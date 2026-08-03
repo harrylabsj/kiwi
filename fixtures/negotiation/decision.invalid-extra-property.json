@@ -1,0 +1,11 @@
+{
+  "protocol_version": "shopping.negotiation/0.1",
+  "conversation_id": "conv-001",
+  "in_reply_to_message_id": 42,
+  "action": "counter",
+  "unexpected_field": "must be rejected: additionalProperties is false",
+  "open_issues": [],
+  "public_message": "extra field should fail",
+  "reason_codes": [],
+  "request_human_review": false
+}

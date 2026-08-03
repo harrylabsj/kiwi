@@ -1,0 +1,29 @@
+{
+  "protocol_version": "shopping.negotiation/0.1",
+  "conversation_id": "conv-001",
+  "in_reply_to_message_id": 42,
+  "action": "counter",
+  "proposal": {
+    "sku": "sku-001",
+    "quantity": 2,
+    "unit_price": 89.0,
+    "currency": "CNY",
+    "stock": {
+      "status": "available",
+      "quantity": 12,
+      "observed_at": "2026-08-03T15:00:00+08:00",
+      "reserved": true
+    },
+    "delivery": {
+      "eta_start": "2026-08-04T14:00:00+08:00",
+      "eta_end": "2026-08-04T18:00:00+08:00",
+      "fee": 0
+    },
+    "after_sales_policy_refs": [],
+    "valid_until": "2026-08-03T15:05:00+08:00"
+  },
+  "open_issues": [],
+  "public_message": "reserved must always be false: negotiation never reserves inventory",
+  "reason_codes": [],
+  "request_human_review": false
+}

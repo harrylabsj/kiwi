@@ -1,0 +1,9 @@
+{
+  "protocol_version": "shopping.negotiation/0.1",
+  "result": "rejected_retryable",
+  "conversation_id": "conv-001",
+  "next_actor": "merchant",
+  "reason_codes": ["stale_inventory"],
+  "public_reason": "库存观察时间已过期，请重新获取快照后再报价。",
+  "retries_remaining": 1
+}

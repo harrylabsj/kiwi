@@ -1,0 +1,10 @@
+{
+  "protocol_version": "shopping.negotiation/0.1",
+  "result": "accepted",
+  "conversation_id": "conv-001",
+  "message_id": 43,
+  "next_actor": "buyer",
+  "reason_codes": ["within_policy", "inventory_observed"],
+  "public_reason": "报价已记录并转给买家。",
+  "retries_remaining": 2
+}

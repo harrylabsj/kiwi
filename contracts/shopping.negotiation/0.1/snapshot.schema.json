@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kiwi.dev/contracts/shopping.negotiation/0.1/snapshot.schema.json",
+  "title": "shopping.negotiation/0.1 NegotiationSnapshot",
+  "description": "Role-trimmed authoritative negotiation snapshot returned by get_negotiation_snapshot. Frozen for protocol version shopping.negotiation/0.1. Contains only data the requesting role is allowed to see.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "conversation",
+    "role",
+    "in_reply_to_message_id",
+    "product",
+    "stock",
+    "delivery",
+    "after_sales_policies",
+    "messages",
+    "current_proposal",
+    "open_issues",
+    "policy_results"
+  ],
+  "properties": {
+    "protocol_version": {
+      "type": "string",
+      "const": "shopping.negotiation/0.1"
+    },
+    "conversation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "next_actor"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": {
+          "type": "string",
+          "enum": ["open", "waiting_merchant", "waiting_buyer", "human_required", "closed"]
+        },
+        "next_actor": {
+          "type": "string",
+          "enum": ["buyer", "merchant", "none"]
+        }
+      }
+    },
+    "role": {
+      "type": "string",
+      "enum": ["buyer", "merchant"],
+      "description": "The role this snapshot was trimmed for."
+    },
+    "in_reply_to_message_id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The claimed message the agent must reply to."
+    },
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sku", "title", "currency", "list_price"],
+      "properties": {
+        "sku": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 500 },
+        "currency": { "type": "string", "minLength": 3, "maxLength": 8 },
+        "list_price": { "type": "number", "minimum": 0 },
+        "description": { "type": "string", "maxLength": 2000 }
+      }
+    },
+    "stock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "quantity", "observed_at", "reserved", "source"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["available", "low", "out_of_stock", "unknown"]
+        },
+        "quantity": { "type": "integer", "minimum": 0 },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "reserved": { "type": "boolean", "const": false },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["backend", "observed_at"],
+          "properties": {
+            "backend": {
+              "type": "string",
+              "enum": ["local_marketplace", "external_platform"]
+            },
+            "external_id": { "type": "string", "maxLength": 256 },
+            "observed_at": { "type": "string", "format": "date-time" }
+          }
+        }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eta_start", "eta_end", "fee"],
+      "properties": {
+        "eta_start": { "type": "string", "format": "date-time" },
+        "eta_end": { "type": "string", "format": "date-time" },
+        "fee": { "type": "number", "minimum": 0 },
+        "notes": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "after_sales_policies": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "summary"],
+        "properties": {
+          "ref": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "summary": { "type": "string", "maxLength": 1000 }
+        }
+      }
+    },
+    "messages": {
+      "type": "array",
+      "maxItems": 50,
+      "description": "Recent public messages, oldest first. Text is untrusted counterpart content.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sender_role", "created_at", "public_message"],
+        "properties": {
+          "id": { "type": "integer", "minimum": 1 },
+          "sender_role": { "type": "string", "enum": ["buyer", "merchant"] },
+          "created_at": { "type": "string", "format": "date-time" },
+          "action": {
+            "type": "string",
+            "enum": ["ask", "propose", "counter", "accept_nonbinding", "decline", "escalate"]
+          },
+          "public_message": { "type": "string", "maxLength": 2000 },
+          "proposal": {
+            "type": ["object", "null"],
+            "description": "Structured proposal attached to this message, if any. Shape: decision.schema.json #/$defs/proposal."
+          }
+        }
+      }
+    },
+    "current_proposal": {
+      "type": ["object", "null"],
+      "description": "Latest structured proposal on the table, or null. Shape: decision.schema.json #/$defs/proposal."
+    },
+    "open_issues": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 },
+      "maxItems": 32
+    },
+    "policy_results": {
+      "type": "array",
+      "maxItems": 32,
+      "description": "Own-side visible policy gate results. Never contains private thresholds.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["result", "reason_codes", "public_reason"],
+        "properties": {
+          "result": {
+            "type": "string",
+            "enum": ["accepted", "rejected_retryable", "human_required"]
+          },
+          "reason_codes": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "maxItems": 32
+          },
+          "public_reason": { "type": "string", "maxLength": 1000 }
+        }
+      }
+    }
+  }
+}
