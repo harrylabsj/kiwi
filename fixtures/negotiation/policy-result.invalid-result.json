@@ -1,0 +1,9 @@
+{
+  "protocol_version": "shopping.negotiation/0.1",
+  "result": "accepted_with_order",
+  "conversation_id": "conv-001",
+  "next_actor": "buyer",
+  "reason_codes": [],
+  "public_reason": "accepted_with_order is not a legal result",
+  "retries_remaining": 2
+}

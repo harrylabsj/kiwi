@@ -1,0 +1,9 @@
+{
+  "protocol_version": "shopping.negotiation/0.1",
+  "result": "human_required",
+  "conversation_id": "conv-001",
+  "next_actor": "none",
+  "reason_codes": ["below_floor"],
+  "public_reason": "该请求需要人工处理。",
+  "retries_remaining": 0
+}

@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kiwi.dev/contracts/shopping.negotiation/0.1/decision.schema.json",
+  "title": "shopping.negotiation/0.1 NegotiationDecision",
+  "description": "The single write-intent payload an agent submits via submit_negotiation_decision. Frozen for protocol version shopping.negotiation/0.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "conversation_id",
+    "in_reply_to_message_id",
+    "action",
+    "open_issues",
+    "public_message",
+    "reason_codes",
+    "request_human_review"
+  ],
+  "properties": {
+    "protocol_version": {
+      "type": "string",
+      "const": "shopping.negotiation/0.1"
+    },
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "in_reply_to_message_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "action": {
+      "type": "string",
+      "enum": ["ask", "propose", "counter", "accept_nonbinding", "decline", "escalate"]
+    },
+    "proposal": {
+      "$ref": "#/$defs/proposal"
+    },
+    "open_issues": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 },
+      "maxItems": 32
+    },
+    "public_message": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 64 },
+      "maxItems": 32
+    },
+    "request_human_review": {
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sku",
+        "quantity",
+        "unit_price",
+        "currency",
+        "stock",
+        "delivery",
+        "after_sales_policy_refs",
+        "valid_until"
+      ],
+      "properties": {
+        "sku": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "quantity": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "unit_price": { "type": "number", "minimum": 0 },
+        "currency": { "type": "string", "minLength": 3, "maxLength": 8 },
+        "stock": { "$ref": "#/$defs/stock" },
+        "delivery": { "$ref": "#/$defs/delivery" },
+        "after_sales_policy_refs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "maxItems": 32
+        },
+        "valid_until": { "type": "string", "format": "date-time" }
+      }
+    },
+    "stock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "quantity", "observed_at", "reserved"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["available", "low", "out_of_stock", "unknown"]
+        },
+        "quantity": { "type": "integer", "minimum": 0 },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "reserved": {
+          "type": "boolean",
+          "const": false,
+          "description": "Negotiation never reserves inventory. Must be false."
+        }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eta_start", "eta_end", "fee"],
+      "properties": {
+        "eta_start": { "type": "string", "format": "date-time" },
+        "eta_end": { "type": "string", "format": "date-time" },
+        "fee": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

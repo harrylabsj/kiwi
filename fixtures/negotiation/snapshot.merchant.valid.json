@@ -1,0 +1,52 @@
+{
+  "protocol_version": "shopping.negotiation/0.1",
+  "conversation": {
+    "id": "conv-001",
+    "status": "waiting_merchant",
+    "next_actor": "merchant"
+  },
+  "role": "merchant",
+  "in_reply_to_message_id": 42,
+  "product": {
+    "sku": "sku-001",
+    "title": "手写陶瓷杯",
+    "currency": "CNY",
+    "list_price": 99.0,
+    "description": "景德镇手工陶瓷杯 350ml"
+  },
+  "stock": {
+    "status": "available",
+    "quantity": 12,
+    "observed_at": "2026-08-03T15:00:00+08:00",
+    "reserved": false,
+    "source": {
+      "backend": "local_marketplace",
+      "observed_at": "2026-08-03T15:00:00+08:00"
+    }
+  },
+  "delivery": {
+    "eta_start": "2026-08-04T14:00:00+08:00",
+    "eta_end": "2026-08-04T18:00:00+08:00",
+    "fee": 0,
+    "notes": "市区当日达"
+  },
+  "after_sales_policies": [
+    {
+      "ref": "policy:return-7d",
+      "summary": "签收后 7 天内支持无理由退货（不影响二次销售）。"
+    }
+  ],
+  "messages": [
+    {
+      "id": 42,
+      "sender_role": "buyer",
+      "created_at": "2026-08-03T14:58:00+08:00",
+      "action": "ask",
+      "public_message": "买 2 件可以便宜一点吗？明天能送到吗？",
+      "proposal": null
+    }
+  ],
+  "current_proposal": null,
+  "open_issues": ["quantity_discount", "delivery_eta"],
+  "policy_results": []
+}

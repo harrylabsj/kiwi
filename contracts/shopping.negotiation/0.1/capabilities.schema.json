@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kiwi.dev/contracts/shopping.negotiation/0.1/capabilities.schema.json",
+  "title": "shopping.negotiation/0.1 CommerceCapabilities",
+  "description": "CommerceGateway capability and protocol advertisement. Kiwi fails closed when a required capability or protocol version is missing. Frozen for protocol version shopping.negotiation/0.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_versions", "backend", "capabilities"],
+  "properties": {
+    "protocol_versions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "description": "Negotiation protocol versions the gateway supports. Must include shopping.negotiation/0.1."
+    },
+    "backend": {
+      "type": "string",
+      "enum": ["local_marketplace", "external_platform"]
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "catalog_read",
+        "inventory_read",
+        "consultation_read",
+        "consultation_write",
+        "price_negotiate",
+        "webhook",
+        "orders"
+      ],
+      "properties": {
+        "catalog_read": { "type": "boolean" },
+        "inventory_read": { "type": "boolean" },
+        "consultation_read": { "type": "boolean" },
+        "consultation_write": { "type": "boolean" },
+        "price_negotiate": { "type": "boolean" },
+        "webhook": { "type": "boolean" },
+        "orders": {
+          "type": "boolean",
+          "const": false,
+          "description": "shopping.negotiation/0.1 never creates orders. Must be false."
+        }
+      }
+    }
+  }
+}

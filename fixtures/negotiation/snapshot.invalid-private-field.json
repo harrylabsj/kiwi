@@ -1,0 +1,37 @@
+{
+  "protocol_version": "shopping.negotiation/0.1",
+  "conversation": {
+    "id": "conv-001",
+    "status": "waiting_merchant",
+    "next_actor": "merchant"
+  },
+  "role": "merchant",
+  "in_reply_to_message_id": 42,
+  "product": {
+    "sku": "sku-001",
+    "title": "手写陶瓷杯",
+    "currency": "CNY",
+    "list_price": 99.0
+  },
+  "stock": {
+    "status": "available",
+    "quantity": 12,
+    "observed_at": "2026-08-03T15:00:00+08:00",
+    "reserved": false,
+    "source": {
+      "backend": "local_marketplace",
+      "observed_at": "2026-08-03T15:00:00+08:00"
+    }
+  },
+  "delivery": {
+    "eta_start": "2026-08-04T14:00:00+08:00",
+    "eta_end": "2026-08-04T18:00:00+08:00",
+    "fee": 0
+  },
+  "after_sales_policies": [],
+  "messages": [],
+  "current_proposal": null,
+  "open_issues": [],
+  "policy_results": [],
+  "private_floor_price": 80.0
+}

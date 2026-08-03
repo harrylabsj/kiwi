@@ -1,0 +1,10 @@
+{
+  "protocol_version": "shopping.negotiation/0.1",
+  "conversation_id": "conv-001",
+  "in_reply_to_message_id": 42,
+  "action": "place_order",
+  "open_issues": [],
+  "public_message": "place_order is not a legal action",
+  "reason_codes": [],
+  "request_human_review": false
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kiwi.dev/contracts/shopping.negotiation/0.1/policy-result.schema.json",
+  "title": "shopping.negotiation/0.1 PolicyResult",
+  "description": "Authoritative policy gate result for a submitted negotiation decision. Frozen for protocol version shopping.negotiation/0.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "result",
+    "conversation_id",
+    "next_actor",
+    "reason_codes",
+    "public_reason",
+    "retries_remaining"
+  ],
+  "properties": {
+    "protocol_version": {
+      "type": "string",
+      "const": "shopping.negotiation/0.1"
+    },
+    "result": {
+      "type": "string",
+      "enum": ["accepted", "rejected_retryable", "human_required"]
+    },
+    "conversation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "message_id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The normalized message id written by the gateway. Present only when result is accepted."
+    },
+    "next_actor": {
+      "type": "string",
+      "enum": ["buyer", "merchant", "none"]
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 64 },
+      "maxItems": 32
+    },
+    "public_reason": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "Repairable, public explanation safe to show the model. Must not leak private thresholds."
+    },
+    "retries_remaining": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How many retry attempts the agent may still make for this claim."
+    }
+  }
+}

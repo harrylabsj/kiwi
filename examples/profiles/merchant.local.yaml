@@ -1,0 +1,34 @@
+# Merchant profile — real model (OpenAI-compatible) against a local shopping-cli.
+# Requires: SHOPPING_AGENT_TOKEN and MODEL_API_KEY set in the environment.
+# Secrets are NEVER written into this file — only env var names.
+runtime_version: 0.1.0
+protocol_version: shopping.negotiation/0.1
+agent_id: merchant-agent:merchant-001
+role: merchant
+owner_id: merchant-001
+commerce:
+  base_url: http://127.0.0.1:8765
+  token_env: SHOPPING_AGENT_TOKEN
+  backend: local_marketplace
+model:
+  provider: openai
+  model: gpt-4o-mini
+  api_key_env: MODEL_API_KEY
+  # api: openai-completions        # optional override
+  # base_url: http://127.0.0.1:11434/v1  # optional OpenAI-compatible endpoint
+runtime:
+  mode: once
+  poll_interval_seconds: 5
+  turn_timeout_seconds: 90
+  max_model_steps: 4
+  max_retries: 2
+merchant_policy:
+  min_unit_price_private: 80.00
+  max_auto_discount_percent: 10
+  inventory_source: marketplace
+  quote_ttl_seconds: 300
+  auto_negotiate: true
+  human_review_on:
+    - below_floor
+    - exceptional_warranty
+    - suspicious_content

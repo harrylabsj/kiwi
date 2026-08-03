@@ -1,0 +1,13 @@
+{
+  "protocol_versions": ["shopping.negotiation/0.1"],
+  "backend": "local_marketplace",
+  "capabilities": {
+    "catalog_read": true,
+    "inventory_read": true,
+    "consultation_read": true,
+    "consultation_write": true,
+    "price_negotiate": true,
+    "webhook": false,
+    "orders": true
+  }
+}

@@ -1,0 +1,36 @@
+# Buyer profile — deterministic fake model against a local shopping-cli.
+# Requires: SHOPPING_BUYER_TOKEN set (conversation-scoped buyer token).
+# buyer_policy is PRIVATE: the marketplace never sees these values; the
+# local policy gate enforces them inside the submit tool before any write.
+runtime_version: 0.1.0
+protocol_version: shopping.negotiation/0.1
+agent_id: buyer-agent:buyer-001
+role: buyer
+owner_id: buyer-001
+commerce:
+  base_url: http://127.0.0.1:8765
+  token_env: SHOPPING_BUYER_TOKEN
+  backend: local_marketplace
+model:
+  provider: fake
+  model: fake-buyer-model
+runtime:
+  mode: once
+  poll_interval_seconds: 5
+  turn_timeout_seconds: 90
+  max_model_steps: 4
+  max_retries: 2
+buyer_policy:
+  target_skus:
+    - sku-001
+  quantity: 2
+  max_total_price_private: 200.00
+  # Far-future deadline keeps the shipped example durable; the local gate
+  # still rejects anything later than this RFC3339 (timezone-required) time.
+  acceptable_eta_latest: "2099-12-31T23:59:59+08:00"
+  required_after_sales_terms:
+    - policy:return-7d
+  auto_negotiate: true
+  human_review_on:
+    - budget_exceeded
+    - ambiguous_after_sales
