@@ -32,10 +32,13 @@ export function parseLogLines(value: string | undefined): number {
 }
 
 const SECRET_PATTERNS: [RegExp, string][] = [
+  // key=value-shaped secrets first, case-insensitive and `]`-tolerant (for
+  // `env[VAR]=value` lines): this must run before the bare-token patterns so
+  // they cannot consume the variable name and leave the value exposed.
+  [/([A-Za-z0-9_[\].-]*(?:token|api[-_]?key|secret|password)[\]]?\s*[:=]\s*)\S+/gi, "$1[REDACTED]"],
   [/Bearer\s+\S+/gi, "Bearer [REDACTED]"],
-  [/shopping_(merchant|buyer|agent|admin)_[A-Za-z0-9_-]+/g, "shopping_$1_[REDACTED]"],
+  [/shopping_(merchant|buyer|agent|admin)_[A-Za-z0-9_-]+/gi, "shopping_$1_[REDACTED]"],
   [/sk-[A-Za-z0-9_-]{6,}/g, "[REDACTED]"],
-  [/((?:token|api[-_]?key|secret|password)\s*[:=]\s*)\S+/gi, "$1[REDACTED]"],
 ];
 
 const PRIVATE_NUMERIC_LINE =

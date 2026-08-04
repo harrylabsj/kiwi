@@ -152,6 +152,21 @@ export async function runNegotiationTurn(options: NegotiationTurnOptions): Promi
   let report: TurnReport;
   try {
     report = await finishTurn(options, profile, client, streamFn, target, idem, base, usage);
+  } catch (err) {
+    // An error escaping a claimed turn (transient snapshot/submit/settle
+    // failures) must not strand the claim until the 300s stale TTL:
+    // best-effort abandon so the message is reclaimable immediately. The
+    // stale TTL stays the backstop if this abandon fails too.
+    try {
+      await client.abandonClaim({
+        message_id: target.message_id,
+        idempotency_key: idem,
+        error: `turn escaped settlement: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } catch {
+      // The original error is what propagates.
+    }
+    throw err;
   } finally {
     // No timer or in-flight heartbeat outlives the turn.
     await heartbeat.stop();
@@ -277,6 +292,24 @@ async function finishTurn(
       };
     }
     // rejected_retryable with no successful resubmission inside the turn.
+    if (externalAbort) {
+      // Shutdown semantics (design §16.2): a claim that was never accepted
+      // is abandoned, never failed — both are reclaimable, but abandon is
+      // the documented "unsettled on shutdown" settlement.
+      const reason = "shutdown: turn aborted by signal before a decision was accepted";
+      await client.abandonClaim({
+        message_id: target.message_id,
+        idempotency_key: idem,
+        error: reason,
+      });
+      return {
+        outcome: { kind: "aborted", reason },
+        ...base,
+        policy_result: result,
+        steps,
+        usage,
+      };
+    }
     const budgetNote = tracker.submissionLimitExceeded
       ? `; submission budget exhausted (max_retries=${profile.runtime.max_retries})`
       : "";
@@ -337,5 +370,12 @@ async function finishTurn(
 /** Model auth/config problems are not retried by an external supervisor. */
 function isModelConfigError(message: string): boolean {
   const m = message.toLowerCase();
-  return m.includes("api key") || m.includes("unauthorized") || m.includes("401");
+  return (
+    m.includes("api key") ||
+    m.includes("unauthorized") ||
+    m.includes("401") ||
+    m.includes("403") ||
+    m.includes("forbidden") ||
+    m.includes("quota")
+  );
 }

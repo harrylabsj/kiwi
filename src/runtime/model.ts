@@ -38,6 +38,11 @@ const PROVIDER_BASE_URL: Record<string, string> = {
   groq: "https://api.groq.com/openai/v1",
   together: "https://api.together.xyz/v1",
   mistral: "https://api.mistral.ai",
+  // google-vertex and amazon-bedrock are intentionally absent: pi-ai
+  // resolves their endpoints through the provider SDKs (region-based) and
+  // never reads model.baseUrl, so the "" fallback below is harmless for
+  // exactly those two. Every other provider needs a default or an explicit
+  // model.base_url in the profile.
 };
 
 export function isFakeProvider(profile: AgentProfile): boolean {

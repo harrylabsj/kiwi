@@ -211,7 +211,10 @@ export async function runInit(options: InitOptions): Promise<InitResult> {
       if (!existsSync(d)) {
         createdDirs.push(d);
       }
-      mkdirSync(d, { recursive: true, mode: d === paths.run ? 0o700 : 0o755 });
+      // run/ holds manifests (pids, tokens-in-path); data/ holds the
+      // shopping SQLite database — both stay owner-only. profiles/ and
+      // logs/ carry 0600 files, so the dirs stay conventionally listable.
+      mkdirSync(d, { recursive: true, mode: d === paths.run || d === paths.data ? 0o700 : 0o755 });
     }
     for (const [file, content] of files) {
       writeExclusive(file, content, 0o600);

@@ -199,7 +199,7 @@ describe("foreground polling loop", () => {
     expect(serialized).not.toContain("token");
   });
 
-  it("already_claimed waits instead of hot-looping", async () => {
+  it("a message under an active claim is not re-listed; the loop waits instead of hot-looping", async () => {
     const market = testMarketplace();
     await market.merchant.claimMessage({
       conversation_id: "conv-merchant-001",
@@ -223,7 +223,7 @@ describe("foreground polling loop", () => {
       onReport: (r) => reports.push(r),
     });
     expect(result.stopped_by).toBe("signal");
-    expect(reports[0]?.outcome.kind).toBe("already_claimed");
+    expect(reports[0]?.outcome.kind).toBe("no_work");
     expect(sleeps).toEqual([5000]);
   });
 });
