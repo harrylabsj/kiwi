@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { FakeCommerceClient } from "../src/commerce/fake-client.js";
+import { CommerceError } from "../src/commerce/types.js";
 import { createScriptedFakeStreamFn } from "../src/runtime/fake-model.js";
 import { startClaimHeartbeat } from "../src/runtime/heartbeat.js";
 import {
@@ -296,5 +297,69 @@ describe("turn-level stale recovery and heartbeat", () => {
     const callsAtStop = heartbeatCalls;
     await new Promise((r) => setTimeout(r, 15));
     expect(heartbeatCalls).toBe(callsAtStop);
+  });
+});
+
+describe("settlement escapes and shutdown edge cases", () => {
+  it("an error escaping settlement abandons the claim immediately (no 300s stale wait)", async () => {
+    const client = testClient();
+    // The turn ends without a decision; the failClaim response is then lost.
+    client.failClaim = (() =>
+      Promise.reject(
+        new CommerceError("transient", "gateway lost the response"),
+      )) as typeof client.failClaim;
+    const { streamFn } = createScriptedFakeStreamFn([
+      fauxAssistantMessage([fauxToolCall(TOOL_GET_SNAPSHOT, {})]),
+      fauxAssistantMessage("我无法处理这个请求。"),
+    ]);
+    await expect(
+      runNegotiationTurn({
+        profile: testProfile(),
+        client,
+        streamFn,
+        heartbeatIntervalMs: 1,
+      }),
+    ).rejects.toMatchObject({ kind: "transient" });
+    // The claim is settled back to abandoned at once — reclaimable without
+    // waiting for the stale TTL, and the deterministic key reclaims it.
+    expect(client.claimStatus(1)).toBe("abandoned");
+    const reclaim = await client.claimMessage({
+      conversation_id: CONV,
+      message_id: 1,
+      idempotency_key: KEY,
+    });
+    expect(reclaim.claimed).toBe(true);
+    expect(reclaim.attempts).toBe(2);
+  });
+
+  it("shutdown after a rejected_retryable decision abandons (never fails) the claim", async () => {
+    const client = testClient();
+    const controller = new AbortController();
+    const original = client.submitNegotiationDecision.bind(client);
+    client.submitNegotiationDecision = (async (input: Parameters<typeof original>[0]) => {
+      const result = await original(input);
+      controller.abort(); // SIGINT lands right after the retryable rejection
+      return result;
+    }) as typeof client.submitNegotiationDecision;
+    const { streamFn } = createScriptedFakeStreamFn([
+      fauxAssistantMessage([fauxToolCall(TOOL_GET_SNAPSHOT, {})]),
+      // Leaks the private floor -> rejected_retryable.
+      fauxAssistantMessage([
+        fauxToolCall(TOOL_SUBMIT_DECISION, validDecision({ public_message: "底价 80 元给你" })),
+      ]),
+      fauxAssistantMessage("好的我再想想。"),
+    ]);
+    const report = await runNegotiationTurn({
+      profile: testProfile(),
+      client,
+      streamFn,
+      signal: controller.signal,
+      heartbeatIntervalMs: 1,
+    });
+    expect(report.outcome.kind).toBe("aborted");
+    expect(client.claimStatus(1)).toBe("abandoned");
+    const events = auditEvents(client);
+    expect(events).toContain("agent_message_abandoned");
+    expect(events).not.toContain("agent_message_failed");
   });
 });

@@ -220,6 +220,7 @@ describe("kiwi init", () => {
     }
     expect(statSync(paths.config).mode & 0o777).toBe(0o600);
     expect(statSync(paths.run).mode & 0o777).toBe(0o700);
+    expect(statSync(paths.data).mode & 0o777).toBe(0o700); // shopping SQLite lives here
     // Profiles name env vars; they never contain secret values.
     const merchant = readFileSync(path.join(paths.profiles, "merchant.yaml"), "utf-8");
     const buyer = readFileSync(path.join(paths.profiles, "buyer.yaml"), "utf-8");
@@ -456,6 +457,12 @@ describe("logs", () => {
     expect(redactLine("api_key=supersecret")).not.toContain("supersecret");
     expect(redactLine("我的内部预算 150")).not.toContain("150");
     expect(redactLine("nothing secret here")).toBe("nothing secret here");
+    // Regression: a lowercase shopping_* name used to consume the keyword
+    // and leak the value; env[VAR]=value lines were missed entirely.
+    expect(redactLine("shopping_agent_token=supersecret123")).not.toContain("supersecret123");
+    expect(redactLine("env[SHOPPING_AGENT_TOKEN]=leaked")).not.toContain("leaked");
+    expect(redactLine("SHOPPING_AGENT_TOKEN=value")).not.toContain("value");
+    expect(redactLine("tokenize: true")).toBe("tokenize: true");
   });
 
   it("bounded tail and --lines validation", async () => {
@@ -503,6 +510,33 @@ describe("CLI argument validation", () => {
 
   it("status on a missing instance fails clearly", async () => {
     expect(await cliMain(["status", "--dir", path.join(workDir, "nope")])).toBe(10);
+  });
+
+  it("agent run --once installs SIGINT/SIGTERM handlers and removes them after", async () => {
+    const dir = await initInstance();
+    const profilePath = path.join(instancePaths(dir).profiles, "merchant.yaml");
+    process.env.SHOPPING_AGENT_TOKEN = "test-token";
+    const registered: string[] = [];
+    const originalOnce = process.once.bind(process);
+    process.once = ((event: string | symbol, listener: (...args: unknown[]) => void) => {
+      registered.push(String(event));
+      return originalOnce(event, listener);
+    }) as typeof process.once;
+    const baseSigint = process.listenerCount("SIGINT");
+    const baseSigterm = process.listenerCount("SIGTERM");
+    let code = -1;
+    try {
+      code = await cliMain(["agent", "run", "--once", "--profile", profilePath]);
+    } finally {
+      process.once = originalOnce;
+    }
+    // No gateway is running: the turn fails transient (10), but the signal
+    // handlers were installed for the attempt and are gone afterwards.
+    expect(code).toBe(10);
+    expect(registered).toContain("SIGINT");
+    expect(registered).toContain("SIGTERM");
+    expect(process.listenerCount("SIGINT")).toBe(baseSigint);
+    expect(process.listenerCount("SIGTERM")).toBe(baseSigterm);
   });
 });
 

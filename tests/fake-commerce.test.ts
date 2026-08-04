@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FakeCommerceClient } from "../src/commerce/fake-client.js";
+import { createFakeMarketplace, FakeCommerceClient } from "../src/commerce/fake-client.js";
 import { CommerceError } from "../src/commerce/types.js";
 import { PROTOCOL_VERSION } from "../src/negotiation/types.js";
 import { testClient, testClientConfig, validDecision } from "./helpers.js";
@@ -31,13 +31,54 @@ describe("FakeCommerceClient claim lifecycle", () => {
     expect(await stranger.listPendingMessages()).toEqual([]);
   });
 
-  it("claim is idempotent under the same key", async () => {
+  it("same-key replay while processing returns the recorded claim (claimed=false)", async () => {
     const client = testClient();
     const first = await claim(client);
     expect(first.claimed).toBe(true);
+    // Contract: a non-retryable existing claim returns claimed=false — even
+    // for a same-key replay. The key is deterministic, so two same-identity
+    // workers generate the same key and must never both hold the claim.
     const replay = await claim(client);
+    expect(replay.claimed).toBe(false);
+    expect(replay.status).toBe("processing");
     expect(replay.idempotency_key).toBe(KEY);
     expect(replay.attempts).toBe(1);
+  });
+
+  it("the same deterministic key reclaims after abandon or fail (retryable)", async () => {
+    const client = testClient();
+    await claim(client);
+    await client.abandonClaim({ message_id: 1, idempotency_key: KEY, error: "crash" });
+    const reclaim = await claim(client);
+    expect(reclaim.claimed).toBe(true);
+    expect(reclaim.attempts).toBe(2);
+    await client.failClaim({ message_id: 1, idempotency_key: KEY, error: "boom" });
+    const retry = await claim(client);
+    expect(retry.claimed).toBe(true);
+    expect(retry.attempts).toBe(3);
+  });
+
+  it("two same-identity workers cannot both see and claim one message", async () => {
+    const config = testClientConfig();
+    const { state, merchant: workerA } = createFakeMarketplace(config);
+    const workerB = new FakeCommerceClient(config, {
+      identity: { role: "merchant", owner_id: "merchant-001" },
+      state,
+    });
+    await workerA.claimMessage({
+      conversation_id: "conv-merchant-001",
+      message_id: 1,
+      idempotency_key: KEY,
+    });
+    // The second worker neither sees the message as pending nor can claim it.
+    expect(await workerB.listPendingMessages()).toEqual([]);
+    const second = await workerB.claimMessage({
+      conversation_id: "conv-merchant-001",
+      message_id: 1,
+      idempotency_key: KEY, // deterministic: same identity, same key
+    });
+    expect(second.claimed).toBe(false);
+    expect(second.status).toBe("processing");
   });
 
   it("a second agent key cannot steal a processing claim", async () => {

@@ -3,6 +3,7 @@ import {
   createFakeMarketplace,
   FakeCommerceClient,
   type FakeMarketplaceConfig,
+  type FakeProduct,
 } from "../src/commerce/fake-client.js";
 import {
   fauxAssistantMessage,
@@ -42,9 +43,13 @@ export function testProfile(overrides: Partial<AgentProfile> = {}): AgentProfile
   };
 }
 
-export function testClientConfig(
-  overrides: Partial<FakeMarketplaceConfig> = {},
-): FakeMarketplaceConfig {
+/** Test config overrides; `product` merges field-by-field over the defaults. */
+export type TestClientOverrides = Omit<Partial<FakeMarketplaceConfig>, "product"> & {
+  product?: Partial<FakeProduct>;
+};
+
+export function testClientConfig(overrides: TestClientOverrides = {}): FakeMarketplaceConfig {
+  const { product, ...rest } = overrides;
   return {
     merchant_id: MERCHANT_ID,
     buyer_id: "buyer-001",
@@ -64,18 +69,18 @@ export function testClientConfig(
         notes: "市区当日达",
       },
       policies: [{ ref: "policy:return-7d", summary: "签收后 7 天内无理由退货。" }],
-      ...overrides.product,
+      ...product,
     },
-    ...overrides,
+    ...rest,
   };
 }
 
-export function testClient(overrides: Partial<FakeMarketplaceConfig> = {}): FakeCommerceClient {
+export function testClient(overrides: TestClientOverrides = {}): FakeCommerceClient {
   return new FakeCommerceClient(testClientConfig(overrides));
 }
 
 /** One shared fake marketplace with both role clients bound to it. */
-export function testMarketplace(overrides: Partial<FakeMarketplaceConfig> = {}): {
+export function testMarketplace(overrides: TestClientOverrides = {}): {
   merchant: FakeCommerceClient;
   buyer: FakeCommerceClient;
 } {

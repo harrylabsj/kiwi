@@ -7,6 +7,8 @@
  *   kiwi agent run --profile <file> --once  Process at most one claimed message.
  *   kiwi agent run --profile <file>         Foreground serial polling until
  *                                           SIGINT/SIGTERM (exit 0).
+ *   kiwi tui --profile <file>               Interactive operator TUI
+ *                                           (supervised by default).
  *   kiwi init|up|status|logs|down --dir <instance-dir>
  *                                           Managed-local product lifecycle.
  */
@@ -24,6 +26,11 @@ import { createDeterministicStreamFn } from "./runtime/fake-model.js";
 import { runForeground } from "./runtime/foreground.js";
 import { runNegotiationTurn, type TurnReport } from "./runtime/negotiation-turn.js";
 import { isFakeProvider, realStreamFn } from "./runtime/model.js";
+import { OperatorController } from "./operator/controller.js";
+import { DeterministicNegotiationRunner } from "./operator/runner.js";
+import { FileOperatorEventStore, OperatorStoreError } from "./operator/store.js";
+import { createStrategyEngine } from "./operator/strategy.js";
+import { runTui } from "./operator/tui.js";
 import { runInit } from "./supervisor/init.js";
 import { runDown, runStatus, runUp, SupervisorError } from "./supervisor/manage.js";
 import { parseLogLines, runLogs } from "./supervisor/logs.js";
@@ -41,6 +48,9 @@ Usage:
   kiwi doctor --profile <file>            Read-only diagnostics (no writes)
   kiwi agent run --profile <file> --once  Run one negotiation turn, then exit
   kiwi agent run --profile <file>         Foreground serial polling (SIGINT/SIGTERM to stop)
+  kiwi tui --profile <file> [--data-dir <dir>]
+                                          Interactive operator TUI (supervised by default;
+                                          approves candidates before any formal submit)
   kiwi --version                          Print version
   kiwi --help                             This help
 
@@ -57,6 +67,7 @@ interface ParsedArgs {
   dir?: string;
   lines?: string;
   shoppingCliSrc?: string;
+  dataDir?: string;
   once: boolean;
   fake: boolean;
 }
@@ -67,6 +78,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let dir: string | undefined;
   let lines: string | undefined;
   let shoppingCliSrc: string | undefined;
+  let dataDir: string | undefined;
   let once = false;
   let fake = false;
   for (let i = 0; i < argv.length; i++) {
@@ -79,6 +91,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       lines = argv[++i];
     } else if (arg === "--shopping-cli-src") {
       shoppingCliSrc = argv[++i];
+    } else if (arg === "--data-dir") {
+      dataDir = argv[++i];
     } else if (arg === "--once") {
       once = true;
     } else if (arg === "--fake") {
@@ -91,6 +105,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       lines = arg.slice("--lines=".length);
     } else if (arg !== undefined && arg.startsWith("--shopping-cli-src=")) {
       shoppingCliSrc = arg.slice("--shopping-cli-src=".length);
+    } else if (arg !== undefined && arg.startsWith("--data-dir=")) {
+      dataDir = arg.slice("--data-dir=".length);
     } else if (arg !== undefined && !arg.startsWith("-")) {
       command.push(arg);
     } else {
@@ -102,6 +118,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (dir !== undefined) out.dir = dir;
   if (lines !== undefined) out.lines = lines;
   if (shoppingCliSrc !== undefined) out.shoppingCliSrc = shoppingCliSrc;
+  if (dataDir !== undefined) out.dataDir = dataDir;
   return out;
 }
 
@@ -201,6 +218,13 @@ async function cmdAgentRun(args: ParsedArgs): Promise<number> {
       };
 
   if (args.once) {
+    // Same shutdown semantics as the foreground loop: SIGINT/SIGTERM aborts
+    // the in-flight turn, which abandons an unsettled claim (never
+    // completes it) instead of orphaning it until the stale-claim TTL.
+    const shutdown = new AbortController();
+    const onSignal = (): void => shutdown.abort();
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
     let report: TurnReport;
     try {
       report = await runNegotiationTurn({
@@ -208,6 +232,7 @@ async function cmdAgentRun(args: ParsedArgs): Promise<number> {
         client,
         streamFn,
         ...(getApiKey !== undefined ? { getApiKey } : {}),
+        signal: shutdown.signal,
       });
     } catch (err) {
       if (err instanceof CommerceError) return commerceErrorExit(err);
@@ -215,6 +240,9 @@ async function cmdAgentRun(args: ParsedArgs): Promise<number> {
         `unexpected error: ${err instanceof Error ? err.message : String(err)}\n`,
       );
       return EXIT.TRANSIENT;
+    } finally {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
     }
     printReportJsonl(report);
     return outcomeExit(report);
@@ -247,6 +275,44 @@ async function cmdAgentRun(args: ParsedArgs): Promise<number> {
   }
 }
 
+/**
+ * Interactive operator TUI (v0.2). Candidate generation uses the
+ * deterministic runner wired to the real CommerceClient boundary — formal
+ * writes still go through CommerceClient and the gateway policy gate. The
+ * embedded-Pi candidate backend is the documented next integration hook.
+ */
+async function cmdTui(args: ParsedArgs): Promise<number> {
+  const profile = requireProfile(args);
+
+  let client: CommerceClient;
+  try {
+    client = buildClient(profile);
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.CONFIG;
+  }
+
+  const dataDir = args.dataDir ?? path.resolve(".kiwi", "agents", profile.agent_id);
+  const controller = new OperatorController({
+    profile,
+    store: new FileOperatorEventStore(dataDir),
+    engine: createStrategyEngine(),
+    runner: new DeterministicNegotiationRunner(profile, client),
+  });
+  try {
+    await controller.start();
+    return await runTui({ controller, input: process.stdin, output: process.stdout });
+  } catch (err) {
+    if (err instanceof CommerceError) return commerceErrorExit(err);
+    if (err instanceof OperatorStoreError) {
+      process.stderr.write(`${err.message}\n`);
+      return EXIT.CONFIG;
+    }
+    process.stderr.write(`unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.TRANSIENT;
+  }
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(USAGE);
@@ -267,6 +333,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   try {
     if (cmd === "doctor") return await cmdDoctor(args);
     if (cmd === "agent" && sub === "run") return await cmdAgentRun(args);
+    if (cmd === "tui") return await cmdTui(args);
     if (cmd === "init") {
       const result = await runInit({
         dir: requireDir(args),
