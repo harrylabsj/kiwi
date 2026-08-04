@@ -315,6 +315,13 @@ export async function runTui(options: TuiOptions): Promise<number> {
     terminal: (input as { isTTY?: boolean }).isTTY === true,
     prompt: "kiwi> ",
   });
+  // EOF (Ctrl-D, or an injected stream that ends) closes the interface while
+  // the last command is still being awaited; prompting a closed readline
+  // throws ERR_USE_AFTER_CLOSE, so track it and skip the re-prompt.
+  let rlClosed = false;
+  rl.once("close", () => {
+    rlClosed = true;
+  });
   rl.prompt();
   for await (const rawLine of rl) {
     const line = String(rawLine).trim();
@@ -330,7 +337,7 @@ export async function runTui(options: TuiOptions): Promise<number> {
         renderPrepare(controller, prepared, write);
       }
     }
-    rl.prompt();
+    if (!rlClosed) rl.prompt();
   }
   rl.close();
   if (!controller.getState().shutdown) {
