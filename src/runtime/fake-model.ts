@@ -52,10 +52,30 @@ function latestToolResultText(context: Context, toolName: string): string | unde
   return undefined;
 }
 
+/**
+ * Structured influence of applied operator strategy directives on candidate
+ * generation (docs/operator-tui-v0.2.md §7). Compiled by the operator runner
+ * from the session's directive list; never widens HardPolicy by itself — the
+ * authoritative policy gates still run on the profile at submit time.
+ */
+export interface DecisionHints {
+  /** Effective buyer budget ceiling (last budget directive, else profile). */
+  buyer_max_total_price?: number;
+  /** Effective merchant floor (last floor directive, else profile). */
+  merchant_min_unit_price?: number;
+  /** Quantity cap ("最多买 N 件"). */
+  quantity_cap?: number;
+  /** Prefer free shipping: counter with fee 0 before accepting. */
+  prefer_free_shipping?: boolean;
+  /** This turn only asks; never accept or counter with a price. */
+  ask_only?: boolean;
+}
+
 /** Build the deterministic decision from a snapshot. Pure function. */
 export function deterministicMerchantDecision(
   snapshot: NegotiationSnapshot,
   quoteTtlSeconds: number,
+  hints: DecisionHints = {},
 ): NegotiationDecision {
   const p = snapshot.product;
   const buyerText = snapshot.messages
@@ -63,10 +83,20 @@ export function deterministicMerchantDecision(
     .map((m) => m.public_message)
     .join("\n");
   const qtyMatch = /(\d+)\s*(?:件|个|只|x\b)/i.exec(buyerText);
-  const quantity = Math.min(Math.max(Number(qtyMatch?.[1] ?? 1), 1), snapshot.stock.quantity || 1);
+  const quantity = Math.min(
+    Math.max(Number(qtyMatch?.[1] ?? 1), 1),
+    snapshot.stock.quantity || 1,
+    hints.quantity_cap ?? Number.POSITIVE_INFINITY,
+  );
   const validUntil = new Date(
     Date.parse(snapshot.stock.observed_at) + quoteTtlSeconds * 1000,
   ).toISOString();
+  // A floor directive above the list price raises the quote; at or below it
+  // the list price already satisfies the floor, so the quote is unchanged.
+  const unitPrice =
+    hints.merchant_min_unit_price !== undefined && hints.merchant_min_unit_price > p.list_price
+      ? hints.merchant_min_unit_price
+      : p.list_price;
 
   if (snapshot.stock.status === "out_of_stock") {
     return {
@@ -90,7 +120,7 @@ export function deterministicMerchantDecision(
     proposal: {
       sku: p.sku,
       quantity,
-      unit_price: p.list_price,
+      unit_price: unitPrice,
       currency: p.currency,
       stock: {
         status: snapshot.stock.status,
@@ -107,7 +137,7 @@ export function deterministicMerchantDecision(
       valid_until: validUntil,
     },
     open_issues: [...snapshot.open_issues],
-    public_message: `可以按单价 ${p.list_price} ${p.currency} 提供 ${quantity} 件，报价 ${quoteTtlSeconds} 秒内有效。`,
+    public_message: `可以按单价 ${unitPrice} ${p.currency} 提供 ${quantity} 件，报价 ${quoteTtlSeconds} 秒内有效。`,
     confidence: 0.9,
     reason_codes: ["within_policy", "inventory_observed"],
     request_human_review: false,
@@ -157,6 +187,7 @@ export function deterministicBuyerDecision(
     acceptable_eta_latest: string;
     required_after_sales_terms: string[];
   },
+  hints: DecisionHints = {},
 ): NegotiationDecision {
   const base = {
     protocol_version: PROTOCOL_VERSION,
@@ -177,33 +208,82 @@ export function deterministicBuyerDecision(
     };
   }
 
-  const total = proposal.unit_price * proposal.quantity + proposal.delivery.fee;
-  const etaOk = Date.parse(proposal.delivery.eta_end) <= Date.parse(policy.acceptable_eta_latest);
-  const refs = new Set(proposal.after_sales_policy_refs);
-  const termsOk = policy.required_after_sales_terms.every((t) => refs.has(t));
-  if (total <= policy.max_total_price_private && etaOk && termsOk) {
+  // Turn-scoped ask-only directive: this turn asks, never accepts or counters
+  // with a price (design §7.3 example: "这一轮只问交期，不接受报价").
+  if (hints.ask_only) {
     return {
       ...base,
-      action: "accept_nonbinding",
-      proposal,
-      open_issues: [],
-      public_message: "接受该报价，双方达成非约束性共识。",
-      confidence: 0.9,
-      reason_codes: ["within_policy"],
+      action: "ask",
+      open_issues: ["turn_ask_only"],
+      public_message: "请先确认交付时间与售后条款。",
+      confidence: 0.8,
+      reason_codes: ["turn_ask_only"],
       request_human_review: false,
     };
   }
 
-  // The offer does not fit the private constraints. Never reveal why in
-  // numeric terms — escalate to a human instead of leaking the budget.
+  // A quantity cap ("最多买 N 件") re-scopes the check to the capped size.
+  const capped =
+    hints.quantity_cap !== undefined && proposal.quantity > hints.quantity_cap
+      ? { ...proposal, quantity: hints.quantity_cap }
+      : proposal;
+  const total = capped.unit_price * capped.quantity + capped.delivery.fee;
+  const maxTotal = hints.buyer_max_total_price ?? policy.max_total_price_private;
+  const etaOk = Date.parse(proposal.delivery.eta_end) <= Date.parse(policy.acceptable_eta_latest);
+  const refs = new Set(proposal.after_sales_policy_refs);
+  const termsOk = policy.required_after_sales_terms.every((t) => refs.has(t));
+  if (total > maxTotal || !etaOk || !termsOk) {
+    // The offer does not fit the constraints. Never reveal why in numeric
+    // terms — escalate to a human instead of leaking the budget.
+    return {
+      ...base,
+      action: "escalate",
+      open_issues: ["offer_outside_constraints"],
+      public_message: "该报价需要人工确认后才能继续。",
+      confidence: 0.7,
+      reason_codes: ["human_review"],
+      request_human_review: true,
+    };
+  }
+
+  // Soft preference: fight for free shipping before accepting a fee-bearing
+  // offer ("先争取包邮").
+  if (hints.prefer_free_shipping && proposal.delivery.fee > 0) {
+    return {
+      ...base,
+      action: "counter",
+      proposal: { ...proposal, delivery: { ...proposal.delivery, fee: 0 } },
+      open_issues: [...snapshot.open_issues],
+      public_message: "如果免运费（包邮），我可以接受当前报价。",
+      confidence: 0.8,
+      reason_codes: ["within_policy", "shipping_discussed"],
+      request_human_review: false,
+    };
+  }
+
+  // Quantity cap: accept at most the capped quantity.
+  if (capped !== proposal) {
+    return {
+      ...base,
+      action: "counter",
+      proposal: capped,
+      open_issues: [...snapshot.open_issues],
+      public_message: `按 ${hints.quantity_cap} 件以内我可以接受，请确认。`,
+      confidence: 0.8,
+      reason_codes: ["within_policy", "quantity_capped"],
+      request_human_review: false,
+    };
+  }
+
   return {
     ...base,
-    action: "escalate",
-    open_issues: ["offer_outside_constraints"],
-    public_message: "该报价需要人工确认后才能继续。",
-    confidence: 0.7,
-    reason_codes: ["human_review"],
-    request_human_review: true,
+    action: "accept_nonbinding",
+    proposal,
+    open_issues: [],
+    public_message: "接受该报价，双方达成非约束性共识。",
+    confidence: 0.9,
+    reason_codes: ["within_policy"],
+    request_human_review: false,
   };
 }
 

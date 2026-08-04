@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
+import {
+  fauxAssistantMessage,
+  fauxToolCall,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+  type FauxResponseStep,
+} from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { createScriptedFakeStreamFn } from "../src/runtime/fake-model.js";
 import { runMerchantTurn } from "../src/runtime/merchant-turn.js";
@@ -62,7 +68,7 @@ describe("merchant single turn (fake model + fake marketplace)", () => {
     expect(client.messages()).toHaveLength(2);
   });
 
-  it("reports already_claimed when another worker holds the claim", async () => {
+  it("a message under an active claim is not listed as work", async () => {
     const client = testClient();
     await client.claimMessage({
       conversation_id: "conv-merchant-001",
@@ -71,7 +77,7 @@ describe("merchant single turn (fake model + fake marketplace)", () => {
     });
     const { streamFn } = createScriptedFakeStreamFn(scriptedTurn(validDecision()));
     const report = await runMerchantTurn({ profile: testProfile(), client, streamFn });
-    expect(report.outcome.kind).toBe("already_claimed");
+    expect(report.outcome.kind).toBe("no_work");
   });
 
   it("retryable policy rejection is repaired by the model inside the turn", async () => {
@@ -297,5 +303,70 @@ describe("turn timeout", () => {
     expect(events).not.toContain("agent_message_processed");
     expect(events).not.toContain("negotiation_decision_submitted");
     expect(client.messages()).toHaveLength(1);
+  });
+
+  it("a submit already in flight when the timeout fires still settles as accepted", async () => {
+    const client = testClient();
+    const original = client.submitNegotiationDecision.bind(client);
+    client.submitNegotiationDecision = (async (input: Parameters<typeof original>[0]) => {
+      await new Promise((r) => setTimeout(r, 100));
+      return original(input);
+    }) as typeof client.submitNegotiationDecision;
+    const profile = testProfile();
+    profile.runtime.turn_timeout_seconds = 0.02; // fires while the submit is in flight
+    const { streamFn } = createScriptedFakeStreamFn(scriptedTurn(validDecision()));
+    const report = await runMerchantTurn({ profile, client, streamFn });
+    // The abort cannot cancel the in-flight gateway call: the decision the
+    // gate accepted is recorded and the claim completes — never misreported.
+    expect(report.outcome.kind).toBe("accepted");
+    expect(client.claimStatus(1)).toBe("processed");
+    const events = client.auditEvents().map((e) => e.event);
+    expect(events).toContain("negotiation_policy_accepted");
+    expect(events).not.toContain("agent_message_failed");
+  });
+});
+
+describe("model error classification", () => {
+  /** A stream whose first response ends in a model error with the given message. */
+  function modelErrorStreamFn(errorMessage: string): StreamFn {
+    return () => {
+      const msg = fauxAssistantMessage("model call failed", {
+        stopReason: "error",
+        errorMessage,
+      });
+      const stream = {
+        async *[Symbol.asyncIterator](): AsyncGenerator<AssistantMessageEvent> {
+          yield { type: "error", reason: "error", error: msg };
+        },
+        result: (): Promise<AssistantMessage> => Promise.resolve(msg),
+      };
+      return stream as unknown as ReturnType<StreamFn>;
+    };
+  }
+
+  it.each([
+    "The request failed with status 401 Unauthorized",
+    "HTTP 403 Forbidden: permission denied",
+    "insufficient_quota: your billing quota is exceeded",
+  ])("auth/config model errors are non-retriable: %s", async (message) => {
+    const client = testClient();
+    const report = await runMerchantTurn({
+      profile: testProfile(),
+      client,
+      streamFn: modelErrorStreamFn(message),
+    });
+    expect(report.outcome.kind).toBe("failed");
+    expect(report.outcome.kind === "failed" && report.outcome.retriable).toBe(false);
+  });
+
+  it("ordinary model errors stay retriable", async () => {
+    const client = testClient();
+    const report = await runMerchantTurn({
+      profile: testProfile(),
+      client,
+      streamFn: modelErrorStreamFn("connection reset by peer"),
+    });
+    expect(report.outcome.kind).toBe("failed");
+    expect(report.outcome.kind === "failed" && report.outcome.retriable).toBe(true);
   });
 });

@@ -287,6 +287,12 @@ export class FakeCommerceClient implements CommerceClient {
     if (this.state.conversationStatus !== this.waitingStatus) return Promise.resolve([]);
     const last = this.state.msgs[this.state.msgs.length - 1];
     if (!last || last.sender_role !== this.counterpart) return Promise.resolve([]);
+    // A message under an active (processing) claim is not pending work:
+    // without this, two same-identity workers would both see it and both
+    // proceed. Settled claims (failed/abandoned/processed) stay listed —
+    // failed/abandoned are reclaimable, processed follows the real
+    // gateway's reply-based listing.
+    if (this.state.claims.get(last.id)?.status === "processing") return Promise.resolve([]);
     return Promise.resolve([
       {
         conversation_id: this.conversationId,
@@ -322,15 +328,11 @@ export class FakeCommerceClient implements CommerceClient {
     }
     const existing = this.state.claims.get(input.message_id);
     if (existing) {
-      if (existing.idempotency_key === input.idempotency_key) {
-        // Idempotent replay: same key returns the recorded outcome.
-        return Promise.resolve({
-          claimed: existing.status === "processing",
-          status: existing.status,
-          attempts: existing.attempts,
-          idempotency_key: existing.idempotency_key,
-        });
-      }
+      // Contract (commerce/types.ts): a non-retryable existing claim returns
+      // claimed=false. This holds even for a same-key replay while the claim
+      // is still processing — the key is deterministic
+      // (agent_id:message_id:protocol), so two same-identity workers produce
+      // the same key and must never both be told they hold the claim.
       if (!RETRYABLE.has(existing.status)) {
         return Promise.resolve({
           claimed: false,
@@ -339,6 +341,8 @@ export class FakeCommerceClient implements CommerceClient {
           idempotency_key: existing.idempotency_key,
         });
       }
+      // failed/abandoned are reclaimable — including under the same
+      // deterministic key, which is exactly how a retrying worker reclaims.
       existing.status = "processing";
       existing.attempts += 1;
       existing.idempotency_key = input.idempotency_key;

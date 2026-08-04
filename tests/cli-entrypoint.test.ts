@@ -24,11 +24,11 @@ function run(args: string[]): { status: number; stdout: string } {
   }
 }
 
-describe("CLI entrypoint guard", () => {
+// dist/ is gitignored: on a fresh clone `npm test` runs without a build, so
+// these packaged-entrypoint tests skip there. `npm run verify` builds first
+// and always exercises them.
+describe.skipIf(!existsSync(DIST_CLI))("CLI entrypoint guard", () => {
   it("--version and --help work through a symlinked bin (npm .bin shape)", () => {
-    if (!existsSync(DIST_CLI)) {
-      throw new Error("dist/cli.js missing — run npm run build first (verify does)");
-    }
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-bin-"));
     try {
       // npm creates .bin/kiwi as a symlink to dist/cli.js.
@@ -50,9 +50,6 @@ describe("CLI entrypoint guard", () => {
   });
 
   it("--version also works on the real path directly", () => {
-    if (!existsSync(DIST_CLI)) {
-      throw new Error("dist/cli.js missing — run npm run build first (verify does)");
-    }
     const version = run([DIST_CLI, "--version"]);
     expect(version.status).toBe(0);
     expect(version.stdout).toBe("kiwi 0.1.0\n");
