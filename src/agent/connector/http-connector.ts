@@ -4,6 +4,7 @@
  * are public on the gateway — no token is sent for reads).
  */
 
+import { createHash } from "node:crypto";
 import {
   ConnectorError,
   parseConnectorMerchant,
@@ -17,13 +18,23 @@ import {
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
+export interface ShoppingCliConnectorOptions {
+  /**
+   * Buyer bootstrap token (gateway env SHOPPING_BUYER_BOOTSTRAP_TOKEN), used
+   * to start consultations via POST /buyer/ask. Read endpoints are public.
+   */
+  buyerBootstrapToken?: string;
+}
+
 export class ShoppingCliConnector implements CommerceConnector {
   readonly connector_id = "shopping-cli";
   readonly platform = "shopping-cli";
   private readonly baseUrl: string;
+  private readonly buyerBootstrapToken: string | undefined;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, options: ShoppingCliConnectorOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
+    this.buyerBootstrapToken = options.buyerBootstrapToken;
   }
 
   private async get(pathname: string, params: Record<string, string>): Promise<unknown> {
@@ -118,9 +129,24 @@ export class ShoppingCliConnector implements CommerceConnector {
   }): Promise<{ conversation_id: string; status: string }> {
     void input.merchant_id;
     void input.sku;
+    if (this.buyerBootstrapToken === undefined) {
+      throw new ConnectorError(
+        "auth",
+        "未配置 buyer bootstrap token（gateway 的 SHOPPING_BUYER_BOOTSTRAP_TOKEN）；无法发起咨询",
+      );
+    }
+    // Content-addressed idempotency key: a retried start after a lost response
+    // dedups on the gateway instead of creating a second conversation.
+    const idempotencyKey = createHash("sha256")
+      .update(`${input.buyer_id}:${input.sku}:${input.opening_message}`)
+      .digest("hex")
+      .slice(0, 16);
     const payload = (await this.post("/buyer/ask", {
       buyer_id: input.buyer_id,
       text: input.opening_message,
+    }, {
+      authorization: `Bearer ${this.buyerBootstrapToken}`,
+      "idempotency-key": idempotencyKey,
     })) as Record<string, unknown>;
     const conversationId =
       typeof payload.conversation_id === "string"
@@ -140,7 +166,11 @@ export class ShoppingCliConnector implements CommerceConnector {
     return { conversation_id: conversationId, status };
   }
 
-  private async post(pathname: string, body: unknown): Promise<unknown> {
+  private async post(
+    pathname: string,
+    body: unknown,
+    headers?: Record<string, string>,
+  ): Promise<unknown> {
     const url = `${this.baseUrl}${pathname}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -148,7 +178,11 @@ export class ShoppingCliConnector implements CommerceConnector {
     try {
       response = await fetch(url, {
         method: "POST",
-        headers: { accept: "application/json", "content-type": "application/json" },
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          ...headers,
+        },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
