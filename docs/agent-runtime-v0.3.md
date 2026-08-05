@@ -1,6 +1,6 @@
 # Kiwi Agent-first 电商运行时设计（v0.3）
 
-状态：v0.3.0-A（Agent 与记忆底座，§20）已实现——`src/agent/`（kernel、memory schema/store、vault、session、chat TUI、`kiwi chat`），34 个新增测试全绿；B、C 与 v0.3.1 未实现。本文其余部分定义 v0.3 的产品边界、Agent 运行时、长期记忆数据模型，以及 Buyer 商品搜索、跟踪和选定任务模型。本文不改变 v0.2 已有代码与 `shopping.negotiation/0.1` 契约。
+状态：v0.3.0-A（Agent 与记忆底座）与 v0.3.0-B（Buyer 搜索与跟踪）已实现——`src/agent/`（kernel、memory、vault、session、buyer task/scheduler/ranker、connector、chat TUI、`kiwi chat`），57 个新增测试全绿；C（咨询、磋商与 Merchant 能力包）与 v0.3.1 未实现。本文其余部分定义 v0.3 的产品边界、Agent 运行时、长期记忆数据模型，以及 Buyer 商品搜索、跟踪和选定任务模型。本文不改变 v0.2 已有代码与 `shopping.negotiation/0.1` 契约。
 
 ## 1. 设计结论
 

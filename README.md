@@ -162,7 +162,9 @@ bash scripts/e2e-local.sh   # SHOPPING_CLI_SRC 默认指向 ../shopping-cli，PO
 - **命令**：`/memory [preferences|private]`、`/forget <id|描述>`、`/correct <id> <新内容>`、`/why`（列出最近回答使用的 memory_id 与精度）；私密资料只回显字段名与状态。
 - **物理隔离**：每个 agent 独立目录/库/会话（0700/0600），一个数据库只绑定一个 principal，角色/owner 不可变；buyer 与 merchant 互相不可读。
 
-B（Buyer 搜索与跟踪）、C（咨询磋商与 Merchant 能力包）尚未实现。完整设计见 [`docs/agent-runtime-v0.3.md`](docs/agent-runtime-v0.3.md)。
+- **Buyer 搜索与跟踪（v0.3.0-B）**：`buyer_tasks` 状态机（draft→…→awaiting_user→selected_nonbinding，乐观版本 + 幂等事件防并发覆盖）、`product_candidates`（canonical_key 去重，不用标题）、`product_observations`（content_hash 去重 + fresh_until 新鲜度）、`tracking_rules`（降价/到货/促销/交期/定时复查）。搜索循环：Connector 搜索 → 本地硬过滤（只认显式约束与结构化事实，推断偏好永不删候选）→ 确定性排序（每维权重可追溯到用户指令/确认记忆/默认策略）→ shortlist 或转跟踪。Scheduler 以 tick 驱动、预算受限、多规则命中同候选合并为一次观察一条通知、重启后从数据库恢复唤醒队列。`select_product_nonbinding` 记录非绑定选定并显式标注"未创建订单"。Buyer 工具（search_products/create_buyer_task/add_tracking_rule/select_product_nonbinding 等）已接入 kernel；shopping-cli Connector 走真实 `GET /search/products`、`/search/merchants`、`/products/{sku}`（只读公开端点，不送 token），fake provider 下用内置确定性 Connector。
+
+B（Buyer 搜索与跟踪）已实现；C（咨询磋商与 Merchant 能力包）尚未实现。完整设计见 [`docs/agent-runtime-v0.3.md`](docs/agent-runtime-v0.3.md)。
 
 ## 外部 Agent Adapter（v0.2.1 设计）
 
@@ -175,7 +177,7 @@ B（Buyer 搜索与跟踪）、C（咨询磋商与 Merchant 能力包）尚未�
 ```bash
 npm run lint            # eslint --max-warnings=0（0 error / 0 warning）
 npm run typecheck       # tsc --noEmit（strict）
-npm run test            # vitest，285 个测试，fake model + fake marketplace + 注入 fetch/sleeper/signal + stub 进程，无外部依赖（全新 clone 未 build 时打包入口测试自动 skip；verify 先 build 必跑）
+npm run test            # vitest，297 个测试，fake model + fake marketplace + 注入 fetch/sleeper/signal + stub 进程，无外部依赖（全新 clone 未 build 时打包入口测试自动 skip；verify 先 build 必跑）
 npm run build           # tsc 构建到 dist/
 npm run verify:package  # 生产包冒烟：npm pack -> 临时目录 npm install --omit=dev -> 运行 kiwi --version 并 import schemas/runtime
 npm run verify          # 以上全部
