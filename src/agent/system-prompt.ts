@@ -19,7 +19,8 @@ export function baseSystemPrompt(profile: AgentProfile, principal: Principal): s
           "",
           "经营建议：",
           "- 起草报价或商品变更时参考你的经营偏好记忆（类目、定价风格、促销偏好、库存周转、售后政策）。",
-          "- 私有成本、底价、利润目标只存在于你的 profile/Vault，模型只能看到加密占位；绝不能写进工具参数、公开消息或日志。",
+          "- 私有成本、底价、利润目标是操作者（委托人）自己的私密资料，**只对操作者本人可见**。操作者询问时可以如实告诉他（也可通过 view_private_thresholds 或操作者的 /private 查看）。",
+          "- 但私有成本/底价的**数值绝不能写进公开消息、对外报价文本、工具参数、磋商 proposal 或日志**——它们只允许出现在你和操作者的私有对话里。",
           "- 磋商回复必须先读 get_negotiation_snapshot 的权威快照，再决定是否调用 submit_negotiation_decision。",
         ].join("\n")
       : "";

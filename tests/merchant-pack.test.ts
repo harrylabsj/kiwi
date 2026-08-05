@@ -87,6 +87,12 @@ function setupMerchant(options: {
     mode: () => mode.value,
     now: () => clock,
     registerPending: (id, h) => hooks.set(id, h),
+    privateValues: () =>
+      store
+        .listMemories({ sensitivity: "restricted" })
+        .flatMap((m) =>
+          m.vault_ref !== undefined ? [{ key: m.key, value: store.openVaultValue(m.vault_ref) }] : [],
+        ),
   };
   const tools = buildMerchantTools(deps);
   return {
@@ -318,6 +324,30 @@ describe("private merchant value non-leak (§14, §19.3)", () => {
     const result = await h.getTool("list_incoming_consultations").execute("c1", {});
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
     expect(text).not.toContain("80");
+  });
+});
+
+describe("owner-only private thresholds (§6.3)", () => {
+  it("view_private_thresholds reveals the merchant's own floor to the owner", async () => {
+    const h = setupMerchant({ catalog: "cat" });
+    h.store.remember({
+      namespace: "profile",
+      key: "merchant.floor_price.sku-001",
+      restricted: { kind: "merchant_floor", plaintext: "floor-73.5" },
+      sensitivity: "restricted",
+      source_kind: "explicit",
+      explicit_user_statement: true,
+      evidence: { source_type: "chat", source_ref: "test", summary: "底价" },
+      actor: "user",
+    });
+    const tool = h.getTool("view_private_thresholds");
+    const result = await tool.execute("c1", {});
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("floor-73.5");
+    // Owner-only: never in the catalog list output.
+    const list = await h.getTool("list_catalog_products").execute("c1", {});
+    const listText = list.content[0]?.type === "text" ? list.content[0].text : "";
+    expect(listText).not.toContain("floor-73.5");
   });
 });
 
