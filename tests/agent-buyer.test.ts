@@ -772,4 +772,27 @@ describe("P2: expiry, observation freshness and event dedup", () => {
     const task = store.listTasks()[0];
     expect(task?.expires_at).toBe("2026-08-09T16:00:00.000Z");
   });
+
+  it("create_buyer_task captures quantity and target_unit_price", async () => {
+    const { store, db } = setup([]);
+    const { tools } = toolsWithMode("supervised", store, db);
+    const create = tools.find((t) => t.name === "create_buyer_task");
+    expect(create).toBeDefined();
+    await create!.execute(
+      "c1",
+      {
+        goal_text: "买2个手写陶瓷杯，砍到100",
+        intent: { query_text: "手写陶瓷杯", category: "厨具", quantity: 2, target_unit_price: 100 },
+        constraints: { max_total_price: 240 },
+        run_search: false,
+      },
+      undefined,
+      undefined,
+      undefined,
+    );
+    const task = store.listTasks()[0] as BuyerTask;
+    expect(task.intent.quantity).toBe(2);
+    expect(task.intent.target_unit_price).toBe(100);
+    expect(task.constraints.max_total_price).toBe(240);
+  });
 });
