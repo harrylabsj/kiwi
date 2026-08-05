@@ -35,6 +35,7 @@ import {
 import type { CredentialBroker } from "./merchant/credential-broker.js";
 import type { MerchantClient } from "./merchant/types.js";
 import { buildMerchantTools } from "./merchant/merchant-tools.js";
+import { DeterministicNegotiationRunner } from "../operator/runner.js";
 import { MemoryStore } from "./memory/store.js";
 import { MemoryError, type MemoryItem, type Principal } from "./memory/types.js";
 import { PrivateVault } from "./memory/vault.js";
@@ -403,6 +404,28 @@ export class AgentKernel {
       }
       return this.scheduler.tick(budget);
     });
+  }
+
+  /**
+   * Autonomous negotiation follow-up (autopilot only): if this agent has a
+   * pending negotiation message, drive ONE deterministic turn to handle it.
+   * The deterministic decision negotiates within the profile's HardPolicy
+   * (buyer budget / merchant floor+discount) and auto-submits through the
+   * gateway gate — no per-turn human and no LLM tool-loop fragility. Escalated
+   * (out-of-rule) decisions park for a human. Returns a progress line for the
+   * chat, or undefined when there is nothing to do.
+   */
+  async negotiationAutoTick(): Promise<string | undefined> {
+    if (this.modeRef.value !== "autopilot") return undefined;
+    if (this.commerceClient === undefined) return undefined;
+    const runner = new DeterministicNegotiationRunner(this.profile, this.commerceClient);
+    const prepared = await runner.prepare().catch(() => undefined);
+    if (prepared === undefined) return undefined;
+    const outcome = await runner.submit(prepared).catch(() => undefined);
+    if (outcome === undefined) return "磋商处理失败（网关异常），下一轮自动重试。";
+    const detail =
+      outcome.settlement === "failed" ? `（${outcome.policy_result.public_reason}）` : "";
+    return `已自动处理一条磋商：${outcome.policy_result.result}${detail}`;
   }
 
   get isShutdownRequested(): boolean {

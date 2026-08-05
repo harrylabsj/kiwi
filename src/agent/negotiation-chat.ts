@@ -281,7 +281,7 @@ export function buildNegotiationChatTools(deps: NegotiationChatDeps): Tool[] {
     label: "提交磋商决策",
     description:
       "对一个待回复的 Marketplace Conversation 提交磋商决策。这是正式写意图，走现有策略门（buyer 私有预算门 + 网关权威门）。" +
-      "supervised 模式需要 /approve 批准后才真正提交。",
+      "supervised 模式需要 /approve 批准后才真正提交。proposal 字段必须与 get_negotiation_snapshot 的结构一致：顶层是 sku/quantity/unit_price/currency/stock/delivery/after_sales_policy_refs/valid_until（不要嵌套 items）。",
     parameters: {
       type: "object",
       properties: {
@@ -291,7 +291,38 @@ export function buildNegotiationChatTools(deps: NegotiationChatDeps): Tool[] {
           enum: ["ask", "propose", "counter", "accept_nonbinding", "decline", "escalate"],
         },
         public_message: { type: "string" },
-        proposal: { type: "object", description: "propose/counter/accept 时的完整 proposal" },
+        proposal: {
+          type: "object",
+          description: "propose/counter/accept 时的完整 proposal（必须含这些顶层字段）",
+          properties: {
+            sku: { type: "string" },
+            quantity: { type: "integer" },
+            unit_price: { type: "number" },
+            currency: { type: "string" },
+            stock: {
+              type: "object",
+              properties: {
+                status: { type: "string" },
+                quantity: { type: "integer" },
+                observed_at: { type: "string" },
+                reserved: { type: "boolean" },
+              },
+              required: ["status", "quantity", "observed_at", "reserved"],
+            },
+            delivery: {
+              type: "object",
+              properties: {
+                eta_start: { type: "string" },
+                eta_end: { type: "string" },
+                fee: { type: "number" },
+              },
+              required: ["eta_start", "eta_end", "fee"],
+            },
+            after_sales_policy_refs: { type: "array", items: { type: "string" } },
+            valid_until: { type: "string", description: "报价有效期（RFC3339）" },
+          },
+          required: ["sku", "quantity", "unit_price", "currency", "stock", "delivery", "after_sales_policy_refs", "valid_until"],
+        },
         open_issues: { type: "array", items: { type: "string" } },
         reason_codes: { type: "array", items: { type: "string" }, description: "本决策的理由代码，用于命中 human_review_on 策略" },
         request_human_review: { type: "boolean" },

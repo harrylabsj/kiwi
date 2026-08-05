@@ -247,13 +247,13 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     description: "列出商家收到的进行中咨询（磋商会话），含最新一条消息。",
     parameters: {
       type: "object",
-      properties: { merchant_id: { type: "string" } },
+      properties: {},
       additionalProperties: false,
     },
-    execute: async (_id, params) => {
+    execute: async (_id, _params) => {
       try {
-        const merchantId = optString((params as { merchant_id?: string }).merchant_id) ?? ownerId;
-        const consultations = await merchantClient.listIncomingConsultations(merchantId);
+        // Always this merchant's own consultations — never a caller-supplied id.
+        const consultations = await merchantClient.listIncomingConsultations(ownerId);
         if (consultations.length === 0) return textResult("当前没有进行中的咨询。");
         return textResult(
           consultations
@@ -276,13 +276,12 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     description: "查看商家需要人工处理的队列（升级、超预算/超底价、转人工的磋商）。",
     parameters: {
       type: "object",
-      properties: { merchant_id: { type: "string" } },
+      properties: {},
       additionalProperties: false,
     },
-    execute: async (_id, params) => {
+    execute: async (_id, _params) => {
       try {
-        const merchantId = optString((params as { merchant_id?: string }).merchant_id) ?? ownerId;
-        const reviews = await merchantClient.getHumanReviewQueue(merchantId);
+        const reviews = await merchantClient.getHumanReviewQueue(ownerId);
         if (reviews.length === 0) return textResult("人工处理队列为空。");
         return textResult(
           reviews
