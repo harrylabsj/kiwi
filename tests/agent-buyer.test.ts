@@ -722,4 +722,25 @@ describe("P2: expiry, observation freshness and event dedup", () => {
     expect(store.listTasks()).toHaveLength(1);
     expect((r2.content[0] as { type: "text"; text: string }).text).toContain("已存在");
   });
+
+  it("create_buyer_task accepts expires_at", async () => {
+    const { store, db } = setup([]);
+    const { tools } = toolsWithMode("supervised", store, db);
+    const create = tools.find((t) => t.name === "create_buyer_task");
+    expect(create).toBeDefined();
+    await create!.execute(
+      "c1",
+      {
+        goal_text: "买一个杯子",
+        intent: { query_text: "杯", category: "kitchenware" },
+        expires_at: "2026-08-10T00:00:00+08:00",
+        run_search: false,
+      },
+      undefined,
+      undefined,
+      undefined,
+    );
+    const task = store.listTasks()[0];
+    expect(task?.expires_at).toBe("2026-08-09T16:00:00.000Z");
+  });
 });

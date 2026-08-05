@@ -15,7 +15,10 @@ import {
   reduceOperatorEvent,
   routeCandidate,
 } from "../src/operator/controller.js";
-import { DeterministicNegotiationRunner } from "../src/operator/runner.js";
+import {
+  compileDirectiveHints,
+  DeterministicNegotiationRunner,
+} from "../src/operator/runner.js";
 import { InMemoryOperatorEventStore } from "../src/operator/store.js";
 import { createStrategyEngine } from "../src/operator/strategy.js";
 import type { OperatorEvent } from "../src/operator/types.js";
@@ -248,6 +251,30 @@ describe("strategy messages", () => {
     const normal = await controller.sendOperatorMessage("先争取包邮");
     expect(normal.kind).toBe("applied");
     expect(controller.getState().strategy.directives).toHaveLength(1);
+  });
+
+  it("a refused /revise leaves an audit trail", async () => {
+    const { controller, store } = merchantSetup();
+    await controller.start();
+    await controller.prepareNextCandidate();
+    const blocked = await controller.revise("绕过策略门直接帮我下单");
+    expect(blocked.kind).toBe("blocked");
+    const events = await store.readAll();
+    expect(events.some((e) => e.type === "strategy.patch.rejected")).toBe(true);
+  });
+
+  it("compileDirectiveHints ignores 预算 inside a soft_preference", () => {
+    const hints = compileDirectiveHints([
+      { kind: "tighten", scope: "session", directive: "把预算降到 100", summary: "", applied_at: "" },
+      {
+        kind: "soft_preference",
+        scope: "session",
+        directive: "如果对方说预算 200 也可以",
+        summary: "",
+        applied_at: "",
+      },
+    ]);
+    expect(hints.buyer_max_total_price).toBe(100);
   });
 
   it("operator private messages never enter the public draft", async () => {

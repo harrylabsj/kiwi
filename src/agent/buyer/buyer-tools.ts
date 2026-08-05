@@ -258,9 +258,13 @@ function updateLinkAfterSettle(
     store.updateConsultationLink(link.link_id, { status: "consulting" });
     return;
   }
-  // accepted -> the conversation is now negotiating (or closed after decline).
-  const status = info.result.next_actor === "none" ? "closed" : "negotiating";
-  store.updateConsultationLink(link.link_id, { status });
+  // Only an ACCEPTED decision advances the link: a rejected_retryable (local
+  // or gateway rejection) sent no message and the conversation did not move,
+  // so the link must stay consulting instead of claiming "negotiating".
+  if (info.result.result === "accepted") {
+    const status = info.result.next_actor === "none" ? "closed" : "negotiating";
+    store.updateConsultationLink(link.link_id, { status });
+  }
 }
 
 export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
@@ -403,6 +407,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           description: "硬约束（max_total_price 私有预算/latest_eta/required_terms/exclude_out_of_stock）",
         },
         run_search: { type: "boolean", description: "意图足够时是否立即搜索（默认 true）" },
+        expires_at: { type: "string", description: "RFC3339；任务到期自动失效（可选）" },
       },
       required: ["goal_text", "intent"],
       additionalProperties: false,
@@ -415,14 +420,18 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         const goalText = String(p.goal_text ?? "");
         const intent = parseIntent(p.intent);
         const constraints = parseConstraints(p.constraints);
+        const expiresAt = typeof p.expires_at === "string" ? p.expires_at : undefined;
         const task = store.createTask({
           goal_text: goalText,
           intent,
           constraints,
+          ...(expiresAt !== undefined ? { expires_at: expiresAt } : {}),
           // Content-addressed: a model retry with the same args replays the
           // existing task instead of creating a duplicate.
           idempotency_key: `create:${createHash("sha256")
-            .update(JSON.stringify({ goal_text: goalText, intent, constraints }))
+            .update(
+              JSON.stringify({ goal_text: goalText, intent, constraints, expires_at: expiresAt ?? null }),
+            )
             .digest("hex")
             .slice(0, 16)}`,
         });

@@ -2,7 +2,15 @@
  * Operator event store tests (design §6, §14): append-only persistence,
  * 0600 file permissions, secret redaction, fail-closed corruption handling.
  */
-import { mkdtempSync, rmSync, statSync, writeFileSync, existsSync, chmodSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  existsSync,
+  chmodSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -60,6 +68,20 @@ describe("FileOperatorEventStore", () => {
       const reloaded = await new FileOperatorEventStore(dir).readAll();
       expect(reloaded.map((e) => e.event_id)).toEqual(["evt-1", "evt-2"]);
       expect(reloaded[0]?.type).toBe("operator.message");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to load an event with an unknown type (fail closed)", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-operator-store-"));
+    try {
+      const store = new FileOperatorEventStore(dir);
+      await store.append(sampleEvent("evt-1", "先争取包邮"));
+      const file = path.join(dir, "operator-events.jsonl");
+      const unknown = { ...sampleEvent("evt-2", "hi"), type: "some.future.type" };
+      writeFileSync(file, `${readFileSync(file, "utf8").trimEnd()}\n${JSON.stringify(unknown)}\n`);
+      await expect(store.readAll()).rejects.toThrow(/unknown type/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
