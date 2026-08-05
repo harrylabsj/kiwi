@@ -19,18 +19,34 @@ import {
 } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import type { AgentProfile } from "../config/profile.js";
+import type { CommerceClient } from "../commerce/types.js";
 import { ensureAgentPaths, openAgentDatabase, type AgentPaths } from "./agent-db.js";
 import { buildBuyerTools } from "./buyer/buyer-tools.js";
 import { TaskScheduler, type TickBudget, type TickResult } from "./buyer/scheduler.js";
 import { BuyerTaskStore } from "./buyer/task-store.js";
 import { buildMemoryTools } from "./chat-tools.js";
 import type { CommerceConnector } from "./connector/types.js";
+import { AGENT_MODES, DEFAULT_AGENT_MODE, isAgentMode, type AgentMode } from "./mode.js";
+import {
+  ActionCandidateStore,
+  executeApprovedCandidate,
+  type ApprovalExecutionResult,
+} from "./merchant/action-candidate.js";
+import type { CredentialBroker } from "./merchant/credential-broker.js";
+import type { MerchantClient } from "./merchant/types.js";
+import { buildMerchantTools } from "./merchant/merchant-tools.js";
 import { MemoryStore } from "./memory/store.js";
 import { MemoryError, type MemoryItem, type Principal } from "./memory/types.js";
 import { PrivateVault } from "./memory/vault.js";
 import { openMainSession } from "./session.js";
 import { baseSystemPrompt, renderMemoryBriefing } from "./system-prompt.js";
 import type { DatabaseSync } from "node:sqlite";
+
+/** Execution hooks for a pending ActionCandidate (process-lifetime only). */
+export interface PendingActionHooks {
+  readPreconditions: () => Promise<Record<string, unknown>> | Record<string, unknown>;
+  execute: (args: Record<string, unknown>) => Promise<unknown>;
+}
 
 export const MAIN_SESSION_ID = "main";
 
@@ -44,6 +60,17 @@ export interface AgentKernelOptions {
   vault?: PrivateVault;
   /** Buyer tasks read facts through this connector (v0.3.0-B). */
   connector?: CommerceConnector;
+  /**
+   * Negotiation CommerceClient (v0.3.0-C): claim/snapshot/submit for linked
+   * consultations. Optional — negotiation tools fail closed when absent.
+   */
+  commerceClient?: CommerceClient;
+  /** Merchant catalog/inventory client (merchant kernels). */
+  merchantClient?: MerchantClient;
+  /** Credential Broker: negotiation/catalog/inventory scopes (§15.4). */
+  broker?: CredentialBroker;
+  /** Runtime write-approval mode (§16); defaults to supervised. */
+  mode?: AgentMode;
   now?: () => string;
 }
 
@@ -66,6 +93,10 @@ const COMMANDS_HELP = `/memory [preferences|private]  查看记忆概览 / 学�
 /forget <memory-id|描述>   删除记忆（tombstone + 审计）
 /correct <memory-id> <新内容>  修正记忆（保留前后版本审计）
 /why                       说明最近的回答使用了哪些记忆
+/mode [manual|supervised|autopilot] [confirm]  查看或切换写操作审批模式
+/pending                   列出等待批准的写操作候选
+/approve <candidate-id>    批准并执行一个写操作候选（重新校验前置状态）
+/reject <candidate-id>     驳回一个写操作候选（绝不执行）
 /help                      本帮助
 /quit                      退出`;
 
@@ -83,6 +114,14 @@ export class AgentKernel {
   private closed = false;
   private readonly taskStore?: BuyerTaskStore;
   private readonly scheduler?: TaskScheduler;
+  private readonly approvals?: ActionCandidateStore;
+  private readonly commerceClient?: CommerceClient;
+  private readonly merchantClient?: MerchantClient;
+  private readonly broker?: CredentialBroker;
+  /** Shared mutable mode ref (tools read it via a getter before the kernel exists). */
+  private readonly modeRef: { value: AgentMode } = { value: DEFAULT_AGENT_MODE };
+  /** Live execution hooks for pending candidates (v0.3.0-C /approve). */
+  private readonly pendingHooks: Map<string, PendingActionHooks>;
 
   private constructor(options: {
     profile: AgentProfile;
@@ -94,6 +133,12 @@ export class AgentKernel {
     harness: AgentHarness;
     taskStore?: BuyerTaskStore;
     scheduler?: TaskScheduler;
+    approvals?: ActionCandidateStore;
+    commerceClient?: CommerceClient;
+    merchantClient?: MerchantClient;
+    broker?: CredentialBroker;
+    modeRef?: { value: AgentMode };
+    pendingHooks?: Map<string, PendingActionHooks>;
   }) {
     this.profile = options.profile;
     this.paths = options.paths;
@@ -104,6 +149,12 @@ export class AgentKernel {
     this.harness = options.harness;
     if (options.taskStore !== undefined) this.taskStore = options.taskStore;
     if (options.scheduler !== undefined) this.scheduler = options.scheduler;
+    if (options.approvals !== undefined) this.approvals = options.approvals;
+    if (options.commerceClient !== undefined) this.commerceClient = options.commerceClient;
+    if (options.merchantClient !== undefined) this.merchantClient = options.merchantClient;
+    if (options.broker !== undefined) this.broker = options.broker;
+    if (options.modeRef !== undefined) this.modeRef = options.modeRef;
+    this.pendingHooks = options.pendingHooks ?? new Map();
   }
 
   static async open(options: AgentKernelOptions): Promise<AgentKernel> {
@@ -123,9 +174,17 @@ export class AgentKernel {
     // All clocks are normalized to UTC ISO (SQLite compares timestamps
     // lexicographically; mixed offsets would silently break due checks).
     const clock = () => new Date(Date.parse((options.now ?? (() => new Date().toISOString()))())).toISOString();
+    const modeRef = { value: options.mode ?? DEFAULT_AGENT_MODE };
+    const pendingHooks = new Map<string, PendingActionHooks>();
+    const registerPending: (id: string, hooks: PendingActionHooks) => void = (id, hooks) => {
+      pendingHooks.set(id, hooks);
+    };
+
+    const approvals = new ActionCandidateStore({ db, principalId: principal.principal_id, now: clock });
     let taskStore: BuyerTaskStore | undefined;
     let scheduler: TaskScheduler | undefined;
     let buyerTools: ReturnType<typeof buildBuyerTools> = [];
+    let merchantTools: ReturnType<typeof buildMerchantTools> = [];
     if (options.profile.role === "buyer" && options.connector !== undefined) {
       taskStore = new BuyerTaskStore({ db, principalId: principal.principal_id, now: clock });
       scheduler = new TaskScheduler({
@@ -133,7 +192,33 @@ export class AgentKernel {
         connectors: [options.connector],
         now: clock,
       });
-      buyerTools = buildBuyerTools({ store: taskStore, connector: options.connector, now: clock });
+      buyerTools = buildBuyerTools({
+        store: taskStore,
+        connector: options.connector,
+        profile: options.profile,
+        ...(options.commerceClient !== undefined ? { commerceClient: options.commerceClient } : {}),
+        ...(options.broker !== undefined ? { broker: options.broker } : {}),
+        approvals,
+        mode: () => modeRef.value,
+        registerPending,
+        now: clock,
+      });
+    } else if (
+      options.profile.role === "merchant" &&
+      options.merchantClient !== undefined &&
+      options.commerceClient !== undefined &&
+      options.broker !== undefined
+    ) {
+      merchantTools = buildMerchantTools({
+        profile: options.profile,
+        merchantClient: options.merchantClient,
+        commerceClient: options.commerceClient,
+        broker: options.broker,
+        approvals,
+        mode: () => modeRef.value,
+        registerPending,
+        now: clock,
+      });
     }
 
     const base = baseSystemPrompt(options.profile, principal);
@@ -142,7 +227,7 @@ export class AgentKernel {
       session,
       models: options.models,
       model: options.model,
-      tools: [...buildMemoryTools(store), ...buyerTools],
+      tools: [...buildMemoryTools(store), ...buyerTools, ...merchantTools],
       systemPrompt: async () => (briefing === undefined ? base : `${base}\n\n${briefing}`),
       ...(options.thinkingLevel !== undefined ? { thinkingLevel: options.thinkingLevel } : {}),
     });
@@ -155,8 +240,14 @@ export class AgentKernel {
       principal,
       session,
       harness,
+      approvals,
+      modeRef,
+      pendingHooks,
       ...(taskStore !== undefined ? { taskStore } : {}),
       ...(scheduler !== undefined ? { scheduler } : {}),
+      ...(options.commerceClient !== undefined ? { commerceClient: options.commerceClient } : {}),
+      ...(options.merchantClient !== undefined ? { merchantClient: options.merchantClient } : {}),
+      ...(options.broker !== undefined ? { broker: options.broker } : {}),
     });
     kernel.briefingSetter = (value) => {
       briefing = value;
@@ -173,6 +264,90 @@ export class AgentKernel {
   /** Buyer task store (undefined for merchant kernels). */
   get buyerTasks(): BuyerTaskStore | undefined {
     return this.taskStore;
+  }
+
+  /** ActionCandidate approval store (both roles; undefined only if unopened). */
+  get actionCandidates(): ActionCandidateStore | undefined {
+    return this.approvals;
+  }
+
+  /** Current runtime write-approval mode (design §16). */
+  getMode(): AgentMode {
+    return this.modeRef.value;
+  }
+
+  /**
+   * Change the runtime mode. Switching INTO autopilot requires an explicit
+   * `confirm` — the same fail-closed rule as the operator control plane
+   * (docs/operator-tui-v0.2.md §8).
+   */
+  setMode(mode: AgentMode, options?: { confirmed?: boolean }): { ok: boolean; error?: string } {
+    if (!isAgentMode(mode)) {
+      return { ok: false, error: `未知模式：${String(mode)}（可选 ${AGENT_MODES.join("/")}）` };
+    }
+    if (this.modeRef.value === mode) return { ok: true };
+    if (mode === "autopilot" && options?.confirmed !== true) {
+      return { ok: false, error: "切换到 autopilot 需要显式确认：/mode autopilot confirm" };
+    }
+    this.modeRef.value = mode;
+    return { ok: true };
+  }
+
+  /** Pending ActionCandidates awaiting /approve (fail closed on expiry). */
+  listPendingApprovals(): ReturnType<ActionCandidateStore["listPending"]> {
+    if (this.approvals === undefined) return [];
+    return this.approvals.listPending();
+  }
+
+  /**
+   * Approve + execute a pending ActionCandidate. Execution re-reads the
+   * preconditions and re-hashes them (§16): a stale or expired approval is
+   * superseded, never executed. A candidate left over from a previous process
+   * (no live execution hooks) is expired, matching operator-plane recovery.
+   */
+  approveCandidate(candidateId: string): Promise<ApprovalExecutionResult> {
+    // Serialized with all other kernel work. Note: slash handlers run INSIDE
+    // the kernel chain, so they call approveCandidateInner directly to avoid
+    // a nested-enqueue deadlock.
+    return this.enqueue(() => this.approveCandidateInner(candidateId));
+  }
+
+  /** Approval execution without re-enqueueing (callers must already be serialized). */
+  private async approveCandidateInner(candidateId: string): Promise<ApprovalExecutionResult> {
+    if (this.approvals === undefined) {
+      throw new MemoryError("validation", "审批存储不可用");
+    }
+    const candidate = this.approvals.get(candidateId);
+    if (candidate === undefined) {
+      throw new MemoryError("validation", `未知审批候选 ${candidateId}`);
+    }
+    const hooks = this.pendingHooks.get(candidateId);
+    if (hooks === undefined) {
+      // Cross-restart recovery (design §18.3): without live hooks the
+      // candidate cannot be re-validated against the current marketplace.
+      this.approvals.expireDue();
+      this.approvals.supersede(candidateId);
+      return {
+        kind: "not_approvable",
+        candidate: this.approvals.get(candidateId) as typeof candidate,
+        reason: `候选 ${candidateId} 没有可用的执行钩子（可能在重启前生成）；已失效，请重新生成。`,
+      };
+    }
+    this.approvals.markApproved(candidateId);
+    return executeApprovedCandidate(this.approvals, candidateId, hooks);
+  }
+
+  /** Reject a pending/advice-only ActionCandidate. Never executes. */
+  rejectCandidate(candidateId: string): { ok: boolean; error?: string } {
+    if (this.approvals === undefined) return { ok: false, error: "审批存储不可用" };
+    const candidate = this.approvals.get(candidateId);
+    if (candidate === undefined) return { ok: false, error: `未知审批候选 ${candidateId}` };
+    if (candidate.status !== "pending_approval" && candidate.status !== "approved") {
+      return { ok: false, error: `候选 ${candidateId} 状态为 ${candidate.status}，不可驳回` };
+    }
+    this.approvals.reject(candidateId);
+    this.pendingHooks.delete(candidateId);
+    return { ok: true };
   }
 
   /**
@@ -214,7 +389,7 @@ export class AgentKernel {
     return this.enqueue(async () => {
       if (this.closed) throw new MemoryError("validation", "kernel is closed");
       if (text.startsWith("/")) {
-        return this.handleSlash(text);
+        return await this.handleSlash(text);
       }
       const memories = this.store.retrieve({
         session_id: MAIN_SESSION_ID,
@@ -231,7 +406,7 @@ export class AgentKernel {
     });
   }
 
-  private handleSlash(input: string): KernelReply {
+  private async handleSlash(input: string): Promise<KernelReply> {
     const [command = "", ...rest] = input.trim().split(/\s+/);
     const arg = rest.join(" ").trim();
     try {
@@ -244,6 +419,14 @@ export class AgentKernel {
           return { text: this.handleCorrect(arg), quit: false };
         case "/why":
           return { text: this.renderWhy(), quit: false };
+        case "/mode":
+          return { text: this.handleMode(arg), quit: false };
+        case "/pending":
+          return { text: this.renderPending(), quit: false };
+        case "/approve":
+          return { text: await this.handleApprove(arg), quit: false };
+        case "/reject":
+          return { text: this.handleReject(arg), quit: false };
         case "/help":
           return { text: COMMANDS_HELP, quit: false };
         case "/quit":
@@ -345,6 +528,57 @@ export class AgentKernel {
         `  · ${e.memory_id} ${e.namespace}/${e.key}（用途 ${e.purpose} · 精度 ${e.redaction_level} · 置信度 ${e.confidence}）`,
     );
     return ["[记忆] 最近一轮回答使用了以下记忆:", ...lines].join("\n");
+  }
+
+  // ---- write-approval slash commands (design §16) ---------------------------
+
+  private handleMode(arg: string): string {
+    if (arg === "") {
+      return `[模式] 当前写操作审批模式：${this.getMode()}（manual/supervised/autopilot；autopilot 需 confirm）`;
+    }
+    const [target, confirm] = arg.split(/\s+/);
+    const result = this.setMode(target as AgentMode, { confirmed: confirm === "confirm" });
+    if (!result.ok) return `[模式] ${result.error ?? "切换失败"}`;
+    return `[模式] 已切换到 ${this.getMode()}。写操作将按新模式路由（supervised 需 /approve）。`;
+  }
+
+  private renderPending(): string {
+    const pending = this.listPendingApprovals();
+    if (pending.length === 0) return "[审批] 当前没有等待批准的写操作候选。";
+    const lines = pending.map((c) => {
+      const args = JSON.stringify(c.arguments);
+      return `  · ${c.candidate_id} [${c.risk}] ${c.tool}（截止 ${c.expires_at}）args=${args.slice(0, 80)}`;
+    });
+    return ["[审批] 等待批准的写操作候选（/approve <id> 批准，/reject <id> 驳回）:", ...lines].join("\n");
+  }
+
+  private async handleApprove(arg: string): Promise<string> {
+    if (arg === "") return "用法：/approve <candidate-id>";
+    const id = arg.trim();
+    try {
+      // Already inside the kernel chain (handleUserText enqueues handleSlash);
+      // calling approveCandidate would re-enqueue and deadlock.
+      const result = await this.approveCandidateInner(id);
+      if (result.kind === "executed") {
+        return `[审批] 候选 ${id} 已执行。结果：${JSON.stringify(result.output)}`;
+      }
+      if (result.kind === "stale") {
+        return `[审批] 候选 ${id} 已失效（${result.reason}），未执行；请重新生成候选。`;
+      }
+      if (result.kind === "expired") {
+        return `[审批] 候选 ${id} 已过期，未执行。`;
+      }
+      return `[审批] 候选 ${id} 无法执行：${result.reason}`;
+    } catch (err) {
+      return `[审批] 命令失败：${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private handleReject(arg: string): string {
+    if (arg === "") return "用法：/reject <candidate-id>";
+    const result = this.rejectCandidate(arg.trim());
+    if (!result.ok) return `[审批] ${result.error ?? "驳回失败"}`;
+    return `[审批] 候选 ${arg.trim()} 已驳回，绝不会执行。`;
   }
 
   // ---- lifecycle ------------------------------------------------------------

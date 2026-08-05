@@ -11,6 +11,8 @@ import type {
   BuyerTask,
   BuyerTaskStatus,
   CandidateStatus,
+  ConsultationLink,
+  ConsultationLinkStatus,
   ProductCandidate,
   ProductObservation,
   RankingPolicy,
@@ -605,6 +607,114 @@ export class BuyerTaskStore {
       .run(next, triggered ? 1 : 0, now, ruleId);
   }
 
+  // ---- consultation links (design §11.8) -----------------------------------
+
+  /**
+   * Associate a Buyer task + candidate with an authoritative Marketplace
+   * Conversation. Idempotent per (task_id, conversation_id): a retried link
+   * returns the existing row instead of duplicating it.
+   */
+  createConsultationLink(input: {
+    task_id: string;
+    candidate_id?: string;
+    connector_id: string;
+    conversation_id: string;
+    idempotency_key: string;
+  }): ConsultationLink {
+    const now = this.now();
+    this.db.exec("BEGIN");
+    try {
+      if (this.eventByIdempotencyKey(input.idempotency_key) !== undefined) {
+        const existing = this.db
+          .prepare(
+            "SELECT * FROM consultation_links WHERE task_id = ? AND conversation_id = ?",
+          )
+          .get(input.task_id, input.conversation_id) as Record<string, unknown> | undefined;
+        this.db.exec("COMMIT");
+        if (existing !== undefined) return this.rowToLink(existing);
+      }
+      const task = this.getTask(input.task_id);
+      if (task === undefined) throw new BuyerTaskError("not_found", `no task ${input.task_id}`);
+      if (input.candidate_id !== undefined) {
+        const candidate = this.getCandidate(input.candidate_id);
+        if (candidate === undefined || candidate.task_id !== input.task_id) {
+          throw new BuyerTaskError("not_found", `no candidate ${input.candidate_id} in task`);
+        }
+      }
+      const linkId = `link_${uuidv7()}`;
+      this.db
+        .prepare(
+          `INSERT INTO consultation_links
+             (link_id, task_id, candidate_id, connector_id, conversation_id, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'consulting', ?, ?)`,
+        )
+        .run(
+          linkId,
+          input.task_id,
+          input.candidate_id ?? null,
+          input.connector_id,
+          input.conversation_id,
+          now,
+          now,
+        );
+      this.appendEventTx(
+        input.task_id,
+        "consultation_linked",
+        { link_id: linkId, conversation_id: input.conversation_id, candidate_id: input.candidate_id ?? null },
+        "model",
+        input.idempotency_key,
+        now,
+      );
+      this.db.exec("COMMIT");
+      return this.getConsultationLink(linkId) as ConsultationLink;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  getConsultationLink(linkId: string): ConsultationLink | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM consultation_links WHERE link_id = ?")
+      .get(linkId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : this.rowToLink(row);
+  }
+
+  linksForTask(taskId: string): ConsultationLink[] {
+    const rows = this.db
+      .prepare("SELECT * FROM consultation_links WHERE task_id = ? ORDER BY created_at, link_id")
+      .all(taskId) as Record<string, unknown>[];
+    return rows.map((r) => this.rowToLink(r));
+  }
+
+  linkByConversation(conversationId: string): ConsultationLink | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM consultation_links WHERE conversation_id = ? LIMIT 1")
+      .get(conversationId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : this.rowToLink(row);
+  }
+
+  updateConsultationLink(
+    linkId: string,
+    patch: { status?: ConsultationLinkStatus; last_message_id?: string | null },
+  ): ConsultationLink {
+    const link = this.getConsultationLink(linkId);
+    if (link === undefined) throw new BuyerTaskError("not_found", `no consultation link ${linkId}`);
+    this.db
+      .prepare(
+        `UPDATE consultation_links
+         SET status = ?, last_message_id = ?, updated_at = ?
+         WHERE link_id = ?`,
+      )
+      .run(
+        patch.status ?? link.status,
+        patch.last_message_id === undefined ? (link.last_message_id ?? null) : patch.last_message_id,
+        this.now(),
+        linkId,
+      );
+    return this.getConsultationLink(linkId) as ConsultationLink;
+  }
+
   // ---- row mapping -------------------------------------------------------------
 
   private rowToTask(row: TaskRow): BuyerTask {
@@ -702,5 +812,20 @@ export class BuyerTaskStore {
     if (row.candidate_id !== null) rule.candidate_id = row.candidate_id as string;
     if (row.last_triggered_at !== null) rule.last_triggered_at = row.last_triggered_at as string;
     return rule;
+  }
+
+  private rowToLink(row: Record<string, unknown>): ConsultationLink {
+    const link: ConsultationLink = {
+      link_id: row.link_id as string,
+      task_id: row.task_id as string,
+      connector_id: row.connector_id as string,
+      conversation_id: row.conversation_id as string,
+      status: row.status as ConsultationLinkStatus,
+      created_at: row.created_at as string,
+      updated_at: row.updated_at as string,
+    };
+    if (row.candidate_id !== null) link.candidate_id = row.candidate_id as string;
+    if (row.last_message_id !== null) link.last_message_id = row.last_message_id as string;
+    return link;
   }
 }
