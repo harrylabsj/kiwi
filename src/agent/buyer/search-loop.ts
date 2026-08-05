@@ -18,6 +18,7 @@ import type {
   BuyerTask,
   ProductCandidate,
   ProductObservation,
+  TaskConstraints,
   TrackingRule,
 } from "./types.js";
 import { BuyerTaskError } from "./types.js";
@@ -35,12 +36,18 @@ export interface ShortlistEntry {
 
 export interface SearchCycleResult {
   task: BuyerTask;
-  outcome: "shortlist_ready" | "tracking" | "failed";
+  /** `retry` = transient connector error, task parked for a scheduled retry. */
+  outcome: "shortlist_ready" | "tracking" | "failed" | "retry";
   shortlist: ShortlistEntry[];
   error?: string;
 }
 
-/** Content-hash over the assertion-relevant facts (§11.6 dedup). */
+/**
+ * Content-hash over the assertion-relevant facts (§11.6 dedup). Includes
+ * delivery ETA so a changed delivery promise produces a NEW observation
+ * instead of being silently deduped away (which would keep `delivery_before`
+ * rules and the delivery dimension evaluating stale ETAs).
+ */
 export function observationHash(product: ConnectorProduct): string {
   return createHash("sha256")
     .update(
@@ -49,6 +56,7 @@ export function observationHash(product: ConnectorProduct): string {
         price: product.price,
         fee: product.delivery.fee,
         stock: product.stock,
+        eta_minutes: product.delivery.eta_minutes,
         warnings: product.warnings,
       }),
     )
@@ -142,6 +150,13 @@ export async function runSearchCycle(
     );
   }
 
+  // A private budget may be vaulted (max_total_price_vault_ref); resolve it
+  // here so filtering and default rules never see the plaintext value and
+  // never skip the constraint when it lives in the Vault (§11.2).
+  const budget = store.resolveBudget(task.constraints);
+  const effectiveConstraints: TaskConstraints =
+    budget !== undefined ? { ...task.constraints, max_total_price: budget } : task.constraints;
+
   // ready/tracking -> searching (idempotent; already-searching = crash resume).
   if (task.status !== "searching") {
     task = store.transitionTask({
@@ -165,25 +180,41 @@ export async function runSearchCycle(
       limit: task.search_budget.max_candidates,
     });
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     const retriable = err instanceof ConnectorError && err.kind === "transient";
+    if (retriable) {
+      // §18.1/§13: a transient connector error must not kill the task. Park it
+      // in `tracking` with a scheduled retry (exponential backoff, capped); the
+      // scheduler's dueTasks re-runs it when next_run_at is due.
+      const attempts =
+        store.taskEvents(taskId).filter((e) => e.type === "connector_retry").length + 1;
+      const backoffMs = Math.min(
+        task.tracking_policy.default_interval_seconds * 1000 * 2 ** Math.min(attempts - 1, 5),
+        6 * 3600 * 1000,
+      );
+      const nextRunAt = new Date(Date.parse(startedAt) + backoffMs).toISOString();
+      task = store.transitionTask({
+        task_id: taskId,
+        to: "tracking",
+        expected_version: task.version,
+        event_type: "connector_retry",
+        payload: { error: message, retriable: true, attempts, next_run_at: nextRunAt },
+        origin: "connector",
+        idempotency_key: `${runId}:retry`,
+        next_run_at: nextRunAt,
+      });
+      return { task, outcome: "retry", shortlist: [], error: message };
+    }
     task = store.transitionTask({
       task_id: taskId,
       to: "failed",
       expected_version: task.version,
       event_type: "failed",
-      payload: {
-        error: err instanceof Error ? err.message : String(err),
-        retriable,
-      },
+      payload: { error: message, retriable: false },
       origin: "connector",
       idempotency_key: `${runId}:failed`,
     });
-    return {
-      task,
-      outcome: "failed",
-      shortlist: [],
-      error: err instanceof Error ? err.message : String(err),
-    };
+    return { task, outcome: "failed", shortlist: [], error: message };
   }
 
   const observations = new Map<string, ProductObservation | undefined>();
@@ -201,7 +232,7 @@ export async function runSearchCycle(
     const obs = store.addObservation(
       toObservation(candidate.candidate_id, product, startedAt, task.tracking_policy.observation_ttl_seconds),
     );
-    const filter = hardFilter(product, task.constraints, startedAt);
+    const filter = hardFilter(product, effectiveConstraints, startedAt);
     const observation = store.latestObservation(candidate.candidate_id);
     observations.set(product.sku, observation);
     if (filter.eligible === "ineligible") {
@@ -279,7 +310,7 @@ export async function runSearchCycle(
   }
 
   // Nothing eligible yet: install tracking rules and wait for wakeups.
-  const rules = installDefaultRules(deps, task);
+  const rules = installDefaultRules(deps, { ...task, constraints: effectiveConstraints });
   const nextRun = new Date(
     Date.parse(startedAt) + task.tracking_policy.default_interval_seconds * 1000,
   ).toISOString();

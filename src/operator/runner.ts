@@ -31,6 +31,8 @@ import {
   type PolicyResult,
 } from "../negotiation/types.js";
 import { checkBuyerLocalPolicy, localBuyerPolicyResult } from "../runtime/buyer-policy.js";
+import { HEARTBEAT_INTERVAL_MS } from "../runtime/negotiation-turn.js";
+import { startClaimHeartbeat, type ClaimHeartbeat } from "../runtime/heartbeat.js";
 import {
   deterministicBuyerDecision,
   deterministicMerchantDecision,
@@ -73,6 +75,13 @@ export interface NegotiationRunner {
   submit(prepared: Pick<PreparedCandidate, "binding" | "decision">): Promise<SubmitOutcome>;
   /** Best-effort abandon of the claim behind a candidate. Never completes. */
   abandon(prepared: Pick<PreparedCandidate, "binding">, reason: string): Promise<void>;
+  /**
+   * Start claim heartbeats while a candidate sits awaiting approval (design
+   * §10): the claim must not be stolen by stale recovery during a long human
+   * decision. Stop before submit/abandon.
+   */
+  startHeartbeat(prepared: Pick<PreparedCandidate, "binding">): void;
+  stopHeartbeat(): Promise<void>;
 }
 
 /**
@@ -178,13 +187,37 @@ function buildAnalysis(
  * rule-based decision functions; submission reuses the same gates as the
  * headless turn (buyer local policy -> gateway policy gate -> settlement).
  */
+export interface DeterministicRunnerOptions {
+  /** Claim-heartbeat cadence while awaiting approval (defaults to runtime value). */
+  heartbeatIntervalMs?: number;
+}
+
 export class DeterministicNegotiationRunner implements NegotiationRunner {
   private readonly profile: AgentProfile;
   private readonly client: CommerceClient;
+  private readonly heartbeatIntervalMs: number;
+  private heartbeat?: ClaimHeartbeat;
 
-  constructor(profile: AgentProfile, client: CommerceClient) {
+  constructor(profile: AgentProfile, client: CommerceClient, options?: DeterministicRunnerOptions) {
     this.profile = profile;
     this.client = client;
+    this.heartbeatIntervalMs = options?.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
+  }
+
+  startHeartbeat(prepared: Pick<PreparedCandidate, "binding">): void {
+    // Never stack beaters: a newer claim supersedes the older one's heartbeat.
+    this.heartbeat?.stop();
+    this.heartbeat = startClaimHeartbeat(
+      this.client,
+      prepared.binding.message_id,
+      this.heartbeatIntervalMs,
+    );
+  }
+
+  async stopHeartbeat(): Promise<void> {
+    const beat = this.heartbeat;
+    this.heartbeat = undefined;
+    await beat?.stop();
   }
 
   async prepare(options?: {

@@ -117,6 +117,10 @@ export class TaskScheduler {
       }
       let observation: ProductObservation | undefined;
       requests += 1;
+      // §11.7: observation freshness TTL comes from the task's tracking
+      // policy, not a hardcoded 30 minutes.
+      const task = this.store.getTask(candidate.task_id);
+      const ttlSeconds = task?.tracking_policy.observation_ttl_seconds ?? 1800;
       try {
         const product = await connector.getProduct(candidate.sku);
         const added = this.store.addObservation({
@@ -140,9 +144,7 @@ export class TaskScheduler {
             warnings: product.warnings,
           },
           content_hash: observationHash(product),
-          fresh_until: new Date(
-            Date.parse(now) + 1800 * 1000,
-          ).toISOString(),
+          fresh_until: new Date(Date.parse(now) + ttlSeconds * 1000).toISOString(),
         });
         if (added.added) {
           this.store.updateCandidate(candidateId, { latest_observation_id: added.observation_id });
@@ -175,9 +177,11 @@ export class TaskScheduler {
         }
       }
       if (triggered.length > 0) {
-        // Merged: one notification per candidate per observation (§11.7).
+        // Merged: one notification per candidate per observation (§11.7). The
+        // event is keyed by observation_id, so an unchanged fact re-triggering
+        // after cooldown does NOT surface a duplicate notification.
         const summary = triggered.map((t) => t.reason).join("；");
-        this.store.appendEvent(
+        const inserted = this.store.appendEvent(
           rules[0]?.task_id ?? "",
           "notification",
           {
@@ -188,12 +192,14 @@ export class TaskScheduler {
           "scheduler",
           `notify:${candidateId}:${observation.observation_id}`,
         );
-        result.notifications.push({
-          task_id: rules[0]?.task_id ?? "",
-          candidate_id: candidateId,
-          summary,
-          rule_ids: triggered.map((t) => t.rule.rule_id),
-        });
+        if (inserted) {
+          result.notifications.push({
+            task_id: rules[0]?.task_id ?? "",
+            candidate_id: candidateId,
+            summary,
+            rule_ids: triggered.map((t) => t.rule.rule_id),
+          });
+        }
       }
     }
 
@@ -236,7 +242,7 @@ export class TaskScheduler {
           .listCandidates(task.task_id)
           .filter((c) => !before.has(c.canonical_key));
         if (newOnes.length > 0) {
-          this.store.appendEvent(
+          const inserted = this.store.appendEvent(
             task.task_id,
             "notification",
             {
@@ -246,11 +252,13 @@ export class TaskScheduler {
             "scheduler",
             `notify:${task.task_id}:new:${now}`,
           );
-          result.notifications.push({
-            task_id: task.task_id,
-            summary: `发现 ${newOnes.length} 个新候选`,
-            rule_ids: [],
-          });
+          if (inserted) {
+            result.notifications.push({
+              task_id: task.task_id,
+              summary: `发现 ${newOnes.length} 个新候选`,
+              rule_ids: [],
+            });
+          }
         }
         void cycle;
       } catch (err) {
@@ -286,11 +294,6 @@ function evaluateRule(
     }
     case "stock_available":
       return latest.stock.quantity > 0 ? `已到货（库存 ${latest.stock.quantity}）` : undefined;
-    case "promotion_changed":
-      if (previous === undefined) return undefined;
-      return JSON.stringify(previous.promotion) !== JSON.stringify(latest.promotion)
-        ? "促销信息发生变化"
-        : undefined;
     case "delivery_before": {
       const before = typeof rule.condition.eta_before === "string" ? rule.condition.eta_before : "";
       if (before === "") return undefined;

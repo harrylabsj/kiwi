@@ -36,7 +36,18 @@ function errorText(err: unknown): string {
   return `记忆操作失败：${err instanceof Error ? err.message : String(err)}`;
 }
 
-export function buildMemoryTools(store: MemoryStore): Tool[] {
+export interface MemoryToolOptions {
+  /**
+   * Current conversation-turn id. The evidence dedup key (design §9.3) must be
+   * per TURN so several remember calls inside one turn count as ONE piece of
+   * evidence — a time-based ref would defeat dedup and let a single session
+   * auto-activate a preference with no task diversity.
+   */
+  turnId?: () => string;
+}
+
+export function buildMemoryTools(store: MemoryStore, options: MemoryToolOptions = {}): Tool[] {
+  const turnRef = () => options.turnId?.() ?? `session:main:${Date.now()}`;
   const remember: Tool = {
     name: TOOL_REMEMBER,
     label: "记住",
@@ -91,12 +102,20 @@ export function buildMemoryTools(store: MemoryStore): Tool[] {
         if (!isMemorySourceKind(p.source_kind)) {
           throw new MemoryError("validation", "source_kind 非法");
         }
+        // Fail closed: a Restricted write needs an explicit valid kind. A
+        // missing/unknown kind must not silently downgrade to `other`.
+        if (p.restricted_kind !== undefined && !isVaultKind(p.restricted_kind)) {
+          throw new MemoryError("validation", "restricted_kind 非法");
+        }
+        if ((p.restricted_value === undefined) !== (p.restricted_kind === undefined)) {
+          throw new MemoryError(
+            "validation",
+            "restricted_value 与 restricted_kind 必须同时提供",
+          );
+        }
         const restricted =
-          p.restricted_value !== undefined || p.restricted_kind !== undefined
-            ? {
-                kind: isVaultKind(p.restricted_kind) ? p.restricted_kind : ("other" as const),
-                plaintext: String(p.restricted_value ?? ""),
-              }
+          p.restricted_value !== undefined && p.restricted_kind !== undefined
+            ? { kind: p.restricted_kind, plaintext: String(p.restricted_value) }
             : undefined;
         const outcome: RememberOutcome = store.remember({
           namespace: p.namespace,
@@ -109,7 +128,7 @@ export function buildMemoryTools(store: MemoryStore): Tool[] {
           ...(typeof p.expires_at === "string" ? { expires_at: p.expires_at } : {}),
           evidence: {
             source_type: "chat",
-            source_ref: `session:main:${Date.now()}`,
+            source_ref: turnRef(),
             summary: String(p.reason_summary ?? ""),
           },
           actor: "model",
@@ -150,7 +169,16 @@ export function buildMemoryTools(store: MemoryStore): Tool[] {
     execute: async (_id, params) => {
       try {
         const p = params as { memory_id: string; reason?: string };
-        const memory = store.forgetMemory(p.memory_id, "user", p.reason ?? "用户要求遗忘");
+        const existing = store.getMemory(p.memory_id);
+        if (
+          existing !== undefined &&
+          (existing.namespace === "constraint" || existing.sensitivity === "restricted")
+        ) {
+          return textResult(
+            "硬约束/敏感记忆请由操作者用 /forget 人工处理，模型不能直接删除。",
+          );
+        }
+        const memory = store.forgetMemory(p.memory_id, "model", p.reason ?? "模型推断用户要求遗忘");
         return textResult(`已遗忘 ${memory.memory_id}（${memory.key}），不再用于任何回答。`);
       } catch (err) {
         return textResult(errorText(err));
@@ -175,11 +203,20 @@ export function buildMemoryTools(store: MemoryStore): Tool[] {
     execute: async (_id, params) => {
       try {
         const p = params as { memory_id: string; value: unknown; reason?: string };
+        const existing = store.getMemory(p.memory_id);
+        if (
+          existing !== undefined &&
+          (existing.namespace === "constraint" || existing.sensitivity === "restricted")
+        ) {
+          return textResult(
+            "硬约束/敏感记忆请由操作者用 /correct 人工处理，模型不能直接修改。",
+          );
+        }
         const memory = store.correctMemory(
           p.memory_id,
           { value: p.value },
-          "user",
-          p.reason ?? "用户纠正",
+          "model",
+          p.reason ?? "模型推断用户纠正",
         );
         return textResult(`已修正 ${memory.memory_id}（版本 ${memory.version}），旧值保留在审计事件中。`);
       } catch (err) {

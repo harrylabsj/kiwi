@@ -53,6 +53,23 @@ function toolResultText(context: Context, toolName: string): string {
   return "";
 }
 
+/** Precise personal data the offline demo must route to the Vault, not plaintext. */
+const SENSITIVE_KIND: ReadonlyArray<{ kind: string; pattern: RegExp }> = [
+  { kind: "address", pattern: /(住址|地址|住在|家住|收货|寄到).{0,20}\d/ },
+  { kind: "contact", pattern: /(电话|手机|微信号|联系方式|邮箱|e-?mail).{0,10}\d{5,}/i },
+  { kind: "private_budget", pattern: /(预算|心理价).{0,6}\d/ },
+  { kind: "merchant_cost", pattern: /(成本|进价).{0,6}\d/ },
+  { kind: "merchant_floor", pattern: /(底价|最低价).{0,6}\d/ },
+  { kind: "other", pattern: /(身份证|银行卡|卡号|账号)/ },
+];
+
+function classifyNote(note: string): { kind: string } | undefined {
+  for (const { kind, pattern } of SENSITIVE_KIND) {
+    if (pattern.test(note)) return { kind };
+  }
+  return undefined;
+}
+
 /** One canned behavior step; repeats as a safety net for retries. */
 function respond(context: Context) {
   if (hasToolResult(context, TOOL_REMEMBER)) {
@@ -68,17 +85,23 @@ function respond(context: Context) {
   const rememberMatch = /^记住[:：]?\s*(.+)$/.exec(text.trim());
   if (rememberMatch !== null) {
     const note = (rememberMatch[1] ?? "").trim();
-    const idMatch = /\bmem_[0-9a-z]+\b/i.exec(note);
+    const sensitive = classifyNote(note);
     return fauxAssistantMessage([
       fauxToolCall(TOOL_REMEMBER, {
         namespace: "preference",
         key: `chat.note.${note.slice(0, 24).replace(/\s+/g, "_")}`,
-        value: { note },
-        sensitivity: "normal",
         source_kind: "explicit",
         explicit_user_statement: true,
         reason_summary: `用户明确要求记住：${note.slice(0, 40)}`,
-        ...(idMatch !== null ? {} : {}),
+        // Precise personal data (address/contact/budget/cost/floor) is a
+        // Restricted Vault write — never plaintext, and it needs a data key.
+        ...(sensitive !== undefined
+          ? {
+              restricted_kind: sensitive.kind,
+              restricted_value: note,
+              sensitivity: "restricted",
+            }
+          : { value: { note }, sensitivity: "normal" }),
       }),
     ]);
   }

@@ -92,6 +92,7 @@ function assistantText(message: AssistantMessage): string {
 const COMMANDS_HELP = `/memory [preferences|private]  查看记忆概览 / 学习到的偏好 / 私密资料字段与状态
 /forget <memory-id|描述>   删除记忆（tombstone + 审计）
 /correct <memory-id> <新内容>  修正记忆（保留前后版本审计）
+/confirm <memory-id>       人工确认候选记忆生效（硬约束/敏感记忆必须人工确认）
 /why                       说明最近的回答使用了哪些记忆
 /mode [manual|supervised|autopilot] [confirm]  查看或切换写操作审批模式
 /pending                   列出等待批准的写操作候选
@@ -122,6 +123,9 @@ export class AgentKernel {
   private readonly modeRef: { value: AgentMode } = { value: DEFAULT_AGENT_MODE };
   /** Live execution hooks for pending candidates (v0.3.0-C /approve). */
   private readonly pendingHooks: Map<string, PendingActionHooks>;
+  /** Current conversation-turn id, shared with the remember tool (evidence dedup §9.3). */
+  private readonly turnId: { current: string };
+  private turnSeq = 0;
 
   private constructor(options: {
     profile: AgentProfile;
@@ -139,6 +143,7 @@ export class AgentKernel {
     broker?: CredentialBroker;
     modeRef?: { value: AgentMode };
     pendingHooks?: Map<string, PendingActionHooks>;
+    turnId: { current: string };
   }) {
     this.profile = options.profile;
     this.paths = options.paths;
@@ -155,6 +160,7 @@ export class AgentKernel {
     if (options.broker !== undefined) this.broker = options.broker;
     if (options.modeRef !== undefined) this.modeRef = options.modeRef;
     this.pendingHooks = options.pendingHooks ?? new Map();
+    this.turnId = options.turnId;
   }
 
   static async open(options: AgentKernelOptions): Promise<AgentKernel> {
@@ -168,7 +174,13 @@ export class AgentKernel {
       role: options.profile.role,
     });
     store.bindPrincipal(principal.principal_id);
-    const session = await openMainSession(paths);
+    let session: Session;
+    try {
+      session = await openMainSession(paths);
+    } catch (err) {
+      db.close(); // never leak the SQLite handle on a fail-closed open
+      throw err;
+    }
 
     // Buyer capability pack (v0.3.0-B): task store + scheduler + tools.
     // All clocks are normalized to UTC ISO (SQLite compares timestamps
@@ -176,6 +188,7 @@ export class AgentKernel {
     const clock = () => new Date(Date.parse((options.now ?? (() => new Date().toISOString()))())).toISOString();
     const modeRef = { value: options.mode ?? DEFAULT_AGENT_MODE };
     const pendingHooks = new Map<string, PendingActionHooks>();
+    const turnId = { current: MAIN_SESSION_ID };
     const registerPending: (id: string, hooks: PendingActionHooks) => void = (id, hooks) => {
       pendingHooks.set(id, hooks);
     };
@@ -186,7 +199,7 @@ export class AgentKernel {
     let buyerTools: ReturnType<typeof buildBuyerTools> = [];
     let merchantTools: ReturnType<typeof buildMerchantTools> = [];
     if (options.profile.role === "buyer" && options.connector !== undefined) {
-      taskStore = new BuyerTaskStore({ db, principalId: principal.principal_id, now: clock });
+      taskStore = new BuyerTaskStore({ db, principalId: principal.principal_id, now: clock, vault });
       scheduler = new TaskScheduler({
         store: taskStore,
         connectors: [options.connector],
@@ -227,7 +240,7 @@ export class AgentKernel {
       session,
       models: options.models,
       model: options.model,
-      tools: [...buildMemoryTools(store), ...buyerTools, ...merchantTools],
+      tools: [...buildMemoryTools(store, { turnId: () => turnId.current }), ...buyerTools, ...merchantTools],
       systemPrompt: async () => (briefing === undefined ? base : `${base}\n\n${briefing}`),
       ...(options.thinkingLevel !== undefined ? { thinkingLevel: options.thinkingLevel } : {}),
     });
@@ -243,6 +256,7 @@ export class AgentKernel {
       approvals,
       modeRef,
       pendingHooks,
+      turnId,
       ...(taskStore !== undefined ? { taskStore } : {}),
       ...(scheduler !== undefined ? { scheduler } : {}),
       ...(options.commerceClient !== undefined ? { commerceClient: options.commerceClient } : {}),
@@ -397,9 +411,23 @@ export class AgentKernel {
         text,
       });
       this.briefingSetter(renderMemoryBriefing(memories));
+      // Advance the turn id so several remember calls inside this one turn
+      // dedup into a single evidence piece (§9.3).
+      this.turnId.current = `${MAIN_SESSION_ID}:${++this.turnSeq}`;
       try {
         const message = await this.harness.prompt(text);
-        return { text: assistantText(message), quit: false };
+        const reply = assistantText(message);
+        // §18.1: a model failure (throw OR empty response) must leave the
+        // conversation and TUI intact.
+        if (reply === "") {
+          return { text: "模型没有返回内容，请重试。", quit: false };
+        }
+        return { text: reply, quit: false };
+      } catch (err) {
+        return {
+          text: `模型处理失败：${err instanceof Error ? err.message : String(err)}。对话状态未改变，请重试。`,
+          quit: false,
+        };
       } finally {
         this.briefingSetter(undefined);
       }
@@ -417,6 +445,8 @@ export class AgentKernel {
           return { text: this.handleForget(arg), quit: false };
         case "/correct":
           return { text: this.handleCorrect(arg), quit: false };
+        case "/confirm":
+          return { text: this.handleConfirm(arg), quit: false };
         case "/why":
           return { text: this.renderWhy(), quit: false };
         case "/mode":
@@ -516,6 +546,17 @@ export class AgentKernel {
     }
     const memory = this.store.correctMemory(memoryId, { value }, "user", "via /correct");
     return `[记忆] 已修正 ${memory.memory_id}（版本 ${memory.version}），旧值保留在审计事件中。`;
+  }
+
+  /** Human-only promotion of a candidate (design §10.1): constraints and
+   * restricted values require /confirm before they take effect. */
+  private handleConfirm(arg: string): string {
+    if (arg === "") return "用法：/confirm <memory-id>";
+    if (!arg.startsWith("mem_")) {
+      return "请用 memory-id 指定（/memory 可查看候选的 id）。";
+    }
+    const memory = this.store.confirmMemory(arg, "user");
+    return `[记忆] 已确认 ${memory.memory_id}（${memory.key}），现在生效。`;
   }
 
   private renderWhy(): string {

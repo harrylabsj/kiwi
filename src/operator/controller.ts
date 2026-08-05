@@ -297,12 +297,17 @@ export class OperatorController {
     this.candidateSeq = events.filter((e) => e.type === "candidate.generated").length;
     // Recovery rule (design §14.3/§14.4): a candidate from a previous run
     // cannot be re-validated against the live claim, so it is expired —
-    // never submitted. The operator regenerates with fresh state.
+    // never submitted. The operator regenerates with fresh state. `submitted`
+    // is included: a crash between decision.submitted and turn.settled would
+    // otherwise leave the session wedged (approve/reject/revise all refuse and
+    // prepareNextCandidate stays blocked), because the approval is only
+    // cleared by turn.settled.
     for (const candidate of this.state.candidates.values()) {
       if (
         candidate.status === "awaiting_approval" ||
         candidate.status === "advice_only" ||
-        candidate.status === "approved"
+        candidate.status === "approved" ||
+        candidate.status === "submitted"
       ) {
         candidate.status = "expired";
       }
@@ -380,11 +385,20 @@ export class OperatorController {
     if (trimmed === "") return { kind: "rejected", reason: "空消息" };
     if (this.state.shutdown) return { kind: "rejected", reason: "控制器已关闭" };
 
-    await this.record({
-      ...this.nextBase("private"),
-      type: "operator.message",
-      payload: { text: trimmed },
-    });
+    try {
+      await this.record({
+        ...this.nextBase("private"),
+        type: "operator.message",
+        payload: { text: trimmed },
+      });
+    } catch {
+      // The event store refuses secret-like values (fail closed). This must
+      // reject the message inline — never crash the whole TUI session.
+      return {
+        kind: "rejected",
+        reason: "该消息疑似包含敏感值（token/密钥等），未记录（fail closed）。请去掉敏感内容后重试。",
+      };
+    }
     const patch = this.engine.compile(trimmed, this.strategyContext());
     await this.record({
       ...this.nextBase("private"),
@@ -493,6 +507,9 @@ export class OperatorController {
       this.lastCounterpartMessage = prepared.counterpart_message;
     }
     this.prepared.set(candidateId, prepared);
+    // Keep the claim alive while the operator deliberates (design §10): a
+    // >300s decision must not let stale recovery steal the claim.
+    this.runner.startHeartbeat(prepared);
     await this.record({
       ...this.nextBase("public_draft"),
       type: "candidate.generated",
@@ -557,6 +574,7 @@ export class OperatorController {
       },
     });
     this.prepared.delete(candidateId);
+    await this.runner.stopHeartbeat();
 
     const result: ApprovalResult & { kind: "submitted" } = {
       kind: "submitted",
@@ -635,6 +653,7 @@ export class OperatorController {
     if (prepared) {
       await this.runner.abandon(prepared, reason ?? "operator rejected candidate");
       this.prepared.delete(id);
+      await this.runner.stopHeartbeat();
     }
     await this.record({
       ...this.nextBase("private"),
@@ -695,6 +714,7 @@ export class OperatorController {
     if (prepared) {
       await this.runner.abandon(prepared, "operator requested revise");
       this.prepared.delete(id);
+      await this.runner.stopHeartbeat();
     }
     await this.record({
       ...this.nextBase("private"),
@@ -784,6 +804,7 @@ export class OperatorController {
       if (prepared) {
         await this.runner.abandon(prepared, "operator shutdown with pending candidate");
         this.prepared.delete(pendingId);
+        await this.runner.stopHeartbeat();
       }
       await this.record({
         ...this.nextBase("private"),
