@@ -220,6 +220,24 @@ describe("strategy messages", () => {
     expect(events.some((e) => e.type === "strategy.patch.applied")).toBe(false);
   });
 
+  it("rejects chat and out-of-scope tasks without applying them", async () => {
+    const { controller, store } = merchantSetup();
+    await controller.start();
+    const chat = await controller.sendOperatorMessage("早上好");
+    expect(chat.kind).toBe("rejected");
+    if (chat.kind === "rejected") expect(chat.patch?.kind).toBe("chat");
+    const oos = await controller.sendOperatorMessage("请帮我上架商品，价格2499元，库存3个");
+    expect(oos.kind).toBe("rejected");
+    if (oos.kind === "rejected") expect(oos.patch?.kind).toBe("out_of_scope");
+
+    expect(controller.getState().strategy.directives).toHaveLength(0);
+    expect(controller.getState().stats.patches_applied).toBe(0);
+    expect(controller.getState().stats.patches_rejected).toBe(2);
+    const events = await store.readAll();
+    expect(events.filter((e) => e.type === "strategy.patch.rejected")).toHaveLength(2);
+    expect(events.some((e) => e.type === "strategy.patch.applied")).toBe(false);
+  });
+
   it("operator private messages never enter the public draft", async () => {
     const { controller } = merchantSetup();
     await controller.start();

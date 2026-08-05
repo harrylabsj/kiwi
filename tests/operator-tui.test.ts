@@ -82,6 +82,36 @@ describe("runTui", () => {
     expect(merchant.claimStatus(1)).toBe("abandoned");
   });
 
+  it("maps bare approve to /approve instead of a preference", async () => {
+    const { controller, merchant } = tuiSetup();
+    await controller.start();
+    const { input, output, text } = streams(["approve", "/quit"]);
+
+    await runTui({ controller, input, output });
+    const out = text();
+    expect(out).not.toContain("策略已应用");
+    // The initial supervised candidate is awaiting approval; bare approve
+    // submits it — never recorded as a soft_preference directive.
+    expect(out).toContain("决策已提交");
+    expect(merchant.messages()).toHaveLength(2);
+    expect(controller.getState().strategy.directives).toHaveLength(0);
+  });
+
+  it("surfaces chat and out-of-scope tasks without applying them as strategy", async () => {
+    const { controller, merchant } = tuiSetup();
+    await controller.start();
+    const { input, output, text } = streams(["早上好", "请帮我上架商品，价格2499元，库存3个", "/quit"]);
+
+    await runTui({ controller, input, output });
+    const out = text();
+    expect(out).toContain("该消息未作为策略指令");
+    expect(out).toContain("超出 Kiwi v0.2 能力范围");
+    expect(out).not.toContain("策略已应用");
+    expect(controller.getState().strategy.directives).toHaveLength(0);
+    // Nothing was approved: the marketplace got no new formal message.
+    expect(merchant.messages()).toHaveLength(1);
+  });
+
   it("requires confirmation before switching to autopilot", async () => {
     const { controller } = tuiSetup();
     await controller.start();

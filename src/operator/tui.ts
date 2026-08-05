@@ -40,6 +40,25 @@ function modeLabel(mode: OperatorMode): string {
 
 type Write = (text: string) => void;
 
+/** Bare natural-language aliases for the slash commands (design §12). */
+const BARE_APPROVE = /^(approve|accept|批准)$/i;
+const BARE_REJECT = /^(reject|驳回|拒绝)$/i;
+const BARE_REVISE = /^(revise|重算|重来|重新生成)\s+(.+)$/i;
+
+/**
+ * Map a bare (no-slash) operator line to its slash command, so `approve` /
+ * `reject` / `revise <指令>` are not swallowed as strategy preferences.
+ * Returns undefined when the line is not a known command alias.
+ */
+function mapBareCommand(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (BARE_APPROVE.test(trimmed)) return "/approve";
+  if (BARE_REJECT.test(trimmed)) return "/reject";
+  const revise = BARE_REVISE.exec(trimmed);
+  if (revise !== null && revise[2] !== undefined) return `/revise ${revise[2].trim()}`;
+  return undefined;
+}
+
 function renderHeader(controller: OperatorController, write: Write): void {
   const state = controller.getState();
   const profile = controller.profile;
@@ -281,12 +300,21 @@ async function handleLine(
     await handleCommand(controller, line, write);
     return;
   }
+  const bare = mapBareCommand(line);
+  if (bare !== undefined) {
+    await handleCommand(controller, bare, write);
+    return;
+  }
   const result = await controller.sendOperatorMessage(line);
   if (result.kind === "applied") {
     write(`[私有] 策略已应用（${result.patch.kind}）：${result.patch.summary}`);
   } else if (result.kind === "needs_confirmation") {
     write(`[私有] 该变更放宽约束：${result.patch.summary}`);
     write("[私有] 输入 /strategy confirm 确认应用，或继续输入其他指令忽略。");
+  } else if (result.patch?.kind === "chat") {
+    write(`[私有] 该消息未作为策略指令：${result.reason}`);
+  } else if (result.patch?.kind === "out_of_scope") {
+    write(`[私有] 超出 Kiwi v0.2 能力范围：${result.reason}`);
   } else {
     write(`[私有] 已拒绝：${result.reason}`);
   }

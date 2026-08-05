@@ -14,8 +14,22 @@ import type { DecisionAction, NegotiationDecision, Role } from "../negotiation/t
 export type OperatorMode = "autopilot" | "supervised" | "manual";
 export const OPERATOR_MODES: readonly OperatorMode[] = ["autopilot", "supervised", "manual"];
 
-/** Strategy patch risk classes (design §8). */
-export type PatchKind = "tighten" | "soft_preference" | "relax" | "forbidden";
+/**
+ * Strategy patch risk classes (design §8).
+ *
+ * `forbidden` attacks a product boundary and is always refused;
+ * `out_of_scope` is a task Kiwi v0.2 does not execute (listing/inventory/
+ * refunds) — also refused, never applied; `chat` is operator chatter that is
+ * not a strategy statement — also refused, never applied. Only tighten /
+ * soft_preference / relax shape the effective strategy.
+ */
+export type PatchKind =
+  | "tighten"
+  | "soft_preference"
+  | "relax"
+  | "forbidden"
+  | "out_of_scope"
+  | "chat";
 /** `turn` directives expire after one candidate settles; `session` persist. */
 export type PatchScope = "session" | "turn";
 
@@ -36,9 +50,12 @@ export interface StrategyPatch {
   matched_rules: string[];
 }
 
+/** Patch kinds that may end up in the effective strategy (never-applied kinds excluded). */
+export type AppliedPatchKind = Exclude<PatchKind, "forbidden" | "out_of_scope" | "chat">;
+
 /** An applied strategy directive inside the effective strategy. */
 export interface StrategyDirective {
-  kind: Exclude<PatchKind, "forbidden">;
+  kind: AppliedPatchKind;
   scope: PatchScope;
   directive: string;
   summary: string;

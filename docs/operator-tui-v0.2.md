@@ -180,6 +180,10 @@ OperatorEvent
 - `soft_preference`：增加不突破硬约束的偏好，可按配置直接应用。
 - `relax`：放宽约束，例如提高预算或降低商家底价，必须二次确认。
 - `forbidden`：试图取消 no-order、安全门或身份隔离，始终拒绝。
+- `chat`：纯问候/闲聊，不是策略语句，拒绝且永不写入有效策略。
+- `out_of_scope`：上架、库存、退款等 v0.2 明确未实现的任务（§3 非目标），给出边界反馈、拒绝且永不写入有效策略，避免被静默吞成 `soft_preference`。
+
+`chat` / `out_of_scope` 与 `forbidden` 一样走 `blocked` 路径，不会进入 `strategy.directives`，因此不会悄悄影响后续候选生成。
 
 以下变化必须显式确认：
 

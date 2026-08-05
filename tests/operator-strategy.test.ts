@@ -81,6 +81,26 @@ describe("StrategyEngine.compile", () => {
     expect(patch.kind).toBe("forbidden");
     expect(patch.matched_rules).toContain("forbid_secret_exfil");
   });
+
+  it("classifies pure chat as chat (never applied as strategy)", () => {
+    const patch = engine.compile("早上好", buyerCtx);
+    expect(patch.kind).toBe("chat");
+    expect(patch.matched_rules).toContain("chat");
+    expect(patch.requires_confirmation).toBe(false);
+  });
+
+  it("classifies out-of-scope tasks like product listing as out_of_scope", () => {
+    const patch = engine.compile("请帮我上架商品“macmini 256”, 价格2499元， 库存3个", buyerCtx);
+    expect(patch.kind).toBe("out_of_scope");
+    expect(patch.matched_rules).toContain("out_of_scope_task");
+    expect(patch.requires_confirmation).toBe(false);
+  });
+
+  it("does not swallow a legit inventory-trigger strategy as out of scope", () => {
+    // design §7.2 session strategy example must stay a preference.
+    const patch = engine.compile("库存低于5件时转人工", merchantCtx);
+    expect(patch.kind).toBe("soft_preference");
+  });
 });
 
 describe("StrategyEngine.assess", () => {
@@ -93,5 +113,9 @@ describe("StrategyEngine.assess", () => {
     expect(engine.assess(tighten).level).toBe("ok");
     const soft = engine.compile("先争取包邮", buyerCtx);
     expect(engine.assess(soft).level).toBe("ok");
+    const chat = engine.compile("早上好", buyerCtx);
+    expect(engine.assess(chat).level).toBe("blocked");
+    const oos = engine.compile("请帮我上架商品", buyerCtx);
+    expect(engine.assess(oos).level).toBe("blocked");
   });
 });
