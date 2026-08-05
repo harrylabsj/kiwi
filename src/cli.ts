@@ -385,7 +385,9 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
     thinkingLevel = resolveThinkingLevel(profile);
     if (profile.role === "buyer") {
       const { ShoppingCliConnector } = await import("./agent/connector/http-connector.js");
-      connector = new ShoppingCliConnector(profile.commerce.base_url);
+      connector = new ShoppingCliConnector(profile.commerce.base_url, {
+        buyerBootstrapToken: process.env.SHOPPING_BUYER_BOOTSTRAP_TOKEN,
+      });
     }
     // Real gateway: negotiation client + scoped merchant client + broker.
     const { ProfileCredentialBroker } = await import(
