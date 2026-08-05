@@ -41,7 +41,7 @@ import { runDown, runStatus, runUp, SupervisorError } from "./supervisor/manage.
 import { parseLogLines, runLogs } from "./supervisor/logs.js";
 import { StackConfigError } from "./supervisor/stack-config.js";
 
-const USAGE = `kiwi 0.1.0 — commerce negotiation agent runtime
+const USAGE = `kiwi 0.3.0 — commerce negotiation agent runtime
 
 Usage:
   kiwi init --dir <dir> [--shopping-cli-src <path>] [--fake]
@@ -443,7 +443,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return EXIT.OK;
   }
   if (argv.includes("--version")) {
-    process.stdout.write("kiwi 0.1.0\n");
+    process.stdout.write("kiwi 0.3.0\n");
     return EXIT.OK;
   }
   let args: ParsedArgs;

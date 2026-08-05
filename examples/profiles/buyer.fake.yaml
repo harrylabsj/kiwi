@@ -2,7 +2,7 @@
 # Requires: SHOPPING_BUYER_TOKEN set (conversation-scoped buyer token).
 # buyer_policy is PRIVATE: the marketplace never sees these values; the
 # local policy gate enforces them inside the submit tool before any write.
-runtime_version: 0.1.0
+runtime_version: 0.3.0
 protocol_version: shopping.negotiation/0.1
 agent_id: buyer-agent:buyer-001
 role: buyer
