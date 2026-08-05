@@ -1,8 +1,9 @@
 ---
 title: Kiwi Negotiation Protocol 1.0
+doc_revision: "1.1"
 short_name: KNP/1.0
 status: Draft Normative Specification
-date: 2026-08-05
+date: 2026-08-06
 target_implementation: Kiwi v0.4+
 scope: Pre-transaction Agent-to-Agent commerce negotiation
 ---
@@ -117,7 +118,7 @@ A public KNP deployment MUST advertise a UCP capability whose identifier follows
 For example:
 
 ```text
-com.example.shopping.negotiation
+example.kiwi.shopping.negotiation
 ```
 
 The `spec` and `schema` origins MUST satisfy UCP namespace-authority rules.
@@ -131,7 +132,7 @@ The concrete production identifier MUST be frozen before public interoperability
 Test vectors in this specification use:
 
 ```text
-com.example.shopping.negotiation
+example.kiwi.shopping.negotiation
 ```
 
 only as an example authority.
@@ -283,7 +284,7 @@ Every KNP wire payload MUST be carried inside a Negotiation Envelope.
 
 ```json
 {
-  "capability": "com.example.shopping.negotiation",
+  "capability": "example.kiwi.shopping.negotiation",
   "protocol_version": "1.0",
   "negotiation_id": "neg_01...",
   "exchange_id": "ex_01...",
@@ -576,8 +577,9 @@ For each rule:
 2. collect all matching rules;
 3. if no rule matches, use `base_terms`;
 4. if exactly one rule matches, use that rule's complete `then_terms`;
-5. if more than one matching rule produces non-identical terms, return `condition_conflict`;
-6. if multiple matching rules produce byte-equivalent canonical `then_terms`, they MAY be treated as one result.
+5. if more than one matching rule produces non-identical complete `then_terms`, return `condition_conflict`;
+6. implementations MUST NOT implicitly merge distinct matching `then_terms` field-by-field;
+7. if multiple matching rules produce byte-equivalent canonical `then_terms`, they MAY be treated as one result.
 
 A model MUST NOT choose among conflicting matching rules.
 
@@ -671,55 +673,87 @@ An agreement MUST be traceable to the accepted offer and its terms digest.
 
 # 17. Withdraw, Decline, and Cancel
 
-## 17.1 Withdraw
+## 17.1 Target Reference
 
-Withdraw retracts an actor's own active RFQ or offer-like object.
+KNP uses stable message-level references for objects that do not otherwise carry their own business object identifier.
+
+A target reference MUST contain:
+
+```json
+{
+  "target_message_id": "msg_..."
+}
+```
+
+For Offer-like targets, it SHOULD additionally contain:
+
+```json
+{
+  "target_offer_id": "off_..."
+}
+```
+
+When both are present, they MUST resolve to the same Ledger object.
+
+A receiver MUST return `state_conflict` if the references disagree.
+
+## 17.2 Withdraw
+
+Withdraw retracts an actor's own still-withdrawable message or Offer-like object.
 
 ```json
 {
   "type": "withdraw",
-  "target_type": "offer",
-  "target_id": "off_03...",
+  "target_message_id": "msg_03...",
+  "target_offer_id": "off_03...",
+  "scope": "offer",
   "reason_code": "commercial_terms_changed"
 }
 ```
 
-An actor MUST NOT withdraw an object authored by the counterparty.
-
-## 17.2 Decline
-
-Decline communicates a commercial decision not to proceed with a target.
-
-```json
-{
-  "type": "decline",
-  "target_type": "offer",
-  "target_id": "off_03...",
-  "scope": "offer",
-  "reason_code": "terms_unacceptable"
-}
-```
-
-`scope` is:
+Allowed `scope` values:
 
 ```text
 offer
 negotiation
 ```
 
-Declining one offer MAY leave the negotiation open.
+`scope=offer` closes the referenced active offer and normally returns the business negotiation to `OPEN`.
 
-Declining the negotiation closes it.
+`scope=negotiation` transitions the negotiation to `WITHDRAWN`.
 
-## 17.3 Cancel
+An actor MUST NOT withdraw an object authored by the counterparty.
 
-`cancel` closes the negotiation at the initiator/runtime level.
+## 17.3 Decline
 
-Cancel MUST NOT be used to claim that an existing legally separate order was cancelled.
+Decline communicates a commercial decision, not a protocol error.
+
+```json
+{
+  "type": "decline",
+  "target_message_id": "msg_03...",
+  "target_offer_id": "off_03...",
+  "scope": "offer",
+  "reason_code": "terms_unacceptable"
+}
+```
+
+`scope=offer` closes the referenced offer and leaves the negotiation open.
+
+`scope=negotiation` transitions the negotiation to `DECLINED`.
+
+For negotiation-level decline, the envelope `negotiation_id` is authoritative and a synthetic object ID MUST NOT be invented.
+
+## 17.4 Cancel
+
+`cancel` transitions a non-terminal negotiation to `CANCELLED`.
+
+Cancel MUST NOT be used to claim that a separate order has been cancelled.
 
 KNP/1.0 does not manage orders.
 
----
+`AGREEMENT_REACHED`, `DECLINED`, `WITHDRAWN`, `CANCELLED`, and terminal negotiation `EXPIRED` states MUST NOT be reopened under the same `negotiation_id`.
+
 
 # 18. Protocol Errors
 
@@ -870,11 +904,11 @@ EXPIRED
 | OFFER_OPEN | Clarification | AWAITING_CLARIFICATION | resume to OFFER_OPEN |
 | OFFER_OPEN | active offer expires | OPEN | active offer cleared |
 | OFFER_OPEN | valid AcceptNonbinding | AGREEMENT_REACHED | agreement produced |
-| OPEN/OFFER_OPEN | withdraw current actor's RFQ and end negotiation | WITHDRAWN | terminal |
-| OFFER_OPEN | withdraw active offer only | OPEN | negotiation may continue |
-| OPEN/OFFER_OPEN | decline scope=offer | OPEN | target offer closed |
-| OPEN/OFFER_OPEN | decline scope=negotiation | DECLINED | terminal |
-| non-terminal | cancel | CANCELLED | terminal |
+| OFFER_OPEN | Withdraw scope=offer | OPEN | target offer closed |
+| OPEN/OFFER_OPEN | Withdraw scope=negotiation | WITHDRAWN | terminal |
+| OFFER_OPEN | Decline scope=offer | OPEN | target offer closed |
+| OPEN/OFFER_OPEN | Decline scope=negotiation | DECLINED | terminal |
+| non-terminal | Cancel | CANCELLED | terminal |
 | non-terminal | negotiation expiry | EXPIRED | terminal |
 
 A terminal negotiation MUST NOT accept a new commercial action under the same `negotiation_id`.
@@ -1154,7 +1188,11 @@ A conforming Kiwi KNP implementation MUST preserve:
 13. KNP/1.0 performs no payment;
 14. KNP/1.0 performs no refund;
 15. KNP/1.0 reserves no inventory;
-16. raw chain-of-thought is not persisted as protocol state.
+16. raw chain-of-thought is not persisted as protocol state;
+17. remote protocol content is treated as untrusted input;
+18. remote content MUST NOT automatically invoke arbitrary local tools;
+19. remote messages MUST NOT be written directly into Principal Memory;
+20. Agent Cards, UCP Profiles, and public protocol metadata MUST NOT contain static secrets.
 
 ---
 
