@@ -50,6 +50,8 @@ export interface PreparedCandidate {
   conversation_status: string;
   /** Last counterpart public message, for the TUI transcript pane. */
   counterpart_message?: string;
+  /** Last counterpart message's action, if any (for consensus detection). */
+  counterpart_action?: NegotiationDecision["action"];
 }
 
 export interface SubmitOutcome {
@@ -299,7 +301,10 @@ export class DeterministicNegotiationRunner implements NegotiationRunner {
       analysis: buildAnalysis(this.profile, snapshot, decision),
       conversation_status: snapshot.conversation.status,
     };
-    if (counterpart !== undefined) prepared.counterpart_message = counterpart.public_message;
+    if (counterpart !== undefined) {
+      prepared.counterpart_message = counterpart.public_message;
+      if (counterpart.action !== undefined) prepared.counterpart_action = counterpart.action;
+    }
     return prepared;
   }
 
