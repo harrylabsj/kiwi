@@ -591,18 +591,33 @@ export class AgentKernel {
   private renderPending(): string {
     const pending = this.listPendingApprovals();
     if (pending.length === 0) return "[审批] 当前没有等待批准的写操作候选。";
-    const lines = pending.map((c) => {
+    const lines = pending.map((c, i) => {
       const args = JSON.stringify(c.arguments);
-      return `  · ${c.candidate_id} [${c.risk}] ${c.tool}（截止 ${c.expires_at}）args=${args.slice(0, 80)}`;
+      return `  ${i + 1}. ${c.candidate_id} [${c.risk}] ${c.tool}（截止 ${c.expires_at}）args=${args.slice(0, 80)}`;
     });
-    return ["[审批] 等待批准的写操作候选（/approve <id> 批准，/reject <id> 驳回）:", ...lines].join("\n");
+    return [
+      "[审批] 等待批准的写操作候选（/approve <编号|id> 批准；/approve all 全部批准；/reject <编号|id> 驳回）:",
+      ...lines,
+    ].join("\n");
   }
 
   private async handleApprove(arg: string): Promise<string> {
-    if (arg === "") return "用法：/approve <candidate-id>";
-    const id = this.resolveApprovalId(arg.trim());
+    if (arg === "") return "用法：/approve <编号|id|all>";
+    const trimmed = arg.trim();
+    if (trimmed === "all") {
+      const pending = this.listPendingApprovals();
+      const outcomes = [];
+      for (const c of pending) {
+        const r = await this.approveCandidateInner(c.candidate_id);
+        const note =
+          r.kind === "stale" || r.kind === "not_approvable" ? `（${r.reason}）` : "";
+        outcomes.push(`${c.tool}: ${r.kind}${note}`);
+      }
+      return `[审批] 已处理 ${outcomes.length} 个候选：\n${outcomes.map((o) => `  · ${o}`).join("\n")}`;
+    }
+    const id = this.resolveApprovalId(trimmed);
     if (id === undefined) {
-      return `[审批] 未知审批候选 ${arg.trim()}（id 可能被模型截断；用 /pending 查看完整 id，或输入足够长的唯一前缀）。`;
+      return `[审批] 未知审批候选 ${trimmed}（用 /pending 看编号，或输入完整 id/唯一前缀）。`;
     }
     try {
       // Already inside the kernel chain (handleUserText enqueues handleSlash);
@@ -624,10 +639,10 @@ export class AgentKernel {
   }
 
   private handleReject(arg: string): string {
-    if (arg === "") return "用法：/reject <candidate-id>";
+    if (arg === "") return "用法：/reject <编号|id>";
     const id = this.resolveApprovalId(arg.trim());
     if (id === undefined) {
-      return `[审批] 未知审批候选 ${arg.trim()}（id 可能被模型截断；用 /pending 查看完整 id）。`;
+      return `[审批] 未知审批候选 ${arg.trim()}（用 /pending 看编号，或输入完整 id/唯一前缀）。`;
     }
     const result = this.rejectCandidate(id);
     if (!result.ok) return `[审批] ${result.error ?? "驳回失败"}`;
@@ -635,16 +650,20 @@ export class AgentKernel {
   }
 
   /**
-   * LLM flows often truncate long UUID candidate ids. Accept an exact id or a
-   * UNIQUE prefix of a pending candidate — ambiguous prefixes stay rejected.
+   * Resolve a user-facing approval target: a /pending index, an exact id, or a
+   * UNIQUE prefix of a pending candidate (LLM flows truncate long UUIDs).
+   * Ambiguous prefixes and out-of-range indices stay rejected.
    */
   private resolveApprovalId(input: string): string | undefined {
     if (this.approvals === undefined) return undefined;
+    const pending = this.approvals.listPending();
+    const n = Number(input);
+    if (Number.isInteger(n) && n >= 1 && n <= pending.length) {
+      return pending[n - 1]?.candidate_id as string;
+    }
     const exact = this.approvals.get(input);
     if (exact !== undefined) return exact.candidate_id;
-    const matches = this.approvals
-      .listPending()
-      .filter((c) => c.candidate_id.startsWith(input));
+    const matches = pending.filter((c) => c.candidate_id.startsWith(input));
     return matches.length === 1 ? (matches[0]?.candidate_id as string) : undefined;
   }
 

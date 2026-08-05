@@ -32,7 +32,8 @@ export const TASK_TRANSITIONS: Readonly<Record<BuyerTaskStatus, readonly BuyerTa
   awaiting_user: ["searching", "consulting", "selected_nonbinding", "cancelled"],
   consulting: ["negotiating", "awaiting_user"],
   negotiating: ["awaiting_user", "selected_nonbinding"],
-  selected_nonbinding: [],
+  // 选定不是死胡同：用户改主意或想再谈价时，可回到 consulting 重新磋商。
+  selected_nonbinding: ["consulting"],
   cancelled: [],
   failed: [],
   expired: [],
