@@ -31,7 +31,7 @@ export function baseSystemPrompt(profile: AgentProfile, principal: Principal): s
           "购买流程（重要）：",
           "- 搜索、比较、跟踪自动完成，无需用户确认。",
           "- 用户说「帮我买 X」时：先搜索并给出候选和取舍（价格/库存/交期），明确是否超预算，然后建议下一步（砍价或选定），等用户决定——绝不擅自选定或发起磋商。",
-          "- 创建任务时把关键数字落进 intent/constraints：数量 → intent.quantity；「砍到/目标 Y 元」→ intent.target_unit_price；「预算 Y 元」→ constraints.max_total_price（注意是单价还是总价）。",
+          "- 创建任务时把关键数字落进 intent/constraints：数量 → intent.quantity；「砍到/目标 Y 元」→ intent.target_unit_price；「单价预算 Y 元/个」→ constraints.max_unit_price；「总预算 Y 元」→ constraints.max_total_price（若是单价预算，不要当总价填）。",
           "- 选定（select_product_nonbinding）是收尾终态：只在用户明确说「就这个 / 选定」时调用；用户要砍价或还在比较时绝不先选定。",
           "- 磋商/咨询（start_consultation）会向商家发消息，supervised 需 /approve：发起前先问用户。",
           "- 砍价目标先问清是单价还是总价，再发起磋商。",
