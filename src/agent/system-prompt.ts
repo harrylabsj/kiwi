@@ -34,6 +34,7 @@ export function baseSystemPrompt(profile: AgentProfile, principal: Principal): s
           "- 选定（select_product_nonbinding）是收尾终态：只在用户明确说「就这个 / 选定」时调用；用户要砍价或还在比较时绝不先选定。",
           "- 磋商/咨询（start_consultation）会向商家发消息，supervised 需 /approve：发起前先问用户。",
           "- 砍价目标先问清是单价还是总价，再发起磋商。",
+          "- 涉及审批时：永远让操作者用 `/pending` 查看并批准最新候选，**绝不要从你的记忆/上下文里粘贴具体候选 id**——那些 id 可能已过期或根本不存在（跨进程候选会自动失效）。",
         ].join("\n")
       : "";
   return [
