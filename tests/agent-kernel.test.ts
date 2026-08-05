@@ -336,6 +336,40 @@ describe("sensitive routing and model failure resilience", () => {
     await kernel.close();
   });
 
+  it("/approve and /reject accept a unique candidate-id prefix", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const kernel = await openKernel("agent");
+    const approvals = kernel.actionCandidates;
+    expect(approvals).toBeDefined();
+    approvals!.create({
+      tool: "test_write",
+      arguments: { a: 1 },
+      preconditions: {},
+      risk: "test",
+      expires_at: "2099-01-01T00:00:00Z",
+    });
+    const full = approvals!.listPending()[0]?.candidate_id as string;
+    const prefix = full.slice(0, 12);
+    // The prefix resolves to the FULL id (the reply names it, not "未知候选").
+    const approve = await kernel.handleUserText(`/approve ${prefix}`);
+    expect(approve.text).toContain(full);
+    expect(approve.text).not.toContain("未知审批候选");
+
+    // A second candidate exercises the same prefix resolution on /reject.
+    approvals!.create({
+      tool: "test_write2",
+      arguments: { b: 2 },
+      preconditions: {},
+      risk: "test",
+      expires_at: "2099-01-01T00:00:00Z",
+    });
+    const full2 = approvals!.listPending()[0]?.candidate_id as string;
+    const reject = await kernel.handleUserText(`/reject ${full2.slice(0, 12)}`);
+    expect(reject.text).toContain("已驳回");
+    expect(reject.text).toContain(full2);
+    await kernel.close();
+  });
+
   it("a model failure in one turn does not kill the session", async () => {
     workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
     const boom = (): never => {

@@ -242,6 +242,11 @@ export class AgentKernel {
       model: options.model,
       tools: [...buildMemoryTools(store, { turnId: () => turnId.current }), ...buyerTools, ...merchantTools],
       systemPrompt: async () => (briefing === undefined ? base : `${base}\n\n${briefing}`),
+      // §18.1: a hung model/provider request must NOT wedge the chat forever —
+      // abort after the profile's turn timeout and surface an error text.
+      streamOptions: {
+        timeoutMs: options.profile.runtime.turn_timeout_seconds * 1000,
+      },
       ...(options.thinkingLevel !== undefined ? { thinkingLevel: options.thinkingLevel } : {}),
     });
 
@@ -595,7 +600,10 @@ export class AgentKernel {
 
   private async handleApprove(arg: string): Promise<string> {
     if (arg === "") return "用法：/approve <candidate-id>";
-    const id = arg.trim();
+    const id = this.resolveApprovalId(arg.trim());
+    if (id === undefined) {
+      return `[审批] 未知审批候选 ${arg.trim()}（id 可能被模型截断；用 /pending 查看完整 id，或输入足够长的唯一前缀）。`;
+    }
     try {
       // Already inside the kernel chain (handleUserText enqueues handleSlash);
       // calling approveCandidate would re-enqueue and deadlock.
@@ -617,9 +625,27 @@ export class AgentKernel {
 
   private handleReject(arg: string): string {
     if (arg === "") return "用法：/reject <candidate-id>";
-    const result = this.rejectCandidate(arg.trim());
+    const id = this.resolveApprovalId(arg.trim());
+    if (id === undefined) {
+      return `[审批] 未知审批候选 ${arg.trim()}（id 可能被模型截断；用 /pending 查看完整 id）。`;
+    }
+    const result = this.rejectCandidate(id);
     if (!result.ok) return `[审批] ${result.error ?? "驳回失败"}`;
-    return `[审批] 候选 ${arg.trim()} 已驳回，绝不会执行。`;
+    return `[审批] 候选 ${id} 已驳回，绝不会执行。`;
+  }
+
+  /**
+   * LLM flows often truncate long UUID candidate ids. Accept an exact id or a
+   * UNIQUE prefix of a pending candidate — ambiguous prefixes stay rejected.
+   */
+  private resolveApprovalId(input: string): string | undefined {
+    if (this.approvals === undefined) return undefined;
+    const exact = this.approvals.get(input);
+    if (exact !== undefined) return exact.candidate_id;
+    const matches = this.approvals
+      .listPending()
+      .filter((c) => c.candidate_id.startsWith(input));
+    return matches.length === 1 ? (matches[0]?.candidate_id as string) : undefined;
   }
 
   // ---- lifecycle ------------------------------------------------------------
