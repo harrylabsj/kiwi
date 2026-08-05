@@ -41,6 +41,18 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
   }, 60_000);
   timer.unref();
 
+  // Autonomous negotiation (autopilot): poll for pending negotiation messages
+  // and drive one model turn per tick. No-op outside autopilot.
+  const negotiate = async (): Promise<void> => {
+    const text = await kernel.negotiationAutoTick().catch(() => undefined);
+    if (text !== undefined && text !== "") write(`[磋商] ${text}`);
+  };
+  await negotiate();
+  const negotiateTimer = setInterval(() => {
+    void negotiate();
+  }, 15_000);
+  negotiateTimer.unref();
+
   try {
     const rl = readline.createInterface({
       input,
@@ -68,5 +80,6 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
     return EXIT.OK;
   } finally {
     clearInterval(timer);
+    clearInterval(negotiateTimer);
   }
 }

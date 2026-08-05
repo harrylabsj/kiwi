@@ -244,10 +244,25 @@ export class DeterministicNegotiationRunner implements NegotiationRunner {
     });
     if (!claim.claimed) return undefined;
 
-    const snapshot = await this.client.getNegotiationSnapshot({
-      conversation_id: target.conversation_id,
-      message_id: target.message_id,
-    });
+    // Any failure AFTER the claim must release it — a stuck processing claim
+    // would silently block this message from ever being re-pending.
+    const release = (err: unknown): never => {
+      void this.client
+        .abandonClaim({
+          message_id: target.message_id,
+          idempotency_key: idem,
+          error: `prepare failed: ${err instanceof Error ? err.message : String(err)}`,
+        })
+        .catch(() => undefined);
+      throw err;
+    };
+
+    const snapshot = await this.client
+      .getNegotiationSnapshot({
+        conversation_id: target.conversation_id,
+        message_id: target.message_id,
+      })
+      .catch(release);
 
     const hints = clampHintsToHardPolicy(
       this.profile,
