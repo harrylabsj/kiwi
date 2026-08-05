@@ -681,6 +681,12 @@ describe("P2: expiry timezone, evidence dedup and shared Vault refs", () => {
     expect(store.getMemory(id)?.value).toEqual({ max: 1 });
   });
 
+  it("records the current memory schema version on the principal", () => {
+    const { store } = setup();
+    const p = store.getPrincipal("buyer-agent:buyer-001");
+    expect(p?.memory_schema_version).toBe(MEMORY_SCHEMA_VERSION);
+  });
+
   it("forgetting one shared-Vault memory keeps the ciphertext for the other", () => {
     const { store } = setup();
     const secret = "上海市静安区yy路9号";

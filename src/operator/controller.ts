@@ -17,9 +17,10 @@
  *   by the backend) are ever submitted, and only after the gate.
  */
 
+import { randomUUID } from "node:crypto";
 import type { AgentProfile } from "../config/profile.js";
 import type { NegotiationDecision } from "../negotiation/types.js";
-import type { NegotiationRunner, PreparedCandidate } from "./runner.js";
+import type { NegotiationRunner, PreparedCandidate, SubmitOutcome } from "./runner.js";
 import type { StrategyContext, StrategyEngine } from "./strategy.js";
 import type { OperatorEventStore } from "./store.js";
 import {
@@ -267,6 +268,8 @@ export class OperatorController {
   private readonly prepared = new Map<string, PreparedCandidate>();
   /** Messages rejected this session; not re-claimed until a later run. */
   private readonly rejectedMessageIds = new Set<number>();
+  /** Candidate ids whose submit is currently in flight (approve idempotency). */
+  private readonly submitting = new Set<string>();
   /** Last counterpart public message seen by prepare (TUI transcript pane). */
   lastCounterpartMessage?: string;
   private eventSeq = 0;
@@ -333,7 +336,9 @@ export class OperatorController {
   } {
     this.eventSeq += 1;
     return {
-      event_id: `evt-${this.eventSeq}`,
+      // A random suffix keeps ids unique across restarts even when a rejected
+      // append consumed a sequence number without persisting (design §6).
+      event_id: `evt-${this.eventSeq}-${randomUUID().slice(0, 8)}`,
       occurred_at: this.now(),
       agent_id: this.profile.agent_id,
       role: this.profile.role,
@@ -358,7 +363,12 @@ export class OperatorController {
     if (this.profile.buyer_policy) {
       let max = this.profile.buyer_policy.max_total_price_private;
       for (const d of this.state.strategy.directives) {
-        if (/预算|budget/i.test(d.directive)) {
+        // Only numeric constraint directives carry a budget hint. A
+        // soft_preference mentioning 预算 must not override it.
+        if (
+          (d.kind === "tighten" || d.kind === "relax") &&
+          /预算|budget/i.test(d.directive)
+        ) {
           const n = /\d+(?:\.\d+)?/.exec(d.directive);
           if (n !== null) max = Number(n[0]);
         }
@@ -368,7 +378,10 @@ export class OperatorController {
     if (this.profile.merchant_policy?.min_unit_price_private !== undefined) {
       let floor = this.profile.merchant_policy.min_unit_price_private;
       for (const d of this.state.strategy.directives) {
-        if (/底价|最低价|floor/i.test(d.directive)) {
+        if (
+          (d.kind === "tighten" || d.kind === "relax") &&
+          /底价|最低价|floor/i.test(d.directive)
+        ) {
           const n = /\d+(?:\.\d+)?/.exec(d.directive);
           if (n !== null) floor = Number(n[0]);
         }
@@ -540,12 +553,28 @@ export class OperatorController {
     if (candidate.status === "submitted" || candidate.status === "settled") {
       return { kind: "replayed", candidate_id: candidateId };
     }
+    // A second approve while the first submit is still in flight (web/mobile
+    // concurrency) must not re-submit or crash on the settled claim.
+    if (this.submitting.has(candidateId)) {
+      return { kind: "replayed", candidate_id: candidateId };
+    }
     const prepared = this.prepared.get(candidateId);
     if (!prepared || candidate.status === "expired") {
       return { kind: "invalid", reason: "候选已过期（需重新生成），不会提交" };
     }
 
-    const outcome = await this.runner.submit(prepared);
+    this.submitting.add(candidateId);
+    let outcome: SubmitOutcome;
+    try {
+      outcome = await this.runner.submit(prepared);
+    } finally {
+      this.submitting.delete(candidateId);
+    }
+    if (outcome.settlement === "failed") {
+      // A failed settle leaves the message reclaimable; stop the autopilot
+      // TUI loop from silently re-claiming + re-submitting on every input.
+      this.rejectedMessageIds.add(prepared.binding.message_id);
+    }
     const submittedPayload: {
       candidate_id: string;
       action: Candidate["decision"]["action"];
@@ -687,18 +716,29 @@ export class OperatorController {
     // and a forbidden one is refused outright. Both leave the current
     // candidate, its claim and the strategy untouched.
     const patch = this.engine.compile(trimmed, this.strategyContext());
-    if (patch.kind === "relax") {
-      return {
-        kind: "blocked",
-        reason:
-          `放宽约束不能通过 /revise 直接生效：${patch.summary}。候选保持不变；` +
-          "如确需放宽，请以普通指令发送并用 /strategy confirm 确认（仍不会突破 profile 硬约束）。",
-      };
-    }
-    if (patch.kind === "forbidden") {
-      return { kind: "blocked", reason: `指令被拒绝：${patch.summary}。候选保持不变。` };
-    }
-    if (patch.kind === "out_of_scope" || patch.kind === "chat") {
+    if (
+      patch.kind === "relax" ||
+      patch.kind === "forbidden" ||
+      patch.kind === "out_of_scope" ||
+      patch.kind === "chat"
+    ) {
+      // A refused /revise must still leave an audit trail (§6).
+      await this.record({
+        ...this.nextBase("private"),
+        type: "strategy.patch.rejected",
+        payload: { patch, reason: "operator /revise 指令被拒绝" },
+      });
+      if (patch.kind === "relax") {
+        return {
+          kind: "blocked",
+          reason:
+            `放宽约束不能通过 /revise 直接生效：${patch.summary}。候选保持不变；` +
+            "如确需放宽，请以普通指令发送并用 /strategy confirm 确认（仍不会突破 profile 硬约束）。",
+        };
+      }
+      if (patch.kind === "forbidden") {
+        return { kind: "blocked", reason: `指令被拒绝：${patch.summary}。候选保持不变。` };
+      }
       return {
         kind: "blocked",
         reason: `该指令无法用于重算：${patch.summary}。候选保持不变。`,
