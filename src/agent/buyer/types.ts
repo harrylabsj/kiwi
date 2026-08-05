@@ -82,6 +82,8 @@ export interface TaskIntent {
 
 /** Current-task hard constraints; private values may be Vault refs (§11.2). */
 export interface TaskConstraints {
+  /** Per-unit budget ("单价预算 94 元"); the decision derives the total from it. */
+  max_unit_price?: number;
   max_total_price?: number;
   max_total_price_vault_ref?: string;
   latest_eta?: string;

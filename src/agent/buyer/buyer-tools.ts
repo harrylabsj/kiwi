@@ -67,6 +67,9 @@ function parseConstraints(value: unknown): TaskConstraints {
   }
   const v = value as Record<string, unknown>;
   const out: TaskConstraints = {};
+  if (typeof v.max_unit_price === "number" && Number.isFinite(v.max_unit_price) && v.max_unit_price >= 0) {
+    out.max_unit_price = v.max_unit_price;
+  }
   if (typeof v.max_total_price === "number" && Number.isFinite(v.max_total_price)) {
     out.max_total_price = v.max_total_price;
   }

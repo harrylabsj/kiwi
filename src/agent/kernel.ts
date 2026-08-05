@@ -117,6 +117,9 @@ function taskNegotiationHints(store: BuyerTaskStore, task: BuyerTask): DecisionH
   if (task.intent.target_unit_price !== undefined) {
     hints.buyer_target_unit_price = task.intent.target_unit_price;
   }
+  if (task.constraints.max_unit_price !== undefined) {
+    hints.buyer_max_unit_price = task.constraints.max_unit_price;
+  }
   try {
     const budget = store.resolveBudget(task.constraints);
     if (budget !== undefined) hints.buyer_max_total_price = budget;

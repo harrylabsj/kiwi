@@ -331,13 +331,35 @@ describe("deterministic buyer negotiation toward a target price", () => {
     expect(d.action).toBe("accept_nonbinding");
   });
 
-  it("escalates when the offer exceeds the budget even if it is below the target", () => {
-    // offer 120×2=240 > budget 180: the hard constraint wins over the target.
+  it("counters at the affordable price when the offer exceeds the budget", () => {
+    // offer 120×2=240 > budget 180; target 100 but only 90/unit affordable.
     const d = deterministicBuyerDecision(snapshotWithOffer(120), policy, {
       buyer_target_unit_price: 100,
       buyer_max_total_price: 180,
+      quantity_cap: 2,
+    });
+    expect(d.action).toBe("counter");
+    expect(d.proposal?.unit_price).toBe(90);
+  });
+
+  it("escalates when the offer exceeds the budget and there is no lower counter", () => {
+    // No target: the buyer has nothing to push toward, so an over-budget offer
+    // goes to a human instead of leaking the private budget.
+    const d = deterministicBuyerDecision(snapshotWithOffer(120), policy, {
+      buyer_max_total_price: 180,
     });
     expect(d.action).toBe("escalate");
+  });
+
+  it("honors a per-unit budget to derive the total ceiling", () => {
+    // 单价预算 94 × 6 件 → 总顶 564；报价 99×6=594 超总顶，但可还到 94.
+    const d = deterministicBuyerDecision(snapshotWithOffer(99, 6), policy, {
+      buyer_target_unit_price: 94,
+      buyer_max_unit_price: 94,
+      quantity_cap: 6,
+    });
+    expect(d.action).toBe("counter");
+    expect(d.proposal?.unit_price).toBe(94);
   });
 });
 
