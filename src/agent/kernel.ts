@@ -36,6 +36,8 @@ import type { CredentialBroker } from "./merchant/credential-broker.js";
 import type { MerchantClient } from "./merchant/types.js";
 import { buildMerchantTools } from "./merchant/merchant-tools.js";
 import { DeterministicNegotiationRunner } from "../operator/runner.js";
+import type { DecisionHints } from "../runtime/fake-model.js";
+import type { BuyerTask } from "./buyer/types.js";
 import { MemoryStore } from "./memory/store.js";
 import { MemoryError, type MemoryItem, type Principal } from "./memory/types.js";
 import { PrivateVault } from "./memory/vault.js";
@@ -102,6 +104,26 @@ function listRestrictedValues(store: MemoryStore): Array<{ key: string; value: s
     }
   }
   return out;
+}
+
+/**
+ * Map a buyer task's intent/constraints into negotiation hints so the
+ * autonomous loop counters toward the user's actual goal ("买 2 个、预算 120、
+ * 砍到 100") instead of the profile defaults.
+ */
+function taskNegotiationHints(store: BuyerTaskStore, task: BuyerTask): DecisionHints {
+  const hints: DecisionHints = {};
+  if (task.intent.quantity !== undefined) hints.quantity_cap = task.intent.quantity;
+  if (task.intent.target_unit_price !== undefined) {
+    hints.buyer_target_unit_price = task.intent.target_unit_price;
+  }
+  try {
+    const budget = store.resolveBudget(task.constraints);
+    if (budget !== undefined) hints.buyer_max_total_price = budget;
+  } catch {
+    // vault unavailable this run: fall back to the profile budget
+  }
+  return hints;
 }
 
 const COMMANDS_HELP = `/memory [preferences|private]  查看记忆概览 / 学习到的偏好 / 私密资料字段与状态
@@ -433,8 +455,22 @@ export class AgentKernel {
       return undefined;
     }
 
+    // Buyer: negotiate toward the linked task's goal (quantity / target unit
+    // price / budget) instead of the profile defaults.
+    let hints: DecisionHints | undefined;
+    const firstPending = pending[0];
+    if (firstPending !== undefined && this.profile.role === "buyer" && this.taskStore !== undefined) {
+      const link = this.taskStore.linkByConversation(firstPending.conversation_id);
+      if (link !== undefined) {
+        const task = this.taskStore.getTask(link.task_id);
+        if (task !== undefined) hints = taskNegotiationHints(this.taskStore, task);
+      }
+    }
+
     const runner = new DeterministicNegotiationRunner(this.profile, this.commerceClient);
-    const prepared = await runner.prepare().catch(() => undefined);
+    const prepared = await runner
+      .prepare({ ...(hints !== undefined ? { hints } : {}) })
+      .catch(() => undefined);
     if (prepared === undefined) return undefined;
     const convId = prepared.binding.conversation_id;
 

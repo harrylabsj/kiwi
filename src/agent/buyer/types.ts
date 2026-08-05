@@ -68,6 +68,8 @@ export interface TaskIntent {
   category?: string;
   use_case?: string;
   quantity?: number;
+  /** The unit price the buyer wants to negotiate toward ("砍到 100"). */
+  target_unit_price?: number;
   location_precision?: "city" | "district";
   city?: string;
   area?: string;
