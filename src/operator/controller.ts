@@ -110,7 +110,10 @@ export function reduceOperatorEvent(state: OperatorState, event: OperatorEvent):
     case "strategy.patch.applied": {
       const patch = event.payload.patch;
       delete state.strategy.pending_relax;
-      if (patch.kind !== "forbidden") {
+      // out_of_scope / chat are rejected before application, but the fold
+      // must never trust that invariant — keep them out of directives so a
+      // corrupted or replayed event cannot steer candidate generation.
+      if (patch.kind !== "forbidden" && patch.kind !== "out_of_scope" && patch.kind !== "chat") {
         state.strategy.directives.push({
           kind: patch.kind,
           scope: patch.scope,
@@ -675,6 +678,12 @@ export class OperatorController {
     }
     if (patch.kind === "forbidden") {
       return { kind: "blocked", reason: `指令被拒绝：${patch.summary}。候选保持不变。` };
+    }
+    if (patch.kind === "out_of_scope" || patch.kind === "chat") {
+      return {
+        kind: "blocked",
+        reason: `该指令无法用于重算：${patch.summary}。候选保持不变。`,
+      };
     }
 
     await this.record({
