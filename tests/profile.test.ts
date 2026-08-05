@@ -49,6 +49,34 @@ describe("profile loading", () => {
     expect(profile.merchant_policy?.min_unit_price_private).toBe(80);
   });
 
+  it("loads optional per-scope credential env refs (§15.4) and rejects bad ones", () => {
+    const withCreds = VALID_YAML.replace(
+      "  backend: local_marketplace",
+      `  backend: local_marketplace
+  credentials:
+    catalog:
+      token_env: SHOPPING_CATALOG_TOKEN
+    inventory:
+      token_env: SHOPPING_INVENTORY_TOKEN`,
+    );
+    const profile = loadProfile(writeTemp(withCreds));
+    expect(profile.commerce.credentials?.catalog?.token_env).toBe("SHOPPING_CATALOG_TOKEN");
+    expect(profile.commerce.credentials?.inventory?.token_env).toBe("SHOPPING_INVENTORY_TOKEN");
+    expect(profile.commerce.credentials?.negotiation).toBeUndefined();
+
+    // Unknown scope fails closed.
+    const badScope = withCreds.replace("inventory:", "payments:");
+    expect(() => loadProfile(writeTemp(badScope))).toThrow(/credentials has unknown scope/);
+
+    // A scope entry without token_env fails closed.
+    const noEnv = withCreds.replace("token_env: SHOPPING_INVENTORY_TOKEN", "token: inline-secret");
+    expect(() => loadProfile(writeTemp(noEnv))).toThrow(/token_env/);
+
+    // A non-env-var name fails closed.
+    const badName = withCreds.replace("SHOPPING_INVENTORY_TOKEN", "my-token");
+    expect(() => loadProfile(writeTemp(badName))).toThrow(/token_env/);
+  });
+
   it("rejects missing file", () => {
     expect(() => loadProfile("/nonexistent/profile.yaml")).toThrow(ProfileError);
   });

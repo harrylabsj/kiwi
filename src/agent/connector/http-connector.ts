@@ -104,4 +104,79 @@ export class ShoppingCliConnector implements CommerceConnector {
     }
     return payload.results.map((m) => parseConnectorMerchant(m));
   }
+
+  /**
+   * Start a consultation via `POST /buyer/ask`. Requires the buyer bootstrap
+   * token in the Authorization header. The buyer task is only linked to the
+   * returned conversation — authoritative state stays in the marketplace.
+   */
+  async startConsultation(input: {
+    buyer_id: string;
+    sku: string;
+    merchant_id: string;
+    opening_message: string;
+  }): Promise<{ conversation_id: string; status: string }> {
+    void input.merchant_id;
+    void input.sku;
+    const payload = (await this.post("/buyer/ask", {
+      buyer_id: input.buyer_id,
+      text: input.opening_message,
+    })) as Record<string, unknown>;
+    const conversationId =
+      typeof payload.conversation_id === "string"
+        ? payload.conversation_id
+        : typeof (payload as { conversation?: { id?: unknown } }).conversation?.id === "string"
+          ? ((payload as { conversation: { id: string } }).conversation.id)
+          : undefined;
+    if (conversationId === undefined) {
+      throw new ConnectorError("validation", "buyer/ask response lacks a conversation id");
+    }
+    const status =
+      typeof payload.status === "string"
+        ? payload.status
+        : typeof (payload as { conversation?: { status?: unknown } }).conversation?.status === "string"
+          ? ((payload as { conversation: { status: string } }).conversation.status)
+          : "waiting_merchant";
+    return { conversation_id: conversationId, status };
+  }
+
+  private async post(pathname: string, body: unknown): Promise<unknown> {
+    const url = `${this.baseUrl}${pathname}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw new ConnectorError(
+        "transient",
+        `connector request failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new ConnectorError("transient", `connector returned non-JSON (HTTP ${response.status})`);
+    }
+    if (!response.ok) {
+      const kind =
+        response.status === 404
+          ? "not_found"
+          : response.status === 401 || response.status === 403
+            ? "auth"
+            : response.status >= 400 && response.status < 500
+              ? "validation"
+              : "transient";
+      throw new ConnectorError(kind, `connector HTTP ${response.status} for ${pathname}`);
+    }
+    return payload;
+  }
 }

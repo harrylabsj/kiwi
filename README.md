@@ -2,7 +2,7 @@
 
 Kiwi 是独立的 A2A 电商磋商 Agent Runtime：嵌入 Pi（`@earendil-works/pi-agent-core` / `pi-ai`）负责“思考和调用工具”，shopping-cli 负责“电商语义、规则、写入和审计”。两者只通过版本化 JSON 契约和 HTTP API 连接。
 
-当前版本实现 **M0（冻结契约）+ M1/M2（双角色单轮）+ M3（前台轮询、心跳与 stale 恢复）+ M4（managed-local 产品编排）**：buyer 与 merchant 共用同一个 runtime（profile 决定角色），支持 `--once` 单轮与前台串行轮询，全部业务访问走 shopping-cli 的真实 `shopping.negotiation/0.1` 权威 API；`kiwi init/up/status/logs/down` 提供单实例产品生命周期管理。
+当前版本实现 **M0（冻结契约）+ M1/M2（双角色单轮）+ M3（前台轮询、心跳与 stale 恢复）+ M4（managed-local 产品编排）+ v0.3.0-A/B/C（Agent Kernel、Principal Memory、Buyer 搜索跟踪、咨询磋商与 Merchant 能力包）**：buyer 与 merchant 共用同一个 runtime（profile 决定角色），支持 `--once` 单轮与前台串行轮询，全部业务访问走 shopping-cli 的真实 `shopping.negotiation/0.1` 权威 API；`kiwi init/up/status/logs/down` 提供单实例产品生命周期管理。
 
 ## 边界
 
@@ -164,7 +164,9 @@ bash scripts/e2e-local.sh   # SHOPPING_CLI_SRC 默认指向 ../shopping-cli，PO
 
 - **Buyer 搜索与跟踪（v0.3.0-B）**：`buyer_tasks` 状态机（draft→…→awaiting_user→selected_nonbinding，乐观版本 + 幂等事件防并发覆盖）、`product_candidates`（canonical_key 去重，不用标题）、`product_observations`（content_hash 去重 + fresh_until 新鲜度）、`tracking_rules`（降价/到货/促销/交期/定时复查）。搜索循环：Connector 搜索 → 本地硬过滤（只认显式约束与结构化事实，推断偏好永不删候选）→ 确定性排序（每维权重可追溯到用户指令/确认记忆/默认策略）→ shortlist 或转跟踪。Scheduler 以 tick 驱动、预算受限、多规则命中同候选合并为一次观察一条通知、重启后从数据库恢复唤醒队列。`select_product_nonbinding` 记录非绑定选定并显式标注"未创建订单"。Buyer 工具（search_products/create_buyer_task/add_tracking_rule/select_product_nonbinding 等）已接入 kernel；shopping-cli Connector 走真实 `GET /search/products`、`/search/merchants`、`/products/{sku}`（只读公开端点，不送 token），fake provider 下用内置确定性 Connector。
 
-B（Buyer 搜索与跟踪）已实现；C（咨询磋商与 Merchant 能力包）尚未实现。完整设计见 [`docs/agent-runtime-v0.3.md`](docs/agent-runtime-v0.3.md)。
+- **咨询、磋商与 Merchant 能力包（v0.3.0-C）**：`consultation_links`（schema v3）把 Buyer 任务与 Marketplace Conversation 关联（`start_consultation`，不复制权威会话状态）；磋商工具（`get_negotiation_snapshot`/`submit_negotiation_decision`）复用现有 claim → buyer 本地私有门 → 网关权威门 → 结算路径。Merchant 能力包（`src/agent/merchant/`）提供只读（`list_catalog_products`/`get_catalog_product`/`get_inventory_snapshot`/`list_incoming_consultations`/`get_negotiation_snapshot`/`get_human_review_queue`）与写入（`draft_product_change`/`create_product`/`update_product`/`update_inventory`/`submit_negotiation_decision`/`pause_or_resume_listing`）工具。写操作一律生成带内容哈希的 `ActionCandidate`（arguments_hash/preconditions_hash/risk/expires_at），按 `manual`/`supervised`（默认）/`autopilot` 模式路由：supervised 需 `/approve` 批准，执行前重新读取前置状态，参数或状态变化则旧批准失效（`/mode`、`/pending`、`/approve`、`/reject`）。Credential Broker 把 negotiation/catalog/inventory 三种 scope 凭据分开持有（`commerce.credentials.<scope>.token_env`），模型只见工具、永不见 token；没有对应 scope 凭据时写工具 fail closed。Merchant 私有底价/成本只进 Vault，模型只见加密占位。取舍：真实 shopping-cli 2.x 无 listing pause 端点，`pause_or_resume_listing` 在真实 Connector 上 fail closed。
+
+完整设计见 [`docs/agent-runtime-v0.3.md`](docs/agent-runtime-v0.3.md)。
 
 ## 外部 Agent Adapter（v0.2.1 设计）
 
@@ -177,13 +179,13 @@ B（Buyer 搜索与跟踪）已实现；C（咨询磋商与 Merchant 能力包�
 ```bash
 npm run lint            # eslint --max-warnings=0（0 error / 0 warning）
 npm run typecheck       # tsc --noEmit（strict）
-npm run test            # vitest，297 个测试，fake model + fake marketplace + 注入 fetch/sleeper/signal + stub 进程，无外部依赖（全新 clone 未 build 时打包入口测试自动 skip；verify 先 build 必跑）
+npm run test            # vitest，320 个测试，fake model + fake marketplace + 注入 fetch/sleeper/signal + stub 进程，无外部依赖（全新 clone 未 build 时打包入口测试自动 skip；verify 先 build 必跑）
 npm run build           # tsc 构建到 dist/
 npm run verify:package  # 生产包冒烟：npm pack -> 临时目录 npm install --omit=dev -> 运行 kiwi --version 并 import schemas/runtime
 npm run verify          # 以上全部
 ```
 
-覆盖：profile 严格校验（未知字段、NaN/Infinity、runtime 上限、merchant_policy 全字段、**buyer_policy 全字段必填/类型/时区/角色互斥**、model.api/thinking_level fail closed）、base_url 安全、冻结契约 fixtures、`beforeToolCall` 越权、claim/complete/fail/abandon 与重试、提交幂等、max_retries 提交预算、确定性 turn timeout、HttpCommerceClient 全量单测（真实端点路径/方法/body、Ajv fail closed、Bearer、双方 pending、请求体无 merchant_id/role/order/payment/reservation 字段）、**buyer 全路径**（accepted、预算恰好等于上限放行、超预算/超 ETA/缺售后条款/预算措辞泄露的本地拦截且不含数值、修复、human_required、提交预算、跨会话 guard、确定性 fake buyer）、**前台轮询**（no_work 等待、有界退避、信号中止 abandon 且不 complete、accepted 不回滚、无双重 claim、maxTurns）、**M3 可靠性**（双角色 stale 崩溃恢复→abandon→reclaim、恢复先于心跳、心跳防 stale、transient 心跳失败不失败 turn、心跳不重叠/定时器不泄漏、abort 后无残留、buyer/merchant 身份隔离、两端点严格形状校验、结算逃逸 best-effort abandon 立即可重领、同键 processing 重放返回 claimed=false、processing claim 不再列入 pending、shutdown 时 rejected_retryable 走 abandon、submit 在途遇超时仍按 accepted 结算、模型 401/403/配额错不可重试、--once 注册/清理信号处理）、**M4 产品编排**（stack config 严格解析、init 不覆盖/拒绝宽目录/0600/0700 权限（含 data/ SQLite 目录）、manifest 原子写与 nonce/PID 验证、信号转发 exit code、不可验证进程只报告不杀、up/down/status 幂等、env 先验与部分失败回滚、日志脱敏（含 `env[VAR]=value` 与小写 `shopping_*` 写法）/有界 tail/路径包含、sentinel 存活、CLI 参数校验）、**操作者控制面**（三模式审批路由与 autopilot 风险升级、批准幂等不重复提交、驳回/重算/退出 abandon 不 complete、策略指令影响候选且 relax 确认后仍 clamp 到 HardPolicy、forbidden 拒绝、私有消息不进公开草稿、事件流恢复与损坏 fail closed、事件存储 0600/0700 与 secret 拒写、TUI /approve 后才提交）。另有 `scripts/e2e-supervisor.sh` 真实 managed-local 全链路验收。
+覆盖：profile 严格校验（未知字段、NaN/Infinity、runtime 上限、merchant_policy 全字段、**buyer_policy 全字段必填/类型/时区/角色互斥**、model.api/thinking_level fail closed、**commerce.credentials 按 scope 校验与 fail closed**）、base_url 安全、冻结契约 fixtures、`beforeToolCall` 越权、claim/complete/fail/abandon 与重试、提交幂等、max_retries 提交预算、确定性 turn timeout、HttpCommerceClient 全量单测（真实端点路径/方法/body、Ajv fail closed、Bearer、双方 pending、请求体无 merchant_id/role/order/payment/reservation 字段）、**buyer 全路径**（accepted、预算恰好等于上限放行、超预算/超 ETA/缺售后条款/预算措辞泄露的本地拦截且不含数值、修复、human_required、提交预算、跨会话 guard、确定性 fake buyer）、**前台轮询**（no_work 等待、有界退避、信号中止 abandon 且不 complete、accepted 不回滚、无双重 claim、maxTurns）、**M3 可靠性**（双角色 stale 崩溃恢复→abandon→reclaim、恢复先于心跳、心跳防 stale、transient 心跳失败不失败 turn、心跳不重叠/定时器不泄漏、abort 后无残留、buyer/merchant 身份隔离、两端点严格形状校验、结算逃逸 best-effort abandon 立即可重领、同键 processing 重放返回 claimed=false、processing claim 不再列入 pending、shutdown 时 rejected_retryable 走 abandon、submit 在途遇超时仍按 accepted 结算、模型 401/403/配额错不可重试、--once 注册/清理信号处理）、**M4 产品编排**（stack config 严格解析、init 不覆盖/拒绝宽目录/0600/0700 权限（含 data/ SQLite 目录）、manifest 原子写与 nonce/PID 验证、信号转发 exit code、不可验证进程只报告不杀、up/down/status 幂等、env 先验与部分失败回滚、日志脱敏（含 `env[VAR]=value` 与小写 `shopping_*` 写法）/有界 tail/路径包含、sentinel 存活、CLI 参数校验）、**操作者控制面**（三模式审批路由与 autopilot 风险升级、批准幂等不重复提交、驳回/重算/退出 abandon 不 complete、策略指令影响候选且 relax 确认后仍 clamp 到 HardPolicy、forbidden 拒绝、私有消息不进公开草稿、事件流恢复与损坏 fail closed、事件存储 0600/0700 与 secret 拒写、TUI /approve 后才提交）、**v0.3.0-A 记忆**（explicit/observed/inferred 治理、证据去重、冲突/纠正/遗忘/过期、Restricted 只进 Vault 与无 key fail closed、物理隔离、/why 检索日志）、**v0.3.0-B 任务**（状态机合法/非法迁移、乐观版本冲突、候选/观察去重、硬过滤 vs 软偏好、跟踪规则合并通知与冷却、重启恢复、过期、selected_nonbinding 无订单语义）、**v0.3.0-C 咨询与 Merchant**（schema v3 迁移与回滚、consultation_links 幂等与关联、start_consultation 审批路由与 stale 失效、Credential scope 隔离 fail closed、token 永不出现在工具输出、私有底价/成本不泄漏、ApprovalActionCandidate 内容哈希与前置状态重校验、过期候选拒执行、Merchant 读写工具、buyer/merchant 双实例集成路径与无 order/payment 断言）。另有 `scripts/e2e-supervisor.sh` 真实 managed-local 全链路验收。
 
 ## 已知限制
 
@@ -193,6 +195,8 @@ npm run verify          # 以上全部
 - **真实模型 smoke 未纳入 CI**；CI 主路径只用确定性 fake model。
 - supervisor 单实例单目录：一个实例目录对应一个 gateway + 双 agent；多实例用多个 `--dir`。wrapper 仅在 SIGTERM 有界等待失败后才升级 SIGKILL；SIGKILL 直接命中 wrapper 时其子进程可能成为孤儿（最后手段，正常 down 不会发生）。日志无轮转，长时间运行需外部清理。
 - `human_required` 结果会让 claim 以 `processed` 结束（升级即本轮职责完成），避免无限重试。
+- **`pause_or_resume_listing` 在真实 Connector 上 fail closed**：shopping-cli 2.x 无 listing pause/resume 端点（`active` 为目录内部字段）。审批候选与记录仍生成，但真实网关上的最终写入被拒绝（fake 客户端可模拟）。
+- **`start_consultation` 的真实 Connector 路径需要 buyer bootstrap 凭据**：HTTP Connector 通过 `POST /buyer/ask` 发起咨询，未配置对应凭据时会以 auth 错误 fail closed（fake Connector 确定性可用）。磋商本身仍走现有 claim/策略门/结算路径。
 - turn timeout 是确定性状态：超时的 claim 一律 `fail`（绝不 complete），进程以可重试退出码 10 退出，由外部监督器重试。例外与信号语义一致：timeout 触发时已在途并被网关 accepted 的提交不回滚，claim 正常 complete（有确定性测试锁定）。
 - `profile.runtime.max_retries` 的语义是“首次提交之外允许的修复次数”，工具层强制每轮提交数 ≤ max_retries + 1（buyer 本地拦截也计入）；超预算会阻止写网关并以可审计失败结算。
 - buyer token 是 conversation-scoped：buyer 的 pending-messages 只覆盖其绑定会话；多会话需要每会话一个 token（shopping-cli 0.1 限制）。

@@ -78,6 +78,25 @@ export class FakeCommerceConnector implements CommerceConnector {
     }
     return Promise.resolve(out.slice(query.offset ?? 0, (query.offset ?? 0) + (query.limit ?? 10)));
   }
+
+  /**
+   * Deterministic fake consultation start. The fake marketplace binds each
+   * merchant to one conversation id (`conv-<merchant_id>`), so starting a
+   * consultation returns exactly that id — matching the FakeCommerceClient
+   * marketplace convention used by the buyer/merchant negotiation clients.
+   */
+  startConsultation(input: {
+    buyer_id: string;
+    sku: string;
+    merchant_id: string;
+    opening_message: string;
+  }): Promise<{ conversation_id: string; status: string }> {
+    void input;
+    return Promise.resolve({
+      conversation_id: `conv-${input.merchant_id}`,
+      status: "waiting_merchant",
+    });
+  }
 }
 
 /** A catalog product fixture with shopping-cli field shapes. */

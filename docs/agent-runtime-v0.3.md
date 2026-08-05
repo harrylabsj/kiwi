@@ -1,6 +1,6 @@
 # Kiwi Agent-first 电商运行时设计（v0.3）
 
-状态：v0.3.0-A（Agent 与记忆底座）与 v0.3.0-B（Buyer 搜索与跟踪）已实现——`src/agent/`（kernel、memory、vault、session、buyer task/scheduler/ranker、connector、chat TUI、`kiwi chat`），57 个新增测试全绿；C（咨询、磋商与 Merchant 能力包）与 v0.3.1 未实现。本文其余部分定义 v0.3 的产品边界、Agent 运行时、长期记忆数据模型，以及 Buyer 商品搜索、跟踪和选定任务模型。本文不改变 v0.2 已有代码与 `shopping.negotiation/0.1` 契约。
+状态：v0.3.0-A（Agent 与记忆底座）、v0.3.0-B（Buyer 搜索与跟踪）与 v0.3.0-C（咨询、磋商与 Merchant 能力包）已实现——`src/agent/`（kernel、memory、vault、session、buyer task/scheduler/ranker、connector、merchant capability pack、credential broker、approval ActionCandidate、chat TUI、`kiwi chat`），新增 23 个 C 阶段测试全绿（共 320 个）。v0.3.1 未实现。本文其余部分定义 v0.3 的产品边界、Agent 运行时、长期记忆数据模型，以及 Buyer 商品搜索、跟踪、选定任务模型与 Merchant 能力包。本文不改变 v0.2 已有代码与 `shopping.negotiation/0.1` 契约。
 
 ## 1. 设计结论
 
@@ -961,13 +961,14 @@ Merchant 完整路径：
 - Scheduler、预算、重试、通知合并和重启恢复。
 - selected_nonbinding。
 
-### v0.3.0-C：咨询、磋商与 Merchant
+### v0.3.0-C：咨询、磋商与 Merchant（已实现）
 
-- Buyer Task 与 Marketplace Conversation 关联。
-- 复用现有 NegotiationRunner 和策略门。
-- Merchant 记忆注入、目录读取和经营建议。
-- Catalog/Inventory Credential Broker 与审批候选。
-- Buyer/Merchant 双实例真实 E2E。
+- Buyer Task 与 Marketplace Conversation 关联：`consultation_links`（schema v3）与 `start_consultation` 工具，不复制权威会话状态。
+- 复用现有磋商运行时与策略门：`get_negotiation_snapshot` / `submit_negotiation_decision` 走现有 claim → buyer 本地门 → 网关权威门 → 结算。
+- Merchant 记忆注入、目录读取和经营建议：`merchant/` 能力包（读 6 工具 + 写 6 工具），私有底价/成本只进 Vault，模型只见加密占位。
+- Catalog/Inventory Credential Broker 与审批候选：按 scope 分开持有凭据；写操作生成带内容哈希的 `ActionCandidate`，supervised 需 `/approve`，执行前重新校验前置状态。
+- Buyer/Merchant 双实例确定性集成测试（fake connector + fake marketplace）。真实 shopping-cli 网关的脚本级 E2E 沿用 `scripts/e2e-local.sh`。
+- 取舍：真实 shopping-cli 2.x 无 listing pause/resume 端点，`pause_or_resume_listing` 在真实 Connector 上 fail closed（审批候选仍生成与记录）。
 
 ### v0.3.1：自治和外部 Runtime
 

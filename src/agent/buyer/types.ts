@@ -158,6 +158,31 @@ export const TASK_EVENT_TYPES = [
 ] as const;
 export type TaskEventType = (typeof TASK_EVENT_TYPES)[number];
 
+export const CONSULTATION_LINK_STATUSES = [
+  "consulting",
+  "negotiating",
+  "closed",
+  "stale",
+] as const;
+export type ConsultationLinkStatus = (typeof CONSULTATION_LINK_STATUSES)[number];
+
+/**
+ * Buyer Task <-> Marketplace Conversation association (design §11.8).
+ * The conversation itself stays authoritative in shopping-cli; this row only
+ * links the task/candidate to its id and tracks our own last-processed cursor.
+ */
+export interface ConsultationLink {
+  link_id: string;
+  task_id: string;
+  candidate_id?: string;
+  connector_id: string;
+  conversation_id: string;
+  status: ConsultationLinkStatus;
+  last_message_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface TaskEvent {
   event_id: string;
   task_id: string;

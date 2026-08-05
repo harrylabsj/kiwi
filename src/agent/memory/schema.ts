@@ -8,7 +8,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const MEMORY_SCHEMA_VERSION = 2;
+export const MEMORY_SCHEMA_VERSION = 3;
 
 export class MigrationError extends Error {
   constructor(message: string) {
@@ -205,10 +205,55 @@ CREATE TABLE tracking_rules (
 CREATE INDEX idx_tracking_rules_due ON tracking_rules (status, next_check_at);
 `;
 
+const MIGRATION_3 = `
+-- v0.3.0-C: consultation links and approval ActionCandidates (§11.8, §16).
+-- consultation_links associates a Buyer task + candidate with the authoritative
+-- Marketplace Conversation (shopping-cli) without copying its state.
+CREATE TABLE consultation_links (
+  link_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES buyer_tasks(task_id),
+  candidate_id TEXT REFERENCES product_candidates(candidate_id),
+  connector_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('consulting','negotiating','closed','stale')),
+  last_message_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (task_id, conversation_id)
+);
+CREATE INDEX idx_consultation_links_task ON consultation_links (task_id, status);
+CREATE INDEX idx_consultation_links_conv ON consultation_links (connector_id, conversation_id);
+
+-- ActionCandidates are content-hashed approval objects (§16): the operator
+-- approves a specific argument set against a specific precondition state.
+-- arguments_json holds only public catalog/inventory facts — Restricted
+-- values (private floors, costs) never enter this table, the event log or
+-- any model-visible output.
+CREATE TABLE action_candidates (
+  candidate_id TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+  task_id TEXT,
+  tool TEXT NOT NULL,
+  arguments_json TEXT NOT NULL,
+  arguments_hash TEXT NOT NULL,
+  preconditions_json TEXT NOT NULL,
+  preconditions_hash TEXT NOT NULL,
+  risk TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN (
+    'pending_approval','approved','executed','rejected','superseded','expired')),
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_action_candidates_principal ON action_candidates (principal_id, status);
+CREATE INDEX idx_action_candidates_expiry ON action_candidates (expires_at) WHERE status = 'pending_approval';
+`;
+
 /** Ordered migrations: version number -> SQL. */
 const MIGRATIONS: Readonly<Record<number, string>> = {
   1: MIGRATION_1,
   2: MIGRATION_2,
+  3: MIGRATION_3,
 };
 
 /**
