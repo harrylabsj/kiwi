@@ -1,7 +1,7 @@
 # Merchant profile — deterministic fake model against a local shopping-cli.
 # Runs the full single-turn slice with zero model dependency.
 # Requires: SHOPPING_AGENT_TOKEN set (agent token for merchant-001).
-runtime_version: 0.1.0
+runtime_version: 0.3.0
 protocol_version: shopping.negotiation/0.1
 agent_id: merchant-agent:merchant-001
 role: merchant

@@ -10,7 +10,7 @@ import {
 } from "../src/config/profile.js";
 
 const VALID_YAML = `
-runtime_version: 0.1.0
+runtime_version: 0.3.0
 protocol_version: shopping.negotiation/0.1
 agent_id: merchant-agent:merchant-001
 role: merchant
@@ -116,7 +116,7 @@ describe("profile loading", () => {
 });
 
 const BUYER_YAML = `
-runtime_version: 0.1.0
+runtime_version: 0.3.0
 protocol_version: shopping.negotiation/0.1
 agent_id: buyer-agent:buyer-001
 role: buyer

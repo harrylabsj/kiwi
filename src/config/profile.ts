@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { PROTOCOL_VERSION, type Role } from "../negotiation/types.js";
 
-export const RUNTIME_VERSION = "0.1.0";
+export const RUNTIME_VERSION = "0.3.0";
 
 export interface MerchantPolicy {
   min_unit_price_private?: number;

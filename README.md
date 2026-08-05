@@ -32,7 +32,7 @@ kiwi logs --dir ./my-instance --lines 50        # 按进程标注、脱敏的有
 kiwi down --dir ./my-instance                   # 只停本实例校验过的进程（幂等）
 ```
 
-安全模型：`up` 通过内部 child-runner 启动每个进程，wrapper argv 中含每次进程独立的随机 nonce；`status`/`down` 只在 instance id + uid + 活动进程 argv nonce + 命令指纹全部匹配后才发信号，绝不使用 pgrep、进程名模糊匹配或按端口杀进程；`down` 先 SIGTERM、有界等待、仅对仍可验证的自有 wrapper 才升级 SIGKILL，无法验证的进程只报告、绝不触碰。实例状态：`kiwi.stack.json`（0600）+ `run/`（0700，原子写 manifest）；`init` fail closed，已有 Kiwi 状态或目标文件存在时拒绝，绝不覆盖用户文件。`up` 在留下任何后台进程前校验 config/profile/所需环境变量，部分失败只回滚自己创建的进程；`up`/`down`/`status` 均幂等。managed-local 保持 HTTP 隔离：agent 不 import Python、不碰数据库，supervisor 仅以产品生命周期职责启动 `python -m shopping_cli.api.server`（argv 数组，无 shell 字符串）。`connected` 模式（连接外部部署的 gateway）在 0.1.0 不由 Kiwi 管理，`up` 会明确报错而不是假装支持。
+安全模型：`up` 通过内部 child-runner 启动每个进程，wrapper argv 中含每次进程独立的随机 nonce；`status`/`down` 只在 instance id + uid + 活动进程 argv nonce + 命令指纹全部匹配后才发信号，绝不使用 pgrep、进程名模糊匹配或按端口杀进程；`down` 先 SIGTERM、有界等待、仅对仍可验证的自有 wrapper 才升级 SIGKILL，无法验证的进程只报告、绝不触碰。实例状态：`kiwi.stack.json`（0600）+ `run/`（0700，原子写 manifest）；`init` fail closed，已有 Kiwi 状态或目标文件存在时拒绝，绝不覆盖用户文件。`up` 在留下任何后台进程前校验 config/profile/所需环境变量，部分失败只回滚自己创建的进程；`up`/`down`/`status` 均幂等。managed-local 保持 HTTP 隔离：agent 不 import Python、不碰数据库，supervisor 仅以产品生命周期职责启动 `python -m shopping_cli.api.server`（argv 数组，无 shell 字符串）。`connected` 模式（连接外部部署的 gateway）在 0.3.0 不由 Kiwi 管理，`up` 会明确报错而不是假装支持。
 
 ## 快速开始（单 agent）
 
@@ -170,7 +170,7 @@ bash scripts/e2e-local.sh   # SHOPPING_CLI_SRC 默认指向 ../shopping-cli，PO
 
 ## 外部 Agent Adapter（v0.2.1 设计）
 
-0.1.0 当前把 Pi Agent Core 作为内嵌推理后端。在 v0.2.0 交互控制面稳定后，v0.2.1 增加 OpenClaw ACP 和 Hermes ACP Adapter，让 buyer/merchant 可以分别选择不同的外部 Agent Runtime。Kiwi 仍然负责 claim、策略、审批、幂等、审计和最终 Commerce 写入；外部 Agent 只返回结构化 `DecisionCandidate`，不获得 shopping-cli token 或 Commerce 工具。
+0.3.0 当前把 Pi Agent Core 作为内嵌推理后端。在 v0.2.0 交互控制面稳定后，v0.2.1 增加 OpenClaw ACP 和 Hermes ACP Adapter，让 buyer/merchant 可以分别选择不同的外部 Agent Runtime。Kiwi 仍然负责 claim、策略、审批、幂等、审计和最终 Commerce 写入；外部 Agent 只返回结构化 `DecisionCandidate`，不获得 shopping-cli token 或 Commerce 工具。
 
 完整设计见 [`docs/external-agent-adapters-v0.2.md`](docs/external-agent-adapters-v0.2.md)。
 
@@ -191,7 +191,7 @@ npm run verify          # 以上全部
 
 - **connected 模式不由 Kiwi 管理**：`kiwi up` 只支持 managed-local；连接外部部署 gateway 时直接用 `kiwi agent run` / `kiwi doctor`。
 - **TUI 候选生成暂为确定性 runner**：`kiwi tui` 已实现操作者控制面，但候选由 `DeterministicNegotiationRunner` 生成（与 fake 模型共用纯规则函数），Embedded Pi 候选后端尚未接入；无法映射到规则的自然语言偏好只记录并展示（/strategy、/why），不影响确定性候选。
-- **OpenClaw/Hermes ACP Adapter 尚未实现**：当前 0.1.0 只有内嵌 Pi 和 pi-ai Provider；外部 Agent Adapter 的边界、配置、失败语义和验收标准见 v0.2 设计文档。
+- **OpenClaw/Hermes ACP Adapter 尚未实现**：当前 0.3.0 只有内嵌 Pi 和 pi-ai Provider；外部 Agent Adapter 的边界、配置、失败语义和验收标准见 v0.2 设计文档。
 - **真实模型 smoke 未纳入 CI**；CI 主路径只用确定性 fake model。
 - supervisor 单实例单目录：一个实例目录对应一个 gateway + 双 agent；多实例用多个 `--dir`。wrapper 仅在 SIGTERM 有界等待失败后才升级 SIGKILL；SIGKILL 直接命中 wrapper 时其子进程可能成为孤儿（最后手段，正常 down 不会发生）。日志无轮转，长时间运行需外部清理。
 - `human_required` 结果会让 claim 以 `processed` 结束（升级即本轮职责完成），避免无限重试。
