@@ -65,6 +65,8 @@ export interface DecisionHints {
   merchant_min_unit_price?: number;
   /** Quantity cap ("最多买 N 件"). */
   quantity_cap?: number;
+  /** Buyer target unit price: counter toward this before accepting ("砍到 100"). */
+  buyer_target_unit_price?: number;
   /** Prefer free shipping: counter with fee 0 before accepting. */
   prefer_free_shipping?: boolean;
   /** This turn only asks; never accept or counter with a price. */
@@ -108,6 +110,26 @@ export function deterministicMerchantDecision(
       public_message: "抱歉，该商品当前缺货，无法报价。",
       confidence: 0.99,
       reason_codes: ["out_of_stock"],
+      request_human_review: false,
+    };
+  }
+
+  // Convergence: accept the buyer's latest counter when it meets the merchant
+  // floor — otherwise the merchant would re-quote the list price forever and
+  // the autonomous negotiation never closes.
+  const floor = hints.merchant_min_unit_price;
+  const buyerProposal = snapshot.current_proposal;
+  if (floor !== undefined && buyerProposal !== null && buyerProposal !== undefined && buyerProposal.unit_price >= floor) {
+    return {
+      protocol_version: PROTOCOL_VERSION,
+      conversation_id: snapshot.conversation.id,
+      in_reply_to_message_id: snapshot.in_reply_to_message_id,
+      action: "accept_nonbinding",
+      proposal: buyerProposal,
+      open_issues: [...snapshot.open_issues],
+      public_message: "接受该报价，双方达成非约束性共识。",
+      confidence: 0.9,
+      reason_codes: ["within_policy", "consensus"],
       request_human_review: false,
     };
   }
@@ -244,6 +266,27 @@ export function deterministicBuyerDecision(
       reason_codes: ["human_review"],
       request_human_review: true,
     };
+  }
+
+  // Counter toward the buyer's target unit price ("砍到 100"): if the offer
+  // is above the target, push back at the target, bounded by what the budget
+  // allows per unit. Never reveal the private budget in numeric terms.
+  const targetPrice = hints.buyer_target_unit_price;
+  if (targetPrice !== undefined && proposal.unit_price > targetPrice) {
+    const affordable = maxTotal / capped.quantity;
+    const counterPrice = Math.min(targetPrice, affordable);
+    if (counterPrice < proposal.unit_price) {
+      return {
+        ...base,
+        action: "counter",
+        proposal: { ...capped, unit_price: counterPrice },
+        open_issues: [...snapshot.open_issues],
+        public_message: `单价 ${counterPrice} ${proposal.currency}（${capped.quantity} 件）我可以接受，请确认。`,
+        confidence: 0.9,
+        reason_codes: ["within_policy", "target_price"],
+        request_human_review: false,
+      };
+    }
   }
 
   // Soft preference: fight for free shipping before accepting a fee-bearing

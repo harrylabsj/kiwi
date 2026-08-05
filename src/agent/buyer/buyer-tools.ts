@@ -48,6 +48,9 @@ function parseIntent(value: unknown): TaskIntent {
   if (typeof v.quantity === "number" && Number.isInteger(v.quantity) && v.quantity > 0) {
     out.quantity = v.quantity;
   }
+  if (typeof v.target_unit_price === "number" && Number.isFinite(v.target_unit_price) && v.target_unit_price >= 0) {
+    out.target_unit_price = v.target_unit_price;
+  }
   if (Array.isArray(v.preferences)) out.preferences = v.preferences.map(String);
   if (Array.isArray(v.required_terms)) out.required_terms = v.required_terms.map(String);
   if (Array.isArray(v.open_questions)) out.open_questions = v.open_questions.map(String);
@@ -386,7 +389,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       type: "object",
       properties: {
         goal_text: { type: "string", description: "用户原始目标的简洁表达" },
-        intent: { type: "object", description: "结构化意图（category/query_text/city/needed_by 等）" },
+        intent: { type: "object", description: "结构化意图（category/query_text/city/needed_by/quantity/target_unit_price 等；target_unit_price = 砍价目标单价）" },
         constraints: {
           type: "object",
           description: "硬约束（max_total_price 私有预算/latest_eta/required_terms/exclude_out_of_stock）",

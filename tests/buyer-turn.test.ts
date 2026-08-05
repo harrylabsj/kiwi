@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
 import type { FakeCommerceClient } from "../src/commerce/fake-client.js";
-import { createScriptedFakeStreamFn } from "../src/runtime/fake-model.js";
+import {
+  createScriptedFakeStreamFn,
+  deterministicBuyerDecision,
+} from "../src/runtime/fake-model.js";
+import { PROTOCOL_VERSION, type NegotiationSnapshot } from "../src/negotiation/types.js";
 import { runNegotiationTurn } from "../src/runtime/negotiation-turn.js";
 import { TOOL_GET_SNAPSHOT, TOOL_SUBMIT_DECISION } from "../src/runtime/tools.js";
 import {
@@ -261,6 +265,79 @@ describe("buyer single turn (fake model + shared fake marketplace)", () => {
     });
     expect(report.outcome.kind).toBe("human_required");
     expect(JSON.stringify(report)).not.toContain('"10"');
+  });
+});
+
+describe("deterministic buyer negotiation toward a target price", () => {
+  const policy = {
+    max_total_price_private: 240,
+    acceptable_eta_latest: "2099-12-31T23:59:59Z",
+    required_after_sales_terms: ["policy:return-7d"],
+  };
+  function snapshotWithOffer(unitPrice: number, quantity = 2): NegotiationSnapshot {
+    const delivery = {
+      eta_start: "2026-08-06T10:00:00Z",
+      eta_end: "2026-08-06T12:00:00Z",
+      fee: 0,
+    };
+    return {
+      protocol_version: PROTOCOL_VERSION,
+      conversation: { id: "CONV-T", status: "waiting_buyer", next_actor: "buyer" },
+      role: "buyer",
+      in_reply_to_message_id: 1,
+      product: { sku: "sku-001", title: "手写陶瓷杯", list_price: 120, currency: "CNY" },
+      stock: {
+        status: "available",
+        quantity: 10,
+        observed_at: "2026-08-05T00:00:00Z",
+        source: { backend: "local_marketplace", observed_at: "2026-08-05T00:00:00Z" },
+        reserved: false,
+      },
+      delivery: { ...delivery, notes: "" },
+      after_sales_policies: [{ ref: "policy:return-7d", summary: "7天退货" }],
+      messages: [],
+      current_proposal: {
+        sku: "sku-001",
+        quantity,
+        unit_price: unitPrice,
+        currency: "CNY",
+        stock: { status: "available", quantity: 10, observed_at: "2026-08-05T00:00:00Z", reserved: false },
+        delivery,
+        after_sales_policy_refs: ["policy:return-7d"],
+        valid_until: "2026-08-05T12:00:00Z",
+      },
+      open_issues: [],
+      policy_results: [],
+    };
+  }
+
+  it("counters toward the target unit price when the offer is above it", () => {
+    const d = deterministicBuyerDecision(snapshotWithOffer(120), policy, {
+      buyer_target_unit_price: 100,
+      buyer_max_total_price: 240,
+      quantity_cap: 2,
+    });
+    expect(d.action).toBe("counter");
+    expect(d.proposal?.unit_price).toBe(100);
+    expect(d.proposal?.quantity).toBe(2);
+    expect(d.public_message).toContain("100");
+  });
+
+  it("accepts when the offer is at or below the target", () => {
+    const d = deterministicBuyerDecision(snapshotWithOffer(90), policy, {
+      buyer_target_unit_price: 100,
+      buyer_max_total_price: 240,
+    });
+    expect(d.action).toBe("accept_nonbinding");
+  });
+
+  it("escalates when the offer exceeds the budget even if it is below the target", () => {
+    // offer 120×2=240 > budget 180: the hard constraint wins over the target.
+    const d = deterministicBuyerDecision(snapshotWithOffer(120), policy, {
+      buyer_target_unit_price: 100,
+      buyer_max_total_price: 180,
+    });
+    expect(d.action).toBe("escalate");
   });
 });
 

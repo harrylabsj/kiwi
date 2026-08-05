@@ -233,6 +233,8 @@ export class DeterministicNegotiationRunner implements NegotiationRunner {
   async prepare(options?: {
     skipMessageIds?: ReadonlySet<number>;
     directives?: readonly StrategyDirective[];
+    /** Direct hints (e.g. task-derived quantity/target/budget), merged over directives. */
+    hints?: DecisionHints;
   }): Promise<PreparedCandidate | undefined> {
     const pending = await this.client.listPendingMessages();
     const target = pending.find((m) => options?.skipMessageIds?.has(m.message_id) !== true);
@@ -266,9 +268,18 @@ export class DeterministicNegotiationRunner implements NegotiationRunner {
       })
       .catch(release);
 
+    // Seed with the profile's private floor so the merchant decision always
+    // knows its floor (convergence: accept a counter at/above the floor).
+    const profileHints: DecisionHints = {};
+    if (
+      this.profile.role === "merchant" &&
+      this.profile.merchant_policy?.min_unit_price_private !== undefined
+    ) {
+      profileHints.merchant_min_unit_price = this.profile.merchant_policy.min_unit_price_private;
+    }
     const hints = clampHintsToHardPolicy(
       this.profile,
-      compileDirectiveHints(options?.directives ?? []),
+      { ...profileHints, ...compileDirectiveHints(options?.directives ?? []), ...options?.hints },
     );
     const decision =
       this.profile.role === "buyer"
