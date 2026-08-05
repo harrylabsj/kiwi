@@ -157,6 +157,12 @@ export interface MerchantToolDeps {
   now: () => string;
   /** Register /approve execution hooks for pending candidates. */
   registerPending?: WriteGateDeps["registerPending"];
+  /**
+   * Read the merchant's own Restricted memory values (Vault). Owner-only:
+   * results must never be written into public messages, offers, tool
+   * arguments, proposals or logs.
+   */
+  privateValues?: () => Array<{ key: string; value: string }>;
 }
 
 export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
@@ -596,12 +602,33 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     registerPending: deps.registerPending,
   });
 
+  const viewPrivateThresholds: Tool = {
+    name: "view_private_thresholds",
+    label: "查看私密阈值",
+    description:
+      "查看操作者（委托人）自己的私有阈值（成本/底价/利润目标，从加密 Vault 读取）。" +
+      "这些数值只对操作者本人可见；绝不能写进公开消息、对外报价文本、磋商 proposal 或日志。",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    execute: async () => {
+      if (deps.privateValues === undefined) {
+        return textResult("当前环境未配置私密阈值读取能力。");
+      }
+      const values = deps.privateValues();
+      if (values.length === 0) return textResult("暂无私密阈值记忆。");
+      return textResult(
+        values.map((v) => `· ${v.key} = ${v.value}`).join("\n"),
+        { count: values.length },
+      );
+    },
+  };
+
   return [
     listProducts,
     getProduct,
     inventorySnapshot,
     listConsultations,
     humanReviewQueue,
+    viewPrivateThresholds,
     ...negotiationTools,
     createProduct,
     updateProduct,

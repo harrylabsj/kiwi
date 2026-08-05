@@ -89,10 +89,25 @@ function assistantText(message: AssistantMessage): string {
     .trim();
 }
 
+/** The owner's own Restricted memory values (Vault). Owner-only by isolation. */
+function listRestrictedValues(store: MemoryStore): Array<{ key: string; value: string }> {
+  const out: Array<{ key: string; value: string }> = [];
+  for (const m of store.listMemories({ sensitivity: "restricted" })) {
+    if (m.vault_ref === undefined) continue;
+    try {
+      out.push({ key: m.key, value: store.openVaultValue(m.vault_ref) });
+    } catch {
+      // data key unavailable on this run: skip rather than crash the read
+    }
+  }
+  return out;
+}
+
 const COMMANDS_HELP = `/memory [preferences|private]  查看记忆概览 / 学习到的偏好 / 私密资料字段与状态
 /forget <memory-id|描述>   删除记忆（tombstone + 审计）
 /correct <memory-id> <新内容>  修正记忆（保留前后版本审计）
 /confirm <memory-id>       人工确认候选记忆生效（硬约束/敏感记忆必须人工确认）
+/private                   查看你自己的私密阈值明文（成本/底价，仅你可见，勿写入对外消息）
 /why                       说明最近的回答使用了哪些记忆
 /mode [manual|supervised|autopilot] [confirm]  查看或切换写操作审批模式
 /pending                   列出等待批准的写操作候选
@@ -231,6 +246,7 @@ export class AgentKernel {
         mode: () => modeRef.value,
         registerPending,
         now: clock,
+        privateValues: () => listRestrictedValues(store),
       });
     }
 
@@ -452,6 +468,8 @@ export class AgentKernel {
           return { text: this.handleCorrect(arg), quit: false };
         case "/confirm":
           return { text: this.handleConfirm(arg), quit: false };
+        case "/private":
+          return { text: this.renderPrivate(), quit: false };
         case "/why":
           return { text: this.renderWhy(), quit: false };
         case "/mode":
@@ -551,6 +569,16 @@ export class AgentKernel {
     }
     const memory = this.store.correctMemory(memoryId, { value }, "user", "via /correct");
     return `[记忆] 已修正 ${memory.memory_id}（版本 ${memory.version}），旧值保留在审计事件中。`;
+  }
+
+  /** Owner-only reveal of Restricted (Vault) values — never echoed to a buyer. */
+  private renderPrivate(): string {
+    const values = listRestrictedValues(this.store);
+    if (values.length === 0) return "[私有] 暂无私密阈值记忆。";
+    return [
+      "[私有] 你的私密阈值（仅你可见；绝不要把它们写进对外消息或报价）:",
+      ...values.map((v) => `  · ${v.key} = ${v.value}`),
+    ].join("\n");
   }
 
   /** Human-only promotion of a candidate (design §10.1): constraints and

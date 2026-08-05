@@ -395,6 +395,24 @@ describe("sensitive routing and model failure resilience", () => {
     await kernel.close();
   });
 
+  it("/private reveals the owner's own Restricted (Vault) values", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const kernel = await openKernel("agent"); // merchant, keyed vault
+    kernel.memoryStore.remember({
+      namespace: "profile",
+      key: "merchant.floor_price.sku-001",
+      restricted: { kind: "merchant_floor", plaintext: "floor-73.5" },
+      sensitivity: "restricted",
+      source_kind: "explicit",
+      explicit_user_statement: true,
+      evidence: { source_type: "chat", source_ref: "test", summary: "底价" },
+      actor: "user",
+    });
+    const reply = await kernel.handleUserText("/private");
+    expect(reply.text).toContain("floor-73.5");
+    await kernel.close();
+  });
+
   it("a model failure in one turn does not kill the session", async () => {
     workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
     const boom = (): never => {
