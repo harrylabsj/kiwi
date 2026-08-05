@@ -316,9 +316,13 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       if (!credential.ok) return textResult(credential.reason);
       try {
         const input = parseProductInput((params as { product: unknown }).product);
-        const args = { product: { ...input } };
-        const preconditions = { sku: input.sku, exists: false };
-        const escalation = catalogEscalation(profile, { ...input }, undefined);
+        // A merchant's own catalog write always belongs to THIS merchant: an
+        // omitted merchant_id must default to the profile owner, never empty.
+        const product =
+          input.merchant_id === "" ? { ...input, merchant_id: ownerId } : input;
+        const args = { product: { ...product } };
+        const preconditions = { sku: product.sku, exists: false };
+        const escalation = catalogEscalation(profile, { ...product }, undefined);
         const outcome = await routeWriteCandidate(
           writeGateDeps,
           {
@@ -335,12 +339,12 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
             readPreconditions: async () => {
               let exists = false;
               try {
-                await merchantClient.getProduct(input.sku);
+                await merchantClient.getProduct(product.sku);
                 exists = true;
               } catch {
                 exists = false;
               }
-              return { sku: input.sku, exists };
+              return { sku: product.sku, exists };
             },
             autopilotEscalation: () => escalation,
           },
