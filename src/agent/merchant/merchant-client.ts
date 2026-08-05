@@ -222,11 +222,16 @@ export class HttpMerchantClient implements MerchantClient {
       "GET",
       `/merchants/${encodeURIComponent(merchantId)}/human-review`,
       { token: this.catalogToken() },
-    )) as { reviews?: unknown };
-    if (payload === null || typeof payload !== "object" || !Array.isArray(payload.reviews)) {
-      throw new MerchantClientError("validation", "human-review response lacks a reviews array");
+    )) as { reviews?: unknown; conversations?: unknown };
+    // shopping-cli 2.x returns {conversations:[...]}; accept both shapes.
+    const reviews = payload.reviews ?? payload.conversations;
+    if (payload === null || typeof payload !== "object" || !Array.isArray(reviews)) {
+      throw new MerchantClientError(
+        "validation",
+        "human-review response lacks a reviews/conversations array",
+      );
     }
-    return payload.reviews.map((r) => parseHumanReviewItem(r));
+    return reviews.map((r) => parseHumanReviewItem(r));
   }
 
   /** shopping-cli 2.x has no listing pause endpoint — fail closed. */

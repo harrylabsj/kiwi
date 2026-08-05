@@ -215,7 +215,7 @@ export function parseHumanReviewItem(value: unknown): HumanReviewItem {
   return {
     // shopping-cli summaries use `id`; the DTO uses `review_id` — accept both.
     review_id: reqId(v.review_id ?? v.id, "review.review_id/id"),
-    conversation_id: reqString(v.conversation_id, "review.conversation_id"),
+    conversation_id: reqString(v.conversation_id ?? v.id, "review.conversation_id/id"),
     buyer_id: reqString(v.buyer_id, "review.buyer_id"),
     sku: reqString(v.sku, "review.sku"),
     reason: typeof v.reason === "string" ? v.reason : "",

@@ -61,6 +61,8 @@ function latestToolResultText(context: Context, toolName: string): string | unde
 export interface DecisionHints {
   /** Effective buyer budget ceiling (last budget directive, else profile). */
   buyer_max_total_price?: number;
+  /** Per-unit buyer budget ("单价预算 94"); the decision derives the total. */
+  buyer_max_unit_price?: number;
   /** Effective merchant floor (last floor directive, else profile). */
   merchant_min_unit_price?: number;
   /** Quantity cap ("最多买 N 件"). */
@@ -249,14 +251,45 @@ export function deterministicBuyerDecision(
     hints.quantity_cap !== undefined && proposal.quantity > hints.quantity_cap
       ? { ...proposal, quantity: hints.quantity_cap }
       : proposal;
-  const total = capped.unit_price * capped.quantity + capped.delivery.fee;
-  const maxTotal = hints.buyer_max_total_price ?? policy.max_total_price_private;
+  // Total budget: explicit total, else per-unit × quantity, else profile.
+  const maxTotal =
+    hints.buyer_max_total_price ??
+    (hints.buyer_max_unit_price !== undefined
+      ? hints.buyer_max_unit_price * capped.quantity
+      : policy.max_total_price_private);
+  const fee = capped.delivery.fee;
   const etaOk = Date.parse(proposal.delivery.eta_end) <= Date.parse(policy.acceptable_eta_latest);
   const refs = new Set(proposal.after_sales_policy_refs);
   const termsOk = policy.required_after_sales_terms.every((t) => refs.has(t));
+
+  // Counter toward the target / affordable unit price FIRST — a buyer who
+  // sees an over-budget offer should push the price down, not give up. Bounded
+  // by the per-unit budget and the total budget.
+  const targetPrice = hints.buyer_target_unit_price;
+  const perUnitBudget = hints.buyer_max_unit_price ?? maxTotal / capped.quantity;
+  const desiredUnit =
+    targetPrice !== undefined ? Math.min(targetPrice, perUnitBudget) : undefined;
+  if (
+    desiredUnit !== undefined &&
+    desiredUnit < capped.unit_price &&
+    desiredUnit * capped.quantity + fee <= maxTotal
+  ) {
+    return {
+      ...base,
+      action: "counter",
+      proposal: { ...capped, unit_price: desiredUnit },
+      open_issues: [...snapshot.open_issues],
+      public_message: `单价 ${desiredUnit} ${proposal.currency}（${capped.quantity} 件）我可以接受，请确认。`,
+      confidence: 0.9,
+      reason_codes: ["within_policy", "target_price"],
+      request_human_review: false,
+    };
+  }
+
+  // Hard constraints: if the offer still doesn't fit, escalate — never reveal
+  // why in numeric terms (the private budget must not leak).
+  const total = capped.unit_price * capped.quantity + fee;
   if (total > maxTotal || !etaOk || !termsOk) {
-    // The offer does not fit the constraints. Never reveal why in numeric
-    // terms — escalate to a human instead of leaking the budget.
     return {
       ...base,
       action: "escalate",
@@ -266,27 +299,6 @@ export function deterministicBuyerDecision(
       reason_codes: ["human_review"],
       request_human_review: true,
     };
-  }
-
-  // Counter toward the buyer's target unit price ("砍到 100"): if the offer
-  // is above the target, push back at the target, bounded by what the budget
-  // allows per unit. Never reveal the private budget in numeric terms.
-  const targetPrice = hints.buyer_target_unit_price;
-  if (targetPrice !== undefined && proposal.unit_price > targetPrice) {
-    const affordable = maxTotal / capped.quantity;
-    const counterPrice = Math.min(targetPrice, affordable);
-    if (counterPrice < proposal.unit_price) {
-      return {
-        ...base,
-        action: "counter",
-        proposal: { ...capped, unit_price: counterPrice },
-        open_issues: [...snapshot.open_issues],
-        public_message: `单价 ${counterPrice} ${proposal.currency}（${capped.quantity} 件）我可以接受，请确认。`,
-        confidence: 0.9,
-        reason_codes: ["within_policy", "target_price"],
-        request_human_review: false,
-      };
-    }
   }
 
   // Soft preference: fight for free shipping before accepting a fee-bearing
