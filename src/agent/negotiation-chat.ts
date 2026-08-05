@@ -87,13 +87,14 @@ function buildDecision(target: PendingTarget, args: Record<string, unknown>): Ne
     ...(args.proposal !== undefined ? { proposal: args.proposal as NegotiationDecision["proposal"] } : {}),
     open_issues: Array.isArray(args.open_issues) ? (args.open_issues as string[]) : [],
     public_message: String(args.public_message ?? ""),
-    reason_codes: [],
+    reason_codes: Array.isArray(args.reason_codes) ? (args.reason_codes as string[]) : [],
     request_human_review: args.request_human_review === true,
   };
   return decision;
 }
 
-/** Autopilot escalation: negotiation messages outside HardPolicy need a human. */
+/** Autopilot escalation: negotiation messages outside HardPolicy need a human.
+ * The reason never contains the private number. */
 function negotiationEscalation(profile: AgentProfile, args: Record<string, unknown>): string | undefined {
   if (args.request_human_review === true) {
     return "请求了人工处理，必须由人确认后再提交。";
@@ -105,6 +106,31 @@ function negotiationEscalation(profile: AgentProfile, args: Record<string, unkno
   const codes = Array.isArray(args.reason_codes) ? (args.reason_codes as string[]) : [];
   if (codes.some((c) => reviewOn.includes(c))) {
     return `命中需人工确认的策略码（${codes.join(",")}）。`;
+  }
+  // Local HardPolicy envelope (design §7.1): a merchant quote below the
+  // private floor, or a buyer proposal over the private budget, must never
+  // auto-submit in autopilot — the gateway would reject it with human_required
+  // and poison the conversation state.
+  const proposal = args.proposal as
+    | { unit_price?: unknown; quantity?: unknown; delivery?: { fee?: unknown } }
+    | undefined;
+  const unitPrice = typeof proposal?.unit_price === "number" ? proposal.unit_price : undefined;
+  if (unitPrice === undefined) return undefined;
+  if (profile.role === "merchant") {
+    const floor = profile.merchant_policy?.min_unit_price_private;
+    if (floor !== undefined && unitPrice < floor) {
+      return "报价低于私有底价，需要人工批准后再提交。";
+    }
+  }
+  if (profile.role === "buyer") {
+    const budget = profile.buyer_policy?.max_total_price_private;
+    if (budget !== undefined) {
+      const qty = typeof proposal?.quantity === "number" ? proposal.quantity : 1;
+      const fee = typeof proposal?.delivery?.fee === "number" ? proposal.delivery.fee : 0;
+      if (unitPrice * qty + fee > budget) {
+        return "提案总价超出私有预算，需要人工批准后再提交。";
+      }
+    }
   }
   return undefined;
 }
@@ -142,6 +168,31 @@ async function executeNegotiationSubmit(
         message_id: target.message_id,
         idempotency_key: idem,
         error: `local policy rejected: ${violation.reason_codes.join(", ")}`,
+      });
+      afterSettle?.({ conversation_id: conversationId, result: local, settlement: "failed" });
+      return { result: local, settlement: "failed" };
+    }
+  }
+
+  // Merchant local floor gate BEFORE the gateway (design §7.1, §16): a quote
+  // below the private floor never reaches the marketplace and never leaks the
+  // number — the gateway would otherwise flip the conversation to human_required.
+  const floor = profile.merchant_policy?.min_unit_price_private;
+  if (profile.role === "merchant" && floor !== undefined && decision.proposal) {
+    if (decision.proposal.unit_price < floor) {
+      const local: PolicyResult = {
+        protocol_version: PROTOCOL_VERSION,
+        result: "rejected_retryable",
+        conversation_id: conversationId,
+        next_actor: "merchant",
+        reason_codes: ["local_floor_violation"],
+        public_reason: "该报价低于你的私有底价，请上调后再提交。",
+        retries_remaining: 0,
+      };
+      await commerceClient.failClaim({
+        message_id: target.message_id,
+        idempotency_key: idem,
+        error: "local policy rejected: local_floor_violation",
       });
       afterSettle?.({ conversation_id: conversationId, result: local, settlement: "failed" });
       return { result: local, settlement: "failed" };
@@ -242,6 +293,7 @@ export function buildNegotiationChatTools(deps: NegotiationChatDeps): Tool[] {
         public_message: { type: "string" },
         proposal: { type: "object", description: "propose/counter/accept 时的完整 proposal" },
         open_issues: { type: "array", items: { type: "string" } },
+        reason_codes: { type: "array", items: { type: "string" }, description: "本决策的理由代码，用于命中 human_review_on 策略" },
         request_human_review: { type: "boolean" },
       },
       required: ["conversation_id", "action", "public_message"],

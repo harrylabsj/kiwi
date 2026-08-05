@@ -11,6 +11,7 @@ import { migrateMemorySchema, MEMORY_SCHEMA_VERSION } from "../src/agent/memory/
 import { MemoryStore, type RememberInput } from "../src/agent/memory/store.js";
 import { MemoryError } from "../src/agent/memory/types.js";
 import { EnvKeyProvider, PrivateVault, VaultKeyError } from "../src/agent/memory/vault.js";
+import { buildMemoryTools } from "../src/agent/chat-tools.js";
 
 const T0 = "2026-08-05T12:00:00+08:00";
 /** Store clocks normalize to UTC ISO; assert against this form. */
@@ -325,8 +326,10 @@ describe("Restricted values and the Vault", () => {
         value: undefined,
       }),
     );
-    expect(outcome.kind).toBe("active");
-    const memory = outcome.kind === "active" ? outcome.memory : undefined;
+    // Restricted values can never auto-activate from a model remember call:
+    // they stay candidate until the human /confirms them (design §10.1/§16).
+    expect(outcome.kind).toBe("candidate");
+    const memory = outcome.kind === "candidate" ? outcome.memory : undefined;
     expect(memory?.vault_ref).toMatch(/^vr_/);
     expect(memory?.value).toBeUndefined();
 
@@ -341,7 +344,9 @@ describe("Restricted values and the Vault", () => {
       .join("\n");
     expect(dump).not.toContain(secret);
 
-    // Retrieval serves metadata only; the owner side can still open it.
+    // Human confirmation promotes to active; retrieval serves metadata only.
+    const confirmed = store.confirmMemory(memory!.memory_id, "user");
+    expect(confirmed.status).toBe("active");
     const retrieved = store.retrieve({ session_id: "main", purpose: "clarify" });
     expect(retrieved[0]?.redaction_level).toBe("metadata_only");
     expect(retrieved[0]?.value).toBeUndefined();
@@ -378,11 +383,115 @@ describe("Restricted values and the Vault", () => {
         value: undefined,
       }),
     );
-    const memory = outcome.kind === "active" ? outcome.memory : undefined;
+    const memory = outcome.kind === "candidate" ? outcome.memory : undefined;
     store.forgetMemory(memory!.memory_id, "user", "用户要求删除");
     expect(store.vaultEntries()).toHaveLength(0);
     expect(store.retrieve({ session_id: "main", purpose: "clarify" })).toHaveLength(0);
     expect(store.memoryEvents(memory!.memory_id).map((e) => e.type)).toContain("memory.forgotten");
+  });
+});
+
+describe("human-confirmation gate and sensitivity escalation (P0)", () => {
+  it("constraint memories stay candidate until the human /confirms them", () => {
+    const { store } = setup();
+    const outcome = store.remember(
+      remember({
+        namespace: "constraint",
+        key: "shopping.budget.max",
+        value: { max: 500 },
+        explicit_user_statement: true,
+      }),
+    );
+    expect(outcome.kind).toBe("candidate");
+    const id = outcome.kind === "candidate" ? outcome.memory.memory_id : "";
+    // A candidate is not trusted context yet.
+    expect(store.retrieve({ session_id: "main", purpose: "rank" })).toHaveLength(0);
+    const confirmed = store.confirmMemory(id, "user");
+    expect(confirmed.status).toBe("active");
+    expect(store.retrieve({ session_id: "main", purpose: "rank" })).toHaveLength(1);
+  });
+
+  it("restricted plaintext never echoes into evidence summaries or audit events", () => {
+    const { store, db } = setup();
+    const secret = "北京市朝阳区zz路9号";
+    store.remember(
+      remember({
+        namespace: "profile",
+        key: "contact.address.delivery",
+        sensitivity: "restricted",
+        restricted: { kind: "address", plaintext: secret },
+        value: undefined,
+        evidence: {
+          source_type: "chat",
+          source_ref: "session:main:2",
+          summary: `用户家庭地址：${secret}，注意保护`,
+        },
+      }),
+    );
+    const dump = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as {
+      name: string;
+    }[])
+      .map((t) => {
+        const rows = db.prepare(`SELECT * FROM "${t.name}"`).all();
+        return JSON.stringify(rows, (k, v) => (v instanceof Uint8Array ? "<blob>" : v));
+      })
+      .join("\n");
+    expect(dump).not.toContain(secret);
+  });
+
+  it("escalates precise personal-data strings to the Vault regardless of claimed sensitivity", () => {
+    const { store, db } = setup();
+    const secret = "我家住在北京市海淀区xx路1号";
+    const outcome = store.remember(
+      remember({
+        namespace: "profile",
+        key: "contact.address.home",
+        value: secret,
+        sensitivity: "normal",
+        explicit_user_statement: true,
+      }),
+    );
+    // Escalated to restricted -> candidate until the human confirms.
+    expect(outcome.kind).toBe("candidate");
+    const memory = outcome.kind === "candidate" ? outcome.memory : undefined;
+    expect(memory?.vault_ref).toMatch(/^vr_/);
+    expect(memory?.value).toBeUndefined();
+    const dump = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as {
+      name: string;
+    }[])
+      .map((t) => {
+        const rows = db.prepare(`SELECT * FROM "${t.name}"`).all();
+        return JSON.stringify(rows, (k, v) => (v instanceof Uint8Array ? "<blob>" : v));
+      })
+      .join("\n");
+    expect(dump).not.toContain("海淀区");
+    const confirmed = store.confirmMemory(memory!.memory_id, "user");
+    expect(confirmed.sensitivity).toBe("restricted");
+    expect(store.retrieve({ session_id: "main", purpose: "rank" })[0]?.redaction_level).toBe("metadata_only");
+  });
+
+  it("refuses an escalated sensitive value without an explicit user statement (fail closed)", () => {
+    const { store } = setup();
+    expect(() =>
+      store.remember(
+        remember({
+          namespace: "profile",
+          key: "contact.address.home",
+          value: "电话 13800001111",
+          explicit_user_statement: false,
+          source_kind: "observed",
+        }),
+      ),
+    ).toThrow(/explicit/);
+  });
+
+  it("does not escalate ordinary preference strings", () => {
+    const { store } = setup();
+    const outcome = store.remember(remember({ value: "偏好京东自营", sensitivity: "normal" }));
+    expect(outcome.kind).toBe("active");
+    const memory = outcome.kind === "active" ? outcome.memory : undefined;
+    expect(memory?.sensitivity).toBe("normal");
+    expect(memory?.value).toBe("偏好京东自营");
   });
 });
 
@@ -514,5 +623,96 @@ describe("listings", () => {
     const privates = store.listMemories({ sensitivity: "restricted" });
     expect(privates).toHaveLength(1);
     expect(JSON.stringify(privates)).not.toContain("秘密地址");
+  });
+});
+
+describe("P2: expiry timezone, evidence dedup and shared Vault refs", () => {
+  it("a +08:00 expires_at expires at the correct UTC instant", () => {
+    const { store, setNow } = setup();
+    store.remember(remember({ expires_at: "2026-08-06T00:00:00+08:00" })); // = 08-05T16:00Z
+    expect(store.retrieve({ session_id: "main", purpose: "rank" })).toHaveLength(1);
+    setNow("2026-08-05T16:30:00.000Z"); // past the true 16:00Z expiry
+    expect(store.retrieve({ session_id: "main", purpose: "rank" })).toHaveLength(0);
+  });
+
+  it("two remember calls in the same turn add only one evidence piece", async () => {
+    const { store } = setup();
+    const turn = { current: "session:main:1" };
+    const tools = buildMemoryTools(store, { turnId: () => turn.current });
+    const rememberTool = tools.find((t) => t.name === "remember");
+    expect(rememberTool).toBeDefined();
+    const params = {
+      namespace: "preference",
+      key: "shopping.note.x",
+      value: "喜欢京东自营",
+      sensitivity: "normal",
+      source_kind: "explicit",
+      explicit_user_statement: true,
+      reason_summary: "用户陈述",
+    };
+    await rememberTool!.execute("c1", params, undefined, undefined, undefined);
+    await rememberTool!.execute("c2", params, undefined, undefined, undefined);
+    expect(store.listMemories({})[0]?.evidence_count).toBe(1);
+    // A later turn counts as a distinct evidence window.
+    turn.current = "session:main:2";
+    await rememberTool!.execute("c3", params, undefined, undefined, undefined);
+    expect(store.listMemories({})[0]?.evidence_count).toBe(2);
+  });
+
+  it("the model cannot forget/correct a hard constraint (human-only)", async () => {
+    const { store } = setup();
+    const outcome = store.remember(
+      remember({
+        namespace: "constraint",
+        key: "shopping.budget.max",
+        value: { max: 1 },
+        explicit_user_statement: true,
+      }),
+    );
+    const id = outcome.kind === "candidate" ? outcome.memory.memory_id : "";
+    const tools = buildMemoryTools(store);
+    const forget = tools.find((t) => t.name === "forget_memory");
+    const correct = tools.find((t) => t.name === "correct_memory");
+    const f = await forget!.execute("c1", { memory_id: id }, undefined, undefined, undefined);
+    expect((f.content[0] as { type: "text"; text: string }).text).toContain("/forget");
+    expect(store.getMemory(id)?.status).not.toBe("deleted");
+    const c = await correct!.execute("c2", { memory_id: id, value: { max: 2 } }, undefined, undefined, undefined);
+    expect((c.content[0] as { type: "text"; text: string }).text).toContain("/correct");
+    expect(store.getMemory(id)?.value).toEqual({ max: 1 });
+  });
+
+  it("forgetting one shared-Vault memory keeps the ciphertext for the other", () => {
+    const { store } = setup();
+    const secret = "上海市静安区yy路9号";
+    const a = store.remember(
+      remember({
+        namespace: "profile",
+        key: "contact.address.home",
+        sensitivity: "restricted",
+        restricted: { kind: "address", plaintext: secret },
+        value: undefined,
+      }),
+    );
+    const b = store.remember(
+      remember({
+        namespace: "profile",
+        key: "contact.address.work",
+        sensitivity: "restricted",
+        restricted: { kind: "address", plaintext: secret },
+        value: undefined,
+      }),
+    );
+    const aId = a.kind === "candidate" ? a.memory.memory_id : "";
+    const bId = b.kind === "candidate" ? b.memory.memory_id : "";
+    const ref = b.kind === "candidate" ? b.memory.vault_ref : undefined;
+    expect(ref).toBeDefined();
+    // Same plaintext -> fingerprint-deduped to one vault row.
+    expect(store.vaultEntries()).toHaveLength(1);
+    store.forgetMemory(aId, "user", "test");
+    // b still references it: the ciphertext survives.
+    expect(store.vaultEntries()).toHaveLength(1);
+    expect(store.openVaultValue(ref as string)).toBe(secret);
+    store.forgetMemory(bId, "user", "test");
+    expect(store.vaultEntries()).toHaveLength(0);
   });
 });

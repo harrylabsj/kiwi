@@ -72,6 +72,73 @@ const SOFT_ACTIVATABLE: ReadonlySet<MemoryNamespace> = new Set(["preference", "r
 const AUTO_ACTIVATE_EVIDENCE = 3;
 const MAX_LIMIT = 32;
 
+/**
+ * High-impact memories must never be auto-activated by a model `remember`
+ * call: a hard `constraint` and any `restricted` value stay `candidate` until
+ * the human confirms via `/confirm` (design §10.1/§16). The model asserting
+ * `explicit_user_statement` is not ground truth — only a human can promote.
+ */
+function requiresHumanConfirm(input: RememberInput): boolean {
+  return input.namespace === "constraint" || input.sensitivity === "restricted";
+}
+
+/**
+ * Restricted writes: never let the plaintext echo into evidence summaries or
+ * audit reasons (design §6.3 minimal disclosure). The whole-DB plaintext-free
+ * guarantee only holds if the model-supplied summary is scrubbed too.
+ */
+function evidenceSummaryFor(input: RememberInput, summary: string): string {
+  if (input.sensitivity !== "restricted" || input.restricted === undefined) return summary;
+  const plaintext = input.restricted.plaintext;
+  const scrubbed = plaintext !== "" ? summary.split(plaintext).join("…") : summary;
+  return scrubbed.trim() !== "" ? scrubbed : "用户确认的敏感信息（已加密保存）";
+}
+
+/**
+ * Precise personal data must live in the Vault regardless of the sensitivity
+ * the model happened to claim (design §6.3, §17). A string value that clearly
+ * matches one of these patterns is escalated to `restricted`; if that then
+ * fails the Restricted validation (no explicit statement, no data key) the
+ * write is refused — never degraded to plaintext.
+ */
+const PRECISE_PERSONAL_PATTERNS: ReadonlyArray<{ kind: VaultKind; pattern: RegExp }> = [
+  {
+    kind: "address",
+    pattern:
+      /(住址|地址|收货|寄到|家庭住址|住在|家住)[^，。；;]{0,20}\d|(?:省|市|区|县|镇|街道).{0,12}(?:号|路|小区|巷)[\d一二三四五六七八九十]*/,
+  },
+  { kind: "contact", pattern: /(电话|手机|手机号|微信号|联系方式|邮箱|e-?mail|QQ)\s*[:：]?[\s-]*\d{5,}/i },
+  { kind: "private_budget", pattern: /(预算|心理价|心理价位|最高出价|上限价)\s*[:：]?\s*(\d+)/ },
+  { kind: "merchant_cost", pattern: /(成本|进价)\s*[:：]?\s*(\d+)/ },
+  { kind: "merchant_floor", pattern: /(底价|最低价|最低售价)\s*[:：]?\s*(\d+)/ },
+  { kind: "other", pattern: /(身份证|银行卡|银行账号|护照|护照号|卡号|账号)\s*[:：]?[\dXx]/i },
+];
+
+function classifyPersonalData(value: string): VaultKind | undefined {
+  for (const { kind, pattern } of PRECISE_PERSONAL_PATTERNS) {
+    if (pattern.test(value)) return kind;
+  }
+  return undefined;
+}
+
+/**
+ * Escalate a string value that clearly is precise personal data to a
+ * Restricted (Vault) write. Object/array values are left alone — a structured
+ * value is the model's explicit non-Restricted choice, not a raw secret.
+ */
+function escalateSensitivity(input: RememberInput): RememberInput {
+  if (input.sensitivity === "restricted") return input;
+  if (input.value === undefined || typeof input.value !== "string") return input;
+  const kind = classifyPersonalData(input.value);
+  if (kind === undefined) return input;
+  return {
+    ...input,
+    sensitivity: "restricted",
+    restricted: { kind, plaintext: input.value },
+    value: undefined,
+  };
+}
+
 export interface EvidenceInput {
   source_type: EvidenceSourceType;
   /** Task/session/event reference; dedup key (same-task repeats don't count). */
@@ -273,11 +340,14 @@ export class MemoryStore {
   // ---- write path ---------------------------------------------------------
 
   remember(input: RememberInput): RememberOutcome {
-    this.validateRemember(input);
+    // Precise personal data escalates to the Vault before validation, so a
+    // model mislabeling an address as `private`/`normal` is still sealed.
+    const effective = escalateSensitivity(input);
+    this.validateRemember(effective);
     const now = this.now();
     this.db.exec("BEGIN");
     try {
-      const outcome = this.rememberTx(input, now);
+      const outcome = this.rememberTx(effective, now);
       this.db.exec("COMMIT");
       return outcome;
     } catch (err) {
@@ -346,8 +416,13 @@ export class MemoryStore {
         "a Vault plaintext requires sensitivity=restricted",
       );
     }
-    if (input.expires_at !== undefined && Number.isNaN(Date.parse(input.expires_at))) {
-      throw new MemoryError("validation", "expires_at must be an RFC3339 timestamp");
+    if (input.expires_at !== undefined) {
+      if (Number.isNaN(Date.parse(input.expires_at))) {
+        throw new MemoryError("validation", "expires_at must be an RFC3339 timestamp");
+      }
+      // Normalize to UTC ISO: expireDue compares lexicographically against a
+      // UTC-Z now, so a "+08:00" input would otherwise silently never expire.
+      input.expires_at = new Date(Date.parse(input.expires_at)).toISOString();
     }
     if (input.confidence !== undefined && (input.confidence < 0 || input.confidence > 1)) {
       throw new MemoryError("validation", "confidence must be in [0, 1]");
@@ -363,7 +438,9 @@ export class MemoryStore {
       return this.mergeOrConflict(existing, input, scope, now);
     }
 
-    const explicitConfirmed = input.explicit_user_statement;
+    // Constraint/restricted memories can never auto-activate from a model
+    // remember call — they stay candidate until the human /confirms them.
+    const explicitConfirmed = input.explicit_user_statement && !requiresHumanConfirm(input);
     const status: MemoryStatus = explicitConfirmed ? "active" : "candidate";
     const confidence = explicitConfirmed
       ? 1.0
@@ -378,7 +455,12 @@ export class MemoryStore {
       explicitConfirmed ? now : undefined,
       now,
     );
-    this.addEvidenceTx(item.memory_id, { ...input.evidence, polarity: "support" }, now, true);
+    this.addEvidenceTx(
+      item.memory_id,
+      { ...input.evidence, polarity: "support", summary: evidenceSummaryFor(input, input.evidence.summary) },
+      now,
+      true,
+    );
     this.appendEvent(
       item.memory_id,
       explicitConfirmed ? "memory.confirmed" : "memory.proposed",
@@ -405,7 +487,7 @@ export class MemoryStore {
     if (sameValue) {
       const added = this.addEvidenceTx(
         existing.memory_id,
-        { ...input.evidence, polarity: "support" },
+        { ...input.evidence, polarity: "support", summary: evidenceSummaryFor(input, input.evidence.summary) },
         now,
         true,
       );
@@ -428,25 +510,31 @@ export class MemoryStore {
         { before: auditSnapshot(existing), after: { status: "superseded" } },
         now,
       );
+      const humanConfirm = requiresHumanConfirm(input);
       const item = this.insertItem(
         existing.principal_id,
         input,
         scope,
-        "active",
-        1.0,
-        now,
+        humanConfirm ? "candidate" : "active",
+        humanConfirm ? (input.confidence ?? DEFAULT_CONFIDENCE[input.source_kind]) : 1.0,
+        humanConfirm ? undefined : now,
         now,
       );
-      this.addEvidenceTx(item.memory_id, { ...input.evidence, polarity: "support" }, now, true);
-      this.appendEvent(item.memory_id, "memory.confirmed", input.actor, undefined, {
+      this.addEvidenceTx(
+        item.memory_id,
+        { ...input.evidence, polarity: "support", summary: evidenceSummaryFor(input, input.evidence.summary) },
+        now,
+        true,
+      );
+      this.appendEvent(item.memory_id, humanConfirm ? "memory.proposed" : "memory.confirmed", input.actor, undefined, {
         after: auditSnapshot({ ...item, evidence_count: 1 }),
       }, now);
-      return { kind: "active", memory: { ...item, evidence_count: 1 } };
+      return { kind: humanConfirm ? "candidate" : "active", memory: { ...item, evidence_count: 1 } };
     }
 
     const added = this.addEvidenceTx(
       existing.memory_id,
-      { ...input.evidence, polarity: "contradict" },
+      { ...input.evidence, polarity: "contradict", summary: evidenceSummaryFor(input, input.evidence.summary) },
       now,
       false,
     );
@@ -455,7 +543,7 @@ export class MemoryStore {
         existing.memory_id,
         "memory.contradicted",
         input.actor,
-        input.evidence.summary,
+        evidenceSummaryFor(input, input.evidence.summary),
         { before: auditSnapshot(existing) },
         now,
       );
@@ -599,6 +687,7 @@ export class MemoryStore {
     if (item.status !== "candidate") return;
     if (!SOFT_ACTIVATABLE.has(item.namespace)) return;
     if (item.source_kind !== "observed" && item.source_kind !== "inferred") return;
+    if (item.sensitivity === "restricted") return;
     if (item.evidence_count < AUTO_ACTIVATE_EVIDENCE) return;
     const confidence = Math.min(0.9, Math.max(item.confidence, 0.5 + 0.1 * item.evidence_count));
     this.db
@@ -758,8 +847,19 @@ export class MemoryStore {
       this.db
         .prepare("UPDATE memory_items SET status = 'deleted', updated_at = ? WHERE memory_id = ?")
         .run(now, memoryId);
+      // Vault rows are fingerprint-deduped and can be shared by several memory
+      // items (design §9.5). Only erase the ciphertext when no OTHER live item
+      // still references it — otherwise /forget of one would silently destroy
+      // the other's private value.
       if (item.vault_ref !== undefined) {
-        this.db.prepare("DELETE FROM private_vault WHERE vault_ref = ?").run(item.vault_ref);
+        const stillReferenced = this.db
+          .prepare(
+            "SELECT COUNT(*) AS c FROM memory_items WHERE vault_ref = ? AND memory_id != ? AND status != 'deleted'",
+          )
+          .get(item.vault_ref, memoryId) as { c: number };
+        if (stillReferenced.c === 0) {
+          this.db.prepare("DELETE FROM private_vault WHERE vault_ref = ?").run(item.vault_ref);
+        }
       }
       this.appendEvent(memoryId, "memory.forgotten", actor, reason, {
         before: auditSnapshot(item),

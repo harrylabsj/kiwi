@@ -357,4 +357,66 @@ describe("merchant negotiation decision via the gateway gate (§15.4, §16)", ()
     const output = outcome.output as { result?: { result?: string } };
     expect(output.result?.result).toBe("accepted");
   });
+
+  it("autopilot escalates a below-floor proposal instead of auto-submitting", async () => {
+    const h = setupMerchant({ mode: "autopilot", negotiation: "neg" });
+    const tool = h.getTool("submit_negotiation_decision");
+    const result = await tool.execute("c1", {
+      conversation_id: "conv-merchant-001",
+      action: "counter",
+      public_message: "可以按单价 60 元提供 2 件。",
+      proposal: {
+        sku: "sku-001",
+        quantity: 2,
+        unit_price: 60, // below the private floor (80)
+        currency: "CNY",
+        stock: { status: "available", quantity: 12, observed_at: T0, reserved: false },
+        delivery: { eta_start: "2026-08-06T14:00:00+08:00", eta_end: "2026-08-06T18:00:00+08:00", fee: 0 },
+        after_sales_policy_refs: ["policy:return-7d"],
+        valid_until: "2026-08-05T12:05:00+08:00",
+      },
+      open_issues: [],
+      request_human_review: false,
+    });
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    // Below the private floor: autopilot escalates to a human, never auto-executes.
+    expect(text).toContain("等待批准");
+    expect(h.approvals.listPending()).toHaveLength(1);
+  });
+
+  it("a below-floor proposal is blocked by the local merchant gate before the gateway", async () => {
+    const h = setupMerchant({ mode: "supervised", negotiation: "neg" });
+    const tool = h.getTool("submit_negotiation_decision");
+    const result = await tool.execute("c1", {
+      conversation_id: "conv-merchant-001",
+      action: "counter",
+      public_message: "可以按单价 60 元提供 2 件。",
+      proposal: {
+        sku: "sku-001",
+        quantity: 2,
+        unit_price: 60, // below the private floor (80)
+        currency: "CNY",
+        stock: { status: "available", quantity: 12, observed_at: T0, reserved: false },
+        delivery: { eta_start: "2026-08-06T14:00:00+08:00", eta_end: "2026-08-06T18:00:00+08:00", fee: 0 },
+        after_sales_policy_refs: ["policy:return-7d"],
+        valid_until: "2026-08-05T12:05:00+08:00",
+      },
+      open_issues: [],
+      request_human_review: false,
+    });
+    expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("等待批准");
+    const candidate = h.approvals.listPending()[0] as NonNullable<
+      ReturnType<ActionCandidateStore["listPending"]>[number]
+    >;
+    h.approvals.markApproved(candidate.candidate_id);
+    const outcome = await executeApprovedCandidate(
+      h.approvals,
+      candidate.candidate_id,
+      h.hooks.get(candidate.candidate_id) as PendingHooks,
+    );
+    if (outcome.kind !== "executed") throw new Error("expected an executed candidate");
+    const output = outcome.output as { result?: { result?: string; reason_codes?: string[] } };
+    expect(output.result?.result).toBe("rejected_retryable");
+    expect(output.result?.reason_codes).toContain("local_floor_violation");
+  });
 });

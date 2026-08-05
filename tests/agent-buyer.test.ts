@@ -8,20 +8,33 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { migrateMemorySchema } from "../src/agent/memory/schema.js";
+import { EnvKeyProvider, PrivateVault } from "../src/agent/memory/vault.js";
 import {
   FakeCommerceConnector,
   fakeConnectorProduct,
 } from "../src/agent/connector/fake-connector.js";
-import { runSearchCycle } from "../src/agent/buyer/search-loop.js";
+import {
+  ConnectorError,
+  type CommerceConnector,
+  type ConnectorMerchant,
+  type ConnectorProduct,
+  type SearchMerchantsQuery,
+  type SearchProductsQuery,
+} from "../src/agent/connector/types.js";
+import { observationHash, runSearchCycle } from "../src/agent/buyer/search-loop.js";
 import { TaskScheduler } from "../src/agent/buyer/scheduler.js";
 import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
 import { BuyerTaskError, type BuyerTask } from "../src/agent/buyer/types.js";
+import { buildBuyerTools } from "../src/agent/buyer/buyer-tools.js";
+import { ActionCandidateStore } from "../src/agent/merchant/action-candidate.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
+import { testBuyerProfile } from "./helpers.js";
 
 const T0 = "2026-08-05T12:00:00+08:00";
 const PRINCIPAL = "buyer-agent:buyer-001";
+const TEST_KEY = "a".repeat(64);
 
-function setup(products = [fakeConnectorProduct()]) {
+function setup(products = [fakeConnectorProduct()], options: { withVault?: boolean } = {}) {
   let clock = T0;
   const db = new DatabaseSync(":memory:");
   migrateMemorySchema(db);
@@ -29,7 +42,8 @@ function setup(products = [fakeConnectorProduct()]) {
     `INSERT INTO principals (principal_id, owner_id, role, locale, timezone, memory_schema_version, created_at, updated_at)
      VALUES (?, 'buyer-001', 'buyer', 'zh-CN', 'Asia/Shanghai', 2, ?, ?)`,
   ).run(PRINCIPAL, T0, T0);
-  const store = new BuyerTaskStore({ db, principalId: PRINCIPAL, now: () => clock });
+  const vault = options.withVault === true ? new PrivateVault(new EnvKeyProvider(TEST_KEY)) : undefined;
+  const store = new BuyerTaskStore({ db, principalId: PRINCIPAL, now: () => clock, vault });
   const connector = new FakeCommerceConnector(products);
   const scheduler = new TaskScheduler({ store, connectors: [connector], now: () => clock });
   return {
@@ -60,6 +74,33 @@ function createReadyTask(store: BuyerTaskStore, overrides: Record<string, unknow
     origin: "user",
     idempotency_key: `ready:${uuidv7()}`,
   });
+}
+
+/** Delegating connector that throws a transient error on the first search. */
+class FlakyConnector implements CommerceConnector {
+  readonly connector_id = "shopping-cli";
+  readonly platform = "shopping-cli";
+  calls = 0;
+  constructor(private readonly inner: CommerceConnector) {}
+  async searchProducts(query: SearchProductsQuery): Promise<ConnectorProduct[]> {
+    this.calls += 1;
+    if (this.calls === 1) throw new ConnectorError("transient", "gateway blip");
+    return this.inner.searchProducts(query);
+  }
+  async getProduct(sku: string): Promise<ConnectorProduct> {
+    return this.inner.getProduct(sku);
+  }
+  async searchMerchants(query: SearchMerchantsQuery): Promise<ConnectorMerchant[]> {
+    return this.inner.searchMerchants(query);
+  }
+  async startConsultation(input: {
+    buyer_id: string;
+    sku: string;
+    merchant_id: string;
+    opening_message: string;
+  }): Promise<{ conversation_id: string; status: string }> {
+    return this.inner.startConsultation(input);
+  }
 }
 
 describe("task state machine (§11.3)", () => {
@@ -407,5 +448,278 @@ describe("non-binding selection (§12.4)", () => {
       .all()
       .map((r) => (r as { name: string }).name);
     expect(tables.filter((t) => /order|payment|reservation/i.test(t))).toEqual([]);
+  });
+});
+
+describe("private budget vaulting (§11.2, §6.3)", () => {
+  it("seals a private budget into the Vault; plaintext never reaches constraints_json", () => {
+    const { db, store } = setup([], { withVault: true });
+    const task = store.createTask({
+      goal_text: "买一个净水器",
+      intent: { category: "appliance", query_text: "净水器" },
+      constraints: { max_total_price: 2499 },
+      idempotency_key: `c:${uuidv7()}`,
+    });
+    expect(task.constraints.max_total_price).toBeUndefined();
+    expect(task.constraints.max_total_price_vault_ref).toMatch(/^vr_/);
+    const row = db
+      .prepare("SELECT constraints_json FROM buyer_tasks WHERE task_id = ?")
+      .get(task.task_id) as { constraints_json: string };
+    expect(row.constraints_json).not.toContain("2499");
+    expect(row.constraints_json).toContain("max_total_price_vault_ref");
+    expect(store.resolveBudget(task.constraints)).toBe(2499);
+  });
+
+  it("without a data key the budget stays in the 0600 DB but the tool output redacts it", async () => {
+    const { store } = setup([]); // no vault key: documented plaintext fallback
+    const task = store.createTask({
+      goal_text: "买一个净水器",
+      intent: { category: "appliance", query_text: "净水器" },
+      constraints: { max_total_price: 2499 },
+      idempotency_key: `c:${uuidv7()}`,
+    });
+    expect(store.resolveBudget(task.constraints)).toBe(2499);
+    const tools = buildBuyerTools({
+      store,
+      connector: new FakeCommerceConnector([]),
+      profile: testBuyerProfile(),
+      now: () => T0,
+    });
+    const getTask = tools.find((t) => t.name === "get_buyer_task");
+    expect(getTask).toBeDefined();
+    const result = await getTask!.execute("call-1", { task_id: task.task_id }, undefined, undefined, undefined);
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(text).not.toContain("2499");
+    expect(text).toContain("私密预算");
+  });
+
+  it("a vaulted budget still hard-filters in the search cycle", async () => {
+    const { store, connector } = setup([{ ...fakeConnectorProduct(), price: 500 }], {
+      withVault: true,
+    });
+    const task = createReadyTask(store, { constraints: { max_total_price: 200 } });
+    const result = await runSearchCycle(
+      { store, connector, now: () => T0 },
+      task.task_id,
+      `run:${uuidv7()}`,
+    );
+    expect(result.outcome).toBe("tracking");
+    expect(store.listCandidates(task.task_id)[0]?.eligibility).toBe("ineligible");
+  });
+});
+
+describe("connector failure classification (§18.1, §18.2)", () => {
+  it("a transient connector error schedules a retry instead of failing the task", async () => {
+    const { store, now, setNow } = setup([fakeConnectorProduct()]);
+    const flaky = new FlakyConnector(new FakeCommerceConnector([fakeConnectorProduct()]));
+    const task = createReadyTask(store, {});
+
+    const first = await runSearchCycle({ store, connector: flaky, now }, task.task_id, `run:1`);
+    expect(first.outcome).toBe("retry");
+    expect(first.task.status).toBe("tracking");
+    expect(first.task.next_run_at).toBeDefined();
+
+    // Advance past the backoff: the scheduler re-runs and the search succeeds.
+    setNow(new Date(Date.parse(first.task.next_run_at as string) + 1000).toISOString());
+    const second = await runSearchCycle({ store, connector: flaky, now }, task.task_id, `run:2`);
+    expect(second.outcome).toBe("shortlist_ready");
+    expect(second.task.status).toBe("awaiting_user");
+  });
+
+  it("the retry backoff is recorded as a task event (visible, not silent)", async () => {
+    const { store, now } = setup([fakeConnectorProduct()]);
+    const flaky = new FlakyConnector(new FakeCommerceConnector([fakeConnectorProduct()]));
+    const task = createReadyTask(store, {});
+    await runSearchCycle({ store, connector: flaky, now }, task.task_id, `run:1`);
+    const retry = store.taskEvents(task.task_id).find((e) => e.type === "connector_retry");
+    expect(retry).toBeDefined();
+    expect(retry?.payload.retriable).toBe(true);
+  });
+});
+
+function toolsWithMode(
+  mode: "manual" | "supervised" | "autopilot",
+  store: BuyerTaskStore,
+  db: DatabaseSync,
+  connector = new FakeCommerceConnector([]),
+) {
+  const approvals = new ActionCandidateStore({ db, principalId: PRINCIPAL, now: () => T0 });
+  const hooks = new Map<string, unknown>();
+  const tools = buildBuyerTools({
+    store,
+    connector,
+    profile: testBuyerProfile(),
+    approvals,
+    mode: () => mode,
+    registerPending: (id, h) => hooks.set(id, h),
+    now: () => T0,
+  });
+  return { tools, approvals, hooks };
+}
+
+describe("write-gate coverage for buyer tools (§16)", () => {
+  it("manual mode never executes create_buyer_task", async () => {
+    const { store, db } = setup([]);
+    const { tools } = toolsWithMode("manual", store, db);
+    const create = tools.find((t) => t.name === "create_buyer_task");
+    expect(create).toBeDefined();
+    const result = await create!.execute(
+      "c1",
+      { goal_text: "买一个杯子", intent: { query_text: "杯" } },
+      undefined,
+      undefined,
+      undefined,
+    );
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("manual 模式");
+    expect(store.listTasks()).toHaveLength(0);
+  });
+
+  it("manual mode never executes add_tracking_rule", async () => {
+    const { store, db } = setup([]);
+    const { tools } = toolsWithMode("manual", store, db);
+    const task = createReadyTask(store, {});
+    const addRule = tools.find((t) => t.name === "add_tracking_rule");
+    expect(addRule).toBeDefined();
+    const result = await addRule!.execute(
+      "c1",
+      { task_id: task.task_id, rule_type: "price_below", condition: { threshold: 90 }, interval_seconds: 1800 },
+      undefined,
+      undefined,
+      undefined,
+    );
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("manual 模式");
+    expect(store.rulesForTask(task.task_id)).toHaveLength(0);
+  });
+
+  it("select_product_nonbinding is advice-only in manual and pending in supervised", async () => {
+    const { store, db, connector, now } = setup([fakeConnectorProduct()]);
+    const ready = createReadyTask(store, {});
+    const cycle = await runSearchCycle({ store, connector, now }, ready.task_id, `r:${uuidv7()}`);
+    const candidateId = cycle.shortlist[0]?.candidate.candidate_id as string;
+    expect(candidateId).toBeDefined();
+    const args = { task_id: ready.task_id, candidate_id: candidateId, user_instruction: "就这个" };
+
+    // manual: advice only — never records the selection.
+    const manual = toolsWithMode("manual", store, db, connector);
+    const select = manual.tools.find((t) => t.name === "select_product_nonbinding");
+    const manualResult = await select!.execute("c1", args, undefined, undefined, undefined);
+    expect((manualResult.content[0] as { type: "text"; text: string }).text).toContain("manual 模式");
+    expect(store.getTask(ready.task_id)?.status).not.toBe("selected_nonbinding");
+
+    // supervised: requires /approve — not executed outright.
+    const supervised = toolsWithMode("supervised", store, db, connector);
+    const select2 = supervised.tools.find((t) => t.name === "select_product_nonbinding");
+    const supervisedResult = await select2!.execute("c1", args, undefined, undefined, undefined);
+    expect((supervisedResult.content[0] as { type: "text"; text: string }).text).toContain("等待批准");
+    expect(store.getTask(ready.task_id)?.status).not.toBe("selected_nonbinding");
+  });
+});
+
+describe("P2: expiry, observation freshness and event dedup", () => {
+  it("normalizes a +08:00 expires_at to UTC ISO", () => {
+    const { store } = setup([]);
+    const task = store.createTask({
+      goal_text: "买一个电饭煲",
+      intent: { category: "appliance", query_text: "电饭煲" },
+      expires_at: "2026-08-06T00:00:00+08:00",
+      idempotency_key: `c:${uuidv7()}`,
+    });
+    expect(task.expires_at).toBe("2026-08-05T16:00:00.000Z");
+  });
+
+  it("re-verifying unchanged facts extends fresh_until without a new observation", () => {
+    const { store } = setup([fakeConnectorProduct()]);
+    const task = createReadyTask(store, {});
+    const product = fakeConnectorProduct();
+    const t0 = "2026-08-05T12:00:00.000Z";
+    const candidate = store.upsertCandidate({
+      task_id: task.task_id,
+      connector_id: "shopping-cli",
+      platform: "shopping-cli",
+      external_product_id: product.sku,
+      sku: product.sku,
+      merchant_id: product.merchant.id,
+    });
+    const base = {
+      candidate_id: candidate.candidate_id,
+      source_url_or_ref: `shopping-cli:/products/${product.sku}`,
+      title: product.title,
+      price: { list: product.price, currency: product.currency, delivery_fee: product.delivery.fee },
+      promotion: {},
+      stock: { quantity: product.stock, observed_at: t0 },
+      delivery: { ...product.delivery },
+      after_sales: {},
+      merchant: { id: product.merchant.id, name: product.merchant.name, city: product.merchant.city, warnings: [] },
+      content_hash: observationHash(product),
+    };
+    const first = store.addObservation({
+      ...base,
+      observed_at: t0,
+      fresh_until: new Date(Date.parse(t0) + 1800 * 1000).toISOString(),
+    });
+    // Same facts re-verified 31 minutes later: same observation, fresh_until extended.
+    const t1 = "2026-08-05T12:31:00.000Z";
+    const second = store.addObservation({
+      ...base,
+      observed_at: t1,
+      fresh_until: new Date(Date.parse(t1) + 1800 * 1000).toISOString(),
+    });
+    expect(second.added).toBe(false);
+    expect(second.observation_id).toBe(first.observation_id);
+    const latest = store.latestObservation(candidate.candidate_id);
+    expect(latest?.fresh_until).toBe(new Date(Date.parse(t1) + 1800 * 1000).toISOString());
+    expect(latest?.observed_at).toBe(t0); // trend timestamp preserved
+  });
+
+  it("appendEvent returns false for an idempotent replay (notification dedup)", () => {
+    const { store } = setup([]);
+    const task = createReadyTask(store, {});
+    expect(store.appendEvent(task.task_id, "notification", { summary: "x" }, "scheduler", "notify:1")).toBe(true);
+    expect(store.appendEvent(task.task_id, "notification", { summary: "x" }, "scheduler", "notify:1")).toBe(false);
+  });
+
+  it("scheduler observation freshness uses the task tracking-policy TTL", async () => {
+    const { store, connector, scheduler, now, setNow } = setup([fakeConnectorProduct()]);
+    const ready = createReadyTask(store, { tracking_policy: { observation_ttl_seconds: 60 } });
+    const cycle = await runSearchCycle({ store, connector, now }, ready.task_id, `r:${uuidv7()}`);
+    const candidate = cycle.shortlist[0]?.candidate;
+    expect(candidate).toBeDefined();
+    store.addTrackingRule({
+      task_id: ready.task_id,
+      candidate_id: candidate?.candidate_id,
+      rule_type: "price_below",
+      condition: { threshold: 100 },
+      interval_seconds: 1,
+      cooldown_seconds: 0,
+      idempotency_key: `r:${uuidv7()}`,
+    });
+    // Advance past the rule's next_check_at so the tick re-observes.
+    const tickNow = "2026-08-05T12:00:02+08:00";
+    setNow(tickNow);
+    await scheduler.tick();
+    const obs = store.latestObservation(candidate?.candidate_id as string);
+    expect(obs).toBeDefined();
+    // fresh_until = observe time + the task's custom 60s TTL (not 1800s).
+    expect(obs?.fresh_until).toBe(
+      new Date(Date.parse(tickNow) + 60 * 1000).toISOString(),
+    );
+  });
+
+  it("create_buyer_task with identical args is idempotent (no duplicate task)", async () => {
+    const { store, db } = setup([]);
+    const { tools } = toolsWithMode("supervised", store, db);
+    const create = tools.find((t) => t.name === "create_buyer_task");
+    expect(create).toBeDefined();
+    const args = {
+      goal_text: "买一个杯子",
+      intent: { query_text: "杯", category: "kitchenware" },
+      run_search: false,
+    };
+    await create!.execute("c1", args, undefined, undefined, undefined);
+    const r2 = await create!.execute("c2", args, undefined, undefined, undefined);
+    expect(store.listTasks()).toHaveLength(1);
+    expect((r2.content[0] as { type: "text"; text: string }).text).toContain("已存在");
   });
 });
