@@ -3,7 +3,8 @@
  *
  * Operator natural language is compiled into a typed StrategyPatch by fixed
  * rules — no model call, no prompt concatenation. Classification order:
- * forbidden (always refused) -> numeric relax/tighten against the profile's
+ * forbidden (always refused) -> chat (not a directive) -> out_of_scope task
+ * (refused, never applied) -> numeric relax/tighten against the profile's
  * hard limits -> ETA / quantity rules -> soft_preference fallback.
  *
  * - tighten:           narrows a constraint; applies immediately.
@@ -89,6 +90,27 @@ const ETA_RELAX = /更晚|延后|推迟|放宽(交期|送达|交付)|宽限|late
 const QTY_CAP = /最多(买|要)?\s*\d+|至多\s*\d+|at most \d+/i;
 const AMOUNT = /(\d+(?:\.\d+)?)/;
 
+/**
+ * Pure operator chatter (greetings / social acknowledgment) — never a strategy
+ * statement, never a task. Anchored to the WHOLE message so "你好，把预算降到
+ * 150" still hits the numeric rules below. Kept conservative: anything that
+ * even hints at a directive stays unclassified and reaches soft_preference.
+ */
+const CHAT_PATTERN =
+  /^\s*(早安|早上好|上午好|中午好|下午好|晚上好|晚安|你好|您好|嗨|哈喽|hello|hi|hey|谢谢|谢谢您|感谢|辛苦了|收到|好的|好嘞|明白|嗯|嗯嗯|哦|ok|okay|再见|拜拜|在吗|在不在)\s*[。！!～~·]?\s*$/i;
+
+/**
+ * Tasks Kiwi v0.2 explicitly does NOT execute (design §3 non-goals: no order,
+ * payment, inventory-lock or refund execution; merchant listing/inventory
+ * management is not implemented). These are surfaced as out-of-scope with
+ * clear feedback instead of being silently swallowed as a preference.
+ *
+ * Requires an action verb (上架/改价/设库存…) so legitimate strategy phrasing
+ * such as "库存低于5件时转人工" (§7.2) is NOT caught.
+ */
+const OUT_OF_SCOPE_PATTERN =
+  /上架|下架|发布商品|发布产品|改价|调价|改价格|定价格|设置价格|设置库存|设置库存量|改库存|加库存|减库存|更新库存|库存数量|库存数|上新|删(除)?商品|商品标题|商品详情|主图|SKU|退款|退货/;
+
 function truncate(text: string, max = 60): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
@@ -109,6 +131,33 @@ export class StrategyEngine {
           matched_rules: [forbidden.rule],
         };
       }
+    }
+
+    // Pure chatter: not a directive at all. Rejected (never applied), with a
+    // hint so the operator knows how to set strategy.
+    if (CHAT_PATTERN.test(text)) {
+      return {
+        kind: "chat",
+        scope,
+        summary: "这不是一条策略指令；策略示例：先争取包邮、最多买 2 件、把预算降到 150",
+        directive: text,
+        requires_confirmation: false,
+        matched_rules: ["chat"],
+      };
+    }
+
+    // Tasks outside Kiwi v0.2's capability: refused with a clear boundary
+    // instead of being swallowed into soft_preference (which would silently
+    // steer future candidates).
+    if (OUT_OF_SCOPE_PATTERN.test(text)) {
+      return {
+        kind: "out_of_scope",
+        scope,
+        summary: "商品上架/库存/退款等操作在 v0.2 未实现，Kiwi 只负责磋商与报价，该指令未应用",
+        directive: text,
+        requires_confirmation: false,
+        matched_rules: ["out_of_scope_task"],
+      };
     }
 
     const amountMatch = AMOUNT.exec(text);
@@ -208,6 +257,12 @@ export class StrategyEngine {
   /** Risk gate for a compiled patch (design §8 confirmation rules). */
   assess(patch: StrategyPatch): StrategyRisk {
     if (patch.kind === "forbidden") {
+      return { level: "blocked", reason: patch.summary };
+    }
+    if (patch.kind === "out_of_scope") {
+      return { level: "blocked", reason: patch.summary };
+    }
+    if (patch.kind === "chat") {
       return { level: "blocked", reason: patch.summary };
     }
     if (patch.kind === "relax") {
