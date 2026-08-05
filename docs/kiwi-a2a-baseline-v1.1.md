@@ -3,7 +3,8 @@ title: Kiwi A2A Agent Commerce Network 总体架构基线
 doc_revision: "1.1"
 target_product: "Kiwi A2A v1.0"
 date: 2026-08-05
-status: Proposed Architecture Baseline
+status: Superseded / 已归档
+superseded_by: kiwi-a2a-architecture-baseline.md
 scope: Pre-transaction Agent Commerce
 ---
 
