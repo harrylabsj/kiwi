@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { agentDataDir, ensurePathsForDir } from "./agent/agent-db.js";
 import { runChatTui } from "./agent/chat-tui.js";
 import { createFakeChatModels } from "./agent/fake-chat-model.js";
+import { isAgentMode, type AgentMode } from "./agent/mode.js";
 import { AgentKernel, type AgentKernelOptions } from "./agent/kernel.js";
 import { loadProfile, ProfileError, resolveSecret, type AgentProfile } from "./config/profile.js";
 import { HttpCommerceClient } from "./commerce/http-client.js";
@@ -406,11 +407,20 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
     }
   }
 
+  // KIWI_MODE env: start the chat already in the given write mode (e.g.
+  // autopilot for autonomous negotiation) — no manual /mode needed.
+  const kiwiMode = process.env.KIWI_MODE;
+  const mode: AgentMode | undefined = isAgentMode(kiwiMode) ? kiwiMode : undefined;
+  if (kiwiMode !== undefined && mode === undefined) {
+    process.stderr.write(`unknown KIWI_MODE ${kiwiMode}（可选 ${["manual", "supervised", "autopilot"].join("/")}）\n`);
+  }
+
   const kernel = await AgentKernel.open({
     profile,
     paths,
     models,
     model,
+    ...(mode !== undefined ? { mode } : {}),
     ...(connector !== undefined ? { connector } : {}),
     ...(commerceClient !== undefined ? { commerceClient } : {}),
     ...(merchantClient !== undefined ? { merchantClient } : {}),

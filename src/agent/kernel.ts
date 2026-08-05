@@ -142,6 +142,8 @@ export class AgentKernel {
   /** Current conversation-turn id, shared with the remember tool (evidence dedup §9.3). */
   private readonly turnId: { current: string };
   private turnSeq = 0;
+  /** Negotiation conversations that reached consensus — the auto-follow must never re-open them. */
+  private readonly settledNegotiations = new Set<string>();
 
   private constructor(options: {
     profile: AgentProfile;
@@ -418,14 +420,60 @@ export class AgentKernel {
   async negotiationAutoTick(): Promise<string | undefined> {
     if (this.modeRef.value !== "autopilot") return undefined;
     if (this.commerceClient === undefined) return undefined;
+    // Skip conversations already settled/at-consensus BEFORE claiming — the
+    // stateless deterministic decision would otherwise re-counter the same
+    // offer forever and re-open settled negotiations every tick.
+    let pending: Awaited<ReturnType<CommerceClient["listPendingMessages"]>>;
+    try {
+      pending = await this.commerceClient.listPendingMessages();
+    } catch {
+      return undefined;
+    }
+    if (pending.every((m) => this.settledNegotiations.has(m.conversation_id))) {
+      return undefined;
+    }
+
     const runner = new DeterministicNegotiationRunner(this.profile, this.commerceClient);
     const prepared = await runner.prepare().catch(() => undefined);
     if (prepared === undefined) return undefined;
+    const convId = prepared.binding.conversation_id;
+
+    // Termination: STOP when the counterpart just accepted our offer — report
+    // the consensus once and never re-open this conversation.
+    if (prepared.counterpart_action === "accept_nonbinding") {
+      this.settledNegotiations.add(convId);
+      await runner.abandon(prepared, "counterpart accepted non-binding — consensus").catch(() => undefined);
+      return `已达成共识（对方接受非绑定报价），磋商结束，不再继续。`;
+    }
+    if (this.settledNegotiations.has(convId)) {
+      await runner.abandon(prepared, "negotiation already settled").catch(() => undefined);
+      return undefined;
+    }
+
     const outcome = await runner.submit(prepared).catch(() => undefined);
     if (outcome === undefined) return "磋商处理失败（网关异常），下一轮自动重试。";
+    // Our own non-binding acceptance ends the negotiation.
+    if (prepared.decision.action === "accept_nonbinding") this.settledNegotiations.add(convId);
+
+    const counterpart =
+      prepared.counterpart_message !== undefined
+        ? `对方：「${prepared.counterpart_message.slice(0, 60)}」`
+        : "";
+    const proposal = prepared.decision.proposal;
+    const offer =
+      proposal !== undefined
+        ? `，出价 ${proposal.unit_price}${proposal.currency ?? ""}×${proposal.quantity}`
+        : "";
+    const sent =
+      prepared.decision.public_message !== ""
+        ? `；已发「${prepared.decision.public_message.slice(0, 60)}」`
+        : "";
     const detail =
       outcome.settlement === "failed" ? `（${outcome.policy_result.public_reason}）` : "";
-    return `已自动处理一条磋商：${outcome.policy_result.result}${detail}`;
+    return (
+      `已自动处理 ${convId}：${counterpart} → ` +
+      `${prepared.decision.action}${offer} = ${outcome.policy_result.result}${sent}${detail}`
+    );
   }
 
   get isShutdownRequested(): boolean {
