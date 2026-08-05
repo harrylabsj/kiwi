@@ -151,6 +151,19 @@ bash scripts/e2e-local.sh   # SHOPPING_CLI_SRC 默认指向 ../shopping-cli，PO
 
 当前工作树已实现 `OperatorController`（追加式事件流 + reducer 恢复）、三层策略与 `StrategyPatch` 风险分类（确定性规则编译，不调用模型）、审批状态机（批准幂等；驳回/重算/退出一律 abandon，绝不 complete 未提交候选）、暂停/恢复和本地会话恢复（默认 `.kiwi/agents/<agent_id>`，0700/0600、损坏 fail closed），同时保持 `kiwi agent run` headless 路径兼容。候选生成与 runtime 之间的缝是 `NegotiationRunner`（prepare/submit/abandon）：当前交付的 `DeterministicNegotiationRunner` 与 fake 模型共用同一组纯规则决策函数，prepare 只生成不可信候选、不写 Commerce，submit 复用与 headless turn 相同的 buyer 本地策略门 → 网关权威策略门 → claim 结算；Embedded Pi 候选后端（`PiNegotiationRunner`）是已文档化的下一集成钩子，尚未接入。完整设计见 [`docs/operator-tui-v0.2.md`](docs/operator-tui-v0.2.md)。
 
+## Agent Kernel 与 Principal Memory（v0.3.0-A）
+
+`kiwi chat --profile <file> [--data-dir <dir>]` 启动主对话：`AgentKernel` 拥有单个实例的生命周期与并发（所有消息串行处理），自由文本交给模型回答，slash 命令是确定性控制捷径。`model.provider: fake` 使用离线确定性 chat 模型；真实 provider 经 pi-ai 内置 catalog 解析（鉴权走该 provider 的环境变量约定）。
+
+- **持久化主对话**：Pi AgentHarness Session（JSONL，`.kiwi/agents/<agent_id>/sessions/main.jsonl`），跨进程重启恢复；存储层强制剥离 thinking 块，原始推理绝不落盘；日志损坏 fail closed。
+- **Principal Memory**（`state.sqlite`，版本化迁移、事务、失败回滚）：六类 namespace（profile/constraint/preference/routine/episode/task_context），每条记忆带 source、置信度、scope、证据数和有效期。写入治理：用户明确陈述 → active + 置信度 1.0；单次行为信号 → candidate；≥3 条去重证据 → 软偏好激活；推断永远写不成硬约束；冲突不静默覆盖（最近明确陈述 supersede，其余只记矛盾证据）。
+- **Vault**：Restricted 值（精确地址、联系方式、私有预算、成本底价）只进 AES-256-GCM 加密 Vault（开发环境用 `KIWI_DATA_KEY`，64 位 hex 或 ≥16 字符口令）；未配置密钥时 Restricted 写入 fail closed；遗忘会硬删除密文；检索对模型只给 metadata_only。
+- **检索**：确定性打分（相关性 × scope 匹配 × 置信度 × 新鲜度 × 来源权重，needs_review 降权），deleted/superseded/expired 永不返回，每次检索带 redaction_level 写入 `memory_retrieval_log`。
+- **命令**：`/memory [preferences|private]`、`/forget <id|描述>`、`/correct <id> <新内容>`、`/why`（列出最近回答使用的 memory_id 与精度）；私密资料只回显字段名与状态。
+- **物理隔离**：每个 agent 独立目录/库/会话（0700/0600），一个数据库只绑定一个 principal，角色/owner 不可变；buyer 与 merchant 互相不可读。
+
+B（Buyer 搜索与跟踪）、C（咨询磋商与 Merchant 能力包）尚未实现。完整设计见 [`docs/agent-runtime-v0.3.md`](docs/agent-runtime-v0.3.md)。
+
 ## 外部 Agent Adapter（v0.2.1 设计）
 
 0.1.0 当前把 Pi Agent Core 作为内嵌推理后端。在 v0.2.0 交互控制面稳定后，v0.2.1 增加 OpenClaw ACP 和 Hermes ACP Adapter，让 buyer/merchant 可以分别选择不同的外部 Agent Runtime。Kiwi 仍然负责 claim、策略、审批、幂等、审计和最终 Commerce 写入；外部 Agent 只返回结构化 `DecisionCandidate`，不获得 shopping-cli token 或 Commerce 工具。
@@ -162,7 +175,7 @@ bash scripts/e2e-local.sh   # SHOPPING_CLI_SRC 默认指向 ../shopping-cli，PO
 ```bash
 npm run lint            # eslint --max-warnings=0（0 error / 0 warning）
 npm run typecheck       # tsc --noEmit（strict）
-npm run test            # vitest，245 个测试，fake model + fake marketplace + 注入 fetch/sleeper/signal + stub 进程，无外部依赖（全新 clone 未 build 时打包入口测试自动 skip；verify 先 build 必跑）
+npm run test            # vitest，285 个测试，fake model + fake marketplace + 注入 fetch/sleeper/signal + stub 进程，无外部依赖（全新 clone 未 build 时打包入口测试自动 skip；verify 先 build 必跑）
 npm run build           # tsc 构建到 dist/
 npm run verify:package  # 生产包冒烟：npm pack -> 临时目录 npm install --omit=dev -> 运行 kiwi --version 并 import schemas/runtime
 npm run verify          # 以上全部

@@ -16,6 +16,10 @@
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { agentDataDir, ensurePathsForDir } from "./agent/agent-db.js";
+import { runChatTui } from "./agent/chat-tui.js";
+import { createFakeChatModels } from "./agent/fake-chat-model.js";
+import { AgentKernel, type AgentKernelOptions } from "./agent/kernel.js";
 import { loadProfile, ProfileError, resolveSecret, type AgentProfile } from "./config/profile.js";
 import { HttpCommerceClient } from "./commerce/http-client.js";
 import type { CommerceClient } from "./commerce/types.js";
@@ -25,7 +29,7 @@ import { EXIT } from "./exit-codes.js";
 import { createDeterministicStreamFn } from "./runtime/fake-model.js";
 import { runForeground } from "./runtime/foreground.js";
 import { runNegotiationTurn, type TurnReport } from "./runtime/negotiation-turn.js";
-import { isFakeProvider, realStreamFn } from "./runtime/model.js";
+import { isFakeProvider, realStreamFn, resolveThinkingLevel } from "./runtime/model.js";
 import { OperatorController } from "./operator/controller.js";
 import { DeterministicNegotiationRunner } from "./operator/runner.js";
 import { FileOperatorEventStore, OperatorStoreError } from "./operator/store.js";
@@ -51,6 +55,8 @@ Usage:
   kiwi tui --profile <file> [--data-dir <dir>]
                                           Interactive operator TUI (supervised by default;
                                           approves candidates before any formal submit)
+  kiwi chat --profile <file> [--data-dir <dir>]
+                                          Main conversation with Principal Memory (v0.3.0-A)
   kiwi --version                          Print version
   kiwi --help                             This help
 
@@ -313,6 +319,53 @@ async function cmdTui(args: ParsedArgs): Promise<number> {
   }
 }
 
+/**
+ * Main conversation (v0.3.0-A): the AgentKernel with persistent session and
+ * Principal Memory. provider=fake runs the deterministic offline chat fake;
+ * real providers resolve models and auth through pi-ai's built-in provider
+ * catalog (env conventions of the chosen provider).
+ */
+async function cmdChat(args: ParsedArgs): Promise<number> {
+  const profile = requireProfile(args);
+  const paths = ensurePathsForDir(args.dataDir ?? agentDataDir(profile.agent_id));
+
+  let models: AgentKernelOptions["models"];
+  let model: AgentKernelOptions["model"];
+  let thinkingLevel: ReturnType<typeof resolveThinkingLevel>;
+  if (isFakeProvider(profile)) {
+    ({ models, model } = createFakeChatModels());
+  } else {
+    const { builtinModels } = await import("@earendil-works/pi-ai/providers/all");
+    const collection = builtinModels();
+    const found = collection.getModel(profile.model.provider, profile.model.model);
+    if (found === undefined) {
+      process.stderr.write(
+        `no built-in model ${profile.model.provider}/${profile.model.model}; check the profile\n`,
+      );
+      return EXIT.CONFIG;
+    }
+    models = collection;
+    model = found;
+    thinkingLevel = resolveThinkingLevel(profile);
+  }
+
+  const kernel = await AgentKernel.open({
+    profile,
+    paths,
+    models,
+    model,
+    ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+  });
+  try {
+    return await runChatTui({ kernel, input: process.stdin, output: process.stdout });
+  } catch (err) {
+    process.stderr.write(`unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.TRANSIENT;
+  } finally {
+    await kernel.close();
+  }
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(USAGE);
@@ -334,6 +387,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (cmd === "doctor") return await cmdDoctor(args);
     if (cmd === "agent" && sub === "run") return await cmdAgentRun(args);
     if (cmd === "tui") return await cmdTui(args);
+    if (cmd === "chat") return await cmdChat(args);
     if (cmd === "init") {
       const result = await runInit({
         dir: requireDir(args),
