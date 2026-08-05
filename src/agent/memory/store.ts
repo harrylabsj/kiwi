@@ -193,7 +193,9 @@ export class MemoryStore {
   constructor(options: MemoryStoreOptions) {
     this.db = options.db;
     this.vault = options.vault;
-    this.now = options.now ?? (() => new Date().toISOString());
+    // Normalize to UTC ISO (lexicographic timestamp comparisons in SQLite).
+    const clock = options.now ?? (() => new Date().toISOString());
+    this.now = () => new Date(Date.parse(clock())).toISOString();
   }
 
   // ---- principals ---------------------------------------------------------

@@ -20,7 +20,11 @@ import {
 import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import type { AgentProfile } from "../config/profile.js";
 import { ensureAgentPaths, openAgentDatabase, type AgentPaths } from "./agent-db.js";
+import { buildBuyerTools } from "./buyer/buyer-tools.js";
+import { TaskScheduler, type TickBudget, type TickResult } from "./buyer/scheduler.js";
+import { BuyerTaskStore } from "./buyer/task-store.js";
 import { buildMemoryTools } from "./chat-tools.js";
+import type { CommerceConnector } from "./connector/types.js";
 import { MemoryStore } from "./memory/store.js";
 import { MemoryError, type MemoryItem, type Principal } from "./memory/types.js";
 import { PrivateVault } from "./memory/vault.js";
@@ -38,6 +42,8 @@ export interface AgentKernelOptions {
   model: Model<Api>;
   thinkingLevel?: ThinkingLevel;
   vault?: PrivateVault;
+  /** Buyer tasks read facts through this connector (v0.3.0-B). */
+  connector?: CommerceConnector;
   now?: () => string;
 }
 
@@ -75,6 +81,8 @@ export class AgentKernel {
   private chain: Promise<unknown> = Promise.resolve();
   private shutdownRequested = false;
   private closed = false;
+  private readonly taskStore?: BuyerTaskStore;
+  private readonly scheduler?: TaskScheduler;
 
   private constructor(options: {
     profile: AgentProfile;
@@ -84,6 +92,8 @@ export class AgentKernel {
     principal: Principal;
     session: Session;
     harness: AgentHarness;
+    taskStore?: BuyerTaskStore;
+    scheduler?: TaskScheduler;
   }) {
     this.profile = options.profile;
     this.paths = options.paths;
@@ -92,6 +102,8 @@ export class AgentKernel {
     this.principal = options.principal;
     this.session = options.session;
     this.harness = options.harness;
+    if (options.taskStore !== undefined) this.taskStore = options.taskStore;
+    if (options.scheduler !== undefined) this.scheduler = options.scheduler;
   }
 
   static async open(options: AgentKernelOptions): Promise<AgentKernel> {
@@ -107,13 +119,30 @@ export class AgentKernel {
     store.bindPrincipal(principal.principal_id);
     const session = await openMainSession(paths);
 
+    // Buyer capability pack (v0.3.0-B): task store + scheduler + tools.
+    // All clocks are normalized to UTC ISO (SQLite compares timestamps
+    // lexicographically; mixed offsets would silently break due checks).
+    const clock = () => new Date(Date.parse((options.now ?? (() => new Date().toISOString()))())).toISOString();
+    let taskStore: BuyerTaskStore | undefined;
+    let scheduler: TaskScheduler | undefined;
+    let buyerTools: ReturnType<typeof buildBuyerTools> = [];
+    if (options.profile.role === "buyer" && options.connector !== undefined) {
+      taskStore = new BuyerTaskStore({ db, principalId: principal.principal_id, now: clock });
+      scheduler = new TaskScheduler({
+        store: taskStore,
+        connectors: [options.connector],
+        now: clock,
+      });
+      buyerTools = buildBuyerTools({ store: taskStore, connector: options.connector, now: clock });
+    }
+
     const base = baseSystemPrompt(options.profile, principal);
     let briefing: string | undefined;
     const harness = new AgentHarness({
       session,
       models: options.models,
       model: options.model,
-      tools: buildMemoryTools(store),
+      tools: [...buildMemoryTools(store), ...buyerTools],
       systemPrompt: async () => (briefing === undefined ? base : `${base}\n\n${briefing}`),
       ...(options.thinkingLevel !== undefined ? { thinkingLevel: options.thinkingLevel } : {}),
     });
@@ -126,6 +155,8 @@ export class AgentKernel {
       principal,
       session,
       harness,
+      ...(taskStore !== undefined ? { taskStore } : {}),
+      ...(scheduler !== undefined ? { scheduler } : {}),
     });
     kernel.briefingSetter = (value) => {
       briefing = value;
@@ -137,6 +168,31 @@ export class AgentKernel {
 
   get memoryStore(): MemoryStore {
     return this.store;
+  }
+
+  /** Buyer task store (undefined for merchant kernels). */
+  get buyerTasks(): BuyerTaskStore | undefined {
+    return this.taskStore;
+  }
+
+  /**
+   * Run one scheduler tick (buyer kernels only): due wakeups, tracking-rule
+   * checks and notifications, all derived from the database (restart-safe).
+   * Serialized with everything else the kernel does.
+   */
+  schedulerTick(budget: TickBudget = {}): Promise<TickResult> {
+    return this.enqueue(async () => {
+      if (this.scheduler === undefined) {
+        return {
+          checked_rules: 0,
+          notifications: [],
+          tasks_searched: [],
+          tasks_expired: [],
+          errors: [],
+        };
+      }
+      return this.scheduler.tick(budget);
+    });
   }
 
   get isShutdownRequested(): boolean {

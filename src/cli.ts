@@ -331,9 +331,25 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
 
   let models: AgentKernelOptions["models"];
   let model: AgentKernelOptions["model"];
+  let connector: AgentKernelOptions["connector"];
   let thinkingLevel: ReturnType<typeof resolveThinkingLevel>;
   if (isFakeProvider(profile)) {
     ({ models, model } = createFakeChatModels());
+    if (profile.role === "buyer") {
+      const { FakeCommerceConnector, fakeConnectorProduct } = await import(
+        "./agent/connector/fake-connector.js"
+      );
+      connector = new FakeCommerceConnector([
+        fakeConnectorProduct(),
+        fakeConnectorProduct({
+          sku: "sku-002",
+          title: "机制陶瓷杯",
+          price: 59,
+          stock: 0,
+          merchant_id: "merchant-002",
+        }),
+      ]);
+    }
   } else {
     const { builtinModels } = await import("@earendil-works/pi-ai/providers/all");
     const collection = builtinModels();
@@ -347,6 +363,10 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
     models = collection;
     model = found;
     thinkingLevel = resolveThinkingLevel(profile);
+    if (profile.role === "buyer") {
+      const { ShoppingCliConnector } = await import("./agent/connector/http-connector.js");
+      connector = new ShoppingCliConnector(profile.commerce.base_url);
+    }
   }
 
   const kernel = await AgentKernel.open({
@@ -354,6 +374,7 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
     paths,
     models,
     model,
+    ...(connector !== undefined ? { connector } : {}),
     ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
   });
   try {

@@ -8,7 +8,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const MEMORY_SCHEMA_VERSION = 1;
+export const MEMORY_SCHEMA_VERSION = 2;
 
 export class MigrationError extends Error {
   constructor(message: string) {
@@ -111,9 +111,104 @@ CREATE TABLE memory_retrieval_log (
 CREATE INDEX idx_retrieval_log_session ON memory_retrieval_log (session_id, created_at);
 `;
 
+const MIGRATION_2 = `
+-- v0.3.0-B: Buyer tasks, candidates, observations and tracking rules (§11).
+CREATE TABLE buyer_tasks (
+  task_id TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+  status TEXT NOT NULL CHECK (status IN (
+    'draft','clarifying','ready','searching','tracking','shortlist_ready',
+    'awaiting_user','consulting','negotiating','selected_nonbinding',
+    'cancelled','failed','expired')),
+  goal_text TEXT NOT NULL,
+  intent_json TEXT NOT NULL DEFAULT '{}',
+  constraints_json TEXT NOT NULL DEFAULT '{}',
+  ranking_policy_json TEXT NOT NULL DEFAULT '{}',
+  connector_scope_json TEXT NOT NULL DEFAULT '{}',
+  search_budget_json TEXT NOT NULL DEFAULT '{}',
+  tracking_policy_json TEXT NOT NULL DEFAULT '{}',
+  selected_candidate_id TEXT,
+  next_run_at TEXT,
+  expires_at TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_buyer_tasks_principal ON buyer_tasks (principal_id, status);
+CREATE INDEX idx_buyer_tasks_wakeup ON buyer_tasks (next_run_at) WHERE next_run_at IS NOT NULL;
+
+CREATE TABLE task_events (
+  event_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES buyer_tasks(task_id),
+  type TEXT NOT NULL,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  origin TEXT NOT NULL CHECK (origin IN ('user','scheduler','model','connector','policy')),
+  idempotency_key TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_task_events_task ON task_events (task_id, created_at);
+
+CREATE TABLE product_candidates (
+  candidate_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES buyer_tasks(task_id),
+  connector_id TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  external_product_id TEXT NOT NULL,
+  sku TEXT,
+  merchant_id TEXT,
+  canonical_key TEXT NOT NULL,
+  eligibility TEXT NOT NULL CHECK (eligibility IN ('eligible','ineligible','unknown')),
+  candidate_status TEXT NOT NULL CHECK (candidate_status IN
+    ('discovered','tracked','shortlisted','rejected','selected','stale')),
+  score REAL,
+  score_explanation_json TEXT,
+  rejection_reasons_json TEXT,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  latest_observation_id TEXT,
+  UNIQUE (task_id, canonical_key)
+);
+CREATE INDEX idx_candidates_task ON product_candidates (task_id, candidate_status);
+
+CREATE TABLE product_observations (
+  observation_id TEXT PRIMARY KEY,
+  candidate_id TEXT NOT NULL REFERENCES product_candidates(candidate_id),
+  observed_at TEXT NOT NULL,
+  source_url_or_ref TEXT NOT NULL,
+  title TEXT NOT NULL,
+  price_json TEXT NOT NULL DEFAULT '{}',
+  promotion_json TEXT NOT NULL DEFAULT '{}',
+  stock_json TEXT NOT NULL DEFAULT '{}',
+  delivery_json TEXT NOT NULL DEFAULT '{}',
+  after_sales_json TEXT NOT NULL DEFAULT '{}',
+  merchant_json TEXT NOT NULL DEFAULT '{}',
+  content_hash TEXT NOT NULL,
+  fresh_until TEXT NOT NULL,
+  UNIQUE (candidate_id, content_hash)
+);
+CREATE INDEX idx_observations_candidate ON product_observations (candidate_id, observed_at);
+
+CREATE TABLE tracking_rules (
+  rule_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES buyer_tasks(task_id),
+  candidate_id TEXT REFERENCES product_candidates(candidate_id),
+  rule_type TEXT NOT NULL CHECK (rule_type IN (
+    'price_below','stock_available','promotion_changed','delivery_before',
+    'new_candidate','periodic_review')),
+  condition_json TEXT NOT NULL DEFAULT '{}',
+  interval_seconds INTEGER NOT NULL CHECK (interval_seconds > 0),
+  next_check_at TEXT NOT NULL,
+  last_triggered_at TEXT,
+  cooldown_seconds INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL CHECK (status IN ('active','paused','completed','expired'))
+);
+CREATE INDEX idx_tracking_rules_due ON tracking_rules (status, next_check_at);
+`;
+
 /** Ordered migrations: version number -> SQL. */
 const MIGRATIONS: Readonly<Record<number, string>> = {
   1: MIGRATION_1,
+  2: MIGRATION_2,
 };
 
 /**

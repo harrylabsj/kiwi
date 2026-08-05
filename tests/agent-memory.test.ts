@@ -13,6 +13,8 @@ import { MemoryError } from "../src/agent/memory/types.js";
 import { EnvKeyProvider, PrivateVault, VaultKeyError } from "../src/agent/memory/vault.js";
 
 const T0 = "2026-08-05T12:00:00+08:00";
+/** Store clocks normalize to UTC ISO; assert against this form. */
+const T0_UTC = new Date(Date.parse(T0)).toISOString();
 const TEST_KEY = "a".repeat(64);
 
 function setup(options: { withKey?: boolean; now?: string } = {}) {
@@ -165,7 +167,7 @@ describe("write governance (design §10.1)", () => {
     const memory = outcome.kind === "active" ? outcome.memory : undefined;
     expect(memory?.status).toBe("active");
     expect(memory?.confidence).toBe(1.0);
-    expect(memory?.confirmed_at).toBe(T0);
+    expect(memory?.confirmed_at).toBe(T0_UTC);
     const events = store.memoryEvents(memory!.memory_id).map((e) => e.type);
     expect(events).toEqual(["memory.confirmed"]);
   });
@@ -290,7 +292,7 @@ describe("write governance (design §10.1)", () => {
     const id = outcome.kind === "candidate" ? outcome.memory.memory_id : "";
     const confirmed = store.confirmMemory(id, "user");
     expect(confirmed.status).toBe("active");
-    expect(confirmed.confirmed_at).toBe(T0);
+    expect(confirmed.confirmed_at).toBe(T0_UTC);
     expect(store.memoryEvents(id).map((e) => e.type)).toContain("memory.confirmed");
   });
 });

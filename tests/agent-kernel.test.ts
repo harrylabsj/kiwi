@@ -22,6 +22,10 @@ import {
   type MutableModels,
 } from "@earendil-works/pi-ai";
 import { ensurePathsForDir } from "../src/agent/agent-db.js";
+import {
+  FakeCommerceConnector,
+  fakeConnectorProduct,
+} from "../src/agent/connector/fake-connector.js";
 import { createFakeChatModels } from "../src/agent/fake-chat-model.js";
 import { AgentKernel } from "../src/agent/kernel.js";
 import { EnvKeyProvider, PrivateVault } from "../src/agent/memory/vault.js";
@@ -236,6 +240,38 @@ describe("slash commands", () => {
     const reply = await kernel.handleUserText("/memory private");
     expect(reply.text).toContain("contact.address.home");
     expect(reply.text).not.toContain("北京市海淀区");
+    await kernel.close();
+  });
+});
+
+describe("buyer capability pack (v0.3.0-B)", () => {
+  it("chat -> create_buyer_task -> search cycle -> shortlist awaiting the user", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const kernel = await AgentKernel.open({
+      profile: testBuyerProfile(),
+      paths: pathsFor("buyer"),
+      ...scriptedChatModels([
+        fauxAssistantMessage([
+          fauxToolCall("create_buyer_task", {
+            goal_text: "买 2 个陶瓷杯",
+            intent: { query_text: "陶瓷杯", category: "kitchenware" },
+            constraints: { max_total_price: 200 },
+          }),
+        ]),
+        fauxAssistantMessage("搜索完成，有 1 个候选等你选择。"),
+      ]),
+      connector: new FakeCommerceConnector([fakeConnectorProduct()]),
+      vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
+    });
+    const reply = await kernel.handleUserText("我想买 2 个陶瓷杯，预算 200");
+    expect(reply.text).toContain("候选");
+
+    const tasks = kernel.buyerTasks?.listTasks() ?? [];
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.status).toBe("awaiting_user");
+    const candidates = kernel.buyerTasks?.listCandidates(tasks[0]?.task_id ?? "") ?? [];
+    expect(candidates[0]?.candidate_status).toBe("shortlisted");
+    expect(candidates[0]?.score_explanation?.dimensions.length).toBeGreaterThan(0);
     await kernel.close();
   });
 });
