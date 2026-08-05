@@ -62,6 +62,14 @@ export const SUPPORTED_MODEL_APIS: readonly string[] = [
   "pi-messages",
 ];
 
+/**
+ * Commerce credential scopes (design §15.4). Credentials are held separately
+ * by scope; the model only ever sees tools, never tokens. When a scope has no
+ * credential configured, the corresponding write tools fail closed.
+ */
+export const COMMERCE_CREDENTIAL_SCOPES = ["negotiation", "catalog", "inventory"] as const;
+export type CommerceCredentialScope = (typeof COMMERCE_CREDENTIAL_SCOPES)[number];
+
 export interface AgentProfile {
   runtime_version: string;
   protocol_version: string;
@@ -70,9 +78,15 @@ export interface AgentProfile {
   owner_id: string;
   commerce: {
     base_url: string;
-    /** Name of the env var holding the commerce API token. */
+    /** Name of the env var holding the commerce API token (negotiation scope). */
     token_env: string;
     backend: "local_marketplace" | "external_platform";
+    /**
+     * Optional per-scope token env refs. `token_env` remains the primary
+     * negotiation credential; catalog/inventory tokens must be configured
+     * separately or the corresponding merchant write tools fail closed.
+     */
+    credentials?: Partial<Record<CommerceCredentialScope, { token_env: string }>>;
   };
   model: {
     provider: string;
@@ -125,7 +139,7 @@ const TOP_LEVEL_KEYS = [
   "merchant_policy",
   "buyer_policy",
 ] as const;
-const COMMERCE_KEYS = ["base_url", "token_env", "backend"] as const;
+const COMMERCE_KEYS = ["base_url", "token_env", "backend", "credentials"] as const;
 const MODEL_KEYS = [
   "provider",
   "model",
@@ -275,6 +289,34 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     commerce.backend === "local_marketplace" || commerce.backend === "external_platform",
     `${source}: commerce.backend must be local_marketplace or external_platform`,
   );
+  // Optional per-scope credential env refs (§15.4). Fail closed on unknown
+  // scopes, missing token_env, or inline secret values — just like token_env.
+  let credentials: AgentProfile["commerce"]["credentials"];
+  if (commerce.credentials !== undefined) {
+    req(isObject(commerce.credentials), `${source}: commerce.credentials must be a mapping`);
+    for (const scope of Object.keys(commerce.credentials)) {
+      req(
+        (COMMERCE_CREDENTIAL_SCOPES as readonly string[]).includes(scope),
+        `${source}: commerce.credentials has unknown scope "${scope}" (expected ${COMMERCE_CREDENTIAL_SCOPES.join("/")})`,
+      );
+      const entry = (commerce.credentials as Record<string, unknown>)[scope] as Record<string, unknown>;
+      req(isObject(entry), `${source}: commerce.credentials.${scope} must be a mapping`);
+      req(
+        typeof entry.token_env === "string" && REQUIRED_ENV_REF.test(entry.token_env),
+        `${source}: commerce.credentials.${scope}.token_env must name an environment variable`,
+      );
+      req(
+        Object.keys(entry).length === 1,
+        `${source}: commerce.credentials.${scope} only supports token_env`,
+      );
+    }
+    credentials = Object.fromEntries(
+      COMMERCE_CREDENTIAL_SCOPES.map((scope) => {
+        const entry = (commerce.credentials as Record<string, unknown>)[scope];
+        return entry === undefined ? [] : [scope, { token_env: (entry as { token_env: string }).token_env }];
+      }).filter((pair) => pair.length > 0),
+    ) as AgentProfile["commerce"]["credentials"];
+  }
   rejectUnknownKeys(commerce, COMMERCE_KEYS, "commerce", source);
 
   req(isObject(p.model), `${source}: model section is required`);
@@ -468,6 +510,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
       base_url: commerceBaseUrl,
       token_env: commerce.token_env,
       backend: commerce.backend,
+      ...(credentials !== undefined ? { credentials } : {}),
     },
     model: {
       provider: model.provider,

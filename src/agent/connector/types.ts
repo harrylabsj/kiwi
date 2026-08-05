@@ -79,6 +79,19 @@ export interface CommerceConnector {
   searchProducts(query: SearchProductsQuery): Promise<ConnectorProduct[]>;
   getProduct(sku: string): Promise<ConnectorProduct>;
   searchMerchants(query: SearchMerchantsQuery): Promise<ConnectorMerchant[]>;
+  /**
+   * Start a consultation (design §11.8/§20-C): create an authoritative
+   * Marketplace Conversation about a product and return its id. The buyer task
+   * is only *linked* to this conversation — the conversation itself stays
+   * authoritative in the marketplace. Reuses the existing negotiation runtime;
+   * this never copies or duplicates authoritative state.
+   */
+  startConsultation(input: {
+    buyer_id: string;
+    sku: string;
+    merchant_id: string;
+    opening_message: string;
+  }): Promise<{ conversation_id: string; status: string }>;
 }
 
 // ---- strict parsing (isolate unknown fields) ------------------------------

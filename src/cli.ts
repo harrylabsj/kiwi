@@ -333,6 +333,9 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
   let model: AgentKernelOptions["model"];
   let connector: AgentKernelOptions["connector"];
   let thinkingLevel: ReturnType<typeof resolveThinkingLevel>;
+  let merchantClient: AgentKernelOptions["merchantClient"];
+  let broker: AgentKernelOptions["broker"];
+  let commerceClient: AgentKernelOptions["commerceClient"];
   if (isFakeProvider(profile)) {
     ({ models, model } = createFakeChatModels());
     if (profile.role === "buyer") {
@@ -349,6 +352,23 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
           merchant_id: "merchant-002",
         }),
       ]);
+    } else {
+      // Offline merchant chat: deterministic catalog client + dummy-scope
+      // credentials so the capability pack is exercisable without a gateway.
+      const { FakeMerchantClient, fakeMerchantProduct } = await import(
+        "./agent/merchant/fake-merchant-client.js"
+      );
+      const { StaticCredentialBroker } = await import(
+        "./agent/merchant/credential-broker.js"
+      );
+      merchantClient = new FakeMerchantClient({
+        products: [fakeMerchantProduct()],
+      });
+      broker = new StaticCredentialBroker({
+        negotiation: "fake-negotiation-token",
+        catalog: "fake-catalog-token",
+        inventory: "fake-inventory-token",
+      });
     }
   } else {
     const { builtinModels } = await import("@earendil-works/pi-ai/providers/all");
@@ -367,6 +387,21 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
       const { ShoppingCliConnector } = await import("./agent/connector/http-connector.js");
       connector = new ShoppingCliConnector(profile.commerce.base_url);
     }
+    // Real gateway: negotiation client + scoped merchant client + broker.
+    const { ProfileCredentialBroker } = await import(
+      "./agent/merchant/credential-broker.js"
+    );
+    broker = new ProfileCredentialBroker(profile);
+    try {
+      commerceClient = buildClient(profile);
+    } catch {
+      // No negotiation token: negotiation tools fail closed at call time.
+      commerceClient = undefined;
+    }
+    if (profile.role === "merchant") {
+      const { HttpMerchantClient } = await import("./agent/merchant/merchant-client.js");
+      merchantClient = new HttpMerchantClient(profile.commerce.base_url, broker);
+    }
   }
 
   const kernel = await AgentKernel.open({
@@ -375,6 +410,9 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
     models,
     model,
     ...(connector !== undefined ? { connector } : {}),
+    ...(commerceClient !== undefined ? { commerceClient } : {}),
+    ...(merchantClient !== undefined ? { merchantClient } : {}),
+    ...(broker !== undefined ? { broker } : {}),
     ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
   });
   try {

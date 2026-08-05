@@ -5,9 +5,18 @@
  */
 
 import type { AgentHarnessTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentProfile } from "../../config/profile.js";
+import type { CommerceClient } from "../../commerce/types.js";
 import type { CommerceConnector } from "../connector/types.js";
+import type { AgentMode } from "../mode.js";
+import type { ActionCandidateStore } from "../merchant/action-candidate.js";
+import type { CredentialBroker } from "../merchant/credential-broker.js";
+import { requireScopeCredential } from "../merchant/credential-broker.js";
+import { buildNegotiationChatTools, writeGateText } from "../negotiation-chat.js";
+import { routeWriteCandidate, type WriteGateDeps } from "../write-gate.js";
 import { runSearchCycle } from "./search-loop.js";
 import type { BuyerTaskStore } from "./task-store.js";
+import type { ConsultationLink } from "./types.js";
 import type { TaskConstraints, TaskIntent } from "./types.js";
 import { BuyerTaskError } from "./types.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
@@ -66,11 +75,99 @@ function parseConstraints(value: unknown): TaskConstraints {
 export interface BuyerToolDeps {
   store: BuyerTaskStore;
   connector: CommerceConnector;
+  profile: AgentProfile;
+  commerceClient?: CommerceClient;
+  broker?: CredentialBroker;
+  approvals?: ActionCandidateStore;
+  mode?: () => AgentMode;
   now: () => string;
+  /** Register /approve execution hooks for pending candidates. */
+  registerPending?: WriteGateDeps["registerPending"];
+}
+
+/** Preconditions for a consultation start: task + candidate state (§16). */
+function consultationPreconditions(
+  store: BuyerTaskStore,
+  taskId: string,
+  candidateId: string,
+): Record<string, unknown> {
+  const task = store.getTask(taskId);
+  const candidate = store.getCandidate(candidateId);
+  return {
+    task_status: task?.status ?? null,
+    task_version: task?.version ?? null,
+    candidate_status: candidate?.candidate_status ?? null,
+  };
+}
+
+/**
+ * Execution of an approved consultation start: create the authoritative
+ * Marketplace Conversation via the connector, link the task to it, and
+ * transition the task to `consulting` (§11.8/§20-C).
+ */
+async function executeStartConsultation(
+  deps: BuyerToolDeps,
+  args: Record<string, unknown>,
+): Promise<{ link_id: string; conversation_id: string; status: string }> {
+  const { store, connector } = deps;
+  const a = args as {
+    task_id: string;
+    candidate_id: string;
+    message: string;
+    sku: string;
+    merchant_id: string;
+  };
+  const task = store.getTask(a.task_id);
+  if (task === undefined) throw new BuyerTaskError("not_found", `no task ${a.task_id}`);
+  if (task.status !== "awaiting_user") {
+    throw new BuyerTaskError(
+      "illegal_transition",
+      `task ${a.task_id} is ${task.status}; 发起咨询要求 awaiting_user`,
+    );
+  }
+  const conv = await connector.startConsultation({
+    buyer_id: deps.profile.owner_id,
+    sku: a.sku,
+    merchant_id: a.merchant_id,
+    opening_message: a.message,
+  });
+  const link: ConsultationLink = store.createConsultationLink({
+    task_id: a.task_id,
+    candidate_id: a.candidate_id,
+    connector_id: connector.connector_id,
+    conversation_id: conv.conversation_id,
+    idempotency_key: `consult:${a.task_id}:${a.candidate_id}:${conv.conversation_id}`,
+  });
+  store.transitionTask({
+    task_id: a.task_id,
+    to: "consulting",
+    expected_version: task.version,
+    event_type: "status_changed",
+    payload: { conversation_id: conv.conversation_id, link_id: link.link_id },
+    origin: "model",
+    idempotency_key: `consult-transition:${a.task_id}:${conv.conversation_id}`,
+  });
+  return { link_id: link.link_id, conversation_id: conv.conversation_id, status: conv.status };
+}
+
+/** Buyer-side consultation link update after a negotiation decision settles. */
+function updateLinkAfterSettle(
+  store: BuyerTaskStore,
+  info: { conversation_id: string; result: { result: string; next_actor: string } },
+): void {
+  const link = store.linkByConversation(info.conversation_id);
+  if (link === undefined) return;
+  if (info.result.result === "human_required") {
+    store.updateConsultationLink(link.link_id, { status: "consulting" });
+    return;
+  }
+  // accepted -> the conversation is now negotiating (or closed after decline).
+  const status = info.result.next_actor === "none" ? "closed" : "negotiating";
+  store.updateConsultationLink(link.link_id, { status });
 }
 
 export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
-  const { store, connector, now } = deps;
+  const { store, connector, now, profile } = deps;
 
   const searchProducts: Tool = {
     name: "search_products",
@@ -495,6 +592,113 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
     },
   };
 
+  const startConsultation: Tool = {
+    name: "start_consultation",
+    label: "发起咨询",
+    description:
+      "把 Buyer 任务与一个 Marketplace Conversation 关联并发起咨询（§11.8/§20-C）。" +
+      "不复制权威会话状态；磋商继续由现有磋商运行时处理。写操作，supervised 模式需 /approve 批准。" +
+      "任务必须处于 awaiting_user 且候选在 shortlist 中。",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: { type: "string" },
+        candidate_id: { type: "string" },
+        message: { type: "string", description: "发给商家的咨询消息" },
+      },
+      required: ["task_id", "candidate_id", "message"],
+      additionalProperties: false,
+    },
+    execute: async (_id, params) => {
+      if (deps.approvals === undefined || deps.broker === undefined || deps.mode === undefined) {
+        return textResult("当前环境未配置咨询能力（缺少审批存储或磋商凭据），无法发起咨询。");
+      }
+      const credential = requireScopeCredential(deps.broker, "negotiation");
+      if (!credential.ok) return textResult(credential.reason);
+      try {
+        const p = params as { task_id: string; candidate_id: string; message: string };
+        const task = store.getTask(p.task_id);
+        if (task === undefined) throw new BuyerTaskError("not_found", `no task ${p.task_id}`);
+        if (task.status !== "awaiting_user") {
+          throw new BuyerTaskError(
+            "illegal_transition",
+            `task ${p.task_id} is ${task.status}; 发起咨询要求 awaiting_user`,
+          );
+        }
+        const candidate = store.getCandidate(p.candidate_id);
+        if (candidate === undefined || candidate.task_id !== p.task_id) {
+          throw new BuyerTaskError("not_found", `no candidate ${p.candidate_id} in task`);
+        }
+        if (candidate.candidate_status !== "shortlisted") {
+          throw new BuyerTaskError(
+            "validation",
+            `candidate ${p.candidate_id} is ${candidate.candidate_status}, not shortlisted`,
+          );
+        }
+        const args = {
+          task_id: p.task_id,
+          candidate_id: p.candidate_id,
+          message: p.message,
+          sku: candidate.sku ?? candidate.external_product_id,
+          merchant_id: candidate.merchant_id ?? "",
+        };
+        const outcome = await routeWriteCandidate(
+          {
+            mode: deps.mode,
+            approvals: deps.approvals,
+            profile,
+            now,
+            registerPending: deps.registerPending,
+          },
+          {
+            tool: "start_consultation",
+            arguments: args,
+            preconditions: consultationPreconditions(store, p.task_id, p.candidate_id),
+            risk: "send_consultation",
+            execute: (approvedArgs) => executeStartConsultation(deps, approvedArgs),
+            readPreconditions: () =>
+              consultationPreconditions(store, p.task_id, p.candidate_id),
+            autopilotEscalation: () => {
+              if (profile.buyer_policy?.auto_negotiate === false) {
+                return "buyer 未授权自动咨询（auto_negotiate=false），需要人工确认。";
+              }
+              return undefined;
+            },
+          },
+        );
+        if (outcome.kind === "pending_approval") {
+          store.appendEvent(
+            p.task_id,
+            "approval_requested",
+            { candidate_id: outcome.candidate.candidate_id, tool: "start_consultation" },
+            "model",
+            `approval:${outcome.candidate.candidate_id}`,
+          );
+        }
+        return writeGateText(outcome);
+      } catch (err) {
+        return textResult(errorText(err));
+      }
+    },
+  };
+
+  const negotiationTools =
+    deps.commerceClient !== undefined &&
+    deps.broker !== undefined &&
+    deps.approvals !== undefined &&
+    deps.mode !== undefined
+      ? buildNegotiationChatTools({
+          profile,
+          commerceClient: deps.commerceClient,
+          broker: deps.broker,
+          approvals: deps.approvals,
+          mode: deps.mode,
+          now,
+          registerPending: deps.registerPending,
+          afterSettle: (info) => updateLinkAfterSettle(store, info),
+        })
+      : [];
+
   return [
     searchProducts,
     getProduct,
@@ -506,5 +710,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
     pauseRule,
     cancelTask,
     selectNonbinding,
+    startConsultation,
+    ...negotiationTools,
   ];
 }
