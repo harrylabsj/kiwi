@@ -106,10 +106,20 @@ const CHAT_PATTERN =
  * clear feedback instead of being silently swallowed as a preference.
  *
  * Requires an action verb (上架/改价/设库存…) so legitimate strategy phrasing
- * such as "库存低于5件时转人工" (§7.2) is NOT caught.
+ * such as "库存低于5件时转人工" (§7.2) is NOT caught. `SKU` needs an actual
+ * identifier after it ("SKU 缺货就转人工" stays a strategy statement).
  */
 const OUT_OF_SCOPE_PATTERN =
-  /上架|下架|发布商品|发布产品|改价|调价|改价格|定价格|设置价格|设置库存|设置库存量|改库存|加库存|减库存|更新库存|库存数量|库存数|上新|删(除)?商品|商品标题|商品详情|主图|SKU|退款|退货/;
+  /上架|下架|发布商品|发布产品|改价|调价|改价格|定价格|设置价格|设置库存|设置库存量|改库存|加库存|减库存|更新库存|库存数量|库存数|上新|删(除)?商品|商品标题|商品详情|主图|SKU\s*[:：-]?\s*[A-Za-z0-9_-]{2,}|退款|退货|取消订单|催发货|查物流|催件|退单|改单|售后处理|投诉|开发票|索要发票/;
+
+/**
+ * Vocabulary that marks a message as a strategy statement. The soft_preference
+ * fallback is NOT a catch-all: a message with none of this vocabulary is
+ * treated as non-strategy chatter and refused, so greeting/task text can never
+ * be silently swallowed into strategy.directives (design §8).
+ */
+const STRATEGY_KEYWORD =
+  /预算|budget|底价|floor|底线|交期|更晚|更早|提前|延后|推迟|放宽|宽限|最多|至多|at most|包邮|免运费|争取|让步|接受|还价|砍价|压价|降价|涨价|让价|便宜|只问|先问|仅询问|只要|只看|想买|要买|不买|不主动|单价|总价|优惠|满减|赠品|会员价|官方|自营|配送|送达|售后|退货|要求|优先|价格|质量|品牌|库存|数量|心理|缺货|转人工|到货|不超过|不得高于|不得低于|希望|尽量/i;
 
 function truncate(text: string, max = 60): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
@@ -241,6 +251,20 @@ export class StrategyEngine {
         directive: text,
         requires_confirmation: false,
         matched_rules: ["cap_quantity"],
+      };
+    }
+
+    // Negative gate: no strategy vocabulary at all means this is not a
+    // strategy statement — refuse it instead of silently swallowing it as a
+    // soft_preference that would steer future candidates.
+    if (!STRATEGY_KEYWORD.test(text)) {
+      return {
+        kind: "chat",
+        scope,
+        summary: "这不是一条策略指令；策略示例：先争取包邮、最多买 2 件、把预算降到 150",
+        directive: text,
+        requires_confirmation: false,
+        matched_rules: ["chat_no_strategy_keyword"],
       };
     }
 

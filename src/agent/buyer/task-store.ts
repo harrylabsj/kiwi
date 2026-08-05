@@ -7,6 +7,8 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import { uuidv7 } from "@earendil-works/pi-ai";
+import type { PrivateVault } from "../memory/vault.js";
+import type { VaultKind } from "../memory/types.js";
 import type {
   BuyerTask,
   BuyerTaskStatus,
@@ -35,6 +37,8 @@ export interface BuyerTaskStoreOptions {
   db: DatabaseSync;
   principalId: string;
   now?: () => string;
+  /** Optional Vault for private budget sealing (design §11.2, §6.3). */
+  vault?: PrivateVault;
 }
 
 interface TaskRow {
@@ -60,18 +64,121 @@ function opt(value: string | null): string | undefined {
   return value === null ? undefined : value;
 }
 
+/**
+ * Normalize a user/model-supplied RFC3339 to UTC ISO so the lexicographic
+ * due/expiry comparisons (next_run_at <= now, expires_at < now) are correct
+ * for mixed-offset inputs. Fail closed on non-timestamps.
+ */
+function normalizeIso(value: string | undefined | null): string | null | undefined {
+  if (value === undefined || value === null) return value;
+  const t = Date.parse(value);
+  if (Number.isNaN(t)) {
+    throw new BuyerTaskError("validation", "expires_at must be an RFC3339 timestamp");
+  }
+  return new Date(t).toISOString();
+}
+
 export class BuyerTaskStore {
   private readonly db: DatabaseSync;
   private readonly principalId: string;
   private readonly now: () => string;
+  private readonly vault?: PrivateVault;
 
   constructor(options: BuyerTaskStoreOptions) {
     this.db = options.db;
     this.principalId = options.principalId;
+    this.vault = options.vault;
     // Normalize to UTC ISO: SQLite compares timestamps lexicographically,
     // so mixed "+08:00"/"Z" spellings would silently break due checks.
     const clock = options.now ?? (() => new Date().toISOString());
     this.now = () => new Date(Date.parse(clock())).toISOString();
+  }
+
+  // ---- private budget sealing (design §11.2, §6.3) ---------------------------
+
+  /**
+   * A task-level private budget never lives in constraints_json as plaintext
+   * when a data key is available: it is sealed into the Vault and stored as
+   * `max_total_price_vault_ref`. Without a key it stays a number inside the
+   * per-agent 0600 database (the same tier as the profile's private config);
+   * either way the model-facing task output is redacted.
+   */
+  private sealConstraints(constraints: TaskConstraints): TaskConstraints {
+    const price = constraints.max_total_price;
+    if (price === undefined || constraints.max_total_price_vault_ref !== undefined) {
+      return constraints;
+    }
+    if (!this.vault?.available) return constraints;
+    return {
+      ...constraints,
+      max_total_price: undefined,
+      max_total_price_vault_ref: this.sealVault("private_budget", String(price)),
+    };
+  }
+
+  private sealVault(kind: VaultKind, plaintext: string): string {
+    const vault = this.vault as PrivateVault;
+    const now = this.now();
+    const fingerprint = vault.fingerprint(kind, plaintext);
+    const existing = this.db
+      .prepare(
+        "SELECT vault_ref FROM private_vault WHERE principal_id = ? AND kind = ? AND value_fingerprint = ?",
+      )
+      .get(this.principalId, kind, fingerprint) as { vault_ref: string } | undefined;
+    if (existing !== undefined) return existing.vault_ref;
+    const sealed = vault.seal(kind, plaintext);
+    const ref = `vr_${uuidv7()}`;
+    this.db
+      .prepare(
+        `INSERT INTO private_vault
+           (vault_ref, principal_id, kind, ciphertext, nonce, key_version, value_fingerprint,
+            retention_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)`,
+      )
+      .run(
+        ref,
+        this.principalId,
+        kind,
+        sealed.ciphertext,
+        sealed.nonce,
+        sealed.key_version,
+        sealed.value_fingerprint,
+        now,
+        now,
+      );
+    return ref;
+  }
+
+  /** Resolve the effective task budget: plaintext number, or the Vault value. */
+  resolveBudget(constraints: TaskConstraints): number | undefined {
+    if (constraints.max_total_price !== undefined) return constraints.max_total_price;
+    if (constraints.max_total_price_vault_ref === undefined) return undefined;
+    if (this.vault === undefined) {
+      throw new BuyerTaskError(
+        "vault_unavailable",
+        "task budget is vaulted but no vault is configured for this store",
+      );
+    }
+    const row = this.db
+      .prepare(
+        "SELECT * FROM private_vault WHERE vault_ref = ? AND principal_id = ?",
+      )
+      .get(constraints.max_total_price_vault_ref, this.principalId) as
+      | Record<string, unknown>
+      | undefined;
+    if (row === undefined) {
+      throw new BuyerTaskError(
+        "not_found",
+        `no vault entry ${constraints.max_total_price_vault_ref}`,
+      );
+    }
+    const value = this.vault.open(
+      row.key_version as number,
+      row.nonce as Buffer,
+      row.ciphertext as Buffer,
+    );
+    const n = Number(value);
+    return Number.isFinite(n) ? n : undefined;
   }
 
   // ---- tasks ----------------------------------------------------------------
@@ -94,6 +201,16 @@ export class BuyerTaskStore {
     const taskId = `task_${uuidv7()}`;
     this.db.exec("BEGIN");
     try {
+      // Content-addressed idempotency: a retried create with the same key is a
+      // replay — return the existing task instead of duplicating it.
+      const existing = this.eventByIdempotencyKey(input.idempotency_key);
+      if (existing !== undefined) {
+        const replayed = this.getTask(existing.task_id);
+        if (replayed !== undefined) {
+          this.db.exec("COMMIT");
+          return replayed;
+        }
+      }
       this.db
         .prepare(
           `INSERT INTO buyer_tasks
@@ -107,12 +224,12 @@ export class BuyerTaskStore {
           this.principalId,
           input.goal_text,
           JSON.stringify(input.intent),
-          JSON.stringify(input.constraints ?? {}),
+          JSON.stringify(this.sealConstraints(input.constraints ?? {})),
           JSON.stringify(input.ranking_policy ?? { weights: {}, sources: {} }),
           JSON.stringify(input.connector_scope ?? { connectors: ["shopping-cli"] }),
           JSON.stringify({ ...DEFAULT_SEARCH_BUDGET, ...input.search_budget }),
           JSON.stringify({ ...DEFAULT_TRACKING_POLICY, ...input.tracking_policy }),
-          input.expires_at ?? null,
+          normalizeIso(input.expires_at) ?? null,
           now,
           now,
         );
@@ -255,10 +372,14 @@ export class BuyerTaskStore {
         );
         const res = stmt.run(
           JSON.stringify(patch.intent ?? task.intent),
-          JSON.stringify(patch.constraints ?? task.constraints),
+          JSON.stringify(
+            patch.constraints !== undefined ? this.sealConstraints(patch.constraints) : task.constraints,
+          ),
           JSON.stringify(patch.ranking_policy ?? task.ranking_policy),
           patch.next_run_at === undefined ? (task.next_run_at ?? null) : patch.next_run_at,
-          patch.expires_at === undefined ? (task.expires_at ?? null) : patch.expires_at,
+          patch.expires_at === undefined
+            ? (task.expires_at ?? null)
+            : (normalizeIso(patch.expires_at) ?? null),
           now,
           taskId,
           expectedVersion,
@@ -295,21 +416,26 @@ export class BuyerTaskStore {
       .run(`tev_${uuidv7()}`, taskId, type, JSON.stringify(payload), origin, idempotencyKey, now);
   }
 
-  /** Idempotent standalone event (notifications, observations, merges). */
+  /**
+   * Idempotent standalone event (notifications, observations, merges).
+   * Returns whether the row was newly inserted (false = idempotency replay),
+   * so callers can skip duplicate user-visible notifications.
+   */
   appendEvent(
     taskId: string,
     type: string,
     payload: Record<string, unknown>,
     origin: TaskEvent["origin"],
     idempotencyKey: string,
-  ): void {
-    this.db
+  ): boolean {
+    const res = this.db
       .prepare(
         `INSERT OR IGNORE INTO task_events
            (event_id, task_id, type, payload_json, origin, idempotency_key, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(`tev_${uuidv7()}`, taskId, type, JSON.stringify(payload), origin, idempotencyKey, this.now());
+    return res.changes === 1;
   }
 
   eventByIdempotencyKey(key: string): TaskEvent | undefined {
@@ -442,6 +568,12 @@ export class BuyerTaskStore {
       )
       .get(input.candidate_id, input.content_hash) as { observation_id: string } | undefined;
     if (existing !== undefined) {
+      // Same facts re-verified: keep observed_at for trend, but EXTEND the
+      // freshness window — otherwise a repeatedly-rechecked unchanged fact
+      // stays permanently stale and is misreported as "过期" (§11.6).
+      this.db
+        .prepare("UPDATE product_observations SET fresh_until = ? WHERE observation_id = ?")
+        .run(input.fresh_until, existing.observation_id);
       return { added: false, observation_id: existing.observation_id };
     }
     const observationId = `obs_${uuidv7()}`;

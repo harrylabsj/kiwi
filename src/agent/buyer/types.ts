@@ -41,7 +41,6 @@ export const TASK_TRANSITIONS: Readonly<Record<BuyerTaskStatus, readonly BuyerTa
 export const TRACKING_RULE_TYPES = [
   "price_below",
   "stock_available",
-  "promotion_changed",
   "delivery_before",
   "new_candidate",
   "periodic_review",
@@ -257,7 +256,7 @@ export interface ScoreExplanation {
 }
 
 export class BuyerTaskError extends Error {
-  readonly code: "validation" | "not_found" | "conflict" | "illegal_transition";
+  readonly code: "validation" | "not_found" | "conflict" | "illegal_transition" | "vault_unavailable";
   constructor(code: BuyerTaskError["code"], message: string) {
     super(message);
     this.name = "BuyerTaskError";

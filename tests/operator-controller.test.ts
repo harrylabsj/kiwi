@@ -18,6 +18,7 @@ import {
 import { DeterministicNegotiationRunner } from "../src/operator/runner.js";
 import { InMemoryOperatorEventStore } from "../src/operator/store.js";
 import { createStrategyEngine } from "../src/operator/strategy.js";
+import type { OperatorEvent } from "../src/operator/types.js";
 import { NOW, testBuyerPolicy, testBuyerProfile, testMarketplace, testProfile } from "./helpers.js";
 
 function makeController(
@@ -238,6 +239,17 @@ describe("strategy messages", () => {
     expect(events.some((e) => e.type === "strategy.patch.applied")).toBe(false);
   });
 
+  it("rejects a credential-shaped message inline instead of crashing the session", async () => {
+    const { controller } = merchantSetup();
+    await controller.start();
+    const result = await controller.sendOperatorMessage("我的 key 是 sk-live-123");
+    expect(result.kind).toBe("rejected");
+    // The session survives and still processes normal messages.
+    const normal = await controller.sendOperatorMessage("先争取包邮");
+    expect(normal.kind).toBe("applied");
+    expect(controller.getState().strategy.directives).toHaveLength(1);
+  });
+
   it("operator private messages never enter the public draft", async () => {
     const { controller } = merchantSetup();
     await controller.start();
@@ -456,6 +468,76 @@ describe("recovery + shutdown", () => {
     const approved = await second.approve("cand-1");
     expect(approved.kind).toBe("invalid");
     expect(merchant.messages()).toHaveLength(1);
+  });
+
+  it("heartbeats the held claim while a candidate awaits approval, stops after settle", async () => {
+    const { merchant } = testMarketplace();
+    const controller = new OperatorController({
+      profile: testProfile(),
+      store: new InMemoryOperatorEventStore(),
+      engine: createStrategyEngine(),
+      runner: new DeterministicNegotiationRunner(testProfile(), merchant, { heartbeatIntervalMs: 10 }),
+      now: () => NOW,
+    });
+    await controller.start();
+    await controller.prepareNextCandidate();
+    expect(merchant.claimStatus(1)).toBe("processing");
+    // While the operator deliberates, the claim is refreshed below the 300s TTL.
+    await new Promise((r) => setTimeout(r, 50));
+    const beats = () => merchant.auditEvents().filter((e) => e.event === "agent_message_heartbeat").length;
+    expect(beats()).toBeGreaterThan(0);
+    // Approval settles the claim; the heartbeat must stop.
+    expect((await controller.approve()).kind).toBe("submitted");
+    const after = beats();
+    await new Promise((r) => setTimeout(r, 40));
+    expect(beats()).toBe(after);
+  });
+
+  it("recovers from a crash between decision.submitted and turn.settled (no wedge)", async () => {
+    const { merchant } = testMarketplace();
+    const store = new InMemoryOperatorEventStore();
+    const first = makeController(testProfile(), merchant, store);
+    await first.start();
+    await first.prepareNextCandidate();
+    const candidate = first.getState().candidates.get("cand-1");
+    expect(candidate).toBeDefined();
+    // Crash window: approved + submitted were recorded, turn.settled never was.
+    const approved: OperatorEvent = {
+      event_id: "evt-2",
+      occurred_at: NOW,
+      agent_id: "merchant-agent:merchant-001",
+      role: "merchant",
+      origin: "local_tui",
+      visibility: "private",
+      type: "candidate.approved",
+      payload: { candidate_id: candidate!.candidate_id },
+    };
+    const submitted: OperatorEvent = {
+      event_id: "evt-3",
+      occurred_at: NOW,
+      agent_id: "merchant-agent:merchant-001",
+      role: "merchant",
+      origin: "local_tui",
+      visibility: "public_sent",
+      type: "decision.submitted",
+      payload: {
+        candidate_id: candidate!.candidate_id,
+        action: candidate!.decision.action,
+        policy_result: "accepted",
+        message_id: 1,
+      },
+    };
+    await store.append(approved);
+    await store.append(submitted);
+
+    // A fresh controller must not wedge: the candidate is expired and the
+    // approval cleared, so prepareNextCandidate is not blocked.
+    const second = makeController(testProfile(), merchant, store);
+    await second.start();
+    expect(second.getState().candidates.get("cand-1")?.status).toBe("expired");
+    expect(second.getState().approval).toEqual({ kind: "idle" });
+    const prepared = await second.prepareNextCandidate();
+    expect(prepared.kind === "no_work" || prepared.kind === "awaiting_approval").toBe(true);
   });
 
   it("reducer fold equals controller state for the same event stream", async () => {

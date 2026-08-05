@@ -101,6 +101,27 @@ describe("StrategyEngine.compile", () => {
     const patch = engine.compile("库存低于5件时转人工", merchantCtx);
     expect(patch.kind).toBe("soft_preference");
   });
+
+  it("refuses non-strategy chatter instead of swallowing it as a preference", () => {
+    const patch = engine.compile("辛苦啦", buyerCtx);
+    expect(patch.kind).toBe("chat");
+    expect(patch.matched_rules).toContain("chat_no_strategy_keyword");
+  });
+
+  it("classifies order/fulfillment tasks as out of scope", () => {
+    const patch = engine.compile("帮我取消订单", buyerCtx);
+    expect(patch.kind).toBe("out_of_scope");
+  });
+
+  it("does not flag a bare SKU mention as out of scope", () => {
+    const patch = engine.compile("SKU 缺货就转人工", merchantCtx);
+    expect(patch.kind).toBe("soft_preference");
+  });
+
+  it("keeps an operator floor wording under soft_preference", () => {
+    const patch = engine.compile("我的底线是再便宜 10 元", buyerCtx);
+    expect(patch.kind).toBe("soft_preference");
+  });
 });
 
 describe("StrategyEngine.assess", () => {

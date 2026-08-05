@@ -4,6 +4,7 @@
  * idempotency); the model never touches SQL or tokens.
  */
 
+import { createHash } from "node:crypto";
 import type { AgentHarnessTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { AgentProfile } from "../../config/profile.js";
 import type { CommerceClient } from "../../commerce/types.js";
@@ -66,10 +67,106 @@ function parseConstraints(value: unknown): TaskConstraints {
   if (typeof v.max_total_price === "number" && Number.isFinite(v.max_total_price)) {
     out.max_total_price = v.max_total_price;
   }
+  if (typeof v.max_total_price_vault_ref === "string") {
+    out.max_total_price_vault_ref = v.max_total_price_vault_ref;
+  }
   if (typeof v.latest_eta === "string") out.latest_eta = v.latest_eta;
   if (Array.isArray(v.required_terms)) out.required_terms = v.required_terms.map(String);
   if (typeof v.exclude_out_of_stock === "boolean") out.exclude_out_of_stock = v.exclude_out_of_stock;
   return out;
+}
+
+/** Model-facing task constraints never echo the private budget (§11.2). */
+function redactConstraints(constraints: TaskConstraints): Record<string, unknown> {
+  const { max_total_price: _price, max_total_price_vault_ref: _ref, ...rest } = constraints;
+  if (_price !== undefined || _ref !== undefined) {
+    return { ...rest, max_total_price: "<私密预算>" };
+  }
+  return { ...rest };
+}
+
+/**
+ * §16 mode table: "创建任务和跟踪规则" is 建议 in manual — the write must NOT
+ * execute. supervised/autopilot execute as today. Blocks the low-risk local
+ * task/rule writes from silently running under manual.
+ */
+function manualAdvice(mode: (() => AgentMode) | undefined): { ok: true } | { ok: false; reason: string } {
+  if (mode?.() === "manual") {
+    return {
+      ok: false,
+      reason:
+        "manual 模式只提供建议、不执行任务写入；请切换到 supervised（写操作需批准）或 autopilot。",
+    };
+  }
+  return { ok: true };
+}
+
+/** Preconditions for a non-binding selection (re-read at execution time). */
+function readSelectionPreconditions(
+  store: BuyerTaskStore,
+  taskId: string,
+  candidateId: string,
+): Record<string, unknown> {
+  const task = store.getTask(taskId);
+  const candidate = store.getCandidate(candidateId);
+  return {
+    task_status: task?.status ?? null,
+    task_version: task?.version ?? null,
+    candidate_status: candidate?.candidate_status ?? null,
+  };
+}
+
+/** Execute an approved non-binding selection (§12.4 — never an order). */
+function executeSelection(
+  store: BuyerTaskStore,
+  now: () => string,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const p = args as { task_id: string; candidate_id: string; user_instruction: string };
+  const task = store.getTask(p.task_id);
+  if (task === undefined) throw new BuyerTaskError("not_found", `no task ${p.task_id}`);
+  const candidate = store.getCandidate(p.candidate_id);
+  if (candidate === undefined || candidate.task_id !== p.task_id) {
+    throw new BuyerTaskError("not_found", `no candidate ${p.candidate_id} in task`);
+  }
+  if (candidate.candidate_status !== "shortlisted") {
+    throw new BuyerTaskError(
+      "validation",
+      `candidate ${p.candidate_id} is ${candidate.candidate_status}, not shortlisted`,
+    );
+  }
+  const observation = store.latestObservation(p.candidate_id);
+  store.appendEvent(
+    p.task_id,
+    "selected",
+    {
+      candidate_id: p.candidate_id,
+      observation_id: observation?.observation_id ?? null,
+      selected_at: now(),
+      authorization: p.user_instruction,
+      score_explanation: candidate.score_explanation ?? null,
+      boundary: "未创建订单；非绑定选定不声明价格、库存或交期仍然有效",
+    },
+    "user",
+    `select:${p.task_id}:${p.candidate_id}:${uuidv7()}`,
+  );
+  store.updateCandidate(p.candidate_id, { candidate_status: "selected" });
+  store.transitionTask({
+    task_id: p.task_id,
+    to: "selected_nonbinding",
+    expected_version: task.version,
+    event_type: "status_changed",
+    payload: { selected_candidate_id: p.candidate_id },
+    origin: "user",
+    idempotency_key: `select-transition:${p.task_id}:${p.candidate_id}`,
+    selected_candidate_id: p.candidate_id,
+  });
+  return {
+    task_id: p.task_id,
+    status: "selected_nonbinding",
+    candidate_id: p.candidate_id,
+    observation_id: observation?.observation_id ?? null,
+  };
 }
 
 export interface BuyerToolDeps {
@@ -275,7 +372,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         const lines = [
           `${task.task_id} [${task.status}] ${task.goal_text}`,
           `意图: ${JSON.stringify(task.intent)}`,
-          `约束: ${JSON.stringify(task.constraints)}`,
+          `约束: ${JSON.stringify(redactConstraints(task.constraints))}`,
           ...candidates.map((c) => {
             const reasons =
               c.rejection_reasons.length > 0 ? ` 排除: ${c.rejection_reasons.join(";")}` : "";
@@ -294,7 +391,8 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
     label: "创建购买任务",
     description:
       "把用户的购买需求创建成 Buyer 任务。意图足够明确（有品类或关键词）会立即执行一轮搜索；" +
-      "关键信息缺失（品类/用途不明）时进入 clarifying，先向用户追问。",
+      "关键信息缺失（品类/用途不明）时进入 clarifying，先向用户追问。私有预算会自动加密保存，" +
+      "绝不在任务输出、回复或任何地方回显预算数值。",
     parameters: {
       type: "object",
       properties: {
@@ -302,7 +400,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         intent: { type: "object", description: "结构化意图（category/query_text/city/needed_by 等）" },
         constraints: {
           type: "object",
-          description: "硬约束（max_total_price/latest_eta/required_terms/exclude_out_of_stock）",
+          description: "硬约束（max_total_price 私有预算/latest_eta/required_terms/exclude_out_of_stock）",
         },
         run_search: { type: "boolean", description: "意图足够时是否立即搜索（默认 true）" },
       },
@@ -310,6 +408,8 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       additionalProperties: false,
     },
     execute: async (_id, params) => {
+      const guard = manualAdvice(deps.mode);
+      if (!guard.ok) return textResult(guard.reason);
       try {
         const p = params as Record<string, unknown>;
         const goalText = String(p.goal_text ?? "");
@@ -319,8 +419,21 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           goal_text: goalText,
           intent,
           constraints,
-          idempotency_key: `create:${uuidv7()}`,
+          // Content-addressed: a model retry with the same args replays the
+          // existing task instead of creating a duplicate.
+          idempotency_key: `create:${createHash("sha256")
+            .update(JSON.stringify({ goal_text: goalText, intent, constraints }))
+            .digest("hex")
+            .slice(0, 16)}`,
         });
+        if (task.status !== "draft") {
+          // Content-addressed replay: this exact create already ran — the task
+          // exists and progressed. Short-circuit instead of re-transitioning.
+          return textResult(`任务 ${task.task_id} 已存在（${task.status}）。`, {
+            task_id: task.task_id,
+            status: task.status,
+          });
+        }
         // Clarifying gate (§12.1): no category AND no query text => ask first.
         const needsClarification =
           (intent.category === undefined || intent.category === "") &&
@@ -378,7 +491,13 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             { task_id: task.task_id, status: current.status },
           );
         }
-        return textResult(`搜索失败：${cycle.error ?? "未知错误"}（任务已标记 failed，可重试）。`, {
+        if (cycle.outcome === "retry") {
+          return textResult(
+            `搜索遇到临时错误，已安排自动重试（${task.task_id}）。错误：${cycle.error ?? "未知"}`,
+            { task_id: task.task_id, status: current.status },
+          );
+        }
+        return textResult(`搜索失败：${cycle.error ?? "未知错误"}（任务已标记 failed）。`, {
           task_id: task.task_id,
           status: current.status,
         });
@@ -402,6 +521,8 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       additionalProperties: false,
     },
     execute: async (_id, params) => {
+      const guard = manualAdvice(deps.mode);
+      if (!guard.ok) return textResult(guard.reason);
       try {
         const p = params as { task_id: string; constraints: unknown };
         const task = store.getTask(p.task_id);
@@ -442,7 +563,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         candidate_id: { type: "string" },
         rule_type: {
           type: "string",
-          enum: ["price_below", "stock_available", "promotion_changed", "delivery_before", "new_candidate", "periodic_review"],
+          enum: ["price_below", "stock_available", "delivery_before", "new_candidate", "periodic_review"],
         },
         condition: { type: "object", description: "如 {threshold: 90} 或 {eta_before: RFC3339}" },
         interval_seconds: { type: "integer" },
@@ -452,6 +573,8 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       additionalProperties: false,
     },
     execute: async (_id, params) => {
+      const guard = manualAdvice(deps.mode);
+      if (!guard.ok) return textResult(guard.reason);
       try {
         const p = params as Record<string, unknown>;
         const rule = store.addTrackingRule({
@@ -486,6 +609,8 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       additionalProperties: false,
     },
     execute: async (_id, params) => {
+      const guard = manualAdvice(deps.mode);
+      if (!guard.ok) return textResult(guard.reason);
       try {
         const rule = store.pauseRule(String((params as { rule_id: string }).rule_id));
         return textResult(`规则 ${rule.rule_id} 已暂停。`);
@@ -506,6 +631,8 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       additionalProperties: false,
     },
     execute: async (_id, params) => {
+      const guard = manualAdvice(deps.mode);
+      if (!guard.ok) return textResult(guard.reason);
       try {
         const p = params as { task_id: string };
         const task = store.getTask(p.task_id);
@@ -542,50 +669,32 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       additionalProperties: false,
     },
     execute: async (_id, params) => {
+      if (deps.approvals === undefined || deps.mode === undefined) {
+        return textResult("当前环境未配置审批能力，无法执行非绑定选定。");
+      }
       try {
         const p = params as { task_id: string; candidate_id: string; user_instruction: string };
-        const task = store.getTask(p.task_id);
-        if (task === undefined) throw new BuyerTaskError("not_found", `no task ${p.task_id}`);
-        const candidate = store.getCandidate(p.candidate_id);
-        if (candidate === undefined || candidate.task_id !== p.task_id) {
-          throw new BuyerTaskError("not_found", `no candidate ${p.candidate_id} in task`);
-        }
-        if (candidate.candidate_status !== "shortlisted") {
-          throw new BuyerTaskError(
-            "validation",
-            `candidate ${p.candidate_id} is ${candidate.candidate_status}, not shortlisted`,
-          );
-        }
-        const observation = store.latestObservation(p.candidate_id);
-        store.appendEvent(
-          p.task_id,
-          "selected",
-          {
-            candidate_id: p.candidate_id,
-            observation_id: observation?.observation_id ?? null,
-            selected_at: now(),
-            authorization: p.user_instruction,
-            score_explanation: candidate.score_explanation ?? null,
-            boundary: "未创建订单；非绑定选定不声明价格、库存或交期仍然有效",
-          },
-          "user",
-          `select:${p.task_id}:${p.candidate_id}:${uuidv7()}`,
-        );
-        store.updateCandidate(p.candidate_id, { candidate_status: "selected" });
-        store.transitionTask({
+        const args = {
           task_id: p.task_id,
-          to: "selected_nonbinding",
-          expected_version: task.version,
-          event_type: "status_changed",
-          payload: { selected_candidate_id: p.candidate_id },
-          origin: "user",
-          idempotency_key: `select-transition:${p.task_id}:${p.candidate_id}`,
-          selected_candidate_id: p.candidate_id,
-        });
-        return textResult(
-          `已记录非绑定选定（${p.candidate_id}）。这不是订单；价格、库存或交期以当时观察 ${observation?.observation_id ?? "-"} 为准，可能已变化。`,
-          { task_id: p.task_id, status: "selected_nonbinding" },
+          candidate_id: p.candidate_id,
+          user_instruction: p.user_instruction,
+        };
+        // §16: 选定商品（非绑定）= manual 建议 / supervised 需确认 / autopilot
+        // 仅满足明确授权时自动。autopilot 切换本身即显式授权，直接自动执行。
+        const outcome = await routeWriteCandidate(
+          { mode: deps.mode, approvals: deps.approvals, profile, now, registerPending: deps.registerPending },
+          {
+            tool: "select_product_nonbinding",
+            arguments: args,
+            preconditions: readSelectionPreconditions(store, args.task_id, args.candidate_id),
+            risk: "select_product",
+            execute: async (approvedArgs) => executeSelection(store, now, approvedArgs),
+            readPreconditions: () =>
+              readSelectionPreconditions(store, args.task_id, args.candidate_id),
+            autopilotEscalation: () => undefined,
+          },
         );
+        return writeGateText(outcome);
       } catch (err) {
         return textResult(errorText(err));
       }

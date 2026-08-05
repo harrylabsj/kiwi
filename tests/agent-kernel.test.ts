@@ -242,6 +242,28 @@ describe("slash commands", () => {
     expect(reply.text).not.toContain("北京市海淀区");
     await kernel.close();
   });
+
+  it("/confirm promotes a constraint candidate (human-only) to active", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const kernel = await openKernel("agent");
+    const outcome = kernel.memoryStore.remember({
+      namespace: "constraint",
+      key: "shopping.budget.max",
+      value: { max: 500 },
+      sensitivity: "normal",
+      source_kind: "explicit",
+      explicit_user_statement: true,
+      evidence: { source_type: "chat", source_ref: "test", summary: "用户设定预算上限" },
+      actor: "model",
+    });
+    expect(outcome.kind).toBe("candidate");
+    const id = outcome.kind === "candidate" ? outcome.memory.memory_id : "";
+    expect((await kernel.handleUserText("/memory")).text).toContain("待确认");
+    const confirmed = await kernel.handleUserText(`/confirm ${id}`);
+    expect(confirmed.text).toContain("已确认");
+    expect(kernel.memoryStore.getMemory(id)?.status).toBe("active");
+    await kernel.close();
+  });
 });
 
 describe("buyer capability pack (v0.3.0-B)", () => {
@@ -297,5 +319,37 @@ describe("physical isolation (design §17)", () => {
       }),
     ).rejects.toThrow(/immutable|isolation/i);
     await merchantKernel.close();
+  });
+});
+
+describe("sensitive routing and model failure resilience", () => {
+  it("a remembered address is routed to the Vault, never plaintext", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const kernel = await openKernel("agent");
+    await kernel.handleUserText("记住我家住在北京市海淀区xx路1号");
+    const memories = kernel.memoryStore.listMemories({});
+    expect(memories).toHaveLength(1);
+    expect(memories[0]?.sensitivity).toBe("restricted");
+    expect(memories[0]?.status).toBe("candidate"); // human /confirm required
+    expect(memories[0]?.value).toBeUndefined();
+    expect(memories[0]?.vault_ref).toMatch(/^vr_/);
+    await kernel.close();
+  });
+
+  it("a model failure in one turn does not kill the session", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const boom = (): never => {
+      throw new Error("provider boom");
+    };
+    const kernel = await openKernel("agent", {
+      steps: [boom, boom, boom, boom] as FauxResponseStep[],
+    });
+    const reply = await kernel.handleUserText("你好");
+    // Either the harness threw (caught) or returned empty — the turn must
+    // surface a non-empty reply, never crash the session.
+    expect(reply.text.length).toBeGreaterThan(0);
+    const help = await kernel.handleUserText("/help");
+    expect(help.text).toContain("/memory");
+    await kernel.close();
   });
 });
