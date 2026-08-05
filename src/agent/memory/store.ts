@@ -52,6 +52,7 @@ import {
 } from "./types.js";
 import type { PrivateVault } from "./vault.js";
 import { VaultKeyError } from "./vault.js";
+import { MEMORY_SCHEMA_VERSION } from "./schema.js";
 
 const SOURCE_WEIGHT: Record<MemorySourceKind, number> = {
   explicit: 1.0,
@@ -304,7 +305,7 @@ export class MemoryStore {
       .prepare(
         `INSERT INTO principals
            (principal_id, owner_id, role, display_name, locale, timezone, memory_schema_version, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.principal_id,
@@ -313,6 +314,7 @@ export class MemoryStore {
         input.display_name ?? null,
         input.locale ?? "zh-CN",
         input.timezone ?? "Asia/Shanghai",
+        MEMORY_SCHEMA_VERSION,
         now,
         now,
       );

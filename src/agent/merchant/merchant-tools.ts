@@ -169,16 +169,16 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
   const listProducts: Tool = {
     name: "list_catalog_products",
     label: "列出商品",
-    description: "列出商家自己的目录商品（只读）。",
+    description: "列出商家自己的目录商品（只读；目录数据来自公开搜索端点，按本商家 owner 过滤）。",
     parameters: {
       type: "object",
-      properties: { merchant_id: { type: "string" } },
+      properties: {},
       additionalProperties: false,
     },
-    execute: async (_id, params) => {
+    execute: async (_id, _params) => {
       try {
-        const merchantId = optString((params as { merchant_id?: string }).merchant_id) ?? ownerId;
-        const products = await merchantClient.listProducts(merchantId);
+        // Always the merchant's own catalog — never an arbitrary merchant_id.
+        const products = await merchantClient.listProducts(ownerId);
         const rows = products.map((p) => ({
           sku: p.sku,
           title: p.title,

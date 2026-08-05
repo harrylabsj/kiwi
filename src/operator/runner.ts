@@ -95,11 +95,19 @@ export interface NegotiationRunner {
 export function compileDirectiveHints(directives: readonly StrategyDirective[]): DecisionHints {
   const hints: DecisionHints = {};
   for (const directive of directives) {
-    if (/预算|budget/i.test(directive.directive)) {
+    // Numeric budget/floor hints only come from tighten/relax constraint
+    // directives — a soft_preference mentioning 预算/底价 must not override.
+    if (
+      (directive.kind === "tighten" || directive.kind === "relax") &&
+      /预算|budget/i.test(directive.directive)
+    ) {
       const amount = /\d+(?:\.\d+)?/.exec(directive.directive);
       if (amount !== null) hints.buyer_max_total_price = Number(amount[0]);
     }
-    if (/底价|最低价|floor/i.test(directive.directive)) {
+    if (
+      (directive.kind === "tighten" || directive.kind === "relax") &&
+      /底价|最低价|floor/i.test(directive.directive)
+    ) {
       const amount = /\d+(?:\.\d+)?/.exec(directive.directive);
       if (amount !== null) hints.merchant_min_unit_price = Number(amount[0]);
     }

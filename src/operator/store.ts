@@ -81,6 +81,23 @@ function isOperatorEvent(value: unknown): value is OperatorEvent {
   );
 }
 
+/** Known event types (design §6). An unknown type fails closed on load. */
+const KNOWN_EVENT_TYPES = new Set<string>([
+  "operator.message",
+  "strategy.patch.proposed",
+  "strategy.patch.applied",
+  "strategy.patch.rejected",
+  "mode.changed",
+  "negotiation.paused",
+  "negotiation.resumed",
+  "candidate.generated",
+  "candidate.approved",
+  "candidate.rejected",
+  "candidate.revised",
+  "decision.submitted",
+  "turn.settled",
+]);
+
 /** JSONL file store. File 0600, directory 0700 (design §14). */
 export class FileOperatorEventStore implements OperatorEventStore {
   readonly dir: string;
@@ -130,6 +147,11 @@ export class FileOperatorEventStore implements OperatorEventStore {
       if (!isOperatorEvent(parsed)) {
         throw new OperatorStoreError(
           `operator event log line ${i + 1} is not a valid event; refusing to load (fail closed)`,
+        );
+      }
+      if (!KNOWN_EVENT_TYPES.has(parsed.type)) {
+        throw new OperatorStoreError(
+          `operator event log line ${i + 1} has unknown type "${parsed.type}"; refusing to load (fail closed)`,
         );
       }
       events.push(parsed);
