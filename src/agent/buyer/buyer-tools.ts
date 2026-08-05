@@ -101,21 +101,6 @@ function manualAdvice(mode: (() => AgentMode) | undefined): { ok: true } | { ok:
   return { ok: true };
 }
 
-/** Preconditions for a non-binding selection (re-read at execution time). */
-function readSelectionPreconditions(
-  store: BuyerTaskStore,
-  taskId: string,
-  candidateId: string,
-): Record<string, unknown> {
-  const task = store.getTask(taskId);
-  const candidate = store.getCandidate(candidateId);
-  return {
-    task_status: task?.status ?? null,
-    task_version: task?.version ?? null,
-    candidate_status: candidate?.candidate_status ?? null,
-  };
-}
-
 /** Execute an approved non-binding selection (§12.4 — never an order). */
 function executeSelection(
   store: BuyerTaskStore,
@@ -129,10 +114,10 @@ function executeSelection(
   if (candidate === undefined || candidate.task_id !== p.task_id) {
     throw new BuyerTaskError("not_found", `no candidate ${p.candidate_id} in task`);
   }
-  if (candidate.candidate_status !== "shortlisted") {
+  if (candidate.candidate_status !== "shortlisted" && candidate.candidate_status !== "selected") {
     throw new BuyerTaskError(
       "validation",
-      `candidate ${p.candidate_id} is ${candidate.candidate_status}, not shortlisted`,
+      `candidate ${p.candidate_id} is ${candidate.candidate_status}; 只能选定 shortlisted 或已 selected 的候选`,
     );
   }
   const observation = store.latestObservation(p.candidate_id);
@@ -666,7 +651,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
     label: "非绑定选定",
     description:
       "用户明确选定某个候选时记录非绑定选定结果（§12.4：不是下单，不声明价格/库存仍有效）。" +
-      "任务必须处于 awaiting_user，候选必须在 shortlist 中。",
+      "选定是本地非绑定标记，直接执行、无需审批；任务在 awaiting_user（或已选定想再谈价回 consulting 后）时调用。",
     parameters: {
       type: "object",
       properties: {
@@ -678,32 +663,20 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       additionalProperties: false,
     },
     execute: async (_id, params) => {
-      if (deps.approvals === undefined || deps.mode === undefined) {
-        return textResult("当前环境未配置审批能力，无法执行非绑定选定。");
-      }
+      const guard = manualAdvice(deps.mode);
+      if (!guard.ok) return textResult(guard.reason);
       try {
         const p = params as { task_id: string; candidate_id: string; user_instruction: string };
-        const args = {
+        // 选定是本地非绑定标记（不是订单、不对外写）——无需审批，直接执行。
+        const result = executeSelection(store, now, {
           task_id: p.task_id,
           candidate_id: p.candidate_id,
           user_instruction: p.user_instruction,
-        };
-        // §16: 选定商品（非绑定）= manual 建议 / supervised 需确认 / autopilot
-        // 仅满足明确授权时自动。autopilot 切换本身即显式授权，直接自动执行。
-        const outcome = await routeWriteCandidate(
-          { mode: deps.mode, approvals: deps.approvals, profile, now, registerPending: deps.registerPending },
-          {
-            tool: "select_product_nonbinding",
-            arguments: args,
-            preconditions: readSelectionPreconditions(store, args.task_id, args.candidate_id),
-            risk: "select_product",
-            execute: async (approvedArgs) => executeSelection(store, now, approvedArgs),
-            readPreconditions: () =>
-              readSelectionPreconditions(store, args.task_id, args.candidate_id),
-            autopilotEscalation: () => undefined,
-          },
+        });
+        return textResult(
+          `已记录非绑定选定（${result.candidate_id}）。这不是订单；价格、库存或交期以当时观察 ${result.observation_id ?? "-"} 为准，可能已变化。`,
+          result,
         );
-        return writeGateText(outcome);
       } catch (err) {
         return textResult(errorText(err));
       }

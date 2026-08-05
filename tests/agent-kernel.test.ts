@@ -370,6 +370,31 @@ describe("sensitive routing and model failure resilience", () => {
     await kernel.close();
   });
 
+  it("/approve accepts /pending indices and 'all'", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const kernel = await openKernel("agent");
+    const approvals = kernel.actionCandidates;
+    expect(approvals).toBeDefined();
+    approvals!.create({ tool: "w1", arguments: {}, preconditions: {}, risk: "t", expires_at: "2099-01-01T00:00:00Z" });
+    approvals!.create({ tool: "w2", arguments: {}, preconditions: {}, risk: "t", expires_at: "2099-01-01T00:00:00Z" });
+
+    // /pending renders numbered entries.
+    const list = await kernel.handleUserText("/pending");
+    expect(list.text).toMatch(/1\. act_/);
+    expect(list.text).toMatch(/2\. act_/);
+
+    // Index 1 -> the first pending candidate; the reply names its full id.
+    const first = approvals!.listPending()[0]?.candidate_id as string;
+    const approve = await kernel.handleUserText("/approve 1");
+    expect(approve.text).toContain(first);
+    expect(approve.text).not.toContain("未知审批候选");
+
+    // 'all' processes whatever remains.
+    const all = await kernel.handleUserText("/approve all");
+    expect(all.text).toContain("已处理 1 个候选");
+    await kernel.close();
+  });
+
   it("a model failure in one turn does not kill the session", async () => {
     workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
     const boom = (): never => {

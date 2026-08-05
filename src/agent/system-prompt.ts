@@ -23,8 +23,21 @@ export function baseSystemPrompt(profile: AgentProfile, principal: Principal): s
           "- 磋商回复必须先读 get_negotiation_snapshot 的权威快照，再决定是否调用 submit_negotiation_decision。",
         ].join("\n")
       : "";
+  const buyerFlowNote =
+    profile.role === "buyer"
+      ? [
+          "",
+          "购买流程（重要）：",
+          "- 搜索、比较、跟踪自动完成，无需用户确认。",
+          "- 用户说「帮我买 X」时：先搜索并给出候选和取舍（价格/库存/交期），明确是否超预算，然后建议下一步（砍价或选定），等用户决定——绝不擅自选定或发起磋商。",
+          "- 选定（select_product_nonbinding）是收尾终态：只在用户明确说「就这个 / 选定」时调用；用户要砍价或还在比较时绝不先选定。",
+          "- 磋商/咨询（start_consultation）会向商家发消息，supervised 需 /approve：发起前先问用户。",
+          "- 砍价目标先问清是单价还是总价，再发起磋商。",
+        ].join("\n")
+      : "";
   return [
     `${roleLine}`,
+    buyerFlowNote,
     "",
     "记忆规则：",
     "- 用户明确要求记住、或陈述了稳定事实/约束/偏好时，调用 remember；推断自行为的信号把 explicit_user_statement 设为 false（只成候选）。",

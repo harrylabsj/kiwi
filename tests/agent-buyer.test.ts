@@ -593,7 +593,7 @@ describe("write-gate coverage for buyer tools (§16)", () => {
     expect(store.rulesForTask(task.task_id)).toHaveLength(0);
   });
 
-  it("select_product_nonbinding is advice-only in manual and pending in supervised", async () => {
+  it("select_product_nonbinding is advice-only in manual and auto-executes otherwise", async () => {
     const { store, db, connector, now } = setup([fakeConnectorProduct()]);
     const ready = createReadyTask(store, {});
     const cycle = await runSearchCycle({ store, connector, now }, ready.task_id, `r:${uuidv7()}`);
@@ -608,12 +608,41 @@ describe("write-gate coverage for buyer tools (§16)", () => {
     expect((manualResult.content[0] as { type: "text"; text: string }).text).toContain("manual 模式");
     expect(store.getTask(ready.task_id)?.status).not.toBe("selected_nonbinding");
 
-    // supervised: requires /approve — not executed outright.
+    // supervised: a local non-binding marker — executes directly, no /approve.
     const supervised = toolsWithMode("supervised", store, db, connector);
     const select2 = supervised.tools.find((t) => t.name === "select_product_nonbinding");
     const supervisedResult = await select2!.execute("c1", args, undefined, undefined, undefined);
-    expect((supervisedResult.content[0] as { type: "text"; text: string }).text).toContain("等待批准");
-    expect(store.getTask(ready.task_id)?.status).not.toBe("selected_nonbinding");
+    expect((supervisedResult.content[0] as { type: "text"; text: string }).text).toContain("已记录非绑定选定");
+    expect(store.getTask(ready.task_id)?.status).toBe("selected_nonbinding");
+    expect(supervised.approvals.listPending()).toHaveLength(0);
+  });
+
+  it("a selected task can go back to consulting to renegotiate", async () => {
+    const { store, connector, now } = setup([fakeConnectorProduct()]);
+    const ready = createReadyTask(store, {});
+    const cycle = await runSearchCycle({ store, connector, now }, ready.task_id, `r:${uuidv7()}`);
+    const candidate = cycle.shortlist[0]?.candidate;
+    expect(candidate).toBeDefined();
+    const task = store.getTask(ready.task_id) as BuyerTask;
+    const selected = store.transitionTask({
+      task_id: task.task_id,
+      to: "selected_nonbinding",
+      expected_version: task.version,
+      event_type: "status_changed",
+      origin: "user",
+      idempotency_key: `sel:${uuidv7()}`,
+      selected_candidate_id: candidate?.candidate_id,
+    });
+    expect(selected.status).toBe("selected_nonbinding");
+    const renegotiated = store.transitionTask({
+      task_id: selected.task_id,
+      to: "consulting",
+      expected_version: selected.version,
+      event_type: "status_changed",
+      origin: "user",
+      idempotency_key: `re:${uuidv7()}`,
+    });
+    expect(renegotiated.status).toBe("consulting");
   });
 });
 
