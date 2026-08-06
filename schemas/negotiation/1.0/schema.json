@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kiwi.harrylabsj.com/schemas/negotiation/1.0/schema.json",
+  "title": "KNP/1.0 Negotiation Envelope",
+  "description": "Top-level wire envelope for Kiwi Negotiation Protocol 1.0 (protocol §8). Every KNP wire payload MUST be carried inside this envelope. Action-specific payload schemas are versioned separately (protocol §9–§17); this envelope schema is the UCP schema origin for capability com.harrylabsj.kiwi.shopping.negotiation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "capability",
+    "protocol_version",
+    "negotiation_id",
+    "exchange_id",
+    "message_id",
+    "actor",
+    "action",
+    "created_at",
+    "payload"
+  ],
+  "properties": {
+    "capability": {
+      "type": "string",
+      "const": "com.harrylabsj.kiwi.shopping.negotiation"
+    },
+    "protocol_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "negotiation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "exchange_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "in_reply_to": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "actor": {
+      "type": "string",
+      "enum": ["buyer", "merchant"]
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "inquiry",
+        "rfq",
+        "offer",
+        "counter_offer",
+        "conditional_offer",
+        "clarification",
+        "clarification_response",
+        "accept_nonbinding",
+        "withdraw",
+        "decline",
+        "cancel"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "public_message": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "payload": {
+      "type": "object"
+    },
+    "digest": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    }
+  }
+}
