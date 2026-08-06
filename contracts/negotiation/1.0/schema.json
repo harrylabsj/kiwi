@@ -14,7 +14,8 @@
     "actor",
     "action",
     "created_at",
-    "payload"
+    "payload",
+    "digest"
   ],
   "properties": {
     "capability": {
@@ -35,7 +36,7 @@
       "$ref": "#/$defs/identifier"
     },
     "in_reply_to": {
-      "oneOf": [{ "$ref": "#/$defs/identifier" }, { "type": "null" }]
+      "$ref": "#/$defs/identifier"
     },
     "actor": {
       "type": "string",
@@ -168,10 +169,21 @@
       }
     },
     "line_item": {
-      "description": "TermSet.items 的条目（§7.4）。offer-like 的 items 要求 unit_price。",
+      "description": "TermSet.items 的条目（§7.4）。RFQ/普通 terms 允许无 unit_price。",
       "type": "object",
       "additionalProperties": true,
       "required": ["sku", "quantity"],
+      "properties": {
+        "sku": { "type": "string", "minLength": 1 },
+        "quantity": { "$ref": "#/$defs/quantity" },
+        "unit_price": { "$ref": "#/$defs/money" }
+      }
+    },
+    "line_item_priced": {
+      "description": "offer-like（Offer/CounterOffer）items：unit_price 必填（领域 requireUnitPrice，§11/§12）。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["sku", "quantity", "unit_price"],
       "properties": {
         "sku": { "type": "string", "minLength": 1 },
         "quantity": { "$ref": "#/$defs/quantity" },
@@ -198,6 +210,17 @@
         "service_terms": { "type": "object" },
         "payment_terms": { "type": "object" },
         "valid_until": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "term_set_priced": {
+      "description": "offer-like（Offer/CounterOffer）的 TermSet：items 要求 unit_price（§11/§12）。",
+      "type": "object",
+      "allOf": [{ "$ref": "#/$defs/term_set" }],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/line_item_priced" }
+        }
       }
     },
     "condition": {
@@ -305,7 +328,7 @@
       "properties": {
         "type": { "const": "offer" },
         "offer_id": { "$ref": "#/$defs/identifier" },
-        "terms": { "$ref": "#/$defs/term_set" }
+        "terms": { "$ref": "#/$defs/term_set_priced" }
       }
     },
     "counter_offer": {
@@ -317,7 +340,7 @@
         "type": { "const": "counter_offer" },
         "offer_id": { "$ref": "#/$defs/identifier" },
         "responding_to_offer_id": { "$ref": "#/$defs/identifier" },
-        "proposed_terms": { "$ref": "#/$defs/term_set" }
+        "proposed_terms": { "$ref": "#/$defs/term_set_priced" }
       }
     },
     "conditional_offer": {

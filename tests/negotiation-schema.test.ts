@@ -32,7 +32,7 @@ import {
 
 type Payload = object;
 
-/** 构造一个 KNP/1.0 Envelope（digest 可选，schema 不强制）。 */
+/** 构造一个 KNP/1.0 Envelope（digest 必填，schema 要求合法 sha256 格式）。 */
 function env(
   action: string,
   payload: Payload,
@@ -48,6 +48,7 @@ function env(
     action,
     created_at: TIMESTAMP,
     payload,
+    digest: `sha256:${"a".repeat(64)}`,
     ...overrides,
   };
 }
