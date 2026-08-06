@@ -9,6 +9,13 @@ export default [
   },
   js.configs.recommended,
   {
+    // Node tooling scripts (fixture generators) run under Node directly.
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
+  {
     files: ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"],
     languageOptions: {
       parser: tsParser,
