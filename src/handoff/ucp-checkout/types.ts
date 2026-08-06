@@ -127,6 +127,10 @@ export const UCP_CHECKOUT_FAILURE_CODES = [
   "network",
   "bad_status",
   "malformed",
+  // cart→checkout 路径的结构化码（cart_id 仅 business profile 宣告 cart capability 时可用）。
+  "cart_not_found",
+  "cart_not_actionable",
+  "cart_capability_unavailable",
 ] as const;
 export type UcpCheckoutFailureCode = (typeof UCP_CHECKOUT_FAILURE_CODES)[number];
 

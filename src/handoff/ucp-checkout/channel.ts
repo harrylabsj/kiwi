@@ -11,6 +11,9 @@
  * 行为保证（对齐工作包验收）：
  *   - createSession：HandoffPackage.agreed_terms → UCP line_items（Money minor
  *     units 直传；quantity 必须为正整数，否则 fail-closed invalid_quantity）；
+ *     opts.cart_id 提供 cart→checkout 转换路径——payload 只带 cart_id + reference
+ *     （不重复塞 line_items），本地记录 cart→checkout 链接（cartCheckoutLink），
+ *     同 cart_id + 同 terms 幂等短接；完成门禁不变（complete 仍需授权）；
  *   - getSession / updateSession（全量替换 PUT）/ cancelSession；
  *   - requestCompletion：先复用 WP1 完成门禁（completion.ts），通过后才发
  *     Complete，且只附 authorization 证据引用（不构造任何支付凭据）；
@@ -53,7 +56,7 @@ import {
 } from "./parse.js";
 import { validateTotals } from "./totals.js";
 import { UcpCheckoutHttpClient, type UcpCheckoutHttpError } from "./client.js";
-import { findCheckoutEndpoint } from "./endpoint.js";
+import { findCheckoutEndpoint, profileHasCartCapability } from "./endpoint.js";
 import type { UcpCheckoutFailureCode } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -63,9 +66,12 @@ import type { UcpCheckoutFailureCode } from "./types.js";
 /**
  * HandoffChannel 的异步投影：真实交易系统适配（UcpCheckoutChannel）用。
  * 操作名与 HandoffChannel 完全一致，返回 `Promise<UcpCheckoutResult>`。
+ *
+ * `createSession` 的 `opts.cart_id` 是 cart→checkout 转换路径（WP2 补全）：
+ * 带 cart_id 时 checkout payload 不再重复塞 line_items（business 使用 cart 内容）。
  */
 export interface AsyncHandoffChannel {
-  createSession(pkg: HandoffPackage): Promise<UcpCheckoutResult>;
+  createSession(pkg: HandoffPackage, opts?: { cart_id?: string }): Promise<UcpCheckoutResult>;
   getSession(ref: string): Promise<UcpCheckoutResult>;
   updateSession(ref: string, terms: TermSet): Promise<UcpCheckoutResult>;
   requestCompletion(ref: string, authorization: PaymentAuthorization): Promise<UcpCheckoutResult>;
@@ -97,16 +103,35 @@ export interface UcpCheckoutChannelOptions {
   now?: () => string;
   /** AP2 授权提供方；缺省 FailClosedAuthorizationProvider（完成一律拒绝）。 */
   authorizationProvider?: AuthorizationProvider;
+  /**
+   * cart_id 可用性标记（cart→checkout 路径）。缺省：profile 提供了且宣告
+   * `dev.ucp.shopping.cart` capability 时为 true；否则 false。显式传值可覆盖。
+   */
+  cartCapabilityVerified?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// cart→checkout 链接（本地记录，供 idempotent 转换与诊断）
+// ---------------------------------------------------------------------------
+
+export interface CartCheckoutLink {
+  cart_id: string;
+  session_ref: string;
+  checkout_status: UcpCheckoutStatus;
+  /** 转换时的 terms_digest；同 cart_id + 同 digest 二次转换短接为既有会话。 */
+  terms_digest: string;
+  checkout: UcpCheckoutSession;
+  created_at: string;
 }
 
 // ---------------------------------------------------------------------------
 // 内部辅助
 // ---------------------------------------------------------------------------
 
-type LineItemsResult = { ok: true; items: UcpCheckoutLineItem[] } | { ok: false; reason: string };
+export type LineItemsResult = { ok: true; items: UcpCheckoutLineItem[] } | { ok: false; reason: string };
 
 /** 把 KNP TermSet 映射为 UCP line_items：Money minor units 直传；quantity 必须为正整数。 */
-function mapTermsToLineItems(terms: TermSet): LineItemsResult {
+export function mapTermsToLineItems(terms: TermSet): LineItemsResult {
   const items: UcpCheckoutLineItem[] = [];
   for (const item of terms.items ?? []) {
     if (!Number.isInteger(item.quantity.value) || item.quantity.value <= 0) {
@@ -134,6 +159,26 @@ function buildSessionRequestBody(
 ): Record<string, unknown> {
   return {
     line_items: items,
+    reference: {
+      agreement_id: pkg.agreement_id,
+      negotiation_id: pkg.negotiation_id,
+      terms_digest: termsDigest,
+    },
+  };
+}
+
+/**
+ * cart→checkout 请求体：只带 cart_id + reference，不带 line_items。
+ * spec：business MUST 使用 cart 内容且 MUST 忽略 checkout payload 里的重叠字段；
+ * 我们不依赖对方忽略——自己就不发重叠字段。
+ */
+function buildCartSessionRequestBody(
+  pkg: HandoffPackage,
+  termsDigest: string,
+  cartId: string,
+): Record<string, unknown> {
+  return {
+    cart_id: cartId,
     reference: {
       agreement_id: pkg.agreement_id,
       negotiation_id: pkg.negotiation_id,
@@ -174,9 +219,13 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
   private readonly client: UcpCheckoutHttpClient;
   private readonly now: () => string;
   private readonly authorizationProvider: AuthorizationProvider;
+  /** cart_id 可用性（cart→checkout 路径；spec：cart_id 仅在 business profile 宣告 cart capability 时可用）。 */
+  private readonly cartCapabilityVerified: boolean;
   /** 本地投影：只服务完成门禁（terms/digest 绑定）；远端 checkout 是状态权威。 */
   private readonly sessions = new Map<string, HandoffSession>();
   private readonly checkouts = new Map<string, UcpCheckoutSession>();
+  /** cart→checkout 链接（cart_id → 最近一次转换的 checkout 投影）。 */
+  private readonly cartCheckoutLinks = new Map<string, CartCheckoutLink>();
 
   constructor(options: UcpCheckoutChannelOptions = {}) {
     const endpoint = resolveEndpoint(options);
@@ -202,6 +251,9 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     this.now = options.now ?? (() => new Date().toISOString());
     this.authorizationProvider =
       options.authorizationProvider ?? new FailClosedAuthorizationProvider();
+    this.cartCapabilityVerified =
+      options.cartCapabilityVerified ??
+      (options.profile !== undefined ? profileHasCartCapability(options.profile) : false);
   }
 
   /** 当前本地投影 session 数量（诊断用）。 */
@@ -209,9 +261,17 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     return this.sessions.size;
   }
 
+  /** cart_id → checkout 链接（cart→checkout 转换的本地记录；诊断/幂等用）。 */
+  cartCheckoutLink(cartId: string): CartCheckoutLink | undefined {
+    return this.cartCheckoutLinks.get(cartId);
+  }
+
   // -- HandoffChannel 异步投影 -------------------------------------------------
 
-  async createSession(pkg: HandoffPackage): Promise<UcpCheckoutResult> {
+  async createSession(
+    pkg: HandoffPackage,
+    opts: { cart_id?: string } = {},
+  ): Promise<UcpCheckoutResult> {
     if (!verifyHandoffPackageDigest(pkg)) {
       return this.failWith(
         "createSession rejected: package terms_digest verification failed",
@@ -234,6 +294,11 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
       );
     }
 
+    // cart→checkout 路径：payload 不再重复塞 line_items（business 使用 cart 内容）。
+    if (opts.cart_id !== undefined) {
+      return this.createSessionFromCart(pkg, terms, opts.cart_id);
+    }
+
     const mapped = mapTermsToLineItems(terms);
     if (!mapped.ok) {
       return this.failWith(`createSession rejected: ${mapped.reason}`, "invalid_quantity");
@@ -252,6 +317,64 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     }
     const checkout = this.withEffectiveExpiry(http.response, this.now());
     const session = this.storeSession(checkout, pkg, terms, pkg.terms_digest, "created");
+    const ctx: ResultContext = {
+      sessionRef: checkout.session_id,
+      session,
+      checkout,
+      checkoutStatus: checkout.status,
+    };
+    return this.resultForDecision(decideResponse(checkout), ctx);
+  }
+
+  /**
+   * cart→checkout 转换（idempotent，spec 事实）：
+   *   - cart_id 仅在 business profile 宣告 cart capability 时可用（构造期已验）；
+   *   - 同一 cart_id + 同一 terms_digest 已转换 → 短接返回既有本地会话（不重复网络写）；
+   *   - 否则发 Create Checkout（body = {cart_id, reference}，无 line_items）；
+   *     business 若已有 incomplete checkout 会返回既有会话而非新建——我们按成功处理
+   *     并记录 cart→checkout 链接（本地记录，不依赖 business 通知）。
+   * 完成门禁不变：requestCompletion 仍要求 HandoffPackage + 授权，cart 路径不产生绕过。
+   */
+  private async createSessionFromCart(
+    pkg: HandoffPackage,
+    terms: TermSet,
+    cartId: string,
+  ): Promise<UcpCheckoutResult> {
+    const existing = this.cartCheckoutLinks.get(cartId);
+    if (existing !== undefined && existing.terms_digest === pkg.terms_digest) {
+      const mirror = this.sessions.get(existing.session_ref);
+      if (mirror !== undefined) {
+        return {
+          status: "ok",
+          session_ref: existing.session_ref,
+          session: mirror,
+          continue_url: existing.checkout.continue_url,
+          checkout: existing.checkout,
+          checkout_status: existing.checkout.status,
+        };
+      }
+    }
+
+    if (!this.cartCapabilityVerified) {
+      return this.failWith(
+        "cart_id unavailable: business profile does not declare dev.ucp.shopping.cart",
+        "cart_capability_unavailable",
+      );
+    }
+
+    const http = await this.client.createSession(
+      buildCartSessionRequestBody(pkg, pkg.terms_digest, cartId),
+    );
+    if (http.kind === "error") return this.mapHttpError(http);
+    if (isUcpCheckoutErrorResponse(http.response)) {
+      return this.resultForDecision(decideResponse(http.response), {
+        messages: http.response.messages,
+      });
+    }
+
+    const checkout = this.withEffectiveExpiry(http.response, this.now());
+    const session = this.storeSession(checkout, pkg, terms, pkg.terms_digest, "created");
+    this.recordCartCheckoutLink(cartId, checkout, pkg.terms_digest);
     const ctx: ResultContext = {
       sessionRef: checkout.session_id,
       session,
@@ -531,6 +654,22 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
 
   private failWith(reason: string, code: UcpCheckoutFailureCode): UcpCheckoutResult {
     return { status: "fail_closed", reason, code, messages: [] };
+  }
+
+  /** 记录 cart→checkout 链接（幂等：同 cart_id 覆盖为最近一次转换）。 */
+  private recordCartCheckoutLink(
+    cartId: string,
+    checkout: UcpCheckoutSession,
+    termsDigest: string,
+  ): void {
+    this.cartCheckoutLinks.set(cartId, {
+      cart_id: cartId,
+      session_ref: checkout.session_id,
+      checkout_status: checkout.status,
+      terms_digest: termsDigest,
+      checkout,
+      created_at: this.now(),
+    });
   }
 
   private mapHttpError(err: UcpCheckoutHttpError): UcpCheckoutResult {

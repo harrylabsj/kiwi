@@ -395,3 +395,20 @@ export function decideResponse(response: UcpCheckoutResponse): CheckoutDecision 
   // （recoverable → retryable，requires_* → requires_user，无可操作 → ok）。
   return decision;
 }
+
+// ---------------------------------------------------------------------------
+// 复用导出（同包 cart-parse 用；cart 实体与 checkout 同构，不另起平行实现）
+// ---------------------------------------------------------------------------
+
+export {
+  fail,
+  parseErrorResponse as parseUcpErrorEnvelope,
+  parseLineItems,
+  parseLinks,
+  parseMessages,
+  parseTotals,
+  preserveUnknown,
+  requireIsoTimestamp,
+  requireNonEmptyString,
+  requireObject,
+};
