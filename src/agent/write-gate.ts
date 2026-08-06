@@ -15,6 +15,7 @@
  */
 
 import type { AgentProfile } from "../config/profile.js";
+import type { OperatorApprovalStatusSource } from "../handoff/operator-approval.js";
 import type { AgentMode } from "./mode.js";
 import {
   executeApprovedCandidate,
@@ -49,6 +50,25 @@ export interface WriteGateDeps {
       execute: (args: Record<string, unknown>) => Promise<unknown>;
     },
   ) => void;
+}
+
+/**
+ * Adapt a WriteApprovalCandidateStore into the handoff operator-approval status
+ * seam. The bridge (OperatorApprovalAuthorizationProvider) consults this so an
+ * approval that is revoked / superseded / expired in the candidate store also
+ * invalidates any checkout authorization minted from it. Unknown candidates
+ * surface as `undefined` (fail closed).
+ */
+export function writeApprovalStatusSource(
+  store: WriteApprovalCandidateStore,
+): OperatorApprovalStatusSource {
+  return {
+    getApprovalState(candidateId) {
+      const candidate = store.get(candidateId);
+      if (candidate === undefined) return undefined;
+      return { status: candidate.status, expires_at: candidate.expires_at };
+    },
+  };
 }
 
 export interface WriteCandidateInput {
