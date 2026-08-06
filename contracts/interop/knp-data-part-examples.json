@@ -1,0 +1,243 @@
+{
+  "schema": "binding-rc1/data-part-examples/v1",
+  "generated_by": "kiwi dist",
+  "examples": [
+    {
+      "label": "counter_offer",
+      "kind": "message",
+      "message": {
+        "role": "agent",
+        "messageId": "msg_01H5V8KXZqJ7Qp3mN2B6A",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "If we order 200 units, we propose CNY 835.00 per unit."
+          },
+          {
+            "kind": "data",
+            "data": {
+              "knp_envelope": {
+                "capability": "com.harrylabsj.kiwi.shopping.negotiation",
+                "protocol_version": "1.0",
+                "negotiation_id": "neg_01H5V8KXZqJ7Qp3mN2B6A",
+                "exchange_id": "ex_01H5V8KXZqJ7Qp3mN2B6A",
+                "created_at": "2026-08-05T12:00:00Z",
+                "message_id": "msg_01H5V8KXZqJ7Qp3mN2B6A",
+                "in_reply_to": "msg_00H5V8KXZqJ7Qp3mN2B6A",
+                "actor": "buyer",
+                "action": "counter_offer",
+                "payload": {
+                  "type": "counter_offer",
+                  "offer_id": "off_02H5V8KXZqJ7Qp3mN2B6A",
+                  "responding_to_offer_id": "off_01H5V8KXZqJ7Qp3mN2B6A",
+                  "proposed_terms": {
+                    "items": [
+                      {
+                        "sku": "SKU-001",
+                        "quantity": {
+                          "value": 200,
+                          "unit": "piece"
+                        },
+                        "unit_price": {
+                          "currency": "CNY",
+                          "amount_minor": 83500
+                        }
+                      }
+                    ]
+                  }
+                },
+                "public_message": "If we order 200 units, we propose CNY 835.00 per unit.",
+                "digest": "sha256:87517fc5c7d13be7abba1e02349632e891aa1062da9339e90dd6249c0e985295"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "offer",
+      "kind": "message",
+      "message": {
+        "role": "agent",
+        "messageId": "msg_02H5V8KXZqJ7Qp3mN2B6A",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "We offer CNY 850.00 per unit, delivery before 2026-08-20."
+          },
+          {
+            "kind": "data",
+            "data": {
+              "knp_envelope": {
+                "capability": "com.harrylabsj.kiwi.shopping.negotiation",
+                "protocol_version": "1.0",
+                "negotiation_id": "neg_01H5V8KXZqJ7Qp3mN2B6A",
+                "exchange_id": "ex_01H5V8KXZqJ7Qp3mN2B6A",
+                "created_at": "2026-08-05T12:00:00Z",
+                "message_id": "msg_02H5V8KXZqJ7Qp3mN2B6A",
+                "in_reply_to": "msg_00H5V8KXZqJ7Qp3mN2B6A",
+                "actor": "merchant",
+                "action": "offer",
+                "payload": {
+                  "type": "offer",
+                  "offer_id": "off_01H5V8KXZqJ7Qp3mN2B6A",
+                  "terms": {
+                    "items": [
+                      {
+                        "sku": "SKU-001",
+                        "quantity": {
+                          "value": 200,
+                          "unit": "piece"
+                        },
+                        "unit_price": {
+                          "currency": "CNY",
+                          "amount_minor": 85000
+                        }
+                      }
+                    ],
+                    "fulfillment_terms": {
+                      "delivery_before": "2026-08-20T18:00:00Z"
+                    },
+                    "valid_until": "2026-08-06T12:00:00Z"
+                  }
+                },
+                "public_message": "We offer CNY 850.00 per unit, delivery before 2026-08-20.",
+                "digest": "sha256:99dfb819f5668835005582cfb1db4992d5bd13fa9059e4b2298dda1c466b5742"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "inquiry",
+      "kind": "message",
+      "message": {
+        "role": "agent",
+        "messageId": "msg_03H5V8KXZqJ7Qp3mN2B6A",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "请问这款商品的预计交付时间？"
+          },
+          {
+            "kind": "data",
+            "data": {
+              "knp_envelope": {
+                "capability": "com.harrylabsj.kiwi.shopping.negotiation",
+                "protocol_version": "1.0",
+                "negotiation_id": "neg_01H5V8KXZqJ7Qp3mN2B6A",
+                "exchange_id": "ex_01H5V8KXZqJ7Qp3mN2B6A",
+                "created_at": "2026-08-05T12:00:00Z",
+                "message_id": "msg_03H5V8KXZqJ7Qp3mN2B6A",
+                "actor": "buyer",
+                "action": "inquiry",
+                "payload": {
+                  "type": "inquiry",
+                  "subject": {
+                    "sku": "SKU-001"
+                  },
+                  "questions": [
+                    {
+                      "code": "delivery.estimated_date"
+                    }
+                  ]
+                },
+                "digest": "sha256:a08539767c6fc46ddc8111fd0b1f320e85978dd164c4ed7bf592646305e91736"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "accept_nonbinding",
+      "kind": "message",
+      "message": {
+        "role": "agent",
+        "messageId": "msg_04H5V8KXZqJ7Qp3mN2B6A",
+        "parts": [
+          {
+            "kind": "data",
+            "data": {
+              "knp_envelope": {
+                "capability": "com.harrylabsj.kiwi.shopping.negotiation",
+                "protocol_version": "1.0",
+                "negotiation_id": "neg_01H5V8KXZqJ7Qp3mN2B6A",
+                "exchange_id": "ex_01H5V8KXZqJ7Qp3mN2B6A",
+                "created_at": "2026-08-05T12:00:00Z",
+                "message_id": "msg_04H5V8KXZqJ7Qp3mN2B6A",
+                "in_reply_to": "msg_01H5V8KXZqJ7Qp3mN2B6A",
+                "actor": "buyer",
+                "action": "accept_nonbinding",
+                "payload": {
+                  "type": "accept_nonbinding",
+                  "offer_id": "off_01H5V8KXZqJ7Qp3mN2B6A",
+                  "terms_digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+                },
+                "digest": "sha256:0231490ea2ff95b8d9a230f2dfb8901ade73f56f0e1f71921bed4157b89c69da"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "task_result",
+      "kind": "task",
+      "task": {
+        "taskId": "task_01H5V8KXZqJ7Qp3mN2B6A",
+        "status": {
+          "state": "completed",
+          "message": {
+            "role": "agent",
+            "messageId": "msg_05H5V8KXZqJ7Qp3mN2B6A",
+            "parts": [
+              {
+                "kind": "data",
+                "data": {
+                  "knp_envelope": {
+                    "capability": "com.harrylabsj.kiwi.shopping.negotiation",
+                    "protocol_version": "1.0",
+                    "negotiation_id": "neg_01H5V8KXZqJ7Qp3mN2B6A",
+                    "exchange_id": "ex_01H5V8KXZqJ7Qp3mN2B6A",
+                    "created_at": "2026-08-05T12:00:00Z",
+                    "message_id": "msg_05H5V8KXZqJ7Qp3mN2B6A",
+                    "in_reply_to": "msg_01H5V8KXZqJ7Qp3mN2B6A",
+                    "actor": "merchant",
+                    "action": "offer",
+                    "payload": {
+                      "type": "offer",
+                      "offer_id": "off_01H5V8KXZqJ7Qp3mN2B6A",
+                      "terms": {
+                        "items": [
+                          {
+                            "sku": "SKU-001",
+                            "quantity": {
+                              "value": 200,
+                              "unit": "piece"
+                            },
+                            "unit_price": {
+                              "currency": "CNY",
+                              "amount_minor": 85000
+                            }
+                          }
+                        ],
+                        "fulfillment_terms": {
+                          "delivery_before": "2026-08-20T18:00:00Z"
+                        },
+                        "valid_until": "2026-08-06T12:00:00Z"
+                      }
+                    },
+                    "public_message": "异步任务的 offer 结果。",
+                    "digest": "sha256:faf538b5cd7eff5e2e9eae85774d9f0ab98fe317dff7a52a5fb57a5d3d94be82"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
