@@ -8,7 +8,7 @@
  * `submit_negotiation_decision` is a write. It reuses the existing negotiation
  * runtime's claim -> (buyer local policy gate) -> gateway policy gate ->
  * settlement path — it never bypasses the strategy gates. Like every write it
- * is routed through the ActionCandidate approval gate (§16): supervised
+ * is routed through the WriteApprovalCandidate approval gate (§16): supervised
  * requires /approve, autopilot auto-executes within HardPolicy, manual is
  * advice-only. Execution re-reads the marketplace routing state; if the
  * conversation moved on, the old approval is stale.
@@ -28,7 +28,7 @@ import {
 import { checkBuyerLocalPolicy, localBuyerPolicyResult } from "../runtime/buyer-policy.js";
 import { submitIdempotencyKey } from "../runtime/tools.js";
 import type { AgentMode } from "./mode.js";
-import type { ActionCandidateStore } from "./merchant/action-candidate.js";
+import type { WriteApprovalCandidateStore } from "./merchant/action-candidate.js";
 import type { CredentialBroker } from "./merchant/credential-broker.js";
 import { requireScopeCredential } from "./merchant/credential-broker.js";
 import type { NegotiationSnapshot } from "../negotiation/types.js";
@@ -48,7 +48,7 @@ export interface NegotiationChatDeps {
   profile: AgentProfile;
   commerceClient: CommerceClient;
   broker: CredentialBroker;
-  approvals: ActionCandidateStore;
+  approvals: WriteApprovalCandidateStore;
   mode: () => AgentMode;
   now: () => string;
   /** Register /approve execution hooks for pending candidates. */

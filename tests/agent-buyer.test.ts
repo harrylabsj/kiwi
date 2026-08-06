@@ -26,7 +26,7 @@ import { TaskScheduler } from "../src/agent/buyer/scheduler.js";
 import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
 import { BuyerTaskError, type BuyerTask } from "../src/agent/buyer/types.js";
 import { buildBuyerTools } from "../src/agent/buyer/buyer-tools.js";
-import { ActionCandidateStore } from "../src/agent/merchant/action-candidate.js";
+import { WriteApprovalCandidateStore } from "../src/agent/merchant/action-candidate.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { testBuyerProfile } from "./helpers.js";
 
@@ -543,7 +543,7 @@ function toolsWithMode(
   db: DatabaseSync,
   connector = new FakeCommerceConnector([]),
 ) {
-  const approvals = new ActionCandidateStore({ db, principalId: PRINCIPAL, now: () => T0 });
+  const approvals = new WriteApprovalCandidateStore({ db, principalId: PRINCIPAL, now: () => T0 });
   const hooks = new Map<string, unknown>();
   const tools = buildBuyerTools({
     store,

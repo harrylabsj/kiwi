@@ -265,7 +265,7 @@ export async function runUp(dir: string, options?: UpOptions): Promise<UpResult>
   const ctx = loadInstance(dir);
   if (ctx.config.mode !== "managed-local") {
     throw new SupervisorError(
-      `mode ${ctx.config.mode} is not managed by kiwi 0.3.0: start the gateway yourself and use kiwi agent run / doctor`,
+      `mode ${ctx.config.mode} is not managed by kiwi 0.5.0: start the gateway yourself and use kiwi agent run / doctor`,
     );
   }
 

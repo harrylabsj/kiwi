@@ -259,7 +259,7 @@ export class FakeCommerceClient implements CommerceClient {
     return Promise.resolve({
       ok: true,
       service: "kiwi-fake-marketplace",
-      version: "0.3.0",
+      version: "0.5.0",
       details: { storage: "in-memory" },
     });
   }

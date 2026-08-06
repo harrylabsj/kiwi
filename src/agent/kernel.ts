@@ -28,7 +28,7 @@ import { buildMemoryTools } from "./chat-tools.js";
 import type { CommerceConnector } from "./connector/types.js";
 import { AGENT_MODES, DEFAULT_AGENT_MODE, isAgentMode, type AgentMode } from "./mode.js";
 import {
-  ActionCandidateStore,
+  WriteApprovalCandidateStore,
   executeApprovedCandidate,
   type ApprovalExecutionResult,
 } from "./merchant/action-candidate.js";
@@ -45,7 +45,7 @@ import { openMainSession } from "./session.js";
 import { baseSystemPrompt, renderMemoryBriefing } from "./system-prompt.js";
 import type { DatabaseSync } from "node:sqlite";
 
-/** Execution hooks for a pending ActionCandidate (process-lifetime only). */
+/** Execution hooks for a pending WriteApprovalCandidate (process-lifetime only). */
 export interface PendingActionHooks {
   readPreconditions: () => Promise<Record<string, unknown>> | Record<string, unknown>;
   execute: (args: Record<string, unknown>) => Promise<unknown>;
@@ -156,7 +156,7 @@ export class AgentKernel {
   private closed = false;
   private readonly taskStore?: BuyerTaskStore;
   private readonly scheduler?: TaskScheduler;
-  private readonly approvals?: ActionCandidateStore;
+  private readonly approvals?: WriteApprovalCandidateStore;
   private readonly commerceClient?: CommerceClient;
   private readonly merchantClient?: MerchantClient;
   private readonly broker?: CredentialBroker;
@@ -180,7 +180,7 @@ export class AgentKernel {
     harness: AgentHarness;
     taskStore?: BuyerTaskStore;
     scheduler?: TaskScheduler;
-    approvals?: ActionCandidateStore;
+    approvals?: WriteApprovalCandidateStore;
     commerceClient?: CommerceClient;
     merchantClient?: MerchantClient;
     broker?: CredentialBroker;
@@ -236,7 +236,7 @@ export class AgentKernel {
       pendingHooks.set(id, hooks);
     };
 
-    const approvals = new ActionCandidateStore({ db, principalId: principal.principal_id, now: clock });
+    const approvals = new WriteApprovalCandidateStore({ db, principalId: principal.principal_id, now: clock });
     let taskStore: BuyerTaskStore | undefined;
     let scheduler: TaskScheduler | undefined;
     let buyerTools: ReturnType<typeof buildBuyerTools> = [];
@@ -329,8 +329,8 @@ export class AgentKernel {
     return this.taskStore;
   }
 
-  /** ActionCandidate approval store (both roles; undefined only if unopened). */
-  get actionCandidates(): ActionCandidateStore | undefined {
+  /** WriteApprovalCandidate approval store (both roles; undefined only if unopened). */
+  get actionCandidates(): WriteApprovalCandidateStore | undefined {
     return this.approvals;
   }
 
@@ -356,14 +356,14 @@ export class AgentKernel {
     return { ok: true };
   }
 
-  /** Pending ActionCandidates awaiting /approve (fail closed on expiry). */
-  listPendingApprovals(): ReturnType<ActionCandidateStore["listPending"]> {
+  /** Pending WriteApprovalCandidates awaiting /approve (fail closed on expiry). */
+  listPendingApprovals(): ReturnType<WriteApprovalCandidateStore["listPending"]> {
     if (this.approvals === undefined) return [];
     return this.approvals.listPending();
   }
 
   /**
-   * Approve + execute a pending ActionCandidate. Execution re-reads the
+   * Approve + execute a pending WriteApprovalCandidate. Execution re-reads the
    * preconditions and re-hashes them (§16): a stale or expired approval is
    * superseded, never executed. A candidate left over from a previous process
    * (no live execution hooks) is expired, matching operator-plane recovery.
@@ -400,7 +400,7 @@ export class AgentKernel {
     return executeApprovedCandidate(this.approvals, candidateId, hooks);
   }
 
-  /** Reject a pending/advice-only ActionCandidate. Never executes. */
+  /** Reject a pending/advice-only WriteApprovalCandidate. Never executes. */
   rejectCandidate(candidateId: string): { ok: boolean; error?: string } {
     if (this.approvals === undefined) return { ok: false, error: "审批存储不可用" };
     const candidate = this.approvals.get(candidateId);

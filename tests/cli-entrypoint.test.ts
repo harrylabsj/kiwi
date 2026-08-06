@@ -39,7 +39,7 @@ describe.skipIf(!existsSync(DIST_CLI))("CLI entrypoint guard", () => {
 
       const version = run([link, "--version"]);
       expect(version.status).toBe(0);
-      expect(version.stdout).toBe("kiwi 0.3.0\n");
+      expect(version.stdout).toBe("kiwi 0.5.0\n");
 
       const help = run([link, "--help"]);
       expect(help.status).toBe(0);
@@ -52,7 +52,7 @@ describe.skipIf(!existsSync(DIST_CLI))("CLI entrypoint guard", () => {
   it("--version also works on the real path directly", () => {
     const version = run([DIST_CLI, "--version"]);
     expect(version.status).toBe(0);
-    expect(version.stdout).toBe("kiwi 0.3.0\n");
+    expect(version.stdout).toBe("kiwi 0.5.0\n");
   });
 
   it("importing the CLI module has no side effects", async () => {

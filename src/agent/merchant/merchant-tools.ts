@@ -3,7 +3,7 @@
  *
  * Read-only tools surface the merchant's own catalog, inventory, incoming
  * consultations and human-review queue. Write tools (product/inventory/listing
- * changes) always produce a content-hashed ActionCandidate and route by mode
+ * changes) always produce a content-hashed WriteApprovalCandidate and route by mode
  * through the shared write gate (§16). The model only sees tools — catalog and
  * inventory tokens live in the CredentialBroker and are attached per-request.
  *
@@ -19,7 +19,7 @@ import type { AgentProfile } from "../../config/profile.js";
 import type { CommerceClient } from "../../commerce/types.js";
 import type { AgentMode } from "../mode.js";
 import { buildNegotiationChatTools, writeGateText } from "../negotiation-chat.js";
-import type { ActionCandidateStore } from "./action-candidate.js";
+import type { WriteApprovalCandidateStore } from "./action-candidate.js";
 import type { CredentialBroker } from "./credential-broker.js";
 import { requireScopeCredential } from "./credential-broker.js";
 import type {
@@ -152,7 +152,7 @@ export interface MerchantToolDeps {
   merchantClient: MerchantClient;
   commerceClient: CommerceClient;
   broker: CredentialBroker;
-  approvals: ActionCandidateStore;
+  approvals: WriteApprovalCandidateStore;
   mode: () => AgentMode;
   now: () => string;
   /** Register /approve execution hooks for pending candidates. */

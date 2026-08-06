@@ -1,7 +1,7 @@
 # Merchant profile — real model (OpenAI-compatible) against a local shopping-cli.
 # Requires: SHOPPING_AGENT_TOKEN and MODEL_API_KEY set in the environment.
 # Secrets are NEVER written into this file — only env var names.
-runtime_version: 0.3.0
+runtime_version: 0.5.0
 protocol_version: shopping.negotiation/0.1
 agent_id: merchant-agent:merchant-001
 role: merchant

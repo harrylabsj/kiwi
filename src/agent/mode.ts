@@ -3,7 +3,7 @@
  *
  * Reuses the operator control-plane's three modes. Writes route by mode:
  *   manual      -> advice only, never executes;
- *   supervised  -> every write creates a content-hashed ActionCandidate that
+ *   supervised  -> every write creates a content-hashed WriteApprovalCandidate that
  *                  the operator must approve (/approve) before execution;
  *   autopilot   -> writes within HardPolicy auto-execute; risk escalations
  *                  still require approval.
