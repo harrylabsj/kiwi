@@ -100,10 +100,7 @@ export function internalServerError(): ServerProtocolError {
  */
 export function authError(
   protocolCode:
-    | "authentication_required"
-    | "authorization_failed"
-    | "identity_rejected"
-    | "replay_detected",
+    "authentication_required" | "authorization_failed" | "identity_rejected" | "replay_detected",
 ): {
   httpStatus: number;
   body: JsonRpcErrorBody;
@@ -136,6 +133,30 @@ export function authError(
       data: { protocol_code: protocolCode },
     },
   };
+}
+
+/**
+ * 限流拒绝（WP3 §31）：走既有 KNP 协议错误载体（-32050），protocol_code =
+ * rate_limited，data 携带 retry_after（秒）对齐 UCP 429/503 的 backoff 语义。
+ */
+export function rateLimited(retryAfterSeconds: number, detail: string): ServerProtocolError {
+  return new ServerProtocolError({
+    code: JSONRPC_CODES.KNP_PROTOCOL_ERROR,
+    message: detail,
+    data: { protocol_code: "rate_limited", retry_after: retryAfterSeconds, detail },
+  });
+}
+
+/** 取任意异常的 protocol_code（错误表统一读取口；未知返回 undefined）。 */
+export function protocolCodeOf(err: unknown): ProtocolErrorCode | undefined {
+  if (err instanceof ServerProtocolError) {
+    const data = err.body.data as { protocol_code?: unknown } | undefined;
+    if (data !== undefined && typeof data.protocol_code === "string") {
+      return data.protocol_code as ProtocolErrorCode;
+    }
+  }
+  if (err instanceof NegotiationValidationError) return err.code;
+  return undefined;
 }
 
 /** body 超限（HTTP 层使用）。 */

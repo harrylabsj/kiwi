@@ -22,6 +22,7 @@ import type {
   CounterpartyProfile,
   RemoteState,
 } from "../../counterparty/index.js";
+import type { IdempotencyStore } from "../idempotency/index.js";
 import type { LedgerHighWaterMark } from "../ledger/index.js";
 import type { NegotiationPhase } from "../state/phase.js";
 
@@ -61,6 +62,12 @@ export interface RecoveryDeps {
   ledger: import("../ledger/index.js").LedgerStore;
   /** negotiation_id ↔ 远端 contextId/taskId（§9.2）。 */
   contextMap: import("../context-map/index.js").ContextMapStore;
+  /**
+   * 协议幂等（§20 / §23）。缺省装配通道时注入：恢复重放沿用原
+   * (sender_identity, message_id) 幂等键 → check() 返回 replayed → 通道不重复
+   * 落 message_sent（§25.2）。注入 openChannel 时由注入方负责。
+   */
+  idempotency?: IdempotencyStore;
   /** 对端通道档案解析（第 3 步）。 */
   resolveCounterparty: CounterpartyResolver;
   /** 打开通道（第 3 步后）；缺省用 profile 首选候选。 */

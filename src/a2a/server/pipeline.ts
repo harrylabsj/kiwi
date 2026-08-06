@@ -30,9 +30,13 @@ import { extractKnpEnvelope, parseInboundMessage } from "./inbound-message.js";
 import {
   fromNegotiationError,
   internalServerError,
+  protocolCodeOf,
   protocolError,
+  rateLimited,
   schemaInvalid,
 } from "./errors.js";
+import { A2AServerThrottle, domainFromUcpProfile, type ThrottleRequest } from "./throttle.js";
+import type { TrustLevel } from "../../trust/identity/trust-policy.js";
 import { isKnownTaskState, newArtifactId, newTaskId, TaskRegistry } from "./task-registry.js";
 import type {
   InboundNegotiationContext,
@@ -47,6 +51,8 @@ export interface InboundPipelineOptions {
   tasks: TaskRegistry;
   now: () => string;
   logError: (message: string, err: unknown) => void;
+  /** WP3 §31 反滥用限流（可选；配置后判定在认证之后、schema 校验之前）。 */
+  throttle?: A2AServerThrottle;
 }
 
 export interface SendMessageCaller {
@@ -54,6 +60,12 @@ export interface SendMessageCaller {
   remoteAddress?: string;
   /** 对端 UCP-Agent 头声明的 platform profile URI（WP3 §25.1，可选）。 */
   ucpAgentProfile?: string;
+  /** 对端 trust level（throttle 档位映射，缺省 T0）。 */
+  trustLevel?: TrustLevel;
+  /** 身份是否经过验签（缺省 false → throttle 按 remoteAddress 且限额更严）。 */
+  identityVerified?: boolean;
+  /** WP1 指纹变更短期降档信号。 */
+  fingerprintChanged?: boolean;
 }
 
 export interface SendMessageInput {
@@ -169,6 +181,7 @@ export class InboundPipeline {
   private readonly tasks: TaskRegistry;
   private readonly now: () => string;
   private readonly logError: (message: string, err: unknown) => void;
+  private readonly throttle: A2AServerThrottle | undefined;
 
   constructor(options: InboundPipelineOptions) {
     this.handler = options.handler;
@@ -177,136 +190,179 @@ export class InboundPipeline {
     this.tasks = options.tasks;
     this.now = options.now;
     this.logError = options.logError;
+    this.throttle = options.throttle;
   }
 
-  /** message/send 入站处理（校验 → 幂等 → handler → Ledger → 幂等 commit）。 */
+  private toThrottleRequest(caller: SendMessageCaller): ThrottleRequest {
+    return {
+      identity: caller.senderIdentity,
+      remoteAddress: caller.remoteAddress,
+      domain: domainFromUcpProfile(caller.ucpAgentProfile),
+      identityVerified: caller.identityVerified,
+      trustLevel: caller.trustLevel,
+      fingerprintChanged: caller.fingerprintChanged,
+    };
+  }
+
+  /** message/send 入站处理（限流 → 校验 → 幂等 → handler → Ledger → 幂等 commit）。 */
   async sendMessage(
     input: SendMessageInput,
     caller: SendMessageCaller,
   ): Promise<SendMessageResult> {
-    // 1-2. A2A Message schema + KNP envelope 提取（untrusted，fail-closed）。
-    const message = parseInboundMessage(input.message);
-    const contextId =
-      input.contextId === undefined ? message.contextId : requireContextId(input.contextId);
-    const envelopeRaw = extractKnpEnvelope(message);
+    // 0. WP3 §31 反滥用：认证之后、schema 校验之前的限流判定（fail-closed）。
+    const th = this.throttle;
+    const tReq = th === undefined ? undefined : this.toThrottleRequest(caller);
+    if (th !== undefined && tReq !== undefined) {
+      const decision = th.check(tReq);
+      if (!decision.allowed) {
+        throw rateLimited(decision.retryAfterSeconds, decision.reason);
+      }
+      const slot = th.enterTask(tReq);
+      if (!slot.ok) {
+        throw rateLimited(slot.retryAfterSeconds, slot.reason);
+      }
+    }
 
-    // 3. KNP envelope schema / version / action-payload 校验。
-    let envelope: NegotiationEnvelope;
     try {
-      envelope = validateEnvelope(envelopeRaw);
-    } catch (err) {
-      if (err instanceof NegotiationValidationError) throw fromNegotiationError(err);
-      throw err;
-    }
+      // 1-2. A2A Message schema + KNP envelope 提取（untrusted，fail-closed）。
+      const message = parseInboundMessage(input.message);
+      const contextId =
+        input.contextId === undefined ? message.contextId : requireContextId(input.contextId);
+      const envelopeRaw = extractKnpEnvelope(message);
 
-    // 4. wire digest 一致性（完整性，§19.2）。
-    if (!verifyEnvelopeDigest(envelope)) {
-      throw schemaInvalid("envelope digest mismatch (wire digest does not match content)");
-    }
-
-    const senderIdentity = caller.senderIdentity;
-    const key = idempotencyKey(senderIdentity, envelope.message_id);
-
-    return withKeyLock(key, async () => {
-      // 5. 幂等三态判定（锁内重新判定，防 check/commit 并发窗口）。
-      const decision = this.idempotency.check({
-        sender_identity: senderIdentity,
-        message_id: envelope.message_id,
-        digest: envelope.digest,
-      });
-      if (decision.status === "replayed") {
-        return { task: outcomeToTask(decision.record.outcome) };
-      }
-      if (decision.status === "conflict") {
-        throw protocolError(
-          "idempotency_conflict",
-          `message_id ${envelope.message_id} already processed with a different digest (replay conflict, §20.3)`,
-        );
-      }
-
-      // 6. 路由给 NegotiationHandler。
-      const taskId = newTaskId();
-      const handlerCtx: InboundNegotiationContext = {
-        envelope,
-        message,
-        taskId,
-        contextId,
-        senderIdentity,
-        remoteAddress: caller.remoteAddress,
-        ucpAgentProfile: caller.ucpAgentProfile,
-      };
-      let handlerResult: NegotiationHandlerResult;
+      // 3. KNP envelope schema / version / action-payload 校验。
+      let envelope: NegotiationEnvelope;
       try {
-        handlerResult = await this.handler.handle(handlerCtx);
+        envelope = validateEnvelope(envelopeRaw);
       } catch (err) {
-        this.logError(`negotiation handler "${this.handler.name}" failed`, err);
-        throw internalServerError();
-      }
-
-      if (handlerResult.kind === "error") {
-        throw protocolError(handlerResult.protocolCode, handlerResult.message);
-      }
-
-      // 7. 生成任务 → 落 Ledger → 幂等 commit（证据交叉引用）。
-      const task = buildTask(handlerResult, handlerCtx, this.now);
-      this.tasks.set(taskId, task);
-
-      let ledgerEvent: LedgerEvent;
-      try {
-        ledgerEvent = this.ledger.append({
-          event_kind: "message_received",
-          negotiation_id: envelope.negotiation_id,
-          exchange_id: envelope.exchange_id,
-          message_id: envelope.message_id,
-          in_reply_to: envelope.in_reply_to,
-          remote_context_id: contextId,
-          remote_task_id: taskId,
-          identity: {
-            sender_identity: senderIdentity,
-            counterparty_identity: caller.remoteAddress ?? senderIdentity,
-            actor: envelope.actor,
-          },
-          capability: {
-            capability: envelope.capability,
-            protocol_version: envelope.protocol_version,
-          },
-          wire_digest: envelope.digest,
-          wire_payload: envelope as unknown as Record<string, unknown>,
-          outcome: { kind: "ok", result: { task_id: taskId, task_state: task.status.state } },
-          occurred_at: envelope.created_at,
-        });
-      } catch (err) {
-        if (err instanceof LedgerError && err.code === "ledger_forbidden_content") {
-          // 内容策略违规：envelope 携带 ledger 不得记录的保留键（§28/§36-5）。
-          throw schemaInvalid("envelope contains reserved content that must not be recorded");
-        }
-        this.logError("ledger append failed", err);
-        throw internalServerError();
-      }
-
-      try {
-        this.idempotency.commit({
-          sender_identity: senderIdentity,
-          message_id: envelope.message_id,
-          digest: envelope.digest,
-          negotiation_id: envelope.negotiation_id,
-          outcome: { kind: "ok", result: { task } },
-          ledger_event_id: ledgerEvent.event_id,
-          ledger_event_digest: ledgerEvent.event_digest,
-        });
-      } catch (err) {
-        // commit 的并发兜底（异 digest）——本锁内不应发生；仍 fail-closed。
-        if (err instanceof IdempotencyConflictError) {
-          throw protocolError(
-            "idempotency_conflict",
-            `message_id ${envelope.message_id} already processed with a different digest`,
-          );
-        }
+        if (err instanceof NegotiationValidationError) throw fromNegotiationError(err);
         throw err;
       }
 
-      return { task, ledgerEvent };
-    });
+      // 4. wire digest 一致性（完整性，§19.2）。
+      if (!verifyEnvelopeDigest(envelope)) {
+        throw schemaInvalid("envelope digest mismatch (wire digest does not match content)");
+      }
+
+      const senderIdentity = caller.senderIdentity;
+      const key = idempotencyKey(senderIdentity, envelope.message_id);
+
+      return await withKeyLock(key, async () => {
+        // 5. 幂等三态判定（锁内重新判定，防 check/commit 并发窗口）。
+        const decision = this.idempotency.check({
+          sender_identity: senderIdentity,
+          message_id: envelope.message_id,
+          digest: envelope.digest,
+        });
+        if (decision.status === "replayed") {
+          return { task: outcomeToTask(decision.record.outcome) };
+        }
+        if (decision.status === "conflict") {
+          throw protocolError(
+            "idempotency_conflict",
+            `message_id ${envelope.message_id} already processed with a different digest (replay conflict, §20.3)`,
+          );
+        }
+
+        // 6. 路由给 NegotiationHandler。
+        const taskId = newTaskId();
+        const handlerCtx: InboundNegotiationContext = {
+          envelope,
+          message,
+          taskId,
+          contextId,
+          senderIdentity,
+          remoteAddress: caller.remoteAddress,
+          ucpAgentProfile: caller.ucpAgentProfile,
+        };
+        let handlerResult: NegotiationHandlerResult;
+        try {
+          handlerResult = await this.handler.handle(handlerCtx);
+        } catch (err) {
+          this.logError(`negotiation handler "${this.handler.name}" failed`, err);
+          throw internalServerError();
+        }
+
+        if (handlerResult.kind === "error") {
+          throw protocolError(handlerResult.protocolCode, handlerResult.message);
+        }
+
+        // 7. 生成任务 → 落 Ledger → 幂等 commit（证据交叉引用）。
+        const task = buildTask(handlerResult, handlerCtx, this.now);
+        this.tasks.set(taskId, task);
+
+        let ledgerEvent: LedgerEvent;
+        try {
+          ledgerEvent = this.ledger.append({
+            event_kind: "message_received",
+            negotiation_id: envelope.negotiation_id,
+            exchange_id: envelope.exchange_id,
+            message_id: envelope.message_id,
+            in_reply_to: envelope.in_reply_to,
+            remote_context_id: contextId,
+            remote_task_id: taskId,
+            identity: {
+              sender_identity: senderIdentity,
+              // 验签身份已给出时，counterparty 侧优先用验签身份（与 buyer 侧
+              // 记录对称，基线 §22）；无验签身份（匿名/loopback/静态 bearer）才
+              // 回退 socket 地址 —— 此时身份不足以标识对端，地址是仅有的区分面。
+              counterparty_identity:
+                caller.identityVerified === true
+                  ? senderIdentity
+                  : (caller.remoteAddress ?? senderIdentity),
+              actor: envelope.actor,
+            },
+            capability: {
+              capability: envelope.capability,
+              protocol_version: envelope.protocol_version,
+            },
+            wire_digest: envelope.digest,
+            wire_payload: envelope as unknown as Record<string, unknown>,
+            outcome: { kind: "ok", result: { task_id: taskId, task_state: task.status.state } },
+            occurred_at: envelope.created_at,
+          });
+        } catch (err) {
+          if (err instanceof LedgerError && err.code === "ledger_forbidden_content") {
+            // 内容策略违规：envelope 携带 ledger 不得记录的保留键（§28/§36-5）。
+            throw schemaInvalid("envelope contains reserved content that must not be recorded");
+          }
+          this.logError("ledger append failed", err);
+          throw internalServerError();
+        }
+
+        try {
+          this.idempotency.commit({
+            sender_identity: senderIdentity,
+            message_id: envelope.message_id,
+            digest: envelope.digest,
+            negotiation_id: envelope.negotiation_id,
+            outcome: { kind: "ok", result: { task } },
+            ledger_event_id: ledgerEvent.event_id,
+            ledger_event_digest: ledgerEvent.event_digest,
+          });
+        } catch (err) {
+          // commit 的并发兜底（异 digest）——本锁内不应发生；仍 fail-closed。
+          if (err instanceof IdempotencyConflictError) {
+            throw protocolError(
+              "idempotency_conflict",
+              `message_id ${envelope.message_id} already processed with a different digest`,
+            );
+          }
+          throw err;
+        }
+
+        return { task, ledgerEvent };
+      });
+    } catch (err) {
+      // schema_invalid 计入 malformed budget（独立于正常限流；WP3 §31）。
+      if (th !== undefined && tReq !== undefined && protocolCodeOf(err) === "schema_invalid") {
+        th.recordMalformed(tReq);
+      }
+      throw err;
+    } finally {
+      // 释放并发槽（幂等；与限流判定中的 enterTask 配对）。
+      if (th !== undefined && tReq !== undefined) th.leaveTask(tReq);
+    }
   }
 
   /** tasks/get：内存优先，miss 时回退 Ledger 视图（§23 恢复第 4 步）。 */

@@ -18,6 +18,8 @@ import type { AgentSkill } from "../../discovery/agent-card/index.js";
 import type { IdempotencyStore } from "../../negotiation/idempotency/index.js";
 import type { LedgerStore } from "../../negotiation/ledger/index.js";
 import type { UcpPublishOptions } from "./ucp.js";
+import type { A2AServerThrottle, ThrottleOptions } from "./throttle.js";
+import type { TrustLevel } from "../../trust/identity/trust-policy.js";
 
 /** Agent Card 本地配置（基线 §26 / 子规范 §24.1 Discovery）。 */
 export interface AgentCardConfig {
@@ -76,12 +78,18 @@ export interface AuthResult {
    * 相关的还有 identity_rejected（身份绑定冲突）与 replay_detected（重放）。
    */
   protocolCode?:
-    | "authentication_required"
-    | "authorization_failed"
-    | "identity_rejected"
-    | "replay_detected";
+    "authentication_required" | "authorization_failed" | "identity_rejected" | "replay_detected";
   /** 失败原因（内部日志用，不回显给远端；§4.5）。 */
   reason?: string;
+  /**
+   * 对端 trust level（T0-T3，基线 §28）。WP3 throttle 用它映射限流档位
+   * （T0 最严 / T3 最宽）；缺省按 T0 处理（最严，fail-closed）。
+   */
+  trustLevel?: TrustLevel;
+  /** 身份是否经过验签（false/缺省 = 匿名/回落，throttle 按 remoteAddress 且限额更严）。 */
+  identityVerified?: boolean;
+  /** WP1 对端 Agent Card 指纹近期变更信号：生效期间 throttle 短期降档。 */
+  fingerprintChanged?: boolean;
 }
 
 /**
@@ -157,4 +165,10 @@ export interface A2AServerOptions {
    * 响应头 Cache-Control 为 `public, max-age=N`（N>=60，UCP 规范强制）。
    */
   ucp?: boolean | UcpPublishOptions;
+  /**
+   * WP3 §31 反滥用限流。缺省不配置 → 不限流（保持既有行为）；配置后判定发生在
+   * 认证之后、schema 校验之前（InboundPipeline.sendMessage 顶部）。
+   * 传 ThrottleOptions 由 server 构造；也可直接注入 A2AServerThrottle 实例（测试用）。
+   */
+  throttle?: ThrottleOptions | A2AServerThrottle;
 }

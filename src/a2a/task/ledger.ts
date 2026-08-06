@@ -27,6 +27,21 @@ const DEFAULT_CAPABILITY: LedgerCapabilitySnapshot = {
   protocol_version: "1.0",
 };
 
+/**
+ * 单调观察序号（§22 内容寻址）。观测事件是「运行时证据」而非离散逻辑事件：
+ * 同一 task_state 可能被多次观察（轮询 / getState），若只按 (task_id,
+ * task_state, occurred_at) 寻址，同一毫秒（或冻结时钟）的第二次观测内容
+ * 完全相同 → ledger_duplicate_content。序号进入 outcome.result → 参与内容
+ * 寻址，使每次观察内容唯一。跨进程重启后从 1 重新开始：occurred_at 通常不同，
+ * 不再构成同内容；冻结时钟跨重启是测试态伪影，不作持久化保证。
+ */
+let observationSeq = 0;
+
+function nextObservationSeq(): number {
+  observationSeq += 1;
+  return observationSeq;
+}
+
 export interface TaskObservationInput {
   ledger: LedgerStore;
   negotiation_id: string;
@@ -59,7 +74,14 @@ export function recordTaskObservation(input: TaskObservationInput): void {
     remote_task_id: input.task_id,
     identity: input.identity ?? DEFAULT_IDENTITY,
     capability: input.capability ?? DEFAULT_CAPABILITY,
-    outcome: { kind: "ok", result: { task_id: input.task_id, task_state: input.task_state } },
+    outcome: {
+      kind: "ok",
+      result: {
+        task_id: input.task_id,
+        task_state: input.task_state,
+        observation_seq: nextObservationSeq(),
+      },
+    },
     occurred_at: input.occurred_at,
   });
 }

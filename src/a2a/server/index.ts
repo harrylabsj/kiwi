@@ -16,6 +16,21 @@ export { buildAgentCard } from "./card.js";
 export { buildUcpProfile, WELL_KNOWN_UCP_PATH } from "./ucp.js";
 export type { BuiltUcpProfile, UcpPublishOptions, UcpVendorOptions } from "./ucp.js";
 export {
+  A2AServerThrottle,
+  DEFAULT_THROTTLE_TIERS,
+  DEFAULT_UNVERIFIED_SCALE,
+  DEFAULT_WINDOW_MS,
+  domainFromUcpProfile,
+} from "./throttle.js";
+export type {
+  TaskSlotResult,
+  ThrottleDecision,
+  ThrottleOptions,
+  ThrottleRequest,
+  ThrottleTierTable,
+  TrustTierLimits,
+} from "./throttle.js";
+export {
   parseUcpAgentHeader,
   serializeRfc8941String,
   serializeUcpAgentHeader,
@@ -41,7 +56,9 @@ export {
   fromNegotiationError,
   internalServerError,
   payloadTooLarge,
+  protocolCodeOf,
   protocolError,
+  rateLimited,
   schemaInvalid,
   taskNotFound,
 } from "./errors.js";
