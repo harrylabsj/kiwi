@@ -13,21 +13,56 @@
 export {
   UcpCheckoutChannel,
   type AsyncHandoffChannel,
+  type CartCheckoutLink,
   type UcpCheckoutChannelOptions,
 } from "./channel.js";
 
 export {
+  CART_CANCEL_SUFFIX,
+  CARTS_PATH,
   CHECKOUT_CANCEL_SUFFIX,
   CHECKOUT_COMPLETE_SUFFIX,
   CHECKOUT_SESSIONS_PATH,
   UcpCheckoutHttpClient,
+  type UcpCartHttpResult,
   type UcpCheckoutHttpClientOptions,
   type UcpCheckoutHttpError,
   type UcpCheckoutHttpErrorCode,
   type UcpCheckoutHttpResult,
 } from "./client.js";
 
-export { findCheckoutEndpoint, type FindCheckoutEndpointOptions } from "./endpoint.js";
+export {
+  findCartEndpoint,
+  findCheckoutEndpoint,
+  profileHasCartCapability,
+  type FindCheckoutEndpointOptions,
+} from "./endpoint.js";
+
+export {
+  CART_CAPABILITY,
+  CART_SPEC_VERSION,
+  UCP_CART_FAILURE_CODES,
+  type UcpCart,
+  type UcpCartErrorResponse,
+  type UcpCartFailureCode,
+  type UcpCartLineItem,
+  type UcpCartLink,
+  type UcpCartMessage,
+  type UcpCartResponse,
+  type UcpCartResult,
+  type UcpCartTotals,
+} from "./cart-types.js";
+
+export {
+  isUcpCartErrorResponse,
+  isUcpCartSuccess,
+  parseUcpCartResponse,
+} from "./cart-parse.js";
+
+export {
+  UcpCartChannel,
+  type UcpCartChannelOptions,
+} from "./cart-channel.js";
 
 export {
   UcpCheckoutParseError,
