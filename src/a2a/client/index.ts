@@ -24,6 +24,12 @@ export type {
 } from "./types.js";
 export { A2A_TASK_STATES } from "./types.js";
 export {
+  serializeRfc8941String,
+  serializeUcpAgentHeader,
+  UCP_AGENT_HEADER,
+  UCP_AGENT_PROFILE_MEMBER,
+} from "../ucp-agent.js";
+export {
   assertResolvableTargetUrl,
   assertSafeTargetUrl,
   isLoopbackHost,

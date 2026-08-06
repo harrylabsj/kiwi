@@ -52,6 +52,8 @@ export interface InboundPipelineOptions {
 export interface SendMessageCaller {
   senderIdentity: string;
   remoteAddress?: string;
+  /** 对端 UCP-Agent 头声明的 platform profile URI（WP3 §25.1，可选）。 */
+  ucpAgentProfile?: string;
 }
 
 export interface SendMessageInput {
@@ -231,6 +233,7 @@ export class InboundPipeline {
         contextId,
         senderIdentity,
         remoteAddress: caller.remoteAddress,
+        ucpAgentProfile: caller.ucpAgentProfile,
       };
       let handlerResult: NegotiationHandlerResult;
       try {

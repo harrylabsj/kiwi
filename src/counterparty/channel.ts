@@ -22,6 +22,8 @@ import type { NegotiationEnvelope } from "../negotiation/domain/envelope.js";
 import type { PolicyResult } from "../negotiation/types.js";
 import type { AgentCard } from "../discovery/agent-card/index.js";
 import type { CapabilityIntersection } from "../discovery/capability/index.js";
+import type { UcpIntersectionView } from "../discovery/ucp/intersect.js";
+import type { UcpProfile } from "../discovery/ucp/types.js";
 
 /** 通道种类（基线 §5 三个实现）。 */
 export type ChannelKind = "a2a-direct" | "shopping-cli-hosted" | "platform-api";
@@ -205,6 +207,16 @@ export interface CounterpartyProfile {
   intersection: CapabilityIntersection;
   /** 按优先序排列的通道候选。 */
   channel_candidates: ChannelCandidate[];
+  /**
+   * WP3：双方 UCP capability intersection（§3.2 / §25），与 A2A binding
+   * `intersection` 两个维度并存。UCP 优先路径成功且配置了 platform 侧
+   * localProfile 时存在。
+   */
+  ucp_intersection?: UcpIntersectionView;
+  /** WP3：解析出的对端 UCP profile（UCP 优先路径成功时存在）。 */
+  ucp_profile?: UcpProfile;
+  /** WP3：UCP 优先路径失败时的回退原因（已回退到 well-known Agent Card）。 */
+  ucp_fallback_reason?: string;
 }
 
 /**
