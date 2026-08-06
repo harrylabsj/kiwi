@@ -1,7 +1,7 @@
 /**
  * Shared write-gate for main-conversation write tools (design §16).
  *
- * Every write operation produces a content-hashed ActionCandidate
+ * Every write operation produces a content-hashed WriteApprovalCandidate
  * (arguments_hash + preconditions_hash + risk + expires_at). The gate routes
  * by mode:
  *   manual      -> advice only (never executes);
@@ -18,22 +18,22 @@ import type { AgentProfile } from "../config/profile.js";
 import type { AgentMode } from "./mode.js";
 import {
   executeApprovedCandidate,
-  type ActionCandidate,
-  type ActionCandidateStore,
+  type WriteApprovalCandidate,
+  type WriteApprovalCandidateStore,
 } from "./merchant/action-candidate.js";
 
 /** Default approval window (design §16 expires_at). */
 export const APPROVAL_TTL_MS = 15 * 60 * 1000;
 
 export type WriteGateResult =
-  | { kind: "executed"; candidate: ActionCandidate; output: unknown }
-  | { kind: "pending_approval"; candidate: ActionCandidate }
-  | { kind: "advice_only"; candidate: ActionCandidate }
+  | { kind: "executed"; candidate: WriteApprovalCandidate; output: unknown }
+  | { kind: "pending_approval"; candidate: WriteApprovalCandidate }
+  | { kind: "advice_only"; candidate: WriteApprovalCandidate }
   | { kind: "forbidden"; reason: string };
 
 export interface WriteGateDeps {
   mode: () => AgentMode;
-  approvals: ActionCandidateStore;
+  approvals: WriteApprovalCandidateStore;
   profile: AgentProfile;
   now: () => string;
   /**

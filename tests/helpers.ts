@@ -20,7 +20,7 @@ export const NOW = "2026-08-03T15:00:00+08:00";
 
 export function testProfile(overrides: Partial<AgentProfile> = {}): AgentProfile {
   return {
-    runtime_version: "0.3.0",
+    runtime_version: "0.5.0",
     protocol_version: PROTOCOL_VERSION,
     agent_id: "merchant-agent:merchant-001",
     role: "merchant",
@@ -104,7 +104,7 @@ export function testBuyerPolicy(overrides: Partial<BuyerPolicy> = {}): BuyerPoli
 
 export function testBuyerProfile(overrides: Partial<AgentProfile> = {}): AgentProfile {
   return {
-    runtime_version: "0.3.0",
+    runtime_version: "0.5.0",
     protocol_version: PROTOCOL_VERSION,
     agent_id: "buyer-agent:buyer-001",
     role: "buyer",

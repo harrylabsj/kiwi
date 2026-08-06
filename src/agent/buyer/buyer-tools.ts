@@ -10,7 +10,7 @@ import type { AgentProfile } from "../../config/profile.js";
 import type { CommerceClient } from "../../commerce/types.js";
 import type { CommerceConnector } from "../connector/types.js";
 import type { AgentMode } from "../mode.js";
-import type { ActionCandidateStore } from "../merchant/action-candidate.js";
+import type { WriteApprovalCandidateStore } from "../merchant/action-candidate.js";
 import type { CredentialBroker } from "../merchant/credential-broker.js";
 import { requireScopeCredential } from "../merchant/credential-broker.js";
 import { buildNegotiationChatTools, writeGateText } from "../negotiation-chat.js";
@@ -166,7 +166,7 @@ export interface BuyerToolDeps {
   profile: AgentProfile;
   commerceClient?: CommerceClient;
   broker?: CredentialBroker;
-  approvals?: ActionCandidateStore;
+  approvals?: WriteApprovalCandidateStore;
   mode?: () => AgentMode;
   now: () => string;
   /** Register /approve execution hooks for pending candidates. */

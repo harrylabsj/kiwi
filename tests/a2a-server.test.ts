@@ -1,0 +1,667 @@
+/**
+ * A2A Server（入站侧，WP2）端到端测试 —— node:http 起真实 server。
+ *
+ * 覆盖：
+ *   - well-known Agent Card（含 KNP negotiation extension 声明，无 secret）；
+ *   - message/send 正例（KNP envelope 入 Data Part）+ Ledger 落账 + 幂等落盘；
+ *   - schema 拒绝（缺 Data Part / payload 非法）→ schema_invalid；
+ *   - 版本拒绝 → protocol_version_unsupported；
+ *   - 幂等重放（同 key 同 digest 返回原结果）与冲突（异 digest → idempotency_conflict）；
+ *   - body 大小上限 → 413 payload_too_large；
+ *   - 认证接缝：缺 token 401 / 错 token 403 / 对 token 200；AuthVerifier 单测；
+ *   - handler 异常不泄漏内部细节（通用 internal error）；
+ *   - tasks/get（内存 + Ledger 视图 fallback，模拟重启）；
+ *   - JSON-RPC 帧错误（未知 method / 畸形 body / 未知 task）。
+ */
+import { afterEach, describe, expect, it, vi } from "vitest";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { computeEnvelopeDigest, finalizeEnvelope } from "../src/negotiation/domain/envelope.js";
+import type { NegotiationEnvelope } from "../src/negotiation/domain/envelope.js";
+import { LedgerStore } from "../src/negotiation/ledger/index.js";
+import { IdempotencyStore } from "../src/negotiation/idempotency/index.js";
+import {
+  A2AServer,
+  LoopbackOnlyAuthVerifier,
+  NoneAuthVerifier,
+  StaticBearerAuthVerifier,
+} from "../src/a2a/server/index.js";
+import type { AgentCardConfig, AuthVerifier, NegotiationHandler } from "../src/a2a/server/index.js";
+import { A2AClient } from "../src/a2a/client/index.js";
+import type { A2AMessage } from "../src/a2a/client/index.js";
+import { NEGOTIATION_ID, validEnvelopeFields } from "./negotiation-helpers.js";
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+interface StartOptions {
+  handler?: NegotiationHandler;
+  authVerifier?: AuthVerifier;
+  maxPayloadBytes?: number;
+  a2aPath?: string;
+  cardOverrides?: Partial<AgentCardConfig>;
+}
+
+interface Started {
+  url: string;
+  a2aUrl: string;
+  ledger: LedgerStore;
+  idempotency: IdempotencyStore;
+  server: A2AServer;
+  httpServer: http.Server;
+  dir: string;
+}
+
+const registry: Array<{ httpServer: http.Server; dir: string }> = [];
+
+async function listen(server: http.Server): Promise<string> {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const addr = server.address() as AddressInfo;
+  return `http://127.0.0.1:${addr.port}`;
+}
+
+async function startServer(options: StartOptions = {}, sharedDir?: string): Promise<Started> {
+  const dir = sharedDir ?? mkdtempSync(path.join(tmpdir(), "kiwi-a2a-server-"));
+  const ledger = new LedgerStore({ dir });
+  const idempotency = new IdempotencyStore({ dir });
+  const holder = { baseUrl: "http://127.0.0.1:0" };
+  const a2aPath = options.a2aPath ?? "/";
+  const server = new A2AServer({
+    card: () => ({
+      name: "Test Kiwi Merchant",
+      description: "A2A test merchant agent",
+      providerOrganization: "Kiwi Test Org",
+      version: "0.5.0",
+      baseUrl: holder.baseUrl,
+      a2aPath,
+      ...options.cardOverrides,
+    }),
+    ledger,
+    idempotency,
+    ...(options.handler !== undefined ? { handler: options.handler } : {}),
+    ...(options.authVerifier !== undefined ? { authVerifier: options.authVerifier } : {}),
+    ...(options.maxPayloadBytes !== undefined ? { maxPayloadBytes: options.maxPayloadBytes } : {}),
+  });
+  const httpServer = server.createServer();
+  const url = await listen(httpServer);
+  holder.baseUrl = url;
+  registry.push({ httpServer, dir });
+  return {
+    url,
+    a2aUrl: `${url}${a2aPath}`,
+    ledger,
+    idempotency,
+    server,
+    httpServer,
+    dir,
+  };
+}
+
+function knpMessage(envelope: NegotiationEnvelope): A2AMessage {
+  return {
+    role: "agent",
+    parts: [
+      { kind: "text", text: "We propose 200 units at CNY 835.00 per unit." },
+      { kind: "data", data: { knp_envelope: envelope } },
+    ],
+    messageId: envelope.message_id,
+  };
+}
+
+/** 原样 JSON-RPC 请求（错误路径检查用）。 */
+async function rpc(
+  a2aUrl: string,
+  method: string,
+  params: unknown,
+  id = "req-1",
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const res = await fetch(a2aUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+  });
+  const body = (await res.json()) as Record<string, unknown>;
+  return { status: res.status, body };
+}
+
+function rpcError(body: Record<string, unknown>): Record<string, unknown> {
+  const error = body["error"];
+  return (error === null || typeof error !== "object" ? {} : error) as Record<string, unknown>;
+}
+
+function authCtx(
+  partial: Partial<{
+    remoteAddress: string | undefined;
+    authorizationHeader: string | undefined;
+  }> = {},
+) {
+  return {
+    remoteAddress: partial.remoteAddress,
+    authorizationHeader: partial.authorizationHeader,
+    method: "POST",
+    url: "/",
+  };
+}
+
+afterEach(async () => {
+  for (const entry of registry) {
+    entry.httpServer.closeAllConnections();
+    await new Promise<void>((resolve) => entry.httpServer.close(() => resolve()));
+    rmSync(entry.dir, { recursive: true, force: true });
+  }
+  registry.length = 0;
+  vi.restoreAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// Agent Card / well-known
+// ---------------------------------------------------------------------------
+
+describe("A2A Server: Agent Card（well-known）", () => {
+  it("serves the Agent Card with a KNP negotiation extension declaration", async () => {
+    const { url } = await startServer();
+    const res = await fetch(`${url}/.well-known/agent-card.json`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+
+    const card = (await res.json()) as Record<string, unknown>;
+    expect(card.name).toBe("Test Kiwi Merchant");
+    expect(card.description).toBe("A2A test merchant agent");
+    expect(card.provider).toEqual({ organization: "Kiwi Test Org" });
+    expect(card.supportedInterfaces).toEqual([
+      expect.objectContaining({ protocolBinding: "JSONRPC", protocolVersion: "1.0" }),
+    ]);
+    const capabilities = card.capabilities as Record<string, unknown>;
+    const extensions = (capabilities.extensions as { uri: string; required: boolean }[]) ?? [];
+    expect(
+      extensions.some(
+        (e) => e.uri.endsWith("/a2a/extensions/negotiation/1.0") && e.required === false,
+      ),
+    ).toBe(true);
+    // 不变量 24：card 不含静态 secret。
+    expect(JSON.stringify(card)).not.toMatch(/(secret|bearer|api[_-]?key|password)/i);
+  });
+
+  it("passes through skills and honors a configured negotiation extension URI", async () => {
+    const { url } = await startServer({
+      cardOverrides: {
+        skills: [{ id: "commerce-negotiation", name: "Commerce Negotiation" }],
+        negotiationExtensionUri: "https://kiwi.test/a2a/extensions/negotiation/1.0",
+      },
+    });
+    const res = await fetch(`${url}/.well-known/agent-card.json`);
+    const card = (await res.json()) as Record<string, unknown>;
+    expect((card.skills as { id: string }[])[0]?.id).toBe("commerce-negotiation");
+    const capabilities = card.capabilities as Record<string, unknown>;
+    const extensions = capabilities.extensions as { uri: string }[];
+    expect(extensions[0]?.uri).toBe("https://kiwi.test/a2a/extensions/negotiation/1.0");
+  });
+
+  it("rejects non-GET and unknown paths", async () => {
+    const { url } = await startServer();
+    const post = await fetch(`${url}/.well-known/agent-card.json`, { method: "POST" });
+    expect(post.status).toBe(405);
+    const missing = await fetch(`${url}/definitely-not-a-path`);
+    expect(missing.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// message/send 正例
+// ---------------------------------------------------------------------------
+
+describe("A2A Server: message/send 正例", () => {
+  it("round-trips a KNP envelope in a data part and records ledger + idempotency", async () => {
+    const { url, ledger, idempotency } = await startServer();
+    const client = new A2AClient({ url: `${url}/` });
+    const envelope = finalizeEnvelope(validEnvelopeFields());
+
+    const task = await client.sendMessage(knpMessage(envelope), "ctx_1");
+
+    expect(task.id).toMatch(/^task_/);
+    expect(task.status.state).toBe("completed");
+    expect(task.contextId).toBe("ctx_1");
+    expect(task.status.message?.role).toBe("agent");
+
+    // Ledger：message_received 事件已落账且链完整。
+    expect(ledger.verifyChain(NEGOTIATION_ID).valid).toBe(true);
+    expect(ledger.findByMessageId(envelope.message_id)).not.toBeNull();
+
+    // 幂等：以 (loopback 身份, message_id) 记录，digest 一致且携带 ledger 证据。
+    const rec = idempotency.get("loopback:127.0.0.1", envelope.message_id);
+    expect(rec?.digest).toBe(envelope.digest);
+    expect(rec?.ledger_event_id).toBeTruthy();
+    expect(rec?.ledger_event_digest).toBeTruthy();
+  });
+
+  it("routes through an injected handler that can accept with artifacts", async () => {
+    const handler: NegotiationHandler = {
+      name: "artifact-handler",
+      async handle(ctx) {
+        return {
+          kind: "accepted",
+          taskState: "completed",
+          artifactParts: [{ kind: "data", data: { negotiation_id: ctx.envelope.negotiation_id } }],
+        };
+      },
+    };
+    const { url } = await startServer({ handler });
+    const client = new A2AClient({ url: `${url}/` });
+    const task = await client.sendMessage(
+      knpMessage(finalizeEnvelope(validEnvelopeFields())),
+      "ctx",
+    );
+    expect(task.status.state).toBe("completed");
+    expect(task.artifacts?.[0]?.artifactId).toMatch(/^art_/);
+  });
+
+  it("defaults to a fail-closed decline handler when none is injected", async () => {
+    const { url } = await startServer();
+    const client = new A2AClient({ url: `${url}/` });
+    const task = await client.sendMessage(
+      knpMessage(finalizeEnvelope(validEnvelopeFields())),
+      "ctx",
+    );
+    // decline 是合法商业结果：任务 completed，消息携带 decline 原因。
+    expect(task.status.state).toBe("completed");
+    const data = task.status.message?.parts.find((p) => p.kind === "data");
+    expect(data && data.kind === "data" ? data.data : null).toMatchObject({ decline: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// schema / version 拒绝
+// ---------------------------------------------------------------------------
+
+describe("A2A Server: schema / version 拒绝（fail-closed）", () => {
+  it("rejects an A2A message without a KNP data part → schema_invalid", async () => {
+    const { a2aUrl } = await startServer();
+    const client = new A2AClient({ url: a2aUrl });
+    await expect(
+      client.sendMessage({
+        role: "agent",
+        parts: [{ kind: "text", text: "hi" }],
+        messageId: "msg_x",
+      }),
+    ).rejects.toMatchObject({
+      kind: "jsonrpc_error",
+      jsonrpcCode: -32050,
+      jsonrpcData: { protocol_code: "schema_invalid" },
+    });
+  });
+
+  it("rejects a KNP envelope with an invalid payload → schema_invalid", async () => {
+    const { a2aUrl } = await startServer();
+    const envelope = finalizeEnvelope(validEnvelopeFields());
+    // 篡改 payload 使 schema 校验失败（digest 即使有效也会先过 schema）。
+    const badEnvelope = { ...envelope, payload: { type: "bogus" } };
+    const res = await rpc(a2aUrl, "message/send", {
+      message: {
+        role: "agent",
+        parts: [{ kind: "data", data: { knp_envelope: badEnvelope } }],
+        messageId: envelope.message_id,
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(rpcError(res.body).code).toBe(-32050);
+    expect((rpcError(res.body).data as Record<string, unknown>).protocol_code).toBe(
+      "schema_invalid",
+    );
+  });
+
+  it("rejects a tampered envelope digest → schema_invalid", async () => {
+    const { a2aUrl } = await startServer();
+    const envelope = finalizeEnvelope(validEnvelopeFields());
+    const tampered = { ...envelope, public_message: "changed after signing" }; // digest 不再匹配
+    const res = await rpc(a2aUrl, "message/send", {
+      message: {
+        role: "agent",
+        parts: [{ kind: "data", data: { knp_envelope: tampered } }],
+        messageId: envelope.message_id,
+      },
+    });
+    expect(rpcError(res.body).code).toBe(-32050);
+    expect((rpcError(res.body).data as Record<string, unknown>).protocol_code).toBe(
+      "schema_invalid",
+    );
+  });
+
+  it("rejects an unknown KNP protocol version → protocol_version_unsupported", async () => {
+    const { a2aUrl } = await startServer();
+    const fields = validEnvelopeFields();
+    const envelope = { ...fields, protocol_version: "2.0" };
+    const digest = computeEnvelopeDigest(envelope);
+    const wire = { ...envelope, digest };
+    const res = await rpc(a2aUrl, "message/send", {
+      message: {
+        role: "agent",
+        parts: [{ kind: "data", data: { knp_envelope: wire } }],
+        messageId: fields.message_id,
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(rpcError(res.body).code).toBe(-32050);
+    expect((rpcError(res.body).data as Record<string, unknown>).protocol_code).toBe(
+      "protocol_version_unsupported",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 幂等
+// ---------------------------------------------------------------------------
+
+describe("A2A Server: 幂等（§20）", () => {
+  it("replays the original result for same key + same digest", async () => {
+    const { url, ledger } = await startServer();
+    const client = new A2AClient({ url: `${url}/` });
+    const envelope = finalizeEnvelope(validEnvelopeFields());
+    const message = knpMessage(envelope);
+
+    const first = await client.sendMessage(message, "ctx_1");
+    const second = await client.sendMessage(message, "ctx_1");
+
+    expect(second.id).toBe(first.id);
+    expect(second.status.state).toBe(first.status.state);
+    // 不重复执行业务效果：Ledger 只落一条。
+    expect(ledger.events(NEGOTIATION_ID).length).toBe(1);
+  });
+
+  it("returns idempotency_conflict for same key + different digest", async () => {
+    const { url } = await startServer();
+    const client = new A2AClient({ url: `${url}/` });
+    const first = finalizeEnvelope(validEnvelopeFields());
+    await client.sendMessage(knpMessage(first), "ctx_1");
+
+    const second = finalizeEnvelope({
+      ...validEnvelopeFields(),
+      public_message: "different content",
+    });
+    expect(second.message_id).toBe(first.message_id);
+    expect(second.digest).not.toBe(first.digest);
+
+    await expect(client.sendMessage(knpMessage(second), "ctx_1")).rejects.toMatchObject({
+      kind: "jsonrpc_error",
+      jsonrpcCode: -32050,
+      jsonrpcData: { protocol_code: "idempotency_conflict" },
+    });
+  });
+
+  it("scopes the idempotency key by the auth identity (sender isolation)", async () => {
+    // 同一数据目录、两个 server，分别以 peer-1 / peer-2 身份处理同 message_id。
+    const first = await startServer({
+      authVerifier: new StaticBearerAuthVerifier("tok", { identity: "peer-1" }),
+    });
+    const second = await startServer(
+      {
+        authVerifier: new StaticBearerAuthVerifier("tok", { identity: "peer-2" }),
+      },
+      first.dir,
+    );
+    const envelope = finalizeEnvelope(validEnvelopeFields());
+    const message = knpMessage(envelope);
+    const headers = { "content-type": "application/json", authorization: "Bearer tok" };
+
+    const r1 = await fetch(first.a2aUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "1",
+        method: "message/send",
+        params: { message },
+      }),
+    });
+    expect(r1.status).toBe(200);
+
+    // 不同 sender → 不冲突，作为新消息处理（幂等主键 (sender_identity, message_id)）。
+    const r2 = await fetch(second.a2aUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "2",
+        method: "message/send",
+        params: { message },
+      }),
+    });
+    expect(r2.status).toBe(200);
+    const body2 = (await r2.json()) as Record<string, unknown>;
+    const task2 = (body2["result"] as Record<string, unknown>)["task"] as Record<string, unknown>;
+    // 新任务 id ≠ peer-1 的任务 id。
+    const body1 = (await r1.json()) as Record<string, unknown>;
+    const task1 = (body1["result"] as Record<string, unknown>)["task"] as Record<string, unknown>;
+    expect(task2["id"]).not.toBe(task1["id"]);
+    // Ledger 记录了两条（同一 negotiation 链，peer 不同则证据不同）。
+    expect(first.ledger.events(NEGOTIATION_ID).length).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 大小上限 / 认证
+// ---------------------------------------------------------------------------
+
+describe("A2A Server: body 大小上限（fail-closed）", () => {
+  it("rejects a request body larger than maxPayloadBytes with 413", async () => {
+    const { a2aUrl } = await startServer({ maxPayloadBytes: 1024 });
+    const huge = "x".repeat(8192);
+    const res = await fetch(a2aUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "r",
+        method: "message/send",
+        params: { message: huge },
+      }),
+    });
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as Record<string, unknown>;
+    const error = rpcError(body);
+    expect(error.code).toBe(-32052);
+    expect((error.data as Record<string, unknown>).protocol_code).toBe("payload_too_large");
+  });
+});
+
+describe("A2A Server: 认证接缝", () => {
+  it("rejects missing token with 401, wrong token with 403, accepts the right token", async () => {
+    const { a2aUrl } = await startServer({
+      authVerifier: new StaticBearerAuthVerifier("s3cret", { identity: "peer-1" }),
+    });
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: "1",
+      method: "tasks/get",
+      params: { id: "task_x" },
+    });
+
+    const noToken = await fetch(a2aUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    expect(noToken.status).toBe(401);
+    expect(
+      (rpcError((await noToken.json()) as Record<string, unknown>).data as Record<string, unknown>)
+        .protocol_code,
+    ).toBe("authentication_required");
+
+    const wrongToken = await fetch(a2aUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer wrong" },
+      body,
+    });
+    expect(wrongToken.status).toBe(403);
+    expect(
+      (
+        rpcError((await wrongToken.json()) as Record<string, unknown>).data as Record<
+          string,
+          unknown
+        >
+      ).protocol_code,
+    ).toBe("authorization_failed");
+
+    const rightToken = await fetch(a2aUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer s3cret" },
+      body,
+    });
+    expect(rightToken.status).toBe(200);
+  });
+
+  it("applies the default loopback-only verifier when none is configured", () => {
+    const v = new LoopbackOnlyAuthVerifier();
+    expect(v.verify(authCtx({ remoteAddress: "127.0.0.1" })).authenticated).toBe(true);
+    expect(v.verify(authCtx({ remoteAddress: "::1" })).authenticated).toBe(true);
+    expect(v.verify(authCtx({ remoteAddress: "::ffff:127.0.0.1" })).authenticated).toBe(true);
+    expect(v.verify(authCtx({ remoteAddress: "10.0.0.1" })).authenticated).toBe(false);
+    expect(v.verify(authCtx({})).authenticated).toBe(false); // 无对端地址 → 拒绝
+  });
+
+  it("provides none and static-bearer reference verifiers", () => {
+    const none = new NoneAuthVerifier();
+    expect(none.verify(authCtx()).authenticated).toBe(true);
+    expect(none.verify(authCtx({ remoteAddress: "10.0.0.1" })).authenticated).toBe(true);
+
+    const bearer = new StaticBearerAuthVerifier("tok", { identity: "peer" });
+    expect(bearer.verify(authCtx({ authorizationHeader: "Bearer tok" }))).toEqual({
+      authenticated: true,
+      identity: "peer",
+    });
+    expect(bearer.verify(authCtx({ authorizationHeader: "Bearer nope" })).protocolCode).toBe(
+      "authorization_failed",
+    );
+    expect(bearer.verify(authCtx({ authorizationHeader: undefined })).protocolCode).toBe(
+      "authentication_required",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handler 异常不泄漏
+// ---------------------------------------------------------------------------
+
+describe("A2A Server: handler 异常不泄漏内部细节", () => {
+  it("returns a generic internal error and never echoes the handler exception", async () => {
+    const secret = "INTERNAL_SECRET_DB_PASSWORD=sup3r";
+    const handler: NegotiationHandler = {
+      name: "explode",
+      async handle() {
+        throw new Error(secret);
+      },
+    };
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { a2aUrl } = await startServer({ handler });
+
+    const res = await rpc(a2aUrl, "message/send", {
+      message: knpMessage(finalizeEnvelope(validEnvelopeFields())),
+    });
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain(secret);
+    expect(rpcError(res.body).code).toBe(-32603);
+    expect((rpcError(res.body).data as Record<string, unknown>).protocol_code).toBe(
+      "temporarily_unavailable",
+    );
+    // 细节只进服务端日志。
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(secret));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tasks/get
+// ---------------------------------------------------------------------------
+
+describe("A2A Server: tasks/get", () => {
+  it("returns the task created by message/send", async () => {
+    const { url, a2aUrl } = await startServer();
+    const client = new A2AClient({ url: `${url}/` });
+    const task = await client.sendMessage(
+      knpMessage(finalizeEnvelope(validEnvelopeFields())),
+      "ctx",
+    );
+
+    const res = await rpc(a2aUrl, "tasks/get", { id: task.id });
+    expect(res.status).toBe(200);
+    const result = res.body["result"] as Record<string, unknown>;
+    const fetched = result["task"] as Record<string, unknown>;
+    expect(fetched["id"]).toBe(task.id);
+    expect((fetched["status"] as Record<string, unknown>)["state"]).toBe("completed");
+  });
+
+  it("maps tasks/get to the Ledger view after a server restart", async () => {
+    const first = await startServer();
+    const client = new A2AClient({ url: `${first.url}/` });
+    const task = await client.sendMessage(
+      knpMessage(finalizeEnvelope(validEnvelopeFields())),
+      "ctx",
+    );
+
+    // 模拟重启：同一数据目录起新 server，内存 TaskRegistry 已空。
+    const second = await startServer({}, first.dir);
+    const res = await rpc(second.a2aUrl, "tasks/get", { id: task.id });
+    expect(res.status).toBe(200);
+    const result = res.body["result"] as Record<string, unknown>;
+    const fetched = result["task"] as Record<string, unknown>;
+    expect(fetched["id"]).toBe(task.id);
+    expect((fetched["status"] as Record<string, unknown>)["state"]).toBe("completed");
+  });
+
+  it("returns TaskNotFound (-32004) for an unknown task id", async () => {
+    const { a2aUrl } = await startServer();
+    const res = await rpc(a2aUrl, "tasks/get", { id: "task_nope" });
+    expect(res.status).toBe(200);
+    expect(rpcError(res.body).code).toBe(-32004);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSON-RPC 帧错误
+// ---------------------------------------------------------------------------
+
+describe("A2A Server: JSON-RPC 帧错误", () => {
+  it("returns -32601 for an unknown method", async () => {
+    const { a2aUrl } = await startServer();
+    const res = await rpc(a2aUrl, "bogus/method", {});
+    expect(res.status).toBe(200);
+    expect(rpcError(res.body).code).toBe(-32601);
+  });
+
+  it("returns -32602 for missing params.message", async () => {
+    const { a2aUrl } = await startServer();
+    const res = await rpc(a2aUrl, "message/send", {});
+    expect(res.status).toBe(200);
+    expect(rpcError(res.body).code).toBe(-32602);
+  });
+
+  it("returns 400 for a malformed JSON body", async () => {
+    const { a2aUrl } = await startServer();
+    const res = await fetch(a2aUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{ not valid json",
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(rpcError(body).code).toBe(-32700);
+  });
+
+  it("returns 400 for a non-JSON-RPC frame", async () => {
+    const { a2aUrl } = await startServer();
+    const res = await fetch(a2aUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ foo: 1 }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 405 for a GET on the JSON-RPC endpoint", async () => {
+    const { url } = await startServer();
+    const res = await fetch(url);
+    expect(res.status).toBe(405);
+  });
+});

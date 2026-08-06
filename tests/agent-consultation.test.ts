@@ -21,7 +21,7 @@ import {
 import { runSearchCycle } from "../src/agent/buyer/search-loop.js";
 import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
 import { buildBuyerTools, type BuyerToolDeps } from "../src/agent/buyer/buyer-tools.js";
-import { ActionCandidateStore, executeApprovedCandidate } from "../src/agent/merchant/action-candidate.js";
+import { WriteApprovalCandidateStore, executeApprovedCandidate } from "../src/agent/merchant/action-candidate.js";
 import { StaticCredentialBroker } from "../src/agent/merchant/credential-broker.js";
 import { testBuyerProfile, testMarketplace } from "./helpers.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
@@ -50,7 +50,7 @@ function setupBuyer() {
   ).run(PRINCIPAL, T0, T0);
   const store = new BuyerTaskStore({ db, principalId: PRINCIPAL, now: () => clock });
   const connector = new FakeCommerceConnector([fakeConnectorProduct()]);
-  const approvals = new ActionCandidateStore({ db, principalId: PRINCIPAL, now: () => clock });
+  const approvals = new WriteApprovalCandidateStore({ db, principalId: PRINCIPAL, now: () => clock });
   const marketplace = testMarketplace();
   const profile = testBuyerProfile();
   const mode = { value: "supervised" as "manual" | "supervised" | "autopilot" };
@@ -241,7 +241,7 @@ describe("start_consultation tool (§15.2, §20-C)", () => {
 
     const pending = h.approvals.listPending();
     expect(pending).toHaveLength(1);
-    const cand = pending[0] as NonNullable<ReturnType<ActionCandidateStore["listPending"]>[number]>;
+    const cand = pending[0] as NonNullable<ReturnType<WriteApprovalCandidateStore["listPending"]>[number]>;
     expect(cand.tool).toBe("start_consultation");
     expect(cand.arguments).toMatchObject({ task_id: task.task_id, message: "请问 2 件有优惠吗？" });
 
@@ -304,7 +304,7 @@ describe("start_consultation tool (§15.2, §20-C)", () => {
       candidate_id: candidate.candidate_id,
       message: "请问？",
     });
-    const cand = h.approvals.listPending()[0] as NonNullable<ReturnType<ActionCandidateStore["listPending"]>[number]>;
+    const cand = h.approvals.listPending()[0] as NonNullable<ReturnType<WriteApprovalCandidateStore["listPending"]>[number]>;
 
     // The user moves the task before the operator approves.
     const current = h.store.getTask(task.task_id) as NonNullable<ReturnType<BuyerTaskStore["getTask"]>>;

@@ -1,5 +1,5 @@
 /**
- * Approval ActionCandidates (design §16).
+ * Approval WriteApprovalCandidates (design §16).
  *
  * The operator approves a specific argument set against a specific
  * precondition state — never a free-form "agree". A candidate carries:
@@ -21,7 +21,7 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { uuidv7 } from "@earendil-works/pi-ai";
 
-export const ACTION_CANDIDATE_STATUSES = [
+export const WRITE_APPROVAL_CANDIDATE_STATUSES = [
   "pending_approval",
   "approved",
   "executed",
@@ -29,9 +29,9 @@ export const ACTION_CANDIDATE_STATUSES = [
   "superseded",
   "expired",
 ] as const;
-export type ActionCandidateStatus = (typeof ACTION_CANDIDATE_STATUSES)[number];
+export type WriteApprovalCandidateStatus = (typeof WRITE_APPROVAL_CANDIDATE_STATUSES)[number];
 
-export interface ActionCandidate {
+export interface WriteApprovalCandidate {
   candidate_id: string;
   principal_id: string;
   task_id?: string;
@@ -41,17 +41,17 @@ export interface ActionCandidate {
   preconditions: Record<string, unknown>;
   preconditions_hash: string;
   risk: string;
-  status: ActionCandidateStatus;
+  status: WriteApprovalCandidateStatus;
   expires_at: string;
   created_at: string;
   updated_at: string;
 }
 
-export class ActionCandidateError extends Error {
+export class WriteApprovalCandidateError extends Error {
   readonly code: "not_found" | "conflict" | "expired";
-  constructor(code: ActionCandidateError["code"], message: string) {
+  constructor(code: WriteApprovalCandidateError["code"], message: string) {
     super(message);
-    this.name = "ActionCandidateError";
+    this.name = "WriteApprovalCandidateError";
     this.code = code;
   }
 }
@@ -78,7 +78,7 @@ export function contentHash(value: unknown): string {
   return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
 }
 
-export interface ActionCandidateStoreOptions {
+export interface WriteApprovalCandidateStoreOptions {
   db: DatabaseSync;
   principalId: string;
   now?: () => string;
@@ -100,12 +100,12 @@ interface CandidateRow {
   updated_at: string;
 }
 
-export class ActionCandidateStore {
+export class WriteApprovalCandidateStore {
   private readonly db: DatabaseSync;
   private readonly principalId: string;
   private readonly now: () => string;
 
-  constructor(options: ActionCandidateStoreOptions) {
+  constructor(options: WriteApprovalCandidateStoreOptions) {
     this.db = options.db;
     this.principalId = options.principalId;
     const clock = options.now ?? (() => new Date().toISOString());
@@ -119,7 +119,7 @@ export class ActionCandidateStore {
     risk: string;
     task_id?: string;
     expires_at: string;
-  }): ActionCandidate {
+  }): WriteApprovalCandidate {
     const candidateId = `act_${uuidv7()}`;
     const now = this.now();
     this.db
@@ -143,17 +143,17 @@ export class ActionCandidateStore {
         now,
         now,
       );
-    return this.get(candidateId) as ActionCandidate;
+    return this.get(candidateId) as WriteApprovalCandidate;
   }
 
-  get(candidateId: string): ActionCandidate | undefined {
+  get(candidateId: string): WriteApprovalCandidate | undefined {
     const row = this.db
       .prepare("SELECT * FROM action_candidates WHERE candidate_id = ? AND principal_id = ?")
       .get(candidateId, this.principalId) as unknown as CandidateRow | undefined;
     return row === undefined ? undefined : this.rowToCandidate(row);
   }
 
-  listPending(): ActionCandidate[] {
+  listPending(): WriteApprovalCandidate[] {
     this.expireDue();
     const rows = this.db
       .prepare(
@@ -180,24 +180,24 @@ export class ActionCandidateStore {
     return due.length;
   }
 
-  private setStatus(candidateId: string, status: ActionCandidateStatus): ActionCandidate {
+  private setStatus(candidateId: string, status: WriteApprovalCandidateStatus): WriteApprovalCandidate {
     const existing = this.get(candidateId);
-    if (existing === undefined) throw new ActionCandidateError("not_found", `no candidate ${candidateId}`);
+    if (existing === undefined) throw new WriteApprovalCandidateError("not_found", `no candidate ${candidateId}`);
     this.db
       .prepare("UPDATE action_candidates SET status = ?, updated_at = ? WHERE candidate_id = ?")
       .run(status, this.now(), candidateId);
-    return this.get(candidateId) as ActionCandidate;
+    return this.get(candidateId) as WriteApprovalCandidate;
   }
 
   /** Record operator approval (idempotent on already-approved/executed). */
-  markApproved(candidateId: string): ActionCandidate {
+  markApproved(candidateId: string): WriteApprovalCandidate {
     this.expireDue();
     const existing = this.get(candidateId);
-    if (existing === undefined) throw new ActionCandidateError("not_found", `no candidate ${candidateId}`);
+    if (existing === undefined) throw new WriteApprovalCandidateError("not_found", `no candidate ${candidateId}`);
     if (existing.status === "executed" || existing.status === "approved") return existing;
-    if (existing.status === "expired") throw new ActionCandidateError("expired", `candidate ${candidateId} expired`);
+    if (existing.status === "expired") throw new WriteApprovalCandidateError("expired", `candidate ${candidateId} expired`);
     if (existing.status !== "pending_approval") {
-      throw new ActionCandidateError(
+      throw new WriteApprovalCandidateError(
         "conflict",
         `candidate ${candidateId} is ${existing.status}, not approvable`,
       );
@@ -205,20 +205,20 @@ export class ActionCandidateStore {
     return this.setStatus(candidateId, "approved");
   }
 
-  markExecuted(candidateId: string): ActionCandidate {
+  markExecuted(candidateId: string): WriteApprovalCandidate {
     return this.setStatus(candidateId, "executed");
   }
 
-  reject(candidateId: string): ActionCandidate {
+  reject(candidateId: string): WriteApprovalCandidate {
     return this.setStatus(candidateId, "rejected");
   }
 
-  supersede(candidateId: string): ActionCandidate {
+  supersede(candidateId: string): WriteApprovalCandidate {
     return this.setStatus(candidateId, "superseded");
   }
 
-  private rowToCandidate(row: CandidateRow): ActionCandidate {
-    const candidate: ActionCandidate = {
+  private rowToCandidate(row: CandidateRow): WriteApprovalCandidate {
+    const candidate: WriteApprovalCandidate = {
       candidate_id: row.candidate_id,
       principal_id: row.principal_id,
       tool: row.tool,
@@ -227,7 +227,7 @@ export class ActionCandidateStore {
       preconditions: JSON.parse(row.preconditions_json) as Record<string, unknown>,
       preconditions_hash: row.preconditions_hash,
       risk: row.risk,
-      status: row.status as ActionCandidateStatus,
+      status: row.status as WriteApprovalCandidateStatus,
       expires_at: row.expires_at,
       created_at: row.created_at,
       updated_at: row.updated_at,
@@ -242,10 +242,10 @@ export class ActionCandidateStore {
 // ---------------------------------------------------------------------------
 
 export type ApprovalExecutionResult =
-  | { kind: "executed"; candidate: ActionCandidate; output: unknown }
-  | { kind: "stale"; candidate: ActionCandidate; reason: string }
-  | { kind: "expired"; candidate: ActionCandidate }
-  | { kind: "not_approvable"; candidate: ActionCandidate; reason: string };
+  | { kind: "executed"; candidate: WriteApprovalCandidate; output: unknown }
+  | { kind: "stale"; candidate: WriteApprovalCandidate; reason: string }
+  | { kind: "expired"; candidate: WriteApprovalCandidate }
+  | { kind: "not_approvable"; candidate: WriteApprovalCandidate; reason: string };
 
 /**
  * Execute an approved candidate after re-validating its preconditions (§16):
@@ -257,7 +257,7 @@ export type ApprovalExecutionResult =
  *     never anything re-read from the model.
  */
 export async function executeApprovedCandidate(
-  store: ActionCandidateStore,
+  store: WriteApprovalCandidateStore,
   candidateId: string,
   hooks: {
     /** Re-read the current precondition state (product/task/conversation). */
@@ -268,7 +268,7 @@ export async function executeApprovedCandidate(
 ): Promise<ApprovalExecutionResult> {
   const candidate = store.get(candidateId);
   if (candidate === undefined) {
-    throw new ActionCandidateError("not_found", `no candidate ${candidateId}`);
+    throw new WriteApprovalCandidateError("not_found", `no candidate ${candidateId}`);
   }
   if (candidate.status === "expired") return { kind: "expired", candidate };
   if (candidate.status !== "approved") {
@@ -284,7 +284,7 @@ export async function executeApprovedCandidate(
     store.supersede(candidateId);
     return {
       kind: "stale",
-      candidate: store.get(candidateId) as ActionCandidate,
+      candidate: store.get(candidateId) as WriteApprovalCandidate,
       reason:
         "前置状态已变化（preconditions_hash 不匹配），旧批准失效；已标记 superseded，请重新生成候选。",
     };

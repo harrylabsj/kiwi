@@ -1,0 +1,137 @@
+/**
+ * A2A JSONRPC binding 出站 client（WP1）。
+ *
+ * 方法面：SendMessage（Text Part + Data Part 可携带 KNP envelope）、GetTask。
+ * 响应解析为结构化 A2ATask。全部失败路径 fail-closed：
+ *
+ * - 构造时对端点 URL 做静态 SSRF/URL 校验（unsafe_target）；
+ * - 请求前做 DNS 复查（主机名解析出的 IP 不得落在私网/保留段）；
+ * - timeout / network / 非 2xx / JSON-RPC error / 畸形响应 / schema 校验
+ *   统一抛 A2AClientError，绝不隐式重试或降级到其他 channel（不变量 21）。
+ *
+ * 零新增依赖：Node 22 原生 fetch + AbortController + node:crypto randomUUID。
+ */
+
+import { randomUUID } from "node:crypto";
+import { A2AClientError, invalidResponse } from "./error.js";
+import { buildJsonRpcRequest, parseJsonRpcResponse, tryParseJsonRpcError } from "./jsonrpc.js";
+import { parseTaskResult } from "./parse.js";
+import type { A2AOutboundSigner, A2AMessage, A2AClientOptions, A2ATask } from "./types.js";
+import { assertResolvableTargetUrl, assertSafeTargetUrl } from "./url-policy.js";
+
+export class A2AClient {
+  private readonly url: URL;
+  private readonly timeoutMs: number;
+  private readonly fetchImpl: typeof fetch;
+  private readonly allowPrivateRanges: boolean;
+  private readonly skipDnsCheck: boolean;
+  private readonly resolveIp?: (hostname: string) => Promise<string[]>;
+  private readonly headers: Record<string, string>;
+  private readonly signer?: A2AOutboundSigner;
+
+  constructor(options: A2AClientOptions) {
+    this.url = assertSafeTargetUrl(options.url, { allowPrivateRanges: options.allowPrivateRanges });
+    this.timeoutMs = options.timeoutMs ?? 15_000;
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.allowPrivateRanges = options.allowPrivateRanges ?? false;
+    this.skipDnsCheck = options.skipDnsCheck ?? false;
+    this.resolveIp = options.resolveIp;
+    this.headers = options.headers ?? {};
+    this.signer = options.signer;
+  }
+
+  /** A2A `message/send`：发送一条 Message（含 Text/Data Part）。返回远端 Task。 */
+  async sendMessage(message: A2AMessage, contextId?: string): Promise<A2ATask> {
+    const result = await this.rpc("message/send", {
+      message: message as unknown as Record<string, unknown>,
+      ...(contextId !== undefined ? { contextId } : {}),
+    });
+    return result;
+  }
+
+  /** A2A `tasks/get`：按 taskId 拉取 Task 状态与 artifacts。 */
+  async getTask(taskId: string): Promise<A2ATask> {
+    return this.rpc("tasks/get", { id: taskId });
+  }
+
+  private async rpc(method: string, params: unknown): Promise<A2ATask> {
+    await assertResolvableTargetUrl(this.url, {
+      allowPrivateRanges: this.allowPrivateRanges,
+      skipDnsCheck: this.skipDnsCheck,
+      resolveIp: this.resolveIp,
+    });
+
+    const id = randomUUID();
+    const body = JSON.stringify(buildJsonRpcRequest(method, params, id));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    const baseHeaders: Record<string, string> = {
+      "content-type": "application/json",
+      accept: "application/json",
+      ...this.headers,
+    };
+    // WP5：配置了出站签名器时，对每个请求计算 HTTP Message Signature 头。
+    // 注意：覆盖组件含 @method，必须是真实 HTTP 方法（POST），不是 JSON-RPC 方法名。
+    const headers =
+      this.signer === undefined
+        ? baseHeaders
+        : { ...baseHeaders, ...this.signer.sign({ method: "POST", url: this.url.href, body: Buffer.from(body, "utf8"), headers: baseHeaders }) };
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(this.url.href, {
+        method: "POST",
+        headers,
+        body,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new A2AClientError("timeout", `A2A request timed out after ${this.timeoutMs}ms`);
+      }
+      throw new A2AClientError(
+        "network",
+        `A2A request failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    let raw: unknown;
+    try {
+      raw = await response.json();
+    } catch {
+      if (!response.ok) {
+        throw new A2AClientError("http_status", `A2A HTTP ${response.status} with non-JSON body`, {
+          httpStatus: response.status,
+        });
+      }
+      throw invalidResponse("response body is not JSON");
+    }
+
+    if (!response.ok) {
+      // 兼容：部分实现用非 2xx 状态码携带 JSON-RPC error 体。
+      const jsonRpcError = tryParseJsonRpcError(raw, id);
+      if (jsonRpcError !== undefined) {
+        throw new A2AClientError("jsonrpc_error", jsonRpcError.message, {
+          httpStatus: response.status,
+          jsonrpcCode: jsonRpcError.code,
+          jsonrpcData: jsonRpcError.data,
+        });
+      }
+      throw new A2AClientError("http_status", `A2A HTTP ${response.status}`, {
+        httpStatus: response.status,
+      });
+    }
+
+    const parsed = parseJsonRpcResponse(raw, id);
+    if ("error" in parsed) {
+      throw new A2AClientError("jsonrpc_error", parsed.error.message, {
+        jsonrpcCode: parsed.error.code,
+        jsonrpcData: parsed.error.data,
+      });
+    }
+    return parseTaskResult(parsed.result);
+  }
+}

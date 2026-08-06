@@ -206,7 +206,7 @@ CREATE INDEX idx_tracking_rules_due ON tracking_rules (status, next_check_at);
 `;
 
 const MIGRATION_3 = `
--- v0.3.0-C: consultation links and approval ActionCandidates (§11.8, §16).
+-- v0.3.0-C: consultation links and approval WriteApprovalCandidates (§11.8, §16).
 -- consultation_links associates a Buyer task + candidate with the authoritative
 -- Marketplace Conversation (shopping-cli) without copying its state.
 CREATE TABLE consultation_links (
@@ -224,7 +224,7 @@ CREATE TABLE consultation_links (
 CREATE INDEX idx_consultation_links_task ON consultation_links (task_id, status);
 CREATE INDEX idx_consultation_links_conv ON consultation_links (connector_id, conversation_id);
 
--- ActionCandidates are content-hashed approval objects (§16): the operator
+-- WriteApprovalCandidates are content-hashed approval objects (§16): the operator
 -- approves a specific argument set against a specific precondition state.
 -- arguments_json holds only public catalog/inventory facts — Restricted
 -- values (private floors, costs) never enter this table, the event log or

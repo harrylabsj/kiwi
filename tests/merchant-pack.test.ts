@@ -1,7 +1,7 @@
 /**
  * Merchant capability pack tests (design §15.3/§15.4, §16, §19.3):
  * Credential scope isolation (write tools fail closed without the scope
- * token), ActionCandidate approval flow with content hashes, stale-approval
+ * token), WriteApprovalCandidate approval flow with content hashes, stale-approval
  * invalidation on changed preconditions, private merchant value non-leak, and
  * the read-only catalog/inventory/consultation/review surface.
  *
@@ -11,7 +11,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { migrateMemorySchema } from "../src/agent/memory/schema.js";
-import { ActionCandidateStore, executeApprovedCandidate } from "../src/agent/merchant/action-candidate.js";
+import { WriteApprovalCandidateStore, executeApprovedCandidate } from "../src/agent/merchant/action-candidate.js";
 import { StaticCredentialBroker } from "../src/agent/merchant/credential-broker.js";
 import { FakeMerchantClient, fakeMerchantProduct } from "../src/agent/merchant/fake-merchant-client.js";
 import { buildMerchantTools, type MerchantToolDeps } from "../src/agent/merchant/merchant-tools.js";
@@ -39,7 +39,7 @@ type CallableTool = {
 };
 
 interface MerchantHarness {
-  approvals: ActionCandidateStore;
+  approvals: WriteApprovalCandidateStore;
   merchantClient: FakeMerchantClient;
   broker: StaticCredentialBroker;
   mode: { value: "manual" | "supervised" | "autopilot" };
@@ -67,7 +67,7 @@ function setupMerchant(options: {
   const vault = new PrivateVault(new EnvKeyProvider(TEST_KEY));
   const store = new MemoryStore({ db, vault, now: () => clock });
   store.bindPrincipal(PRINCIPAL);
-  const approvals = new ActionCandidateStore({ db, principalId: PRINCIPAL, now: () => clock });
+  const approvals = new WriteApprovalCandidateStore({ db, principalId: PRINCIPAL, now: () => clock });
   const merchantClient = new FakeMerchantClient({ products: [fakeMerchantProduct()] });
   const broker = new StaticCredentialBroker({
     ...(options.catalog !== undefined ? { catalog: options.catalog } : {}),
@@ -150,7 +150,7 @@ describe("merchant write approval flow (§16)", () => {
     expect(text).toContain("等待批准");
     expect(h.approvals.listPending()).toHaveLength(1);
 
-    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<ActionCandidateStore["listPending"]>[number]>;
+    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<WriteApprovalCandidateStore["listPending"]>[number]>;
     expect(candidate.arguments_hash).toMatch(/^sha256:/);
     expect(candidate.preconditions_hash).toMatch(/^sha256:/);
     expect(candidate.arguments).toMatchObject({ sku: "sku-001", stock: 7 });
@@ -174,7 +174,7 @@ describe("merchant write approval flow (§16)", () => {
       product: { sku: "sku-999", title: "新品", price: 30, stock: 5, merchant_id: "merchant-001" },
     });
     expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("等待批准");
-    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<ActionCandidateStore["listPending"]>[number]>;
+    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<WriteApprovalCandidateStore["listPending"]>[number]>;
     h.approvals.markApproved(candidate.candidate_id);
     const outcome = await executeApprovedCandidate(h.approvals, candidate.candidate_id, h.hooks.get(candidate.candidate_id) as PendingHooks);
     expect(outcome.kind).toBe("executed");
@@ -189,7 +189,7 @@ describe("merchant write approval flow (§16)", () => {
     expect(text).toContain("草稿候选");
     // Even in autopilot, a draft is never auto-executed.
     expect((await h.merchantClient.getProduct("sku-001")).price).toBe(99);
-    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<ActionCandidateStore["listPending"]>[number]>;
+    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<WriteApprovalCandidateStore["listPending"]>[number]>;
     h.approvals.markApproved(candidate.candidate_id);
     const outcome = await executeApprovedCandidate(h.approvals, candidate.candidate_id, h.hooks.get(candidate.candidate_id) as PendingHooks);
     expect(outcome.kind).toBe("executed");
@@ -201,7 +201,7 @@ describe("merchant write approval flow (§16)", () => {
     const tool = h.getTool("update_inventory");
     const result = await tool.execute("c1", { sku: "sku-001", stock: 7 });
     expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("等待批准");
-    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<ActionCandidateStore["listPending"]>[number]>;
+    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<WriteApprovalCandidateStore["listPending"]>[number]>;
 
     // The product state changes BEFORE approval (another worker / a real event).
     await h.merchantClient.updateInventory("sku-001", 2);
@@ -221,7 +221,7 @@ describe("merchant write approval flow (§16)", () => {
     const h = setupMerchant({ inventory: "inv" });
     const tool = h.getTool("update_inventory");
     await tool.execute("c1", { sku: "sku-001", stock: 5 });
-    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<ActionCandidateStore["listPending"]>[number]>;
+    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<WriteApprovalCandidateStore["listPending"]>[number]>;
     h.setNow("2026-08-05T13:00:00+08:00"); // past the 15-min TTL
     // Approving an expired candidate is refused (fail closed).
     expect(() => h.approvals.markApproved(candidate.candidate_id)).toThrow(/expired/);
@@ -250,7 +250,7 @@ describe("merchant write approval flow (§16)", () => {
     expect((await h.merchantClient.getProduct("sku-001")).price).toBe(95);
     // The candidate carries the PROPOSED price (60), never the private floor
     // (80) — the floor stays in the profile and is not written anywhere.
-    const escalated = h.approvals.listPending()[0] as NonNullable<ReturnType<ActionCandidateStore["listPending"]>[number]>;
+    const escalated = h.approvals.listPending()[0] as NonNullable<ReturnType<WriteApprovalCandidateStore["listPending"]>[number]>;
     expect(JSON.stringify(escalated.arguments)).not.toContain("底价");
     expect(escalated.arguments).toMatchObject({ sku: "sku-001" });
   });
@@ -307,7 +307,7 @@ describe("private merchant value non-leak (§14, §19.3)", () => {
     expect(text).not.toContain("floor-price-73.5");
     expect(text).not.toContain("73.5");
     // Candidate args are public catalog facts only.
-    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<ActionCandidateStore["listPending"]>[number]>;
+    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<WriteApprovalCandidateStore["listPending"]>[number]>;
     expect(JSON.stringify(candidate.arguments)).not.toContain("floor-price-73.5");
     expect(JSON.stringify(candidate.preconditions)).not.toContain("floor-price-73.5");
   });
@@ -375,7 +375,7 @@ describe("merchant negotiation decision via the gateway gate (§15.4, §16)", ()
     });
     expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("等待批准");
 
-    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<ActionCandidateStore["listPending"]>[number]>;
+    const candidate = h.approvals.listPending()[0] as NonNullable<ReturnType<WriteApprovalCandidateStore["listPending"]>[number]>;
     h.approvals.markApproved(candidate.candidate_id);
     const outcome = await executeApprovedCandidate(
       h.approvals,
@@ -436,7 +436,7 @@ describe("merchant negotiation decision via the gateway gate (§15.4, §16)", ()
     });
     expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("等待批准");
     const candidate = h.approvals.listPending()[0] as NonNullable<
-      ReturnType<ActionCandidateStore["listPending"]>[number]
+      ReturnType<WriteApprovalCandidateStore["listPending"]>[number]
     >;
     h.approvals.markApproved(candidate.candidate_id);
     const outcome = await executeApprovedCandidate(
