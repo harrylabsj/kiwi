@@ -1,12 +1,17 @@
 ---
 title: Kiwi Negotiation Protocol 1.0
-doc_revision: "1.1"
+doc_revision: "1.2"
 short_name: KNP/1.0
-status: Draft Normative Specification
-date: 2026-08-06
-target_implementation: Kiwi v0.4+
+status: Normative Specification (Released 2026-08-07)
+date: 2026-08-07
+target_implementation: Kiwi v1.0.0
 scope: Pre-transaction Agent-to-Agent commerce negotiation
 ---
+
+# Kiwi Negotiation Protocol 1.0
+
+**A2A v1.0 已宣布（2026-08-07）**：基线 §41 完成定义 26/26 经就绪度审计实证满足。
+namespace 与 schema 托管于 `https://kiwi.harrylabsj.com`（公开仓库 `harrylabsj/kiwi-spec`）。
 
 # Kiwi Negotiation Protocol 1.0
 
