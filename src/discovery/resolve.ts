@@ -26,9 +26,19 @@
  * 后续失败绝不自动降级到权限更宽的通道（不变量 21）。
  *
  * 全部失败路径抛 DiscoveryError（fail-closed，§4.6）。
+ *
+ * v2.3（设计 §21 / MVP Slice A/B）：DiscoveryDeps.catalog 可选配置后启用
+ * resolveViaCatalog —— 通过 shopping-cli Commerce Agent Catalog 发现候选并升级为
+ * CounterpartyProfile。catalog 候选不是已证明的在线身份（契约 §1），升级路径
+ * 必须走 resolve() 做 fresh verification，不直接信任候选元数据。
  */
 
-import { AgentCardError, parseAgentCard, type AgentCard, type AgentInterface } from "./agent-card/index.js";
+import {
+  AgentCardError,
+  parseAgentCard,
+  type AgentCard,
+  type AgentInterface,
+} from "./agent-card/index.js";
 import { intersectCapabilities } from "./capability/index.js";
 import type { CapabilityIntersection } from "./capability/index.js";
 import { UcpResolver } from "./ucp/resolver.js";
@@ -37,6 +47,14 @@ import { isUcpError } from "./ucp/error.js";
 import { computeCapabilityIntersection, intersectionView } from "./ucp/intersect.js";
 import type { UcpIntersectionView } from "./ucp/intersect.js";
 import type { UcpProfile } from "./ucp/types.js";
+import { normalizeHostingMode } from "./catalog-source/index.js";
+import type {
+  CandidateAgent,
+  CatalogSearchQuery,
+  HostingMode,
+  ShoppingCliCatalogSource,
+  VerificationStatus,
+} from "./catalog-source/index.js";
 import type { ChannelCandidate, CounterpartyProfile } from "../counterparty/channel.js";
 
 export interface DiscoveryInput {
@@ -56,6 +74,25 @@ export interface UcpDiscoveryDeps {
   resolver?: UcpResolverOptions;
 }
 
+/**
+ * Commerce Agent Catalog 集成（v2.3 / 设计 §21、MVP Slice A/B）。
+ * 提供 catalog source 后，AgentDiscovery 可通过 resolveViaCatalog 把候选升级为
+ * CounterpartyProfile。Catalog 返回的是 candidate，不是已证明的在线身份（契约 §1）；
+ * 升级路径必须走 resolve() 做 fresh verification。
+ */
+export interface CatalogDiscoveryDeps {
+  /** ShoppingCliCatalogSource（shopping-cli /v1/agent-catalog/* 消费端）。 */
+  source: ShoppingCliCatalogSource;
+  /** 缺省搜索查询；resolveViaCatalog 未显式传 query 时使用。 */
+  query?: CatalogSearchQuery;
+  /**
+   * 显式放宽 verification.status 过滤（设计 §8.2：Kiwi SHOULD 按 TrustPolicy
+   * 做 fresh verification）。默认过滤 blocked 状态集 {rejected, suspended,
+   * unreachable}；true 时这些候选也进入 fresh resolve（风险自负，文档注明）。
+   */
+  includeBlocked?: boolean;
+}
+
 export interface DiscoveryDeps {
   /** 拉取 card 的 fetch；缺省 globalThis.fetch。 */
   fetchImpl?: typeof fetch;
@@ -73,6 +110,11 @@ export interface DiscoveryDeps {
    * `disabled: true` 保持 v0.5 行为。
    */
   ucp?: UcpDiscoveryDeps;
+  /**
+   * Commerce Agent Catalog 集成（v2.3，可选）：配置后启用 resolveViaCatalog。
+   * 不影响现有 resolve() 语义。
+   */
+  catalog?: CatalogDiscoveryDeps;
 }
 
 export type DiscoveryErrorCode =
@@ -91,10 +133,31 @@ export class DiscoveryError extends Error {
   }
 }
 
+/**
+ * resolveViaCatalog 的产出：catalog 候选 + 经 fresh verification 升级的档案。
+ * `candidate` 保留 catalog 元数据（catalog_agent_id / hosting / verification 等），
+ * 供调用方追溯来源；`profile` 是可信的 CounterpartyProfile。
+ */
+export interface ResolvedCatalogCandidate {
+  candidate: CandidateAgent;
+  profile: CounterpartyProfile;
+}
+
 /** Kiwi 本地默认 A2A binding：JSONRPC 1.0（基线 §3.1 core binding）。 */
 const DEFAULT_LOCAL_INTERFACES: AgentInterface[] = [
   { url: "https://kiwi.local/a2a", protocolBinding: "JSONRPC", protocolVersion: "1.0" },
 ];
+
+/**
+ * 默认过滤的 verification.status（设计 §8.2 fresh verification / TrustPolicy）。
+ * rejected / suspended / unreachable 说明对端身份已被 catalog 判定不可信；
+ * includeBlocked: true 可显式放宽。
+ */
+const BLOCKED_CATALOG_VERIFICATION_STATUSES: ReadonlySet<VerificationStatus> = new Set([
+  "rejected",
+  "suspended",
+  "unreachable",
+]);
 
 const WELL_KNOWN_AGENT_CARD_PATH = "/.well-known/agent-card.json";
 
@@ -111,6 +174,30 @@ function findA2aTransportEndpoint(profile: UcpProfile): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * 按 catalog hosting.mode（设计 §22）收窄 resolve() 产出的通道候选。
+ * 不引入自动降级（不变量 21 / §22 fallback 不能自动扩大权限）：
+ *   - direct_only → 只保留 a2a-direct（无 direct 端点则该候选不可用）；
+ *   - hosted_only → 只保留 shopping-cli-hosted（未配置 hosted 则不可用）；
+ *   - hybrid     → 保留 direct + hosted 两个候选，优先序仍由 selectChannelCandidate
+ *                  （direct 优先）决定；
+ *   - unknown    → 只当 resolve() 实际发现 a2a binding 时给 direct 候选。
+ * platform-api 不进入 catalog 驱动的档案（catalog 只表达 direct/hosted 两种偏好；
+ * 附加 platform 候选属于超出 merchant 声明范围的降级/扩权）。
+ */
+function applyHostingMode(candidates: ChannelCandidate[], mode: HostingMode): ChannelCandidate[] {
+  switch (mode) {
+    case "direct_only":
+      return candidates.filter((c) => c.kind === "a2a-direct");
+    case "hosted_only":
+      return candidates.filter((c) => c.kind === "shopping-cli-hosted");
+    case "hybrid":
+      return candidates.filter((c) => c.kind === "a2a-direct" || c.kind === "shopping-cli-hosted");
+    case "unknown":
+      return candidates.filter((c) => c.kind === "a2a-direct");
+  }
 }
 
 export class AgentDiscovery {
@@ -164,7 +251,10 @@ export class AgentDiscovery {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
     try {
-      response = await fetchImpl(url, { signal: controller.signal, headers: { accept: "application/json" } });
+      response = await fetchImpl(url, {
+        signal: controller.signal,
+        headers: { accept: "application/json" },
+      });
     } catch (err) {
       throw new DiscoveryError(
         "card_fetch_failed",
@@ -174,13 +264,19 @@ export class AgentDiscovery {
       clearTimeout(timer);
     }
     if (!response.ok) {
-      throw new DiscoveryError("card_fetch_failed", `Agent Card fetch returned HTTP ${response.status} from ${url}`);
+      throw new DiscoveryError(
+        "card_fetch_failed",
+        `Agent Card fetch returned HTTP ${response.status} from ${url}`,
+      );
     }
     let raw: unknown;
     try {
       raw = await response.json();
     } catch {
-      throw new DiscoveryError("card_fetch_failed", `Agent Card response from ${url} is not valid JSON`);
+      throw new DiscoveryError(
+        "card_fetch_failed",
+        `Agent Card response from ${url} is not valid JSON`,
+      );
     }
     return raw;
   }
@@ -246,10 +342,9 @@ export class AgentDiscovery {
           }
         }
       } catch (err) {
-        const detail =
-          isUcpError(err)
-            ? `ucp:${err.code}`
-            : `ucp:unexpected:${err instanceof Error ? err.message : String(err)}`;
+        const detail = isUcpError(err)
+          ? `ucp:${err.code}`
+          : `ucp:unexpected:${err instanceof Error ? err.message : String(err)}`;
         ucpFallbackReason = `${detail} (fallback to well-known Agent Card)`;
       }
     }
@@ -282,7 +377,10 @@ export class AgentDiscovery {
 
     return {
       identity: this.identityFor(card),
-      source: input.agentCardUrl !== undefined ? `card:${input.agentCardUrl}` : `domain:${input.domain ?? url}`,
+      source:
+        input.agentCardUrl !== undefined
+          ? `card:${input.agentCardUrl}`
+          : `domain:${input.domain ?? url}`,
       agent_card: card,
       intersection,
       channel_candidates: candidates,
@@ -290,5 +388,71 @@ export class AgentDiscovery {
       ...(ucpIntersection !== undefined ? { ucp_intersection: ucpIntersection } : {}),
       ...(ucpFallbackReason !== undefined ? { ucp_fallback_reason: ucpFallbackReason } : {}),
     };
+  }
+
+  /**
+   * 通过 Commerce Agent Catalog 发现并升级对端（v2.3，设计 §21 / MVP Slice A/B）。
+   *
+   * 流程：searchCandidates → 按 TrustPolicy 过滤 blocked 状态 → 对每个候选按其
+   * `discovery.agent_card_url` 或 `merchant.domain` 走现有 resolve() 做 fresh
+   * verification → 按候选 hosting.mode 收窄通道候选（不自动降级）→ 返回
+   * `{ candidate, profile }`。
+   *
+   * 关键语义（契约 §1 / 设计 §8.2）：catalog 候选**不是**已证明的在线身份。
+   * 本方法绝不直接信任候选元数据构造档案，profile 必须来自 resolve() 实时拉取
+   * 校验的 Agent Card。没有 agent_card_url / merchant.domain 的候选无法 fresh
+   * verify → 跳过（不产出档案）。filtered 后无可用通道候选 → 跳过（不降级）。
+   *
+   * fail-closed（§4.6）：任一候选的 fresh resolve 失败（fetch / 校验 / 无通道）
+   * 直接抛错，不静默丢弃；blocked 状态候选默认过滤，includeBlocked: true 显式放宽。
+   *
+   * @param query 覆盖 DiscoveryDeps.catalog.query 的搜索查询。
+   */
+  async resolveViaCatalog(query?: CatalogSearchQuery): Promise<ResolvedCatalogCandidate[]> {
+    const catalogDeps = this.deps.catalog;
+    if (catalogDeps === undefined) {
+      throw new DiscoveryError(
+        "invalid_input",
+        "resolveViaCatalog requires a catalog source in DiscoveryDeps.catalog",
+      );
+    }
+    const candidates = await catalogDeps.source.searchCandidates(query ?? catalogDeps.query);
+    const results: ResolvedCatalogCandidate[] = [];
+    for (const candidate of candidates) {
+      if (!this.isCatalogCandidateAllowed(candidate)) continue;
+      const input = this.resolveInputForCandidate(candidate);
+      if (input === undefined) continue;
+      // 现有 resolve() 实时拉取校验（fresh verification）。失败 propagate。
+      const profile = await this.resolve(input);
+      const channelCandidates = applyHostingMode(
+        profile.channel_candidates,
+        normalizeHostingMode(candidate.hosting.mode),
+      );
+      if (channelCandidates.length === 0) continue;
+      results.push({ candidate, profile: { ...profile, channel_candidates: channelCandidates } });
+    }
+    return results;
+  }
+
+  /** blocked verification.status 过滤；includeBlocked 显式放宽（文档注明）。 */
+  private isCatalogCandidateAllowed(candidate: CandidateAgent): boolean {
+    if (this.deps.catalog?.includeBlocked === true) return true;
+    return !BLOCKED_CATALOG_VERIFICATION_STATUSES.has(candidate.verification.status);
+  }
+
+  /**
+   * 候选 → resolve() 输入。优先 agent_card_url，其次 merchant.domain；
+   * 两者都缺 → undefined（无法 fresh verify，跳过）。
+   */
+  private resolveInputForCandidate(candidate: CandidateAgent): DiscoveryInput | undefined {
+    const agentCardUrl = candidate.discovery?.agent_card_url;
+    if (agentCardUrl !== undefined && agentCardUrl.length > 0) {
+      return { agentCardUrl };
+    }
+    const domain = candidate.merchant?.domain;
+    if (domain !== undefined && domain.length > 0) {
+      return { domain };
+    }
+    return undefined;
   }
 }
