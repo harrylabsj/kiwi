@@ -41,7 +41,7 @@ function candidateFixture(overrides: Record<string, unknown> = {}): Record<strin
       ucp_profile_url: "https://acme.example/.well-known/ucp",
     },
     protocols: { a2a: ["1.0.0"], ucp: ["2026-04-08"] },
-    capabilities: ["com.shopping.agent.capability:catalog"],
+    capabilities: ["com.harrylabsj.shopping.capability:catalog"],
     verification: { status: "discovered", last_verified_at: "2026-08-06T00:00:00Z" },
     hosting: { mode: "direct_only" },
     contract: { name: "candidate-agent", version: "1.0" },
@@ -136,7 +136,7 @@ describe("ShoppingCliCatalogSource", () => {
     expect(candidates[0]?.merchant?.name).toBe("Acme Merchant");
     expect(candidates[0]?.verification.status).toBe("discovered");
     expect(candidates[0]?.hosting.mode).toBe("direct_only");
-    expect(candidates[0]?.capabilities).toEqual(["com.shopping.agent.capability:catalog"]);
+    expect(candidates[0]?.capabilities).toEqual(["com.harrylabsj.shopping.capability:catalog"]);
   });
 
   it("getCandidate 返回契约候选（catalog_agent 信封）", async () => {
