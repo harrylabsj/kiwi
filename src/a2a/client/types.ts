@@ -1,4 +1,20 @@
 /**
+ * Copyright 2026 harrylabsj
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
  * A2A Message / Task / Artifact 领域类型（§43 pin A2A v1.0.x）。
  *
  * 本 WP1 只建模出站 client 需要的子集：Message（Text Part + Data Part）、Task

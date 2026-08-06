@@ -1,4 +1,20 @@
 /**
+ * Copyright 2026 harrylabsj
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
  * discovery/ucp — UCP Profile（UCP 2026-04-08 spec family，基线 §3.2 / §25 / §43）。
  *
  * WP1：UCP Profile 模型 + resolver。后续 WP3 通过 discovery/resolve.ts 集成

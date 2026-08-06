@@ -1,4 +1,20 @@
 /**
+ * Copyright 2026 harrylabsj
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
  * A2A Agent Card 领域类型（基线 §26，外部标准 pin §43：A2A v1.0.x）。
  *
  * 形状以架构基线 §26 的完整示例为准：`supportedInterfaces` 是数组，每一项至少
