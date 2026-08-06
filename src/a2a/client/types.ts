@@ -88,6 +88,12 @@ export interface A2AClientOptions {
   resolveIp?: (hostname: string) => Promise<string[]>;
   /** 附加请求头（如认证）。 */
   headers?: Record<string, string>;
+  /**
+   * UCP-Agent 宣告（基线 §25.1）：配置后出站请求携带
+   * `UCP-Agent: profile="<uri>"`（RFC 8941 Dictionary），声明本方的 UCP
+   * platform profile URI。HTTP-based A2A binding 用；可选。
+   */
+  ucpAgentProfile?: string;
   /** 出站 HTTP Message Signature 签名器（可选；配置后每个请求都被签名）。 */
   signer?: A2AOutboundSigner;
 }

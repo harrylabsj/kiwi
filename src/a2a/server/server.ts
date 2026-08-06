@@ -19,7 +19,10 @@
 import http from "node:http";
 import { isJsonRpcRequest } from "../client/index.js";
 import { NegotiationValidationError } from "../../negotiation/domain/common.js";
+import { parseUcpAgentHeader, UCP_AGENT_HEADER } from "../ucp-agent.js";
 import { buildAgentCard } from "./card.js";
+import { buildUcpProfile, WELL_KNOWN_UCP_PATH } from "./ucp.js";
+import type { BuiltUcpProfile, UcpPublishOptions } from "./ucp.js";
 import { defaultAuthVerifier } from "./auth.js";
 import { defaultHandler } from "./handler.js";
 import { InboundPipeline } from "./pipeline.js";
@@ -135,6 +138,7 @@ export class A2AServer {
   private readonly maxPayloadBytes: number;
   private readonly now: () => string;
   private readonly wellKnownPath: string;
+  private readonly ucpOptions: UcpPublishOptions | undefined;
   private readonly pipeline: InboundPipeline;
 
   constructor(options: A2AServerOptions) {
@@ -146,6 +150,17 @@ export class A2AServer {
     }
     this.now = options.now ?? (() => new Date().toISOString());
     this.wellKnownPath = options.wellKnownPath ?? DEFAULT_WELL_KNOWN_PATH;
+
+    const ucpOpt = options.ucp;
+    if (
+      ucpOpt === undefined ||
+      ucpOpt === false ||
+      (typeof ucpOpt === "object" && ucpOpt.enabled === false)
+    ) {
+      this.ucpOptions = undefined;
+    } else {
+      this.ucpOptions = ucpOpt === true ? {} : ucpOpt;
+    }
 
     const handler = options.handler ?? defaultHandler();
     const tasks = new TaskRegistry();
@@ -188,6 +203,15 @@ export class A2AServer {
       const a2aPath = normalizePath(cardConfig.a2aPath);
       if (pathname === this.wellKnownPath) {
         await this.handleWellKnown(req, res);
+        return;
+      }
+      // WP3 §25：UCP Profile 标准发现入口（/.well-known/ucp）。未配置发布时 404。
+      if (pathname === WELL_KNOWN_UCP_PATH) {
+        if (this.ucpOptions === undefined) {
+          sendText(res, 404, "not found");
+          return;
+        }
+        await this.handleUcp(req, res);
         return;
       }
       if (pathname === a2aPath) {
@@ -253,6 +277,44 @@ export class A2AServer {
     sendJson(res, 200, card);
   }
 
+  /**
+   * UCP Profile 端点（WP3）：GET /.well-known/ucp。
+   * 响应头 Cache-Control: public, max-age=N（N>=60，UCP 规范强制）；
+   * 内容由 buildUcpProfile 强制过 validate 自洽（fail-closed）。
+   */
+  private async handleUcp(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (req.method !== "GET") {
+      sendText(res, 405, "method not allowed");
+      return;
+    }
+    const auth = await this.authenticate(req);
+    if ("error" in auth) {
+      sendJsonError(res, null, auth.error.httpStatus, auth.error.body);
+      return;
+    }
+    let built: BuiltUcpProfile;
+    try {
+      built = buildUcpProfile(resolveCardConfig(this.cardConfig), {
+        wellKnownPath: this.wellKnownPath,
+        ...this.ucpOptions,
+      });
+    } catch (err) {
+      this.logError("failed to build UCP profile", err);
+      sendText(res, 500, "internal error");
+      return;
+    }
+    const payload = JSON.stringify(built.profile);
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "content-length": Buffer.byteLength(payload),
+      "cache-control": built.cacheControl,
+    });
+    res.end(payload);
+  }
+
   private async handleA2a(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (req.method !== "POST") {
       sendText(res, 405, "method not allowed");
@@ -272,6 +334,9 @@ export class A2AServer {
       sendJsonError(res, null, auth.error.httpStatus, auth.error.body);
       return;
     }
+
+    // WP3 §25.1：解析对端 UCP-Agent 宣告（只读，不强制 —— 缺失/畸形不拒绝）。
+    const ucpAgentProfile = parseUcpAgentHeader(req.headers[UCP_AGENT_HEADER]);
 
     let parsed: unknown;
     try {
@@ -294,7 +359,7 @@ export class A2AServer {
 
     const { id, method, params } = parsed;
     try {
-      const result = await this.dispatch(method, params, auth);
+      const result = await this.dispatch(method, params, auth, ucpAgentProfile);
       sendJson(res, 200, { jsonrpc: "2.0", id, result });
     } catch (err) {
       sendJsonError(res, id, 200, this.toJsonRpcErrorBody(err));
@@ -308,10 +373,15 @@ export class A2AServer {
     return internalServerError().body;
   }
 
-  private async dispatch(method: string, params: unknown, caller: Caller): Promise<unknown> {
+  private async dispatch(
+    method: string,
+    params: unknown,
+    caller: Caller,
+    ucpAgentProfile?: string,
+  ): Promise<unknown> {
     switch (method) {
       case "message/send":
-        return this.handleMessageSend(params, caller);
+        return this.handleMessageSend(params, caller, ucpAgentProfile);
       case "tasks/get":
         return this.handleTasksGet(params);
       default:
@@ -322,7 +392,11 @@ export class A2AServer {
     }
   }
 
-  private async handleMessageSend(params: unknown, caller: Caller): Promise<unknown> {
+  private async handleMessageSend(
+    params: unknown,
+    caller: Caller,
+    ucpAgentProfile?: string,
+  ): Promise<unknown> {
     const p = requireParamsObject(params);
     if (p.message === undefined) {
       throw new ServerProtocolError({
@@ -332,7 +406,7 @@ export class A2AServer {
     }
     const result = await this.pipeline.sendMessage(
       { message: p.message, contextId: p.contextId },
-      { senderIdentity: caller.identity, remoteAddress: caller.remoteAddress },
+      { senderIdentity: caller.identity, remoteAddress: caller.remoteAddress, ucpAgentProfile },
     );
     return { task: result.task };
   }

@@ -17,6 +17,7 @@ import type { ProtocolErrorCode } from "../../negotiation/domain/common.js";
 import type { AgentSkill } from "../../discovery/agent-card/index.js";
 import type { IdempotencyStore } from "../../negotiation/idempotency/index.js";
 import type { LedgerStore } from "../../negotiation/ledger/index.js";
+import type { UcpPublishOptions } from "./ucp.js";
 
 /** Agent Card 本地配置（基线 §26 / 子规范 §24.1 Discovery）。 */
 export interface AgentCardConfig {
@@ -107,6 +108,12 @@ export interface InboundNegotiationContext {
   senderIdentity: string;
   /** 对端 socket 地址。 */
   remoteAddress?: string;
+  /**
+   * 对端 UCP-Agent 头声明的 platform profile URI（基线 §25.1，WP3）。
+   * HTTP-based binding 的 service parameter 宣告；只读暴露给 handler，
+   * 不强制 —— 头缺失时缺省 undefined，请求照常处理。
+   */
+  ucpAgentProfile?: string;
 }
 
 export type NegotiationHandlerResult =
@@ -144,4 +151,10 @@ export interface A2AServerOptions {
   now?: () => string;
   /** well-known Agent Card 路径（默认 "/.well-known/agent-card.json"）。 */
   wellKnownPath?: string;
+  /**
+   * UCP Profile 发布（WP3，基线 §25）：true = 用默认选项在
+   * `GET /.well-known/ucp` 上发布；对象 = 自定义发布选项。缺省不发布。
+   * 响应头 Cache-Control 为 `public, max-age=N`（N>=60，UCP 规范强制）。
+   */
+  ucp?: boolean | UcpPublishOptions;
 }

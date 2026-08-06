@@ -17,6 +17,7 @@ import { A2AClientError, invalidResponse } from "./error.js";
 import { buildJsonRpcRequest, parseJsonRpcResponse, tryParseJsonRpcError } from "./jsonrpc.js";
 import { parseTaskResult } from "./parse.js";
 import type { A2AOutboundSigner, A2AMessage, A2AClientOptions, A2ATask } from "./types.js";
+import { serializeUcpAgentHeader, UCP_AGENT_HEADER } from "../ucp-agent.js";
 import { assertResolvableTargetUrl, assertSafeTargetUrl } from "./url-policy.js";
 
 export class A2AClient {
@@ -27,6 +28,7 @@ export class A2AClient {
   private readonly skipDnsCheck: boolean;
   private readonly resolveIp?: (hostname: string) => Promise<string[]>;
   private readonly headers: Record<string, string>;
+  private readonly ucpAgentProfile?: string;
   private readonly signer?: A2AOutboundSigner;
 
   constructor(options: A2AClientOptions) {
@@ -37,6 +39,7 @@ export class A2AClient {
     this.skipDnsCheck = options.skipDnsCheck ?? false;
     this.resolveIp = options.resolveIp;
     this.headers = options.headers ?? {};
+    this.ucpAgentProfile = options.ucpAgentProfile;
     this.signer = options.signer;
   }
 
@@ -69,6 +72,10 @@ export class A2AClient {
     const baseHeaders: Record<string, string> = {
       "content-type": "application/json",
       accept: "application/json",
+      // WP3 §25.1：配置了 buyer profile URI 时宣告 UCP-Agent（RFC 8941 Dictionary）。
+      ...(this.ucpAgentProfile !== undefined
+        ? { [UCP_AGENT_HEADER]: serializeUcpAgentHeader(this.ucpAgentProfile) }
+        : {}),
       ...this.headers,
     };
     // WP5：配置了出站签名器时，对每个请求计算 HTTP Message Signature 头。

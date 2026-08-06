@@ -138,7 +138,7 @@ describe("AgentDiscovery.resolve: agentCardUrl", () => {
 });
 
 describe("AgentDiscovery.resolve: domain", () => {
-  it("domain → well-known Agent Card 路径（可注入 fetchImpl 断言 URL）", async () => {
+  it("domain → UCP 优先，失败回退 well-known Agent Card（双发现入口，WP3）", async () => {
     const captured: string[] = [];
     const card = agentCardJson("http://127.0.0.1:1");
     const discovery = new AgentDiscovery({
@@ -146,12 +146,38 @@ describe("AgentDiscovery.resolve: domain", () => {
         captured.push(String(url));
         return new globalThis.Response(JSON.stringify(card), { status: 200 });
       },
+      // skipDnsCheck 让 UCP 尝试确定性到达注入的 fetchImpl（返回的 Response 无
+      // Cache-Control 头 → profile_cache_control → 回退，同时验证 discovery 路径
+      // 上 UCP Cache-Control 强制生效）。
+      ucp: { resolver: { skipDnsCheck: true } },
     });
     const profile = await discovery.resolve({ domain: "merchant.example" });
 
-    expect(captured[0]).toBe("https://merchant.example/.well-known/agent-card.json");
+    expect(captured).toEqual([
+      "https://merchant.example/.well-known/ucp",
+      "https://merchant.example/.well-known/agent-card.json",
+    ]);
     expect(profile.source).toBe("domain:merchant.example");
+    expect(profile.ucp_fallback_reason).toContain("ucp:profile_cache_control");
     expect(selectChannelCandidate(profile)?.kind).toBe("a2a-direct");
+  });
+
+  it("ucp.disabled: true → 保持 v0.5 行为（直接 well-known Agent Card）", async () => {
+    const captured: string[] = [];
+    const card = agentCardJson("http://127.0.0.1:1");
+    const discovery = new AgentDiscovery({
+      fetchImpl: async (url, _init) => {
+        captured.push(String(url));
+        return new globalThis.Response(JSON.stringify(card), { status: 200 });
+      },
+      ucp: { disabled: true },
+    });
+    const profile = await discovery.resolve({ domain: "merchant.example" });
+
+    expect(captured).toEqual(["https://merchant.example/.well-known/agent-card.json"]);
+    expect(profile.ucp_fallback_reason).toBeUndefined();
+    expect(profile.ucp_profile).toBeUndefined();
+    expect(profile.ucp_intersection).toBeUndefined();
   });
 });
 

@@ -13,6 +13,15 @@
 
 export { A2AServer } from "./server.js";
 export { buildAgentCard } from "./card.js";
+export { buildUcpProfile, WELL_KNOWN_UCP_PATH } from "./ucp.js";
+export type { BuiltUcpProfile, UcpPublishOptions, UcpVendorOptions } from "./ucp.js";
+export {
+  parseUcpAgentHeader,
+  serializeRfc8941String,
+  serializeUcpAgentHeader,
+  UCP_AGENT_HEADER,
+  UCP_AGENT_PROFILE_MEMBER,
+} from "../ucp-agent.js";
 export {
   defaultAuthVerifier,
   LoopbackOnlyAuthVerifier,
