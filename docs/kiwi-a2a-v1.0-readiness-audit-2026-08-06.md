@@ -7,11 +7,11 @@ Created: 2026-08-06
 
 | 评估 | 数量 | 条目 |
 | --- | --- | --- |
-| ✅ 实证满足 | 26 | #1-26 |
+| ✅ 实证满足 | 27 | #1-27 |
 | ⚠️ 部分满足 | 0 | — |
 | ❌ 缺失 | 0 | — |
 
-**可以宣布 A2A v1.0。** 26/26 全部有代码 + 测试双证。原缺口 #24（network partition）已于同日补上 `tests/interop/interop-partition.test.ts`：模拟 merchant 停听后 buyer 发送 fail-closed（`ChannelError send_failed`）、同端口恢复后同一 negotiation 续跑收敛到 Agreement。
+**A2A v1.0 已宣布（2026-08-07）。** 27/27 全部有代码 + 测试双证。原缺口 #24（network partition）已于同日补上 `tests/interop/interop-partition.test.ts`：模拟 merchant 停听后 buyer 发送 fail-closed（`ChannelError send_failed`）、同端口恢复后同一 negotiation 续跑收敛到 Agreement。§41 后由并行工作补入的 #27（没有库存预留副作用）与 #25/#26 同源证据（`reserves_inventory:false` 由 schema 与领域强制）。
 
 ## 逐条矩阵
 
@@ -43,10 +43,18 @@ Created: 2026-08-06
 | 24 | partition / replay / restart tests 通过 | recovery/reliability 实现 | `reliability`（stale recovery/heartbeat）、`recovery`、`a2a-task-state`（中断）、`interop-recovery`、**`interop-partition`（2026-08-07 新增：停听→send_failed fail-closed→同端口恢复→收敛 Agreement）** | ✅ |
 | 25 | 没有订单副作用 | schema 强制 `creates_order:false` + domain `requireFalse` + order-record 只读 | `negotiation-schema`（creates_order=true 拒绝）、`order-record`、`handoff` | ✅ |
 | 26 | 没有支付副作用 | schema 强制 `authorizes_payment:false` | 同上 + `handoff`（agreement→checkout 仅 operator 授权后） | ✅ |
+| 27 | 没有库存预留副作用 | schema 强制 `reserves_inventory:false` + domain `requireFalse` | `negotiation-schema`（reserves_inventory=true 拒绝）、`negotiation-schema-domain-crosscheck` | ✅ |
 
 ## 缺口闭合：#24 network partition（2026-08-07）
 
 原缺口已补上：`tests/interop/interop-partition.test.ts` 用真实 http server 模拟分区——
 merchant 停听后 buyer 发送抛 `ChannelError("send_failed")`（fail-closed、不降级、不挂起），
 同一端口重新 listen 恢复后，同一 `negotiation_id` 续跑 CounterOffer→ConditionalOffer→Accept→Agreement，
-双侧 Ledger 链有效、agreement 三副作用 flag 全 false。**26/26 全部闭合，可宣布 A2A v1.0。**
+双侧 Ledger 链有效、agreement 三副作用 flag 全 false。
+
+## 宣布
+
+**2026-08-07，A2A v1.0 正式宣布（27/27 完成定义全部实证满足）。**
+依据本文档就绪度矩阵；协议文档 `docs/protocol/kiwi-negotiation-protocol-1.0.md` 状态转为
+Normative（Released），基线 `docs/kiwi-a2a-architecture-baseline.md` §41 加盖宣布戳，
+包版本 0.5.0 → 1.0.0，git tag `v1.0.0`。
