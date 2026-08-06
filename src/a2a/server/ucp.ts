@@ -6,8 +6,8 @@
  *
  *   - a2a service transport：endpoint 指向本 server 的 Agent Card well-known
  *     URL（`<baseUrl>/.well-known/agent-card.json`），基线 §25；
- *   - Kiwi vendor capability：`example.kiwi.shopping.negotiation`（§8.3，
- *     生产发布前 MUST 替换 authority 为实际控制域名）。
+ *   - Kiwi vendor capability：`com.harrylabsj.kiwi.shopping.negotiation`（§8.3，
+ *     真实 authority `kiwi.harrylabsj.com`，spec/schema 需托管在该域名上）。
  *
  * 不声明任何 `dev.ucp.*` capability：该 namespace 为 UCP 治理机构保留，vendor
  * 不得占用（`dev.ucp.shopping.*` 官方 capability 仅 checkout / cart / order /

@@ -102,7 +102,7 @@ This string MUST NOT be used as the public governance authority of a UCP capabil
 A public KNP deployment MUST publish a stable HTTPS A2A extension URI controlled by the protocol authority, for example:
 
 ```text
-https://kiwi.example/a2a/extensions/negotiation/1.0
+https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0
 ```
 
 The value above is illustrative only.
@@ -118,7 +118,7 @@ A public KNP deployment MUST advertise a UCP capability whose identifier follows
 For example:
 
 ```text
-example.kiwi.shopping.negotiation
+com.harrylabsj.kiwi.shopping.negotiation
 ```
 
 The `spec` and `schema` origins MUST satisfy UCP namespace-authority rules.
@@ -132,7 +132,7 @@ The concrete production identifier MUST be frozen before public interoperability
 Test vectors in this specification use:
 
 ```text
-example.kiwi.shopping.negotiation
+com.harrylabsj.kiwi.shopping.negotiation
 ```
 
 only as an example authority.
@@ -284,7 +284,7 @@ Every KNP wire payload MUST be carried inside a Negotiation Envelope.
 
 ```json
 {
-  "capability": "example.kiwi.shopping.negotiation",
+  "capability": "com.harrylabsj.kiwi.shopping.negotiation",
   "protocol_version": "1.0",
   "negotiation_id": "neg_01...",
   "exchange_id": "ex_01...",

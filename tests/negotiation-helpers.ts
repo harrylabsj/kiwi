@@ -20,7 +20,7 @@ import type {
   Withdraw,
 } from "../src/negotiation/domain/objects.js";
 
-export const CAPABILITY = "example.kiwi.shopping.negotiation";
+export const CAPABILITY = "com.harrylabsj.kiwi.shopping.negotiation";
 export const NEGOTIATION_ID = "neg_01H5V8KXZqJ7Qp3mN2B6A";
 export const EXCHANGE_ID = "ex_01H5V8KXZqJ7Qp3mN2B6A";
 export const MESSAGE_ID = "msg_01H5V8KXZqJ7Qp3mN2B6A";

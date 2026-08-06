@@ -107,14 +107,14 @@ describe("A2A Server: GET /.well-known/ucp（UCP profile 服务化）", () => {
 
     // a2a transport → endpoint 指向本 server 的 Agent Card URL。
     const services = validation.profile.ucp.services as Record<string, unknown[]>;
-    const a2a = (services?.["example.kiwi.shopping"] ?? [])[0] as Record<string, unknown>;
+    const a2a = (services?.["com.harrylabsj.kiwi.shopping"] ?? [])[0] as Record<string, unknown>;
     expect(a2a.transport).toBe("a2a");
     expect(a2a.endpoint).toBe("https://kiwi.test/.well-known/agent-card.json");
 
     // 不声明任何 dev.ucp.* 官方 capability（该 namespace 由 UCP 治理机构保留）；
-    // profile 只携带 Kiwi vendor capability example.kiwi.shopping.negotiation。
+    // profile 只携带 Kiwi vendor capability com.harrylabsj.kiwi.shopping.negotiation。
     const caps = validation.profile.ucp.capabilities as Record<string, unknown[]>;
-    expect(caps).toEqual({ "example.kiwi.shopping.negotiation": expect.any(Array) });
+    expect(caps).toEqual({ "com.harrylabsj.kiwi.shopping.negotiation": expect.any(Array) });
     expect(Object.keys(caps).some((name) => name.startsWith("dev.ucp."))).toBe(false);
   });
 

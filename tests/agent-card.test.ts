@@ -36,7 +36,7 @@ function validCard(): Record<string, unknown> {
     security: [{ scheme: "bearer", credential: "merchant-cred" }],
     capabilities: {
       extendedAgentCard: true,
-      extensions: [{ uri: "https://kiwi.example/a2a/extensions/negotiation/1.0", required: false }],
+      extensions: [{ uri: "https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0", required: false }],
     },
     skills: [
       {
@@ -68,7 +68,7 @@ describe("Agent Card 合法输入（§26）", () => {
       protocolVersion: "1.0",
     });
     expect(card.capabilities?.extensions?.[0]?.uri).toBe(
-      "https://kiwi.example/a2a/extensions/negotiation/1.0",
+      "https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0",
     );
   });
 
@@ -164,7 +164,7 @@ describe("Agent Card 畸形输入（fail-closed）", () => {
   it("rejects an extension entry without a boolean required", () => {
     const card = validCard();
     (card.capabilities as Record<string, unknown>).extensions = [
-      { uri: "https://kiwi.example/a2a/extensions/negotiation/1.0", required: "yes" },
+      { uri: "https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0", required: "yes" },
     ];
     expect(errorCode(() => validateAgentCard(card))).toBe("schema_invalid");
   });
@@ -178,7 +178,7 @@ describe("Agent Card 畸形输入（fail-closed）", () => {
 
 describe("Kiwi negotiation extension URI（§8.2）", () => {
   it("recognizes the canonical https form on any authority", () => {
-    expect(isNegotiationExtensionUri("https://kiwi.example/a2a/extensions/negotiation/1.0")).toBe(
+    expect(isNegotiationExtensionUri("https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0")).toBe(
       true,
     );
     expect(
@@ -187,21 +187,21 @@ describe("Kiwi negotiation extension URI（§8.2）", () => {
   });
 
   it("rejects non-matching paths, schemes and userinfo", () => {
-    expect(isNegotiationExtensionUri("http://kiwi.example/a2a/extensions/negotiation/1.0")).toBe(
+    expect(isNegotiationExtensionUri("http://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0")).toBe(
       true,
     );
-    expect(isNegotiationExtensionUri("https://kiwi.example/a2a/extensions/negotiation/1.0/")).toBe(
+    expect(isNegotiationExtensionUri("https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0/")).toBe(
       false,
     );
-    expect(isNegotiationExtensionUri("https://kiwi.example/a2a/extensions/other/1.0")).toBe(false);
-    expect(isNegotiationExtensionUri("https://kiwi.example/a2a/extensions/negotiation/1.1")).toBe(
+    expect(isNegotiationExtensionUri("https://kiwi.harrylabsj.com/a2a/extensions/other/1.0")).toBe(false);
+    expect(isNegotiationExtensionUri("https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.1")).toBe(
       false,
     );
-    expect(isNegotiationExtensionUri("ftp://kiwi.example/a2a/extensions/negotiation/1.0")).toBe(
+    expect(isNegotiationExtensionUri("ftp://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0")).toBe(
       false,
     );
     expect(
-      isNegotiationExtensionUri("https://user:pass@kiwi.example/a2a/extensions/negotiation/1.0"),
+      isNegotiationExtensionUri("https://user:pass@kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0"),
     ).toBe(false);
     expect(isNegotiationExtensionUri("not a url")).toBe(false);
   });
@@ -209,7 +209,7 @@ describe("Kiwi negotiation extension URI（§8.2）", () => {
   it("finds negotiation extensions across capabilities and top level", () => {
     const card = validateAgentCard(validCard());
     expect(findNegotiationExtensions(card)).toEqual([
-      "https://kiwi.example/a2a/extensions/negotiation/1.0",
+      "https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0",
     ]);
     const noExt = validateAgentCard(validCard());
     delete (noExt as { capabilities?: unknown }).capabilities;
@@ -276,7 +276,7 @@ describe("Agent Card secret 扫描（不变量 24）", () => {
   it("rejects nested floor_price inside an extension object", () => {
     const card = validCard();
     (card.capabilities as Record<string, unknown>).extensions = [
-      { uri: "https://kiwi.example/a2a/extensions/negotiation/1.0", required: false },
+      { uri: "https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0", required: false },
       { uri: "https://vendor.example/ext", required: true, floor_price: 99 },
     ];
     const result = scanAgentCardSecrets(card);

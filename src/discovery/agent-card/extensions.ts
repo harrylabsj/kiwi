@@ -4,7 +4,7 @@
  * 规范形态：
  *   https://<domain>/a2a/extensions/negotiation/1.0
  *
- * authority 在示例中为 kiwi.example，但识别规则只看 path 形态与 scheme，不绑定
+ * authority 在示例中为 kiwi.harrylabsj.com，但识别规则只看 path 形态与 scheme，不绑定
  * 具体 domain——生产部署时由 Kiwi 实际控制的域发布（§8.2 要求生产前替换示例
  * authority）。非 http(s) scheme / 带 userinfo / 无 authority 均不识别。
  */
