@@ -419,8 +419,8 @@ com.harrylabsj.kiwi.shopping.negotiation
 ```
 
 namespace 已替换为实际控制域名对应的 reverse-domain（`kiwi.example` 占位符已移除）。
-生产发布前仍 MUST 在该域名上真实托管 `spec` / `schema`（UCP origin 绑定，见下）。
-托管面：公开仓库 `harrylabsj/kiwi-spec`（GitHub Pages → `https://kiwi.harrylabsj.com`），
+spec / schema 已在 `https://kiwi.harrylabsj.com` 真实托管（UCP origin 绑定已满足，2026-08-06 上线）。
+托管面：公开仓库 `harrylabsj/kiwi-spec`（Cloudflare Pages → `https://kiwi.harrylabsj.com`），
 协议正文以 `docs/protocol/kiwi-negotiation-protocol-1.0.md` 为权威源。
 
 UCP capability MUST 遵循：
