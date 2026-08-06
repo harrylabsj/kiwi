@@ -7,11 +7,11 @@ Created: 2026-08-06
 
 | 评估 | 数量 | 条目 |
 | --- | --- | --- |
-| ✅ 实证满足 | 25 | #1-23, #25-26 |
-| ⚠️ 部分满足 | 1 | #24（network partition 缺直接测试；replay/restart 已覆盖） |
+| ✅ 实证满足 | 26 | #1-26 |
+| ⚠️ 部分满足 | 0 | — |
 | ❌ 缺失 | 0 | — |
 
-**可否宣布 A2A v1.0：可以，但建议先补 #24 的 network partition 直接测试。** 其余 25 条均有代码 + 测试双证。唯一缺口是"网络分区期间的行为 + 恢复后 reconciliation"这一维度没有显式测试（`grep partition` 在 tests 无命中）。
+**可以宣布 A2A v1.0。** 26/26 全部有代码 + 测试双证。原缺口 #24（network partition）已于同日补上 `tests/interop/interop-partition.test.ts`：模拟 merchant 停听后 buyer 发送 fail-closed（`ChannelError send_failed`）、同端口恢复后同一 negotiation 续跑收敛到 Agreement。
 
 ## 逐条矩阵
 
@@ -40,12 +40,13 @@ Created: 2026-08-06
 | 21 | reasoning backend 不改变 wire semantics | JCS 规范化（`src/negotiation/jcs.ts`）确定性生成 wire；与模型无关 | `knp-conformance-vectors`、`knp-data-part-examples`（frozen 向量锁 wire） | ✅（间接：无"换后端跑同一输入"直接测试） |
 | 22 | 安全测试全部通过 | 安全边界实现（memory/tools/trust） | `tools-guard`、`agent-memory`、`trust-jws`、`trust-http-message-signature`、`trust-policy`、`interop-untrusted`、`counterparty-no-downgrade` | ✅ |
 | 23 | RFQ abuse / fan-out privacy tests 通过 | `src/fanout/`（policy/disclosure/orchestrator）+ a2a-server throttle | `fanout-policy`、`fanout-disclosure`、`fanout-orchestrator`、`a2a-server-throttle`、`interop-fanout` | ✅ |
-| 24 | partition / replay / restart tests 通过 | recovery/reliability 实现 | `reliability`（stale recovery/heartbeat）、`recovery`、`a2a-task-state`（中断）、`interop-recovery`。**无显式网络分区测试**（`grep partition` 无命中） | ⚠️ |
+| 24 | partition / replay / restart tests 通过 | recovery/reliability 实现 | `reliability`（stale recovery/heartbeat）、`recovery`、`a2a-task-state`（中断）、`interop-recovery`、**`interop-partition`（2026-08-07 新增：停听→send_failed fail-closed→同端口恢复→收敛 Agreement）** | ✅ |
 | 25 | 没有订单副作用 | schema 强制 `creates_order:false` + domain `requireFalse` + order-record 只读 | `negotiation-schema`（creates_order=true 拒绝）、`order-record`、`handoff` | ✅ |
 | 26 | 没有支付副作用 | schema 强制 `authorizes_payment:false` | 同上 + `handoff`（agreement→checkout 仅 operator 授权后） | ✅ |
 
-## 唯一缺口：#24 network partition
+## 缺口闭合：#24 network partition（2026-08-07）
 
-已覆盖：replay（幂等）、restart（跨进程恢复）、stale recovery（心跳/超时）。缺：**"网络分区期间 A2A 消息发送失败/挂起，分区恢复后双方 reconciliation 到同一 negotiation 状态"** 的显式端到端测试。
-
-建议补一个测试（可放 `tests/interop/interop-partition.test.ts`）：模拟 a2a-direct channel 在分区期间不可达（send 抛 `channel_unreachable`/超时），分区恢复后按 recovery 语义对账，断言双方 phase/Ledger 一致。补上后 26/26 即可宣布 A2A v1.0。
+原缺口已补上：`tests/interop/interop-partition.test.ts` 用真实 http server 模拟分区——
+merchant 停听后 buyer 发送抛 `ChannelError("send_failed")`（fail-closed、不降级、不挂起），
+同一端口重新 listen 恢复后，同一 `negotiation_id` 续跑 CounterOffer→ConditionalOffer→Accept→Agreement，
+双侧 Ledger 链有效、agreement 三副作用 flag 全 false。**26/26 全部闭合，可宣布 A2A v1.0。**
