@@ -221,6 +221,12 @@ describe("kiwi init", () => {
     expect(statSync(paths.config).mode & 0o777).toBe(0o600);
     expect(statSync(paths.run).mode & 0o777).toBe(0o700);
     expect(statSync(paths.data).mode & 0o777).toBe(0o700); // shopping SQLite lives here
+    // logs/ and profiles/ hold owner-only (0600) files; the dirs stay
+    // conventionally listable (0755) but are never group/other-writable.
+    expect(statSync(paths.logs).mode & 0o022).toBe(0);
+    expect(statSync(paths.profiles).mode & 0o022).toBe(0);
+    expect(statSync(path.join(paths.profiles, "merchant.yaml")).mode & 0o777).toBe(0o600);
+    expect(statSync(path.join(paths.profiles, "buyer.yaml")).mode & 0o777).toBe(0o600);
     // Profiles name env vars; they never contain secret values.
     const merchant = readFileSync(path.join(paths.profiles, "merchant.yaml"), "utf-8");
     const buyer = readFileSync(path.join(paths.profiles, "buyer.yaml"), "utf-8");
