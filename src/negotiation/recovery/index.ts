@@ -5,7 +5,13 @@
  * recovery 不再定义第二套 RemoteTaskGateway 契约。
  */
 
-export { NegotiationRecovery, collectOutbound, deriveLocalPhase } from "./recover.js";
+export {
+  collectOutbound,
+  deriveLocalPhase,
+  deriveSessionIdentity,
+  NegotiationRecovery,
+  RECOVERY_SENDER_IDENTITY,
+} from "./recover.js";
 export { recordOutboundMessage } from "./outbound.js";
 export type { OutboundMessageInput } from "./outbound.js";
 export type {

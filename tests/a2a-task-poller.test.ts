@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { A2AClientError } from "../src/a2a/client/index.js";
-import { A2ATaskPoller } from "../src/a2a/task/index.js";
+import { A2ATaskPoller, recordTaskObservation } from "../src/a2a/task/index.js";
 import type { A2ATask } from "../src/a2a/client/index.js";
 import { LedgerStore } from "../src/negotiation/ledger/index.js";
 
@@ -263,6 +263,62 @@ describe("A2ATaskPoller: Ledger 落账", () => {
       });
       await poller.poll();
       expect(ledger.events("neg_2").length).toBe(2); // working, completed —— 不重复记 working
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("recordTaskObservation: 同毫秒 / 冻结时钟重复观测不触发 ledger_duplicate_content", () => {
+  it("同一 task_state + 同一 occurred_at 的两次观测都落账，且内容可区分", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-task-obs-"));
+    try {
+      const ledger = new LedgerStore({ dir, now: () => NOW });
+      // 冻结时钟：两次观测的 occurred_at 与 recorded_at 完全相同。
+      // 修复前稳定内容（task_id, task_state, occurred_at）一致 →
+      // ledger_duplicate_content；修复后单调观察序号进入 outcome.result，
+      // 每次观测内容唯一。
+      recordTaskObservation({
+        ledger,
+        negotiation_id: "neg_obs",
+        task_id: "task_1",
+        task_state: "working",
+        context_id: "ctx_1",
+        occurred_at: NOW,
+      });
+      recordTaskObservation({
+        ledger,
+        negotiation_id: "neg_obs",
+        task_id: "task_1",
+        task_state: "working",
+        context_id: "ctx_1",
+        occurred_at: NOW,
+      });
+
+      const events = ledger.events("neg_obs");
+      expect(events).toHaveLength(2);
+      // 序号进入内容寻址 → 两次观测 digest 不同（非重复内容）。
+      expect(events[0]?.event_digest).not.toBe(events[1]?.event_digest);
+      expect(ledger.verifyChain("neg_obs").valid).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("task_state unknown → fail-closed 拒绝，不落账", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-task-obs-"));
+    try {
+      const ledger = new LedgerStore({ dir, now: () => NOW });
+      expect(() =>
+        recordTaskObservation({
+          ledger,
+          negotiation_id: "neg_obs",
+          task_id: "task_1",
+          task_state: "unknown",
+          occurred_at: NOW,
+        }),
+      ).toThrow(/unknown task state/);
+      expect(ledger.events("neg_obs")).toHaveLength(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

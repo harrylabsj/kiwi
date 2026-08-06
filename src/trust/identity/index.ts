@@ -18,7 +18,11 @@ export type {
 } from "./auth-verifier.js";
 
 export { bindIdentity } from "./identity-binding.js";
-export type { ClaimedIdentity, IdentityBindingResult, VerifiedPrincipal } from "./identity-binding.js";
+export type {
+  ClaimedIdentity,
+  IdentityBindingResult,
+  VerifiedPrincipal,
+} from "./identity-binding.js";
 
 export { JwsError, jwsKid, verifyAgentCardJws, verifyCompactJws } from "./jws.js";
 export type { AgentCardJwsResult, JwsErrorCode, VerifiedJws } from "./jws.js";
@@ -67,10 +71,16 @@ export type {
 } from "./signature-base.js";
 
 export {
+  conservativeLevel,
   DEFAULT_TRUST_POLICY,
   evaluatePolicy,
   isTrustLevel,
   TRUST_LEVELS,
   trustLevelRank,
 } from "./trust-policy.js";
-export type { PolicyEvaluationInput, PolicyEvaluationResult, TrustLevel, TrustPolicy } from "./trust-policy.js";
+export type {
+  PolicyEvaluationInput,
+  PolicyEvaluationResult,
+  TrustLevel,
+  TrustPolicy,
+} from "./trust-policy.js";

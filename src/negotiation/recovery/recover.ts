@@ -55,6 +55,33 @@ interface OutboundLedgerEntry {
 }
 
 const RECOVERY_CAPABILITY = { capability: "knp.a2a.recovery", protocol_version: "1.0" } as const;
+/** 恢复子系统的审计身份（reconciliation 事件的 sender 侧）。 */
+export const RECOVERY_SENDER_IDENTITY = "kiwi.recovery";
+
+/**
+ * 从 Ledger 事件推断本地会话的 sender_identity（基线 §23 / §25.2）。
+ *
+ * 恢复重放必须以原会话身份打开通道：幂等主键是 (sender_identity, message_id)，
+ * 若硬编码成 "kiwi.recovery"，pending 消息的键与原发送不匹配 → idempotency
+ * check() 返回 new → A2ADirectChannel 真实重发并在 Ledger 产生第二条
+ * message_sent（审计重复，§23）。此处优先取 message_sent 事件的 identity
+ * snapshot（出站身份）；无出站消息时取任一非 reconciliation 事件的
+ * sender_identity（reconciliation 是恢复子系统自身审计，不算会话身份）；全部
+ * 缺失回退 RECOVERY_SENDER_IDENTITY（保持既有兜底）。
+ */
+export function deriveSessionIdentity(events: LedgerEvent[]): string {
+  for (const event of events) {
+    if (event.event_kind === "message_sent") {
+      return event.identity.sender_identity;
+    }
+  }
+  for (const event of events) {
+    if (event.event_kind !== "reconciliation") {
+      return event.identity.sender_identity;
+    }
+  }
+  return RECOVERY_SENDER_IDENTITY;
+}
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -169,7 +196,7 @@ export class NegotiationRecovery {
       remote_context_id: input.remote_context_id,
       remote_task_id: input.remote_task_id,
       identity: {
-        sender_identity: "kiwi.recovery",
+        sender_identity: RECOVERY_SENDER_IDENTITY,
         counterparty_identity: profile?.identity ?? "unresolved",
       },
       capability: { ...RECOVERY_CAPABILITY },
@@ -213,7 +240,13 @@ export class NegotiationRecovery {
 
   private makeChannel(profile: CounterpartyProfile, input: ChannelOpenInput): Promise<ChannelHandle> {
     if (this.deps.openChannel !== undefined) return this.deps.openChannel(profile, input);
-    return openChannel(profile, { ledger: this.deps.ledger }, input);
+    // 默认装配也注入 idempotency：恢复重放复用原 (sender_identity, message_id)
+    // 幂等键 → check() 返回 replayed → 通道不重复落 message_sent（§23/§25.2）。
+    return openChannel(
+      profile,
+      { ledger: this.deps.ledger, idempotency: this.deps.idempotency },
+      input,
+    );
   }
 
   /**
@@ -239,6 +272,10 @@ export class NegotiationRecovery {
     const phase = deriveLocalPhase(events);
     const localSent = collectOutbound(events);
     const localTaskState = lastRecordedTaskState(events);
+    // 恢复重放沿用原会话身份（§23/§25.2）：从 Ledger identity snapshot 取，
+    // 不用硬编码 —— 否则幂等键 (sender_identity, message_id) 错位，通道会
+    // 真实重发并在 Ledger 产生第二条 message_sent。
+    const senderIdentity = deriveSessionIdentity(events);
 
     // 2. Ledger high-water mark + 链完整性（损坏即 fail-closed，绝不可信）。
     const chain = ledger.verifyChain(negotiationId);
@@ -292,7 +329,7 @@ export class NegotiationRecovery {
     try {
       handle = await this.makeChannel(profile, {
         negotiation_id: negotiationId,
-        sender_identity: "kiwi.recovery",
+        sender_identity: senderIdentity,
         identity: profile.identity,
         remote: { context_id: contextId, task_id: activeTaskId },
       });

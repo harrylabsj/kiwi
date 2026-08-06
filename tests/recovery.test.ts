@@ -16,18 +16,24 @@
  *  - 正常 counter 流（远端已回应）→ 重放幂等 + 补记远端消息，不转人工。
  */
 import { describe, expect, it } from "vitest";
+import type { AddressInfo } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { finalizeEnvelope } from "../src/negotiation/domain/envelope.js";
 import type { NegotiationEnvelope } from "../src/negotiation/domain/envelope.js";
 import { LedgerStore, ledgerFileName } from "../src/negotiation/ledger/index.js";
+import { IdempotencyStore } from "../src/negotiation/idempotency/index.js";
 import { ContextMapStore } from "../src/negotiation/context-map/index.js";
 import {
+  deriveSessionIdentity,
   NegotiationRecovery,
+  RECOVERY_SENDER_IDENTITY,
   recordOutboundMessage,
   type RecoveryResult,
 } from "../src/negotiation/recovery/index.js";
+import { A2AServer } from "../src/a2a/server/index.js";
+import { A2ADirectChannel } from "../src/counterparty/index.js";
 import type {
   ChannelHandle,
   ChannelSendInput,
@@ -378,6 +384,168 @@ describe("Recovery: 幂等重跑", () => {
       expect(s.ledger.verifyChain(NEGOTIATION_ID).valid).toBe(true);
     } finally {
       teardown(s.dir);
+    }
+  });
+});
+
+describe("Recovery: 恢复重放沿用原会话身份（§23/§25.2 身份键不错位）", () => {
+  it("deriveSessionIdentity 从 message_sent identity snapshot 取原出站身份", () => {
+    const s = setup();
+    try {
+      recordSent(s.ledger);
+      const events = s.ledger.events(NEGOTIATION_ID);
+      // message_sent 事件的 identity.sender_identity 即原会话身份。
+      expect(deriveSessionIdentity(events)).toBe(IDENTITY.sender_identity);
+      expect(deriveSessionIdentity(events)).not.toBe(RECOVERY_SENDER_IDENTITY);
+    } finally {
+      teardown(s.dir);
+    }
+  });
+
+  it("无 message_sent 时回退到非 reconciliation 事件的 sender_identity；全是 reconciliation 才回退 RECOVERY_SENDER_IDENTITY", () => {
+    const s = setup();
+    try {
+      // 只有 message_received：取该事件的本地 sender_identity。
+      s.ledger.append({
+        event_kind: "message_received",
+        negotiation_id: NEGOTIATION_ID,
+        message_id: "msg_received_1",
+        identity: IDENTITY,
+        capability: CAPABILITY_SNAPSHOT,
+        wire_digest: "sha256:" + "a".repeat(64),
+        outcome: { kind: "ok" },
+        occurred_at: NOW,
+      });
+      expect(deriveSessionIdentity(s.ledger.events(NEGOTIATION_ID))).toBe("kiwi-buyer");
+
+      // 只有 reconciliation（恢复子系统自身审计）→ 回退。
+      const recOnly = new LedgerStore({ dir: s.dir, now: () => NOW });
+      recOnly.append({
+        event_kind: "reconciliation",
+        negotiation_id: "neg_rec_only",
+        message_id: "msg_r",
+        identity: { sender_identity: RECOVERY_SENDER_IDENTITY, counterparty_identity: "peer" },
+        capability: CAPABILITY_SNAPSHOT,
+        outcome: { kind: "ok", result: { replayed_message_id: "msg_r" } },
+        occurred_at: NOW,
+      });
+      expect(deriveSessionIdentity(recOnly.events("neg_rec_only"))).toBe(RECOVERY_SENDER_IDENTITY);
+    } finally {
+      teardown(s.dir);
+    }
+  });
+
+  it("recover 用原会话身份打开通道（非硬编码 kiwi.recovery），重放不产生第二条 message_sent", async () => {
+    // 真实双侧：merchant server（任务保持 working，未确认 buyer 消息，模拟
+    // 恢复时 pending 出站消息）+ buyer 真实 A2ADirectChannel（含幂等）。
+    const srvDir = mkdtempSync(path.join(tmpdir(), "kiwi-recovery-srv-"));
+    const srvLedger = new LedgerStore({ dir: srvDir, now: () => NOW });
+    const srvIdem = new IdempotencyStore({ dir: srvDir, now: () => NOW });
+    const holder = { baseUrl: "http://127.0.0.1:0" };
+    const server = new A2AServer({
+      card: () => ({
+        name: "Echo Merchant",
+        description: "recovery identity regression merchant",
+        providerOrganization: "Kiwi Test Org",
+        version: "0.5.0",
+        baseUrl: holder.baseUrl,
+      }),
+      ledger: srvLedger,
+      idempotency: srvIdem,
+      // 不回显 messageId（保持 pending）；任务 state 保持 working（非终态，
+      // 否则恢复 fail-closed → reconciliation_required）。
+      handler: {
+        name: "working-echo",
+        async handle(ctx) {
+          return {
+            kind: "accepted",
+            taskState: "working",
+            message: {
+              role: "agent",
+              parts: [{ kind: "data", data: { knp_envelope: ctx.envelope } }],
+              messageId: `msg_ack_${ctx.envelope.message_id}`,
+            },
+          };
+        },
+      },
+      now: () => NOW,
+    });
+    const httpServer = server.createServer();
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", () => resolve()));
+    const addr = httpServer.address() as AddressInfo;
+    const srvUrl = `http://127.0.0.1:${addr.port}`;
+    holder.baseUrl = srvUrl;
+
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-recovery-buyer-"));
+    const ledger = new LedgerStore({ dir, now: () => NOW });
+    const idempotency = new IdempotencyStore({ dir, now: () => NOW });
+    const contextMap = new ContextMapStore({ dir, now: () => NOW });
+
+    try {
+      // 原始发送：buyer 身份出站 → message_sent + 幂等 commit。
+      const buyer = new A2ADirectChannel({
+        url: srvUrl,
+        ledger,
+        idempotency,
+        now: () => NOW,
+      });
+      const buyerHandle = await buyer.open({
+        negotiation_id: NEGOTIATION_ID,
+        sender_identity: IDENTITY.sender_identity,
+        identity: "merchant-remote",
+      });
+      const envelope = finalizeEnvelope(validEnvelopeFields());
+      const original = await buyerHandle.send({ envelope });
+      await buyerHandle.close();
+
+      expect(
+        ledger.events(NEGOTIATION_ID).filter((e) => e.event_kind === "message_sent"),
+      ).toHaveLength(1);
+
+      contextMap.set(NEGOTIATION_ID, { remote_context_id: original.ref.context_id });
+      contextMap.addTask(NEGOTIATION_ID, original.ref.task_id!);
+
+      let openedSender: string | undefined;
+      const rec = new NegotiationRecovery({
+        ledger,
+        contextMap,
+        idempotency,
+        resolveCounterparty: async () => PROFILE,
+        openChannel: async (_profile, input) => {
+          openedSender = input.sender_identity;
+          const channel = new A2ADirectChannel({ url: srvUrl, ledger, idempotency, now: () => NOW });
+          return channel.open(input);
+        },
+        now: () => NOW,
+      });
+      const r = await rec.recover(NEGOTIATION_ID);
+
+      expect(r.status).toBe("resumed");
+      // 通道以原会话身份打开（幂等键 (buyer, message_id) 匹配 → 通道返回
+      // replayed，不重复落 message_sent）。
+      expect(openedSender).toBe(IDENTITY.sender_identity);
+      expect(openedSender).not.toBe(RECOVERY_SENDER_IDENTITY);
+      expect(r.replayed_message_ids).toContain(envelope.message_id);
+      // 本地 Ledger 只有一条 message_sent：恢复重放记为 reconciliation 而非新发送。
+      const sent = ledger.events(NEGOTIATION_ID).filter((e) => e.event_kind === "message_sent");
+      expect(sent).toHaveLength(1);
+      // 重放证据以 reconciliation 事件记录。
+      const replayEvidence = ledger
+        .events(NEGOTIATION_ID)
+        .filter((e) => e.event_kind === "reconciliation")
+        .some(
+          (e) =>
+            e.outcome.kind === "ok" &&
+            (e.outcome.result as Record<string, unknown>)["replayed_message_id"] ===
+              envelope.message_id,
+        );
+      expect(replayEvidence).toBe(true);
+      expect(ledger.verifyChain(NEGOTIATION_ID).valid).toBe(true);
+    } finally {
+      httpServer.closeAllConnections();
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      rmSync(srvDir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

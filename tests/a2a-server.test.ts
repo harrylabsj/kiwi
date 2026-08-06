@@ -15,6 +15,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import http from "node:http";
+import { generateKeyPairSync } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,11 +26,16 @@ import { LedgerStore } from "../src/negotiation/ledger/index.js";
 import { IdempotencyStore } from "../src/negotiation/idempotency/index.js";
 import {
   A2AServer,
+  echoHandler,
+  HttpMessageSignatureVerifier,
+  InboundPipeline,
   LoopbackOnlyAuthVerifier,
   NoneAuthVerifier,
   StaticBearerAuthVerifier,
+  TaskRegistry,
 } from "../src/a2a/server/index.js";
 import type { AgentCardConfig, AuthVerifier, NegotiationHandler } from "../src/a2a/server/index.js";
+import { HttpMessageSigner, resolveFromSigningKeys } from "../src/trust/identity/index.js";
 import { A2AClient } from "../src/a2a/client/index.js";
 import type { A2AMessage } from "../src/a2a/client/index.js";
 import { NEGOTIATION_ID, validEnvelopeFields } from "./negotiation-helpers.js";
@@ -663,5 +669,101 @@ describe("A2A Server: JSON-RPC 帧错误", () => {
     const { url } = await startServer();
     const res = await fetch(url);
     expect(res.status).toBe(405);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 入站 identity snapshot counterparty 侧（基线 §22，问题三）
+// ---------------------------------------------------------------------------
+
+describe("A2A Server: 入站 identity snapshot counterparty 侧", () => {
+  it("验签身份优先写入 counterparty_identity；无验签身份才回退 remoteAddress", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-pipeline-identity-"));
+    try {
+      const ledger = new LedgerStore({ dir, now: () => "2026-08-06T10:00:00.000Z" });
+      const idempotency = new IdempotencyStore({ dir, now: () => "2026-08-06T10:00:00.000Z" });
+      const pipeline = new InboundPipeline({
+        handler: echoHandler(),
+        idempotency,
+        ledger,
+        tasks: new TaskRegistry(),
+        now: () => "2026-08-06T10:00:00.000Z",
+        logError: () => {},
+      });
+
+      // 1. AuthVerifier 给出验签身份（identityVerified=true）→ counterparty 用验签身份，
+      //    而不是 socket 地址。
+      const signedEnvelope = finalizeEnvelope(validEnvelopeFields());
+      await pipeline.sendMessage(
+        { message: knpMessage(signedEnvelope) },
+        {
+          senderIdentity: "peer-verified",
+          remoteAddress: "::ffff:127.0.0.1",
+          identityVerified: true,
+        },
+      );
+      const first = ledger.events(NEGOTIATION_ID)[0];
+      expect(first?.identity.sender_identity).toBe("peer-verified");
+      expect(first?.identity.counterparty_identity).toBe("peer-verified");
+      expect(first?.identity.counterparty_identity).not.toBe("::ffff:127.0.0.1");
+
+      // 2. 无验签身份（匿名/loopback 档）→ 回退 remoteAddress。
+      const anonymousEnvelope = finalizeEnvelope({
+        ...validEnvelopeFields(),
+        message_id: "msg_pipeline_identity_2",
+      });
+      await pipeline.sendMessage(
+        { message: knpMessage(anonymousEnvelope) },
+        { senderIdentity: "anonymous", remoteAddress: "127.0.0.1:43123" },
+      );
+      const second = ledger.events(NEGOTIATION_ID)[1];
+      expect(second?.identity.sender_identity).toBe("anonymous");
+      expect(second?.identity.counterparty_identity).toBe("127.0.0.1:43123");
+
+      expect(ledger.verifyChain(NEGOTIATION_ID).valid).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("HttpMessageSignatureVerifier 验签成功时返回 identityVerified=true（驱动 counterparty 身份）", async () => {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const privatePem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const pubJwk = publicKey.export({ format: "jwk" });
+    const resolver = resolveFromSigningKeys([
+      {
+        keyid: "buyer-2026",
+        algorithm: "ed25519" as const,
+        jwk: pubJwk,
+        // T1（DISCOVERED）：强制 HTTP Message Signature 但不强制 Agent Card JWS，
+        // 单测聚焦验签身份的 identityVerified 信号（完整 T2 卡片 JWS 往返由
+        // interop-signed-identity 覆盖）。
+        profile: { identity: "peer-verified", trustLevel: "T1" as const },
+      },
+    ]);
+    const verifier = new HttpMessageSignatureVerifier({ resolver, anonymousTrustLevel: "T1" });
+    const signer = new HttpMessageSigner({
+      keyid: "buyer-2026",
+      algorithm: "ed25519",
+      privateKey: privatePem,
+    });
+    const headers = signer.sign({
+      method: "POST",
+      url: "http://merchant/a2a",
+      body: Buffer.from("{}"),
+      headers: { host: "merchant" },
+    });
+    const result = verifier.verify({
+      remoteAddress: "::ffff:127.0.0.1",
+      authorizationHeader: undefined,
+      method: "POST",
+      url: "/a2a",
+      scheme: "http",
+      headers: { ...headers, host: "merchant" },
+      body: Buffer.from("{}"),
+    });
+    expect(result.authenticated).toBe(true);
+    expect(result.identity).toBe("peer-verified");
+    expect(result.identityVerified).toBe(true);
   });
 });

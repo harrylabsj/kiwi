@@ -206,6 +206,9 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
     if (!bound.ok) {
       return { authenticated: false, protocolCode: "identity_rejected", reason: bound.reason };
     }
-    return { authenticated: true, identity: bound.senderIdentity };
+    // 验签通过：identity 是 HTTP Message Signature 验证出的对端身份。
+    // identityVerified=true 让 pipeline 把该身份写入入站 Ledger identity
+    // snapshot 的 counterparty 侧（§22，与 buyer 侧记录对称）。
+    return { authenticated: true, identity: bound.senderIdentity, identityVerified: true };
   }
 }

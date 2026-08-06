@@ -27,6 +27,9 @@ import { defaultAuthVerifier } from "./auth.js";
 import { defaultHandler } from "./handler.js";
 import { InboundPipeline } from "./pipeline.js";
 import { TaskRegistry } from "./task-registry.js";
+import { A2AServerThrottle } from "./throttle.js";
+import type { ThrottleOptions } from "./throttle.js";
+import type { TrustLevel } from "../../trust/identity/trust-policy.js";
 import {
   authError,
   fromNegotiationError,
@@ -74,6 +77,9 @@ function requireParamsObject(params: unknown): Record<string, unknown> {
 interface Caller {
   identity: string;
   remoteAddress: string | undefined;
+  trustLevel?: TrustLevel;
+  identityVerified?: boolean;
+  fingerprintChanged?: boolean;
 }
 
 type ReadBodyResult = { ok: true; body: Buffer } | { ok: false };
@@ -164,6 +170,12 @@ export class A2AServer {
 
     const handler = options.handler ?? defaultHandler();
     const tasks = new TaskRegistry();
+    const throttle =
+      options.throttle === undefined
+        ? undefined
+        : options.throttle instanceof A2AServerThrottle
+          ? options.throttle
+          : new A2AServerThrottle(options.throttle as ThrottleOptions);
     this.pipeline = new InboundPipeline({
       handler,
       idempotency: options.idempotency,
@@ -171,6 +183,7 @@ export class A2AServer {
       tasks,
       now: this.now,
       logError: this.logError,
+      throttle,
     });
   }
 
@@ -250,7 +263,13 @@ export class A2AServer {
       const { httpStatus, body } = authError(result.protocolCode ?? "authorization_failed");
       return { error: { httpStatus, body } };
     }
-    return { identity: result.identity ?? "unknown", remoteAddress: req.socket.remoteAddress };
+    return {
+      identity: result.identity ?? "unknown",
+      remoteAddress: req.socket.remoteAddress,
+      trustLevel: result.trustLevel,
+      identityVerified: result.identityVerified,
+      fingerprintChanged: result.fingerprintChanged,
+    };
   }
 
   private async handleWellKnown(
@@ -282,10 +301,7 @@ export class A2AServer {
    * 响应头 Cache-Control: public, max-age=N（N>=60，UCP 规范强制）；
    * 内容由 buildUcpProfile 强制过 validate 自洽（fail-closed）。
    */
-  private async handleUcp(
-    req: http.IncomingMessage,
-    res: http.ServerResponse,
-  ): Promise<void> {
+  private async handleUcp(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (req.method !== "GET") {
       sendText(res, 405, "method not allowed");
       return;
@@ -406,7 +422,14 @@ export class A2AServer {
     }
     const result = await this.pipeline.sendMessage(
       { message: p.message, contextId: p.contextId },
-      { senderIdentity: caller.identity, remoteAddress: caller.remoteAddress, ucpAgentProfile },
+      {
+        senderIdentity: caller.identity,
+        remoteAddress: caller.remoteAddress,
+        ucpAgentProfile,
+        trustLevel: caller.trustLevel,
+        identityVerified: caller.identityVerified,
+        fingerprintChanged: caller.fingerprintChanged,
+      },
     );
     return { task: result.task };
   }

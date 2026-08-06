@@ -30,6 +30,15 @@ export function trustLevelRank(level: TrustLevel): number {
 }
 
 /**
+ * 取两个 trust level 中更保守（更低）的一个。
+ * WP1 集成：签名密钥档案的 trustLevel 优先，但 record 推导值对它是保守校验——
+ * 冲突时绝不向更乐观的一侧取齐（§28 trust level 只控制协议/自动化风险）。
+ */
+export function conservativeLevel(a: TrustLevel, b: TrustLevel): TrustLevel {
+  return trustLevelRank(a) <= trustLevelRank(b) ? a : b;
+}
+
+/**
  * 信任策略：按对端 trust level 决定对请求身份证据的强制程度。
  * 全部为纯查询接口，便于测试矩阵。
  */
@@ -62,6 +71,13 @@ export interface PolicyEvaluationInput {
   /** 卡片 JWS 是否验证通过（未提供时 undefined）。 */
   cardJwsValid?: boolean;
   hasNonce?: boolean;
+  /**
+   * WP1：对端 TrustRecord 评估推导出的信任信号（可选）。签名密钥档案的
+   * trustLevel（`level`）优先；两者同时提供且冲突时取更保守者
+   * （conservativeLevel）。`record.rejected === true` 时直接拒绝（fail-closed，
+   * §4.6）。
+   */
+  record?: { trustLevel: TrustLevel; rejected?: boolean };
 }
 
 export interface PolicyEvaluationResult {
@@ -81,21 +97,34 @@ export function evaluatePolicy(
   policy: TrustPolicy,
   input: PolicyEvaluationInput,
 ): PolicyEvaluationResult {
+  if (input.record?.rejected === true) {
+    return {
+      allowed: false,
+      protocolCode: "authorization_failed",
+      reason: "TrustRecord evaluation rejected counterparty (fail-closed)",
+      missing: [],
+    };
+  }
+  // 有效 level：密钥档案 level 优先，record 推导值做保守校验（冲突取更保守者）。
+  const level =
+    input.record === undefined
+      ? input.level
+      : conservativeLevel(input.level, input.record.trustLevel);
   const missing: string[] = [];
-  if (policy.requireHttpSignature(input.level) && !input.hasHttpSignature) {
+  if (policy.requireHttpSignature(level) && !input.hasHttpSignature) {
     return {
       allowed: false,
       protocolCode: "authentication_required",
-      reason: `HTTP Message Signature required at ${input.level}`,
+      reason: `HTTP Message Signature required at ${level}`,
       missing: ["http-signature"],
     };
   }
-  if (policy.requireCardJws(input.level)) {
+  if (policy.requireCardJws(level)) {
     if (!input.hasCardJws) {
       return {
         allowed: false,
         protocolCode: "authentication_required",
-        reason: `Agent Card JWS required at ${input.level}`,
+        reason: `Agent Card JWS required at ${level}`,
         missing: ["card-jws"],
       };
     }
@@ -103,21 +132,17 @@ export function evaluatePolicy(
       return {
         allowed: false,
         protocolCode: "authorization_failed",
-        reason: `Agent Card JWS verification failed at ${input.level}`,
+        reason: `Agent Card JWS verification failed at ${level}`,
         missing: [],
       };
     }
   }
-  if (
-    policy.requireNonce(input.level) &&
-    input.hasHttpSignature &&
-    input.hasNonce !== true
-  ) {
+  if (policy.requireNonce(level) && input.hasHttpSignature && input.hasNonce !== true) {
     // hasNonce 缺省/未知按缺失处理（fail-closed）：T3 的 nonce 强制不容模糊。
     return {
       allowed: false,
       protocolCode: "authorization_failed",
-      reason: `signature nonce required at ${input.level}`,
+      reason: `signature nonce required at ${level}`,
       missing: ["nonce"],
     };
   }

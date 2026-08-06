@@ -213,7 +213,12 @@ describe("HttpMessageSignatureVerifier（AuthVerifier 接缝）", () => {
   it("T1 密钥签名请求通过（T1 不强制 JWS）", () => {
     const verifier = new HttpMessageSignatureVerifier({ resolver: RESOLVER, now: () => CREATED });
     const ctx = verifierCtx(signedHeaders("t1-key"));
-    expect(verifier.verify(ctx)).toEqual({ authenticated: true, identity: "peer-t1" });
+    // 验签通过 → identityVerified=true（驱动入站 Ledger counterparty 身份，§22）。
+    expect(verifier.verify(ctx)).toEqual({
+      authenticated: true,
+      identity: "peer-t1",
+      identityVerified: true,
+    });
   });
 
   it("T2 密钥签名但缺卡片 JWS → authentication_required", () => {
@@ -236,7 +241,11 @@ describe("HttpMessageSignatureVerifier（AuthVerifier 接缝）", () => {
       verifyCardJws: () => ({ ok: true, identity: "peer-t2", organization: "Acme" }),
     });
     const ctx = verifierCtx({ "x-agent-card-jws": "valid.jws.value", ...signedHeaders("t2-key") });
-    expect(verifier.verify(ctx)).toEqual({ authenticated: true, identity: "peer-t2" });
+    expect(verifier.verify(ctx)).toEqual({
+      authenticated: true,
+      identity: "peer-t2",
+      identityVerified: true,
+    });
   });
 
   it("T2 密钥 + 无效卡片 JWS → authorization_failed", () => {
@@ -275,7 +284,11 @@ describe("HttpMessageSignatureVerifier（AuthVerifier 接缝）", () => {
       "x-agent-card-jws": "jws",
       ...signedHeaders("t3-key", { nonce: "n-1" }),
     });
-    expect(verifier.verify(ctx)).toEqual({ authenticated: true, identity: "peer-t3" });
+    expect(verifier.verify(ctx)).toEqual({
+      authenticated: true,
+      identity: "peer-t3",
+      identityVerified: true,
+    });
   });
 
   it("宣称 org 与密钥档案冲突 → identity_rejected", () => {
@@ -296,7 +309,11 @@ describe("HttpMessageSignatureVerifier（AuthVerifier 接缝）", () => {
       "x-kiwi-claimed-identity": JSON.stringify({ identity: "peer-t1", organization: "Acme" }),
       ...signedHeaders("t1-key"),
     });
-    expect(verifier.verify(ctx)).toEqual({ authenticated: true, identity: "peer-t1" });
+    expect(verifier.verify(ctx)).toEqual({
+      authenticated: true,
+      identity: "peer-t1",
+      identityVerified: true,
+    });
   });
 
   it("T3 nonce 复用 → replay_detected", () => {
