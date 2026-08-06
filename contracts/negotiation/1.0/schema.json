@@ -1,0 +1,470 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kiwi.harrylabsj.com/schemas/negotiation/1.0/schema.json",
+  "title": "KNP/1.0 Negotiation Envelope",
+  "description": "KNP/1.0 完整 wire schema（基线 §41 #7 九类核心对象冻结）：Envelope + 全部 payload 对象 $defs。Every KNP wire payload MUST be carried inside this envelope; envelope.payload 经 oneOf 约束为合法 payload，并经 allOf 约束与 envelope.action 一一对应。AcceptedNonbindingAgreement（§16）是响应/Task artifact（§8.2），不是 envelope action，单独以 $defs.accepted_nonbinding_agreement 冻结。UCP schema origin for capability com.harrylabsj.kiwi.shopping.negotiation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "capability",
+    "protocol_version",
+    "negotiation_id",
+    "exchange_id",
+    "message_id",
+    "actor",
+    "action",
+    "created_at",
+    "payload"
+  ],
+  "properties": {
+    "capability": {
+      "type": "string",
+      "const": "com.harrylabsj.kiwi.shopping.negotiation"
+    },
+    "protocol_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "negotiation_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "exchange_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "message_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "in_reply_to": {
+      "oneOf": [{ "$ref": "#/$defs/identifier" }, { "type": "null" }]
+    },
+    "actor": {
+      "type": "string",
+      "enum": ["buyer", "merchant"]
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "inquiry",
+        "rfq",
+        "offer",
+        "counter_offer",
+        "conditional_offer",
+        "clarification",
+        "clarification_response",
+        "accept_nonbinding",
+        "withdraw",
+        "decline",
+        "cancel"
+      ]
+    },
+    "created_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "public_message": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "payload": {
+      "oneOf": [
+        { "$ref": "#/$defs/inquiry" },
+        { "$ref": "#/$defs/rfq" },
+        { "$ref": "#/$defs/offer" },
+        { "$ref": "#/$defs/counter_offer" },
+        { "$ref": "#/$defs/conditional_offer" },
+        { "$ref": "#/$defs/clarification" },
+        { "$ref": "#/$defs/clarification_response" },
+        { "$ref": "#/$defs/accept_nonbinding" },
+        { "$ref": "#/$defs/withdraw" },
+        { "$ref": "#/$defs/decline" },
+        { "$ref": "#/$defs/cancel" }
+      ]
+    },
+    "digest": {
+      "$ref": "#/$defs/digest"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "action": { "const": "inquiry" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/inquiry" } } }
+    },
+    {
+      "if": { "properties": { "action": { "const": "rfq" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/rfq" } } }
+    },
+    {
+      "if": { "properties": { "action": { "const": "offer" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/offer" } } }
+    },
+    {
+      "if": { "properties": { "action": { "const": "counter_offer" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/counter_offer" } } }
+    },
+    {
+      "if": { "properties": { "action": { "const": "conditional_offer" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/conditional_offer" } } }
+    },
+    {
+      "if": { "properties": { "action": { "const": "clarification" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/clarification" } } }
+    },
+    {
+      "if": { "properties": { "action": { "const": "clarification_response" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/clarification_response" } } }
+    },
+    {
+      "if": { "properties": { "action": { "const": "accept_nonbinding" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/accept_nonbinding" } } }
+    },
+    {
+      "if": { "properties": { "action": { "const": "withdraw" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/withdraw" } } }
+    },
+    {
+      "if": { "properties": { "action": { "const": "decline" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/decline" } } }
+    },
+    {
+      "if": { "properties": { "action": { "const": "cancel" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/cancel" } } }
+    }
+  ],
+  "$defs": {
+    "identifier": {
+      "description": "KNP 标识符对端 opaque（§6）：非空、≤256、无首尾空白、无控制字符。",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^\\S(.*\\S)?$"
+    },
+    "timestamp": {
+      "description": "RFC 3339 时间戳（§7.3）。",
+      "type": "string",
+      "format": "date-time"
+    },
+    "digest": {
+      "description": "KNP/1.0 摘要（§19）：sha256:<64 位小写十六进制>。",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "money": {
+      "description": "金额用最小单位整数（§7.1）。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["currency", "amount_minor"],
+      "properties": {
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "amount_minor": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "quantity": {
+      "description": "数量（§7.2）：value 为正数。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["value", "unit"],
+      "properties": {
+        "value": { "type": "number", "exclusiveMinimum": 0 },
+        "unit": { "type": "string", "minLength": 1 }
+      }
+    },
+    "line_item": {
+      "description": "TermSet.items 的条目（§7.4）。offer-like 的 items 要求 unit_price。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["sku", "quantity"],
+      "properties": {
+        "sku": { "type": "string", "minLength": 1 },
+        "quantity": { "$ref": "#/$defs/quantity" },
+        "unit_price": { "$ref": "#/$defs/money" }
+      }
+    },
+    "term_set": {
+      "description": "TermSet（§7.4）：稳定顶层域 items / price_terms / fulfillment_terms / service_terms / payment_terms / valid_until。payment_terms 只表达商业条件，不得授权或执行支付。",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/line_item" }
+        },
+        "price_terms": { "type": "object" },
+        "fulfillment_terms": {
+          "type": "object",
+          "properties": {
+            "delivery_before": { "$ref": "#/$defs/timestamp" }
+          },
+          "additionalProperties": true
+        },
+        "service_terms": { "type": "object" },
+        "payment_terms": { "type": "object" },
+        "valid_until": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "condition": {
+      "description": "ConditionalOffer 条件节点（§13.3/§13.4）：节点必须恰含 all / any / 比较叶之一；嵌套深度不得超过根下 2 层（JSON Schema 不表达深度，由实现校验）。",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["all"],
+          "properties": {
+            "all": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/condition" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["any"],
+          "properties": {
+            "any": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/condition" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["field", "op", "value"],
+          "properties": {
+            "field": {
+              "type": "string",
+              "enum": [
+                "aggregate.total_quantity",
+                "fulfillment.batch_count",
+                "service.warranty_months",
+                "commercial.commitment_days"
+              ]
+            },
+            "op": {
+              "type": "string",
+              "enum": ["eq", "neq", "gt", "gte", "lt", "lte", "in"]
+            },
+            "value": {
+              "description": "op=in 时必须是含 number|string 的非空数组（§13.4）；其余 op 必须为标量。",
+              "oneOf": [
+                { "type": "number" },
+                { "type": "string" },
+                {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "oneOf": [{ "type": "number" }, { "type": "string" }] }
+                }
+              ]
+            }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "op": { "not": { "const": "in" } } } },
+              "then": { "properties": { "value": { "not": { "type": "array" } } } }
+            }
+          ]
+        }
+      ]
+    },
+    "inquiry": {
+      "description": "Inquiry（§9）：非约束性提问，MUST NOT 被解读为购买意图。subject / questions 均可选。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "inquiry" },
+        "subject": { "type": "object" },
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["code"],
+            "properties": { "code": { "type": "string", "minLength": 1 } }
+          }
+        }
+      }
+    },
+    "rfq": {
+      "description": "RFQ（§10）：请求商业条款。至少含一个 item。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "items"],
+      "properties": {
+        "type": { "const": "rfq" },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/line_item" }
+        },
+        "requested_terms": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": { "delivery_before": { "$ref": "#/$defs/timestamp" } }
+        }
+      }
+    },
+    "offer": {
+      "description": "Offer（§11）：非约束性商业提案。MUST NOT 描述为订单或销售完成。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "offer_id", "terms"],
+      "properties": {
+        "type": { "const": "offer" },
+        "offer_id": { "$ref": "#/$defs/identifier" },
+        "terms": { "$ref": "#/$defs/term_set" }
+      }
+    },
+    "counter_offer": {
+      "description": "CounterOffer（§12）：回应先前的 offer-like 对象；用完整 proposed_terms，不得用任意可执行 patch 表达式。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "offer_id", "responding_to_offer_id", "proposed_terms"],
+      "properties": {
+        "type": { "const": "counter_offer" },
+        "offer_id": { "$ref": "#/$defs/identifier" },
+        "responding_to_offer_id": { "$ref": "#/$defs/identifier" },
+        "proposed_terms": { "$ref": "#/$defs/term_set" }
+      }
+    },
+    "conditional_offer": {
+      "description": "ConditionalOffer（§13）：确定性替代条款。conditions 可空（等价 base_terms）。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "offer_id", "base_terms"],
+      "properties": {
+        "type": { "const": "conditional_offer" },
+        "offer_id": { "$ref": "#/$defs/identifier" },
+        "responding_to_offer_id": { "$ref": "#/$defs/identifier" },
+        "base_terms": { "$ref": "#/$defs/term_set" },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["when", "then_terms"],
+            "properties": {
+              "when": { "$ref": "#/$defs/condition" },
+              "then_terms": { "$ref": "#/$defs/term_set" }
+            }
+          }
+        }
+      }
+    },
+    "clarification": {
+      "description": "Clarification（§14）：请求缺失或歧义信息。至少一个问题；MUST NOT 改变已接受的商业条款。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "questions"],
+      "properties": {
+        "type": { "const": "clarification" },
+        "questions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["field"],
+            "properties": {
+              "field": { "type": "string", "minLength": 1 },
+              "reason": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "clarification_response": {
+      "description": "clarification_response（§8.2/§14）：KNP/1.0 未冻结 payload 形状，唯一约束是 type 判别；对被回答的澄清消息的引用由 envelope in_reply_to 承担。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": { "type": { "const": "clarification_response" } }
+    },
+    "accept_nonbinding": {
+      "description": "AcceptNonbinding（§15）：接受一个活跃的 offer-like 对象；terms_digest 必须匹配 offer terms 的规范摘要。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "offer_id", "terms_digest"],
+      "properties": {
+        "type": { "const": "accept_nonbinding" },
+        "offer_id": { "$ref": "#/$defs/identifier" },
+        "terms_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "withdraw": {
+      "description": "Withdraw（§17.2）：撤回本人仍可撤回的 message / offer-like 对象。scope=negotiation 时不得携带 target_offer_id（以 envelope negotiation_id 为准）。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "scope", "target_message_id"],
+      "properties": {
+        "type": { "const": "withdraw" },
+        "scope": { "type": "string", "enum": ["offer", "negotiation"] },
+        "target_message_id": { "$ref": "#/$defs/identifier" },
+        "target_offer_id": { "$ref": "#/$defs/identifier" },
+        "reason_code": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "scope": { "const": "negotiation" } } },
+          "then": { "properties": { "target_offer_id": false } }
+        }
+      ]
+    },
+    "decline": {
+      "description": "Decline（§17.3）：商业决定，非协议错误。scope=negotiation 时不得携带 target_offer_id（以 envelope negotiation_id 为准）。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "scope", "target_message_id"],
+      "properties": {
+        "type": { "const": "decline" },
+        "scope": { "type": "string", "enum": ["offer", "negotiation"] },
+        "target_message_id": { "$ref": "#/$defs/identifier" },
+        "target_offer_id": { "$ref": "#/$defs/identifier" },
+        "reason_code": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "scope": { "const": "negotiation" } } },
+          "then": { "properties": { "target_offer_id": false } }
+        }
+      ]
+    },
+    "cancel": {
+      "description": "Cancel（§17.4）：把非终态 negotiation 转到 CANCELLED。KNP/1.0 不管理订单。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": { "type": { "const": "cancel" } }
+    },
+    "accepted_nonbinding_agreement": {
+      "description": "AcceptedNonbindingAgreement（§16）：成功接受后产生的响应 / Task artifact（§8.2，不是 envelope action）。三个副作用标志 MUST 为 false。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "agreement_id",
+        "negotiation_id",
+        "accepted_offer_id",
+        "agreed_terms",
+        "terms_digest",
+        "accepted_by",
+        "created_at",
+        "binding_effect",
+        "creates_order",
+        "reserves_inventory",
+        "authorizes_payment"
+      ],
+      "properties": {
+        "type": { "const": "accepted_nonbinding_agreement" },
+        "agreement_id": { "$ref": "#/$defs/identifier" },
+        "negotiation_id": { "$ref": "#/$defs/identifier" },
+        "accepted_offer_id": { "$ref": "#/$defs/identifier" },
+        "agreed_terms": { "$ref": "#/$defs/term_set" },
+        "terms_digest": { "$ref": "#/$defs/digest" },
+        "accepted_by": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["buyer", "merchant"] }
+        },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "binding_effect": { "const": "nonbinding" },
+        "creates_order": { "const": false },
+        "reserves_inventory": { "const": false },
+        "authorizes_payment": { "const": false }
+      }
+    }
+  }
+}
