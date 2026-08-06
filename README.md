@@ -65,6 +65,14 @@ kiwi chat --profile <file>              # 主对话 + Principal Memory
 kiwi init/up/status/logs/down --dir <d> # managed-local 产品栈生命周期
 ```
 
+本地双 agent 实测（两个独立进程，经 kiwi-catalog 发现 + A2A 自由对话）：
+
+```bash
+node scripts/a2a-agent.mjs --role merchant --port 9000   # 独立 merchant A2A server
+node scripts/a2a-agent.mjs --role buyer                   # 交互式 buyer（缺省角色）
+# buyer 命令：inquiry | rfq | counter | accept | clarify | withdraw | decline | quit
+```
+
 > `model.provider: fake` 使用内置确定性模型，无需任何凭据即可本地冒烟 / CI。
 
 ## 测试与质量
