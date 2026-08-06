@@ -404,10 +404,10 @@ kiwi.negotiation/1.0
 
 ## 8.2 A2A Extension URI
 
-统一使用本文件的示例 authority：
+统一使用项目维护者实际控制域名 `kiwi.harrylabsj.com`（harrylabsj.com 的子域）：
 
 ```text
-https://kiwi.example/a2a/extensions/negotiation/1.0
+https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0
 ```
 
 ## 8.3 UCP Vendor Capability
@@ -415,10 +415,11 @@ https://kiwi.example/a2a/extensions/negotiation/1.0
 本文全部示例统一为：
 
 ```text
-example.kiwi.shopping.negotiation
+com.harrylabsj.kiwi.shopping.negotiation
 ```
 
-生产发布前 MUST 替换为 Kiwi 实际控制域名对应的 reverse-domain namespace。
+namespace 已替换为实际控制域名对应的 reverse-domain（`kiwi.example` 占位符已移除）。
+生产发布前仍 MUST 在该域名上真实托管 `spec` / `schema`（UCP origin 绑定，见下）。
 
 UCP capability MUST 遵循：
 
@@ -437,12 +438,12 @@ kiwi.negotiation/1.0
       implements
 
 A2A:
-https://kiwi.example/a2a/extensions/negotiation/1.0
+https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0
 
       advertises commerce capability
 
 UCP:
-example.kiwi.shopping.negotiation
+com.harrylabsj.kiwi.shopping.negotiation
 ```
 
 三者不能互换。
@@ -1131,7 +1132,7 @@ extensions
     "extendedAgentCard": true,
     "extensions": [
       {
-        "uri": "https://kiwi.example/a2a/extensions/negotiation/1.0",
+        "uri": "https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0",
         "required": false
       }
     ]

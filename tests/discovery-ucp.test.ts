@@ -43,7 +43,7 @@ function agentCard(
   };
 }
 
-/** 合法 Merchant UCP profile：example.kiwi.shopping → authority kiwi.example，a2a transport。 */
+/** 合法 Merchant UCP profile：com.harrylabsj.kiwi.shopping → authority kiwi.harrylabsj.com，a2a transport。 */
 function merchantUcpProfile(
   agentCardUrl = "https://merchant.example/.well-known/agent-card.json",
 ): Record<string, unknown> {
@@ -178,7 +178,7 @@ describe("AgentDiscovery.resolve: domain → UCP 优先（双发现入口）", (
 
 describe("AgentDiscovery.resolve: UCP capability intersection 纳入 CounterpartyProfile", () => {
   it("配置 localProfile → ucp_intersection 与 A2A binding intersection 两个维度并存", async () => {
-    // Kiwi 平台侧 profile 声明同名的 example.kiwi.shopping.negotiation v1.0。
+    // Kiwi 平台侧 profile 声明同名的 com.harrylabsj.kiwi.shopping.negotiation v1.0。
     const localProfile = buildKiwiVendorProfile({
       agentCardUrl: "https://buyer.example/.well-known/agent-card.json",
     });
@@ -200,17 +200,17 @@ describe("AgentDiscovery.resolve: UCP capability intersection 纳入 Counterpart
     // UCP capability intersection（新维度）。
     expect(profile.ucp_intersection?.compatible).toBe(true);
     expect(profile.ucp_intersection?.active).toEqual([
-      { name: "example.kiwi.shopping.negotiation", version: "1.0" },
+      { name: "com.harrylabsj.kiwi.shopping.negotiation", version: "1.0" },
     ]);
     expect(profile.ucp_intersection?.excluded).toEqual([]);
-    expect(profile.ucp_profile?.ucp.capabilities?.["example.kiwi.shopping.negotiation"]).toHaveLength(1);
+    expect(profile.ucp_profile?.ucp.capabilities?.["com.harrylabsj.kiwi.shopping.negotiation"]).toHaveLength(1);
   });
 
   it("localProfile 与对端无同名能力 → ucp_intersection.compatible=false（业务结果，非 transport 错误）", async () => {
     const localProfile = buildKiwiVendorProfile({
       agentCardUrl: "https://buyer.example/.well-known/agent-card.json",
-      capabilityName: "example.kiwi.shopping.order",
-      serviceName: "example.kiwi.shopping",
+      capabilityName: "com.harrylabsj.kiwi.shopping.order",
+      serviceName: "com.harrylabsj.kiwi.shopping",
     });
     const { fetchImpl } = routerFetch({
       ucp: () =>
@@ -226,7 +226,7 @@ describe("AgentDiscovery.resolve: UCP capability intersection 纳入 Counterpart
 
     expect(profile.ucp_intersection?.compatible).toBe(false);
     expect(profile.ucp_intersection?.excluded).toEqual([
-      { name: "example.kiwi.shopping.negotiation", reason: "no_mutual" },
+      { name: "com.harrylabsj.kiwi.shopping.negotiation", reason: "no_mutual" },
     ]);
     // A2A 通道不受 UCP 交集影响（两个维度独立）。
     expect(profile.intersection.compatible).toBe(true);

@@ -7,7 +7,7 @@
  *     a2a endpoint MUST 指向 Agent Card URL、version 日期格式、未知字段 forward-compat 保留；
  *   - UcpResolver：HTTPS only、不跟随重定向、超时、Cache-Control 校验、按 Cache-Control
  *     缓存（60s 地板）、错误码映射、SSRF 复用 url-policy、按条目拒绝结果透传；
- *   - Kiwi vendor capability 构造器：example.kiwi.shopping.negotiation + 完整 vendor profile。
+ *   - Kiwi vendor capability 构造器：com.harrylabsj.kiwi.shopping.negotiation + 完整 vendor profile。
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -362,28 +362,28 @@ describe("parseCacheControl", () => {
 });
 
 describe("Kiwi vendor capability builder", () => {
-  it("builds example.kiwi.shopping.negotiation as a Vendor Root Capability (§25.2)", () => {
+  it("builds com.harrylabsj.kiwi.shopping.negotiation as a Vendor Root Capability (§25.2)", () => {
     const { name, declaration } = buildKiwiNegotiationCapability();
-    expect(name).toBe("example.kiwi.shopping.negotiation");
+    expect(name).toBe("com.harrylabsj.kiwi.shopping.negotiation");
     expect(declaration.version).toBe("1.0");
-    expect(declaration.spec).toBe("https://kiwi.example/a2a/extensions/negotiation/1.0");
-    expect(declaration.schema).toBe("https://kiwi.example/schemas/negotiation/1.0/schema.json");
+    expect(declaration.spec).toBe("https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0");
+    expect(declaration.schema).toBe("https://kiwi.harrylabsj.com/schemas/negotiation/1.0/schema.json");
     expect(declaration.extends).toBeUndefined();
   });
 
   it("builds a full vendor profile that passes UCP validation (self-consistent)", () => {
     const profile = buildKiwiVendorProfile({
-      agentCardUrl: "https://kiwi.example/.well-known/agent-card.json",
+      agentCardUrl: "https://kiwi.harrylabsj.com/.well-known/agent-card.json",
     });
     const result = validateUcpProfile(profile);
     expect(result.rejected).toEqual([]);
-    expect(result.profile.ucp.services?.["example.kiwi.shopping"]?.[0]?.transport).toBe("a2a");
-    expect(result.profile.ucp.services?.["example.kiwi.shopping"]?.[0]?.endpoint).toBe(
-      "https://kiwi.example/.well-known/agent-card.json",
+    expect(result.profile.ucp.services?.["com.harrylabsj.kiwi.shopping"]?.[0]?.transport).toBe("a2a");
+    expect(result.profile.ucp.services?.["com.harrylabsj.kiwi.shopping"]?.[0]?.endpoint).toBe(
+      "https://kiwi.harrylabsj.com/.well-known/agent-card.json",
     );
     expect(
-      result.profile.ucp.capabilities?.["example.kiwi.shopping.negotiation"]?.[0]?.spec,
-    ).toBe("https://kiwi.example/a2a/extensions/negotiation/1.0");
+      result.profile.ucp.capabilities?.["com.harrylabsj.kiwi.shopping.negotiation"]?.[0]?.spec,
+    ).toBe("https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0");
   });
 
   it("custom authority + namespace pair stays self-consistent (placeholders MUST be replaced together)", () => {

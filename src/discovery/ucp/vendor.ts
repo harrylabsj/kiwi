@@ -1,10 +1,11 @@
 /**
  * Kiwi vendor capability 构造器（基线 §8.3 / §25.2 / §43）。
  *
- * capability 名：`example.kiwi.shopping.negotiation`（占位 authority `kiwi.example`，
- * 对齐 §8.2 的 A2A Extension URI 示例）。**生产发布前 MUST 把 authority 与
- * capability/service 名整体替换为 Kiwi 实际控制域名对应的 reverse-domain namespace**
- * （§8.3），spec / schema origin 由构造器按 authority 推导，替换后自动满足 origin 绑定。
+ * capability 名：`com.harrylabsj.kiwi.shopping.negotiation`（真实 authority
+ * `kiwi.harrylabsj.com`，对齐 §8.2 的 A2A Extension URI）。**生产发布前 MUST 把
+ * authority 与 capability/service 名替换为 Kiwi 实际控制域名对应的 reverse-domain
+ * namespace，并在该域名上真实托管 spec / schema**（§8.3，spec / schema origin 由
+ * 构造器按 authority 推导，替换后自动满足 origin 绑定）。
  *
  * spec 用 §8.2 Extension URI；schema 用同 origin 的 JSON Schema 地址。negotiation 是
  * Vendor Root Capability（不带 extends，§25.2）。
@@ -12,21 +13,24 @@
 
 import type { UcpCapabilityDeclaration, UcpProfile } from "./types.js";
 
-/** 占位 authority（§8.2 示例域名）。生产前 MUST 替换为实际控制域名。 */
-export const KIWI_VENDOR_AUTHORITY = "kiwi.example";
-export const KIWI_VENDOR_SERVICE_NAME = "example.kiwi.shopping";
-export const KIWI_VENDOR_CAPABILITY_NAME = "example.kiwi.shopping.negotiation";
+/**
+ * 真实 authority（§8.2 / §8.3）。`kiwi.harrylabsj.com` 为项目维护者实际控制域名
+ * （harrylabsj.com 的子域）；spec / schema 须托管在该域名上（UCP origin 绑定）。
+ */
+export const KIWI_VENDOR_AUTHORITY = "kiwi.harrylabsj.com";
+export const KIWI_VENDOR_SERVICE_NAME = "com.harrylabsj.kiwi.shopping";
+export const KIWI_VENDOR_CAPABILITY_NAME = "com.harrylabsj.kiwi.shopping.negotiation";
 export const KIWI_NEGOTIATION_SPEC_PATH = "/a2a/extensions/negotiation/1.0";
 export const KIWI_NEGOTIATION_SCHEMA_PATH = "/schemas/negotiation/1.0/schema.json";
 
 export interface KiwiVendorBuildOptions {
-  /** 实际控制域名的 reverse-domain authority（默认占位 kiwi.example）。 */
+  /** 实际控制域名的 reverse-domain authority（默认 kiwi.harrylabsj.com）。 */
   authority?: string;
   /** 声明版本（默认 "1.0"）。 */
   version?: string;
-  /** capability 名（默认 example.kiwi.shopping.negotiation）。换 authority 时必须同步替换。 */
+  /** capability 名（默认 com.harrylabsj.kiwi.shopping.negotiation）。换 authority 时必须同步替换。 */
   capabilityName?: string;
-  /** service 名（默认 example.kiwi.shopping）。换 authority 时必须同步替换。 */
+  /** service 名（默认 com.harrylabsj.kiwi.shopping）。换 authority 时必须同步替换。 */
   serviceName?: string;
 }
 

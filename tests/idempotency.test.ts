@@ -304,7 +304,7 @@ describe("协议级幂等：本地持久化与 Ledger 关系", () => {
         counterparty_identity: "merchant@kiwi.test",
         actor: "buyer",
       },
-      capability: { capability: "example.kiwi.shopping.negotiation", protocol_version: "1.0" },
+      capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
       wire_digest: DIGEST_A,
       outcome: { kind: "ok", result: { accepted: true } },
       occurred_at: "2026-08-05T12:00:00Z",

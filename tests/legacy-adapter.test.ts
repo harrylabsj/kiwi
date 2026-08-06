@@ -40,7 +40,7 @@ import {
 } from "../src/negotiation/types.js";
 import { packageRoot } from "../src/contracts/schemas.js";
 
-const CAPABILITY = "example.kiwi.shopping.negotiation";
+const CAPABILITY = "com.harrylabsj.kiwi.shopping.negotiation";
 const NOW = "2026-08-05T12:00:00Z";
 const adapter = new LegacyNegotiationAdapter({ now: () => NOW });
 const ctx = { capability: CAPABILITY, actor: "buyer", created_at: NOW, current_sku: "sku-001" } as const;

@@ -23,7 +23,7 @@ const MESSAGE_B = "msg_02H5V8KXZqJ7Qp3mN2B6A";
 const MESSAGE_C = "msg_03H5V8KXZqJ7Qp3mN2B6A";
 const SENDER = "buyer@kiwi.test";
 const COUNTERPARTY = "merchant@kiwi.test";
-const CAPABILITY = "example.kiwi.shopping.negotiation";
+const CAPABILITY = "com.harrylabsj.kiwi.shopping.negotiation";
 const T0 = "2026-08-05T12:00:00Z";
 
 function baseContent(overrides: Partial<LedgerEventContent> = {}): LedgerEventContent {

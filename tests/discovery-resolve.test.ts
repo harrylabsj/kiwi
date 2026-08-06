@@ -31,7 +31,7 @@ function agentCardJson(baseUrl: string, overrides: Record<string, unknown> = {})
     capabilities: {
       extendedAgentCard: true,
       extensions: [
-        { uri: "https://kiwi.example/a2a/extensions/negotiation/1.0", required: false },
+        { uri: "https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0", required: false },
       ],
     },
     ...overrides,

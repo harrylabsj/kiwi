@@ -77,7 +77,7 @@ export function isDnsLabel(label: string): boolean {
   return label.length >= 1 && label.length <= 63 && DNS_LABEL_RE.test(label);
 }
 
-/** reverse-domain（如 `example.kiwi`）→ namespace authority host（`kiwi.example`）。 */
+/** reverse-domain（如 `com.harrylabsj.kiwi`）→ namespace authority host（`kiwi.harrylabsj.com`）。 */
 export function reverseDomainToAuthority(reverseDomain: string): string {
   return reverseDomain.split(".").reverse().join(".");
 }
