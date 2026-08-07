@@ -38,7 +38,7 @@ import { contentDigest } from "../dist/negotiation/jcs.js";
 import { evaluateConditionalOffer } from "../dist/negotiation/condition/evaluator.js";
 
 export const CAPABILITY = "com.harrylabsj.kiwi.shopping.negotiation";
-export const SKU = "SKU-001";
+export const SKU = "sku-001";
 export const CURRENCY = "CNY";
 export const OFFER_PRICE_MINOR = 85_000;
 export const DEAL_PRICE_MINOR = 83_500;

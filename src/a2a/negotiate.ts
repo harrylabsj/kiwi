@@ -43,7 +43,7 @@ import { evaluateConditionalOffer } from "../negotiation/condition/evaluator.js"
 import { detectLocale, type KiwiLocale } from "../i18n.js";
 
 export const NEGOTIATE_CAPABILITY = "com.harrylabsj.kiwi.shopping.negotiation";
-export const NEGOTIATE_SKU = "SKU-001";
+export const NEGOTIATE_SKU = "sku-001";
 export const NEGOTIATE_CURRENCY = "CNY";
 export const NEGOTIATE_QUANTITY = 200;
 export const NEGOTIATE_DEAL_PRICE_MINOR = 83_500;
