@@ -155,6 +155,7 @@ const COMMANDS_HELP = `/memory [preferences|private]  查看记忆概览 / 学�
 /pending                   列出等待批准的写操作候选
 /approve <candidate-id>    批准并执行一个写操作候选（重新校验前置状态）
 /reject <candidate-id>     驳回一个写操作候选（绝不执行）
+/profile <file.yaml>      加载并切换另一个 agent profile（buyer/merchant 等）
 /help                      本帮助
 /quit                      退出`;
 

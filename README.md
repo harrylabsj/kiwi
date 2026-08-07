@@ -58,12 +58,24 @@ npm run verify        # lint + typecheck + build + test + package smoke
 CLI 概览：
 
 ```bash
-kiwi doctor --profile <file>            # 只读诊断
-kiwi agent run --profile <file>         # 单 agent 前台磋商
-kiwi tui --profile <file>               # 操作者驾驶舱（supervised/manual/autopilot）
-kiwi chat --profile <file>              # 主对话 + Principal Memory
-kiwi init/up/status/logs/down --dir <d> # managed-local 产品栈生命周期
+kiwi                                     # 裸启动：直接进入 `kiwi>` 自由对话
+kiwi chat --profile <file>               # 指定 profile 的主对话 + Principal Memory
+kiwi doctor --profile <file>             # 只读诊断
+kiwi agent run --profile <file>          # 单 agent 前台磋商
+kiwi tui --profile <file>                # 操作者驾驶舱（supervised/manual/autopilot）
+kiwi init/up/status/logs/down --dir <d>  # managed-local 产品栈生命周期
 ```
+
+裸 `kiwi` 的默认底层大模型**可配置**（不 hardcode，从环境变量读）：
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `KIWI_MODEL_PROVIDER` | `deepseek` | 模型 provider（pi-ai 目录） |
+| `KIWI_MODEL` | `deepseek-v4-flash` | 模型 id |
+| `KIWI_MODEL_API_KEY_ENV` | `DEEPSEEK_API_KEY` | 持有 API key 的环境变量名 |
+| `KIWI_MODEL_BASE_URL` | 缺省 | 可选 OpenAI 兼容端点覆盖 |
+
+对话内可用 `/profile <file.yaml>` 切换为任意 buyer/merchant profile（换模型/角色/记忆）。
 
 本地双 agent 实测（两个独立进程，经 kiwi-catalog 发现 + A2A 自由对话）：
 
