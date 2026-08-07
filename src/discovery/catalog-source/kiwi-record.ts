@@ -95,6 +95,8 @@ export interface KiwiCatalogSearchQuery
   administrative_state?: AdministrativeState;
   /** 精确匹配 KTH destination_type（禁止 supports_* 平行词表）。 */
   handoff_destination_types?: readonly DestinationType[];
+  /** 分页游标（searchRecords 内部翻页用；调用方无需直接设置）。 */
+  cursor?: string;
 }
 
 /** 折叠优先级：行政 > 可达性 > 新鲜度 > 验证级别。 */

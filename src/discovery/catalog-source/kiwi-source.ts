@@ -45,6 +45,8 @@ import {
 import type { CandidateAgent } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+/** 分页拉取上限（防御服务端游标不前进/循环；100 页 × 页大小已远超目录规模）。 */
+const MAX_SEARCH_PAGES = 100;
 
 const KIWI_SEARCH_QUERY_KEYS: readonly string[] = [
   "q",
@@ -159,22 +161,38 @@ export class KiwiCatalogSource {
 
   /** 搜索 record（新 API，支持三态域 + handoff 词表过滤）。 */
   async searchRecords(query: KiwiCatalogSearchQuery = {}): Promise<CatalogAgentRecord[]> {
-    const qs = buildSearchQuery(query);
-    const raw = await this.getJson(`/v1/agents/search${qs.length > 0 ? `?${qs}` : ""}`);
-    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-      throw new CatalogSourceError(
-        "response_invalid",
-        "kiwi-catalog search response must be a JSON object",
-      );
+    // 分页完整拉取：服务端响应带 next_cursor 时翻页直到无游标（此前单页
+    // 拉取，目录超过页大小静默漏掉其余候选）；跨页 catalog_agent_id 去重。
+    const records: CatalogAgentRecord[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_SEARCH_PAGES; page++) {
+      const qs = buildSearchQuery({ ...query, ...(cursor !== undefined ? { cursor } : {}) });
+      const raw = await this.getJson(`/v1/agents/search${qs.length > 0 ? `?${qs}` : ""}`);
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        throw new CatalogSourceError(
+          "response_invalid",
+          "kiwi-catalog search response must be a JSON object",
+        );
+      }
+      const body = raw as Record<string, unknown>;
+      if (!Array.isArray(body.results)) {
+        throw new CatalogSourceError(
+          "response_invalid",
+          'kiwi-catalog search response is missing array field "results"',
+        );
+      }
+      for (const element of body.results) {
+        const record = validateCatalogAgentRecord(element);
+        if (seen.has(record.catalog_agent_id)) continue;
+        seen.add(record.catalog_agent_id);
+        records.push(record);
+      }
+      const next = body.next_cursor;
+      if (typeof next !== "string" || next === "") break;
+      cursor = next;
     }
-    const body = raw as Record<string, unknown>;
-    if (!Array.isArray(body.results)) {
-      throw new CatalogSourceError(
-        "response_invalid",
-        'kiwi-catalog search response is missing array field "results"',
-      );
-    }
-    return body.results.map((element) => validateCatalogAgentRecord(element));
+    return records;
   }
 
   /** 按 catalog_agent_id 取单个 record。 */

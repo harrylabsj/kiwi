@@ -1237,6 +1237,11 @@ const handoffAgreement: Tool = {
       if (!Number.isFinite(expiresInHours) || expiresInHours <= 0) {
         return textResult("expires_in_hours 必须是正数（小时）。");
       }
+      // 审计链：stale 候选之后的新候选链接到被它取代的候选
+      //（supersedes_candidate_id；此前从不写入，stale 后的新候选是审计孤儿）。
+      const lastStale = [...handoff.ledger.events(agreement.negotiation_id)]
+        .reverse()
+        .find((e) => e.event_kind === "handoff_candidate_stale");
       const candidate = createHandoffCandidate({
         agreement_id: agreement.agreement_id,
         negotiation_id: agreement.negotiation_id,
@@ -1249,7 +1254,13 @@ const handoffAgreement: Tool = {
           summary: p.display_summary_text ?? `negotiation ${agreement.negotiation_id}`,
         },
         policy_version: "handoff-policy/1",
-        expires_at: new Date(Date.now() + expiresInHours * 3_600_000).toISOString(),
+        // 时钟统一用注入的 deps.now()（此前 created_at 走墙钟、事件走注入时钟，
+        // time_to_handoff 指标掺入偏差）。
+        created_at: deps.now(),
+        expires_at: new Date(Date.parse(deps.now()) + expiresInHours * 3_600_000).toISOString(),
+        ...(lastStale?.handoff_candidate_id !== undefined
+          ? { supersedes_candidate_id: lastStale.handoff_candidate_id }
+          : {}),
         requires_user_action: true,
       });
       const outcome = await routeWriteCandidate(

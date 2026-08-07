@@ -22,7 +22,10 @@ import { migrateMemorySchema } from "../src/agent/memory/schema.js";
 import { FakeCommerceConnector, fakeConnectorProduct } from "../src/agent/connector/fake-connector.js";
 import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
 import { buildBuyerTools, type BuyerToolDeps } from "../src/agent/buyer/buyer-tools.js";
-import { WriteApprovalCandidateStore } from "../src/agent/merchant/action-candidate.js";
+import {
+  WriteApprovalCandidateStore,
+  executeApprovedCandidate,
+} from "../src/agent/merchant/action-candidate.js";
 import {
   HandoffEventStore,
   HandoffIdempotencyStore,
@@ -83,9 +86,20 @@ interface E2eHarness {
   getTool: (name: string) => CallableTool;
   ledger: HandoffEventStore;
   idempotency: HandoffIdempotencyStore;
+  approvals: WriteApprovalCandidateStore;
+  pendingHooks: Map<
+    string,
+    {
+      readPreconditions: () => Promise<Record<string, unknown>> | Record<string, unknown>;
+      execute: (args: Record<string, unknown>) => Promise<unknown>;
+    }
+  >;
 }
 
-function setupBuyer(catalog: string): E2eHarness {
+function setupBuyer(
+  catalog: string,
+  options: { mode?: "autopilot" | "supervised" } = {},
+): E2eHarness {
   const dir = mkdtempSync(path.join(tmpdir(), "kiwi-e2e-"));
   const db = new DatabaseSync(":memory:");
   migrateMemorySchema(db);
@@ -98,7 +112,11 @@ function setupBuyer(catalog: string): E2eHarness {
   const approvals = new WriteApprovalCandidateStore({ db, principalId: PRINCIPAL, now: () => T0 });
   const ledger = new HandoffEventStore({ dir, now: () => T0 });
   const idempotency = new HandoffIdempotencyStore({ dir, now: () => T0 });
-  const mode = { value: "autopilot" as const };
+  const mode = { value: (options.mode ?? "autopilot") as "autopilot" | "supervised" };
+  const pendingHooks = new Map<
+    string,
+    { readPreconditions: () => Promise<Record<string, unknown>> | Record<string, unknown>; execute: (args: Record<string, unknown>) => Promise<unknown> }
+  >();
   const deps: BuyerToolDeps = {
     store,
     connector,
@@ -106,7 +124,7 @@ function setupBuyer(catalog: string): E2eHarness {
     approvals,
     mode: () => mode.value,
     now: () => T0,
-    registerPending: () => undefined,
+    registerPending: (id, hooks) => pendingHooks.set(id, hooks),
     catalog,
     handoff: { ledger, idempotency },
   };
@@ -116,6 +134,8 @@ function setupBuyer(catalog: string): E2eHarness {
     getTool: (name) => tools.find((t) => t.name === name) as unknown as CallableTool,
     ledger,
     idempotency,
+    approvals,
+    pendingHooks,
   };
 }
 
@@ -372,5 +392,91 @@ describe("KTH 端到端（#20、#21）", () => {
     });
     const metrics = computeHandoffMetrics(byNegotiation);
     expect(metrics.opened_confirmed_rate).toBe(1);
+  });
+
+  it("supervised: handoff 经审批门 → /approve 后交付，created 事件审批后才落链", async () => {
+    const stack = await startTestA2aStack({ productSource, capture });
+    stacks.push(stack);
+    const h = setupBuyer(stack.catalogUrl, { mode: "supervised" });
+    const taskId = await createReadyTask(h.store);
+
+    // 1. 磋商（supervised）→ 审批候选 → /approve → selected_nonbinding
+    const negotiateTool = h.getTool("negotiate_buyer_task");
+    const firstNeg = await negotiateTool.execute("1", { task_id: taskId });
+    expect(toolText(firstNeg)).toContain("等待批准");
+    const negPending = h.approvals.listPending();
+    expect(negPending).toHaveLength(1);
+    const negCandidate = negPending[0] as NonNullable<(typeof negPending)[number]>;
+    h.approvals.markApproved(negCandidate.candidate_id);
+    const negOutcome = await executeApprovedCandidate(
+      h.approvals,
+      negCandidate.candidate_id,
+      h.pendingHooks.get(negCandidate.candidate_id) as {
+        readPreconditions: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+        execute: (args: Record<string, unknown>) => Promise<unknown>;
+      },
+    );
+    if (negOutcome.kind !== "executed") throw new Error("expected negotiated execution");
+    expect(h.store.getTask(taskId)?.status).toBe("selected_nonbinding");
+
+    // 2. handoff_agreement（supervised）→ 审批候选；created 事件尚未落链
+    const http = await import("node:http");
+    const checkoutServer = http.createServer((_req, res) => {
+      res.statusCode = 200;
+      res.end();
+    });
+    await new Promise<void>((resolve) => checkoutServer.listen(0, "127.0.0.1", () => resolve()));
+    const checkoutAddr = checkoutServer.address() as { port: number };
+    const checkoutUrl = `http://127.0.0.1:${checkoutAddr.port}/checkout/e2e`;
+
+    const handoffTool = h.getTool("handoff_agreement");
+    const handoffResult = await handoffTool.execute("2", {
+      task_id: taskId,
+      destination_type: "external_checkout_url",
+      destination_ref: checkoutUrl,
+      display_summary_merchant: "Acme Merchant",
+      display_summary_text: "2 × sku-001",
+    });
+    expect(toolText(handoffResult)).toContain("等待批准");
+    const taskEvents = h.store.taskEvents(taskId);
+    let statusChanged: (typeof taskEvents)[number] | undefined;
+    for (let i = taskEvents.length - 1; i >= 0; i--) {
+      const event = taskEvents[i];
+      if (event !== undefined && event.type === "status_changed" && typeof event.payload.negotiation_id === "string") {
+        statusChanged = event;
+        break;
+      }
+    }
+    const negotiationId = statusChanged?.payload.negotiation_id as string;
+    expect(negotiationId).toBeDefined();
+    // created 事件在审批后才落链（被 /reject 的候选不留悬空 PROPOSED）。
+    expect(h.ledger.events(negotiationId).some((e) => e.event_kind === "handoff_candidate_created")).toBe(false);
+
+    // 3. /approve → delivered；事件序列 [created, ready, consumed, delivered]
+    const handoffPending = h.approvals.listPending();
+    expect(handoffPending).toHaveLength(1);
+    const handoffCandidate = handoffPending[0] as NonNullable<(typeof handoffPending)[number]>;
+    h.approvals.markApproved(handoffCandidate.candidate_id);
+    const outcome = await executeApprovedCandidate(
+      h.approvals,
+      handoffCandidate.candidate_id,
+      h.pendingHooks.get(handoffCandidate.candidate_id) as {
+        readPreconditions: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+        execute: (args: Record<string, unknown>) => Promise<unknown>;
+      },
+    );
+    if (outcome.kind !== "executed") throw new Error("expected handoff execution");
+    const output = outcome.output as { ok: boolean; status?: string };
+    expect(output.ok).toBe(true);
+    expect(output.status).toBe("delivered");
+
+    const events = h.ledger.events(negotiationId);
+    expect(events.map((e) => e.event_kind)).toEqual([
+      "handoff_candidate_created",
+      "handoff_candidate_ready",
+      "handoff_candidate_consumed",
+      "handoff_delivered",
+    ]);
+    await new Promise<void>((resolve) => checkoutServer.close(() => resolve()));
   });
 });
