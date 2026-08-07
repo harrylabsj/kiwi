@@ -60,9 +60,15 @@ describe("runChatTui TTY 样式（Neural Awakening）", () => {
       });
       expect(code).toBe(0);
       const out = text();
-      // 24-bit 渐变横幅（art 首字符着色）
+      // 24-bit 渐变 logo（box 字符 art）
       expect(out).toContain(`${ESC}[38;2;`);
-      expect(out).toContain("K"); // art 可见
+      expect(out).toContain("██"); // art 可见
+      // 欢迎面板：版本标题 + 会话/模型/命令信息行
+      expect(out).toContain("┌─"); // 面板顶边
+      expect(out).toContain("kiwi 0.6.0");
+      expect(out).toContain("会话:");
+      expect(out).toContain("模型:");
+      expect(out).toContain("命令:");
       // 状态栏（catalog 段）
       expect(out).toContain(`catalog ${stack.catalogUrl}`);
       // /discover box 面板边框

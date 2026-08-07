@@ -30,6 +30,7 @@ import { EXIT } from "../exit-codes.js";
 import { ShoppingCliCatalogSource } from "../discovery/catalog-source/index.js";
 import { negotiateWithAgent, summarizeNegotiation } from "../a2a/negotiate.js";
 import { createTheme, type Seg } from "../tui/styles.js";
+import { PRODUCT_VERSION } from "../product-cli.js";
 import type { AgentKernel } from "./kernel.js";
 
 /** A2A 节点状态（供 `/a2a` 显示）。 */
@@ -78,13 +79,27 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
 
   // 可变 kernel 引用：`/profile` 切换时更新，定时器与循环自动跟随。
   let current: { kernel: AgentKernel } = { kernel: options.kernel };
-  write(
-    theme.banner({
-      roleLabel: roleLabelOf(current.kernel.profile.role),
-      id: current.kernel.principal.principal_id,
-      tagline: "主对话（/help 查看命令，/quit 退出）",
-    }),
-  );
+
+  // 欢迎界面（hermes build_welcome_banner 结构）：大号渐变 logo + 带版本
+  // 标题的信息面板；非 TTY 下 theme.welcome 返回现状单行（字节不变）。
+  const renderWelcome = (): void => {
+    const mode = current.kernel.getMode();
+    write(
+      theme.welcome({
+        roleLabel: roleLabelOf(current.kernel.profile.role),
+        id: current.kernel.principal.principal_id,
+        tagline: "主对话（/help 查看命令，/quit 退出）",
+        versionLabel: `kiwi ${PRODUCT_VERSION}`,
+        commerceUrl: current.kernel.profile.commerce.base_url,
+        modelLabel: `${current.kernel.profile.model.provider}/${current.kernel.profile.model.model}`,
+        modeLabel: mode === "autopilot" ? "Autopilot" : mode === "manual" ? "Manual" : "Supervised",
+        a2aOn: a2aNode?.status() !== undefined && a2aNode?.status() !== null,
+        catalog,
+        commands: "/help /profile /handoff /discover /negotiate /a2a /quit",
+      }),
+    );
+  };
+  renderWelcome();
 
   // Restart recovery: wakeups derive from the database, so an immediate tick
   // rebuilds the queue; a slow unref'd timer keeps tracking tasks alive.
@@ -183,13 +198,7 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
                     write(`A2A 节点重建失败（对话继续）：${err instanceof Error ? err.message : String(err)}`);
                   });
                 }
-                write(
-                  theme.banner({
-                    roleLabel: roleLabelOf(current.kernel.profile.role),
-                    id: current.kernel.principal.principal_id,
-                    tagline: "主对话（/help 查看命令，/quit 退出）",
-                  }),
-                );
+                renderWelcome();
               }
             } catch (err) {
               write(`加载 profile 失败，保留当前 agent：${err instanceof Error ? err.message : String(err)}`);
