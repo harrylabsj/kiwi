@@ -182,13 +182,18 @@ export class KiwiCatalogSource {
 
   /** 搜索 record（新 API，支持三态域 + handoff 词表过滤）。 */
   async searchRecords(query: KiwiCatalogSearchQuery = {}): Promise<CatalogAgentRecord[]> {
-    // 分页完整拉取：服务端响应带 next_cursor 时翻页直到无游标（此前单页
-    // 拉取，目录超过页大小静默漏掉其余候选）；跨页 catalog_agent_id 去重。
+    // 分页完整拉取：服务端响应带 next_cursor 时翻页直到无游标或达到 limit
+    // 总量（limit 是总返回上限而非页大小——历史教训：只当页大小用会让
+    // --limit 5 返回全目录）；跨页 catalog_agent_id 去重。
     const records: CatalogAgentRecord[] = [];
     const seen = new Set<string>();
+    const limit = query.limit;
     let cursor: string | undefined;
     for (let page = 0; page < MAX_SEARCH_PAGES; page++) {
+      // 先构造查询（buildSearchQuery 校验 limit 为正整数，fail-closed），
+      // 再判总量封顶——提前 break 会绕过校验（limit=0 必须 reject）。
       const qs = buildSearchQuery({ ...query, ...(cursor !== undefined ? { cursor } : {}) });
+      if (limit !== undefined && records.length >= limit) break;
       const raw = await this.getJson(`/v1/agents/search${qs.length > 0 ? `?${qs}` : ""}`);
       if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
         throw new CatalogSourceError(
@@ -204,6 +209,7 @@ export class KiwiCatalogSource {
         );
       }
       for (const element of body.results) {
+        if (limit !== undefined && records.length >= limit) break;
         const record = validateCatalogAgentRecord(element);
         if (seen.has(record.catalog_agent_id)) continue;
         seen.add(record.catalog_agent_id);
@@ -213,7 +219,7 @@ export class KiwiCatalogSource {
       if (typeof next !== "string" || next === "") break;
       cursor = next;
     }
-    return records;
+    return limit !== undefined ? records.slice(0, limit) : records;
   }
 
   /** 按 catalog_agent_id 取单个 record。 */
@@ -244,13 +250,18 @@ export class KiwiCatalogSource {
     return normalizeCatalogAgent(record);
   }
 
-  /** 搜索 listing（v0.4 §8；rev1.5 CD #22/#24）。分页完整拉取，跨页去重。 */
+  /** 搜索 listing（v0.4 §8；rev1.5 CD #22/#24）。分页完整拉取，跨页去重；
+   *  limit 是总返回上限而非页大小（历史教训：--limit N 曾返回全目录）。 */
   async searchListings(query: KiwiListingSearchQuery = {}): Promise<ListingSearchResult[]> {
     const results: ListingSearchResult[] = [];
     const seen = new Set<string>();
+    const limit = query.limit;
     let cursor: string | undefined;
     for (let page = 0; page < MAX_SEARCH_PAGES; page++) {
+      // 先构造查询（buildListingSearchQuery 校验 limit 为正整数，fail-closed），
+      // 再判总量封顶——提前 break 会绕过校验（limit=0 必须 reject）。
       const qs = buildListingSearchQuery({ ...query, ...(cursor !== undefined ? { cursor } : {}) });
+      if (limit !== undefined && results.length >= limit) break;
       const raw = await this.getJson(`/v1/listings/search${qs.length > 0 ? `?${qs}` : ""}`);
       if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
         throw new CatalogSourceError(
@@ -266,6 +277,7 @@ export class KiwiCatalogSource {
         );
       }
       for (const element of body.results) {
+        if (limit !== undefined && results.length >= limit) break;
         const result = validateListingSearchResult(element);
         if (seen.has(result.listing.listing_id)) continue;
         seen.add(result.listing.listing_id);
@@ -275,7 +287,7 @@ export class KiwiCatalogSource {
       if (typeof next !== "string" || next === "") break;
       cursor = next;
     }
-    return results;
+    return limit !== undefined ? results.slice(0, limit) : results;
   }
 
   /** 按 listing_id 取单个 listing record（publisher 自查/详情）。 */

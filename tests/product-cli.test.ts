@@ -11,6 +11,9 @@
  *   （kiwi / shopping_cli / kiwi_catalog；D0 最小版）；
  * - 旧命令保留：`kiwi chat --help` / `kiwi agent serve --help` 仍走全局帮助。
  */
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { main } from "../src/cli.js";
 import { EXIT } from "../src/exit-codes.js";
@@ -94,7 +97,45 @@ describe("product CLI command tree (D0)", () => {
     const { code, stderr } = await run(["merchant", "init"]);
     expect(code).toBe(EXIT.CONFIG);
     expect(stderr).not.toContain("尚未实现");
-    expect(stderr).toContain("--merchant-id");
+    // --name 是必填标识（--merchant-id 可选，缺失时 init 报告 fail-closed）
+    expect(stderr).toContain("--name");
+  });
+
+  it("merchant init accepts --merchant-id / --name flags (D1 flag 解析回归)", async () => {
+    // 历史教训：help 文案承诺的 flag 从未被 parseArgs 解析，按 help 执行
+    // 100% "Unknown argument"。两种形式（空格 / =）都必须真实生成 profile。
+    const out1 = path.join(mkdtempSync(path.join(tmpdir(), "kiwi-init-")), "merchant-1.yaml");
+    const first = await run([
+      "merchant", "init",
+      "--merchant-id", "seller-b-flag",
+      "--name", "商家B",
+      "--output", out1,
+    ]);
+    expect(first.stderr).not.toContain("Unknown argument");
+    expect(first.stderr).not.toContain("尚未实现");
+    expect(first.code).toBe(EXIT.OK);
+    expect(existsSync(out1)).toBe(true);
+
+    const out2 = path.join(mkdtempSync(path.join(tmpdir(), "kiwi-init-")), "merchant-2.yaml");
+    const second = await run([
+      "merchant", "init",
+      "--merchant-id=seller-c-flag",
+      "--name=商家C",
+      "--output", out2,
+    ]);
+    expect(second.stderr).not.toContain("Unknown argument");
+    expect(second.code).toBe(EXIT.OK);
+    expect(existsSync(out2)).toBe(true);
+
+    // 清理 init 生成的数据目录（.kiwi/agents/<agent_id>，gitignored 但测试不留痕）
+    rmSync(path.join(process.cwd(), ".kiwi", "agents", "seller-b-flag"), {
+      recursive: true,
+      force: true,
+    });
+    rmSync(path.join(process.cwd(), ".kiwi", "agents", "seller-c-flag"), {
+      recursive: true,
+      force: true,
+    });
   });
 
   it("legacy commands stay reachable through the global help", async () => {

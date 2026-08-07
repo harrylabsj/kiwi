@@ -288,6 +288,9 @@ async function executeNegotiateBuyerTask(
   const sku = intent.category ?? intent.query_text ?? NEGOTIATE_SKU;
   const result = await negotiateWithAgent({
     catalog: deps.catalog,
+    // CD #27：listing → owner_agent_id → getRecord → fresh verify 全链，
+    // 与 search_listings 同一注入源（历史教训：只注入 search 面不注入磋商面）。
+    ...(deps.catalogSource !== undefined ? { catalogSource: deps.catalogSource } : {}),
     ...(a.catalog_agent_id !== undefined && a.catalog_agent_id !== ""
       ? { catalogAgentId: a.catalog_agent_id }
       : {}),
