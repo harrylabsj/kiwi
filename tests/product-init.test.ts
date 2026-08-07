@@ -167,13 +167,21 @@ describe("merchant init (D1)", () => {
     }
   });
 
-  it("empty merchant id fails closed", async () => {
-    const report = await merchantInit({
-      merchantName: "X",
-      merchantId: "  ",
-    });
-    expect(report.ok).toBe(false);
-    expect(report.steps.profile_written.ok).toBe(false);
+  it("merchant id is derived from name when not provided", async () => {
+    const dir = tmpDir();
+    try {
+      const report = await merchantInit({
+        merchantName: "West Lake Tea Co.",
+        outputPath: path.join(dir, "merchant.yaml"),
+        spawnImpl: shoppingCliFoundSpawn(),
+        fetchImpl: healthOkFetch(),
+      });
+      expect(report.ok).toBe(true);
+      expect(report.agent_id).toBe("west-lake-tea-co"); // slug 派生
+      expect(loadProfile(path.join(dir, "merchant.yaml")).agent_id).toBe("west-lake-tea-co");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("auto-install: missing shopping-cli is installed via pip then detected", async () => {

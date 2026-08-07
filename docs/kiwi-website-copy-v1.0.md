@@ -141,11 +141,12 @@ EN:
 One command. One identity. Start with a sentence.
 
 npm install -g @harrylabsj/kiwi
-kiwi buyer init --agent-id <your-id>
+kiwi buyer init
 kiwi buyer search "21.5 inch industrial touch display, IP67"
 
 中文：
-安装只需要一条命令（发布后）。Buyer 不需要安装其他任何东西。
+安装只需要一条命令（发布后）。init 自动创建身份；Buyer 不需要
+安装其他任何东西、不需要填写任何身份标识。
 ```
 
 ### 怎么工作（4 步）
@@ -228,12 +229,12 @@ EN:
 One command. Data engine included.
 
 npm install -g @harrylabsj/kiwi
-kiwi merchant init --merchant-id <your-merchant> --name "Your Co." --auto-install
+kiwi merchant init --name "Your Co." --auto-install
 kiwi merchant publish --profile merchant.yaml --shopping-cli-db <db>
 
 中文：
-一条命令装 Kiwi；init 时数据引擎（shopping-cli）自动安装——
-你不需要知道它是什么、装在哪。
+一条命令装 Kiwi；init 只需要你的商家名称（商家号自动生成），
+数据引擎（shopping-cli）自动安装——你不需要知道它是什么、装在哪。
 ```
 
 ### 怎么工作（4 步）

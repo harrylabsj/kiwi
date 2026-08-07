@@ -25,7 +25,9 @@
  * - tasks：读本地 BuyerTaskStore 任务列表（AgentKernel data dir）。
  */
 
+import { randomBytes } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { stringify as stringifyYaml } from "yaml";
@@ -35,6 +37,13 @@ import { PROTOCOL_VERSION } from "./negotiation/types.js";
 import { KiwiCatalogSource } from "./discovery/catalog-source/index.js";
 
 // ── buyer init ─────────────────────────────────────────────────────────────
+
+/** 缺省 buyer 身份：buyer-<hostname>-<短随机>（同机多次 init 稳定可复用）。 */
+function defaultBuyerAgentId(): string {
+  const random = randomBytes(3).toString("hex");
+  const host = hostname().replace(/[^a-z0-9-]/gi, "-").toLowerCase() || "local";
+  return `buyer-${host}-${random}`;
+}
 
 export interface BuyerInitOptions {
   agentId: string;
@@ -59,16 +68,8 @@ export interface BuyerInitReport {
 
 export function buyerInit(options: BuyerInitOptions): BuyerInitReport {
   const warnings: string[] = [];
-  const agentId = options.agentId.trim();
-  if (agentId === "") {
-    return {
-      ok: false,
-      profile_path: "",
-      agent_id: "",
-      detail: "agentId 为空",
-      warnings,
-    };
-  }
+  // 身份缺省自动生成（普通用户不需要想 agent-id；显式指定用于跨设备延续身份）
+  const agentId = options.agentId.trim() !== "" ? options.agentId.trim() : defaultBuyerAgentId();
   const ownerId = options.ownerId?.trim() || agentId;
   const profile: Record<string, unknown> = {
     // 由 `kiwi buyer init` 生成（D4）。secret 永不入 profile（token_env 只写环境变量名）。

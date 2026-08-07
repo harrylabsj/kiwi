@@ -114,6 +114,8 @@ interface ParsedArgs {
   shoppingCliDb?: string;
   shoppingCliPath?: string;
   shoppingCliMerchant?: string;
+  merchantId?: string;
+  merchantName?: string;
   output?: string;
   force: boolean;
   autoInstall: boolean;
@@ -142,6 +144,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   let shoppingCliDb: string | undefined;
   let shoppingCliPath: string | undefined;
   let shoppingCliMerchant: string | undefined;
+  let merchantId: string | undefined;
+  let merchantName: string | undefined;
   let output: string | undefined;
   let force = false;
   let autoInstall = false;
@@ -175,6 +179,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       shoppingCliPath = argv[++i];
     } else if (arg === "--shopping-cli-merchant") {
       shoppingCliMerchant = argv[++i];
+    } else if (arg === "--merchant-id") {
+      merchantId = argv[++i];
+    } else if (arg === "--name") {
+      merchantName = argv[++i];
     } else if (arg === "--output") {
       output = argv[++i];
     } else if (arg === "--force") {
@@ -217,6 +225,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       lines = arg.slice("--lines=".length);
     } else if (arg !== undefined && arg.startsWith("--shopping-cli-src=")) {
       shoppingCliSrc = arg.slice("--shopping-cli-src=".length);
+    } else if (arg !== undefined && arg.startsWith("--merchant-id=")) {
+      merchantId = arg.slice("--merchant-id=".length);
+    } else if (arg !== undefined && arg.startsWith("--name=")) {
+      merchantName = arg.slice("--name=".length);
     } else if (arg !== undefined && arg.startsWith("--data-dir=")) {
       dataDir = arg.slice("--data-dir=".length);
     } else if (arg !== undefined && !arg.startsWith("-")) {
@@ -233,6 +245,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (shoppingCliDb !== undefined) out.shoppingCliDb = shoppingCliDb;
   if (shoppingCliPath !== undefined) out.shoppingCliPath = shoppingCliPath;
   if (shoppingCliMerchant !== undefined) out.shoppingCliMerchant = shoppingCliMerchant;
+  if (merchantId !== undefined) out.merchantId = merchantId;
+  if (merchantName !== undefined) out.merchantName = merchantName;
   if (output !== undefined) out.output = output;
   if (agentId !== undefined) out.agentId = agentId;
   if (ownerId !== undefined) out.ownerId = ownerId;
@@ -822,11 +836,8 @@ async function routeBuyer(sub: string | undefined, args: ParsedArgs): Promise<nu
 
 /** `kiwi buyer init`（D4）：生成 buyer profile（无需 shopping-cli）。 */
 async function cmdBuyerInit(args: ParsedArgs): Promise<number> {
+  // 身份可选：缺省自动生成（buyer-<hostname>-<随机>）；显式指定用于跨设备延续
   const agentId = args.agentId ?? process.env.KIWI_BUYER_AGENT_ID ?? "";
-  if (!agentId) {
-    process.stderr.write("--agent-id <buyer 身份> 是必需的（或 KIWI_BUYER_AGENT_ID）\n");
-    return EXIT.CONFIG;
-  }
   const report = buyerInit({
     agentId,
     ...(args.ownerId !== undefined ? { ownerId: args.ownerId } : {}),
@@ -914,18 +925,17 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
  * D2 身份统一）；shopping-cli 缺失/不可达记 warning 不阻塞。
  */
 async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
-  const merchantId = process.env.KIWI_MERCHANT_ID ?? "";
-  const name = process.env.KIWI_MERCHANT_NAME ?? "";
-  if (!merchantId || !name) {
-    process.stderr.write(
-      "--merchant-id <shopping-cli merchant_id> 与 --name <商家名称> 是必需的" +
-        "（或 KIWI_MERCHANT_ID / KIWI_MERCHANT_NAME）\n",
-    );
+  // --merchant-id / --name flag 优先，env 回退（历史教训：help 文案承诺的
+  // flag 从未被 parseArgs 解析，按 help 执行 100% Unknown argument）。
+  const merchantId = args.merchantId ?? process.env.KIWI_MERCHANT_ID ?? "";
+  const name = args.merchantName ?? process.env.KIWI_MERCHANT_NAME ?? "";
+  if (!name) {
+    process.stderr.write("--name <商家名称> 是必需的（或 KIWI_MERCHANT_NAME）\n");
     return EXIT.CONFIG;
   }
   const report = await merchantInit({
     merchantName: name,
-    merchantId,
+    ...(merchantId !== "" ? { merchantId } : {}),
     shoppingCliUrl: process.env.SHOPPING_CLI_URL ?? "http://127.0.0.1:8765",
     shoppingCliDb: process.env.SHOPPING_DB_PATH,
     catalogUrl: args.catalog ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600",

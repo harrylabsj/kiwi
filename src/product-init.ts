@@ -32,6 +32,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { stringify as stringifyYaml } from "yaml";
@@ -40,11 +41,25 @@ import { RUNTIME_VERSION } from "./config/profile.js";
 import { PROTOCOL_VERSION } from "./negotiation/types.js";
 import { detectShoppingCli } from "./product-cli.js";
 
+function slugifyMerchantId(name: string): string {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (slug !== "") return slug;
+  return `merchant-${randomBytes(3).toString("hex")}`;
+}
+
 export interface MerchantInitOptions {
   /** 商家名称（写进 profile 注释与 owner 可读性）。 */
   merchantName: string;
-  /** shopping-cli merchant_id —— 身份锚（agent_id/owner_id 同源）。 */
-  merchantId: string;
+  /**
+   * shopping-cli merchant_id —— 身份锚（agent_id/owner_id 同源）。
+   * 缺省从 merchantName 派生（普通商家只需要知道自己名称）；
+   * 显式指定用于对接已有 shopping-cli 商家数据。
+   */
+  merchantId?: string;
   /** shopping-cli API base URL（Kiwi ↔ shopping-cli 连接）。 */
   shoppingCliUrl?: string;
   /** shopping-cli SQLite 路径（连接验证与 publish 用；记录于报告）。 */
@@ -99,21 +114,13 @@ export async function merchantInit(
   options: MerchantInitOptions,
 ): Promise<MerchantInitReport> {
   const warnings: string[] = [];
-  const merchantId = options.merchantId.trim();
-  if (merchantId === "") {
-    return {
-      ok: false,
-      profile_path: "",
-      agent_id: "",
-      steps: {
-        shopping_cli_detected: { ok: false, detail: "merchantId 为空" },
-        shopping_cli_reachable: { ok: false, detail: "未执行（merchantId 无效）" },
-        profile_written: { ok: false, detail: "未执行（merchantId 无效）" },
-        data_dir_initialized: { ok: false, detail: "未执行（merchantId 无效）" },
-      },
-      warnings,
-    };
-  }
+  // 商家号缺省从名称派生（用户只需要知道自己的商家名称；显式指定用于
+  // 对接已有 shopping-cli 商家数据）。派生规则：小写 + 空白/特殊字符转
+  // '-'；中文保留；空结果回退随机。
+  const merchantId =
+    options.merchantId !== undefined && options.merchantId.trim() !== ""
+      ? options.merchantId.trim()
+      : slugifyMerchantId(options.merchantName);
 
   // ── Step 1: shopping-cli 依赖检测（缺失时按需自动安装）──────────────────
   let detected = detectShoppingCli(options.spawnImpl);
