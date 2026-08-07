@@ -56,6 +56,8 @@ function setupMerchant(options: {
   inventory?: string;
   negotiation?: string;
   marketplace?: TestClientOverrides;
+  /** 完全不给磋商 CommerceClient（模拟 SHOPPING_AGENT_TOKEN 未设置）。 */
+  noCommerceClient?: boolean;
 } = {}): MerchantHarness {
   let clock = T0;
   const db = new DatabaseSync(":memory:");
@@ -81,7 +83,7 @@ function setupMerchant(options: {
   const deps: MerchantToolDeps = {
     profile,
     merchantClient,
-    commerceClient: marketplace.merchant,
+    ...(options.noCommerceClient === true ? {} : { commerceClient: marketplace.merchant }),
     broker,
     approvals,
     mode: () => mode.value,
@@ -448,5 +450,26 @@ describe("merchant negotiation decision via the gateway gate (§15.4, §16)", ()
     const output = outcome.output as { result?: { result?: string; reason_codes?: string[] } };
     expect(output.result?.result).toBe("rejected_retryable");
     expect(output.result?.reason_codes).toContain("local_floor_violation");
+  });
+});
+
+describe("merchant pack without negotiation CommerceClient (regression: no SHOPPING_AGENT_TOKEN)", () => {
+  it("catalog/inventory read tools still mount and work; negotiation tools fail closed", async () => {
+    const h = setupMerchant({ noCommerceClient: true, catalog: "cat", inventory: "inv" });
+
+    // 只读目录/库存工具不依赖谈判 token（list_catalog_products 走公开搜索端点），
+    // 缺失时仍必须挂载并可执行——这是"我上架的商品有哪些？"的修复契约。
+    const list = h.getTool("list_catalog_products");
+    const result = await list.execute("c1", {});
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("sku-001");
+
+    // 磋商工具（claim/snapshot/submit）需要 commerceClient，缺失时不挂载。
+    expect(h.getTool("get_negotiation_snapshot")).toBeUndefined();
+    expect(h.getTool("submit_negotiation_decision")).toBeUndefined();
+
+    // 写工具照常挂载，作用域凭据缺什么 fail closed 什么（catalog 已配 → 生成候选）。
+    const update = h.getTool("update_product");
+    expect(update).toBeDefined();
   });
 });

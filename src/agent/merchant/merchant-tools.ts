@@ -166,7 +166,13 @@ function catalogEscalation(
 export interface MerchantToolDeps {
   profile: AgentProfile;
   merchantClient: MerchantClient;
-  commerceClient: CommerceClient;
+  /**
+   * Negotiation CommerceClient（v0.3.0-C）。目录/库存/咨询等只读工具与
+   * 审批式写工具都不依赖它；仅磋商工具（claim/snapshot/submit）需要。
+   * 缺失时磋商工具不挂载（fail closed），其余能力包照常可用——只读目录
+   * 查询走公开搜索端点，无需谈判 token。
+   */
+  commerceClient?: CommerceClient;
   broker: CredentialBroker;
   approvals: WriteApprovalCandidateStore;
   mode: () => AgentMode;
@@ -182,7 +188,7 @@ export interface MerchantToolDeps {
 }
 
 export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
-  const { profile, merchantClient, commerceClient, broker, approvals, mode, now } = deps;
+  const { profile, merchantClient, broker, approvals, mode, now } = deps;
   const ownerId = profile.owner_id;
   const writeGateDeps = { mode, approvals, profile, now, registerPending: deps.registerPending };
 
@@ -607,15 +613,18 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     },
   };
 
-  const negotiationTools = buildNegotiationChatTools({
-    profile,
-    commerceClient,
-    broker,
-    approvals,
-    mode,
-    now,
-    registerPending: deps.registerPending,
-  });
+  const negotiationTools =
+    deps.commerceClient !== undefined
+      ? buildNegotiationChatTools({
+          profile,
+          commerceClient: deps.commerceClient,
+          broker,
+          approvals,
+          mode,
+          now,
+          registerPending: deps.registerPending,
+        })
+      : [];
 
   const viewPrivateThresholds: Tool = {
     name: "view_private_thresholds",

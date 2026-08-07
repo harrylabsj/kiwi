@@ -430,10 +430,10 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
   }
 
   // 内置对话（缺省）：同一进程既是 A2A 节点又能 `kiwi>` 对话。/quit 退出整个进程。
-  const kernel = await buildChatKernel(profile, args.dataDir);
+  const kernel = await buildChatKernel(profile, args.dataDir, catalog);
   const kernels: AgentKernel[] = [kernel];
   const reload = async (file: string): Promise<AgentKernel> => {
-    const next = await buildChatKernel(loadProfile(resolveProfilePath(file)), args.dataDir);
+    const next = await buildChatKernel(loadProfile(resolveProfilePath(file)), args.dataDir, catalog);
     kernels.push(next);
     return next;
   };
@@ -505,8 +505,13 @@ function defaultChatProfile(): AgentProfile {
  * Main conversation (v0.3.0-A): build the AgentKernel for a profile.
  * provider=fake runs the deterministic offline chat fake; real providers
  * resolve models and auth through pi-ai's built-in provider catalog.
+ * `catalog` 是 agent catalog base URL（buyer 的 negotiate_buyer_task 发现商家用）。
  */
-async function buildChatKernel(profile: AgentProfile, dataDir?: string): Promise<AgentKernel> {
+async function buildChatKernel(
+  profile: AgentProfile,
+  dataDir?: string,
+  catalog?: string,
+): Promise<AgentKernel> {
   const paths = ensurePathsForDir(dataDir ?? agentDataDir(profile.agent_id));
 
   let models: AgentKernelOptions["models"];
@@ -578,7 +583,14 @@ async function buildChatKernel(profile: AgentProfile, dataDir?: string): Promise
       commerceClient = buildClient(profile);
     } catch {
       // No negotiation token: negotiation tools fail closed at call time.
+      // Catalog/inventory 只读工具走公开搜索端点，不依赖该 token，仍会挂载。
       commerceClient = undefined;
+      if (profile.role === "merchant") {
+        process.stderr.write(
+          `[kiwi] 未设置 ${profile.commerce.token_env}：磋商工具停用（fail closed），` +
+            "目录/库存只读工具仍可用。\n",
+        );
+      }
     }
     if (profile.role === "merchant") {
       const { HttpMerchantClient } = await import("./agent/merchant/merchant-client.js");
@@ -604,6 +616,7 @@ async function buildChatKernel(profile: AgentProfile, dataDir?: string): Promise
     ...(commerceClient !== undefined ? { commerceClient } : {}),
     ...(merchantClient !== undefined ? { merchantClient } : {}),
     ...(broker !== undefined ? { broker } : {}),
+    ...(catalog !== undefined ? { catalog } : {}),
     ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
   });
 }
@@ -639,16 +652,15 @@ function resolveProfilePath(file: string): string {
  */
 async function cmdChat(args: ParsedArgs): Promise<number> {
   const profile = args.profile !== undefined ? loadProfile(args.profile) : defaultChatProfile();
-  const kernel = await buildChatKernel(profile, args.dataDir);
+  // A2A 节点 + buyer 磋商工具共用一个 catalog：kernel 构建前先解析。
+  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600";
+  const kernel = await buildChatKernel(profile, args.dataDir, catalog);
   const kernels: AgentKernel[] = [kernel];
   const reload = async (file: string): Promise<AgentKernel> => {
-    const next = await buildChatKernel(loadProfile(resolveProfilePath(file)), args.dataDir);
+    const next = await buildChatKernel(loadProfile(resolveProfilePath(file)), args.dataDir, catalog);
     kernels.push(next);
     return next;
   };
-
-  // A2A 节点（一个入口 = 对话 + 可被发现/磋商的节点）：merchant 角色自动注册 catalog。
-  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600";
   let node: A2aNodeHandle | null = null;
   const a2aNode: ChatA2aNode = {
     status: () =>

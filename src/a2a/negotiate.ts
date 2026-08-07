@@ -56,6 +56,14 @@ export interface NegotiateOptions {
   catalogAgentId?: string;
   /** 订货量（缺省 200）。 */
   quantity?: number;
+  /** 询价 SKU（缺省 sku-001）。买家任务驱动时取任务 intent 的 sku/category。 */
+  sku?: string;
+  /** 买方还价单价（minor 单位；缺省 835.00 分 = 83.50 元）。 */
+  dealPriceMinor?: number;
+  /** 要求交期（RFC3339；缺省 2026-08-20T18:00:00Z）。 */
+  deliveryBefore?: string;
+  /** 发送方身份（缺省 buyer:a2a-demo）。 */
+  senderIdentity?: string;
 }
 
 export interface NegotiateResult {
@@ -146,7 +154,13 @@ function seedEnvelope(seed: EnvelopeSeed): ReturnType<typeof finalizeEnvelope> {
   });
 }
 
-function rfqEnvelope(negotiationId: string, now: () => string, quantity: number) {
+function rfqEnvelope(
+  negotiationId: string,
+  now: () => string,
+  quantity: number,
+  sku: string,
+  deliveryBefore: string,
+) {
   return seedEnvelope({
     negotiation_id: negotiationId,
     actor: "buyer",
@@ -154,13 +168,21 @@ function rfqEnvelope(negotiationId: string, now: () => string, quantity: number)
     created_at: now(),
     payload: {
       type: "rfq",
-      items: [{ sku: NEGOTIATE_SKU, quantity: { value: quantity, unit: "piece" } }],
-      requested_terms: { delivery_before: NEGOTIATE_DELIVERY_BEFORE },
+      items: [{ sku, quantity: { value: quantity, unit: "piece" } }],
+      requested_terms: { delivery_before: deliveryBefore },
     },
   });
 }
 
-function counterEnvelope(negotiationId: string, now: () => string, inReplyTo: string, respondingToOfferId: string, quantity: number) {
+function counterEnvelope(
+  negotiationId: string,
+  now: () => string,
+  inReplyTo: string,
+  respondingToOfferId: string,
+  quantity: number,
+  sku: string,
+  counterPriceMinor: number,
+) {
   return seedEnvelope({
     negotiation_id: negotiationId,
     in_reply_to: inReplyTo,
@@ -174,9 +196,9 @@ function counterEnvelope(negotiationId: string, now: () => string, inReplyTo: st
       proposed_terms: {
         items: [
           {
-            sku: NEGOTIATE_SKU,
+            sku,
             quantity: { value: quantity, unit: "piece" },
-            unit_price: { currency: NEGOTIATE_CURRENCY, amount_minor: NEGOTIATE_DEAL_PRICE_MINOR },
+            unit_price: { currency: NEGOTIATE_CURRENCY, amount_minor: counterPriceMinor },
           },
         ],
       },
@@ -219,6 +241,10 @@ function extractAgreement(task: { artifacts?: Array<{ parts?: Array<{ kind: stri
  */
 export async function negotiateWithAgent(options: NegotiateOptions): Promise<NegotiateResult> {
   const quantity = options.quantity ?? NEGOTIATE_QUANTITY;
+  const sku = options.sku ?? NEGOTIATE_SKU;
+  const counterPriceMinor = options.dealPriceMinor ?? NEGOTIATE_DEAL_PRICE_MINOR;
+  const deliveryBefore = options.deliveryBefore ?? NEGOTIATE_DELIVERY_BEFORE;
+  const senderIdentity = options.senderIdentity ?? "buyer:a2a-demo";
   const dir = mkdtempSync(path.join(tmpdir(), "kiwi-a2a-negotiate-"));
   const now = monotonicNow();
   const ledger = new LedgerStore({ dir, now });
@@ -262,14 +288,14 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     const channel = new A2ADirectChannel({ url: channelCandidate.url, ledger, idempotency, now });
     handle = await channel.open({
       negotiation_id: negotiationId,
-      sender_identity: "buyer:a2a-demo",
+      sender_identity: senderIdentity,
       identity: target.profile.identity,
     });
     const send = async (envelope: ReturnType<typeof finalizeEnvelope>) =>
       handle!.send({ envelope, ref: { negotiation_id: negotiationId } });
 
     // 3. RFQ → Offer。
-    const rfq = rfqEnvelope(negotiationId, now, quantity);
+    const rfq = rfqEnvelope(negotiationId, now, quantity, sku, deliveryBefore);
     steps.push(`rfq`);
     const offerRes = await send(rfq);
     const offer = extractKnpEnvelope(offerRes.task);
@@ -284,7 +310,15 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     steps.push(`offer ${offerPayload.offer_id}`);
 
     // 4. CounterOffer → ConditionalOffer。
-    const counter = counterEnvelope(negotiationId, now, (offer.message_id as string) ?? "", offerPayload.offer_id, quantity);
+    const counter = counterEnvelope(
+      negotiationId,
+      now,
+      (offer.message_id as string) ?? "",
+      offerPayload.offer_id,
+      quantity,
+      sku,
+      counterPriceMinor,
+    );
     steps.push(`counter_offer`);
     const condRes = await send(counter);
     const conditional = extractKnpEnvelope(condRes.task);
@@ -324,11 +358,11 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
       steps,
       agreement,
       facts: {
-        sku: NEGOTIATE_SKU,
+        sku,
         quantity,
         offerPriceMinor,
         dealPriceMinor,
-        deliveryBefore: NEGOTIATE_DELIVERY_BEFORE,
+        deliveryBefore,
       },
     };
   } catch (err) {

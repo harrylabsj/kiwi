@@ -254,6 +254,15 @@ export class TaskScheduler {
           `tick:${task.task_id}:${now}`,
         );
         result.tasks_searched.push(task.task_id);
+        if (cycle.outcome === "retry" && cycle.error !== undefined) {
+          // §18.1 transient failure: runSearchCycle parked the task with a
+          // scheduled retry but did NOT throw. Surface it in tick errors so
+          // the chat/model can see the task is retrying — otherwise a
+          // persistently down gateway looks like a silently stalled task.
+          result.errors.push(
+            `search ${task.task_id}: ${cycle.error}（已安排自动重试）`,
+          );
+        }
         const newOnes = this.store
           .listCandidates(task.task_id)
           .filter((c) => !before.has(c.canonical_key));

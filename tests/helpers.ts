@@ -231,3 +231,128 @@ export function hangingStreamFn(): StreamFn {
     return stream as unknown as ReturnType<StreamFn>;
   };
 }
+
+/** 入站 KNP 信封快照（测试断言商家收到的 RFQ/CounterOffer 内容用）。 */
+export interface CapturedInbound {
+  action: string;
+  senderIdentity: string;
+  envelope: Record<string, unknown>;
+}
+
+/**
+ * 本地 A2A 磋商测试栈（完全离线、确定性，零 marketplace）：
+ * - 生产版 merchant handler（createMerchantHandler；可接 productSource 桩——
+ *   商家从"商品库"按 SKU 报价，模拟真实商品层）挂临时 A2AServer；
+ * - 可选 `capture` 数组：包装 handler 记录每次入站 envelope（断言买家参数穿入用）；
+ * - 两路由 catalog stub（/v1/agent-catalog/agents/search + /agents/{id}），
+ *   候选的 agent_card_url 指向 merchant 的 Agent Card。
+ */
+export async function startTestA2aStack(
+  options: {
+    productSource?: {
+      getProduct(
+        sku: string,
+      ): Promise<{ price: number; currency: string; title?: string; stock?: number }>;
+    };
+    catalogAgentId?: string;
+    /** 传入数组后，每次入站信封（action/senderIdentity/envelope）被 push 进来。 */
+    capture?: CapturedInbound[];
+  } = {},
+): Promise<{
+  catalogUrl: string;
+  merchantUrl: string;
+  merchantDir: string;
+  stop: () => Promise<void>;
+}> {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const http = await import("node:http");
+  const { A2AServer } = await import("../src/a2a/server/index.js");
+  const { createMerchantHandler } = await import("../src/a2a/server/merchant-handler.js");
+  const { LedgerStore } = await import("../src/negotiation/ledger/index.js");
+  const { IdempotencyStore } = await import("../src/negotiation/idempotency/index.js");
+
+  const merchantDir = mkdtempSync(path.join(tmpdir(), "kiwi-a2a-stack-"));
+  const ledger = new LedgerStore({ dir: merchantDir, now: () => NOW });
+  const idempotency = new IdempotencyStore({ dir: merchantDir, now: () => NOW });
+  const holder = { baseUrl: "http://127.0.0.1:0" };
+  const inner = createMerchantHandler({
+    ledger,
+    now: () => NOW,
+    sender: "merchant:merchant-001",
+    counterparty: "buyer:*",
+    ...(options.productSource !== undefined ? { productSource: options.productSource } : {}),
+  });
+  const handler = options.capture !== undefined
+    ? {
+        name: inner.name,
+        handle: async (ctx: {
+          envelope: { action?: string };
+          senderIdentity: string;
+        }) => {
+          options.capture?.push({
+            action: String(ctx.envelope.action ?? ""),
+            senderIdentity: ctx.senderIdentity,
+            envelope: ctx.envelope as unknown as Record<string, unknown>,
+          });
+          return inner.handle(ctx as never);
+        },
+      }
+    : inner;
+  const server = new A2AServer({
+    card: () => ({
+      name: "Test Merchant",
+      description: "a2a stack merchant",
+      providerOrganization: "Kiwi Test Org",
+      version: "0.5.0",
+      baseUrl: holder.baseUrl,
+    }),
+    ledger,
+    idempotency,
+    handler,
+    now: () => NOW,
+  });
+  const httpServer = server.createServer();
+  await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", () => resolve()));
+  const addr = httpServer.address() as { port: number };
+  holder.baseUrl = `http://127.0.0.1:${addr.port}`;
+
+  const candidate = {
+    catalog_agent_id: options.catalogAgentId ?? "cagt_test_merchant_001",
+    merchant: { id: "merchant-001", name: "Test Merchant", domain: "test.example" },
+    discovery: { agent_card_url: `${holder.baseUrl}/.well-known/agent-card.json` },
+    protocols: { a2a: ["1.0.0"] },
+    capabilities: ["com.harrylabsj.kiwi.shopping.negotiation"],
+    verification: { status: "discovered", last_verified_at: NOW },
+    hosting: { mode: "direct_only" },
+    contract: { name: "candidate-agent", version: "1.0" },
+  };
+  const catalog = http.createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    const url = req.url ?? "";
+    if (url.includes("/v1/agent-catalog/agents/search")) {
+      res.end(JSON.stringify({ results: [candidate] }));
+      return;
+    }
+    if (url.includes("/v1/agent-catalog/agents/")) {
+      res.end(JSON.stringify({ catalog_agent: candidate }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ error: "not found" }));
+  });
+  await new Promise<void>((resolve) => catalog.listen(0, "127.0.0.1", () => resolve()));
+  const catalogAddr = catalog.address() as { port: number };
+  const catalogUrl = `http://127.0.0.1:${catalogAddr.port}`;
+
+  return {
+    catalogUrl,
+    merchantUrl: holder.baseUrl,
+    merchantDir,
+    stop: async () => {
+      await new Promise<void>((resolve) => catalog.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    },
+  };
+}

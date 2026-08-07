@@ -81,11 +81,23 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
 
   // Restart recovery: wakeups derive from the database, so an immediate tick
   // rebuilds the queue; a slow unref'd timer keeps tracking tasks alive.
+  // 失败的 tick 必须可见：搜索/观察错误写进聊天（按内容去重，干净一轮后重置），
+  // 否则"任务在 tracking 但一直失败"会表现为无声卡住。
+  const surfacedErrors = new Set<string>();
   const tickAndNotify = async (): Promise<void> => {
     const result = await current.kernel.schedulerTick().catch(() => undefined);
     if (result === undefined) return;
     for (const n of result.notifications) {
       write(`[通知] ${n.summary}（任务 ${n.task_id}）`);
+    }
+    if (result.errors.length === 0) {
+      surfacedErrors.clear();
+      return;
+    }
+    for (const e of result.errors) {
+      if (surfacedErrors.has(e)) continue;
+      surfacedErrors.add(e);
+      write(`[任务] ${e}`);
     }
   };
   await tickAndNotify();
