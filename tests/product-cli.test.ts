@@ -74,7 +74,6 @@ describe("product CLI command tree (D0)", () => {
       ["buyer", "init"],
       ["buyer", "search"],
       ["buyer", "tasks"],
-      ["merchant", "init"],
       ["merchant", "listings"],
       ["merchant", "status"],
       ["merchant", "doctor"],
@@ -92,6 +91,13 @@ describe("product CLI command tree (D0)", () => {
     expect(code).toBe(EXIT.CONFIG);
     expect(stderr).not.toContain("尚未实现");
     expect(stderr).toContain("--profile");
+  });
+
+  it("merchant init (D1) validates required identity instead of not-implemented", async () => {
+    const { code, stderr } = await run(["merchant", "init"]);
+    expect(code).toBe(EXIT.CONFIG);
+    expect(stderr).not.toContain("尚未实现");
+    expect(stderr).toContain("--merchant-id");
   });
 
   it("legacy commands stay reachable through the global help", async () => {
