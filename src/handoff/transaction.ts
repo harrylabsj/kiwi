@@ -99,8 +99,20 @@ function computeHandoffDigest(handoff: Omit<TransactionHandoff, "handoff_digest"
   return contentDigest(handoff);
 }
 
-/** 从 Ledger 事件流驱动执行（含生命周期/重验/幂等/落链）。 */
+/**
+ * 从 Ledger 事件流驱动执行（含生命周期/重验/幂等/落链）。
+ * 整个流程以候选为粒度互斥（§10.1 并发保护）：lookup→(await)→record 的
+ * check-then-act 在无锁时两个并发执行会双双通过幂等检查、同一候选交付两次。
+ * 锁在幂等存储上（JSONL 与锁文件同目录，跨进程共享 dir 时同样互斥）。
+ */
 export async function executeHandoff(input: ExecuteHandoffInput): Promise<ExecuteHandoffResult> {
+  return input.idempotency.withCandidateLock(
+    input.candidate.handoff_candidate_id,
+    () => executeHandoffUnlocked(input),
+  );
+}
+
+async function executeHandoffUnlocked(input: ExecuteHandoffInput): Promise<ExecuteHandoffResult> {
   const { candidate, ledger, idempotency } = input;
   const negotiationId = candidate.negotiation_id;
   const events = ledger.events(negotiationId);
@@ -157,7 +169,12 @@ export async function executeHandoff(input: ExecuteHandoffInput): Promise<Execut
   if (recomputedTerms !== candidate.terms_digest) {
     return stale(input, candidate, now, "terms_digest mismatch on revalidation");
   }
-  if (Date.parse(candidate.expires_at) < Date.parse(now())) {
+  // fail-closed 过期门：不可解析的时间戳（Date.parse 为 NaN）绝不视为
+  // "未过期"——NaN < x 恒 false 会让候选永不过期直接交付。与 completion.ts
+  // 的守卫一致：NaN 一律按过期处理。
+  const expiresMs = Date.parse(candidate.expires_at);
+  const nowMs = Date.parse(now());
+  if (!Number.isFinite(expiresMs) || !Number.isFinite(nowMs) || expiresMs < nowMs) {
     ledger.appendCandidateEvent({
       kind: "handoff_candidate_expired",
       candidate,

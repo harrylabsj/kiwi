@@ -238,7 +238,7 @@ export function validateHandoffCandidate(value: unknown, path = "handoff_candida
       ),
     },
     policy_version: requireNonEmptyString(obj.policy_version, `${path}/policy_version`),
-    expires_at: requireNonEmptyString(obj.expires_at, `${path}/expires_at`),
+    expires_at: requireIsoTimestamp(obj.expires_at, `${path}/expires_at`),
     requires_user_action: obj.requires_user_action as boolean | undefined,
     ...(obj.supersedes_candidate_id !== undefined
       ? { supersedes_candidate_id: obj.supersedes_candidate_id as string }

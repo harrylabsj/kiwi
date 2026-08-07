@@ -31,6 +31,7 @@ describe("validateExternalDestinationUrl", () => {
     const result = await validateExternalDestinationUrl("https://acme.example/checkout/abc", {
       expectedHost: "acme.example",
       fetchImpl: redirectFetch({}),
+      skipDnsCheck: true,
     });
     expect(result.finalUrl).toBe("https://acme.example/checkout/abc");
   });
@@ -67,6 +68,7 @@ describe("validateExternalDestinationUrl", () => {
     const result = await validateExternalDestinationUrl("https://pay.example/checkout", {
       allowlist: ["pay.example"],
       fetchImpl: redirectFetch({}),
+      skipDnsCheck: true,
     });
     expect(result.finalUrl).toBe("https://pay.example/checkout");
   });
@@ -78,6 +80,7 @@ describe("validateExternalDestinationUrl", () => {
         fetchImpl: redirectFetch({
           "https://acme.example/checkout": "https://evil.example/steal",
         }),
+      skipDnsCheck: true,
       }),
     ).rejects.toThrow(/not allowed/);
   });
@@ -89,6 +92,7 @@ describe("validateExternalDestinationUrl", () => {
         fetchImpl: redirectFetch({
           "https://acme.example/checkout": "javascript:alert(1)",
         }),
+        skipDnsCheck: true,
       }),
     ).rejects.toThrow(/must use http or https/);
   });
@@ -99,6 +103,7 @@ describe("validateExternalDestinationUrl", () => {
       fetchImpl: redirectFetch({
         "https://acme.example/go": "https://acme.example/checkout/final",
       }),
+      skipDnsCheck: true,
     });
     expect(result.finalUrl).toBe("https://acme.example/checkout/final");
     expect(result.redirects).toEqual(["https://acme.example/go"]);
@@ -114,7 +119,66 @@ describe("validateExternalDestinationUrl", () => {
         expectedHost: "acme.example",
         maxRedirects: 3,
         fetchImpl: redirectFetch(loop),
+        skipDnsCheck: true,
       }),
     ).rejects.toThrow(/redirects/);
+  });
+
+  it("DNS 复查：expectedHost 命中但解析到保留网段 → 拒绝（不发出探测）", async () => {
+    let probed = false;
+    const fetchImpl = (async (_input: FetchInput, _init?: FetchInit): Promise<Response> => {
+      probed = true;
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+    await expect(
+      validateExternalDestinationUrl("https://acme.example/checkout", {
+        expectedHost: "acme.example",
+        fetchImpl,
+        resolveIp: async () => ["169.254.169.254"], // 云元数据端点
+      }),
+    ).rejects.toThrow(/reserved network/);
+    expect(probed).toBe(false); // 防护在探测之前
+  });
+
+  it("死链拒绝：非 2xx 且无重定向 → 不当作已验证目的地", async () => {
+    const fetchImpl = (async (_input: FetchInput, _init?: FetchInit): Promise<Response> => {
+      return new Response(null, { status: 404 });
+    }) as typeof fetch;
+    await expect(
+      validateExternalDestinationUrl("https://acme.example/checkout", {
+        expectedHost: "acme.example",
+        fetchImpl,
+        skipDnsCheck: true,
+      }),
+    ).rejects.toThrow(/HTTP 404/);
+  });
+
+  it("3xx 无 Location → fail-closed（重定向响应必须有目标）", async () => {
+    const fetchImpl = (async (_input: FetchInput, _init?: FetchInit): Promise<Response> => {
+      return new Response(null, { status: 302 });
+    }) as typeof fetch;
+    await expect(
+      validateExternalDestinationUrl("https://acme.example/checkout", {
+        expectedHost: "acme.example",
+        fetchImpl,
+        skipDnsCheck: true,
+      }),
+    ).rejects.toThrow(/HTTP 302/);
+  });
+
+  it("非 3xx 带 Location → fail-closed（重定向头只在 3xx 有效）", async () => {
+    const fetchImpl = (async (_input: FetchInput, _init?: FetchInit): Promise<Response> => {
+      return new Response(null, {
+        status: 200,
+        headers: { location: "https://evil.example/steal" },
+      });
+    }) as typeof fetch;
+    await expect(
+      validateExternalDestinationUrl("https://acme.example/checkout", {
+        expectedHost: "acme.example",
+        fetchImpl,
+        skipDnsCheck: true,
+      }),
+    ).rejects.toThrow(/non-3xx/);
   });
 });

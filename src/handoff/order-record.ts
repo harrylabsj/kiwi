@@ -96,11 +96,20 @@ export interface OrderRecordSource {
 // 校验
 // ---------------------------------------------------------------------------
 
+/** 非负整数（金额/数量语义，与核心 validateMoney 一致——负数不可入审计账）。 */
+function requireNonNegativeInteger(value: unknown, path: string): number {
+  const n = requireInteger(value, path);
+  if (n < 0) {
+    throw schemaError(path, `${path} must be a non-negative integer`);
+  }
+  return n;
+}
+
 function validateLineItem(value: unknown, index: number): OrderRecordLineItem {
   const obj = requireObject(value, `line_items/${index}`);
   const base: OrderRecordLineItem = {
     sku: requireNonEmptyString(obj.sku, `line_items/${index}/sku`),
-    quantity: requireInteger(obj.quantity, `line_items/${index}/quantity`),
+    quantity: requireNonNegativeInteger(obj.quantity, `line_items/${index}/quantity`),
   };
   if (obj.unit_price === undefined) return base;
   const price = requireObject(obj.unit_price, `line_items/${index}/unit_price`);
@@ -108,7 +117,7 @@ function validateLineItem(value: unknown, index: number): OrderRecordLineItem {
     ...base,
     unit_price: {
       currency: requireNonEmptyString(price.currency, `line_items/${index}/unit_price/currency`),
-      amount_minor: requireInteger(
+      amount_minor: requireNonNegativeInteger(
         price.amount_minor,
         `line_items/${index}/unit_price/amount_minor`,
       ),
@@ -131,7 +140,7 @@ function validateSource(source: OrderRecordSource): OrderRecordSource {
       ? { currency: requireNonEmptyString(source.currency, "currency") }
       : {}),
     ...(source.total_minor !== undefined
-      ? { total_minor: requireInteger(source.total_minor, "total_minor") }
+      ? { total_minor: requireNonNegativeInteger(source.total_minor, "total_minor") }
       : {}),
     agreement_id: validateIdentifier(source.agreement_id, "agreement_id"),
     negotiation_id: validateIdentifier(source.negotiation_id, "negotiation_id"),

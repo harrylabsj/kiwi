@@ -148,7 +148,11 @@ export function createPaymentAuthorization(
     expires_at: expiresAt,
   };
   requireIsoTimestamp(authorization.evidence.confirmed_at, "evidence.confirmed_at");
-  if (authorization.evidence.confirmed_at > authorization.approved_at) {
+  // 数值比较（非字符串）：RFC 3339 允许带时区偏移，字符串比较跨时区会
+  // fail-open（如 confirmed_at 带 -08:00 偏移时事后补签可通过）。NaN 视为非法。
+  const confirmedMs = Date.parse(authorization.evidence.confirmed_at);
+  const approvedMs = Date.parse(authorization.approved_at);
+  if (!Number.isFinite(confirmedMs) || !Number.isFinite(approvedMs) || confirmedMs > approvedMs) {
     throw new HandoffError(
       "invalid_authorization",
       "evidence.confirmed_at MUST NOT be after approved_at (evidence must precede approval)",

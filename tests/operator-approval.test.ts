@@ -11,6 +11,9 @@
  *  - write-gate 适配：WriteApprovalCandidate 生命周期桥接为审批状态源。
  */
 import { describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { contentDigest } from "../src/negotiation/jcs.js";
 import type { TermSet } from "../src/negotiation/domain/common.js";
@@ -428,5 +431,50 @@ describe("OperatorApprovalAuthorizationProvider × WriteApprovalCandidate", () =
     });
     expect(verify.verified).toBe(false);
     if (!verify.verified) expect(verify.reason).toMatch(/unknown/);
+  });
+
+  it("persistDir：审批记录落 JSONL，重启后恢复（record + revoke 重放）", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-opappr-"));
+
+    const provider = new OperatorApprovalAuthorizationProvider({ now: () => NOW, persistDir: dir });
+    const channel = new ManualHandoffChannel({ now: () => NOW, authorizationProvider: provider });
+    const created = channel.createSession(makePackage());
+    if (created.status !== "ok") throw new Error("create session failed");
+    const summary = summarizeCheckoutSession(
+      {
+        session_ref: created.session_ref,
+        current_terms_digest: contentDigest(TERMS),
+        status: "created",
+        updated_at: NOW,
+      },
+      "rev-1",
+    );
+    provider.recordApproval({
+      approval_id: "act_persist_1",
+      package: makePackage(),
+      session: summary,
+      candidate_digest: CANDIDATE_DIGEST,
+      policy_version: POLICY_VERSION,
+    });
+
+    // 重启：新 provider 从 JSONL 重放，审批仍在（含 revoked 状态）。
+    const revived = new OperatorApprovalAuthorizationProvider({
+      now: () => NOW,
+      persistDir: dir,
+    });
+    expect(revived.getApproval("act_persist_1")?.status).toBe("approved");
+    const verify = revived.verifyIntentMandate("act_persist_1", {
+      session_ref: created.session_ref,
+      terms_digest: contentDigest(TERMS),
+    });
+    expect(verify.verified).toBe(true);
+
+    // revoke 同样持久化。
+    revived.revokeApproval("act_persist_1");
+    const revivedAgain = new OperatorApprovalAuthorizationProvider({
+      now: () => NOW,
+      persistDir: dir,
+    });
+    expect(revivedAgain.getApproval("act_persist_1")?.status).toBe("revoked");
   });
 });

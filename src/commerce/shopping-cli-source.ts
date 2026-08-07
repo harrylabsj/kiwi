@@ -58,6 +58,12 @@ function validateBaseUrl(value: string): string {
   if (url.username !== "" || url.password !== "") {
     throw new CommerceError("invalid_input", "shopping-cli baseUrl must not embed credentials (userinfo)");
   }
+  if (url.search !== "" || url.hash !== "") {
+    throw new CommerceError(
+      "invalid_input",
+      "shopping-cli baseUrl must not contain query or fragment (paths are appended to it)",
+    );
+  }
   return value.replace(/\/+$/, "");
 }
 
@@ -135,6 +141,11 @@ export class ShoppingCliCommerceDataSource implements CommerceDataSource {
     } finally {
       clearTimeout(timer);
     }
+    if (response.status === 404) {
+      // 404 = 资源不存在：getProduct 的"未知 SKU → undefined"接口承诺
+      //（composite 次要源靠它跳过自身不收录的 SKU，而不是整体抛错）。
+      return null;
+    }
     if (!response.ok) {
       throw new CommerceError("request_failed", `shopping-cli request returned HTTP ${response.status} from ${url}`);
     }
@@ -152,7 +163,8 @@ export class ShoppingCliCommerceDataSource implements CommerceDataSource {
       throw new CommerceError("invalid_input", "sku must be a non-empty string");
     }
     const raw = await this.getJson(`/products/${encodeURIComponent(sku)}`);
-    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    if (raw === null) return undefined; // 404 → 未知 SKU（接口承诺）
+    if (typeof raw !== "object" || Array.isArray(raw)) {
       throw new CommerceError("request_failed", "shopping-cli get product response must be an object");
     }
     const body = raw as Record<string, unknown>;

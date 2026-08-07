@@ -277,6 +277,45 @@ describe("AgentDiscovery.resolveViaCatalog", () => {
     });
   });
 
+  it("catalog 驱动的 agent_card_url 过 SSRF 策略：私网 IP 字面量拒绝（fail-closed，不发起抓取）", async () => {
+    const candidate = candidateFixture({
+      discovery: {
+        agent_card_url: "http://10.0.0.1/.well-known/agent-card.json",
+        ucp_profile_url: undefined,
+      },
+    }) as unknown as CandidateAgent;
+    const { fetchImpl, calls } = cardFetch(agentCard());
+    const discovery = new AgentDiscovery({
+      fetchImpl,
+      skipDnsCheck: true,
+      catalog: { source: fakeSource([candidate]) },
+    });
+
+    await expect(discovery.resolveViaCatalog()).rejects.toMatchObject({
+      code: "card_fetch_failed",
+    });
+    expect(calls).toHaveLength(0); // 防护在 fetch 之前，绝不对内网地址发起请求
+  });
+
+  it("catalog 驱动的 agent_card_url 过 SSRF 策略：重定向拒绝（redirect: manual，不跟随）", async () => {
+    const candidate = candidateFixture() as unknown as CandidateAgent;
+    let requested = 0;
+    const fetchImpl = (async (_input: FetchInput, _init?: FetchInit): Promise<Response> => {
+      requested += 1;
+      return new Response("", { status: 302, headers: { location: "http://169.254.169.254/latest/meta-data" } });
+    }) as unknown as typeof fetch;
+    const discovery = new AgentDiscovery({
+      fetchImpl,
+      skipDnsCheck: true,
+      catalog: { source: fakeSource([candidate]) },
+    });
+
+    await expect(discovery.resolveViaCatalog()).rejects.toMatchObject({
+      code: "card_fetch_failed",
+    });
+    expect(requested).toBe(1); // 只发起首跳，绝不跟随到 metadata 端点
+  });
+
   it("候选不被直接信任：fresh resolve 从 Agent Card 拉取真实档案", async () => {
     // candidate 声称 merchant.name = "Acme Merchant"，但真实 card 的 identity 是 "Real"。
     const candidate = candidateFixture() as unknown as CandidateAgent;
@@ -284,6 +323,7 @@ describe("AgentDiscovery.resolveViaCatalog", () => {
     const { fetchImpl, calls } = cardFetch(card);
     const discovery = new AgentDiscovery({
       fetchImpl,
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身（.example 域名非真实 DNS）
       catalog: { source: fakeSource([candidate]) },
     });
 
@@ -313,6 +353,7 @@ describe("AgentDiscovery.resolveViaCatalog", () => {
     const { fetchImpl, calls } = cardFetch(card);
     const discovery = new AgentDiscovery({
       fetchImpl,
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身（.example 域名非真实 DNS）
       catalog: { source: fakeSource([rejected, healthy]) },
     });
 
@@ -332,6 +373,7 @@ describe("AgentDiscovery.resolveViaCatalog", () => {
     const { fetchImpl } = cardFetch(card);
     const discovery = new AgentDiscovery({
       fetchImpl,
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身（.example 域名非真实 DNS）
       catalog: { source: fakeSource([rejected]), includeBlocked: true },
     });
 
@@ -347,6 +389,7 @@ describe("AgentDiscovery.resolveViaCatalog", () => {
     const { fetchImpl } = cardFetch(agentCard());
     const discovery = new AgentDiscovery({
       fetchImpl,
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身（.example 域名非真实 DNS）
       hosted: { configured: true, config_id: "local" },
       catalog: { source: fakeSource([candidate]) },
     });
@@ -368,6 +411,7 @@ describe("AgentDiscovery.resolveViaCatalog", () => {
     const { fetchImpl } = cardFetch(agentCard());
     const discovery = new AgentDiscovery({
       fetchImpl,
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身（.example 域名非真实 DNS）
       hosted: { configured: true, config_id: "local" },
       catalog: { source: fakeSource([candidate]) },
     });
@@ -387,6 +431,7 @@ describe("AgentDiscovery.resolveViaCatalog", () => {
     const { fetchImpl } = cardFetch(agentCard());
     const discovery = new AgentDiscovery({
       fetchImpl,
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身（.example 域名非真实 DNS）
       catalog: { source: fakeSource([withA2a]) },
     });
 
@@ -411,6 +456,7 @@ describe("AgentDiscovery.resolveViaCatalog", () => {
     const { fetchImpl } = cardFetch(card);
     const discovery = new AgentDiscovery({
       fetchImpl,
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身（.example 域名非真实 DNS）
       hosted: { configured: true, config_id: "local" },
       catalog: { source: fakeSource([unknownNoA2a]) },
     });
@@ -428,6 +474,7 @@ describe("AgentDiscovery.resolveViaCatalog", () => {
     const { fetchImpl } = cardFetch(agentCard());
     const discovery = new AgentDiscovery({
       fetchImpl,
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身（.example 域名非真实 DNS）
       hosted: { configured: true, config_id: "local" },
       catalog: { source: fakeSource([candidate]) },
     });
@@ -450,6 +497,7 @@ describe("AgentDiscovery.resolveViaCatalog", () => {
     const { fetchImpl } = cardFetch(agentCard());
     const discovery = new AgentDiscovery({
       fetchImpl,
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身（.example 域名非真实 DNS）
       hosted: { configured: true, config_id: "local" },
       catalog: { source: fakeSource([candidate]) },
     });
@@ -471,6 +519,7 @@ describe("AgentDiscovery.resolveViaCatalog", () => {
     const { fetchImpl, calls } = cardFetch(card);
     const discovery = new AgentDiscovery({
       fetchImpl,
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身（.example 域名非真实 DNS）
       catalog: { source: fakeSource([noResolve]) },
     });
 
@@ -487,6 +536,7 @@ describe("AgentDiscovery.resolveViaCatalog", () => {
     const { fetchImpl } = cardFetch(agentCard());
     const discovery = new AgentDiscovery({
       fetchImpl,
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身（.example 域名非真实 DNS）
       catalog: { source: fakeSource([evil]) },
     });
 
@@ -502,6 +552,7 @@ describe("AgentDiscovery.resolveViaCatalog", () => {
       jsonResponse({ error: "not found" }, 404)) as typeof fetch;
     const discovery = new AgentDiscovery({
       fetchImpl,
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身（.example 域名非真实 DNS）
       catalog: { source: fakeSource([candidate]) },
     });
 

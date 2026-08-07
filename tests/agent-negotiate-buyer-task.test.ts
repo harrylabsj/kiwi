@@ -20,6 +20,7 @@ import {
   WriteApprovalCandidateStore,
 } from "../src/agent/merchant/action-candidate.js";
 import { testBuyerProfile, startTestA2aStack, type CapturedInbound } from "./helpers.js";
+import { dataSourceProductSource } from "../src/a2a/server/merchant-handler.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
 
 const T0 = "2026-08-05T12:00:00+08:00";
@@ -265,7 +266,7 @@ describe("negotiate_buyer_task", () => {
     );
   });
 
-  it("failure path: unknown merchant → executed with ok:false, task untouched", async () => {
+  it("failure path: unknown merchant → 审批候选不标 executed（superseded + stale），任务不动", async () => {
     const s = await startTestA2aStack({ productSource });
     stacks.push(s);
     const h = await setupBuyer({ catalog: s.catalogUrl });
@@ -282,10 +283,11 @@ describe("negotiate_buyer_task", () => {
       candidate.candidate_id,
       h.hooks.get(candidate.candidate_id) as PendingHooks,
     );
-    if (outcome.kind !== "executed") throw new Error("expected an executed candidate");
-    const output = outcome.output as { ok: boolean; error?: string };
-    expect(output.ok).toBe(false);
-    expect(output.error).toContain("找不到");
+    // execute 返回 {ok:false}（商家找不到）→ 候选 superseded + stale，
+    // 不标 executed（审计状态与真实执行一致；此前无条件 markExecuted）。
+    expect(outcome.kind).toBe("stale");
+    expect(outcome.candidate.status).toBe("superseded");
+    expect(h.approvals.get(candidate.candidate_id)?.status).toBe("superseded");
     // 任务不动：无链接、状态不变、事件记录失败。
     expect(h.store.getTask(task_id)?.status).toBe("ready");
     expect(h.store.linksForTask(task_id)).toHaveLength(0);
@@ -305,5 +307,56 @@ describe("negotiate_buyer_task", () => {
     expect(h.approvals.listPending()).toHaveLength(0);
     expect(h.store.getTask(task_id)?.status).toBe("selected_nonbinding");
     expect(capture.some((c) => c.action === "rfq")).toBe(true);
+  });
+
+  it("dataSourceProductSource × createMerchantHandler: offer price is price_minor, not 100x (P1 regression)", async () => {
+    // 真实 CommerceDataSource（minor units）接 adapter → 商家 handler。
+    // 回归：adapter 曾把 price_minor 直接当"元"返回，resolveProduct 再 ×100
+    // → 83500 minor 报成 8,350,000。组合层此前完全无测试覆盖。
+    const dataSource = {
+      async getProduct(sku: string) {
+        if (sku === "sku-001") {
+          return { sku, title: "Real Beans", price_minor: 83500, currency: "CNY", stock: 200 };
+        }
+        return undefined;
+      },
+      async getProducts() {
+        return [];
+      },
+      async getInventory() {
+        return undefined;
+      },
+      async getPrice() {
+        return undefined;
+      },
+      async getPublicListing() {
+        return {};
+      },
+      async health() {
+        return { ok: true };
+      },
+    };
+    const adapter = dataSourceProductSource(dataSource);
+    const s = await startTestA2aStack({ productSource: adapter, capture });
+    stacks.push(s);
+    const h = await setupBuyer({ catalog: s.catalogUrl });
+    const { task_id } = await createReadyTask(h.store);
+    const tool = h.getTool("negotiate_buyer_task");
+
+    const first = await tool.execute("c1", { task_id });
+    expect(first.content[0]?.type === "text" ? first.content[0].text : "").toContain("等待批准");
+    const pending = h.approvals.listPending();
+    const candidate = pending[0] as (typeof pending)[number];
+    h.approvals.markApproved(candidate.candidate_id);
+    const outcome = await executeApprovedCandidate(
+      h.approvals,
+      candidate.candidate_id,
+      h.hooks.get(candidate.candidate_id) as PendingHooks,
+    );
+    if (outcome.kind !== "executed") throw new Error("expected an executed candidate");
+    const output = outcome.output as { ok: boolean; facts?: { offerPriceMinor?: number } };
+    expect(output.ok).toBe(true);
+    // 83500 minor（835.00 元）——不是 100 倍的 8,350,000。
+    expect(output.facts?.offerPriceMinor).toBe(83_500);
   });
 });

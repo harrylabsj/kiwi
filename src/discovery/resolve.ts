@@ -72,6 +72,10 @@ import type {
   VerificationStatus,
 } from "./catalog-source/index.js";
 import type { ChannelCandidate, CounterpartyProfile } from "../counterparty/channel.js";
+import {
+  assertResolvableTargetUrl,
+  assertSafeTargetUrl,
+} from "../a2a/client/url-policy.js";
 
 export interface DiscoveryInput {
   /** 对端域名（不含 scheme）；从 well-known Agent Card 解析。 */
@@ -120,6 +124,10 @@ export interface DiscoveryDeps {
   platform?: { configured: boolean; credential_ref?: string };
   /** 拉取超时 ms（默认 15000）。 */
   timeoutMs?: number;
+  /** SSRF DNS 复查的解析函数（缺省 node:dns lookup；受控/测试环境注入用）。 */
+  resolveIp?: (hostname: string) => Promise<string[]>;
+  /** 跳过 SSRF DNS 复查（仅测试/受控环境；生产缺省 false）。 */
+  skipDnsCheck?: boolean;
   /**
    * UCP 集成（WP3）：domain 输入先试 `/.well-known/ucp`，失败回退
    * `/.well-known/agent-card.json`。缺省启用（不传即用默认 resolver）；
@@ -261,13 +269,31 @@ export class AgentDiscovery {
   }
 
   private async fetchCard(url: string): Promise<unknown> {
+    // SSRF 防护（与 UCP resolver 同级，catalog 驱动的 agent_card_url 同样受保护）：
+    //   1. 静态校验（scheme/userinfo/保留网段/loopback http 例外）；
+    //   2. 请求前 DNS 复查（主机名解析的每个 IP 过保留网段判定，防 rebinding）；
+    //   3. 不跟随重定向（redirect:"manual"，3xx → 拒绝）。
+    let safeUrl: URL;
+    try {
+      safeUrl = assertSafeTargetUrl(url);
+      await assertResolvableTargetUrl(safeUrl, {
+        skipDnsCheck: this.deps.skipDnsCheck,
+        resolveIp: this.deps.resolveIp,
+      });
+    } catch (err) {
+      throw new DiscoveryError(
+        "card_fetch_failed",
+        `Agent Card URL rejected by safety policy: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     const fetchImpl = this.deps.fetchImpl ?? globalThis.fetch;
     const timeoutMs = this.deps.timeoutMs ?? 15_000;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
     try {
-      response = await fetchImpl(url, {
+      response = await fetchImpl(safeUrl.href, {
+        redirect: "manual",
         signal: controller.signal,
         headers: { accept: "application/json" },
       });
@@ -278,6 +304,16 @@ export class AgentDiscovery {
       );
     } finally {
       clearTimeout(timer);
+    }
+    if (
+      response.redirected ||
+      response.type === "opaqueredirect" ||
+      (response.status >= 300 && response.status < 400)
+    ) {
+      throw new DiscoveryError(
+        "card_fetch_failed",
+        `Agent Card fetch must not follow redirects (HTTP ${response.status} from ${url})`,
+      );
     }
     if (!response.ok) {
       throw new DiscoveryError(

@@ -69,6 +69,13 @@ describe("OPENED_CONFIRMED 证据门", () => {
       const ledger = store();
       const c = candidate();
       const deps = deliveredDeps(ledger, c, "hnd_01");
+      ledger.appendDeliveryEvent({
+        kind: "handoff_delivered",
+        candidate: c,
+        handoff_id: "hnd_01",
+        identity: IDENTITY,
+        capability: CAPABILITY,
+      });
       recordLaunch(deps);
       recordOpenEvidence({ ...deps, evidence: { kind, handoff_id: "hnd_01", at: "2026-08-07T10:00:00Z" } });
       expect(deliveryState(ledger.eventsForHandoff(c.negotiation_id, "hnd_01"))).toBe("OPENED_CONFIRMED");

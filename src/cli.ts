@@ -697,6 +697,16 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
     }
   }
 
+  // SIGINT/SIGTERM → 优雅关闭（flush harness 会话 + close kernel/DB）。
+  // 此前裸 `kiwi`/`kiwi chat` 在模型回合中途 Ctrl+C 直接终止，kernel.close()
+  // 被跳过（与 agent serve 的信号处理对齐）。
+  const shutdown = async (): Promise<void> => {
+    for (const k of kernels) await k.close().catch(() => undefined);
+    await a2aNode.stop().catch(() => undefined);
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
   try {
     return await runChatTui({
       kernel,
@@ -710,6 +720,8 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
     process.stderr.write(`unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
     return EXIT.TRANSIENT;
   } finally {
+    process.removeListener("SIGINT", shutdown);
+    process.removeListener("SIGTERM", shutdown);
     for (const k of kernels) await k.close().catch(() => undefined);
     await a2aNode.stop().catch(() => undefined);
   }

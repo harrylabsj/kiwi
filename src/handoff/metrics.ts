@@ -43,7 +43,7 @@ export interface HandoffMetrics {
   agreement_to_handoff_rate: number;
   /** handoff → launch 率（launched / delivered）。 */
   handoff_launch_rate: number;
-  /** launch → opened_confirmed 率（opened / delivered）。 */
+  /** opened_confirmed 率（opened / delivered——与实现一致的分母；launch 事件可选，不参与分母）。 */
   opened_confirmed_rate: number;
   /** negotiation → handoff 率（delivered / 有候选的 negotiation 数）。 */
   negotiation_to_handoff_rate: number;
@@ -87,6 +87,8 @@ export function computeHandoffMetrics(eventsByNegotiation: ReadonlyMap<string, r
           launches += 1;
           break;
         case "handoff_opened_confirmed":
+          // 计数所有 opened 事件（事件已由证据门保证可归属——recordOpenEvidence
+          // 只落带可归属证据的确认；无证据的 launch 永不产生本事件）。
           openedConfirmed += 1;
           break;
         default:

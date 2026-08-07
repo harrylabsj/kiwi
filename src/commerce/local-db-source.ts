@@ -60,6 +60,11 @@ interface ProductRow {
 
 const CTOR = Symbol("local-db-source.ctor");
 
+/** LIKE 通配符转义（`%`/`_` 在用户输入里是字面量，不是通配符）。 */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 /** 本地商品库 CommerceDataSource（LOCAL_AUTHORITATIVE）。 */
 export class LocalDatabaseCommerceDataSource implements CommerceDataSource {
   private readonly db: DatabaseSync;
@@ -84,9 +89,9 @@ export class LocalDatabaseCommerceDataSource implements CommerceDataSource {
     const rows = q
       ? (this.db
           .prepare(
-            "SELECT * FROM product_facts WHERE sku LIKE ? OR title LIKE ? ORDER BY sku LIMIT ?",
+            "SELECT * FROM product_facts WHERE sku LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' ORDER BY sku LIMIT ?",
           )
-          .all(`%${q}%`, `%${q}%`, limit) as unknown as ProductRow[])
+          .all(`%${escapeLike(q)}%`, `%${escapeLike(q)}%`, limit) as unknown as ProductRow[])
       : (this.db
           .prepare("SELECT * FROM product_facts ORDER BY sku LIMIT ?")
           .all(limit) as unknown as ProductRow[]);

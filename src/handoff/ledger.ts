@@ -75,6 +75,16 @@ export interface HandoffEventInput {
   occurred_at?: string;
 }
 
+/** 从目的地补充字段中剥离候选身份字段（type/ref 属于候选，不可被覆盖）。 */
+function stripDestinationIdentityFields(
+  destination: Record<string, unknown>,
+): Record<string, unknown> {
+  const rest = { ...destination };
+  delete rest.type;
+  delete rest.ref;
+  return rest;
+}
+
 /** KTH 事件存储（LedgerStore 引擎复用）。 */
 export class HandoffEventStore {
   private readonly store: LedgerStore;
@@ -100,7 +110,15 @@ export class HandoffEventStore {
       agreement_id: input.candidate.agreement_id,
       terms_digest: input.candidate.terms_digest,
       ...(input.destination !== undefined
-        ? { destination: { type: input.candidate.destination_type, ref: input.candidate.destination_ref, ...input.destination } }
+        ? {
+            destination: {
+              type: input.candidate.destination_type,
+              ref: input.candidate.destination_ref,
+              // 调用方只可补充展示字段（如 final_url）；type/ref 是候选的审计
+              // 事实，不得被覆盖（否则落链目的地与候选内容不一致）。
+              ...stripDestinationIdentityFields(input.destination),
+            },
+          }
         : {}),
       ...(input.evidence !== undefined ? { evidence: input.evidence } : {}),
       identity: input.identity,

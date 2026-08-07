@@ -391,6 +391,7 @@ describe("AgentDiscovery.resolveViaCatalog with KiwiCatalogSource", () => {
     const card = agentCard();
     const discovery = new AgentDiscovery({
       fetchImpl: cardFetch(card),
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身
       catalog: { source: new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl }) },
     });
 
@@ -419,6 +420,7 @@ describe("AgentDiscovery.resolveViaCatalog with KiwiCatalogSource", () => {
     const card = agentCard();
     const discovery = new AgentDiscovery({
       fetchImpl: cardFetch(card),
+      skipDnsCheck: true, // 注入的 fetchImpl 测试替身
       catalog: { source: new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl }) },
     });
 
