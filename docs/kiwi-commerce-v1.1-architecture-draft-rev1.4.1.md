@@ -2036,6 +2036,11 @@ v1.1 Handoff/Product Split 只有同时满足以下条件才算完成：
 20. 至少一个端到端场景达到 Agreement → Handoff → external checkout/ERP。
 21. `Negotiation-to-Handoff Rate` 可观测。
 
+**就绪度审计（2026-08-07）**：上述 21 条完成定义经就绪度审计
+（`docs/reviews/kiwi-commerce-v1.1-readiness-audit-2026-08-07.md`）逐条实证
+满足（21/21 直接实证）。v1.1 仍为 **Draft**——本注记不构成发布宣布；
+发布决定（含第三方互操作证据、部署复核）另行作出。
+
 # 43. Canonical Documents and Artifact Layout
 
 v1.1 Draft 的当前文档布局：

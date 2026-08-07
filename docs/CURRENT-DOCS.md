@@ -29,3 +29,13 @@ docs/testing/kiwi-commerce-v1.1-test-plan-v0.2.md
 - `selected_nonbinding` is OPTIONAL before Handoff.
 - Candidate content is immutable; lifecycle is an event-sourced projection.
 - kiwi-catalog state is three-dimensional: Verification / Freshness / Administrative.
+
+## Implementation status (2026-08-07)
+
+- v1.1 completion definition: **21/21 directly evidenced** (readiness audit:
+  `docs/reviews/kiwi-commerce-v1.1-readiness-audit-2026-08-07.md`).
+- New CLI: `kiwi catalog serve` (standalone kiwi-catalog service),
+  `kiwi metrics --dir <agent-dir>` (KTH metrics).
+- New chat TUI commands: `/handoff`, `/handoff-launch <handoff_id> <negotiation_id>`,
+  `/handoff-open <handoff_id> <negotiation_id>`.
+- v1.1 remains a **Draft**; the audit does not announce a release.
