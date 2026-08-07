@@ -229,12 +229,13 @@ EN:
 One command. Data engine included.
 
 npm install -g @harrylabsj/kiwi
-kiwi merchant init --name "Your Co." --auto-install
+kiwi merchant init --name "Your Co."
 kiwi merchant publish --profile merchant.yaml --shopping-cli-db <db>
 
 中文：
-一条命令装 Kiwi；init 只需要你的商家名称（商家号自动生成），
-数据引擎（shopping-cli）自动安装——你不需要知道它是什么、装在哪。
+一条命令装 Kiwi；init 只需要你的商家名称（它是你在网络上的公开名称，
+商家号自动生成），数据引擎（shopping-cli）自动安装——你不需要知道
+它是什么、装在哪。
 ```
 
 ### 怎么工作（4 步）
