@@ -337,14 +337,60 @@ async function cmdTui(args: ParsedArgs): Promise<number> {
 }
 
 /**
- * Main conversation (v0.3.0-A): the AgentKernel with persistent session and
- * Principal Memory. provider=fake runs the deterministic offline chat fake;
- * real providers resolve models and auth through pi-ai's built-in provider
- * catalog (env conventions of the chosen provider).
+ * 裸 `kiwi` 的默认聊天 profile：底层大模型**可配置**（从环境变量读取，不 hardcode）。
+ * - KIWI_MODEL_PROVIDER（默认 deepseek）
+ * - KIWI_MODEL（默认 deepseek-v4-flash）
+ * - KIWI_MODEL_API_KEY_ENV（默认 DEEPSEEK_API_KEY）
+ * - KIWI_MODEL_BASE_URL（可选覆盖）
  */
-async function cmdChat(args: ParsedArgs): Promise<number> {
-  const profile = requireProfile(args);
-  const paths = ensurePathsForDir(args.dataDir ?? agentDataDir(profile.agent_id));
+function defaultChatProfile(): AgentProfile {
+  const provider = process.env.KIWI_MODEL_PROVIDER ?? "deepseek";
+  const model = process.env.KIWI_MODEL ?? "deepseek-v4-flash";
+  const apiKeyEnv = process.env.KIWI_MODEL_API_KEY_ENV ?? "DEEPSEEK_API_KEY";
+  const baseUrl = process.env.KIWI_MODEL_BASE_URL;
+  return {
+    runtime_version: "1.0.0",
+    protocol_version: "shopping.negotiation/0.1",
+    agent_id: "kiwi-assistant",
+    role: "buyer",
+    owner_id: "kiwi-user",
+    commerce: {
+      base_url: "http://127.0.0.1:8765",
+      token_env: "SHOPPING_BUYER_TOKEN",
+      backend: "local_marketplace",
+    },
+    model: {
+      provider,
+      model,
+      api_key_env: apiKeyEnv,
+      ...(baseUrl !== undefined ? { base_url: baseUrl } : {}),
+    },
+    runtime: {
+      mode: "once",
+      poll_interval_seconds: 5,
+      turn_timeout_seconds: 90,
+      max_model_steps: 4,
+      max_retries: 2,
+    },
+    buyer_policy: {
+      target_skus: [],
+      quantity: 1,
+      max_total_price_private: 1_000_000,
+      acceptable_eta_latest: "2099-12-31T23:59:59+08:00",
+      required_after_sales_terms: [],
+      auto_negotiate: true,
+      human_review_on: [],
+    },
+  };
+}
+
+/**
+ * Main conversation (v0.3.0-A): build the AgentKernel for a profile.
+ * provider=fake runs the deterministic offline chat fake; real providers
+ * resolve models and auth through pi-ai's built-in provider catalog.
+ */
+async function buildChatKernel(profile: AgentProfile, dataDir?: string): Promise<AgentKernel> {
+  const paths = ensurePathsForDir(dataDir ?? agentDataDir(profile.agent_id));
 
   let models: AgentKernelOptions["models"];
   let model: AgentKernelOptions["model"];
@@ -395,7 +441,7 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
       process.stderr.write(
         `no built-in model ${profile.model.provider}/${profile.model.model}; check the profile\n`,
       );
-      return EXIT.CONFIG;
+      throw new ProfileError(`no built-in model ${profile.model.provider}/${profile.model.model}`);
     }
     models = collection;
     model = found;
@@ -431,7 +477,7 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
     process.stderr.write(`unknown KIWI_MODE ${kiwiMode}（可选 ${["manual", "supervised", "autopilot"].join("/")}）\n`);
   }
 
-  const kernel = await AgentKernel.open({
+  return AgentKernel.open({
     profile,
     paths,
     models,
@@ -443,13 +489,34 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
     ...(broker !== undefined ? { broker } : {}),
     ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
   });
+}
+
+/**
+ * Main conversation (v0.3.0-A): the AgentKernel with persistent session and
+ * Principal Memory. 裸 `kiwi`（无 --profile）用 defaultChatProfile 直接进入
+ * `kiwi>` 对话；`/profile <file>` 在对话内切换 kernel。
+ */
+async function cmdChat(args: ParsedArgs): Promise<number> {
+  const profile = args.profile !== undefined ? loadProfile(args.profile) : defaultChatProfile();
+  const kernel = await buildChatKernel(profile, args.dataDir);
+  const kernels: AgentKernel[] = [kernel];
+  const reload = async (file: string): Promise<AgentKernel> => {
+    const next = await buildChatKernel(loadProfile(file), args.dataDir);
+    kernels.push(next);
+    return next;
+  };
   try {
-    return await runChatTui({ kernel, input: process.stdin, output: process.stdout });
+    return await runChatTui({
+      kernel,
+      input: process.stdin,
+      output: process.stdout,
+      reload,
+    });
   } catch (err) {
     process.stderr.write(`unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
     return EXIT.TRANSIENT;
   } finally {
-    await kernel.close();
+    for (const k of kernels) await k.close().catch(() => undefined);
   }
 }
 
@@ -471,6 +538,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
   const [cmd, sub] = args.command;
   try {
+    // 裸 `kiwi`：直接进入 `kiwi>` 自由对话（默认 deepseek-v4-flash，模型可配置）。
+    if (cmd === undefined) return await cmdChat(args);
     if (cmd === "doctor") return await cmdDoctor(args);
     if (cmd === "agent" && sub === "run") return await cmdAgentRun(args);
     if (cmd === "tui") return await cmdTui(args);
