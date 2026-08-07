@@ -134,6 +134,20 @@ Install Kiwi. Tell it what you need.
 ——一句需求，就足以开始。
 ```
 
+### Install
+
+```
+EN:
+One command. One identity. Start with a sentence.
+
+npm install -g @harrylabsj/kiwi
+kiwi buyer init --agent-id <your-id>
+kiwi buyer search "21.5 inch industrial touch display, IP67"
+
+中文：
+安装只需要一条命令（发布后）。Buyer 不需要安装其他任何东西。
+```
+
 ### 怎么工作（4 步）
 
 ```
@@ -205,6 +219,21 @@ Let buyer agents find you, talk to you, and buy from you.
 中文：
 安装 Kiwi Merchant。连接你的商品目录。
 让 Buyer Agent 找到你、跟你谈、向你买。
+```
+
+### Install
+
+```
+EN:
+One command. Data engine included.
+
+npm install -g @harrylabsj/kiwi
+kiwi merchant init --merchant-id <your-merchant> --name "Your Co." --auto-install
+kiwi merchant publish --profile merchant.yaml --shopping-cli-db <db>
+
+中文：
+一条命令装 Kiwi；init 时数据引擎（shopping-cli）自动安装——
+你不需要知道它是什么、装在哪。
 ```
 
 ### 怎么工作（4 步）
@@ -312,35 +341,25 @@ EN:
 - 跨供应商互操作在我们的测试栈中验证；独立第三方互操作证据仍在积累。
 ```
 
-### 快速开始
+### 代码与构建（普通用户安装见 For Buyers / For Merchants 页）
 
 ```
 EN:
-# Install — single npm entry (once published); source fallback while unpublished
-npm install -g @harrylabsj/kiwi                # provides `kiwi`
-git clone https://github.com/harrylabsj/kiwi   # current: source fallback
+# Kiwi Runtime
+git clone https://github.com/harrylabsj/kiwi
 cd kiwi && npm install && npm run build && npm link
 
-# Buyer — this is all it takes
-kiwi buyer init --agent-id <your-id>
-kiwi buyer search "21.5 inch industrial touch display, IP67"
+# shopping-cli（数据引擎；Merchant 用户由 init --auto-install 自动装）
+git clone https://github.com/harrylabsj/shopping-cli
+cd shopping-cli && pip install -e '.[api]'
 
-# Merchant — the data engine (shopping-cli) is auto-installed by init
-kiwi merchant init --merchant-id <your-merchant> --name "Your Co." --auto-install
-kiwi merchant publish --profile merchant.yaml --shopping-cli-db <db>
+# kiwi-catalog（Network 服务端，Operator/自建网络用）
+git clone https://github.com/harrylabsj/kiwi-catalog
+cd kiwi-catalog && pip install -e '.[api]'
 
 中文：
-# 安装（发布后 npm 单一入口；当前源码备选）
-npm install -g @harrylabsj/kiwi    # 提供 `kiwi`
-clone kiwi 源码构建作为备选后：
-
-# Buyer —— 一步到位
-kiwi buyer init --agent-id <你的身份>
-kiwi buyer search "21.5 英寸工业触摸屏，IP67"
-
-# Merchant —— 数据引擎（shopping-cli）由 init 自动安装，无需单独装
-kiwi merchant init --merchant-id <你的商家> --name "你的公司" --auto-install
-kiwi merchant publish --profile merchant.yaml --shopping-cli-db <db>
+普通用户安装见 For Buyers / For Merchants 页（发布后 npm 一条命令）；
+本页是开发者的源码位置与构建方式。
 ```
 
 ### 文档导航

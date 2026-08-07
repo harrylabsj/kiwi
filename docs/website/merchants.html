@@ -26,13 +26,27 @@
     <h1>Install Kiwi Merchant. Connect your catalog.</h1>
     <p class="tagline">Let buyer agents find you, talk to you, and buy from you.</p>
     <div class="hero-actions">
-      <a class="btn btn-solid" href="developers.html#quickstart">Get Kiwi Merchant</a>
+      <a class="btn btn-solid" href="#install">Get Kiwi Merchant</a>
     </div>
     <div class="cn">
       <p>中文：安装 Kiwi Merchant。连接你的商品目录。让 Buyer Agent 找到你、跟你谈、向你买。</p>
     </div>
   </div>
 </header>
+
+<section class="section" id="install">
+  <div class="section-inner">
+    <div class="kicker">Install</div>
+    <h2>One command. Data engine included.</h2>
+    <p class="lead">You install Kiwi. The commerce data engine installs itself when you init.</p>
+    <pre><code>npm install -g @harrylabsj/kiwi
+kiwi merchant init --merchant-id &lt;your-merchant&gt; --name "Your Co." --auto-install
+kiwi merchant publish --profile merchant.yaml --shopping-cli-db &lt;db&gt;</code></pre>
+    <div class="notice">
+      <p><strong>中文：</strong>一条命令装 Kiwi；init 时数据引擎（shopping-cli）自动安装——你不需要知道它是什么、装在哪。publish 把你的商品送上网络。</p>
+    </div>
+  </div>
+</section>
 
 <section class="section">
   <div class="section-inner">
