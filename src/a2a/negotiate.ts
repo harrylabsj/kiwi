@@ -25,7 +25,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { ShoppingCliCatalogSource } from "../discovery/catalog-source/index.js";
+import { ShoppingCliCatalogSource, type CatalogSource } from "../discovery/catalog-source/index.js";
 import { AgentDiscovery } from "../discovery/index.js";
 import { selectChannelCandidate, A2ADirectChannel } from "../counterparty/index.js";
 import type { ChannelHandle } from "../counterparty/index.js";
@@ -52,6 +52,11 @@ export const NEGOTIATE_DELIVERY_BEFORE = "2026-08-20T18:00:00Z";
 export interface NegotiateOptions {
   /** agent catalog base URL。 */
   catalog: string;
+  /**
+   * catalog source 注入（rev1.5 CD #27：Buyer 传 KiwiCatalogSource 走
+   * product-first 链路）。缺省 ShoppingCliCatalogSource 保持 legacy 行为。
+   */
+  catalogSource?: CatalogSource;
   /** 目标 catalog_agent_id；缺省取第一个可发现候选。 */
   catalogAgentId?: string;
   /** 订货量（缺省 200）。 */
@@ -255,7 +260,9 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
 
   try {
     // 1. 发现：catalog 候选 → fresh resolve Agent Card（includeBlocked：本地 rejected 也纳入）。
-    const source = new ShoppingCliCatalogSource({ baseUrl: options.catalog });
+    // CD #27：Buyer 可注入 KiwiCatalogSource（listing → owner_agent_id → getRecord →
+    // resolveViaCatalog fresh verify 全链）；缺省 legacy ShoppingCliCatalogSource。
+    const source = options.catalogSource ?? new ShoppingCliCatalogSource({ baseUrl: options.catalog });
     const discovery = new AgentDiscovery({ catalog: { source, includeBlocked: true } });
     const resolved = await discovery.resolveViaCatalog();
     if (resolved.length === 0) {

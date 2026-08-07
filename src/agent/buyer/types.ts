@@ -98,6 +98,31 @@ export interface TaskIntent {
   open_questions?: string[];
 }
 
+/**
+ * Product-first 商品意图（rev1.5 CD #27；产品文档 kiwi-catalog v0.4 §10）。
+ * 与 TaskIntent 独立：TaskIntent 是本地任务的结构化约束，ProductIntent 是
+ * kiwi-catalog listing 搜索的输入（need → /v1/listings/search）。
+ */
+export interface ProductIntent {
+  /** 需求描述（"我要 21.5 寸工业触摸屏"）。 */
+  need_description: string;
+  category?: string;
+  regions?: string[];
+  min_moq?: number;
+  max_moq?: number;
+  supports_customization?: boolean;
+  /** 预算提示（discovery hint，不对外精确披露——NetworkDisclosurePolicy 门）。 */
+  budget_hint?: string;
+  handoff_destination_types?: readonly string[];
+}
+
+/** listing → owner Agent resolution 的引用（CD #23：绑定 owner_agent_id，不复制 endpoint）。 */
+export interface ListingRef {
+  listing_id: string;
+  listing_type: "product" | "capability";
+  source_product_ref?: string;
+}
+
 /** Current-task hard constraints; private values may be Vault refs (§11.2). */
 export interface TaskConstraints {
   /** Per-unit budget ("单价预算 94 元"); the decision derives the total from it. */
@@ -223,6 +248,10 @@ export interface ProductCandidate {
   external_product_id: string;
   sku?: string;
   merchant_id?: string;
+  /** kiwi-catalog listing 引用（product-first 链路；shortlist 候选的来源锚点）。 */
+  listing_ref?: ListingRef;
+  /** owner Agent（listing.owner_agent_id；Direct A2A 的 catalogAgentId 输入）。 */
+  owner_agent_id?: string;
   canonical_key: string;
   eligibility: CandidateEligibility;
   candidate_status: CandidateStatus;

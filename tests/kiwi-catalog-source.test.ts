@@ -429,3 +429,84 @@ describe("AgentDiscovery.resolveViaCatalog with KiwiCatalogSource", () => {
     expect(results.map((r) => r.candidate.catalog_agent_id)).toEqual(["cagt_ok"]);
   });
 });
+
+/** listing 搜索响应桩（/v1/listings/search + /{id}；Kiwi 形状）。 */
+function listingFixture(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    listing: {
+      listing_id: "lst_01JABC",
+      listing_type: "product",
+      owner_agent_id: "cagt_01JABC",
+      merchant_id: "mrc_01JABC",
+      source_product_ref: "SKU-001",
+      title: "21.5 inch Industrial Touch Display",
+      category: "industrial-display",
+      listing_digest: "abc123",
+      publication_state: "ACTIVE",
+      listing_freshness_state: "FRESH",
+      published_at: "2026-08-07T00:00:00Z",
+      updated_at: "2026-08-07T00:00:00Z",
+      fresh_until: "2026-08-08T00:00:00Z",
+      ...(overrides.listing as Record<string, unknown> | undefined),
+    },
+    merchant: { merchant_id: "mrc_01JABC", display_name: "Acme Merchant" },
+    agent: {
+      catalog_agent_id: "cagt_01JABC",
+      verification_level: "commerce_verified",
+      freshness_state: "fresh",
+      administrative_state: "active",
+    },
+    listing_freshness_state: "FRESH",
+    authority: "discovery_projection",
+    requires_direct_confirmation: true,
+    ...(overrides.searchResult as Record<string, unknown> | undefined),
+  };
+}
+
+describe("KiwiCatalogSource listing methods (v0.4 / CD #22-#24)", () => {
+  it("searchListings parses results and keeps CD #24 constants", async () => {
+    const fetchImpl = (async (input: FetchInput): Promise<Response> => {
+      if (String(input).includes("/v1/listings/search")) {
+        return jsonResponse({ results: [listingFixture()], next_cursor: "" });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    }) as typeof fetch;
+    const source = new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl });
+    const results = await source.searchListings({ q: "touch", listing_type: "product" });
+    expect(results.length).toBe(1);
+    expect(results[0]?.authority).toBe("discovery_projection");
+    expect(results[0]?.requires_direct_confirmation).toBe(true);
+    expect(results[0]?.listing.owner_agent_id).toBe("cagt_01JABC");
+    expect(results[0]?.listing.source_product_ref).toBe("SKU-001");
+  });
+
+  it("searchListings rejects unknown query keys (fail-closed)", async () => {
+    const source = new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl: fetch });
+    await expect(source.searchListings({ mystery: "x" } as never)).rejects.toThrow("unknown");
+  });
+
+  it("searchListings rejects a result that violates the schema (private field)", async () => {
+    const bad = listingFixture({ searchResult: { floor_price: 100 } });
+    const fetchImpl = (async (input: FetchInput): Promise<Response> => {
+      if (String(input).includes("/v1/listings/search")) {
+        return jsonResponse({ results: [bad], next_cursor: "" });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    }) as typeof fetch;
+    const source = new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl });
+    await expect(source.searchListings({})).rejects.toMatchObject({ code: "contract_violation" });
+  });
+
+  it("getListing returns the record and validates it", async () => {
+    const fetchImpl = (async (input: FetchInput): Promise<Response> => {
+      if (String(input).includes("/v1/listings/")) {
+        return jsonResponse({ listing: listingFixture().listing });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    }) as typeof fetch;
+    const source = new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl });
+    const listing = await source.getListing("lst_01JABC");
+    expect(listing.listing_type).toBe("product");
+    await expect(source.getListing("")).rejects.toMatchObject({ code: "invalid_input" });
+  });
+});
