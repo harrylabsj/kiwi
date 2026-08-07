@@ -58,6 +58,7 @@ import { runInit } from "./supervisor/init.js";
 import { runDown, runStatus, runUp, SupervisorError } from "./supervisor/manage.js";
 import { parseLogLines, runLogs } from "./supervisor/logs.js";
 import { StackConfigError } from "./supervisor/stack-config.js";
+import { cmdProductDoctor, productHelp } from "./product-cli.js";
 
 const USAGE = `kiwi 0.6.0 — commerce negotiation agent runtime
 
@@ -82,6 +83,15 @@ Usage:
                                           /discover /negotiate /register in-session
   kiwi chat --profile <file> [--data-dir <dir>]
                                           Main conversation with Principal Memory (v0.3.0-A)
+
+Product layer (product-strategy rev1.1 §10/§19):
+  kiwi buyer --help                       Kiwi Buyer command tree
+  kiwi merchant --help                    Kiwi Merchant command tree
+  kiwi network --help                     Kiwi Network command tree
+  kiwi doctor                             Aggregate health: kiwi runtime +
+                                          shopping-cli presence + kiwi-catalog
+                                          reachability (no --profile needed)
+
   kiwi --version                          Print version
   kiwi --help                             This help
 
@@ -727,8 +737,72 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
   }
 }
 
+/**
+ * 产品层 buyer 命令树（rev1.1 §2.2/§19 D4）。
+ * - start = chat 别名（Buyer 对话入口，既有实现）；
+ * - init/search/tasks = D4 骨架（输出"尚未实现"提示，不假装可用）。
+ */
+async function routeBuyer(sub: string | undefined, args: ParsedArgs): Promise<number> {
+  if (sub === undefined) {
+    process.stdout.write(productHelp("buyer"));
+    return EXIT.OK;
+  }
+  if (sub === "start") return await cmdChat(args);
+  if (sub === "init") return notImplementedProduct("kiwi buyer init", "D4");
+  if (sub === "search") return notImplementedProduct("kiwi buyer search", "D4");
+  if (sub === "tasks") return notImplementedProduct("kiwi buyer tasks", "D4");
+  process.stderr.write(`unknown buyer command: ${sub}\n`);
+  return EXIT.CONFIG;
+}
+
+/**
+ * 产品层 merchant 命令树（rev1.1 §2.3/§19 D1-D3）。
+ * - start = agent serve 别名（Merchant A2A server + 注册 Kiwi Network）；
+ * - init/publish/listings/status/doctor = 骨架（对应 D1/D2/D3）。
+ */
+async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise<number> {
+  if (sub === undefined) {
+    process.stdout.write(productHelp("merchant"));
+    return EXIT.OK;
+  }
+  if (sub === "start") return await cmdAgentServe(args);
+  if (sub === "init") return notImplementedProduct("kiwi merchant init", "D1");
+  if (sub === "publish") return notImplementedProduct("kiwi merchant publish", "D2");
+  if (sub === "listings") return notImplementedProduct("kiwi merchant listings", "D2");
+  if (sub === "status") return notImplementedProduct("kiwi merchant status", "D1");
+  if (sub === "doctor") return notImplementedProduct("kiwi merchant doctor", "D3");
+  process.stderr.write(`unknown merchant command: ${sub}\n`);
+  return EXIT.CONFIG;
+}
+
+/** 产品层 network 命令树（rev1.1 §5）——Operator 面规划中，全部骨架。 */
+async function routeNetwork(sub: string | undefined): Promise<number> {
+  if (sub === undefined) {
+    process.stdout.write(productHelp("network"));
+    return EXIT.OK;
+  }
+  return notImplementedProduct(`kiwi network ${sub}`, "§5（Network Operator 面）");
+}
+
+function notImplementedProduct(name: string, target: string): number {
+  process.stderr.write(
+    `${name} 尚未实现（产品层完成定义 ${target}，见 docs/kiwi-product-layer-refactor-rev1.1.md §19）。\n`,
+  );
+  return EXIT.CONFIG;
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
-  if (argv.includes("--help") || argv.includes("-h")) {
+  const hasHelp = argv.includes("--help") || argv.includes("-h");
+  const firstArg = argv.find((a) => !a.startsWith("-"));
+  // 产品层命令组帮助优先于全局帮助（`kiwi buyer --help` → buyer 帮助）
+  if (hasHelp && (firstArg === "buyer" || firstArg === "merchant" || firstArg === "network")) {
+    const help = productHelp(firstArg);
+    if (help !== "") {
+      process.stdout.write(help);
+      return EXIT.OK;
+    }
+  }
+  if (hasHelp) {
     process.stdout.write(USAGE);
     return EXIT.OK;
   }
@@ -747,9 +821,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   try {
     // 裸 `kiwi`：直接进入 `kiwi>` 自由对话（默认 deepseek-v4-flash，模型可配置）。
     if (cmd === undefined) return await cmdChat(args);
-    if (cmd === "doctor") return await cmdDoctor(args);
+    // 产品层命令树（product-strategy rev1.1 §10/§19；别名保留旧命令）
+    if (cmd === "buyer") return await routeBuyer(sub, args);
+    if (cmd === "merchant") return await routeMerchant(sub, args);
+    if (cmd === "network") return await routeNetwork(sub);
+    if (cmd === "doctor") {
+      // 无 --profile → 三组件聚合健康（D0）；有 → 既有 profile doctor
+      return args.profile !== undefined ? await cmdDoctor(args) : await cmdProductDoctor();
+    }
     if (cmd === "agent" && sub === "run") return await cmdAgentRun(args);
-    if (cmd === "agent" && sub === "serve") return await cmdAgentServe(args);
+    if (cmd === "agent" && sub === "run") return await cmdAgentRun(args);
+    if (cmd === "agent" && sub === "serve") return await cmdAgentServe(args);  // 旧命令别名保留
     if (cmd === "tui") return await cmdTui(args);
     if (cmd === "chat") return await cmdChat(args);
     if (cmd === "init") {
