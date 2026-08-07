@@ -93,6 +93,7 @@ export {
 export {
   DESTINATION_TYPES,
   isDestinationType,
+  isUrlDestinationType,
   validateDestination,
   type Destination,
   type DestinationType,
@@ -158,3 +159,5 @@ export {
   type SafeDestinationUrl,
   type UrlSafetyOptions,
 } from "./url-safety.js";
+
+export { computeHandoffMetrics, type HandoffMetrics } from "./metrics.js";

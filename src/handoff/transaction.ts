@@ -43,7 +43,7 @@ import { foldCandidateLifecycle, transitionCandidateLifecycle } from "./lifecycl
 import type { HandoffEventStore } from "./ledger.js";
 import type { HandoffIdempotencyStore } from "./idempotency.js";
 import { validateExternalDestinationUrl, type SafeDestinationUrl } from "./url-safety.js";
-import type { DestinationType } from "./destination.js";
+import { isUrlDestinationType, type DestinationType } from "./destination.js";
 
 /** TransactionHandoff（KTH rev0.3 §6）。不可变；digest 覆盖全部内容。 */
 export interface TransactionHandoff {
@@ -168,7 +168,9 @@ export async function executeHandoff(input: ExecuteHandoffInput): Promise<Execut
     return { kind: "expired", reason: "candidate expired before execution" };
   }
   let finalUrl: string | undefined;
-  if (input.urlSafety !== undefined) {
+  // URL 安全只适用于 URL 承载类目的地（quote/PO/contact 等 opaque ref
+  // 不做 URL 探测——它们不是可点击链接，KTH §7 类型语义）。
+  if (input.urlSafety !== undefined && isUrlDestinationType(candidate.destination_type)) {
     try {
       const safe = await input.urlSafety(candidate.destination_ref);
       finalUrl = safe.finalUrl;
