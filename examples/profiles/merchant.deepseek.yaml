@@ -1,0 +1,32 @@
+# Merchant profile — real model (deepseek-v4-flash) against a local shopping-cli.
+# Requires: SHOPPING_AGENT_TOKEN set (agent token for merchant-001) 与
+# DEEPSEEK_API_KEY 环境变量（模型 key，可从 Hermes 环境继承）。
+runtime_version: 0.5.0
+protocol_version: shopping.negotiation/0.1
+agent_id: merchant-agent:merchant-001
+role: merchant
+owner_id: merchant-001
+commerce:
+  base_url: http://127.0.0.1:8765
+  token_env: SHOPPING_AGENT_TOKEN
+  backend: local_marketplace
+model:
+  provider: deepseek
+  model: deepseek-v4-flash
+  api_key_env: DEEPSEEK_API_KEY
+runtime:
+  mode: once
+  poll_interval_seconds: 5
+  turn_timeout_seconds: 90
+  max_model_steps: 4
+  max_retries: 2
+merchant_policy:
+  min_unit_price_private: 80.00
+  max_auto_discount_percent: 10
+  inventory_source: marketplace
+  quote_ttl_seconds: 300
+  auto_negotiate: true
+  human_review_on:
+    - below_floor
+    - exceptional_warranty
+    - suspicious_content
