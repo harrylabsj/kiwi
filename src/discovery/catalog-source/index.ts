@@ -27,6 +27,7 @@ export type { CatalogSourceDeps } from "./source.js";
 export { KiwiCatalogSource } from "./kiwi-source.js";
 export { CatalogSourceError } from "./errors.js";
 export type { CatalogSourceErrorCode } from "./errors.js";
+export { validateCatalogAgentRecord, validateListingRecord, validateListingSearchResult } from "./kiwi-schema.js";
 export {
   normalizeCatalogAgent,
   type AdministrativeState,
@@ -34,6 +35,15 @@ export {
   type CatalogSkill,
   type FreshnessState,
   type KiwiCatalogSearchQuery,
+  type KiwiListingSearchQuery,
+  type ListingAgentProjection,
+  type ListingFreshnessState,
+  type ListingMatch,
+  type ListingMerchantSummary,
+  type ListingRecord,
+  type ListingSearchResult,
+  type ListingType,
+  type PublicationState,
   type VerificationLevel,
 } from "./kiwi-record.js";
 export {

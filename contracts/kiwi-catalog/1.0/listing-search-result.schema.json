@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "listing-search-result.schema.json",
+  "title": "kiwi-catalog listing search result",
+  "description": "kiwi-catalog /v1/listings/search 的单个结果形状（产品文档 kiwi-catalog v0.4 §9）。同时返回“商品/能力”与“谁可以被联系”：listing（$ref listing-record）+ merchant/agent 投影。authority 恒为 discovery_projection、requires_direct_confirmation 恒为 true（v0.4 CD #24）：Catalog 只负责召回，Merchant Agent 负责确认；hint 永不视为 Offer/库存预留（v0.4 §3 Source of Truth Boundary）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "listing",
+    "merchant",
+    "agent",
+    "listing_freshness_state",
+    "authority",
+    "requires_direct_confirmation"
+  ],
+  "properties": {
+    "listing": { "$ref": "listing-record.schema.json" },
+    "merchant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["merchant_id", "display_name"],
+      "properties": {
+        "merchant_id": { "type": "string", "minLength": 1 },
+        "display_name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "agent": {
+      "description": "owner Agent 当前投影（join 自 catalog_agents）；Buyer 后续按 owner_agent_id → getRecord → fresh verify，本投影不复制 A2A endpoint（v0.4 §11）",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "catalog_agent_id",
+        "verification_level",
+        "freshness_state",
+        "administrative_state"
+      ],
+      "properties": {
+        "catalog_agent_id": { "type": "string", "minLength": 1 },
+        "verification_level": {
+          "enum": ["discovered", "profile_valid", "domain_verified", "agent_verified", "commerce_verified"]
+        },
+        "freshness_state": { "enum": ["fresh", "stale", "unreachable"] },
+        "administrative_state": { "enum": ["active", "suspended", "rejected"] }
+      }
+    },
+    "listing_freshness_state": { "enum": ["FRESH", "STALE"] },
+    "authority": { "enum": ["discovery_projection"] },
+    "requires_direct_confirmation": { "const": true },
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "matched_category": { "type": "boolean" },
+        "matched_region": { "type": "boolean" },
+        "matched_brand": { "type": "boolean" },
+        "score": { "type": "number" }
+      }
+    }
+  }
+}

@@ -5,9 +5,10 @@ Kiwi A2A Agent Commerce Runtime：Buyer/Merchant Agent 跨运行时直接发现�
 Handoff（KTH/0.1）安全交给外部成交入口。
 
 - **v1.0 已发布**（27/27 完成定义，2026-08-07）。
-- **v1.1 为 Draft**（Handoff + 产品拆分，21/21 完成定义已直接实证——见
-  `docs/reviews/kiwi-commerce-v1.1-readiness-audit-2026-08-07.md`；不宣布发布，
-  不宣称第三方互操作证据）。
+- **v1.1 为 Draft**（Handoff + 产品拆分；rev1.4.1 基线 21/21 完成定义已直接实证
+  ——见 `docs/reviews/kiwi-commerce-v1.1-readiness-audit-2026-08-07.md`；rev1.5 新增
+  CD #22–28（Product-first Discovery）尚未进入该 audit；不宣布发布，不宣称第三方
+  互操作证据）。
 
 ## 文档地图
 
@@ -15,9 +16,12 @@ Handoff（KTH/0.1）安全交给外部成交入口。
   `doc_revision` / 产品版本 / git commit-tag / 该清单共同决定文档身份。
 - 已发布权威：`docs/kiwi-a2a-architecture-baseline.md`（rev1.2）、
   `docs/protocol/kiwi-negotiation-protocol-1.0.md`。
-- v1.1 当前草稿：`docs/kiwi-commerce-v1.1-architecture-draft-rev1.4.1.md`（§42 =
-  完成定义 21 条）、`docs/products/*`、`docs/protocol/kiwi-transaction-handoff-0.1-rev0.3.md`、
-  `docs/testing/kiwi-commerce-v1.1-test-plan-v0.2.md`。
+- v1.1 当前草稿：`docs/kiwi-commerce-v1.1-architecture-draft-rev1.5.md`（§42 =
+  完成定义 28 条，#1–21 已实证、#22–28 为 Product-first 新增）、
+  `docs/products/kiwi-catalog-product-architecture-v0.4.md`、
+  `docs/products/shopping-cli-commerce-data-hub-v0.3.md`、
+  `docs/protocol/kiwi-transaction-handoff-0.1-rev0.3.md`、
+  `docs/testing/kiwi-commerce-v1.1-test-plan-v0.3.md`。
 - 评审/审计文档统一在 `docs/reviews/`；路径引用按仓库根相对（如
   `docs/reviews/…`）。
 

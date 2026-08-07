@@ -12,12 +12,12 @@ docs/protocol/kiwi-negotiation-protocol-1.0.md
 ## Current v1.1 Draft
 
 ```text
-docs/kiwi-commerce-v1.1-architecture-draft-rev1.4.1.md
-docs/products/kiwi-catalog-product-architecture-v0.3.md
-docs/products/shopping-cli-commerce-data-hub-v0.2.1.md
+docs/kiwi-commerce-v1.1-architecture-draft-rev1.5.md
+docs/products/kiwi-catalog-product-architecture-v0.4.md
+docs/products/shopping-cli-commerce-data-hub-v0.3.md
 docs/protocol/kiwi-negotiation-protocol-1.0-rev1.4.md
 docs/protocol/kiwi-transaction-handoff-0.1-rev0.3.md
-docs/testing/kiwi-commerce-v1.1-test-plan-v0.2.md
+docs/testing/kiwi-commerce-v1.1-test-plan-v0.3.md
 ```
 
 ## Version identity
@@ -32,8 +32,9 @@ docs/testing/kiwi-commerce-v1.1-test-plan-v0.2.md
 
 ## Implementation status (2026-08-07)
 
-- v1.1 completion definition: **21/21 directly evidenced** (readiness audit:
-  `docs/reviews/kiwi-commerce-v1.1-readiness-audit-2026-08-07.md`).
+- v1.1 completion definition: **CD #1–21 evidenced** (rev1.4.1 baseline,
+  readiness audit: `docs/reviews/kiwi-commerce-v1.1-readiness-audit-2026-08-07.md`).
+  rev1.5 新增 CD #22–28（Product-first Discovery）尚未进入该 audit。
 - New CLI: `kiwi catalog serve` (standalone kiwi-catalog service),
   `kiwi metrics --dir <agent-dir>` (KTH metrics).
 - New chat TUI commands: `/handoff`, `/handoff-launch <handoff_id> <negotiation_id>`,

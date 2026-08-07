@@ -36,6 +36,7 @@ import type { ExecuteHandoffResult } from "../../handoff/index.js";
 import { contentDigest } from "../../negotiation/jcs.js";
 import type { AgentProfile } from "../../config/profile.js";
 import type { CommerceClient } from "../../commerce/types.js";
+import type { KiwiCatalogSource } from "../../discovery/catalog-source/index.js";
 import type { CommerceConnector } from "../connector/types.js";
 import type { AgentMode } from "../mode.js";
 import type { WriteApprovalCandidateStore } from "../merchant/action-candidate.js";
@@ -208,6 +209,12 @@ export interface BuyerToolDeps {
   registerPending?: WriteGateDeps["registerPending"];
   /** agent catalog base URL（`negotiate_buyer_task` 的 A2A 商家发现用）。 */
   catalog?: string;
+  /**
+   * kiwi-catalog listing 源（rev1.5 CD #27 Product-first）。注入时挂载
+   * `search_listings` / `shortlist_listing` 工具；缺失时工具不挂载
+   * （fail-closed，legacy marketplace 搜索路径不变）。
+   */
+  catalogSource?: KiwiCatalogSource;
   /**
    * 磋商结果写记忆（kernel 注入，复用 recordNegotiation 的 remember 形状）。
    * 记忆是尽力而为：失败不影响任务推进。
@@ -1299,6 +1306,131 @@ const handoffAgreement: Tool = {
   },
 };
 
+  const searchListings: Tool = {
+    name: "search_listings",
+    label: "搜索商品/能力 Listing",
+    description:
+      "在 kiwi-catalog 按商品/能力意图搜索 Listing（rev1.5 CD #27）。返回 discovery " +
+      "projection（authority=discovery_projection、requires_direct_confirmation=true）：" +
+      "报价/库存必须联系 owner Agent 确认。",
+    parameters: {
+      type: "object",
+      properties: {
+        need_description: { type: "string", description: "需求描述（q）" },
+        category: { type: "string" },
+        region: { type: "string" },
+        listing_type: { type: "string", enum: ["product", "capability"] },
+        min_moq: { type: "integer" },
+        max_moq: { type: "integer" },
+        limit: { type: "integer" },
+      },
+      additionalProperties: false,
+    },
+    execute: async (_id, params) => {
+      const source = deps.catalogSource;
+      if (source === undefined) {
+        return textResult(errorText(new Error("kiwi-catalog listing 源未配置（工具不应被挂载）")));
+      }
+      try {
+        const p = params as Record<string, unknown>;
+        const results = await source.searchListings({
+          ...(typeof p.need_description === "string" ? { q: p.need_description } : {}),
+          ...(typeof p.category === "string" ? { category: p.category } : {}),
+          ...(typeof p.region === "string" ? { region: p.region } : {}),
+          ...(p.listing_type === "product" || p.listing_type === "capability"
+            ? { listing_type: p.listing_type }
+            : {}),
+          ...(typeof p.min_moq === "number" ? { min_moq: p.min_moq } : {}),
+          ...(typeof p.max_moq === "number" ? { max_moq: p.max_moq } : {}),
+          ...(typeof p.limit === "number" ? { limit: p.limit } : {}),
+        });
+        const rows = results.map((r) => ({
+          listing_id: r.listing.listing_id,
+          listing_type: r.listing.listing_type,
+          title: r.listing.title,
+          category: r.listing.category,
+          merchant: r.merchant.display_name,
+          owner_agent_id: r.agent.catalog_agent_id,
+          owner_verification: r.agent.verification_level,
+          commercial_hints: r.listing.commercial_hints ?? {},
+          listing_freshness_state: r.listing.listing_freshness_state,
+          authority: r.authority,
+          requires_direct_confirmation: r.requires_direct_confirmation,
+        }));
+        return textResult(JSON.stringify(rows), { count: rows.length });
+      } catch (err) {
+        return textResult(errorText(err));
+      }
+    },
+  };
+
+  const shortlistListing: Tool = {
+    name: "shortlist_listing",
+    label: "入选 Listing",
+    description:
+      "把一个 Listing 写入任务候选并标记 shortlisted（供 negotiate_buyer_task 使用）。" +
+      "Listing 是 discovery projection，真正询价时传 owner_agent_id 给 negotiate_buyer_task。",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: { type: "string" },
+        listing_id: { type: "string" },
+        owner_agent_id: { type: "string" },
+        title: { type: "string" },
+        sku: { type: "string" },
+      },
+      required: ["task_id", "listing_id", "owner_agent_id"],
+      additionalProperties: false,
+    },
+    execute: async (_id, params) => {
+      try {
+        const p = params as {
+          task_id: string;
+          listing_id: string;
+          owner_agent_id: string;
+          title?: string;
+          sku?: string;
+        };
+        const task = store.getTask(p.task_id);
+        if (task === undefined) throw new BuyerTaskError("not_found", `no task ${p.task_id}`);
+        const candidate = store.upsertCandidate({
+          task_id: p.task_id,
+          connector_id: "kiwi-catalog",
+          platform: "kiwi-catalog",
+          external_product_id: p.listing_id,
+          sku: p.sku,
+        });
+        store.updateCandidate(candidate.candidate_id, {
+          candidate_status: "shortlisted",
+          eligibility: "eligible",
+        });
+        store.appendEvent(
+          p.task_id,
+          "candidate_shortlisted",
+          {
+            candidate_id: candidate.candidate_id,
+            listing_id: p.listing_id,
+            owner_agent_id: p.owner_agent_id,
+            listing_title: p.title ?? null,
+            source: "kiwi-catalog",
+          },
+          "model",
+          `shortlist:${p.task_id}:${p.listing_id}:${uuidv7()}`,
+        );
+        return textResult(
+          JSON.stringify({
+            candidate_id: candidate.candidate_id,
+            task_id: p.task_id,
+            status: "shortlisted",
+            owner_agent_id: p.owner_agent_id,
+          }),
+        );
+      } catch (err) {
+        return textResult(errorText(err));
+      }
+    },
+  };
+
   return [
     searchProducts,
     getProduct,
@@ -1312,6 +1444,7 @@ const handoffAgreement: Tool = {
     selectNonbinding,
     startConsultation,
     negotiateBuyerTask,
+    ...(deps.catalogSource !== undefined ? [searchListings, shortlistListing] : []),
     ...(deps.handoff !== undefined ? [handoffAgreement] : []),
     ...negotiationTools,
   ];

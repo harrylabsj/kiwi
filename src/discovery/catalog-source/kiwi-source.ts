@@ -36,11 +36,14 @@
 import { CatalogSourceError } from "./errors.js";
 import { validateBaseUrl } from "./source.js";
 import type { CatalogSourceDeps } from "./source.js";
-import { validateCatalogAgentRecord } from "./kiwi-schema.js";
+import { validateCatalogAgentRecord, validateListingRecord, validateListingSearchResult } from "./kiwi-schema.js";
 import {
   normalizeCatalogAgent,
   type CatalogAgentRecord,
   type KiwiCatalogSearchQuery,
+  type KiwiListingSearchQuery,
+  type ListingRecord,
+  type ListingSearchResult,
 } from "./kiwi-record.js";
 import type { CandidateAgent } from "./types.js";
 
@@ -57,6 +60,24 @@ const KIWI_SEARCH_QUERY_KEYS: readonly string[] = [
   "freshness_state",
   "administrative_state",
   "handoff_destination_types",
+  "limit",
+  "cursor",
+];
+
+/** listing 搜索查询键白名单（v0.4 §8；未知键 fail-closed invalid_input）。 */
+const KIWI_LISTING_SEARCH_QUERY_KEYS: readonly string[] = [
+  "q",
+  "listing_type",
+  "category",
+  "brand",
+  "region",
+  "tag",
+  "min_moq",
+  "max_moq",
+  "supports_bulk_quote",
+  "supports_customization",
+  "freshness_state",
+  "handoff_destination_type",
   "limit",
   "cursor",
 ];
@@ -222,4 +243,91 @@ export class KiwiCatalogSource {
     const record = await this.getRecord(catalogAgentId);
     return normalizeCatalogAgent(record);
   }
+
+  /** 搜索 listing（v0.4 §8；rev1.5 CD #22/#24）。分页完整拉取，跨页去重。 */
+  async searchListings(query: KiwiListingSearchQuery = {}): Promise<ListingSearchResult[]> {
+    const results: ListingSearchResult[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_SEARCH_PAGES; page++) {
+      const qs = buildListingSearchQuery({ ...query, ...(cursor !== undefined ? { cursor } : {}) });
+      const raw = await this.getJson(`/v1/listings/search${qs.length > 0 ? `?${qs}` : ""}`);
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        throw new CatalogSourceError(
+          "response_invalid",
+          "kiwi-catalog listings search response must be a JSON object",
+        );
+      }
+      const body = raw as Record<string, unknown>;
+      if (!Array.isArray(body.results)) {
+        throw new CatalogSourceError(
+          "response_invalid",
+          'kiwi-catalog listings search response is missing array field "results"',
+        );
+      }
+      for (const element of body.results) {
+        const result = validateListingSearchResult(element);
+        if (seen.has(result.listing.listing_id)) continue;
+        seen.add(result.listing.listing_id);
+        results.push(result);
+      }
+      const next = body.next_cursor;
+      if (typeof next !== "string" || next === "") break;
+      cursor = next;
+    }
+    return results;
+  }
+
+  /** 按 listing_id 取单个 listing record（publisher 自查/详情）。 */
+  async getListing(listingId: string): Promise<ListingRecord> {
+    if (typeof listingId !== "string" || listingId.length === 0) {
+      throw new CatalogSourceError("invalid_input", "listingId must be a non-empty string");
+    }
+    const raw = await this.getJson(`/v1/listings/${encodeURIComponent(listingId)}`);
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new CatalogSourceError("response_invalid", "kiwi-catalog get listing response must be an object");
+    }
+    const body = raw as Record<string, unknown>;
+    if (body.listing === undefined) {
+      throw new CatalogSourceError("response_invalid", 'kiwi-catalog get listing is missing field "listing"');
+    }
+    return validateListingRecord(body.listing);
+  }
+}
+
+/**
+ * 序列化 listing 搜索查询。未知键 → invalid_input（fail-closed，不静默丢弃）；
+ * attribute.<path> 过滤键允许（v0.4 §8 attribute filters）。
+ */
+function buildListingSearchQuery(query: KiwiListingSearchQuery): string {
+  for (const key of Object.keys(query)) {
+    if (!KIWI_LISTING_SEARCH_QUERY_KEYS.includes(key)) {
+      throw new CatalogSourceError("invalid_input", `unknown kiwi-catalog listing search query key: "${key}"`);
+    }
+  }
+  if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit <= 0)) {
+    throw new CatalogSourceError(
+      "invalid_input",
+      `kiwi-catalog listing search limit must be a positive integer (got ${query.limit})`,
+    );
+  }
+  const entries: Array<[string, string]> = [];
+  const push = (key: string, value: string | number | boolean | undefined): void => {
+    if (value !== undefined) entries.push([key, String(value)]);
+  };
+  push("q", query.q);
+  push("listing_type", query.listing_type);
+  push("category", query.category);
+  push("brand", query.brand);
+  push("region", query.region);
+  push("tag", query.tag);
+  push("min_moq", query.min_moq);
+  push("max_moq", query.max_moq);
+  push("supports_bulk_quote", query.supports_bulk_quote);
+  push("supports_customization", query.supports_customization);
+  push("freshness_state", query.freshness_state);
+  push("handoff_destination_type", query.handoff_destination_type);
+  if (query.limit !== undefined) push("limit", query.limit);
+  push("cursor", query.cursor);
+  return new URLSearchParams(entries).toString();
 }

@@ -99,6 +99,109 @@ export interface KiwiCatalogSearchQuery
   cursor?: string;
 }
 
+/** listing 类型（v0.4 §4/§5；词表单一来源见 listing-record.schema.json）。 */
+export type ListingType = "product" | "capability";
+
+/** Listing 发布状态（v0.4 §7.1；大写，与 Agent 域小写 administrative_state 拼写区分）。 */
+export type PublicationState = "ACTIVE" | "WITHDRAWN" | "SUSPENDED";
+
+/** Listing 新鲜度（v0.4 §7.2；FRESH/STALE 两态，独立于 Agent freshness 三态）。 */
+export type ListingFreshnessState = "FRESH" | "STALE";
+
+/**
+ * kiwi-catalog ListingRecord —— /v1/listings wire 形状的 TS 投影（v0.4 §4/§5）。
+ *
+ * public-only discovery projection：不得携带 cost / floor price / 私有库存 /
+ * 凭据（v0.4 §4.2）。`listing_freshness_state` 与 `owner_agent_id` 的 Agent
+ * `freshness_state` 是两套独立状态（v0.4 §7.2）；CapabilityListing 不携带
+ * `handoff_destination_types`。
+ */
+export interface ListingRecord {
+  readonly listing_id: string;
+  readonly listing_type: ListingType;
+  readonly owner_agent_id: string;
+  readonly merchant_id: string;
+  readonly source_product_ref?: string;
+  readonly source_revision?: string;
+  readonly title: string;
+  readonly summary?: string;
+  readonly category: string;
+  readonly brand?: string;
+  readonly attributes?: Readonly<Record<string, string | number | boolean>>;
+  readonly regions?: readonly string[];
+  readonly tags?: readonly string[];
+  readonly commercial_hints?: Readonly<{
+    moq?: number;
+    price_range_hint?: string;
+    availability_hint?: string;
+    lead_time_hint?: string;
+    supports_bulk_quote?: boolean;
+    supports_customization?: boolean;
+    fulfillment_regions?: readonly string[];
+  }>;
+  readonly handoff_destination_types?: readonly DestinationType[];
+  readonly listing_digest: string;
+  readonly publication_state: PublicationState;
+  readonly listing_freshness_state: ListingFreshnessState;
+  readonly published_at: string;
+  readonly updated_at: string;
+  readonly fresh_until: string;
+}
+
+/** 搜索结果中的 merchant 投影（v0.4 §9）。 */
+export interface ListingMerchantSummary {
+  readonly merchant_id: string;
+  readonly display_name: string;
+}
+
+/** 搜索结果中的 owner Agent 投影（join 自 catalog_agents；不复制 endpoint）。 */
+export interface ListingAgentProjection {
+  readonly catalog_agent_id: string;
+  readonly verification_level: VerificationLevel;
+  readonly freshness_state: FreshnessState;
+  readonly administrative_state: AdministrativeState;
+}
+
+/** match/reason 字段（v0.4 §9，optional）。 */
+export interface ListingMatch {
+  readonly matched_category?: boolean;
+  readonly matched_region?: boolean;
+  readonly matched_brand?: boolean;
+  readonly score?: number;
+}
+
+/** /v1/listings/search 单个结果（v0.4 §9；authority/requires_direct_confirmation 恒值）。 */
+export interface ListingSearchResult {
+  readonly listing: ListingRecord;
+  readonly merchant: ListingMerchantSummary;
+  readonly agent: ListingAgentProjection;
+  readonly listing_freshness_state: ListingFreshnessState;
+  readonly authority: "discovery_projection";
+  readonly requires_direct_confirmation: true;
+  readonly match?: ListingMatch;
+}
+
+/**
+ * kiwi-catalog listing 搜索查询（v0.4 §8 query 面；词表单一来源）。
+ * 与 KiwiCatalogSearchQuery 分离：listing 面有自己的键集与 JSON1 结构化过滤。
+ */
+export interface KiwiListingSearchQuery {
+  q?: string;
+  listing_type?: ListingType;
+  category?: string;
+  brand?: string;
+  region?: string;
+  tag?: string;
+  min_moq?: number;
+  max_moq?: number;
+  supports_bulk_quote?: boolean;
+  supports_customization?: boolean;
+  freshness_state?: ListingFreshnessState;
+  handoff_destination_type?: DestinationType;
+  limit?: number;
+  cursor?: string;
+}
+
 /** 折叠优先级：行政 > 可达性 > 新鲜度 > 验证级别。 */
 function foldVerificationStatus(
   level: VerificationLevel,

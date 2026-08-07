@@ -318,8 +318,9 @@ export async function startTestA2aStack(
   const addr = httpServer.address() as { port: number };
   holder.baseUrl = `http://127.0.0.1:${addr.port}`;
 
+  const catalogAgentId = options.catalogAgentId ?? "cagt_test_merchant_001";
   const candidate = {
-    catalog_agent_id: options.catalogAgentId ?? "cagt_test_merchant_001",
+    catalog_agent_id: catalogAgentId,
     merchant: { id: "merchant-001", name: "Test Merchant", domain: "test.example" },
     discovery: { agent_card_url: `${holder.baseUrl}/.well-known/agent-card.json` },
     protocols: { a2a: ["1.0.0"] },
@@ -327,6 +328,51 @@ export async function startTestA2aStack(
     verification: { status: "discovered", last_verified_at: NOW },
     hosting: { mode: "direct_only" },
     contract: { name: "candidate-agent", version: "1.0" },
+  };
+  // Kiwi 形状 agent record（agent-record.schema.json；KiwiCatalogSource 消费）
+  const agentRecord = {
+    catalog_agent_id: catalogAgentId,
+    principal_type: "merchant",
+    merchant_id: "merchant-001",
+    display_name: "Test Merchant",
+    canonical_domain: "test.example",
+    agent_card_url: `${holder.baseUrl}/.well-known/agent-card.json`,
+    hosting_mode: "direct_only",
+    verification_level: "commerce_verified",
+    freshness_state: "fresh",
+    administrative_state: "active",
+    created_at: NOW,
+    updated_at: NOW,
+  };
+  // listing stub（/v1/listings/search + /{id}；authority/requires_direct_confirmation 恒值
+  // 必须与 listing-search-result.schema.json 一致——测试内过 validateListingSearchResult）
+  const listingSearchResult = {
+    listing: {
+      listing_id: "lst_test_001",
+      listing_type: "product",
+      owner_agent_id: catalogAgentId,
+      merchant_id: "merchant-001",
+      source_product_ref: "sku-001",
+      title: "Test Product Sku-001",
+      category: "test-category",
+      listing_digest: "test-digest",
+      publication_state: "ACTIVE",
+      listing_freshness_state: "FRESH",
+      published_at: NOW,
+      updated_at: NOW,
+      fresh_until: "2099-01-01T00:00:00Z",
+      commercial_hints: { moq: 50, supports_bulk_quote: true },
+    },
+    merchant: { merchant_id: "merchant-001", display_name: "Test Merchant" },
+    agent: {
+      catalog_agent_id: catalogAgentId,
+      verification_level: "commerce_verified",
+      freshness_state: "fresh",
+      administrative_state: "active",
+    },
+    listing_freshness_state: "FRESH",
+    authority: "discovery_projection",
+    requires_direct_confirmation: true,
   };
   const catalog = http.createServer((req, res) => {
     res.setHeader("content-type", "application/json");
@@ -337,6 +383,22 @@ export async function startTestA2aStack(
     }
     if (url.includes("/v1/agent-catalog/agents/")) {
       res.end(JSON.stringify({ catalog_agent: candidate }));
+      return;
+    }
+    if (url.includes("/v1/listings/search")) {
+      res.end(JSON.stringify({ results: [listingSearchResult], next_cursor: "" }));
+      return;
+    }
+    if (url.includes("/v1/listings/")) {
+      res.end(JSON.stringify({ listing: listingSearchResult.listing }));
+      return;
+    }
+    if (url.includes("/v1/agents/search")) {
+      res.end(JSON.stringify({ results: [agentRecord], next_cursor: "" }));
+      return;
+    }
+    if (url.includes("/v1/agents/")) {
+      res.end(JSON.stringify({ agent: agentRecord }));
       return;
     }
     res.statusCode = 404;

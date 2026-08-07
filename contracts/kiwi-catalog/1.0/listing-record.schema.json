@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "listing-record.schema.json",
+  "title": "kiwi-catalog listing record",
+  "description": "kiwi-catalog /v1/listings 的 ListingRecord wire 形状（产品文档 kiwi-catalog v0.4 §4/§5/§9）。public-only discovery projection：不得携带 merchant cost / floor price / 私有库存 / 凭据 / 客户数据（v0.4 §4.2 Forbidden Fields）。listing freshness 与 Agent freshness 分离：本 schema 用大写 listing_freshness_state（FRESH/STALE），与 agent-record 的小写 freshness_state（fresh/stale/unreachable）拼写区分，禁止混用。CapabilityListing 不得虚构 SKU，也不携带 handoff_destination_types。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "listing_id",
+    "listing_type",
+    "owner_agent_id",
+    "merchant_id",
+    "title",
+    "category",
+    "listing_digest",
+    "publication_state",
+    "listing_freshness_state",
+    "published_at",
+    "updated_at",
+    "fresh_until"
+  ],
+  "if": {
+    "properties": { "listing_type": { "const": "product" } },
+    "required": ["listing_type"]
+  },
+  "then": { "required": ["source_product_ref"] },
+  "else": {
+    "not": { "required": ["handoff_destination_types"] }
+  },
+  "properties": {
+    "listing_id": { "type": "string", "pattern": "^lst_" },
+    "listing_type": { "enum": ["product", "capability"] },
+    "owner_agent_id": { "type": "string", "minLength": 1 },
+    "merchant_id": { "type": "string", "minLength": 1 },
+    "source_product_ref": { "type": "string", "minLength": 1 },
+    "source_revision": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "summary": { "type": "string" },
+    "category": { "type": "string", "minLength": 1 },
+    "brand": { "type": "string", "minLength": 1 },
+    "attributes": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "number", "boolean"] },
+      "maxProperties": 64
+    },
+    "regions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "tags": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "commercial_hints": {
+      "description": "discovery hints，不是 KNP Offer（v0.4 §4.1）；authority 仍在 Direct A2A 阶段确认",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "moq": { "type": "integer", "minimum": 1 },
+        "price_range_hint": { "type": "string", "minLength": 1 },
+        "availability_hint": { "type": "string", "minLength": 1 },
+        "lead_time_hint": { "type": "string", "minLength": 1 },
+        "supports_bulk_quote": { "type": "boolean" },
+        "supports_customization": { "type": "boolean" },
+        "fulfillment_regions": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "handoff_destination_types": {
+      "description": "仅 ProductListing 允许；精确 KTH destination_type 词表（单一来源，禁止 supports_* 平行词表）",
+      "type": "array",
+      "items": {
+        "enum": [
+          "ucp_checkout",
+          "ucp_order",
+          "external_checkout_url",
+          "merchant_checkout_session",
+          "platform_deep_link",
+          "buyer_erp_request",
+          "procurement_request",
+          "purchase_order_draft",
+          "quote_document",
+          "merchant_contact",
+          "sales_handoff"
+        ]
+      }
+    },
+    "listing_digest": { "type": "string", "minLength": 1 },
+    "publication_state": { "enum": ["ACTIVE", "WITHDRAWN", "SUSPENDED"] },
+    "listing_freshness_state": { "enum": ["FRESH", "STALE"] },
+    "published_at": { "type": "string", "minLength": 1 },
+    "updated_at": { "type": "string", "minLength": 1 },
+    "fresh_until": { "type": "string", "minLength": 1 }
+  }
+}
