@@ -20,6 +20,16 @@ docs/protocol/kiwi-transaction-handoff-0.1-rev0.3.md
 docs/testing/kiwi-commerce-v0.7.0-test-plan-v0.3.md
 ```
 
+## Product Strategy（非协议，独立版本）
+
+```text
+docs/kiwi-product-layer-refactor-rev1.1.md
+```
+
+- rev1.1 完成定义 D0–D4（统一 CLI / merchant init / publish 编排 /
+  doctor 聚合 / buyer 命令面），实施顺序与"明确不做"见 §19。
+- 文档版本独立于产品版本（v0.6.0 released / v0.7.0 draft）。
+
 ## Version identity
 
 - File mtime is NOT a version authority.
