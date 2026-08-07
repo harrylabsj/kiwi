@@ -10,10 +10,8 @@ scope: Pre-transaction Agent-to-Agent commerce negotiation
 
 # Kiwi Negotiation Protocol 1.0
 
-**A2A v1.0 已宣布（2026-08-07）**：基线 §41 完成定义 26/26 经就绪度审计实证满足。
+**A2A v1.0 已宣布（2026-08-07）**：基线 §41 完成定义 27/27 经就绪度审计实证满足。
 namespace 与 schema 托管于 `https://kiwi.harrylabsj.com`（公开仓库 `harrylabsj/kiwi-spec`）。
-
-# Kiwi Negotiation Protocol 1.0
 
 ## 1. Status of This Specification
 
@@ -1356,4 +1354,4 @@ KNP/1.0 relies on, but does not redefine:
 - RFC 8785 JSON Canonicalization Scheme;
 - SHA-256.
 
-The public KNP capability namespace and HTTPS specification origin MUST be replaced with a Kiwi-owned production authority before public interoperability release.
+The public KNP capability namespace and HTTPS specification origin are hosted at the Kiwi-owned production authority `https://kiwi.harrylabsj.com` (live since 2026-08-06).
