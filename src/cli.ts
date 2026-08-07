@@ -74,8 +74,9 @@ Usage:
   kiwi doctor --profile <file>            Read-only diagnostics (no writes)
   kiwi agent run --profile <file> --once  Run one negotiation turn, then exit
   kiwi agent run --profile <file>         Foreground serial polling (SIGINT/SIGTERM to stop)
-  kiwi agent serve --profile <file> [--catalog <url>] [--port N]
+  kiwi agent serve --profile <file> [--catalog <url>] [--port N] [--no-chat]
                                           Run a merchant A2A server + register in kiwi-catalog
+                                          (default: also opens the kiwi> conversation)
   kiwi tui --profile <file> [--data-dir <dir>]
                                           Interactive operator TUI (supervised by default;
                                           approves candidates before any formal submit)
@@ -102,6 +103,7 @@ interface ParsedArgs {
   fake: boolean;
   catalog?: string;
   port?: number;
+  noChat: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -115,6 +117,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let port: number | undefined;
   let once = false;
   let fake = false;
+  let noChat = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--profile") {
@@ -135,6 +138,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       once = true;
     } else if (arg === "--fake") {
       fake = true;
+    } else if (arg === "--no-chat") {
+      noChat = true;
     } else if (arg !== undefined && arg.startsWith("--profile=")) {
       profile = arg.slice("--profile=".length);
     } else if (arg !== undefined && arg.startsWith("--dir=")) {
@@ -151,7 +156,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       throw new ProfileError(`Unknown argument: ${arg ?? ""}`);
     }
   }
-  const out: ParsedArgs = { command, once, fake };
+  const out: ParsedArgs = { command, once, fake, noChat };
   if (profile !== undefined) out.profile = profile;
   if (dir !== undefined) out.dir = dir;
   if (lines !== undefined) out.lines = lines;
@@ -435,17 +440,50 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
     );
   }
 
+  // --no-chat 或非交互 stdin（后台/重定向）：仅 A2A server 常驻，不进入对话。
+  // （后台运行时 chat 会因 stdin EOF 立即结束并连带关闭 server——必须跳过。）
+  if (args.noChat === true || process.stdin.isTTY !== true) {
+    const shutdown = async (): Promise<void> => {
+      httpServer.closeAllConnections?.();
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+    console.log(
+      args.noChat === true
+        ? "[agent serve] listening（--no-chat）— Ctrl+C to stop"
+        : "[agent serve] listening（非交互 stdin，仅 A2A server）— Ctrl+C to stop",
+    );
+    await new Promise<never>(() => {});
+    return EXIT.OK;
+  }
+
+  // 内置对话（缺省）：同一进程既是 A2A 节点（merchant 可被 catalog 发现/磋商）
+  // 又能 `kiwi>` 自由对话。/quit 退出对话并关闭 A2A server（整个进程退出）。
+  const kernel = await buildChatKernel(profile, args.dataDir);
+  const kernels: AgentKernel[] = [kernel];
+  const reload = async (file: string): Promise<AgentKernel> => {
+    const next = await buildChatKernel(loadProfile(resolveProfilePath(file)), args.dataDir);
+    kernels.push(next);
+    return next;
+  };
   const shutdown = async (): Promise<void> => {
     httpServer.closeAllConnections?.();
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    for (const k of kernels) await k.close().catch(() => undefined);
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
-  console.log("[agent serve] listening — Ctrl+C to stop");
-  // 永不返回：server 持续监听，直到 SIGINT/SIGTERM 触发 shutdown（process.exit）。
-  await new Promise<never>(() => {});
-  return EXIT.OK;
+  console.log("[agent serve] A2A server + 内置对话（/quit 退出整个进程）");
+  try {
+    return await runChatTui({ kernel, input: process.stdin, output: process.stdout, reload });
+  } finally {
+    httpServer.closeAllConnections?.();
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    for (const k of kernels) await k.close().catch(() => undefined);
+  }
 }
 
 /**
