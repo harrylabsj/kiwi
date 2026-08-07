@@ -26,6 +26,7 @@
  * 的确定性 merchant 行为；未来可替换为 LLM 驱动的 Negotiation Engine（同一 handler 接缝）。
  */
 
+import type { CommerceDataSource } from "../../commerce/data-source.js";
 import { LedgerStore } from "../../negotiation/ledger/index.js";
 import {
   newAgreementId,
@@ -69,6 +70,30 @@ export interface MerchantProductSource {
   getProduct(
     sku: string,
   ): Promise<{ price: number; currency: string; title?: string; stock?: number }>;
+}
+
+/**
+ * 把 CommerceDataSource（v1.1 数据侧边界）适配成 MerchantProductSource。
+ * price 用 price_minor（与 KNP Money 一致）；未知 SKU → 内置演示价
+ * （缺省行为不变，merchant-handler 的调用方决定是否提供真实源）。
+ */
+export function dataSourceProductSource(
+  dataSource: CommerceDataSource,
+): MerchantProductSource {
+  return {
+    async getProduct(sku: string) {
+      const fact = await dataSource.getProduct(sku);
+      if (fact === undefined || fact.price_minor === undefined || fact.currency === undefined) {
+        throw new Error(`product source has no price for SKU ${sku}`);
+      }
+      return {
+        price: fact.price_minor,
+        currency: fact.currency,
+        ...(fact.title !== undefined ? { title: fact.title } : {}),
+        ...(fact.stock !== undefined ? { stock: fact.stock } : {}),
+      };
+    },
+  };
 }
 
 type EnvelopeSeed = Omit<

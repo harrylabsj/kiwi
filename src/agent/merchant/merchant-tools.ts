@@ -32,6 +32,7 @@
 
 import type { AgentHarnessTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { AgentProfile } from "../../config/profile.js";
+import type { CommerceDataSource } from "../../commerce/data-source.js";
 import type { CommerceClient } from "../../commerce/types.js";
 import type { AgentMode } from "../mode.js";
 import { buildNegotiationChatTools, writeGateText } from "../negotiation-chat.js";
@@ -173,6 +174,12 @@ export interface MerchantToolDeps {
    * 查询走公开搜索端点，无需谈判 token。
    */
   commerceClient?: CommerceClient;
+  /**
+   * Merchant 经营事实数据源（v1.1 CommerceDataSource）。提供时只读目录
+   * 工具改从数据源读取（本地商品库 / ERP 适配器）；缺省走公开搜索端点。
+   * 数据侧边界：不负责发现远端 Agent（架构 rev1.4.1 §33）。
+   */
+  dataSource?: CommerceDataSource;
   broker: CredentialBroker;
   approvals: WriteApprovalCandidateStore;
   mode: () => AgentMode;
@@ -206,6 +213,20 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     execute: async (_id, _params) => {
       try {
         // Always the merchant's own catalog — never an arbitrary merchant_id.
+        if (deps.dataSource !== undefined) {
+          const facts = await deps.dataSource.getProducts({ limit: 100 });
+          const rows = facts.map((p) => ({
+            sku: p.sku,
+            title: p.title ?? "",
+            price: p.price_minor ?? 0,
+            stock: p.stock ?? null,
+            paused: false,
+          }));
+          return textResult(rows.length === 0 ? "目录为空。" : JSON.stringify(rows), {
+            count: rows.length,
+            source: "data-source",
+          });
+        }
         const products = await merchantClient.listProducts(ownerId);
         const rows = products.map((p) => ({
           sku: p.sku,
