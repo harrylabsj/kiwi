@@ -44,6 +44,20 @@ export const LEDGER_EVENT_KINDS = [
   "system",
   "reconciliation",
   "error",
+  // v1.1 KTH：candidate 生命周期（KTH rev0.3 §5.1，event-sourced 投影）
+  "handoff_candidate_created",
+  "handoff_candidate_ready",
+  "handoff_candidate_rejected",
+  "handoff_candidate_stale",
+  "handoff_candidate_expired",
+  "handoff_candidate_consumed",
+  // v1.1 KTH：交付观察（KTH rev0.3 §9，evidence-gated）
+  "handoff_delivered",
+  "handoff_launched",
+  "handoff_opened_confirmed",
+  "handoff_expired",
+  "handoff_revoked",
+  "handoff_delivery_failed",
 ] as const;
 export type LedgerEventKind = (typeof LEDGER_EVENT_KINDS)[number];
 
@@ -94,6 +108,19 @@ export interface LedgerEventContent {
   wire_payload?: Record<string, unknown>;
   /** Phase 状态转换（如该事件驱动了状态机推进）。 */
   state_transition?: LedgerStateTransition;
+  // v1.1 KTH 字段（KTH rev0.3 §5.1/§12：候选与交付事件绑定溯源与证据）。
+  /** handoff candidate id（candidate 生命周期事件必填）。 */
+  handoff_candidate_id?: string;
+  /** handoff id（交付观察事件必填）。 */
+  handoff_id?: string;
+  /** 溯源：产生该 handoff 的 agreement。 */
+  agreement_id?: string;
+  /** 溯源：agreement 的 terms_digest。 */
+  terms_digest?: string;
+  /** 目的地快照（最小化、非秘密；payload 最小化约束见 KTH §11.3）。 */
+  destination?: Record<string, unknown>;
+  /** 证据快照（OPENED_CONFIRMED 的可归属证据，KTH rev0.3 §9）。 */
+  evidence?: Record<string, unknown>;
   outcome: LedgerOutcome;
   /** 业务发生时间（如 envelope.created_at），RFC 3339。 */
   occurred_at: string;
@@ -249,6 +276,15 @@ export function eventContentAddressable(
     wire_digest: content.wire_digest,
     wire_payload: content.wire_payload,
     state_transition: content.state_transition,
+    // v1.1 KTH 字段（JCS 跳过 undefined，KNP 事件向后兼容；KTH 事件的
+    // 溯源/证据字段必须纳入 digest——否则篡改 terms_digest/evidence 无法
+    // 被 verifyChain 检出，审计链形同虚设，§22/#18）。
+    handoff_candidate_id: content.handoff_candidate_id,
+    handoff_id: content.handoff_id,
+    agreement_id: content.agreement_id,
+    terms_digest: content.terms_digest,
+    destination: content.destination,
+    evidence: content.evidence,
     outcome: content.outcome,
     occurred_at: content.occurred_at,
   };

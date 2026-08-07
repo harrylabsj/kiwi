@@ -21,6 +21,15 @@
  * Merchant of Record）；Kiwi 只做「非绑定共识 → 交易系统」的安全交接。本包只
  * 提供交接工件、交易系统适配接缝、AP2 授权接缝与完成门禁，不创建订单、不处理
  * 原始支付凭据、不实现真实 UCP Checkout / AP2（分别属于 WP2 / 外部系统）。
+ *
+ * 两层关系（术语对齐决策，KTH rev0.3）：
+ *   外层 —— KTH 候选链：Agreement → HandoffCandidate（candidate.ts，
+ *   不可变 + event-sourced 生命周期 lifecycle.ts/ledger.ts）→ 交付观察
+ *   （delivery 状态，Phase 2）。
+ *   内层 —— UCP checkout session 适配：HandoffPackage/HandoffSession/
+ *   HandoffChannel（package.ts/channel.ts，v1.0 WP1 工件，不重命名保留）。
+ *   `ucp_checkout`/`ucp_order` 目的地走内层；URL/PO/quote/contact 目的地
+ *   走外层交付。
  */
 
 export {
@@ -78,3 +87,43 @@ export {
   type CompletionGateDecision,
   type CompletionGateFailureCode,
 } from "./completion.js";
+
+// ── KTH/0.1 rev0.3（v1.1 WP-C1）──────────────────────────────────────────
+
+export {
+  DESTINATION_TYPES,
+  isDestinationType,
+  validateDestination,
+  type Destination,
+  type DestinationType,
+} from "./destination.js";
+
+export {
+  computeCandidateDigest,
+  createHandoffCandidate,
+  isHandoffCandidate,
+  validateHandoffCandidate,
+  verifyHandoffCandidateDigest,
+  type HandoffCandidate,
+  type HandoffCandidateInput,
+  type HandoffDisplaySummary,
+} from "./candidate.js";
+
+export {
+  HANDOFF_CANDIDATE_EVENT_KINDS,
+  HANDOFF_CANDIDATE_LIFECYCLE_STATES,
+  foldCandidateLifecycle,
+  isHandoffCandidateEventKind,
+  isTerminalLifecycleState,
+  transitionCandidateLifecycle,
+  type HandoffCandidateEventKind,
+  type HandoffCandidateLifecycleState,
+} from "./lifecycle.js";
+
+export {
+  HANDOFF_DELIVERY_EVENT_KINDS,
+  HandoffEventStore,
+  type HandoffDeliveryEventKind,
+  type HandoffEventInput,
+  type HandoffEventStoreOptions,
+} from "./ledger.js";
