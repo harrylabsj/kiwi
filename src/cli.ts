@@ -116,6 +116,7 @@ interface ParsedArgs {
   shoppingCliMerchant?: string;
   output?: string;
   force: boolean;
+  autoInstall: boolean;
   agentId?: string;
   ownerId?: string;
   autoNegotiate: boolean;
@@ -143,6 +144,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let shoppingCliMerchant: string | undefined;
   let output: string | undefined;
   let force = false;
+  let autoInstall = false;
   let agentId: string | undefined;
   let ownerId: string | undefined;
   let autoNegotiate = false;
@@ -177,6 +179,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       output = argv[++i];
     } else if (arg === "--force") {
       force = true;
+    } else if (arg === "--auto-install") {
+      autoInstall = true;
     } else if (arg === "--agent-id") {
       agentId = argv[++i];
     } else if (arg === "--owner-id") {
@@ -221,7 +225,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       throw new ProfileError(`Unknown argument: ${arg ?? ""}`);
     }
   }
-  const out: ParsedArgs = { command, once, fake, noChat, noA2a, force, autoNegotiate };
+  const out: ParsedArgs = { command, once, fake, noChat, noA2a, force, autoInstall, autoNegotiate };
   if (profile !== undefined) out.profile = profile;
   if (dir !== undefined) out.dir = dir;
   if (lines !== undefined) out.lines = lines;
@@ -928,6 +932,7 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
     floorPriceMinor: 0,
     ...(args.output !== undefined ? { outputPath: args.output } : {}),
     ...(args.force ? { force: true } : {}),
+    ...(args.autoInstall ? { autoInstallShoppingCli: true } : {}),
   });
   printJson(report);
   for (const warning of report.warnings) {

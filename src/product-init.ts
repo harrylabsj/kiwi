@@ -31,6 +31,7 @@
  * 不存任何 secret（token_env 只写环境变量名，与 loadProfile 约定一致）。
  */
 
+import { spawnSync } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { stringify as stringifyYaml } from "yaml";
@@ -58,6 +59,12 @@ export interface MerchantInitOptions {
   outputPath?: string;
   /** 覆盖已存在的输出文件（缺省拒绝）。 */
   force?: boolean;
+  /**
+   * shopping-cli 缺失时自动安装（pip install shopping-cli，PyPI 包名定稿）。
+   * 只检测到缺失才执行；安装失败 fail-closed（warning，不假装装好）。
+   * rev1.1 §3.2：Merchant 无需知晓并单独安装数据引擎。
+   */
+  autoInstallShoppingCli?: boolean;
   modelProvider?: string;
   modelName?: string;
   apiKeyEnv?: string;
@@ -108,12 +115,45 @@ export async function merchantInit(
     };
   }
 
-  // ── Step 1: shopping-cli 依赖检测 ────────────────────────────────────────
-  const detected = detectShoppingCli(options.spawnImpl);
+  // ── Step 1: shopping-cli 依赖检测（缺失时按需自动安装）──────────────────
+  let detected = detectShoppingCli(options.spawnImpl);
+  if (!detected.ok && options.autoInstallShoppingCli === true) {
+    const spawn = options.spawnImpl ?? spawnSync;
+    let install: ReturnType<typeof spawnSync>;
+    try {
+      install = spawn("pip", ["install", "shopping-cli"], {
+        encoding: "utf-8",
+        timeout: 300_000,
+      });
+    } catch (err) {
+      install = {
+        status: -1,
+        stdout: "",
+        stderr: err instanceof Error ? err.message : String(err),
+      } as unknown as ReturnType<typeof spawnSync>;
+    }
+    if (install.status === 0) {
+      // PATH 可能未刷新：重检测，失败也给明确指引
+      detected = detectShoppingCli(options.spawnImpl);
+      if (detected.ok) {
+        warnings.push("shopping-cli 已自动安装（数据引擎就绪）。");
+      } else {
+        warnings.push(
+          "pip install shopping-cli 完成但 `shopping` 命令仍不可用——" +
+            "可能需要刷新 PATH 或重新打开终端。",
+        );
+      }
+    } else {
+      warnings.push(
+        `自动安装失败（pip install shopping-cli 退出 ${install.status ?? "?"}）——` +
+          `请手动安装后重试（${String(install.stderr ?? "").trim().slice(0, 200)}）。`,
+      );
+    }
+  }
   if (!detected.ok) {
     warnings.push(
       `shopping-cli 未检测到（${detected.error ?? "?"}）——Kiwi Merchant 需要它；` +
-        "请先安装（pip install shopping-cli）或指定 --shopping-cli-path。",
+        "可运行 `kiwi merchant init --auto-install` 自动安装（pip install shopping-cli）。",
     );
   }
 

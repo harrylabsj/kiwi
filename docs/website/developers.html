@@ -90,30 +90,18 @@
   <div class="section-inner">
     <div class="kicker">Quick start</div>
     <h2>From zero to a live agent.</h2>
-    <pre><code># Install — npm 包名 @harrylabsj/kiwi（发布后）
-npm install -g @harrylabsj/kiwi                # 提供 `kiwi`
-npm install -g @harrylabsj/shopping-cli        # 提供 `shopping`（发布后）
-pip install kiwi-catalog                       # 提供 `kiwi-catalog`（发布后按 PyPI 说明）
-
-# 当前未发布 —— 源码安装备选
-git clone https://github.com/harrylabsj/kiwi
+    <pre><code># 安装（发布后：npm 单一入口；当前未发布：源码安装）
+npm install -g @harrylabsj/kiwi            # 提供 `kiwi`（发布后）
+git clone https://github.com/harrylabsj/kiwi   # 当前：源码备选
 cd kiwi &amp;&amp; npm install &amp;&amp; npm run build &amp;&amp; npm link
-git clone https://github.com/harrylabsj/shopping-cli   # 提供 `shopping`
-git clone https://github.com/harrylabsj/kiwi-catalog
-cd kiwi-catalog &amp;&amp; pip install -e '.[api]'             # 提供 `kiwi-catalog`
 
-# Buyer
+# Buyer —— 只需要这一步
 kiwi buyer init --agent-id &lt;your-id&gt;
 kiwi buyer search "21.5 inch industrial touch display, IP67"
 
-# Merchant
-kiwi merchant init --merchant-id &lt;your-merchant&gt; --name "Your Co."
-kiwi merchant publish --profile merchant.yaml --shopping-cli-db &lt;db&gt;
-
-# Network operator
-kiwi-catalog serve --db /data/catalog.sqlite
-</code></pre>    <div class="notice">
-      <p><strong>中文：</strong>安装（发布后 npm install -g @harrylabsj/kiwi；当前源码备选）后：Buyer 用 init 你的身份、search 一句需求；Merchant 用 init 商家、publish 商品；Network Operator 用 kiwi-catalog serve 起服务。</p>
+# Merchant —— 数据引擎（shopping-cli）由 init 自动安装，无需单独装
+kiwi merchant init --merchant-id &lt;your-merchant&gt; --name "Your Co." --auto-install
+kiwi merchant publish --profile merchant.yaml --shopping-cli-db &lt;db&gt;</code></pre>      <p><strong>中文：</strong>安装（发布后 npm install -g @harrylabsj/kiwi；当前源码备选）后：Buyer 一步 init 即可用；Merchant 的 init 自动安装数据引擎（shopping-cli，--auto-install），无需知晓并单独安装。</p>
     </div>
   </div>
 </section>
