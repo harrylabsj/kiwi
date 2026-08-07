@@ -38,6 +38,8 @@ import { createMerchantHandler } from "./a2a/server/merchant-handler.js";
 import { LedgerStore } from "./negotiation/ledger/index.js";
 import { IdempotencyStore } from "./negotiation/idempotency/index.js";
 import { registerCatalogAgent } from "./discovery/catalog-source/register.js";
+import { startA2aNode, type A2aNodeHandle } from "./a2a/node.js";
+import type { ChatA2aNode } from "./agent/chat-tui.js";
 import { runChatTui } from "./agent/chat-tui.js";
 import { createFakeChatModels } from "./agent/fake-chat-model.js";
 import { isAgentMode, type AgentMode } from "./agent/mode.js";
@@ -80,6 +82,9 @@ Usage:
   kiwi tui --profile <file> [--data-dir <dir>]
                                           Interactive operator TUI (supervised by default;
                                           approves candidates before any formal submit)
+  kiwi [--no-a2a]                         Conversation TUI + auto A2A node (merchant
+                                          registers in kiwi-catalog); /profile /a2a
+                                          /discover /negotiate /register in-session
   kiwi chat --profile <file> [--data-dir <dir>]
                                           Main conversation with Principal Memory (v0.3.0-A)
   kiwi --version                          Print version
@@ -104,6 +109,7 @@ interface ParsedArgs {
   catalog?: string;
   port?: number;
   noChat: boolean;
+  noA2a: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -118,6 +124,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let once = false;
   let fake = false;
   let noChat = false;
+  let noA2a = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--profile") {
@@ -140,6 +147,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       fake = true;
     } else if (arg === "--no-chat") {
       noChat = true;
+    } else if (arg === "--no-a2a") {
+      noA2a = true;
     } else if (arg !== undefined && arg.startsWith("--profile=")) {
       profile = arg.slice("--profile=".length);
     } else if (arg !== undefined && arg.startsWith("--dir=")) {
@@ -156,7 +165,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       throw new ProfileError(`Unknown argument: ${arg ?? ""}`);
     }
   }
-  const out: ParsedArgs = { command, once, fake, noChat };
+  const out: ParsedArgs = { command, once, fake, noChat, noA2a };
   if (profile !== undefined) out.profile = profile;
   if (dir !== undefined) out.dir = dir;
   if (lines !== undefined) out.lines = lines;
@@ -679,18 +688,60 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
     kernels.push(next);
     return next;
   };
+
+  // A2A 节点（一个入口 = 对话 + 可被发现/磋商的节点）：merchant 角色自动注册 catalog。
+  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600";
+  let node: A2aNodeHandle | null = null;
+  const a2aNode: ChatA2aNode = {
+    status: () =>
+      node === null
+        ? null
+        : {
+            role: node.role,
+            url: node.url,
+            agentCardUrl: node.agentCardUrl,
+            ...(node.catalogAgentId !== undefined ? { catalogAgentId: node.catalogAgentId } : {}),
+          },
+    rebuild: async (p) => {
+      await node?.stop().catch(() => undefined);
+      node = await startA2aNode({
+        profile: p as AgentProfile,
+        catalog,
+        preferredPort: args.port,
+        ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
+      });
+      process.stderr.write(
+        `[a2a] ${node.role}@${node.url}${node.catalogAgentId !== undefined ? ` registered ${node.catalogAgentId}` : ""}\n`,
+      );
+    },
+    stop: async () => {
+      await node?.stop().catch(() => undefined);
+      node = null;
+    },
+  };
+  if (!args.noA2a) {
+    try {
+      await a2aNode.rebuild(profile);
+    } catch (err) {
+      process.stderr.write(`[a2a] 节点启动失败（对话继续）：${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  }
+
   try {
     return await runChatTui({
       kernel,
       input: process.stdin,
       output: process.stdout,
       reload,
+      a2aNode,
+      catalog,
     });
   } catch (err) {
     process.stderr.write(`unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
     return EXIT.TRANSIENT;
   } finally {
     for (const k of kernels) await k.close().catch(() => undefined);
+    await a2aNode.stop().catch(() => undefined);
   }
 }
 

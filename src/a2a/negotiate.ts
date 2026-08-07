@@ -1,0 +1,275 @@
+/**
+ * Copyright 2026 harrylabsj
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * buyer 侧 A2A 磋商驱动（`/negotiate` 用）——经 agent catalog 发现目标 → fresh
+ * resolve Agent Card → A2ADirectChannel → 脚本化 KNP 磋商
+ * （RFQ→Offer→CounterOffer→ConditionalOffer→AcceptNonbinding→Agreement）。
+ *
+ * 确定性（不依赖 LLM）：与 a2a-agent.mjs 同一语义，供对话内 /negotiate 复用。
+ */
+
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { ShoppingCliCatalogSource } from "../discovery/catalog-source/index.js";
+import { AgentDiscovery } from "../discovery/index.js";
+import { selectChannelCandidate, A2ADirectChannel } from "../counterparty/index.js";
+import type { ChannelHandle } from "../counterparty/index.js";
+import { LedgerStore } from "../negotiation/ledger/index.js";
+import { IdempotencyStore } from "../negotiation/idempotency/index.js";
+import {
+  newExchangeId,
+  newMessageId,
+  newNegotiationId,
+  newOfferId,
+} from "../negotiation/domain/identifiers.js";
+import { finalizeEnvelope } from "../negotiation/domain/envelope.js";
+import { contentDigest } from "../negotiation/jcs.js";
+import { evaluateConditionalOffer } from "../negotiation/condition/evaluator.js";
+
+export const NEGOTIATE_CAPABILITY = "com.harrylabsj.kiwi.shopping.negotiation";
+export const NEGOTIATE_SKU = "SKU-001";
+export const NEGOTIATE_CURRENCY = "CNY";
+export const NEGOTIATE_QUANTITY = 200;
+export const NEGOTIATE_DEAL_PRICE_MINOR = 83_500;
+export const NEGOTIATE_DELIVERY_BEFORE = "2026-08-20T18:00:00Z";
+
+export interface NegotiateOptions {
+  /** agent catalog base URL。 */
+  catalog: string;
+  /** 目标 catalog_agent_id；缺省取第一个可发现候选。 */
+  catalogAgentId?: string;
+  /** 订货量（缺省 200）。 */
+  quantity?: number;
+}
+
+export interface NegotiateResult {
+  ok: boolean;
+  negotiationId: string;
+  catalogAgentId: string;
+  agentCardUrl: string;
+  steps: string[];
+  agreement?: Record<string, unknown>;
+  error?: string;
+}
+
+function monotonicNow(): () => string {
+  let tick = 0;
+  const base = Date.parse("2026-08-07T00:00:00.000Z");
+  return () => {
+    const t = new Date(base + tick);
+    tick += 1;
+    return t.toISOString();
+  };
+}
+
+type EnvelopeSeed = Omit<
+  Parameters<typeof finalizeEnvelope>[0],
+  "capability" | "protocol_version" | "exchange_id" | "message_id"
+> &
+  Partial<Pick<Parameters<typeof finalizeEnvelope>[0], "exchange_id" | "message_id">>;
+
+function seedEnvelope(seed: EnvelopeSeed): ReturnType<typeof finalizeEnvelope> {
+  return finalizeEnvelope({
+    capability: NEGOTIATE_CAPABILITY,
+    protocol_version: "1.0",
+    exchange_id: seed.exchange_id ?? newExchangeId(),
+    message_id: seed.message_id ?? newMessageId(),
+    ...seed,
+  });
+}
+
+function rfqEnvelope(negotiationId: string, now: () => string, quantity: number) {
+  return seedEnvelope({
+    negotiation_id: negotiationId,
+    actor: "buyer",
+    action: "rfq",
+    created_at: now(),
+    payload: {
+      type: "rfq",
+      items: [{ sku: NEGOTIATE_SKU, quantity: { value: quantity, unit: "piece" } }],
+      requested_terms: { delivery_before: NEGOTIATE_DELIVERY_BEFORE },
+    },
+  });
+}
+
+function counterEnvelope(negotiationId: string, now: () => string, inReplyTo: string, respondingToOfferId: string, quantity: number) {
+  return seedEnvelope({
+    negotiation_id: negotiationId,
+    in_reply_to: inReplyTo,
+    actor: "buyer",
+    action: "counter_offer",
+    created_at: now(),
+    payload: {
+      type: "counter_offer",
+      offer_id: newOfferId(),
+      responding_to_offer_id: respondingToOfferId,
+      proposed_terms: {
+        items: [
+          {
+            sku: NEGOTIATE_SKU,
+            quantity: { value: quantity, unit: "piece" },
+            unit_price: { currency: NEGOTIATE_CURRENCY, amount_minor: NEGOTIATE_DEAL_PRICE_MINOR },
+          },
+        ],
+      },
+    },
+  });
+}
+
+function acceptEnvelope(negotiationId: string, now: () => string, inReplyTo: string, offerId: string, termsDigest: string) {
+  return seedEnvelope({
+    negotiation_id: negotiationId,
+    in_reply_to: inReplyTo,
+    actor: "buyer",
+    action: "accept_nonbinding",
+    created_at: now(),
+    payload: { type: "accept_nonbinding", offer_id: offerId, terms_digest: termsDigest },
+  });
+}
+
+function extractKnpEnvelope(task: { status?: { message?: { parts?: Array<{ kind: string; data?: Record<string, unknown> }> } } } | undefined) {
+  const message = task?.status?.message;
+  if (message === undefined) return null;
+  for (const part of message.parts ?? []) {
+    if (part.kind === "data" && part.data?.["knp_envelope"]) return part.data["knp_envelope"] as Record<string, unknown>;
+  }
+  return null;
+}
+
+function extractAgreement(task: { artifacts?: Array<{ parts?: Array<{ kind: string; data?: Record<string, unknown> }> }> } | undefined) {
+  for (const artifact of task?.artifacts ?? []) {
+    for (const part of artifact.parts ?? []) {
+      if (part.kind === "data" && part.data?.["agreement"]) return part.data["agreement"] as Record<string, unknown>;
+    }
+  }
+  return null;
+}
+
+/**
+ * 与 catalog 中发现的一个 agent 完成一轮确定性磋商（RFQ→…→Agreement）。
+ * 失败返回 `{ ok: false, error }`，不抛错（供对话内命令友好报告）。
+ */
+export async function negotiateWithAgent(options: NegotiateOptions): Promise<NegotiateResult> {
+  const quantity = options.quantity ?? NEGOTIATE_QUANTITY;
+  const dir = mkdtempSync(path.join(tmpdir(), "kiwi-a2a-negotiate-"));
+  const now = monotonicNow();
+  const ledger = new LedgerStore({ dir, now });
+  const idempotency = new IdempotencyStore({ dir, now });
+  const steps: string[] = [];
+  let handle: ChannelHandle | null = null;
+  const negotiationId = newNegotiationId();
+
+  try {
+    // 1. 发现：catalog 候选 → fresh resolve Agent Card（includeBlocked：本地 rejected 也纳入）。
+    const source = new ShoppingCliCatalogSource({ baseUrl: options.catalog });
+    const discovery = new AgentDiscovery({ catalog: { source, includeBlocked: true } });
+    const resolved = await discovery.resolveViaCatalog();
+    if (resolved.length === 0) {
+      return { ok: false, negotiationId, catalogAgentId: "", agentCardUrl: "", steps, error: "catalog 里没有可发现的 agent" };
+    }
+    const target =
+      options.catalogAgentId === undefined
+        ? resolved[0]
+        : resolved.find((r) => r.candidate.catalog_agent_id === options.catalogAgentId);
+    if (target === undefined) {
+      return {
+        ok: false,
+        negotiationId,
+        catalogAgentId: options.catalogAgentId ?? "",
+        agentCardUrl: "",
+        steps,
+        error: `catalog 里找不到 ${options.catalogAgentId ?? ""}（可用 /discover 查看）`,
+      };
+    }
+    const catalogAgentId = target.candidate.catalog_agent_id;
+    const agentCardUrl = target.candidate.discovery?.agent_card_url ?? "";
+    steps.push(`discover ${catalogAgentId}`);
+    steps.push(`resolve ${agentCardUrl}`);
+
+    // 2. 通道：a2a-direct 优先。
+    const channelCandidate = selectChannelCandidate(target.profile);
+    if (channelCandidate === null || channelCandidate.url === undefined) {
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "无 a2a-direct 通道候选" };
+    }
+    const channel = new A2ADirectChannel({ url: channelCandidate.url, ledger, idempotency, now });
+    handle = await channel.open({
+      negotiation_id: negotiationId,
+      sender_identity: "buyer:a2a-demo",
+      identity: target.profile.identity,
+    });
+    const send = async (envelope: ReturnType<typeof finalizeEnvelope>) =>
+      handle!.send({ envelope, ref: { negotiation_id: negotiationId } });
+
+    // 3. RFQ → Offer。
+    const rfq = rfqEnvelope(negotiationId, now, quantity);
+    steps.push(`rfq`);
+    const offerRes = await send(rfq);
+    const offer = extractKnpEnvelope(offerRes.task);
+    if (offer === null || offer.action !== "offer") {
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 offer 回复" };
+    }
+    const offerPayload = offer.payload as { offer_id?: string };
+    if (offerPayload.offer_id === undefined) {
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "offer 缺 offer_id" };
+    }
+    steps.push(`offer ${offerPayload.offer_id}`);
+
+    // 4. CounterOffer → ConditionalOffer。
+    const counter = counterEnvelope(negotiationId, now, (offer.message_id as string) ?? "", offerPayload.offer_id, quantity);
+    steps.push(`counter_offer`);
+    const condRes = await send(counter);
+    const conditional = extractKnpEnvelope(condRes.task);
+    if (conditional === null || conditional.action !== "conditional_offer") {
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 conditional_offer 回复" };
+    }
+    const conditionalPayload = conditional.payload as { offer_id?: string; conditions?: unknown[] };
+    steps.push(`conditional_offer ${conditionalPayload.offer_id ?? ""}`);
+
+    // 5. 确定性求值 → AcceptNonbinding → Agreement。
+    const agreedTerms = evaluateConditionalOffer(conditionalPayload as never, {
+      "aggregate.total_quantity": quantity,
+    });
+    const accept = acceptEnvelope(
+      negotiationId,
+      now,
+      (conditional.message_id as string) ?? "",
+      conditionalPayload.offer_id ?? "",
+      contentDigest(agreedTerms as never),
+    );
+    steps.push(`accept_nonbinding`);
+    const acceptRes = await send(accept);
+    const agreement = extractAgreement(acceptRes.task);
+    if (agreement === null) {
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 agreement artifact" };
+    }
+    steps.push(`agreement ${String(agreement.agreement_id ?? "")}`);
+    return { ok: true, negotiationId, catalogAgentId, agentCardUrl, steps, agreement };
+  } catch (err) {
+    return {
+      ok: false,
+      negotiationId,
+      catalogAgentId: "",
+      agentCardUrl: "",
+      steps,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    await handle?.close().catch(() => undefined);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
