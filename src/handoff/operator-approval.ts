@@ -34,6 +34,14 @@
  */
 
 import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+} from "node:fs";
+import path from "node:path";
+import {
   requireDigest,
   requireIsoTimestamp,
   requireNonEmptyString,
@@ -187,6 +195,11 @@ export interface OperatorApprovalAuthorizationProviderOptions {
    * 不一致即 stale（§19 remote_revision 绑定）。
    */
   currentRevision?: (sessionRef: string) => string | undefined;
+  /**
+   * 可选持久化目录：提供时审批事件（record/revoke）落 JSONL（目录 0700、
+   * 文件 0600），重启恢复 + §19 审计留存；缺省纯内存（进程重启即失效）。
+   */
+  persistDir?: string;
 }
 
 const NOT_CONFIRMED_REASON =
@@ -209,10 +222,49 @@ export class OperatorApprovalAuthorizationProvider implements AuthorizationProvi
   private readonly records = new Map<string, OperatorApprovalRecord>();
   private readonly now: () => string;
   private readonly options: OperatorApprovalAuthorizationProviderOptions;
+  private readonly journalPath?: string;
 
   constructor(options: OperatorApprovalAuthorizationProviderOptions = {}) {
     this.now = options.now ?? (() => new Date().toISOString());
     this.options = options;
+    if (options.persistDir !== undefined) {
+      mkdirSync(options.persistDir, { recursive: true, mode: 0o700 });
+      chmodSync(options.persistDir, 0o700);
+      this.journalPath = path.join(options.persistDir, "operator-approvals.jsonl");
+      this.replayJournal();
+    }
+  }
+
+  /** 从 JSONL 重放审批事件（同 approval_id 后事件胜出；撕裂行容忍跳过）。 */
+  private replayJournal(): void {
+    if (this.journalPath === undefined || !existsSync(this.journalPath)) return;
+    const raw = readFileSync(this.journalPath, "utf-8");
+    for (const line of raw.split("\n")) {
+      if (line.length === 0) continue;
+      try {
+        const event = JSON.parse(line) as {
+          type: string;
+          approval?: OperatorApprovalRecord;
+          approval_id?: string;
+        };
+        if (event.type === "record" && event.approval?.approval_id !== undefined) {
+          this.records.set(event.approval.approval_id, event.approval);
+        } else if (event.type === "revoke" && typeof event.approval_id === "string") {
+          const existing = this.records.get(event.approval_id);
+          if (existing !== undefined) {
+            this.records.set(event.approval_id, { ...existing, status: "revoked" });
+          }
+        }
+      } catch {
+        // 撕裂行跳过（审计由事件流本身承载；审批重放容忍最后一行撕裂）。
+      }
+    }
+  }
+
+  /** 追加一条审批事件（单行 append，原子）。 */
+  private journalAppend(event: Record<string, unknown>): void {
+    if (this.journalPath === undefined) return;
+    appendFileSync(this.journalPath, `${JSON.stringify(event)}\n`, { mode: 0o600 });
   }
 
   // -- 审批证据写入（审批面） ------------------------------------------------
@@ -243,6 +295,7 @@ export class OperatorApprovalAuthorizationProvider implements AuthorizationProvi
       recorded_at: now,
     };
     this.records.set(approval.approval_id, approval);
+    this.journalAppend({ type: "record", approval });
     return approval;
   }
 
@@ -254,6 +307,7 @@ export class OperatorApprovalAuthorizationProvider implements AuthorizationProvi
     }
     const revoked: OperatorApprovalRecord = { ...existing, status: "revoked" };
     this.records.set(approvalId, revoked);
+    this.journalAppend({ type: "revoke", approval_id: approvalId });
     return revoked;
   }
 
@@ -307,7 +361,10 @@ export class OperatorApprovalAuthorizationProvider implements AuthorizationProvi
       };
     }
     const approvedAt = this.now();
-    if (approval.confirmed_at > approvedAt) {
+    // 数值比较（非字符串）：跨时区偏移的 confirmed_at 字符串比较可 fail-open。
+    const confirmedMs = Date.parse(approval.confirmed_at);
+    const approvedMs = Date.parse(approvedAt);
+    if (!Number.isFinite(confirmedMs) || !Number.isFinite(approvedMs) || confirmedMs > approvedMs) {
       return {
         status: "fail_closed",
         reason: "confirmed_at MUST NOT be after approved_at",

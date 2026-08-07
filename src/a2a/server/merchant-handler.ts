@@ -65,7 +65,11 @@ export interface MerchantHandlerOptions {
   dealDiscountPercent?: number;
 }
 
-/** 真实商品源：给定 SKU 返回价目（shopping-cli 开放层/ERP/商品表均可接入）。 */
+/**
+ * 真实商品源：给定 SKU 返回价目（shopping-cli 开放层/ERP/商品表均可接入）。
+ * `price` 单位为**元**（major units，与 resolveProduct 的 `*100 → amount_minor`
+ * 约定一致，也符合 shopping-cli wire 值；测试桩 `{price: 99}` → 9900 minor 同此）。
+ */
 export interface MerchantProductSource {
   getProduct(
     sku: string,
@@ -74,8 +78,8 @@ export interface MerchantProductSource {
 
 /**
  * 把 CommerceDataSource（v1.1 数据侧边界）适配成 MerchantProductSource。
- * price 用 price_minor（与 KNP Money 一致）；未知 SKU → 内置演示价
- * （缺省行为不变，merchant-handler 的调用方决定是否提供真实源）。
+ * price_minor（分）→ 元（major）转换在此完成，与接口"元"单位约定一致；
+ * 未知 SKU → 抛错（resolveProduct 回退演示价，缺省行为不变）。
  */
 export function dataSourceProductSource(
   dataSource: CommerceDataSource,
@@ -87,7 +91,7 @@ export function dataSourceProductSource(
         throw new Error(`product source has no price for SKU ${sku}`);
       }
       return {
-        price: fact.price_minor,
+        price: fact.price_minor / 100,
         currency: fact.currency,
         ...(fact.title !== undefined ? { title: fact.title } : {}),
         ...(fact.stock !== undefined ? { stock: fact.stock } : {}),
@@ -154,7 +158,9 @@ const textReply = (text: string, taskState: "working" | "completed" = "working")
   message: {
     role: "agent",
     parts: [{ kind: "text", text }],
-    messageId: `msg_${newMessageId()}`,
+    // newMessageId 已带 msg_ 前缀（此前 msg_${newMessageId()} 产生
+    // msg_msg_<uuid> 双重前缀，跨端对账隐患）。
+    messageId: newMessageId(),
   },
 });
 
@@ -191,9 +197,13 @@ export function createMerchantHandler(
         priceBySku.set(sku, resolved);
         return resolved;
       } catch {
-        const demo = { priceMinor: offerPriceMinor, currency: MERCHANT_CURRENCY };
-        priceBySku.set(sku, demo);
-        return { ...demo, note: `商品源不可用（${sku}），使用演示价` };
+        // 失败回退**不写缓存**：一次性故障（超时/重启）不得让该 SKU 从此
+        // 永久按演示价报价（长驻进程里源恢复后价格仍错）。下一轮重试真实源。
+        return {
+          priceMinor: offerPriceMinor,
+          currency: MERCHANT_CURRENCY,
+          note: `商品源不可用（${sku}），本回合使用演示价`,
+        };
       }
     }
     return { priceMinor: offerPriceMinor, currency: MERCHANT_CURRENCY };
@@ -231,7 +241,9 @@ export function createMerchantHandler(
 
       switch (envelope.action) {
         case "inquiry": {
-          await appendSent(envelope);
+          // 入站消息由 A2A pipeline 统一落 message_received（§22）；这里不再
+          // 重复落账——此前 appendSent(envelope) 把买家的 inquiry 记为 merchant
+          // 自己"发送"（sender=merchant），审计语义错位且重复。
           return textReply(
             `We carry ${MERCHANT_SKU} at ${(offerPriceMinor / 100).toFixed(2)} ${MERCHANT_CURRENCY}/piece; ask for delivery details.`,
           );
@@ -328,11 +340,24 @@ export function createMerchantHandler(
         }
         case "accept_nonbinding": {
           const stored = conditionalByNegotiation.get(negotiationId);
+          const acceptedOfferId = (envelope.payload as { offer_id?: string }).offer_id ?? "";
+          // 成交价必须来自本磋商已发出的 conditional_offer：无前置 conditional
+          // 或 accept 的 offer_id 与所存 conditional 不匹配 → 用基础价成交
+          // （无折扣），绝不发 DEAL 价。此前无前置时直接给 DEAL 价，任何 buyer
+          // 在 conditional_offer 之前发 accept 即可拿到折扣价。
+          const storedOfferId = (stored?.conditional as { offer_id?: string } | undefined)?.offer_id ?? "";
+          const acceptedConditional =
+            stored !== undefined && acceptedOfferId !== "" && acceptedOfferId === storedOfferId
+              ? stored
+              : undefined;
           const agreedTerms =
-            stored === undefined
-              ? offerTerms({ priceMinor: MERCHANT_DEAL_PRICE_MINOR, quantity: MERCHANT_QUANTITY })
-              : evaluateConditionalOffer(stored.conditional as never, {
-                  "aggregate.total_quantity": stored.quantity,
+            acceptedConditional === undefined
+              ? offerTerms({
+                  priceMinor: (await resolveProduct(MERCHANT_SKU)).priceMinor,
+                  quantity: MERCHANT_QUANTITY,
+                })
+              : evaluateConditionalOffer(acceptedConditional.conditional as never, {
+                  "aggregate.total_quantity": acceptedConditional.quantity,
                 });
           const agreement = buildAgreement({
             negotiation_id: negotiationId,
@@ -344,7 +369,7 @@ export function createMerchantHandler(
           const message: A2AMessage = {
             role: "agent",
             parts: [{ kind: "text", text: "Agreement reached (nonbinding)." }],
-            messageId: `msg_${newMessageId()}`,
+            messageId: newMessageId(),
           };
           return { kind: "accepted", taskState: "completed", artifactParts: [artifactPart], message };
         }

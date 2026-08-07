@@ -65,13 +65,14 @@ export interface OpenEvidence {
   readonly details?: Readonly<Record<string, unknown>>;
 }
 
-const DELIVERY_EVENT_TO_STATE: Readonly<Record<HandoffDeliveryEventKind, HandoffDeliveryState>> = {
+// handoff_delivery_failed 不在此表：失败交付不产生观察状态，fold 时保留
+// 前态（此前映射为 DELIVERED 会把 LAUNCHED 倒退成 DELIVERED）。
+const DELIVERY_EVENT_TO_STATE: Readonly<Partial<Record<HandoffDeliveryEventKind, HandoffDeliveryState>>> = {
   handoff_delivered: "DELIVERED",
   handoff_launched: "LAUNCHED",
   handoff_opened_confirmed: "OPENED_CONFIRMED",
   handoff_expired: "EXPIRED",
   handoff_revoked: "REVOKED",
-  handoff_delivery_failed: "DELIVERED", // 失败交付不产生观察状态（回到前态）
 };
 
 /** 从 Ledger 交付事件投影交付状态（纯函数，最后事件胜出）。 */
@@ -81,7 +82,8 @@ export function deliveryState(
   let state: HandoffDeliveryState | undefined;
   for (const event of events) {
     if (!isHandoffDeliveryEventKind(event.event_kind)) continue;
-    state = DELIVERY_EVENT_TO_STATE[event.event_kind];
+    const next = DELIVERY_EVENT_TO_STATE[event.event_kind];
+    if (next !== undefined) state = next;
   }
   return state;
 }
@@ -154,6 +156,19 @@ export function recordOpenEvidence(deps: DeliveryEventDeps & { evidence: unknown
       `evidence handoff_id ${evidence.handoff_id} does not match ${deps.handoff_id}`,
     );
   }
+  // 前置状态门：只允许对已交付的 handoff 记录打开确认（交付观察层此前无
+  // 状态机——链上根本没有 delivered 事件也可直接落 opened_confirmed，审计可被污染）。
+  const delivered = deps.ledger
+    .events(deps.candidate.negotiation_id)
+    .find(
+      (e) => e.event_kind === "handoff_delivered" && e.handoff_id === deps.handoff_id,
+    );
+  if (delivered === undefined) {
+    throw schemaError(
+      "handoff_id",
+      `cannot confirm opened for handoff ${deps.handoff_id}: no delivered event on chain`,
+    );
+  }
   deps.ledger.appendDeliveryEvent({
     kind: "handoff_opened_confirmed",
     candidate: deps.candidate,
@@ -168,6 +183,18 @@ export function recordOpenEvidence(deps: DeliveryEventDeps & { evidence: unknown
 
 /** 记录 REVOKED（仅当目的地支持撤销；§9）。 */
 export function recordRevoked(deps: DeliveryEventDeps, reason = "operator revocation"): void {
+  // 前置状态门：只允许对已交付的 handoff 撤销（同 recordOpenEvidence）。
+  const delivered = deps.ledger
+    .events(deps.candidate.negotiation_id)
+    .find(
+      (e) => e.event_kind === "handoff_delivered" && e.handoff_id === deps.handoff_id,
+    );
+  if (delivered === undefined) {
+    throw schemaError(
+      "handoff_id",
+      `cannot revoke handoff ${deps.handoff_id}: no delivered event on chain`,
+    );
+  }
   deps.ledger.appendDeliveryEvent({
     kind: "handoff_revoked",
     candidate: deps.candidate,

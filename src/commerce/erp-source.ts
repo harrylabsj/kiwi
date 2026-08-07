@@ -52,6 +52,12 @@ function validateBaseUrl(value: string): string {
   if (url.username !== "" || url.password !== "") {
     throw new CommerceError("invalid_input", "erp baseUrl must not embed credentials (userinfo)");
   }
+  if (url.search !== "" || url.hash !== "") {
+    throw new CommerceError(
+      "invalid_input",
+      "erp baseUrl must not contain query or fragment (paths are appended to it)",
+    );
+  }
   return value.replace(/\/+$/, "");
 }
 
@@ -117,6 +123,11 @@ export class ErpCommerceDataSource implements CommerceDataSource {
       );
     } finally {
       clearTimeout(timer);
+    }
+    if (response.status === 404) {
+      // 404 = 资源不存在：getProduct 的"未知 SKU → undefined"接口承诺
+      //（composite 次要源靠它跳过自身不收录的 SKU，而不是整体抛错）。
+      return null;
     }
     if (!response.ok) {
       throw new CommerceError("request_failed", `erp request returned HTTP ${response.status} from ${url}`);

@@ -25,14 +25,30 @@
  * 惰性清理过期行。lookup 命中 → 返回已交付的 handoff_id（重试不重复交付）。
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
+import { HandoffError } from "./errors.js";
 
 export interface HandoffIdempotencyStoreOptions {
   dir: string;
   /** 保留期（缺省 7 天）。 */
   retentionDays?: number;
   now?: () => string;
+  /**
+   * 候选执行锁等待上限（ms，缺省 120_000）。executeHandoff 内可能含 URL
+   * 探测（最长 15s 超时 × 重定向链），等待上限要容纳完整执行。
+   */
+  lockTimeoutMs?: number;
 }
 
 interface IdempotencyRow {
@@ -43,18 +59,67 @@ interface IdempotencyRow {
 }
 
 const DEFAULT_RETENTION_DAYS = 7;
+const DEFAULT_LOCK_TIMEOUT_MS = 120_000;
+const LOCK_POLL_MS = 25;
 
 export class HandoffIdempotencyStore {
+  private readonly dir: string;
   private readonly filePath: string;
   private readonly retentionMs: number;
   private readonly now: () => string;
+  private readonly lockTimeoutMs: number;
 
   constructor(options: HandoffIdempotencyStoreOptions) {
     mkdirSync(options.dir, { recursive: true, mode: 0o700 });
     chmodSync(options.dir, 0o700);
+    this.dir = options.dir;
     this.filePath = path.join(options.dir, "handoff-idempotency.jsonl");
     this.retentionMs = (options.retentionDays ?? DEFAULT_RETENTION_DAYS) * 24 * 60 * 60 * 1000;
+    this.lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
     this.now = options.now ?? (() => new Date().toISOString());
+  }
+
+  /**
+   * 以候选为粒度的互斥（§10.1 幂等的并发保护）：executeHandoff 的
+   * lookup→(多次 await)→record 是 check-then-act，两个并发执行会双双通过
+   * 幂等检查、同一候选交付两次。锁文件用 `openSync("wx")` 原子创建——
+   * 单进程内 async 交错与跨进程共享 dir 两个场景都互斥；持锁期间崩溃由
+   * 等待方超时（fail-closed：抛 HandoffError，绝不并发执行）。
+   */
+  async withCandidateLock<T>(
+    candidateId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const lockDir = path.join(this.dir, "locks");
+    mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+    const safeId = candidateId.replace(/[^A-Za-z0-9_-]/g, "_");
+    const lockPath = path.join(lockDir, `${safeId}.lock`);
+    const deadline = Date.now() + this.lockTimeoutMs;
+    for (;;) {
+      try {
+        const fd = openSync(lockPath, "wx");
+        closeSync(fd);
+        break;
+      } catch (err) {
+        if ((err as { code?: string }).code !== "EEXIST") throw err;
+        if (Date.now() >= deadline) {
+          throw new HandoffError(
+            "concurrency_lock_timeout",
+            `handoff candidate ${candidateId} is locked by another executor (waited ${this.lockTimeoutMs}ms); refusing concurrent execution`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
+      }
+    }
+    try {
+      return await fn();
+    } finally {
+      try {
+        unlinkSync(lockPath);
+      } catch {
+        // 锁文件已不存在（异常清理）则忽略。
+      }
+    }
   }
 
   /** 幂等查询：同候选同 digest 已交付 → 返回 handoff_id。 */

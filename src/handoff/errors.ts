@@ -32,6 +32,7 @@ export const HANDOFF_ERROR_CODES = [
   "invalid_authorization",
   "invalid_session",
   "invalid_input",
+  "concurrency_lock_timeout",
 ] as const;
 export type HandoffErrorCode = (typeof HANDOFF_ERROR_CODES)[number];
 

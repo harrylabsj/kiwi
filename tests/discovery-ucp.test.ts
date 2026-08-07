@@ -88,7 +88,10 @@ function routerFetch(opts: {
   return { fetchImpl, calls };
 }
 
-const DEFAULT_UCP_DEP = { ucp: { resolver: { skipDnsCheck: true } } };
+const DEFAULT_UCP_DEP = {
+  ucp: { resolver: { skipDnsCheck: true } },
+  skipDnsCheck: true, // fetchCard 的 SSRF DNS 复查跳过（注入 fetchImpl 测试替身）
+};
 
 describe("AgentDiscovery.resolve: domain → UCP 优先（双发现入口）", () => {
   it("UCP 成功且含 a2a transport → 从 profile endpoint 拉 Agent Card，不拉默认 card 路径", async () => {
@@ -190,6 +193,7 @@ describe("AgentDiscovery.resolve: UCP capability intersection 纳入 Counterpart
     const discovery = new AgentDiscovery({
       fetchImpl,
       ucp: { resolver: { skipDnsCheck: true }, localProfile },
+      skipDnsCheck: true, // fetchCard SSRF DNS 复查跳过（注入 fetchImpl）
     });
 
     const profile = await discovery.resolve({ domain: "merchant.example" });
@@ -220,6 +224,7 @@ describe("AgentDiscovery.resolve: UCP capability intersection 纳入 Counterpart
     const discovery = new AgentDiscovery({
       fetchImpl,
       ucp: { resolver: { skipDnsCheck: true }, localProfile },
+      skipDnsCheck: true, // fetchCard SSRF DNS 复查跳过（注入 fetchImpl）
     });
 
     const profile = await discovery.resolve({ domain: "merchant.example" });
@@ -241,6 +246,7 @@ describe("AgentDiscovery.resolve: UCP capability intersection 纳入 Counterpart
     const discovery = new AgentDiscovery({
       fetchImpl,
       ucp: { resolver: { skipDnsCheck: true }, localProfile },
+      skipDnsCheck: true, // fetchCard SSRF DNS 复查跳过（注入 fetchImpl）
     });
 
     const profile = await discovery.resolve({ domain: "merchant.example" });

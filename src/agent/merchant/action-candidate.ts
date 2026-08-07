@@ -306,6 +306,22 @@ export async function executeApprovedCandidate(
     };
   }
   const output = await hooks.execute(candidate.arguments);
+  // 执行失败（如 handoff 候选已 stale/expired，execute 返回 {ok:false} 而非
+  // 抛错）→ 审批候选不标 executed：审计状态不得与 Ledger 矛盾（此前无条件
+  // markExecuted，/approve 显示"已执行"但链上实际无交付）。标 superseded
+  // 防重复批准，返回 stale 让调用方提示重新生成候选。
+  if (
+    output !== null &&
+    typeof output === "object" &&
+    (output as { ok?: unknown }).ok === false
+  ) {
+    store.supersede(candidateId);
+    return {
+      kind: "stale",
+      candidate: store.get(candidateId) as WriteApprovalCandidate,
+      reason: "执行失败（execute 返回非成功结果），候选已失效，请重新生成候选。",
+    };
+  }
   const executed = store.markExecuted(candidateId);
   return { kind: "executed", candidate: executed, output };
 }

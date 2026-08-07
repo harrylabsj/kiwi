@@ -55,3 +55,76 @@ describe("HandoffIdempotencyStore", () => {
     expect(s.lookup("hcan_01", "sha256:abc")).toEqual({ handoff_id: "hnd_01" });
   });
 });
+
+describe("withCandidateLock（§10.1 并发保护）", () => {
+  it("并发 withCandidateLock 串行执行（互斥）：第二个执行者看到首个的 record，仅一次落盘", async () => {
+    const s = store();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let recorded = 0;
+    // 模拟 executeHandoff 锁内语义：lookup（在锁内重查）→ 命中则跳过 record。
+    const entry = () =>
+      s.withCandidateLock("hcan_01", async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 30)); // await 间隙
+        inFlight -= 1;
+        const hit = s.lookup("hcan_01", "sha256:abc");
+        if (hit === undefined) {
+          recorded += 1;
+          s.record("hcan_01", "sha256:abc", "hnd_01");
+        }
+        return hit ?? "delivered";
+      });
+    const outcomes = await Promise.all([entry(), entry()]);
+    expect(maxInFlight).toBe(1); // 任何时刻只有一个执行者在锁内
+    expect(recorded).toBe(1); // 仅一次落盘（无锁时会是 2）
+    expect(outcomes).toEqual(["delivered", { handoff_id: "hnd_01" }]);
+    expect(s.lookup("hcan_01", "sha256:abc")).toEqual({ handoff_id: "hnd_01" });
+  });
+
+  it("不同候选互不阻塞（锁按候选粒度）", async () => {
+    const s = store();
+    const order: string[] = [];
+    await Promise.all([
+      s.withCandidateLock("hcan_a", async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        order.push("a");
+      }),
+      s.withCandidateLock("hcan_b", async () => {
+        order.push("b");
+      }),
+    ]);
+    expect(order).toEqual(["b", "a"]); // b 不被 a 的锁阻塞
+  });
+
+  it("锁内抛错 → 锁释放，后续可再获锁；锁文件不留残骸", async () => {
+    const s = store();
+    await expect(
+      s.withCandidateLock("hcan_01", async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    await expect(
+      s.withCandidateLock("hcan_01", async () => "ok"),
+    ).resolves.toBe("ok");
+  });
+
+  it("持锁超时 → HandoffError(concurrency_lock_timeout)（fail-closed，绝不并发执行）", async () => {
+    const s = new HandoffIdempotencyStore({
+      dir: mkdtempSync(path.join(tmpdir(), "kiwi-idem-")),
+      lockTimeoutMs: 60,
+    });
+    let released = false;
+    const holder = s.withCandidateLock("hcan_01", async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      released = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await expect(
+      s.withCandidateLock("hcan_01", async () => "never"),
+    ).rejects.toMatchObject({ code: "concurrency_lock_timeout" });
+    await holder;
+    expect(released).toBe(true);
+  });
+});

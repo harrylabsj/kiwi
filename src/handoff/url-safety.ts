@@ -28,7 +28,7 @@
  *   - 返回最终 URL（供用户展示，完成定义 #17）。
  */
 
-import { assertSafeTargetUrl } from "../a2a/client/url-policy.js";
+import { assertResolvableTargetUrl, assertSafeTargetUrl } from "../a2a/client/url-policy.js";
 import { CommerceError } from "../commerce/data-source.js";
 
 export interface UrlSafetyOptions {
@@ -44,6 +44,10 @@ export interface UrlSafetyOptions {
   fetchImpl?: typeof fetch;
   /** 请求超时 ms（缺省 15000）。 */
   timeoutMs?: number;
+  /** SSRF DNS 复查的解析函数（缺省 node:dns lookup；受控/测试环境注入用）。 */
+  resolveIp?: (hostname: string) => Promise<string[]>;
+  /** 跳过 SSRF DNS 复查（仅测试/受控环境；生产缺省 false）。 */
+  skipDnsCheck?: boolean;
 }
 
 export interface SafeDestinationUrl {
@@ -102,12 +106,27 @@ export async function validateExternalDestinationUrl(
         `destination host "${parsed.hostname}" is not allowed (expected ${options.expectedHost ?? "allowlist"})`,
       );
     }
+    // 请求前 DNS 复查：主机名解析的每个 IP 过保留网段判定（防 rebinding）。
+    // 此前只对字面 IP 生效——expectedHost 命中但解析到 169.254.169.254 等
+    // 内网地址的主机名会真实发出探测。
+    try {
+      await assertResolvableTargetUrl(parsed, {
+        skipDnsCheck: options.skipDnsCheck,
+        resolveIp: options.resolveIp,
+      });
+    } catch (err) {
+      throw new CommerceError(
+        "invalid_input",
+        `destination DNS rejected by safety policy: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
     try {
-      // HEAD 探测重定向；普通响应也接受（2xx 即终点）。
+      // HEAD 探测重定向；2xx 即终点（不 HEAD 的服务器按不可达拒绝，绝不把
+      // 404/500/403 死链当"已验证目的地"交付给用户展示）。
       response = await fetchImpl(current, {
         method: "HEAD",
         redirect: "manual",
@@ -126,7 +145,19 @@ export async function validateExternalDestinationUrl(
     }
     const location = response.headers.get("location");
     if (location === null) {
+      if (response.status < 200 || response.status >= 300) {
+        throw new CommerceError(
+          "request_failed",
+          `destination probe returned HTTP ${response.status} (not a reachable 2xx endpoint): ${current}`,
+        );
+      }
       return { finalUrl: current, redirects };
+    }
+    if (response.status < 300 || response.status >= 400) {
+      throw new CommerceError(
+        "request_failed",
+        `destination returned a redirect Location with non-3xx status (HTTP ${response.status}): ${current}`,
+      );
     }
     if (hop === maxRedirects) {
       throw new CommerceError(

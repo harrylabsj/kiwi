@@ -138,11 +138,19 @@ export function requireEnum<T extends string>(
 
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
-/** RFC 3339 时间戳（子规范 §7.3）。 */
+/**
+ * RFC 3339 时间戳（子规范 §7.3）。
+ * 格式正则之外还要 Date.parse 真实可解析：`2026-13-01T00:00:00Z` 等越界
+ * 时间/日期能过正则但 Date.parse 返回 NaN（fail-open 缺口，见
+ * transaction.ts 过期门）。不可解析 → schemaError（fail-closed）。
+ */
 export function requireIsoTimestamp(value: unknown, path: string): string {
   const s = requireNonEmptyString(value, path);
   if (!RFC3339.test(s)) {
     throw schemaError(path, `${path} must be an RFC 3339 timestamp`);
+  }
+  if (!Number.isFinite(Date.parse(s))) {
+    throw schemaError(path, `${path} must be a parseable RFC 3339 timestamp`);
   }
   return s;
 }

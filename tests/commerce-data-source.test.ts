@@ -118,12 +118,12 @@ describe("ErpCommerceDataSource", () => {
     expect(inventory?.source).toBe("erp");
   });
 
-  it("404 → undefined；网络异常 → request_failed", async () => {
+  it("404 → undefined（未知 SKU 的接口承诺）；网络异常 → request_failed", async () => {
     const notFound = new ErpCommerceDataSource({
       baseUrl: "https://erp.example",
       fetchImpl: erpFetch({ "/products/X": () => jsonResponse({ error: "nope" }, 404) }),
     });
-    await expect(notFound.getProduct("X")).rejects.toMatchObject({ code: "request_failed" });
+    await expect(notFound.getProduct("X")).resolves.toBeUndefined();
 
     const net = (async (): Promise<Response> => {
       throw new TypeError("fetch failed");
@@ -217,12 +217,12 @@ describe("compositeCommerceDataSource", () => {
 });
 
 describe("dataSourceProductSource", () => {
-  it("把 CommerceDataSource 适配成 MerchantProductSource（price 用 minor units）", async () => {
+  it("把 CommerceDataSource 适配成 MerchantProductSource（price 转元 major units，与 resolveProduct 的 ×100 约定一致）", async () => {
     const source = localSource();
     source.upsertProduct({ sku: "SKU-001", title: "Beans", price_minor: 83500, currency: "CNY", stock: 9 });
     const adapter = dataSourceProductSource(source);
     const product = await adapter.getProduct("SKU-001");
-    expect(product?.price).toBe(83500);
+    expect(product?.price).toBe(835); // 83500 minor → 835.00 元
     expect(product?.currency).toBe("CNY");
     expect(product?.title).toBe("Beans");
     expect(product?.stock).toBe(9);

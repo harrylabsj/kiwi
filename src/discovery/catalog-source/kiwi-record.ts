@@ -85,7 +85,11 @@ export interface CatalogSkill {
  * record schema 的 hosting_mode 枚举两者都收），新增三态域过滤与
  * `handoff_destination_types`（精确 KTH destination_type 词表，禁止平行词表）。
  */
-export interface KiwiCatalogSearchQuery extends CatalogSearchQuery {
+// category/region/skill 是共享 CatalogSearchQuery 的键，但 kiwi 源的
+// KIWI_SEARCH_QUERY_KEYS 运行时拒绝它们（invalid_input，fail-closed）——
+// 类型层必须同步排除，否则类型合法的调用在运行时炸掉。
+export interface KiwiCatalogSearchQuery
+  extends Omit<CatalogSearchQuery, "category" | "region" | "skill"> {
   verification_level?: VerificationLevel;
   freshness_state?: FreshnessState;
   administrative_state?: AdministrativeState;

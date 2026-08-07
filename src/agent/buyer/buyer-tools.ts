@@ -33,6 +33,7 @@ import {
   type HandoffCandidate,
 } from "../../handoff/index.js";
 import type { ExecuteHandoffResult } from "../../handoff/index.js";
+import { contentDigest } from "../../negotiation/jcs.js";
 import type { AgentProfile } from "../../config/profile.js";
 import type { CommerceClient } from "../../commerce/types.js";
 import type { CommerceConnector } from "../connector/types.js";
@@ -1216,7 +1217,26 @@ const handoffAgreement: Tool = {
         return textResult("任务记录缺少 agreement 快照（磋商未完成或 terms 未持久化）。");
       }
       const destination = validateDestination({ type: p.destination_type, ref: p.destination_ref });
+      // 协议级去重：同一磋商、同一目的地已交付过 → 拒绝（LLM 重试会生成
+      // 新候选 → 新 digest，绕过 (candidate_id, digest) 幂等键，导致同协议
+      // 二次交付/二次 URL 探测、negotiation_to_handoff_rate 虚高）。
+      const priorDelivery = handoff.ledger.events(agreement.negotiation_id).find(
+        (e) =>
+          e.event_kind === "handoff_delivered" &&
+          (e.destination as { ref?: unknown } | undefined)?.ref === destination.ref &&
+          (e.destination as { type?: unknown } | undefined)?.type === destination.type,
+      );
+      if (priorDelivery !== undefined) {
+        return textResult(
+          `该协议已交付过（handoff ${priorDelivery.handoff_id ?? "unknown"}，` +
+            `目的地 ${destination.type} ${destination.ref}），同一目的地不重复交接。`,
+        );
+      }
+      // NaN 防护：非数字 expires_in_hours → Date.now()+NaN 抛 RangeError。
       const expiresInHours = Number(p.expires_in_hours ?? 24);
+      if (!Number.isFinite(expiresInHours) || expiresInHours <= 0) {
+        return textResult("expires_in_hours 必须是正数（小时）。");
+      }
       const candidate = createHandoffCandidate({
         agreement_id: agreement.agreement_id,
         negotiation_id: agreement.negotiation_id,
@@ -1232,17 +1252,6 @@ const handoffAgreement: Tool = {
         expires_at: new Date(Date.now() + expiresInHours * 3_600_000).toISOString(),
         requires_user_action: true,
       });
-      handoff.ledger.appendCandidateEvent({
-        kind: "handoff_candidate_created",
-        candidate,
-        identity: {
-          sender_identity: candidate.buyer_identity_ref,
-          counterparty_identity: candidate.merchant_identity_ref,
-          actor: "buyer",
-        },
-        capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
-        occurred_at: deps.now(),
-      });
       const outcome = await routeWriteCandidate(
         { mode: deps.mode, approvals: deps.approvals, profile, now: deps.now, registerPending: deps.registerPending },
         {
@@ -1251,7 +1260,25 @@ const handoffAgreement: Tool = {
           preconditions: { agreement_bound: true },
           risk: "handoff_delivery",
           execute: (approvedArgs) => executeHandoffForCandidate(deps, approvedArgs),
-          readPreconditions: () => ({ agreement_bound: true }),
+          // §16 stale 检测的真实重读：approval 与执行之间协议被重磋商改写
+          //（agreement 消失 / 身份变化 / terms_digest 不匹配）→ 候选 supersede。
+          // 此前恒返回 {agreement_bound: true}，write-gate 的 stale 检测对
+          // handoff 结构性失效（防护只剩 executeHandoff 执行期重验）。
+          readPreconditions: () => {
+            const current = agreementFromTask(deps.store.taskEvents(p.task_id));
+            const stillBound =
+              current !== undefined &&
+              current.agreement_id === agreement.agreement_id &&
+              current.negotiation_id === agreement.negotiation_id &&
+              contentDigest(current.agreed_terms) === candidate.terms_digest;
+            return { agreement_bound: stillBound };
+          },
+          // autopilot 政策闸：handoff 把买家送向真实成交入口（外部结账/PO/联系
+          // 商家），是系统里最接近交易的写动作——未授权自动磋商时绝不自动执行。
+          autopilotEscalation: () =>
+            profile.buyer_policy?.auto_negotiate === false
+              ? "buyer 未授权自动交接（auto_negotiate=false），需要人工确认。"
+              : undefined,
         },
       );
       return writeGateText(outcome);
@@ -1375,6 +1402,20 @@ async function executeHandoffForCandidate(
   if (agreement === undefined) {
     return { ok: false, status: "stale", error: "任务记录缺少 agreement 快照，交接中止（fail-closed）" };
   }
+  // created 事件在审批通过后才落链：被 /reject 的候选不在 Ledger 留下悬空的
+  // PROPOSED（此前先落链，/reject 后 /handoff 永远显示"从未获批"的候选，
+  // 且 LLM 重复调用会堆积无限候选事件与审批候选）。
+  handoff.ledger.appendCandidateEvent({
+    kind: "handoff_candidate_created",
+    candidate: a.candidate,
+    identity: {
+      sender_identity: a.candidate.buyer_identity_ref,
+      counterparty_identity: a.candidate.merchant_identity_ref,
+      actor: "buyer",
+    },
+    capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+    occurred_at: deps.now(),
+  });
   const result = await executeHandoff({
     candidate: a.candidate,
     ledger: handoff.ledger,

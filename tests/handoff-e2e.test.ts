@@ -162,6 +162,18 @@ describe("KTH 端到端（#20、#21）", () => {
     stacks.push(stack);
     const h = setupBuyer(stack.catalogUrl);
 
+    // 外部 checkout 桩：URL 安全探测（HEAD）要求可达的 2xx 端点。
+    const http = await import("node:http");
+    const checkoutServer = http.createServer((_req, res) => {
+      res.statusCode = 200;
+      res.end();
+    });
+    await new Promise<void>((resolve) =>
+      checkoutServer.listen(0, "127.0.0.1", () => resolve()),
+    );
+    const checkoutAddr = checkoutServer.address() as { port: number };
+    const checkoutUrl = `http://127.0.0.1:${checkoutAddr.port}/checkout/e2e`;
+
     // 1. 磋商：任务 → negotiate_buyer_task（autopilot 直通）→ selected_nonbinding
     const taskId = await createReadyTask(h.store);
     const negotiateTool = h.getTool("negotiate_buyer_task");
@@ -176,11 +188,12 @@ describe("KTH 端到端（#20、#21）", () => {
     const handoffResult = await handoffTool.execute("2", {
       task_id: taskId,
       destination_type: "external_checkout_url",
-      destination_ref: `${stack.merchantUrl}/checkout/e2e`,
+      destination_ref: checkoutUrl,
       display_summary_merchant: "Acme Merchant",
       display_summary_text: "2 × sku-001",
     });
     expect(toolText(handoffResult)).toContain("交接已交付");
+    await new Promise<void>((resolve) => checkoutServer.close(() => resolve()));
 
     // 3. Ledger 事件序列 + 三副作用 + 无订单/支付/库存事件（#12-14）
     const taskEvents = h.store.taskEvents(taskId);

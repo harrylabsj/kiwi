@@ -212,7 +212,11 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
           } else if (negotiationId === "") {
             write("缺少 negotiation_id（handoff 事件按 negotiation 落链，需提供）。");
           } else {
-            write(await current.kernel.confirmHandoffOpened(handoffId, negotiationId));
+            try {
+              write(await current.kernel.confirmHandoffOpened(handoffId, negotiationId));
+            } catch (err) {
+              write(`[handoff-open] 失败：${err instanceof Error ? err.message : String(err)}`);
+            }
           }
         } else if (line.startsWith("/handoff-launch ")) {
           const rest = line.slice("/handoff-launch ".length).trim();
@@ -222,7 +226,11 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
           if (handoffId === "" || negotiationId === "") {
             write("用法：/handoff-launch <handoff_id> <negotiation_id>");
           } else {
-            write(await current.kernel.launchHandoff(handoffId, negotiationId));
+            try {
+              write(await current.kernel.launchHandoff(handoffId, negotiationId));
+            } catch (err) {
+              write(`[handoff-launch] 失败：${err instanceof Error ? err.message : String(err)}`);
+            }
           }
         } else if (line.startsWith("/negotiate")) {
           if (catalog === undefined) {

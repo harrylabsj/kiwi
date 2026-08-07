@@ -150,6 +150,9 @@ describe("AgentDiscovery.resolve: domain", () => {
       // Cache-Control 头 → profile_cache_control → 回退，同时验证 discovery 路径
       // 上 UCP Cache-Control 强制生效）。
       ucp: { resolver: { skipDnsCheck: true } },
+      // fetchCard 的 SSRF DNS 复查同样跳过（注入的 fetchImpl 是测试替身，
+      // merchant.example 在测试环境 DNS 解析到保留网段，非真实目标）。
+      skipDnsCheck: true,
     });
     const profile = await discovery.resolve({ domain: "merchant.example" });
 
@@ -171,6 +174,7 @@ describe("AgentDiscovery.resolve: domain", () => {
         return new globalThis.Response(JSON.stringify(card), { status: 200 });
       },
       ucp: { disabled: true },
+      skipDnsCheck: true, // 同上：注入的 fetchImpl 测试替身
     });
     const profile = await discovery.resolve({ domain: "merchant.example" });
 

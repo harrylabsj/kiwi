@@ -149,25 +149,54 @@ export function compositeCommerceDataSource(
     },
     async getProducts(query?: ProductSearchQuery): Promise<ProductFact[]> {
       const results = await primary.getProducts(query);
-      // 次要源只补充 primary 缺失的 SKU；已存在 SKU 走 mergedProduct 冲突检测。
-      const known = new Set(results.map((p) => p.sku));
-      const extra: ProductFact[] = [];
+      // 次要源只补充 primary 缺失的 SKU；**重叠 SKU 不得静默跳过**——与
+      // mergedProduct 同一冲突语义：次要源给出冲突字段值 → fail-closed
+      //（authority_conflict，绝不静默合并冲突权威源）。此前 getProduct 抛错
+      // 而 getProducts 静默取 primary，同 SKU 走两条 API 行为不一致。
+      const bySku = new Map(results.map((p) => [p.sku, p]));
       for (const other of others) {
         for (const product of await other.getProducts(query)) {
-          if (known.has(product.sku)) continue;
-          known.add(product.sku);
-          extra.push(product);
+          const existing = bySku.get(product.sku);
+          if (existing === undefined) {
+            bySku.set(product.sku, product);
+            continue;
+          }
+          for (const field of CONFLICT_FIELDS) {
+            const baseValue = (existing as unknown as Record<string, unknown>)[field];
+            const otherValue = (product as unknown as Record<string, unknown>)[field];
+            if (otherValue !== undefined && baseValue !== undefined && otherValue !== baseValue) {
+              throw new CommerceError(
+                "authority_conflict",
+                `field "${field}" of SKU "${product.sku}" conflicts between sources ` +
+                  `(primary=${String(baseValue)}, secondary=${String(otherValue)})`,
+              );
+            }
+          }
         }
       }
-      return [...results, ...extra];
+      return [...bySku.values()];
     },
     async getInventory(sku: string): Promise<CommerceField<number> | undefined> {
-      return primary.getInventory(sku);
+      // 先走 mergedProduct 冲突检测（此前只看 primary，绕过了 fail-closed）；
+      // primary 有库存时保留其权威标注，否则给 composite 标注。
+      const product = await mergedProduct(sku);
+      if (product?.stock === undefined) return undefined;
+      const primaryInv = await primary.getInventory(sku);
+      if (primaryInv !== undefined) return primaryInv;
+      return { value: product.stock, authority: "UPSTREAM_PROXY", source: "composite" };
     },
     async getPrice(
       sku: string,
     ): Promise<CommerceField<{ currency: string; amount_minor: number }> | undefined> {
-      return primary.getPrice(sku);
+      const product = await mergedProduct(sku);
+      if (product?.price_minor === undefined || product.currency === undefined) return undefined;
+      const primaryPrice = await primary.getPrice(sku);
+      if (primaryPrice !== undefined) return primaryPrice;
+      return {
+        value: { currency: product.currency, amount_minor: product.price_minor },
+        authority: "UPSTREAM_PROXY",
+        source: "composite",
+      };
     },
     async getPublicListing(): Promise<Record<string, unknown>> {
       return primary.getPublicListing();

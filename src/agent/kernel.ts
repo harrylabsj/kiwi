@@ -719,7 +719,14 @@ export class AgentKernel {
    * (out-of-rule) decisions park for a human. Returns a progress line for the
    * chat, or undefined when there is nothing to do.
    */
-  async negotiationAutoTick(): Promise<string | undefined> {
+  negotiationAutoTick(): Promise<string | undefined> {
+    // 与 schedulerTick 同级：整个 tick 必须进 kernel 串行链（enqueue）。此前
+    // 被 chat-tui 定时器直接调用，可与最长 turn_timeout 的模型回合并发操作
+    // 同一 pending conversation（双路同时 claim/提交同一磋商）。
+    return this.enqueue(async () => this.negotiationAutoTickUnlocked());
+  }
+
+  private async negotiationAutoTickUnlocked(): Promise<string | undefined> {
     if (this.modeRef.value !== "autopilot") return undefined;
     if (this.commerceClient === undefined) return undefined;
     // Skip conversations already settled/at-consensus BEFORE claiming — the
