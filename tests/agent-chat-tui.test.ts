@@ -4,10 +4,10 @@
  * path (readline-closed guard).
  */
 import { mkdtempSync, rmSync } from "node:fs";
+import { streams } from "./tui-helpers.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensurePathsForDir } from "../src/agent/agent-db.js";
 import { runChatTui } from "../src/agent/chat-tui.js";
@@ -57,17 +57,6 @@ afterEach(() => {
   rmSync(workDir, { recursive: true, force: true });
 });
 
-function streams(lines: string[]): { input: Readable; output: Writable; text: () => string } {
-  const input = Readable.from([`${lines.join("\n")}\n`]);
-  let buffer = "";
-  const output = new Writable({
-    write(chunk, _encoding, callback) {
-      buffer += String(chunk);
-      callback();
-    },
-  });
-  return { input, output, text: () => buffer };
-}
 
 async function setup(): Promise<AgentKernel> {
   const { models, model } = createFakeChatModels();

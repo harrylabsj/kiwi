@@ -6,9 +6,9 @@
  * 从 Ledger 事件投影输出候选生命周期 + 目的地 + display_summary。
  */
 import { mkdtempSync, rmSync } from "node:fs";
+import { streams } from "./tui-helpers.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensurePathsForDir } from "../src/agent/agent-db.js";
 import { runChatTui } from "../src/agent/chat-tui.js";
@@ -25,17 +25,6 @@ afterEach(() => {
   rmSync(workDir, { recursive: true, force: true });
 });
 
-function streams(lines: string[]): { input: Readable; output: Writable; text: () => string } {
-  const input = Readable.from([`${lines.join("\n")}\n`]);
-  let buffer = "";
-  const output = new Writable({
-    write(chunk, _encoding, callback) {
-      buffer += String(chunk);
-      callback();
-    },
-  });
-  return { input, output, text: () => buffer };
-}
 
 describe("runChatTui /handoff（#17）", () => {
   it("显示候选生命周期 + 目的地 + 商家/摘要（用户可见目标与摘要）", async () => {

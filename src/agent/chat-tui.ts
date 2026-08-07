@@ -29,6 +29,7 @@ import type { Readable, Writable } from "node:stream";
 import { EXIT } from "../exit-codes.js";
 import { ShoppingCliCatalogSource } from "../discovery/catalog-source/index.js";
 import { negotiateWithAgent, summarizeNegotiation } from "../a2a/negotiate.js";
+import { createTheme, type Seg } from "../tui/styles.js";
 import type { AgentKernel } from "./kernel.js";
 
 /** A2A 节点状态（供 `/a2a` 显示）。 */
@@ -61,23 +62,29 @@ export interface ChatTuiOptions {
   catalog?: string;
 }
 
-function printBanner(kernel: AgentKernel, output: Writable): void {
-  const roleLabel = kernel.profile.role === "buyer" ? "Buyer" : "Merchant";
-  output.write(
-    `Kiwi ${roleLabel} · ${kernel.principal.principal_id} · 主对话（/help 查看命令，/quit 退出）\n`,
-  );
+function roleLabelOf(role: string): string {
+  return role === "buyer" ? "Buyer" : "Merchant";
 }
 
 /** Run the main chat loop. Resolves EXIT.OK on /quit or EOF. */
 export async function runChatTui(options: ChatTuiOptions): Promise<number> {
   const { input, output, reload, a2aNode, catalog } = options;
+  // Neural Awakening 主题（参照 hermes）：非 TTY 时所有样式直通原文——
+  // 既有内存流测试断言字节级不变。
+  const theme = createTheme(output as { isTTY?: boolean });
   const write = (text: string): void => {
-    output.write(`${text}\n`);
+    output.write(`${theme.decorate(text)}\n`);
   };
 
   // 可变 kernel 引用：`/profile` 切换时更新，定时器与循环自动跟随。
   let current: { kernel: AgentKernel } = { kernel: options.kernel };
-  printBanner(current.kernel, output);
+  write(
+    theme.banner({
+      roleLabel: roleLabelOf(current.kernel.profile.role),
+      id: current.kernel.principal.principal_id,
+      tagline: "主对话（/help 查看命令，/quit 退出）",
+    }),
+  );
 
   // Restart recovery: wakeups derive from the database, so an immediate tick
   // rebuilds the queue; a slow unref'd timer keeps tracking tasks alive.
@@ -123,7 +130,8 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
       input,
       output,
       terminal: (input as { isTTY?: boolean }).isTTY === true,
-      prompt: "kiwi> ",
+      // 彩色 prompt（青色；Node 22 readline 对 ANSI prompt 的宽度计算已验证）
+      prompt: theme.enabled ? theme.paint("kiwi> ", "accent") : "kiwi> ",
     });
     // EOF (Ctrl-D, or an injected stream that ends) closes the interface while
     // the last line is still being handled; prompting a closed readline throws.
@@ -131,7 +139,31 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
     rl.once("close", () => {
       rlClosed = true;
     });
-    rl.prompt();
+
+    // 状态栏 + prompt 重绘（TTY-only）：状态栏写在输入行上方，readline 的
+    // 重绘只碰自己的行，正在输入的缓冲由 readline 完整重画不丢字。
+    // 非 TTY 下 statusBar 返回空串 → 等价旧 rl.prompt()（零额外字节）。
+    const refreshPrompt = (): void => {
+      if (rlClosed) return;
+      if (theme.enabled) {
+        output.write("\r\u001b[K");
+        const mode = current.kernel.getMode();
+        const modeColor = mode === "autopilot" ? "accent" : mode === "supervised" ? "primary" : "warn";
+        const segments: Array<string | Seg> = [
+          { text: `Kiwi ${roleLabelOf(current.kernel.profile.role)}`, color: "primary", bold: true },
+          current.kernel.principal.principal_id,
+          { text: mode === "autopilot" ? "Autopilot" : mode === "manual" ? "Manual" : "Supervised", color: modeColor },
+          a2aNode?.status() !== undefined && a2aNode?.status() !== null
+            ? { text: "A2A on", color: "ok" }
+            : { text: "A2A off", color: "muted", dim: true },
+          catalog !== undefined ? `catalog ${catalog}` : "catalog —",
+        ];
+        output.write(`${theme.statusBar(segments)}\n`);
+      }
+      rl.prompt();
+    };
+
+    refreshPrompt();
     for await (const rawLine of rl) {
       const line = String(rawLine).trim();
       if (line !== "") {
@@ -151,7 +183,13 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
                     write(`A2A 节点重建失败（对话继续）：${err instanceof Error ? err.message : String(err)}`);
                   });
                 }
-                printBanner(current.kernel, output);
+                write(
+                  theme.banner({
+                    roleLabel: roleLabelOf(current.kernel.profile.role),
+                    id: current.kernel.principal.principal_id,
+                    tagline: "主对话（/help 查看命令，/quit 退出）",
+                  }),
+                );
               }
             } catch (err) {
               write(`加载 profile 失败，保留当前 agent：${err instanceof Error ? err.message : String(err)}`);
@@ -176,10 +214,12 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
               if (candidates.length === 0) {
                 write("[discover] catalog 里没有可发现的 agent。");
               } else {
-                for (const c of candidates) {
+                // panel 化：行内容与现状逐字节一致，TTY 下 box 包裹
+                const lines = candidates.map((c) => {
                   const card = c.discovery?.agent_card_url ?? c.merchant?.domain ?? "?";
-                  write(`[discover] ${c.catalog_agent_id}  status=${c.verification?.status ?? "?"}  ${card}`);
-                }
+                  return `[discover] ${c.catalog_agent_id}  status=${c.verification?.status ?? "?"}  ${card}`;
+                });
+                write(theme.panel(lines));
               }
             } catch (err) {
               write(`[discover] 失败：${err instanceof Error ? err.message : String(err)}`);
@@ -190,17 +230,17 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
           if (summary.enabled === false) {
             write("[handoff] 当前 kernel 未启用 Handoff（buyer 角色）。");
           } else {
-            write(`[handoff] 候选 ${summary.candidates.length} 个 / 交付 ${summary.handoffs.length} 个`);
-            for (const c of summary.candidates) {
-              write(
-                `  candidate ${c.candidate_id}  ${c.lifecycle}  ${c.destination_type} ${c.destination_ref}
-` +
-                  `    ${c.display_summary.merchant} — ${c.display_summary.summary}（negotiation ${c.negotiation_id}）`,
-              );
-            }
-            for (const h of summary.handoffs) {
-              write(`  handoff ${h.handoff_id}  delivery=${h.delivery}`);
-            }
+            // panel 化：TTY 下 box 包裹；非 TTY 下 join 输出与现状逐字节一致
+            // （保留候选/交付行的前导空格）。
+            const lines = [
+              `[handoff] 候选 ${summary.candidates.length} 个 / 交付 ${summary.handoffs.length} 个`,
+              ...summary.candidates.flatMap((c) => [
+                `  candidate ${c.candidate_id}  ${c.lifecycle}  ${c.destination_type} ${c.destination_ref}`,
+                `    ${c.display_summary.merchant} — ${c.display_summary.summary}（negotiation ${c.negotiation_id}）`,
+              ]),
+              ...summary.handoffs.map((h) => `  handoff ${h.handoff_id}  delivery=${h.delivery}`),
+            ];
+            write(theme.panel(lines));
           }
         } else if (line.startsWith("/handoff-open ")) {
           const rest = line.slice("/handoff-open ".length).trim();
@@ -268,7 +308,7 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
           if (reply.quit) break;
         }
       }
-      if (!rlClosed) rl.prompt();
+      if (!rlClosed) refreshPrompt();
     }
     rl.close();
     return EXIT.OK;
