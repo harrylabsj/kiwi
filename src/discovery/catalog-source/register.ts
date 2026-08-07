@@ -1,0 +1,119 @@
+/**
+ * Copyright 2026 harrylabsj
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Commerce Agent Catalog 注册 client（发布侧）——merchant 把自己注册进 catalog，
+ * 供 buyer 经 catalog 发现（消费侧在 source.ts / resolve.ts）。
+ *
+ * POST /v1/agent-catalog/agents/register（kiwi-catalog §10.2）：
+ *   - `domain` 必填（catalog 规范化 canonical domain；本地直连用占位域名）；
+ *   - `agent_card_url` / `ucp_profile_url`：merchant 自己 A2A server 的 well-known。
+ * 返回 catalog_agent_id + status；非 2xx / error 信封 → fail closed（抛 CatalogSourceError）。
+ */
+
+import { createHmac } from "node:crypto";
+import { CatalogSourceError } from "./errors.js";
+
+export interface CatalogRegisterInput {
+  /** catalog 服务 base URL（如 http://127.0.0.1:8600）。 */
+  catalogBaseUrl: string;
+  /** 注册域名（必填，catalog 规范化）。 */
+  domain: string;
+  /** merchant 自己的 Agent Card well-known URL。 */
+  agentCardUrl: string;
+  /** merchant 自己的 UCP profile well-known URL（可选）。 */
+  ucpProfileUrl?: string;
+  /** 绑定 merchant_id（owner 语义，可选）。 */
+  merchantId?: string;
+  /**
+   * KIWI_CATALOG_OWNER_TOKEN_SECRET：绑定 merchant_id 时用于派生 owner_token
+   * （HMAC-SHA256("kiwi-catalog-owner:" + merchant_id)）。未提供则按公开
+   * 自助注册（不带 merchant_id）处理。
+   */
+  ownerTokenSecret?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}
+
+export interface CatalogRegisterResult {
+  ok: boolean;
+  catalogAgentId?: string;
+  status?: string;
+  verificationEnqueued?: boolean;
+}
+
+/** 规范化 catalog base URL：去掉尾部斜杠。 */
+export function normalizeCatalogBaseUrl(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
+/**
+ * 注册一个 agent 到 catalog（fail closed：非 2xx 或 error 信封 → 抛错）。
+ * 幂等：同 domain + agent_card_url 重复注册由 catalog 侧幂等处理，安全可重试。
+ */
+export async function registerCatalogAgent(
+  input: CatalogRegisterInput,
+): Promise<CatalogRegisterResult> {
+  const fetchImpl = input.fetchImpl ?? globalThis.fetch;
+  const base = normalizeCatalogBaseUrl(input.catalogBaseUrl);
+  const body: Record<string, string> = {
+    domain: input.domain,
+    agent_card_url: input.agentCardUrl,
+  };
+  if (input.ucpProfileUrl !== undefined) body.ucp_profile_url = input.ucpProfileUrl;
+  // owner 语义：有 ownerTokenSecret 时绑定 merchant_id 并派生 owner_token；
+  // 否则退回公开自助注册（不带 merchant_id，避免 catalog 拒收）。
+  if (input.merchantId !== undefined && input.ownerTokenSecret !== undefined) {
+    body.merchant_id = input.merchantId;
+    body.owner_token = createHmac("sha256", input.ownerTokenSecret)
+      .update(`kiwi-catalog-owner:${input.merchantId}`)
+      .digest("hex");
+  }
+
+  let res: Response;
+  try {
+    res = await fetchImpl(`${base}/v1/agent-catalog/agents/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: input.timeoutMs === undefined ? undefined : AbortSignal.timeout(input.timeoutMs),
+    });
+  } catch (err) {
+    throw new CatalogSourceError(
+      "request_failed",
+      `catalog register network error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = (await res.json()) as Record<string, unknown>;
+  } catch {
+    payload = {};
+  }
+  if (!res.ok || payload.ok === false) {
+    const detail =
+      typeof payload.error === "string" ? payload.error : `HTTP ${res.status}`;
+    throw new CatalogSourceError("request_failed", `catalog register failed: ${detail}`);
+  }
+  const agent = payload.catalog_agent as Record<string, unknown> | undefined;
+  return {
+    ok: true,
+    catalogAgentId: typeof agent?.catalog_agent_id === "string" ? agent.catalog_agent_id : undefined,
+    status: typeof agent?.status === "string" ? agent.status : undefined,
+    verificationEnqueued: payload.verification_enqueued === true,
+  };
+}

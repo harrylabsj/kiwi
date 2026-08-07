@@ -62,9 +62,19 @@ kiwi                                     # 裸启动：直接进入 `kiwi>` 自�
 kiwi chat --profile <file>               # 指定 profile 的主对话 + Principal Memory
 kiwi doctor --profile <file>             # 只读诊断
 kiwi agent run --profile <file>          # 单 agent 前台磋商
+kiwi agent serve --profile <merchant> --catalog <url>   # merchant A2A server + 注册进 catalog
 kiwi tui --profile <file>                # 操作者驾驶舱（supervised/manual/autopilot）
 kiwi init/up/status/logs/down --dir <d>  # managed-local 产品栈生命周期
 ```
+
+merchant 可通过 `kiwi agent serve` 把自己注册进 kiwi-catalog（buyer 据此发现）：
+
+```bash
+kiwi agent serve --profile merchant.yaml --catalog http://127.0.0.1:8600 --port 9000
+# → 起 A2A server，POST /v1/agent-catalog/agents/register，catalog 可见
+```
+
+> 注册域名默认 `merchant-<agent_id>.local`，可用环境变量 `KIWI_CATALOG_DOMAIN` 覆盖。
 
 裸 `kiwi` 的默认底层大模型**可配置**（不 hardcode，从环境变量读）：
 

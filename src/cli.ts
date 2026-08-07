@@ -33,6 +33,11 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentDataDir, ensurePathsForDir } from "./agent/agent-db.js";
+import { A2AServer } from "./a2a/server/index.js";
+import { createMerchantHandler } from "./a2a/server/merchant-handler.js";
+import { LedgerStore } from "./negotiation/ledger/index.js";
+import { IdempotencyStore } from "./negotiation/idempotency/index.js";
+import { registerCatalogAgent } from "./discovery/catalog-source/register.js";
 import { runChatTui } from "./agent/chat-tui.js";
 import { createFakeChatModels } from "./agent/fake-chat-model.js";
 import { isAgentMode, type AgentMode } from "./agent/mode.js";
@@ -69,6 +74,8 @@ Usage:
   kiwi doctor --profile <file>            Read-only diagnostics (no writes)
   kiwi agent run --profile <file> --once  Run one negotiation turn, then exit
   kiwi agent run --profile <file>         Foreground serial polling (SIGINT/SIGTERM to stop)
+  kiwi agent serve --profile <file> [--catalog <url>] [--port N]
+                                          Run a merchant A2A server + register in kiwi-catalog
   kiwi tui --profile <file> [--data-dir <dir>]
                                           Interactive operator TUI (supervised by default;
                                           approves candidates before any formal submit)
@@ -93,6 +100,8 @@ interface ParsedArgs {
   dataDir?: string;
   once: boolean;
   fake: boolean;
+  catalog?: string;
+  port?: number;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -102,6 +111,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   let lines: string | undefined;
   let shoppingCliSrc: string | undefined;
   let dataDir: string | undefined;
+  let catalog: string | undefined;
+  let port: number | undefined;
   let once = false;
   let fake = false;
   for (let i = 0; i < argv.length; i++) {
@@ -116,6 +127,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       shoppingCliSrc = argv[++i];
     } else if (arg === "--data-dir") {
       dataDir = argv[++i];
+    } else if (arg === "--catalog") {
+      catalog = argv[++i];
+    } else if (arg === "--port") {
+      port = Number(argv[++i]);
     } else if (arg === "--once") {
       once = true;
     } else if (arg === "--fake") {
@@ -142,6 +157,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (lines !== undefined) out.lines = lines;
   if (shoppingCliSrc !== undefined) out.shoppingCliSrc = shoppingCliSrc;
   if (dataDir !== undefined) out.dataDir = dataDir;
+  if (catalog !== undefined) out.catalog = catalog;
+  if (port !== undefined) out.port = port;
   return out;
 }
 
@@ -334,6 +351,101 @@ async function cmdTui(args: ParsedArgs): Promise<number> {
     process.stderr.write(`unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
     return EXIT.TRANSIENT;
   }
+}
+
+/**
+ * `kiwi agent serve`：把 merchant profile 变成可被 catalog 发现的 A2A merchant。
+ *
+ * 从 merchant profile 构建身份 + Agent Card，起 A2AServer（生产 KNP merchant
+ * handler），启动时注册进 kiwi-catalog，buyer 可经 catalog 发现并磋商。
+ *
+ *   kiwi agent serve --profile <merchant.yaml> [--catalog http://127.0.0.1:8600]
+ *                    [--port 9000] [--data-dir <dir>]
+ */
+async function cmdAgentServe(args: ParsedArgs): Promise<number> {
+  const profile = requireProfile(args);
+  if (profile.role !== "merchant") {
+    process.stderr.write("kiwi agent serve 需要 merchant profile（role: merchant）\n");
+    return EXIT.CONFIG;
+  }
+  const port = args.port ?? 9000;
+  const catalog = args.catalog ?? "http://127.0.0.1:8600";
+  const paths = ensurePathsForDir(args.dataDir ?? agentDataDir(profile.agent_id));
+  const dir = paths.dir;
+
+  // 单调递增时钟：同内容事件在同一毫秒会触发 ledger 内容去重。
+  let tick = 0;
+  const clockBase = Date.parse("2026-08-07T00:00:00.000Z");
+  const now = (): string => {
+    const t = new Date(clockBase + tick);
+    tick += 1;
+    return t.toISOString();
+  };
+
+  const ledger = new LedgerStore({ dir, now });
+  const idempotency = new IdempotencyStore({ dir, now });
+  const handler = createMerchantHandler({
+    ledger,
+    now,
+    sender: profile.agent_id,
+    counterparty: "buyer:*",
+  });
+
+  const holder = { baseUrl: `http://127.0.0.1:${port}` };
+  const server = new A2AServer({
+    // A2AServerOptions.card 是 AgentCardConfigProvider：返回 config，server 内部再 buildAgentCard。
+    // name 用干净显示名，不掺 agent_id（形如 agent:token，会被 card secret 扫描器判为 card_has_secret）。
+    card: () => ({
+      name: "Kiwi A2A Merchant",
+      description: "Kiwi A2A merchant",
+      providerOrganization: "Kiwi",
+      version: "1.0.0",
+      baseUrl: holder.baseUrl,
+      a2aPath: "/",
+    }),
+    ledger,
+    idempotency,
+    handler,
+    now,
+  });
+  const httpServer = server.createServer();
+  await new Promise<void>((resolve) => httpServer.listen(port, "127.0.0.1", () => resolve()));
+  holder.baseUrl = `http://127.0.0.1:${port}`;
+  const agentCardUrl = `${holder.baseUrl}/.well-known/agent-card.json`;
+  console.log(`[agent serve] merchant ${profile.agent_id} A2A server: ${agentCardUrl}`);
+
+  // 注册进 kiwi-catalog（buyer 据此发现）。
+  const domain =
+    process.env.KIWI_CATALOG_DOMAIN ?? `merchant-${profile.agent_id.replace(/[^a-z0-9-]/gi, "-").toLowerCase()}.local`;
+  try {
+    const reg = await registerCatalogAgent({
+      catalogBaseUrl: catalog,
+      domain,
+      agentCardUrl,
+      ucpProfileUrl: `${holder.baseUrl}/.well-known/ucp`,
+      merchantId: profile.agent_id,
+      ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
+    });
+    console.log(
+      `[agent serve] registered in catalog ${catalog}: ${reg.catalogAgentId ?? "?"} (${reg.status ?? "?"})`,
+    );
+  } catch (err) {
+    process.stderr.write(
+      `[agent serve] catalog 注册失败（A2A server 仍运行）：${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
+
+  const shutdown = async (): Promise<void> => {
+    httpServer.closeAllConnections?.();
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  console.log("[agent serve] listening — Ctrl+C to stop");
+  // 永不返回：server 持续监听，直到 SIGINT/SIGTERM 触发 shutdown（process.exit）。
+  await new Promise<never>(() => {});
+  return EXIT.OK;
 }
 
 /**
@@ -542,6 +654,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (cmd === undefined) return await cmdChat(args);
     if (cmd === "doctor") return await cmdDoctor(args);
     if (cmd === "agent" && sub === "run") return await cmdAgentRun(args);
+    if (cmd === "agent" && sub === "serve") return await cmdAgentServe(args);
     if (cmd === "tui") return await cmdTui(args);
     if (cmd === "chat") return await cmdChat(args);
     if (cmd === "init") {
