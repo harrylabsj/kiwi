@@ -90,9 +90,14 @@
   <div class="section-inner">
     <div class="kicker">Quick start</div>
     <h2>From zero to a live agent.</h2>
-    <pre><code># 安装（尚未发布公共 registry —— 源码安装）
+    <pre><code># Install — npm 包名 @harrylabsj/kiwi（发布后）
+npm install -g @harrylabsj/kiwi                # 提供 `kiwi`
+npm install -g @harrylabsj/shopping-cli        # 提供 `shopping`（发布后）
+pip install kiwi-catalog                       # 提供 `kiwi-catalog`（发布后按 PyPI 说明）
+
+# 当前未发布 —— 源码安装备选
 git clone https://github.com/harrylabsj/kiwi
-cd kiwi &amp;&amp; npm install &amp;&amp; npm run build &amp;&amp; npm link   # 提供 `kiwi`
+cd kiwi &amp;&amp; npm install &amp;&amp; npm run build &amp;&amp; npm link
 git clone https://github.com/harrylabsj/shopping-cli   # 提供 `shopping`
 git clone https://github.com/harrylabsj/kiwi-catalog
 cd kiwi-catalog &amp;&amp; pip install -e '.[api]'             # 提供 `kiwi-catalog`
@@ -108,7 +113,7 @@ kiwi merchant publish --profile merchant.yaml --shopping-cli-db &lt;db&gt;
 # Network operator
 kiwi-catalog serve --db /data/catalog.sqlite
 </code></pre>    <div class="notice">
-      <p><strong>中文：</strong>源码安装三个仓库后：Buyer 用 init 你的身份、search 一句需求；Merchant 用 init 商家、publish 商品；Network Operator 用 kiwi-catalog serve 起服务。</p>
+      <p><strong>中文：</strong>安装（发布后 npm install -g @harrylabsj/kiwi；当前源码备选）后：Buyer 用 init 你的身份、search 一句需求；Merchant 用 init 商家、publish 商品；Network Operator 用 kiwi-catalog serve 起服务。</p>
     </div>
   </div>
 </section>

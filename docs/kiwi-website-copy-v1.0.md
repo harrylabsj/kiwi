@@ -316,9 +316,14 @@ EN:
 
 ```
 EN:
-# Install (source — not yet on a public registry)
+# Install — npm package @harrylabsj/kiwi (once published)
+npm install -g @harrylabsj/kiwi                # provides `kiwi`
+npm install -g @harrylabsj/shopping-cli        # provides `shopping` (once published)
+pip install kiwi-catalog                       # provides `kiwi-catalog` (per PyPI once published)
+
+# Not published yet — source install fallback
 git clone https://github.com/harrylabsj/kiwi
-cd kiwi && npm install && npm run build && npm link   # provides `kiwi`
+cd kiwi && npm install && npm run build && npm link
 git clone https://github.com/harrylabsj/shopping-cli   # provides `shopping`
 git clone https://github.com/harrylabsj/kiwi-catalog
 cd kiwi-catalog && pip install -e '.[api]'             # provides `kiwi-catalog`
@@ -335,8 +340,9 @@ kiwi merchant publish --profile merchant.yaml --shopping-cli-db <db>
 kiwi-catalog serve --db /data/catalog.sqlite
 
 中文：
-# 安装（源码）
-clone 三个仓库 + 各自构建（提供 `kiwi` / `shopping` / `kiwi-catalog`）后：
+# 安装（发布后 npm 包名 @harrylabsj/kiwi；当前源码备选）
+npm install -g @harrylabsj/kiwi    # 提供 `kiwi`
+clone 三仓源码构建作为备选后：
 
 # Buyer
 kiwi buyer init --agent-id <你的身份>
