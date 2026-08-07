@@ -58,6 +58,7 @@ import { MemoryStore } from "./memory/store.js";
 import { MemoryError, type MemoryItem, type Principal } from "./memory/types.js";
 import { PrivateVault } from "./memory/vault.js";
 import { openMainSession } from "./session.js";
+import { registerCatalogAgent } from "../discovery/catalog-source/register.js";
 import { baseSystemPrompt, renderMemoryBriefing } from "./system-prompt.js";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -156,6 +157,8 @@ const COMMANDS_HELP = `/memory [preferences|private]  查看记忆概览 / 学�
 /approve <candidate-id>    批准并执行一个写操作候选（重新校验前置状态）
 /reject <candidate-id>     驳回一个写操作候选（绝不执行）
 /profile <file.yaml>      加载并切换另一个 agent profile（buyer/merchant 等）
+/register --agent-card-url <url> [--catalog <url>] [--domain <d>]
+                          把本 merchant 注册进 agent catalog（buyer 发现用）
 /help                      本帮助
 /quit                      退出`;
 
@@ -613,6 +616,8 @@ export class AgentKernel {
           return { text: await this.handleApprove(arg), quit: false };
         case "/reject":
           return { text: this.handleReject(arg), quit: false };
+        case "/register":
+          return { text: await this.handleRegister(arg), quit: false };
         case "/help":
           return { text: COMMANDS_HELP, quit: false };
         case "/quit":
@@ -808,6 +813,50 @@ export class AgentKernel {
     const result = this.rejectCandidate(id);
     if (!result.ok) return `[审批] ${result.error ?? "驳回失败"}`;
     return `[审批] 候选 ${id} 已驳回，绝不会执行。`;
+  }
+
+  /**
+   * `/register`：把本 merchant 注册进 agent catalog（buyer 据此发现）。
+   * 用法：/register --agent-card-url <url> [--catalog <url>] [--domain <d>]
+   * agent-card-url 可来自 `kiwi agent serve` 的 A2A server（缺省 env KIWI_AGENT_CARD_URL）。
+   * catalog 缺省 env KIWI_CATALOG_URL 或 http://127.0.0.1:8600。
+   */
+  private async handleRegister(arg: string): Promise<string> {
+    const flagValue = (flag: string): string | undefined => {
+      const idx = arg.indexOf(flag);
+      if (idx === -1) return undefined;
+      const rest = arg.slice(idx + flag.length).trim();
+      const word = rest.split(/\s+/)[0] ?? "";
+      return word !== "" && !word.startsWith("--") ? word : undefined;
+    };
+
+    const agentCardUrl = flagValue("--agent-card-url") ?? process.env.KIWI_AGENT_CARD_URL;
+    if (agentCardUrl === undefined) {
+      return (
+        "需要 merchant A2A server 的 agent card URL。先运行 `kiwi agent serve --profile <merchant>`，" +
+        "然后 /register --agent-card-url http://127.0.0.1:9000/.well-known/agent-card.json" +
+        "（或设置环境变量 KIWI_AGENT_CARD_URL）。"
+      );
+    }
+    const catalog = flagValue("--catalog") ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600";
+    const safeAgentId = this.profile.agent_id.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
+    const domain =
+      flagValue("--domain") ?? process.env.KIWI_CATALOG_DOMAIN ?? `merchant-${safeAgentId}.local`;
+    const ucpProfileUrl = agentCardUrl.replace(/\/agent-card\.json$/, "/ucp");
+
+    try {
+      const result = await registerCatalogAgent({
+        catalogBaseUrl: catalog,
+        domain,
+        agentCardUrl,
+        ucpProfileUrl: ucpProfileUrl !== agentCardUrl ? ucpProfileUrl : undefined,
+        merchantId: this.profile.agent_id,
+        ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
+      });
+      return `[注册] 已注册到 agent catalog ${catalog}：${result.catalogAgentId ?? "?"}（status=${result.status ?? "?"}）。buyer 可经 catalog 发现本 merchant。`;
+    } catch (err) {
+      return `[注册] 失败（A2A server 仍在运行）：${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   /**
