@@ -185,6 +185,45 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
               write(`[discover] 失败：${err instanceof Error ? err.message : String(err)}`);
             }
           }
+        } else if (line === "/handoff" || line.startsWith("/handoff ")) {
+          const summary = current.kernel.handoffSummary;
+          if (summary.enabled === false) {
+            write("[handoff] 当前 kernel 未启用 Handoff（buyer 角色）。");
+          } else {
+            write(`[handoff] 候选 ${summary.candidates.length} 个 / 交付 ${summary.handoffs.length} 个`);
+            for (const c of summary.candidates) {
+              write(
+                `  candidate ${c.candidate_id}  ${c.lifecycle}  ${c.destination_type} ${c.destination_ref}
+` +
+                  `    ${c.display_summary.merchant} — ${c.display_summary.summary}（negotiation ${c.negotiation_id}）`,
+              );
+            }
+            for (const h of summary.handoffs) {
+              write(`  handoff ${h.handoff_id}  delivery=${h.delivery}`);
+            }
+          }
+        } else if (line.startsWith("/handoff-open ")) {
+          const rest = line.slice("/handoff-open ".length).trim();
+          const parts = rest.split(/\s+/);
+          const handoffId = parts[0] ?? "";
+          const negotiationId = parts[1] ?? "";
+          if (handoffId === "") {
+            write("用法：/handoff-open <handoff_id> <negotiation_id>");
+          } else if (negotiationId === "") {
+            write("缺少 negotiation_id（handoff 事件按 negotiation 落链，需提供）。");
+          } else {
+            write(await current.kernel.confirmHandoffOpened(handoffId, negotiationId));
+          }
+        } else if (line.startsWith("/handoff-launch ")) {
+          const rest = line.slice("/handoff-launch ".length).trim();
+          const parts = rest.split(/\s+/);
+          const handoffId = parts[0] ?? "";
+          const negotiationId = parts[1] ?? "";
+          if (handoffId === "" || negotiationId === "") {
+            write("用法：/handoff-launch <handoff_id> <negotiation_id>");
+          } else {
+            write(await current.kernel.launchHandoff(handoffId, negotiationId));
+          }
         } else if (line.startsWith("/negotiate")) {
           if (catalog === undefined) {
             write("未配置 agent catalog（KIWI_CATALOG_URL 或 --catalog）。");

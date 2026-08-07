@@ -132,6 +132,11 @@ export class HandoffEventStore {
     return this.store.events(negotiationId);
   }
 
+  /** 全部已落账的 negotiation_id（/handoff 列表用）。 */
+  listNegotiations(): string[] {
+    return this.store.listNegotiations();
+  }
+
   /** 某候选的全部生命周期 + 交付事件（按记录时间序；链 key = negotiation_id）。 */
   eventsForCandidate(negotiationId: string, candidateId: string): LedgerEvent[] {
     return this.store

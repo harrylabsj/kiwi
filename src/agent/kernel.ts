@@ -34,10 +34,19 @@ import {
   type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import { existsSync, readFileSync, rmSync } from "node:fs";
+import path from "node:path";
 import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import type { AgentProfile } from "../config/profile.js";
 import type { CommerceClient } from "../commerce/types.js";
 import { ensureAgentPaths, openAgentDatabase, type AgentPaths } from "./agent-db.js";
+import {
+  HandoffEventStore,
+  HandoffIdempotencyStore,
+  foldCandidateLifecycle,
+  deliveryState,
+  recordLaunch,
+  recordOpenEvidence,
+} from "../handoff/index.js";
 import { buildBuyerTools } from "./buyer/buyer-tools.js";
 import { TaskScheduler, type TickBudget, type TickResult } from "./buyer/scheduler.js";
 import { BuyerTaskStore } from "./buyer/task-store.js";
@@ -264,6 +273,8 @@ export class AgentKernel {
   private readonly taskStore?: BuyerTaskStore;
   private readonly scheduler?: TaskScheduler;
   private readonly approvals?: WriteApprovalCandidateStore;
+  /** v1.1 KTH：handoff 存储（open() 构造，buyer 角色注入）。 */
+  private readonly handoffRuntime?: { ledger: HandoffEventStore; idempotency: HandoffIdempotencyStore };
   private readonly commerceClient?: CommerceClient;
   private readonly merchantClient?: MerchantClient;
   private readonly broker?: CredentialBroker;
@@ -288,6 +299,7 @@ export class AgentKernel {
     taskStore?: BuyerTaskStore;
     scheduler?: TaskScheduler;
     approvals?: WriteApprovalCandidateStore;
+    handoffRuntime?: { ledger: HandoffEventStore; idempotency: HandoffIdempotencyStore };
     commerceClient?: CommerceClient;
     merchantClient?: MerchantClient;
     broker?: CredentialBroker;
@@ -305,6 +317,7 @@ export class AgentKernel {
     if (options.taskStore !== undefined) this.taskStore = options.taskStore;
     if (options.scheduler !== undefined) this.scheduler = options.scheduler;
     if (options.approvals !== undefined) this.approvals = options.approvals;
+    if (options.handoffRuntime !== undefined) this.handoffRuntime = options.handoffRuntime;
     if (options.commerceClient !== undefined) this.commerceClient = options.commerceClient;
     if (options.merchantClient !== undefined) this.merchantClient = options.merchantClient;
     if (options.broker !== undefined) this.broker = options.broker;
@@ -359,6 +372,7 @@ export class AgentKernel {
     let scheduler: TaskScheduler | undefined;
     let buyerTools: ReturnType<typeof buildBuyerTools> = [];
     let merchantTools: ReturnType<typeof buildMerchantTools> = [];
+    let handoffRuntime: { ledger: HandoffEventStore; idempotency: HandoffIdempotencyStore } | undefined;
     if (options.profile.role === "buyer" && options.connector !== undefined) {
       taskStore = new BuyerTaskStore({ db, principalId: principal.principal_id, now: clock, vault });
       scheduler = new TaskScheduler({
@@ -366,6 +380,12 @@ export class AgentKernel {
         connectors: [options.connector],
         now: clock,
       });
+      // v1.1 KTH：handoff 存储（Ledger 事件 + 执行幂等）落在 agent data dir，
+      // 注入 buyer 工具（handoff_agreement 工具挂载）。
+      const handoffDir = path.dirname(paths.db);
+      const handoffLedger = new HandoffEventStore({ dir: handoffDir, now: clock });
+      const handoffIdempotency = new HandoffIdempotencyStore({ dir: handoffDir, now: clock });
+      handoffRuntime = { ledger: handoffLedger, idempotency: handoffIdempotency };
       buyerTools = buildBuyerTools({
         store: taskStore,
         connector: options.connector,
@@ -378,6 +398,7 @@ export class AgentKernel {
         registerPending,
         now: clock,
         recordNegotiation: (input) => rememberNegotiation(store, input),
+        handoff: { ledger: handoffLedger, idempotency: handoffIdempotency },
       });
     } else if (
       options.profile.role === "merchant" &&
@@ -430,6 +451,7 @@ export class AgentKernel {
       session,
       harness,
       approvals,
+      ...(handoffRuntime !== undefined ? { handoffRuntime } : {}),
       modeRef,
       pendingHooks,
       turnId,
@@ -446,6 +468,134 @@ export class AgentKernel {
   }
 
   private briefingSetter: (value: string | undefined) => void = () => undefined;
+
+  /**
+   * v1.1 KTH：handoff 运行态摘要（/handoff 命令用）——候选生命周期 +
+   * 交付观察状态，从 Ledger 事件投影（#17 用户可见目标与摘要、#18 可审计）。
+   */
+  get handoffSummary():
+    | { enabled: false }
+    | {
+        enabled: true;
+        candidates: Array<{
+          candidate_id: string;
+          negotiation_id: string;
+          lifecycle: string;
+          destination_type: string;
+          destination_ref: string;
+          display_summary: { merchant: string; summary: string };
+        }>;
+        handoffs: Array<{ handoff_id: string; delivery: string }>;
+      } {
+    if (this.handoffRuntime === undefined) return { enabled: false };
+    const candidates: Array<{
+      candidate_id: string;
+      negotiation_id: string;
+      lifecycle: string;
+      destination_type: string;
+      destination_ref: string;
+      display_summary: { merchant: string; summary: string };
+    }> = [];
+    const handoffs: Array<{ handoff_id: string; delivery: string }> = [];
+    for (const negotiationId of this.handoffRuntime.ledger.listNegotiations()) {
+      const events = this.handoffRuntime.ledger.events(negotiationId);
+      const seenCandidates = new Set<string>();
+      const seenHandoffs = new Set<string>();
+      for (const event of events) {
+        if (event.handoff_candidate_id !== undefined && !seenCandidates.has(event.handoff_candidate_id)) {
+          seenCandidates.add(event.handoff_candidate_id);
+          const lifecycle = foldCandidateLifecycle(events.filter((e) => e.handoff_candidate_id === event.handoff_candidate_id));
+          const candidateEvents = events.filter((e) => e.handoff_candidate_id === event.handoff_candidate_id);
+          const created = candidateEvents.find((e) => e.event_kind === "handoff_candidate_created");
+          const embedded =
+            created?.outcome.kind === "ok"
+              ? (created.outcome.result?.candidate as Record<string, unknown> | undefined)
+              : undefined;
+          candidates.push({
+            candidate_id: event.handoff_candidate_id,
+            negotiation_id: negotiationId,
+            lifecycle: lifecycle ?? "UNKNOWN",
+            destination_type:
+              typeof embedded?.destination_type === "string" ? embedded.destination_type : "?",
+            destination_ref: typeof embedded?.destination_ref === "string" ? embedded.destination_ref : "?",
+            display_summary: (() => {
+              const summary = embedded?.display_summary as Record<string, unknown> | undefined;
+              return {
+                merchant: typeof summary?.merchant === "string" ? summary.merchant : "?",
+                summary: typeof summary?.summary === "string" ? summary.summary : "?",
+              };
+            })(),
+          });
+        }
+        if (event.handoff_id !== undefined && !seenHandoffs.has(event.handoff_id)) {
+          seenHandoffs.add(event.handoff_id);
+          handoffs.push({
+            handoff_id: event.handoff_id,
+            delivery: deliveryState(events.filter((e) => e.handoff_id === event.handoff_id)) ?? "?",
+          });
+        }
+      }
+    }
+    return { enabled: true, candidates, handoffs };
+  }
+
+  /** 模拟 OS/browser/deep-link handler 启动（LAUNCHED；不证明页面加载）。 */
+  async launchHandoff(handoffId: string, negotiationId: string): Promise<string> {
+    if (this.handoffRuntime === undefined) return "Handoff 未启用。";
+    const events = this.handoffRuntime.ledger.events(negotiationId);
+    const handoffEvents = events.filter((e) => e.handoff_id === handoffId);
+    if (handoffEvents.length === 0) return `未知 handoff ${handoffId}（negotiation ${negotiationId}）。`;
+    const candidateId = handoffEvents[0]?.handoff_candidate_id;
+    if (candidateId === undefined) return "handoff 事件缺少候选引用。";
+    const candidateEvents = events.filter((e) => e.handoff_candidate_id === candidateId);
+    const created = candidateEvents.find((e) => e.event_kind === "handoff_candidate_created");
+    const embedded =
+      created?.outcome.kind === "ok"
+        ? (created.outcome.result?.candidate as Record<string, unknown> | undefined)
+        : undefined;
+    if (embedded === undefined) return "候选文档缺失，无法启动。";
+    const { validateHandoffCandidate } = await import("../handoff/index.js");
+    const candidate = validateHandoffCandidate(embedded);
+    recordLaunch({
+      ledger: this.handoffRuntime.ledger,
+      candidate,
+      handoff_id: handoffId,
+      identity: { sender_identity: candidate.buyer_identity_ref, counterparty_identity: candidate.merchant_identity_ref, actor: "buyer" },
+      capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+      now: () => new Date().toISOString(),
+    });
+    return `handoff ${handoffId} 已启动（LAUNCHED）——不证明页面加载。`;
+  }
+
+  /** 本地回调证据：handoff-open 演示（OPENED_CONFIRMED 证据门，KTH §9）。 */
+  async confirmHandoffOpened(handoffId: string, negotiationId: string): Promise<string> {
+    if (this.handoffRuntime === undefined) return "Handoff 未启用。";
+    const events = this.handoffRuntime.ledger.events(negotiationId);
+    const handoffEvents = events.filter((e) => e.handoff_id === handoffId);
+    if (handoffEvents.length === 0) return `未知 handoff ${handoffId}（negotiation ${negotiationId}）。`;
+    const candidateId = handoffEvents[0]?.handoff_candidate_id;
+    if (candidateId === undefined) return "handoff 事件缺少候选引用。";
+    const created = events
+      .filter((e) => e.handoff_candidate_id === candidateId)
+      .find((e) => e.event_kind === "handoff_candidate_created");
+    const embedded =
+      created?.outcome.kind === "ok"
+        ? (created.outcome.result?.candidate as Record<string, unknown> | undefined)
+        : undefined;
+    if (embedded === undefined) return "候选文档缺失，无法确认。";
+    const { validateHandoffCandidate } = await import("../handoff/index.js");
+    const candidate = validateHandoffCandidate(embedded);
+    recordOpenEvidence({
+      ledger: this.handoffRuntime.ledger,
+      candidate,
+      handoff_id: handoffId,
+      identity: { sender_identity: candidate.buyer_identity_ref, counterparty_identity: candidate.merchant_identity_ref, actor: "buyer" },
+      capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+      now: () => new Date().toISOString(),
+      evidence: { kind: "local_callback", handoff_id: handoffId, at: new Date().toISOString() },
+    });
+    return `handoff ${handoffId} 已确认打开（OPENED_CONFIRMED，evidence=local_callback）。`;
+  }
 
   get memoryStore(): MemoryStore {
     return this.store;
