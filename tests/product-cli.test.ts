@@ -75,7 +75,6 @@ describe("product CLI command tree (D0)", () => {
       ["buyer", "search"],
       ["buyer", "tasks"],
       ["merchant", "init"],
-      ["merchant", "publish"],
       ["merchant", "listings"],
       ["merchant", "status"],
       ["merchant", "doctor"],
@@ -85,6 +84,14 @@ describe("product CLI command tree (D0)", () => {
       expect(code).toBe(EXIT.CONFIG);
       expect(stderr).toContain("尚未实现");
     }
+  });
+
+  it("merchant publish (D2) validates required config instead of not-implemented", async () => {
+    // 缺 --profile：走 profile 校验路径（不是"尚未实现"）
+    const { code, stderr } = await run(["merchant", "publish"]);
+    expect(code).toBe(EXIT.CONFIG);
+    expect(stderr).not.toContain("尚未实现");
+    expect(stderr).toContain("--profile");
   });
 
   it("legacy commands stay reachable through the global help", async () => {

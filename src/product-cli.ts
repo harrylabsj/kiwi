@@ -56,7 +56,9 @@ Usage:
                                           （agent serve 别名）
   kiwi merchant init                      [D1] 统一初始化引导（shopping-cli 检测/
                                           Principal/数据连接/A2A 配置）—— 尚未实现
-  kiwi merchant publish                   [D2] 注册 Agent + 发布 Listing 编排 —— 尚未实现
+  kiwi merchant publish --profile <merchant.yaml> --shopping-cli-db <db>
+                                          [D2] 注册 Agent + 发布 Listing 编排
+                                          （需 KIWI_CATALOG_OWNER_TOKEN_SECRET）
   kiwi merchant listings                  [D2] 已发布 Listing 查看 —— 尚未实现
   kiwi merchant status                    [D1] Merchant 运行时状态 —— 尚未实现
   kiwi merchant doctor                    [D3] Merchant 侧组件健康 —— 尚未实现

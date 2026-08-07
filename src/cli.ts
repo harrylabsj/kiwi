@@ -59,6 +59,7 @@ import { runDown, runStatus, runUp, SupervisorError } from "./supervisor/manage.
 import { parseLogLines, runLogs } from "./supervisor/logs.js";
 import { StackConfigError } from "./supervisor/stack-config.js";
 import { cmdProductDoctor, productHelp } from "./product-cli.js";
+import { merchantPublish } from "./product-publish.js";
 
 const USAGE = `kiwi 0.6.0 — commerce negotiation agent runtime
 
@@ -108,6 +109,9 @@ interface ParsedArgs {
   dir?: string;
   lines?: string;
   shoppingCliSrc?: string;
+  shoppingCliDb?: string;
+  shoppingCliPath?: string;
+  shoppingCliMerchant?: string;
   dataDir?: string;
   once: boolean;
   fake: boolean;
@@ -123,6 +127,9 @@ function parseArgs(argv: string[]): ParsedArgs {
   let dir: string | undefined;
   let lines: string | undefined;
   let shoppingCliSrc: string | undefined;
+  let shoppingCliDb: string | undefined;
+  let shoppingCliPath: string | undefined;
+  let shoppingCliMerchant: string | undefined;
   let dataDir: string | undefined;
   let catalog: string | undefined;
   let port: number | undefined;
@@ -140,6 +147,12 @@ function parseArgs(argv: string[]): ParsedArgs {
       lines = argv[++i];
     } else if (arg === "--shopping-cli-src") {
       shoppingCliSrc = argv[++i];
+    } else if (arg === "--shopping-cli-db") {
+      shoppingCliDb = argv[++i];
+    } else if (arg === "--shopping-cli-path") {
+      shoppingCliPath = argv[++i];
+    } else if (arg === "--shopping-cli-merchant") {
+      shoppingCliMerchant = argv[++i];
     } else if (arg === "--data-dir") {
       dataDir = argv[++i];
     } else if (arg === "--catalog") {
@@ -175,6 +188,9 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (dir !== undefined) out.dir = dir;
   if (lines !== undefined) out.lines = lines;
   if (shoppingCliSrc !== undefined) out.shoppingCliSrc = shoppingCliSrc;
+  if (shoppingCliDb !== undefined) out.shoppingCliDb = shoppingCliDb;
+  if (shoppingCliPath !== undefined) out.shoppingCliPath = shoppingCliPath;
+  if (shoppingCliMerchant !== undefined) out.shoppingCliMerchant = shoppingCliMerchant;
   if (dataDir !== undefined) out.dataDir = dataDir;
   if (catalog !== undefined) out.catalog = catalog;
   if (port !== undefined) out.port = port;
@@ -767,12 +783,55 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   }
   if (sub === "start") return await cmdAgentServe(args);
   if (sub === "init") return notImplementedProduct("kiwi merchant init", "D1");
-  if (sub === "publish") return notImplementedProduct("kiwi merchant publish", "D2");
+  if (sub === "publish") return await cmdMerchantPublish(args);
   if (sub === "listings") return notImplementedProduct("kiwi merchant listings", "D2");
   if (sub === "status") return notImplementedProduct("kiwi merchant status", "D1");
   if (sub === "doctor") return notImplementedProduct("kiwi merchant doctor", "D3");
   process.stderr.write(`unknown merchant command: ${sub}\n`);
   return EXIT.CONFIG;
+}
+
+/**
+ * `kiwi merchant publish`（D2）：编排 agent 注册 + listing 发布（rev1.1 §4.5）。
+ * fail-closed：任一步失败 → 非零退出 + 分步报告，不假装全成功。
+ */
+async function cmdMerchantPublish(args: ParsedArgs): Promise<number> {
+  const profile = requireProfile(args);
+  if (profile.role !== "merchant") {
+    process.stderr.write("kiwi merchant publish 需要 merchant profile（role: merchant）\n");
+    return EXIT.CONFIG;
+  }
+  const shoppingCliDb = args.shoppingCliDb ?? process.env.SHOPPING_DB_PATH;
+  if (!shoppingCliDb) {
+    process.stderr.write(
+      "--shopping-cli-db <path>（或 SHOPPING_DB_PATH）是必需的：shopping-cli 的 SQLite 数据库路径\n",
+    );
+    return EXIT.CONFIG;
+  }
+  if (!existsSync(shoppingCliDb)) {
+    process.stderr.write(`shopping-cli 数据库不存在：${shoppingCliDb}\n`);
+    return EXIT.CONFIG;
+  }
+  const ownerTokenSecret = process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET;
+  if (!ownerTokenSecret) {
+    process.stderr.write(
+      "KIWI_CATALOG_OWNER_TOKEN_SECRET 是必需的（owner token 派生，与 kiwi-catalog 一致）\n",
+    );
+    return EXIT.CONFIG;
+  }
+  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600";
+  const report = await merchantPublish({
+    profile,
+    catalogBaseUrl: catalog,
+    ownerTokenSecret,
+    shoppingCliDb,
+    ...(args.shoppingCliPath !== undefined ? { shoppingCliPath: args.shoppingCliPath } : {}),
+    ...(args.shoppingCliMerchant !== undefined
+      ? { shoppingCliMerchant: args.shoppingCliMerchant }
+      : {}),
+  });
+  printJson(report);
+  return report.ok ? EXIT.OK : EXIT.CONFIG;
 }
 
 /** 产品层 network 命令树（rev1.1 §5）——Operator 面规划中，全部骨架。 */
