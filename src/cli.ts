@@ -119,6 +119,7 @@ interface ParsedArgs {
   output?: string;
   force: boolean;
   autoInstall: boolean;
+  noInstall: boolean;
   agentId?: string;
   ownerId?: string;
   autoNegotiate: boolean;
@@ -149,6 +150,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let output: string | undefined;
   let force = false;
   let autoInstall = false;
+  let noInstall = false;
   let agentId: string | undefined;
   let ownerId: string | undefined;
   let autoNegotiate = false;
@@ -189,6 +191,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       force = true;
     } else if (arg === "--auto-install") {
       autoInstall = true;
+    } else if (arg === "--no-install") {
+      noInstall = true;
     } else if (arg === "--agent-id") {
       agentId = argv[++i];
     } else if (arg === "--owner-id") {
@@ -237,7 +241,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       throw new ProfileError(`Unknown argument: ${arg ?? ""}`);
     }
   }
-  const out: ParsedArgs = { command, once, fake, noChat, noA2a, force, autoInstall, autoNegotiate };
+  const out: ParsedArgs = { command, once, fake, noChat, noA2a, force, autoInstall, noInstall, autoNegotiate };
   if (profile !== undefined) out.profile = profile;
   if (dir !== undefined) out.dir = dir;
   if (lines !== undefined) out.lines = lines;
@@ -930,7 +934,10 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
   const merchantId = args.merchantId ?? process.env.KIWI_MERCHANT_ID ?? "";
   const name = args.merchantName ?? process.env.KIWI_MERCHANT_NAME ?? "";
   if (!name) {
-    process.stderr.write("--name <商家名称> 是必需的（或 KIWI_MERCHANT_NAME）\n");
+    process.stderr.write(
+      "--name <商家名称> 是必需的（或 KIWI_MERCHANT_NAME）——它是你在网络上的" +
+        "公开商家名称，Kiwi 不能替商家起名。\n",
+    );
     return EXIT.CONFIG;
   }
   const report = await merchantInit({
@@ -942,7 +949,8 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
     floorPriceMinor: 0,
     ...(args.output !== undefined ? { outputPath: args.output } : {}),
     ...(args.force ? { force: true } : {}),
-    ...(args.autoInstall ? { autoInstallShoppingCli: true } : {}),
+    // 数据引擎默认自动安装（合一体验）；--no-install 显式禁用（受限/CI）
+    autoInstallShoppingCli: !args.noInstall,
   });
   printJson(report);
   for (const warning of report.warnings) {
