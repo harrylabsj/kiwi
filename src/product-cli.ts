@@ -54,8 +54,10 @@ Usage:
   kiwi merchant start --profile <merchant.yaml> [--catalog <url>] [--port N] [--no-chat]
                                           Merchant A2A server + 注册 Kiwi Network
                                           （agent serve 别名）
-  kiwi merchant init                      [D1] 统一初始化引导（shopping-cli 检测/
-                                          Principal/数据连接/A2A 配置）—— 尚未实现
+  kiwi merchant init --merchant-id <shopping-cli merchant_id> --name <商家名称>
+                                          [D1] 生成 merchant profile（agent_id =
+                                          merchant_id 身份统一；需 KIWI_MERCHANT_ID /
+                                          KIWI_MERCHANT_NAME 或 --output/--force）
   kiwi merchant publish --profile <merchant.yaml> --shopping-cli-db <db>
                                           [D2] 注册 Agent + 发布 Listing 编排
                                           （需 KIWI_CATALOG_OWNER_TOKEN_SECRET）
@@ -89,9 +91,12 @@ function printJson(value: unknown): void {
 
 // ── 聚合 doctor（D0 最小版；D3 补版本兼容矩阵）─────────────────────────────
 
-function detectShoppingCli(): { ok: boolean; found: boolean; version?: string; error?: string } {
+export function detectShoppingCli(
+  spawnImpl?: typeof spawnSync,
+): { ok: boolean; found: boolean; version?: string; error?: string } {
   try {
-    const result = spawnSync("shopping", ["--version"], {
+    const spawn = spawnImpl ?? spawnSync;
+    const result = spawn("shopping", ["--version"], {
       encoding: "utf-8",
       timeout: 5_000,
     });

@@ -59,6 +59,7 @@ import { runDown, runStatus, runUp, SupervisorError } from "./supervisor/manage.
 import { parseLogLines, runLogs } from "./supervisor/logs.js";
 import { StackConfigError } from "./supervisor/stack-config.js";
 import { cmdProductDoctor, productHelp } from "./product-cli.js";
+import { merchantInit } from "./product-init.js";
 import { merchantPublish } from "./product-publish.js";
 
 const USAGE = `kiwi 0.6.0 — commerce negotiation agent runtime
@@ -112,6 +113,8 @@ interface ParsedArgs {
   shoppingCliDb?: string;
   shoppingCliPath?: string;
   shoppingCliMerchant?: string;
+  output?: string;
+  force: boolean;
   dataDir?: string;
   once: boolean;
   fake: boolean;
@@ -130,6 +133,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   let shoppingCliDb: string | undefined;
   let shoppingCliPath: string | undefined;
   let shoppingCliMerchant: string | undefined;
+  let output: string | undefined;
+  let force = false;
   let dataDir: string | undefined;
   let catalog: string | undefined;
   let port: number | undefined;
@@ -153,6 +158,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       shoppingCliPath = argv[++i];
     } else if (arg === "--shopping-cli-merchant") {
       shoppingCliMerchant = argv[++i];
+    } else if (arg === "--output") {
+      output = argv[++i];
+    } else if (arg === "--force") {
+      force = true;
     } else if (arg === "--data-dir") {
       dataDir = argv[++i];
     } else if (arg === "--catalog") {
@@ -183,7 +192,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       throw new ProfileError(`Unknown argument: ${arg ?? ""}`);
     }
   }
-  const out: ParsedArgs = { command, once, fake, noChat, noA2a };
+  const out: ParsedArgs = { command, once, fake, noChat, noA2a, force };
   if (profile !== undefined) out.profile = profile;
   if (dir !== undefined) out.dir = dir;
   if (lines !== undefined) out.lines = lines;
@@ -191,6 +200,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (shoppingCliDb !== undefined) out.shoppingCliDb = shoppingCliDb;
   if (shoppingCliPath !== undefined) out.shoppingCliPath = shoppingCliPath;
   if (shoppingCliMerchant !== undefined) out.shoppingCliMerchant = shoppingCliMerchant;
+  if (output !== undefined) out.output = output;
   if (dataDir !== undefined) out.dataDir = dataDir;
   if (catalog !== undefined) out.catalog = catalog;
   if (port !== undefined) out.port = port;
@@ -782,13 +792,45 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
     return EXIT.OK;
   }
   if (sub === "start") return await cmdAgentServe(args);
-  if (sub === "init") return notImplementedProduct("kiwi merchant init", "D1");
+  if (sub === "init") return await cmdMerchantInit(args);
   if (sub === "publish") return await cmdMerchantPublish(args);
   if (sub === "listings") return notImplementedProduct("kiwi merchant listings", "D2");
   if (sub === "status") return notImplementedProduct("kiwi merchant status", "D1");
   if (sub === "doctor") return notImplementedProduct("kiwi merchant doctor", "D3");
   process.stderr.write(`unknown merchant command: ${sub}\n`);
   return EXIT.CONFIG;
+}
+
+/**
+ * `kiwi merchant init`（D1）：首次初始化引导（rev1.1 §3.2/§19 D1）。
+ * 生成可直接使用的 merchant profile（agent_id = shopping-cli merchant_id，
+ * D2 身份统一）；shopping-cli 缺失/不可达记 warning 不阻塞。
+ */
+async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
+  const merchantId = process.env.KIWI_MERCHANT_ID ?? "";
+  const name = process.env.KIWI_MERCHANT_NAME ?? "";
+  if (!merchantId || !name) {
+    process.stderr.write(
+      "--merchant-id <shopping-cli merchant_id> 与 --name <商家名称> 是必需的" +
+        "（或 KIWI_MERCHANT_ID / KIWI_MERCHANT_NAME）\n",
+    );
+    return EXIT.CONFIG;
+  }
+  const report = await merchantInit({
+    merchantName: name,
+    merchantId,
+    shoppingCliUrl: process.env.SHOPPING_CLI_URL ?? "http://127.0.0.1:8765",
+    shoppingCliDb: process.env.SHOPPING_DB_PATH,
+    catalogUrl: args.catalog ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600",
+    floorPriceMinor: 0,
+    ...(args.output !== undefined ? { outputPath: args.output } : {}),
+    ...(args.force ? { force: true } : {}),
+  });
+  printJson(report);
+  for (const warning of report.warnings) {
+    process.stderr.write(`warning: ${warning}\n`);
+  }
+  return report.ok ? EXIT.OK : EXIT.CONFIG;
 }
 
 /**
