@@ -1,30 +1,23 @@
 /**
  * CommerceDataSource 测试（v1.1 WP-B / 完成定义 #5、#6、#7）。
  *
- * 覆盖：
- * - LocalDatabaseCommerceDataSource：本地商品库增改查、权威标注
- *   （LOCAL_AUTHORITATIVE）、public-only、健康检查；
- * - ErpCommerceDataSource：HTTP adapter 成功/404/网络/超时/结构错误
- *   fail-closed、UPSTREAM_PROXY 标注；
- * - compositeCommerceDataSource：多源合并、同字段冲突 fail-closed
- *   （authority_conflict，绝不静默合并冲突权威源）、次要源补缺；
- * - dataSourceProductSource：MerchantProductSource 适配（price 用
- *   price_minor，与 KNP Money 一致）。
+ * 架构调整（2026-08-07）：kiwi merchant 只与 shopping-cli 沟通——
+ * ERP / 本地库接入已下沉到 shopping-cli 仓（`shopping_cli/data_sources/`，
+ * migration v16 products.source）。kiwi 侧只保留：
+ * - `CommerceDataSource` 接口（数据侧边界，≠ CommerceClient 通信侧
+ *   ≠ CounterpartyChannel）；
+ * - `ShoppingCliCommerceDataSource`（唯一数据入口）；
+ * - `dataSourceProductSource`（MerchantProductSource 适配，price minor
+ *   与 resolveProduct 的 ×100 约定一致）。
  */
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CommerceError,
-  compositeCommerceDataSource,
   type CommerceDataSource,
+  type CommerceField,
+  type ProductFact,
+  type ProductSearchQuery,
 } from "../src/commerce/data-source.js";
-import {
-  LocalDatabaseCommerceDataSource,
-  openLocalDatabaseCommerceDataSource,
-} from "../src/commerce/local-db-source.js";
-import { ErpCommerceDataSource } from "../src/commerce/erp-source.js";
 import { ShoppingCliCommerceDataSource } from "../src/commerce/shopping-cli-source.js";
 import { dataSourceProductSource } from "../src/a2a/server/merchant-handler.js";
 
@@ -38,13 +31,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function localSource(): LocalDatabaseCommerceDataSource {
-  const dir = mkdtempSync(path.join(tmpdir(), "kiwi-cds-"));
-  return openLocalDatabaseCommerceDataSource({ dbPath: path.join(dir, "facts.sqlite") });
-}
-
-/** ERP 假 fetch。 */
-function erpFetch(routes: Record<string, () => Response>): typeof fetch {
+function cliFetch(routes: Record<string, () => Response>): typeof fetch {
   return (async (input: FetchInput, _init?: FetchInit): Promise<Response> => {
     const href = String(input);
     for (const [suffix, handler] of Object.entries(routes)) {
@@ -54,200 +41,33 @@ function erpFetch(routes: Record<string, () => Response>): typeof fetch {
   }) as typeof fetch;
 }
 
-describe("LocalDatabaseCommerceDataSource", () => {
-  it("upsert + get + search 基本读写", async () => {
-    const source = localSource();
-    source.upsertProduct({ sku: "SKU-001", title: "Coffee Beans", price_minor: 83500, stock: 12 });
-    source.upsertProduct({ sku: "SKU-002", title: "Tea", price_minor: 4200, currency: "CNY" });
+/** 最小 stub：dataSourceProductSource 适配测试用（不依赖 HTTP 形状）。 */
+function stubSource(product?: ProductFact): CommerceDataSource {
+  return {
+    async getProduct(sku) {
+      return product?.sku === sku ? product : undefined;
+    },
+    async getProducts(_query?: ProductSearchQuery): Promise<ProductFact[]> {
+      return product === undefined ? [] : [product];
+    },
+    async getInventory(_sku: string): Promise<CommerceField<number> | undefined> {
+      return undefined;
+    },
+    async getPrice(
+      _sku: string,
+    ): Promise<CommerceField<{ currency: string; amount_minor: number }> | undefined> {
+      return undefined;
+    },
+    async getPublicListing(): Promise<Record<string, unknown>> {
+      return {};
+    },
+    async health() {
+      return { ok: true };
+    },
+  };
+}
 
-    const product = await source.getProduct("SKU-001");
-    expect(product?.sku).toBe("SKU-001");
-    expect(product?.price_minor).toBe(83500);
-    expect(product?.stock).toBe(12);
-    expect(await source.getProduct("MISSING")).toBeUndefined();
-
-    const search = await source.getProducts({ q: "tea" });
-    expect(search.map((p) => p.sku)).toEqual(["SKU-002"]);
-    source.close();
-  });
-
-  it("权威标注 LOCAL_AUTHORITATIVE", async () => {
-    const source = localSource();
-    source.upsertProduct({ sku: "SKU-001", price_minor: 100, stock: 3 });
-    const inventory = await source.getInventory("SKU-001");
-    expect(inventory?.authority).toBe("LOCAL_AUTHORITATIVE");
-    expect(inventory?.source).toBe("local-db");
-    const price = await source.getPrice("SKU-001");
-    expect(price?.value.amount_minor).toBe(100);
-    expect(price?.authority).toBe("LOCAL_AUTHORITATIVE");
-    source.close();
-  });
-
-  it("非法输入 fail-closed（空 sku / 负价）", async () => {
-    const source = localSource();
-    await expect(source.getProduct("")).rejects.toMatchObject({ code: "invalid_input" });
-    expect(() => source.upsertProduct({ sku: "X", price_minor: -1 })).toThrow(CommerceError);
-    source.close();
-  });
-
-  it("public listing 只含公开字段", async () => {
-    const source = localSource();
-    source.upsertProduct({ sku: "SKU-001", price_minor: 100 });
-    const listing = await source.getPublicListing();
-    expect(listing.source).toBe("local-db");
-    expect((listing.products as Array<Record<string, unknown>>)[0]?.sku).toBe("SKU-001");
-    expect((listing.products as Array<Record<string, unknown>>)[0]).not.toHaveProperty("cost_minor");
-    source.close();
-  });
-});
-
-describe("ErpCommerceDataSource", () => {
-  it("getProduct 成功（UPSTREAM_PROXY 标注）", async () => {
-    const source = new ErpCommerceDataSource({
-      baseUrl: "https://erp.example",
-      fetchImpl: erpFetch({
-        "/products/SKU-001": () =>
-          jsonResponse({ sku: "SKU-001", title: "Erp Item", price_minor: 5000, currency: "CNY", stock: 7 }),
-      }),
-    });
-    const product = await source.getProduct("SKU-001");
-    expect(product?.price_minor).toBe(5000);
-    expect(product?.stock).toBe(7);
-    const inventory = await source.getInventory("SKU-001");
-    expect(inventory?.authority).toBe("UPSTREAM_PROXY");
-    expect(inventory?.source).toBe("erp");
-  });
-
-  it("404 → undefined（未知 SKU 的接口承诺）；网络异常 → request_failed", async () => {
-    const notFound = new ErpCommerceDataSource({
-      baseUrl: "https://erp.example",
-      fetchImpl: erpFetch({ "/products/X": () => jsonResponse({ error: "nope" }, 404) }),
-    });
-    await expect(notFound.getProduct("X")).resolves.toBeUndefined();
-
-    const net = (async (): Promise<Response> => {
-      throw new TypeError("fetch failed");
-    }) as typeof fetch;
-    const broken = new ErpCommerceDataSource({ baseUrl: "https://erp.example", fetchImpl: net });
-    await expect(broken.getProduct("X")).rejects.toMatchObject({ code: "request_failed" });
-  });
-
-  it("结构错误 fail-closed（缺 sku / 非对象）", async () => {
-    const bad = new ErpCommerceDataSource({
-      baseUrl: "https://erp.example",
-      fetchImpl: erpFetch({ "/products/X": () => jsonResponse({ title: "no sku" }) }),
-    });
-    await expect(bad.getProduct("X")).rejects.toMatchObject({ code: "request_failed" });
-  });
-
-  it("非法 baseUrl → invalid_input", () => {
-    expect(() => new ErpCommerceDataSource({ baseUrl: "ftp://erp.example" })).toThrow(CommerceError);
-  });
-
-  it("getProducts 列表响应解析", async () => {
-    const source = new ErpCommerceDataSource({
-      baseUrl: "https://erp.example",
-      fetchImpl: erpFetch({
-        "/products?": () =>
-          jsonResponse({ results: [{ sku: "A", price_minor: 1 }, { sku: "B", price_minor: 2 }] }),
-      }),
-    });
-    const products = await source.getProducts();
-    expect(products.map((p) => p.sku)).toEqual(["A", "B"]);
-  });
-});
-
-describe("compositeCommerceDataSource", () => {
-  function stubSource(products: Record<string, { price_minor?: number; stock?: number }>): CommerceDataSource {
-    return {
-      async getProduct(sku) {
-        const p = products[sku];
-        return p === undefined ? undefined : { sku, ...p };
-      },
-      async getProducts() {
-        return Object.entries(products).map(([sku, p]) => ({ sku, ...p }));
-      },
-      async getInventory() {
-        return undefined;
-      },
-      async getPrice() {
-        return undefined;
-      },
-      async getPublicListing() {
-        return {};
-      },
-      async health() {
-        return { ok: true };
-      },
-    };
-  }
-
-  it("多源一致字段合并", async () => {
-    const composite = compositeCommerceDataSource([
-      stubSource({ "SKU-001": { price_minor: 100, stock: 5 } }),
-      stubSource({ "SKU-001": { price_minor: 100 } }),
-    ]);
-    const product = await composite.getProduct("SKU-001");
-    expect(product?.price_minor).toBe(100);
-    expect(product?.stock).toBe(5);
-  });
-
-  it("同字段冲突 → authority_conflict（fail-closed，绝不静默合并）", async () => {
-    const composite = compositeCommerceDataSource([
-      stubSource({ "SKU-001": { price_minor: 100 } }),
-      stubSource({ "SKU-001": { price_minor: 999 } }),
-    ]);
-    await expect(composite.getProduct("SKU-001")).rejects.toMatchObject({
-      code: "authority_conflict",
-    });
-  });
-
-  it("次要源只补 primary 缺失的 SKU", async () => {
-    const composite = compositeCommerceDataSource([
-      stubSource({ "SKU-001": { price_minor: 100 } }),
-      stubSource({ "SKU-002": { price_minor: 200 } }),
-    ]);
-    const products = await composite.getProducts();
-    expect(products.map((p) => p.sku).sort()).toEqual(["SKU-001", "SKU-002"]);
-  });
-
-  it("空源列表 → invalid_input", () => {
-    expect(() => compositeCommerceDataSource([])).toThrow(CommerceError);
-  });
-});
-
-describe("dataSourceProductSource", () => {
-  it("把 CommerceDataSource 适配成 MerchantProductSource（price 转元 major units，与 resolveProduct 的 ×100 约定一致）", async () => {
-    const source = localSource();
-    source.upsertProduct({ sku: "SKU-001", title: "Beans", price_minor: 83500, currency: "CNY", stock: 9 });
-    const adapter = dataSourceProductSource(source);
-    const product = await adapter.getProduct("SKU-001");
-    expect(product?.price).toBe(835); // 83500 minor → 835.00 元
-    expect(product?.currency).toBe("CNY");
-    expect(product?.title).toBe("Beans");
-    expect(product?.stock).toBe(9);
-    source.close();
-  });
-
-  it("未知 SKU → 抛错（由 merchant-handler 的调用方决定演示价回退）", async () => {
-    const source = localSource();
-    const adapter = dataSourceProductSource(source);
-    await expect(adapter.getProduct("NOPE")).rejects.toThrow(/no price/);
-    source.close();
-  });
-});
-
-describe("ShoppingCliCommerceDataSource", () => {
-  function cliFetch(routes: Record<string, () => Response>): typeof fetch {
-    return (async (input: FetchInput, _init?: FetchInit): Promise<Response> => {
-      const href = String(input);
-      for (const [suffix, handler] of Object.entries(routes)) {
-        if (href.includes(suffix)) return handler();
-      }
-      return jsonResponse({ error: "not found" }, 404);
-    }) as typeof fetch;
-  }
-
+describe("ShoppingCliCommerceDataSource（唯一数据入口）", () => {
   it("getProduct 解析 {product} 信封：price 元→minor 转换 + UPSTREAM_PROXY 标注", async () => {
     const source = new ShoppingCliCommerceDataSource({
       baseUrl: "https://shopping-cli.example",
@@ -265,6 +85,14 @@ describe("ShoppingCliCommerceDataSource", () => {
     const inventory = await source.getInventory("SKU-001");
     expect(inventory?.authority).toBe("UPSTREAM_PROXY");
     expect(inventory?.source).toBe("shopping-cli");
+  });
+
+  it("404 → undefined（未知 SKU 的接口承诺，供调用方回退演示价）", async () => {
+    const source = new ShoppingCliCommerceDataSource({
+      baseUrl: "https://shopping-cli.example",
+      fetchImpl: cliFetch({}),
+    });
+    expect(await source.getProduct("NOPE")).toBeUndefined();
   });
 
   it("getProducts 解析 {results} 信封（/search/products）", async () => {
@@ -303,25 +131,34 @@ describe("ShoppingCliCommerceDataSource", () => {
     const net = (async (): Promise<Response> => {
       throw new TypeError("fetch failed");
     }) as typeof fetch;
-    const broken = new ShoppingCliCommerceDataSource({ baseUrl: "https://shopping-cli.example", fetchImpl: net });
+    const broken = new ShoppingCliCommerceDataSource({
+      baseUrl: "https://shopping-cli.example",
+      fetchImpl: net,
+    });
     await expect(broken.getProduct("X")).rejects.toMatchObject({ code: "request_failed" });
     expect(() => new ShoppingCliCommerceDataSource({ baseUrl: "ftp://x" })).toThrow(CommerceError);
   });
+});
 
-  it("shopping-cli adapter 可经 composite 与其他源合并（同字段冲突仍 fail-closed）", async () => {
-    const cli = new ShoppingCliCommerceDataSource({
-      baseUrl: "https://shopping-cli.example",
-      fetchImpl: cliFetch({
-        "/products/SKU-001": () =>
-          jsonResponse({ product: { sku: "SKU-001", price: 5, currency: "CNY" } }),
-      }),
+describe("dataSourceProductSource", () => {
+  it("把 CommerceDataSource 适配成 MerchantProductSource（price minor → 元，×100 约定一致）", async () => {
+    const source = stubSource({
+      sku: "SKU-001",
+      title: "Beans",
+      price_minor: 83500,
+      currency: "CNY",
+      stock: 9,
     });
-    const local = localSource();
-    local.upsertProduct({ sku: "SKU-001", price_minor: 500, currency: "CNY" });
-    const composite = compositeCommerceDataSource([local, cli]);
-    // 一致（500 minor == 5 元）→ 合并通过
-    const product = await composite.getProduct("SKU-001");
-    expect(product?.price_minor).toBe(500);
-    local.close();
+    const adapter = dataSourceProductSource(source);
+    const product = await adapter.getProduct("SKU-001");
+    expect(product?.price).toBe(835); // 83500 minor → 835.00 元
+    expect(product?.currency).toBe("CNY");
+    expect(product?.title).toBe("Beans");
+    expect(product?.stock).toBe(9);
+  });
+
+  it("未知 SKU → 抛错（由 merchant-handler 的调用方决定演示价回退）", async () => {
+    const adapter = dataSourceProductSource(stubSource());
+    await expect(adapter.getProduct("NOPE")).rejects.toThrow(/no price/);
   });
 });
