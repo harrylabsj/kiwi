@@ -124,6 +124,70 @@ describe("main conversation and session persistence", () => {
     writeFileSync(paths.mainSession, "not json at all\n{broken\n");
     await expect(openKernel("agent")).rejects.toThrow(AgentSessionError);
   });
+
+  it("model 变更 → 会话重置（新模型不读旧模型消息）；同模型重开保留", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const paths = pathsFor("agent");
+    const { models, model } = createFakeChatModels();
+    const kernel = await AgentKernel.open({
+      profile: testProfile(),
+      paths,
+      models,
+      model,
+      vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
+    });
+    await kernel.handleUserText("你好，介绍你自己");
+    await kernel.close();
+    const firstLog = readFileSync(paths.mainSession, "utf8");
+    expect(firstLog).toContain("「你好，介绍你自己」"); // 旧模型回复已持久化
+
+    // 不同 model（同 provider 不同 modelId）→ 打开即重置（旧消息不进入新会话）。
+    const otherHandle = fauxProvider({ models: [{ id: "other-chat-model", name: "other-chat-model" }] });
+    otherHandle.setResponses([
+      fauxAssistantMessage("换模型后的回复"),
+      fauxAssistantMessage("换模型后的回复 2"),
+      fauxAssistantMessage("换模型后的回复 3"),
+      fauxAssistantMessage("换模型后的回复 4"),
+      fauxAssistantMessage("换模型后的回复 5"),
+    ]);
+    const otherModels = createModels();
+    otherModels.setProvider(otherHandle.provider);
+    const kernel2 = await AgentKernel.open({
+      profile: testProfile(),
+      paths,
+      models: otherModels,
+      model: otherHandle.getModel(),
+      vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
+    });
+    await kernel2.close();
+    // close 时 harness 会重写会话文件，但重置后的新会话不含旧模型消息。
+    expect(readFileSync(paths.mainSession, "utf8")).not.toContain("「你好，介绍你自己」");
+
+    // 新模型继续对话 → 消息属于新会话。
+    const kernel2b = await AgentKernel.open({
+      profile: testProfile(),
+      paths,
+      models: otherModels,
+      model: otherHandle.getModel(),
+      vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
+    });
+    await kernel2b.handleUserText("再次你好");
+    await kernel2b.close();
+    expect(readFileSync(paths.mainSession, "utf8")).toContain("再次你好");
+
+    // 同模型重开 → 会话保留（重置不是每次打开都发生；也不清掉新模型的消息）。
+    const kernel3 = await AgentKernel.open({
+      profile: testProfile(),
+      paths,
+      models: otherModels,
+      model: otherHandle.getModel(),
+      vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
+    });
+    await kernel3.close();
+    const finalLog = readFileSync(paths.mainSession, "utf8");
+    expect(finalLog).toContain("再次你好");
+    expect(finalLog).not.toContain("「你好，介绍你自己」");
+  });
 });
 
 describe("memory closed loop through the model tool path", () => {

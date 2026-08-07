@@ -88,4 +88,114 @@ describe("runChatTui /handoff（#17）", () => {
     expect(out).toContain("200 units, CNY 835.00/unit");
     await kernel.close();
   });
+
+  it("/handoff-open 证据门：无 delivered 前置 → 拒绝（不落 OPENED_CONFIRMED，进程不崩）", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-handoff-tui-"));
+    const paths = ensurePathsForDir(path.join(workDir, "agent"));
+
+    // 只预写 created（无 delivered）——交付观察层前置门必须拒绝打开确认。
+    const ledger = new HandoffEventStore({ dir: path.dirname(paths.db) });
+    const candidate = createHandoffCandidate({
+      agreement_id: "agr_01JABC",
+      negotiation_id: "neg_01JABC",
+      agreed_terms: { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" } }] },
+      destination: { type: "external_checkout_url", ref: "https://acme.example/checkout/abc" },
+      display_summary: { merchant: "Acme Merchant", summary: "200 units" },
+      policy_version: "handoff-policy/1",
+      expires_at: "2099-12-31T23:59:59Z",
+    });
+    ledger.appendCandidateEvent({
+      kind: "handoff_candidate_created",
+      candidate,
+      identity: {
+        sender_identity: candidate.buyer_identity_ref,
+        counterparty_identity: candidate.merchant_identity_ref,
+        actor: "buyer",
+      },
+      capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+    });
+
+    const { models, model } = createFakeChatModels();
+    const kernel = await AgentKernel.open({
+      profile: testBuyerProfile(),
+      paths,
+      models,
+      model,
+      vault: new PrivateVault(new EnvKeyProvider("a".repeat(64))),
+      connector: new FakeCommerceConnector([fakeConnectorProduct()]),
+    });
+
+    const { input, output, text } = streams([
+      `/handoff-open hnd_none neg_01JABC`,
+      `/handoff-open ${"hnd_01"} neg_01JABC`,
+      "/quit",
+    ]);
+    const code = await runChatTui({ kernel, input, output });
+    expect(code).toBe(0);
+    const out = text();
+    // 未知 handoff：提示未知，不崩。
+    expect(out).toContain("未知 handoff hnd_none");
+    // 有候选事件但无 delivered：前置状态门拒绝（错误被 try/catch 捕获，进程存活）。
+    const events = ledger.events("neg_01JABC");
+    expect(events.some((e) => e.event_kind === "handoff_opened_confirmed")).toBe(false);
+    await kernel.close();
+  });
+
+  it("/handoff-open 证据门：有 delivered → OPENED_CONFIRMED（local_callback 证据）", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-handoff-tui-"));
+    const paths = ensurePathsForDir(path.join(workDir, "agent"));
+
+    const ledger = new HandoffEventStore({ dir: path.dirname(paths.db) });
+    const candidate = createHandoffCandidate({
+      agreement_id: "agr_01JABC",
+      negotiation_id: "neg_01JABC",
+      agreed_terms: { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" } }] },
+      destination: { type: "external_checkout_url", ref: "https://acme.example/checkout/abc" },
+      display_summary: { merchant: "Acme Merchant", summary: "200 units" },
+      policy_version: "handoff-policy/1",
+      expires_at: "2099-12-31T23:59:59Z",
+    });
+    ledger.appendCandidateEvent({
+      kind: "handoff_candidate_created",
+      candidate,
+      identity: {
+        sender_identity: candidate.buyer_identity_ref,
+        counterparty_identity: candidate.merchant_identity_ref,
+        actor: "buyer",
+      },
+      capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+    });
+    ledger.appendDeliveryEvent({
+      kind: "handoff_delivered",
+      candidate,
+      handoff_id: "hnd_01",
+      identity: {
+        sender_identity: candidate.buyer_identity_ref,
+        counterparty_identity: candidate.merchant_identity_ref,
+        actor: "buyer",
+      },
+      capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+    });
+
+    const { models, model } = createFakeChatModels();
+    const kernel = await AgentKernel.open({
+      profile: testBuyerProfile(),
+      paths,
+      models,
+      model,
+      vault: new PrivateVault(new EnvKeyProvider("a".repeat(64))),
+      connector: new FakeCommerceConnector([fakeConnectorProduct()]),
+    });
+
+    const { input, output, text } = streams(["/handoff-open hnd_01 neg_01JABC", "/quit"]);
+    const code = await runChatTui({ kernel, input, output });
+    expect(code).toBe(0);
+    const out = text();
+    expect(out).toContain("已确认打开（OPENED_CONFIRMED");
+    const events = ledger.events("neg_01JABC");
+    const opened = events.find((e) => e.event_kind === "handoff_opened_confirmed");
+    expect(opened).toBeDefined();
+    expect((opened?.evidence as { kind?: string } | undefined)?.kind).toBe("local_callback");
+    await kernel.close();
+  });
 });

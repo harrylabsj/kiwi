@@ -157,10 +157,11 @@ export class ManualHandoffChannel implements HandoffChannel {
     };
     this.sessions.set(sessionRef, session);
     // manual:// scheme 仅用于展示，不触发任何网络写入。
+    // 返回拷贝（与 getSession 一致：外部持有者不得持有内部对象引用）。
     return {
       status: "ok",
       session_ref: sessionRef,
-      session,
+      session: { ...session },
       continue_url: `manual://checkout/${sessionRef}`,
     };
   }
@@ -168,7 +169,9 @@ export class ManualHandoffChannel implements HandoffChannel {
   getSession(ref: string): HandoffResult {
     const session = this.sessions.get(ref);
     if (session === undefined) return notFound(ref);
-    return { status: "ok", session_ref: ref, session };
+    // 返回拷贝：外部持有者不得绕过 status 机原地改写内部对象
+    //（此前引用别名泄漏，篡改 current_terms 靠完成门禁兜底，status 无兜底）。
+    return { status: "ok", session_ref: ref, session: { ...session } };
   }
 
   updateSession(ref: string, terms: TermSet): HandoffResult {
@@ -176,11 +179,16 @@ export class ManualHandoffChannel implements HandoffChannel {
     if (session === undefined) return notFound(ref);
     if (sessionNotActionable(session)) return notActionable(session);
     const nextTerms = validateTermSet(terms, "terms");
-    session.current_terms = nextTerms;
-    session.current_terms_digest = contentDigest(nextTerms);
-    session.status = "updated";
-    session.updated_at = this.now();
-    return { status: "ok", session_ref: ref, session };
+    // 不可变更新（新对象替换，不原地突变 Map 内的对象）。
+    const next: HandoffSession = {
+      ...session,
+      current_terms: nextTerms,
+      current_terms_digest: contentDigest(nextTerms),
+      status: "updated",
+      updated_at: this.now(),
+    };
+    this.sessions.set(ref, next);
+    return { status: "ok", session_ref: ref, session: next };
   }
 
   requestCompletion(ref: string, authorization: PaymentAuthorization): HandoffResult {
@@ -197,18 +205,26 @@ export class ManualHandoffChannel implements HandoffChannel {
     if (!gate.allowed) {
       return { status: "fail_closed", reason: gate.reason };
     }
-    session.status = "completed";
-    session.updated_at = this.now();
-    return { status: "ok", session_ref: ref, session };
+    const completed: HandoffSession = {
+      ...session,
+      status: "completed",
+      updated_at: this.now(),
+    };
+    this.sessions.set(ref, completed);
+    return { status: "ok", session_ref: ref, session: completed };
   }
 
   cancelSession(ref: string): HandoffResult {
     const session = this.sessions.get(ref);
     if (session === undefined) return notFound(ref);
     if (sessionNotActionable(session)) return notActionable(session);
-    session.status = "cancelled";
-    session.updated_at = this.now();
-    return { status: "ok", session_ref: ref, session };
+    const cancelled: HandoffSession = {
+      ...session,
+      status: "cancelled",
+      updated_at: this.now(),
+    };
+    this.sessions.set(ref, cancelled);
+    return { status: "ok", session_ref: ref, session: cancelled };
   }
 
   /** 导出 session JSON 供展示（Manual 参考实现；不执行任何网络写入）。 */
