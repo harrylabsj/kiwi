@@ -1,0 +1,288 @@
+/**
+ * Copyright 2026 harrylabsj
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * 生产 merchant A2A handler（`kiwi agent serve` 用）——脚本化 KNP 磋商：
+ *
+ *   rfq/inquiry → offer；offer → counter_offer（还价到 DEAL 价）；
+ *   counter_offer → conditional_offer；clarification → 文字澄清应答；
+ *   accept_nonbinding → agreement artifact（三副作用 flag 恒 false）；
+ *   withdraw/decline/cancel → 文字确认。
+ *
+ * 每个出站回复落 merchant 侧 Ledger（append-only，§22）。这是 `kiwi agent serve`
+ * 的确定性 merchant 行为；未来可替换为 LLM 驱动的 Negotiation Engine（同一 handler 接缝）。
+ */
+
+import { LedgerStore } from "../../negotiation/ledger/index.js";
+import {
+  newAgreementId,
+  newExchangeId,
+  newMessageId,
+  newOfferId,
+} from "../../negotiation/domain/identifiers.js";
+import { finalizeEnvelope } from "../../negotiation/domain/envelope.js";
+import { contentDigest } from "../../negotiation/jcs.js";
+import { evaluateConditionalOffer } from "../../negotiation/condition/evaluator.js";
+import type { A2AMessage, A2APart } from "../client/types.js";
+import type {
+  InboundNegotiationContext,
+  NegotiationHandler,
+  NegotiationHandlerResult,
+} from "./types.js";
+
+export const MERCHANT_CAPABILITY = "com.harrylabsj.kiwi.shopping.negotiation";
+export const MERCHANT_SKU = "SKU-001";
+export const MERCHANT_CURRENCY = "CNY";
+export const MERCHANT_OFFER_PRICE_MINOR = 85_000; // CNY 850.00
+export const MERCHANT_DEAL_PRICE_MINOR = 83_500; // CNY 835.00
+export const MERCHANT_QUANTITY = 200;
+export const MERCHANT_DELIVERY_BEFORE = "2026-08-20T18:00:00Z";
+
+export interface MerchantHandlerOptions {
+  ledger: LedgerStore;
+  now: () => string;
+  sender: string;
+  counterparty: string;
+  /** rfq→offer 的初始报价（amount_minor）；缺省 85000。 */
+  offerPriceMinor?: number;
+}
+
+type EnvelopeSeed = Omit<
+  Parameters<typeof finalizeEnvelope>[0],
+  "capability" | "protocol_version" | "exchange_id" | "message_id"
+> &
+  Partial<Pick<Parameters<typeof finalizeEnvelope>[0], "exchange_id" | "message_id">>;
+
+function seedEnvelope(seed: EnvelopeSeed): ReturnType<typeof finalizeEnvelope> {
+  return finalizeEnvelope({
+    capability: MERCHANT_CAPABILITY,
+    protocol_version: "1.0",
+    exchange_id: seed.exchange_id ?? newExchangeId(),
+    message_id: seed.message_id ?? newMessageId(),
+    ...seed,
+  });
+}
+
+function offerTerms(priceMinor: number, quantity: number) {
+  return {
+    items: [
+      {
+        sku: MERCHANT_SKU,
+        quantity: { value: quantity, unit: "piece" },
+        unit_price: { currency: MERCHANT_CURRENCY, amount_minor: priceMinor },
+      },
+    ],
+    fulfillment_terms: { delivery_before: MERCHANT_DELIVERY_BEFORE },
+    valid_until: "2099-12-31T23:59:59Z",
+  };
+}
+
+function buildAgreement(input: {
+  negotiation_id: string;
+  accepted_offer_id: string;
+  agreed_terms: unknown;
+  created_at: string;
+}): Record<string, unknown> {
+  return {
+    type: "accepted_nonbinding_agreement",
+    agreement_id: newAgreementId(),
+    negotiation_id: input.negotiation_id,
+    accepted_offer_id: input.accepted_offer_id,
+    agreed_terms: input.agreed_terms,
+    terms_digest: contentDigest(input.agreed_terms as never),
+    accepted_by: ["buyer", "merchant"],
+    created_at: input.created_at,
+    binding_effect: "nonbinding",
+    creates_order: false,
+    reserves_inventory: false,
+    authorizes_payment: false,
+  };
+}
+
+const textReply = (text: string, taskState: "working" | "completed" = "working"): NegotiationHandlerResult => ({
+  kind: "accepted",
+  taskState,
+  message: {
+    role: "agent",
+    parts: [{ kind: "text", text }],
+    messageId: `msg_${newMessageId()}`,
+  },
+});
+
+const envelopeReply = (reply: ReturnType<typeof finalizeEnvelope>): NegotiationHandlerResult => ({
+  kind: "accepted",
+  taskState: "working",
+  message: {
+    role: "agent",
+    parts: [{ kind: "data", data: { knp_envelope: reply } }],
+    messageId: reply.message_id,
+  },
+});
+
+/** 构造生产 merchant KNP handler。 */
+export function createMerchantHandler(
+  options: MerchantHandlerOptions,
+): NegotiationHandler {
+  const { ledger, now, sender, counterparty } = options;
+  const offerPriceMinor = options.offerPriceMinor ?? MERCHANT_OFFER_PRICE_MINOR;
+  const conditionalByNegotiation = new Map<string, { conditional: Record<string, unknown>; quantity: number }>();
+
+  const appendSent = async (reply: ReturnType<typeof finalizeEnvelope>): Promise<void> => {
+    await ledger.append({
+      event_kind: "message_sent",
+      negotiation_id: reply.negotiation_id,
+      exchange_id: reply.exchange_id,
+      message_id: reply.message_id,
+      in_reply_to: reply.in_reply_to,
+      identity: {
+        sender_identity: sender,
+        counterparty_identity: counterparty,
+        actor: reply.actor,
+      },
+      capability: {
+        capability: reply.capability,
+        protocol_version: reply.protocol_version,
+      },
+      wire_digest: reply.digest,
+      wire_payload: reply as unknown as Record<string, unknown>,
+      outcome: { kind: "ok" },
+      occurred_at: reply.created_at,
+    });
+  };
+
+  return {
+    name: "kiwi-agent-serve-merchant",
+    async handle(ctx: InboundNegotiationContext): Promise<NegotiationHandlerResult> {
+      const envelope = ctx.envelope;
+      const negotiationId = envelope.negotiation_id;
+      const inReplyTo = envelope.message_id;
+
+      switch (envelope.action) {
+        case "inquiry": {
+          await appendSent(envelope);
+          return textReply(
+            `We carry ${MERCHANT_SKU} at ${(offerPriceMinor / 100).toFixed(2)} ${MERCHANT_CURRENCY}/piece; ask for delivery details.`,
+          );
+        }
+        case "rfq": {
+          const quantity =
+            (envelope.payload as { items?: { quantity?: { value?: number } }[] }).items?.[0]?.quantity
+              ?.value ?? MERCHANT_QUANTITY;
+          const reply = seedEnvelope({
+            negotiation_id: negotiationId,
+            in_reply_to: inReplyTo,
+            actor: "merchant",
+            action: "offer",
+            created_at: now(),
+            payload: {
+              type: "offer",
+              offer_id: newOfferId(),
+              terms: offerTerms(offerPriceMinor, quantity),
+            },
+          });
+          await appendSent(reply);
+          return envelopeReply(reply);
+        }
+        case "offer": {
+          // 商家还价：对 buyer 的 offer 回 counter_offer（到 DEAL 价）。
+          const reply = seedEnvelope({
+            negotiation_id: negotiationId,
+            in_reply_to: inReplyTo,
+            actor: "merchant",
+            action: "counter_offer",
+            created_at: now(),
+            payload: {
+              type: "counter_offer",
+              offer_id: newOfferId(),
+              responding_to_offer_id: (envelope.payload as { offer_id: string }).offer_id,
+              proposed_terms: offerTerms(MERCHANT_DEAL_PRICE_MINOR, MERCHANT_QUANTITY),
+            },
+          });
+          await appendSent(reply);
+          return envelopeReply(reply);
+        }
+        case "counter_offer": {
+          const counter = envelope.payload as {
+            proposed_terms?: { items?: { quantity?: { value?: number } }[] };
+            offer_id?: string;
+          };
+          const quantity = counter.proposed_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
+          const reply = seedEnvelope({
+            negotiation_id: negotiationId,
+            in_reply_to: inReplyTo,
+            actor: "merchant",
+            action: "conditional_offer",
+            created_at: now(),
+            payload: {
+              type: "conditional_offer",
+              offer_id: newOfferId(),
+              responding_to_offer_id: counter.offer_id,
+              base_terms: offerTerms(offerPriceMinor, quantity),
+              conditions: [
+                {
+                  when: { all: [{ field: "aggregate.total_quantity", op: "gte", value: 100 }] },
+                  then_terms: offerTerms(MERCHANT_DEAL_PRICE_MINOR, quantity),
+                },
+              ],
+            },
+          });
+          conditionalByNegotiation.set(negotiationId, {
+            conditional: reply.payload as unknown as Record<string, unknown>,
+            quantity,
+          });
+          await appendSent(reply);
+          return envelopeReply(reply);
+        }
+        case "clarification": {
+          const field = (envelope.payload as { questions?: { field?: string }[] }).questions?.[0]?.field;
+          return textReply(
+            `Regarding "${field ?? "…"}": delivery before ${MERCHANT_DELIVERY_BEFORE}, payment terms negotiable (nonbinding).`,
+          );
+        }
+        case "accept_nonbinding": {
+          const stored = conditionalByNegotiation.get(negotiationId);
+          const agreedTerms =
+            stored === undefined
+              ? offerTerms(MERCHANT_DEAL_PRICE_MINOR, MERCHANT_QUANTITY)
+              : evaluateConditionalOffer(stored.conditional as never, {
+                  "aggregate.total_quantity": stored.quantity,
+                });
+          const agreement = buildAgreement({
+            negotiation_id: negotiationId,
+            accepted_offer_id: (envelope.payload as { offer_id: string }).offer_id,
+            agreed_terms: agreedTerms,
+            created_at: now(),
+          });
+          const artifactPart: A2APart = { kind: "data", data: { agreement } };
+          const message: A2AMessage = {
+            role: "agent",
+            parts: [{ kind: "text", text: "Agreement reached (nonbinding)." }],
+            messageId: `msg_${newMessageId()}`,
+          };
+          return { kind: "accepted", taskState: "completed", artifactParts: [artifactPart], message };
+        }
+        case "withdraw":
+          return textReply(`Withdrawn (scope=${(envelope.payload as { scope?: string }).scope ?? "offer"}).`);
+        case "decline":
+          return textReply(`Declined (scope=${(envelope.payload as { scope?: string }).scope ?? "offer"}).`);
+        case "cancel":
+          return textReply("Negotiation cancelled.");
+        default:
+          return { kind: "declined", reasonCode: "unsupported_action" };
+      }
+    },
+  };
+}
