@@ -1251,10 +1251,7 @@ const handoffAgreement: Tool = {
           preconditions: { agreement_bound: true },
           risk: "handoff_delivery",
           execute: (approvedArgs) => executeHandoffForCandidate(deps, approvedArgs),
-          readPreconditions: () => ({
-            agreement_bound: true,
-            note: "handoff 执行前将重验 agreement/terms_digest/destination/expiry（KTH §10）",
-          }),
+          readPreconditions: () => ({ agreement_bound: true }),
         },
       );
       return writeGateText(outcome);
@@ -1293,10 +1290,26 @@ function agreementFromTask(events: readonly TaskEvent[]): {
   negotiation_id: string;
   agreed_terms: unknown;
   merchant_identity_ref: string;
+  /** merchant 声明域（从 a2a_negotiated 的 agent_card_url 派生；URL 安全用）。 */
+  merchant_domain?: string;
 } | undefined {
+  let merchantDomain: string | undefined;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i];
-    if (event === undefined || event.type !== "status_changed") continue;
+    if (event === undefined) continue;
+    if (event.type === "a2a_negotiated") {
+      const cardUrl = event.payload.agent_card_url;
+      // http(s) 均可（URL 安全策略对 loopback http 放行；https-only 由
+      // validateExternalDestinationUrl 强制）。
+      if (typeof cardUrl === "string" && /^https?:\/\//.test(cardUrl)) {
+        try {
+          merchantDomain = new URL(cardUrl).hostname;
+        } catch {
+          merchantDomain = undefined;
+        }
+      }
+    }
+    if (event.type !== "status_changed") continue;
     const payload = event.payload;
     const agreementId = payload.agreement_id;
     const negotiationId = payload.negotiation_id;
@@ -1317,6 +1330,7 @@ function agreementFromTask(events: readonly TaskEvent[]): {
         typeof payload.merchant_identity_ref === "string"
           ? payload.merchant_identity_ref
           : "merchant:unknown",
+      ...(merchantDomain !== undefined ? { merchant_domain: merchantDomain } : {}),
     };
   }
   return undefined;
@@ -1380,7 +1394,7 @@ async function executeHandoffForCandidate(
       negotiation_id: agreement.negotiation_id,
       agreed_terms: agreement.agreed_terms,
     }),
-    urlSafety: defaultUrlSafety(),
+    urlSafety: defaultUrlSafety(agreement.merchant_domain),
     now: deps.now,
   });
   const rendered = handoffResultText(result);

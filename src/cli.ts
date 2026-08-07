@@ -766,6 +766,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       }
       return EXIT.OK;
     }
+    if (cmd === "metrics") {
+      // v1.1 #21：从 buyer agent data dir 的 Ledger 事件计算 KTH 指标。
+      const dir = requireDir(args);
+      const { HandoffEventStore, computeHandoffMetrics } = await import("./handoff/index.js");
+      const ledger = new HandoffEventStore({ dir });
+      const byNegotiation = new Map<string, ReturnType<typeof ledger.events>>();
+      for (const nid of ledger.listNegotiations()) byNegotiation.set(nid, ledger.events(nid));
+      printJson(computeHandoffMetrics(byNegotiation));
+      return EXIT.OK;
+    }
     if (cmd === "down") {
       const result = await runDown(requireDir(args));
       printJson(result);

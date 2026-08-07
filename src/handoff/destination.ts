@@ -80,6 +80,11 @@ export interface Destination {
   readonly payload?: Readonly<Record<string, unknown>>;
 }
 
+/** URL 承载类目的地（external checkout / deep link）——URL 安全策略适用。 */
+export function isUrlDestinationType(type: DestinationType): boolean {
+  return URL_DESTINATION_TYPES.has(type);
+}
+
 /** 校验是否为目标类型已知值。 */
 export function isDestinationType(value: unknown): value is DestinationType {
   return typeof value === "string" && (DESTINATION_TYPES as readonly string[]).includes(value);
