@@ -33,6 +33,7 @@ import {
   type Session,
   type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import type { AgentProfile } from "../config/profile.js";
 import type { CommerceClient } from "../commerce/types.js";
@@ -162,6 +163,41 @@ const COMMANDS_HELP = `/memory [preferences|private]  查看记忆概览 / 学�
 /help                      本帮助
 /quit                      退出`;
 
+/** 读会话 JSONL 中最后一条模型记录（model_change 或 assistant 消息的 provider/model）。 */
+function sessionLastModel(file: string): { provider: string; modelId: string } | undefined {
+  let last: { provider: string; modelId: string } | undefined;
+  try {
+    for (const line of readFileSync(file, "utf-8").split("\n")) {
+      if (line.trim() === "") continue;
+      let entry: Record<string, unknown>;
+      try {
+        entry = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (
+        entry.type === "model_change" &&
+        typeof entry.provider === "string" &&
+        typeof entry.modelId === "string"
+      ) {
+        last = { provider: entry.provider, modelId: entry.modelId };
+      } else if (
+        entry.type === "message" &&
+        entry.message !== null &&
+        typeof entry.message === "object"
+      ) {
+        const m = entry.message as { role?: string; provider?: string; model?: string };
+        if (m.role === "assistant" && typeof m.provider === "string" && typeof m.model === "string") {
+          last = { provider: m.provider, modelId: m.model };
+        }
+      }
+    }
+  } catch {
+    // 读不了就当作没有历史，不重置。
+  }
+  return last;
+}
+
 export class AgentKernel {
   readonly profile: AgentProfile;
   readonly principal: Principal;
@@ -228,6 +264,17 @@ export class AgentKernel {
 
   static async open(options: AgentKernelOptions): Promise<AgentKernel> {
     const paths = options.paths ?? ensureAgentPaths(options.profile.agent_id);
+    // 会话来自不同模型（如 fake→deepseek）时重置：旧模型的消息会让新模型首轮
+    // 产生空响应（"模型没有返回内容"）。模型变更 = 新的对话历史。
+    if (options.model !== undefined && existsSync(paths.mainSession)) {
+      const sessionModel = sessionLastModel(paths.mainSession);
+      if (
+        sessionModel !== undefined &&
+        (sessionModel.provider !== options.model.provider || sessionModel.modelId !== options.model.id)
+      ) {
+        rmSync(paths.mainSession, { force: true });
+      }
+    }
     const db = openAgentDatabase(paths.db);
     const vault = options.vault ?? new PrivateVault();
     const store = new MemoryStore({ db, vault, ...(options.now ? { now: options.now } : {}) });
@@ -556,6 +603,65 @@ export class AgentKernel {
    * Handle one user input line: slash commands run deterministically;
    * anything else goes to the model with a per-turn memory briefing.
    */
+  /**
+   * 把一段上下文注入会话（不触发模型回复）：`/negotiate` 等确定性动作的结果
+   * 写入 session（user 角色、带「系统记录」标记），下一轮用户提问时模型能看到
+   * （消除"两个脑"）。
+   */
+  async injectContext(text: string): Promise<void> {
+    await this.harness.appendMessage({
+      role: "user",
+      content: `[系统记录] ${text}`,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * 把一轮 A2A 磋商结果写入记忆（episode namespace，active 无需人工确认）：
+   * 持久上下文，`/why` 可查、跨重启可恢复。
+   */
+  async recordNegotiation(input: {
+    negotiationId: string;
+    catalogAgentId: string;
+    sku: string;
+    quantity: number;
+    offerPriceMinor?: number;
+    dealPriceMinor?: number;
+    agreementId?: string;
+  }): Promise<string> {
+    const summary = [
+      `A2A 磋商完成：negotiation ${input.negotiationId}，商家 ${input.catalogAgentId}`,
+      `，${input.quantity} 件 ${input.sku}，报价 ${input.offerPriceMinor === undefined ? "?" : (input.offerPriceMinor / 100).toFixed(2)} 元/件`,
+      `，条件价（量≥100）${input.dealPriceMinor === undefined ? "?" : (input.dealPriceMinor / 100).toFixed(2)} 元/件`,
+      input.agreementId !== undefined ? `，agreement ${input.agreementId}` : "",
+    ].join("");
+    const outcome = this.store.remember({
+      namespace: "episode",
+      key: `a2a-negotiation:${input.negotiationId}`,
+      value: {
+        kind: "a2a_negotiation",
+        negotiation_id: input.negotiationId,
+        catalog_agent_id: input.catalogAgentId,
+        sku: input.sku,
+        quantity: input.quantity,
+        offer_price_minor: input.offerPriceMinor,
+        deal_price_minor: input.dealPriceMinor,
+        agreement_id: input.agreementId,
+      },
+      source_kind: "observed",
+      sensitivity: "normal",
+      confidence: 1,
+      explicit_user_statement: false,
+      evidence: {
+        source_type: "import",
+        source_ref: input.negotiationId,
+        summary,
+      },
+      actor: "system",
+    });
+    return outcome.kind === "conflict" ? outcome.existing.memory_id : outcome.memory.memory_id;
+  }
+
   handleUserText(text: string): Promise<KernelReply> {
     return this.enqueue(async () => {
       if (this.closed) throw new MemoryError("validation", "kernel is closed");

@@ -60,6 +60,8 @@ export interface MerchantHandlerOptions {
   offerPriceMinor?: number;
   /** 真实商品源（接 shopping-cli /products/{sku} 等开放商品层）；缺省用内置演示价。 */
   productSource?: MerchantProductSource;
+  /** 条件成交折扣百分比（deal = base × (1 - pct/100)）；缺省 5。 */
+  dealDiscountPercent?: number;
 }
 
 /** 真实商品源：给定 SKU 返回价目（shopping-cli 开放层/ERP/商品表均可接入）。 */
@@ -263,6 +265,9 @@ export function createMerchantHandler(
           const sku = counter.proposed_terms?.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = counter.proposed_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
           const { priceMinor, currency, note } = await resolveProduct(sku);
+          // 条件成交价 = base × (1 - 折扣%)：批量确实更便宜。
+          const discountPercent = options.dealDiscountPercent ?? 5;
+          const dealPriceMinor = Math.round((priceMinor * (100 - discountPercent)) / 100);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -277,7 +282,7 @@ export function createMerchantHandler(
               conditions: [
                 {
                   when: { all: [{ field: "aggregate.total_quantity", op: "gte", value: 100 }] },
-                  then_terms: offerTerms({ sku, priceMinor, quantity, currency }),
+                  then_terms: offerTerms({ sku, priceMinor: dealPriceMinor, quantity, currency }),
                 },
               ],
             },

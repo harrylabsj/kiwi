@@ -183,7 +183,25 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
               catalog,
               ...(targetId !== "" ? { catalogAgentId: targetId } : {}),
             });
-            write(`[negotiate]\n${summarizeNegotiation(result)}`);
+            const summary = summarizeNegotiation(result);
+            write(`[negotiate]\n${summary}`);
+            // 磋商结果注入会话 + 写入记忆：下一轮提问时模型能看到（消除"两个脑"）。
+            if (result.ok) {
+              await current.kernel.injectContext(summary).catch(() => undefined);
+              await current.kernel
+                .recordNegotiation({
+                  negotiationId: result.negotiationId,
+                  catalogAgentId: result.catalogAgentId,
+                  sku: result.facts?.sku ?? "sku-001",
+                  quantity: result.facts?.quantity ?? 200,
+                  offerPriceMinor: result.facts?.offerPriceMinor,
+                  dealPriceMinor: result.facts?.dealPriceMinor,
+                  ...(result.agreement?.agreement_id !== undefined
+                    ? { agreementId: String(result.agreement.agreement_id) }
+                    : {}),
+                })
+                .catch(() => undefined);
+            }
           }
         } else {
           const reply = await current.kernel.handleUserText(line);
