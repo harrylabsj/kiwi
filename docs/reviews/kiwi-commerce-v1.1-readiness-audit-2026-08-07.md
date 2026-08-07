@@ -14,8 +14,8 @@ v1.1 的发布决定（含第三方互操作证据、部署验证、产品化打
 
 | 评估 | 数量 | 条目 |
 | --- | --- | --- |
-| ✅ 直接实证 | 17 | #1-3、#6、#8-10、#12-16、#18-21 |
-| ⚠️ 部分或间接 | 4 | #4、#5、#11、#17（见矩阵注记） |
+| ✅ 直接实证 | 18 | #1-3、#6-16、#18-21 |
+| ⚠️ 部分或间接 | 3 | #4、#5、#17（见矩阵注记） |
 | ❌ 缺失 | 0 | — |
 
 ## 逐条矩阵
@@ -32,7 +32,7 @@ v1.1 的发布决定（含第三方互操作证据、部署验证、产品化打
 | 8 | Merchant private data 不进入 kiwi-catalog | TS 契约 `contracts/kiwi-catalog/1.0/agent-record.schema.json` additionalProperties:false（私有字段在 schema 层拒绝）；Python register 只读取白名单字段（display_name/hosting_mode/handoff/capabilities/skills），未识别字段不落库 | `tests/kiwi-catalog-source.test.ts`（私有字段 contract_violation）、`test_kiwi_catalog_v1_api.py`（record 无私有字段） | ✅（注：新 API register-input 的 schema 硬拒未落盘，依赖白名单读取实现） |
 | 9 | Agreement 可生成 HandoffCandidate | `handoff_agreement` 工具（selected_nonbinding 任务 → createHandoffCandidate）+ `src/handoff/candidate.ts` | `tests/handoff-candidate.test.ts`（构造即校验）、`tests/handoff-e2e.test.ts`（全链路） | ✅ |
 | 10 | HandoffCandidate 绑定 agreement/terms digest/destination/identity | candidate 构造即校验：agreement_id/negotiation_id、terms_digest 重算比对、destination 词表、buyer/merchant identity ref | `tests/handoff-candidate.test.ts`（digest 一致性/篡改拒绝/身份 ref） | ✅ |
-| 11 | Handoff 支持至少 external URL、PO/quote/contact 中三类目的地 | `DESTINATION_TYPES` 11 值（external_checkout_url/platform_deep_link URL 类 + quote/PO/contact 文档类）；执行层对非 URL 类不做 URL 探测 | `tests/handoff-e2e.test.ts`（**E2E 实证 2 类**：external_checkout_url + quote_document）、`tests/handoff-stale-revalidation.test.ts`（external URL 路径） | ⚠️（域模型覆盖全部 11 类；E2E 实证 2 类，PO/contact 无 E2E 测试） |
+| 11 | Handoff 支持至少 external URL、PO/quote/contact 中三类目的地 | `DESTINATION_TYPES` 11 值（external_checkout_url/platform_deep_link URL 类 + quote/PO/contact 文档类）；执行层对非 URL 类不做 URL 探测（isUrlDestinationType 门控） | `tests/handoff-e2e.test.ts`（**E2E 实证 4 类**：external_checkout_url + quote_document + purchase_order_draft + merchant_contact，参数化用例）、`tests/handoff-stale-revalidation.test.ts`（external URL 路径） | ✅（2026-08-07 补齐 PO/contact E2E） |
 | 12 | Handoff 不创建订单 | executeHandoff 无订单路径；TransactionHandoff.creates_order 恒 false | `tests/handoff-stale-revalidation.test.ts`（事件序列无 order/payment/inventory）、`tests/handoff-e2e.test.ts`（断言） | ✅ |
 | 13 | Handoff 不授权支付 | 同上（authorizes_payment 恒 false） | 同上 | ✅ |
 | 14 | Handoff 不预留库存 | 同上（reserves_inventory 恒 false） | 同上 | ✅ |
@@ -55,8 +55,9 @@ v1.1 的发布决定（含第三方互操作证据、部署验证、产品化打
 
 ## 声明
 
-- v1.1 完成定义 21 条：**17 条直接实证、4 条部分或间接、0 条缺失**。
+- v1.1 完成定义 21 条：**18 条直接实证、3 条部分或间接、0 条缺失**。
 - 本审计**不宣布 v1.1 发布**。v1.1 仍为 Draft（rev1.4.1 §0）；发布前还需：
-  v1.1 就绪度审计随发布决策复核、kiwi-catalog Python 服务部署冒烟（Docker/
-  systemd）、#11 的 PO/contact 目的地 E2E 补齐、#17 的 TUI 真机交互验证、
+  v1.1 就绪度审计随发布决策复核、#17 的 TUI 真机交互验证、
   第三方互操作证据（文档明确禁止宣称，维持）。
+  （#11 的 PO/contact E2E 已补齐；kiwi-catalog 部署冒烟已于 2026-08-07 通过，
+  并抓到并修复 record 时间戳序列化缺陷——见 `f1eb9d4`。）
