@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff（WP2 补全）— UCP Cart 协议类型（UCP 2026-04-08
+ * Kiwi v0.7.0 Transaction Handoff（WP2 补全）— UCP Cart 协议类型（UCP 2026-04-08
  * cart spec family；实体与 checkout 完全同构，最大限度复用 types.ts）。
  *
  * 已核实的 cart 事实（勿发明）：

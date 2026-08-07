@@ -44,14 +44,14 @@ export const LEDGER_EVENT_KINDS = [
   "system",
   "reconciliation",
   "error",
-  // v1.1 KTH：candidate 生命周期（KTH rev0.3 §5.1，event-sourced 投影）
+  // v0.7.0 KTH：candidate 生命周期（KTH rev0.3 §5.1，event-sourced 投影）
   "handoff_candidate_created",
   "handoff_candidate_ready",
   "handoff_candidate_rejected",
   "handoff_candidate_stale",
   "handoff_candidate_expired",
   "handoff_candidate_consumed",
-  // v1.1 KTH：交付观察（KTH rev0.3 §9，evidence-gated）
+  // v0.7.0 KTH：交付观察（KTH rev0.3 §9，evidence-gated）
   "handoff_delivered",
   "handoff_launched",
   "handoff_opened_confirmed",
@@ -108,7 +108,7 @@ export interface LedgerEventContent {
   wire_payload?: Record<string, unknown>;
   /** Phase 状态转换（如该事件驱动了状态机推进）。 */
   state_transition?: LedgerStateTransition;
-  // v1.1 KTH 字段（KTH rev0.3 §5.1/§12：候选与交付事件绑定溯源与证据）。
+  // v0.7.0 KTH 字段（KTH rev0.3 §5.1/§12：候选与交付事件绑定溯源与证据）。
   /** handoff candidate id（candidate 生命周期事件必填）。 */
   handoff_candidate_id?: string;
   /** handoff id（交付观察事件必填）。 */
@@ -276,7 +276,7 @@ export function eventContentAddressable(
     wire_digest: content.wire_digest,
     wire_payload: content.wire_payload,
     state_transition: content.state_transition,
-    // v1.1 KTH 字段（JCS 跳过 undefined，KNP 事件向后兼容；KTH 事件的
+    // v0.7.0 KTH 字段（JCS 跳过 undefined，KNP 事件向后兼容；KTH 事件的
     // 溯源/证据字段必须纳入 digest——否则篡改 terms_digest/evidence 无法
     // 被 verifyChain 检出，审计链形同虚设，§22/#18）。
     handoff_candidate_id: content.handoff_candidate_id,

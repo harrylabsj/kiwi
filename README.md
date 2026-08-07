@@ -4,7 +4,7 @@
 [A2A](https://a2a-protocol.org/) 与 [UCP](https://ucp.dev/) 完成发现 → capability 协商 →
 磋商 → 非绑定协议。磋商以**非约束性商业协议**终止：不创建订单、不支付、不锁库存。
 
-**A2A v1.0 已宣布（2026-08-07）**：基线 §41 完成定义 27/27 经就绪度审计实证满足
+**Kiwi A2A v0.6.0 已发布（2026-08-07）**：基线 §41 完成定义 27/27 经就绪度审计实证满足
 （见 [`docs/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md`](docs/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md)）。
 
 ## 协议：KNP/1.0

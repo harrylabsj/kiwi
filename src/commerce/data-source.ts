@@ -24,7 +24,7 @@
  *   - CommerceDataSource 不负责发现远端 Agent；AgentDiscovery 不读
  *     Merchant 私有经营库；
  *   - 写操作（draftProductChange / updateProduct / updateInventory）保持
- *     scope 控制与 approval-aware —— v1.1 只实现读侧 + 权威冲突模型。
+ *     scope 控制与 approval-aware —— v0.7.0 只实现读侧 + 权威冲突模型。
  *
  * 权威模型（data hub v0.2.1 §5）：每个字段的 source authority MUST 显式；
  * 同字段多权威冲突 → fail-closed（CommerceError("authority_conflict")），

@@ -15,10 +15,10 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff — AcpCommerceAdapter 接缝（WP3）。
+ * Kiwi v0.7.0 Transaction Handoff — AcpCommerceAdapter 接缝（WP3）。
  *
  * 面向 Agentic Commerce Protocol（ACP-Commerce）checkout 生态的 HandoffChannel
- * 适配占位。基线 §43：ACP-Commerce 属 v1.1+ Transaction Handoff，不绑定唯一实现；
+ * 适配占位。基线 §43：ACP-Commerce 属 v0.7.0+ Transaction Handoff，不绑定唯一实现；
  * 本模块只钉住接缝形状，未来真实 ACP adapter 在同样位置替换内部实现。
  *
  * fail-closed 语义：

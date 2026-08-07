@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff（WP2）— UCP Checkout 响应解析 + 消息算法。
+ * Kiwi v0.7.0 Transaction Handoff（WP2）— UCP Checkout 响应解析 + 消息算法。
  *
  * 两层：
  *  1. 结构解析（parseUcpCheckoutResponse）：不可信响应 → UcpCheckoutResponse，

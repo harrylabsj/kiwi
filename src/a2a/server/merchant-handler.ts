@@ -77,7 +77,7 @@ export interface MerchantProductSource {
 }
 
 /**
- * 把 CommerceDataSource（v1.1 数据侧边界）适配成 MerchantProductSource。
+ * 把 CommerceDataSource（v0.7.0 数据侧边界）适配成 MerchantProductSource。
  * price_minor（分）→ 元（major）转换在此完成，与接口"元"单位约定一致；
  * 未知 SKU → 抛错（resolveProduct 回退演示价，缺省行为不变）。
  */

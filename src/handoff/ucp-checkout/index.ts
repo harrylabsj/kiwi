@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff（WP2）— UCP Checkout client。
+ * Kiwi v0.7.0 Transaction Handoff（WP2）— UCP Checkout client。
  *
  * HandoffChannel 的真实 UCP 版本：在外部交易系统（business 为 Merchant of Record）
  * 上创建 / 读取 / 全量替换更新 / 请求完成 / 取消 checkout session。与 WP1 的

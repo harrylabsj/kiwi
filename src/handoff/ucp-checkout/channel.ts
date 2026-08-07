@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff（WP2）— UcpCheckoutChannel：HandoffChannel 的
+ * Kiwi v0.7.0 Transaction Handoff（WP2）— UcpCheckoutChannel：HandoffChannel 的
  * 真实 UCP 版本（UCP 2026-04-08 checkout，REST binding）。
  *
  * 与 WP1 接缝的关系：`HandoffChannel`（src/handoff/channel.ts）是同步接缝

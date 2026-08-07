@@ -175,7 +175,7 @@ export interface MerchantToolDeps {
    */
   commerceClient?: CommerceClient;
   /**
-   * Merchant 经营事实数据源（v1.1 CommerceDataSource）。提供时只读目录
+   * Merchant 经营事实数据源（v0.7.0 CommerceDataSource）。提供时只读目录
    * 工具改从数据源读取（本地商品库 / ERP 适配器）；缺省走公开搜索端点。
    * 数据侧边界：不负责发现远端 Agent（架构 rev1.4.1 §33）。
    */

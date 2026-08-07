@@ -1,5 +1,5 @@
 /**
- * Kiwi v1.1 Transaction Handoff（WP3）— OperatorApprovalAuthorizationProvider tests。
+ * Kiwi v0.7.0 Transaction Handoff（WP3）— OperatorApprovalAuthorizationProvider tests。
  *
  * 覆盖（对齐工作包验收清单）：
  *  - 审批证据→授权全链路：recordApproval → createIntentMandate → authorizeCheckout

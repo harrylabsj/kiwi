@@ -42,7 +42,7 @@ Authoritative Inquiry / RFQ
 
 产品名仍然是 `kiwi-catalog`。
 
-**v0.4 是 Kiwi Commerce v1.1 的一个里程碑**：主架构基线 rev1.5 §42 CD #22–28 与本文 DoD（§21）同构覆盖 kiwi-catalog 部分；实现验收以本文 DoD 为基线，v1.1 发布复核以主文档 CD 为准。
+**v0.4 是 Kiwi Commerce v0.7.0 的一个里程碑**：主架构基线 rev1.5 §42 CD #22–28 与本文 DoD（§21）同构覆盖 kiwi-catalog 部分；实现验收以本文 DoD 为基线，v0.7.0 发布复核以主文档 CD 为准。
 
 ---
 

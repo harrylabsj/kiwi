@@ -1,15 +1,15 @@
 ---
-title: Kiwi Commerce v1.1 Test Plan
+title: Kiwi Commerce v0.7.0 Test Plan
 version: "0.3"
 date: 2026-08-07
 status: Draft Test Plan
 ---
 
-# Kiwi Commerce v1.1 Test Plan
+# Kiwi Commerce v0.7.0 Test Plan
 
 ## 1. Scope
 
-Covers v1.1 additions, plus backward-compatibility regression for the existing Agent Catalog (§2):
+Covers v0.7.0 additions, plus backward-compatibility regression for the existing Agent Catalog (§2):
 
 ```text
 kiwi-catalog Product-first Commerce Discovery

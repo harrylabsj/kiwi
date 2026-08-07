@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff — HandoffPackage（WP1 交接工件）。
+ * Kiwi v0.7.0 Transaction Handoff — HandoffPackage（WP1 交接工件）。
  *
  * HandoffPackage 是把一个 KNP/1.0 `AcceptedNonbindingAgreement`（基线 §15/§16）
  * 交给外部交易系统（UCP Checkout / AP2）前的安全交接工件。它携带协商达成所需的

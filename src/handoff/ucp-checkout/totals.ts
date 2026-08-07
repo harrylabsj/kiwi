@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff（WP2）— UCP Checkout totals 校验。
+ * Kiwi v0.7.0 Transaction Handoff（WP2）— UCP Checkout totals 校验。
  *
  * totals 是 business 权威（platform MUST NOT 自行计算替代）；platform MAY 校验
  * `非 total 各项之和 == total`。不符 → MUST NOT 自动完成，应拒绝或升级。本模块

@@ -1,5 +1,5 @@
 /**
- * KiwiCatalogSource 测试（v1.1 WP-A / 完成定义 #2、#8）。
+ * KiwiCatalogSource 测试（v0.7.0 WP-A / 完成定义 #2、#8）。
  *
  * 覆盖：
  *   - /v1/agents 新 API 消费：searchRecords / getRecord / searchCandidates /

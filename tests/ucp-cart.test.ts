@@ -1,5 +1,5 @@
 /**
- * Kiwi v1.1 Transaction Handoff（WP2 补全）— UcpCartChannel + cart→checkout 转换 tests。
+ * Kiwi v0.7.0 Transaction Handoff（WP2 补全）— UcpCartChannel + cart→checkout 转换 tests。
  *
  * 覆盖（对齐工作包验收清单）：
  *  - Cart CRUD 全路径：create → get → update（全量替换 PUT）→ cancel；

@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff（WP2）— UCP Checkout 协议类型（UCP 2026-04-08
+ * Kiwi v0.7.0 Transaction Handoff（WP2）— UCP Checkout 协议类型（UCP 2026-04-08
  * checkout spec family，基线 §3.2 / §43）。
  *
  * UCP Checkout REST binding：`{endpoint}/checkout-sessions`（Create/Get/Update/

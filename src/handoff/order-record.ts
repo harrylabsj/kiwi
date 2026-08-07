@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff — OrderRecord（WP3，只读订单事实）。
+ * Kiwi v0.7.0 Transaction Handoff — OrderRecord（WP3，只读订单事实）。
  *
  * ⚠️ Kiwi 不是订单系统。订单由 merchant 侧创建（business 是 Merchant of Record）；
  * Kiwi 只保存来自 completed checkout 的只读订单事实，用于审计与溯源。Kiwi 永不

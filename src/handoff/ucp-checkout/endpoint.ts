@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff（WP2 + 补全）— UCP checkout / cart service
+ * Kiwi v0.7.0 Transaction Handoff（WP2 + 补全）— UCP checkout / cart service
  * endpoint 解析 + cart capability 检测。
  *
  * 从 UCP profile（src/discovery/ucp）里找出 checkout / cart REST service endpoint：

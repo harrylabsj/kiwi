@@ -1,5 +1,5 @@
 /**
- * CommerceDataSource 测试（v1.1 WP-B / 完成定义 #5、#6、#7）。
+ * CommerceDataSource 测试（v0.7.0 WP-B / 完成定义 #5、#6、#7）。
  *
  * 架构调整（2026-08-07）：kiwi merchant 只与 shopping-cli 沟通——
  * ERP / 本地库接入已下沉到 shopping-cli 仓（`shopping_cli/data_sources/`，

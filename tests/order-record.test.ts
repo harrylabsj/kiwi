@@ -1,5 +1,5 @@
 /**
- * Kiwi v1.1 Transaction Handoff（WP3）— OrderRecord tests。
+ * Kiwi v0.7.0 Transaction Handoff（WP3）— OrderRecord tests。
  *
  * 覆盖（对齐工作包验收清单）：
  *  - 从 completed checkout 的 order 字段摄取（order id / permalink_url /

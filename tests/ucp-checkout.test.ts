@@ -1,5 +1,5 @@
 /**
- * Kiwi v1.1 Transaction Handoff（WP2）— UcpCheckoutChannel tests。
+ * Kiwi v0.7.0 Transaction Handoff（WP2）— UcpCheckoutChannel tests。
  *
  * 覆盖（对齐工作包验收清单）：
  *  - createSession：HandoffPackage.agreed_terms → UCP line_items（Money minor

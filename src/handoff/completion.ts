@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff — 完成门禁（WP1 交付 4）。
+ * Kiwi v0.7.0 Transaction Handoff — 完成门禁（WP1 交付 4）。
  *
  * requestCompletion 的调用前置条件（基线 §19 Approval Pipeline 绑定语义的
  * 交接域投影；§4.6 fail closed）。任一不满足即拒绝完成，绝不静默放行：
