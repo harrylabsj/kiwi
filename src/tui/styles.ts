@@ -49,6 +49,17 @@ export interface BannerInput {
   tagline: string;
 }
 
+/** 欢迎面板输入（参照 hermes build_welcome_banner：logo + 带标题信息面板）。 */
+export interface WelcomeInput extends BannerInput {
+  versionLabel: string;
+  commerceUrl: string;
+  modelLabel: string;
+  modeLabel: string;
+  a2aOn: boolean;
+  catalog?: string;
+  commands: string;
+}
+
 /** 行首前缀配色表（按长度降序匹配——`[handoff-open]` 必须先于 `[handoff]`）。 */
 const PREFIX_STYLES: ReadonlyArray<{ prefix: string; color: ColorKey; dim?: boolean; bold?: boolean }> = [
   { prefix: "[handoff-open]", color: "accent" },
@@ -89,6 +100,11 @@ export interface Theme {
   statusBar(parts: ReadonlyArray<string | Seg>): string;
   /** 启动横幅；off → 升级前单行 banner 逐字节相同。 */
   banner(input: BannerInput): string;
+  /**
+   * 欢迎界面（hermes build_welcome_banner 结构）：大号渐变 logo + 带版本
+   * 标题的信息面板（身份/会话/模型/运行时/命令）；off → 现状单行逐字节相同。
+   */
+  welcome(input: WelcomeInput): string;
 }
 
 export function createTheme(
@@ -180,5 +196,34 @@ export function createTheme(
     return `${art}${info}`; // 末尾换行由调用方 write() 补
   };
 
-  return { mode, enabled, paint, decorate, box, panel, rule, segments, statusBar, banner };
+  const welcome = (input: WelcomeInput): string => {
+    if (!enabled) {
+      return `Kiwi ${input.roleLabel} · ${input.id} · ${input.tagline}`;
+    }
+    const lines = [
+      `${paint(`Kiwi ${input.roleLabel}`, "primary", { bold: true })} · ${input.id}`,
+      `${paint("会话:", "accent")} ${input.commerceUrl}`,
+      `${paint("模型:", "accent")} ${input.modelLabel}`,
+      `${paint("运行时:", "accent")} ${input.modeLabel} · ${
+        input.a2aOn ? paint("A2A on", "ok") : paint("A2A off", "muted", { dim: true })
+      }${input.catalog !== undefined ? ` · ${paint("catalog", "muted", { dim: true })} ${input.catalog}` : ""}`,
+      "",
+      `${paint("命令:", "accent", { bold: true })} ${input.commands}`,
+    ];
+    const innerWidth = Math.max(1, ...lines.map((line) => visibleWidth(line)));
+    const border = borderStyle();
+    // 带标题顶边：┌─ {version} ───…──┐（标题段计入内容宽，右段补齐）
+    const titleText = ` ${input.versionLabel} `;
+    // 顶边 = ┌ + ─ + title + ─×p + ┐：总宽须等于内容宽 + 2（与行一致）
+    const pad = Math.max(0, innerWidth - visibleWidth(titleText) - 2);
+    const top = `${border}┌─${RESET}${paint(titleText, "primary", { bold: true })}${border}${"─".repeat(pad + 1)}┐${RESET}`;
+    const bottom = `${border}└${"─".repeat(innerWidth + 2)}┘${RESET}`;
+    const rows = lines.map((line) => {
+      const padInner = " ".repeat(Math.max(0, innerWidth - visibleWidth(line)));
+      return `${border}│${RESET} ${line}${padInner} ${border}│${RESET}`;
+    });
+    return `${kiwiBanner(mode)}\n${[top, ...rows, bottom].join("\n")}`; // 尾部换行由调用方 write() 补
+  };
+
+  return { mode, enabled, paint, decorate, box, panel, rule, segments, statusBar, banner, welcome };
 }

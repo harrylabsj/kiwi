@@ -5,7 +5,7 @@
  * 的输出与升级前逐字节一致（非 TTY 回归的根基）。
  */
 import { describe, expect, it } from "vitest";
-import { KIWI_ART, gradientText, kiwiBanner } from "../src/tui/banner.js";
+import { KIWI_ART, gradientText, kiwiBanner, rowGradient } from "../src/tui/banner.js";
 import { createTheme } from "../src/tui/styles.js";
 import {
   detectColorMode,
@@ -76,10 +76,10 @@ describe("detectColorMode", () => {
 });
 
 describe("banner", () => {
-  it("KIWI_ART 六行等宽（23 列）", () => {
+  it("KIWI_ART 六行等宽（30 列 box 字符）", () => {
     expect(KIWI_ART).toHaveLength(6);
     for (const line of KIWI_ART) {
-      expect(visibleWidth(line)).toBe(23);
+      expect(visibleWidth(line)).toBe(30);
     }
   });
 
@@ -90,10 +90,17 @@ describe("banner", () => {
     expect(painted).toContain(`${ESC}[0m ${ESC}[38;2;`);
   });
 
-  it("kiwiBanner：24bit 含渐变 art，off 为空串", () => {
+  it("kiwiBanner：24bit 含逐行渐变 art，off 为空串", () => {
     expect(kiwiBanner("24bit")).toContain(`${ESC}[38;2;`);
-    expect(kiwiBanner("24bit")).toContain("K"); // art 首字符
+    expect(kiwiBanner("24bit")).toContain("██"); // box 字符 art
     expect(kiwiBanner("off")).toBe("");
+  });
+
+  it("rowGradient：每行一个颜色（垂直渐变，hermes logo 风格）", () => {
+    const painted = rowGradient(["AA", "BB"]);
+    // 两行颜色不同（首行蓝、末行近白）
+    expect(painted).toContain(`${ESC}[38;2;79;195;247mAA${ESC}[0m`);
+    expect(painted).toContain(`${ESC}[38;2;224;247;250mBB${ESC}[0m`);
   });
 });
 
@@ -195,5 +202,39 @@ describe("styles 语义层（24bit）", () => {
     expect(on).toContain(`${ESC}[38;2;`);
     expect(on).toContain("Kiwi Buyer");
     expect(on).toContain("buyer-a");
+  });
+
+  it("welcome：off 与现状单行逐字节相同；24bit 含 logo + 带标题面板", () => {
+    const off = createTheme({ isTTY: false }, { color: "off" });
+    const legacy = "Kiwi Merchant · merchant-agent:merchant-001 · 主对话（/help 查看命令，/quit 退出）";
+    const input = {
+      roleLabel: "Merchant",
+      id: "merchant-agent:merchant-001",
+      tagline: "主对话（/help 查看命令，/quit 退出）",
+      versionLabel: "kiwi 0.6.0",
+      commerceUrl: "http://127.0.0.1:8765",
+      modelLabel: "deepseek/deepseek-v4-flash",
+      modeLabel: "Supervised",
+      a2aOn: true,
+      catalog: "http://127.0.0.1:8600",
+      commands: "/help /profile /handoff /discover /negotiate /a2a /quit",
+    };
+    expect(off.welcome(input)).toBe(legacy);
+    const on = theme.welcome(input);
+    expect(on).toContain(`${ESC}[38;2;`); // 渐变 logo
+    expect(on).toContain("██"); // box art
+    expect(on).toContain("┌─"); // 面板顶边
+    expect(on).toContain("└"); // 面板底边
+    expect(on).toContain("kiwi 0.6.0"); // 版本标题
+    expect(on).toContain("会话:");
+    expect(on).toContain("http://127.0.0.1:8765");
+    expect(on).toContain("模型:");
+    expect(on).toContain("deepseek/deepseek-v4-flash");
+    expect(on).toContain("命令:");
+    expect(on).toContain("/help /profile /handoff /discover /negotiate /a2a /quit");
+    // 面板行等宽（边框对齐）
+    const rows = on.split("\n").filter((line) => line.includes("│"));
+    const widths = rows.map((line) => visibleWidth(line));
+    expect(new Set(widths).size).toBe(1);
   });
 });
