@@ -43,9 +43,10 @@ npm run lint          # eslint . --max-warnings=0
 - `discovery/` — AgentDiscovery（resolve.ts）、agent-card/、ucp/、
   catalog-source/（ShoppingCliCatalogSource legacy + KiwiCatalogSource）
 - `counterparty/` — Channel 抽象（a2a-direct / shopping-cli-hosted / platform-api）
-- `commerce/` — **数据侧边界 CommerceDataSource**（data-source.ts + local-db/
-  erp/shopping-cli 三实现）；≠ `CommerceClient`（磋商轮询通信侧）≠
-  `CounterpartyChannel`（A2A 通道）
+- `commerce/` — **数据侧边界 CommerceDataSource**（data-source.ts 接口 +
+  shopping-cli-source.ts **唯一入口**；kiwi merchant 不直连 ERP/其他数据库——
+  外部数据接入在 shopping-cli 仓 `shopping_cli/data_sources/` 实现）；
+  ≠ `CommerceClient`（磋商轮询通信侧）≠ `CounterpartyChannel`（A2A 通道）
 - `agent/` — AgentKernel、buyer/（task-store、buyer-tools）、merchant/、
   memory/、write-gate.ts（routeWriteCandidate 审批门）
 - `contracts/` — ajv schema（negotiation/1.0、kiwi-catalog/1.0、
