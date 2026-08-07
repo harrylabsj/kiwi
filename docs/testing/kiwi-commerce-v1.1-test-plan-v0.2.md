@@ -32,6 +32,11 @@ integration with already released KNP/1.0
 - Handoff search uses exact KTH `destination_type` vocabulary;
 - Direct A2A remains usable without kiwi-catalog.
 
+> 实现状态（2026-08-07）：✅ 已覆盖——`tests/kiwi-catalog-source.test.ts`（TS 消费端，
+> 词表单一性契约、三态域折叠、resolveViaCatalog 集成）+ kiwi-catalog 仓
+> `test_kiwi_catalog_v1_api.py`/`test_state_domains.py`（服务端三态域/新 API/
+> handoff 搜索/legacy 兼容）。
+
 ## 3. shopping-cli
 
 - per-field authority/provenance;
@@ -41,6 +46,10 @@ integration with already released KNP/1.0
 - conflicting source authority → fail closed;
 - ERP/local DB freshness;
 - public/private boundary.
+
+> 实现状态（2026-08-07）：✅ 已覆盖——`tests/commerce-data-source.test.ts`
+> （20 例：本地库/ERP/shopping-cli adapter、权威标注、冲突 fail-closed、
+> product-source 适配）。
 
 ## 4. KTH/0.1
 
@@ -76,6 +85,10 @@ integration with already released KNP/1.0
 - phishing/destination display policy;
 - no secrets/private budget/merchant floor leakage.
 
+> 实现状态（2026-08-07）：✅ 已覆盖——`tests/handoff-{candidate,lifecycle,ledger,
+> delivery,url-safety,idempotency,stale-revalidation}.test.ts`（完成标准 1-13
+> 逐条映射见 KTH/0.1 rev0.3 §18 Implementation status）。
+
 ## 5. E2E
 
 ```text
@@ -90,6 +103,14 @@ Buyer Kiwi
 ```
 
 At least one E2E must use shopping-cli-backed Merchant data and at least one must use an external-authority adapter.
+
+> 实现状态（2026-08-07）：✅ 已覆盖——`tests/handoff-e2e.test.ts`（4 类目的地全链路：
+> external checkout URL / quote / PO draft / merchant contact）+ `tests/handoff-tui.test.ts`
+> （/handoff 用户可见性）。
+
+> 实现状态（2026-08-07）：✅ 已覆盖——`src/handoff/metrics.ts` +
+> `tests/handoff-metrics.test.ts`（率/时长/external conversion null）+
+> `kiwi metrics --dir <agent-dir>` 命令。
 
 ## 6. Metrics
 

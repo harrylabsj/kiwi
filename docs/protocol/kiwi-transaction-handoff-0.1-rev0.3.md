@@ -645,6 +645,24 @@ KTH/0.1 is implementation-ready when:
 12. a launch without callback evidence never becomes OPENED_CONFIRMED.
 13. Candidate lifecycle state is reconstructed from Ledger events without mutating Candidate content.
 
+## Implementation status (2026-08-07)
+
+Criteria 1-13 are implemented and covered by tests in the kiwi repo (`tests/handoff-*.test.ts`):
+
+| Criterion | Tests |
+|---|---|
+| 1-3 schema/digest binding | `handoff-candidate.test.ts` (construction validation, terms_digest recompute, digest tamper detection) |
+| 4 stale behavior | `handoff-stale-revalidation.test.ts` (agreement loss / identity / digest / destination / expiry) |
+| 5 URL safety | `handoff-url-safety.test.ts` (scheme/userinfo/host allowlist/redirect revalidation/maxRedirects) |
+| 6 no-order/payment/reservation | `handoff-stale-revalidation.test.ts`, `handoff-e2e.test.ts` (event-kind assertions) |
+| 7 destination types | `handoff-e2e.test.ts` (external_checkout_url / quote_document / purchase_order_draft / merchant_contact) |
+| 8 no external inference | `handoff-delivery.test.ts`, `handoff-metrics.test.ts` (reported_external_conversion always null) |
+| 9 lifecycle transitions | `handoff-lifecycle.test.ts` (transition table, terminal states, fold) |
+| 10 delivery-state transitions | `handoff-delivery.test.ts` (LAUNCHED not page-load, evidence-gated OPENED_CONFIRMED) |
+| 11 idempotency | `handoff-idempotency.test.ts`, `handoff-stale-revalidation.test.ts` (already_delivered) |
+| 12 no evidence → no confirm | `handoff-delivery.test.ts` |
+| 13 reconstruction from events | `handoff-ledger.test.ts` (embedded candidate rebuild, verifyChain tamper detection) |
+
 
 ---
 
