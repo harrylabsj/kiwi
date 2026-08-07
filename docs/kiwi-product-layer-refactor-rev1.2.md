@@ -1,6 +1,6 @@
 ---
 title: Kiwi 产品层重构与统一安装体验
-version: "rev1.1"
+version: "rev1.2"
 date: 2026-08-07
 status: Product Strategy Draft
 doc_type: product-strategy
@@ -869,21 +869,21 @@ Kiwi Network
 产品层重构按完成定义验收（沿用项目 CD/DoD + readiness audit 惯例），
 不宣布"完成"直到逐条直接实证：
 
-| # | 完成定义 | 验收标准 |
-| --- | --- | --- |
-| D0 | 统一 CLI 树可执行 | `kiwi buyer / merchant / network / doctor --help` 全部可用；现有 `kiwi agent serve` / `kiwi chat` 映射为 `merchant start` / `chat` 且保留别名兼容；CLI 骨架测试全绿 |
-| D1 | `kiwi merchant init` 端到端 | 首次初始化完成：shopping-cli 依赖检测（缺失 → 引导安装提示）→ Merchant Principal/Vault → Kiwi↔shopping-cli 连接配置 → 公开/私有边界配置 → A2A Server 配置 → Agent Card/UCP 生成（模式 A 或 B）→ 可发布状态；E2E 测试（mock shopping-cli）通过 |
-| D2 | `kiwi merchant publish` 编排 | 一次命令完成：agent 注册（kiwi-catalog，owner token 派生）→ listing 发布（进程调用 shopping-cli，digest 去重）→ 分步状态汇总（fail-closed：任一步失败非零退出 + 明确原因）；编排 E2E（双 stub）通过 |
-| D3 | `kiwi doctor` 聚合健康 | 输出三组件状态：Kiwi runtime self-check + shopping-cli 存在性/版本（版本兼容矩阵 `Kiwi x.y supports shopping-cli >= a.b < c`）+ kiwi-catalog 可达性；矩阵有单一来源配置并被 doctor 与 publish 共同消费 |
-| D4 | `kiwi buyer` 命令面 | `buyer init / start / search / tasks` 可用：search 复用 Product-first 链路（ProductIntent → listing 搜索），start 为 chat TUI 入口；Buyer 不感知 shopping-cli / kiwi-catalog（§2.2） |
+| # | 完成定义 | 验收标准 | 状态 |
+| --- | --- | --- | --- |
+| D0 | 统一 CLI 树可执行 | `kiwi buyer / merchant / network / doctor --help` 全部可用；现有 `kiwi agent serve` / `kiwi chat` 映射为 `merchant start` / `chat` 且保留别名兼容；CLI 骨架测试全绿 | ✅ 已实现（kiwi e1fe866） |
+| D1 | `kiwi merchant init` 端到端 | 首次初始化完成：shopping-cli 依赖检测（缺失 → 引导安装提示）→ Merchant Principal/Vault → Kiwi↔shopping-cli 连接配置 → 公开/私有边界配置 → A2A Server 配置 → Agent Card/UCP 生成（模式 A 或 B）→ 可发布状态；E2E 测试（mock shopping-cli）通过 | ✅ 已实现（kiwi e1fe866）：profile 生成（agent_id = merchant_id 身份统一）+ 依赖检测 + 连接可达性 + 数据目录；Agent Card/UCP 由 `merchant start` 运行时生成（模式 A） |
+| D2 | `kiwi merchant publish` 编排 | 一次命令完成：agent 注册（kiwi-catalog，owner token 派生）→ listing 发布（进程调用 shopping-cli，digest 去重）→ 分步状态汇总（fail-closed：任一步失败非零退出 + 明确原因）；编排 E2E（双 stub）通过 | ✅ 已实现（kiwi e1fe866）：三步编排 + 幂等（先查复用）+ 身份统一 + 版本门（D3 矩阵消费） |
+| D3 | `kiwi doctor` 聚合健康 | 输出三组件状态：Kiwi runtime self-check + shopping-cli 存在性/版本（版本兼容矩阵 `Kiwi x.y supports shopping-cli >= a.b < c`）+ kiwi-catalog 可达性；矩阵有单一来源配置并被 doctor 与 publish 共同消费 | ✅ 已实现（kiwi e1fe866）：product-compat.ts 单一来源（>= 2.0.0 < 3.0.0），doctor 与 publish 共同消费 |
+| D4 | `kiwi buyer` 命令面 | `buyer init / start / search / tasks` 可用：search 复用 Product-first 链路（ProductIntent → listing 搜索），start 为 chat TUI 入口；Buyer 不感知 shopping-cli / kiwi-catalog（§2.2） | ✅ 已实现（kiwi e1fe866 + kiwi-catalog 07bad01）：init/search/tasks + start 别名；search 复用 M3 链路；跨仓修复 merchants 影子表写入方 |
 
-实施顺序建议（依赖驱动）：
+实施顺序（rev1.2 更新：D0–D4 已全部落地）：
 
 ```text
-D0（CLI 骨架）
-  ├──> D2（publish 编排——Merchant 闭环最短路径）
-  └──> D1（merchant init）与 D4（buyer 命令面）可并行
-D3（doctor 聚合）依赖 D0 与版本矩阵配置，可与 D2 并行
+D0（CLI 骨架）→ D2（publish 编排）→ D1（merchant init）
+→ D3（doctor 聚合 + 版本矩阵）→ D4（buyer 命令面）
+全部完成；实现证据与真实 E2E 记录见
+docs/reviews/kiwi-product-layer-readiness-audit-2026-08-07.md
 ```
 
 明确不做（本轮）：
