@@ -14,8 +14,8 @@ v1.1 的发布决定（含第三方互操作证据、部署验证、产品化打
 
 | 评估 | 数量 | 条目 |
 | --- | --- | --- |
-| ✅ 直接实证 | 18 | #1-3、#6-16、#18-21 |
-| ⚠️ 部分或间接 | 3 | #4、#5、#17（见矩阵注记） |
+| ✅ 直接实证 | 19 | #1-3、#6-21 |
+| ⚠️ 部分或间接 | 2 | #4、#5（见矩阵注记） |
 | ❌ 缺失 | 0 | — |
 
 ## 逐条矩阵
@@ -38,7 +38,7 @@ v1.1 的发布决定（含第三方互操作证据、部署验证、产品化打
 | 14 | Handoff 不预留库存 | 同上（reserves_inventory 恒 false） | 同上 | ✅ |
 | 15 | 目的 URL 有 HTTPS / redirect / phishing 防护 | `src/handoff/url-safety.ts`（HTTPS 默认/unsafe scheme 拒绝/userinfo 拒绝/expectedHost+allowlist 绑定/重定向每跳重验/maxRedirects）+ executeHandoff 集成（仅 URL 类目的地） | `tests/handoff-url-safety.test.ts`（10 例全矩阵） | ✅ |
 | 16 | stale Agreement 或 destination 可使 HandoffCandidate 失效 | executeHandoff §10 revalidation：agreement 消失/身份变化/terms_digest 不匹配/expiry/目的地无效 → stale/expired 事件 + 不执行 | `tests/handoff-stale-revalidation.test.ts`（4 例） | ✅ |
-| 17 | 用户能看到 Handoff 目标和已谈妥摘要 | `display_summary`（merchant + summary）+ kernel `handoffSummary` getter（/handoff 命令，Ledger 投影）+ 工具交付文本 | `tests/handoff-e2e.test.ts`（交付文本断言）；kernel getter 无单测 | ⚠️（数据面与工具文本实证；TUI /handoff 交互未真机验证） |
+| 17 | 用户能看到 Handoff 目标和已谈妥摘要 | `display_summary`（merchant + summary）+ kernel `handoffSummary` getter（/handoff 命令，Ledger 投影）+ 工具交付文本 | `tests/handoff-tui.test.ts`（真实 kernel + runChatTui 注入流：/handoff 输出候选 id/生命周期/目的地/商家/摘要）、`tests/handoff-e2e.test.ts`（交付文本断言） | ✅（2026-08-07 TUI 集成测试补齐） |
 | 18 | Ledger 可审计 Handoff created/delivered/opened/expired | `HandoffEventStore`（复用 LedgerStore 引擎：append-only/hash-linked/verifyChain/禁词）+ 12 个 handoff event kinds + **digest 覆盖修复**（篡改 terms_digest/evidence 可检出） | `tests/handoff-ledger.test.ts`（事件过滤/evidence 落链/篡改检出/事件重建/禁词） | ✅ |
 | 19 | 不把 external URL opened 误报成 order/payment success | LAUNCHED 不证明页面加载、OPENED_CONFIRMED 需可归属证据（四类白名单，无证据永不确认）；metrics `reported_external_conversion` 恒 null | `tests/handoff-delivery.test.ts`（证据门全矩阵）、`tests/handoff-metrics.test.ts`（external conversion null） | ✅ |
 | 20 | 至少一个端到端场景达到 Agreement → Handoff → external checkout/ERP | `tests/handoff-e2e.test.ts`：negotiate_buyer_task → selected_nonbinding → handoff_agreement（write gate）→ executeHandoff → delivered → launch → 证据门 | 2 个 E2E 用例（external checkout URL + quote_document 目的地） | ✅ |
@@ -55,9 +55,8 @@ v1.1 的发布决定（含第三方互操作证据、部署验证、产品化打
 
 ## 声明
 
-- v1.1 完成定义 21 条：**18 条直接实证、3 条部分或间接、0 条缺失**。
+- v1.1 完成定义 21 条：**19 条直接实证、2 条部分或间接、0 条缺失**。
 - 本审计**不宣布 v1.1 发布**。v1.1 仍为 Draft（rev1.4.1 §0）；发布前还需：
-  v1.1 就绪度审计随发布决策复核、#17 的 TUI 真机交互验证、
-  第三方互操作证据（文档明确禁止宣称，维持）。
-  （#11 的 PO/contact E2E 已补齐；kiwi-catalog 部署冒烟已于 2026-08-07 通过，
-  并抓到并修复 record 时间戳序列化缺陷——见 `f1eb9d4`。）
+  v1.1 就绪度审计随发布决策复核、第三方互操作证据（文档明确禁止宣称，维持）。
+  （#11 的 PO/contact E2E 与 #17 的 TUI 集成测试已于 2026-08-07 补齐；
+  kiwi-catalog 部署冒烟通过，并抓到修复 record 时间戳序列化缺陷 `f1eb9d4`。）
