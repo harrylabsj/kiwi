@@ -29,6 +29,7 @@
 import readline from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { EXIT } from "../exit-codes.js";
+import { createTheme, type Seg, type Theme } from "../tui/styles.js";
 import type { ApprovalResult, OperatorController, PrepareResult } from "./controller.js";
 import type { Candidate, OperatorEvent, OperatorMode } from "./types.js";
 
@@ -75,37 +76,64 @@ function mapBareCommand(line: string): string | undefined {
   return undefined;
 }
 
-function renderHeader(controller: OperatorController, write: Write): void {
+function renderHeader(controller: OperatorController, write: Write, theme: Theme): void {
   const state = controller.getState();
   const profile = controller.profile;
   const roleLabel = profile.role === "buyer" ? "Buyer" : "Merchant";
-  const paused = state.paused ? " · 已暂停" : "";
-  write(`Kiwi ${roleLabel} · ${profile.agent_id} · ${modeLabel(state.mode)}${paused}`);
-  write(`会话: ${profile.commerce.base_url} · 输入 /help 查看命令`);
+  // segments 拼接与旧文本逐字节一致（off 模式），TTY 下按语义着色
+  write(
+    theme.segments([
+      { text: `Kiwi ${roleLabel}`, color: "primary", bold: true },
+      profile.agent_id,
+      { text: modeLabel(state.mode), color: modeColor(state.mode) },
+      ...(state.paused ? [{ text: "已暂停", color: "warn" as const }] : []),
+    ]),
+  );
+  write(
+    theme.enabled
+      ? `${theme.paint("会话:", "accent")} ${profile.commerce.base_url} · ${theme.paint("输入 /help 查看命令", "muted", { dim: true })}`
+      : `会话: ${profile.commerce.base_url} · 输入 /help 查看命令`,
+  );
 }
 
-function renderCandidate(controller: OperatorController, candidate: Candidate, write: Write): void {
-  write("─".repeat(56));
+function modeColor(mode: OperatorMode): Seg["color"] {
+  return mode === "autopilot" ? "accent" : mode === "supervised" ? "primary" : "warn";
+}
+
+function renderCandidate(
+  controller: OperatorController,
+  candidate: Candidate,
+  write: Write,
+  theme: Theme,
+): void {
+  // panel 化：TTY 下 box 包裹；off 下 `─`×56 + 内容（legacy 逐字节复刻）
+  const lines: string[] = [];
   const counterpart = controller.lastCounterpartMessage;
-  if (counterpart !== undefined) write(`对方: ${counterpart}`);
-  write("Kiwi 分析:");
-  for (const line of candidate.analysis) write(`  · ${line}`);
+  if (counterpart !== undefined) lines.push(`对方: ${counterpart}`);
+  lines.push("Kiwi 分析:");
+  for (const line of candidate.analysis) lines.push(`  · ${line}`);
   if (candidate.route === "advice_only") {
-    write(`建议（manual 模式，不自动提交）: ${candidate.decision.public_message}`);
-    write(`候选 ${candidate.candidate_id} 仅建议 · /reject 放弃 · /revise <指令> 重算`);
+    lines.push(`建议（manual 模式，不自动提交）: ${candidate.decision.public_message}`);
+    lines.push(`候选 ${candidate.candidate_id} 仅建议 · /reject 放弃 · /revise <指令> 重算`);
   } else {
-    write(`公开草稿: ${candidate.decision.public_message}`);
-    write(
+    lines.push(`公开草稿: ${candidate.decision.public_message}`);
+    lines.push(
       `候选 ${candidate.candidate_id} 等待批准：/approve 批准 · /revise <指令> 重算 · /reject 驳回`,
     );
   }
+  write(theme.panel(lines, { legacySeparator: true }));
 }
 
-function renderPrepare(controller: OperatorController, result: PrepareResult, write: Write): void {
+function renderPrepare(
+  controller: OperatorController,
+  result: PrepareResult,
+  write: Write,
+  theme: Theme,
+): void {
   switch (result.kind) {
     case "awaiting_approval":
     case "advice_ready":
-      renderCandidate(controller, result.candidate, write);
+      renderCandidate(controller, result.candidate, write, theme);
       break;
     case "auto_submitted":
       write(
@@ -222,6 +250,7 @@ async function handleCommand(
   controller: OperatorController,
   line: string,
   write: Write,
+  theme: Theme,
 ): Promise<void> {
   const parts = line.split(/\s+/);
   const command = parts[0] ?? "";
@@ -264,7 +293,7 @@ async function handleCommand(
       return;
     }
     case "/revise": {
-      renderPrepare(controller, await controller.revise(arg), write);
+      renderPrepare(controller, await controller.revise(arg), write, theme);
       return;
     }
     case "/pause": {
@@ -311,14 +340,15 @@ async function handleLine(
   controller: OperatorController,
   line: string,
   write: Write,
+  theme: Theme,
 ): Promise<void> {
   if (line.startsWith("/")) {
-    await handleCommand(controller, line, write);
+    await handleCommand(controller, line, write, theme);
     return;
   }
   const bare = mapBareCommand(line);
   if (bare !== undefined) {
-    await handleCommand(controller, bare, write);
+    await handleCommand(controller, bare, write, theme);
     return;
   }
   const result = await controller.sendOperatorMessage(line);
@@ -342,22 +372,24 @@ async function handleLine(
  */
 export async function runTui(options: TuiOptions): Promise<number> {
   const { controller, input, output } = options;
+  // Neural Awakening 主题（参照 hermes）：非 TTY 时所有样式直通原文。
+  const theme = createTheme(output as { isTTY?: boolean });
   const write: Write = (text) => {
-    output.write(`${text}\n`);
+    output.write(`${theme.decorate(text)}\n`);
   };
 
-  renderHeader(controller, write);
+  renderHeader(controller, write, theme);
   // Initial pull: show the current candidate (supervised never submits here).
   const initial = await controller.prepareNextCandidate();
   if (initial.kind !== "no_work" && initial.kind !== "blocked") {
-    renderPrepare(controller, initial, write);
+    renderPrepare(controller, initial, write, theme);
   }
 
   const rl = readline.createInterface({
     input,
     output,
     terminal: (input as { isTTY?: boolean }).isTTY === true,
-    prompt: "kiwi> ",
+    prompt: theme.enabled ? theme.paint("kiwi> ", "accent") : "kiwi> ",
   });
   // EOF (Ctrl-D, or an injected stream that ends) closes the interface while
   // the last command is still being awaited; prompting a closed readline
@@ -366,11 +398,29 @@ export async function runTui(options: TuiOptions): Promise<number> {
   rl.once("close", () => {
     rlClosed = true;
   });
-  rl.prompt();
+  // 状态栏 + prompt 重绘（TTY-only；非 TTY 零额外字节）。
+  const refreshPrompt = (): void => {
+    if (rlClosed) return;
+    if (theme.enabled) {
+      output.write("\r\u001b[K");
+      const state = controller.getState();
+      const roleLabel = controller.profile.role === "buyer" ? "Buyer" : "Merchant";
+      output.write(
+        `${theme.statusBar([
+          { text: `Kiwi ${roleLabel}`, color: "primary", bold: true },
+          controller.profile.agent_id,
+          { text: modeLabel(state.mode), color: modeColor(state.mode) },
+          ...(state.paused ? [{ text: "已暂停", color: "warn" as const }] : []),
+        ])}\n`,
+      );
+    }
+    rl.prompt();
+  };
+  refreshPrompt();
   for await (const rawLine of rl) {
     const line = String(rawLine).trim();
     if (line !== "") {
-      await handleLine(controller, line, write);
+      await handleLine(controller, line, write, theme);
     }
     if (controller.getState().shutdown) break;
     // After each command, surface newly arrived work (never auto-submits in
@@ -378,10 +428,10 @@ export async function runTui(options: TuiOptions): Promise<number> {
     if (!controller.getState().paused && controller.getState().approval.kind === "idle") {
       const prepared = await controller.prepareNextCandidate();
       if (prepared.kind !== "no_work" && prepared.kind !== "blocked") {
-        renderPrepare(controller, prepared, write);
+        renderPrepare(controller, prepared, write, theme);
       }
     }
-    if (!rlClosed) rl.prompt();
+    if (!rlClosed) refreshPrompt();
   }
   rl.close();
   if (!controller.getState().shutdown) {

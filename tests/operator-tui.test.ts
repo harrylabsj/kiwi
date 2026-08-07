@@ -4,7 +4,7 @@
  * Asserts the supervised approval boundary from the user's perspective:
  * nothing is formally submitted before /approve.
  */
-import { Readable, Writable } from "node:stream";
+import { streams } from "./tui-helpers.js";
 import { describe, expect, it } from "vitest";
 import type { FakeCommerceClient } from "../src/commerce/fake-client.js";
 import { OperatorController } from "../src/operator/controller.js";
@@ -27,21 +27,6 @@ function tuiSetup(): { controller: OperatorController; merchant: FakeCommerceCli
   return { controller, merchant };
 }
 
-function streams(lines: string[]): {
-  input: Readable;
-  output: Writable;
-  text: () => string;
-} {
-  const input = Readable.from([`${lines.join("\n")}\n`]);
-  let buffer = "";
-  const output = new Writable({
-    write(chunk, _encoding, callback) {
-      buffer += String(chunk);
-      callback();
-    },
-  });
-  return { input, output, text: () => buffer };
-}
 
 describe("runTui", () => {
   it("shows role/agent/mode, the candidate draft, and submits only after /approve", async () => {
