@@ -1,6 +1,6 @@
 {
   "name": "kiwi",
-  "version": "1.0.0",
+  "version": "0.6.0",
   "description": "Kiwi: standalone A2A commerce negotiation agent runtime (Pi Agent Core + shopping-cli Commerce API)",
   "type": "module",
   "license": "Apache-2.0",

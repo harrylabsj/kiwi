@@ -1,5 +1,5 @@
 /**
- * HandoffCandidate 测试（KTH rev0.3 §5；v1.1 完成定义 #9、#10）。
+ * HandoffCandidate 测试（KTH rev0.3 §5；v0.7.0 完成定义 #9、#10）。
  *
  * 覆盖：
  * - 构造即校验：agreement 绑定、terms_digest 与 agreed_terms 重算一致性、

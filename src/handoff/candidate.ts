@@ -15,9 +15,9 @@
  */
 
 /**
- * HandoffCandidate —— KTH/0.1 §5 不可变候选（v1.1 WP-C1 / 完成定义 #9、#10）。
+ * HandoffCandidate —— KTH/0.1 §5 不可变候选（v0.7.0 WP-C1 / 完成定义 #9、#10）。
  *
- * 与 `HandoffPackage`（src/handoff/package.ts，v1.0 WP1 的 UCP checkout session
+ * 与 `HandoffPackage`（src/handoff/package.ts，v0.6.0 WP1 的 UCP checkout session
  * 层工件）**不是一回事**：HandoffPackage 是 UCP Checkout 适配层输入；
  * HandoffCandidate 是 KTH 候选——agreement → 策略/批准 → 重验 → 交付链的
  * 第一环。二者并存（术语对齐决策：不重命名、双轨共存）。

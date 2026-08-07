@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff（WP1）错误模型。
+ * Kiwi v0.7.0 Transaction Handoff（WP1）错误模型。
  *
  * 交接域内两类失败语义分得很开：
  * - 结构化结果（HandoffChannel / AuthorizationProvider 返回 `{ok}` /

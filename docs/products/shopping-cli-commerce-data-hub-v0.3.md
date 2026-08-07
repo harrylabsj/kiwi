@@ -188,7 +188,7 @@ regions
 capabilities
 Agent Card
 UCP Profile
-Handoff destination metadata (Kiwi Commerce v1.1+; exact KTH `destination_type` vocabulary)
+Handoff destination metadata (Kiwi Commerce v0.7.0+; exact KTH `destination_type` vocabulary)
 ```
 
 kiwi-catalog indexes Agents; shopping-cli stores/aggregates commerce data.
@@ -220,7 +220,7 @@ Keep as Hosted/Legacy infrastructure with an explicit decision:
 ```text
 - 存续原因：存量 hosted negotiation 链路仍在使用，且在 Direct A2A 上线并验证前没有替代通道
 - 维护承诺：修复 claim escape / fake claim 等 P0 可靠性问题（主架构 rev1.5 §37），维持存量可用性
-- 退役条件：Direct A2A + KiwiCatalogSource 验证通过后另行评估下线，不在 v1.1 范围内
+- 退役条件：Direct A2A + KiwiCatalogSource 验证通过后另行评估下线，不在 v0.7.0 范围内
 ```
 
 This does not restore Agent Catalog responsibility to shopping-cli.
@@ -257,7 +257,7 @@ It MUST NOT claim an external order/payment succeeded unless the authoritative e
 
 ## 13. Version Scope
 
-`Handoff capabilities` and Handoff destination metadata are Kiwi Commerce v1.1+ integration points. The core CommerceDataSource / authority model can ship independently.
+`Handoff capabilities` and Handoff destination metadata are Kiwi Commerce v0.7.0+ integration points. The core CommerceDataSource / authority model can ship independently.
 
 ---
 

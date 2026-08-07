@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff（WP1）—— 域模型与授权接缝。
+ * Kiwi v0.7.0 Transaction Handoff（WP1）—— 域模型与授权接缝。
  *
  * 基线 §3.4 / §43：订单/支付发生在外部交易系统（UCP Checkout，business 是
  * Merchant of Record）；Kiwi 只做「非绑定共识 → 交易系统」的安全交接。本包只
@@ -27,7 +27,7 @@
  *   不可变 + event-sourced 生命周期 lifecycle.ts/ledger.ts）→ 交付观察
  *   （delivery 状态，Phase 2）。
  *   内层 —— UCP checkout session 适配：HandoffPackage/HandoffSession/
- *   HandoffChannel（package.ts/channel.ts，v1.0 WP1 工件，不重命名保留）。
+ *   HandoffChannel（package.ts/channel.ts，v0.6.0 WP1 工件，不重命名保留）。
  *   `ucp_checkout`/`ucp_order` 目的地走内层；URL/PO/quote/contact 目的地
  *   走外层交付。
  */
@@ -88,7 +88,7 @@ export {
   type CompletionGateFailureCode,
 } from "./completion.js";
 
-// ── KTH/0.1 rev0.3（v1.1 WP-C1）──────────────────────────────────────────
+// ── KTH/0.1 rev0.3（v0.7.0 WP-C1）──────────────────────────────────────────
 
 export {
   DESTINATION_TYPES,

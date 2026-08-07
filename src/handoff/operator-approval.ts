@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff — OperatorApprovalAuthorizationProvider（WP3）。
+ * Kiwi v0.7.0 Transaction Handoff — OperatorApprovalAuthorizationProvider（WP3）。
  *
  * 把 operator 审批证据桥接为 AuthorizationProvider（AP2 边界）。用户/操作员在
  * 审批面（approval face）上看到 HandoffPackage + checkout session 摘要后显式

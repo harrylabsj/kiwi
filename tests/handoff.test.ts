@@ -1,5 +1,5 @@
 /**
- * Kiwi v1.1 Transaction Handoff（WP1）tests。
+ * Kiwi v0.7.0 Transaction Handoff（WP1）tests。
  *
  * 覆盖（对齐工作包验收清单）：
  *  - HandoffPackage 构造与 digest 校验（JCS+SHA-256 重算、fail-closed 拒绝）；

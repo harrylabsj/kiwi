@@ -59,7 +59,7 @@ import { runDown, runStatus, runUp, SupervisorError } from "./supervisor/manage.
 import { parseLogLines, runLogs } from "./supervisor/logs.js";
 import { StackConfigError } from "./supervisor/stack-config.js";
 
-const USAGE = `kiwi 1.0.0 — commerce negotiation agent runtime
+const USAGE = `kiwi 0.6.0 — commerce negotiation agent runtime
 
 Usage:
   kiwi init --dir <dir> [--shopping-cli-src <path>] [--fake]
@@ -466,7 +466,7 @@ function defaultChatProfile(): AgentProfile {
   const apiKeyEnv = process.env.KIWI_MODEL_API_KEY_ENV ?? "DEEPSEEK_API_KEY";
   const baseUrl = process.env.KIWI_MODEL_BASE_URL;
   return {
-    runtime_version: "1.0.0",
+    runtime_version: "0.6.0",
     protocol_version: "shopping.negotiation/0.1",
     agent_id: "kiwi-assistant",
     role: "buyer",
@@ -733,7 +733,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return EXIT.OK;
   }
   if (argv.includes("--version")) {
-    process.stdout.write("kiwi 1.0.0\n");
+    process.stdout.write("kiwi 0.6.0\n");
     return EXIT.OK;
   }
   let args: ParsedArgs;
@@ -779,7 +779,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return EXIT.OK;
     }
     if (cmd === "metrics") {
-      // v1.1 #21：从 buyer agent data dir 的 Ledger 事件计算 KTH 指标。
+      // v0.7.0 #21：从 buyer agent data dir 的 Ledger 事件计算 KTH 指标。
       const dir = requireDir(args);
       const { HandoffEventStore, computeHandoffMetrics } = await import("./handoff/index.js");
       const ledger = new HandoffEventStore({ dir });

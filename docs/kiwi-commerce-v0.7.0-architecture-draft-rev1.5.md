@@ -1,23 +1,23 @@
 ---
 title: Kiwi A2A Agent Commerce Network 总体架构基线
 doc_revision: "1.5"
-target_product: "Kiwi Commerce v1.1"
+target_product: "Kiwi Commerce v0.7.0"
 date: 2026-08-07
 status: Draft Architecture Baseline
 canonical_source: markdown
 supersedes_draft: "doc_revision 1.4.1"
-scope: v1.1 Draft — Agent-to-Agent Commerce through Safe Transaction Handoff
+scope: v0.7.0 Draft — Agent-to-Agent Commerce through Safe Transaction Handoff
 ---
 
 # Kiwi A2A Agent Commerce Network 总体架构基线
 
 ## 0. 文档定位
 
-本文是 **Kiwi Commerce v1.1 的下一阶段架构草稿**。
+本文是 **Kiwi Commerce v0.7.0 的下一阶段架构草稿**。
 
-它建立在已经发布的 Kiwi A2A v1.0.0 / architecture rev1.2 之上，但**不改写、不替代 v1.0 已发布基线**。v1.0 的完成定义、发布证据与 release status 仍由已发布 rev1.2 基线和对应 readiness audit 管理。
+它建立在已经发布的 Kiwi A2A v0.6.0 / architecture rev1.2 之上，但**不改写、不替代 v0.6.0 已发布基线**。v0.6.0 的完成定义、发布证据与 release status 仍由已发布 rev1.2 基线和对应 readiness audit 管理。
 
-本文只定义 v1.1 新增方向：
+本文只定义 v0.7.0 新增方向：
 
 ```text
 kiwi-catalog 产品独立
@@ -26,7 +26,7 @@ Transaction Handoff
 ERP / local commerce data connectivity
 ```
 
-在 v1.1 正式发布前，本文状态始终是 Draft。
+在 v0.7.0 正式发布前，本文状态始终是 Draft。
 
 Markdown 是唯一规范源；PDF 只能作为 Markdown 的导出物，不得成为独立事实源。
 
@@ -38,7 +38,7 @@ Markdown 是唯一规范源；PDF 只能作为 Markdown 的导出物，不得成
 - kiwi-catalog 与 shopping-cli 在开放网络中的产品边界；
 - Buyer Agent 与 Merchant Agent 的发现、连接、协商与恢复；
 - 身份、信任、策略、审批、披露、幂等和反滥用；
-- v1.1 的新增边界、完成定义与对 v1.0 的继承关系。
+- v0.7.0 的新增边界、完成定义与对 v0.6.0 的继承关系。
 
 Wire-level JSON Schema、精确状态转换表、test vectors 和错误响应格式由：
 
@@ -124,7 +124,7 @@ Kiwi v0.3 是：
 
 > 一个持续代表 Buyer 或 Merchant、拥有长期记忆、任务能力和私有策略的 Agent-first 电商运行时。
 
-Kiwi A2A v1.0 在此基础上升级为：
+Kiwi A2A v0.6.0 在此基础上升级为：
 
 > **一个开放的 Agent Commerce Runtime，使真实经济主体的 Buyer Agent 与 Merchant Agent 可以跨运行时、跨组织、跨平台直接发现、沟通、询价、报价、还价、澄清和形成非绑定商业共识。**
 
@@ -220,7 +220,7 @@ AcceptedNonbindingAgreement
 
 它不创建订单、不授权支付、不预留库存。
 
-Kiwi v1.1+ 在 KNP 之外新增：
+Kiwi v0.7.0+ 在 KNP 之外新增：
 
 ```text
 AcceptedNonbindingAgreement
@@ -903,7 +903,7 @@ Cancel 是 negotiation lifecycle 终止：
 → CANCELLED
 ```
 
-Cancel 不代表取消已经存在的订单；Kiwi A2A v1.0 不管理订单。
+Cancel 不代表取消已经存在的订单；Kiwi A2A v0.6.0 不管理订单。
 
 ## 14.4 Reopen
 
@@ -1799,10 +1799,10 @@ open confirmation
 3. `[E]` ReasoningBackend 不拥有 Commerce 写权限。
 4. `[E]` 模型输出不能直接执行外部副作用。
 5. `[E]` 不保存 raw chain-of-thought。
-6. `[E]` v1.0 不创建订单。
-7. `[E]` v1.0 不执行支付。
-8. `[E]` v1.0 不执行退款。
-9. `[E]` v1.0 不锁库存。
+6. `[E]` v0.6.0 不创建订单。
+7. `[E]` v0.6.0 不执行支付。
+8. `[E]` v0.6.0 不执行退款。
+9. `[E]` v0.6.0 不锁库存。
 10. `[N]` Remote Agent 不获得 Principal Memory。
 11. `[N]` Remote Agent 不得通过协议内容获得任意本地工具执行权。
 12. `[N]` 所有 Remote Content 必须视为 untrusted input。
@@ -1952,7 +1952,7 @@ interop tests
 optional directory
 ```
 
-## Kiwi A2A v1.0
+## Kiwi A2A v0.6.0
 
 完整：
 
@@ -1969,7 +1969,7 @@ Need
 
 ---
 
-## Kiwi Commerce v1.1 — Handoff & Product Split
+## Kiwi Commerce v0.7.0 — Handoff & Product Split
 
 ```text
 kiwi-catalog standalone
@@ -1995,7 +1995,7 @@ Need
 → External Transaction System
 ```
 
-v1.1 仍不要求 Kiwi 自己创建订单或执行支付。
+v0.7.0 仍不要求 Kiwi 自己创建订单或执行支付。
 
 # 40. Testing Ownership
 
@@ -2042,13 +2042,13 @@ agreement invariants
 
 ---
 
-# 41. Frozen v1.0 Inheritance
+# 41. Frozen v0.6.0 Inheritance
 
-Kiwi A2A v1.0.0 已按 architecture rev1.2 发布。
+Kiwi A2A v0.6.0 已按 architecture rev1.2 发布。
 
-本 v1.1 Draft **不重新声明或重新审计 v1.0 的完成状态**，也不把 v1.1 的 Handoff / Product Split 倒灌进 v1.0 release scope。
+本 v0.7.0 Draft **不重新声明或重新审计 v0.6.0 的完成状态**，也不把 v0.7.0 的 Handoff / Product Split 倒灌进 v0.6.0 release scope。
 
-v1.0 的历史完成定义和 readiness evidence 应继续从已发布文件读取：
+v0.6.0 的历史完成定义和 readiness evidence 应继续从已发布文件读取：
 
 ```text
 docs/kiwi-a2a-architecture-baseline.md        # released rev1.2
@@ -2058,13 +2058,13 @@ docs/protocol/kiwi-negotiation-protocol-1.0.md
 
 关于 independent implementation：
 
-> v1.0 reference implementation 已有双侧 Kiwi interop 证据；在真正第三方/独立实现互操作测试完成前，文档不得宣称“已验证 cross-vendor / independent implementation interoperability”。
+> v0.6.0 reference implementation 已有双侧 Kiwi interop 证据；在真正第三方/独立实现互操作测试完成前，文档不得宣称“已验证 cross-vendor / independent implementation interoperability”。
 
 这不撤销 KNP/1.0 规范文本的发布状态，但限制产品/市场对互操作证据的表述。
 
-# 42. Kiwi Commerce v1.1 Completion Definition
+# 42. Kiwi Commerce v0.7.0 Completion Definition
 
-v1.1 Handoff/Product Split 只有同时满足以下条件才算完成：
+v0.7.0 Handoff/Product Split 只有同时满足以下条件才算完成：
 
 1. `kiwi-catalog` 可独立部署，不依赖 shopping-cli 数据库。
 2. Kiwi AgentDiscovery 可使用 `KiwiCatalogSource`。
@@ -2097,12 +2097,12 @@ v1.1 Handoff/Product Split 只有同时满足以下条件才算完成：
 
 # 43. Canonical Documents and Artifact Layout
 
-v1.1 Draft 的当前文档布局：
+v0.7.0 Draft 的当前文档布局：
 
 ```text
 docs/
   CURRENT-DOCS.md
-  kiwi-commerce-v1.1-architecture-draft-rev1.5.md
+  kiwi-commerce-v0.7.0-architecture-draft-rev1.5.md
 
 docs/products/
   kiwi-catalog-product-architecture-v0.4.md
@@ -2113,7 +2113,7 @@ docs/protocol/
   kiwi-transaction-handoff-0.1-rev0.3.md
 
 docs/testing/
-  kiwi-commerce-v1.1-test-plan-v0.3.md
+  kiwi-commerce-v0.7.0-test-plan-v0.3.md
 ```
 
 现有 KNP v1.0 实现 schema 的 repository authority：
@@ -2128,7 +2128,7 @@ contracts/negotiation/1.0/schema.json
 
 规则：
 
-- 已发布 v1.0 canonical 文件继续保留，不由 v1.1 Draft 覆盖；
+- 已发布 v0.6.0 canonical 文件继续保留，不由 v0.7.0 Draft 覆盖；
 - KNP/1.0 的 wire semantics 由 KNP 文档与现有 contract schema 管理；
 - KTH/0.1 是 Handoff 唯一 domain/spec 定义源；
 - kiwi-catalog / shopping-cli 的产品细节只在各自 product document 管理；
@@ -2155,7 +2155,7 @@ contracts/negotiation/1.0/schema.json
 - HTTP Message Signatures where selected by TrustPolicy
 - OAuth 2 / OIDC / mTLS where selected by deployment
 
-AP2 与 ACP-Commerce 属于 v1.1+ Transaction Handoff，不是 Kiwi A2A v1.0 Core。
+AP2 与 ACP-Commerce 属于 v0.7.0+ Transaction Handoff，不是 Kiwi A2A v0.6.0 Core。
 
 ---
 
@@ -2236,7 +2236,7 @@ Kiwi 最终代表的是：
 
 本修订吸收 `kiwi-a2a-rev1.3-docs-review-2026-08-07.md` 的文档级意见：
 
-- v1.0 released baseline 与 v1.1 Draft 身份彻底分离；
+- v0.6.0 released baseline 与 v0.7.0 Draft 身份彻底分离；
 - §35A 不再重复定义 KTH 对象/状态；
 - Handoff 安全不变量进入母文档；
 - 规范树改为真实/本包可实现路径；

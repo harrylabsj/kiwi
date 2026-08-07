@@ -40,7 +40,7 @@ export const IDENTIFIER_PREFIX = {
   message: "msg",
   offer: "off",
   agreement: "agr",
-  // v1.1 KTH（KTH rev0.3 §5/§6）
+  // v0.7.0 KTH（KTH rev0.3 §5/§6）
   handoff_candidate: "hcan",
   handoff: "hnd",
 } as const;

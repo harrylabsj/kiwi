@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff — AuthorizationProvider（AP2 边界，WP1）。
+ * Kiwi v0.7.0 Transaction Handoff — AuthorizationProvider（AP2 边界，WP1）。
  *
  * 基线 §43 / docs/kiwi_a2a_v1.md §29 预留给 AuthorizationProvider 的 AP2 接缝：
  * Kiwi 不实现真实 AP2（外部系统），只定义适配边界，并提供一个 fail-closed 默认

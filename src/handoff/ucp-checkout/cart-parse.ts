@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff（WP2 补全）— UCP Cart 响应解析。
+ * Kiwi v0.7.0 Transaction Handoff（WP2 补全）— UCP Cart 响应解析。
  *
  * 与 checkout 判别同构：`/ucp/status === success|error`。success 资源本体是
  * `UcpCart`（cart_id 取代 session_id；无 status 生命周期）；error 响应复用

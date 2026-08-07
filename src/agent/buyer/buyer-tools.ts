@@ -229,7 +229,7 @@ export interface BuyerToolDeps {
     agreementId?: string;
   }) => Promise<string>;
   /**
-   * KTH/0.1 Handoff 存储（v1.1；kernel 注入）。提供时挂载 `handoff_agreement`
+   * KTH/0.1 Handoff 存储（v0.7.0；kernel 注入）。提供时挂载 `handoff_agreement`
    * 工具（agreement → 审批门 → 安全交接）；缺失时工具不挂载（fail closed）。
    */
   handoff?: { ledger: HandoffEventStore; idempotency: HandoffIdempotencyStore };
@@ -351,7 +351,7 @@ async function executeNegotiateBuyerTask(
         negotiation_id: result.negotiationId,
         agreement_id: result.agreement?.agreement_id ?? null,
         deal_price_minor: facts?.dealPriceMinor ?? null,
-        // v1.1 KTH：agreement 快照落任务记录——handoff_agreement 的
+        // v0.7.0 KTH：agreement 快照落任务记录——handoff_agreement 的
         // agreementReader 以此做 pre-execution revalidation（§10）。
         agreed_terms: result.agreement?.agreed_terms ?? null,
         terms_digest: result.agreement?.terms_digest ?? null,
@@ -1450,7 +1450,7 @@ const handoffAgreement: Tool = {
   ];
 }
 
-// ── v1.1 KTH：handoff_agreement ───────────────────────────────────────────
+// ── v0.7.0 KTH：handoff_agreement ───────────────────────────────────────────
 
 /**
  * 从任务事件流重建 agreement 快照（handoff 的 agreementReader 权威源；

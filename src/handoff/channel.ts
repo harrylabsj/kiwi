@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff — HandoffChannel 接缝（WP1）。
+ * Kiwi v0.7.0 Transaction Handoff — HandoffChannel 接缝（WP1）。
  *
  * HandoffChannel 是「交易系统适配接口」：真实实现（WP2 的 UCP Checkout adapter）
  * 会在外部交易系统上创建 session / 更新 terms / 请求完成 / 取消。WP1 只定义

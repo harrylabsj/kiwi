@@ -1,5 +1,5 @@
 /**
- * Kiwi v1.1 Transaction Handoff（WP3）— AcpCommerceAdapter seam tests。
+ * Kiwi v0.7.0 Transaction Handoff（WP3）— AcpCommerceAdapter seam tests。
  *
  * 覆盖（对齐工作包验收清单）：
  *  - 未配置时所有操作 fail-closed（不静默降级到 UCP 或其他通道）；

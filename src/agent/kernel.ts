@@ -273,7 +273,7 @@ export class AgentKernel {
   private readonly taskStore?: BuyerTaskStore;
   private readonly scheduler?: TaskScheduler;
   private readonly approvals?: WriteApprovalCandidateStore;
-  /** v1.1 KTH：handoff 存储（open() 构造，buyer 角色注入）。 */
+  /** v0.7.0 KTH：handoff 存储（open() 构造，buyer 角色注入）。 */
   private readonly handoffRuntime?: { ledger: HandoffEventStore; idempotency: HandoffIdempotencyStore };
   private readonly commerceClient?: CommerceClient;
   private readonly merchantClient?: MerchantClient;
@@ -380,7 +380,7 @@ export class AgentKernel {
         connectors: [options.connector],
         now: clock,
       });
-      // v1.1 KTH：handoff 存储（Ledger 事件 + 执行幂等）落在 agent data dir，
+      // v0.7.0 KTH：handoff 存储（Ledger 事件 + 执行幂等）落在 agent data dir，
       // 注入 buyer 工具（handoff_agreement 工具挂载）。
       const handoffDir = path.dirname(paths.db);
       const handoffLedger = new HandoffEventStore({ dir: handoffDir, now: clock });
@@ -470,7 +470,7 @@ export class AgentKernel {
   private briefingSetter: (value: string | undefined) => void = () => undefined;
 
   /**
-   * v1.1 KTH：handoff 运行态摘要（/handoff 命令用）——候选生命周期 +
+   * v0.7.0 KTH：handoff 运行态摘要（/handoff 命令用）——候选生命周期 +
    * 交付观察状态，从 Ledger 事件投影（#17 用户可见目标与摘要、#18 可审计）。
    */
   get handoffSummary():

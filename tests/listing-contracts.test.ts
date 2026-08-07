@@ -1,5 +1,5 @@
 /**
- * listing 契约测试（v1.1 Product-first Discovery / CD #22–24）。
+ * listing 契约测试（v0.7.0 Product-first Discovery / CD #22–24）。
  *
  * 覆盖：
  *   - 词表单一来源：listing-record.schema.json 的枚举（listing_type /

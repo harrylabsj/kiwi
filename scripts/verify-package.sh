@@ -21,8 +21,8 @@ npm install --omit=dev "${WORK}/${PKG}" >/dev/null
 
 echo "== installed CLI runs (npm .bin symlink)"
 VERSION_OUT="$(./node_modules/.bin/kiwi --version)"
-if [[ "${VERSION_OUT}" != "kiwi 1.0.0" ]]; then
-  echo "FAIL: 'kiwi --version' printed '${VERSION_OUT}' (expected 'kiwi 1.0.0')" >&2
+if [[ "${VERSION_OUT}" != "kiwi 0.6.0" ]]; then
+  echo "FAIL: 'kiwi --version' printed '${VERSION_OUT}' (expected 'kiwi 0.6.0')" >&2
   exit 1
 fi
 echo "${VERSION_OUT}"

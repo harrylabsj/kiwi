@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff（WP2 + 补全）— UCP Checkout/Cart HTTP 客户端
+ * Kiwi v0.7.0 Transaction Handoff（WP2 + 补全）— UCP Checkout/Cart HTTP 客户端
  * （原生 fetch）。
  *
  * 网络面（全部 fail-closed，§4.6）：

@@ -109,7 +109,7 @@ export function requireInteger(value: unknown, path: string): number {
   return value;
 }
 
-/** 布尔（v1.1 KTH 三副作用不变量等）。 */
+/** 布尔（v0.7.0 KTH 三副作用不变量等）。 */
 export function requireBoolean(value: unknown, path: string): boolean {
   if (typeof value !== "boolean") {
     throw schemaError(path, `${path} must be a boolean`);

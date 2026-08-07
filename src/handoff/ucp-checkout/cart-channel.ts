@@ -15,7 +15,7 @@
  */
 
 /**
- * Kiwi v1.1 Transaction Handoff（WP2 补全）— UcpCartChannel：UCP Cart client +
+ * Kiwi v0.7.0 Transaction Handoff（WP2 补全）— UcpCartChannel：UCP Cart client +
  * cart→checkout 转换。
  *
  * Cart（UCP 2026-04-08）：

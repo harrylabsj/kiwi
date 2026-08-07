@@ -1,7 +1,7 @@
 ---
 title: Kiwi A2A Agent Commerce Network 总体架构基线
 doc_revision: "1.2"
-target_product: "Kiwi A2A v1.0"
+target_product: "Kiwi A2A v0.6.0"
 date: 2026-08-05
 status: Architecture Baseline
 canonical_source: markdown
@@ -25,7 +25,7 @@ Markdown 是唯一规范源；PDF 只能作为 Markdown 的导出物，不得成
 - shopping-cli 在开放网络中的定位；
 - Buyer Agent 与 Merchant Agent 的发现、连接、协商与恢复；
 - 身份、信任、策略、审批、披露、幂等和反滥用；
-- v1.0 的明确完成边界。
+- v0.6.0 的明确完成边界。
 
 Wire-level JSON Schema、精确状态转换表、test vectors 和错误响应格式由：
 
@@ -104,7 +104,7 @@ Kiwi v0.3 是：
 
 > 一个持续代表 Buyer 或 Merchant、拥有长期记忆、任务能力和私有策略的 Agent-first 电商运行时。
 
-Kiwi A2A v1.0 在此基础上升级为：
+Kiwi A2A v0.6.0 在此基础上升级为：
 
 > **一个开放的 Agent Commerce Runtime，使真实经济主体的 Buyer Agent 与 Merchant Agent 可以跨运行时、跨组织、跨平台直接发现、沟通、询价、报价、还价、澄清和形成非绑定商业共识。**
 
@@ -192,14 +192,14 @@ AcceptedNonbindingAgreement
 
 ## 3.4 AP2 / Checkout / Payment
 
-不进入 Kiwi A2A v1.0 Core。
+不进入 Kiwi A2A v0.6.0 Core。
 
 ```text
 AcceptedNonbindingAgreement
         ↓
 Transaction Handoff
         ↓
-v1.1+
+v0.7.0+
 ```
 
 ---
@@ -740,7 +740,7 @@ Cancel 是 negotiation lifecycle 终止：
 → CANCELLED
 ```
 
-Cancel 不代表取消已经存在的订单；Kiwi A2A v1.0 不管理订单。
+Cancel 不代表取消已经存在的订单；Kiwi A2A v0.6.0 不管理订单。
 
 ## 14.4 Reopen
 
@@ -1442,10 +1442,10 @@ agreement semantics
 3. `[E]` ReasoningBackend 不拥有 Commerce 写权限。
 4. `[E]` 模型输出不能直接执行外部副作用。
 5. `[E]` 不保存 raw chain-of-thought。
-6. `[E]` v1.0 不创建订单。
-7. `[E]` v1.0 不执行支付。
-8. `[E]` v1.0 不执行退款。
-9. `[E]` v1.0 不锁库存。
+6. `[E]` v0.6.0 不创建订单。
+7. `[E]` v0.6.0 不执行支付。
+8. `[E]` v0.6.0 不执行退款。
+9. `[E]` v0.6.0 不锁库存。
 10. `[N]` Remote Agent 不获得 Principal Memory。
 11. `[N]` Remote Agent 不得通过协议内容获得任意本地工具执行权。
 12. `[N]` 所有 Remote Content 必须视为 untrusted input。
@@ -1591,7 +1591,7 @@ interop tests
 optional directory
 ```
 
-## Kiwi A2A v1.0
+## Kiwi A2A v0.6.0
 
 完整：
 
@@ -1653,9 +1653,9 @@ agreement invariants
 
 ---
 
-# 41. v1.0 Completion Definition
+# 41. v0.6.0 Completion Definition
 
-Kiwi 只有同时满足以下条件才宣布 A2A v1.0：
+Kiwi 只有同时满足以下条件才宣布 A2A v0.6.0：
 
 1. Buyer 与 Merchant 都能作为独立 A2A Agent。
 2. 不依赖共同 Kiwi Gateway 即可完成谈判。
@@ -1685,7 +1685,7 @@ Kiwi 只有同时满足以下条件才宣布 A2A v1.0：
 26. 没有支付副作用。
 27. 没有库存预留副作用。
 
-**A2A v1.0 已宣布（2026-08-07）**：上述 27 条完成定义经就绪度审计（
+**A2A v0.6.0 已宣布（2026-08-07）**：上述 27 条完成定义经就绪度审计（
 `docs/reviews/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md`）逐条实证满足（27/27）。
 namespace 与 schema 托管于 `https://kiwi.harrylabsj.com`（公开仓库 `harrylabsj/kiwi-spec`）。
 
@@ -1736,7 +1736,7 @@ PDF、网页和其他格式均由 canonical Markdown 生成。
 - HTTP Message Signatures where selected by TrustPolicy
 - OAuth 2 / OIDC / mTLS where selected by deployment
 
-AP2 与 ACP-Commerce 属于 v1.1+ Transaction Handoff，不是 Kiwi A2A v1.0 Core。
+AP2 与 ACP-Commerce 属于 v0.7.0+ Transaction Handoff，不是 Kiwi A2A v0.6.0 Core。
 
 ---
 
