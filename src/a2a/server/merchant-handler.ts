@@ -58,6 +58,15 @@ export interface MerchantHandlerOptions {
   counterparty: string;
   /** rfq→offer 的初始报价（amount_minor）；缺省 85000。 */
   offerPriceMinor?: number;
+  /** 真实商品源（接 shopping-cli /products/{sku} 等开放商品层）；缺省用内置演示价。 */
+  productSource?: MerchantProductSource;
+}
+
+/** 真实商品源：给定 SKU 返回价目（shopping-cli 开放层/ERP/商品表均可接入）。 */
+export interface MerchantProductSource {
+  getProduct(
+    sku: string,
+  ): Promise<{ price: number; currency: string; title?: string; stock?: number }>;
 }
 
 type EnvelopeSeed = Omit<
@@ -76,13 +85,13 @@ function seedEnvelope(seed: EnvelopeSeed): ReturnType<typeof finalizeEnvelope> {
   });
 }
 
-function offerTerms(priceMinor: number, quantity: number) {
+function offerTerms(opts: { sku?: string; priceMinor: number; quantity: number; currency?: string }) {
   return {
     items: [
       {
-        sku: MERCHANT_SKU,
-        quantity: { value: quantity, unit: "piece" },
-        unit_price: { currency: MERCHANT_CURRENCY, amount_minor: priceMinor },
+        sku: opts.sku ?? MERCHANT_SKU,
+        quantity: { value: opts.quantity, unit: "piece" },
+        unit_price: { currency: opts.currency ?? MERCHANT_CURRENCY, amount_minor: opts.priceMinor },
       },
     ],
     fulfillment_terms: { delivery_before: MERCHANT_DELIVERY_BEFORE },
@@ -139,6 +148,29 @@ export function createMerchantHandler(
   const { ledger, now, sender, counterparty } = options;
   const offerPriceMinor = options.offerPriceMinor ?? MERCHANT_OFFER_PRICE_MINOR;
   const conditionalByNegotiation = new Map<string, { conditional: Record<string, unknown>; quantity: number }>();
+  // 每 negotiation 已解析的真实商品价（sku → {priceMinor, currency}）。
+  const priceBySku = new Map<string, { priceMinor: number; currency: string }>();
+
+  /** 从真实商品源解析 SKU 价目；源不可用/查不到时回退演示价并返回注记。 */
+  const resolveProduct = async (
+    sku: string,
+  ): Promise<{ priceMinor: number; currency: string; note?: string }> => {
+    const cached = priceBySku.get(sku);
+    if (cached !== undefined) return cached;
+    if (options.productSource !== undefined) {
+      try {
+        const product = await options.productSource.getProduct(sku);
+        const resolved = { priceMinor: Math.round(product.price * 100), currency: product.currency };
+        priceBySku.set(sku, resolved);
+        return resolved;
+      } catch {
+        const demo = { priceMinor: offerPriceMinor, currency: MERCHANT_CURRENCY };
+        priceBySku.set(sku, demo);
+        return { ...demo, note: `商品源不可用（${sku}），使用演示价` };
+      }
+    }
+    return { priceMinor: offerPriceMinor, currency: MERCHANT_CURRENCY };
+  };
 
   const appendSent = async (reply: ReturnType<typeof finalizeEnvelope>): Promise<void> => {
     await ledger.append({
@@ -178,9 +210,12 @@ export function createMerchantHandler(
           );
         }
         case "rfq": {
-          const quantity =
-            (envelope.payload as { items?: { quantity?: { value?: number } }[] }).items?.[0]?.quantity
-              ?.value ?? MERCHANT_QUANTITY;
+          const payload = envelope.payload as {
+            items?: { sku?: string; quantity?: { value?: number } }[];
+          };
+          const sku = payload.items?.[0]?.sku ?? MERCHANT_SKU;
+          const quantity = payload.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
+          const { priceMinor, currency, note } = await resolveProduct(sku);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -190,14 +225,19 @@ export function createMerchantHandler(
             payload: {
               type: "offer",
               offer_id: newOfferId(),
-              terms: offerTerms(offerPriceMinor, quantity),
+              terms: offerTerms({ sku, priceMinor, quantity, currency }),
             },
+            ...(note !== undefined ? { public_message: note } : {}),
           });
           await appendSent(reply);
           return envelopeReply(reply);
         }
         case "offer": {
-          // 商家还价：对 buyer 的 offer 回 counter_offer（到 DEAL 价）。
+          // 商家还价：对 buyer 的 offer 回 counter_offer（真实商品价）。
+          const buyerOffer = envelope.payload as { offer_id?: string; terms?: { items?: { sku?: string; quantity?: { value?: number } }[] } };
+          const sku = buyerOffer.terms?.items?.[0]?.sku ?? MERCHANT_SKU;
+          const quantity = buyerOffer.terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
+          const { priceMinor, currency, note } = await resolveProduct(sku);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -207,19 +247,22 @@ export function createMerchantHandler(
             payload: {
               type: "counter_offer",
               offer_id: newOfferId(),
-              responding_to_offer_id: (envelope.payload as { offer_id: string }).offer_id,
-              proposed_terms: offerTerms(MERCHANT_DEAL_PRICE_MINOR, MERCHANT_QUANTITY),
+              responding_to_offer_id: buyerOffer.offer_id ?? "",
+              proposed_terms: offerTerms({ sku, priceMinor, quantity, currency }),
             },
+            ...(note !== undefined ? { public_message: note } : {}),
           });
           await appendSent(reply);
           return envelopeReply(reply);
         }
         case "counter_offer": {
           const counter = envelope.payload as {
-            proposed_terms?: { items?: { quantity?: { value?: number } }[] };
+            proposed_terms?: { items?: { sku?: string; quantity?: { value?: number } }[] };
             offer_id?: string;
           };
+          const sku = counter.proposed_terms?.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = counter.proposed_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
+          const { priceMinor, currency, note } = await resolveProduct(sku);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -230,14 +273,15 @@ export function createMerchantHandler(
               type: "conditional_offer",
               offer_id: newOfferId(),
               responding_to_offer_id: counter.offer_id,
-              base_terms: offerTerms(offerPriceMinor, quantity),
+              base_terms: offerTerms({ sku, priceMinor, quantity, currency }),
               conditions: [
                 {
                   when: { all: [{ field: "aggregate.total_quantity", op: "gte", value: 100 }] },
-                  then_terms: offerTerms(MERCHANT_DEAL_PRICE_MINOR, quantity),
+                  then_terms: offerTerms({ sku, priceMinor, quantity, currency }),
                 },
               ],
             },
+            ...(note !== undefined ? { public_message: note } : {}),
           });
           conditionalByNegotiation.set(negotiationId, {
             conditional: reply.payload as unknown as Record<string, unknown>,
@@ -256,7 +300,7 @@ export function createMerchantHandler(
           const stored = conditionalByNegotiation.get(negotiationId);
           const agreedTerms =
             stored === undefined
-              ? offerTerms(MERCHANT_DEAL_PRICE_MINOR, MERCHANT_QUANTITY)
+              ? offerTerms({ priceMinor: MERCHANT_DEAL_PRICE_MINOR, quantity: MERCHANT_QUANTITY })
               : evaluateConditionalOffer(stored.conditional as never, {
                   "aggregate.total_quantity": stored.quantity,
                 });

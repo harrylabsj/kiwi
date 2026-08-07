@@ -91,6 +91,19 @@ kiwi> /negotiate cagt_...            # 磋商 → agreement（无副作用）
 
 > 注册域名默认 `merchant-<agent_id>.local`，可用 `KIWI_CATALOG_DOMAIN` 覆盖；catalog 地址默认 `http://127.0.0.1:8600`（`KIWI_CATALOG_URL` 覆盖）。
 
+### 真实商品闭环（shopping-cli 开放商品层）
+
+merchant 的 A2A 报价**读真实商品源**（缺省 shopping-cli 的 `/products/{sku}` 公开端点），
+shopping-cli 自身可接本地 ERP / 商品表：
+
+```bash
+# merchant 指向真实 shopping-cli（缺省用 profile.commerce.base_url）
+KIWI_COMMERCE_URL=http://127.0.0.1:63161 kiwi agent serve --profile merchant.deepseek.yaml --port 9000
+```
+
+`/negotiate` 报告即显示数据库真实价（如 `商家首次报价：99.00 元/件`）；商品源不可用时
+回退演示价并在回复中注明（`商品源不可用（<sku>），使用演示价`）。
+
 裸 `kiwi` 的默认底层大模型**可配置**（不 hardcode，从环境变量读）：
 
 | 环境变量 | 默认 | 说明 |

@@ -33,11 +33,6 @@ import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentDataDir, ensurePathsForDir } from "./agent/agent-db.js";
-import { A2AServer } from "./a2a/server/index.js";
-import { createMerchantHandler } from "./a2a/server/merchant-handler.js";
-import { LedgerStore } from "./negotiation/ledger/index.js";
-import { IdempotencyStore } from "./negotiation/idempotency/index.js";
-import { registerCatalogAgent } from "./discovery/catalog-source/register.js";
 import { startA2aNode, type A2aNodeHandle } from "./a2a/node.js";
 import type { ChatA2aNode } from "./agent/chat-tui.js";
 import { runChatTui } from "./agent/chat-tui.js";
@@ -382,79 +377,45 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
     process.stderr.write("kiwi agent serve 需要 merchant profile（role: merchant）\n");
     return EXIT.CONFIG;
   }
-  const port = args.port ?? 9000;
-  const catalog = args.catalog ?? "http://127.0.0.1:8600";
-  const paths = ensurePathsForDir(args.dataDir ?? agentDataDir(profile.agent_id));
-  const dir = paths.dir;
+  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600";
+  let node: A2aNodeHandle | null = await startA2aNode({
+    profile,
+    catalog,
+    preferredPort: args.port,
+    ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
+  });
+  console.log(`[agent serve] merchant ${profile.agent_id} A2A server: ${node.agentCardUrl}`);
+  console.log(`[agent serve] registered in catalog ${catalog}: ${node.catalogAgentId ?? "?"}`);
 
-  // 单调递增时钟：同内容事件在同一毫秒会触发 ledger 内容去重。
-  let tick = 0;
-  const clockBase = Date.parse("2026-08-07T00:00:00.000Z");
-  const now = (): string => {
-    const t = new Date(clockBase + tick);
-    tick += 1;
-    return t.toISOString();
+  const a2aNode: ChatA2aNode = {
+    status: () =>
+      node === null
+        ? null
+        : {
+            role: node.role,
+            url: node.url,
+            agentCardUrl: node.agentCardUrl,
+            ...(node.catalogAgentId !== undefined ? { catalogAgentId: node.catalogAgentId } : {}),
+          },
+    rebuild: async (p) => {
+      await node?.stop().catch(() => undefined);
+      node = await startA2aNode({
+        profile: p as AgentProfile,
+        catalog,
+        preferredPort: args.port,
+        ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
+      });
+    },
+    stop: async () => {
+      await node?.stop().catch(() => undefined);
+      node = null;
+    },
   };
 
-  const ledger = new LedgerStore({ dir, now });
-  const idempotency = new IdempotencyStore({ dir, now });
-  const handler = createMerchantHandler({
-    ledger,
-    now,
-    sender: profile.agent_id,
-    counterparty: "buyer:*",
-  });
-
-  const holder = { baseUrl: `http://127.0.0.1:${port}` };
-  const server = new A2AServer({
-    // A2AServerOptions.card 是 AgentCardConfigProvider：返回 config，server 内部再 buildAgentCard。
-    // name 用干净显示名，不掺 agent_id（形如 agent:token，会被 card secret 扫描器判为 card_has_secret）。
-    card: () => ({
-      name: "Kiwi A2A Merchant",
-      description: "Kiwi A2A merchant",
-      providerOrganization: "Kiwi",
-      version: "1.0.0",
-      baseUrl: holder.baseUrl,
-      a2aPath: "/",
-    }),
-    ledger,
-    idempotency,
-    handler,
-    now,
-  });
-  const httpServer = server.createServer();
-  await new Promise<void>((resolve) => httpServer.listen(port, "127.0.0.1", () => resolve()));
-  holder.baseUrl = `http://127.0.0.1:${port}`;
-  const agentCardUrl = `${holder.baseUrl}/.well-known/agent-card.json`;
-  console.log(`[agent serve] merchant ${profile.agent_id} A2A server: ${agentCardUrl}`);
-
-  // 注册进 kiwi-catalog（buyer 据此发现）。
-  const domain =
-    process.env.KIWI_CATALOG_DOMAIN ?? `merchant-${profile.agent_id.replace(/[^a-z0-9-]/gi, "-").toLowerCase()}.local`;
-  try {
-    const reg = await registerCatalogAgent({
-      catalogBaseUrl: catalog,
-      domain,
-      agentCardUrl,
-      ucpProfileUrl: `${holder.baseUrl}/.well-known/ucp`,
-      merchantId: profile.agent_id,
-      ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
-    });
-    console.log(
-      `[agent serve] registered in catalog ${catalog}: ${reg.catalogAgentId ?? "?"} (${reg.status ?? "?"})`,
-    );
-  } catch (err) {
-    process.stderr.write(
-      `[agent serve] catalog 注册失败（A2A server 仍运行）：${err instanceof Error ? err.message : String(err)}\n`,
-    );
-  }
-
   // --no-chat 或非交互 stdin（后台/重定向）：仅 A2A server 常驻，不进入对话。
-  // （后台运行时 chat 会因 stdin EOF 立即结束并连带关闭 server——必须跳过。）
   if (args.noChat === true || process.stdin.isTTY !== true) {
     const shutdown = async (): Promise<void> => {
-      httpServer.closeAllConnections?.();
-      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      await a2aNode.stop();
       process.exit(0);
     };
     process.on("SIGINT", shutdown);
@@ -468,8 +429,7 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
     return EXIT.OK;
   }
 
-  // 内置对话（缺省）：同一进程既是 A2A 节点（merchant 可被 catalog 发现/磋商）
-  // 又能 `kiwi>` 自由对话。/quit 退出对话并关闭 A2A server（整个进程退出）。
+  // 内置对话（缺省）：同一进程既是 A2A 节点又能 `kiwi>` 对话。/quit 退出整个进程。
   const kernel = await buildChatKernel(profile, args.dataDir);
   const kernels: AgentKernel[] = [kernel];
   const reload = async (file: string): Promise<AgentKernel> => {
@@ -478,8 +438,7 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
     return next;
   };
   const shutdown = async (): Promise<void> => {
-    httpServer.closeAllConnections?.();
-    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await a2aNode.stop();
     for (const k of kernels) await k.close().catch(() => undefined);
     process.exit(0);
   };
@@ -487,10 +446,9 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
   process.on("SIGTERM", shutdown);
   console.log("[agent serve] A2A server + 内置对话（/quit 退出整个进程）");
   try {
-    return await runChatTui({ kernel, input: process.stdin, output: process.stdout, reload });
+    return await runChatTui({ kernel, input: process.stdin, output: process.stdout, reload, a2aNode, catalog });
   } finally {
-    httpServer.closeAllConnections?.();
-    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await a2aNode.stop();
     for (const k of kernels) await k.close().catch(() => undefined);
   }
 }

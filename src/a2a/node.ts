@@ -37,6 +37,9 @@ import { LedgerStore } from "../negotiation/ledger/index.js";
 import { IdempotencyStore } from "../negotiation/idempotency/index.js";
 import { pickFreePort } from "../supervisor/stack-config.js";
 import { registerCatalogAgent } from "../discovery/catalog-source/register.js";
+import { HttpMerchantClient } from "../agent/merchant/merchant-client.js";
+import { ProfileCredentialBroker } from "../agent/merchant/credential-broker.js";
+import type { MerchantProductSource } from "./server/merchant-handler.js";
 
 export interface A2aNodeOptions {
   profile: AgentProfile;
@@ -87,6 +90,22 @@ async function listenPort(preferred: number): Promise<{ port: number; url: strin
   return { port, url: `http://127.0.0.1:${port}` };
 }
 
+/**
+ * 构建真实商品源：读 shopping-cli（开放商品层）的价目。URL 来自
+ * `KIWI_COMMERCE_URL` 覆盖或 profile.commerce.base_url；/products/{sku} 是
+ * 公开只读端点（无需 token），shopping-cli 自身可接 ERP/本地商品表。
+ */
+function buildProductSource(profile: AgentProfile): MerchantProductSource {
+  const commerceUrl = process.env.KIWI_COMMERCE_URL ?? profile.commerce.base_url;
+  const client = new HttpMerchantClient(commerceUrl, new ProfileCredentialBroker(profile));
+  return {
+    getProduct: async (sku) => {
+      const product = await client.getProduct(sku);
+      return { price: product.price, currency: product.currency };
+    },
+  };
+}
+
 /** 启动一个 A2A 节点（按 profile 角色）。 */
 export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHandle> {
   const { profile } = options;
@@ -106,6 +125,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
           now,
           sender: profile.agent_id,
           counterparty: "buyer:*",
+          productSource: buildProductSource(profile),
         })
       : defaultHandler();
 
