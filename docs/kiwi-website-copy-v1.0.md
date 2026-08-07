@@ -96,6 +96,12 @@ Kiwi Network——开放、受运营、可验证。
    网络帮你发现；绝不插足交易本身。
 ```
 
+### 联系方式
+
+```
+Contact: harrylabsj@gmail.com · 微信 hddsh2025
+```
+
 ### 页脚信任行
 
 ```
