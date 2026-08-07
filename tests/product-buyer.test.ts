@@ -88,11 +88,13 @@ describe("buyer init (D4)", () => {
     }
   });
 
-  it("empty agent id and existing output fail closed", () => {
+  it("agent id auto-generates when not provided; existing output fails closed", () => {
     const dir = tmpDir();
     try {
-      const bad = buyerInit({ agentId: "  " });
-      expect(bad.ok).toBe(false);
+      // 缺省自动生成（buyer-<hostname>-<随机>），普通用户无需想身份
+      const auto = buyerInit({ agentId: "", outputPath: path.join(dir, "auto.yaml") });
+      expect(auto.ok).toBe(true);
+      expect(auto.agent_id).toMatch(/^buyer-/);
 
       const outputPath = path.join(dir, "buyer.yaml");
       expect(buyerInit({ agentId: "a", outputPath }).ok).toBe(true);
