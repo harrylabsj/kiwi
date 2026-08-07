@@ -64,7 +64,42 @@ export interface NegotiateResult {
   agentCardUrl: string;
   steps: string[];
   agreement?: Record<string, unknown>;
+  /** 磋商商业要点（自然语言渲染用）。 */
+  facts?: {
+    sku: string;
+    quantity: number;
+    offerPriceMinor?: number;
+    dealPriceMinor?: number;
+    deliveryBefore: string;
+  };
   error?: string;
+}
+
+const minorPrice = (minor: number | undefined): string =>
+  minor === undefined ? "?" : (minor / 100).toFixed(2);
+
+/** 把一轮磋商结果渲染成人类可读的自然语言总结。 */
+export function summarizeNegotiation(result: NegotiateResult): string {
+  if (!result.ok) {
+    return `磋商失败：${result.error ?? "未知错误"}（可先 /discover 查看 catalog 里的 agent）`;
+  }
+  const f = result.facts;
+  const a = result.agreement;
+  const sku = f?.sku ?? NEGOTIATE_SKU;
+  const quantity = f?.quantity ?? NEGOTIATE_QUANTITY;
+  const delivery = f?.deliveryBefore ?? NEGOTIATE_DELIVERY_BEFORE;
+  const offerPrice = minorPrice(f?.offerPriceMinor);
+  const dealPrice = minorPrice(f?.dealPriceMinor);
+  const lines = [
+    `已完成一轮 A2A 磋商（negotiation ${result.negotiationId}）：`,
+    `· 发现商家 ${result.catalogAgentId} 并验证其 Agent Card（${result.agentCardUrl}），确认在线可用`,
+    `· 询价：采购 ${quantity} 件 ${sku}，要求 ${delivery} 前交货`,
+    `· 商家首次报价：${offerPrice} 元/件`,
+    `· 还价后商家给出条件价：总采购量 ≥ 100 件时按 ${dealPrice} 元/件成交`,
+    `· 采购量满足条件，双方达成非绑定协议（agreement ${String(a?.agreement_id ?? "")}）`,
+    `协议性质：nonbinding — 不创建订单、不锁库存、不授权支付（§41 #25/#26/#27）`,
+  ];
+  return lines.join("\n");
 }
 
 function monotonicNow(): () => string {
@@ -223,10 +258,11 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     if (offer === null || offer.action !== "offer") {
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 offer 回复" };
     }
-    const offerPayload = offer.payload as { offer_id?: string };
+    const offerPayload = offer.payload as { offer_id?: string; terms?: { items?: Array<{ unit_price?: { amount_minor?: number } }> } };
     if (offerPayload.offer_id === undefined) {
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "offer 缺 offer_id" };
     }
+    const offerPriceMinor = offerPayload.terms?.items?.[0]?.unit_price?.amount_minor;
     steps.push(`offer ${offerPayload.offer_id}`);
 
     // 4. CounterOffer → ConditionalOffer。
@@ -237,8 +273,12 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     if (conditional === null || conditional.action !== "conditional_offer") {
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 conditional_offer 回复" };
     }
-    const conditionalPayload = conditional.payload as { offer_id?: string; conditions?: unknown[] };
+    const conditionalPayload = conditional.payload as {
+      offer_id?: string;
+      conditions?: Array<{ then_terms?: { items?: Array<{ unit_price?: { amount_minor?: number } }> } }>;
+    };
     steps.push(`conditional_offer ${conditionalPayload.offer_id ?? ""}`);
+    const dealPriceMinor = conditionalPayload.conditions?.[0]?.then_terms?.items?.[0]?.unit_price?.amount_minor;
 
     // 5. 确定性求值 → AcceptNonbinding → Agreement。
     const agreedTerms = evaluateConditionalOffer(conditionalPayload as never, {
@@ -258,7 +298,21 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 agreement artifact" };
     }
     steps.push(`agreement ${String(agreement.agreement_id ?? "")}`);
-    return { ok: true, negotiationId, catalogAgentId, agentCardUrl, steps, agreement };
+    return {
+      ok: true,
+      negotiationId,
+      catalogAgentId,
+      agentCardUrl,
+      steps,
+      agreement,
+      facts: {
+        sku: NEGOTIATE_SKU,
+        quantity,
+        offerPriceMinor,
+        dealPriceMinor,
+        deliveryBefore: NEGOTIATE_DELIVERY_BEFORE,
+      },
+    };
   } catch (err) {
     return {
       ok: false,

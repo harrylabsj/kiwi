@@ -28,7 +28,7 @@ import readline from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { EXIT } from "../exit-codes.js";
 import { ShoppingCliCatalogSource } from "../discovery/catalog-source/index.js";
-import { negotiateWithAgent } from "../a2a/negotiate.js";
+import { negotiateWithAgent, summarizeNegotiation } from "../a2a/negotiate.js";
 import type { AgentKernel } from "./kernel.js";
 
 /** A2A 节点状态（供 `/a2a` 显示）。 */
@@ -183,17 +183,7 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
               catalog,
               ...(targetId !== "" ? { catalogAgentId: targetId } : {}),
             });
-            if (result.ok) {
-              write(`[negotiate] 成功：${result.steps.join(" → ")}`);
-              if (result.agreement !== undefined) {
-                const a = result.agreement;
-                write(
-                  `[negotiate] agreement ${String(a.agreement_id ?? "")} · binding=${String(a.binding_effect ?? "")} · creates_order=${String(a.creates_order)} · reserves_inventory=${String(a.reserves_inventory)} · authorizes_payment=${String(a.authorizes_payment)}`,
-                );
-              }
-            } else {
-              write(`[negotiate] 失败：${result.error ?? "未知错误"}`);
-            }
+            write(`[negotiate]\n${summarizeNegotiation(result)}`);
           }
         } else {
           const reply = await current.kernel.handleUserText(line);
