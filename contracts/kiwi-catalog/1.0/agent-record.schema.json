@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "kiwi-catalog agent record",
+  "description": "kiwi-catalog /v1/agents 的 CatalogAgentRecord wire 形状（产品文档 v0.3 §6/§7）。public-only：register 与响应均不得携带私有经营数据（完成定义 #8）。三正交状态域（VerificationLevel / FreshnessState / AdministrativeState）各自独立，不得坍缩为单一状态机。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "catalog_agent_id",
+    "principal_type",
+    "display_name",
+    "canonical_domain",
+    "hosting_mode",
+    "verification_level",
+    "freshness_state",
+    "administrative_state",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "catalog_agent_id": { "type": "string", "minLength": 1 },
+    "principal_type": { "enum": ["buyer", "merchant"] },
+    "merchant_id": { "type": "string", "minLength": 1 },
+    "display_name": { "type": "string", "minLength": 1 },
+    "canonical_domain": { "type": "string", "minLength": 1 },
+    "agent_card_url": { "type": "string", "pattern": "^https?://\\S+$" },
+    "ucp_profile_url": { "type": "string", "pattern": "^https?://\\S+$" },
+    "protocols": {
+      "type": "object",
+      "additionalProperties": { "type": "array", "items": { "type": "string" } }
+    },
+    "capabilities": { "type": "array", "items": { "type": "string" } },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["skill_id", "name"],
+        "properties": {
+          "skill_id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "description": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "hosting_mode": {
+      "enum": ["direct", "hosted", "hybrid", "unknown", "direct_only", "hosted_only"]
+    },
+    "handoff_destination_types": {
+      "description": "KTH destination_type 精确词表（单一来源，禁止 supports_* 平行词表）",
+      "type": "array",
+      "items": {
+        "enum": [
+          "ucp_checkout",
+          "ucp_order",
+          "external_checkout_url",
+          "merchant_checkout_session",
+          "platform_deep_link",
+          "buyer_erp_request",
+          "procurement_request",
+          "purchase_order_draft",
+          "quote_document",
+          "merchant_contact",
+          "sales_handoff"
+        ]
+      }
+    },
+    "verification_level": {
+      "enum": ["discovered", "profile_valid", "domain_verified", "agent_verified", "commerce_verified"]
+    },
+    "freshness_state": { "enum": ["fresh", "stale", "unreachable"] },
+    "administrative_state": { "enum": ["active", "suspended", "rejected"] },
+    "last_verified_at": { "type": "string", "minLength": 1 },
+    "fresh_until": { "type": "string", "minLength": 1 },
+    "created_at": { "type": "string", "minLength": 1 },
+    "updated_at": { "type": "string", "minLength": 1 }
+  }
+}

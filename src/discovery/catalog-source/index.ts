@@ -24,8 +24,18 @@
 
 export { ShoppingCliCatalogSource } from "./source.js";
 export type { CatalogSourceDeps } from "./source.js";
+export { KiwiCatalogSource } from "./kiwi-source.js";
 export { CatalogSourceError } from "./errors.js";
 export type { CatalogSourceErrorCode } from "./errors.js";
+export {
+  normalizeCatalogAgent,
+  type AdministrativeState,
+  type CatalogAgentRecord,
+  type CatalogSkill,
+  type FreshnessState,
+  type KiwiCatalogSearchQuery,
+  type VerificationLevel,
+} from "./kiwi-record.js";
 export {
   normalizeHostingMode,
   type CandidateAgent,
@@ -36,6 +46,7 @@ export {
   type CandidateSkill,
   type CandidateVerification,
   type CatalogSearchQuery,
+  type CatalogSource,
   type HostingMode,
   type RawHostingMode,
   type VerificationStatus,

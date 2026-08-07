@@ -67,8 +67,8 @@ import { normalizeHostingMode } from "./catalog-source/index.js";
 import type {
   CandidateAgent,
   CatalogSearchQuery,
+  CatalogSource,
   HostingMode,
-  ShoppingCliCatalogSource,
   VerificationStatus,
 } from "./catalog-source/index.js";
 import type { ChannelCandidate, CounterpartyProfile } from "../counterparty/channel.js";
@@ -97,8 +97,8 @@ export interface UcpDiscoveryDeps {
  * 升级路径必须走 resolve() 做 fresh verification。
  */
 export interface CatalogDiscoveryDeps {
-  /** ShoppingCliCatalogSource（shopping-cli /v1/agent-catalog/* 消费端）。 */
-  source: ShoppingCliCatalogSource;
+  /** CatalogSource 接口：ShoppingCliCatalogSource（legacy）或 KiwiCatalogSource（/v1/agents）。 */
+  source: CatalogSource;
   /** 缺省搜索查询；resolveViaCatalog 未显式传 query 时使用。 */
   query?: CatalogSearchQuery;
   /**
@@ -432,7 +432,7 @@ export class AgentDiscovery {
         "resolveViaCatalog requires a catalog source in DiscoveryDeps.catalog",
       );
     }
-    const candidates = await catalogDeps.source.searchCandidates(query ?? catalogDeps.query);
+    const candidates = await catalogDeps.source.searchCandidates(query ?? catalogDeps.query ?? {});
     const results: ResolvedCatalogCandidate[] = [];
     for (const candidate of candidates) {
       if (!this.isCatalogCandidateAllowed(candidate)) continue;

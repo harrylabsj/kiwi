@@ -126,6 +126,17 @@ export function normalizeHostingMode(mode: RawHostingMode): HostingMode {
 }
 
 /**
+ * CatalogSource 统一接口：legacy `ShoppingCliCatalogSource`（/v1/agent-catalog/*）
+ * 与产品化 `KiwiCatalogSource`（/v1/agents/*）都满足；resolve.ts 的
+ * resolveViaCatalog 可互换使用。返回的候选都必须是已通过契约校验的
+ * CandidateAgent（DTO 1.0 形状）。
+ */
+export interface CatalogSource {
+  searchCandidates(query: CatalogSearchQuery): Promise<CandidateAgent[]>;
+  getCandidate(catalogAgentId: string): Promise<CandidateAgent>;
+}
+
+/**
  * Catalog 搜索查询（设计 §10.1 子集）。类型层约束合法键；运行时非法键抛
  * invalid_input（fail-closed，不静默丢弃）。
  */
