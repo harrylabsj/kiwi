@@ -109,6 +109,14 @@ export function requireInteger(value: unknown, path: string): number {
   return value;
 }
 
+/** 布尔（v1.1 KTH 三副作用不变量等）。 */
+export function requireBoolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") {
+    throw schemaError(path, `${path} must be a boolean`);
+  }
+  return value;
+}
+
 export function requirePositiveNumber(value: unknown, path: string): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     throw schemaError(path, `${path} must be a positive number`);
