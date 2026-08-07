@@ -33,8 +33,10 @@ docs/testing/kiwi-commerce-v1.1-test-plan-v0.3.md
 ## Implementation status (2026-08-07)
 
 - v1.1 completion definition: **CD #1–21 evidenced** (rev1.4.1 baseline,
-  readiness audit: `docs/reviews/kiwi-commerce-v1.1-readiness-audit-2026-08-07.md`).
-  rev1.5 新增 CD #22–28（Product-first Discovery）尚未进入该 audit。
+  readiness audit: `docs/reviews/kiwi-commerce-v1.1-readiness-audit-2026-08-07.md`)
+  + **CD #22–28 evidenced** (rev1.5 Product-first Discovery, readiness audit:
+  `docs/reviews/kiwi-commerce-v1.1-product-first-readiness-audit-2026-08-07.md`).
+  28/28 全部有直接实证；v1.1 仍未宣布发布。
 - New CLI: `kiwi catalog serve` (standalone kiwi-catalog service),
   `kiwi metrics --dir <agent-dir>` (KTH metrics).
 - New chat TUI commands: `/handoff`, `/handoff-launch <handoff_id> <negotiation_id>`,

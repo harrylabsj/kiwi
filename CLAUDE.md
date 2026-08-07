@@ -5,10 +5,10 @@ Kiwi A2A Agent Commerce Runtime：Buyer/Merchant Agent 跨运行时直接发现�
 Handoff（KTH/0.1）安全交给外部成交入口。
 
 - **v1.0 已发布**（27/27 完成定义，2026-08-07）。
-- **v1.1 为 Draft**（Handoff + 产品拆分；rev1.4.1 基线 21/21 完成定义已直接实证
-  ——见 `docs/reviews/kiwi-commerce-v1.1-readiness-audit-2026-08-07.md`；rev1.5 新增
-  CD #22–28（Product-first Discovery）尚未进入该 audit；不宣布发布，不宣称第三方
-  互操作证据）。
+- **v1.1 为 Draft**（Handoff + 产品拆分；完成定义 28/28 直接实证——CD #1–21 见
+  `docs/reviews/kiwi-commerce-v1.1-readiness-audit-2026-08-07.md`（rev1.4.1 基线）、
+  CD #22–28 见 `docs/reviews/kiwi-commerce-v1.1-product-first-readiness-audit-2026-08-07.md`
+  （rev1.5 Product-first）；不宣布发布，不宣称第三方互操作证据）。
 
 ## 文档地图
 
