@@ -30,6 +30,7 @@
 
 import { spawnSync } from "node:child_process";
 import { EXIT } from "./exit-codes.js";
+import { SHOPPING_CLI_COMPAT, compatRangeText, versionInRange } from "./product-compat.js";
 
 /** 与 package.json / USAGE 同步的产品版本。 */
 export const PRODUCT_VERSION = "0.6.0";
@@ -140,13 +141,36 @@ async function detectCatalog(): Promise<{
 }
 
 /**
- * 三组件聚合健康检查（D0 最小版）：runtime self-check + shopping-cli 存在性
- * + kiwi-catalog 可达性。输出 JSON {ok, components}。
+ * 三组件聚合健康检查（D0 最小版 → D3 补版本兼容矩阵）：runtime self-check
+ * + shopping-cli 存在性/版本（矩阵判定）+ kiwi-catalog 可达性。
+ * 输出 JSON {ok, components}；矩阵单一来源 = product-compat.ts，
+ * 与 `kiwi merchant publish` 共同消费（D3）。
  */
 export async function cmdProductDoctor(): Promise<number> {
+  const shopping = detectShoppingCli();
+  const detectedVersion = shopping.version;
+  const compatible =
+    shopping.found &&
+    detectedVersion !== undefined &&
+    versionInRange(detectedVersion, SHOPPING_CLI_COMPAT);
+  const shoppingStep: Record<string, unknown> = {
+    ok: shopping.ok && compatible,
+    found: shopping.found,
+  };
+  if (shopping.found) {
+    shoppingStep.version = detectedVersion ?? "unknown";
+    shoppingStep.compatible = compatible;
+    if (detectedVersion !== undefined && !compatible) {
+      shoppingStep.error =
+        `shopping-cli ${detectedVersion} 超出 Kiwi 支持范围（${compatRangeText(SHOPPING_CLI_COMPAT)}）`;
+    }
+  } else if (shopping.error !== undefined) {
+    shoppingStep.error = shopping.error;
+  }
+
   const components = {
     kiwi: { ok: true, version: PRODUCT_VERSION },
-    shopping_cli: detectShoppingCli(),
+    shopping_cli: shoppingStep,
     kiwi_catalog: await detectCatalog(),
   };
   const ok = Object.values(components).every((c) => c.ok === true);

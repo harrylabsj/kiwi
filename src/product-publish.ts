@@ -33,6 +33,7 @@
 import { spawnSync } from "node:child_process";
 import type { AgentProfile } from "./config/profile.js";
 import { registerCatalogAgent } from "./discovery/catalog-source/register.js";
+import { SHOPPING_CLI_COMPAT, compatRangeText, versionInRange } from "./product-compat.js";
 
 export interface MerchantPublishOptions {
   /** merchant profile（role: merchant；agent_id = catalog merchant_id）。 */
@@ -70,9 +71,16 @@ export interface StepListings {
   raw?: unknown;
 }
 
+export interface StepCompat {
+  ok: boolean;
+  version?: string;
+  error?: string;
+}
+
 export interface MerchantPublishReport {
   ok: boolean;
   steps: {
+    shopping_cli_compat: StepCompat;
     agent: StepAgent;
     listings: StepListings;
   };
@@ -101,6 +109,50 @@ export async function merchantPublish(
     options.catalogDomain ??
     process.env.KIWI_CATALOG_DOMAIN ??
     `merchant-${safeAgentId(merchantId)}.local`;
+
+  // ── Step 0: shopping-cli 版本兼容检查（D3 矩阵共同消费，fail-closed）──
+  // 矩阵单一来源 = product-compat.ts；与 `kiwi doctor` 共同消费。
+  const versionSpawn = options.spawnImpl ?? spawnSync;
+  let versionResult: ReturnType<typeof spawnSync>;
+  try {
+    versionResult = versionSpawn(options.shoppingCliPath ?? "shopping", ["--version"], {
+      encoding: "utf-8",
+      timeout: 5_000,
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      steps: {
+        shopping_cli_compat: {
+          ok: false,
+          error: `shopping-cli 版本检测失败：${err instanceof Error ? err.message : String(err)}`,
+        },
+        agent: { ok: false, error: "shopping-cli 版本不兼容，未执行注册" },
+        listings: { ok: false, skipped_reason: "shopping-cli 版本不兼容" },
+      },
+    };
+  }
+  const versionText = String(versionResult.stdout ?? "").split("\n")[0] ?? "";
+  if (!versionInRange(versionText, SHOPPING_CLI_COMPAT)) {
+    return {
+      ok: false,
+      steps: {
+        shopping_cli_compat: {
+          ok: false,
+          version: versionText !== "" ? versionText : undefined,
+          error:
+            `shopping-cli ${versionText !== "" ? versionText : "版本无法识别"} 超出 Kiwi 支持范围` +
+            `（${compatRangeText(SHOPPING_CLI_COMPAT)}）`,
+        },
+        agent: { ok: false, error: "shopping-cli 版本不兼容，未执行注册" },
+        listings: { ok: false, skipped_reason: "shopping-cli 版本不兼容" },
+      },
+    };
+  }
+  const compatStep: StepCompat = {
+    ok: true,
+    ...(versionText !== "" ? { version: versionText } : {}),
+  };
 
   // ── Step 1: 确认/注册 owner Agent（幂等：先查复用，没有再注册）──────────
   // 重复 publish 必须是安全操作（rev1.1 §4.5）：kiwi-catalog 一商家一 agent
@@ -139,6 +191,7 @@ export async function merchantPublish(
     return {
       ok: false,
       steps: {
+        shopping_cli_compat: compatStep,
         agent: { ok: false, error: agentError ?? "catalog register returned no agent id" },
         listings: { ok: false, skipped_reason: "agent 注册失败（listings 依赖 owner agent）" },
       },
@@ -168,6 +221,7 @@ export async function merchantPublish(
     return {
       ok: false,
       steps: {
+        shopping_cli_compat: compatStep,
         agent: { ok: true, catalog_agent_id: catalogAgentId },
         listings: {
           ok: false,
@@ -216,6 +270,7 @@ export async function merchantPublish(
   return {
     ok,
     steps: {
+      shopping_cli_compat: compatStep,
       agent: { ok: true, catalog_agent_id: catalogAgentId },
       listings: {
         ok,
