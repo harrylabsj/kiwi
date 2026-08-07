@@ -29,7 +29,7 @@
  *                                           Managed-local product lifecycle.
  */
 
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentDataDir, ensurePathsForDir } from "./agent/agent-db.js";
@@ -604,6 +604,23 @@ async function buildChatKernel(profile: AgentProfile, dataDir?: string): Promise
 }
 
 /**
+ * `/profile <name>` 快捷解析：`merchant` → examples/profiles/merchant.fake.yaml
+ * （依次试 fake/local/裸名）。含路径或 .yaml/.yml 后缀时原样使用。
+ */
+function resolveProfilePath(file: string): string {
+  if (file.includes("/") || file.endsWith(".yaml") || file.endsWith(".yml")) return file;
+  const candidates = [
+    `examples/profiles/${file}.fake.yaml`,
+    `examples/profiles/${file}.local.yaml`,
+    `examples/profiles/${file}.yaml`,
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return file; // 原路径，让 loadProfile 抛原始错误
+}
+
+/**
  * Main conversation (v0.3.0-A): the AgentKernel with persistent session and
  * Principal Memory. 裸 `kiwi`（无 --profile）用 defaultChatProfile 直接进入
  * `kiwi>` 对话；`/profile <file>` 在对话内切换 kernel。
@@ -613,7 +630,7 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
   const kernel = await buildChatKernel(profile, args.dataDir);
   const kernels: AgentKernel[] = [kernel];
   const reload = async (file: string): Promise<AgentKernel> => {
-    const next = await buildChatKernel(loadProfile(file), args.dataDir);
+    const next = await buildChatKernel(loadProfile(resolveProfilePath(file)), args.dataDir);
     kernels.push(next);
     return next;
   };
