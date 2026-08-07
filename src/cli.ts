@@ -603,16 +603,23 @@ async function buildChatKernel(profile: AgentProfile, dataDir?: string): Promise
   });
 }
 
+/** kiwi 包根目录（dist/cli.js 的上级）——全局 `kiwi` 在任意 cwd 也能解析示例 profile。 */
+function packageRoot(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, "..");
+}
+
 /**
- * `/profile <name>` 快捷解析：`merchant` → examples/profiles/merchant.fake.yaml
- * （依次试 fake/local/裸名）。含路径或 .yaml/.yml 后缀时原样使用。
+ * `/profile <name>` 快捷解析：`merchant` → <包根>/examples/profiles/merchant.fake.yaml
+ * （依次试 fake/local/裸名）。含路径或 .yaml/.yml 后缀时原样使用（相对 cwd）。
  */
 function resolveProfilePath(file: string): string {
   if (file.includes("/") || file.endsWith(".yaml") || file.endsWith(".yml")) return file;
+  const root = packageRoot();
   const candidates = [
-    `examples/profiles/${file}.fake.yaml`,
-    `examples/profiles/${file}.local.yaml`,
-    `examples/profiles/${file}.yaml`,
+    path.join(root, "examples", "profiles", `${file}.fake.yaml`),
+    path.join(root, "examples", "profiles", `${file}.local.yaml`),
+    path.join(root, "examples", "profiles", `${file}.yaml`),
   ];
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
