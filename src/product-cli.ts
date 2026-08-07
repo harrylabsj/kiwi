@@ -42,9 +42,11 @@ const BUYER_HELP = `kiwi buyer — Kiwi Buyer（product-strategy rev1.1 §2.2/§
 
 Usage:
   kiwi buyer start [--profile <file>]      Buyer 对话入口（chat 别名；裸 kiwi 即进入）
-  kiwi buyer init                          [D4] 初始化 Buyer Principal/Vault —— 尚未实现
-  kiwi buyer search                        [D4] Product-first 搜索（listing → Merchant Agent）—— 尚未实现
-  kiwi buyer tasks                         [D4] 查看 Buyer 任务 —— 尚未实现
+  kiwi buyer init --agent-id <buyer 身份>  [D4] 生成 buyer profile（无需 shopping-cli；
+                                          --output/--force；或 KIWI_BUYER_AGENT_ID）
+  kiwi buyer search <需求描述>             [D4] Product-first 搜索（listing → Merchant
+                                          Agent；--catalog/--limit/--category/--region）
+  kiwi buyer tasks [--data-dir <dir>]      [D4] 查看 Buyer 任务（start 运行后）
 
 Buyer 只需要 Kiwi；不感知 shopping-cli / kiwi-catalog。
 `;

@@ -71,9 +71,6 @@ describe("product CLI command tree (D0)", () => {
 
   it("skeleton commands fail closed with D-target hints", async () => {
     for (const argv of [
-      ["buyer", "init"],
-      ["buyer", "search"],
-      ["buyer", "tasks"],
       ["merchant", "listings"],
       ["merchant", "status"],
       ["merchant", "doctor"],
