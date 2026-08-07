@@ -29,11 +29,18 @@ import type { AgentMode } from "../mode.js";
 import type { WriteApprovalCandidateStore } from "../merchant/action-candidate.js";
 import type { CredentialBroker } from "../merchant/credential-broker.js";
 import { requireScopeCredential } from "../merchant/credential-broker.js";
+import {
+  NEGOTIATE_DEAL_PRICE_MINOR,
+  NEGOTIATE_DELIVERY_BEFORE,
+  NEGOTIATE_SKU,
+  negotiateWithAgent,
+  summarizeNegotiation,
+} from "../../a2a/negotiate.js";
 import { buildNegotiationChatTools, writeGateText } from "../negotiation-chat.js";
 import { routeWriteCandidate, type WriteGateDeps } from "../write-gate.js";
 import { runSearchCycle } from "./search-loop.js";
 import type { BuyerTaskStore } from "./task-store.js";
-import type { ConsultationLink } from "./types.js";
+import type { ConsultationLink, BuyerTaskStatus } from "./types.js";
 import type { TaskConstraints, TaskIntent } from "./types.js";
 import { BuyerTaskError } from "./types.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
@@ -187,6 +194,209 @@ export interface BuyerToolDeps {
   now: () => string;
   /** Register /approve execution hooks for pending candidates. */
   registerPending?: WriteGateDeps["registerPending"];
+  /** agent catalog base URL（`negotiate_buyer_task` 的 A2A 商家发现用）。 */
+  catalog?: string;
+  /**
+   * 磋商结果写记忆（kernel 注入，复用 recordNegotiation 的 remember 形状）。
+   * 记忆是尽力而为：失败不影响任务推进。
+   */
+  recordNegotiation?: (input: {
+    negotiationId: string;
+    catalogAgentId: string;
+    sku: string;
+    quantity: number;
+    offerPriceMinor?: number;
+    dealPriceMinor?: number;
+    agreementId?: string;
+  }) => Promise<string>;
+}
+
+/**
+ * 可直接发起本地 A2A 磋商的任务状态。排除：
+ * - draft/clarifying（意图未定）；searching（搜索在途，避免版本并发冲突）；
+ * - consulting/negotiating（已有磋商链接）；selected_nonbinding（重谈是未来工作）。
+ */
+const NEGOTIABLE_TASK_STATUSES: ReadonlySet<BuyerTaskStatus> = new Set([
+  "ready",
+  "tracking",
+  "shortlist_ready",
+  "awaiting_user",
+]);
+
+/** 磋商前置快照（审批候选 + 执行前重读用，§16）。 */
+function negotiationPreconditions(
+  store: BuyerTaskStore,
+  catalogConfigured: boolean,
+  taskId: string,
+): Record<string, unknown> {
+  const task = store.getTask(taskId);
+  return {
+    task_status: task?.status ?? null,
+    task_version: task?.version ?? null,
+    catalog_configured: catalogConfigured,
+  };
+}
+
+/**
+ * 已批准的本地 A2A 磋商执行体：经 catalog 发现商家 → negotiateWithAgent
+ * 确定性 KNP 磋商（RFQ→offer→counter→conditional→accept）。成功：任务
+ * consulting → negotiating → selected_nonbinding，链路（connector=a2a-direct）
+ * 记 negotiation_id；失败：仅记 ok:false 事件，任务状态不动。
+ */
+async function executeNegotiateBuyerTask(
+  deps: BuyerToolDeps,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const { store } = deps;
+  const a = args as { task_id: string; catalog_agent_id?: string };
+  const task = store.getTask(a.task_id);
+  if (task === undefined) throw new BuyerTaskError("not_found", `no task ${a.task_id}`);
+  if (!NEGOTIABLE_TASK_STATUSES.has(task.status)) {
+    throw new BuyerTaskError(
+      "illegal_transition",
+      `task ${a.task_id} is ${task.status}; 可直接磋商的状态：${[...NEGOTIABLE_TASK_STATUSES].join("/")}`,
+    );
+  }
+  if (deps.catalog === undefined) {
+    throw new BuyerTaskError("validation", "未配置 agent catalog（KIWI_CATALOG_URL 或 --catalog）");
+  }
+  const intent = task.intent;
+  const sku = intent.category ?? intent.query_text ?? NEGOTIATE_SKU;
+  const result = await negotiateWithAgent({
+    catalog: deps.catalog,
+    ...(a.catalog_agent_id !== undefined && a.catalog_agent_id !== ""
+      ? { catalogAgentId: a.catalog_agent_id }
+      : {}),
+    sku,
+    quantity: intent.quantity ?? 1,
+    dealPriceMinor:
+      intent.target_unit_price !== undefined
+        ? Math.round(intent.target_unit_price * 100)
+        : NEGOTIATE_DEAL_PRICE_MINOR,
+    deliveryBefore: intent.needed_by ?? NEGOTIATE_DELIVERY_BEFORE,
+    senderIdentity: deps.profile.agent_id,
+  });
+  const eventKey = `a2a-neg:${a.task_id}:${result.negotiationId}`;
+  if (!result.ok) {
+    store.appendEvent(
+      a.task_id,
+      "a2a_negotiated",
+      {
+        ok: false,
+        error: result.error ?? "未知错误",
+        negotiation_id: result.negotiationId,
+        catalog_agent_id: result.catalogAgentId,
+      },
+      "model",
+      eventKey,
+    );
+    return { ok: false, task_id: a.task_id, negotiation_id: result.negotiationId, error: result.error };
+  }
+  const facts = result.facts;
+  try {
+    const link = store.createConsultationLink({
+      task_id: a.task_id,
+      connector_id: "a2a-direct",
+      conversation_id: result.negotiationId,
+      idempotency_key: `a2a-consult:${a.task_id}:${result.negotiationId}`,
+    });
+    // consulting → negotiating → selected_nonbinding（各跳 version 守卫 + 幂等）。
+    let current = store.transitionTask({
+      task_id: a.task_id,
+      to: "consulting",
+      expected_version: task.version,
+      event_type: "status_changed",
+      payload: { negotiation_id: result.negotiationId, link_id: link.link_id },
+      origin: "model",
+      idempotency_key: `${eventKey}:consulting`,
+    });
+    current = store.transitionTask({
+      task_id: a.task_id,
+      to: "negotiating",
+      expected_version: current.version,
+      event_type: "status_changed",
+      origin: "model",
+      idempotency_key: `${eventKey}:negotiating`,
+    });
+    store.transitionTask({
+      task_id: a.task_id,
+      to: "selected_nonbinding",
+      expected_version: current.version,
+      event_type: "status_changed",
+      payload: {
+        negotiation_id: result.negotiationId,
+        agreement_id: result.agreement?.agreement_id ?? null,
+        deal_price_minor: facts?.dealPriceMinor ?? null,
+      },
+      origin: "model",
+      idempotency_key: `${eventKey}:selected`,
+    });
+    store.updateConsultationLink(link.link_id, { status: "closed" });
+    store.appendEvent(
+      a.task_id,
+      "a2a_negotiated",
+      {
+        ok: true,
+        negotiation_id: result.negotiationId,
+        catalog_agent_id: result.catalogAgentId,
+        agent_card_url: result.agentCardUrl,
+        sku: facts?.sku ?? sku,
+        quantity: facts?.quantity ?? intent.quantity ?? 1,
+        offer_price_minor: facts?.offerPriceMinor ?? null,
+        deal_price_minor: facts?.dealPriceMinor ?? null,
+        delivery_before: facts?.deliveryBefore ?? null,
+        agreement_id: result.agreement?.agreement_id ?? null,
+        steps: result.steps,
+        boundary: "非绑定协议 — 不创建订单、不锁库存、不授权支付",
+      },
+      "model",
+      eventKey,
+    );
+    await deps.recordNegotiation?.({
+      negotiationId: result.negotiationId,
+      catalogAgentId: result.catalogAgentId,
+      sku: facts?.sku ?? sku,
+      quantity: facts?.quantity ?? intent.quantity ?? 1,
+      offerPriceMinor: facts?.offerPriceMinor,
+      dealPriceMinor: facts?.dealPriceMinor,
+      agreementId:
+        typeof result.agreement?.agreement_id === "string"
+          ? result.agreement.agreement_id
+          : undefined,
+    }).catch(() => undefined); // 记忆尽力而为，失败不阻塞任务推进
+    return {
+      ok: true,
+      task_id: a.task_id,
+      status: "selected_nonbinding",
+      link_id: link.link_id,
+      negotiation_id: result.negotiationId,
+      catalog_agent_id: result.catalogAgentId,
+      agreement_id: result.agreement?.agreement_id ?? null,
+      facts,
+      summary: summarizeNegotiation(result),
+    };
+  } catch (err) {
+    // 磋商已成功但本地持久化冲突（如调度器并发推进任务）：协议在 ledger 里
+    // 仍有效，任务状态不动。绝不把异常抛出 execute（会卡死已 approved 候选）。
+    store.appendEvent(
+      a.task_id,
+      "a2a_negotiated",
+      {
+        ok: false,
+        phase: "post-negotiation-persist",
+        negotiation_id: result.negotiationId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      "model",
+      `${eventKey}:persist-fail`,
+    );
+    return {
+      ok: false,
+      task_id: a.task_id,
+      negotiation_id: result.negotiationId,
+      error: `磋商已完成但任务状态写入失败：${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }
 
 /** Preconditions for a consultation start: task + candidate state (§16). */
@@ -380,8 +590,19 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         const candidates = store
           .listCandidates(taskId)
           .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+        // 失败必须可见：tracking 可能是"等条件满足"，也可能是"搜索一直在失败"。
+        // 把最近一次 connector_retry 的原因和下次唤醒时间暴露给模型，避免把
+        // 重试等待误报为"网络错误已经过去"。
+        const retries = store.taskEvents(taskId).filter((e) => e.type === "connector_retry");
+        const lastRetry = retries.at(-1);
+        const nextWake =
+          task.next_run_at !== undefined ? `；下次唤醒 ${task.next_run_at}` : "";
+        const lastError =
+          lastRetry !== undefined && typeof lastRetry.payload.error === "string"
+            ? `；上次搜索失败：${String(lastRetry.payload.error)}`
+            : "";
         const lines = [
-          `${task.task_id} [${task.status}] ${task.goal_text}`,
+          `${task.task_id} [${task.status}] ${task.goal_text}${nextWake}${lastError}`,
           `意图: ${JSON.stringify(task.intent)}`,
           `约束: ${JSON.stringify(redactConstraints(task.constraints))}`,
           ...candidates.map((c) => {
@@ -390,6 +611,35 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             return `· ${c.candidate_id} [${c.candidate_status}/${c.eligibility}] ${c.sku ?? c.external_product_id} score=${c.score?.toFixed(3) ?? "-"}${reasons}`;
           }),
         ];
+        // 磋商链接（marketplace 或 A2A 直连）——磋商结果对模型可见。
+        const links = store.linksForTask(taskId);
+        if (links.length > 0) {
+          lines.push(
+            "磋商:",
+            ...links.map((l) => `· ${l.conversation_id} [${l.connector_id}/${l.status}]`),
+          );
+        }
+        // 最近一次成功的 A2A 磋商商业要点（报价/条件价/协议 id）——模型和操作者
+        // 都要能看到成交数字，而不是只能看到"已达成协议"。
+        const negotiated = store
+          .taskEvents(taskId)
+          .filter((e) => e.type === "a2a_negotiated" && e.payload.ok === true)
+          .at(-1);
+        if (negotiated !== undefined) {
+          const p = negotiated.payload as Record<string, unknown>;
+          const fmt = (minor: unknown): string =>
+            typeof minor === "number" && Number.isFinite(minor)
+              ? (minor / 100).toFixed(2)
+              : "?";
+          const sku = typeof p.sku === "string" ? p.sku : "?";
+          const qty = typeof p.quantity === "number" ? String(p.quantity) : "?";
+          const agreement = typeof p.agreement_id === "string" ? p.agreement_id : "?";
+          lines.push(
+            `最近磋商: ${String(p.negotiation_id ?? "?")} 商家 ${String(p.catalog_agent_id ?? "?")} ` +
+              `${qty} 件 ${sku} 报价 ${fmt(p.offer_price_minor)} 元/件，` +
+              `条件价 ${fmt(p.deal_price_minor)} 元/件，agreement ${agreement}（非绑定）`,
+          );
+        }
         return textResult(lines.join("\n"));
       } catch (err) {
         return textResult(errorText(err));
@@ -795,6 +1045,83 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
     },
   };
 
+  const negotiateBuyerTask: Tool = {
+    name: "negotiate_buyer_task",
+    label: "本地 A2A 磋商",
+    description:
+      "用 Buyer 任务的意图直接与商家进行本地 A2A 磋商：经 agent catalog 发现商家，" +
+      "与商家的 A2A 节点跑确定性 KNP 磋商（RFQ→offer→counter→conditional→accept）。" +
+      "不依赖 marketplace API；商家报价仍来自其自身商品库（折扣/底价在商家侧）。" +
+      "SKU/数量/目标单价/交期取自任务 intent（category 或 query_text 视为 SKU）。" +
+      "结果是非绑定协议（不创建订单、不锁库存、不授权支付）。写操作：supervised 模式" +
+      "需 /approve 批准后才真正发送消息；任务须处于 ready/tracking/shortlist_ready/awaiting_user。" +
+      "达成协议后任务进入 selected_nonbinding。",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: { type: "string" },
+        catalog_agent_id: {
+          type: "string",
+          description: "目标商家 catalog_agent_id（可选；缺省取第一个可发现商家）",
+        },
+      },
+      required: ["task_id"],
+      additionalProperties: false,
+    },
+    execute: async (_id, params) => {
+      if (deps.approvals === undefined || deps.mode === undefined) {
+        return textResult("当前环境未配置磋商能力（缺少审批存储），无法发起 A2A 磋商。");
+      }
+      try {
+        const p = params as { task_id: string; catalog_agent_id?: string };
+        const task = store.getTask(p.task_id);
+        if (task === undefined) throw new BuyerTaskError("not_found", `no task ${p.task_id}`);
+        if (!NEGOTIABLE_TASK_STATUSES.has(task.status)) {
+          return textResult(
+            `任务 ${p.task_id} 当前状态 ${task.status} 不可直接磋商；` +
+              `可直接磋商的状态：${[...NEGOTIABLE_TASK_STATUSES].join("/")}。`,
+          );
+        }
+        if (deps.catalog === undefined) {
+          return textResult("未配置 agent catalog（KIWI_CATALOG_URL 或 --catalog），无法发现商家。");
+        }
+        const args = {
+          task_id: p.task_id,
+          ...(p.catalog_agent_id !== undefined && p.catalog_agent_id !== ""
+            ? { catalog_agent_id: p.catalog_agent_id }
+            : {}),
+        };
+        const outcome = await routeWriteCandidate(
+          { mode: deps.mode, approvals: deps.approvals, profile, now, registerPending: deps.registerPending },
+          {
+            tool: "negotiate_buyer_task",
+            arguments: args,
+            preconditions: negotiationPreconditions(store, true, p.task_id),
+            risk: "send_negotiation_message",
+            execute: (approvedArgs) => executeNegotiateBuyerTask(deps, approvedArgs),
+            readPreconditions: () => negotiationPreconditions(store, deps.catalog !== undefined, p.task_id),
+            autopilotEscalation: () =>
+              profile.buyer_policy?.auto_negotiate === false
+                ? "buyer 未授权自动磋商（auto_negotiate=false），需要人工确认。"
+                : undefined,
+          },
+        );
+        if (outcome.kind === "pending_approval") {
+          store.appendEvent(
+            p.task_id,
+            "approval_requested",
+            { candidate_id: outcome.candidate.candidate_id, tool: "negotiate_buyer_task" },
+            "model",
+            `approval:${outcome.candidate.candidate_id}`,
+          );
+        }
+        return writeGateText(outcome);
+      } catch (err) {
+        return textResult(errorText(err));
+      }
+    },
+  };
+
   const negotiationTools =
     deps.commerceClient !== undefined &&
     deps.broker !== undefined &&
@@ -824,6 +1151,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
     cancelTask,
     selectNonbinding,
     startConsultation,
+    negotiateBuyerTask,
     ...negotiationTools,
   ];
 }

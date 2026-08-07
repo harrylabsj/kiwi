@@ -93,6 +93,57 @@ export interface AgentKernelOptions {
   /** Runtime write-approval mode (§16); defaults to supervised. */
   mode?: AgentMode;
   now?: () => string;
+  /** agent catalog base URL（buyer `negotiate_buyer_task` 的 A2A 商家发现用）。 */
+  catalog?: string;
+}
+
+/** A2A 磋商结果记忆记录（/negotiate 与 negotiate_buyer_task 共用形状）。 */
+interface NegotiationRecord {
+  negotiationId: string;
+  catalogAgentId: string;
+  sku: string;
+  quantity: number;
+  offerPriceMinor?: number;
+  dealPriceMinor?: number;
+  agreementId?: string;
+}
+
+/**
+ * 把一轮 A2A 磋商结果写入 MemoryStore（episode namespace，active 无需人工确认）：
+ * 持久上下文，`/why` 可查、跨重启可恢复。buyer 工具经 recordNegotiation 回调复用。
+ */
+async function rememberNegotiation(store: MemoryStore, input: NegotiationRecord): Promise<string> {
+  const summary = [
+    `A2A 磋商完成：negotiation ${input.negotiationId}，商家 ${input.catalogAgentId}`,
+    `，${input.quantity} 件 ${input.sku}，报价 ${input.offerPriceMinor === undefined ? "?" : (input.offerPriceMinor / 100).toFixed(2)} 元/件`,
+    `，条件价（量≥100）${input.dealPriceMinor === undefined ? "?" : (input.dealPriceMinor / 100).toFixed(2)} 元/件`,
+    input.agreementId !== undefined ? `，agreement ${input.agreementId}` : "",
+  ].join("");
+  const outcome = store.remember({
+    namespace: "episode",
+    key: `a2a-negotiation:${input.negotiationId}`,
+    value: {
+      kind: "a2a_negotiation",
+      negotiation_id: input.negotiationId,
+      catalog_agent_id: input.catalogAgentId,
+      sku: input.sku,
+      quantity: input.quantity,
+      offer_price_minor: input.offerPriceMinor,
+      deal_price_minor: input.dealPriceMinor,
+      agreement_id: input.agreementId,
+    },
+    source_kind: "observed",
+    sensitivity: "normal",
+    confidence: 1,
+    explicit_user_statement: false,
+    evidence: {
+      source_type: "import",
+      source_ref: input.negotiationId,
+      summary,
+    },
+    actor: "system",
+  });
+  return outcome.kind === "conflict" ? outcome.existing.memory_id : outcome.memory.memory_id;
 }
 
 export interface KernelReply {
@@ -321,21 +372,24 @@ export class AgentKernel {
         profile: options.profile,
         ...(options.commerceClient !== undefined ? { commerceClient: options.commerceClient } : {}),
         ...(options.broker !== undefined ? { broker: options.broker } : {}),
+        ...(options.catalog !== undefined ? { catalog: options.catalog } : {}),
         approvals,
         mode: () => modeRef.value,
         registerPending,
         now: clock,
+        recordNegotiation: (input) => rememberNegotiation(store, input),
       });
     } else if (
       options.profile.role === "merchant" &&
       options.merchantClient !== undefined &&
-      options.commerceClient !== undefined &&
       options.broker !== undefined
     ) {
       merchantTools = buildMerchantTools({
         profile: options.profile,
         merchantClient: options.merchantClient,
-        commerceClient: options.commerceClient,
+        // Negotiation token (commerceClient) is optional: absent → 磋商工具
+        // fail closed，目录/库存只读与审批式写工具照常可用（见 §15.3/§15.4）。
+        ...(options.commerceClient !== undefined ? { commerceClient: options.commerceClient } : {}),
         broker: options.broker,
         approvals,
         mode: () => modeRef.value,
@@ -620,46 +674,8 @@ export class AgentKernel {
    * 把一轮 A2A 磋商结果写入记忆（episode namespace，active 无需人工确认）：
    * 持久上下文，`/why` 可查、跨重启可恢复。
    */
-  async recordNegotiation(input: {
-    negotiationId: string;
-    catalogAgentId: string;
-    sku: string;
-    quantity: number;
-    offerPriceMinor?: number;
-    dealPriceMinor?: number;
-    agreementId?: string;
-  }): Promise<string> {
-    const summary = [
-      `A2A 磋商完成：negotiation ${input.negotiationId}，商家 ${input.catalogAgentId}`,
-      `，${input.quantity} 件 ${input.sku}，报价 ${input.offerPriceMinor === undefined ? "?" : (input.offerPriceMinor / 100).toFixed(2)} 元/件`,
-      `，条件价（量≥100）${input.dealPriceMinor === undefined ? "?" : (input.dealPriceMinor / 100).toFixed(2)} 元/件`,
-      input.agreementId !== undefined ? `，agreement ${input.agreementId}` : "",
-    ].join("");
-    const outcome = this.store.remember({
-      namespace: "episode",
-      key: `a2a-negotiation:${input.negotiationId}`,
-      value: {
-        kind: "a2a_negotiation",
-        negotiation_id: input.negotiationId,
-        catalog_agent_id: input.catalogAgentId,
-        sku: input.sku,
-        quantity: input.quantity,
-        offer_price_minor: input.offerPriceMinor,
-        deal_price_minor: input.dealPriceMinor,
-        agreement_id: input.agreementId,
-      },
-      source_kind: "observed",
-      sensitivity: "normal",
-      confidence: 1,
-      explicit_user_statement: false,
-      evidence: {
-        source_type: "import",
-        source_ref: input.negotiationId,
-        summary,
-      },
-      actor: "system",
-    });
-    return outcome.kind === "conflict" ? outcome.existing.memory_id : outcome.memory.memory_id;
+  recordNegotiation(input: NegotiationRecord): Promise<string> {
+    return rememberNegotiation(this.store, input);
   }
 
   handleUserText(text: string): Promise<KernelReply> {

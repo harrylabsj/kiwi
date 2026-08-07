@@ -41,9 +41,11 @@ export type BuyerTaskStatus = (typeof BUYER_TASK_STATUSES)[number];
 export const TASK_TRANSITIONS: Readonly<Record<BuyerTaskStatus, readonly BuyerTaskStatus[]>> = {
   draft: ["clarifying", "ready", "cancelled"],
   clarifying: ["ready", "cancelled"],
-  ready: ["searching"],
+  // consulting 边：任务即磋商任务（§本地磋商）——不经 marketplace 搜索/候选
+  // 也可直接发起 A2A 磋商（ready/tracking → consulting）。
+  ready: ["searching", "consulting"],
   searching: ["tracking", "shortlist_ready", "failed"],
-  tracking: ["searching", "shortlist_ready", "expired"],
+  tracking: ["searching", "shortlist_ready", "expired", "consulting"],
   shortlist_ready: ["awaiting_user"],
   awaiting_user: ["searching", "consulting", "selected_nonbinding", "cancelled"],
   consulting: ["negotiating", "awaiting_user"],

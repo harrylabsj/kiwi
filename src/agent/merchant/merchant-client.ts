@@ -125,8 +125,10 @@ export class HttpMerchantClient implements MerchantClient {
   async listProducts(merchantId: string): Promise<MerchantCatalogProduct[]> {
     // Public search endpoint returns merchant_id per product; filter locally.
     // Real gateway has no merchant-owned product listing route.
+    // include_out_of_stock=1：商家自查目录要看到全部在架商品（含缺货/暂停），
+    // 买家搜索默认排除缺货的行为不适用于商家自己的商品清单。
     const payload = (await this.request("GET", "/search/products", {
-      query: { limit: "100", offset: "0" },
+      query: { limit: "100", offset: "0", include_out_of_stock: "1" },
     })) as { results?: unknown };
     if (payload === null || typeof payload !== "object" || !Array.isArray(payload.results)) {
       throw new MerchantClientError("validation", "search/products response lacks a results array");

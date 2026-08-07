@@ -143,6 +143,106 @@ describe("task state machine (§11.3)", () => {
     expect(current.status).toBe("ready");
   });
 
+  it("ready/tracking can go straight to consulting (local negotiation task); searching cannot", () => {
+    const { store } = setup();
+    // ready → consulting（不经搜索/候选，直接本地 A2A 磋商）。
+    const task = store.createTask({
+      goal_text: "g",
+      intent: { query_text: "杯" },
+      idempotency_key: `c:${uuidv7()}`,
+    });
+    let current = store.transitionTask({
+      task_id: task.task_id,
+      to: "ready",
+      expected_version: task.version,
+      event_type: "status_changed",
+      origin: "user",
+      idempotency_key: `r:${uuidv7()}`,
+    });
+    current = store.transitionTask({
+      task_id: task.task_id,
+      to: "consulting",
+      expected_version: current.version,
+      event_type: "status_changed",
+      origin: "user",
+      idempotency_key: `c1:${uuidv7()}`,
+    });
+    expect(current.status).toBe("consulting");
+
+    // tracking → consulting（搜索失败退避中的任务也可直接磋商）。
+    const t2 = store.createTask({
+      goal_text: "g2",
+      intent: { query_text: "杯" },
+      idempotency_key: `c:${uuidv7()}:2`,
+    });
+    let cur2 = store.transitionTask({
+      task_id: t2.task_id,
+      to: "ready",
+      expected_version: t2.version,
+      event_type: "status_changed",
+      origin: "user",
+      idempotency_key: `r2:${uuidv7()}`,
+    });
+    cur2 = store.transitionTask({
+      task_id: t2.task_id,
+      to: "searching",
+      expected_version: cur2.version,
+      event_type: "search_started",
+      origin: "scheduler",
+      idempotency_key: `s2:${uuidv7()}`,
+    });
+    cur2 = store.transitionTask({
+      task_id: t2.task_id,
+      to: "tracking",
+      expected_version: cur2.version,
+      event_type: "tracking_installed",
+      origin: "scheduler",
+      idempotency_key: `t2:${uuidv7()}`,
+    });
+    cur2 = store.transitionTask({
+      task_id: t2.task_id,
+      to: "consulting",
+      expected_version: cur2.version,
+      event_type: "status_changed",
+      origin: "user",
+      idempotency_key: `c2:${uuidv7()}`,
+    });
+    expect(cur2.status).toBe("consulting");
+
+    // searching → consulting 仍非法（搜索在途，不允许并发磋商写入）。
+    const t3 = store.createTask({
+      goal_text: "g3",
+      intent: { query_text: "杯" },
+      idempotency_key: `c:${uuidv7()}:3`,
+    });
+    const cur3 = store.transitionTask({
+      task_id: t3.task_id,
+      to: "ready",
+      expected_version: t3.version,
+      event_type: "status_changed",
+      origin: "user",
+      idempotency_key: `r3:${uuidv7()}`,
+    });
+    store.transitionTask({
+      task_id: t3.task_id,
+      to: "searching",
+      expected_version: cur3.version,
+      event_type: "search_started",
+      origin: "scheduler",
+      idempotency_key: `s3:${uuidv7()}`,
+    });
+    expect(() =>
+      store.transitionTask({
+        task_id: t3.task_id,
+        to: "consulting",
+        expected_version: cur3.version + 1,
+        event_type: "status_changed",
+        origin: "user",
+        idempotency_key: `c3:${uuidv7()}`,
+      }),
+    ).toThrow(BuyerTaskError);
+  });
+
   it("optimistic versioning: a stale expected_version loses; replays are no-ops", () => {
     const { store } = setup();
     const task = store.createTask({
@@ -534,6 +634,28 @@ describe("connector failure classification (§18.1, §18.2)", () => {
     const retry = store.taskEvents(task.task_id).find((e) => e.type === "connector_retry");
     expect(retry).toBeDefined();
     expect(retry?.payload.retriable).toBe(true);
+  });
+
+  it("get_buyer_task surfaces the last failure and next retry (never 'tracking = all clear')", async () => {
+    const { store, now } = setup([fakeConnectorProduct()]);
+    const flaky = new FlakyConnector(new FakeCommerceConnector([fakeConnectorProduct()]));
+    const task = createReadyTask(store, {});
+    const cycle = await runSearchCycle({ store, connector: flaky, now }, task.task_id, `run:1`);
+    expect(cycle.outcome).toBe("retry");
+
+    const tools = buildBuyerTools({
+      store,
+      connector: flaky,
+      profile: testBuyerProfile(),
+      now,
+    });
+    const getTask = tools.find((t) => t.name === "get_buyer_task");
+    const result = await getTask!.execute("call-1", { task_id: task.task_id }, undefined, undefined, undefined);
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("tracking");
+    expect(text).toContain("上次搜索失败");
+    expect(text).toContain("gateway blip");
+    expect(text).toContain("下次唤醒");
   });
 });
 

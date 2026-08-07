@@ -1,0 +1,309 @@
+/**
+ * negotiate_buyer_task 测试（本地 A2A 磋商，零 marketplace）：
+ * - 审批门：supervised 生成候选、/approve 后才发消息；未批准零消息；
+ * - 商家按商品库（productSource 桩）报价：offer = SKU 真实价；
+ * - 成功路径：任务 consulting → negotiating → selected_nonbinding + a2a-direct
+ *   链接（negotiation_id）+ a2a_negotiated 事件 + 磋商记忆回调；
+ * - 前置校验（状态/目录）；失败路径（catalog 找不到商家）；autopilot 直通。
+ *
+ * 完全离线：生产版 merchant handler（接 productSource 桩）+ 临时 A2AServer
+ * + 两路由 catalog stub；capture 记录入站信封。
+ */
+import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { migrateMemorySchema } from "../src/agent/memory/schema.js";
+import { FakeCommerceConnector, fakeConnectorProduct } from "../src/agent/connector/fake-connector.js";
+import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
+import { buildBuyerTools, type BuyerToolDeps } from "../src/agent/buyer/buyer-tools.js";
+import {
+  executeApprovedCandidate,
+  WriteApprovalCandidateStore,
+} from "../src/agent/merchant/action-candidate.js";
+import { testBuyerProfile, startTestA2aStack, type CapturedInbound } from "./helpers.js";
+import { uuidv7 } from "@earendil-works/pi-ai";
+
+const T0 = "2026-08-05T12:00:00+08:00";
+const PRINCIPAL = "buyer-agent:buyer-001";
+
+type PendingHooks = {
+  readPreconditions: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+  execute: (args: Record<string, unknown>) => Promise<unknown>;
+};
+
+type CallableTool = {
+  name: string;
+  execute: (id: string, params: Record<string, unknown>) => Promise<{
+    content: { type: string; text?: string }[];
+    details?: unknown;
+  }>;
+};
+
+/** 商家商品库桩：按 SKU 报价（折扣/底价等真实数据在商家侧）。 */
+const productSource = {
+  async getProduct(sku: string) {
+    const prices: Record<string, { price: number; currency: string }> = {
+      "sku-001": { price: 99, currency: "CNY" },
+    };
+    const p = prices[sku];
+    if (p === undefined) throw new Error(`no product ${sku}`);
+    return p;
+  },
+};
+
+interface BuyerHarness {
+  db: DatabaseSync;
+  store: BuyerTaskStore;
+  approvals: WriteApprovalCandidateStore;
+  mode: { value: "manual" | "supervised" | "autopilot" };
+  hooks: Map<string, PendingHooks>;
+  getTool: (name: string) => CallableTool;
+  recordCalls: Array<Record<string, unknown>>;
+  capture: CapturedInbound[];
+  stop: () => Promise<void>;
+}
+
+const stacks: Awaited<ReturnType<typeof startTestA2aStack>>[] = [];
+const capture: CapturedInbound[] = [];
+
+afterEach(async () => {
+  for (const s of stacks.splice(0)) await s.stop().catch(() => undefined);
+  capture.length = 0;
+});
+
+async function setupBuyer(options: {
+  catalog?: string;
+  mode?: "manual" | "supervised" | "autopilot";
+  autoNegotiate?: boolean;
+} = {}): Promise<BuyerHarness> {
+  let clock = T0;
+  const db = new DatabaseSync(":memory:");
+  migrateMemorySchema(db);
+  db.prepare(
+    `INSERT INTO principals (principal_id, owner_id, role, locale, timezone, memory_schema_version, created_at, updated_at)
+     VALUES (?, 'buyer-001', 'buyer', 'zh-CN', 'Asia/Shanghai', 3, ?, ?)`,
+  ).run(PRINCIPAL, T0, T0);
+  const store = new BuyerTaskStore({ db, principalId: PRINCIPAL, now: () => clock });
+  const connector = new FakeCommerceConnector([fakeConnectorProduct()]);
+  const approvals = new WriteApprovalCandidateStore({ db, principalId: PRINCIPAL, now: () => clock });
+  const mode = { value: options.mode ?? ("supervised" as const) };
+  const hooks = new Map<string, PendingHooks>();
+  const recordCalls: Array<Record<string, unknown>> = [];
+  const deps: BuyerToolDeps = {
+    store,
+    connector,
+    profile: testBuyerProfile({ buyer_policy: { ...testBuyerPolicyBase(), auto_negotiate: options.autoNegotiate ?? true } }),
+    approvals,
+    mode: () => mode.value,
+    now: () => clock,
+    registerPending: (id, h) => hooks.set(id, h),
+    ...(options.catalog !== undefined ? { catalog: options.catalog } : {}),
+    recordNegotiation: async (input) => {
+      recordCalls.push({ ...input });
+      return `mem-${input.negotiationId}`;
+    },
+  };
+  const tools = buildBuyerTools(deps);
+  return {
+    db,
+    store,
+    approvals,
+    mode,
+    hooks,
+    getTool: (name) => tools.find((t) => t.name === name) as unknown as CallableTool,
+    recordCalls,
+    capture,
+    stop: async () => undefined,
+  };
+}
+
+function testBuyerPolicyBase() {
+  return {
+    target_skus: [] as string[],
+    quantity: 1,
+    max_total_price_private: 100_000,
+    acceptable_eta_latest: "2099-12-31T23:59:59+08:00",
+    required_after_sales_terms: [] as string[],
+    auto_negotiate: true,
+    human_review_on: [] as string[],
+  };
+}
+
+/** 建一个 ready 任务（磋商参数来自 intent）。 */
+async function createReadyTask(
+  store: BuyerTaskStore,
+  overrides: Record<string, unknown> = {},
+): Promise<{ task_id: string; version: number }> {
+  const task = store.createTask({
+    goal_text: "采购 sku-001 磋商",
+    intent: { category: "sku-001", quantity: 2, target_unit_price: 800 },
+    ...overrides,
+    idempotency_key: `create:${uuidv7()}`,
+  });
+  const ready = store.transitionTask({
+    task_id: task.task_id,
+    to: "ready",
+    expected_version: task.version,
+    event_type: "status_changed",
+    origin: "user",
+    idempotency_key: `ready:${uuidv7()}`,
+  });
+  return { task_id: ready.task_id, version: ready.version };
+}
+
+describe("negotiate_buyer_task", () => {
+  it("supervised: approval required; after /approve the A2A negotiation runs and the task settles", async () => {
+    const s = await startTestA2aStack({ productSource, capture });
+    stacks.push(s);
+    const h = await setupBuyer({ catalog: s.catalogUrl });
+    const { task_id } = await createReadyTask(h.store);
+    const tool = h.getTool("negotiate_buyer_task");
+
+    // 1. supervised 调用 → 审批候选，零消息出站。
+    const first = await tool.execute("c1", { task_id });
+    const firstText = first.content[0]?.type === "text" ? first.content[0].text : "";
+    expect(firstText).toContain("等待批准");
+    expect(capture).toHaveLength(0);
+    expect(h.store.getTask(task_id)?.status).toBe("ready");
+    const pending = h.approvals.listPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.tool).toBe("negotiate_buyer_task");
+    expect(pending[0]?.risk).toBe("send_negotiation_message");
+    expect(h.store.taskEvents(task_id).some((e) => e.type === "approval_requested")).toBe(true);
+
+    // 2. /approve → 执行：A2A 磋商 → 商家按商品库报价（sku-001 → 9900 minor）。
+    const candidate = pending[0] as NonNullable<(typeof pending)[number]>;
+    h.approvals.markApproved(candidate.candidate_id);
+    const outcome = await executeApprovedCandidate(
+      h.approvals,
+      candidate.candidate_id,
+      h.hooks.get(candidate.candidate_id) as PendingHooks,
+    );
+    if (outcome.kind !== "executed") throw new Error("expected an executed candidate");
+    const output = outcome.output as {
+      ok: boolean;
+      status?: string;
+      negotiation_id?: string;
+      facts?: { offerPriceMinor?: number; sku?: string };
+    };
+    expect(output.ok).toBe(true);
+    expect(output.status).toBe("selected_nonbinding");
+    expect(output.facts?.sku).toBe("sku-001");
+    // 商家侧报价来自商品库（99 元），不是演示价。
+    expect(output.facts?.offerPriceMinor).toBe(9_900);
+
+    // 3. 任务终态 + 链接 + 事件 + 记忆回调。
+    expect(h.store.getTask(task_id)?.status).toBe("selected_nonbinding");
+    const links = h.store.linksForTask(task_id);
+    expect(links).toHaveLength(1);
+    expect(links[0]?.connector_id).toBe("a2a-direct");
+    expect(links[0]?.conversation_id).toBe(output.negotiation_id);
+    expect(links[0]?.status).toBe("closed");
+    const event = h.store.taskEvents(task_id).find((e) => e.type === "a2a_negotiated");
+    expect(event?.payload.ok).toBe(true);
+    expect(event?.payload.boundary).toContain("非绑定");
+    expect(h.recordCalls).toHaveLength(1);
+    expect(h.recordCalls[0]?.negotiationId).toBe(output.negotiation_id);
+
+    // 4. 商家确实收到了 RFQ（capture 记录）。
+    expect(capture.some((c) => c.action === "rfq")).toBe(true);
+    expect(capture.some((c) => c.action === "accept_nonbinding")).toBe(true);
+  });
+
+  it("no approval → no messages leave the buyer side", async () => {
+    const s = await startTestA2aStack({ productSource, capture });
+    stacks.push(s);
+    const h = await setupBuyer({ catalog: s.catalogUrl });
+    const { task_id } = await createReadyTask(h.store);
+    const tool = h.getTool("negotiate_buyer_task");
+    const result = await tool.execute("c1", { task_id });
+    expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("等待批准");
+    expect(capture).toHaveLength(0);
+    expect(h.store.getTask(task_id)?.status).toBe("ready");
+    expect(h.store.linksForTask(task_id)).toHaveLength(0);
+  });
+
+  it("rejects non-negotiable task states and missing catalog", async () => {
+    const s = await startTestA2aStack({ productSource });
+    stacks.push(s);
+    const h = await setupBuyer({ catalog: s.catalogUrl });
+    const tool = h.getTool("negotiate_buyer_task");
+
+    // draft（未就绪）不可磋商。
+    const draft = h.store.createTask({
+      goal_text: "g",
+      intent: { category: "sku-001" },
+      idempotency_key: `d:${uuidv7()}`,
+    });
+    const draftRes = await tool.execute("c1", { task_id: draft.task_id });
+    expect(draftRes.content[0]?.type === "text" ? draftRes.content[0].text : "").toContain(
+      "不可直接磋商",
+    );
+    expect(h.approvals.listPending()).toHaveLength(0);
+
+    // searching（搜索在途）不可磋商。
+    const { task_id, version } = await createReadyTask(h.store);
+    h.store.transitionTask({
+      task_id,
+      to: "searching",
+      expected_version: version,
+      event_type: "search_started",
+      origin: "scheduler",
+      idempotency_key: `s:${uuidv7()}`,
+    });
+    const searchingRes = await tool.execute("c1", { task_id });
+    expect(searchingRes.content[0]?.type === "text" ? searchingRes.content[0].text : "").toContain(
+      "不可直接磋商",
+    );
+
+    // 未配置 catalog → fail closed。
+    const hNoCatalog = await setupBuyer({ catalog: undefined });
+    const { task_id: t2 } = await createReadyTask(hNoCatalog.store);
+    const toolNoCatalog = hNoCatalog.getTool("negotiate_buyer_task");
+    const noCat = await toolNoCatalog.execute("c1", { task_id: t2 });
+    expect(noCat.content[0]?.type === "text" ? noCat.content[0].text : "").toContain(
+      "未配置 agent catalog",
+    );
+  });
+
+  it("failure path: unknown merchant → executed with ok:false, task untouched", async () => {
+    const s = await startTestA2aStack({ productSource });
+    stacks.push(s);
+    const h = await setupBuyer({ catalog: s.catalogUrl });
+    const { task_id } = await createReadyTask(h.store);
+    const tool = h.getTool("negotiate_buyer_task");
+    const first = await tool.execute("c1", { task_id, catalog_agent_id: "cagt_missing" });
+    expect(first.content[0]?.type === "text" ? first.content[0].text : "").toContain("等待批准");
+    const pending = h.approvals.listPending();
+    expect(pending).toHaveLength(1);
+    const candidate = pending[0] as NonNullable<(typeof pending)[number]>;
+    h.approvals.markApproved(candidate.candidate_id);
+    const outcome = await executeApprovedCandidate(
+      h.approvals,
+      candidate.candidate_id,
+      h.hooks.get(candidate.candidate_id) as PendingHooks,
+    );
+    if (outcome.kind !== "executed") throw new Error("expected an executed candidate");
+    const output = outcome.output as { ok: boolean; error?: string };
+    expect(output.ok).toBe(false);
+    expect(output.error).toContain("找不到");
+    // 任务不动：无链接、状态不变、事件记录失败。
+    expect(h.store.getTask(task_id)?.status).toBe("ready");
+    expect(h.store.linksForTask(task_id)).toHaveLength(0);
+    const event = h.store.taskEvents(task_id).find((e) => e.type === "a2a_negotiated");
+    expect(event?.payload.ok).toBe(false);
+  });
+
+  it("autopilot with auto_negotiate runs immediately without a pending candidate", async () => {
+    const s = await startTestA2aStack({ productSource, capture });
+    stacks.push(s);
+    const h = await setupBuyer({ catalog: s.catalogUrl, mode: "autopilot", autoNegotiate: true });
+    const { task_id } = await createReadyTask(h.store);
+    const tool = h.getTool("negotiate_buyer_task");
+    const result = await tool.execute("c1", { task_id });
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("已执行");
+    expect(h.approvals.listPending()).toHaveLength(0);
+    expect(h.store.getTask(task_id)?.status).toBe("selected_nonbinding");
+    expect(capture.some((c) => c.action === "rfq")).toBe(true);
+  });
+});
