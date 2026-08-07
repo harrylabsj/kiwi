@@ -88,20 +88,27 @@
 
 <section class="section" id="quickstart">
   <div class="section-inner">
-    <div class="kicker">Quick start</div>
-    <h2>From zero to a live agent.</h2>
-    <pre><code># 安装（发布后：npm 单一入口；当前未发布：源码安装）
-npm install -g @harrylabsj/kiwi            # 提供 `kiwi`（发布后）
-git clone https://github.com/harrylabsj/kiwi   # 当前：源码备选
-cd kiwi &amp;&amp; npm install &amp;&amp; npm run build &amp;&amp; npm link
+    <div class="kicker">Source &amp; build</div>
+    <h2>For developers: code, not copy.</h2>
+    <pre><code># Kiwi Runtime
+git clone https://github.com/harrylabsj/kiwi
+cd kiwi &amp;&amp; npm install &amp;&amp; npm run build &amp;&amp; npm link   # 提供 `kiwi`
 
-# Buyer —— 只需要这一步
-kiwi buyer init --agent-id &lt;your-id&gt;
-kiwi buyer search "21.5 inch industrial touch display, IP67"
+# shopping-cli（数据引擎；Merchant 用户由 init --auto-install 自动装）
+git clone https://github.com/harrylabsj/shopping-cli
+cd shopping-cli &amp;&amp; pip install -e '.[api]'             # 提供 `shopping`
 
-# Merchant —— 数据引擎（shopping-cli）由 init 自动安装，无需单独装
-kiwi merchant init --merchant-id &lt;your-merchant&gt; --name "Your Co." --auto-install
-kiwi merchant publish --profile merchant.yaml --shopping-cli-db &lt;db&gt;</code></pre>      <p><strong>中文：</strong>安装（发布后 npm install -g @harrylabsj/kiwi；当前源码备选）后：Buyer 一步 init 即可用；Merchant 的 init 自动安装数据引擎（shopping-cli，--auto-install），无需知晓并单独安装。</p>
+# kiwi-catalog（Network 服务端，Operator/自建网络用）
+git clone https://github.com/harrylabsj/kiwi-catalog
+cd kiwi-catalog &amp;&amp; pip install -e '.[api]'             # 提供 `kiwi-catalog`</code></pre>
+    <div class="notice">
+      <p><strong>Users:</strong> ordinary installation is one command on the
+      <a href="buyers.html#install">For Buyers</a> / <a href="merchants.html#install">For Merchants</a>
+      pages — no git, no source. This page is for developers.</p>
+      <p style="margin-top:6px"><strong>中文：</strong>普通用户安装见
+      <a href="buyers.html#install">For Buyers</a> / <a href="merchants.html#install">For Merchants</a>
+      页——发布后 npm 一条命令，不需要 git 和源码。本页是开发者的源码与代码位置。</p>
+    </div>
     </div>
   </div>
 </section>
