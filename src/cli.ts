@@ -60,6 +60,7 @@ import { parseLogLines, runLogs } from "./supervisor/logs.js";
 import { StackConfigError } from "./supervisor/stack-config.js";
 import { cmdProductDoctor, productHelp } from "./product-cli.js";
 import { merchantInit } from "./product-init.js";
+import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
 import { merchantPublish } from "./product-publish.js";
 
 const USAGE = `kiwi 0.6.0 — commerce negotiation agent runtime
@@ -115,6 +116,13 @@ interface ParsedArgs {
   shoppingCliMerchant?: string;
   output?: string;
   force: boolean;
+  agentId?: string;
+  ownerId?: string;
+  autoNegotiate: boolean;
+  limit?: string;
+  category?: string;
+  region?: string;
+  listingType?: string;
   dataDir?: string;
   once: boolean;
   fake: boolean;
@@ -135,6 +143,13 @@ function parseArgs(argv: string[]): ParsedArgs {
   let shoppingCliMerchant: string | undefined;
   let output: string | undefined;
   let force = false;
+  let agentId: string | undefined;
+  let ownerId: string | undefined;
+  let autoNegotiate = false;
+  let limit: string | undefined;
+  let category: string | undefined;
+  let region: string | undefined;
+  let listingType: string | undefined;
   let dataDir: string | undefined;
   let catalog: string | undefined;
   let port: number | undefined;
@@ -162,6 +177,20 @@ function parseArgs(argv: string[]): ParsedArgs {
       output = argv[++i];
     } else if (arg === "--force") {
       force = true;
+    } else if (arg === "--agent-id") {
+      agentId = argv[++i];
+    } else if (arg === "--owner-id") {
+      ownerId = argv[++i];
+    } else if (arg === "--auto-negotiate") {
+      autoNegotiate = true;
+    } else if (arg === "--limit") {
+      limit = argv[++i];
+    } else if (arg === "--category") {
+      category = argv[++i];
+    } else if (arg === "--region") {
+      region = argv[++i];
+    } else if (arg === "--listing-type") {
+      listingType = argv[++i];
     } else if (arg === "--data-dir") {
       dataDir = argv[++i];
     } else if (arg === "--catalog") {
@@ -192,7 +221,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       throw new ProfileError(`Unknown argument: ${arg ?? ""}`);
     }
   }
-  const out: ParsedArgs = { command, once, fake, noChat, noA2a, force };
+  const out: ParsedArgs = { command, once, fake, noChat, noA2a, force, autoNegotiate };
   if (profile !== undefined) out.profile = profile;
   if (dir !== undefined) out.dir = dir;
   if (lines !== undefined) out.lines = lines;
@@ -201,6 +230,12 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (shoppingCliPath !== undefined) out.shoppingCliPath = shoppingCliPath;
   if (shoppingCliMerchant !== undefined) out.shoppingCliMerchant = shoppingCliMerchant;
   if (output !== undefined) out.output = output;
+  if (agentId !== undefined) out.agentId = agentId;
+  if (ownerId !== undefined) out.ownerId = ownerId;
+  if (limit !== undefined) out.limit = limit;
+  if (category !== undefined) out.category = category;
+  if (region !== undefined) out.region = region;
+  if (listingType !== undefined) out.listingType = listingType;
   if (dataDir !== undefined) out.dataDir = dataDir;
   if (catalog !== undefined) out.catalog = catalog;
   if (port !== undefined) out.port = port;
@@ -774,11 +809,79 @@ async function routeBuyer(sub: string | undefined, args: ParsedArgs): Promise<nu
     return EXIT.OK;
   }
   if (sub === "start") return await cmdChat(args);
-  if (sub === "init") return notImplementedProduct("kiwi buyer init", "D4");
-  if (sub === "search") return notImplementedProduct("kiwi buyer search", "D4");
-  if (sub === "tasks") return notImplementedProduct("kiwi buyer tasks", "D4");
+  if (sub === "init") return await cmdBuyerInit(args);
+  if (sub === "search") return await cmdBuyerSearch(args);
+  if (sub === "tasks") return await cmdBuyerTasks(args);
   process.stderr.write(`unknown buyer command: ${sub}\n`);
   return EXIT.CONFIG;
+}
+
+/** `kiwi buyer init`（D4）：生成 buyer profile（无需 shopping-cli）。 */
+async function cmdBuyerInit(args: ParsedArgs): Promise<number> {
+  const agentId = args.agentId ?? process.env.KIWI_BUYER_AGENT_ID ?? "";
+  if (!agentId) {
+    process.stderr.write("--agent-id <buyer 身份> 是必需的（或 KIWI_BUYER_AGENT_ID）\n");
+    return EXIT.CONFIG;
+  }
+  const report = buyerInit({
+    agentId,
+    ...(args.ownerId !== undefined ? { ownerId: args.ownerId } : {}),
+    ...(args.autoNegotiate ? { autoNegotiate: true } : {}),
+    ...(args.output !== undefined ? { outputPath: args.output } : {}),
+    ...(args.force ? { force: true } : {}),
+  });
+  printJson(report);
+  return report.ok ? EXIT.OK : EXIT.CONFIG;
+}
+
+/** `kiwi buyer search`（D4）：Product-first 搜索（M3 链路）。 */
+async function cmdBuyerSearch(args: ParsedArgs): Promise<number> {
+  // command = ["buyer", "search", <query...>]
+  const query = args.command.slice(2).join(" ");
+  if (!query) {
+    process.stderr.write("search 需要一个查询描述（如：kiwi buyer search 21.5寸工业触摸屏）\n");
+    return EXIT.CONFIG;
+  }
+  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600";
+  const limit = args.limit !== undefined ? Number(args.limit) : undefined;
+  if (args.limit !== undefined && (!Number.isInteger(limit) || (limit ?? 0) <= 0)) {
+    process.stderr.write("--limit 必须是正整数\n");
+    return EXIT.CONFIG;
+  }
+  try {
+    const hits = await buyerSearch({
+      query,
+      catalogUrl: catalog,
+      ...(limit !== undefined ? { limit } : {}),
+      ...(args.category !== undefined ? { category: args.category } : {}),
+      ...(args.region !== undefined ? { region: args.region } : {}),
+      ...(args.listingType === "product" || args.listingType === "capability"
+        ? { listingType: args.listingType }
+        : {}),
+    });
+    printJson({ ok: true, count: hits.length, results: hits });
+    return hits.length > 0 ? EXIT.OK : EXIT.CONFIG;
+  } catch (err) {
+    process.stderr.write(
+      `搜索失败：${err instanceof Error ? err.message : String(err)}（Kiwi Network ${catalog} 不可达？）\n`,
+    );
+    return EXIT.CONFIG;
+  }
+}
+
+/** `kiwi buyer tasks`（D4）：读本地任务列表。 */
+async function cmdBuyerTasks(args: ParsedArgs): Promise<number> {
+  try {
+    const tasks = await buyerTasks({
+      ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+      ...(args.agentId !== undefined ? { agentId: args.agentId } : {}),
+    });
+    printJson({ ok: true, count: tasks.length, tasks });
+    return EXIT.OK;
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.CONFIG;
+  }
 }
 
 /**
