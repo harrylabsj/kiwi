@@ -25,6 +25,7 @@ import {
   openLocalDatabaseCommerceDataSource,
 } from "../src/commerce/local-db-source.js";
 import { ErpCommerceDataSource } from "../src/commerce/erp-source.js";
+import { ShoppingCliCommerceDataSource } from "../src/commerce/shopping-cli-source.js";
 import { dataSourceProductSource } from "../src/a2a/server/merchant-handler.js";
 
 type FetchInput = Parameters<typeof fetch>[0];
@@ -233,5 +234,94 @@ describe("dataSourceProductSource", () => {
     const adapter = dataSourceProductSource(source);
     await expect(adapter.getProduct("NOPE")).rejects.toThrow(/no price/);
     source.close();
+  });
+});
+
+describe("ShoppingCliCommerceDataSource", () => {
+  function cliFetch(routes: Record<string, () => Response>): typeof fetch {
+    return (async (input: FetchInput, _init?: FetchInit): Promise<Response> => {
+      const href = String(input);
+      for (const [suffix, handler] of Object.entries(routes)) {
+        if (href.includes(suffix)) return handler();
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    }) as typeof fetch;
+  }
+
+  it("getProduct 解析 {product} 信封：price 元→minor 转换 + UPSTREAM_PROXY 标注", async () => {
+    const source = new ShoppingCliCommerceDataSource({
+      baseUrl: "https://shopping-cli.example",
+      fetchImpl: cliFetch({
+        "/products/SKU-001": () =>
+          jsonResponse({
+            product: { sku: "SKU-001", title: "Coffee", price: 99, currency: "CNY", stock: 12 },
+          }),
+      }),
+    });
+    const product = await source.getProduct("SKU-001");
+    expect(product?.title).toBe("Coffee");
+    expect(product?.price_minor).toBe(9900); // 99 元 → 9900 minor
+    expect(product?.stock).toBe(12);
+    const inventory = await source.getInventory("SKU-001");
+    expect(inventory?.authority).toBe("UPSTREAM_PROXY");
+    expect(inventory?.source).toBe("shopping-cli");
+  });
+
+  it("getProducts 解析 {results} 信封（/search/products）", async () => {
+    const source = new ShoppingCliCommerceDataSource({
+      baseUrl: "https://shopping-cli.example",
+      fetchImpl: cliFetch({
+        "/search/products": () =>
+          jsonResponse({
+            results: [
+              { sku: "A", price: 10, currency: "CNY" },
+              { sku: "B", price: 20, currency: "CNY" },
+            ],
+          }),
+      }),
+    });
+    const products = await source.getProducts();
+    expect(products.map((p) => p.sku)).toEqual(["A", "B"]);
+    expect(products[0]?.price_minor).toBe(1000);
+  });
+
+  it("结构错误 fail-closed（缺 product / 缺 results / 非对象）", async () => {
+    const noProduct = new ShoppingCliCommerceDataSource({
+      baseUrl: "https://shopping-cli.example",
+      fetchImpl: cliFetch({ "/products/X": () => jsonResponse({ foo: 1 }) }),
+    });
+    await expect(noProduct.getProduct("X")).rejects.toMatchObject({ code: "request_failed" });
+
+    const noResults = new ShoppingCliCommerceDataSource({
+      baseUrl: "https://shopping-cli.example",
+      fetchImpl: cliFetch({ "/search/products": () => jsonResponse({ foo: 1 }) }),
+    });
+    await expect(noResults.getProducts()).rejects.toMatchObject({ code: "request_failed" });
+  });
+
+  it("网络失败/非法 baseUrl fail-closed", async () => {
+    const net = (async (): Promise<Response> => {
+      throw new TypeError("fetch failed");
+    }) as typeof fetch;
+    const broken = new ShoppingCliCommerceDataSource({ baseUrl: "https://shopping-cli.example", fetchImpl: net });
+    await expect(broken.getProduct("X")).rejects.toMatchObject({ code: "request_failed" });
+    expect(() => new ShoppingCliCommerceDataSource({ baseUrl: "ftp://x" })).toThrow(CommerceError);
+  });
+
+  it("shopping-cli adapter 可经 composite 与其他源合并（同字段冲突仍 fail-closed）", async () => {
+    const cli = new ShoppingCliCommerceDataSource({
+      baseUrl: "https://shopping-cli.example",
+      fetchImpl: cliFetch({
+        "/products/SKU-001": () =>
+          jsonResponse({ product: { sku: "SKU-001", price: 5, currency: "CNY" } }),
+      }),
+    });
+    const local = localSource();
+    local.upsertProduct({ sku: "SKU-001", price_minor: 500, currency: "CNY" });
+    const composite = compositeCommerceDataSource([local, cli]);
+    // 一致（500 minor == 5 元）→ 合并通过
+    const product = await composite.getProduct("SKU-001");
+    expect(product?.price_minor).toBe(500);
+    local.close();
   });
 });

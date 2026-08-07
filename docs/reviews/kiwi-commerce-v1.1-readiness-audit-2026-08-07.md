@@ -14,8 +14,8 @@ v1.1 的发布决定（含第三方互操作证据、部署验证、产品化打
 
 | 评估 | 数量 | 条目 |
 | --- | --- | --- |
-| ✅ 直接实证 | 19 | #1-3、#6-21 |
-| ⚠️ 部分或间接 | 2 | #4、#5（见矩阵注记） |
+| ✅ 直接实证 | 21 | #1-21 |
+| ⚠️ 部分或间接 | 0 | — |
 | ❌ 缺失 | 0 | — |
 
 ## 逐条矩阵
@@ -25,8 +25,8 @@ v1.1 的发布决定（含第三方互操作证据、部署验证、产品化打
 | 1 | kiwi-catalog 可独立部署，不依赖 shopping-cli 数据库 | 独立 Python FastAPI 项目（`<WORKSPACE>/kiwi-catalog`：独立 schema、shadow tables、migration v8、Docker/systemd 部署物）；`catalog_agents` 表对 merchants 仅弱引用 | `test_kiwi_catalog_service.py`（独立库端到端）、`test_fastapi_dualstack.py`、`test_shadow_tables.py`（缺影子行不崩） | ✅ |
 | 2 | Kiwi AgentDiscovery 可使用 KiwiCatalogSource | `src/discovery/catalog-source/kiwi-source.ts`（/v1/agents 消费端）+ `CatalogSource` 接口化（`resolve.ts` resolveViaCatalog 可互换） | `tests/kiwi-catalog-source.test.ts`（searchRecords/searchCandidates/getCandidate + resolveViaCatalog 集成 2 例） | ✅ |
 | 3 | Direct well-known discovery 在没有 kiwi-catalog 时仍可工作 | `resolve()` 的 well-known 路径零改动（catalog 是可选 deps）；既有 1235→1341 tests 全绿为回归证据 | `tests/discovery-catalog-source.test.ts`（resolveViaCatalog 可选性）、`tests/discovery-resolve.test.ts`（直连路径） | ✅ |
-| 4 | shopping-cli 不再承担 network Agent Catalog authority | 服务边界证据：Agent Catalog 已整体迁出为独立 kiwi-catalog 项目（`/v1/agents` 三态域 + 独立 schema）；TS 侧 `ShoppingCliCatalogSource` 降级为 legacy 消费端 | `test_merchant_single_agent.py`（catalog 数据层自洽）、kiwi-catalog 独立库测试 | ⚠️（仓库/服务边界证据，无单一"authority 转移"功能测试） |
-| 5 | shopping-cli 可作为 Merchant CommerceDataSource | `src/commerce/data-source.ts` 数据侧边界（≠ CommerceClient 通信侧 ≠ CounterpartyChannel）+ `local-db-source.ts`/`erp-source.ts` 两实现 + composite 冲突 fail-closed | `tests/commerce-data-source.test.ts`（15 例） | ⚠️（抽象+两实现就位；shopping-cli 特定 adapter 未单独建——HTTP 端点可经 ErpCommerceDataSource 泛化接入） |
+| 4 | shopping-cli 不再承担 network Agent Catalog authority | 服务边界证据：Agent Catalog 已整体迁出为独立 kiwi-catalog 项目（`/v1/agents` 三态域 + 独立 schema）；TS 侧 `ShoppingCliCatalogSource` 降级为 legacy 消费端 | `test_kiwi_catalog_v1_api.py::test_legacy_route_consumes_v1_registered_agent`（v1 register → legacy 搜索命中 + 折叠状态一致，消费端可用性）、`test_merchant_single_agent.py` | ✅（2026-08-07 legacy 消费端用例补齐） |
+| 5 | shopping-cli 可作为 Merchant CommerceDataSource | `src/commerce/data-source.ts` 数据侧边界（≠ CommerceClient 通信侧 ≠ CounterpartyChannel）+ 三实现：`local-db-source.ts`/`erp-source.ts`/**`shopping-cli-source.ts`**（GET /products/{sku} + /search/products，price 元→minor 转换，UPSTREAM_PROXY）+ composite 冲突 fail-closed | `tests/commerce-data-source.test.ts`（20 例，含 ShoppingCliCommerceDataSource 信封解析/元→minor/标注/结构错误/composite 合并） | ✅（2026-08-07 shopping-cli 专属 adapter 补齐） |
 | 6 | shopping-cli 至少支持一种本地数据库源 | `LocalDatabaseCommerceDataSource`（node:sqlite，LOCAL_AUTHORITATIVE） | `tests/commerce-data-source.test.ts`（本地库读写/权威标注/listing） | ✅ |
 | 7 | shopping-cli 至少支持一种 ERP / external business data adapter | `ErpCommerceDataSource`（HTTP adapter，UPSTREAM_PROXY，超时/HTTP/结构失败 fail-closed） | `tests/commerce-data-source.test.ts`（ERP 成功/404/网络/超时/结构错误） | ✅ |
 | 8 | Merchant private data 不进入 kiwi-catalog | TS 契约 `contracts/kiwi-catalog/1.0/agent-record.schema.json` additionalProperties:false（私有字段在 schema 层拒绝）；Python register 只读取白名单字段（display_name/hosting_mode/handoff/capabilities/skills），未识别字段不落库 | `tests/kiwi-catalog-source.test.ts`（私有字段 contract_violation）、`test_kiwi_catalog_v1_api.py`（record 无私有字段） | ✅（注：新 API register-input 的 schema 硬拒未落盘，依赖白名单读取实现） |
@@ -55,8 +55,7 @@ v1.1 的发布决定（含第三方互操作证据、部署验证、产品化打
 
 ## 声明
 
-- v1.1 完成定义 21 条：**19 条直接实证、2 条部分或间接、0 条缺失**。
+- v1.1 完成定义 21 条：**21 条直接实证、0 条部分、0 条缺失**。
+- v1.1 完成定义 21 条已全部直接实证（2026-08-07）。
 - 本审计**不宣布 v1.1 发布**。v1.1 仍为 Draft（rev1.4.1 §0）；发布前还需：
   v1.1 就绪度审计随发布决策复核、第三方互操作证据（文档明确禁止宣称，维持）。
-  （#11 的 PO/contact E2E 与 #17 的 TUI 集成测试已于 2026-08-07 补齐；
-  kiwi-catalog 部署冒烟通过，并抓到修复 record 时间戳序列化缺陷 `f1eb9d4`。）
