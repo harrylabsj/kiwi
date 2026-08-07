@@ -40,6 +40,7 @@ import {
 import { finalizeEnvelope } from "../negotiation/domain/envelope.js";
 import { contentDigest } from "../negotiation/jcs.js";
 import { evaluateConditionalOffer } from "../negotiation/condition/evaluator.js";
+import { detectLocale, type KiwiLocale } from "../i18n.js";
 
 export const NEGOTIATE_CAPABILITY = "com.harrylabsj.kiwi.shopping.negotiation";
 export const NEGOTIATE_SKU = "SKU-001";
@@ -78,11 +79,11 @@ export interface NegotiateResult {
 const minorPrice = (minor: number | undefined): string =>
   minor === undefined ? "?" : (minor / 100).toFixed(2);
 
-/** 把一轮磋商结果渲染成人类可读的自然语言总结。 */
-export function summarizeNegotiation(result: NegotiateResult): string {
-  if (!result.ok) {
-    return `磋商失败：${result.error ?? "未知错误"}（可先 /discover 查看 catalog 里的 agent）`;
-  }
+/** 把一轮磋商结果渲染成人类可读的自然语言总结（跟随用户语言，缺省 detectLocale）。 */
+export function summarizeNegotiation(
+  result: NegotiateResult,
+  locale: KiwiLocale = detectLocale(),
+): string {
   const f = result.facts;
   const a = result.agreement;
   const sku = f?.sku ?? NEGOTIATE_SKU;
@@ -90,16 +91,33 @@ export function summarizeNegotiation(result: NegotiateResult): string {
   const delivery = f?.deliveryBefore ?? NEGOTIATE_DELIVERY_BEFORE;
   const offerPrice = minorPrice(f?.offerPriceMinor);
   const dealPrice = minorPrice(f?.dealPriceMinor);
-  const lines = [
-    `已完成一轮 A2A 磋商（negotiation ${result.negotiationId}）：`,
-    `· 发现商家 ${result.catalogAgentId} 并验证其 Agent Card（${result.agentCardUrl}），确认在线可用`,
-    `· 询价：采购 ${quantity} 件 ${sku}，要求 ${delivery} 前交货`,
-    `· 商家首次报价：${offerPrice} 元/件`,
-    `· 还价后商家给出条件价：总采购量 ≥ 100 件时按 ${dealPrice} 元/件成交`,
-    `· 采购量满足条件，双方达成非绑定协议（agreement ${String(a?.agreement_id ?? "")}）`,
-    `协议性质：nonbinding — 不创建订单、不锁库存、不授权支付（§41 #25/#26/#27）`,
-  ];
-  return lines.join("\n");
+  const agreementId = String(a?.agreement_id ?? "");
+
+  if (!result.ok) {
+    return locale === "zh"
+      ? `磋商失败：${result.error ?? "未知错误"}（可先 /discover 查看 catalog 里的 agent）`
+      : `Negotiation failed: ${result.error ?? "unknown error"} (run /discover to list catalog agents)`;
+  }
+  if (locale === "zh") {
+    return [
+      `已完成一轮 A2A 磋商（negotiation ${result.negotiationId}）：`,
+      `· 发现商家 ${result.catalogAgentId} 并验证其 Agent Card（${result.agentCardUrl}），确认在线可用`,
+      `· 询价：采购 ${quantity} 件 ${sku}，要求 ${delivery} 前交货`,
+      `· 商家首次报价：${offerPrice} 元/件`,
+      `· 还价后商家给出条件价：总采购量 ≥ 100 件时按 ${dealPrice} 元/件成交`,
+      `· 采购量满足条件，双方达成非绑定协议（agreement ${agreementId}）`,
+      `协议性质：nonbinding — 不创建订单、不锁库存、不授权支付（§41 #25/#26/#27）`,
+    ].join("\n");
+  }
+  return [
+    `A round of A2A negotiation completed (negotiation ${result.negotiationId}):`,
+    `· Discovered merchant ${result.catalogAgentId} and verified its Agent Card (${result.agentCardUrl}) — online and reachable`,
+    `· RFQ: ${quantity} units of ${sku}, delivery by ${delivery}`,
+    `· Merchant's initial offer: ${offerPrice} ${NEGOTIATE_CURRENCY}/unit`,
+    `· After the counter, the merchant offered a conditional price: ${dealPrice} ${NEGOTIATE_CURRENCY}/unit when total quantity ≥ 100`,
+    `· Quantity meets the condition; non-binding agreement reached (agreement ${agreementId})`,
+    `Agreement is nonbinding — no order, no inventory reservation, no payment authorization (§41 #25/#26/#27)`,
+  ].join("\n");
 }
 
 function monotonicNow(): () => string {
