@@ -114,6 +114,8 @@ body {
   color: rgba(255, 255, 255, 0.6);
   max-width: 40em;
 }
+/* 中文关键短语防拆行（如「成交入口」在窄容器被折行） */
+.nowrap { white-space: nowrap; }
 .hero .cn p { margin-top: 4px; }
 
 /* ── 内容区 ───────────────────────────────────────────────── */
