@@ -127,3 +127,34 @@ export {
   type HandoffEventInput,
   type HandoffEventStoreOptions,
 } from "./ledger.js";
+
+export {
+  HANDOFF_DELIVERY_STATES,
+  OPEN_EVIDENCE_KINDS,
+  deliveryState,
+  isHandoffDeliveryEventKind,
+  recordLaunch,
+  recordOpenEvidence,
+  recordRevoked,
+  validateOpenEvidence,
+  type HandoffDeliveryState,
+  type OpenEvidence,
+  type OpenEvidenceKind,
+} from "./delivery.js";
+
+export {
+  executeHandoff,
+  defaultUrlSafety,
+  type AgreementReadResult,
+  type ExecuteHandoffInput,
+  type ExecuteHandoffResult,
+  type TransactionHandoff,
+} from "./transaction.js";
+
+export { HandoffIdempotencyStore, type HandoffIdempotencyStoreOptions } from "./idempotency.js";
+
+export {
+  validateExternalDestinationUrl,
+  type SafeDestinationUrl,
+  type UrlSafetyOptions,
+} from "./url-safety.js";
