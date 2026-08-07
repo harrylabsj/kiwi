@@ -316,14 +316,18 @@ EN:
 
 ```
 EN:
+# Install (source — not yet on a public registry)
+git clone https://github.com/harrylabsj/kiwi
+cd kiwi && npm install && npm run build && npm link   # provides `kiwi`
+git clone https://github.com/harrylabsj/shopping-cli   # provides `shopping`
+git clone https://github.com/harrylabsj/kiwi-catalog
+cd kiwi-catalog && pip install -e '.[api]'             # provides `kiwi-catalog`
+
 # Buyer
-install kiwi
 kiwi buyer init --agent-id <your-id>
 kiwi buyer search "21.5 inch industrial touch display, IP67"
 
 # Merchant
-install kiwi
-install shopping-cli
 kiwi merchant init --merchant-id <your-merchant> --name "Your Co."
 kiwi merchant publish --profile merchant.yaml --shopping-cli-db <db>
 
@@ -331,13 +335,14 @@ kiwi merchant publish --profile merchant.yaml --shopping-cli-db <db>
 kiwi-catalog serve --db /data/catalog.sqlite
 
 中文：
+# 安装（源码）
+clone 三个仓库 + 各自构建（提供 `kiwi` / `shopping` / `kiwi-catalog`）后：
+
 # Buyer
-安装 kiwi 后：
 kiwi buyer init --agent-id <你的身份>
 kiwi buyer search "21.5 英寸工业触摸屏，IP67"
 
 # Merchant
-安装 kiwi + shopping-cli 后：
 kiwi merchant init --merchant-id <你的商家> --name "你的公司"
 kiwi merchant publish --profile merchant.yaml --shopping-cli-db <db>
 

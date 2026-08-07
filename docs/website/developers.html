@@ -90,21 +90,25 @@
   <div class="section-inner">
     <div class="kicker">Quick start</div>
     <h2>From zero to a live agent.</h2>
-    <pre><code># Buyer
-install kiwi
+    <pre><code># 安装（尚未发布公共 registry —— 源码安装）
+git clone https://github.com/harrylabsj/kiwi
+cd kiwi &amp;&amp; npm install &amp;&amp; npm run build &amp;&amp; npm link   # 提供 `kiwi`
+git clone https://github.com/harrylabsj/shopping-cli   # 提供 `shopping`
+git clone https://github.com/harrylabsj/kiwi-catalog
+cd kiwi-catalog &amp;&amp; pip install -e '.[api]'             # 提供 `kiwi-catalog`
+
+# Buyer
 kiwi buyer init --agent-id &lt;your-id&gt;
 kiwi buyer search "21.5 inch industrial touch display, IP67"
 
 # Merchant
-install kiwi
-install shopping-cli
 kiwi merchant init --merchant-id &lt;your-merchant&gt; --name "Your Co."
 kiwi merchant publish --profile merchant.yaml --shopping-cli-db &lt;db&gt;
 
 # Network operator
-kiwi-catalog serve --db /data/catalog.sqlite</code></pre>
-    <div class="notice">
-      <p><strong>中文：</strong>Buyer：安装 kiwi 后 init 你的身份、search 一句需求；Merchant：安装 kiwi + shopping-cli 后 init 商家、publish 商品；Network Operator：kiwi-catalog serve 起服务。</p>
+kiwi-catalog serve --db /data/catalog.sqlite
+</code></pre>    <div class="notice">
+      <p><strong>中文：</strong>源码安装三个仓库后：Buyer 用 init 你的身份、search 一句需求；Merchant 用 init 商家、publish 商品；Network Operator 用 kiwi-catalog serve 起服务。</p>
     </div>
   </div>
 </section>
