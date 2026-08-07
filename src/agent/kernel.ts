@@ -310,6 +310,12 @@ export class AgentKernel {
       },
       ...(options.thinkingLevel !== undefined ? { thinkingLevel: options.thinkingLevel } : {}),
     });
+    // 强制使用 profile 指定的模型：pi-agent-core 会从 session 的 model_change
+    // 记录恢复历史模型——同一 agent_id 换过模型（如 fake→deepseek）时，旧会话
+    // 会把 fake 模型恢复回来覆盖新传入的 real 模型。显式 setModel 覆盖之。
+    if (options.model !== undefined) {
+      await harness.setModel(options.model);
+    }
 
     const kernel = new AgentKernel({
       profile: options.profile,
