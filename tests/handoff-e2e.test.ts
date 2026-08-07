@@ -250,6 +250,63 @@ describe("KTH 端到端（#20、#21）", () => {
     expect(metrics.reported_external_conversion).toBeNull();
   });
 
+  it.each(["purchase_order_draft", "merchant_contact"] as const)(
+    "非 URL 类目的地 %s：Agreement → Handoff → delivered（#11 三类目的地补齐）",
+    async (destinationType) => {
+      const stack = await startTestA2aStack({ productSource, capture });
+      stacks.push(stack);
+      const h = setupBuyer(stack.catalogUrl);
+      const taskId = await createReadyTask(h.store);
+      await h.getTool("negotiate_buyer_task").execute("1", { task_id: taskId });
+
+      // 非 URL 类目的地（PO draft / merchant contact）：ref 是 opaque 引用，
+      // executeHandoff 不对其做 URL 探测（isUrlDestinationType 门控）。
+      const result = await h.getTool("handoff_agreement").execute("2", {
+        task_id: taskId,
+        destination_type: destinationType,
+        destination_ref: destinationType === "purchase_order_draft" ? "po-draft-2026-08-07-01" : "sales@acme.example",
+        display_summary_merchant: "Acme Merchant",
+        display_summary_text: "2 × sku-001",
+      });
+      expect(toolText(result)).toContain("交接已交付");
+
+      const taskEvents = h.store.taskEvents(taskId);
+      let statusChanged: (typeof taskEvents)[number] | undefined;
+      for (let i = taskEvents.length - 1; i >= 0; i--) {
+        const event = taskEvents[i];
+        if (event !== undefined && event.type === "status_changed" && typeof event.payload.negotiation_id === "string") {
+          statusChanged = event;
+          break;
+        }
+      }
+      const negotiationId = statusChanged?.payload.negotiation_id as string;
+      expect(negotiationId).toBeDefined();
+      const events = h.ledger.events(negotiationId);
+      const kinds = events.map((e) => e.event_kind);
+      expect(kinds).toContain("handoff_candidate_created");
+      expect(kinds).toContain("handoff_candidate_ready");
+      expect(kinds).toContain("handoff_candidate_consumed");
+      expect(kinds).toContain("handoff_delivered");
+      // #12-14：无订单/支付/库存事件
+      expect(kinds.some((k) => k.includes("order") || k.includes("payment") || k.includes("inventory"))).toBe(false);
+      // 目的地类型正确落 handoff
+      const delivered = events.find((e) => e.event_kind === "handoff_delivered");
+      expect(delivered?.handoff_id).toBeDefined();
+      // 候选重建后 destination_type 与请求一致
+      const candidateId = events[0]?.handoff_candidate_id;
+      const created = events.find(
+        (e) => e.handoff_candidate_id === candidateId && e.event_kind === "handoff_candidate_created",
+      );
+      expect(
+        (
+          created?.outcome.kind === "ok"
+            ? (created.outcome.result?.candidate as Record<string, unknown> | undefined)
+            : undefined
+        )?.destination_type,
+      ).toBe(destinationType);
+    },
+  );
+
   it("local_callback 证据 → OPENED_CONFIRMED（opened 率更新，绝不伪装成交）", async () => {
     const stack = await startTestA2aStack({ productSource, capture });
     stacks.push(stack);
