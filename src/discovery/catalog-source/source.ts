@@ -52,7 +52,7 @@ export interface CatalogSourceDeps {
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 /** baseUrl 合法性校验：http(s)、无 userinfo、无 query/fragment。 */
-function validateBaseUrl(value: string): string {
+export function validateBaseUrl(value: string): string {
   let url: URL;
   try {
     url = new URL(value);
