@@ -58,23 +58,38 @@ npm run verify        # lint + typecheck + build + test + package smoke
 CLI 概览：
 
 ```bash
-kiwi                                     # 裸启动：直接进入 `kiwi>` 自由对话
+kiwi                                     # 一个入口：`kiwi>` 自由对话 + 自动启动 A2A 节点
 kiwi chat --profile <file>               # 指定 profile 的主对话 + Principal Memory
 kiwi doctor --profile <file>             # 只读诊断
 kiwi agent run --profile <file>          # 单 agent 前台磋商
-kiwi agent serve --profile <merchant> --catalog <url>   # merchant A2A server + 注册进 catalog
+kiwi agent serve --profile <merchant> --catalog <url> [--no-chat]
+                                         # 无头 merchant A2A server（自动注册；缺省也开对话）
 kiwi tui --profile <file>                # 操作者驾驶舱（supervised/manual/autopilot）
 kiwi init/up/status/logs/down --dir <d>  # managed-local 产品栈生命周期
 ```
 
-merchant 可通过 `kiwi agent serve` 把自己注册进 kiwi-catalog（buyer 据此发现）：
+`kiwi`（裸）进入后：
+
+- **自由聊天**：deepseek 等真实模型（`KIWI_MODEL*` 可配置）
+- **自动 A2A 节点**：按角色监听（merchant:9000 / buyer:9001，占用自动换；`KIWI_A2A_PORT` 覆盖），`--no-a2a` 关闭
+- **merchant 角色自动注册**进 kiwi-catalog（buyer 据此发现）
+- 命令：`/profile <buyer|merchant|file>` 切换角色（A2A 节点同步重建）、`/a2a` 看节点状态、`/discover` 列出 catalog agents、`/negotiate <id>` 与某个 agent 磋商、`/register` 手动注册、`/quit` 退出
+
+双实例相互发现：
 
 ```bash
-kiwi agent serve --profile merchant.yaml --catalog http://127.0.0.1:8600 --port 9000
-# → 起 A2A server，POST /v1/agent-catalog/agents/register，catalog 可见
+# 终端 A（merchant）
+kiwi
+kiwi> /profile merchant.deepseek     # → [a2a] merchant@9000 registered cagt_...
+
+# 终端 B（buyer）
+kiwi
+kiwi> /profile buyer.deepseek        # → [a2a] buyer@9001
+kiwi> /discover                      # 看到 merchant
+kiwi> /negotiate cagt_...            # 磋商 → agreement（无副作用）
 ```
 
-> 注册域名默认 `merchant-<agent_id>.local`，可用环境变量 `KIWI_CATALOG_DOMAIN` 覆盖。
+> 注册域名默认 `merchant-<agent_id>.local`，可用 `KIWI_CATALOG_DOMAIN` 覆盖；catalog 地址默认 `http://127.0.0.1:8600`（`KIWI_CATALOG_URL` 覆盖）。
 
 裸 `kiwi` 的默认底层大模型**可配置**（不 hardcode，从环境变量读）：
 

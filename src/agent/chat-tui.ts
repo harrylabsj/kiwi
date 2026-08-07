@@ -27,7 +27,24 @@
 import readline from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { EXIT } from "../exit-codes.js";
+import { ShoppingCliCatalogSource } from "../discovery/catalog-source/index.js";
+import { negotiateWithAgent } from "../a2a/negotiate.js";
 import type { AgentKernel } from "./kernel.js";
+
+/** A2A 节点状态（供 `/a2a` 显示）。 */
+export interface ChatA2aNodeStatus {
+  role: string;
+  url: string;
+  agentCardUrl: string;
+  catalogAgentId?: string;
+}
+
+/** A2A 节点生命周期管理（由 cli 层持有；`/profile` 换角色时 rebuild）。 */
+export interface ChatA2aNode {
+  status(): ChatA2aNodeStatus | null;
+  rebuild(profile: { role: string; agent_id: string }): Promise<void>;
+  stop(): Promise<void>;
+}
 
 export interface ChatTuiOptions {
   kernel: AgentKernel;
@@ -38,6 +55,10 @@ export interface ChatTuiOptions {
    * AgentKernel.open 与 close 语义）。失败时抛错，TUI 保留当前 kernel。
    */
   reload?: (profileFile: string) => Promise<AgentKernel>;
+  /** A2A 节点（自动启动，随 `/profile` 角色切换重建）。 */
+  a2aNode?: ChatA2aNode;
+  /** agent catalog base URL（`/discover`、`/negotiate` 用）。 */
+  catalog?: string;
 }
 
 function printBanner(kernel: AgentKernel, output: Writable): void {
@@ -49,7 +70,7 @@ function printBanner(kernel: AgentKernel, output: Writable): void {
 
 /** Run the main chat loop. Resolves EXIT.OK on /quit or EOF. */
 export async function runChatTui(options: ChatTuiOptions): Promise<number> {
-  const { input, output, reload } = options;
+  const { input, output, reload, a2aNode, catalog } = options;
   const write = (text: string): void => {
     output.write(`${text}\n`);
   };
@@ -112,10 +133,66 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
               if (next !== current.kernel) {
                 await current.kernel.close().catch(() => undefined);
                 current = { kernel: next };
+                // 换角色：同步重建 A2A 节点（merchant 自动重新注册 catalog）。
+                if (a2aNode !== undefined) {
+                  await a2aNode.rebuild(current.kernel.profile).catch((err: unknown) => {
+                    write(`A2A 节点重建失败（对话继续）：${err instanceof Error ? err.message : String(err)}`);
+                  });
+                }
                 printBanner(current.kernel, output);
               }
             } catch (err) {
               write(`加载 profile 失败，保留当前 agent：${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+        } else if (line === "/a2a") {
+          const status = a2aNode?.status();
+          if (status === undefined || status === null) {
+            write("A2A 节点未启动。");
+          } else {
+            write(
+              `[a2a] ${status.role}@${status.url}${status.catalogAgentId !== undefined ? ` registered ${status.catalogAgentId}` : ""}（card: ${status.agentCardUrl}）`,
+            );
+          }
+        } else if (line.startsWith("/discover")) {
+          if (catalog === undefined) {
+            write("未配置 agent catalog（KIWI_CATALOG_URL 或 --catalog）。");
+          } else {
+            try {
+              const source = new ShoppingCliCatalogSource({ baseUrl: catalog });
+              const candidates = await source.searchCandidates();
+              if (candidates.length === 0) {
+                write("[discover] catalog 里没有可发现的 agent。");
+              } else {
+                for (const c of candidates) {
+                  const card = c.discovery?.agent_card_url ?? c.merchant?.domain ?? "?";
+                  write(`[discover] ${c.catalog_agent_id}  status=${c.verification?.status ?? "?"}  ${card}`);
+                }
+              }
+            } catch (err) {
+              write(`[discover] 失败：${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+        } else if (line.startsWith("/negotiate")) {
+          if (catalog === undefined) {
+            write("未配置 agent catalog（KIWI_CATALOG_URL 或 --catalog）。");
+          } else {
+            const targetId = line.slice("/negotiate".length).trim();
+            write(`[negotiate] 与 ${targetId === "" ? "首个可发现 agent" : targetId} 磋商中…`);
+            const result = await negotiateWithAgent({
+              catalog,
+              ...(targetId !== "" ? { catalogAgentId: targetId } : {}),
+            });
+            if (result.ok) {
+              write(`[negotiate] 成功：${result.steps.join(" → ")}`);
+              if (result.agreement !== undefined) {
+                const a = result.agreement;
+                write(
+                  `[negotiate] agreement ${String(a.agreement_id ?? "")} · binding=${String(a.binding_effect ?? "")} · creates_order=${String(a.creates_order)} · reserves_inventory=${String(a.reserves_inventory)} · authorizes_payment=${String(a.authorizes_payment)}`,
+                );
+              }
+            } else {
+              write(`[negotiate] 失败：${result.error ?? "未知错误"}`);
             }
           }
         } else {
@@ -131,5 +208,6 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
   } finally {
     clearInterval(timer);
     clearInterval(negotiateTimer);
+    await a2aNode?.stop().catch(() => undefined);
   }
 }
