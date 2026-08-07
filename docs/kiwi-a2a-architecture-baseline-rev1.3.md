@@ -2171,7 +2171,7 @@ Kiwi 只有同时满足以下条件才宣布 A2A v1.0：
 27. 没有库存预留副作用。
 
 **A2A v1.0 已宣布（2026-08-07）**：上述 27 条完成定义经就绪度审计（
-`docs/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md`）逐条实证满足（27/27）。
+`docs/reviews/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md`）逐条实证满足（27/27）。
 namespace 与 schema 托管于 `https://kiwi.harrylabsj.com`（公开仓库 `harrylabsj/kiwi-spec`）。
 
 ---
