@@ -22,6 +22,17 @@
 
 import { createHash } from "node:crypto";
 import type { AgentHarnessTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import {
+  DESTINATION_TYPES,
+  HandoffIdempotencyStore,
+  HandoffEventStore,
+  createHandoffCandidate,
+  defaultUrlSafety,
+  executeHandoff,
+  validateDestination,
+  type HandoffCandidate,
+} from "../../handoff/index.js";
+import type { ExecuteHandoffResult } from "../../handoff/index.js";
 import type { AgentProfile } from "../../config/profile.js";
 import type { CommerceClient } from "../../commerce/types.js";
 import type { CommerceConnector } from "../connector/types.js";
@@ -41,7 +52,7 @@ import { routeWriteCandidate, type WriteGateDeps } from "../write-gate.js";
 import { runSearchCycle } from "./search-loop.js";
 import type { BuyerTaskStore } from "./task-store.js";
 import type { ConsultationLink, BuyerTaskStatus } from "./types.js";
-import type { TaskConstraints, TaskIntent } from "./types.js";
+import type { TaskConstraints, TaskEvent, TaskIntent } from "./types.js";
 import { BuyerTaskError } from "./types.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
 
@@ -209,6 +220,11 @@ export interface BuyerToolDeps {
     dealPriceMinor?: number;
     agreementId?: string;
   }) => Promise<string>;
+  /**
+   * KTH/0.1 Handoff 存储（v1.1；kernel 注入）。提供时挂载 `handoff_agreement`
+   * 工具（agreement → 审批门 → 安全交接）；缺失时工具不挂载（fail closed）。
+   */
+  handoff?: { ledger: HandoffEventStore; idempotency: HandoffIdempotencyStore };
 }
 
 /**
@@ -327,6 +343,11 @@ async function executeNegotiateBuyerTask(
         negotiation_id: result.negotiationId,
         agreement_id: result.agreement?.agreement_id ?? null,
         deal_price_minor: facts?.dealPriceMinor ?? null,
+        // v1.1 KTH：agreement 快照落任务记录——handoff_agreement 的
+        // agreementReader 以此做 pre-execution revalidation（§10）。
+        agreed_terms: result.agreement?.agreed_terms ?? null,
+        terms_digest: result.agreement?.terms_digest ?? null,
+        merchant_identity_ref: `merchant:${result.catalogAgentId}`,
       },
       origin: "model",
       idempotency_key: `${eventKey}:selected`,
@@ -1139,6 +1160,110 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         })
       : [];
 
+const handoffAgreement: Tool = {
+  name: "handoff_agreement",
+  label: "非绑定协议交接",
+  description:
+    "把已谈妥的非绑定协议（selected_nonbinding 任务）交接给真实成交入口（KTH/0.1）。" +
+    "经审批门（supervised 需 /approve）后执行：重验 agreement/terms/destination/expiry，" +
+    "安全交付到 external checkout URL / PO / quote / contact 等目的地。不创建订单、不授权支付、不预留库存。",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string", description: "已达成非绑定协议（selected_nonbinding）的 buyer 任务" },
+      destination_type: {
+        type: "string",
+        enum: [...DESTINATION_TYPES],
+        description: "目的地类型（KTH destination_type 词表，单一来源）",
+      },
+      destination_ref: {
+        type: "string",
+        description: "目的地引用：URL 类为 https URL，会话/文档类为 opaque ref",
+      },
+      display_summary_merchant: { type: "string", description: "展示用商家名（缺省取协议商家）" },
+      display_summary_text: { type: "string", description: "展示用摘要（如“200 units, CNY 835.00/unit”）" },
+      expires_in_hours: { type: "number", description: "候选有效期（小时，缺省 24）" },
+    },
+    required: ["task_id", "destination_type", "destination_ref"],
+    additionalProperties: false,
+  },
+  execute: async (_id, params) => {
+    const handoff = deps.handoff;
+    if (handoff === undefined) {
+      return textResult("未配置 Handoff 能力（kernel 未注入 handoff 存储）。");
+    }
+    if (deps.approvals === undefined || deps.mode === undefined) {
+      return textResult("当前环境未配置审批存储，无法发起 Handoff 交接。");
+    }
+    try {
+      const p = params as {
+        task_id: string;
+        destination_type: string;
+        destination_ref: string;
+        display_summary_merchant?: string;
+        display_summary_text?: string;
+        expires_in_hours?: number;
+      };
+      const task = deps.store.getTask(p.task_id);
+      if (task === undefined) throw new BuyerTaskError("not_found", `no task ${p.task_id}`);
+      if (task.status !== "selected_nonbinding") {
+        return textResult(
+          `任务 ${p.task_id} 当前状态 ${task.status}；handoff 需要先达成非绑定协议（selected_nonbinding）。`,
+        );
+      }
+      const agreement = agreementFromTask(deps.store.taskEvents(p.task_id));
+      if (agreement === undefined) {
+        return textResult("任务记录缺少 agreement 快照（磋商未完成或 terms 未持久化）。");
+      }
+      const destination = validateDestination({ type: p.destination_type, ref: p.destination_ref });
+      const expiresInHours = Number(p.expires_in_hours ?? 24);
+      const candidate = createHandoffCandidate({
+        agreement_id: agreement.agreement_id,
+        negotiation_id: agreement.negotiation_id,
+        agreed_terms: agreement.agreed_terms,
+        buyer_identity_ref: `principal:${profile.agent_id}`,
+        merchant_identity_ref: agreement.merchant_identity_ref,
+        destination: { type: destination.type, ref: destination.ref },
+        display_summary: {
+          merchant: p.display_summary_merchant ?? agreement.merchant_identity_ref,
+          summary: p.display_summary_text ?? `negotiation ${agreement.negotiation_id}`,
+        },
+        policy_version: "handoff-policy/1",
+        expires_at: new Date(Date.now() + expiresInHours * 3_600_000).toISOString(),
+        requires_user_action: true,
+      });
+      handoff.ledger.appendCandidateEvent({
+        kind: "handoff_candidate_created",
+        candidate,
+        identity: {
+          sender_identity: candidate.buyer_identity_ref,
+          counterparty_identity: candidate.merchant_identity_ref,
+          actor: "buyer",
+        },
+        capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+        occurred_at: deps.now(),
+      });
+      const outcome = await routeWriteCandidate(
+        { mode: deps.mode, approvals: deps.approvals, profile, now: deps.now, registerPending: deps.registerPending },
+        {
+          tool: "handoff_agreement",
+          arguments: { task_id: p.task_id, candidate },
+          preconditions: { agreement_bound: true },
+          risk: "handoff_delivery",
+          execute: (approvedArgs) => executeHandoffForCandidate(deps, approvedArgs),
+          readPreconditions: () => ({
+            agreement_bound: true,
+            note: "handoff 执行前将重验 agreement/terms_digest/destination/expiry（KTH §10）",
+          }),
+        },
+      );
+      return writeGateText(outcome);
+    } catch (err) {
+      return textResult(errorText(err));
+    }
+  },
+};
+
   return [
     searchProducts,
     getProduct,
@@ -1152,6 +1277,116 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
     selectNonbinding,
     startConsultation,
     negotiateBuyerTask,
+    ...(deps.handoff !== undefined ? [handoffAgreement] : []),
     ...negotiationTools,
   ];
+}
+
+// ── v1.1 KTH：handoff_agreement ───────────────────────────────────────────
+
+/**
+ * 从任务事件流重建 agreement 快照（handoff 的 agreementReader 权威源；
+ * 取最新 status_changed 事件的 payload —— negotiate 成功时落 agreed_terms）。
+ */
+function agreementFromTask(events: readonly TaskEvent[]): {
+  agreement_id: string;
+  negotiation_id: string;
+  agreed_terms: unknown;
+  merchant_identity_ref: string;
+} | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event === undefined || event.type !== "status_changed") continue;
+    const payload = event.payload;
+    const agreementId = payload.agreement_id;
+    const negotiationId = payload.negotiation_id;
+    const agreedTerms = payload.agreed_terms;
+    if (
+      typeof agreementId !== "string" ||
+      typeof negotiationId !== "string" ||
+      agreedTerms === null ||
+      agreedTerms === undefined
+    ) {
+      continue;
+    }
+    return {
+      agreement_id: agreementId,
+      negotiation_id: negotiationId,
+      agreed_terms: agreedTerms,
+      merchant_identity_ref:
+        typeof payload.merchant_identity_ref === "string"
+          ? payload.merchant_identity_ref
+          : "merchant:unknown",
+    };
+  }
+  return undefined;
+}
+
+function handoffResultText(result: ExecuteHandoffResult): AgentToolResult<unknown> {
+  switch (result.kind) {
+    case "delivered": {
+      const h = result.handoff;
+      return textResult(
+        `交接已交付（handoff ${h.handoff_id}）：` +
+          `${h.display_summary.merchant} — ${h.display_summary.summary}\n` +
+          `目的地：${h.destination_type} ${h.destination_ref}${result.final_url !== undefined ? `\n最终 URL：${result.final_url}` : ""}\n` +
+          `非绑定协议已安全交接；Kiwi 不创建订单/不授权支付/不预留库存。`,
+        { status: "delivered", handoff_id: h.handoff_id, destination_type: h.destination_type },
+      );
+    }
+    case "already_delivered":
+      return textResult(`该协议已交付过（handoff ${result.handoff_id}），未重复执行。`, {
+        status: "already_delivered",
+      });
+    case "stale":
+      return textResult(`交接未执行：候选已失效（${result.reason}）。需重新生成候选。`, { status: "stale" });
+    case "rejected":
+      return textResult(`交接未执行：${result.reason}。`, { status: "rejected" });
+    case "expired":
+      return textResult(`交接未执行：候选已过期。`, { status: "expired" });
+  }
+}
+
+/** 批准后的实际执行：agreementReader 从任务事件重读（§10 revalidation）。 */
+async function executeHandoffForCandidate(
+  deps: BuyerToolDeps,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const a = args as { task_id: string; candidate: HandoffCandidate };
+  const handoff = deps.handoff;
+  if (handoff === undefined) {
+    return { ok: false, status: "unavailable", error: "Handoff 存储未配置，无法执行交接。" };
+  }
+  const agreement = agreementFromTask(deps.store.taskEvents(a.task_id));
+  if (agreement === undefined) {
+    return { ok: false, status: "stale", error: "任务记录缺少 agreement 快照，交接中止（fail-closed）" };
+  }
+  const result = await executeHandoff({
+    candidate: a.candidate,
+    ledger: handoff.ledger,
+    idempotency: handoff.idempotency,
+    identity: {
+      sender_identity: a.candidate.buyer_identity_ref,
+      counterparty_identity: a.candidate.merchant_identity_ref,
+      actor: "buyer",
+    },
+    capability: {
+      capability: "com.harrylabsj.kiwi.shopping.negotiation",
+      protocol_version: "1.0",
+    },
+    approval: async () => ({ approved: true, evidence: { via: "write-gate" } }),
+    agreementReader: async () => ({
+      agreement_id: agreement.agreement_id,
+      negotiation_id: agreement.negotiation_id,
+      agreed_terms: agreement.agreed_terms,
+    }),
+    urlSafety: defaultUrlSafety(),
+    now: deps.now,
+  });
+  const rendered = handoffResultText(result);
+  return {
+    ok: result.kind === "delivered" || result.kind === "already_delivered",
+    status: result.kind,
+    text: rendered.content.map((c) => ("text" in c ? c.text : "")).join("\n"),
+  };
 }
