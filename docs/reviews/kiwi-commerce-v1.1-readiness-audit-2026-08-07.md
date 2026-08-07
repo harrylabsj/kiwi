@@ -3,10 +3,12 @@
 Created: 2026-08-07
 Updated: 2026-08-07（两轮 code-review 修复后同步：1349→1361 tests；实现引用与
 测试基线更新到 `3fb38b5` fix(review) 提交后的代码状态）
+Updated: 2026-08-07（发布复核：架构调整 `3bfa46b` 后 kiwi 1352 tests；部署验证
+证据入档——见 `kiwi-commerce-v1.1-release-decision-2026-08-07.md`）
 方法：把 `docs/kiwi-commerce-v1.1-architecture-draft-rev1.4.1.md` §42 完成定义 21 条
 逐条映射到实现代码 + 测试证据，标 ✅（直接实证）/ ⚠️（部分或间接）/ ❌（缺失）。
-依据 = kiwi 仓 `main`（90 测试文件，1361 tests 全绿，`npm run verify` 含 lint/
-typecheck/build/包冒烟）+ kiwi-catalog 仓 `main`（63 tests，5 skip 为 FastAPI 条件）。
+依据 = kiwi 仓 `main`（90 测试文件，1352 tests 全绿，`npm run verify` 含 lint/
+typecheck/build/包冒烟）+ kiwi-catalog 仓 `main`（66 passed，5 skip 为 FastAPI 条件）。
 
 **范围声明**：本审计只评估 v1.1 完成定义的就绪度，**不宣布 v1.1 发布**。
 按 rev1.4.1 文档自身约定（"在 v1.1 正式发布前，本文状态始终是 Draft"），
@@ -24,7 +26,7 @@ v1.1 的发布决定（含第三方互操作证据、部署验证、产品化打
 
 | # | 完成定义 | 实现 | 测试证据 | 评估 |
 | --- | --- | --- | --- | --- |
-| 1 | kiwi-catalog 可独立部署，不依赖 shopping-cli 数据库 | 独立 Python FastAPI 项目（`<WORKSPACE>/kiwi-catalog`：独立 schema、shadow tables、migration v8、Docker/systemd 部署物）；`catalog_agents` 表对 merchants 仅弱引用 | `test_kiwi_catalog_service.py`（独立库端到端）、`test_fastapi_dualstack.py`、`test_shadow_tables.py`（缺影子行不崩） | ✅ |
+| 1 | kiwi-catalog 可独立部署，不依赖 shopping-cli 数据库 | 独立 Python FastAPI 项目（`<WORKSPACE>/kiwi-catalog`：独立 schema、shadow tables、migration v9、Docker/systemd 部署物）；`catalog_agents` 表对 merchants 仅弱引用。**部署验证（2026-08-07）**：`docker build` + 容器内全链路冒烟（health/register/search/get/suspend/reinstate/verify）通过、重启后 volume 数据保留；venv 安装 + `kiwi-catalog-api` console script 启动冒烟（systemd ExecStart 等价路径）通过 | `test_kiwi_catalog_service.py`（独立库端到端）、`test_fastapi_dualstack.py`、`test_shadow_tables.py`（缺影子行不崩 + 迁移路径表集合一致） | ✅ |
 | 2 | Kiwi AgentDiscovery 可使用 KiwiCatalogSource | `src/discovery/catalog-source/kiwi-source.ts`（/v1/agents 消费端）+ `CatalogSource` 接口化（`resolve.ts` resolveViaCatalog 可互换） | `tests/kiwi-catalog-source.test.ts`（searchRecords/searchCandidates/getCandidate + resolveViaCatalog 集成 2 例） | ✅ |
 | 3 | Direct well-known discovery 在没有 kiwi-catalog 时仍可工作 | `resolve()` 的 well-known 路径零改动（catalog 是可选 deps）；既有 1341→1361 tests 全绿为回归证据。**fetchCard 复用 UCP 级 SSRF 防护**（assertSafeTargetUrl + 请求前 DNS 复查 + redirect:manual 禁重定向），catalog 驱动的 agent_card_url 与 domain 路径同受保护 | `tests/discovery-catalog-source.test.ts`（resolveViaCatalog 可选性 + SSRF 拒绝 2 例）、`tests/discovery-resolve.test.ts`（直连路径） | ✅ |
 | 4 | shopping-cli 不再承担 network Agent Catalog authority | 服务边界证据：Agent Catalog 已整体迁出为独立 kiwi-catalog 项目（`/v1/agents` 三态域 + 独立 schema）；TS 侧 `ShoppingCliCatalogSource` 降级为 legacy 消费端 | `test_kiwi_catalog_v1_api.py::test_legacy_route_consumes_v1_registered_agent`（v1 register → legacy 搜索命中 + 折叠状态一致，消费端可用性）、`test_merchant_single_agent.py` | ✅（2026-08-07 legacy 消费端用例补齐） |
