@@ -142,6 +142,35 @@ describe("KiwiCatalogSource", () => {
     expect(records[0]?.handoff_destination_types).toEqual(["external_checkout_url"]);
   });
 
+  it("searchRecords caps the total at limit across pages (limit 是总量不是页大小)", async () => {
+    // 回归：limit 曾只当页大小，翻页直到无游标 → --limit 2 返回全部 3 条。
+    const page1 = {
+      results: [
+        recordFixture({ catalog_agent_id: "cagt_a" }),
+        recordFixture({ catalog_agent_id: "cagt_b" }),
+      ],
+      next_cursor: "cursor-1",
+    };
+    const page2 = {
+      results: [recordFixture({ catalog_agent_id: "cagt_c" })],
+      next_cursor: "",
+    };
+    let searchCalls = 0;
+    const fetchImpl = (async (input: FetchInput): Promise<Response> => {
+      const href = String(input);
+      if (href.includes("/v1/agents/search")) {
+        searchCalls += 1;
+        return jsonResponse(searchCalls === 1 ? page1 : page2);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    }) as typeof fetch;
+    const source = new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl });
+    const records = await source.searchRecords({ limit: 2 });
+    expect(records.length).toBe(2);
+    expect(records.map((r) => r.catalog_agent_id)).toEqual(["cagt_a", "cagt_b"]);
+    expect(searchCalls).toBe(1); // 已达 limit，不再翻第二页
+  });
+
   it("searchCandidates 折叠三态域 → CandidateAgent 共享形状", async () => {
     const { fetchImpl } = kiwiFetch({
       search: () => jsonResponse({ results: [recordFixture()] }),
@@ -478,6 +507,34 @@ describe("KiwiCatalogSource listing methods (v0.4 / CD #22-#24)", () => {
     expect(results[0]?.requires_direct_confirmation).toBe(true);
     expect(results[0]?.listing.owner_agent_id).toBe("cagt_01JABC");
     expect(results[0]?.listing.source_product_ref).toBe("SKU-001");
+  });
+
+  it("searchListings caps the total at limit across pages (limit 是总量不是页大小)", async () => {
+    // 回归：limit 曾只当页大小，翻页直到无游标 → --limit 3 返回全部 4 条。
+    const page1 = {
+      results: [
+        listingFixture({ listing: { listing_id: "lst_a" } }),
+        listingFixture({ listing: { listing_id: "lst_b" } }),
+      ],
+      next_cursor: "cursor-1",
+    };
+    const page2 = {
+      results: [
+        listingFixture({ listing: { listing_id: "lst_c" } }),
+        listingFixture({ listing: { listing_id: "lst_d" } }),
+      ],
+      next_cursor: "",
+    };
+    const fetchImpl = (async (input: FetchInput): Promise<Response> => {
+      if (String(input).includes("/v1/listings/search")) {
+        return jsonResponse(String(input).includes("cursor-1") ? page2 : page1);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    }) as typeof fetch;
+    const source = new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl });
+    const results = await source.searchListings({ limit: 3 });
+    expect(results.length).toBe(3);
+    expect(results.map((r) => r.listing.listing_id)).toEqual(["lst_a", "lst_b", "lst_c"]);
   });
 
   it("searchListings rejects unknown query keys (fail-closed)", async () => {

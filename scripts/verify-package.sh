@@ -30,21 +30,21 @@ echo "${VERSION_OUT}"
 
 echo "== runtime modules import with production deps only"
 node --input-type=module -e "
-  const schemas = await import('kiwi/dist/contracts/schemas.js');
+  const schemas = await import('@harrylabsj/kiwi/dist/contracts/schemas.js');
   const schema = schemas.loadSchema('decision');
   if (schemas.validateAgainst('decision', {}).length === 0) {
     throw new Error('ajv validator did not reject an empty decision');
   }
   if (!schema) throw new Error('decision schema missing');
-  await import('kiwi/dist/runtime/tools.js');
-  await import('kiwi/dist/runtime/merchant-turn.js');
-  await import('kiwi/dist/runtime/negotiation-turn.js');
-  await import('kiwi/dist/runtime/foreground.js');
-  await import('kiwi/dist/runtime/buyer-policy.js');
-  await import('kiwi/dist/commerce/http-client.js');
-  await import('kiwi/dist/supervisor/stack-config.js');
-  await import('kiwi/dist/supervisor/manage.js');
-  const { wrapperPath } = await import('kiwi/dist/supervisor/manifest.js');
+  await import('@harrylabsj/kiwi/dist/runtime/tools.js');
+  await import('@harrylabsj/kiwi/dist/runtime/merchant-turn.js');
+  await import('@harrylabsj/kiwi/dist/runtime/negotiation-turn.js');
+  await import('@harrylabsj/kiwi/dist/runtime/foreground.js');
+  await import('@harrylabsj/kiwi/dist/runtime/buyer-policy.js');
+  await import('@harrylabsj/kiwi/dist/commerce/http-client.js');
+  await import('@harrylabsj/kiwi/dist/supervisor/stack-config.js');
+  await import('@harrylabsj/kiwi/dist/supervisor/manage.js');
+  const { wrapperPath } = await import('@harrylabsj/kiwi/dist/supervisor/manifest.js');
   const { existsSync } = await import('node:fs');
   if (!existsSync(wrapperPath())) throw new Error('child-runner wrapper.js missing from package');
   console.log('production package smoke OK');

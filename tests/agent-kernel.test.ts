@@ -360,6 +360,43 @@ describe("buyer capability pack (v0.3.0-B)", () => {
     expect(candidates[0]?.score_explanation?.dimensions.length).toBeGreaterThan(0);
     await kernel.close();
   });
+
+  it("kernel injects KiwiCatalogSource when catalog is configured (CD #27 wiring)", async () => {
+    // 回归：search_listings 工具曾只在测试里注入、kernel 运行时从未挂载
+    // （dead code）。这里用请求记录 server 证明：kernel 配置 catalog 后，
+    // 模型调用 search_listings 真实打到了 kiwi-catalog 面。
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const http = await import("node:http");
+    const hits: string[] = [];
+    const server = http.createServer((_req, res) => {
+      hits.push(_req.url ?? "");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, results: [], next_cursor: "" }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as { port: number };
+    try {
+      const kernel = await AgentKernel.open({
+        profile: testBuyerProfile(),
+        paths: pathsFor("buyer-catalog"),
+        ...scriptedChatModels([
+          fauxAssistantMessage([
+            fauxToolCall("search_listings", { need_description: "Test", limit: 5 }),
+          ]),
+          fauxAssistantMessage("搜索完成。"),
+        ]),
+        connector: new FakeCommerceConnector([fakeConnectorProduct()]),
+        catalog: `http://127.0.0.1:${port}`,
+        vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
+      });
+      const reply = await kernel.handleUserText("搜索一下 Test 商品");
+      expect(reply.text).toContain("搜索完成");
+      await kernel.close();
+      expect(hits.some((url) => url.includes("/v1/listings/search"))).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
 
 describe("physical isolation (design §17)", () => {

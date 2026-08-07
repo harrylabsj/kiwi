@@ -69,6 +69,7 @@ import { MemoryError, type MemoryItem, type Principal } from "./memory/types.js"
 import { PrivateVault } from "./memory/vault.js";
 import { openMainSession } from "./session.js";
 import { registerCatalogAgent } from "../discovery/catalog-source/register.js";
+import { KiwiCatalogSource } from "../discovery/catalog-source/kiwi-source.js";
 import { baseSystemPrompt, renderMemoryBriefing } from "./system-prompt.js";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -392,7 +393,15 @@ export class AgentKernel {
         profile: options.profile,
         ...(options.commerceClient !== undefined ? { commerceClient: options.commerceClient } : {}),
         ...(options.broker !== undefined ? { broker: options.broker } : {}),
-        ...(options.catalog !== undefined ? { catalog: options.catalog } : {}),
+        ...(options.catalog !== undefined
+          ? {
+              catalog: options.catalog,
+              // CD #27 wiring：buyer kernel 配置 catalog 时注入 KiwiCatalogSource，
+              // search_listings / shortlist_listing 工具才挂载（历史教训：工具
+              // 只在测试里可达，运行时从未注入——dead code）。
+              catalogSource: new KiwiCatalogSource({ baseUrl: options.catalog }),
+            }
+          : {}),
         approvals,
         mode: () => modeRef.value,
         registerPending,
