@@ -55,11 +55,24 @@ function canonicalNumber(value: number): string {
   return serialized;
 }
 
+/**
+ * RFC 8785 §3.2.2.1 字符串序列化：`"`/`\`/控制字符（JSON.stringify 已处理）
+ * + U+2028/U+2029（JSON.stringify 原样输出——RFC 8785 要求转义，否则与
+ * 按规范转义的实现产生不同 digest，跨实现互操作断裂）。
+ */
+function canonicalString(value: string): string {
+  // 正则字面量用 \u2028/\u2029 Unicode 转义（非控制字符转义，eslint
+  // no-control-regex 不适用），匹配 U+2028（行分隔符）/ U+2029（段落分隔符）字符本身。
+  return JSON.stringify(value)
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
 function canonicalValue(value: unknown): string {
   if (value === null) return "null";
   switch (typeof value) {
     case "string":
-      return JSON.stringify(value);
+      return canonicalString(value);
     case "boolean":
       return value ? "true" : "false";
     case "number":
@@ -81,7 +94,7 @@ function canonicalValue(value: unknown): string {
       const keys = Object.keys(record)
         .filter((key) => record[key] !== undefined)
         .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-      return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalValue(record[key])}`).join(",")}}`;
+      return `{${keys.map((key) => `${canonicalString(key)}:${canonicalValue(record[key])}`).join(",")}}`;
     }
     default:
       // functions, symbols, bigint: not part of the JSON data model — fail
