@@ -32,28 +32,36 @@ export interface NonceStore {
 
 /**
  * 进程内 nonce 缓存。适合单实例验证方；多实例部署应换共享存储（Redis 等）。
- * 达到上限时清空（保底防无限增长；T3 的 nonce 只在时钟窗口内有效，清空是
- * 保守而非危险行为）。
+ * 达到上限时逐 key 淘汰最旧一条（FIFO，评审项 H6）：整体清空会让时钟窗口
+ * 内**全部**已捕获 nonce 同时失效——此前配合"验签前消费"，攻击者用伪造
+ * 签名填满 store 触发清空后，真实捕获的签名可被重放；FIFO 只挤出最旧一条
+ * （最早的 nonce 最接近过期），配合验签后消费使 store 只能被真实签名写入。
  */
 export class InMemoryNonceStore implements NonceStore {
-  private readonly seen = new Set<string>();
+  /** key → 记录时间（ms）。Map 迭代序 = 插入序，满额时删除首条。 */
+  private readonly entries = new Map<string, number>();
   private readonly maxEntries: number;
+  private readonly now: () => number;
 
-  constructor(maxEntries = 10_000) {
+  constructor(maxEntries = 10_000, now: () => number = Date.now) {
     if (!Number.isInteger(maxEntries) || maxEntries <= 0) {
       throw new Error("InMemoryNonceStore: maxEntries must be a positive integer");
     }
     this.maxEntries = maxEntries;
+    this.now = now;
   }
 
   checkAndSet(key: string): boolean {
-    if (this.seen.has(key)) return false;
-    if (this.seen.size >= this.maxEntries) this.seen.clear();
-    this.seen.add(key);
+    if (this.entries.has(key)) return false;
+    if (this.entries.size >= this.maxEntries) {
+      const oldest = this.entries.keys().next().value as string | undefined;
+      if (oldest !== undefined) this.entries.delete(oldest);
+    }
+    this.entries.set(key, this.now());
     return true;
   }
 
   get size(): number {
-    return this.seen.size;
+    return this.entries.size;
   }
 }

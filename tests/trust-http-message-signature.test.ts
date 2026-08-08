@@ -476,4 +476,46 @@ describe("时间窗口 / 重放 / keyid", () => {
     const replay = verifyHttpMessageSignature(base);
     expect(replay).toMatchObject({ ok: false, code: "replay_detected" });
   });
+
+  it("验签失败的请求不消费 nonce：伪造签名无法刷 nonce（评审项 H6）", () => {
+    const signer = new HttpMessageSigner({
+      keyid: "alice",
+      algorithm: "ed25519",
+      privateKey: ED25519_SEED,
+      nonce: "nonce-42",
+      created: 1723000000,
+    });
+    const store = new InMemoryNonceStore();
+    const headers = signer.sign({ method: "POST", url: "http://a.test/", body: Buffer.from("x"), headers: {} });
+    const base = {
+      method: "POST",
+      targetUri: "http://a.test/",
+      authority: "a.test",
+      headers,
+      body: Buffer.from("x"),
+      resolver: resolveFromSigningKeys([aliceKey()]),
+      now: () => 1723000000,
+      nonceStore: store,
+    };
+    // 篡改 body：验签失败（content-digest 不匹配）——修复前 nonce 在验签
+    // 前被消费，攻击者可用伪造签名刷入任意 nonce；修复后失败不消耗。
+    const rejected = verifyHttpMessageSignature({ ...base, body: Buffer.from("y") });
+    expect(rejected.ok).toBe(false);
+    // 同 nonce 的合法请求仍首次通过 → 失败的验签没有消耗 nonce。
+    expect(verifyHttpMessageSignature(base).ok).toBe(true);
+  });
+
+  it("InMemoryNonceStore 满额逐 key 淘汰最旧一条（评审项 H6：不清空全部）", () => {
+    const store = new InMemoryNonceStore(2);
+    expect(store.checkAndSet("a")).toBe(true);
+    expect(store.checkAndSet("b")).toBe(true);
+    // 满额：c 挤掉最旧的 a（此前整体 clear() 会让窗口内全部 nonce 失效）
+    expect(store.checkAndSet("c")).toBe(true);
+    expect(store.size).toBe(2);
+    // a 已被挤出（FIFO 只淘汰最旧一条）→ 可再次使用；此时满额挤出 b
+    expect(store.checkAndSet("a")).toBe(true);
+    // c 仍在（复用拒绝）；b 已被挤出 → 新 key
+    expect(store.checkAndSet("c")).toBe(false);
+    expect(store.checkAndSet("b")).toBe(true);
+  });
 });

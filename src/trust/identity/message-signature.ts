@@ -344,13 +344,6 @@ function verifyEntry(
     return { ok: false, code: "authorization_failed", reason: "signature has expired" };
   }
 
-  // nonce 防重放第二道防线。
-  if (entry.params.nonce !== undefined && input.nonceStore !== undefined) {
-    if (!input.nonceStore.checkAndSet(`${keyid}|${entry.params.nonce}`)) {
-      return { ok: false, code: "replay_detected", reason: "signature nonce already used" };
-    }
-  }
-
   let base: string;
   try {
     base = buildSignatureBase({
@@ -383,6 +376,16 @@ function verifyEntry(
   const keyObject = publicKeyObject(key);
   if (!verifyBytes(algorithm, Buffer.from(base, "utf8"), keyObject, signatureBytes)) {
     return { ok: false, code: "authorization_failed", reason: "signature verification failed" };
+  }
+
+  // nonce 防重放（评审项 H6）：**验签成功后**才消费。此前在验签前
+  // checkAndSet——任何能构造格式合法请求的攻击者（keyid 公开可解析、时间
+  // 窗内）可用伪造签名刷入任意 nonce 填满 store，配合满额整体清空把已捕获
+  // 的真实签名打开重放窗口；验签后才消费使 nonce 只能被真实签名持有者写入。
+  if (entry.params.nonce !== undefined && input.nonceStore !== undefined) {
+    if (!input.nonceStore.checkAndSet(`${keyid}|${entry.params.nonce}`)) {
+      return { ok: false, code: "replay_detected", reason: "signature nonce already used" };
+    }
   }
 
   return { ok: true, keyid, algorithm, params: entry.params, profile: key.profile };
