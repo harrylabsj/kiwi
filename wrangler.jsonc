@@ -3,5 +3,8 @@
   "compatibility_date": "2026-08-08",
   "assets": {
     "directory": "./docs/website"
-  }
+  },
+  "routes": [
+    { "pattern": "kiwi.harrylabsj.com", "custom_domain": true }
+  ]
 }
