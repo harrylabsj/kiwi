@@ -88,24 +88,20 @@ p.lead { margin-top: 14px; font-size: clamp(1rem, 2vw, 1.2rem); color: var(--ink
 }
 
 /* 控制条 */
-.controls {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
-  background: rgba(255,255,255,.96); backdrop-filter: blur(8px); border-top: 1px solid var(--line);
-  padding: 14px 20px;
-}
-.controls-inner { max-width: var(--maxw); margin: 0 auto; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
-.progress { flex: 1; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; min-width: 120px; }
-.progress .fill { height: 100%; background: var(--kiwi-600); width: 0%; transition: width .3s ease; }
-.dots { display: flex; gap: 6px; }
-.dot-nav { width: 9px; height: 9px; border-radius: 50%; background: var(--line); cursor: pointer; border: none; padding: 0; transition: background .2s; }
-.dot-nav.on { background: var(--kiwi-600); }
+
+
+
+
+
+
+
 .btn {
   border: none; cursor: pointer; font-family: inherit; font-weight: 700; font-size: .88rem;
   padding: 9px 18px; border-radius: 999px; background: var(--kiwi-800); color: #fff; transition: transform .12s ease;
 }
 .btn:hover { transform: translateY(-1px); }
 .btn.ghost { background: var(--paper-soft); color: var(--ink); border: 1px solid var(--line); }
-.scene-label { font-size: .78rem; color: var(--ink-soft); }
+
 
 /* 结尾 */
 .finale { text-align: center; }
@@ -126,9 +122,9 @@ a.btn { text-decoration: none; display: inline-block; }
     <h1>电商正在变成<br>AI 智能体与AI 智能体的对话</h1>
     <p class="lead typing" id="intro-type">买家不需要再逛 100 个网站；商家不需要再投 100 个平台的广告。您的AI 智能体，替您去买、替您去卖。</p>
     <div class="network">
-      <div class="node buyer"><div class="role">AI Buyer Agent</div><div class="name">买家 AI 智能体</div><div class="sub">替您说需求、谈价格</div></div>
+      <div class="node buyer"><div class="role">Buyer AI Agent</div><div class="name">买家 AI 智能体</div><div class="sub">替您说需求、谈价格</div></div>
       <div class="link">⇄</div>
-      <div class="node merchant"><div class="role">AI Merchant Agent</div><div class="name">商家 AI 智能体</div><div class="sub">替您报价、守底线</div></div>
+      <div class="node merchant"><div class="role">Merchant AI Agent</div><div class="name">商家 AI 智能体</div><div class="sub">替您报价、守底线</div></div>
     </div>
   </section>
 
@@ -138,7 +134,7 @@ a.btn { text-decoration: none; display: inline-block; }
     <h2>买家只需说一句需求</h2>
     <div class="chat">
       <div class="bubble from-buyer"><div class="who">买家</div><span id="need-type">我要采购 500 台 21.5 英寸工业触摸屏，要求 IP67，7 天内交货，报价和起订量都要谈。</span></div>
-      <div class="bubble from-buyer"><div class="who">AI Buyer Agent</div><span id="agent-start-type">收到。我去 Kiwi 网络上找真正能交付的商家，逐个询价谈判。</span></div>
+      <div class="bubble from-buyer"><div class="who">Buyer AI Agent</div><span id="agent-start-type">收到。我去 Kiwi 网络上找真正能交付的商家，逐个询价谈判。</span></div>
     </div>
   </section>
 
@@ -148,11 +144,11 @@ a.btn { text-decoration: none; display: inline-block; }
     <h2>买家 AI 智能体搜索 Kiwi 网络</h2>
     <p class="lead">Kiwi 网络是一个开放目录：商家 AI 智能体注册在这里，买家 AI 智能体在这里发现它们——<span class="highlight">不是靠广告，靠验证过的事实</span>。</p>
     <div class="network">
-      <div class="node buyer"><div class="role">AI Buyer Agent</div><div class="name">买家 AI 智能体</div><div class="sub">搜索：工业触摸屏</div></div>
+      <div class="node buyer"><div class="role">Buyer AI Agent</div><div class="name">买家 AI 智能体</div><div class="sub">搜索：工业触摸屏</div></div>
       <div class="link">→</div>
       <div class="catalog-ring"><span>Kiwi<br>网络<br>目录</span></div>
       <div class="link">→</div>
-      <div class="node merchant"><div class="role">AI Merchant Agent</div><div class="name">Veyquo</div><div class="sub">工业显示 · 已注册 · 可询价</div></div>
+      <div class="node merchant"><div class="role">Merchant AI Agent</div><div class="name">Veyquo</div><div class="sub">工业显示 · 已注册 · 可询价</div></div>
     </div>
   </section>
 
@@ -243,36 +239,16 @@ a.btn { text-decoration: none; display: inline-block; }
   </section>
 </main>
 
-<div class="controls">
-  <div class="controls-inner">
-    <button class="btn ghost" id="prev">‹ 上一幕</button>
-    <button class="btn" id="next">下一幕 ›</button>
-    <div class="dots" id="dots"></div>
-    <div class="progress"><div class="fill" id="fill"></div></div>
-    <span class="scene-label" id="label">0 / 9</span>
-    <button class="btn ghost" id="autoplay">⏸ 暂停</button>
-  </div>
-</div>
+
 
 <script>
 (function () {
   var scenes = Array.prototype.slice.call(document.querySelectorAll(".scene"));
   var total = scenes.length;
   var current = 0;
-  var playing = true;
   var SCENE_MS = 9000;
   var timer = null;
   var typeTimer = null;
-
-  var dots = document.getElementById("dots");
-  scenes.forEach(function (_, i) {
-    var d = document.createElement("button");
-    d.className = "dot-nav";
-    d.title = "第 " + (i + 1) + " 幕";
-    d.addEventListener("click", function () { go(i); });
-    dots.appendChild(d);
-  });
-  var dotEls = Array.prototype.slice.call(dots.children);
 
   function stopTyping() {
     if (typeTimer) { clearInterval(typeTimer); typeTimer = null; }
@@ -296,13 +272,9 @@ a.btn { text-decoration: none; display: inline-block; }
 
   function go(n) {
     stopTyping();
-    if (n < 0) n = 0;
-    if (n >= total) n = total - 1;
-    current = n;
-    scenes.forEach(function (s, i) { s.classList.toggle("active", i === n); });
-    dotEls.forEach(function (d, i) { d.classList.toggle("on", i === n); });
-    document.getElementById("fill").style.width = ((n + 1) / total * 100) + "%";
-    document.getElementById("label").textContent = n + " / " + (total - 1);
+    // 自动连续循环播放：播完最后一幕回到第一幕
+    current = n % total;
+    scenes.forEach(function (s, i) { s.classList.toggle("active", i === current); });
 
     // 打字机开场与需求句
     if (n === 0) {
@@ -320,20 +292,8 @@ a.btn { text-decoration: none; display: inline-block; }
 
   function restartTimer() {
     if (timer) { clearTimeout(timer); timer = null; }
-    if (playing) timer = setTimeout(function () { go(current + 1); }, SCENE_MS);
+    timer = setTimeout(function () { go(current + 1); }, SCENE_MS);
   }
-
-  document.getElementById("next").addEventListener("click", function () { go(current + 1); });
-  document.getElementById("prev").addEventListener("click", function () { go(current - 1); });
-  document.getElementById("autoplay").addEventListener("click", function () {
-    playing = !playing;
-    this.textContent = playing ? "⏸ 暂停" : "▶ 播放";
-    restartTimer();
-  });
-  document.addEventListener("keydown", function (e) {
-    if (e.key === "ArrowRight") go(current + 1);
-    if (e.key === "ArrowLeft") go(current - 1);
-  });
 
   go(0);
 })();
