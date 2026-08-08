@@ -199,7 +199,8 @@ export class ShoppingCliCommerceDataSource implements CommerceDataSource {
     const limit = Math.max(1, Math.min(Number(query.limit ?? 20) || 20, 100));
     const params = new URLSearchParams();
     params.set("limit", String(limit));
-    if (query.q !== undefined && query.q !== "") params.set("q", query.q);
+    // wire 参数名与 shopping-cli /search/products 一致（FastAPI 与 fallback 两分支只认 query）
+    if (query.query !== undefined && query.query !== "") params.set("query", query.query);
     const raw = await this.getJson(`/search/products?${params.toString()}`);
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
       throw new CommerceError("request_failed", "shopping-cli search products response must be an object");

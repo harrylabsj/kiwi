@@ -60,7 +60,8 @@ export interface ProductFact {
 }
 
 export interface ProductSearchQuery {
-  q?: string;
+  /** 关键词（匹配标题/SKU 等；wire 参数名与 shopping-cli 一致为 query）。 */
+  query?: string;
   limit?: number;
 }
 
@@ -84,12 +85,12 @@ export class CommerceError extends Error {
  * Merchant 经营事实统一读取边界。实现：
  * - `ShoppingCliCommerceDataSource`（唯一数据入口；kiwi merchant 不直连
  *   ERP 或其他数据库——外部数据接入在 shopping-cli 仓实现，
- *   `shopping_cli/data_sources/erp_source.py` + migration v16）。
+ *   `shopping_cli/data_sources/erp_source.py` + migration v17（product provenance））。
  */
 export interface CommerceDataSource {
   /** 按 SKU 取商品事实；未知 SKU 返回 undefined。 */
   getProduct(sku: string): Promise<ProductFact | undefined>;
-  /** 搜索商品（q 匹配标题/SKU；limit 夹在 1..100）。 */
+  /** 搜索商品（query 匹配标题/SKU；limit 夹在 1..100）。 */
   getProducts(query?: ProductSearchQuery): Promise<ProductFact[]>;
   /** 库存字段（带权威标注）。 */
   getInventory(sku: string): Promise<CommerceField<number> | undefined>;
