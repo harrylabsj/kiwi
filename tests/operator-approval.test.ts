@@ -10,8 +10,8 @@
  *  - 授权绑定：换 session / 换 terms 即失效；evidence 必须引用记录的审批；
  *  - write-gate 适配：WriteApprovalCandidate 生命周期桥接为审批状态源。
  */
-import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -434,7 +434,7 @@ describe("OperatorApprovalAuthorizationProvider × WriteApprovalCandidate", () =
   });
 
   it("persistDir：审批记录落 JSONL，重启后恢复（record + revoke 重放）", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-opappr-"));
+    const dir = trackedMkdtemp("kiwi-opappr-");
 
     const provider = new OperatorApprovalAuthorizationProvider({ now: () => NOW, persistDir: dir });
     const channel = new ManualHandoffChannel({ now: () => NOW, authorizationProvider: provider });
@@ -477,4 +477,18 @@ describe("OperatorApprovalAuthorizationProvider × WriteApprovalCandidate", () =
     });
     expect(revivedAgain.getApproval("act_persist_1")?.status).toBe("revoked");
   });
+});
+
+/** 评审项 L6：mkdtemp 目录跟踪清理（此前每次运行在 /tmp 残留）。 */
+const tmpDirs: string[] = [];
+function trackedMkdtemp(prefix: string): string {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tmpDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

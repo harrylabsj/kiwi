@@ -6,15 +6,15 @@
  * - 不同 digest（同候选）→ 不命中（调用方 fail-closed 的输入）；
  * - 保留期清理（prune 删除过期行）。
  */
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import {mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { HandoffIdempotencyStore } from "../src/handoff/index.js";
 
 function store(now: () => string = () => "2026-08-07T00:00:00Z"): HandoffIdempotencyStore {
   return new HandoffIdempotencyStore({
-    dir: mkdtempSync(path.join(tmpdir(), "kiwi-idem-")),
+    dir: trackedMkdtemp("kiwi-idem-"),
     now,
   });
 }
@@ -112,7 +112,7 @@ describe("withCandidateLock（§10.1 并发保护）", () => {
 
   it("持锁超时 → HandoffError(concurrency_lock_timeout)（fail-closed，绝不并发执行）", async () => {
     const s = new HandoffIdempotencyStore({
-      dir: mkdtempSync(path.join(tmpdir(), "kiwi-idem-")),
+      dir: trackedMkdtemp("kiwi-idem-"),
       lockTimeoutMs: 60,
     });
     let released = false;
@@ -129,7 +129,7 @@ describe("withCandidateLock（§10.1 并发保护）", () => {
   });
 
   it("陈旧锁自愈：崩溃残留（mtime 超阈值）被清理，不永久 concurrency_lock_timeout（评审项 B2）", async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-idem-"));
+    const dir = trackedMkdtemp("kiwi-idem-");
     const s = new HandoffIdempotencyStore({ dir, lockTimeoutMs: 60 });
     // 模拟持锁进程崩溃：手工创建锁文件并把 mtime 改到陈旧阈值之前
     const lockPath = path.join(dir, "locks", "hcan_01.lock");
@@ -140,4 +140,18 @@ describe("withCandidateLock（§10.1 并发保护）", () => {
     // 陈旧锁被自愈清理，立即获得锁（不会等满 60ms 超时）
     await expect(s.withCandidateLock("hcan_01", async () => "ok")).resolves.toBe("ok");
   });
+});
+
+/** 评审项 L6：mkdtemp 目录跟踪清理（此前每次运行在 /tmp 残留）。 */
+const tmpDirs: string[] = [];
+function trackedMkdtemp(prefix: string): string {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tmpDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

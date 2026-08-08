@@ -10,8 +10,8 @@
  *  - 文件损坏 fail-closed（ContextMapError）；
  *  - negotiation_id 逃逸目录被拒。
  */
-import { describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, it } from "vitest";
+import {existsSync, mkdtempSync, rmSync, readFileSync, readdirSync, statSync, writeFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ContextMapError, ContextMapStore, contextMapFileName } from "../src/negotiation/context-map/index.js";
@@ -19,7 +19,7 @@ import { ContextMapError, ContextMapStore, contextMapFileName } from "../src/neg
 const NOW = "2026-08-06T10:00:00.000Z";
 
 function makeDir(): string {
-  return mkdtempSync(path.join(tmpdir(), "kiwi-context-map-"));
+  return trackedMkdtemp("kiwi-context-map-");
 }
 
 describe("ContextMapStore: 写入与读取", () => {
@@ -173,4 +173,18 @@ describe("ContextMapStore: 写入与读取", () => {
       // 清理交给系统临时目录
     }
   });
+});
+
+/** 评审项 L6：mkdtemp 目录跟踪清理（此前每次运行在 /tmp 残留）。 */
+const tmpDirs: string[] = [];
+function trackedMkdtemp(prefix: string): string {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tmpDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

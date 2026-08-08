@@ -8,10 +8,10 @@
  * - 非法证据种类（button-click/openURL 成功/计时/UA 猜测）拒绝；
  * - deliveryState 从 Ledger 事件投影；终态不可逆。
  */
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   HandoffEventStore,
   createHandoffCandidate,
@@ -26,7 +26,7 @@ const IDENTITY = { sender_identity: "principal:buyer-1", counterparty_identity: 
 const CAPABILITY = { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" };
 
 function store(): HandoffEventStore {
-  return new HandoffEventStore({ dir: mkdtempSync(path.join(tmpdir(), "kiwi-delivery-")) });
+  return new HandoffEventStore({ dir: trackedMkdtemp("kiwi-delivery-") });
 }
 
 function candidate(): HandoffCandidate {
@@ -229,4 +229,18 @@ describe("交付状态机迁移表（评审项：delivery 域补齐）", () => {
       } as never),
     ).toThrow(/requires handoff_id/);
   });
+});
+
+/** 评审项 L6：mkdtemp 目录跟踪清理（此前每次运行在 /tmp 残留）。 */
+const tmpDirs: string[] = [];
+function trackedMkdtemp(prefix: string): string {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tmpDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
