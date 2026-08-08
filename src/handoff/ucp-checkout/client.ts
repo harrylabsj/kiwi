@@ -36,6 +36,7 @@
  */
 
 import { assertResolvableTargetUrl, assertSafeTargetUrl } from "../../a2a/client/url-policy.js";
+import { isRedirectResponse, readJsonBody, SafeHttpError } from "../../net/safe-http.js";
 import { serializeUcpAgentHeader, UCP_AGENT_HEADER } from "../../a2a/ucp-agent.js";
 import { parseUcpCartResponse } from "./cart-parse.js";
 import type { UcpCartMessage, UcpCartResponse } from "./cart-types.js";
@@ -216,6 +217,10 @@ export class UcpCheckoutHttpClient {
     try {
       response = await this.fetchImpl(url, {
         method,
+        // 出站纪律（评审项 P3-1，与 a2a-client 同类的 SSRF 面）：绝不跟随
+        // 重定向——3xx 目标不经过 SSRF/DNS 复查，恶意/被攻陷的 UCP 服务器
+        // 可把 checkout 请求重定向到内网/元数据服务。
+        redirect: "manual",
         headers: this.baseHeaders,
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         signal: controller.signal,
@@ -228,19 +233,32 @@ export class UcpCheckoutHttpClient {
         "network",
         `UCP request failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-    } finally {
-      clearTimeout(timer);
+    }
+    if (isRedirectResponse(response)) {
+      return httpError(
+        "network",
+        `UCP endpoint must not redirect (HTTP ${response.status})`,
+        response.status,
+      );
     }
 
     let raw: unknown;
     try {
-      raw = await response.json();
-    } catch {
+      // 响应体读取在超时覆盖内 + 大小上限（对端停滞 body 不再永久挂起）。
+      raw = await readJsonBody(response, { signal: controller.signal });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        return httpError("timeout", `UCP request timed out after ${this.timeoutMs}ms`);
+      }
       return httpError(
         "malformed",
-        `UCP response is not JSON${response.ok ? "" : ` (http ${response.status})`}`,
+        err instanceof SafeHttpError && err.code === "response_too_large"
+          ? `UCP response too large: ${err.message}`
+          : `UCP response is not JSON${response.ok ? "" : ` (http ${response.status})`}`,
         response.status,
       );
+    } finally {
+      clearTimeout(timer);
     }
     return { kind: "ok", status: response.status, raw };
   }

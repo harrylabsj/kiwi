@@ -344,6 +344,46 @@ class MockCheckoutServer {
 // ---------------------------------------------------------------------------
 
 describe("UcpCheckoutChannel.createSession", () => {
+  it("拒绝重定向：UCP 端点 3xx 不跟随（评审项 P3-1，与 a2a-client 同类的 SSRF 面）", async () => {
+    const { fetchImpl } = routerFetch([
+      {
+        match: (c) => c.url.includes("/checkout-sessions"),
+        handler: () =>
+          new Response(null, {
+            status: 302,
+            headers: { location: "http://169.254.169.254/latest/meta-data/" },
+          }),
+      },
+    ]);
+    const channel = makeChannel(fetchImpl);
+    const res = await channel.createSession(makePackage());
+    expect(res.status).toBe("fail_closed");
+    if (res.status === "fail_closed") {
+      expect(res.code).toBe("network");
+      expect(res.reason).toContain("redirect");
+    }
+  });
+
+  it("拒绝超大响应：Content-Length 预检超限（评审项 P3-1）", async () => {
+    const { fetchImpl } = routerFetch([
+      {
+        match: (c) => c.url.includes("/checkout-sessions"),
+        handler: () =>
+          new Response("{}", {
+            status: 200,
+            headers: { "content-type": "application/json", "content-length": "99999999" },
+          }),
+      },
+    ]);
+    const channel = makeChannel(fetchImpl);
+    const res = await channel.createSession(makePackage());
+    expect(res.status).toBe("fail_closed");
+    if (res.status === "fail_closed") {
+      expect(res.code).toBe("malformed");
+      expect(res.reason).toContain("too large");
+    }
+  });
+
   it("maps agreed_terms to UCP line_items (Money minor units passthrough, integer quantity)", async () => {
     const server = new MockCheckoutServer();
     const channel = makeChannel(server.fetchImpl);
