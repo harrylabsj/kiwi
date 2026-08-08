@@ -583,6 +583,28 @@ export class OperatorController {
     let outcome: SubmitOutcome;
     try {
       outcome = await this.runner.submit(prepared);
+    } catch (err) {
+      // 提交异常兜底（评审项 M7）：网关瞬时故障时 submit 抛错——此前
+      // finally 只清 submitting，心跳继续每 60s 续命 claim：消息永远不被
+      // stale recovery 回收、也不回到 pending，会话永久楔死（对照 headless
+      // turn 路径有完整 abandon 兜底，本路径缺失）。此处停心跳 + abandon
+      // claim（消息重新可领取）+ 落 failed 事件 + 返回可读错误；prepared
+      // 保留——重试 /approve 走 submit 的幂等键，不重复提交。
+      await this.runner.stopHeartbeat().catch(() => undefined);
+      await this.runner.abandon(prepared, "submit error").catch(() => undefined);
+      await this.record({
+        ...this.nextBase("private"),
+        type: "turn.settled",
+        payload: {
+          candidate_id: candidateId,
+          settlement: "failed",
+          reason: `submit error: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      }).catch(() => undefined);
+      return {
+        kind: "invalid",
+        reason: `提交失败（claim 已释放，可重新尝试）：${err instanceof Error ? err.message : String(err)}`,
+      };
     } finally {
       this.submitting.delete(candidateId);
     }
