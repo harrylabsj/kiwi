@@ -60,6 +60,52 @@ export interface WelcomeInput extends BannerInput {
   commands: string;
 }
 
+/**
+ * 剥离终端控制序列与 C0 控制字符（评审项 H7：TUI 渲染的未信任文本——网关
+ * public_message、catalog 返回、对手消息——可能携带 ANSI/CR，直通终端可
+ * 清屏/伪造审批行/覆盖输入行）。保留 \t 与 \n；对无控制字符的输入是恒等
+ * 变换，因此不影响非 TTY 字节直通契约。
+ *
+ * 正则用动态构造（eslint no-control-regex 禁控制字符字面量进正则字面量，
+ * 与 theme.ts visibleWidth 的同类约束一致）。
+ */
+
+/** 正则源码里表示 ESC（\x1b）控制字符的转义文本。 */
+const ESC_PATTERN = "\\x1b";
+
+/** 按序应用的剥离模式（每类终端控制序列 + C0 控制字符兜底）。 */
+const CONTROL_PATTERNS: readonly RegExp[] = [
+  // OSC（ESC ] … (BEL | ESC \)）：终端标题、剪贴板写等
+  new RegExp(`${ESC_PATTERN}\\](?:[^\\x07${ESC_PATTERN}]|${ESC_PATTERN}(?=[^\\\\]))*(?:\\x07|${ESC_PATTERN}\\\\)`, "g"),
+  // CSI（ESC [ 参数 中间字节 终字节）：SGR 颜色、光标移动、擦除、模式切换
+  new RegExp(`${ESC_PATTERN}\\[[0-9;:?]*[ -/]*[@-~]`, "g"),
+  // DCS/PM/APC（ESC P … ESC \）与 STS
+  new RegExp(`${ESC_PATTERN}[PX^_][\\s\\S]*?${ESC_PATTERN}\\\\`, "g"),
+  // 残留 ESC + 简单序列
+  new RegExp(`${ESC_PATTERN}[0-9;]*[@-~]`, "g"),
+];
+
+/** C0 控制字符判定（保留 \t 与 \n；含 \r——防覆盖输入行）。 */
+function isC0Control(code: number): boolean {
+  return code !== 0x09 && code !== 0x0a && (code < 0x20 || code === 0x7f);
+}
+
+export function stripTerminalControls(value: string): string {
+  let out = value;
+  for (const pattern of CONTROL_PATTERNS) out = out.replace(pattern, "");
+  // C0 兜底用码点扫描（控制字符不进正则字面量——eslint no-control-regex）。
+  let result = "";
+  let prev = 0;
+  for (let i = 0; i < out.length; i++) {
+    if (isC0Control(out.charCodeAt(i))) {
+      result += out.slice(prev, i);
+      prev = i + 1;
+    }
+  }
+  result += out.slice(prev);
+  return result;
+}
+
 /** 行首前缀配色表（按长度降序匹配——`[handoff-open]` 必须先于 `[handoff]`）。 */
 const PREFIX_STYLES: ReadonlyArray<{ prefix: string; color: ColorKey; dim?: boolean; bold?: boolean }> = [
   { prefix: "[handoff-open]", color: "accent" },
@@ -118,8 +164,9 @@ export function createTheme(
     paintRaw(text, mode, color, opts);
 
   const decorate = (text: string): string => {
-    if (!enabled) return text;
-    return text
+    const cleaned = stripTerminalControls(text);
+    if (!enabled) return cleaned;
+    return cleaned
       .split("\n")
       .map((line) => {
         for (const style of PREFIX_STYLES) {
@@ -144,12 +191,13 @@ export function createTheme(
   const borderStyle = (): string => sgr(mode, "muted", { dim: true });
 
   const box = (lines: readonly string[]): string => {
-    if (!enabled) return lines.join("\n");
-    const width = Math.max(1, ...lines.map((line) => visibleWidth(line)));
+    const cleaned = lines.map((line) => stripTerminalControls(line));
+    if (!enabled) return cleaned.join("\n");
+    const width = Math.max(1, ...cleaned.map((line) => visibleWidth(line)));
     const border = borderStyle();
     const top = `${border}┌${"─".repeat(width + 2)}┐${RESET}`;
     const bottom = `${border}└${"─".repeat(width + 2)}┘${RESET}`;
-    const rows = lines.map((line) => {
+    const rows = cleaned.map((line) => {
       const pad = " ".repeat(Math.max(0, width - visibleWidth(line)));
       return `${border}│${RESET} ${line}${pad} ${border}│${RESET}`;
     });
@@ -157,12 +205,13 @@ export function createTheme(
   };
 
   const panel = (lines: readonly string[], opts: { legacySeparator?: boolean } = {}): string => {
+    const cleaned = lines.map((line) => stripTerminalControls(line));
     if (!enabled) {
       return opts.legacySeparator === true
-        ? `${"─".repeat(56)}\n${lines.join("\n")}`
-        : lines.join("\n");
+        ? `${"─".repeat(56)}\n${cleaned.join("\n")}`
+        : cleaned.join("\n");
     }
-    return box(lines);
+    return box(cleaned);
   };
 
   const rule = (width: number): string => {
@@ -173,8 +222,8 @@ export function createTheme(
   const segments = (parts: ReadonlyArray<string | Seg>): string =>
     parts
       .map((part) => {
-        if (typeof part === "string") return part;
-        return paint(part.text, part.color ?? "text", { bold: part.bold, dim: part.dim });
+        if (typeof part === "string") return stripTerminalControls(part);
+        return paint(stripTerminalControls(part.text), part.color ?? "text", { bold: part.bold, dim: part.dim });
       })
       .join(" · ");
 
@@ -185,7 +234,7 @@ export function createTheme(
 
   const banner = (input: BannerInput): string => {
     if (!enabled) {
-      return `Kiwi ${input.roleLabel} · ${input.id} · ${input.tagline}`;
+      return stripTerminalControls(`Kiwi ${input.roleLabel} · ${input.id} · ${input.tagline}`);
     }
     const art = kiwiBanner(mode); // art 自带尾换行
     const info = segments([
@@ -198,7 +247,7 @@ export function createTheme(
 
   const welcome = (input: WelcomeInput): string => {
     if (!enabled) {
-      return `Kiwi ${input.roleLabel} · ${input.id} · ${input.tagline}`;
+      return stripTerminalControls(`Kiwi ${input.roleLabel} · ${input.id} · ${input.tagline}`);
     }
     const lines = [
       `${paint(`Kiwi ${input.roleLabel}`, "primary", { bold: true })} · ${input.id}`,
