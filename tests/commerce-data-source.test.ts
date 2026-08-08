@@ -3,7 +3,7 @@
  *
  * 架构调整（2026-08-07）：kiwi merchant 只与 shopping-cli 沟通——
  * ERP / 本地库接入已下沉到 shopping-cli 仓（`shopping_cli/data_sources/`，
- * migration v16 products.source）。kiwi 侧只保留：
+ * migration v17 products.provenance）。kiwi 侧只保留：
  * - `CommerceDataSource` 接口（数据侧边界，≠ CommerceClient 通信侧
  *   ≠ CounterpartyChannel）；
  * - `ShoppingCliCommerceDataSource`（唯一数据入口）；
@@ -31,11 +31,11 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function cliFetch(routes: Record<string, () => Response>): typeof fetch {
+function cliFetch(routes: Record<string, (href: string) => Response>): typeof fetch {
   return (async (input: FetchInput, _init?: FetchInit): Promise<Response> => {
     const href = String(input);
     for (const [suffix, handler] of Object.entries(routes)) {
-      if (href.includes(suffix)) return handler();
+      if (href.includes(suffix)) return handler(href);
     }
     return jsonResponse({ error: "not found" }, 404);
   }) as typeof fetch;
@@ -111,6 +111,23 @@ describe("ShoppingCliCommerceDataSource（唯一数据入口）", () => {
     const products = await source.getProducts();
     expect(products.map((p) => p.sku)).toEqual(["A", "B"]);
     expect(products[0]?.price_minor).toBe(1000);
+  });
+
+  it("getProducts 关键词走 wire 参数 query（与 shopping-cli 两分支一致）", async () => {
+    let seenUrl = "";
+    const source = new ShoppingCliCommerceDataSource({
+      baseUrl: "https://shopping-cli.example",
+      fetchImpl: cliFetch({
+        "/search/products": (url: string) => {
+          seenUrl = url;
+          return jsonResponse({ results: [] });
+        },
+      }),
+    });
+    const products = await source.getProducts({ query: "longjing", limit: 5 });
+    expect(products).toEqual([]);
+    expect(seenUrl).toContain("/search/products?limit=5&query=longjing");
+    expect(seenUrl).not.toContain("q=");
   });
 
   it("结构错误 fail-closed（缺 product / 缺 results / 非对象）", async () => {
