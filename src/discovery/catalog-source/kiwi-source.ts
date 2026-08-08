@@ -77,6 +77,7 @@ const KIWI_LISTING_SEARCH_QUERY_KEYS: readonly string[] = [
   "max_moq",
   "supports_bulk_quote",
   "supports_customization",
+  "attribute",
   "freshness_state",
   "handoff_destination_type",
   "limit",
@@ -327,7 +328,9 @@ export class KiwiCatalogSource {
 
 /**
  * 序列化 listing 搜索查询。未知键 → invalid_input（fail-closed，不静默丢弃）；
- * attribute.<path> 过滤键允许（v0.4 §8 attribute filters）。
+ * `attribute` 键为结构化属性映射（v0.4 §8 JSON1 attribute filters）——
+ * 每个 k:v 序列化为 `attribute.<path>=<value>`（与 kiwi-catalog
+ * listings/search.py 的 attribute.* 过滤键集一致）。
  */
 function buildListingSearchQuery(query: KiwiListingSearchQuery): string {
   for (const key of Object.keys(query)) {
@@ -357,6 +360,9 @@ function buildListingSearchQuery(query: KiwiListingSearchQuery): string {
   push("supports_customization", query.supports_customization);
   push("freshness_state", query.freshness_state);
   push("handoff_destination_type", query.handoff_destination_type);
+  for (const [path, value] of Object.entries(query.attribute ?? {})) {
+    push(`attribute.${path}`, value);
+  }
   if (query.limit !== undefined) push("limit", query.limit);
   push("cursor", query.cursor);
   return new URLSearchParams(entries).toString();

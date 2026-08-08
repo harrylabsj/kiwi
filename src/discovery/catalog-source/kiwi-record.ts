@@ -196,6 +196,9 @@ export interface KiwiListingSearchQuery {
   max_moq?: number;
   supports_bulk_quote?: boolean;
   supports_customization?: boolean;
+  /** 结构化属性过滤（v0.4 §8 JSON1）：键 = attributes JSON path
+   *  （如 material），值 = 匹配值；wire 形状 `attribute.<path>=<value>`。 */
+  attribute?: Record<string, string>;
   freshness_state?: ListingFreshnessState;
   handoff_destination_type?: DestinationType;
   limit?: number;
