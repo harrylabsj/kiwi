@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kiwi — A2A 电商动画演示</title>
-<meta name="description" content="Kiwi A2A 电商工作方式与创新点动画演示：买家 Agent 与商家 Agent 直接对话、谈判、成交。">
+<meta name="description" content="Kiwi A2A 电商工作方式与创新点动画演示：买家智能体与商家智能体直接对话、谈判、成交。">
 <style>
 :root {
   --kiwi-900: #143d18; --kiwi-800: #1b5e20; --kiwi-700: #2e7d32; --kiwi-600: #43a047;
@@ -119,12 +119,12 @@ a.btn { text-decoration: none; display: inline-block; }
   <!-- 0 开场 -->
   <section class="scene active" data-scene="0">
     <div class="kicker">A2A Commerce</div>
-    <h1>电商正在变成<br>Agent 与 Agent 的对话</h1>
-    <p class="lead typing" id="intro-type">买家不需要再逛 100 个网站；商家不需要再投 100 个平台的广告。你的 Agent，替你去买、替你去卖。</p>
+    <h1>电商正在变成<br>智能体与智能体的对话</h1>
+    <p class="lead typing" id="intro-type">买家不需要再逛 100 个网站；商家不需要再投 100 个平台的广告。你的智能体，替你去买、替你去卖。</p>
     <div class="network">
-      <div class="node buyer"><div class="role">Buyer Agent</div><div class="name">买家代理</div><div class="sub">替你说需求、谈价格</div></div>
+      <div class="node buyer"><div class="role">Buyer Agent</div><div class="name">买家智能体</div><div class="sub">替你说需求、谈价格</div></div>
       <div class="link">⇄</div>
-      <div class="node merchant"><div class="role">Merchant Agent</div><div class="name">商家代理</div><div class="sub">替你报价、守底线</div></div>
+      <div class="node merchant"><div class="role">Merchant Agent</div><div class="name">商家智能体</div><div class="sub">替你报价、守底线</div></div>
     </div>
   </section>
 
@@ -141,10 +141,10 @@ a.btn { text-decoration: none; display: inline-block; }
   <!-- 2 发现 -->
   <section class="scene" data-scene="2">
     <div class="kicker">Discovery · 被发现</div>
-    <h2>买家 Agent 搜索 Kiwi 网络</h2>
-    <p class="lead">Kiwi 网络是一个开放目录：商家 Agent 注册在这里，买家 Agent 在这里发现它们——<span class="highlight">不是靠广告，靠验证过的事实</span>。</p>
+    <h2>买家智能体搜索 Kiwi 网络</h2>
+    <p class="lead">Kiwi 网络是一个开放目录：商家智能体注册在这里，买家智能体在这里发现它们——<span class="highlight">不是靠广告，靠验证过的事实</span>。</p>
     <div class="network">
-      <div class="node buyer"><div class="role">Buyer Agent</div><div class="name">买家代理</div><div class="sub">搜索：工业触摸屏</div></div>
+      <div class="node buyer"><div class="role">Buyer Agent</div><div class="name">买家智能体</div><div class="sub">搜索：工业触摸屏</div></div>
       <div class="link">→</div>
       <div class="catalog-ring"><span>Kiwi<br>网络<br>目录</span></div>
       <div class="link">→</div>
@@ -155,13 +155,13 @@ a.btn { text-decoration: none; display: inline-block; }
   <!-- 3 谈判 -->
   <section class="scene" data-scene="3">
     <div class="kicker">Negotiation · KNP 谈判协议</div>
-    <h2>两个 Agent 直接谈判</h2>
+    <h2>两个智能体直接谈判</h2>
     <p class="lead">Kiwi Negotiation Protocol：询价、报价、还价、澄清——<span class="highlight">谈的是真实条件，不是页面上的静态价格</span>。</p>
     <div class="chat">
-      <div class="bubble from-buyer"><div class="who">买家代理 → Veyquo</div>500 台 21.5" 工业触摸屏，IP67，7 天交期，单价能到多少？</div>
-      <div class="bubble from-merchant"><div class="who">Veyquo → 买家代理</div>500 台 ¥1,280/台，7 天可交。300 台以上可谈，加急 +8%。</div>
-      <div class="bubble from-buyer"><div class="who">买家代理 → Veyquo</div>1,150 行不行？500 台全要，长期复购。</div>
-      <div class="bubble from-merchant"><div class="who">Veyquo → 买家代理</div>1,190 成交，含一年质保。付款走你们 ERP 的采购单流程。</div>
+      <div class="bubble from-buyer"><div class="who">买家智能体 → Veyquo</div>500 台 21.5" 工业触摸屏，IP67，7 天交期，单价能到多少？</div>
+      <div class="bubble from-merchant"><div class="who">Veyquo → 买家智能体</div>500 台 ¥1,280/台，7 天可交。300 台以上可谈，加急 +8%。</div>
+      <div class="bubble from-buyer"><div class="who">买家智能体 → Veyquo</div>1,150 行不行？500 台全要，长期复购。</div>
+      <div class="bubble from-merchant"><div class="who">Veyquo → 买家智能体</div>1,190 成交，含一年质保。付款走你们 ERP 的采购单流程。</div>
     </div>
   </section>
 
@@ -196,7 +196,7 @@ a.btn { text-decoration: none; display: inline-block; }
     <div class="kicker">为什么是 Kiwi</div>
     <h2>三个创新点</h2>
     <div class="cards">
-      <div class="card"><div class="num">1</div><h3>Agent 直接对话</h3><p>买家代理与商家代理跨平台直接谈判——没有中间商抽成，没有信息黑箱。</p></div>
+      <div class="card"><div class="num">1</div><h3>智能体直接对话</h3><p>买家智能体与商家智能体跨平台直接谈判——没有中间商抽成，没有信息黑箱。</p></div>
       <div class="card"><div class="num">2</div><h3>数据城堡</h3><p>商家的成本、底价、库存、客户条款永不离开商家系统。网络只看到你批准的公开投影。</p></div>
       <div class="card"><div class="num">3</div><h3>成交入口自主</h3><p>Kiwi 不建立自己的交易闭环——成交落在你信任的结账、ERP 或联系人，你自己掌控。</p></div>
     </div>
@@ -210,9 +210,9 @@ a.btn { text-decoration: none; display: inline-block; }
       <div class="step"><div class="k">① 注册账号</div><div class="d">官网「My Account」注册，邮箱验证。</div></div>
       <div class="step"><div class="k">② 申请令牌</div><div class="d">填写商家信息申请 token，平台审核签发。</div></div>
       <div class="step"><div class="k">③ 发布商品</div><div class="d">数据引擎连你的商品库，一条命令发布到 Kiwi 网络。</div></div>
-      <div class="step"><div class="k">④ 保持在线</div><div class="d">商家 Agent 持续在线——买家 Agent 才能找到你、跟你谈。</div></div>
+      <div class="step"><div class="k">④ 保持在线</div><div class="d">商家智能体持续在线——买家智能体才能找到你、跟你谈。</div></div>
     </div>
-    <p class="lead" style="margin-top:24px">要点：<span class="highlight">用自己的域名</span>作为身份锚点；<span class="highlight">不用个人电脑</span>跑商家 Agent（要持续在线）；成本、底价永远留在自己系统里。</p>
+    <p class="lead" style="margin-top:24px">要点：<span class="highlight">用自己的域名</span>作为身份锚点；<span class="highlight">不用个人电脑</span>跑商家智能体（要持续在线）；成本、底价永远留在自己系统里。</p>
   </section>
 
   <!-- 8 买家行动 -->
@@ -221,10 +221,10 @@ a.btn { text-decoration: none; display: inline-block; }
     <h2>买家现在该做什么</h2>
     <div class="flow">
       <div class="step"><div class="k">① 安装 Kiwi</div><div class="d">一条命令装上 Kiwi，创建你的买家身份。</div></div>
-      <div class="step"><div class="k">② 说需求</div><div class="d">用一句话告诉你的 Agent：要什么、多少、什么时候要。</div></div>
-      <div class="step"><div class="k">③ 确认成交</div><div class="d">Agent 谈妥后把共识交给你——你在自己的结账/ERP 里确认下单。</div></div>
+      <div class="step"><div class="k">② 说需求</div><div class="d">用一句话告诉你的智能体：要什么、多少、什么时候要。</div></div>
+      <div class="step"><div class="k">③ 确认成交</div><div class="d">智能体谈妥后把共识交给你——你在自己的结账/ERP 里确认下单。</div></div>
     </div>
-    <p class="lead" style="margin-top:24px">要点：<span class="highlight">你的 Agent 替你比价、谈判、守底线</span>；成交永远发生在你信任的入口，Kiwi 不替你付钱。</p>
+    <p class="lead" style="margin-top:24px">要点：<span class="highlight">你的智能体替你比价、谈判、守底线</span>；成交永远发生在你信任的入口，Kiwi 不替你付钱。</p>
   </section>
 
   <!-- 9 结尾 -->
@@ -302,7 +302,7 @@ a.btn { text-decoration: none; display: inline-block; }
 
     // 打字机开场与需求句
     if (n === 0) {
-      typeText(document.getElementById("intro-type"), "买家不需要再逛 100 个网站；商家不需要再投 100 个平台的广告。你的 Agent，替你去买、替你去卖。");
+      typeText(document.getElementById("intro-type"), "买家不需要再逛 100 个网站；商家不需要再投 100 个平台的广告。你的智能体，替你去买、替你去卖。");
     }
     if (n === 1) {
       var need = document.getElementById("need-type");
