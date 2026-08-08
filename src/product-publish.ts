@@ -287,8 +287,13 @@ export async function merchantPublish(
   const skippedRefs: string[] = [];
   for (const projection of projections) {
     const ref = String(projection.source_product_ref ?? "?");
+    // 投影含内部元数据（_provenance 等）——catalog 契约 additionalProperties:
+    // false，发布前剔除 _ 前缀字段（仅 wire 字段进 body）。
+    const wireFields = Object.fromEntries(
+      Object.entries(projection).filter(([key]) => !key.startsWith("_")),
+    );
     const body: Record<string, unknown> = {
-      ...projection,
+      ...wireFields,
       merchant_id: merchantId,
       owner_agent_id: catalogAgentId,
       owner_token: effectiveOwnerToken,
