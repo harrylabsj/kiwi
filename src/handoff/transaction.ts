@@ -118,6 +118,13 @@ export async function executeHandoff(input: ExecuteHandoffInput): Promise<Execut
 
 async function executeHandoffUnlocked(input: ExecuteHandoffInput): Promise<ExecuteHandoffResult> {
   const { candidate, ledger, idempotency } = input;
+  // 惰性清理（评审项 L2）：prune 此前无调用方——幂等行永久保留，磁盘随
+  // 候选数无界增长。执行是低频操作，顺带清理过期行（保留期 ≥7 天不变）。
+  try {
+    idempotency.prune();
+  } catch {
+    // 清理失败不影响执行（fail-safe 方向；下次执行再试）。
+  }
   const negotiationId = candidate.negotiation_id;
   const events = ledger.events(negotiationId);
   const candidateEvents = events.filter((e) => e.handoff_candidate_id === candidate.handoff_candidate_id);

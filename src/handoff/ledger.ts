@@ -40,6 +40,7 @@ import {
   type HandoffCandidateEventKind,
 } from "./lifecycle.js";
 import { deliveryState, transitionDeliveryState } from "./delivery.js";
+import { isTerminalLifecycleState, foldCandidateLifecycle } from "./lifecycle.js";
 import { HandoffError } from "./errors.js";
 
 /** 交付观察事件 kind（KTH rev0.3 §9；不伪装外部成交，§36-27/28）。 */
@@ -186,5 +187,56 @@ export class HandoffEventStore {
   /** 链完整性校验（篡改 / 断链 / 重复检出）。 */
   verifyChain(negotiationId: string): LedgerVerifyResult {
     return this.store.verifyChain(negotiationId);
+  }
+
+  /**
+   * 惰性过期清扫（评审项 L1）：handoff_candidate_expired 此前只在
+   * executeHandoff 的过期门内落链——到期未执行的候选在 TUI /handoff 列表
+   * 永远显示 PROPOSED/READY"从未获批/从未执行"，指标失真。本方法遍历全部
+   * 链，对未终态且 expires_at 已过的候选落 expired 事件。幂等：已终态
+   * （EXPIRED/REJECTED/STALE/CONSUMED）候选不重复处理。调用方挂载在 kernel
+   * 的周期性入口（schedulerTick）与 /handoff 渲染前。
+   */
+  sweepExpiredCandidates(now: string): number {
+    let swept = 0;
+    for (const negotiationId of this.store.listNegotiations()) {
+      const events = this.store.events(negotiationId);
+      const seen = new Set<string>();
+      for (const event of events) {
+        const candidateId = event.handoff_candidate_id;
+        if (candidateId === undefined || seen.has(candidateId)) continue;
+        seen.add(candidateId);
+        const candidateEvents = events.filter((e) => e.handoff_candidate_id === candidateId);
+        const state = foldCandidateLifecycle(candidateEvents);
+        if (state === undefined || isTerminalLifecycleState(state)) continue;
+        // 过期判定：候选内嵌文档的 expires_at（created 事件携带完整候选）。
+        const created = candidateEvents.find((e) => e.event_kind === "handoff_candidate_created");
+        const embedded =
+          created?.outcome.kind === "ok"
+            ? (created.outcome.result?.candidate as { expires_at?: unknown } | undefined)
+            : undefined;
+        const expiresAt = typeof embedded?.expires_at === "string" ? embedded.expires_at : "";
+        // NaN 防护与 executeHandoff 的过期门一致：不可解析视为未过期（不误杀）。
+        if (expiresAt === "" || !Number.isFinite(Date.parse(expiresAt))) continue;
+        if (Date.parse(expiresAt) >= Date.parse(now)) continue;
+        const candidate = created?.outcome.kind === "ok"
+          ? (created.outcome.result?.candidate as HandoffCandidate)
+          : undefined;
+        if (candidate === undefined) continue;
+        try {
+          this.appendCandidateEvent({
+            kind: "handoff_candidate_expired",
+            candidate,
+            identity: { sender_identity: candidate.buyer_identity_ref, counterparty_identity: candidate.merchant_identity_ref, actor: "buyer" },
+            capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+            occurred_at: now,
+          });
+          swept += 1;
+        } catch {
+          // 单候选失败不影响整体清扫（fail-closed 但继续其他链）。
+        }
+      }
+    }
+    return swept;
   }
 }
