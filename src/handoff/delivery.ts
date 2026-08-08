@@ -88,6 +88,53 @@ export function deliveryState(
   return state;
 }
 
+/**
+ * 显式迁移表（评审项：delivery 域补齐与 candidate lifecycle 对称的状态机）。
+ * `handoff_delivery_failed` 不映射状态（保留前态），不出现在表中。
+ *
+ *   (none)            --delivered--> DELIVERED        （交付事件必须是首个）
+ *   DELIVERED         --launched-->  LAUNCHED
+ *   DELIVERED/LAUNCHED --opened-->   OPENED_CONFIRMED
+ *   DELIVERED/LAUNCHED --expired-->  EXPIRED          （打开时限过期，终态）
+ *   DELIVERED/LAUNCHED --revoked-->  REVOKED          （终态）
+ *   OPENED_CONFIRMED/EXPIRED/REVOKED 无后继
+ *
+ * 由此拒绝：无 delivered 的 launch（审计污染）、REVOKED/EXPIRED 后的任何
+ * 事件（终态）、OPENED_CONFIRMED 后的倒退（expired/launch/再次确认）。
+ */
+const DELIVERY_TRANSITIONS: Readonly<
+  Record<string, ReadonlySet<HandoffDeliveryState>>
+> = {
+  "": new Set(["DELIVERED"]),
+  DELIVERED: new Set(["LAUNCHED", "OPENED_CONFIRMED", "EXPIRED", "REVOKED"]),
+  LAUNCHED: new Set(["OPENED_CONFIRMED", "EXPIRED", "REVOKED"]),
+  OPENED_CONFIRMED: new Set(),
+  EXPIRED: new Set(),
+  REVOKED: new Set(),
+};
+
+/** 迁移校验：非法转换抛 schemaError（fail-closed）。 */
+export function transitionDeliveryState(
+  current: HandoffDeliveryState | undefined,
+  eventKind: HandoffDeliveryEventKind,
+): HandoffDeliveryState {
+  const target = DELIVERY_EVENT_TO_STATE[eventKind];
+  if (target === undefined) {
+    throw schemaError(
+      "handoff_delivery_state",
+      `event kind ${eventKind} has no delivery state mapping`,
+    );
+  }
+  const allowed = DELIVERY_TRANSITIONS[current ?? ""] ?? new Set<HandoffDeliveryState>();
+  if (!allowed.has(target)) {
+    throw schemaError(
+      "handoff_delivery_state",
+      `illegal handoff delivery transition ${current ?? "(none)"} --${eventKind}--> ${target}`,
+    );
+  }
+  return target;
+}
+
 export function isHandoffDeliveryEventKind(kind: string): kind is HandoffDeliveryEventKind {
   return (
     kind === "handoff_delivered" ||

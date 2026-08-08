@@ -9,7 +9,17 @@
  *  - 不保存 raw chain-of-thought / Vault plaintext（负向测试，§22/§28/§36-5）。
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { contentDigest } from "../src/negotiation/jcs.js";
@@ -86,6 +96,27 @@ describe("Negotiation Ledger: hash 链", () => {
 
   it("空链（无事件）视为 valid", () => {
     expect(store.verifyChain(NEG)).toEqual({ valid: true, count: 0 });
+  });
+
+  it("跨进程 append 锁：锁被占用 → 超时 fail-closed，不静默丢事件（评审项 B1）", () => {
+    // 手工创建锁文件（模拟另一进程持锁中：此前无锁，跨进程共享 dir 时
+    // 两个进程各自读到同一链尾互相覆盖——一条事件静默丢失）。
+    const lockPath = path.join(dir, "ledger", `${ledgerFileName(NEG)}.lock`);
+    mkdirSync(path.join(dir, "ledger"), { recursive: true });
+    writeFileSync(lockPath, "99999");
+    const locked = new LedgerStore({ dir, lockTimeoutMs: 100 });
+    expect(() => locked.append(baseContent())).toThrowError(/locked by another process/);
+  });
+
+  it("陈旧锁自愈：崩溃残留（mtime 超 30s）被清理后 append 成功（评审项 B1）", () => {
+    const lockPath = path.join(dir, "ledger", `${ledgerFileName(NEG)}.lock`);
+    mkdirSync(path.join(dir, "ledger"), { recursive: true });
+    writeFileSync(lockPath, "99999");
+    const past = new Date(Date.now() - 31_000);
+    utimesSync(lockPath, past, past);
+    const event = store.append(baseContent());
+    expect(event.event_id).toBeDefined();
+    expect(existsSync(lockPath)).toBe(false);
   });
 
   it("断链检测：中间事件被删除 → chain_break 且 append 被拒", () => {

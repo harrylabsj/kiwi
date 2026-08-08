@@ -156,6 +156,7 @@ export const LEDGER_ERROR_CODES = [
   "ledger_forbidden_content",
   "ledger_invalid_identity",
   "ledger_invalid_capability",
+  "ledger_append_locked",
 ] as const;
 export type LedgerErrorCode = (typeof LEDGER_ERROR_CODES)[number];
 
