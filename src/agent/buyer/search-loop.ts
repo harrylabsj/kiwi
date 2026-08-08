@@ -173,6 +173,8 @@ export async function runSearchCycle(
   const effectiveConstraints: TaskConstraints =
     budget !== undefined ? { ...task.constraints, max_total_price: budget } : task.constraints;
 
+  const startedAt = now();
+
   // ready/tracking -> searching (idempotent; already-searching = crash resume).
   if (task.status !== "searching") {
     task = store.transitionTask({
@@ -182,10 +184,19 @@ export async function runSearchCycle(
       event_type: "search_started",
       origin: "scheduler",
       idempotency_key: `${runId}:search_started`,
+      // 崩溃恢复 + 防并发重复执行（评审项 H4）：新激活任务的 next_run_at 为
+      // NULL（createTask 时置空、激活 ready 不设置）——searching 转移若保留
+      // NULL，崩溃后 dueTasks（要求 NOT NULL）永不选中该任务，永久卡死且
+      // 无恢复路径（"already-searching = crash resume" 注释此前不成立）。
+      // 置为未来锁定期：正常完成由 tracking/shortlist 转移覆盖该值；崩溃
+      // 后到期即被 dueTasks 重新选中恢复；锁定期内下一 tick 不会重复选中
+      // 同一任务（防并发搜索）。
+      next_run_at: new Date(
+        Date.parse(startedAt) +
+          Math.max(task.tracking_policy.default_interval_seconds, 60) * 1000,
+      ).toISOString(),
     });
   }
-
-  const startedAt = now();
   let products: ConnectorProduct[];
   try {
     products = await connector.searchProducts({

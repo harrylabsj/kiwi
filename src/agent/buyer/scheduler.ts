@@ -219,14 +219,20 @@ export class TaskScheduler {
       }
     }
 
-    // 3. Task-level rules (periodic_review / new_candidate) queue a re-search.
+    // 3. Task-level rules (periodic_review / price_below / stock_available)
+    //    queue a re-search. 求值在重搜索之后（第 5 步）——任务级规则针对的是
+    //    "任务任一候选满足条件"（如默认 price_below 阈值），必须基于本 tick
+    //    重搜索产生的新鲜观察，否则条件形同虚设（评审项 H5：此前只
+    //    markRuleChecked，条件从未被求值，承诺的"降价/到货通知"静默失效）。
     const searchQueue = new Map<string, BuyerTask>();
     for (const rule of taskLevel) {
-      result.checked_rules += 1;
-      this.store.markRuleChecked(rule.rule_id, true, now);
       const task = this.store.getTask(rule.task_id);
       if (task !== undefined && task.status === "tracking") {
         searchQueue.set(task.task_id, task);
+      } else {
+        // 不重搜的任务：仅推进检查时间，避免每 tick 重复入队。
+        result.checked_rules += 1;
+        this.store.markRuleChecked(rule.rule_id, true, now);
       }
     }
 
@@ -294,6 +300,59 @@ export class TaskScheduler {
             `search ${task.task_id}: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
+      }
+    }
+
+    // 5. Task-level rules evaluated against this tick's fresh observations
+    //    （评审项 H5 修复）：只对本 tick 实际重搜过的任务求值——重搜写入了
+    //    新观察，规则看到的是当前事实。任一候选满足条件即触发（任务级
+    //    price_below 的阈值是全任务预算；stock_available 同理）。通知按
+    //    (task_id, rule_id, 触发观察) 去重——观察未变时不重复打扰用户。
+    const searchedTasks = new Set(result.tasks_searched);
+    for (const rule of taskLevel) {
+      if (!searchedTasks.has(rule.task_id)) continue;
+      const task = this.store.getTask(rule.task_id);
+      if (task === undefined) continue;
+      result.checked_rules += 1;
+      let triggeredReason: string | undefined;
+      let triggerObservationId: string | undefined;
+      for (const candidate of this.store.listCandidates(rule.task_id)) {
+        if (candidate.sku === undefined) continue;
+        const observation = this.store.latestObservation(candidate.candidate_id);
+        if (observation === undefined) continue;
+        const previous = this.store.observations(candidate.candidate_id, 2)[1];
+        const inCooldown =
+          rule.cooldown_seconds > 0 &&
+          rule.last_triggered_at !== undefined &&
+          Date.parse(rule.last_triggered_at) + rule.cooldown_seconds * 1000 > Date.parse(now);
+        const reason = inCooldown ? undefined : evaluateRule(rule, observation, previous, now);
+        if (reason !== undefined) {
+          triggeredReason = reason;
+          triggerObservationId = observation.observation_id;
+          break;
+        }
+      }
+      if (triggeredReason === undefined || triggerObservationId === undefined) {
+        this.store.markRuleChecked(rule.rule_id, false, now);
+        continue;
+      }
+      this.store.markRuleChecked(rule.rule_id, true, now);
+      const inserted = this.store.appendEvent(
+        rule.task_id,
+        "notification",
+        {
+          rule_ids: [rule.rule_id],
+          summary: triggeredReason,
+        },
+        "scheduler",
+        `notify:${rule.task_id}:${rule.rule_id}:${triggerObservationId}`,
+      );
+      if (inserted) {
+        result.notifications.push({
+          task_id: rule.task_id,
+          summary: triggeredReason,
+          rule_ids: [rule.rule_id],
+        });
       }
     }
 
