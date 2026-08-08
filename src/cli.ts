@@ -32,15 +32,15 @@
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { agentDataDir, ensurePathsForDir } from "./agent/agent-db.js";
+
 import { startA2aNode, type A2aNodeHandle } from "./a2a/node.js";
 import type { ChatA2aNode } from "./agent/chat-tui.js";
 import { runChatTui } from "./agent/chat-tui.js";
 import { buildChatKernel, buildClient, defaultChatProfile } from "./agent/kernel-builder.js";
-import { isAgentMode, type AgentMode } from "./agent/mode.js";
-import { AgentKernel, type AgentKernelOptions } from "./agent/kernel.js";
-import { loadProfile, ProfileError, resolveSecret, RUNTIME_VERSION, type AgentProfile } from "./config/profile.js";
-import { HttpCommerceClient } from "./commerce/http-client.js";
+
+import { AgentKernel } from "./agent/kernel.js";
+import { loadProfile, ProfileError, type AgentProfile } from "./config/profile.js";
+
 import type { CommerceClient } from "./commerce/types.js";
 import { CommerceError } from "./commerce/types.js";
 import { runDoctor } from "./doctor.js";
@@ -48,7 +48,7 @@ import { EXIT } from "./exit-codes.js";
 import { createDeterministicStreamFn } from "./runtime/fake-model.js";
 import { runForeground } from "./runtime/foreground.js";
 import { runNegotiationTurn, type TurnReport } from "./runtime/negotiation-turn.js";
-import { isFakeProvider, realStreamFn, resolveThinkingLevel } from "./runtime/model.js";
+import { isFakeProvider, realStreamFn } from "./runtime/model.js";
 import { OperatorController } from "./operator/controller.js";
 import { DeterministicNegotiationRunner } from "./operator/runner.js";
 import { FileOperatorEventStore, OperatorStoreError } from "./operator/store.js";
@@ -59,6 +59,7 @@ import { runDown, runStatus, runUp, SupervisorError } from "./supervisor/manage.
 import { parseLogLines, runLogs } from "./supervisor/logs.js";
 import { StackConfigError } from "./supervisor/stack-config.js";
 import { cmdProductDoctor, productHelp, PRODUCT_VERSION, DEFAULT_CATALOG_URL } from "./product-cli.js";
+import { cmdWeixin, weixinUsage } from "./weixin/cli-weixin.js";
 import { merchantInit } from "./product-init.js";
 import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
 import { merchantPublish } from "./product-publish.js";
@@ -86,6 +87,8 @@ Usage:
                                           /discover /negotiate /register in-session
   kiwi chat --profile <file> [--data-dir <dir>]
                                           Main conversation with Principal Memory (v0.3.0-A)
+  kiwi weixin [--profile <file>] [--allow id,...] [--relogin] [--a2a]
+                                          WeChat remote control (scan QR to log in)
   kiwi metrics --dir <dir>                Handoff/negotiation ledger metrics (JSONL)
 
 Product layer (product-strategy rev1.1 §10/§19):
@@ -134,6 +137,10 @@ interface ParsedArgs {
   port?: number;
   noChat: boolean;
   noA2a: boolean;
+  weixinAllow?: string;
+  relogin: boolean;
+  qrScale: number;
+  noQr: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -164,6 +171,10 @@ function parseArgs(argv: string[]): ParsedArgs {
   let fake = false;
   let noChat = false;
   let noA2a = false;
+  let weixinAllow: string | undefined;
+  let relogin = false;
+  let qrScale = 1;
+  let noQr = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--profile") {
@@ -221,6 +232,15 @@ function parseArgs(argv: string[]): ParsedArgs {
       noChat = true;
     } else if (arg === "--no-a2a") {
       noA2a = true;
+    } else if (arg === "--allow") {
+      weixinAllow = argv[++i];
+    } else if (arg === "--relogin") {
+      relogin = true;
+    } else if (arg === "--qr-scale") {
+      const raw = argv[++i];
+      qrScale = raw === "2" ? 2 : 1;
+    } else if (arg === "--no-qr") {
+      noQr = true;
     } else if (arg !== undefined && arg.startsWith("--profile=")) {
       profile = arg.slice("--profile=".length);
     } else if (arg !== undefined && arg.startsWith("--dir=")) {
@@ -241,7 +261,20 @@ function parseArgs(argv: string[]): ParsedArgs {
       throw new ProfileError(`Unknown argument: ${arg ?? ""}`);
     }
   }
-  const out: ParsedArgs = { command, once, fake, noChat, noA2a, force, noInstall, autoNegotiate };
+  const out: ParsedArgs = {
+    command,
+    once,
+    fake,
+    noChat,
+    noA2a,
+    force,
+    noInstall,
+    autoNegotiate,
+    weixinAllow,
+    relogin,
+    qrScale,
+    noQr,
+  };
   if (profile !== undefined) out.profile = profile;
   if (dir !== undefined) out.dir = dir;
   if (lines !== undefined) out.lines = lines;
@@ -862,6 +895,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const hasHelp = argv.includes("--help") || argv.includes("-h");
   const firstArg = argv.find((a) => !a.startsWith("-"));
   // 产品层命令组帮助优先于全局帮助（`kiwi buyer --help` → buyer 帮助）
+  if (hasHelp && firstArg === "weixin") {
+    process.stdout.write(weixinUsage());
+    return EXIT.OK;
+  }
   if (hasHelp && (firstArg === "buyer" || firstArg === "merchant" || firstArg === "network")) {
     const help = productHelp(firstArg);
     if (help !== "") {
@@ -900,6 +937,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (cmd === "agent" && sub === "serve") return await cmdAgentServe(args);  // 旧命令别名保留
     if (cmd === "tui") return await cmdTui(args);
     if (cmd === "chat") return await cmdChat(args);
+    if (cmd === "weixin") {
+      return await cmdWeixin({
+        profile: args.profile,
+        dataDir: args.dataDir,
+        allow: args.weixinAllow,
+        relogin: args.relogin,
+        a2a: args.noA2a === false,
+        port: args.port,
+        qrScale: args.qrScale,
+        noQr: args.noQr,
+        catalog: args.catalog,
+      });
+    }
     if (cmd === "init") {
       const result = await runInit({
         dir: requireDir(args),

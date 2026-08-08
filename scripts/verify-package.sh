@@ -41,6 +41,10 @@ node --input-type=module -e "
   await import('@harrylabsj/kiwi/dist/runtime/negotiation-turn.js');
   await import('@harrylabsj/kiwi/dist/runtime/foreground.js');
   await import('@harrylabsj/kiwi/dist/runtime/buyer-policy.js');
+  await import('@harrylabsj/kiwi/dist/weixin/qr.js');
+  await import('@harrylabsj/kiwi/dist/weixin/ilink-client.js');
+  await import('@harrylabsj/kiwi/dist/weixin/channel.js');
+  await import('@harrylabsj/kiwi/dist/agent/kernel-builder.js');
   await import('@harrylabsj/kiwi/dist/commerce/http-client.js');
   await import('@harrylabsj/kiwi/dist/supervisor/stack-config.js');
   await import('@harrylabsj/kiwi/dist/supervisor/manage.js');
