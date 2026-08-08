@@ -31,6 +31,7 @@ import {
   type SearchMerchantsQuery,
   type SearchProductsQuery,
 } from "./types.js";
+import { isRedirectResponse, readJsonBody, SafeHttpError } from "../../net/safe-http.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -61,22 +62,23 @@ export class ShoppingCliConnector implements CommerceConnector {
     try {
       response = await fetch(url, {
         method: "GET",
-        headers: { accept: "application/json" },
+        // 出站纪律（与 P0 七处客户端一致）：不跟随重定向 + 响应体读取在
+        // 超时覆盖内 + 大小上限。
+        redirect: "manual",
         signal: controller.signal,
+        headers: { accept: "application/json" },
       });
     } catch (err) {
       throw new ConnectorError(
         "transient",
         `connector request failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-    } finally {
-      clearTimeout(timer);
     }
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch {
-      throw new ConnectorError("transient", `connector returned non-JSON (HTTP ${response.status})`);
+    if (isRedirectResponse(response)) {
+      throw new ConnectorError(
+        "transient",
+        `connector must not follow redirects (HTTP ${response.status})`,
+      );
     }
     if (!response.ok) {
       const kind =
@@ -88,6 +90,25 @@ export class ShoppingCliConnector implements CommerceConnector {
               ? "validation"
               : "transient";
       throw new ConnectorError(kind, `connector HTTP ${response.status} for ${pathname}`);
+    }
+    let payload: unknown;
+    try {
+      payload = await readJsonBody(response, { signal: controller.signal });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new ConnectorError(
+          "transient",
+          `connector request timed out after ${REQUEST_TIMEOUT_MS}ms`,
+        );
+      }
+      throw new ConnectorError(
+        "transient",
+        err instanceof SafeHttpError && err.code === "response_too_large"
+          ? `connector response too large: ${err.message}`
+          : `connector returned non-JSON (HTTP ${response.status})`,
+      );
+    } finally {
+      clearTimeout(timer);
     }
     return payload;
   }
@@ -194,6 +215,8 @@ export class ShoppingCliConnector implements CommerceConnector {
     try {
       response = await fetch(url, {
         method: "POST",
+        // 出站纪律（同 get）：POST 携带 Bearer token——重定向会泄露给第三方。
+        redirect: "manual",
         headers: {
           accept: "application/json",
           "content-type": "application/json",
@@ -207,14 +230,12 @@ export class ShoppingCliConnector implements CommerceConnector {
         "transient",
         `connector request failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-    } finally {
-      clearTimeout(timer);
     }
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch {
-      throw new ConnectorError("transient", `connector returned non-JSON (HTTP ${response.status})`);
+    if (isRedirectResponse(response)) {
+      throw new ConnectorError(
+        "transient",
+        `connector must not follow redirects (HTTP ${response.status})`,
+      );
     }
     if (!response.ok) {
       const kind =
@@ -226,6 +247,25 @@ export class ShoppingCliConnector implements CommerceConnector {
               ? "validation"
               : "transient";
       throw new ConnectorError(kind, `connector HTTP ${response.status} for ${pathname}`);
+    }
+    let payload: unknown;
+    try {
+      payload = await readJsonBody(response, { signal: controller.signal });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new ConnectorError(
+          "transient",
+          `connector request timed out after ${REQUEST_TIMEOUT_MS}ms`,
+        );
+      }
+      throw new ConnectorError(
+        "transient",
+        err instanceof SafeHttpError && err.code === "response_too_large"
+          ? `connector response too large: ${err.message}`
+          : `connector returned non-JSON (HTTP ${response.status})`,
+      );
+    } finally {
+      clearTimeout(timer);
     }
     return payload;
   }
