@@ -40,8 +40,10 @@ export interface MerchantPublishOptions {
   profile: AgentProfile;
   /** kiwi-catalog base URL（缺省由调用方解析 KIWI_CATALOG_URL）。 */
   catalogBaseUrl: string;
-  /** KIWI_CATALOG_OWNER_TOKEN_SECRET（owner token 派生）。 */
-  ownerTokenSecret: string;
+  /** KIWI_CATALOG_OWNER_TOKEN_SECRET（owner token 派生，legacy）。 */
+  ownerTokenSecret?: string;
+  /** 商家随机 owner token（v12+ 双路径；优先于 HMAC 派生）。 */
+  ownerToken?: string;
   /** shopping-cli SQLite 数据库路径（listings publish-listings --db）。 */
   shoppingCliDb: string;
   /** shopping-cli 可执行名/路径（缺省 "shopping"）。 */
@@ -177,6 +179,7 @@ export async function merchantPublish(
         catalogBaseUrl: options.catalogBaseUrl,
         domain,
         merchantId,
+        ownerToken: options.ownerToken,
         ownerTokenSecret: options.ownerTokenSecret,
         agentCardUrl: `${domain}/.well-known/agent-card.json`,
         fetchImpl: options.fetchImpl,
@@ -207,7 +210,9 @@ export async function merchantPublish(
     "publish-listings",
     "--merchant", merchantId,
     "--kiwi-catalog-url", options.catalogBaseUrl,
-    "--owner-token-secret", options.ownerTokenSecret,
+    ...(options.ownerToken
+      ? ["--owner-token", options.ownerToken]
+      : ["--owner-token-secret", options.ownerTokenSecret ?? ""]),
     "--owner-agent-id", catalogAgentId,
     "--format", "json",
   ];

@@ -497,10 +497,12 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
     return EXIT.CONFIG;
   }
   const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
+  const merchantToken = process.env.KIWI_MERCHANT_TOKEN || "";
   let node: A2aNodeHandle | null = await startA2aNode({
     profile,
     catalog,
     preferredPort: args.port,
+    ...(merchantToken ? { ownerToken: merchantToken } : {}),
     ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
   });
   console.log(`[agent serve] merchant ${profile.agent_id} A2A server: ${node.agentCardUrl}`);
@@ -522,6 +524,7 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
         profile: p as AgentProfile,
         catalog,
         preferredPort: args.port,
+        ...(merchantToken ? { ownerToken: merchantToken } : {}),
         ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
       });
     },
@@ -620,6 +623,7 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
   const profile = args.profile !== undefined ? loadProfile(args.profile) : defaultChatProfile();
   // A2A 节点 + buyer 磋商工具共用一个 catalog：kernel 构建前先解析。
   const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
+  const merchantToken = process.env.KIWI_MERCHANT_TOKEN || "";
   const kernel = await buildChatKernel(profile, args.dataDir, catalog);
   const kernels: AgentKernel[] = [kernel];
   const reload = async (file: string): Promise<AgentKernel> => {
@@ -644,6 +648,7 @@ async function cmdChat(args: ParsedArgs): Promise<number> {
         profile: p as AgentProfile,
         catalog,
         preferredPort: args.port,
+        ...(merchantToken ? { ownerToken: merchantToken } : {}),
         ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
       });
       process.stderr.write(
@@ -854,9 +859,10 @@ async function cmdMerchantPublish(args: ParsedArgs): Promise<number> {
     return EXIT.CONFIG;
   }
   const ownerTokenSecret = process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET;
-  if (!ownerTokenSecret) {
+  const merchantToken = process.env.KIWI_MERCHANT_TOKEN || "";
+  if (!merchantToken && !ownerTokenSecret) {
     process.stderr.write(
-      "KIWI_CATALOG_OWNER_TOKEN_SECRET 是必需的（owner token 派生，与 kiwi-catalog 一致）\n",
+      "需要 KIWI_MERCHANT_TOKEN（随机 token，推荐）或 KIWI_CATALOG_OWNER_TOKEN_SECRET（legacy HMAC）\n",
     );
     return EXIT.CONFIG;
   }
@@ -864,7 +870,8 @@ async function cmdMerchantPublish(args: ParsedArgs): Promise<number> {
   const report = await merchantPublish({
     profile,
     catalogBaseUrl: catalog,
-    ownerTokenSecret,
+    ...(merchantToken ? { ownerToken: merchantToken } : {}),
+    ...(ownerTokenSecret ? { ownerTokenSecret } : {}),
     shoppingCliDb,
     ...(args.shoppingCliPath !== undefined ? { shoppingCliPath: args.shoppingCliPath } : {}),
     ...(args.shoppingCliMerchant !== undefined
