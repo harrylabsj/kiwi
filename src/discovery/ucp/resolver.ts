@@ -33,6 +33,7 @@
  */
 
 import { assertResolvableTargetUrl, assertSafeTargetUrl } from "../../a2a/client/url-policy.js";
+import { readJsonBody, SafeHttpError } from "../../net/safe-http.js";
 import { UcpError } from "./error.js";
 import { validateUcpProfile } from "./validate.js";
 import type { UcpRejectedEntry, UcpValidationResult } from "./validate.js";
@@ -210,8 +211,6 @@ export class UcpResolver {
         "profile_unreachable",
         `UCP profile fetch failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-    } finally {
-      clearTimeout(timer);
     }
 
     if (
@@ -235,9 +234,20 @@ export class UcpResolver {
 
     let raw: unknown;
     try {
-      raw = await response.json();
-    } catch {
-      throw new UcpError("profile_malformed", "UCP profile response is not valid JSON");
+      // 响应体读取在超时覆盖内 + 大小上限（出站加固）。
+      raw = await readJsonBody(response, { signal: controller.signal });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new UcpError("profile_unreachable", `UCP profile fetch timed out after ${timeoutMs}ms`);
+      }
+      throw new UcpError(
+        "profile_malformed",
+        err instanceof SafeHttpError && err.code === "response_too_large"
+          ? err.message
+          : "UCP profile response is not valid JSON",
+      );
+    } finally {
+      clearTimeout(timer);
     }
 
     let validation: UcpValidationResult;

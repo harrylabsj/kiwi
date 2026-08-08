@@ -44,6 +44,7 @@
  */
 
 import { validateAgainst } from "../contracts/schemas.js";
+import { readJsonBody, SafeHttpError } from "../net/safe-http.js";
 import type {
   CommerceCapabilities,
   NegotiationDecision,
@@ -100,6 +101,8 @@ export class HttpCommerceClient implements CommerceClient {
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
+        // 出站加固：绝不跟随重定向（3xx 目标不经过校验，且会携带 Bearer 头）。
+        redirect: "manual",
         headers: {
           authorization: `Bearer ${this.token}`,
           "content-type": "application/json",
@@ -113,15 +116,33 @@ export class HttpCommerceClient implements CommerceClient {
         "transient",
         `Commerce API request failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-    } finally {
-      clearTimeout(timer);
+    }
+
+    if (
+      response.redirected ||
+      response.type === "opaqueredirect" ||
+      (response.status >= 300 && response.status < 400)
+    ) {
+      throw new CommerceError("transient", `Commerce API must not follow redirects (HTTP ${response.status})`);
     }
 
     let payload: JsonObject = {};
     try {
-      payload = (await response.json()) as JsonObject;
-    } catch {
+      // 响应体读取在超时覆盖内 + 大小上限（出站加固）。
+      payload = (await readJsonBody(response, { signal: controller.signal })) as JsonObject;
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new CommerceError(
+          "transient",
+          `Commerce API request timed out after ${this.timeoutMs}ms while reading response`,
+        );
+      }
+      if (err instanceof SafeHttpError && err.code === "response_too_large") {
+        throw new CommerceError("transient", err.message);
+      }
       // Non-JSON body; handled via status mapping below.
+    } finally {
+      clearTimeout(timer);
     }
 
     if (!response.ok || payload.ok === false) {

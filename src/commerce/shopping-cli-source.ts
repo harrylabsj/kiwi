@@ -30,6 +30,7 @@
  */
 
 import { CommerceError, type CommerceDataSource, type CommerceField, type ProductFact, type ProductSearchQuery } from "./data-source.js";
+import { isRedirectResponse, readJsonBody, SafeHttpError } from "../net/safe-http.js";
 import type { CommerceHealth } from "./types.js";
 
 export interface ShoppingCliCommerceDataSourceDeps {
@@ -121,6 +122,8 @@ export class ShoppingCliCommerceDataSource implements CommerceDataSource {
     let response: Response;
     try {
       response = await fetchImpl(url, {
+        // 出站加固：绝不跟随重定向（3xx 目标不经过校验，且可能转发 Bearer 头）。
+        redirect: "manual",
         signal: controller.signal,
         headers: {
           accept: "application/json",
@@ -138,8 +141,12 @@ export class ShoppingCliCommerceDataSource implements CommerceDataSource {
           ? `shopping-cli request timed out after ${timeoutMs}ms: ${url}`
           : `shopping-cli request failed: ${url} (${detail})`,
       );
-    } finally {
-      clearTimeout(timer);
+    }
+    if (isRedirectResponse(response)) {
+      throw new CommerceError(
+        "request_failed",
+        `shopping-cli request must not follow redirects (HTTP ${response.status} from ${url})`,
+      );
     }
     if (response.status === 404) {
       // 404 = 资源不存在：getProduct 的"未知 SKU → undefined"接口承诺
@@ -151,9 +158,23 @@ export class ShoppingCliCommerceDataSource implements CommerceDataSource {
     }
     let raw: unknown;
     try {
-      raw = await response.json();
-    } catch {
-      throw new CommerceError("request_failed", `shopping-cli response from ${url} is not valid JSON`);
+      // 响应体读取在超时覆盖内 + 大小上限（出站加固）。
+      raw = await readJsonBody(response, { signal: controller.signal });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new CommerceError(
+          "request_failed",
+          `shopping-cli request timed out after ${timeoutMs}ms while reading response: ${url}`,
+        );
+      }
+      throw new CommerceError(
+        "request_failed",
+        err instanceof SafeHttpError && err.code === "response_too_large"
+          ? `shopping-cli response from ${url}: ${err.message}`
+          : `shopping-cli response from ${url} is not valid JSON`,
+      );
+    } finally {
+      clearTimeout(timer);
     }
     return raw;
   }

@@ -477,6 +477,37 @@ describe("A2AServer + throttle: 超限拒绝（rate_limited / retry_after）", (
     expect(idempotency.get("peer-1", "msg_rl_3")).toBeNull();
   });
 
+  it("tasks/get 独立限流：未知 id 的全链扫描不再无限制（评审项 B3）", async () => {
+    const throttle = new A2AServerThrottle({
+      windowMs: 60_000,
+      tiers: {
+        T0: {
+          identityRequestsPerWindow: 2,
+          domainRequestsPerWindow: 100,
+          maxConcurrentTasks: 5,
+          malformedBudget: 100,
+          retryAfterSeconds: 8,
+        },
+      },
+    });
+    const { a2aUrl } = await startServer({
+      throttle,
+      authVerifier: verifiedVerifier("peer-1", "T0"),
+    });
+
+    // 前两次 tasks/get 通过（限额 2；此前该路径完全不受限流）
+    for (let i = 1; i <= 2; i++) {
+      const res = await rpc(a2aUrl, "tasks/get", { id: `task_unknown_${i}` }, `tg-${i}`);
+      expect(res.status).toBe(200);
+    }
+    // 第三次被限流（未知 id 每次触发全 Ledger 扫描，CPU 开销随规模线性放大）
+    const res3 = await rpc(a2aUrl, "tasks/get", { id: "task_unknown_3" }, "tg-3");
+    expect(res3.status).toBe(200); // JSON-RPC 协议错误载体仍走 200
+    const err = rpcError(res3.body);
+    expect(err.code).toBe(-32050);
+    expect(errorData(err).protocol_code).toBe("rate_limited");
+  });
+
   it("rejects beyond the per-domain limit across identities", async () => {
     let seq = 0;
     const cycling: AuthVerifier = {
