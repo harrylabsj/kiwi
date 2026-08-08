@@ -209,6 +209,25 @@ export function proposalToTerms(
   proposal: Proposal,
   currencyExponentOf: (currency: string) => number,
 ): TermConversionResult<TermSet> {
+  // 形状守卫（评审项：snapshot schema 的 proposal 只声明 {"type":["object",
+  // "null"]} 未 $ref $defs——网关可回传 {sku:"x"} 之类残缺对象，此前
+  // proposal.delivery.fee 直接取值抛 TypeError，channel 崩溃而非 fail-closed）。
+  if (
+    proposal === null ||
+    typeof proposal !== "object" ||
+    typeof proposal.currency !== "string" ||
+    typeof proposal.unit_price !== "number" ||
+    (proposal as { delivery?: unknown }).delivery === null ||
+    typeof (proposal as { delivery?: unknown }).delivery !== "object" ||
+    typeof (proposal as { delivery?: { fee?: unknown } }).delivery?.fee !== "number"
+  ) {
+    return {
+      ok: false,
+      reason:
+        "proposal shape invalid: expected {currency, unit_price, delivery.fee} — got " +
+        JSON.stringify(proposal ?? null).slice(0, 200),
+    };
+  }
   const notes: TranslationNote[] = [];
   const exponent = currencyExponentOf(proposal.currency);
 
