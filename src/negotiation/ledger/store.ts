@@ -46,6 +46,8 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  statSync,
+  unlinkSync,
   writeSync,
 } from "node:fs";
 import path from "node:path";
@@ -68,7 +70,13 @@ export interface LedgerStoreOptions {
   dir: string;
   /** 可注入时钟（RFC 3339）；缺省用 new Date().toISOString()。 */
   now?: () => string;
+  /** 跨进程 append 锁等待上限（ms，缺省 5000）；超时 fail-closed。 */
+  lockTimeoutMs?: number;
 }
+
+/** append 锁轮询间隔（ms）与陈旧阈值（持锁超此即视为崩溃残留，可自愈）。 */
+const LOCK_POLL_MS = 20;
+const LOCK_STALE_MS = 30_000;
 
 let tmpSeq = 0;
 
@@ -85,11 +93,63 @@ export class LedgerStore {
   private readonly baseDir: string;
   private readonly ledgerDir: string;
   private readonly now: () => string;
+  private readonly lockTimeoutMs: number;
 
   constructor(options: LedgerStoreOptions) {
     this.baseDir = options.dir;
     this.ledgerDir = path.join(options.dir, "ledger");
     this.now = options.now ?? (() => new Date().toISOString());
+    this.lockTimeoutMs = options.lockTimeoutMs ?? 5000;
+  }
+
+  /**
+   * 跨进程 append 互斥（评审项 B1）：append = load → verify → 整文件重写，
+   * 单进程内同步无交错，但**跨进程共享 dir**（handoff 幂等锁文档声称支持
+   * 的场景）两个进程同时 append 会各自读到同一链尾、互相覆盖——一条事件
+   * 静默丢失（无报错）。锁文件用 `openSync("wx")` 原子创建；持锁崩溃残留
+   * 由 mtime 陈旧检测自愈（append 是亚秒级操作，30s 阈值安全）；等待超时
+   * fail-closed（ledger_append_locked）——绝不静默丢事件。
+   */
+  private withChainLock<T>(negotiationId: string, fn: () => T): T {
+    const lockPath = path.join(this.ensureLedgerDir(), `${ledgerFileName(negotiationId)}.lock`);
+    const deadline = Date.now() + this.lockTimeoutMs;
+    for (;;) {
+      try {
+        const fd = openSync(lockPath, "wx");
+        writeSync(fd, String(process.pid));
+        closeSync(fd);
+        break;
+      } catch (err) {
+        if ((err as { code?: string }).code !== "EEXIST") throw err;
+        try {
+          const st = statSync(lockPath);
+          if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+            unlinkSync(lockPath);
+            continue;
+          }
+        } catch {
+          // 锁文件刚被持有方释放 → 重试
+          continue;
+        }
+        if (Date.now() >= deadline) {
+          throw new LedgerError(
+            "ledger_append_locked",
+            `negotiation ${negotiationId} is locked by another process (waited ${this.lockTimeoutMs}ms)`,
+          );
+        }
+        // 同步轮询（append 是同步 API；Atomics.wait 不占用 CPU 轮询）
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_POLL_MS);
+      }
+    }
+    try {
+      return fn();
+    } finally {
+      try {
+        unlinkSync(lockPath);
+      } catch {
+        // 锁文件已不存在（异常清理）则忽略。
+      }
+    }
   }
 
   /** ledger 目录（0700），不存在则创建。 */
@@ -184,6 +244,11 @@ export class LedgerStore {
    * 返回完整事件（含 event_id / digests / recorded_at）。
    */
   append(content: LedgerEventContent): LedgerEvent {
+    // 跨进程互斥（评审项 B1）：整个 load→verify→rewrite 在链级文件锁内。
+    return this.withChainLock(content.negotiation_id, () => this.appendUnlocked(content));
+  }
+
+  private appendUnlocked(content: LedgerEventContent): LedgerEvent {
     // 禁词前置检查：绝不把 CoT / Vault plaintext 落盘（§22 / §28 / §36-5）。
     assertNoForbiddenContent(eventContentAddressable(content));
 

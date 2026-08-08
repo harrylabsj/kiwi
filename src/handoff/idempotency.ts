@@ -29,12 +29,15 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import path from "node:path";
 import { HandoffError } from "./errors.js";
@@ -61,6 +64,9 @@ interface IdempotencyRow {
 const DEFAULT_RETENTION_DAYS = 7;
 const DEFAULT_LOCK_TIMEOUT_MS = 120_000;
 const LOCK_POLL_MS = 25;
+/** 陈旧锁阈值：持锁超此即视为崩溃残留（executeHandoff 锁持有上限 = 锁超时
+ *  + URL 探测，10 分钟对正常操作是安全上限）。 */
+const LOCK_STALE_MS = 10 * 60 * 1000;
 
 export class HandoffIdempotencyStore {
   private readonly dir: string;
@@ -102,6 +108,19 @@ export class HandoffIdempotencyStore {
         break;
       } catch (err) {
         if ((err as { code?: string }).code !== "EEXIST") throw err;
+        // 陈旧锁自愈（评审项 B2）：持锁进程崩溃（finally 未执行）→ 锁文件
+        // 永久残留，该候选永远 concurrency_lock_timeout（每次等满超时）。
+        // mtime 超 LOCK_STALE_MS 即视为残留删除重试。
+        try {
+          const st = statSync(lockPath);
+          if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+            unlinkSync(lockPath);
+            continue;
+          }
+        } catch {
+          // 锁文件刚被释放 → 重试
+          continue;
+        }
         if (Date.now() >= deadline) {
           throw new HandoffError(
             "concurrency_lock_timeout",
@@ -140,7 +159,16 @@ export class HandoffIdempotencyStore {
       handoff_id: handoffId,
       recorded_at: this.now(),
     };
-    writeFileSync(this.filePath, `${JSON.stringify(row)}\n`, { flag: "a", mode: 0o600 });
+    // 追加 + fsync（评审项 B2）：此前纯追加无 fsync，崩溃时最后一行可能
+    // 撕裂——rows() 容忍撕裂行（跳过）→ 同候选再次执行会重复交付。fsync
+    // 后成功返回即持久，重试路径可依赖幂等表。
+    const fd = openSync(this.filePath, "a", 0o600);
+    try {
+      writeSync(fd, `${JSON.stringify(row)}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
   }
 
   /** 惰性清理：删除超过保留期的行（重写文件，原子 rename）。 */

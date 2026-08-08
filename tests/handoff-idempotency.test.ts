@@ -6,7 +6,7 @@
  * - 不同 digest（同候选）→ 不命中（调用方 fail-closed 的输入）；
  * - 保留期清理（prune 删除过期行）。
  */
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -126,5 +126,18 @@ describe("withCandidateLock（§10.1 并发保护）", () => {
     ).rejects.toMatchObject({ code: "concurrency_lock_timeout" });
     await holder;
     expect(released).toBe(true);
+  });
+
+  it("陈旧锁自愈：崩溃残留（mtime 超阈值）被清理，不永久 concurrency_lock_timeout（评审项 B2）", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-idem-"));
+    const s = new HandoffIdempotencyStore({ dir, lockTimeoutMs: 60 });
+    // 模拟持锁进程崩溃：手工创建锁文件并把 mtime 改到陈旧阈值之前
+    const lockPath = path.join(dir, "locks", "hcan_01.lock");
+    mkdirSync(path.join(dir, "locks"), { recursive: true });
+    writeFileSync(lockPath, "99999");
+    const past = new Date(Date.now() - 11 * 60 * 1000); // > 10 分钟阈值
+    utimesSync(lockPath, past, past);
+    // 陈旧锁被自愈清理，立即获得锁（不会等满 60ms 超时）
+    await expect(s.withCandidateLock("hcan_01", async () => "ok")).resolves.toBe("ok");
   });
 });

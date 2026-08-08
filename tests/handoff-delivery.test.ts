@@ -85,6 +85,13 @@ describe("OPENED_CONFIRMED 证据门", () => {
   it("无证据的 launch 永不成为 OPENED_CONFIRMED", () => {
     const ledger = store();
     const c = candidate();
+    ledger.appendDeliveryEvent({
+      kind: "handoff_delivered",
+      candidate: c,
+      handoff_id: "hnd_01",
+      identity: IDENTITY,
+      capability: CAPABILITY,
+    });
     recordLaunch(deliveredDeps(ledger, c, "hnd_01"));
     expect(deliveryState(ledger.eventsForHandoff(c.negotiation_id, "hnd_01"))).toBe("LAUNCHED");
   });
@@ -112,5 +119,114 @@ describe("OPENED_CONFIRMED 证据门", () => {
     expect(() =>
       validateOpenEvidence({ kind: "local_callback", handoff_id: "hnd_01", at: "yesterday" }),
     ).toThrow(/timestamp|RFC 3339/);
+  });
+});
+
+describe("交付状态机迁移表（评审项：delivery 域补齐）", () => {
+  function delivered(ledger: HandoffEventStore, c: HandoffCandidate): void {
+    ledger.appendDeliveryEvent({
+      kind: "handoff_delivered",
+      candidate: c,
+      handoff_id: "hnd_01",
+      identity: IDENTITY,
+      capability: CAPABILITY,
+    });
+  }
+
+  it("launch 必须已有 delivered（此前无前置门，审计可被污染）", () => {
+    const ledger = store();
+    const c = candidate();
+    expect(() => recordLaunch(deliveredDeps(ledger, c, "hnd_01"))).toThrow(
+      /illegal handoff delivery transition \(none\)/,
+    );
+  });
+
+  it("REVOKED 之后不再接受任何事件（终态）", () => {
+    const ledger = store();
+    const c = candidate();
+    delivered(ledger, c);
+    ledger.appendDeliveryEvent({
+      kind: "handoff_revoked",
+      candidate: c,
+      handoff_id: "hnd_01",
+      identity: IDENTITY,
+      capability: CAPABILITY,
+      evidence: { reason: "operator revocation" },
+    });
+    expect(() => recordOpenEvidence({ ...deliveredDeps(ledger, c, "hnd_01"), evidence: { kind: "local_callback", handoff_id: "hnd_01", at: "2026-08-07T10:00:00Z" } })).toThrow(
+      /illegal handoff delivery transition REVOKED/,
+    );
+    expect(() => recordLaunch(deliveredDeps(ledger, c, "hnd_01"))).toThrow(/illegal/);
+  });
+
+  it("OPENED_CONFIRMED 之后不可倒退为 EXPIRED / 重复确认", () => {
+    const ledger = store();
+    const c = candidate();
+    delivered(ledger, c);
+    recordLaunch(deliveredDeps(ledger, c, "hnd_01"));
+    recordOpenEvidence({ ...deliveredDeps(ledger, c, "hnd_01"), evidence: { kind: "local_callback", handoff_id: "hnd_01", at: "2026-08-07T10:00:00Z" } });
+    expect(deliveryState(ledger.eventsForHandoff(c.negotiation_id, "hnd_01"))).toBe("OPENED_CONFIRMED");
+    expect(() =>
+      ledger.appendDeliveryEvent({
+        kind: "handoff_expired",
+        candidate: c,
+        handoff_id: "hnd_01",
+        identity: IDENTITY,
+        capability: CAPABILITY,
+      }),
+    ).toThrow(/illegal handoff delivery transition OPENED_CONFIRMED/);
+    expect(() =>
+      recordOpenEvidence({ ...deliveredDeps(ledger, c, "hnd_01"), evidence: { kind: "platform_callback", handoff_id: "hnd_01", at: "2026-08-07T11:00:00Z" } }),
+    ).toThrow(/illegal/);
+  });
+
+  it("EXPIRED 是终态（delivered → expired 合法，其后任何事件拒绝）", () => {
+    const ledger = store();
+    const c = candidate();
+    delivered(ledger, c);
+    ledger.appendDeliveryEvent({
+      kind: "handoff_expired",
+      candidate: c,
+      handoff_id: "hnd_01",
+      identity: IDENTITY,
+      capability: CAPABILITY,
+    });
+    expect(deliveryState(ledger.eventsForHandoff(c.negotiation_id, "hnd_01"))).toBe("EXPIRED");
+    expect(() => recordLaunch(deliveredDeps(ledger, c, "hnd_01"))).toThrow(/illegal/);
+  });
+
+  it("同链上多个 handoff 的交付事件互不干扰", () => {
+    const ledger = store();
+    const c = candidate();
+    ledger.appendDeliveryEvent({
+      kind: "handoff_delivered",
+      candidate: c,
+      handoff_id: "hnd_01",
+      identity: IDENTITY,
+      capability: CAPABILITY,
+    });
+    // 第二个 handoff 独立交付：折叠按 handoff_id 过滤，不受 hnd_01 影响
+    ledger.appendDeliveryEvent({
+      kind: "handoff_delivered",
+      candidate: c,
+      handoff_id: "hnd_02",
+      identity: IDENTITY,
+      capability: CAPABILITY,
+    });
+    expect(deliveryState(ledger.eventsForHandoff(c.negotiation_id, "hnd_01"))).toBe("DELIVERED");
+    expect(deliveryState(ledger.eventsForHandoff(c.negotiation_id, "hnd_02"))).toBe("DELIVERED");
+  });
+
+  it("交付事件必须绑定 handoff_id（fail-closed）", () => {
+    const ledger = store();
+    const c = candidate();
+    expect(() =>
+      ledger.appendDeliveryEvent({
+        kind: "handoff_delivered",
+        candidate: c,
+        identity: IDENTITY,
+        capability: CAPABILITY,
+      } as never),
+    ).toThrow(/requires handoff_id/);
   });
 });

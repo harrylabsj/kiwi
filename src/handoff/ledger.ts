@@ -39,6 +39,8 @@ import {
   HANDOFF_CANDIDATE_EVENT_KINDS,
   type HandoffCandidateEventKind,
 } from "./lifecycle.js";
+import { deliveryState, transitionDeliveryState } from "./delivery.js";
+import { HandoffError } from "./errors.js";
 
 /** 交付观察事件 kind（KTH rev0.3 §9；不伪装外部成交，§36-27/28）。 */
 export const HANDOFF_DELIVERY_EVENT_KINDS = [
@@ -140,8 +142,22 @@ export class HandoffEventStore {
     return this.append(input);
   }
 
-  /** 交付观察事件（kind 限定 delivery 域）。 */
+  /**
+   * 交付观察事件（kind 限定 delivery 域）。
+   *
+   * 落链前做交付状态机迁移校验（delivery.ts 的 DELIVERY_TRANSITIONS，
+   * 与 candidate lifecycle 的迁移校验对称）：交付事件必须绑定 handoff_id，
+   * 且 (none)→DELIVERED 必须是首个事件；REVOKED/EXPIRED/OPENED_CONFIRMED
+   * 之后不再接受任何事件。校验按同 handoff_id 折叠（同一 negotiation 链上
+   * 可并存多个 handoff 的交付事件，互不干扰）。
+   */
   appendDeliveryEvent(input: Omit<HandoffEventInput, "kind"> & { kind: HandoffDeliveryEventKind }): LedgerEvent {
+    if (input.handoff_id === undefined) {
+      throw new HandoffError("invalid_input", "delivery event requires handoff_id", "handoff_id");
+    }
+    const chain = this.store.events(input.candidate.negotiation_id);
+    const current = deliveryState(chain.filter((e) => e.handoff_id === input.handoff_id));
+    transitionDeliveryState(current, input.kind);
     return this.append(input);
   }
 
