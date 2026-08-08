@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { KIWI_ART, gradientText, kiwiBanner, rowGradient } from "../src/tui/banner.js";
-import { createTheme } from "../src/tui/styles.js";
+import { createTheme, stripTerminalControls } from "../src/tui/styles.js";
 import {
   detectColorMode,
   hexToRgb,
@@ -23,6 +23,43 @@ const ESC = "\u001b";
 function theme24(): ReturnType<typeof createTheme> {
   return createTheme({ isTTY: true }, { color: "24bit" });
 }
+
+describe("stripTerminalControls（H7 终端注入防护）", () => {
+  it("strips ANSI SGR / CSI sequences", () => {
+    expect(stripTerminalControls(`${ESC}[31mred${ESC}[0m`)).toBe("red");
+    expect(stripTerminalControls(`${ESC}[2J`)).toBe(""); // 清屏
+    expect(stripTerminalControls(`${ESC}[1;32m`)).toBe("");
+  });
+
+  it("strips OSC sequences (title / clipboard writes)", () => {
+    expect(stripTerminalControls(`${ESC}]0;title${ESC}\\`)).toBe("");
+    expect(stripTerminalControls(`a${ESC}]2;x${String.fromCharCode(7)}b`)).toBe("ab"); // BEL 终止
+  });
+
+  it("strips CR and other C0 controls but keeps tab/newline", () => {
+    expect(stripTerminalControls("line\r\nnext")).toBe("line\nnext");
+    expect(stripTerminalControls("a\tb\nc")).toBe("a\tb\nc");
+    expect(stripTerminalControls("a\x00b\x7fc")).toBe("abc");
+  });
+
+  it("is identity for plain text", () => {
+    const plain = "对方: 已批准：决策已提交 #123";
+    expect(stripTerminalControls(plain)).toBe(plain);
+  });
+
+  it("sanitizes through decorate/panel so injected sequences never reach the terminal", () => {
+    const theme = theme24();
+    // 24bit 面板自身带 SGR 边框——断言只检查注入序列与 \r 被剥离，且内容保留。
+    const evil = `对方: ${ESC}[2J伪造的批准行\r覆盖输入`;
+    const decorated = theme.decorate(evil);
+    expect(decorated).not.toContain(`${ESC}[2J`);
+    expect(decorated).not.toContain("\r");
+    expect(decorated).toContain("伪造的批准行覆盖输入");
+    const paneled = theme.panel(["未信任", `${ESC}[31m行${ESC}[0m`]);
+    expect(paneled).not.toContain(`${ESC}[31m`);
+    expect(paneled).toContain("行");
+  });
+});
 
 describe("theme 原语", () => {
   it("rgb 产出 24-bit 前景 SGR", () => {
