@@ -268,6 +268,8 @@ export class AgentKernel {
   private readonly session: Session;
   private readonly harness: AgentHarness;
   private briefing: string | undefined;
+  /** 统一时钟（构造注入或墙钟；与 open() 的 clock 闭包同源语义）。 */
+  private readonly clock: () => string;
   private chain: Promise<unknown> = Promise.resolve();
   private shutdownRequested = false;
   private closed = false;
@@ -307,9 +309,11 @@ export class AgentKernel {
     modeRef?: { value: AgentMode };
     pendingHooks?: Map<string, PendingActionHooks>;
     turnId: { current: string };
+    now?: () => string;
   }) {
     this.profile = options.profile;
     this.paths = options.paths;
+    this.clock = options.now ?? (() => new Date().toISOString());
     this.db = options.db;
     this.store = options.store;
     this.principal = options.principal;
@@ -464,6 +468,7 @@ export class AgentKernel {
       modeRef,
       pendingHooks,
       turnId,
+      now: clock,
       ...(taskStore !== undefined ? { taskStore } : {}),
       ...(scheduler !== undefined ? { scheduler } : {}),
       ...(options.commerceClient !== undefined ? { commerceClient: options.commerceClient } : {}),
@@ -736,6 +741,9 @@ export class AgentKernel {
    */
   schedulerTick(budget: TickBudget = {}): Promise<TickResult> {
     return this.enqueue(async () => {
+      // 惰性过期清扫（评审项 L1）：到期未执行的 handoff 候选落 expired 事件，
+      // TUI /handoff 不再永久显示"从未获批/从未执行"。
+      this.handoffRuntime?.ledger.sweepExpiredCandidates(this.clock());
       if (this.scheduler === undefined) {
         return {
           checked_rules: 0,
@@ -747,6 +755,12 @@ export class AgentKernel {
       }
       return this.scheduler.tick(budget);
     });
+  }
+
+  /** 惰性过期清扫入口（/handoff 渲染前调用；幂等，可重复调）。 */
+  sweepHandoffCandidates(): number {
+    if (this.handoffRuntime === undefined) return 0;
+    return this.handoffRuntime.ledger.sweepExpiredCandidates(this.clock());
   }
 
   /**
@@ -1203,6 +1217,14 @@ export class AgentKernel {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    // 等 enqueue 链（评审项 L4）：排队中的工具调用/命令/scheduler tick 全部
+    // 落定后再关库——此前只等模型 harness 空闲，排队中的后续 work 在
+    // db.close() 之后仍会执行（/profile 切换旧 kernel 的空窗），行为未定义。
+    try {
+      await this.chain;
+    } catch {
+      // 链上错误已各自 catch（this.chain 赋值时 catch），此处仅确保等待完成。
+    }
     try {
       await this.harness.waitForIdle();
     } catch {
