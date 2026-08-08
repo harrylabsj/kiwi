@@ -118,7 +118,7 @@ export SHOPPING_BUYER_TOKEN="${BUYER_TOKEN}"
 MERCHANT_PROFILE="${WORK}/merchant.e2e.yaml"
 BUYER_PROFILE="${WORK}/buyer.e2e.yaml"
 cat >"${MERCHANT_PROFILE}" <<EOF
-runtime_version: 0.5.0
+runtime_version: 0.6.0
 protocol_version: shopping.negotiation/0.1
 agent_id: merchant-agent:merchant-001
 role: merchant
@@ -148,7 +148,7 @@ merchant_policy:
     - suspicious_content
 EOF
 cat >"${BUYER_PROFILE}" <<EOF
-runtime_version: 0.5.0
+runtime_version: 0.6.0
 protocol_version: shopping.negotiation/0.1
 agent_id: buyer-agent:buyer-001
 role: buyer

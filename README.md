@@ -51,7 +51,7 @@ Buyer Agent ──A2A wire──▶ Merchant Agent
 ```bash
 npm install
 npm run build
-npm test              # 1236 tests（75 文件），零外部依赖
+npm test              # 全部离线测试（103 文件 / 1489 tests），零外部依赖
 npm run verify        # lint + typecheck + build + test + package smoke
 ```
 
@@ -130,7 +130,7 @@ node scripts/a2a-agent.mjs --role buyer                   # 交互式 buyer（�
 ```bash
 npm run lint            # eslint --max-warnings=0
 npm run typecheck       # tsc --noEmit（strict）
-npm run test            # vitest，1236 tests
+npm run test            # vitest，103 文件 / 1489 tests（全离线）
 npm run verify          # 全部 + 生产包冒烟
 ```
 
