@@ -235,6 +235,9 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
             }
           }
         } else if (line === "/handoff" || line.startsWith("/handoff ")) {
+          // 惰性过期清扫（评审项 L1）：到期未执行的候选先落 expired 事件，
+          // 列表不再显示"从未获批/从未执行"的过期候选。
+          current.kernel.sweepHandoffCandidates();
           const summary = current.kernel.handoffSummary;
           if (summary.enabled === false) {
             write("[handoff] 当前 kernel 未启用 Handoff（buyer 角色）。");

@@ -225,6 +225,13 @@ export class InboundPipeline {
     input: SendMessageInput,
     caller: SendMessageCaller,
   ): Promise<SendMessageResult> {
+    // 惰性清理（评审项 L2）：negotiation 幂等文件的 sweep 此前无调用方，
+    // 过期行永久保留、磁盘无界增长。入站消息处理是低频操作，顺带清理。
+    try {
+      this.idempotency.sweep();
+    } catch {
+      // 清理失败不影响消息处理（fail-safe 方向；下次再试）。
+    }
     // 0. WP3 §31 反滥用：认证之后、schema 校验之前的限流判定（fail-closed）。
     const th = this.throttle;
     const tReq = th === undefined ? undefined : this.toThrottleRequest(caller);

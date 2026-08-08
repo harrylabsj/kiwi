@@ -8,10 +8,10 @@
  * - 禁词扫描：evidence 携带 secret 类 key → ledger_forbidden_content；
  * - 事件内容可重建候选（§18-13：lifecycle 从事件重建，不 mutate 候选）。
  */
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   HandoffEventStore,
   createHandoffCandidate,
@@ -30,10 +30,10 @@ const CAPABILITY = {
 };
 
 function storeDir(): string {
-  return mkdtempSync(path.join(tmpdir(), "kiwi-handoff-"));
+  return trackedMkdtemp("kiwi-handoff-");
 }
 
-function candidate(): HandoffCandidate {
+function candidate(overrides: Partial<Parameters<typeof createHandoffCandidate>[0]> = {}): HandoffCandidate {
   return createHandoffCandidate({
     agreement_id: "agr_01JABC",
     negotiation_id: "neg_01JABC",
@@ -44,6 +44,7 @@ function candidate(): HandoffCandidate {
     display_summary: { merchant: "Acme Merchant", summary: "200 units" },
     policy_version: "handoff-policy/1",
     expires_at: "2026-08-08T12:00:00Z",
+    ...overrides,
   });
 }
 
@@ -181,4 +182,46 @@ describe("HandoffEventStore", () => {
       }),
     ).toThrow(/MUST NOT record evidence\.api_key/);
   });
+
+  it("惰性过期清扫：过期候选落 expired 事件，未过期/已终态不受影响（评审项 L1）", () => {
+    const ledger = new HandoffEventStore({ dir: storeDir() });
+    const expired = candidate(); // expires_at 2026-08-08
+    const fresh = candidate({ expires_at: "2099-01-01T00:00:00Z" });
+    ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: expired, identity: IDENTITY, capability: CAPABILITY });
+    ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: fresh, identity: IDENTITY, capability: CAPABILITY });
+    // 已终态候选（CONSUMED）不受清扫影响
+    const consumed = candidate();
+    ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: consumed, identity: IDENTITY, capability: CAPABILITY });
+    ledger.appendCandidateEvent({ kind: "handoff_candidate_consumed", candidate: consumed, identity: IDENTITY, capability: CAPABILITY, handoff_id: "hnd_01" });
+
+    const swept = ledger.sweepExpiredCandidates("2026-08-09T00:00:00Z");
+    expect(swept).toBe(1); // 只有 expired 候选
+    expect(
+      ledger.eventsForCandidate(expired.negotiation_id, expired.handoff_candidate_id).map((e) => e.event_kind),
+    ).toContain("handoff_candidate_expired");
+    // 未过期与已终态：无 expired 事件
+    expect(
+      ledger.eventsForCandidate(fresh.negotiation_id, fresh.handoff_candidate_id).some((e) => e.event_kind === "handoff_candidate_expired"),
+    ).toBe(false);
+    expect(
+      ledger.eventsForCandidate(consumed.negotiation_id, consumed.handoff_candidate_id).some((e) => e.event_kind === "handoff_candidate_expired"),
+    ).toBe(false);
+
+    // 幂等：再次清扫不重复落链
+    expect(ledger.sweepExpiredCandidates("2026-08-10T00:00:00Z")).toBe(0);
+  });
+});
+
+/** 评审项 L6：mkdtemp 目录跟踪清理（此前每次运行在 /tmp 残留）。 */
+const tmpDirs: string[] = [];
+function trackedMkdtemp(prefix: string): string {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tmpDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
