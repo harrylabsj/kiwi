@@ -645,7 +645,19 @@ export class AgentKernel {
   /** Pending WriteApprovalCandidates awaiting /approve (fail closed on expiry). */
   listPendingApprovals(): ReturnType<WriteApprovalCandidateStore["listPending"]> {
     if (this.approvals === undefined) return [];
-    return this.approvals.listPending();
+    const pending = this.approvals.listPending(); // 内部 expireDue：过期候选已标记 expired
+    // 清理已终结候选的执行钩子闭包（评审项 P3-5）：expired/superseded/
+    // executed/rejected 后的 hooks 不再需要，防内存无界增长。
+    const live = new Set(pending.map((c) => c.candidate_id));
+    for (const id of [...this.pendingHooks.keys()]) {
+      if (!live.has(id)) this.pendingHooks.delete(id);
+    }
+    return pending;
+  }
+
+  /** 释放候选执行钩子闭包（评审项 P3-5；候选生命周期终结后调用）。 */
+  private releasePending(candidateId: string): void {
+    this.pendingHooks.delete(candidateId);
   }
 
   /**
@@ -670,6 +682,18 @@ export class AgentKernel {
     if (candidate === undefined) {
       throw new MemoryError("validation", `未知审批候选 ${candidateId}`);
     }
+    // manual 模式语义（评审项 P3-3）：manual = advice only（never executes）。
+    // routeWriteCandidate 在 manual 分支仍注册执行钩子（供 /pending 显示与
+    // /revise 重算），但批准路径必须拒绝——此前 /approve 绕过模式直接执行，
+    // 与 operator 平面分叉（controller 对 advice_only 候选明确拒绝批准：
+    // "manual 模式只提供建议，不自动提交"）。
+    if (this.getMode() === "manual") {
+      return {
+        kind: "not_approvable",
+        candidate,
+        reason: "manual 模式只提供建议，不自动执行（/approve 拒绝 advice-only 候选）",
+      };
+    }
     const hooks = this.pendingHooks.get(candidateId);
     if (hooks === undefined) {
       // Cross-restart recovery (design §18.3): without live hooks the
@@ -683,7 +707,13 @@ export class AgentKernel {
       };
     }
     this.approvals.markApproved(candidateId);
-    return executeApprovedCandidate(this.approvals, candidateId, hooks);
+    const outcome = await executeApprovedCandidate(this.approvals, candidateId, hooks);
+    // 无论结果（executed / stale=superseded / expired），候选生命周期已终结，
+    // 执行钩子不再需要——释放闭包防泄漏（评审项 P3-5）。
+    if (outcome.kind !== "not_approvable") {
+      this.releasePending(candidateId);
+    }
+    return outcome;
   }
 
   /** Reject a pending/advice-only WriteApprovalCandidate. Never executes. */
@@ -695,7 +725,7 @@ export class AgentKernel {
       return { ok: false, error: `候选 ${candidateId} 状态为 ${candidate.status}，不可驳回` };
     }
     this.approvals.reject(candidateId);
-    this.pendingHooks.delete(candidateId);
+    this.releasePending(candidateId);
     return { ok: true };
   }
 
