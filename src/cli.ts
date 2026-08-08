@@ -58,7 +58,7 @@ import { runInit } from "./supervisor/init.js";
 import { runDown, runStatus, runUp, SupervisorError } from "./supervisor/manage.js";
 import { parseLogLines, runLogs } from "./supervisor/logs.js";
 import { StackConfigError } from "./supervisor/stack-config.js";
-import { cmdProductDoctor, productHelp, PRODUCT_VERSION } from "./product-cli.js";
+import { cmdProductDoctor, productHelp, PRODUCT_VERSION, DEFAULT_CATALOG_URL } from "./product-cli.js";
 import { merchantInit } from "./product-init.js";
 import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
 import { merchantPublish } from "./product-publish.js";
@@ -461,7 +461,7 @@ async function cmdTui(args: ParsedArgs): Promise<number> {
  * 从 merchant profile 构建身份 + Agent Card，起 A2AServer（生产 KNP merchant
  * handler），启动时注册进 kiwi-catalog，buyer 可经 catalog 发现并磋商。
  *
- *   kiwi agent serve --profile <merchant.yaml> [--catalog http://127.0.0.1:8600]
+ *   kiwi agent serve --profile <merchant.yaml> [--catalog <url>]  # 缺省官方 catalog，本地自托管用 --catalog http://127.0.0.1:8600
  *                    [--port 9000] [--data-dir <dir>]
  */
 async function cmdAgentServe(args: ParsedArgs): Promise<number> {
@@ -470,7 +470,7 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
     process.stderr.write("kiwi agent serve 需要 merchant profile（role: merchant）\n");
     return EXIT.CONFIG;
   }
-  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600";
+  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
   let node: A2aNodeHandle | null = await startA2aNode({
     profile,
     catalog,
@@ -746,7 +746,7 @@ function resolveProfilePath(file: string): string {
 async function cmdChat(args: ParsedArgs): Promise<number> {
   const profile = args.profile !== undefined ? loadProfile(args.profile) : defaultChatProfile();
   // A2A 节点 + buyer 磋商工具共用一个 catalog：kernel 构建前先解析。
-  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600";
+  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
   const kernel = await buildChatKernel(profile, args.dataDir, catalog);
   const kernels: AgentKernel[] = [kernel];
   const reload = async (file: string): Promise<AgentKernel> => {
@@ -861,7 +861,7 @@ async function cmdBuyerSearch(args: ParsedArgs): Promise<number> {
     process.stderr.write("search 需要一个查询描述（如：kiwi buyer search 21.5寸工业触摸屏）\n");
     return EXIT.CONFIG;
   }
-  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600";
+  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
   const limit = args.limit !== undefined ? Number(args.limit) : undefined;
   if (args.limit !== undefined && (!Number.isInteger(limit) || (limit ?? 0) <= 0)) {
     process.stderr.write("--limit 必须是正整数\n");
@@ -945,7 +945,7 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
     ...(merchantId !== "" ? { merchantId } : {}),
     shoppingCliUrl: process.env.SHOPPING_CLI_URL ?? "http://127.0.0.1:8765",
     shoppingCliDb: process.env.SHOPPING_DB_PATH,
-    catalogUrl: args.catalog ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600",
+    catalogUrl: args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL,
     floorPriceMinor: 0,
     ...(args.output !== undefined ? { outputPath: args.output } : {}),
     ...(args.force ? { force: true } : {}),
@@ -987,7 +987,7 @@ async function cmdMerchantPublish(args: ParsedArgs): Promise<number> {
     );
     return EXIT.CONFIG;
   }
-  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600";
+  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
   const report = await merchantPublish({
     profile,
     catalogBaseUrl: catalog,
