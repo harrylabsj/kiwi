@@ -488,17 +488,20 @@ Only fields required by the destination should be transmitted.
 
 ## 12. Audit / Ledger
 
-Kiwi SHOULD record:
+Kiwi SHOULD record（实现事件名以代码 `src/handoff/ledger.ts` 为准；
+本表与实现等价映射——`handoff_approved` 由 `handoff_candidate_ready`
++ approval evidence 表达，`handoff_failed` 由 `handoff_delivery_failed`
+表达，其余同名）：
 
 ```text
 handoff_candidate_created
-handoff_approved
+handoff_candidate_ready   （= handoff_approved，携带 approval evidence）
 handoff_delivered
 handoff_launched
 handoff_opened_confirmed
 handoff_expired
 handoff_revoked
-handoff_failed
+handoff_delivery_failed   （= handoff_failed）
 ```
 
 Each record SHOULD bind:
