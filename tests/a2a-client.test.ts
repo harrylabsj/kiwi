@@ -182,6 +182,50 @@ describe("A2A client 错误路径（fail-closed）", () => {
     await expect(client.sendMessage(knpMessage())).rejects.toMatchObject({ kind: "timeout" });
   });
 
+  it("refuses to follow a redirect (SSRF: redirect target is not re-checked)", async () => {
+    const redirectedTo = await startServer((_body, res) => {
+      jsonResponse(res, { jsonrpc: "2.0", id: "x", result: { task: {} } });
+    });
+    const mock = await startServer((_body, res) => {
+      res.writeHead(302, { location: redirectedTo.url });
+      res.end();
+    });
+    const client = new A2AClient({ url: mock.url });
+    await expect(client.sendMessage(knpMessage())).rejects.toMatchObject({
+      kind: "http_status",
+    });
+    // 目标服务器从未收到请求（此前 fetch 默认跟随，请求体会被投递过去）。
+    expect(redirectedTo.lastRequest()).toBeNull();
+  });
+
+  it("times out while reading a stalled response body (slow-body hang)", async () => {
+    const mock = await startServer((_body, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write('{"jsonrpc":"2.0","id":1,"result":');
+      // 不再 end：body 停滞——此前超时只覆盖头阶段，此场景会永久挂起。
+    });
+    const client = new A2AClient({ url: mock.url, timeoutMs: 200 });
+    await expect(client.sendMessage(knpMessage())).rejects.toMatchObject({ kind: "timeout" });
+  });
+
+  it("rejects an oversized response before reading it (content-length precheck)", async () => {
+    const client = new A2AClient({
+      url: "http://127.0.0.1:1/a2a",
+      skipDnsCheck: true,
+      fetchImpl: async () =>
+        new Response("{}", {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "content-length": String(1024 * 1024 * 1024),
+          },
+        }),
+    });
+    await expect(client.sendMessage(knpMessage())).rejects.toMatchObject({
+      kind: "invalid_response",
+    });
+  });
+
   it("fails with http_status on a non-2xx response", async () => {
     const mock = await startServer((_body, res) => {
       res.writeHead(500, { "content-type": "application/json" });
@@ -372,5 +416,11 @@ describe("A2A client URL 安全（SSRF 防护）", () => {
     expect(isReservedIpv6("2001:db8::1").reserved).toBe(true);
     expect(isReservedIpv6("fc00::1").reserved).toBe(true);
     expect(isReservedIpv6("2606:4700::1111").reserved).toBe(false);
+    // fe80::/10 全段（此前只覆盖 fe80-fe8f，fe90-febf 漏判）+ 废弃 site-local
+    expect(isReservedIpv6("fe90::1").reserved).toBe(true);
+    expect(isReservedIpv6("febf::1").reserved).toBe(true);
+    expect(isReservedIpv6("fec0::1").reserved).toBe(true);
+    expect(isReservedIpv6("feff::1").reserved).toBe(true);
+    expect(isReservedIpv6("fe7f::1").reserved).toBe(false);
   });
 });

@@ -43,7 +43,7 @@ import { defaultAuthVerifier } from "./auth.js";
 import { defaultHandler } from "./handler.js";
 import { InboundPipeline } from "./pipeline.js";
 import { TaskRegistry } from "./task-registry.js";
-import { A2AServerThrottle } from "./throttle.js";
+import { A2AServerThrottle, domainFromUcpProfile } from "./throttle.js";
 import type { ThrottleOptions } from "./throttle.js";
 import type { TrustLevel } from "../../trust/identity/trust-policy.js";
 import {
@@ -52,6 +52,7 @@ import {
   internalServerError,
   JSONRPC_CODES,
   payloadTooLarge,
+  rateLimited,
   ServerProtocolError,
 } from "./errors.js";
 import type { JsonRpcErrorBody } from "./errors.js";
@@ -162,6 +163,7 @@ export class A2AServer {
   private readonly wellKnownPath: string;
   private readonly ucpOptions: UcpPublishOptions | undefined;
   private readonly pipeline: InboundPipeline;
+  private readonly throttle: A2AServerThrottle | undefined;
 
   constructor(options: A2AServerOptions) {
     this.cardConfig = options.card;
@@ -186,7 +188,7 @@ export class A2AServer {
 
     const handler = options.handler ?? defaultHandler();
     const tasks = new TaskRegistry();
-    const throttle =
+    this.throttle =
       options.throttle === undefined
         ? undefined
         : options.throttle instanceof A2AServerThrottle
@@ -199,7 +201,7 @@ export class A2AServer {
       tasks,
       now: this.now,
       logError: this.logError,
-      throttle,
+      throttle: this.throttle,
     });
   }
 
@@ -415,7 +417,7 @@ export class A2AServer {
       case "message/send":
         return this.handleMessageSend(params, caller, ucpAgentProfile);
       case "tasks/get":
-        return this.handleTasksGet(params);
+        return this.handleTasksGet(params, caller, ucpAgentProfile);
       default:
         throw new ServerProtocolError({
           code: JSONRPC_CODES.METHOD_NOT_FOUND,
@@ -450,7 +452,11 @@ export class A2AServer {
     return { task: result.task };
   }
 
-  private async handleTasksGet(params: unknown): Promise<unknown> {
+  private async handleTasksGet(
+    params: unknown,
+    caller: Caller,
+    ucpAgentProfile?: string,
+  ): Promise<unknown> {
     const p = requireParamsObject(params);
     const id = p.id;
     if (typeof id !== "string" || id.length === 0) {
@@ -458,6 +464,23 @@ export class A2AServer {
         code: JSONRPC_CODES.INVALID_PARAMS,
         message: "params.id must be a non-empty string",
       });
+    }
+    // 限流（评审项 B3）：tasks/get 对未知 id 走全 Ledger 线性扫描且此前完全
+    // 不受限流（throttle 只挂在 message/send）——认证客户端可高频刷 CPU 且
+    // 开销随 Ledger 规模线性放大。与 message/send 同档位判定（identity/
+    // domain 窗口 + malformed budget）。
+    if (this.throttle !== undefined) {
+      const decision = this.throttle.check({
+        identity: caller.identity,
+        remoteAddress: caller.remoteAddress,
+        domain: domainFromUcpProfile(ucpAgentProfile),
+        identityVerified: caller.identityVerified,
+        trustLevel: caller.trustLevel,
+        fingerprintChanged: caller.fingerprintChanged,
+      });
+      if (!decision.allowed) {
+        throw rateLimited(decision.retryAfterSeconds, decision.reason);
+      }
     }
     const task = await this.pipeline.getTask(id);
     if (task === null) {

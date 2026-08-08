@@ -35,6 +35,7 @@
  */
 
 import { CatalogSourceError } from "./errors.js";
+import { isRedirectResponse, readJsonBody, SafeHttpError } from "../../net/safe-http.js";
 import { validateCandidate } from "./schema.js";
 import type { CandidateAgent, CatalogSearchQuery } from "./types.js";
 
@@ -147,6 +148,8 @@ export class ShoppingCliCatalogSource {
     let response: Response;
     try {
       response = await fetchImpl(url, {
+        // 出站加固：绝不跟随重定向（3xx 目标不经过校验，且可能转发 Bearer 头）。
+        redirect: "manual",
         signal: controller.signal,
         headers: {
           accept: "application/json",
@@ -164,8 +167,12 @@ export class ShoppingCliCatalogSource {
           ? `catalog request timed out after ${timeoutMs}ms: ${url}`
           : `catalog request failed: ${url} (${detail})`,
       );
-    } finally {
-      clearTimeout(timer);
+    }
+    if (isRedirectResponse(response)) {
+      throw new CatalogSourceError(
+        "request_failed",
+        `catalog request must not follow redirects (HTTP ${response.status} from ${url})`,
+      );
     }
     if (!response.ok) {
       throw new CatalogSourceError(
@@ -175,12 +182,23 @@ export class ShoppingCliCatalogSource {
     }
     let raw: unknown;
     try {
-      raw = await response.json();
-    } catch {
+      // 响应体读取在超时覆盖内 + 大小上限（出站加固）。
+      raw = await readJsonBody(response, { signal: controller.signal });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new CatalogSourceError(
+          "request_failed",
+          `catalog request timed out after ${timeoutMs}ms while reading response: ${url}`,
+        );
+      }
       throw new CatalogSourceError(
         "response_invalid",
-        `catalog response from ${url} is not valid JSON`,
+        err instanceof SafeHttpError && err.code === "response_too_large"
+          ? `catalog response from ${url}: ${err.message}`
+          : `catalog response from ${url} is not valid JSON`,
       );
+    } finally {
+      clearTimeout(timer);
     }
     return raw;
   }

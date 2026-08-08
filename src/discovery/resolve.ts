@@ -76,6 +76,7 @@ import {
   assertResolvableTargetUrl,
   assertSafeTargetUrl,
 } from "../a2a/client/url-policy.js";
+import { readJsonBody, SafeHttpError } from "../net/safe-http.js";
 
 export interface DiscoveryInput {
   /** 对端域名（不含 scheme）；从 well-known Agent Card 解析。 */
@@ -302,8 +303,6 @@ export class AgentDiscovery {
         "card_fetch_failed",
         `failed to fetch Agent Card from ${url}: ${err instanceof Error ? err.message : String(err)}`,
       );
-    } finally {
-      clearTimeout(timer);
     }
     if (
       response.redirected ||
@@ -323,12 +322,24 @@ export class AgentDiscovery {
     }
     let raw: unknown;
     try {
-      raw = await response.json();
-    } catch {
+      // 响应体读取在超时覆盖内 + 大小上限（出站加固：对端停滞 body 或回传
+      // 巨量 body 都不能挂起/打爆本进程）。
+      raw = await readJsonBody(response, { signal: controller.signal });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new DiscoveryError(
+          "card_fetch_failed",
+          `Agent Card fetch timed out after ${timeoutMs}ms: ${url}`,
+        );
+      }
       throw new DiscoveryError(
         "card_fetch_failed",
-        `Agent Card response from ${url} is not valid JSON`,
+        err instanceof SafeHttpError && err.code === "response_too_large"
+          ? `Agent Card response from ${url}: ${err.message}`
+          : `Agent Card response from ${url} is not valid JSON`,
       );
+    } finally {
+      clearTimeout(timer);
     }
     return raw;
   }

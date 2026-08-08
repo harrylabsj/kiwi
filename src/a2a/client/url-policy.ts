@@ -144,11 +144,18 @@ export function isReservedIpv6(ip: string): { reserved: boolean; name?: string }
     return { reserved: false };
   }
   const first = normalized.slice(0, 4);
-  // fc00::/7 覆盖 fc00-fdff 首 hextet。
-  if (first.startsWith("fc") || first.startsWith("fd"))
+  const firstHextet = Number.parseInt(first, 16);
+  // fc00::/7 覆盖 fc00-fdff 首 hextet（数值比较，前缀位判定）。
+  if (firstHextet >= 0xfc00 && firstHextet <= 0xfdff)
     return { reserved: true, name: "unique local fc00::/7" };
-  if (first.startsWith("fe8")) return { reserved: true, name: "link-local fe80::/10" };
-  if (first.startsWith("ff")) return { reserved: true, name: "multicast ff00::/8" };
+  // fe80::/10 = 首 hextet fe80–febf（此前 startsWith("fe8") 只覆盖 fe80–fe8f，
+  // 漏掉 fe90–febf 这 48/64 段——link-local 邻居可被 SSRF 探测）。
+  if (firstHextet >= 0xfe80 && firstHextet <= 0xfebf)
+    return { reserved: true, name: "link-local fe80::/10" };
+  // fec0::/10 是已废弃 site-local（RFC 3879），同样属保留网段。
+  if (firstHextet >= 0xfec0 && firstHextet <= 0xfeff)
+    return { reserved: true, name: "site-local fec0::/10 (deprecated)" };
+  if (firstHextet >= 0xff00) return { reserved: true, name: "multicast ff00::/8" };
   if (normalized.startsWith("2001:0db8"))
     return { reserved: true, name: "documentation 2001:db8::/32" };
   return { reserved: false };

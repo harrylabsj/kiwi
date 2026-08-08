@@ -35,6 +35,7 @@ import { parseTaskResult } from "./parse.js";
 import type { A2AOutboundSigner, A2AMessage, A2AClientOptions, A2ATask } from "./types.js";
 import { serializeUcpAgentHeader, UCP_AGENT_HEADER } from "../ucp-agent.js";
 import { assertResolvableTargetUrl, assertSafeTargetUrl } from "./url-policy.js";
+import { isRedirectResponse, readJsonBody, SafeHttpError } from "../../net/safe-http.js";
 
 export class A2AClient {
   private readonly url: URL;
@@ -107,6 +108,9 @@ export class A2AClient {
         method: "POST",
         headers,
         body,
+        // SSRF 防线：绝不跟随重定向——重定向目标不经过 SSRF/DNS 复查，且
+        // 3xx 可把请求体/认证头转发给第三方。resolve/ucp 已实施，本处对齐。
+        redirect: "manual",
         signal: controller.signal,
       });
     } catch (err) {
@@ -117,20 +121,36 @@ export class A2AClient {
         "network",
         `A2A request failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-    } finally {
-      clearTimeout(timer);
+    }
+
+    if (isRedirectResponse(response)) {
+      throw new A2AClientError(
+        "http_status",
+        `A2A endpoint must not redirect (HTTP ${response.status})`,
+        { httpStatus: response.status },
+      );
     }
 
     let raw: unknown;
     try {
-      raw = await response.json();
-    } catch {
+      // 响应体读取在超时覆盖内（timer 活到 body 读完；对端停滞 body 也会
+      // 被 abort 中断），且有大小上限（防恶意对端回传 GB 级 body 打爆内存）。
+      raw = await readJsonBody(response, { signal: controller.signal });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new A2AClientError("timeout", `A2A request timed out after ${this.timeoutMs}ms`);
+      }
+      if (err instanceof SafeHttpError && err.code === "response_too_large") {
+        throw invalidResponse(err.message);
+      }
       if (!response.ok) {
         throw new A2AClientError("http_status", `A2A HTTP ${response.status} with non-JSON body`, {
           httpStatus: response.status,
         });
       }
       throw invalidResponse("response body is not JSON");
+    } finally {
+      clearTimeout(timer);
     }
 
     if (!response.ok) {
