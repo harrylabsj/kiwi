@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.6.1 — 2026-08-09
+
+**修复与商家侧支持**（shopping-cli v3.0 发布面剥离后的契约对齐）：
+
+### 商家部署（Veyquo 实装驱动）
+
+- 新增 `KIWI_MERCHANT_TOKEN`：商家用自己签发/找回的随机 token 绑定 merchant_id
+  注册 Agent（register.ts / a2a node / cli serve+publish 直传优先，HMAC 派生兜底）
+  ——平台 `KIWI_CATALOG_OWNER_TOKEN_SECRET` 不再需要出现在商家服务器；
+- `kiwi merchant publish` Step 2 重构：读 shopping-cli `listings projections
+  --format json` 投影 → 直连 catalog `POST /v1/listings/publish`（剔除 `_` 前缀
+  内部字段；owner token 直传优先/HMAC 兜底；投影读取非零退出/非 JSON fail-closed），
+  修复 `publish-listings` 命令被 shopping-cli v3.0 剥离后的发布失败；
+- shopping-cli 兼容探测与调用路径支持 `--shopping-cli-path`（entry point 名
+  `shopping-cli`，非 legacy `shopping`）。
+
+### 其他
+
+- 测试：1577 全过（新增发布失败明细、投影参数断言等）。
+
 ## v0.6.0 — 2026-08-07
 
 **A2A v0.6.0 正式发布**（当日由 v1.0.0 回退版本号；KNP 协议身份不变，基线 §41 完成定义
