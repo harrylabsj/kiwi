@@ -105,7 +105,7 @@ const buildAgreement = ({ negotiation_id, accepted_offer_id, agreed_terms, creat
 const textReply = (text, taskState = "working") => ({
   kind: "accepted",
   taskState,
-  message: { role: "agent", parts: [{ kind: "text", text }], messageId: `msg_${newMessageId()}` },
+  message: { role: "agent", parts: [{ kind: "text", text }], messageId: newMessageId() },
 });
 
 const envelopeReply = (reply, taskState = "working") => ({
@@ -234,7 +234,7 @@ export function createMerchantHandler({ ledger, now, sender, counterparty }) {
               message: {
                 role: "agent",
                 parts: [{ kind: "text", text: "Agreement reached (nonbinding)." }],
-                messageId: `msg_${newMessageId()}`,
+                messageId: newMessageId(),
               },
             };
           }

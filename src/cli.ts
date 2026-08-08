@@ -86,6 +86,7 @@ Usage:
                                           /discover /negotiate /register in-session
   kiwi chat --profile <file> [--data-dir <dir>]
                                           Main conversation with Principal Memory (v0.3.0-A)
+  kiwi metrics --dir <dir>                Handoff/negotiation ledger metrics (JSONL)
 
 Product layer (product-strategy rev1.1 §10/§19):
   kiwi buyer --help                       Kiwi Buyer command tree
@@ -208,7 +209,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     } else if (arg === "--catalog") {
       catalog = argv[++i];
     } else if (arg === "--port") {
-      port = Number(argv[++i]);
+      // 只接受十进制正整数（评审项 L5：Number("abc")=NaN 会流入 server.listen）
+      const raw = argv[++i];
+      const parsed = /^\d+$/.test(raw ?? "") ? Number(raw) : Number.NaN;
+      port = Number.isInteger(parsed) ? parsed : undefined;
     } else if (arg === "--once") {
       once = true;
     } else if (arg === "--fake") {
@@ -1052,7 +1056,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       // 无 --profile → 三组件聚合健康（D0）；有 → 既有 profile doctor
       return args.profile !== undefined ? await cmdDoctor(args) : await cmdProductDoctor();
     }
-    if (cmd === "agent" && sub === "run") return await cmdAgentRun(args);
     if (cmd === "agent" && sub === "run") return await cmdAgentRun(args);
     if (cmd === "agent" && sub === "serve") return await cmdAgentServe(args);  // 旧命令别名保留
     if (cmd === "tui") return await cmdTui(args);
