@@ -81,7 +81,11 @@ p.lead { margin-top: 14px; font-size: clamp(1rem, 2vw, 1.2rem); color: var(--ink
 .step { flex: 1; min-width: 150px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
 .step .k { font-weight: 800; color: var(--kiwi-800); font-size: 1.05rem; }
 .step .d { font-size: .88rem; color: var(--ink-soft); margin-top: 6px; }
-.step .arrow { color: var(--kiwi-600); font-weight: 800; }
+.step.arrow {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+  background: none; border: none; box-shadow: none; padding: 0;
+  color: var(--kiwi-600); font-weight: 800; font-size: 1.6rem;
+}
 
 /* 控制条 */
 .controls {
