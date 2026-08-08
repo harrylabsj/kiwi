@@ -23,9 +23,11 @@
  *   1. 确认/注册 owner Agent  → kiwi-catalog POST /v1/agent-catalog/agents/register
  *      （owner_token = HMAC-SHA256("kiwi-catalog-owner:" + merchant_id)，
  *       与 kiwi-catalog api/auth.py 逐字节一致；注册幂等 upsert）
- *   2. 触发 listing 发布      → 进程调用 shopping-cli
- *      （spawn `shopping listings publish-listings`，不建 HTTP 强依赖；
- *       digest 去重由 shopping-cli 镜像表保证幂等）
+ *   2. 读投影并发布 listings  → spawn `shopping listings projections list`（只读）
+ *      取 public-only 投影 → 逐条直连 kiwi-catalog POST /v1/listings/publish
+ *      （v3.0 起 publish 面归独立 kiwi-catalog 服务，行级幂等在服务端；
+ *       owner token 直传优先，否则按 register 同公式 HMAC 派生）
+ *      随后 reconcile：投影中消失的商品 POST /v1/listings/{id}/withdraw
  *   3. 汇总分步状态           → fail-closed：agent 注册失败则短路
  *      （listings 依赖 owner agent 存在），listings 失败报错不假装全成功。
  */
@@ -49,7 +51,9 @@ export interface MerchantPublishOptions {
   shoppingCliDb: string;
   /** shopping-cli 可执行名/路径（缺省 "shopping"）。 */
   shoppingCliPath?: string;
-  /** shopping-cli 的 merchant_id（缺省 = profile.agent_id；init 统一身份前的显式映射）。 */
+  /** shopping-cli 侧 merchant_id（投影过滤；缺省 = profile.agent_id）。
+   *  catalog 侧身份恒为 profile.agent_id——两者不同时（如 catalog 申请
+   *  审批身份配随机 owner token）用本字段显式映射投影侧。 */
   shoppingCliMerchant?: string;
   /** catalog 注册域名（缺省 KIWI_CATALOG_DOMAIN / merchant-{agent_id}.local）。 */
   catalogDomain?: string;
@@ -71,6 +75,8 @@ export interface StepListings {
   skipped?: number;
   withdrawn?: number;
   published_refs?: string[];
+  skipped_refs?: string[];
+  withdrawn_refs?: string[];
   errors?: string[];
   raw?: unknown;
 }
@@ -104,15 +110,22 @@ export async function merchantPublish(
   options: MerchantPublishOptions,
 ): Promise<MerchantPublishReport> {
   const profile = options.profile;
-  // 统一身份：agent 注册、merchant 查询、shopping-cli 发布必须用同一个
-  // merchant_id（kiwi-catalog 一商家一 agent + publish 校验 owner 绑定）。
-  // 缺省 = profile.agent_id；kiwi 身份与 shopping-cli merchant 不一致时
-  // 用 --shopping-cli-merchant 显式指定（D1 init 统一身份前的映射）。
-  const merchantId = options.shoppingCliMerchant ?? profile.agent_id;
+  // 双身份拆分（2026-08-08 修复）：catalog 侧身份与 shopping-cli 侧 merchant
+  // 是两个独立概念——
+  // - catalogMerchantId = profile.agent_id：agent 注册/复用、owner token
+  //   派生（HMAC）与校验、publish body merchant_id、自查端点（kiwi-catalog
+  //   一商家一 agent + publish 校验 owner 绑定都以此为准）；
+  // - shoppingMerchant = --shopping-cli-merchant ?? profile.agent_id：投影
+  //   过滤（shopping-cli 侧 merchant）。D1 init 统一身份后两者相同；显式
+  //   映射用于 catalog 申请审批身份（随机 owner token）与 shopping-cli
+  //   商家名不同的场景——原实现把映射项当成全局身份，导致随机 token
+  //   （KIWI_MERCHANT_TOKEN）下 publish 身份错乱。
+  const catalogMerchantId = profile.agent_id;
+  const shoppingMerchant = options.shoppingCliMerchant ?? profile.agent_id;
   const domain =
     options.catalogDomain ??
     process.env.KIWI_CATALOG_DOMAIN ??
-    `merchant-${safeAgentId(merchantId)}.local`;
+    `merchant-${safeAgentId(catalogMerchantId)}.local`;
 
   // ── Step 0: shopping-cli 版本兼容检查（D3 矩阵共同消费，fail-closed）──
   // 矩阵单一来源 = product-compat.ts；与 `kiwi doctor` 共同消费。
@@ -166,7 +179,7 @@ export async function merchantPublish(
   let catalogAgentId: string | undefined;
   let agentError: string | undefined;
   try {
-    const lookupUrl = `${baseUrl}/v1/agent-catalog/merchants/${encodeURIComponent(merchantId)}/agents`;
+    const lookupUrl = `${baseUrl}/v1/agent-catalog/merchants/${encodeURIComponent(catalogMerchantId)}/agents`;
     const lookup = await fetchImpl(lookupUrl, { signal: AbortSignal.timeout(15_000) });
     if (lookup.ok) {
       const body = (await lookup.json()) as { results?: Array<{ catalog_agent_id?: string }> };
@@ -180,7 +193,7 @@ export async function merchantPublish(
       const reg = await registerCatalogAgent({
         catalogBaseUrl: options.catalogBaseUrl,
         domain,
-        merchantId,
+        merchantId: catalogMerchantId,
         ownerToken: options.ownerToken,
         ownerTokenSecret: options.ownerTokenSecret,
         agentCardUrl: `${domain}/.well-known/agent-card.json`,
@@ -213,7 +226,7 @@ export async function merchantPublish(
     "--db", options.shoppingCliDb,
     "listings",
     "projections",
-    "--merchant", merchantId,
+    "--merchant", shoppingMerchant,
     "--format", "json",
   ];
   let result: ReturnType<typeof spawnSync>;
@@ -279,7 +292,7 @@ export async function merchantPublish(
       ? options.ownerToken
       : options.ownerTokenSecret !== undefined
         ? createHmac("sha256", options.ownerTokenSecret)
-            .update(`kiwi-catalog-owner:${merchantId}`)
+            .update(`kiwi-catalog-owner:${catalogMerchantId}`)
             .digest("hex")
         : "";
   const reportErrors: string[] = [];
@@ -287,6 +300,13 @@ export async function merchantPublish(
   const skippedRefs: string[] = [];
   for (const projection of projections) {
     const ref = String(projection.source_product_ref ?? "?");
+    // category 必须非空（catalog contracts.py 要求）——为空则跳过并报告，
+    // 不猜默认值（fail-closed）。
+    const category = projection.category;
+    if (typeof category !== "string" || category.trim() === "") {
+      skippedRefs.push(ref);
+      continue;
+    }
     // 投影含内部元数据（_provenance 等）——catalog 契约 additionalProperties:
     // false，发布前剔除 _ 前缀字段（仅 wire 字段进 body）。
     const wireFields = Object.fromEntries(
@@ -294,7 +314,7 @@ export async function merchantPublish(
     );
     const body: Record<string, unknown> = {
       ...wireFields,
-      merchant_id: merchantId,
+      merchant_id: catalogMerchantId,
       owner_agent_id: catalogAgentId,
       owner_token: effectiveOwnerToken,
       handoff_destination_types: ["external_checkout_url"],
@@ -321,6 +341,69 @@ export async function merchantPublish(
     }
   }
 
+  // ── Step 2b: reconcile——投影消失的商品 withdraw（data-hub DoD #5）──────
+  // products.active=0 或已删除的商品不再出现在投影里；拉取本 agent 现有
+  // product listings（自查端点，owner_token 经 query），与投影 ref 集合
+  // diff，多出的下架（capability listing 不在投影集合，不处理）。服务端
+  // 对已 WITHDRAWN 幂等返回；SUSPENDED 的 listing 也允许商家 withdraw。
+  const projectedRefs = new Set(
+    projections.map((p) => String(p.source_product_ref ?? "")).filter((ref) => ref !== ""),
+  );
+  const withdrawnRefs: string[] = [];
+  try {
+    let cursor: string | undefined;
+    for (;;) {
+      const listUrl =
+        `${baseUrl}/v1/agents/${encodeURIComponent(catalogAgentId)}/listings` +
+        `?owner_token=${encodeURIComponent(effectiveOwnerToken)}&limit=100` +
+        (cursor !== undefined ? `&cursor=${encodeURIComponent(cursor)}` : "");
+      const listRes = await fetchImpl(listUrl, { signal: AbortSignal.timeout(15_000) });
+      const listPayload = (await listRes.json()) as {
+        ok?: boolean;
+        results?: Array<Record<string, unknown>>;
+        next_cursor?: string;
+        error?: string;
+      };
+      if (!listRes.ok || listPayload.ok !== true) {
+        reportErrors.push(`withdraw reconcile failed: ${listPayload.error ?? `HTTP ${listRes.status}`}`);
+        break;
+      }
+      for (const rec of listPayload.results ?? []) {
+        // 只 diff product listing：capability listing 不在投影集合，不处理
+        if (String(rec.listing_type ?? "") !== "product") continue;
+        const ref = String(rec.source_product_ref ?? "");
+        if (ref === "" || projectedRefs.has(ref)) continue;
+        if (String(rec.publication_state ?? "") === "WITHDRAWN") continue;
+        const listingId = String(rec.listing_id ?? "");
+        if (listingId === "") continue;
+        try {
+          const wRes = await fetchImpl(
+            `${baseUrl}/v1/listings/${encodeURIComponent(listingId)}/withdraw`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ owner_token: effectiveOwnerToken }),
+              signal: AbortSignal.timeout(20_000),
+            },
+          );
+          const wPayload = (await wRes.json()) as { ok?: boolean; error?: string };
+          if (wRes.ok && wPayload.ok === true) {
+            withdrawnRefs.push(ref);
+          } else {
+            reportErrors.push(`${ref}: withdraw ${wPayload.error ?? `HTTP ${wRes.status}`}`);
+          }
+        } catch (err) {
+          reportErrors.push(`${ref}: withdraw ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      const next = listPayload.next_cursor;
+      if (typeof next !== "string" || next === "") break;
+      cursor = next;
+    }
+  } catch (err) {
+    reportErrors.push(`withdraw reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   const ok = reportErrors.length === 0;
   return {
     ok,
@@ -331,7 +414,10 @@ export async function merchantPublish(
         ok,
         published: publishedRefs.length,
         skipped: skippedRefs.length,
+        withdrawn: withdrawnRefs.length,
         published_refs: publishedRefs,
+        skipped_refs: skippedRefs,
+        withdrawn_refs: withdrawnRefs,
         ...(reportErrors.length > 0 ? { errors: reportErrors } : {}),
       },
     },
