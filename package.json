@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "bin": {
-    "kiwi": "./dist/cli.js"
+    "kiwi": "dist/cli.js"
   },
   "exports": {
     ".": "./dist/cli.js",
@@ -28,7 +28,8 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "verify:package": "bash scripts/verify-package.sh",
-    "verify": "npm run lint && npm run typecheck && npm run build && npm run test && npm run verify:package"
+    "verify": "npm run lint && npm run typecheck && npm run build && npm run test && npm run verify:package",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",
@@ -47,5 +48,8 @@
     "prettier": "^3.5.3",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
