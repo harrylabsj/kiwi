@@ -515,6 +515,23 @@ describe("sensitive routing and model failure resilience", () => {
     await kernel.close();
   });
 
+  it("manual 模式 /approve 拒绝执行 advice-only 候选（评审项 P3-3）", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const kernel = await openKernel("agent");
+    expect(kernel.setMode("manual", { confirmed: true }).ok).toBe(true);
+    const approvals = kernel.actionCandidates;
+    expect(approvals).toBeDefined();
+    approvals!.create({ tool: "test_write", arguments: {}, preconditions: {}, risk: "t", expires_at: "2099-01-01T00:00:00Z" });
+
+    // 修复前：manual 分支仍注册执行钩子，/approve 绕过模式直接执行
+    //（manual="never executes" 语义被击穿，与 operator 平面分叉）。
+    const approve = await kernel.handleUserText("/approve 1");
+    expect(approve.text).toContain("manual 模式只提供建议");
+    // 候选未被批准/执行：状态保持 pending_approval
+    expect(approvals!.listPending()[0]?.status).toBe("pending_approval");
+    await kernel.close();
+  });
+
   it("/private reveals the owner's own Restricted (Vault) values", async () => {
     workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
     const kernel = await openKernel("agent"); // merchant, keyed vault
