@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, it } from "vitest";
+import {mkdtempSync, rmSync, writeFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -34,7 +34,7 @@ merchant_policy:
 `;
 
 function writeTemp(content: string): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "kiwi-profile-"));
+  const dir = trackedMkdtemp("kiwi-profile-");
   const file = path.join(dir, "profile.yaml");
   writeFileSync(file, content);
   return file;
@@ -503,4 +503,18 @@ describe("base_url security", () => {
     );
     expect(() => loadProfile(writeTemp(withModelUrl("gopher://x")))).toThrow(/http or https/);
   });
+});
+
+/** 评审项 L6：mkdtemp 目录跟踪清理（此前每次运行在 /tmp 残留）。 */
+const tmpDirs: string[] = [];
+function trackedMkdtemp(prefix: string): string {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tmpDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

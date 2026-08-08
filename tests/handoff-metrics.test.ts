@@ -7,10 +7,10 @@
  * - 部分转化 → 0.5 率（2 协议 1 交付）；
  * - reported_external_conversion 恒 null（无权威交易集成，§17 标注）。
  */
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   HandoffEventStore,
   HandoffIdempotencyStore,
@@ -77,7 +77,7 @@ describe("computeHandoffMetrics", () => {
   });
 
   it("1 协议 1 交付 → 全 1 率 + launch/opened 率", async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-metrics-"));
+    const dir = trackedMkdtemp("kiwi-metrics-");
     await deliver(dir, "neg_1");
     const metrics = collect(dir);
     expect(metrics.negotiations_with_candidates).toBe(1);
@@ -92,7 +92,7 @@ describe("computeHandoffMetrics", () => {
   });
 
   it("2 协议 1 交付 → 0.5 率；launch 不计 opened", async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-metrics-"));
+    const dir = trackedMkdtemp("kiwi-metrics-");
     await deliver(dir, "neg_1");
     const e = env(dir);
     const c = candidate("neg_2");
@@ -103,4 +103,18 @@ describe("computeHandoffMetrics", () => {
     expect(metrics.agreement_to_handoff_rate).toBe(0.5);
     expect(metrics.negotiation_to_handoff_rate).toBe(0.5);
   });
+});
+
+/** 评审项 L6：mkdtemp 目录跟踪清理（此前每次运行在 /tmp 残留）。 */
+const tmpDirs: string[] = [];
+function trackedMkdtemp(prefix: string): string {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tmpDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

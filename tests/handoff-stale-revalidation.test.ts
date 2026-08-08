@@ -11,10 +11,10 @@
  * - 成功路径：consumed + delivered 落链、三 false 不变量、handoff_digest
  *   自洽、无订单/支付/库存事件（完成定义 #12-14）。
  */
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   HandoffEventStore,
   HandoffIdempotencyStore,
@@ -62,7 +62,7 @@ function approval(approved = true) {
 }
 
 function env(c: HandoffCandidate, reader = agreementReader()) {
-  const dir = mkdtempSync(path.join(tmpdir(), "kiwi-exec-"));
+  const dir = trackedMkdtemp("kiwi-exec-");
   return {
     ledger: new HandoffEventStore({ dir }),
     idempotency: new HandoffIdempotencyStore({ dir }),
@@ -287,4 +287,18 @@ describe("executeHandoff", () => {
     const delivered = e.ledger.events(cA.negotiation_id).filter((ev) => ev.event_kind === "handoff_delivered");
     expect(delivered).toHaveLength(2);
   });
+});
+
+/** 评审项 L6：mkdtemp 目录跟踪清理（此前每次运行在 /tmp 残留）。 */
+const tmpDirs: string[] = [];
+function trackedMkdtemp(prefix: string): string {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tmpDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

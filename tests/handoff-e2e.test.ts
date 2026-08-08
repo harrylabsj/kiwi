@@ -15,7 +15,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { migrateMemorySchema } from "../src/agent/memory/schema.js";
@@ -100,7 +100,7 @@ function setupBuyer(
   catalog: string,
   options: { mode?: "autopilot" | "supervised" } = {},
 ): E2eHarness {
-  const dir = mkdtempSync(path.join(tmpdir(), "kiwi-e2e-"));
+  const dir = trackedMkdtemp("kiwi-e2e-");
   const db = new DatabaseSync(":memory:");
   migrateMemorySchema(db);
   db.prepare(
@@ -479,4 +479,18 @@ describe("KTH 端到端（#20、#21）", () => {
     ]);
     await new Promise<void>((resolve) => checkoutServer.close(() => resolve()));
   });
+});
+
+/** 评审项 L6：mkdtemp 目录跟踪清理（此前每次运行在 /tmp 残留）。 */
+const tmpDirs: string[] = [];
+function trackedMkdtemp(prefix: string): string {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tmpDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
