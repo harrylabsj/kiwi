@@ -132,6 +132,13 @@ console.log("child-ready");
 setInterval(() => {}, 1000);
 `;
 
+/** 忽略 SIGTERM 的子进程：wrapper 必须兜底强杀，否则孤儿化（双 agent 并存）。 */
+const IGNORE_TERM = `
+process.on("SIGTERM", () => {});
+console.log("child-ready");
+setInterval(() => {}, 1000);
+`;
+
 function makeManifest(ctx: InstanceContext, pid: number, nonce: string): ProcessManifest {
   const command = [process.execPath, "-e", SLEEPER];
   const argv = wrapperArgv(
@@ -336,6 +343,36 @@ describe("child-runner lifecycle", () => {
     expect(outcome).toBe("stopped");
     const exit = readExitRecord(manifest.exit_path);
     expect(exit?.exit_code).toBe(42);
+  });
+
+  it("wrapper 兜底：子进程忽略 SIGTERM 时 4s 内被强杀，不孤儿化（评审项 P3-2）", async () => {
+    const dir = await initInstance();
+    const ctx = loadInstance(dir);
+    const manifest = await spawnManaged(ctx, "gateway", [process.execPath, "-e", IGNORE_TERM], {});
+    const deadline = Date.now() + 3_000;
+    let childReady = false;
+    while (Date.now() < deadline) {
+      try {
+        if (readFileSync(manifest.log_path, "utf-8").includes("child-ready")) {
+          childReady = true;
+          break;
+        }
+      } catch {
+        // log not written yet
+      }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(childReady).toBe(true);
+
+    const outcome = await stopVerified(ctx, manifest);
+    // stopped（wrapper 兜底后自行退出）或 killed（调度负载下 supervisor 升级）
+    // 均可接受——核心不变量是子进程被兜底强杀、不孤儿化。
+    expect(["stopped", "killed"]).toContain(outcome);
+    // 子进程被强杀（忽略 SIGTERM 不会自然退出）——若孤儿化则 exit 记录永
+    // 不写入（wrapper 被杀时子进程还活着）。signal=SIGKILL 证明兜底生效。
+    const exit = readExitRecord(manifest.exit_path);
+    expect(exit?.signal).toBe("SIGKILL");
+    expect(pidAlive(manifest.pid)).toBe(false);
   });
 
   it("unverifiable processes are reported, never killed", async () => {
