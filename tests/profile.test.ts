@@ -513,6 +513,57 @@ function trackedMkdtemp(prefix: string): string {
   return dir;
 }
 
+
+describe("weixin section", () => {
+  const wxYaml = (extra: string): string => `${VALID_YAML}weixin:
+${extra}`;
+  const wxAllow = (entries: string): string =>
+    wxYaml(`  allow_users:
+${entries}`);
+
+  it("loads valid weixin section", () => {
+    const p = loadProfile(writeTemp(wxAllow("    - wxid_owner\n    - wxid_guest\n")));
+    expect(p.weixin?.allow_users).toEqual(["wxid_owner", "wxid_guest"]);
+    expect(p.weixin?.base_url).toBeUndefined();
+  });
+
+  it("loads base_url override (https)", () => {
+    const p = loadProfile(
+      writeTemp(wxAllow("    - wxid_owner\n") + "  base_url: https://ilinkai.weixin.qq.com\n"),
+    );
+    expect(p.weixin?.base_url).toBe("https://ilinkai.weixin.qq.com");
+  });
+
+  it("rejects unknown weixin fields (fail-closed)", () => {
+    expect(() =>
+      loadProfile(writeTemp(wxAllow("    - wxid_owner\n") + "  bot_token: sekrit\n")),
+    ).toThrow(/weixin has unknown field "bot_token"/);
+  });
+
+  it("rejects non-array allow_users", () => {
+    expect(() =>
+      loadProfile(writeTemp(`${VALID_YAML}weixin:\n  allow_users: not-a-list\n`)),
+    ).toThrow(/weixin.allow_users must be a list/);
+  });
+
+  it("rejects empty-string allow_users entries", () => {
+    expect(() =>
+      loadProfile(writeTemp(`${VALID_YAML}weixin:\n  allow_users:\n    - \n`)),
+    ).toThrow(/weixin.allow_users must be a list/);
+  });
+
+  it("rejects plain-http base_url (non-loopback)", () => {
+    expect(() =>
+      loadProfile(writeTemp(wxAllow("    - wxid_owner\n") + "  base_url: http://ilinkai.weixin.qq.com\n")),
+    ).toThrow();
+  });
+
+  it("omits weixin when absent", () => {
+    const p = loadProfile(writeTemp(VALID_YAML));
+    expect(p.weixin).toBeUndefined();
+  });
+});
+
 afterEach(() => {
   for (const dir of tmpDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });

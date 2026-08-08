@@ -124,6 +124,13 @@ export interface AgentProfile {
   };
   merchant_policy?: MerchantPolicy;
   buyer_policy?: BuyerPolicy;
+  /** 微信远程控制通道（可选段；缺省 = 全默认）。 */
+  weixin?: {
+    /** 额外授权微信用户（配对扫描者始终自动授权；缺省 = 仅配对者）。 */
+    allow_users?: string[];
+    /** iLink base URL 覆盖（可选；必须 https 或 loopback）。 */
+    base_url?: string;
+  };
 }
 
 export class ProfileError extends Error {
@@ -154,7 +161,10 @@ const TOP_LEVEL_KEYS = [
   "runtime",
   "merchant_policy",
   "buyer_policy",
+  "weixin",
 ] as const;
+/** weixin 段白名单（微信远程控制通道配置；无 *_env 密钥字段——iLink 凭证运行时获取）。 */
+const WEIXIN_KEYS = ["allow_users", "base_url"] as const;
 const COMMERCE_KEYS = ["base_url", "token_env", "backend", "credentials"] as const;
 const MODEL_KEYS = [
   "provider",
@@ -531,6 +541,29 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     );
   }
 
+  // weixin 段（可选）：allow_users 非空字符串数组；base_url 必须 https 或 loopback。
+  let weixinSection: AgentProfile["weixin"];
+  if (p.weixin !== undefined) {
+    req(isObject(p.weixin), `${source}: weixin must be a mapping`);
+    rejectUnknownKeys(p.weixin, WEIXIN_KEYS, "weixin", source);
+    const wx = p.weixin;
+    if (wx.allow_users !== undefined) {
+      req(
+        Array.isArray(wx.allow_users) &&
+          wx.allow_users.every((u) => typeof u === "string" && u.length > 0),
+        `${source}: weixin.allow_users must be a list of non-empty strings`,
+      );
+    }
+    let wxBaseUrl: string | undefined;
+    if (wx.base_url !== undefined) {
+      wxBaseUrl = assertSecureBaseUrl(wx.base_url, "weixin.base_url", source);
+    }
+    weixinSection = {
+      ...(wx.allow_users !== undefined ? { allow_users: wx.allow_users as string[] } : {}),
+      ...(wxBaseUrl !== undefined ? { base_url: wxBaseUrl } : {}),
+    };
+  }
+
   rejectUnknownKeys(p, TOP_LEVEL_KEYS, "profile", source);
 
   const profile: AgentProfile = {
@@ -564,6 +597,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     },
     ...(merchantPolicy !== undefined ? { merchant_policy: merchantPolicy } : {}),
     ...(buyerPolicy !== undefined ? { buyer_policy: buyerPolicy } : {}),
+    ...(weixinSection !== undefined ? { weixin: weixinSection } : {}),
   };
   return profile;
 }
