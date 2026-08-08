@@ -44,6 +44,12 @@ export interface CatalogRegisterInput {
    * 自助注册（不带 merchant_id）处理。
    */
   ownerTokenSecret?: string;
+  /**
+   * 直接传入的 merchant owner token（随机落库路径，v12+ 双路径校验）——
+   * 平台 secret 不应出现在商家服务器，商家用自己签发/找回的随机 token
+   * 绑定 merchant_id。优先级高于 ownerTokenSecret。
+   */
+  ownerToken?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }
@@ -74,13 +80,20 @@ export async function registerCatalogAgent(
     agent_card_url: input.agentCardUrl,
   };
   if (input.ucpProfileUrl !== undefined) body.ucp_profile_url = input.ucpProfileUrl;
-  // owner 语义：有 ownerTokenSecret 时绑定 merchant_id 并派生 owner_token；
-  // 否则退回公开自助注册（不带 merchant_id，避免 catalog 拒收）。
-  if (input.merchantId !== undefined && input.ownerTokenSecret !== undefined) {
-    body.merchant_id = input.merchantId;
-    body.owner_token = createHmac("sha256", input.ownerTokenSecret)
-      .update(`kiwi-catalog-owner:${input.merchantId}`)
-      .digest("hex");
+  // owner 语义：有 merchantId 时绑定 merchant_id——token 来源二选一：
+  //   1) ownerToken 直传（随机落库路径，商家自己的凭证，优先）；
+  //   2) ownerTokenSecret HMAC 派生（legacy 路径，需平台 secret）。
+  // 都没有则退回公开自助注册（不带 merchant_id，避免 catalog 拒收）。
+  if (input.merchantId !== undefined) {
+    if (input.ownerToken !== undefined && input.ownerToken !== "") {
+      body.merchant_id = input.merchantId;
+      body.owner_token = input.ownerToken;
+    } else if (input.ownerTokenSecret !== undefined) {
+      body.merchant_id = input.merchantId;
+      body.owner_token = createHmac("sha256", input.ownerTokenSecret)
+        .update(`kiwi-catalog-owner:${input.merchantId}`)
+        .digest("hex");
+    }
   }
 
   let res: Response;

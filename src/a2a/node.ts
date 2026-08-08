@@ -47,8 +47,10 @@ export interface A2aNodeOptions {
   catalog?: string;
   /** 首选端口（缺省按角色：merchant 9000 / buyer 9001）。占用则自动换。 */
   preferredPort?: number;
-  /** KIWI_CATALOG_OWNER_TOKEN_SECRET（merchant 注册绑定 owner 语义）。 */
+  /** KIWI_CATALOG_OWNER_TOKEN_SECRET（merchant 注册绑定 owner 语义，legacy HMAC 派生）。 */
   ownerTokenSecret?: string;
+  /** 商家自己的随机 owner token（v12+ 双路径；平台 secret 不落商家服务器）。 */
+  ownerToken?: string;
 }
 
 export interface A2aNodeHandle {
@@ -167,6 +169,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
         agentCardUrl,
         ucpProfileUrl: `${url}/.well-known/ucp`,
         merchantId: profile.agent_id,
+        ownerToken: options.ownerToken,
         ownerTokenSecret: options.ownerTokenSecret,
       });
       catalogAgentId = reg.catalogAgentId;
