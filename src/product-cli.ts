@@ -35,8 +35,17 @@ import { SHOPPING_CLI_COMPAT, compatRangeText, versionInRange } from "./product-
 /** 与 package.json / USAGE 同步的产品版本。 */
 export const PRODUCT_VERSION = "0.6.0";
 
-/** 缺省 kiwi-catalog 地址（与 cli.ts 的 KIWI_CATALOG_URL 解析一致）。 */
-const DEFAULT_CATALOG_URL = "http://127.0.0.1:8600";
+/**
+ * 缺省 kiwi-catalog 地址（单一来源，cli.ts 各处解析一致）。
+ *
+ * 默认指向官方 catalog（harrylabsj 资产，catalog.kiwi.harrylabsj.com）；
+ * 用户可覆盖：
+ *   - CLI：`--catalog <url>`
+ *   - 环境变量：`KIWI_CATALOG_URL`
+ *   - profile：`commerce.base_url` 不参与；catalog 独立配置
+ * 本地开发/自托管：`KIWI_CATALOG_URL=http://127.0.0.1:8600` 或 `--catalog http://127.0.0.1:8600`。
+ */
+export const DEFAULT_CATALOG_URL = "https://catalog.kiwi.harrylabsj.com";
 
 const BUYER_HELP = `kiwi buyer — Kiwi Buyer（product-strategy rev1.1 §2.2/§19 D4）
 
