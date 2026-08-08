@@ -93,8 +93,20 @@ function main(): void {
   closeSync(logFd); // the child holds its own descriptors now
 
   let exited = false;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
   const forward = (signal: "SIGINT" | "SIGTERM"): void => {
-    if (!exited) child.kill(signal);
+    if (exited) return;
+    child.kill(signal);
+    // 兜底（评审项 P3-2）：supervisor 的 SIGKILL 升级只杀 wrapper（5s 后），
+    // 若 wrapper 被升级杀掉而子进程还活着，子进程会孤儿化继续运行——重启后
+    // 双 agent 并存、双写同一 SQLite/端口。此处 2.5s（< 5s 升级点，留足
+    // 调度余量）强杀子进程：正常关停永远不需要 supervisor 升级，升级发生时
+    // 子进程已被兜底终止。
+    if (killTimer === undefined) {
+      killTimer = setTimeout(() => {
+        if (!exited) child.kill("SIGKILL");
+      }, 2500);
+    }
   };
   // Signal handlers are installed before the ready marker is written, so a
   // supervisor that waits for readiness can never lose a signal.
