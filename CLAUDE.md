@@ -23,6 +23,9 @@ Handoff（KTH/0.1）安全交给外部成交入口。
   `docs/products/shopping-cli-commerce-data-hub-v0.3.md`、
   `docs/protocol/kiwi-transaction-handoff-0.1-rev0.3.md`、
   `docs/testing/kiwi-commerce-v0.7.0-test-plan-v0.3.md`。
+- **`spec/` = 公开协议源**（原 harrylabsj/kiwi-spec 仓库，2026-08-09 subtree 并入，
+  历史保留）：KNP/1.0 协议规范 + schemas/（对外公开，Apache-2.0）；实现侧协议
+  文档仍在 `docs/protocol/`。
 - 评审/审计文档统一在 `docs/reviews/`；路径引用按仓库根相对（如
   `docs/reviews/…`）。
 
