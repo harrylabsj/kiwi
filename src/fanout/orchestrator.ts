@@ -395,7 +395,7 @@ export class FanoutOrchestrator {
         envelope,
         ref: { negotiation_id },
       });
-      const wait = await this.waitForOffer(handle, sendResult.ref, timeoutMs, messageId);
+      const wait = await this.waitForOffer(handle, sendResult.ref, timeoutMs, messageId, negotiation_id);
       return this.resolveWait(identity, negotiation_id, messageId, started, wait);
     } catch (err) {
       return {
@@ -419,6 +419,7 @@ export class FanoutOrchestrator {
     ref: RemoteRef,
     timeoutMs: number,
     sentMessageId: string,
+    negotiationId: string,
   ): Promise<WaitOutcome> {
     const deadline = this.clock() + timeoutMs;
     const pollInterval = this.deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
@@ -435,7 +436,15 @@ export class FanoutOrchestrator {
         return { kind: "terminal_no_offer", reason: "canceled" };
       }
       const envelope = extract(state);
-      if (envelope !== null && envelope.message_id !== sentMessageId) {
+      if (
+        envelope !== null &&
+        envelope.message_id !== sentMessageId &&
+        // 关联校验（评审项 P3-6）：只接受本腿 negotiation 的 envelope——对端
+        // 回传旧 round 或另一磋商的 offer 会污染比较集与审计链（此前只排除
+        // 自身回声，任一格式合法 envelope 都被当本腿报价接受）。无关
+        // envelope 忽略并继续轮询：deadline 兜底，绝不采用无关数据。
+        envelope.negotiation_id === negotiationId
+      ) {
         return { kind: "envelope", envelope };
       }
       if (state.stable) {
@@ -467,6 +476,14 @@ export class FanoutOrchestrator {
       case "envelope": {
         // 入站 envelope fail-closed：schema + digest（§4.5）。
         const incoming = validateIncoming(wait.envelope);
+        // 归属校验防御纵深（评审项 P3-6）：waitForOffer 已过滤无关 negotiation
+        // 的 envelope，独立入口再核对一次——任何路径都不采用不属于本腿的
+        // 数据（校验失败抛错 → leg failed，fail-closed）。
+        if (incoming.negotiation_id !== negotiation_id) {
+          throw new Error(
+            `incoming envelope belongs to negotiation ${incoming.negotiation_id}, expected ${negotiation_id}`,
+          );
+        }
         if (incoming.action === "offer") {
           const offer = validateOffer(incoming.payload);
           record({

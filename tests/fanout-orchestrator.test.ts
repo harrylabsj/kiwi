@@ -54,7 +54,8 @@ type LegMode =
   | { kind: "timeout" }
   | { kind: "task_failed" }
   | { kind: "send_error"; code?: ChannelErrorCode }
-  | { kind: "tampered_offer" };
+  | { kind: "tampered_offer" }
+  | { kind: "foreign_then_offer"; unitPriceMinor: number };
 
 interface Tracker {
   active: number;
@@ -176,6 +177,18 @@ class FakeHandle implements ChannelHandle {
       case "decline": {
         if (this.getStateCalls === 1) return working(negotiationId);
         return completed(negotiationId, declineEnvelope(negotiationId));
+      }
+      case "foreign_then_offer": {
+        // 先回传无关磋商的 envelope（对端任务状态残留/恶意；任务仍在途
+        // stable=false → 轮询继续），再回传本腿 offer
+        if (this.getStateCalls === 1) {
+          return {
+            ...completed("neg_FOREIGN", offerEnvelope("neg_FOREIGN", 100)),
+            state: "working",
+            stable: false,
+          };
+        }
+        return completed(negotiationId, offerEnvelope(negotiationId, this.mode.unitPriceMinor));
       }
       case "timeout":
         return working(negotiationId);
@@ -344,6 +357,20 @@ describe("部分失败隔离（§19）", () => {
     const result = await orchestrator.fanout([leg("a.example", { negotiation_id: "neg_a" })]);
     expect(result.legs[0]?.outcome).toBe("failed");
     expect(result.offer_count).toBe(0);
+  });
+
+  it("无关 negotiation 的 envelope 被忽略：不污染比较集与审计链（评审项 P3-6）", async () => {
+    const { orchestrator } = createOrchestrator({
+      "a.example": { kind: "foreign_then_offer", unitPriceMinor: 500 },
+    });
+    const result = await orchestrator.fanout([leg("a.example", { negotiation_id: "neg_a" })]);
+    // foreign envelope（neg_FOREIGN）被忽略，轮询继续直到本腿 offer 到达
+    expect(result.legs[0]?.outcome).toBe("offer_received");
+    expect(result.offer_count).toBe(1);
+    // 采用的是本腿 offer（offer_id 归属 neg_a），foreign 报价未进比较集
+    const offer = result.legs[0]?.offer;
+    expect(offer?.offer_id).toContain("neg_a");
+    expect(offer?.offer_id).not.toContain("FOREIGN");
   });
 });
 
