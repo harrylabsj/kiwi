@@ -115,6 +115,9 @@ interface CacheEntry {
   expiresAt: number;
 }
 
+/** 缓存上限（评审项 L3：此前无驱逐，发现大量对端后内存永久累积）。 */
+const MAX_CACHE_ENTRIES = 512;
+
 export class UcpResolver {
   private readonly deps: UcpResolverOptions;
   private readonly cache = new Map<string, CacheEntry>();
@@ -161,6 +164,7 @@ export class UcpResolver {
     if (hit !== undefined && hit.expiresAt > now) {
       return { ...hit.result, cached: true };
     }
+    if (hit !== undefined) this.cache.delete(url); // 过期条目立即移除（此前滞留到同 URL 再次访问）
 
     let parsed: URL;
     try {
@@ -272,6 +276,12 @@ export class UcpResolver {
       cached: false,
       rawProfile: raw,
     };
+    // 防无界增长：超限时惰性清除全部过期条目（容量兜底）。
+    if (this.cache.size >= MAX_CACHE_ENTRIES) {
+      for (const [key, entry] of this.cache) {
+        if (entry.expiresAt <= this.now()) this.cache.delete(key);
+      }
+    }
     this.cache.set(url, { result, expiresAt: fetchedAt + ttlMs });
     return result;
   }

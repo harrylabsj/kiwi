@@ -86,7 +86,10 @@ async function listenPort(preferred: number): Promise<{ port: number; url: strin
         resolve(true);
       });
     });
-  const port = (await tryListen(preferred)) ? preferred : await pickFreePort();
+  // preferred <= 0（含显式 0 / NaN）不尝试：tryListen(0) 会返回"成功"并把
+  // port=0 带进 url（http://127.0.0.1:0），随后 server.listen(0) 换随机端口
+  // 但 holder.baseUrl 仍是无效端口 0——节点 URL 全部指向空。直接 pickFreePort。
+  const port = preferred > 0 && (await tryListen(preferred)) ? preferred : await pickFreePort();
   return { port, url: `http://127.0.0.1:${port}` };
 }
 
