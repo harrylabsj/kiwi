@@ -26,14 +26,13 @@
 export interface VersionRange {
   /** 支持的最低版本（含）。 */
   min: string;
-  /** 支持的最高版本（不含）。 */
-  maxExclusive: string;
+  /** 支持的最高版本（不含）；缺省 = 不设上限（上不封顶）。 */
+  maxExclusive?: string;
 }
 
-/** Kiwi 0.6.0 支持的 shopping-cli 版本范围（数据引擎契约面）。 */
+/** Kiwi 0.6.0 支持的 shopping-cli 版本范围（数据引擎契约面）：>= 2.0.0 不限上限。 */
 export const SHOPPING_CLI_COMPAT: VersionRange = {
   min: "2.0.0",
-  maxExclusive: "3.0.0",
 };
 
 export interface ParsedVersion {
@@ -64,16 +63,21 @@ export function compareVersions(a: ParsedVersion, b: ParsedVersion): number {
   return 0;
 }
 
-/** 版本是否在 [min, maxExclusive) 内。parse 失败 → false（fail-closed）。 */
+/**
+ * 版本是否在 [min, maxExclusive) 内；maxExclusive 缺省 = 不设上限。
+ * parse 失败 → false（fail-closed）。
+ */
 export function versionInRange(versionText: string, range: VersionRange): boolean {
   const version = parseVersion(versionText);
   const min = parseVersion(range.min);
-  const max = parseVersion(range.maxExclusive);
-  if (version === null || min === null || max === null) return false;
-  return compareVersions(version, min) >= 0 && compareVersions(version, max) < 0;
+  const max = range.maxExclusive !== undefined ? parseVersion(range.maxExclusive) : null;
+  if (version === null || min === null) return false;
+  if (compareVersions(version, min) < 0) return false;
+  if (max !== null && compareVersions(version, max) >= 0) return false;
+  return true;
 }
 
 /** 人类可读的支持范围描述（doctor/publish 错误信息共用）。 */
 export function compatRangeText(range: VersionRange): string {
-  return `>= ${range.min} < ${range.maxExclusive}`;
+  return range.maxExclusive !== undefined ? `>= ${range.min} < ${range.maxExclusive}` : `>= ${range.min}`;
 }
