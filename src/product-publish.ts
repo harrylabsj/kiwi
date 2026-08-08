@@ -30,6 +30,7 @@
  *      （listings 依赖 owner agent 存在），listings 失败报错不假装全成功。
  */
 
+import { createHmac } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import type { AgentProfile } from "./config/profile.js";
 import { registerCatalogAgent } from "./discovery/catalog-source/register.js";
@@ -69,6 +70,7 @@ export interface StepListings {
   published?: number;
   skipped?: number;
   withdrawn?: number;
+  published_refs?: string[];
   errors?: string[];
   raw?: unknown;
 }
@@ -201,19 +203,18 @@ export async function merchantPublish(
     };
   }
 
-  // ── Step 2: 进程调用 shopping-cli 发布 listings ─────────────────────────
-  // --db 是 shopping-cli 顶层参数，必须在子命令之前（usage: shopping.py [--db DB] {cmd}）。
+  // ── Step 2: 读 shopping-cli 投影 → 直连 catalog 发布 listings ──────────
+  // shopping-cli v3.0 剥离 publish-listings 后，发布面归 kiwi-catalog：
+  // 本步骤读取可发布投影（listings projections list --format json，只读），
+  // 逐条直连 POST /v1/listings/publish（owner token 直传）。--db 是
+  // shopping-cli 顶层参数，必须在子命令之前。
   const spawn = options.spawnImpl ?? spawnSync;
   const args = [
     "--db", options.shoppingCliDb,
     "listings",
-    "publish-listings",
+    "projections",
+    "list",
     "--merchant", merchantId,
-    "--kiwi-catalog-url", options.catalogBaseUrl,
-    ...(options.ownerToken
-      ? ["--owner-token", options.ownerToken]
-      : ["--owner-token-secret", options.ownerTokenSecret ?? ""]),
-    "--owner-agent-id", catalogAgentId,
     "--format", "json",
   ];
   let result: ReturnType<typeof spawnSync>;
@@ -238,40 +239,85 @@ export async function merchantPublish(
 
   const stdout = String(result.stdout ?? "");
   const stderr = String(result.stderr ?? "");
-  let raw: unknown;
+  if (result.status !== 0) {
+    // fail-closed：投影读取失败（含非零退出/输出非 JSON）一律不发布
+    const detail = (stderr !== "" ? stderr.trim() : stdout.trim()).slice(0, 300);
+    return {
+      ok: false,
+      steps: {
+        shopping_cli_compat: compatStep,
+        agent: { ok: true, catalog_agent_id: catalogAgentId },
+        listings: {
+          ok: false,
+          errors: [`shopping-cli projections failed: ${detail !== "" ? detail : `exit ${result.status ?? "?"}`}`],
+        },
+      },
+    };
+  }
+  let projections: Array<Record<string, unknown>> = [];
   try {
-    raw = stdout !== "" ? JSON.parse(stdout) : undefined;
+    const parsed = JSON.parse(stdout) as { ok?: boolean; results?: unknown };
+    if (parsed.ok === true && Array.isArray(parsed.results)) {
+      projections = parsed.results as Array<Record<string, unknown>>;
+    }
   } catch {
-    raw = undefined;
-  }
-  const report = (raw as {
-    published?: unknown;
-    skipped?: unknown;
-    withdrawn?: unknown;
-    errors?: unknown;
-  } | undefined) ?? {};
-
-  const published = Array.isArray(report.published) ? report.published.length : 0;
-  const skipped = Array.isArray(report.skipped) ? report.skipped.length : 0;
-  const withdrawn = Array.isArray(report.withdrawn) ? report.withdrawn.length : 0;
-  const reportErrors: string[] = Array.isArray(report.errors)
-    ? report.errors.map(String)
-    : [];
-
-  const spawnFailed = result.status !== 0;
-  if (spawnFailed && reportErrors.length === 0) {
-    const spawnError = (result as { error?: Error }).error;
-    reportErrors.push(
-      spawnError !== undefined
-        ? `shopping-cli spawn failed: ${spawnError.message}`
-        : `shopping-cli exited ${result.status ?? "?"}${stderr !== "" ? `: ${stderr.trim().slice(0, 300)}` : ""}`,
-    );
-  }
-  if (spawnFailed && raw === undefined && stdout !== "") {
-    reportErrors.push(`shopping-cli 输出非 JSON：${stdout.slice(0, 200)}`);
+    // 非 JSON → fail-closed（不发布，避免漏发）
+    return {
+      ok: false,
+      steps: {
+        shopping_cli_compat: compatStep,
+        agent: { ok: true, catalog_agent_id: catalogAgentId },
+        listings: { ok: false, errors: [`shopping-cli projections 输出非 JSON：${stdout.slice(0, 200)}`] },
+      },
+    };
   }
 
-  const ok = !spawnFailed && reportErrors.length === 0;
+  // 逐条直连 catalog publish（投影是 canonical payload 子集；owner 身份由
+  // 发布方补齐：merchant_id / owner_agent_id / owner_token / handoff 默认）。
+  // owner token：直传优先，否则 HMAC 派生（与 register 一致）。
+  const effectiveOwnerToken =
+    options.ownerToken !== undefined && options.ownerToken !== ""
+      ? options.ownerToken
+      : options.ownerTokenSecret !== undefined
+        ? createHmac("sha256", options.ownerTokenSecret)
+            .update(`kiwi-catalog-owner:${merchantId}`)
+            .digest("hex")
+        : "";
+  const reportErrors: string[] = [];
+  const publishedRefs: string[] = [];
+  const skippedRefs: string[] = [];
+  for (const projection of projections) {
+    const ref = String(projection.source_product_ref ?? "?");
+    const body: Record<string, unknown> = {
+      ...projection,
+      merchant_id: merchantId,
+      owner_agent_id: catalogAgentId,
+      owner_token: effectiveOwnerToken,
+      handoff_destination_types: ["external_checkout_url"],
+    };
+    if (typeof body.owner_token !== "string" || body.owner_token === "") {
+      reportErrors.push(`${ref}: no owner token (KIWI_MERCHANT_TOKEN 或 secret 派生)`);
+      continue;
+    }
+    try {
+      const res = await fetchImpl(`${baseUrl}/v1/listings/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(20_000),
+      });
+      const payload = (await res.json()) as { ok?: boolean; error?: string; listing?: { listing_id?: string } };
+      if (res.ok && payload.ok === true) {
+        publishedRefs.push(ref);
+      } else {
+        reportErrors.push(`${ref}: ${payload.error ?? `HTTP ${res.status}`}`);
+      }
+    } catch (err) {
+      reportErrors.push(`${ref}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  const ok = reportErrors.length === 0;
   return {
     ok,
     steps: {
@@ -279,11 +325,10 @@ export async function merchantPublish(
       agent: { ok: true, catalog_agent_id: catalogAgentId },
       listings: {
         ok,
-        published,
-        skipped,
-        withdrawn,
+        published: publishedRefs.length,
+        skipped: skippedRefs.length,
+        published_refs: publishedRefs,
         ...(reportErrors.length > 0 ? { errors: reportErrors } : {}),
-        ...(raw !== undefined ? { raw } : {}),
       },
     },
   };
