@@ -1155,7 +1155,9 @@ export class AgentKernel {
   private resolveApprovalId(input: string): string | undefined {
     if (this.approvals === undefined) return undefined;
     const pending = this.approvals.listPending();
-    const n = Number(input);
+    // 只把纯十进制当序号（评审项：Number("0x10")=16、Number("1e2")=100 会
+    // 把进制/科学计数法输入解析成序号索引，误批非预期的候选）。
+    const n = /^\d+$/.test(input) ? Number(input) : Number.NaN;
     if (Number.isInteger(n) && n >= 1 && n <= pending.length) {
       return pending[n - 1]?.candidate_id as string;
     }

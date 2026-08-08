@@ -31,7 +31,7 @@ import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { PROTOCOL_VERSION, type Role } from "../negotiation/types.js";
 
-export const RUNTIME_VERSION = "0.5.0";
+export const RUNTIME_VERSION = "0.6.0";
 
 export interface MerchantPolicy {
   min_unit_price_private?: number;
@@ -282,9 +282,12 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
   req(isObject(data), `${source}: profile must be a YAML mapping`);
   const p = data;
 
+  // runtime_version 是"生成该 profile 的运行时版本"：只做格式校验，不 gate
+  // 精确相等（版本单源评审项：RUNTIME_VERSION 升级不应让全部既有 profile
+  // 失效——0.5.0 的 profile 在新代码上必须继续可加载）。
   req(
-    p.runtime_version === RUNTIME_VERSION,
-    `${source}: runtime_version must be ${RUNTIME_VERSION}`,
+    typeof p.runtime_version === "string" && /^\d+\.\d+\.\d+$/.test(p.runtime_version),
+    `${source}: runtime_version must be a semantic version like ${RUNTIME_VERSION}`,
   );
   req(
     p.protocol_version === PROTOCOL_VERSION,

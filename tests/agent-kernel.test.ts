@@ -496,6 +496,25 @@ describe("sensitive routing and model failure resilience", () => {
     await kernel.close();
   });
 
+  it("/approve 拒绝进制/科学计数法序号（评审项：Number('0x10')=16 会误批非预期候选）", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const kernel = await openKernel("agent");
+    const approvals = kernel.actionCandidates;
+    expect(approvals).toBeDefined();
+    const firstId = approvals!.create({ tool: "w1", arguments: {}, preconditions: {}, risk: "t", expires_at: "2099-01-01T00:00:00Z" }).candidate_id;
+
+    // 修复前 Number("0x10")=16 会解析成序号（pending 足够多时）或前缀匹配失败；
+    // 修复后非纯十进制一律不按序号解析，退回前缀/精确匹配 → 无匹配 → 拒绝。
+    const hex = await kernel.handleUserText("/approve 0x1");
+    expect(hex.text).toContain("未知审批候选");
+    const sci = await kernel.handleUserText("/approve 1e0");
+    expect(sci.text).toContain("未知审批候选");
+    // 十进制序号仍正常工作
+    const dec = await kernel.handleUserText("/approve 1");
+    expect(dec.text).toContain(firstId);
+    await kernel.close();
+  });
+
   it("/private reveals the owner's own Restricted (Vault) values", async () => {
     workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
     const kernel = await openKernel("agent"); // merchant, keyed vault

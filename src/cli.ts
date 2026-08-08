@@ -39,7 +39,7 @@ import { runChatTui } from "./agent/chat-tui.js";
 import { createFakeChatModels } from "./agent/fake-chat-model.js";
 import { isAgentMode, type AgentMode } from "./agent/mode.js";
 import { AgentKernel, type AgentKernelOptions } from "./agent/kernel.js";
-import { loadProfile, ProfileError, resolveSecret, type AgentProfile } from "./config/profile.js";
+import { loadProfile, ProfileError, resolveSecret, RUNTIME_VERSION, type AgentProfile } from "./config/profile.js";
 import { HttpCommerceClient } from "./commerce/http-client.js";
 import type { CommerceClient } from "./commerce/types.js";
 import { CommerceError } from "./commerce/types.js";
@@ -58,12 +58,12 @@ import { runInit } from "./supervisor/init.js";
 import { runDown, runStatus, runUp, SupervisorError } from "./supervisor/manage.js";
 import { parseLogLines, runLogs } from "./supervisor/logs.js";
 import { StackConfigError } from "./supervisor/stack-config.js";
-import { cmdProductDoctor, productHelp } from "./product-cli.js";
+import { cmdProductDoctor, productHelp, PRODUCT_VERSION } from "./product-cli.js";
 import { merchantInit } from "./product-init.js";
 import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
 import { merchantPublish } from "./product-publish.js";
 
-const USAGE = `kiwi 0.6.0 — commerce negotiation agent runtime
+const USAGE = `kiwi ${PRODUCT_VERSION} — commerce negotiation agent runtime
 
 Usage:
   kiwi init --dir <dir> [--shopping-cli-src <path>] [--fake]
@@ -118,7 +118,6 @@ interface ParsedArgs {
   merchantName?: string;
   output?: string;
   force: boolean;
-  autoInstall: boolean;
   noInstall: boolean;
   agentId?: string;
   ownerId?: string;
@@ -149,7 +148,6 @@ function parseArgs(argv: string[]): ParsedArgs {
   let merchantName: string | undefined;
   let output: string | undefined;
   let force = false;
-  let autoInstall = false;
   let noInstall = false;
   let agentId: string | undefined;
   let ownerId: string | undefined;
@@ -189,8 +187,6 @@ function parseArgs(argv: string[]): ParsedArgs {
       output = argv[++i];
     } else if (arg === "--force") {
       force = true;
-    } else if (arg === "--auto-install") {
-      autoInstall = true;
     } else if (arg === "--no-install") {
       noInstall = true;
     } else if (arg === "--agent-id") {
@@ -241,7 +237,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       throw new ProfileError(`Unknown argument: ${arg ?? ""}`);
     }
   }
-  const out: ParsedArgs = { command, once, fake, noChat, noA2a, force, autoInstall, noInstall, autoNegotiate };
+  const out: ParsedArgs = { command, once, fake, noChat, noA2a, force, noInstall, autoNegotiate };
   if (profile !== undefined) out.profile = profile;
   if (dir !== undefined) out.dir = dir;
   if (lines !== undefined) out.lines = lines;
@@ -559,7 +555,7 @@ function defaultChatProfile(): AgentProfile {
   const apiKeyEnv = process.env.KIWI_MODEL_API_KEY_ENV ?? "DEEPSEEK_API_KEY";
   const baseUrl = process.env.KIWI_MODEL_BASE_URL;
   return {
-    runtime_version: "0.6.0",
+    runtime_version: RUNTIME_VERSION,
     protocol_version: "shopping.negotiation/0.1",
     agent_id: "kiwi-assistant",
     role: "buyer",
@@ -1034,7 +1030,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return EXIT.OK;
   }
   if (argv.includes("--version")) {
-    process.stdout.write("kiwi 0.6.0\n");
+    process.stdout.write(`kiwi ${PRODUCT_VERSION}\n`);
     return EXIT.OK;
   }
   let args: ParsedArgs;

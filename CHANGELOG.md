@@ -1,8 +1,9 @@
 # Changelog
 
-## v1.0.0 — 2026-08-07
+## v0.6.0 — 2026-08-07
 
-**A2A v1.0 正式发布。** 基线 §41 完成定义 27/27 经就绪度审计（`docs/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md`）逐条实证满足。
+**A2A v0.6.0 正式发布**（当日由 v1.0.0 回退版本号；KNP 协议身份不变，基线 §41 完成定义
+27/27 经就绪度审计 `docs/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md` 逐条实证满足）。
 
 ### 协议与发布
 
@@ -23,8 +24,8 @@
 
 ### 验证
 
-- 1236 tests（75 文件）全绿；§41 #24 network partition 端到端测试补入。
-- `npm run verify`（lint/typecheck/build/test/package）通过。
+- 全部离线测试全绿（`npm run verify`：lint/typecheck/build/test/package）。
+- 测试计数以 `npm run verify` 实际输出为准（README 同步维护）。
 
 ### 行为边界（§41 #25/#26/#27）
 

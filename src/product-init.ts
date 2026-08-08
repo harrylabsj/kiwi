@@ -160,7 +160,7 @@ export async function merchantInit(
   if (!detected.ok) {
     warnings.push(
       `shopping-cli 未检测到（${detected.error ?? "?"}）——Kiwi Merchant 需要它；` +
-        "可运行 `kiwi merchant init --auto-install` 自动安装（pip install shopping-cli）。",
+        "安装已默认自动尝试，可用 `kiwi merchant init --no-install` 跳过自动安装、稍后手动安装。",
     );
   }
 

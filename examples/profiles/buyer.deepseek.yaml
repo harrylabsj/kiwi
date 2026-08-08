@@ -1,7 +1,7 @@
 # Buyer profile — real model (deepseek-v4-flash) against a local shopping-cli.
 # Requires: SHOPPING_BUYER_TOKEN set (conversation-scoped buyer token) 与
 # DEEPSEEK_API_KEY 环境变量（模型 key，可从 Hermes 环境继承）。
-runtime_version: 0.5.0
+runtime_version: 0.6.0
 protocol_version: shopping.negotiation/0.1
 agent_id: buyer-agent:buyer-001
 role: buyer
