@@ -509,6 +509,25 @@ describe("KiwiCatalogSource listing methods (v0.4 / CD #22-#24)", () => {
     expect(results[0]?.listing.source_product_ref).toBe("SKU-001");
   });
 
+  it("searchListings serializes attribute.* filters (v0.4 §8 JSON1)", async () => {
+    let seenUrl = "";
+    const fetchImpl = (async (input: FetchInput): Promise<Response> => {
+      if (String(input).includes("/v1/listings/search")) {
+        seenUrl = String(input);
+        return jsonResponse({ results: [], next_cursor: "" });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    }) as typeof fetch;
+    const source = new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl });
+    await source.searchListings({
+      category: "tea",
+      attribute: { material: "ceramic", origin: "杭州" },
+    });
+    expect(seenUrl).toContain("attribute.material=ceramic");
+    expect(seenUrl).toContain("attribute.origin=%E6%9D%AD%E5%B7%9E");
+    expect(seenUrl).toContain("category=tea");
+  });
+
   it("searchListings caps the total at limit across pages (limit 是总量不是页大小)", async () => {
     // 回归：limit 曾只当页大小，翻页直到无游标 → --limit 3 返回全部 4 条。
     const page1 = {
