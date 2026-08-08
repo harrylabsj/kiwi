@@ -148,6 +148,22 @@ describe("product CLI command tree (D0)", () => {
   });
 });
 
+describe("kiwi catalog serve (CURRENT-DOCS v0.7.0)", () => {
+  it("without subcommand prints usage and fails closed", async () => {
+    const { code, stderr } = await run(["catalog"]);
+    expect(code).toBe(EXIT.CONFIG);
+    expect(stderr).toContain("usage: kiwi catalog serve");
+  });
+
+  it("serve without installed kiwi-catalog-api fails closed with install hint", async () => {
+    // 测试环境无 kiwi-catalog-api 二进制 → ENOENT → 引导安装提示
+    const { code, stderr } = await run(["catalog", "serve", "--db", "/tmp/catalog.sqlite"]);
+    expect(code).toBe(EXIT.CONFIG);
+    expect(stderr).toContain("kiwi-catalog");
+    expect(stderr).toContain("pip install");
+  });
+});
+
 describe("kiwi doctor aggregate (D0)", () => {
   it("without --profile prints three-component health JSON", async () => {
     const { code, stdout } = await run(["doctor"]);
