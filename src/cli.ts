@@ -63,6 +63,7 @@ import { cmdWeixin, weixinUsage } from "./weixin/cli-weixin.js";
 import { merchantInit } from "./product-init.js";
 import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
 import { merchantPublish } from "./product-publish.js";
+import { catalogServe } from "./product-catalog.js";
 
 const USAGE = `kiwi ${PRODUCT_VERSION} — commerce negotiation agent runtime
 
@@ -90,6 +91,9 @@ Usage:
   kiwi weixin [--profile <file>] [--allow id,...] [--relogin] [--a2a]
                                           WeChat remote control (scan QR to log in)
   kiwi metrics --dir <dir>                Handoff/negotiation ledger metrics (JSONL)
+  kiwi catalog serve [--db <file>] [--host <host>] [--port <port>]
+                                          Start the standalone kiwi-catalog service
+                                          (foreground; requires pip install kiwi-catalog)
 
 Product layer (product-strategy rev1.1 §10/§19):
   kiwi buyer --help                       Kiwi Buyer command tree
@@ -131,6 +135,8 @@ interface ParsedArgs {
   region?: string;
   listingType?: string;
   dataDir?: string;
+  catalogDb?: string;
+  catalogHost?: string;
   once: boolean;
   fake: boolean;
   catalog?: string;
@@ -167,6 +173,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   let dataDir: string | undefined;
   let catalog: string | undefined;
   let port: number | undefined;
+  let catalogDb: string | undefined;
+  let catalogHost: string | undefined;
   let once = false;
   let fake = false;
   let noChat = false;
@@ -224,6 +232,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       const raw = argv[++i];
       const parsed = /^\d+$/.test(raw ?? "") ? Number(raw) : Number.NaN;
       port = Number.isInteger(parsed) ? parsed : undefined;
+    } else if (arg === "--host") {
+      catalogHost = argv[++i];
+    } else if (arg === "--db") {
+      catalogDb = argv[++i];
     } else if (arg === "--once") {
       once = true;
     } else if (arg === "--fake") {
@@ -294,6 +306,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (dataDir !== undefined) out.dataDir = dataDir;
   if (catalog !== undefined) out.catalog = catalog;
   if (port !== undefined) out.port = port;
+  if (catalogDb !== undefined) out.catalogDb = catalogDb;
+  if (catalogHost !== undefined) out.catalogHost = catalogHost;
   return out;
 }
 
@@ -992,6 +1006,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       for (const nid of ledger.listNegotiations()) byNegotiation.set(nid, ledger.events(nid));
       printJson(computeHandoffMetrics(byNegotiation));
       return EXIT.OK;
+    }
+    if (cmd === "catalog") {
+      // `kiwi catalog serve` —— 前台启动独立 kiwi-catalog 服务（CURRENT-DOCS）。
+      const sub = args.command[1] ?? "";
+      if (sub === "serve") {
+        const result = catalogServe({
+          db: args.catalogDb,
+          host: args.catalogHost,
+          port: args.port,
+        });
+        if (!result.ok) {
+          process.stderr.write(`${result.error ?? "kiwi-catalog 启动失败"}\n`);
+          return EXIT.CONFIG;
+        }
+        return EXIT.OK;
+      }
+      process.stderr.write("usage: kiwi catalog serve [--db <file>] [--host <host>] [--port <port>]\n");
+      return EXIT.CONFIG;
     }
     if (cmd === "down") {
       const result = await runDown(requireDir(args));
