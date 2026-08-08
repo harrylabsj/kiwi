@@ -152,7 +152,7 @@ describe("merchant publish orchestration (D2/D3)", () => {
     expect(listingArgs[listingArgs.indexOf("--db") + 1]).toBe("/tmp/shop.sqlite");
     expect(listingArgs).toContain("listings");
     expect(listingArgs).toContain("projections");
-    expect(listingArgs).toContain("list");
+    expect(listingArgs).not.toContain("list");
     expect(listingArgs).toContain("--merchant");
     expect(listingArgs[listingArgs.indexOf("--merchant") + 1]).toBe(MERCHANT_ID);
     expect(listingArgs).toContain("--format");

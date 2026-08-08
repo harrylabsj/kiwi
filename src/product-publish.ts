@@ -213,7 +213,6 @@ export async function merchantPublish(
     "--db", options.shoppingCliDb,
     "listings",
     "projections",
-    "list",
     "--merchant", merchantId,
     "--format", "json",
   ];
