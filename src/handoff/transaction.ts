@@ -33,7 +33,9 @@
  */
 
 import { contentDigest } from "../negotiation/jcs.js";
+import { assertNoForbiddenContent } from "../negotiation/ledger/event.js";
 import { generateId } from "../negotiation/domain/identifiers.js";
+import { CommerceError } from "../commerce/data-source.js";
 import type {
   LedgerCapabilitySnapshot,
   LedgerIdentitySnapshot,
@@ -71,6 +73,8 @@ export type ExecuteHandoffResult =
   | { kind: "delivered"; handoff: TransactionHandoff; final_url?: string }
   | { kind: "already_delivered"; handoff_id: string }
   | { kind: "stale"; reason: string }
+  /** 目的地探测瞬时失败（超时/网络/HEAD 405）：候选保持 READY，可重试。 */
+  | { kind: "probe_failed"; reason: string }
   | { kind: "rejected"; reason: string }
   | { kind: "expired"; reason: string };
 
@@ -120,15 +124,55 @@ async function executeHandoffUnlocked(input: ExecuteHandoffInput): Promise<Execu
   const state = foldCandidateLifecycle(candidateEvents);
   const now = input.now ?? (() => new Date().toISOString());
 
+  // ── 0.5 协议级去重（评审项 H3）──────────────────────────────────────
+  // 同一 (agreement_id, destination_type, destination_ref) 已交付过 →
+  // already_delivered。创建期检查（buyer-tools priorDelivery）拦不住双候选
+  // 双批准：候选 A 创建时 B 尚未交付，两者都通过创建期检查；执行期幂等键
+  // (candidate_id, digest) 对每个候选都是新键。以链上事实为准——第一个
+  // 交付落链后，任何后续候选执行（含不同候选并发执行）都命中此检查，
+  // 且不触发无谓的 approval/重验。
+  const priorDestination = events.find(
+    (e) =>
+      e.event_kind === "handoff_delivered" &&
+      e.agreement_id === candidate.agreement_id &&
+      (e.destination as { type?: unknown } | undefined)?.type === candidate.destination_type &&
+      (e.destination as { ref?: unknown } | undefined)?.ref === candidate.destination_ref,
+  );
+  if (priorDestination !== undefined) {
+    return { kind: "already_delivered", handoff_id: priorDestination.handoff_id ?? "unknown" };
+  }
+
   // ── 1. 生命周期门 ────────────────────────────────────────────────────
   if (state === "REJECTED") return { kind: "rejected", reason: "candidate was rejected" };
   if (state === "STALE") return { kind: "stale", reason: "candidate is stale" };
   if (state === "EXPIRED") return { kind: "expired", reason: "candidate already expired" };
   if (state === "CONSUMED") {
-    const delivered = events.find(
+    const consumed = events.find(
       (e) => e.handoff_candidate_id === candidate.handoff_candidate_id && e.handoff_id !== undefined,
     );
-    return { kind: "already_delivered", handoff_id: delivered?.handoff_id ?? "unknown" };
+    const handoffId = consumed?.handoff_id ?? "unknown";
+    // 中间态恢复（评审项 M1）：consumed 已落、delivered 缺失（两次 append
+    // 之间崩溃）时，补落 delivered + 幂等记录——否则重试永远报"已交付"
+    // 但审计链上无交付证据（deliveryState 投影 undefined、metrics 缺失、
+    // TUI 列表显示 delivery "?"）。恢复的 delivered 以候选 destination_ref
+    // 为兜底（首次执行的 URL 探测结果已不可得；type/ref 是候选审计事实，
+    // final_url 是展示字段，缺失可接受）。
+    const deliveredExists = events.some(
+      (e) => e.event_kind === "handoff_delivered" && e.handoff_id === handoffId,
+    );
+    if (!deliveredExists && handoffId !== "unknown") {
+      ledger.appendDeliveryEvent({
+        kind: "handoff_delivered",
+        candidate,
+        handoff_id: handoffId,
+        identity: input.identity,
+        capability: input.capability,
+        destination: { final_url: candidate.destination_ref },
+        occurred_at: now(),
+      });
+      idempotency.record(candidate.handoff_candidate_id, candidate.candidate_digest, handoffId);
+    }
+    return { kind: "already_delivered", handoff_id: handoffId };
   }
   if (state === "PROPOSED" || state === undefined) {
     // PROPOSED：先走策略/批准。通过 → ready（附批准证据）；拒绝 → rejected。
@@ -192,6 +236,13 @@ async function executeHandoffUnlocked(input: ExecuteHandoffInput): Promise<Execu
       const safe = await input.urlSafety(candidate.destination_ref);
       finalUrl = safe.finalUrl;
     } catch (err) {
+      // 瞬时探测失败（超时/网络/HEAD 405）可重试，不置终态 STALE（评审项
+      // M2：此前一次 15s 超时即永久废掉候选——目的地内容并未变化，断网期间
+      // 每次重试都新建候选再置 stale，候选/事件堆积）。安全拒绝（scheme/
+      // host/DNS 保留网段 → invalid_input）仍是终态——内容确实不可用。
+      if (err instanceof CommerceError && err.code === "request_failed") {
+        return { kind: "probe_failed", reason: err.message };
+      }
       return stale(
         input,
         candidate,
@@ -231,6 +282,17 @@ async function executeHandoffUnlocked(input: ExecuteHandoffInput): Promise<Execu
     ...base,
     handoff_digest: computeHandoffDigest(base),
   };
+
+  // 预检（评审项 M1 加固）：consumed 落链前先验证 delivered 内容可落账
+  //（禁词扫描）。若 delivered 因 ledger_forbidden_content 失败，此时 consumed
+  // 已落链，会形成"已消费但无交付证据"的中间态（恢复路径虽能补，但可预
+  // 见的失败应发生在 consumed 之前）。
+  const deliveredDestination: Record<string, unknown> = {
+    type: candidate.destination_type,
+    ref: candidate.destination_ref,
+    ...(finalUrl !== undefined ? { final_url: finalUrl } : {}),
+  };
+  assertNoForbiddenContent(deliveredDestination, "destination");
 
   ledger.appendCandidateEvent({
     kind: "handoff_candidate_consumed",
