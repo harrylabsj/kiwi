@@ -141,14 +141,27 @@ export class HandoffIdempotencyStore {
     }
   }
 
-  /** 幂等查询：同候选同 digest 已交付 → 返回 handoff_id。 */
-  lookup(candidateId: string, candidateDigest: string): { handoff_id: string } | undefined {
+  /**
+   * 幂等查询（KTH §10.1）：
+   * - 同候选同 digest 已交付 → `{ status: "hit", handoff_id }`；
+   * - 同候选**异 digest**（内容被篡改/重建不匹配）→ `{ status: "conflict" }`
+   *   （调用方必须 fail-closed，见 `handoff_idempotency_conflict`）；
+   * - 无记录 → undefined。
+   */
+  lookup(
+    candidateId: string,
+    candidateDigest: string,
+  ): { status: "hit"; handoff_id: string } | { status: "conflict" } | undefined {
+    let found: string | undefined;
     for (const row of this.rows()) {
       if (row.candidate_id === candidateId && row.candidate_digest === candidateDigest) {
-        return { handoff_id: row.handoff_id };
+        found = row.handoff_id;
+      }
+      if (row.candidate_id === candidateId && row.candidate_digest !== candidateDigest) {
+        return { status: "conflict" };
       }
     }
-    return undefined;
+    return found !== undefined ? { status: "hit", handoff_id: found } : undefined;
   }
 
   /** 记录一次成功交付（幂等键 → handoff_id）。 */

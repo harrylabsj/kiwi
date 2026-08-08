@@ -32,6 +32,7 @@
  * 三副作用不变量（§16/§36-25）：本模块绝不创建订单/授权支付/预留库存。
  */
 
+import { HandoffError } from "./errors.js";
 import { contentDigest } from "../negotiation/jcs.js";
 import { assertNoForbiddenContent } from "../negotiation/ledger/event.js";
 import { generateId } from "../negotiation/domain/identifiers.js";
@@ -131,7 +132,22 @@ async function executeHandoffUnlocked(input: ExecuteHandoffInput): Promise<Execu
   const state = foldCandidateLifecycle(candidateEvents);
   const now = input.now ?? (() => new Date().toISOString());
 
-  // ── 0.5 协议级去重（评审项 H3）──────────────────────────────────────
+  // ── 0.5 幂等（§10.1）─────────────────────────────────────────────────
+  // 候选级幂等优先于 H3 目标级去重：同候选同 digest → already_delivered；
+  // 同候选**异 digest**（内容篡改/重建不匹配）→ handoff_idempotency_conflict
+  // fail-closed，绝不放行二次交付（KTH §10.1 具名错误）。
+  const prior = idempotency.lookup(candidate.handoff_candidate_id, candidate.candidate_digest);
+  if (prior !== undefined) {
+    if (prior.status === "conflict") {
+      throw new HandoffError(
+        "handoff_idempotency_conflict",
+        `handoff candidate ${candidate.handoff_candidate_id} was already delivered with a different digest; refusing execution (content tampering or rebuild mismatch)`,
+      );
+    }
+    return { kind: "already_delivered", handoff_id: prior.handoff_id };
+  }
+
+  // ── 0.6 协议级去重（评审项 H3）──────────────────────────────────────
   // 同一 (agreement_id, destination_type, destination_ref) 已交付过 →
   // already_delivered。创建期检查（buyer-tools priorDelivery）拦不住双候选
   // 双批准：候选 A 创建时 B 尚未交付，两者都通过创建期检查；执行期幂等键
@@ -257,12 +273,6 @@ async function executeHandoffUnlocked(input: ExecuteHandoffInput): Promise<Execu
         `destination invalid: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-  }
-
-  // ── 3. 幂等（§10.1）─────────────────────────────────────────────────
-  const prior = idempotency.lookup(candidate.handoff_candidate_id, candidate.candidate_digest);
-  if (prior !== undefined) {
-    return { kind: "already_delivered", handoff_id: prior.handoff_id };
   }
 
   // ── 4. 交付：consumed + delivered 落链 ──────────────────────────────

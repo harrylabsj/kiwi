@@ -276,15 +276,12 @@ describe("非法转换 fail-closed → state_conflict", () => {
     );
   });
 
-  it("rejects scope=negotiation Withdraw/Decline while AWAITING_CLARIFICATION", () => {
-    // §21.2 仅列出 OPEN/OFFER_OPEN + scope=negotiation；AWAITING_CLARIFICATION 不在表中。
+  it("rejects Decline scope=offer while AWAITING_CLARIFICATION (resume=OPEN)", () => {
+    // 澄清前无 offer（resume=OPEN）→ 无 offer 可 decline，保持 fail-closed。
     const awaiting = transitionPhase(createNegotiationPhase(NEG_ID), { type: "clarification" });
-    expect(
-      errorCode(() => transitionPhase(awaiting, { type: "withdraw", scope: "negotiation" })),
-    ).toBe("state_conflict");
-    expect(
-      errorCode(() => transitionPhase(awaiting, { type: "decline", scope: "negotiation" })),
-    ).toBe("state_conflict");
+    expect(errorCode(() => transitionPhase(awaiting, { type: "decline", scope: "offer" }))).toBe(
+      "state_conflict",
+    );
   });
 
   it("rejects clarification_response outside AWAITING_CLARIFICATION", () => {
@@ -305,6 +302,35 @@ describe("非法转换 fail-closed → state_conflict", () => {
     });
     // offer_expired 在 OFFER_OPEN 是合法行；这里验证的是另一条非法组合不受影响。
     expect(transitionPhase(offerOpen, { type: "offer_expired" }).phase).toBe("OPEN");
+  });
+});
+
+describe("rev1.4 §21.2: AWAITING_CLARIFICATION 下的 Withdraw/Decline", () => {
+  it("allows Withdraw scope=negotiation while AWAITING_CLARIFICATION → WITHDRAWN", () => {
+    const awaiting = transitionPhase(createNegotiationPhase(NEG_ID), { type: "clarification" });
+    const next = transitionPhase(awaiting, { type: "withdraw", scope: "negotiation" });
+    expect(next.phase).toBe("WITHDRAWN");
+  });
+
+  it("allows Decline scope=negotiation while AWAITING_CLARIFICATION → DECLINED", () => {
+    const awaiting = transitionPhase(createNegotiationPhase(NEG_ID), { type: "clarification" });
+    const next = transitionPhase(awaiting, { type: "decline", scope: "negotiation" });
+    expect(next.phase).toBe("DECLINED");
+  });
+
+  it("allows Decline scope=offer while AWAITING_CLARIFICATION (resume=OFFER_OPEN) → OPEN", () => {
+    const offerOpen = transitionPhase(createNegotiationPhase(NEG_ID), {
+      type: "offer",
+      offer_id: OFFER_A,
+    });
+    const awaiting = transitionPhase(offerOpen, { type: "clarification" });
+    expect(awaiting.resume_phase).toBe("OFFER_OPEN");
+    expect(awaiting.active_offer_id).toBe(OFFER_A);
+    const next = transitionPhase(awaiting, { type: "decline", scope: "offer" });
+    // 澄清挂起的 active offer 关闭，不再阻塞闭合；offer 状态清零。
+    expect(next.phase).toBe("OPEN");
+    expect(next.active_offer_id).toBeUndefined();
+    expect(next.resume_phase).toBeUndefined();
   });
 });
 
