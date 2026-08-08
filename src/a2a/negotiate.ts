@@ -259,11 +259,13 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
   const negotiationId = newNegotiationId();
 
   try {
-    // 1. 发现：catalog 候选 → fresh resolve Agent Card（includeBlocked：本地 rejected 也纳入）。
+    // 1. 发现：catalog 候选 → fresh resolve Agent Card（评审项 L4：includeBlocked
+    // 默认关闭——此前 true 会让 catalog 判定 rejected/suspended/unreachable 的
+    // 商户也进入磋商并产生误导性商业共识；演示路径也不该放宽安全默认）。
     // CD #27：Buyer 可注入 KiwiCatalogSource（listing → owner_agent_id → getRecord →
     // resolveViaCatalog fresh verify 全链）；缺省 legacy ShoppingCliCatalogSource。
     const source = options.catalogSource ?? new ShoppingCliCatalogSource({ baseUrl: options.catalog });
-    const discovery = new AgentDiscovery({ catalog: { source, includeBlocked: true } });
+    const discovery = new AgentDiscovery({ catalog: { source, includeBlocked: false } });
     const resolved = await discovery.resolveViaCatalog();
     if (resolved.length === 0) {
       return { ok: false, negotiationId, catalogAgentId: "", agentCardUrl: "", steps, error: "catalog 里没有可发现的 agent" };

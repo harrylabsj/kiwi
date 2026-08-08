@@ -181,19 +181,29 @@ export function createMerchantHandler(
   const { ledger, now, sender, counterparty } = options;
   const offerPriceMinor = options.offerPriceMinor ?? MERCHANT_OFFER_PRICE_MINOR;
   const conditionalByNegotiation = new Map<string, { conditional: Record<string, unknown>; quantity: number }>();
-  // 每 negotiation 已解析的真实商品价（sku → {priceMinor, currency}）。
-  const priceBySku = new Map<string, { priceMinor: number; currency: string }>();
+  // 每 negotiation 已解析的真实商品价（sku → {priceMinor, currency}），带
+  // TTL（评审项 L3：此前永久累积、价格永不刷新——长驻 merchant 节点内存
+  // 单调增长且价目陈旧）。
+  const PRICE_CACHE_TTL_MS = 10 * 60 * 1000;
+  const priceBySku = new Map<string, { priceMinor: number; currency: string; at: number }>();
 
   /** 从真实商品源解析 SKU 价目；源不可用/查不到时回退演示价并返回注记。 */
   const resolveProduct = async (
     sku: string,
   ): Promise<{ priceMinor: number; currency: string; note?: string }> => {
     const cached = priceBySku.get(sku);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      if (Date.parse(now()) - cached.at <= PRICE_CACHE_TTL_MS) return cached;
+      priceBySku.delete(sku); // TTL 过期：重新解析（价格会变）
+    }
     if (options.productSource !== undefined) {
       try {
         const product = await options.productSource.getProduct(sku);
-        const resolved = { priceMinor: Math.round(product.price * 100), currency: product.currency };
+        const resolved = {
+          priceMinor: Math.round(product.price * 100),
+          currency: product.currency,
+          at: Date.parse(now()),
+        };
         priceBySku.set(sku, resolved);
         return resolved;
       } catch {
@@ -371,13 +381,18 @@ export function createMerchantHandler(
             parts: [{ kind: "text", text: "Agreement reached (nonbinding)." }],
             messageId: newMessageId(),
           };
+          // 协商终态：conditional 不再需要（评审项 L3：此前永久累积）
+          conditionalByNegotiation.delete(negotiationId);
           return { kind: "accepted", taskState: "completed", artifactParts: [artifactPart], message };
         }
         case "withdraw":
+          conditionalByNegotiation.delete(negotiationId);
           return textReply(`Withdrawn (scope=${(envelope.payload as { scope?: string }).scope ?? "offer"}).`);
         case "decline":
+          conditionalByNegotiation.delete(negotiationId);
           return textReply(`Declined (scope=${(envelope.payload as { scope?: string }).scope ?? "offer"}).`);
         case "cancel":
+          conditionalByNegotiation.delete(negotiationId);
           return textReply("Negotiation cancelled.");
         default:
           return { kind: "declined", reasonCode: "unsupported_action" };
