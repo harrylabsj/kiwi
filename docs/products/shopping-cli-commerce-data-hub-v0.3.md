@@ -338,6 +338,15 @@ Catalog 不反向进入 ERP 抓商品私有库。
 5. 商品停止公开可触发 withdraw。
 6. Merchant Kiwi 可把 projection 发布到 kiwi-catalog v0.4。
 
+> **实现载体（2026-08-08，shopping-cli v3.0 剥离后）**：#4/#5/#6 的发布面
+> 由 **kiwi 仓 `merchant publish`** 承载（`src/product-publish.ts`）：
+> 进程调用 shopping-cli 只读 `listings projections list --format json`
+> 取 public-only 投影（projections 命令 v2.0 起提供、v3.0 保留），逐条
+> 直连 kiwi-catalog `POST /v1/listings/publish`（服务端行级幂等：同
+> `source_product_ref` upsert，digest 由服务端计算——同内容不重复建行）；
+> reconcile 阶段对投影中消失的商品 `POST /v1/listings/{id}/withdraw`
+> 实现 #5。shopping-cli 仓不再提供 publish/withdraw 子命令。
+
 ---
 
 ## 17. Revision History

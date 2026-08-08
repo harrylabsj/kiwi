@@ -108,13 +108,16 @@ shopping-cli:
 ```text
 OpenClaw ACP-Runtime Adapter
 Hermes ACP-Runtime Adapter
-
-kiwi-catalog standalone service
-Transaction Handoff
-shopping-cli ERP / local-data adapters
 ```
 
-其中 OpenClaw / Hermes 只作为 `ReasoningBackend`；`kiwi-catalog`、Transaction Handoff 与 shopping-cli data adapters 属于独立产品/运行时能力，不是 ReasoningBackend。
+其中 OpenClaw / Hermes 只作为 `ReasoningBackend`（`src/handoff/acp-commerce.ts`
+是 ACP-Commerce 占位接缝，恒 fail-closed，不是运行时适配器）。
+
+> **2026-08-08 更新**：本清单原列的 kiwi-catalog standalone service、
+> Transaction Handoff、shopping-cli ERP / local-data adapters 均已落地
+> （分别见 kiwi-catalog 仓、`src/handoff/`、shopping-cli 仓
+> `shopping_cli/data_sources/` + `listings/projection.py`），与 §42 完成
+> 定义 28/28 实证一致。
 
 ---
 
@@ -2092,7 +2095,9 @@ v0.7.0 Handoff/Product Split 只有同时满足以下条件才算完成：
 24. Listing 明确标记为 discovery projection 且需要 Direct confirmation。
 25. Listing freshness 与 Agent freshness 分离。
 26. shopping-cli 能生成 public-only `PublicListingProjection`。
-27. Buyer 可从 ProductIntent 完成 Listing Search → Merchant Agent resolution。
+27. Buyer 可从商品需求（search_listings / shortlist_listing 工具，经
+    KiwiCatalogSource.searchListings）完成 Listing Search → Merchant Agent
+    resolution（实现以 buyer 工具平铺参数为事实，无独立 ProductIntent 类型）。
 28. 至少一个 Product-first E2E 达到 Need → Listing → Direct A2A → KNP Offer。
 
 # 43. Canonical Documents and Artifact Layout
