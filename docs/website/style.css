@@ -218,3 +218,9 @@ code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   .hero { padding: 64px 20px 56px; }
   .section { padding: 52px 20px; }
 }
+
+/* 表格容器：移动端（≤640px）表格内部横滑，页面不产生横向滚动 */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}

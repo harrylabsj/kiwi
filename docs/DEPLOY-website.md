@@ -1,6 +1,8 @@
 # Kiwi 官网部署手册（kiwi.harrylabsj.com）
 
-> 状态：2026-08-07。页面源在 kiwi 仓库 `docs/website/`（markdown 文案为规范源）。
+> 状态：2026-08-08。页面源在 kiwi 仓库 `docs/website/`（markdown 文案为规范源）。
+> 本手册 2026-08-08 从 `docs/website/DEPLOY.md` 移至 `docs/DEPLOY-website.md`
+> （部署手册不属于站点内容，避免被静态部署发布）。
 > 目标域名 `kiwi.harrylabsj.com` **当前被 `harrylabsj/kiwi-spec` 的 Cloudflare
 > Pages 占用**（协议文档托管中）——发布官网前必须先做域名迁移。
 
