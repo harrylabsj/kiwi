@@ -5,6 +5,7 @@
  * 覆盖：版本解析（容忍前缀）、比较、范围判定（含边界/失败 fail-closed）。
  */
 import { describe, expect, it } from "vitest";
+import type { VersionRange } from "../src/product-compat.js";
 import {
   SHOPPING_CLI_COMPAT,
   compareVersions,
@@ -42,10 +43,16 @@ describe("versionInRange (matrix single source)", () => {
     expect(versionInRange("shopping.py 2.0.0", SHOPPING_CLI_COMPAT)).toBe(true);
   });
 
-  it("rejects versions below min, at max, and above max", () => {
+  it("rejects versions below min (无上限：3.0.0+ 均接受)", () => {
     expect(versionInRange("1.9.9", SHOPPING_CLI_COMPAT)).toBe(false);
-    expect(versionInRange("3.0.0", SHOPPING_CLI_COMPAT)).toBe(false); // 上边界不含
-    expect(versionInRange("4.0.0", SHOPPING_CLI_COMPAT)).toBe(false);
+    expect(versionInRange("3.0.0", SHOPPING_CLI_COMPAT)).toBe(true); // 不限上界
+    expect(versionInRange("4.0.0", SHOPPING_CLI_COMPAT)).toBe(true);
+  });
+
+  it("honors maxExclusive when present (有上限范围)", () => {
+    const bounded: VersionRange = { min: "1.0.0", maxExclusive: "2.0.0" };
+    expect(versionInRange("1.5.0", bounded)).toBe(true);
+    expect(versionInRange("2.0.0", bounded)).toBe(false); // 上边界不含
   });
 
   it("rejects unparseable version text (fail-closed)", () => {
@@ -53,7 +60,8 @@ describe("versionInRange (matrix single source)", () => {
     expect(versionInRange("not-a-version", SHOPPING_CLI_COMPAT)).toBe(false);
   });
 
-  it("range text is human readable", () => {
-    expect(compatRangeText(SHOPPING_CLI_COMPAT)).toBe(">= 2.0.0 < 3.0.0");
+  it("range text is human readable (无上限)", () => {
+    expect(compatRangeText(SHOPPING_CLI_COMPAT)).toBe(">= 2.0.0");
+    expect(compatRangeText({ min: "1.0.0", maxExclusive: "2.0.0" })).toBe(">= 1.0.0 < 2.0.0");
   });
 });
