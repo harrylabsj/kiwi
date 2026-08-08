@@ -305,7 +305,22 @@ export async function executeApprovedCandidate(
         "前置状态已变化（preconditions_hash 不匹配），旧批准失效；已标记 superseded，请重新生成候选。",
     };
   }
-  const output = await hooks.execute(candidate.arguments);
+  let output: unknown;
+  try {
+    output = await hooks.execute(candidate.arguments);
+  } catch (err) {
+    // 执行体抛错（评审项 P3-4）：网络中断等异常会让候选停留在 approved——
+    // 操作者可再次 /approve，而执行体（如 start_consultation：先在外网创建
+    // 会话、再本地落账）可能在首次执行已完成外部副作用后抛错——重试会重复
+    // 创建外部会话（幂等键依赖新的 conversation_id，不构成防护）。标
+    // superseded 防重复批准，返回 stale 让调用方提示重新生成候选。
+    store.supersede(candidateId);
+    return {
+      kind: "stale",
+      candidate: store.get(candidateId) as WriteApprovalCandidate,
+      reason: `执行抛错（${err instanceof Error ? err.message : String(err)}），候选已失效，请重新生成候选。`,
+    };
+  }
   // 执行失败（如 handoff 候选已 stale/expired，execute 返回 {ok:false} 而非
   // 抛错）→ 审批候选不标 executed：审计状态不得与 Ledger 矛盾（此前无条件
   // markExecuted，/approve 显示"已执行"但链上实际无交付）。标 superseded

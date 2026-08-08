@@ -260,6 +260,38 @@ describe("start_consultation tool (§15.2, §20-C)", () => {
     expect(events).toHaveLength(1);
   });
 
+  it("执行体抛错 → 候选 superseded，不重复执行（评审项 P3-4：防外部副作用重放）", async () => {
+    const h = setupBuyer();
+    const task = await createAwaitingTask(h.store);
+    const { candidate } = await shortlistOne(h.store, h.connector, task.task_id);
+    const tool = h.getTool("start_consultation");
+    await tool.execute("c2", {
+      task_id: task.task_id,
+      candidate_id: candidate.candidate_id,
+      message: "hi",
+    });
+    const cand = h.approvals.listPending()[0];
+    expect(cand).toBeDefined();
+    h.approvals.markApproved(cand!.candidate_id);
+
+    // 执行体抛错（模拟网关在本地落账前故障）：修复前候选停留 approved，
+    // 操作者可再次 /approve——若首次执行已创建外部会话，重试会重复创建。
+    const hooks = h.hooks.get(cand!.candidate_id) as PendingHooks;
+    const throwing: PendingHooks = {
+      ...hooks,
+      execute: async () => {
+        throw new Error("gateway unreachable");
+      },
+    };
+    const outcome = await executeApprovedCandidate(h.approvals, cand!.candidate_id, throwing);
+    expect(outcome.kind).toBe("stale");
+    // 候选已 superseded：再次批准无法执行（防副作用重放）
+    const again = await executeApprovedCandidate(h.approvals, cand!.candidate_id, throwing);
+    expect(again.kind).toBe("not_approvable");
+    // 本地未建立咨询（外部副作用不发生在本仓库内）
+    expect(h.store.getTask(task.task_id)?.status).not.toBe("consulting");
+  });
+
   it("rejects a task that is not awaiting_user or a candidate not shortlisted", async () => {
     const h = setupBuyer();
     const task = await createAwaitingTask(h.store);
