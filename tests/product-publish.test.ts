@@ -61,14 +61,38 @@ function registerResponse(overrides: Record<string, unknown> = {}): Response {
   );
 }
 
-function listingReport(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function projectionsReport(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    published: [{ listing_id: "lst_1" }, { listing_id: "lst_2" }],
-    skipped: [{ source_key: "SKU-3", reason: "digest unchanged" }],
-    withdrawn: [],
-    errors: [],
+    ok: true,
+    results: [
+      { listing_type: "product", source_product_ref: "SKU-1", title: "Widget A", category: "widgets" },
+      { listing_type: "product", source_product_ref: "SKU-2", title: "Widget B", category: "widgets" },
+    ],
     ...overrides,
   };
+}
+
+/** fetch mock：register/lookup 返回 agent；/v1/listings/publish 返回 ok。 */
+function publishFetch(
+  options: { publishBody?: string[]; publishError?: string } = {},
+): typeof fetch {
+  return (async (url: string, init?: Parameters<typeof fetch>[1]) => {
+    const u = String(url);
+    if (u.includes("/v1/listings/publish")) {
+      if (options.publishError !== undefined) {
+        return new Response(JSON.stringify({ ok: false, error: options.publishError }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (options.publishBody !== undefined) options.publishBody.push(String(init?.body ?? ""));
+      return new Response(
+        JSON.stringify({ ok: true, listing: { listing_id: "lst_" + options.publishBody?.length } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return registerResponse();
+  }) as unknown as typeof fetch;
 }
 
 type SpawnResult = { status: number; stdout: string; stderr: string };
@@ -92,11 +116,12 @@ function compatSpawn(
 }
 
 describe("merchant publish orchestration (D2/D3)", () => {
-  it("registers the agent then spawns shopping-cli with correct args", async () => {
+  it("reads projections then publishes each direct to catalog", async () => {
     const spawnArgs: string[] = [];
-    const fetchImpl = (async () => registerResponse()) as typeof fetch;
+    const publishBodies: string[] = [];
+    const fetchImpl = publishFetch({ publishBody: publishBodies });
     const spawnImpl = compatSpawn(
-      () => ({ status: 0, stdout: JSON.stringify(listingReport()), stderr: "" }),
+      () => ({ status: 0, stdout: JSON.stringify(projectionsReport()), stderr: "" }),
       spawnArgs,
     );
 
@@ -114,19 +139,25 @@ describe("merchant publish orchestration (D2/D3)", () => {
     expect(report.steps.agent.catalog_agent_id).toBe("cagt_published_001");
     expect(report.steps.listings.ok).toBe(true);
     expect(report.steps.listings.published).toBe(2);
-    expect(report.steps.listings.skipped).toBe(1);
+    expect(publishBodies.length).toBe(2);
+    // 每条 publish body 带 owner 身份（merchant_id / owner_agent_id / owner_token）
+    for (const body of publishBodies) {
+      expect(body).toContain(`"merchant_id":"${MERCHANT_ID}"`);
+      expect(body).toContain('"owner_agent_id":"cagt_published_001"');
+      expect(body).toContain('"owner_token":');
+    }
 
     const listingArgs = spawnArgs[0]?.split(" ") ?? [];
     expect(listingArgs).toContain("--db");
     expect(listingArgs[listingArgs.indexOf("--db") + 1]).toBe("/tmp/shop.sqlite");
+    expect(listingArgs).toContain("listings");
+    expect(listingArgs).toContain("projections");
+    expect(listingArgs).toContain("list");
     expect(listingArgs).toContain("--merchant");
     expect(listingArgs[listingArgs.indexOf("--merchant") + 1]).toBe(MERCHANT_ID);
-    expect(listingArgs).toContain("--kiwi-catalog-url");
-    expect(listingArgs[listingArgs.indexOf("--kiwi-catalog-url") + 1]).toBe("http://127.0.0.1:8600");
-    expect(listingArgs).toContain("--owner-token-secret");
-    expect(listingArgs[listingArgs.indexOf("--owner-token-secret") + 1]).toBe(SECRET);
-    expect(listingArgs).toContain("--owner-agent-id");
-    expect(listingArgs[listingArgs.indexOf("--owner-agent-id") + 1]).toBe("cagt_published_001");
+    expect(listingArgs).toContain("--format");
+    expect(listingArgs[listingArgs.indexOf("--format") + 1]).toBe("json");
+    expect(listingArgs).not.toContain("--owner-token-secret"); // 投影读取不携带凭据
   });
 
   it("owner token derivation matches kiwi-catalog (fixed vector)", async () => {
@@ -134,13 +165,19 @@ describe("merchant publish orchestration (D2/D3)", () => {
       .update(`kiwi-catalog-owner:${MERCHANT_ID}`)
       .digest("hex");
     let registerBody = "";
-    const fetchImpl = (async (_url: string, init?: Parameters<typeof fetch>[1]) => {
+    const fetchImpl = (async (url: string, init?: Parameters<typeof fetch>[1]) => {
+      if (String(url).includes("/v1/listings/publish")) {
+        return new Response(JSON.stringify({ ok: true, listing: { listing_id: "lst_x" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
       registerBody = String(init?.body ?? "");
       return registerResponse();
     }) as typeof fetch;
     const spawnImpl = compatSpawn(() => ({
       status: 0,
-      stdout: JSON.stringify(listingReport()),
+      stdout: JSON.stringify(projectionsReport()),
       stderr: "",
     }));
 
@@ -159,7 +196,9 @@ describe("merchant publish orchestration (D2/D3)", () => {
 
   it("repeat publish is idempotent: reuses existing agent (lookup first)", async () => {
     let registerCalled = false;
-    const fetchImpl = (async (url: string) => {
+    const spawnArgs: string[] = [];
+    const publishBodies: string[] = [];
+    const fetchImpl = (async (url: string, init?: Parameters<typeof fetch>[1]) => {
       if (String(url).includes("/v1/agent-catalog/merchants/")) {
         return new Response(
           JSON.stringify({
@@ -170,12 +209,18 @@ describe("merchant publish orchestration (D2/D3)", () => {
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
+      if (String(url).includes("/v1/listings/publish")) {
+        publishBodies.push(String(init?.body ?? ""));
+        return new Response(JSON.stringify({ ok: true, listing: { listing_id: "lst_y" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
       registerCalled = true;
       return registerResponse();
     }) as typeof fetch;
-    const spawnArgs: string[] = [];
     const spawnImpl = compatSpawn(
-      () => ({ status: 0, stdout: JSON.stringify(listingReport()), stderr: "" }),
+      () => ({ status: 0, stdout: JSON.stringify(projectionsReport()), stderr: "" }),
       spawnArgs,
     );
 
@@ -191,7 +236,7 @@ describe("merchant publish orchestration (D2/D3)", () => {
     expect(report.ok).toBe(true);
     expect(report.steps.agent.catalog_agent_id).toBe("cagt_existing_001");
     expect(registerCalled).toBe(false);
-    expect(spawnArgs[0]).toContain("--owner-agent-id cagt_existing_001");
+    expect(publishBodies[0]).toContain('"owner_agent_id":"cagt_existing_001"');
   });
 
   it("agent registration failure short-circuits (listings skipped)", async () => {
@@ -225,7 +270,29 @@ describe("merchant publish orchestration (D2/D3)", () => {
     const fetchImpl = (async () => registerResponse()) as typeof fetch;
     const spawnImpl = compatSpawn(() => ({
       status: 2,
-      stdout: JSON.stringify(listingReport({ errors: ["SKU-9: kiwi-catalog returned HTTP 400"] })),
+      stdout: "",
+      stderr: "shopping-cli: projections failed: boom",
+    }));
+
+    const report = await merchantPublish({
+      profile: MERCHANT_PROFILE,
+      catalogBaseUrl: "http://127.0.0.1:8600",
+      ownerTokenSecret: SECRET,
+      shoppingCliDb: "/tmp/shop.sqlite",
+      fetchImpl,
+      spawnImpl,
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.steps.listings.ok).toBe(false);
+    expect(report.steps.listings.errors?.[0]).toContain("projections failed");
+  });
+
+  it("catalog publish error fails closed with ref detail", async () => {
+    const fetchImpl = publishFetch({ publishError: "SKU-9: kiwi-catalog returned HTTP 400" });
+    const spawnImpl = compatSpawn(() => ({
+      status: 0,
+      stdout: JSON.stringify(projectionsReport()),
       stderr: "",
     }));
 
@@ -240,14 +307,14 @@ describe("merchant publish orchestration (D2/D3)", () => {
 
     expect(report.ok).toBe(false);
     expect(report.steps.listings.ok).toBe(false);
-    expect(report.steps.listings.errors).toContain("SKU-9: kiwi-catalog returned HTTP 400");
+    expect(report.steps.listings.errors?.length).toBe(2); // 两条投影都失败
   });
 
   it("incompatible shopping-cli version fails closed before registration (D3)", async () => {
     const fetchImpl = (async () => registerResponse()) as typeof fetch;
     const spawnArgs: string[] = [];
     const spawnImpl = compatSpawn(
-      () => ({ status: 0, stdout: JSON.stringify(listingReport()), stderr: "" }),
+      () => ({ status: 0, stdout: JSON.stringify(projectionsReport()), stderr: "" }),
       spawnArgs,
       "shopping.py 1.9.9\n", // 低于支持范围 >= 2.0.0
     );
