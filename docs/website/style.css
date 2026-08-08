@@ -186,11 +186,12 @@ th, td {
 th { color: var(--kiwi-800); font-weight: 700; white-space: nowrap; }
 td:first-child { font-weight: 600; white-space: nowrap; }
 
-/* ── 代码块 ───────────────────────────────────────────────── */
+/* ── 代码块（与中文说明段落同底色，无深色块）────────────────── */
 pre {
-  background: #12251a;
-  color: #d7f0da;
-  border-radius: var(--radius);
+  background: var(--kiwi-100);
+  color: var(--kiwi-900);
+  border-left: 4px solid var(--kiwi-600);
+  border-radius: 0 var(--radius) var(--radius) 0;
   padding: 22px 24px;
   overflow-x: auto;
   font-size: 0.88rem;
