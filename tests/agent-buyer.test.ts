@@ -382,6 +382,49 @@ describe("search cycle (§13)", () => {
     const events = store.taskEvents(ready.task_id);
     expect(events.some((e) => e.type === "failed")).toBe(true);
   });
+
+  it("searching 转移设置 next_run_at：崩溃后 dueTasks 可恢复（评审项 H4）", async () => {
+    const { store, setNow } = setup();
+    const task = createReadyTask(store);
+    // 新激活任务 next_run_at 为空——此前 searching 转移保留空值，
+    // 崩溃后 dueTasks（要求 NOT NULL）永不选中，任务永久卡死。
+    expect(store.getTask(task.task_id)?.next_run_at).toBeUndefined();
+
+    // 卡住搜索的 connector：runSearchCycle 同步执行到 awaiting 之前，
+    // 让我们断言 searching 中间态。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const hanging = new FakeCommerceConnector();
+    const original = hanging.searchProducts.bind(hanging);
+    hanging.searchProducts = async () => {
+      await gate;
+      return original({});
+    };
+    const cycle = runSearchCycle(
+      { store, connector: hanging, now: () => "2026-08-05T12:00:01+08:00" },
+      task.task_id,
+      "run:1",
+    );
+
+    const searching = store.getTask(task.task_id);
+    expect(searching?.status).toBe("searching");
+    // 关键断言：next_run_at 非 NULL 且在锁定期内（正常完成由 tracking
+    // 转移覆盖；崩溃后到期即被 dueTasks 重新选中 → 恢复路径真实存在）。
+    expect(searching?.next_run_at).not.toBeNull();
+    expect(Date.parse(searching?.next_run_at ?? "")).toBeGreaterThan(
+      Date.parse("2026-08-05T12:00:01+08:00"),
+    );
+
+    // 模拟崩溃（搜索永远不完成，进程重启）：锁定期到期后 dueTasks 选中它。
+    const due = store.dueTasks("2026-08-05T12:03:00+08:00", 10);
+    expect(due.some((t) => t.task_id === task.task_id)).toBe(true);
+
+    release();
+    await cycle;
+    setNow("2026-08-05T12:03:00+08:00");
+  });
 });
 
 describe("tracking rules and scheduler (§11.7, §13)", () => {
@@ -484,6 +527,30 @@ describe("tracking rules and scheduler (§11.7, §13)", () => {
     const tick = await recovered.tick();
     expect(tick.tasks_searched).toContain(ready.task_id);
     expect(store.getTask(ready.task_id)?.status).toBe("awaiting_user");
+  });
+
+  it("任务级默认规则在重搜索后基于新鲜观察求值：price_below 触发降价通知（评审项 H5）", async () => {
+    const { store, connector, scheduler, setNow, now } = setup([
+      fakeConnectorProduct({ sku: "sku-001", price: 150 }), // 高于预算 → 无 eligible
+    ]);
+    const ready = createReadyTask(store, { constraints: { max_total_price: 100 } });
+    // 首次搜索：无 eligible → tracking + 默认任务级规则（price_below threshold=100）
+    await runSearchCycle({ store, connector, now }, ready.task_id, `r:${uuidv7()}`);
+    expect(store.getTask(ready.task_id)?.status).toBe("tracking");
+    const rules = store.rulesForTask(ready.task_id);
+    expect(rules.some((r) => r.rule_type === "price_below" && r.candidate_id === undefined)).toBe(true);
+
+    // 价格降到阈值内：重搜索写入新鲜观察后，任务级 price_below 必须被求值并通知
+    //（修复前只 markRuleChecked、条件永不求值——承诺的"降价通知"静默失效）。
+    // 12:30 = 12:00 + 默认 interval(1800s)，next_run_at 到期后才重搜。
+    setNow("2026-08-05T12:35:00+08:00");
+    connector.put(fakeConnectorProduct({ sku: "sku-001", price: 90 }));
+    const tick = await scheduler.tick();
+    const notified = tick.notifications.find(
+      (n) => n.task_id === ready.task_id && n.rule_ids.length === 1,
+    );
+    expect(notified).toBeDefined();
+    expect(notified?.summary).toContain("已低于");
   });
 
   it("expires tracking tasks past their deadline", async () => {
