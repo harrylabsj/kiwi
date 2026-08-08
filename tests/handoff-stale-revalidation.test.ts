@@ -25,6 +25,7 @@ import {
   type HandoffCandidate,
 } from "../src/handoff/index.js";
 import { contentDigest } from "../src/negotiation/jcs.js";
+import { CommerceError } from "../src/commerce/data-source.js";
 
 const IDENTITY = { sender_identity: "principal:buyer-1", counterparty_identity: "merchant:acme", actor: "buyer" as const };
 const CAPABILITY = { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" };
@@ -179,5 +180,111 @@ describe("executeHandoff", () => {
     // 只有一次 delivered 事件
     const delivered = e.ledger.events(c.negotiation_id).filter((ev) => ev.event_kind === "handoff_delivered");
     expect(delivered).toHaveLength(1);
+  });
+
+  it("中间态恢复：consumed 已落、delivered 缺失 → 补落 delivered + 幂等记录（评审项 M1）", async () => {
+    const c = candidate();
+    const e = env(c);
+    e.ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: c, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
+    e.ledger.appendCandidateEvent({ kind: "handoff_candidate_ready", candidate: c, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
+    // 模拟崩溃中间态：consumed 落链但 delivered 缺失（两次 append 之间崩溃）
+    e.ledger.appendCandidateEvent({
+      kind: "handoff_candidate_consumed",
+      candidate: c,
+      identity: IDENTITY,
+      capability: CAPABILITY,
+      handoff_id: "hnd_mid",
+      occurred_at: NOW,
+    });
+
+    const result = await executeHandoff({ ...e, candidate: c });
+    expect(result).toMatchObject({ kind: "already_delivered", handoff_id: "hnd_mid" });
+    // delivered 已补落（审计完整：deliveryState 可投影，TUI 列表不再显示 "?"）
+    const delivered = e.ledger.events(c.negotiation_id).filter((ev) => ev.event_kind === "handoff_delivered");
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.handoff_id).toBe("hnd_mid");
+    // 幂等记录已补：重试命中幂等表而非再次触发恢复
+    expect(e.idempotency.lookup(c.handoff_candidate_id, c.candidate_digest)).toEqual({ handoff_id: "hnd_mid" });
+    // 恢复只发生一次：再次执行不重复补落
+    const again = await executeHandoff({ ...e, candidate: c });
+    expect(again).toMatchObject({ kind: "already_delivered", handoff_id: "hnd_mid" });
+    expect(e.ledger.events(c.negotiation_id).filter((ev) => ev.event_kind === "handoff_delivered")).toHaveLength(1);
+  });
+
+  it("瞬时探测失败 → probe_failed（候选保持 READY，重试可成功；评审项 M2）", async () => {
+    const c = candidate();
+    const e = env(c);
+    e.ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: c, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
+    e.ledger.appendCandidateEvent({ kind: "handoff_candidate_ready", candidate: c, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
+
+    const failing = async (): Promise<never> => {
+      throw new CommerceError("request_failed", "destination probe timed out after 15000ms");
+    };
+    const first = await executeHandoff({ ...e, candidate: c, urlSafety: failing });
+    expect(first).toMatchObject({ kind: "probe_failed" });
+    // 候选保持 READY：未落 stale/expired/consumed（修复前一次超时即永久废掉候选）
+    const events = e.ledger.events(c.negotiation_id);
+    expect(events.some((ev) => ev.event_kind === "handoff_candidate_stale")).toBe(false);
+    expect(events.some((ev) => ev.event_kind === "handoff_candidate_consumed")).toBe(false);
+
+    // 探测恢复后重试成功（同一候选，无需重新生成）
+    const second = await executeHandoff({
+      ...e,
+      candidate: c,
+      urlSafety: async () => ({ finalUrl: "https://acme.example/checkout/abc", redirects: [] }),
+    });
+    expect(second.kind).toBe("delivered");
+  });
+
+  it("安全拒绝（invalid_input）仍置 STALE：目的地内容不可用是终态", async () => {
+    const c = candidate();
+    const e = env(c);
+    e.ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: c, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
+    e.ledger.appendCandidateEvent({ kind: "handoff_candidate_ready", candidate: c, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
+
+    const unsafe = async (): Promise<never> => {
+      throw new CommerceError("invalid_input", "unsafe destination scheme \"file:\"");
+    };
+    const first = await executeHandoff({ ...e, candidate: c, urlSafety: unsafe });
+    expect(first.kind).toBe("stale");
+    const events = e.ledger.events(c.negotiation_id);
+    expect(events.some((ev) => ev.event_kind === "handoff_candidate_stale")).toBe(true);
+  });
+
+  it("双候选同 (agreement, destination)：第二个候选执行 → already_delivered（H3 防二次交付）", async () => {
+    // 候选 A、B：同协议同目的地、不同候选 id（模拟 LLM 重试生成的第二候选——
+    // 创建期 priorDelivery 检查拦不住双候选双批准，执行期链上事实兜底）。
+    const cA = candidate();
+    const cB = candidate();
+    expect(cB.handoff_candidate_id).not.toBe(cA.handoff_candidate_id);
+    expect(cB.candidate_digest).not.toBe(cA.candidate_digest);
+    const e = env(cA);
+    e.ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: cA, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
+    e.ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: cB, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
+
+    const first = await executeHandoff({ ...e, candidate: cA });
+    expect(first.kind).toBe("delivered");
+    const second = await executeHandoff({ ...e, candidate: cB });
+    expect(second).toMatchObject({ kind: "already_delivered" });
+    // 链上只有一次 delivered（B 不触发 approval/ready——0.5 步在生命周期门前）
+    const events = e.ledger.events(cA.negotiation_id);
+    const delivered = events.filter((ev) => ev.event_kind === "handoff_delivered");
+    expect(delivered).toHaveLength(1);
+    expect(events.filter((ev) => ev.event_kind === "handoff_candidate_ready")).toHaveLength(1);
+  });
+
+  it("不同目的地不误伤：同协议不同 destination_ref 仍可交付", async () => {
+    const cA = candidate();
+    const cB = candidate({ destination: { type: "external_checkout_url", ref: "https://acme.example/checkout/other" } });
+    const e = env(cA);
+    e.ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: cA, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
+    e.ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: cB, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
+
+    const first = await executeHandoff({ ...e, candidate: cA });
+    expect(first.kind).toBe("delivered");
+    const second = await executeHandoff({ ...e, candidate: cB });
+    expect(second.kind).toBe("delivered");
+    const delivered = e.ledger.events(cA.negotiation_id).filter((ev) => ev.event_kind === "handoff_delivered");
+    expect(delivered).toHaveLength(2);
   });
 });

@@ -1528,6 +1528,10 @@ function handoffResultText(result: ExecuteHandoffResult): AgentToolResult<unknow
       });
     case "stale":
       return textResult(`交接未执行：候选已失效（${result.reason}）。需重新生成候选。`, { status: "stale" });
+    case "probe_failed":
+      return textResult(`交接未执行：目的地探测瞬时失败（${result.reason}）。候选保持可用，可重试。`, {
+        status: "probe_failed",
+      });
     case "rejected":
       return textResult(`交接未执行：${result.reason}。`, { status: "rejected" });
     case "expired":
