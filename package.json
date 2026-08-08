@@ -10,6 +10,11 @@
   "bin": {
     "kiwi": "./dist/cli.js"
   },
+  "exports": {
+    ".": "./dist/cli.js",
+    "./package.json": "./package.json",
+    "./dist/*": "./dist/*"
+  },
   "files": [
     "dist",
     "contracts",

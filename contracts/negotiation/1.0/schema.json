@@ -277,6 +277,14 @@
             {
               "if": { "properties": { "op": { "not": { "const": "in" } } } },
               "then": { "properties": { "value": { "not": { "type": "array" } } } }
+            },
+            {
+              "if": { "properties": { "op": { "const": "in" } } },
+              "then": {
+                "properties": {
+                  "value": { "type": "array", "minItems": 1 }
+                }
+              }
             }
           ]
         }
