@@ -25,6 +25,7 @@ import {
   type HandoffCandidate,
 } from "../src/handoff/index.js";
 import { contentDigest } from "../src/negotiation/jcs.js";
+import { computeCandidateDigest } from "../src/handoff/candidate.js";
 import { CommerceError } from "../src/commerce/data-source.js";
 
 const IDENTITY = { sender_identity: "principal:buyer-1", counterparty_identity: "merchant:acme", actor: "buyer" as const };
@@ -182,6 +183,36 @@ describe("executeHandoff", () => {
     expect(delivered).toHaveLength(1);
   });
 
+  it("幂等冲突：同候选异 digest → handoff_idempotency_conflict（KTH §10.1）", async () => {
+    const c = candidate({ handoff_candidate_id: "hcan_tamper" });
+    const e = env(c);
+    e.ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: c, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
+    e.ledger.appendCandidateEvent({ kind: "handoff_candidate_ready", candidate: c, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
+
+    const first = await executeHandoff({ ...e, candidate: c });
+    expect(first.kind).toBe("delivered");
+
+    // 内容被篡改/重建不匹配：同 candidate_id 但内容不同 → digest 不同
+    // （createHandoffCandidate 总是生成新 id，故手工保留 id 并重算 digest）
+    const tamperedBase: HandoffCandidate = {
+      ...c,
+      display_summary: { merchant: "Acme", summary: "200 units (tampered)" },
+    };
+    const tampered: HandoffCandidate = Object.freeze({
+      ...tamperedBase,
+      candidate_digest: computeCandidateDigest(tamperedBase),
+    });
+    expect(tampered.handoff_candidate_id).toBe(c.handoff_candidate_id);
+    expect(tampered.candidate_digest).not.toBe(c.candidate_digest);
+
+    await expect(executeHandoff({ ...e, candidate: tampered })).rejects.toMatchObject({
+      code: "handoff_idempotency_conflict",
+    });
+    // 不产生第二次 delivered（fail-closed，绝不重复交付）
+    const delivered = e.ledger.events(c.negotiation_id).filter((ev) => ev.event_kind === "handoff_delivered");
+    expect(delivered).toHaveLength(1);
+  });
+
   it("中间态恢复：consumed 已落、delivered 缺失 → 补落 delivered + 幂等记录（评审项 M1）", async () => {
     const c = candidate();
     const e = env(c);
@@ -204,7 +235,10 @@ describe("executeHandoff", () => {
     expect(delivered).toHaveLength(1);
     expect(delivered[0]?.handoff_id).toBe("hnd_mid");
     // 幂等记录已补：重试命中幂等表而非再次触发恢复
-    expect(e.idempotency.lookup(c.handoff_candidate_id, c.candidate_digest)).toEqual({ handoff_id: "hnd_mid" });
+    expect(e.idempotency.lookup(c.handoff_candidate_id, c.candidate_digest)).toEqual({
+      status: "hit",
+      handoff_id: "hnd_mid",
+    });
     // 恢复只发生一次：再次执行不重复补落
     const again = await executeHandoff({ ...e, candidate: c });
     expect(again).toMatchObject({ kind: "already_delivered", handoff_id: "hnd_mid" });

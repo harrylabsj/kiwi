@@ -3,7 +3,8 @@
  *
  * 覆盖：
  * - 幂等键 (candidate_id, candidate_digest)：同键命中 → 返回原 handoff_id；
- * - 不同 digest（同候选）→ 不命中（调用方 fail-closed 的输入）；
+ * - 同候选不同 digest → conflict（KTH §10.1 `handoff_idempotency_conflict`，
+ *   调用方必须 fail-closed，不得放行二次交付）；
  * - 保留期清理（prune 删除过期行）。
  */
 import {mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync} from "node:fs";
@@ -24,13 +25,13 @@ describe("HandoffIdempotencyStore", () => {
     const s = store();
     expect(s.lookup("hcan_01", "sha256:abc")).toBeUndefined();
     s.record("hcan_01", "sha256:abc", "hnd_99");
-    expect(s.lookup("hcan_01", "sha256:abc")).toEqual({ handoff_id: "hnd_99" });
+    expect(s.lookup("hcan_01", "sha256:abc")).toEqual({ status: "hit", handoff_id: "hnd_99" });
   });
 
-  it("同候选不同 digest → 不命中（幂等键的 digest 分量生效）", () => {
+  it("同候选不同 digest → conflict（KTH §10.1 具名冲突，调用方 fail-closed）", () => {
     const s = store();
     s.record("hcan_01", "sha256:abc", "hnd_99");
-    expect(s.lookup("hcan_01", "sha256:def")).toBeUndefined();
+    expect(s.lookup("hcan_01", "sha256:def")).toEqual({ status: "conflict" });
   });
 
   it("prune 清理过期行，保留新行", () => {
@@ -52,7 +53,7 @@ describe("HandoffIdempotencyStore", () => {
     s.record("hcan_01", "sha256:abc", "hnd_01");
     now = "2026-08-10T00:00:00Z"; // 3 天后
     expect(s.prune()).toBe(0);
-    expect(s.lookup("hcan_01", "sha256:abc")).toEqual({ handoff_id: "hnd_01" });
+    expect(s.lookup("hcan_01", "sha256:abc")).toEqual({ status: "hit", handoff_id: "hnd_01" });
   });
 });
 
@@ -79,8 +80,8 @@ describe("withCandidateLock（§10.1 并发保护）", () => {
     const outcomes = await Promise.all([entry(), entry()]);
     expect(maxInFlight).toBe(1); // 任何时刻只有一个执行者在锁内
     expect(recorded).toBe(1); // 仅一次落盘（无锁时会是 2）
-    expect(outcomes).toEqual(["delivered", { handoff_id: "hnd_01" }]);
-    expect(s.lookup("hcan_01", "sha256:abc")).toEqual({ handoff_id: "hnd_01" });
+    expect(outcomes).toEqual(["delivered", { status: "hit", handoff_id: "hnd_01" }]);
+    expect(s.lookup("hcan_01", "sha256:abc")).toEqual({ status: "hit", handoff_id: "hnd_01" });
   });
 
   it("不同候选互不阻塞（锁按候选粒度）", async () => {

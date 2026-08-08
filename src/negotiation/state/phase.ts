@@ -215,8 +215,9 @@ function applyWithdraw(
     }
     throw stateConflict(state, event);
   }
-  // scope=negotiation：OPEN/OFFER_OPEN → WITHDRAWN（terminal）。
-  if (state.phase === "OPEN" || state.phase === "OFFER_OPEN") {
+  // scope=negotiation：任何非终态（顶层守卫已保证）→ WITHDRAWN（terminal）。
+  // rev1.4 §21.2 行 968：包括 AWAITING_CLARIFICATION（澄清挂起不阻塞整体撤回）。
+  if (state.phase === "OPEN" || state.phase === "OFFER_OPEN" || state.phase === "AWAITING_CLARIFICATION") {
     return { negotiation_id: state.negotiation_id, phase: "WITHDRAWN" };
   }
   throw stateConflict(state, event);
@@ -230,10 +231,17 @@ function applyDecline(
     if (state.phase === "OFFER_OPEN") {
       return { negotiation_id: state.negotiation_id, phase: "OPEN" };
     }
+    // rev1.4 §21.2 行 970：AWAITING_CLARIFICATION (resume=OFFER_OPEN) → OPEN，
+    // 澄清挂起的 active offer 关闭、不再阻塞闭合；resume=OPEN 时无 offer
+    // 可 decline（保持 state_conflict）。
+    if (state.phase === "AWAITING_CLARIFICATION" && state.resume_phase === "OFFER_OPEN") {
+      return { negotiation_id: state.negotiation_id, phase: "OPEN" };
+    }
     throw stateConflict(state, event);
   }
-  // scope=negotiation：OPEN/OFFER_OPEN → DECLINED（terminal）。
-  if (state.phase === "OPEN" || state.phase === "OFFER_OPEN") {
+  // scope=negotiation：任何非终态（顶层守卫已保证）→ DECLINED（terminal）。
+  // rev1.4 §21.2 行 971：包括 AWAITING_CLARIFICATION。
+  if (state.phase === "OPEN" || state.phase === "OFFER_OPEN" || state.phase === "AWAITING_CLARIFICATION") {
     return { negotiation_id: state.negotiation_id, phase: "DECLINED" };
   }
   throw stateConflict(state, event);
