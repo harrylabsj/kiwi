@@ -77,6 +77,7 @@ jobs:
           NODE
           tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='UTC 1970-01-01' \
             -czf portfolio-release.tgz -C release .
+          node scripts/verify-release-manifest.mjs "$GITHUB_WORKSPACE/release"
       - uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
       - name: Sign exact release bundle (keyless)
         run: |
