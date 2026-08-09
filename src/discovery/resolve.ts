@@ -75,6 +75,7 @@ import type { ChannelCandidate, CounterpartyProfile } from "../counterparty/chan
 import {
   assertResolvableTargetUrl,
   assertSafeTargetUrl,
+  isLoopbackHost,
 } from "../a2a/client/url-policy.js";
 import { readJsonBody, SafeHttpError } from "../net/safe-http.js";
 
@@ -349,7 +350,7 @@ export class AgentDiscovery {
     return org.length > 0 ? org : card.name;
   }
 
-  private channelCandidates(card: AgentCard): {
+  private channelCandidates(card: AgentCard, allowLoopback: boolean): {
     intersection: CapabilityIntersection;
     candidates: ChannelCandidate[];
   } {
@@ -358,7 +359,15 @@ export class AgentDiscovery {
 
     const candidates: ChannelCandidate[] = [];
     if (intersection.selected !== undefined) {
-      candidates.push({ kind: "a2a-direct", url: intersection.selected.url });
+      try {
+        // A remote Agent Card must not turn a legitimate discovery into a
+        // request to localhost/loopback. Local cards remain usable for dev.
+        const safe = assertSafeTargetUrl(intersection.selected.url, { allowLoopback });
+        candidates.push({ kind: "a2a-direct", url: safe.href });
+      } catch {
+        // Keep the candidate list fail-closed; hosted/platform candidates may
+        // still be used when explicitly configured.
+      }
     }
     if (this.deps.hosted?.configured === true) {
       candidates.push({ kind: "shopping-cli-hosted", config_id: this.deps.hosted.config_id });
@@ -430,7 +439,13 @@ export class AgentDiscovery {
       );
     }
 
-    const { intersection, candidates } = this.channelCandidates(card);
+    let cardHostIsLoopback = false;
+    try {
+      cardHostIsLoopback = isLoopbackHost(new URL(cardUrl).hostname);
+    } catch {
+      // fetchCard already validated the URL; keep this defensive fallback.
+    }
+    const { intersection, candidates } = this.channelCandidates(card, cardHostIsLoopback);
     if (candidates.length === 0) {
       throw new DiscoveryError(
         "no_channel_candidate",

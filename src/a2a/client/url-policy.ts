@@ -34,8 +34,10 @@ import { isIP } from "node:net";
 import { A2AClientError } from "./error.js";
 
 export interface SafeTargetUrlOptions {
-  /** 允许私网/保留网段（默认 false）。loopback 始终允许。 */
+  /** 允许私网/保留网段（默认 false）。 */
   allowPrivateRanges?: boolean;
+  /** 允许 loopback 目标（本地开发默认 true；不可信 Agent Card 应传 false）。 */
+  allowLoopback?: boolean;
 }
 
 const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
@@ -217,7 +219,12 @@ export function assertSafeTargetUrl(value: string, options: SafeTargetUrlOptions
       );
     }
   }
-  if (loopback) return url;
+  if (loopback) {
+    if (options.allowLoopback === false) {
+      throw unsafeTarget("A2A endpoint must not target loopback from an untrusted Agent Card");
+    }
+    return url;
+  }
 
   if (isIpLiteral(hostname)) {
     const ip = stripBrackets(hostname);
@@ -263,7 +270,13 @@ export async function assertResolvableTargetUrl(
     const version = isIP(ip);
     const check =
       version === 4 ? isReservedIpv4(ip) : version === 6 ? isReservedIpv6(ip) : { reserved: false };
-    // loopback 解析结果始终放行（与静态校验一致）；其余保留网段拒绝。
+    // loopback 解析结果按显式策略处理；其余保留网段拒绝。
+    // A public hostname that resolves to loopback is a DNS-rebinding SSRF
+    // target. Only an explicitly loopback hostname may resolve to loopback by
+    // default; callers that intentionally trust such a mapping must opt in.
+    if (isLoopbackHost(ip) && !isLoopbackHost(hostname) && options.allowLoopback !== true) {
+      throw unsafeTarget(`A2A endpoint host ${hostname} resolves to loopback (${ip})`);
+    }
     if (check.reserved && !isLoopbackHost(ip) && !options.allowPrivateRanges) {
       throw unsafeTarget(
         `A2A endpoint host ${hostname} resolves to a reserved network (${check.name})`,
