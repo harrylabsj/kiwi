@@ -9,11 +9,11 @@
     },
     "kiwi-catalog": {
       "repository": "harrylabsj/kiwi-catalog",
-      "commit": "ae428d74ba0c46376790963b46ec1275462313d4"
+      "commit": "441b14ccb1db24382c9584945c358d96f167e617"
     },
     "shopping-cli": {
       "repository": "harrylabsj/shopping-cli",
-      "commit": "0a9bcd69ea633a5ea6b40abef24fd86cfaa73096"
+      "commit": "3db5c10459603989496805daf4efd0e178451991"
     }
   }
 }
