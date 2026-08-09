@@ -18,8 +18,15 @@ jobs:
         run: |
           node <<'NODE' >> "$GITHUB_OUTPUT"
           const lock = JSON.parse(require('fs').readFileSync('portfolio.lock.json', 'utf8'));
+          const hex40 = /^[0-9a-f]{40}$/;
           for (const [name, value] of Object.entries(lock.repositories)) {
+            if (!hex40.test(value.commit)) {
+              throw new Error(`${value.repository} commit is not a full 40-char SHA: ${value.commit}`);
+            }
             console.log(`${name.replace('-', '_')}_sha=${value.commit}`);
+          }
+          if (!hex40.test(lock.contract_source_commit)) {
+            throw new Error(`contract_source_commit is not a full 40-char SHA: ${lock.contract_source_commit}`);
           }
           console.log(`contract_source_commit=${lock.contract_source_commit}`);
           NODE

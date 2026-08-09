@@ -126,4 +126,27 @@ describe("GitHub workflow action refs", () => {
     const selfMatch = steps.find((s) => s.name?.includes("Verify central ref matches portfolio lock"));
     expect(selfMatch).toBeUndefined();
   });
+
+  const LOCK_CONSUMING_WORKFLOWS = [
+    "portfolio-integration.yml",
+    "portfolio-release.yml",
+    "release-rehearsal.yml",
+    "supply-chain-rehearsal.yml",
+    "portfolio-contracts.yml",
+  ];
+
+  it("every portfolio-lock-consuming workflow fails closed on non-40-char SHAs before checkout", () => {
+    for (const file of LOCK_CONSUMING_WORKFLOWS) {
+      const src = readFileSync(join(WORKFLOWS_DIR, file), "utf8");
+      expect(src, `${file} must reject non-40-char SHAs from portfolio.lock.json`).toMatch(
+        /not a full 40-char SHA/,
+      );
+    }
+  });
+
+  it("portfolio-contracts verify step checks both consumer source_commit and bundle_sha256", () => {
+    const src = readFileSync(join(WORKFLOWS_DIR, "portfolio-contracts.yml"), "utf8");
+    expect(src).toMatch(/lock\.source_commit !== portfolio\.contract_source_commit/);
+    expect(src).toMatch(/lock\.bundle_sha256 !== portfolio\.contract_bundle_sha256/);
+  });
 });
