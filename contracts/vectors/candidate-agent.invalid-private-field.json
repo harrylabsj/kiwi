@@ -1,0 +1,7 @@
+{
+  "catalog_agent_id": "cagt_test_merchant_001",
+  "verification": {"status": "discovered"},
+  "hosting": {"mode": "direct_only"},
+  "contract": {"name": "candidate-agent", "version": "1.0"},
+  "private_cost": 42
+}

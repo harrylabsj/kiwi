@@ -40,6 +40,8 @@ jobs:
           python-version: "3.13"
       - name: Verify central manifest
         run: node scripts/verify-contracts.mjs
+      - name: Verify central contract vectors
+        run: node scripts/verify-contract-vectors.mjs
       - name: Verify catalog consumer lock
         working-directory: kiwi-catalog
         run: python scripts/verify_contract_lock.py --manifest ../contracts/manifest.json
