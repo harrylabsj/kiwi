@@ -18,9 +18,9 @@
 ## 发布前检查
 
 - 为三个包分别 bump 到从未发布过的新版本；不能复用旧版本号。
-- 更新对应的 `package-lock.json`、`uv.lock` 和 `portfolio.lock.json`。
-- `portfolio.lock.json.repositories.kiwi.commit` 必须等于要发布的中心仓 commit；工作流在 `publish=true` 时会 fail-closed 检查这一点。
-- catalog 与 shopping 的 commit、contract source commit、contract bundle SHA 必须保持 lock 一致。
+- 更新对应的 `package-lock.json`、`uv.lock`，以及组合锁中需要变更的 consumer SHAs/contract source commit。
+- `ref` 是本次 Kiwi bundle 的不可变中心源提交；`portfolio.lock.json.repositories.kiwi.commit` 只是组合快照锚点，不与 `ref` 做自引用比较（提交无法包含自身 hash）。
+- catalog 与 shopping 的 commit、contract source commit、contract bundle SHA 必须保持 lock 一致，并由工作流从该中心 ref 检查。
 - 先运行本地 `npm run verify`，并在两个 Python 仓运行 locked install、contract lock 和测试。
 
 ## 推荐执行顺序
@@ -40,7 +40,7 @@
 确认 dry-run 成功后重新手动运行：
 
 - `publish=true`
-- `ref` 必须是与 `portfolio.lock.json.repositories.kiwi.commit` 完全一致的 40 位小写 SHA
+- `ref` 必须是本次待发布中心源的完整 40 位小写 SHA；消费者仓和契约 commit 则由该 ref 内的组合锁固定
 
 `publish` job 需要 `kiwi-release` reviewer 批准，然后只发布 build job 生成的 immutable bundle：npm 使用 provenance，PyPI 使用 Trusted Publishing。发布完成后 `verify-registry` 会重新下载 npm/PyPI 文件，按 release manifest 的 SHA-256（以及 npm SRI）逐一比对；任一不一致都 fail-closed。
 
