@@ -277,13 +277,17 @@ jobs:
           npm sbom --sbom-format=spdx > release/sbom/kiwi.spdx.json
           (cd kiwi-catalog && uv export --locked --no-dev --extra api --format requirements.txt) > release/sbom/kiwi-catalog.requirements.txt
           (cd shopping-cli && uv export --locked --no-dev --extra api --format requirements.txt) > release/sbom/shopping-cli.requirements.txt
-          find release -type f -not -name 'SHA256SUMS' -print0 | sort -z | xargs -0 sha256sum > release/SHA256SUMS
+          (
+            cd release
+            find . -type f -not -name 'SHA256SUMS' -not -name 'release-manifest.json' -print0 \
+              | sort -z | xargs -0 sha256sum | sed 's#  \./#  #'
+          ) > release/SHA256SUMS
           node <<'NODE'
           const fs = require('fs');
           const lines = fs.readFileSync('release/SHA256SUMS', 'utf8').trim().split('\n');
           const files = lines.map((line) => {
             const [sha, ...parts] = line.trim().split(/\s+/);
-            return { path: parts.join(' ').replace(/^release\//, ''), sha256: sha };
+            return { path: parts.join(' ').replace(/^\.\//, ''), sha256: sha };
           });
           fs.writeFileSync('release/release-manifest.json', JSON.stringify({
             schema: 'kiwi.portfolio.release-manifest.v1',
