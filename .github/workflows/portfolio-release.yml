@@ -1,0 +1,431 @@
+# =============================================================================
+# Protected portfolio release workflow (P0, registry-facing).
+#
+# This is the ONLY workflow that publishes @harrylabsj/kiwi to npm and
+# kiwi-catalog / shopping-cli to PyPI. It is intentionally manual
+# (workflow_dispatch) and defaults to a DRY RUN (publish=false) that builds,
+# verifies, signs, and uploads the release bundle without touching any
+# registry.
+#
+# ################ PROTECTED ENVIRONMENT SETUP (required for publish=true) ####
+#
+# 1. GitHub protected environment `kiwi-release`
+#    Settings -> Environments -> New environment -> `kiwi-release`.
+#    Add required reviewers (human approval gate) and pin the deployment
+#    branch/ref to the protected main branch. The publish job references
+#    `environment: kiwi-release`, which also namespaces the OIDC token.
+#
+# 2. npm Trusted Publisher (no npm token stored anywhere)
+#    Configure the @harrylabsj/kiwi npm package's publishing settings to accept
+#    OIDC from this repository (harrylabsj/kiwi), workflow path
+#    `.github/workflows/portfolio-release.yml`, environment `kiwi-release`.
+#    npm publish then uses `--provenance --access public` with the short-lived
+#    OIDC token; the repository keeps NO npm access token/secret.
+#
+# 3. PyPI Trusted Publisher (no PyPI password/token stored anywhere)
+#    For BOTH the `kiwi-catalog` and `shopping-cli` PyPI projects, add a GitHub
+#    Trusted Publisher mapping with:
+#        Owner: harrylabsj
+#        Repository: kiwi
+#        Workflow: portfolio-release.yml
+#        Environment: kiwi-release
+#    uv publish then uses `--trusted-publishing always` with the same OIDC
+#    token; the repository keeps NO PyPI credential.
+#
+# 4. Package version bump before every publish
+#    npm: bump `version` in package.json (and package-lock.json) for
+#         @harrylabsj/kiwi, commit, and update portfolio.lock.json central SHA.
+#    PyPI: bump `version` in kiwi-catalog/pyproject.toml and
+#         shopping-cli/pyproject.toml (plus uv.lock), commit, and update
+#         portfolio.lock.json consumer SHAs.
+#    NEVER reuse a version number; npm/PyPI rollback is always a NEW patch.
+#
+# All `uses:` action refs below are full 40-character commit SHAs with the
+# matching tag in a trailing comment. No mutable refs are permitted.
+# =============================================================================
+name: Portfolio protected release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: >-
+          Actually publish to npm and PyPI. Defaults to false (dry-run build,
+          sign, and upload only). Requires the protected kiwi-release
+          environment and npm/PyPI Trusted Publisher mappings (see header).
+        required: false
+        default: false
+        type: boolean
+      ref:
+        description: >-
+          Central kiwi source ref or full 40-char commit SHA to build and
+          release. When publish=true this MUST be a full 40-character lowercase
+          commit SHA (dry-run publish=false may use a named ref).
+          portfolio.lock.json pins kiwi-catalog and shopping-cli and the
+          contract source commit.
+        required: false
+        default: "main"
+        type: string
+      verify_rollback:
+        description: >-
+          Run non-destructive rollback candidate verification against a previous
+          release manifest (read-only; never deletes or unpublishes anything).
+        required: false
+        default: false
+        type: boolean
+      previous_manifest:
+        description: >-
+          Previous release-manifest.json reference for rollback verification:
+          an https:// URL or a path relative to the workspace.
+        required: false
+        default: ""
+        type: string
+
+# Serialize releases; never auto-cancel a release run.
+concurrency:
+  group: portfolio-release
+  cancel-in-progress: false
+
+# Least-privilege default; per-job overrides add exactly the scopes required.
+permissions:
+  contents: read
+
+jobs:
+  build-once:
+    name: Build, verify, and sign release bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout central source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Validate central ref (publish=true requires a full 40-char commit SHA)
+        env:
+          REF_INPUT: ${{ inputs.ref }}
+          PUBLISH_INPUT: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          REF="$REF_INPUT"
+          PUBLISH="$PUBLISH_INPUT"
+          if [[ "${REF}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "central ref is a full 40-char SHA: ${REF}"
+          elif [[ "${REF}" =~ ^[0-9a-f]{7,39}$ ]]; then
+            echo "error: ref '${REF}' looks like a short SHA; use a full 40-char SHA or a branch/tag name" >&2
+            exit 1
+          elif [[ "${PUBLISH}" == "true" ]]; then
+            echo "error: publish=true requires ref to be a full 40-char lowercase commit SHA; got named ref '${REF}'" >&2
+            exit 1
+          else
+            echo "central ref is a named ref (dry-run only): ${REF}"
+          fi
+
+      - id: lock
+        name: Read and validate portfolio lock
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs = require('fs');
+          const lock = JSON.parse(fs.readFileSync('portfolio.lock.json', 'utf8'));
+          const hex40 = /^[0-9a-f]{40}$/;
+          for (const [name, value] of Object.entries(lock.repositories)) {
+            if (!hex40.test(value.commit)) {
+              throw new Error(`${value.repository} commit is not a full 40-char SHA: ${value.commit}`);
+            }
+            console.log(`${name.replace('-', '_')}_sha=${value.commit}`);
+          }
+          if (!hex40.test(lock.contract_source_commit)) {
+            throw new Error(`contract_source_commit is not a full 40-char SHA: ${lock.contract_source_commit}`);
+          }
+          console.log(`contract_source_commit=${lock.contract_source_commit}`);
+          NODE
+
+      - name: Checkout kiwi-catalog at locked SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: harrylabsj/kiwi-catalog
+          ref: ${{ steps.lock.outputs.kiwi_catalog_sha }}
+          path: kiwi-catalog
+
+      - name: Checkout shopping-cli at locked SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: harrylabsj/shopping-cli
+          ref: ${{ steps.lock.outputs.shopping_cli_sha }}
+          path: shopping-cli
+
+      - name: Verify pinned checkouts and contract locks
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const { execFileSync } = require('child_process');
+          const portfolio = JSON.parse(fs.readFileSync('portfolio.lock.json', 'utf8'));
+          for (const name of ['kiwi-catalog', 'shopping-cli']) {
+            const entry = portfolio.repositories[name];
+            const head = execFileSync('git', ['-C', name, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+            if (head !== entry.commit) {
+              throw new Error(`${name} HEAD ${head} != locked ${entry.commit}`);
+            }
+            const lockPath = name === 'kiwi-catalog'
+              ? 'kiwi-catalog/kiwi_catalog/contracts/kiwi-contracts.lock.json'
+              : 'shopping-cli/shopping_cli/contracts/kiwi-contracts.lock.json';
+            const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            if (lock.source_commit !== portfolio.contract_source_commit) {
+              throw new Error(`${name} source_commit ${lock.source_commit} != portfolio ${portfolio.contract_source_commit}`);
+            }
+            if (lock.bundle_sha256 !== portfolio.contract_bundle_sha256) {
+              throw new Error(`${name} bundle_sha256 ${lock.bundle_sha256} != portfolio ${portfolio.contract_bundle_sha256}`);
+            }
+            console.log(`${name}: HEAD ${head}, contract lock verified`);
+          }
+          NODE
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
+      - name: Install locked build tools
+        run: python -m pip install "uv==0.10.6" "build==1.3.0"
+
+      - name: Kiwi full verify (lint, typecheck, build, test, contracts, vectors, package smoke)
+        run: |
+          npm ci
+          npm run verify
+
+      - name: Kiwi-catalog locked install, contract lock, and deterministic tests
+        working-directory: kiwi-catalog
+        run: |
+          uv sync --locked --extra api --extra dev
+          uv run --locked python scripts/verify_contract_lock.py --manifest ../contracts/manifest.json
+          # Basic syntax/parse-error lint only (E9); full ruff/mypy is owned by
+          # kiwi-catalog CI and omitted here to avoid its pre-existing drift.
+          uv run --locked python -m ruff check --select E9 kiwi_catalog tests scripts
+          uv run --locked python -m pytest -q
+
+      - name: Shopping-cli locked install, contract lock, and deterministic tests
+        working-directory: shopping-cli
+        run: |
+          uv sync --locked --extra api --extra dev
+          uv run --locked python scripts/verify_contract_lock.py --manifest ../contracts/manifest.json
+          # Basic syntax/error lint only (E4,E7,E9); full ruff/mypy/coverage is
+          # owned by shopping-cli CI and omitted here to avoid pre-existing drift.
+          uv run --locked python -m ruff check --select E4,E7,E9 shopping_cli tests
+          uv run --locked python -m unittest discover -s tests
+          uv run --locked node --test tests/shopping_plugin.test.mjs
+
+      - name: Run shared Python service conformance
+        env:
+          PYTHONPATH: ${{ github.workspace }}/contracts/conformance/python-service:${{ github.workspace }}/kiwi-catalog/scripts:${{ github.workspace }}/shopping-cli/scripts:${{ github.workspace }}/kiwi-catalog:${{ github.workspace }}/shopping-cli
+        run: |
+          uv --directory kiwi-catalog run --locked python \
+            "$GITHUB_WORKSPACE/contracts/conformance/python-service/run.py" \
+            kiwi_catalog_conformance:apps shopping_cli_conformance:apps
+
+      # Build the release artifacts exactly once. The npm pack below uses the
+      # dist/ produced by the kiwi full verify step; the publish job downloads
+      # this immutable bundle and NEVER rebuilds.
+      - name: Build release candidates and evidence once
+        env:
+          CONTRACT_SOURCE_COMMIT: ${{ steps.lock.outputs.contract_source_commit }}
+        run: |
+          set -euo pipefail
+          rm -rf release
+          mkdir -p release/npm release/kiwi-catalog release/shopping-cli release/contracts release/sbom
+
+          npm pack --pack-destination release/npm
+
+          (cd kiwi-catalog && uv sync --locked --extra api --extra dev && python -m build --sdist --wheel --outdir ../release/kiwi-catalog)
+          (cd shopping-cli && uv sync --locked --extra api --extra dev && python -m build --sdist --wheel --outdir ../release/shopping-cli)
+
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='UTC 1970-01-01' \
+            -czf release/contracts.tgz -C contracts .
+          npm sbom --sbom-format=spdx > release/sbom/kiwi.spdx.json
+          (cd kiwi-catalog && uv export --locked --no-dev --extra api --format requirements.txt) > release/sbom/kiwi-catalog.requirements.txt
+          (cd shopping-cli && uv export --locked --no-dev --extra api --format requirements.txt) > release/sbom/shopping-cli.requirements.txt
+          find release -type f -not -name 'SHA256SUMS' -print0 | sort -z | xargs -0 sha256sum > release/SHA256SUMS
+          node <<'NODE'
+          const fs = require('fs');
+          const lines = fs.readFileSync('release/SHA256SUMS', 'utf8').trim().split('\n');
+          const files = lines.map((line) => {
+            const [sha, ...parts] = line.trim().split(/\s+/);
+            return { path: parts.join(' ').replace(/^release\//, ''), sha256: sha };
+          });
+          fs.writeFileSync('release/release-manifest.json', JSON.stringify({
+            schema: 'kiwi.portfolio.release-manifest.v1',
+            contract_source_commit: process.env.CONTRACT_SOURCE_COMMIT,
+            files,
+          }, null, 2) + '\n');
+          NODE
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='UTC 1970-01-01' \
+            -czf portfolio-release.tgz -C release .
+          node scripts/verify-release-manifest.mjs "$GITHUB_WORKSPACE/release"
+
+      - name: Install cosign (keyless signing)
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+
+      - name: Sign exact release bundle (keyless)
+        run: |
+          cosign sign-blob --yes \
+            --output-signature portfolio-release.tgz.sig \
+            --output-certificate portfolio-release.tgz.pem \
+            portfolio-release.tgz
+
+      - name: Upload release bundle, manifest, signature, certificate, and release dir
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: portfolio-release
+          path: |
+            portfolio-release.tgz
+            portfolio-release.tgz.sig
+            portfolio-release.tgz.pem
+            release/
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
+        with:
+          subject-path: portfolio-release.tgz
+
+  publish:
+    name: Publish to npm and PyPI (protected kiwi-release)
+    needs: build-once
+    if: inputs.publish == true
+    runs-on: ubuntu-latest
+    environment: kiwi-release
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout central source (read-only, for verify scripts)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Download immutable build artifact
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: portfolio-release
+          path: dist-artifact
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
+      - name: Install locked publish tools
+        run: python -m pip install "uv==0.10.6"
+
+      - name: Verify downloaded release manifest before publishing
+        run: |
+          set -euo pipefail
+          node scripts/verify-release-manifest.mjs "$GITHUB_WORKSPACE/dist-artifact/release"
+
+      - name: Publish exact npm tarball with provenance (OIDC, no npm token)
+        run: |
+          set -euo pipefail
+          npm publish dist-artifact/release/npm/*.tgz --provenance --access public
+
+      - name: Publish kiwi-catalog wheel and sdist (OIDC Trusted Publisher)
+        run: |
+          set -euo pipefail
+          uv publish --trusted-publishing always \
+            dist-artifact/release/kiwi-catalog/*.whl \
+            dist-artifact/release/kiwi-catalog/*.tar.gz
+
+      - name: Publish shopping-cli wheel and sdist (OIDC Trusted Publisher)
+        run: |
+          set -euo pipefail
+          uv publish --trusted-publishing always \
+            dist-artifact/release/shopping-cli/*.whl \
+            dist-artifact/release/shopping-cli/*.tar.gz
+
+  verify-registry:
+    name: Verify npm and PyPI downloads after publish (fail closed)
+    needs: publish
+    if: inputs.publish == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout central source (for verify scripts)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Download immutable build artifact
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: portfolio-release
+          path: dist-artifact
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Verify registry downloads against built manifest (fail closed)
+        run: |
+          set -euo pipefail
+          node scripts/verify-registry-downloads.mjs "$GITHUB_WORKSPACE/dist-artifact/release"
+
+  rollback-verify:
+    name: Verify previous release as rollback candidate (read-only)
+    if: inputs.verify_rollback == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout central source (for verify scripts)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      - id: previous
+        name: Resolve previous release manifest reference
+        env:
+          PREVIOUS_MANIFEST: ${{ inputs.previous_manifest }}
+        run: |
+          set -euo pipefail
+          PREV="$PREVIOUS_MANIFEST"
+          if [[ -z "${PREV}" ]]; then
+            echo "inputs.previous_manifest is required when verify_rollback is true" >&2
+            exit 1
+          fi
+          if [[ "${PREV}" =~ ^https:// ]]; then
+            curl -fsSL --retry 3 "${PREV}" -o previous-manifest.json
+            echo "previous_file=$GITHUB_WORKSPACE/previous-manifest.json" >> "$GITHUB_OUTPUT"
+          elif [[ -f "$GITHUB_WORKSPACE/${PREV}" ]]; then
+            echo "previous_file=$GITHUB_WORKSPACE/${PREV}" >> "$GITHUB_OUTPUT"
+          elif [[ -d "$GITHUB_WORKSPACE/${PREV}" ]]; then
+            echo "previous_file=$GITHUB_WORKSPACE/${PREV}/release-manifest.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "previous_manifest reference not found: ${PREV}" >&2
+            exit 1
+          fi
+
+      - name: Verify previous registry artifacts still match recorded digests
+        env:
+          PREVIOUS_FILE: ${{ steps.previous.outputs.previous_file }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-rollback-candidate.mjs "$PREVIOUS_FILE"
