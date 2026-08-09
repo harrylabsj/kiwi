@@ -1,6 +1,6 @@
 # Kiwi 三产品跨仓库 P2 架构设计
 
-- 状态：实施中（T1–T7、T10 已落地；T8/T9 已完成首个纯路由匹配 facade 拆分；T11 完成无发布权限的签名演练；T12 已具备离线 manifest 验证，真实 registry 回滚待受控推进）
+- 状态：实施中（T1–T7、T10 已落地；T8/T9 已完成多组纯 facade 拆分；T11 完成无发布权限的签名演练；T12 已具备离线 manifest 验证，真实 registry 回滚待受控推进）
 - 日期：2026-08-09
 - 范围：`kiwi`、`kiwi-catalog`、`shopping-cli`
 - 目标：完成统一契约包、组合 CI、重复服务脚手架重构，以及依赖锁定、SBOM、签名与可验证发布链路
@@ -666,7 +666,7 @@ nightly 连续两次失败才创建阻断级事件，第一次标记 flaky candi
 - `contracts/conformance/python-service` 作为 dev-only 套件已接入两个 Python 服务；本地固定 lock 命令通过。
 - 三仓 GitHub Actions 已固定到完整 commit SHA；两个 Python Dockerfile 使用 digest 基础镜像、`uv.lock` 和 hash 校验依赖。
 - `release-rehearsal.yml` 已实现一次构建、SBOM、release manifest、keyless cosign blob 签名和 GitHub provenance attestation；该 workflow 不自动发布到公共 registry。
-- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）以及需要真实受保护 registry 环境的发布后回滚演练（T12）。已完成六组无行为变更拆分：catalog pagination/page shaping、catalog row serialization、catalog public views、纯路由模板匹配器、错误 envelope/response、verification/negotiation 纯策略 helper；characterization tests 固定游标兼容性、页边界与游标生成、行投影、私有字段剥离、路由、错误响应、时间格式、状态映射、私有阈值泄漏和 CJK 搜索行为。`scripts/rollback-drill.mjs` 已完成离线“上一版本 → 回滚 → 当前版本恢复”演练。
+- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）以及需要真实受保护 registry 环境的发布后回滚演练（T12）。已完成七组无行为变更拆分：catalog pagination/page shaping、catalog row serialization、catalog public views、catalog search scoring、纯路由模板匹配器、错误 envelope/response、verification/negotiation 纯策略 helper；characterization tests 固定游标兼容性、页边界与游标生成、行投影、私有字段剥离、路由、错误响应、时间格式、状态映射、私有阈值泄漏、CJK 搜索和评分权重行为。`scripts/rollback-drill.mjs` 已完成离线“上一版本 → 回滚 → 当前版本恢复”演练。
 
 ## 16. 并行实施策略
 
@@ -710,8 +710,8 @@ Phase 0
   - 验证：FastAPI/fallback、auth/error/limits/idempotency/session 两仓一致。
 - [~] **T8（P2，human ~3–6d / Codex ~1d）**：已完成 `agent_catalog/pagination.py`（含页边界/page shaping）、`agent_catalog/row_serialization.py`、`api/route_matching.py`、`api/error_envelope.py` 与 `services/verification_helpers.py` 五组无行为变更 facade 拆分；`app.py`、verification pipeline orchestration、repository 其余热点继续按小 PR 推进。
   - 验证：现有 238+ 测试、conformance、composition 全绿，公开 facade 不变。
-- [~] **T9（P2，human ~3–5d / Codex ~1d）**：已完成 `core/catalog_text.py`、`core/catalog_views.py`、`api/route_matching.py`、`api/error_response.py` 与 `services/negotiation_policy_helpers.py` 五组无行为变更 facade 拆分；业务 catalog、negotiation orchestration 和 app factory 剩余热点继续按小 PR 推进。
-  - 验证：现有 526+ 测试、conformance、composition 全绿。
+- [~] **T9（P2，human ~3–5d / Codex ~1d）**：已完成 `core/catalog_text.py`、`core/catalog_views.py`、`core/catalog_scoring.py`、`api/route_matching.py`、`api/error_response.py` 与 `services/negotiation_policy_helpers.py` 六组无行为变更 facade 拆分；业务 catalog、negotiation orchestration 和 app factory 剩余热点继续按小 PR 推进。
+  - 验证：现有 528+ 测试、conformance、composition 全绿。
 - [x] **T10（P2，human ~1d / Codex ~90min）**：两个 Python 仓库引入 `uv.lock`，Docker/CI 改 locked install；kiwi 强制 `npm ci`。
   - 验证：lock stale、依赖现场漂移和未固定 base image 均失败。
 - [~] **T11（P2，human ~1.5d / Codex ~2h）**：已建立 build-once、SBOM、keyless cosign blob 签名与 GitHub provenance 演练；真实 npm/PyPI/GHCR 发布仍需人工批准和环境配置。
@@ -723,17 +723,17 @@ Phase 0
 
 以下全部满足才关闭本组 P2：
 
-- [ ] 机器契约只有 `kiwi/contracts` 一个权威源，所有副本可由工具重建。
-- [ ] 三仓 contract lock 固定 bundle version、source SHA 与 digest。
-- [ ] strict schema 的新增字段有消费者优先 rollout 和版本协商测试。
-- [ ] 三仓有独立 merge gate，且 Action 全部 pin 完整 SHA。
+- [x] 机器契约只有 `kiwi/contracts` 一个权威源，所有副本可由工具重建。
+- [x] 三仓 contract lock 固定 bundle version、source SHA 与 digest。
+- [~] strict schema 的新增字段已有兼容性/golden 校验；消费者优先 rollout 与 HTTP 版本协商仍需独立落地。
+- [x] 三仓有独立 merge gate，且 Action 全部 pin 完整 SHA。
 - [ ] 固定 SHA composition 与 nightly 均稳定通过 7 天。
-- [ ] Python service conformance 在两个服务上通过。
-- [ ] 热点拆分未改变 API/状态机，测试总量不下降。
-- [ ] Python 使用 `uv.lock`，Node 使用 `npm ci`，容器使用 locked deps 与 base digest。
+- [x] Python service conformance 在两个服务上通过。
+- [~] 热点拆分未改变 API/状态机，测试总量不下降（纯 facade 已验证；app/orchestration 仍有剩余热点）。
+- [x] Python 使用 `uv.lock`，Node 使用 `npm ci`，容器使用 locked deps 与 base digest。
 - [~] npm/PyPI/OCI/contracts bundle 的构建、SBOM、来源证明和 keyless bundle 签名演练已具备；真实 registry 发布与下载验证待受保护环境批准。
-- [ ] 用户可以从干净环境验证 artifact identity 与安装结果。
-- [ ] 完成一次按 digest 的回滚演练。
+- [~] 用户可以从干净环境验证 artifact identity 与安装结果（本地 package smoke 与离线 manifest 已通过；公共 registry 下载验证待受保护环境）。
+- [~] 完成一次按 digest 的回滚演练（离线上一版本→回滚→恢复已通过；真实 registry digest 仍待受控环境）。
 
 ## 19. NOT in scope
 
