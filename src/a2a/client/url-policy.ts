@@ -26,6 +26,11 @@
  * - 主机名先做保留主机名检查，再在请求前 DNS 解析复查解析出的 IP（DNS
  *   rebinding 的基础缓解；`allowPrivateRanges` 可显式逃生）。
  *
+ * `allowLoopback` 只放宽**静态字面 loopback**（localhost / 127.0.0.1 / ::1，
+ * 由 assertSafeTargetUrl 判定）供本地开发；公共主机名解析到 loopback（DNS
+ * rebinding）与私网/保留网段始终拒绝，不因 `allowLoopback` / `allowPrivateRanges`
+ * 之外的任何开关放宽。
+ *
  * 任何拒绝都抛 A2AClientError("unsafe_target")，fail-closed。
  */
 
@@ -36,7 +41,12 @@ import { A2AClientError } from "./error.js";
 export interface SafeTargetUrlOptions {
   /** 允许私网/保留网段（默认 false）。 */
   allowPrivateRanges?: boolean;
-  /** 允许 loopback 目标（本地开发默认 true；不可信 Agent Card 应传 false）。 */
+  /**
+   * 允许**静态字面** loopback 目标（localhost / 127.0.0.1 / ::1；本地开发默认
+   * true，不可信 Agent Card 应传 false）。只影响 assertSafeTargetUrl 的字面判定；
+   * assertResolvableTargetUrl 的 DNS 复查不读取本字段——公共主机名解析到 loopback
+   * 始终拒绝（DNS rebinding 不放宽）。
+   */
   allowLoopback?: boolean;
 }
 
@@ -270,11 +280,12 @@ export async function assertResolvableTargetUrl(
     const version = isIP(ip);
     const check =
       version === 4 ? isReservedIpv4(ip) : version === 6 ? isReservedIpv6(ip) : { reserved: false };
-    // loopback 解析结果按显式策略处理；其余保留网段拒绝。
     // A public hostname that resolves to loopback is a DNS-rebinding SSRF
-    // target. Only an explicitly loopback hostname may resolve to loopback by
-    // default; callers that intentionally trust such a mapping must opt in.
-    if (isLoopbackHost(ip) && !isLoopbackHost(hostname) && options.allowLoopback !== true) {
+    // target and must ALWAYS fail closed. `allowLoopback` only relaxes the
+    // *static* literal-loopback check in assertSafeTargetUrl (localhost /
+    // 127.0.0.1 / ::1) for local development; it never legitimizes a
+    // hostname→loopback mapping, and it never relaxes private/reserved ranges.
+    if (isLoopbackHost(ip) && !isLoopbackHost(hostname)) {
       throw unsafeTarget(`A2A endpoint host ${hostname} resolves to loopback (${ip})`);
     }
     if (check.reserved && !isLoopbackHost(ip) && !options.allowPrivateRanges) {

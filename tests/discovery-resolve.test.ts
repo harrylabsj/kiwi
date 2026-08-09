@@ -213,6 +213,20 @@ describe("AgentDiscovery.resolve: agentCardUrl", () => {
     ).rejects.toMatchObject({ code: "card_fetch_failed" });
   });
 
+  it("allowLoopback: true 不放宽 DNS rebinding（远程 HTTPS host 解析到 loopback 仍 fail-closed）", async () => {
+    // allowLoopback 只放行字面 localhost/127.0.0.1/::1 本地开发；公共主机名
+    // 解析到 loopback 是 DNS rebinding SSRF，必须始终拒绝。
+    const card = agentCardJson("https://remote.example");
+    const discovery = new AgentDiscovery({
+      allowLoopback: true,
+      resolveIp: async () => ["127.0.0.1"],
+      fetchImpl: async () => new globalThis.Response(JSON.stringify(card), { status: 200 }),
+    });
+    await expect(
+      discovery.resolve({ agentCardUrl: "https://remote.example/.well-known/agent-card.json" }),
+    ).rejects.toMatchObject({ code: "card_fetch_failed" });
+  });
+
   it("allowLoopback 不放宽 DNS 复查的私网拒绝（解析到 RFC1918 仍 fail-closed）", async () => {
     const card = agentCardJson("https://remote.example");
     const discovery = new AgentDiscovery({

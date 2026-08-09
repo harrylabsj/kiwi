@@ -392,6 +392,14 @@ describe("A2A client URL 安全（SSRF 防护）", () => {
     await expect(
       assertResolvableTargetUrl(url, { resolveIp: async () => ["127.0.0.1"] }),
     ).rejects.toMatchObject({ kind: "unsafe_target" });
+    // allowLoopback 只放宽静态字面 loopback；公共主机名解析到 loopback
+    // （DNS rebinding）即使 allowLoopback: true 也必须 fail-closed。
+    await expect(
+      assertResolvableTargetUrl(url, {
+        allowLoopback: true,
+        resolveIp: async () => ["127.0.0.1"],
+      }),
+    ).rejects.toMatchObject({ kind: "unsafe_target" });
   });
 
   it("fails closed when the hostname cannot be resolved", async () => {
