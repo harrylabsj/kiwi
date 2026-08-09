@@ -666,7 +666,7 @@ nightly 连续两次失败才创建阻断级事件，第一次标记 flaky candi
 - `contracts/conformance/python-service` 作为 dev-only 套件已接入两个 Python 服务；本地固定 lock 命令通过。
 - 三仓 GitHub Actions 已固定到完整 commit SHA；两个 Python Dockerfile 使用 digest 基础镜像、`uv.lock` 和 hash 校验依赖。
 - `release-rehearsal.yml` 已实现一次构建、SBOM、release manifest、keyless cosign blob 签名和 GitHub provenance attestation；该 workflow 不自动发布到公共 registry。
-- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）以及需要真实受保护 registry 环境的发布后回滚演练（T12）。首个拆分已将两个服务的纯路由模板匹配器分别移入 `api/route_matching.py`，并由 characterization tests 固定字面量转义和参数提取行为。
+- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）以及需要真实受保护 registry 环境的发布后回滚演练（T12）。首个拆分已将两个服务的纯路由模板匹配器分别移入 `api/route_matching.py`，并由 characterization tests 固定字面量转义和参数提取行为；`scripts/rollback-drill.mjs` 已完成离线“上一版本 → 回滚 → 当前版本恢复”演练。
 
 ## 16. 并行实施策略
 
@@ -716,7 +716,7 @@ Phase 0
   - 验证：lock stale、依赖现场漂移和未固定 base image 均失败。
 - [~] **T11（P2，human ~1.5d / Codex ~2h）**：已建立 build-once、SBOM、keyless cosign blob 签名与 GitHub provenance 演练；真实 npm/PyPI/GHCR 发布仍需人工批准和环境配置。
   - 验证：演练 workflow 只生成一次构建物并上传签名/证书；不在本阶段自动向公共 registry 发布。
-- [~] **T12（P2，human ~4h / Codex ~45min）**：已加入 `scripts/verify-release-manifest.mjs`，可在离线环境验证 release manifest、SHA256SUMS 与文件 bytes 一致；真实 registry release rollback 仍需受保护环境和上一版本 digest。
+- [~] **T12（P2，human ~4h / Codex ~45min）**：已加入 `scripts/verify-release-manifest.mjs` 与 `scripts/rollback-drill.mjs`，并完成离线“上一版本 → 回滚 → 当前版本恢复”演练；真实 registry release rollback 仍需受保护环境和上一版本 digest。
   - 验证：从当前版本回滚到上一 digest，再恢复当前版本；验证命令全程通过。
 
 ## 18. 总体验收标准
