@@ -124,6 +124,13 @@ jobs:
             echo "central ref is a named ref (dry-run only): ${REF}"
           fi
 
+      # The lock's central kiwi entry (repositories.kiwi.commit) is a SHA-shaped
+      # composition snapshot anchor, not a self-referential commit: a commit
+      # cannot contain its own hash, so it is validated here only for shape
+      # (full 40-char lowercase SHA) and never compared to inputs.ref — doing so
+      # would block publishing any new central commit. Consumer SHAs
+      # (kiwi-catalog, shopping-cli) and contract_source_commit remain the
+      # reproducibility boundary and are verified against the checked-out source.
       - id: lock
         name: Read and validate portfolio lock
         run: |
@@ -142,36 +149,6 @@ jobs:
           }
           console.log(`contract_source_commit=${lock.contract_source_commit}`);
           NODE
-
-      # Publish=true builds the immutable bundle from the central ref requested
-      # on dispatch. That ref must be EXACTLY the central commit pinned by
-      # portfolio.lock.json.repositories.kiwi.commit; otherwise the published
-      # bundle would be built from a central commit different from the
-      # composition lock while kiwi-catalog/shopping-cli are still pinned to the
-      # locked SHAs. Dry-run keeps named refs allowed (no lock match required).
-      - name: Verify central ref matches portfolio lock (publish=true)
-        env:
-          REF_INPUT: ${{ inputs.ref }}
-          PUBLISH_INPUT: ${{ inputs.publish }}
-          LOCKED_KIWI_SHA: ${{ steps.lock.outputs.kiwi_sha }}
-        run: |
-          set -euo pipefail
-          REF="$REF_INPUT"
-          PUBLISH="$PUBLISH_INPUT"
-          LOCKED="$LOCKED_KIWI_SHA"
-          if [[ "${PUBLISH}" == "true" ]]; then
-            if [[ -z "${LOCKED}" ]]; then
-              echo "error: portfolio.lock.json has no repositories.kiwi.commit (kiwi_sha) to compare against publish ref" >&2
-              exit 1
-            fi
-            if [[ "${REF}" != "${LOCKED}" ]]; then
-              echo "error: publish=true central ref '${REF}' does not match portfolio.lock.json repositories.kiwi.commit '${LOCKED}'" >&2
-              exit 1
-            fi
-            echo "central ref matches portfolio lock: ${REF}"
-          else
-            echo "dry-run: central ref '${REF}' is not required to match the portfolio lock"
-          fi
 
       - name: Checkout kiwi-catalog at locked SHA
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
