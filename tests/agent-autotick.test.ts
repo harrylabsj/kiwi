@@ -3,13 +3,16 @@
  *
  * 已结算（settled）消息 abandon 后回到 pending 队首（conversations.updated_at
  * desc），若 autopilot 每次只取第一条，队尾的 live 消息会被永久饿死。
- * 修复：settled 键精确到 message_id 粒度，prepare 透传 skipMessageIds 并
- * 选择 firstLive。
+ * 修复：settled 键为 (conversation_id, message_id) 复合粒度，prepare 透传
+ * skipKeys 并选择 firstLive——message_id 是会话内的，不能用裸 message_id 做
+ * 跨会话跳过（否则其他会话同号的 live 消息会被误压制）。
  *
  * 覆盖：
  * - 混合队列（settled 最新 + live 较旧）：单次 tick 只 claim live 消息，
  *   已结算消息不被重复 claim；
- * - 连续 tick：live 消息每次都被推进（不因 settled 阻塞）。
+ * - 连续 tick：live 消息每次都被推进（不因 settled 阻塞）；
+ * - 跨会话 message_id 撞车：settled 会话与 live 会话共享同号 message_id 时，
+ *   live 消息仍被推进。
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -109,6 +112,53 @@ function starvationClient(): { client: CommerceClient; claims: number[] } {
   return { client, claims };
 }
 
+/**
+ * 跨会话 message_id 撞车 client：pending 为 [settled:101(conv-settled),
+ * live:101(conv-live)]——两个会话共享同一 message_id。若按裸 message_id 跳过
+ * 已结算消息，conv-live 的 live 消息会被误压制（饥饿）。claimMessage 记录
+ * (conversation_id, message_id) 以断言 claim 落在 live 会话上。
+ */
+function collisionClient(): { client: CommerceClient; claims: { conversation_id: string; message_id: number }[] } {
+  const claims: { conversation_id: string; message_id: number }[] = [];
+  const pending: PendingMessage[] = [
+    {
+      conversation_id: "conv-settled",
+      message_id: 101,
+      conversation_status: "waiting_merchant",
+      sender_role: "buyer",
+      preview: "便宜点？",
+      created_at: "2026-08-03T00:00:00Z",
+    },
+    {
+      conversation_id: "conv-live",
+      message_id: 101,
+      conversation_status: "waiting_merchant",
+      sender_role: "buyer",
+      preview: "能再便宜点吗？",
+      created_at: "2026-08-03T00:01:00Z",
+    },
+  ];
+  const client = {
+    listPendingMessages: async () => pending,
+    claimMessage: async (input: { conversation_id: string; message_id: number }) => {
+      claims.push({ conversation_id: input.conversation_id, message_id: input.message_id });
+      return { claimed: true };
+    },
+    getNegotiationSnapshot: async (input: { conversation_id: string }) =>
+      snapshot(input.conversation_id, 101),
+    submitNegotiationDecision: async () => ({ ok: true, accepted: true }),
+    completeClaim: async () => ({ ok: true }),
+    abandonClaim: async () => ({ ok: true }),
+    failClaim: async () => ({ ok: true }),
+    health: async () => ({ ok: true }),
+    getCapabilities: async () => ({
+      protocol_version: PROTOCOL_VERSION,
+      capabilities: ["price_negotiate"],
+    }),
+  } as unknown as CommerceClient;
+  return { client, claims };
+}
+
 async function openAutopilotKernel(client: CommerceClient): Promise<AgentKernel> {
   const { models, model } = createFakeChatModels();
   const dir = mkdtempSync(path.join(tmpdir(), "kiwi-autotick-"));
@@ -156,6 +206,21 @@ describe("negotiationAutoTick 饥饿回归（KW-REL-01）", () => {
     // 每 tick 恰好 claim 一次 live；101 一次都不出现
     expect(claims.filter((id) => id === 101)).toEqual([]);
     expect(claims.filter((id) => id === 201)).toHaveLength(3);
+  });
+
+  it("跨会话 message_id 撞车：已结算 conv-settled:101 不压制 conv-live:101 的 live 消息", async () => {
+    const { client, claims } = collisionClient();
+    const kernel = await openAutopilotKernel(client);
+    // 只结算 conv-settled:101；conv-live:101 是 live。两会话共享 message_id 101。
+    (
+      kernel as unknown as { settledNegotiations: Set<string> }
+    ).settledNegotiations.add("conv-settled:101");
+
+    const result = await kernel.negotiationAutoTick();
+
+    // live 会话的 101 被 claim 推进，而不是被已结算会话的同号 message_id 压制。
+    expect(claims).toEqual([{ conversation_id: "conv-live", message_id: 101 }]);
+    expect(result).toBeDefined();
   });
 
   it("全部 settled 时 tick 直接返回（不 claim 任何消息）", async () => {

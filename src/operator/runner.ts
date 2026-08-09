@@ -81,12 +81,17 @@ export interface NegotiationRunner {
    * Claim the next pending message and generate a candidate. No write.
    * `skipMessageIds` excludes messages the operator rejected this session;
    * they stay reclaimable for later runs (abandoned, never completed).
+   * `skipKeys` excludes messages by their composite `${conversation_id}:
+   * ${message_id}` key — used by the autopilot for settled negotiations so a
+   * settled message in one conversation never suppresses a live message in
+   * another conversation that happens to share the same numeric message_id.
    * `directives` are the applied session/turn strategy directives that guide
    * candidate generation (design §7) — the compiled hints never widen the
    * profile's HardPolicy, which the gates re-check at submit time.
    */
   prepare(options?: {
     skipMessageIds?: ReadonlySet<number>;
+    skipKeys?: ReadonlySet<string>;
     directives?: readonly StrategyDirective[];
   }): Promise<PreparedCandidate | undefined>;
   /** Submit an approved candidate through the Commerce boundary and settle. */
@@ -248,12 +253,20 @@ export class DeterministicNegotiationRunner implements NegotiationRunner {
 
   async prepare(options?: {
     skipMessageIds?: ReadonlySet<number>;
+    skipKeys?: ReadonlySet<string>;
     directives?: readonly StrategyDirective[];
     /** Direct hints (e.g. task-derived quantity/target/budget), merged over directives. */
     hints?: DecisionHints;
   }): Promise<PreparedCandidate | undefined> {
     const pending = await this.client.listPendingMessages();
-    const target = pending.find((m) => options?.skipMessageIds?.has(m.message_id) !== true);
+    // Skip by full (conversation_id, message_id) key, not bare message_id:
+    // message ids are per-conversation, so a settled/rejected message must
+    // never suppress a live message in another conversation with the same id.
+    const target = pending.find(
+      (m) =>
+        options?.skipMessageIds?.has(m.message_id) !== true &&
+        options?.skipKeys?.has(`${m.conversation_id}:${m.message_id}`) !== true,
+    );
     if (!target) return undefined;
 
     const idem = idempotencyKey(this.profile.agent_id, target.message_id, PROTOCOL_VERSION);

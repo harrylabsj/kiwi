@@ -798,18 +798,18 @@ export class AgentKernel {
     }
 
     // Never let an abandoned/settled message at the head of the pending list
-    // starve a live message behind it. A new message in the same conversation
-    // has a different key and remains eligible.
-    const skipMessageIds = new Set(
-      pending
-        .filter((m) => this.settledNegotiations.has(settledKey(m)))
-        .map((m) => m.message_id),
-    );
+    // starve a live message behind it. Skip by the composite
+    // (conversation_id, message_id) key, never by bare message_id: message ids
+    // are per-conversation, so a settled message must not suppress a live
+    // message in another conversation that happens to share the same id.
+    // A new message in the same conversation has a different key and remains
+    // eligible.
+    const settledKeys = new Set(this.settledNegotiations);
 
     // Buyer: negotiate toward the linked task's goal (quantity / target unit
     // price / budget) instead of the profile defaults.
     let hints: DecisionHints | undefined;
-    const firstPending = pending.find((m) => !skipMessageIds.has(m.message_id));
+    const firstPending = pending.find((m) => !settledKeys.has(settledKey(m)));
     if (firstPending !== undefined && this.profile.role === "buyer" && this.taskStore !== undefined) {
       const link = this.taskStore.linkByConversation(firstPending.conversation_id);
       if (link !== undefined) {
@@ -822,7 +822,7 @@ export class AgentKernel {
     const prepared = await runner
       .prepare({
         ...(hints !== undefined ? { hints } : {}),
-        ...(skipMessageIds.size > 0 ? { skipMessageIds } : {}),
+        ...(settledKeys.size > 0 ? { skipKeys: settledKeys } : {}),
       })
       .catch(() => undefined);
     if (prepared === undefined) return undefined;
