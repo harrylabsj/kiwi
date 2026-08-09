@@ -14,6 +14,10 @@
    - environment：`kiwi-release`
 3. 在 PyPI 项目 `kiwi-catalog` 和 `shopping-cli` 各配置同一组 GitHub Trusted Publisher 映射。
 4. 确认仓库没有 `NPM_TOKEN`、`PYPI_TOKEN`、`TWINE_PASSWORD` 等长期凭据；发布使用短期 OIDC 身份。
+5. 为 `harrylabsj/kiwi` 配置 Actions secret `PORTFOLIO_READ_TOKEN`，供组合/发布 workflow checkout 两个私有 sibling 仓：
+   - 推荐使用 GitHub App installation token，或 fine-grained PAT；仅授予 `kiwi-catalog` 与 `shopping-cli` 的 `Contents: read`（以及读取 metadata）权限。
+   - 不要把个人宽权限 CLI token、registry token 或私钥写入 workflow；secret 只作为 `actions/checkout` 的 token，不在日志中展开。
+   - `portfolio-integration.yml` 为 dispatch-only，避免把 sibling 读取凭据暴露给任意 pull request；普通 PR 由本仓 CI 覆盖，组合门禁在受控 dispatch 上执行。
 
 ## 发布前检查
 

@@ -32,6 +32,51 @@ describe("GitHub workflow action refs", () => {
     }
   });
 
+  it("private sibling checkouts require a dedicated read-only token and fail closed", () => {
+    const privateWorkflowFiles = [
+      "portfolio-integration.yml",
+      "portfolio-contracts.yml",
+      "release-rehearsal.yml",
+      "supply-chain-rehearsal.yml",
+      "portfolio-release.yml",
+    ];
+    for (const file of privateWorkflowFiles) {
+      const src = readFileSync(join(WORKFLOWS_DIR, file), "utf8");
+      const doc = YAML.parse(src) as {
+        jobs?: Record<string, {
+          steps?: Array<{
+            name?: string;
+            run?: string;
+            env?: Record<string, string>;
+            with?: Record<string, string>;
+          }>;
+        }>;
+      };
+      const steps = Object.values(doc.jobs ?? {}).flatMap((job) => job.steps ?? []);
+      const guard = steps.find((step) => step.name === "Require private portfolio read token");
+      expect(guard, `${file} must guard private sibling checkout`).toBeDefined();
+      expect(guard?.env).toEqual(
+        expect.objectContaining({ PORTFOLIO_READ_TOKEN: "${{ secrets.PORTFOLIO_READ_TOKEN }}" }),
+      );
+      expect(guard?.run).toMatch(/PORTFOLIO_READ_TOKEN/);
+      expect(guard?.run).toMatch(/exit 1/);
+
+      const siblingCheckouts = steps.filter((step) =>
+        /^(?:harrylabsj\/kiwi-catalog|harrylabsj\/shopping-cli)$/.test(step.with?.repository ?? ""),
+      );
+      expect(siblingCheckouts, `${file} must checkout both private sibling repositories`).toHaveLength(2);
+      for (const checkout of siblingCheckouts) {
+        expect(checkout.with?.token, `${file} sibling checkout must use the dedicated read token`).toBe(
+          "${{ secrets.PORTFOLIO_READ_TOKEN }}",
+        );
+      }
+    }
+
+    // Private sibling credentials must never be exposed to arbitrary pull requests.
+    const integration = readFileSync(join(WORKFLOWS_DIR, "portfolio-integration.yml"), "utf8");
+    expect(integration).not.toMatch(/^\s*pull_request:/m);
+  });
+
   it("the protected release workflow is dispatch-only and defaults publish=false", () => {
     const src = readFileSync(join(WORKFLOWS_DIR, "portfolio-release.yml"), "utf8");
     expect(src).toMatch(/workflow_dispatch/);
