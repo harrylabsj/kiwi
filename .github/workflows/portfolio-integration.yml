@@ -1,0 +1,134 @@
+# Portfolio fixed-SHA integration gate.
+#
+# This workflow is a deterministic COMPOSITION gate, not a substitute for any
+# repository's own CI. Repo-specific lint/type quality (full ruff, mypy, etc.)
+# remains owned by each repository's CI and is intentionally NOT enforced here:
+# the pinned consumer SHAs carry pre-existing repo-wide ruff/mypy drift, so this
+# gate fails only on composition/test/contract drift (locked installs,
+# contract-lock consistency, deterministic test suites, shared conformance).
+name: Portfolio fixed-SHA integration gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - id: lock
+        name: Read portfolio lock
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const lock = JSON.parse(require('fs').readFileSync('portfolio.lock.json', 'utf8'));
+          const hex40 = /^[0-9a-f]{40}$/;
+          for (const [name, value] of Object.entries(lock.repositories)) {
+            if (!hex40.test(value.commit)) {
+              throw new Error(`${value.repository} commit is not a full 40-char SHA: ${value.commit}`);
+            }
+            console.log(`${name.replace('-', '_')}_sha=${value.commit}`);
+          }
+          if (!hex40.test(lock.contract_source_commit)) {
+            throw new Error(`contract_source_commit is not a full 40-char SHA: ${lock.contract_source_commit}`);
+          }
+          NODE
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: harrylabsj/kiwi-catalog
+          ref: ${{ steps.lock.outputs.kiwi_catalog_sha }}
+          path: kiwi-catalog
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: harrylabsj/shopping-cli
+          ref: ${{ steps.lock.outputs.shopping_cli_sha }}
+          path: shopping-cli
+      # The kiwi checkout above is the code under test (PR/dispatch ref), so only the
+      # two consumer repos pinned by portfolio.lock.json are verified against the lock.
+      - name: Verify pinned checkouts and contract locks
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const { execFileSync } = require('child_process');
+          const portfolio = JSON.parse(fs.readFileSync('portfolio.lock.json', 'utf8'));
+          for (const name of ['kiwi-catalog', 'shopping-cli']) {
+            const entry = portfolio.repositories[name];
+            const head = execFileSync('git', ['-C', name, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+            if (head !== entry.commit) {
+              throw new Error(`${name} HEAD ${head} != locked ${entry.commit}`);
+            }
+            const lockPath = name === 'kiwi-catalog'
+              ? 'kiwi-catalog/kiwi_catalog/contracts/kiwi-contracts.lock.json'
+              : 'shopping-cli/shopping_cli/contracts/kiwi-contracts.lock.json';
+            const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            if (lock.source_commit !== portfolio.contract_source_commit) {
+              throw new Error(`${name} source_commit ${lock.source_commit} != portfolio ${portfolio.contract_source_commit}`);
+            }
+            if (lock.bundle_sha256 !== portfolio.contract_bundle_sha256) {
+              throw new Error(`${name} bundle_sha256 ${lock.bundle_sha256} != portfolio ${portfolio.contract_bundle_sha256}`);
+            }
+            console.log(`${name}: HEAD ${head}, contract lock verified`);
+          }
+          NODE
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - name: Install locked uv
+        run: python -m pip install "uv==0.10.6"
+      - name: Install kiwi dependencies
+        run: npm ci
+      - name: Kiwi lint
+        run: npm run lint
+      - name: Kiwi typecheck
+        run: npm run typecheck
+      - name: Kiwi build
+        run: npm run build
+      - name: Kiwi test
+        run: npm run test
+      - name: Kiwi verify contracts
+        run: npm run verify:contracts
+      - name: Kiwi verify vectors
+        run: npm run verify:vectors
+      # ---------------------------------------------------------------------------
+      # Consumer-repo composition checks.
+      #
+      # Repo-specific lint/type quality (full ruff, mypy, coverage report) remains
+      # owned by each consumer repository's own CI and is intentionally NOT enforced
+      # here: the pinned consumer SHAs carry pre-existing repo-wide ruff/mypy drift.
+      # This gate therefore fails only on composition/test/contract drift — locked
+      # installs, contract-lock consistency, deterministic test suites, and the
+      # shared conformance runner below.
+      # ---------------------------------------------------------------------------
+      - name: Kiwi-catalog locked install, contract lock, and deterministic tests
+        working-directory: kiwi-catalog
+        run: |
+          uv sync --locked --extra api --extra dev
+          uv run --locked python scripts/verify_contract_lock.py --manifest ../contracts/manifest.json
+          # Basic syntax/parse-error lint only (E9); full ruff/mypy is owned by
+          # kiwi-catalog CI and omitted here to avoid its pre-existing drift.
+          uv run --locked python -m ruff check --select E9 kiwi_catalog tests scripts
+          uv run --locked python -m pytest -q
+      - name: Shopping-cli locked install, contract lock, and deterministic tests
+        working-directory: shopping-cli
+        run: |
+          uv sync --locked --extra api --extra dev
+          uv run --locked python scripts/verify_contract_lock.py --manifest ../contracts/manifest.json
+          # Basic syntax/error lint only (E4,E7,E9); full ruff/mypy/coverage report
+          # is owned by shopping-cli CI and omitted here to avoid its pre-existing drift.
+          uv run --locked python -m ruff check --select E4,E7,E9 shopping_cli tests
+          uv run --locked python -m unittest discover -s tests
+          uv run --locked node --test tests/shopping_plugin.test.mjs
+      - name: Run shared Python service conformance
+        env:
+          PYTHONPATH: ${{ github.workspace }}/contracts/conformance/python-service:${{ github.workspace }}/kiwi-catalog/scripts:${{ github.workspace }}/shopping-cli/scripts:${{ github.workspace }}/kiwi-catalog:${{ github.workspace }}/shopping-cli
+        run: |
+          uv --directory kiwi-catalog run --locked python \
+            "$GITHUB_WORKSPACE/contracts/conformance/python-service/run.py" \
+            kiwi_catalog_conformance:apps shopping_cli_conformance:apps
