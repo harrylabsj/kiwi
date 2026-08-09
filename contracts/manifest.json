@@ -1,0 +1,61 @@
+{
+  "manifest_version": 1,
+  "authority": "kiwi/contracts",
+  "bundle_sha256": "e7001ebe6ac4e8679ccd4f8e0375f85753ff7e39a9da5f13641285cdef1f8c00",
+  "contracts": [
+    {
+      "id": "candidate-agent-dto",
+      "version": "1.0",
+      "path": "contracts/candidate-agent-dto-1.0.schema.json",
+      "sha256": "9c820cff1f998662dee6fe85f7a6a8bbc3d1a8bce8b8802b6483612ae06dec03"
+    },
+    {
+      "id": "kiwi-catalog-agent-record",
+      "version": "1.0",
+      "path": "contracts/kiwi-catalog/1.0/agent-record.schema.json",
+      "sha256": "2d4cc595f8fd5d7bd6b7ce45066519695ecf867a3f1089bf112d1bff1e30fe15"
+    },
+    {
+      "id": "kiwi-catalog-listing-record",
+      "version": "1.0",
+      "path": "contracts/kiwi-catalog/1.0/listing-record.schema.json",
+      "sha256": "ac394e4743815dbd35e962108eaeb8a0db03f314f5462f77a323beb79168f975"
+    },
+    {
+      "id": "kiwi-catalog-listing-search-result",
+      "version": "1.0",
+      "path": "contracts/kiwi-catalog/1.0/listing-search-result.schema.json",
+      "sha256": "c77792ffb7e4eb0a59cd0f4d48059686face8878674afac1090808ccb6c7fee7"
+    },
+    {
+      "id": "negotiation-envelope",
+      "version": "1.0",
+      "path": "contracts/negotiation/1.0/schema.json",
+      "sha256": "7a0da30fb8a6d91b653d9507beaa4615f263d4b26d7bc9c3e61f64853f3495c6"
+    },
+    {
+      "id": "shopping-negotiation-capabilities",
+      "version": "0.1",
+      "path": "contracts/shopping.negotiation/0.1/capabilities.schema.json",
+      "sha256": "386a6eda04d20e31519e86aa2c7b30403af5ec31dbd9ac0d15a440347d7e1356"
+    },
+    {
+      "id": "shopping-negotiation-decision",
+      "version": "0.1",
+      "path": "contracts/shopping.negotiation/0.1/decision.schema.json",
+      "sha256": "b98255cf779f76a15c5768dc75fd6d9cd5616c4cbaa0593053b113e7bd2c4ef1"
+    },
+    {
+      "id": "shopping-negotiation-policy-result",
+      "version": "0.1",
+      "path": "contracts/shopping.negotiation/0.1/policy-result.schema.json",
+      "sha256": "3b2dd7980c091c50f8a58dd18f15a0a56a483ba722c075153ee1c3be07c660e8"
+    },
+    {
+      "id": "shopping-negotiation-snapshot",
+      "version": "0.1",
+      "path": "contracts/shopping.negotiation/0.1/snapshot.schema.json",
+      "sha256": "3684e5674917b1d3777e298d9e18e34f3f124d1ba7534540de08023be45a4e27"
+    }
+  ]
+}
