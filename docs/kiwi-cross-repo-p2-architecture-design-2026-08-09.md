@@ -1,6 +1,6 @@
 # Kiwi 三产品跨仓库 P2 架构设计
 
-- 状态：实施中（T1–T5、T7、T10 已落地；T6 已落地固定 SHA 组合门禁但主链跨进程 E2E 仍待受控纳入；T8/T9 已完成多组纯 facade 拆分；T11 完成无发布权限的签名演练；T12 已具备离线 manifest 验证，真实 registry 回滚待受控推进）
+- 状态：实施中（T1–T5、T7、T10 已落地；T6 已落地固定 SHA 组合门禁但主链跨进程 E2E 仍待受控纳入；T8/T9 已完成多组纯 facade 拆分；T11 已落地受保护 OIDC 发布工作流与无发布权限的签名演练；T12 已具备 registry 下载校验和离线/只读回滚候选验证，真实 registry 回滚待受控推进）
 - 日期：2026-08-09
 - 范围：`kiwi`、`kiwi-catalog`、`shopping-cli`
 - 目标：完成统一契约包、组合 CI、重复服务脚手架重构，以及依赖锁定、SBOM、签名与可验证发布链路
@@ -665,9 +665,9 @@ nightly 连续两次失败才创建阻断级事件，第一次标记 flaky candi
 - `contracts/manifest.json`、consumer lock、golden vectors 和固定 SHA 组合 CI 已提交。
 - `contracts/conformance/python-service` 作为 dev-only 套件已接入两个 Python 服务；本地固定 lock 命令通过。
 - 三仓 GitHub Actions 已固定到完整 commit SHA；新增 `portfolio-integration.yml` 作为只读、无发布权限的固定 SHA 组合门禁，两个 Python Dockerfile 使用 digest 基础镜像、`uv.lock` 和 hash 校验依赖。
-- `release-rehearsal.yml` 已实现一次构建、SBOM、release manifest、keyless cosign blob 签名和 GitHub provenance attestation；该 workflow 不自动发布到公共 registry。
-- 本轮组合验收已通过 kiwi `npm run verify`（1598 tests）、catalog 锁定环境 272 tests、shopping 565 tests/121 subtests、双适配器 conformance、contract lock、release manifest/离线 rollback；`scripts/e2e-local.sh` 也验证了真实 shopping-cli API 上的 buyer ask → merchant counter → buyer accept_nonbinding 三消息链路。组合 gate 有意不重复两仓当前已知的全量 ruff/mypy 漂移，质量门禁仍由各仓 CI 负责。
-- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）、真实跨进程主链 E2E 的 CI 化，以及需要真实受保护 registry 环境的发布后回滚演练（T12）。已完成多组无行为变更拆分：catalog pagination/page shaping、catalog row serialization、catalog public views、catalog search scoring、verification queue result serialization/types、catalog request dispatch、shopping request dispatch、negotiation policy result、纯路由模板匹配器、错误 envelope/response、verification/negotiation 纯策略 helper；characterization tests 固定游标兼容性、页边界与游标生成、行投影、私有字段剥离、验证队列结果 round-trip/损坏输入、队列配置边界/值类型不可变、纯 dispatch 路径/方法/参数转发、路由、错误响应、时间格式、状态映射、私有阈值泄漏、CJK 搜索和评分权重行为。`scripts/rollback-drill.mjs` 已完成离线“上一版本 → 回滚 → 当前版本恢复”演练。
+- `release-rehearsal.yml` 已实现一次构建、SBOM、release manifest、keyless cosign blob 签名和 GitHub provenance attestation；新增 `portfolio-release.yml` 将同一 immutable bundle 接入 `kiwi-release` protected environment，使用 npm/PyPI Trusted Publishing OIDC 发布，并在发布后按 manifest digest 重新下载校验。
+- 本轮组合验收已通过 kiwi `npm run verify`（1616 tests）、新增 registry/release 单元测试 18 tests、catalog 锁定环境 272 tests、shopping 565 tests/121 subtests、双适配器 conformance、contract lock、release manifest/离线 rollback；`scripts/e2e-local.sh` 也验证了真实 shopping-cli API 上的 buyer ask → merchant counter → buyer accept_nonbinding 三消息链路。组合 gate 有意不重复两仓当前已知的全量 ruff/mypy 漂移，质量门禁仍由各仓 CI 负责。
+- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）、真实跨进程主链 E2E 的 CI 化，以及需要 GitHub `kiwi-release` 环境、Trusted Publisher 映射和有效 GitHub 授权的真实 registry 发布后回滚演练（T12）。已完成多组无行为变更拆分：catalog pagination/page shaping、catalog row serialization、catalog public views、catalog search scoring、verification queue result serialization/types、catalog request dispatch、shopping request dispatch、negotiation policy result、纯路由模板匹配器、错误 envelope/response、verification/negotiation 纯策略 helper；characterization tests 固定游标兼容性、页边界与游标生成、行投影、私有字段剥离、验证队列结果 round-trip/损坏输入、队列配置边界/值类型不可变、纯 dispatch 路径/方法/参数转发、路由、错误响应、时间格式、状态映射、私有阈值泄漏、CJK 搜索和评分权重行为。`scripts/rollback-drill.mjs` 与 `scripts/verify-rollback-candidate.mjs` 已完成离线/只读回滚验证。
 
 ## 16. 并行实施策略
 
@@ -715,10 +715,10 @@ Phase 0
   - 验证：现有 565+ 测试、conformance、composition 全绿。
 - [x] **T10（P2，human ~1d / Codex ~90min）**：两个 Python 仓库引入 `uv.lock`，Docker/CI 改 locked install；kiwi 强制 `npm ci`。
   - 验证：lock stale、依赖现场漂移和未固定 base image 均失败。
-- [~] **T11（P2，human ~1.5d / Codex ~2h）**：已建立 build-once、SBOM、keyless cosign blob 签名与 GitHub provenance 演练；真实 npm/PyPI/GHCR 发布仍需人工批准和环境配置。
-  - 验证：演练 workflow 只生成一次构建物并上传签名/证书；不在本阶段自动向公共 registry 发布。
-- [~] **T12（P2，human ~4h / Codex ~45min）**：已加入 `scripts/verify-release-manifest.mjs` 与 `scripts/rollback-drill.mjs`，并完成离线“上一版本 → 回滚 → 当前版本恢复”演练；真实 registry release rollback 仍需受保护环境和上一版本 digest。
-  - 验证：从当前版本回滚到上一 digest，再恢复当前版本；验证命令全程通过。
+- [~] **T11（P2，human ~1.5d / Codex ~2h）**：已建立 build-once、SBOM、keyless cosign blob 签名、GitHub provenance attestation，以及 `portfolio-release.yml` 受保护 OIDC 发布工作流。代码侧已完成；真实 npm/PyPI publish 仍需人工配置 `kiwi-release` environment、Trusted Publisher 映射、版本 bump 和有效 GitHub 授权。
+  - 验证：dry-run 只生成一次构建物并上传签名/证书；publish job 只下载 immutable bundle，权限不含长期 registry token 或 `packages: write`。
+- [~] **T12（P2，human ~4h / Codex ~45min）**：已加入 `scripts/verify-release-manifest.mjs`、`scripts/verify-registry-downloads.mjs`、`scripts/verify-rollback-candidate.mjs` 与 `scripts/rollback-drill.mjs`；离线“上一版本 → 回滚 → 当前版本恢复”及只读候选 digest 校验已通过，真实 registry release rollback 仍需受保护环境和上一版本 manifest。
+  - 验证：发布后按 manifest 重新下载 npm/PyPI artifact 并 fail-closed 比对 digest；回滚验证不执行删除或 unpublish，实际生产回滚通过重新选择已验证的上一版本 digest 完成。
 
 ## 18. 总体验收标准
 
@@ -732,9 +732,9 @@ Phase 0
 - [x] Python service conformance 在两个服务上通过。
 - [~] 热点拆分未改变 API/状态机，测试总量不下降（纯 facade 已验证；app/orchestration 仍有剩余热点）。
 - [x] Python 使用 `uv.lock`，Node 使用 `npm ci`，容器使用 locked deps 与 base digest。
-- [~] npm/PyPI/OCI/contracts bundle 的构建、SBOM、来源证明和 keyless bundle 签名演练已具备；真实 registry 发布与下载验证待受保护环境批准。
-- [~] 用户可以从干净环境验证 artifact identity 与安装结果（本地 package smoke 与离线 manifest 已通过；公共 registry 下载验证待受保护环境）。
-- [~] 完成一次按 digest 的回滚演练（离线上一版本→回滚→恢复已通过；真实 registry digest 仍待受控环境）。
+- [~] npm/PyPI/OCI/contracts bundle 的构建、SBOM、来源证明和 keyless bundle 签名链路已具备；真实 registry 发布与下载验证待 `kiwi-release` 受保护环境批准。
+- [~] 用户可以从干净环境验证 artifact identity 与安装结果（本地 package smoke、registry verifier 和离线 manifest 已通过；公共 registry 下载验证待受保护环境）。
+- [~] 完成一次按 digest 的回滚演练（离线上一版本→回滚→恢复、只读 rollback candidate 校验已通过；真实 registry digest 仍待受控环境）。
 
 ## 19. NOT in scope
 
