@@ -1,0 +1,48 @@
+name: Portfolio contract composition
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: lock
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const lock = JSON.parse(require('fs').readFileSync('portfolio.lock.json', 'utf8'));
+          for (const [name, value] of Object.entries(lock.repositories)) {
+            console.log(`${name.replace('-', '_')}_sha=${value.commit}`);
+          }
+          console.log(`bundle_sha=${lock.contract_bundle_sha256}`);
+          NODE
+      - uses: actions/checkout@v4
+        with:
+          repository: harrylabsj/kiwi-catalog
+          ref: ${{ steps.lock.outputs.kiwi_catalog_sha }}
+          path: kiwi-catalog
+      - uses: actions/checkout@v4
+        with:
+          repository: harrylabsj/shopping-cli
+          ref: ${{ steps.lock.outputs.shopping_cli_sha }}
+          path: shopping-cli
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Verify central manifest
+        run: node scripts/verify-contracts.mjs
+      - name: Verify catalog consumer lock
+        working-directory: kiwi-catalog
+        run: python scripts/verify_contract_lock.py --manifest ../contracts/manifest.json
+      - name: Verify shopping consumer lock
+        working-directory: shopping-cli
+        run: python scripts/verify_contract_lock.py --manifest ../contracts/manifest.json
