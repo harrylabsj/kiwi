@@ -664,9 +664,9 @@ nightly 连续两次失败才创建阻断级事件，第一次标记 flaky candi
 
 - `contracts/manifest.json`、consumer lock、golden vectors 和固定 SHA 组合 CI 已提交。
 - `contracts/conformance/python-service` 作为 dev-only 套件已接入两个 Python 服务；本地固定 lock 命令通过。
-- 三仓 GitHub Actions 已固定到完整 commit SHA；两个 Python Dockerfile 使用 digest 基础镜像、`uv.lock` 和 hash 校验依赖。
+- 三仓 GitHub Actions 已固定到完整 commit SHA；新增 `portfolio-integration.yml` 作为只读、无发布权限的固定 SHA 组合门禁，两个 Python Dockerfile 使用 digest 基础镜像、`uv.lock` 和 hash 校验依赖。
 - `release-rehearsal.yml` 已实现一次构建、SBOM、release manifest、keyless cosign blob 签名和 GitHub provenance attestation；该 workflow 不自动发布到公共 registry。
-- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）以及需要真实受保护 registry 环境的发布后回滚演练（T12）。已完成多组无行为变更拆分：catalog pagination/page shaping、catalog row serialization、catalog public views、catalog search scoring、verification queue result serialization/types、catalog request dispatch、shopping request dispatch、negotiation policy result、纯路由模板匹配器、错误 envelope/response、verification/negotiation 纯策略 helper；characterization tests 固定游标兼容性、页边界与游标生成、行投影、私有字段剥离、验证队列结果 round-trip/损坏输入、队列配置边界/值类型不可变、纯 dispatch 路径/方法/参数转发、路由、错误响应、时间格式、状态映射、私有阈值泄漏、CJK 搜索和评分权重行为。`scripts/rollback-drill.mjs` 已完成离线“上一版本 → 回滚 → 当前版本恢复”演练。
+- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）、真实跨进程主链 E2E 的 CI 化，以及需要真实受保护 registry 环境的发布后回滚演练（T12）。已完成多组无行为变更拆分：catalog pagination/page shaping、catalog row serialization、catalog public views、catalog search scoring、verification queue result serialization/types、catalog request dispatch、shopping request dispatch、negotiation policy result、纯路由模板匹配器、错误 envelope/response、verification/negotiation 纯策略 helper；characterization tests 固定游标兼容性、页边界与游标生成、行投影、私有字段剥离、验证队列结果 round-trip/损坏输入、队列配置边界/值类型不可变、纯 dispatch 路径/方法/参数转发、路由、错误响应、时间格式、状态映射、私有阈值泄漏、CJK 搜索和评分权重行为。`scripts/rollback-drill.mjs` 已完成离线“上一版本 → 回滚 → 当前版本恢复”演练。
 
 ## 16. 并行实施策略
 
@@ -704,8 +704,8 @@ Phase 0
   - 验证：修改 vendored schema 或 lock digest 任意一处会失败。
 - [x] **T5（P2，human ~1d / Codex ~90min）**：为 kiwi、kiwi-catalog 建 CI，并硬化 shopping-cli CI。
   - 验证：full tests、package smoke、SHA-pinned Actions policy 全绿。
-- [x] **T6（P2，human ~1.5d / Codex ~2h）**：建立固定 SHA 的 `portfolio-integration.yml` 与主链 E2E。
-  - 验证：shopping projection → catalog → kiwi discovery/negotiate/handoff 完成，错误 SHA 在执行前失败。
+- [~] **T6（P2，human ~1.5d / Codex ~2h）**：建立固定 SHA 的 `portfolio-integration.yml` 确定性组合门禁；主链跨进程 E2E 仍保留在本地脚本/受控环境，尚未纳入无凭据的 PR workflow。
+  - 验证：错误 SHA 在执行前失败；组合门禁完成 kiwi 全量测试、两仓 locked install/契约锁、Python conformance。主链 shopping projection → catalog → kiwi discovery/negotiate/handoff 需单独受控环境演练。
 - [x] **T7（P2，human ~1d / Codex ~90min）**：建立 Python service conformance adapter/cases。
   - 验证：FastAPI/fallback、auth/error/limits/idempotency/session 两仓一致。
 - [~] **T8（P2，human ~3–6d / Codex ~1d）**：已完成 `agent_catalog/pagination.py`（含页边界/page shaping）、`agent_catalog/row_serialization.py`、`api/route_matching.py`、`api/error_envelope.py`、`api/request_dispatch.py`、`services/verification_helpers.py`、`services/verification_queue_serialization.py` 与 `services/verification_queue_types.py` 多组无行为变更 facade 拆分；FastAPI route registration、verification pipeline orchestration、repository 其余热点继续按小 PR 推进。
