@@ -687,6 +687,7 @@ nightly 连续两次失败才创建阻断级事件，第一次标记 flaky candi
 - claude-ds 对剩余 `VerificationService` 纯状态候选做了边界审查，确认 `_apply_*` 仅是数据库状态写入，`_stage_*` 仍承担状态机惰性求值与持久化顺序，当前没有收益足够且无行为风险的进一步纯 leaf；因此未强行拆分，保持状态机/事务边界集中。
 - 最终候选锁（catalog CI lint 收口后）已更新并再次通过 `verify:portfolio-lock`：kiwi `c5ac9a5fba94cffe6c31df928075e452285de7d0`、kiwi-catalog `1a70c6fa47a848118db64accf4c035741d2a6c09`、shopping-cli `b76703ff3d75231556f4e64a21cd1fb44abd9cc9`；三仓 `git push --dry-run origin main` 均可达，未执行真实 push。
 - 最新候选锁（register input leaf 后）已更新并再次通过 `verify:portfolio-lock`：kiwi `5c5a3d10fc3e5076fed57eb0e6648b14b4745c5b`、kiwi-catalog `b2148d52fbbbf27dd893373848eb0e892a8f3bb6`、shopping-cli `b76703ff3d75231556f4e64a21cd1fb44abd9cc9`；三仓 dry-run 均可达，公开锁仍保持 fail-closed。
+- 最终组合审计再次通过 shared Python conformance（`kiwi_catalog_conformance:apps` 与 `shopping_cli_conformance:apps`）；GitHub 当前可见 6 个 workflow，但 `portfolio-integration.yml` 和 `portfolio-release.yml` 均无 run 记录，`kiwi-release` environment API 仍为 `total_count=0`，因此受控 dispatch/真实发布回滚继续是外部阻塞。
 
 ## 16. 并行实施策略
 
