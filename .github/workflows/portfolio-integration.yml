@@ -18,6 +18,9 @@ permissions:
 jobs:
   integrate:
     runs-on: ubuntu-latest
+    # Whole-gate safety net: locked installs + tests + (on dispatch) the
+    # cross-process E2E must finish within 45 minutes or the run is cancelled.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - id: lock
@@ -132,3 +135,24 @@ jobs:
           uv --directory kiwi-catalog run --locked python \
             "$GITHUB_WORKSPACE/contracts/conformance/python-service/run.py" \
             kiwi_catalog_conformance:apps shopping_cli_conformance:apps
+      # ---------------------------------------------------------------------------
+      # Cross-process E2E negotiation — controlled gate, workflow_dispatch only.
+      #
+      # scripts/e2e-local.sh proves the real-HTTP path: buyer ask -> merchant
+      # counter -> buyer accept_nonbinding, against the fixed-SHA shopping-cli
+      # checkout above, with locked deps and structural no-order assertions. It is
+      # gated to workflow_dispatch so ordinary pull_request runs are never blocked
+      # by a cross-process server or network-dependent installs. The shopping-cli
+      # .venv created by the locked install step above satisfies the script's
+      # venv-detection branch, so no unbounded `pip install uvicorn fastapi` runs.
+      # Kiwi is already built by the earlier "Kiwi build" step; the script's
+      # internal rebuild is idempotent.
+      # ---------------------------------------------------------------------------
+      - name: Cross-process E2E negotiation (buyer ask -> merchant counter -> accept_nonbinding)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          SHOPPING_CLI_SRC: ${{ github.workspace }}/shopping-cli
+        run: |
+          set -euo pipefail
+          echo "== pinned composition: kiwi-catalog $(git -C kiwi-catalog rev-parse HEAD) / shopping-cli $(git -C shopping-cli rev-parse HEAD)"
+          bash scripts/e2e-local.sh

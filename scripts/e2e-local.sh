@@ -38,10 +38,17 @@ BASE="http://127.0.0.1:${PORT}"
 SERVER_PID=""
 
 cleanup() {
+  local rc=$?
   # Only ever stop the PID this script started; only remove its own temp dir.
   if [[ -n "${SERVER_PID}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then
     kill "${SERVER_PID}" 2>/dev/null || true
     wait "${SERVER_PID}" 2>/dev/null || true
+  fi
+  # Failure diagnostics: surface the last server log lines before the work dir
+  # is removed, so CI runs can tell why the negotiation path failed.
+  if [[ ${rc} -ne 0 ]]; then
+    echo "== E2E failed (rc=${rc}); last server log lines:" >&2
+    tail -n 40 "${WORK}/server.log" 2>/dev/null || true
   fi
   rm -rf "${WORK}"
 }
