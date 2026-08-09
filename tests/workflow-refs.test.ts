@@ -116,4 +116,14 @@ describe("GitHub workflow action refs", () => {
     // Uppercase 40-char hex is not a lowercase commit SHA; publish=true rejects it.
     expect(() => runWith(UPPER_SHA, "true")).toThrow(/publish=true requires ref/);
   });
+
+  it("release workflow has no 'Verify central ref matches portfolio lock' self-match step", () => {
+    const src = readFileSync(join(WORKFLOWS_DIR, "portfolio-release.yml"), "utf8");
+    const doc = YAML.parse(src) as {
+      jobs?: Record<string, { steps?: Array<{ name?: string }> }>;
+    };
+    const steps = Object.values(doc.jobs ?? {}).flatMap((job) => job.steps ?? []);
+    const selfMatch = steps.find((s) => s.name?.includes("Verify central ref matches portfolio lock"));
+    expect(selfMatch).toBeUndefined();
+  });
 });

@@ -34,7 +34,14 @@
 #
 # 4. Package version bump before every publish
 #    npm: bump `version` in package.json (and package-lock.json) for
-#         @harrylabsj/kiwi, commit, and update portfolio.lock.json central SHA.
+#         @harrylabsj/kiwi and commit. The dispatched central `ref` input is
+#         the immutable source for the kiwi bundle; portfolio.lock.json
+#         consumer SHAs (kiwi-catalog, shopping-cli) and contract_source_commit
+#         are the composition boundary, verified against the checked-out
+#         source. The lock's repositories.kiwi.commit is only a SHA-shaped
+#         snapshot anchor and is never compared to inputs.ref — a commit cannot
+#         contain its own hash, so updating it to match a new central commit is
+#         not part of the release flow.
 #    PyPI: bump `version` in kiwi-catalog/pyproject.toml and
 #         shopping-cli/pyproject.toml (plus uv.lock), commit, and update
 #         portfolio.lock.json consumer SHAs.
