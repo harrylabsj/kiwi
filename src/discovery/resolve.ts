@@ -45,8 +45,9 @@
  *
  * SSRF 策略：远程 Agent Card URL 的 fetch 默认拒绝 loopback（127.0.0.1 /
  * ::1 / localhost），A2A direct interface 默认拒绝 loopback/私网/保留网段；
- * `DiscoveryDeps.allowLoopback: true` 显式放行本地开发（仅 loopback，私网/
- * 保留网段仍始终拒绝）。
+ * `DiscoveryDeps.allowLoopback: true` 显式放行本地开发的**字面** loopback
+ * （localhost / 127.0.0.1 / ::1）。公共主机名解析到 loopback（DNS rebinding）
+ * 与私网/保留网段始终拒绝，不被本开关放宽。
  *
  * v2.3（设计 §21 / MVP Slice A/B）：DiscoveryDeps.catalog 可选配置后启用
  * resolveViaCatalog —— 通过 shopping-cli Commerce Agent Catalog 发现候选并升级为
@@ -134,9 +135,10 @@ export interface DiscoveryDeps {
   /**
    * 允许 loopback 目标（远程 Agent Card URL 的 fetch 与 A2A direct interface）。
    * 缺省 false，fail-closed：远程 Agent Card 不得把发现过程或通道候选指向
-   * loopback。仅显式传 true 放行本地开发（localhost / 127.0.0.1 / ::1）；
-   * 私网/保留网段（RFC1918、link-local、CGNAT、metadata 等）始终拒绝，不被
-   * 本开关放开 —— HTTPS/userinfo/重定向/DNS rebinding 约束不因本开关放宽。
+   * loopback。仅显式传 true 放行本地开发的**字面** loopback（localhost /
+   * 127.0.0.1 / ::1）；公共主机名解析到 loopback（DNS rebinding）与私网/保留
+   * 网段（RFC1918、link-local、CGNAT、metadata 等）始终拒绝，不被本开关放开
+   * —— HTTPS/userinfo/重定向/DNS rebinding 约束不因本开关放宽。
    */
   allowLoopback?: boolean;
   /**
@@ -282,15 +284,15 @@ export class AgentDiscovery {
   private async fetchCard(url: string): Promise<unknown> {
     // SSRF 防护（与 UCP resolver 同级，catalog 驱动的 agent_card_url 同样受保护）：
     //   1. 静态校验（scheme/userinfo/保留网段；loopback 默认拒绝，
-    //      deps.allowLoopback 显式放行本地开发）；
+    //      deps.allowLoopback 只放行字面 localhost/127.0.0.1/::1 本地开发）；
     //   2. 请求前 DNS 复查（主机名解析的每个 IP 过保留网段判定，防 rebinding；
-    //      allowLoopback 只影响 loopback 判定，私网/保留网段不放宽）；
+    //      公共主机名解析到 loopback 始终拒绝——allowLoopback 只作用于上述静态
+    //      字面判定，不放宽 DNS rebinding，也不放宽私网/保留网段）；
     //   3. 不跟随重定向（redirect:"manual"，3xx → 拒绝）。
     let safeUrl: URL;
     try {
       safeUrl = assertSafeTargetUrl(url, { allowLoopback: this.deps.allowLoopback === true });
       await assertResolvableTargetUrl(safeUrl, {
-        allowLoopback: this.deps.allowLoopback === true,
         skipDnsCheck: this.deps.skipDnsCheck,
         resolveIp: this.deps.resolveIp,
       });
