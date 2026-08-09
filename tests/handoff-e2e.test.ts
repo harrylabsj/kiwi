@@ -133,6 +133,7 @@ function setupBuyer(
     now: () => T0,
     registerPending: (id, hooks) => pendingHooks.set(id, hooks),
     catalog,
+    allowLoopback: true, // 本地 127.0.0.1 测试栈
     handoff: { ledger, idempotency },
   };
   const tools = buildBuyerTools(deps);

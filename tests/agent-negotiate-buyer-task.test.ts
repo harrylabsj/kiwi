@@ -98,6 +98,7 @@ async function setupBuyer(options: {
     now: () => clock,
     registerPending: (id, h) => hooks.set(id, h),
     ...(options.catalog !== undefined ? { catalog: options.catalog } : {}),
+    allowLoopback: true, // 本地 127.0.0.1 测试栈
     recordNegotiation: async (input) => {
       recordCalls.push({ ...input });
       return `mem-${input.negotiationId}`;

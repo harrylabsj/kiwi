@@ -69,6 +69,12 @@ export interface NegotiateOptions {
   deliveryBefore?: string;
   /** 发送方身份（缺省 buyer:a2a-demo）。 */
   senderIdentity?: string;
+  /**
+   * 本地开发 loopback 放行（透传给 AgentDiscovery；缺省 false，fail-closed）。
+   * 仅显式传 true 允许发现阶段访问 127.0.0.1 / ::1 / localhost 上的 Agent Card
+   * 与 A2A direct interface；私网/保留网段始终拒绝。
+   */
+  allowLoopback?: boolean;
 }
 
 export interface NegotiateResult {
@@ -265,7 +271,10 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     // CD #27：Buyer 可注入 KiwiCatalogSource（listing → owner_agent_id → getRecord →
     // resolveViaCatalog fresh verify 全链）；缺省 legacy ShoppingCliCatalogSource。
     const source = options.catalogSource ?? new ShoppingCliCatalogSource({ baseUrl: options.catalog });
-    const discovery = new AgentDiscovery({ catalog: { source, includeBlocked: false } });
+    const discovery = new AgentDiscovery({
+      allowLoopback: options.allowLoopback === true,
+      catalog: { source, includeBlocked: false },
+    });
     const resolved = await discovery.resolveViaCatalog();
     if (resolved.length === 0) {
       return { ok: false, negotiationId, catalogAgentId: "", agentCardUrl: "", steps, error: "catalog 里没有可发现的 agent" };
