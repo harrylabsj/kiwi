@@ -666,7 +666,7 @@ nightly 连续两次失败才创建阻断级事件，第一次标记 flaky candi
 - `contracts/conformance/python-service` 作为 dev-only 套件已接入两个 Python 服务；本地固定 lock 命令通过。
 - 三仓 GitHub Actions 已固定到完整 commit SHA；两个 Python Dockerfile 使用 digest 基础镜像、`uv.lock` 和 hash 校验依赖。
 - `release-rehearsal.yml` 已实现一次构建、SBOM、release manifest、keyless cosign blob 签名和 GitHub provenance attestation；该 workflow 不自动发布到公共 registry。
-- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）以及需要真实受保护 registry 环境的发布后回滚演练（T12）。已完成多组无行为变更拆分：catalog pagination/page shaping、catalog row serialization、catalog public views、catalog search scoring、verification queue result serialization/types、negotiation policy result、纯路由模板匹配器、错误 envelope/response、verification/negotiation 纯策略 helper；characterization tests 固定游标兼容性、页边界与游标生成、行投影、私有字段剥离、验证队列结果 round-trip/损坏输入、队列配置边界/值类型不可变、路由、错误响应、时间格式、状态映射、私有阈值泄漏、CJK 搜索和评分权重行为。`scripts/rollback-drill.mjs` 已完成离线“上一版本 → 回滚 → 当前版本恢复”演练。
+- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）以及需要真实受保护 registry 环境的发布后回滚演练（T12）。已完成多组无行为变更拆分：catalog pagination/page shaping、catalog row serialization、catalog public views、catalog search scoring、verification queue result serialization/types、catalog request dispatch、negotiation policy result、纯路由模板匹配器、错误 envelope/response、verification/negotiation 纯策略 helper；characterization tests 固定游标兼容性、页边界与游标生成、行投影、私有字段剥离、验证队列结果 round-trip/损坏输入、队列配置边界/值类型不可变、纯 dispatch 路径/方法/参数转发、路由、错误响应、时间格式、状态映射、私有阈值泄漏、CJK 搜索和评分权重行为。`scripts/rollback-drill.mjs` 已完成离线“上一版本 → 回滚 → 当前版本恢复”演练。
 
 ## 16. 并行实施策略
 
@@ -708,8 +708,8 @@ Phase 0
   - 验证：shopping projection → catalog → kiwi discovery/negotiate/handoff 完成，错误 SHA 在执行前失败。
 - [x] **T7（P2，human ~1d / Codex ~90min）**：建立 Python service conformance adapter/cases。
   - 验证：FastAPI/fallback、auth/error/limits/idempotency/session 两仓一致。
-- [~] **T8（P2，human ~3–6d / Codex ~1d）**：已完成 `agent_catalog/pagination.py`（含页边界/page shaping）、`agent_catalog/row_serialization.py`、`api/route_matching.py`、`api/error_envelope.py`、`services/verification_helpers.py`、`services/verification_queue_serialization.py` 与 `services/verification_queue_types.py` 多组无行为变更 facade 拆分；`app.py`、verification pipeline orchestration、repository 其余热点继续按小 PR 推进。
-  - 验证：现有 266+ 测试、conformance、composition 全绿，公开 facade 不变。
+- [~] **T8（P2，human ~3–6d / Codex ~1d）**：已完成 `agent_catalog/pagination.py`（含页边界/page shaping）、`agent_catalog/row_serialization.py`、`api/route_matching.py`、`api/error_envelope.py`、`api/request_dispatch.py`、`services/verification_helpers.py`、`services/verification_queue_serialization.py` 与 `services/verification_queue_types.py` 多组无行为变更 facade 拆分；FastAPI route registration、verification pipeline orchestration、repository 其余热点继续按小 PR 推进。
+  - 验证：现有 272+ 测试、conformance、composition 全绿，公开 facade 不变。
 - [~] **T9（P2，human ~3–5d / Codex ~1d）**：已完成 `core/catalog_text.py`、`core/catalog_views.py`、`core/catalog_scoring.py`、`api/route_matching.py`、`api/error_response.py`、`services/negotiation_policy_helpers.py` 与 `services/negotiation_policy_result.py` 多组无行为变更 facade 拆分；业务 catalog、negotiation orchestration 和 app factory 剩余热点继续按小 PR 推进。
   - 验证：现有 539+ 测试、conformance、composition 全绿。
 - [x] **T10（P2，human ~1d / Codex ~90min）**：两个 Python 仓库引入 `uv.lock`，Docker/CI 改 locked install；kiwi 强制 `npm ci`。
