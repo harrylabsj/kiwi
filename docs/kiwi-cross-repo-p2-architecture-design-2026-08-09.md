@@ -1,6 +1,6 @@
 # Kiwi 三产品跨仓库 P2 架构设计
 
-- 状态：实施中（T1–T5、T7、T10 已落地；T6 已落地固定 SHA 组合门禁但主链跨进程 E2E 仍待受控纳入；T8/T9 已完成多组纯 facade 拆分；T11 已落地受保护 OIDC 发布工作流与无发布权限的签名演练；T12 已具备 registry 下载校验和离线/只读回滚候选验证，真实 registry 回滚待受控推进）
+- 状态：实施中（T1–T5、T7、T10 已落地；T6 已落地固定 SHA 组合门禁与 `workflow_dispatch` 受控跨进程 E2E，尚未在 GitHub 受控环境实际 dispatch；T8/T9 已完成多组纯 facade 拆分，shopping-cli 请求体限流中间件已独立成模块；T11 已落地受保护 OIDC 发布工作流与无发布权限的签名演练；T12 已具备 registry 下载校验和离线/只读回滚候选验证，真实 registry 回滚待受控推进）
 - 日期：2026-08-09
 - 范围：`kiwi`、`kiwi-catalog`、`shopping-cli`
 - 目标：完成统一契约包、组合 CI、重复服务脚手架重构，以及依赖锁定、SBOM、签名与可验证发布链路
@@ -666,8 +666,9 @@ nightly 连续两次失败才创建阻断级事件，第一次标记 flaky candi
 - `contracts/conformance/python-service` 作为 dev-only 套件已接入两个 Python 服务；本地固定 lock 命令通过。
 - 三仓 GitHub Actions 已固定到完整 commit SHA；新增 `portfolio-integration.yml` 作为只读、无发布权限的固定 SHA 组合门禁，两个 Python Dockerfile 使用 digest 基础镜像、`uv.lock` 和 hash 校验依赖。
 - `release-rehearsal.yml` 已实现一次构建、SBOM、release manifest、keyless cosign blob 签名和 GitHub provenance attestation；新增 `portfolio-release.yml` 将同一 immutable bundle 接入 `kiwi-release` protected environment，使用 npm/PyPI Trusted Publishing OIDC 发布，并在发布后按 manifest digest 重新下载校验。
-- 本轮组合验收已通过 kiwi `npm run verify`（1617 tests）、新增 registry/release 单元测试 19 tests、catalog 锁定环境 272 tests、shopping 565 tests/121 subtests、双适配器 conformance、contract lock、release manifest/离线 rollback；`scripts/e2e-local.sh` 也验证了真实 shopping-cli API 上的 buyer ask → merchant counter → buyer accept_nonbinding 三消息链路。组合 gate 有意不重复两仓当前已知的全量 ruff/mypy 漂移，质量门禁仍由各仓 CI 负责。
-- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）、真实跨进程主链 E2E 的 CI 化，以及需要 GitHub `kiwi-release` 环境、Trusted Publisher 映射和有效 GitHub 授权的真实 registry 发布后回滚演练（T12）。已完成多组无行为变更拆分：catalog pagination/page shaping、catalog row serialization、catalog public views、catalog search scoring、verification queue result serialization/types、catalog request dispatch、shopping request dispatch、negotiation policy result、纯路由模板匹配器、错误 envelope/response、verification/negotiation 纯策略 helper；characterization tests 固定游标兼容性、页边界与游标生成、行投影、私有字段剥离、验证队列结果 round-trip/损坏输入、队列配置边界/值类型不可变、纯 dispatch 路径/方法/参数转发、路由、错误响应、时间格式、状态映射、私有阈值泄漏、CJK 搜索和评分权重行为。`scripts/rollback-drill.mjs` 与 `scripts/verify-rollback-candidate.mjs` 已完成离线/只读回滚验证。
+- 本轮组合验收已通过 kiwi `npm run verify`（1626 tests）；catalog 锁定环境全量 281 tests、`mypy` 79 个 source files 无问题、生产代码 ruff 仅保留 7 个已知且有意的 `S110` fail-open 清理分支；shopping-cli 全量 pytest 577（121 subtests）、`scripts/verify.sh` 的 unittest 527（6 skipped）+ Node 插件 7，ruff/mypy 全绿；双适配器 conformance、contract lock、release manifest/离线 rollback 也通过。`scripts/e2e-local.sh` 已由独立验收在真实 shopping-cli API 上跑通 buyer ask → merchant counter → buyer accept_nonbinding 三消息链路。
+- T6 的 `portfolio-integration.yml` 现在在固定 SHA、锁定依赖、契约锁和 conformance 之后提供 `workflow_dispatch` 专用跨进程 E2E 步骤，并设置 45 分钟 job timeout；普通 `pull_request` 不执行该长链路。当前本地三仓质量修复提交尚未进入公开组合锁：`portfolio.lock.json` 仍指向可从远程检出的历史 consumer 快照，不能在未确认远程可见前直接改为本地提交，否则固定 SHA checkout 会失败；后续应在受控推送/同步后更新 consumer SHAs，再实际 dispatch 一次组合门禁。
+- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）、GitHub 受控环境实际 dispatch 与 nightly 稳定性，以及需要 GitHub `kiwi-release` 环境、Trusted Publisher 映射和有效 GitHub 授权的真实 registry 发布后回滚演练（T12）。已完成多组无行为变更拆分：catalog pagination/page shaping、catalog row serialization、catalog public views、catalog search scoring、verification queue result serialization/types、catalog request dispatch、shopping request dispatch、shopping request-body limit middleware、negotiation policy result、纯路由模板匹配器、错误 envelope/response、verification/negotiation 纯策略 helper；characterization tests 固定游标兼容性、页边界与游标生成、行投影、私有字段剥离、验证队列结果 round-trip/损坏输入、队列配置边界/值类型不可变、纯 dispatch 路径/方法/参数转发、路由、错误响应、时间格式、状态映射、私有阈值泄漏、CJK 搜索和评分权重行为、ASGI body replay/413/取消传播。`scripts/rollback-drill.mjs` 与 `scripts/verify-rollback-candidate.mjs` 已完成离线/只读回滚验证。
 
 ## 16. 并行实施策略
 
@@ -705,14 +706,14 @@ Phase 0
   - 验证：修改 vendored schema 或 lock digest 任意一处会失败。
 - [x] **T5（P2，human ~1d / Codex ~90min）**：为 kiwi、kiwi-catalog 建 CI，并硬化 shopping-cli CI。
   - 验证：full tests、package smoke、SHA-pinned Actions policy 全绿。
-- [~] **T6（P2，human ~1.5d / Codex ~2h）**：建立固定 SHA 的 `portfolio-integration.yml` 确定性组合门禁；主链跨进程 E2E 仍保留在本地脚本/受控环境，尚未纳入无凭据的 PR workflow。
-  - 验证：错误 SHA 在执行前失败；组合门禁完成 kiwi 全量测试、两仓 locked install/契约锁、Python conformance。主链 shopping projection → catalog → kiwi discovery/negotiate/handoff 需单独受控环境演练。
+- [~] **T6（P2，human ~1.5d / Codex ~2h）**：建立固定 SHA 的 `portfolio-integration.yml` 确定性组合门禁，并把 `scripts/e2e-local.sh` 接入 `workflow_dispatch` 专用受控步骤；普通 PR 不启动长链路服务。
+  - 验证：错误 SHA 在执行前失败；组合门禁完成 kiwi 全量测试、两仓 locked install/契约锁、Python conformance；本地真实 HTTP buyer ask → merchant counter → buyer accept_nonbinding 已通过。GitHub 受控 dispatch 和 7 天稳定窗口仍待外部执行。
 - [x] **T7（P2，human ~1d / Codex ~90min）**：建立 Python service conformance adapter/cases。
   - 验证：FastAPI/fallback、auth/error/limits/idempotency/session 两仓一致。
 - [~] **T8（P2，human ~3–6d / Codex ~1d）**：已完成 `agent_catalog/pagination.py`（含页边界/page shaping）、`agent_catalog/row_serialization.py`、`api/route_matching.py`、`api/error_envelope.py`、`api/request_dispatch.py`、`services/verification_helpers.py`、`services/verification_queue_serialization.py` 与 `services/verification_queue_types.py` 多组无行为变更 facade 拆分；FastAPI route registration、verification pipeline orchestration、repository 其余热点继续按小 PR 推进。
-  - 验证：现有 272+ 测试、conformance、composition 全绿，公开 facade 不变。
-- [~] **T9（P2，human ~3–5d / Codex ~1d）**：已完成 `core/catalog_text.py`、`core/catalog_views.py`、`core/catalog_scoring.py`、`api/route_matching.py`、`api/error_response.py`、`api/request_dispatch.py`、`services/negotiation_policy_helpers.py`、`services/negotiation_policy_result.py` 与 `services/negotiation_snapshot.py` 多组无行为变更 facade 拆分；业务 catalog、negotiation orchestration 和 app factory 剩余热点继续按小 PR 推进。
-  - 验证：现有 565+ 测试、conformance、composition 全绿。
+  - 验证：kiwi-catalog 全量 281 tests、mypy 79 个 source files 通过，公开 facade 不变；conformance、composition 需在同步后的固定 SHA 上复跑。
+- [~] **T9（P2，human ~3–5d / Codex ~1d）**：已完成 `core/catalog_text.py`、`core/catalog_views.py`、`core/catalog_scoring.py`、`api/route_matching.py`、`api/error_response.py`、`api/request_dispatch.py`、`api/request_limits.py`、`services/negotiation_policy_helpers.py`、`services/negotiation_policy_result.py` 与 `services/negotiation_snapshot.py` 多组无行为变更 facade 拆分；业务 catalog、negotiation orchestration 和 app factory 剩余热点继续按小 PR 推进。shopping-cli 最新拆分为 `ce928cb`，保留 `shopping_cli.api.app` 兼容导入别名。
+  - 验证：shopping-cli pytest 577（121 subtests）、verify.sh unittest 527（6 skipped）+ 插件 7、ruff/mypy 全绿；conformance、composition 仍需在同步后的固定 SHA 上复跑。
 - [x] **T10（P2，human ~1d / Codex ~90min）**：两个 Python 仓库引入 `uv.lock`，Docker/CI 改 locked install；kiwi 强制 `npm ci`。
   - 验证：lock stale、依赖现场漂移和未固定 base image 均失败。
 - [~] **T11（P2，human ~1.5d / Codex ~2h）**：已建立 build-once、SBOM、keyless cosign blob 签名、GitHub provenance attestation，以及 `portfolio-release.yml` 受保护 OIDC 发布工作流。代码侧已完成；真实 npm/PyPI publish 仍需人工配置 `kiwi-release` environment、Trusted Publisher 映射、版本 bump 和有效 GitHub 授权。
