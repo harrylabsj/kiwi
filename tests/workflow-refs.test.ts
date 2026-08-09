@@ -116,4 +116,60 @@ describe("GitHub workflow action refs", () => {
     // Uppercase 40-char hex is not a lowercase commit SHA; publish=true rejects it.
     expect(() => runWith(UPPER_SHA, "true")).toThrow(/publish=true requires ref/);
   });
+
+  it("release lock-match step requires the publish ref to equal portfolio.lock.json repositories.kiwi.commit", () => {
+    const src = readFileSync(join(WORKFLOWS_DIR, "portfolio-release.yml"), "utf8");
+    const doc = YAML.parse(src) as {
+      jobs?: Record<
+        string,
+        {
+          steps?: Array<{
+            name?: string;
+            run?: string;
+            env?: Record<string, string>;
+          }>;
+        }
+      >;
+    };
+    const steps = Object.values(doc.jobs ?? {}).flatMap((job) => job.steps ?? []);
+    const lockMatch = steps.find((s) => s.name?.includes("Verify central ref matches portfolio lock"));
+    expect(lockMatch).toBeDefined();
+
+    // ref, publish, and the lock output all flow through env, never shell-interpolated.
+    expect(lockMatch!.env).toEqual(
+      expect.objectContaining({
+        REF_INPUT: "${{ inputs.ref }}",
+        PUBLISH_INPUT: "${{ inputs.publish }}",
+        LOCKED_KIWI_SHA: "${{ steps.lock.outputs.kiwi_sha }}",
+      }),
+    );
+
+    const run = lockMatch!.run ?? "";
+    expect(run).not.toMatch(/\$\{\{\s*(inputs|steps)\.[^}]*\}\}/);
+
+    // Execute the exact lock-match shell block against the ref/publish/lock matrix.
+    const runWith = (ref: string, publish: string, locked: string): void => {
+      execFileSync("/bin/bash", ["-c", run], {
+        env: { ...process.env, REF_INPUT: ref, PUBLISH_INPUT: publish, LOCKED_KIWI_SHA: locked },
+        stdio: "pipe",
+      });
+    };
+
+    const LOCKED_SHA = "0123456789abcdef0123456789abcdef01234567";
+    const OTHER_SHA = "fedcba9876543210fedcba9876543210fedcba98";
+
+    // publish=true accepts the ref only when it exactly matches the locked kiwi commit.
+    expect(() => runWith(LOCKED_SHA, "true", LOCKED_SHA)).not.toThrow();
+
+    // publish=true with a central ref different from the lock fails closed.
+    expect(() => runWith(OTHER_SHA, "true", LOCKED_SHA)).toThrow(/does not match portfolio\.lock\.json/);
+
+    // publish=true with no repositories.kiwi.commit in the lock fails closed.
+    expect(() => runWith(OTHER_SHA, "true", "")).toThrow(/no repositories\.kiwi\.commit/);
+
+    // Dry-run keeps named refs allowed and does not require a lock match, even
+    // when the lock SHA is absent.
+    expect(() => runWith("main", "false", LOCKED_SHA)).not.toThrow();
+    expect(() => runWith("main", "false", "")).not.toThrow();
+  });
 });
