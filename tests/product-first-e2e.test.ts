@@ -69,6 +69,7 @@ describe("product-first discovery E2E (CD #28)", () => {
 
       const outcome = await negotiateWithAgent({
         catalog: s.catalogUrl,
+        allowLoopback: true, // 本地 127.0.0.1 测试栈
         catalogSource: source,
         catalogAgentId: ownerAgentId,
         sku: "sku-001",

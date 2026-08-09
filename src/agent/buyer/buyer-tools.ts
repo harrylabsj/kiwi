@@ -210,6 +210,11 @@ export interface BuyerToolDeps {
   /** agent catalog base URL（`negotiate_buyer_task` 的 A2A 商家发现用）。 */
   catalog?: string;
   /**
+   * 本地开发 loopback 放行（透传给 negotiateWithAgent → AgentDiscovery；
+   * 缺省 false，fail-closed）。仅测试/本地联调环境显式传 true。
+   */
+  allowLoopback?: boolean;
+  /**
    * kiwi-catalog listing 源（rev1.5 CD #27 Product-first）。注入时挂载
    * `search_listings` / `shortlist_listing` 工具；缺失时工具不挂载
    * （fail-closed，legacy marketplace 搜索路径不变）。
@@ -288,6 +293,7 @@ async function executeNegotiateBuyerTask(
   const sku = intent.category ?? intent.query_text ?? NEGOTIATE_SKU;
   const result = await negotiateWithAgent({
     catalog: deps.catalog,
+    allowLoopback: deps.allowLoopback === true,
     // CD #27：listing → owner_agent_id → getRecord → fresh verify 全链，
     // 与 search_listings 同一注入源（历史教训：只注入 search 面不注入磋商面）。
     ...(deps.catalogSource !== undefined ? { catalogSource: deps.catalogSource } : {}),

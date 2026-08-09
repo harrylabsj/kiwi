@@ -58,6 +58,7 @@ describe("negotiateWithAgent parameterization", () => {
     const s = await stack(capture);
     const result = await negotiateWithAgent({
       catalog: s.catalogUrl,
+      allowLoopback: true, // 本地 127.0.0.1 测试栈
       sku: "sku-007",
       quantity: 3,
       deliveryBefore: "2026-09-01T00:00:00Z",
@@ -87,6 +88,7 @@ describe("negotiateWithAgent parameterization", () => {
     const s = await stack(capture);
     const result = await negotiateWithAgent({
       catalog: s.catalogUrl,
+      allowLoopback: true, // 本地 127.0.0.1 测试栈
       sku: "sku-007",
       quantity: 3,
       dealPriceMinor: 9_000, // 90.00 元
@@ -104,7 +106,7 @@ describe("negotiateWithAgent parameterization", () => {
 
   it("defaults keep the /negotiate constants (regression)", async () => {
     const s = await stack();
-    const result = await negotiateWithAgent({ catalog: s.catalogUrl });
+    const result = await negotiateWithAgent({ catalog: s.catalogUrl, allowLoopback: true });
     expect(result.ok).toBe(true);
     expect(result.facts?.sku).toBe(NEGOTIATE_SKU);
     expect(result.facts?.quantity).toBe(NEGOTIATE_QUANTITY);
@@ -116,6 +118,7 @@ describe("negotiateWithAgent parameterization", () => {
     const s = await stack();
     const result = await negotiateWithAgent({
       catalog: s.catalogUrl,
+      allowLoopback: true, // 本地 127.0.0.1 测试栈
       catalogAgentId: "cagt_missing",
     });
     expect(result.ok).toBe(false);

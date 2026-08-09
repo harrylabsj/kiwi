@@ -53,7 +53,8 @@ async function serveCard(body: unknown): Promise<string> {
 describe("AgentDiscovery.resolve: agentCardUrl", () => {
   it("拉取并校验 Agent Card，产出 profile + direct 候选", async () => {
     const base = await serveCard(agentCardJson("http://127.0.0.1:1"));
-    const discovery = new AgentDiscovery();
+    // 本地 127.0.0.1 测试服务器：显式 allowLoopback: true 放行。
+    const discovery = new AgentDiscovery({ allowLoopback: true });
     const profile = await discovery.resolve({ agentCardUrl: `${base}/card.json` });
 
     expect(profile.identity).toBe("Acme");
@@ -76,7 +77,10 @@ describe("AgentDiscovery.resolve: agentCardUrl", () => {
         ],
       }),
     );
-    const discovery = new AgentDiscovery({ hosted: { configured: true, config_id: "local" } });
+    const discovery = new AgentDiscovery({
+      allowLoopback: true,
+      hosted: { configured: true, config_id: "local" },
+    });
     const profile = await discovery.resolve({ agentCardUrl: `${base}/card.json` });
 
     expect(profile.intersection.compatible).toBe(false);
@@ -86,7 +90,10 @@ describe("AgentDiscovery.resolve: agentCardUrl", () => {
 
   it("A2A 可用且 hosted 已配置 → direct 优先（候选顺序 direct → hosted）", async () => {
     const base = await serveCard(agentCardJson("http://127.0.0.1:1"));
-    const discovery = new AgentDiscovery({ hosted: { configured: true, config_id: "local" } });
+    const discovery = new AgentDiscovery({
+      allowLoopback: true,
+      hosted: { configured: true, config_id: "local" },
+    });
     const profile = await discovery.resolve({ agentCardUrl: `${base}/card.json` });
 
     expect(profile.channel_candidates.map((c) => c.kind)).toEqual(["a2a-direct", "shopping-cli-hosted"]);
@@ -101,7 +108,7 @@ describe("AgentDiscovery.resolve: agentCardUrl", () => {
         ],
       }),
     );
-    const discovery = new AgentDiscovery();
+    const discovery = new AgentDiscovery({ allowLoopback: true });
     await expect(discovery.resolve({ agentCardUrl: `${base}/card.json` })).rejects.toMatchObject({
       code: "no_channel_candidate",
     });
@@ -111,14 +118,15 @@ describe("AgentDiscovery.resolve: agentCardUrl", () => {
     const base = await serveCard(
       agentCardJson("http://127.0.0.1:1", { api_key: "sk_live_1234567890abcdef" }),
     );
-    const discovery = new AgentDiscovery();
+    const discovery = new AgentDiscovery({ allowLoopback: true });
     await expect(discovery.resolve({ agentCardUrl: `${base}/card.json` })).rejects.toMatchObject({
       code: "card_has_secret",
     });
   });
 
   it("fetch 失败 → card_fetch_failed（fail-closed）", async () => {
-    const discovery = new AgentDiscovery();
+    // allowLoopback: true 让 URL 过安全策略，保留"端口无服务 → 真实 fetch 失败"的语义。
+    const discovery = new AgentDiscovery({ allowLoopback: true });
     await expect(
       discovery.resolve({ agentCardUrl: "http://127.0.0.1:1/nope.json" }),
     ).rejects.toMatchObject({ code: "card_fetch_failed" });
@@ -133,6 +141,88 @@ describe("AgentDiscovery.resolve: agentCardUrl", () => {
     await expect(
       discovery.resolve({ agentCardUrl: "https://remote.example/.well-known/agent-card.json" }),
     ).rejects.toMatchObject({ code: "no_channel_candidate" });
+  });
+
+  it("默认拒绝 loopback Agent Card URL（allowLoopback 缺省 false，fail-closed）", async () => {
+    const base = await serveCard(agentCardJson("http://127.0.0.1:1"));
+    const discovery = new AgentDiscovery();
+    await expect(discovery.resolve({ agentCardUrl: `${base}/card.json` })).rejects.toMatchObject({
+      code: "card_fetch_failed",
+    });
+  });
+
+  it("allowLoopback: true 显式放行 loopback Agent Card URL", async () => {
+    const base = await serveCard(agentCardJson("http://127.0.0.1:1"));
+    const discovery = new AgentDiscovery({ allowLoopback: true });
+    const profile = await discovery.resolve({ agentCardUrl: `${base}/card.json` });
+
+    expect(profile.identity).toBe("Acme");
+    expect(profile.channel_candidates).toContainEqual({
+      kind: "a2a-direct",
+      url: "http://127.0.0.1:1/a2a",
+    });
+  });
+
+  it("远程 card + loopback direct interface → 默认拒绝该候选（仅保留显式配置的 hosted）", async () => {
+    // card 从远程 https 源拉取（URL 合法），但其返回的 direct interface 指向 loopback。
+    const card = agentCardJson("http://127.0.0.1:8765");
+    const discovery = new AgentDiscovery({
+      skipDnsCheck: true,
+      hosted: { configured: true, config_id: "local" },
+      fetchImpl: async () => new globalThis.Response(JSON.stringify(card), { status: 200 }),
+    });
+    const profile = await discovery.resolve({
+      agentCardUrl: "https://remote.example/.well-known/agent-card.json",
+    });
+    // direct 候选被丢弃（fail-closed），hosted 候选保留——但 selectChannelCandidate 不得选到 loopback。
+    expect(profile.channel_candidates.map((c) => c.kind)).toEqual(["shopping-cli-hosted"]);
+    expect(selectChannelCandidate(profile)?.kind).toBe("shopping-cli-hosted");
+  });
+
+  it("allowLoopback 不放行 Agent Card URL 的私网/保留网段目标", async () => {
+    const discovery = new AgentDiscovery({ allowLoopback: true, skipDnsCheck: true });
+    await expect(
+      discovery.resolve({ agentCardUrl: "https://10.0.0.1/.well-known/agent-card.json" }),
+    ).rejects.toMatchObject({ code: "card_fetch_failed" });
+  });
+
+  it("allowLoopback 不放行 direct 候选的私网/保留网段目标", async () => {
+    const card = agentCardJson("http://127.0.0.1:1", {
+      supportedInterfaces: [
+        { url: "https://10.0.0.5/a2a", protocolBinding: "JSONRPC", protocolVersion: "1.0" },
+      ],
+    });
+    const discovery = new AgentDiscovery({
+      allowLoopback: true,
+      skipDnsCheck: true,
+      fetchImpl: async () => new globalThis.Response(JSON.stringify(card), { status: 200 }),
+    });
+    await expect(
+      discovery.resolve({ agentCardUrl: "https://remote.example/.well-known/agent-card.json" }),
+    ).rejects.toMatchObject({ code: "no_channel_candidate" });
+  });
+
+  it("DNS 复查：远程主机名解析到 loopback → 默认拒绝（DNS rebinding 约束不放宽）", async () => {
+    const card = agentCardJson("https://remote.example");
+    const discovery = new AgentDiscovery({
+      resolveIp: async () => ["127.0.0.1"],
+      fetchImpl: async () => new globalThis.Response(JSON.stringify(card), { status: 200 }),
+    });
+    await expect(
+      discovery.resolve({ agentCardUrl: "https://remote.example/.well-known/agent-card.json" }),
+    ).rejects.toMatchObject({ code: "card_fetch_failed" });
+  });
+
+  it("allowLoopback 不放宽 DNS 复查的私网拒绝（解析到 RFC1918 仍 fail-closed）", async () => {
+    const card = agentCardJson("https://remote.example");
+    const discovery = new AgentDiscovery({
+      allowLoopback: true,
+      resolveIp: async () => ["10.0.0.7"],
+      fetchImpl: async () => new globalThis.Response(JSON.stringify(card), { status: 200 }),
+    });
+    await expect(
+      discovery.resolve({ agentCardUrl: "https://remote.example/.well-known/agent-card.json" }),
+    ).rejects.toMatchObject({ code: "card_fetch_failed" });
   });
 
   it("非法输入：domain 与 agentCardUrl 同时提供 → invalid_input", async () => {

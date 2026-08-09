@@ -43,6 +43,11 @@
  *
  * 全部失败路径抛 DiscoveryError（fail-closed，§4.6）。
  *
+ * SSRF 策略：远程 Agent Card URL 的 fetch 默认拒绝 loopback（127.0.0.1 /
+ * ::1 / localhost），A2A direct interface 默认拒绝 loopback/私网/保留网段；
+ * `DiscoveryDeps.allowLoopback: true` 显式放行本地开发（仅 loopback，私网/
+ * 保留网段仍始终拒绝）。
+ *
  * v2.3（设计 §21 / MVP Slice A/B）：DiscoveryDeps.catalog 可选配置后启用
  * resolveViaCatalog —— 通过 shopping-cli Commerce Agent Catalog 发现候选并升级为
  * CounterpartyProfile。catalog 候选不是已证明的在线身份（契约 §1），升级路径
@@ -72,11 +77,7 @@ import type {
   VerificationStatus,
 } from "./catalog-source/index.js";
 import type { ChannelCandidate, CounterpartyProfile } from "../counterparty/channel.js";
-import {
-  assertResolvableTargetUrl,
-  assertSafeTargetUrl,
-  isLoopbackHost,
-} from "../a2a/client/url-policy.js";
+import { assertResolvableTargetUrl, assertSafeTargetUrl } from "../a2a/client/url-policy.js";
 import { readJsonBody, SafeHttpError } from "../net/safe-http.js";
 
 export interface DiscoveryInput {
@@ -130,6 +131,14 @@ export interface DiscoveryDeps {
   resolveIp?: (hostname: string) => Promise<string[]>;
   /** 跳过 SSRF DNS 复查（仅测试/受控环境；生产缺省 false）。 */
   skipDnsCheck?: boolean;
+  /**
+   * 允许 loopback 目标（远程 Agent Card URL 的 fetch 与 A2A direct interface）。
+   * 缺省 false，fail-closed：远程 Agent Card 不得把发现过程或通道候选指向
+   * loopback。仅显式传 true 放行本地开发（localhost / 127.0.0.1 / ::1）；
+   * 私网/保留网段（RFC1918、link-local、CGNAT、metadata 等）始终拒绝，不被
+   * 本开关放开 —— HTTPS/userinfo/重定向/DNS rebinding 约束不因本开关放宽。
+   */
+  allowLoopback?: boolean;
   /**
    * UCP 集成（WP3）：domain 输入先试 `/.well-known/ucp`，失败回退
    * `/.well-known/agent-card.json`。缺省启用（不传即用默认 resolver）；
@@ -272,13 +281,16 @@ export class AgentDiscovery {
 
   private async fetchCard(url: string): Promise<unknown> {
     // SSRF 防护（与 UCP resolver 同级，catalog 驱动的 agent_card_url 同样受保护）：
-    //   1. 静态校验（scheme/userinfo/保留网段/loopback http 例外）；
-    //   2. 请求前 DNS 复查（主机名解析的每个 IP 过保留网段判定，防 rebinding）；
+    //   1. 静态校验（scheme/userinfo/保留网段；loopback 默认拒绝，
+    //      deps.allowLoopback 显式放行本地开发）；
+    //   2. 请求前 DNS 复查（主机名解析的每个 IP 过保留网段判定，防 rebinding；
+    //      allowLoopback 只影响 loopback 判定，私网/保留网段不放宽）；
     //   3. 不跟随重定向（redirect:"manual"，3xx → 拒绝）。
     let safeUrl: URL;
     try {
-      safeUrl = assertSafeTargetUrl(url);
+      safeUrl = assertSafeTargetUrl(url, { allowLoopback: this.deps.allowLoopback === true });
       await assertResolvableTargetUrl(safeUrl, {
+        allowLoopback: this.deps.allowLoopback === true,
         skipDnsCheck: this.deps.skipDnsCheck,
         resolveIp: this.deps.resolveIp,
       });
@@ -439,13 +451,12 @@ export class AgentDiscovery {
       );
     }
 
-    let cardHostIsLoopback = false;
-    try {
-      cardHostIsLoopback = isLoopbackHost(new URL(cardUrl).hostname);
-    } catch {
-      // fetchCard already validated the URL; keep this defensive fallback.
-    }
-    const { intersection, candidates } = this.channelCandidates(card, cardHostIsLoopback);
+    // direct 通道候选的 loopback 放行只由 deps.allowLoopback 决定（缺省 false）：
+    // 远程 card 返回 loopback interface → fail-closed；本地开发显式传 true 放行。
+    const { intersection, candidates } = this.channelCandidates(
+      card,
+      this.deps.allowLoopback === true,
+    );
     if (candidates.length === 0) {
       throw new DiscoveryError(
         "no_channel_candidate",
