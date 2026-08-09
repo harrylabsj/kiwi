@@ -666,7 +666,7 @@ nightly 连续两次失败才创建阻断级事件，第一次标记 flaky candi
 - `contracts/conformance/python-service` 作为 dev-only 套件已接入两个 Python 服务；本地固定 lock 命令通过。
 - 三仓 GitHub Actions 已固定到完整 commit SHA；两个 Python Dockerfile 使用 digest 基础镜像、`uv.lock` 和 hash 校验依赖。
 - `release-rehearsal.yml` 已实现一次构建、SBOM、release manifest、keyless cosign blob 签名和 GitHub provenance attestation；该 workflow 不自动发布到公共 registry。
-- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）以及需要真实受保护 registry 环境的发布后回滚演练（T12）。已完成两组无行为变更拆分：纯路由模板匹配器分别移入 `api/route_matching.py`，错误 envelope/response 分别移入 `api/error_envelope.py` 与 `api/error_response.py`；characterization tests 固定路由、字面量转义、参数提取和错误响应形状。`scripts/rollback-drill.mjs` 已完成离线“上一版本 → 回滚 → 当前版本恢复”演练。
+- 尚未关闭项是热点文件剩余职责的分阶段拆分（T8/T9）以及需要真实受保护 registry 环境的发布后回滚演练（T12）。已完成三组无行为变更拆分：纯路由模板匹配器分别移入 `api/route_matching.py`，错误 envelope/response 分别移入 `api/error_envelope.py` 与 `api/error_response.py`，verification/negotiation 纯策略 helper 分别移入 `services/verification_helpers.py` 与 `services/negotiation_policy_helpers.py`；characterization tests 固定路由、错误响应、时间格式、状态映射和私有阈值泄漏检测。`scripts/rollback-drill.mjs` 已完成离线“上一版本 → 回滚 → 当前版本恢复”演练。
 
 ## 16. 并行实施策略
 
@@ -708,9 +708,9 @@ Phase 0
   - 验证：shopping projection → catalog → kiwi discovery/negotiate/handoff 完成，错误 SHA 在执行前失败。
 - [x] **T7（P2，human ~1d / Codex ~90min）**：建立 Python service conformance adapter/cases。
   - 验证：FastAPI/fallback、auth/error/limits/idempotency/session 两仓一致。
-- [~] **T8（P2，human ~3–6d / Codex ~1d）**：已完成 `api/route_matching.py` 与 `api/error_envelope.py` 两组无行为变更 facade 拆分；`app.py`、verification pipeline、repository 等剩余热点继续按小 PR 推进。
+- [~] **T8（P2，human ~3–6d / Codex ~1d）**：已完成 `api/route_matching.py`、`api/error_envelope.py` 与 `services/verification_helpers.py` 三组无行为变更 facade 拆分；`app.py`、verification pipeline orchestration、repository 等剩余热点继续按小 PR 推进。
   - 验证：现有 215+ 测试、conformance、composition 全绿，公开 facade 不变。
-- [~] **T9（P2，human ~3–5d / Codex ~1d）**：已完成 `api/route_matching.py` 与 `api/error_response.py` 两组无行为变更 facade 拆分；业务 catalog、negotiation 和 app factory 剩余热点继续按小 PR 推进。
+- [~] **T9（P2，human ~3–5d / Codex ~1d）**：已完成 `api/route_matching.py`、`api/error_response.py` 与 `services/negotiation_policy_helpers.py` 三组无行为变更 facade 拆分；业务 catalog、negotiation orchestration 和 app factory 剩余热点继续按小 PR 推进。
   - 验证：现有 509+ 测试、conformance、composition 全绿。
 - [x] **T10（P2，human ~1d / Codex ~90min）**：两个 Python 仓库引入 `uv.lock`，Docker/CI 改 locked install；kiwi 强制 `npm ci`。
   - 验证：lock stale、依赖现场漂移和未固定 base image 均失败。
