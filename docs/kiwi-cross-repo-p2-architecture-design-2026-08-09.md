@@ -682,6 +682,7 @@ nightly 连续两次失败才创建阻断级事件，第一次标记 flaky candi
 - 本轮 catalog verification audit policy 拆分（T8/T9 纯结构）：`1f7101e` 新增 `services/verification_audit_policy.py`，将 `_finalize` 的 §23 audit event 与 §24 verified funnel 纯决策抽出为有序 side-effect plan，facade 仅执行既有 append/metric 顺序；新增策略与 facade characterization tests，覆盖 refreshed-first、commerce/verified/rejected/STALE、空 stages fallback 和公开字段边界。独立验收目标集 68、全量 pytest 469、unittest 232、ruff（忽略 7 个既有 S110）全绿、mypy 91 source files 通过。
 - 本轮 catalog profile index 拆分（T8/T9 纯结构）：`c74a66d` 新增 `services/verification_profile_index.py`，将 `_index_profiles` 的 capabilities/skills 合并与 agent_card/ucp_profile endpoint 字段整形移出，facade 仅保留原顺序的三个 repository 写入调用；新增 characterization tests 覆盖空/重复列表、字段映射、输入不变性及 delegation 顺序。独立验收目标集 52、全量 pytest 480、unittest 232、ruff（忽略 7 个既有 S110）全绿、mypy 92 source files 通过。
 - 本轮 release/rollback 离线验收补强：`b5fc074` 新增 `tests/release-manifest-rollback.test.ts`，以临时 fixture 实测 `verify-release-manifest.mjs` 的合法/篡改/未绑定 SHA/路径穿越 fail-closed 行为，以及 `rollback-drill.mjs` 的 previous/current symlink 激活与恢复；新增 11 tests，Kiwi 最新 `npm run verify` 通过 116 个测试文件、1680 tests、contracts/vectors/package smoke。
+- catalog CI lint 收口：`1a70c6f` 为 `pyproject.toml` 固定 Ruff `target-version=py311`、`line-length=120` 与 `E4/E7/E9/F` 规则集，并修复确定性 E/F 阻断项；workflow 同款 `ruff check kiwi_catalog tests scripts`、pytest 480、unittest 232、mypy 92 source files 均通过。
 - claude-ds 对剩余 `VerificationService` 纯状态候选做了边界审查，确认 `_apply_*` 仅是数据库状态写入，`_stage_*` 仍承担状态机惰性求值与持久化顺序，当前没有收益足够且无行为风险的进一步纯 leaf；因此未强行拆分，保持状态机/事务边界集中。
 
 ## 16. 并行实施策略
