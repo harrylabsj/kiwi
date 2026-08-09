@@ -314,8 +314,16 @@ export function newInstanceId(): string {
   return randomBytes(16).toString("hex");
 }
 
-/** Detect the shopping-cli source checkout (sibling of the Kiwi package). */
+/** Detect a nearby shopping-cli source checkout.
+ *
+ * Local development keeps the repositories as siblings, while composition CI
+ * checks the pinned consumer out below the Kiwi workspace. Support both
+ * layouts so `kiwi init` remains deterministic in either environment.
+ */
 export function detectShoppingCliSrc(packageRoot: string): string | undefined {
-  const candidate = path.resolve(packageRoot, "..", "shopping-cli");
-  return existsSync(path.join(candidate, "shopping_cli")) ? candidate : undefined;
+  const candidates = [
+    path.resolve(packageRoot, "..", "shopping-cli"),
+    path.resolve(packageRoot, "shopping-cli"),
+  ];
+  return candidates.find((candidate) => existsSync(path.join(candidate, "shopping_cli")));
 }
