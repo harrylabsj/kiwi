@@ -1,0 +1,55 @@
+name: Supply-chain rehearsal
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: lock
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const lock = JSON.parse(require('fs').readFileSync('portfolio.lock.json', 'utf8'));
+          for (const [name, value] of Object.entries(lock.repositories)) {
+            console.log(`${name.replace('-', '_')}_sha=${value.commit}`);
+          }
+          NODE
+      - uses: actions/checkout@v4
+        with:
+          repository: harrylabsj/kiwi-catalog
+          ref: ${{ steps.lock.outputs.kiwi_catalog_sha }}
+          path: kiwi-catalog
+      - uses: actions/checkout@v4
+        with:
+          repository: harrylabsj/shopping-cli
+          ref: ${{ steps.lock.outputs.shopping_cli_sha }}
+          path: shopping-cli
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install "uv==0.10.6"
+      - name: Generate dependency evidence
+        run: |
+          mkdir -p artifacts
+          npm sbom --sbom-format=spdx > artifacts/kiwi.spdx.json
+          (cd kiwi-catalog && uv export --locked --format requirements.txt) > artifacts/kiwi-catalog.requirements.txt
+          (cd shopping-cli && uv export --locked --format requirements.txt) > artifacts/shopping-cli.requirements.txt
+          sha256sum artifacts/* > artifacts/SHA256SUMS
+          tar -czf portfolio-sbom.tgz artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portfolio-sbom
+          path: portfolio-sbom.tgz
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: portfolio-sbom.tgz
