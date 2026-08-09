@@ -791,14 +791,25 @@ export class AgentKernel {
     } catch {
       return undefined;
     }
-    if (pending.every((m) => this.settledNegotiations.has(m.conversation_id))) {
+    const settledKey = (message: { conversation_id: string; message_id: number }): string =>
+      `${message.conversation_id}:${message.message_id}`;
+    if (pending.every((m) => this.settledNegotiations.has(settledKey(m)))) {
       return undefined;
     }
+
+    // Never let an abandoned/settled message at the head of the pending list
+    // starve a live message behind it. A new message in the same conversation
+    // has a different key and remains eligible.
+    const skipMessageIds = new Set(
+      pending
+        .filter((m) => this.settledNegotiations.has(settledKey(m)))
+        .map((m) => m.message_id),
+    );
 
     // Buyer: negotiate toward the linked task's goal (quantity / target unit
     // price / budget) instead of the profile defaults.
     let hints: DecisionHints | undefined;
-    const firstPending = pending[0];
+    const firstPending = pending.find((m) => !skipMessageIds.has(m.message_id));
     if (firstPending !== undefined && this.profile.role === "buyer" && this.taskStore !== undefined) {
       const link = this.taskStore.linkByConversation(firstPending.conversation_id);
       if (link !== undefined) {
@@ -809,7 +820,10 @@ export class AgentKernel {
 
     const runner = new DeterministicNegotiationRunner(this.profile, this.commerceClient);
     const prepared = await runner
-      .prepare({ ...(hints !== undefined ? { hints } : {}) })
+      .prepare({
+        ...(hints !== undefined ? { hints } : {}),
+        ...(skipMessageIds.size > 0 ? { skipMessageIds } : {}),
+      })
       .catch(() => undefined);
     if (prepared === undefined) return undefined;
     const convId = prepared.binding.conversation_id;
@@ -817,11 +831,11 @@ export class AgentKernel {
     // Termination: STOP when the counterpart just accepted our offer — report
     // the consensus once and never re-open this conversation.
     if (prepared.counterpart_action === "accept_nonbinding") {
-      this.settledNegotiations.add(convId);
+      this.settledNegotiations.add(settledKey(prepared.binding));
       await runner.abandon(prepared, "counterpart accepted non-binding — consensus").catch(() => undefined);
       return `已达成共识（对方接受非绑定报价），磋商结束，不再继续。`;
     }
-    if (this.settledNegotiations.has(convId)) {
+    if (this.settledNegotiations.has(settledKey(prepared.binding))) {
       await runner.abandon(prepared, "negotiation already settled").catch(() => undefined);
       return undefined;
     }
@@ -829,7 +843,9 @@ export class AgentKernel {
     const outcome = await runner.submit(prepared).catch(() => undefined);
     if (outcome === undefined) return "磋商处理失败（网关异常），下一轮自动重试。";
     // Our own non-binding acceptance ends the negotiation.
-    if (prepared.decision.action === "accept_nonbinding") this.settledNegotiations.add(convId);
+    if (prepared.decision.action === "accept_nonbinding") {
+      this.settledNegotiations.add(settledKey(prepared.binding));
+    }
 
     const counterpart =
       prepared.counterpart_message !== undefined
