@@ -14,6 +14,7 @@ import { runChatTui } from "../src/agent/chat-tui.js";
 import { createFakeChatModels } from "../src/agent/fake-chat-model.js";
 import { AgentKernel } from "../src/agent/kernel.js";
 import { EnvKeyProvider, PrivateVault } from "../src/agent/memory/vault.js";
+import { PRODUCT_VERSION } from "../src/product-cli.js";
 import { startTestA2aStack, testProfile } from "./helpers.js";
 import { streams } from "./tui-helpers.js";
 
@@ -65,7 +66,7 @@ describe("runChatTui TTY 样式（Neural Awakening）", () => {
       expect(out).toContain("██"); // art 可见
       // 欢迎面板：版本标题 + 会话/模型/命令信息行
       expect(out).toContain("┌─"); // 面板顶边
-      expect(out).toContain("kiwi 0.6.0");
+      expect(out).toContain(`kiwi ${PRODUCT_VERSION}`);
       expect(out).toContain("会话:");
       expect(out).toContain("模型:");
       expect(out).toContain("命令:");

@@ -5,11 +5,12 @@
  */
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 const DIST_CLI = path.resolve(__dirname, "..", "dist", "cli.js");
+const PRODUCT_VERSION = (JSON.parse(readFileSync(path.resolve(__dirname, "..", "package.json"), "utf-8")) as { version: string }).version;
 
 function run(args: string[]): { status: number; stdout: string } {
   try {
@@ -39,7 +40,7 @@ describe.skipIf(!existsSync(DIST_CLI))("CLI entrypoint guard", () => {
 
       const version = run([link, "--version"]);
       expect(version.status).toBe(0);
-      expect(version.stdout).toBe("kiwi 0.6.0\n");
+      expect(version.stdout).toBe(`kiwi ${PRODUCT_VERSION}\n`);
 
       const help = run([link, "--help"]);
       expect(help.status).toBe(0);
@@ -52,7 +53,7 @@ describe.skipIf(!existsSync(DIST_CLI))("CLI entrypoint guard", () => {
   it("--version also works on the real path directly", () => {
     const version = run([DIST_CLI, "--version"]);
     expect(version.status).toBe(0);
-    expect(version.stdout).toBe("kiwi 0.6.0\n");
+    expect(version.stdout).toBe(`kiwi ${PRODUCT_VERSION}\n`);
   });
 
   it("importing the CLI module has no side effects", async () => {
@@ -63,7 +64,8 @@ describe.skipIf(!existsSync(DIST_CLI))("CLI entrypoint guard", () => {
       writes.push(String(chunk));
       return true;
     }) as typeof process.stdout.write;
-    process.stderr.write = process.stdout.write;
+    // Keep stderr outside this assertion: importing node:sqlite may emit an
+    // ExperimentalWarning asynchronously, which is unrelated to CLI guards.
     try {
       // Cache-busting query forces a fresh module evaluation; the guard must
       // keep main() from running because argv[1] is the test runner.

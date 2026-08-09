@@ -13,7 +13,7 @@
  * 全 false、无订单/支付/库存事件、terms_digest 一致性、无证据永不确认、
  * 指标可观测（agreement_to_handoff_rate=1、launch/opened 率）。
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -67,6 +67,13 @@ const capture: CapturedInbound[] = [];
 afterEach(async () => {
   for (const s of stacks.splice(0)) await s.stop().catch(() => undefined);
   capture.length = 0;
+  vi.unstubAllEnvs();
+});
+
+beforeEach(() => {
+  // The buyer profile and assertions are Chinese; pin locale so CI host LANG
+  // cannot silently switch the user-visible negotiation summary to English.
+  vi.stubEnv("KIWI_LANG", "zh");
 });
 
 function buyerPolicyBase() {
