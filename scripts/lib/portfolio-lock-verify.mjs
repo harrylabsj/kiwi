@@ -23,8 +23,10 @@
 //      64 位小写 bundle hex；
 //   2. kiwi contracts/manifest.json 的 bundle_sha256 与 lock 的
 //      contract_bundle_sha256 一致；
-//   3. 两个 consumer checkout 的 `git rev-parse HEAD` 与 lock commit 精确一致；
-//   4. 两个 consumer 的 kiwi-contracts.lock.json 的 source_commit /
+//   3. kiwi 中央 contracts/kiwi-contracts.lock.json 的 source_commit /
+//      bundle_sha256 与 portfolio lock 一致（三仓锁同一 source commit）；
+//   4. 两个 consumer checkout 的 `git rev-parse HEAD` 与 lock commit 精确一致；
+//   5. 两个 consumer 的 kiwi-contracts.lock.json 的 source_commit /
 //      bundle_sha256 与 portfolio lock 一致。
 //
 // 所有失败都以类型化 PortfolioLockError 抛出（fail-closed）。纯 helper 导出给
@@ -156,6 +158,64 @@ export async function verifyManifestBundle(kiwiRoot, lock) {
     fail(
       `kiwi contracts/manifest.json bundle_sha256 ${manifest.bundle_sha256} does not match portfolio contract_bundle_sha256 ${lock.contract_bundle_sha256}`,
       "MANIFEST_BUNDLE_MISMATCH",
+    );
+  }
+}
+
+/**
+ * 校验 kiwi 中央 contracts/kiwi-contracts.lock.json 的 source_commit /
+ * bundle_sha256 与组合锁一致（fail-closed）。中央锁记录契约 bundle 的来源
+ * commit；三个仓库的锁必须引用同一个 contract_source_commit，避免 operator
+ * 用消费者锁同步后、中央锁仍指向旧 commit 的组合漂移。
+ *
+ * @param {string} kiwiRoot kiwi 仓库根目录。
+ * @param {object} lock 已通过结构校验的组合锁。
+ */
+export async function verifyCentralLock(kiwiRoot, lock) {
+  const lockPath = resolve(kiwiRoot, "contracts", LOCK_FILENAME);
+  let raw;
+  try {
+    raw = await readFile(lockPath, "utf8");
+  } catch (err) {
+    fail(`cannot read kiwi central contract lock: ${err.code ?? "error"}`, "CENTRAL_LOCK_READ");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    fail("kiwi central kiwi-contracts.lock.json is not valid JSON", "CENTRAL_LOCK_PARSE");
+  }
+  if (!isPlainObject(parsed)) {
+    fail("kiwi central kiwi-contracts.lock.json must be an object", "CENTRAL_LOCK_SHAPE");
+  }
+  if (parsed.lock_version !== 1) {
+    fail(
+      `unsupported central lock_version ${String(parsed.lock_version)}`,
+      "CENTRAL_LOCK_VERSION",
+    );
+  }
+  if (parsed.source_repository !== ALLOWED_REPOSITORIES.kiwi) {
+    fail(
+      `central lock source_repository must be ${ALLOWED_REPOSITORIES.kiwi}, got ${String(parsed.source_repository)}`,
+      "CENTRAL_SOURCE_REPOSITORY",
+    );
+  }
+  if (!COMMIT_SHA_RE.test(String(parsed.source_commit ?? ""))) {
+    fail("central lock source_commit must be a 40-char lowercase SHA", "CENTRAL_SOURCE_COMMIT_SHA");
+  }
+  if (!SHA256_HEX_RE.test(String(parsed.bundle_sha256 ?? ""))) {
+    fail("central lock bundle_sha256 must be a 64-char lowercase hex", "CENTRAL_BUNDLE_SHA");
+  }
+  if (parsed.source_commit !== lock.contract_source_commit) {
+    fail(
+      `central lock source_commit ${parsed.source_commit} does not match portfolio contract_source_commit ${lock.contract_source_commit}`,
+      "CENTRAL_SOURCE_COMMIT_MISMATCH",
+    );
+  }
+  if (parsed.bundle_sha256 !== lock.contract_bundle_sha256) {
+    fail(
+      `central lock bundle_sha256 ${parsed.bundle_sha256} does not match portfolio contract_bundle_sha256 ${lock.contract_bundle_sha256}`,
+      "CENTRAL_BUNDLE_MISMATCH",
     );
   }
 }
@@ -341,8 +401,8 @@ export async function verifyConsumerLock(consumerDir, lock) {
 }
 
 /**
- * 组合锁候选预检编排：结构 → manifest bundle → 两个 consumer HEAD →
- * 两个 consumer 契约锁，全部通过才返回固定摘要行。
+ * 组合锁候选预检编排：结构 → manifest bundle → 中央契约锁 → 两个 consumer
+ * HEAD → 两个 consumer 契约锁，全部通过才返回固定摘要行。
  *
  * @param {object} options
  * @param {string} options.lockPath candidate portfolio lock 文件路径。
@@ -372,6 +432,7 @@ export async function verifyPortfolioLockCandidate({
   validateLock(lock);
 
   await verifyManifestBundle(kiwiRoot, lock);
+  await verifyCentralLock(kiwiRoot, lock);
 
   const catalogHead = await verifyConsumerHead(kiwiCatalogDir, lock, "kiwi-catalog");
   const shoppingHead = await verifyConsumerHead(shoppingCliDir, lock, "shopping-cli");
@@ -385,6 +446,7 @@ export async function verifyPortfolioLockCandidate({
     `  contract_source_commit: ${lock.contract_source_commit}`,
     `  contract_bundle_sha256: ${lock.contract_bundle_sha256}`,
     "  kiwi contracts/manifest.json bundle_sha256: match",
+    "  kiwi contracts/kiwi-contracts.lock.json source_commit + bundle_sha256: match",
     `  kiwi-catalog HEAD: ${catalogHead} (matches lock repositories.kiwi-catalog.commit)`,
     `  shopping-cli HEAD: ${shoppingHead} (matches lock repositories.shopping-cli.commit)`,
     `  kiwi-catalog consumer lock: ${catalogLock.checked} file(s), source_commit + bundle_sha256 match`,

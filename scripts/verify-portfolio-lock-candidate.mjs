@@ -26,6 +26,8 @@
 //     repository 名必须命中 allowlist；commit/source_commit 必须 40 位小写 SHA；
 //     contract_bundle_sha256 必须 64 位小写 hex；
 //   - kiwi contracts/manifest.json 的 bundle_sha256 与组合锁一致；
+//   - kiwi 中央 contracts/kiwi-contracts.lock.json 的 source_commit/bundle_sha256
+//     与组合锁一致；
 //   - 两个 consumer checkout 的 `git rev-parse HEAD` 与 lock commit 精确一致；
 //   - 两个 consumer 的 kiwi-contracts.lock.json 的 source_commit/bundle_sha256
 //     与组合锁一致。

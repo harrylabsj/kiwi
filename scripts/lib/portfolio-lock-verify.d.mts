@@ -37,6 +37,7 @@ export class PortfolioLockError extends Error {
 
 export function validateLock(lock: unknown): void;
 export function verifyManifestBundle(kiwiRoot: string, lock: PortfolioLock): Promise<void>;
+export function verifyCentralLock(kiwiRoot: string, lock: PortfolioLock): Promise<void>;
 export function gitHeadCommit(repoDir: string): string;
 export function verifyConsumerHead(
   consumerDir: string,

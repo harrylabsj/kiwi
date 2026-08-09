@@ -20,6 +20,7 @@ import {
   gitHeadCommit,
   readConsumerLockFile,
   validateLock,
+  verifyCentralLock,
   verifyConsumerHead,
   verifyConsumerLock,
   verifyManifestBundle,
@@ -115,8 +116,8 @@ function writeLock(lock: unknown): string {
   return lockPath;
 }
 
-/** 写入 kiwi contracts/manifest.json fixture。 */
-function writeManifest(kiwiRoot: string, bundleSha: string): void {
+/** 写入 kiwi contracts/manifest.json 与中央 kiwi-contracts.lock.json fixture。 */
+function writeManifest(kiwiRoot: string, bundleSha: string, sourceCommit = REAL_SOURCE_COMMIT): void {
   mkdirSync(join(kiwiRoot, "contracts"), { recursive: true });
   writeFileSync(
     join(kiwiRoot, "contracts", "manifest.json"),
@@ -126,6 +127,20 @@ function writeManifest(kiwiRoot: string, bundleSha: string): void {
         authority: "kiwi/contracts",
         bundle_sha256: bundleSha,
         contracts: [],
+      },
+      null,
+      2,
+    ),
+  );
+  writeFileSync(
+    join(kiwiRoot, "contracts", LOCK_FILENAME),
+    JSON.stringify(
+      {
+        lock_version: 1,
+        source_repository: "harrylabsj/kiwi",
+        source_commit: sourceCommit,
+        bundle_sha256: bundleSha,
+        contracts_manifest: "contracts/manifest.json",
       },
       null,
       2,
@@ -252,6 +267,69 @@ describe("verifyManifestBundle", () => {
     const lock = buildMutableLock() as PortfolioLock;
     const error = await verifyManifestBundle(kiwiRoot, lock).catch((err) => err);
     expect(error.code).toBe("MANIFEST_READ");
+  });
+});
+
+describe("verifyCentralLock", () => {
+  it("中央锁 source_commit/bundle_sha256 与组合锁一致时通过", async () => {
+    const kiwiRoot = makeTempDir();
+    writeManifest(kiwiRoot, REAL_BUNDLE_SHA);
+    const lock = buildMutableLock({
+      bundleSha: REAL_BUNDLE_SHA,
+      sourceCommit: REAL_SOURCE_COMMIT,
+    }) as PortfolioLock;
+    await expect(verifyCentralLock(kiwiRoot, lock)).resolves.toBeUndefined();
+  });
+
+  it("中央锁 source_commit 与组合锁不一致时 fail-closed（CENTRAL_SOURCE_COMMIT_MISMATCH）", async () => {
+    const kiwiRoot = makeTempDir();
+    writeManifest(kiwiRoot, REAL_BUNDLE_SHA, "a".repeat(40));
+    const lock = buildMutableLock({
+      bundleSha: REAL_BUNDLE_SHA,
+      sourceCommit: REAL_SOURCE_COMMIT,
+    }) as PortfolioLock;
+    const error = await verifyCentralLock(kiwiRoot, lock).catch((err) => err);
+    expect(error.code).toBe("CENTRAL_SOURCE_COMMIT_MISMATCH");
+  });
+
+  it("中央锁 bundle_sha256 与组合锁不一致时 fail-closed（CENTRAL_BUNDLE_MISMATCH）", async () => {
+    const kiwiRoot = makeTempDir();
+    writeManifest(kiwiRoot, "f".repeat(64));
+    const lock = buildMutableLock({
+      bundleSha: REAL_BUNDLE_SHA,
+      sourceCommit: REAL_SOURCE_COMMIT,
+    }) as PortfolioLock;
+    const error = await verifyCentralLock(kiwiRoot, lock).catch((err) => err);
+    expect(error.code).toBe("CENTRAL_BUNDLE_MISMATCH");
+  });
+
+  it("中央锁缺失时 fail-closed（CENTRAL_LOCK_READ）", async () => {
+    const kiwiRoot = makeTempDir();
+    mkdirSync(join(kiwiRoot, "contracts"), { recursive: true });
+    writeFileSync(join(kiwiRoot, "contracts", "manifest.json"), "{}");
+    const lock = buildMutableLock() as PortfolioLock;
+    const error = await verifyCentralLock(kiwiRoot, lock).catch((err) => err);
+    expect(error.code).toBe("CENTRAL_LOCK_READ");
+  });
+
+  it("中央锁非 40 位 source_commit fail-closed（CENTRAL_SOURCE_COMMIT_SHA）", async () => {
+    const kiwiRoot = makeTempDir();
+    mkdirSync(join(kiwiRoot, "contracts"), { recursive: true });
+    writeFileSync(
+      join(kiwiRoot, "contracts", LOCK_FILENAME),
+      JSON.stringify({
+        lock_version: 1,
+        source_repository: "harrylabsj/kiwi",
+        source_commit: "short",
+        bundle_sha256: REAL_BUNDLE_SHA,
+      }),
+    );
+    const lock = buildMutableLock({
+      bundleSha: REAL_BUNDLE_SHA,
+      sourceCommit: REAL_SOURCE_COMMIT,
+    }) as PortfolioLock;
+    const error = await verifyCentralLock(kiwiRoot, lock).catch((err) => err);
+    expect(error.code).toBe("CENTRAL_SOURCE_COMMIT_SHA");
   });
 });
 
@@ -392,6 +470,9 @@ describe("verifyPortfolioLockCandidate（端到端）", () => {
     expect(lines.join("\n")).toContain(`kiwi-catalog HEAD: ${catalogHead}`);
     expect(lines.join("\n")).toContain(`shopping-cli HEAD: ${shoppingHead}`);
     expect(lines.join("\n")).toContain("kiwi contracts/manifest.json bundle_sha256: match");
+    expect(lines.join("\n")).toContain(
+      "kiwi contracts/kiwi-contracts.lock.json source_commit + bundle_sha256: match",
+    );
   });
 
   it("HEAD 不匹配时 fail-closed（HEAD_MISMATCH）", async () => {
@@ -439,6 +520,25 @@ describe("verifyPortfolioLockCandidate（端到端）", () => {
       kiwiRoot,
     }).catch((err) => err);
     expect(error.code).toBe("MANIFEST_BUNDLE_MISMATCH");
+  });
+
+  it("中央锁 source_commit 漂移时 fail-closed（CENTRAL_SOURCE_COMMIT_MISMATCH）", async () => {
+    const kiwiRoot = makeTempDir();
+    writeManifest(kiwiRoot, REAL_BUNDLE_SHA, "a".repeat(40));
+    const lockPath = writeLock(
+      buildMutableLock({
+        bundleSha: REAL_BUNDLE_SHA,
+        sourceCommit: REAL_SOURCE_COMMIT,
+      }),
+    );
+
+    const error = await verifyPortfolioLockCandidate({
+      lockPath,
+      kiwiCatalogDir: makeTempDir(),
+      shoppingCliDir: makeTempDir(),
+      kiwiRoot,
+    }).catch((err) => err);
+    expect(error.code).toBe("CENTRAL_SOURCE_COMMIT_MISMATCH");
   });
 
   it("consumer 缺 kiwi-contracts.lock.json 时 fail-closed", async () => {

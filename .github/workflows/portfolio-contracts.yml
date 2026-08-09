@@ -17,9 +17,17 @@ jobs:
         run: |
           node <<'NODE' >> "$GITHUB_OUTPUT"
           const lock = JSON.parse(require('fs').readFileSync('portfolio.lock.json', 'utf8'));
+          const hex40 = /^[0-9a-f]{40}$/;
           for (const [name, value] of Object.entries(lock.repositories)) {
+            if (!hex40.test(value.commit)) {
+              throw new Error(`${value.repository} commit is not a full 40-char SHA: ${value.commit}`);
+            }
             console.log(`${name.replace('-', '_')}_sha=${value.commit}`);
           }
+          if (!hex40.test(lock.contract_source_commit)) {
+            throw new Error(`contract_source_commit is not a full 40-char SHA: ${lock.contract_source_commit}`);
+          }
+          console.log(`contract_source_commit=${lock.contract_source_commit}`);
           console.log(`bundle_sha=${lock.contract_bundle_sha256}`);
           NODE
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -39,20 +47,29 @@ jobs:
         with:
           python-version: "3.13"
       - run: python -m pip install "uv==0.10.6"
-      - name: Verify portfolio commit pins
+      - name: Verify pinned checkouts and contract locks
         run: |
           node <<'NODE'
           const fs = require('fs');
+          const { execFileSync } = require('child_process');
           const portfolio = JSON.parse(fs.readFileSync('portfolio.lock.json', 'utf8'));
-          const sourceCommit = portfolio.contract_source_commit;
-          for (const repo of ['kiwi-catalog', 'shopping-cli']) {
-            const lockPath = repo === 'kiwi-catalog'
+          for (const name of ['kiwi-catalog', 'shopping-cli']) {
+            const entry = portfolio.repositories[name];
+            const head = execFileSync('git', ['-C', name, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+            if (head !== entry.commit) {
+              throw new Error(`${name} HEAD ${head} != locked ${entry.commit}`);
+            }
+            const lockPath = name === 'kiwi-catalog'
               ? 'kiwi-catalog/kiwi_catalog/contracts/kiwi-contracts.lock.json'
               : 'shopping-cli/shopping_cli/contracts/kiwi-contracts.lock.json';
             const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-            if (lock.source_commit !== sourceCommit) {
-              throw new Error(`${repo} source_commit ${lock.source_commit} != portfolio kiwi ${sourceCommit}`);
+            if (lock.source_commit !== portfolio.contract_source_commit) {
+              throw new Error(`${name} source_commit ${lock.source_commit} != portfolio ${portfolio.contract_source_commit}`);
             }
+            if (lock.bundle_sha256 !== portfolio.contract_bundle_sha256) {
+              throw new Error(`${name} bundle_sha256 ${lock.bundle_sha256} != portfolio ${portfolio.contract_bundle_sha256}`);
+            }
+            console.log(`${name}: HEAD ${head}, contract lock verified`);
           }
           NODE
       - name: Verify central manifest
