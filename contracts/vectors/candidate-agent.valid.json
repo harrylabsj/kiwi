@@ -1,0 +1,26 @@
+{
+  "catalog_agent_id": "cagt_test_merchant_001",
+  "merchant": {
+    "id": "merchant-001",
+    "name": "Test Merchant",
+    "domain": "test.example"
+  },
+  "discovery": {
+    "agent_card_url": "https://test.example/.well-known/agent-card.json"
+  },
+  "protocols": {
+    "a2a": ["1.0.0"]
+  },
+  "capabilities": ["com.harrylabsj.kiwi.shopping.negotiation"],
+  "verification": {
+    "status": "discovered",
+    "last_verified_at": "2026-01-01T00:00:00Z"
+  },
+  "hosting": {
+    "mode": "direct_only"
+  },
+  "contract": {
+    "name": "candidate-agent",
+    "version": "1.0"
+  }
+}
