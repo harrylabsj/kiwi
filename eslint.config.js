@@ -5,7 +5,16 @@ import tsPlugin from "@typescript-eslint/eslint-plugin";
 
 export default [
   {
-    ignores: ["dist/**", "node_modules/**", "coverage/**"],
+    // Composition CI checks out the pinned sibling repositories beside Kiwi.
+    // Each sibling owns its own lint configuration; do not lint their source
+    // as part of Kiwi's root-level ESLint invocation.
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      "coverage/**",
+      "kiwi-catalog/**",
+      "shopping-cli/**",
+    ],
   },
   js.configs.recommended,
   {
