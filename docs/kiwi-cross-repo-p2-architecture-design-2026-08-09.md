@@ -684,6 +684,7 @@ nightly 连续两次失败才创建阻断级事件，第一次标记 flaky candi
 - 本轮 release/rollback 离线验收补强：`b5fc074` 新增 `tests/release-manifest-rollback.test.ts`，以临时 fixture 实测 `verify-release-manifest.mjs` 的合法/篡改/未绑定 SHA/路径穿越 fail-closed 行为，以及 `rollback-drill.mjs` 的 previous/current symlink 激活与恢复；新增 11 tests，Kiwi 最新 `npm run verify` 通过 116 个测试文件、1680 tests、contracts/vectors/package smoke。
 - catalog CI lint 收口：`1a70c6f` 为 `pyproject.toml` 固定 Ruff `target-version=py311`、`line-length=120` 与 `E4/E7/E9/F` 规则集，并修复确定性 E/F 阻断项；workflow 同款 `ruff check kiwi_catalog tests scripts`、pytest 480、unittest 232、mypy 92 source files 均通过。
 - claude-ds 对剩余 `VerificationService` 纯状态候选做了边界审查，确认 `_apply_*` 仅是数据库状态写入，`_stage_*` 仍承担状态机惰性求值与持久化顺序，当前没有收益足够且无行为风险的进一步纯 leaf；因此未强行拆分，保持状态机/事务边界集中。
+- 最终候选锁（catalog CI lint 收口后）已更新并再次通过 `verify:portfolio-lock`：kiwi `c5ac9a5fba94cffe6c31df928075e452285de7d0`、kiwi-catalog `1a70c6fa47a848118db64accf4c035741d2a6c09`、shopping-cli `b76703ff3d75231556f4e64a21cd1fb44abd9cc9`；三仓 `git push --dry-run origin main` 均可达，未执行真实 push。
 
 ## 16. 并行实施策略
 
