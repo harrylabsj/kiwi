@@ -27,8 +27,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
+    "verify:contracts": "node scripts/verify-contracts.mjs",
     "verify:package": "bash scripts/verify-package.sh",
-    "verify": "npm run lint && npm run typecheck && npm run build && npm run test && npm run verify:package",
+    "verify": "npm run lint && npm run typecheck && npm run build && npm run test && npm run verify:contracts && npm run verify:package",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
