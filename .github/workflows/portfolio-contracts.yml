@@ -38,6 +38,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - name: Verify portfolio commit pins
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const portfolio = JSON.parse(fs.readFileSync('portfolio.lock.json', 'utf8'));
+          const sourceCommit = portfolio.repositories.kiwi.commit;
+          for (const repo of ['kiwi-catalog', 'shopping-cli']) {
+            const lockPath = repo === 'kiwi-catalog'
+              ? 'kiwi-catalog/kiwi_catalog/contracts/kiwi-contracts.lock.json'
+              : 'shopping-cli/shopping_cli/contracts/kiwi-contracts.lock.json';
+            const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            if (lock.source_commit !== sourceCommit) {
+              throw new Error(`${repo} source_commit ${lock.source_commit} != portfolio kiwi ${sourceCommit}`);
+            }
+          }
+          NODE
       - name: Verify central manifest
         run: node scripts/verify-contracts.mjs
       - name: Verify central contract vectors
