@@ -43,7 +43,7 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
           const portfolio = JSON.parse(fs.readFileSync('portfolio.lock.json', 'utf8'));
-          const sourceCommit = portfolio.repositories.kiwi.commit;
+          const sourceCommit = portfolio.contract_source_commit;
           for (const repo of ['kiwi-catalog', 'shopping-cli']) {
             const lockPath = repo === 'kiwi-catalog'
               ? 'kiwi-catalog/kiwi_catalog/contracts/kiwi-contracts.lock.json'
