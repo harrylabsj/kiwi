@@ -30,6 +30,7 @@
     "verify:vectors": "node scripts/verify-contract-vectors.mjs",
     "verify:contracts": "node scripts/verify-contracts.mjs",
     "verify:package": "bash scripts/verify-package.sh",
+    "verify:portfolio-lock": "node scripts/verify-portfolio-lock-candidate.mjs",
     "verify": "npm run lint && npm run typecheck && npm run build && npm run test && npm run verify:contracts && npm run verify:vectors && npm run verify:package",
     "prepublishOnly": "npm run build"
   },
