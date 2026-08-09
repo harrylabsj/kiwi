@@ -124,6 +124,17 @@ describe("AgentDiscovery.resolve: agentCardUrl", () => {
     ).rejects.toMatchObject({ code: "card_fetch_failed" });
   });
 
+  it("远程 Agent Card 不得把 direct 候选指向 loopback（SSRF）", async () => {
+    const card = agentCardJson("http://127.0.0.1:8765");
+    const discovery = new AgentDiscovery({
+      skipDnsCheck: true,
+      fetchImpl: async () => new globalThis.Response(JSON.stringify(card), { status: 200 }),
+    });
+    await expect(
+      discovery.resolve({ agentCardUrl: "https://remote.example/.well-known/agent-card.json" }),
+    ).rejects.toMatchObject({ code: "no_channel_candidate" });
+  });
+
   it("非法输入：domain 与 agentCardUrl 同时提供 → invalid_input", async () => {
     const discovery = new AgentDiscovery();
     await expect(
@@ -140,7 +151,7 @@ describe("AgentDiscovery.resolve: agentCardUrl", () => {
 describe("AgentDiscovery.resolve: domain", () => {
   it("domain → UCP 优先，失败回退 well-known Agent Card（双发现入口，WP3）", async () => {
     const captured: string[] = [];
-    const card = agentCardJson("http://127.0.0.1:1");
+    const card = agentCardJson("https://merchant.example/a2a");
     const discovery = new AgentDiscovery({
       fetchImpl: async (url, _init) => {
         captured.push(String(url));
@@ -167,7 +178,7 @@ describe("AgentDiscovery.resolve: domain", () => {
 
   it("ucp.disabled: true → 保持 v0.5 行为（直接 well-known Agent Card）", async () => {
     const captured: string[] = [];
-    const card = agentCardJson("http://127.0.0.1:1");
+    const card = agentCardJson("https://merchant.example/a2a");
     const discovery = new AgentDiscovery({
       fetchImpl: async (url, _init) => {
         captured.push(String(url));

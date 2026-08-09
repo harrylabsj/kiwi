@@ -391,7 +391,7 @@ describe("A2A client URL 安全（SSRF 防护）", () => {
     ).rejects.toMatchObject({ kind: "unsafe_target" });
     await expect(
       assertResolvableTargetUrl(url, { resolveIp: async () => ["127.0.0.1"] }),
-    ).resolves.toBeUndefined();
+    ).rejects.toMatchObject({ kind: "unsafe_target" });
   });
 
   it("fails closed when the hostname cannot be resolved", async () => {
