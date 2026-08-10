@@ -220,3 +220,139 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
     expect(last?.state_transition?.from_phase).toBe("OPEN");
   });
 });
+
+// ── 重启恢复（审查 BUG-03，2026-08-10）─────────────────────────────────────
+
+describe("merchant handler 重启恢复（BUG-03）", () => {
+  let dir: string;
+  let ledger: LedgerStore;
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "kiwi-bug03-"));
+    ledger = new LedgerStore({ dir, now: () => NOW });
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const makeHandler = (): NegotiationHandler =>
+    createMerchantHandler({
+      ledger,
+      now: () => NOW,
+      sender: "merchant:merchant-001",
+      counterparty: "buyer:*",
+    });
+
+  const runWith = (
+    h: NegotiationHandler,
+    envelope: NegotiationEnvelope,
+  ): Promise<NegotiationHandlerResult> =>
+    h.handle({
+      envelope: envelope as never,
+      message: { role: "user", parts: [], messageId: envelope.message_id },
+      taskId: `task_${envelope.message_id}`,
+      senderIdentity: "buyer:buyer-001",
+    });
+
+  let seq = 0;
+  const env = (
+    action: string,
+    payload: Record<string, unknown>,
+    inReplyTo?: string,
+  ): NegotiationEnvelope => {
+    seq += 1;
+    return finalizeEnvelope({
+      capability: MERCHANT_CAPABILITY,
+      protocol_version: "1.0",
+      negotiation_id: NEGOTIATION_ID,
+      exchange_id: `ex_${seq}`,
+      message_id: `msg_${seq}`,
+      in_reply_to: inReplyTo ?? `msg_${seq - 1}`,
+      actor: "buyer",
+      action: action as NegotiationEnvelope["action"],
+      created_at: NOW,
+      payload: payload as never,
+    });
+  };
+
+  const runNegotiationToConditional = async (h: NegotiationHandler): Promise<{
+    offerId: string;
+    agreedTerms: unknown;
+  }> => {
+    await runWith(h, env("inquiry", {}));
+    await runWith(h, env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
+    await runWith(h, env("offer", { offer_id: "off_buyer", terms: {} }));
+    const cond = await runWith(h, env("counter_offer", { offer_id: "off_counter", proposed_terms: {} }));
+    const offerId = (() => {
+      const reply = cond.kind === "accepted" && cond.message
+        ? (
+            cond.message.parts[0] as unknown as {
+              data?: { knp_envelope?: { payload?: { offer_id?: string } } };
+            }
+          ).data?.knp_envelope?.payload?.offer_id
+        : undefined;
+      expect(reply).toBeTruthy();
+      return reply as string;
+    })();
+    const conditional = (cond.kind === "accepted" && cond.message
+      ? (
+          cond.message.parts[0] as unknown as {
+            data?: { knp_envelope?: { payload?: unknown } };
+          }
+        ).data?.knp_envelope?.payload
+      : undefined) as { conditions?: unknown };
+    const { evaluateConditionalOffer } = await import("../src/negotiation/condition/evaluator.js");
+    const agreedTerms = evaluateConditionalOffer(conditional as never, {
+      "aggregate.total_quantity": 200,
+    });
+    return { offerId, agreedTerms };
+  };
+
+  it("同 Ledger 重建 handler：已发 conditional offer 继续可接受（不返回 offer_unknown）", async () => {
+    const first = makeHandler();
+    const { offerId, agreedTerms } = await runNegotiationToConditional(first);
+
+    // "重启"：丢弃第一个实例，同 Ledger 重建
+    const second = makeHandler();
+    const result = await runWith(
+      second,
+      env("accept_nonbinding", {
+        type: "accept_nonbinding",
+        offer_id: offerId,
+        terms_digest: contentDigest(agreedTerms as never),
+      }),
+    );
+    expect(result.kind).toBe("accepted");
+  });
+
+  it("重启后终态 negotiation 拒绝重开（state_conflict）", async () => {
+    const first = makeHandler();
+    const { offerId, agreedTerms } = await runNegotiationToConditional(first);
+    const accepted = await runWith(
+      first,
+      env("accept_nonbinding", {
+        type: "accept_nonbinding",
+        offer_id: offerId,
+        terms_digest: contentDigest(agreedTerms as never),
+      }),
+    );
+    expect(accepted.kind).toBe("accepted");
+
+    // "重启"后：同 negotiation 的商业动作被终态守卫拒绝
+    const second = makeHandler();
+    const reaccept = await runWith(
+      second,
+      env("accept_nonbinding", {
+        type: "accept_nonbinding",
+        offer_id: offerId,
+        terms_digest: contentDigest(agreedTerms as never),
+      }),
+    );
+    expect(reaccept.kind).toBe("declined");
+    expect(reaccept.kind === "declined" && reaccept.reasonCode).toBe("state_conflict");
+    const rfq = await runWith(second, env("rfq", { items: [{ sku: "SKU-001" }] }));
+    expect(rfq.kind).toBe("declined");
+    expect(rfq.kind === "declined" && rfq.reasonCode).toBe("state_conflict");
+  });
+});
