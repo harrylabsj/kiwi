@@ -127,8 +127,12 @@ export class HttpMerchantClient implements MerchantClient {
     // Real gateway has no merchant-owned product listing route.
     // include_out_of_stock=1：商家自查目录要看到全部在架商品（含缺货/暂停），
     // 买家搜索默认排除缺货的行为不适用于商家自己的商品清单。
+    // 审查 P2-1：精确库存是私密 inventory——带 catalog 凭据（可解析时）读，
+    // 网关按 owner 校验后返回本商家精确 stock；未配置凭据则匿名读（无 stock）。
+    const token = this.broker.resolve("catalog");
     const payload = (await this.request("GET", "/search/products", {
       query: { limit: "100", offset: "0", include_out_of_stock: "1" },
+      ...(token !== undefined ? { token } : {}),
     })) as { results?: unknown };
     if (payload === null || typeof payload !== "object" || !Array.isArray(payload.results)) {
       throw new MerchantClientError("validation", "search/products response lacks a results array");
@@ -139,9 +143,13 @@ export class HttpMerchantClient implements MerchantClient {
   }
 
   async getProduct(sku: string): Promise<MerchantCatalogProduct> {
+    // 审查 P2-1：精确库存仅向商品所属商户本人开放——带 catalog 凭据
+    // （可解析时）读，网关按 owner 校验；未配置凭据则匿名读（availability）。
+    const token = this.broker.resolve("catalog");
     const payload = (await this.request(
       "GET",
       `/products/${encodeURIComponent(sku)}`,
+      ...(token !== undefined ? [{ token }] : []),
     )) as { product?: unknown };
     if (payload === null || typeof payload !== "object" || payload.product === undefined) {
       throw new MerchantClientError("validation", "get product response lacks a product object");

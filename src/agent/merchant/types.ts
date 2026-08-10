@@ -34,7 +34,9 @@ export interface MerchantCatalogProduct {
   tags: string[];
   price: number;
   currency: string;
-  stock: number;
+  /** 精确库存仅在持有商户凭据时返回（design v0.3 §7 private inventory，
+   *  审查 P2-1）；匿名读降级为 availability_hint，此处为 undefined。 */
+  stock?: number;
   delivery_attributes: string[];
   /** Listing active flag. When true the product is paused/hidden from search. */
   paused: boolean;
@@ -90,7 +92,8 @@ export interface HumanReviewItem {
 
 export interface InventorySnapshot {
   sku: string;
-  stock: number;
+  /** 无商户凭据时（匿名读）为空——精确库存是私密 inventory（审查 P2-1）。 */
+  stock?: number;
   /** Observed at — never present current state as timeless fact (§18.2). */
   observed_at: string;
 }
@@ -164,7 +167,7 @@ export function parseMerchantCatalogProduct(value: unknown): MerchantCatalogProd
     tags: Array.isArray(v.tags) ? stringArray(v.tags, "product.tags") : [],
     price: reqNumber(v.price, "product.price"),
     currency: typeof v.currency === "string" ? v.currency : "CNY",
-    stock: reqNumber(v.stock, "product.stock"),
+    stock: typeof v.stock === "number" ? v.stock : undefined,
     delivery_attributes: Array.isArray(v.delivery_attributes)
       ? stringArray(v.delivery_attributes, "product.delivery_attributes")
       : [],
@@ -179,7 +182,12 @@ export function parseInventorySnapshot(value: unknown, sku: string): InventorySn
   const v = value as Record<string, unknown>;
   return {
     sku: typeof v.sku === "string" ? v.sku : sku,
-    stock: reqNumber(v.stock ?? v.quantity, "inventory.stock"),
+    stock:
+      typeof v.stock === "number"
+        ? v.stock
+        : typeof v.quantity === "number"
+          ? v.quantity
+          : undefined,
     observed_at: typeof v.observed_at === "string" ? v.observed_at : new Date().toISOString(),
   };
 }
