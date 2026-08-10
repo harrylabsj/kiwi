@@ -24,6 +24,7 @@
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { createMonotonicClock } from "./clock.js";
+import { FileLeaseStore } from "../negotiation/lease/store.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ShoppingCliCatalogSource, type CatalogSource } from "../discovery/catalog-source/index.js";
@@ -295,7 +296,9 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     if (channelCandidate === null || channelCandidate.url === undefined) {
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "无 a2a-direct 通道候选" };
     }
-    const channel = new A2ADirectChannel({ url: channelCandidate.url, ledger, idempotency, now });
+    // 审查 BUG-07：共享持久目录的租约——出站 send 全临界区单 owner
+    const lease = new FileLeaseStore(dir);
+    const channel = new A2ADirectChannel({ url: channelCandidate.url, ledger, idempotency, now, lease });
     handle = await channel.open({
       negotiation_id: negotiationId,
       sender_identity: senderIdentity,

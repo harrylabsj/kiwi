@@ -39,6 +39,8 @@ import { A2ATaskPoller, recordTaskObservation } from "../../a2a/task/index.js";
 import { validateEnvelope, verifyEnvelopeDigest } from "../../negotiation/domain/envelope.js";
 import type { NegotiationEnvelope } from "../../negotiation/domain/envelope.js";
 import type { IdempotencyStore } from "../../negotiation/idempotency/index.js";
+import type { FileLeaseStore } from "../../negotiation/lease/store.js";
+import { randomUUID as cryptoRandomUUID } from "node:crypto";
 import type {
   LedgerCapabilitySnapshot,
   LedgerIdentitySnapshot,
@@ -57,6 +59,9 @@ import {
   isStableTaskState,
 } from "../channel.js";
 
+/** 审查 BUG-07：出站 send 临界区租约 TTL（毫秒）——覆盖一次典型 HTTP send。 */
+const OUTBOUND_LEASE_TTL_MS = 30_000;
+
 export interface A2ADirectChannelOptions {
   /** 远端 A2A endpoint URL（capability intersection 选中）。 */
   url: string;
@@ -68,6 +73,9 @@ export interface A2ADirectChannelOptions {
   timeoutMs?: number;
   /** 透传 A2AClient 的 SSRF 选项（测试/本机直连）。 */
   allowPrivateRanges?: boolean;
+  /** 全临界区 ownership 租约（审查 BUG-07）：共享持久目录时提供——并发
+   *  direct send 同 key 只允许一个 owner 执行（check→HTTP→ledger→commit）。 */
+  lease?: FileLeaseStore;
   skipDnsCheck?: boolean;
   resolveIp?: (hostname: string) => Promise<string[]>;
 }
@@ -82,6 +90,7 @@ export class A2ADirectChannel implements CounterpartyChannel {
   private readonly client: A2AClient;
   private readonly ledger?: LedgerStore;
   private readonly idempotency?: IdempotencyStore;
+  private readonly lease?: FileLeaseStore;
   private readonly now: () => string;
 
   constructor(options: A2ADirectChannelOptions) {
@@ -95,6 +104,7 @@ export class A2ADirectChannel implements CounterpartyChannel {
     });
     this.ledger = options.ledger;
     this.idempotency = options.idempotency;
+    this.lease = options.lease;
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
@@ -103,6 +113,7 @@ export class A2ADirectChannel implements CounterpartyChannel {
       client: this.client,
       ledger: this.ledger,
       idempotency: this.idempotency,
+      ...(this.lease !== undefined ? { lease: this.lease } : {}),
       now: this.now,
       negotiationId: input.negotiation_id,
       senderIdentity: input.sender_identity,
@@ -116,6 +127,8 @@ interface A2ADirectHandleDeps {
   client: A2AClient;
   ledger?: LedgerStore;
   idempotency?: IdempotencyStore;
+  /** 审查 BUG-07：全临界区租约（透传自 channel options）。 */
+  lease?: FileLeaseStore;
   now: () => string;
   negotiationId: string;
   senderIdentity: string;
@@ -205,6 +218,33 @@ class A2ADirectHandle implements ChannelHandle {
     const ref = this.refOf(input.ref);
     const message = this.envelopeToMessage(envelope, ref);
 
+    // 审查 BUG-07：全临界区 ownership 租约——幂等 check→HTTP 发送→ledger→
+    // commit 之间，同 key 并发（同进程异步或共享目录跨进程）会产生两次远端
+    // 调用（commit 阶段的冲突检测已无法撤销前面的副作用）。文件租约（TTL +
+    // 崩溃接管）覆盖整段，第二个并发 send fail-closed。
+    const leaseKey = `${this.deps.senderIdentity}:${envelope.message_id}`;
+    const leaseOwner = `${process.pid}:${cryptoRandomUUID()}`;
+    if (this.deps.lease !== undefined && !this.deps.lease.acquire(leaseKey, leaseOwner, OUTBOUND_LEASE_TTL_MS)) {
+      throw new ChannelError(
+        "a2a-direct",
+        "idempotency_conflict",
+        `message_id ${envelope.message_id} send already in progress by another owner`,
+      );
+    }
+    try {
+      return await this.sendUnlocked(input, envelope, message, ref);
+    } finally {
+      this.deps.lease?.release(leaseKey, leaseOwner);
+    }
+  }
+
+  /** 临界区主体（租约持有期间执行；见 send 的 BUG-07 注释）。 */
+  private async sendUnlocked(
+    input: ChannelSendInput,
+    envelope: NegotiationEnvelope,
+    message: A2AMessage,
+    ref: RemoteRef,
+  ): Promise<ChannelSendResult> {
     // 协议幂等 check（§20）：(sender_identity, message_id)。
     if (this.deps.idempotency !== undefined) {
       const decision = this.deps.idempotency.check({
