@@ -22,7 +22,7 @@ The catalog implementation is checked against this schema; it is not the source
 of wire truth. To regenerate a compatibility fixture from the implementation:
 
 ```sh
-cd <WORKSPACE>/kiwi-catalog
+cd /path/to/kiwi-catalog
 python3 -c "import json,sys; sys.path.insert(0,'.'); \
 from kiwi_catalog.agent_catalog.candidate_dto import CANDIDATE_AGENT_SCHEMA; \
 print(json.dumps(CANDIDATE_AGENT_SCHEMA, indent=2, ensure_ascii=False))" \

@@ -57,7 +57,7 @@ docs/protocol/kiwi-transaction-handoff-0.1.md
   - `schemas/`、`test-vectors/` — **不存在**，schema 实际在 `contracts/negotiation/1.0/schema.json`（v1.2 发布版 §42 同样引用 `schemas/`，同病）。
 - **[P2] R5. §34 产品定位与 products/ 两份文档重复**：34.1≈catalog 文档 §1–4、34.2≈shopping-cli 文档 §1–2，措辞已出现轻微漂移（如 `observation` 只在基线出现）。母文档应保留摘要+指针，避免三处维护。
 - **[P2] R6. §34.2 "读取/受控写入边界"未解决写权威问题**：与 shopping-cli 文档同源（见 §4），写操作与外部权威源（ERP/PIM）的关系未定义。
-- **[P3] R7. 正式规范里出现昵称"项目维护者"**（`:557`"统一使用项目维护者实际控制域名"）：公开发布到 kiwi.harrylabsj.com 前应改为"Kiwi 项目实际控制域名"。
+- **[P3] R7. 正式规范里出现个人昵称**（`:557` 的个人化表述）：公开发布到 kiwi.harrylabsj.com 前应改为"Kiwi 项目实际控制域名"。
 
 ## 3. docs/protocol/（3 个文件）
 

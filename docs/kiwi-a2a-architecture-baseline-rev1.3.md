@@ -554,7 +554,7 @@ kiwi.negotiation/1.0
 
 ## 8.2 A2A Extension URI
 
-统一使用项目维护者实际控制域名 `kiwi.harrylabsj.com`（harrylabsj.com 的子域）：
+统一使用 Kiwi 项目实际控制域名 `kiwi.harrylabsj.com`（harrylabsj.com 的子域）：
 
 ```text
 https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0

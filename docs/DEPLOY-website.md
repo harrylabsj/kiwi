@@ -10,16 +10,15 @@
 
 - `kiwi.harrylabsj.com` → Cloudflare Pages，200 响应，托管 kiwi-spec 协议文档；
 - kiwi-spec 的 Pages 配置在 Cloudflare 侧（GitHub API 查不到），域名解绑/换绑
-  必须由账号持有人（项目维护者）在 Cloudflare 控制台操作；
-- `harrylabsj/kiwi` 仓库是 **private**——Cloudflare Pages 可连接 private
-  仓库（经 Cloudflare GitHub App 授权），只部署 `docs/website/` 目录，
+  必须由域名与 Cloudflare 管理员在控制台操作；
+- `harrylabsj/kiwi` 仓库可由 Cloudflare Pages 连接，只部署 `docs/website/` 目录，
   源码不进站点。
 
 ## 路径 A：用现有 kiwi 仓库部署（推荐，不需要新仓库）
 
 1. **Cloudflare Pages 新建项目**
    - 控制台 → Workers & Pages → Create → Pages → Connect to Git
-   - 选 `harrylabsj/kiwi`（如未授权需先连 GitHub App，允许访问 private 仓库）
+   - 选 `harrylabsj/kiwi`（如未授权需先连接 GitHub App）
    - 构建配置：Framework preset = **None**（纯静态）；Build command = 留空；
      **Build output directory = `docs/website`**
    - Deploy → 得到临时域名 `<project>.pages.dev`，先验证页面正常
@@ -34,7 +33,7 @@
 
 如需官网独立仓库（与源码仓库分离）：
 
-1. 创建公开仓库（需项目维护者授权/手动）：`gh repo create harrylabsj/kiwi-website --public`
+1. 创建公开仓库（需仓库管理员授权/手动）：`gh repo create harrylabsj/kiwi-website --public`
 2. 同步页面：拷贝 `docs/website/*.html` + `style.css` 到仓库根
 3. Cloudflare Pages 连接该仓库（build output directory = 根目录 `/`）
 4. 域名迁移同路径 A 第 2 步
