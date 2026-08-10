@@ -144,13 +144,15 @@ interface ParsedArgs {
   port?: number;
   noChat: boolean;
   noA2a: boolean;
+  a2aExplicit: boolean;
   weixinAllow?: string;
   relogin: boolean;
   qrScale: number;
   noQr: boolean;
 }
 
-function parseArgs(argv: string[]): ParsedArgs {
+/** 导出供测试（审查 P2-L：--a2a flag 解析回归锁定）。 */
+export function parseArgs(argv: string[]): ParsedArgs {
   const command: string[] = [];
   let profile: string | undefined;
   let dir: string | undefined;
@@ -181,6 +183,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let fake = false;
   let noChat = false;
   let noA2a = false;
+  let a2aExplicit = false;
   let weixinAllow: string | undefined;
   let relogin = false;
   let qrScale = 1;
@@ -249,6 +252,12 @@ function parseArgs(argv: string[]): ParsedArgs {
       noChat = true;
     } else if (arg === "--no-a2a") {
       noA2a = true;
+    } else if (arg === "--a2a") {
+      // 审查 P2-L：weixin 命令文档承诺"A2A 节点默认关，--a2a 开启"——
+      // 此前 parseArgs 无此分支（Unknown argument: --a2a，实测 exit 2），
+      // 且默认 noA2a=false 让 A2A 恒开（与文档相反，需 --no-a2a 才能关）。
+      // 裸 kiwi 命令的 A2A 默认开不受影响（见 cmdWeixin 的解析）。
+      a2aExplicit = true;
     } else if (arg === "--allow") {
       weixinAllow = argv[++i];
     } else if (arg === "--relogin") {
@@ -284,6 +293,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     fake,
     noChat,
     noA2a,
+    a2aExplicit,
     force,
     noInstall,
     autoNegotiate,
@@ -510,6 +520,9 @@ async function cmdTui(args: ParsedArgs): Promise<number> {
  *
  *   kiwi agent serve --profile <merchant.yaml> [--catalog <url>]  # 缺省官方 catalog，本地自托管用 --catalog http://127.0.0.1:8600
  *                    [--port 9000] [--data-dir <dir>]
+ *
+ * 公网暴露：节点仍监听 127.0.0.1，但可用 KIWI_A2A_PUBLIC_URL=<https://domain>
+ * 覆盖 Agent Card / UCP / catalog 注册广告的公网地址（配合 Caddy/Nginx 反代）。
  */
 async function cmdAgentServe(args: ParsedArgs): Promise<number> {
   const profile = requireProfile(args);
@@ -526,7 +539,10 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
     ...(merchantToken ? { ownerToken: merchantToken } : {}),
     ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
   });
-  console.log(`[agent serve] merchant ${profile.agent_id} A2A server: ${node.agentCardUrl}`);
+  console.log(
+    `[agent serve] merchant ${profile.agent_id} A2A server: ${node.agentCardUrl}` +
+      (node.advertisedUrl !== node.url ? ` (local ${node.url})` : ""),
+  );
   console.log(`[agent serve] registered in catalog ${catalog}: ${node.catalogAgentId ?? "?"}`);
 
   const a2aNode: ChatA2aNode = {
@@ -974,7 +990,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         dataDir: args.dataDir,
         allow: args.weixinAllow,
         relogin: args.relogin,
-        a2a: args.noA2a === false,
+        // 审查 P2-L：weixin 命令 A2A 节点默认关（headless 控制面收窄攻击面），
+        // 仅 --a2a 显式开启（--no-a2a 仍可覆盖）。裸 kiwi/chat 命令的
+        // A2A 默认开不受影响（各自按 noA2a 判断）。
+        a2a: args.a2aExplicit && !args.noA2a,
         port: args.port,
         qrScale: args.qrScale,
         noQr: args.noQr,
