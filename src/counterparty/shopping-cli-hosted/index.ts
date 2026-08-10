@@ -265,8 +265,28 @@ class ShoppingCliHostedHandle implements ChannelHandle {
       throw this.toChannelError(err);
     }
 
-    // 4. 结算 claim（内部，§24）。
-    await this.settleClaim(message_id, policy).catch(() => undefined);
+    // 4. 结算 claim（内部，§24）。审查 P2-R：completeClaim/failClaim 瞬时
+    // 失败不得静默吞掉——此前 .catch(() => undefined) 后照常 settled=true，
+    // claim 滞留 processing 直到网关 300s stale TTL（消息被
+    // listPendingMessages 隐藏、白等 5 分钟），且 settled=true 让 close()
+    // 跳过 abandon 兜底。失败时按 runtime M1 同款模式 best-effort abandon
+    //（释放 claim，内容寻址幂等保证重处理无重复效果），保持 settled=false
+    // 让 close() 兜底仍生效，然后向外传播原始错误。
+    try {
+      await this.settleClaim(message_id, policy);
+    } catch (err) {
+      this.settled = false;
+      try {
+        await this.deps.client.abandonClaim({
+          message_id,
+          idempotency_key: this.claimKey(message_id),
+          error: `claim settle failed, released: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      } catch {
+        // abandon 也失败：保持 settled=false，close() 再兜底一次
+      }
+      throw this.toChannelError(err);
+    }
     this.settled = true;
 
     // 5. 出站落账（§22：message_sent 证据）。

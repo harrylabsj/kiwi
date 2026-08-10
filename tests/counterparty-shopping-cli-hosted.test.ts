@@ -95,6 +95,39 @@ describe("ShoppingCliHostedChannel: 权威快照（§21）", () => {
 });
 
 describe("ShoppingCliHostedChannel: send（claim 内部机制 + 结算）", () => {
+  it("claim 结算失败 → best-effort abandon 释放 + 向外抛错（审查 P2-R）", async () => {
+    const mk = marketplace();
+    const channel = new ShoppingCliHostedChannel({ client: mk.merchant, now: () => NOW });
+    const handle = await channel.open(openInput());
+
+    const abandons: Array<{ message_id: number; idempotency_key: string; error: string }> = [];
+    const realAbandon = mk.merchant.abandonClaim.bind(mk.merchant);
+    mk.merchant.completeClaim = async () => {
+      throw new Error("simulated complete failure");
+    };
+    mk.merchant.abandonClaim = async (
+      input: { message_id: number; idempotency_key: string; error: string },
+    ) => {
+      abandons.push(input);
+      return realAbandon(input);
+    };
+
+    // 决策已 accepted、completeClaim 瞬断：此前 .catch(() => undefined)
+    // 静默吞错 + settled=true，claim 滞留 processing 直到 300s TTL。
+    await expect(handle.send({ envelope: declineEnvelope() })).rejects.toThrow(
+      /simulated complete failure/,
+    );
+    // claim 被 abandon 释放（消息立即可被重 claim；内容寻址幂等保证
+    // 重处理无重复效果），而非滞留 processing
+    expect(abandons.length).toBeGreaterThanOrEqual(1);
+    expect(abandons[0]?.message_id).toBe(1);
+    expect(abandons[0]?.error).toContain("claim settle failed");
+    expect(mk.merchant.claimStatus(1)).toBe("abandoned");
+
+    // close() 兜底路径不抛错（claim 已 abandoned，幂等）
+    await handle.close();
+  });
+
   it("send 转译 KNP→legacy，policy accepted，claim 结算为 processed，落 Ledger", async () => {
     const mk = marketplace();
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-hosted-ledger-"));
