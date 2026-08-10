@@ -33,6 +33,7 @@ import {
   type HandoffCandidate,
 } from "../../handoff/index.js";
 import type { ExecuteHandoffResult } from "../../handoff/index.js";
+import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
 import { contentDigest } from "../../negotiation/jcs.js";
 import type { AgentProfile } from "../../config/profile.js";
 import type { CommerceClient } from "../../commerce/types.js";
@@ -304,7 +305,12 @@ async function executeNegotiateBuyerTask(
     quantity: intent.quantity ?? 1,
     dealPriceMinor:
       intent.target_unit_price !== undefined
-        ? Math.round(intent.target_unit_price * 100)
+        ? (() => {
+            // 审查 BUG-04：目标价 major→minor 必须 lossless——静默舍入会把
+            // 错误的目标价写进 buyer 出价（fail-closed：lossy 时用缺省价）。
+            const converted = losslessToMinorUnits(intent.target_unit_price, 2);
+            return converted.lossless ? converted.amount_minor : NEGOTIATE_DEAL_PRICE_MINOR;
+          })()
         : NEGOTIATE_DEAL_PRICE_MINOR,
     deliveryBefore: intent.needed_by ?? NEGOTIATE_DELIVERY_BEFORE,
     senderIdentity: deps.profile.agent_id,

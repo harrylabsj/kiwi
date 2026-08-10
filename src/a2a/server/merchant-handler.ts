@@ -37,7 +37,8 @@ import {
 import { finalizeEnvelope } from "../../negotiation/domain/envelope.js";
 import { contentDigest } from "../../negotiation/jcs.js";
 import { evaluateConditionalOffer } from "../../negotiation/condition/evaluator.js";
-import type { NegotiationPhase } from "../../negotiation/state/phase.js";
+import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
+import { isTerminalPhase, type NegotiationPhase } from "../../negotiation/state/phase.js";
 import type { ProtocolErrorCode } from "../../negotiation/domain/common.js";
 import type { A2AMessage, A2APart } from "../client/types.js";
 import type {
@@ -252,8 +253,18 @@ export function createMerchantHandler(
     if (options.productSource !== undefined) {
       try {
         const product = await options.productSource.getProduct(sku);
+        // 审查 BUG-04：major→minor 必须 lossless——Math.round 会把 19.995
+        // 静默改写为 1999/2000 进入报价（P2-P 已修数据源路径，此处是生产
+        // merchant handler 的剩余舍入点）。无法精确表达 → fail-closed
+        // （抛错 → resolveProduct 回退演示价并注记）。
+        const converted = losslessToMinorUnits(product.price, 2);
+        if (!converted.lossless) {
+          throw new Error(
+            `商品源价格 ${product.price} 超出 ${MERCHANT_CURRENCY} 两位小数精度（lossy）`,
+          );
+        }
         const resolved = {
-          priceMinor: Math.round(product.price * 100),
+          priceMinor: converted.amount_minor,
           currency: product.currency,
           at: Date.parse(now()),
         };
@@ -295,6 +306,47 @@ export function createMerchantHandler(
     });
   };
 
+  // 审查 BUG-03：从持久 Ledger 恢复状态（必须在 return 之前执行）——重启后
+  // 终态不得重开、已发出的 conditional offer 必须继续可被接受（此前
+  // conditionalByNegotiation / closedNegotiations / phaseByNegotiation 纯内存，
+  // 重启全丢：已终态 negotiation 可重新打开、已发 offer 返回 offer_unknown）。
+  for (const negotiationId of ledger.listNegotiations()) {
+    const events = ledger.events(negotiationId);
+    let phase: NegotiationPhase = "OPEN";
+    for (const event of events) {
+      if (event.state_transition?.to_phase !== undefined) {
+        phase = event.state_transition.to_phase;
+      }
+    }
+    if (isTerminalPhase(phase)) {
+      closedNegotiations.add(negotiationId);
+      continue; // 终态后 conditional 已删除，不恢复
+    }
+    phaseByNegotiation.set(negotiationId, phase);
+    // 恢复最后发出的 conditional_offer（message_sent 事件携带完整 envelope）
+    let lastConditional: { conditional: Record<string, unknown>; quantity: number } | undefined;
+    for (const event of events) {
+      if (event.event_kind !== "message_sent") continue;
+      const envelope = event.wire_payload as
+        | { action?: string; payload?: Record<string, unknown> }
+        | undefined;
+      if (envelope?.action !== "conditional_offer") continue;
+      const payload = envelope.payload as
+        | {
+            offer_id?: string;
+            base_terms?: { items?: Array<{ quantity?: { value?: number } }> };
+          }
+        | undefined;
+      if (payload?.offer_id === undefined) continue;
+      lastConditional = {
+        conditional: envelope.payload as Record<string, unknown>,
+        quantity: payload.base_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY,
+      };
+    }
+    if (lastConditional !== undefined) {
+      conditionalByNegotiation.set(negotiationId, lastConditional);
+    }
+  }
   return {
     name: "kiwi-agent-serve-merchant",
     async handle(ctx: InboundNegotiationContext): Promise<NegotiationHandlerResult> {
@@ -490,4 +542,5 @@ export function createMerchantHandler(
       }
     },
   };
+
 }
