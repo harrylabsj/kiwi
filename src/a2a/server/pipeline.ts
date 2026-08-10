@@ -349,6 +349,35 @@ export class InboundPipeline {
             // 内容策略违规：envelope 携带 ledger 不得记录的保留键（§28/§36-5）。
             throw schemaInvalid("envelope contains reserved content that must not be recorded");
           }
+          if (err instanceof LedgerError && err.code === "ledger_duplicate_content") {
+            // 审查 P2-E：append 成功、幂等 commit 前崩溃的窗口。重试时消息
+            // 内容已落链（首次运行的处理结果），但幂等未 commit——此前走
+            // internalServerError 且永不 commit，消息永久卡死。此处补 commit
+            // 并返回按已落账事件还原的任务：客户端拿到稳定响应，后续重试
+            // 直接命中幂等短接。真实恶意重放（同 message_id 异 digest）在
+            // 幂等 check 层已被拒，到不了这里。
+            const prior = this.ledger.findByMessageId(envelope.message_id);
+            const recoveredTask = this.tasks.resolveFromLedger(this.ledger, taskId);
+            if (prior === null || recoveredTask === null) {
+              this.logError("ledger duplicate but prior event/task unrecoverable", err);
+              throw internalServerError();
+            }
+            try {
+              this.idempotency.commit({
+                sender_identity: senderIdentity,
+                message_id: envelope.message_id,
+                digest: envelope.digest,
+                negotiation_id: envelope.negotiation_id,
+                outcome: { kind: "ok", result: { task: recoveredTask } },
+                ledger_event_id: prior.event.event_id,
+                ledger_event_digest: prior.event.event_digest,
+              });
+            } catch (commitErr) {
+              this.logError("idempotency commit failed during duplicate recovery", commitErr);
+              throw internalServerError();
+            }
+            return { task: recoveredTask, ledgerEvent: prior.event };
+          }
           this.logError("ledger append failed", err);
           throw internalServerError();
         }
