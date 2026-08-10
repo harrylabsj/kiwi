@@ -399,4 +399,19 @@ export class DeterministicNegotiationRunner implements NegotiationRunner {
       // Abandon must never mask the operator-facing outcome.
     }
   }
+
+  /** 审查 BUG-08：对方已接受 = 本消息已处理的终态——以 completeClaim 权威
+   *  结算。abandon 的语义是释放 claim 允许重领，此前 accept 后 abandon 靠
+   *  进程内存 settled 集合遮挡，重启后消息再次进入处理（重复 claim/快照/
+   *  通知）。Best-effort：失败由网关 stale TTL 兜底。 */
+  async complete(prepared: Pick<PreparedCandidate, "binding">): Promise<void> {
+    try {
+      await this.client.completeClaim({
+        message_id: prepared.binding.message_id,
+        idempotency_key: prepared.binding.idempotency_key,
+      });
+    } catch {
+      // Complete must never mask the operator-facing outcome.
+    }
+  }
 }

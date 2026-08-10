@@ -892,7 +892,10 @@ export class AgentKernel {
     // the consensus once and never re-open this conversation.
     if (prepared.counterpart_action === "accept_nonbinding") {
       this.markSettled(settledKey(prepared.binding));
-      await runner.abandon(prepared, "counterpart accepted non-binding — consensus").catch(() => undefined);
+      // 审查 BUG-08：对方已接受 = 本消息已处理——以 completeClaim 权威结算
+      // （此前 abandon 释放 claim 允许重领，进程内存 settled 集合重启即失，
+      // 消息再次进入处理产生重复 claim/快照/共识通知）。
+      await runner.complete(prepared).catch(() => undefined);
       return `已达成共识（对方接受非绑定报价），磋商结束，不再继续。`;
     }
     if (this.settledNegotiations.has(settledKey(prepared.binding))) {
