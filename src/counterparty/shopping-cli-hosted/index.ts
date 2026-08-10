@@ -126,6 +126,9 @@ class ShoppingCliHostedHandle implements ChannelHandle {
   private readonly subscriptions = new Set<() => void | Promise<void>>();
   private claimHeld = false;
   private settled = false;
+  /** 上次已落账的观察键（status:lastMessageId；审查 P3：避免 100ms 轮询
+   *  每拍写 ledger，仅状态变化落账）。 */
+  private lastObservationKey: string | null = null;
 
   constructor(deps: ShoppingCliHostedHandleDeps) {
     this.deps = deps;
@@ -334,27 +337,34 @@ class ShoppingCliHostedHandle implements ChannelHandle {
       throw this.toChannelError(err);
     }
 
-    if (this.deps.ledger !== undefined) {
-      this.deps.ledger.append({
-        event_kind: "system",
-        negotiation_id: this.deps.negotiationId,
-        remote_context_id: conversation_id,
-        identity: {
-          sender_identity: this.deps.senderIdentity,
-          counterparty_identity: this.deps.identity,
-        },
-        capability: { ...HOSTED_CAPABILITY },
-        outcome: {
-          kind: "ok",
-          result: { snapshot_state: snapshot.conversation.status },
-        },
-        occurred_at: this.deps.now(),
-      });
-    }
-
     const messageIds = snapshot.messages
       .map((m) => legacyMessageIdToKnp(m.id))
       .filter((id): id is string => id !== null);
+    if (this.deps.ledger !== undefined) {
+      // 审查 P3：subscribe 以 100ms 轮询 getState——此前每次调用都落一条
+      // system 观察事件（约 600 条/分钟，ledger 无界膨胀）。仅当状态或
+      // 最新消息变化时才落账（对齐 poller 的"仅状态变化"语义）。
+      const lastMessageId = messageIds.length > 0 ? messageIds[messageIds.length - 1] : "";
+      const obsKey = `${snapshot.conversation.status}:${lastMessageId}`;
+      if (this.lastObservationKey !== obsKey) {
+        this.lastObservationKey = obsKey;
+        this.deps.ledger.append({
+          event_kind: "system",
+          negotiation_id: this.deps.negotiationId,
+          remote_context_id: conversation_id,
+          identity: {
+            sender_identity: this.deps.senderIdentity,
+            counterparty_identity: this.deps.identity,
+          },
+          capability: { ...HOSTED_CAPABILITY },
+          outcome: {
+            kind: "ok",
+            result: { snapshot_state: snapshot.conversation.status },
+          },
+          occurred_at: this.deps.now(),
+        });
+      }
+    }
     return {
       channel: "shopping-cli-hosted",
       state: snapshot.conversation.status,
