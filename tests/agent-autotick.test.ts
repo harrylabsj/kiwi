@@ -297,3 +297,64 @@ describe("negotiationAutoTick 饥饿回归（KW-REL-01）", () => {
     expect(claims).toEqual([]);
   });
 });
+
+describe("autopilot 共识结算（审查 BUG-08）", () => {
+  it("对方 accept_nonbinding 后 claim 被 complete 结算而非 abandon", async () => {
+    const completed: number[] = [];
+    const abandoned: number[] = [];
+    const pending: PendingMessage[] = [
+      {
+        conversation_id: "conv-consensus",
+        message_id: 501,
+        conversation_status: "waiting_merchant",
+        sender_role: "buyer",
+        preview: "接受",
+        created_at: "2026-08-03T00:01:00Z",
+      },
+    ];
+    const client = {
+      listPendingMessages: async () => pending,
+      claimMessage: async () => ({ claimed: true }),
+      getNegotiationSnapshot: async () => {
+        const snap = snapshot("conv-consensus", 501);
+        // 对方（buyer）已 accept 我们的 offer：消息带 action
+        return {
+          ...snap,
+          messages: [
+            {
+              id: 501,
+              sender_role: "buyer",
+              created_at: "2026-08-03T00:01:00Z",
+              public_message: "接受",
+              action: "accept_nonbinding" as const,
+            },
+          ],
+        };
+      },
+      submitNegotiationDecision: async () => ({ result: "accepted" }),
+      completeClaim: async (input: { message_id: number }) => {
+        completed.push(input.message_id);
+        return { ok: true };
+      },
+      abandonClaim: async (input: { message_id: number }) => {
+        abandoned.push(input.message_id);
+        return { ok: true };
+      },
+      failClaim: async () => ({ ok: true }),
+      health: async () => ({ ok: true }),
+      getCapabilities: async () => ({
+        protocol_version: PROTOCOL_VERSION,
+        capabilities: ["price_negotiate"],
+      }),
+    } as unknown as CommerceClient;
+    const kernel = await openAutopilotKernel(client);
+
+    const result = await kernel.negotiationAutoTick();
+
+    expect(result).toContain("已达成共识");
+    // 权威结算：completeClaim（此前 abandon 释放 claim，重启后消息再次
+    // 进入处理产生重复 claim/快照/共识通知）
+    expect(completed).toEqual([501]);
+    expect(abandoned).toEqual([]);
+  });
+});
