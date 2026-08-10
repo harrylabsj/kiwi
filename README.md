@@ -90,6 +90,12 @@ kiwi> /negotiate cagt_...            # 磋商 → agreement（无副作用）
 ```
 
 > 注册域名默认 `merchant-<agent_id>.local`，可用 `KIWI_CATALOG_DOMAIN` 覆盖；catalog 地址默认 `http://127.0.0.1:8600`（`KIWI_CATALOG_URL` 覆盖）。
+>
+> **公网 merchant**：A2A 节点默认监听回环并广告回环地址（仅本机可达）。要让
+> 外部 buyer 经 DNS + 反向代理（Caddy/Nginx）发现并直连，用
+> `KIWI_A2A_PUBLIC_URL=https://<domain>`（如 `https://veyquo.com`）覆盖——
+> 节点仍绑定 `127.0.0.1:<port>`，但 Agent Card / UCP / catalog 注册都广告该
+> 公网 HTTPS 地址，注册域名缺省取 `<domain>`（`KIWI_CATALOG_DOMAIN` 仍优先）。
 
 ### 真实商品闭环（shopping-cli 开放商品层）
 

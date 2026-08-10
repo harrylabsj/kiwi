@@ -81,6 +81,7 @@ export async function cmdWeixin(args: WeixinCliArgs): Promise<number> {
         profile,
         catalog,
         preferredPort: args.port,
+        ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
         ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
       });
       process.stderr.write(
