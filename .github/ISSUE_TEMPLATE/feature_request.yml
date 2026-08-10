@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose a new capability or a meaningful improvement
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a change. Before opening, please check the existing
+        issues and the docs in `docs/` to avoid duplicates. Focus on the problem
+        to solve rather than prescribing an implementation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What user or protocol need is not currently met?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Sketch the capability, behavior, or interface change you envision.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds or other designs you evaluated and why they are insufficient.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and impact
+      description: Repos affected (kiwi, kiwi-catalog, shopping-cli), protocol/contract impact, and compatibility notes.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links to protocol docs, schemas, or related issues.
