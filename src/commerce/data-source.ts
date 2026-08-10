@@ -57,6 +57,9 @@ export interface ProductFact {
   readonly stock?: number;
   /** 配送承诺（工作日，可选）。 */
   readonly delivery_lead_days?: number;
+  /** 配送方式/承诺标签（如 ["same-city","courier"]；审查 P3：此前 wire
+   *  声明该字段但 parse 静默丢弃，配送承诺数据从未到达消费方）。 */
+  readonly delivery_attributes?: readonly string[];
 }
 
 export interface ProductSearchQuery {

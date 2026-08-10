@@ -294,6 +294,22 @@ export class AgentKernel {
   private turnSeq = 0;
   /** Negotiation conversations that reached consensus — the auto-follow must never re-open them. */
   private readonly settledNegotiations = new Set<string>();
+  // 审查 P3：settled 集合只进不出（每共识会话一条 key 永驻内存）。网关已
+  // 处理的消息不会再进 pending，旧 key 只防极端回滚重放——FIFO 上限截断
+  // （超出后仅影响极端场景下的一次多余重新计数，幂等无商业效果）。
+  private static readonly SETTLED_MAX_KEYS = 2000;
+
+  private markSettled(key: string): void {
+    this.settledNegotiations.add(key);
+    if (this.settledNegotiations.size > AgentKernel.SETTLED_MAX_KEYS) {
+      // Set 迭代序 = 插入序：从最旧开始删除
+      for (const oldest of this.settledNegotiations) {
+        this.settledNegotiations.delete(oldest);
+        if (this.settledNegotiations.size <= AgentKernel.SETTLED_MAX_KEYS) break;
+      }
+    }
+  }
+
   // 审查 P2-I：被网关权威门持续拒绝的消息（failClaim 后回 pending 队首，
   // 确定性决策每次 tick 重新 claim → 同一拒绝）——无退避会每 tick 无限
   // claim→fail 并饿死队尾 live 消息。连续失败达上限后进入冷却窗口，
@@ -872,7 +888,7 @@ export class AgentKernel {
     // Termination: STOP when the counterpart just accepted our offer — report
     // the consensus once and never re-open this conversation.
     if (prepared.counterpart_action === "accept_nonbinding") {
-      this.settledNegotiations.add(settledKey(prepared.binding));
+      this.markSettled(settledKey(prepared.binding));
       await runner.abandon(prepared, "counterpart accepted non-binding — consensus").catch(() => undefined);
       return `已达成共识（对方接受非绑定报价），磋商结束，不再继续。`;
     }
@@ -905,7 +921,7 @@ export class AgentKernel {
     }
     // Our own non-binding acceptance ends the negotiation.
     if (prepared.decision.action === "accept_nonbinding") {
-      this.settledNegotiations.add(bindingKey);
+      this.markSettled(bindingKey);
     }
 
     const counterpart =

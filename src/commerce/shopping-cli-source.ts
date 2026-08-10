@@ -107,6 +107,15 @@ function parseProduct(raw: unknown, path: string): ProductFact {
     ...(priceMinor !== undefined ? { price_minor: priceMinor } : {}),
     ...(typeof obj.currency === "string" && obj.currency !== "" ? { currency: obj.currency } : {}),
     ...(typeof obj.stock === "number" && Number.isInteger(obj.stock) ? { stock: obj.stock } : {}),
+    // 审查 P3：delivery_attributes（shopping-cli product_summary 返回的配送
+    // 承诺数组）此前声明但从未映射，数据被静默丢弃。
+    ...(Array.isArray(obj.delivery_attributes)
+      ? {
+          delivery_attributes: obj.delivery_attributes.filter(
+            (d): d is string => typeof d === "string" && d !== "",
+          ),
+        }
+      : {}),
   };
 }
 
