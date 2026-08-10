@@ -12,6 +12,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Supervisor tests exercise the managed local gateway against the public
+      # shopping-cli consumer. Resolve only the allowlisted, full-SHA lock entry
+      # so ordinary Kiwi CI remains reproducible without a private token.
+      - id: portfolio_lock
+        name: Read locked shopping-cli source
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs = require('fs');
+          const lock = JSON.parse(fs.readFileSync('portfolio.lock.json', 'utf8'));
+          const entry = lock.repositories?.['shopping-cli'];
+          if (!entry || entry.repository !== 'harrylabsj/shopping-cli') {
+            throw new Error('portfolio lock must allowlist harrylabsj/shopping-cli');
+          }
+          if (!/^[0-9a-f]{40}$/.test(entry.commit)) {
+            throw new Error(`shopping-cli commit is not a full 40-char SHA: ${entry.commit}`);
+          }
+          console.log(`shopping_cli_sha=${entry.commit}`);
+          NODE
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: harrylabsj/shopping-cli
+          ref: ${{ steps.portfolio_lock.outputs.shopping_cli_sha }}
+          path: shopping-cli
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
