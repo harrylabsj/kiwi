@@ -314,6 +314,96 @@ describe("merchant publish orchestration (D2/D3)", () => {
     expect(withdrawUrls[0]).not.toContain("lst_cap");
   });
 
+  it("refuses reconcile when projection is empty but ACTIVE listings exist (P1-B)", async () => {
+    // 审查 P1-B：空投影 + 既有 ACTIVE listing = 配置错误典型信号
+    // （--shopping-cli-merchant 不匹配 / --shopping-cli-db 空库）。此前
+    // reconcile 会全量下架且报告仍 ok:true——必须 fail-closed。
+    const withdrawUrls: string[] = [];
+    const fetchImpl = publishFetch({
+      withdrawUrls,
+      selfCheck: [
+        { listing_id: "lst_1", listing_type: "product", source_product_ref: "SKU-1", publication_state: "ACTIVE" },
+        { listing_id: "lst_2", listing_type: "product", source_product_ref: "SKU-2", publication_state: "ACTIVE" },
+      ],
+    });
+    const spawnImpl = compatSpawn(() => ({
+      status: 0,
+      stdout: JSON.stringify({ ok: true, results: [] }),
+      stderr: "",
+    }));
+
+    const report = await merchantPublish({
+      profile: MERCHANT_PROFILE,
+      catalogBaseUrl: "http://127.0.0.1:8600",
+      ownerTokenSecret: SECRET,
+      shoppingCliDb: "/tmp/shop.sqlite",
+      fetchImpl,
+      spawnImpl,
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.steps.listings.withdrawn).toBe(0);
+    expect(withdrawUrls).toHaveLength(0); // 一条都不下架
+    const errors = report.steps.listings.errors ?? [];
+    expect(errors.some((e) => e.includes("拒绝 reconcile 下架"))).toBe(true);
+  });
+
+  it("allows reconcile when projection is empty and no listings exist (P1-B)", async () => {
+    const withdrawUrls: string[] = [];
+    const fetchImpl = publishFetch({
+      withdrawUrls,
+      selfCheck: [{ listing_id: "lst_cap", listing_type: "capability", source_product_ref: "CAP-1", publication_state: "ACTIVE" }],
+    });
+    const spawnImpl = compatSpawn(() => ({
+      status: 0,
+      stdout: JSON.stringify({ ok: true, results: [] }),
+      stderr: "",
+    }));
+
+    const report = await merchantPublish({
+      profile: MERCHANT_PROFILE,
+      catalogBaseUrl: "http://127.0.0.1:8600",
+      ownerTokenSecret: SECRET,
+      shoppingCliDb: "/tmp/shop.sqlite",
+      fetchImpl,
+      spawnImpl,
+    });
+
+    // 只有 capability listing（不在投影集合、本就不处理）→ 不误报
+    expect(report.ok).toBe(true);
+    expect(report.steps.listings.withdrawn).toBe(0);
+    expect(withdrawUrls).toHaveLength(0);
+  });
+
+  it("explicit allowEmptyProjectionReconcile permits mass withdraw (P1-B)", async () => {
+    const withdrawUrls: string[] = [];
+    const fetchImpl = publishFetch({
+      withdrawUrls,
+      selfCheck: [
+        { listing_id: "lst_1", listing_type: "product", source_product_ref: "SKU-1", publication_state: "ACTIVE" },
+      ],
+    });
+    const spawnImpl = compatSpawn(() => ({
+      status: 0,
+      stdout: JSON.stringify({ ok: true, results: [] }),
+      stderr: "",
+    }));
+
+    const report = await merchantPublish({
+      profile: MERCHANT_PROFILE,
+      catalogBaseUrl: "http://127.0.0.1:8600",
+      ownerTokenSecret: SECRET,
+      shoppingCliDb: "/tmp/shop.sqlite",
+      allowEmptyProjectionReconcile: true,
+      fetchImpl,
+      spawnImpl,
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.steps.listings.withdrawn).toBe(1);
+    expect(withdrawUrls).toHaveLength(1);
+  });
+
   it("withdraw reconcile failure is reported (fail-closed)", async () => {
     const fetchImpl = (async (url: string) => {
       const u = String(url);

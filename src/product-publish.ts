@@ -57,6 +57,11 @@ export interface MerchantPublishOptions {
   shoppingCliMerchant?: string;
   /** catalog 注册域名（缺省 KIWI_CATALOG_DOMAIN / merchant-{agent_id}.local）。 */
   catalogDomain?: string;
+  /** 审查 P1-B：投影为空但 catalog 存在 ACTIVE product listing 时，默认
+   *  拒绝 reconcile 下架（典型成因是 --shopping-cli-merchant 不匹配或
+   *  --shopping-cli-db 指向空库，静默全量下架=数据丢失且报告仍 ok）。
+   *  设为 true 显式放行"全部下架"语义（CLI --allow-empty-projection）。 */
+  allowEmptyProjectionReconcile?: boolean;
   /** 测试注入。 */
   fetchImpl?: typeof fetch;
   spawnImpl?: typeof spawnSync;
@@ -349,10 +354,46 @@ export async function merchantPublish(
   const projectedRefs = new Set(
     projections.map((p) => String(p.source_product_ref ?? "")).filter((ref) => ref !== ""),
   );
+  // 审查 P1-B（2026-08-10 复验）：空投影 + 既有 ACTIVE product listing =
+  // 配置错误典型信号（--shopping-cli-merchant 不匹配 / --shopping-cli-db
+  // 指向空库）——此前 reconcile 会把自查端点返回的全部 listing 下架且
+  // 报告仍 ok:true，自动化发布不告警。fail-closed：拒绝下架，除非显式
+  // allowEmptyProjectionReconcile。自查失败不在此重复判定（下方循环会报）。
+  let reconcileBlocked = false;
+  if (projections.length === 0 && options.allowEmptyProjectionReconcile !== true) {
+    const probeUrl =
+      `${baseUrl}/v1/agents/${encodeURIComponent(catalogAgentId)}/listings` +
+      `?owner_token=${encodeURIComponent(effectiveOwnerToken)}&limit=100`;
+    try {
+      const probeRes = await fetchImpl(probeUrl, { signal: AbortSignal.timeout(15_000) });
+      const probePayload = (await probeRes.json()) as {
+        ok?: boolean;
+        results?: Array<Record<string, unknown>>;
+      };
+      if (probeRes.ok && probePayload.ok === true) {
+        const hasActiveProductListing = (probePayload.results ?? []).some(
+          (rec) =>
+            String(rec.listing_type ?? "") === "product" &&
+            String(rec.publication_state ?? "") !== "WITHDRAWN",
+        );
+        if (hasActiveProductListing) {
+          reconcileBlocked = true;
+          reportErrors.push(
+            "投影为空但 catalog 存在 ACTIVE product listing：拒绝 reconcile 下架" +
+              "（疑似 --shopping-cli-merchant 不匹配或 --shopping-cli-db 指向空库）；" +
+              "如确需全部下架请显式传 --allow-empty-projection",
+          );
+        }
+      }
+    } catch {
+      // 探测失败交给下方 reconcile 循环报错（fail-closed 语义一致）
+    }
+  }
   const withdrawnRefs: string[] = [];
   try {
     let cursor: string | undefined;
     for (;;) {
+      if (reconcileBlocked) break;
       const listUrl =
         `${baseUrl}/v1/agents/${encodeURIComponent(catalogAgentId)}/listings` +
         `?owner_token=${encodeURIComponent(effectiveOwnerToken)}&limit=100` +

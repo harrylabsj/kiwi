@@ -122,6 +122,7 @@ interface ParsedArgs {
   shoppingCliDb?: string;
   shoppingCliPath?: string;
   shoppingCliMerchant?: string;
+  allowEmptyProjectionReconcile: boolean;
   merchantId?: string;
   merchantName?: string;
   output?: string;
@@ -163,6 +164,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let output: string | undefined;
   let force = false;
   let noInstall = false;
+  let allowEmptyProjectionReconcile = false;
   let agentId: string | undefined;
   let ownerId: string | undefined;
   let autoNegotiate = false;
@@ -207,6 +209,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       output = argv[++i];
     } else if (arg === "--force") {
       force = true;
+    } else if (arg === "--allow-empty-projection") {
+      // 审查 P1-B：显式放行"投影为空时 reconcile 全量下架"（默认拒绝）
+      allowEmptyProjectionReconcile = true;
     } else if (arg === "--no-install") {
       noInstall = true;
     } else if (arg === "--agent-id") {
@@ -282,6 +287,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     force,
     noInstall,
     autoNegotiate,
+    allowEmptyProjectionReconcile,
     weixinAllow,
     relogin,
     qrScale,
@@ -294,6 +300,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (shoppingCliDb !== undefined) out.shoppingCliDb = shoppingCliDb;
   if (shoppingCliPath !== undefined) out.shoppingCliPath = shoppingCliPath;
   if (shoppingCliMerchant !== undefined) out.shoppingCliMerchant = shoppingCliMerchant;
+  if (allowEmptyProjectionReconcile) out.allowEmptyProjectionReconcile = true;
   if (merchantId !== undefined) out.merchantId = merchantId;
   if (merchantName !== undefined) out.merchantName = merchantName;
   if (output !== undefined) out.output = output;
@@ -890,6 +897,9 @@ async function cmdMerchantPublish(args: ParsedArgs): Promise<number> {
     ...(args.shoppingCliPath !== undefined ? { shoppingCliPath: args.shoppingCliPath } : {}),
     ...(args.shoppingCliMerchant !== undefined
       ? { shoppingCliMerchant: args.shoppingCliMerchant }
+      : {}),
+    ...(args.allowEmptyProjectionReconcile
+      ? { allowEmptyProjectionReconcile: true }
       : {}),
   });
   printJson(report);
