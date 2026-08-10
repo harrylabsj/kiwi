@@ -127,6 +127,28 @@ export class IlinkClient {
       if (redirectHost === "") {
         throw new WeixinError("validation", "scaned_but_redirect 缺少 redirect_host");
       }
+      // 审查 P3：redirect_host 是后续 bot_token 直送目标（经 base_info）——
+      // 此前零校验直接拼 https://${redirectHost}。至少校验是纯 hostname
+      // （无 scheme/path/port/userinfo），防 iLink 被攻破时把凭证流量导到
+      // 任意主机（协议内信任模型可接受，但语法边界必须 fail-closed）。
+      let parsed: URL;
+      try {
+        parsed = new URL(`https://${redirectHost}`);
+      } catch {
+        throw new WeixinError("validation", `scaned_but_redirect 非法 redirect_host: ${redirectHost}`);
+      }
+      if (
+        parsed.hostname !== redirectHost.toLowerCase() ||
+        parsed.pathname !== "/" ||
+        parsed.port !== "" ||
+        parsed.username !== "" ||
+        parsed.password !== ""
+      ) {
+        throw new WeixinError(
+          "validation",
+          `scaned_but_redirect redirect_host 必须是无 scheme/path/port 的纯 hostname`,
+        );
+      }
       return { state: "scaned_but_redirect", baseUrl: `https://${redirectHost}` };
     }
     if (status === "wait" || status === "scaned" || status === "expired") {
