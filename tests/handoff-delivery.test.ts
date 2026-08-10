@@ -244,3 +244,41 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+describe("handoff_delivery_failed 审计事件（审查 P2-F，2026-08-10）", () => {
+  it("appendDeliveryEvent 可落 handoff_delivery_failed（此前必抛 schemaError）", () => {
+    const ledger = store();
+    const c = candidate();
+    const failed = ledger.appendDeliveryEvent({
+      kind: "handoff_delivery_failed",
+      candidate: c,
+      handoff_id: "hnd_failed",
+      identity: IDENTITY,
+      capability: CAPABILITY,
+      outcome: { kind: "error", code: "request_failed", message: "probe timed out" },
+    });
+    expect(failed.event_kind).toBe("handoff_delivery_failed");
+    // 审计事件不产生观察状态：投影保持 undefined（从未 delivered）
+    expect(deliveryState(ledger.events(c.negotiation_id))).toBeUndefined();
+  });
+
+  it("失败事件后交付照常推进（audit-only，不影响状态机）", () => {
+    const ledger = store();
+    const c = candidate();
+    ledger.appendDeliveryEvent({
+      kind: "handoff_delivery_failed",
+      candidate: c,
+      handoff_id: "hnd_01",
+      identity: IDENTITY,
+      capability: CAPABILITY,
+    });
+    ledger.appendDeliveryEvent({
+      kind: "handoff_delivered",
+      candidate: c,
+      handoff_id: "hnd_01",
+      identity: IDENTITY,
+      capability: CAPABILITY,
+    });
+    expect(deliveryState(ledger.events(c.negotiation_id))).toBe("DELIVERED");
+  });
+});

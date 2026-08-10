@@ -264,6 +264,21 @@ async function executeHandoffUnlocked(input: ExecuteHandoffInput): Promise<Execu
       // 每次重试都新建候选再置 stale，候选/事件堆积）。安全拒绝（scheme/
       // host/DNS 保留网段 → invalid_input）仍是终态——内容确实不可用。
       if (err instanceof CommerceError && err.code === "request_failed") {
+        // 审查 P2-F：交付失败在 handoff 创建前落 handoff_delivery_failed
+        // 审计事件（KTH rev0.3 §9）。此前该 kind 无状态映射，append 必抛
+        // schemaError，失败交付审计缺失（3 处声明、0 处产生）。
+        ledger.append({
+          kind: "handoff_delivery_failed",
+          candidate,
+          identity: input.identity,
+          capability: input.capability,
+          outcome: {
+            kind: "error",
+            code: "request_failed",
+            message: err.message,
+          },
+          occurred_at: now(),
+        });
         return { kind: "probe_failed", reason: err.message };
       }
       return stale(

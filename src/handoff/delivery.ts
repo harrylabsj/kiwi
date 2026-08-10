@@ -113,11 +113,16 @@ const DELIVERY_TRANSITIONS: Readonly<
   REVOKED: new Set(),
 };
 
-/** 迁移校验：非法转换抛 schemaError（fail-closed）。 */
+/** 迁移校验：非法转换抛 schemaError（fail-closed）。
+ * `handoff_delivery_failed` 是审计事件（KTH rev0.3 §9：交付失败在 handoff
+ * 创建前落账），不产生观察状态、保留前态——不参与迁移校验。 */
 export function transitionDeliveryState(
   current: HandoffDeliveryState | undefined,
   eventKind: HandoffDeliveryEventKind,
-): HandoffDeliveryState {
+): HandoffDeliveryState | undefined {
+  if (eventKind === "handoff_delivery_failed") {
+    return current;
+  }
   const target = DELIVERY_EVENT_TO_STATE[eventKind];
   if (target === undefined) {
     throw schemaError(
