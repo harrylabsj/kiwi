@@ -23,6 +23,7 @@
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
+import { createMonotonicClock } from "./clock.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ShoppingCliCatalogSource, type CatalogSource } from "../discovery/catalog-source/index.js";
@@ -139,15 +140,6 @@ export function summarizeNegotiation(
   ].join("\n");
 }
 
-function monotonicNow(): () => string {
-  let tick = 0;
-  const base = Date.parse("2026-08-07T00:00:00.000Z");
-  return () => {
-    const t = new Date(base + tick);
-    tick += 1;
-    return t.toISOString();
-  };
-}
 
 type EnvelopeSeed = Omit<
   Parameters<typeof finalizeEnvelope>[0],
@@ -257,7 +249,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
   const deliveryBefore = options.deliveryBefore ?? NEGOTIATE_DELIVERY_BEFORE;
   const senderIdentity = options.senderIdentity ?? "buyer:a2a-demo";
   const dir = mkdtempSync(path.join(tmpdir(), "kiwi-a2a-negotiate-"));
-  const now = monotonicNow();
+  const now = createMonotonicClock();
   const ledger = new LedgerStore({ dir, now });
   const idempotency = new IdempotencyStore({ dir, now });
   const steps: string[] = [];
