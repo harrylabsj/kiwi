@@ -38,7 +38,14 @@ import { finalizeEnvelope } from "../../negotiation/domain/envelope.js";
 import { contentDigest } from "../../negotiation/jcs.js";
 import { evaluateConditionalOffer } from "../../negotiation/condition/evaluator.js";
 import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
-import { isTerminalPhase, type NegotiationPhase } from "../../negotiation/state/phase.js";
+import {
+  createNegotiationPhase,
+  isTerminalPhase,
+  transitionPhase,
+  type NegotiationPhase,
+  type NegotiationPhaseEvent,
+  type NegotiationPhaseState,
+} from "../../negotiation/state/phase.js";
 import type { ProtocolErrorCode } from "../../negotiation/domain/common.js";
 import type { A2AMessage, A2APart } from "../client/types.js";
 import type {
@@ -204,9 +211,10 @@ export function createMerchantHandler(
   // 不得以同一 negotiation_id 重开（§17.4/§21.2）——运行时此前无任何终态
   // 守卫：连发两份 accept 可产出两份 agreement、withdraw 后可再次成交。
   const closedNegotiations = new Set<string>();
-  // 每 negotiation 的最小相位轨迹（OPEN → 终态），供 state_transition 事件；
-  // 中间相位（OFFER_OPEN 等）由 conditionalByNegotiation 隐式表达。
-  const phaseByNegotiation = new Map<string, NegotiationPhase>();
+  // 每 negotiation 的相位机状态（审查 BUG-10：完整状态含 active_offer_id /
+  // resume_phase——此前只记 OPEN→终态的最小轨迹，中间相位由
+  // conditionalByNegotiation 隐式表达，规范转换表不是接收消息的权威门）。
+  const phaseStateByNegotiation = new Map<string, NegotiationPhaseState>();
   // 产生商业承诺的动作：终态后一律拒绝；text-only（clarification）放行。
   const COMMERCIAL_ACTIONS = new Set([
     "inquiry",
@@ -217,14 +225,71 @@ export function createMerchantHandler(
     "accept_nonbinding",
   ]);
 
-  /** 落 state_transition 事件并推进本机相位（recovery.deriveLocalPhase 消费）。 */
-  const appendPhaseTransition = async (negotiationId: string, toPhase: NegotiationPhase): Promise<void> => {
-    const fromPhase = phaseByNegotiation.get(negotiationId) ?? "OPEN";
-    phaseByNegotiation.set(negotiationId, toPhase);
+  /** 审查 BUG-10：把入站 action 映射到相位机事件并推进；非法转换（不在
+   *  转换表内的组合）fail-closed 返回 false（调用方 decline state_conflict）。
+   *  clarification 是文本应答即恢复：同轮 apply clarification_response，
+   *  相位净不变。相位变化（含中间相位 OFFER_OPEN）落 state_transition 事件，
+   *  重启可完整重建。 */
+  const advancePhase = async (
+    negotiationId: string,
+    event: NegotiationPhaseEvent,
+  ): Promise<boolean> => {
+    const state = phaseStateByNegotiation.get(negotiationId) ?? createNegotiationPhase(negotiationId);
+    let next: NegotiationPhaseState;
+    try {
+      next = transitionPhase(state, event);
+    } catch {
+      return false;
+    }
+    phaseStateByNegotiation.set(negotiationId, next);
+    if (next.phase !== state.phase) {
+      await appendPhaseTransition(negotiationId, next.phase, state.phase);
+    }
+    return true;
+  };
+
+  /** 入站 action → 相位机事件（inquiry/rfq 是起始动作，无转换）。 */
+  const actionToPhaseEvent = (
+    envelope: { action: string; payload?: unknown },
+  ): NegotiationPhaseEvent | undefined => {
+    const offerId = String((envelope.payload as { offer_id?: unknown } | undefined)?.offer_id ?? "");
+    switch (envelope.action) {
+      case "offer":
+        return { type: "offer", offer_id: offerId };
+      case "counter_offer":
+        return { type: "counter_offer", offer_id: offerId };
+      case "conditional_offer":
+        return { type: "conditional_offer", offer_id: offerId };
+      case "clarification":
+        return { type: "clarification" };
+      case "accept_nonbinding":
+        return { type: "accept_nonbinding", offer_id: offerId };
+      case "withdraw":
+        return { type: "withdraw", scope: (envelope.payload as { scope?: string } | undefined)?.scope === "negotiation" ? "negotiation" : "offer" };
+      case "decline":
+        return { type: "decline", scope: (envelope.payload as { scope?: string } | undefined)?.scope === "negotiation" ? "negotiation" : "offer" };
+      case "cancel":
+        return { type: "cancel" };
+      default:
+        return undefined;
+    }
+  };
+
+  /** 落 state_transition 事件并推进本机相位（recovery.deriveLocalPhase 消费）。
+   *  fromPhase 必须显式传入——调用方若已把 next 写入 map 再读，from 会变成
+   *  已推进的值（审查 BUG-10 实现注记）。 */
+  const appendPhaseTransition = async (
+    negotiationId: string,
+    toPhase: NegotiationPhase,
+    fromPhase?: NegotiationPhase,
+  ): Promise<void> => {
+    const current = phaseStateByNegotiation.get(negotiationId);
+    const effectiveFrom = fromPhase ?? current?.phase ?? "OPEN";
+    phaseStateByNegotiation.set(negotiationId, { ...(current ?? createNegotiationPhase(negotiationId)), phase: toPhase });
     await ledger.append({
       event_kind: "state_transition",
       negotiation_id: negotiationId,
-      state_transition: { from_phase: fromPhase, to_phase: toPhase },
+      state_transition: { from_phase: effectiveFrom, to_phase: toPhase },
       identity: {
         sender_identity: sender,
         counterparty_identity: counterparty,
@@ -308,7 +373,7 @@ export function createMerchantHandler(
 
   // 审查 BUG-03：从持久 Ledger 恢复状态（必须在 return 之前执行）——重启后
   // 终态不得重开、已发出的 conditional offer 必须继续可被接受（此前
-  // conditionalByNegotiation / closedNegotiations / phaseByNegotiation 纯内存，
+  // conditionalByNegotiation / closedNegotiations / phaseStateByNegotiation 纯内存，
   // 重启全丢：已终态 negotiation 可重新打开、已发 offer 返回 offer_unknown）。
   for (const negotiationId of ledger.listNegotiations()) {
     const events = ledger.events(negotiationId);
@@ -322,7 +387,10 @@ export function createMerchantHandler(
       closedNegotiations.add(negotiationId);
       continue; // 终态后 conditional 已删除，不恢复
     }
-    phaseByNegotiation.set(negotiationId, phase);
+    phaseStateByNegotiation.set(negotiationId, {
+      negotiation_id: negotiationId,
+      phase,
+    });
     // 恢复最后发出的 conditional_offer（message_sent 事件携带完整 envelope）
     let lastConditional: { conditional: Record<string, unknown>; quantity: number } | undefined;
     for (const event of events) {
@@ -359,6 +427,18 @@ export function createMerchantHandler(
         return declineReply("state_conflict");
       }
 
+      // 审查 BUG-10：每个入站 action 经规范转换表推进相位——非法转换
+      // fail-closed（state_conflict）。accept 的推进在 §15 校验通过后
+      // （见 accept 分支：被拒的 accept 不得进入 AGREEMENT_REACHED）。
+      const phaseEvent = actionToPhaseEvent(envelope);
+      const isAcceptAction = envelope.action === "accept_nonbinding";
+      if (phaseEvent !== undefined && !isAcceptAction) {
+        const advanced = await advancePhase(negotiationId, phaseEvent);
+        if (!advanced) {
+          return declineReply("state_conflict");
+        }
+      }
+
       switch (envelope.action) {
         case "inquiry": {
           // 入站消息由 A2A pipeline 统一落 message_received（§22）；这里不再
@@ -388,6 +468,12 @@ export function createMerchantHandler(
             },
             ...(note !== undefined ? { public_message: note } : {}),
           });
+          // 审查 BUG-10：merchant 侧相位由自己的出站动作推进——rfq 的 offer
+          // 回复是 OPEN→OFFER_OPEN 的边（入站侧 rfq 是起始动作无事件）。
+          await advancePhase(negotiationId, {
+            type: "offer",
+            offer_id: String((reply.payload as { offer_id?: unknown }).offer_id ?? ""),
+          });
           await appendSent(reply);
           return envelopeReply(reply);
         }
@@ -410,6 +496,10 @@ export function createMerchantHandler(
               proposed_terms: offerTerms({ sku, priceMinor, quantity, currency }, now()),
             },
             ...(note !== undefined ? { public_message: note } : {}),
+          });
+          await advancePhase(negotiationId, {
+            type: "counter_offer",
+            offer_id: String((reply.payload as { offer_id?: unknown }).offer_id ?? ""),
           });
           await appendSent(reply);
           return envelopeReply(reply);
@@ -448,6 +538,10 @@ export function createMerchantHandler(
           conditionalByNegotiation.set(negotiationId, {
             conditional: reply.payload as unknown as Record<string, unknown>,
             quantity,
+          });
+          await advancePhase(negotiationId, {
+            type: "conditional_offer",
+            offer_id: String((reply.payload as { offer_id?: unknown }).offer_id ?? ""),
           });
           await appendSent(reply);
           return envelopeReply(reply);
@@ -506,10 +600,12 @@ export function createMerchantHandler(
             parts: [{ kind: "text", text: "Agreement reached (nonbinding)." }],
             messageId: newMessageId(),
           };
-          // 协商终态：conditional 不再需要（评审项 L3：此前永久累积）
+          // 协商终态：conditional 不再需要（评审项 L3：此前永久累积）；
+          // 审查 BUG-10：accept 的相位推进在 §15 校验通过后（被拒的 accept
+          // 不得进入 AGREEMENT_REACHED）。
           conditionalByNegotiation.delete(negotiationId);
           closedNegotiations.add(negotiationId);
-          await appendPhaseTransition(negotiationId, "AGREEMENT_REACHED");
+          await advancePhase(negotiationId, { type: "accept_nonbinding", offer_id: acceptedOfferId });
           return { kind: "accepted", taskState: "completed", artifactParts: [artifactPart], message };
         }
         case "withdraw": {
@@ -519,7 +615,7 @@ export function createMerchantHandler(
           // negotiation 才进入 WITHDRAWN 终态。
           if (scope !== "offer") {
             closedNegotiations.add(negotiationId);
-            await appendPhaseTransition(negotiationId, "WITHDRAWN");
+            await advancePhase(negotiationId, { type: "withdraw", scope: "negotiation" });
           }
           return textReply(`Withdrawn (scope=${scope}).`);
         }
@@ -528,14 +624,14 @@ export function createMerchantHandler(
           conditionalByNegotiation.delete(negotiationId);
           if (scope !== "offer") {
             closedNegotiations.add(negotiationId);
-            await appendPhaseTransition(negotiationId, "DECLINED");
+            await advancePhase(negotiationId, { type: "decline", scope: "negotiation" });
           }
           return textReply(`Declined (scope=${scope}).`);
         }
         case "cancel":
           conditionalByNegotiation.delete(negotiationId);
           closedNegotiations.add(negotiationId);
-          await appendPhaseTransition(negotiationId, "CANCELLED");
+          await advancePhase(negotiationId, { type: "cancel" });
           return textReply("Negotiation cancelled.");
         default:
           return { kind: "declined", reasonCode: "unsupported_action" };

@@ -184,6 +184,62 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
     expect(second.kind === "declined" && second.reasonCode).toBe("state_conflict");
   });
 
+  // ── 审查 P1-07：终态后 withdraw/decline/cancel 必须被拒（不只 accept）─────
+  it("AGREEMENT_REACHED 后 withdraw/decline/cancel（含 offer 级）→ state_conflict（P1-07）", async () => {
+    const { offerId, agreedTerms } = await reachConditional();
+    const digest = contentDigest(agreedTerms as never);
+    const acc = await run(
+      envelopeFor("accept_nonbinding", { type: "accept_nonbinding", offer_id: offerId, terms_digest: digest }),
+    );
+    expect(acc.kind).toBe("accepted");
+
+    const terminalActions: Array<[string, Record<string, unknown>]> = [
+      ["withdraw", { scope: "negotiation" }],
+      ["withdraw", { scope: "offer" }],
+      ["decline", { scope: "negotiation" }],
+      ["decline", { scope: "offer" }],
+      ["cancel", {}],
+    ];
+    for (const [action, payload] of terminalActions) {
+      const result = await run(envelopeFor(action, payload));
+      expect(result.kind).toBe("declined");
+      expect(result.kind === "declined" && result.reasonCode).toBe("state_conflict");
+    }
+    // 链上无任何后置终局事件（withdraw/decline/cancel 的 state_transition 未落账）
+    const transitions = ledger
+      .events(NEGOTIATION_ID)
+      .filter((e) => e.event_kind === "state_transition")
+      .map((e) => e.state_transition);
+    expect(transitions.filter((t) => t?.to_phase === "AGREEMENT_REACHED")).toHaveLength(1);
+    expect(
+      transitions.some((t) => ["WITHDRAWN", "DECLINED", "CANCELLED"].includes(t?.to_phase ?? "")),
+    ).toBe(false);
+  });
+
+  it("WITHDRAWN 后再 withdraw/cancel → state_conflict；DECLINED 后再 cancel → state_conflict（P1-07）", async () => {
+    // WITHDRAWN 终态
+    await reachConditional();
+    const wd = await run(envelopeFor("withdraw", { scope: "negotiation" }));
+    expect(wd.kind).toBe("accepted");
+
+    const wd2 = await run(envelopeFor("withdraw", { scope: "negotiation" }));
+    expect(wd2.kind === "declined" && wd2.reasonCode).toBe("state_conflict");
+    const cancelAfterWd = await run(envelopeFor("cancel", {}));
+    expect(cancelAfterWd.kind === "declined" && cancelAfterWd.reasonCode).toBe("state_conflict");
+  });
+
+  it("CANCELLED 后 withdraw / accept → state_conflict（P1-07 终态不可重开）", async () => {
+    await reachConditional();
+    const cancel = await run(envelopeFor("cancel", {}));
+    expect(cancel.kind).toBe("accepted");
+    const wdAfterCancel = await run(envelopeFor("withdraw", { scope: "negotiation" }));
+    expect(wdAfterCancel.kind === "declined" && wdAfterCancel.reasonCode).toBe("state_conflict");
+    const acceptAfterCancel = await run(
+      envelopeFor("accept_nonbinding", { type: "accept_nonbinding", offer_id: "off_x", terms_digest: "sha256:" + "0".repeat(64) }),
+    );
+    expect(acceptAfterCancel.kind === "declined" && acceptAfterCancel.reasonCode).toBe("state_conflict");
+  });
+
   it("withdraw scope=negotiation closes the negotiation (P2-D)", async () => {
     await reachConditional();
     const wd = await run(
@@ -217,7 +273,9 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
     const last = transitions.at(-1);
     expect(last).toBeDefined();
     expect(last?.state_transition?.to_phase).toBe("AGREEMENT_REACHED");
-    expect(last?.state_transition?.from_phase).toBe("OPEN");
+    // 审查 BUG-10：中间相位转换（OPEN→OFFER_OPEN）也落账——终态转换的
+    // from_phase 现在是 OFFER_OPEN（此前只记录终态一条、from 恒 OPEN）。
+    expect(last?.state_transition?.from_phase).toBe("OFFER_OPEN");
   });
 });
 
@@ -354,5 +412,85 @@ describe("merchant handler 重启恢复（BUG-03）", () => {
     const rfq = await runWith(second, env("rfq", { items: [{ sku: "SKU-001" }] }));
     expect(rfq.kind).toBe("declined");
     expect(rfq.kind === "declined" && rfq.reasonCode).toBe("state_conflict");
+  });
+});
+
+// ── 相位机接线（审查 BUG-10，2026-08-10）───────────────────────────────────
+
+describe("merchant handler 相位机接线（BUG-10）", () => {
+  let dir: string;
+  let ledger: LedgerStore;
+  let handler: NegotiationHandler;
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "kiwi-bug10-"));
+    ledger = new LedgerStore({ dir, now: () => NOW });
+    handler = createMerchantHandler({
+      ledger,
+      now: () => NOW,
+      sender: "merchant:merchant-001",
+      counterparty: "buyer:*",
+    });
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  let seq = 0;
+  const env = (action: string, payload: Record<string, unknown>): NegotiationEnvelope => {
+    seq += 1;
+    return finalizeEnvelope({
+      capability: MERCHANT_CAPABILITY,
+      protocol_version: "1.0",
+      negotiation_id: NEGOTIATION_ID,
+      exchange_id: `ex_${seq}`,
+      message_id: `msg_${seq}`,
+      in_reply_to: `msg_${seq - 1}`,
+      actor: "buyer",
+      action: action as NegotiationEnvelope["action"],
+      created_at: NOW,
+      payload: payload as never,
+    });
+  };
+
+  const run = (envelope: NegotiationEnvelope): Promise<NegotiationHandlerResult> =>
+    handler.handle({
+      envelope: envelope as never,
+      message: { role: "user", parts: [], messageId: envelope.message_id },
+      taskId: `task_${seq}`,
+      senderIdentity: "buyer:buyer-001",
+    });
+
+  it("无前置 offer 的 counter_offer → state_conflict 拒绝（非法转换 fail-closed）", async () => {
+    const result = await run(
+      env("counter_offer", { offer_id: "off_illegal", proposed_terms: {} }),
+    );
+    expect(result.kind).toBe("declined");
+    expect(result.kind === "declined" && result.reasonCode).toBe("state_conflict");
+  });
+
+  it("正常磋商序列（rfq→counter→conditional）相位逐级推进并落账", async () => {
+    await run(env("inquiry", {}));
+    await run(env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
+    // 真实 buyer 流程：merchant 的 offer 回复推进相位到 OFFER_OPEN 后，
+    // buyer 的下一个商业动作是 counter_offer（OFFER_OPEN 替换边）
+    const cond = await run(
+      env("counter_offer", { offer_id: "off_counter", proposed_terms: {} }),
+    );
+    expect(cond.kind).toBe("accepted");
+
+    // 相位事件链：OPEN→OFFER_OPEN（rfq 回复的 offer）→ OFFER_OPEN 替换
+    // （conditional_offer 回复）——中间相位可重建
+    const transitions = ledger
+      .events(NEGOTIATION_ID)
+      .filter((e) => e.event_kind === "state_transition")
+      .map((e) => e.state_transition);
+    const openToOfferOpen = transitions.find(
+      (t) => t?.from_phase === "OPEN" && t.to_phase === "OFFER_OPEN",
+    );
+    expect(openToOfferOpen).toBeDefined();
+    // 相位替换边（OFFER_OPEN→OFFER_OPEN）不落账；至少 OPEN→OFFER_OPEN 一条
+    expect(transitions.length).toBeGreaterThanOrEqual(1);
   });
 });
