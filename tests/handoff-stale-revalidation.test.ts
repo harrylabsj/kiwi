@@ -260,6 +260,9 @@ describe("executeHandoff", () => {
     const events = e.ledger.events(c.negotiation_id);
     expect(events.some((ev) => ev.event_kind === "handoff_candidate_stale")).toBe(false);
     expect(events.some((ev) => ev.event_kind === "handoff_candidate_consumed")).toBe(false);
+    // 审查 P2-F：失败交付在 handoff 创建前落 handoff_delivery_failed 审计
+    // 事件（KTH rev0.3 §9；此前该 kind 无状态映射，append 必抛 schemaError）
+    expect(events.some((ev) => ev.event_kind === "handoff_delivery_failed")).toBe(true);
 
     // 探测恢复后重试成功（同一候选，无需重新生成）
     const second = await executeHandoff({
