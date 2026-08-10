@@ -458,7 +458,14 @@ export class MemoryStore {
 
     // Constraint/restricted memories can never auto-activate from a model
     // remember call — they stay candidate until the human /confirms them.
-    const explicitConfirmed = input.explicit_user_statement && !requiresHumanConfirm(input);
+    // 审查 P2-G：系统落账的 episode（kernel rememberNegotiation，actor=
+    // system）是可信操作记录，直接 active（检索可达、/why 可查、跨重启
+    // 可恢复）——此前恒为 candidate 且无自动激活路径，retrieve 永不返回，
+    // 磋商结果记忆是注释级死功能。模型经 remember 工具写入的 episode
+    // （actor=model）保持 candidate（fail-closed，不信任模型内容）。
+    const explicitConfirmed =
+      (input.explicit_user_statement && !requiresHumanConfirm(input)) ||
+      (input.namespace === "episode" && input.actor === "system");
     const status: MemoryStatus = explicitConfirmed ? "active" : "candidate";
     const confidence = explicitConfirmed
       ? 1.0
