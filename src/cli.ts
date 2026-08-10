@@ -561,6 +561,7 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
         profile: p as AgentProfile,
         catalog,
         preferredPort: args.port,
+        ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
         ...(merchantToken ? { ownerToken: merchantToken } : {}),
         ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
       });

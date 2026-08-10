@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { startA2aNode } from "../src/a2a/node.js";
+import { NoneAuthVerifier } from "../src/a2a/server/index.js";
 import { testProfile } from "./helpers.js";
 
 interface MockCatalog {
@@ -122,5 +123,65 @@ describe("startA2aNode（启动接线）", () => {
     const merchant = await startA2aNode({ profile: testProfile(), preferredPort: 0 });
     expect(merchant.catalogAgentId).toBeUndefined();
     await merchant.stop();
+  });
+
+  it("publicBaseUrl 覆盖：节点仍监听回环，但 card/注册/ucp 广告公网地址", async () => {
+    const savedDomain = process.env.KIWI_CATALOG_DOMAIN;
+    delete process.env.KIWI_CATALOG_DOMAIN;
+    const catalog = await startCatalog();
+    const publicUrl = "https://veyquo.example";
+    const node = await startA2aNode({
+      profile: testProfile(),
+      catalog: catalog.url,
+      preferredPort: 0,
+      publicBaseUrl: publicUrl,
+      // 审查 BUG-02：公网广告形态必须显式认证（本测试验证广告 URL 接线，
+      // 不是认证门——认证门见 a2a-node-guard.test.ts）
+      authVerifier: new NoneAuthVerifier(),
+    });
+    try {
+      // 对外广告地址与 agent card URL 用公网地址；实际监听仍是回环。
+      expect(node.advertisedUrl).toBe(publicUrl);
+      expect(node.agentCardUrl).toBe(`${publicUrl}/.well-known/agent-card.json`);
+      expect(node.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      // 注册体广告公网 card/ucp；域名派生自 publicBaseUrl 的 hostname。
+      expect(catalog.registrations).toHaveLength(1);
+      const reg = catalog.registrations[0];
+      expect(reg?.body.agent_card_url).toBe(`${publicUrl}/.well-known/agent-card.json`);
+      expect(reg?.body.ucp_profile_url).toBe(`${publicUrl}/.well-known/ucp`);
+      expect(reg?.body.domain).toBe("veyquo.example");
+      // card 内容广告公网 baseUrl（buyer 拿到 card 后据此发 A2A）。
+      const card = await fetch(`${node.url}/.well-known/agent-card.json`);
+      expect(card.ok).toBe(true);
+      const cardJson = (await card.json()) as { url?: string };
+      expect(cardJson.url).toBe(publicUrl);
+      // UCP Profile 端点真实可拉（注册广告了 ucp_profile_url，端点必须存在，
+      // 否则 catalog 验证 profile 阶段拉 UCP 404 → freshness=unreachable）。
+      // 形状为标准 UCP（specificationVersion，对齐 kiwi-catalog 验证器）。
+      const ucp = await fetch(`${node.url}/.well-known/ucp`);
+      expect(ucp.ok).toBe(true);
+      const ucpJson = (await ucp.json()) as { specificationVersion?: string };
+      expect(ucpJson.specificationVersion).toBe("2026-04-08");
+      // 本地回环 A2A 端点仍服务。
+      const send = await fetch(node.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "1",
+          method: "message/send",
+          params: {
+            message: { role: "agent", parts: [{ kind: "text", text: "hi" }], messageId: "m1" },
+          },
+        }),
+      });
+      expect(send.ok).toBe(true);
+      const body = (await send.json()) as { error?: { code?: number } };
+      expect(body.error?.code).toBeDefined();
+    } finally {
+      if (savedDomain === undefined) delete process.env.KIWI_CATALOG_DOMAIN;
+      else process.env.KIWI_CATALOG_DOMAIN = savedDomain;
+      await node.stop();
+    }
   });
 });
