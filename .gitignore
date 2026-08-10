@@ -9,6 +9,8 @@ coverage/
 .vitest/
 *.tgz
 .gstack/
+.scratch/
+.playwright-mcp/
 
 # runtime agent data (ledger/memory) created by agent run/serve/chat
 .kiwi/

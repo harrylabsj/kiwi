@@ -1,0 +1,4 @@
+# Keep workflow, release, and contract changes under maintainer review.
+* @harrylabsj
+/.github/workflows/ @harrylabsj
+/.github/CODEOWNERS @harrylabsj

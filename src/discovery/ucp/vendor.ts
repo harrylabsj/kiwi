@@ -30,7 +30,7 @@
 import type { UcpCapabilityDeclaration, UcpProfile } from "./types.js";
 
 /**
- * 真实 authority（§8.2 / §8.3）。`kiwi.harrylabsj.com` 为项目维护者实际控制域名
+ * 真实 authority（§8.2 / §8.3）。`kiwi.harrylabsj.com` 为 Kiwi 项目实际控制域名
  * （harrylabsj.com 的子域）；spec / schema 须托管在该域名上（UCP origin 绑定）。
  */
 export const KIWI_VENDOR_AUTHORITY = "kiwi.harrylabsj.com";
