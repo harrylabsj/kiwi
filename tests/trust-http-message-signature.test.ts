@@ -519,3 +519,67 @@ describe("时间窗口 / 重放 / keyid", () => {
     expect(store.checkAndSet("b")).toBe(true);
   });
 });
+
+describe("最小组件集合强制（审查 BUG-06）", () => {
+  const body = Buffer.from('{"a":1}', "utf8");
+  const baseVerify = (headers: Record<string, string>, verifyBody: Buffer) =>
+    verifyHttpMessageSignature({
+      method: "POST",
+      targetUri: "http://a.test/",
+      authority: "a.test",
+      headers,
+      body: verifyBody,
+      resolver: resolveFromSigningKeys([aliceKey()]),
+      now: () => 1723000000,
+    });
+
+  it("带非空 body 的签名缺少 content-digest → 拒绝（body 不被绑定）", () => {
+    const signer = new HttpMessageSigner({
+      keyid: "alice",
+      algorithm: "ed25519",
+      privateKey: ED25519_SEED,
+      created: 1723000000,
+      // 攻击者/疏忽的对端只签方法头（此前完全合法）
+      coveredComponents: ["@method", "@target-uri", "@authority"],
+    });
+    const headers = signer.sign({ method: "POST", url: "http://a.test/", body, headers: {} });
+    const result = baseVerify(headers, body);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("content-digest");
+  });
+
+  it("缺少 @authority → 拒绝", () => {
+    const signer = new HttpMessageSigner({
+      keyid: "alice",
+      algorithm: "ed25519",
+      privateKey: ED25519_SEED,
+      created: 1723000000,
+      coveredComponents: ["@method", "@target-uri", "content-digest"],
+    });
+    const headers = signer.sign({ method: "POST", url: "http://a.test/", body, headers: {} });
+    const result = baseVerify(headers, body);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("@authority");
+  });
+
+  it("无 body 请求不强制 content-digest（按请求形状）", () => {
+    const signer = new HttpMessageSigner({
+      keyid: "alice",
+      algorithm: "ed25519",
+      privateKey: ED25519_SEED,
+      created: 1723000000,
+      coveredComponents: ["@method", "@target-uri", "@authority"],
+    });
+    const headers = signer.sign({ method: "GET", url: "http://a.test/", body: Buffer.alloc(0), headers: {} });
+    const result = verifyHttpMessageSignature({
+      method: "GET",
+      targetUri: "http://a.test/",
+      authority: "a.test",
+      headers,
+      body: Buffer.alloc(0),
+      resolver: resolveFromSigningKeys([aliceKey()]),
+      now: () => 1723000000,
+    });
+    expect(result.ok).toBe(true);
+  });
+});
