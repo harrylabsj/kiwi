@@ -87,6 +87,36 @@ describe("ShoppingCliCommerceDataSource（唯一数据入口）", () => {
     expect(inventory?.source).toBe("shopping-cli");
   });
 
+  it("lossy 价格 fail-closed：price_minor 缺省而非静默舍入（审查 P2-P）", async () => {
+    const source = new ShoppingCliCommerceDataSource({
+      baseUrl: "https://shopping-cli.example",
+      fetchImpl: cliFetch({
+        "/products/SKU-001": () =>
+          jsonResponse({
+            product: { sku: "SKU-001", title: "Lossy", price: 19.999, currency: "CNY" },
+          }),
+      }),
+    });
+    const product = await source.getProduct("SKU-001");
+    // 19.999 元 → 1999.9 minor：此前 Math.round 静默抹平为 2000（¥20.00），
+    // 错误价格进入 offer terms；现在 price_minor 缺省（调用方回退演示价）
+    expect(product?.price_minor).toBeUndefined();
+  });
+
+  it("两位小数价格仍无损转换（审查 P2-P 正例）", async () => {
+    const source = new ShoppingCliCommerceDataSource({
+      baseUrl: "https://shopping-cli.example",
+      fetchImpl: cliFetch({
+        "/products/SKU-001": () =>
+          jsonResponse({
+            product: { sku: "SKU-001", title: "Exact", price: 19.99, currency: "CNY" },
+          }),
+      }),
+    });
+    const product = await source.getProduct("SKU-001");
+    expect(product?.price_minor).toBe(1999);
+  });
+
   it("404 → undefined（未知 SKU 的接口承诺，供调用方回退演示价）", async () => {
     const source = new ShoppingCliCommerceDataSource({
       baseUrl: "https://shopping-cli.example",
