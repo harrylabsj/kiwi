@@ -50,6 +50,8 @@ export interface WeixinChannelOptions {
   forceRelogin?: boolean;
   /** 二维码渲染（缺省 stdout 打印）。 */
   renderQr?: (qr: string[]) => void;
+  /** 二维码每模块列数（审查 P3：--qr-scale 传到这里，再进 login）。 */
+  qrScale?: number;
   /** 状态行输出（缺省 stderr）。 */
   notice?: (line: string) => void;
   /** 日志行（缺省 stderr；不落 token/context_token）。 */
@@ -132,6 +134,7 @@ export class WeixinChannel {
       notice: options.notice,
       qrPollMs: this.timings.qrPollMs,
       qrRefreshCap: this.timings.qrRefreshCap,
+      ...(options.qrScale !== undefined ? { qrScale: options.qrScale } : {}),
       now: this.now,
     });
     saveCredentials(this.credentialsPath, credentials);
@@ -189,8 +192,15 @@ export class WeixinChannel {
       syncBuf = state.get_updates_buf;
       for (const fp of state.seen) this.seen.add(fp);
     } catch (err) {
-      this.log(`[weixin] 同步状态损坏，从头轮询：${err instanceof Error ? err.message : String(err)}`);
-      syncBuf = "";
+      // 审查 P3：损坏的同步状态必须 fail-closed——此前打日志后从头轮询，
+      // seen 指纹随同一文件丢失，旧消息（含 /slash 命令）整批重放（命令
+      // 二次执行）。缺文件是首次运行（loadSyncState 返回空态），只有损坏
+      // 才抛 WeixinError。
+      this.log(
+        `[weixin] 同步状态损坏，拒绝重扫（修复或删除 ${this.syncBufPath} 后重启）：` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 2; // EXIT.CONFIG
     }
 
     let consecutiveProtocolErrors = 0;
