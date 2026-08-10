@@ -235,7 +235,11 @@ jobs:
           # Basic syntax/error lint only (E4,E7,E9); full ruff/mypy/coverage is
           # owned by shopping-cli CI and omitted here to avoid pre-existing drift.
           uv run --locked python -m ruff check --select E4,E7,E9 shopping_cli tests
-          uv run --locked python -m unittest discover -s tests
+          # pytest, not unittest discover: shopping-cli's own CI (scripts/quality.sh)
+          # runs pytest because unittest discover silently skips its top-level
+          # `def test_*` cases; this release gate must run the same suite or it
+          # misses the same tests.
+          uv run --locked python -m pytest -q
           uv run --locked node --test tests/shopping_plugin.test.mjs
 
       - name: Run shared Python service conformance
@@ -294,10 +298,25 @@ jobs:
 
       - name: Sign exact release bundle (keyless)
         run: |
+          # sign-blob accepts SIGNING flags only. --certificate-identity /
+          # --certificate-oidc-issuer are verify-only flags (rejected / meaningless
+          # here); the keyless identity is bound by the ambient GitHub Actions OIDC
+          # token and is enforced by the verify-blob step below.
           cosign sign-blob --yes \
             --output-signature portfolio-release.tgz.sig \
             --output-certificate portfolio-release.tgz.pem \
-            --certificate-identity "${{ github.actor }}@users.noreply.github.com" \
+            portfolio-release.tgz
+
+      - name: Verify bundle signature and certificate identity (fail closed)
+        run: |
+          # Keyless GHA certificates carry the job_workflow_ref identity
+          # (https://github.com/ORG/REPO/.github/workflows/WORKFLOW.yml@REF).
+          # Pin the exact workflow file and the ref this dispatch ran on so a
+          # certificate minted by any other workflow/ref cannot pass.
+          cosign verify-blob \
+            --certificate portfolio-release.tgz.pem \
+            --signature portfolio-release.tgz.sig \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/portfolio-release.yml@${GITHUB_REF}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             portfolio-release.tgz
 
@@ -316,8 +335,17 @@ jobs:
         with:
           subject-path: portfolio-release.tgz
 
-  publish:
-    name: Publish to npm and PyPI (protected kiwi-release)
+  # Publishing is split into one independent job per registry (npm /
+  # kiwi-catalog / shopping-cli) so each registry is a resumable retry boundary:
+  # a failure in one registry does not block the others, and GitHub "re-run
+  # failed jobs" retries only the failed registry. Every publish step is
+  # idempotent — it first checks whether the exact version already exists on the
+  # registry and skips it, so re-running after a partial failure never errors on
+  # an already-published artifact. Each job runs under the protected kiwi-release
+  # environment, so every registry publish is independently gated by the
+  # required-reviewer approval.
+  publish-npm:
+    name: Publish @harrylabsj/kiwi to npm (protected kiwi-release)
     needs: build-once
     if: inputs.publish == true
     runs-on: ubuntu-latest
@@ -325,7 +353,49 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      attestations: write
+    steps:
+      - name: Checkout central source (read-only, for verify scripts)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Download immutable build artifact
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: portfolio-release
+          path: dist-artifact
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Verify downloaded release manifest before publishing
+        run: |
+          set -euo pipefail
+          node scripts/verify-release-manifest.mjs "$GITHUB_WORKSPACE/dist-artifact/release"
+
+      - name: Publish exact npm tarball with provenance (idempotent, skip if already published)
+        run: |
+          set -euo pipefail
+          NAME="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
+            echo "== ${NAME}@${VERSION} already published to npm; skipping"
+          else
+            npm publish dist-artifact/release/npm/*.tgz --provenance --access public
+            echo "== published ${NAME}@${VERSION} to npm"
+          fi
+
+  publish-kiwi-catalog:
+    name: Publish kiwi-catalog to PyPI (protected kiwi-release)
+    needs: build-once
+    if: inputs.publish == true
+    runs-on: ubuntu-latest
+    environment: kiwi-release
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout central source (read-only, for verify scripts)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -356,28 +426,76 @@ jobs:
           set -euo pipefail
           node scripts/verify-release-manifest.mjs "$GITHUB_WORKSPACE/dist-artifact/release"
 
-      - name: Publish exact npm tarball with provenance (OIDC, no npm token)
+      - name: Publish kiwi-catalog wheel and sdist (idempotent, skip if already published)
         run: |
           set -euo pipefail
-          npm publish dist-artifact/release/npm/*.tgz --provenance --access public
+          SDIST="$(find dist-artifact/release/kiwi-catalog -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          read -r NAME VERSION < <(tar -xOzf "${SDIST}" --wildcards '*/pyproject.toml' | python -c 'import sys,re,tomllib; d=tomllib.loads(sys.stdin.read()); print(re.sub(r"[-_.]+","-",d["project"]["name"].lower())); print(d["project"]["version"])')
+          if curl -fsSL --max-time 30 "https://pypi.org/pypi/${NAME}/${VERSION}/json" >/dev/null 2>&1; then
+            echo "== ${NAME}==${VERSION} already published to PyPI; skipping"
+          else
+            uv publish --trusted-publishing always \
+              dist-artifact/release/kiwi-catalog/*.whl \
+              dist-artifact/release/kiwi-catalog/*.tar.gz
+            echo "== published ${NAME}==${VERSION} to PyPI"
+          fi
 
-      - name: Publish kiwi-catalog wheel and sdist (OIDC Trusted Publisher)
-        run: |
-          set -euo pipefail
-          uv publish --trusted-publishing always \
-            dist-artifact/release/kiwi-catalog/*.whl \
-            dist-artifact/release/kiwi-catalog/*.tar.gz
+  publish-shopping-cli:
+    name: Publish shopping-cli to PyPI (protected kiwi-release)
+    needs: build-once
+    if: inputs.publish == true
+    runs-on: ubuntu-latest
+    environment: kiwi-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout central source (read-only, for verify scripts)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
 
-      - name: Publish shopping-cli wheel and sdist (OIDC Trusted Publisher)
+      - name: Download immutable build artifact
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: portfolio-release
+          path: dist-artifact
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
+      - name: Install locked publish tools
+        run: python -m pip install "uv==0.10.6"
+
+      - name: Verify downloaded release manifest before publishing
         run: |
           set -euo pipefail
-          uv publish --trusted-publishing always \
-            dist-artifact/release/shopping-cli/*.whl \
-            dist-artifact/release/shopping-cli/*.tar.gz
+          node scripts/verify-release-manifest.mjs "$GITHUB_WORKSPACE/dist-artifact/release"
+
+      - name: Publish shopping-cli wheel and sdist (idempotent, skip if already published)
+        run: |
+          set -euo pipefail
+          SDIST="$(find dist-artifact/release/shopping-cli -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          read -r NAME VERSION < <(tar -xOzf "${SDIST}" --wildcards '*/pyproject.toml' | python -c 'import sys,re,tomllib; d=tomllib.loads(sys.stdin.read()); print(re.sub(r"[-_.]+","-",d["project"]["name"].lower())); print(d["project"]["version"])')
+          if curl -fsSL --max-time 30 "https://pypi.org/pypi/${NAME}/${VERSION}/json" >/dev/null 2>&1; then
+            echo "== ${NAME}==${VERSION} already published to PyPI; skipping"
+          else
+            uv publish --trusted-publishing always \
+              dist-artifact/release/shopping-cli/*.whl \
+              dist-artifact/release/shopping-cli/*.tar.gz
+            echo "== published ${NAME}==${VERSION} to PyPI"
+          fi
 
   verify-registry:
     name: Verify npm and PyPI downloads after publish (fail closed)
-    needs: publish
+    needs: [publish-npm, publish-kiwi-catalog, publish-shopping-cli]
     if: inputs.publish == true
     runs-on: ubuntu-latest
     permissions:

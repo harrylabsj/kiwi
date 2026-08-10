@@ -769,16 +769,25 @@ describe("A2A Server: 入站 identity snapshot counterparty 侧", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 入站幂等崩溃窗口自愈（审查 P2-E，2026-08-10）
+// 入站幂等 commit 失败后至多一次（审查 P1-05，2026-08-10）
 // ---------------------------------------------------------------------------
 
-describe("A2A Server: append-before-commit crash window self-heals (P2-E)", () => {
-  it("duplicate ledger content after crash commits idempotency and returns the prior task", async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-p2e-"));
+describe("A2A Server: commit 失败后 handler 至多一次（P1-05）", () => {
+  it("commit 失败 → ledger 恢复返回稳定响应；重试幂等短接，handler 不重复执行", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-p105-"));
     const ledger = new LedgerStore({ dir, now: () => "2026-08-06T10:00:00.000Z" });
     const idempotency = new IdempotencyStore({ dir, now: () => "2026-08-06T10:00:00.000Z" });
+    let handlerCalls = 0;
+    const inner = echoHandler();
+    const counting: NegotiationHandler = {
+      name: "counting-echo",
+      async handle(ctx) {
+        handlerCalls += 1;
+        return inner.handle(ctx);
+      },
+    };
     const pipeline = new InboundPipeline({
-      handler: echoHandler(),
+      handler: counting,
       idempotency,
       ledger,
       tasks: new TaskRegistry(),
@@ -787,39 +796,273 @@ describe("A2A Server: append-before-commit crash window self-heals (P2-E)", () =
     });
     const envelope = finalizeEnvelope({
       ...validEnvelopeFields(),
-      message_id: "msg_p2e_crash_window",
+      message_id: "msg_p105_commit_fail",
     });
     const message = knpMessage(envelope);
-    const caller = { senderIdentity: "peer-p2e", remoteAddress: "127.0.0.1:9" };
+    const caller = { senderIdentity: "peer-p105", remoteAddress: "127.0.0.1:9" };
 
-    // 固定 taskId：让重试产生与首次运行完全相同的 append 内容（含
-    // remote_task_id）——这是"崩溃后重试撞 ledger_duplicate_content"的
-    // 唯一可达路径（随机 taskId 时重试内容不同、本就不卡死）。
-    const taskRegistry = await import("../src/a2a/server/task-registry.js");
-    const fixedTaskId = "task_p2e_fixed";
-    const taskIdSpy = vi.spyOn(taskRegistry, "newTaskId").mockReturnValue(fixedTaskId);
+    // run 1：ledger.append 成功、幂等 commit 抛错（模拟 commit 失败窗口）——
+    // P1-05 前此窗口抛 internalServerError，客户端重试会重复执行 handler。
+    const commitSpy = vi.spyOn(idempotency, "commit").mockImplementationOnce(() => {
+      throw new Error("simulated commit failure");
+    });
+    const run1 = await pipeline.sendMessage({ message }, caller);
+    commitSpy.mockRestore();
+    expect(run1.task.id).toBeTruthy();
+    expect(run1.task.status.state).toBe("completed");
+
+    // run 2：同消息重试 → 幂等已补 commit → 直接短接（不重复执行 handler）
+    const run2 = await pipeline.sendMessage({ message }, caller);
+    expect(run2.task.id).toBe(run1.task.id);
+
+    // handler 全程只执行一次（至多一次：双份 agreement 不可能）
+    expect(handlerCalls).toBe(1);
+    // Ledger 只落一条 message_received
+    expect(
+      ledger.events(NEGOTIATION_ID).filter((e) => e.event_kind === "message_received"),
+    ).toHaveLength(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("补 commit 也失败（持久）→ 重试走 ledger 守卫恢复，handler 仍不重复执行", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-p105b-"));
+    const ledger = new LedgerStore({ dir, now: () => "2026-08-06T10:00:00.000Z" });
+    const idempotency = new IdempotencyStore({ dir, now: () => "2026-08-06T10:00:00.000Z" });
+    let handlerCalls = 0;
+    const inner = echoHandler();
+    const counting: NegotiationHandler = {
+      name: "counting-echo",
+      async handle(ctx) {
+        handlerCalls += 1;
+        return inner.handle(ctx);
+      },
+    };
+    const pipeline = new InboundPipeline({
+      handler: counting,
+      idempotency,
+      ledger,
+      tasks: new TaskRegistry(),
+      now: () => "2026-08-06T10:00:00.000Z",
+      logError: () => {},
+    });
+    const envelope = finalizeEnvelope({
+      ...validEnvelopeFields(),
+      message_id: "msg_p105_persistent_commit_fail",
+    });
+    const message = knpMessage(envelope);
+    const caller = { senderIdentity: "peer-p105b", remoteAddress: "127.0.0.1:9" };
+
+    // commit 永远失败：run 1 的 ledger 恢复补 commit 也失败 → 幂等索引保持为空。
+    // 重试必须命中 ledger 守卫（findByMessageId 持久事实）恢复，不重跑 handler。
+    const commitSpy = vi.spyOn(idempotency, "commit").mockImplementation(() => {
+      throw new Error("persistent commit failure");
+    });
     try {
-      // run 1：append 已落账、幂等 commit 前"进程被杀"（commit 抛错）
-      const commitSpy = vi.spyOn(idempotency, "commit").mockImplementationOnce(() => {
-        throw new Error("simulated crash before idempotency commit");
-      });
-      await expect(pipeline.sendMessage({ message }, caller)).rejects.toThrow(
-        /simulated crash/,
-      );
-      commitSpy.mockRestore();
-
-      // run 2：同消息重试 → append 撞 ledger_duplicate_content → 补 commit +
-      // 返回按已落账事件还原的任务（不再 internalServerError 卡死）
-      const recovered = await pipeline.sendMessage({ message }, caller);
-      expect(recovered.task.id).toBe(fixedTaskId);
-      expect(recovered.task.status.state).toBe("completed");
-
-      // run 3：幂等已 commit → 直接短接重放（不再重复处理）
-      const replayed = await pipeline.sendMessage({ message }, caller);
-      expect(replayed.task.id).toBe(fixedTaskId);
+      const run1 = await pipeline.sendMessage({ message }, caller);
+      expect(run1.task.status.state).toBe("completed");
+      const run2 = await pipeline.sendMessage({ message }, caller);
+      expect(run2.task.id).toBe(run1.task.id);
+      expect(run2.task.status.state).toBe("completed");
     } finally {
-      taskIdSpy.mockRestore();
-      rmSync(dir, { recursive: true, force: true });
+      commitSpy.mockRestore();
     }
+
+    // handler 全程只执行一次：run 2 命中 ledger 守卫，未重跑 handler
+    expect(handlerCalls).toBe(1);
+    expect(
+      ledger.events(NEGOTIATION_ID).filter((e) => e.event_kind === "message_received"),
+    ).toHaveLength(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("同 message_id 异 digest 重放（幂等索引空、Ledger 有证据）→ idempotency_conflict fail-closed", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-p105c-"));
+    const ledger = new LedgerStore({ dir, now: () => "2026-08-06T10:00:00.000Z" });
+    const idempotency = new IdempotencyStore({ dir, now: () => "2026-08-06T10:00:00.000Z" });
+    let handlerCalls = 0;
+    const inner = echoHandler();
+    const counting: NegotiationHandler = {
+      name: "counting-echo",
+      async handle(ctx) {
+        handlerCalls += 1;
+        return inner.handle(ctx);
+      },
+    };
+    const pipeline = new InboundPipeline({
+      handler: counting,
+      idempotency,
+      ledger,
+      tasks: new TaskRegistry(),
+      now: () => "2026-08-06T10:00:00.000Z",
+      logError: () => {},
+    });
+    const msgId = "msg_p105_conflict";
+    const first = finalizeEnvelope({ ...validEnvelopeFields(), message_id: msgId });
+    const caller = { senderIdentity: "peer-p105c", remoteAddress: "127.0.0.1:9" };
+
+    // commit 永远失败 → 幂等索引保持为空；Ledger 落证据（wire_digest=first.digest）
+    const commitSpy = vi.spyOn(idempotency, "commit").mockImplementation(() => {
+      throw new Error("persistent commit failure");
+    });
+    try {
+      await pipeline.sendMessage({ message: knpMessage(first) }, caller);
+
+      // 恶意重放：同 message_id 但内容不同（digest 不同）→ ledger 守卫 digest
+      // 校验 fail-closed → idempotency_conflict，handler 不重复执行。
+      const replay = finalizeEnvelope({
+        ...validEnvelopeFields(),
+        message_id: msgId,
+        public_message: "tampered content",
+      });
+      expect(replay.digest).not.toBe(first.digest);
+      // pipeline 直接调用抛原始 ServerProtocolError（A2AClient 才归一化成 jsonrpc_error）
+      await expect(pipeline.sendMessage({ message: knpMessage(replay) }, caller)).rejects.toMatchObject({
+        name: "ServerProtocolError",
+        body: { data: { protocol_code: "idempotency_conflict" } },
+      });
+    } finally {
+      commitSpy.mockRestore();
+    }
+
+    expect(handlerCalls).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("append 与 commit 之间崩溃（全新实例、幂等为空）：ledger 守卫恢复，handler 零重跑", async () => {
+    // 独立故障注入：直接构造"run 1 崩溃后"的持久状态——handler 已执行完毕、
+    // message_received 已落账（携带 run 1 的随机 taskId），进程在幂等 commit
+    // 之前崩溃（幂等索引为空、内存 task registry 丢失）。重试方是全新实例
+    // （重启语义），内部会生成新的随机 taskId——修复前此场景 handler 必重跑。
+    const NOW = "2026-08-06T10:00:00.000Z";
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-p105-crash-"));
+    const crashedTaskId = "task_crashed_run_1";
+    const envelope = finalizeEnvelope({
+      ...validEnvelopeFields(),
+      message_id: "msg_p105_crash_window",
+    });
+    const caller = { senderIdentity: "peer-p105-crash", remoteAddress: "127.0.0.1:9" };
+
+    // run 1 崩溃现场：事件内容与 pipeline 落账路径一致（wire_digest 与链上
+    // 证据一致，否则恢复路径按恶意重放 fail-closed）。
+    const crashedLedger = new LedgerStore({ dir, now: () => NOW });
+    crashedLedger.append({
+      event_kind: "message_received",
+      negotiation_id: envelope.negotiation_id,
+      exchange_id: envelope.exchange_id,
+      message_id: envelope.message_id,
+      in_reply_to: envelope.in_reply_to,
+      remote_task_id: crashedTaskId,
+      identity: {
+        sender_identity: caller.senderIdentity,
+        counterparty_identity: caller.remoteAddress,
+        actor: envelope.actor,
+      },
+      capability: { capability: envelope.capability, protocol_version: envelope.protocol_version },
+      wire_digest: envelope.digest,
+      wire_payload: envelope as unknown as Record<string, unknown>,
+      outcome: { kind: "ok", result: { task_id: crashedTaskId, task_state: "completed" } },
+      occurred_at: envelope.created_at,
+    });
+
+    // “重启”：全新 LedgerStore / IdempotencyStore / TaskRegistry / Pipeline（同 dir）。
+    const ledger = new LedgerStore({ dir, now: () => NOW });
+    const idempotency = new IdempotencyStore({ dir, now: () => NOW });
+    let handlerCalls = 0;
+    const inner = echoHandler();
+    const counting: NegotiationHandler = {
+      name: "counting-echo",
+      async handle(ctx) {
+        handlerCalls += 1;
+        return inner.handle(ctx);
+      },
+    };
+    const pipeline = new InboundPipeline({
+      handler: counting,
+      idempotency,
+      ledger,
+      tasks: new TaskRegistry(),
+      now: () => NOW,
+      logError: () => {},
+    });
+
+    // 重试 1（同逻辑消息、同 digest；pipeline 内部生成的新随机 taskId 不得被使用）：
+    // ledger 守卫恢复崩溃运行的结果，handler 一次都不跑。
+    const retry1 = await pipeline.sendMessage({ message: knpMessage(envelope) }, caller);
+    expect(handlerCalls).toBe(0);
+    expect(retry1.task.id).toBe(crashedTaskId);
+    expect(retry1.task.status.state).toBe("completed");
+
+    // 恢复已补 commit：重试 2 命中幂等短接（同 key 同 digest → 原结果）。
+    const retry2 = await pipeline.sendMessage({ message: knpMessage(envelope) }, caller);
+    expect(retry2.task.id).toBe(crashedTaskId);
+    expect(handlerCalls).toBe(0);
+
+    // 全程只有崩溃 run 落的那一条 message_received，链完整。
+    expect(
+      ledger.events(NEGOTIATION_ID).filter((e) => e.event_kind === "message_received"),
+    ).toHaveLength(1);
+    expect(ledger.verifyChain(NEGOTIATION_ID).valid).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("commit 永久失败后整体重启（全新 store/pipeline 实例）→ 重试仍至多一次执行", async () => {
+    // 与上一用例互补：run 1 由真实 pipeline 执行（handler 跑完、ledger 落账、
+    // commit 被注入永久失败），随后连同 store 一起换成全新实例重放同消息。
+    const NOW = "2026-08-06T10:00:00.000Z";
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-p105-restart-"));
+    const envelope = finalizeEnvelope({
+      ...validEnvelopeFields(),
+      message_id: "msg_p105_restart",
+    });
+    const caller = { senderIdentity: "peer-p105-restart", remoteAddress: "127.0.0.1:9" };
+    let handlerCalls = 0;
+    const inner = echoHandler();
+    const counting: NegotiationHandler = {
+      name: "counting-echo",
+      async handle(ctx) {
+        handlerCalls += 1;
+        return inner.handle(ctx);
+      },
+    };
+    const makePipeline = () =>
+      new InboundPipeline({
+        handler: counting,
+        idempotency: new IdempotencyStore({ dir, now: () => NOW }),
+        ledger: new LedgerStore({ dir, now: () => NOW }),
+        tasks: new TaskRegistry(),
+        now: () => NOW,
+        logError: () => {},
+      });
+
+    // run 1（实例 A）：commit 永久失败——message_received 落账、幂等索引为空。
+    const pipelineA = makePipeline();
+    const commitSpy = vi
+      .spyOn(IdempotencyStore.prototype, "commit")
+      .mockImplementation(() => {
+        throw new Error("persistent commit failure");
+      });
+    const run1 = await pipelineA.sendMessage({ message: knpMessage(envelope) }, caller);
+    commitSpy.mockRestore();
+    expect(run1.task.status.state).toBe("completed");
+    expect(handlerCalls).toBe(1);
+
+    // “重启”（实例 B：全新 store/pipeline/task registry，同 dir）重放同一逻辑消息：
+    // 幂等索引为空 → 必须命中 ledger 守卫恢复，不得重跑 handler。
+    const pipelineB = makePipeline();
+    const run2 = await pipelineB.sendMessage({ message: knpMessage(envelope) }, caller);
+    expect(run2.task.id).toBe(run1.task.id);
+    expect(handlerCalls).toBe(1);
+
+    // 实例 B 已补 commit：重试 3 命中幂等短接。
+    const run3 = await pipelineB.sendMessage({ message: knpMessage(envelope) }, caller);
+    expect(run3.task.id).toBe(run1.task.id);
+    expect(handlerCalls).toBe(1);
+
+    const ledger = new LedgerStore({ dir, now: () => NOW });
+    expect(
+      ledger.events(NEGOTIATION_ID).filter((e) => e.event_kind === "message_received"),
+    ).toHaveLength(1);
+    expect(ledger.verifyChain(NEGOTIATION_ID).valid).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

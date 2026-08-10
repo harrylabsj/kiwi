@@ -25,7 +25,12 @@
   },
   "then": { "required": ["source_product_ref"] },
   "else": {
-    "not": { "required": ["handoff_destination_types"] }
+    "not": {
+      "anyOf": [
+        { "required": ["handoff_destination_types"] },
+        { "required": ["handoff_destination_ref"] }
+      ]
+    }
   },
   "properties": {
     "listing_id": { "type": "string", "pattern": "^lst_" },
@@ -77,6 +82,11 @@
           "sales_handoff"
         ]
       }
+    },
+    "handoff_destination_ref": {
+      "description": "每商品成交入口（KTH destination_ref）：商家声明并维护的实际交易入口。URL 类（external_checkout_url 等）为 https URL；联系/会话类为 opaque ref。URL 安全性由 handoff 执行侧（url-safety）负责",
+      "type": "string",
+      "minLength": 1
     },
     "listing_digest": { "type": "string", "minLength": 1 },
     "publication_state": { "enum": ["ACTIVE", "WITHDRAWN", "SUSPENDED"] },

@@ -160,8 +160,10 @@ describe("startA2aNode（启动接线）", () => {
       // 形状为标准 UCP（specificationVersion，对齐 kiwi-catalog 验证器）。
       const ucp = await fetch(`${node.url}/.well-known/ucp`);
       expect(ucp.ok).toBe(true);
-      const ucpJson = (await ucp.json()) as { specificationVersion?: string };
-      expect(ucpJson.specificationVersion).toBe("2026-04-08");
+      // 审查 P1-03：UCP profile 为 canonical 形状（ucp:{version,services,capabilities}），
+      // 不再有规范外顶层 specificationVersion 字段。
+      const ucpJson = (await ucp.json()) as { ucp?: { version?: string } };
+      expect(ucpJson.ucp?.version).toBe("2026-04-08");
       // 本地回环 A2A 端点仍服务。
       const send = await fetch(node.url, {
         method: "POST",
@@ -182,6 +184,81 @@ describe("startA2aNode（启动接线）", () => {
       if (savedDomain === undefined) delete process.env.KIWI_CATALOG_DOMAIN;
       else process.env.KIWI_CATALOG_DOMAIN = savedDomain;
       await node.stop();
+    }
+  });
+
+  // ── 审查 P1-08：publicBaseUrl 只接受 HTTPS origin ─────────────────────────
+  it("publicBaseUrl 拒绝远程 http（仅 HTTPS origin）", async () => {
+    await expect(
+      startA2aNode({
+        profile: testProfile(),
+        preferredPort: 0,
+        publicBaseUrl: "http://veyquo.example",
+        authVerifier: new NoneAuthVerifier(),
+      }),
+    ).rejects.toThrow(/必须是 https/);
+  });
+
+  it("publicBaseUrl 拒绝 userinfo / path / query / fragment", async () => {
+    await expect(
+      startA2aNode({
+        profile: testProfile(),
+        preferredPort: 0,
+        publicBaseUrl: "https://user:pass@veyquo.example",
+        authVerifier: new NoneAuthVerifier(),
+      }),
+    ).rejects.toThrow(/不得内嵌凭据/);
+    await expect(
+      startA2aNode({
+        profile: testProfile(),
+        preferredPort: 0,
+        publicBaseUrl: "https://veyquo.example/shop",
+        authVerifier: new NoneAuthVerifier(),
+      }),
+    ).rejects.toThrow(/不得包含路径/);
+    await expect(
+      startA2aNode({
+        profile: testProfile(),
+        preferredPort: 0,
+        publicBaseUrl: "https://veyquo.example?x=1",
+        authVerifier: new NoneAuthVerifier(),
+      }),
+    ).rejects.toThrow(/query\/fragment/);
+    await expect(
+      startA2aNode({
+        profile: testProfile(),
+        preferredPort: 0,
+        publicBaseUrl: "https://veyquo.example#top",
+        authVerifier: new NoneAuthVerifier(),
+      }),
+    ).rejects.toThrow(/query\/fragment/);
+  });
+
+  it("publicBaseUrl 拒绝裸 hostname（无 scheme）", async () => {
+    await expect(
+      startA2aNode({
+        profile: testProfile(),
+        preferredPort: 0,
+        publicBaseUrl: "veyquo.example",
+        authVerifier: new NoneAuthVerifier(),
+      }),
+    ).rejects.toThrow(/不是合法 URL/);
+  });
+
+  it("无显式 publicBaseUrl → 回环自动 URL 保持 http（本地形态）", async () => {
+    const savedPublic = process.env.KIWI_A2A_PUBLIC_URL;
+    delete process.env.KIWI_A2A_PUBLIC_URL;
+    try {
+      const node = await startA2aNode({ profile: testProfile(), preferredPort: 0 });
+      try {
+        expect(node.advertisedUrl.startsWith("http://127.0.0.1:")).toBe(true);
+        expect(node.advertisedUrl).toBe(node.url);
+      } finally {
+        await node.stop();
+      }
+    } finally {
+      if (savedPublic === undefined) delete process.env.KIWI_A2A_PUBLIC_URL;
+      else process.env.KIWI_A2A_PUBLIC_URL = savedPublic;
     }
   });
 });

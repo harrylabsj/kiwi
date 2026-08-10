@@ -11,7 +11,7 @@
  *   - SSRF 边界：candidate 的 agent_card_url 指向非法 scheme 时，resolve() 现有
  *     fail-closed 防护生效（断言抛错，不在 catalog-source 重复实现防护）。
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AgentDiscovery,
   CatalogSourceError,
@@ -262,6 +262,48 @@ describe("ShoppingCliCatalogSource", () => {
     await expect(source.searchCandidates({ limit: 0 })).rejects.toMatchObject({
       code: "invalid_input",
     });
+  });
+});
+
+describe("ShoppingCliCatalogSource 超时 timer 清理（审查 P2-02）", () => {
+  it("fetch 拒绝 → timer 清理，不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_input: FetchInput, init?: FetchInit) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        throw new Error("network down");
+      }) as typeof fetch;
+      const source = new ShoppingCliCatalogSource({ baseUrl: "https://catalog.example", fetchImpl });
+      await expect(source.searchCandidates({ q: "coffee" })).rejects.toMatchObject({
+        code: "request_failed",
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("redirect 响应 → timer 清理，不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_input: FetchInput, init?: FetchInit) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        return new Response("", { status: 302, headers: { location: "https://evil.example/" } });
+      }) as typeof fetch;
+      const source = new ShoppingCliCatalogSource({ baseUrl: "https://catalog.example", fetchImpl });
+      await expect(source.searchCandidates({ q: "coffee" })).rejects.toMatchObject({
+        code: "request_failed",
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

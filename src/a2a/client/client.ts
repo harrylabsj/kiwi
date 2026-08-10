@@ -103,53 +103,58 @@ export class A2AClient {
         : { ...baseHeaders, ...this.signer.sign({ method: "POST", url: this.url.href, body: Buffer.from(body, "utf8"), headers: baseHeaders }) };
 
     let response: Response;
-    try {
-      response = await this.fetchImpl(this.url.href, {
-        method: "POST",
-        headers,
-        body,
-        // SSRF 防线：绝不跟随重定向——重定向目标不经过 SSRF/DNS 复查，且
-        // 3xx 可把请求体/认证头转发给第三方。resolve/ucp 已实施，本处对齐。
-        redirect: "manual",
-        signal: controller.signal,
-      });
-    } catch (err) {
-      if (controller.signal.aborted) {
-        throw new A2AClientError("timeout", `A2A request timed out after ${this.timeoutMs}ms`);
-      }
-      throw new A2AClientError(
-        "network",
-        `A2A request failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    if (isRedirectResponse(response)) {
-      throw new A2AClientError(
-        "http_status",
-        `A2A endpoint must not redirect (HTTP ${response.status})`,
-        { httpStatus: response.status },
-      );
-    }
-
     let raw: unknown;
     try {
-      // 响应体读取在超时覆盖内（timer 活到 body 读完；对端停滞 body 也会
-      // 被 abort 中断），且有大小上限（防恶意对端回传 GB 级 body 打爆内存）。
-      raw = await readJsonBody(response, { signal: controller.signal });
-    } catch (err) {
-      if (controller.signal.aborted) {
-        throw new A2AClientError("timeout", `A2A request timed out after ${this.timeoutMs}ms`);
-      }
-      if (err instanceof SafeHttpError && err.code === "response_too_large") {
-        throw invalidResponse(err.message);
-      }
-      if (!response.ok) {
-        throw new A2AClientError("http_status", `A2A HTTP ${response.status} with non-JSON body`, {
-          httpStatus: response.status,
+      try {
+        response = await this.fetchImpl(this.url.href, {
+          method: "POST",
+          headers,
+          body,
+          // SSRF 防线：绝不跟随重定向——重定向目标不经过 SSRF/DNS 复查，且
+          // 3xx 可把请求体/认证头转发给第三方。resolve/ucp 已实施，本处对齐。
+          redirect: "manual",
+          signal: controller.signal,
         });
+      } catch (err) {
+        if (controller.signal.aborted) {
+          throw new A2AClientError("timeout", `A2A request timed out after ${this.timeoutMs}ms`);
+        }
+        throw new A2AClientError(
+          "network",
+          `A2A request failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
-      throw invalidResponse("response body is not JSON");
+
+      if (isRedirectResponse(response)) {
+        throw new A2AClientError(
+          "http_status",
+          `A2A endpoint must not redirect (HTTP ${response.status})`,
+          { httpStatus: response.status },
+        );
+      }
+
+      try {
+        // 响应体读取在超时覆盖内（timer 活到 body 读完；对端停滞 body 也会
+        // 被 abort 中断），且有大小上限（防恶意对端回传 GB 级 body 打爆内存）。
+        raw = await readJsonBody(response, { signal: controller.signal });
+      } catch (err) {
+        if (controller.signal.aborted) {
+          throw new A2AClientError("timeout", `A2A request timed out after ${this.timeoutMs}ms`);
+        }
+        if (err instanceof SafeHttpError && err.code === "response_too_large") {
+          throw invalidResponse(err.message);
+        }
+        if (!response.ok) {
+          throw new A2AClientError("http_status", `A2A HTTP ${response.status} with non-JSON body`, {
+            httpStatus: response.status,
+          });
+        }
+        throw invalidResponse("response body is not JSON");
+      }
     } finally {
+      // 审查 P2-02：所有路径（fetch 拒绝 / redirect / 非 2xx / body 读失败）
+      // 都必须清理超时 timer——此前只有 body 读的 finally 清理，fetch 抛错与
+      // redirect/非 2xx 的提前 throw 会泄漏存活 timer 与 AbortController。
       clearTimeout(timer);
     }
 

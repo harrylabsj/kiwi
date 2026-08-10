@@ -626,3 +626,188 @@ describe("merchant publish orchestration (D2/D3)", () => {
     expect(spawnArgs.length).toBe(0); // listings 未执行
   });
 });
+
+// ── 审查 P1-10 / P1-11 / P2-04：publish 出站安全 ─────────────────────────────
+describe("publish 出站安全（P1-10 / P1-11 / P2-04）", () => {
+  it("agent_card_url 是绝对 HTTPS URL，不再拼接相对路径（P1-10）", async () => {
+    let registerBody = "";
+    const fetchImpl = (async (url: string, init?: Parameters<typeof fetch>[1]) => {
+      const u = String(url);
+      if (u.includes("/v1/listings/publish")) {
+        return new Response(JSON.stringify({ ok: true, listing: { listing_id: "lst_x" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (u.includes("/v1/agent-catalog/agents/register")) {
+        registerBody = String(init?.body ?? "");
+      }
+      if (u.includes("/v1/agents/")) {
+        // publisher 自查端点
+        return new Response(JSON.stringify({ ok: true, results: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return registerResponse();
+    }) as typeof fetch;
+    const spawnImpl = compatSpawn(() => ({
+      status: 0,
+      stdout: JSON.stringify(projectionsReport()),
+      stderr: "",
+    }));
+
+    const report = await merchantPublish({
+      profile: MERCHANT_PROFILE,
+      catalogBaseUrl: "http://127.0.0.1:8600",
+      ownerTokenSecret: SECRET,
+      shoppingCliDb: "/tmp/shop.sqlite",
+      fetchImpl,
+      spawnImpl,
+    });
+
+    expect(report.ok).toBe(true);
+    const parsed = JSON.parse(registerBody) as { agent_card_url?: string };
+    // 缺省 domain = merchant-<safeAgentId(agent_id)>.local = merchant-merchant-acme.local
+    // → 绝对 HTTPS well-known URL（此前是相对路径 `merchant-…local/.well-known/…`，无 scheme）。
+    expect(parsed.agent_card_url).toBe("https://merchant-merchant-acme.local/.well-known/agent-card.json");
+    expect(parsed.agent_card_url).toMatch(/^https:\/\/[^/]+\/.well-known\/agent-card\.json$/);
+  });
+
+  it("非法 catalog domain（含路径）→ fail-closed 短路（P1-10）", async () => {
+    const spawnImpl = compatSpawn(() => ({
+      status: 0,
+      stdout: JSON.stringify(projectionsReport()),
+      stderr: "",
+    }));
+    const report = await merchantPublish({
+      profile: MERCHANT_PROFILE,
+      catalogBaseUrl: "http://127.0.0.1:8600",
+      ownerTokenSecret: SECRET,
+      shoppingCliDb: "/tmp/shop.sqlite",
+      catalogDomain: "merchant-acme.local/some/path",
+      fetchImpl: publishFetch(),
+      spawnImpl,
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.steps.agent.ok).toBe(false);
+    expect(report.steps.listings.skipped_reason).toContain("agent 注册失败");
+  });
+
+  it("owner-token catalog 调用一律 redirect:manual，绝不跟随 3xx（P1-11）", async () => {
+    const redirectFlags: Array<string | undefined> = [];
+    const fetchImpl = (async (url: string, init?: Parameters<typeof fetch>[1]) => {
+      redirectFlags.push((init as { redirect?: string } | undefined)?.redirect);
+      const u = String(url);
+      if (u.includes("/v1/listings/publish")) {
+        return new Response(JSON.stringify({ ok: true, listing: { listing_id: "lst_x" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (u.includes("/v1/agents/")) {
+        return new Response(JSON.stringify({ ok: true, results: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return registerResponse();
+    }) as typeof fetch;
+    const spawnImpl = compatSpawn(() => ({
+      status: 0,
+      stdout: JSON.stringify(projectionsReport()),
+      stderr: "",
+    }));
+
+    const report = await merchantPublish({
+      profile: MERCHANT_PROFILE,
+      catalogBaseUrl: "http://127.0.0.1:8600",
+      ownerTokenSecret: SECRET,
+      shoppingCliDb: "/tmp/shop.sqlite",
+      fetchImpl,
+      spawnImpl,
+    });
+
+    expect(report.ok).toBe(true);
+    expect(redirectFlags.length).toBeGreaterThan(0);
+    for (const flag of redirectFlags) expect(flag).toBe("manual");
+  });
+
+  it("publish 3xx 重定向响应 → fail-closed（不发布、报错；P1-11）", async () => {
+    const fetchImpl = (async (url: string) => {
+      const u = String(url);
+      if (u.includes("/v1/listings/publish")) {
+        return new Response("", {
+          status: 302,
+          headers: { location: "https://evil.example/listings" },
+        });
+      }
+      if (u.includes("/v1/agents/")) {
+        return new Response(JSON.stringify({ ok: true, results: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return registerResponse();
+    }) as typeof fetch;
+    const spawnImpl = compatSpawn(() => ({
+      status: 0,
+      stdout: JSON.stringify(projectionsReport()),
+      stderr: "",
+    }));
+
+    const report = await merchantPublish({
+      profile: MERCHANT_PROFILE,
+      catalogBaseUrl: "http://127.0.0.1:8600",
+      ownerTokenSecret: SECRET,
+      shoppingCliDb: "/tmp/shop.sqlite",
+      fetchImpl,
+      spawnImpl,
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.steps.listings.published).toBe(0);
+    const errors = report.steps.listings.errors ?? [];
+    expect(errors.some((e) => e.includes("must not follow redirects"))).toBe(true);
+  });
+
+  it("publish HTTP 200 + ok:false 信封 → fail-closed（P2-04）", async () => {
+    const fetchImpl = (async (url: string) => {
+      const u = String(url);
+      if (u.includes("/v1/listings/publish")) {
+        // HTTP 200 但信封 ok:false：绝不能当成功（此前若只查 HTTP status 会误判）
+        return new Response(JSON.stringify({ ok: false, error: "envelope rejected" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (u.includes("/v1/agents/")) {
+        return new Response(JSON.stringify({ ok: true, results: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return registerResponse();
+    }) as typeof fetch;
+    const spawnImpl = compatSpawn(() => ({
+      status: 0,
+      stdout: JSON.stringify(projectionsReport()),
+      stderr: "",
+    }));
+
+    const report = await merchantPublish({
+      profile: MERCHANT_PROFILE,
+      catalogBaseUrl: "http://127.0.0.1:8600",
+      ownerTokenSecret: SECRET,
+      shoppingCliDb: "/tmp/shop.sqlite",
+      fetchImpl,
+      spawnImpl,
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.steps.listings.published).toBe(0);
+    const errors = report.steps.listings.errors ?? [];
+    expect(errors.some((e) => e.includes("envelope rejected"))).toBe(true);
+  });
+});

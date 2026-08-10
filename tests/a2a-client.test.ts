@@ -6,7 +6,7 @@
  *    id 不匹配 / schema 校验失败 / network；
  *  - SSRF 防护：http(s) only、拒绝私网/保留段、loopback 放行、DNS 复查。
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { finalizeEnvelope } from "../src/negotiation/domain/envelope.js";
@@ -316,6 +316,77 @@ describe("A2A client 错误路径（fail-closed）", () => {
     });
     const client = new A2AClient({ url: mock.url });
     await expect(client.getTask("t")).rejects.toMatchObject({ kind: "schema_invalid" });
+  });
+});
+
+describe("A2A client 超时 timer 清理（审查 P2-02）", () => {
+  it("fetch 拒绝 → timer 清理，不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_url: string, init?: Parameters<typeof fetch>[1]) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        throw new Error("network down");
+      }) as typeof fetch;
+      const client = new A2AClient({
+        url: "https://a2a.example/",
+        timeoutMs: 100,
+        skipDnsCheck: true,
+        fetchImpl,
+      });
+      await expect(client.sendMessage(knpMessage())).rejects.toMatchObject({ kind: "network" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("redirect 响应 → timer 清理，不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_url: string, init?: Parameters<typeof fetch>[1]) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        return new Response("", { status: 302, headers: { location: "https://evil.example/" } });
+      }) as typeof fetch;
+      const client = new A2AClient({
+        url: "https://a2a.example/",
+        timeoutMs: 100,
+        skipDnsCheck: true,
+        fetchImpl,
+      });
+      await expect(client.sendMessage(knpMessage())).rejects.toMatchObject({ kind: "http_status" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("非 2xx 响应 → timer 清理，不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_url: string, init?: Parameters<typeof fetch>[1]) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        return new Response("boom", { status: 500 });
+      }) as typeof fetch;
+      const client = new A2AClient({
+        url: "https://a2a.example/",
+        timeoutMs: 100,
+        skipDnsCheck: true,
+        fetchImpl,
+      });
+      await expect(client.sendMessage(knpMessage())).rejects.toMatchObject({ kind: "http_status" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

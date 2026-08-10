@@ -135,64 +135,67 @@ export class ShoppingCliCommerceDataSource implements CommerceDataSource {
     const url = `${this.baseUrl}${requestPath}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let response: Response;
     try {
-      response = await fetchImpl(url, {
-        // 出站加固：绝不跟随重定向（3xx 目标不经过校验，且可能转发 Bearer 头）。
-        redirect: "manual",
-        signal: controller.signal,
-        headers: {
-          accept: "application/json",
-          ...(this.deps.authToken !== undefined
-            ? { authorization: `Bearer ${this.deps.authToken}` }
-            : {}),
-        },
-      });
-    } catch (err) {
-      const name = (err as { name?: string } | null)?.name;
-      const detail = err instanceof Error ? err.message : String(err);
-      throw new CommerceError(
-        "request_failed",
-        name === "AbortError"
-          ? `shopping-cli request timed out after ${timeoutMs}ms: ${url}`
-          : `shopping-cli request failed: ${url} (${detail})`,
-      );
-    }
-    if (isRedirectResponse(response)) {
-      throw new CommerceError(
-        "request_failed",
-        `shopping-cli request must not follow redirects (HTTP ${response.status} from ${url})`,
-      );
-    }
-    if (response.status === 404) {
-      // 404 = 资源不存在：getProduct 的"未知 SKU → undefined"接口承诺
-      //（composite 次要源靠它跳过自身不收录的 SKU，而不是整体抛错）。
-      return null;
-    }
-    if (!response.ok) {
-      throw new CommerceError("request_failed", `shopping-cli request returned HTTP ${response.status} from ${url}`);
-    }
-    let raw: unknown;
-    try {
-      // 响应体读取在超时覆盖内 + 大小上限（出站加固）。
-      raw = await readJsonBody(response, { signal: controller.signal });
-    } catch (err) {
-      if (controller.signal.aborted) {
+      let response: Response;
+      try {
+        response = await fetchImpl(url, {
+          // 出站加固：绝不跟随重定向（3xx 目标不经过校验，且可能转发 Bearer 头）。
+          redirect: "manual",
+          signal: controller.signal,
+          headers: {
+            accept: "application/json",
+            ...(this.deps.authToken !== undefined
+              ? { authorization: `Bearer ${this.deps.authToken}` }
+              : {}),
+          },
+        });
+      } catch (err) {
+        const name = (err as { name?: string } | null)?.name;
+        const detail = err instanceof Error ? err.message : String(err);
         throw new CommerceError(
           "request_failed",
-          `shopping-cli request timed out after ${timeoutMs}ms while reading response: ${url}`,
+          name === "AbortError"
+            ? `shopping-cli request timed out after ${timeoutMs}ms: ${url}`
+            : `shopping-cli request failed: ${url} (${detail})`,
         );
       }
-      throw new CommerceError(
-        "request_failed",
-        err instanceof SafeHttpError && err.code === "response_too_large"
-          ? `shopping-cli response from ${url}: ${err.message}`
-          : `shopping-cli response from ${url} is not valid JSON`,
-      );
+      if (isRedirectResponse(response)) {
+        throw new CommerceError(
+          "request_failed",
+          `shopping-cli request must not follow redirects (HTTP ${response.status} from ${url})`,
+        );
+      }
+      if (response.status === 404) {
+        // 404 = 资源不存在：getProduct 的"未知 SKU → undefined"接口承诺
+        //（composite 次要源靠它跳过自身不收录的 SKU，而不是整体抛错）。
+        return null;
+      }
+      if (!response.ok) {
+        throw new CommerceError("request_failed", `shopping-cli request returned HTTP ${response.status} from ${url}`);
+      }
+      try {
+        // 响应体读取在超时覆盖内 + 大小上限（出站加固）。
+        return await readJsonBody(response, { signal: controller.signal });
+      } catch (err) {
+        if (controller.signal.aborted) {
+          throw new CommerceError(
+            "request_failed",
+            `shopping-cli request timed out after ${timeoutMs}ms while reading response: ${url}`,
+          );
+        }
+        throw new CommerceError(
+          "request_failed",
+          err instanceof SafeHttpError && err.code === "response_too_large"
+            ? `shopping-cli response from ${url}: ${err.message}`
+            : `shopping-cli response from ${url} is not valid JSON`,
+        );
+      }
     } finally {
+      // 审查 P2-02：所有路径（fetch 失败 / redirect / 坏状态 / 404 / body 读）
+      // 都必须清理超时 timer——此前 fetch 抛错、redirect、非 2xx 的提前 throw
+      // 会跳过 clearTimeout，长驻进程里多次失败累积存活 timer 与 AbortController。
       clearTimeout(timer);
     }
-    return raw;
   }
 
   async getProduct(sku: string): Promise<ProductFact | undefined> {

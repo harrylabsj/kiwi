@@ -36,6 +36,7 @@ import { createHmac } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import type { AgentProfile } from "./config/profile.js";
 import { registerCatalogAgent } from "./discovery/catalog-source/register.js";
+import { isRedirectResponse } from "./net/safe-http.js";
 import { SHOPPING_CLI_COMPAT, compatRangeText, versionInRange } from "./product-compat.js";
 
 export interface MerchantPublishOptions {
@@ -103,6 +104,69 @@ export interface MerchantPublishReport {
 
 function safeAgentId(agentId: string): string {
   return agentId.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
+}
+
+/**
+ * 审查 P1-10：构造注册用的 agent_card_url —— **绝对且经过校验**。
+ *
+ * `domain` 可能是裸 hostname（`merchant-x.local`，本地占位）或已含 scheme 的
+ * URL；统一规范化为 `<scheme>://<host>/.well-known/agent-card.json`。此前直接
+ * 拼接 `${domain}/.well-known/agent-card.json`——裸 hostname 时产物是相对 URL
+ * （catalog 无法按 well-known 验证），且若 domain 携带 userinfo/路径会污染注册
+ * 身份。
+ *
+ * 校验（fail-closed，任何一项不过 → 抛错短路，不发布）：
+ *   - 绝对 URL 且 http(s)；
+ *   - 远程 host 必须 https（loopback 本地形态允许 http）；
+ *   - 无 userinfo / query / fragment；
+ *   - path 只允许空或 "/"（agent_card_url 的 well-known 路径由本函数追加）。
+ */
+function buildAgentCardUrl(domain: string): string {
+  const base = /^[a-z][a-z0-9+.-]*:\/\//i.test(domain) ? domain : `https://${domain}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(base);
+  } catch {
+    throw new Error(`catalog domain 不是合法 URL/域名: "${domain}"（应为 https://<host> 形式）`);
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(`catalog domain 必须使用 http(s)（got ${parsed.protocol}）: ${domain}`);
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    throw new Error(`catalog domain 不得内嵌凭据（userinfo）: ${domain}`);
+  }
+  if (parsed.search !== "" || parsed.hash !== "") {
+    throw new Error(`catalog domain 不得包含 query/fragment: ${domain}`);
+  }
+  if (parsed.pathname !== "" && parsed.pathname !== "/") {
+    throw new Error(`catalog domain 不得包含路径（agent_card_url 由本函数构造）: ${domain}`);
+  }
+  const host = parsed.hostname;
+  const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
+  if (parsed.protocol !== "https:" && !isLoopback) {
+    throw new Error(`catalog domain 远程 host 必须使用 https（本地 loopback 才允许 http）: ${domain}`);
+  }
+  const port = parsed.port !== "" ? `:${parsed.port}` : "";
+  return `${parsed.protocol}//${host}${port}/.well-known/agent-card.json`;
+}
+
+/**
+ * 审查 P1-11：catalog 出站调用（可能携带 owner_token 凭据）——**绝不跟随
+ * 重定向**。manual redirect 下任何 3xx / opaqueredirect 立即抛错，不解析
+ * body：重定向会把 Authorization 头 / body / query 中的凭据转发给第三方
+ * host。跨源重定向是 token 泄漏路径（SC-SEC-01 同型）；fail-closed 拒绝所有
+ * 3xx（含同源——最简且最安全的保证）。
+ */
+async function catalogFetch(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: Parameters<typeof fetch>[1],
+): Promise<Response> {
+  const res = await fetchImpl(url, { ...init, redirect: "manual" });
+  if (isRedirectResponse(res)) {
+    throw new Error(`catalog request must not follow redirects (HTTP ${res.status} from ${url})`);
+  }
+  return res;
 }
 
 /**
@@ -185,7 +249,7 @@ export async function merchantPublish(
   let agentError: string | undefined;
   try {
     const lookupUrl = `${baseUrl}/v1/agent-catalog/merchants/${encodeURIComponent(catalogMerchantId)}/agents`;
-    const lookup = await fetchImpl(lookupUrl, { signal: AbortSignal.timeout(15_000) });
+    const lookup = await catalogFetch(fetchImpl, lookupUrl, { signal: AbortSignal.timeout(15_000) });
     if (lookup.ok) {
       const body = (await lookup.json()) as { results?: Array<{ catalog_agent_id?: string }> };
       const existing = body.results?.[0]?.catalog_agent_id;
@@ -201,7 +265,7 @@ export async function merchantPublish(
         merchantId: catalogMerchantId,
         ownerToken: options.ownerToken,
         ownerTokenSecret: options.ownerTokenSecret,
-        agentCardUrl: `${domain}/.well-known/agent-card.json`,
+        agentCardUrl: buildAgentCardUrl(domain),
         fetchImpl: options.fetchImpl,
         timeoutMs: 15_000,
       });
@@ -317,19 +381,28 @@ export async function merchantPublish(
     const wireFields = Object.fromEntries(
       Object.entries(projection).filter(([key]) => !key.startsWith("_")),
     );
+    // 每商品成交入口（KTH destination_ref）：投影携带商家维护的
+    // handoff_destination（shopping-cli products.handoff_destination）。
+    // 映射为 listing 的 handoff_destination_ref，并剔除原始字段（catalog 契约
+    // 只认 handoff_destination_ref，additionalProperties:false 会拒未知键）。
+    const { handoff_destination: rawHandoff, ...projectionWire } = wireFields;
+    const handoffRef = typeof rawHandoff === "string" ? rawHandoff.trim() : "";
     const body: Record<string, unknown> = {
-      ...wireFields,
+      ...projectionWire,
       merchant_id: catalogMerchantId,
       owner_agent_id: catalogAgentId,
       owner_token: effectiveOwnerToken,
       handoff_destination_types: ["external_checkout_url"],
     };
+    if (handoffRef !== "") {
+      body.handoff_destination_ref = handoffRef;
+    }
     if (typeof body.owner_token !== "string" || body.owner_token === "") {
       reportErrors.push(`${ref}: no owner token (KIWI_MERCHANT_TOKEN 或 secret 派生)`);
       continue;
     }
     try {
-      const res = await fetchImpl(`${baseUrl}/v1/listings/publish`, {
+      const res = await catalogFetch(fetchImpl, `${baseUrl}/v1/listings/publish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -365,7 +438,7 @@ export async function merchantPublish(
       `${baseUrl}/v1/agents/${encodeURIComponent(catalogAgentId)}/listings` +
       `?owner_token=${encodeURIComponent(effectiveOwnerToken)}&limit=100`;
     try {
-      const probeRes = await fetchImpl(probeUrl, { signal: AbortSignal.timeout(15_000) });
+      const probeRes = await catalogFetch(fetchImpl, probeUrl, { signal: AbortSignal.timeout(15_000) });
       const probePayload = (await probeRes.json()) as {
         ok?: boolean;
         results?: Array<Record<string, unknown>>;
@@ -398,7 +471,7 @@ export async function merchantPublish(
         `${baseUrl}/v1/agents/${encodeURIComponent(catalogAgentId)}/listings` +
         `?owner_token=${encodeURIComponent(effectiveOwnerToken)}&limit=100` +
         (cursor !== undefined ? `&cursor=${encodeURIComponent(cursor)}` : "");
-      const listRes = await fetchImpl(listUrl, { signal: AbortSignal.timeout(15_000) });
+      const listRes = await catalogFetch(fetchImpl, listUrl, { signal: AbortSignal.timeout(15_000) });
       const listPayload = (await listRes.json()) as {
         ok?: boolean;
         results?: Array<Record<string, unknown>>;
@@ -418,7 +491,8 @@ export async function merchantPublish(
         const listingId = String(rec.listing_id ?? "");
         if (listingId === "") continue;
         try {
-          const wRes = await fetchImpl(
+          const wRes = await catalogFetch(
+            fetchImpl,
             `${baseUrl}/v1/listings/${encodeURIComponent(listingId)}/withdraw`,
             {
               method: "POST",

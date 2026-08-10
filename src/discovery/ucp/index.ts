@@ -43,7 +43,7 @@ export type {
 } from "./intersect.js";
 export { validateUcpProfile } from "./validate.js";
 export type { UcpRejectedEntry, UcpRejectionCode, UcpValidationResult } from "./validate.js";
-export { UcpResolver, parseCacheControl, WELL_KNOWN_UCP_PATH } from "./resolver.js";
+export { UcpResolver, MAX_CACHE_ENTRIES, parseCacheControl, WELL_KNOWN_UCP_PATH } from "./resolver.js";
 export type {
   CacheControlParse,
   UcpResolveInput,

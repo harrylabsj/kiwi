@@ -1,9 +1,10 @@
 /**
  * RFC 8785 JCS canonicalization 测试（src/negotiation/jcs.ts）：
  *  - 键序无关、-0 保留、指数归一化（既有行为锁定）；
- *  - U+2028/U+2029 转义（评审项 A2：JSON.stringify 原样输出这两个字符，
- *    RFC 8785 §3.2.2.1 要求转义——否则与按规范转义的实现产生不同 digest，
- *    跨实现互操作断裂；对象 key 同样适用）。
+ *  - U+2028/U+2029 字面保留（审查修正，2026-08-10：RFC 8785 §3.2.2.1 只
+ *    MUST-escape quotation mark / reverse solidus / 控制字符 U+0000-U+001F；
+ *    U+2028/U+2029 是 U+2000 段非控制字符，字面输出。此前转义它们会让 digest
+ *    与符合规范的实现不一致）；控制字符仍正常转义。
  */
 import { describe, expect, it } from "vitest";
 import { canonicalize } from "../src/negotiation/jcs.js";
@@ -17,25 +18,30 @@ describe("RFC 8785 canonicalize", () => {
     expect(canonicalize(1e-7)).toBe("1e-7");
   });
 
-  it("escapes U+2028 / U+2029 in string values (RFC 8785 §3.2.2.1)", () => {
+  it("preserves U+2028 / U+2029 literally in string values (RFC 8785 §3.2.2.1)", () => {
     // 直接构造字符（避免源码内不可见字面量）
     const ls = String.fromCharCode(0x2028);
     const ps = String.fromCharCode(0x2029);
-    expect(canonicalize(`a${ls}b`)).toBe('"a\\u2028b"');
-    expect(canonicalize(`a${ps}b`)).toBe('"a\\u2029b"');
-    // 输出确为 6 字符转义（反斜杠 + u2028），而非不可见字符直出
+    // 字面码点输出——转义它们会与符合规范的 JCS 实现产生不同 digest。
+    expect(canonicalize(`a${ls}b`)).toBe(`"a${ls}b"`);
+    expect(canonicalize(`a${ps}b`)).toBe(`"a${ps}b"`);
+    // 输出确为原字面字符（码点 0x2028），而非 6 字符反斜杠转义。
     const out = canonicalize(`x${ls}y`);
-    expect(out).toBe('"x\\u2028y"');
-    expect(out.charCodeAt(2)).toBe(0x5c); // `\`
-    expect(out.charCodeAt(3)).toBe(0x75); // `u`
+    expect(out.charCodeAt(2)).toBe(0x2028);
+    expect(out.length).toBe(5); // 引号 + x + U+2028 + y + 引号
   });
 
-  it("escapes U+2028 / U+2029 in object keys", () => {
+  it("preserves U+2028 / U+2029 literally in object keys", () => {
     const ls = String.fromCharCode(0x2028);
-    expect(canonicalize({ [`k${ls}`]: 1 })).toBe('{"k\\u2028":1}');
+    expect(canonicalize({ [`k${ls}`]: 1 })).toBe(`{"k${ls}":1}`);
   });
 
-  it("keeps plain text unchanged (identity for normal input)", () => {
+  it("retains control-character escaping (U+0000-U+001F)", () => {
+    // 控制字符仍必须转义（与 JSON.stringify 行为一致，RFC 8785 MUST-escape）。
     expect(canonicalize("hello\n世界")).toBe('"hello\\n世界"');
+    const nul = String.fromCharCode(0x00);
+    expect(canonicalize(`a${nul}b`)).toBe('"a\\u0000b"');
+    const tab = String.fromCharCode(0x09);
+    expect(canonicalize(`a${tab}b`)).toBe('"a\\tb"');
   });
 });

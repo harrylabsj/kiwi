@@ -383,14 +383,19 @@ export function createMerchantHandler(
         phase = event.state_transition.to_phase;
       }
     }
-    if (isTerminalPhase(phase)) {
-      closedNegotiations.add(negotiationId);
-      continue; // 终态后 conditional 已删除，不恢复
-    }
+    // 审查 P1-07（跨重启残留，独立验收发现）：终态相位同样必须恢复——相位
+    // 取自链上 state_transition 事实（非臆造）。否则 cancel/withdraw/decline
+    // 不在 COMMERCIAL_ACTIONS、重启后 advancePhase 从全新 OPEN 状态推进：
+    // 重放的 cancel 被当作新动作接受，并落 from_phase 伪造为 OPEN 的幻影
+    // 终态转换。恢复后由相位机 fail-closed（state_conflict），与进程内一致。
     phaseStateByNegotiation.set(negotiationId, {
       negotiation_id: negotiationId,
       phase,
     });
+    if (isTerminalPhase(phase)) {
+      closedNegotiations.add(negotiationId);
+      continue; // 终态后 conditional 已删除，不恢复
+    }
     // 恢复最后发出的 conditional_offer（message_sent 事件携带完整 envelope）
     let lastConditional: { conditional: Record<string, unknown>; quantity: number } | undefined;
     for (const event of events) {

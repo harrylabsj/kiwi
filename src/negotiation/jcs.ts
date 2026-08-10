@@ -56,16 +56,19 @@ function canonicalNumber(value: number): string {
 }
 
 /**
- * RFC 8785 §3.2.2.1 字符串序列化：`"`/`\`/控制字符（JSON.stringify 已处理）
- * + U+2028/U+2029（JSON.stringify 原样输出——RFC 8785 要求转义，否则与
- * 按规范转义的实现产生不同 digest，跨实现互操作断裂）。
+ * RFC 8785 §3.2.2.1 字符串序列化：只转义 quotation mark（0x0022）/
+ * reverse solidus（0x005C）/ 控制字符（U+0000–U+001F）——`JSON.stringify`
+ * 已处理全部。
+ *
+ * **U+2028/U+2029 不转义**（审查修正，2026-08-10）：它们是 U+2000 段的非
+ * 控制字符，RFC 8785 明确 "All Unicode characters may be placed within the
+ * quotation marks except … control characters (U+0000 through U+001F)"，
+ * ECMAScript JSON 序列化同样字面保留。此前实现把它们转义成 `\u2028/\u2029`
+ * ——与符合规范的实现产生不同 digest，跨实现互操作断裂（错误不是字面输出，
+ * 而是转义本身）。
  */
 function canonicalString(value: string): string {
-  // 正则字面量用 \u2028/\u2029 Unicode 转义（非控制字符转义，eslint
-  // no-control-regex 不适用），匹配 U+2028（行分隔符）/ U+2029（段落分隔符）字符本身。
-  return JSON.stringify(value)
-    .replace(/\u2028/g, "\\u2028")
-    .replace(/\u2029/g, "\\u2029");
+  return JSON.stringify(value);
 }
 
 function canonicalValue(value: unknown): string {
