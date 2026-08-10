@@ -4,7 +4,7 @@ doc_revision: "1.4"
 short_name: KNP/1.0
 status: Normative Specification (Released 2026-08-07; errata/editorial revision)
 date: 2026-08-07
-target_implementation: Kiwi v1.0.0
+target_implementation: Kiwi v0.7.0 (draft; v0.6.0 发布身份见 kiwi-negotiation-protocol-1.0.md)
 scope: Pre-transaction Agent-to-Agent commerce negotiation
 ---
 
