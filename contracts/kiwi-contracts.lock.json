@@ -1,7 +1,7 @@
 {
   "lock_version": 1,
   "source_repository": "harrylabsj/kiwi",
-  "source_commit": "506a425d5da730b1d5be65941c3b93af1a998baa",
-  "bundle_sha256": "e7001ebe6ac4e8679ccd4f8e0375f85753ff7e39a9da5f13641285cdef1f8c00",
+  "source_commit": "009bc25cdae2668c8fd19ccedcc4e0c64a34f6be",
+  "bundle_sha256": "2dbbc52a1113dc5c05dc544802571ee188b44e1567d6bfb0cd8ccd87ea7f4998",
   "contracts_manifest": "contracts/manifest.json"
 }
