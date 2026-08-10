@@ -253,6 +253,43 @@ describe("Recovery: local pending（同 id + 同 digest 安全重放）", () => 
     }
   });
 
+  it("远端回包 in_reply_to 指向本地出站 id 即已确认——不重放（审查 P3）", async () => {
+    const s = setup();
+    try {
+      recordSent(s.ledger);
+      s.contextMap.set(NEGOTIATION_ID, { remote_context_id: "ctx_remote" });
+      s.contextMap.addTask(NEGOTIATION_ID, "task_active");
+      const outbound = finalizeEnvelope(validEnvelopeFields());
+      // 远端回包：新 messageId + in_reply_to 指向我们的出站消息——此前 ack
+      // 只比 messageId（远端回包恒用新 id），我们的消息每次恢复都判 pending
+      // 走全量重放循环（靠发送侧幂等短路兜住）。
+      const reply = finalizeEnvelope({
+        ...validEnvelopeFields(),
+        message_id: "msg_ack_remote_1",
+        in_reply_to: outbound.message_id,
+      });
+      const handle = new FakeHandle({
+        id: "task_active",
+        status: {
+          state: "working",
+          message: {
+            role: "agent",
+            parts: [{ kind: "data", data: { knp_envelope: reply } }],
+            messageId: "msg_ack_remote_1",
+          },
+        },
+      });
+      const { result } = recovery(s, handle);
+      const r = await result;
+
+      expect(r.status).toBe("resumed");
+      expect(r.replayed_message_ids).toHaveLength(0);
+      expect(handle.sent).toHaveLength(0);
+    } finally {
+      teardown(s.dir);
+    }
+  });
+
   it("handles the normal counter flow: replay is idempotent and the counter is recorded", async () => {
     const s = setup();
     try {
