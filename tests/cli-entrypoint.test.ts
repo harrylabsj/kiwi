@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { parseArgs } from "../src/cli.js";
 
 const DIST_CLI = path.resolve(__dirname, "..", "dist", "cli.js");
 const PRODUCT_VERSION = (JSON.parse(readFileSync(path.resolve(__dirname, "..", "package.json"), "utf-8")) as { version: string }).version;
@@ -78,5 +79,24 @@ describe.skipIf(!existsSync(DIST_CLI))("CLI entrypoint guard", () => {
       process.stderr.write = originalErrWrite;
     }
     expect(writes).toEqual([]);
+  });
+});
+
+describe("parseArgs: weixin --a2a flag（审查 P2-L）", () => {
+  it("--a2a 被解析（此前 Unknown argument: --a2a，exit 2）", () => {
+    const parsed = parseArgs(["weixin", "--a2a", "--no-qr"]);
+    expect(parsed.a2aExplicit).toBe(true);
+    expect(parsed.noA2a).toBe(false);
+  });
+
+  it("默认不显式开启 A2A（weixin 文档承诺默认关）", () => {
+    const parsed = parseArgs(["weixin"]);
+    expect(parsed.a2aExplicit).toBe(false);
+  });
+
+  it("--no-a2a 仍可覆盖 --a2a", () => {
+    const parsed = parseArgs(["weixin", "--a2a", "--no-a2a"]);
+    expect(parsed.a2aExplicit).toBe(true);
+    expect(parsed.noA2a).toBe(true);
   });
 });
