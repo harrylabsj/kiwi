@@ -72,6 +72,10 @@ export class HttpMerchantClient implements MerchantClient {
     try {
       response = await fetch(url, {
         method,
+        // 审查 P2-H：携带 Bearer token 的请求绝不跟随 3xx——重定向会把凭据
+        // 转发到第三方域（同仓 http-connector.ts 同款纪律注释）。3xx 在
+        // manual 模式下不进 response.ok，下方按非 2xx 处理（fail-closed）。
+        redirect: "manual",
         headers: {
           accept: "application/json",
           ...(options.body !== undefined ? { "content-type": "application/json" } : {}),
@@ -88,11 +92,23 @@ export class HttpMerchantClient implements MerchantClient {
     } finally {
       clearTimeout(timer);
     }
+    // 响应体大小上限（审查 P2-H 配套项：此前无上限，恶意网关可回传巨量 body）。
+    const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
     let payload: unknown;
     try {
-      payload = await response.json();
-    } catch {
-      throw new MerchantClientError("transient", `merchant returned non-JSON (HTTP ${response.status})`);
+      const raw = await response.arrayBuffer();
+      if (raw.byteLength > MAX_RESPONSE_BYTES) {
+        throw new Error(`response exceeds ${MAX_RESPONSE_BYTES} bytes`);
+      }
+      const text = new TextDecoder("utf-8").decode(raw);
+      payload = text === "" ? null : JSON.parse(text);
+    } catch (err) {
+      throw new MerchantClientError(
+        "transient",
+        `merchant returned non-JSON or oversized body (HTTP ${response.status}): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
     if (!response.ok) {
       const kind =
