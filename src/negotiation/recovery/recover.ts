@@ -108,6 +108,28 @@ function defaultViewMessageIds(state: RemoteState): string[] {
   return id === undefined ? [] : [id];
 }
 
+/** 审查 P3：远端回包用新 messageId——"远端 id 集合包含本地出站 id"永远为假，
+ *  恢复第 5 步的 ack 比较形同虚设（每条出站消息每次恢复都判 pending，靠发送
+ *  侧幂等短路兜住）。正确的 ack 键是远端消息的 `in_reply_to`（KNP envelope
+ *  data part）：回包引用本地出站 message_id 即已确认。 */
+function acknowledgedMessageIds(task: A2ATask | null): Set<string> {
+  const ids = new Set<string>();
+  const parts = task?.status.message?.parts;
+  if (!Array.isArray(parts)) return ids;
+  for (const part of parts) {
+    if (part.kind !== "data" || part.data === undefined) continue;
+    const envelope = part.data["knp_envelope"] as { in_reply_to?: unknown } | undefined;
+    if (
+      envelope !== undefined &&
+      typeof envelope.in_reply_to === "string" &&
+      envelope.in_reply_to !== ""
+    ) {
+      ids.add(envelope.in_reply_to);
+    }
+  }
+  return ids;
+}
+
 /** 第 1 步：从 Ledger 的 state_transition 事件重建本地 phase；无记录时 OPEN。 */
 export function deriveLocalPhase(events: LedgerEvent[]): NegotiationPhase {
   let phase: NegotiationPhase = "OPEN";
@@ -398,11 +420,16 @@ export class NegotiationRecovery {
 
     // 5. Compare acknowledged messages。
     const remoteIds = new Set(view.message_ids);
+    const acknowledged = acknowledgedMessageIds(view.task);
     const localIds = new Set(
       events.filter((e) => e.message_id !== undefined).map((e) => e.message_id as string),
     );
     const remoteAhead = [...remoteIds].filter((id) => !localIds.has(id));
-    const pending = localSent.filter((entry) => !remoteIds.has(entry.message_id));
+    // 审查 P3：pending = 本地出站 id 未被远端确认——确认 = 远端消息 id 相等
+    // 或远端回包 in_reply_to 指向它（此前只比 id，恒 pending，重放证据逻辑退化）。
+    const pending = localSent.filter(
+      (entry) => !remoteIds.has(entry.message_id) && !acknowledged.has(entry.message_id),
+    );
 
     // 6. Reconcile。
     // 6a. remote ahead：fetch → validate（已做）→ append Ledger。

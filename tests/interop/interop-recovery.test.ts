@@ -124,10 +124,11 @@ describe("场景 2：谈判中途重启 buyer，经 §23 恢复续上", () => {
 
     expect(result.status).toBe("resumed");
     expect(result.phase).toBe("OFFER_OPEN");
-    // rfq 与 counter 两条 pending 出站消息都被安全重放（幂等，不重复执行）。
-    expect(result.replayed_message_ids).toEqual(
-      expect.arrayContaining([rfq.message_id, counter.message_id]),
-    );
+    // 审查 P3（ack 语义修正）：恢复时远端 task 只携带最新消息
+    // （conditional_offer），其 in_reply_to 已确认 counter——counter 不重放；
+    // rfq 无回包引用仍 pending，被安全重放（幂等，不重复执行）。此前 ack
+    // 只比 messageId（远端回包恒用新 id），两条都被误判 pending 全量重放。
+    expect(result.replayed_message_ids).toEqual([rfq.message_id]);
     expect(result.remote_ahead_appended).toBe(0);
     expect(ledger.verifyChain(negotiationId).valid).toBe(true);
 
