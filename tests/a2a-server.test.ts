@@ -767,3 +767,59 @@ describe("A2A Server: 入站 identity snapshot counterparty 侧", () => {
     expect(result.identityVerified).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 入站幂等崩溃窗口自愈（审查 P2-E，2026-08-10）
+// ---------------------------------------------------------------------------
+
+describe("A2A Server: append-before-commit crash window self-heals (P2-E)", () => {
+  it("duplicate ledger content after crash commits idempotency and returns the prior task", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-p2e-"));
+    const ledger = new LedgerStore({ dir, now: () => "2026-08-06T10:00:00.000Z" });
+    const idempotency = new IdempotencyStore({ dir, now: () => "2026-08-06T10:00:00.000Z" });
+    const pipeline = new InboundPipeline({
+      handler: echoHandler(),
+      idempotency,
+      ledger,
+      tasks: new TaskRegistry(),
+      now: () => "2026-08-06T10:00:00.000Z",
+      logError: () => {},
+    });
+    const envelope = finalizeEnvelope({
+      ...validEnvelopeFields(),
+      message_id: "msg_p2e_crash_window",
+    });
+    const message = knpMessage(envelope);
+    const caller = { senderIdentity: "peer-p2e", remoteAddress: "127.0.0.1:9" };
+
+    // 固定 taskId：让重试产生与首次运行完全相同的 append 内容（含
+    // remote_task_id）——这是"崩溃后重试撞 ledger_duplicate_content"的
+    // 唯一可达路径（随机 taskId 时重试内容不同、本就不卡死）。
+    const taskRegistry = await import("../src/a2a/server/task-registry.js");
+    const fixedTaskId = "task_p2e_fixed";
+    const taskIdSpy = vi.spyOn(taskRegistry, "newTaskId").mockReturnValue(fixedTaskId);
+    try {
+      // run 1：append 已落账、幂等 commit 前"进程被杀"（commit 抛错）
+      const commitSpy = vi.spyOn(idempotency, "commit").mockImplementationOnce(() => {
+        throw new Error("simulated crash before idempotency commit");
+      });
+      await expect(pipeline.sendMessage({ message }, caller)).rejects.toThrow(
+        /simulated crash/,
+      );
+      commitSpy.mockRestore();
+
+      // run 2：同消息重试 → append 撞 ledger_duplicate_content → 补 commit +
+      // 返回按已落账事件还原的任务（不再 internalServerError 卡死）
+      const recovered = await pipeline.sendMessage({ message }, caller);
+      expect(recovered.task.id).toBe(fixedTaskId);
+      expect(recovered.task.status.state).toBe("completed");
+
+      // run 3：幂等已 commit → 直接短接重放（不再重复处理）
+      const replayed = await pipeline.sendMessage({ message }, caller);
+      expect(replayed.task.id).toBe(fixedTaskId);
+    } finally {
+      taskIdSpy.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
