@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a reproducible defect in Kiwi or its release tooling
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. A clear, minimal reproduction
+        helps maintainers fix it faster. Please redact all secrets, personal
+        data, and production endpoints before submitting.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing the defect.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands, inputs, and setup needed to observe the bug. Prefer a minimal public fixture or test case.
+      placeholder: |
+        1. Run `npm ci` and `npm run build` ...
+        2. Invoke ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen instead?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happens, including any error output.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Package version, tag, or full 40-character commit SHA affected.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Node.js and OS versions, plus any relevant runtime settings.
+      placeholder: Node 22.x on macOS 14 / Ubuntu 22.04, etc.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Logs, screenshots, or links that help diagnose the issue (redact secrets).
