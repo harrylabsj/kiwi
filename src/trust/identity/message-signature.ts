@@ -344,6 +344,26 @@ function verifyEntry(
     return { ok: false, code: "authorization_failed", reason: "signature has expired" };
   }
 
+  // 审查 BUG-06：最小组件集合强制——此前 content-digest 校验由签名者自选
+  // 组件决定（signature 可只覆盖 @method/@target-uri/@authority，body 不被
+  // 签名绑定），服务端确认"签名有效"却未确认签过当前 body。带非空 body 的
+  // 已签名请求必须覆盖 @method/@target-uri/@authority 与 content-digest。
+  const REQUIRED_COMPONENTS = ["@method", "@target-uri", "@authority"];
+  const missingComponents = REQUIRED_COMPONENTS.filter(
+    (component) => !entry.components.includes(component),
+  );
+  const hasBody = input.body !== undefined && input.body.length > 0;
+  if (hasBody && !entry.components.includes("content-digest")) {
+    missingComponents.push("content-digest");
+  }
+  if (missingComponents.length > 0) {
+    return {
+      ok: false,
+      code: "authorization_failed",
+      reason: `signature must cover: ${missingComponents.join(", ")}`,
+    };
+  }
+
   let base: string;
   try {
     base = buildSignatureBase({
