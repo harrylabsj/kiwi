@@ -294,7 +294,20 @@ export async function executeApprovedCandidate(
       reason: `候选 ${candidateId} 状态为 ${candidate.status}，不是 approved；不会执行。`,
     };
   }
-  const freshPreconditions = await hooks.readPreconditions();
+  let freshPreconditions: unknown;
+  try {
+    freshPreconditions = await hooks.readPreconditions();
+  } catch (err) {
+    // 审查 P3：前置读取抛错（网关瞬断/商品已删除）——候选此前留在
+    // approved 可被无限次重复批准（执行体抛错已标 superseded，此路径漏）。
+    // 标 superseded 防重复，返回 stale 让调用方重新生成候选。
+    store.supersede(candidateId);
+    return {
+      kind: "stale",
+      candidate: store.get(candidateId) as WriteApprovalCandidate,
+      reason: `前置状态读取失败（${err instanceof Error ? err.message : String(err)}），候选已失效，请重新生成候选。`,
+    };
+  }
   const freshHash = contentHash(freshPreconditions);
   if (freshHash !== candidate.preconditions_hash) {
     store.supersede(candidateId);
