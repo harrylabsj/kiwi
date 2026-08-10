@@ -37,6 +37,8 @@ import {
 import { finalizeEnvelope } from "../../negotiation/domain/envelope.js";
 import { contentDigest } from "../../negotiation/jcs.js";
 import { evaluateConditionalOffer } from "../../negotiation/condition/evaluator.js";
+import type { NegotiationPhase } from "../../negotiation/state/phase.js";
+import type { ProtocolErrorCode } from "../../negotiation/domain/common.js";
 import type { A2AMessage, A2APart } from "../client/types.js";
 import type {
   InboundNegotiationContext,
@@ -164,6 +166,14 @@ const textReply = (text: string, taskState: "working" | "completed" = "working")
   },
 });
 
+/** 商业拒绝（offer 未知/已关闭/terms_digest 不匹配/终态重开）。
+ * decline 消息由 pipeline 按 reason_code 自动构造。 */
+const declineReply = (reasonCode: ProtocolErrorCode = "state_conflict"): NegotiationHandlerResult => ({
+  kind: "declined",
+  reasonCode,
+  taskState: "completed",
+});
+
 const envelopeReply = (reply: ReturnType<typeof finalizeEnvelope>): NegotiationHandlerResult => ({
   kind: "accepted",
   taskState: "working",
@@ -181,6 +191,41 @@ export function createMerchantHandler(
   const { ledger, now, sender, counterparty } = options;
   const offerPriceMinor = options.offerPriceMinor ?? MERCHANT_OFFER_PRICE_MINOR;
   const conditionalByNegotiation = new Map<string, { conditional: Record<string, unknown>; quantity: number }>();
+  // 审查 P2-D：终态（AGREEMENT_REACHED / WITHDRAWN / DECLINED / CANCELLED）
+  // 不得以同一 negotiation_id 重开（§17.4/§21.2）——运行时此前无任何终态
+  // 守卫：连发两份 accept 可产出两份 agreement、withdraw 后可再次成交。
+  const closedNegotiations = new Set<string>();
+  // 每 negotiation 的最小相位轨迹（OPEN → 终态），供 state_transition 事件；
+  // 中间相位（OFFER_OPEN 等）由 conditionalByNegotiation 隐式表达。
+  const phaseByNegotiation = new Map<string, NegotiationPhase>();
+  // 产生商业承诺的动作：终态后一律拒绝；text-only（clarification）放行。
+  const COMMERCIAL_ACTIONS = new Set([
+    "inquiry",
+    "rfq",
+    "offer",
+    "counter_offer",
+    "conditional_offer",
+    "accept_nonbinding",
+  ]);
+
+  /** 落 state_transition 事件并推进本机相位（recovery.deriveLocalPhase 消费）。 */
+  const appendPhaseTransition = async (negotiationId: string, toPhase: NegotiationPhase): Promise<void> => {
+    const fromPhase = phaseByNegotiation.get(negotiationId) ?? "OPEN";
+    phaseByNegotiation.set(negotiationId, toPhase);
+    await ledger.append({
+      event_kind: "state_transition",
+      negotiation_id: negotiationId,
+      state_transition: { from_phase: fromPhase, to_phase: toPhase },
+      identity: {
+        sender_identity: sender,
+        counterparty_identity: counterparty,
+        actor: "merchant",
+      },
+      capability: { capability: MERCHANT_CAPABILITY, protocol_version: "1.0" },
+      outcome: { kind: "ok" },
+      occurred_at: now(),
+    });
+  };
   // 每 negotiation 已解析的真实商品价（sku → {priceMinor, currency}），带
   // TTL（评审项 L3：此前永久累积、价格永不刷新——长驻 merchant 节点内存
   // 单调增长且价目陈旧）。
@@ -248,6 +293,11 @@ export function createMerchantHandler(
       const envelope = ctx.envelope;
       const negotiationId = envelope.negotiation_id;
       const inReplyTo = envelope.message_id;
+
+      // 审查 P2-D：终态不得以同一 negotiation_id 重开（§17.4/§21.2）。
+      if (closedNegotiations.has(negotiationId) && COMMERCIAL_ACTIONS.has(envelope.action)) {
+        return declineReply("state_conflict");
+      }
 
       switch (envelope.action) {
         case "inquiry": {
@@ -350,28 +400,33 @@ export function createMerchantHandler(
         }
         case "accept_nonbinding": {
           const stored = conditionalByNegotiation.get(negotiationId);
-          const acceptedOfferId = (envelope.payload as { offer_id?: string }).offer_id ?? "";
+          const acceptPayload = envelope.payload as { offer_id?: string; terms_digest?: string };
+          const acceptedOfferId = acceptPayload.offer_id ?? "";
           // 成交价必须来自本磋商已发出的 conditional_offer：无前置 conditional
-          // 或 accept 的 offer_id 与所存 conditional 不匹配 → 用基础价成交
-          // （无折扣），绝不发 DEAL 价。此前无前置时直接给 DEAL 价，任何 buyer
-          // 在 conditional_offer 之前发 accept 即可拿到折扣价。
+          // 或 accept 的 offer_id 与所存 conditional 不匹配 → 拒绝成交。此前
+          // 无前置时回退基础价照样产出 agreement，从未发出的 offer_id 也照样
+          // 成交（agreement 指向不存在的 offer，审计溯源断裂）。
           const storedOfferId = (stored?.conditional as { offer_id?: string } | undefined)?.offer_id ?? "";
           const acceptedConditional =
             stored !== undefined && acceptedOfferId !== "" && acceptedOfferId === storedOfferId
               ? stored
               : undefined;
-          const agreedTerms =
-            acceptedConditional === undefined
-              ? offerTerms({
-                  priceMinor: (await resolveProduct(MERCHANT_SKU)).priceMinor,
-                  quantity: MERCHANT_QUANTITY,
-                })
-              : evaluateConditionalOffer(acceptedConditional.conditional as never, {
-                  "aggregate.total_quantity": acceptedConditional.quantity,
-                });
+          if (acceptedConditional === undefined) {
+            return declineReply("offer_unknown");
+          }
+          // KNP §15（审查 P2-C，实验复现）：terms_digest 必须是 agreed terms
+          // 的 canonical digest——错误 digest 此前也产出 agreement。任一检查
+          // 失败都不得创建 agreement。
+          const agreedTerms = evaluateConditionalOffer(acceptedConditional.conditional as never, {
+            "aggregate.total_quantity": acceptedConditional.quantity,
+          });
+          const presentedDigest = acceptPayload.terms_digest ?? "";
+          if (presentedDigest === "" || presentedDigest !== contentDigest(agreedTerms as never)) {
+            return declineReply("terms_digest_mismatch");
+          }
           const agreement = buildAgreement({
             negotiation_id: negotiationId,
-            accepted_offer_id: (envelope.payload as { offer_id: string }).offer_id,
+            accepted_offer_id: acceptedOfferId,
             agreed_terms: agreedTerms,
             created_at: now(),
           });
@@ -383,16 +438,34 @@ export function createMerchantHandler(
           };
           // 协商终态：conditional 不再需要（评审项 L3：此前永久累积）
           conditionalByNegotiation.delete(negotiationId);
+          closedNegotiations.add(negotiationId);
+          await appendPhaseTransition(negotiationId, "AGREEMENT_REACHED");
           return { kind: "accepted", taskState: "completed", artifactParts: [artifactPart], message };
         }
-        case "withdraw":
+        case "withdraw": {
+          const scope = (envelope.payload as { scope?: string }).scope ?? "offer";
           conditionalByNegotiation.delete(negotiationId);
-          return textReply(`Withdrawn (scope=${(envelope.payload as { scope?: string }).scope ?? "offer"}).`);
-        case "decline":
+          // scope=offer 只关 offer 不终局（相位机 OFFER_OPEN→OPEN）；scope=
+          // negotiation 才进入 WITHDRAWN 终态。
+          if (scope !== "offer") {
+            closedNegotiations.add(negotiationId);
+            await appendPhaseTransition(negotiationId, "WITHDRAWN");
+          }
+          return textReply(`Withdrawn (scope=${scope}).`);
+        }
+        case "decline": {
+          const scope = (envelope.payload as { scope?: string }).scope ?? "offer";
           conditionalByNegotiation.delete(negotiationId);
-          return textReply(`Declined (scope=${(envelope.payload as { scope?: string }).scope ?? "offer"}).`);
+          if (scope !== "offer") {
+            closedNegotiations.add(negotiationId);
+            await appendPhaseTransition(negotiationId, "DECLINED");
+          }
+          return textReply(`Declined (scope=${scope}).`);
+        }
         case "cancel":
           conditionalByNegotiation.delete(negotiationId);
+          closedNegotiations.add(negotiationId);
+          await appendPhaseTransition(negotiationId, "CANCELLED");
           return textReply("Negotiation cancelled.");
         default:
           return { kind: "declined", reasonCode: "unsupported_action" };
