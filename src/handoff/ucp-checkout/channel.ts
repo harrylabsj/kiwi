@@ -358,16 +358,15 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
   ): Promise<UcpCheckoutResult> {
     const existing = this.cartCheckoutLinks.get(cartId);
     if (existing !== undefined && existing.terms_digest === pkg.terms_digest) {
-      const mirror = this.sessions.get(existing.session_ref);
-      if (mirror !== undefined) {
-        return {
-          status: "ok",
-          session_ref: existing.session_ref,
-          session: mirror,
-          continue_url: existing.checkout.continue_url,
-          checkout: existing.checkout,
-          checkout_status: existing.checkout.status,
-        };
+      // 审查 P3：幂等短接此前直接返回本地 mirror（含 continue_url/
+      // checkout_status）不刷新远端——远端会话已被取消/过期时调用方拿到
+      // "看起来成功"的 stale 结果，后续操作才报错。命中时刷新远端：
+      // session_not_found（远端已消失）→ 落入下方重建路径；其他错误按原
+      // 样返回（retryable 时调用方可安全重试）。
+      const refreshed = await this.getSession(existing.session_ref);
+      if (refreshed.status === "ok") return refreshed;
+      if (refreshed.status !== "fail_closed" || refreshed.code !== "session_not_found") {
+        return refreshed;
       }
     }
 
@@ -689,11 +688,16 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
   }
 
   private mapHttpError(err: UcpCheckoutHttpError): UcpCheckoutResult {
+    // 审查 P3：timeout/network 是瞬时故障——此前与硬失败同为 fail_closed
+    // 且无 retryable 标记，调用方无法区分、无法安全重试。带 retryable 让
+    // 恢复路径可触发（"改输入重试"，不自动死循环）。
+    const retryable = err.code === "timeout" || err.code === "network";
     return {
       status: "fail_closed",
       reason: `ucp_checkout_${err.code}: ${err.reason}`,
       code: err.code,
       messages: [],
+      ...(retryable ? { retryable: true } : {}),
     };
   }
 
