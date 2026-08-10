@@ -35,6 +35,9 @@ export interface LoginOptions {
   qrPollMs?: number;
   /** 过期刷新上限（缺省 DEFAULT_WEIXIN_TIMINGS.qrRefreshCap）。 */
   qrRefreshCap?: number;
+  /** 二维码每模块列数（审查 P3：此前 CLI --qr-scale 传到这里就断了，
+   *  renderQr 恒用默认 scale=1，文档承诺的 --qr-scale 2 静默无效）。 */
+  qrScale?: number;
   /** 时间源（测试注入）。 */
   now?: () => string;
 }
@@ -58,7 +61,7 @@ export async function loginWithQrcode(
   let refreshCount = 0;
   for (;;) {
     const qrcode = await client.getBotQrcode();
-    render(renderQr(qrcode.qrcode_img_content));
+    render(renderQr(qrcode.qrcode_img_content, options.qrScale ?? 1));
     notice("请使用微信扫一扫登录 kiwi 微信通道（8 分钟内有效，过期自动刷新）");
 
     // 轮询状态直到 confirmed / expired（自动刷新）

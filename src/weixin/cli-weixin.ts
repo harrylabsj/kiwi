@@ -116,6 +116,7 @@ export async function cmdWeixin(args: WeixinCliArgs): Promise<number> {
       syncBufPath: syncStatePathFor(dataDir),
       allowUsers,
       forceRelogin: args.relogin,
+      ...(args.qrScale > 1 ? { qrScale: args.qrScale } : {}),
       renderQr: args.noQr
         ? undefined
         : (qr) => {
