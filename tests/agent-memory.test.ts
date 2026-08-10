@@ -190,6 +190,41 @@ describe("write governance (design §10.1)", () => {
     expect(store.memoryEvents(id).map((e) => e.type)).toEqual(["memory.proposed"]);
   });
 
+  it("system-recorded episode memories are active and retrievable（审查 P2-G）", () => {
+    const { store } = setup();
+    const outcome = store.remember(
+      remember({
+        namespace: "episode",
+        key: "a2a-negotiation:neg-001",
+        source_kind: "observed",
+        explicit_user_statement: false,
+        actor: "system",
+        value: { kind: "a2a_negotiation", negotiation_id: "neg-001" },
+      }),
+    );
+    // 此前恒为 candidate 且无自动激活路径 → retrieve 永不返回（死功能）
+    expect(outcome.kind).toBe("active");
+    const memory = outcome.kind === "active" ? outcome.memory : undefined;
+    expect(memory?.status).toBe("active");
+    const hits = store.retrieve({ session_id: "main", purpose: "rank" });
+    expect(hits.some((h) => h.memory_id === memory?.memory_id)).toBe(true);
+  });
+
+  it("model-written episode memories stay candidate（审查 P2-G fail-closed）", () => {
+    const { store } = setup();
+    const outcome = store.remember(
+      remember({
+        namespace: "episode",
+        source_kind: "observed",
+        explicit_user_statement: false,
+        actor: "model",
+        value: { kind: "a2a_negotiation", negotiation_id: "neg-002" },
+      }),
+    );
+    expect(outcome.kind).toBe("candidate");
+    expect(store.retrieve({ session_id: "main", purpose: "rank" })).toHaveLength(0);
+  });
+
   it("three deduplicated signals activate a soft preference; repeats do not count", () => {
     const { store } = setup();
     const base = remember({
