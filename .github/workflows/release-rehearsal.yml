@@ -97,6 +97,8 @@ jobs:
           cosign sign-blob --yes \
             --output-signature portfolio-release.tgz.sig \
             --output-certificate portfolio-release.tgz.pem \
+            --certificate-identity "${{ github.actor }}@users.noreply.github.com" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             portfolio-release.tgz
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

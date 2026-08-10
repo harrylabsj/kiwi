@@ -297,6 +297,8 @@ jobs:
           cosign sign-blob --yes \
             --output-signature portfolio-release.tgz.sig \
             --output-certificate portfolio-release.tgz.pem \
+            --certificate-identity "${{ github.actor }}@users.noreply.github.com" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             portfolio-release.tgz
 
       - name: Upload release bundle, manifest, signature, certificate, and release dir
@@ -428,6 +430,13 @@ jobs:
           PREV="$PREVIOUS_MANIFEST"
           if [[ -z "${PREV}" ]]; then
             echo "inputs.previous_manifest is required when verify_rollback is true" >&2
+            exit 1
+          fi
+          # 审查 P3：外部 URL 输入只允许 https（curl 直通任意 URL = SSRF/
+          # 资源滥用面，虽仅限有写权限触发者）——http/其他 scheme 拒绝；
+          # 本地路径拒绝 .. 逃逸（读 workspace 之外的文件）
+          if [[ "${PREV}" == *".."* ]]; then
+            echo "previous_manifest must not contain '..'" >&2
             exit 1
           fi
           if [[ "${PREV}" =~ ^https:// ]]; then
