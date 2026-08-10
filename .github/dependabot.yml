@@ -5,3 +5,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+  # 审查 P3：actions 生态此前未覆盖——workflow 全 SHA 固定下无自动更新
+  # 提醒；每周检查，限制并发避免依赖升级风暴
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3

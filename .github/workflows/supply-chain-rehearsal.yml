@@ -53,8 +53,10 @@ jobs:
         run: |
           mkdir -p artifacts
           npm sbom --sbom-format=spdx > artifacts/kiwi.spdx.json
-          (cd kiwi-catalog && uv export --locked --format requirements.txt) > artifacts/kiwi-catalog.requirements.txt
-          (cd shopping-cli && uv export --locked --format requirements.txt) > artifacts/shopping-cli.requirements.txt
+          # 审查 P3：与正式发布（portfolio-release --no-dev）同口径——
+          # 此前演练 SBOM 含 dev 依赖，高估依赖面
+          (cd kiwi-catalog && uv export --locked --no-dev --extra api --format requirements.txt) > artifacts/kiwi-catalog.requirements.txt
+          (cd shopping-cli && uv export --locked --no-dev --extra api --format requirements.txt) > artifacts/shopping-cli.requirements.txt
           sha256sum artifacts/* > artifacts/SHA256SUMS
           tar -czf portfolio-sbom.tgz artifacts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
