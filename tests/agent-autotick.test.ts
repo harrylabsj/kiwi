@@ -223,6 +223,64 @@ describe("negotiationAutoTick 饥饿回归（KW-REL-01）", () => {
     expect(result).toBeDefined();
   });
 
+  it("权威门持续拒绝的消息失败 3 次后进入冷却，不再饿死队尾 live（审查 P2-I）", async () => {
+    const claims: number[] = [];
+    const pending: PendingMessage[] = [
+      {
+        conversation_id: "conv-rejected",
+        message_id: 301,
+        conversation_status: "waiting_merchant",
+        sender_role: "buyer",
+        preview: "再便宜点",
+        created_at: "2026-08-03T00:01:00Z",
+      },
+      {
+        conversation_id: "conv-live",
+        message_id: 401,
+        conversation_status: "waiting_merchant",
+        sender_role: "buyer",
+        preview: "能更便宜吗",
+        created_at: "2026-08-03T00:02:00Z",
+      },
+    ];
+    const client = {
+      listPendingMessages: async () => pending,
+      claimMessage: async (input: { message_id: number }) => {
+        claims.push(input.message_id);
+        return { claimed: true };
+      },
+      getNegotiationSnapshot: async (input: { conversation_id: string }) =>
+        snapshot(input.conversation_id, input.conversation_id === "conv-rejected" ? 301 : 401),
+      // 网关权威门确定性拒绝：每次 tick 同一决策 → 同一拒绝
+      submitNegotiationDecision: async () => ({
+        result: "rejected",
+        public_reason: "authority gate: price below floor",
+      }),
+      completeClaim: async () => ({ ok: true }),
+      abandonClaim: async () => ({ ok: true }),
+      failClaim: async () => ({ ok: true }),
+      health: async () => ({ ok: true }),
+      getCapabilities: async () => ({
+        protocol_version: PROTOCOL_VERSION,
+        capabilities: ["price_negotiate"],
+      }),
+    } as unknown as CommerceClient;
+    const kernel = await openAutopilotKernel(client);
+
+    // 前 3 tick：301 被 claim 并失败（计数 1→2→3）
+    await kernel.negotiationAutoTick();
+    await kernel.negotiationAutoTick();
+    const third = await kernel.negotiationAutoTick();
+    expect(claims.filter((id) => id === 301)).toHaveLength(3);
+    expect(third).toContain("暂停自动处理");
+
+    // 第 4 tick：301 进入冷却窗口被跳过 → 队尾 live 401 被推进
+    // （修复前 301 每 tick 无限 claim→fail，401 永久饿死）
+    const fourth = await kernel.negotiationAutoTick();
+    expect(claims).toEqual([301, 301, 301, 401]);
+    expect(fourth).toContain("conv-live");
+  });
+
   it("全部 settled 时 tick 直接返回（不 claim 任何消息）", async () => {
     const { client, claims } = starvationClient();
     const kernel = await openAutopilotKernel(client);
