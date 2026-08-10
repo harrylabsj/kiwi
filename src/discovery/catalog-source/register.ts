@@ -100,6 +100,10 @@ export async function registerCatalogAgent(
   try {
     res = await fetchImpl(`${base}/v1/agent-catalog/agents/register`, {
       method: "POST",
+      // 审查 P3（出站纪律，同 safe-http）：请求体携带 owner_token（凭据）——
+      // 绝不跟随 3xx（重定向把 token body 转发到第三方 host）；超时覆盖
+      // 响应体读取。
+      redirect: "manual",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       signal: input.timeoutMs === undefined ? undefined : AbortSignal.timeout(input.timeoutMs),
@@ -111,9 +115,16 @@ export async function registerCatalogAgent(
     );
   }
 
+  // 3xx 在 manual 模式下不进 res.ok → 下方按失败处理（fail-closed）。
   let payload: Record<string, unknown>;
   try {
-    payload = (await res.json()) as Record<string, unknown>;
+    // 响应体大小上限（与 safe-http 纪律一致；此前 res.json() 无上限）。
+    const raw = await res.arrayBuffer();
+    if (raw.byteLength > 2 * 1024 * 1024) {
+      throw new Error("response exceeds 2MB");
+    }
+    const text = new TextDecoder("utf-8").decode(raw);
+    payload = text === "" ? {} : (JSON.parse(text) as Record<string, unknown>);
   } catch {
     payload = {};
   }
