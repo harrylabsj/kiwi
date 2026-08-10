@@ -195,10 +195,15 @@ export class WeixinChannel {
 
     let consecutiveProtocolErrors = 0;
     let fatalCount = 0;
+    // 审查 P2-M：在飞长轮询的 abort 句柄——stop() 的 pollAbort?.abort()
+    // 此前是空操作（声明后从未赋值），Ctrl+C 退出被阻塞到轮询超时
+    // （~55s）。现在 runLoop 创建 controller 并传入 getUpdates。
+    this.pollAbort = new AbortController();
+    const pollSignal = this.pollAbort.signal;
 
     while (!this.stopped) {
       try {
-        const result = await this.client.getUpdates(syncBuf, creds);
+        const result = await this.client.getUpdates(syncBuf, creds, pollSignal);
         consecutiveProtocolErrors = 0;
         fatalCount = 0;
         syncBuf = result.next_sync_buf;
@@ -260,6 +265,9 @@ export class WeixinChannel {
         this.log(`[weixin] ${err instanceof Error ? err.message : String(err)}`);
         await this.sleep(2_000);
       }
+    }
+    if (this.pollAbort?.signal === pollSignal) {
+      this.pollAbort = null;
     }
     return 0;
   }

@@ -136,13 +136,18 @@ export class IlinkClient {
   }
 
   /** POST ilink/bot/getupdates（长轮询）→ 消息 + 新游标。 */
-  async getUpdates(syncBuf: string, credentials: BotCredentials): Promise<GetUpdatesResult> {
+  async getUpdates(
+    syncBuf: string,
+    credentials: BotCredentials,
+    signal?: AbortSignal,
+  ): Promise<GetUpdatesResult> {
     const body = (await this.request("POST", EP_GET_UPDATES, {
       timeoutMs: LONG_POLL_DEFAULT_MS + 20_000, // 长轮询需覆盖服务端 longpoll
       payload: {
         get_updates_buf: syncBuf,
         base_info: baseInfoOf(credentials),
       },
+      ...(signal !== undefined ? { signal } : {}),
     })) as Record<string, unknown>;
     assertOk(body, "getupdates");
     const messages: InboundMessage[] = [];
@@ -192,10 +197,15 @@ export class IlinkClient {
   private async request(
     method: "GET" | "POST",
     path: string,
-    options: { timeoutMs: number; payload?: Record<string, unknown> },
+    options: { timeoutMs: number; payload?: Record<string, unknown>; signal?: AbortSignal },
   ): Promise<unknown> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+    // 审查 P2-M：外部 abort（通道 stop()）转发到内部 controller——长轮询
+    // 在飞时 Ctrl+C 不再等满轮询超时（此前 pollAbort 声明后从未赋值，
+    // stop() 的 abort 是空操作，进程退出卡 ~55s）。
+    const onExternalAbort = (): void => controller.abort();
+    options.signal?.addEventListener("abort", onExternalAbort, { once: true });
     try {
       const headers: Record<string, string> = {
         "iLink-App-Id": ILINK_APP_ID,
@@ -235,6 +245,7 @@ export class IlinkClient {
       throw new WeixinError("network", `iLink ${path} 网络错误: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onExternalAbort);
     }
   }
 }
