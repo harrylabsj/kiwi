@@ -89,6 +89,11 @@ export function openAgentDatabase(dbPath: string): DatabaseSync {
   if (existsSync(dbPath)) chmodSync(dbPath, 0o600);
   try {
     db.exec("PRAGMA foreign_keys = ON");
+    // 审查 P3：WAL + busy_timeout——同身份多 worker 双开同一 state.sqlite
+    // 时同步写此前直接 SQLITE_BUSY 抛错（node:sqlite 不自动重试）；WAL 下
+    // 读写并发 + 5s 等待让跨进程写有合理竞争窗口。
+    db.exec("PRAGMA journal_mode = WAL");
+    db.exec("PRAGMA busy_timeout = 5000");
     migrateMemorySchema(db);
   } catch (err) {
     try {

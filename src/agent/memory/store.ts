@@ -273,6 +273,8 @@ export class MemoryStore {
   private readonly db: DatabaseSync;
   private readonly vault: PrivateVault;
   private readonly now: () => string;
+  /** 审查 P3：检索日志清理节流（上次清理时间；每小时最多一次）。 */
+  private lastRetrievalPrune: string | null = null;
 
   constructor(options: MemoryStoreOptions) {
     this.db = options.db;
@@ -936,6 +938,16 @@ export class MemoryStore {
     const principal = this.requirePrincipal();
     this.expireDue();
     const now = this.now();
+    // 审查 P3：检索日志每 retrieve 一行、只增不减——顺带按小时节流清理
+    // 30 天前的行（审计/调优保留期；失败不影响检索本身）。
+    if (this.lastRetrievalPrune === null || Date.parse(now) - Date.parse(this.lastRetrievalPrune) > 60 * 60 * 1000) {
+      this.lastRetrievalPrune = now;
+      try {
+        this.pruneRetrievalLog(now);
+      } catch {
+        // 清理失败不影响检索（fail-safe 方向；下次再试）
+      }
+    }
     const limit = Math.min(MAX_LIMIT, Math.max(1, query.limit ?? 8));
 
     const rows = this.db
@@ -1004,6 +1016,16 @@ export class MemoryStore {
         );
     }
     return picked;
+  }
+
+  /** 审查 P3：检索日志物理清理——保留期（默认 30 天）前的行删除，幂等
+   *  可重复调。此前 memory_retrieval_log 只增不减，长跑 agent 库无界增长。 */
+  pruneRetrievalLog(now: string, retentionDays = 30): number {
+    const cutoff = new Date(Date.parse(now) - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+    const result = this.db
+      .prepare("DELETE FROM memory_retrieval_log WHERE created_at < ?")
+      .run(cutoff);
+    return Number(result.changes ?? 0);
   }
 
   /** Data behind /why: the most recent retrieval batch for a session. */
