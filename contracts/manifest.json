@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "authority": "kiwi/contracts",
-  "bundle_sha256": "e7001ebe6ac4e8679ccd4f8e0375f85753ff7e39a9da5f13641285cdef1f8c00",
+  "bundle_sha256": "2dbbc52a1113dc5c05dc544802571ee188b44e1567d6bfb0cd8ccd87ea7f4998",
   "contracts": [
     {
       "id": "candidate-agent-dto",
@@ -19,7 +19,7 @@
       "id": "kiwi-catalog-listing-record",
       "version": "1.0",
       "path": "contracts/kiwi-catalog/1.0/listing-record.schema.json",
-      "sha256": "ac394e4743815dbd35e962108eaeb8a0db03f314f5462f77a323beb79168f975"
+      "sha256": "9bdb2b262404b3a9fe57e4c4b09d337341d89f6b8aba40c54b49eaa46b687662"
     },
     {
       "id": "kiwi-catalog-listing-search-result",
