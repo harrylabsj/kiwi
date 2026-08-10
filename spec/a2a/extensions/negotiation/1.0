@@ -1,18 +1,23 @@
 ---
 title: Kiwi Negotiation Protocol 1.0
-doc_revision: "1.1"
+doc_revision: "1.4"
 short_name: KNP/1.0
-status: Draft Normative Specification
-date: 2026-08-06
-target_implementation: Kiwi v0.4+
+status: Normative Specification (Released 2026-08-07; errata/editorial revision)
+date: 2026-08-07
+target_implementation: Kiwi v0.7.0 (draft; v0.6.0 发布身份见 kiwi-negotiation-protocol-1.0.md)
 scope: Pre-transaction Agent-to-Agent commerce negotiation
 ---
 
 # Kiwi Negotiation Protocol 1.0
 
+**A2A v1.0 已宣布（2026-08-07）**：基线 §41 完成定义 27/27 经就绪度审计实证满足。
+namespace 与 schema 托管于 `https://kiwi.harrylabsj.com`（公开仓库 `harrylabsj/kiwi-spec`）。
+
 ## 1. Status of This Specification
 
 This document defines the normative interoperability contract for Kiwi pre-transaction commerce negotiation.
+
+Publication of the specification and evidence of cross-vendor interoperability are separate claims. The Kiwi v1.0 reference implementation has bilateral Kiwi-side interoperability evidence; it MUST NOT be described as independently implemented or cross-vendor interoperability until such a test exists.
 
 The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHALL**, **SHALL NOT**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**, **MAY**, and **OPTIONAL** are to be interpreted as described in RFC 2119 and RFC 8174.
 
@@ -344,6 +349,14 @@ The receiver SHOULD return `structured_text_conflict` or route the exchange for 
 
 An envelope MUST NOT contain a private budget ceiling, Merchant cost, Merchant floor price, secret credential, private memory record, or other restricted value unless an explicit disclosure policy permits that exact field.
 
+## 8.5 `in_reply_to`
+
+`in_reply_to` is OPTIONAL unless the action-specific rule requires a reply reference.
+
+When present, it MUST reference a known KNP `message_id` in the same negotiation.
+
+`clarification_response` MUST set `in_reply_to` to the Clarification message being answered. An implementation MUST NOT infer a missing required reply reference from human-readable text.
+
 ---
 
 # 9. Inquiry
@@ -538,7 +551,15 @@ A node MUST contain exactly one of:
 - `any`
 - a comparison leaf
 
-Nesting depth MUST NOT exceed 2 below the root condition node.
+Condition depth is counted explicitly:
+
+```text
+root condition node = depth 0
+child boolean node  = depth 1
+comparison leaf     = depth 1 or depth 2
+```
+
+No node may appear below depth 2. In particular, a boolean node at depth 2 MUST NOT contain another boolean child.
 
 ## 13.4 Comparison Operators
 
@@ -671,6 +692,42 @@ An agreement MUST be traceable to the accepted offer and its terms digest.
 
 ---
 
+## 16.1 Downstream Transaction Handoff
+
+KNP/1.0 ends when a valid `AcceptedNonbindingAgreement` is produced.
+
+A host runtime MAY use that Agreement as input to a separate Transaction Handoff layer.
+
+```text
+AcceptedNonbindingAgreement
+        ↓
+Transaction Handoff
+        ↓
+external checkout / ERP / PO / contact
+```
+
+This does not extend KNP/1.0 transaction authority.
+
+A Handoff implementation MUST preserve:
+
+```text
+agreement_id
+negotiation_id
+terms_digest
+counterparty identity
+```
+
+and MUST NOT reinterpret the Agreement as:
+
+```text
+order created
+payment authorized
+inventory reserved
+contract executed
+```
+
+Transaction Handoff is governed by a separate child specification and is not required for KNP/1.0 conformance.
+
 # 17. Withdraw, Decline, and Cancel
 
 ## 17.1 Target Reference
@@ -802,12 +859,15 @@ Objects used for hashing MUST satisfy JCS/I-JSON constraints.
 
 To compute the envelope digest:
 
-1. clone the envelope;
-2. remove `digest`;
-3. remove any transport-specific signature fields not defined by KNP;
-4. canonicalize with RFC 8785 JCS;
-5. compute SHA-256 over UTF-8 canonical bytes;
-6. encode as lowercase hexadecimal prefixed by `sha256:`.
+1. take the KNP Negotiation Envelope JSON object;
+2. remove exactly the top-level `digest` member;
+3. do **not** remove any other KNP envelope member;
+4. transport wrapper fields, HTTP headers, A2A signatures, JWS containers, or other transport-specific signatures MUST live outside the KNP envelope and therefore are never part of the KNP digest input;
+5. canonicalize the remaining envelope with RFC 8785 JCS;
+6. compute SHA-256 over UTF-8 canonical bytes;
+7. encode as lowercase hexadecimal prefixed by `sha256:`.
+
+An implementation MUST NOT invent a local “signature-field stripping” list inside the KNP envelope.
 
 ## 19.3 Terms Digest
 
@@ -905,9 +965,10 @@ EXPIRED
 | OFFER_OPEN | active offer expires | OPEN | active offer cleared |
 | OFFER_OPEN | valid AcceptNonbinding | AGREEMENT_REACHED | agreement produced |
 | OFFER_OPEN | Withdraw scope=offer | OPEN | target offer closed |
-| OPEN/OFFER_OPEN | Withdraw scope=negotiation | WITHDRAWN | terminal |
+| non-terminal | Withdraw scope=negotiation | WITHDRAWN | terminal; includes AWAITING_CLARIFICATION |
 | OFFER_OPEN | Decline scope=offer | OPEN | target offer closed |
-| OPEN/OFFER_OPEN | Decline scope=negotiation | DECLINED | terminal |
+| AWAITING_CLARIFICATION (resume=OFFER_OPEN) | Decline scope=offer | OPEN | target active offer closed; pending clarification no longer blocks closure |
+| non-terminal | Decline scope=negotiation | DECLINED | terminal; includes AWAITING_CLARIFICATION |
 | non-terminal | Cancel | CANCELLED | terminal |
 | non-terminal | negotiation expiry | EXPIRED | terminal |
 
@@ -1028,13 +1089,25 @@ Capability negotiation MUST use the intersection of both parties' advertised sup
 
 `AgentDiscovery` resolves identity, profiles, capabilities, Agent Cards, and candidate channels.
 
+An implementation MAY use:
+
+```text
+kiwi-catalog
+well-known discovery
+direct configuration
+enterprise registry
+another curated registry
+```
+
+KNP/1.0 does not require kiwi-catalog.
+
 `CounterpartyChannel` performs communication after discovery.
 
 A channel MUST NOT silently widen disclosure or authorization when fallback occurs.
 
 If Direct A2A fails, the runtime MUST NOT automatically fall back to a more privileged hosted channel unless policy explicitly allows that fallback.
 
----
+Product, inventory, pricing, delivery and merchant operating data are outside KNP discovery semantics. A Merchant runtime MAY obtain those facts from shopping-cli, ERP, PIM, local databases, or other authorized CommerceDataSources.
 
 # 27. Recovery and Reconciliation
 
@@ -1146,7 +1219,7 @@ A Merchant MUST be able to return `rate_limited` without converting it into a co
 
 `shopping.negotiation/0.1` remains a legacy wire contract.
 
-KNP/1.0 becomes the canonical new negotiation domain.
+KNP/1.0 remains the canonical negotiation domain.
 
 A `LegacyNegotiationAdapter` MAY translate between them.
 
@@ -1167,7 +1240,9 @@ The adapter MUST NOT silently drop:
 
 Claim/heartbeat semantics remain internal to `ShoppingCliHostedChannel` and MUST NOT be projected onto Direct A2A as fake protocol state.
 
----
+`kiwi-catalog` is not part of this legacy mapping. It is discovery infrastructure.
+
+shopping-cli MAY additionally serve as a Merchant commerce data source for product, inventory, pricing, delivery and business facts. Those data-source semantics are outside KNP/1.0 wire semantics.
 
 # 33. Security Invariants
 
@@ -1193,6 +1268,7 @@ A conforming Kiwi KNP implementation MUST preserve:
 18. remote content MUST NOT automatically invoke arbitrary local tools;
 19. remote messages MUST NOT be written directly into Principal Memory;
 20. Agent Cards, UCP Profiles, and public protocol metadata MUST NOT contain static secrets.
+21. A downstream Transaction Handoff MUST NOT be represented as a KNP order/payment/inventory side effect.
 
 ---
 
@@ -1296,49 +1372,41 @@ A conforming implementation MUST test:
 
 ---
 
-# 36. Version 1.0 Completion Criteria
+# 36. Version 1.0 Conformance and Interoperability Gates
 
-KNP/1.0 is implementation-ready only when:
+KNP/1.0 protocol conformance requires:
 
-1. all schemas in `schemas/` validate;
-2. normative examples validate against their schemas;
-3. digest vectors are reproducible;
-4. condition vectors are deterministic;
-5. transition vectors pass;
+1. the canonical contract schema at `contracts/negotiation/1.0/schema.json` validates required protocol objects;
+2. normative examples validate against the canonical schema;
+3. digest tests are reproducible;
+4. condition tests are deterministic;
+5. transition tests pass;
 6. duplicate message behavior passes;
-7. A2A binding is interoperable with an independent implementation;
-8. UCP capability advertisement passes namespace-origin validation;
-9. legacy adapter loss cases fail closed;
-10. no-order/no-payment/no-reservation invariants hold.
+7. UCP capability advertisement passes namespace-origin validation;
+8. legacy adapter loss cases fail closed;
+9. no-order/no-payment/no-reservation invariants hold.
 
----
+A separate **cross-implementation interoperability claim** requires at least one A2A/KNP peer implemented independently from the Kiwi reference implementation.
+
+Until that evidence exists, Kiwi MAY claim KNP/1.0 reference conformance and bilateral reference interoperability, but MUST NOT claim verified independent/cross-vendor interoperability.
+
+Transaction Handoff is intentionally outside KNP/1.0 conformance. A runtime may implement Handoff only as a downstream layer bound to a valid Agreement.
 
 # Appendix A — Reference Artifact Layout
+
+Current repository authority:
 
 ```text
 docs/protocol/
   kiwi-negotiation-protocol-1.0.md
 
-schemas/
-  envelope.schema.json
-  common.schema.json
-  inquiry.schema.json
-  rfq.schema.json
-  offer.schema.json
-  counter-offer.schema.json
-  conditional-offer.schema.json
-  clarification.schema.json
-  accept-nonbinding.schema.json
-  withdraw.schema.json
-  decline.schema.json
-  agreement.schema.json
-  protocol-error.schema.json
-
-test-vectors/
-  test-vectors.json
+contracts/negotiation/1.0/
+  schema.json
 ```
 
----
+Protocol test evidence currently lives in the repository test suite and readiness audit. This specification MUST NOT cite a standalone `schemas/` or `test-vectors/` directory unless those artifacts actually exist and are version-controlled.
+
+A future dedicated vector bundle MAY be introduced, but its path becomes normative only after it is committed and referenced here.
 
 # Appendix B — External Standards Baseline
 
@@ -1351,4 +1419,17 @@ KNP/1.0 relies on, but does not redefine:
 - RFC 8785 JSON Canonicalization Scheme;
 - SHA-256.
 
-The public KNP capability namespace and HTTPS specification origin MUST be replaced with a Kiwi-owned production authority before public interoperability release.
+The public KNP capability namespace and HTTPS specification origin are hosted under the Kiwi-controlled authority `https://kiwi.harrylabsj.com` (online since 2026-08-06).
+
+---
+
+# Appendix C — rev1.4 Errata Summary
+
+This document revision does not change the KNP wire version (`1.0`). It:
+
+- closes `AWAITING_CLARIFICATION` Withdraw/Decline transition gaps;
+- defines condition depth counting precisely;
+- defines `in_reply_to` near the envelope;
+- removes digest signature-stripping ambiguity;
+- separates spec publication from independent/cross-vendor interop claims;
+- points to the actual canonical contract schema path.
