@@ -81,6 +81,10 @@ export interface PendingActionHooks {
 
 export const MAIN_SESSION_ID = "main";
 
+/** 审查 P2-I：autopilot 对网关权威门持续拒绝的消息——连续失败上限与冷却窗口。 */
+export const AUTOPILOT_MAX_SUBMIT_FAILURES = 3;
+export const AUTOPILOT_STALL_COOLDOWN_MS = 10 * 60 * 1000;
+
 export interface AgentKernelOptions {
   profile: AgentProfile;
   /** Injectable paths (tests); defaults to .kiwi/agents/<agent_id>. */
@@ -290,6 +294,14 @@ export class AgentKernel {
   private turnSeq = 0;
   /** Negotiation conversations that reached consensus — the auto-follow must never re-open them. */
   private readonly settledNegotiations = new Set<string>();
+  // 审查 P2-I：被网关权威门持续拒绝的消息（failClaim 后回 pending 队首，
+  // 确定性决策每次 tick 重新 claim → 同一拒绝）——无退避会每 tick 无限
+  // claim→fail 并饿死队尾 live 消息。连续失败达上限后进入冷却窗口，
+  // 窗口内跳过，窗口后允许一次重试；成功/共识时清除。
+  private readonly stalledNegotiations = new Map<
+    string,
+    { since: string; attempts: number }
+  >();
 
   private constructor(options: {
     profile: AgentProfile;
@@ -793,7 +805,18 @@ export class AgentKernel {
     }
     const settledKey = (message: { conversation_id: string; message_id: number }): string =>
       `${message.conversation_id}:${message.message_id}`;
-    if (pending.every((m) => this.settledNegotiations.has(settledKey(m)))) {
+    // 审查 P2-I：冷却窗口内的消息跳过（连续失败达上限后暂停自动处理）。
+    const stalled = this.stalledNegotiations;
+    const isStalled = (message: { conversation_id: string; message_id: number }): boolean => {
+      const entry = stalled.get(settledKey(message));
+      // 达到连续失败上限才进入冷却（上限前的失败继续重试计数）
+      if (entry === undefined || entry.attempts < AUTOPILOT_MAX_SUBMIT_FAILURES) return false;
+      const sinceMs = Date.parse(entry.since);
+      const nowMs = Date.parse(this.clock());
+      if (!Number.isFinite(sinceMs) || !Number.isFinite(nowMs)) return false;
+      return nowMs - sinceMs < AUTOPILOT_STALL_COOLDOWN_MS;
+    };
+    if (pending.every((m) => this.settledNegotiations.has(settledKey(m)) || isStalled(m))) {
       return undefined;
     }
 
@@ -805,11 +828,27 @@ export class AgentKernel {
     // A new message in the same conversation has a different key and remains
     // eligible.
     const settledKeys = new Set(this.settledNegotiations);
+    const stalledKeys = new Set(
+      [...stalled.entries()]
+        .filter(([, entry]) => {
+          if (entry.attempts < AUTOPILOT_MAX_SUBMIT_FAILURES) return false;
+          const sinceMs = Date.parse(entry.since);
+          const nowMs = Date.parse(this.clock());
+          return (
+            Number.isFinite(sinceMs) &&
+            Number.isFinite(nowMs) &&
+            nowMs - sinceMs < AUTOPILOT_STALL_COOLDOWN_MS
+          );
+        })
+        .map(([key]) => key),
+    );
 
     // Buyer: negotiate toward the linked task's goal (quantity / target unit
     // price / budget) instead of the profile defaults.
     let hints: DecisionHints | undefined;
-    const firstPending = pending.find((m) => !settledKeys.has(settledKey(m)));
+    const firstPending = pending.find(
+      (m) => !settledKeys.has(settledKey(m)) && !stalledKeys.has(settledKey(m)),
+    );
     if (firstPending !== undefined && this.profile.role === "buyer" && this.taskStore !== undefined) {
       const link = this.taskStore.linkByConversation(firstPending.conversation_id);
       if (link !== undefined) {
@@ -822,7 +861,9 @@ export class AgentKernel {
     const prepared = await runner
       .prepare({
         ...(hints !== undefined ? { hints } : {}),
-        ...(settledKeys.size > 0 ? { skipKeys: settledKeys } : {}),
+        ...(settledKeys.size > 0 || stalledKeys.size > 0
+          ? { skipKeys: new Set([...settledKeys, ...stalledKeys]) }
+          : {}),
       })
       .catch(() => undefined);
     if (prepared === undefined) return undefined;
@@ -842,9 +883,29 @@ export class AgentKernel {
 
     const outcome = await runner.submit(prepared).catch(() => undefined);
     if (outcome === undefined) return "磋商处理失败（网关异常），下一轮自动重试。";
+    const bindingKey = settledKey(prepared.binding);
+    // 审查 P2-I：权威门确定性拒绝（settlement failed）→ 连续失败计数；
+    // 达上限进入冷却窗口（窗口内跳过、窗口后重试一次），并清空"已结算"
+    // 误记——被拒消息绝不进 settled 集合（那是共识终态语义）。
+    if (outcome.settlement === "failed") {
+      const prev = stalled.get(bindingKey);
+      const attempts = (prev?.attempts ?? 0) + 1;
+      if (attempts >= AUTOPILOT_MAX_SUBMIT_FAILURES) {
+        stalled.set(bindingKey, { since: this.clock(), attempts });
+        return (
+          `已自动处理 ${convId}：连续 ${attempts} 次被网关拒绝` +
+          `（${outcome.policy_result.public_reason}），暂停自动处理 ` +
+          `${AUTOPILOT_STALL_COOLDOWN_MS / 60_000} 分钟（可手动 /approve 或改策略后重试）。`
+        );
+      }
+      stalled.set(bindingKey, { since: this.clock(), attempts });
+    } else {
+      // 成功/已共识：清除冷却记录
+      stalled.delete(bindingKey);
+    }
     // Our own non-binding acceptance ends the negotiation.
     if (prepared.decision.action === "accept_nonbinding") {
-      this.settledNegotiations.add(settledKey(prepared.binding));
+      this.settledNegotiations.add(bindingKey);
     }
 
     const counterpart =
