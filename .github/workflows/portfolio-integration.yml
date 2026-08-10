@@ -127,7 +127,11 @@ jobs:
           # Basic syntax/error lint only (E4,E7,E9); full ruff/mypy/coverage report
           # is owned by shopping-cli CI and omitted here to avoid its pre-existing drift.
           uv run --locked python -m ruff check --select E4,E7,E9 shopping_cli tests
-          uv run --locked python -m unittest discover -s tests
+          # pytest, not unittest discover: shopping-cli's own CI (scripts/quality.sh)
+          # runs pytest because unittest discover silently skips its top-level
+          # `def test_*` cases; this portfolio gate must run the same suite or it
+          # misses the same tests.
+          uv run --locked python -m pytest -q
           uv run --locked node --test tests/shopping_plugin.test.mjs
       - name: Run shared Python service conformance
         env:

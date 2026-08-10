@@ -3,7 +3,8 @@
  *
  * 覆盖（基线 §25 / §25.1 / §8.3 / §43）：
  *   - GET /.well-known/ucp：200 + Cache-Control: public, max-age>=60（UCP 规范强制）、
- *     内容过 validateUcpProfile 自洽、含 a2a transport 与 vendor capability；
+ *     内容为 canonical UCP 形状（ucp:{version, services, capabilities}，审查 P1-03）并
+ *     可 round-trip 过 validateUcpProfile；
  *   - 未配置发布 → 404；非 GET → 405；
  *   - UCP-Agent 出站注入（A2AClient）→ 入站解析 → handler 可见（往返）；
  *   - 缺省（无 UCP-Agent 头）→ handler 收到 undefined，请求照常处理（不强制）；
@@ -27,10 +28,10 @@ import {
   UCP_AGENT_HEADER,
   WELL_KNOWN_UCP_PATH,
 } from "../src/a2a/server/index.js";
+import { validateUcpProfile } from "../src/discovery/ucp/index.js";
 import type { NegotiationHandler } from "../src/a2a/server/index.js";
 import { A2AClient } from "../src/a2a/client/index.js";
 import type { A2AMessage } from "../src/a2a/client/index.js";
-import { validateUcpProfile } from "../src/discovery/ucp/index.js";
 import { validEnvelopeFields } from "./negotiation-helpers.js";
 
 const registry: Array<{ httpServer: http.Server; dir: string }> = [];
@@ -99,23 +100,56 @@ describe("A2A Server: GET /.well-known/ucp（UCP profile 服务化）", () => {
     const maxAge = /max-age\s*=\s*(\d+)/i.exec(cacheControl)?.[1];
     expect(Number(maxAge)).toBeGreaterThanOrEqual(60);
 
-    // 内容过 validate 自洽（无条目被拒）。
+    // 内容为 canonical UCP 形状（ucp:{version, services, capabilities}，审查 P1-03）——
+    // 与 discovery/ucp/validate.ts + types.ts 同一模型，无发布侧分叉形状。
     const body = (await res.json()) as Record<string, unknown>;
-    const validation = validateUcpProfile(body);
+    const ucp = body.ucp as Record<string, unknown>;
+    expect(ucp.version).toBe("2026-04-08");
+
+    // services：a2a transport，endpoint 指向本 server 的 Agent Card URL。
+    const services = ucp.services as Record<string, unknown[]>;
+    const svcEntries = services?.["com.harrylabsj.kiwi.shopping"];
+    expect(svcEntries).toHaveLength(1);
+    const svc = svcEntries?.[0] as Record<string, unknown>;
+    expect(svc.transport).toBe("a2a");
+    expect(svc.endpoint).toBe("https://kiwi.test/.well-known/agent-card.json");
+    expect(svc.spec).toBe("https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0");
+
+    // capabilities：声明携带 version/spec/schema 元数据（P1-03 要求补齐）。
+    const capabilities = ucp.capabilities as Record<string, unknown[]>;
+    const capEntries = capabilities?.["com.harrylabsj.kiwi.shopping.negotiation"];
+    expect(capEntries).toHaveLength(1);
+    const cap = capEntries?.[0] as Record<string, unknown>;
+    expect(cap.version).toBe("1.0");
+    expect(cap.spec).toBe("https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0");
+    expect(cap.schema).toBe("https://kiwi.harrylabsj.com/schemas/negotiation/1.0/schema.json");
+  });
+
+  it("buildUcpProfile → validateUcpProfile round-trip：无被拒条目（P1-03）", () => {
+    const built = buildUcpProfile(
+      {
+        name: "Test Kiwi Merchant",
+        description: "A2A test merchant agent",
+        providerOrganization: "Kiwi Test Org",
+        version: "0.5.0",
+        baseUrl: "https://kiwi.test",
+      },
+      { wellKnownPath: "/.well-known/agent-card.json" },
+    );
+    const validation = validateUcpProfile(built.profile);
     expect(validation.rejected).toEqual([]);
-    expect(validation.profile.ucp.version).toBe("2026-04-08");
-
-    // a2a transport → endpoint 指向本 server 的 Agent Card URL。
-    const services = validation.profile.ucp.services as Record<string, unknown[]>;
-    const a2a = (services?.["com.harrylabsj.kiwi.shopping"] ?? [])[0] as Record<string, unknown>;
-    expect(a2a.transport).toBe("a2a");
-    expect(a2a.endpoint).toBe("https://kiwi.test/.well-known/agent-card.json");
-
-    // 不声明任何 dev.ucp.* 官方 capability（该 namespace 由 UCP 治理机构保留）；
-    // profile 只携带 Kiwi vendor capability com.harrylabsj.kiwi.shopping.negotiation。
-    const caps = validation.profile.ucp.capabilities as Record<string, unknown[]>;
-    expect(caps).toEqual({ "com.harrylabsj.kiwi.shopping.negotiation": expect.any(Array) });
-    expect(Object.keys(caps).some((name) => name.startsWith("dev.ucp."))).toBe(false);
+    // canonical 模型落点：a2a endpoint = Agent Card URL，capability 带元数据。
+    const ucp = built.profile.ucp;
+    expect(ucp.version).toBe("2026-04-08");
+    expect(ucp.services?.["com.harrylabsj.kiwi.shopping"]?.[0]).toMatchObject({
+      transport: "a2a",
+      endpoint: "https://kiwi.test/.well-known/agent-card.json",
+    });
+    expect(ucp.capabilities?.["com.harrylabsj.kiwi.shopping.negotiation"]?.[0]).toMatchObject({
+      version: "1.0",
+      spec: "https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0",
+      schema: "https://kiwi.harrylabsj.com/schemas/negotiation/1.0/schema.json",
+    });
   });
 
   it("未配置发布 → 404；非 GET → 405", async () => {

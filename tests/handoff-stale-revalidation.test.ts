@@ -19,6 +19,7 @@ import {
   HandoffEventStore,
   HandoffIdempotencyStore,
   createHandoffCandidate,
+  destinationLockKey,
   executeHandoff,
   foldCandidateLifecycle,
   type AgreementReadResult,
@@ -323,6 +324,135 @@ describe("executeHandoff", () => {
     expect(second.kind).toBe("delivered");
     const delivered = e.ledger.events(cA.negotiation_id).filter((ev) => ev.event_kind === "handoff_delivered");
     expect(delivered).toHaveLength(2);
+  });
+});
+
+// ── 审查 P1-06：双投递锁作用域按 destination ──────────────────────────────
+describe("executeHandoff 双投递锁作用域按 destination（P1-06）", () => {
+  it("destinationLockKey：同 destination 不同候选共享同一把锁；不同 destination 不同锁", () => {
+    const a = candidate(); // 候选 A：agr_01JABC → https://acme.example/checkout/abc
+    const b = candidate(); // 候选 B：不同候选 id，同一 destination
+    expect(a.handoff_candidate_id).not.toBe(b.handoff_candidate_id);
+    expect(destinationLockKey(a)).toBe(destinationLockKey(b));
+
+    const other = candidate({
+      destination: { type: "external_checkout_url", ref: "https://other.example/checkout/xyz" },
+    });
+    expect(destinationLockKey(a)).not.toBe(destinationLockKey(other));
+    // 锁键定长（ref 可能是长 URL；直接进文件名会超 FS 255 字节限制）
+    expect(destinationLockKey(a).length).toBeLessThan(128);
+  });
+
+  it("同 destination 的两个不同候选并发执行 → 恰一次交付（destination 锁串行化）", async () => {
+    const dir = trackedMkdtemp("kiwi-destlock-");
+    const ledger = new HandoffEventStore({ dir });
+    const idempotency = new HandoffIdempotencyStore({ dir });
+    const cA = candidate();
+    const cB = candidate(); // 不同候选、同一 destination
+    const shared = {
+      ledger,
+      idempotency,
+      identity: IDENTITY,
+      capability: CAPABILITY,
+      now: () => NOW,
+      approval: approval(true),
+      agreementReader: agreementReader(),
+    };
+    ledger.appendCandidateEvent({
+      kind: "handoff_candidate_created",
+      candidate: cA,
+      identity: IDENTITY,
+      capability: CAPABILITY,
+      occurred_at: NOW,
+    });
+    ledger.appendCandidateEvent({
+      kind: "handoff_candidate_created",
+      candidate: cB,
+      identity: IDENTITY,
+      capability: CAPABILITY,
+      occurred_at: NOW,
+    });
+
+    const [rA, rB] = await Promise.all([
+      executeHandoff({ ...shared, candidate: cA }),
+      executeHandoff({ ...shared, candidate: cB }),
+    ]);
+    const delivered = [rA, rB].filter((r) => r.kind === "delivered");
+    const already = [rA, rB].filter((r) => r.kind === "already_delivered");
+    expect(delivered).toHaveLength(1);
+    expect(already).toHaveLength(1);
+    // 链上只有一个 handoff_delivered 事件（双投递被 destination 锁 + 协议级去重挡住）
+    const deliveredEvents = ledger
+      .events(cA.negotiation_id)
+      .filter((e) => e.event_kind === "handoff_delivered");
+    expect(deliveredEvents).toHaveLength(1);
+  });
+
+  it("并发屏障：B 在 A 持锁执行（approval 内）期间进入 → 仍恰一次交付、恰一个终态", async () => {
+    // 真实交错窗口（修复前 P1-06 复现形态）：A 先进入临界区并停在 approval
+    // 屏障内 150ms，B 确认在 A 完成之前发起执行。锁粒度若退回 candidate 级，
+    // 两个不同候选会双双通过 §10.1 去重并各落一次 handoff_delivered。
+    const dir = trackedMkdtemp("kiwi-destlock-barrier-");
+    const ledger = new HandoffEventStore({ dir });
+    const idempotency = new HandoffIdempotencyStore({ dir });
+    const cA = candidate();
+    const cB = candidate(); // 不同候选 id、同一 (agreement, destination)
+    expect(cB.handoff_candidate_id).not.toBe(cA.handoff_candidate_id);
+    for (const c of [cA, cB]) {
+      ledger.appendCandidateEvent({
+        kind: "handoff_candidate_created",
+        candidate: c,
+        identity: IDENTITY,
+        capability: CAPABILITY,
+        occurred_at: NOW,
+      });
+    }
+
+    let approvalCalls = 0;
+    let signalAEntered!: () => void;
+    const aEnteredApproval = new Promise<void>((resolve) => {
+      signalAEntered = resolve;
+    });
+    const barrierApproval = async () => {
+      approvalCalls += 1;
+      signalAEntered();
+      // 撑开 check-then-act 竞态窗口：A 持 destination 锁停留期间 B 到达。
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return { approved: true, evidence: { actor: "operator" } as Record<string, unknown> };
+    };
+    const shared = {
+      ledger,
+      idempotency,
+      identity: IDENTITY,
+      capability: CAPABILITY,
+      now: () => NOW,
+      approval: barrierApproval,
+      agreementReader: agreementReader(),
+    };
+
+    const pA = executeHandoff({ ...shared, candidate: cA });
+    await aEnteredApproval; // 屏障：A 已在锁内执行 → B 此刻进入必与其并发
+    const pB = executeHandoff({ ...shared, candidate: cB });
+    const [rA, rB] = await Promise.all([pA, pB]);
+
+    // A 交付；B 在锁内重读 ledger 命中协议级去重 → already_delivered（同一 handoff）。
+    expect(rA.kind).toBe("delivered");
+    expect(rB.kind).toBe("already_delivered");
+    if (rA.kind === "delivered" && rB.kind === "already_delivered") {
+      expect(rB.handoff_id).toBe(rA.handoff.handoff_id);
+    }
+    // B 被 0.6 协议级去重短接：不得走到 approval/生命周期门。
+    expect(approvalCalls).toBe(1);
+
+    // 链上恰一个 handoff_delivered；恰一个 delivered 终态（A=CONSUMED，
+    // B 未被消费——无 consumed/delivered 事件）。
+    const events = ledger.events(cA.negotiation_id);
+    expect(events.filter((e) => e.event_kind === "handoff_delivered")).toHaveLength(1);
+    expect(foldCandidateLifecycle(ledger.eventsForCandidate(cA.negotiation_id, cA.handoff_candidate_id))).toBe(
+      "CONSUMED",
+    );
+    const bEvents = ledger.eventsForCandidate(cB.negotiation_id, cB.handoff_candidate_id);
+    expect(bEvents.some((e) => e.event_kind === "handoff_candidate_consumed")).toBe(false);
   });
 });
 

@@ -220,6 +220,70 @@ export class InboundPipeline {
     };
   }
 
+  /** 从已落账 message_received 事件还原最小 A2ATask（P1-05 恢复路径）。
+   *  事件携带 remote_task_id + outcome.task_state（§24.5）；消息正文不落账，
+   *  恢复的任务不含 message（与幂等重放路径的完整 task 不同，可接受）。 */
+  private taskFromLedgerEvent(event: LedgerEvent): A2ATask | null {
+    const taskId = event.remote_task_id;
+    if (typeof taskId !== "string" || taskId.length === 0) return null;
+    const result = event.outcome.kind === "ok" ? event.outcome.result : undefined;
+    const state = result === undefined ? undefined : result["task_state"];
+    if (!isKnownTaskState(state)) return null;
+    return { id: taskId, status: { state } };
+  }
+
+  /**
+   * 审查 P1-05：以 Ledger 为持久事实的幂等恢复——消息已落账（message_received）
+   * 但幂等未 commit（commit 失败 / append 与 commit 之间崩溃的窗口）时，重试
+   * 必须**不重复执行 handler**（至多一次）。三个调用点：
+   *   - 幂等 check 返回 "new" 但 Ledger 已有同 message_id → 恢复（不跑 handler）；
+   *   - ledger.append 成功后 commit 失败 → 从刚落账的事件恢复并返回稳定响应；
+   *   - ledger.append 抛 ledger_duplicate_content（P2-E，首次落账成功）→ 恢复。
+   *
+   * digest 必须与链上证据一致：同 message_id 异 digest = 恶意重放 → conflict
+   * fail-closed。补 commit 是 best-effort（失败不阻断恢复响应，ledger 仍是持久
+   * 事实，下一次重试仍走本条恢复路径）。
+   */
+  private recoverFromLedgerEvidence(
+    senderIdentity: string,
+    envelope: NegotiationEnvelope,
+    prior: { event: LedgerEvent },
+    taskOverride?: A2ATask,
+  ): SendMessageResult {
+    // 防御性 sender 一致性（fail-closed）：链上证据必须归属当前 sender——幂等
+    // 主键是 (sender_identity, message_id)，他人消息的证据不得被当作自己的。
+    // 调用点已按 sender 过滤；此处兜底。
+    if (prior.event.identity.sender_identity !== senderIdentity) {
+      throw internalServerError();
+    }
+    if (prior.event.wire_digest !== envelope.digest) {
+      throw protocolError(
+        "idempotency_conflict",
+        `message_id ${envelope.message_id} already processed with a different digest (ledger evidence, §20.3)`,
+      );
+    }
+    // taskOverride：commit 失败恢复路径传入本回合完整 task（含 message）；
+    // ledger 守卫/duplicate 恢复路径无内存 task，按事件 remote_task_id 还原最小 task。
+    const task = taskOverride ?? this.taskFromLedgerEvent(prior.event);
+    if (task === null) {
+      throw internalServerError();
+    }
+    try {
+      this.idempotency.commit({
+        sender_identity: senderIdentity,
+        message_id: envelope.message_id,
+        digest: envelope.digest,
+        negotiation_id: envelope.negotiation_id,
+        outcome: { kind: "ok", result: { task } },
+        ledger_event_id: prior.event.event_id,
+        ledger_event_digest: prior.event.event_digest,
+      });
+    } catch (commitErr) {
+      this.logError("idempotency commit failed during ledger recovery", commitErr);
+    }
+    return { task, ledgerEvent: prior.event };
+  }
+
   /** message/send 入站处理（限流 → 校验 → 幂等 → handler → Ledger → 幂等 commit）。 */
   async sendMessage(
     input: SendMessageInput,
@@ -287,6 +351,16 @@ export class InboundPipeline {
           );
         }
 
+        // 审查 P1-05：幂等索引无记录但 Ledger 已落账同 (sender, message_id)（commit
+        // 失败 / append 与 commit 之间崩溃的窗口）→ 以 Ledger 为持久事实恢复，
+        // handler 不重复执行（至多一次）。**按 sender 过滤**：幂等主键是
+        // (sender_identity, message_id)（§20），不同 sender 用同 message_id 是
+        // 独立消息（sender 隔离），不得被他人消息的证据短路。
+        const priorOnLedger = this.ledger.findByMessageId(envelope.message_id);
+        if (priorOnLedger !== null && priorOnLedger.event.identity.sender_identity === senderIdentity) {
+          return this.recoverFromLedgerEvidence(senderIdentity, envelope, priorOnLedger);
+        }
+
         // 6. 路由给 NegotiationHandler。
         const taskId = newTaskId();
         const handlerCtx: InboundNegotiationContext = {
@@ -350,33 +424,20 @@ export class InboundPipeline {
             throw schemaInvalid("envelope contains reserved content that must not be recorded");
           }
           if (err instanceof LedgerError && err.code === "ledger_duplicate_content") {
-            // 审查 P2-E：append 成功、幂等 commit 前崩溃的窗口。重试时消息
-            // 内容已落链（首次运行的处理结果），但幂等未 commit——此前走
-            // internalServerError 且永不 commit，消息永久卡死。此处补 commit
-            // 并返回按已落账事件还原的任务：客户端拿到稳定响应，后续重试
-            // 直接命中幂等短接。真实恶意重放（同 message_id 异 digest）在
-            // 幂等 check 层已被拒，到不了这里。
+            // 审查 P2-E + P1-05：append 成功、幂等 commit 前崩溃的窗口。重试时
+            // 消息内容已落链（首次运行的处理结果），但幂等未 commit——此前走
+            // internalServerError 且永不 commit，消息永久卡死；且恢复路径用
+            // 本轮新 taskId 查 remote_task_id 恒 miss（事件携带首次的 taskId）。
+            // 统一走 ledger 恢复（digest 校验 + 按事件 remote_task_id 还原任务 +
+            // 补 commit）：客户端拿到稳定响应，后续重试直接命中幂等短接或 ledger
+            // 守卫，handler 至多一次。真实恶意重放（同 message_id 异 digest）在
+            // digest 校验层 fail-closed（idempotency_conflict）。
             const prior = this.ledger.findByMessageId(envelope.message_id);
-            const recoveredTask = this.tasks.resolveFromLedger(this.ledger, taskId);
-            if (prior === null || recoveredTask === null) {
-              this.logError("ledger duplicate but prior event/task unrecoverable", err);
+            if (prior === null) {
+              this.logError("ledger duplicate but prior event unrecoverable", err);
               throw internalServerError();
             }
-            try {
-              this.idempotency.commit({
-                sender_identity: senderIdentity,
-                message_id: envelope.message_id,
-                digest: envelope.digest,
-                negotiation_id: envelope.negotiation_id,
-                outcome: { kind: "ok", result: { task: recoveredTask } },
-                ledger_event_id: prior.event.event_id,
-                ledger_event_digest: prior.event.event_digest,
-              });
-            } catch (commitErr) {
-              this.logError("idempotency commit failed during duplicate recovery", commitErr);
-              throw internalServerError();
-            }
-            return { task: recoveredTask, ledgerEvent: prior.event };
+            return this.recoverFromLedgerEvidence(senderIdentity, envelope, prior);
           }
           this.logError("ledger append failed", err);
           throw internalServerError();
@@ -400,7 +461,13 @@ export class InboundPipeline {
               `message_id ${envelope.message_id} already processed with a different digest`,
             );
           }
-          throw err;
+          // 审查 P1-05：commit 失败（非冲突，磁盘/瞬时）——message_received 已
+          // 落账。从 ledger 恢复并补 commit（best-effort），返回稳定响应而不是
+          // 抛错：否则客户端重试时幂等索引仍无记录 → handler 重复执行（双份
+          // agreement）。taskOverride 传本回合完整 task（含 message）。ledger
+          // 守卫兜底：即使客户端重试，也命中恢复路径。
+          this.logError("idempotency commit failed; recovering from ledger evidence", err);
+          return this.recoverFromLedgerEvidence(senderIdentity, envelope, { event: ledgerEvent }, task);
         }
 
         return { task, ledgerEvent };

@@ -524,6 +524,13 @@ async function cmdTui(args: ParsedArgs): Promise<number> {
  * 公网暴露：节点仍监听 127.0.0.1，但可用 KIWI_A2A_PUBLIC_URL=<https://domain>
  * 覆盖 Agent Card / UCP / catalog 注册广告的公网地址（配合 Caddy/Nginx 反代）。
  */
+
+/** 审查 P1-09：agent serve 的 A2A 状态目录。缺省用稳定路径
+ *  `<cwd>/.kiwi/agents/<agent_id>`（与 operator 路径共用同一缺省）——重启后
+ *  Ledger/幂等/终态可恢复；显式 --data-dir 覆盖。绝不回退到临时目录。 */
+export function resolveServeDataDir(dataDir: string | undefined, agentId: string): string {
+  return dataDir ?? path.resolve(".kiwi", "agents", agentId);
+}
 async function cmdAgentServe(args: ParsedArgs): Promise<number> {
   const profile = requireProfile(args);
   if (profile.role !== "merchant") {
@@ -532,10 +539,16 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
   }
   const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
   const merchantToken = process.env.KIWI_MERCHANT_TOKEN || "";
+  // 审查 P1-09：serve 的初始 A2A 节点必须用稳定 dataDir——此前初始节点缺省走
+  // mkdtemp 临时目录且 stop 时删除，重启后 Ledger/幂等/终态全丢：已终态
+  // negotiation 可重开、已发 conditional offer 返回 offer_unknown。稳定目录
+  // 让重启可恢复状态（resolveServeDataDir 见上）。
+  const serveDataDir = resolveServeDataDir(args.dataDir, profile.agent_id);
   let node: A2aNodeHandle | null = await startA2aNode({
     profile,
     catalog,
     preferredPort: args.port,
+    dataDir: serveDataDir,
     ...(merchantToken ? { ownerToken: merchantToken } : {}),
     ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
   });
@@ -561,7 +574,7 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
         profile: p as AgentProfile,
         catalog,
         preferredPort: args.port,
-        ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+        dataDir: serveDataDir,
         ...(merchantToken ? { ownerToken: merchantToken } : {}),
         ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
       });

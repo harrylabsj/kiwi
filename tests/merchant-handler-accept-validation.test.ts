@@ -240,6 +240,48 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
     expect(acceptAfterCancel.kind === "declined" && acceptAfterCancel.reasonCode).toBe("state_conflict");
   });
 
+  // ── P1-07 独立故障注入：同动作原样重放（原复现形态：双 cancel →
+  //    CANCELLED→CANCELLED）不得再被当作新动作接受 ─────────────────────
+  it("CANCELLED 后原样重放 cancel → state_conflict，无新转换事件（P1-07 原复现形态）", async () => {
+    await reachConditional();
+    const first = await run(envelopeFor("cancel", {}));
+    expect(first.kind).toBe("accepted");
+    const transitionsAfterFirst = ledger
+      .events(NEGOTIATION_ID)
+      .filter((e) => e.event_kind === "state_transition").length;
+
+    // 同一终态动作原样重放（不同 message_id，绕过协议幂等直达 handler）。
+    const replay = await run(envelopeFor("cancel", {}));
+    expect(replay.kind).toBe("declined");
+    expect(replay.kind === "declined" && replay.reasonCode).toBe("state_conflict");
+
+    // 无新 state_transition 事件；CANCELLED 转换全程恰一条（无 CANCELLED→CANCELLED）。
+    const transitions = ledger
+      .events(NEGOTIATION_ID)
+      .filter((e) => e.event_kind === "state_transition");
+    expect(transitions.length).toBe(transitionsAfterFirst);
+    expect(transitions.filter((t) => t.state_transition?.to_phase === "CANCELLED")).toHaveLength(1);
+  });
+
+  it("DECLINED 后原样重放 decline（scope=negotiation）→ state_conflict，无新转换事件（P1-07）", async () => {
+    await reachConditional();
+    const first = await run(envelopeFor("decline", { scope: "negotiation" }));
+    expect(first.kind).toBe("accepted");
+    const transitionsAfterFirst = ledger
+      .events(NEGOTIATION_ID)
+      .filter((e) => e.event_kind === "state_transition").length;
+
+    const replay = await run(envelopeFor("decline", { scope: "negotiation" }));
+    expect(replay.kind).toBe("declined");
+    expect(replay.kind === "declined" && replay.reasonCode).toBe("state_conflict");
+
+    const transitions = ledger
+      .events(NEGOTIATION_ID)
+      .filter((e) => e.event_kind === "state_transition");
+    expect(transitions.length).toBe(transitionsAfterFirst);
+    expect(transitions.filter((t) => t.state_transition?.to_phase === "DECLINED")).toHaveLength(1);
+  });
+
   it("withdraw scope=negotiation closes the negotiation (P2-D)", async () => {
     await reachConditional();
     const wd = await run(
@@ -412,6 +454,53 @@ describe("merchant handler 重启恢复（BUG-03）", () => {
     const rfq = await runWith(second, env("rfq", { items: [{ sku: "SKU-001" }] }));
     expect(rfq.kind).toBe("declined");
     expect(rfq.kind === "declined" && rfq.reasonCode).toBe("state_conflict");
+  });
+
+  // ── P1-07 独立故障注入：重启后重放终态动作。终态守卫必须跨重启成立——
+  //    恢复路径（createMerchantHandler 构造时从 Ledger 重建）曾只恢复
+  //    closedNegotiations 而不恢复终态相位：withdraw/decline/cancel 不在
+  //    COMMERCIAL_ACTIONS 内，重启后从全新 OPEN 状态推进、被当作新动作
+  //    接受并落幻影转换。修复：恢复循环对终态 negotiation 也按链上
+  //    state_transition 事实恢复 phaseStateByNegotiation。 ────────────────
+  it("重启后原样重放 cancel → state_conflict，无新 state_transition 事件（P1-07 跨重启）", async () => {
+    const first = makeHandler();
+    await runNegotiationToConditional(first);
+    const cancel = await runWith(first, env("cancel", {}));
+    expect(cancel.kind).toBe("accepted");
+    const transitionsBefore = ledger
+      .events(NEGOTIATION_ID)
+      .filter((e) => e.event_kind === "state_transition").length;
+
+    // “重启”后原样重放同一终态动作（不同 message_id，直达 handler）。
+    const second = makeHandler();
+    const replay = await runWith(second, env("cancel", {}));
+    expect(replay.kind).toBe("declined");
+    expect(replay.kind === "declined" && replay.reasonCode).toBe("state_conflict");
+
+    // 不得在链上追加第二条终态转换（含 from_phase 伪造的 OPEN→CANCELLED）。
+    const transitions = ledger
+      .events(NEGOTIATION_ID)
+      .filter((e) => e.event_kind === "state_transition");
+    expect(transitions.length).toBe(transitionsBefore);
+    expect(transitions.filter((t) => t.state_transition?.to_phase === "CANCELLED")).toHaveLength(1);
+  });
+
+  it("重启后向 WITHDRAWN 重放兄弟终态动作 cancel → state_conflict（P1-07 跨重启）", async () => {
+    const first = makeHandler();
+    await runNegotiationToConditional(first);
+    const wd = await runWith(first, env("withdraw", { scope: "negotiation" }));
+    expect(wd.kind).toBe("accepted");
+    const transitionsBefore = ledger
+      .events(NEGOTIATION_ID)
+      .filter((e) => e.event_kind === "state_transition").length;
+
+    const second = makeHandler();
+    const replay = await runWith(second, env("cancel", {}));
+    expect(replay.kind).toBe("declined");
+    expect(replay.kind === "declined" && replay.reasonCode).toBe("state_conflict");
+    expect(
+      ledger.events(NEGOTIATION_ID).filter((e) => e.event_kind === "state_transition").length,
+    ).toBe(transitionsBefore);
   });
 });
 

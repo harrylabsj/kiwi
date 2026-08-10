@@ -18,26 +18,27 @@
  * UCP Profile 服务化（WP3，基线 §25 / §8.3 / §43）。
  *
  * merchant 侧从 AgentCardConfig 生成 UCP Profile 并在 `GET /.well-known/ucp`
- * 上发布（UCP 规范强制的标准发现入口）：
+ * 上发布（UCP 规范强制的标准发现入口）。
  *
- *   - a2a service transport：endpoint 指向本 server 的 Agent Card well-known
- *     URL（`<baseUrl>/.well-known/agent-card.json`），基线 §25；
- *   - Kiwi vendor capability：`com.harrylabsj.kiwi.shopping.negotiation`（§8.3，
- *     真实 authority `kiwi.harrylabsj.com`，spec/schema 需托管在该域名上）。
+ * **单一 canonical 模型（审查 P1-03）**：UCP Profile 的领域模型只以
+ * `discovery/ucp/types.ts` 的 `UcpProfile`（`ucp: { version, services,
+ * capabilities }`）为准，构造入口统一走 `buildKiwiVendorProfile`（AgentCardConfig
+ * → UcpProfile 的唯一 adapter）。`buildUcpProfile` 产物强制过 `validateUcpProfile`
+ * 自洽校验（round-trip 不变量，fail-closed：被拒条目存在即抛错，不发布坏
+ * profile）——不允许发布侧另立一套顶层形状与校验器分叉。
  *
- * 不声明任何 `dev.ucp.*` capability：该 namespace 为 UCP 治理机构保留，vendor
- * 不得占用（`dev.ucp.shopping.*` 官方 capability 仅 checkout / cart / order /
- * fulfillment / discount）；Kiwi 协商能力以 Vendor Root Capability 形态发布（§25.2）。
+ * 条目元数据（version / spec / schema）由构造器补齐：capability 声明携带
+ * version + spec + schema（origin 与 namespace authority 绑定），service 声明
+ * 携带 version + spec + a2a transport + endpoint（指向本 server 的 Agent Card
+ * URL）。
  *
- * 构建结果强制过 validateUcpProfile 自洽校验（fail-closed：过不了校验就不发）。
  * 响应头 Cache-Control 由 buildUcpProfile 计算（`public, max-age=N`，N>=60）。
- *
  * 零新增依赖。
  */
 
+import { WELL_KNOWN_UCP_PATH } from "../../discovery/ucp/resolver.js";
 import { buildKiwiVendorProfile } from "../../discovery/ucp/vendor.js";
 import { validateUcpProfile } from "../../discovery/ucp/validate.js";
-import { WELL_KNOWN_UCP_PATH } from "../../discovery/ucp/resolver.js";
 import type { UcpProfile } from "../../discovery/ucp/types.js";
 import type { AgentCardConfig } from "./types.js";
 
@@ -70,6 +71,7 @@ export interface UcpPublishOptions {
 
 /** buildUcpProfile 的产物：可发布 profile + 计算好的 Cache-Control 头。 */
 export interface BuiltUcpProfile {
+  /** canonical UcpProfile（已过 validateUcpProfile，无被拒条目）。 */
   profile: UcpProfile;
   cacheControl: string;
   maxAgeSeconds: number;
@@ -92,8 +94,14 @@ function requireHttpUrl(value: string, field: string): URL {
 }
 
 /**
- * 从本地 Agent Card 配置生成 UCP Profile。构建结果强制过 validateUcpProfile
- * 自洽校验（fail-closed：被拒条目存在即抛错，不发布坏 profile）。
+ * 从本地 Agent Card 配置生成 canonical UCP Profile（发布侧）。
+ *
+ * 构造走唯一 adapter `buildKiwiVendorProfile`（capability / service 声明补齐
+ * version / spec / schema 元数据），产物再强制过 `validateUcpProfile`
+ * （round-trip 不变量，审查 P1-03）：任何被拒条目 → 抛错，不发布坏 profile。
+ * a2a service 的 endpoint 指向本 server 的 Agent Card URL，因此 baseUrl 必须
+ * 是 https（UCP 规范）；http baseUrl 会被 validateUcpProfile 以 endpoint_invalid
+ * 拒绝（fail-closed）。
  */
 export function buildUcpProfile(
   config: AgentCardConfig,
@@ -111,10 +119,12 @@ export function buildUcpProfile(
   const agentCardUrl = new URL(wellKnownPath, baseUrl).href;
   const profile = buildKiwiVendorProfile({ agentCardUrl, ...opts.vendor });
 
+  // 审查 P1-03：buildUcpProfile 产物必须能 round-trip 过 validateUcpProfile
+  // （canonical model 的权威校验）。构造器产物不被直接信任，fail-closed。
   const validation = validateUcpProfile(profile);
   if (validation.rejected.length > 0) {
     const detail = validation.rejected
-      .map((r) => `${r.name} (${r.code})`)
+      .map((r) => `${r.kind}:${r.name} (${r.code})`)
       .join("; ");
     throw new Error(`UCP profile failed validation: ${detail}`);
   }

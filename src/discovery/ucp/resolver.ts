@@ -115,8 +115,9 @@ interface CacheEntry {
   expiresAt: number;
 }
 
-/** 缓存上限（评审项 L3：此前无驱逐，发现大量对端后内存永久累积）。 */
-const MAX_CACHE_ENTRIES = 512;
+/** 缓存上限（评审项 L3 / 审查 P2-03：此前无驱逐，发现大量对端后内存永久
+ * 累积；现超限即清过期 + 逐出最旧，容量严格有界）。 */
+export const MAX_CACHE_ENTRIES = 512;
 
 export class UcpResolver {
   private readonly deps: UcpResolverOptions;
@@ -128,6 +129,11 @@ export class UcpResolver {
 
   clearCache(): void {
     this.cache.clear();
+  }
+
+  /** 缓存条目数（诊断/测试用）。 */
+  cacheSize(): number {
+    return this.cache.size;
   }
 
   private now(): number {
@@ -201,56 +207,61 @@ export class UcpResolver {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     let response: Response;
-    try {
-      response = await fetchImpl(url, {
-        redirect: "manual",
-        signal: controller.signal,
-        headers: { accept: "application/json" },
-      });
-    } catch (err) {
-      if (controller.signal.aborted) {
-        throw new UcpError("profile_unreachable", `UCP profile fetch timed out after ${timeoutMs}ms`);
-      }
-      throw new UcpError(
-        "profile_unreachable",
-        `UCP profile fetch failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    if (
-      response.redirected ||
-      response.type === "opaqueredirect" ||
-      (response.status >= 300 && response.status < 400)
-    ) {
-      throw new UcpError(
-        "profile_redirect",
-        `UCP profile fetch must not follow redirects (HTTP ${response.status})`,
-      );
-    }
-    if (response.status < 200 || response.status >= 300) {
-      throw new UcpError("profile_bad_status", `UCP profile fetch returned HTTP ${response.status}`);
-    }
-
-    const cacheControl = parseCacheControl(response.headers.get("cache-control"));
-    if (!cacheControl.ok) {
-      throw new UcpError("profile_cache_control", cacheControl.reason ?? "invalid Cache-Control");
-    }
-
+    let cacheControl: CacheControlParse;
     let raw: unknown;
     try {
-      // 响应体读取在超时覆盖内 + 大小上限（出站加固）。
-      raw = await readJsonBody(response, { signal: controller.signal });
-    } catch (err) {
-      if (controller.signal.aborted) {
-        throw new UcpError("profile_unreachable", `UCP profile fetch timed out after ${timeoutMs}ms`);
+      try {
+        response = await fetchImpl(url, {
+          redirect: "manual",
+          signal: controller.signal,
+          headers: { accept: "application/json" },
+        });
+      } catch (err) {
+        if (controller.signal.aborted) {
+          throw new UcpError("profile_unreachable", `UCP profile fetch timed out after ${timeoutMs}ms`);
+        }
+        throw new UcpError(
+          "profile_unreachable",
+          `UCP profile fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
-      throw new UcpError(
-        "profile_malformed",
-        err instanceof SafeHttpError && err.code === "response_too_large"
-          ? err.message
-          : "UCP profile response is not valid JSON",
-      );
+
+      if (
+        response.redirected ||
+        response.type === "opaqueredirect" ||
+        (response.status >= 300 && response.status < 400)
+      ) {
+        throw new UcpError(
+          "profile_redirect",
+          `UCP profile fetch must not follow redirects (HTTP ${response.status})`,
+        );
+      }
+      if (response.status < 200 || response.status >= 300) {
+        throw new UcpError("profile_bad_status", `UCP profile fetch returned HTTP ${response.status}`);
+      }
+
+      cacheControl = parseCacheControl(response.headers.get("cache-control"));
+      if (!cacheControl.ok) {
+        throw new UcpError("profile_cache_control", cacheControl.reason ?? "invalid Cache-Control");
+      }
+
+      try {
+        // 响应体读取在超时覆盖内 + 大小上限（出站加固）。
+        raw = await readJsonBody(response, { signal: controller.signal });
+      } catch (err) {
+        if (controller.signal.aborted) {
+          throw new UcpError("profile_unreachable", `UCP profile fetch timed out after ${timeoutMs}ms`);
+        }
+        throw new UcpError(
+          "profile_malformed",
+          err instanceof SafeHttpError && err.code === "response_too_large"
+            ? err.message
+            : "UCP profile response is not valid JSON",
+        );
+      }
     } finally {
+      // 审查 P2-02：所有路径（fetch 拒绝 / redirect / 非 2xx / Cache-Control
+      // 非法 / body 读失败）都清理超时 timer——此前只有 body 读的 finally 清理。
       clearTimeout(timer);
     }
 
@@ -276,10 +287,26 @@ export class UcpResolver {
       cached: false,
       rawProfile: raw,
     };
-    // 防无界增长：超限时惰性清除全部过期条目（容量兜底）。
+    // 防无界增长（审查 P2-03）：容量严格有界——超限时先清除全部过期条目，
+    // 仍超限则逐出最早过期（近似 LRU 的最旧条目）腾位。此前只清过期条目，
+    // 全为有效条目时新 URL 仍会写入 → 缓存可无限增长。发现大量对端后内存
+    // 不再永久累积。
     if (this.cache.size >= MAX_CACHE_ENTRIES) {
+      const nowMs = this.now();
       for (const [key, entry] of this.cache) {
-        if (entry.expiresAt <= this.now()) this.cache.delete(key);
+        if (entry.expiresAt <= nowMs) this.cache.delete(key);
+      }
+      while (this.cache.size >= MAX_CACHE_ENTRIES) {
+        let oldestKey: string | undefined;
+        let oldestExpires = Number.POSITIVE_INFINITY;
+        for (const [key, entry] of this.cache) {
+          if (entry.expiresAt < oldestExpires) {
+            oldestExpires = entry.expiresAt;
+            oldestKey = key;
+          }
+        }
+        if (oldestKey === undefined) break;
+        this.cache.delete(oldestKey);
       }
     }
     this.cache.set(url, { result, expiresAt: fetchedAt + ttlMs });

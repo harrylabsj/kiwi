@@ -15,7 +15,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AgentDiscovery,
   CatalogSourceError,
@@ -584,5 +584,47 @@ describe("KiwiCatalogSource listing methods (v0.4 / CD #22-#24)", () => {
     const listing = await source.getListing("lst_01JABC");
     expect(listing.listing_type).toBe("product");
     await expect(source.getListing("")).rejects.toMatchObject({ code: "invalid_input" });
+  });
+});
+
+describe("KiwiCatalogSource 超时 timer 清理（审查 P2-02）", () => {
+  it("fetch 拒绝 → timer 清理，不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_input: FetchInput, init?: FetchInit) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        throw new Error("network down");
+      }) as typeof fetch;
+      const source = new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl });
+      await expect(source.searchRecords({ q: "coffee" })).rejects.toMatchObject({
+        code: "request_failed",
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("redirect 响应 → timer 清理，不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_input: FetchInput, init?: FetchInit) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        return new Response("", { status: 302, headers: { location: "https://evil.example/" } });
+      }) as typeof fetch;
+      const source = new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl });
+      await expect(source.searchRecords({ q: "coffee" })).rejects.toMatchObject({
+        code: "request_failed",
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

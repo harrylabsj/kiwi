@@ -135,8 +135,13 @@ function buildProductSource(profile: AgentProfile): MerchantProductSource {
 
 /**
  * 解析对外广告的 base URL：显式 `publicBaseUrl`/`KIWI_A2A_PUBLIC_URL` 优先，
- * 缺省回退本机回环。广告地址必须是 http(s) URL（fail-closed——错误的公网
- * 配置在启动即失败，不带着错误身份对外服务）。
+ * 缺省回退本机回环（自动回环 URL 允许 http）。
+ *
+ * 审查 P1-08：显式广告地址只接受 **HTTPS origin**——拒绝远程（非回环）
+ * http、userinfo、path、query、fragment（`https://<host>` 唯一合法形态）。
+ * 广告地址是 Agent Card / UCP / catalog 注册的对外身份，携带路径或凭据会
+ * 污染 well-known URL 构造与域控制验证。fail-closed：错误公网配置在启动即
+ * 失败，不带着错误身份对外服务。
  */
 function resolveAdvertisedBase(publicBaseUrl: string | undefined, loopbackUrl: string): string {
   const raw = (publicBaseUrl ?? process.env.KIWI_A2A_PUBLIC_URL ?? "").trim();
@@ -150,8 +155,17 @@ function resolveAdvertisedBase(publicBaseUrl: string | undefined, loopbackUrl: s
       `KIWI_A2A_PUBLIC_URL 不是合法 URL: ${raw!}（应为 https://<host> 形式）`,
     );
   }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`KIWI_A2A_PUBLIC_URL 必须是 http(s) URL: ${raw}`);
+  if (parsed.protocol !== "https:") {
+    throw new Error(`KIWI_A2A_PUBLIC_URL 必须是 https URL（公网广告不接受 http）: ${raw}`);
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    throw new Error(`KIWI_A2A_PUBLIC_URL 不得内嵌凭据（userinfo）: ${raw}`);
+  }
+  if (parsed.search !== "" || parsed.hash !== "") {
+    throw new Error(`KIWI_A2A_PUBLIC_URL 不得包含 query/fragment（应为 https://<host>）: ${raw}`);
+  }
+  if (parsed.pathname !== "" && parsed.pathname !== "/") {
+    throw new Error(`KIWI_A2A_PUBLIC_URL 不得包含路径（应为 https://<host> 形式）: ${raw}`);
   }
   return normalized;
 }

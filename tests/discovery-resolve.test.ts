@@ -10,7 +10,7 @@
  *   - Agent Card 含静态 secret → card_has_secret（不变量 24）；
  *   - fetch 失败 / 非法输入 → fail-closed。
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { AgentDiscovery } from "../src/discovery/index.js";
@@ -297,6 +297,56 @@ describe("AgentDiscovery.resolve: domain", () => {
     expect(profile.ucp_fallback_reason).toBeUndefined();
     expect(profile.ucp_profile).toBeUndefined();
     expect(profile.ucp_intersection).toBeUndefined();
+  });
+});
+
+describe("AgentDiscovery fetchCard 超时 timer 清理（审查 P2-02）", () => {
+  it("fetch 拒绝 → timer 清理，不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_url: string, init?: Parameters<typeof fetch>[1]) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        throw new Error("network down");
+      }) as typeof fetch;
+      const discovery = new AgentDiscovery({
+        fetchImpl,
+        skipDnsCheck: true,
+        allowLoopback: true,
+      });
+      await expect(
+        discovery.resolve({ agentCardUrl: "http://127.0.0.1:1/card.json" }),
+      ).rejects.toMatchObject({ code: "card_fetch_failed" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("redirect 响应 → timer 清理，不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_url: string, init?: Parameters<typeof fetch>[1]) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        return new Response("", { status: 302, headers: { location: "https://evil.example/" } });
+      }) as typeof fetch;
+      const discovery = new AgentDiscovery({
+        fetchImpl,
+        skipDnsCheck: true,
+        allowLoopback: true,
+      });
+      await expect(
+        discovery.resolve({ agentCardUrl: "http://127.0.0.1:1/card.json" }),
+      ).rejects.toMatchObject({ code: "card_fetch_failed" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

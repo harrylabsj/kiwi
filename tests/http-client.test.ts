@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { HttpCommerceClient } from "../src/commerce/http-client.js";
 import { CommerceError } from "../src/commerce/types.js";
 import {
@@ -140,6 +140,44 @@ function decision(overrides: Partial<NegotiationDecision> = {}): NegotiationDeci
     ...overrides,
   };
 }
+
+describe("HttpCommerceClient 超时 timer 清理（审查 P2-02）", () => {
+  it("fetch 拒绝 → timer 清理，不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_url: string, init?: Parameters<typeof fetch>[1]) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        throw new Error("network down");
+      }) as typeof fetch;
+      const client = makeClient(fetchImpl, 100);
+      await expect(client.health()).rejects.toMatchObject({ kind: "transient" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("redirect 响应 → timer 清理，不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_url: string, init?: Parameters<typeof fetch>[1]) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        return new Response("", { status: 302, headers: { location: "https://evil.example/" } });
+      }) as typeof fetch;
+      const client = makeClient(fetchImpl, 100);
+      await expect(client.health()).rejects.toMatchObject({ kind: "transient" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("HttpCommerceClient transport", () => {
   it("sends Bearer auth and JSON headers; strips trailing slashes on baseUrl", async () => {

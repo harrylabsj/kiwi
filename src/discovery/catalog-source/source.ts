@@ -146,58 +146,62 @@ export class ShoppingCliCatalogSource {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
-    try {
-      response = await fetchImpl(url, {
-        // 出站加固：绝不跟随重定向（3xx 目标不经过校验，且可能转发 Bearer 头）。
-        redirect: "manual",
-        signal: controller.signal,
-        headers: {
-          accept: "application/json",
-          ...(this.deps.authToken !== undefined
-            ? { authorization: `Bearer ${this.deps.authToken}` }
-            : {}),
-        },
-      });
-    } catch (err) {
-      const name = (err as { name?: string } | null)?.name;
-      const detail = err instanceof Error ? err.message : String(err);
-      throw new CatalogSourceError(
-        "request_failed",
-        name === "AbortError"
-          ? `catalog request timed out after ${timeoutMs}ms: ${url}`
-          : `catalog request failed: ${url} (${detail})`,
-      );
-    }
-    if (isRedirectResponse(response)) {
-      throw new CatalogSourceError(
-        "request_failed",
-        `catalog request must not follow redirects (HTTP ${response.status} from ${url})`,
-      );
-    }
-    if (!response.ok) {
-      throw new CatalogSourceError(
-        "request_failed",
-        `catalog request returned HTTP ${response.status} from ${url}`,
-      );
-    }
     let raw: unknown;
     try {
-      // 响应体读取在超时覆盖内 + 大小上限（出站加固）。
-      raw = await readJsonBody(response, { signal: controller.signal });
-    } catch (err) {
-      if (controller.signal.aborted) {
+      try {
+        response = await fetchImpl(url, {
+          // 出站加固：绝不跟随重定向（3xx 目标不经过校验，且可能转发 Bearer 头）。
+          redirect: "manual",
+          signal: controller.signal,
+          headers: {
+            accept: "application/json",
+            ...(this.deps.authToken !== undefined
+              ? { authorization: `Bearer ${this.deps.authToken}` }
+              : {}),
+          },
+        });
+      } catch (err) {
+        const name = (err as { name?: string } | null)?.name;
+        const detail = err instanceof Error ? err.message : String(err);
         throw new CatalogSourceError(
           "request_failed",
-          `catalog request timed out after ${timeoutMs}ms while reading response: ${url}`,
+          name === "AbortError"
+            ? `catalog request timed out after ${timeoutMs}ms: ${url}`
+            : `catalog request failed: ${url} (${detail})`,
         );
       }
-      throw new CatalogSourceError(
-        "response_invalid",
-        err instanceof SafeHttpError && err.code === "response_too_large"
-          ? `catalog response from ${url}: ${err.message}`
-          : `catalog response from ${url} is not valid JSON`,
-      );
+      if (isRedirectResponse(response)) {
+        throw new CatalogSourceError(
+          "request_failed",
+          `catalog request must not follow redirects (HTTP ${response.status} from ${url})`,
+        );
+      }
+      if (!response.ok) {
+        throw new CatalogSourceError(
+          "request_failed",
+          `catalog request returned HTTP ${response.status} from ${url}`,
+        );
+      }
+      try {
+        // 响应体读取在超时覆盖内 + 大小上限（出站加固）。
+        raw = await readJsonBody(response, { signal: controller.signal });
+      } catch (err) {
+        if (controller.signal.aborted) {
+          throw new CatalogSourceError(
+            "request_failed",
+            `catalog request timed out after ${timeoutMs}ms while reading response: ${url}`,
+          );
+        }
+        throw new CatalogSourceError(
+          "response_invalid",
+          err instanceof SafeHttpError && err.code === "response_too_large"
+            ? `catalog response from ${url}: ${err.message}`
+            : `catalog response from ${url} is not valid JSON`,
+        );
+      }
     } finally {
+      // 审查 P2-02：所有路径（fetch 拒绝 / redirect / 非 2xx / body 读失败）
+      // 都清理超时 timer——此前只有 body 读的 finally 清理。
       clearTimeout(timer);
     }
     return raw;

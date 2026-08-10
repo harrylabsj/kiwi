@@ -94,10 +94,25 @@ jobs:
       - uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
       - name: Sign exact release bundle (keyless)
         run: |
+          # sign-blob accepts SIGNING flags only. --certificate-identity /
+          # --certificate-oidc-issuer are verify-only flags (rejected / meaningless
+          # here); the keyless identity is bound by the ambient GitHub Actions OIDC
+          # token and is enforced by the verify-blob step below.
           cosign sign-blob --yes \
             --output-signature portfolio-release.tgz.sig \
             --output-certificate portfolio-release.tgz.pem \
-            --certificate-identity "${{ github.actor }}@users.noreply.github.com" \
+            portfolio-release.tgz
+
+      - name: Verify bundle signature and certificate identity (fail closed)
+        run: |
+          # Keyless GHA certificates carry the job_workflow_ref identity
+          # (https://github.com/ORG/REPO/.github/workflows/WORKFLOW.yml@REF).
+          # Pin the exact workflow file and the ref this dispatch ran on so a
+          # certificate minted by any other workflow/ref cannot pass.
+          cosign verify-blob \
+            --certificate portfolio-release.tgz.pem \
+            --signature portfolio-release.tgz.sig \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-rehearsal.yml@${GITHUB_REF}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             portfolio-release.tgz
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

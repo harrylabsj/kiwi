@@ -144,6 +144,7 @@ export {
 } from "./delivery.js";
 
 export {
+  destinationLockKey,
   executeHandoff,
   defaultUrlSafety,
   type AgreementReadResult,

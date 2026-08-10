@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { parseArgs } from "../src/cli.js";
+import { parseArgs, resolveServeDataDir } from "../src/cli.js";
 
 const DIST_CLI = path.resolve(__dirname, "..", "dist", "cli.js");
 const PRODUCT_VERSION = (JSON.parse(readFileSync(path.resolve(__dirname, "..", "package.json"), "utf-8")) as { version: string }).version;
@@ -79,6 +79,24 @@ describe.skipIf(!existsSync(DIST_CLI))("CLI entrypoint guard", () => {
       process.stderr.write = originalErrWrite;
     }
     expect(writes).toEqual([]);
+  });
+});
+
+describe("agent serve 稳定 dataDir（审查 P1-09）", () => {
+  it("缺省解析为 .kiwi/agents/<agent_id>（稳定，跨重启可恢复）", () => {
+    expect(resolveServeDataDir(undefined, "merchant-acme")).toBe(
+      path.resolve(".kiwi", "agents", "merchant-acme"),
+    );
+  });
+
+  it("显式 --data-dir 覆盖缺省", () => {
+    expect(resolveServeDataDir("/tmp/kiwi-state", "merchant-acme")).toBe("/tmp/kiwi-state");
+  });
+
+  it("绝不回退到临时目录（mkdtemp 形态只在 startA2aNode 无 dataDir 时出现）", () => {
+    const dir = resolveServeDataDir(undefined, "merchant-acme");
+    expect(dir.startsWith(path.resolve(".kiwi", "agents"))).toBe(true);
+    expect(dir).not.toContain("kiwi-a2a-node-");
   });
 });
 

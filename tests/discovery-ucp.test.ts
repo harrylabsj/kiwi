@@ -10,8 +10,9 @@
  *   - UCP capability intersection 纳入 profile（与 A2A binding intersection 两个维度并存）；
  *   - ucp.disabled → v0.5 直接 well-known Agent Card。
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AgentDiscovery, buildKiwiVendorProfile, validateUcpProfile } from "../src/discovery/index.js";
+import { MAX_CACHE_ENTRIES, UcpResolver } from "../src/discovery/ucp/index.js";
 import { selectChannelCandidate } from "../src/counterparty/index.js";
 
 type FetchInput = Parameters<typeof fetch>[0];
@@ -262,5 +263,70 @@ describe("AgentDiscovery.resolve: 构造出的 Kiwi vendor profile 自洽", () =
   it("buildKiwiVendorProfile 输出过 validate（测试数据自身的 sanity）", () => {
     const result = validateUcpProfile(merchantUcpProfile());
     expect(result.rejected).toEqual([]);
+  });
+});
+
+describe("UcpResolver 缓存有界（审查 P2-03）", () => {
+  it("超过上限的 distinct URL 解析后缓存不增长超过 MAX_CACHE_ENTRIES", async () => {
+    const fetchImpl = (async (_input: FetchInput): Promise<Response> =>
+      jsonResponse(merchantUcpProfile(), 200, { "cache-control": "public, max-age=60" })) as typeof fetch;
+    const resolver = new UcpResolver({ fetchImpl, skipDnsCheck: true });
+
+    // 解析远超上限的 distinct profile URL（全有效、未过期——此前超限时只清
+    // 过期条目，全有效则缓存无界增长）。
+    const total = MAX_CACHE_ENTRIES + 200;
+    for (let i = 0; i < total; i++) {
+      await resolver.resolve({
+        profileUrl: `https://merchant-${i}.example/.well-known/ucp`,
+      });
+    }
+    expect(resolver.cacheSize()).toBeLessThanOrEqual(MAX_CACHE_ENTRIES);
+    expect(resolver.cacheSize()).toBe(MAX_CACHE_ENTRIES);
+  });
+});
+
+describe("UcpResolver 超时 timer 清理（审查 P2-02）", () => {
+  it("redirect 响应 → timer 清理，不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_input: FetchInput, init?: FetchInit) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        return new Response("", { status: 302, headers: { location: "https://evil.example/" } });
+      }) as typeof fetch;
+      const resolver = new UcpResolver({ fetchImpl, skipDnsCheck: true });
+      await expect(
+        resolver.resolve({ profileUrl: "https://merchant.example/.well-known/ucp" }),
+      ).rejects.toMatchObject({ code: "profile_redirect" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Cache-Control 非法 → timer 清理，不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_input: FetchInput, init?: FetchInit) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        // 200 + 合法 profile 但缺 Cache-Control → profile_cache_control 提前 throw
+        return new Response(JSON.stringify(merchantUcpProfile()), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch;
+      const resolver = new UcpResolver({ fetchImpl, skipDnsCheck: true });
+      await expect(
+        resolver.resolve({ profileUrl: "https://merchant.example/.well-known/ucp" }),
+      ).rejects.toMatchObject({ code: "profile_cache_control" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

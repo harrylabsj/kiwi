@@ -33,7 +33,7 @@
  */
 
 import { HandoffError } from "./errors.js";
-import { contentDigest } from "../negotiation/jcs.js";
+import { contentDigest, sha256Hex } from "../negotiation/jcs.js";
 import { assertNoForbiddenContent } from "../negotiation/ledger/event.js";
 import { generateId } from "../negotiation/domain/identifiers.js";
 import { CommerceError } from "../commerce/data-source.js";
@@ -105,14 +105,36 @@ function computeHandoffDigest(handoff: Omit<TransactionHandoff, "handoff_digest"
 }
 
 /**
+ * 审查 P1-06：执行锁作用域按 **destination**——同一 (agreement_id,
+ * destination_type, destination_ref) 的任何候选共享同一把锁。此前按
+ * candidate_id 加锁，两个**不同候选**指向同一 destination 时并发执行会双双
+ * 通过 §10.1 协议级去重（check-then-act，双方都还没交付）→ 双投递到同一
+ * 目的地。destination 级锁把这些执行串行化：第二个看到首个的 delivered 事件
+ * → already_delivered。同一候选必然落在同一 destination 锁上，候选级幂等
+ * （§10.1 lookup→record）同样被保护。
+ *
+ * 锁键：`dest:<agreement_id>:<destination_type>:<sha256(ref) 前 16>`——ref 可能
+ * 是长 URL，直接进文件名会超出文件系统 255 字节限制，取定长哈希。
+ */
+export function destinationLockKey(candidate: {
+  agreement_id: string;
+  destination_type: string;
+  destination_ref: string;
+}): string {
+  const refHash = sha256Hex(candidate.destination_ref).slice(0, 16);
+  return `dest:${candidate.agreement_id}:${candidate.destination_type}:${refHash}`;
+}
+
+/**
  * 从 Ledger 事件流驱动执行（含生命周期/重验/幂等/落链）。
- * 整个流程以候选为粒度互斥（§10.1 并发保护）：lookup→(await)→record 的
- * check-then-act 在无锁时两个并发执行会双双通过幂等检查、同一候选交付两次。
- * 锁在幂等存储上（JSONL 与锁文件同目录，跨进程共享 dir 时同样互斥）。
+ * 整个流程按 destination 互斥（§10.1 并发保护 + 审查 P1-06）：lookup→(await)
+ * →record 的 check-then-act 在无锁时两个并发执行会双双通过幂等检查、同一候选
+ * 交付两次；不同候选指向同一 destination 也会双双通过协议级去重。锁在幂等
+ * 存储上（JSONL 与锁文件同目录，跨进程共享 dir 时同样互斥）。
  */
 export async function executeHandoff(input: ExecuteHandoffInput): Promise<ExecuteHandoffResult> {
   return input.idempotency.withCandidateLock(
-    input.candidate.handoff_candidate_id,
+    destinationLockKey(input.candidate),
     () => executeHandoffUnlocked(input),
   );
 }

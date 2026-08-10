@@ -10,7 +10,7 @@
  * - `dataSourceProductSource`（MerchantProductSource 适配，price minor
  *   与 resolveProduct 的 ×100 约定一致）。
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CommerceError,
   type CommerceDataSource,
@@ -184,6 +184,52 @@ describe("ShoppingCliCommerceDataSource（唯一数据入口）", () => {
     });
     await expect(broken.getProduct("X")).rejects.toMatchObject({ code: "request_failed" });
     expect(() => new ShoppingCliCommerceDataSource({ baseUrl: "ftp://x" })).toThrow(CommerceError);
+  });
+
+  // ── 审查 P2-02：所有失败路径都要清理超时 timer ───────────────────────────
+  it("fetch 失败路径清理超时 timer（P2-02）：不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_input: FetchInput, init?: FetchInit) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        throw new Error("network down"); // fetch 立即失败
+      }) as typeof fetch;
+      const source = new ShoppingCliCommerceDataSource({
+        baseUrl: "http://shopping-cli.example",
+        timeoutMs: 100,
+        fetchImpl,
+      });
+      await expect(source.getProduct("SKU-1")).rejects.toMatchObject({ code: "request_failed" });
+      // 推进远超 timeout：若 timer 未清理，会触发 controller.abort() → abort 事件。
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("redirect 响应路径清理超时 timer（P2-02）：不触发迟到的 abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: string[] = [];
+      const fetchImpl = (async (_input: FetchInput, init?: FetchInit) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => aborted.push("abort"));
+        return new Response("", { status: 302, headers: { location: "https://evil.example/" } });
+      }) as typeof fetch;
+      const source = new ShoppingCliCommerceDataSource({
+        baseUrl: "http://shopping-cli.example",
+        timeoutMs: 100,
+        fetchImpl,
+      });
+      await expect(source.getProduct("SKU-1")).rejects.toThrow(/must not follow redirects/);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

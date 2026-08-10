@@ -307,53 +307,57 @@ export class AgentDiscovery {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
-    try {
-      response = await fetchImpl(safeUrl.href, {
-        redirect: "manual",
-        signal: controller.signal,
-        headers: { accept: "application/json" },
-      });
-    } catch (err) {
-      throw new DiscoveryError(
-        "card_fetch_failed",
-        `failed to fetch Agent Card from ${url}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    if (
-      response.redirected ||
-      response.type === "opaqueredirect" ||
-      (response.status >= 300 && response.status < 400)
-    ) {
-      throw new DiscoveryError(
-        "card_fetch_failed",
-        `Agent Card fetch must not follow redirects (HTTP ${response.status} from ${url})`,
-      );
-    }
-    if (!response.ok) {
-      throw new DiscoveryError(
-        "card_fetch_failed",
-        `Agent Card fetch returned HTTP ${response.status} from ${url}`,
-      );
-    }
     let raw: unknown;
     try {
-      // 响应体读取在超时覆盖内 + 大小上限（出站加固：对端停滞 body 或回传
-      // 巨量 body 都不能挂起/打爆本进程）。
-      raw = await readJsonBody(response, { signal: controller.signal });
-    } catch (err) {
-      if (controller.signal.aborted) {
+      try {
+        response = await fetchImpl(safeUrl.href, {
+          redirect: "manual",
+          signal: controller.signal,
+          headers: { accept: "application/json" },
+        });
+      } catch (err) {
         throw new DiscoveryError(
           "card_fetch_failed",
-          `Agent Card fetch timed out after ${timeoutMs}ms: ${url}`,
+          `failed to fetch Agent Card from ${url}: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-      throw new DiscoveryError(
-        "card_fetch_failed",
-        err instanceof SafeHttpError && err.code === "response_too_large"
-          ? `Agent Card response from ${url}: ${err.message}`
-          : `Agent Card response from ${url} is not valid JSON`,
-      );
+      if (
+        response.redirected ||
+        response.type === "opaqueredirect" ||
+        (response.status >= 300 && response.status < 400)
+      ) {
+        throw new DiscoveryError(
+          "card_fetch_failed",
+          `Agent Card fetch must not follow redirects (HTTP ${response.status} from ${url})`,
+        );
+      }
+      if (!response.ok) {
+        throw new DiscoveryError(
+          "card_fetch_failed",
+          `Agent Card fetch returned HTTP ${response.status} from ${url}`,
+        );
+      }
+      try {
+        // 响应体读取在超时覆盖内 + 大小上限（出站加固：对端停滞 body 或回传
+        // 巨量 body 都不能挂起/打爆本进程）。
+        raw = await readJsonBody(response, { signal: controller.signal });
+      } catch (err) {
+        if (controller.signal.aborted) {
+          throw new DiscoveryError(
+            "card_fetch_failed",
+            `Agent Card fetch timed out after ${timeoutMs}ms: ${url}`,
+          );
+        }
+        throw new DiscoveryError(
+          "card_fetch_failed",
+          err instanceof SafeHttpError && err.code === "response_too_large"
+            ? `Agent Card response from ${url}: ${err.message}`
+            : `Agent Card response from ${url} is not valid JSON`,
+        );
+      }
     } finally {
+      // 审查 P2-02：所有路径（fetch 拒绝 / redirect / 非 2xx / body 读失败）
+      // 都清理超时 timer——此前只有 body 读的 finally 清理。
       clearTimeout(timer);
     }
     return raw;
