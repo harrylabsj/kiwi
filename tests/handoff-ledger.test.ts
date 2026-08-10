@@ -225,3 +225,63 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+describe("sweepExpiredHandoffs（审查 P3：delivery 域 EXPIRED 发射）", () => {
+  it("DELIVERED/LAUNCHED 且打开时限已过的 handoff 落 handoff_expired", () => {
+    const ledger = new HandoffEventStore({ dir: storeDir(), now: () => "2026-08-09T00:00:00Z" });
+    const expired = candidate(); // expires_at 2026-08-08T12:00:00Z（已过）
+    const fresh = candidate({ expires_at: "2026-08-10T00:00:00Z" }); // 未过
+    for (const c of [expired, fresh]) {
+      ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: c, identity: IDENTITY, capability: CAPABILITY });
+      ledger.appendCandidateEvent({ kind: "handoff_candidate_ready", candidate: c, identity: IDENTITY, capability: CAPABILITY });
+      ledger.appendDeliveryEvent({
+        kind: "handoff_delivered",
+        candidate: c,
+        handoff_id: c.handoff_candidate_id,
+        identity: IDENTITY,
+        capability: CAPABILITY,
+        destination: { final_url: "https://acme.example/checkout/abc" },
+      });
+    }
+    // OPENED_CONFIRMED（已确认打开，不再适用打开时限）不应被清扫
+    const confirmed = candidate({ expires_at: "2026-08-08T12:00:00Z" });
+    ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: confirmed, identity: IDENTITY, capability: CAPABILITY });
+    ledger.appendDeliveryEvent({
+      kind: "handoff_delivered",
+      candidate: confirmed,
+      handoff_id: confirmed.handoff_candidate_id,
+      identity: IDENTITY,
+      capability: CAPABILITY,
+      destination: { final_url: "https://acme.example/checkout/def" },
+    });
+    ledger.appendDeliveryEvent({
+      kind: "handoff_opened_confirmed",
+      candidate: confirmed,
+      handoff_id: confirmed.handoff_candidate_id,
+      identity: IDENTITY,
+      capability: CAPABILITY,
+      evidence: { kind: "local_callback", handoff_id: confirmed.handoff_candidate_id, at: "2026-08-07T10:00:00Z" },
+    });
+
+    const swept = ledger.sweepExpiredHandoffs("2026-08-09T00:00:00Z");
+    expect(swept).toBe(1); // 只有过期且未确认打开的 delivered
+    const events = ledger.events(expired.negotiation_id);
+    const expiredEvent = events.filter(
+      (e) => e.event_kind === "handoff_expired" && e.handoff_id === expired.handoff_candidate_id,
+    );
+    expect(expiredEvent).toHaveLength(1);
+    expect(
+      events.some(
+        (e) => e.event_kind === "handoff_expired" && e.handoff_id === fresh.handoff_candidate_id,
+      ),
+    ).toBe(false);
+    expect(
+      events.some(
+        (e) => e.event_kind === "handoff_expired" && e.handoff_id === confirmed.handoff_candidate_id,
+      ),
+    ).toBe(false);
+
+    // 幂等：已终态（EXPIRED）不再重复清扫
+    expect(ledger.sweepExpiredHandoffs("2026-08-10T00:00:00Z")).toBe(0);
+  });
+});

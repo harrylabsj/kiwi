@@ -772,6 +772,9 @@ export class AgentKernel {
       // 惰性过期清扫（评审项 L1）：到期未执行的 handoff 候选落 expired 事件，
       // TUI /handoff 不再永久显示"从未获批/从未执行"。
       this.handoffRuntime?.ledger.sweepExpiredCandidates(this.clock());
+      // 审查 P3：交付域同样清扫——DELIVERED/LAUNCHED 打开时限过期落
+      // handoff_expired（此前该事件全仓无生产者，"过期未打开"不可观测）。
+      this.handoffRuntime?.ledger.sweepExpiredHandoffs(this.clock());
       if (this.scheduler === undefined) {
         return {
           checked_rules: 0,

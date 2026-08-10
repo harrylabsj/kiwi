@@ -118,7 +118,15 @@ function seedEnvelope(seed: EnvelopeSeed): ReturnType<typeof finalizeEnvelope> {
   });
 }
 
-function offerTerms(opts: { sku?: string; priceMinor: number; quantity: number; currency?: string }) {
+/** offer 有效期（审查 P3：此前 valid_until 硬编码 2099——§11 "Offer with
+ *  valid_until MUST NOT be accepted after that timestamp" 永不生效，陈旧
+ * 报价可被无限期接受）。24h 窗口，accept 时校验（offer_expired 拒绝）。 */
+export const OFFER_VALIDITY_MS = 24 * 60 * 60 * 1000;
+
+function offerTerms(
+  opts: { sku?: string; priceMinor: number; quantity: number; currency?: string },
+  now: string,
+) {
   return {
     items: [
       {
@@ -128,7 +136,7 @@ function offerTerms(opts: { sku?: string; priceMinor: number; quantity: number; 
       },
     ],
     fulfillment_terms: { delivery_before: MERCHANT_DELIVERY_BEFORE },
-    valid_until: "2099-12-31T23:59:59Z",
+    valid_until: new Date(Date.parse(now) + OFFER_VALIDITY_MS).toISOString(),
   };
 }
 
@@ -324,7 +332,7 @@ export function createMerchantHandler(
             payload: {
               type: "offer",
               offer_id: newOfferId(),
-              terms: offerTerms({ sku, priceMinor, quantity, currency }),
+              terms: offerTerms({ sku, priceMinor, quantity, currency }, now()),
             },
             ...(note !== undefined ? { public_message: note } : {}),
           });
@@ -347,7 +355,7 @@ export function createMerchantHandler(
               type: "counter_offer",
               offer_id: newOfferId(),
               responding_to_offer_id: buyerOffer.offer_id ?? "",
-              proposed_terms: offerTerms({ sku, priceMinor, quantity, currency }),
+              proposed_terms: offerTerms({ sku, priceMinor, quantity, currency }, now()),
             },
             ...(note !== undefined ? { public_message: note } : {}),
           });
@@ -375,11 +383,11 @@ export function createMerchantHandler(
               type: "conditional_offer",
               offer_id: newOfferId(),
               responding_to_offer_id: counter.offer_id,
-              base_terms: offerTerms({ sku, priceMinor, quantity, currency }),
+              base_terms: offerTerms({ sku, priceMinor, quantity, currency }, now()),
               conditions: [
                 {
                   when: { all: [{ field: "aggregate.total_quantity", op: "gte", value: 100 }] },
-                  then_terms: offerTerms({ sku, priceMinor: dealPriceMinor, quantity, currency }),
+                  then_terms: offerTerms({ sku, priceMinor: dealPriceMinor, quantity, currency }, now()),
                 },
               ],
             },
@@ -420,6 +428,16 @@ export function createMerchantHandler(
           const agreedTerms = evaluateConditionalOffer(acceptedConditional.conditional as never, {
             "aggregate.total_quantity": acceptedConditional.quantity,
           });
+          // 审查 P3：§11 offer 过期校验——valid_until 已过 → 拒绝（此前
+          // valid_until 硬编码 2099 永不生效，陈旧报价可被无限期接受）。
+          const validUntil = (agreedTerms as { valid_until?: string } | undefined)?.valid_until;
+          if (validUntil !== undefined) {
+            const validUntilMs = Date.parse(validUntil);
+            const nowMs = Date.parse(now());
+            if (!Number.isFinite(validUntilMs) || !Number.isFinite(nowMs) || validUntilMs < nowMs) {
+              return declineReply("offer_expired");
+            }
+          }
           const presentedDigest = acceptPayload.terms_digest ?? "";
           if (presentedDigest === "" || presentedDigest !== contentDigest(agreedTerms as never)) {
             return declineReply("terms_digest_mismatch");

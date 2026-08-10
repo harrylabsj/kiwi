@@ -239,4 +239,67 @@ export class HandoffEventStore {
     }
     return swept;
   }
+
+  /**
+   * 交付域过期清扫（审查 P3）：handoff_expired 此前在类型表/状态机里但全仓
+   * 无生产者——DELIVERED/LAUNCHED 的 handoff 打开时限过期后永远停在原态
+   * （"过期未打开"不可观测，指标缺失）。与 sweepExpiredCandidates 同款：
+   * 按 handoff_id 分组，交付状态为 DELIVERED/LAUNCHED 且源头 candidate 的
+   * expires_at 已过 → 落 handoff_expired。幂等：已终态不重复处理；调用方
+   * 与 candidate 清扫同挂 kernel schedulerTick。
+   */
+  sweepExpiredHandoffs(now: string): number {
+    let swept = 0;
+    for (const negotiationId of this.store.listNegotiations()) {
+      const events = this.store.events(negotiationId);
+      const seen = new Set<string>();
+      for (const event of events) {
+        const handoffId = event.handoff_id;
+        if (handoffId === undefined || seen.has(handoffId)) continue;
+        seen.add(handoffId);
+        const handoffEvents = events.filter((e) => e.handoff_id === handoffId);
+        const state = deliveryState(handoffEvents);
+        // 只有 DELIVERED/LAUNCHED 可过期；OPENED_CONFIRMED 是打开证据
+        // （已确认打开，不再适用打开时限），EXPIRED/REVOKED 已是终态。
+        if (state !== "DELIVERED" && state !== "LAUNCHED") continue;
+        // 源头 candidate 的 expires_at：delivered 事件携带 handoff_candidate_id
+        const delivered = handoffEvents.find((e) => e.event_kind === "handoff_delivered");
+        const candidateId = delivered?.handoff_candidate_id;
+        if (candidateId === undefined) continue;
+        const created = events.find(
+          (e) => e.handoff_candidate_id === candidateId && e.event_kind === "handoff_candidate_created",
+        );
+        const embedded =
+          created?.outcome.kind === "ok"
+            ? (created.outcome.result?.candidate as { expires_at?: unknown } | undefined)
+            : undefined;
+        const expiresAt = typeof embedded?.expires_at === "string" ? embedded.expires_at : "";
+        // NaN 防护与 executeHandoff 的过期门一致：不可解析视为未过期（不误杀）。
+        if (expiresAt === "" || !Number.isFinite(Date.parse(expiresAt))) continue;
+        if (Date.parse(expiresAt) >= Date.parse(now)) continue;
+        const candidate = created?.outcome.kind === "ok"
+          ? (created.outcome.result?.candidate as HandoffCandidate)
+          : undefined;
+        if (candidate === undefined) continue;
+        try {
+          this.appendDeliveryEvent({
+            kind: "handoff_expired",
+            candidate,
+            handoff_id: handoffId,
+            identity: {
+              sender_identity: candidate.buyer_identity_ref,
+              counterparty_identity: candidate.merchant_identity_ref,
+              actor: "buyer",
+            },
+            capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+            occurred_at: now,
+          });
+          swept += 1;
+        } catch {
+          // 单 handoff 失败不影响整体清扫（fail-closed 但继续其他链）。
+        }
+      }
+    }
+    return swept;
+  }
 }
