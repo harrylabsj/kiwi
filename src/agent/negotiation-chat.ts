@@ -215,21 +215,39 @@ async function executeNegotiationSubmit(
     }
   }
 
-  const result = await commerceClient.submitNegotiationDecision({
-    decision,
-    idempotency_key: submitIdempotencyKey(idem, decision),
-  });
-  if (result.result === "accepted" || result.result === "human_required") {
-    await commerceClient.completeClaim({
-      message_id: target.message_id,
-      idempotency_key: idem,
+  // 审查 P3（M1 同模式，chat 路径）：claim 成功后任何瞬时失败（submit/
+  // complete/fail 网络错误）不得让 claim 滞留 processing 直到网关 300s
+  // stale TTL——此前用户重试恒得"已被其他 worker 处理"。best-effort
+  // abandon 释放（内容寻址幂等保证重处理无重复效果），原始错误向外传播。
+  let result: PolicyResult;
+  try {
+    result = await commerceClient.submitNegotiationDecision({
+      decision,
+      idempotency_key: submitIdempotencyKey(idem, decision),
     });
-  } else {
-    await commerceClient.failClaim({
-      message_id: target.message_id,
-      idempotency_key: idem,
-      error: `policy rejected: ${result.public_reason}`,
-    });
+    if (result.result === "accepted" || result.result === "human_required") {
+      await commerceClient.completeClaim({
+        message_id: target.message_id,
+        idempotency_key: idem,
+      });
+    } else {
+      await commerceClient.failClaim({
+        message_id: target.message_id,
+        idempotency_key: idem,
+        error: `policy rejected: ${result.public_reason}`,
+      });
+    }
+  } catch (err) {
+    try {
+      await commerceClient.abandonClaim({
+        message_id: target.message_id,
+        idempotency_key: idem,
+        error: `chat submit escaped settlement: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } catch {
+      // 原始错误向外传播
+    }
+    throw err;
   }
   afterSettle?.({
     conversation_id: conversationId,
