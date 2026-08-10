@@ -31,6 +31,7 @@
 
 import { CommerceError, type CommerceDataSource, type CommerceField, type ProductFact, type ProductSearchQuery } from "./data-source.js";
 import { isRedirectResponse, readJsonBody, SafeHttpError } from "../net/safe-http.js";
+import { toMinorUnits as losslessToMinorUnits } from "../protocol/legacy-shopping-negotiation/money.js";
 import type { CommerceHealth } from "./types.js";
 
 export interface ShoppingCliCommerceDataSourceDeps {
@@ -78,10 +79,16 @@ interface ShoppingCliProductWire {
   delivery_attributes?: unknown;
 }
 
-/** shopping-cli price（元）→ price_minor（minor units，两位小数假设）。 */
+/** shopping-cli price（元）→ price_minor（minor units，两位小数假设）。
+ * 审查 P2-P：复用 legacy-shopping-negotiation/money.ts 的 lossless 原语——
+ * 此前 Math.round(price*100) 静默吞掉精度损失（19.995 → 19.99、
+ * 19.999 → 20.00），错误价格进入 merchant offer terms（谈判路径严格执行
+ * lossless，数据源路径不执行）。lossy → fail-closed（返回 undefined，
+ * 价格事实缺省，绝不静默抹平；调用方回退演示价并注记）。 */
 function toMinorUnits(price: unknown): number | undefined {
-  if (typeof price !== "number" || !Number.isFinite(price) || price < 0) return undefined;
-  return Math.round(price * 100);
+  if (typeof price !== "number") return undefined;
+  const converted = losslessToMinorUnits(price, 2);
+  return converted.lossless ? converted.amount_minor : undefined;
 }
 
 function parseProduct(raw: unknown, path: string): ProductFact {
