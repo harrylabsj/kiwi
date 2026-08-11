@@ -27,6 +27,7 @@ import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
 import { BuyerTaskError, type BuyerTask } from "../src/agent/buyer/types.js";
 import { buildBuyerTools } from "../src/agent/buyer/buyer-tools.js";
 import { WriteApprovalCandidateStore } from "../src/agent/merchant/action-candidate.js";
+import type { KiwiCatalogSource } from "../src/discovery/index.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { testBuyerProfile } from "./helpers.js";
 
@@ -983,5 +984,120 @@ describe("P2: expiry, observation freshness and event dedup", () => {
     expect(task.intent.quantity).toBe(2);
     expect(task.intent.target_unit_price).toBe(100);
     expect(task.constraints.max_total_price).toBe(240);
+  });
+});
+
+// ── 审查 P3-11：search_listings 透出商家声明的每商品成交入口 ─────────────────
+describe("search_listings 透出 handoff_destination（P3-11）", () => {
+  function listingResult(overrides: Record<string, unknown> = {}) {
+    return {
+      listing: {
+        listing_id: "lst_1",
+        listing_type: "product",
+        owner_agent_id: "cagt_x",
+        merchant_id: "merchant-acme",
+        title: "VQ-001 智能保温杯",
+        category: "kitchenware",
+        listing_digest: "digest-1",
+        publication_state: "ACTIVE",
+        listing_freshness_state: "FRESH",
+        published_at: T0,
+        updated_at: T0,
+        fresh_until: T0,
+        ...overrides,
+      },
+      merchant: { merchant_id: "merchant-acme", display_name: "Acme" },
+      agent: {
+        catalog_agent_id: "cagt_x",
+        verification_level: "commerce_verified",
+        freshness_state: "fresh",
+        administrative_state: "active",
+      },
+      listing_freshness_state: "FRESH",
+      authority: "discovery_projection",
+      requires_direct_confirmation: true,
+    };
+  }
+
+  function toolsWithCatalog(results: unknown[], store: BuyerTaskStore) {
+    const catalogSource = {
+      searchListings: async () => results,
+    } as unknown as KiwiCatalogSource;
+    return buildBuyerTools({
+      store,
+      connector: new FakeCommerceConnector([]),
+      profile: testBuyerProfile(),
+      catalogSource,
+      now: () => T0,
+    });
+  }
+
+  function toolText(result: { content: { type: string; text?: string }[] }): string {
+    return result.content.map((c) => c.text ?? "").join("\n");
+  }
+
+  it("listing 带 handoff_destination_ref/types → 输出透出，shortlist 链路优先取该值", async () => {
+    const { store } = setup([]);
+    const declaredRef = "https://shop.example.com/checkout/vq-001";
+    const tools = toolsWithCatalog(
+      [
+        listingResult({
+          handoff_destination_types: ["external_checkout_url"],
+          handoff_destination_ref: declaredRef,
+        }),
+      ],
+      store,
+    );
+    const search = tools.find((t) => t.name === "search_listings");
+    const result = await search!.execute(
+      "call-1",
+      { need_description: "保温杯" },
+      undefined,
+      undefined,
+      undefined,
+    );
+    const rows = JSON.parse(toolText(result)) as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.handoff_destination_types).toEqual(["external_checkout_url"]);
+    expect(rows[0]?.handoff_destination_ref).toBe(declaredRef);
+
+    // 链路：搜索输出原样传给 shortlist_listing → 候选事件携带商家声明
+    //（handoff_agreement 优先用声明不现编，端到端由 handoff-e2e.test.ts
+    // 「优先用商家声明的每商品成交入口」锁定）。
+    const task = createReadyTask(store);
+    const shortlist = tools.find((t) => t.name === "shortlist_listing");
+    await shortlist!.execute(
+      "call-2",
+      {
+        task_id: task.task_id,
+        listing_id: String(rows[0]?.listing_id),
+        owner_agent_id: String(rows[0]?.owner_agent_id),
+        handoff_destination_types: rows[0]?.handoff_destination_types,
+        handoff_destination_ref: rows[0]?.handoff_destination_ref,
+      },
+      undefined,
+      undefined,
+      undefined,
+    );
+    const event = store.taskEvents(task.task_id).find((e) => e.type === "candidate_shortlisted");
+    expect(event?.payload.handoff_destination_ref).toBe(declaredRef);
+    expect(event?.payload.handoff_destination_types).toEqual(["external_checkout_url"]);
+  });
+
+  it("listing 无 handoff_destination 字段 → 输出不带这两个键（回退行为不变）", async () => {
+    const { store } = setup([]);
+    const tools = toolsWithCatalog([listingResult()], store);
+    const search = tools.find((t) => t.name === "search_listings");
+    const result = await search!.execute(
+      "call-1",
+      { need_description: "保温杯" },
+      undefined,
+      undefined,
+      undefined,
+    );
+    const rows = JSON.parse(toolText(result)) as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).not.toHaveProperty("handoff_destination_types");
+    expect(rows[0]).not.toHaveProperty("handoff_destination_ref");
   });
 });

@@ -140,6 +140,8 @@ export interface ListingRecord {
     fulfillment_regions?: readonly string[];
   }>;
   readonly handoff_destination_types?: readonly DestinationType[];
+  /** 商家声明的每商品成交入口（KTH destination_ref；仅 ProductListing 允许）。 */
+  readonly handoff_destination_ref?: string;
   readonly listing_digest: string;
   readonly publication_state: PublicationState;
   readonly listing_freshness_state: ListingFreshnessState;

@@ -766,6 +766,72 @@ describe("publish 出站安全（P1-10 / P1-11 / P2-04）", () => {
     expect(report.steps.listings.skipped_reason).toContain("agent 注册失败");
   });
 
+  it("IPv6 loopback catalog domain（http://[::1]:port）按 loopback 放行（P3-13）", async () => {
+    // 回归：Node URL.hostname 对 IPv6 带方括号（"[::1]"），此前裸比 "::1"
+    // 把 http://[::1] 误判为远程 host 而拒绝。
+    let registerBody = "";
+    const fetchImpl = (async (url: string, init?: Parameters<typeof fetch>[1]) => {
+      const u = String(url);
+      if (u.includes("/v1/listings/publish")) {
+        return new Response(JSON.stringify({ ok: true, listing: { listing_id: "lst_x" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (u.includes("/v1/agent-catalog/agents/register")) {
+        registerBody = String(init?.body ?? "");
+      }
+      if (u.includes("/v1/agents/")) {
+        return new Response(JSON.stringify({ ok: true, results: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return registerResponse();
+    }) as typeof fetch;
+    const spawnImpl = compatSpawn(() => ({
+      status: 0,
+      stdout: JSON.stringify(projectionsReport()),
+      stderr: "",
+    }));
+
+    const report = await merchantPublish({
+      profile: MERCHANT_PROFILE,
+      catalogBaseUrl: "http://127.0.0.1:8600",
+      ownerTokenSecret: SECRET,
+      shoppingCliDb: "/tmp/shop.sqlite",
+      catalogDomain: "http://[::1]:8600",
+      fetchImpl,
+      spawnImpl,
+    });
+
+    expect(report.ok).toBe(true);
+    const parsed = JSON.parse(registerBody) as { agent_card_url?: string };
+    expect(parsed.agent_card_url).toBe("http://[::1]:8600/.well-known/agent-card.json");
+  });
+
+  it("非 loopback 明文 http catalog domain → fail-closed 拒绝（P3-13 行为不变）", async () => {
+    const spawnImpl = compatSpawn(() => ({
+      status: 0,
+      stdout: JSON.stringify(projectionsReport()),
+      stderr: "",
+    }));
+    const report = await merchantPublish({
+      profile: MERCHANT_PROFILE,
+      catalogBaseUrl: "http://127.0.0.1:8600",
+      ownerTokenSecret: SECRET,
+      shoppingCliDb: "/tmp/shop.sqlite",
+      catalogDomain: "http://merchant-acme.example.com",
+      fetchImpl: publishFetch(),
+      spawnImpl,
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.steps.agent.ok).toBe(false);
+    expect(report.steps.agent.error).toContain("必须使用 https");
+    expect(report.steps.listings.skipped_reason).toContain("agent 注册失败");
+  });
+
   it("owner-token catalog 调用一律 redirect:manual，绝不跟随 3xx（P1-11）", async () => {
     const redirectFlags: Array<string | undefined> = [];
     const fetchImpl = (async (url: string, init?: Parameters<typeof fetch>[1]) => {
