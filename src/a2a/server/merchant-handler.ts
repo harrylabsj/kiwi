@@ -593,6 +593,20 @@ export function createMerchantHandler(
           if (presentedDigest === "" || presentedDigest !== contentDigest(agreedTerms as never)) {
             return declineReply("terms_digest_mismatch");
           }
+          // 审查 P1-C：相位机是权威守卫——§15 校验通过后、构建协议之前先
+          // 推进相位并检查返回值（BUG-10 语义不变：被拒的 accept 不得进入
+          // AGREEMENT_REACHED）。推进失败（如 AWAITING_CLARIFICATION 下直接
+          // accept）fail-closed：不返回协议、不进 closedNegotiations、不删
+          // conditional，无任何终态副作用——此前忽略返回值，协议照发但相位
+          // 机拒绝推进；进程内 closedNegotiations 挡住二次 accept，重启恢复
+          // 后相位重建为 AWAITING_CLARIFICATION，二次 accept 产出重复协议。
+          const advanced = await advancePhase(negotiationId, {
+            type: "accept_nonbinding",
+            offer_id: acceptedOfferId,
+          });
+          if (!advanced) {
+            return declineReply("state_conflict");
+          }
           const agreement = buildAgreement({
             negotiation_id: negotiationId,
             accepted_offer_id: acceptedOfferId,
@@ -605,12 +619,9 @@ export function createMerchantHandler(
             parts: [{ kind: "text", text: "Agreement reached (nonbinding)." }],
             messageId: newMessageId(),
           };
-          // 协商终态：conditional 不再需要（评审项 L3：此前永久累积）；
-          // 审查 BUG-10：accept 的相位推进在 §15 校验通过后（被拒的 accept
-          // 不得进入 AGREEMENT_REACHED）。
+          // 协商终态：conditional 不再需要（评审项 L3：此前永久累积）。
           conditionalByNegotiation.delete(negotiationId);
           closedNegotiations.add(negotiationId);
-          await advancePhase(negotiationId, { type: "accept_nonbinding", offer_id: acceptedOfferId });
           return { kind: "accepted", taskState: "completed", artifactParts: [artifactPart], message };
         }
         case "withdraw": {

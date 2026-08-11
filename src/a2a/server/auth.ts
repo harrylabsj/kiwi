@@ -32,6 +32,8 @@
  * 冲突即不会误判 —— 幂等冲突仅在同 message_id 异 digest 时触发）。
  */
 
+import { timingSafeEqual } from "node:crypto";
+
 import { isLoopbackHost } from "../client/url-policy.js";
 import type { AuthContext, AuthResult, AuthVerifier } from "./types.js";
 
@@ -48,6 +50,15 @@ export class NoneAuthVerifier implements AuthVerifier {
   verify(_ctx: AuthContext): AuthResult {
     return { authenticated: true, identity: "anonymous" };
   }
+}
+
+/** 常量时间 token 比较：长度恒等预检 + timingSafeEqual（审查 P2-D：此前
+ *  `presented !== this.token` 逐字节短路，构成时序侧信道）。与
+ *  agent/memory/vault.ts fingerprintEquals 同一模式。 */
+function tokenEquals(presented: string, expected: string): boolean {
+  const a = Buffer.from(presented, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 /** 静态 Bearer token 校验。 */
@@ -79,8 +90,8 @@ export class StaticBearerAuthVerifier implements AuthVerifier {
         reason: "Authorization header is not a bearer token",
       };
     }
-    const presented = match[1];
-    if (presented !== this.token) {
+    const presented = match[1] ?? "";
+    if (!tokenEquals(presented, this.token)) {
       return {
         authenticated: false,
         protocolCode: "authorization_failed",

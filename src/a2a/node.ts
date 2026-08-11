@@ -227,6 +227,18 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
         `否则反向代理连接会被误当本机可信`,
     );
   }
+  // 审查 P2-E：loopback 模式 + 公网广告地址是部署脚枪——节点只绑定
+  // 127.0.0.1，经反代转发的公网流量在应用层全是 loopback 一律放行，认证
+  // 形同虚设（功能等价 none）。不改默认行为（反代自己做强认证时 loopback
+  // 仍是合法的代理即边界契约），但醒目告警：认证责任全在反代。
+  if (!isLoopbackAdvertised(advertisedBase) && authVerifier?.name === "loopback-only") {
+    process.stderr.write(
+      `⚠️ [kiwi] 广告地址 ${advertisedBase} 是公网地址，但 KIWI_A2A_AUTH=loopback：` +
+        `节点只校验 socket 来源，经反向代理转发的公网请求在应用层全部是 loopback 一律放行，` +
+        `等价于无应用层认证——认证责任完全在反代（反代必须自己做强认证并把它当作信任边界）。` +
+        `公网节点建议使用 KIWI_A2A_AUTH=bearer:<token> 或 HTTP Message Signature 验证器。\n`,
+    );
+  }
   // 审查 BUG-03：持久形态（dataDir）——Ledger/幂等落 <dataDir>/a2a/，
   // stop 不删除；临时形态（demo/测试）维持 mkdtemp + stop 删除。
   const isEphemeral = options.dataDir === undefined;

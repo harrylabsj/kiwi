@@ -583,3 +583,156 @@ describe("merchant handler 相位机接线（BUG-10）", () => {
     expect(transitions.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+
+// ── accept 相位机权威守卫（审查 P1-C，2026-08-11）───────────────────────────
+//
+// P1-C：accept 分支此前先 buildAgreement 再 advancePhase 且忽略返回值——
+// 买家在商家 conditional_offer 后发 clarification（相位进入
+// AWAITING_CLARIFICATION）再直接 accept：§15 业务校验全过、协议照发，但
+// 相位机拒绝推进（applyAccept 只允许 OFFER_OPEN→AGREEMENT_REACHED）。
+// 进程内 closedNegotiations 挡住二次 accept，重启恢复（按 ledger 重建相位
+// 为 AWAITING_CLARIFICATION）后二次 accept 可产出重复协议。修复：构建协议
+// 前先推进相位，推进失败 decline state_conflict 且无任何终态副作用。
+
+describe("merchant accept 相位机权威守卫（P1-C）", () => {
+  let dir: string;
+  let ledger: LedgerStore;
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "kiwi-p1c-"));
+    ledger = new LedgerStore({ dir, now: () => NOW });
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const makeHandler = (): NegotiationHandler =>
+    createMerchantHandler({
+      ledger,
+      now: () => NOW,
+      sender: "merchant:merchant-001",
+      counterparty: "buyer:*",
+    });
+
+  let seq = 0;
+  const env = (action: string, payload: Record<string, unknown>): NegotiationEnvelope => {
+    seq += 1;
+    return finalizeEnvelope({
+      capability: MERCHANT_CAPABILITY,
+      protocol_version: "1.0",
+      negotiation_id: NEGOTIATION_ID,
+      exchange_id: `ex_${seq}`,
+      message_id: `msg_${seq}`,
+      in_reply_to: `msg_${seq - 1}`,
+      actor: "buyer",
+      action: action as NegotiationEnvelope["action"],
+      created_at: NOW,
+      payload: payload as never,
+    });
+  };
+
+  const runWith = (
+    h: NegotiationHandler,
+    envelope: NegotiationEnvelope,
+  ): Promise<NegotiationHandlerResult> =>
+    h.handle({
+      envelope: envelope as never,
+      message: { role: "user", parts: [], messageId: envelope.message_id },
+      taskId: `task_${envelope.message_id}`,
+      senderIdentity: "buyer:buyer-001",
+    });
+
+  /** 走 inquiry → rfq → offer → counter_offer 拿到活跃 conditional。 */
+  const reachConditional = async (
+    h: NegotiationHandler,
+  ): Promise<{ offerId: string; agreedTerms: unknown }> => {
+    await runWith(h, env("inquiry", {}));
+    await runWith(h, env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
+    await runWith(h, env("offer", { offer_id: "off_buyer", terms: {} }));
+    const cond = await runWith(h, env("counter_offer", { offer_id: "off_counter", proposed_terms: {} }));
+    const offerId = (() => {
+      const reply = cond.kind === "accepted" && cond.message
+        ? (
+            cond.message.parts[0] as unknown as {
+              data?: { knp_envelope?: { payload?: { offer_id?: string } } };
+            }
+          ).data?.knp_envelope?.payload?.offer_id
+        : undefined;
+      expect(reply).toBeTruthy();
+      return reply as string;
+    })();
+    const conditional = (cond.kind === "accepted" && cond.message
+      ? (
+          cond.message.parts[0] as unknown as {
+            data?: { knp_envelope?: { payload?: unknown } };
+          }
+        ).data?.knp_envelope?.payload
+      : undefined) as { conditions?: unknown };
+    const { evaluateConditionalOffer } = await import("../src/negotiation/condition/evaluator.js");
+    const agreedTerms = evaluateConditionalOffer(conditional as never, {
+      "aggregate.total_quantity": 200,
+    });
+    return { offerId, agreedTerms };
+  };
+
+  const agreementTransitions = (): unknown[] =>
+    ledger
+      .events(NEGOTIATION_ID)
+      .filter((e) => e.event_kind === "state_transition")
+      .filter((e) => e.state_transition?.to_phase === "AGREEMENT_REACHED");
+
+  it("clarification 挂起相位时直接 accept → state_conflict，无协议、相位未推进（P1-C）", async () => {
+    const h = makeHandler();
+    const { offerId, agreedTerms } = await reachConditional(h);
+    // 买家在 conditional_offer 后发 clarification → 相位 OFFER_OPEN →
+    // AWAITING_CLARIFICATION（商家文本应答，条件 offer 仍存）。
+    const clar = await runWith(h, env("clarification", { questions: [{ field: "delivery_before" }] }));
+    expect(clar.kind).toBe("accepted");
+
+    // 不恢复 OFFER_OPEN 直接 accept：§15 校验（offer 存在 / digest 匹配）
+    // 全过，但相位机拒绝 AWAITING_CLARIFICATION → AGREEMENT_REACHED。
+    const result = await runWith(
+      h,
+      env("accept_nonbinding", {
+        type: "accept_nonbinding",
+        offer_id: offerId,
+        terms_digest: contentDigest(agreedTerms as never),
+      }),
+    );
+    expect(result.kind).toBe("declined");
+    expect(result.kind === "declined" && result.reasonCode).toBe("state_conflict");
+    // 无终态副作用：链上无 AGREEMENT_REACHED 转换（相位未被推进）。
+    expect(agreementTransitions()).toHaveLength(0);
+  });
+
+  it("被拒 accept 后重启恢复：再次 accept 仍 state_conflict，不产重复协议（P1-C 跨重启）", async () => {
+    const first = makeHandler();
+    const { offerId, agreedTerms } = await reachConditional(first);
+    await runWith(first, env("clarification", { questions: [{ field: "delivery_before" }] }));
+    const digest = contentDigest(agreedTerms as never);
+    const attempt1 = await runWith(
+      first,
+      env("accept_nonbinding", { type: "accept_nonbinding", offer_id: offerId, terms_digest: digest }),
+    );
+    expect(attempt1.kind).toBe("declined");
+
+    // “重启”：同 Ledger 重建 handler——恢复按链上 state_transition 把相位
+    // 重建为 AWAITING_CLARIFICATION（conditional 由 message_sent 恢复）。
+    const second = makeHandler();
+    const attempt2 = await runWith(
+      second,
+      env("accept_nonbinding", { type: "accept_nonbinding", offer_id: offerId, terms_digest: digest }),
+    );
+    expect(attempt2.kind).toBe("declined");
+    expect(attempt2.kind === "declined" && attempt2.reasonCode).toBe("state_conflict");
+    // 两次尝试均未落 AGREEMENT_REACHED（无重复协议的事实来源）。
+    expect(agreementTransitions()).toHaveLength(0);
+  });
+
+  // (b) 防过修：无 clarification 的正常 accept 仍返回协议——由上文
+  // "accept with matching digest produces one agreement (P2-C happy path)"
+  // 与 "records state_transition events on terminal transitions (P2-D)"
+  // 锁定（agreement artifact + AGREEMENT_REACHED 转换）。
+});
