@@ -435,7 +435,13 @@ jobs:
         run: |
           set -euo pipefail
           SDIST="$(find dist-artifact/release/kiwi-catalog -maxdepth 1 -name '*.tar.gz' -print -quit)"
-          read -r NAME VERSION < <(tar -xOzf "${SDIST}" --wildcards '*/pyproject.toml' | python -c 'import sys,re,tomllib; d=tomllib.loads(sys.stdin.read()); print(re.sub(r"[-_.]+","-",d["project"]["name"].lower())); print(d["project"]["version"])')
+          read -r NAME VERSION < <(tar -xOzf "${SDIST}" --wildcards '*/pyproject.toml' | python -c 'import sys,re,tomllib; d=tomllib.loads(sys.stdin.read()); print(re.sub(r"[-_.]+","-",d["project"]["name"].lower()), d["project"]["version"])')
+          # fail closed：read 只消费一行，name/version 必须同行输出且都非空，
+          # 否则空 VERSION 会让版本存在性检查命中畸形 URL 而误判"已发布"跳过。
+          if [ -z "${NAME}" ] || [ -z "${VERSION}" ]; then
+            echo "::error::failed to extract package name/version from ${SDIST}"
+            exit 1
+          fi
           if curl -fsSL --max-time 30 "https://pypi.org/pypi/${NAME}/${VERSION}/json" >/dev/null 2>&1; then
             echo "== ${NAME}==${VERSION} already published to PyPI; skipping"
           else
@@ -488,7 +494,13 @@ jobs:
         run: |
           set -euo pipefail
           SDIST="$(find dist-artifact/release/shopping-cli -maxdepth 1 -name '*.tar.gz' -print -quit)"
-          read -r NAME VERSION < <(tar -xOzf "${SDIST}" --wildcards '*/pyproject.toml' | python -c 'import sys,re,tomllib; d=tomllib.loads(sys.stdin.read()); print(re.sub(r"[-_.]+","-",d["project"]["name"].lower())); print(d["project"]["version"])')
+          read -r NAME VERSION < <(tar -xOzf "${SDIST}" --wildcards '*/pyproject.toml' | python -c 'import sys,re,tomllib; d=tomllib.loads(sys.stdin.read()); print(re.sub(r"[-_.]+","-",d["project"]["name"].lower()), d["project"]["version"])')
+          # fail closed：read 只消费一行，name/version 必须同行输出且都非空，
+          # 否则空 VERSION 会让版本存在性检查命中畸形 URL 而误判"已发布"跳过。
+          if [ -z "${NAME}" ] || [ -z "${VERSION}" ]; then
+            echo "::error::failed to extract package name/version from ${SDIST}"
+            exit 1
+          fi
           if curl -fsSL --max-time 30 "https://pypi.org/pypi/${NAME}/${VERSION}/json" >/dev/null 2>&1; then
             echo "== ${NAME}==${VERSION} already published to PyPI; skipping"
           else
