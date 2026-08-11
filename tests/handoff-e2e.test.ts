@@ -348,6 +348,68 @@ describe("KTH 端到端（#20、#21）", () => {
     },
   );
 
+  it("handoff_agreement 优先用商家声明的每商品成交入口（listing handoff_destination_ref）", async () => {
+    const stack = await startTestA2aStack({ productSource, capture });
+    stacks.push(stack);
+    const h = setupBuyer(stack.catalogUrl);
+    const taskId = await createReadyTask(h.store);
+
+    // 商家声明的成交入口（shortlistListing 写入候选事件；loopback checkout 桩）
+    const http = await import("node:http");
+    const checkoutServer = http.createServer((_req, res) => {
+      res.statusCode = 200;
+      res.end();
+    });
+    await new Promise<void>((resolve) =>
+      checkoutServer.listen(0, "127.0.0.1", () => resolve()),
+    );
+    const checkoutAddr = checkoutServer.address() as { port: number };
+    const declaredRef = `http://127.0.0.1:${checkoutAddr.port}/checkout/vq-001`;
+    h.store.appendEvent(
+      taskId,
+      "candidate_shortlisted",
+      {
+        listing_id: "lst_1",
+        owner_agent_id: "cagt_x",
+        listing_title: "VQ-001 智能保温杯",
+        handoff_destination_types: ["external_checkout_url"],
+        handoff_destination_ref: declaredRef,
+        source: "kiwi-catalog",
+      },
+      "model",
+      `shortlist:${taskId}:${uuidv7()}`,
+    );
+
+    await h.getTool("negotiate_buyer_task").execute("1", { task_id: taskId });
+
+    // LLM 现编一个不同的 destination_ref —— 应被商家声明覆盖（不现编）。
+    await h.getTool("handoff_agreement").execute("2", {
+      task_id: taskId,
+      destination_type: "external_checkout_url",
+      destination_ref: "https://llm.invented.example/checkout",
+      display_summary_merchant: "Acme",
+    });
+
+    // 验证候选用了商家声明入口
+    const taskEvents = h.store.taskEvents(taskId);
+    let negotiationId: string | undefined;
+    for (let i = taskEvents.length - 1; i >= 0; i--) {
+      const event = taskEvents[i];
+      if (event?.type === "status_changed" && typeof event.payload.negotiation_id === "string") {
+        negotiationId = event.payload.negotiation_id;
+        break;
+      }
+    }
+    const events = h.ledger.events(negotiationId as string);
+    const created = events.find((e) => e.event_kind === "handoff_candidate_created");
+    const candidate =
+      created?.outcome.kind === "ok"
+        ? (created.outcome.result?.candidate as Record<string, unknown> | undefined)
+        : undefined;
+    expect(candidate?.destination_ref).toBe(declaredRef);
+    await new Promise<void>((resolve) => checkoutServer.close(() => resolve()));
+  });
+
   it("local_callback 证据 → OPENED_CONFIRMED（opened 率更新，绝不伪装成交）", async () => {
     const stack = await startTestA2aStack({ productSource, capture });
     stacks.push(stack);

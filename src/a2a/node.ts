@@ -42,7 +42,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AgentProfile } from "../config/profile.js";
 import type { AuthVerifier } from "./server/types.js";
-import { A2AServer } from "./server/index.js";
+import {
+  A2AServer,
+  LoopbackOnlyAuthVerifier,
+  NoneAuthVerifier,
+  StaticBearerAuthVerifier,
+} from "./server/index.js";
 import { defaultHandler } from "./server/handler.js";
 import { createMerchantHandler } from "./server/merchant-handler.js";
 import { LedgerStore } from "../negotiation/ledger/index.js";
@@ -180,6 +185,27 @@ function isLoopbackAdvertised(value: string): boolean {
   }
 }
 
+/** 从 KIWI_A2A_AUTH env 构造 authVerifier（公网广告形态的认证边界，审查 BUG-02）。
+ *
+ * - ``loopback`` → LoopbackOnlyAuthVerifier：只信 loopback socket 来源（Caddy
+ *   反代从 127.0.0.1 连接时的应用层信任边界，可审计的代理认证契约）；
+ * - ``none`` → NoneAuthVerifier：总是放行（显式可信网络/测试）；
+ * - ``bearer:<token>`` → StaticBearerAuthVerifier：校验 Authorization Bearer。
+ * 未配置 → undefined（公网广告形态下守卫拒绝启动，fail-closed）。
+ */
+function authVerifierFromEnv(): AuthVerifier | undefined {
+  const raw = (process.env.KIWI_A2A_AUTH ?? "").trim();
+  if (raw === "") return undefined;
+  if (raw === "loopback") return new LoopbackOnlyAuthVerifier();
+  if (raw === "none") return new NoneAuthVerifier();
+  if (raw.startsWith("bearer:")) {
+    const token = raw.slice("bearer:".length).trim();
+    if (token === "") throw new Error("KIWI_A2A_AUTH=bearer:<token> 需要非空 token");
+    return new StaticBearerAuthVerifier(token);
+  }
+  throw new Error(`KIWI_A2A_AUTH 未知模式: ${raw}（可选 loopback | none | bearer:<token>）`);
+}
+
 /** 启动一个 A2A 节点（按 profile 角色）。 */
 export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHandle> {
   const { profile } = options;
@@ -191,10 +217,13 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
   // 审查 BUG-02：公网广告形态必须显式认证——LoopbackOnlyAuthVerifier 只信
   // socket 来源，反代从 127.0.0.1 连接时外部请求在应用层就是 loopback。
   // 未配置验证器则启动失败（fail-closed），不带着错误身份对外服务。
-  if (!isLoopbackAdvertised(advertisedBase) && options.authVerifier === undefined) {
+  // authVerifier 来源：options 直传优先，否则 KIWI_A2A_AUTH env
+  // （loopback | none | bearer:<token>）。
+  const authVerifier = options.authVerifier ?? authVerifierFromEnv();
+  if (!isLoopbackAdvertised(advertisedBase) && authVerifier === undefined) {
     throw new Error(
       `广告地址 ${advertisedBase} 不是 loopback：必须配置 authVerifier` +
-        `（HTTP Message Signature 验证器或明确的可审计代理认证契约），` +
+        `（KIWI_A2A_AUTH=loopback|none|bearer:<token>，或 HTTP Message Signature 验证器），` +
         `否则反向代理连接会被误当本机可信`,
     );
   }
@@ -278,7 +307,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     idempotency,
     handler,
     now,
-    ...(options.authVerifier !== undefined ? { authVerifier: options.authVerifier } : {}),
+    ...(authVerifier !== undefined ? { authVerifier } : {}),
   });
   const httpServer = server.createServer();
   await new Promise<void>((resolve) => httpServer.listen(port, "127.0.0.1", () => resolve()));
