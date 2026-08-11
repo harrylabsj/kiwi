@@ -591,8 +591,9 @@ describe("merchant handler 相位机接线（BUG-10）", () => {
 // 相位机拒绝推进时协议照发，重启恢复后可二次 accept 产出重复协议。修复：
 // 构建协议前先推进相位，推进失败 decline state_conflict 且无任何终态副作用。
 //
-// 同轮恢复（2026-08-12 跟进）：clarification 的商家文本应答即 §8.2 的
-// clarification_response——handler 同轮把相位从 AWAITING_CLARIFICATION
+// 同轮恢复（2026-08-12 跟进，方案B 协议完整版）：商家对 clarification 的
+// 应答是结构化 clarification_response envelope（§8.2，in_reply_to 引用被
+// 回答的消息，§8.5/§14 强制）——handler 同轮把相位从 AWAITING_CLARIFICATION
 // 弹回 resume_phase，「问一句再 accept」的 happy path 不再被卡死（此前
 // 入站 clarification 后相位永远挂起，后续合法 accept 被 state_conflict 误拒）。
 
@@ -684,14 +685,26 @@ describe("merchant accept 相位机权威守卫（P1-C）", () => {
       .filter((e) => e.event_kind === "state_transition")
       .filter((e) => e.state_transition?.to_phase === "AGREEMENT_REACHED");
 
-  it("clarification 文本应答后相位同轮恢复，随后 accept 正常成交（P1-C happy path）", async () => {
+  it("clarification 应答后相位同轮恢复，随后 accept 正常成交（P1-C happy path）", async () => {
     const h = makeHandler();
     const { offerId, agreedTerms } = await reachConditional(h);
     // 买家在 conditional_offer 后发 clarification → 顶层推进 OFFER_OPEN →
-    // AWAITING_CLARIFICATION；商家文本应答即 clarification_response，同轮
-    // 弹回 OFFER_OPEN（条件 offer 仍存）。
-    const clar = await runWith(h, env("clarification", { questions: [{ field: "delivery_before" }] }));
+    // AWAITING_CLARIFICATION；商家应答是结构化 clarification_response
+    // envelope（§8.2），同轮弹回 OFFER_OPEN（条件 offer 仍存）。
+    const clarEnv = env("clarification", { questions: [{ field: "delivery_before" }] });
+    const clar = await runWith(h, clarEnv);
     expect(clar.kind).toBe("accepted");
+    // 方案B：应答为结构化 envelope，in_reply_to 引用被回答的澄清消息（§8.5/§14）。
+    const knpReply = (clar.kind === "accepted" && clar.message
+      ? (clar.message.parts[0] as unknown as { data?: { knp_envelope?: Record<string, unknown> } })
+          .data?.knp_envelope
+      : undefined) as
+      | { action?: string; in_reply_to?: string; payload?: { type?: string; answers?: unknown[] } }
+      | undefined;
+    expect(knpReply?.action).toBe("clarification_response");
+    expect(knpReply?.in_reply_to).toBe(clarEnv.message_id);
+    expect(knpReply?.payload?.type).toBe("clarification_response");
+    expect(Array.isArray(knpReply?.payload?.answers)).toBe(true);
 
     // 澄清已应答 → accept 走正常 OFFER_OPEN → AGREEMENT_REACHED 边。
     const result = await runWith(
@@ -704,6 +717,16 @@ describe("merchant accept 相位机权威守卫（P1-C）", () => {
     );
     expect(result.kind).toBe("accepted");
     expect(agreementTransitions()).toHaveLength(1);
+  });
+
+  it("stray clarification_response（非澄清挂起态）被相位机 fail-closed（方案B 对称路径）", async () => {
+    const h = makeHandler();
+    await reachConditional(h); // 相位 OFFER_OPEN，无挂起澄清
+    const result = await runWith(h, env("clarification_response", { type: "clarification_response" }));
+    // OFFER_OPEN + clarification_response 不在 §21.2 转换表 → state_conflict。
+    expect(result.kind).toBe("declined");
+    expect(result.kind === "declined" && result.reasonCode).toBe("state_conflict");
+    expect(agreementTransitions()).toHaveLength(0);
   });
 
   it("成交后重启恢复：二次 accept 被终态守卫拒绝，不产重复协议（P1-C 跨重启）", async () => {

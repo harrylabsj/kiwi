@@ -227,7 +227,7 @@ export function createMerchantHandler(
 
   /** 审查 BUG-10：把入站 action 映射到相位机事件并推进；非法转换（不在
    *  转换表内的组合）fail-closed 返回 false（调用方 decline state_conflict）。
-   *  clarification 是文本应答即恢复：同轮 apply clarification_response，
+   *  clarification 由商家的结构化 clarification_response 应答同轮恢复，
    *  相位净不变。相位变化（含中间相位 OFFER_OPEN）落 state_transition 事件，
    *  重启可完整重建。 */
   const advancePhase = async (
@@ -262,6 +262,10 @@ export function createMerchantHandler(
         return { type: "conditional_offer", offer_id: offerId };
       case "clarification":
         return { type: "clarification" };
+      case "clarification_response":
+        // 对称路径（方案B）：商家为提问方时，买家的应答经 restore 边弹回相位；
+        // 非 AWAITING_CLARIFICATION 时相位机 fail-closed（state_conflict）。
+        return { type: "clarification_response" };
       case "accept_nonbinding":
         return { type: "accept_nonbinding", offer_id: offerId };
       case "withdraw":
@@ -552,20 +556,36 @@ export function createMerchantHandler(
           return envelopeReply(reply);
         }
         case "clarification": {
-          const field = (envelope.payload as { questions?: { field?: string }[] }).questions?.[0]?.field;
-          const reply = textReply(
-            `Regarding "${field ?? "…"}": delivery before ${MERCHANT_DELIVERY_BEFORE}, payment terms negotiable (nonbinding).`,
-          );
-          // 文本应答即恢复（设计注释见 advancePhase：同轮 apply
-          // clarification_response）——顶层推进已把相位挂到
-          // AWAITING_CLARIFICATION，商家的文本应答就是 §8.2 的
-          // clarification_response，同轮弹回 resume_phase（OFFER_OPEN/OPEN），
-          // 否则「问一句再 accept」的 happy path 会被相位机永久 state_conflict。
+          const questions = (envelope.payload as { questions?: { field?: string }[] }).questions ?? [];
+          // 方案B（协议完整）：商家的应答是结构化 clarification_response
+          // envelope（§8.2），in_reply_to 引用被回答的澄清消息（§8.5/§14
+          // 强制，finalizeEnvelope 校验）。payload 形状规范未冻结（§14），
+          // 携带 answers 便于对端结构化消费；人类可读文本走 public_message。
+          const reply = seedEnvelope({
+            negotiation_id: negotiationId,
+            in_reply_to: inReplyTo,
+            actor: "merchant",
+            action: "clarification_response",
+            created_at: now(),
+            payload: {
+              type: "clarification_response",
+              answers: questions.map((q) => ({
+                field: q.field ?? "…",
+                answer: `delivery before ${MERCHANT_DELIVERY_BEFORE}, payment terms negotiable (nonbinding)`,
+              })),
+            },
+            public_message: `delivery before ${MERCHANT_DELIVERY_BEFORE}, payment terms negotiable (nonbinding).`,
+          });
+          // 出站应答即恢复（restore 边，§21.2）：顶层推进已把相位挂到
+          // AWAITING_CLARIFICATION，clarification_response 同轮弹回
+          // resume_phase（OFFER_OPEN/OPEN），否则「问一句再 accept」的
+          // happy path 会被相位机永久 state_conflict。恢复失败 fail-closed。
           const restored = await advancePhase(negotiationId, { type: "clarification_response" });
           if (!restored) {
             return declineReply("state_conflict");
           }
-          return reply;
+          await appendSent(reply);
+          return envelopeReply(reply);
         }
         case "accept_nonbinding": {
           const stored = conditionalByNegotiation.get(negotiationId);
