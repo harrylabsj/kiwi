@@ -545,6 +545,21 @@ describe("A2A Server: 认证接缝", () => {
       "authentication_required",
     );
   });
+
+  // 审查 P2-D：token 比较走常量时间路径（长度恒等预检 + timingSafeEqual）——
+  // 长度不同（预检短路）与同长度异值（timingSafeEqual 拒绝）都必须正确拒绝，
+  // 正确 token（含多字节字符）仍放行。
+  it("static-bearer token comparison accepts only the exact token (P2-D)", () => {
+    const bearer = new StaticBearerAuthVerifier("t0ken-值", { identity: "peer" });
+    expect(bearer.verify(authCtx({ authorizationHeader: "Bearer t0ken-值" })).authenticated).toBe(true);
+    // 长度不同（长度恒等预检分支）
+    expect(bearer.verify(authCtx({ authorizationHeader: "Bearer t0ken" })).authenticated).toBe(false);
+    expect(
+      bearer.verify(authCtx({ authorizationHeader: "Bearer t0ken-值-extra" })).authenticated,
+    ).toBe(false);
+    // 同长度异值（timingSafeEqual 分支）
+    expect(bearer.verify(authCtx({ authorizationHeader: "Bearer t0ken-値" })).authenticated).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

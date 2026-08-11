@@ -186,6 +186,77 @@ describe("merchant publish orchestration (D2/D3)", () => {
     expect(listingArgs).not.toContain("--owner-token-secret"); // 投影读取不携带凭据
   });
 
+  // 审查 P3-10：handoff_destination 按值派生——合法 http(s) URL 映射为
+  // external_checkout_url + ref；opaque 非 URL 文本（chat-id/电话/文档引用）
+  // 不进公开 listing（成交入口由商家 Agent 谈判达成后点对点交给买家，
+  // opaque ref 进公开目录是语义污染）。
+  it("handoff_destination derived by value: URL → external_checkout_url, opaque → omitted (P3-10)", async () => {
+    const publishBodies: string[] = [];
+    const fetchImpl = publishFetch({ publishBody: publishBodies });
+    const spawnImpl = compatSpawn(() => ({
+      status: 0,
+      stdout: JSON.stringify(
+        projectionsReport({
+          results: [
+            {
+              listing_type: "product",
+              source_product_ref: "SKU-URL",
+              title: "Widget URL",
+              category: "widgets",
+              handoff_destination: "https://shop.example.com/checkout/sku-url",
+            },
+            {
+              listing_type: "product",
+              source_product_ref: "SKU-CHAT",
+              title: "Widget Chat",
+              category: "widgets",
+              handoff_destination: "wechat:merchant-001",
+            },
+            {
+              listing_type: "product",
+              source_product_ref: "SKU-NONE",
+              title: "Widget None",
+              category: "widgets",
+            },
+          ],
+        }),
+      ),
+      stderr: "",
+    }));
+
+    const report = await merchantPublish({
+      profile: MERCHANT_PROFILE,
+      catalogBaseUrl: "http://127.0.0.1:8600",
+      ownerTokenSecret: SECRET,
+      shoppingCliDb: "/tmp/shop.sqlite",
+      fetchImpl,
+      spawnImpl,
+    });
+
+    expect(report.ok).toBe(true);
+    expect(publishBodies.length).toBe(3);
+    const bodies = publishBodies.map((b) => JSON.parse(b) as Record<string, unknown>);
+    const byRef = new Map(bodies.map((b) => [String(b.source_product_ref), b]));
+
+    // URL → external_checkout_url + ref
+    const urlBody = byRef.get("SKU-URL");
+    expect(urlBody?.handoff_destination_types).toEqual(["external_checkout_url"]);
+    expect(urlBody?.handoff_destination_ref).toBe("https://shop.example.com/checkout/sku-url");
+
+    // opaque 非 URL → 两个字段都省略
+    const opaqueBody = byRef.get("SKU-CHAT");
+    expect(opaqueBody).not.toHaveProperty("handoff_destination_types");
+    expect(opaqueBody).not.toHaveProperty("handoff_destination_ref");
+
+    // 无 handoff_destination → 同样省略
+    expect(byRef.get("SKU-NONE")).not.toHaveProperty("handoff_destination_types");
+
+    // 原始 handoff_destination 键一律剔除（catalog 契约 additionalProperties:false）
+    for (const body of bodies) {
+      expect(body).not.toHaveProperty("handoff_destination");
+    }
+  });
+
   it("owner token derivation matches kiwi-catalog (fixed vector)", async () => {
     const expected = createHmac("sha256", SECRET)
       .update(`kiwi-catalog-owner:${MERCHANT_ID}`)

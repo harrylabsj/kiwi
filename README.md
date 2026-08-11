@@ -111,6 +111,13 @@ kiwi> /negotiate cagt_...            # 磋商 → agreement（无副作用）
 >    并把验证结果以节点可审计的方式透传——不得只信任 `remoteAddress`。
 >
 > 本地形态（不设 `KIWI_A2A_PUBLIC_URL`）不受影响，维持 loopback 默认值。
+>
+> `KIWI_A2A_AUTH` env 提供三种内置模式：`loopback`（**仅限本地开发 /
+> 代理即边界**——节点只校验 socket 来源，经反代转发的公网流量在应用层
+> 全部是 loopback 被放行，等价无应用层认证；公网广告地址 + loopback
+> 启动时会输出醒目 stderr 警告）、`none`（显式可信网络/测试）、
+> `bearer:<token>`（校验 `Authorization: Bearer <token>`，**公网节点
+> 推荐**）。
 
 ### 真实商品闭环（shopping-cli 开放商品层）
 

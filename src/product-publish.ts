@@ -383,8 +383,13 @@ export async function merchantPublish(
     );
     // 每商品成交入口（KTH destination_ref）：投影携带商家维护的
     // handoff_destination（shopping-cli products.handoff_destination）。
-    // 映射为 listing 的 handoff_destination_ref，并剔除原始字段（catalog 契约
-    // 只认 handoff_destination_ref，additionalProperties:false 会拒未知键）。
+    // 按值派生（审查 P3-10，此前无条件标 external_checkout_url 并输出原始
+    // ref）：合法 http(s) URL → external_checkout_url + ref；opaque 非 URL
+    // 文本（chat-id/电话/文档引用）→ 两个字段都不进公开 listing（架构约定：
+    // 成交入口由商家 Agent 谈判达成后点对点交给买家，opaque ref 进公开目录
+    // 是语义污染）。原始 handoff_destination 键一律剔除（catalog 契约
+    // additionalProperties:false 会拒未知键；product listing 的两个 handoff
+    // 字段均可选，省略仍通过 schema 校验）。
     const { handoff_destination: rawHandoff, ...projectionWire } = wireFields;
     const handoffRef = typeof rawHandoff === "string" ? rawHandoff.trim() : "";
     const body: Record<string, unknown> = {
@@ -392,9 +397,9 @@ export async function merchantPublish(
       merchant_id: catalogMerchantId,
       owner_agent_id: catalogAgentId,
       owner_token: effectiveOwnerToken,
-      handoff_destination_types: ["external_checkout_url"],
     };
-    if (handoffRef !== "") {
+    if (/^https?:\/\/\S+$/.test(handoffRef)) {
+      body.handoff_destination_types = ["external_checkout_url"];
       body.handoff_destination_ref = handoffRef;
     }
     if (typeof body.owner_token !== "string" || body.owner_token === "") {

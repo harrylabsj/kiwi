@@ -111,6 +111,13 @@ Turn reports are printed as JSONL (one JSON object per line) and never
 contain secrets or private policy values. Secrets come from environment
 variables named in the profile (commerce.token_env, model.api_key_env);
 they are never read from or written to the profile file.
+
+Public A2A exposure: KIWI_A2A_PUBLIC_URL=https://<domain> advertises the
+public address (the node still binds 127.0.0.1 behind a reverse proxy);
+KIWI_A2A_AUTH selects inbound auth — "loopback" (local development /
+proxy-is-the-boundary only; a public advertised address prints a loud
+warning), "none" (trusted networks/tests), or "bearer:<token>"
+(recommended for public nodes).
 `;
 
 interface ParsedArgs {
