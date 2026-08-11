@@ -34,6 +34,7 @@
 
 import { createHmac } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { isLoopbackHost } from "./a2a/client/url-policy.js";
 import type { AgentProfile } from "./config/profile.js";
 import { registerCatalogAgent } from "./discovery/catalog-source/register.js";
 import { isRedirectResponse } from "./net/safe-http.js";
@@ -142,7 +143,9 @@ function buildAgentCardUrl(domain: string): string {
     throw new Error(`catalog domain 不得包含路径（agent_card_url 由本函数构造）: ${domain}`);
   }
   const host = parsed.hostname;
-  const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
+  // 复用仓内统一 loopback 判定（P3-13）：Node URL.hostname 对 IPv6 带方括号
+  // （http://[::1] → "[::1]"），此前裸比 "::1" 把 IPv6 loopback 误判为远程。
+  const isLoopback = isLoopbackHost(host);
   if (parsed.protocol !== "https:" && !isLoopback) {
     throw new Error(`catalog domain 远程 host 必须使用 https（本地 loopback 才允许 http）: ${domain}`);
   }

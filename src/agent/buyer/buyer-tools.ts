@@ -1378,6 +1378,14 @@ const handoffAgreement: Tool = {
           listing_freshness_state: r.listing.listing_freshness_state,
           authority: r.authority,
           requires_direct_confirmation: r.requires_direct_confirmation,
+          // 商家声明的每商品成交入口透出（P3-11）：shortlist_listing /
+          // handoff_agreement 优先用商家声明，不用 LLM 现编目的地。有值才输出。
+          ...(r.listing.handoff_destination_types !== undefined
+            ? { handoff_destination_types: r.listing.handoff_destination_types }
+            : {}),
+          ...(r.listing.handoff_destination_ref !== undefined
+            ? { handoff_destination_ref: r.listing.handoff_destination_ref }
+            : {}),
         }));
         return textResult(JSON.stringify(rows), { count: rows.length });
       } catch (err) {
