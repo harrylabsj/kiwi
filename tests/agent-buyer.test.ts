@@ -27,7 +27,12 @@ import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
 import { BuyerTaskError, type BuyerTask } from "../src/agent/buyer/types.js";
 import { buildBuyerTools } from "../src/agent/buyer/buyer-tools.js";
 import { WriteApprovalCandidateStore } from "../src/agent/merchant/action-candidate.js";
-import type { KiwiCatalogSource } from "../src/discovery/index.js";
+import type {
+  KiwiCatalogSource,
+  KiwiListingSearchQuery,
+  ListingRecord,
+  ListingSearchResult,
+} from "../src/discovery/index.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { testBuyerProfile } from "./helpers.js";
 
@@ -1099,5 +1104,147 @@ describe("search_listings 透出 handoff_destination（P3-11）", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).not.toHaveProperty("handoff_destination_types");
     expect(rows[0]).not.toHaveProperty("handoff_destination_ref");
+  });
+});
+
+describe("catalog-first search cycle (CD #28)", () => {
+  function fakeListing(overrides: Partial<ListingRecord> = {}): ListingRecord {
+    return {
+      listing_id: "lst_catalog_1",
+      listing_type: "product",
+      owner_agent_id: "cagt_veyquo",
+      merchant_id: "mkt_veyquo",
+      title: "iPhone 17 256GB",
+      category: "electronics",
+      listing_digest: "digest-1",
+      publication_state: "ACTIVE",
+      listing_freshness_state: "FRESH",
+      published_at: "2026-08-12T00:00:00+00:00",
+      updated_at: "2026-08-12T00:00:00+00:00",
+      fresh_until: "2099-01-01T00:00:00+00:00",
+      commercial_hints: {
+        price_range_hint: "CNY 10999",
+        availability_hint: "in_stock",
+        moq: 1,
+      },
+      handoff_destination_types: ["external_checkout_url"],
+      handoff_destination_ref: "https://veyquo.example/checkout/iphone17",
+      ...overrides,
+    };
+  }
+
+  function fakeListingResult(listing: ListingRecord): ListingSearchResult {
+    return {
+      listing,
+      merchant: { merchant_id: listing.merchant_id, display_name: "Veyquo" },
+      agent: {
+        catalog_agent_id: listing.owner_agent_id,
+        verification_level: "commerce_verified",
+        freshness_state: "fresh",
+        administrative_state: "active",
+      },
+      listing_freshness_state: "FRESH",
+      authority: "discovery_projection",
+      requires_direct_confirmation: true,
+    };
+  }
+
+  function stubCatalog(
+    handler: (q: KiwiListingSearchQuery) => Promise<ListingSearchResult[]> | ListingSearchResult[],
+  ): KiwiCatalogSource {
+    return {
+      searchListings: async (q: KiwiListingSearchQuery) => handler(q),
+    } as unknown as KiwiCatalogSource;
+  }
+
+  it("searches the catalog first and shortlists listings as candidates", async () => {
+    const { store, connector, now } = setup();
+    const ready = createReadyTask(store, {
+      intent: { category: "electronics", query_text: "iphone" },
+      constraints: { max_total_price: 11000 },
+    });
+    let seenQuery: KiwiListingSearchQuery | undefined;
+    const catalog = stubCatalog(async (q) => {
+      seenQuery = q;
+      return [fakeListingResult(fakeListing())];
+    });
+    const result = await runSearchCycle(
+      { store, connector, now, catalogSource: catalog },
+      ready.task_id,
+      `run:${uuidv7()}`,
+    );
+    expect(result.outcome).toBe("shortlist_ready");
+    expect(result.task.status).toBe("awaiting_user");
+    expect(seenQuery?.q).toBe("iphone");
+    expect(seenQuery?.category).toBe("electronics");
+    const candidate = result.shortlist[0]?.candidate;
+    expect(candidate?.connector_id).toBe("kiwi-catalog");
+    expect(candidate?.external_product_id).toBe("lst_catalog_1");
+    expect(candidate?.merchant_id).toBe("mkt_veyquo");
+    // owner Agent 落到候选 + 事件，供 negotiate_buyer_task 走 A2A。
+    expect(candidate?.owner_agent_id).toBe("cagt_veyquo");
+    const evt = store.taskEvents(ready.task_id).find((e) => e.type === "candidate_shortlisted");
+    expect(evt?.payload.owner_agent_id).toBe("cagt_veyquo");
+    expect(evt?.payload.handoff_destination_ref).toBe(
+      "https://veyquo.example/checkout/iphone17",
+    );
+    expect(evt?.payload.handoff_destination_types).toEqual(["external_checkout_url"]);
+  });
+
+  it("falls back to the marketplace connector when the catalog has no match", async () => {
+    const { store, connector, now } = setup([
+      fakeConnectorProduct({ sku: "sku-local", price: 99, stock: 3 }),
+    ]);
+    const ready = createReadyTask(store);
+    const catalog = stubCatalog(async () => []);
+    const result = await runSearchCycle(
+      { store, connector, now, catalogSource: catalog },
+      ready.task_id,
+      `run:${uuidv7()}`,
+    );
+    expect(result.outcome).toBe("shortlist_ready");
+    expect(result.shortlist.map((s) => s.candidate.sku)).toEqual(["sku-local"]);
+    expect(result.shortlist[0]?.candidate.connector_id).toBe("shopping-cli");
+  });
+
+  it("skips out-of-stock listings by default and shortlists the rest", async () => {
+    const { store, connector, now } = setup();
+    const ready = createReadyTask(store);
+    const catalog = stubCatalog(async () => [
+      fakeListingResult(
+        fakeListing({
+          listing_id: "lst_oos",
+          commercial_hints: { availability_hint: "out_of_stock" },
+        }),
+      ),
+      fakeListingResult(fakeListing({ listing_id: "lst_ok" })),
+    ]);
+    const result = await runSearchCycle(
+      { store, connector, now, catalogSource: catalog },
+      ready.task_id,
+      `run:${uuidv7()}`,
+    );
+    expect(result.outcome).toBe("shortlist_ready");
+    expect(result.shortlist.map((s) => s.candidate.external_product_id)).toEqual(["lst_ok"]);
+  });
+
+  it("treats a catalog query error as transient: parks the task in tracking with a scheduled retry", async () => {
+    const { store, connector, now } = setup();
+    const ready = createReadyTask(store);
+    const catalog = stubCatalog(async () => {
+      throw new Error("catalog unreachable");
+    });
+    const result = await runSearchCycle(
+      { store, connector, now, catalogSource: catalog },
+      ready.task_id,
+      `run:${uuidv7()}`,
+    );
+    expect(result.outcome).toBe("retry");
+    expect(result.task.status).toBe("tracking");
+    expect(result.error).toBe("catalog unreachable");
+    const evt = store.taskEvents(ready.task_id).find((e) => e.type === "connector_retry");
+    expect(evt?.payload.source).toBe("kiwi-catalog");
+    expect((evt?.payload as { retriable?: boolean }).retriable).toBe(true);
+    expect(result.task.next_run_at).toBeDefined();
   });
 });

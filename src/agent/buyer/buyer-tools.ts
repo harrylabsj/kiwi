@@ -652,7 +652,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           ...candidates.map((c) => {
             const reasons =
               c.rejection_reasons.length > 0 ? ` 排除: ${c.rejection_reasons.join(";")}` : "";
-            return `· ${c.candidate_id} [${c.candidate_status}/${c.eligibility}] ${c.sku ?? c.external_product_id} score=${c.score?.toFixed(3) ?? "-"}${reasons}`;
+            return `· ${c.candidate_id} [${c.candidate_status}/${c.eligibility}] ${c.sku ?? c.external_product_id} score=${c.score?.toFixed(3) ?? "-"}${c.owner_agent_id !== undefined ? ` owner=${c.owner_agent_id}` : ""}${reasons}`;
           }),
         ];
         // 磋商链接（marketplace 或 A2A 直连）——磋商结果对模型可见。
@@ -777,7 +777,13 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           });
         }
         const cycle = await runSearchCycle(
-          { store, connector, now },
+          {
+            store,
+            connector,
+            now,
+            // CD #28：配置 catalog 时任务搜索优先走 catalog listings。
+            ...(deps.catalogSource !== undefined ? { catalogSource: deps.catalogSource } : {}),
+          },
           task.task_id,
           `tool:${uuidv7()}`,
         );
@@ -787,11 +793,12 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             const top = candidate.score_explanation?.dimensions
               .slice()
               .sort((a, b) => b.weight * b.score - a.weight * a.score)[0];
-            return `· ${candidate.candidate_id} ${candidate.sku}（${(candidate.score ?? 0).toFixed(2)}）${top !== undefined ? ` 主要加分: ${top.dimension} ${top.note}` : ""}`;
+            return `· ${candidate.candidate_id} ${candidate.sku}（${(candidate.score ?? 0).toFixed(2)}）${candidate.owner_agent_id !== undefined ? ` owner=${candidate.owner_agent_id}` : ""}${top !== undefined ? ` 主要加分: ${top.dimension} ${top.note}` : ""}`;
           });
           return textResult(
             `搜索完成，${cycle.shortlist.length} 个候选待你选择：\n${lines.join("\n")}\n` +
-              `用 select_product_nonbinding 可形成非绑定选定（不是下单）。`,
+              `用 select_product_nonbinding 可形成非绑定选定（不是下单）；` +
+              `catalog 候选可先 negotiate_buyer_task 与 owner Agent 磋商。`,
             { task_id: task.task_id, status: current.status },
           );
         }
@@ -852,7 +859,16 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             origin: "user",
             idempotency_key: `${updated.task_id}:re-search:${uuidv7()}`,
           });
-          const cycle = await runSearchCycle({ store, connector, now }, searching.task_id, `tool:${uuidv7()}`);
+          const cycle = await runSearchCycle(
+            {
+              store,
+              connector,
+              now,
+              ...(deps.catalogSource !== undefined ? { catalogSource: deps.catalogSource } : {}),
+            },
+            searching.task_id,
+            `tool:${uuidv7()}`,
+          );
           return textResult(`约束已更新并重新搜索（结果：${cycle.outcome}）。`);
         }
         return textResult(`约束已更新（任务 ${updated.task_id}，当前 ${updated.status}），下次搜索生效。`);

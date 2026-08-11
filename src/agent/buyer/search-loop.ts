@@ -38,10 +38,17 @@ import type {
   TrackingRule,
 } from "./types.js";
 import { BuyerTaskError } from "./types.js";
+import type { KiwiCatalogSource } from "../../discovery/catalog-source/kiwi-source.js";
+import type {
+  KiwiListingSearchQuery,
+  ListingSearchResult,
+} from "../../discovery/catalog-source/kiwi-record.js";
 
 export interface SearchCycleDeps {
   store: BuyerTaskStore;
   connector: CommerceConnector;
+  /** 配置 catalog 时注入：任务搜索数据面优先走 catalog listings（CD #28）。 */
+  catalogSource?: KiwiCatalogSource;
   now: () => string;
 }
 
@@ -197,6 +204,18 @@ export async function runSearchCycle(
       ).toISOString(),
     });
   }
+
+  // catalog-first（CD #28）：配置 catalog 时，任务搜索数据面优先查询 catalog
+  // listings。listings 是 discovery projection——报价/库存必须联系 owner Agent
+  // 确认（requires_direct_confirmation），不做价格/库存硬过滤；候选带
+  // owner_agent_id 供 negotiate_buyer_task 走 A2A 磋商。catalog 无命中时回退
+  // legacy marketplace connector 路径（search_products 语义不变）；catalog
+  // 查询失败视为瞬时错误 → tracking 退避重试。
+  if (deps.catalogSource !== undefined) {
+    const catalogOutcome = await runCatalogSearchCycle(deps, task, startedAt, runId);
+    if (catalogOutcome !== undefined) return catalogOutcome;
+  }
+
   let products: ConnectorProduct[];
   try {
     products = await connector.searchProducts({
@@ -352,4 +371,146 @@ export async function runSearchCycle(
     next_run_at: nextRun,
   });
   return { task, outcome: "tracking", shortlist: [] };
+}
+
+/**
+ * catalog-first 搜索循环（CD #28）：把 catalog listings 作为任务搜索数据面。
+ *
+ * listings 是 discovery projection（报价/库存须联系 owner Agent 确认），因此
+ * 不做价格/库存硬过滤、也不打分（候选 score 留空，模型看到的是 listing 的
+ * commercial_hints）；候选经 shortlist → awaiting_user 交给操作者/模型选择，
+ * owner_agent_id 与 handoff_destination_* 写入候选事件，供 negotiate_buyer_task
+ * / handoff_agreement 使用。无命中返回 undefined → 回退 marketplace connector
+ * 路径；catalog 查询失败视为瞬时错误 → tracking + 指数退避重试（与 marketplace
+ * transient 一致）。
+ */
+async function runCatalogSearchCycle(
+  deps: SearchCycleDeps,
+  task: BuyerTask,
+  startedAt: string,
+  runId: string,
+): Promise<SearchCycleResult | undefined> {
+  const { store, catalogSource } = deps;
+  const source = catalogSource;
+  if (source === undefined) {
+    throw new BuyerTaskError("validation", "catalogSource 未配置（runCatalogSearchCycle 不应被调用）");
+  }
+  const query: KiwiListingSearchQuery = {
+    ...(task.intent.query_text !== undefined && task.intent.query_text !== ""
+      ? { q: task.intent.query_text }
+      : {}),
+    ...(task.intent.category !== undefined && task.intent.category !== ""
+      ? { category: task.intent.category }
+      : {}),
+    ...(task.intent.city !== undefined ? { region: task.intent.city } : {}),
+    limit: task.search_budget.max_candidates,
+  };
+  let results: ListingSearchResult[];
+  try {
+    results = await source.searchListings(query);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const attempts =
+      store.taskEvents(task.task_id).filter((e) => e.type === "connector_retry").length + 1;
+    const backoffMs = Math.min(
+      task.tracking_policy.default_interval_seconds * 1000 * 2 ** Math.min(attempts - 1, 5),
+      6 * 3600 * 1000,
+    );
+    const nextRunAt = new Date(Date.parse(startedAt) + backoffMs).toISOString();
+    const parked = store.transitionTask({
+      task_id: task.task_id,
+      to: "tracking",
+      expected_version: task.version,
+      event_type: "connector_retry",
+      payload: {
+        source: "kiwi-catalog",
+        error: message,
+        retriable: true,
+        attempts,
+        next_run_at: nextRunAt,
+      },
+      origin: "connector",
+      idempotency_key: `${runId}:catalog-retry`,
+      next_run_at: nextRunAt,
+    });
+    return { task: parked, outcome: "retry", shortlist: [], error: message };
+  }
+
+  // 与 marketplace 一致：缺省排除 out_of_stock（仅显式 exclude=false 时包含）。
+  const includeOutOfStock = task.constraints.exclude_out_of_stock === false;
+  const shortlist: ShortlistEntry[] = [];
+  for (const r of results) {
+    const listing = r.listing;
+    if (!includeOutOfStock && listing.commercial_hints?.availability_hint === "out_of_stock") {
+      continue;
+    }
+    const candidate = store.upsertCandidate({
+      task_id: task.task_id,
+      connector_id: "kiwi-catalog",
+      platform: "kiwi-catalog",
+      external_product_id: listing.listing_id,
+      sku: listing.source_product_ref ?? listing.listing_id,
+      merchant_id: listing.merchant_id,
+      // owner Agent：Direct A2A 磋商（negotiate_buyer_task）的 catalogAgentId 输入。
+      owner_agent_id: listing.owner_agent_id,
+    });
+    store.updateCandidate(candidate.candidate_id, {
+      candidate_status: "shortlisted",
+      eligibility: "eligible",
+    });
+    store.appendEvent(
+      task.task_id,
+      "candidate_shortlisted",
+      {
+        candidate_id: candidate.candidate_id,
+        listing_id: listing.listing_id,
+        owner_agent_id: listing.owner_agent_id,
+        listing_title: listing.title,
+        source: "kiwi-catalog",
+        handoff_destination_types: listing.handoff_destination_types ?? null,
+        handoff_destination_ref: listing.handoff_destination_ref ?? null,
+      },
+      "model",
+      `shortlist:${task.task_id}:${listing.listing_id}:${runId}`,
+    );
+    shortlist.push({ candidate });
+  }
+
+  if (shortlist.length > 0) {
+    store.appendEvent(
+      task.task_id,
+      "observation_added",
+      { source: "kiwi-catalog", listings: shortlist.length },
+      "connector",
+      `${runId}:catalog-observations`,
+    );
+    let current = store.transitionTask({
+      task_id: task.task_id,
+      to: "shortlist_ready",
+      expected_version: task.version,
+      event_type: "shortlisted",
+      payload: {
+        source: "kiwi-catalog",
+        candidates: shortlist.map(({ candidate }) => ({
+          candidate_id: candidate.candidate_id,
+          sku: candidate.sku,
+          score: candidate.score ?? null,
+        })),
+      },
+      origin: "scheduler",
+      idempotency_key: `${runId}:shortlisted`,
+    });
+    current = store.transitionTask({
+      task_id: task.task_id,
+      to: "awaiting_user",
+      expected_version: current.version,
+      event_type: "status_changed",
+      origin: "scheduler",
+      idempotency_key: `${runId}:awaiting_user`,
+    });
+    return { task: current, outcome: "shortlist_ready", shortlist };
+  }
+
+  // 无命中：回退 marketplace connector 路径（catalog 是优先源，不是唯一源）。
+  return undefined;
 }
