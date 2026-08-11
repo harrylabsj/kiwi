@@ -553,9 +553,19 @@ export function createMerchantHandler(
         }
         case "clarification": {
           const field = (envelope.payload as { questions?: { field?: string }[] }).questions?.[0]?.field;
-          return textReply(
+          const reply = textReply(
             `Regarding "${field ?? "…"}": delivery before ${MERCHANT_DELIVERY_BEFORE}, payment terms negotiable (nonbinding).`,
           );
+          // 文本应答即恢复（设计注释见 advancePhase：同轮 apply
+          // clarification_response）——顶层推进已把相位挂到
+          // AWAITING_CLARIFICATION，商家的文本应答就是 §8.2 的
+          // clarification_response，同轮弹回 resume_phase（OFFER_OPEN/OPEN），
+          // 否则「问一句再 accept」的 happy path 会被相位机永久 state_conflict。
+          const restored = await advancePhase(negotiationId, { type: "clarification_response" });
+          if (!restored) {
+            return declineReply("state_conflict");
+          }
+          return reply;
         }
         case "accept_nonbinding": {
           const stored = conditionalByNegotiation.get(negotiationId);

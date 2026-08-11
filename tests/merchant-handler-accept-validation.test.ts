@@ -588,12 +588,13 @@ describe("merchant handler 相位机接线（BUG-10）", () => {
 // ── accept 相位机权威守卫（审查 P1-C，2026-08-11）───────────────────────────
 //
 // P1-C：accept 分支此前先 buildAgreement 再 advancePhase 且忽略返回值——
-// 买家在商家 conditional_offer 后发 clarification（相位进入
-// AWAITING_CLARIFICATION）再直接 accept：§15 业务校验全过、协议照发，但
-// 相位机拒绝推进（applyAccept 只允许 OFFER_OPEN→AGREEMENT_REACHED）。
-// 进程内 closedNegotiations 挡住二次 accept，重启恢复（按 ledger 重建相位
-// 为 AWAITING_CLARIFICATION）后二次 accept 可产出重复协议。修复：构建协议
-// 前先推进相位，推进失败 decline state_conflict 且无任何终态副作用。
+// 相位机拒绝推进时协议照发，重启恢复后可二次 accept 产出重复协议。修复：
+// 构建协议前先推进相位，推进失败 decline state_conflict 且无任何终态副作用。
+//
+// 同轮恢复（2026-08-12 跟进）：clarification 的商家文本应答即 §8.2 的
+// clarification_response——handler 同轮把相位从 AWAITING_CLARIFICATION
+// 弹回 resume_phase，「问一句再 accept」的 happy path 不再被卡死（此前
+// 入站 clarification 后相位永远挂起，后续合法 accept 被 state_conflict 误拒）。
 
 describe("merchant accept 相位机权威守卫（P1-C）", () => {
   let dir: string;
@@ -683,16 +684,16 @@ describe("merchant accept 相位机权威守卫（P1-C）", () => {
       .filter((e) => e.event_kind === "state_transition")
       .filter((e) => e.state_transition?.to_phase === "AGREEMENT_REACHED");
 
-  it("clarification 挂起相位时直接 accept → state_conflict，无协议、相位未推进（P1-C）", async () => {
+  it("clarification 文本应答后相位同轮恢复，随后 accept 正常成交（P1-C happy path）", async () => {
     const h = makeHandler();
     const { offerId, agreedTerms } = await reachConditional(h);
-    // 买家在 conditional_offer 后发 clarification → 相位 OFFER_OPEN →
-    // AWAITING_CLARIFICATION（商家文本应答，条件 offer 仍存）。
+    // 买家在 conditional_offer 后发 clarification → 顶层推进 OFFER_OPEN →
+    // AWAITING_CLARIFICATION；商家文本应答即 clarification_response，同轮
+    // 弹回 OFFER_OPEN（条件 offer 仍存）。
     const clar = await runWith(h, env("clarification", { questions: [{ field: "delivery_before" }] }));
     expect(clar.kind).toBe("accepted");
 
-    // 不恢复 OFFER_OPEN 直接 accept：§15 校验（offer 存在 / digest 匹配）
-    // 全过，但相位机拒绝 AWAITING_CLARIFICATION → AGREEMENT_REACHED。
+    // 澄清已应答 → accept 走正常 OFFER_OPEN → AGREEMENT_REACHED 边。
     const result = await runWith(
       h,
       env("accept_nonbinding", {
@@ -701,13 +702,11 @@ describe("merchant accept 相位机权威守卫（P1-C）", () => {
         terms_digest: contentDigest(agreedTerms as never),
       }),
     );
-    expect(result.kind).toBe("declined");
-    expect(result.kind === "declined" && result.reasonCode).toBe("state_conflict");
-    // 无终态副作用：链上无 AGREEMENT_REACHED 转换（相位未被推进）。
-    expect(agreementTransitions()).toHaveLength(0);
+    expect(result.kind).toBe("accepted");
+    expect(agreementTransitions()).toHaveLength(1);
   });
 
-  it("被拒 accept 后重启恢复：再次 accept 仍 state_conflict，不产重复协议（P1-C 跨重启）", async () => {
+  it("成交后重启恢复：二次 accept 被终态守卫拒绝，不产重复协议（P1-C 跨重启）", async () => {
     const first = makeHandler();
     const { offerId, agreedTerms } = await reachConditional(first);
     await runWith(first, env("clarification", { questions: [{ field: "delivery_before" }] }));
@@ -716,10 +715,11 @@ describe("merchant accept 相位机权威守卫（P1-C）", () => {
       first,
       env("accept_nonbinding", { type: "accept_nonbinding", offer_id: offerId, terms_digest: digest }),
     );
-    expect(attempt1.kind).toBe("declined");
+    expect(attempt1.kind).toBe("accepted");
+    expect(agreementTransitions()).toHaveLength(1);
 
     // “重启”：同 Ledger 重建 handler——恢复按链上 state_transition 把相位
-    // 重建为 AWAITING_CLARIFICATION（conditional 由 message_sent 恢复）。
+    // 重建为 AGREEMENT_REACHED（终态 → closedNegotiations），conditional 不再恢复。
     const second = makeHandler();
     const attempt2 = await runWith(
       second,
@@ -727,8 +727,8 @@ describe("merchant accept 相位机权威守卫（P1-C）", () => {
     );
     expect(attempt2.kind).toBe("declined");
     expect(attempt2.kind === "declined" && attempt2.reasonCode).toBe("state_conflict");
-    // 两次尝试均未落 AGREEMENT_REACHED（无重复协议的事实来源）。
-    expect(agreementTransitions()).toHaveLength(0);
+    // 二次 accept 未落第二条 AGREEMENT_REACHED（无重复协议的事实来源）。
+    expect(agreementTransitions()).toHaveLength(1);
   });
 
   // (b) 防过修：无 clarification 的正常 accept 仍返回协议——由上文
