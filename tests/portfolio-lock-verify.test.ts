@@ -34,8 +34,8 @@ const SCRIPT = fileURLToPath(
 
 // 真实 kiwi contracts/manifest.json 的固定 bundle digest 与 contract source
 // commit（CLI 级合法用例用它，因为 CLI 从自身位置读取真实 kiwi 根）。
-const REAL_BUNDLE_SHA = "e7001ebe6ac4e8679ccd4f8e0375f85753ff7e39a9da5f13641285cdef1f8c00";
-const REAL_SOURCE_COMMIT = "506a425d5da730b1d5be65941c3b93af1a998baa";
+const REAL_BUNDLE_SHA = "2dbbc52a1113dc5c05dc544802571ee188b44e1567d6bfb0cd8ccd87ea7f4998";
+const REAL_SOURCE_COMMIT = "009bc25cdae2668c8fd19ccedcc4e0c64a34f6be";
 
 const tempDirs: string[] = [];
 function makeTempDir(): string {
