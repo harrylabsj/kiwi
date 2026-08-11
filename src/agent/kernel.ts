@@ -362,7 +362,7 @@ export class AgentKernel {
   static async open(options: AgentKernelOptions): Promise<AgentKernel> {
     const paths = options.paths ?? ensureAgentPaths(options.profile.agent_id);
     // 会话来自不同模型（如 fake→deepseek）时重置：旧模型的消息会让新模型首轮
-    // 产生空响应（"模型没有返回内容"）。模型变更 = 新的对话历史。
+    // 产生空响应（模型没有返回任何文本）。模型变更 = 新的对话历史。
     if (options.model !== undefined && existsSync(paths.mainSession)) {
       const sessionModel = sessionLastModel(paths.mainSession);
       if (
@@ -1008,7 +1008,10 @@ export class AgentKernel {
         // §18.1: a model failure (throw OR empty response) must leave the
         // conversation and TUI intact.
         if (reply === "") {
-          return { text: "模型没有返回内容，请重试。", quit: false };
+          return {
+            text: "暂时没能给出有效回复——当前目录里可能没有匹配的商品或商家，也可能是这条需求还不够具体。补充品牌、型号或预算范围后再问我一次即可。",
+            quit: false,
+          };
         }
         return { text: reply, quit: false };
       } catch (err) {
