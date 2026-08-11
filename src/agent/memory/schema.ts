@@ -24,7 +24,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const MEMORY_SCHEMA_VERSION = 3;
+export const MEMORY_SCHEMA_VERSION = 4;
 
 export class MigrationError extends Error {
   constructor(message: string) {
@@ -265,11 +265,18 @@ CREATE INDEX idx_action_candidates_principal ON action_candidates (principal_id,
 CREATE INDEX idx_action_candidates_expiry ON action_candidates (expires_at) WHERE status = 'pending_approval';
 `;
 
+const MIGRATION_4 = `
+-- v0.7.0 catalog-first（CD #28）：候选持久化 owner Agent（listing.owner_agent_id，
+-- Direct A2A 磋商 negotiate_buyer_task 的 catalogAgentId 输入）。
+ALTER TABLE product_candidates ADD COLUMN owner_agent_id TEXT;
+`;
+
 /** Ordered migrations: version number -> SQL. */
 const MIGRATIONS: Readonly<Record<number, string>> = {
   1: MIGRATION_1,
   2: MIGRATION_2,
   3: MIGRATION_3,
+  4: MIGRATION_4,
 };
 
 /**
