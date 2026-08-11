@@ -1238,7 +1238,14 @@ const handoffAgreement: Tool = {
       if (agreement === undefined) {
         return textResult("任务记录缺少 agreement 快照（磋商未完成或 terms 未持久化）。");
       }
-      const destination = validateDestination({ type: p.destination_type, ref: p.destination_ref });
+      // 商家声明的每商品成交入口优先（listing handoff_destination_ref，
+      // shortlistListing 写入任务候选事件）：有声明就用商家的，LLM 现编的
+      // destination_ref 不覆盖商家权威声明（跨仓契约 v0.4 §9）。
+      const declared = taskDeclaredHandoff(deps.store.taskEvents(p.task_id));
+      const destination =
+        declared?.ref !== undefined
+          ? validateDestination({ type: declared.type ?? p.destination_type, ref: declared.ref })
+          : validateDestination({ type: p.destination_type, ref: p.destination_ref });
       // 协议级去重：同一磋商、同一目的地已交付过 → 拒绝（LLM 重试会生成
       // 新候选 → 新 digest，绕过 (candidate_id, digest) 幂等键，导致同协议
       // 二次交付/二次 URL 探测、negotiation_to_handoff_rate 虚高）。
@@ -1393,6 +1400,15 @@ const handoffAgreement: Tool = {
         owner_agent_id: { type: "string" },
         title: { type: "string" },
         sku: { type: "string" },
+        handoff_destination_types: {
+          type: "array",
+          items: { type: "string" },
+          description: "商家声明的 KTH destination_type（来自 listing，KTH 词表）",
+        },
+        handoff_destination_ref: {
+          type: "string",
+          description: "商家声明的每商品成交入口（listing handoff_destination_ref；URL 类为 https URL，联系/会话类为 opaque ref）",
+        },
       },
       required: ["task_id", "listing_id", "owner_agent_id"],
       additionalProperties: false,
@@ -1405,6 +1421,8 @@ const handoffAgreement: Tool = {
           owner_agent_id: string;
           title?: string;
           sku?: string;
+          handoff_destination_types?: string[];
+          handoff_destination_ref?: string;
         };
         const task = store.getTask(p.task_id);
         if (task === undefined) throw new BuyerTaskError("not_found", `no task ${p.task_id}`);
@@ -1428,6 +1446,9 @@ const handoffAgreement: Tool = {
             owner_agent_id: p.owner_agent_id,
             listing_title: p.title ?? null,
             source: "kiwi-catalog",
+            // 商家声明的每商品成交入口（handoff_agreement 优先用，不现编）。
+            handoff_destination_types: p.handoff_destination_types ?? null,
+            handoff_destination_ref: p.handoff_destination_ref ?? null,
           },
           "model",
           `shortlist:${p.task_id}:${p.listing_id}:${uuidv7()}`,
@@ -1471,6 +1492,31 @@ const handoffAgreement: Tool = {
  * 从任务事件流重建 agreement 快照（handoff 的 agreementReader 权威源；
  * 取最新 status_changed 事件的 payload —— negotiate 成功时落 agreed_terms）。
  */
+/** 从任务事件取商家声明的每商品成交入口（shortlistListing 写入）。 */
+function taskDeclaredHandoff(events: readonly TaskEvent[]):
+  | { type?: string; ref?: string }
+  | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event === undefined) continue;
+    if (event.type !== "candidate_shortlisted") continue;
+    const ref = event.payload.handoff_destination_ref;
+    if (typeof ref === "string" && ref.trim() !== "") {
+      const types = event.payload.handoff_destination_types;
+      return {
+        type:
+          typeof types === "string"
+            ? types
+            : Array.isArray(types) && types.length > 0
+              ? String(types[0])
+              : undefined,
+        ref: ref.trim(),
+      };
+    }
+  }
+  return undefined;
+}
+
 function agreementFromTask(events: readonly TaskEvent[]): {
   agreement_id: string;
   negotiation_id: string;
