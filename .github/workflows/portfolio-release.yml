@@ -370,6 +370,11 @@ jobs:
         with:
           node-version: "22"
 
+      # npm trusted publishing（OIDC）需要 npm >= 11.5.1；Node 22 自带 10.x，
+      # 不升级则 npm publish --provenance 无凭据可用（ENEEDAUTH）。
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@11.19.0
+
       - name: Verify downloaded release manifest before publishing
         run: |
           set -euo pipefail
