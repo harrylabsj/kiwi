@@ -86,6 +86,26 @@ npm run lint          # eslint . --max-warnings=0
   词表契约测试 `tests/kiwi-catalog-source.test.ts` 断言 schema enum ===
   DESTINATION_TYPES。
 
+## 发布（Release）——唯一合法通道
+
+- **只走 `.github/workflows/portfolio-release.yml`**（workflow_dispatch）。npm
+  `@harrylabsj/kiwi` 与 PyPI `kiwi-catalog` / `shopping-cli` 的 trusted publisher
+  均绑定该 workflow + `kiwi-release` 环境；仓库不存任何 registry token，
+  本地 publish 或其他 workflow 会被 registry 直接拒绝。**禁止**：本地
+  `npm publish` / `uv publish`、新建发布 workflow、跳号、复用版本号
+  （回滚 = 新 patch）。只 bump 版本号 ≠ 已发布。
+- **bump 清单**：`package.json` + `package-lock.json` +
+  `src/product-cli.ts` 的 `PRODUCT_VERSION`，改后 `npm run build`；
+  `npm run verify` 全绿才提交。kiwi-catalog / shopping-cli 的 bump 清单
+  见各自仓（catalog：pyproject + `__init__.py` + `db/session.py` + uv.lock）。
+- **portfolio.lock.json 重锚**：consumer 钉各自仓最新已推送 HEAD，预检
+  `node scripts/verify-portfolio-lock-candidate.mjs --lock portfolio.lock.json
+  --kiwi-catalog-dir <path> --shopping-cli-dir <path>`。
+- **步骤**：dry-run（`publish=false, ref=main`）→ 绿后正式
+  （`publish=true, ref=<40 位完整 SHA>`）→ 用户审批三个 `kiwi-release`
+  环境（版本未变的包幂等跳过，天然支持只发一个产品）→ verify-registry
+  绿 → 打 tag。
+
 ## 代码约定
 
 - ESM：所有内部 import 带 `.js` 后缀；Node >= 22。
