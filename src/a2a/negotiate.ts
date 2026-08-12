@@ -77,6 +77,17 @@ export interface NegotiateOptions {
    * 与 A2A direct interface；私网/保留网段始终拒绝。
    */
   allowLoopback?: boolean;
+  /**
+   * 出站 A2A 认证（v0.7.0 安全加固）：向商家 A2A 节点发送协商请求时附加
+   * `Authorization: Bearer <token>`。缺省读 env `KIWI_A2A_CLIENT_BEARER`——
+   * 商家侧 `KIWI_A2A_AUTH=bearer:<token>` 时必需，否则协商 401。
+   */
+  outboundAuth?: { bearer?: string };
+}
+
+/** 解析出站 bearer：显式选项优先，缺省 env `KIWI_A2A_CLIENT_BEARER`。 */
+export function resolveOutboundBearer(options: NegotiateOptions): string | undefined {
+  return options.outboundAuth?.bearer ?? process.env.KIWI_A2A_CLIENT_BEARER;
 }
 
 export interface NegotiateResult {
@@ -256,6 +267,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
   const steps: string[] = [];
   let handle: ChannelHandle | null = null;
   const negotiationId = newNegotiationId();
+  const bearer = resolveOutboundBearer(options);
 
   try {
     // 1. 发现：catalog 候选 → fresh resolve Agent Card（评审项 L4：includeBlocked
@@ -267,6 +279,8 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     const discovery = new AgentDiscovery({
       allowLoopback: options.allowLoopback === true,
       catalog: { source, includeBlocked: false },
+      // 商家要求 bearer 时，Agent Card 抓取也必须带 Authorization 头。
+      ...(bearer !== undefined ? { headers: { Authorization: `Bearer ${bearer}` } } : {}),
     });
     const resolved = await discovery.resolveViaCatalog();
     if (resolved.length === 0) {
@@ -298,7 +312,14 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     }
     // 审查 BUG-07：共享持久目录的租约——出站 send 全临界区单 owner
     const lease = new FileLeaseStore(dir);
-    const channel = new A2ADirectChannel({ url: channelCandidate.url, ledger, idempotency, now, lease });
+    const channel = new A2ADirectChannel({
+      url: channelCandidate.url,
+      ledger,
+      idempotency,
+      now,
+      lease,
+      ...(bearer !== undefined ? { auth: { bearer } } : {}),
+    });
     handle = await channel.open({
       negotiation_id: negotiationId,
       sender_identity: senderIdentity,

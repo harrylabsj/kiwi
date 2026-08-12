@@ -120,6 +120,8 @@ export interface CatalogDiscoveryDeps {
 export interface DiscoveryDeps {
   /** 拉取 card 的 fetch；缺省 globalThis.fetch。 */
   fetchImpl?: typeof fetch;
+  /** 附加请求头（出站认证：向要求 bearer 的商家 A2A 节点抓取 Agent Card）。 */
+  headers?: Record<string, string>;
   /** Kiwi 本地 A2A binding 声明（capability intersection 的 local 侧）。 */
   localInterfaces?: AgentInterface[];
   /** hosted 通道是否已配置（§33：非 direct 时的次选）。 */
@@ -313,7 +315,7 @@ export class AgentDiscovery {
         response = await fetchImpl(safeUrl.href, {
           redirect: "manual",
           signal: controller.signal,
-          headers: { accept: "application/json" },
+          headers: { accept: "application/json", ...this.deps.headers },
         });
       } catch (err) {
         throw new DiscoveryError(

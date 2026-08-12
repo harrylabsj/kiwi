@@ -73,6 +73,8 @@ export interface A2ADirectChannelOptions {
   timeoutMs?: number;
   /** 透传 A2AClient 的 SSRF 选项（测试/本机直连）。 */
   allowPrivateRanges?: boolean;
+  /** 出站认证：向远端 A2A 节点附加 Authorization: Bearer（透传 A2AClient headers）。 */
+  auth?: { bearer?: string };
   /** 全临界区 ownership 租约（审查 BUG-07）：共享持久目录时提供——并发
    *  direct send 同 key 只允许一个 owner 执行（check→HTTP→ledger→commit）。 */
   lease?: FileLeaseStore;
@@ -101,6 +103,9 @@ export class A2ADirectChannel implements CounterpartyChannel {
       allowPrivateRanges: options.allowPrivateRanges,
       skipDnsCheck: options.skipDnsCheck,
       resolveIp: options.resolveIp,
+      ...(options.auth?.bearer !== undefined
+        ? { headers: { Authorization: `Bearer ${options.auth.bearer}` } }
+        : {}),
     });
     this.ledger = options.ledger;
     this.idempotency = options.idempotency;
