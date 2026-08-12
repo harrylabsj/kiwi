@@ -41,10 +41,18 @@ import { SHOPPING_CLI_COMPAT, compatRangeText, versionInRange } from "./product-
  */
 export const DEFAULT_PROFILE_PATH = path.join(homedir(), ".kiwi", "kiwi.yaml");
 
-/** 写默认 profile（供裸 `kiwi` 读取）；目录不存在则创建（0700/0600）。 */
-export function writeDefaultProfile(yaml: string): void {
-  mkdirSync(path.dirname(DEFAULT_PROFILE_PATH), { recursive: true, mode: 0o700 });
-  writeFileSync(DEFAULT_PROFILE_PATH, yaml, { mode: 0o600 });
+/**
+ * 写默认 profile（供裸 `kiwi` 读取）；目录不存在则创建（0700/0600）。
+ *
+ * 目标路径优先级：显式 `profilePath` > 环境变量 `KIWI_DEFAULT_PROFILE` >
+ * `DEFAULT_PROFILE_PATH`。后两者供测试/受控环境隔离真实用户默认 profile——
+ * init 测试不得污染 `~/.kiwi/kiwi.yaml`（历史教训：测试跑一遍就把用户默认
+ * profile 覆盖成测试 merchant）。
+ */
+export function writeDefaultProfile(yaml: string, profilePath?: string): void {
+  const target = profilePath ?? process.env.KIWI_DEFAULT_PROFILE ?? DEFAULT_PROFILE_PATH;
+  mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  writeFileSync(target, yaml, { mode: 0o600 });
 }
 
 /** 与 package.json / USAGE 同步的产品版本。 */

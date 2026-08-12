@@ -12,7 +12,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { migrateMemorySchema } from "../src/agent/memory/schema.js";
-import { FakeCommerceConnector, fakeConnectorProduct } from "../src/agent/connector/fake-connector.js";
+import {
+  FakeCommerceConnector,
+  fakeConnectorProduct,
+} from "../src/agent/connector/fake-connector.js";
 import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
 import { buildBuyerTools, type BuyerToolDeps } from "../src/agent/buyer/buyer-tools.js";
 import {
@@ -33,7 +36,10 @@ type PendingHooks = {
 
 type CallableTool = {
   name: string;
-  execute: (id: string, params: Record<string, unknown>) => Promise<{
+  execute: (
+    id: string,
+    params: Record<string, unknown>,
+  ) => Promise<{
     content: { type: string; text?: string }[];
     details?: unknown;
   }>;
@@ -71,11 +77,13 @@ afterEach(async () => {
   capture.length = 0;
 });
 
-async function setupBuyer(options: {
-  catalog?: string;
-  mode?: "manual" | "supervised" | "autopilot";
-  autoNegotiate?: boolean;
-} = {}): Promise<BuyerHarness> {
+async function setupBuyer(
+  options: {
+    catalog?: string;
+    mode?: "manual" | "supervised" | "autopilot";
+    autoNegotiate?: boolean;
+  } = {},
+): Promise<BuyerHarness> {
   let clock = T0;
   const db = new DatabaseSync(":memory:");
   migrateMemorySchema(db);
@@ -85,14 +93,20 @@ async function setupBuyer(options: {
   ).run(PRINCIPAL, T0, T0);
   const store = new BuyerTaskStore({ db, principalId: PRINCIPAL, now: () => clock });
   const connector = new FakeCommerceConnector([fakeConnectorProduct()]);
-  const approvals = new WriteApprovalCandidateStore({ db, principalId: PRINCIPAL, now: () => clock });
+  const approvals = new WriteApprovalCandidateStore({
+    db,
+    principalId: PRINCIPAL,
+    now: () => clock,
+  });
   const mode = { value: options.mode ?? ("supervised" as const) };
   const hooks = new Map<string, PendingHooks>();
   const recordCalls: Array<Record<string, unknown>> = [];
   const deps: BuyerToolDeps = {
     store,
     connector,
-    profile: testBuyerProfile({ buyer_policy: { ...testBuyerPolicyBase(), auto_negotiate: options.autoNegotiate ?? true } }),
+    profile: testBuyerProfile({
+      buyer_policy: { ...testBuyerPolicyBase(), auto_negotiate: options.autoNegotiate ?? true },
+    }),
     approvals,
     mode: () => mode.value,
     now: () => clock,
@@ -169,7 +183,12 @@ describe("negotiate_buyer_task", () => {
     const pending = h.approvals.listPending();
     expect(pending).toHaveLength(1);
     expect(pending[0]?.tool).toBe("negotiate_buyer_task");
+    expect(pending[0]?.task_id).toBe(task_id);
     expect(pending[0]?.risk).toBe("send_negotiation_message");
+    const pendingView = await h.getTool("list_pending_approvals").execute("pending", {});
+    const pendingText = pendingView.content[0]?.type === "text" ? pendingView.content[0].text : "";
+    expect(pendingText).toContain(pending[0]?.candidate_id ?? "");
+    expect(pendingText).toContain(task_id);
     expect(h.store.taskEvents(task_id).some((e) => e.type === "approval_requested")).toBe(true);
 
     // 2. /approve → 执行：A2A 磋商 → 商家按商品库报价（sku-001 → 9900 minor）。
@@ -238,7 +257,10 @@ describe("negotiate_buyer_task", () => {
       merchant_id: "mkt_veyquo",
       owner_agent_id: "cagt_veyquo",
     });
-    h.store.updateCandidate(cand.candidate_id, { candidate_status: "shortlisted", eligibility: "eligible" });
+    h.store.updateCandidate(cand.candidate_id, {
+      candidate_status: "shortlisted",
+      eligibility: "eligible",
+    });
 
     const tool = h.getTool("negotiate_buyer_task");
     const first = await tool.execute("c1", { task_id });
@@ -253,7 +275,10 @@ describe("negotiate_buyer_task", () => {
       h.hooks.get(candidate.candidate_id) as PendingHooks,
     );
     if (outcome.kind !== "executed") throw new Error("expected an executed candidate");
-    const output = outcome.output as { ok: boolean; facts?: { sku?: string; offerPriceMinor?: number } };
+    const output = outcome.output as {
+      ok: boolean;
+      facts?: { sku?: string; offerPriceMinor?: number };
+    };
     expect(output.ok).toBe(true);
     // 协商用候选 SKU VQ-003，而不是自由文本 "iPhone 17"（否则 getProduct 抛错）。
     expect(output.facts?.sku).toBe("VQ-003");

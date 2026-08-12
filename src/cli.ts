@@ -684,17 +684,39 @@ function resolveProfilePath(file: string): string {
  * Principal Memory. 裸 `kiwi`（无 --profile）用 defaultChatProfile 直接进入
  * `kiwi>` 对话；`/profile <file>` 在对话内切换 kernel。
  */
-async function cmdChat(args: ParsedArgs): Promise<number> {
+export function resolveChatProfile(
+  explicitProfile: string | undefined,
+  requiredRole?: AgentProfile["role"],
+  defaultProfilePath: string = DEFAULT_PROFILE_PATH,
+): AgentProfile {
   // 裸 `kiwi`：优先用 `kiwi buyer/merchant init` 写下的默认 profile
   //（~/.kiwi/kiwi.yaml）；没有才回退内置 buyer 默认。
   let profile: AgentProfile;
-  if (args.profile !== undefined) {
-    profile = loadProfile(args.profile);
-  } else if (existsSync(DEFAULT_PROFILE_PATH)) {
-    profile = loadProfile(DEFAULT_PROFILE_PATH);
+  if (explicitProfile !== undefined) {
+    profile = loadProfile(explicitProfile);
+  } else if (existsSync(defaultProfilePath)) {
+    profile = loadProfile(defaultProfilePath);
   } else {
     profile = defaultChatProfile();
   }
+
+  if (requiredRole === undefined || profile.role === requiredRole) return profile;
+
+  // `kiwi buyer start` is an explicit product entry point.  A merchant
+  // default profile must not silently turn it into a merchant conversation;
+  // use the built-in buyer profile when no profile was explicitly supplied.
+  if (explicitProfile === undefined && requiredRole === "buyer") {
+    return defaultChatProfile();
+  }
+
+  throw new ProfileError(
+    `kiwi ${requiredRole} start 需要 ${requiredRole} profile；当前 profile 的 role 是 ${profile.role}。` +
+      ` 请使用 --profile 指向 ${requiredRole} profile。`,
+  );
+}
+
+async function cmdChat(args: ParsedArgs, requiredRole?: AgentProfile["role"]): Promise<number> {
+  const profile = resolveChatProfile(args.profile, requiredRole);
   // A2A 节点 + buyer 磋商工具共用一个 catalog：kernel 构建前先解析。
   const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
   const merchantToken = process.env.KIWI_MERCHANT_TOKEN || "";
@@ -782,7 +804,7 @@ async function routeBuyer(sub: string | undefined, args: ParsedArgs): Promise<nu
     process.stdout.write(productHelp("buyer"));
     return EXIT.OK;
   }
-  if (sub === "start") return await cmdChat(args);
+  if (sub === "start") return await cmdChat(args, "buyer");
   if (sub === "init") return await cmdBuyerInit(args);
   if (sub === "search") return await cmdBuyerSearch(args);
   if (sub === "tasks") return await cmdBuyerTasks(args);

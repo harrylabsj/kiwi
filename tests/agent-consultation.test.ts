@@ -41,7 +41,10 @@ type PendingHooks = {
 /** Direct-call view of a tool: the harness passes 5 args, tests pass 2. */
 type CallableTool = {
   name: string;
-  execute: (id: string, params: Record<string, unknown>) => Promise<{ content: { type: string; text?: string }[] }>;
+  execute: (
+    id: string,
+    params: Record<string, unknown>,
+  ) => Promise<{ content: { type: string; text?: string }[] }>;
 };
 
 function setupBuyer() {
@@ -54,7 +57,11 @@ function setupBuyer() {
   ).run(PRINCIPAL, T0, T0);
   const store = new BuyerTaskStore({ db, principalId: PRINCIPAL, now: () => clock });
   const connector = new FakeCommerceConnector([fakeConnectorProduct()]);
-  const approvals = new WriteApprovalCandidateStore({ db, principalId: PRINCIPAL, now: () => clock });
+  const approvals = new WriteApprovalCandidateStore({
+    db,
+    principalId: PRINCIPAL,
+    now: () => clock,
+  });
   const marketplace = testMarketplace();
   const profile = testBuyerProfile();
   const mode = { value: "supervised" as "manual" | "supervised" | "autopilot" };
@@ -85,15 +92,17 @@ function setupBuyer() {
   };
 }
 
-async function shortlistOne(store: BuyerTaskStore, connector: FakeCommerceConnector, taskId: string) {
-  await runSearchCycle(
-    { store, connector, now: () => T0 },
-    taskId,
-    `run:${uuidv7()}`,
-  );
+async function shortlistOne(
+  store: BuyerTaskStore,
+  connector: FakeCommerceConnector,
+  taskId: string,
+) {
+  await runSearchCycle({ store, connector, now: () => T0 }, taskId, `run:${uuidv7()}`);
   const task = store.getTask(taskId) as NonNullable<ReturnType<BuyerTaskStore["getTask"]>>;
   expect(task.status).toBe("awaiting_user");
-  const candidate = store.listCandidates(taskId)[0] as NonNullable<ReturnType<BuyerTaskStore["listCandidates"]>[number]>;
+  const candidate = store.listCandidates(taskId)[0] as NonNullable<
+    ReturnType<BuyerTaskStore["listCandidates"]>[number]
+  >;
   return { task, candidate };
 }
 
@@ -123,7 +132,9 @@ describe("schema v3 migration (§11.8, §16)", () => {
       .map((r) => (r as { name: string }).name);
     expect(tables).toContain("consultation_links");
     expect(tables).toContain("action_candidates");
-    const version = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as { v: number };
+    const version = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as {
+      v: number;
+    };
     expect(version.v).toBe(5);
     expect(MEMORY_SCHEMA_VERSION).toBe(5);
     db.close();
@@ -142,13 +153,14 @@ describe("schema v3 migration (§11.8, §16)", () => {
     }).toThrow();
     // Now bring it forward to v3.
     migrateMemorySchema(db, undefined, 3);
-    const cols = db.prepare("SELECT name FROM pragma_table_info('consultation_links')").all().map(
-      (r) => (r as { name: string }).name,
-    );
+    const cols = db
+      .prepare("SELECT name FROM pragma_table_info('consultation_links')")
+      .all()
+      .map((r) => (r as { name: string }).name);
     expect(cols).toContain("conversation_id");
-    expect(
-      db.prepare("SELECT COUNT(*) AS c FROM principals").get() as { c: number },
-    ).toMatchObject({ c: 1 });
+    expect(db.prepare("SELECT COUNT(*) AS c FROM principals").get() as { c: number }).toMatchObject(
+      { c: 1 },
+    );
     db.close();
   });
 
@@ -160,7 +172,9 @@ describe("schema v3 migration (§11.8, §16)", () => {
     };
     expect(() => migrateMemorySchema(db, broken, 3)).toThrow(MigrationError);
     // The v3 row was rolled back.
-    const version = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as { v: number };
+    const version = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as {
+      v: number;
+    };
     expect(version.v).toBe(2);
     db.close();
   });
@@ -245,8 +259,11 @@ describe("start_consultation tool (§15.2, §20-C)", () => {
 
     const pending = h.approvals.listPending();
     expect(pending).toHaveLength(1);
-    const cand = pending[0] as NonNullable<ReturnType<WriteApprovalCandidateStore["listPending"]>[number]>;
+    const cand = pending[0] as NonNullable<
+      ReturnType<WriteApprovalCandidateStore["listPending"]>[number]
+    >;
     expect(cand.tool).toBe("start_consultation");
+    expect(cand.task_id).toBe(task.task_id);
     expect(cand.arguments).toMatchObject({ task_id: task.task_id, message: "请问 2 件有优惠吗？" });
 
     h.approvals.markApproved(cand.candidate_id);
@@ -309,7 +326,9 @@ describe("start_consultation tool (§15.2, §20-C)", () => {
       candidate_id: candidate.candidate_id,
       message: "hi",
     });
-    expect(badCandidate.content[0]?.type === "text" ? badCandidate.content[0].text : "").toContain("not shortlisted");
+    expect(badCandidate.content[0]?.type === "text" ? badCandidate.content[0].text : "").toContain(
+      "not shortlisted",
+    );
 
     // Task in `ready` cannot consult either.
     const fresh = await createAwaitingTask(h.store);
@@ -327,7 +346,9 @@ describe("start_consultation tool (§15.2, §20-C)", () => {
       candidate_id: candidate.candidate_id,
       message: "hi",
     });
-    expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("awaiting_user");
+    expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain(
+      "awaiting_user",
+    );
   });
 
   it("a stale approval is invalidated when the task moves before approve", async () => {
@@ -340,10 +361,14 @@ describe("start_consultation tool (§15.2, §20-C)", () => {
       candidate_id: candidate.candidate_id,
       message: "请问？",
     });
-    const cand = h.approvals.listPending()[0] as NonNullable<ReturnType<WriteApprovalCandidateStore["listPending"]>[number]>;
+    const cand = h.approvals.listPending()[0] as NonNullable<
+      ReturnType<WriteApprovalCandidateStore["listPending"]>[number]
+    >;
 
     // The user moves the task before the operator approves.
-    const current = h.store.getTask(task.task_id) as NonNullable<ReturnType<BuyerTaskStore["getTask"]>>;
+    const current = h.store.getTask(task.task_id) as NonNullable<
+      ReturnType<BuyerTaskStore["getTask"]>
+    >;
     h.store.transitionTask({
       task_id: task.task_id,
       to: "cancelled",

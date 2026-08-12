@@ -84,7 +84,11 @@ function parseIntent(value: unknown): TaskIntent {
   if (typeof v.quantity === "number" && Number.isInteger(v.quantity) && v.quantity > 0) {
     out.quantity = v.quantity;
   }
-  if (typeof v.target_unit_price === "number" && Number.isFinite(v.target_unit_price) && v.target_unit_price >= 0) {
+  if (
+    typeof v.target_unit_price === "number" &&
+    Number.isFinite(v.target_unit_price) &&
+    v.target_unit_price >= 0
+  ) {
     out.target_unit_price = v.target_unit_price;
   }
   if (Array.isArray(v.preferences)) out.preferences = v.preferences.map(String);
@@ -103,7 +107,11 @@ function parseConstraints(value: unknown): TaskConstraints {
   }
   const v = value as Record<string, unknown>;
   const out: TaskConstraints = {};
-  if (typeof v.max_unit_price === "number" && Number.isFinite(v.max_unit_price) && v.max_unit_price >= 0) {
+  if (
+    typeof v.max_unit_price === "number" &&
+    Number.isFinite(v.max_unit_price) &&
+    v.max_unit_price >= 0
+  ) {
     out.max_unit_price = v.max_unit_price;
   }
   if (typeof v.max_total_price === "number" && Number.isFinite(v.max_total_price)) {
@@ -114,7 +122,8 @@ function parseConstraints(value: unknown): TaskConstraints {
   }
   if (typeof v.latest_eta === "string") out.latest_eta = v.latest_eta;
   if (Array.isArray(v.required_terms)) out.required_terms = v.required_terms.map(String);
-  if (typeof v.exclude_out_of_stock === "boolean") out.exclude_out_of_stock = v.exclude_out_of_stock;
+  if (typeof v.exclude_out_of_stock === "boolean")
+    out.exclude_out_of_stock = v.exclude_out_of_stock;
   return out;
 }
 
@@ -132,7 +141,9 @@ function redactConstraints(constraints: TaskConstraints): Record<string, unknown
  * execute. supervised/autopilot execute as today. Blocks the low-risk local
  * task/rule writes from silently running under manual.
  */
-function manualAdvice(mode: (() => AgentMode) | undefined): { ok: true } | { ok: false; reason: string } {
+function manualAdvice(
+  mode: (() => AgentMode) | undefined,
+): { ok: true } | { ok: false; reason: string } {
   if (mode?.() === "manual") {
     return {
       ok: false,
@@ -350,7 +361,12 @@ async function executeNegotiateBuyerTask(
       "model",
       eventKey,
     );
-    return { ok: false, task_id: a.task_id, negotiation_id: result.negotiationId, error: result.error };
+    return {
+      ok: false,
+      task_id: a.task_id,
+      negotiation_id: result.negotiationId,
+      error: result.error,
+    };
   }
   const facts = result.facts;
   try {
@@ -418,18 +434,20 @@ async function executeNegotiateBuyerTask(
       "model",
       eventKey,
     );
-    await deps.recordNegotiation?.({
-      negotiationId: result.negotiationId,
-      catalogAgentId: result.catalogAgentId,
-      sku: facts?.sku ?? sku,
-      quantity: facts?.quantity ?? intent.quantity ?? 1,
-      offerPriceMinor: facts?.offerPriceMinor,
-      dealPriceMinor: facts?.dealPriceMinor,
-      agreementId:
-        typeof result.agreement?.agreement_id === "string"
-          ? result.agreement.agreement_id
-          : undefined,
-    }).catch(() => undefined); // 记忆尽力而为，失败不阻塞任务推进
+    await deps
+      .recordNegotiation?.({
+        negotiationId: result.negotiationId,
+        catalogAgentId: result.catalogAgentId,
+        sku: facts?.sku ?? sku,
+        quantity: facts?.quantity ?? intent.quantity ?? 1,
+        offerPriceMinor: facts?.offerPriceMinor,
+        dealPriceMinor: facts?.dealPriceMinor,
+        agreementId:
+          typeof result.agreement?.agreement_id === "string"
+            ? result.agreement.agreement_id
+            : undefined,
+      })
+      .catch(() => undefined); // 记忆尽力而为，失败不阻塞任务推进
     return {
       ok: true,
       task_id: a.task_id,
@@ -638,6 +656,32 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
     },
   };
 
+  const listPendingApprovals: Tool = {
+    name: "list_pending_approvals",
+    label: "列出待审批候选",
+    description:
+      "读取当前仍可执行的写操作审批候选。涉及 /approve 时必须先调用本工具；只允许使用本次返回的 candidate_id，" +
+      "不能从历史对话、任务事件或记忆中复制旧 ID。",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    execute: async () => {
+      const pending = deps.approvals?.listPending() ?? [];
+      if (pending.length === 0) {
+        return textResult(
+          "当前没有等待批准且仍可执行的写操作候选。候选在重启后会自动失效；如需继续，请重新生成候选。",
+        );
+      }
+      return textResult(
+        pending
+          .map(
+            (candidate, index) =>
+              `${index + 1}. ${candidate.candidate_id} [${candidate.risk}] ${candidate.tool}` +
+              `${candidate.task_id === undefined ? "" : ` task=${candidate.task_id}`}（截止 ${candidate.expires_at}）`,
+          )
+          .join("\n"),
+      );
+    },
+  };
+
   const getTask: Tool = {
     name: "get_buyer_task",
     label: "任务详情",
@@ -661,8 +705,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         // 重试等待误报为"网络错误已经过去"。
         const retries = store.taskEvents(taskId).filter((e) => e.type === "connector_retry");
         const lastRetry = retries.at(-1);
-        const nextWake =
-          task.next_run_at !== undefined ? `；下次唤醒 ${task.next_run_at}` : "";
+        const nextWake = task.next_run_at !== undefined ? `；下次唤醒 ${task.next_run_at}` : "";
         const lastError =
           lastRetry !== undefined && typeof lastRetry.payload.error === "string"
             ? `；上次搜索失败：${String(lastRetry.payload.error)}`
@@ -694,9 +737,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         if (negotiated !== undefined) {
           const p = negotiated.payload as Record<string, unknown>;
           const fmt = (minor: unknown): string =>
-            typeof minor === "number" && Number.isFinite(minor)
-              ? (minor / 100).toFixed(2)
-              : "?";
+            typeof minor === "number" && Number.isFinite(minor) ? (minor / 100).toFixed(2) : "?";
           const sku = typeof p.sku === "string" ? p.sku : "?";
           const qty = typeof p.quantity === "number" ? String(p.quantity) : "?";
           const agreement = typeof p.agreement_id === "string" ? p.agreement_id : "?";
@@ -724,10 +765,15 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       type: "object",
       properties: {
         goal_text: { type: "string", description: "用户原始目标的简洁表达" },
-        intent: { type: "object", description: "结构化意图（category/query_text/city/needed_by/quantity/target_unit_price 等；target_unit_price = 砍价目标单价）" },
+        intent: {
+          type: "object",
+          description:
+            "结构化意图（category/query_text/city/needed_by/quantity/target_unit_price 等；target_unit_price = 砍价目标单价）",
+        },
         constraints: {
           type: "object",
-          description: "硬约束（max_total_price 私有预算/latest_eta/required_terms/exclude_out_of_stock）",
+          description:
+            "硬约束（max_total_price 私有预算/latest_eta/required_terms/exclude_out_of_stock）",
         },
         run_search: { type: "boolean", description: "意图足够时是否立即搜索（默认 true）" },
         expires_at: { type: "string", description: "RFC3339；任务到期自动失效（可选）" },
@@ -753,7 +799,12 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           // existing task instead of creating a duplicate.
           idempotency_key: `create:${createHash("sha256")
             .update(
-              JSON.stringify({ goal_text: goalText, intent, constraints, expires_at: expiresAt ?? null }),
+              JSON.stringify({
+                goal_text: goalText,
+                intent,
+                constraints,
+                expires_at: expiresAt ?? null,
+              }),
             )
             .digest("hex")
             .slice(0, 16)}`,
@@ -893,7 +944,9 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           );
           return textResult(`约束已更新并重新搜索（结果：${cycle.outcome}）。`);
         }
-        return textResult(`约束已更新（任务 ${updated.task_id}，当前 ${updated.status}），下次搜索生效。`);
+        return textResult(
+          `约束已更新（任务 ${updated.task_id}，当前 ${updated.status}），下次搜索生效。`,
+        );
       } catch (err) {
         return textResult(errorText(err));
       }
@@ -911,7 +964,13 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         candidate_id: { type: "string" },
         rule_type: {
           type: "string",
-          enum: ["price_below", "stock_available", "delivery_before", "new_candidate", "periodic_review"],
+          enum: [
+            "price_below",
+            "stock_available",
+            "delivery_before",
+            "new_candidate",
+            "periodic_review",
+          ],
         },
         condition: { type: "object", description: "如 {threshold: 90} 或 {eta_before: RFC3339}" },
         interval_seconds: { type: "integer" },
@@ -1097,12 +1156,12 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           },
           {
             tool: "start_consultation",
+            task_id: p.task_id,
             arguments: args,
             preconditions: consultationPreconditions(store, p.task_id, p.candidate_id),
             risk: "send_consultation",
             execute: (approvedArgs) => executeStartConsultation(deps, approvedArgs),
-            readPreconditions: () =>
-              consultationPreconditions(store, p.task_id, p.candidate_id),
+            readPreconditions: () => consultationPreconditions(store, p.task_id, p.candidate_id),
             autopilotEscalation: () => {
               if (profile.buyer_policy?.auto_negotiate === false) {
                 return "buyer 未授权自动咨询（auto_negotiate=false），需要人工确认。";
@@ -1165,7 +1224,9 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           );
         }
         if (deps.catalog === undefined) {
-          return textResult("未配置 agent catalog（KIWI_CATALOG_URL 或 --catalog），无法发现商家。");
+          return textResult(
+            "未配置 agent catalog（KIWI_CATALOG_URL 或 --catalog），无法发现商家。",
+          );
         }
         const args = {
           task_id: p.task_id,
@@ -1174,14 +1235,22 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             : {}),
         };
         const outcome = await routeWriteCandidate(
-          { mode: deps.mode, approvals: deps.approvals, profile, now, registerPending: deps.registerPending },
+          {
+            mode: deps.mode,
+            approvals: deps.approvals,
+            profile,
+            now,
+            registerPending: deps.registerPending,
+          },
           {
             tool: "negotiate_buyer_task",
+            task_id: p.task_id,
             arguments: args,
             preconditions: negotiationPreconditions(store, true, p.task_id),
             risk: "send_negotiation_message",
             execute: (approvedArgs) => executeNegotiateBuyerTask(deps, approvedArgs),
-            readPreconditions: () => negotiationPreconditions(store, deps.catalog !== undefined, p.task_id),
+            readPreconditions: () =>
+              negotiationPreconditions(store, deps.catalog !== undefined, p.task_id),
             autopilotEscalation: () =>
               profile.buyer_policy?.auto_negotiate === false
                 ? "buyer 未授权自动磋商（auto_negotiate=false），需要人工确认。"
@@ -1221,140 +1290,155 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         })
       : [];
 
-const handoffAgreement: Tool = {
-  name: "handoff_agreement",
-  label: "非绑定协议交接",
-  description:
-    "把已谈妥的非绑定协议（selected_nonbinding 任务）交接给真实成交入口（KTH/0.1）。" +
-    "目的地**只取商家在协议里直传的成交入口**（merchant 从 shopping-cli 读的 handoff_destination），" +
-    "不允许 LLM 自编、也不读 catalog 投影——协议未带成交入口则拒绝交接。" +
-    "经审批门（supervised 需 /approve）后执行：重验 agreement/terms/destination/expiry，" +
-    "安全交付到 external checkout URL。不创建订单、不授权支付、不预留库存。",
-  parameters: {
-    type: "object",
-    properties: {
-      task_id: { type: "string", description: "已达成非绑定协议（selected_nonbinding）的 buyer 任务" },
-      display_summary_merchant: { type: "string", description: "展示用商家名（缺省取协议商家）" },
-      display_summary_text: { type: "string", description: "展示用摘要（如“200 units, CNY 8999.00/unit”）" },
-      expires_in_hours: { type: "number", description: "候选有效期（小时，缺省 24）" },
+  const handoffAgreement: Tool = {
+    name: "handoff_agreement",
+    label: "非绑定协议交接",
+    description:
+      "把已谈妥的非绑定协议（selected_nonbinding 任务）交接给真实成交入口（KTH/0.1）。" +
+      "目的地**只取商家在协议里直传的成交入口**（merchant 从 shopping-cli 读的 handoff_destination），" +
+      "不允许 LLM 自编、也不读 catalog 投影——协议未带成交入口则拒绝交接。" +
+      "经审批门（supervised 需 /approve）后执行：重验 agreement/terms/destination/expiry，" +
+      "安全交付到 external checkout URL。不创建订单、不授权支付、不预留库存。",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: {
+          type: "string",
+          description: "已达成非绑定协议（selected_nonbinding）的 buyer 任务",
+        },
+        display_summary_merchant: { type: "string", description: "展示用商家名（缺省取协议商家）" },
+        display_summary_text: {
+          type: "string",
+          description: "展示用摘要（如“200 units, CNY 8999.00/unit”）",
+        },
+        expires_in_hours: { type: "number", description: "候选有效期（小时，缺省 24）" },
+      },
+      required: ["task_id"],
+      additionalProperties: false,
     },
-    required: ["task_id"],
-    additionalProperties: false,
-  },
-  execute: async (_id, params) => {
-    const handoff = deps.handoff;
-    if (handoff === undefined) {
-      return textResult("未配置 Handoff 能力（kernel 未注入 handoff 存储）。");
-    }
-    if (deps.approvals === undefined || deps.mode === undefined) {
-      return textResult("当前环境未配置审批存储，无法发起 Handoff 交接。");
-    }
-    try {
-      const p = params as {
-        task_id: string;
-        display_summary_merchant?: string;
-        display_summary_text?: string;
-        expires_in_hours?: number;
-      };
-      const task = deps.store.getTask(p.task_id);
-      if (task === undefined) throw new BuyerTaskError("not_found", `no task ${p.task_id}`);
-      if (task.status !== "selected_nonbinding") {
-        return textResult(
-          `任务 ${p.task_id} 当前状态 ${task.status}；handoff 需要先达成非绑定协议（selected_nonbinding）。`,
-        );
+    execute: async (_id, params) => {
+      const handoff = deps.handoff;
+      if (handoff === undefined) {
+        return textResult("未配置 Handoff 能力（kernel 未注入 handoff 存储）。");
       }
-      const agreement = agreementFromTask(deps.store.taskEvents(p.task_id));
-      if (agreement === undefined) {
-        return textResult("任务记录缺少 agreement 快照（磋商未完成或 terms 未持久化）。");
+      if (deps.approvals === undefined || deps.mode === undefined) {
+        return textResult("当前环境未配置审批存储，无法发起 Handoff 交接。");
       }
-      // 成交入口**只取商家在协议里直传的** handoff_destination——不经 catalog、
-      // 不允许 LLM 现编。协议未携带则拒绝交接（fail-closed）。
-      const agreementDestination = agreementDestinationFromTerms(agreement.agreed_terms);
-      if (agreementDestination === undefined) {
-        return textResult("商家未在协议中声明成交入口（handoff_destination），无法交接。");
-      }
-      const destination = validateDestination(agreementDestination);
-      // 协议级去重：同一磋商、同一目的地已交付过 → 拒绝（LLM 重试会生成
-      // 新候选 → 新 digest，绕过 (candidate_id, digest) 幂等键，导致同协议
-      // 二次交付/二次 URL 探测、negotiation_to_handoff_rate 虚高）。
-      const priorDelivery = handoff.ledger.events(agreement.negotiation_id).find(
-        (e) =>
-          e.event_kind === "handoff_delivered" &&
-          (e.destination as { ref?: unknown } | undefined)?.ref === destination.ref &&
-          (e.destination as { type?: unknown } | undefined)?.type === destination.type,
-      );
-      if (priorDelivery !== undefined) {
-        return textResult(
-          `该协议已交付过（handoff ${priorDelivery.handoff_id ?? "unknown"}，` +
-            `目的地 ${destination.type} ${destination.ref}），同一目的地不重复交接。`,
-        );
-      }
-      // NaN 防护：非数字 expires_in_hours → Date.now()+NaN 抛 RangeError。
-      const expiresInHours = Number(p.expires_in_hours ?? 24);
-      if (!Number.isFinite(expiresInHours) || expiresInHours <= 0) {
-        return textResult("expires_in_hours 必须是正数（小时）。");
-      }
-      // 审计链：stale 候选之后的新候选链接到被它取代的候选
-      //（supersedes_candidate_id；此前从不写入，stale 后的新候选是审计孤儿）。
-      const lastStale = [...handoff.ledger.events(agreement.negotiation_id)]
-        .reverse()
-        .find((e) => e.event_kind === "handoff_candidate_stale");
-      const candidate = createHandoffCandidate({
-        agreement_id: agreement.agreement_id,
-        negotiation_id: agreement.negotiation_id,
-        agreed_terms: agreement.agreed_terms,
-        buyer_identity_ref: `principal:${profile.agent_id}`,
-        merchant_identity_ref: agreement.merchant_identity_ref,
-        destination: { type: destination.type, ref: destination.ref },
-        display_summary: {
-          merchant: p.display_summary_merchant ?? agreement.merchant_identity_ref,
-          summary: p.display_summary_text ?? `negotiation ${agreement.negotiation_id}`,
-        },
-        policy_version: "handoff-policy/1",
-        // 时钟统一用注入的 deps.now()（此前 created_at 走墙钟、事件走注入时钟，
-        // time_to_handoff 指标掺入偏差）。
-        created_at: deps.now(),
-        expires_at: new Date(Date.parse(deps.now()) + expiresInHours * 3_600_000).toISOString(),
-        ...(lastStale?.handoff_candidate_id !== undefined
-          ? { supersedes_candidate_id: lastStale.handoff_candidate_id }
-          : {}),
-        requires_user_action: true,
-      });
-      const outcome = await routeWriteCandidate(
-        { mode: deps.mode, approvals: deps.approvals, profile, now: deps.now, registerPending: deps.registerPending },
-        {
-          tool: "handoff_agreement",
-          arguments: { task_id: p.task_id, candidate },
-          preconditions: { agreement_bound: true },
-          risk: "handoff_delivery",
-          execute: (approvedArgs) => executeHandoffForCandidate(deps, approvedArgs),
-          // §16 stale 检测的真实重读：approval 与执行之间协议被重磋商改写
-          //（agreement 消失 / 身份变化 / terms_digest 不匹配）→ 候选 supersede。
-          // 此前恒返回 {agreement_bound: true}，write-gate 的 stale 检测对
-          // handoff 结构性失效（防护只剩 executeHandoff 执行期重验）。
-          readPreconditions: () => {
-            const current = agreementFromTask(deps.store.taskEvents(p.task_id));
-            const stillBound =
-              current !== undefined &&
-              current.agreement_id === agreement.agreement_id &&
-              current.negotiation_id === agreement.negotiation_id &&
-              contentDigest(current.agreed_terms) === candidate.terms_digest;
-            return { agreement_bound: stillBound };
+      try {
+        const p = params as {
+          task_id: string;
+          display_summary_merchant?: string;
+          display_summary_text?: string;
+          expires_in_hours?: number;
+        };
+        const task = deps.store.getTask(p.task_id);
+        if (task === undefined) throw new BuyerTaskError("not_found", `no task ${p.task_id}`);
+        if (task.status !== "selected_nonbinding") {
+          return textResult(
+            `任务 ${p.task_id} 当前状态 ${task.status}；handoff 需要先达成非绑定协议（selected_nonbinding）。`,
+          );
+        }
+        const agreement = agreementFromTask(deps.store.taskEvents(p.task_id));
+        if (agreement === undefined) {
+          return textResult("任务记录缺少 agreement 快照（磋商未完成或 terms 未持久化）。");
+        }
+        // 成交入口**只取商家在协议里直传的** handoff_destination——不经 catalog、
+        // 不允许 LLM 现编。协议未携带则拒绝交接（fail-closed）。
+        const agreementDestination = agreementDestinationFromTerms(agreement.agreed_terms);
+        if (agreementDestination === undefined) {
+          return textResult("商家未在协议中声明成交入口（handoff_destination），无法交接。");
+        }
+        const destination = validateDestination(agreementDestination);
+        // 协议级去重：同一磋商、同一目的地已交付过 → 拒绝（LLM 重试会生成
+        // 新候选 → 新 digest，绕过 (candidate_id, digest) 幂等键，导致同协议
+        // 二次交付/二次 URL 探测、negotiation_to_handoff_rate 虚高）。
+        const priorDelivery = handoff.ledger
+          .events(agreement.negotiation_id)
+          .find(
+            (e) =>
+              e.event_kind === "handoff_delivered" &&
+              (e.destination as { ref?: unknown } | undefined)?.ref === destination.ref &&
+              (e.destination as { type?: unknown } | undefined)?.type === destination.type,
+          );
+        if (priorDelivery !== undefined) {
+          return textResult(
+            `该协议已交付过（handoff ${priorDelivery.handoff_id ?? "unknown"}，` +
+              `目的地 ${destination.type} ${destination.ref}），同一目的地不重复交接。`,
+          );
+        }
+        // NaN 防护：非数字 expires_in_hours → Date.now()+NaN 抛 RangeError。
+        const expiresInHours = Number(p.expires_in_hours ?? 24);
+        if (!Number.isFinite(expiresInHours) || expiresInHours <= 0) {
+          return textResult("expires_in_hours 必须是正数（小时）。");
+        }
+        // 审计链：stale 候选之后的新候选链接到被它取代的候选
+        //（supersedes_candidate_id；此前从不写入，stale 后的新候选是审计孤儿）。
+        const lastStale = [...handoff.ledger.events(agreement.negotiation_id)]
+          .reverse()
+          .find((e) => e.event_kind === "handoff_candidate_stale");
+        const candidate = createHandoffCandidate({
+          agreement_id: agreement.agreement_id,
+          negotiation_id: agreement.negotiation_id,
+          agreed_terms: agreement.agreed_terms,
+          buyer_identity_ref: `principal:${profile.agent_id}`,
+          merchant_identity_ref: agreement.merchant_identity_ref,
+          destination: { type: destination.type, ref: destination.ref },
+          display_summary: {
+            merchant: p.display_summary_merchant ?? agreement.merchant_identity_ref,
+            summary: p.display_summary_text ?? `negotiation ${agreement.negotiation_id}`,
           },
-          // autopilot 政策闸：handoff 把买家送向真实成交入口（外部结账/PO/联系
-          // 商家），是系统里最接近交易的写动作——未授权自动磋商时绝不自动执行。
-          autopilotEscalation: () =>
-            profile.buyer_policy?.auto_negotiate === false
-              ? "buyer 未授权自动交接（auto_negotiate=false），需要人工确认。"
-              : undefined,
-        },
-      );
-      return writeGateText(outcome);
-    } catch (err) {
-      return textResult(errorText(err));
-    }
-  },
-};
+          policy_version: "handoff-policy/1",
+          // 时钟统一用注入的 deps.now()（此前 created_at 走墙钟、事件走注入时钟，
+          // time_to_handoff 指标掺入偏差）。
+          created_at: deps.now(),
+          expires_at: new Date(Date.parse(deps.now()) + expiresInHours * 3_600_000).toISOString(),
+          ...(lastStale?.handoff_candidate_id !== undefined
+            ? { supersedes_candidate_id: lastStale.handoff_candidate_id }
+            : {}),
+          requires_user_action: true,
+        });
+        const outcome = await routeWriteCandidate(
+          {
+            mode: deps.mode,
+            approvals: deps.approvals,
+            profile,
+            now: deps.now,
+            registerPending: deps.registerPending,
+          },
+          {
+            tool: "handoff_agreement",
+            task_id: p.task_id,
+            arguments: { task_id: p.task_id, candidate },
+            preconditions: { agreement_bound: true },
+            risk: "handoff_delivery",
+            execute: (approvedArgs) => executeHandoffForCandidate(deps, approvedArgs),
+            // §16 stale 检测的真实重读：approval 与执行之间协议被重磋商改写
+            //（agreement 消失 / 身份变化 / terms_digest 不匹配）→ 候选 supersede。
+            // 此前恒返回 {agreement_bound: true}，write-gate 的 stale 检测对
+            // handoff 结构性失效（防护只剩 executeHandoff 执行期重验）。
+            readPreconditions: () => {
+              const current = agreementFromTask(deps.store.taskEvents(p.task_id));
+              const stillBound =
+                current !== undefined &&
+                current.agreement_id === agreement.agreement_id &&
+                current.negotiation_id === agreement.negotiation_id &&
+                contentDigest(current.agreed_terms) === candidate.terms_digest;
+              return { agreement_bound: stillBound };
+            },
+            // autopilot 政策闸：handoff 把买家送向真实成交入口（外部结账/PO/联系
+            // 商家），是系统里最接近交易的写动作——未授权自动磋商时绝不自动执行。
+            autopilotEscalation: () =>
+              profile.buyer_policy?.auto_negotiate === false
+                ? "buyer 未授权自动交接（auto_negotiate=false），需要人工确认。"
+                : undefined,
+          },
+        );
+        return writeGateText(outcome);
+      } catch (err) {
+        return textResult(errorText(err));
+      }
+    },
+  };
 
   const searchListings: Tool = {
     name: "search_listings",
@@ -1443,11 +1527,13 @@ const handoffAgreement: Tool = {
         },
         handoff_destination_ref: {
           type: "string",
-          description: "商家声明的每商品成交入口（listing handoff_destination_ref；URL 类为 https URL，联系/会话类为 opaque ref）",
+          description:
+            "商家声明的每商品成交入口（listing handoff_destination_ref；URL 类为 https URL，联系/会话类为 opaque ref）",
         },
         merchant_name: {
           type: "string",
-          description: "商家显示名（listing.merchant.display_name）——沟通用名字而非 catalog_agent_id",
+          description:
+            "商家显示名（listing.merchant.display_name）——沟通用名字而非 catalog_agent_id",
         },
       },
       required: ["task_id", "listing_id", "owner_agent_id"],
@@ -1518,6 +1604,7 @@ const handoffAgreement: Tool = {
   return [
     ...(catalogFirst ? [] : [searchProducts, getProduct]),
     listTasks,
+    listPendingApprovals,
     getTask,
     createTask,
     updateConstraints,
@@ -1545,9 +1632,9 @@ const handoffAgreement: Tool = {
  * `handoff_destination`，merchant 从 shopping-cli 商品读）。https URL →
  * external_checkout_url 类型。商家直传优先于 catalog listing 声明。
  */
-function agreementDestinationFromTerms(agreed_terms: unknown):
-  | { type: string; ref: string }
-  | undefined {
+function agreementDestinationFromTerms(
+  agreed_terms: unknown,
+): { type: string; ref: string } | undefined {
   const terms = agreed_terms as { handoff_destination?: unknown } | null | undefined;
   const ref = terms?.handoff_destination;
   if (typeof ref !== "string" || ref.trim() === "") return undefined;
@@ -1572,14 +1659,16 @@ function declaredHandoffHost(
   }
 }
 
-function agreementFromTask(events: readonly TaskEvent[]): {
-  agreement_id: string;
-  negotiation_id: string;
-  agreed_terms: unknown;
-  merchant_identity_ref: string;
-  /** merchant 声明域（从 a2a_negotiated 的 agent_card_url 派生；URL 安全用）。 */
-  merchant_domain?: string;
-} | undefined {
+function agreementFromTask(events: readonly TaskEvent[]):
+  | {
+      agreement_id: string;
+      negotiation_id: string;
+      agreed_terms: unknown;
+      merchant_identity_ref: string;
+      /** merchant 声明域（从 a2a_negotiated 的 agent_card_url 派生；URL 安全用）。 */
+      merchant_domain?: string;
+    }
+  | undefined {
   let merchantDomain: string | undefined;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i];
@@ -1640,11 +1729,16 @@ function handoffResultText(result: ExecuteHandoffResult): AgentToolResult<unknow
         status: "already_delivered",
       });
     case "stale":
-      return textResult(`交接未执行：候选已失效（${result.reason}）。需重新生成候选。`, { status: "stale" });
-    case "probe_failed":
-      return textResult(`交接未执行：目的地探测瞬时失败（${result.reason}）。候选保持可用，可重试。`, {
-        status: "probe_failed",
+      return textResult(`交接未执行：候选已失效（${result.reason}）。需重新生成候选。`, {
+        status: "stale",
       });
+    case "probe_failed":
+      return textResult(
+        `交接未执行：目的地探测瞬时失败（${result.reason}）。候选保持可用，可重试。`,
+        {
+          status: "probe_failed",
+        },
+      );
     case "rejected":
       return textResult(`交接未执行：${result.reason}。`, { status: "rejected" });
     case "expired":
@@ -1664,7 +1758,11 @@ async function executeHandoffForCandidate(
   }
   const agreement = agreementFromTask(deps.store.taskEvents(a.task_id));
   if (agreement === undefined) {
-    return { ok: false, status: "stale", error: "任务记录缺少 agreement 快照，交接中止（fail-closed）" };
+    return {
+      ok: false,
+      status: "stale",
+      error: "任务记录缺少 agreement 快照，交接中止（fail-closed）",
+    };
   }
   // created 事件在审批通过后才落链：被 /reject 的候选不在 Ledger 留下悬空的
   // PROPOSED（此前先落链，/reject 后 /handoff 永远显示"从未获批"的候选，

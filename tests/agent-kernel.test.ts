@@ -142,7 +142,9 @@ describe("main conversation and session persistence", () => {
     expect(firstLog).toContain("「你好，介绍你自己」"); // 旧模型回复已持久化
 
     // 不同 model（同 provider 不同 modelId）→ 打开即重置（旧消息不进入新会话）。
-    const otherHandle = fauxProvider({ models: [{ id: "other-chat-model", name: "other-chat-model" }] });
+    const otherHandle = fauxProvider({
+      models: [{ id: "other-chat-model", name: "other-chat-model" }],
+    });
     otherHandle.setResponses([
       fauxAssistantMessage("换模型后的回复"),
       fauxAssistantMessage("换模型后的回复 2"),
@@ -476,8 +478,20 @@ describe("sensitive routing and model failure resilience", () => {
     const kernel = await openKernel("agent");
     const approvals = kernel.actionCandidates;
     expect(approvals).toBeDefined();
-    approvals!.create({ tool: "w1", arguments: {}, preconditions: {}, risk: "t", expires_at: "2099-01-01T00:00:00Z" });
-    approvals!.create({ tool: "w2", arguments: {}, preconditions: {}, risk: "t", expires_at: "2099-01-01T00:00:00Z" });
+    approvals!.create({
+      tool: "w1",
+      arguments: {},
+      preconditions: {},
+      risk: "t",
+      expires_at: "2099-01-01T00:00:00Z",
+    });
+    approvals!.create({
+      tool: "w2",
+      arguments: {},
+      preconditions: {},
+      risk: "t",
+      expires_at: "2099-01-01T00:00:00Z",
+    });
 
     // /pending renders numbered entries.
     const list = await kernel.handleUserText("/pending");
@@ -501,7 +515,13 @@ describe("sensitive routing and model failure resilience", () => {
     const kernel = await openKernel("agent");
     const approvals = kernel.actionCandidates;
     expect(approvals).toBeDefined();
-    const firstId = approvals!.create({ tool: "w1", arguments: {}, preconditions: {}, risk: "t", expires_at: "2099-01-01T00:00:00Z" }).candidate_id;
+    const firstId = approvals!.create({
+      tool: "w1",
+      arguments: {},
+      preconditions: {},
+      risk: "t",
+      expires_at: "2099-01-01T00:00:00Z",
+    }).candidate_id;
 
     // 修复前 Number("0x10")=16 会解析成序号（pending 足够多时）或前缀匹配失败；
     // 修复后非纯十进制一律不按序号解析，退回前缀/精确匹配 → 无匹配 → 拒绝。
@@ -521,7 +541,13 @@ describe("sensitive routing and model failure resilience", () => {
     expect(kernel.setMode("manual", { confirmed: true }).ok).toBe(true);
     const approvals = kernel.actionCandidates;
     expect(approvals).toBeDefined();
-    approvals!.create({ tool: "test_write", arguments: {}, preconditions: {}, risk: "t", expires_at: "2099-01-01T00:00:00Z" });
+    approvals!.create({
+      tool: "test_write",
+      arguments: {},
+      preconditions: {},
+      risk: "t",
+      expires_at: "2099-01-01T00:00:00Z",
+    });
 
     // 修复前：manual 分支仍注册执行钩子，/approve 绕过模式直接执行
     //（manual="never executes" 语义被击穿，与 operator 平面分叉）。
@@ -530,6 +556,29 @@ describe("sensitive routing and model failure resilience", () => {
     // 候选未被批准/执行：状态保持 pending_approval
     expect(approvals!.listPending()[0]?.status).toBe("pending_approval");
     await kernel.close();
+  });
+
+  it("重启后自动失效没有进程内执行钩子的审批候选", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const kernel = await openKernel("agent");
+    const approvals = kernel.actionCandidates;
+    expect(approvals).toBeDefined();
+    const candidate = approvals!.create({
+      tool: "test_write",
+      arguments: { a: 1 },
+      preconditions: {},
+      risk: "test",
+      expires_at: "2099-01-01T00:00:00Z",
+    });
+    await kernel.close();
+
+    // 执行钩子只在旧进程内存中，重开后候选不能继续出现在 /pending。
+    const reopened = await openKernel("agent");
+    expect(reopened.listPendingApprovals()).toEqual([]);
+    expect(reopened.actionCandidates!.get(candidate.candidate_id)?.status).toBe("expired");
+    const approve = await reopened.handleUserText(`/approve ${candidate.candidate_id}`);
+    expect(approve.text).toContain("已过期");
+    await reopened.close();
   });
 
   it("/private reveals the owner's own Restricted (Vault) values", async () => {
