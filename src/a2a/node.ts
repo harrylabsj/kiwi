@@ -47,6 +47,7 @@ import {
   LoopbackOnlyAuthVerifier,
   NoneAuthVerifier,
   StaticBearerAuthVerifier,
+  type ThrottleOptions,
 } from "./server/index.js";
 import { defaultHandler } from "./server/handler.js";
 import { createMerchantHandler } from "./server/merchant-handler.js";
@@ -206,6 +207,30 @@ function authVerifierFromEnv(): AuthVerifier | undefined {
   throw new Error(`KIWI_A2A_AUTH 未知模式: ${raw}（可选 loopback | none | bearer:<token>）`);
 }
 
+/**
+ * 解析 merchant A2A 反滥用限流（§31）：
+ * - 未设置 / "0" / "false" / "off" → 不限流（undefined）；
+ * - "1" / "true" / "on" → 默认档位表（60s 窗口；匿名来源限额自动缩窄 0.5）；
+ * - 其它 → 按 JSON 解析为 ThrottleOptions 覆盖（如
+ *   `{"windowMs":60000,"tiers":{"T0":{"identityRequestsPerWindow":60}}}`）。
+ */
+export function resolveA2aThrottle(raw = process.env.KIWI_A2A_THROTTLE ?? ""): ThrottleOptions | undefined {
+  const v = raw.trim();
+  if (v === "" || v === "0" || v === "false" || v === "off") return undefined;
+  if (v === "1" || v === "true" || v === "on") return {};
+  try {
+    const parsed = JSON.parse(v) as ThrottleOptions;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("ThrottleOptions 必须是对象");
+    }
+    return parsed;
+  } catch (err) {
+    throw new Error(
+      `KIWI_A2A_THROTTLE 非法: ${v}（可选 "1"/"true"/"on" 用默认档位，或 JSON ThrottleOptions）——${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 /** 启动一个 A2A 节点（按 profile 角色）。 */
 export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHandle> {
   const { profile } = options;
@@ -220,6 +245,8 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
   // authVerifier 来源：options 直传优先，否则 KIWI_A2A_AUTH env
   // （loopback | none | bearer:<token>）。
   const authVerifier = options.authVerifier ?? authVerifierFromEnv();
+  // 反滥用限流（§31）：KIWI_A2A_THROTTLE 非空即启用（默认档位表 / JSON 覆盖）。
+  const a2aThrottle = resolveA2aThrottle();
   if (!isLoopbackAdvertised(advertisedBase) && authVerifier === undefined) {
     throw new Error(
       `广告地址 ${advertisedBase} 不是 loopback：必须配置 authVerifier` +
@@ -320,6 +347,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     handler,
     now,
     ...(authVerifier !== undefined ? { authVerifier } : {}),
+    ...(a2aThrottle !== undefined ? { throttle: a2aThrottle } : {}),
   });
   const httpServer = server.createServer();
   await new Promise<void>((resolve) => httpServer.listen(port, "127.0.0.1", () => resolve()));
