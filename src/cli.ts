@@ -903,10 +903,20 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
       merchantId,
     );
     name = await promptLine(`商家名称（回车用缺省）: `, name);
+    // TTY 下可全回车：merchant_id 自动生成（避免固定名碰撞）。
+    if (merchantId === "") merchantId = `merchant-${Math.random().toString(36).slice(2, 8)}`;
+    if (name === "") name = merchantId;
+  } else if (merchantId === "" && name === "") {
+    // 非交互且无任何身份 → fail-closed（不自动生成碰撞身份）。
+    process.stderr.write(
+      "--merchant-id <id> 或 --name <商家名称> 至少填一个（TTY 下可交互回车自动生成）。\n",
+    );
+    return EXIT.CONFIG;
+  } else {
+    // 系统补全：merchant_id 缺省从名称派生；名称缺省用 merchant_id。
+    if (merchantId === "") merchantId = slugifyMerchantId(name);
+    if (name === "") name = merchantId;
   }
-  // 系统补全：merchant_id 缺省从名称派生；名称缺省用 merchant_id。
-  if (merchantId === "") merchantId = slugifyMerchantId(name !== "" ? name : "merchant");
-  if (name === "") name = merchantId;
   const report = await merchantInit({
     merchantName: name,
     ...(merchantId !== "" ? { merchantId } : {}),
