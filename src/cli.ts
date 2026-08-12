@@ -58,7 +58,13 @@ import { runInit } from "./supervisor/init.js";
 import { runDown, runStatus, runUp, SupervisorError } from "./supervisor/manage.js";
 import { parseLogLines, runLogs } from "./supervisor/logs.js";
 import { StackConfigError } from "./supervisor/stack-config.js";
-import { cmdProductDoctor, productHelp, PRODUCT_VERSION, DEFAULT_CATALOG_URL } from "./product-cli.js";
+import {
+  cmdProductDoctor,
+  productHelp,
+  PRODUCT_VERSION,
+  DEFAULT_CATALOG_URL,
+  DEFAULT_PROFILE_PATH,
+} from "./product-cli.js";
 import { cmdWeixin, weixinUsage } from "./weixin/cli-weixin.js";
 import { merchantInit } from "./product-init.js";
 import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
@@ -678,7 +684,16 @@ function resolveProfilePath(file: string): string {
  * `kiwi>` 对话；`/profile <file>` 在对话内切换 kernel。
  */
 async function cmdChat(args: ParsedArgs): Promise<number> {
-  const profile = args.profile !== undefined ? loadProfile(args.profile) : defaultChatProfile();
+  // 裸 `kiwi`：优先用 `kiwi buyer/merchant init` 写下的默认 profile
+  //（~/.kiwi/kiwi.yaml）；没有才回退内置 buyer 默认。
+  let profile: AgentProfile;
+  if (args.profile !== undefined) {
+    profile = loadProfile(args.profile);
+  } else if (existsSync(DEFAULT_PROFILE_PATH)) {
+    profile = loadProfile(DEFAULT_PROFILE_PATH);
+  } else {
+    profile = defaultChatProfile();
+  }
   // A2A 节点 + buyer 磋商工具共用一个 catalog：kernel 构建前先解析。
   const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
   const merchantToken = process.env.KIWI_MERCHANT_TOKEN || "";
