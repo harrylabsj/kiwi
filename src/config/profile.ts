@@ -156,6 +156,7 @@ const TOP_LEVEL_KEYS = [
   "runtime_version",
   "protocol_version",
   "agent_id",
+  "name",
   "role",
   "owner_id",
   "commerce",
