@@ -272,6 +272,25 @@ export type ApprovalExecutionResult =
  *  3. Only the STORED arguments (what the operator approved) are executed,
  *     never anything re-read from the model.
  */
+/** 从失败输出提取具体原因（error/text/content[].text），供 /approve 展示。 */
+export function executionFailureDetail(output: unknown): string {
+  if (output === null || typeof output !== "object") return "";
+  const o = output as {
+    error?: unknown;
+    text?: unknown;
+    content?: Array<{ type?: string; text?: unknown }>;
+  };
+  if (typeof o.error === "string" && o.error.trim() !== "") return o.error.trim();
+  if (typeof o.text === "string" && o.text.trim() !== "") return o.text.trim().slice(0, 200);
+  const firstText = o.content?.find(
+    (b) => b !== undefined && b.type === "text" && typeof b.text === "string",
+  );
+  if (firstText !== undefined && typeof firstText.text === "string" && firstText.text.trim() !== "") {
+    return firstText.text.trim().slice(0, 200);
+  }
+  return "";
+}
+
 export async function executeApprovedCandidate(
   store: WriteApprovalCandidateStore,
   candidateId: string,
@@ -344,10 +363,13 @@ export async function executeApprovedCandidate(
     (output as { ok?: unknown }).ok === false
   ) {
     store.supersede(candidateId);
+    const detail = executionFailureDetail(output);
     return {
       kind: "stale",
       candidate: store.get(candidateId) as WriteApprovalCandidate,
-      reason: "执行失败（execute 返回非成功结果），候选已失效，请重新生成候选。",
+      reason:
+        `执行失败：${detail !== "" ? detail : "execute 返回非成功结果"}，` +
+        "候选已失效，请重新生成候选。",
     };
   }
   const executed = store.markExecuted(candidateId);

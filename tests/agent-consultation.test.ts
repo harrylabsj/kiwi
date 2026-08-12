@@ -21,7 +21,11 @@ import {
 import { runSearchCycle } from "../src/agent/buyer/search-loop.js";
 import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
 import { buildBuyerTools, type BuyerToolDeps } from "../src/agent/buyer/buyer-tools.js";
-import { WriteApprovalCandidateStore, executeApprovedCandidate } from "../src/agent/merchant/action-candidate.js";
+import {
+  WriteApprovalCandidateStore,
+  executeApprovedCandidate,
+  executionFailureDetail,
+} from "../src/agent/merchant/action-candidate.js";
 import { StaticCredentialBroker } from "../src/agent/merchant/credential-broker.js";
 import { testBuyerProfile, testMarketplace } from "./helpers.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
@@ -373,5 +377,27 @@ describe("start_consultation tool (§15.2, §20-C)", () => {
     expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("manual");
     expect(h.store.linksForTask(task.task_id)).toHaveLength(0);
     expect(h.store.getTask(task.task_id)?.status).toBe("awaiting_user");
+  });
+});
+
+describe("executionFailureDetail（/approve 失败带具体原因）", () => {
+  it("从 {ok:false, error} 提取原因", () => {
+    const detail = executionFailureDetail({
+      ok: false,
+      error: "商家成交价 8999.00 元/件 超过买方预算上限 8900.00 元/件，已拒绝成交",
+    });
+    expect(detail).toContain("超过买方预算上限");
+  });
+
+  it("从 textResult content[].text 提取", () => {
+    const detail = executionFailureDetail({
+      ok: false,
+      content: [{ type: "text", text: "磋商失败：商家不可用（network）" }],
+    });
+    expect(detail).toContain("磋商失败");
+  });
+
+  it("无 detail 时回退空串", () => {
+    expect(executionFailureDetail({ ok: false })).toBe("");
   });
 });
