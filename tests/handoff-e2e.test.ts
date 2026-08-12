@@ -61,6 +61,26 @@ const productSource = {
   },
 };
 
+/** 商家 productSource 声明成交入口的栈（merchant→buyer 直传场景）。 */
+async function checkoutStack(
+  checkoutUrl: string,
+  opts: { capture?: CapturedInbound[] } = {},
+): Promise<Awaited<ReturnType<typeof startTestA2aStack>>> {
+  const stack = await startTestA2aStack({
+    ...(opts.capture !== undefined ? { capture: opts.capture } : {}),
+    productSource: {
+      async getProduct(sku: string) {
+        if (sku === "sku-001") {
+          return { price: 99, currency: "CNY", handoff_destination: checkoutUrl };
+        }
+        throw new Error(`no product ${sku}`);
+      },
+    },
+  });
+  stacks.push(stack);
+  return stack;
+}
+
 const stacks: Awaited<ReturnType<typeof startTestA2aStack>>[] = [];
 const capture: CapturedInbound[] = [];
 
@@ -186,11 +206,8 @@ function toolText(result: { content: { type: string; text?: string }[] }): strin
 
 describe("KTH 端到端（#20、#21）", () => {
   it("Agreement → Handoff → external checkout URL：全链路 + 证据门 + 指标", async () => {
-    const stack = await startTestA2aStack({ productSource, capture });
-    stacks.push(stack);
-    const h = setupBuyer(stack.catalogUrl);
-
-    // 外部 checkout 桩：URL 安全探测（HEAD）要求可达的 2xx 端点。
+    // 外部 checkout 桩：URL 安全探测（HEAD）要求可达的 2xx 端点；商家 productSource
+    // 声明其为成交入口（merchant→buyer 直传，不经 catalog、不现编）。
     const http = await import("node:http");
     const checkoutServer = http.createServer((_req, res) => {
       res.statusCode = 200;
@@ -202,6 +219,9 @@ describe("KTH 端到端（#20、#21）", () => {
     const checkoutAddr = checkoutServer.address() as { port: number };
     const checkoutUrl = `http://127.0.0.1:${checkoutAddr.port}/checkout/e2e`;
 
+    const stack = await checkoutStack(checkoutUrl);
+    const h = setupBuyer(stack.catalogUrl);
+
     // 1. 磋商：任务 → negotiate_buyer_task（autopilot 直通）→ selected_nonbinding
     const taskId = await createReadyTask(h.store);
     const negotiateTool = h.getTool("negotiate_buyer_task");
@@ -210,13 +230,11 @@ describe("KTH 端到端（#20、#21）", () => {
     const task = h.store.getTask(taskId);
     expect(task?.status).toBe("selected_nonbinding");
 
-    // 2. 交接：handoff_agreement（autopilot 审批直通 → executeHandoff → delivered）
+    // 2. 交接：handoff_agreement（autopilot 审批直通 → executeHandoff → delivered）。
+    //    目的地只取商家在协议里直传的成交入口，不传 destination 参数。
     const handoffTool = h.getTool("handoff_agreement");
-    // 目的地必须命中 merchant 声明域（URL 安全 expectedHost 绑定，anti-phishing）。
     const handoffResult = await handoffTool.execute("2", {
       task_id: taskId,
-      destination_type: "external_checkout_url",
-      destination_ref: checkoutUrl,
       display_summary_merchant: "Acme Merchant",
       display_summary_text: "2 × sku-001",
     });
@@ -291,80 +309,32 @@ describe("KTH 端到端（#20、#21）", () => {
     expect(metrics.reported_external_conversion).toBeNull();
   });
 
-  it.each(["purchase_order_draft", "merchant_contact"] as const)(
-    "非 URL 类目的地 %s：Agreement → Handoff → delivered（#11 三类目的地补齐）",
-    async (destinationType) => {
-      const stack = await startTestA2aStack({ productSource, capture });
-      stacks.push(stack);
-      const h = setupBuyer(stack.catalogUrl);
-      const taskId = await createReadyTask(h.store);
-      await h.getTool("negotiate_buyer_task").execute("1", { task_id: taskId });
-
-      // 非 URL 类目的地（PO draft / merchant contact）：ref 是 opaque 引用，
-      // executeHandoff 不对其做 URL 探测（isUrlDestinationType 门控）。
-      const result = await h.getTool("handoff_agreement").execute("2", {
-        task_id: taskId,
-        destination_type: destinationType,
-        destination_ref: destinationType === "purchase_order_draft" ? "po-draft-2026-08-07-01" : "sales@acme.example",
-        display_summary_merchant: "Acme Merchant",
-        display_summary_text: "2 × sku-001",
-      });
-      expect(toolText(result)).toContain("交接已交付");
-
-      const taskEvents = h.store.taskEvents(taskId);
-      let statusChanged: (typeof taskEvents)[number] | undefined;
-      for (let i = taskEvents.length - 1; i >= 0; i--) {
-        const event = taskEvents[i];
-        if (event !== undefined && event.type === "status_changed" && typeof event.payload.negotiation_id === "string") {
-          statusChanged = event;
-          break;
-        }
-      }
-      const negotiationId = statusChanged?.payload.negotiation_id as string;
-      expect(negotiationId).toBeDefined();
-      const events = h.ledger.events(negotiationId);
-      const kinds = events.map((e) => e.event_kind);
-      expect(kinds).toContain("handoff_candidate_created");
-      expect(kinds).toContain("handoff_candidate_ready");
-      expect(kinds).toContain("handoff_candidate_consumed");
-      expect(kinds).toContain("handoff_delivered");
-      // #12-14：无订单/支付/库存事件
-      expect(kinds.some((k) => k.includes("order") || k.includes("payment") || k.includes("inventory"))).toBe(false);
-      // 目的地类型正确落 handoff
-      const delivered = events.find((e) => e.event_kind === "handoff_delivered");
-      expect(delivered?.handoff_id).toBeDefined();
-      // 候选重建后 destination_type 与请求一致
-      const candidateId = events[0]?.handoff_candidate_id;
-      const created = events.find(
-        (e) => e.handoff_candidate_id === candidateId && e.event_kind === "handoff_candidate_created",
-      );
-      expect(
-        (
-          created?.outcome.kind === "ok"
-            ? (created.outcome.result?.candidate as Record<string, unknown> | undefined)
-            : undefined
-        )?.destination_type,
-      ).toBe(destinationType);
-    },
-  );
-
-  it("handoff_agreement 优先用商家声明的每商品成交入口（listing handoff_destination_ref）", async () => {
+  it("handoff_agreement 商家未在协议声明成交入口 → 拒绝交接（不认 catalog/LLM 现编目的地）", async () => {
+    // 共享 productSource 不携带 handoff_destination → 协议里没有成交入口。
     const stack = await startTestA2aStack({ productSource, capture });
     stacks.push(stack);
     const h = setupBuyer(stack.catalogUrl);
     const taskId = await createReadyTask(h.store);
-
-    // 商家声明的成交入口（shortlistListing 写入候选事件；loopback checkout 桩）
-    const http = await import("node:http");
-    const checkoutServer = http.createServer((_req, res) => {
-      res.statusCode = 200;
-      res.end();
+    await h.getTool("negotiate_buyer_task").execute("1", { task_id: taskId });
+    const result = await h.getTool("handoff_agreement").execute("2", {
+      task_id: taskId,
+      display_summary_merchant: "Acme Merchant",
     });
-    await new Promise<void>((resolve) =>
-      checkoutServer.listen(0, "127.0.0.1", () => resolve()),
-    );
-    const checkoutAddr = checkoutServer.address() as { port: number };
-    const declaredRef = `http://127.0.0.1:${checkoutAddr.port}/checkout/vq-001`;
+    expect(toolText(result)).toContain("商家未在协议中声明成交入口");
+    // 未交接：无 created 事件。
+    const negotiationId = h.ledger.listNegotiations()[0];
+    if (negotiationId !== undefined) {
+      expect(h.ledger.events(negotiationId).some((e) => e.event_kind === "handoff_candidate_created")).toBe(false);
+    }
+  });
+
+  it("catalog listing 声明不能作为成交入口——只认商家协议直传（不经 catalog）", async () => {
+    // 商家 productSource 无 handoff_destination；只在 catalog 事件里声明一个
+    // 成交入口——旧行为会采纳它，现在必须忽略并拒绝交接。
+    const stack = await startTestA2aStack({ productSource, capture });
+    stacks.push(stack);
+    const h = setupBuyer(stack.catalogUrl);
+    const taskId = await createReadyTask(h.store);
     h.store.appendEvent(
       taskId,
       "candidate_shortlisted",
@@ -373,7 +343,7 @@ describe("KTH 端到端（#20、#21）", () => {
         owner_agent_id: "cagt_x",
         listing_title: "VQ-001 智能保温杯",
         handoff_destination_types: ["external_checkout_url"],
-        handoff_destination_ref: declaredRef,
+        handoff_destination_ref: "https://catalog-declared.example/checkout",
         source: "kiwi-catalog",
       },
       "model",
@@ -381,33 +351,11 @@ describe("KTH 端到端（#20、#21）", () => {
     );
 
     await h.getTool("negotiate_buyer_task").execute("1", { task_id: taskId });
-
-    // LLM 现编一个不同的 destination_ref —— 应被商家声明覆盖（不现编）。
-    await h.getTool("handoff_agreement").execute("2", {
+    const result = await h.getTool("handoff_agreement").execute("2", {
       task_id: taskId,
-      destination_type: "external_checkout_url",
-      destination_ref: "https://llm.invented.example/checkout",
       display_summary_merchant: "Acme",
     });
-
-    // 验证候选用了商家声明入口
-    const taskEvents = h.store.taskEvents(taskId);
-    let negotiationId: string | undefined;
-    for (let i = taskEvents.length - 1; i >= 0; i--) {
-      const event = taskEvents[i];
-      if (event?.type === "status_changed" && typeof event.payload.negotiation_id === "string") {
-        negotiationId = event.payload.negotiation_id;
-        break;
-      }
-    }
-    const events = h.ledger.events(negotiationId as string);
-    const created = events.find((e) => e.event_kind === "handoff_candidate_created");
-    const candidate =
-      created?.outcome.kind === "ok"
-        ? (created.outcome.result?.candidate as Record<string, unknown> | undefined)
-        : undefined;
-    expect(candidate?.destination_ref).toBe(declaredRef);
-    await new Promise<void>((resolve) => checkoutServer.close(() => resolve()));
+    expect(toolText(result)).toContain("商家未在协议中声明成交入口");
   });
 
   it("handoff_agreement 优先用 agreement 里商家直传的成交入口（覆盖 catalog 声明与 LLM 现编）", async () => {
@@ -461,11 +409,9 @@ describe("KTH 端到端（#20、#21）", () => {
 
     // 磋商（候选 sku VQ-003 → 商家 agreement 携带 merchantDeclared）。
     await h.getTool("negotiate_buyer_task").execute("1", { task_id: taskId });
-    // 交接：LLM 现编 + catalog 声明都应被 agreement 直传覆盖。
+    // 交接：目的地只取 agreement 直传（catalog 声明与 LLM 现编均被忽略）。
     await h.getTool("handoff_agreement").execute("2", {
       task_id: taskId,
-      destination_type: "external_checkout_url",
-      destination_ref: "https://llm.invented.example/checkout",
       display_summary_merchant: "Acme",
     });
 
@@ -489,17 +435,21 @@ describe("KTH 端到端（#20、#21）", () => {
   });
 
   it("local_callback 证据 → OPENED_CONFIRMED（opened 率更新，绝不伪装成交）", async () => {
-    const stack = await startTestA2aStack({ productSource, capture });
-    stacks.push(stack);
+    const http = await import("node:http");
+    const checkoutServer = http.createServer((_req, res) => {
+      res.statusCode = 200;
+      res.end();
+    });
+    await new Promise<void>((resolve) => checkoutServer.listen(0, "127.0.0.1", () => resolve()));
+    const checkoutAddr = checkoutServer.address() as { port: number };
+    const stack = await checkoutStack(`http://127.0.0.1:${checkoutAddr.port}/checkout/e2e`);
     const h = setupBuyer(stack.catalogUrl);
     const taskId = await createReadyTask(h.store);
     await h.getTool("negotiate_buyer_task").execute("1", { task_id: taskId });
     await h.getTool("handoff_agreement").execute("2", {
       task_id: taskId,
-      destination_type: "quote_document",
-      destination_ref: "quote-2026-08-07-01",
       display_summary_merchant: "Acme",
-      display_summary_text: "quote",
+      display_summary_text: "2 × sku-001",
     });
 
     const negotiationId = h.ledger.listNegotiations()[0];
@@ -540,11 +490,18 @@ describe("KTH 端到端（#20、#21）", () => {
     });
     const metrics = computeHandoffMetrics(byNegotiation);
     expect(metrics.opened_confirmed_rate).toBe(1);
+    await new Promise<void>((resolve) => checkoutServer.close(() => resolve()));
   });
 
   it("supervised: handoff 经审批门 → /approve 后交付，created 事件审批后才落链", async () => {
-    const stack = await startTestA2aStack({ productSource, capture });
-    stacks.push(stack);
+    const http = await import("node:http");
+    const checkoutServer = http.createServer((_req, res) => {
+      res.statusCode = 200;
+      res.end();
+    });
+    await new Promise<void>((resolve) => checkoutServer.listen(0, "127.0.0.1", () => resolve()));
+    const checkoutAddr = checkoutServer.address() as { port: number };
+    const stack = await checkoutStack(`http://127.0.0.1:${checkoutAddr.port}/checkout/e2e`);
     const h = setupBuyer(stack.catalogUrl, { mode: "supervised" });
     const taskId = await createReadyTask(h.store);
 
@@ -567,21 +524,11 @@ describe("KTH 端到端（#20、#21）", () => {
     if (negOutcome.kind !== "executed") throw new Error("expected negotiated execution");
     expect(h.store.getTask(taskId)?.status).toBe("selected_nonbinding");
 
-    // 2. handoff_agreement（supervised）→ 审批候选；created 事件尚未落链
-    const http = await import("node:http");
-    const checkoutServer = http.createServer((_req, res) => {
-      res.statusCode = 200;
-      res.end();
-    });
-    await new Promise<void>((resolve) => checkoutServer.listen(0, "127.0.0.1", () => resolve()));
-    const checkoutAddr = checkoutServer.address() as { port: number };
-    const checkoutUrl = `http://127.0.0.1:${checkoutAddr.port}/checkout/e2e`;
-
+    // 2. handoff_agreement（supervised）→ 审批候选；created 事件尚未落链。
+    //    目的地来自商家协议直传（checkoutStack 声明的 checkoutUrl）。
     const handoffTool = h.getTool("handoff_agreement");
     const handoffResult = await handoffTool.execute("2", {
       task_id: taskId,
-      destination_type: "external_checkout_url",
-      destination_ref: checkoutUrl,
       display_summary_merchant: "Acme Merchant",
       display_summary_text: "2 × sku-001",
     });

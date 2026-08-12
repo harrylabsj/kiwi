@@ -23,7 +23,6 @@
 import { createHash } from "node:crypto";
 import type { AgentHarnessTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
-  DESTINATION_TYPES,
   HandoffIdempotencyStore,
   HandoffEventStore,
   createHandoffCandidate,
@@ -1210,26 +1209,19 @@ const handoffAgreement: Tool = {
   label: "非绑定协议交接",
   description:
     "把已谈妥的非绑定协议（selected_nonbinding 任务）交接给真实成交入口（KTH/0.1）。" +
+    "目的地**只取商家在协议里直传的成交入口**（merchant 从 shopping-cli 读的 handoff_destination），" +
+    "不允许 LLM 自编、也不读 catalog 投影——协议未带成交入口则拒绝交接。" +
     "经审批门（supervised 需 /approve）后执行：重验 agreement/terms/destination/expiry，" +
-    "安全交付到 external checkout URL / PO / quote / contact 等目的地。不创建订单、不授权支付、不预留库存。",
+    "安全交付到 external checkout URL。不创建订单、不授权支付、不预留库存。",
   parameters: {
     type: "object",
     properties: {
       task_id: { type: "string", description: "已达成非绑定协议（selected_nonbinding）的 buyer 任务" },
-      destination_type: {
-        type: "string",
-        enum: [...DESTINATION_TYPES],
-        description: "目的地类型（KTH destination_type 词表，单一来源）",
-      },
-      destination_ref: {
-        type: "string",
-        description: "目的地引用：URL 类为 https URL，会话/文档类为 opaque ref",
-      },
       display_summary_merchant: { type: "string", description: "展示用商家名（缺省取协议商家）" },
-      display_summary_text: { type: "string", description: "展示用摘要（如“200 units, CNY 835.00/unit”）" },
+      display_summary_text: { type: "string", description: "展示用摘要（如“200 units, CNY 8999.00/unit”）" },
       expires_in_hours: { type: "number", description: "候选有效期（小时，缺省 24）" },
     },
-    required: ["task_id", "destination_type", "destination_ref"],
+    required: ["task_id"],
     additionalProperties: false,
   },
   execute: async (_id, params) => {
@@ -1243,8 +1235,6 @@ const handoffAgreement: Tool = {
     try {
       const p = params as {
         task_id: string;
-        destination_type: string;
-        destination_ref: string;
         display_summary_merchant?: string;
         display_summary_text?: string;
         expires_in_hours?: number;
@@ -1260,16 +1250,13 @@ const handoffAgreement: Tool = {
       if (agreement === undefined) {
         return textResult("任务记录缺少 agreement 快照（磋商未完成或 terms 未持久化）。");
       }
-      // 成交入口优先级（商家权威声明，LLM 现编 ref 永不覆盖）：
-      //   1. agreement 里商家直传（merchant 从 shopping-cli 读的 handoff_destination）；
-      //   2. catalog listing 声明（shortlistListing 写入候选事件）；
-      //   3. LLM 现编 destination_ref（兜底）。
+      // 成交入口**只取商家在协议里直传的** handoff_destination——不经 catalog、
+      // 不允许 LLM 现编。协议未携带则拒绝交接（fail-closed）。
       const agreementDestination = agreementDestinationFromTerms(agreement.agreed_terms);
-      const declared = agreementDestination ?? taskDeclaredHandoff(deps.store.taskEvents(p.task_id));
-      const destination =
-        declared?.ref !== undefined
-          ? validateDestination({ type: declared.type ?? p.destination_type, ref: declared.ref })
-          : validateDestination({ type: p.destination_type, ref: p.destination_ref });
+      if (agreementDestination === undefined) {
+        return textResult("商家未在协议中声明成交入口（handoff_destination），无法交接。");
+      }
+      const destination = validateDestination(agreementDestination);
       // 协议级去重：同一磋商、同一目的地已交付过 → 拒绝（LLM 重试会生成
       // 新候选 → 新 digest，绕过 (candidate_id, digest) 幂等键，导致同协议
       // 二次交付/二次 URL 探测、negotiation_to_handoff_rate 虚高）。
@@ -1544,50 +1531,21 @@ function agreementDestinationFromTerms(agreed_terms: unknown):
 }
 
 /**
- * 候选目的地若来自商家权威声明（agreement 直传 handoff_destination 优先，
- * catalog listing 声明次之）且与候选一致，返回该目的地主机——供 URL 安全
- * allowlist 放行外部成交入口（如 item.jd.com）。LLM 现编 ref 返回 undefined。
+ * 候选目的地若来自商家协议直传的 handoff_destination 且与候选一致，返回该
+ * 目的地主机——供 URL 安全 allowlist 放行外部成交入口（如 item.jd.com）。
+ * 只信 agreement 直传：不经 catalog、不认 LLM 现编。
  */
 function declaredHandoffHost(
-  store: BuyerTaskStore,
-  taskId: string,
   agreement: { agreed_terms: unknown },
   candidate: HandoffCandidate,
 ): string | undefined {
-  const declared =
-    agreementDestinationFromTerms(agreement.agreed_terms) ??
-    taskDeclaredHandoff(store.taskEvents(taskId));
+  const declared = agreementDestinationFromTerms(agreement.agreed_terms);
   if (declared?.ref === undefined || declared.ref !== candidate.destination_ref) return undefined;
   try {
     return new URL(declared.ref).hostname;
   } catch {
     return undefined;
   }
-}
-
-/** 从任务事件取商家声明的每商品成交入口（shortlistListing 写入）。 */
-function taskDeclaredHandoff(events: readonly TaskEvent[]):
-  | { type?: string; ref?: string }
-  | undefined {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
-    if (event === undefined) continue;
-    if (event.type !== "candidate_shortlisted") continue;
-    const ref = event.payload.handoff_destination_ref;
-    if (typeof ref === "string" && ref.trim() !== "") {
-      const types = event.payload.handoff_destination_types;
-      return {
-        type:
-          typeof types === "string"
-            ? types
-            : Array.isArray(types) && types.length > 0
-              ? String(types[0])
-              : undefined,
-        ref: ref.trim(),
-      };
-    }
-  }
-  return undefined;
 }
 
 function agreementFromTask(events: readonly TaskEvent[]): {
@@ -1701,7 +1659,7 @@ async function executeHandoffForCandidate(
   // 成交入口若来自商家权威声明（agreement 直传 / catalog listing），URL 安全
   // 放行该外部主机（如 item.jd.com）；LLM 现编的 destination_ref 仍限制在
   // merchant 声明域（anti-phishing）。
-  const declaredHost = declaredHandoffHost(deps.store, a.task_id, agreement, a.candidate);
+  const declaredHost = declaredHandoffHost(agreement, a.candidate);
   const result = await executeHandoff({
     candidate: a.candidate,
     ledger: handoff.ledger,
