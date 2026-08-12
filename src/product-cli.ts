@@ -29,8 +29,23 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 import { EXIT } from "./exit-codes.js";
 import { SHOPPING_CLI_COMPAT, compatRangeText, versionInRange } from "./product-compat.js";
+
+/**
+ * 裸 `kiwi` 默认读取的 profile 路径：`kiwi buyer init` / `kiwi merchant init`
+ * 都会写到这里。之后直接 `kiwi` 即按已初始化的 buyer/merchant 运行。
+ */
+export const DEFAULT_PROFILE_PATH = path.join(homedir(), ".kiwi", "kiwi.yaml");
+
+/** 写默认 profile（供裸 `kiwi` 读取）；目录不存在则创建（0700/0600）。 */
+export function writeDefaultProfile(yaml: string): void {
+  mkdirSync(path.dirname(DEFAULT_PROFILE_PATH), { recursive: true, mode: 0o700 });
+  writeFileSync(DEFAULT_PROFILE_PATH, yaml, { mode: 0o600 });
+}
 
 /** 与 package.json / USAGE 同步的产品版本。 */
 export const PRODUCT_VERSION = "0.7.3";
