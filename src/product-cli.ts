@@ -81,10 +81,10 @@ Usage:
   kiwi merchant start --profile <merchant.yaml> [--catalog <url>] [--port N] [--no-chat]
                                           Merchant A2A server + 注册 Kiwi Network
                                           （agent serve 别名）
-  kiwi merchant init --merchant-id <shopping-cli merchant_id> --name <商家名称>
-                                          [D1] 生成 merchant profile（agent_id =
-                                          merchant_id 身份统一；需 KIWI_MERCHANT_ID /
-                                          KIWI_MERCHANT_NAME 或 --output/--force）
+  kiwi merchant init [--merchant-id <shopping-cli merchant_id>] [--name <商家名称>]
+                                          [D1] 生成 merchant profile（只填 merchant_id
+                                          即可，其余自动补全；TTY 交互提示；写默认
+                                          profile，之后裸 kiwi 即按此运行）
   kiwi merchant publish --profile <merchant.yaml> --shopping-cli-db <db>
                                           [D2] 注册 Agent + 发布 Listing 编排
                                           （需 KIWI_CATALOG_OWNER_TOKEN_SECRET）
