@@ -1497,9 +1497,13 @@ const handoffAgreement: Tool = {
     },
   };
 
+  // catalog-first（CD #28）：配置 catalog 时 buyer 是「catalog 发现 + A2A 磋商」
+  // 形态——不挂载 legacy marketplace 工具（search_products/get_product/
+  // start_consultation/磋商 chat），避免模型去查死掉的本地 marketplace 而误报
+  // 网络故障。无 catalog（legacy 形态）时行为不变。
+  const catalogFirst = deps.catalogSource !== undefined;
   return [
-    searchProducts,
-    getProduct,
+    ...(catalogFirst ? [] : [searchProducts, getProduct]),
     listTasks,
     getTask,
     createTask,
@@ -1508,11 +1512,11 @@ const handoffAgreement: Tool = {
     pauseRule,
     cancelTask,
     selectNonbinding,
-    startConsultation,
+    ...(catalogFirst ? [] : [startConsultation]),
     negotiateBuyerTask,
-    ...(deps.catalogSource !== undefined ? [searchListings, shortlistListing] : []),
+    ...(catalogFirst ? [searchListings, shortlistListing] : []),
     ...(deps.handoff !== undefined ? [handoffAgreement] : []),
-    ...negotiationTools,
+    ...(catalogFirst ? [] : negotiationTools),
   ];
 }
 
