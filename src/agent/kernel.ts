@@ -412,6 +412,10 @@ export class AgentKernel {
         store: taskStore,
         connectors: [options.connector],
         now: clock,
+        // CD #28：配置 catalog 时调度器定时重搜同样 catalog-first。
+        ...(options.catalog !== undefined
+          ? { catalogSource: new KiwiCatalogSource({ baseUrl: options.catalog }) }
+          : {}),
       });
       // v0.7.0 KTH：handoff 存储（Ledger 事件 + 执行幂等）落在 agent data dir，
       // 注入 buyer 工具（handoff_agreement 工具挂载）。

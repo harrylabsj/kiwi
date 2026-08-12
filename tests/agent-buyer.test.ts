@@ -1247,4 +1247,32 @@ describe("catalog-first search cycle (CD #28)", () => {
     expect((evt?.payload as { retriable?: boolean }).retriable).toBe(true);
     expect(result.task.next_run_at).toBeDefined();
   });
+
+  it("scheduler tick 带 catalogSource：tracking 任务定时重搜走 catalog-first 而非 marketplace（CD #28）", async () => {
+    const { store, connector, now, setNow } = setup([
+      // marketplace 侧故意返回缺货，确保若走了 marketplace 只能落 tracking。
+      fakeConnectorProduct({ sku: "sku-oos", stock: 0 }),
+    ]);
+    const ready = createReadyTask(store, {
+      intent: { category: "iPhone 17", quantity: 1 },
+    });
+    // 首次搜索（无 catalogSource）→ marketplace 无合格候选 → tracking。
+    await runSearchCycle({ store, connector, now }, ready.task_id, `r:${uuidv7()}`);
+    expect(store.getTask(ready.task_id)?.status).toBe("tracking");
+
+    // 重启：新 scheduler 注入 catalogSource，next_run_at 已到期（拨远）。
+    setNow("2026-08-05T20:00:00+08:00");
+    const catalog = stubCatalog(async (q) => {
+      expect(q.category).toBe("iPhone 17");
+      return [fakeListingResult(fakeListing())];
+    });
+    const sched = new TaskScheduler({ store, connectors: [connector], now, catalogSource: catalog });
+    const tick = await sched.tick();
+    expect(tick.tasks_searched).toContain(ready.task_id);
+    const after = store.getTask(ready.task_id);
+    expect(after?.status).toBe("awaiting_user");
+    const cand = store.listCandidates(ready.task_id)[0];
+    expect(cand?.connector_id).toBe("kiwi-catalog");
+    expect(cand?.owner_agent_id).toBe("cagt_veyquo");
+  });
 });
