@@ -74,6 +74,7 @@ describe("product-first discovery E2E (CD #28)", () => {
         catalogAgentId: ownerAgentId,
         sku: "sku-001",
         dealPriceMinor: 8_500,
+        maxPriceMinor: 10_000, // 预算上限 100 元（≥ 商家 99 元，避免预算拒绝）
       });
       expect(outcome.ok).toBe(true);
       // Direct A2A + KNP Offer：Offer 价格来自 merchant productSource 桩

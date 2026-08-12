@@ -319,6 +319,22 @@ async function executeNegotiateBuyerTask(
         : NEGOTIATE_DEAL_PRICE_MINOR,
     deliveryBefore: intent.needed_by ?? NEGOTIATE_DELIVERY_BEFORE,
     senderIdentity: deps.profile.agent_id,
+    // 预算硬约束（单价上限）：成交价超此值即拒绝。优先 constraints.max_unit_price；
+    // 只有总预算时按数量折算单价。
+    maxPriceMinor: (() => {
+      const perUnit = task.constraints.max_unit_price;
+      if (perUnit !== undefined && Number.isFinite(perUnit) && perUnit > 0) {
+        const c = losslessToMinorUnits(perUnit, 2);
+        return c.lossless ? c.amount_minor : undefined;
+      }
+      const total = task.constraints.max_total_price;
+      const qty = intent.quantity ?? 1;
+      if (total !== undefined && Number.isFinite(total) && qty > 0) {
+        const c = losslessToMinorUnits(total / qty, 2);
+        return c.lossless ? c.amount_minor : undefined;
+      }
+      return undefined;
+    })(),
   });
   const eventKey = `a2a-neg:${a.task_id}:${result.negotiationId}`;
   if (!result.ok) {

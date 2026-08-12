@@ -74,10 +74,35 @@ describe("negotiateWithAgent parameterization", () => {
       allowLoopback: true,
       sku: "VQ-003",
       quantity: 1,
+      dealPriceMinor: 900_000, // 还价目标 9000 元
+      maxPriceMinor: 900_000, // 预算上限 9000 元（≥ 商家 8999）
     });
     expect(result.ok).toBe(true);
     const terms = result.agreement?.agreed_terms as { handoff_destination?: string } | undefined;
     expect(terms?.handoff_destination).toBe("https://item.jd.com/100244909689.html");
+  });
+
+  it("成交价超过预算上限 → 拒绝成交（不 accept 超预算协议）", async () => {
+    const s = await startTestA2aStack({
+      productSource: {
+        async getProduct(sku: string) {
+          if (sku === "VQ-003") return { price: 8999, currency: "CNY" };
+          throw new Error(`no product ${sku}`);
+        },
+      },
+    });
+    stacks.push(s);
+    // 买方预算上限 8900，商家 base 8999（qty=1 条件价不命中 → 成交价 8999）。
+    const res = await negotiateWithAgent({
+      catalog: s.catalogUrl,
+      allowLoopback: true,
+      sku: "VQ-003",
+      quantity: 1,
+      dealPriceMinor: 890_000, // 还价目标 8900
+      maxPriceMinor: 890_000, // 预算上限 8900
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("超过买方预算上限");
   });
 
   it("custom sku/quantity/deliveryBefore reach the merchant's RFQ", async () => {
@@ -118,7 +143,8 @@ describe("negotiateWithAgent parameterization", () => {
       allowLoopback: true, // 本地 127.0.0.1 测试栈
       sku: "sku-007",
       quantity: 3,
-      dealPriceMinor: 9_000, // 90.00 元
+      dealPriceMinor: 9_000, // 90.00 元（还价）
+      maxPriceMinor: 120_000, // 预算上限 1200 元（≥ 商家 120 元，避免预算拒绝）
       senderIdentity: "buyer-agent:buyer-001",
     });
     expect(result.ok).toBe(true);
