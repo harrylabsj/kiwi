@@ -453,6 +453,8 @@ async function runCatalogSearchCycle(
       merchant_id: listing.merchant_id,
       // owner Agent：Direct A2A 磋商（negotiate_buyer_task）的 catalogAgentId 输入。
       owner_agent_id: listing.owner_agent_id,
+      // 商家显示名：沟通用名字而非 catalog_agent_id。
+      merchant_name: r.merchant.display_name,
     });
     store.updateCandidate(candidate.candidate_id, {
       candidate_status: "shortlisted",

@@ -482,6 +482,7 @@ export class BuyerTaskStore {
     sku?: string;
     merchant_id?: string;
     owner_agent_id?: string;
+    merchant_name?: string;
   }): ProductCandidate {
     const now = this.now();
     const canonicalKey = `${input.connector_id}:${input.sku ?? input.external_product_id}`;
@@ -489,12 +490,17 @@ export class BuyerTaskStore {
       .prepare("SELECT * FROM product_candidates WHERE task_id = ? AND canonical_key = ?")
       .get(input.task_id, canonicalKey) as Record<string, unknown> | undefined;
     if (existing !== undefined) {
-      // 复用已有候选：刷新 last_seen_at；owner_agent_id 非空时覆盖（listing 重发布）。
+      // 复用已有候选：刷新 last_seen_at；owner_agent_id/merchant_name 非空时覆盖。
       this.db
         .prepare(
-          "UPDATE product_candidates SET last_seen_at = ?, owner_agent_id = COALESCE(?, owner_agent_id) WHERE candidate_id = ?",
+          "UPDATE product_candidates SET last_seen_at = ?, owner_agent_id = COALESCE(?, owner_agent_id), merchant_name = COALESCE(?, merchant_name) WHERE candidate_id = ?",
         )
-        .run(now, input.owner_agent_id ?? null, existing.candidate_id as string);
+        .run(
+          now,
+          input.owner_agent_id ?? null,
+          input.merchant_name ?? null,
+          existing.candidate_id as string,
+        );
       return this.getCandidate(existing.candidate_id as string) as ProductCandidate;
     }
     const candidateId = `cand_${uuidv7()}`;
@@ -502,8 +508,8 @@ export class BuyerTaskStore {
       .prepare(
         `INSERT INTO product_candidates
            (candidate_id, task_id, connector_id, platform, external_product_id, sku, merchant_id,
-            owner_agent_id, canonical_key, eligibility, candidate_status, first_seen_at, last_seen_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', 'discovered', ?, ?)`,
+            owner_agent_id, merchant_name, canonical_key, eligibility, candidate_status, first_seen_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', 'discovered', ?, ?)`,
       )
       .run(
         candidateId,
@@ -514,6 +520,7 @@ export class BuyerTaskStore {
         input.sku ?? null,
         input.merchant_id ?? null,
         input.owner_agent_id ?? null,
+        input.merchant_name ?? null,
         canonicalKey,
         now,
         now,
@@ -549,6 +556,7 @@ export class BuyerTaskStore {
       rejection_reasons?: string[];
       latest_observation_id?: string;
       owner_agent_id?: string;
+      merchant_name?: string;
     },
   ): ProductCandidate {
     const c = this.getCandidate(candidateId);
@@ -558,7 +566,7 @@ export class BuyerTaskStore {
         `UPDATE product_candidates
          SET eligibility = ?, candidate_status = ?, score = ?, score_explanation_json = ?,
              rejection_reasons_json = ?, latest_observation_id = ?, owner_agent_id = ?,
-             last_seen_at = ?
+             merchant_name = ?, last_seen_at = ?
          WHERE candidate_id = ?`,
       )
       .run(
@@ -575,6 +583,7 @@ export class BuyerTaskStore {
           : JSON.stringify(c.rejection_reasons),
         patch.latest_observation_id ?? c.latest_observation_id ?? null,
         patch.owner_agent_id ?? c.owner_agent_id ?? null,
+        patch.merchant_name ?? c.merchant_name ?? null,
         this.now(),
         candidateId,
       );
@@ -927,6 +936,7 @@ export class BuyerTaskStore {
     if (row.sku !== null) c.sku = row.sku as string;
     if (row.merchant_id !== null) c.merchant_id = row.merchant_id as string;
     if (row.owner_agent_id !== null) c.owner_agent_id = row.owner_agent_id as string;
+    if (row.merchant_name !== null) c.merchant_name = row.merchant_name as string;
     if (row.score !== null) c.score = row.score as number;
     if (row.score_explanation_json !== null) {
       c.score_explanation = JSON.parse(row.score_explanation_json as string);

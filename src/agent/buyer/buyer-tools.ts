@@ -389,6 +389,7 @@ async function executeNegotiateBuyerTask(
         negotiation_id: result.negotiationId,
         catalog_agent_id: result.catalogAgentId,
         agent_card_url: result.agentCardUrl,
+        merchant_name: facts?.merchantName ?? null,
         sku: facts?.sku ?? sku,
         quantity: facts?.quantity ?? intent.quantity ?? 1,
         offer_price_minor: facts?.offerPriceMinor ?? null,
@@ -657,7 +658,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           ...candidates.map((c) => {
             const reasons =
               c.rejection_reasons.length > 0 ? ` 排除: ${c.rejection_reasons.join(";")}` : "";
-            return `· ${c.candidate_id} [${c.candidate_status}/${c.eligibility}] ${c.sku ?? c.external_product_id} score=${c.score?.toFixed(3) ?? "-"}${c.owner_agent_id !== undefined ? ` owner=${c.owner_agent_id}` : ""}${reasons}`;
+            return `· ${c.candidate_id} [${c.candidate_status}/${c.eligibility}] ${c.sku ?? c.external_product_id} score=${c.score?.toFixed(3) ?? "-"}${c.merchant_name !== undefined ? ` merchant=${c.merchant_name}` : ""}${c.owner_agent_id !== undefined ? ` owner=${c.owner_agent_id}` : ""}${reasons}`;
           }),
         ];
         // 磋商链接（marketplace 或 A2A 直连）——磋商结果对模型可见。
@@ -684,7 +685,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           const qty = typeof p.quantity === "number" ? String(p.quantity) : "?";
           const agreement = typeof p.agreement_id === "string" ? p.agreement_id : "?";
           lines.push(
-            `最近磋商: ${String(p.negotiation_id ?? "?")} 商家 ${String(p.catalog_agent_id ?? "?")} ` +
+            `最近磋商: ${String(p.negotiation_id ?? "?")} 商家 ${String(p.merchant_name ?? p.catalog_agent_id ?? "?")} ` +
               `${qty} 件 ${sku} 报价 ${fmt(p.offer_price_minor)} 元/件，` +
               `条件价 ${fmt(p.deal_price_minor)} 元/件，agreement ${agreement}（非绑定）`,
           );
@@ -798,7 +799,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             const top = candidate.score_explanation?.dimensions
               .slice()
               .sort((a, b) => b.weight * b.score - a.weight * a.score)[0];
-            return `· ${candidate.candidate_id} ${candidate.sku}（${(candidate.score ?? 0).toFixed(2)}）${candidate.owner_agent_id !== undefined ? ` owner=${candidate.owner_agent_id}` : ""}${top !== undefined ? ` 主要加分: ${top.dimension} ${top.note}` : ""}`;
+            return `· ${candidate.candidate_id} ${candidate.sku}（${(candidate.score ?? 0).toFixed(2)}）${candidate.merchant_name !== undefined ? ` merchant=${candidate.merchant_name}` : ""}${candidate.owner_agent_id !== undefined ? ` owner=${candidate.owner_agent_id}` : ""}${top !== undefined ? ` 主要加分: ${top.dimension} ${top.note}` : ""}`;
           });
           return textResult(
             `搜索完成，${cycle.shortlist.length} 个候选待你选择：\n${lines.join("\n")}\n` +
@@ -1428,6 +1429,10 @@ const handoffAgreement: Tool = {
           type: "string",
           description: "商家声明的每商品成交入口（listing handoff_destination_ref；URL 类为 https URL，联系/会话类为 opaque ref）",
         },
+        merchant_name: {
+          type: "string",
+          description: "商家显示名（listing.merchant.display_name）——沟通用名字而非 catalog_agent_id",
+        },
       },
       required: ["task_id", "listing_id", "owner_agent_id"],
       additionalProperties: false,
@@ -1442,6 +1447,7 @@ const handoffAgreement: Tool = {
           sku?: string;
           handoff_destination_types?: string[];
           handoff_destination_ref?: string;
+          merchant_name?: string;
         };
         const task = store.getTask(p.task_id);
         if (task === undefined) throw new BuyerTaskError("not_found", `no task ${p.task_id}`);
@@ -1451,6 +1457,8 @@ const handoffAgreement: Tool = {
           platform: "kiwi-catalog",
           external_product_id: p.listing_id,
           sku: p.sku,
+          ...(p.owner_agent_id !== undefined ? { owner_agent_id: p.owner_agent_id } : {}),
+          ...(p.merchant_name !== undefined ? { merchant_name: p.merchant_name } : {}),
         });
         store.updateCandidate(candidate.candidate_id, {
           candidate_status: "shortlisted",

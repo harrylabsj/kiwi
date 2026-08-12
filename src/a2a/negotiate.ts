@@ -104,6 +104,8 @@ export interface NegotiateResult {
     offerPriceMinor?: number;
     dealPriceMinor?: number;
     deliveryBefore: string;
+    /** 商家显示名（Veyquo / veyquo.com）——沟通用名字，不用 catalog_agent_id。 */
+    merchantName?: string;
   };
   error?: string;
 }
@@ -133,7 +135,7 @@ export function summarizeNegotiation(
   if (locale === "zh") {
     return [
       `已完成一轮 A2A 磋商（negotiation ${result.negotiationId}）：`,
-      `· 发现商家 ${result.catalogAgentId} 并验证其 Agent Card（${result.agentCardUrl}），确认在线可用`,
+      `· 发现商家 ${f?.merchantName ?? result.catalogAgentId} 并验证其 Agent Card（${result.agentCardUrl}），确认在线可用`,
       `· 询价：采购 ${quantity} 件 ${sku}，要求 ${delivery} 前交货`,
       `· 商家首次报价：${offerPrice} 元/件`,
       `· 还价后商家给出条件价：总采购量 ≥ 100 件时按 ${dealPrice} 元/件成交`,
@@ -143,7 +145,7 @@ export function summarizeNegotiation(
   }
   return [
     `A round of A2A negotiation completed (negotiation ${result.negotiationId}):`,
-    `· Discovered merchant ${result.catalogAgentId} and verified its Agent Card (${result.agentCardUrl}) — online and reachable`,
+    `· Discovered merchant ${f?.merchantName ?? result.catalogAgentId} and verified its Agent Card (${result.agentCardUrl}) — online and reachable`,
     `· RFQ: ${quantity} units of ${sku}, delivery by ${delivery}`,
     `· Merchant's initial offer: ${offerPrice} ${NEGOTIATE_CURRENCY}/unit`,
     `· After the counter, the merchant offered a conditional price: ${dealPrice} ${NEGOTIATE_CURRENCY}/unit when total quantity ≥ 100`,
@@ -301,6 +303,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
       };
     }
     const catalogAgentId = target.candidate.catalog_agent_id;
+    const merchantName = target.candidate.merchant?.name ?? catalogAgentId;
     const agentCardUrl = target.candidate.discovery?.agent_card_url ?? "";
     steps.push(`discover ${catalogAgentId}`);
     steps.push(`resolve ${agentCardUrl}`);
@@ -403,6 +406,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
         offerPriceMinor,
         dealPriceMinor,
         deliveryBefore,
+        merchantName,
       },
     };
   } catch (err) {

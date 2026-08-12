@@ -24,7 +24,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const MEMORY_SCHEMA_VERSION = 4;
+export const MEMORY_SCHEMA_VERSION = 5;
 
 export class MigrationError extends Error {
   constructor(message: string) {
@@ -271,12 +271,19 @@ const MIGRATION_4 = `
 ALTER TABLE product_candidates ADD COLUMN owner_agent_id TEXT;
 `;
 
+const MIGRATION_5 = `
+-- v0.7.2：候选持久化商家显示名（listing.merchant.display_name）——与买家沟通
+-- 用商家名字而非 catalog_agent_id。
+ALTER TABLE product_candidates ADD COLUMN merchant_name TEXT;
+`;
+
 /** Ordered migrations: version number -> SQL. */
 const MIGRATIONS: Readonly<Record<number, string>> = {
   1: MIGRATION_1,
   2: MIGRATION_2,
   3: MIGRATION_3,
   4: MIGRATION_4,
+  5: MIGRATION_5,
 };
 
 /**

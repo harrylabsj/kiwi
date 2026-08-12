@@ -120,8 +120,8 @@ describe("schema v3 migration (§11.8, §16)", () => {
     expect(tables).toContain("consultation_links");
     expect(tables).toContain("action_candidates");
     const version = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as { v: number };
-    expect(version.v).toBe(4);
-    expect(MEMORY_SCHEMA_VERSION).toBe(4);
+    expect(version.v).toBe(5);
+    expect(MEMORY_SCHEMA_VERSION).toBe(5);
     db.close();
   });
 
