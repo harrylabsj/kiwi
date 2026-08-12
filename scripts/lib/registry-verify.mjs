@@ -184,6 +184,18 @@ function isPyPiNotYetPublishedError(error) {
   return String(error?.message ?? "").startsWith("HTTP 404");
 }
 
+/**
+ * 本 run 是否真实发布了该包的新版本（publish job 的 published 输出）。
+ * 只有真实发布才允许用本 run 新构建 manifest 对比 registry 字节；幂等跳过
+ * 的版本（"false"）registry 上是历史 run 构建——wheel/sdist 含打包时间戳，
+ * 重建不保证逐字节一致（2026-08-12 v0.7.1 发布实测：跳过的 kiwi-catalog
+ * 0.2.0 重建 wheel 与昨日已发布 wheel 字节不同，manifest 对比假失败）。
+ * env 缺失/其他值默认 true（strict，本地/旧流程行为不变）。
+ */
+export function isFreshPublish(envValue) {
+  return envValue !== "false";
+}
+
 async function fetchWithRetry(url, { retries = DEFAULT_RETRIES } = {}) {
   let lastError;
   for (let attempt = 1; attempt <= retries; attempt += 1) {
