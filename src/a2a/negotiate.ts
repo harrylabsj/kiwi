@@ -72,6 +72,12 @@ export interface NegotiateOptions {
   /** 发送方身份（缺省 buyer:a2a-demo）。 */
   senderIdentity?: string;
   /**
+   * 买方最高可接受单价（minor 单位，硬预算上限）。协商结果（求值后 terms 的
+   * 成交价）超过它 → 拒绝 accept（fail-closed，绝不成交超预算协议）。
+   * 缺省用 dealPriceMinor（买方还价目标）兜底。
+   */
+  maxPriceMinor?: number;
+  /**
    * 本地开发 loopback 放行（透传给 AgentDiscovery；缺省 false，fail-closed）。
    * 仅显式传 true 允许发现阶段访问 127.0.0.1 / ::1 / localhost 上的 Agent Card
    * 与 A2A direct interface；私网/保留网段始终拒绝。
@@ -377,6 +383,22 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     const dealPriceMinor = (agreedTerms as {
       items?: Array<{ unit_price?: { amount_minor?: number } }>;
     })?.items?.[0]?.unit_price?.amount_minor;
+
+    // 预算硬约束：成交价超过买方最高可接受单价 → 拒绝 accept，绝不成交超预算
+    // 协议（历史 bug：买方预算 8900、商家 8999 仍 accept）。缺省用还价目标兜底。
+    const priceCeiling = options.maxPriceMinor ?? counterPriceMinor;
+    if (dealPriceMinor !== undefined && dealPriceMinor > priceCeiling) {
+      return {
+        ok: false,
+        negotiationId,
+        catalogAgentId,
+        agentCardUrl,
+        steps,
+        error:
+          `商家成交价 ${(dealPriceMinor / 100).toFixed(2)} 元/件 超过买方预算上限 ` +
+          `${(priceCeiling / 100).toFixed(2)} 元/件，已拒绝成交`,
+      };
+    }
 
     // 6. AcceptNonbinding → Agreement。
     const accept = acceptEnvelope(

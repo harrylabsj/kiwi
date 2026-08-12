@@ -167,10 +167,11 @@ function setupBuyer(
   };
 }
 
-async function createReadyTask(store: BuyerTaskStore): Promise<string> {
+async function createReadyTask(store: BuyerTaskStore, overrides: Record<string, unknown> = {}): Promise<string> {
   const task = store.createTask({
     goal_text: "采购 sku-001 磋商",
     intent: { category: "sku-001", quantity: 2, target_unit_price: 800 },
+    ...overrides,
     idempotency_key: `create:${uuidv7()}`,
   });
   store.transitionTask({
@@ -381,7 +382,10 @@ describe("KTH 端到端（#20、#21）", () => {
     });
     stacks.push(stack);
     const h = setupBuyer(stack.catalogUrl);
-    const taskId = await createReadyTask(h.store);
+    // 商家 VQ-003 价 8999；目标价 9000（否则预算校验拒绝——此测试验证直传优先）。
+    const taskId = await createReadyTask(h.store, {
+      intent: { category: "VQ-003", quantity: 1, target_unit_price: 9000 },
+    });
 
     // 候选 sku VQ-003 + catalog 声明一个不同地址（验证 agreement 直传优先）。
     const cand = h.store.upsertCandidate({

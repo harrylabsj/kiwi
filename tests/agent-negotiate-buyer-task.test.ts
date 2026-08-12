@@ -390,7 +390,10 @@ describe("negotiate_buyer_task", () => {
     const s = await startTestA2aStack({ productSource: adapter, capture });
     stacks.push(s);
     const h = await setupBuyer({ catalog: s.catalogUrl });
-    const { task_id } = await createReadyTask(h.store);
+    // 商家价 835 元；目标价 1000 元（否则预算校验拒绝——此测试只看价格换算）。
+    const { task_id } = await createReadyTask(h.store, {
+      intent: { category: "sku-001", quantity: 2, target_unit_price: 1000 },
+    });
     const tool = h.getTool("negotiate_buyer_task");
 
     const first = await tool.execute("c1", { task_id });
