@@ -462,6 +462,8 @@ export class AgentKernel {
         registerPending,
         now: clock,
         privateValues: () => listRestrictedValues(store),
+        // 商家 A2A 节点 ledger（<dataDir>/a2a/ledger）——list_a2a_negotiations 用。
+        a2aLedgerDir: path.join(path.dirname(paths.db), "a2a", "ledger"),
       });
     }
 

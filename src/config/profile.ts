@@ -90,6 +90,8 @@ export interface AgentProfile {
   runtime_version: string;
   protocol_version: string;
   agent_id: string;
+  /** 显示名（可选）——TUI/沟通用名字而非 agent_id（如商家 Veyquo）。 */
+  name?: string;
   role: Role;
   owner_id: string;
   commerce: {

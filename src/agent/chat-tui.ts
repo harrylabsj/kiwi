@@ -87,7 +87,7 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
     write(
       theme.welcome({
         roleLabel: roleLabelOf(current.kernel.profile.role),
-        id: current.kernel.principal.principal_id,
+        id: current.kernel.profile.name ?? current.kernel.principal.principal_id,
         tagline: "主对话（/help 查看命令，/quit 退出）",
         versionLabel: `kiwi ${PRODUCT_VERSION}`,
         commerceUrl: current.kernel.profile.commerce.base_url,
@@ -166,7 +166,7 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
         const modeColor = mode === "autopilot" ? "accent" : mode === "supervised" ? "primary" : "warn";
         const segments: Array<string | Seg> = [
           { text: `Kiwi ${roleLabelOf(current.kernel.profile.role)}`, color: "primary", bold: true },
-          current.kernel.principal.principal_id,
+          current.kernel.profile.name ?? current.kernel.principal.principal_id,
           { text: mode === "autopilot" ? "Autopilot" : mode === "manual" ? "Manual" : "Supervised", color: modeColor },
           a2aNode?.status() !== undefined && a2aNode?.status() !== null
             ? { text: "A2A on", color: "ok" }
