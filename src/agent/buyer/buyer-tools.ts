@@ -1260,10 +1260,12 @@ const handoffAgreement: Tool = {
       if (agreement === undefined) {
         return textResult("任务记录缺少 agreement 快照（磋商未完成或 terms 未持久化）。");
       }
-      // 商家声明的每商品成交入口优先（listing handoff_destination_ref，
-      // shortlistListing 写入任务候选事件）：有声明就用商家的，LLM 现编的
-      // destination_ref 不覆盖商家权威声明（跨仓契约 v0.4 §9）。
-      const declared = taskDeclaredHandoff(deps.store.taskEvents(p.task_id));
+      // 成交入口优先级（商家权威声明，LLM 现编 ref 永不覆盖）：
+      //   1. agreement 里商家直传（merchant 从 shopping-cli 读的 handoff_destination）；
+      //   2. catalog listing 声明（shortlistListing 写入候选事件）；
+      //   3. LLM 现编 destination_ref（兜底）。
+      const agreementDestination = agreementDestinationFromTerms(agreement.agreed_terms);
+      const declared = agreementDestination ?? taskDeclaredHandoff(deps.store.taskEvents(p.task_id));
       const destination =
         declared?.ref !== undefined
           ? validateDestination({ type: declared.type ?? p.destination_type, ref: declared.ref })
@@ -1526,6 +1528,43 @@ const handoffAgreement: Tool = {
  * 从任务事件流重建 agreement 快照（handoff 的 agreementReader 权威源；
  * 取最新 status_changed 事件的 payload —— negotiate 成功时落 agreed_terms）。
  */
+
+/**
+ * 从 agreement 的 agreed_terms 提取商家直传的每商品成交入口（offerTerms 带的
+ * `handoff_destination`，merchant 从 shopping-cli 商品读）。https URL →
+ * external_checkout_url 类型。商家直传优先于 catalog listing 声明。
+ */
+function agreementDestinationFromTerms(agreed_terms: unknown):
+  | { type: string; ref: string }
+  | undefined {
+  const terms = agreed_terms as { handoff_destination?: unknown } | null | undefined;
+  const ref = terms?.handoff_destination;
+  if (typeof ref !== "string" || ref.trim() === "") return undefined;
+  return { type: "external_checkout_url", ref: ref.trim() };
+}
+
+/**
+ * 候选目的地若来自商家权威声明（agreement 直传 handoff_destination 优先，
+ * catalog listing 声明次之）且与候选一致，返回该目的地主机——供 URL 安全
+ * allowlist 放行外部成交入口（如 item.jd.com）。LLM 现编 ref 返回 undefined。
+ */
+function declaredHandoffHost(
+  store: BuyerTaskStore,
+  taskId: string,
+  agreement: { agreed_terms: unknown },
+  candidate: HandoffCandidate,
+): string | undefined {
+  const declared =
+    agreementDestinationFromTerms(agreement.agreed_terms) ??
+    taskDeclaredHandoff(store.taskEvents(taskId));
+  if (declared?.ref === undefined || declared.ref !== candidate.destination_ref) return undefined;
+  try {
+    return new URL(declared.ref).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 从任务事件取商家声明的每商品成交入口（shortlistListing 写入）。 */
 function taskDeclaredHandoff(events: readonly TaskEvent[]):
   | { type?: string; ref?: string }
@@ -1659,6 +1698,10 @@ async function executeHandoffForCandidate(
     capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
     occurred_at: deps.now(),
   });
+  // 成交入口若来自商家权威声明（agreement 直传 / catalog listing），URL 安全
+  // 放行该外部主机（如 item.jd.com）；LLM 现编的 destination_ref 仍限制在
+  // merchant 声明域（anti-phishing）。
+  const declaredHost = declaredHandoffHost(deps.store, a.task_id, agreement, a.candidate);
   const result = await executeHandoff({
     candidate: a.candidate,
     ledger: handoff.ledger,
@@ -1678,7 +1721,10 @@ async function executeHandoffForCandidate(
       negotiation_id: agreement.negotiation_id,
       agreed_terms: agreement.agreed_terms,
     }),
-    urlSafety: defaultUrlSafety(agreement.merchant_domain),
+    urlSafety: defaultUrlSafety(
+      agreement.merchant_domain,
+      declaredHost !== undefined ? [declaredHost] : undefined,
+    ),
     now: deps.now,
   });
   const rendered = handoffResultText(result);

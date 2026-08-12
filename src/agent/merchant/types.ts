@@ -40,6 +40,9 @@ export interface MerchantCatalogProduct {
   delivery_attributes: string[];
   /** Listing active flag. When true the product is paused/hidden from search. */
   paused: boolean;
+  /** 商家声明的每商品成交入口（shopping-cli products.handoff_destination；KTH
+   *  handoff 用，商家协商 agreement 直传 buyer）。 */
+  handoff_destination?: string;
 }
 
 export interface MerchantProductInput {
@@ -172,6 +175,7 @@ export function parseMerchantCatalogProduct(value: unknown): MerchantCatalogProd
       ? stringArray(v.delivery_attributes, "product.delivery_attributes")
       : [],
     paused: typeof v.paused === "boolean" ? v.paused : v.active === false,
+    handoff_destination: typeof v.handoff_destination === "string" ? v.handoff_destination : undefined,
   };
 }
 
