@@ -53,7 +53,16 @@ export interface NpmRegistryMetadata {
   integrity: string;
   version: string;
 }
-export function npmRegistryMetadata(name: string, version: string): NpmRegistryMetadata;
+export function npmRegistryMetadata(name: string, version: string): Promise<NpmRegistryMetadata>;
+
+export function withPropagationRetry<T>(
+  fn: () => Promise<T> | T,
+  options: {
+    isRetryable: (error: unknown) => boolean;
+    delays?: number[];
+    label?: string;
+  },
+): Promise<T>;
 
 export function pypiMetadata(name: string, version: string): Promise<{
   info: { name: string; version: string };

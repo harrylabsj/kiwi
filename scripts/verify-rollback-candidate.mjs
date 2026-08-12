@@ -59,7 +59,7 @@ const npmEntry = manifest.files.find(
 );
 if (npmEntry) {
   const { name, version } = parseNpmTarballFilename(basename(npmEntry.path));
-  const meta = npmRegistryMetadata(name, version);
+  const meta = await npmRegistryMetadata(name, version);
   const buffer = await downloadBuffer(meta.tarball);
   verifyNpmDownload(buffer, {
     identity: { name, version },
