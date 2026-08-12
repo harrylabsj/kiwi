@@ -31,10 +31,14 @@ import { observationHash, runSearchCycle } from "./search-loop.js";
 import type { BuyerTaskStore } from "./task-store.js";
 import type { BuyerTask, ProductObservation, TrackingRule } from "./types.js";
 import { BuyerTaskError } from "./types.js";
+import type { KiwiCatalogSource } from "../../discovery/catalog-source/kiwi-source.js";
 
 export interface SchedulerOptions {
   store: BuyerTaskStore;
   connectors: CommerceConnector[];
+  /** 配置 catalog 时注入：调度器触发的定时重搜同样走 catalog-first（与
+   *  create_buyer_task 数据面一致——否则 tracking 任务自动重搜绕过 catalog）。 */
+  catalogSource?: KiwiCatalogSource;
   now?: () => string;
 }
 
@@ -64,11 +68,13 @@ const DEFAULT_BUDGET: Required<TickBudget> = { max_requests: 20, max_rules: 50, 
 export class TaskScheduler {
   private readonly store: BuyerTaskStore;
   private readonly connectors: Map<string, CommerceConnector>;
+  private readonly catalogSource?: KiwiCatalogSource;
   private readonly now: () => string;
 
   constructor(options: SchedulerOptions) {
     this.store = options.store;
     this.connectors = new Map(options.connectors.map((c) => [c.connector_id, c]));
+    this.catalogSource = options.catalogSource;
     const clock = options.now ?? (() => new Date().toISOString());
     this.now = () => new Date(Date.parse(clock())).toISOString();
   }
@@ -255,7 +261,13 @@ export class TaskScheduler {
           this.store.listCandidates(task.task_id).map((c) => c.canonical_key),
         );
         const cycle = await runSearchCycle(
-          { store: this.store, connector, now: this.now },
+          {
+            store: this.store,
+            connector,
+            now: this.now,
+            // catalog-first：调度器触发的定时重搜与 create_buyer_task 同数据面。
+            ...(this.catalogSource !== undefined ? { catalogSource: this.catalogSource } : {}),
+          },
           task.task_id,
           `tick:${task.task_id}:${now}`,
         );
