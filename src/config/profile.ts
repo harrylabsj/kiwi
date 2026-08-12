@@ -573,6 +573,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     runtime_version: p.runtime_version,
     protocol_version: p.protocol_version,
     agent_id: p.agent_id,
+    ...(typeof p.name === "string" && p.name !== "" ? { name: p.name } : {}),
     role: p.role,
     owner_id: p.owner_id,
     commerce: {
