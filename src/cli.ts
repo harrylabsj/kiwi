@@ -66,7 +66,8 @@ import {
   DEFAULT_PROFILE_PATH,
 } from "./product-cli.js";
 import { cmdWeixin, weixinUsage } from "./weixin/cli-weixin.js";
-import { merchantInit } from "./product-init.js";
+import { merchantInit, slugifyMerchantId } from "./product-init.js";
+import readline from "node:readline";
 import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
 import { merchantPublish } from "./product-publish.js";
 import { catalogServe } from "./product-catalog.js";
@@ -879,18 +880,33 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
  * 生成可直接使用的 merchant profile（agent_id = shopping-cli merchant_id，
  * D2 身份统一）；shopping-cli 缺失/不可达记 warning 不阻塞。
  */
+/** TTY 交互提示一行（非 TTY 返回缺省，不阻塞脚本）。 */
+function promptLine(text: string, fallback: string): Promise<string> {
+  if (!process.stdin.isTTY) return Promise.resolve(fallback);
+  process.stdout.write(text);
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question("", (answer) => {
+      rl.close();
+      resolve(answer.trim() !== "" ? answer.trim() : fallback);
+    });
+  });
+}
+
 async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
-  // --merchant-id / --name flag 优先，env 回退（历史教训：help 文案承诺的
-  // flag 从未被 parseArgs 解析，按 help 执行 100% Unknown argument）。
-  const merchantId = args.merchantId ?? process.env.KIWI_MERCHANT_ID ?? "";
-  const name = args.merchantName ?? process.env.KIWI_MERCHANT_NAME ?? "";
-  if (!name) {
-    process.stderr.write(
-      "--name <商家名称> 是必需的（或 KIWI_MERCHANT_NAME）——它是你在网络上的" +
-        "公开商家名称，Kiwi 不能替商家起名。\n",
+  // --merchant-id / --name flag 优先，env 回退；TTY 下交互提示，缺省自动派生。
+  let merchantId = args.merchantId ?? process.env.KIWI_MERCHANT_ID ?? "";
+  let name = args.merchantName ?? process.env.KIWI_MERCHANT_NAME ?? "";
+  if (process.stdin.isTTY) {
+    merchantId = await promptLine(
+      `merchant_id（回车自动生成${name !== "" ? `，建议 ${slugifyMerchantId(name)}` : ""}）: `,
+      merchantId,
     );
-    return EXIT.CONFIG;
+    name = await promptLine(`商家名称（回车用缺省）: `, name);
   }
+  // 系统补全：merchant_id 缺省从名称派生；名称缺省用 merchant_id。
+  if (merchantId === "") merchantId = slugifyMerchantId(name !== "" ? name : "merchant");
+  if (name === "") name = merchantId;
   const report = await merchantInit({
     merchantName: name,
     ...(merchantId !== "" ? { merchantId } : {}),

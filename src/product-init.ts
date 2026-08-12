@@ -41,7 +41,7 @@ import { RUNTIME_VERSION } from "./config/profile.js";
 import { PROTOCOL_VERSION } from "./negotiation/types.js";
 import { detectShoppingCli, writeDefaultProfile } from "./product-cli.js";
 
-function slugifyMerchantId(name: string): string {
+export function slugifyMerchantId(name: string): string {
   const slug = name
     .trim()
     .toLowerCase()
