@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MANIFEST_SCHEMA,
+  isFreshPublish,
   loadManifest,
   parseNpmTarballFilename,
   parsePyPiFilename,
@@ -193,5 +194,34 @@ describe("withPropagationRetry（发布传播延迟重试）", () => {
       ),
     ).rejects.toThrow(/E404 attempt 3/);
     expect(calls).toBe(3); // 首次 + 2 次延迟重试
+  });
+});
+
+describe("isFreshPublish（幂等跳过版本的 manifest 对比豁免）", () => {
+  it("仅显式 false 豁免 manifest 字节对比，其余一律 strict", () => {
+    expect(isFreshPublish("false")).toBe(false); // publish job 幂等跳过
+    expect(isFreshPublish("true")).toBe(true); // 本 run 真实发布
+    expect(isFreshPublish(undefined)).toBe(true); // env 缺失默认 strict
+    expect(isFreshPublish("")).toBe(true);
+  });
+
+  it("跳过 manifest 对比时（manifestSha256 undefined）registry 摘要仍强制校验", () => {
+    const buffer = Buffer.from("bytes");
+    // registry digest 匹配 + manifest 不检查 → 通过
+    expect(() =>
+      verifyPyPiFile(buffer, {
+        identity: { name: "kiwi-catalog", version: "0.2.0", filename: "kiwi_catalog-0.2.0-py3-none-any.whl" },
+        pypiSha256: sha256Hex(buffer),
+        manifestSha256: undefined,
+      }),
+    ).not.toThrow();
+    // registry digest 不匹配（防替换边界）→ 仍 fail-closed
+    expect(() =>
+      verifyPyPiFile(buffer, {
+        identity: { name: "kiwi-catalog", version: "0.2.0", filename: "kiwi_catalog-0.2.0-py3-none-any.whl" },
+        pypiSha256: "0".repeat(64),
+        manifestSha256: undefined,
+      }),
+    ).toThrow(/sha256 mismatch vs PyPI JSON/);
   });
 });

@@ -21,6 +21,7 @@ import { basename, join, resolve } from "node:path";
 import { existsSync } from "node:fs";
 import {
   downloadBuffer,
+  isFreshPublish,
   loadManifest,
   npmRegistryMetadata,
   npmTarballPackageJson,
@@ -53,12 +54,17 @@ if (!npmEntry) {
   const { name, version } = npmTarballPackageJson(tarballPath);
   const meta = await npmRegistryMetadata(name, version);
   const buffer = await downloadBuffer(meta.tarball);
+  // 本 run 幂等跳过的版本：registry 上是历史构建，不与新 manifest 比字节，
+  // 只校验 registry 自身 integrity（防替换）；真实发布的版本严格对比。
+  const fresh = isFreshPublish(process.env.VERIFY_FRESH_NPM);
   verifyNpmDownload(buffer, {
     identity: { name, version },
     integrity: meta.integrity,
-    sha256: npmEntry.sha256,
+    sha256: fresh ? npmEntry.sha256 : undefined,
   });
-  verified.push(`npm ${name}@${version} verified (${meta.tarball})`);
+  verified.push(
+    `npm ${name}@${version} verified (${meta.tarball})${fresh ? "" : " [registry digest only: predates this run]"}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +81,10 @@ for (const pkgDir of ["kiwi-catalog", "shopping-cli"]) {
   }
   const first = parsePyPiFilename(basename(entries[0].path));
   const meta = await pypiMetadata(first.name, first.version);
+  // 同 npm：幂等跳过的版本只校验 PyPI 自身 digests，不与新 manifest 比字节。
+  const freshEnv =
+    pkgDir === "kiwi-catalog" ? process.env.VERIFY_FRESH_KIWI_CATALOG : process.env.VERIFY_FRESH_SHOPPING_CLI;
+  const fresh = isFreshPublish(freshEnv);
   for (const entry of entries) {
     const filename = basename(entry.path);
     const pypiFile = meta.urls.find((url) => url.filename === filename);
@@ -87,9 +97,11 @@ for (const pkgDir of ["kiwi-catalog", "shopping-cli"]) {
     verifyPyPiFile(buffer, {
       identity: { name: first.name, version: first.version, filename },
       pypiSha256: pypiFile.digests.sha256,
-      manifestSha256: entry.sha256,
+      manifestSha256: fresh ? entry.sha256 : undefined,
     });
-    verified.push(`PyPI ${first.name}@${first.version} ${filename} verified (${pypiFile.url})`);
+    verified.push(
+      `PyPI ${first.name}@${first.version} ${filename} verified (${pypiFile.url})${fresh ? "" : " [registry digest only: predates this run]"}`,
+    );
   }
 }
 

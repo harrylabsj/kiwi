@@ -350,6 +350,11 @@ jobs:
     if: inputs.publish == true
     runs-on: ubuntu-latest
     environment: kiwi-release
+    # published=true 表示本 run 真实发布了新版本；false 表示版本已存在幂等
+    # 跳过——verify-registry 据此决定能否用本 run 新构建产物对比 registry
+    # 字节（跳过的版本 registry 上是历史 run 构建，重建不保证逐字节一致）。
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
     permissions:
       contents: read
       id-token: write
@@ -380,16 +385,19 @@ jobs:
           set -euo pipefail
           node scripts/verify-release-manifest.mjs "$GITHUB_WORKSPACE/dist-artifact/release"
 
-      - name: Publish exact npm tarball with provenance (idempotent, skip if already published)
+      - id: publish
+        name: Publish exact npm tarball with provenance (idempotent, skip if already published)
         run: |
           set -euo pipefail
           NAME="$(node -p "require('./package.json').name")"
           VERSION="$(node -p "require('./package.json').version")"
           if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
             echo "== ${NAME}@${VERSION} already published to npm; skipping"
+            echo "published=false" >> "$GITHUB_OUTPUT"
           else
             npm publish dist-artifact/release/npm/*.tgz --provenance --access public
             echo "== published ${NAME}@${VERSION} to npm"
+            echo "published=true" >> "$GITHUB_OUTPUT"
           fi
 
   publish-kiwi-catalog:
@@ -398,6 +406,8 @@ jobs:
     if: inputs.publish == true
     runs-on: ubuntu-latest
     environment: kiwi-release
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
     permissions:
       contents: read
       id-token: write
@@ -431,7 +441,8 @@ jobs:
           set -euo pipefail
           node scripts/verify-release-manifest.mjs "$GITHUB_WORKSPACE/dist-artifact/release"
 
-      - name: Publish kiwi-catalog wheel and sdist (idempotent, skip if already published)
+      - id: publish
+        name: Publish kiwi-catalog wheel and sdist (idempotent, skip if already published)
         run: |
           set -euo pipefail
           SDIST="$(find dist-artifact/release/kiwi-catalog -maxdepth 1 -name '*.tar.gz' -print -quit)"
@@ -444,11 +455,13 @@ jobs:
           fi
           if curl -fsSL --max-time 30 "https://pypi.org/pypi/${NAME}/${VERSION}/json" >/dev/null 2>&1; then
             echo "== ${NAME}==${VERSION} already published to PyPI; skipping"
+            echo "published=false" >> "$GITHUB_OUTPUT"
           else
             uv publish --trusted-publishing always \
               dist-artifact/release/kiwi-catalog/*.whl \
               dist-artifact/release/kiwi-catalog/*.tar.gz
             echo "== published ${NAME}==${VERSION} to PyPI"
+            echo "published=true" >> "$GITHUB_OUTPUT"
           fi
 
   publish-shopping-cli:
@@ -457,6 +470,8 @@ jobs:
     if: inputs.publish == true
     runs-on: ubuntu-latest
     environment: kiwi-release
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
     permissions:
       contents: read
       id-token: write
@@ -490,7 +505,8 @@ jobs:
           set -euo pipefail
           node scripts/verify-release-manifest.mjs "$GITHUB_WORKSPACE/dist-artifact/release"
 
-      - name: Publish shopping-cli wheel and sdist (idempotent, skip if already published)
+      - id: publish
+        name: Publish shopping-cli wheel and sdist (idempotent, skip if already published)
         run: |
           set -euo pipefail
           SDIST="$(find dist-artifact/release/shopping-cli -maxdepth 1 -name '*.tar.gz' -print -quit)"
@@ -503,11 +519,13 @@ jobs:
           fi
           if curl -fsSL --max-time 30 "https://pypi.org/pypi/${NAME}/${VERSION}/json" >/dev/null 2>&1; then
             echo "== ${NAME}==${VERSION} already published to PyPI; skipping"
+            echo "published=false" >> "$GITHUB_OUTPUT"
           else
             uv publish --trusted-publishing always \
               dist-artifact/release/shopping-cli/*.whl \
               dist-artifact/release/shopping-cli/*.tar.gz
             echo "== published ${NAME}==${VERSION} to PyPI"
+            echo "published=true" >> "$GITHUB_OUTPUT"
           fi
 
   verify-registry:
@@ -535,6 +553,13 @@ jobs:
           node-version: "22"
 
       - name: Verify registry downloads against built manifest (fail closed)
+        env:
+          # 本 run 真实发布的版本才用新构建 manifest 对比字节；幂等跳过的版本
+          # registry 上是历史 run 构建（wheel/sdist 含打包时间戳，重建不保证
+          # 逐字节一致），只校验 registry 自身摘要一致性。env 缺失默认 strict。
+          VERIFY_FRESH_NPM: ${{ needs.publish-npm.outputs.published }}
+          VERIFY_FRESH_KIWI_CATALOG: ${{ needs.publish-kiwi-catalog.outputs.published }}
+          VERIFY_FRESH_SHOPPING_CLI: ${{ needs.publish-shopping-cli.outputs.published }}
         run: |
           set -euo pipefail
           node scripts/verify-registry-downloads.mjs "$GITHUB_WORKSPACE/dist-artifact/release"

@@ -64,6 +64,8 @@ export function withPropagationRetry<T>(
   },
 ): Promise<T>;
 
+export function isFreshPublish(envValue: string | undefined): boolean;
+
 export function pypiMetadata(name: string, version: string): Promise<{
   info: { name: string; version: string };
   urls: Array<{ filename: string; url: string; packagetype: string; digests: { sha256: string } }>;
