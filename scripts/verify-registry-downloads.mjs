@@ -51,7 +51,7 @@ if (!npmEntry) {
 {
   const tarballPath = join(releaseDir, npmEntry.path);
   const { name, version } = npmTarballPackageJson(tarballPath);
-  const meta = npmRegistryMetadata(name, version);
+  const meta = await npmRegistryMetadata(name, version);
   const buffer = await downloadBuffer(meta.tarball);
   verifyNpmDownload(buffer, {
     identity: { name, version },

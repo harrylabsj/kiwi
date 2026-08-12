@@ -8,6 +8,7 @@ import {
   sha512Base64,
   verifyNpmDownload,
   verifyPyPiFile,
+  withPropagationRetry,
 } from "../scripts/lib/registry-verify.mjs";
 
 describe("registry-verify pure helpers", () => {
@@ -146,5 +147,51 @@ describe("registry-verify pure helpers", () => {
 
     await writeFile(join(dir, "release-manifest.json"), JSON.stringify({ schema: "other", files: [] }));
     await expect(loadManifest(dir)).rejects.toThrow(/unsupported release manifest/);
+  });
+});
+
+describe("withPropagationRetry（发布传播延迟重试）", () => {
+  const isE404 = (error: unknown) => String((error as Error)?.message ?? "").includes("E404");
+
+  it("可重试错误在长退避后成功（版本传播可见）", async () => {
+    let calls = 0;
+    const result = await withPropagationRetry(
+      () => {
+        calls += 1;
+        if (calls < 3) return Promise.reject(new Error("npm error code E404"));
+        return Promise.resolve("ok");
+      },
+      { isRetryable: isE404, delays: [1, 1, 1], label: "test" },
+    );
+    expect(result).toBe("ok");
+    expect(calls).toBe(3);
+  });
+
+  it("不可重试错误（如摘要 mismatch）立即 fail-closed，不重试", async () => {
+    let calls = 0;
+    await expect(
+      withPropagationRetry(
+        () => {
+          calls += 1;
+          return Promise.reject(new Error("sha256 mismatch vs release manifest"));
+        },
+        { isRetryable: isE404, delays: [1, 1, 1], label: "test" },
+      ),
+    ).rejects.toThrow(/sha256 mismatch/);
+    expect(calls).toBe(1);
+  });
+
+  it("重试耗尽后抛出最后一次错误", async () => {
+    let calls = 0;
+    await expect(
+      withPropagationRetry(
+        () => {
+          calls += 1;
+          return Promise.reject(new Error(`E404 attempt ${calls}`));
+        },
+        { isRetryable: isE404, delays: [1, 1], label: "test" },
+      ),
+    ).rejects.toThrow(/E404 attempt 3/);
+    expect(calls).toBe(3); // 首次 + 2 次延迟重试
   });
 });

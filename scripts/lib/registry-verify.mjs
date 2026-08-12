@@ -142,6 +142,48 @@ export function verifyPyPiFile(buffer, expected) {
 const DEFAULT_RETRIES = 3;
 const DEFAULT_TIMEOUT_MS = 30000;
 
+// 发布传播延迟：registry 元数据/CDN 在 publish 后需要数秒到数分钟才可见
+// （2026-08-12 v0.7.0 发布实测：verify-registry 在 npm publish 后数秒查询
+// 踩 E404 假失败）。仅对「版本尚未出现」类错误做长退避重试；摘要/内容
+// 不匹配是真实校验失败，必须立即 fail-closed，绝不靠重试等待。
+const PROPAGATION_DELAYS_MS = [10_000, 20_000, 30_000, 60_000, 60_000, 60_000];
+
+/**
+ * 对「尚未传播可见」类错误做长退避重试。isRetryable 返回 false 的错误
+ * （如摘要 mismatch）立即抛出。每次尝试内部仍可用短重试处理瞬时网络错误。
+ */
+export async function withPropagationRetry(
+  fn,
+  { isRetryable, delays = PROPAGATION_DELAYS_MS, label = "registry query" } = {},
+) {
+  let lastError;
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryable(error) || attempt === delays.length) break;
+      const waitMs = delays[attempt];
+      console.error(
+        `${label} not yet propagated (attempt ${attempt + 1}/${delays.length + 1}); retrying in ${waitMs / 1000}s`,
+      );
+      await sleep(waitMs);
+    }
+  }
+  throw lastError ?? new Error(`${label} failed`);
+}
+
+/** npm publish 后版本尚未传播（E404）→ 可重试；其余错误 fail-closed。 */
+function isNpmNotYetPublishedError(error) {
+  const text = String(error?.stderr ?? "") + String(error?.message ?? "");
+  return text.includes("E404") || text.includes("No match found") || text.includes("is not in this registry");
+}
+
+/** PyPI release JSON 在 publish 后短暂 404 → 可重试；其余错误 fail-closed。 */
+function isPyPiNotYetPublishedError(error) {
+  return String(error?.message ?? "").startsWith("HTTP 404");
+}
+
 async function fetchWithRetry(url, { retries = DEFAULT_RETRIES } = {}) {
   let lastError;
   for (let attempt = 1; attempt <= retries; attempt += 1) {
@@ -174,32 +216,45 @@ export async function downloadBuffer(url, { retries = DEFAULT_RETRIES } = {}) {
  * Query the npm registry for a package version's dist metadata using `npm view`.
  * Returns { tarball, integrity, version }. The metadata is cross-checked against
  * the release manifest by the caller; it is never trusted alone.
+ *
+ * 版本尚未传播（E404）时长退避重试（发布 CDN 传播延迟）；元数据不完整等
+ * 真实错误立即 fail-closed。
  */
-export function npmRegistryMetadata(name, version) {
-  const stdout = execFileSync(
-    "npm",
-    ["view", `${name}@${version}`, "dist.tarball", "dist.integrity", "version", "--json"],
-    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+export async function npmRegistryMetadata(name, version) {
+  return withPropagationRetry(
+    () => {
+      const stdout = execFileSync(
+        "npm",
+        ["view", `${name}@${version}`, "dist.tarball", "dist.integrity", "version", "--json"],
+        { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+      );
+      const data = JSON.parse(stdout);
+      const tarball = data["dist.tarball"] ?? data.dist?.tarball;
+      const integrity = data["dist.integrity"] ?? data.dist?.integrity;
+      const resolvedVersion = data.version;
+      if (!tarball || !integrity || !resolvedVersion) {
+        throw new Error(`npm view returned incomplete metadata for ${name}@${version}`);
+      }
+      return { tarball, integrity, version: resolvedVersion };
+    },
+    { isRetryable: isNpmNotYetPublishedError, label: `npm ${name}@${version}` },
   );
-  const data = JSON.parse(stdout);
-  const tarball = data["dist.tarball"] ?? data.dist?.tarball;
-  const integrity = data["dist.integrity"] ?? data.dist?.integrity;
-  const resolvedVersion = data.version;
-  if (!tarball || !integrity || !resolvedVersion) {
-    throw new Error(`npm view returned incomplete metadata for ${name}@${version}`);
-  }
-  return { tarball, integrity, version: resolvedVersion };
 }
 
-/** Fetch a PyPI project release JSON (bounded retries). */
+/** Fetch a PyPI project release JSON（404 传播延迟长退避重试；其余短重试兜底）。 */
 export async function pypiMetadata(name, version) {
   const url = `https://pypi.org/pypi/${encodeURIComponent(name)}/${encodeURIComponent(version)}/json`;
-  const response = await fetchWithRetry(url);
-  const data = await response.json();
-  if (!data.info || !Array.isArray(data.urls)) {
-    throw new Error(`unexpected PyPI JSON for ${name}@${version}`);
-  }
-  return data;
+  return withPropagationRetry(
+    async () => {
+      const response = await fetchWithRetry(url);
+      const data = await response.json();
+      if (!data.info || !Array.isArray(data.urls)) {
+        throw new Error(`unexpected PyPI JSON for ${name}@${version}`);
+      }
+      return data;
+    },
+    { isRetryable: isPyPiNotYetPublishedError, label: `PyPI ${name}@${version}` },
+  );
 }
 
 /** Read the package/package.json inside an npm tarball. */
