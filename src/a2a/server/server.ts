@@ -298,11 +298,8 @@ export class A2AServer {
       sendText(res, 405, "method not allowed");
       return;
     }
-    const auth = await this.authenticate(req);
-    if ("error" in auth) {
-      sendJsonError(res, null, auth.error.httpStatus, auth.error.body);
-      return;
-    }
+    // Agent Card 是公开发现元数据（catalog 验证 / buyer 发现都要匿名拉取），
+    // 不套用 A2A 端点认证；敏感字段本就在构造时被 secrets 扫描器剥离。
     let card: unknown;
     try {
       card = buildAgentCard(resolveCardConfig(this.cardConfig));
@@ -324,11 +321,7 @@ export class A2AServer {
       sendText(res, 405, "method not allowed");
       return;
     }
-    const auth = await this.authenticate(req);
-    if ("error" in auth) {
-      sendJsonError(res, null, auth.error.httpStatus, auth.error.body);
-      return;
-    }
+    // UCP Profile 同 Agent Card：公开发现元数据，不套用 A2A 端点认证。
     let built: BuiltUcpProfile;
     try {
       built = buildUcpProfile(resolveCardConfig(this.cardConfig), {
