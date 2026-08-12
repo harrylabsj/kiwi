@@ -291,7 +291,13 @@ async function executeNegotiateBuyerTask(
     throw new BuyerTaskError("validation", "未配置 agent catalog（KIWI_CATALOG_URL 或 --catalog）");
   }
   const intent = task.intent;
-  const sku = intent.category ?? intent.query_text ?? NEGOTIATE_SKU;
+  // 优先用短名单候选的 merchant SKU（catalog listing source_product_ref /
+  // marketplace product.sku）——用自由文本 intent 当 SKU 会让商家按回退价报价
+  // （实测 "iPhone 17" → ¥807.50，而候选 VQ-003 → ¥94.05）。
+  const candidateSku = store
+    .listCandidates(a.task_id)
+    .find((c) => c.candidate_status === "shortlisted" || c.candidate_status === "selected")?.sku;
+  const sku = candidateSku ?? intent.category ?? intent.query_text ?? NEGOTIATE_SKU;
   const result = await negotiateWithAgent({
     catalog: deps.catalog,
     allowLoopback: deps.allowLoopback === true,

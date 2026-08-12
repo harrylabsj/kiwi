@@ -211,6 +211,55 @@ describe("negotiate_buyer_task", () => {
     expect(capture.some((c) => c.action === "accept_nonbinding")).toBe(true);
   });
 
+  // 回归 CD #28：intent.category 是自由文本时，优先用短名单候选的 merchant SKU，
+  // 不能让商家按自由文本回退价报价（"iPhone 17" → 未知 SKU 回退，而非 VQ-003）。
+  it("intent.category 自由文本 → 用短名单候选 SKU 协商", async () => {
+    const s = await startTestA2aStack({
+      capture,
+      productSource: {
+        async getProduct(sku: string) {
+          if (sku === "VQ-003") return { price: 99, currency: "CNY" };
+          throw new Error(`no product ${sku}`);
+        },
+      },
+    });
+    stacks.push(s);
+    const h = await setupBuyer({ catalog: s.catalogUrl });
+    const { task_id } = await createReadyTask(h.store, {
+      intent: { category: "iPhone 17", quantity: 1 },
+    });
+    // 从 catalog listing 短名单一个候选，其 merchant SKU = VQ-003。
+    const cand = h.store.upsertCandidate({
+      task_id,
+      connector_id: "kiwi-catalog",
+      platform: "kiwi-catalog",
+      external_product_id: "lst_iphone17",
+      sku: "VQ-003",
+      merchant_id: "mkt_veyquo",
+      owner_agent_id: "cagt_veyquo",
+    });
+    h.store.updateCandidate(cand.candidate_id, { candidate_status: "shortlisted", eligibility: "eligible" });
+
+    const tool = h.getTool("negotiate_buyer_task");
+    const first = await tool.execute("c1", { task_id });
+    expect(first.content[0]?.type === "text" ? first.content[0].text : "").toContain("等待批准");
+    const pending = h.approvals.listPending();
+    expect(pending).toHaveLength(1);
+    const candidate = pending[0] as NonNullable<(typeof pending)[number]>;
+    h.approvals.markApproved(candidate.candidate_id);
+    const outcome = await executeApprovedCandidate(
+      h.approvals,
+      candidate.candidate_id,
+      h.hooks.get(candidate.candidate_id) as PendingHooks,
+    );
+    if (outcome.kind !== "executed") throw new Error("expected an executed candidate");
+    const output = outcome.output as { ok: boolean; facts?: { sku?: string; offerPriceMinor?: number } };
+    expect(output.ok).toBe(true);
+    // 协商用候选 SKU VQ-003，而不是自由文本 "iPhone 17"（否则 getProduct 抛错）。
+    expect(output.facts?.sku).toBe("VQ-003");
+    expect(output.facts?.offerPriceMinor).toBe(9_900);
+  });
+
   it("no approval → no messages leave the buyer side", async () => {
     const s = await startTestA2aStack({ productSource, capture });
     stacks.push(s);
