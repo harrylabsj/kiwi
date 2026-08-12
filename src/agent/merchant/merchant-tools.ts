@@ -34,6 +34,7 @@ import type { AgentHarnessTool, AgentToolResult } from "@earendil-works/pi-agent
 import type { AgentProfile } from "../../config/profile.js";
 import type { CommerceDataSource } from "../../commerce/data-source.js";
 import type { CommerceClient } from "../../commerce/types.js";
+import { LedgerStore } from "../../negotiation/ledger/index.js";
 import type { AgentMode } from "../mode.js";
 import { buildNegotiationChatTools, writeGateText } from "../negotiation-chat.js";
 import type { WriteApprovalCandidateStore } from "./action-candidate.js";
@@ -192,6 +193,9 @@ export interface MerchantToolDeps {
    * arguments, proposals or logs.
    */
   privateValues?: () => Array<{ key: string; value: string }>;
+  /** 商家 A2A 节点 ledger 目录（`<dataDir>/a2a/ledger`）；提供时挂载
+   *  `list_a2a_negotiations` 工具，让运营者查看真实发生的 A2A 磋商记录。 */
+  a2aLedgerDir?: string;
 }
 
 export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
@@ -667,6 +671,73 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     },
   };
 
+  // ── A2A 磋商记录（真实经 A2A 节点的磋商，读 merchant 节点 ledger）───────
+  const listA2aNegotiations: Tool = {
+    name: "list_a2a_negotiations",
+    label: "A2A 磋商记录",
+    description:
+      "列出商家节点收到/处理的 A2A 磋商记录（真实磋商，非 shopping-cli 咨询）：" +
+      "negotiation_id、是否达成协议、SKU、数量、成交价、时间。运营者问" +
+      "「有用户来磋商吗」时用此查看。",
+    parameters: {
+      type: "object",
+      properties: {
+        limit: { type: "integer", description: "最多返回最近 N 笔（缺省 20）" },
+      },
+      additionalProperties: false,
+    },
+    execute: async (_id, params) => {
+      const ledgerDir = deps.a2aLedgerDir;
+      if (ledgerDir === undefined) {
+        return textResult("未配置 A2A ledger 目录，无法读取磋商记录。");
+      }
+      const ledger = new LedgerStore({ dir: ledgerDir, now: deps.now });
+      const limit = Math.min(Math.max(Number((params as { limit?: unknown }).limit ?? 20) || 20, 1), 100);
+      const rows: Array<{ at: string; line: string }> = [];
+      for (const negotiationId of ledger.listNegotiations()) {
+        const events = ledger.events(negotiationId);
+        let at = "";
+        let lastAction = "";
+        let sku = "";
+        let qty: number | undefined;
+        let priceMinor: number | undefined;
+        let agreement = false;
+        for (const e of events) {
+          if (e.recorded_at > at) at = e.recorded_at;
+          if (e.event_kind === "message_sent") {
+            const wp = e.wire_payload as
+              | {
+                  action?: string;
+                  payload?: {
+                    terms?: { items?: Array<{ sku?: string; quantity?: { value?: number }; unit_price?: { amount_minor?: number } }> };
+                  };
+                }
+              | undefined;
+            if (wp?.action !== undefined) lastAction = wp.action;
+            const item = wp?.payload?.terms?.items?.[0];
+            if (item?.sku !== undefined && item.sku !== "") sku = item.sku;
+            if (item?.quantity?.value !== undefined) qty = item.quantity.value;
+            if (item?.unit_price?.amount_minor !== undefined) priceMinor = item.unit_price.amount_minor;
+          }
+          if (e.state_transition?.to_phase === "AGREEMENT_REACHED") agreement = true;
+        }
+        const price = priceMinor !== undefined ? `，价 ${(priceMinor / 100).toFixed(2)} 元/件` : "";
+        rows.push({
+          at,
+          line:
+            `· ${negotiationId}${agreement ? " ✅ 已达成协议" : `（${lastAction || "?"}）`} ` +
+            `SKU=${sku || "-"} 数量=${qty ?? "-"}${price} ${at}`,
+        });
+      }
+      rows.sort((a, b) => (a.at > b.at ? -1 : a.at < b.at ? 1 : 0));
+      const recent = rows.slice(0, limit);
+      if (recent.length === 0) return textResult("暂无 A2A 磋商记录。", { count: 0 });
+      return textResult(`共 ${rows.length} 笔 A2A 磋商（最近 ${recent.length} 笔）：\n${recent.map((r) => r.line).join("\n")}`, {
+        count: recent.length,
+      });
+    },
+  };
+
   return [
     listProducts,
     getProduct,
@@ -680,6 +751,7 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     updateInventory,
     pauseListing,
     draftChange,
+    ...(deps.a2aLedgerDir !== undefined ? [listA2aNegotiations] : []),
   ];
 }
 

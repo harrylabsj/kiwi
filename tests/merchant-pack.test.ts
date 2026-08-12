@@ -8,8 +8,12 @@
  * Deterministic: in-memory SQLite, FakeMerchantClient + FakeCommerceClient,
  * injected clocks.
  */
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { LedgerStore } from "../src/negotiation/ledger/index.js";
 import { migrateMemorySchema } from "../src/agent/memory/schema.js";
 import { WriteApprovalCandidateStore, executeApprovedCandidate } from "../src/agent/merchant/action-candidate.js";
 import { StaticCredentialBroker } from "../src/agent/merchant/credential-broker.js";
@@ -58,6 +62,8 @@ function setupMerchant(options: {
   marketplace?: TestClientOverrides;
   /** 完全不给磋商 CommerceClient（模拟 SHOPPING_AGENT_TOKEN 未设置）。 */
   noCommerceClient?: boolean;
+  /** 商家 A2A ledger 目录（挂载 list_a2a_negotiations）。 */
+  a2aLedgerDir?: string;
 } = {}): MerchantHarness {
   let clock = T0;
   const db = new DatabaseSync(":memory:");
@@ -95,6 +101,7 @@ function setupMerchant(options: {
         .flatMap((m) =>
           m.vault_ref !== undefined ? [{ key: m.key, value: store.openVaultValue(m.vault_ref) }] : [],
         ),
+    ...(options.a2aLedgerDir !== undefined ? { a2aLedgerDir: options.a2aLedgerDir } : {}),
   };
   const tools = buildMerchantTools(deps);
   return {
@@ -471,5 +478,52 @@ describe("merchant pack without negotiation CommerceClient (regression: no SHOPP
     // 写工具照常挂载，作用域凭据缺什么 fail closed 什么（catalog 已配 → 生成候选）。
     const update = h.getTool("update_product");
     expect(update).toBeDefined();
+  });
+
+  it("list_a2a_negotiations 读取 A2A ledger 列出磋商记录（含协议达成）", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "merchant-a2a-ledger-"));
+    try {
+      const ledger = new LedgerStore({ dir, now: () => T0 });
+      ledger.append({
+        event_kind: "message_sent",
+        negotiation_id: "neg_abc",
+        identity: { sender_identity: "mkt_veyquo", counterparty_identity: "buyer:*", actor: "merchant" },
+        capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+        wire_payload: {
+          action: "conditional_offer",
+          payload: {
+            type: "conditional_offer",
+            terms: {
+              items: [
+                { sku: "VQ-003", quantity: { value: 3, unit: "piece" }, unit_price: { currency: "CNY", amount_minor: 899900 } },
+              ],
+            },
+          },
+        },
+        outcome: { kind: "ok" },
+        occurred_at: T0,
+      });
+      ledger.append({
+        event_kind: "state_transition",
+        negotiation_id: "neg_abc",
+        identity: { sender_identity: "mkt_veyquo", counterparty_identity: "buyer:*", actor: "merchant" },
+        capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+        state_transition: { from_phase: "OFFER_OPEN", to_phase: "AGREEMENT_REACHED" },
+        outcome: { kind: "ok" },
+        occurred_at: T0,
+      });
+
+      const h = setupMerchant({ a2aLedgerDir: dir });
+      const tool = h.getTool("list_a2a_negotiations");
+      expect(tool).toBeDefined();
+      const result = await tool.execute("c1", {});
+      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+      expect(text).toContain("neg_abc");
+      expect(text).toContain("已达成协议");
+      expect(text).toContain("SKU=VQ-003");
+      expect(text).toContain("8999.00");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
