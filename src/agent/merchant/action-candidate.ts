@@ -190,15 +190,58 @@ export class WriteApprovalCandidateStore {
       .all(this.principalId, now) as { candidate_id: string }[];
     for (const { candidate_id } of due) {
       this.db
-        .prepare("UPDATE action_candidates SET status = 'expired', updated_at = ? WHERE candidate_id = ?")
+        .prepare(
+          "UPDATE action_candidates SET status = 'expired', updated_at = ? WHERE candidate_id = ?",
+        )
         .run(now, candidate_id);
     }
     return due.length;
   }
 
-  private setStatus(candidateId: string, status: WriteApprovalCandidateStatus): WriteApprovalCandidate {
+  /**
+   * Expire candidates whose execution hooks cannot survive an AgentKernel
+   * restart. The candidate record is durable, but the hook closes over the
+   * live connector/session and is intentionally process-local; keeping the
+   * row pending would make /pending advertise an action that /approve cannot
+   * execute. Returns the number of rows invalidated for this principal.
+   */
+  expireForRecovery(): number {
+    const now = this.now();
+    const recoverable = this.db
+      .prepare(
+        `SELECT candidate_id FROM action_candidates
+         WHERE principal_id = ? AND status IN ('pending_approval','approved')`,
+      )
+      .all(this.principalId) as { candidate_id: string }[];
+    for (const { candidate_id } of recoverable) {
+      this.db
+        .prepare(
+          `UPDATE action_candidates
+           SET status = 'expired', updated_at = ?
+           WHERE candidate_id = ? AND principal_id = ?
+             AND status IN ('pending_approval','approved')`,
+        )
+        .run(now, candidate_id, this.principalId);
+    }
+    return recoverable.length;
+  }
+
+  /** Expire one live candidate when its process-local execution hook is gone. */
+  expireCandidate(candidateId: string): WriteApprovalCandidate {
     const existing = this.get(candidateId);
-    if (existing === undefined) throw new WriteApprovalCandidateError("not_found", `no candidate ${candidateId}`);
+    if (existing === undefined)
+      throw new WriteApprovalCandidateError("not_found", `no candidate ${candidateId}`);
+    if (existing.status !== "pending_approval" && existing.status !== "approved") return existing;
+    return this.setStatus(candidateId, "expired");
+  }
+
+  private setStatus(
+    candidateId: string,
+    status: WriteApprovalCandidateStatus,
+  ): WriteApprovalCandidate {
+    const existing = this.get(candidateId);
+    if (existing === undefined)
+      throw new WriteApprovalCandidateError("not_found", `no candidate ${candidateId}`);
     this.db
       .prepare("UPDATE action_candidates SET status = ?, updated_at = ? WHERE candidate_id = ?")
       .run(status, this.now(), candidateId);
@@ -209,9 +252,11 @@ export class WriteApprovalCandidateStore {
   markApproved(candidateId: string): WriteApprovalCandidate {
     this.expireDue();
     const existing = this.get(candidateId);
-    if (existing === undefined) throw new WriteApprovalCandidateError("not_found", `no candidate ${candidateId}`);
+    if (existing === undefined)
+      throw new WriteApprovalCandidateError("not_found", `no candidate ${candidateId}`);
     if (existing.status === "executed" || existing.status === "approved") return existing;
-    if (existing.status === "expired") throw new WriteApprovalCandidateError("expired", `candidate ${candidateId} expired`);
+    if (existing.status === "expired")
+      throw new WriteApprovalCandidateError("expired", `candidate ${candidateId} expired`);
     if (existing.status !== "pending_approval") {
       throw new WriteApprovalCandidateError(
         "conflict",
@@ -285,7 +330,11 @@ export function executionFailureDetail(output: unknown): string {
   const firstText = o.content?.find(
     (b) => b !== undefined && b.type === "text" && typeof b.text === "string",
   );
-  if (firstText !== undefined && typeof firstText.text === "string" && firstText.text.trim() !== "") {
+  if (
+    firstText !== undefined &&
+    typeof firstText.text === "string" &&
+    firstText.text.trim() !== ""
+  ) {
     return firstText.text.trim().slice(0, 200);
   }
   return "";
@@ -357,11 +406,7 @@ export async function executeApprovedCandidate(
   // 抛错）→ 审批候选不标 executed：审计状态不得与 Ledger 矛盾（此前无条件
   // markExecuted，/approve 显示"已执行"但链上实际无交付）。标 superseded
   // 防重复批准，返回 stale 让调用方提示重新生成候选。
-  if (
-    output !== null &&
-    typeof output === "object" &&
-    (output as { ok?: unknown }).ok === false
-  ) {
+  if (output !== null && typeof output === "object" && (output as { ok?: unknown }).ok === false) {
     store.supersede(candidateId);
     const detail = executionFailureDetail(output);
     return {

@@ -53,6 +53,11 @@ export interface BuyerInitOptions {
   shoppingCliUrl?: string;
   autoNegotiate?: boolean;
   outputPath?: string;
+  /**
+   * 默认 profile 写入路径（裸 `kiwi` 读取；缺省 DEFAULT_PROFILE_PATH）。
+   * 测试注入隔离用——init 测试不得污染真实 `~/.kiwi/kiwi.yaml`。
+   */
+  defaultProfilePath?: string;
   force?: boolean;
   modelProvider?: string;
   modelName?: string;
@@ -122,7 +127,7 @@ export function buyerInit(options: BuyerInitOptions): BuyerInitReport {
       stringifyYaml(profile);
     writeFileSync(outputPath, yaml, { mode: 0o600 });
     // 同时写默认 profile：之后裸 `kiwi` 即按此 buyer 运行。
-    writeDefaultProfile(yaml);
+    writeDefaultProfile(yaml, options.defaultProfilePath);
   } catch (err) {
     return {
       ok: false,

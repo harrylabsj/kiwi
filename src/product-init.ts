@@ -72,6 +72,12 @@ export interface MerchantInitOptions {
   autoNegotiate?: boolean;
   /** profile 输出路径（缺省 ./merchant.yaml）。 */
   outputPath?: string;
+  /**
+   * 默认 profile 写入路径（裸 `kiwi` 读取；缺省 DEFAULT_PROFILE_PATH）。
+   * 测试注入隔离用——init 测试不得污染真实 `~/.kiwi/kiwi.yaml`
+   * （历史教训：merchant-init 测试把用户默认 profile 覆盖成测试 merchant）。
+   */
+  defaultProfilePath?: string;
   /** 覆盖已存在的输出文件（缺省拒绝）。 */
   force?: boolean;
   /**
@@ -234,7 +240,7 @@ export async function merchantInit(
         stringifyYaml(profile);
       writeFileSync(outputPath, yaml, { mode: 0o600 });
       // 同时写默认 profile：之后裸 `kiwi` 即按此 merchant 运行。
-      writeDefaultProfile(yaml);
+      writeDefaultProfile(yaml, options.defaultProfilePath);
       written = { ok: true, detail: outputPath };
     } catch (err) {
       written = {

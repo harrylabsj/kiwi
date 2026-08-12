@@ -13,7 +13,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadProfile } from "../src/config/profile.js";
 import { merchantInit } from "../src/product-init.js";
 
@@ -52,6 +52,22 @@ function healthDownFetch() {
     throw new Error("fetch failed: connection refused");
   }) as typeof fetch;
 }
+
+let defaultProfileDir: string | undefined;
+
+beforeEach(() => {
+  // 隔离默认 profile：init 测试不得污染真实 ~/.kiwi/kiwi.yaml（历史教训：
+  // merchant-init 测试把用户默认 profile 覆盖成测试 merchant）。
+  defaultProfileDir = tmpDir();
+  process.env.KIWI_DEFAULT_PROFILE = path.join(defaultProfileDir, "kiwi.yaml");
+});
+
+afterEach(() => {
+  delete process.env.KIWI_DEFAULT_PROFILE;
+  if (defaultProfileDir !== undefined) {
+    rmSync(defaultProfileDir, { recursive: true, force: true });
+  }
+});
 
 describe("merchant init (D1)", () => {
   it("generates a loadable merchant profile with unified identity", async () => {

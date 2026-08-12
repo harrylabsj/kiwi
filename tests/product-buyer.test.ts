@@ -14,7 +14,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadProfile } from "../src/config/profile.js";
 import { buyerInit, buyerSearch, buyerTasks } from "../src/product-buyer.js";
 
@@ -61,6 +61,21 @@ function listingSearchResponse(): Response {
     { status: 200, headers: { "content-type": "application/json" } },
   );
 }
+
+let defaultProfileDir: string | undefined;
+
+beforeEach(() => {
+  // 隔离默认 profile：buyer-init 测试不得污染真实 ~/.kiwi/kiwi.yaml。
+  defaultProfileDir = tmpDir();
+  process.env.KIWI_DEFAULT_PROFILE = path.join(defaultProfileDir, "kiwi.yaml");
+});
+
+afterEach(() => {
+  delete process.env.KIWI_DEFAULT_PROFILE;
+  if (defaultProfileDir !== undefined) {
+    rmSync(defaultProfileDir, { recursive: true, force: true });
+  }
+});
 
 describe("buyer init (D4)", () => {
   it("generates a loadable buyer profile without shopping-cli", async () => {

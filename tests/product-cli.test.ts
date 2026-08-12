@@ -14,9 +14,13 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { main } from "../src/cli.js";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { main, resolveChatProfile } from "../src/cli.js";
 import { EXIT } from "../src/exit-codes.js";
+
+const KIWI_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const MERCHANT_PROFILE = path.join(KIWI_ROOT, "examples", "profiles", "merchant.fake.yaml");
 
 async function run(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   const stdout: string[] = [];
@@ -40,7 +44,41 @@ async function run(argv: string[]): Promise<{ code: number; stdout: string; stde
   }
 }
 
+let defaultProfileDir: string | undefined;
+
+beforeEach(() => {
+  // 隔离默认 profile：`kiwi merchant/buyer init` 的 CLI 路径（run([...])）会写
+  // 默认 profile，测试不得污染真实 ~/.kiwi/kiwi.yaml（历史教训）。
+  defaultProfileDir = mkdtempSync(path.join(tmpdir(), "kiwi-default-profile-"));
+  process.env.KIWI_DEFAULT_PROFILE = path.join(defaultProfileDir, "kiwi.yaml");
+});
+
+afterEach(() => {
+  delete process.env.KIWI_DEFAULT_PROFILE;
+  if (defaultProfileDir !== undefined) {
+    rmSync(defaultProfileDir, { recursive: true, force: true });
+  }
+});
+
 describe("product CLI command tree (D0)", () => {
+  it("buyer start must not inherit a merchant default profile", () => {
+    const profile = resolveChatProfile(undefined, "buyer", MERCHANT_PROFILE);
+    expect(profile.role).toBe("buyer");
+    expect(profile.agent_id).toBe("kiwi-assistant");
+  });
+
+  it("buyer start rejects an explicitly supplied merchant profile", () => {
+    expect(() => resolveChatProfile(MERCHANT_PROFILE, "buyer", MERCHANT_PROFILE)).toThrow(
+      /buyer.*profile.*merchant|role.*merchant/i,
+    );
+  });
+
+  it("buyer start fails closed before opening a merchant chat", async () => {
+    const { code, stderr } = await run(["buyer", "start", "--profile", MERCHANT_PROFILE]);
+    expect(code).toBe(EXIT.CONFIG);
+    expect(stderr).toMatch(/当前 profile 的 role 是 merchant/);
+  });
+
   it("kiwi buyer --help prints the buyer tree", async () => {
     const { code, stdout } = await run(["buyer", "--help"]);
     expect(code).toBe(EXIT.OK);

@@ -28,11 +28,7 @@
  *   MemoryStore) and deterministic slash commands to the operator.
  */
 
-import {
-  AgentHarness,
-  type Session,
-  type ThinkingLevel,
-} from "@earendil-works/pi-agent-core";
+import { AgentHarness, type Session, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
@@ -252,7 +248,11 @@ function sessionLastModel(file: string): { provider: string; modelId: string } |
         typeof entry.message === "object"
       ) {
         const m = entry.message as { role?: string; provider?: string; model?: string };
-        if (m.role === "assistant" && typeof m.provider === "string" && typeof m.model === "string") {
+        if (
+          m.role === "assistant" &&
+          typeof m.provider === "string" &&
+          typeof m.model === "string"
+        ) {
           last = { provider: m.provider, modelId: m.model };
         }
       }
@@ -281,7 +281,10 @@ export class AgentKernel {
   private readonly scheduler?: TaskScheduler;
   private readonly approvals?: WriteApprovalCandidateStore;
   /** v0.7.0 KTH：handoff 存储（open() 构造，buyer 角色注入）。 */
-  private readonly handoffRuntime?: { ledger: HandoffEventStore; idempotency: HandoffIdempotencyStore };
+  private readonly handoffRuntime?: {
+    ledger: HandoffEventStore;
+    idempotency: HandoffIdempotencyStore;
+  };
   private readonly commerceClient?: CommerceClient;
   private readonly merchantClient?: MerchantClient;
   private readonly broker?: CredentialBroker;
@@ -314,10 +317,7 @@ export class AgentKernel {
   // 确定性决策每次 tick 重新 claim → 同一拒绝）——无退避会每 tick 无限
   // claim→fail 并饿死队尾 live 消息。连续失败达上限后进入冷却窗口，
   // 窗口内跳过，窗口后允许一次重试；成功/共识时清除。
-  private readonly stalledNegotiations = new Map<
-    string,
-    { since: string; attempts: number }
-  >();
+  private readonly stalledNegotiations = new Map<string, { since: string; attempts: number }>();
 
   private constructor(options: {
     profile: AgentProfile;
@@ -367,7 +367,8 @@ export class AgentKernel {
       const sessionModel = sessionLastModel(paths.mainSession);
       if (
         sessionModel !== undefined &&
-        (sessionModel.provider !== options.model.provider || sessionModel.modelId !== options.model.id)
+        (sessionModel.provider !== options.model.provider ||
+          sessionModel.modelId !== options.model.id)
       ) {
         rmSync(paths.mainSession, { force: true });
       }
@@ -392,7 +393,8 @@ export class AgentKernel {
     // Buyer capability pack (v0.3.0-B): task store + scheduler + tools.
     // All clocks are normalized to UTC ISO (SQLite compares timestamps
     // lexicographically; mixed offsets would silently break due checks).
-    const clock = () => new Date(Date.parse((options.now ?? (() => new Date().toISOString()))())).toISOString();
+    const clock = () =>
+      new Date(Date.parse((options.now ?? (() => new Date().toISOString()))())).toISOString();
     const modeRef = { value: options.mode ?? DEFAULT_AGENT_MODE };
     const pendingHooks = new Map<string, PendingActionHooks>();
     const turnId = { current: MAIN_SESSION_ID };
@@ -400,14 +402,28 @@ export class AgentKernel {
       pendingHooks.set(id, hooks);
     };
 
-    const approvals = new WriteApprovalCandidateStore({ db, principalId: principal.principal_id, now: clock });
+    const approvals = new WriteApprovalCandidateStore({
+      db,
+      principalId: principal.principal_id,
+      now: clock,
+    });
+    // Execution hooks are deliberately process-local. Invalidate durable
+    // candidates before wiring tools so a restarted kernel never exposes a
+    // /pending item that its /approve path cannot execute.
+    approvals.expireForRecovery();
     let taskStore: BuyerTaskStore | undefined;
     let scheduler: TaskScheduler | undefined;
     let buyerTools: ReturnType<typeof buildBuyerTools> = [];
     let merchantTools: ReturnType<typeof buildMerchantTools> = [];
-    let handoffRuntime: { ledger: HandoffEventStore; idempotency: HandoffIdempotencyStore } | undefined;
+    let handoffRuntime:
+      { ledger: HandoffEventStore; idempotency: HandoffIdempotencyStore } | undefined;
     if (options.profile.role === "buyer" && options.connector !== undefined) {
-      taskStore = new BuyerTaskStore({ db, principalId: principal.principal_id, now: clock, vault });
+      taskStore = new BuyerTaskStore({
+        db,
+        principalId: principal.principal_id,
+        now: clock,
+        vault,
+      });
       scheduler = new TaskScheduler({
         store: taskStore,
         connectors: [options.connector],
@@ -474,7 +490,11 @@ export class AgentKernel {
       session,
       models: options.models,
       model: options.model,
-      tools: [...buildMemoryTools(store, { turnId: () => turnId.current }), ...buyerTools, ...merchantTools],
+      tools: [
+        ...buildMemoryTools(store, { turnId: () => turnId.current }),
+        ...buyerTools,
+        ...merchantTools,
+      ],
       systemPrompt: async () => (briefing === undefined ? base : `${base}\n\n${briefing}`),
       // §18.1: a hung model/provider request must NOT wedge the chat forever —
       // abort after the profile's turn timeout and surface an error text.
@@ -551,10 +571,17 @@ export class AgentKernel {
       const seenCandidates = new Set<string>();
       const seenHandoffs = new Set<string>();
       for (const event of events) {
-        if (event.handoff_candidate_id !== undefined && !seenCandidates.has(event.handoff_candidate_id)) {
+        if (
+          event.handoff_candidate_id !== undefined &&
+          !seenCandidates.has(event.handoff_candidate_id)
+        ) {
           seenCandidates.add(event.handoff_candidate_id);
-          const lifecycle = foldCandidateLifecycle(events.filter((e) => e.handoff_candidate_id === event.handoff_candidate_id));
-          const candidateEvents = events.filter((e) => e.handoff_candidate_id === event.handoff_candidate_id);
+          const lifecycle = foldCandidateLifecycle(
+            events.filter((e) => e.handoff_candidate_id === event.handoff_candidate_id),
+          );
+          const candidateEvents = events.filter(
+            (e) => e.handoff_candidate_id === event.handoff_candidate_id,
+          );
           const created = candidateEvents.find((e) => e.event_kind === "handoff_candidate_created");
           const embedded =
             created?.outcome.kind === "ok"
@@ -566,7 +593,8 @@ export class AgentKernel {
             lifecycle: lifecycle ?? "UNKNOWN",
             destination_type:
               typeof embedded?.destination_type === "string" ? embedded.destination_type : "?",
-            destination_ref: typeof embedded?.destination_ref === "string" ? embedded.destination_ref : "?",
+            destination_ref:
+              typeof embedded?.destination_ref === "string" ? embedded.destination_ref : "?",
             display_summary: (() => {
               const summary = embedded?.display_summary as Record<string, unknown> | undefined;
               return {
@@ -593,7 +621,8 @@ export class AgentKernel {
     if (this.handoffRuntime === undefined) return "Handoff 未启用。";
     const events = this.handoffRuntime.ledger.events(negotiationId);
     const handoffEvents = events.filter((e) => e.handoff_id === handoffId);
-    if (handoffEvents.length === 0) return `未知 handoff ${handoffId}（negotiation ${negotiationId}）。`;
+    if (handoffEvents.length === 0)
+      return `未知 handoff ${handoffId}（negotiation ${negotiationId}）。`;
     const candidateId = handoffEvents[0]?.handoff_candidate_id;
     if (candidateId === undefined) return "handoff 事件缺少候选引用。";
     const candidateEvents = events.filter((e) => e.handoff_candidate_id === candidateId);
@@ -609,8 +638,15 @@ export class AgentKernel {
       ledger: this.handoffRuntime.ledger,
       candidate,
       handoff_id: handoffId,
-      identity: { sender_identity: candidate.buyer_identity_ref, counterparty_identity: candidate.merchant_identity_ref, actor: "buyer" },
-      capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+      identity: {
+        sender_identity: candidate.buyer_identity_ref,
+        counterparty_identity: candidate.merchant_identity_ref,
+        actor: "buyer",
+      },
+      capability: {
+        capability: "com.harrylabsj.kiwi.shopping.negotiation",
+        protocol_version: "1.0",
+      },
       now: () => new Date().toISOString(),
     });
     return `handoff ${handoffId} 已启动（LAUNCHED）——不证明页面加载。`;
@@ -621,7 +657,8 @@ export class AgentKernel {
     if (this.handoffRuntime === undefined) return "Handoff 未启用。";
     const events = this.handoffRuntime.ledger.events(negotiationId);
     const handoffEvents = events.filter((e) => e.handoff_id === handoffId);
-    if (handoffEvents.length === 0) return `未知 handoff ${handoffId}（negotiation ${negotiationId}）。`;
+    if (handoffEvents.length === 0)
+      return `未知 handoff ${handoffId}（negotiation ${negotiationId}）。`;
     const candidateId = handoffEvents[0]?.handoff_candidate_id;
     if (candidateId === undefined) return "handoff 事件缺少候选引用。";
     const created = events
@@ -638,8 +675,15 @@ export class AgentKernel {
       ledger: this.handoffRuntime.ledger,
       candidate,
       handoff_id: handoffId,
-      identity: { sender_identity: candidate.buyer_identity_ref, counterparty_identity: candidate.merchant_identity_ref, actor: "buyer" },
-      capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+      identity: {
+        sender_identity: candidate.buyer_identity_ref,
+        counterparty_identity: candidate.merchant_identity_ref,
+        actor: "buyer",
+      },
+      capability: {
+        capability: "com.harrylabsj.kiwi.shopping.negotiation",
+        protocol_version: "1.0",
+      },
       now: () => new Date().toISOString(),
       evidence: { kind: "local_callback", handoff_id: handoffId, at: new Date().toISOString() },
     });
@@ -738,13 +782,21 @@ export class AgentKernel {
     if (hooks === undefined) {
       // Cross-restart recovery (design §18.3): without live hooks the
       // candidate cannot be re-validated against the current marketplace.
-      this.approvals.expireDue();
-      this.approvals.supersede(candidateId);
-      return {
-        kind: "not_approvable",
-        candidate: this.approvals.get(candidateId) as typeof candidate,
-        reason: `候选 ${candidateId} 没有可用的执行钩子（可能在重启前生成）；已失效，请重新生成。`,
-      };
+      if (candidate.status === "expired") {
+        this.releasePending(candidateId);
+        return { kind: "expired", candidate };
+      }
+      if (candidate.status !== "pending_approval" && candidate.status !== "approved") {
+        this.releasePending(candidateId);
+        return {
+          kind: "not_approvable",
+          candidate,
+          reason: `候选 ${candidateId} 状态为 ${candidate.status}，不可批准。`,
+        };
+      }
+      const expired = this.approvals.expireCandidate(candidateId);
+      this.releasePending(candidateId);
+      return { kind: "expired", candidate: expired };
     }
     this.approvals.markApproved(candidateId);
     const outcome = await executeApprovedCandidate(this.approvals, candidateId, hooks);
@@ -875,7 +927,11 @@ export class AgentKernel {
     const firstPending = pending.find(
       (m) => !settledKeys.has(settledKey(m)) && !stalledKeys.has(settledKey(m)),
     );
-    if (firstPending !== undefined && this.profile.role === "buyer" && this.taskStore !== undefined) {
+    if (
+      firstPending !== undefined &&
+      this.profile.role === "buyer" &&
+      this.taskStore !== undefined
+    ) {
       const link = this.taskStore.linkByConversation(firstPending.conversation_id);
       if (link !== undefined) {
         const task = this.taskStore.getTask(link.task_id);
@@ -1115,9 +1171,7 @@ export class AgentKernel {
       return item ?? `找不到记忆 ${arg}`;
     }
     const needle = arg.toLowerCase();
-    const matches = this.store
-      .listMemories({})
-      .filter((m) => m.key.toLowerCase().includes(needle));
+    const matches = this.store.listMemories({}).filter((m) => m.key.toLowerCase().includes(needle));
     if (matches.length === 0) return `找不到与「${arg}」匹配的记忆`;
     if (matches.length > 1) {
       const lines = matches.map((m) => `  · ${m.memory_id} ${m.key}`);
@@ -1197,10 +1251,13 @@ export class AgentKernel {
 
   private renderPending(): string {
     const pending = this.listPendingApprovals();
-    if (pending.length === 0) return "[审批] 当前没有等待批准的写操作候选。";
+    if (pending.length === 0) {
+      return "[审批] 当前没有等待批准且仍可执行的写操作候选。候选在重启后会自动失效；如需继续，请重新生成候选。";
+    }
     const lines = pending.map((c, i) => {
       const args = JSON.stringify(c.arguments);
-      return `  ${i + 1}. ${c.candidate_id} [${c.risk}] ${c.tool}（截止 ${c.expires_at}）args=${args.slice(0, 80)}`;
+      const task = c.task_id === undefined ? "" : ` task=${c.task_id}`;
+      return `  ${i + 1}. ${c.candidate_id} [${c.risk}] ${c.tool}${task}（截止 ${c.expires_at}）args=${args.slice(0, 80)}`;
     });
     return [
       "[审批] 等待批准的写操作候选（/approve <编号|id> 批准；/approve all 全部批准；/reject <编号|id> 驳回）:",
@@ -1233,8 +1290,7 @@ export class AgentKernel {
       const outcomes = [];
       for (const c of pending) {
         const r = await this.approveCandidateInner(c.candidate_id);
-        const note =
-          r.kind === "stale" || r.kind === "not_approvable" ? `（${r.reason}）` : "";
+        const note = r.kind === "stale" || r.kind === "not_approvable" ? `（${r.reason}）` : "";
         outcomes.push(`${c.tool}: ${r.kind}${note}`);
       }
       return `[审批] 已处理 ${outcomes.length} 个候选：\n${outcomes.map((o) => `  · ${o}`).join("\n")}`;
@@ -1296,7 +1352,8 @@ export class AgentKernel {
         "（或设置环境变量 KIWI_AGENT_CARD_URL）。"
       );
     }
-    const catalog = flagValue("--catalog") ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600";
+    const catalog =
+      flagValue("--catalog") ?? process.env.KIWI_CATALOG_URL ?? "http://127.0.0.1:8600";
     const safeAgentId = this.profile.agent_id.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
     const domain =
       flagValue("--domain") ?? process.env.KIWI_CATALOG_DOMAIN ?? `merchant-${safeAgentId}.local`;
