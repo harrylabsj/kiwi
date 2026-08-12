@@ -225,6 +225,8 @@ export interface ProductCandidate {
   merchant_id?: string;
   /** owner Agent（listing.owner_agent_id；Direct A2A 的 catalogAgentId 输入）。 */
   owner_agent_id?: string;
+  /** 商家显示名（listing.merchant.display_name）——沟通用名字而非 catalog_agent_id。 */
+  merchant_name?: string;
   canonical_key: string;
   eligibility: CandidateEligibility;
   candidate_status: CandidateStatus;
