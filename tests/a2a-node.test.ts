@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { startA2aNode } from "../src/a2a/node.js";
+import { resolveA2aThrottle, startA2aNode } from "../src/a2a/node.js";
 import { NoneAuthVerifier } from "../src/a2a/server/index.js";
 import { testProfile } from "./helpers.js";
 
@@ -260,5 +260,34 @@ describe("startA2aNode（启动接线）", () => {
       if (savedPublic === undefined) delete process.env.KIWI_A2A_PUBLIC_URL;
       else process.env.KIWI_A2A_PUBLIC_URL = savedPublic;
     }
+  });
+});
+
+describe("resolveA2aThrottle（§31 反滥用限流接线）", () => {
+  it("未设置 / 显式关闭 → 不限流（undefined）", () => {
+    expect(resolveA2aThrottle("")).toBeUndefined();
+    expect(resolveA2aThrottle("0")).toBeUndefined();
+    expect(resolveA2aThrottle("false")).toBeUndefined();
+    expect(resolveA2aThrottle("off")).toBeUndefined();
+  });
+
+  it("1 / true / on → 默认档位表（空 ThrottleOptions）", () => {
+    expect(resolveA2aThrottle("1")).toEqual({});
+    expect(resolveA2aThrottle("true")).toEqual({});
+    expect(resolveA2aThrottle("on")).toEqual({});
+  });
+
+  it("JSON 覆盖 → 透传 ThrottleOptions（窗口/档位）", () => {
+    const opts = resolveA2aThrottle(
+      '{"windowMs":60000,"tiers":{"T0":{"identityRequestsPerWindow":60,"domainRequestsPerWindow":120}}}',
+    );
+    expect(opts?.windowMs).toBe(60_000);
+    expect(opts?.tiers?.T0?.identityRequestsPerWindow).toBe(60);
+    expect(opts?.tiers?.T0?.domainRequestsPerWindow).toBe(120);
+  });
+
+  it("非法值 → fail-closed 抛错", () => {
+    expect(() => resolveA2aThrottle("garbage")).toThrow(/KIWI_A2A_THROTTLE 非法/);
+    expect(() => resolveA2aThrottle('{"windowMs":')).toThrow(/KIWI_A2A_THROTTLE 非法/);
   });
 });
