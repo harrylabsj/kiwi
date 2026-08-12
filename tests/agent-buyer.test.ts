@@ -1175,8 +1175,9 @@ describe("catalog-first search cycle (CD #28)", () => {
     );
     expect(result.outcome).toBe("shortlist_ready");
     expect(result.task.status).toBe("awaiting_user");
+    // 自由文本意图走 q 模糊匹配；不再把 intent.category 当精确 filter。
     expect(seenQuery?.q).toBe("iphone");
-    expect(seenQuery?.category).toBe("electronics");
+    expect(seenQuery?.category).toBeUndefined();
     const candidate = result.shortlist[0]?.candidate;
     expect(candidate?.connector_id).toBe("kiwi-catalog");
     expect(candidate?.external_product_id).toBe("lst_catalog_1");
@@ -1189,6 +1190,27 @@ describe("catalog-first search cycle (CD #28)", () => {
       "https://veyquo.example/checkout/iphone17",
     );
     expect(evt?.payload.handoff_destination_types).toEqual(["external_checkout_url"]);
+  });
+
+  it("自由文本 category（如「手机」）不精确过滤：query_text 走 q 模糊匹配", async () => {
+    const { store, connector, now } = setup();
+    const ready = createReadyTask(store, {
+      intent: { category: "手机", query_text: "iPhone 17", quantity: 1 },
+    });
+    let seenQuery: KiwiListingSearchQuery | undefined;
+    const catalog = stubCatalog(async (q) => {
+      seenQuery = q;
+      return [fakeListingResult(fakeListing())];
+    });
+    const result = await runSearchCycle(
+      { store, connector, now, catalogSource: catalog },
+      ready.task_id,
+      `run:${uuidv7()}`,
+    );
+    expect(result.outcome).toBe("shortlist_ready");
+    // query_text 优先作 q；category（自由文本）不再精确过滤（否则 0 命中回退 marketplace）。
+    expect(seenQuery?.q).toBe("iPhone 17");
+    expect(seenQuery?.category).toBeUndefined();
   });
 
   it("falls back to the marketplace connector when the catalog has no match", async () => {
@@ -1263,7 +1285,9 @@ describe("catalog-first search cycle (CD #28)", () => {
     // 重启：新 scheduler 注入 catalogSource，next_run_at 已到期（拨远）。
     setNow("2026-08-05T20:00:00+08:00");
     const catalog = stubCatalog(async (q) => {
-      expect(q.category).toBe("iPhone 17");
+      // 自由文本 category 走 q 模糊匹配，不再精确过滤。
+      expect(q.q).toBe("iPhone 17");
+      expect(q.category).toBeUndefined();
       return [fakeListingResult(fakeListing())];
     });
     const sched = new TaskScheduler({ store, connectors: [connector], now, catalogSource: catalog });
