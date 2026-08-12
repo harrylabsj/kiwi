@@ -53,6 +53,33 @@ function inbound(capture: CapturedInbound[], action: string): CapturedInbound {
 }
 
 describe("negotiateWithAgent parameterization", () => {
+  it("商家 productSource 带 handoff_destination → agreement 直传成交入口（merchant → buyer）", async () => {
+    const s = await startTestA2aStack({
+      productSource: {
+        async getProduct(sku: string) {
+          if (sku === "VQ-003") {
+            return {
+              price: 8999,
+              currency: "CNY",
+              handoff_destination: "https://item.jd.com/100244909689.html",
+            };
+          }
+          throw new Error(`no product ${sku}`);
+        },
+      },
+    });
+    stacks.push(s);
+    const result = await negotiateWithAgent({
+      catalog: s.catalogUrl,
+      allowLoopback: true,
+      sku: "VQ-003",
+      quantity: 1,
+    });
+    expect(result.ok).toBe(true);
+    const terms = result.agreement?.agreed_terms as { handoff_destination?: string } | undefined;
+    expect(terms?.handoff_destination).toBe("https://item.jd.com/100244909689.html");
+  });
+
   it("custom sku/quantity/deliveryBefore reach the merchant's RFQ", async () => {
     const capture: CapturedInbound[] = [];
     const s = await stack(capture);

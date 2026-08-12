@@ -134,7 +134,13 @@ function buildProductSource(profile: AgentProfile): MerchantProductSource {
   return {
     getProduct: async (sku) => {
       const product = await client.getProduct(sku);
-      return { price: product.price, currency: product.currency };
+      return {
+        price: product.price,
+        currency: product.currency,
+        ...(product.handoff_destination !== undefined
+          ? { handoff_destination: product.handoff_destination }
+          : {}),
+      };
     },
   };
 }

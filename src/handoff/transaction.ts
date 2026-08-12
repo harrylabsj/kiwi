@@ -388,11 +388,16 @@ function stale(
   return { kind: "stale", reason };
 }
 
-/** 供调用方构造缺省 URL 安全策略（HTTPS-only + merchant 域绑定）。 */
-export function defaultUrlSafety(expectedHost?: string): (url: string) => Promise<SafeDestinationUrl> {
+/** 供调用方构造缺省 URL 安全策略（HTTPS-only + merchant 域绑定；allowlist 可
+ *  放行商家直传的外部成交入口主机，如 item.jd.com）。 */
+export function defaultUrlSafety(
+  expectedHost?: string,
+  allowlist?: readonly string[],
+): (url: string) => Promise<SafeDestinationUrl> {
   return (url: string) =>
     validateExternalDestinationUrl(url, {
       ...(expectedHost !== undefined ? { expectedHost } : {}),
+      ...(allowlist !== undefined && allowlist.length > 0 ? { allowlist } : {}),
       allowHttp: false,
     });
 }

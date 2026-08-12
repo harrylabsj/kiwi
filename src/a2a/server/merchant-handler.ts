@@ -83,7 +83,7 @@ export interface MerchantHandlerOptions {
 export interface MerchantProductSource {
   getProduct(
     sku: string,
-  ): Promise<{ price: number; currency: string; title?: string; stock?: number }>;
+  ): Promise<{ price: number; currency: string; title?: string; stock?: number; handoff_destination?: string }>;
 }
 
 /**
@@ -132,7 +132,7 @@ function seedEnvelope(seed: EnvelopeSeed): ReturnType<typeof finalizeEnvelope> {
 export const OFFER_VALIDITY_MS = 24 * 60 * 60 * 1000;
 
 function offerTerms(
-  opts: { sku?: string; priceMinor: number; quantity: number; currency?: string },
+  opts: { sku?: string; priceMinor: number; quantity: number; currency?: string; handoff_destination?: string },
   now: string,
 ) {
   return {
@@ -144,6 +144,11 @@ function offerTerms(
       },
     ],
     fulfillment_terms: { delivery_before: MERCHANT_DELIVERY_BEFORE },
+    // 商家声明的每商品成交入口（KTH handoff 目的地）：buyer 从 agreement 直读，
+    // 不依赖 catalog 投影。
+    ...(opts.handoff_destination !== undefined
+      ? { handoff_destination: opts.handoff_destination }
+      : {}),
     valid_until: new Date(Date.parse(now) + OFFER_VALIDITY_MS).toISOString(),
   };
 }
@@ -313,7 +318,7 @@ export function createMerchantHandler(
   /** 从真实商品源解析 SKU 价目；源不可用/查不到时回退演示价并返回注记。 */
   const resolveProduct = async (
     sku: string,
-  ): Promise<{ priceMinor: number; currency: string; note?: string }> => {
+  ): Promise<{ priceMinor: number; currency: string; note?: string; handoff_destination?: string }> => {
     const cached = priceBySku.get(sku);
     if (cached !== undefined) {
       if (Date.parse(now()) - cached.at <= PRICE_CACHE_TTL_MS) return cached;
@@ -336,6 +341,9 @@ export function createMerchantHandler(
           priceMinor: converted.amount_minor,
           currency: product.currency,
           at: Date.parse(now()),
+          ...(product.handoff_destination !== undefined
+            ? { handoff_destination: product.handoff_destination }
+            : {}),
         };
         priceBySku.set(sku, resolved);
         return resolved;
@@ -463,7 +471,7 @@ export function createMerchantHandler(
           };
           const sku = payload.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = payload.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
-          const { priceMinor, currency, note } = await resolveProduct(sku);
+          const { priceMinor, currency, note, handoff_destination } = await resolveProduct(sku);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -473,7 +481,7 @@ export function createMerchantHandler(
             payload: {
               type: "offer",
               offer_id: newOfferId(),
-              terms: offerTerms({ sku, priceMinor, quantity, currency }, now()),
+              terms: offerTerms({ sku, priceMinor, quantity, currency, handoff_destination }, now()),
             },
             ...(note !== undefined ? { public_message: note } : {}),
           });
@@ -491,7 +499,7 @@ export function createMerchantHandler(
           const buyerOffer = envelope.payload as { offer_id?: string; terms?: { items?: { sku?: string; quantity?: { value?: number } }[] } };
           const sku = buyerOffer.terms?.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = buyerOffer.terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
-          const { priceMinor, currency, note } = await resolveProduct(sku);
+          const { priceMinor, currency, note, handoff_destination } = await resolveProduct(sku);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -502,7 +510,7 @@ export function createMerchantHandler(
               type: "counter_offer",
               offer_id: newOfferId(),
               responding_to_offer_id: buyerOffer.offer_id ?? "",
-              proposed_terms: offerTerms({ sku, priceMinor, quantity, currency }, now()),
+              proposed_terms: offerTerms({ sku, priceMinor, quantity, currency, handoff_destination }, now()),
             },
             ...(note !== undefined ? { public_message: note } : {}),
           });
@@ -520,7 +528,7 @@ export function createMerchantHandler(
           };
           const sku = counter.proposed_terms?.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = counter.proposed_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
-          const { priceMinor, currency, note } = await resolveProduct(sku);
+          const { priceMinor, currency, note, handoff_destination } = await resolveProduct(sku);
           // 条件成交价 = base × (1 - 折扣%)：批量确实更便宜。
           const discountPercent = options.dealDiscountPercent ?? 5;
           const dealPriceMinor = Math.round((priceMinor * (100 - discountPercent)) / 100);
@@ -534,11 +542,14 @@ export function createMerchantHandler(
               type: "conditional_offer",
               offer_id: newOfferId(),
               responding_to_offer_id: counter.offer_id,
-              base_terms: offerTerms({ sku, priceMinor, quantity, currency }, now()),
+              base_terms: offerTerms({ sku, priceMinor, quantity, currency, handoff_destination }, now()),
               conditions: [
                 {
                   when: { all: [{ field: "aggregate.total_quantity", op: "gte", value: 100 }] },
-                  then_terms: offerTerms({ sku, priceMinor: dealPriceMinor, quantity, currency }, now()),
+                  then_terms: offerTerms(
+                    { sku, priceMinor: dealPriceMinor, quantity, currency, handoff_destination },
+                    now(),
+                  ),
                 },
               ],
             },

@@ -410,6 +410,84 @@ describe("KTH 端到端（#20、#21）", () => {
     await new Promise<void>((resolve) => checkoutServer.close(() => resolve()));
   });
 
+  it("handoff_agreement 优先用 agreement 里商家直传的成交入口（覆盖 catalog 声明与 LLM 现编）", async () => {
+    const http = await import("node:http");
+    const checkoutServer = http.createServer((_req, res) => {
+      res.statusCode = 200;
+      res.end();
+    });
+    await new Promise<void>((resolve) => checkoutServer.listen(0, "127.0.0.1", () => resolve()));
+    const port = (checkoutServer.address() as { port: number }).port;
+    const merchantDeclared = `http://127.0.0.1:${port}/checkout/vq-003`;
+
+    const stack = await startTestA2aStack({
+      capture,
+      productSource: {
+        async getProduct(sku: string) {
+          if (sku === "VQ-003") {
+            return { price: 8999, currency: "CNY", handoff_destination: merchantDeclared };
+          }
+          throw new Error(`no product ${sku}`);
+        },
+      },
+    });
+    stacks.push(stack);
+    const h = setupBuyer(stack.catalogUrl);
+    const taskId = await createReadyTask(h.store);
+
+    // 候选 sku VQ-003 + catalog 声明一个不同地址（验证 agreement 直传优先）。
+    const cand = h.store.upsertCandidate({
+      task_id: taskId,
+      connector_id: "kiwi-catalog",
+      platform: "kiwi-catalog",
+      external_product_id: "lst_1",
+      sku: "VQ-003",
+      owner_agent_id: "cagt_veyquo",
+    });
+    h.store.updateCandidate(cand.candidate_id, { candidate_status: "shortlisted", eligibility: "eligible" });
+    h.store.appendEvent(
+      taskId,
+      "candidate_shortlisted",
+      {
+        listing_id: "lst_1",
+        owner_agent_id: "cagt_veyquo",
+        handoff_destination_types: ["external_checkout_url"],
+        handoff_destination_ref: "http://127.0.0.1:1/catalog-declared",
+        source: "kiwi-catalog",
+      },
+      "model",
+      `shortlist:${taskId}:lst_1`,
+    );
+
+    // 磋商（候选 sku VQ-003 → 商家 agreement 携带 merchantDeclared）。
+    await h.getTool("negotiate_buyer_task").execute("1", { task_id: taskId });
+    // 交接：LLM 现编 + catalog 声明都应被 agreement 直传覆盖。
+    await h.getTool("handoff_agreement").execute("2", {
+      task_id: taskId,
+      destination_type: "external_checkout_url",
+      destination_ref: "https://llm.invented.example/checkout",
+      display_summary_merchant: "Acme",
+    });
+
+    const taskEvents = h.store.taskEvents(taskId);
+    let negotiationId: string | undefined;
+    for (let i = taskEvents.length - 1; i >= 0; i--) {
+      const event = taskEvents[i];
+      if (event?.type === "status_changed" && typeof event.payload.negotiation_id === "string") {
+        negotiationId = event.payload.negotiation_id;
+        break;
+      }
+    }
+    const events = h.ledger.events(negotiationId as string);
+    const created = events.find((e) => e.event_kind === "handoff_candidate_created");
+    const candidate =
+      created?.outcome.kind === "ok"
+        ? (created.outcome.result?.candidate as Record<string, unknown> | undefined)
+        : undefined;
+    expect(candidate?.destination_ref).toBe(merchantDeclared);
+    await new Promise<void>((resolve) => checkoutServer.close(() => resolve()));
+  });
+
   it("local_callback 证据 → OPENED_CONFIRMED（opened 率更新，绝不伪装成交）", async () => {
     const stack = await startTestA2aStack({ productSource, capture });
     stacks.push(stack);

@@ -10,7 +10,7 @@
  * - 返回最终 URL（供用户展示，#17）；超过 maxRedirects → fail-closed。
  */
 import { describe, expect, it } from "vitest";
-import { validateExternalDestinationUrl } from "../src/handoff/index.js";
+import { defaultUrlSafety, validateExternalDestinationUrl } from "../src/handoff/index.js";
 
 type FetchInput = Parameters<typeof fetch>[0];
 type FetchInit = NonNullable<Parameters<typeof fetch>[1]>;
@@ -71,6 +71,29 @@ describe("validateExternalDestinationUrl", () => {
       skipDnsCheck: true,
     });
     expect(result.finalUrl).toBe("https://pay.example/checkout");
+  });
+
+  it("defaultUrlSafety 透传 allowlist（商家直传成交入口场景，不破坏既有 expectedHost 约束）", async () => {
+    // 起一个 loopback checkout 桩；allowlist 传入不改变既有 HTTPS/域约束，
+    // 且默认无 allowlist 时跨域仍拒绝。
+    const http = await import("node:http");
+    const srv = http.createServer((_req, res) => {
+      res.statusCode = 200;
+      res.end();
+    });
+    await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", () => resolve()));
+    const port = (srv.address() as { port: number }).port;
+    const url = `http://127.0.0.1:${port}/checkout`;
+    try {
+      const result = await defaultUrlSafety("veyquo.com", ["127.0.0.1"])(url);
+      expect(result.finalUrl).toBe(url);
+    } finally {
+      await new Promise<void>((resolve) => srv.close(() => resolve()));
+    }
+    // 无 allowlist：跨域（非 merchant 域）外部 https 主机仍拒绝。
+    await expect(
+      defaultUrlSafety("veyquo.com")("https://item.jd.com/100244909689.html"),
+    ).rejects.toThrow(/not allowed/);
   });
 
   it("重定向链每跳重验：跳转到异 host → 拒绝", async () => {
