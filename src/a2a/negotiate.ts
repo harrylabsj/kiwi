@@ -364,12 +364,18 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
       conditions?: Array<{ then_terms?: { items?: Array<{ unit_price?: { amount_minor?: number } }> } }>;
     };
     steps.push(`conditional_offer ${conditionalPayload.offer_id ?? ""}`);
-    const dealPriceMinor = conditionalPayload.conditions?.[0]?.then_terms?.items?.[0]?.unit_price?.amount_minor;
 
-    // 5. 确定性求值 → AcceptNonbinding → Agreement。
+    // 5. 确定性求值：真实成交价来自**求值后**的 terms——条件未命中时是
+    //    base_terms，不是条件价。历史 bug：无条件读 conditions[0].then_terms，
+    //    导致 1 件套用 ≥100 件的条件价（如 VQ-003 ¥8999 被报成 ¥8549.05）。
     const agreedTerms = evaluateConditionalOffer(conditionalPayload as never, {
       "aggregate.total_quantity": quantity,
     });
+    const dealPriceMinor = (agreedTerms as {
+      items?: Array<{ unit_price?: { amount_minor?: number } }>;
+    })?.items?.[0]?.unit_price?.amount_minor;
+
+    // 6. AcceptNonbinding → Agreement。
     const accept = acceptEnvelope(
       negotiationId,
       now,
