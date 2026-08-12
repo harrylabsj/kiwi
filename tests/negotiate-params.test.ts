@@ -124,4 +124,34 @@ describe("negotiateWithAgent parameterization", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain("找不到");
   });
+
+  it("outbound bearer auth: 商家要求 bearer 时匿名 401，带 outboundAuth 成交", async () => {
+    const { StaticBearerAuthVerifier } = await import("../src/a2a/server/auth.js");
+    const s = await startTestA2aStack({
+      productSource,
+      authVerifier: new StaticBearerAuthVerifier("secret-tok"),
+    });
+    stacks.push(s);
+    try {
+      // 匿名协商：Agent Card 仍公开可读，但 JSON-RPC 端点 401 → 磋商失败。
+      const anon = await negotiateWithAgent({
+        catalog: s.catalogUrl,
+        allowLoopback: true,
+        sku: "sku-001",
+      });
+      expect(anon.ok).toBe(false);
+
+      // 带 outboundAuth bearer → 磋商成交。
+      const authed = await negotiateWithAgent({
+        catalog: s.catalogUrl,
+        allowLoopback: true,
+        sku: "sku-001",
+        outboundAuth: { bearer: "secret-tok" },
+      });
+      expect(authed.ok).toBe(true);
+      expect(authed.facts?.sku).toBe("sku-001");
+    } finally {
+      await s.stop().catch(() => undefined);
+    }
+  });
 });

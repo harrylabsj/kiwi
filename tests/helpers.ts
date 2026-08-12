@@ -257,6 +257,8 @@ export async function startTestA2aStack(
     catalogAgentId?: string;
     /** 传入数组后，每次入站信封（action/senderIdentity/envelope）被 push 进来。 */
     capture?: CapturedInbound[];
+    /** merchant A2A 端点认证（缺省 loopback-only）；bearer 协商测试注入。 */
+    authVerifier?: { name: string; verify(ctx: unknown): unknown };
   } = {},
 ): Promise<{
   catalogUrl: string;
@@ -312,6 +314,9 @@ export async function startTestA2aStack(
     idempotency,
     handler,
     now: () => NOW,
+    ...(options.authVerifier !== undefined
+      ? { authVerifier: options.authVerifier as never }
+      : {}),
   });
   const httpServer = server.createServer();
   await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", () => resolve()));
