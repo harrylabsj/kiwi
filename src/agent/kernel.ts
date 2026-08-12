@@ -1205,6 +1205,23 @@ export class AgentKernel {
     ].join("\n");
   }
 
+  /** 把写操作执行结果渲染成操作者可读语言，而非原始 JSON。
+   *  优先用工具自带的自然语言 summary/text；否则给一行精简要点（不 dump
+   *  内部 id/明细）。 */
+  private renderApprovalOutput(output: Record<string, unknown>): string {
+    const summary = output.summary;
+    if (typeof summary === "string" && summary.trim() !== "") return summary.trim();
+    const text = output.text;
+    if (typeof text === "string" && text.trim() !== "") return text.trim();
+    const bits: string[] = [];
+    if (typeof output.ok === "boolean") bits.push(output.ok ? "成功" : "失败");
+    if (typeof output.status === "string") bits.push(`状态 ${output.status}`);
+    if (typeof output.negotiation_id === "string") bits.push(`磋商 ${output.negotiation_id}`);
+    if (typeof output.agreement_id === "string") bits.push(`协议 ${output.agreement_id}`);
+    if (typeof output.error === "string") bits.push(`原因: ${output.error}`);
+    return bits.length > 0 ? bits.join("，") : JSON.stringify(output).slice(0, 200);
+  }
+
   private async handleApprove(arg: string): Promise<string> {
     if (arg === "") return "用法：/approve <编号|id|all>";
     const trimmed = arg.trim();
@@ -1228,7 +1245,7 @@ export class AgentKernel {
       // calling approveCandidate would re-enqueue and deadlock.
       const result = await this.approveCandidateInner(id);
       if (result.kind === "executed") {
-        return `[审批] 候选 ${id} 已执行。结果：${JSON.stringify(result.output)}`;
+        return `[审批] 候选 ${id} 已执行。\n${this.renderApprovalOutput(result.output as Record<string, unknown>)}`;
       }
       if (result.kind === "stale") {
         return `[审批] 候选 ${id} 已失效（${result.reason}），未执行；请重新生成候选。`;
