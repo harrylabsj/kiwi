@@ -395,12 +395,14 @@ async function runCatalogSearchCycle(
   if (source === undefined) {
     throw new BuyerTaskError("validation", "catalogSource 未配置（runCatalogSearchCycle 不应被调用）");
   }
+  // 自由文本意图只走 q（LIKE title/category/brand/summary）模糊匹配——
+  // intent.category 是模型从用户语言抽的自由文本（如"手机"/"iPhone 17"），
+  // 当精确 filter 几乎必空（listing.category 是结构化值），会 0 命中后回退
+  // marketplace 死端口 → 误报网络故障。用 query_text ?? category 作 q。
   const query: KiwiListingSearchQuery = {
-    ...(task.intent.query_text !== undefined && task.intent.query_text !== ""
-      ? { q: task.intent.query_text }
-      : {}),
-    ...(task.intent.category !== undefined && task.intent.category !== ""
-      ? { category: task.intent.category }
+    ...((task.intent.query_text ?? task.intent.category) !== undefined &&
+    (task.intent.query_text ?? task.intent.category) !== ""
+      ? { q: task.intent.query_text ?? task.intent.category }
       : {}),
     ...(task.intent.city !== undefined ? { region: task.intent.city } : {}),
     limit: task.search_budget.max_candidates,
