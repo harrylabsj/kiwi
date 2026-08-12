@@ -97,8 +97,8 @@ describe("product CLI command tree (D0)", () => {
     const { code, stderr } = await run(["merchant", "init"]);
     expect(code).toBe(EXIT.CONFIG);
     expect(stderr).not.toContain("尚未实现");
-    // --name 是必填标识（--merchant-id 可选，缺失时 init 报告 fail-closed）
-    expect(stderr).toContain("--name");
+    // 非交互且无身份 → fail-closed 要求 --merchant-id / --name（TTY 下才自动生成）
+    expect(stderr).toContain("--merchant-id");
   });
 
   it("merchant init accepts --merchant-id / --name flags (D1 flag 解析回归)", async () => {
