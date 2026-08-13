@@ -23,9 +23,12 @@ docs/testing/kiwi-commerce-v0.7.0-test-plan-v0.3.md
 ## Product Strategy（非协议，独立版本）
 
 ```text
+docs/kiwi-agent-commerce-strategy-upgrade-2026-08-13.md
 docs/kiwi-product-layer-refactor-rev1.2.md
 ```
 
+- `kiwi-agent-commerce-strategy-upgrade-2026-08-13.md`：已批准的三产品战略升级与执行基线；
+  统一产品定位、协议分层、P0/P1/P2 顺序、阶段门、验收标准和对外声明纪律。
 - rev1.2：D0–D4 全部实现（readiness audit 见
   `docs/reviews/kiwi-product-layer-readiness-audit-2026-08-07.md`）；
   实施顺序与"明确不做"见 §19。

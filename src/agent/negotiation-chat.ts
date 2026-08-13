@@ -93,6 +93,17 @@ async function findPending(
   };
 }
 
+/** 审查 K-L22：出站公开消息脱敏——merchant 私有底价（profile HardPolicy）绝不
+ *  进入对外 public_message。防御 prompt-inject 商家模型把底价写进公开文本；
+ *  只替换完整数字 token（数字两侧非数字/逗号/点），避免误伤子串。
+ *  （已知设计权衡：模型磋商需要底价可见；此处是出站面的纵深防线。） */
+export function redactPrivateFloor(text: string, profile: AgentProfile): string {
+  const floor = profile.merchant_policy?.min_unit_price_private;
+  if (floor === undefined || text === "") return text;
+  const needle = String(floor);
+  return text.replace(new RegExp(`(?<![0-9.,])${needle}(?![0-9.,])`, "g"), "[私密阈值]");
+}
+
 function buildDecision(target: PendingTarget, args: Record<string, unknown>): NegotiationDecision {
   const action = String(args.action ?? "ask");
   const decision: NegotiationDecision = {
@@ -173,6 +184,8 @@ async function executeNegotiationSubmit(
     throw new Error(`该消息已被其他 worker 处理（${claim.status}），不会重复提交。`);
   }
   const decision = buildDecision(target, args);
+  // 审查 K-L22：出站 public_message 前脱敏私密底价（prompt-inject 防线）。
+  decision.public_message = redactPrivateFloor(decision.public_message, profile);
 
   // Buyer local private policy gate BEFORE the gateway — same as the headless
   // turn. A violation never reaches the marketplace and never leaks numbers.

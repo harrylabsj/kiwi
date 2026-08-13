@@ -27,7 +27,7 @@
  * URLs are only accepted for loopback hosts.
  */
 
-import { readFileSync, statSync } from "node:fs";
+import { chmodSync, readFileSync, statSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { PROTOCOL_VERSION, type Role } from "../negotiation/types.js";
 
@@ -274,16 +274,24 @@ export function assertSecureBaseUrl(value: unknown, field: string, source: strin
 
 /** Load, parse and validate a profile file. Never reads secret env values. */
 export function loadProfile(path: string): AgentProfile {
-  // 权限检查（评审项 L5）：profile 含私有策略值（max_total_price_private 等）
-  // ——与数据目录 0700/0600 约定对齐，过宽权限告警（不阻断：历史文件常见
-  // 0644，doctor 已做 inline-secret 扫描兜底）。
+  // 权限检查（评审项 L5 / 审查 K-L16）：profile 含私有策略值（max_total_price_private
+  // 等）——与数据目录 0700/0600 约定对齐。过宽权限此前仅 console.warn（0644 即被
+  // 同机其他用户读取）；best-effort 收紧为 0600，不可写场景回退告警。
   try {
     const st = statSync(path);
     if ((st.mode & 0o077) !== 0) {
-      console.warn(
-        `[profile] ${path} is group/world-readable (mode ${(st.mode & 0o777).toString(8)}); ` +
-          "consider chmod 600 (contains private policy values)",
-      );
+      try {
+        chmodSync(path, 0o600);
+        console.warn(
+          `[profile] ${path} was group/world-readable (mode ${(st.mode & 0o777).toString(8)}); ` +
+            "tightened to 0600",
+        );
+      } catch {
+        console.warn(
+          `[profile] ${path} is group/world-readable (mode ${(st.mode & 0o777).toString(8)}); ` +
+            "consider chmod 600 (contains private policy values)",
+        );
+      }
     }
   } catch {
     // stat 失败由下方 readFileSync 的清晰错误兜底。

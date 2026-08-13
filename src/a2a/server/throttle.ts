@@ -101,6 +101,8 @@ export const DEFAULT_THROTTLE_TIERS: ThrottleTierTable = {
 
 export const DEFAULT_WINDOW_MS = 60_000;
 export const DEFAULT_UNVERIFIED_SCALE = 0.5;
+/** 审查 K-L3：限流 Map 全量清扫周期（毫秒，默认 60s）。 */
+export const THROTTLE_SWEEP_INTERVAL_MS = 60_000;
 
 export interface ThrottleOptions {
   /** 滑动窗口（毫秒，默认 60_000）。 */
@@ -112,6 +114,8 @@ export interface ThrottleOptions {
    * 默认 0.5 —— 匿名来源限额严格于验签身份（§31 identity cycling 缓解）。
    */
   unverifiedIdentityScale?: number;
+  /** 限流 Map 清扫周期（毫秒，默认 60s；测试可注入短周期）。 */
+  sweepIntervalMs?: number;
   /** 时钟（unix 毫秒）；可注入便于确定性测试。默认 Date.now。 */
   now?: () => number;
 }
@@ -200,11 +204,17 @@ export class A2AServerThrottle {
   private readonly malformedWindow = new Map<string, number[]>();
   /** per-identity 主键 → 当前在途任务数。 */
   private readonly inflight = new Map<string, number>();
+  private readonly sweepIntervalMs: number;
+  private lastSweepAt = 0;
 
   constructor(options: ThrottleOptions = {}) {
     this.windowMs = options.windowMs ?? DEFAULT_WINDOW_MS;
     if (!Number.isFinite(this.windowMs) || this.windowMs <= 0) {
       throw new TypeError("A2AServerThrottle: windowMs must be a positive number");
+    }
+    this.sweepIntervalMs = options.sweepIntervalMs ?? THROTTLE_SWEEP_INTERVAL_MS;
+    if (!Number.isFinite(this.sweepIntervalMs) || this.sweepIntervalMs <= 0) {
+      throw new TypeError("A2AServerThrottle: sweepIntervalMs must be a positive number");
     }
     this.unverifiedScale = options.unverifiedIdentityScale ?? DEFAULT_UNVERIFIED_SCALE;
     if (
@@ -286,6 +296,30 @@ export class A2AServerThrottle {
     map.set(key, arr);
   }
 
+  /** 审查 K-L3：全量清扫已过期窗口的键——windowEntries 只在再次访问该键时
+   *  修剪，一次性身份轮换的键永不再次访问、永久残留（长驻服务内存无界增长）。
+   *  每 sweepIntervalMs 调一次，Map 有界于「最近活跃身份」。 */
+  private sweep(now: number): void {
+    const cutoff = now - this.windowMs;
+    for (const map of [this.identityWindow, this.domainWindow, this.malformedWindow]) {
+      for (const [key, arr] of map) {
+        let start = 0;
+        while (start < arr.length && arr[start]! <= cutoff) start += 1;
+        if (start === 0) continue;
+        const kept = arr.slice(start);
+        if (kept.length === 0) map.delete(key);
+        else map.set(key, kept);
+      }
+    }
+  }
+
+  private sweepIfDue(now: number): void {
+    if (now - this.lastSweepAt >= this.sweepIntervalMs) {
+      this.lastSweepAt = now;
+      this.sweep(now);
+    }
+  }
+
   // -- 公开判定 --------------------------------------------------------------
 
   /**
@@ -293,8 +327,9 @@ export class A2AServerThrottle {
    * per-identity → per-domain。拒绝携带档位 retry_after。
    */
   check(req: ThrottleRequest): ThrottleDecision {
-    const tier = this.resolveTier(req);
     const now = this.now();
+    this.sweepIfDue(now); // 审查 K-L3：限流 Map 有界
+    const tier = this.resolveTier(req);
     const idKey = this.identityKeyOf(req);
 
     if (this.isMalformedBlocked(idKey, tier.malformedBudget, now)) {
@@ -347,6 +382,7 @@ export class A2AServerThrottle {
    */
   recordMalformed(req: ThrottleRequest): void {
     const now = this.now();
+    this.sweepIfDue(now); // 审查 K-L3
     this.record(this.malformedWindow, this.identityKeyOf(req), now);
     if (req.domain !== undefined) {
       this.record(this.malformedWindow, this.domainKeyOf(req.domain), now);
@@ -380,5 +416,10 @@ export class A2AServerThrottle {
 
   private isMalformedBlocked(key: string, budget: number, now: number): boolean {
     return this.windowEntries(this.malformedWindow, key, now).length >= budget;
+  }
+
+  /** 诊断：当前 identity 窗口键数（审查 K-L3 内存有界性验证/监控用）。 */
+  get debugIdentityWindowSize(): number {
+    return this.identityWindow.size;
   }
 }

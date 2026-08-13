@@ -26,7 +26,15 @@
  *   owner 的租约）。
  */
 
-import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import { join } from "node:path";
 
 interface LeaseRecord {
@@ -82,9 +90,18 @@ export class FileLeaseStore {
     try {
       const parsed = JSON.parse(readFileSync(path, "utf-8")) as LeaseRecord;
       if (parsed.owner !== owner) return false; // fencing：不是我的租约
-      const fd = openSync(path, "w");
-      writeSync(fd, JSON.stringify({ owner, expires_at: Date.now() + ttlMs }));
-      closeSync(fd);
+      // 审查 K-L6：截断重写（open "w"）非原子且无 fsync——崩溃留半写文件、
+      // 旧 owner 截断写可覆盖新租约。改 tmp + fsync + rename 原子写（对齐
+      // acquire 的 wx 模式与 supervisor/manifest.ts 约定）。
+      const tmp = `${path}.tmp-${process.pid}`;
+      const fd = openSync(tmp, "wx", 0o600);
+      try {
+        writeSync(fd, JSON.stringify({ owner, expires_at: Date.now() + ttlMs }));
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(tmp, path);
       return true;
     } catch {
       return false;
