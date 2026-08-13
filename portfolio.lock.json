@@ -5,7 +5,7 @@
   "repositories": {
     "kiwi": {
       "repository": "harrylabsj/kiwi",
-      "commit": "dba238661b751d3f37536908843abc8afe21cfeb"
+      "commit": "99c088f9d98cf55474a5ae1f453b52c84759a99f"
     },
     "kiwi-catalog": {
       "repository": "harrylabsj/kiwi-catalog",
@@ -13,7 +13,7 @@
     },
     "shopping-cli": {
       "repository": "harrylabsj/shopping-cli",
-      "commit": "12c3f60694d1ee3760cc3ba2a2993fceb8b9aeea"
+      "commit": "350ab73bb9c0c23e66bcb59fb0646b1db4f95b1f"
     }
   }
 }
