@@ -23,7 +23,15 @@
  * WeixinError（fail-closed，拒绝静默重扫）。
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  writeSync,
+} from "node:fs";
 import path from "node:path";
 import { WeixinError } from "./types.js";
 import type { BotCredentials } from "./types.js";
@@ -106,11 +114,22 @@ export function loadSyncState(pathName: string): StoredSyncState {
   return { get_updates_buf: buf, seen: seen as string[] };
 }
 
-// ── 内部：原子写（tmp + renameSync，0600）─────────────────────────────
+// ── 内部：原子写（tmp + fsync + rename，0600）───────────────────────────
+
+let _atomicWriteSeq = 0;
 
 function atomicWrite(pathName: string, content: string): void {
-  const tmp = `${pathName}.tmp`;
-  writeFileSync(tmp, content, { mode: 0o600 });
+  // 审查 K-L12：固定 tmp 名并发写互相覆盖 + rename ENOENT + 无 fsync。改
+  // 唯一 tmp 名（pid + 序号，同进程并发也唯一）+ 独占 open("wx") + fsync +
+  // rename（对齐 supervisor/manifest.ts 的原子写模式）。
+  const tmp = `${pathName}.tmp-${process.pid}-${_atomicWriteSeq++}`;
+  const fd = openSync(tmp, "wx", 0o600);
+  try {
+    writeSync(fd, content);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmp, pathName);
 }
 

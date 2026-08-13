@@ -186,7 +186,9 @@ function executeSelection(
       boundary: "未创建订单；非绑定选定不声明价格、库存或交期仍然有效",
     },
     "user",
-    `select:${p.task_id}:${p.candidate_id}:${uuidv7()}`,
+    // 审查 K-L26：幂等键内容寻址（此前 uuidv7 随机，重试产生重复 selected
+    // 事件）。与 transition 键同源，重试去重。
+    `select:${p.task_id}:${p.candidate_id}`,
   );
   store.updateCandidate(p.candidate_id, { candidate_status: "selected" });
   store.transitionTask({

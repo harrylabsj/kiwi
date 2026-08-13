@@ -501,5 +501,14 @@ describe("A2A client URL 安全（SSRF 防护）", () => {
     expect(isReservedIpv6("fec0::1").reserved).toBe(true);
     expect(isReservedIpv6("feff::1").reserved).toBe(true);
     expect(isReservedIpv6("fe7f::1").reserved).toBe(false);
+    // 审查 K-L14：NAT64 / 6to4 / IPv4-compatible 内嵌保留 IPv4 必须判保留。
+    expect(isReservedIpv6("64:ff9b::7f00:1").reserved).toBe(true); // NAT64 → 127.0.0.1
+    expect(isReservedIpv6("64:ff9b::c0a8:0101").reserved).toBe(true); // NAT64 → 192.168.1.1
+    expect(isReservedIpv6("2002:7f00:1::").reserved).toBe(true); // 6to4 → 127.0.0.1
+    expect(isReservedIpv6("2002:c0a8:0101::").reserved).toBe(true); // 6to4 → 192.168.1.1
+    expect(isReservedIpv6("::127.0.0.1").reserved).toBe(true); // IPv4-compatible
+    // 内嵌公网 IPv4 不误判（NAT64/6to4 映射公网地址非保留）。
+    expect(isReservedIpv6("64:ff9b::808:808").reserved).toBe(false); // → 8.8.8.8
+    expect(isReservedIpv6("2002:808:808::").reserved).toBe(false); // → 8.8.8.8
   });
 });

@@ -1153,7 +1153,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
     if (err instanceof SupervisorError) {
       process.stderr.write(`${err.message}\n`);
-      return EXIT.TRANSIENT;
+      // 审查 K-L18：配置/环境类错误（kind=config）→ EXIT.CONFIG(2)；运行时/
+      // 操作类（transient）→ EXIT.TRANSIENT(10)。此前一律 TRANSIENT，退出码
+      // 语义混淆（脚本按退出码判断"配置错"会误判为"瞬时故障可重试"）。
+      return err.kind === "config" ? EXIT.CONFIG : EXIT.TRANSIENT;
     }
     throw err;
   }

@@ -515,6 +515,23 @@ async function runCatalogSearchCycle(
     return { task: current, outcome: "shortlist_ready", shortlist };
   }
 
-  // 无命中：回退 marketplace connector 路径（catalog 是优先源，不是唯一源）。
-  return undefined;
+  // 无命中（审查 K-L21）：catalog-first 形态下回退 marketplace connector 常指向
+  // 同一 shopping-cli——不在线时把「catalog 无命中」误报为网络错误（task 被 park
+  // 进 tracking/retry）。catalog 是优先且权威的发现源：0 命中即按 marketplace
+  // 同款「无匹配 → tracking 等待唤醒」结局处理，不再回退。
+  const rules = installDefaultRules(deps, task);
+  const nextRun = new Date(
+    Date.parse(startedAt) + task.tracking_policy.default_interval_seconds * 1000,
+  ).toISOString();
+  const parked = store.transitionTask({
+    task_id: task.task_id,
+    to: "tracking",
+    expected_version: task.version,
+    event_type: "tracking_installed",
+    payload: { rule_ids: rules.map((r) => r.rule_id), source: "kiwi-catalog" },
+    origin: "scheduler",
+    idempotency_key: `${runId}:tracking`,
+    next_run_at: nextRun,
+  });
+  return { task: parked, outcome: "tracking", shortlist: [] };
 }

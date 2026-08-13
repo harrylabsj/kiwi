@@ -112,8 +112,11 @@ async function pollUntilConfirmed(
         break;
       }
       case "expired": {
-        const shouldRefresh = await options.onExpired();
-        return shouldRefresh ? null : null;
+        // 审查 K-L13：`shouldRefresh ? null : null` 恒返回 null、shouldRefresh 未
+        // 使用。onExpired 返回 true 表示「已请求刷新」（由调用方重新取码），或
+        // 抛 qr_expired 放弃——统一走「expired → 返回 null」。
+        await options.onExpired();
+        return null;
       }
       case "confirmed":
         return status.credentials;

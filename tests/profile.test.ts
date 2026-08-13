@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import {mkdtempSync, rmSync, writeFileSync} from "node:fs";
+import {chmodSync, mkdtempSync, rmSync, statSync, writeFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -41,6 +41,16 @@ function writeTemp(content: string): string {
 }
 
 describe("profile loading", () => {
+  it("K-L16: group/world-readable profile is auto-tightened to 0600", () => {
+    const file = writeTemp(VALID_YAML);
+    chmodSync(file, 0o644); // 显式设为过宽权限
+    const profile = loadProfile(file);
+    expect(profile.agent_id).toBe("merchant-agent:merchant-001");
+    // 审查 K-L16：loadProfile 后权限收紧为 0600（含私有预算的 profile 不再
+    // 被同机其他用户读取）。
+    expect(statSync(file).mode & 0o077).toBe(0);
+  });
+
   it("loads a valid merchant profile", () => {
     const profile = loadProfile(writeTemp(VALID_YAML));
     expect(profile.agent_id).toBe("merchant-agent:merchant-001");

@@ -155,6 +155,34 @@ export function isReservedIpv6(ip: string): { reserved: boolean; name?: string }
     }
     return { reserved: false };
   }
+  // 审查 K-L14：补三类「内嵌 IPv4」的保留网段——此前仅覆盖 ::ffff:a.b.c.d，
+  // NAT64 网络下 `64:ff9b::7f00:1`→127.0.0.1 可绕过 DNS 复查（SSRF 面）。
+  const parts = normalized.split(":");
+  // 6to4 2002::/16（RFC 3056）：bits 16-47 内嵌 IPv4（hextets 2-3）。
+  if (normalized.startsWith("2002:") && parts[1] !== undefined && parts[2] !== undefined) {
+    const g2 = Number.parseInt(parts[1], 16);
+    const g3 = Number.parseInt(parts[2], 16);
+    const v4 = isReservedIpv4(`${g2 >> 8}.${g2 & 0xff}.${g3 >> 8}.${g3 & 0xff}`);
+    if (v4.reserved) return { reserved: true, name: `6to4 2002::/16 → ${v4.name ?? "reserved"}` };
+  }
+  // NAT64 well-known 64:ff9b::/96（RFC 6052）：低 32 位内嵌 IPv4。
+  if (normalized.startsWith("0064:ff9b:") && parts[6] !== undefined && parts[7] !== undefined) {
+    const g6 = Number.parseInt(parts[6], 16);
+    const g7 = Number.parseInt(parts[7], 16);
+    const v4 = isReservedIpv4(`${g6 >> 8}.${g6 & 0xff}.${g7 >> 8}.${g7 & 0xff}`);
+    if (v4.reserved) return { reserved: true, name: `NAT64 64:ff9b::/96 → ${v4.name ?? "reserved"}` };
+  }
+  // IPv4-compatible ::/96（RFC 4291 已废弃）：前 6 hextet 全 0，低 32 位内嵌 IPv4。
+  if (
+    normalized.startsWith("0000:0000:0000:0000:0000:0000:") &&
+    parts[6] !== undefined &&
+    parts[7] !== undefined
+  ) {
+    const g6 = Number.parseInt(parts[6], 16);
+    const g7 = Number.parseInt(parts[7], 16);
+    const v4 = isReservedIpv4(`${g6 >> 8}.${g6 & 0xff}.${g7 >> 8}.${g7 & 0xff}`);
+    if (v4.reserved) return { reserved: true, name: `IPv4-compatible ::/96 → ${v4.name ?? "reserved"}` };
+  }
   const first = normalized.slice(0, 4);
   const firstHextet = Number.parseInt(first, 16);
   // fc00::/7 覆盖 fc00-fdff 首 hextet（数值比较，前缀位判定）。

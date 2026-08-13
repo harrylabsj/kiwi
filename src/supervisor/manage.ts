@@ -71,9 +71,14 @@ const SIGKILL_WAIT_MS = 2_000;
 const WAIT_POLL_MS = 100;
 
 export class SupervisorError extends Error {
-  constructor(message: string) {
+  /** 错误类别（审查 K-L18）：config=配置/环境错误（退出码 CONFIG）；transient=
+   *  运行时/操作错误（退出码 TRANSIENT）。此前无分类，配置类错误被统一映射
+   *  EXIT.TRANSIENT(10)，退出码语义混淆。 */
+  readonly kind: "config" | "transient";
+  constructor(message: string, kind: "config" | "transient" = "transient") {
     super(message);
     this.name = "SupervisorError";
+    this.kind = kind;
   }
 }
 
@@ -89,7 +94,7 @@ function safeProfilePath(ctx: InstanceContext, role: "merchant" | "buyer"): stri
   try {
     return resolveProfilePath(ctx.paths.root, ctx.config.agents[role].profile, "stack config");
   } catch (err) {
-    if (err instanceof StackConfigError) throw new SupervisorError(err.message);
+    if (err instanceof StackConfigError) throw new SupervisorError(err.message, "config");
     throw err;
   }
 }
@@ -107,12 +112,13 @@ export function loadInstance(dir: string): InstanceContext {
   } catch {
     throw new SupervisorError(
       `no Kiwi instance at ${paths.root} (missing ${path.basename(paths.config)}); run kiwi init first`,
+      "config",
     );
   }
   try {
     return { paths, config: parseStackConfig(raw, paths.config) };
   } catch (err) {
-    if (err instanceof StackConfigError) throw new SupervisorError(err.message);
+    if (err instanceof StackConfigError) throw new SupervisorError(err.message, "config");
     throw err;
   }
 }
@@ -404,7 +410,7 @@ async function runUpLocked(ctx: InstanceContext, options?: UpOptions): Promise<U
         }
       } catch (err) {
         if (err instanceof ProfileError) {
-          throw new SupervisorError(`${role} profile invalid: ${err.message}`);
+          throw new SupervisorError(`${role} profile invalid: ${err.message}`, "config");
         }
         throw err;
       }
@@ -412,6 +418,7 @@ async function runUpLocked(ctx: InstanceContext, options?: UpOptions): Promise<U
     if (missing.length > 0) {
       throw new SupervisorError(
         `missing required environment variables: ${missing.join(", ")} (names only; values are never printed)`,
+        "config",
       );
     }
   }

@@ -574,7 +574,9 @@ describe("CLI argument validation", () => {
   });
 
   it("status on a missing instance fails clearly", async () => {
-    expect(await cliMain(["status", "--dir", path.join(workDir, "nope")])).toBe(10);
+    // 审查 K-L18：missing instance 是配置类错误（SupervisorError kind=config）
+    // → EXIT.CONFIG(2)；此前统一映射 TRANSIENT(10)，退出码语义混淆。
+    expect(await cliMain(["status", "--dir", path.join(workDir, "nope")])).toBe(2);
   });
 
   it("agent run --once installs SIGINT/SIGTERM handlers and removes them after", async () => {

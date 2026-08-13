@@ -812,6 +812,22 @@ describe("write-gate coverage for buyer tools (§16)", () => {
     expect(supervised.approvals.listPending()).toHaveLength(0);
   });
 
+  it("K-L26: select_product_nonbinding 重试不产生重复 selected 事件（内容寻址幂等键）", async () => {
+    const { store, db, connector, now } = setup([fakeConnectorProduct()]);
+    const ready = createReadyTask(store, {});
+    const cycle = await runSearchCycle({ store, connector, now }, ready.task_id, `r:${uuidv7()}`);
+    const candidateId = cycle.shortlist[0]?.candidate.candidate_id as string;
+    const args = { task_id: ready.task_id, candidate_id: candidateId, user_instruction: "就这个" };
+    const tools = toolsWithMode("supervised", store, db, connector);
+    const select = tools.tools.find((t) => t.name === "select_product_nonbinding");
+    const first = await select!.execute("c1", args, undefined, undefined, undefined);
+    expect((first.content[0] as { type: "text"; text: string }).text).toContain("已记录非绑定选定");
+    // 重试同一 select（幂等键内容寻址 → 事件去重，不产生第二条 selected）
+    await select!.execute("c2", args, undefined, undefined, undefined);
+    const selectedEvents = store.taskEvents(ready.task_id).filter((e) => e.type === "selected");
+    expect(selectedEvents).toHaveLength(1);
+  });
+
   it("a selected task can go back to consulting to renegotiate", async () => {
     const { store, connector, now } = setup([fakeConnectorProduct()]);
     const ready = createReadyTask(store, {});
@@ -1213,20 +1229,28 @@ describe("catalog-first search cycle (CD #28)", () => {
     expect(seenQuery?.category).toBeUndefined();
   });
 
-  it("falls back to the marketplace connector when the catalog has no match", async () => {
+  it("K-L21: catalog 无命中不再回退 marketplace（0 命中 → tracking，不误报网络错误）", async () => {
     const { store, connector, now } = setup([
       fakeConnectorProduct({ sku: "sku-local", price: 99, stock: 3 }),
     ]);
     const ready = createReadyTask(store);
+    let marketplaceCalled = false;
+    const origSearch = connector.searchProducts.bind(connector);
+    connector.searchProducts = async (q) => {
+      marketplaceCalled = true;
+      return origSearch(q);
+    };
     const catalog = stubCatalog(async () => []);
     const result = await runSearchCycle(
       { store, connector, now, catalogSource: catalog },
       ready.task_id,
       `run:${uuidv7()}`,
     );
-    expect(result.outcome).toBe("shortlist_ready");
-    expect(result.shortlist.map((s) => s.candidate.sku)).toEqual(["sku-local"]);
-    expect(result.shortlist[0]?.candidate.connector_id).toBe("shopping-cli");
+    // catalog-first：0 命中 → tracking 等待唤醒（marketplace 离线不再被误报为
+    // 网络错误；此前回退同一 shopping-cli 死端口 → 误报）。
+    expect(result.outcome).toBe("tracking");
+    expect(marketplaceCalled).toBe(false);
+    expect(store.getTask(ready.task_id)?.status).toBe("tracking");
   });
 
   it("skips out-of-stock listings by default and shortlists the rest", async () => {
