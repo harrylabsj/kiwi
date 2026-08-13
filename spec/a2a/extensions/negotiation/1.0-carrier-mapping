@@ -1,0 +1,98 @@
+# KNP/1.0 — A2A 1.0 Carrier Mapping
+
+> KNP 载荷在 A2A 1.0 上的承载规范（公开镜像）。权威源：
+> `docs/protocol/knp-spec-convergence-2026-08-13.md` §1。
+> Wire 形状已由官方 TCK/SDK 往返与三向互操作逐字节实证。
+
+## 1. Request
+
+```
+POST <a2aPath>                          # 缺省 "/"；Agent Card supportedInterfaces[0].url
+A2A-Version: 1.0
+A2A-Extensions: <origin>/a2a/extensions/negotiation/1.0
+Content-Type: application/json
+
+{ "jsonrpc": "2.0",
+  "id": "<opaque>",
+  "method": "SendMessage",
+  "params": {
+    "message": {
+      "role": "user",                    # 也接受 "ROLE_USER"
+      "messageId": "<= envelope.message_id>",
+      "parts": [
+        { "text": "人类可读文本（可选）" },
+        { "data": { "knp_envelope": { "…" } },
+          "mediaType": "application/json" }
+      ]
+    }
+  }
+}
+```
+
+- `messageId` 必须等于 KNP envelope 的 `message_id`。
+- KNP DataPart 是 1.0 统一 Part：字段存在判别（无 `kind`），
+  `data.knp_envelope` + `mediaType: "application/json"`。
+
+## 2. Response
+
+```
+{ "jsonrpc": "2.0",
+  "id": "<echo of request id>",
+  "result": { "task": {
+      "id": "task_…",
+      "contextId": "ctx_…",
+      "status": {
+        "state": "TASK_STATE_WORKING",   # 1.0 wire：proto 枚举名
+        "message": {
+          "role": "agent",
+          "messageId": "<商家回复 envelope.message_id>",
+          "parts": [ { "kind": "data", "data": { "knp_envelope": { "…" } } } ]
+        }
+      }
+    } } }
+```
+
+- 回复 envelope 在 `task.status.message.parts[].data.knp_envelope`。
+- **即使 1.0 请求，响应 parts 仍是 0.3 形状**（`{kind:"data", data:{...}}`）——
+  解析器不依赖 `kind`。
+- 终态：`TASK_STATE_COMPLETED`；Agreement artifact 在
+  `task.artifacts[].parts[].data.agreement`。
+- 商业拒绝：`task.status.message.parts[].data` = `{decline: true, reason_code, message}`。
+
+## 3. 1.0 错误体
+
+```
+"error": { "code": -32600,
+  "message": "…",
+  "data": [ { "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+              "domain": "a2a-protocol.org",
+              "reason": "…" } ] }
+```
+
+错误码：TaskNotFound `-32001`、TaskNotCancelable `-32002`、
+PushNotificationNotSupported `-32003`、UnsupportedOperation `-32004`、
+ContentTypeNotSupported `-32005`、VersionNotSupported `-32009`。
+
+## 4. 版本 / 状态 wire 值
+
+1.0 wire 用 protobuf 枚举名：`ROLE_USER` / `ROLE_AGENT`（也接受小写）、
+`TASK_STATE_SUBMITTED|WORKING|INPUT_REQUIRED|COMPLETED|CANCELED|FAILED|REJECTED|AUTH_REQUIRED`。
+
+## 5. 扩展激活
+
+- 扩展 URI：`/a2a/extensions/negotiation/1.0`；`A2A-Extensions` 头发绝对 URI。
+- capability `com.harrylabsj.kiwi.shopping.negotiation`，`protocol_version` `"1.0"`。
+- 未知扩展 → fail-closed `-32600`；未声明的 streaming/push capability 被请求 →
+  `-32004` / `-32003`；非 `application/json` Content-Type → HTTP `415`。
+
+## 6. 通用（非 KNP）消息
+
+无 `knp_envelope` 的普通 A2A 消息不进磋商管线：完成 task + 生成 `contextId` +
+回显 parts 为 artifact。taskId 语义校验（TaskNotFound / 终态→Unsupported /
+contextId mismatch）只对通用消息生效。
+
+## Conformance
+
+- 参考实现（零依赖 Python）：`spec/examples/python/`
+- 向量：`spec/conformance/knp-1.0-vectors.json`
+- 互操作复现：`node scripts/conformance/three-way-interop.mjs`
