@@ -37,6 +37,10 @@ import { isJsonRpcRequest } from "../client/index.js";
 import { NegotiationValidationError } from "../../negotiation/domain/common.js";
 import { parseUcpAgentHeader, UCP_AGENT_HEADER } from "../ucp-agent.js";
 import { buildAgentCard } from "./card.js";
+// issue 07：1.0 双栈（版本头/扩展激活/方法路由/Part 解码）。
+import { A2A_EXTENSIONS_HEADER, A2A_VERSION_HEADER, activateKnp, parseExtensions, parseVersion } from "../v1/headers.js";
+import { METHOD_GET_TASK, METHOD_SEND_MESSAGE } from "../v1/methods.js";
+import { decodeV1Part } from "../v1/part.js";
 import { buildUcpProfile, WELL_KNOWN_UCP_PATH } from "./ucp.js";
 import type { BuiltUcpProfile, UcpPublishOptions } from "./ucp.js";
 import { defaultAuthVerifier } from "./auth.js";
@@ -79,6 +83,26 @@ function pathOf(url: string | undefined): string {
   if (url === undefined) return "/";
   const queryIndex = url.indexOf("?");
   return queryIndex >= 0 ? url.slice(0, queryIndex) : url;
+}
+
+/** issue 08：JSON-RPC 错误码 → gRPC Status code（1.0 错误体）。简化映射。 */
+function grpcCodeFor(jsonRpcCode: number): number {
+  switch (jsonRpcCode) {
+    case JSONRPC_CODES.METHOD_NOT_FOUND:
+      return 12; // UNIMPLEMENTED
+    case JSONRPC_CODES.INVALID_REQUEST:
+    case JSONRPC_CODES.INVALID_PARAMS:
+    case JSONRPC_CODES.PARSE_ERROR:
+      return 3; // INVALID_ARGUMENT
+    case JSONRPC_CODES.AUTH_ERROR:
+      return 16; // UNAUTHENTICATED
+    case JSONRPC_CODES.TASK_NOT_FOUND:
+      return 5; // NOT_FOUND
+    case JSONRPC_CODES.PAYLOAD_TOO_LARGE:
+      return 3; // INVALID_ARGUMENT
+    default:
+      return 13; // INTERNAL
+  }
 }
 
 function requireParamsObject(params: unknown): Record<string, unknown> {
@@ -385,19 +409,47 @@ export class A2AServer {
     }
 
     const { id, method, params } = parsed;
+    // issue 07：读 A2A-Version / A2A-Extensions 头，按版本 dispatch。
+    const version = parseVersion(String(req.headers[A2A_VERSION_HEADER.toLowerCase()] ?? ""));
+    const extensions = parseExtensions(String(req.headers[A2A_EXTENSIONS_HEADER.toLowerCase()] ?? ""));
     try {
-      const result = await this.dispatch(method, params, auth, ucpAgentProfile);
+      const result = await this.dispatch(method, params, auth, ucpAgentProfile, version, extensions);
       sendJson(res, 200, { jsonrpc: "2.0", id, result });
     } catch (err) {
-      sendJsonError(res, id, 200, this.toJsonRpcErrorBody(err));
+      sendJsonError(res, id, 200, this.toJsonRpcErrorBody(err, version));
     }
   }
 
-  private toJsonRpcErrorBody(err: unknown): JsonRpcErrorBody {
-    if (err instanceof ServerProtocolError) return err.body;
-    if (err instanceof NegotiationValidationError) return fromNegotiationError(err).body;
-    this.logError("a2a jsonrpc request failed", err);
-    return internalServerError().body;
+  private toJsonRpcErrorBody(err: unknown, version?: string): JsonRpcErrorBody {
+    const body =
+      err instanceof ServerProtocolError
+        ? err.body
+        : err instanceof NegotiationValidationError
+          ? fromNegotiationError(err).body
+          : (this.logError("a2a jsonrpc request failed", err), internalServerError().body);
+    // issue 08：1.0 错误体升级为 google.rpc.Status + ErrorInfo（domain a2a-protocol.org）。
+    if (version !== "1.0") return body;
+    return {
+      code: body.code,
+      message: body.message,
+      data: {
+        "@type": "google.rpc.Status",
+        code: grpcCodeFor(body.code),
+        message: body.message,
+        details: [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            domain: "a2a-protocol.org",
+            reason: String(
+              (body.data as { protocol_code?: unknown } | undefined)?.protocol_code ?? "unknown",
+            ),
+            ...(body.data !== null && typeof body.data === "object" && !Array.isArray(body.data)
+              ? { metadata: body.data as Record<string, string> }
+              : {}),
+          },
+        ],
+      },
+    };
   }
 
   private async dispatch(
@@ -405,7 +457,39 @@ export class A2AServer {
     params: unknown,
     caller: Caller,
     ucpAgentProfile?: string,
+    version?: string,
+    extensions?: string[],
   ): Promise<unknown> {
+    // issue 07：版本校验——不支持的版本 fail-closed（1.0 错误体在 issue 08 升级）。
+    if (version !== undefined && version !== "1.0" && version !== "0.3") {
+      throw new ServerProtocolError({
+        code: JSONRPC_CODES.METHOD_NOT_FOUND,
+        message: `unsupported A2A version ${version}`,
+      });
+    }
+    if (version === "1.0") {
+      // KNP 扩展激活：未知扩展 fail-closed（包裹为 ServerProtocolError，
+      // 而非 internal error）；声明 KNP 才走磋商。
+      try {
+        activateKnp(extensions ?? [], this.supportedExtensionUris());
+      } catch (err) {
+        throw new ServerProtocolError({
+          code: JSONRPC_CODES.INVALID_REQUEST,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      switch (method) {
+        case METHOD_SEND_MESSAGE:
+          return this.handleMessageSendV1(params, caller, ucpAgentProfile);
+        case METHOD_GET_TASK:
+          return this.upperTaskState(await this.handleTasksGet(params, caller, ucpAgentProfile));
+        default:
+          throw new ServerProtocolError({
+            code: JSONRPC_CODES.METHOD_NOT_FOUND,
+            message: `method ${method} not found`,
+          });
+      }
+    }
     switch (method) {
       case "message/send":
         return this.handleMessageSend(params, caller, ucpAgentProfile);
@@ -417,6 +501,55 @@ export class A2AServer {
           message: `method ${method} not found`,
         });
     }
+  }
+
+  /** 服务器自身声明的扩展 URI 集合（来自 Card capabilities.extensions）。 */
+  private supportedExtensionUris(): ReadonlySet<string> {
+    const config = resolveCardConfig(this.cardConfig);
+    const card = buildAgentCard(config);
+    const uris = new Set<string>();
+    for (const ext of card.capabilities?.extensions ?? []) {
+      uris.add(ext.uri);
+    }
+    return uris;
+  }
+
+  /** 1.0 SendMessage：解码统一 Part → 复用 0.3 磋商内核 → 响应 TaskState 大写。 */
+  private async handleMessageSendV1(
+    params: unknown,
+    caller: Caller,
+    ucpAgentProfile?: string,
+  ): Promise<unknown> {
+    const p = requireParamsObject(params);
+    const rawMessage = p.message as { parts?: unknown[] } | undefined;
+    if (rawMessage === undefined || !Array.isArray(rawMessage.parts)) {
+      throw new ServerProtocolError({
+        code: JSONRPC_CODES.INVALID_REQUEST,
+        message: "params.message is required",
+      });
+    }
+    const decoded = {
+      ...rawMessage,
+      parts: rawMessage.parts.map((part) => decodeV1Part(part as never)),
+    };
+    const result = await this.handleMessageSend(
+      { ...p, message: decoded },
+      caller,
+      ucpAgentProfile,
+    );
+    return this.upperTaskState(result);
+  }
+
+  /** 1.0 响应：`{task: {status: {state}}}` 的 state 归一化为大写（wire 格式）。 */
+  private upperTaskState(value: unknown): unknown {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+    const obj = value as { task?: { status?: { state?: unknown } } };
+    const task = obj.task;
+    if (task === undefined || typeof task !== "object") return value;
+    const status = task.status;
+    if (status === undefined || typeof status.state !== "string") return value;
+    const normalized = status.state === "unknown" ? "UNSPECIFIED" : status.state.toUpperCase();
+    return { ...obj, task: { ...task, status: { ...status, state: normalized } } };
   }
 
   private async handleMessageSend(

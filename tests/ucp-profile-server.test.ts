@@ -201,6 +201,7 @@ describe("UCP-Agent 宣告（§25.1）—— 出站注入 + 入站解析往返",
     const client = new A2AClient({
       url: `${url}/`,
       ucpAgentProfile: "https://buyer.example/.well-known/ucp",
+      version: "0.3",
     });
     await client.sendMessage(knpMessage(finalizeEnvelope(validEnvelopeFields())), "ctx");
 
@@ -218,7 +219,7 @@ describe("UCP-Agent 宣告（§25.1）—— 出站注入 + 入站解析往返",
         },
       },
     });
-    const client = new A2AClient({ url: `${url}/` });
+    const client = new A2AClient({ url: `${url}/`, version: "0.3" });
     await client.sendMessage(knpMessage(finalizeEnvelope(validEnvelopeFields())), "ctx");
 
     expect(seen).toBeUndefined();

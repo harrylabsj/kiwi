@@ -92,6 +92,17 @@ export interface A2AOutboundSigner {
 export interface A2AClientOptions {
   /** 选定 binding 的端点 URL（来自 capability intersection 的 remote interface url）。 */
   url: string;
+  /**
+   * 线协议版本（issue 06/09）：缺省 `"1.0"`（Card 声明 1.0 ↔ 默认 client 讲 1.0）
+   * ——发 `A2A-Version` + `A2A-Extensions` + 1.0 方法名（SendMessage/GetTask）
+   * + 1.0 Part 编码。`"0.3"` 走 legacy 帧（message/send/tasks/get + kind Part）。
+   */
+  version?: "1.0" | "0.3";
+  /**
+   * 1.0 模式声明 KNP 扩展的 URI（A2A-Extensions 头）；缺省从端点 origin 派生
+   * （`${origin}${KNP_EXTENSION_PATH}`），与 server Card 默认对齐；显式可覆盖。
+   */
+  knpExtensionUri?: string;
   /** 每请求超时 ms。默认 15000。 */
   timeoutMs?: number;
   /** 注入 fetch（测试用）。默认 globalThis.fetch。 */

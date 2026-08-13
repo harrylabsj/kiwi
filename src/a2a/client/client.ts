@@ -36,6 +36,15 @@ import type { A2AOutboundSigner, A2AMessage, A2AClientOptions, A2ATask } from ".
 import { serializeUcpAgentHeader, UCP_AGENT_HEADER } from "../ucp-agent.js";
 import { assertResolvableTargetUrl, assertSafeTargetUrl } from "./url-policy.js";
 import { isRedirectResponse, readJsonBody, SafeHttpError } from "../../net/safe-http.js";
+// issue 06：1.0 双栈（方法名/头/Part 编码）。
+import {
+  A2A_EXTENSIONS_HEADER,
+  A2A_VERSION_HEADER,
+  KNP_EXTENSION_PATH,
+  SUPPORTED_A2A_VERSION,
+} from "../v1/headers.js";
+import { METHOD_GET_TASK, METHOD_SEND_MESSAGE } from "../v1/methods.js";
+import { encodeV1Part } from "../v1/part.js";
 
 export class A2AClient {
   private readonly url: URL;
@@ -47,6 +56,8 @@ export class A2AClient {
   private readonly headers: Record<string, string>;
   private readonly ucpAgentProfile?: string;
   private readonly signer?: A2AOutboundSigner;
+  private readonly version: "1.0" | "0.3";
+  private readonly knpExtensionUri?: string;
 
   constructor(options: A2AClientOptions) {
     this.url = assertSafeTargetUrl(options.url, { allowPrivateRanges: options.allowPrivateRanges });
@@ -58,20 +69,35 @@ export class A2AClient {
     this.headers = options.headers ?? {};
     this.ucpAgentProfile = options.ucpAgentProfile;
     this.signer = options.signer;
+    // issue 09（方案 1）：默认 1.0——Card 声明 1.0 ↔ 默认 client 讲 1.0。
+    // knpExtensionUri 缺省从端点 origin 派生（服务器默认 path），显式可覆盖。
+    this.version = options.version ?? "1.0";
+    this.knpExtensionUri =
+      options.knpExtensionUri ??
+      (this.version === "1.0" ? `${this.url.origin}${KNP_EXTENSION_PATH}` : undefined);
   }
 
-  /** A2A `message/send`：发送一条 Message（含 Text/Data Part）。返回远端 Task。 */
+  /**
+   * 发送一条 Message（含 Text/Data Part）。返回远端 Task。
+   * 1.0 模式：方法名 `SendMessage` + Part 编码为 1.0 统一 Part。
+   */
   async sendMessage(message: A2AMessage, contextId?: string): Promise<A2ATask> {
-    const result = await this.rpc("message/send", {
-      message: message as unknown as Record<string, unknown>,
+    const wireMethod = this.version === "1.0" ? METHOD_SEND_MESSAGE : "message/send";
+    const wireMessage =
+      this.version === "1.0"
+        ? { ...message, parts: message.parts.map(encodeV1Part) }
+        : message;
+    const result = await this.rpc(wireMethod, {
+      message: wireMessage as unknown as Record<string, unknown>,
       ...(contextId !== undefined ? { contextId } : {}),
     });
     return result;
   }
 
-  /** A2A `tasks/get`：按 taskId 拉取 Task 状态与 artifacts。 */
+  /** 按 taskId 拉取 Task 状态与 artifacts。1.0 模式方法名 `GetTask`。 */
   async getTask(taskId: string): Promise<A2ATask> {
-    return this.rpc("tasks/get", { id: taskId });
+    const wireMethod = this.version === "1.0" ? METHOD_GET_TASK : "tasks/get";
+    return this.rpc(wireMethod, { id: taskId });
   }
 
   private async rpc(method: string, params: unknown): Promise<A2ATask> {
@@ -89,6 +115,15 @@ export class A2AClient {
     const baseHeaders: Record<string, string> = {
       "content-type": "application/json",
       accept: "application/json",
+      // issue 06：1.0 模式每请求带 A2A-Version + A2A-Extensions（声明 KNP）。
+      ...(this.version === "1.0"
+        ? {
+            [A2A_VERSION_HEADER]: SUPPORTED_A2A_VERSION,
+            ...(this.knpExtensionUri !== undefined
+              ? { [A2A_EXTENSIONS_HEADER]: this.knpExtensionUri }
+              : {}),
+          }
+        : {}),
       // WP3 §25.1：配置了 buyer profile URI 时宣告 UCP-Agent（RFC 8941 Dictionary）。
       ...(this.ucpAgentProfile !== undefined
         ? { [UCP_AGENT_HEADER]: serializeUcpAgentHeader(this.ucpAgentProfile) }
