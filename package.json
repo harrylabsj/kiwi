@@ -31,10 +31,12 @@
     "verify:contracts": "node scripts/verify-contracts.mjs",
     "verify:package": "bash scripts/verify-package.sh",
     "verify:portfolio-lock": "node scripts/verify-portfolio-lock-candidate.mjs",
-    "verify": "npm run lint && npm run typecheck && npm run build && npm run test && npm run verify:contracts && npm run verify:vectors && npm run verify:package",
+    "verify:python-ref": "cd spec/examples/python && python3 -m unittest discover -s tests -t .",
+    "verify": "npm run lint && npm run typecheck && npm run build && npm run test && npm run verify:contracts && npm run verify:vectors && npm run verify:package && npm run verify:python-ref",
     "prepublishOnly": "npm run build",
     "conformance:a2a-sdk": "node scripts/conformance/a2a-sdk-roundtrip.mjs",
-    "conformance:tck-sut": "node scripts/conformance/start-tck-sut.mjs"
+    "conformance:tck-sut": "node scripts/conformance/start-tck-sut.mjs",
+    "conformance:three-way": "node scripts/conformance/three-way-interop.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",
