@@ -56,8 +56,19 @@ export const JSONRPC_CODES = {
   METHOD_NOT_FOUND: -32601,
   INVALID_PARAMS: -32602,
   INTERNAL_ERROR: -32603,
-  /** A2A v1.0: TaskNotFound。 */
-  TASK_NOT_FOUND: -32004,
+  // issue 10 / TCK：A2A 1.0 标准错误码（spec §5.4）。
+  /** A2A v1.0: TaskNotFound（-32001）。 */
+  TASK_NOT_FOUND: -32001,
+  /** A2A v1.0: TaskNotCancelable。 */
+  TASK_NOT_CANCELABLE: -32002,
+  /** A2A v1.0: PushNotificationNotSupported。 */
+  PUSH_NOTIFICATION_NOT_SUPPORTED: -32003,
+  /** A2A v1.0: UnsupportedOperation。 */
+  UNSUPPORTED_OPERATION: -32004,
+  /** A2A v1.0: ContentTypeNotSupported。 */
+  CONTENT_TYPE_NOT_SUPPORTED: -32005,
+  /** A2A v1.0: VersionNotSupported（-32009）。 */
+  VERSION_NOT_SUPPORTED: -32009,
   /** KNP 协议错误载体：真实 code 在 data.protocol_code（§18 词表）。 */
   KNP_PROTOCOL_ERROR: -32050,
   /** 认证失败载体：protocol_code ∈ {authentication_required, authorization_failed}。 */

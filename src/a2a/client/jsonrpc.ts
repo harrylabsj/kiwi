@@ -97,7 +97,8 @@ export function isJsonRpcRequest(value: unknown): value is JsonRpcRequest {
   const obj = value as Record<string, unknown>;
   return (
     obj.jsonrpc === "2.0" &&
-    typeof obj.id === "string" &&
+    // JSON-RPC 规范允许 string 或 number id（issue 10：官方 SDK 用数字 id）。
+    (typeof obj.id === "string" || typeof obj.id === "number") &&
     typeof obj.method === "string" &&
     ("params" in obj ? obj.params !== undefined : true)
   );

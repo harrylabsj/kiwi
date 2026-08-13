@@ -23,6 +23,7 @@
  */
 
 import { A2AClientError } from "./error.js";
+import { V1_STATE_TO_LEGACY } from "../v1/types.js";
 import {
   A2A_TASK_STATES,
   type A2AArtifact,
@@ -112,9 +113,9 @@ function parseTask(value: unknown, path: string): A2ATask {
     status: (() => {
       const status = requireObject(obj.status, `${path}/status`);
       const state = requireNonEmptyString(status.state, `${path}/status/state`);
-      // issue 06：接受 1.0 大写状态（SUBMITTED/COMPLETED/…），归一化到 0.3 小写；
-      // 1.0 `UNSPECIFIED` → 0.3 `unknown`（语义对应）。
-      const normalized = state === "UNSPECIFIED" ? "unknown" : state.toLowerCase();
+      // issue 06/10：接受 1.0 wire 状态（TASK_STATE_COMPLETED 等）与大小写变体，
+      // 归一化到 0.3 小写；`UNSPECIFIED`/`TASK_STATE_UNSPECIFIED` → `unknown`。
+      const normalized = V1_STATE_TO_LEGACY[state] ?? state.toLowerCase();
       if (!(A2A_TASK_STATES as readonly string[]).includes(normalized)) {
         throw schemaInvalid(`${path}/status/state is unsupported: ${state}`);
       }

@@ -631,11 +631,13 @@ describe("A2A Server: tasks/get", () => {
     expect((fetched["status"] as Record<string, unknown>)["state"]).toBe("completed");
   });
 
-  it("returns TaskNotFound (-32004) for an unknown task id", async () => {
+  // issue 10：A2A 1.0 规范 TaskNotFoundError = -32001（旧实现误用 -32004
+  // UnsupportedOperationError；TCK CORE-SEND error 断言 -32001）。
+  it("returns TaskNotFound (-32001) for an unknown task id", async () => {
     const { a2aUrl } = await startServer();
     const res = await rpc(a2aUrl, "tasks/get", { id: "task_nope" });
     expect(res.status).toBe(200);
-    expect(rpcError(res.body).code).toBe(-32004);
+    expect(rpcError(res.body).code).toBe(-32001);
   });
 });
 

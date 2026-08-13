@@ -59,6 +59,11 @@ import type {
   NegotiationHandler,
   NegotiationHandlerResult,
 } from "./types.js";
+import {
+  defaultGenericResponder,
+  newGenericContextId,
+  type GenericMessageResponder,
+} from "./generic-responder.js";
 
 export interface InboundPipelineOptions {
   handler: NegotiationHandler;
@@ -69,6 +74,8 @@ export interface InboundPipelineOptions {
   logError: (message: string, err: unknown) => void;
   /** WP3 §31 反滥用限流（可选；配置后判定在认证之后、schema 校验之前）。 */
   throttle?: A2AServerThrottle;
+  /** 通用（非 KNP）A2A 消息响应器（issue 10 / TCK）；缺省用 spec 一致的回显。 */
+  genericResponder?: GenericMessageResponder;
 }
 
 export interface SendMessageCaller {
@@ -94,6 +101,11 @@ export interface SendMessageResult {
   /** 新处理的落账事件；幂等重放时为 undefined。 */
   ledgerEvent?: LedgerEvent;
 }
+
+/** 通用（非 KNP）消息的归一化响应：task（已入库）或 message（1.0 wire）。 */
+export type GenericSendResult =
+  | { task: A2ATask }
+  | { message: Record<string, unknown> };
 
 // ---------------------------------------------------------------------------
 // 按幂等键串行化：防止并发同 key 请求双执行 handler
@@ -204,6 +216,7 @@ export class InboundPipeline {
   private readonly now: () => string;
   private readonly logError: (message: string, err: unknown) => void;
   private readonly throttle: A2AServerThrottle | undefined;
+  private readonly genericResponder: GenericMessageResponder;
 
   constructor(options: InboundPipelineOptions) {
     this.handler = options.handler;
@@ -213,6 +226,7 @@ export class InboundPipeline {
     this.now = options.now;
     this.logError = options.logError;
     this.throttle = options.throttle;
+    this.genericResponder = options.genericResponder ?? defaultGenericResponder;
   }
 
   private toThrottleRequest(caller: SendMessageCaller): ThrottleRequest {
@@ -500,6 +514,62 @@ export class InboundPipeline {
     const inMemory = this.tasks.get(taskId);
     if (inMemory !== null) return inMemory;
     return this.tasks.resolveFromLedger(this.ledger, taskId);
+  }
+
+  /** ListTasks（issue 10 / TCK CORE-LIST）：返回内存任务列表。 */
+  listTasks(): { tasks: A2ATask[] } {
+    return { tasks: this.tasks.list() };
+  }
+
+  /** CancelTask（issue 10 / TCK CORE-CANCEL）。 */
+  cancelTask(
+    taskId: string,
+  ): { ok: boolean; outcome: "canceled" | "not_found" | "not_cancelable" } {
+    return this.tasks.cancel(taskId);
+  }
+
+  /**
+   * 通用 A2A 消息（issue 10 / TCK CORE-SEND/EXECUTION-MODE/MULTI）：无 KNP
+   * envelope 的普通消息不进磋商管线——交给通用响应器（缺省：完成任务 + 回显
+   * parts 为 artifact + 生成 contextId）。让 A2A 1.0 server 对任意消息合规
+   * （KNP 是扩展，非 A2A 必载）。响应器可注入（TCK 参考场景）。
+   */
+  sendGenericMessage(message: Record<string, unknown>): GenericSendResult {
+    const taskId = newTaskId();
+    const contextId =
+      typeof message.contextId === "string" && message.contextId.length > 0
+        ? message.contextId
+        : newGenericContextId();
+    const result = this.genericResponder({ message, taskId, contextId, now: this.now });
+    if (result.task !== undefined) {
+      const t = result.task;
+      // 1.0 通用路径是 raw 透传：task 的 message/artifacts 保持 1.0 wire 形状
+      // （统一 Part），非 0.3 建模——类型经 unknown 放宽是有意的。
+      const task: A2ATask = {
+        id: taskId,
+        status: {
+          state: t.state,
+          timestamp: this.now(),
+          ...(t.statusMessage !== undefined
+            ? { message: t.statusMessage as unknown as A2AMessage }
+            : {}),
+        },
+        ...(t.contextId !== undefined ? { contextId: t.contextId } : {}),
+        ...(t.artifacts !== undefined
+          ? { artifacts: t.artifacts as unknown as A2ATask["artifacts"] }
+          : {}),
+      };
+      this.tasks.set(taskId, task);
+      return { task };
+    }
+    // 响应器契约：task XOR message；两者皆缺即内部错误（fail-closed）。
+    if (result.message === undefined) throw internalServerError();
+    return { message: result.message };
+  }
+
+  /** 内存任务注册表是否已存在该任务（issue 10 / TCK CORE-MULTI-004）。 */
+  hasTask(taskId: string): boolean {
+    return this.tasks.get(taskId) !== null;
   }
 }
 

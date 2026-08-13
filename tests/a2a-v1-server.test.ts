@@ -115,7 +115,7 @@ describe("A2A server 双栈 dispatch（issue 07）", () => {
     });
     expect(status).toBe(200);
     const task = resultOf(body)?.["task"] as { status?: { state?: string } } | undefined;
-    expect(task?.status?.state).toBe("COMPLETED"); // 1.0 大写状态
+    expect(task?.status?.state).toBe("TASK_STATE_COMPLETED"); // 1.0 wire 状态
   });
 
   it("0.3 / 无版本头走 legacy（message/send 可用）", async () => {
@@ -143,21 +143,18 @@ describe("A2A server 双栈 dispatch（issue 07）", () => {
     expect(rpcError(body).message).toContain("unsupported A2A extension");
   });
 
-  it("1.0 错误体升级为 google.rpc.Status + ErrorInfo（domain a2a-protocol.org）", async () => {
+  it("1.0 错误体：error.data 是 ErrorInfo 数组（domain a2a-protocol.org）", async () => {
     const { a2aUrl } = await startServer();
     const { body } = await post(a2aUrl, "SendMessage", { message: {} }, {
       "A2A-Version": "1.0",
       "A2A-Extensions": "https://evil.example/ext",
     });
-    const data = rpcError(body)["data"] as {
-      "@type"?: string;
-      code?: number;
-      details?: Array<{ "@type"?: string; domain?: string }>;
-    };
-    expect(data?.["@type"]).toBe("google.rpc.Status");
-    expect(typeof data?.code).toBe("number");
-    expect(data?.details?.[0]?.["@type"]).toBe("type.googleapis.com/google.rpc.ErrorInfo");
-    expect(data?.details?.[0]?.domain).toBe("a2a-protocol.org");
+    const data = rpcError(body)["data"] as
+      | Array<{ "@type"?: string; domain?: string; reason?: string }>
+      | undefined;
+    expect(Array.isArray(data)).toBe(true);
+    expect(data?.[0]?.["@type"]).toBe("type.googleapis.com/google.rpc.ErrorInfo");
+    expect(data?.[0]?.domain).toBe("a2a-protocol.org");
   });
 
   it("0.3 错误体保持 legacy 形状（无 google.rpc.Status 升级）", async () => {
@@ -165,6 +162,98 @@ describe("A2A server 双栈 dispatch（issue 07）", () => {
     const { body } = await post(a2aUrl, "message/send", { message: {} });
     const data = rpcError(body)["data"] as { "@type"?: string } | undefined;
     expect(data?.["@type"]).not.toBe("google.rpc.Status"); // 0.3 不升级
+  });
+});
+
+describe("1.0 通用（非 KNP）消息路径（issue 10 / TCK）", () => {
+  it("普通消息 → 完成任务 + 生成 contextId + 回显 artifact（缺省响应器）", async () => {
+    const { a2aUrl } = await startServer();
+    const message = {
+      role: "ROLE_USER",
+      parts: [{ text: "hello generic" }],
+      messageId: "msg-generic-1",
+    };
+    const { status, body } = await post(a2aUrl, "SendMessage", { message }, { "A2A-Version": "1.0" });
+    expect(status).toBe(200);
+    const task = resultOf(body)?.["task"] as
+      | { id?: string; status?: { state?: string }; contextId?: string; artifacts?: unknown[] }
+      | undefined;
+    expect(task?.id).toBeTruthy();
+    expect(task?.status?.state).toBe("TASK_STATE_COMPLETED");
+    expect(task?.contextId).toBeTruthy();
+    expect(Array.isArray(task?.artifacts)).toBe(true);
+  });
+
+  it("CORE-MULTI-004：消息携带不存在的 taskId → TaskNotFound (-32001)", async () => {
+    const { a2aUrl } = await startServer();
+    const message = {
+      role: "ROLE_USER",
+      parts: [{ text: "to missing task" }],
+      messageId: "msg-multi-004",
+      taskId: "task_nonexistent",
+    };
+    const { status, body } = await post(a2aUrl, "SendMessage", { message }, { "A2A-Version": "1.0" });
+    expect(status).toBe(200);
+    expect(rpcError(body).code).toBe(-32001);
+  });
+
+  it("CORE-SEND-002：向终态任务发消息 → UnsupportedOperation (-32004)", async () => {
+    const { a2aUrl } = await startServer();
+    // 先创建任务（缺省响应器立即完成任务）。
+    const first = {
+      role: "ROLE_USER",
+      parts: [{ text: "first" }],
+      messageId: "msg-terminal-1",
+    };
+    const firstRes = await post(a2aUrl, "SendMessage", { message: first }, { "A2A-Version": "1.0" });
+    const taskId = (resultOf(firstRes.body)?.["task"] as { id?: string } | undefined)?.id;
+    expect(taskId).toBeTruthy();
+    // 对终态任务再发消息 → -32004。
+    const follow = {
+      role: "ROLE_USER",
+      parts: [{ text: "follow-up" }],
+      messageId: "msg-terminal-2",
+      taskId,
+    };
+    const { status, body } = await post(a2aUrl, "SendMessage", { message: follow }, { "A2A-Version": "1.0" });
+    expect(status).toBe(200);
+    expect(rpcError(body).code).toBe(-32004);
+  });
+
+  it("CORE-MULTI-006：taskId + 不匹配 contextId → 拒绝", async () => {
+    const { a2aUrl } = await startServer();
+    const first = {
+      role: "ROLE_USER",
+      parts: [{ text: "first" }],
+      messageId: "msg-mismatch-1",
+    };
+    const firstRes = await post(a2aUrl, "SendMessage", { message: first }, { "A2A-Version": "1.0" });
+    const task = resultOf(firstRes.body)?.["task"] as
+      | { id?: string; contextId?: string }
+      | undefined;
+    expect(task?.id).toBeTruthy();
+    expect(task?.contextId).toBeTruthy();
+    const wrong = {
+      role: "ROLE_USER",
+      parts: [{ text: "wrong ctx" }],
+      messageId: "msg-mismatch-2",
+      taskId: task?.id,
+      contextId: "ctx-wrong",
+    };
+    const { status, body } = await post(a2aUrl, "SendMessage", { message: wrong }, { "A2A-Version": "1.0" });
+    expect(status).toBe(200);
+    expect(rpcError(body).code).not.toBeUndefined();
+  });
+
+  it("HTTP 层：非 application/json Content-Type → 415 text body（不进 JSON-RPC 解析）", async () => {
+    const { a2aUrl } = await startServer();
+    const res = await fetch(a2aUrl, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "not json",
+    });
+    expect(res.status).toBe(415);
+    expect((await res.text()).startsWith("{")).toBe(false);
   });
 });
 
