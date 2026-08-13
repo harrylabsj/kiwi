@@ -36,11 +36,23 @@ import http from "node:http";
 import { isJsonRpcRequest } from "../client/index.js";
 import { NegotiationValidationError } from "../../negotiation/domain/common.js";
 import { parseUcpAgentHeader, UCP_AGENT_HEADER } from "../ucp-agent.js";
-import { buildAgentCard } from "./card.js";
+import { buildAgentCard, buildExtendedAgentCard } from "./card.js";
 // issue 07：1.0 双栈（版本头/扩展激活/方法路由/Part 解码）。
 import { A2A_EXTENSIONS_HEADER, A2A_VERSION_HEADER, activateKnp, parseExtensions, parseVersion } from "../v1/headers.js";
-import { METHOD_GET_TASK, METHOD_SEND_MESSAGE } from "../v1/methods.js";
-import { decodeV1Part } from "../v1/part.js";
+import {
+  METHOD_CANCEL_TASK,
+  METHOD_CREATE_PUSH_CONFIG,
+  METHOD_DELETE_PUSH_CONFIG,
+  METHOD_GET_EXTENDED_AGENT_CARD,
+  METHOD_GET_PUSH_CONFIG,
+  METHOD_GET_TASK,
+  METHOD_LIST_PUSH_CONFIGS,
+  METHOD_LIST_TASKS,
+  METHOD_SEND_MESSAGE,
+  METHOD_SEND_STREAMING_MESSAGE,
+} from "../v1/methods.js";
+import { decodeV1Part, isKnpDataPart } from "../v1/part.js";
+import { LEGACY_TO_V1_STATE } from "../v1/types.js";
 import { buildUcpProfile, WELL_KNOWN_UCP_PATH } from "./ucp.js";
 import type { BuiltUcpProfile, UcpPublishOptions } from "./ucp.js";
 import { defaultAuthVerifier } from "./auth.js";
@@ -85,24 +97,31 @@ function pathOf(url: string | undefined): string {
   return queryIndex >= 0 ? url.slice(0, queryIndex) : url;
 }
 
-/** issue 08：JSON-RPC 错误码 → gRPC Status code（1.0 错误体）。简化映射。 */
-function grpcCodeFor(jsonRpcCode: number): number {
-  switch (jsonRpcCode) {
-    case JSONRPC_CODES.METHOD_NOT_FOUND:
-      return 12; // UNIMPLEMENTED
-    case JSONRPC_CODES.INVALID_REQUEST:
-    case JSONRPC_CODES.INVALID_PARAMS:
-    case JSONRPC_CODES.PARSE_ERROR:
-      return 3; // INVALID_ARGUMENT
-    case JSONRPC_CODES.AUTH_ERROR:
-      return 16; // UNAUTHENTICATED
+/** issue 10：A2A 错误码 → 1.0 ErrorInfo reason（标准 JSON-RPC 错误无 reason）。 */
+function v1ErrorReasonFor(code: number): string | undefined {
+  switch (code) {
     case JSONRPC_CODES.TASK_NOT_FOUND:
-      return 5; // NOT_FOUND
-    case JSONRPC_CODES.PAYLOAD_TOO_LARGE:
-      return 3; // INVALID_ARGUMENT
+      return "TASK_NOT_FOUND";
+    case JSONRPC_CODES.TASK_NOT_CANCELABLE:
+      return "TASK_NOT_CANCELABLE";
+    case JSONRPC_CODES.PUSH_NOTIFICATION_NOT_SUPPORTED:
+      return "PUSH_NOTIFICATION_NOT_SUPPORTED";
+    case JSONRPC_CODES.UNSUPPORTED_OPERATION:
+      return "UNSUPPORTED_OPERATION";
+    case JSONRPC_CODES.CONTENT_TYPE_NOT_SUPPORTED:
+      return "CONTENT_TYPE_NOT_SUPPORTED";
+    case JSONRPC_CODES.VERSION_NOT_SUPPORTED:
+      return "VERSION_NOT_SUPPORTED";
     default:
-      return 13; // INTERNAL
+      return undefined;
   }
+}
+
+/** issue 10：兼容 SDK 的 proto 枚举名（ROLE_USER/ROLE_AGENT）与规范小写 role。 */
+function normalizeV1Role(role: unknown): unknown {
+  if (role === "ROLE_USER") return "user";
+  if (role === "ROLE_AGENT") return "agent";
+  return role;
 }
 
 function requireParamsObject(params: unknown): Record<string, unknown> {
@@ -226,6 +245,7 @@ export class A2AServer {
       now: this.now,
       logError: this.logError,
       throttle: this.throttle,
+      genericResponder: options.genericResponder,
     });
   }
 
@@ -371,6 +391,14 @@ export class A2AServer {
       sendText(res, 405, "method not allowed");
       return;
     }
+    // issue 10 / TCK JSONRPC-SSE-002 content_type：非 application/json 的
+    // Content-Type 在 HTTP 层 415 拒绝（text body，不进入 JSON-RPC 解析）。
+    // 兼容 MIME 后缀（application/json; charset=utf-8）；缺省头按空串放行。
+    const contentType = String(req.headers["content-type"] ?? "");
+    if (contentType !== "" && !contentType.startsWith("application/json")) {
+      sendText(res, 415, "content type not supported");
+      return;
+    }
     // 先读 body（有大小上限）：WP5 content-digest 验签需要请求体；顺序调整对
     // 既有认证语义无影响——认证失败仍返回 401/403，只是 body 先被读取。
     const bodyResult = await readBody(req, this.maxPayloadBytes);
@@ -427,28 +455,20 @@ export class A2AServer {
         : err instanceof NegotiationValidationError
           ? fromNegotiationError(err).body
           : (this.logError("a2a jsonrpc request failed", err), internalServerError().body);
-    // issue 08：1.0 错误体升级为 google.rpc.Status + ErrorInfo（domain a2a-protocol.org）。
+    // issue 08/10：1.0 错误体 —— `error.data` 是 google.rpc.ErrorInfo **数组**
+    // （domain a2a-protocol.org + 标准 reason；TCK JSONRPC-ERR-003）。
     if (version !== "1.0") return body;
+    const reason = v1ErrorReasonFor(body.code);
     return {
       code: body.code,
       message: body.message,
-      data: {
-        "@type": "google.rpc.Status",
-        code: grpcCodeFor(body.code),
-        message: body.message,
-        details: [
-          {
-            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-            domain: "a2a-protocol.org",
-            reason: String(
-              (body.data as { protocol_code?: unknown } | undefined)?.protocol_code ?? "unknown",
-            ),
-            ...(body.data !== null && typeof body.data === "object" && !Array.isArray(body.data)
-              ? { metadata: body.data as Record<string, string> }
-              : {}),
-          },
-        ],
-      },
+      data: [
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          domain: "a2a-protocol.org",
+          reason: reason ?? "UNKNOWN",
+        },
+      ],
     };
   }
 
@@ -463,7 +483,7 @@ export class A2AServer {
     // issue 07：版本校验——不支持的版本 fail-closed（1.0 错误体在 issue 08 升级）。
     if (version !== undefined && version !== "1.0" && version !== "0.3") {
       throw new ServerProtocolError({
-        code: JSONRPC_CODES.METHOD_NOT_FOUND,
+        code: JSONRPC_CODES.VERSION_NOT_SUPPORTED,
         message: `unsupported A2A version ${version}`,
       });
     }
@@ -483,6 +503,28 @@ export class A2AServer {
           return this.handleMessageSendV1(params, caller, ucpAgentProfile);
         case METHOD_GET_TASK:
           return this.upperTaskState(await this.handleTasksGet(params, caller, ucpAgentProfile));
+        case METHOD_LIST_TASKS:
+          return this.handleListTasks();
+        case METHOD_CANCEL_TASK:
+          return this.upperTaskState(await this.handleCancelTask(params));
+        case METHOD_GET_EXTENDED_AGENT_CARD:
+          return this.handleGetExtendedAgentCard();
+        // issue 10 / TCK JSONRPC-SSE-002：不支持的操作返回标准错误码而非
+        // MethodNotFound——流式未声明支持 → -32004 UnsupportedOperationError；
+        // push 通知未声明支持 → -32003 PushNotificationNotSupportedError。
+        case METHOD_SEND_STREAMING_MESSAGE:
+          throw new ServerProtocolError({
+            code: JSONRPC_CODES.UNSUPPORTED_OPERATION,
+            message: "streaming is not supported",
+          });
+        case METHOD_CREATE_PUSH_CONFIG:
+        case METHOD_GET_PUSH_CONFIG:
+        case METHOD_LIST_PUSH_CONFIGS:
+        case METHOD_DELETE_PUSH_CONFIG:
+          throw new ServerProtocolError({
+            code: JSONRPC_CODES.PUSH_NOTIFICATION_NOT_SUPPORTED,
+            message: "push notifications are not supported",
+          });
         default:
           throw new ServerProtocolError({
             code: JSONRPC_CODES.METHOD_NOT_FOUND,
@@ -521,15 +563,68 @@ export class A2AServer {
     ucpAgentProfile?: string,
   ): Promise<unknown> {
     const p = requireParamsObject(params);
-    const rawMessage = p.message as { parts?: unknown[] } | undefined;
+    const rawMessage = p.message as
+      | { role?: unknown; parts?: unknown[]; taskId?: unknown; contextId?: unknown }
+      | undefined;
     if (rawMessage === undefined || !Array.isArray(rawMessage.parts)) {
       throw new ServerProtocolError({
         code: JSONRPC_CODES.INVALID_REQUEST,
         message: "params.message is required",
       });
     }
+    // KNP 检测在**原始** parts 上做（不先解码）：未知 Part（raw/file/url）不进
+    // decodeV1Part（后者对 0.3 无等价物会抛错）。TCK CORE-SEND-003：带未知
+    // mediaType 的普通消息按参考 SUT 语义直接回显成功（ContentTypeNotSupported
+    // 由 HTTP 层 Content-Type 守卫覆盖，见 handleA2a）。
+    const hasKnp = rawMessage.parts.some((part) => isKnpDataPart(part as never));
+    // issue 10 / TCK CORE-SEND/EXECUTION-MODE/MULTI：无 KNP envelope 的普通
+    // A2A 消息走通用处理（不强制磋商管线）。回显**原始 1.0 消息**（role/parts
+    // 保持 1.0 wire 形状：ROLE_USER + 统一 Part），否则 TCK schema 拒绝。
+    // taskId 语义校验（CORE-MULTI-004/006、CORE-SEND-002）**只对通用消息生效**：
+    // KNP 磋商会话由 (sender_identity, message_id) 幂等驱动，客户端跨回合复用
+    // merchant 已终态化的 taskId 是既有设计（interop 双边流），不受 A2A 通用
+    // 消息语义约束。
+    if (!hasKnp) {
+      if (typeof rawMessage.taskId === "string" && rawMessage.taskId.length > 0) {
+        const existing = await this.pipeline.getTask(rawMessage.taskId);
+        if (existing === null) {
+          // CORE-MULTI-004：不存在的 taskId → TaskNotFound。
+          throw new ServerProtocolError({
+            code: JSONRPC_CODES.TASK_NOT_FOUND,
+            message: `task ${rawMessage.taskId} not found`,
+            data: { taskId: rawMessage.taskId },
+          });
+        }
+        // CORE-SEND-002：向终态任务发消息 → UnsupportedOperation。
+        const state = existing.status.state;
+        if (state === "completed" || state === "canceled" || state === "failed") {
+          throw new ServerProtocolError({
+            code: JSONRPC_CODES.UNSUPPORTED_OPERATION,
+            message: `task ${rawMessage.taskId} is in terminal state ${state}`,
+            data: { taskId: rawMessage.taskId },
+          });
+        }
+        // CORE-MULTI-006：contextId 与任务已记录的 contextId 不匹配 → 拒绝。
+        if (
+          typeof rawMessage.contextId === "string" &&
+          rawMessage.contextId.length > 0 &&
+          existing.contextId !== undefined &&
+          rawMessage.contextId !== existing.contextId
+        ) {
+          throw new ServerProtocolError({
+            code: JSONRPC_CODES.INVALID_REQUEST,
+            message: "contextId does not match the task's contextId",
+            data: { taskId: rawMessage.taskId },
+          });
+        }
+      }
+      const generic = this.pipeline.sendGenericMessage(rawMessage);
+      return this.upperTaskState(generic);
+    }
     const decoded = {
       ...rawMessage,
+      // issue 10：兼容 SDK 的 proto 枚举名（ROLE_USER）与规范小写（user）。
+      role: normalizeV1Role(rawMessage.role),
       parts: rawMessage.parts.map((part) => decodeV1Part(part as never)),
     };
     const result = await this.handleMessageSend(
@@ -540,7 +635,7 @@ export class A2AServer {
     return this.upperTaskState(result);
   }
 
-  /** 1.0 响应：`{task: {status: {state}}}` 的 state 归一化为大写（wire 格式）。 */
+  /** 1.0 响应：`{task: {status: {state}}}` 的 state 映射为 1.0 wire（TASK_STATE_*）。 */
   private upperTaskState(value: unknown): unknown {
     if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
     const obj = value as { task?: { status?: { state?: unknown } } };
@@ -548,8 +643,8 @@ export class A2AServer {
     if (task === undefined || typeof task !== "object") return value;
     const status = task.status;
     if (status === undefined || typeof status.state !== "string") return value;
-    const normalized = status.state === "unknown" ? "UNSPECIFIED" : status.state.toUpperCase();
-    return { ...obj, task: { ...task, status: { ...status, state: normalized } } };
+    const v1 = LEGACY_TO_V1_STATE[status.state] ?? status.state;
+    return { ...obj, task: { ...task, status: { ...status, state: v1 } } };
   }
 
   private async handleMessageSend(
@@ -617,5 +712,50 @@ export class A2AServer {
       });
     }
     return { task };
+  }
+
+  /** ListTasks（issue 10 / TCK CORE-LIST）：返回任务列表（1.0 wire state）。 */
+  private handleListTasks(): unknown {
+    const tasks = this.pipeline.listTasks().tasks.map((t) => {
+      const up = this.upperTaskState({ task: t });
+      return (up as { task: unknown }).task;
+    });
+    return { tasks };
+  }
+
+  /** CancelTask（issue 10 / TCK CORE-CANCEL）。 */
+  private async handleCancelTask(params: unknown): Promise<unknown> {
+    const p = requireParamsObject(params);
+    const id = p.id;
+    if (typeof id !== "string" || id.length === 0) {
+      throw new ServerProtocolError({
+        code: JSONRPC_CODES.INVALID_PARAMS,
+        message: "params.id must be a non-empty string",
+      });
+    }
+    const result = this.pipeline.cancelTask(id);
+    if (result.outcome === "not_found") {
+      throw new ServerProtocolError({
+        code: JSONRPC_CODES.TASK_NOT_FOUND,
+        message: `task ${id} not found`,
+        data: { taskId: id },
+      });
+    }
+    if (result.outcome === "not_cancelable") {
+      throw new ServerProtocolError({
+        code: JSONRPC_CODES.TASK_NOT_CANCELABLE,
+        message: `task ${id} is not cancelable`,
+        data: { taskId: id },
+      });
+    }
+    // getTask 是 async（内存优先，Ledger 兜底）；必须 await，否则 Promise 被
+    // 序列化为 {}（TCK CORE-CANCEL：CancelTask 响应必须带 task.id）。
+    const task = await this.pipeline.getTask(id);
+    return { task: task ?? { id, status: { state: "canceled" as const } } };
+  }
+
+  /** GetExtendedAgentCard（issue 10 / TCK CARD-EXT-001）：返回 snake_case 扩展 card 本体。 */
+  private handleGetExtendedAgentCard(): unknown {
+    return buildExtendedAgentCard(resolveCardConfig(this.cardConfig));
   }
 }

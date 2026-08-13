@@ -57,3 +57,18 @@ export function isKnpDataPart(part: A2AV1Part): part is DataPart {
   if (!("data" in part)) return false;
   return "knp_envelope" in part.data || "agreement" in part.data;
 }
+
+/**
+ * 输入 Part 是否受支持（issue 10 / TCK CORE-SEND-003）。fail-closed：未知
+ * 形状一律不支持。TextPart 直接支持；DataPart 仅当 mediaType 为
+ * application/json（含 KNP）；带其他 mediaType（如 raw/file/url）不支持 →
+ * server 返回 ContentTypeNotSupportedError（-32005），而非内部错误。
+ */
+export function isV1InputPartSupported(part: A2AV1Part): boolean {
+  if (typeof part !== "object" || part === null) return false;
+  if ("text" in part) return true;
+  const mediaType =
+    "mediaType" in part && typeof part.mediaType === "string" ? part.mediaType : undefined;
+  if (mediaType === undefined) return false;
+  return mediaType.startsWith("text/") || mediaType === "application/json";
+}

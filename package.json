@@ -32,7 +32,9 @@
     "verify:package": "bash scripts/verify-package.sh",
     "verify:portfolio-lock": "node scripts/verify-portfolio-lock-candidate.mjs",
     "verify": "npm run lint && npm run typecheck && npm run build && npm run test && npm run verify:contracts && npm run verify:vectors && npm run verify:package",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "conformance:a2a-sdk": "node scripts/conformance/a2a-sdk-roundtrip.mjs",
+    "conformance:tck-sut": "node scripts/conformance/start-tck-sut.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",
@@ -42,6 +44,7 @@
     "yaml": "2.9.0"
   },
   "devDependencies": {
+    "@a2a-js/sdk": "^1.0.1",
     "@eslint/js": "^9.29.0",
     "@types/node": "^24.0.0",
     "@types/qrcode": "^1.5.6",

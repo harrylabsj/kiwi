@@ -28,6 +28,15 @@ export const METHOD_GET_TASK = "GetTask";
 export const METHOD_LIST_TASKS = "ListTasks";
 export const METHOD_CANCEL_TASK = "CancelTask";
 export const METHOD_SUBSCRIBE_TO_TASK = "SubscribeToTask";
+/** A2A 1.0: GetExtendedAgentCard（issue 10 / TCK CARD-EXT-001）。 */
+export const METHOD_GET_EXTENDED_AGENT_CARD = "GetExtendedAgentCard";
+/** A2A 1.0: SendStreamingMessage（issue 10 / TCK JSONRPC-SSE-002：不支持流式 → -32004）。 */
+export const METHOD_SEND_STREAMING_MESSAGE = "SendStreamingMessage";
+/** A2A 1.0 push 通知配置方法（issue 10 / TCK JSONRPC-SSE-002：不支持推送 → -32003）。 */
+export const METHOD_CREATE_PUSH_CONFIG = "CreateTaskPushNotificationConfig";
+export const METHOD_GET_PUSH_CONFIG = "GetTaskPushNotificationConfig";
+export const METHOD_LIST_PUSH_CONFIGS = "ListTaskPushNotificationConfigs";
+export const METHOD_DELETE_PUSH_CONFIG = "DeleteTaskPushNotificationConfig";
 
 /** A2A 0.3 legacy 方法名常量。 */
 export const LEGACY_METHOD_SEND_MESSAGE = "message/send";
@@ -51,6 +60,12 @@ export const V1_METHODS: ReadonlySet<string> = new Set([
   METHOD_LIST_TASKS,
   METHOD_CANCEL_TASK,
   METHOD_SUBSCRIBE_TO_TASK,
+  METHOD_GET_EXTENDED_AGENT_CARD,
+  METHOD_SEND_STREAMING_MESSAGE,
+  METHOD_CREATE_PUSH_CONFIG,
+  METHOD_GET_PUSH_CONFIG,
+  METHOD_LIST_PUSH_CONFIGS,
+  METHOD_DELETE_PUSH_CONFIG,
 ]);
 
 /** 全部 0.3 legacy 方法名集合。 */

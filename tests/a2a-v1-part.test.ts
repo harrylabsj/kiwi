@@ -4,7 +4,12 @@
  * Part 形状间逐字段一致（磋商内核 100% 复用，只转传输帧）。
  */
 import { describe, expect, it } from "vitest";
-import { decodeV1Part, encodeV1Part, isKnpDataPart } from "../src/a2a/v1/part.js";
+import {
+  decodeV1Part,
+  encodeV1Part,
+  isKnpDataPart,
+  isV1InputPartSupported,
+} from "../src/a2a/v1/part.js";
 import type { A2AV1Part } from "../src/a2a/v1/types.js";
 import type { A2APart } from "../src/a2a/client/types.js";
 
@@ -67,5 +72,14 @@ describe("A2A v1 Part（issue 04）", () => {
   it("URL/File Part 在 0.3 模型无等价 → decode fail-closed", () => {
     expect(() => decodeV1Part({ url: "https://x.example/f" } as A2AV1Part)).toThrow();
     expect(() => decodeV1Part({ raw: "aGk=", mediaType: "text/plain" } as A2AV1Part)).toThrow();
+  });
+
+  it("isV1InputPartSupported（issue 10 / TCK CORE-SEND-003）：text 直接支持；data 仅 application/json；未知 mediaType fail-closed", () => {
+    expect(isV1InputPartSupported({ text: "hi" })).toBe(true);
+    expect(isV1InputPartSupported({ data: { knp_envelope: {} }, mediaType: "application/json" })).toBe(true);
+    expect(isV1InputPartSupported({ raw: "dGNr", mediaType: "text/plain" })).toBe(true);
+    expect(isV1InputPartSupported({ raw: "dGNr", mediaType: "application/x-unsupported-tck-type" })).toBe(false);
+    expect(isV1InputPartSupported({ data: { x: 1 } })).toBe(false); // data 无 mediaType → fail-closed
+    expect(isV1InputPartSupported({ url: "https://x.example/f" })).toBe(false); // URL 无 mediaType
   });
 });

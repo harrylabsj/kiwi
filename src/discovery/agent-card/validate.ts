@@ -231,6 +231,17 @@ export function validateAgentCard(value: unknown): AgentCard {
   if (obj.extensions !== undefined) {
     card.extensions = validateExtensions(obj.extensions, "/extensions");
   }
+  // issue 10 / TCK CARD-STRUCT-001：输入/输出模式必填，不得被校验器剥离。
+  if (obj.defaultInputModes !== undefined) {
+    card.defaultInputModes = requireArray(obj.defaultInputModes, "/defaultInputModes").map((s, i) =>
+      requireNonEmptyString(s, `/defaultInputModes/${i}`),
+    );
+  }
+  if (obj.defaultOutputModes !== undefined) {
+    card.defaultOutputModes = requireArray(obj.defaultOutputModes, "/defaultOutputModes").map((s, i) =>
+      requireNonEmptyString(s, `/defaultOutputModes/${i}`),
+    );
+  }
   return card;
 }
 

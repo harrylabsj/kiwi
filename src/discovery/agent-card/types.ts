@@ -119,6 +119,9 @@ export interface AgentCard {
   security?: AgentSecurityRequirement[];
   capabilities?: AgentCapabilities;
   skills?: AgentSkill[];
+  /** 声明的输入/输出模式（issue 10 / TCK CARD-STRUCT-001 必填）。 */
+  defaultInputModes?: string[];
+  defaultOutputModes?: string[];
   /** §26 字段清单中的顶层 extensions；capabilities.extensions 是规范位置。 */
   extensions?: AgentExtension[];
 }

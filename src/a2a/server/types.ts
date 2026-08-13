@@ -36,6 +36,7 @@ import type { LedgerStore } from "../../negotiation/ledger/index.js";
 import type { UcpPublishOptions } from "./ucp.js";
 import type { A2AServerThrottle, ThrottleOptions } from "./throttle.js";
 import type { TrustLevel } from "../../trust/identity/trust-policy.js";
+import type { GenericMessageResponder } from "./generic-responder.js";
 
 /** Agent Card 本地配置（基线 §26 / 子规范 §24.1 Discovery）。 */
 export interface AgentCardConfig {
@@ -187,4 +188,9 @@ export interface A2AServerOptions {
    * 传 ThrottleOptions 由 server 构造；也可直接注入 A2AServerThrottle 实例（测试用）。
    */
   throttle?: ThrottleOptions | A2AServerThrottle;
+  /**
+   * 通用（非 KNP）A2A 消息响应器（issue 10 / TCK）。缺省用 spec 一致的回显；
+   * conformance SUT 注入 TCK 参考场景（messageId 前缀路由）。
+   */
+  genericResponder?: GenericMessageResponder;
 }

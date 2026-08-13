@@ -71,6 +71,10 @@ export function buildAgentCard(config: AgentCardConfig): AgentCard {
       extendedAgentCard: true,
       extensions: [{ uri: negotiationExtensionUri, required: false }],
     },
+    // issue 10 / TCK CARD-STRUCT-001：A2A 1.0 必填字段。
+    skills: [],
+    defaultInputModes: ["text"],
+    defaultOutputModes: ["text"],
   };
 
   if (config.providerUrl !== undefined) {
@@ -89,4 +93,35 @@ export function buildAgentCard(config: AgentCardConfig): AgentCard {
 
   // 结构校验兜底：构造有误立即暴露，而不是把坏 card 发给远端。
   return validateAgentCard(card);
+}
+
+/**
+ * 扩展 Agent Card（issue 10 / TCK CARD-EXT-001）：`GetExtendedAgentCard` 返回的
+ * snake_case 形状（`default_input_modes`/`documentation_url`/`supported_interfaces`
+ * 等），与标准 card 的 camelCase 不同。
+ */
+export function buildExtendedAgentCard(config: AgentCardConfig): Record<string, unknown> {
+  const base = buildAgentCard(config);
+  const ext: Record<string, unknown> = {
+    name: base.name,
+    description: base.description,
+    version: base.version,
+    provider: base.provider,
+    supported_interfaces: base.supportedInterfaces.map((i) => ({
+      url: i.url,
+      protocol_binding: i.protocolBinding,
+      protocol_version: i.protocolVersion,
+    })),
+  };
+  // TCK CARD-EXT-001：扩展 card 的 Agent Card schema `additionalProperties:false`，
+  // 顶层不允许 `url`/`extensions`——只输出 schema 列出的字段。
+  if (base.documentationUrl !== undefined) ext.documentation_url = base.documentationUrl;
+  if (base.capabilities !== undefined) ext.capabilities = base.capabilities;
+  if (base.securitySchemes !== undefined) ext.security_schemes = base.securitySchemes;
+  if (base.security !== undefined) ext.security_requirements = base.security;
+  if (base.defaultInputModes !== undefined) ext.default_input_modes = base.defaultInputModes;
+  if (base.defaultOutputModes !== undefined) ext.default_output_modes = base.defaultOutputModes;
+  if (base.skills !== undefined) ext.skills = base.skills;
+  if (base.extensions !== undefined) ext.extensions = base.extensions;
+  return ext;
 }

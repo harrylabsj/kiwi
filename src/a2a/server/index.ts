@@ -95,3 +95,11 @@ export type {
   NegotiationHandler,
   NegotiationHandlerResult,
 } from "./types.js";
+// issue 10：通用（非 KNP）A2A 消息响应器——conformance SUT 注入 TCK 参考场景。
+export { defaultGenericResponder, newGenericContextId } from "./generic-responder.js";
+export type {
+  GenericMessageResponder,
+  GenericMessageResponse,
+  GenericResponderInput,
+  GenericResponderTask,
+} from "./generic-responder.js";

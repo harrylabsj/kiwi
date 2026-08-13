@@ -53,6 +53,26 @@ export class TaskRegistry {
     return task === undefined ? null : task;
   }
 
+  /** 全部在内存中的任务（issue 10 / TCK CORE-LIST：ListTasks）。 */
+  list(): A2ATask[] {
+    return [...this.tasks.values()];
+  }
+
+  /** 取消（issue 10 / TCK CORE-CANCEL）：非终态 → canceled；未知 → not_found；
+   *  终态 → not_cancelable。 */
+  cancel(
+    taskId: string,
+  ): { ok: boolean; outcome: "canceled" | "not_found" | "not_cancelable" } {
+    const task = this.tasks.get(taskId);
+    if (task === undefined) return { ok: false, outcome: "not_found" };
+    const state = task.status.state;
+    if (state === "completed" || state === "canceled" || state === "failed") {
+      return { ok: false, outcome: "not_cancelable" };
+    }
+    this.tasks.set(taskId, { ...task, status: { ...task.status, state: "canceled" } });
+    return { ok: true, outcome: "canceled" };
+  }
+
   /**
    * 从 Ledger 还原任务视图：扫描事件，命中 remote_task_id === taskId 的首条
    * 记录，返回最小 A2ATask（id + status.state）。结果不依赖内存状态。

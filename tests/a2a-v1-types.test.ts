@@ -12,28 +12,28 @@ import {
 } from "../src/a2a/v1/types.js";
 
 describe("A2A v1 types（issue 02）", () => {
-  it("TaskState 全集为大写下划线枚举（含 1.0 新增 REJECTED/AUTH_REQUIRED/UNSPECIFIED）", () => {
+  it("TaskState 全集为 TASK_STATE_* 枚举（含 1.0 新增 REJECTED/AUTH_REQUIRED/UNSPECIFIED）", () => {
     expect(A2A_TASK_STATES).toEqual([
-      "SUBMITTED",
-      "WORKING",
-      "INPUT_REQUIRED",
-      "COMPLETED",
-      "CANCELED",
-      "FAILED",
-      "REJECTED",
-      "AUTH_REQUIRED",
-      "UNSPECIFIED",
+      "TASK_STATE_SUBMITTED",
+      "TASK_STATE_WORKING",
+      "TASK_STATE_INPUT_REQUIRED",
+      "TASK_STATE_COMPLETED",
+      "TASK_STATE_CANCELED",
+      "TASK_STATE_FAILED",
+      "TASK_STATE_REJECTED",
+      "TASK_STATE_AUTH_REQUIRED",
+      "TASK_STATE_UNSPECIFIED",
     ]);
-    // 1.0 新增状态在列；0.3 的 `unknown` 语义由 `UNSPECIFIED` 承接。
-    expect(A2A_TASK_STATES).toContain("REJECTED");
-    expect(A2A_TASK_STATES).toContain("AUTH_REQUIRED");
-    expect(A2A_TASK_STATES).toContain("UNSPECIFIED");
+    // 1.0 新增状态在列；0.3 的 `unknown` 语义由 `TASK_STATE_UNSPECIFIED` 承接。
+    expect(A2A_TASK_STATES).toContain("TASK_STATE_REJECTED");
+    expect(A2A_TASK_STATES).toContain("TASK_STATE_AUTH_REQUIRED");
+    expect(A2A_TASK_STATES).toContain("TASK_STATE_UNSPECIFIED");
     expect(A2A_TASK_STATES).not.toContain("unknown");
   });
 
-  it("Role 常量为 agent / user", () => {
-    expect(ROLE_AGENT).toBe("agent");
-    expect(ROLE_USER).toBe("user");
+  it("Role 常量为 ROLE_AGENT / ROLE_USER（proto 枚举名，官方 SDK 序列化一致）", () => {
+    expect(ROLE_AGENT).toBe("ROLE_AGENT");
+    expect(ROLE_USER).toBe("ROLE_USER");
   });
 
   it("统一 Part 用字段存在性判别（无 kind 字段）", () => {
@@ -55,7 +55,7 @@ describe("A2A v1 types（issue 02）", () => {
   });
 
   it("类型编译：A2ATaskState 覆盖枚举成员", () => {
-    const state: A2ATaskState = "UNSPECIFIED";
-    expect(state).toBe("UNSPECIFIED");
+    const state: A2ATaskState = "TASK_STATE_UNSPECIFIED";
+    expect(state).toBe("TASK_STATE_UNSPECIFIED");
   });
 });
