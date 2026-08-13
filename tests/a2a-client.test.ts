@@ -111,7 +111,7 @@ describe("A2A client 往返（mock server）", () => {
       });
     });
 
-    const client = new A2AClient({ url: mock.url });
+    const client = new A2AClient({ url: mock.url, version: "0.3" });
     const message = knpMessage();
     const task = await client.sendMessage(message, "ctx_1");
 
@@ -152,7 +152,7 @@ describe("A2A client 往返（mock server）", () => {
       });
     });
 
-    const task = await new A2AClient({ url: mock.url }).sendMessage(knpMessage("task_09"));
+    const task = await new A2AClient({ url: mock.url, version: "0.3" }).sendMessage(knpMessage("task_09"));
     expect(task.status.state).toBe("completed");
     expect(task.artifacts?.[0]?.artifactId).toBe("art_1");
   });

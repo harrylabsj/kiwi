@@ -112,10 +112,13 @@ function parseTask(value: unknown, path: string): A2ATask {
     status: (() => {
       const status = requireObject(obj.status, `${path}/status`);
       const state = requireNonEmptyString(status.state, `${path}/status/state`);
-      if (!(A2A_TASK_STATES as readonly string[]).includes(state)) {
+      // issue 06：接受 1.0 大写状态（SUBMITTED/COMPLETED/…），归一化到 0.3 小写；
+      // 1.0 `UNSPECIFIED` → 0.3 `unknown`（语义对应）。
+      const normalized = state === "UNSPECIFIED" ? "unknown" : state.toLowerCase();
+      if (!(A2A_TASK_STATES as readonly string[]).includes(normalized)) {
         throw schemaInvalid(`${path}/status/state is unsupported: ${state}`);
       }
-      const parsed: A2ATask["status"] = { state: state as A2ATask["status"]["state"] };
+      const parsed: A2ATask["status"] = { state: normalized as A2ATask["status"]["state"] };
       if (status.message !== undefined) {
         parsed.message = parseMessage(status.message, `${path}/status/message`);
       }

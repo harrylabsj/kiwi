@@ -223,7 +223,7 @@ describe("A2A Server: Agent Card（well-known）", () => {
 describe("A2A Server: message/send 正例", () => {
   it("round-trips a KNP envelope in a data part and records ledger + idempotency", async () => {
     const { url, ledger, idempotency } = await startServer();
-    const client = new A2AClient({ url: `${url}/` });
+    const client = new A2AClient({ url: `${url}/`, version: "0.3" });
     const envelope = finalizeEnvelope(validEnvelopeFields());
 
     const task = await client.sendMessage(knpMessage(envelope), "ctx_1");
@@ -256,7 +256,7 @@ describe("A2A Server: message/send 正例", () => {
       },
     };
     const { url } = await startServer({ handler });
-    const client = new A2AClient({ url: `${url}/` });
+    const client = new A2AClient({ url: `${url}/`, version: "0.3" });
     const task = await client.sendMessage(
       knpMessage(finalizeEnvelope(validEnvelopeFields())),
       "ctx",
@@ -267,7 +267,7 @@ describe("A2A Server: message/send 正例", () => {
 
   it("defaults to a fail-closed decline handler when none is injected", async () => {
     const { url } = await startServer();
-    const client = new A2AClient({ url: `${url}/` });
+    const client = new A2AClient({ url: `${url}/`, version: "0.3" });
     const task = await client.sendMessage(
       knpMessage(finalizeEnvelope(validEnvelopeFields())),
       "ctx",
@@ -286,7 +286,7 @@ describe("A2A Server: message/send 正例", () => {
 describe("A2A Server: schema / version 拒绝（fail-closed）", () => {
   it("rejects an A2A message without a KNP data part → schema_invalid", async () => {
     const { a2aUrl } = await startServer();
-    const client = new A2AClient({ url: a2aUrl });
+    const client = new A2AClient({ url: a2aUrl, version: "0.3" });
     await expect(
       client.sendMessage({
         role: "agent",
@@ -364,7 +364,7 @@ describe("A2A Server: schema / version 拒绝（fail-closed）", () => {
 describe("A2A Server: 幂等（§20）", () => {
   it("replays the original result for same key + same digest", async () => {
     const { url, ledger } = await startServer();
-    const client = new A2AClient({ url: `${url}/` });
+    const client = new A2AClient({ url: `${url}/`, version: "0.3" });
     const envelope = finalizeEnvelope(validEnvelopeFields());
     const message = knpMessage(envelope);
 
@@ -379,7 +379,7 @@ describe("A2A Server: 幂等（§20）", () => {
 
   it("returns idempotency_conflict for same key + different digest", async () => {
     const { url } = await startServer();
-    const client = new A2AClient({ url: `${url}/` });
+    const client = new A2AClient({ url: `${url}/`, version: "0.3" });
     const first = finalizeEnvelope(validEnvelopeFields());
     await client.sendMessage(knpMessage(first), "ctx_1");
 
@@ -599,7 +599,7 @@ describe("A2A Server: handler 异常不泄漏内部细节", () => {
 describe("A2A Server: tasks/get", () => {
   it("returns the task created by message/send", async () => {
     const { url, a2aUrl } = await startServer();
-    const client = new A2AClient({ url: `${url}/` });
+    const client = new A2AClient({ url: `${url}/`, version: "0.3" });
     const task = await client.sendMessage(
       knpMessage(finalizeEnvelope(validEnvelopeFields())),
       "ctx",
@@ -615,7 +615,7 @@ describe("A2A Server: tasks/get", () => {
 
   it("maps tasks/get to the Ledger view after a server restart", async () => {
     const first = await startServer();
-    const client = new A2AClient({ url: `${first.url}/` });
+    const client = new A2AClient({ url: `${first.url}/`, version: "0.3" });
     const task = await client.sendMessage(
       knpMessage(finalizeEnvelope(validEnvelopeFields())),
       "ctx",
