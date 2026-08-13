@@ -106,6 +106,10 @@ Product layer (product-strategy rev1.1 §10/§19):
   kiwi buyer --help                       Kiwi Buyer command tree
   kiwi merchant --help                    Kiwi Merchant command tree
   kiwi network --help                     Kiwi Network command tree
+  kiwi demo [a|b]                         One-command local multi-merchant demo
+                                          (Issue 13; 1 buyer + catalog + 3 merchants
+                                          + fan-out RFQ → Agreement → Handoff, no
+                                          LLM/API key/no internet/no real transaction)
   kiwi doctor                             Aggregate health: kiwi runtime +
                                           shopping-cli presence + kiwi-catalog
                                           reachability (no --profile needed)
@@ -1015,6 +1019,28 @@ async function routeNetwork(sub: string | undefined): Promise<number> {
   return notImplementedProduct(`kiwi network ${sub}`, "§5（Network Operator 面）");
 }
 
+/**
+ * `kiwi demo [a|b]`（Issue 13）：一条命令本地多商家演示。
+ * 阶段可视化输出到 stderr，stdout 保持干净（可 JSON 消费）。
+ */
+async function cmdDemo(args: ParsedArgs): Promise<number> {
+  const scenarioKey = args.command[1] ?? "a";
+  const { runDemo, DEMO_SCENARIOS } = await import("./demo/demo-runner.js");
+  if (DEMO_SCENARIOS[scenarioKey] === undefined) {
+    process.stderr.write(`unknown demo scenario: ${scenarioKey}（可用 a / b）\n`);
+    return EXIT.CONFIG;
+  }
+  try {
+    await runDemo(scenarioKey, {
+      onLog: (phase: string, detail: string) => process.stderr.write(`  [${phase}] ${detail}\n`),
+    });
+    return EXIT.OK;
+  } catch (err) {
+    process.stderr.write(`demo failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.TRANSIENT;
+  }
+}
+
 function notImplementedProduct(name: string, target: string): number {
   process.stderr.write(
     `${name} 尚未实现（产品层完成定义 ${target}，见 docs/kiwi-product-layer-refactor-rev1.1.md §19）。\n`,
@@ -1060,6 +1086,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (cmd === "buyer") return await routeBuyer(sub, args);
     if (cmd === "merchant") return await routeMerchant(sub, args);
     if (cmd === "network") return await routeNetwork(sub);
+    if (cmd === "demo") return await cmdDemo(args);
     if (cmd === "doctor") {
       // 无 --profile → 三组件聚合健康（D0）；有 → 既有 profile doctor
       return args.profile !== undefined ? await cmdDoctor(args) : await cmdProductDoctor();
