@@ -23,6 +23,10 @@ _CONTRACTS_INTEROP = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "contracts", "interop")
 )
 _DATA_PART_EXAMPLES = os.path.join(_CONTRACTS_INTEROP, "knp-data-part-examples.json")
+# 发布的公开 conformance vectors（spec/conformance/）——同样必须逐字节一致。
+_SPEC_VECTORS = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "conformance", "knp-1.0-vectors.json")
+)
 
 NEGOTIATION_ID = "neg_01H5V8KXZqJ7Qp3mN2B6A"
 SKU = "SKU-001"
@@ -106,6 +110,20 @@ class BuildAndVerify(unittest.TestCase):
             envelope = _load_example_envelope(label)
             recomputed = compute_envelope_digest(envelope)
             self.assertEqual(recomputed, envelope["digest"], f"{label} digest mismatch")
+
+    def test_published_spec_vectors_stay_anchored(self) -> None:
+        """`spec/conformance/knp-1.0-vectors.json`（公开向量）重算必须逐字节一致。"""
+        with open(_SPEC_VECTORS, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data["schema"], "knp/1.0/conformance-vectors/v1")
+        for vector in data["vectors"]:
+            envelope = vector["envelope"]
+            recomputed = compute_envelope_digest(envelope)
+            self.assertEqual(
+                recomputed,
+                envelope["digest"],
+                f"published vector {vector['label']} digest mismatch",
+            )
 
 
 class GoldenVectors(unittest.TestCase):
