@@ -55,9 +55,28 @@ const MAX_RESPONSE_BYTES = 1024 * 1024; // 1 MiB（iLink 响应远小于默认 8
 const SESSION_EXPIRED_ERRCODE = -14;
 const RATE_LIMIT_ERRCODE = -2;
 
+/** redirect_host / confirmed baseurl 默认主机白名单（iLink 官方腾讯域）。 */
+const DEFAULT_ALLOWED_REDIRECT_HOSTS: readonly string[] = [".qq.com"];
+
+/** 主机白名单判定：等于自身 baseUrl 主机，或精确匹配/域名后缀匹配白名单。 */
+function isAllowedRedirectHost(host: string, selfHost: string, allowlist: readonly string[]): boolean {
+  const h = host.toLowerCase();
+  if (h === selfHost.toLowerCase()) return true;
+  return allowlist.some((entry) => {
+    const e = entry.toLowerCase();
+    return e.startsWith(".") ? h.endsWith(e) : h === e;
+  });
+}
+
 export interface IlinkClientOptions {
   /** iLink base URL（confirmed 的 baseurl 或默认）。 */
   baseUrl?: string;
+  /**
+   * redirect_host / confirmed baseurl 主机白名单（审查 K-M6）：bot_token 直送
+   * 目标只允许这些主机/域名后缀（缺省 *.qq.com —— iLink 官方腾讯域）。自定义
+   * iLink 部署/自建端点需显式扩展；自身 baseUrl 主机恒允许。
+   */
+  allowedRedirectHosts?: string[];
   log?: (line: string) => void;
 }
 
@@ -68,13 +87,24 @@ export interface IlinkClientOptions {
 export class IlinkClient {
   private baseUrl: string;
   private readonly log?: (line: string) => void;
+  private readonly allowedRedirectHosts: readonly string[];
   /** sendmessage 的 client_id（每进程一个，幂等标识）。 */
   private readonly clientId: string;
 
   constructor(options: IlinkClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? ILINK_DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.log = options.log;
+    this.allowedRedirectHosts = options.allowedRedirectHosts ?? [...DEFAULT_ALLOWED_REDIRECT_HOSTS];
     this.clientId = crypto.randomUUID();
+  }
+
+  /** 当前 baseUrl 的主机（bot_token 直送白名单里的"自身"主机）。 */
+  private selfHost(): string {
+    try {
+      return new URL(this.baseUrl).hostname;
+    } catch {
+      return "";
+    }
   }
 
   /** scaned_but_redirect 时切换 base URL（进程内生效；持久化由调用方负责）。 */
@@ -113,6 +143,26 @@ export class IlinkClient {
       if (typeof accountId !== "string" || accountId === "" || typeof token !== "string" || token === "") {
         throw new WeixinError("validation", "get_qrcode_status confirmed 缺少凭证字段");
       }
+      // 审查 K-M6：confirmed 的 baseurl 是 bot_token 直送目标（getupdates/
+      // sendmessage 把 base_info 发到该 host）——与 redirect_host 同一白名单，
+      // 必须 https，防 iLink 被攻破时把凭证流量导到任意主机。
+      if (typeof baseUrl === "string" && baseUrl !== "") {
+        let parsedBase: URL;
+        try {
+          parsedBase = new URL(baseUrl);
+        } catch {
+          throw new WeixinError("validation", "confirmed baseurl 非法");
+        }
+        if (parsedBase.protocol !== "https:") {
+          throw new WeixinError("validation", "confirmed baseurl 必须 https");
+        }
+        if (!isAllowedRedirectHost(parsedBase.hostname, this.selfHost(), this.allowedRedirectHosts)) {
+          throw new WeixinError(
+            "validation",
+            `confirmed baseurl 主机 ${parsedBase.hostname} 不在白名单（默认 *.qq.com）`,
+          );
+        }
+      }
       const credentials: BotCredentials = {
         ilink_bot_id: accountId,
         bot_token: token,
@@ -147,6 +197,14 @@ export class IlinkClient {
         throw new WeixinError(
           "validation",
           `scaned_but_redirect redirect_host 必须是无 scheme/path/port 的纯 hostname`,
+        );
+      }
+      // 审查 K-M6：纯 hostname 校验之外加主机白名单（默认 *.qq.com）纵深防御——
+      // iLink 被攻破时凭证流量不能被导到任意主机。
+      if (!isAllowedRedirectHost(parsed.hostname, this.selfHost(), this.allowedRedirectHosts)) {
+        throw new WeixinError(
+          "validation",
+          `scaned_but_redirect redirect_host ${parsed.hostname} 不在白名单（默认 *.qq.com）`,
         );
       }
       return { state: "scaned_but_redirect", baseUrl: `https://${redirectHost}` };

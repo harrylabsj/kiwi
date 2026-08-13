@@ -169,3 +169,61 @@ describe("WP5 身份层集成（A2AServer + 签名 client）", () => {
     expect(resBody.error?.data?.protocol_code).toBe("authorization_failed");
   });
 });
+
+describe("K-M8: expectedAuthority binds signatures to the server's advertised host", () => {
+  function signedFor(host: string): { headers: Record<string, string>; body: Buffer } {
+    const signer = new HttpMessageSigner({
+      keyid: "acme-2026",
+      algorithm: "ed25519",
+      privateKey: ED25519_SEED,
+    });
+    const body = Buffer.from('{"msg":"x"}', "utf8");
+    const headers = signer.sign({
+      method: "POST",
+      url: `https://${host}/neg`,
+      body,
+      headers: { host, "content-type": "application/json" },
+    });
+    return { headers, body };
+  }
+
+  it("a signature for another host is rejected when expectedAuthority is set (cross-host replay)", () => {
+    const { headers, body } = signedFor("veyquo.com");
+    // 攻击场景：把绑定 veyquo.com 的签名重放到「期望主机 = a.test」的服务端
+    // （客户端仍发 Host: veyquo.com）。expectedAuthority 强制绑定后必须拒绝。
+    const verifier = new HttpMessageSignatureVerifier({
+      resolver: RESOLVER,
+      expectedAuthority: "a.test",
+    });
+    const result = verifier.verify({
+      remoteAddress: "::ffff:192.0.2.1",
+      authorizationHeader: undefined,
+      method: "POST",
+      url: "/neg",
+      scheme: "https",
+      headers: { ...headers, host: "veyquo.com" },
+      body,
+    });
+    expect(result.authenticated).toBe(false);
+    expect(result.protocolCode).toBe("authorization_failed");
+    expect(result.reason).toMatch(/does not match expected authority/);
+  });
+
+  it("passes when expectedAuthority matches the signed authority", () => {
+    const { headers, body } = signedFor("veyquo.com");
+    const verifier = new HttpMessageSignatureVerifier({
+      resolver: RESOLVER,
+      expectedAuthority: "veyquo.com",
+    });
+    const result = verifier.verify({
+      remoteAddress: "::ffff:192.0.2.1",
+      authorizationHeader: undefined,
+      method: "POST",
+      url: "/neg",
+      scheme: "https",
+      headers: { ...headers, host: "veyquo.com" },
+      body,
+    });
+    expect(result.authenticated).toBe(true);
+  });
+});

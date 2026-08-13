@@ -105,6 +105,8 @@ export interface AgentProfile {
      * separately or the corresponding merchant write tools fail closed.
      */
     credentials?: Partial<Record<CommerceCredentialScope, { token_env: string }>>;
+    /** 商品源故障时是否回退内置演示价（fail-open）；缺省 false = fail-closed。 */
+    allow_demo_price_fallback?: boolean;
   };
   model: {
     provider: string;
@@ -168,7 +170,7 @@ const TOP_LEVEL_KEYS = [
 ] as const;
 /** weixin 段白名单（微信远程控制通道配置；无 *_env 密钥字段——iLink 凭证运行时获取）。 */
 const WEIXIN_KEYS = ["allow_users", "base_url"] as const;
-const COMMERCE_KEYS = ["base_url", "token_env", "backend", "credentials"] as const;
+const COMMERCE_KEYS = ["base_url", "token_env", "backend", "credentials", "allow_demo_price_fallback"] as const;
 const MODEL_KEYS = [
   "provider",
   "model",
@@ -362,6 +364,14 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
         return entry === undefined ? [] : [scope, { token_env: (entry as { token_env: string }).token_env }];
       }).filter((pair) => pair.length > 0),
     ) as AgentProfile["commerce"]["credentials"];
+  }
+  // 商品源故障回退演示价开关（可选布尔；缺省 fail-closed）。
+  const allowDemoPriceFallback = commerce.allow_demo_price_fallback;
+  if (allowDemoPriceFallback !== undefined) {
+    req(
+      typeof allowDemoPriceFallback === "boolean",
+      `${source}: commerce.allow_demo_price_fallback must be a boolean`,
+    );
   }
   rejectUnknownKeys(commerce, COMMERCE_KEYS, "commerce", source);
 
@@ -581,6 +591,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
       token_env: commerce.token_env,
       backend: commerce.backend,
       ...(credentials !== undefined ? { credentials } : {}),
+      ...(allowDemoPriceFallback === true ? { allow_demo_price_fallback: true } : {}),
     },
     model: {
       provider: model.provider,

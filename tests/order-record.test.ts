@@ -159,6 +159,27 @@ describe("OrderRecord ingestion", () => {
       store.close();
     }
   });
+
+  // 审查 K-H4：permalink_url 拒绝 userinfo / loopback / 私网 / 云元数据主机。
+  it("rejects permalink_url with userinfo or reserved hosts", () => {
+    const store = openOrderRecordStore({ dbPath: ":memory:" });
+    try {
+      for (const bad of [
+        "https://user:pass@evil.com/x",
+        "http://127.0.0.1:8080/admin",
+        "https://169.254.169.254/latest/meta-data/",
+        "https://localhost/secret",
+        "https://10.0.0.5/internal",
+      ]) {
+        expect(() => ingestOrderRecord(store, orderSource({ permalink_url: bad }), CLOCK)).toThrow(
+          /permalink_url/,
+        );
+      }
+      expect(store.count()).toBe(0);
+    } finally {
+      store.close();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

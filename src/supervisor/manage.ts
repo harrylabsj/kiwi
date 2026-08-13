@@ -33,7 +33,7 @@
 
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, rmSync, unlinkSync, writeSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProfile, ProfileError } from "../config/profile.js";
@@ -275,15 +275,88 @@ export interface UpOptions {
   agentGraceMs?: number;
 }
 
+/**
+ * 实例级互斥锁（审查 K-M9）：并发 `kiwi up` 在状态检查前串行化——否则两个
+ * up 都读"未运行"、各自 spawn 网关（一个 bind 失败退出、另一个成功）且都继续
+ * 起 buyer/merchant agent → 双 agent 并存。崩溃残留（PID 已死）自动接管，
+ * 存活实例则 fail-closed 拒绝。锁路径在实例 run 目录，随进程退出释放。
+ */
+function acquireUpLock(runDir: string): () => void {
+  const lockPath = path.join(runDir, "up.lock");
+  const stealIfStale = (): void => {
+    if (!existsSync(lockPath)) return;
+    const pidText = readFileSync(lockPath, "utf-8").trim();
+    const pid = Number(pidText);
+    if (Number.isInteger(pid) && pid > 0) {
+      try {
+        process.kill(pid, 0);
+        // 存活 → 不接管
+        throw new SupervisorError(
+          `另一个 \`kiwi up\` 正在运行（pid ${pid}，锁 ${lockPath}）——并发 up 被实例锁拒绝`,
+        );
+      } catch (err) {
+        if (err instanceof SupervisorError) throw err;
+        // ESRCH：持有进程已死，残留锁可接管
+      }
+    }
+    unlinkSync(lockPath);
+  };
+  stealIfStale();
+  let fd: number;
+  try {
+    fd = openSync(lockPath, "wx");
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code;
+    if (code === "EEXIST") {
+      throw new SupervisorError(`另一个 \`kiwi up\` 正在运行（${lockPath}）`);
+    }
+    throw err;
+  }
+  try {
+    writeSync(fd, String(process.pid));
+  } catch (err) {
+    closeSync(fd);
+    throw err;
+  }
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    try {
+      closeSync(fd);
+    } catch {
+      // ignore
+    }
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // ignore
+    }
+  };
+  process.once("exit", release);
+  return release;
+}
+
 export async function runUp(dir: string, options?: UpOptions): Promise<UpResult> {
-  const healthTimeoutMs = options?.healthTimeoutMs ?? HEALTH_TIMEOUT_MS;
-  const agentGraceMs = options?.agentGraceMs ?? AGENT_GRACE_MS;
   const ctx = loadInstance(dir);
   if (ctx.config.mode !== "managed-local") {
     throw new SupervisorError(
       `mode ${ctx.config.mode} is not managed by kiwi 0.5.0: start the gateway yourself and use kiwi agent run / doctor`,
     );
   }
+  // 审查 K-M9：实例级互斥（状态检查之前获取，串行化并发 up）。
+  const releaseUpLock = acquireUpLock(ctx.paths.run);
+  try {
+    return await runUpLocked(ctx, options);
+  } finally {
+    releaseUpLock();
+  }
+}
+
+/** runUp 主体（持实例锁执行，审查 K-M9）。 */
+async function runUpLocked(ctx: InstanceContext, options?: UpOptions): Promise<UpResult> {
+  const healthTimeoutMs = options?.healthTimeoutMs ?? HEALTH_TIMEOUT_MS;
+  const agentGraceMs = options?.agentGraceMs ?? AGENT_GRACE_MS;
 
   // 1. Ownership/running state FIRST (safe, needs no secrets): an already
   // verified+running stack must be idempotent even from a fresh shell
@@ -432,6 +505,12 @@ export async function stopVerified(
   if (!existsSync(readyPath) && !(await waitForFile(readyPath, READY_WAIT_MS))) {
     return "unverified";
   }
+  // 审查 K-M7（TOCTOU）：首次 verify 与 SIGTERM 之间隔着 ready-marker 等待，
+  // 进程可能退出且 PID 被复用为无关进程——SIGTERM 会打错对象。SIGTERM 前再
+  // verify 一次（与 SIGKILL 升级前的守卫一致）：跑飞/复用一律不信号。
+  const preTerm = verifyProcess(manifest, ctx.config.instance_id);
+  if (!preTerm.running) return "not_running";
+  if (!preTerm.verified) return "unverified";
   process.kill(manifest.pid, "SIGTERM");
   if (await waitExit(manifest.pid, SIGTERM_WAIT_MS)) return "stopped";
   // Escalate only against our own still-verified wrapper.

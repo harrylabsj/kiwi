@@ -97,4 +97,23 @@ describe("merchant read path exact-stock semantics (P2-1)", () => {
       server.close();
     }
   });
+
+  it("K-M1: stalled response body is aborted by the timeout, not a permanent hang", async () => {
+    // 服务端发头 + 部分 body 后停滞（永不 end）：此前的实现 timer 在 fetch
+    // 头到达即清，await arrayBuffer() 永久挂起。readJsonBody 用同一 signal
+    // abort 时 cancel 底层流——挂起的读被中断，工具调用以 transient 超时返回。
+    const server = createServer((_req, res) => {
+      res.setHeader("content-type", "application/json");
+      res.write("{");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const broker = new StaticCredentialBroker({ catalog: "tok-catalog" });
+      const client = new HttpMerchantClient(`http://127.0.0.1:${port}`, broker, { timeoutMs: 200 });
+      await expect(client.getProduct("tea-a")).rejects.toMatchObject({ kind: "transient" });
+    } finally {
+      server.close();
+    }
+  });
 });

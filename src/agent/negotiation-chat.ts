@@ -414,7 +414,8 @@ export function writeGateText(
     | { kind: "executed"; candidate: { candidate_id: string }; output: unknown }
     | { kind: "pending_approval"; candidate: { candidate_id: string } }
     | { kind: "advice_only"; candidate: { candidate_id: string } }
-    | { kind: "forbidden"; reason: string },
+    | { kind: "forbidden"; reason: string }
+    | { kind: "failed"; candidate: { candidate_id: string }; reason: string },
 ): AgentToolResult<unknown> {
   switch (outcome.kind) {
     case "executed":
@@ -435,5 +436,10 @@ export function writeGateText(
       );
     case "forbidden":
       return textResult(outcome.reason);
+    case "failed":
+      return textResult(
+        `该写操作未执行（候选 ${outcome.candidate.candidate_id} 已失效）。原因：${outcome.reason}`,
+        { candidate_id: outcome.candidate.candidate_id, status: "failed" },
+      );
   }
 }

@@ -8,7 +8,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { resolveA2aThrottle, startA2aNode } from "../src/a2a/node.js";
+import {
+  resolveA2aThrottle,
+  startA2aNode,
+  type A2aNodeHandle,
+} from "../src/a2a/node.js";
 import { NoneAuthVerifier } from "../src/a2a/server/index.js";
 import { testProfile } from "./helpers.js";
 
@@ -19,6 +23,20 @@ interface MockCatalog {
 }
 
 const servers: http.Server[] = [];
+
+function startFailingCatalog(): Promise<{ server: http.Server; url: string }> {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "boom" }));
+  });
+  servers.push(server);
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address() as AddressInfo;
+      resolve({ server, url: `http://127.0.0.1:${addr.port}` });
+    });
+  });
+}
 
 function startCatalog(): Promise<MockCatalog> {
   const registrations: MockCatalog["registrations"] = [];
@@ -123,6 +141,44 @@ describe("startA2aNode（启动接线）", () => {
     const merchant = await startA2aNode({ profile: testProfile(), preferredPort: 0 });
     expect(merchant.catalogAgentId).toBeUndefined();
     await merchant.stop();
+  });
+
+  it("K-M11: catalog 注册失败 → 记录日志并继续（默认不阻断），catalogAgentId 为 undefined", async () => {
+    const catalog = await startFailingCatalog();
+    const writes: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    let node: A2aNodeHandle | undefined;
+    try {
+      node = await startA2aNode({ profile: testProfile(), catalog: catalog.url, preferredPort: 0 });
+      expect(node.catalogAgentId).toBeUndefined();
+      // 审查 K-M11：此前空 catch 静默吞掉——现在必须看到注册失败日志。
+      expect(writes.some((w) => w.includes("catalog 注册失败"))).toBe(true);
+    } finally {
+      process.stderr.write = original;
+      await node?.stop().catch(() => undefined);
+    }
+  });
+
+  it("K-M11: requireCatalogRegistration 时注册失败 → 启动 fail-closed（且不残留监听节点）", async () => {
+    const catalog = await startFailingCatalog();
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    try {
+      await expect(
+        startA2aNode({
+          profile: testProfile(),
+          catalog: catalog.url,
+          preferredPort: 0,
+          requireCatalogRegistration: true,
+        }),
+      ).rejects.toThrow(/catalog 注册失败|boom/);
+    } finally {
+      process.stderr.write = original;
+    }
   });
 
   it("publicBaseUrl 覆盖：节点仍监听回环，但 card/注册/ucp 广告公网地址", async () => {

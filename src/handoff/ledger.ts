@@ -27,6 +27,7 @@
 import {
   assertNoForbiddenContent,
   type LedgerCapabilitySnapshot,
+  LedgerError,
   type LedgerEvent,
   type LedgerEventContent,
   type LedgerIdentitySnapshot,
@@ -86,6 +87,15 @@ function stripDestinationIdentityFields(
   delete rest.type;
   delete rest.ref;
   return rest;
+}
+
+/** 链损坏类 LedgerError：链无法追加 → 清扫器 fail-closed（审查 K-M13）。
+ *  ledger_duplicate_content（幂等回放）与 ledger_append_locked（瞬时锁）不算。 */
+function isChainCorruption(err: unknown): boolean {
+  return (
+    err instanceof LedgerError &&
+    (err.code === "ledger_chain_corrupt" || err.code === "ledger_append_only_violation")
+  );
 }
 
 /** KTH 事件存储（LedgerStore 引擎复用）。 */
@@ -232,8 +242,16 @@ export class HandoffEventStore {
             occurred_at: now,
           });
           swept += 1;
-        } catch {
-          // 单候选失败不影响整体清扫（fail-closed 但继续其他链）。
+        } catch (err) {
+          // 审查 K-M13：单候选失败继续清扫，但不得静默——链损坏/磁盘满意味着
+          // 过期标记永不落链、候选永久停在中间态、每 tick 静默失败。链损坏类
+          // 错误 fail-closed（抛错，不假装清扫成功）；其余记录日志后继续。
+          if (isChainCorruption(err)) {
+            throw err;
+          }
+          process.stderr.write(
+            `⚠️ [kiwi] handoff 候选过期清扫失败（${err instanceof Error ? err.message : String(err)}）——过期标记未落链。\n`,
+          );
         }
       }
     }
@@ -295,8 +313,16 @@ export class HandoffEventStore {
             occurred_at: now,
           });
           swept += 1;
-        } catch {
-          // 单 handoff 失败不影响整体清扫（fail-closed 但继续其他链）。
+        } catch (err) {
+          // 审查 K-M13：单 handoff 失败继续清扫，但不得静默——链损坏/磁盘满
+          // 意味着过期标记永不落链、handoff 永久停在中间态、指标失真、每 tick
+          // 静默失败。链损坏类错误 fail-closed；其余记录日志后继续。
+          if (isChainCorruption(err)) {
+            throw err;
+          }
+          process.stderr.write(
+            `⚠️ [kiwi] handoff 过期清扫失败（${err instanceof Error ? err.message : String(err)}）——过期标记未落链。\n`,
+          );
         }
       }
     }

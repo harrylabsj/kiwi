@@ -393,6 +393,28 @@ describe("child-runner lifecycle", () => {
   });
 });
 
+describe("K-M9: instance lock serializes concurrent `kiwi up`", () => {
+  it("a live up.lock (held pid) rejects a second up", async () => {
+    const dir = await initInstance();
+    stubGateway(dir, STUB_HEALTH_SERVER);
+    const lockPath = path.join(instancePaths(dir).run, "up.lock");
+    // 模拟一个正在运行的 `up`：持有锁 + 存活 PID（本进程）。
+    writeFileSync(lockPath, `${process.pid}\n`, { mode: 0o600 });
+    await expect(runUp(dir, { healthTimeoutMs: 5_000 })).rejects.toThrow(/正在运行/);
+  });
+
+  it("a stale up.lock (dead pid) is stolen and up proceeds", async () => {
+    const dir = await initInstance();
+    stubGateway(dir, STUB_HEALTH_SERVER);
+    const lockPath = path.join(instancePaths(dir).run, "up.lock");
+    writeFileSync(lockPath, "99999999\n", { mode: 0o600 }); // 必然不存在的 PID
+    const up = await runUp(dir, { healthTimeoutMs: 5_000 });
+    expect(up.started).toEqual(["gateway"]);
+    // 锁已被接管并在 runUp 收尾时释放——后续 up 不被残留锁挡住。
+    expect(existsSync(lockPath)).toBe(false);
+  });
+});
+
 describe("up / status / down with stub gateway", () => {
   it("up starts the gateway, is idempotent; status ok; down stops it, idempotent", async () => {
     const dir = await initInstance();

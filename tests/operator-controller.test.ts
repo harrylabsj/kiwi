@@ -353,6 +353,19 @@ describe("strategy directives influence candidate generation", () => {
     }
   });
 
+  it("K-M5: after a confirmed relax, a raise below the directive is still relax (context reflects the clamp)", async () => {
+    // Hard budget 100。确认放宽到 500 后受 HardPolicy 钳制，有效预算仍是 100。
+    const { controller } = await buyerWithOffer({
+      buyer_policy: testBuyerPolicy({ max_total_price_private: 100 }),
+    });
+    await controller.sendOperatorMessage("把预算提高到 500");
+    await controller.confirmStrategy();
+    // K-M5 修复前 strategyContext 取 directive 原值 500 → 450 < 500 被误判为
+    // tighten（applied，无需确认）；修复后上下文反映钳制后的 100 → 450 仍 relax。
+    const again = await controller.sendOperatorMessage("把预算提高到 450");
+    expect(again.kind).toBe("needs_confirmation");
+  });
+
   it("a merchant floor tighten raises the quoted price", async () => {
     const { controller } = merchantSetup();
     await controller.start();

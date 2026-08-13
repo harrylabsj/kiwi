@@ -74,6 +74,13 @@ export interface A2aNodeOptions {
   /** 商家自己的随机 owner token（v12+ 双路径；平台 secret 不落商家服务器）。 */
   ownerToken?: string;
   /**
+   * merchant 必须成功注册进 catalog 才启动（fail-closed）。审查 K-M11：此前
+   * 注册失败被空 catch 静默吞掉，merchant 静默不在 catalog 且无任何日志。
+   * 缺省读 `KIWI_REQUIRE_CATALOG_REGISTRATION=1`；两者都不设则记录日志后继续
+   * （buyer 仍可经 direct URL 磋商）。
+   */
+  requireCatalogRegistration?: boolean;
+  /**
    * 对外广告的 base URL（如 `https://veyquo.com`）——节点**仍监听
    * 127.0.0.1**（Caddy 等反向代理把公网流量转到回环），但 Agent Card /
    * UCP / catalog 注册都广告该公网地址。缺省 `KIWI_A2A_PUBLIC_URL` 环境
@@ -130,7 +137,18 @@ async function listenPort(preferred: number): Promise<{ port: number; url: strin
  */
 function buildProductSource(profile: AgentProfile): MerchantProductSource {
   const commerceUrl = process.env.KIWI_COMMERCE_URL ?? profile.commerce.base_url;
-  const client = new HttpMerchantClient(commerceUrl, new ProfileCredentialBroker(profile));
+  const broker = new ProfileCredentialBroker(profile);
+  // 审查 X-M1：handoff_destination 与精确 stock 是商家私有字段，公开端点匿名
+  // 一律剥除——未配置 catalog 凭据时真实报价路径只能拿到 availability_hint，
+  // KTH 成交入口静默不可用。显式告警（而非无信号降级），文档见 README。
+  if (!broker.has("catalog")) {
+    process.stderr.write(
+      `⚠️ [kiwi] merchant 未配置 catalog 凭据（commerce.credentials.catalog.token_env）：` +
+        `商品源将匿名读取，handoff_destination（KTH 成交入口）与精确库存不可用，` +
+        `仅得到 availability_hint。要完整 handoff 能力请配置 catalog token。\n`,
+    );
+  }
+  const client = new HttpMerchantClient(commerceUrl, broker);
   return {
     getProduct: async (sku) => {
       const product = await client.getProduct(sku);
@@ -329,6 +347,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
           sender: profile.agent_id,
           counterparty: "buyer:*",
           productSource: buildProductSource(profile),
+          allowDemoPriceFallback: profile.commerce.allow_demo_price_fallback ?? false,
         })
       : defaultHandler();
 
@@ -370,6 +389,8 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     const domain =
       process.env.KIWI_CATALOG_DOMAIN ??
       (advertisedBase !== url ? new URL(advertisedBase).hostname : `merchant-${safeAgentId}.local`);
+    const requireRegistration =
+      options.requireCatalogRegistration ?? process.env.KIWI_REQUIRE_CATALOG_REGISTRATION === "1";
     try {
       const reg = await registerCatalogAgent({
         catalogBaseUrl: options.catalog,
@@ -381,8 +402,27 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
         ownerTokenSecret: options.ownerTokenSecret,
       });
       catalogAgentId = reg.catalogAgentId;
-    } catch {
-      // 注册失败不阻断节点：buyer 侧仍可经 direct URL 磋商。
+    } catch (err) {
+      // 审查 K-M11：注册失败必须可见——此前空 catch 静默吞掉，merchant 静默
+      // 不在 catalog（buyer 只能 direct URL）且无任何日志。默认记录日志后继续
+      // （buyer 仍可经 direct URL 磋商）；KIWI_REQUIRE_CATALOG_REGISTRATION=1
+      // 或显式 requireCatalogRegistration 时 fail-closed（启动失败）。
+      const detail = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `⚠️ [kiwi] merchant catalog 注册失败（${detail}）——` +
+          (requireRegistration
+            ? "KIWI_REQUIRE_CATALOG_REGISTRATION 已开启，节点启动失败（fail-closed）。"
+            : "merchant 不会出现在 catalog，buyer 只能经 direct URL 磋商。"),
+      );
+      if (requireRegistration) {
+        // fail-closed：注册失败即启动失败——先清理已创建的 server/锁/临时目录
+        // （镜像 stop()），不留下监听中的孤儿节点。
+        httpServer.closeAllConnections?.();
+        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+        releaseOwnerLock?.();
+        if (isEphemeral) rmSync(dir, { recursive: true, force: true });
+        throw err;
+      }
       catalogAgentId = undefined;
     }
   }

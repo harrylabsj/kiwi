@@ -101,6 +101,12 @@ export interface SendMessageResult {
 
 const locks = new Map<string, Promise<void>>();
 
+// 审查 K-M16：幂等文件惰性清理节流——此前每条入站消息都全量 sweep
+// （readdir 扫描全部 idem-*.json 并逐一读取），忙时开销随规模线性放大。
+// 改每 IDEMPOTENCY_SWEEP_INTERVAL_MS 至多一次；首次调用必执行（0 起点）。
+const IDEMPOTENCY_SWEEP_INTERVAL_MS = 5 * 60_000;
+let lastIdempotencySweepAt = 0;
+
 async function withKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const tail = locks.get(key) ?? Promise.resolve();
   let release!: () => void;
@@ -289,10 +295,15 @@ export class InboundPipeline {
     input: SendMessageInput,
     caller: SendMessageCaller,
   ): Promise<SendMessageResult> {
-    // 惰性清理（评审项 L2）：negotiation 幂等文件的 sweep 此前无调用方，
-    // 过期行永久保留、磁盘无界增长。入站消息处理是低频操作，顺带清理。
+    // 惰性清理（评审项 L2 / 审查 K-M16）：negotiation 幂等文件的 sweep 此前
+    // 无调用方，过期行永久保留、磁盘无界增长。入站消息处理是低频操作，但每条
+    // 都全量扫文件仍随规模线性放大——节流为每 IDEMPOTENCY_SWEEP_INTERVAL_MS 一次。
     try {
-      this.idempotency.sweep();
+      const nowMs = Date.now();
+      if (nowMs - lastIdempotencySweepAt >= IDEMPOTENCY_SWEEP_INTERVAL_MS) {
+        lastIdempotencySweepAt = nowMs;
+        this.idempotency.sweep();
+      }
     } catch {
       // 清理失败不影响消息处理（fail-safe 方向；下次再试）。
     }

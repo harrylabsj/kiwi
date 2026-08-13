@@ -210,6 +210,28 @@ describe("HandoffEventStore", () => {
     // 幂等：再次清扫不重复落链
     expect(ledger.sweepExpiredCandidates("2026-08-10T00:00:00Z")).toBe(0);
   });
+
+  it("K-M13: 链损坏时过期清扫 fail-closed（抛错而非静默吞掉）", () => {
+    const dir = storeDir();
+    const ledger = new HandoffEventStore({ dir });
+    const expired = candidate(); // expires_at 过去
+    ledger.appendCandidateEvent({
+      kind: "handoff_candidate_created",
+      candidate: expired,
+      identity: IDENTITY,
+      capability: CAPABILITY,
+    });
+    // 篡改链（改首行字段）→ 下次 append 走 verifyChain 抛 ledger_chain_corrupt
+    const ledgerDir = path.join(dir, "ledger");
+    const files = readdirSync(ledgerDir).filter((f) => f.endsWith(".jsonl"));
+    const target = path.join(ledgerDir, files[0]!);
+    const lines = readFileSync(target, "utf-8").trim().split("\n");
+    lines[0] = JSON.stringify({ ...JSON.parse(lines[0]!), terms_digest: "sha256:deadbeef" });
+    writeFileSync(target, `${lines.join("\n")}\n`);
+    // K-M13 修复前：空 catch 静默吞掉，候选永久停在中间态且无日志；
+    // 修复后：链损坏类错误 fail-closed 抛出。
+    expect(() => ledger.sweepExpiredCandidates("2026-08-09T00:00:00Z")).toThrow();
+  });
 });
 
 /** 评审项 L6：mkdtemp 目录跟踪清理（此前每次运行在 /tmp 残留）。 */

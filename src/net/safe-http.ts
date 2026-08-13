@@ -96,7 +96,14 @@ export async function readJsonBody(response: Response, options: ReadJsonBodyOpti
   const onAbort = (): void => {
     void reader.cancel().catch(() => {});
   };
-  signal?.addEventListener("abort", onAbort, { once: true });
+  // 审查 K-M10：先查 signal 是否已 abort——若已 abort（fetch 头阶段超时后才
+  // 进入 body 读），此刻挂监听已来不及（abort 事件早已触发），必须立即 cancel
+  // 流，否则挂起的 reader.read() 无取消路径、永久挂住。
+  if (signal?.aborted === true) {
+    onAbort();
+  } else {
+    signal?.addEventListener("abort", onAbort, { once: true });
+  }
   try {
     for (;;) {
       const { done, value } = await reader.read();

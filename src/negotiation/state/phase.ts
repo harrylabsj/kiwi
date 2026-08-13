@@ -136,6 +136,18 @@ function applyClarification(
       active_offer_id: state.active_offer_id,
     };
   }
+  // 审查 K-M15：AWAITING_CLARIFICATION 时重发澄清（商家上轮应答前崩溃、buyer
+  // 重试同一澄清）视为重问——保持 AWAITING_CLARIFICATION 并保留 resume_phase/
+  // active_offer_id，由商家应答时 restore 弹回。否则崩溃后重启停在
+  // AWAITING_CLARIFICATION、buyer 重试恒被 state_conflict 卡死。
+  if (state.phase === "AWAITING_CLARIFICATION") {
+    return {
+      negotiation_id: state.negotiation_id,
+      phase: "AWAITING_CLARIFICATION",
+      resume_phase: state.resume_phase,
+      active_offer_id: state.active_offer_id,
+    };
+  }
   throw stateConflict(state, event);
 }
 

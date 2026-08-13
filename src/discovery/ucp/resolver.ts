@@ -46,6 +46,8 @@ export interface UcpResolverOptions {
   fetchImpl?: typeof fetch;
   /** 抓取超时 ms（默认 10000）。 */
   timeoutMs?: number;
+  /** 附加请求头（审查 K-M4：Authorization 等；UCP 优先路径此前不透传）。 */
+  headers?: Record<string, string>;
   /** 透传给 url-policy 的私网放行开关（默认 false，fail-closed）。 */
   allowPrivateRanges?: boolean;
   /** 跳过请求前 DNS 复查（测试用；生产应保持 false）。 */
@@ -214,7 +216,9 @@ export class UcpResolver {
         response = await fetchImpl(url, {
           redirect: "manual",
           signal: controller.signal,
-          headers: { accept: "application/json" },
+          // 审查 K-M4：透传附加头（Authorization 等）——商家节点要求 bearer 时
+          // UCP 优先路径不再 401 后回退 agent-card，直接带凭据拉取。
+          headers: { accept: "application/json", ...this.deps.headers },
         });
       } catch (err) {
         if (controller.signal.aborted) {

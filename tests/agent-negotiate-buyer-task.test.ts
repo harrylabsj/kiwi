@@ -384,6 +384,39 @@ describe("negotiate_buyer_task", () => {
     expect(capture.some((c) => c.action === "rfq")).toBe(true);
   });
 
+  it("K-M3: shortlist_ready task can negotiate directly (state machine allows → consulting)", async () => {
+    const s = await startTestA2aStack({ productSource, capture });
+    stacks.push(s);
+    const h = await setupBuyer({ catalog: s.catalogUrl, mode: "autopilot", autoNegotiate: true });
+    const tool = h.getTool("negotiate_buyer_task");
+    // ready → searching → shortlist_ready（短名单就绪）
+    const { task_id, version } = await createReadyTask(h.store);
+    const searching = h.store.transitionTask({
+      task_id,
+      to: "searching",
+      expected_version: version,
+      event_type: "search_started",
+      origin: "scheduler",
+      idempotency_key: `k3-s:${uuidv7()}`,
+    });
+    const shortlist = h.store.transitionTask({
+      task_id,
+      to: "shortlist_ready",
+      expected_version: searching.version,
+      event_type: "search_completed",
+      origin: "scheduler",
+      idempotency_key: `k3-sl:${uuidv7()}`,
+    });
+    expect(shortlist.status).toBe("shortlist_ready");
+    // 直接磋商：K-M3 修复前 transitionTask("consulting") 在此抛 illegal_transition。
+    const result = await tool.execute("c1", { task_id });
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("已执行");
+    expect(h.approvals.listPending()).toHaveLength(0);
+    expect(h.store.getTask(task_id)?.status).toBe("selected_nonbinding");
+    expect(capture.some((c) => c.action === "rfq")).toBe(true);
+  });
+
   it("dataSourceProductSource × createMerchantHandler: offer price is price_minor, not 100x (P1 regression)", async () => {
     // 真实 CommerceDataSource（minor units）接 adapter → 商家 handler。
     // 回归：adapter 曾把 price_minor 直接当"元"返回，resolveProduct 再 ×100

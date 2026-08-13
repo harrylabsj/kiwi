@@ -26,6 +26,11 @@
 
 import { createHmac } from "node:crypto";
 import { CatalogSourceError } from "./errors.js";
+import { validateBaseUrl } from "./source.js";
+
+/** 注册请求默认超时（ms）。审查 K-M2：此前缺省无超时，挂死的 catalog 会
+ *  永久卡住 /register（串行链内）。 */
+const REGISTER_TIMEOUT_MS = 15_000;
 
 export interface CatalogRegisterInput {
   /** catalog 服务 base URL（如 http://127.0.0.1:8600）。 */
@@ -61,9 +66,13 @@ export interface CatalogRegisterResult {
   verificationEnqueued?: boolean;
 }
 
-/** 规范化 catalog base URL：去掉尾部斜杠。 */
+/**
+ * 规范化 catalog base URL：校验（协议/凭据/query/fragment）并去掉尾部斜杠。
+ * 审查 K-M2：原实现只去尾斜杠——`--catalog http://remote` 会把 HMAC 派生的
+ * owner_token 以明文 POST body 外发。复用 source.ts 的 validateBaseUrl。
+ */
 export function normalizeCatalogBaseUrl(url: string): string {
-  return url.replace(/\/+$/, "");
+  return validateBaseUrl(url);
 }
 
 /**
@@ -106,7 +115,10 @@ export async function registerCatalogAgent(
       redirect: "manual",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: input.timeoutMs === undefined ? undefined : AbortSignal.timeout(input.timeoutMs),
+      // 审查 K-M2：缺省超时（原先 undefined 无 signal，挂死 catalog 永久卡住）；
+      // 同一 signal 覆盖 fetch 头阶段与响应体读取（AbortSignal.timeout 触发
+      // abort 时取消未完成的 body 读）。
+      signal: AbortSignal.timeout(input.timeoutMs ?? REGISTER_TIMEOUT_MS),
     });
   } catch (err) {
     throw new CatalogSourceError(

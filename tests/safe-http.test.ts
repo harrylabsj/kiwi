@@ -52,6 +52,29 @@ describe("safe-http readJsonBody", () => {
     expect(result).not.toBe("resolved");
   });
 
+  it("K-M10: an already-aborted signal fails fast instead of hanging the body read", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start() {
+        // 永不 push 也不 close：读挂起。
+      },
+    });
+    const res = new Response(body);
+    const controller = new AbortController();
+    controller.abort(); // 调用前已 abort（fetch 头阶段超时后才进 body 读的场景）
+    // K-M10 修复前：已 abort 的 signal 挂监听不触发，reader.read() 永久挂住
+    // （超时覆盖 body 读的不变量有洞）；修复后：先查 aborted → 立即 cancel
+    // 流 → 快速失败，不会一直 pending。
+    const result = await Promise.race([
+      readJsonBody(res, { signal: controller.signal }).then(
+        () => "resolved",
+        (err: unknown) => (err instanceof Error ? err.name : String(err)),
+      ),
+      new Promise<string>((r) => setTimeout(() => r("timeout"), 500)),
+    ]);
+    expect(result).not.toBe("resolved");
+    expect(result).not.toBe("timeout");
+  });
+
   it("rejects a non-JSON body", async () => {
     const res = new Response("<html>not json</html>");
     await expect(readJsonBody(res)).rejects.toMatchObject({ code: "invalid_json" });
