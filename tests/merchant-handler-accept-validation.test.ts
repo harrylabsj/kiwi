@@ -11,7 +11,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { NegotiationHandler, NegotiationHandlerResult } from "../src/a2a/server/types.js";
-import { createMerchantHandler } from "../src/a2a/server/merchant-handler.js";
+import {
+  applyDiscountPercentMinor,
+  createMerchantHandler,
+} from "../src/a2a/server/merchant-handler.js";
 import { contentDigest } from "../src/negotiation/jcs.js";
 import { LedgerStore } from "../src/negotiation/ledger/index.js";
 import type { NegotiationEnvelope } from "../src/negotiation/domain/envelope.js";
@@ -502,6 +505,45 @@ describe("merchant handler 重启恢复（BUG-03）", () => {
       ledger.events(NEGOTIATION_ID).filter((e) => e.event_kind === "state_transition").length,
     ).toBe(transitionsBefore);
   });
+
+  it("K-M15: 崩溃后重启停在 AWAITING_CLARIFICATION，buyer 重试澄清不被卡死", async () => {
+    // 磋商到 OFFER_OPEN（商家已发出 offer）。
+    const first = makeHandler();
+    await runWith(first, env("inquiry", {}));
+    await runWith(first, env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
+    // 模拟崩溃 partial 进度：top-level advance 把相位挂到 AWAITING_CLARIFICATION
+    // 后、商家应答前进程崩溃。此前恢复只重建 phase，resume_phase 全丢。
+    ledger.append({
+      event_kind: "state_transition",
+      negotiation_id: NEGOTIATION_ID,
+      state_transition: { from_phase: "OFFER_OPEN", to_phase: "AWAITING_CLARIFICATION" },
+      identity: {
+        sender_identity: "merchant:merchant-001",
+        counterparty_identity: "buyer:*",
+        actor: "merchant",
+      },
+      capability: { capability: MERCHANT_CAPABILITY, protocol_version: "1.0" },
+      outcome: { kind: "ok" },
+      occurred_at: NOW,
+    });
+    // "重启"：同 Ledger 重建 handler——恢复循环必须重建 resume_phase=OFFER_OPEN。
+    const second = makeHandler();
+    // buyer 重试同一澄清：K-M15 修复前 advancePhase 抛 state_conflict 永久卡死；
+    // 修复后放行、商家应答并弹回 OFFER_OPEN。
+    const retry = await runWith(
+      second,
+      env("clarification", { questions: [{ field: "delivery" }] }),
+    );
+    expect(retry.kind).toBe("accepted");
+    const replyAction = (() => {
+      if (retry.kind !== "accepted" || !retry.message) return undefined;
+      const data = (retry.message.parts[0] as { data?: unknown }).data as
+        | { knp_envelope?: { action?: string } }
+        | undefined;
+      return data?.knp_envelope?.action;
+    })();
+    expect(replyAction).toBe("clarification_response");
+  });
 });
 
 // ── 相位机接线（审查 BUG-10，2026-08-10）───────────────────────────────────
@@ -758,4 +800,82 @@ describe("merchant accept 相位机权威守卫（P1-C）", () => {
   // "accept with matching digest produces one agreement (P2-C happy path)"
   // 与 "records state_transition events on terminal transitions (P2-D)"
   // 锁定（agreement artifact + AGREEMENT_REACHED 转换）。
+});
+
+// ---------------------------------------------------------------------------
+// K-H3：商品源故障回退演示价（fail-open → 默认 fail-closed）
+// ---------------------------------------------------------------------------
+
+describe("product-source failure (K-H3 demo fallback)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "kiwi-kh3-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const makeHandler = (allowDemoPriceFallback?: boolean): NegotiationHandler =>
+    createMerchantHandler({
+      ledger: new LedgerStore({ dir, now: () => NOW }),
+      now: () => NOW,
+      sender: "merchant:merchant-001",
+      counterparty: "buyer:*",
+      productSource: {
+        async getProduct() {
+          throw new Error("shopping-cli down");
+        },
+      },
+      ...(allowDemoPriceFallback !== undefined ? { allowDemoPriceFallback } : {}),
+    });
+
+  const run = async (h: NegotiationHandler, envelope: NegotiationEnvelope): Promise<NegotiationHandlerResult> =>
+    h.handle({
+      envelope: envelope as never,
+      message: { role: "user", parts: [], messageId: envelope.message_id },
+      taskId: "task_kh3",
+      senderIdentity: "buyer:buyer-001",
+    });
+
+  const rfq = (): NegotiationEnvelope =>
+    finalizeEnvelope({
+      capability: MERCHANT_CAPABILITY,
+      protocol_version: "1.0",
+      negotiation_id: "neg_kh3_001",
+      exchange_id: "ex_kh3",
+      message_id: "msg_kh3",
+      in_reply_to: "msg_prev",
+      actor: "buyer",
+      action: "rfq",
+      created_at: NOW,
+      payload: { items: [{ sku: "SKU-001", quantity: { value: 200 } }] } as never,
+    });
+
+  it("default (no allow_demo_price_fallback): source failure declines temporarily_unavailable", async () => {
+    const result = await run(makeHandler(), rfq());
+    expect(result.kind).toBe("declined");
+    expect(result.kind === "declined" && result.reasonCode).toBe("temporarily_unavailable");
+  });
+
+  it("allow_demo_price_fallback: true falls back to demo price (offer accepted)", async () => {
+    const result = await run(makeHandler(true), rfq());
+    expect(result.kind).toBe("accepted");
+  });
+});
+
+describe("applyDiscountPercentMinor（K-M14 整数 minor 折扣）", () => {
+  it("round-half-up 到整数分，无浮点亚分（1999×0.95=1899.05 → 1899）", () => {
+    expect(applyDiscountPercentMinor(1999, 5)).toBe(1899);
+  });
+
+  it("半路 .5 进位（1890×0.95=1795.5 → 1796）", () => {
+    expect(applyDiscountPercentMinor(1890, 5)).toBe(1796);
+  });
+
+  it("整分不动（2000×0.95=1900 / 899900×0.95=854905）", () => {
+    expect(applyDiscountPercentMinor(2000, 5)).toBe(1900);
+    expect(applyDiscountPercentMinor(899900, 5)).toBe(854905);
+  });
 });

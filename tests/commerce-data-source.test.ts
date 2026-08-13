@@ -117,6 +117,51 @@ describe("ShoppingCliCommerceDataSource（唯一数据入口）", () => {
     expect(product?.price_minor).toBe(1999);
   });
 
+  it("解析 handoff_destination + 精确 stock（审查 X-M1）：带 owner 凭据的私有成交入口到达数据源", async () => {
+    const source = new ShoppingCliCommerceDataSource({
+      baseUrl: "https://shopping-cli.example",
+      fetchImpl: cliFetch({
+        "/products/SKU-001": () =>
+          jsonResponse({
+            product: {
+              sku: "SKU-001",
+              title: "Handoff",
+              price: 8999,
+              currency: "CNY",
+              stock: 120,
+              handoff_destination: "https://shop.veyquo.example/checkout",
+            },
+          }),
+      }),
+    });
+    const product = await source.getProduct("SKU-001");
+    expect(product?.handoff_destination).toBe("https://shop.veyquo.example/checkout");
+    expect(product?.stock).toBe(120);
+    expect(product?.availability_hint).toBeUndefined();
+  });
+
+  it("匿名投影降级：精确 stock → availability_hint 显式携带（审查 X-M1，不再静默丢失）", async () => {
+    const source = new ShoppingCliCommerceDataSource({
+      baseUrl: "https://shopping-cli.example",
+      fetchImpl: cliFetch({
+        "/products/SKU-001": () =>
+          jsonResponse({
+            product: {
+              sku: "SKU-001",
+              title: "Anon",
+              price: 99,
+              currency: "CNY",
+              availability_hint: "in_stock",
+            },
+          }),
+      }),
+    });
+    const product = await source.getProduct("SKU-001");
+    expect(product?.stock).toBeUndefined(); // 匿名投影无精确库存
+    expect(product?.availability_hint).toBe("in_stock");
+    expect(product?.handoff_destination).toBeUndefined(); // 匿名投影剥除
+  });
+
   it("404 → undefined（未知 SKU 的接口承诺，供调用方回退演示价）", async () => {
     const source = new ShoppingCliCommerceDataSource({
       baseUrl: "https://shopping-cli.example",
@@ -241,6 +286,7 @@ describe("dataSourceProductSource", () => {
       price_minor: 83500,
       currency: "CNY",
       stock: 9,
+      handoff_destination: "https://shop.veyquo.example/checkout",
     });
     const adapter = dataSourceProductSource(source);
     const product = await adapter.getProduct("SKU-001");
@@ -248,6 +294,8 @@ describe("dataSourceProductSource", () => {
     expect(product?.currency).toBe("CNY");
     expect(product?.title).toBe("Beans");
     expect(product?.stock).toBe(9);
+    // 审查 X-M1：handoff 成交入口必须经适配器到达 MerchantProductSource。
+    expect(product?.handoff_destination).toBe("https://shop.veyquo.example/checkout");
   });
 
   it("未知 SKU → 抛错（由 merchant-handler 的调用方决定演示价回退）", async () => {

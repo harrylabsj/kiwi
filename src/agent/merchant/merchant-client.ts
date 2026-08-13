@@ -44,16 +44,26 @@ import {
   parseIncomingConsultation,
   parseMerchantCatalogProduct,
 } from "./types.js";
+import { readJsonBody } from "../../net/safe-http.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
+/** 响应体大小上限（审查 P2-H 配套项：此前无上限，恶意网关可回传巨量 body）。 */
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 export class HttpMerchantClient implements MerchantClient {
   private readonly baseUrl: string;
   private readonly broker: CredentialBroker;
+  private readonly timeoutMs: number;
 
-  constructor(baseUrl: string, broker: CredentialBroker) {
+  constructor(
+    baseUrl: string,
+    broker: CredentialBroker,
+    options: { timeoutMs?: number } = {},
+  ) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.broker = broker;
+    // 审查 K-M1：超时可注入（测试用短超时验证 body 停滞不再永久挂起）。
+    this.timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   }
 
   // ---- HTTP plumbing -------------------------------------------------------
@@ -67,10 +77,13 @@ export class HttpMerchantClient implements MerchantClient {
       options.query ? `?${new URLSearchParams(options.query).toString()}` : ""
     }`;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    let response: Response;
+    // 审查 K-M1：timer 在响应体读完才清理——此前 fetch 头到达即在 finally
+    // clearTimeout，随后 await response.arrayBuffer() 不在任何超时覆盖内，
+    // 对端停滞 body 会永久挂起该串行工具调用。readJsonBody 用同一 signal，
+    // abort 会 cancel 底层流（挂起的 reader.read() 被中断）。
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      response = await fetch(url, {
+      const response = await fetch(url, {
         method,
         // 审查 P2-H：携带 Bearer token 的请求绝不跟随 3xx——重定向会把凭据
         // 转发到第三方域（同仓 http-connector.ts 同款纪律注释）。3xx 在
@@ -84,7 +97,42 @@ export class HttpMerchantClient implements MerchantClient {
         body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
         signal: controller.signal,
       });
+      let payload: unknown;
+      try {
+        // 响应体大小上限 + 超时覆盖（审查 P2-H / K-M1）：readJsonBody 在
+        // signal abort 时 cancel 流，挂起的 body 读不再永久阻塞。
+        payload = await readJsonBody(response, {
+          signal: controller.signal,
+          maxBytes: MAX_RESPONSE_BYTES,
+        });
+      } catch (err) {
+        if (controller.signal.aborted) {
+          throw new MerchantClientError(
+            "transient",
+            `merchant request timed out after ${this.timeoutMs}ms while reading response: ${pathname}`,
+          );
+        }
+        throw new MerchantClientError(
+          "transient",
+          `merchant returned non-JSON or oversized body (HTTP ${response.status}): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      if (!response.ok) {
+        const kind =
+          response.status === 404
+            ? "not_found"
+            : response.status === 401 || response.status === 403
+              ? "auth"
+              : response.status >= 400 && response.status < 500
+                ? "validation"
+                : "transient";
+        throw new MerchantClientError(kind, `merchant HTTP ${response.status} for ${pathname}`);
+      }
+      return payload;
     } catch (err) {
+      if (err instanceof MerchantClientError) throw err;
       throw new MerchantClientError(
         "transient",
         `merchant request failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -92,36 +140,6 @@ export class HttpMerchantClient implements MerchantClient {
     } finally {
       clearTimeout(timer);
     }
-    // 响应体大小上限（审查 P2-H 配套项：此前无上限，恶意网关可回传巨量 body）。
-    const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-    let payload: unknown;
-    try {
-      const raw = await response.arrayBuffer();
-      if (raw.byteLength > MAX_RESPONSE_BYTES) {
-        throw new Error(`response exceeds ${MAX_RESPONSE_BYTES} bytes`);
-      }
-      const text = new TextDecoder("utf-8").decode(raw);
-      payload = text === "" ? null : JSON.parse(text);
-    } catch (err) {
-      throw new MerchantClientError(
-        "transient",
-        `merchant returned non-JSON or oversized body (HTTP ${response.status}): ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-    if (!response.ok) {
-      const kind =
-        response.status === 404
-          ? "not_found"
-          : response.status === 401 || response.status === 403
-            ? "auth"
-            : response.status >= 400 && response.status < 500
-              ? "validation"
-              : "transient";
-      throw new MerchantClientError(kind, `merchant HTTP ${response.status} for ${pathname}`);
-    }
-    return payload;
   }
 
   /** Catalog credential token; missing scope -> fail closed. */

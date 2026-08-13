@@ -58,7 +58,7 @@ describe("loginWithQrcode", () => {
         },
       };
     });
-    const client = new IlinkClient({ baseUrl: base });
+    const client = new IlinkClient({ baseUrl: base, allowedRedirectHosts: [".example.com"] });
     const rendered: string[][] = [];
     const notices: string[] = [];
     const creds = await loginWithQrcode(client, {
@@ -103,7 +103,7 @@ describe("loginWithQrcode", () => {
       }
       return { status: 200, body: { status: "confirmed", ilink_bot_id: "b", bot_token: "t", ilink_user_id: "u" } };
     });
-    const client = new IlinkClient({ baseUrl: base });
+    const client = new IlinkClient({ baseUrl: base, allowedRedirectHosts: [".example.com"] });
     // redirect 后 client.base 切换到 https://ilink-2.example.com——mock 只监听
     // 127.0.0.1，后续 status 轮询打真实域名 → network 错。这证明 setBaseUrl 生效。
     await expect(

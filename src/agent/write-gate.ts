@@ -46,7 +46,8 @@ export type WriteGateResult =
   | { kind: "executed"; candidate: WriteApprovalCandidate; output: unknown }
   | { kind: "pending_approval"; candidate: WriteApprovalCandidate }
   | { kind: "advice_only"; candidate: WriteApprovalCandidate }
-  | { kind: "forbidden"; reason: string };
+  | { kind: "forbidden"; reason: string }
+  | { kind: "failed"; candidate: WriteApprovalCandidate; reason: string };
 
 export interface WriteGateDeps {
   mode: () => AgentMode;
@@ -156,7 +157,14 @@ export async function routeWriteCandidate(
   if (outcome.kind === "executed") {
     return { kind: "executed", candidate: outcome.candidate, output: outcome.output };
   }
-  // Fresh candidates should never be stale/expired on immediate execution,
-  // but fail safe rather than pretending an unexecuted write happened.
-  return { kind: "pending_approval", candidate: outcome.candidate };
+  // 审查 K-H1：执行体抛错 / 返回 {ok:false} / 前置变化会让
+  // executeApprovedCandidate 把候选 supersede 并返回 stale/expired/
+  // not_approvable。此时绝不能谎报 pending_approval——操作者会被引导去
+  // /approve 一个永远无法执行的死候选（且本路径从未注册执行钩子）。返回
+  // failed 并透出原因，调用方据此不再落 approval_requested、不提示 /approve。
+  const reason =
+    "reason" in outcome && typeof outcome.reason === "string"
+      ? outcome.reason
+      : "写操作未执行（候选已失效，请重新生成）";
+  return { kind: "failed", candidate: outcome.candidate, reason };
 }

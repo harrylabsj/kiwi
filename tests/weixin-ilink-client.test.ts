@@ -108,7 +108,10 @@ describe("getQrcodeStatus", () => {
         ilink_user_id: "wxid_scanner",
       }),
     );
-    const result = await new IlinkClient({ baseUrl: base }).getQrcodeStatus("h");
+    // 审查 K-M6：confirmed baseurl 是 bot_token 直送目标，需白名单放行 fixture 域
+    const result = await new IlinkClient({ baseUrl: base, allowedRedirectHosts: [".example.com"] }).getQrcodeStatus(
+      "h",
+    );
     expect(result.state).toBe("confirmed");
     if (result.state === "confirmed") {
       expect(result.credentials.ilink_bot_id).toBe("bot-9");
@@ -117,15 +120,43 @@ describe("getQrcodeStatus", () => {
     }
   });
 
+  it("confirmed baseurl outside allowlist → rejected (K-M6)", async () => {
+    const base = await startMock((_req, res) =>
+      json(res, 200, {
+        status: "confirmed",
+        ilink_bot_id: "bot-9",
+        bot_token: "tok-9",
+        baseurl: "https://evil.example.com",
+        ilink_user_id: "wxid_scanner",
+      }),
+    );
+    await expect(new IlinkClient({ baseUrl: base }).getQrcodeStatus("h")).rejects.toThrow(
+      /不在白名单/,
+    );
+  });
+
   it("scaned_but_redirect → https baseUrl from redirect_host", async () => {
     const base = await startMock((_req, res) =>
       json(res, 200, { status: "scaned_but_redirect", redirect_host: "ilink-2.example.com" }),
     );
-    const result = await new IlinkClient({ baseUrl: base }).getQrcodeStatus("h");
+    // 审查 K-M6：redirect_host 白名单放行 fixture 域
+    const result = await new IlinkClient({
+      baseUrl: base,
+      allowedRedirectHosts: [".example.com"],
+    }).getQrcodeStatus("h");
     expect(result.state).toBe("scaned_but_redirect");
     if (result.state === "scaned_but_redirect") {
       expect(result.baseUrl).toBe("https://ilink-2.example.com");
     }
+  });
+
+  it("scaned_but_redirect host outside allowlist → rejected (K-M6)", async () => {
+    const base = await startMock((_req, res) =>
+      json(res, 200, { status: "scaned_but_redirect", redirect_host: "ilink-2.evil.com" }),
+    );
+    await expect(new IlinkClient({ baseUrl: base }).getQrcodeStatus("h")).rejects.toThrow(
+      /不在白名单/,
+    );
   });
 
   it("confirmed missing token → validation", async () => {

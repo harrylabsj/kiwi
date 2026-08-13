@@ -271,9 +271,12 @@ describe("非法转换 fail-closed → state_conflict", () => {
     expect(errorCode(() => transitionPhase(awaiting, { type: "offer", offer_id: OFFER_A }))).toBe(
       "state_conflict",
     );
-    expect(errorCode(() => transitionPhase(awaiting, { type: "clarification" }))).toBe(
-      "state_conflict",
-    );
+    // 审查 K-M15：AWAITING_CLARIFICATION 时重发澄清视为重问（商家上轮应答前崩溃、
+    // buyer 重试同一澄清）——保持 AWAITING_CLARIFICATION 并保留 resume_phase，
+    // 由商家应答时 restore；不放行任何商业动作。
+    const reask = transitionPhase(awaiting, { type: "clarification" });
+    expect(reask.phase).toBe("AWAITING_CLARIFICATION");
+    expect(reask.resume_phase).toBe("OPEN");
   });
 
   it("rejects Decline scope=offer while AWAITING_CLARIFICATION (resume=OPEN)", () => {

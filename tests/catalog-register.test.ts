@@ -21,6 +21,7 @@
  *   - 网络失败：fetch 抛错 → CatalogSourceError(request_failed)；
  *   - 请求体：domain / agent_card_url / ucp_profile_url / merchant_id 正确携带。
  */
+import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
 import { CatalogSourceError } from "../src/discovery/catalog-source/errors.js";
 import { registerCatalogAgent } from "../src/discovery/catalog-source/register.js";
@@ -122,5 +123,44 @@ describe("registerCatalogAgent", () => {
         fetchImpl: async () => jsonResponse({ detail: "rate limited" }, 429),
       }),
     ).rejects.toThrow(/catalog register failed/);
+  });
+
+  it("K-M2: rejects an invalid catalog base URL (protocol / userinfo) before sending token", async () => {
+    await expect(
+      registerCatalogAgent({
+        catalogBaseUrl: "ftp://evil.example",
+        domain: "merchant.test",
+        agentCardUrl: "http://127.0.0.1:9000/card.json",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    await expect(
+      registerCatalogAgent({
+        catalogBaseUrl: "http://user:pass@evil.example",
+        domain: "merchant.test",
+        agentCardUrl: "http://127.0.0.1:9000/card.json",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+  });
+
+  it("K-M2: register times out (injected short timeout) instead of hanging", async () => {
+    // 服务端永不响应：缺省 AbortSignal.timeout 在超时后 abort——挂死 catalog
+    // 不再永久卡住 /register（串行链内）。
+    const server = createServer(() => {
+      // never respond
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    try {
+      await expect(
+        registerCatalogAgent({
+          catalogBaseUrl: `http://127.0.0.1:${port}`,
+          domain: "merchant.test",
+          agentCardUrl: "http://127.0.0.1:9000/card.json",
+          timeoutMs: 200,
+        }),
+      ).rejects.toBeInstanceOf(CatalogSourceError);
+    } finally {
+      server.close();
+    }
   });
 });

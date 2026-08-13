@@ -257,6 +257,9 @@ export class AgentDiscovery {
       ...ucpDeps.resolver,
       fetchImpl: ucpDeps.resolver?.fetchImpl ?? deps.fetchImpl,
       timeoutMs: ucpDeps.resolver?.timeoutMs ?? deps.timeoutMs ?? 15_000,
+      // 审查 K-M4：UCP 优先路径透传 Authorization 等 headers（与 agent-card 路径
+      // 一致），否则要求 bearer 的商家节点 UCP 发现 401 后被迫回退 agent-card。
+      headers: deps.headers,
     });
   }
 

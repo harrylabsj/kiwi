@@ -53,8 +53,18 @@ export interface ProductFact {
   /** 公开价（minor units；与 KNP Money 一致，禁 float）。 */
   readonly price_minor?: number;
   readonly currency?: string;
-  /** 当前可售库存（可选）。 */
+  /** 当前可售库存（可选；公开/匿名投影剥除 → availability_hint 替代）。 */
   readonly stock?: number;
+  /**
+   * 私有成交入口（KTH handoff 目的地；仅 owner 鉴权读回，匿名/公开投影一律
+   * 剥除）。审查 X-M1：此前数据源路径从未解析该字段，带 token 也静默丢失。
+   */
+  readonly handoff_destination?: string;
+  /**
+   * 库存可用性提示（in_stock / out_of_stock；公开投影把精确 stock 降级为它，
+   * 审查 X-M1）。消费方应据此识别「库存不可得」而非把缺字段当 0。
+   */
+  readonly availability_hint?: string;
   /** 配送承诺（工作日，可选）。 */
   readonly delivery_lead_days?: number;
   /** 配送方式/承诺标签（如 ["same-city","courier"]；审查 P3：此前 wire

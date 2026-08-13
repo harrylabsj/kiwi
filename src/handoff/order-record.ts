@@ -42,6 +42,7 @@ import {
   schemaError,
 } from "../negotiation/domain/common.js";
 import { validateIdentifier } from "../negotiation/domain/identifiers.js";
+import { isLoopbackHost, isReservedIpv4, isReservedIpv6 } from "../a2a/client/url-policy.js";
 
 // ---------------------------------------------------------------------------
 // 类型（类型层面不可变）
@@ -125,14 +126,35 @@ function validateLineItem(value: unknown, index: number): OrderRecordLineItem {
   };
 }
 
-function validateSource(source: OrderRecordSource): OrderRecordSource {
-  if (!/^https?:\/\/\S+$/.test(source.permalink_url)) {
-    throw schemaError("permalink_url", "permalink_url must be an http(s) URL");
+/** 订单 permalink 校验（审查：原正则 `/^https?:\/\/\S+$/` 放行 userinfo 与
+ *  loopback/私网/云元数据主机，展示面可被钓鱼或引导内网地址）。
+ *  复用 url-policy 的保留网段判定（单一来源），不重复实现 IP 表。 */
+function validatePermalinkUrl(value: unknown): string {
+  const raw = requireNonEmptyString(value, "permalink_url");
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw schemaError("permalink_url", "permalink_url must be a valid http(s) URL");
   }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw schemaError("permalink_url", "permalink_url must use http(s)");
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw schemaError("permalink_url", "permalink_url must not embed credentials (userinfo)");
+  }
+  const host = url.hostname;
+  if (isLoopbackHost(host) || isReservedIpv4(host).reserved || isReservedIpv6(host).reserved) {
+    throw schemaError("permalink_url", "permalink_url must not target a loopback/private/reserved host");
+  }
+  return raw;
+}
+
+function validateSource(source: OrderRecordSource): OrderRecordSource {
   return {
     ...source,
     order_id: validateIdentifier(source.order_id, "order_id"),
-    permalink_url: requireNonEmptyString(source.permalink_url, "permalink_url"),
+    permalink_url: validatePermalinkUrl(source.permalink_url),
     line_items: source.line_items.map((item, i) => validateLineItem(item, i)),
     status: requireNonEmptyString(source.status, "status"),
     terms_digest: requireDigest(source.terms_digest, "terms_digest"),

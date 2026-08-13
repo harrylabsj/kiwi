@@ -62,6 +62,17 @@ export const MERCHANT_DEAL_PRICE_MINOR = 83_500; // CNY 835.00
 export const MERCHANT_QUANTITY = 200;
 export const MERCHANT_DELIVERY_BEFORE = "2026-08-20T18:00:00Z";
 
+/**
+ * 整数 minor 折扣价（round-half-up）。审查 K-M14：Math.round 在浮点中间值上
+ * 取整可能亚分漂移（1999×0.95=1899.05 在二进制浮点里或为 1899.0499…/
+ * 1899.0500…1）——整数分子运算无浮点，金额恒为整数分。取整语义与 Math.round
+ * 一致（half-up）；要求整数百分比（dealDiscountPercent 缺省 5）。
+ */
+export function applyDiscountPercentMinor(priceMinor: number, discountPercent: number): number {
+  const numerator = 100 - discountPercent;
+  return Math.floor((priceMinor * numerator + 50) / 100);
+}
+
 export interface MerchantHandlerOptions {
   ledger: LedgerStore;
   now: () => string;
@@ -71,6 +82,9 @@ export interface MerchantHandlerOptions {
   offerPriceMinor?: number;
   /** 真实商品源（接 shopping-cli /products/{sku} 等开放商品层）；缺省用内置演示价。 */
   productSource?: MerchantProductSource;
+  /** 商品源故障时是否回退内置演示价（fail-open）；缺省 false = fail-closed
+   *  （decline temporarily_unavailable）。仅本地 demo/测试形态显式开启。 */
+  allowDemoPriceFallback?: boolean;
   /** 条件成交折扣百分比（deal = base × (1 - pct/100)）；缺省 5。 */
   dealDiscountPercent?: number;
 }
@@ -89,7 +103,8 @@ export interface MerchantProductSource {
 /**
  * 把 CommerceDataSource（v0.7.0 数据侧边界）适配成 MerchantProductSource。
  * price_minor（分）→ 元（major）转换在此完成，与接口"元"单位约定一致；
- * 未知 SKU → 抛错（resolveProduct 回退演示价，缺省行为不变）。
+ * 未知 SKU → 抛错（resolveProduct 默认 fail-closed decline，仅显式开启
+ * allowDemoPriceFallback 时才回退演示价）。
  */
 export function dataSourceProductSource(
   dataSource: CommerceDataSource,
@@ -105,6 +120,11 @@ export function dataSourceProductSource(
         currency: fact.currency,
         ...(fact.title !== undefined ? { title: fact.title } : {}),
         ...(fact.stock !== undefined ? { stock: fact.stock } : {}),
+        // 审查 X-M1：handoff 成交入口必须随真实商品源到达 offer terms——
+        // 此前 dataSourceProductSource 丢弃该字段，KTH 目的地静默丢失。
+        ...(fact.handoff_destination !== undefined
+          ? { handoff_destination: fact.handoff_destination }
+          : {}),
       };
     },
   };
@@ -187,6 +207,17 @@ const textReply = (text: string, taskState: "working" | "completed" = "working")
   },
 });
 
+/** 商品源不可用（源宕机/未知 SKU/价格 lossy）且未开 demo 回退时抛出。
+ *  handle 层捕获后 decline（temporarily_unavailable），而非报演示价。 */
+class ProductSourceUnavailableError extends Error {
+  constructor(sku: string, cause?: unknown) {
+    super(
+      `商品源不可用（${sku}）：${cause instanceof Error ? cause.message : String(cause ?? "")}`.trim(),
+    );
+    this.name = "ProductSourceUnavailableError";
+  }
+}
+
 /** 商业拒绝（offer 未知/已关闭/terms_digest 不匹配/终态重开）。
  * decline 消息由 pipeline 按 reason_code 自动构造。 */
 const declineReply = (reasonCode: ProtocolErrorCode = "state_conflict"): NegotiationHandlerResult => ({
@@ -211,6 +242,7 @@ export function createMerchantHandler(
 ): NegotiationHandler {
   const { ledger, now, sender, counterparty } = options;
   const offerPriceMinor = options.offerPriceMinor ?? MERCHANT_OFFER_PRICE_MINOR;
+  const allowDemoPriceFallback = options.allowDemoPriceFallback ?? false;
   const conditionalByNegotiation = new Map<string, { conditional: Record<string, unknown>; quantity: number }>();
   // 审查 P2-D：终态（AGREEMENT_REACHED / WITHDRAWN / DECLINED / CANCELLED）
   // 不得以同一 negotiation_id 重开（§17.4/§21.2）——运行时此前无任何终态
@@ -347,7 +379,13 @@ export function createMerchantHandler(
         };
         priceBySku.set(sku, resolved);
         return resolved;
-      } catch {
+      } catch (err) {
+        // 审查 K-H3：商品源故障（宕机/未知 SKU/价格 lossy）回退演示价是
+        // fail-open——真实报价路径上买家可能据此达成错误共识。仅当显式开
+        // 启 demo 回退时才兜底，否则抛错让 handle 层 decline（fail-closed）。
+        if (!allowDemoPriceFallback) {
+          throw new ProductSourceUnavailableError(sku, err);
+        }
         // 失败回退**不写缓存**：一次性故障（超时/重启）不得让该 SKU 从此
         // 永久按演示价报价（长驻进程里源恢复后价格仍错）。下一轮重试真实源。
         return {
@@ -358,6 +396,19 @@ export function createMerchantHandler(
       }
     }
     return { priceMinor: offerPriceMinor, currency: MERCHANT_CURRENCY };
+  };
+
+  /** resolveProduct 的 fail-closed 包装：商品源不可用且未开 demo 回退时返回
+   *  null（调用方 decline temporarily_unavailable），否则返回解析结果。 */
+  const resolveProductOrDecline = async (
+    sku: string,
+  ): Promise<{ priceMinor: number; currency: string; note?: string; handoff_destination?: string } | null> => {
+    try {
+      return await resolveProduct(sku);
+    } catch (err) {
+      if (err instanceof ProductSourceUnavailableError) return null;
+      throw err;
+    }
   };
 
   const appendSent = async (reply: ReturnType<typeof finalizeEnvelope>): Promise<void> => {
@@ -388,11 +439,43 @@ export function createMerchantHandler(
   // conditionalByNegotiation / closedNegotiations / phaseStateByNegotiation 纯内存，
   // 重启全丢：已终态 negotiation 可重新打开、已发 offer 返回 offer_unknown）。
   for (const negotiationId of ledger.listNegotiations()) {
+    // 审查 K-M12：单次读链 + 单趟合并扫描——phase / resume_phase /
+    // active_offer_id / last conditional_offer 一次算出。此前按 phase 与
+    // conditional 分两趟遍历每条链，长驻 merchant 启动时间随磋商数线性放大
+    // （O(total events) 的全量恢复是正确性必需，这里只减掉冗余遍历）。
     const events = ledger.events(negotiationId);
     let phase: NegotiationPhase = "OPEN";
+    // 审查 K-M15：恢复完整相位状态——AWAITING_CLARIFICATION 的 resume_phase
+    // 由「进入它的转换的 from_phase」推导（进入只能是 OPEN/OFFER_OPEN）；
+    // active_offer_id 由链上最后一条 offer 类出站消息推导。此前只恢复 phase，
+    // resume_phase/active_offer_id 全丢：崩溃后停在 AWAITING_CLARIFICATION、
+    // buyer 重试澄清被 state_conflict 永久卡死。
+    let lastTransitionFrom: NegotiationPhase | undefined;
+    let activeOfferId: string | undefined;
+    let lastConditional: { conditional: Record<string, unknown>; quantity: number } | undefined;
     for (const event of events) {
       if (event.state_transition?.to_phase !== undefined) {
+        lastTransitionFrom = event.state_transition.from_phase;
         phase = event.state_transition.to_phase;
+      }
+      if (event.event_kind !== "message_sent") continue;
+      const envelope = event.wire_payload as
+        | { action?: string; payload?: Record<string, unknown> }
+        | undefined;
+      if (envelope?.action === "offer" || envelope?.action === "counter_offer" || envelope?.action === "conditional_offer") {
+        const offerId = (envelope.payload as { offer_id?: string } | undefined)?.offer_id;
+        if (typeof offerId === "string" && offerId !== "") activeOfferId = offerId;
+      }
+      if (envelope?.action === "conditional_offer") {
+        const payload = envelope.payload as
+          | { offer_id?: string; base_terms?: { items?: Array<{ quantity?: { value?: number } }> } }
+          | undefined;
+        if (payload?.offer_id !== undefined) {
+          lastConditional = {
+            conditional: envelope.payload as Record<string, unknown>,
+            quantity: payload.base_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY,
+          };
+        }
       }
     }
     // 审查 P1-07（跨重启残留，独立验收发现）：终态相位同样必须恢复——相位
@@ -403,30 +486,18 @@ export function createMerchantHandler(
     phaseStateByNegotiation.set(negotiationId, {
       negotiation_id: negotiationId,
       phase,
+      ...(phase === "AWAITING_CLARIFICATION" && lastTransitionFrom !== undefined
+        ? {
+            resume_phase: lastTransitionFrom === "OFFER_OPEN" ? ("OFFER_OPEN" as const) : ("OPEN" as const),
+            ...(activeOfferId !== undefined ? { active_offer_id: activeOfferId } : {}),
+          }
+        : phase === "OFFER_OPEN" && activeOfferId !== undefined
+          ? { active_offer_id: activeOfferId }
+          : {}),
     });
     if (isTerminalPhase(phase)) {
       closedNegotiations.add(negotiationId);
       continue; // 终态后 conditional 已删除，不恢复
-    }
-    // 恢复最后发出的 conditional_offer（message_sent 事件携带完整 envelope）
-    let lastConditional: { conditional: Record<string, unknown>; quantity: number } | undefined;
-    for (const event of events) {
-      if (event.event_kind !== "message_sent") continue;
-      const envelope = event.wire_payload as
-        | { action?: string; payload?: Record<string, unknown> }
-        | undefined;
-      if (envelope?.action !== "conditional_offer") continue;
-      const payload = envelope.payload as
-        | {
-            offer_id?: string;
-            base_terms?: { items?: Array<{ quantity?: { value?: number } }> };
-          }
-        | undefined;
-      if (payload?.offer_id === undefined) continue;
-      lastConditional = {
-        conditional: envelope.payload as Record<string, unknown>,
-        quantity: payload.base_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY,
-      };
     }
     if (lastConditional !== undefined) {
       conditionalByNegotiation.set(negotiationId, lastConditional);
@@ -471,7 +542,9 @@ export function createMerchantHandler(
           };
           const sku = payload.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = payload.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
-          const { priceMinor, currency, note, handoff_destination } = await resolveProduct(sku);
+          const product = await resolveProductOrDecline(sku);
+          if (product === null) return declineReply("temporarily_unavailable");
+          const { priceMinor, currency, note, handoff_destination } = product;
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -499,7 +572,9 @@ export function createMerchantHandler(
           const buyerOffer = envelope.payload as { offer_id?: string; terms?: { items?: { sku?: string; quantity?: { value?: number } }[] } };
           const sku = buyerOffer.terms?.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = buyerOffer.terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
-          const { priceMinor, currency, note, handoff_destination } = await resolveProduct(sku);
+          const product = await resolveProductOrDecline(sku);
+          if (product === null) return declineReply("temporarily_unavailable");
+          const { priceMinor, currency, note, handoff_destination } = product;
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -528,10 +603,12 @@ export function createMerchantHandler(
           };
           const sku = counter.proposed_terms?.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = counter.proposed_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
-          const { priceMinor, currency, note, handoff_destination } = await resolveProduct(sku);
+          const product = await resolveProductOrDecline(sku);
+          if (product === null) return declineReply("temporarily_unavailable");
+          const { priceMinor, currency, note, handoff_destination } = product;
           // 条件成交价 = base × (1 - 折扣%)：批量确实更便宜。
           const discountPercent = options.dealDiscountPercent ?? 5;
-          const dealPriceMinor = Math.round((priceMinor * (100 - discountPercent)) / 100);
+          const dealPriceMinor = applyDiscountPercentMinor(priceMinor, discountPercent);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,

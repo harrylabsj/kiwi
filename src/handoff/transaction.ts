@@ -48,6 +48,12 @@ import type { HandoffIdempotencyStore } from "./idempotency.js";
 import { validateExternalDestinationUrl, type SafeDestinationUrl } from "./url-safety.js";
 import { isUrlDestinationType, type DestinationType } from "./destination.js";
 
+// 审查 K-M16：handoff 幂等 prune 节流——此前每次 executeHandoff 都读+重写整个
+// JSONL（原子 rename），忙时开销随规模线性放大。改每 HANDOFF_PRUNE_INTERVAL_MS
+// 至多一次；首次执行必跑（0 起点）。
+const HANDOFF_PRUNE_INTERVAL_MS = 5 * 60_000;
+let lastHandoffPruneAt = 0;
+
 /** TransactionHandoff（KTH rev0.3 §6）。不可变；digest 覆盖全部内容。 */
 export interface TransactionHandoff {
   readonly handoff_id: string;
@@ -141,10 +147,15 @@ export async function executeHandoff(input: ExecuteHandoffInput): Promise<Execut
 
 async function executeHandoffUnlocked(input: ExecuteHandoffInput): Promise<ExecuteHandoffResult> {
   const { candidate, ledger, idempotency } = input;
-  // 惰性清理（评审项 L2）：prune 此前无调用方——幂等行永久保留，磁盘随
-  // 候选数无界增长。执行是低频操作，顺带清理过期行（保留期 ≥7 天不变）。
+  // 惰性清理（评审项 L2 / 审查 K-M16）：prune 此前无调用方——幂等行永久保留，
+  // 磁盘随候选数无界增长。执行是低频操作，但每次全量读+重写 JSONL 仍随规模
+  // 线性放大——节流为每 HANDOFF_PRUNE_INTERVAL_MS 一次（保留期 ≥7 天不变）。
   try {
-    idempotency.prune();
+    const nowMs = Date.now();
+    if (nowMs - lastHandoffPruneAt >= HANDOFF_PRUNE_INTERVAL_MS) {
+      lastHandoffPruneAt = nowMs;
+      idempotency.prune();
+    }
   } catch {
     // 清理失败不影响执行（fail-safe 方向；下次执行再试）。
   }

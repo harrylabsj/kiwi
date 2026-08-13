@@ -77,6 +77,13 @@ export interface HttpMessageSignatureVerifierOptions {
   maxClockSkewSeconds?: number;
   /** 无 expires 的签名最大年龄（秒）；默认 900。 */
   maxSignatureAgeSeconds?: number;
+  /**
+   * 服务端广告主机（SNI/TLS 证书 host / 公开 base URL host）。审查 K-M8：
+   * authority 由客户端 Host 头重建时，签名对 host A 可被重放到 host B——设置
+   * 本字段后强制「声明的 authority 必须等于广告主机」，跨主机重放失效。缺省
+   * （undefined）保持 Host 头行为（反代/本地拓扑下向后兼容）。
+   */
+  expectedAuthority?: string;
 }
 
 /**
@@ -116,6 +123,7 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
   private readonly verifyCardJws: ((jws: string) => CardJwsVerificationResult) | undefined;
   private readonly maxClockSkewSeconds: number;
   private readonly maxSignatureAgeSeconds: number;
+  private readonly expectedAuthority: string | undefined;
 
   constructor(options: HttpMessageSignatureVerifierOptions) {
     this.resolver = options.resolver;
@@ -128,6 +136,7 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
     this.verifyCardJws = options.verifyCardJws;
     this.maxClockSkewSeconds = options.maxClockSkewSeconds ?? 300;
     this.maxSignatureAgeSeconds = options.maxSignatureAgeSeconds ?? 900;
+    this.expectedAuthority = options.expectedAuthority;
   }
 
   verify(ctx: AuthContext): AuthResult {
@@ -152,6 +161,21 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
       ctx.url.startsWith("http://") || ctx.url.startsWith("https://")
         ? ctx.url
         : `${scheme}://${authority}${ctx.url}`;
+
+    // 审查 K-M8：authority 由客户端 Host 头重建——签名对 host A 可被重放到 host B
+    // 并在此通过验签（签名绑定的是「签名者声明的目标」而非「实际连接目标」）。
+    // 配置 expectedAuthority（自身广告主机 / SNI / TLS 证书 host）时强制绑定：
+    // 声明的 authority 必须等于它，跨主机重放直接拒绝。
+    if (
+      this.expectedAuthority !== undefined &&
+      authority.toLowerCase() !== this.expectedAuthority.toLowerCase()
+    ) {
+      return {
+        authenticated: false,
+        protocolCode: "authorization_failed",
+        reason: `signature authority ${authority === "" ? "(none)" : authority} does not match expected authority ${this.expectedAuthority}`,
+      };
+    }
 
     const result = verifyHttpMessageSignature({
       method: ctx.method,

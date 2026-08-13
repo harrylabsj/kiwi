@@ -10,6 +10,7 @@ commerce:
   base_url: http://127.0.0.1:8765
   token_env: SHOPPING_AGENT_TOKEN
   backend: local_marketplace
+  allow_demo_price_fallback: true
 model:
   provider: deepseek
   model: deepseek-v4-flash

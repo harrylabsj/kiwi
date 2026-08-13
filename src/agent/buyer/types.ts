@@ -46,7 +46,10 @@ export const TASK_TRANSITIONS: Readonly<Record<BuyerTaskStatus, readonly BuyerTa
   ready: ["searching", "consulting"],
   searching: ["tracking", "shortlist_ready", "failed"],
   tracking: ["searching", "shortlist_ready", "expired", "consulting"],
-  shortlist_ready: ["awaiting_user"],
+  // 审查 K-M3：shortlist_ready 被 NEGOTIABLE_TASK_STATUSES 宣传可直接磋商，
+  // 但状态机此前只允许 → awaiting_user——直接磋商必抛 illegal_transition。
+  // 补 consulting 边（与 ready/tracking 的「任务即磋商任务」语义一致）。
+  shortlist_ready: ["awaiting_user", "consulting"],
   awaiting_user: ["searching", "consulting", "selected_nonbinding", "cancelled"],
   consulting: ["negotiating", "awaiting_user"],
   negotiating: ["awaiting_user", "selected_nonbinding"],

@@ -76,6 +76,8 @@ interface ShoppingCliProductWire {
   price?: unknown;
   currency?: unknown;
   stock?: unknown;
+  handoff_destination?: unknown;
+  availability_hint?: unknown;
   delivery_attributes?: unknown;
 }
 
@@ -107,6 +109,16 @@ function parseProduct(raw: unknown, path: string): ProductFact {
     ...(priceMinor !== undefined ? { price_minor: priceMinor } : {}),
     ...(typeof obj.currency === "string" && obj.currency !== "" ? { currency: obj.currency } : {}),
     ...(typeof obj.stock === "number" && Number.isInteger(obj.stock) ? { stock: obj.stock } : {}),
+    // 审查 X-M1：匿名/公开投影剥除 handoff_destination（→ 不可得）；带 owner
+    // 凭据时它随 merchant_product_summary 返回——必须解析，否则静默丢失。
+    ...(typeof obj.handoff_destination === "string" && obj.handoff_destination !== ""
+      ? { handoff_destination: obj.handoff_destination }
+      : {}),
+    // 审查 X-M1：精确 stock 被公开投影降级为 availability_hint——显式携带，
+    // 消费方据此识别「库存不可得」而非把缺字段当 0。
+    ...(typeof obj.availability_hint === "string" && obj.availability_hint !== ""
+      ? { availability_hint: obj.availability_hint }
+      : {}),
     // 审查 P3：delivery_attributes（shopping-cli product_summary 返回的配送
     // 承诺数组）此前声明但从未映射，数据被静默丢弃。
     ...(Array.isArray(obj.delivery_attributes)

@@ -117,6 +117,30 @@ describe("AgentDiscovery.resolve: domain → UCP 优先（双发现入口）", (
     expect(selectChannelCandidate(profile)?.kind).toBe("a2a-direct");
   });
 
+  it("K-M4: UCP 优先路径透传 Authorization headers（不再 401 后回退 agent-card）", async () => {
+    const seen: Array<{ href: string; headers: Record<string, string> }> = [];
+    const fetchImpl = (async (input: FetchInput, init?: FetchInit): Promise<Response> => {
+      const href = String(input);
+      seen.push({ href, headers: (init?.headers ?? {}) as Record<string, string> });
+      if (href.includes("/.well-known/ucp")) {
+        return jsonResponse(merchantUcpProfile(), 200, { "cache-control": "public, max-age=300" });
+      }
+      return jsonResponse(agentCard());
+    }) as typeof fetch;
+    const discovery = new AgentDiscovery({
+      fetchImpl,
+      headers: { authorization: "Bearer tok-123" },
+      ...DEFAULT_UCP_DEP,
+    });
+    const profile = await discovery.resolve({ domain: "merchant.example" });
+    expect(profile.agent_card.name).toBe("Acme Merchant");
+    const ucpCall = seen.find((s) => s.href.includes("/.well-known/ucp"));
+    expect(ucpCall).toBeDefined();
+    // 审查 K-M4：此前 UCP 路径只发 accept，Authorization 丢失 → 要求 bearer 的
+    // 商家节点 UCP 发现 401 后被迫回退 agent-card。现在带凭据直接拉取。
+    expect(ucpCall?.headers.authorization).toBe("Bearer tok-123");
+  });
+
   it("UCP 成功但无 a2a transport → 回退 /.well-known/agent-card.json", async () => {
     const { fetchImpl, calls } = routerFetch({
       ucp: () =>
