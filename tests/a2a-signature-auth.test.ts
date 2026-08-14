@@ -68,6 +68,34 @@ describe("KIWI_A2A_AUTH=signature verifier", () => {
     expect(result.identity).toBe("anonymous");
   });
 
+  it("signed request passes even when ctx.scheme is http (reverse-proxy TLS termination)", async () => {
+    // 公网 https 节点经 Caddy 终结 TLS：本地 socket 是 http，但节点声明
+    // expectedAuthority=merchant.example + scheme=https。@target-uri 必须用节点
+    // 声明的 https 重建（否则 https 签名的请求被按 http 重建 → 验签失败）。
+    const verifier = new HttpMessageSignatureVerifier({
+      resolver: resolveA2aSignatureResolver(merchant, [
+        { keyid: buyer.keyid, algorithm: buyer.algorithm, publicKeyPem: buyer.publicKeyPem, publicKeyRaw: buyer.publicKeyRaw },
+      ]),
+      scheme: "https",
+      expectedAuthority: "merchant.example",
+    });
+    const signer = new HttpMessageSigner({
+      keyid: buyer.keyid,
+      algorithm: buyer.algorithm,
+      privateKey: buyer.privateKeyPem,
+    });
+    const body = JSON.stringify({ rfq: true });
+    const headers = { host: "merchant.example", "content-type": "application/json" };
+    const signed = signer.sign({ method: "POST", url: "https://merchant.example/a2a", body: Buffer.from(body, "utf8"), headers });
+    // ctx.scheme = "http"（本地反代 socket），但节点声明 https 身份 → 仍须通过。
+    const result = await verifier.verify({
+      ...makeRequest(body).context,
+      scheme: "http",
+      headers: { ...headers, ...signed },
+    });
+    expect(result.authenticated).toBe(true);
+  });
+
   it("signed request from a known key passes", async () => {
     const verifier = new HttpMessageSignatureVerifier({
       resolver: resolveA2aSignatureResolver(merchant, [
