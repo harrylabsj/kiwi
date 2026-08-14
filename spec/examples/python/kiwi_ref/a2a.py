@@ -6,9 +6,9 @@
   + ``Content-Type: application/json``；
 - 请求 body ``{jsonrpc, id, method: "SendMessage", params: {message: {role, messageId, parts}}}``；
 - KNP DataPart 用 1.0 统一 Part：``{data: {knp_envelope}, mediaType: "application/json"}``；
-- 响应 ``result.task``：回复 envelope 在 ``task.status.message.parts[].data.knp_envelope``
-  （即使 1.0 请求，响应 parts 仍是 0.3 形状 ``{kind:"data",...}``——提取器不依赖 kind），
-  agreement 在 ``task.artifacts[].parts[].data.agreement``。
+- 响应 ``result.task``：回复 envelope 在 A2A 1.0 统一 Part
+  ``task.status.message.parts[].data.knp_envelope``，agreement 在
+  ``task.artifacts[].parts[].data.agreement``。
 
 fail-closed：非 2xx / JSON-RPC error / 缺失 task 一律抛类型化异常。
 """
@@ -28,6 +28,9 @@ KNP_EXTENSION_PATH = "/a2a/extensions/negotiation/1.0"
 A2A_VERSION = "1.0"
 
 SEND_MESSAGE = "SendMessage"
+MAX_REQUEST_BYTES = 1 * 1024 * 1024
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_AGENT_CARD_BYTES = 256 * 1024
 
 
 class A2AClientError(RuntimeError):
@@ -42,23 +45,43 @@ class A2ABusinessDecline(A2AClientError):
         self.reason_code = reason_code
 
 
+def _read_bounded(response: Any, limit: int, label: str) -> bytes:
+    """Read an HTTP body with an explicit Content-Length and streaming cap."""
+    header = response.headers.get("Content-Length")
+    if header is not None:
+        try:
+            declared = int(header)
+        except (TypeError, ValueError) as exc:
+            raise A2AClientError(f"{label} has invalid Content-Length") from exc
+        if declared < 0 or declared > limit:
+            raise A2AClientError(f"{label} exceeds {limit} bytes")
+    raw = response.read(limit + 1)
+    if len(raw) > limit:
+        raise A2AClientError(f"{label} exceeds {limit} bytes")
+    return raw
+
+
 def _url_join(base: str, path: str) -> str:
     return base.rstrip("/") + "/" + path.lstrip("/")
 
 
 def _post_json(url: str, payload: dict, headers: dict[str, str]) -> dict:
     """POST JSON 并解析响应。非 2xx / 非 JSON 一律抛错。"""
+    encoded = json.dumps(payload).encode("utf-8")
+    if len(encoded) > MAX_REQUEST_BYTES:
+        raise A2AClientError(f"request exceeds {MAX_REQUEST_BYTES} bytes")
     req = urllib.request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=encoded,
         headers={"Content-Type": "application/json", "Accept": "application/json", **headers},
         method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as res:
-            raw = res.read().decode("utf-8")
+            raw = _read_bounded(res, MAX_RESPONSE_BYTES, "A2A response").decode("utf-8")
     except urllib.error.HTTPError as err:
-        raise A2AClientError(f"HTTP {err.code} from {url}: {err.read().decode('utf-8', 'replace')[:300]}") from err
+        detail = _read_bounded(err, MAX_RESPONSE_BYTES, "A2A error response").decode("utf-8", "replace")
+        raise A2AClientError(f"HTTP {err.code} from {url}: {detail[:300]}") from err
     except urllib.error.URLError as err:
         raise A2AClientError(f"request to {url} failed: {err.reason}") from err
     try:
@@ -89,7 +112,7 @@ class A2AClient:
         card_url = _url_join(self.url, "/.well-known/agent-card.json")
         try:
             with urllib.request.urlopen(card_url, timeout=15) as res:
-                raw = res.read().decode("utf-8")
+                raw = _read_bounded(res, MAX_AGENT_CARD_BYTES, "agent card").decode("utf-8")
         except urllib.error.URLError as err:
             raise A2AClientError(f"agent card fetch failed: {err.reason}") from err
         body = json.loads(raw)

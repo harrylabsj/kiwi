@@ -3,3 +3,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+# 本地生成的测试 profile（kiwi buyer init 产物）
+buyer.yaml
+merchant.yaml

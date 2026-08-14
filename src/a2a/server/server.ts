@@ -51,7 +51,7 @@ import {
   METHOD_SEND_MESSAGE,
   METHOD_SEND_STREAMING_MESSAGE,
 } from "../v1/methods.js";
-import { decodeV1Part, isKnpDataPart } from "../v1/part.js";
+import { decodeV1Part, isKnpDataPart, isV1InputPartSupported } from "../v1/part.js";
 import { LEGACY_TO_V1_STATE } from "../v1/types.js";
 import { buildUcpProfile, WELL_KNOWN_UCP_PATH } from "./ucp.js";
 import type { BuiltUcpProfile, UcpPublishOptions } from "./ucp.js";
@@ -572,6 +572,14 @@ export class A2AServer {
         message: "params.message is required",
       });
     }
+    // 先验证每个 unified Part 的运行时形状。输入来自远端，不能把 null、数组
+    // 或缺字段对象交给 `in`/解码逻辑，否则会把坏请求升级为 500。
+    if (!rawMessage.parts.every((part) => isV1InputPartSupported(part as never))) {
+      throw new ServerProtocolError({
+        code: JSONRPC_CODES.INVALID_REQUEST,
+        message: "params.message.parts contains an invalid or unsupported Part",
+      });
+    }
     // KNP 检测在**原始** parts 上做（不先解码）：未知 Part（raw/file/url）不进
     // decodeV1Part（后者对 0.3 无等价物会抛错）。TCK CORE-SEND-003：带未知
     // mediaType 的普通消息按参考 SUT 语义直接回显成功（ContentTypeNotSupported
@@ -635,16 +643,71 @@ export class A2AServer {
     return this.upperTaskState(result);
   }
 
-  /** 1.0 响应：`{task: {status: {state}}}` 的 state 映射为 1.0 wire（TASK_STATE_*）。 */
+  /**
+   * 1.0 响应：状态、Role、Part 均映射为 A2A 1.0 wire。
+   *
+   * 磋商管线内部仍使用 0.3 领域模型（`kind` + 小写 role），但 1.0
+   * 响应不能把这个内部形状泄漏到线上；否则官方 SDK 会拿到一个看似成功
+   * 的 Task，却在解析 status.message/artifacts 时失败。
+   */
   private upperTaskState(value: unknown): unknown {
     if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
-    const obj = value as { task?: { status?: { state?: unknown } } };
+    const obj = value as { task?: Record<string, unknown> };
     const task = obj.task;
     if (task === undefined || typeof task !== "object") return value;
-    const status = task.status;
-    if (status === undefined || typeof status.state !== "string") return value;
-    const v1 = LEGACY_TO_V1_STATE[status.state] ?? status.state;
-    return { ...obj, task: { ...task, status: { ...status, state: v1 } } };
+    const status = task.status as Record<string, unknown> | undefined;
+    if (status === undefined || typeof status !== "object") return value;
+    const v1State =
+      typeof status.state === "string"
+        ? LEGACY_TO_V1_STATE[status.state] ?? status.state
+        : status.state;
+    const encodeMessage = (message: unknown): unknown => {
+      if (message === null || typeof message !== "object" || Array.isArray(message)) return message;
+      const m = message as Record<string, unknown>;
+      const parts = Array.isArray(m.parts)
+        ? m.parts.map((part) => {
+            if (part === null || typeof part !== "object" || Array.isArray(part)) return part;
+            const p = part as Record<string, unknown>;
+            if (p.kind === "text" && typeof p.text === "string") return { text: p.text };
+            if (p.kind === "data" && p.data !== null && typeof p.data === "object" && !Array.isArray(p.data)) {
+              return { data: p.data, mediaType: "application/json" };
+            }
+            return part;
+          })
+        : m.parts;
+      const role = m.role === "agent" ? "ROLE_AGENT" : m.role === "user" ? "ROLE_USER" : m.role;
+      return { ...m, ...(role !== undefined ? { role } : {}), ...(parts !== undefined ? { parts } : {}) };
+    };
+    const artifacts = Array.isArray((task as Record<string, unknown>).artifacts)
+      ? ((task as Record<string, unknown>).artifacts as unknown[]).map((artifact) => {
+          if (artifact === null || typeof artifact !== "object" || Array.isArray(artifact)) return artifact;
+          const a = artifact as Record<string, unknown>;
+          const parts = Array.isArray(a.parts)
+            ? a.parts.map((part) => {
+                if (part === null || typeof part !== "object" || Array.isArray(part)) return part;
+                const p = part as Record<string, unknown>;
+                if (p.kind === "text" && typeof p.text === "string") return { text: p.text };
+                if (p.kind === "data" && p.data !== null && typeof p.data === "object" && !Array.isArray(p.data)) {
+                  return { data: p.data, mediaType: "application/json" };
+                }
+                return part;
+              })
+            : a.parts;
+          return { ...a, ...(parts !== undefined ? { parts } : {}) };
+        })
+      : (task as Record<string, unknown>).artifacts;
+    return {
+      ...obj,
+      task: {
+        ...task,
+        status: {
+          ...status,
+          state: v1State,
+          ...(status.message !== undefined ? { message: encodeMessage(status.message) } : {}),
+        },
+        ...(artifacts !== undefined ? { artifacts } : {}),
+      },
+    };
   }
 
   private async handleMessageSend(

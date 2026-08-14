@@ -118,6 +118,72 @@ describe("A2A server 双栈 dispatch（issue 07）", () => {
     expect(task?.status?.state).toBe("TASK_STATE_COMPLETED"); // 1.0 wire 状态
   });
 
+  it("1.0 KNP response maps legacy carrier parts to unified Parts", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-a2a-v1-response-"));
+    const ledger = new LedgerStore({ dir });
+    const idempotency = new IdempotencyStore({ dir });
+    const holder = { baseUrl: "http://127.0.0.1:0" };
+    const server = new A2AServer({
+      card: () => ({
+        name: "Response shape merchant",
+        description: "A2A response shape test",
+        providerOrganization: "Kiwi Test Org",
+        version: "1.0.0",
+        baseUrl: holder.baseUrl,
+        a2aPath: "/",
+      }),
+      ledger,
+      idempotency,
+      handler: {
+        name: "response-shape",
+        async handle() {
+          return {
+            kind: "accepted" as const,
+            taskState: "completed" as const,
+            message: { role: "agent" as const, parts: [{ kind: "text" as const, text: "done" }], messageId: "msg-response" },
+            artifactParts: [{ kind: "data" as const, data: { agreement: { agreement_id: "agr_test" } } }],
+          };
+        },
+      },
+    });
+    const httpServer = server.createServer();
+    const responseUrl = await listen(httpServer);
+    holder.baseUrl = responseUrl;
+    registry.push({ httpServer, dir });
+    const envelope = finalizeEnvelope(validEnvelopeFields());
+    const { body } = await post(`${responseUrl}/`, "SendMessage", {
+      message: {
+        role: "ROLE_USER",
+        parts: [{ data: { knp_envelope: envelope }, mediaType: "application/json" }],
+        messageId: envelope.message_id,
+      },
+    }, { "A2A-Version": "1.0", "A2A-Extensions": `${responseUrl}${KIWI_NEGOTIATION_EXTENSION_PATH}` });
+    const task = resultOf(body)?.["task"] as {
+      status?: { message?: { role?: string; parts?: unknown[] } };
+      artifacts?: Array<{ parts?: unknown[] }>;
+    } | undefined;
+    expect(task?.status?.message?.role).toBe("ROLE_AGENT");
+    expect(task?.status?.message?.parts?.[0]).toEqual({ text: "done" });
+    expect(task?.artifacts?.[0]?.parts?.[0]).toEqual({
+      data: { agreement: { agreement_id: "agr_test" } },
+      mediaType: "application/json",
+    });
+  });
+
+  it.each([
+    [null, "null"],
+    ["bad", "primitive"],
+    [{ data: null }, "null data"],
+    [{ kind: "data", data: {} }, "legacy kind"],
+  ])("1.0 malformed Part (%s) is rejected as invalid request", async (part, _label) => {
+    const { a2aUrl } = await startServer();
+    const { body } = await post(a2aUrl, "SendMessage", {
+      message: { role: "ROLE_USER", parts: [part], messageId: `malformed-${String(part)}` },
+    }, { "A2A-Version": "1.0" });
+    expect(rpcError(body).code).toBe(-32600);
+    expect(rpcError(body).message).not.toContain("internal error");
+  });
+
   it("0.3 / 无版本头走 legacy（message/send 可用）", async () => {
     const { a2aUrl } = await startServer();
     const { status } = await post(a2aUrl, "message/send", {

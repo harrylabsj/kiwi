@@ -17,7 +17,7 @@
 /**
  * `kiwi demo`（Issue 13）：一条命令的本地多商家演示。
  *
- * 拓扑：1 Buyer + 1 catalog（内存 /v1/agents 桩）+ 3 Merchant（真实 A2AServer +
+ * 拓扑：1 Buyer + 1 **真实 kiwi-catalog 进程** + 3 Merchant（真实 A2AServer +
  * createMerchantHandler，不同价格/折扣/交期/审批规则）。
  *
  * 流程：发现 catalog → fan-out RFQ 三家 → 收集 Offer → 选最优 → CounterOffer →
@@ -30,8 +30,9 @@
  * 两个标准场景（§6.2 A/B）：低理解成本（保温杯）/ 差异化（工业批量参数化）。
  */
 
-import http from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { A2AServer } from "../a2a/server/index.js";
@@ -123,6 +124,12 @@ interface RunningMerchant {
   dir: string;
 }
 
+interface RunningCatalog {
+  url: string;
+  stop: () => Promise<void>;
+  dir: string;
+}
+
 async function startDemoMerchant(spec: DemoMerchantSpec, sku: string): Promise<RunningMerchant> {
   const dir = mkdtempSync(path.join(tmpdir(), `kiwi-demo-${spec.id}-`));
   const ledger = new LedgerStore({ dir });
@@ -184,26 +191,120 @@ interface CatalogRecord {
   capabilities: string[];
 }
 
-/** 内存 catalog 桩：`GET /v1/agents` 返回商家记录（kiwi-catalog 契约形状）。 */
-async function startDemoCatalog(records: CatalogRecord[]): Promise<{ url: string; stop: () => void }> {
-  const server = http.createServer((req, res) => {
-    if (req.url === "/v1/agents" && req.method === "GET") {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ agents: records }));
-      return;
-    }
-    res.writeHead(404, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: "not found" }));
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function findFreePort(): Promise<number> {
+  const probe = net.createServer();
+  await new Promise<void>((resolve, reject) => probe.once("error", reject).listen(0, "127.0.0.1", resolve));
+  const port = (probe.address() as net.AddressInfo).port;
+  await new Promise<void>((resolve, reject) => probe.close((err) => (err ? reject(err) : resolve())));
+  return port;
+}
+
+function catalogPython(catalogDir: string): string {
+  const configured = process.env.KIWI_CATALOG_PYTHON;
+  if (configured !== undefined && configured !== "") return configured;
+  const venvPython = path.join(catalogDir, ".venv", "bin", "python");
+  return existsSync(venvPython) ? venvPython : "python3";
+}
+
+async function postCatalogJson(
+  url: string,
+  pathName: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const response = await fetch(`${url}${pathName}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(payload),
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-  return {
-    url,
-    stop: () => {
-      server.closeAllConnections?.();
-      server.close();
-    },
-  };
+  const body = (await response.json()) as unknown;
+  if (!response.ok || body === null || typeof body !== "object") {
+    throw new Error(`demo: kiwi-catalog ${pathName} failed (HTTP ${response.status})`);
+  }
+  return body as Record<string, unknown>;
+}
+
+async function waitForCatalog(url: string, child: ReturnType<typeof spawn>): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`demo: kiwi-catalog exited before readiness (code ${child.exitCode})`);
+    try {
+      const response = await fetch(`${url}/health`, { signal: AbortSignal.timeout(500) });
+      if (response.ok) return;
+    } catch {
+      // Service is still booting; retry inside the bounded readiness window.
+    }
+    await delay(100);
+  }
+  child.kill("SIGTERM");
+  throw new Error("demo: kiwi-catalog did not become ready within 15 seconds");
+}
+
+/** 启动真实 kiwi-catalog API，注册本次演示的三个商家并返回服务地址。 */
+async function startDemoCatalog(records: CatalogRecord[]): Promise<RunningCatalog> {
+  const configuredDir = process.env.KIWI_CATALOG_DIR;
+  const catalogDir = configuredDir !== undefined && configuredDir !== ""
+    ? path.resolve(configuredDir)
+    : path.resolve(process.cwd(), "../kiwi-catalog");
+  if (!existsSync(path.join(catalogDir, "pyproject.toml"))) {
+    throw new Error(
+      `demo: kiwi-catalog checkout not found at ${catalogDir}; set KIWI_CATALOG_DIR or install the sibling repository`,
+    );
+  }
+  const dir = mkdtempSync(path.join(tmpdir(), "kiwi-demo-catalog-"));
+  const db = path.join(dir, "catalog.sqlite");
+  const port = await findFreePort();
+  const url = `http://127.0.0.1:${port}`;
+  const child = spawn(
+    catalogPython(catalogDir),
+    ["-m", "kiwi_catalog.scripts.kiwi_catalog_api", "--db", db, "--host", "127.0.0.1", "--port", String(port)],
+    { cwd: catalogDir, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PYTHONUNBUFFERED: "1" } },
+  );
+  // Drain service output so a noisy verification worker cannot fill the pipe.
+  child.stdout?.resume();
+  child.stderr?.resume();
+  try {
+    await waitForCatalog(url, child);
+    for (const record of records) {
+      const registration = await postCatalogJson(url, "/v1/agents/register", {
+        domain: `${record.catalog_agent_id}.local`,
+        agent_card_url: record.agent_card_url,
+        display_name: record.display_name,
+        hosting_mode: "direct",
+        capabilities: record.capabilities,
+      });
+      if (registration.ok !== true || registration.agent === null || typeof registration.agent !== "object") {
+        throw new Error(`demo: kiwi-catalog registration failed for ${record.display_name}`);
+      }
+    }
+    return {
+      url,
+      dir,
+      stop: async () => {
+        if (child.exitCode === null) {
+          child.kill("SIGTERM");
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(() => {
+              child.kill("SIGKILL");
+              resolve();
+            }, 2_000);
+            child.once("exit", () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+        }
+        rmSync(dir, { recursive: true, force: true });
+      },
+    };
+  } catch (err) {
+    if (child.exitCode === null) child.kill("SIGTERM");
+    rmSync(dir, { recursive: true, force: true });
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -300,14 +401,15 @@ export async function runFanoutBuyer(scenario: DemoScenario, catalogUrl: string)
 
   log("发现", `catalog ${catalogUrl}/v1/agents → ${scenario.merchants.length} 商家`);
   const catRes = await fetch(`${catalogUrl}/v1/agents`);
-  const cat = (await catRes.json()) as { agents: CatalogRecord[] };
-  const records = cat.agents.filter((r) => r.principal_type === "merchant");
+  if (!catRes.ok) throw new Error(`demo: catalog discovery failed (HTTP ${catRes.status})`);
+  const cat = (await catRes.json()) as { results?: CatalogRecord[]; agents?: CatalogRecord[] };
+  const records = (cat.results ?? cat.agents ?? []).filter((r) => r.principal_type === "merchant");
   log("发现", records.map((r) => r.display_name).join("、"));
 
   const negotiationId = newNegotiationId();
   const offers: FanoutOffer[] = [];
   for (const record of records) {
-    const spec = scenario.merchants.find((m) => m.id === record.catalog_agent_id);
+    const spec = scenario.merchants.find((m) => m.id === record.catalog_agent_id || m.name === record.display_name);
     if (spec === undefined) continue;
     log("询价", `${spec.name} RFQ ${scenario.quantity}x ${scenario.sku}`);
     const client = new A2AClient({ url: record.agent_card_url, allowPrivateRanges: true, skipDnsCheck: true });
@@ -454,7 +556,7 @@ export async function runDemo(
     agent_card_url: m.url,
     capabilities: [CAPABILITY],
   }));
-  // 2. 起 catalog 桩。
+  // 2. 起真实 kiwi-catalog 服务并注册本次演示商家。
   const catalog = await startDemoCatalog(records);
 
   try {
@@ -463,7 +565,7 @@ export async function runDemo(
     return { scenario: scenario.name, merchants: merchants.map((m) => ({ id: m.spec.id, url: m.url })), result, cleaned: false };
   } finally {
     // 4. 清理（隔离目录 + 关闭 server）。
-    catalog.stop();
+    await catalog.stop();
     for (const m of merchants) m.stop();
     log("清理", "所有 merchant / catalog 已关闭，临时目录已删除");
   }

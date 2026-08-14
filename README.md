@@ -4,8 +4,9 @@
 [A2A](https://a2a-protocol.org/) 与 [UCP](https://ucp.dev/) 完成发现 → capability 协商 →
 磋商 → 非绑定协议。磋商以**非约束性商业协议**终止：不创建订单、不支付、不锁库存。
 
-**Kiwi A2A v0.6.0 已发布（2026-08-07）**：基线 §41 完成定义 27/27 经就绪度审计实证满足
-（见 [`docs/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md`](docs/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md)）。
+**Kiwi 0.7.7 已发布（2026-08-14）**：当前发布线包含 A2A 双栈、KNP/1.0 磋商、签名身份
+与安全交接能力。A2A 1.0 线协议互操作以组合 conformance transcript 为准，不用历史审计
+文档替代运行证据。
 
 ## 协议：KNP/1.0
 
@@ -51,7 +52,7 @@ Buyer Agent ──A2A wire──▶ Merchant Agent
 ```bash
 npm install
 npm run build
-npm test              # 全部离线测试（103 文件 / 1489 tests），零外部依赖
+npm test              # 全部离线测试，零外部依赖
 npm run verify        # lint + typecheck + build + test + package smoke
 ```
 
@@ -66,7 +67,12 @@ kiwi agent serve --profile <merchant> --catalog <url> [--no-chat]
                                          # 无头 merchant A2A server（自动注册；缺省也开对话）
 kiwi tui --profile <file>                # 操作者驾驶舱（supervised/manual/autopilot）
 kiwi init/up/status/logs/down --dir <d>  # managed-local 产品栈生命周期
+kiwi demo [a|b]                         # 启动真实 kiwi-catalog + 3 个本地 merchant 的确定性演示
 ```
+
+`kiwi demo` 需要可运行的 `kiwi-catalog` checkout（默认查找 `../kiwi-catalog`，也可用
+`KIWI_CATALOG_DIR` 指定）及其 Python 环境；演示只使用 loopback、临时 SQLite 和
+非绑定 Handoff，不执行订单、支付或库存写入。
 
 `kiwi`（裸）进入后：
 
@@ -158,7 +164,7 @@ node scripts/a2a-agent.mjs --role buyer                   # 交互式 buyer（�
 ```bash
 npm run lint            # eslint --max-warnings=0
 npm run typecheck       # tsc --noEmit（strict）
-npm run test            # vitest，103 文件 / 1489 tests（全离线）
+npm run test            # vitest（全离线）
 npm run verify          # 全部 + 生产包冒烟
 ```
 
@@ -170,7 +176,7 @@ npm run verify          # 全部 + 生产包冒烟
 
 - [`docs/kiwi-a2a-architecture-baseline.md`](docs/kiwi-a2a-architecture-baseline.md) — 架构基线（§41 完成定义）
 - [`docs/protocol/kiwi-negotiation-protocol-1.0.md`](docs/protocol/kiwi-negotiation-protocol-1.0.md) — KNP/1.0 规范
-- [`docs/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md`](docs/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md) — v1.0 就绪度审计
+- [`docs/reviews/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md`](docs/reviews/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md) — 历史 v1.0 就绪度审计
 - [`CHANGELOG.md`](CHANGELOG.md) — 版本历史
 
 ## 许可

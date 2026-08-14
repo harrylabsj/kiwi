@@ -52,7 +52,8 @@ mapping + KTH HandoffCandidate。
 - **schema**：`spec/schemas/negotiation/1.0/schema.json`（envelope + 22 `$defs`，
   9 类核心对象；`additionalProperties: false`）。
 - **carrier mapping**：`spec/a2a/extensions/negotiation/1.0-carrier-mapping`（A2A 1.0
-  SendMessage + KNP DataPart + 0.3-shape 响应 parts + ErrorInfo 错误体）。
+  SendMessage + KNP DataPart + unified response Parts + 0.3 compatibility adapter +
+  ErrorInfo 错误体）。
 - **状态机**：协议正文 §21.2；并发报价按 `offer_id` 隔离（收敛文档 §4）。
 - **conformance vectors**：`spec/conformance/knp-1.0-vectors.json`（5 完整 envelope +
   期望 digest；第三方重算 JCS 即自证）。
@@ -87,8 +88,8 @@ mapping + KTH HandoffCandidate。
 ## 8. 已知限制与开放问题
 
 - **已知限制**：
-  - A2A 1.0 响应 parts 仍为 0.3 形状（`{kind:"data"}`）——解析器不依赖 kind，
-    但 wire 不一致；建议在 1.0 规范收敛时统一。
+  - A2A 1.0 响应使用统一 Part（`{data:{...}, mediaType:"application/json"}`）；
+    0.3 compatibility adapter 单独保留 `{kind:"data"}`，不污染 1.0 wire。
   - ConditionalOffer field 词表当前为白名单（aggregate.* / fulfillment.* /
     service.* / commercial.*）；第三方扩展字段需提案。
   - 并发报价按 offer_id 隔离，但同一 negotiation 多轮并发仍依赖幂等键。

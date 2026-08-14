@@ -11,7 +11,7 @@
  * 不 import Kiwi runtime 的 SDK 侧逻辑；Kiwi 只提供被互操作的 server。
  */
 
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ClientFactory } from "@a2a-js/sdk/client";
@@ -22,7 +22,7 @@ import { LedgerStore } from "../../dist/negotiation/ledger/index.js";
 import { IdempotencyStore } from "../../dist/negotiation/idempotency/index.js";
 import { finalizeEnvelope } from "../../dist/negotiation/domain/envelope.js";
 
-const OUT_DIR = "docs/reviews";
+const OUT_DIR = process.env.KIWI_CONFORMANCE_OUT_DIR ?? "docs/reviews";
 const NOW = () => new Date().toISOString();
 
 /** 启动 Kiwi merchant A2A server（1.0）。 */
@@ -131,6 +131,7 @@ async function main() {
     }
 
     // 保存 transcript（稳定路径，覆盖写，可提交作 CI 证据）。
+    mkdirSync(OUT_DIR, { recursive: true });
     const outPath = path.join(OUT_DIR, "a2a-sdk-conformance-transcript.jsonl");
     writeFileSync(outPath, records.map((r) => JSON.stringify(r)).join("\n") + "\n", { mode: 0o600 });
     console.log(`[conformance] @a2a-js/sdk ↔ Kiwi merchant round-trip OK`);
