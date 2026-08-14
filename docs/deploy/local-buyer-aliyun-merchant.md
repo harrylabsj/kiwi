@@ -19,6 +19,22 @@
 - Merchant A2A 节点经 HTTP 读 shopping-cli 的 `/products/{sku}`（`KIWI_COMMERCE_URL`）。
 - 云安全组放行：`8600`（catalog）、`PORT`（merchant A2A）。
 
+## 入站认证：`KIWI_A2A_AUTH`（设计意图：任何 kiwi buyer ↔ 任何 kiwi merchant）
+
+| 模式 | 行为 | 何时用 |
+| --- | --- | --- |
+| `none` | 匿名放行（无认证） | 显式可信网络 / 内测 |
+| `bearer:<token>` | 预共享 token（**违背开放互操作**——每个 buyer 都要先拿到 token） | 不推荐公开形态 |
+| `signature`（推荐，0.7.6+） | **RFC 9421 HTTP Message Signature**：匿名按 T0 放行（任何 buyer 可磋商，无预共享密钥）；签名请求按 keyid→公钥验签（未知 key → 403）；card 发布节点公钥 | 公开 merchant |
+
+**服务器已用 `signature`**：card 的 `securitySchemes["kiwi-signature"]` 携带节点 Ed25519 公钥
+（keyid = 广告 origin）。配合 `KIWI_A2A_THROTTLE=1` 反滥用限流。
+
+> 签名认证的信任闭环：merchant 要验签某个 buyer 的签名请求，需要把该 buyer 的公钥
+> 放进 merchant 的 trusted resolver（运行时 `resolveA2aSignatureResolver(own, extraKeys)`
+> 支持；运营侧 trusted-keys 注册表 / card-fetch 自动解析是后续）。**未配置时**：匿名 buyer
+> 照常磋商（T0），未知签名者被 403——设计意图不受影响。
+
 ## 阿里云服务器
 
 前置：Node ≥22、Python ≥3.11。
