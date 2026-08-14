@@ -110,6 +110,21 @@ export function parseClaimedIdentityHeader(
   return out;
 }
 
+/**
+ * authority（host[:port]）→ hostname 归一（审查 K-M19）。Host 头可能带端口
+ * （veyquo.com:8443）或 IPv6 括号形式（[::1]:8080）；expectedAuthority 常为
+ * 无端口的 hostname。跨主机重放判定只看 hostname，端口差异不构成重放。
+ */
+function authorityHostname(authority: string): string {
+  const trimmed = authority.trim();
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]");
+    return end === -1 ? trimmed.toLowerCase() : trimmed.slice(0, end + 1).toLowerCase();
+  }
+  const host = trimmed.split(":")[0] ?? "";
+  return host.toLowerCase();
+}
+
 /** 完整 HTTP Message Signature 入站验证器（AuthVerifier 实现）。 */
 export class HttpMessageSignatureVerifier implements AuthVerifier {
   readonly name = "http-message-signature";
@@ -177,9 +192,13 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
     // 并在此通过验签（签名绑定的是「签名者声明的目标」而非「实际连接目标」）。
     // 配置 expectedAuthority（自身广告主机 / SNI / TLS 证书 host）时强制绑定：
     // 声明的 authority 必须等于它，跨主机重放直接拒绝。
+    // 审查 K-M19：authority 可能带端口（Host: veyquo.com:8443），而
+    // expectedAuthority 是 hostname（advertised.hostname 无端口）——字符串全等
+    // 会把非默认端口的合法签名全拒（匿名却照常放行，签名认证形同虚设）。
+    // hostname 归一比较：端口差异不构成跨主机重放，hostname 不同仍拒绝。
     if (
       this.expectedAuthority !== undefined &&
-      authority.toLowerCase() !== this.expectedAuthority.toLowerCase()
+      authorityHostname(authority) !== authorityHostname(this.expectedAuthority)
     ) {
       return {
         authenticated: false,

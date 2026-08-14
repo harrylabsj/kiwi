@@ -331,14 +331,20 @@ function verifyEntry(
   }
   const algorithm = requested ?? key.algorithm;
 
-  // created/expires 窗口（RFC 9421 §3.1 / 防重放第一道防线）。
-  if (entry.params.created !== undefined) {
-    if (entry.params.created > now + skew) {
-      return { ok: false, code: "authorization_failed", reason: "signature created in the future" };
-    }
-    if (entry.params.expires === undefined && now - entry.params.created > maxAge) {
-      return { ok: false, code: "authorization_failed", reason: "signature is too old" };
-    }
+  // created/expires 窗口（RFC 9421 §2.2：created 必选——缺失即无任何防重放
+  // 时间边界，捕获签名可无限期重放。审查 K-M17：fail-closed，不再跳过时间检查）。
+  if (entry.params.created === undefined) {
+    return {
+      ok: false,
+      code: "authorization_failed",
+      reason: "signature has no created parameter (RFC 9421 requires it)",
+    };
+  }
+  if (entry.params.created > now + skew) {
+    return { ok: false, code: "authorization_failed", reason: "signature created in the future" };
+  }
+  if (entry.params.expires === undefined && now - entry.params.created > maxAge) {
+    return { ok: false, code: "authorization_failed", reason: "signature is too old" };
   }
   if (entry.params.expires !== undefined && entry.params.expires < now - skew) {
     return { ok: false, code: "authorization_failed", reason: "signature has expired" };

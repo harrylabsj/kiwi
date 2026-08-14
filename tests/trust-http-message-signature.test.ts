@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { createHash } from "node:crypto";
+import { createHash, createPrivateKey, sign as nodeSign } from "node:crypto";
 import {
   HttpMessageSigner,
   InMemoryNonceStore,
@@ -411,6 +411,42 @@ describe("时间窗口 / 重放 / keyid", () => {
       now: () => 1723000000, // created(1723000600) > now + skew(300)
     });
     expect(result).toMatchObject({ ok: false, code: "authorization_failed" });
+  });
+
+  it("rejects a signature without created even far in the future (K-M17)", () => {
+    // 手工构造「无 created」的合法签名：signature-input 与签名 base 都不含
+    // created（RFC 9421 §2.2 要求 created 必选）。修复前 created 缺失时时间窗
+    // 检查整体跳过——now 拉到 10 年后该签名仍验签通过（捕获后可永久重放）；
+    // 修复后必须 fail-closed。
+    const method = "POST";
+    const targetUri = "http://a.test/";
+    const authority = "a.test";
+    const body = Buffer.from("x");
+    const components = ["@method", "@target-uri", "@authority", "content-digest"];
+    const params = { keyid: "alice", algorithm: "ed25519" }; // 无 created
+    const headers = { "content-digest": contentDigestHeader(body) };
+    const base = buildSignatureBase({ method, targetUri, authority, headers, components, params });
+    const privateKey = createPrivateKey({
+      key: { kty: "OKP", crv: "Ed25519", d: ED25519_SEED.toString("base64url"), x: ED25519_PUBLIC_X },
+      format: "jwk",
+    });
+    const signature = nodeSign(null, Buffer.from(base, "utf8"), privateKey);
+    const signedHeaders = {
+      ...headers,
+      "signature-input": formatSignatureInput("sig1", components, params),
+      "signature": `sig1=:${signature.toString("base64")}:`,
+    };
+    const result = verifyHttpMessageSignature({
+      method,
+      targetUri,
+      authority,
+      headers: signedHeaders,
+      body,
+      resolver: resolveFromSigningKeys([aliceKey()]),
+      now: () => 1723000000 + 10 * 365 * 24 * 3600, // 10 年后
+    });
+    expect(result).toMatchObject({ ok: false, code: "authorization_failed" });
+    expect((result as { reason?: string }).reason).toContain("created");
   });
 
   it("rejects a signature too old without expires", () => {
