@@ -557,16 +557,23 @@ export async function runDemo(
     capabilities: [CAPABILITY],
   }));
   // 2. 起真实 kiwi-catalog 服务并注册本次演示商家。
-  const catalog = await startDemoCatalog(records);
-
+  let catalog: RunningCatalog | undefined;
+  let result: DemoResult | undefined;
   try {
+    catalog = await startDemoCatalog(records);
     // 3. 买家 fan-out。
-    const result = await runFanoutBuyer(scenario, catalog.url);
-    return { scenario: scenario.name, merchants: merchants.map((m) => ({ id: m.spec.id, url: m.url })), result, cleaned: false };
+    result = await runFanoutBuyer(scenario, catalog.url);
   } finally {
     // 4. 清理（隔离目录 + 关闭 server）。
-    await catalog.stop();
+    if (catalog !== undefined) await catalog.stop();
     for (const m of merchants) m.stop();
     log("清理", "所有 merchant / catalog 已关闭，临时目录已删除");
   }
+  if (result === undefined) throw new Error("demo: no result produced");
+  return {
+    scenario: scenario.name,
+    merchants: merchants.map((m) => ({ id: m.spec.id, url: m.url })),
+    result,
+    cleaned: true,
+  };
 }
