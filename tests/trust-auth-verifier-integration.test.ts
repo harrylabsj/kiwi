@@ -226,4 +226,45 @@ describe("K-M8: expectedAuthority binds signatures to the server's advertised ho
     });
     expect(result.authenticated).toBe(true);
   });
+
+  it("passes when the signed authority carries a non-default port (K-M19)", () => {
+    // 审查 K-M19：expectedAuthority 是 hostname（无端口），签名 Host 头带
+    // 非默认端口（veyquo.com:8443）——修复前字符串全等比较把这类合法签名
+    // 全拒（匿名却照常放行，签名认证形同虚设）。hostname 归一后必须通过。
+    const { headers, body } = signedFor("veyquo.com:8443");
+    const verifier = new HttpMessageSignatureVerifier({
+      resolver: RESOLVER,
+      expectedAuthority: "veyquo.com",
+    });
+    const result = verifier.verify({
+      remoteAddress: "::ffff:192.0.2.1",
+      authorizationHeader: undefined,
+      method: "POST",
+      url: "/neg",
+      scheme: "https",
+      headers: { ...headers, host: "veyquo.com:8443" },
+      body,
+    });
+    expect(result.authenticated).toBe(true);
+  });
+
+  it("rejects a different host even when ports differ (K-M19 cross-host still binds)", () => {
+    // 端口归一不放松跨主机绑定：期望 veyquo.com 时，a.test:8443 的签名仍拒绝。
+    const { headers, body } = signedFor("a.test:8443");
+    const verifier = new HttpMessageSignatureVerifier({
+      resolver: RESOLVER,
+      expectedAuthority: "veyquo.com",
+    });
+    const result = verifier.verify({
+      remoteAddress: "::ffff:192.0.2.1",
+      authorizationHeader: undefined,
+      method: "POST",
+      url: "/neg",
+      scheme: "https",
+      headers: { ...headers, host: "a.test:8443" },
+      body,
+    });
+    expect(result.authenticated).toBe(false);
+    expect(result.protocolCode).toBe("authorization_failed");
+  });
 });
