@@ -51,6 +51,7 @@ import {
 } from "./server/index.js";
 import { HttpMessageSignatureVerifier } from "../trust/identity/index.js";
 import {
+  loadA2aTrustedKeys,
   loadOrCreateA2aSigningIdentity,
   resolveA2aSignatureResolver,
   type A2aSigningIdentity,
@@ -253,9 +254,16 @@ function authVerifierFromEnv(ctx: AuthFromEnvContext): AuthVerifier | undefined 
   if (raw === "none") return new NoneAuthVerifier();
   if (raw === "signature") {
     const identity = loadOrCreateA2aSigningIdentity(ctx.signingKeyDir, ctx.signingKeyId);
+    // Issue 16 B：trusted-keys 注册表（<dataDir>/a2a-trusted-keys.json）——
+    // 运营者把可信对端（buyer）的公钥放进来，其签名请求即被验签并提升身份。
+    let trustedKeys: ReturnType<typeof loadA2aTrustedKeys> = [];
+    const trustedFile = path.join(ctx.signingKeyDir, "a2a-trusted-keys.json");
+    if (existsSync(trustedFile)) {
+      trustedKeys = loadA2aTrustedKeys(trustedFile);
+    }
     const advertised = new URL(ctx.advertisedBase);
     return new HttpMessageSignatureVerifier({
-      resolver: resolveA2aSignatureResolver(identity),
+      resolver: resolveA2aSignatureResolver(identity, trustedKeys),
       scheme: advertised.protocol === "https:" ? "https" : "http",
       expectedAuthority: advertised.hostname,
       // 设计意图：匿名 T0 放行，签名请求更高信任——不阻塞任何 kiwi buyer。
