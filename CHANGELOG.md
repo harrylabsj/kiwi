@@ -7,6 +7,10 @@
 - Python 参考实现与 CSV/Excel 适配器增加响应、请求体、文件、行、列和压缩包资源上限。
 - 组合 CI 增加官方 SDK 往返与三向独立实现 conformance，并上传 wire transcript 证据。
 
+## v0.7.8 — 2026-08-14
+
+**签名身份持久化**：统一 chat/A2A 节点的签名密钥与 trusted-keys 目录，并让节点重启后继续使用持久化的签名状态；同步重锚组合发布元数据。
+
 ## v0.7.7 — 2026-08-14
 
 **安全身份与发布元数据**：trusted-keys 注册表、出站 HTTP Message Signature 闭环，以及组合锁重锚。

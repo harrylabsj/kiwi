@@ -61,7 +61,7 @@ export function isKnpDataPart(part: A2AV1Part): part is DataPart {
   if (!("data" in part)) return false;
   const data = (part as { data?: unknown }).data;
   if (data === null || typeof data !== "object" || Array.isArray(data)) return false;
-  return "knp_envelope" in data || "agreement" in data;
+  return Object.hasOwn(data, "knp_envelope") || Object.hasOwn(data, "agreement");
 }
 
 /**
@@ -80,7 +80,12 @@ export function isV1InputPartSupported(part: A2AV1Part): boolean {
   if ("data" in part) {
     const data = (part as { data?: unknown }).data;
     if (data === null || typeof data !== "object" || Array.isArray(data)) return false;
-    if (mediaType === undefined) return false;
+    // Official @a2a-js/sdk emits the protobuf JSON default (empty/omitted
+    // mediaType) for object-valued data. KNP's namespace is unambiguous, so
+    // accept that carrier while still rejecting untyped generic data.
+    if (mediaType === undefined || mediaType === "") {
+      return Object.hasOwn(data, "knp_envelope") || Object.hasOwn(data, "agreement");
+    }
     return mediaType.startsWith("text/") || mediaType === "application/json";
   }
   if ("raw" in part) {

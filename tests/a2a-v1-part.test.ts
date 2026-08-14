@@ -87,6 +87,10 @@ describe("A2A v1 Part（issue 04）", () => {
   it("isV1InputPartSupported（issue 10 / TCK CORE-SEND-003）：text 直接支持；data 仅 application/json；未知 mediaType fail-closed", () => {
     expect(isV1InputPartSupported({ text: "hi" })).toBe(true);
     expect(isV1InputPartSupported({ data: { knp_envelope: {} }, mediaType: "application/json" })).toBe(true);
+    // 官方 @a2a-js/sdk 的 protobuf JSON carrier 可能省略或输出空 mediaType；
+    // KNP 命名空间本身足以消歧，但普通无类型 data 仍必须拒绝。
+    expect(isV1InputPartSupported({ data: { knp_envelope: {} } })).toBe(true);
+    expect(isV1InputPartSupported({ data: { agreement: {} }, mediaType: "" })).toBe(true);
     expect(isV1InputPartSupported({ raw: "dGNr", mediaType: "text/plain" })).toBe(true);
     expect(isV1InputPartSupported({ raw: "dGNr", mediaType: "application/x-unsupported-tck-type" })).toBe(false);
     expect(isV1InputPartSupported({ data: { x: 1 } })).toBe(false); // data 无 mediaType → fail-closed
