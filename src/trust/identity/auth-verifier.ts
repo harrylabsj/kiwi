@@ -124,6 +124,8 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
   private readonly maxClockSkewSeconds: number;
   private readonly maxSignatureAgeSeconds: number;
   private readonly expectedAuthority: string | undefined;
+  /** scheme 是否显式配置（公网 https 节点经反代终结 TLS 时必须显式 https）。 */
+  private readonly schemeExplicit: boolean;
 
   constructor(options: HttpMessageSignatureVerifierOptions) {
     this.resolver = options.resolver;
@@ -131,6 +133,7 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
     this.nonceStore = options.nonceStore;
     this.now = options.now ?? (() => Math.floor(Date.now() / 1000));
     this.scheme = options.scheme ?? "http";
+    this.schemeExplicit = options.scheme !== undefined;
     this.anonymousTrustLevel = options.anonymousTrustLevel ?? "T0";
     this.anonymousIdentity = options.anonymousIdentity ?? "anonymous";
     this.verifyCardJws = options.verifyCardJws;
@@ -156,7 +159,15 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
 
     // 签名请求：重建 @target-uri / @authority（服务端只有 origin-form req.url）。
     const authority = headerValue(headers, "host") ?? "";
-    const scheme = ctx.scheme ?? this.scheme;
+    // scheme 优先级：节点**显式**配置了 scheme + expectedAuthority（声明固定公网
+    // 身份，如 https://veyquo.com，反代终结 TLS、本地 socket 是 http）时，
+    // @target-uri 必须用节点声明的 scheme——否则签名者按 https 签、节点按本地 http
+    // 重建，验签必败。scheme 未显式配置（默认 http）时维持 ctx.scheme 优先（兼容
+    // 未配置身份的既有调用方）。
+    const scheme =
+      this.schemeExplicit && this.expectedAuthority !== undefined
+        ? this.scheme
+        : (ctx.scheme ?? this.scheme);
     const targetUri =
       ctx.url.startsWith("http://") || ctx.url.startsWith("https://")
         ? ctx.url
