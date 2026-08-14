@@ -318,18 +318,21 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
   // 未配置验证器则启动失败（fail-closed），不带着错误身份对外服务。
   // authVerifier 来源：options 直传优先，否则 KIWI_A2A_AUTH env
   // （loopback | none | bearer:<token> | signature）。
-  // Issue 16 B：signature 模式节点自持 Ed25519 密钥对（dataDir 持久 / 临时）。
+  // Issue 16 B：signature 模式节点自持 Ed25519 密钥对。签名目录**单一来源**：
+  // 持久 dataDir 优先（密钥/trusted-keys/出站 env 同源）；临时用
+  // <tmpdir>/kiwi-a2a-signing-<agent_id>（demo/测试，重启换钥可接受）。
   const signatureMode = (process.env.KIWI_A2A_AUTH ?? "").trim() === "signature";
+  const signingKeyDir = options.dataDir ?? path.join(tmpdir(), `kiwi-a2a-signing-${profile.agent_id}`);
   const signingIdentity: A2aSigningIdentity | undefined = signatureMode
     ? loadOrCreateA2aSigningIdentity(
-        options.dataDir ?? path.join(tmpdir(), `kiwi-a2a-signing-${profile.agent_id}`),
+        signingKeyDir,
         !isLoopbackAdvertised(advertisedBase)
           ? new URL(advertisedBase).origin
           : `${role}:${profile.agent_id}`,
       )
     : undefined;
   const authVerifier = options.authVerifier ?? authVerifierFromEnv({
-    signingKeyDir: options.dataDir ?? tmpdir(),
+    signingKeyDir,
     signingKeyId:
       signingIdentity?.keyid ?? (isLoopbackAdvertised(advertisedBase) ? `${role}:${profile.agent_id}` : new URL(advertisedBase).origin),
     role,
@@ -339,10 +342,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
   // A2ADirectChannel 的 env 回退读 KIWI_A2A_SIGNING_KEY_FILE；这里把节点密钥
   // 文件指向自身（缺省不覆盖显式配置），使本进程的 outbound 都用同一身份。
   if (signingIdentity !== undefined && (process.env.KIWI_A2A_SIGNING_KEY_FILE ?? "").trim() === "") {
-    process.env.KIWI_A2A_SIGNING_KEY_FILE = path.join(
-      options.dataDir ?? tmpdir(),
-      "a2a-signing-key.json",
-    );
+    process.env.KIWI_A2A_SIGNING_KEY_FILE = path.join(signingKeyDir, "a2a-signing-key.json");
   }
   // 反滥用限流（§31）：KIWI_A2A_THROTTLE 非空即启用（默认档位表 / JSON 覆盖）。
   const a2aThrottle = resolveA2aThrottle();
