@@ -748,6 +748,9 @@ async function cmdChat(args: ParsedArgs, requiredRole?: AgentProfile["role"]): P
         profile: p as AgentProfile,
         catalog,
         preferredPort: args.port,
+        // 审查：chat 起的 A2A 节点同样要持久 dataDir——否则 Ledger/幂等/签名密钥
+        // 全落临时目录，重启后磋商状态与签名身份丢失（Issue 16 B）。
+        dataDir: resolveServeDataDir(args.dataDir, (p as AgentProfile).agent_id),
         ...(merchantToken ? { ownerToken: merchantToken } : {}),
         ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
       });
