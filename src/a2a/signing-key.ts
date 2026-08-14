@@ -185,6 +185,26 @@ export function resolveA2aSignatureResolver(
   return (keyid: string) => byId.get(keyid);
 }
 
+/** 从 trusted-keys 文件加载对端公钥列表（keyid → 公钥）。非法行 fail-closed。 */
+export function loadA2aTrustedKeys(file: string): SigningKey[] {
+  const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error(`A2A trusted keys ${file} 必须是数组（fail-closed）`);
+  }
+  return parsed.map((raw, index) => {
+    const row = raw as Record<string, unknown>;
+    if (typeof row.keyid !== "string" || typeof row.publicKeyPem !== "string") {
+      throw new Error(`A2A trusted keys ${file}[${index}] 缺 keyid/publicKeyPem（fail-closed）`);
+    }
+    const key: SigningKey = {
+      keyid: row.keyid,
+      algorithm: row.algorithm === "es256" ? "es256" : "ed25519",
+      publicKeyPem: row.publicKeyPem,
+    };
+    return key;
+  });
+}
+
 /** Agent Card 的 securitySchemes 条目（对端据此解析本节点公钥）。 */
 export function a2aSignatureSecurityScheme(identity: A2aSigningIdentity): Record<string, unknown> {
   return {

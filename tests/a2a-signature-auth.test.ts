@@ -6,12 +6,15 @@
  * - 节点签名密钥持久化确定性（重启不换钥）。
  */
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { HttpMessageSigner, HttpMessageSignatureVerifier } from "../src/trust/identity/index.js";
+import { A2ADirectChannel } from "../src/counterparty/index.js";
+import { finalizeEnvelope } from "../src/negotiation/domain/envelope.js";
 import {
   generateA2aSigningIdentity,
+  loadA2aTrustedKeys,
   loadOrCreateA2aSigningIdentity,
   resolveA2aSignatureResolver,
 } from "../src/a2a/signing-key.js";
@@ -101,6 +104,82 @@ describe("KIWI_A2A_AUTH=signature verifier", () => {
     const signed = signer.sign({ method: "POST", url: "https://merchant.example/a2a", body: Buffer.from(body, "utf8"), headers });
     const result = await verifier.verify({ ...context, headers: { ...headers, ...signed } });
     expect(result.authenticated).toBe(false);
+  });
+
+  it("trusted-keys file is parsed and invalid file fails closed", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-a2a-trust-"));
+    try {
+      const buyer = generateA2aSigningIdentity("buyer.example");
+      const file = path.join(dir, "a2a-trusted-keys.json");
+      writeFileSync(
+        file,
+        JSON.stringify([{ keyid: buyer.keyid, algorithm: buyer.algorithm, publicKeyPem: buyer.publicKeyPem }]),
+      );
+      const keys = loadA2aTrustedKeys(file);
+      expect(keys[0]?.keyid).toBe("buyer.example");
+      writeFileSync(file, JSON.stringify([{ keyid: "x" }])); // 缺 publicKeyPem
+      expect(() => loadA2aTrustedKeys(file)).toThrow(/fail-closed/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("A2ADirectChannel signs outbound when KIWI_A2A_SIGNING_KEY_FILE is set", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-a2a-out-"));
+    const prev = process.env.KIWI_A2A_SIGNING_KEY_FILE;
+    try {
+      const buyer = generateA2aSigningIdentity("buyer.example");
+      writeFileSync(
+        path.join(dir, "buyer-key.json"),
+        JSON.stringify({
+          keyid: buyer.keyid,
+          algorithm: buyer.algorithm,
+          privateKeyPem: buyer.privateKeyPem,
+          publicKeyPem: buyer.publicKeyPem,
+          publicKeyRaw: buyer.publicKeyRaw.toString("base64"),
+        }),
+      );
+      process.env.KIWI_A2A_SIGNING_KEY_FILE = path.join(dir, "buyer-key.json");
+      let captured: Record<string, string> | undefined;
+      const channel = new A2ADirectChannel({
+        url: "https://merchant.example/",
+        allowPrivateRanges: true,
+        skipDnsCheck: true,
+        fetchImpl: async (_url, init) => {
+          captured = init?.headers as Record<string, string>;
+          return new Response(JSON.stringify({ jsonrpc: "2.0", id: "1", result: { task: { id: "t", status: { state: "completed" } } } }), { status: 200 });
+        },
+      });
+      const handle = await channel.open({
+        negotiation_id: "neg_1",
+        sender_identity: "buyer.example",
+        identity: "merchant.example",
+        remote: {},
+      });
+      await handle
+        .send({
+          ref: { negotiation_id: "neg_1" },
+          envelope: finalizeEnvelope({
+            capability: "com.harrylabsj.kiwi.shopping.negotiation",
+            protocol_version: "1.0",
+            negotiation_id: "neg_1",
+            exchange_id: "ex_1",
+            message_id: "msg_1",
+            actor: "buyer",
+            action: "rfq",
+            created_at: "2026-08-14T00:00:00Z",
+            payload: { type: "rfq", items: [{ sku: "VQ-003", quantity: { value: 1, unit: "piece" } }] },
+          }),
+        })
+        .catch(() => {});
+      expect(captured).toBeDefined();
+      expect(captured?.signature).toBeDefined();
+      expect(captured?.signatureInput ?? captured?.["signature-input"]).toBeDefined();
+      expect(captured?.contentDigest ?? captured?.["content-digest"]).toBeDefined();
+    } finally {
+      process.env.KIWI_A2A_SIGNING_KEY_FILE = prev ?? "";
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("tampered signature is rejected", async () => {
