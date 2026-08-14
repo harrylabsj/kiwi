@@ -69,6 +69,16 @@ describe("A2A v1 Part（issue 04）", () => {
     expect(isKnpDataPart(url)).toBe(false);
   });
 
+  it("malformed JSON values are rejected without throwing", () => {
+    expect(isKnpDataPart(null as never)).toBe(false);
+    expect(isKnpDataPart("data" as never)).toBe(false);
+    expect(isKnpDataPart([] as never)).toBe(false);
+    expect(isKnpDataPart({ data: null } as never)).toBe(false);
+    expect(isV1InputPartSupported(null as never)).toBe(false);
+    expect(isV1InputPartSupported({ data: null } as never)).toBe(false);
+    expect(isV1InputPartSupported({ text: 42 } as never)).toBe(false);
+  });
+
   it("URL/File Part 在 0.3 模型无等价 → decode fail-closed", () => {
     expect(() => decodeV1Part({ url: "https://x.example/f" } as A2AV1Part)).toThrow();
     expect(() => decodeV1Part({ raw: "aGk=", mediaType: "text/plain" } as A2AV1Part)).toThrow();
@@ -80,6 +90,7 @@ describe("A2A v1 Part（issue 04）", () => {
     expect(isV1InputPartSupported({ raw: "dGNr", mediaType: "text/plain" })).toBe(true);
     expect(isV1InputPartSupported({ raw: "dGNr", mediaType: "application/x-unsupported-tck-type" })).toBe(false);
     expect(isV1InputPartSupported({ data: { x: 1 } })).toBe(false); // data 无 mediaType → fail-closed
-    expect(isV1InputPartSupported({ url: "https://x.example/f" })).toBe(false); // URL 无 mediaType
+    // 加固（2026-08-14）：URL Part 是合法输入模式，无 mediaType 也接受。
+    expect(isV1InputPartSupported({ url: "https://x.example/f" })).toBe(true);
   });
 });

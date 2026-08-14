@@ -54,8 +54,14 @@ export function decodeV1Part(v1: A2AV1Part): A2APart {
 
 /** 识别 KNP 载荷 Part（data 内含 knp_envelope 或 agreement）。 */
 export function isKnpDataPart(part: A2AV1Part): part is DataPart {
+  // JSON-RPC 输入来自远端，不能假定调用方已经完成了 TypeScript 类型
+  // 收窄。`in` 对 null/primitive 会抛 TypeError，进而把坏请求错误地升级为
+  // -32603 internal error。这里必须先做运行时对象守卫，保持 fail-closed。
+  if (part === null || typeof part !== "object" || Array.isArray(part)) return false;
   if (!("data" in part)) return false;
-  return "knp_envelope" in part.data || "agreement" in part.data;
+  const data = (part as { data?: unknown }).data;
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return false;
+  return "knp_envelope" in data || "agreement" in data;
 }
 
 /**
@@ -65,10 +71,27 @@ export function isKnpDataPart(part: A2AV1Part): part is DataPart {
  * server 返回 ContentTypeNotSupportedError（-32005），而非内部错误。
  */
 export function isV1InputPartSupported(part: A2AV1Part): boolean {
-  if (typeof part !== "object" || part === null) return false;
-  if ("text" in part) return true;
+  if (typeof part !== "object" || part === null || Array.isArray(part)) return false;
+  if ("text" in part) return typeof (part as { text?: unknown }).text === "string";
   const mediaType =
-    "mediaType" in part && typeof part.mediaType === "string" ? part.mediaType : undefined;
-  if (mediaType === undefined) return false;
-  return mediaType.startsWith("text/") || mediaType === "application/json";
+    "mediaType" in part && typeof (part as { mediaType?: unknown }).mediaType === "string"
+      ? (part as { mediaType: string }).mediaType
+      : undefined;
+  if ("data" in part) {
+    const data = (part as { data?: unknown }).data;
+    if (data === null || typeof data !== "object" || Array.isArray(data)) return false;
+    if (mediaType === undefined) return false;
+    return mediaType.startsWith("text/") || mediaType === "application/json";
+  }
+  if ("raw" in part) {
+    return (
+      typeof (part as { raw?: unknown }).raw === "string" &&
+      mediaType !== undefined &&
+      (mediaType.startsWith("text/") || mediaType === "application/json")
+    );
+  }
+  if ("url" in part) {
+    return typeof (part as { url?: unknown }).url === "string";
+  }
+  return false;
 }

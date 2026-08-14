@@ -61,8 +61,8 @@ python3 -m unittest discover -s tests -t . -v
 
 - **请求**：`POST <a2aPath>`，头 `A2A-Version: 1.0`、`A2A-Extensions: <origin>/a2a/extensions/negotiation/1.0`、
   body `{jsonrpc, id, method: "SendMessage", params: {message: {role, messageId, parts: [{text}, {data: {knp_envelope}, mediaType: "application/json"}]}}}`。
-- **响应**：`result.task.status.message.parts[].data.knp_envelope` 携带回复 envelope
-  （即使 1.0 请求，响应 parts 仍是 0.3 形状 `{kind:"data", data:{...}}`）；
+- **响应**：`result.task.status.message.parts[].data.knp_envelope` 携带回复 envelope，
+  使用 A2A 1.0 统一 DataPart（`{data:{...}, mediaType:"application/json"}`）；
   agreement 在 `task.artifacts[].parts[].data.agreement`；状态 `TASK_STATE_*`。
 - **envelope digest**：`sha256:` + `sha256(JCS(envelope 去掉 digest + signature 字段))`
   （KNP §19.2）；`terms_digest` = `contentDigest(求值后的 agreed terms)`（§19.3）。

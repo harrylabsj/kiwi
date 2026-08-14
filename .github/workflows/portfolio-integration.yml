@@ -100,6 +100,21 @@ jobs:
         run: npm run verify:contracts
       - name: Kiwi verify vectors
         run: npm run verify:vectors
+      - name: Kiwi independent A2A conformance (SDK + three-way)
+        env:
+          KIWI_CONFORMANCE_OUT_DIR: ${{ runner.temp }}/kiwi-conformance
+        run: |
+          set -euo pipefail
+          mkdir -p "$KIWI_CONFORMANCE_OUT_DIR"
+          npm run conformance:a2a-sdk
+          npm run conformance:three-way
+      - name: Upload Kiwi wire conformance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kiwi-a2a-conformance-${{ github.run_id }}
+          path: ${{ runner.temp }}/kiwi-conformance
+          if-no-files-found: ignore
       # ---------------------------------------------------------------------------
       # Consumer-repo composition checks.
       #

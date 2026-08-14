@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from urllib.parse import urlsplit
 
 from kiwi_ref import envelope as env
 from kiwi_ref.a2a import A2ABusinessDecline, A2AClient, decline_or_envelope, extract_agreement
@@ -13,6 +14,7 @@ from kiwi_ref.merchant import (
     Merchant,
     MerchantDecline,
     MerchantHTTPServer,
+    MAX_REQUEST_BODY_BYTES,
 )
 
 NOW = "2026-08-13T12:00:00Z"
@@ -255,6 +257,36 @@ class MerchantOverHttpTest(unittest.TestCase):
         with self.assertRaises(A2ABusinessDecline) as ctx:
             decline_or_envelope(task)
         self.assertEqual(ctx.exception.reason_code, "offer_unknown")
+
+    def test_oversized_request_is_rejected_before_json_parse(self) -> None:
+        server = MerchantHTTPServer()
+        url = server.start()
+        self.addCleanup(server.stop)
+        target = urlsplit(url)
+        # 服务端按 Content-Length header 拒绝（413），不读 body。用原始 socket 只发
+        # header + 极短 body，避免客户端在服务端提前关闭时被 reset。
+        import socket
+
+        with socket.create_connection((target.hostname, target.port), timeout=5) as sock:
+            sock.sendall(
+                (
+                    "POST / HTTP/1.1\r\n"
+                    f"Host: {target.hostname}:{target.port}\r\n"
+                    "Content-Type: application/json\r\n"
+                    f"Content-Length: {MAX_REQUEST_BODY_BYTES + 1}\r\n"
+                    "Connection: close\r\n"
+                    "\r\n"
+                ).encode()
+                + b'{"jsonrpc":'
+            )
+            sock.settimeout(5)
+            head = b""
+            while b"\r\n" not in head:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                head += chunk
+        self.assertIn(b"413", head.split(b"\r\n")[0])
 
 
 if __name__ == "__main__":

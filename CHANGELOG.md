@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- A2A 1.0 KNP 响应统一使用 `text`/`data` Part 与 `ROLE_*` wire 形状，0.3 兼容响应保持不变。
+- malformed 1.0 Part 现在在协议边界 fail-closed，避免远端输入触发内部 500。
+- Python 参考实现与 CSV/Excel 适配器增加响应、请求体、文件、行、列和压缩包资源上限。
+- 组合 CI 增加官方 SDK 往返与三向独立实现 conformance，并上传 wire transcript 证据。
+
+## v0.7.7 — 2026-08-14
+
+**安全身份与发布元数据**：trusted-keys 注册表、出站 HTTP Message Signature 闭环，以及组合锁重锚。
+
 ## v0.6.1 — 2026-08-09
 
 **修复与商家侧支持**（shopping-cli v3.0 发布面剥离后的契约对齐）：

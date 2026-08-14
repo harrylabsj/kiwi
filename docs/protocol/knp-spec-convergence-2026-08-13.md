@@ -56,9 +56,9 @@ Content-Type: application/json
       "status": {
         "state": "TASK_STATE_WORKING",   # 1.0 wire：proto 枚举名
         "message": {
-          "role": "agent",
+          "role": "ROLE_AGENT",
           "messageId": "<商家回复 envelope.message_id>",
-          "parts": [ { "kind": "data", "data": { "knp_envelope": { "…" } } } ]
+          "parts": [ { "data": { "knp_envelope": { "…" } }, "mediaType": "application/json" } ]
         }
       }
     } } }
@@ -66,8 +66,9 @@ Content-Type: application/json
 
 要点：
 - 回复 envelope 在 `task.status.message.parts[].data.knp_envelope`。
-- **即使 1.0 请求，响应 parts 仍是 0.3 形状**（`{kind:"data", data:{...}}`）——
-  解析器不依赖 `kind`，扫任意 part 的 `data.knp_envelope` 即可（TS/Python 均已实证）。
+- 1.0 响应使用统一 Part（`{data:{...}, mediaType:"application/json"}`）；0.3
+  compatibility adapter 单独保留 `{kind:"data", data:{...}}`。解析器同时接受两种
+  版本形状，但不会把 legacy carrier 泄漏到 1.0 响应。
 - 任务终态（decline / agreement）：`state` = `TASK_STATE_COMPLETED`。
 - Agreement artifact 在 `task.artifacts[].parts[].data.agreement`。
 - 商业拒绝在 `task.status.message.parts[].data` = `{decline: true, reason_code, message}`。

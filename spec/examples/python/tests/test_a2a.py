@@ -13,6 +13,8 @@ from kiwi_ref.a2a import (
     A2ABusinessDecline,
     A2AClient,
     A2AClientError,
+    MAX_RESPONSE_BYTES,
+    _read_bounded,
     decline_or_envelope,
     extract_agreement,
     extract_reply_envelope,
@@ -234,6 +236,20 @@ class A2AClientTest(unittest.TestCase):
         with self.assertRaises(A2ABusinessDecline) as ctx:
             decline_or_envelope(task)
         self.assertEqual(ctx.exception.reason_code, "offer_unknown")
+
+    def test_response_body_limit_is_fail_closed(self) -> None:
+        class Response:
+            def __init__(self, payload: bytes, declared: str | None = None) -> None:
+                self.payload = payload
+                self.headers = {} if declared is None else {"Content-Length": declared}
+
+            def read(self, limit: int) -> bytes:
+                return self.payload[:limit]
+
+        with self.assertRaises(A2AClientError):
+            _read_bounded(Response(b"x", str(MAX_RESPONSE_BYTES + 1)), MAX_RESPONSE_BYTES, "test")
+        with self.assertRaises(A2AClientError):
+            _read_bounded(Response(b"x" * (MAX_RESPONSE_BYTES + 1)), MAX_RESPONSE_BYTES, "test")
 
 
 class AgentCardTest(unittest.TestCase):

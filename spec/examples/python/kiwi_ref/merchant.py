@@ -28,6 +28,7 @@ from .jcs import content_digest
 MERCHANT_CURRENCY = "CNY"
 MERCHANT_DELIVERY_BEFORE = "2026-08-20T18:00:00Z"
 OFFER_VALIDITY_MS = 24 * 60 * 60 * 1000  # 24h 报价有效期（TS 同款）
+MAX_REQUEST_BODY_BYTES = 1 * 1024 * 1024
 
 # 商品价目表（demo 数据源）。价格 minor 单位。
 DEFAULT_PRODUCT = {
@@ -237,9 +238,9 @@ class Merchant:
             "status": {
                 "state": "TASK_STATE_WORKING",
                 "message": {
-                    "role": "agent",
+                    "role": "ROLE_AGENT",
                     "messageId": reply_envelope["message_id"],
-                    "parts": [{"kind": "data", "data": {"knp_envelope": reply_envelope}}],
+                    "parts": [{"data": {"knp_envelope": reply_envelope}, "mediaType": "application/json"}],
                 },
             },
         }
@@ -251,13 +252,13 @@ class Merchant:
             "status": {
                 "state": "TASK_STATE_COMPLETED",
                 "message": {
-                    "role": "agent",
+                    "role": "ROLE_AGENT",
                     "messageId": env.new_message_id(),
-                    "parts": [{"kind": "text", "text": "Agreement reached (nonbinding)."}],
+                    "parts": [{"text": "Agreement reached (nonbinding)."}],
                 },
             },
             "artifacts": [
-                {"artifactId": f"art_{uuid.uuid4().hex}", "parts": [{"kind": "data", "data": {"agreement": agreement}}]}
+                {"artifactId": f"art_{uuid.uuid4().hex}", "parts": [{"data": {"agreement": agreement}, "mediaType": "application/json"}]}
             ],
         }
 
@@ -267,7 +268,7 @@ class Merchant:
             "contextId": _context_id(),
             "status": {
                 "state": "TASK_STATE_WORKING",
-                "message": {"role": "agent", "messageId": env.new_message_id(), "parts": [{"kind": "text", "text": text}]},
+                "message": {"role": "ROLE_AGENT", "messageId": env.new_message_id(), "parts": [{"text": text}]},
             },
         }
 
@@ -283,12 +284,12 @@ class MerchantDeclineTask:
             "status": {
                 "state": "TASK_STATE_COMPLETED",
                 "message": {
-                    "role": "agent",
+                    "role": "ROLE_AGENT",
                     "messageId": env.new_message_id(),
                     "parts": [
                         {
-                            "kind": "data",
                             "data": {"decline": True, "reason_code": reason_code, "message": message},
+                            "mediaType": "application/json",
                         }
                     ],
                 },
@@ -340,8 +341,22 @@ class MerchantHTTPServer:
         return self._requests
 
     def _handle(self, handler: BaseHTTPRequestHandler) -> None:
-        length = int(handler.headers.get("Content-Length", "0"))
+        content_length = handler.headers.get("Content-Length")
+        if content_length is None:
+            self._send_json(handler, 411, {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Content-Length required"}})
+            return
+        try:
+            length = int(content_length)
+        except ValueError:
+            self._send_json(handler, 413, {"jsonrpc": "2.0", "id": None, "error": {"code": -32052, "message": "request body too large"}})
+            return
+        if length < 0 or length > MAX_REQUEST_BODY_BYTES:
+            self._send_json(handler, 413, {"jsonrpc": "2.0", "id": None, "error": {"code": -32052, "message": "request body too large"}})
+            return
         raw = handler.rfile.read(length)
+        if len(raw) != length:
+            self._send_json(handler, 413, {"jsonrpc": "2.0", "id": None, "error": {"code": -32052, "message": "request body too large"}})
+            return
         try:
             body = json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError:

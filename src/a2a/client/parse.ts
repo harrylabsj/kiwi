@@ -56,16 +56,34 @@ function optionalRecord(value: unknown, path: string): Record<string, unknown> |
 
 function parsePart(value: unknown, path: string): A2APart {
   const obj = requireObject(value, path);
-  const kind = requireNonEmptyString(obj.kind, `${path}/kind`);
-  if (kind === "text") {
-    const text = obj.text;
-    if (typeof text !== "string") throw schemaInvalid(`${path}/text must be a string`);
-    return { kind: "text", text };
+  // 0.3 uses an explicit `kind`; A2A 1.0 uses the unified Part oneof
+  // (`text`/`data`/`raw`/`url`). Accept both so the client can consume a
+  // version-aware server response while preserving fail-closed behavior for
+  // unsupported file and URL parts.
+  if (obj.kind !== undefined) {
+    const kind = requireNonEmptyString(obj.kind, `${path}/kind`);
+    if (kind === "text") {
+      const text = obj.text;
+      if (typeof text !== "string") throw schemaInvalid(`${path}/text must be a string`);
+      return { kind: "text", text };
+    }
+    if (kind === "data") {
+      return { kind: "data", data: requireObject(obj.data, `${path}/data`) };
+    }
+    throw schemaInvalid(`${path}/kind is unsupported: ${kind}`);
   }
-  if (kind === "data") {
-    return { kind: "data", data: requireObject(obj.data, `${path}/data`) };
+  if (obj.text !== undefined) {
+    if (typeof obj.text !== "string") throw schemaInvalid(`${path}/text must be a string`);
+    return { kind: "text", text: obj.text };
   }
-  throw schemaInvalid(`${path}/kind is unsupported: ${kind}`);
+  if (obj.data !== undefined) {
+    const data = requireObject(obj.data, `${path}/data`);
+    if (obj.mediaType !== undefined && typeof obj.mediaType !== "string") {
+      throw schemaInvalid(`${path}/mediaType must be a string`);
+    }
+    return { kind: "data", data };
+  }
+  throw schemaInvalid(`${path} must contain a supported text or data Part`);
 }
 
 function parseParts(value: unknown, path: string): A2APart[] {
@@ -77,11 +95,13 @@ function parseParts(value: unknown, path: string): A2APart[] {
 function parseMessage(value: unknown, path: string): A2AMessage {
   const obj = requireObject(value, path);
   const role = obj.role;
-  if (role !== "agent" && role !== "user") {
-    throw schemaInvalid(`${path}/role must be agent or user`);
+  const normalizedRole =
+    role === "ROLE_AGENT" ? "agent" : role === "ROLE_USER" ? "user" : role;
+  if (normalizedRole !== "agent" && normalizedRole !== "user") {
+    throw schemaInvalid(`${path}/role must be agent/user or ROLE_AGENT/ROLE_USER`);
   }
   const message: A2AMessage = {
-    role,
+    role: normalizedRole,
     parts: parseParts(obj.parts, `${path}/parts`),
     messageId: requireNonEmptyString(obj.messageId, `${path}/messageId`),
   };

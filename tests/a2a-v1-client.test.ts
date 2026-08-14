@@ -72,6 +72,41 @@ describe("A2A client 双栈（issue 06）", () => {
     expect(getWire()?.method).toBe("GetTask");
   });
 
+  it("1.0 response parser accepts unified Parts and ROLE_AGENT", async () => {
+    const fetchImpl = (async (_url: unknown, init?: FetchInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: {
+            task: {
+              id: "t-v1",
+              status: {
+                state: "TASK_STATE_COMPLETED",
+                message: { role: "ROLE_AGENT", parts: [{ text: "done" }], messageId: "m-v1" },
+              },
+              artifacts: [{ parts: [{ data: { agreement: { agreement_id: "agr-v1" } }, mediaType: "application/json" }] }],
+            },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const client = new A2AClient({
+      url: "http://127.0.0.1:9999",
+      fetchImpl,
+      skipDnsCheck: true,
+      allowPrivateRanges: true,
+      version: "1.0",
+      knpExtensionUri: KNP_URI,
+    });
+    const task = await client.getTask("t-v1");
+    expect(task.status.state).toBe("completed");
+    expect(task.status.message?.parts[0]).toEqual({ kind: "text", text: "done" });
+    expect(task.artifacts?.[0]?.parts[0]).toEqual({ kind: "data", data: { agreement: { agreement_id: "agr-v1" } } });
+  });
+
   it("0.3 路径走 legacy 帧（回归）", async () => {
     const { client, getWire } = mockClient({ version: "0.3" });
     await client.sendMessage({ role: "agent", parts: [{ kind: "text", text: "hi" }], messageId: "m1" });
