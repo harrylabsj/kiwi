@@ -85,8 +85,20 @@ export function buildAgentCard(config: AgentCardConfig): AgentCard {
     card.skills = config.skills;
   }
   if (config.securityScheme !== undefined) {
+    // Issue 16 B：签名模式可携带 keyid/publicKeyPem/algorithm（公钥，非 secret）。
     card.securitySchemes = {
-      [config.securityScheme.name]: { type: config.securityScheme.type },
+      [config.securityScheme.name]: {
+        type: config.securityScheme.type,
+        ...(config.securityScheme.keyid !== undefined
+          ? { keyid: config.securityScheme.keyid }
+          : {}),
+        ...(config.securityScheme.publicKeyPem !== undefined
+          ? { publicKeyPem: config.securityScheme.publicKeyPem }
+          : {}),
+        ...(config.securityScheme.algorithm !== undefined
+          ? { algorithm: config.securityScheme.algorithm }
+          : {}),
+      },
     };
     card.security = [{ scheme: config.securityScheme.name }];
   }

@@ -32,6 +32,7 @@ export { parseTaskResult } from "./parse.js";
 export type {
   A2AArtifact,
   A2AMessage,
+  A2AOutboundSigner,
   A2AClientOptions,
   A2APart,
   A2ATask,

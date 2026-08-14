@@ -34,7 +34,8 @@
  */
 
 import { A2AClient, A2AClientError } from "../../a2a/client/index.js";
-import type { A2AMessage, A2ATask } from "../../a2a/client/index.js";
+import type { A2AMessage, A2AOutboundSigner, A2ATask } from "../../a2a/client/index.js";
+import { resolveOutboundSigner } from "../../a2a/signing-key.js";
 import { A2ATaskPoller, recordTaskObservation } from "../../a2a/task/index.js";
 import { validateEnvelope, verifyEnvelopeDigest } from "../../negotiation/domain/envelope.js";
 import type { NegotiationEnvelope } from "../../negotiation/domain/envelope.js";
@@ -75,6 +76,9 @@ export interface A2ADirectChannelOptions {
   allowPrivateRanges?: boolean;
   /** 出站认证：向远端 A2A 节点附加 Authorization: Bearer（透传 A2AClient headers）。 */
   auth?: { bearer?: string };
+  /** 出站 HTTP Message Signature（Issue 16 B）：显式 signer 优先，缺省读
+   *  `KIWI_A2A_SIGNING_KEY_FILE` env（节点自持密钥签出站请求）。 */
+  signer?: A2AOutboundSigner;
   /** 全临界区 ownership 租约（审查 BUG-07）：共享持久目录时提供——并发
    *  direct send 同 key 只允许一个 owner 执行（check→HTTP→ledger→commit）。 */
   lease?: FileLeaseStore;
@@ -105,6 +109,10 @@ export class A2ADirectChannel implements CounterpartyChannel {
       resolveIp: options.resolveIp,
       ...(options.auth?.bearer !== undefined
         ? { headers: { Authorization: `Bearer ${options.auth.bearer}` } }
+        : {}),
+      // Issue 16 B：出站 HTTP Message Signature（显式 signer 或 KIWI_A2A_SIGNING_KEY_FILE）。
+      ...(resolveOutboundSigner(options.signer) !== undefined
+        ? { signer: resolveOutboundSigner(options.signer) }
         : {}),
     });
     this.ledger = options.ledger;

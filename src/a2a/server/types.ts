@@ -61,8 +61,18 @@ export interface AgentCardConfig {
   negotiationExtensionUri?: string;
   /** 附加技能声明（可选）。 */
   skills?: AgentSkill[];
-  /** 安全方案声明（仅元数据，不得含 secret；不变量 24）。 */
-  securityScheme?: { name: string; type: string };
+  /**
+   * 安全方案声明（仅元数据，不得含 secret；不变量 24）。
+   * Issue 16 B：HTTP Message Signature 模式可携带该节点的公开签名密钥
+   * （keyid / publicKeyPem / algorithm），供对端解析本节点出站签名。
+   */
+  securityScheme?: {
+    name: string;
+    type: string;
+    keyid?: string;
+    publicKeyPem?: string;
+    algorithm?: string;
+  };
 }
 
 /** card 配置可静态提供，也可用 provider 函数（测试/部署时 baseUrl 动态确定）。 */
