@@ -49,6 +49,12 @@ import {
   StaticBearerAuthVerifier,
   type ThrottleOptions,
 } from "./server/index.js";
+import { HttpMessageSignatureVerifier } from "../trust/identity/index.js";
+import {
+  loadOrCreateA2aSigningIdentity,
+  resolveA2aSignatureResolver,
+  type A2aSigningIdentity,
+} from "./signing-key.js";
 import { defaultHandler } from "./server/handler.js";
 import { createMerchantHandler } from "./server/merchant-handler.js";
 import { LedgerStore } from "../negotiation/ledger/index.js";
@@ -103,6 +109,8 @@ export interface A2aNodeHandle {
   agentCardUrl: string;
   /** 注册进 catalog 的 catalog_agent_id（merchant 角色且有 catalog 时）。 */
   catalogAgentId?: string;
+  /** 节点签名身份（Issue 16 B / KIWI_A2A_AUTH=signature 时存在）。 */
+  signingIdentity?: A2aSigningIdentity;
   stop(): Promise<void>;
 }
 
@@ -218,17 +226,51 @@ function isLoopbackAdvertised(value: string): boolean {
  * - ``bearer:<token>`` → StaticBearerAuthVerifier：校验 Authorization Bearer。
  * 未配置 → undefined（公网广告形态下守卫拒绝启动，fail-closed）。
  */
-function authVerifierFromEnv(): AuthVerifier | undefined {
+interface AuthFromEnvContext {
+  /** 签名模式节点密钥目录（dataDir 或临时）。 */
+  signingKeyDir: string;
+  /** 签名模式 keyid（公网用 advertised origin，否则 role:agent_id）。 */
+  signingKeyId: string;
+  role: AgentProfile["role"];
+  advertisedBase: string;
+}
+
+/**
+ * 从 KIWI_A2A_AUTH 构造入站验证器（公网广告形态的认证边界，审查 BUG-02）。
+ * 模式：
+ * - ``loopback`` → LoopbackOnlyAuthVerifier；
+ * - ``none`` → NoneAuthVerifier（显式可信网络/测试）；
+ * - ``bearer:<token>`` → StaticBearerAuthVerifier；
+ * - ``signature`` → HTTP Message Signature（RFC 9421，Issue 16 B）：
+ *   节点自持 Ed25519 密钥对，验签方按 keyid→公钥 resolver；**匿名请求按 T0
+ *   放行**（无预共享密钥的开放互操作：任何 kiwi buyer 可与任何 kiwi merchant
+ *   沟通；签名请求获更高信任）。
+ */
+function authVerifierFromEnv(ctx: AuthFromEnvContext): AuthVerifier | undefined {
   const raw = (process.env.KIWI_A2A_AUTH ?? "").trim();
   if (raw === "") return undefined;
   if (raw === "loopback") return new LoopbackOnlyAuthVerifier();
   if (raw === "none") return new NoneAuthVerifier();
+  if (raw === "signature") {
+    const identity = loadOrCreateA2aSigningIdentity(ctx.signingKeyDir, ctx.signingKeyId);
+    const advertised = new URL(ctx.advertisedBase);
+    return new HttpMessageSignatureVerifier({
+      resolver: resolveA2aSignatureResolver(identity),
+      scheme: advertised.protocol === "https:" ? "https" : "http",
+      expectedAuthority: advertised.hostname,
+      // 设计意图：匿名 T0 放行，签名请求更高信任——不阻塞任何 kiwi buyer。
+      anonymousTrustLevel: "T0",
+      anonymousIdentity: "anonymous",
+    });
+  }
   if (raw.startsWith("bearer:")) {
     const token = raw.slice("bearer:".length).trim();
     if (token === "") throw new Error("KIWI_A2A_AUTH=bearer:<token> 需要非空 token");
     return new StaticBearerAuthVerifier(token);
   }
-  throw new Error(`KIWI_A2A_AUTH 未知模式: ${raw}（可选 loopback | none | bearer:<token>）`);
+  throw new Error(
+    `KIWI_A2A_AUTH 未知模式: ${raw}（可选 loopback | none | bearer:<token> | signature）`,
+  );
 }
 
 /**
@@ -267,8 +309,33 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
   // socket 来源，反代从 127.0.0.1 连接时外部请求在应用层就是 loopback。
   // 未配置验证器则启动失败（fail-closed），不带着错误身份对外服务。
   // authVerifier 来源：options 直传优先，否则 KIWI_A2A_AUTH env
-  // （loopback | none | bearer:<token>）。
-  const authVerifier = options.authVerifier ?? authVerifierFromEnv();
+  // （loopback | none | bearer:<token> | signature）。
+  // Issue 16 B：signature 模式节点自持 Ed25519 密钥对（dataDir 持久 / 临时）。
+  const signatureMode = (process.env.KIWI_A2A_AUTH ?? "").trim() === "signature";
+  const signingIdentity: A2aSigningIdentity | undefined = signatureMode
+    ? loadOrCreateA2aSigningIdentity(
+        options.dataDir ?? path.join(tmpdir(), `kiwi-a2a-signing-${profile.agent_id}`),
+        !isLoopbackAdvertised(advertisedBase)
+          ? new URL(advertisedBase).origin
+          : `${role}:${profile.agent_id}`,
+      )
+    : undefined;
+  const authVerifier = options.authVerifier ?? authVerifierFromEnv({
+    signingKeyDir: options.dataDir ?? tmpdir(),
+    signingKeyId:
+      signingIdentity?.keyid ?? (isLoopbackAdvertised(advertisedBase) ? `${role}:${profile.agent_id}` : new URL(advertisedBase).origin),
+    role,
+    advertisedBase,
+  });
+  // 出站签名（Issue 16 B）：节点自持密钥 → 出站 A2A 请求自动签名。
+  // A2ADirectChannel 的 env 回退读 KIWI_A2A_SIGNING_KEY_FILE；这里把节点密钥
+  // 文件指向自身（缺省不覆盖显式配置），使本进程的 outbound 都用同一身份。
+  if (signingIdentity !== undefined && (process.env.KIWI_A2A_SIGNING_KEY_FILE ?? "").trim() === "") {
+    process.env.KIWI_A2A_SIGNING_KEY_FILE = path.join(
+      options.dataDir ?? tmpdir(),
+      "a2a-signing-key.json",
+    );
+  }
   // 反滥用限流（§31）：KIWI_A2A_THROTTLE 非空即启用（默认档位表 / JSON 覆盖）。
   const a2aThrottle = resolveA2aThrottle();
   if (!isLoopbackAdvertised(advertisedBase) && authVerifier === undefined) {
@@ -362,6 +429,18 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
       version: "1.0.0",
       baseUrl: holder.baseUrl,
       a2aPath: "/",
+      // Issue 16 B：签名模式发布节点公开签名密钥（非 secret），对端据此验签。
+      ...(signingIdentity !== undefined
+        ? {
+            securityScheme: {
+              name: "kiwi-signature",
+              type: "kiwi-http-message-signature",
+              keyid: signingIdentity.keyid,
+              publicKeyPem: signingIdentity.publicKeyPem,
+              algorithm: signingIdentity.algorithm,
+            },
+          }
+        : {}),
     }),
     // 发布 UCP Profile（/.well-known/ucp）：注册广告了 ucp_profile_url，
     // 端点就必须真实可拉——否则 catalog 验证的 profile 阶段拉 UCP 404 →
@@ -433,6 +512,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     advertisedUrl: advertisedBase,
     agentCardUrl,
     catalogAgentId,
+    ...(signingIdentity !== undefined ? { signingIdentity } : {}),
     async stop(): Promise<void> {
       httpServer.closeAllConnections?.();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
