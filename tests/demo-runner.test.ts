@@ -1,11 +1,23 @@
 /**
  * `kiwi demo`（Issue 13）端到端测试：拓扑启动 → fan-out RFQ → Agreement → Handoff → 清理。
+ * 依赖真实 kiwi-catalog sibling 目录（KIWI_CATALOG_DIR 或 ../kiwi-catalog）；
+ * 缺失时跳过（CI 上无 sibling 仓库），本地有 sibling 才跑。
  */
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runDemo } from "../src/demo/demo-runner.js";
 
+const catalogAvailable =
+  existsSync(
+    path.join(
+      process.env.KIWI_CATALOG_DIR ?? path.resolve(process.cwd(), "../kiwi-catalog"),
+      "pyproject.toml",
+    ),
+  );
+
 describe("kiwi demo（Issue 13）", () => {
-  it("场景 A：3 商家 fan-out → 最优选择 → Agreement → Handoff，全部清理", async () => {
+  it.skipIf(!catalogAvailable)("场景 A：3 商家 fan-out → 最优选择 → Agreement → Handoff，全部清理", async () => {
     const lines: string[] = [];
     const summary = await runDemo("a", { onLog: (_p, d) => lines.push(d) });
 
@@ -28,9 +40,10 @@ describe("kiwi demo（Issue 13）", () => {
 
     // 清理日志。
     expect(lines.some((l) => l.includes("已关闭"))).toBe(true);
+    expect(summary.cleaned).toBe(true);
   });
 
-  it("场景 B：工业批量参数化（数量阶梯条件成交）", async () => {
+  it.skipIf(!catalogAvailable)("场景 B：工业批量参数化（数量阶梯条件成交）", async () => {
     const summary = await runDemo("b");
     expect(summary.result.offers.length).toBe(3);
     expect(summary.result.agreement.agreement_id).toMatch(/^agr_/);
