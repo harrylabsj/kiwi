@@ -121,7 +121,20 @@ export function isReservedIpv4(ip: string): { reserved: boolean; name?: string }
 function normalizeIpv6(ip: string): string | undefined {
   const clean = stripBrackets(ip);
   if (isIP(clean) !== 6) return undefined;
-  const address = clean.toLowerCase();
+  let address = clean.toLowerCase();
+  // 内嵌点分四段（IPv4-mapped ::ffff:a.b.c.d / IPv4-compatible ::a.b.c.d）：点分
+  // 四段实为低 32 位（两个 16-bit group），naive split(":") 会把它误当单个 group，
+  // 导致 fill 计数错位、后续范围分支判错（审查 H3 fail-open / L3 误伤）。先替换成
+  // 等价 "hhhh:hhhh" 两段，保证归一化正确。
+  address = address.replace(
+    /:([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/,
+    (_match, a, b, c, d) => {
+      const value = ((Number(a) << 24) | (Number(b) << 16) | (Number(c) << 8) | Number(d)) >>> 0;
+      const hi = ((value >>> 16) & 0xffff).toString(16).padStart(4, "0");
+      const lo = (value & 0xffff).toString(16).padStart(4, "0");
+      return `:${hi}:${lo}`;
+    },
+  );
   const [head, tail] = address.split("::");
   if (head === undefined) return undefined;
   const headGroups = head === "" ? [] : head.split(":");
@@ -136,23 +149,46 @@ const IPV6_LOOPBACK = "0000:0000:0000:0000:0000:0000:0000:0001";
 const IPV6_UNSPECIFIED = "0000:0000:0000:0000:0000:0000:0000:0000";
 const IPV6_V4MAPPED_PREFIX = "0000:0000:0000:0000:0000:ffff:";
 
+function valueToDottedQuad(value: number): string {
+  return `${value >>> 24}.${(value >>> 16) & 0xff}.${(value >>> 8) & 0xff}.${value & 0xff}`;
+}
+
+/**
+ * IPv4-mapped IPv6（::ffff:/64）内嵌 IPv4 低 32 位提取。normalizeIpv6 会把两种合法
+ * 写法留作尾巴：两段 hex（::ffff:7f00:0001）、点分四段（::ffff:127.0.0.1，被当作
+ * 单个 group 保留 '.'）。返回内嵌 IPv4 的整数值，无法解析返回 undefined。
+ */
+function mappedIpv4Value(remainder: string): number | undefined {
+  if (remainder.includes(".")) {
+    return ipv4ToInt(remainder);
+  }
+  const groups = remainder.split(":");
+  const first = groups[0];
+  const second = groups[1];
+  if (
+    groups.length === 2 &&
+    first !== undefined &&
+    second !== undefined &&
+    /^[0-9a-f]{1,4}$/.test(first) &&
+    /^[0-9a-f]{1,4}$/.test(second)
+  ) {
+    return ((Number.parseInt(first, 16) << 16) | Number.parseInt(second, 16)) >>> 0;
+  }
+  return undefined;
+}
+
 export function isReservedIpv6(ip: string): { reserved: boolean; name?: string } {
   const normalized = normalizeIpv6(ip);
   if (normalized === undefined) return { reserved: false };
   if (normalized === IPV6_LOOPBACK) return { reserved: true, name: "loopback ::1/128" };
   if (normalized === IPV6_UNSPECIFIED) return { reserved: true, name: "unspecified ::/128" };
-  // IPv4-mapped IPv6 按内嵌 IPv4 判定（::ffff:127.0.0.1 等）。
+  // IPv4-mapped IPv6 按内嵌 IPv4 判定（::ffff:127.0.0.1 / ::ffff:7f000001 等）。
+  // 原实现只处理「两段 hex」一种写法，点分四段与单段 32bit hex 均 fail-open（审查 H3）。
   if (normalized.startsWith(IPV6_V4MAPPED_PREFIX)) {
-    const groups = normalized.slice(IPV6_V4MAPPED_PREFIX.length).split(":");
-    const last = groups[groups.length - 1];
-    const penultimate = groups[groups.length - 2];
-    if (last !== undefined && penultimate !== undefined) {
-      const a = Number.parseInt(penultimate, 16);
-      const b = Number.parseInt(last, 16);
-      const mapped = `${a >> 8}.${a & 0xff}.${b >> 8}.${b & 0xff}`;
-      const ipv4 = isReservedIpv4(mapped);
-      if (ipv4.reserved) return { reserved: true, name: `IPv4-mapped ${ipv4.name}` };
-    }
+    const value = mappedIpv4Value(normalized.slice(IPV6_V4MAPPED_PREFIX.length));
+    if (value === undefined) return { reserved: false };
+    const ipv4 = isReservedIpv4(valueToDottedQuad(value));
+    if (ipv4.reserved) return { reserved: true, name: `IPv4-mapped ${ipv4.name}` };
     return { reserved: false };
   }
   // 审查 K-L14：补三类「内嵌 IPv4」的保留网段——此前仅覆盖 ::ffff:a.b.c.d，
@@ -215,7 +251,14 @@ export function isLoopbackHost(hostname: string): boolean {
     return value !== undefined && value >= 0x7f000000 && value <= 0x7fffffff;
   }
   if (isIP(ip) === 6) {
-    return normalizeIpv6(ip) === IPV6_LOOPBACK;
+    const normalized = normalizeIpv6(ip);
+    if (normalized === IPV6_LOOPBACK) return true;
+    // IPv4-mapped loopback ::ffff:127.0.0.0/104 同样视为 loopback（审查 H3）。
+    if (normalized !== undefined && normalized.startsWith(IPV6_V4MAPPED_PREFIX)) {
+      const value = mappedIpv4Value(normalized.slice(IPV6_V4MAPPED_PREFIX.length));
+      return value !== undefined && value >= 0x7f000000 && value <= 0x7fffffff;
+    }
+    return false;
   }
   return false;
 }

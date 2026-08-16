@@ -30,7 +30,7 @@ import { createPublicKey, generateKeyPairSync } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { HttpMessageSigner } from "../trust/identity/index.js";
-import type { KeyResolver, SigningKey } from "../trust/identity/index.js";
+import type { KeyProfile, KeyResolver, SigningKey } from "../trust/identity/index.js";
 
 export const A2A_SIGNING_KEY_FILE = "a2a-signing-key.json";
 
@@ -196,11 +196,26 @@ export function loadA2aTrustedKeys(file: string): SigningKey[] {
     if (typeof row.keyid !== "string" || typeof row.publicKeyPem !== "string") {
       throw new Error(`A2A trusted keys ${file}[${index}] 缺 keyid/publicKeyPem（fail-closed）`);
     }
+    // 审查 M2：解析可选 profile（identity/role/trustLevel）——运营者据此把可信
+    // 对端提升到 T1+（触发 nonce / Agent Card JWS 强制），否则签名请求恒为 T0。
+    const profile: KeyProfile = {};
+    if (row.profile !== undefined && typeof row.profile === "object" && row.profile !== null) {
+      const p = row.profile as Record<string, unknown>;
+      if (typeof p.identity === "string") profile.identity = p.identity;
+      if (typeof p.organization === "string") profile.organization = p.organization;
+      if (p.role === "buyer" || p.role === "merchant") profile.role = p.role;
+      if (p.trustLevel === "T0" || p.trustLevel === "T1" || p.trustLevel === "T2" || p.trustLevel === "T3") {
+        profile.trustLevel = p.trustLevel;
+      }
+    }
     const key: SigningKey = {
       keyid: row.keyid,
       algorithm: row.algorithm === "es256" ? "es256" : "ed25519",
       publicKeyPem: row.publicKeyPem,
     };
+    if (Object.keys(profile).length > 0) {
+      key.profile = profile;
+    }
     return key;
   });
 }

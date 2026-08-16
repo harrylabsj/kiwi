@@ -68,6 +68,17 @@ const DOCUMENT_DESTINATION_TYPES: ReadonlySet<DestinationType> = new Set<Destina
   "sales_handoff",
 ]);
 
+// fail-closed 词表分区不变量：每个 destination_type 必须恰好落在 URL/SESSION/
+// DOCUMENT 三类之一——漏分会让校验静默失效（安全策略不生效），多分造成语义冲突。
+for (const type of DESTINATION_TYPES) {
+  const membership = Number(URL_DESTINATION_TYPES.has(type))
+    + Number(SESSION_DESTINATION_TYPES.has(type))
+    + Number(DOCUMENT_DESTINATION_TYPES.has(type));
+  if (membership !== 1) {
+    throw new Error(`destination_type "${type}" must belong to exactly one of URL/SESSION/DOCUMENT sets`);
+  }
+}
+
 /**
  * 归一化后的目的地（不可变）。`payload` 必须是最小化、schema-validated、
  * 非秘密数据（KTH rev0.3 §5/§11.3）。
@@ -109,11 +120,12 @@ export function validateDestination(input: unknown, path = "destination"): Desti
   if (URL_DESTINATION_TYPES.has(type) && !/^https?:\/\/\S+$/.test(ref)) {
     throw schemaError(`${path}/ref`, `destination type "${type}" requires an http(s) URL ref`);
   }
-  if (SESSION_DESTINATION_TYPES.has(type) || DOCUMENT_DESTINATION_TYPES.has(type)) {
-    if (/^https?:\/\//.test(ref) && !URL_DESTINATION_TYPES.has(type)) {
-      // 会话/文档类目的地不禁止 URL（如 buyer_erp_request 的 ERP 端点引用），
-      // 但不会被当作可点击链接处理——ref 语义由 destination type 决定。
-    }
+  // 审查 M3：会话类目的地（ucp_checkout / ucp_order / merchant_checkout_session）
+  // 是 opaque 会话/订单 id，不得携带 URL——否则绕过 URL 安全策略，把 URL 直接
+  // 呈现给买家（钓鱼 / 内部地址面）。文档类目的地（buyer_erp_request 等）仍允许
+  // URL 形 ref（ERP 端点引用，ref 语义由 destination type 决定，不做 URL 探测）。
+  if (SESSION_DESTINATION_TYPES.has(type) && /^https?:\/\//.test(ref)) {
+    throw schemaError(`${path}/ref`, `destination type "${type}" requires an opaque session ref, not a URL`);
   }
   let payload: Readonly<Record<string, unknown>> | undefined;
   if (obj.payload !== undefined) {
