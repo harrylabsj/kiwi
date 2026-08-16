@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kiwi.harrylabsj.com/schemas/effective-authorization/1.0/schema.json",
+  "title": "Kiwi EffectiveAuthorization v0.1",
+  "description": "EffectiveAuthorization = PackageTrust ∩ HostToolPolicy ∩ RuntimeApproval ∩ KiwiDelegationPolicy ∩ MerchantHardPolicy（战略 v2.5 §5.5）。五个相互独立边界的交集；任意一层拒绝即拒绝（deny 优先）；任何宿主 UI 的『允许』都不能提升 Kiwi/Merchant 的硬策略。AcceptNonbinding、handoff 以及超出默认披露范围的信息必须写入持久 approval_id；重启后仍可验证授权主体、范围、版本、过期时间与被批准 candidate digest。本 schema 把『granted ⇔ 五层全部 allowed』与『任一层 denied ⇒ denied』编码为可机检不变量。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "authorization_id",
+    "action",
+    "subject",
+    "layers",
+    "effective_decision",
+    "decided_at"
+  ],
+  "properties": {
+    "authorization_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "task_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "discover",
+        "inquiry_rfq",
+        "compare_offers",
+        "counter_offer",
+        "accept_nonbinding",
+        "handoff",
+        "payment"
+      ]
+    },
+    "subject": {
+      "description": "授权主体：Merchant 只需要知道这是哪个可验证 Buyer Session、由什么 Principal/组织授权、授权范围、何时过期（§8.1）。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["buyer_agent_id", "session_id", "delegation_id", "expires_at"],
+      "properties": {
+        "buyer_agent_id": { "$ref": "#/$defs/identifier" },
+        "session_id": { "$ref": "#/$defs/identifier" },
+        "delegation_id": { "$ref": "#/$defs/identifier" },
+        "expires_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "layers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "package_trust",
+        "host_tool_policy",
+        "runtime_approval",
+        "kiwi_delegation_policy",
+        "merchant_hard_policy"
+      ],
+      "properties": {
+        "package_trust": {
+          "description": "插件/包是否来自可信来源、签名与版本是否允许（§6.11）。不可信包不得获得商业写能力。",
+          "$ref": "#/$defs/layer_decision"
+        },
+        "host_tool_policy": {
+          "description": "宿主 Agent 是否允许调用该工具/暴露相关字段。宿主只可收紧，不可放宽下游策略。",
+          "$ref": "#/$defs/layer_decision"
+        },
+        "runtime_approval": {
+          "description": "当前 task/candidate 的持久审批记录。AcceptNonbinding、handoff、敏感 disclosure 必须可审计。",
+          "$ref": "#/$defs/layer_decision"
+        },
+        "kiwi_delegation_policy": {
+          "description": "Principal 对金额、数量、商家、轮次、期限的委托边界（AUTO/ASK/NEVER + 硬约束）。",
+          "$ref": "#/$defs/layer_decision"
+        },
+        "merchant_hard_policy": {
+          "description": "商家底价、MOQ、区域、客户等级、合规与人工审核。Merchant 最终商业硬边界。",
+          "$ref": "#/$defs/layer_decision"
+        }
+      }
+    },
+    "effective_decision": {
+      "type": "string",
+      "enum": ["granted", "denied"]
+    },
+    "approval_id": {
+      "description": "AcceptNonbinding / handoff / 敏感 disclosure 必须绑定持久 approval_id。",
+      "$ref": "#/$defs/identifier"
+    },
+    "expires_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "decided_at": {
+      "$ref": "#/$defs/timestamp"
+    }
+  },
+  "allOf": [
+    {
+      "description": "deny 优先：任一独立层 denied ⇒ effective_decision 必须为 denied。",
+      "if": {
+        "anyOf": [
+          { "type": "object", "properties": { "layers": { "type": "object", "properties": { "package_trust": { "type": "object", "properties": { "status": { "const": "denied" } } } } } } },
+          { "type": "object", "properties": { "layers": { "type": "object", "properties": { "host_tool_policy": { "type": "object", "properties": { "status": { "const": "denied" } } } } } } },
+          { "type": "object", "properties": { "layers": { "type": "object", "properties": { "runtime_approval": { "type": "object", "properties": { "status": { "const": "denied" } } } } } } },
+          { "type": "object", "properties": { "layers": { "type": "object", "properties": { "kiwi_delegation_policy": { "type": "object", "properties": { "status": { "const": "denied" } } } } } } },
+          { "type": "object", "properties": { "layers": { "type": "object", "properties": { "merchant_hard_policy": { "type": "object", "properties": { "status": { "const": "denied" } } } } } } }
+        ]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "effective_decision": { "const": "denied" }
+        }
+      }
+    },
+    {
+      "description": "granted ⇒ 五层必须全部 allowed（交集语义；不是『多数层允许』）。",
+      "if": {
+        "type": "object",
+        "properties": { "effective_decision": { "const": "granted" } }
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "layers": {
+            "type": "object",
+            "properties": {
+              "package_trust": { "type": "object", "properties": { "status": { "enum": ["allowed"] } } },
+              "host_tool_policy": { "type": "object", "properties": { "status": { "enum": ["allowed"] } } },
+              "runtime_approval": { "type": "object", "properties": { "status": { "enum": ["allowed"] } } },
+              "kiwi_delegation_policy": { "type": "object", "properties": { "status": { "enum": ["allowed"] } } },
+              "merchant_hard_policy": { "type": "object", "properties": { "status": { "enum": ["allowed"] } } }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "identifier": {
+      "description": "对端 opaque 标识符（同 KNP/1.0 §6）：非空、≤256、无首尾空白、无控制字符。",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^\\S(.*\\S)?$"
+    },
+    "timestamp": {
+      "description": "RFC 3339 时间戳（同 KNP/1.0 §7.3）。",
+      "type": "string",
+      "format": "date-time"
+    },
+    "layer_decision": {
+      "description": "单层授权判定：allowed / denied。本 schema 不含 not_applicable——交集语义要求五层全部 allowed 才 granted。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["allowed", "denied"]
+        },
+        "reason": { "type": "string", "maxLength": 1024 }
+      }
+    }
+  }
+}

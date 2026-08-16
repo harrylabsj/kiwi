@@ -27,7 +27,42 @@ docs/kiwi-agent-commerce-strategy-upgrade-2026-08-13.md
 docs/kiwi-product-layer-refactor-rev1.2.md
 ```
 
-- `kiwi-agent-commerce-strategy-upgrade-2026-08-13.md`：已批准的三产品战略升级与执行基线；
+## Northbound（PILOT DRAFT，v0.1）
+
+```text
+docs/kiwi-buyer-mcp-facade-v0.1.md
+```
+
+## Compatibility（Phase 3 语义不变量）
+
+```text
+compatibility/ucp-knp-boundary.md
+compatibility/host-harness-matrix.md
+compatibility/merchant-three-plane.md
+compatibility/openclaw-tri-role-separation.md
+compatibility/knp-ucp-capability.md
+```
+
+- UCP/KNP 边界：能力层归属 + machine-checkable 不变量（工具词表、三副作用 false、
+  payment never、商品 truth 不落 Kiwi、transport 可组合）。
+- Host/Harness Matrix：跨宿主语义不变量（schema/授权门/脱敏/幂等/恢复/错误分类/
+  协议摘要/版本兼容）+ 接入方向矩阵（Hermes/DeepSeek Harness/resident daemon/
+  kiwi runtime 当前状态）。
+- Merchant 三 Plane：shopping-cli 的 Commerce / Merchant Core / Intelligence&Ops
+  映射（§7.5），Failure rule 验证（`scripts/pilot/merchant-three-plane-check.sh`：
+  Intelligence 离线时 RFQ 报价 / human_required 升级 / 运营 resolve 均工作）。
+- OpenClaw 三角色分离（§6.8）：当前 shopping-plugin 混装 buyer/merchant 工具 →
+  `kiwi-buyer-openclaw` / `kiwi-merchant-openclaw` / `kiwi-reasoning-openclaw-acp`
+  目标映射 + 迁移规则（future OpenClaw gate）。
+- KNP 作为 UCP capability（Phase 3 TO VALIDATE）：vendor-root capability 判定 +
+  §8.3 命名不变量。
+
+- `docs/kiwi-buyer-mcp-facade-v0.1.md`：战略 v2.5 北向面薄 facade —— 四份冻结
+  Northbound 契约（CommerceIntent/DelegationPolicy/EffectiveAuthorization/
+  PersistentTask）、7 个高层 Sourcing Tools、持久 Task/Approval 存储、五层授权
+  deny 优先、MCP stdio server（`kiwi mcp serve`）。契约 schema 单一来源在
+  `contracts/`，运行时校验 `src/contracts/northbound-schema.ts`。
+- 与 `kiwi-agent-commerce-strategy-upgrade-2026-08-13.md`：已批准的三产品战略升级与执行基线；
   统一产品定位、协议分层、P0/P1/P2 顺序、阶段门、验收标准和对外声明纪律。
 - rev1.2：D0–D4 全部实现（readiness audit 见
   `docs/reviews/kiwi-product-layer-readiness-audit-2026-08-07.md`）；

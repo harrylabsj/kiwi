@@ -1,0 +1,32 @@
+{
+  "intent_id": "intent-20260815-0001",
+  "intent_type": "purchase",
+  "items": [
+    {
+      "query": "USB-C 扩展坞 8 口 千兆网口 4K 60Hz",
+      "sku": "dock-usbc-8in1",
+      "attributes": { "interface": "usb-c", "ports": 8, "video": "4k60" },
+      "quantity": { "value": 3, "unit": "台" }
+    },
+    {
+      "query": "HDMI 2.1 线缆 2 米",
+      "quantity": { "value": 10, "unit": "根" }
+    }
+  ],
+  "constraints": {
+    "budget": { "currency": "CNY", "amount_minor": 1200000 },
+    "currency": "CNY",
+    "delivery_location": "杭州市西湖区",
+    "deadline": "2026-08-30T18:00:00+08:00",
+    "mandatory_requirements": ["正品", "支持增值税专用发票"]
+  },
+  "preferences": {
+    "brands": ["绿联", "Anker"],
+    "quality": "企业级",
+    "service_priorities": ["售后", "交期"]
+  },
+  "context_projection": {
+    "disclosure_boundary": "commerce_required",
+    "projected_fields": ["items", "constraints", "preferences"]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "authorization_id": "authz-broken-deny",
+  "task_id": "task-rfq-0002",
+  "action": "handoff",
+  "subject": {
+    "buyer_agent_id": "buyer-agent:hermes-001",
+    "session_id": "session-0002",
+    "delegation_id": "dp-20260815-buyer-001",
+    "expires_at": "2026-09-15T10:00:00+08:00"
+  },
+  "layers": {
+    "package_trust": { "status": "allowed" },
+    "host_tool_policy": { "status": "allowed" },
+    "runtime_approval": { "status": "denied", "reason": "host UI allow 不能提升 Kiwi/Merchant 硬策略" },
+    "kiwi_delegation_policy": { "status": "allowed" },
+    "merchant_hard_policy": { "status": "allowed" }
+  },
+  "effective_decision": "granted",
+  "decided_at": "2026-08-15T11:00:00+08:00"
+}

@@ -55,6 +55,8 @@ import { FileOperatorEventStore, OperatorStoreError } from "./operator/store.js"
 import { createStrategyEngine } from "./operator/strategy.js";
 import { runTui } from "./operator/tui.js";
 import { runInit } from "./supervisor/init.js";
+import { runMcpServe } from "./mcp/cli.js";
+import { runHttpServe } from "./http/cli.js";
 import { runDown, runStatus, runUp, SupervisorError } from "./supervisor/manage.js";
 import { parseLogLines, runLogs } from "./supervisor/logs.js";
 import { StackConfigError } from "./supervisor/stack-config.js";
@@ -1074,6 +1076,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     process.stdout.write(`kiwi ${PRODUCT_VERSION}\n`);
     return EXIT.OK;
   }
+  // `kiwi mcp serve <raw flags>`：MCP server 有自己的 flag 集（--db/--principal/
+  // --agent/--session/--policy），不经过全局 parseArgs（会拒绝未知参数）。
+  if (argv[0] === "mcp" && argv[1] === "serve") {
+    return await runMcpServe(argv.slice(2));
+  }
+  // `kiwi buyer-api serve`：同样走独立 flag 集（--port/--host/--marketplace-url 等）。
+  if (argv[0] === "buyer-api" && argv[1] === "serve") {
+    return await runHttpServe(argv.slice(2));
+  }
   let args: ParsedArgs;
   try {
     args = parseArgs(argv);
@@ -1139,6 +1150,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         process.stderr.write("no log lines (processes not started yet or logs empty)\n");
       }
       return EXIT.OK;
+    }
+    if (cmd === "mcp") {
+      // `kiwi mcp serve` —— kiwi-buyer-mcp stdio server（战略 v2.5 §6.1）。
+      if (sub === "serve") return await runMcpServe(args.command.slice(2));
+      process.stderr.write("usage: kiwi mcp serve [--db <file>] [--principal <id>] [--agent <id>] [--session <id>] [--policy <file>]\n");
+      return EXIT.CONFIG;
+    }
+    if (cmd === "buyer-api") {
+      // `kiwi buyer-api serve` —— Buyer Core 的 HTTP 包装（§6.3 单核心多包装）。
+      if (sub === "serve") return await runHttpServe(args.command.slice(2));
+      process.stderr.write("usage: kiwi buyer-api serve [--db <file>] [--port <port>] [--host <host>] [--marketplace-url <url>] [--buyer-bootstrap-token <token>]\n");
+      return EXIT.CONFIG;
     }
     if (cmd === "metrics") {
       // v0.7.0 #21：从 buyer agent data dir 的 Ledger 事件计算 KTH 指标。

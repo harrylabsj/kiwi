@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kiwi.harrylabsj.com/schemas/delegation-policy/1.0/schema.json",
+  "title": "Kiwi DelegationPolicy v0.1",
+  "description": "Principal 对每一类商业动作的委托边界（战略 v2.5 §5.3）。商业 Agent 的真正风险不在『能不能调用工具』，而在『被授权做到哪一步』。每个动作映射为 AUTO / ASK / NEVER 之一，并支持价格、数量、时间、商家范围等硬限制。默认映射（§5.3）：discover=auto，inquiry_rfq=auto，compare_offers=auto，counter_offer=auto/受限，accept_nonbinding=ask，handoff=ask，payment=never。payment 恒为 never（KNP 不进入支付/资金托管，属硬不变量）。Host 许可只是 EffectiveAuthorization 的一层（§5.5），不得通过宿主 UI 提升本策略。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "policy_id",
+    "version",
+    "principal",
+    "actions",
+    "expires_at"
+  ],
+  "properties": {
+    "policy_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "principal": {
+      "description": "授权主体（human/company）opaque 标识，对 Merchant 只投影为可验证 Buyer Session，不泄露完整宿主身份（§8.1）。",
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "expires_at": {
+      "description": "委托有效期：过期后 Enter 可解释状态，可重新生成，不留幽灵 pending。",
+      "$ref": "#/$defs/timestamp"
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "discover",
+        "inquiry_rfq",
+        "compare_offers",
+        "counter_offer",
+        "accept_nonbinding",
+        "handoff",
+        "payment"
+      ],
+      "properties": {
+        "discover": { "$ref": "#/$defs/action_policy" },
+        "inquiry_rfq": { "$ref": "#/$defs/action_policy" },
+        "compare_offers": { "$ref": "#/$defs/action_policy" },
+        "counter_offer": { "$ref": "#/$defs/action_policy" },
+        "accept_nonbinding": { "$ref": "#/$defs/action_policy" },
+        "handoff": { "$ref": "#/$defs/action_policy" },
+        "payment": { "$ref": "#/$defs/payment_policy" }
+      }
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "description": "对端 opaque 标识符（同 KNP/1.0 §6）：非空、≤256、无首尾空白、无控制字符。",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^\\S(.*\\S)?$"
+    },
+    "timestamp": {
+      "description": "RFC 3339 时间戳（同 KNP/1.0 §7.3）。",
+      "type": "string",
+      "format": "date-time"
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "money": {
+      "description": "金额用最小单位整数（同 KNP/1.0 §7.1）。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["currency", "amount_minor"],
+      "properties": {
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "amount_minor": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "quantity": {
+      "description": "数量（同 KNP/1.0 §7.2）：value 为正数。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["value", "unit"],
+      "properties": {
+        "value": { "type": "number", "exclusiveMinimum": 0 },
+        "unit": { "type": "string", "minLength": 1 }
+      }
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["auto", "ask", "never"]
+    },
+    "action_policy": {
+      "description": "单类商业动作的委托模式 + 可选说明。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "$ref": "#/$defs/mode" },
+        "note": { "type": "string", "maxLength": 1024 }
+      }
+    },
+    "payment_policy": {
+      "description": "支付/资金托管（§10 产品边界）：KNP 不进入支付与资金托管，恒为 never。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "const": "never" },
+        "note": { "type": "string", "maxLength": 1024 }
+      }
+    },
+    "limits": {
+      "description": "AUTO/ASK 的硬边界：金额、数量、商家范围、币种、轮次、期限。",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "max_total_price": { "$ref": "#/$defs/money" },
+        "max_unit_price": { "$ref": "#/$defs/money" },
+        "max_quantity": { "$ref": "#/$defs/quantity" },
+        "max_rounds": { "type": "integer", "minimum": 0 },
+        "allowed_merchants": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "allowed_currencies": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/currency" }
+        },
+        "deadline": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  }
+}

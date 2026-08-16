@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kiwi.harrylabsj.com/schemas/persistent-task/1.0/schema.json",
+  "title": "Kiwi Persistent Task / Approval v0.1",
+  "description": "跨进程、跨审批、跨 Merchant 操作必须落到持久任务模型（战略 v2.5 §6.2）。『只有 5—7 个高层工具』不能替代任务生命周期设计：插件和 MCP 连接断开后，Kiwi 仍能解释任务现在在哪里、为什么停住、是否可重试、是否已失效。稳定标识 task_id / candidate_id / approval_id / agreement_id 重启后仍可解析，不得依赖进程内对象或宿主 session 作为权威标识。所有写操作显式携带 idempotency_key；定义 retry、timeout、cancel、resume 与 crash recovery。Offer/candidate/approval/delegation 均有 expires_at，过期后进入可解释状态，可重新生成，不留幽灵 pending。多 Merchant fan-out 允许部分成功（status=partial_success），每个结果保留 provenance、失败分类与 retryability。Buyer Core 持久存储是 task/pending/approval 的唯一权威；Plugin、MCP App、Host UI 只投影状态，不保存第二套状态机。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "task_kind",
+    "status",
+    "idempotency_key",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "task_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "task_kind": {
+      "type": "string",
+      "enum": ["search", "request_quotes", "negotiate", "accept_agreement", "handoff"]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "in_progress",
+        "awaiting_approval",
+        "partial_success",
+        "succeeded",
+        "failed",
+        "expired",
+        "cancelled"
+      ]
+    },
+    "idempotency_key": {
+      "description": "写操作幂等键：相同 key 的重复提交返回原任务结果，不产生重复写入。",
+      "$ref": "#/$defs/identifier"
+    },
+    "intent_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "delegation_policy_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "created_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "updated_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "expires_at": {
+      "description": "任务整体过期时间；过期后进入 expired 可解释状态。",
+      "$ref": "#/$defs/timestamp"
+    },
+    "resumable": {
+      "description": "crash 后是否可从持久 checkpoint 恢复。",
+      "type": "boolean"
+    },
+    "resumed_from_task_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "candidates": {
+      "description": "多 Merchant fan-out 的每个子结果；允许部分失败。",
+      "type": "array",
+      "items": { "$ref": "#/$defs/candidate_record" }
+    },
+    "intent": {
+      "description": "本任务操作的 CommerceIntent（§5.2）；由 intent_id 关联，随任务记录持久化。",
+      "type": "object",
+      "additionalProperties": true
+    },
+    "steps": {
+      "description": "磋商步骤记录（counter_offer / clarification），受 DelegationPolicy 轮次限制。",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["round", "action"],
+        "properties": {
+          "round": { "type": "integer", "minimum": 1 },
+          "action": { "type": "string", "enum": ["counter_offer", "clarification"] },
+          "summary": { "type": "string" }
+        }
+      }
+    },
+    "approval": {
+      "$ref": "#/$defs/approval_record"
+    },
+    "agreement_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "handoff_ref": {
+      "$ref": "#/$defs/handoff_ref"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "description": "对端 opaque 标识符（同 KNP/1.0 §6）：非空、≤256、无首尾空白、无控制字符。",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^\\S(.*\\S)?$"
+    },
+    "timestamp": {
+      "description": "RFC 3339 时间戳（同 KNP/1.0 §7.3）。",
+      "type": "string",
+      "format": "date-time"
+    },
+    "digest": {
+      "description": "内容摘要（同 KNP/1.0 §19）：sha256:<64 位小写十六进制>。",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "candidate_record": {
+      "description": "单个 Merchant 的 fan-out 子任务结果。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_id", "merchant_id", "status"],
+      "properties": {
+        "candidate_id": { "$ref": "#/$defs/identifier" },
+        "merchant_id": { "type": "string", "minLength": 1 },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "succeeded", "failed", "expired", "pending_approval"]
+        },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "failure": { "$ref": "#/$defs/failure" },
+        "expires_at": { "$ref": "#/$defs/timestamp" },
+        "retryable": { "type": "boolean" }
+      }
+    },
+    "provenance": {
+      "description": "结果来源：Merchant 外部回复/协商标识，用于 Verified Agreement 审计（§12）。",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "merchant_reply_id": { "type": "string", "minLength": 1 },
+        "negotiation_id": { "$ref": "#/$defs/identifier" },
+        "offer_id": { "$ref": "#/$defs/identifier" },
+        "source": { "type": "string", "minLength": 1 }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification"],
+      "properties": {
+        "classification": {
+          "type": "string",
+          "enum": ["timeout", "rejected", "unreachable", "protocol_error", "expired", "other"]
+        },
+        "retryable": { "type": "boolean" },
+        "detail": { "type": "string", "maxLength": 4096 }
+      }
+    },
+    "approval_record": {
+      "description": "持久审批记录：AcceptNonbinding / handoff / 敏感 disclosure 必须写入持久 approval_id，重启后仍可验证授权主体、范围、版本、过期时间与被批准的 candidate digest。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approval_id", "action", "status"],
+      "properties": {
+        "approval_id": { "$ref": "#/$defs/identifier" },
+        "action": {
+          "type": "string",
+          "enum": ["accept_nonbinding", "handoff", "sensitive_disclosure"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "denied", "expired"]
+        },
+        "candidate_digest": { "$ref": "#/$defs/digest" },
+        "approved_authorization_id": { "$ref": "#/$defs/identifier" },
+        "expires_at": { "$ref": "#/$defs/timestamp" },
+        "decided_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "handoff_ref": {
+      "description": "Agreement → UCP Checkout / merchant transaction endpoint 的 handoff 引用（§5.3/KTH）。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handoff_id", "destination_type"],
+      "properties": {
+        "handoff_id": { "$ref": "#/$defs/identifier" },
+        "destination_type": { "type": "string", "minLength": 1 },
+        "url": { "type": "string" }
+      }
+    }
+  }
+}

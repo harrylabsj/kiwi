@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+**Northbound（战略 v2.5 Phase 1 / Phase 2 Hermes 轨）**：
+- 冻结四份 Northbound 契约（v0.1）：CommerceIntent / DelegationPolicy /
+  EffectiveAuthorization / PersistentTask，schema 单一来源 `contracts/`，
+  向量测试 + 运行时校验 `src/contracts/northbound-schema.ts`。
+- 新增 `kiwi mcp serve`（kiwi-buyer-mcp 薄 facade）：手写 stdio MCP server，
+  暴露 7 个高层 Sourcing Tools（kiwi_search/request_quotes/get_task/negotiate/
+  accept_agreement/get_agreement/handoff），持久 Task/Approval store
+  （node:sqlite），五层授权 deny 优先，幂等 + 重启恢复 + fail-closed 协议面。
+- Hermes Host reference integration：`integrations/hosts/hermes/SKILL.md` +
+  MCP 配置；Hermes 自动发现 7 工具并真实调用 kiwi_search（端到端验证）。
+- `--catalog-url` 接线 kiwi-catalog 发现（KiwiCatalogMerchantIndex，
+  §3.2 Discovery & Routing Index）；catalog 不可达时优雅降级 note。
+- **真实 RFQ fan-out（Phase 2 Supply 轨）**：`MarketplaceQuoteFetcher`
+  （`--marketplace-url` + `--buyer-bootstrap-token`）经 shopping-cli marketplace
+  创建定向会话、轮询商家 daemon 真实回复，candidate 携带 provenance +
+  reply_text（真实价格/库存/交付）。`scripts/pilot/` 自建 5 家真实数据商家
+  （办公/IT 48 商品 CSV 数据源，含共享大宗商品差异化定价）+ marketplace/商家
+  daemon 启动脚本。
+- **真实发现 + 证据门（Phase 2）**：`MarketplaceMerchantIndex` 用 `/search/products`
+  商品 FTS 路由 + CJK 相关度过滤 → 各商家 matching_skus（RFQ 用商家自有 SKU，
+  多商家比价成立）；`register-catalog.sh` 把 5 家商家注册进 kiwi-catalog
+  （admin token + merchant_id 绑定）；`evidence-gate.mjs` 批量真实 RFQ +
+  可审计报告（26/26 Qualified RFQ，5 家比价 DOCK-6IN1 真实报价
+  189/199/209/185/195 CNY）。
+- **真实磋商（Negotiator）**：`MarketplaceNegotiator`（claim→counter(proposal)→
+  complete→轮询商家回复），循环端到端验证（CONV-0071）；proposal 库存/价格从
+  商家回复解析对齐（stale_inventory 防护）。
+- **DeepSeek Harness 第三轨**：`integrations/harnesses/deepseek-harness/`——
+  受限 ReasoningBackend（只产不可信 DecisionCandidate，0 越权写）；
+  contract gate **双模式全过**：mock 24/24 + 真实 DeepSeek V4 Flash（`--real`，
+  schema 驱动 + json_object）24/24，均 **0 越权写**；`npm run verify:harness` 入 verify 链。
+- **单核心多包装（Phase 3 §6.3）**：`buildBuyerService` 共享 Buyer Core；
+  新增 HTTP 包装 `kiwi buyer-api serve`（`src/http/`）——与 MCP 同一核心、
+  同一语义不变量，真实冒烟拿到商家报价。MCP/HTTP 均为薄适配器。
+- **Merchant UCP Profile（§7.1/§7.8）**：`src/merchant/ucp-profile.ts` 生成合法
+  `/.well-known/ucp` profile（catalog service + KNP capability，§8.3 命名不变量）；
+  HTTP 端点 `GET /merchants/:id/ucp`（`--ucp-config`）。
+- **Merchant Ops API（§7.6/§7.7）**：`src/merchant/ops.ts`（MerchantOpsService：
+  RFQ 队列 / human_required / resolve-review / analytics，merchant token 作用域，
+  命名空间与 buyer 分离）；HTTP `GET /merchant/:id/{rfqs,human-review,analytics}`
+  + `POST /merchant/:id/resolve-review`（`--merchant-tokens`）。
+- **插件发布供应链（§6.11）**：`scripts/verify-facade-supply-chain.mjs` 生成运行时
+  依赖 SBOM（lock 的 resolved+integrity，fail-closed）+ 发布物 sha256 + 版本兼容
+  fail-closed；`npm run verify:supply-chain` 入 verify 链。
+- **Merchant Independence（§7.4）**：`scripts/pilot/merchant-independence.sh`
+  关推理 harness 后商家独立应答真实 RFQ。
+- **兼容性工件**：`compatibility/{ucp-knp-boundary,host-harness-matrix,merchant-three-plane}.md`
+  登记入 CURRENT-DOCS（§6.10 语义不变量 + UCP/KNP 边界 + §7.5 三 Plane）。
+- **Merchant 三 Plane（§7.5）**：`merchant-three-plane-check.sh` 验证 Failure rule
+  （Intelligence 离线时 Commerce+Merchant Core 仍 RFQ 报价 / human_required 升级 /
+  运营 resolve，PASS）。
+- 文档：`docs/kiwi-buyer-mcp-facade-v0.1.md` 登记入 CURRENT-DOCS.md。
+
 - A2A 1.0 KNP 响应统一使用 `text`/`data` Part 与 `ROLE_*` wire 形状，0.3 兼容响应保持不变。
 - malformed 1.0 Part 现在在协议边界 fail-closed，避免远端输入触发内部 500。
 - Python 参考实现与 CSV/Excel 适配器增加响应、请求体、文件、行、列和压缩包资源上限。

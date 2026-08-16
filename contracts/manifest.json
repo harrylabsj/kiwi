@@ -1,8 +1,32 @@
 {
   "manifest_version": 1,
   "authority": "kiwi/contracts",
-  "bundle_sha256": "2dbbc52a1113dc5c05dc544802571ee188b44e1567d6bfb0cd8ccd87ea7f4998",
+  "bundle_sha256": "2350ecaacebb791cd980cc2886511359e356378a6f18cdecc1ac6331c31b0e70",
   "contracts": [
+    {
+      "id": "commerce-intent",
+      "version": "1.0",
+      "path": "contracts/commerce-intent/1.0/schema.json",
+      "sha256": "58e24c3d41dab8d582c7e74b540546ccad601b0e219ea1f988eca21c9107a7fb"
+    },
+    {
+      "id": "delegation-policy",
+      "version": "1.0",
+      "path": "contracts/delegation-policy/1.0/schema.json",
+      "sha256": "62a146055a68f9a1014c99ed58d6ba02160e17441f9577de0fd134023c038341"
+    },
+    {
+      "id": "effective-authorization",
+      "version": "1.0",
+      "path": "contracts/effective-authorization/1.0/schema.json",
+      "sha256": "7a04d97de2c5b2777766ee260ca8a8a2bce5024e2bff817a64ad6ff327856aa1"
+    },
+    {
+      "id": "persistent-task",
+      "version": "1.0",
+      "path": "contracts/persistent-task/1.0/schema.json",
+      "sha256": "f01c7df2dd439350daddbc272985bf4caa3db50b9c741cd1454799fdad1afdcc"
+    },
     {
       "id": "candidate-agent-dto",
       "version": "1.0",

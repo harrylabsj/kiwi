@@ -1,0 +1,7 @@
+{
+  "intent_id": "intent-broken-0001",
+  "intent_type": "procurement",
+  "constraints": {
+    "budget": { "currency": "CNY", "amount_minor": 100000 }
+  }
+}
