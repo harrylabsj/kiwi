@@ -49,7 +49,7 @@ import {
   StaticBearerAuthVerifier,
   type ThrottleOptions,
 } from "./server/index.js";
-import { HttpMessageSignatureVerifier } from "../trust/identity/index.js";
+import { HttpMessageSignatureVerifier, InMemoryNonceStore } from "../trust/identity/index.js";
 import {
   loadA2aTrustedKeys,
   loadOrCreateA2aSigningIdentity,
@@ -269,6 +269,9 @@ function authVerifierFromEnv(ctx: AuthFromEnvContext): AuthVerifier | undefined 
       // 设计意图：匿名 T0 放行，签名请求更高信任——不阻塞任何 kiwi buyer。
       anonymousTrustLevel: "T0",
       anonymousIdentity: "anonymous",
+      // 审查 M2：此前未接 nonceStore——签名请求的 nonce 永不被校验，重放保护
+      // 失效（JWS/nonce 机制是死代码）。接入内存 nonce 存储后，T1+ 键可强制 nonce。
+      nonceStore: new InMemoryNonceStore(),
     });
   }
   if (raw.startsWith("bearer:")) {

@@ -510,5 +510,11 @@ describe("A2A client URL 安全（SSRF 防护）", () => {
     // 内嵌公网 IPv4 不误判（NAT64/6to4 映射公网地址非保留）。
     expect(isReservedIpv6("64:ff9b::808:808").reserved).toBe(false); // → 8.8.8.8
     expect(isReservedIpv6("2002:808:808::").reserved).toBe(false); // → 8.8.8.8
+    // 审查 H3：IPv4-mapped（::ffff:/64）两种合法写法都必须判保留，不得 fail-open。
+    expect(isReservedIpv6("::ffff:127.0.0.1").reserved).toBe(true); // 点分四段 → loopback
+    expect(isReservedIpv6("::ffff:169.254.169.254").reserved).toBe(true); // 点分四段 → link-local
+    expect(isReservedIpv6("::ffff:7f00:0001").reserved).toBe(true); // 两段 hex → 127.0.0.1
+    expect(isReservedIpv6("::ffff:8.8.8.8").reserved).toBe(false); // 内嵌公网不误判
+    expect(isReservedIpv6("::ffff:808:808").reserved).toBe(false); // 两段 hex → 8.8.8.8
   });
 });
