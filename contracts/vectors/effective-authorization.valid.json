@@ -1,0 +1,23 @@
+{
+  "authorization_id": "authz-20260815-0001",
+  "task_id": "task-rfq-0001",
+  "candidate_id": "cand-merchant-001-001",
+  "action": "accept_nonbinding",
+  "subject": {
+    "buyer_agent_id": "buyer-agent:hermes-001",
+    "session_id": "session-0001",
+    "delegation_id": "dp-20260815-buyer-001",
+    "expires_at": "2026-09-15T10:00:00+08:00"
+  },
+  "layers": {
+    "package_trust": { "status": "allowed", "reason": "signed by kiwi-release CA, version pinned" },
+    "host_tool_policy": { "status": "allowed", "reason": "host allows kiwi_accept_agreement" },
+    "runtime_approval": { "status": "allowed", "reason": "persistent approval approved" },
+    "kiwi_delegation_policy": { "status": "allowed", "reason": "accept_nonbinding=ask, approval granted" },
+    "merchant_hard_policy": { "status": "allowed", "reason": "within floor/MOQ" }
+  },
+  "effective_decision": "granted",
+  "approval_id": "appr-20260815-0001",
+  "expires_at": "2026-08-16T10:00:00+08:00",
+  "decided_at": "2026-08-15T11:00:00+08:00"
+}

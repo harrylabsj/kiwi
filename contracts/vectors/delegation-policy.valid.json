@@ -1,0 +1,25 @@
+{
+  "policy_id": "dp-20260815-buyer-001",
+  "version": "1.0",
+  "principal": "company:acme-hangzhou",
+  "created_at": "2026-08-15T10:00:00+08:00",
+  "expires_at": "2026-09-15T10:00:00+08:00",
+  "actions": {
+    "discover": { "mode": "auto" },
+    "inquiry_rfq": { "mode": "auto" },
+    "compare_offers": { "mode": "auto" },
+    "counter_offer": { "mode": "auto", "note": "受限 AUTO：受 limits 约束" },
+    "accept_nonbinding": { "mode": "ask" },
+    "handoff": { "mode": "ask" },
+    "payment": { "mode": "never" }
+  },
+  "limits": {
+    "max_total_price": { "currency": "CNY", "amount_minor": 1200000 },
+    "max_unit_price": { "currency": "CNY", "amount_minor": 400000 },
+    "max_quantity": { "value": 50, "unit": "件" },
+    "max_rounds": 3,
+    "allowed_merchants": ["merchant-001", "merchant-002"],
+    "allowed_currencies": ["CNY"],
+    "deadline": "2026-08-30T18:00:00+08:00"
+  }
+}

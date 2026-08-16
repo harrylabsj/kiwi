@@ -1,0 +1,22 @@
+{
+  "merchant-hz-xihu": {
+    "domain": "xihu-digital.example.com",
+    "catalogEndpoint": "http://127.0.0.1:8765/search/products"
+  },
+  "merchant-sh-pudong": {
+    "domain": "sh-pudong-office.example.com",
+    "catalogEndpoint": "http://127.0.0.1:8765/search/products"
+  },
+  "merchant-bj-zhongguancun": {
+    "domain": "bj-zgc-it.example.com",
+    "catalogEndpoint": "http://127.0.0.1:8765/search/products"
+  },
+  "merchant-gz-tianhe": {
+    "domain": "gz-tianhe-elec.example.com",
+    "catalogEndpoint": "http://127.0.0.1:8765/search/products"
+  },
+  "merchant-sz-nanshan": {
+    "domain": "sz-nanshan-office.example.com",
+    "catalogEndpoint": "http://127.0.0.1:8765/search/products"
+  }
+}

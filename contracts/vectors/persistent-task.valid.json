@@ -1,0 +1,45 @@
+{
+  "task_id": "task-rfq-0001",
+  "task_kind": "request_quotes",
+  "status": "partial_success",
+  "idempotency_key": "rfq-20260815-0001-k3",
+  "intent_id": "intent-20260815-0001",
+  "delegation_policy_id": "dp-20260815-buyer-001",
+  "created_at": "2026-08-15T11:00:00+08:00",
+  "updated_at": "2026-08-15T11:02:30+08:00",
+  "expires_at": "2026-08-16T11:00:00+08:00",
+  "resumable": true,
+  "candidates": [
+    {
+      "candidate_id": "cand-merchant-001-001",
+      "merchant_id": "merchant-001",
+      "status": "succeeded",
+      "provenance": {
+        "merchant_reply_id": "msg-20260815-001",
+        "negotiation_id": "neg-merchant-001-1",
+        "offer_id": "offer-merchant-001-1",
+        "source": "a2a"
+      },
+      "expires_at": "2026-08-15T11:30:00+08:00",
+      "retryable": false
+    },
+    {
+      "candidate_id": "cand-merchant-002-001",
+      "merchant_id": "merchant-002",
+      "status": "failed",
+      "failure": {
+        "classification": "timeout",
+        "retryable": true,
+        "detail": "merchant 10s 无响应"
+      },
+      "retryable": true
+    }
+  ],
+  "approval": {
+    "approval_id": "appr-20260815-0001",
+    "action": "accept_nonbinding",
+    "status": "pending",
+    "candidate_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expires_at": "2026-08-15T12:00:00+08:00"
+  }
+}

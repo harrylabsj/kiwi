@@ -1,0 +1,24 @@
+# Hermes MCP 配置（追加到 ~/.hermes/config.yaml 的 mcp_servers 下）
+#
+# kiwi-buyer-mcp：Hermes 自动发现并注册 7 个 Kiwi Sourcing Tools。
+# 持久 store 在 <KIWI_ROOT>/.kiwi/mcp/state.sqlite；principal 建议按 Hermes 用户区分。
+#
+# 复制到 ~/.hermes/config.yaml:
+#
+# mcp_servers:
+#   kiwi-buyer-mcp:
+#     command: "node"
+#     args:
+#       - "/Users/<user>/coding/kiwi/dist/cli.js"
+#       - "mcp"
+#       - "serve"
+#       - "--db"
+#       - "/Users/<user>/coding/kiwi/.kiwi/mcp/hermes.sqlite"
+#       - "--principal"
+#       - "hermes:<user>"
+#       - "--agent"
+#       - "buyer-agent:hermes"
+#
+# 安全默认（未给 --policy）：discover/inquiry_rfq/compare/counter_offer=AUTO，
+# accept_nonbinding/handoff=ASK，payment=NEVER。硬约束与更多策略见
+# contracts/delegation-policy/1.0/schema.json。

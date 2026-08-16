@@ -1,6 +1,6 @@
 {
   "lock_version": 1,
-  "contract_bundle_sha256": "2dbbc52a1113dc5c05dc544802571ee188b44e1567d6bfb0cd8ccd87ea7f4998",
+  "contract_bundle_sha256": "2350ecaacebb791cd980cc2886511359e356378a6f18cdecc1ac6331c31b0e70",
   "contract_source_commit": "009bc25cdae2668c8fd19ccedcc4e0c64a34f6be",
   "repositories": {
     "kiwi": {

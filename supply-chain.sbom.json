@@ -1,0 +1,48 @@
+{
+  "sbom_version": 1,
+  "package": "@harrylabsj/kiwi",
+  "package_version": "0.7.9",
+  "runtime_dependencies": [
+    {
+      "name": "@earendil-works/pi-agent-core",
+      "spec": "0.83.0",
+      "resolved": "0.83.0",
+      "integrity": "sha512-RorGp9OH5l3ElpuC5a5ZQ2eWcchZGXflXRzVGkV99y3y6tT+LLNyxoYIdVKvTKWEObwhExeQbTH0fI2tE4iX4g=="
+    },
+    {
+      "name": "@earendil-works/pi-ai",
+      "spec": "0.83.0",
+      "resolved": "0.83.0",
+      "integrity": "sha512-m3IZD4g3er0V8TC9+Vpgw/sjTKqcJlkcIBy/JvsgRubuuik3tAVzyugUg4rVrShIkkOT69mEd34NEqKUIsl6JQ=="
+    },
+    {
+      "name": "ajv",
+      "spec": "8.20.0",
+      "resolved": "8.20.0",
+      "integrity": "sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA=="
+    },
+    {
+      "name": "ajv-formats",
+      "spec": "3.0.1",
+      "resolved": "3.0.1",
+      "integrity": "sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ=="
+    },
+    {
+      "name": "yaml",
+      "spec": "2.9.0",
+      "resolved": "2.9.0",
+      "integrity": "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA=="
+    }
+  ],
+  "artifact": {
+    "name": "harrylabsj-kiwi-0.7.9.tgz",
+    "sha256": "7892cf5b6b461f019e69ee1e29e062b788d5a4453e7cbeacc5a75835a8a05479",
+    "bytes": 1028027
+  },
+  "mcp_protocol_versions": [
+    "2024-11-05",
+    "2025-06-18",
+    "2025-11-25"
+  ],
+  "generated_at": "2026-08-16T06:31:07.026Z"
+}

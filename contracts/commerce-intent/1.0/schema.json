@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kiwi.harrylabsj.com/schemas/commerce-intent/1.0/schema.json",
+  "title": "Kiwi CommerceIntent v0.1",
+  "description": "统一所有宿主 Agent 的 Sourcing 委托（战略 v2.5 §5.2）。CommerceIntent 是 Northbound 稳定契约，表达 sourcing intent 而非 UCP transaction payload。宿主（Hermes/Kimi/Codex/OpenClaw/企业 Agent）把自然语言需求映射为同一结构；Kiwi 再把商品检索/交易部分转换为 UCP 调用，把询报价与磋商部分转换为 KNP 流程。context_projection 承载最小商业披露（§5.4）：只投影完成当前交易必需的字段；Principal Memory、原始对话历史与宿主私有工具不得默认进入远程上下文。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "intent_id",
+    "intent_type",
+    "items"
+  ],
+  "properties": {
+    "intent_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "intent_type": {
+      "type": "string",
+      "enum": ["purchase", "procurement", "inquiry"]
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/intent_item" }
+    },
+    "constraints": {
+      "$ref": "#/$defs/constraints"
+    },
+    "preferences": {
+      "$ref": "#/$defs/preferences"
+    },
+    "context_projection": {
+      "$ref": "#/$defs/context_projection"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "description": "对端 opaque 标识符（同 KNP/1.0 §6）：非空、≤256、无首尾空白、无控制字符。",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^\\S(.*\\S)?$"
+    },
+    "timestamp": {
+      "description": "RFC 3339 时间戳（同 KNP/1.0 §7.3）。",
+      "type": "string",
+      "format": "date-time"
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "money": {
+      "description": "金额用最小单位整数（同 KNP/1.0 §7.1）。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["currency", "amount_minor"],
+      "properties": {
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "amount_minor": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "quantity": {
+      "description": "数量（同 KNP/1.0 §7.2）：value 为正数。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["value", "unit"],
+      "properties": {
+        "value": { "type": "number", "exclusiveMinimum": 0 },
+        "unit": { "type": "string", "minLength": 1 }
+      }
+    },
+    "intent_item": {
+      "description": "单个采购条目：query / sku / attributes 至少其一表达商品语义，quantity 可选。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["query"],
+      "properties": {
+        "query": { "type": "string", "minLength": 1 },
+        "sku": { "type": "string", "minLength": 1 },
+        "attributes": { "type": "object" },
+        "quantity": { "$ref": "#/$defs/quantity" }
+      }
+    },
+    "constraints": {
+      "description": "硬约束：预算/目标单价/币种/交付地点/期限/强制要求。",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "budget": { "$ref": "#/$defs/money" },
+        "target_unit_price": { "$ref": "#/$defs/money" },
+        "currency": { "$ref": "#/$defs/currency" },
+        "delivery_location": { "type": "string", "minLength": 1 },
+        "deadline": { "$ref": "#/$defs/timestamp" },
+        "mandatory_requirements": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "preferences": {
+      "description": "偏好：品牌/质量/服务优先级，不构成硬约束。",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "brands": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "quality": { "type": "string", "minLength": 1 },
+        "service_priorities": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "context_projection": {
+      "description": "最小商业披露（§5.4）：宿主只把完成当前交易必需的字段投影给远程 Merchant。Principal Memory、原始对话历史和宿主私有工具不得默认进入远程上下文。disclosure_boundary 固定为 commerce_required。",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "disclosure_boundary": { "const": "commerce_required" },
+        "projected_fields": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}
