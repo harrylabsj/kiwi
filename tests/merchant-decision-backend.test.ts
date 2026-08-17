@@ -21,7 +21,6 @@ import {
   MockDecisionBackend,
   extractJson,
   sanitizeDecision,
-  type MerchantDecisionBackend,
 } from "../src/merchant/decision-backend.js";
 import { finalizeEnvelope, type NegotiationEnvelope } from "../src/negotiation/domain/envelope.js";
 import { LedgerStore } from "../src/negotiation/ledger/index.js";
@@ -56,23 +55,10 @@ function validDecision(unitPriceMajor: number, action: "propose" | "counter" = "
   };
 }
 
-/** 可控建议价的后端（或抛错）。 */
-function suggestionBackend(
-  unitPriceMajor: number | undefined,
-  opts: { throwOnSuggest?: boolean } = {},
-): MerchantDecisionBackend {
-  return {
-    async suggest(input) {
-      if (opts.throwOnSuggest) throw new Error("backend boom");
-      return validDecision(unitPriceMajor ?? input.product.priceMinor / 100, input.action);
-    },
-  };
-}
 
 async function setupHandler(options: {
   productPrice?: number;
   merchantPolicy?: MerchantPolicy;
-  decisionBackend?: MerchantDecisionBackend;
 }): Promise<{ handler: NegotiationHandler; stop: () => void }> {
   const dir = mkdtempSync(join(tmpdir(), "kiwi-dsh-"));
   const ledger = new LedgerStore({ dir, now: () => NOW });
@@ -89,7 +75,6 @@ async function setupHandler(options: {
       }),
     },
     ...(options.merchantPolicy !== undefined ? { merchantPolicy: options.merchantPolicy } : {}),
-    ...(options.decisionBackend !== undefined ? { decisionBackend: options.decisionBackend } : {}),
   });
   return { handler, stop: () => rmSync(dir, { recursive: true, force: true }) };
 }
@@ -281,153 +266,120 @@ describe("sanitizeDecision", () => {
   });
 });
 
-describe("createMerchantHandler 硬边界（DeepSeek Harness 运行时插件）", () => {
-  it("rfq→offer：backend 建议低于 floor → 钳到 floor（80.00 → 8000 minor）", async () => {
-    const { handler, stop } = await setupHandler({
-      merchantPolicy: { min_unit_price_private: 80 },
-      decisionBackend: suggestionBackend(50), // 50 元 → 5000 minor，低于 floor 8000
+describe("createMerchantHandler 确定性定价（无 LLM）+ 可配置促销", () => {
+  /** conditional_offer 的 base_terms 单价（还价响应）。 */
+  function conditionalBaseMinor(result: NegotiationHandlerResult): number {
+    const reply =
+      result.kind === "accepted" && result.message
+        ? (result.message.parts[0] as unknown as { data?: { knp_envelope?: { payload?: Record<string, unknown> } } })
+            .data?.knp_envelope?.payload
+        : undefined;
+    return (
+      (reply as {
+        base_terms?: { items?: Array<{ unit_price?: { amount_minor?: number } }> };
+      })?.base_terms?.items?.[0]?.unit_price?.amount_minor as number
+    );
+  }
+
+  const counterFor = (priceMinor: number, qty = 1) =>
+    envelopeFor("counter_offer", {
+      offer_id: "off_b",
+      proposed_terms: {
+        items: [{ sku: "SKU-001", quantity: { value: qty }, unit_price: { amount_minor: priceMinor } }],
+      },
     });
-    try {
-      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
-      expect(offerPriceMinor(res)).toBe(8000);
-    } finally {
-      stop();
-    }
-  });
 
-  it("rfq→offer：backend 建议高于 list → 封顶 list（85000 minor）", async () => {
-    const { handler, stop } = await setupHandler({
-      merchantPolicy: { min_unit_price_private: 80 },
-      decisionBackend: suggestionBackend(900), // 900 元 > list 850 元
-    });
-    try {
-      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
-      expect(offerPriceMinor(res)).toBe(85000);
-    } finally {
-      stop();
-    }
-  });
-
-  it("counter_offer→conditional：建议过低 → then_terms = max(floor, applyDiscount(base, maxAutoDiscount))", async () => {
-    const { handler, stop } = await setupHandler({
-      merchantPolicy: { min_unit_price_private: 80, max_auto_discount_percent: 10 },
-      decisionBackend: suggestionBackend(50),
-    });
-    try {
-      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
-      const res = await run(handler, envelopeFor("counter_offer", { offer_id: "off_b", proposed_terms: {} }));
-      // base 85000，10% 折扣 → 76500；floor 8000；建议 5000 → max(8000, 76500)=76500
-      expect(offerPriceMinor(res)).toBe(76500);
-    } finally {
-      stop();
-    }
-  });
-
-  it("backend throw → 确定性基线（offer=list，conditional=5% 折扣）", async () => {
-    const { handler, stop } = await setupHandler({
-      merchantPolicy: { min_unit_price_private: 80 },
-      decisionBackend: suggestionBackend(50, { throwOnSuggest: true }),
-    });
-    try {
-      const offer = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
-      expect(offerPriceMinor(offer)).toBe(85000); // 基线 = list
-      await run(handler, envelopeFor("offer", { offer_id: "off_b", terms: {} }));
-      const cond = await run(handler, envelopeFor("counter_offer", { offer_id: "off_c", proposed_terms: {} }));
-      // 确定性 deal = applyDiscountPercentMinor(85000, 5) = floor((85000*95+50)/100) = 80750
-      expect(offerPriceMinor(cond)).toBe(80750);
-    } finally {
-      stop();
-    }
-  });
-
-  it("有 backend 无 policy → 只钳 [0, list]（floor 0）", async () => {
-    const { handler, stop } = await setupHandler({ decisionBackend: suggestionBackend(50) });
-    try {
-      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
-      expect(offerPriceMinor(res)).toBe(5000);
-    } finally {
-      stop();
-    }
-  });
-
-  it("无 backend → 今日确定性行为（offer = list）", async () => {
+  it("rfq→offer：offer = max(list, floor)，floor 内不抬价", async () => {
     const { handler, stop } = await setupHandler({ merchantPolicy: { min_unit_price_private: 80 } });
     try {
-      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
+      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
       expect(offerPriceMinor(res)).toBe(85000);
     } finally {
       stop();
     }
   });
 
-  it("确定性兜底路径也 clamp floor（商品源价低于 floor → 抬到 floor）", async () => {
-    // 无 decisionBackend（确定性路径）；商品价 ¥60 < floor ¥80 → offer 钳到 8000。
+  it("rfq→offer：list 低于 floor → 抬到 floor（¥60 < floor ¥80）", async () => {
     const { handler, stop } = await setupHandler({
       productPrice: 60,
       merchantPolicy: { price_floors: { "SKU-001": 80 } },
     });
     try {
-      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
+      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
       expect(offerPriceMinor(res)).toBe(8000);
     } finally {
       stop();
     }
   });
 
-  it("确定性兜底路径 deal 也 clamp floor（折后价低于 floor → 抬到 floor）", async () => {
-    // 无 backend；list ¥89，5% 折后 84.55，但 floor 85 → deal 钳到 8500。
+  it("counter_offer：买家还价高于 floor → base = 还价（确定性接受）", async () => {
+    const { handler, stop } = await setupHandler({ merchantPolicy: { price_floors: { "SKU-001": 80 } } });
+    try {
+      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
+      const res = await run(handler, counterFor(84000)); // 840 元 ∈ [floor 80, list 850]
+      expect(conditionalBaseMinor(res)).toBe(84000);
+    } finally {
+      stop();
+    }
+  });
+
+  it("counter_offer：买家还价低于 floor → base = floor（抬到私有底价）", async () => {
+    const { handler, stop } = await setupHandler({ merchantPolicy: { price_floors: { "SKU-001": 80 } } });
+    try {
+      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
+      const res = await run(handler, counterFor(7000)); // 70 元 < floor 80 元 → 8000
+      expect(conditionalBaseMinor(res)).toBe(8000);
+    } finally {
+      stop();
+    }
+  });
+
+  it("counter_offer：买家还价高于 list → base = list（压回 list）", async () => {
+    const { handler, stop } = await setupHandler({ merchantPolicy: { price_floors: { "SKU-001": 80 } } });
+    try {
+      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
+      const res = await run(handler, counterFor(90000)); // 900 元 > list 850 元
+      expect(conditionalBaseMinor(res)).toBe(85000);
+    } finally {
+      stop();
+    }
+  });
+
+  it("促销：数量达标 → then_terms = 批量价（list × 批量折扣）", async () => {
     const { handler, stop } = await setupHandler({
-      productPrice: 89,
-      merchantPolicy: { price_floors: { "SKU-001": 85 } },
+      merchantPolicy: { promos: { "SKU-001": { bulk_threshold: 10, bulk_discount_percent: 3 } } },
     });
     try {
-      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
-      const res = await run(handler, envelopeFor("counter_offer", { offer_id: "off_b", proposed_terms: {} }));
-      // deal = max(applyDiscount(8900, 5)=8455, floor 8500) = 8500
+      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 50 } }] }));
+      const res = await run(handler, counterFor(85000, 50));
+      // 批量价 = max(floor 0, min(85000, applyDiscount(85000,3)=82450)) = 82450
+      expect(offerPriceMinor(res)).toBe(82450);
+    } finally {
+      stop();
+    }
+  });
+
+  it("促销：批量折扣不突破 floor", async () => {
+    const { handler, stop } = await setupHandler({
+      productPrice: 89,
+      merchantPolicy: { price_floors: { "SKU-001": 85 }, promos: { "SKU-001": { bulk_threshold: 10, bulk_discount_percent: 20 } } },
+    });
+    try {
+      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 50 } }] }));
+      const res = await run(handler, counterFor(8900, 50));
+      // 批量价 = max(floor 8500, min(8900, applyDiscount(8900,20)=7120)) = 8500
       expect(offerPriceMinor(res)).toBe(8500);
     } finally {
       stop();
     }
   });
 
-  it("per-SKU floor：price_floors 覆盖全局默认", async () => {
-    // 全局 floor 0，但 SKU-001 的 per-SKU floor 80 → 建议 50 元被钳到 8000 minor。
-    const { handler, stop } = await setupHandler({
-      merchantPolicy: { min_unit_price_private: 0, price_floors: { "SKU-001": 80 } },
-      decisionBackend: suggestionBackend(50),
-    });
+  it("无 policy → floor 0，还价即接受（base = 还价）", async () => {
+    const { handler, stop } = await setupHandler({});
     try {
-      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
-      expect(offerPriceMinor(res)).toBe(8000);
-    } finally {
-      stop();
-    }
-  });
-
-  it("per-SKU 折扣：sku_max_discount_percent 生效（覆盖全局默认）", async () => {
-    // 全局默认 0（不允许折扣），SKU-001 per-SKU 10% → deal 可到 76500。
-    const { handler, stop } = await setupHandler({
-      merchantPolicy: { max_auto_discount_percent: 0, sku_max_discount_percent: { "SKU-001": 10 } },
-      decisionBackend: suggestionBackend(50),
-    });
-    try {
-      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
-      const res = await run(handler, envelopeFor("counter_offer", { offer_id: "off_b", proposed_terms: {} }));
-      expect(offerPriceMinor(res)).toBe(76500);
-    } finally {
-      stop();
-    }
-  });
-
-  it("per-SKU 未列出 → 回落全局默认 floor/discount", async () => {
-    // SKU-OTHER 不在 price_floors/sku_max_discount_percent → 用全局 min_unit_price_private。
-    const { handler, stop } = await setupHandler({
-      merchantPolicy: { min_unit_price_private: 80, price_floors: { "SKU-001": 100 } },
-      decisionBackend: suggestionBackend(50),
-    });
-    try {
-      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-OTHER", quantity: { value: 200 } }] }));
-      expect(offerPriceMinor(res)).toBe(8000); // 全局 floor 80（非 per-SKU 100）
+      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
+      const res = await run(handler, counterFor(5000));
+      expect(conditionalBaseMinor(res)).toBe(5000);
     } finally {
       stop();
     }

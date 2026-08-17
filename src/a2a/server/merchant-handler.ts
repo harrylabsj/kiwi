@@ -39,8 +39,6 @@ import { contentDigest } from "../../negotiation/jcs.js";
 import { evaluateConditionalOffer } from "../../negotiation/condition/evaluator.js";
 import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
 import type { MerchantPolicy } from "../../config/profile.js";
-import type { MerchantDecisionBackend } from "../../merchant/decision-backend.js";
-import { consultDecisionBackend, redactPublicMessage } from "../../merchant/decision-backend.js";
 import {
   createNegotiationPhase,
   isTerminalPhase,
@@ -64,6 +62,8 @@ export const MERCHANT_OFFER_PRICE_MINOR = 85_000; // CNY 850.00
 export const MERCHANT_DEAL_PRICE_MINOR = 83_500; // CNY 835.00
 export const MERCHANT_QUANTITY = 200;
 export const MERCHANT_DELIVERY_BEFORE = "2026-08-20T18:00:00Z";
+/** 批量促销默认门槛（merchant_policy.promos[sku].bulk_threshold 缺省值）。 */
+export const DEFAULT_BULK_THRESHOLD = 100;
 
 /**
  * 整数 minor 折扣价（round-half-up）。审查 K-M14：Math.round 在浮点中间值上
@@ -74,33 +74,6 @@ export const MERCHANT_DELIVERY_BEFORE = "2026-08-20T18:00:00Z";
 export function applyDiscountPercentMinor(priceMinor: number, discountPercent: number): number {
   const numerator = 100 - discountPercent;
   return Math.floor((priceMinor * numerator + 50) / 100);
-}
-
-/**
- * 把 backend 建议的 minor 单价钳到硬边界：永不低于私有 floor、永高于 list 价；
- * isDeal 时折价深度不超过 max_auto_discount_percent（maxAutoDiscountPercent 缺省 0
- * = 不允许任何自动折扣）。`applyDiscountPercentMinor(base, pct) <= base`（pct≥0），
- * 先 min 后 max 顺序安全。backend 建议不可信，硬边界由 handler 兜底。
- */
-export function boundPriceMinor(opts: {
-  suggestedMinor: number;
-  /** list 价（resolveProduct priceMinor）。 */
-  baseMinor: number;
-  /** 私有 floor（minor units；policy.min_unit_price_private × 100）。 */
-  floorMinor?: number;
-  /** 折价深度上限（仅 isDeal 有意义）。 */
-  maxAutoDiscountPercent?: number;
-  /** 是否为条件成交价（deal）——只有它允许低于 list。 */
-  isDeal: boolean;
-}): number {
-  const floor = opts.floorMinor ?? 0;
-  let price = Math.max(opts.suggestedMinor, floor); // 永不低于私有 floor
-  price = Math.min(price, opts.baseMinor); // 永高于 list
-  if (opts.isDeal) {
-    const maxDiscount = opts.maxAutoDiscountPercent ?? 0;
-    price = Math.max(price, applyDiscountPercentMinor(opts.baseMinor, Math.min(maxDiscount, 100)));
-  }
-  return price;
 }
 
 export interface MerchantHandlerOptions {
@@ -117,13 +90,7 @@ export interface MerchantHandlerOptions {
   allowDemoPriceFallback?: boolean;
   /** 条件成交折扣百分比（deal = base × (1 - pct/100)）；缺省 5。 */
   dealDiscountPercent?: number;
-  /**
-   * 受限推理后端（DeepSeek Harness 运行时插件）：只被咨询**价格建议**（+可选公开
-   * 说明），产出不可信候选，handler 验证 + 硬边界约束后应用；backend 从不写。
-   * 未配置 → 纯确定性（今日行为）。
-   */
-  decisionBackend?: MerchantDecisionBackend;
-  /** merchant policy：用于约束 backend 建议（floor / max auto discount）。 */
+  /** merchant policy：确定性定价的 floor / 促销（per-SKU，可配置）。 */
   merchantPolicy?: MerchantPolicy;
 }
 
@@ -584,49 +551,20 @@ export function createMerchantHandler(
         }
       }
 
-      // DeepSeek Harness 运行时插件：受限后端只被咨询价格建议（不可信），
-      // handler 用 floor/discount/list 硬边界钳位后应用；backend 从不写。
-      const consultPrice = async (opts: {
-        action: "propose" | "counter";
-        sku: string;
-        quantity: number;
-        product: { priceMinor: number; currency: string; stock?: number; title?: string };
-      }): Promise<{ unitPriceMinor: number; note?: string } | null> =>
-        consultDecisionBackend(options.decisionBackend, {
-          action: opts.action,
-          sku: opts.sku,
-          quantity: opts.quantity,
-          product: opts.product,
-          policy: options.merchantPolicy,
-          conversationId: negotiationId,
-          inReplyToMessageId: 1,
-          snapshot: (envelope.payload as Record<string, unknown> | undefined) ?? {},
-        });
-      // per-SKU 私有 floor / 折扣上限（major→minor lossless；SKU 未列出用全局默认）。
-      const policyForSku = (sku: string): {
-        floorMinor: number;
-        floorMajor: number | undefined;
-        maxAutoDiscountPercent: number | undefined;
-      } => {
+      // merchant 定价是**确定性**的（不依赖 LLM）：floor / 促销是 merchant 自己的
+      // 可配置策略。per-SKU 私有 floor（major→minor lossless；SKU 未列出用全局默认）。
+      const policyForSku = (sku: string): { floorMinor: number; floorMajor: number | undefined } => {
         const floorValue =
           options.merchantPolicy?.price_floors?.[sku] ?? options.merchantPolicy?.min_unit_price_private;
         const floorConv = floorValue !== undefined ? losslessToMinorUnits(floorValue, 2) : undefined;
         return {
           floorMinor: floorConv !== undefined && floorConv.lossless ? floorConv.amount_minor : 0,
           floorMajor: floorValue,
-          maxAutoDiscountPercent:
-            options.merchantPolicy?.sku_max_discount_percent?.[sku]
-            ?? options.merchantPolicy?.max_auto_discount_percent,
         };
       };
-      const publicMessageOf = (
-        suggestedNote: string | undefined,
-        deterministicNote: string | undefined,
-        floorMajor: number | undefined,
-      ): string | undefined =>
-        suggestedNote !== undefined
-          ? redactPublicMessage(suggestedNote, floorMajor)
-          : deterministicNote;
+      /** 买家还价（major→minor；KNP 里 buyer counter 的 unit_price）。 */
+      const clampToBounds = (minor: number, floor: number, list: number): number =>
+        Math.min(list, Math.max(minor, floor));
 
       switch (envelope.action) {
         case "inquiry": {
@@ -643,20 +581,12 @@ export function createMerchantHandler(
           };
           const sku = payload.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = payload.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
-          const { floorMinor, floorMajor } = policyForSku(sku);
+          const { floorMinor } = policyForSku(sku);
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
-          const { priceMinor, currency, note, handoff_destination, stock, title } = product;
-          const suggested = await consultPrice({
-            action: "propose",
-            sku,
-            quantity,
-            product: { priceMinor, currency, stock, title },
-          });
-          const effectivePriceMinor = suggested === null
-            ? Math.max(priceMinor, floorMinor) // 确定性兜底路径也 clamp floor（永不低于私有底价）
-            : boundPriceMinor({ suggestedMinor: suggested.unitPriceMinor, baseMinor: priceMinor, floorMinor, isDeal: false });
-          const publicMessage = publicMessageOf(suggested?.note, note, floorMajor);
+          const { priceMinor, currency, note, handoff_destination } = product;
+          // 确定性：offer = list 价，clamp 到 ≥ floor（永不低于私有底价；无 LLM）。
+          const effectivePriceMinor = Math.max(priceMinor, floorMinor);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -668,7 +598,7 @@ export function createMerchantHandler(
               offer_id: newOfferId(),
               terms: offerTerms({ sku, priceMinor: effectivePriceMinor, quantity, currency, handoff_destination }, now()),
             },
-            ...(publicMessage !== undefined ? { public_message: publicMessage } : {}),
+            ...(note !== undefined ? { public_message: note } : {}),
           });
           // 审查 BUG-10：merchant 侧相位由自己的出站动作推进——rfq 的 offer
           // 回复是 OPEN→OFFER_OPEN 的边（入站侧 rfq 是起始动作无事件）。
@@ -684,20 +614,12 @@ export function createMerchantHandler(
           const buyerOffer = envelope.payload as { offer_id?: string; terms?: { items?: { sku?: string; quantity?: { value?: number } }[] } };
           const sku = buyerOffer.terms?.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = buyerOffer.terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
-          const { floorMinor, floorMajor } = policyForSku(sku);
+          const { floorMinor } = policyForSku(sku);
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
-          const { priceMinor, currency, note, handoff_destination, stock, title } = product;
-          const suggested = await consultPrice({
-            action: "counter",
-            sku,
-            quantity,
-            product: { priceMinor, currency, stock, title },
-          });
-          const effectivePriceMinor = suggested === null
-            ? Math.max(priceMinor, floorMinor) // 确定性兜底路径也 clamp floor（永不低于私有底价）
-            : boundPriceMinor({ suggestedMinor: suggested.unitPriceMinor, baseMinor: priceMinor, floorMinor, isDeal: false });
-          const publicMessage = publicMessageOf(suggested?.note, note, floorMajor);
+          const { priceMinor, currency, note, handoff_destination } = product;
+          // 确定性：counter = list 价，clamp 到 ≥ floor。
+          const effectivePriceMinor = Math.max(priceMinor, floorMinor);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -710,7 +632,7 @@ export function createMerchantHandler(
               responding_to_offer_id: buyerOffer.offer_id ?? "",
               proposed_terms: offerTerms({ sku, priceMinor: effectivePriceMinor, quantity, currency, handoff_destination }, now()),
             },
-            ...(publicMessage !== undefined ? { public_message: publicMessage } : {}),
+            ...(note !== undefined ? { public_message: note } : {}),
           });
           await advancePhase(negotiationId, {
             type: "counter_offer",
@@ -721,35 +643,37 @@ export function createMerchantHandler(
         }
         case "counter_offer": {
           const counter = envelope.payload as {
-            proposed_terms?: { items?: { sku?: string; quantity?: { value?: number } }[] };
+            proposed_terms?: { items?: { sku?: string; quantity?: { value?: number }; unit_price?: { amount_minor?: number } }[] };
             offer_id?: string;
           };
           const sku = counter.proposed_terms?.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = counter.proposed_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
-          const { floorMinor, floorMajor, maxAutoDiscountPercent } = policyForSku(sku);
+          const buyerCounterMinor = counter.proposed_terms?.items?.[0]?.unit_price?.amount_minor;
+          const { floorMinor } = policyForSku(sku);
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
-          const { priceMinor, currency, note, handoff_destination, stock, title } = product;
-          // 条件成交价 = base × (1 - 折扣%)：批量确实更便宜。backend 建议参与
-          // deal 价，但折价深度受 per-SKU sku_max_discount_percent 硬约束。
-          const discountPercent = options.dealDiscountPercent ?? 5;
-          const defaultDeal = applyDiscountPercentMinor(priceMinor, discountPercent);
-          const suggested = await consultPrice({
-            action: "counter",
-            sku,
-            quantity,
-            product: { priceMinor, currency, stock, title },
-          });
-          const dealPriceMinor = suggested === null
-            ? Math.max(defaultDeal, floorMinor) // 确定性兜底路径也 clamp floor
-            : boundPriceMinor({
-                suggestedMinor: suggested.unitPriceMinor,
-                baseMinor: priceMinor,
-                floorMinor,
-                maxAutoDiscountPercent,
-                isDeal: true,
-              });
-          const publicMessage = publicMessageOf(suggested?.note, note, floorMajor);
+          const { priceMinor, currency, note, handoff_destination } = product;
+          // 确定性（无 LLM）：买家还价在 [floor, list] 内响应——高于 floor 就接受，
+          // 低于 floor 抬到 floor，高于 list 压到 list。
+          const responsiveMinor =
+            typeof buyerCounterMinor === "number" && Number.isFinite(buyerCounterMinor)
+              ? clampToBounds(buyerCounterMinor, floorMinor, priceMinor)
+              : priceMinor;
+          // 可配置促销（merchant_policy.promos[sku]）：买满 bulk_threshold 台，
+          // 批量价 = max(floor, min(还价, list×(1-d%/100)))，比单台更便宜。
+          const promo = options.merchantPolicy?.promos?.[sku];
+          const bulkThreshold = promo?.bulk_threshold ?? DEFAULT_BULK_THRESHOLD;
+          const bulkMinor =
+            promo !== undefined
+              ? clampToBounds(
+                  Math.min(
+                    responsiveMinor,
+                    applyDiscountPercentMinor(priceMinor, promo.bulk_discount_percent ?? 0),
+                  ),
+                  floorMinor,
+                  priceMinor,
+                )
+              : responsiveMinor;
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -760,18 +684,19 @@ export function createMerchantHandler(
               type: "conditional_offer",
               offer_id: newOfferId(),
               responding_to_offer_id: counter.offer_id,
-              base_terms: offerTerms({ sku, priceMinor, quantity, currency, handoff_destination }, now()),
+              // base = 还价响应（已 clamp 到 [floor, list]）——单台即得到该价。
+              base_terms: offerTerms({ sku, priceMinor: responsiveMinor, quantity, currency, handoff_destination }, now()),
               conditions: [
                 {
-                  when: { all: [{ field: "aggregate.total_quantity", op: "gte", value: 100 }] },
+                  when: { all: [{ field: "aggregate.total_quantity", op: "gte", value: bulkThreshold }] },
                   then_terms: offerTerms(
-                    { sku, priceMinor: dealPriceMinor, quantity, currency, handoff_destination },
+                    { sku, priceMinor: bulkMinor, quantity, currency, handoff_destination },
                     now(),
                   ),
                 },
               ],
             },
-            ...(publicMessage !== undefined ? { public_message: publicMessage } : {}),
+            ...(note !== undefined ? { public_message: note } : {}),
           });
           conditionalByNegotiation.set(negotiationId, {
             conditional: reply.payload as unknown as Record<string, unknown>,
