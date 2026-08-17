@@ -3,101 +3,80 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kiwi 买家 —— 让任何 AI Agent 替你采购</title>
-  <meta name="description" content="Kiwi buyer 是任何 AI Agent 可调用的开放询价、采购与磋商层：hermes、openclaw 或其他通用 Agent 都能通过 Kiwi 发现商家、询价、比价、磋商、审批并成交交接。">
-  <link rel="stylesheet" href="style.css">
+  <title>Kiwi 买家接入 —— 在你已有的 AI 智能体里启用采购能力</title>
+  <meta name="description" content="通过 MCP 或宿主插件，为 Hermes、OpenClaw 和企业智能体接入 Kiwi 的商家发现、询价、比价、磋商、审批与成交交接能力。">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="style.css?v=20260817-2">
 </head>
 <body>
-
-<nav class="nav">
-  <div class="nav-inner">
-    <a class="nav-logo" href="index.html">Kiwi</a>
-    <div class="nav-links">
-      <a href="index.html">首页</a>
-      <a href="buyers.html" class="active">买家</a>
-      <a href="merchants.html">商家</a>
-      <a href="developers.html">开发者</a>
-      <a href="https://catalog.kiwi.harrylabsj.com/portal/account">我的账户</a>
-    </div>
-  </div>
-</nav>
+<nav class="nav"><div class="nav-inner"><a class="nav-logo" href="index.html">Kiwi</a><div class="nav-links">
+  <a href="index.html">首页</a><a href="buyers.html" class="active">买家接入</a><a href="merchants.html">商家接入</a><a href="developers.html">开发者</a><a href="https://catalog.kiwi.harrylabsj.com/portal/account">商家后台</a>
+</div></div></nav>
 
 <header class="hero">
-  <div class="hero-inner">
-    <h1>让 AI 智能体替你采购</h1>
-    <p class="tagline">「帮我买 200 个保温杯，单个预算 82 元以内，本周内到。」</p>
-    <p class="sub">—— 一句需求就够了。你的 AI 智能体（hermes / openclaw / 其他）通过 Kiwi 开始发现、询价、比价与磋商。</p>
-    <div class="hero-actions">
-      <a class="btn btn-solid" href="#how">了解工作方式</a>
-      <a class="btn btn-ghost" href="developers.html">接入指南</a>
+  <div class="hero-inner hero-grid">
+    <div>
+      <div class="hero-kicker">宿主内的采购连接器</div>
+      <h1>在你已经使用的 AI 智能体里，启用 Kiwi。</h1>
+      <p class="tagline">用户继续与 Hermes、OpenClaw 或企业智能体对话。Kiwi 只接收结构化采购委托，负责跨商家发现、询价、比较、磋商、审批与成交交接。</p>
+      <div class="hero-actions"><a class="btn btn-solid" href="#host">选择接入方式</a><a class="btn btn-ghost" href="#reference">命令行参考</a></div>
+    </div>
+    <div class="host-visual">
+      <div class="host-chat"><span>用户</span><p>帮我找 200 个 USB-C 扩展坞，7 天内到，比较三家报价。</p></div>
+      <div class="host-route">采购意图 ↓</div>
+      <div class="host-kiwi"><small>Kiwi 买家连接器</small><strong>发现 → 询价 → 比较 → 审批</strong><span>只保存完成采购任务所需的最小信息</span></div>
     </div>
   </div>
 </header>
 
-<section class="section" id="how">
-  <div class="section-inner">
-    <div class="kicker">工作方式</div>
-    <h2>四步，从需求到成交。</h2>
-    <div class="grid grid-3">
-      <div class="card">
-        <div class="card-num">1</div>
-        <h3>对你的 AI 说需求</h3>
-        <p>商品、数量、预算、交期。自然语言就够了。Kiwi 在 hermes、openclaw 等宿主里以插件接入。</p>
-      </div>
-      <div class="card">
-        <div class="card-num">2</div>
-        <h3>经 catalog 发现商家</h3>
-        <p>Kiwi 经 `catalog.kiwi.harrylabsj.com` 搜索开放网络，筛出真正能交付的商家与商品。</p>
-      </div>
-      <div class="card">
-        <div class="card-num">3</div>
-        <h3>A2A 直连磋商</h3>
-        <p>Kiwi 直接与每个商家 Agent 询价、RFQ、比价、还价 —— 谈价格、起订量、交期与定制。</p>
-      </div>
-      <div class="card">
-        <div class="card-num">4</div>
-        <h3>审批后交接成交</h3>
-        <p>谈成后先把非绑定协议呈现给你确认；你确认后 Kiwi 把它交接给你信任的结账、采购单、ERP 或联系人。</p>
-      </div>
+<main>
+  <section class="section" id="host"><div class="section-inner">
+    <div class="kicker">接入方式</div><h2>同一个买家核心，多种薄接入。</h2>
+    <p class="lead">不同宿主只负责安装、触发和展示；采购状态、权限、幂等与恢复始终由 Kiwi 买家核心负责。</p>
+    <div class="surface-grid">
+      <article class="surface-card surface-card-strong"><div class="surface-label">首个真实宿主</div><h3>Hermes</h3><p>使用 MCP 与 Skill 接入。Hermes 保留对话、记忆和用户关系，Kiwi 负责采购任务。</p><a href="developers.html#quickstart">查看接入说明 →</a></article>
+      <article class="surface-card"><div class="surface-label">原生插件</div><h3>OpenClaw</h3><p>通过 Kiwi 买家插件暴露采购工具，使用独立命名空间，不接触商家运营凭据。</p><a href="developers.html#quickstart">查看插件结构 →</a></article>
+      <article class="surface-card"><div class="surface-label">开放接口</div><h3>任何 MCP 宿主</h3><p>连接同一 Kiwi MCP 服务，获得一致的意图、授权、任务和错误语义。</p><a href="developers.html">查看开发者文档 →</a></article>
     </div>
-  </div>
-</section>
+  </div></section>
 
-<section class="section">
-  <div class="section-inner">
-    <div class="kicker">诚实边界</div>
-    <h2>报价是真实成交前的确认，不是最终价格。</h2>
-    <p class="lead">价格、库存与交期在你承诺前会与商家直接确认。Kiwi 不替你下单、不授权支付、不预留库存 —— 且接受协议 / 交接前，必须经过你的确认（审批门）。</p>
-    <div class="notice">
-      <p>Kiwi 展示的是发现与磋商结果，不是最终价格。谈成是非绑定协议；成交交接回你信任的入口。支付永远发生在你的系统里，Kiwi 不碰钱。</p>
+  <section class="section section-dark"><div class="section-inner">
+    <div class="kicker kicker-light">用户看到的流程</div><h2>一句需求，七种高层动作。</h2>
+    <div class="tool-flow">
+      <span>找商家</span><i>→</i><span>发询价单</span><i>→</i><span>查看任务</span><i>→</i><span>继续磋商</span><i>→</i><span>审批协议</span><i>→</i><span>读取协议</span><i>→</i><span>成交交接</span>
     </div>
-  </div>
-</section>
+    <p class="dark-note">宿主不需要编排底层协议消息，也不能绕过 Kiwi 与商家的硬策略。</p>
+  </div></section>
 
-<section class="section section-alt">
-  <div class="section-inner">
-    <div class="kicker">适合谁</div>
-    <h2>一套统一的采购方式。</h2>
-    <p class="lead">面向个人、采购团队，以及任何想接入真实商家网络的 AI Agent 宿主 —— 不用从一家平台换到另一家。</p>
-  </div>
-</section>
-
-<footer class="footer">
-  <div class="footer-inner">
-    <div class="row">
-      <div>
-        <p><strong>开源。</strong>商家数据始终由商家掌控。</p>
-        <p><a href="index.html">← Kiwi 首页</a> · <a href="merchants.html">商家接入 →</a></p>
-      </div>
-      <div>
-        <p>你的成交永远发生在你信任的入口。</p>
-      </div>
-      <div class="contact-line">
-        <p>联系：<a href="mailto:harrylabsj@gmail.com">harrylabsj@gmail.com</a> · 微信 hddsh2025</p>
-      </div>
+  <section class="section"><div class="section-inner boundary-layout">
+    <div><div class="kicker">最小披露</div><h2>商家不需要知道你的全部上下文。</h2><p class="lead">Kiwi 只向远端商家投影完成本次采购所需的商品、数量、交期和授权范围；原始对话、邮件、文件和宿主记忆默认不外传。</p></div>
+    <div class="boundary-list">
+      <div><span>权限取交集</span><p>宿主许可不能提升用户委托或商家硬策略。</p></div>
+      <div><span>写操作可恢复</span><p>任务、审批与协议使用稳定标识和幂等键。</p></div>
+      <div><span>付款永远禁止</span><p>Kiwi 只交接成交入口，不执行支付。</p></div>
     </div>
-  </div>
-</footer>
+  </div></section>
 
+  <section class="section section-alt" id="reference"><div class="section-inner">
+    <div class="kicker">参考运行方式</div><h2>独立命令行仍可用于测试与调试。</h2>
+    <p class="lead">产品主路径是宿主内接入；独立命令行保留为参考客户端和回归工具。</p>
+    <pre><code>npm install -g @harrylabsj/kiwi
+
+# 启动标准 MCP 服务，供 Hermes 或其他宿主连接
+kiwi mcp serve \
+  --db "$HOME/.kiwi/buyer.sqlite" \
+  --principal "buyer:local" \
+  --catalog-url "https://catalog.kiwi.harrylabsj.com"
+
+# 参考客户端
+kiwi buyer search "200 个 USB-C 扩展坞，7 天内到"</code></pre>
+    <div class="notice"><p><strong>诚实边界：</strong>Kiwi 绝不替用户下单、授权支付或预留库存；接受非绑定协议和成交交接必须经过授权门。</p></div>
+  </div></section>
+</main>
+
+<footer class="footer"><div class="footer-inner"><div class="row">
+  <div><p><strong>Kiwi 买家连接器</strong> · 跟着用户所在的智能体运行</p><p><a href="index.html">← 首页</a> · <a href="merchants.html">商家接入 →</a></p></div>
+  <div><p>你的对话和长期记忆仍由宿主智能体掌控。</p><p>联系：<a href="mailto:harrylabsj@gmail.com">harrylabsj@gmail.com</a></p></div>
+</div></div></footer>
 </body>
 </html>

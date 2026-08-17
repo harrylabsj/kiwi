@@ -3,9 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kiwi —— 让 AI 智能体替你真实地采购与磋商</title>
-  <meta name="description" content="Kiwi 是开放询价、采购与商业磋商层：AI 智能体（hermes、openclaw 等）都能通过 Kiwi 发现商家、询价、比价、磋商，并把成交安全交接给你信任的入口。">
-  <link rel="stylesheet" href="style.css">
+  <title>Kiwi —— 让你的 AI 智能体具备跨商家询价与磋商能力</title>
+  <meta name="description" content="Kiwi 是开放的智能体采购询价与商业磋商层：连接你已有的 AI 智能体、商家发现网络与独立运行的 Kiwi Merchant。">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="style.css?v=20260817-2">
 </head>
 <body>
 
@@ -14,79 +15,117 @@
     <a class="nav-logo" href="index.html">Kiwi</a>
     <div class="nav-links">
       <a href="index.html" class="active">首页</a>
-      <a href="buyers.html">买家</a>
-      <a href="merchants.html">商家</a>
+      <a href="buyers.html">买家接入</a>
+      <a href="merchants.html">商家接入</a>
       <a href="developers.html">开发者</a>
-      <a href="https://catalog.kiwi.harrylabsj.com/portal/account">我的账户</a>
+      <a href="https://catalog.kiwi.harrylabsj.com/portal/account">商家后台</a>
     </div>
   </div>
 </nav>
 
-<header class="hero">
-  <div class="hero-inner">
-    <h1>Kiwi. 让 AI 智能体替你真实地采购与磋商</h1>
-    <p class="tagline">告诉你的 AI 智能体（hermes、openclaw 或任何通用智能体）你要什么。Kiwi 找到对的商家、谈好条件、把成交入口安全地交给你。</p>
-    <div class="hero-actions">
-      <a class="btn btn-solid" href="buyers.html">买家入口</a>
-      <a class="btn btn-ghost" href="merchants.html">商家接入</a>
-      <a class="btn btn-ghost" href="demo.html">▶ 动画演示</a>
+<header class="hero hero-home">
+  <div class="hero-inner hero-grid">
+    <div>
+      <div class="hero-kicker">开放的智能体询价与商业磋商层</div>
+      <h1>让你的 AI 智能体，<br>获得跨商家询价与磋商能力。</h1>
+      <p class="tagline">继续使用 Hermes、OpenClaw 或企业内部智能体。Kiwi 在后台发现商家、发起询价单、比较报价、推动非绑定协议，并把结果交回商家自己的成交系统。</p>
+      <div class="hero-actions">
+        <a class="btn btn-solid" href="buyers.html">为我的智能体接入 Kiwi</a>
+        <a class="btn btn-ghost" href="merchants.html">让企业成为 Kiwi 商家</a>
+        <a class="btn btn-text" href="demo.html">查看真实流程 →</a>
+      </div>
+      <div class="pilot-badge"><span></span>当前阶段：首批商家试点</div>
+    </div>
+    <div class="hero-map" aria-label="Kiwi 三种产品面关系">
+      <div class="map-node map-buyer"><small>需求入口</small><strong>你已有的 AI 智能体</strong><span>Hermes / OpenClaw / 企业智能体</span></div>
+      <div class="map-line"><b>询价与磋商</b></div>
+      <div class="map-node map-kiwi"><small>Kiwi 买家连接器</small><strong>发现 · 询价 · 比较 · 审批</strong><span>不拥有用户对话，不替用户付款</span></div>
+      <div class="map-split"><i></i><i></i><i></i></div>
+      <div class="map-merchants"><span>商家 A</span><span>商家 B</span><span>商家 C</span></div>
     </div>
   </div>
 </header>
 
-<section class="section">
-  <div class="section-inner">
-    <div class="kicker">为什么用 Kiwi</div>
-    <h2>您的采购意图，AI 智能体来贯彻执行</h2>
-    <p class="lead">Kiwi 在开放的商家网络里搜索商品与能力，然后把你的采购直接接到真正能交付的商家 Agent —— 不依赖任何平台的围墙花园。</p>
-
-    <div class="grid grid-3">
-      <div class="card">
-        <div class="card-num">1</div>
-        <h3>从开放网络空间买，不依赖于平台</h3>
-        <p>Kiwi 搜索开放网络里的商家与商品，直接连接能真正交付的商家 Agent。没有围墙花园，没有中间商抽成。</p>
-      </div>
-      <div class="card">
-        <div class="card-num">2</div>
-        <h3>像专业采购一样谈判。</h3>
-        <p>价格、起订量、交期、定制。Kiwi 处理询价、RFQ、比价、还价与条件条款 —— 透明进行，由你的委托策略与审批把关。</p>
-      </div>
-      <div class="card">
-        <div class="card-num">3</div>
-        <h3>真实成交留在你信任的入口。</h3>
-        <p>Kiwi 从不把"谈妥"假装成"下单"。谈成后，经你的确认，把非绑定协议交接给你已有的结账、ERP、采购单或联系人。</p>
+<main>
+  <section class="section">
+    <div class="section-inner">
+      <div class="kicker">产品结构</div>
+      <h2>三种产品面，各守一条边界。</h2>
+      <p class="lead">Kiwi 不再争夺聊天入口，也不建设平行的结账和订单系统。它只把跨商家采购中缺失的部分补上。</p>
+      <div class="surface-grid">
+        <article class="surface-card">
+          <span class="surface-index">01</span><div class="surface-label">买家侧</div>
+          <h3>Kiwi 买家连接器</h3>
+          <p>嵌入你已有的智能体，负责找商家、发询价单、比价、还价、审批和成交交接。</p>
+          <a href="buyers.html">查看买家接入 →</a>
+        </article>
+        <article class="surface-card">
+          <span class="surface-index">02</span><div class="surface-label">发现层</div>
+          <h3>Kiwi 商家发现网络</h3>
+          <p>只做商家身份验证、商品能力索引与路由。商品、价格和库存真相仍在商家系统。</p>
+          <a href="developers.html#architecture">查看系统边界 →</a>
+        </article>
+        <article class="surface-card surface-card-strong">
+          <span class="surface-index">03</span><div class="surface-label">商家侧</div>
+          <h3>Kiwi 商家运行时</h3>
+          <p>独立运行在企业服务器，连接商品库、价格、库存与政策；宿主或模型离线时仍能接收询价和进入人工审核。</p>
+          <a href="merchants.html">查看商家接入 →</a>
+        </article>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section class="section section-alt">
-  <div class="section-inner">
-    <div class="kicker">Kiwi 网络</div>
-    <h2>开放、可验证、A2A 直连。</h2>
-    <p class="lead">网络里的每个商家都发布一份可验证的公开投影：卖什么、怎么联系、能谈什么。买家的 AI 与商家的 AI 通过开放协议直接对话 —— 网络帮你发现，绝不插足交易本身。</p>
-    <div class="notice">
-      <p>Kiwi 是一个"任何 AI Agent 都可调用"的开放询价、采购与商业磋商层。发现经 catalog 索引，磋商 A2A 直连商家，成交交接回你信任的系统。</p>
+  <section class="section section-dark">
+    <div class="section-inner">
+      <div class="kicker kicker-light">实际流程</div>
+      <h2>从一句采购需求，到你的成交入口。</h2>
+      <div class="process-line">
+        <div><b>1</b><strong>提出需求</strong><span>用户继续在自己的智能体里说话</span></div>
+        <div><b>2</b><strong>发现商家</strong><span>按商品、区域、能力与新鲜度路由</span></div>
+        <div><b>3</b><strong>询价与磋商</strong><span>商家智能体基于真实事实和政策回应</span></div>
+        <div><b>4</b><strong>形成非绑定协议</strong><span>接受和交接前必须经过授权门</span></div>
+        <div><b>5</b><strong>交回商家系统</strong><span>结账、采购单、ERP 或销售联系人</span></div>
+      </div>
     </div>
-  </div>
-</section>
+  </section>
+
+  <section class="section">
+    <div class="section-inner boundary-layout">
+      <div><div class="kicker">诚实边界</div><h2>谈妥，不等于下单。</h2><p class="lead">Kiwi 止于非绑定商业协议和成交交接。真实订单、付款与库存仍由你信任的系统负责。</p></div>
+      <div class="boundary-list">
+        <div><span>不创建订单</span><p>协议不会自动变成订单。</p></div>
+        <div><span>不授权支付</span><p>Kiwi 不持有资金，也不能替用户付款。</p></div>
+        <div><span>不预留库存</span><p>商家系统仍是库存与履约权威。</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-alt">
+    <div class="section-inner">
+      <div class="kicker">当前证据</div>
+      <h2>已验证技术闭环，正在验证真实采用。</h2>
+      <div class="evidence-grid">
+        <div><strong>26 / 26</strong><span>受控环境合格询价单</span></div>
+        <div><strong>97.2%</strong><span>受控环境商家响应率</span></div>
+        <div><strong>21 / 21</strong><span>三向实现互操作检查</span></div>
+      </div>
+      <div class="notice evidence-note"><p>以上是本地受控试点与一致性检查，不等于第三方采用或真实交易成功。当前主线是招募真实商家、积累持续询价与可复核成交交接证据。</p></div>
+    </div>
+  </section>
+
+  <section class="cta-band">
+    <div class="section-inner cta-inner">
+      <div><div class="kicker kicker-light">首批试点</div><h2>让下一个买家，先找到你。</h2></div>
+      <div class="hero-actions"><a class="btn btn-solid" href="merchants.html">申请商家接入</a><a class="btn btn-ghost" href="buyers.html">接入买家能力</a></div>
+    </div>
+  </section>
+</main>
 
 <footer class="footer">
-  <div class="footer-inner">
-    <div class="row">
-      <div>
-        <p><strong>开源。</strong>商家数据始终由商家掌控。</p>
-        <p>网络由 Kiwi 官方运营；企业可自建私有网络。</p>
-      </div>
-      <div>
-        <p><a href="developers.html">开发者文档 →</a></p>
-      </div>
-      <div class="contact-line">
-        <p>联系：<a href="mailto:harrylabsj@gmail.com">harrylabsj@gmail.com</a> · 微信 hddsh2025</p>
-      </div>
-    </div>
-  </div>
+  <div class="footer-inner"><div class="row">
+    <div><p><strong>Kiwi</strong> · 开放的智能体询价与商业磋商层</p><p><a href="developers.html">开发者与协议 →</a></p></div>
+    <div><p>商家数据始终由商家掌控。</p><p>联系：<a href="mailto:harrylabsj@gmail.com">harrylabsj@gmail.com</a> · 微信 hddsh2025</p></div>
+  </div></div>
 </footer>
-
 </body>
 </html>
