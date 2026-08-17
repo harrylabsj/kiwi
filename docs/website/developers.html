@@ -3,133 +3,100 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kiwi 开发者 —— 开放协议，诚实边界</title>
-  <meta name="description" content="Kiwi 是一个产品、三种角色，由四块开放组件构成：Kiwi Runtime、shopping-cli、kiwi-catalog、协议规范。Buyer 侧提供 MCP 与 OpenClaw 插件两种宿主适配。">
-  <link rel="stylesheet" href="style.css">
+  <title>Kiwi 开发者 —— 一套核心，三种产品面</title>
+  <meta name="description" content="Kiwi 的开发者架构：买家连接器、商家发现网络、独立商家运行时，以及 A2A、KNP、KTH 与 UCP 的清晰边界。">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="style.css?v=20260817-2">
 </head>
 <body>
-
-<nav class="nav">
-  <div class="nav-inner">
-    <a class="nav-logo" href="index.html">Kiwi</a>
-    <div class="nav-links">
-      <a href="index.html">首页</a>
-      <a href="buyers.html">买家</a>
-      <a href="merchants.html">商家</a>
-      <a href="developers.html" class="active">开发者</a>
-      <a href="https://catalog.kiwi.harrylabsj.com/portal/account">我的账户</a>
-    </div>
-  </div>
-</nav>
+<nav class="nav"><div class="nav-inner"><a class="nav-logo" href="index.html">Kiwi</a><div class="nav-links">
+  <a href="index.html">首页</a><a href="buyers.html">买家接入</a><a href="merchants.html">商家接入</a><a href="developers.html" class="active">开发者</a><a href="https://catalog.kiwi.harrylabsj.com/portal/account">商家后台</a>
+</div></div></nav>
 
 <header class="hero">
   <div class="hero-inner">
-    <h1>一个产品。三种角色。开放组件构成。</h1>
-    <p class="tagline">Kiwi 是一个产品、三种角色（买家 / 商家 / 推理），由开放的组件与协议构成。</p>
+    <div class="hero-kicker">开放协议与运行时</div>
+    <h1>一套核心，三种产品面。</h1>
+    <p class="tagline">买家连接器跟着用户所在的智能体运行；商家运行时扎在企业系统里长期在线；发现网络只负责验证、索引和路由。</p>
+    <div class="hero-actions"><a class="btn btn-solid" href="#architecture">查看架构</a><a class="btn btn-ghost" href="#quickstart">源码与接入</a></div>
   </div>
 </header>
 
-<section class="section">
-  <div class="section-inner">
-    <div class="kicker">组件</div>
-    <h2>四块开放组件。</h2>
-    <div class="table-scroll">
-    <table>
-      <tr><th>组件</th><th>角色</th><th>一句话</th></tr>
-      <tr>
-        <td>Kiwi Runtime</td>
-        <td>用户侧运行时</td>
-        <td>买家代理或商家代理的执行环境：A2A、谈判、策略、审批、账本、交接。Buyer 侧提供 <code>kiwi-buyer-mcp</code>（MCP 宿主）与 <code>kiwi-buyer-openclaw</code>（OpenClaw 插件）两种薄适配器，共享同一 Buyer Core。</td>
-      </tr>
-      <tr>
-        <td>shopping-cli</td>
-        <td>Merchant 数据引擎</td>
-        <td>商品/库存/价格/交期的本地事实层 + ERP/PIM 适配器；商家数据的权威在商家侧。</td>
-      </tr>
-      <tr>
-        <td>kiwi-catalog</td>
-        <td>Kiwi 网络服务端</td>
-        <td>开放网络：代理注册/验证、ProductListing/CapabilityListing 发现索引、治理。</td>
-      </tr>
-      <tr>
-        <td>协议规范（spec/）</td>
-        <td>协议规范</td>
-        <td>KNP/1.0（成交前谈判）、KTH/0.1（安全交接）、商品条目契约——随 Kiwi 仓 <code>spec/</code> 开源发布。</td>
-      </tr>
-    </table>
+<main>
+  <section class="section" id="architecture"><div class="section-inner">
+    <div class="kicker">产品架构</div><h2>供需两端采用不对称运行模型。</h2>
+    <div class="architecture-stack">
+      <div class="architecture-row"><div class="architecture-name"><small>需求入口</small><strong>宿主智能体</strong></div><p>Hermes、OpenClaw、企业智能体负责对话、记忆、自然语言和宿主侧批准。</p></div>
+      <div class="architecture-arrow">↓ 采购意图 / 授权范围</div>
+      <div class="architecture-row architecture-accent"><div class="architecture-name"><small>买家侧</small><strong>Kiwi 买家连接器</strong></div><p>统一的意图、权限、任务、询价、磋商、协议和成交交接核心；MCP、HTTP 与插件只是薄包装。</p></div>
+      <div class="architecture-arrow">↓ 商家发现与 A2A 直连</div>
+      <div class="architecture-row"><div class="architecture-name"><small>发现层</small><strong>Kiwi 商家发现网络</strong></div><p>保存商家身份、验证、新鲜度、区域、商品能力与公开端点；不成为消息中转和商品真相源。</p></div>
+      <div class="architecture-arrow">↓ 询价单 / 报价 / 条件磋商</div>
+      <div class="architecture-row architecture-strong"><div class="architecture-name"><small>供给侧</small><strong>Kiwi 商家运行时</strong></div><p>独立持有商品事实、报价政策、询价队列、人工审批、协议、审计和恢复。外部宿主与推理模型均可拔插。</p></div>
     </div>
-  </div>
-</section>
+  </div></section>
 
-<section class="section section-alt">
-  <div class="section-inner">
-    <div class="kicker">协议真相</div>
-    <h2>诚实边界，设计使然。</h2>
-    <div class="grid grid-3">
-      <div class="card">
-        <h3>直连，不经转</h3>
-        <p>买家的 AI 与商家的 AI 通过 A2A 直接对话 —— 网络只做发现，绝不中转消息。</p>
-      </div>
-      <div class="card">
-        <h3>谈妥 ≠ 下单</h3>
-        <p>KNP/1.0 止于非绑定协议。它不创建订单、不授权支付、不预留库存。</p>
-      </div>
-      <div class="card">
-        <h3>打开 ≠ 已付</h3>
-        <p>KTH/0.1 把谈妥的条件交给真实的外部入口（结账 URL、采购单、ERP、联系人）。"已打开"不等于"已支付"。</p>
-      </div>
-    </div>
-    <div class="notice">
-      <p>跨供应商互操作在我们的测试栈中验证；独立第三方互操作证据仍在积累。KNP/1.0 止于非绑定共识；KTH/0.1 的"已打开"不等于"已支付"。</p>
-    </div>
-  </div>
-</section>
+  <section class="section section-alt"><div class="section-inner">
+    <div class="kicker">组件归属</div><h2>三仓各自拥有一种权威。</h2>
+    <div class="table-scroll"><table>
+      <thead><tr><th>仓库 / 产品</th><th>负责什么</th><th>不负责什么</th></tr></thead>
+      <tbody>
+        <tr><td><code>kiwi</code></td><td>买家核心、A2A/KNP、授权、任务、协议、交接与宿主适配</td><td>不拥有商家商品真相，不执行支付和订单</td></tr>
+        <tr><td><code>kiwi-catalog</code></td><td>商家身份、验证、新鲜度、商品能力索引和路由</td><td>不中转磋商消息，不主动抓取商家 ERP</td></tr>
+        <tr><td><code>shopping-cli</code></td><td>商品、价格、库存、配送、报价政策与商家运营事实</td><td>不拥有买家预算、宿主记忆或支付权限</td></tr>
+      </tbody>
+    </table></div>
+  </div></section>
 
-<section class="section" id="quickstart">
-  <div class="section-inner">
-    <div class="kicker">源码与构建</div>
-    <h2>给开发者：源码，不是复制粘贴。</h2>
-    <pre><code># Kiwi Runtime
+  <section class="section section-dark"><div class="section-inner">
+    <div class="kicker kicker-light">协议边界</div><h2>标准商业能力用 UCP，跨商家询价与磋商用 KNP。</h2>
+    <div class="protocol-grid">
+      <div><strong>A2A</strong><span>智能体发现、消息与任务承载</span></div>
+      <div><strong>KNP</strong><span>询价、报价、还价、澄清与非绑定协议</span></div>
+      <div><strong>KTH</strong><span>把协议安全交接到外部成交入口</span></div>
+      <div><strong>UCP</strong><span>商品目录、购物车、结账与订单等标准商业原语</span></div>
+    </div>
+    <div class="dark-note">KNP 的三个副作用恒为否：不创建订单、不授权支付、不预留库存。</div>
+  </div></section>
+
+  <section class="section" id="quickstart"><div class="section-inner">
+    <div class="kicker">源码与接入</div><h2>从公开仓库开始。</h2>
+    <div class="repo-grid">
+      <a class="repo-card" href="https://github.com/harrylabsj/kiwi"><strong>Kiwi 运行时</strong><span>TypeScript · Apache-2.0</span><p>买家核心、协议、商家运行时、MCP 与宿主适配。</p></a>
+      <a class="repo-card" href="https://github.com/harrylabsj/kiwi-catalog"><strong>Kiwi 商家发现网络</strong><span>Python · Apache-2.0</span><p>验证、索引、路由与商家账户。</p></a>
+      <a class="repo-card" href="https://github.com/harrylabsj/shopping-cli"><strong>商家商品事实引擎</strong><span>Python · Apache-2.0</span><p>商品、库存、政策、询价队列与适配器。</p></a>
+    </div>
+    <pre><code># Kiwi 运行时
 git clone https://github.com/harrylabsj/kiwi
-cd kiwi &amp;&amp; npm install &amp;&amp; npm run build &amp;&amp; npm link   # 提供 `kiwi`
+cd kiwi
+npm install
+npm run verify
 
-# shopping-cli（数据引擎；Merchant 用户由 init 自动安装）
-git clone https://github.com/harrylabsj/shopping-cli
-cd shopping-cli &amp;&amp; pip install -e '.[api]'             # 提供 `shopping`
-
-# kiwi-catalog（网络服务端，Operator/自建网络用）
+# 商家发现网络
 git clone https://github.com/harrylabsj/kiwi-catalog
-cd kiwi-catalog &amp;&amp; pip install -e '.[api]'             # 提供 `kiwi-catalog`</code></pre>
-    <div class="notice">
-      <p>普通用户接入：hermes 装 kiwi-buyer skill + MCP，或 openclaw 装 kiwi-buyer-openclaw 插件——见 <a href="buyers.html">买家入口</a> 与各宿主集成文档。本页是开发者的源码位置。</p>
+cd kiwi-catalog
+uv sync --locked --extra api --extra dev
+
+# 商家商品事实引擎
+git clone https://github.com/harrylabsj/shopping-cli
+cd shopping-cli
+uv sync --locked --extra api --extra dev</code></pre>
+  </div></section>
+
+  <section class="section section-alt"><div class="section-inner">
+    <div class="kicker">当前状态</div><h2>技术基线已通过，产品采用仍在试点。</h2>
+    <div class="status-matrix">
+      <div><span>已验证</span><p>本地三向实现互操作、受控询价、授权边界、商家独立运行和发布门禁。</p></div>
+      <div><span>正在验证</span><p>真实商家持续上线、外部买家调用、真实成交交接和重复使用。</p></div>
+      <div><span>不宣称</span><p>尚未取得的第三方采用、真实订单完成或行业标准地位。</p></div>
     </div>
-  </div>
-</section>
+    <div class="notice"><p>协议语义以仓库中的 <code>spec/</code>、机器可读契约和一致性向量为准；市场页面只解释产品，不替代规范。</p></div>
+  </div></section>
+</main>
 
-<section class="section section-alt">
-  <div class="section-inner">
-    <div class="kicker">文档</div>
-    <h2>读规范，别读市场文案。</h2>
-    <p class="lead">先读协议规范，再读架构基线，最后读产品层计划。不要用市场文案代替协议语义 —— 规范才是权威。</p>
-  </div>
-</section>
-
-<footer class="footer">
-  <div class="footer-inner">
-    <div class="row">
-      <div>
-        <p><strong>开源。</strong>商家数据始终由商家掌控。</p>
-        <p><a href="index.html">← Kiwi 首页</a> · <a href="buyers.html">买家入口 →</a></p>
-      </div>
-      <div>
-        <p>你的数据始终由你的系统掌控。</p>
-      </div>
-      <div class="contact-line">
-        <p>联系：<a href="mailto:harrylabsj@gmail.com">harrylabsj@gmail.com</a> · 微信 hddsh2025</p>
-      </div>
-    </div>
-  </div>
-</footer>
-
+<footer class="footer"><div class="footer-inner"><div class="row">
+  <div><p><strong>Kiwi 开源项目</strong> · KNP/1.0 · Apache-2.0</p><p><a href="index.html">← 首页</a> · <a href="buyers.html">买家接入 →</a></p></div>
+  <div><p>联系：<a href="mailto:harrylabsj@gmail.com">harrylabsj@gmail.com</a></p></div>
+</div></div></footer>
 </body>
 </html>

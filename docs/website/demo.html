@@ -1,302 +1,222 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kiwi — A2A 电商动画演示</title>
-<meta name="description" content="Kiwi A2A 电商工作方式与创新点动画演示：买家 AI 智能体与商家 AI 智能体直接对话、谈判、成交。">
-<style>
-:root {
-  --kiwi-900: #143d18; --kiwi-800: #1b5e20; --kiwi-700: #2e7d32; --kiwi-600: #43a047;
-  --kiwi-100: #e8f5e9; --ink: #1a1f1a; --ink-soft: #4b554b; --paper: #ffffff;
-  --paper-soft: #f6f8f6; --line: #dde5dd; --radius: 14px; --maxw: 1080px;
-}
-* { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { height: 100%; }
-body {
-  font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  color: var(--ink); background: var(--paper-soft); line-height: 1.6;
-  -webkit-font-smoothing: antialiased;
-}
-.stage {
-  position: relative; max-width: var(--maxw); margin: 0 auto; padding: 40px 20px 90px;
-  min-height: 100vh; display: flex; flex-direction: column;
-}
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 800; color: var(--kiwi-800); font-size: 1.15rem; letter-spacing: -0.01em; }
-.brand .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--kiwi-600); }
-.scene {
-  display: none; flex: 1; flex-direction: column; justify-content: center;
-  animation: sceneIn .6s ease both;
-}
-.scene.active { display: flex; }
-@keyframes sceneIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
-.kicker { color: var(--kiwi-700); font-weight: 700; font-size: .8rem; text-transform: uppercase; letter-spacing: .1em; margin-bottom: 10px; }
-h1 { font-size: clamp(2rem, 5vw, 3.2rem); letter-spacing: -.02em; line-height: 1.15; }
-h2 { font-size: clamp(1.5rem, 3.5vw, 2.2rem); letter-spacing: -.02em; line-height: 1.25; }
-p.lead { margin-top: 14px; font-size: clamp(1rem, 2vw, 1.2rem); color: var(--ink-soft); max-width: 44em; }
-.highlight { color: var(--kiwi-700); font-weight: 700; }
-.typing::after { content: "▍"; animation: blink .8s step-end infinite; color: var(--kiwi-600); }
-@keyframes blink { 50% { opacity: 0; } }
-
-/* 网络图 */
-.network { display: flex; align-items: center; justify-content: center; gap: 28px; margin-top: 44px; flex-wrap: wrap; }
-.node {
-  background: var(--paper); border: 2px solid var(--line); border-radius: var(--radius);
-  padding: 18px 22px; text-align: center; min-width: 150px; box-shadow: 0 4px 14px rgba(20,40,24,.06);
-}
-.node.buyer { border-color: var(--kiwi-600); }
-.node.merchant { border-color: var(--kiwi-800); }
-.node .role { font-size: .75rem; font-weight: 700; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .08em; }
-.node .name { font-weight: 800; margin-top: 4px; }
-.node .sub { font-size: .8rem; color: var(--ink-soft); margin-top: 2px; }
-.link { font-size: 1.6rem; color: var(--kiwi-600); animation: pulse 1.4s ease-in-out infinite; }
-@keyframes pulse { 50% { transform: scale(1.25); opacity: .55; } }
-.catalog-ring {
-  width: 150px; height: 150px; border-radius: 50%; border: 3px dashed var(--kiwi-600);
-  display: flex; align-items: center; justify-content: center; text-align: center;
-  font-weight: 800; color: var(--kiwi-800); font-size: .95rem; background: var(--kiwi-100);
-  animation: spin 24s linear infinite;
-}
-.catalog-ring span { animation: spin 24s linear infinite reverse; }
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* 对话气泡 */
-.chat { margin-top: 36px; display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
-.bubble { max-width: 78%; padding: 14px 18px; border-radius: 16px; font-size: 1rem; position: relative; }
-.bubble.from-buyer { align-self: flex-start; background: var(--kiwi-100); border-bottom-left-radius: 4px; }
-.bubble.from-merchant { align-self: flex-end; background: #fff; border: 1.5px solid var(--kiwi-600); border-bottom-right-radius: 4px; }
-.bubble .who { font-size: .72rem; font-weight: 700; color: var(--ink-soft); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .06em; }
-
-/* 卡片 */
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 18px; margin-top: 34px; }
-.card { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; box-shadow: 0 2px 8px rgba(20,40,24,.04); }
-.card .num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--kiwi-100); color: var(--kiwi-800); font-weight: 800; font-size: .85rem; margin-bottom: 10px; }
-.card h3 { font-size: 1.02rem; margin-bottom: 6px; }
-.card p { font-size: .9rem; color: var(--ink-soft); }
-.card.no { border-color: #f5c6c2; background: #fdf3f2; }
-.card.no .num { background: #fbe4e1; color: #b3261e; }
-
-/* 大数字与流程 */
-.flow { margin-top: 34px; display: flex; gap: 14px; align-items: stretch; flex-wrap: wrap; }
-.step { flex: 1; min-width: 150px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
-.step .k { font-weight: 800; color: var(--kiwi-800); font-size: 1.05rem; }
-.step .d { font-size: .88rem; color: var(--ink-soft); margin-top: 6px; }
-.step.arrow {
-  flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
-  background: none; border: none; box-shadow: none; padding: 0;
-  color: var(--kiwi-600); font-weight: 800; font-size: 1.6rem;
-}
-
-/* 控制条 */
-
-
-
-
-
-
-
-.btn {
-  border: none; cursor: pointer; font-family: inherit; font-weight: 700; font-size: .88rem;
-  padding: 9px 18px; border-radius: 999px; background: var(--kiwi-800); color: #fff; transition: transform .12s ease;
-}
-.btn:hover { transform: translateY(-1px); }
-.btn.ghost { background: var(--paper-soft); color: var(--ink); border: 1px solid var(--line); }
-
-
-/* 结尾 */
-.finale { text-align: center; }
-.finale .big { font-size: clamp(1.8rem, 4vw, 2.8rem); font-weight: 800; letter-spacing: -.02em; }
-.finale .cta { display: flex; gap: 16px; justify-content: center; margin-top: 34px; flex-wrap: wrap; }
-a.btn { text-decoration: none; display: inline-block; }
-@media (max-width: 640px) { .network { gap: 14px; } .node { min-width: 120px; padding: 12px 14px; } }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kiwi 产品演示 —— 一次跨商家询价如何完成</title>
+  <meta name="description" content="用一个真实可理解的办公采购案例，演示 Kiwi 如何连接已有 AI 智能体、商家发现网络与独立商家运行时。">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="style.css?v=20260817-2">
+  <style>
+    body { background: #071b10; }
+    .demo-nav { background: rgba(7, 27, 16, .92); border-color: rgba(255,255,255,.1); }
+    .demo-nav .nav-logo { color: #fff !important; }
+    .demo-nav .nav-links a, .demo-nav .nav-links a:visited { color: rgba(255,255,255,.65); }
+    .demo-nav .nav-links a:hover { color: #fff; border-color: #d6f56f; }
+    .demo-page { min-height: calc(100vh - 68px); padding: 34px 24px 28px; color: #fff; background: linear-gradient(145deg, #071b10, #0c2a19 62%, #104925); }
+    .demo-shell { width: min(1180px, 100%); min-height: min(720px, calc(100vh - 130px)); margin: 0 auto; border: 1px solid rgba(255,255,255,.15); border-radius: 22px; overflow: hidden; background: rgba(4, 20, 11, .7); box-shadow: 0 36px 90px rgba(0,0,0,.34); display: grid; grid-template-rows: auto 1fr auto; }
+    .demo-head { min-height: 62px; padding: 14px 22px; border-bottom: 1px solid rgba(255,255,255,.12); display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .demo-brand { display: flex; align-items: center; gap: 10px; font-size: .84rem; font-weight: 760; }
+    .demo-brand i { width: 9px; height: 9px; border-radius: 2px; background: #d6f56f; transform: rotate(12deg); }
+    .demo-status { color: rgba(255,255,255,.52); font-size: .72rem; }
+    .scene-wrap { position: relative; min-height: 520px; }
+    .scene { position: absolute; inset: 0; padding: clamp(34px, 6vw, 72px); display: grid; align-content: center; opacity: 0; visibility: hidden; transform: translateY(16px); transition: opacity .55s ease, transform .55s ease, visibility .55s; }
+    .scene.active { opacity: 1; visibility: visible; transform: none; }
+    .scene-grid { display: grid; grid-template-columns: minmax(0, .9fr) minmax(360px, 1.1fr); gap: clamp(36px, 7vw, 88px); align-items: center; }
+    .scene-kicker { color: #a9dfb6; font-size: .72rem; font-weight: 760; letter-spacing: .14em; }
+    .scene h1, .scene h2 { max-width: 12em; margin-top: 14px; font-size: clamp(2rem, 4.3vw, 3.65rem); line-height: 1.13; letter-spacing: -.045em; }
+    .scene-lead { max-width: 38em; margin-top: 20px; color: rgba(255,255,255,.68); font-size: clamp(.98rem, 1.7vw, 1.14rem); }
+    .scene-lead strong { color: #fff; }
+    .accent { color: #d6f56f; }
+    .host-window, .buyer-card, .catalog-card, .merchant-card, .agreement, .handoff-card { border: 1px solid rgba(255,255,255,.17); border-radius: 16px; background: rgba(255,255,255,.06); }
+    .window-head { padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,.11); color: rgba(255,255,255,.5); font-size: .7rem; display: flex; justify-content: space-between; }
+    .chat-stack { padding: 20px; display: grid; gap: 14px; }
+    .chat-bubble { max-width: 84%; border-radius: 13px; padding: 14px 16px; background: #fff; color: #142019; font-size: .88rem; }
+    .chat-bubble small { display: block; margin-bottom: 4px; color: #23723d; font-size: .66rem; font-weight: 750; }
+    .chat-bubble.reply { margin-left: auto; border: 1px solid rgba(214,245,111,.45); background: rgba(214,245,111,.08); color: #fff; }
+    .chat-bubble.reply small { color: #d6f56f; }
+    .route-stack { display: grid; gap: 10px; }
+    .route-card { padding: 17px 18px; border: 1px solid rgba(255,255,255,.15); border-radius: 12px; background: rgba(255,255,255,.05); }
+    .route-card.active { border-color: rgba(214,245,111,.56); background: rgba(214,245,111,.08); }
+    .route-card small, .route-card strong, .route-card span { display: block; }
+    .route-card small { color: #a9dfb6; font-size: .66rem; letter-spacing: .09em; }
+    .route-card strong { margin-top: 5px; font-size: .95rem; }
+    .route-card span { margin-top: 4px; color: rgba(255,255,255,.55); font-size: .74rem; }
+    .route-arrow { padding-left: 18px; color: #a9dfb6; font-size: .68rem; }
+    .quote-board { border: 1px solid rgba(255,255,255,.16); border-radius: 16px; overflow: hidden; }
+    .quote-head, .quote-row { display: grid; grid-template-columns: 1.1fr .75fr .75fr .75fr; align-items: center; }
+    .quote-head { padding: 11px 17px; background: rgba(255,255,255,.07); color: rgba(255,255,255,.5); font-size: .67rem; }
+    .quote-row { padding: 16px 17px; border-top: 1px solid rgba(255,255,255,.1); font-size: .8rem; }
+    .quote-row strong { font-size: .86rem; }
+    .quote-row span { color: rgba(255,255,255,.67); }
+    .quote-row.best { background: rgba(214,245,111,.07); }
+    .quote-row.best strong::after { content: "可继续谈"; margin-left: 7px; color: #d6f56f; font-size: .6rem; font-weight: 650; }
+    .nego-chat { display: grid; gap: 13px; }
+    .nego { max-width: 86%; padding: 14px 17px; border-radius: 12px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.06); font-size: .82rem; }
+    .nego:nth-child(even) { margin-left: auto; border-color: rgba(214,245,111,.38); }
+    .nego small { display: block; margin-bottom: 4px; color: #a9dfb6; font-size: .64rem; }
+    .agreement { padding: 25px; }
+    .agreement-top { display: flex; justify-content: space-between; gap: 20px; align-items: start; }
+    .agreement-top small { color: #a9dfb6; font-size: .67rem; }
+    .agreement-top b { color: #d6f56f; font-size: .74rem; }
+    .agreement h3 { margin-top: 5px; font-size: 1.18rem; }
+    .agreement dl { margin-top: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .agreement dt { color: rgba(255,255,255,.5); font-size: .66rem; }
+    .agreement dd { margin-top: 2px; font-size: .86rem; }
+    .no-effects { margin-top: 18px; padding-top: 17px; border-top: 1px solid rgba(255,255,255,.12); display: flex; gap: 8px; flex-wrap: wrap; }
+    .no-effects span { padding: 7px 10px; border: 1px solid rgba(255,255,255,.13); border-radius: 7px; color: rgba(255,255,255,.65); font-size: .68rem; }
+    .handoff-flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 9px; align-items: stretch; }
+    .handoff-card { min-height: 155px; padding: 18px; display: flex; flex-direction: column; justify-content: space-between; }
+    .handoff-card small { color: #a9dfb6; font-size: .66rem; }
+    .handoff-card strong { font-size: .9rem; }
+    .handoff-card span { color: rgba(255,255,255,.54); font-size: .7rem; }
+    .handoff-arrow { display: grid; place-items: center; color: #d6f56f; }
+    .truth-list { margin-top: 25px; border-top: 1px solid rgba(255,255,255,.15); }
+    .truth-list div { display: grid; grid-template-columns: 120px 1fr; gap: 22px; padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,.12); }
+    .truth-list strong { color: #d6f56f; font-size: .78rem; }
+    .truth-list span { color: rgba(255,255,255,.62); font-size: .78rem; }
+    .finale { text-align: center; justify-items: center; }
+    .finale h2 { max-width: 16em; }
+    .finale .scene-lead { margin-left: auto; margin-right: auto; }
+    .final-actions { margin-top: 30px; display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+    .final-note { margin-top: 20px; color: rgba(255,255,255,.48); font-size: .72rem; }
+    .demo-controls { min-height: 70px; border-top: 1px solid rgba(255,255,255,.12); padding: 14px 22px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 24px; }
+    .progress { height: 3px; background: rgba(255,255,255,.12); }
+    .progress span { display: block; width: 12.5%; height: 100%; background: #d6f56f; transition: width .45s ease; }
+    .control-buttons { display: flex; align-items: center; gap: 8px; }
+    .scene-count { min-width: 54px; color: rgba(255,255,255,.52); font-size: .7rem; text-align: center; }
+    .control-button { width: 36px; height: 36px; border: 1px solid rgba(255,255,255,.18); border-radius: 8px; color: #fff; background: rgba(255,255,255,.05); cursor: pointer; font: inherit; }
+    .control-button:hover { border-color: rgba(214,245,111,.65); color: #d6f56f; }
+    @media (max-width: 820px) {
+      .demo-page { padding: 18px 12px; }
+      .demo-shell { min-height: calc(100vh - 150px); }
+      .scene-wrap { min-height: 650px; }
+      .scene { padding: 34px 24px; align-content: start; overflow-y: auto; }
+      .scene-grid { grid-template-columns: 1fr; gap: 30px; }
+      .scene h1, .scene h2 { font-size: clamp(2rem, 9vw, 3rem); }
+      .quote-head, .quote-row { grid-template-columns: 1fr .75fr .7fr; }
+      .quote-head span:last-child, .quote-row span:last-child { display: none; }
+      .handoff-flow { grid-template-columns: 1fr; }
+      .handoff-arrow { transform: rotate(90deg); }
+      .agreement dl { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 520px) {
+      .demo-status { display: none; }
+      .scene-wrap { min-height: 720px; }
+      .scene { padding: 30px 20px; }
+      .truth-list div { grid-template-columns: 1fr; gap: 3px; }
+      .demo-controls { grid-template-columns: 1fr; gap: 12px; }
+      .control-buttons { justify-content: center; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .scene { transition: none; }
+    }
+  </style>
 </head>
 <body>
+<nav class="nav demo-nav"><div class="nav-inner"><a class="nav-logo" href="index.html">Kiwi</a><div class="nav-links">
+  <a href="index.html">首页</a><a href="buyers.html">买家接入</a><a href="merchants.html">商家接入</a><a href="developers.html">开发者</a><a href="https://catalog.kiwi.harrylabsj.com/portal/account">商家后台</a>
+</div></div></nav>
 
-<main class="stage" id="stage">
-  <div class="brand"><span class="dot"></span> Kiwi · A2A 电商演示</div>
+<main class="demo-page">
+  <div class="demo-shell" aria-label="Kiwi 产品流程演示">
+    <header class="demo-head"><div class="demo-brand"><i></i><span>Kiwi · 跨商家询价演示</span></div><div class="demo-status">自动播放 · 可手动切换</div></header>
 
-  <!-- 0 开场 -->
-  <section class="scene active" data-scene="0">
-    <div class="kicker">A2A Commerce</div>
-    <h1>电商正在变成<br>AI 智能体与AI 智能体的对话</h1>
-    <p class="lead typing" id="intro-type">买家不需要再逛 100 个网站；商家不需要再投 100 个平台的广告。您的AI 智能体，替您去买、替您去卖。</p>
-    <div class="network">
-      <div class="node buyer"><div class="role">Buyer AI Agent</div><div class="name">买家 AI 智能体</div><div class="sub">替您说需求、谈价格</div></div>
-      <div class="link">⇄</div>
-      <div class="node merchant"><div class="role">Merchant AI Agent</div><div class="name">商家 AI 智能体</div><div class="sub">替您报价、守底线</div></div>
+    <div class="scene-wrap" aria-live="polite">
+      <section class="scene active" data-scene="0">
+        <div class="scene-grid">
+          <div><div class="scene-kicker">01 · 需求入口不变</div><h1>采购正在进入<span class="accent">智能体协作</span>时代。</h1><p class="scene-lead">用户不需要学习一个新的聊天工具。继续对自己已有的 AI 智能体说需求，Kiwi 在后台补上跨商家发现、询价与磋商能力。</p></div>
+          <div class="host-window"><div class="window-head"><span>企业智能体</span><span>对话保持在宿主内</span></div><div class="chat-stack"><div class="chat-bubble"><small>用户</small>帮我采购 200 个 USB-C 扩展坞，7 天内到，希望比较三家报价。</div><div class="chat-bubble reply"><small>宿主智能体</small>我会调用 Kiwi 找到合适商家，并在你批准前不接受任何协议。</div></div></div>
+        </div>
+      </section>
+
+      <section class="scene" data-scene="1">
+        <div class="scene-grid">
+          <div><div class="scene-kicker">02 · 买家连接器</div><h2>把一句话，变成可授权、可恢复的采购任务。</h2><p class="scene-lead">Kiwi 只接收本次采购必要的信息：商品、数量、交期、地区和授权范围。原始对话、邮件与长期记忆默认不外传。</p></div>
+          <div class="route-stack"><div class="route-card"><small>宿主智能体</small><strong>采购意图 + 用户委托</strong><span>用户仍在原来的对话里</span></div><div class="route-arrow">↓ 最小必要投影</div><div class="route-card active"><small>Kiwi 买家连接器</small><strong>发现 · 询价 · 比较 · 磋商 · 审批</strong><span>统一任务状态、权限与幂等语义</span></div></div>
+        </div>
+      </section>
+
+      <section class="scene" data-scene="2">
+        <div class="scene-grid">
+          <div><div class="scene-kicker">03 · 商家发现网络</div><h2>按真实能力路由，而不是按广告位排序。</h2><p class="scene-lead">发现网络只保存商家身份、验证状态、商品能力、区域、新鲜度和公开端点。价格、库存和政策真相仍然留在商家系统。</p></div>
+          <div class="route-stack"><div class="route-card active"><small>发现请求</small><strong>USB-C 扩展坞 · 华东 · 7 天交付</strong><span>需要至少三家可询价商家</span></div><div class="route-arrow">↓ 身份验证与能力匹配</div><div class="route-card"><small>路由结果</small><strong>杭州商家甲 · 上海商家乙 · 深圳商家丙</strong><span>买家连接器随后与商家端点直接通信</span></div></div>
+        </div>
+      </section>
+
+      <section class="scene" data-scene="3">
+        <div class="scene-grid">
+          <div><div class="scene-kicker">04 · 真实询价</div><h2>三家商家，按自己的库存与政策回应。</h2><p class="scene-lead">商家运行时独立在线。常规询价由确定性政策处理；触碰底价、敏感客户或异常条件时，自动升级人工审核。</p></div>
+          <div class="quote-board"><div class="quote-head"><span>商家</span><span>单价</span><span>交期</span><span>状态</span></div><div class="quote-row"><strong>杭州商家甲</strong><span>¥269</span><span>6 天</span><span>已报价</span></div><div class="quote-row best"><strong>上海商家乙</strong><span>¥255</span><span>7 天</span><span>可磋商</span></div><div class="quote-row"><strong>深圳商家丙</strong><span>¥248</span><span>10 天</span><span>交期不符</span></div></div>
+        </div>
+      </section>
+
+      <section class="scene" data-scene="4">
+        <div class="scene-grid">
+          <div><div class="scene-kicker">05 · 条件磋商</div><h2>谈价格，也谈交期、质保和验收条件。</h2><p class="scene-lead">Kiwi 的磋商协议承载结构化询价、报价、还价与澄清。宿主无法绕过商家的硬策略，商家也看不到买家的全部私有上下文。</p></div>
+          <div class="nego-chat"><div class="nego"><small>买家连接器 → 上海商家乙</small>200 个，若 7 天内到货并含两年质保，单价能否到 ¥245？</div><div class="nego"><small>商家运行时 → 买家连接器</small>¥249 可接受；7 天到货，两年质保。低于 ¥249 需人工审批。</div><div class="nego"><small>买家连接器 → 上海商家乙</small>接受 ¥249，并补充：分两地交付，验收后进入企业采购单流程。</div><div class="nego"><small>商家运行时 → 买家连接器</small>条件满足政策。生成非绑定商业协议，等待双方授权。</div></div>
+        </div>
+      </section>
+
+      <section class="scene" data-scene="5">
+        <div class="scene-grid">
+          <div><div class="scene-kicker">06 · 诚实边界</div><h2>谈妥，<span class="accent">不等于下单</span>。</h2><p class="scene-lead">Kiwi 形成的是可审计、可读取、需授权的非绑定商业协议。真实订单与付款始终留在用户和商家信任的系统里。</p></div>
+          <div class="agreement"><div class="agreement-top"><div><small>非绑定商业协议</small><h3>USB-C 扩展坞 × 200</h3></div><b>等待买家批准</b></div><dl><div><dt>商家</dt><dd>上海商家乙</dd></div><div><dt>单价</dt><dd>¥249</dd></div><div><dt>交期</dt><dd>7 天</dd></div><div><dt>附加条件</dt><dd>两年质保 · 分两地交付</dd></div></dl><div class="no-effects"><span>不创建订单</span><span>不授权支付</span><span>不预留库存</span></div></div>
+        </div>
+      </section>
+
+      <section class="scene" data-scene="6">
+        <div><div class="scene-kicker">07 · 成交交接</div><h2>把已批准条件，安全交回真实成交入口。</h2><p class="scene-lead">Kiwi 只记录交接了什么、交给谁以及结果状态，不建立平行的订单和支付系统。</p><div class="handoff-flow"><div class="handoff-card"><small>已批准协议</small><strong>商品、价格、交期与条款</strong><span>稳定协议标识与审计记录</span></div><div class="handoff-arrow">→</div><div class="handoff-card"><small>Kiwi 成交交接</small><strong>选择企业认可的入口</strong><span>结账页 / ERP / 采购单 / 销售联系人</span></div><div class="handoff-arrow">→</div><div class="handoff-card"><small>真实成交系统</small><strong>创建订单与付款</strong><span>由买卖双方的系统负责</span></div></div></div>
+      </section>
+
+      <section class="scene finale" data-scene="7">
+        <div class="scene-kicker">当前阶段 · 首批商家试点</div><h2>让下一个采购智能体，先找到你的企业。</h2><p class="scene-lead">Kiwi 已完成受控技术闭环，正在招募标准化办公、IT 配件与 B2B 供应商，共同验证真实询价、持续在线与成交交接。</p><div class="truth-list"><div><strong>你提供</strong><span>商品 CSV、真实报价政策和一台可长期在线的服务器</span></div><div><strong>Kiwi 协助</strong><span>首次发布、发现验证、询价演练与成交交接检查</span></div><div><strong>你始终掌控</strong><span>成本、底价、库存、订单、付款和客户关系</span></div></div><div class="final-actions"><a class="btn btn-solid" href="merchants.html#pilot">申请商家试点</a><a class="btn btn-ghost" href="buyers.html">接入买家能力</a></div><div class="final-note">受控验证结果不等于第三方采用或真实交易成功。</div>
+      </section>
     </div>
-  </section>
 
-  <!-- 1 买家视角 -->
-  <section class="scene" data-scene="1">
-    <div class="kicker">Buyer · 一句话出发</div>
-    <h2>买家只需说一句需求</h2>
-    <div class="chat">
-      <div class="bubble from-buyer"><div class="who">买家</div><span id="need-type">我要采购 500 台 21.5 英寸工业触摸屏，要求 IP67，7 天内交货，报价和起订量都要谈。</span></div>
-      <div class="bubble from-buyer"><div class="who">Buyer AI Agent</div><span id="agent-start-type">收到。我去 Kiwi 网络上找真正能交付的商家，逐个询价谈判。</span></div>
-    </div>
-  </section>
-
-  <!-- 2 发现 -->
-  <section class="scene" data-scene="2">
-    <div class="kicker">Discovery · 被发现</div>
-    <h2>买家 AI 智能体搜索 Kiwi 网络</h2>
-    <p class="lead">Kiwi 网络是一个开放目录：商家 AI 智能体注册在这里，买家 AI 智能体在这里发现它们——<span class="highlight">不是靠广告，靠验证过的事实</span>。</p>
-    <div class="network">
-      <div class="node buyer"><div class="role">Buyer AI Agent</div><div class="name">买家 AI 智能体</div><div class="sub">搜索：工业触摸屏</div></div>
-      <div class="link">→</div>
-      <div class="catalog-ring"><span>Kiwi<br>网络<br>目录</span></div>
-      <div class="link">→</div>
-      <div class="node merchant"><div class="role">Merchant AI Agent</div><div class="name">Veyquo</div><div class="sub">工业显示 · 已注册 · 可询价</div></div>
-    </div>
-  </section>
-
-  <!-- 3 谈判 -->
-  <section class="scene" data-scene="3">
-    <div class="kicker">Negotiation · KNP 谈判协议</div>
-    <h2>两个AI 智能体直接谈判</h2>
-    <p class="lead">Kiwi Negotiation Protocol：询价、报价、还价、澄清——<span class="highlight">谈的是真实条件，不是页面上的静态价格</span>。</p>
-    <div class="chat">
-      <div class="bubble from-buyer"><div class="who">买家 AI 智能体 → Veyquo</div>500 台 21.5" 工业触摸屏，IP67，7 天交期，单价能到多少？</div>
-      <div class="bubble from-merchant"><div class="who">Veyquo → 买家 AI 智能体</div>500 台 ¥1,280/台，7 天可交。300 台以上可谈，加急 +8%。</div>
-      <div class="bubble from-buyer"><div class="who">买家 AI 智能体 → Veyquo</div>1,150 行不行？500 台全要，长期复购。</div>
-      <div class="bubble from-merchant"><div class="who">Veyquo → 买家 AI 智能体</div>1,190 成交，含一年质保。付款走您们 ERP 的采购单流程。</div>
-    </div>
-  </section>
-
-  <!-- 4 共识 -->
-  <section class="scene" data-scene="4">
-    <div class="kicker">Consensus · 非绑定共识</div>
-    <h2>谈妥了，但"谈妥"不等于"下单"</h2>
-    <p class="lead">谈判的产物是一份<span class="highlight">非绑定商业共识</span>：双方都确认了条件，但 Kiwi <strong>暂不</strong>替您完成交易。</p>
-    <div class="cards">
-      <div class="card no"><div class="num">✕</div><h3>不创建订单</h3><p>共识不会自动变成订单——下不下单，由您和您的系统决定。</p></div>
-      <div class="card no"><div class="num">✕</div><h3>不授权支付</h3><p>不会动您的钱。付款只发生在您选择的真实结账流程里。</p></div>
-      <div class="card no"><div class="num">✕</div><h3>不预留库存</h3><p>不锁商家库存——商家自己决定库存怎么处理。</p></div>
-    </div>
-  </section>
-
-  <!-- 5 交接 -->
-  <section class="scene" data-scene="5">
-    <div class="kicker">Handoff · KTH 交接协议</div>
-    <h2>共识安全交到您的成交入口</h2>
-    <p class="lead">Kiwi Transaction Handoff：把谈妥的条件交给<span class="highlight">您选择的成交入口</span>——您的结账、您的 ERP、您的采购单、您的销售联系人、您的电商商品页地址。Kiwi 只负责"交接"和"记录交了什么"。</p>
-    <div class="flow">
-      <div class="step"><div class="k">共识</div><div class="d">买家与商家谈妥：1,190/台 × 500 台，7 天交期</div></div>
-      <div class="step arrow">→</div>
-      <div class="step"><div class="k">交接</div><div class="d">KTH 把共识送到买家的 ERP 采购单流程或电商平台商品页</div></div>
-      <div class="step arrow">→</div>
-      <div class="step"><div class="k">成交</div><div class="d">真实订单在您的系统里生成——Kiwi 不碰钱、不碰货</div></div>
-    </div>
-  </section>
-
-  <!-- 6 创新点 -->
-  <section class="scene" data-scene="6">
-    <div class="kicker">为什么是 Kiwi</div>
-    <h2>三个创新点</h2>
-    <div class="cards">
-      <div class="card"><div class="num">1</div><h3>AI 智能体直接对话</h3><p>买家 AI 智能体与商家 AI 智能体跨平台直接谈判——没有中间商抽成，没有信息黑箱。</p></div>
-      <div class="card"><div class="num">2</div><h3>数据城堡</h3><p>商家的成本、底价、库存、客户条款永不离开商家系统。网络只看到您批准的公开投影。</p></div>
-      <div class="card"><div class="num">3</div><h3>成交入口自主</h3><p>Kiwi 不建立自己的交易闭环——成交落在您信任的结账、ERP、电商商品页或联系人，您自己掌控。</p></div>
-    </div>
-  </section>
-
-  <!-- 7 商家行动 -->
-  <section class="scene" data-scene="7">
-    <div class="kicker">Merchant · 商家行动指南</div>
-    <h2>商家现在该做什么</h2>
-    <div class="flow">
-      <div class="step"><div class="k">① 注册账号</div><div class="d">官网「My Account」注册，邮箱验证。</div></div>
-      <div class="step"><div class="k">② 申请令牌</div><div class="d">填写商家信息申请 token，平台审核签发。</div></div>
-      <div class="step"><div class="k">③ 发布商品</div><div class="d">数据引擎连您的商品库，一条命令发布到 Kiwi 网络。</div></div>
-      <div class="step"><div class="k">④ 保持在线</div><div class="d">商家 AI 智能体持续在线——买家 AI 智能体才能找到您、跟您谈。</div></div>
-    </div>
-    <p class="lead" style="margin-top:24px">要点：<span class="highlight">用自己的域名</span>作为身份锚点；<span class="highlight">不用个人电脑</span>跑商家 AI 智能体（要持续在线）；成本、底价永远留在自己系统里。</p>
-  </section>
-
-  <!-- 8 买家行动 -->
-  <section class="scene" data-scene="8">
-    <div class="kicker">Buyer · 买家行动指南</div>
-    <h2>买家现在该做什么</h2>
-    <div class="flow">
-      <div class="step"><div class="k">① 安装 Kiwi</div><div class="d">一条命令装上 Kiwi，创建您的买家身份。</div></div>
-      <div class="step"><div class="k">② 说需求</div><div class="d">用一句话告诉您的AI 智能体：要什么、多少、什么时候要。</div></div>
-      <div class="step"><div class="k">③ 确认成交</div><div class="d">AI 智能体谈妥后把共识交给您——您在自己的结账/ERP/电商平台 里确认下单。</div></div>
-    </div>
-    <p class="lead" style="margin-top:24px">要点：<span class="highlight">您的AI 智能体替您比价、谈判、守底线</span>；成交永远发生在您信任的入口，Kiwi 不替您付钱。</p>
-  </section>
-
-  <!-- 9 结尾 -->
-  <section class="scene finale" data-scene="9">
-    <div class="kicker">A2A Commerce</div>
-    <div class="big">A2A 电商正在到来</div>
-    <p class="lead" style="margin: 16px auto 0; text-align: center;">问题不是"要不要参与"，而是"<span class="highlight">您的 AI Agent 在线了吗</span>"。</p>
-    <div class="cta">
-      <a class="btn" href="https://catalog.kiwi.harrylabsj.com/portal/account">我是商家 · 注册接入</a>
-      <a class="btn ghost" href="index.html">了解 Kiwi</a>
-    </div>
-  </section>
+    <footer class="demo-controls"><div class="progress" aria-hidden="true"><span id="progress"></span></div><div class="control-buttons"><button class="control-button" id="prev" aria-label="上一幕">←</button><button class="control-button" id="toggle" aria-label="暂停播放">Ⅱ</button><span class="scene-count" id="count">01 / 08</span><button class="control-button" id="next" aria-label="下一幕">→</button></div></footer>
+  </div>
 </main>
 
-
-
 <script>
-(function () {
-  var scenes = Array.prototype.slice.call(document.querySelectorAll(".scene"));
-  var total = scenes.length;
-  var current = 0;
-  var SCENE_MS = 9000;
-  var timer = null;
-  var typeTimer = null;
+  (function () {
+    var scenes = Array.prototype.slice.call(document.querySelectorAll('.scene'));
+    var progress = document.getElementById('progress');
+    var count = document.getElementById('count');
+    var toggle = document.getElementById('toggle');
+    var current = 0;
+    var playing = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var timer = null;
+    var duration = 7600;
 
-  function stopTyping() {
-    if (typeTimer) { clearInterval(typeTimer); typeTimer = null; }
-    var els = document.querySelectorAll(".typing");
-    els.forEach(function (el) { el.classList.remove("typing"); });
-  }
-
-  function typeText(el, text, done) {
-    el.textContent = "";
-    el.classList.add("typing");
-    var i = 0;
-    typeTimer = setInterval(function () {
-      el.textContent = text.slice(0, ++i);
-      if (i >= text.length) {
-        clearInterval(typeTimer); typeTimer = null;
-        el.classList.remove("typing");
-        if (done) done();
-      }
-    }, 28);
-  }
-
-  function go(n) {
-    stopTyping();
-    // 自动连续循环播放：播完最后一幕回到第一幕
-    current = n % total;
-    scenes.forEach(function (s, i) { s.classList.toggle("active", i === current); });
-
-    // 打字机开场与需求句
-    if (n === 0) {
-      typeText(document.getElementById("intro-type"), "买家不需要再逛 100 个网站；商家不需要再投 100 个平台的广告。您的AI 智能体，替您去买、替您去卖。");
+    function render(next) {
+      current = (next + scenes.length) % scenes.length;
+      scenes.forEach(function (scene, index) { scene.classList.toggle('active', index === current); });
+      progress.style.width = ((current + 1) / scenes.length * 100) + '%';
+      count.textContent = String(current + 1).padStart(2, '0') + ' / ' + String(scenes.length).padStart(2, '0');
+      schedule();
     }
-    if (n === 1) {
-      var need = document.getElementById("need-type");
-      need.textContent = "";
-      typeText(need, "我要采购 500 台 21.5 英寸工业触摸屏，要求 IP67，7 天内交货，报价和起订量都要谈。", function () {
-        typeText(document.getElementById("agent-start-type"), "收到。我去 Kiwi 网络上找真正能交付的商家，逐个询价谈判。");
-      });
+
+    function schedule() {
+      if (timer) window.clearTimeout(timer);
+      if (playing) timer = window.setTimeout(function () { render(current + 1); }, duration);
     }
-    restartTimer();
-  }
 
-  function restartTimer() {
-    if (timer) { clearTimeout(timer); timer = null; }
-    timer = setTimeout(function () { go(current + 1); }, SCENE_MS);
-  }
-
-  go(0);
-})();
+    document.getElementById('prev').addEventListener('click', function () { render(current - 1); });
+    document.getElementById('next').addEventListener('click', function () { render(current + 1); });
+    toggle.addEventListener('click', function () {
+      playing = !playing;
+      toggle.textContent = playing ? 'Ⅱ' : '▶';
+      toggle.setAttribute('aria-label', playing ? '暂停播放' : '继续播放');
+      schedule();
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'ArrowLeft') render(current - 1);
+      if (event.key === 'ArrowRight') render(current + 1);
+      if (event.key === ' ') { event.preventDefault(); toggle.click(); }
+    });
+    render(0);
+  })();
 </script>
 </body>
 </html>

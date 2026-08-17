@@ -3,144 +3,105 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kiwi 商家 —— 让买家 AI 智能体直接找到你</title>
-  <meta name="description" content="Kiwi Merchant 把你的商品目录变成可被买家 AI 发现、询价和谈判的商家智能体。数据留在你的系统，成交交给你的系统。">
-  <link rel="stylesheet" href="style.css">
+  <title>Kiwi 商家接入 —— 让买家 AI 直接找到你</title>
+  <meta name="description" content="Kiwi 商家运行时连接你的商品库、库存与报价政策，让买家智能体找到你、向你询价、谈条件，并把结果交回你的成交系统。">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="style.css?v=20260817-2">
 </head>
 <body>
-
-<nav class="nav">
-  <div class="nav-inner">
-    <a class="nav-logo" href="index.html">Kiwi</a>
-    <div class="nav-links">
-      <a href="index.html">首页</a>
-      <a href="buyers.html">买家</a>
-      <a href="merchants.html" class="active">商家</a>
-      <a href="developers.html">开发者</a>
-      <a href="https://catalog.kiwi.harrylabsj.com/portal/account">我的账户</a>
-    </div>
-  </div>
-</nav>
+<nav class="nav"><div class="nav-inner"><a class="nav-logo" href="index.html">Kiwi</a><div class="nav-links">
+  <a href="index.html">首页</a><a href="buyers.html">买家接入</a><a href="merchants.html" class="active">商家接入</a><a href="developers.html">开发者</a><a href="https://catalog.kiwi.harrylabsj.com/portal/account">商家后台</a>
+</div></div></nav>
 
 <header class="hero">
-  <div class="hero-inner">
-    <h1>让买家 AI 智能体直接找到你</h1>
-    <p class="tagline">把你的商品、库存和报价规则，变成一个能被 AI 发现、询价、谈判的商家智能体。</p>
-    <div class="hero-actions">
-      <a class="btn btn-solid" href="#quickstart">开始接入</a>
-      <a class="btn btn-ghost" href="https://catalog.kiwi.harrylabsj.com/portal/account">商家账户</a>
+  <div class="hero-inner hero-grid">
+    <div>
+      <div class="hero-kicker">独立运行的企业商家入口</div>
+      <h1>让买家 AI，直接找到你。</h1>
+      <p class="tagline">把现有商品库、库存、价格和报价政策接入 Kiwi。你的商家运行时在自己的服务器上长期在线，按你的规则接收询价、报价、升级人工审核并交接成交。</p>
+      <div class="hero-actions"><a class="btn btn-solid" href="#pilot">申请首批试点</a><a class="btn btn-ghost" href="#install">查看安装方式</a><a class="btn btn-text" href="demo.html">查看演示 →</a></div>
+    </div>
+    <div class="merchant-runtime">
+      <div class="runtime-head"><span>商家运行时</span><b>● 在线</b></div>
+      <h3>你的企业</h3>
+      <div class="runtime-metrics"><div><strong>商品事实</strong><span>来自你的 CSV / ERP / PIM</span></div><div><strong>报价政策</strong><span>底价、折扣、交期与审批</span></div><div><strong>成交入口</strong><span>结账、采购单、ERP 或销售</span></div></div>
+      <div class="runtime-rfq"><small>新询价单</small><b>USB-C 扩展坞 × 200</b><span>正在执行价格与库存检查</span></div>
     </div>
   </div>
 </header>
 
-<section class="section">
-  <div class="section-inner">
-    <div class="kicker">为什么用 Kiwi Merchant</div>
-    <h2>不是再开一家店，是让 AI 找得到你。</h2>
-    <p class="lead">越来越多的采购会从"搜索网页"变成"告诉自己的 AI 智能体"。Kiwi Merchant 让你的企业直接出现在这条新链路里。</p>
-    <div class="notice">
-      <p>你的目录、底价、库存和交易系统仍由你掌控。Kiwi 负责把合适的买家带到你的门前，并把谈妥的条件交回你的结账、ERP、采购单或销售团队。</p>
+<main>
+  <section class="section"><div class="section-inner">
+    <div class="kicker">为什么接入</div><h2>不是再开一家店，是让采购智能体找得到你。</h2>
+    <p class="lead">Kiwi 不拿走你的目录、客户和结账。它只让来自不同宿主的采购需求，进入同一个由你掌控的商家状态和政策边界。</p>
+    <div class="process-line process-light">
+      <div><b>1</b><strong>被发现</strong><span>公开身份、商品能力与服务区域进入发现索引</span></div>
+      <div><b>2</b><strong>被询价</strong><span>买家智能体带着真实数量、交期和条件直连</span></div>
+      <div><b>3</b><strong>按规则报价</strong><span>确定性政策守住底价、库存和授权边界</span></div>
+      <div><b>4</b><strong>交回你的系统</strong><span>协议交给结账、ERP、采购单或销售联系人</span></div>
     </div>
-  </div>
-</section>
+  </div></section>
 
-<section class="section section-alt">
-  <div class="section-inner">
-    <div class="kicker">运作方式</div>
-    <h2>买家 AI 说需求，你的商家智能体接住。</h2>
-    <div class="grid grid-3">
-      <div class="card">
-        <div class="card-num">1</div>
-        <h3>被发现</h3>
-        <p>Kiwi Catalog 索引你的公开身份、商品能力、服务区域和可谈判能力。</p>
-      </div>
-      <div class="card">
-        <div class="card-num">2</div>
-        <h3>被询价</h3>
-        <p>买家 AI 直接向你的商家智能体发起 RFQ，带来真实数量、交期和条件。</p>
-      </div>
-      <div class="card">
-        <div class="card-num">3</div>
-        <h3>按规则报价</h3>
-        <p>底价、折扣、库存和审批由你的商家核心守住；需要人工时进入审核队列。</p>
-      </div>
-      <div class="card">
-        <div class="card-num">4</div>
-        <h3>交回你的系统</h3>
-        <p>非绑定协议交给你的结账、ERP、采购单或销售联系人，Kiwi 不替你收款。</p>
-      </div>
+  <section class="section section-dark"><div class="section-inner boundary-layout">
+    <div><div class="kicker kicker-light">独立运行原则</div><h2>宿主或模型离线，商家核心仍然工作。</h2><p class="lead light-lead">Hermes、控制台和推理模型都只是可选增强。商家身份、商品事实、询价状态、报价政策、审批、协议和审计始终留在你的商家核心。</p></div>
+    <div class="boundary-list boundary-list-dark">
+      <div><span>确定性报价</span><p>常规询价可依据真实价格、库存和政策直接回应。</p></div>
+      <div><span>人工审核</span><p>低于底价、敏感客户或异常条件自动进入人工处理。</p></div>
+      <div><span>故障隔离</span><p>外部宿主或推理服务故障不阻断询价接收与任务恢复。</p></div>
     </div>
-  </div>
-</section>
+  </div></section>
 
-<section class="section">
-  <div class="section-inner">
-    <div class="kicker">数据边界</div>
-    <h2>你的目录，你的城堡。</h2>
-    <div class="grid grid-3">
-      <div class="card">
-        <h3>真实商品事实留在你的系统</h3>
-        <p>Kiwi 读取你授权的公开投影和报价所需事实，不复制你的私有经营数据库。</p>
-      </div>
-      <div class="card">
-        <h3>底价与权限由商家核心守住</h3>
-        <p>低于底价、敏感客户或异常条件，自动进入人工审核，不静默放宽策略。</p>
-      </div>
-      <div class="card">
-        <h3>Kiwi 不碰钱、不创建订单</h3>
-        <p>谈判结果是非绑定协议，最终成交仍在你选择的真实系统里发生。</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="section section-alt" id="quickstart">
-  <div class="section-inner">
-    <div class="kicker">开始接入</div>
-    <h2>把你的商品接入 AI 采购网络</h2>
-    <p class="lead">卖家只需装 Kiwi；shopping-cli 会作为依赖自动带上，kiwi-catalog 由 Kiwi 官方运营、无需自装。先用 CSV / Excel 跑通第一条路径。</p>
-    <pre><code># 1. 安装（shopping-cli 会作为依赖自动安装，无需单独装）
+  <section class="section" id="install"><div class="section-inner">
+    <div class="kicker">安装与使用</div><h2>先用 CSV / Excel 跑通第一条商家链路。</h2>
+    <p class="lead">商家需要 Kiwi 运行时和 shopping-cli 商品事实引擎；官方 Catalog 由 Kiwi 运营，商家无需自行安装。</p>
+    <pre><code># 1. 安装商家运行时与商品事实引擎
 npm install -g @harrylabsj/kiwi
+pip install shopping-cli
 
-# 2. 初始化商家 + 导入商品（CSV / Excel）
-kiwi merchant init --merchant-id acme --name "Acme Supply"
-shopping-cli --db "$HOME/kiwi-merchant/shopping.sqlite" \
-  import-csv-excel --file products.csv --merchant acme
+# 2. 创建商家并导入商品
+export SHOPPING_DB_PATH="$HOME/kiwi-merchant/shopping.sqlite"
+shopping-cli --db "$SHOPPING_DB_PATH" merchant create \
+  --id acme --name "你的企业" --city 杭州
+shopping-cli --db "$SHOPPING_DB_PATH" import-csv-excel \
+  --file products.csv --merchant acme
 
-# 3. 发布到网络并保持在线
-kiwi merchant publish --shopping-cli-db "$HOME/kiwi-merchant/shopping.sqlite"
-kiwi merchant start --catalog https://catalog.kiwi.harrylabsj.com \
+# 3. 创建商家配置
+kiwi merchant init --merchant-id acme --name "你的企业"
+
+# 4. 发布公开商品与能力
+export KIWI_CATALOG_OWNER_TOKEN_SECRET="由 Kiwi 运营方提供"
+kiwi merchant publish \
+  --profile "$HOME/.kiwi/kiwi.yaml" \
+  --shopping-cli-db "$SHOPPING_DB_PATH"
+
+# 5. 在稳定服务器上保持在线
+export KIWI_A2A_PUBLIC_URL="https://merchant.example.com"
+export KIWI_A2A_AUTH="bearer:请替换为随机密钥"
+kiwi merchant start \
+  --profile "$HOME/.kiwi/kiwi.yaml" \
+  --catalog "https://catalog.kiwi.harrylabsj.com" \
   --port 8601 --no-chat</code></pre>
-    <div class="notice">
-      <p>卖家只需装 Kiwi；shopping-cli 作为依赖自动带上，kiwi-catalog 由 Kiwi 官方运营、无需自装。公网部署请使用 HTTPS 与稳定域名。</p>
+    <div class="notice"><p>公网运行请使用 HTTPS、稳定域名和安全的密钥注入。不要把令牌、成本、底价或私有库存写入公开配置和智能体卡片。</p></div>
+  </div></section>
+
+  <section class="section section-alt"><div class="section-inner">
+    <div class="kicker">数据边界</div><h2>你的目录，仍然是你的城堡。</h2>
+    <div class="surface-grid">
+      <article class="surface-card"><div class="surface-label">留在企业内部</div><h3>成本、底价与客户条款</h3><p>这些字段不会因为注册到 Kiwi Catalog 而自动公开。</p></article>
+      <article class="surface-card"><div class="surface-label">按需公开</div><h3>商品摘要与服务能力</h3><p>网络只看到你批准的公开投影、服务区域和可谈判能力。</p></article>
+      <article class="surface-card"><div class="surface-label">回到企业系统</div><h3>真实订单、付款与履约</h3><p>Kiwi 只交接非绑定协议，不替商家收款或执行订单。</p></article>
     </div>
-  </div>
-</section>
+  </div></section>
 
-<section class="section">
-  <div class="section-inner">
-    <div class="kicker">适合谁</div>
-    <h2>适合那些不想把生意交给平台的人。</h2>
-    <p class="lead">制造商、品牌方、分销商、工业品供应商、B2B 服务商 —— 让下一个买家先找到你。</p>
-  </div>
-</section>
+  <section class="section" id="pilot"><div class="section-inner pilot-layout">
+    <div><div class="kicker">首批商家试点</div><h2>适合标准化办公、IT 配件和 B2B 供应商。</h2><p class="lead">准备一份商品 CSV、一个可长期在线的服务器和真实报价政策。Kiwi 团队协助完成首次发布、询价和成交交接验证。</p></div>
+    <div class="pilot-actions"><a class="btn btn-green" href="https://catalog.kiwi.harrylabsj.com/portal/account">注册商家账户</a><a class="btn btn-outline" href="mailto:harrylabsj@gmail.com">联系 Kiwi 团队</a><span>微信：hddsh2025</span></div>
+  </div></section>
+</main>
 
-<footer class="footer">
-  <div class="footer-inner">
-    <div class="row">
-      <div>
-        <p><strong>开源。</strong>商家数据始终由商家掌控。</p>
-        <p><a href="index.html">← Kiwi 首页</a> · <a href="buyers.html">买家入口 →</a></p>
-      </div>
-      <div>
-        <p>你的数据始终由你的系统掌控。</p>
-      </div>
-      <div class="contact-line">
-        <p>联系：<a href="mailto:harrylabsj@gmail.com">harrylabsj@gmail.com</a> · 微信 hddsh2025</p>
-      </div>
-    </div>
-  </div>
-</footer>
-
+<footer class="footer"><div class="footer-inner"><div class="row">
+  <div><p><strong>Kiwi 商家运行时</strong> · 商家扎在企业系统里</p><p><a href="index.html">← 首页</a> · <a href="buyers.html">买家接入 →</a></p></div>
+  <div><p>商品与交易真相始终由商家系统掌控。</p></div>
+</div></div></footer>
 </body>
 </html>
