@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import { createMerchantHandler } from "../src/a2a/server/merchant-handler.js";
 import type { NegotiationHandler, NegotiationHandlerResult } from "../src/a2a/server/types.js";
+import type { MerchantPolicy } from "../src/config/profile.js";
 import {
   DeepSeekDecisionBackend,
   MockDecisionBackend,
@@ -70,7 +71,7 @@ function suggestionBackend(
 
 async function setupHandler(options: {
   productPrice?: number;
-  merchantPolicy?: { min_unit_price_private?: number; max_auto_discount_percent?: number };
+  merchantPolicy?: MerchantPolicy;
   decisionBackend?: MerchantDecisionBackend;
 }): Promise<{ handler: NegotiationHandler; stop: () => void }> {
   const dir = mkdtempSync(join(tmpdir(), "kiwi-dsh-"));
@@ -354,6 +355,49 @@ describe("createMerchantHandler 硬边界（DeepSeek Harness 运行时插件）"
     try {
       const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
       expect(offerPriceMinor(res)).toBe(85000);
+    } finally {
+      stop();
+    }
+  });
+
+  it("per-SKU floor：price_floors 覆盖全局默认", async () => {
+    // 全局 floor 0，但 SKU-001 的 per-SKU floor 80 → 建议 50 元被钳到 8000 minor。
+    const { handler, stop } = await setupHandler({
+      merchantPolicy: { min_unit_price_private: 0, price_floors: { "SKU-001": 80 } },
+      decisionBackend: suggestionBackend(50),
+    });
+    try {
+      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
+      expect(offerPriceMinor(res)).toBe(8000);
+    } finally {
+      stop();
+    }
+  });
+
+  it("per-SKU 折扣：sku_max_discount_percent 生效（覆盖全局默认）", async () => {
+    // 全局默认 0（不允许折扣），SKU-001 per-SKU 10% → deal 可到 76500。
+    const { handler, stop } = await setupHandler({
+      merchantPolicy: { max_auto_discount_percent: 0, sku_max_discount_percent: { "SKU-001": 10 } },
+      decisionBackend: suggestionBackend(50),
+    });
+    try {
+      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
+      const res = await run(handler, envelopeFor("counter_offer", { offer_id: "off_b", proposed_terms: {} }));
+      expect(offerPriceMinor(res)).toBe(76500);
+    } finally {
+      stop();
+    }
+  });
+
+  it("per-SKU 未列出 → 回落全局默认 floor/discount", async () => {
+    // SKU-OTHER 不在 price_floors/sku_max_discount_percent → 用全局 min_unit_price_private。
+    const { handler, stop } = await setupHandler({
+      merchantPolicy: { min_unit_price_private: 80, price_floors: { "SKU-001": 100 } },
+      decisionBackend: suggestionBackend(50),
+    });
+    try {
+      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-OTHER", quantity: { value: 200 } }] }));
+      expect(offerPriceMinor(res)).toBe(8000); // 全局 floor 80（非 per-SKU 100）
     } finally {
       stop();
     }

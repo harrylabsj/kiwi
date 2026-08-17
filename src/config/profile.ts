@@ -34,8 +34,14 @@ import { PROTOCOL_VERSION, type Role } from "../negotiation/types.js";
 export const RUNTIME_VERSION = "0.6.0";
 
 export interface MerchantPolicy {
+  /** 全局默认私有价格下限（major 元；SKU 未在 price_floors 列出的兜底）。 */
   min_unit_price_private?: number;
+  /** per-SKU 私有价格下限（major 元）：`{ sku: floor }`，覆盖全局默认。 */
+  price_floors?: Record<string, number>;
+  /** 全局默认自动折扣上限（%）；SKU 未在 sku_max_discount_percent 列出的兜底。 */
   max_auto_discount_percent?: number;
+  /** per-SKU 自动折扣上限（%）：`{ sku: pct }`，覆盖全局默认。 */
+  sku_max_discount_percent?: Record<string, number>;
   inventory_source?: string;
   quote_ttl_seconds?: number;
   auto_negotiate?: boolean;
@@ -200,7 +206,9 @@ const RUNTIME_KEYS = [
 ] as const;
 const MERCHANT_POLICY_KEYS = [
   "min_unit_price_private",
+  "price_floors",
   "max_auto_discount_percent",
+  "sku_max_discount_percent",
   "inventory_source",
   "quote_ttl_seconds",
   "auto_negotiate",
@@ -509,6 +517,26 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
           mp.human_review_on.every((c) => typeof c === "string" && c.length > 0),
         `${source}: merchant_policy.human_review_on must be a list of non-empty strings`,
       );
+    }
+    // per-SKU floor / discount：`{ sku: number }`，键非空字符串，值有限且合理。
+    if (mp.price_floors !== undefined) {
+      req(isObject(mp.price_floors), `${source}: merchant_policy.price_floors must be a mapping`);
+      for (const [sku, floor] of Object.entries(mp.price_floors)) {
+        req(sku.length > 0, `${source}: merchant_policy.price_floors key must be a non-empty string`);
+        reqFinite(floor, `merchant_policy.price_floors.${sku}`, source);
+        req(floor >= 0, `${source}: merchant_policy.price_floors.${sku} must be >= 0`);
+      }
+    }
+    if (mp.sku_max_discount_percent !== undefined) {
+      req(
+        isObject(mp.sku_max_discount_percent),
+        `${source}: merchant_policy.sku_max_discount_percent must be a mapping`,
+      );
+      for (const [sku, pct] of Object.entries(mp.sku_max_discount_percent)) {
+        req(sku.length > 0, `${source}: merchant_policy.sku_max_discount_percent key must be a non-empty string`);
+        reqFinite(pct, `merchant_policy.sku_max_discount_percent.${sku}`, source);
+        req(pct >= 0 && pct <= 100, `${source}: merchant_policy.sku_max_discount_percent.${sku} must be between 0 and 100`);
+      }
     }
     merchantPolicy = { ...mp } as MerchantPolicy;
   }
