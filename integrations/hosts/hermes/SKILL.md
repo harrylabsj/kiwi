@@ -1,12 +1,12 @@
 ---
 name: kiwi-buyer
-description: Kiwi Sourcing & Negotiation Kit —— 当用户出现采购、找商家、询价、比价、还价、交期/MOQ 等商业意图时，使用 kiwi-buyer-mcp 的 7 个高层工具完成跨商家发现、询价、磋商、非绑定协议与交易 handoff。UCP 处理标准商品/交易原语，Kiwi 只负责 sourcing 与商业磋商。
+description: Kiwi Sourcing & Negotiation Kit —— 采购/购买/购物一般商品（非餐饮、非外卖、非生鲜）时使用：用户想"买 X"（如买保温杯、充电器、办公用品、工业品，含预算/数量/交期要求），找商家/供应商、询价、比价、还价、问交期/MOQ。经 kiwi-buyer-mcp 的 9 个工具完成跨商家发现 → 询价 → 磋商 → 非绑定协议 → handoff。餐饮/食品/外卖/生鲜请用 eleme-ordering；本 skill 覆盖一般商品采购。
 version: 0.1.0
 author: harrylabsj
 license: Apache-2.0
 metadata:
   hermes:
-    tags: [commerce, sourcing, procurement, rfq, negotiation, mcp, kiwi]
+    tags: [commerce, sourcing, procurement, rfq, negotiation, mcp, kiwi, 购买, 采购, 购物, buy, shopping, 找商家]
     category: commerce
 ---
 
