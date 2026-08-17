@@ -41,6 +41,12 @@ import { createMonotonicClock } from "./clock.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AgentProfile } from "../config/profile.js";
+import { resolveSecret } from "../config/profile.js";
+import {
+  DeepSeekDecisionBackend,
+  MockDecisionBackend,
+  type MerchantDecisionBackend,
+} from "../merchant/decision-backend.js";
 import type { AuthVerifier } from "./server/types.js";
 import {
   A2AServer,
@@ -417,6 +423,25 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
   const ledger = new LedgerStore({ dir, now });
   const idempotency = new IdempotencyStore({ dir, now });
 
+  /** 按 profile.decision 装配 merchant 推理后端（DeepSeek Harness 运行时插件）。 */
+  const buildDecisionBackend = (): MerchantDecisionBackend | undefined => {
+    const cfg = profile.decision;
+    if (cfg === undefined || cfg.enabled === false) return undefined;
+    switch (cfg.backend) {
+      case "deepseek":
+        // api_key_env 惰性解析：profile 只存 env 名；请求时 resolveSecret，
+        // 未设置 → 后端 fail-safe 回落确定性（非静默配置错误）。
+        return new DeepSeekDecisionBackend({
+          apiKey: () => resolveSecret(profile.model.api_key_env ?? "DEEPSEEK_API_KEY", "decision backend"),
+          model: profile.model.model,
+        });
+      case "mock":
+        return new MockDecisionBackend();
+      case "deterministic":
+        return undefined;
+    }
+  };
+
   const handler =
     role === "merchant"
       ? createMerchantHandler({
@@ -426,6 +451,8 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
           counterparty: "buyer:*",
           productSource: buildProductSource(profile),
           allowDemoPriceFallback: profile.commerce.allow_demo_price_fallback ?? false,
+          merchantPolicy: profile.merchant_policy,
+          decisionBackend: buildDecisionBackend(),
         })
       : defaultHandler();
 

@@ -32,3 +32,19 @@ Hermes = 完整 Host Agent（Host→Kiwi Buyer，产品入口）；DeepSeek Harn
 protocol-aware harness（Kiwi↔Harness，contract/model 独立性验证面）。二者共享
 CommerceIntent / DelegationPolicy / Persistent Task / KNP/UCP 边界，不同点只在
 宿主体验、推理实现与包装形式（§6.9）。
+
+## 运行时插件（2026-08-17）
+
+本 harness 的 contract gate 现同时是 **merchant 运行时插件**：
+
+- `src/merchant/decision-backend.ts` —— `MerchantDecisionBackend` 接口 +
+  `DeepSeekDecisionBackend`（raw fetch，零新依赖）/ `MockDecisionBackend`。它**镜像**
+  本文件 `realCandidate`/`mockCandidate` 的 schema 驱动 prompt、`extractJson`、
+  role bounds（merchant → propose/counter）。**两处 prompt 须保持同步**——本文件是
+  只读 contract-gate 验证面，`src/merchant/decision-backend.ts` 是运行时消费方。
+- merchant handler（`src/a2a/server/merchant-handler.ts`）在 rfq/offer/counter 分支
+  咨询后端，产出的**不可信**候选经 `boundPriceMinor` 硬约束（floor / max auto
+  discount / list 封顶）后应用；backend 失败 → 回落确定性基线；backend 从不写
+  （0 write by construction，只 fetch 模型端点）。
+- 配置：merchant.yaml `decision: {backend: deterministic|mock|deepseek, enabled}`；
+  仅 role=merchant 允许；deepseek 需要 `model.api_key_env`（只存 env 名）。
