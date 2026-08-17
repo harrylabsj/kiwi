@@ -35,7 +35,8 @@
     <p class="lead">不同宿主只负责安装、触发和展示；采购状态、权限、幂等与恢复始终由 Kiwi 买家核心负责。</p>
     <div class="surface-grid">
       <article class="surface-card surface-card-strong" id="hermes-install"><div class="surface-label">首个真实宿主</div><h3>Hermes</h3><p>Hermes 保留对话、记忆和用户关系，Kiwi 负责跨商家采购。无需 clone 源码。</p><div class="host-install"><div class="surface-label">一行安装</div><pre><code>npm install -g @harrylabsj/kiwi</code></pre><span>安装后在 Hermes 中启用 Kiwi，即可直接说出采购需求。</span></div></article>
-      <article class="surface-card"><div class="surface-label">原生插件</div><h3>OpenClaw</h3><p>通过 Kiwi 买家插件暴露采购工具，使用独立命名空间，不接触商家运营凭据。</p><a href="developers.html#quickstart">查看插件结构 →</a></article>
+      <article class="surface-card"><div class="surface-label">原生插件</div><h3>OpenClaw</h3><p>插件负责采购工具，Skill 负责识别采购意图。两条命令安装完成，不需要 clone 源码。</p><div class="host-install"><div class="surface-label">安装插件与 Skill</div><pre><code>openclaw plugins install clawhub:kiwi
+openclaw skills install kiwi-buyer</code></pre><span>安装后重启 OpenClaw Gateway，即可直接说出采购需求。</span></div></article>
       <article class="surface-card"><div class="surface-label">开放接口</div><h3>任何 MCP 宿主</h3><p>连接同一 Kiwi MCP 服务，获得一致的意图、授权、任务和错误语义。</p><a href="developers.html">查看开发者文档 →</a></article>
     </div>
   </div></section>
