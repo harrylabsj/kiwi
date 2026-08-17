@@ -1,0 +1,58 @@
+{
+  "id": "kiwi-buyer-openclaw",
+  "name": "Kiwi Buyer Plugin",
+  "version": "0.7.15",
+  "description": "Kiwi buyer core sourcing & negotiation tools (catalog discovery → A2A direct merchant → RFQ → negotiate → approval → handoff) for OpenClaw.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "catalogUrl": {
+        "type": "string",
+        "description": "kiwi-catalog 发现入口；缺省 https://catalog.kiwi.harrylabsj.com"
+      },
+      "a2aSkipDnsCheck": {
+        "type": "boolean",
+        "default": false,
+        "description": "跳过 A2A DNS 保留网段复查（Clash fake-IP 环境需 true）"
+      },
+      "dbPath": {
+        "type": "string",
+        "description": "持久 store 路径；缺省 ~/.kiwi/openclaw.sqlite"
+      },
+      "principal": {
+        "type": "string",
+        "description": "Principal opaque 标识；缺省 openclaw:user"
+      },
+      "buyerAgentId": {
+        "type": "string",
+        "description": "buyer_agent_id；缺省 buyer-agent:openclaw"
+      }
+    }
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "kiwi_buyer_search",
+      "kiwi_buyer_request_quotes",
+      "kiwi_buyer_get_task",
+      "kiwi_buyer_negotiate",
+      "kiwi_buyer_accept_agreement",
+      "kiwi_buyer_get_agreement",
+      "kiwi_buyer_handoff",
+      "kiwi_buyer_approve",
+      "kiwi_buyer_reject"
+    ]
+  },
+  "toolMetadata": {
+    "kiwi_buyer_request_quotes": { "optional": true },
+    "kiwi_buyer_negotiate": { "optional": true },
+    "kiwi_buyer_accept_agreement": { "optional": true },
+    "kiwi_buyer_handoff": { "optional": true },
+    "kiwi_buyer_approve": { "optional": true },
+    "kiwi_buyer_reject": { "optional": true }
+  },
+  "skills": ["./skills"]
+}
