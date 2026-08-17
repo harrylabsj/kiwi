@@ -654,7 +654,7 @@ export function createMerchantHandler(
             product: { priceMinor, currency, stock, title },
           });
           const effectivePriceMinor = suggested === null
-            ? priceMinor
+            ? Math.max(priceMinor, floorMinor) // 确定性兜底路径也 clamp floor（永不低于私有底价）
             : boundPriceMinor({ suggestedMinor: suggested.unitPriceMinor, baseMinor: priceMinor, floorMinor, isDeal: false });
           const publicMessage = publicMessageOf(suggested?.note, note, floorMajor);
           const reply = seedEnvelope({
@@ -695,7 +695,7 @@ export function createMerchantHandler(
             product: { priceMinor, currency, stock, title },
           });
           const effectivePriceMinor = suggested === null
-            ? priceMinor
+            ? Math.max(priceMinor, floorMinor) // 确定性兜底路径也 clamp floor（永不低于私有底价）
             : boundPriceMinor({ suggestedMinor: suggested.unitPriceMinor, baseMinor: priceMinor, floorMinor, isDeal: false });
           const publicMessage = publicMessageOf(suggested?.note, note, floorMajor);
           const reply = seedEnvelope({
@@ -741,7 +741,7 @@ export function createMerchantHandler(
             product: { priceMinor, currency, stock, title },
           });
           const dealPriceMinor = suggested === null
-            ? defaultDeal
+            ? Math.max(defaultDeal, floorMinor) // 确定性兜底路径也 clamp floor
             : boundPriceMinor({
                 suggestedMinor: suggested.unitPriceMinor,
                 baseMinor: priceMinor,
