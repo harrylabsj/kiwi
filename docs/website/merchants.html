@@ -3,146 +3,270 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kiwi Merchant — Install Kiwi Merchant. Connect your catalog.</title>
-  <meta name="description" content="Install Kiwi Merchant. Connect your catalog. Let buyer agents find you, talk to you, and buy from you.">
+  <title>Kiwi Merchant — 让买家 AI 直接找到你</title>
+  <meta name="description" content="Kiwi Merchant 把你的商品目录变成可被买家 AI 发现、询价和谈判的商家智能体。数据留在你的系统，成交交给你的系统。">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="merchant-promo.css">
 </head>
-<body>
+<body class="merchant-page">
 
-<nav class="nav">
+<nav class="nav merchant-nav">
   <div class="nav-inner">
-    <a class="nav-logo" href="index.html">Kiwi</a>
+    <a class="nav-logo" href="index.html">Kiwi<span class="logo-mark">●</span></a>
     <div class="nav-links">
-      <a href="index.html">Home</a>
-      <a href="buyers.html">For Buyers</a>
-      <a href="merchants.html" class="active">For Merchants</a>
-      <a href="developers.html">For Developers</a>
-      <a href="https://catalog.kiwi.harrylabsj.com/portal/account">My Account</a>
+      <a href="index.html">首页</a>
+      <a href="buyers.html">买家</a>
+      <a href="merchants.html" class="active">商家</a>
+      <a href="developers.html">开发者</a>
     </div>
+    <a class="nav-account" href="https://catalog.kiwi.harrylabsj.com/portal/account">商家账户 <span>↗</span></a>
   </div>
 </nav>
 
-<header class="hero">
-  <div class="hero-inner">
-    <h1>Install Kiwi Merchant. Connect your catalog.</h1>
-    <p class="tagline">Let buyer agents find you, talk to you, and buy from you.</p>
-    <div class="hero-actions">
-      <a class="btn btn-solid" href="#install">Get Kiwi Merchant</a>
+<header class="merchant-hero">
+  <div class="hero-glow hero-glow-one"></div>
+  <div class="hero-glow hero-glow-two"></div>
+  <div class="merchant-hero-inner">
+    <div class="hero-copy">
+      <p class="eyebrow light">KIWI MERCHANT / A2A COMMERCE</p>
+      <h1>让买家 AI<br><span>直接找到你。</span></h1>
+      <p class="hero-lead">把你的商品、库存和报价规则，变成一个能被 AI 发现、询价、谈判的商家智能体。</p>
+      <div class="hero-actions">
+        <a class="promo-btn promo-btn-light" href="#quickstart">开始接入 <span>↓</span></a>
+        <a class="promo-btn promo-btn-quiet" href="#demo">观看 30 秒演示 <span>▶</span></a>
+      </div>
+      <p class="hero-footnote">Standalone-first · UCP-first · KNP negotiation</p>
     </div>
-    <div class="cn">
-      <p>安装 Kiwi Merchant。连接你的商品目录。让买家代理找到你、跟你谈、向你买。</p>
+
+    <div class="runtime-scene" aria-label="Kiwi Merchant 运行状态示意">
+      <div class="scene-orbit orbit-one"></div>
+      <div class="scene-orbit orbit-two"></div>
+      <div class="runtime-window">
+        <div class="window-bar">
+          <div class="window-dots"><i></i><i></i><i></i></div>
+          <span>kiwi merchant / live</span>
+          <b>● online</b>
+        </div>
+        <div class="runtime-body">
+          <div class="runtime-head">
+            <div>
+              <p class="mini-label">MERCHANT CORE</p>
+              <h2>Acme Supply</h2>
+            </div>
+            <span class="status-pill">A2A READY</span>
+          </div>
+          <div class="runtime-stats">
+            <div><strong>248</strong><span>公开商品</span></div>
+            <div><strong>12</strong><span>待处理询价</span></div>
+            <div><strong>0</strong><span>越权写入</span></div>
+          </div>
+          <div class="quote-card">
+            <div class="quote-top"><span class="live-dot"></span><span>NEW RFQ</span><time>刚刚</time></div>
+            <p>USB-C 扩展坞 × 200</p>
+            <div class="quote-meta"><span>杭州 · 7 天内</span><span>策略检查中…</span></div>
+            <div class="quote-progress"><span></span></div>
+          </div>
+          <div class="runtime-footer"><span>真实数据在你的系统</span><span>● Policy protected</span></div>
+        </div>
+      </div>
+      <div class="signal-card signal-card-top"><span class="signal-icon">↗</span><span>Buyer found you</span></div>
+      <div class="signal-card signal-card-bottom"><span class="signal-icon">✓</span><span>Quote ready</span></div>
     </div>
   </div>
+  <div class="hero-scroll">向下了解 <span>↓</span></div>
 </header>
 
-<section class="section" id="install">
-  <div class="section-inner">
-    <div class="kicker">Install</div>
-    <h2>One command. Data engine included.</h2>
-    <p class="lead">You install Kiwi. The commerce data engine installs itself when you init.</p>
-    <pre><code>npm install -g @harrylabsj/kiwi
-kiwi merchant init --name "Your Co."
-kiwi merchant publish --profile merchant.yaml --shopping-cli-db &lt;db&gt;</code></pre>
-    <div class="notice">
-      <p>一条命令装 Kiwi；init 只需要你的商家名称（它是你在网络上的公开名称，商家号自动生成），数据引擎（shopping-cli）自动安装——你不需要知道它是什么、装在哪。发布把你的商品送上网络。</p>
-    </div>
+<section class="proof-strip">
+  <div class="proof-inner">
+    <div><span class="proof-value">01</span><span>连接你的商品事实</span></div>
+    <div><span class="proof-value">02</span><span>发布你的商家身份</span></div>
+    <div><span class="proof-value">03</span><span>接收真实 RFQ</span></div>
+    <div><span class="proof-value">04</span><span>交接到你的系统</span></div>
   </div>
 </section>
 
-<section class="section">
-  <div class="section-inner">
-    <div class="kicker">How it works</div>
-    <h2>Four steps to a working merchant agent.</h2>
-    <div class="grid grid-3">
-      <div class="card">
-        <div class="card-num">1</div>
-        <h3>Install — one guided setup</h3>
-        <p>Kiwi + your commerce data engine (shopping-cli), wired together by <code>kiwi merchant init</code>. No manual integration.</p>
+<main>
+  <section class="promo-section intro-section" id="why">
+    <div class="promo-container two-col-intro">
+      <div>
+        <p class="eyebrow">WHY KIWI MERCHANT</p>
+        <h2>不是再开一家店。<br><em>是让 AI 找得到你。</em></h2>
       </div>
-      <div class="card">
-        <div class="card-num">2</div>
-        <h3>Connect your catalog</h3>
-        <p>Local database, ERP, or PIM. Your real data stays yours; only what you approve becomes public.</p>
-      </div>
-      <div class="card">
-        <div class="card-num">3</div>
-        <h3>Publish</h3>
-        <p><code>kiwi merchant publish</code> puts your public products and capabilities on the network, and verifies your agent is reachable.</p>
-      </div>
-      <div class="card">
-        <div class="card-num">4</div>
-        <h3>The deal lands where you choose</h3>
-        <p>A buyer agent finds you, asks, negotiates — and the deal lands in your checkout, ERP, or sales contact, exactly as you decide.</p>
+      <div class="intro-copy">
+        <p>越来越多的采购会从“搜索网页”变成“告诉自己的 AI Agent”。Kiwi Merchant 让你的企业直接出现在这条新链路里。</p>
+        <p class="muted">你的目录、底价、库存和交易系统仍由你掌控。Kiwi 负责把合适的买家带到你的门前，并把谈妥的条件交回你的结账、ERP、采购单或销售团队。</p>
       </div>
     </div>
-    <div class="notice">
-      <p>安装 Kiwi + 你的商业数据引擎（shopping-cli）——一次引导式设置；连接商品目录（本地数据库、ERP 或 PIM），真实数据始终是你的；发布后买家代理找到你、提问、谈判——交易落在你选的结账、ERP 或销售联系人里。</p>
-    </div>
-  </div>
-</section>
+  </section>
 
-<section class="section section-alt">
-  <div class="section-inner">
-    <div class="kicker">Data boundary</div>
-    <h2>Your catalog is your castle.</h2>
-    <p class="lead">Cost, floor price, private inventory and customer terms never leave your system. What the network sees is a public projection you approve — product facts, availability hints, service regions.</p>
-    <div class="notice">
-      <p>你的目录是你的城堡。成本、底价、私密库存与客户条款永不离开你的系统。网络看到的只是你批准的公开投影——商品事实、可用性提示与服务区域。</p>
-    </div>
-  </div>
-</section>
-
-<section class="section">
-  <div class="section-inner">
-    <div class="kicker">Who it's for</div>
-    <h2>Be found directly — without ceding your data.</h2>
-    <p class="lead">For manufacturers, brands, distributors and B2B suppliers who want buyer agents to find them directly — without ceding their catalog, their data, or their checkout to another platform.</p>
-    <div class="notice">
-      <p>面向制造商、品牌方、分销商与 B2B 供应商——让买家代理直接找到你，而不必把目录、数据或结账交给另一个平台。</p>
-    </div>
-  </div>
-</section>
-
-<section class="section section-alt" id="account">
-  <div class="section-inner">
-    <div class="kicker">Get access</div>
-    <h2>Register your merchant account.</h2>
-    <p class="lead">Publishing to the Kiwi network starts with a merchant account. Register once — your token is then managed from <strong>My Account</strong> in the top navigation: apply, view it anytime, and check your listing status.</p>
-    <div class="grid grid-3">
-      <div class="card">
-        <div class="card-num">1</div>
-        <h3>Register</h3>
-        <p>Store domain, merchant name and email — that's it. We review to confirm the merchant identity.</p>
+  <section class="promo-section dark-section" id="how">
+    <div class="promo-container">
+      <div class="section-heading light-heading">
+        <p class="eyebrow light">THE NEW MERCHANT LOOP</p>
+        <h2>买家 AI 说需求，<br><span>你的 Merchant Agent 接住。</span></h2>
       </div>
-      <div class="card">
-        <div class="card-num">2</div>
-        <h3>Token in My Account</h3>
-        <p>After approval, your merchant token (<code>mkt_…</code>) appears in My Account — viewable anytime, no more losing it.</p>
-      </div>
-      <div class="card">
-        <div class="card-num">3</div>
-        <h3>Publish with it</h3>
-        <p>Use the token to register your agent and publish listings. Lost it? Ask operations to rotate it for you.</p>
+      <div class="loop-grid">
+        <article class="loop-card">
+          <div class="loop-number">01</div>
+          <div class="loop-icon">⌕</div>
+          <h3>被发现</h3>
+          <p>Kiwi Catalog 索引你的公开身份、商品能力、服务区域和可谈判能力。</p>
+          <span class="loop-tag">DISCOVERY</span>
+        </article>
+        <article class="loop-card loop-card-active">
+          <div class="loop-number">02</div>
+          <div class="loop-icon">↔</div>
+          <h3>被询价</h3>
+          <p>Buyer Agent 直接向你的 Merchant Agent 发起 RFQ，带来真实数量、交期和条件。</p>
+          <span class="loop-tag">RFQ / KNP</span>
+        </article>
+        <article class="loop-card">
+          <div class="loop-number">03</div>
+          <div class="loop-icon">⌁</div>
+          <h3>按规则报价</h3>
+          <p>底价、折扣、库存和审批由你的 Merchant Core 守住；需要人工时进入审核队列。</p>
+          <span class="loop-tag">POLICY PROTECTED</span>
+        </article>
+        <article class="loop-card">
+          <div class="loop-number">04</div>
+          <div class="loop-icon">↗</div>
+          <h3>交回你的系统</h3>
+          <p>非绑定 Agreement 交给你的 Checkout、ERP、PO、CRM 或销售联系人，Kiwi 不替你收款。</p>
+          <span class="loop-tag">HANDOFF</span>
+        </article>
       </div>
     </div>
-    <div class="notice">
-      <p>在 Kiwi 网络上发布商品先注册商家账号（店铺域名、商家名称、邮箱）。审核通过后，令牌在页面顶部<strong>「我的账户」</strong>里随时可见——申请、查看、状态查询都在那里，不会丢失。注册代理、上传产品用该令牌；遗失请联系运营轮换。</p>
-    </div>
-  </div>
-</section>
+  </section>
 
-<footer class="footer">
+  <section class="promo-section boundary-section">
+    <div class="promo-container">
+      <div class="section-heading">
+        <p class="eyebrow">YOUR DATA BOUNDARY</p>
+        <h2>你的目录，<br><em>你的城堡。</em></h2>
+      </div>
+      <div class="boundary-grid">
+        <div class="boundary-visual">
+          <div class="boundary-core"><span>YOUR<br>MERCHANT<br>CORE</span></div>
+          <div class="boundary-ring ring-a"></div>
+          <div class="boundary-ring ring-b"></div>
+          <div class="boundary-label label-one">ERP / PIM / CSV</div>
+          <div class="boundary-label label-two">POLICY + APPROVAL</div>
+          <div class="boundary-label label-three">YOUR CHECKOUT</div>
+        </div>
+        <div class="boundary-list">
+          <div class="boundary-item"><span class="check">✓</span><div><strong>真实商品事实留在你的系统</strong><p>Kiwi 读取你授权的公开投影和报价所需事实，不复制你的私有经营数据库。</p></div></div>
+          <div class="boundary-item"><span class="check">✓</span><div><strong>底价与权限由 Merchant Core 守住</strong><p>低于底价、敏感客户或异常条件，自动进入 human_required，不静默放宽策略。</p></div></div>
+          <div class="boundary-item"><span class="check">✓</span><div><strong>Kiwi 不碰钱、不创建订单</strong><p>谈判结果是非绑定 Agreement，最终成交仍在你选择的真实系统里发生。</p></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="promo-section quickstart-section" id="quickstart">
+    <div class="promo-container">
+      <div class="section-heading centered-heading">
+        <p class="eyebrow">QUICKSTART</p>
+        <h2>把你的商品接入 AI 采购网络</h2>
+        <p class="section-lead">先用 CSV / Excel 跑通第一条路径；之后再接 ERP、PIM 或你自己的 API。</p>
+      </div>
+      <div class="install-layout">
+        <div class="install-steps">
+          <div class="install-step active"><span>01</span><div><strong>安装运行时</strong><p>Kiwi 负责 Agent、协议、策略与交接；shopping-cli 负责商品事实。</p></div></div>
+          <div class="install-step"><span>02</span><div><strong>导入你的商品</strong><p>用 CSV / Excel 载入 SKU、价格、库存、币种和配送信息。</p></div></div>
+          <div class="install-step"><span>03</span><div><strong>发布并保持在线</strong><p>生成 Merchant profile，注册到 Catalog，启动你的 A2A endpoint。</p></div></div>
+          <div class="install-step"><span>04</span><div><strong>接收 RFQ</strong><p>买家 Agent 找到你后，按你的 policy 询价、谈判并交接。</p></div></div>
+        </div>
+        <div class="terminal-card">
+          <div class="terminal-top"><span><i></i><i></i><i></i></span><b>merchant-setup.sh</b></div>
+          <pre><code><span class="code-comment"># 1. Install</span>
+npm install -g @harrylabsj/kiwi
+pip install shopping-cli kiwi-catalog
+
+<span class="code-comment"># 2. Load your catalog</span>
+export SHOPPING_DB_PATH="$HOME/kiwi-merchant/shopping.sqlite"
+shopping-cli --db "$SHOPPING_DB_PATH" \
+  merchant create --id acme --name "Acme Supply" --city Shanghai
+shopping-cli --db "$SHOPPING_DB_PATH" \
+  import-csv-excel --file products.csv --merchant acme
+
+<span class="code-comment"># 3. Create your merchant profile</span>
+kiwi merchant init --merchant-id acme --name "Acme Supply"
+
+<span class="code-comment"># 4. Publish and serve</span>
+export KIWI_CATALOG_URL="https://catalog.your-domain.com"
+export KIWI_CATALOG_OWNER_TOKEN_SECRET="..."
+export KIWI_A2A_PUBLIC_URL="https://merchant.your-domain.com"
+export KIWI_A2A_AUTH="bearer:replace-with-a-secret"
+kiwi merchant publish \
+  --profile "$HOME/.kiwi/kiwi.yaml" \
+  --shopping-cli-db "$SHOPPING_DB_PATH"
+kiwi merchant start \
+  --profile "$HOME/.kiwi/kiwi.yaml" \
+  --catalog "$KIWI_CATALOG_URL" \
+  --port 8601 --no-chat</code></pre>
+          <div class="terminal-note"><span>↳</span> 公网部署请使用 HTTPS、稳定域名和 secret 注入；不要把 token 写进命令历史或 profile 文件。</div>
+        </div>
+      </div>
+      <div class="quickstart-foot"><span>当前支持：CSV / Excel 首条路径</span><span>后续：ERP / PIM / 自建 API adapter</span><a href="../deploy/local-buyer-aliyun-merchant.md">查看完整部署说明 ↗</a></div>
+    </div>
+  </section>
+
+  <section class="promo-section demo-section" id="demo">
+    <div class="promo-container demo-layout">
+      <div class="demo-copy">
+        <p class="eyebrow">SEE IT IN MOTION</p>
+        <h2>从“有人询价”<br>到“条件交接”</h2>
+        <p class="section-lead">一条真实的 Merchant 运行链：发现、RFQ、政策检查、报价、谈判，最后回到你的成交入口。</p>
+        <a class="text-link" href="kiwi-merchant-demo.mp4" download>下载演示视频 <span>↓</span></a>
+      </div>
+      <div class="video-shell">
+        <video controls preload="metadata" poster="kiwi-merchant-demo-poster.png" aria-label="Kiwi Merchant 产品演示视频">
+          <source src="kiwi-merchant-demo.mp4" type="video/mp4">
+          你的浏览器不支持视频播放。<a href="kiwi-merchant-demo.mp4">下载视频</a>。
+        </video>
+        <div class="video-caption"><span class="play-dot">▶</span><span>Kiwi Merchant / 30s product demo</span><span class="video-duration">00:30</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="promo-section fit-section">
+    <div class="promo-container fit-layout">
+      <div>
+        <p class="eyebrow">BUILT FOR SUPPLY</p>
+        <h2>适合那些不想把生意交给平台的人。</h2>
+      </div>
+      <div class="fit-points">
+        <span>制造商</span><span>品牌方</span><span>分销商</span><span>工业品供应商</span><span>B2B 服务商</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="merchant-cta">
+    <div class="cta-pattern"></div>
+    <div class="promo-container cta-inner">
+      <p class="eyebrow light">READY WHEN YOU ARE</p>
+      <h2>让下一个买家<br>先找到你。</h2>
+      <div class="hero-actions">
+        <a class="promo-btn promo-btn-light" href="#quickstart">开始接入 <span>↑</span></a>
+        <a class="promo-btn promo-btn-quiet" href="mailto:harrylabsj@gmail.com">联系 Kiwi 团队 <span>↗</span></a>
+      </div>
+      <p class="cta-note">Open source · merchant-controlled · no payment custody</p>
+    </div>
+  </section>
+</main>
+
+<footer class="footer merchant-footer">
   <div class="footer-inner">
     <div class="row">
       <div>
-        <p><strong>Open source.</strong> Merchant data stays merchant-controlled.</p>
-        <p><a href="index.html">← Home</a> · <a href="buyers.html">For Buyers →</a></p>
+        <p><strong>Kiwi Merchant</strong> · Open Agent Sourcing &amp; Negotiation Layer</p>
+        <p><a href="index.html">← Kiwi 首页</a> · <a href="buyers.html">买家入口 →</a> · <a href="developers.html">开发者文档 →</a></p>
       </div>
-      <div>
-        <p>开源。商家数据始终由商家掌控。</p>
-      </div>    <div class="contact-line">
-      <p>Contact: <a href="mailto:harrylabsj@gmail.com">harrylabsj@gmail.com</a> · 微信 hddsh2025</p>
-    </div>
+      <div class="footer-right">
+        <p>你的数据始终由你的系统掌控。</p>
+        <p><a href="mailto:harrylabsj@gmail.com">harrylabsj@gmail.com</a> · 微信 hddsh2025</p>
+      </div>
     </div>
   </div>
 </footer>
