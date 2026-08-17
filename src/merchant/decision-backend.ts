@@ -15,20 +15,17 @@
  */
 
 /**
- * MerchantDecisionBackend —— merchant 运行时的受限推理后端（DeepSeek Harness 运行时
- * 插件，战略 v2.5 §6.9 / §十一 Phase 2）。
+ * MerchantDecisionBackend —— 受限 ReasoningBackend 的可复用实现（DeepSeek Harness
+ * contract-gate 验证面，战略 v2.5 §6.9 / §十一 Phase 2）。
  *
- * 设计边界（§3.3 / §6.9）：
- * - backend 只产出 **不可信** DecisionCandidate（`NegotiationDecision`），**不持有
- *   Commerce token、不拥有状态机、无任何最终写入权**（0 写 by construction——
- *   DeepSeek 后端只 fetch 模型端点，从不接触 commerce 端点）。
- * - 调用方（createMerchantHandler）负责验证（冻结 decision 契约）+ 硬边界约束
- *   （floor / max auto discount / list 封顶）后应用；任何失败 → 回落确定性基线。
- * - 独立运行：merchant 是独立进程，不依赖宿主（Standalone-first §7.4）。
+ * **设计边界（2026-08-17 修正）**：kiwi merchant 的定价是**确定性**的，不依赖 LLM；
+ * 生产 merchant handler（`src/a2a/server/merchant-handler.ts`）**不咨询**本模块——
+ * 买家还价在 `[floor, list]` 内确定性响应，促销（批量门槛/折扣）来自可配置的
+ * `merchant_policy`。本模块保留为受限推理后端（产不可信 `NegotiationDecision`、
+ * 0 写 by construction）的验证/复用面，不作为 merchant 的定价权威。
  *
  * 与 integrations/harnesses/deepseek-harness/validate-contract-cases.mjs 共享同一
- * schema 驱动 prompt 与 extractJson —— 两处 prompt 须保持同步（本文件是运行时消费
- * 方，harness 是只读 contract-gate 验证面）。
+ * schema 驱动 prompt 与 extractJson —— 两处 prompt 须保持同步。
  */
 
 import { validateAgainst } from "../contracts/schemas.js";

@@ -15,11 +15,8 @@ model:
   provider: deepseek
   model: deepseek-v4-flash
   api_key_env: DEEPSEEK_API_KEY
-# DeepSeek Harness 运行时插件（§6.9）：DeepSeek 作为受限推理后端产出不可信
-# 决策候选，merchant handler 验证 + floor/discount 硬约束后应用；backend 从不写。
-decision:
-  backend: deepseek
-  enabled: true
+# merchant 定价确定性（不依赖 LLM）：买家还价在 [floor, list] 内响应；
+# 促销（批量门槛/折扣）可配置，见 merchant_policy.promos。
 runtime:
   mode: once
   poll_interval_seconds: 5
