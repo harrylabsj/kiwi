@@ -35,16 +35,14 @@ CommerceIntent / DelegationPolicy / Persistent Task / KNP/UCP 边界，不同点
 
 ## 运行时插件（2026-08-17）
 
-本 harness 的 contract gate 现同时是 **merchant 运行时插件**：
+本 harness 的 contract gate 与 `src/merchant/decision-backend.ts`（`MerchantDecisionBackend`
+接口 + `DeepSeekDecisionBackend` raw fetch 实现 / `MockDecisionBackend`）是**受限
+ReasoningBackend 的验证/可复用面**——它镜像本文件 `realCandidate`/`mockCandidate` 的
+schema 驱动 prompt、`extractJson`、role bounds。
 
-- `src/merchant/decision-backend.ts` —— `MerchantDecisionBackend` 接口 +
-  `DeepSeekDecisionBackend`（raw fetch，零新依赖）/ `MockDecisionBackend`。它**镜像**
-  本文件 `realCandidate`/`mockCandidate` 的 schema 驱动 prompt、`extractJson`、
-  role bounds（merchant → propose/counter）。**两处 prompt 须保持同步**——本文件是
-  只读 contract-gate 验证面，`src/merchant/decision-backend.ts` 是运行时消费方。
-- merchant handler（`src/a2a/server/merchant-handler.ts`）在 rfq/offer/counter 分支
-  咨询后端，产出的**不可信**候选经 `boundPriceMinor` 硬约束（floor / max auto
-  discount / list 封顶）后应用；backend 失败 → 回落确定性基线；backend 从不写
-  （0 write by construction，只 fetch 模型端点）。
-- 配置：merchant.yaml `decision: {backend: deterministic|mock|deepseek, enabled}`；
-  仅 role=merchant 允许；deepseek 需要 `model.api_key_env`（只存 env 名）。
+**注意（2026-08-17 设计修正）**：**kiwi merchant 的定价是确定性的，不依赖 LLM**。
+生产 merchant handler（`src/a2a/server/merchant-handler.ts`）**不咨询** decision
+backend——买家还价在 `[floor, list]` 内确定性响应（floor / list 均来自可配置的
+`merchant_policy`），促销（批量门槛/折扣）也是配置项。本 harness / decision-backend
+模块保留为 contract-gate 验证面（`npm run verify:harness`），不作为 merchant 的
+定价权威。两处 prompt 仍须保持同步（本文件只读验证面 ↔ `src/merchant/decision-backend.ts`）。
