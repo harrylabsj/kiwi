@@ -42,6 +42,9 @@ export interface MerchantPolicy {
   max_auto_discount_percent?: number;
   /** per-SKU 自动折扣上限（%）：`{ sku: pct }`，覆盖全局默认。 */
   sku_max_discount_percent?: Record<string, number>;
+  /** per-SKU 促销（可配置，非硬编码）：`{ sku: { bulk_threshold, bulk_discount_percent } }`。
+   *  买家数量 ≥ bulk_threshold 时，成交价 = max(floor, min(还价, list×(1-d%/100)))。 */
+  promos?: Record<string, { bulk_threshold?: number; bulk_discount_percent?: number }>;
   inventory_source?: string;
   quote_ttl_seconds?: number;
   auto_negotiate?: boolean;
@@ -209,11 +212,13 @@ const MERCHANT_POLICY_KEYS = [
   "price_floors",
   "max_auto_discount_percent",
   "sku_max_discount_percent",
+  "promos",
   "inventory_source",
   "quote_ttl_seconds",
   "auto_negotiate",
   "human_review_on",
 ] as const;
+const PROMO_KEYS = ["bulk_threshold", "bulk_discount_percent"] as const;
 const BUYER_POLICY_KEYS = [
   "target_skus",
   "quantity",
@@ -536,6 +541,25 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
         req(sku.length > 0, `${source}: merchant_policy.sku_max_discount_percent key must be a non-empty string`);
         reqFinite(pct, `merchant_policy.sku_max_discount_percent.${sku}`, source);
         req(pct >= 0 && pct <= 100, `${source}: merchant_policy.sku_max_discount_percent.${sku} must be between 0 and 100`);
+      }
+    }
+    if (mp.promos !== undefined) {
+      req(isObject(mp.promos), `${source}: merchant_policy.promos must be a mapping`);
+      for (const [sku, promo] of Object.entries(mp.promos)) {
+        req(sku.length > 0, `${source}: merchant_policy.promos key must be a non-empty string`);
+        req(isObject(promo), `${source}: merchant_policy.promos.${sku} must be a mapping`);
+        rejectUnknownKeys(promo as Record<string, unknown>, PROMO_KEYS, `merchant_policy.promos.${sku}`, source);
+        const p = promo as Record<string, unknown>;
+        if (p.bulk_threshold !== undefined) {
+          reqFinite(p.bulk_threshold, `merchant_policy.promos.${sku}.bulk_threshold`, source);
+          req(Number.isInteger(p.bulk_threshold) && (p.bulk_threshold as number) >= 1,
+            `${source}: merchant_policy.promos.${sku}.bulk_threshold must be a positive integer`);
+        }
+        if (p.bulk_discount_percent !== undefined) {
+          reqFinite(p.bulk_discount_percent, `merchant_policy.promos.${sku}.bulk_discount_percent`, source);
+          req((p.bulk_discount_percent as number) >= 0 && (p.bulk_discount_percent as number) <= 100,
+            `${source}: merchant_policy.promos.${sku}.bulk_discount_percent must be between 0 and 100`);
+        }
       }
     }
     merchantPolicy = { ...mp } as MerchantPolicy;

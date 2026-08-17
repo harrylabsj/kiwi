@@ -90,9 +90,12 @@ describe("negotiateWithAgent parameterization", () => {
           throw new Error(`no product ${sku}`);
         },
       },
+      // merchant 确定性还价在 [floor, list] 内响应：floor 8950 > 预算 8900 →
+      // 还价 8900 被抬到 floor 8950，超出买方预算 → 拒绝。
+      merchantPolicy: { price_floors: { "VQ-003": 8950 } },
     });
     stacks.push(s);
-    // 买方预算上限 8900，商家 base 8999（qty=1 条件价不命中 → 成交价 8999）。
+    // 买方预算上限 8900，商家 floor 8950 → 还价被抬到 8950 > 预算 → 拒绝。
     const res = await negotiateWithAgent({
       catalog: s.catalogUrl,
       allowLoopback: true,
