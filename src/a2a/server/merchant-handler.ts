@@ -602,17 +602,30 @@ export function createMerchantHandler(
           inReplyToMessageId: 1,
           snapshot: (envelope.payload as Record<string, unknown> | undefined) ?? {},
         });
-      // 私有 floor（major → minor，lossless 才生效；否则视为无 floor）。
-      const floorConversion =
-        options.merchantPolicy?.min_unit_price_private !== undefined
-          ? losslessToMinorUnits(options.merchantPolicy.min_unit_price_private, 2)
-          : undefined;
-      const floorMinor = floorConversion !== undefined && floorConversion.lossless
-        ? floorConversion.amount_minor
-        : 0;
-      const publicMessageOf = (suggestedNote: string | undefined, deterministicNote: string | undefined): string | undefined =>
+      // per-SKU 私有 floor / 折扣上限（major→minor lossless；SKU 未列出用全局默认）。
+      const policyForSku = (sku: string): {
+        floorMinor: number;
+        floorMajor: number | undefined;
+        maxAutoDiscountPercent: number | undefined;
+      } => {
+        const floorValue =
+          options.merchantPolicy?.price_floors?.[sku] ?? options.merchantPolicy?.min_unit_price_private;
+        const floorConv = floorValue !== undefined ? losslessToMinorUnits(floorValue, 2) : undefined;
+        return {
+          floorMinor: floorConv !== undefined && floorConv.lossless ? floorConv.amount_minor : 0,
+          floorMajor: floorValue,
+          maxAutoDiscountPercent:
+            options.merchantPolicy?.sku_max_discount_percent?.[sku]
+            ?? options.merchantPolicy?.max_auto_discount_percent,
+        };
+      };
+      const publicMessageOf = (
+        suggestedNote: string | undefined,
+        deterministicNote: string | undefined,
+        floorMajor: number | undefined,
+      ): string | undefined =>
         suggestedNote !== undefined
-          ? redactPublicMessage(suggestedNote, options.merchantPolicy?.min_unit_price_private)
+          ? redactPublicMessage(suggestedNote, floorMajor)
           : deterministicNote;
 
       switch (envelope.action) {
@@ -630,6 +643,7 @@ export function createMerchantHandler(
           };
           const sku = payload.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = payload.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
+          const { floorMinor, floorMajor } = policyForSku(sku);
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination, stock, title } = product;
@@ -642,7 +656,7 @@ export function createMerchantHandler(
           const effectivePriceMinor = suggested === null
             ? priceMinor
             : boundPriceMinor({ suggestedMinor: suggested.unitPriceMinor, baseMinor: priceMinor, floorMinor, isDeal: false });
-          const publicMessage = publicMessageOf(suggested?.note, note);
+          const publicMessage = publicMessageOf(suggested?.note, note, floorMajor);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -670,6 +684,7 @@ export function createMerchantHandler(
           const buyerOffer = envelope.payload as { offer_id?: string; terms?: { items?: { sku?: string; quantity?: { value?: number } }[] } };
           const sku = buyerOffer.terms?.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = buyerOffer.terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
+          const { floorMinor, floorMajor } = policyForSku(sku);
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination, stock, title } = product;
@@ -682,7 +697,7 @@ export function createMerchantHandler(
           const effectivePriceMinor = suggested === null
             ? priceMinor
             : boundPriceMinor({ suggestedMinor: suggested.unitPriceMinor, baseMinor: priceMinor, floorMinor, isDeal: false });
-          const publicMessage = publicMessageOf(suggested?.note, note);
+          const publicMessage = publicMessageOf(suggested?.note, note, floorMajor);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -711,11 +726,12 @@ export function createMerchantHandler(
           };
           const sku = counter.proposed_terms?.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantity = counter.proposed_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
+          const { floorMinor, floorMajor, maxAutoDiscountPercent } = policyForSku(sku);
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination, stock, title } = product;
           // 条件成交价 = base × (1 - 折扣%)：批量确实更便宜。backend 建议参与
-          // deal 价，但折价深度受 max_auto_discount_percent 硬约束。
+          // deal 价，但折价深度受 per-SKU sku_max_discount_percent 硬约束。
           const discountPercent = options.dealDiscountPercent ?? 5;
           const defaultDeal = applyDiscountPercentMinor(priceMinor, discountPercent);
           const suggested = await consultPrice({
@@ -730,10 +746,10 @@ export function createMerchantHandler(
                 suggestedMinor: suggested.unitPriceMinor,
                 baseMinor: priceMinor,
                 floorMinor,
-                maxAutoDiscountPercent: options.merchantPolicy?.max_auto_discount_percent,
+                maxAutoDiscountPercent,
                 isDeal: true,
               });
-          const publicMessage = publicMessageOf(suggested?.note, note);
+          const publicMessage = publicMessageOf(suggested?.note, note, floorMajor);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
