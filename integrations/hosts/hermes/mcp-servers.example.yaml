@@ -1,6 +1,8 @@
 # Hermes MCP 配置（追加到 ~/.hermes/config.yaml 的 mcp_servers 下）
 #
-# kiwi-buyer-mcp：Hermes 自动发现并注册 7 个 Kiwi Sourcing Tools。
+# kiwi-buyer-mcp：Hermes 自动发现并注册 9 个 Kiwi Sourcing Tools
+# （search/request_quotes/get_task/negotiate/accept_agreement/get_agreement/handoff
+#  + approve/reject 审批面）。
 # 持久 store 在 <KIWI_ROOT>/.kiwi/mcp/state.sqlite；principal 建议按 Hermes 用户区分。
 #
 # 两种执行 seam（build-service.ts 按 URL 选择）：
@@ -26,10 +28,12 @@
 #       - "hermes:<user>"
 #       - "--agent"
 #       - "buyer-agent:hermes"
-#       - "--catalog-url"
-#       - "https://catalog.kiwi.harrylabsj.com"   # 公网 catalog 入口
+#       # --catalog-url 可省略：默认 https://catalog.kiwi.harrylabsj.com（覆盖才需要传）
+#       # - "--catalog-url"
+#       # - "https://catalog.kiwi.harrylabsj.com"
 #       # A2A 可选：--a2a-bearer-token <token>
 #       #         --a2a-allow-private-ranges true（本地/私网 merchant 直连）
+#       #         --a2a-skip-dns-check true（Clash fake-IP 等代理环境需跳过 DNS 复查）
 #       #         --a2a-timeout-ms 20000
 
 # B) marketplace 直连（试点兼容；需本地/隧道可达 shopping-cli）

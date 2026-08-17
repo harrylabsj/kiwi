@@ -45,6 +45,20 @@ function err(error: unknown): McpCallToolResult {
   };
 }
 
+/**
+ * ASK 动作遇 approval_required 时的结构化返回：不抛 isError，而是返回
+ * `{ approval_required: { approval_id }, ...extra }`——宿主拿到持久 approval_id
+ * 呈现给用户确认后调 kiwi_approve，再携 id 重试。approval_id 是 first-class 值，
+ * 不从错误文本解析。
+ */
+function approvalRequiredOrErr(error: unknown, extra: Record<string, unknown>): McpCallToolResult {
+  if (error instanceof McpError && error.code === "approval_required") {
+    const approvalId = (error.detail as { approval_id?: string } | undefined)?.approval_id;
+    return ok(JSON.stringify({ approval_required: { approval_id: approvalId }, ...extra }));
+  }
+  return err(error);
+}
+
 /** 构造 7 个高层工具。任意 handler 抛出的 McpError 都会被转成 isError 结果。 */
 export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] {
   const tools: Array<KiwiToolDefinition & { raw?: boolean }> = [
@@ -187,7 +201,10 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
           });
           return ok(JSON.stringify(result));
         } catch (error) {
-          return err(error);
+          return approvalRequiredOrErr(error, {
+            task_id: String(args.task_id),
+            candidate_id: String(args.candidate_id),
+          });
         }
       },
     },
@@ -213,12 +230,12 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
     {
       name: "kiwi_handoff",
       description:
-        "生成交易/PO/联系路径。要求持久 approval；Agreement → UCP Checkout / merchant transaction endpoint。",
+        "生成交易/PO/联系路径。Agreement → UCP Checkout / merchant transaction endpoint。ASK 时缺审批返回结构化 approval_required（含 approval_id），宿主 kiwi_approve 后携 id 重试。",
       inputSchema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",
         type: "object",
         additionalProperties: false,
-        required: ["agreement_id", "approval_id", "destination_type"],
+        required: ["agreement_id", "destination_type"],
         properties: {
           agreement_id: { type: "string", minLength: 1 },
           approval_id: { type: "string", minLength: 1 },
@@ -230,11 +247,72 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
         try {
           const result = await service.handoff({
             agreement_id: String(args.agreement_id),
-            approval_id: String(args.approval_id),
+            approval_id: args.approval_id === undefined ? undefined : String(args.approval_id),
             destination_type: String(args.destination_type),
             url: args.url === undefined ? undefined : String(args.url),
           });
           return ok(JSON.stringify(result));
+        } catch (error) {
+          return approvalRequiredOrErr(error, {
+            agreement_id: String(args.agreement_id),
+            destination_type: String(args.destination_type),
+          });
+        }
+      },
+    },
+    {
+      name: "kiwi_approve",
+      description:
+        "批准一个持久审批（ASK 门）。宿主在向用户呈现非绑定协议/交接摘要并获得确认后调用；随后携 approval_id 重试 kiwi_accept_agreement / kiwi_handoff。写操作，受宿主审批系统二次拦截。",
+      inputSchema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: false,
+        required: ["approval_id"],
+        properties: {
+          approval_id: { type: "string", minLength: 1 },
+          note: { type: "string" },
+        },
+      },
+      async handle(args) {
+        try {
+          return ok(
+            JSON.stringify(
+              service.approve({
+                approval_id: String(args.approval_id),
+                note: args.note === undefined ? undefined : String(args.note),
+              }),
+            ),
+          );
+        } catch (error) {
+          return err(error);
+        }
+      },
+    },
+    {
+      name: "kiwi_reject",
+      description:
+        "拒绝一个持久审批（deny 优先路径）。拒绝后同一 approval_id 无法再批准或形成协议/交接。",
+      inputSchema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: false,
+        required: ["approval_id"],
+        properties: {
+          approval_id: { type: "string", minLength: 1 },
+          reason: { type: "string" },
+        },
+      },
+      async handle(args) {
+        try {
+          return ok(
+            JSON.stringify(
+              service.reject({
+                approval_id: String(args.approval_id),
+                reason: args.reason === undefined ? undefined : String(args.reason),
+              }),
+            ),
+          );
         } catch (error) {
           return err(error);
         }

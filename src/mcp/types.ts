@@ -108,5 +108,7 @@ export const KIWI_SOURCING_TOOLS = [
   "kiwi_accept_agreement",
   "kiwi_get_agreement",
   "kiwi_handoff",
+  "kiwi_approve",
+  "kiwi_reject",
 ] as const;
 export type KiwiSourcingToolName = (typeof KIWI_SOURCING_TOOLS)[number];

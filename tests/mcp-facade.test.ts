@@ -443,7 +443,7 @@ describe("Merchant Discovery（§3.2 kiwi-catalog 驱动）", () => {
 });
 
 describe("UCP/KNP boundary conformance（§6.1）", () => {
-  it("只暴露 7 个高层 Sourcing Tools，无 UCP/raw-KNP 工具", () => {
+  it("只暴露 Kiwi Sourcing Tools（9 个：7 高层 + approve/reject 审批），无 UCP/raw-KNP 工具", () => {
     const { service } = makeHarness(makeInMemoryStore());
     const names = buildKiwiTools(service).map((t) => t.name);
     expect(names.sort()).toEqual([...KIWI_SOURCING_TOOLS].sort());
@@ -455,6 +455,141 @@ describe("UCP/KNP boundary conformance（§6.1）", () => {
       "send_offer", "evaluate_condition", "resolve_capabilities", "send_rfq", // raw KNP
     ];
     for (const f of forbidden) expect(names).not.toContain(f);
+  });
+});
+
+describe("默认 catalog 入口（kiwi-buyer 免配置发现）", () => {
+  it("默认经 catalog.kiwi.harrylabsj.com 发现，可覆盖", async () => {
+    const { DEFAULT_CATALOG_URL } = await import("../src/mcp/cli.js");
+    expect(DEFAULT_CATALOG_URL).toBe("https://catalog.kiwi.harrylabsj.com");
+  });
+});
+
+describe("kiwi_approve / kiwi_reject（ASK 门宿主审批面）", () => {
+  const tools = buildKiwiTools;
+  /** 从结构化 approval_required 结果安全提取 approval_id（缺失即抛错，避免 `?.id!`）。 */
+  function approvalIdFrom(result: { content?: Array<{ text?: string }> }): string {
+    const body = JSON.parse(result.content?.[0]?.text ?? "{}") as {
+      approval_required?: { approval_id?: string };
+    };
+    const id = body.approval_required?.approval_id;
+    if (typeof id !== "string" || id === "") throw new Error("approval_required missing approval_id");
+    return id;
+  }
+  async function runAcceptApprovalFlow(store: ReturnType<typeof makeInMemoryStore>) {
+    const { service } = makeHarness(store);
+    const calls = tools(service);
+    const call = (name: string, args: Record<string, unknown>) =>
+      calls.find((t) => t.name === name)!.handle(args);
+    const created = await service.requestQuotes({
+      intent: INTENT,
+      idempotency_key: "rfq-approve-flow",
+      merchant_ids: ["merchant-001"],
+    });
+    const taskId = String(created.task.task_id);
+    const winner = (created.task.candidates as Array<Record<string, unknown>>).find(
+      (c) => c.status === "succeeded",
+    )!;
+    return { service, call, taskId, winner };
+  }
+
+  it("accept_agreement 返回结构化 approval_required，宿主 kiwi_approve 后重试成功", async () => {
+    const { call, taskId, winner } = await runAcceptApprovalFlow(makeInMemoryStore());
+    const acc1 = await call("kiwi_accept_agreement", {
+      task_id: taskId,
+      candidate_id: String(winner.candidate_id),
+    });
+    // 结构化返回，不是 isError；approval_id 是 first-class 值。
+    expect(acc1.isError).toBeUndefined();
+    const body1 = JSON.parse(acc1.content?.[0]?.text ?? "{}") as {
+      approval_required?: { approval_id?: string };
+    };
+    const approvalId = body1.approval_required?.approval_id;
+    expect(typeof approvalId).toBe("string");
+
+    const app = await call("kiwi_approve", { approval_id: approvalId!, note: "用户确认" });
+    expect(app.isError).toBeUndefined();
+    expect((JSON.parse(app.content?.[0]?.text ?? "{}") as { status?: string }).status).toBe("approved");
+
+    const acc2 = await call("kiwi_accept_agreement", {
+      task_id: taskId,
+      candidate_id: String(winner.candidate_id),
+      approval_id: approvalId!,
+    });
+    expect(acc2.isError).toBeUndefined();
+    const body2 = JSON.parse(acc2.content?.[0]?.text ?? "{}") as { agreement?: { binding_effect?: string } };
+    expect(body2.agreement?.binding_effect).toBe("nonbinding");
+  });
+
+  it("kiwi_reject 后 accept_agreement 被拒（deny 优先）", async () => {
+    const { call, taskId, winner } = await runAcceptApprovalFlow(makeInMemoryStore());
+    const acc1 = await call("kiwi_accept_agreement", {
+      task_id: taskId,
+      candidate_id: String(winner.candidate_id),
+    });
+    const approvalId = approvalIdFrom(acc1);
+    const rej = await call("kiwi_reject", { approval_id: approvalId, reason: "价格不合适" });
+    expect(rej.isError).toBeUndefined();
+    expect((JSON.parse(rej.content?.[0]?.text ?? "{}") as { status?: string }).status).toBe("denied");
+
+    const acc2 = await call("kiwi_accept_agreement", {
+      task_id: taskId,
+      candidate_id: String(winner.candidate_id),
+      approval_id: approvalId,
+    });
+    expect(acc2.isError).toBe(true);
+    expect(acc2.content?.[0]?.text ?? "").toContain("authorization_denied");
+  });
+
+  it("重复批准非 pending 审批被拒", async () => {
+    const { call, taskId, winner } = await runAcceptApprovalFlow(makeInMemoryStore());
+    const acc1 = await call("kiwi_accept_agreement", {
+      task_id: taskId,
+      candidate_id: String(winner.candidate_id),
+    });
+    const approvalId = approvalIdFrom(acc1);
+    await call("kiwi_approve", { approval_id: approvalId });
+    const again = await call("kiwi_approve", { approval_id: approvalId });
+    expect(again.isError).toBe(true);
+    expect(again.content?.[0]?.text ?? "").toContain("approval_denied");
+  });
+
+  it("handoff 缺审批返回结构化 approval_required，approve 后重试成功（独立 handoff 审批）", async () => {
+    const { call, taskId, winner } = await runAcceptApprovalFlow(makeInMemoryStore());
+    const acc1 = await call("kiwi_accept_agreement", {
+      task_id: taskId,
+      candidate_id: String(winner.candidate_id),
+    });
+    const acceptApprovalId = approvalIdFrom(acc1);
+    await call("kiwi_approve", { approval_id: acceptApprovalId });
+    const acc2 = await call("kiwi_accept_agreement", {
+      task_id: taskId,
+      candidate_id: String(winner.candidate_id),
+      approval_id: acceptApprovalId,
+    });
+    const agreementId = (JSON.parse(acc2.content?.[0]?.text ?? "{}") as { agreement?: { agreement_id?: string } })
+      .agreement?.agreement_id ?? "";
+
+    // handoff 缺 approval → 结构化 approval_required（handoff 独立审批）。
+    const hf1 = await call("kiwi_handoff", {
+      agreement_id: agreementId,
+      destination_type: "external_checkout_url",
+    });
+    expect(hf1.isError).toBeUndefined();
+    const hf1Body = JSON.parse(hf1.content?.[0]?.text ?? "{}") as { approval_required?: { approval_id?: string } };
+    const handoffApprovalId = hf1Body.approval_required?.approval_id;
+    expect(typeof handoffApprovalId).toBe("string");
+
+    await call("kiwi_approve", { approval_id: handoffApprovalId! });
+    const hf2 = await call("kiwi_handoff", {
+      agreement_id: agreementId,
+      approval_id: handoffApprovalId!,
+      destination_type: "external_checkout_url",
+      url: "https://merchant-001.example/checkout/xyz",
+    });
+    expect(hf2.isError).toBeUndefined();
+    const hf2Body = JSON.parse(hf2.content?.[0]?.text ?? "{}") as { handoff_ref?: { handoff_id?: string } };
+    expect(hf2Body.handoff_ref?.handoff_id).toBeDefined();
   });
 });
 

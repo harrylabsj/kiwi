@@ -47,7 +47,7 @@ sourcing and commercial negotiation。**
 - 交期 / MOQ / 售后服务条款：约束进 CommerceIntent 的 `constraints` / `preferences`
 - 形成协议 / 下单意向：`kiwi_accept_agreement` → `kiwi_handoff`
 
-## 7 个高层工具
+## 9 个高层工具（含审批面）
 
 | Tool | 作用 | 写/读 |
 |---|---|---|
@@ -55,9 +55,11 @@ sourcing and commercial negotiation。**
 | `kiwi_request_quotes` | 发起询价，返回稳定 `task_id` | 写（幂等） |
 | `kiwi_get_task` | 任务状态 / 报价 / 部分失败 / 待审批 / 过期 | 读 |
 | `kiwi_negotiate` | CounterOffer / Clarification（受委托轮次限制） | 写 |
-| `kiwi_accept_agreement` | 接受非绑定协议（需 approval） | 写 |
+| `kiwi_accept_agreement` | 接受非绑定协议（ASK 时返回 `approval_required`） | 写 |
 | `kiwi_get_agreement` | 读取协议 + digest + 审计 | 读 |
 | `kiwi_handoff` | 生成 UCP Checkout / PO / 联系路径 | 写 |
+| `kiwi_approve` | 批准持久审批（用户确认后调用） | 写 |
+| `kiwi_reject` | 拒绝持久审批（deny 优先路径） | 写 |
 
 ## CommerceIntent 构造
 
@@ -87,16 +89,20 @@ sourcing and commercial negotiation。**
 
 ## 授权（DelegationPolicy = ask）
 
-`accept_nonbinding` 与 `handoff` 默认 **ASK**。当工具返回 `error approval_required:
-<approval_id>` 时：
+`accept_nonbinding` 与 `handoff` 默认 **ASK**。宿主流程：
 
-1. 向用户呈现将形成的非绑定协议摘要（接受哪个候选、条款、金额）。
-2. 用户确认后，通过 Kiwi 宿主适配面的 `approveApproval(approval_id)` 记录持久审批
-   （本 skill 不暴露该操作时，将 approval_id 交回 Kiwi Ops/宿主审批流）。
-3. 携带 `approval_id` 重试 `kiwi_accept_agreement` / `kiwi_handoff`。
+1. `kiwi_accept_agreement`（无 approval_id）→ **结构化返回** `{ approval_required:
+   { approval_id } }`（不是 isError；approval_id 是 first-class 值）。
+2. 向用户呈现将形成的非绑定协议摘要（接受哪个候选、条款、金额）。
+3. 用户确认后，调 `kiwi_approve(approval_id, note?)` 记录持久审批；用户拒绝则
+   `kiwi_reject(approval_id, reason?)`（deny 优先，拒绝后不可再批准）。
+4. 携带 `approval_id` 重试 `kiwi_accept_agreement` / `kiwi_handoff`（handoff 需
+   独立的 action=handoff 审批）。
 
-**不要**：把 host 侧的"允许"当作最终权限；不要绕过 approval；不要让 Kiwi 处理支付
-（payment 恒 NEVER）。
+**不要**：把 host 侧的"允许"当作最终权限；不要绕过 approval；不要让 LLM 未经
+用户确认就自动 `kiwi_approve`（必须先在对话里呈现协议摘要并获确认）；不要让 Kiwi
+处理支付（payment 恒 NEVER）。`kiwi_approve`/`kiwi_reject` 是写操作，受宿主审批
+系统二次拦截。
 
 ## 错误处理
 

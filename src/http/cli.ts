@@ -24,7 +24,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { DEFAULT_DELEGATION_POLICY, type McpServeOptions } from "../mcp/cli.js";
+import { DEFAULT_CATALOG_URL, DEFAULT_DELEGATION_POLICY, type McpServeOptions } from "../mcp/cli.js";
 import { buildBuyerService } from "../buyer-core/build-service.js";
 import { MerchantOpsService } from "../merchant/ops.js";
 import { createBuyerHttpServer } from "./server.js";
@@ -75,7 +75,7 @@ export async function runHttpServe(args: string[]): Promise<number> {
     buyerAgentId: opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-http",
     sessionId: opts.sessionId ?? process.env.KIWI_SESSION ?? `session-${process.pid}`,
     policy,
-    catalogUrl: opts.catalogUrl,
+    catalogUrl: opts.catalogUrl ?? DEFAULT_CATALOG_URL,
     marketplaceUrl: opts.marketplaceUrl,
     buyerBootstrapToken: opts.buyerBootstrapToken ?? process.env.SHOPPING_BUYER_BOOTSTRAP_TOKEN,
     a2aBearerToken: opts.a2aBearerToken,

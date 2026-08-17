@@ -26,9 +26,9 @@ Kiwi 是"任何 AI Agent 都可调用的开放询价、采购与商业磋商层"
 
 **核心不变量**：
 - **宿主本地**：kiwi buyer（`kiwi-buyer-mcp`）跑在 host 侧，宿主为 hermes、openclaw
-  及其他通用 AI Agent。buyer 提供 7 个高层 Sourcing Tools（`kiwi_search` /
+  及其他通用 AI Agent。buyer 提供 9 个高层 Sourcing Tools（`kiwi_search` /
   `kiwi_request_quotes` / `kiwi_get_task` / `kiwi_negotiate` / `kiwi_accept_agreement` /
-  `kiwi_get_agreement` / `kiwi_handoff`）。
+  `kiwi_get_agreement` / `kiwi_handoff` / `kiwi_approve` / `kiwi_reject`）。
 - **只连 catalog 做发现**：buyer 经 `catalog.kiwi.harrylabsj.com`（公网入口）做商家
   发现与路由 —— `/v1/listings/search` 商品搜索 + `/v1/agents/search` 商家身份/
   Agent Card。buyer **不直连 shopping-cli**。
