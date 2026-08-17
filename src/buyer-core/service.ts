@@ -471,7 +471,8 @@ export class KiwiBuyerService {
 
   async handoff(input: {
     agreement_id: string;
-    approval_id: string;
+    /** 缺省触发 ASK 审批创建（approval_required 结构化返回，宿主 kiwi_approve 后重试）。 */
+    approval_id?: string;
     destination_type: string;
     url?: string;
   }): Promise<{
@@ -497,7 +498,7 @@ export class KiwiBuyerService {
     return { handoff_ref: handoffRef, authorization };
   }
 
-  // ---- 持久审批（宿主适配面，非 7 个 MCP 工具）-------------------------------
+  // ---- 持久审批（宿主适配面；kiwi_approve / kiwi_reject 为 MCP 工具）----------
 
   /** 创建 pending 审批记录（ASK 动作触发）。返回持久 approval_id。 */
   requestApproval(input: {
@@ -548,6 +549,68 @@ export class KiwiBuyerService {
         decided_at: this.now(),
       }),
     });
+  }
+
+  /**
+   * 宿主批准一个 pending 审批（ASK 门北向面）。自含授权记录——宿主只需给出
+   * approval_id（来自 approval_required 结构化结果），无需构造 AuthorizationRecord。
+   * 写操作：宿主在向用户呈现协议摘要并获确认后调用；后续携 approval_id 重试
+   * kiwi_accept_agreement / kiwi_handoff。
+   */
+  approve(input: { approval_id: string; note?: string }): {
+    approval_id: string;
+    status: "approved";
+    decided_at: string;
+  } {
+    const stored = this.store.getApproval(input.approval_id);
+    if (stored === undefined) throw new McpError("invalid_params", `approval ${input.approval_id} not found`);
+    if (stored.status !== "pending") {
+      throw new McpError(
+        "approval_denied",
+        `approval ${input.approval_id} 状态=${stored.status}，只能批准 pending 审批`,
+      );
+    }
+    const expiresAt = stored.expires_at ?? "2099-12-31T23:59:59Z";
+    const decidedAt = this.now();
+    const authorization: AuthorizationRecord = {
+      authorization_id: `authz-${uuidv7()}`,
+      action: stored.action as BuyerAction,
+      subject: {
+        buyer_agent_id: this.buyerAgentId,
+        session_id: this.sessionId,
+        delegation_id: this.policy.policy_id,
+        expires_at: expiresAt,
+      },
+      layers: {
+        runtime_approval: {
+          status: "allowed",
+          reason: `approved by host${input.note !== undefined ? `: ${input.note}` : ""}`,
+        },
+      },
+      effective_decision: "granted",
+      expires_at: expiresAt,
+      decided_at: decidedAt,
+    };
+    this.approveApproval({ approval_id: input.approval_id, authorization });
+    return { approval_id: input.approval_id, status: "approved", decided_at: decidedAt };
+  }
+
+  /** 宿主拒绝一个 pending 审批（deny 优先路径；拒绝后不可再批准）。 */
+  reject(input: { approval_id: string; reason?: string }): {
+    approval_id: string;
+    status: "denied";
+    decided_at: string;
+  } {
+    const stored = this.store.getApproval(input.approval_id);
+    if (stored === undefined) throw new McpError("invalid_params", `approval ${input.approval_id} not found`);
+    if (stored.status !== "pending") {
+      throw new McpError(
+        "approval_denied",
+        `approval ${input.approval_id} 状态=${stored.status}，只能拒绝 pending 审批`,
+      );
+    }
+    this.rejectApproval({ approval_id: input.approval_id, reason: input.reason });
+    return { approval_id: input.approval_id, status: "denied", decided_at: this.now() };
   }
 
   // ---- 五层授权（§5.5 deny 优先）---------------------------------------------

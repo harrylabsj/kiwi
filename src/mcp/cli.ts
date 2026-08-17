@@ -44,6 +44,12 @@ import { buildKiwiTools } from "./tools.js";
 
 export const KIWI_MCP_VERSION = "0.1.0";
 
+/**
+ * 默认 catalog 入口（kiwi-catalog 公网地址）。kiwi-buyer 默认经它发现商家；
+ * 用户无需配置，可用 --catalog-url <url> 覆盖。
+ */
+export const DEFAULT_CATALOG_URL = "https://catalog.kiwi.harrylabsj.com";
+
 /** 内置安全默认 DelegationPolicy（§5.3 默认映射）。 */
 export const DEFAULT_DELEGATION_POLICY = {
   policy_id: "dp-default",
@@ -132,7 +138,7 @@ export async function runMcpServe(args: string[]): Promise<number> {
     buyerAgentId,
     sessionId,
     policy,
-    catalogUrl: opts.catalogUrl,
+    catalogUrl: opts.catalogUrl ?? DEFAULT_CATALOG_URL,
     marketplaceUrl: opts.marketplaceUrl,
     buyerBootstrapToken: opts.buyerBootstrapToken ?? process.env.SHOPPING_BUYER_BOOTSTRAP_TOKEN,
     a2aBearerToken: opts.a2aBearerToken,
