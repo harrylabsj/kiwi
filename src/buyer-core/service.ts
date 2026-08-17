@@ -81,6 +81,8 @@ export interface QuoteCandidateInput {
     buyer_token?: string;
     /** 该商家实际报价的 SKU（磋商 proposal 复用）。 */
     sku?: string;
+    /** A2A 磋商端点（agent card JSONRPC url），供 A2ANegotiator 复用。 */
+    a2a_endpoint?: string;
   };
   failure?: { classification: string; retryable: boolean; detail?: string };
 }

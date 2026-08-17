@@ -53,22 +53,93 @@ export class KiwiCatalogMerchantIndex {
     this.source = new KiwiCatalogSource(deps);
   }
 
+  /**
+   * 商品查询 → catalog listings 搜索（/v1/listings/search，title/category/brand/
+   * summary LIKE）找"能供应该商品的商家"，携带 matching_skus；商家身份/Agent Card
+   * → /v1/agents/search 补齐 agent_card_url/ucp_profile_url/capabilities。
+   *
+   * 合并语义（镜像 MarketplaceMerchantIndex 去重）：
+   * - listing 命中但 agents 无匹配的商家，用 getRecord(owner_agent_id) 定向补
+   *   agent_card_url（商家数有界，不编造）。
+   * - catalog 不可达时按 service 层降级为可解释 note；单侧失败容忍（listings 端点
+   *   在旧 catalog 上可能不存在），双侧失败才 fail-closed。
+   */
   async search(query: string, opts?: { category?: string; region?: string }): Promise<MerchantRecord[]> {
-    const records = await this.source.searchRecords({ q: query });
-    const merchants = records
-      .filter((r) => r.principal_type === "merchant")
-      .filter((r) => r.merchant_id !== undefined)
-      .filter((r) => {
-        if (opts?.category !== undefined && !r.display_name.toLowerCase().includes(opts.category.toLowerCase())) {
-          return false;
+    const [listingsRes, agentsRes] = await Promise.allSettled([
+      this.source.searchListings({
+        q: query,
+        listing_type: "product",
+        ...(opts?.category !== undefined ? { category: opts.category } : {}),
+        ...(opts?.region !== undefined ? { region: opts.region } : {}),
+        limit: 50,
+      }),
+      this.source.searchRecords({ q: query }),
+    ]);
+    if (listingsRes.status === "rejected" && agentsRes.status === "rejected") {
+      // 双侧失败才抛（fail-closed）；单侧失败容忍，保留可用侧结果。
+      throw agentsRes.reason;
+    }
+    const listings = listingsRes.status === "fulfilled" ? listingsRes.value : [];
+    const agents = agentsRes.status === "fulfilled" ? agentsRes.value : [];
+
+    const byId = new Map<string, MerchantRecord>();
+    for (const r of listings) {
+      const merchantId = r.merchant.merchant_id ?? r.listing.owner_agent_id;
+      if (merchantId === undefined || merchantId === "") continue;
+      const sku = r.listing.source_product_ref ?? r.listing.listing_id;
+      const existing = byId.get(merchantId);
+      if (existing === undefined) {
+        byId.set(merchantId, {
+          merchant_id: merchantId,
+          name: r.merchant.display_name,
+          verified: VERIFIED_LEVELS.has(r.agent.verification_level),
+          category: r.listing.category,
+          region: r.listing.regions?.[0],
+          capabilities: [],
+          matching_skus: [sku],
+        });
+      } else {
+        existing.matching_skus = existing.matching_skus ? [...existing.matching_skus, sku] : [sku];
+      }
+    }
+    for (const r of agents) {
+      if (r.principal_type !== "merchant") continue;
+      const merchantId = r.merchant_id ?? r.catalog_agent_id;
+      if (merchantId === undefined || merchantId === "") continue;
+      const existing = byId.get(merchantId);
+      if (existing === undefined) {
+        byId.set(merchantId, mapRecord(r));
+      } else {
+        if (r.verification_level !== undefined) {
+          existing.verified = VERIFIED_LEVELS.has(r.verification_level);
         }
-        if (opts?.region !== undefined && !r.display_name.toLowerCase().includes(opts.region.toLowerCase())) {
-          return false;
+        existing.ucp_profile_url = r.ucp_profile_url ?? existing.ucp_profile_url;
+        existing.agent_card_url = r.agent_card_url ?? existing.agent_card_url;
+        if (r.capabilities !== undefined && r.capabilities.length > 0) {
+          existing.capabilities = [...r.capabilities];
         }
-        return true;
-      })
-      .map((r): MerchantRecord => mapRecord(r));
-    return merchants;
+      }
+    }
+    // listing 命中但缺 Agent Card 的商家：定向取 owner Agent record 补 agent_card_url
+    // （A2A 磋商必需；商家数有界）。
+    await Promise.all(
+      listings.map(async (r) => {
+        const merchantId = r.merchant.merchant_id ?? r.listing.owner_agent_id;
+        const rec = byId.get(merchantId);
+        if (rec === undefined || rec.agent_card_url !== undefined) return;
+        try {
+          const owner = await this.source.getRecord(r.listing.owner_agent_id);
+          rec.agent_card_url = owner.agent_card_url;
+          rec.ucp_profile_url = owner.ucp_profile_url ?? rec.ucp_profile_url;
+          if (owner.capabilities !== undefined && owner.capabilities.length > 0) {
+            rec.capabilities = [...owner.capabilities];
+          }
+        } catch {
+          // 商家不可达：保留已收集字段，不编造。
+        }
+      }),
+    );
+    return [...byId.values()];
   }
 }
 

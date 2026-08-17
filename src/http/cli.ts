@@ -49,6 +49,10 @@ export async function runHttpServe(args: string[]): Promise<number> {
     else if (flag === "--catalog-url") opts.catalogUrl = value;
     else if (flag === "--marketplace-url") opts.marketplaceUrl = value;
     else if (flag === "--buyer-bootstrap-token") opts.buyerBootstrapToken = value;
+    else if (flag === "--a2a-bearer-token") opts.a2aBearerToken = value;
+    else if (flag === "--a2a-allow-private-ranges") opts.a2aAllowPrivateRanges = value === "true";
+    else if (flag === "--a2a-skip-dns-check") opts.a2aSkipDnsCheck = value === "true";
+    else if (flag === "--a2a-timeout-ms") opts.a2aTimeoutMs = Number(value);
     else if (flag === "--port") opts.port = Number(value);
     else if (flag === "--host") opts.host = value;
     else if (flag === "--ucp-config") ucpConfigPath = value;
@@ -74,6 +78,10 @@ export async function runHttpServe(args: string[]): Promise<number> {
     catalogUrl: opts.catalogUrl,
     marketplaceUrl: opts.marketplaceUrl,
     buyerBootstrapToken: opts.buyerBootstrapToken ?? process.env.SHOPPING_BUYER_BOOTSTRAP_TOKEN,
+    a2aBearerToken: opts.a2aBearerToken,
+    a2aAllowPrivateRanges: opts.a2aAllowPrivateRanges,
+    a2aSkipDnsCheck: opts.a2aSkipDnsCheck,
+    a2aTimeoutMs: opts.a2aTimeoutMs,
   });
   const port = opts.port ?? 8787;
   const host = opts.host ?? "127.0.0.1";

@@ -3,11 +3,19 @@
 # kiwi-buyer-mcp：Hermes 自动发现并注册 7 个 Kiwi Sourcing Tools。
 # 持久 store 在 <KIWI_ROOT>/.kiwi/mcp/state.sqlite；principal 建议按 Hermes 用户区分。
 #
-# 复制到 ~/.hermes/config.yaml:
+# 两种执行 seam（build-service.ts 按 URL 选择）：
+#   A) A2A 直连（推荐）：--catalog-url → catalog 发现 + A2A 直连 merchant 磋商。
+#      buyer 只连 catalog 获取信息，然后直接与 kiwi merchant 沟通（merchant 自己调
+#      shopping-cli）。本地试点 daemon 不需要跑。
+#   B) marketplace 直连（试点兼容）：--marketplace-url → shopping-cli 直连。
 #
+# 复制到 ~/.hermes/config.yaml:
+
+# A) A2A 直连（本地 hermes + 远程/本地 catalog + merchant）
 # mcp_servers:
 #   kiwi-buyer-mcp:
 #     command: "node"
+#     cwd: "/Users/<user>/coding/kiwi"     # 必需：mcp serve 对 cwd 敏感
 #     args:
 #       - "/Users/<user>/coding/kiwi/dist/cli.js"
 #       - "mcp"
@@ -18,7 +26,32 @@
 #       - "hermes:<user>"
 #       - "--agent"
 #       - "buyer-agent:hermes"
-#
+#       - "--catalog-url"
+#       - "https://catalog.kiwi.harrylabsj.com"   # 公网 catalog 入口
+#       # A2A 可选：--a2a-bearer-token <token>
+#       #         --a2a-allow-private-ranges true（本地/私网 merchant 直连）
+#       #         --a2a-timeout-ms 20000
+
+# B) marketplace 直连（试点兼容；需本地/隧道可达 shopping-cli）
+# mcp_servers:
+#   kiwi-buyer-mcp:
+#     command: "node"
+#     cwd: "/Users/<user>/coding/kiwi"
+#     args:
+#       - "/Users/<user>/coding/kiwi/dist/cli.js"
+#       - "mcp"
+#       - "serve"
+#       - "--db"
+#       - "/Users/<user>/coding/kiwi/.kiwi/mcp/hermes.sqlite"
+#       - "--principal"
+#       - "hermes:<user>"
+#       - "--agent"
+#       - "buyer-agent:hermes"
+#       - "--marketplace-url"
+#       - "http://127.0.0.1:8765"
+#       - "--buyer-bootstrap-token"
+#       - "<SHOPPING_BUYER_BOOTSTRAP_TOKEN>"
+
 # 安全默认（未给 --policy）：discover/inquiry_rfq/compare/counter_offer=AUTO，
 # accept_nonbinding/handoff=ASK，payment=NEVER。硬约束与更多策略见
 # contracts/delegation-policy/1.0/schema.json。

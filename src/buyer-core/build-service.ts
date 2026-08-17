@@ -23,6 +23,8 @@
  */
 
 import { assertNorthboundContractValid } from "../contracts/northbound-schema.js";
+import { A2ANegotiator } from "./a2a-negotiator.js";
+import { A2AQuoteFetcher } from "./a2a-quote-fetcher.js";
 import { KiwiCatalogMerchantIndex, MarketplaceMerchantIndex } from "./merchant-index.js";
 import { MarketplaceNegotiator } from "./negotiator.js";
 import { MarketplaceQuoteFetcher } from "./quote-fetcher.js";
@@ -38,27 +40,49 @@ export interface BuyerServiceConfig {
   catalogUrl?: string;
   marketplaceUrl?: string;
   buyerBootstrapToken?: string;
+  /** A2A 出站 bearer（服务器为 signature 认证时匿名放行可省）。 */
+  a2aBearerToken?: string;
+  /** A2A 允许打到私网/保留网段（SSRF 逃生门；本地试点直连时开）。 */
+  a2aAllowPrivateRanges?: boolean;
+  /** A2A 跳过 DNS 保留网段复查（测试/本机直连）。 */
+  a2aSkipDnsCheck?: boolean;
+  /** A2A 单请求超时 ms。 */
+  a2aTimeoutMs?: number;
 }
 
-/** 构建 Buyer Core：store + merchant index + quote fetcher + negotiator。 */
+/**
+ * 构建 Buyer Core：store + merchant index + quote fetcher + negotiator。
+ *
+ * 执行 seam 接线（战略 v2.5 Phase 2）：
+ * - marketplaceUrl 优先（试点向后兼容）→ MarketplaceMerchantIndex +
+ *   MarketplaceQuoteFetcher + MarketplaceNegotiator（shopping-cli 直连）。
+ * - 否则 catalogUrl → KiwiCatalogMerchantIndex（listings 感知发现）+ A2AQuoteFetcher
+ *   + A2ANegotiator（catalog 发现 → A2A 直连 merchant 磋商）。
+ */
 export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService {
   assertNorthboundContractValid("delegation-policy", config.policy, "delegation policy");
   const store = new TaskApprovalStore({ dbPath: config.dbPath });
   let merchantIndex;
+  let quoteFetcher;
+  let negotiator;
   if (config.marketplaceUrl !== undefined) {
     merchantIndex = new MarketplaceMerchantIndex({ baseUrl: config.marketplaceUrl });
+    quoteFetcher = new MarketplaceQuoteFetcher({
+      baseUrl: config.marketplaceUrl,
+      buyerBootstrapToken: config.buyerBootstrapToken ?? "",
+    });
+    negotiator = new MarketplaceNegotiator({ baseUrl: config.marketplaceUrl });
   } else if (config.catalogUrl !== undefined) {
     merchantIndex = new KiwiCatalogMerchantIndex({ baseUrl: config.catalogUrl });
+    const a2a = {
+      bearerToken: config.a2aBearerToken,
+      allowPrivateRanges: config.a2aAllowPrivateRanges,
+      skipDnsCheck: config.a2aSkipDnsCheck,
+      timeoutMs: config.a2aTimeoutMs,
+    };
+    quoteFetcher = new A2AQuoteFetcher(a2a);
+    negotiator = new A2ANegotiator(a2a);
   }
-  const quoteFetcher =
-    config.marketplaceUrl !== undefined
-      ? new MarketplaceQuoteFetcher({
-          baseUrl: config.marketplaceUrl,
-          buyerBootstrapToken: config.buyerBootstrapToken ?? "",
-        })
-      : undefined;
-  const negotiator =
-    config.marketplaceUrl !== undefined ? new MarketplaceNegotiator({ baseUrl: config.marketplaceUrl }) : undefined;
   return new KiwiBuyerService({
     store,
     principal: config.principal,

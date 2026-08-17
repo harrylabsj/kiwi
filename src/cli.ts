@@ -1154,7 +1154,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (cmd === "mcp") {
       // `kiwi mcp serve` —— kiwi-buyer-mcp stdio server（战略 v2.5 §6.1）。
       if (sub === "serve") return await runMcpServe(args.command.slice(2));
-      process.stderr.write("usage: kiwi mcp serve [--db <file>] [--principal <id>] [--agent <id>] [--session <id>] [--policy <file>]\n");
+      process.stderr.write("usage: kiwi mcp serve [--db <file>] [--principal <id>] [--agent <id>] [--session <id>] [--policy <file>] [--catalog-url <url>] [--marketplace-url <url>] [--a2a-*]\n");
       return EXIT.CONFIG;
     }
     if (cmd === "buyer-api") {
