@@ -141,6 +141,67 @@ export class KiwiCatalogMerchantIndex {
     );
     return [...byId.values()];
   }
+
+  /**
+   * 按 merchant_id 解析完整记录（含 agent_card_url / matching_skus）。
+   *
+   * requestQuotes 的兜底：宿主传的 merchant_ids 来自一次成功的 kiwi_search，但
+   * requestQuotes 内部会用 intent 的 query 再搜一遍——用户意图文本（如"买一个
+   * 保温杯 预算82元"）未必命中 catalog 的 title/category LIKE，导致匹配不到、
+   * 商家丢 agent_card_url（A2A 无法磋商）。此处按 merchant_id 直接解析：agents 面
+   * 按 merchant_id/catalog_agent_id 匹配，listings 面按 merchant_id 匹配并补
+   * owner agent card。catalog 商家数小，全量扫描可接受。
+   */
+  async resolveById(merchantId: string): Promise<MerchantRecord | undefined> {
+    if (merchantId === undefined || merchantId === "") return undefined;
+    const [agentsRes, listingsRes] = await Promise.allSettled([
+      this.source.searchRecords({}),
+      this.source.searchListings({ limit: 50 }),
+    ]);
+    if (agentsRes.status === "rejected" && listingsRes.status === "rejected") throw agentsRes.reason;
+    const agents = agentsRes.status === "fulfilled" ? agentsRes.value : [];
+    const listings = listingsRes.status === "fulfilled" ? listingsRes.value : [];
+
+    const listing = listings.find(
+      (l) => (l.merchant.merchant_id ?? l.listing.owner_agent_id) === merchantId,
+    );
+    const agent = agents.find((a) => (a.merchant_id ?? a.catalog_agent_id) === merchantId)
+      ?? (listing !== undefined
+        ? agents.find((a) => a.catalog_agent_id === listing.listing.owner_agent_id)
+        : undefined);
+    if (listing === undefined && agent === undefined) return undefined;
+
+    if (listing !== undefined) {
+      // listing 优先：商品事实（matching_skus/category/region）+ agent card
+      const record: MerchantRecord = {
+        merchant_id: listing.merchant.merchant_id ?? listing.listing.owner_agent_id,
+        name: listing.merchant.display_name,
+        verified: VERIFIED_LEVELS.has(listing.agent.verification_level),
+        category: listing.listing.category,
+        region: listing.listing.regions?.[0],
+        capabilities: [],
+        matching_skus: [listing.listing.source_product_ref ?? listing.listing.listing_id],
+      };
+      if (agent !== undefined) {
+        record.agent_card_url = agent.agent_card_url;
+        record.ucp_profile_url = agent.ucp_profile_url ?? record.ucp_profile_url;
+        record.capabilities = agent.capabilities ? [...agent.capabilities] : record.capabilities;
+      } else {
+        try {
+          const owner = await this.source.getRecord(listing.listing.owner_agent_id);
+          record.agent_card_url = owner.agent_card_url;
+          record.ucp_profile_url = owner.ucp_profile_url ?? record.ucp_profile_url;
+          if (owner.capabilities !== undefined && owner.capabilities.length > 0) {
+            record.capabilities = [...owner.capabilities];
+          }
+        } catch {
+          // 商家不可达：保留已收集字段，不编造
+        }
+      }
+      return record;
+    }
+    return mapRecord(agent as CatalogAgentRecord);
+  }
 }
 
 function mapRecord(record: CatalogAgentRecord): MerchantRecord {
@@ -233,6 +294,15 @@ export class MarketplaceMerchantIndex {
       matching_skus:
         skus.size > 0 ? [...skus.entries()].sort((a, b) => b[1] - a[1]).map(([sku]) => sku) : undefined,
     }));
+  }
+
+  /**
+   * marketplace 路径是 legacy（试点 shopping-cli 直连），fetcher 不依赖
+   * agent_card_url；按 merchant_id 无法从商品 FTS 端点解析，返回 undefined →
+   * service 回落最小记录（marketplace fetcher 仍可工作）。
+   */
+  async resolveById(_merchantId: string): Promise<MerchantRecord | undefined> {
+    return undefined;
   }
 }
 
