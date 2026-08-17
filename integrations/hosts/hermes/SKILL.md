@@ -17,6 +17,25 @@ Kiwi 是"任何 AI Agent 都可调用的开放询价、采购与商业磋商层"
 conversation；UCP owns standard commerce primitives；Kiwi owns cross-merchant
 sourcing and commercial negotiation。**
 
+## 职责边界（设计理念）
+
+```
+本地（Hermes 等宿主）            公网                  阿里云服务器
+  hermes ─▶ kiwi buyer ──catalog.kiwi.harrylabsj.com──▶ kiwi-catalog（发现）
+             │  A2A/KNP 直连                              │
+             └──────────────────────────────────────────▶ kiwi merchant
+                                                          │ 唯一可直接调用
+                                                          ▼
+                                                     shopping-cli（真实商品/库存）
+```
+
+- **buyer 在本地、宿主无关**：kiwi-buyer-mcp 跑在 Hermes / OpenClaw / 其他通用
+  Agent 侧；只经 `catalog.kiwi.harrylabsj.com` 发现商家，然后 **A2A 直连 merchant**
+  磋商。buyer **不直连 shopping-cli**。
+- **merchant + shopping-cli 在服务器**：kiwi merchant 是 shopping-cli 的唯一消费者；
+  只有 kiwi merchant 可直接调用 shopping-cli。shopping-cli 绑 127.0.0.1 对外不可达。
+- 完整部署见 `docs/deploy/local-buyer-aliyun-merchant.md`。
+
 ## 何时触发（Trigger）
 
 当用户意图是以下任意一种时调用 Kiwi，而不是自己发明流程：

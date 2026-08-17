@@ -4,6 +4,42 @@
 `kiwi-catalog==0.2.1`（未变）。本文把"本地跑 buyer、服务器跑 merchant + shopping-cli"
 落到可复制命令。
 
+## 设计理念（Data Flow & Responsibility Boundary）
+
+Kiwi 是"任何 AI Agent 都可调用的开放询价、采购与商业磋商层"。职责边界严格划分：
+
+```
+本地（host 侧）                            阿里云服务器（supply 侧）
+┌──────────────────────────────┐        ┌──────────────────────────────┐
+│ 宿主 Agent：hermes / openclaw│        │ kiwi-catalog（发现/路由索引）  │
+│ / 其他通用 Agent              │        │   catalog.kiwi.harrylabsj.com │
+│        │                     │        └──────────┬───────────────────┘
+│        ▼                     │  catalog 发现      │
+│  kiwi buyer（kiwi-buyer-mcp）│ ──────────────────▶│
+│        │  A2A/KNP 直连磋商    │                   │
+│        └─────────────────────┼────▶ kiwi merchant │
+│                              │        │ 唯一可直接调用 │
+│                              │        ▼              │
+│                              │   shopping-cli        │
+└──────────────────────────────┘   （真实商品/库存数据）┘
+```
+
+**核心不变量**：
+- **宿主本地**：kiwi buyer（`kiwi-buyer-mcp`）跑在 host 侧，宿主为 hermes、openclaw
+  及其他通用 AI Agent。buyer 提供 7 个高层 Sourcing Tools（`kiwi_search` /
+  `kiwi_request_quotes` / `kiwi_get_task` / `kiwi_negotiate` / `kiwi_accept_agreement` /
+  `kiwi_get_agreement` / `kiwi_handoff`）。
+- **只连 catalog 做发现**：buyer 经 `catalog.kiwi.harrylabsj.com`（公网入口）做商家
+  发现与路由 —— `/v1/listings/search` 商品搜索 + `/v1/agents/search` 商家身份/
+  Agent Card。buyer **不直连 shopping-cli**。
+- **A2A 直连 merchant**：发现后 buyer 直接与 kiwi merchant 经 A2A/KNP 磋商（RFQ →
+  报价 → 还价 → 非绑定 Agreement → handoff），不经 catalog 转发消息。
+- **只有 kiwi merchant 可直接调用 shopping-cli**：merchant 是 shopping-cli 的唯一
+  消费者，经 `KIWI_COMMERCE_URL`（`127.0.0.1:8765`）读真实商品/库存。shopping-cli
+  绑 127.0.0.1，对外不可达。
+- **服务器跑 supply 侧**：kiwi-catalog + kiwi merchant + shopping-cli 都运行在阿里云
+  服务器；merchant A2A 与 catalog 经公网域名（nginx 反代）暴露。
+
 ## 架构
 
 ```

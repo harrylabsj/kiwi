@@ -342,6 +342,7 @@ export async function startTestA2aStack(
     display_name: "Test Merchant",
     canonical_domain: "test.example",
     agent_card_url: `${holder.baseUrl}/.well-known/agent-card.json`,
+    capabilities: ["com.harrylabsj.kiwi.shopping.negotiation"],
     hosting_mode: "direct_only",
     verification_level: "commerce_verified",
     freshness_state: "fresh",

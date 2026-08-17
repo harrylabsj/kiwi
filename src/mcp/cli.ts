@@ -24,9 +24,14 @@
  *   --session <id>     session_id（默认 env KIWI_SESSION）
  *   --policy <file>    冻结 DelegationPolicy JSON（默认 env KIWI_DELEGATION_POLICY；
  *                      未提供则用内置安全默认：读 AUTO、accept/handoff ASK、payment NEVER）
+ *   --catalog-url      真实 merchant 网络：catalog 发现 → A2A 直连 merchant（listings
+ *                      感知搜索 + A2AQuoteFetcher/A2ANegotiator）
+ *   --marketplace-url  试点兼容：shopping-cli 直连（MarketplaceQuoteFetcher/Negotiator）
+ *   --a2a-bearer-token / --a2a-allow-private-ranges / --a2a-skip-dns-check /
+ *   --a2a-timeout-ms    A2A 轨可选配置
  *
- * 执行 seam（MerchantIndex/QuoteFetcher/Negotiator）在 v0.1 CLI 中未接线，由 Phase 2
- * 注入真实 merchant 网络；本 server 负责契约面 + 持久任务/审批状态机。
+ * 执行 seam（MerchantIndex/QuoteFetcher/Negotiator）已接线：marketplaceUrl 优先，
+ * 否则 catalogUrl → A2A 直连 merchant 网络；本 server 负责契约面 + 持久任务/审批状态机。
  */
 
 import { readFileSync } from "node:fs";
@@ -66,6 +71,10 @@ export interface McpServeOptions {
   catalogUrl?: string;
   marketplaceUrl?: string;
   buyerBootstrapToken?: string;
+  a2aBearerToken?: string;
+  a2aAllowPrivateRanges?: boolean;
+  a2aSkipDnsCheck?: boolean;
+  a2aTimeoutMs?: number;
 }
 
 function readPolicy(options: McpServeOptions, principal: string): Record<string, unknown> {
@@ -98,6 +107,10 @@ export async function runMcpServe(args: string[]): Promise<number> {
     else if (flag === "--catalog-url") opts.catalogUrl = value;
     else if (flag === "--marketplace-url") opts.marketplaceUrl = value;
     else if (flag === "--buyer-bootstrap-token") opts.buyerBootstrapToken = value;
+    else if (flag === "--a2a-bearer-token") opts.a2aBearerToken = value;
+    else if (flag === "--a2a-allow-private-ranges") opts.a2aAllowPrivateRanges = value === "true";
+    else if (flag === "--a2a-skip-dns-check") opts.a2aSkipDnsCheck = value === "true";
+    else if (flag === "--a2a-timeout-ms") opts.a2aTimeoutMs = Number(value);
     else if (flag === "--policy") {
       try {
         opts.policy = JSON.parse(readFileSync(value, "utf-8")) as Record<string, unknown>;
@@ -122,6 +135,10 @@ export async function runMcpServe(args: string[]): Promise<number> {
     catalogUrl: opts.catalogUrl,
     marketplaceUrl: opts.marketplaceUrl,
     buyerBootstrapToken: opts.buyerBootstrapToken ?? process.env.SHOPPING_BUYER_BOOTSTRAP_TOKEN,
+    a2aBearerToken: opts.a2aBearerToken,
+    a2aAllowPrivateRanges: opts.a2aAllowPrivateRanges,
+    a2aSkipDnsCheck: opts.a2aSkipDnsCheck,
+    a2aTimeoutMs: opts.a2aTimeoutMs,
   });
   const tools = buildKiwiTools(service);
   const server = new McpServer({
