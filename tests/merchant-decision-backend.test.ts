@@ -360,6 +360,36 @@ describe("createMerchantHandler 硬边界（DeepSeek Harness 运行时插件）"
     }
   });
 
+  it("确定性兜底路径也 clamp floor（商品源价低于 floor → 抬到 floor）", async () => {
+    // 无 decisionBackend（确定性路径）；商品价 ¥60 < floor ¥80 → offer 钳到 8000。
+    const { handler, stop } = await setupHandler({
+      productPrice: 60,
+      merchantPolicy: { price_floors: { "SKU-001": 80 } },
+    });
+    try {
+      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
+      expect(offerPriceMinor(res)).toBe(8000);
+    } finally {
+      stop();
+    }
+  });
+
+  it("确定性兜底路径 deal 也 clamp floor（折后价低于 floor → 抬到 floor）", async () => {
+    // 无 backend；list ¥89，5% 折后 84.55，但 floor 85 → deal 钳到 8500。
+    const { handler, stop } = await setupHandler({
+      productPrice: 89,
+      merchantPolicy: { price_floors: { "SKU-001": 85 } },
+    });
+    try {
+      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
+      const res = await run(handler, envelopeFor("counter_offer", { offer_id: "off_b", proposed_terms: {} }));
+      // deal = max(applyDiscount(8900, 5)=8455, floor 8500) = 8500
+      expect(offerPriceMinor(res)).toBe(8500);
+    } finally {
+      stop();
+    }
+  });
+
   it("per-SKU floor：price_floors 覆盖全局默认", async () => {
     // 全局 floor 0，但 SKU-001 的 per-SKU floor 80 → 建议 50 元被钳到 8000 minor。
     const { handler, stop } = await setupHandler({
