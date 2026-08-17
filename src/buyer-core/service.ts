@@ -65,6 +65,12 @@ export interface MerchantRecord {
 
 export interface MerchantIndex {
   search(query: string, opts?: { category?: string; region?: string }): Promise<MerchantRecord[]>;
+  /**
+   * 按 merchant_id 解析完整记录（含 agent_card_url / matching_skus）。requestQuotes
+   * 在 intent query 文本搜索匹配不到商家时用此兜底——不依赖用户意图文本恰好命中
+   * catalog 的 title/category LIKE（否则丢 agent_card_url → A2A 无法磋商）。
+   */
+  resolveById(merchantId: string): Promise<MerchantRecord | undefined>;
 }
 
 export interface QuoteCandidateInput {
@@ -286,14 +292,19 @@ export class KiwiBuyerService {
       // 用意图的商品查询解析商家（拿到各自 matching_skus，供 RFQ 用商家自有 SKU）。
       const resolved =
         index !== undefined ? await index.search(this.firstQuery(input.intent)) : [];
-      const merchantRecords = merchants.map(
-        (m) =>
-          resolved.find((r) => r.merchant_id === m) ?? {
-            merchant_id: m,
-            name: m,
-            verified: false,
-            capabilities: [],
-          },
+      const merchantRecords = await Promise.all(
+        merchants.map(async (m) => {
+          const found = resolved.find((r) => r.merchant_id === m);
+          if (found !== undefined) return found;
+          // intent query 文本未命中 catalog LIKE 时按 merchant_id 直接解析
+          // （保 agent_card_url，A2A 才能磋商；host 的 merchant_ids 来自一次
+          // 成功的 kiwi_search，不该因意图措辞丢失完整记录）。
+          if (index !== undefined) {
+            const byId = await index.resolveById(m);
+            if (byId !== undefined) return byId;
+          }
+          return { merchant_id: m, name: m, verified: false, capabilities: [] };
+        }),
       );
       const results = await this.quoteFetcher.requestQuotes(input.intent, merchantRecords);
       const successes = results.filter((r) => r.status === "succeeded").length;

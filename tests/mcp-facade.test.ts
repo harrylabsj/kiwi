@@ -71,6 +71,12 @@ const MERCHANTS: MerchantIndex = {
       { merchant_id: "merchant-002", name: "商家乙", verified: false, category: "it", region: "上海", capabilities: ["com.harrylabsj.kiwi.shopping.negotiation"] },
     ].filter((m) => query === "" || m.name.includes(query));
   },
+  async resolveById(merchantId) {
+    return [
+      { merchant_id: "merchant-001", name: "商家甲", verified: true, category: "it", region: "杭州", capabilities: ["com.harrylabsj.kiwi.shopping.negotiation"] },
+      { merchant_id: "merchant-002", name: "商家乙", verified: false, category: "it", region: "上海", capabilities: ["com.harrylabsj.kiwi.shopping.negotiation"] },
+    ].find((m) => m.merchant_id === merchantId);
+  },
 };
 
 function fakeQuoteFetcher(): QuoteFetcher {
@@ -391,6 +397,9 @@ describe("Merchant Discovery（§3.2 kiwi-catalog 驱动）", () => {
       delegationPolicy: POLICY,
       merchantIndex: {
         async search() {
+          throw new Error("connection refused");
+        },
+        async resolveById() {
           throw new Error("connection refused");
         },
       },

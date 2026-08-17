@@ -99,6 +99,64 @@ describe("A2AQuoteFetcher（catalog 发现 → A2A 直连 merchant RFQ）", () =
     expect(results[0]!.status).toBe("failed");
     expect(results[0]!.failure?.classification).toBe("unreachable");
   });
+
+  it("intent query 文本不匹配 catalog 时仍按 merchant_id 解析成功（回归：不丢 agent_card_url）", async () => {
+    const { buildBuyerService } = await import("../src/buyer-core/build-service.js");
+    const { buildKiwiTools } = await import("../src/mcp/tools.js");
+    const { DEFAULT_DELEGATION_POLICY } = await import("../src/mcp/cli.js");
+    const stack = await startTestA2aStack({
+      productSource: {
+        getProduct: async () => ({ price: 189, currency: "CNY", title: "Test Product", stock: 120 }),
+      },
+    });
+    try {
+      const service = buildBuyerService({
+        dbPath: ":memory:",
+        principal: "hermes:probe",
+        buyerAgentId: "buyer-agent:hermes",
+        sessionId: "repro-no-card",
+        policy: { ...DEFAULT_DELEGATION_POLICY, principal: "hermes:probe" },
+        catalogUrl: stack.catalogUrl,
+        a2aAllowPrivateRanges: true,
+        a2aSkipDnsCheck: true,
+        a2aTimeoutMs: 8000,
+      });
+      const tools = buildKiwiTools(service);
+      const call = (name: string, args: Record<string, unknown>) =>
+        tools.find((t) => t.name === name)!.handle(args);
+      const text = (r: { content?: Array<{ text?: string }> }) => r.content?.[0]?.text ?? "";
+
+      // 先 search 拿到 merchant（带 agent_card_url）
+      const s = JSON.parse(text(await call("kiwi_search", { query: "Test Product" }))) as {
+        merchants?: Array<{ merchant_id: string; agent_card_url?: string }>;
+      };
+      const merchant = s.merchants?.[0];
+      expect(merchant).toBeDefined();
+      expect(merchant?.agent_card_url).toContain("agent-card.json");
+
+      // request_quotes 用完全不同的意图措辞（catalog LIKE 匹配不上）—— 应仍按 id 解析成功
+      const rq = await call("kiwi_request_quotes", {
+        intent: {
+          intent_id: "repro-no-card-1",
+          intent_type: "purchase",
+          items: [{ query: "买一个完全不同的商品 预算不知道", quantity: { value: 1, unit: "个" } }],
+          constraints: { currency: "CNY" },
+          context_projection: { disclosure_boundary: "commerce_required", projected_fields: ["items", "constraints"] },
+        },
+        merchant_ids: [merchant!.merchant_id],
+      });
+      expect(rq.isError).toBeUndefined();
+      const taskId = (JSON.parse(text(rq)) as { task_id: string }).task_id;
+      const gt = JSON.parse(text(await call("kiwi_get_task", { task_id: taskId }))) as {
+        task?: { candidates?: Array<{ status: string; failure?: { classification?: string } }> };
+      };
+      const candidates = gt.task?.candidates ?? [];
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]!.status).toBe("succeeded");
+    } finally {
+      await stack.stop();
+    }
+  });
 });
 
 describe("A2ANegotiator（A2A 直连 merchant CounterOffer）", () => {
