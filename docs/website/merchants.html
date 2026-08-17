@@ -30,11 +30,10 @@
   <div class="merchant-hero-inner">
     <div class="hero-copy">
       <p class="eyebrow light">KIWI MERCHANT / A2A COMMERCE</p>
-      <h1>让买家 AI<br><span>直接找到你。</span></h1>
+      <h1>让买家 AI 智能体直接找到你</h1>
       <p class="hero-lead">把你的商品、库存和报价规则，变成一个能被 AI 发现、询价、谈判的商家智能体。</p>
       <div class="hero-actions">
         <a class="promo-btn promo-btn-light" href="#quickstart">开始接入 <span>↓</span></a>
-        <a class="promo-btn promo-btn-quiet" href="#demo">观看 30 秒演示 <span>▶</span></a>
       </div>
       <p class="hero-footnote">Standalone-first · UCP-first · KNP negotiation</p>
     </div>
@@ -179,54 +178,22 @@
         </div>
         <div class="terminal-card">
           <div class="terminal-top"><span><i></i><i></i><i></i></span><b>merchant-setup.sh</b></div>
-          <pre><code><span class="code-comment"># 1. Install</span>
+          <pre><code><span class="code-comment"># 1. 安装（shopping-cli 会作为依赖自动安装，无需单独装）</span>
 npm install -g @harrylabsj/kiwi
-pip install shopping-cli kiwi-catalog
 
-<span class="code-comment"># 2. Load your catalog</span>
-export SHOPPING_DB_PATH="$HOME/kiwi-merchant/shopping.sqlite"
-shopping-cli --db "$SHOPPING_DB_PATH" \
-  merchant create --id acme --name "Acme Supply" --city Shanghai
-shopping-cli --db "$SHOPPING_DB_PATH" \
+<span class="code-comment"># 2. 初始化商家 + 导入商品（CSV / Excel）</span>
+kiwi merchant init --merchant-id acme --name "Acme Supply"
+shopping-cli --db "$HOME/kiwi-merchant/shopping.sqlite" \
   import-csv-excel --file products.csv --merchant acme
 
-<span class="code-comment"># 3. Create your merchant profile</span>
-kiwi merchant init --merchant-id acme --name "Acme Supply"
-
-<span class="code-comment"># 4. Publish and serve</span>
-export KIWI_CATALOG_URL="https://catalog.your-domain.com"
-export KIWI_CATALOG_OWNER_TOKEN_SECRET="..."
-export KIWI_A2A_PUBLIC_URL="https://merchant.your-domain.com"
-export KIWI_A2A_AUTH="bearer:replace-with-a-secret"
-kiwi merchant publish \
-  --profile "$HOME/.kiwi/kiwi.yaml" \
-  --shopping-cli-db "$SHOPPING_DB_PATH"
-kiwi merchant start \
-  --profile "$HOME/.kiwi/kiwi.yaml" \
-  --catalog "$KIWI_CATALOG_URL" \
+<span class="code-comment"># 3. 发布到网络并保持在线</span>
+kiwi merchant publish --shopping-cli-db "$HOME/kiwi-merchant/shopping.sqlite"
+kiwi merchant start --catalog https://catalog.kiwi.harrylabsj.com \
   --port 8601 --no-chat</code></pre>
-          <div class="terminal-note"><span>↳</span> 公网部署请使用 HTTPS、稳定域名和 secret 注入；不要把 token 写进命令历史或 profile 文件。</div>
+          <div class="terminal-note"><span>↳</span> 卖家只需装 Kiwi；shopping-cli 作为依赖自动带上，kiwi-catalog 由 Kiwi 官方运营、无需自装。公网部署请使用 HTTPS 与稳定域名。</div>
         </div>
       </div>
       <div class="quickstart-foot"><span>当前支持：CSV / Excel 首条路径</span><span>后续：ERP / PIM / 自建 API adapter</span><a href="../deploy/local-buyer-aliyun-merchant.md">查看完整部署说明 ↗</a></div>
-    </div>
-  </section>
-
-  <section class="promo-section demo-section" id="demo">
-    <div class="promo-container demo-layout">
-      <div class="demo-copy">
-        <p class="eyebrow">SEE IT IN MOTION</p>
-        <h2>从“有人询价”<br>到“条件交接”</h2>
-        <p class="section-lead">一条真实的 Merchant 运行链：发现、RFQ、政策检查、报价、谈判，最后回到你的成交入口。</p>
-        <a class="text-link" href="kiwi-merchant-demo.mp4" download>下载演示视频 <span>↓</span></a>
-      </div>
-      <div class="video-shell">
-        <video controls preload="metadata" poster="kiwi-merchant-demo-poster.png" aria-label="Kiwi Merchant 产品演示视频">
-          <source src="kiwi-merchant-demo.mp4" type="video/mp4">
-          你的浏览器不支持视频播放。<a href="kiwi-merchant-demo.mp4">下载视频</a>。
-        </video>
-        <div class="video-caption"><span class="play-dot">▶</span><span>Kiwi Merchant / 30s product demo</span><span class="video-duration">00:30</span></div>
-      </div>
     </div>
   </section>
 
