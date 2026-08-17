@@ -24,8 +24,8 @@
 
 <header class="hero">
   <div class="hero-inner">
-    <h1>让 AI 智能体替你采购。</h1>
-    <p class="tagline">「帮我买 200 个保温杯，预算 82 元以内，本周内到。」</p>
+    <h1>让 AI 智能体替你采购</h1>
+    <p class="tagline">「帮我买 200 个保温杯，单个预算 82 元以内，本周内到。」</p>
     <p class="sub">—— 一句需求就够了。你的 AI 智能体（hermes / openclaw / 其他）通过 Kiwi 开始发现、询价、比价与磋商。</p>
     <div class="hero-actions">
       <a class="btn btn-solid" href="#how">了解工作方式</a>
@@ -42,7 +42,7 @@
       <div class="card">
         <div class="card-num">1</div>
         <h3>对你的 AI 说需求</h3>
-        <p>商品、数量、预算、交期。自然语言就够了。Kiwi 在 hermes、openclaw 等宿主里以 9 个高层工具接入。</p>
+        <p>商品、数量、预算、交期。自然语言就够了。Kiwi 在 hermes、openclaw 等宿主里以插件接入。</p>
       </div>
       <div class="card">
         <div class="card-num">2</div>
@@ -59,27 +59,6 @@
         <h3>审批后交接成交</h3>
         <p>谈成后先把非绑定协议呈现给你确认；你确认后 Kiwi 把它交接给你信任的结账、采购单、ERP 或联系人。</p>
       </div>
-    </div>
-  </div>
-</section>
-
-<section class="section section-alt">
-  <div class="section-inner">
-    <div class="kicker">9 个高层工具</div>
-    <h2>宿主里的 Kiwi Buyer。</h2>
-    <p class="lead">kiwi-buyer-mcp（hermes / 其他 MCP 宿主）与 kiwi-buyer-openclaw 插件暴露同一套 9 个工具：</p>
-    <div class="table-scroll">
-    <table>
-      <tr><th>工具</th><th>作用</th></tr>
-      <tr><td>kiwi_buyer_search</td><td>发现候选供应商（经 catalog）</td></tr>
-      <tr><td>kiwi_buyer_request_quotes</td><td>发起询价，返回稳定 task_id</td></tr>
-      <tr><td>kiwi_buyer_get_task</td><td>任务状态 / 报价 / 待审批 / 部分失败</td></tr>
-      <tr><td>kiwi_buyer_negotiate</td><td>还价 / 澄清（受委托轮次约束）</td></tr>
-      <tr><td>kiwi_buyer_accept_agreement</td><td>接受非绑定协议（ASK 时需审批）</td></tr>
-      <tr><td>kiwi_buyer_get_agreement</td><td>读取协议 + 审计</td></tr>
-      <tr><td>kiwi_buyer_handoff</td><td>生成结账 / 采购单 / 联系路径</td></tr>
-      <tr><td>kiwi_buyer_approve / reject</td><td>批准 / 拒绝持久审批（用户确认后）</td></tr>
-    </table>
     </div>
   </div>
 </section>
