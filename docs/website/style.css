@@ -1,21 +1,21 @@
 /* Kiwi 官网 — 全中文产品站共享样式，零外部依赖 */
 
 :root {
-  --kiwi-950: #0a2415;
-  --kiwi-900: #103a22;
-  --kiwi-800: #17572f;
-  --kiwi-700: #23723d;
-  --kiwi-600: #2f8f4e;
-  --kiwi-500: #53b96e;
-  --kiwi-300: #a9dfb6;
-  --kiwi-100: #e8f6eb;
-  --kiwi-50: #f4faf5;
-  --lime: #d6f56f;
-  --ink: #142019;
-  --ink-soft: #536159;
-  --paper: #fffef9;
-  --paper-soft: #f3f6f1;
-  --line: #d8e1d8;
+  --kiwi-950: #143d18;
+  --kiwi-900: #1b5e20;
+  --kiwi-800: #2e7d32;
+  --kiwi-700: #388e3c;
+  --kiwi-600: #43a047;
+  --kiwi-500: #66bb6a;
+  --kiwi-300: #a5d6a7;
+  --kiwi-100: #e8f5e9;
+  --kiwi-50: #f6faf6;
+  --lime: #e8f5e9;
+  --ink: #1a1f1a;
+  --ink-soft: #4b554b;
+  --paper: #ffffff;
+  --paper-soft: #f6f8f6;
+  --line: #dde5dd;
   --line-dark: rgba(255, 255, 255, 0.16);
   --radius: 16px;
   --shadow: 0 24px 70px rgba(8, 40, 20, 0.14);
@@ -112,9 +112,8 @@ a:focus-visible,
   overflow: hidden;
   color: #fff;
   background:
-    linear-gradient(115deg, rgba(214, 245, 111, 0.08) 0 1px, transparent 1px 100%),
-    linear-gradient(145deg, var(--kiwi-950), var(--kiwi-900) 58%, #1c6738);
-  background-size: 44px 44px, auto;
+    radial-gradient(1100px 500px at 85% -10%, rgba(67, 160, 71, 0.35), transparent 60%),
+    linear-gradient(160deg, var(--kiwi-900), var(--kiwi-800) 55%, var(--kiwi-700));
   padding: 88px 24px 82px;
 }
 
@@ -125,7 +124,7 @@ a:focus-visible,
   bottom: -90px;
   width: 54%;
   height: 210px;
-  background: rgba(214, 245, 111, 0.08);
+  background: rgba(67, 160, 71, 0.12);
   transform: skewY(-7deg);
   pointer-events: none;
 }
@@ -181,7 +180,7 @@ a:focus-visible,
 
 .btn:hover { transform: translateY(-2px); }
 .btn-solid,
-.btn-solid:visited { color: var(--kiwi-950); background: var(--lime); box-shadow: 0 12px 28px rgba(0, 0, 0, 0.2); }
+.btn-solid:visited { color: var(--kiwi-800); background: #fff; box-shadow: 0 12px 28px rgba(0, 0, 0, 0.2); }
 .btn-solid:hover { box-shadow: 0 16px 34px rgba(0, 0, 0, 0.25); }
 .btn-ghost,
 .btn-ghost:visited { color: #fff; border-color: rgba(255, 255, 255, 0.52); background: rgba(255, 255, 255, 0.04); }
@@ -202,7 +201,7 @@ a:focus-visible,
   font-size: 0.82rem;
 }
 
-.pilot-badge span { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 6px rgba(214, 245, 111, 0.1); }
+.pilot-badge span { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 6px rgba(232, 245, 233, 0.12); }
 
 /* 首页产品关系图 */
 .hero-map {
@@ -218,7 +217,7 @@ a:focus-visible,
 .map-node small { display: block; color: var(--kiwi-300); font-size: .69rem; font-weight: 700; letter-spacing: .1em; }
 .map-node strong { display: block; margin-top: 4px; font-size: 1rem; }
 .map-node span { display: block; margin-top: 3px; color: rgba(255,255,255,.6); font-size: .76rem; }
-.map-kiwi { border-color: rgba(214, 245, 111, .55); background: rgba(214, 245, 111, .08); }
+.map-kiwi { border-color: rgba(232, 245, 233, .55); background: rgba(232, 245, 233, .08); }
 .map-line { height: 48px; display: grid; place-items: center; color: var(--kiwi-300); font-size: .7rem; }
 .map-line::before, .map-line::after { content: ""; display: block; width: 1px; height: 8px; background: rgba(255,255,255,.38); }
 .map-split { height: 36px; margin: 0 42px; border-top: 1px solid rgba(255,255,255,.32); display: flex; justify-content: space-between; }
@@ -230,7 +229,7 @@ a:focus-visible,
 .section { padding: 82px 24px; }
 .section-inner { max-width: var(--maxw); margin: 0 auto; }
 .section-alt { background: var(--paper-soft); }
-.section-dark { color: #fff; background: var(--kiwi-950); }
+.section-dark { color: #fff; background: var(--kiwi-900); }
 
 .kicker { color: var(--kiwi-700); font-size: .75rem; font-weight: 760; letter-spacing: .14em; }
 .kicker-light { color: var(--kiwi-300); }
@@ -297,7 +296,7 @@ h2 { max-width: 19em; margin-top: 12px; font-size: clamp(1.8rem, 3.6vw, 2.75rem)
 .host-chat span { color: var(--kiwi-700); font-size: .7rem; font-weight: 760; }
 .host-chat p { margin-top: 4px; font-size: .9rem; }
 .host-route { padding: 18px 0 18px 22px; color: var(--kiwi-300); font-size: .72rem; }
-.host-kiwi { padding: 20px; border: 1px solid rgba(214,245,111,.48); border-radius: 12px; background: rgba(214,245,111,.08); }
+.host-kiwi { padding: 20px; border: 1px solid rgba(232,245,233,.48); border-radius: 12px; background: rgba(232,245,233,.08); }
 .host-kiwi small, .host-kiwi strong, .host-kiwi span { display: block; }
 .host-kiwi small { color: var(--lime); font-size: .7rem; }
 .host-kiwi strong { margin-top: 7px; font-size: .96rem; }

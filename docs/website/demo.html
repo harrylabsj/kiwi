@@ -6,18 +6,18 @@
   <title>Kiwi 产品演示 —— 一次跨商家询价如何完成</title>
   <meta name="description" content="用一个真实可理解的办公采购案例，演示 Kiwi 如何连接已有 AI 智能体、商家发现网络与独立商家运行时。">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <link rel="stylesheet" href="style.css?v=20260817-2">
+  <link rel="stylesheet" href="style.css?v=20260817-3">
   <style>
-    body { background: #071b10; }
-    .demo-nav { background: rgba(7, 27, 16, .92); border-color: rgba(255,255,255,.1); }
+    body { background: #143d18; }
+    .demo-nav { background: rgba(20, 61, 24, .92); border-color: rgba(255,255,255,.1); }
     .demo-nav .nav-logo { color: #fff !important; }
     .demo-nav .nav-links a, .demo-nav .nav-links a:visited { color: rgba(255,255,255,.65); }
-    .demo-nav .nav-links a:hover { color: #fff; border-color: #d6f56f; }
-    .demo-page { min-height: calc(100vh - 68px); padding: 34px 24px 28px; color: #fff; background: linear-gradient(145deg, #071b10, #0c2a19 62%, #104925); }
-    .demo-shell { width: min(1180px, 100%); min-height: min(720px, calc(100vh - 130px)); margin: 0 auto; border: 1px solid rgba(255,255,255,.15); border-radius: 22px; overflow: hidden; background: rgba(4, 20, 11, .7); box-shadow: 0 36px 90px rgba(0,0,0,.34); display: grid; grid-template-rows: auto 1fr auto; }
+    .demo-nav .nav-links a:hover { color: #fff; border-color: #e8f5e9; }
+    .demo-page { min-height: calc(100vh - 68px); padding: 34px 24px 28px; color: #fff; background: linear-gradient(145deg, #143d18, #1b5e20 62%, #2e7d32); }
+    .demo-shell { width: min(1180px, 100%); min-height: min(720px, calc(100vh - 130px)); margin: 0 auto; border: 1px solid rgba(255,255,255,.15); border-radius: 22px; overflow: hidden; background: rgba(20, 61, 24, .7); box-shadow: 0 36px 90px rgba(0,0,0,.28); display: grid; grid-template-rows: auto 1fr auto; }
     .demo-head { min-height: 62px; padding: 14px 22px; border-bottom: 1px solid rgba(255,255,255,.12); display: flex; align-items: center; justify-content: space-between; gap: 20px; }
     .demo-brand { display: flex; align-items: center; gap: 10px; font-size: .84rem; font-weight: 760; }
-    .demo-brand i { width: 9px; height: 9px; border-radius: 2px; background: #d6f56f; transform: rotate(12deg); }
+    .demo-brand i { width: 9px; height: 9px; border-radius: 2px; background: #e8f5e9; transform: rotate(12deg); }
     .demo-status { color: rgba(255,255,255,.52); font-size: .72rem; }
     .scene-wrap { position: relative; min-height: 520px; }
     .scene { position: absolute; inset: 0; padding: clamp(34px, 6vw, 72px); display: grid; align-content: center; opacity: 0; visibility: hidden; transform: translateY(16px); transition: opacity .55s ease, transform .55s ease, visibility .55s; }
@@ -27,17 +27,17 @@
     .scene h1, .scene h2 { max-width: 12em; margin-top: 14px; font-size: clamp(2rem, 4.3vw, 3.65rem); line-height: 1.13; letter-spacing: -.045em; }
     .scene-lead { max-width: 38em; margin-top: 20px; color: rgba(255,255,255,.68); font-size: clamp(.98rem, 1.7vw, 1.14rem); }
     .scene-lead strong { color: #fff; }
-    .accent { color: #d6f56f; }
+    .accent { color: #e8f5e9; }
     .host-window, .buyer-card, .catalog-card, .merchant-card, .agreement, .handoff-card { border: 1px solid rgba(255,255,255,.17); border-radius: 16px; background: rgba(255,255,255,.06); }
     .window-head { padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,.11); color: rgba(255,255,255,.5); font-size: .7rem; display: flex; justify-content: space-between; }
     .chat-stack { padding: 20px; display: grid; gap: 14px; }
     .chat-bubble { max-width: 84%; border-radius: 13px; padding: 14px 16px; background: #fff; color: #142019; font-size: .88rem; }
-    .chat-bubble small { display: block; margin-bottom: 4px; color: #23723d; font-size: .66rem; font-weight: 750; }
-    .chat-bubble.reply { margin-left: auto; border: 1px solid rgba(214,245,111,.45); background: rgba(214,245,111,.08); color: #fff; }
-    .chat-bubble.reply small { color: #d6f56f; }
+    .chat-bubble small { display: block; margin-bottom: 4px; color: #2e7d32; font-size: .66rem; font-weight: 750; }
+    .chat-bubble.reply { margin-left: auto; border: 1px solid rgba(232,245,233,.45); background: rgba(232,245,233,.08); color: #fff; }
+    .chat-bubble.reply small { color: #e8f5e9; }
     .route-stack { display: grid; gap: 10px; }
     .route-card { padding: 17px 18px; border: 1px solid rgba(255,255,255,.15); border-radius: 12px; background: rgba(255,255,255,.05); }
-    .route-card.active { border-color: rgba(214,245,111,.56); background: rgba(214,245,111,.08); }
+    .route-card.active { border-color: rgba(232,245,233,.56); background: rgba(232,245,233,.08); }
     .route-card small, .route-card strong, .route-card span { display: block; }
     .route-card small { color: #a9dfb6; font-size: .66rem; letter-spacing: .09em; }
     .route-card strong { margin-top: 5px; font-size: .95rem; }
@@ -49,16 +49,16 @@
     .quote-row { padding: 16px 17px; border-top: 1px solid rgba(255,255,255,.1); font-size: .8rem; }
     .quote-row strong { font-size: .86rem; }
     .quote-row span { color: rgba(255,255,255,.67); }
-    .quote-row.best { background: rgba(214,245,111,.07); }
-    .quote-row.best strong::after { content: "可继续谈"; margin-left: 7px; color: #d6f56f; font-size: .6rem; font-weight: 650; }
+    .quote-row.best { background: rgba(232,245,233,.07); }
+    .quote-row.best strong::after { content: "可继续谈"; margin-left: 7px; color: #e8f5e9; font-size: .6rem; font-weight: 650; }
     .nego-chat { display: grid; gap: 13px; }
     .nego { max-width: 86%; padding: 14px 17px; border-radius: 12px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.06); font-size: .82rem; }
-    .nego:nth-child(even) { margin-left: auto; border-color: rgba(214,245,111,.38); }
+    .nego:nth-child(even) { margin-left: auto; border-color: rgba(232,245,233,.38); }
     .nego small { display: block; margin-bottom: 4px; color: #a9dfb6; font-size: .64rem; }
     .agreement { padding: 25px; }
     .agreement-top { display: flex; justify-content: space-between; gap: 20px; align-items: start; }
     .agreement-top small { color: #a9dfb6; font-size: .67rem; }
-    .agreement-top b { color: #d6f56f; font-size: .74rem; }
+    .agreement-top b { color: #e8f5e9; font-size: .74rem; }
     .agreement h3 { margin-top: 5px; font-size: 1.18rem; }
     .agreement dl { margin-top: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
     .agreement dt { color: rgba(255,255,255,.5); font-size: .66rem; }
@@ -70,10 +70,10 @@
     .handoff-card small { color: #a9dfb6; font-size: .66rem; }
     .handoff-card strong { font-size: .9rem; }
     .handoff-card span { color: rgba(255,255,255,.54); font-size: .7rem; }
-    .handoff-arrow { display: grid; place-items: center; color: #d6f56f; }
+    .handoff-arrow { display: grid; place-items: center; color: #e8f5e9; }
     .truth-list { margin-top: 25px; border-top: 1px solid rgba(255,255,255,.15); }
     .truth-list div { display: grid; grid-template-columns: 120px 1fr; gap: 22px; padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,.12); }
-    .truth-list strong { color: #d6f56f; font-size: .78rem; }
+    .truth-list strong { color: #e8f5e9; font-size: .78rem; }
     .truth-list span { color: rgba(255,255,255,.62); font-size: .78rem; }
     .finale { text-align: center; justify-items: center; }
     .finale h2 { max-width: 16em; }
@@ -82,11 +82,11 @@
     .final-note { margin-top: 20px; color: rgba(255,255,255,.48); font-size: .72rem; }
     .demo-controls { min-height: 70px; border-top: 1px solid rgba(255,255,255,.12); padding: 14px 22px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 24px; }
     .progress { height: 3px; background: rgba(255,255,255,.12); }
-    .progress span { display: block; width: 12.5%; height: 100%; background: #d6f56f; transition: width .45s ease; }
+    .progress span { display: block; width: 12.5%; height: 100%; background: #e8f5e9; transition: width .45s ease; }
     .control-buttons { display: flex; align-items: center; gap: 8px; }
     .scene-count { min-width: 54px; color: rgba(255,255,255,.52); font-size: .7rem; text-align: center; }
     .control-button { width: 36px; height: 36px; border: 1px solid rgba(255,255,255,.18); border-radius: 8px; color: #fff; background: rgba(255,255,255,.05); cursor: pointer; font: inherit; }
-    .control-button:hover { border-color: rgba(214,245,111,.65); color: #d6f56f; }
+    .control-button:hover { border-color: rgba(232,245,233,.65); color: #e8f5e9; }
     @media (max-width: 820px) {
       .demo-page { padding: 18px 12px; }
       .demo-shell { min-height: calc(100vh - 150px); }
