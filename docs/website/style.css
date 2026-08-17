@@ -301,6 +301,9 @@ h2 { max-width: 19em; margin-top: 12px; font-size: clamp(1.8rem, 3.6vw, 2.75rem)
 .host-kiwi small { color: var(--lime); font-size: .7rem; }
 .host-kiwi strong { margin-top: 7px; font-size: .96rem; }
 .host-kiwi span { margin-top: 5px; color: rgba(255,255,255,.58); font-size: .75rem; }
+.host-install { width: 100%; margin-top: auto; padding-top: 22px; border-top: 1px solid var(--line); }
+.host-install pre { margin-top: 12px; padding: 13px 14px; border-left-width: 3px; font-size: .72rem; }
+.host-install > span { display: block; margin-top: 12px; color: var(--ink-soft); font-size: .78rem; }
 
 .tool-flow { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 38px; }
 .tool-flow span { padding: 11px 14px; border: 1px solid rgba(255,255,255,.19); border-radius: 8px; background: rgba(255,255,255,.06); font-size: .82rem; font-weight: 650; }
@@ -324,6 +327,19 @@ h2 { max-width: 19em; margin-top: 12px; font-size: clamp(1.8rem, 3.6vw, 2.75rem)
 .pilot-layout { display: grid; grid-template-columns: 1fr 330px; gap: 80px; align-items: center; }
 .pilot-actions { display: flex; flex-direction: column; gap: 12px; }
 .pilot-actions span { color: var(--ink-soft); font-size: .84rem; text-align: center; }
+
+/* 对外安装路径：先展示最短可执行路径，技术细节不挡住首次接入 */
+.quickstart-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin-top: 40px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--paper); }
+.quickstart-step { min-height: 275px; padding: 27px; border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; }
+.quickstart-step:last-child { border-right: 0; }
+.quickstart-number { color: var(--kiwi-700); font-family: Georgia, serif; font-size: 1.25rem; }
+.quickstart-step .surface-label { margin-top: 24px; }
+.quickstart-step h3 { margin-top: 8px; font-size: 1.08rem; }
+.quickstart-step p { margin-top: 12px; color: var(--ink-soft); font-size: .88rem; }
+.quickstart-code { width: 100%; margin-top: auto; padding: 13px 14px; border-left-width: 3px; font-size: .72rem; }
+.quickstart-link { margin-top: auto; padding-top: 22px; font-size: .86rem; font-weight: 720; text-decoration: none; }
+.quickstart-note { margin-top: 28px; border-left: 4px solid var(--kiwi-600); border-radius: 0 10px 10px 0; padding: 17px 20px; background: var(--kiwi-100); color: var(--ink-soft); font-size: .9rem; }
+.quickstart-note strong { color: var(--kiwi-900); }
 
 /* 开发者页 */
 .architecture-stack { max-width: 900px; margin-top: 40px; }
@@ -382,6 +398,9 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
   .surface-grid { grid-template-columns: 1fr; }
   .surface-card { min-height: 220px; border-right: 0; border-bottom: 1px solid var(--line); }
   .surface-card:last-child { border-bottom: 0; }
+  .quickstart-grid { grid-template-columns: 1fr; }
+  .quickstart-step { min-height: 220px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .quickstart-step:last-child { border-bottom: 0; }
   .boundary-layout { grid-template-columns: 1fr; gap: 42px; }
   .protocol-grid { grid-template-columns: repeat(2, 1fr); }
   .protocol-grid > div:nth-child(2) { border-right: 0; }

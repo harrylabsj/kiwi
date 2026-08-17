@@ -6,7 +6,7 @@
   <title>Kiwi 开发者 —— 一套核心，三种产品面</title>
   <meta name="description" content="Kiwi 的开发者架构：买家连接器、商家发现网络、独立商家运行时，以及 A2A、KNP、KTH 与 UCP 的清晰边界。">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <link rel="stylesheet" href="style.css?v=20260817-3">
+  <link rel="stylesheet" href="style.css?v=20260817-4">
 </head>
 <body>
 <nav class="nav"><div class="nav-inner"><a class="nav-logo" href="index.html">Kiwi</a><div class="nav-links">
@@ -84,11 +84,11 @@ uv sync --locked --extra api --extra dev</code></pre>
   </div></section>
 
   <section class="section section-alt"><div class="section-inner">
-    <div class="kicker">当前状态</div><h2>技术基线已通过，产品采用仍在试点。</h2>
+    <div class="kicker">产品状态</div><h2>技术能力已具备，欢迎接入 Kiwi。</h2>
     <div class="status-matrix">
-      <div><span>已验证</span><p>本地三向实现互操作、受控询价、授权边界、商家独立运行和发布门禁。</p></div>
-      <div><span>正在验证</span><p>真实商家持续上线、外部买家调用、真实成交交接和重复使用。</p></div>
-      <div><span>不宣称</span><p>尚未取得的第三方采用、真实订单完成或行业标准地位。</p></div>
+      <div><span>买家接入</span><p>Hermes、OpenClaw 和 MCP 宿主可接入跨商家发现、询价、磋商与成交交接。</p></div>
+      <div><span>商家接入</span><p>独立运行的商家运行时可连接商品、库存、报价政策和企业成交入口。</p></div>
+      <div><span>产品边界</span><p>Kiwi 不自动创建订单、不授权支付，也不把非绑定协议假装成真实成交。</p></div>
     </div>
     <div class="notice"><p>协议语义以仓库中的 <code>spec/</code>、机器可读契约和一致性向量为准；市场页面只解释产品，不替代规范。</p></div>
   </div></section>

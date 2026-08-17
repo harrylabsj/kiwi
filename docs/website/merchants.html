@@ -6,7 +6,7 @@
   <title>Kiwi 商家接入 —— 让买家 AI 直接找到你</title>
   <meta name="description" content="Kiwi 商家运行时连接你的商品库、库存与报价政策，让买家智能体找到你、向你询价、谈条件，并把结果交回你的成交系统。">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <link rel="stylesheet" href="style.css?v=20260817-3">
+  <link rel="stylesheet" href="style.css?v=20260817-4">
 </head>
 <body>
 <nav class="nav"><div class="nav-inner"><a class="nav-logo" href="index.html">Kiwi</a><div class="nav-links">
@@ -19,7 +19,7 @@
       <div class="hero-kicker">独立运行的企业商家入口</div>
       <h1>让买家 AI，直接找到你。</h1>
       <p class="tagline">把现有商品库、库存、价格和报价政策接入 Kiwi。你的商家运行时在自己的服务器上长期在线，按你的规则接收询价、报价、升级人工审核并交接成交。</p>
-      <div class="hero-actions"><a class="btn btn-solid" href="#pilot">申请首批试点</a><a class="btn btn-ghost" href="#install">查看安装方式</a><a class="btn btn-text" href="demo.html">查看演示 →</a></div>
+      <div class="hero-actions"><a class="btn btn-solid" href="#contact">开始商家接入</a><a class="btn btn-ghost" href="#install">查看三步安装</a><a class="btn btn-text" href="demo.html">查看演示 →</a></div>
     </div>
     <div class="merchant-runtime">
       <div class="runtime-head"><span>商家运行时</span><b>● 在线</b></div>
@@ -52,36 +52,14 @@
   </div></section>
 
   <section class="section" id="install"><div class="section-inner">
-    <div class="kicker">安装与使用</div><h2>先用 CSV / Excel 跑通第一条商家链路。</h2>
-    <p class="lead">商家需要 Kiwi 运行时和 shopping-cli 商品事实引擎；官方 Catalog 由 Kiwi 运营，商家无需自行安装。</p>
-    <pre><code># 1. 安装商家运行时与商品事实引擎
-npm install -g @harrylabsj/kiwi
-pip install shopping-cli
-
-# 2. 创建商家并导入商品
-export SHOPPING_DB_PATH="$HOME/kiwi-merchant/shopping.sqlite"
-shopping-cli --db "$SHOPPING_DB_PATH" merchant create \
-  --id acme --name "你的企业" --city 杭州
-shopping-cli --db "$SHOPPING_DB_PATH" import-csv-excel \
-  --file products.csv --merchant acme
-
-# 3. 创建商家配置
-kiwi merchant init --merchant-id acme --name "你的企业"
-
-# 4. 发布公开商品与能力
-export KIWI_CATALOG_OWNER_TOKEN_SECRET="由 Kiwi 运营方提供"
-kiwi merchant publish \
-  --profile "$HOME/.kiwi/kiwi.yaml" \
-  --shopping-cli-db "$SHOPPING_DB_PATH"
-
-# 5. 在稳定服务器上保持在线
-export KIWI_A2A_PUBLIC_URL="https://merchant.example.com"
-export KIWI_A2A_AUTH="bearer:请替换为随机密钥"
-kiwi merchant start \
-  --profile "$HOME/.kiwi/kiwi.yaml" \
-  --catalog "https://catalog.kiwi.harrylabsj.com" \
-  --port 8601 --no-chat</code></pre>
-    <div class="notice"><p>公网运行请使用 HTTPS、稳定域名和安全的密钥注入。不要把令牌、成本、底价或私有库存写入公开配置和智能体卡片。</p></div>
+    <div class="kicker">安装与使用</div><h2>三步开始接受 AI 采购请求。</h2>
+    <p class="lead">只需安装 Kiwi、初始化商家并发布商品。准备一份 CSV / Excel，Kiwi 团队可以协助导入和发布。</p>
+    <div class="quickstart-grid">
+      <article class="quickstart-step"><div class="quickstart-number">01</div><div class="surface-label">安装 Kiwi</div><h3>装一个主产品</h3><pre class="quickstart-code"><code>npm install -g @harrylabsj/kiwi</code></pre></article>
+      <article class="quickstart-step"><div class="quickstart-number">02</div><div class="surface-label">初始化商家</div><h3>让 Kiwi 带你完成设置</h3><pre class="quickstart-code"><code>kiwi merchant init</code></pre><p>Kiwi 会检查商品数据连接并生成商家配置。</p></article>
+      <article class="quickstart-step"><div class="quickstart-number">03</div><div class="surface-label">发布商品</div><h3>让买家找得到你</h3><p>准备一份 CSV / Excel，Kiwi 团队协助导入商品、发布到网络并开启询价。</p><a class="quickstart-link" href="#contact">开始商家接入 →</a></article>
+    </div>
+    <div class="quickstart-note"><p><strong>你始终掌控：</strong>成本、底价、库存、订单和付款不会因为接入 Kiwi 而自动公开。</p></div>
   </div></section>
 
   <section class="section section-alt"><div class="section-inner">
@@ -93,8 +71,8 @@ kiwi merchant start \
     </div>
   </div></section>
 
-  <section class="section" id="pilot"><div class="section-inner pilot-layout">
-    <div><div class="kicker">首批商家试点</div><h2>适合标准化办公、IT 配件和 B2B 供应商。</h2><p class="lead">准备一份商品 CSV、一个可长期在线的服务器和真实报价政策。Kiwi 团队协助完成首次发布、询价和成交交接验证。</p></div>
+  <section class="section" id="contact"><div class="section-inner pilot-layout">
+    <div><div class="kicker">商家接入</div><h2>适合标准化办公、IT 配件和 B2B 供应商。</h2><p class="lead">准备一份商品 CSV、一个可长期在线的服务器和真实报价政策。Kiwi 团队协助完成商品发布、询价和成交交接。</p></div>
     <div class="pilot-actions"><a class="btn btn-green" href="https://catalog.kiwi.harrylabsj.com/portal/account">注册商家账户</a><a class="btn btn-outline" href="mailto:harrylabsj@gmail.com">联系 Kiwi 团队</a><span>微信：hddsh2025</span></div>
   </div></section>
 </main>
