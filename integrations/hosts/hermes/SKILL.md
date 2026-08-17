@@ -20,7 +20,7 @@ sourcing and commercial negotiation。**
 ## 职责边界（设计理念）
 
 ```
-本地（Hermes 等宿主）            公网                  阿里云服务器
+本地宿主（Hermes/OpenClaw，无 marketplace 服务）            公网                  阿里云服务器
   hermes ─▶ kiwi buyer ──catalog.kiwi.harrylabsj.com──▶ kiwi-catalog（发现）
              │  A2A/KNP 直连                              │
              └──────────────────────────────────────────▶ kiwi merchant
@@ -35,6 +35,12 @@ sourcing and commercial negotiation。**
 - **merchant + shopping-cli 在服务器**：kiwi merchant 是 shopping-cli 的唯一消费者；
   只有 kiwi merchant 可直接调用 shopping-cli。shopping-cli 绑 127.0.0.1 对外不可达。
 - 完整部署见 `docs/deploy/local-buyer-aliyun-merchant.md`。
+
+**不要做的（常见误解）**：
+- **不要检查/等待任何本地 marketplace / shopping-cli / 127.0.0.1 服务** —— 本地宿主没有
+  marketplace 服务；buyer **不直连 shopping-cli**（那是服务器上 merchant 才碰的）。
+- **不要"先加载工具 schema / 先探测环境 / 先查目录之外"之类的额外步骤** —— 直接调
+  `kiwi_search`（内部已走 catalog 发现），发现后按工具链 A2A 磋商即可。
 
 ## 何时触发（Trigger）
 
