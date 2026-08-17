@@ -38,6 +38,9 @@ import { finalizeEnvelope } from "../../negotiation/domain/envelope.js";
 import { contentDigest } from "../../negotiation/jcs.js";
 import { evaluateConditionalOffer } from "../../negotiation/condition/evaluator.js";
 import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
+import type { MerchantPolicy } from "../../config/profile.js";
+import type { MerchantDecisionBackend } from "../../merchant/decision-backend.js";
+import { consultDecisionBackend, redactPublicMessage } from "../../merchant/decision-backend.js";
 import {
   createNegotiationPhase,
   isTerminalPhase,
@@ -73,6 +76,33 @@ export function applyDiscountPercentMinor(priceMinor: number, discountPercent: n
   return Math.floor((priceMinor * numerator + 50) / 100);
 }
 
+/**
+ * 把 backend 建议的 minor 单价钳到硬边界：永不低于私有 floor、永高于 list 价；
+ * isDeal 时折价深度不超过 max_auto_discount_percent（maxAutoDiscountPercent 缺省 0
+ * = 不允许任何自动折扣）。`applyDiscountPercentMinor(base, pct) <= base`（pct≥0），
+ * 先 min 后 max 顺序安全。backend 建议不可信，硬边界由 handler 兜底。
+ */
+export function boundPriceMinor(opts: {
+  suggestedMinor: number;
+  /** list 价（resolveProduct priceMinor）。 */
+  baseMinor: number;
+  /** 私有 floor（minor units；policy.min_unit_price_private × 100）。 */
+  floorMinor?: number;
+  /** 折价深度上限（仅 isDeal 有意义）。 */
+  maxAutoDiscountPercent?: number;
+  /** 是否为条件成交价（deal）——只有它允许低于 list。 */
+  isDeal: boolean;
+}): number {
+  const floor = opts.floorMinor ?? 0;
+  let price = Math.max(opts.suggestedMinor, floor); // 永不低于私有 floor
+  price = Math.min(price, opts.baseMinor); // 永高于 list
+  if (opts.isDeal) {
+    const maxDiscount = opts.maxAutoDiscountPercent ?? 0;
+    price = Math.max(price, applyDiscountPercentMinor(opts.baseMinor, Math.min(maxDiscount, 100)));
+  }
+  return price;
+}
+
 export interface MerchantHandlerOptions {
   ledger: LedgerStore;
   now: () => string;
@@ -87,6 +117,14 @@ export interface MerchantHandlerOptions {
   allowDemoPriceFallback?: boolean;
   /** 条件成交折扣百分比（deal = base × (1 - pct/100)）；缺省 5。 */
   dealDiscountPercent?: number;
+  /**
+   * 受限推理后端（DeepSeek Harness 运行时插件）：只被咨询**价格建议**（+可选公开
+   * 说明），产出不可信候选，handler 验证 + 硬边界约束后应用；backend 从不写。
+   * 未配置 → 纯确定性（今日行为）。
+   */
+  decisionBackend?: MerchantDecisionBackend;
+  /** merchant policy：用于约束 backend 建议（floor / max auto discount）。 */
+  merchantPolicy?: MerchantPolicy;
 }
 
 /**
@@ -345,12 +383,22 @@ export function createMerchantHandler(
   // TTL（评审项 L3：此前永久累积、价格永不刷新——长驻 merchant 节点内存
   // 单调增长且价目陈旧）。
   const PRICE_CACHE_TTL_MS = 10 * 60 * 1000;
-  const priceBySku = new Map<string, { priceMinor: number; currency: string; at: number }>();
+  const priceBySku = new Map<
+    string,
+    { priceMinor: number; currency: string; at: number; handoff_destination?: string; stock?: number; title?: string }
+  >();
 
   /** 从真实商品源解析 SKU 价目；源不可用/查不到时回退演示价并返回注记。 */
   const resolveProduct = async (
     sku: string,
-  ): Promise<{ priceMinor: number; currency: string; note?: string; handoff_destination?: string }> => {
+  ): Promise<{
+    priceMinor: number;
+    currency: string;
+    note?: string;
+    handoff_destination?: string;
+    stock?: number;
+    title?: string;
+  }> => {
     const cached = priceBySku.get(sku);
     if (cached !== undefined) {
       if (Date.parse(now()) - cached.at <= PRICE_CACHE_TTL_MS) return cached;
@@ -376,6 +424,8 @@ export function createMerchantHandler(
           ...(product.handoff_destination !== undefined
             ? { handoff_destination: product.handoff_destination }
             : {}),
+          ...(product.stock !== undefined ? { stock: product.stock } : {}),
+          ...(product.title !== undefined ? { title: product.title } : {}),
         };
         priceBySku.set(sku, resolved);
         return resolved;
@@ -402,7 +452,14 @@ export function createMerchantHandler(
    *  null（调用方 decline temporarily_unavailable），否则返回解析结果。 */
   const resolveProductOrDecline = async (
     sku: string,
-  ): Promise<{ priceMinor: number; currency: string; note?: string; handoff_destination?: string } | null> => {
+  ): Promise<{
+    priceMinor: number;
+    currency: string;
+    note?: string;
+    handoff_destination?: string;
+    stock?: number;
+    title?: string;
+  } | null> => {
     try {
       return await resolveProduct(sku);
     } catch (err) {
@@ -527,6 +584,37 @@ export function createMerchantHandler(
         }
       }
 
+      // DeepSeek Harness 运行时插件：受限后端只被咨询价格建议（不可信），
+      // handler 用 floor/discount/list 硬边界钳位后应用；backend 从不写。
+      const consultPrice = async (opts: {
+        action: "propose" | "counter";
+        sku: string;
+        quantity: number;
+        product: { priceMinor: number; currency: string; stock?: number; title?: string };
+      }): Promise<{ unitPriceMinor: number; note?: string } | null> =>
+        consultDecisionBackend(options.decisionBackend, {
+          action: opts.action,
+          sku: opts.sku,
+          quantity: opts.quantity,
+          product: opts.product,
+          policy: options.merchantPolicy,
+          conversationId: negotiationId,
+          inReplyToMessageId: 1,
+          snapshot: (envelope.payload as Record<string, unknown> | undefined) ?? {},
+        });
+      // 私有 floor（major → minor，lossless 才生效；否则视为无 floor）。
+      const floorConversion =
+        options.merchantPolicy?.min_unit_price_private !== undefined
+          ? losslessToMinorUnits(options.merchantPolicy.min_unit_price_private, 2)
+          : undefined;
+      const floorMinor = floorConversion !== undefined && floorConversion.lossless
+        ? floorConversion.amount_minor
+        : 0;
+      const publicMessageOf = (suggestedNote: string | undefined, deterministicNote: string | undefined): string | undefined =>
+        suggestedNote !== undefined
+          ? redactPublicMessage(suggestedNote, options.merchantPolicy?.min_unit_price_private)
+          : deterministicNote;
+
       switch (envelope.action) {
         case "inquiry": {
           // 入站消息由 A2A pipeline 统一落 message_received（§22）；这里不再
@@ -544,7 +632,17 @@ export function createMerchantHandler(
           const quantity = payload.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
-          const { priceMinor, currency, note, handoff_destination } = product;
+          const { priceMinor, currency, note, handoff_destination, stock, title } = product;
+          const suggested = await consultPrice({
+            action: "propose",
+            sku,
+            quantity,
+            product: { priceMinor, currency, stock, title },
+          });
+          const effectivePriceMinor = suggested === null
+            ? priceMinor
+            : boundPriceMinor({ suggestedMinor: suggested.unitPriceMinor, baseMinor: priceMinor, floorMinor, isDeal: false });
+          const publicMessage = publicMessageOf(suggested?.note, note);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -554,9 +652,9 @@ export function createMerchantHandler(
             payload: {
               type: "offer",
               offer_id: newOfferId(),
-              terms: offerTerms({ sku, priceMinor, quantity, currency, handoff_destination }, now()),
+              terms: offerTerms({ sku, priceMinor: effectivePriceMinor, quantity, currency, handoff_destination }, now()),
             },
-            ...(note !== undefined ? { public_message: note } : {}),
+            ...(publicMessage !== undefined ? { public_message: publicMessage } : {}),
           });
           // 审查 BUG-10：merchant 侧相位由自己的出站动作推进——rfq 的 offer
           // 回复是 OPEN→OFFER_OPEN 的边（入站侧 rfq 是起始动作无事件）。
@@ -574,7 +672,17 @@ export function createMerchantHandler(
           const quantity = buyerOffer.terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
-          const { priceMinor, currency, note, handoff_destination } = product;
+          const { priceMinor, currency, note, handoff_destination, stock, title } = product;
+          const suggested = await consultPrice({
+            action: "counter",
+            sku,
+            quantity,
+            product: { priceMinor, currency, stock, title },
+          });
+          const effectivePriceMinor = suggested === null
+            ? priceMinor
+            : boundPriceMinor({ suggestedMinor: suggested.unitPriceMinor, baseMinor: priceMinor, floorMinor, isDeal: false });
+          const publicMessage = publicMessageOf(suggested?.note, note);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -585,9 +693,9 @@ export function createMerchantHandler(
               type: "counter_offer",
               offer_id: newOfferId(),
               responding_to_offer_id: buyerOffer.offer_id ?? "",
-              proposed_terms: offerTerms({ sku, priceMinor, quantity, currency, handoff_destination }, now()),
+              proposed_terms: offerTerms({ sku, priceMinor: effectivePriceMinor, quantity, currency, handoff_destination }, now()),
             },
-            ...(note !== undefined ? { public_message: note } : {}),
+            ...(publicMessage !== undefined ? { public_message: publicMessage } : {}),
           });
           await advancePhase(negotiationId, {
             type: "counter_offer",
@@ -605,10 +713,27 @@ export function createMerchantHandler(
           const quantity = counter.proposed_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
-          const { priceMinor, currency, note, handoff_destination } = product;
-          // 条件成交价 = base × (1 - 折扣%)：批量确实更便宜。
+          const { priceMinor, currency, note, handoff_destination, stock, title } = product;
+          // 条件成交价 = base × (1 - 折扣%)：批量确实更便宜。backend 建议参与
+          // deal 价，但折价深度受 max_auto_discount_percent 硬约束。
           const discountPercent = options.dealDiscountPercent ?? 5;
-          const dealPriceMinor = applyDiscountPercentMinor(priceMinor, discountPercent);
+          const defaultDeal = applyDiscountPercentMinor(priceMinor, discountPercent);
+          const suggested = await consultPrice({
+            action: "counter",
+            sku,
+            quantity,
+            product: { priceMinor, currency, stock, title },
+          });
+          const dealPriceMinor = suggested === null
+            ? defaultDeal
+            : boundPriceMinor({
+                suggestedMinor: suggested.unitPriceMinor,
+                baseMinor: priceMinor,
+                floorMinor,
+                maxAutoDiscountPercent: options.merchantPolicy?.max_auto_discount_percent,
+                isDeal: true,
+              });
+          const publicMessage = publicMessageOf(suggested?.note, note);
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -630,7 +755,7 @@ export function createMerchantHandler(
                 },
               ],
             },
-            ...(note !== undefined ? { public_message: note } : {}),
+            ...(publicMessage !== undefined ? { public_message: publicMessage } : {}),
           });
           conditionalByNegotiation.set(negotiationId, {
             conditional: reply.payload as unknown as Record<string, unknown>,

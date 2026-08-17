@@ -1,4 +1,5 @@
-import type { AgentProfile, BuyerPolicy } from "../src/config/profile.js";
+import type { AgentProfile, BuyerPolicy, MerchantPolicy } from "../src/config/profile.js";
+import type { MerchantDecisionBackend } from "../src/merchant/decision-backend.js";
 import {
   createFakeMarketplace,
   FakeCommerceClient,
@@ -259,6 +260,9 @@ export async function startTestA2aStack(
     capture?: CapturedInbound[];
     /** merchant A2A 端点认证（缺省 loopback-only）；bearer 协商测试注入。 */
     authVerifier?: { name: string; verify(ctx: unknown): unknown };
+    /** DeepSeek Harness 运行时插件测试：注入推理后端（价格建议）+ merchant policy。 */
+    decisionBackend?: MerchantDecisionBackend;
+    merchantPolicy?: MerchantPolicy;
   } = {},
 ): Promise<{
   catalogUrl: string;
@@ -285,6 +289,8 @@ export async function startTestA2aStack(
     sender: "merchant:merchant-001",
     counterparty: "buyer:*",
     ...(options.productSource !== undefined ? { productSource: options.productSource } : {}),
+    ...(options.decisionBackend !== undefined ? { decisionBackend: options.decisionBackend } : {}),
+    ...(options.merchantPolicy !== undefined ? { merchantPolicy: options.merchantPolicy } : {}),
   });
   const handler = options.capture !== undefined
     ? {

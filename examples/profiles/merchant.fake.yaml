@@ -14,6 +14,10 @@ commerce:
 model:
   provider: fake
   model: fake-merchant-model
+# 离线冒烟：确定性 mock 推理后端（不依赖模型/密钥）。
+decision:
+  backend: mock
+  enabled: true
 runtime:
   mode: once
   poll_interval_seconds: 5

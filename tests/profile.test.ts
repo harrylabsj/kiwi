@@ -574,6 +574,61 @@ ${entries}`);
   });
 });
 
+describe("decision（DeepSeek Harness 运行时插件配置，§6.9）", () => {
+  const withModelKey = VALID_YAML.replace(
+    "  provider: fake",
+    "  provider: deepseek\n  api_key_env: DEEPSEEK_API_KEY",
+  );
+
+  it("valid: decision.backend=mock（无需 api_key_env）", () => {
+    const p = loadProfile(writeTemp(VALID_YAML + "\ndecision:\n  backend: mock\n  enabled: true\n"));
+    expect(p.decision?.backend).toBe("mock");
+    expect(p.decision?.enabled).toBe(true);
+  });
+
+  it("valid: decision.backend=deepseek + model.api_key_env", () => {
+    const p = loadProfile(writeTemp(withModelKey + "\ndecision:\n  backend: deepseek\n"));
+    expect(p.decision?.backend).toBe("deepseek");
+    expect(p.decision?.enabled).toBeUndefined(); // 缺省 true
+  });
+
+  it("rejects: 未知 decision 字段", () => {
+    expect(() => loadProfile(writeTemp(VALID_YAML + "\ndecision:\n  backend: mock\n  extra: x\n"))).toThrow(
+      /decision has unknown field "extra"/,
+    );
+  });
+
+  it("rejects: 未知 backend 值", () => {
+    expect(() => loadProfile(writeTemp(VALID_YAML + "\ndecision:\n  backend: claude\n"))).toThrow(
+      /decision.backend must be one of/,
+    );
+  });
+
+  it("rejects: enabled 非 boolean", () => {
+    expect(() => loadProfile(writeTemp(VALID_YAML + "\ndecision:\n  backend: mock\n  enabled: yes\n"))).toThrow(
+      /decision.enabled must be a boolean/,
+    );
+  });
+
+  it("rejects: backend=deepseek 但缺 model.api_key_env", () => {
+    expect(() => loadProfile(writeTemp(VALID_YAML + "\ndecision:\n  backend: deepseek\n"))).toThrow(
+      /decision.backend=deepseek requires model.api_key_env/,
+    );
+  });
+
+  it("allows: backend=deepseek + enabled=false 无 api_key_env（禁用态不要求密钥）", () => {
+    const p = loadProfile(writeTemp(VALID_YAML + "\ndecision:\n  backend: deepseek\n  enabled: false\n"));
+    expect(p.decision?.enabled).toBe(false);
+  });
+
+  it("rejects: buyer 角色配 decision（merchant-only 概念）", () => {
+    const buyer = VALID_YAML.replace("role: merchant", "role: buyer");
+    expect(() => loadProfile(writeTemp(buyer + "\ndecision:\n  backend: mock\n"))).toThrow(
+      /decision is only valid for role=merchant/,
+    );
+  });
+});
+
 afterEach(() => {
   for (const dir of tmpDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });

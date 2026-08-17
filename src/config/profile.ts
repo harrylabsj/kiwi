@@ -42,6 +42,15 @@ export interface MerchantPolicy {
   human_review_on?: string[];
 }
 
+/** merchant 推理后端形态（DeepSeek Harness 运行时插件，§6.9）。 */
+export type DecisionBackendKind = "deterministic" | "mock" | "deepseek";
+
+export interface MerchantDecisionConfig {
+  backend: DecisionBackendKind;
+  /** 缺省 true；false 时禁用后端（回落确定性）。 */
+  enabled?: boolean;
+}
+
 /**
  * Buyer private policy (design §7.2). All fields are required: the local
  * private-policy gate is a security boundary, so a half-specified policy
@@ -128,6 +137,8 @@ export interface AgentProfile {
   };
   merchant_policy?: MerchantPolicy;
   buyer_policy?: BuyerPolicy;
+  /** merchant 推理后端配置（DeepSeek Harness 运行时插件；仅 role=merchant）。 */
+  decision?: MerchantDecisionConfig;
   /** 微信远程控制通道（可选段；缺省 = 全默认）。 */
   weixin?: {
     /** 额外授权微信用户（配对扫描者始终自动授权；缺省 = 仅配对者）。 */
@@ -167,6 +178,7 @@ const TOP_LEVEL_KEYS = [
   "merchant_policy",
   "buyer_policy",
   "weixin",
+  "decision",
 ] as const;
 /** weixin 段白名单（微信远程控制通道配置；无 *_env 密钥字段——iLink 凭证运行时获取）。 */
 const WEIXIN_KEYS = ["allow_users", "base_url"] as const;
@@ -203,6 +215,8 @@ const BUYER_POLICY_KEYS = [
   "auto_negotiate",
   "human_review_on",
 ] as const;
+const DECISION_KEYS = ["backend", "enabled"] as const;
+const DECISION_BACKENDS: readonly DecisionBackendKind[] = ["deterministic", "mock", "deepseek"];
 
 /** RFC 3339 date-time with an explicit timezone (offset or Z); naive times fail closed. */
 const RFC3339_TZ = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -499,6 +513,32 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     merchantPolicy = { ...mp } as MerchantPolicy;
   }
 
+  let decisionSection: MerchantDecisionConfig | undefined;
+  if (p.decision !== undefined) {
+    req(isObject(p.decision), `${source}: decision must be a mapping`);
+    const d = p.decision;
+    rejectUnknownKeys(d, DECISION_KEYS, "decision", source);
+    req(
+      (DECISION_BACKENDS as readonly string[]).includes(d.backend as string),
+      `${source}: decision.backend must be one of: ${DECISION_BACKENDS.join(", ")}`,
+    );
+    if (d.enabled !== undefined) {
+      req(typeof d.enabled === "boolean", `${source}: decision.enabled must be a boolean`);
+    }
+    // merchant-only 概念：buyer 配置 decision → fail-closed。
+    if (p.role !== "merchant") {
+      req(false, `${source}: decision is only valid for role=merchant`);
+    }
+    // deepseek 后端需要 model.api_key_env（只存 env 名，永不存密钥）。
+    if (d.backend === "deepseek" && d.enabled !== false) {
+      req(
+        typeof model.api_key_env === "string" && REQUIRED_ENV_REF.test(model.api_key_env),
+        `${source}: decision.backend=deepseek requires model.api_key_env`,
+      );
+    }
+    decisionSection = { backend: d.backend as DecisionBackendKind, ...(d.enabled !== undefined ? { enabled: d.enabled } : {}) };
+  }
+
   let buyerPolicy: BuyerPolicy | undefined;
   if (p.buyer_policy !== undefined) {
     req(isObject(p.buyer_policy), `${source}: buyer_policy must be a mapping`);
@@ -621,6 +661,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     ...(merchantPolicy !== undefined ? { merchant_policy: merchantPolicy } : {}),
     ...(buyerPolicy !== undefined ? { buyer_policy: buyerPolicy } : {}),
     ...(weixinSection !== undefined ? { weixin: weixinSection } : {}),
+    ...(decisionSection !== undefined ? { decision: decisionSection } : {}),
   };
   return profile;
 }
