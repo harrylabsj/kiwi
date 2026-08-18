@@ -1,6 +1,6 @@
 ---
 name: kiwi-buyer
-description: Kiwi 采购/询价/磋商。当用户想买一般商品（非餐饮/外卖/生鲜）、采购、找商家/供应商、询价、比价、还价、问交期/MOQ 时使用 kiwi_buyer_* 工具跨商家发现→询价→磋商→非绑定协议→handoff。餐饮/外卖/生鲜用 eleme-ordering，本 skill 覆盖一般商品采购。
+description: Kiwi 采购/询价/磋商。当用户想买一般商品、采购、找商家/供应商、询价、比价、还价、问交期/MOQ 时使用 kiwi_buyer_* 工具跨商家发现→询价→磋商→非绑定协议→handoff。需配合 ClawHub 上的 kiwi 插件使用（openclaw plugins install clawhub:kiwi，提供 kiwi_buyer_* 工具）。
 metadata: {"openclaw":{"emoji":"🥝"}}
 ---
 

@@ -4,7 +4,17 @@ OpenClaw 原生插件：把 kiwi Buyer Core（与 `kiwi-buyer-mcp` 同一 `build
 `buildKiwiTools`，9 个高层工具）以 `kiwi_buyer_*` 前缀暴露给 OpenClaw（战略 v2.5
 §6.3 单核心多包装 / §6.8 三角色分离 —— Host→Kiwi Buyer，不管理商家本地运营）。
 
-## 安装
+## 安装（ClawHub 一键安装）
+
+已发布到 ClawHub：`kiwi`。
+
+```sh
+openclaw plugins install clawhub:kiwi
+```
+
+插件内置 skill `kiwi-buyer` 自动随插件加载；`@harrylabsj/kiwi` 作为运行时依赖随包安装。
+
+## 本地开发（源码加载）
 
 1. 在 `~/.openclaw/openclaw.json` 的 `plugins.load.paths` 加：
    ```json
@@ -18,7 +28,8 @@ OpenClaw 原生插件：把 kiwi Buyer Core（与 `kiwi-buyer-mcp` 同一 `build
      }
    }
    ```
-2. 重启 OpenClaw（或触发插件热加载）。插件内置 skill `kiwi-buyer` 自动随插件加载。
+2. 插件目录 `npm install`（拉取 `@harrylabsj/kiwi`），重启 OpenClaw（或触发插件热加载）。
+   插件内置 skill `kiwi-buyer` 自动随插件加载。
 
 ## 配置（plugins.entries.kiwi-buyer-openclaw.config）
 

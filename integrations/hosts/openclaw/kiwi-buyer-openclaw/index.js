@@ -5,15 +5,17 @@
  * 9 个高层工具）：本插件是薄适配器，把 kiwi_* 工具以 `kiwi_buyer_*` 前缀暴露给
  * OpenClaw（§6.8 命名空间隔离：Host→Kiwi Buyer，不管理商家本地运营）。
  *
- * 直接 import kiwi dist（相对路径），无运行时第三方依赖（peer openclaw optional）。
- * 工具 parameters 直接复用 kiwi 工具的 inputSchema（JSON Schema，SDK 原样透传）。
+ * 直接 import 已发布的 `@harrylabsj/kiwi` npm 包（subpath export），无其它运行时
+ * 第三方依赖（peer openclaw optional）。工具 parameters 直接复用 kiwi 工具的
+ * inputSchema（JSON Schema，SDK 原样透传）。
  */
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import os from "node:os";
 import path from "node:path";
-import { buildBuyerService } from "../../../../dist/buyer-core/build-service.js";
-import { buildKiwiTools } from "../../../../dist/mcp/tools.js";
-import { DEFAULT_DELEGATION_POLICY, DEFAULT_CATALOG_URL } from "../../../../dist/mcp/cli.js";
+import process from "node:process";
+import { buildBuyerService } from "@harrylabsj/kiwi/dist/buyer-core/build-service.js";
+import { buildKiwiTools } from "@harrylabsj/kiwi/dist/mcp/tools.js";
+import { DEFAULT_DELEGATION_POLICY, DEFAULT_CATALOG_URL } from "@harrylabsj/kiwi/dist/mcp/cli.js";
 
 const CONFIG_SCHEMA = {
   type: "object",
@@ -96,7 +98,7 @@ function resolveTools(config) {
 }
 
 export default defineToolPlugin({
-  id: "kiwi-buyer-openclaw",
+  id: "kiwi",
   name: "Kiwi Buyer Plugin",
   description:
     "Expose kiwi buyer core sourcing & negotiation tools (catalog discovery → A2A direct merchant → RFQ → negotiate → approval → handoff) to OpenClaw.",
