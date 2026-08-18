@@ -10,7 +10,7 @@
 </head>
 <body>
 <nav class="nav"><div class="nav-inner"><a class="nav-logo" href="index.html">Kiwi</a><div class="nav-links">
-  <a href="index.html">首页</a><a href="buyers.html" class="active">买家接入</a><a href="merchants.html">商家接入</a><a href="developers.html">开发者</a><a href="https://catalog.kiwi.harrylabsj.com/portal/account">商家后台</a>
+  <a href="index.html">首页</a><a href="buyers.html" class="active">买家</a><a href="merchants.html">商家</a><a href="developers.html">开发者</a><a href="https://catalog.kiwi.harrylabsj.com/portal/account">商家后台</a>
 </div></div></nav>
 
 <header class="hero">
@@ -19,7 +19,7 @@
       <div class="hero-kicker">宿主内的采购连接器</div>
       <h1>在你已经使用的 AI 智能体里，启用 Kiwi。</h1>
       <p class="tagline">用户继续与 Hermes、OpenClaw 或企业智能体对话。Kiwi 只接收结构化采购委托，负责跨商家发现、询价、比较、磋商、审批与成交交接。</p>
-      <div class="hero-actions"><a class="btn btn-solid" href="#hermes-install">Hermes 三步接入</a><a class="btn btn-ghost" href="#host">选择接入方式</a></div>
+      <div class="hero-actions"><a class="btn btn-solid" href="#hermes-install">查看二步接入</a></div>
     </div>
     <div class="host-visual">
       <div class="host-chat"><span>用户</span><p>帮我找 200 个 USB-C 扩展坞，7 天内到，比较三家报价。</p></div>
@@ -34,8 +34,8 @@
     <div class="kicker">接入方式</div><h2>同一个买家核心，多种薄接入。</h2>
     <p class="lead">不同宿主只负责安装、触发和展示；采购状态、权限、幂等与恢复始终由 Kiwi 买家核心负责。</p>
     <div class="surface-grid">
-      <article class="surface-card surface-card-strong" id="hermes-install"><div class="surface-label">首个真实宿主</div><h3>Hermes</h3><p>Hermes 保留对话、记忆和用户关系，Kiwi 负责跨商家采购。无需 clone 源码。</p><div class="host-install"><div class="surface-label">三步接入</div><pre><code>npm install -g @harrylabsj/kiwi
-kiwi setup-hermes</code></pre><span>setup-hermes 自动把 kiwi mcp serve 接成 Hermes 的 MCP server，并安装采购 skill；重启 Hermes 后直接说出采购需求。</span></div></article>
+      <article class="surface-card surface-card-strong" id="hermes-install"><div class="surface-label">首个真实宿主</div><h3>Hermes</h3><p>Hermes 保留对话、记忆和用户关系，Kiwi 负责跨商家采购。无需 clone 源码。</p><div class="host-install"><div class="surface-label">二步接入</div><pre><code>npm install -g @harrylabsj/kiwi
+kiwi setup-hermes</code></pre><span>setup-hermes 自动把 kiwi mcp serve 接成 Hermes 的 MCP server，并安装采购 skill。重启 Hermes 后直接说出采购需求（重启不算一步）。</span></div></article>
       <article class="surface-card"><div class="surface-label">原生插件</div><h3>OpenClaw</h3><p>插件负责采购工具，Skill 负责识别采购意图。两条命令安装完成，不需要 clone 源码。</p><div class="host-install"><div class="surface-label">安装插件与 Skill</div><pre><code>openclaw plugins install clawhub:kiwi
 openclaw skills install kiwi-buyer</code></pre><span>安装后重启 OpenClaw Gateway，即可直接说出采购需求。</span></div></article>
       <article class="surface-card"><div class="surface-label">开放接口</div><h3>任何 MCP 宿主</h3><p>连接同一 Kiwi MCP 服务，获得一致的意图、授权、任务和错误语义。</p><a href="developers.html">查看开发者文档 →</a></article>
