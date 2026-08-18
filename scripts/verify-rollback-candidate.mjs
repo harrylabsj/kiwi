@@ -69,6 +69,22 @@ if (npmEntry) {
   verified.push(`npm ${name}@${version} still served with matching digest`);
 }
 
+// dsh-plugin npm package (@harrylabsj/kiwi-dsh-plugin)
+const dshEntry = manifest.files.find(
+  (entry) => entry.path.startsWith("dsh-plugin/") && entry.path.endsWith(".tgz"),
+);
+if (dshEntry) {
+  const { name, version } = parseNpmTarballFilename(basename(dshEntry.path));
+  const meta = await npmRegistryMetadata(name, version);
+  const buffer = await downloadBuffer(meta.tarball);
+  verifyNpmDownload(buffer, {
+    identity: { name, version },
+    integrity: meta.integrity,
+    sha256: dshEntry.sha256,
+  });
+  verified.push(`npm ${name}@${version} still served with matching digest`);
+}
+
 for (const pkgDir of ["kiwi-catalog", "shopping-cli"]) {
   const entries = manifest.files.filter(
     (entry) =>

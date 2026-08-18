@@ -18,7 +18,7 @@
  * `kiwi mcp serve` —— 启动 kiwi-buyer-mcp stdio server（战略 v2.5 §6.1/§6.5）。
  *
  * 配置来源：
- *   --db <path>        持久 store 路径（默认 ./.kiwi/mcp/state.sqlite）
+ *   --db <path>        持久 store 路径（默认 $KIWI_MCP_DB 或 ~/.kiwi/mcp/dsh.sqlite）
  *   --principal <id>   Principal opaque 标识（默认 env KIWI_PRINCIPAL）
  *   --agent <id>       buyer_agent_id（默认 env KIWI_BUYER_AGENT）
  *   --session <id>     session_id（默认 env KIWI_SESSION）
@@ -35,6 +35,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 
 import { assertNorthboundContractValid } from "../contracts/northbound-schema.js";
@@ -130,7 +131,12 @@ export async function runMcpServe(args: string[]): Promise<number> {
   const buyerAgentId = opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-mcp";
   const sessionId = opts.sessionId ?? process.env.KIWI_SESSION ?? `session-${process.pid}`;
   const policy = readPolicy(opts, principal);
-  const dbPath = opts.db ?? path.join(".kiwi", "mcp", "state.sqlite");
+  // 持久 store 默认路径：--db → KIWI_MCP_DB env → ~/.kiwi/mcp/dsh.sqlite（HOME 基准，
+  // 稳定可跨宿主；dsh/Hermes 等 host 不传 --db 时也能落一致位置，不再依赖 cwd）。
+  const dbPath =
+    opts.db ??
+    process.env.KIWI_MCP_DB ??
+    path.join(homedir(), ".kiwi", "mcp", "dsh.sqlite");
   // 单核心多包装：MCP 与 HTTP 共用同一 buildBuyerService（§6.3）。
   const service = buildBuyerService({
     dbPath,
