@@ -73,6 +73,7 @@ import readline from "node:readline";
 import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
 import { merchantPublish } from "./product-publish.js";
 import { catalogServe } from "./product-catalog.js";
+import { runMerchantSetupPublic, SetupPublicError, validatePublicDomain } from "./product-setup-public.js";
 
 const USAGE = `kiwi ${PRODUCT_VERSION} — commerce negotiation agent runtime
 
@@ -169,6 +170,9 @@ interface ParsedArgs {
   relogin: boolean;
   qrScale: number;
   noQr: boolean;
+  domain?: string;
+  check: boolean;
+  caddyfile?: string;
 }
 
 /** 导出供测试（审查 P2-L：--a2a flag 解析回归锁定）。 */
@@ -208,6 +212,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let relogin = false;
   let qrScale = 1;
   let noQr = false;
+  let domain: string | undefined;
+  let check = false;
+  let caddyfile: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--profile") {
@@ -287,6 +294,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
       qrScale = raw === "2" ? 2 : 1;
     } else if (arg === "--no-qr") {
       noQr = true;
+    } else if (arg === "--domain") {
+      domain = argv[++i];
+    } else if (arg === "--check") {
+      check = true;
+    } else if (arg === "--caddyfile") {
+      caddyfile = argv[++i];
     } else if (arg !== undefined && arg.startsWith("--profile=")) {
       profile = arg.slice("--profile=".length);
     } else if (arg !== undefined && arg.startsWith("--dir=")) {
@@ -301,6 +314,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
       merchantName = arg.slice("--name=".length);
     } else if (arg !== undefined && arg.startsWith("--data-dir=")) {
       dataDir = arg.slice("--data-dir=".length);
+    } else if (arg !== undefined && arg.startsWith("--domain=")) {
+      domain = arg.slice("--domain=".length);
+    } else if (arg !== undefined && arg.startsWith("--caddyfile=")) {
+      caddyfile = arg.slice("--caddyfile=".length);
     } else if (arg !== undefined && !arg.startsWith("-")) {
       command.push(arg);
     } else {
@@ -322,6 +339,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     relogin,
     qrScale,
     noQr,
+    check,
   };
   if (profile !== undefined) out.profile = profile;
   if (dir !== undefined) out.dir = dir;
@@ -344,6 +362,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
   if (catalog !== undefined) out.catalog = catalog;
   if (port !== undefined) out.port = port;
   if (catalogDb !== undefined) out.catalogDb = catalogDb;
+  if (domain !== undefined) out.domain = domain;
+  if (caddyfile !== undefined) out.caddyfile = caddyfile;
   if (catalogHost !== undefined) out.catalogHost = catalogHost;
   return out;
 }
@@ -899,6 +919,7 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   if (sub === "start") return await cmdAgentServe(args);
   if (sub === "init") return await cmdMerchantInit(args);
   if (sub === "publish") return await cmdMerchantPublish(args);
+  if (sub === "setup-public") return await cmdMerchantSetupPublic(args);
   if (sub === "listings") return notImplementedProduct("kiwi merchant listings", "D2");
   if (sub === "status") return notImplementedProduct("kiwi merchant status", "D1");
   if (sub === "doctor") return notImplementedProduct("kiwi merchant doctor", "D3");
@@ -1043,6 +1064,71 @@ async function cmdDemo(args: ParsedArgs): Promise<number> {
   } catch (err) {
     process.stderr.write(`demo failed: ${err instanceof Error ? err.message : String(err)}\n`);
     return EXIT.TRANSIENT;
+  }
+}
+
+/**
+ * `kiwi merchant setup-public`（D3）——公网 A2A 暴露引导向导。
+ * 检测公网 IP、检查域名 DNS、生成 Caddy 反代配置、输出启动与验证命令。
+ * well-known 文件由跑着的 `kiwi merchant start` 节点自动生成，商家无需手写。
+ */
+async function cmdMerchantSetupPublic(args: ParsedArgs): Promise<number> {
+  const profile = requireProfile(args); // 无 --profile → fail-closed 提示先 init
+  const port = args.port ?? (Number(process.env.KIWI_A2A_PORT ?? "") || 9000); // 与 startA2aNode 缺省一致
+  let domain = args.domain ?? "";
+  if (domain === "" && process.stdin.isTTY) {
+    domain = await promptLine("公网域名（如 merchant.example.com，TLS 证书就用它）: ", "");
+  }
+  if (domain === "") {
+    process.stderr.write(
+      "--domain <公网域名> 必填（TTY 下可交互输入）。例：kiwi merchant setup-public --domain merchant.example.com\n",
+    );
+    return EXIT.CONFIG;
+  }
+  let normalized: string;
+  try {
+    normalized = validatePublicDomain(domain);
+  } catch (err) {
+    if (err instanceof SetupPublicError) {
+      process.stderr.write(`${err.message}\n`);
+      return EXIT.CONFIG;
+    }
+    throw err;
+  }
+  const caddyfilePath = args.caddyfile ?? "Caddyfile.kiwi";
+  try {
+    const report = await runMerchantSetupPublic({
+      domain: normalized,
+      port,
+      caddyfilePath,
+      merchantAgentId: profile.agent_id,
+      profilePath: args.profile,
+      checkNow: args.check,
+    });
+    process.stdout.write(`merchant ${report.merchantAgentId} · 端口 ${report.port} · 域名 ${report.domain}\n`);
+    process.stdout.write(`公网 IP：${report.publicIp ?? "（未能自动检测，请手动确认）"}\n`);
+    const dnsMsg: Record<"ok" | "mismatch" | "unresolved" | "skipped", string> = {
+      ok: `DNS 已指向本机（${report.dns.resolved}）`,
+      mismatch: `DNS 解析到 ${report.dns.resolved}，与公网 IP ${report.dns.expected} 不一致——请到域名服务商把 ${report.domain} 的 A 记录指向 ${report.dns.expected}`,
+      unresolved: `域名 ${report.domain} 当前无法解析——请先到域名服务商添加 A 记录指向服务器公网 IP`,
+      skipped: `无法对比 DNS（未检测到公网 IP），请手动确认 ${report.domain} 的 A 记录指向本机`,
+    };
+    process.stdout.write(`DNS：${dnsMsg[report.dns.status]}\n`);
+    process.stdout.write(`已写入 ${report.caddyfilePath}：\n${report.caddyfile}`);
+    for (const line of report.instructions) process.stdout.write(`${line}\n`);
+    if (report.check !== null) {
+      const status = report.check.httpStatus;
+      process.stdout.write(
+        `\n--check：${status === 200 ? "✓" : status === null ? "✗ 无法连接" : `✗ HTTP ${status}`} ${report.check.url}\n`,
+      );
+    }
+    return EXIT.OK;
+  } catch (err) {
+    if (err instanceof SetupPublicError) {
+      process.stderr.write(`${err.message}\n`);
+      return EXIT.CONFIG;
+    }
+    throw err;
   }
 }
 
