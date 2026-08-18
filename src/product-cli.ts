@@ -56,7 +56,7 @@ export function writeDefaultProfile(yaml: string, profilePath?: string): void {
 }
 
 /** 与 package.json / USAGE 同步的产品版本。 */
-export const PRODUCT_VERSION = "0.7.15";
+export const PRODUCT_VERSION = "0.7.16";
 
 /**
  * 缺省 kiwi-catalog 地址（单一来源，cli.ts 各处解析一致）。
