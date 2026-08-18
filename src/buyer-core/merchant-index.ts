@@ -162,10 +162,17 @@ export class KiwiCatalogMerchantIndex {
     const agents = agentsRes.status === "fulfilled" ? agentsRes.value : [];
     const listings = listingsRes.status === "fulfilled" ? listingsRes.value : [];
 
+    // 审查：host 传入的 merchant_ids 可能来自 catalog_agent_id（cagt_…）或
+    // merchant_id（mkt_…）。不能用 `??` 短路（merchant_id 存在时忽略 agent id，
+    // 导致 cagt_ 传入 → resolveById undefined → "merchant has no agent card URL"）。
     const listing = listings.find(
-      (l) => (l.merchant.merchant_id ?? l.listing.owner_agent_id) === merchantId,
+      (l) =>
+        l.merchant.merchant_id === merchantId ||
+        l.listing.owner_agent_id === merchantId,
     );
-    const agent = agents.find((a) => (a.merchant_id ?? a.catalog_agent_id) === merchantId)
+    const agent = agents.find(
+      (a) => a.merchant_id === merchantId || a.catalog_agent_id === merchantId,
+    )
       ?? (listing !== undefined
         ? agents.find((a) => a.catalog_agent_id === listing.listing.owner_agent_id)
         : undefined);
