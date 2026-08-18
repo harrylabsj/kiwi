@@ -35,6 +35,7 @@ import type { AgentProfile } from "../../config/profile.js";
 import type { CommerceDataSource } from "../../commerce/data-source.js";
 import type { CommerceClient } from "../../commerce/types.js";
 import { LedgerStore } from "../../negotiation/ledger/index.js";
+import { TERMINAL_PHASES } from "../../negotiation/state/phase.js";
 import type { AgentMode } from "../mode.js";
 import { buildNegotiationChatTools, writeGateText } from "../negotiation-chat.js";
 import type { WriteApprovalCandidateStore } from "./action-candidate.js";
@@ -291,29 +292,59 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
   const listConsultations: Tool = {
     name: "list_incoming_consultations",
     label: "收到的咨询",
-    description: "列出商家收到的进行中咨询（磋商会话），含最新一条消息。",
+    description:
+      "列出商家收到的**进行中**磋商（A2A ledger，未到终态）：negotiation_id、当前相位、" +
+      "SKU、数量、报价、时间。运营者问「有用户来咨询吗/正在磋商什么」时用此查看；" +
+      "历史已结束磋商用 list_a2a_negotiations。",
     parameters: {
       type: "object",
       properties: {},
       additionalProperties: false,
     },
     execute: async (_id, _params) => {
-      try {
-        // Always this merchant's own consultations — never a caller-supplied id.
-        const consultations = await merchantClient.listIncomingConsultations(ownerId);
-        if (consultations.length === 0) return textResult("当前没有进行中的咨询。");
-        return textResult(
-          consultations
-            .map(
-              (c) =>
-                `· ${c.conversation_id} [${c.status}]${c.sku !== undefined ? ` ${c.sku}` : ""}：${c.last_message.slice(0, 120)}`,
-            )
-            .join("\n"),
-          { count: consultations.length },
-        );
-      } catch (err) {
-        return textResult(errorText(err));
+      const ledgerDir = deps.a2aLedgerDir;
+      if (ledgerDir === undefined) {
+        return textResult("未配置 A2A ledger 目录，无法读取磋商记录。");
       }
+      const ledger = new LedgerStore({ dir: ledgerDir, now: deps.now });
+      const rows: Array<{ at: string; line: string }> = [];
+      for (const negotiationId of ledger.listNegotiations()) {
+        let phase = "OPEN";
+        let at = "";
+        let sku = "";
+        let qty: number | undefined;
+        let priceMinor: number | undefined;
+        for (const e of ledger.events(negotiationId)) {
+          if (e.recorded_at > at) at = e.recorded_at;
+          if (e.state_transition?.to_phase !== undefined) phase = e.state_transition.to_phase;
+          if (e.event_kind === "message_sent") {
+            const wp = e.wire_payload as
+              | {
+                  action?: string;
+                  payload?: {
+                    terms?: { items?: Array<{ sku?: string; quantity?: { value?: number }; unit_price?: { amount_minor?: number } }> };
+                  };
+                }
+              | undefined;
+            const item = wp?.payload?.terms?.items?.[0];
+            if (item?.sku !== undefined && item.sku !== "") sku = item.sku;
+            if (item?.quantity?.value !== undefined) qty = item.quantity.value;
+            if (item?.unit_price?.amount_minor !== undefined) priceMinor = item.unit_price.amount_minor;
+          }
+        }
+        // 已到终态（AGREEMENT_REACHED/DECLINED/WITHDRAWN/CANCELLED/EXPIRED）不算进行中
+        if ((TERMINAL_PHASES as readonly string[]).includes(phase)) continue;
+        const price = priceMinor !== undefined ? `，价 ${(priceMinor / 100).toFixed(2)} 元/件` : "";
+        rows.push({
+          at,
+          line: `· ${negotiationId}（${phase}）SKU=${sku || "-"} 数量=${qty ?? "-"}${price} ${at}`,
+        });
+      }
+      rows.sort((a, b) => (a.at > b.at ? -1 : a.at < b.at ? 1 : 0));
+      if (rows.length === 0) return textResult("当前没有进行中的磋商。", { count: 0 });
+      return textResult(`共 ${rows.length} 笔进行中磋商：\n${rows.map((r) => r.line).join("\n")}`, {
+        count: rows.length,
+      });
     },
   };
 
