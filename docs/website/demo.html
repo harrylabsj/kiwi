@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kiwi 产品演示 —— 一次跨商家询价如何完成</title>
-  <meta name="description" content="用一个真实可理解的办公采购案例，演示 Kiwi 如何连接已有 AI 智能体、商家发现网络与独立商家运行时。">
+  <title>Hermes × Kiwi Buyer 演示 —— 一句话完成商家发现与询价</title>
+  <meta name="description" content="在 Hermes 中说出采购需求，观看 Kiwi Buyer 如何发现商家、发起询价、比较报价，并在协议、handoff 与付款前停下。">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="style.css?v=20260817-5">
   <style>
@@ -119,21 +119,21 @@
 </div></div></nav>
 
 <main class="demo-page">
-  <div class="demo-shell" aria-label="Kiwi 产品流程演示">
-    <header class="demo-head"><div class="demo-brand"><i></i><span>Kiwi · 跨商家询价演示</span></div><div class="demo-status">自动播放 · 可手动切换</div></header>
+  <div class="demo-shell" aria-label="Hermes 与 Kiwi Buyer 产品流程演示">
+    <header class="demo-head"><div class="demo-brand"><i></i><span>Hermes × Kiwi Buyer · 询价演示</span></div><div class="demo-status">流程演示 · 示例数据 · 可手动切换</div></header>
 
     <div class="scene-wrap" aria-live="polite">
       <section class="scene active" data-scene="0">
         <div class="scene-grid">
-          <div><div class="scene-kicker">01 · 需求入口不变</div><h1>采购正在进入<span class="accent">智能体协作</span>时代。</h1><p class="scene-lead">用户不需要学习一个新的聊天工具。继续对自己已有的 AI 智能体说需求，Kiwi 在后台补上跨商家发现、询价与磋商能力。</p></div>
-          <div class="host-window"><div class="window-head"><span>企业智能体</span><span>对话保持在宿主内</span></div><div class="chat-stack"><div class="chat-bubble"><small>用户</small>帮我采购 200 个 USB-C 扩展坞，7 天内到，希望比较三家报价。</div><div class="chat-bubble reply"><small>宿主智能体</small>我会调用 Kiwi 找到合适商家，并在你批准前不接受任何协议。</div></div></div>
+          <div><div class="scene-kicker">01 · Hermes 入口</div><h1>继续对 Hermes 说话，<span class="accent">Kiwi 负责采购。</span></h1><p class="scene-lead">安装 Kiwi 并运行 <strong>kiwi setup-hermes</strong>。之后用户不需要学习新的采购应用，只需像平时一样说出商品、数量、交期和地区。</p></div>
+          <div class="host-window"><div class="window-head"><span>Hermes</span><span>对话与记忆仍在宿主内</span></div><div class="chat-stack"><div class="chat-bubble"><small>用户</small>帮我采购 200 个 USB-C 扩展坞，7 天内到，希望比较三家报价。</div><div class="chat-bubble reply"><small>Hermes</small>我会调用 Kiwi 找到合适商家，并在你批准前不接受任何协议。</div></div></div>
         </div>
       </section>
 
       <section class="scene" data-scene="1">
         <div class="scene-grid">
           <div><div class="scene-kicker">02 · 买家连接器</div><h2>把一句话，变成可授权、可恢复的采购任务。</h2><p class="scene-lead">Kiwi 只接收本次采购必要的信息：商品、数量、交期、地区和授权范围。原始对话、邮件与长期记忆默认不外传。</p></div>
-          <div class="route-stack"><div class="route-card"><small>宿主智能体</small><strong>采购意图 + 用户委托</strong><span>用户仍在原来的对话里</span></div><div class="route-arrow">↓ 最小必要投影</div><div class="route-card active"><small>Kiwi 买家连接器</small><strong>发现 · 询价 · 比较 · 磋商 · 审批</strong><span>统一任务状态、权限与幂等语义</span></div></div>
+          <div class="route-stack"><div class="route-card"><small>Hermes</small><strong>采购意图 + 用户委托</strong><span>用户仍在原来的对话里</span></div><div class="route-arrow">↓ 最小必要投影</div><div class="route-card active"><small>Kiwi Buyer</small><strong>发现 · 询价 · 比较 · 磋商 · 审批</strong><span>统一任务状态、权限与幂等语义</span></div></div>
         </div>
       </section>
 
@@ -147,7 +147,7 @@
       <section class="scene" data-scene="3">
         <div class="scene-grid">
           <div><div class="scene-kicker">04 · 真实询价</div><h2>三家商家，按自己的库存与政策回应。</h2><p class="scene-lead">商家运行时独立在线。常规询价由确定性政策处理；触碰底价、敏感客户或异常条件时，自动升级人工审核。</p></div>
-          <div class="quote-board"><div class="quote-head"><span>商家</span><span>单价</span><span>交期</span><span>状态</span></div><div class="quote-row"><strong>杭州商家甲</strong><span>¥269</span><span>6 天</span><span>已报价</span></div><div class="quote-row best"><strong>上海商家乙</strong><span>¥255</span><span>7 天</span><span>可磋商</span></div><div class="quote-row"><strong>深圳商家丙</strong><span>¥248</span><span>10 天</span><span>交期不符</span></div></div>
+          <div class="quote-board" aria-label="示例报价，非实时数据"><div class="quote-head"><span>示例商家</span><span>单价</span><span>交期</span><span>状态</span></div><div class="quote-row"><strong>杭州商家甲</strong><span>¥269</span><span>6 天</span><span>已报价</span></div><div class="quote-row best"><strong>上海商家乙</strong><span>¥255</span><span>7 天</span><span>可磋商</span></div><div class="quote-row"><strong>深圳商家丙</strong><span>¥248</span><span>10 天</span><span>交期不符</span></div></div>
         </div>
       </section>
 
@@ -170,7 +170,7 @@
       </section>
 
       <section class="scene finale" data-scene="7">
-        <div class="scene-kicker">商家接入 · 现在开始</div><h2>让下一个采购智能体，先找到你的企业。</h2><p class="scene-lead">Kiwi 面向标准化办公、IT 配件与 B2B 供应商开放接入，让商品、报价政策和成交入口进入新的采购入口。</p><div class="truth-list"><div><strong>你提供</strong><span>商品 CSV、真实报价政策和一台可长期在线的服务器</span></div><div><strong>Kiwi 协助</strong><span>商品发布、发现配置、询价连接与成交交接</span></div><div><strong>你始终掌控</strong><span>成本、底价、库存、订单、付款和客户关系</span></div></div><div class="final-actions"><a class="btn btn-solid" href="merchants.html#contact">开始商家接入</a><a class="btn btn-ghost" href="buyers.html">接入买家能力</a></div><div class="final-note">订单、付款和履约仍由你的企业系统负责。</div>
+        <div class="scene-kicker">现在开始</div><h2>让 Hermes 里的下一次采购，先找到你的企业。</h2><p class="scene-lead">买家可以先用两步接入 Hermes；商家用四步公开商品能力并接收询价。真实案例始终按可核验证据与商家授权公开。</p><div class="truth-list"><div><strong>Hermes 用户</strong><span>安装 Kiwi，直接说出采购需求</span></div><div><strong>商家</strong><span>连接商品、公开端点与报价政策</span></div><div><strong>双方始终掌控</strong><span>隐私、授权、订单、付款和客户关系</span></div></div><div class="final-actions"><a class="btn btn-solid" href="buyers.html#hermes-install">接入 Hermes Buyer</a><a class="btn btn-ghost" href="merchants.html#install">接入商家</a><a class="btn btn-ghost" href="case-template.html">查看案例模板</a></div><div class="final-note">本页报价为示例数据；订单、付款和履约仍由双方系统负责。</div>
       </section>
     </div>
 

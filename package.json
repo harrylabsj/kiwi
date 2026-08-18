@@ -32,6 +32,7 @@
     "verify:package": "bash scripts/verify-package.sh",
     "verify:portfolio-lock": "node scripts/verify-portfolio-lock-candidate.mjs",
     "verify:python-ref": "cd spec/examples/python && python3 -m unittest discover -s tests -t .",
+    "demo:hermes-buyer": "bash scripts/demo-hermes-buyer.sh",
     "verify:harness": "node integrations/harnesses/deepseek-harness/validate-contract-cases.mjs",
     "verify:supply-chain": "node scripts/verify-facade-supply-chain.mjs",
     "verify": "npm run lint && npm run typecheck && npm run build && npm run test && npm run verify:contracts && npm run verify:vectors && npm run verify:harness && npm run verify:supply-chain && npm run verify:package && npm run verify:python-ref",
