@@ -41,6 +41,15 @@ docs/protocol/kiwi-negotiation-protocol-1.0.md
 - 当前 `main` 在发布运行时之后继续增加商家公网向导和对外采用材料；不改变上述已发布
   package version，后续运行时代码变更仍需新版本和同一受保护流程。
 
+### 0.7.19（Draft，待发布）
+
+- `@harrylabsj/kiwi@0.7.19`：`kiwi mcp serve` 默认持久 store 支持 `KIWI_MCP_DB`
+  env / `~/.kiwi/mcp/dsh.sqlite`；`kiwi_request_quotes` schema 暴露 items 结构
+  （ff4e077 修复 contract_violation）。
+- 新增 `@harrylabsj/kiwi-dsh-plugin`（npm）：DeepSeek Harness 一键安装插件
+  （`dsh plugin --profile web add @harrylabsj/kiwi-dsh-plugin`），`portfolio-release.yml`
+  新增 `publish-dsh-plugin` job + verify-registry/rollback 覆盖。
+
 ## Current protocol / architecture drafts
 
 ```text
@@ -77,6 +86,7 @@ src/mcp/
 src/http/
 integrations/hosts/hermes/
 integrations/hosts/deepseek-harness/   # dsh Host 接入（kiwi-buyer-mcp 作为 MCP 插件）
+integrations/plugins/kiwi-dsh-plugin/  # dsh 一键安装插件（bundle + skill，portfolio 发布）
 integrations/harnesses/deepseek-harness/   # dsh 受限 ReasoningBackend（contract gate）
 ```
 

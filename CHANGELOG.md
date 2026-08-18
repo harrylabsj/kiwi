@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.7.19 — 2026-08-18
+
+**DeepSeek Harness 一键安装插件（`@harrylabsj/kiwi-dsh-plugin`）**：
+- 新增 `integrations/plugins/kiwi-dsh-plugin/`：dsh 插件包（`dsh.bundle.patch` →
+  `cordis.patch.yml`），一条命令安装：
+  `dsh plugin --profile web add @harrylabsj/kiwi-dsh-plugin`。
+  - `cordis.patch.yml` 插入 `mcp-kiwi` 行（`@deepseek-ai/dsh-mcp-client` 把
+    `kiwi mcp serve` 挂成 MCP 插件，9 工具 → `mcp__kiwi__*`）+ `kiwi-dsh-plugin`
+    行（宿主插件注册 kiwi-buyer SKILL，教模型构造合法 CommerceIntent）。
+  - `lib/index.js` 纯 ESM JS、零运行时依赖（不 import `@deepseek-ai/*`，规避
+    ESM realpath 解析）；`scripts/validate.mjs` 是 prepack 门。
+  - 已实测：本地 `dsh plugin add link:` 安装 → 两行合并 → kiwi mcp serve 子进程
+    拉起（干净 args、无 `!!js` 残留）、无 duplicate serverName、skill 注册。
+- `portfolio-release.yml` 扩展：新增 `publish-dsh-plugin` job（`@harrylabsj/kiwi-dsh-plugin`
+  npm 受保护发布，同 `kiwi-release` 环境 + OIDC trusted publisher）；build-once 打包
+  `release/dsh-plugin/`；verify-registry / rollback-verify 覆盖该包。
+
+**MCP 默认路径与 schema 修复（所有宿主受益）**：
+- `kiwi mcp serve` 默认持久 store 路径：`--db` → `KIWI_MCP_DB` env →
+  `~/.kiwi/mcp/dsh.sqlite`（HOME 基准，不再依赖 cwd；dsh/Hermes 等 host 不传
+  --db 也能落一致位置）。
+- `kiwi_request_quotes` 工具 schema 完整暴露 `items[].query`（必填）+ `quantity`
+  `{value, unit}` object（ff4e077）：修复 dsh/其他宿主模型因缺 schema 引导而构造
+  非法 CommerceIntent（contract_violation）。
+
 ## v0.7.18 — 2026-08-18
 
 **商家配送时效（按区域）——发现/搜索可见**：
