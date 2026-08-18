@@ -14,9 +14,28 @@ import {
   buildCaddyfile,
   checkDomainDns,
   detectPublicIp,
+  extractPublicDomain,
   runMerchantSetupPublic,
   validatePublicDomain,
 } from "../src/product-setup-public.js";
+
+describe("extractPublicDomain", () => {
+  it("从 KIWI_A2A_PUBLIC_URL 提取域名（https://<domain>）", () => {
+    expect(extractPublicDomain("https://merchant.example.com")).toBe("merchant.example.com");
+    expect(extractPublicDomain("https://merchant.example.com/")).toBe("merchant.example.com");
+    expect(extractPublicDomain(" https://Merchant.Example.COM ")).toBe("merchant.example.com");
+  });
+
+  it("无效输入 → null", () => {
+    expect(extractPublicDomain(undefined)).toBeNull();
+    expect(extractPublicDomain("")).toBeNull();
+    expect(extractPublicDomain("http://merchant.example.com")).toBeNull();
+    expect(extractPublicDomain("https://merchant.example.com/path")).toBeNull();
+    expect(extractPublicDomain("https://user:pass@merchant.example.com")).toBeNull();
+    expect(extractPublicDomain("https://merchant.example.com?q=1")).toBeNull();
+    expect(extractPublicDomain("not-a-url")).toBeNull();
+  });
+});
 
 describe("validatePublicDomain", () => {
   it("归一化并返回小写域名", () => {
