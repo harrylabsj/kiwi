@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.7.17 — 2026-08-18
+
+> v0.7.16 由 2026-08-17 的 workflow run 发布（缺下述新功能，不可覆盖）；本版
+> **0.7.17 为完整版**，请安装 0.7.17。
+
+**商家接入零参数（商家侧一站引导）**：
+- `kiwi merchant init` TTY 引导输入商家名称、公网域名、商家令牌；域名写入
+  profile `merchant_public.public_url`，令牌写入独立 0600 `~/.kiwi/credentials.env`
+  （secret 不入 profile，start/publish 自动加载）。
+- `--profile` 缺省回退 `~/.kiwi/kiwi.yaml`（`requireProfileOrDefault`）；
+  `--shopping-cli-db` 缺省 `~/.local/share/shopping-cli/shopping-cli.sqlite`（与
+  shopping-cli 一致，商家无需设置 SHOPPING_DB_PATH）。
+- 新增 `kiwi merchant setup-public`：公网 A2A 引导（检测公网 IP、检查域名 DNS、
+  生成 Caddyfile），域名缺省从 `KIWI_A2A_PUBLIC_URL` 提取。
+- 新增 `kiwi merchant up`：一条命令上线（setup-public → 起 Caddy 反代 → 起 A2A
+  节点，退出时清理 Caddy），把第 4 步三命令合成一个。
+- `kiwi merchant publish --file <csv>`：先导入商品再发布；名称-only 投影
+  （shopping-cli 3.2.4）。
+
+**买家用 Hermes 一键接入**：
+- 新增 `kiwi setup-hermes`：`hermes mcp add` 把 `kiwi mcp serve` 接成 MCP server
+  + `hermes skills install` 装 kiwi-buyer skill；检测已配置则跳过，skill 安装失败
+  时兜底直接写入 `~/.hermes/skills/kiwi-buyer/`。
+
+**组合发布**（portfolio，3.2.4 / 0.2.4 / 0.7.17）：
+- `shopping-cli@3.2.4`：商品发布投影改为**名称-only**（去掉价格/促销/底价），
+  新增 `import-csv-excel --template` 与 `examples/products-template.csv`。
+- `kiwi-catalog@0.2.4`：移除门户「我的商品」discovery entries（买家搜索只走
+  listings）；门户导航与官网一致（买家/商家/商家后台）。
+
+**官网**：商家四步接入（安装→初始化→上线→导入并发布）、买家 Hermes 二步接入、
+导航短名（买家/商家）。
+
 ## v0.7.16 — 2026-08-17
 
 **Northbound（战略 v2.5 Phase 1 / Phase 2 Hermes 轨）**：
