@@ -336,7 +336,7 @@ h2 { max-width: 19em; margin-top: 12px; font-size: clamp(1.8rem, 3.6vw, 2.75rem)
 .quickstart-step .surface-label { margin-top: 24px; }
 .quickstart-step h3 { margin-top: 8px; font-size: 1.08rem; }
 .quickstart-step p { margin-top: 12px; color: var(--ink-soft); font-size: .88rem; }
-.quickstart-code { width: 100%; margin-top: auto; padding: 13px 14px; border-left-width: 3px; font-size: .72rem; }
+.quickstart-code { width: 100%; margin-top: auto; padding: 13px 14px; border-left-width: 3px; font-size: .72rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .quickstart-link { margin-top: auto; padding-top: 22px; font-size: .86rem; font-weight: 720; text-decoration: none; }
 .quickstart-note { margin-top: 28px; border-left: 4px solid var(--kiwi-600); border-radius: 0 10px 10px 0; padding: 17px 20px; background: var(--kiwi-100); color: var(--ink-soft); font-size: .9rem; }
 .quickstart-note strong { color: var(--kiwi-900); }
