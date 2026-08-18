@@ -117,6 +117,14 @@ sourcing and commercial negotiation。**
 - `error contract_violation`：CommerceIntent 不符合契约，修正 intent 后重试。
 - `error authorization_denied / approval_denied`：硬拒绝，不可重试；向用户说明。
 - 部分失败（`partial_success`）：保留已成功候选的报价，单独提示失败项可重试。
+- `merchant has no agent card URL` 误报（观察到的坑，2026-08）：当 `kiwi_request_quotes` 显式传
+  `merchant_ids` 时，Kiwi 内部仍会用 intent 的商品 query 重新搜索商家来解析 id；query 带规格词
+  （如"保温杯 316不锈钢 500ml"）时目录 LIKE 匹配不到，回退成缺 `agent_card_url` 的对象，误报该
+  错误且重试无效。规避：把 intent 的商品 query 写成短词（如"保温杯"），或先用 `kiwi_search`
+  短词发现商家再定向询价。根因是"按 id 定向解析"缺失（service.ts:287-297），catalog 侧数据完好。
+- 交接前验证 checkout URL：演示商家（如 Veyquo）的 `kiwi_handoff` 链接可能返回 404（checkout
+  端点未实现），付款前用 `curl -sS -o /dev/null -w "%{http_code}" <url>` 验证，404 时如实告知
+  用户该链接可能无法真实下单，再决定是否继续。
 
 ## 演示
 
