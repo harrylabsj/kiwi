@@ -5,6 +5,16 @@ portfolio siblings `kiwi-catalog` and `shopping-cli`) are released. It is meant
 for maintainers and for external contributors who want to understand why a
 release looks the way it does.
 
+## Current release candidate（2026-08-17）
+
+- `@harrylabsj/kiwi`: `0.7.16`
+- `kiwi-catalog`: `0.2.4`
+- `shopping-cli`: `3.2.2`
+
+These versions are release candidates until the protected workflow completes
+`publish=true` and `verify-registry`; the immutable release ref is the full
+40-character commit SHA passed to the workflow.
+
 For a hands-on operator walkthrough (Chinese), see
 [`docs/kiwi-protected-release-runbook-2026-08-09.md`](kiwi-protected-release-runbook-2026-08-09.md).
 

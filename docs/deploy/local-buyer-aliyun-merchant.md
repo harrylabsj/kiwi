@@ -1,7 +1,7 @@
 # 部署：本地 Buyer ↔ 阿里云 Merchant + shopping-cli
 
-发布包（2026-08-14）：npm `@harrylabsj/kiwi@0.7.5`、PyPI `shopping-cli==3.2.0`、
-`kiwi-catalog==0.2.1`（未变）。本文把"本地跑 buyer、服务器跑 merchant + shopping-cli"
+当前发布候选：npm `@harrylabsj/kiwi@0.7.16`、PyPI `shopping-cli==3.2.2`、
+`kiwi-catalog==0.2.4`。本文把"本地跑 buyer、服务器跑 merchant + shopping-cli"
 落到可复制命令。
 
 ## 设计理念（Data Flow & Responsibility Boundary）
@@ -43,15 +43,15 @@ Kiwi 是"任何 AI Agent 都可调用的开放询价、采购与商业磋商层"
 ## 架构
 
 ```
-本地电脑                                  阿里云服务器（公网 IP 假设 1.2.3.4）
+本地电脑                                  阿里云服务器（公网域名示例）
 ┌──────────┐   A2A/KNP（公网）  ┌──────────────────────────────┐
 │ kiwi      │ ───────────────▶ │ kiwi merchant start（A2A:PORT）│──┐
 │ buyer     │  发现 catalog     │   └─ productSource ─▶ shopping-cli api（127.0.0.1:8765）
-│ 0.7.5     │ ──▶ 1.2.3.4:8600 │ kiwi catalog serve（0.0.0.0:8600）│ 商品事实
+│ 0.7.16    │ ──▶ catalog.example.com │ kiwi catalog serve（0.0.0.0:8600）│ 商品事实
 └──────────┘                   │ shopping-cli（SQLite + CSV 导入） ┘
 ```
 
-- Buyer 经 catalog（`1.2.3.4:8600`）发现 merchant → 直连 merchant A2A 端口协商。
+- Buyer 经 catalog（`https://catalog.example.com`）发现 merchant → 直连 merchant A2A 端口协商。
 - Merchant A2A 节点经 HTTP 读 shopping-cli 的 `/products/{sku}`（`KIWI_COMMERCE_URL`）。
 - 云安全组放行：`8600`（catalog）、`PORT`（merchant A2A）。
 
@@ -76,8 +76,8 @@ Kiwi 是"任何 AI Agent 都可调用的开放询价、采购与商业磋商层"
 前置：Node ≥22、Python ≥3.11。
 
 ```sh
-npm install -g @harrylabsj/kiwi@0.7.5
-pip install shopping-cli==3.2.0 kiwi-catalog==0.2.1
+npm install -g @harrylabsj/kiwi@0.7.16
+pip install shopping-cli==3.2.2 kiwi-catalog==0.2.4
 
 mkdir -p ~/kiwi-merchant && cd ~/kiwi-merchant
 export SHOPPING_DB_PATH=~/kiwi-merchant/shopping.sqlite
@@ -95,15 +95,16 @@ kiwi catalog serve --db ~/kiwi-merchant/catalog.sqlite --host 0.0.0.0 --port 860
 # 4) merchant A2A 节点（连 shopping-cli 数据源 + 公网地址 + bearer 认证）
 export KIWI_COMMERCE_URL=http://127.0.0.1:8765      # 读 shopping-cli /products
 export KIWI_CATALOG_URL=http://127.0.0.1:8600
+export KIWI_CATALOG_OWNER_TOKEN_SECRET="<由 Catalog 运营方提供>"
 export KIWI_MERCHANT_TOKEN="$(openssl rand -hex 16)" # catalog 注册 token
 export KIWI_A2A_AUTH=bearer:"$(openssl rand -hex 16)" # 公网必配：入站 A2A 认证
-export KIWI_A2A_PUBLIC_URL=http://1.2.3.4:PORT       # 对外公告的 merchant 地址
+export KIWI_A2A_PUBLIC_URL=https://merchant.example.com # 对外公告的 merchant 地址（公网使用 HTTPS）
 kiwi merchant init --merchant-id <mid> --name "<商家名>"   # 生成 ~/.kiwi/kiwi.yaml
-kiwi merchant start --port PORT &
+kiwi merchant start --profile ~/.kiwi/kiwi.yaml --catalog "$KIWI_CATALOG_URL" --port PORT --no-chat &
 
 # 5) 发布商家进 catalog（buyer 才能发现）
 export SHOPPING_DB_PATH=~/kiwi-merchant/shopping.sqlite
-kiwi merchant publish --shopping-cli-merchant <mid>
+kiwi merchant publish --profile ~/.kiwi/kiwi.yaml --shopping-cli-db "$SHOPPING_DB_PATH"
 
 # 可选：固定公网地址用 systemd / nohup 守护（示例见下）。
 ```
@@ -118,14 +119,14 @@ curl -s http://1.2.3.4:PORT/.well-known/agent-card.json   # 公网可达（自�
 ## 本地（buyer）
 
 ```sh
-npm install -g @harrylabsj/kiwi@0.7.5
+npm install -g @harrylabsj/kiwi@0.7.16
 
 kiwi buyer init --agent-id <buyer-id>
 export KIWI_A2A_CLIENT_BEARER="<与服务器 KIWI_A2A_AUTH 相同的 token>"
-export KIWI_CATALOG_URL=http://1.2.3.4:8600
+export KIWI_CATALOG_URL=https://catalog.example.com
 
 # 交互式 buyer（自然语言描述需求 → 发现 → 询价 → 议价 → Agreement）
-kiwi buyer start --catalog http://1.2.3.4:8600
+kiwi buyer start --catalog https://catalog.example.com
 # 或非交互搜索：
 kiwi buyer search "保温杯 200 个" --catalog http://1.2.3.4:8600
 ```
@@ -147,8 +148,8 @@ Environment=KIWI_COMMERCE_URL=http://127.0.0.1:8765
 Environment=KIWI_CATALOG_URL=http://127.0.0.1:8600
 Environment=SHOPPING_DB_PATH=/root/kiwi-merchant/shopping.sqlite
 Environment=KIWI_A2A_AUTH=bearer:<token>
-Environment=KIWI_A2A_PUBLIC_URL=http://1.2.3.4:PORT
-ExecStart=/usr/bin/kiwi merchant start --port PORT
+Environment=KIWI_A2A_PUBLIC_URL=https://merchant.example.com
+ExecStart=/usr/bin/kiwi merchant start --profile /root/.kiwi/kiwi.yaml --catalog http://127.0.0.1:8600 --port PORT --no-chat
 Restart=on-failure
 ```
 

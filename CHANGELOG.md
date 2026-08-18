@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.7.16 — 2026-08-17
 
 **Northbound（战略 v2.5 Phase 1 / Phase 2 Hermes 轨）**：
 - 冻结四份 Northbound 契约（v0.1）：CommerceIntent / DelegationPolicy /
@@ -54,6 +54,11 @@
   （Intelligence 离线时 Commerce+Merchant Core 仍 RFQ 报价 / human_required 升级 /
   运营 resolve，PASS）。
 - 文档：`docs/kiwi-buyer-mcp-facade-v0.1.md` 登记入 CURRENT-DOCS.md。
+
+**Host adapter 与 Merchant pricing**：
+- 新增 `kiwi-buyer-openclaw` 薄适配器与 Skill；它只连接 `kiwi-buyer-mcp`，不复制 Buyer Core 或 KNP 状态机。
+- Merchant 报价与促销由确定性 `merchant_policy` 执行，支持 per-SKU floor、折扣上限和批量促销；LLM 只保留为受限候选生成/contract gate，不是定价权威。
+- 发布候选版本统一为 Kiwi `0.7.16`、kiwi-catalog `0.2.4`、shopping-cli `3.2.2`。
 
 - A2A 1.0 KNP 响应统一使用 `text`/`data` Part 与 `ROLE_*` wire 形状，0.3 兼容响应保持不变。
 - malformed 1.0 Part 现在在协议边界 fail-closed，避免远端输入触发内部 500。

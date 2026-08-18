@@ -1,15 +1,43 @@
 # CURRENT DOCS — Kiwi Commerce
 
-## Released v0.6.0
+## Current source of truth（2026-08-17）
 
-These remain the released v0.6.0 authority and are NOT superseded by the v0.7.0 draft:
+当前产品方向由 v2.5 战略基线决定，当前实现状态由代码、测试和实现对齐页决定：
+
+```text
+docs/Kiwi_Product_Strategy_Upgrade_Baseline_v2.5_2026-08-15.docx
+docs/kiwi-product-strategy-implementation-alignment-2026-08-17.md
+```
+
+v1/v2.1 基线与 v2.0/v2.1 评审稿已移入本目录，保留为历史决策依据：
+
+```text
+docs/Kiwi_Product_Strategy_Upgrade_Baseline_2026-08-14.docx
+docs/Kiwi_Product_Strategy_Upgrade_Baseline_v2.1_2026-08-14.docx
+docs/Kiwi_Product_Strategy_Upgrade_Review_v2.0_v2.1_2026-08-15.docx
+```
+
+v2.5 的现行执行顺序是：Hermes + `kiwi-buyer-mcp` 双突破口 → 真实 B2B 试点 → Merchant Independence / DeepSeek Harness 双证据门 → 再决定深度重构与其他 Host 扩张。旧 v2.1 的 OpenClaw-first 顺序不再是当前执行顺序。
+
+## Release identity
+
+### Released v0.6.0
+
+这些文件仍是 v0.6.0 已发布协议的权威版本，不被后续 Draft 文档直接覆盖：
 
 ```text
 docs/kiwi-a2a-architecture-baseline.md
 docs/protocol/kiwi-negotiation-protocol-1.0.md
 ```
 
-## Current v0.7.0 Draft
+### Current source candidate
+
+- Kiwi 当前源码候选：`@harrylabsj/kiwi@0.7.15`，HEAD `4fd0207b7f9f45115fab86f73bd18bcf8424fe98`。
+- `kiwi-catalog` 当前组合候选：`0.2.3`，锁定提交 `8646bdd531f4712f5fbbdb75448e820fdb12b28b`。
+- `shopping-cli` 当前组合候选：`3.2.1`，锁定提交 `a8e4dbc50717bdf26bd507d6f9b28a95296a31d7`。
+- 当前候选尚未由本仓库文档证明已经完成 protected registry publish；在 workflow dry-run、正式发布和 `verify-registry` 通过前，不称为已发布版本。
+
+## Current protocol / architecture drafts
 
 ```text
 docs/kiwi-commerce-v0.7.0-architecture-draft-rev1.5.md
@@ -20,10 +48,14 @@ docs/protocol/kiwi-transaction-handoff-0.1-rev0.3.md
 docs/testing/kiwi-commerce-v0.7.0-test-plan-v0.3.md
 ```
 
-## Product Strategy（非协议，独立版本）
+这些文件描述 v0.7.x 的协议与产品契约；版本身份仍以本清单、代码、Git commit/tag 和发布证据共同判定。
+
+## Product strategy / upgrade docs
 
 ```text
-docs/kiwi-agent-commerce-strategy-upgrade-2026-08-13.md
+docs/Kiwi_Product_Strategy_Upgrade_Baseline_v2.5_2026-08-15.docx
+docs/kiwi-product-strategy-implementation-alignment-2026-08-17.md
+docs/kiwi-agent-commerce-strategy-upgrade-2026-08-13.md  # v1.0 早期 Markdown 基线
 docs/kiwi-product-layer-refactor-rev1.2.md
 ```
 
@@ -33,7 +65,17 @@ docs/kiwi-product-layer-refactor-rev1.2.md
 docs/kiwi-buyer-mcp-facade-v0.1.md
 ```
 
-## Compatibility（Phase 3 语义不变量）
+当前 Buyer Core / MCP / HTTP 实现：
+
+```text
+src/buyer-core/
+src/mcp/
+src/http/
+integrations/hosts/hermes/
+integrations/harnesses/deepseek-harness/
+```
+
+## Compatibility（v2.5 语义不变量）
 
 ```text
 compatibility/ucp-knp-boundary.md
@@ -43,54 +85,38 @@ compatibility/openclaw-tri-role-separation.md
 compatibility/knp-ucp-capability.md
 ```
 
-- UCP/KNP 边界：能力层归属 + machine-checkable 不变量（工具词表、三副作用 false、
-  payment never、商品 truth 不落 Kiwi、transport 可组合）。
-- Host/Harness Matrix：跨宿主语义不变量（schema/授权门/脱敏/幂等/恢复/错误分类/
-  协议摘要/版本兼容）+ 接入方向矩阵（Hermes/DeepSeek Harness/resident daemon/
-  kiwi runtime 当前状态）。
-- Merchant 三 Plane：shopping-cli 的 Commerce / Merchant Core / Intelligence&Ops
-  映射（§7.5），Failure rule 验证（`scripts/pilot/merchant-three-plane-check.sh`：
-  Intelligence 离线时 RFQ 报价 / human_required 升级 / 运营 resolve 均工作）。
-- OpenClaw 三角色分离（§6.8）：当前 shopping-plugin 混装 buyer/merchant 工具 →
-  `kiwi-buyer-openclaw` / `kiwi-merchant-openclaw` / `kiwi-reasoning-openclaw-acp`
-  目标映射 + 迁移规则（future OpenClaw gate）。
-- KNP 作为 UCP capability（Phase 3 TO VALIDATE）：vendor-root capability 判定 +
-  §8.3 命名不变量。
+- UCP/KNP 边界：商品 truth 留在 Merchant/UCP；Kiwi 负责发现、路由、RFQ、Negotiation 和 handoff，不承担支付、订单或库存预留。
+- Host/Harness Matrix：Hermes 是当前首个真实 Host reference；DeepSeek Harness 是受限 contract gate；OpenClaw/Kimi/Codex/WorkBuddy 保持 AFTER GATE。
+- Merchant 三 Plane：Commerce Plane + Merchant Core 必须在 Intelligence/Ops 离线时继续工作，低于底价等异常进入 `human_required`。
+- OpenClaw 三角色分离：Buyer、Merchant Ops、ReasoningBackend 使用不同命名空间、凭据和状态目录；旧角色迁移不是当前试点前置条件。
 
-- `docs/kiwi-buyer-mcp-facade-v0.1.md`：战略 v2.5 北向面薄 facade —— 四份冻结
-  Northbound 契约（CommerceIntent/DelegationPolicy/EffectiveAuthorization/
-  PersistentTask）、7 个高层 Sourcing Tools、持久 Task/Approval 存储、五层授权
-  deny 优先、MCP stdio server（`kiwi mcp serve`）。契约 schema 单一来源在
-  `contracts/`，运行时校验 `src/contracts/northbound-schema.ts`。
-- 与 `kiwi-agent-commerce-strategy-upgrade-2026-08-13.md`：已批准的三产品战略升级与执行基线；
-  统一产品定位、协议分层、P0/P1/P2 顺序、阶段门、验收标准和对外声明纪律。
-- rev1.2：D0–D4 全部实现（readiness audit 见
-  `docs/reviews/kiwi-product-layer-readiness-audit-2026-08-07.md`）；
-  实施顺序与"明确不做"见 §19。
-- 文档版本独立于产品版本（v0.6.0 released / v0.7.0 draft）。
+## Current implementation evidence
 
-## Version identity
+- 当前 Kiwi `npm run verify`：141 个测试文件、1998 个测试通过；官方 A2A SDK 往返通过；三向 Independent↔Kiwi↔Independent 互操作 21/21 通过。
+- 当前本地试点证据：26/26 Qualified RFQ、5 家 seeded merchants、merchant response rate 97.2%、median latency 2072ms；这不是第三方采用证据，也不是 30–45 天持续复用证据。
+- 当前 pilot sourcing index 中商家 freshness 为 stale、verification 为 discovered；外部试点前必须刷新 listing、验证和 endpoint。
+- 当前 handoff 证据包含 `purchase_order_draft` 演示；仍需至少一个真实 UCP Checkout、PO/CRM 或 Merchant transaction endpoint 的权威回执。
+
+## Version identity rules
 
 - File mtime is NOT a version authority.
-- `status`, `doc_revision`, product version, Git commit/tag, and this manifest determine document identity.
-- **2026-08-07 版本回退**：产品版本由 v1.0.0 回退为 v0.6.0（git tag v0.6.0）；
-  v1.1 Draft 随之更名为 v0.7.0 Draft。KNP/1.0、kiwi-catalog/1.0 等协议与契约
-  身份不变；历史 rev 归档文档保留当时命名，身份以本清单与 git tag 为准。
-- KNP wire protocol remains `1.0`; `rev1.4` is an editorial/errata revision.
-- KTH protocol draft remains `0.1`; `rev0.3` is the current document revision.
-- `selected_nonbinding` is OPTIONAL before Handoff.
-- Candidate content is immutable; lifecycle is an event-sourced projection.
-- kiwi-catalog state is three-dimensional: Verification / Freshness / Administrative.
+- `status`、`doc_revision`、产品版本、Git commit/tag、本清单和发布证据共同决定文档/产品身份。
+- KNP wire protocol remains `1.0`；`rev1.4` 是当前编辑/勘误版本。
+- KTH protocol remains `0.1`；`rev0.3` 是当前文档修订版本。
+- `selected_nonbinding` 在 Handoff 前为 OPTIONAL。
+- Candidate content is immutable；lifecycle is an event-sourced projection。
+- `kiwi-catalog` 状态保持三维：Verification / Freshness / Administrative。
 
-## Implementation status (2026-08-07)
+## Current next gate
 
-- v0.7.0 completion definition: **CD #1–21 evidenced** (rev1.4.1 baseline,
-  readiness audit: `docs/reviews/kiwi-commerce-v0.7.0-readiness-audit-2026-08-07.md`)
-  + **CD #22–28 evidenced** (rev1.5 Product-first Discovery, readiness audit:
-  `docs/reviews/kiwi-commerce-v1.1-product-first-readiness-audit-2026-08-07.md`).
-  28/28 全部有直接实证；v0.7.0 仍未宣布发布。
-- New CLI: `kiwi catalog serve` (standalone kiwi-catalog service),
-  `kiwi metrics --dir <agent-dir>` (KTH metrics).
-- New chat TUI commands: `/handoff`, `/handoff-launch <handoff_id> <negotiation_id>`,
-  `/handoff-open <handoff_id> <negotiation_id>`.
-- v0.7.0 remains a **Draft**; the audit does not announce a release.
+1. 更新组合文档与版本身份，完成固定 SHA 组合门禁和 protected release dry-run。
+2. 用 Hermes + `kiwi-buyer-mcp` 接入 3–5 家真实外部 Merchant，运行 30–45 天 B2B 试点并记录至少 20 个 Qualified RFQ。
+3. 固化 Merchant Independence、DeepSeek Harness contract 和真实 Agreement-to-Handoff 证据。
+4. 三个证据门全部通过后，才决定 Buyer Core 深度拆包、Merchant UCP/Connector 产品化和下一个 Host。
+
+## Related docs
+
+- `docs/releasing.md`
+- `docs/kiwi-protected-release-runbook-2026-08-09.md`
+- `docs/kiwi-buyer-mcp-facade-v0.1.md`
+- `docs/protocol/knp-spec-convergence-2026-08-13.md`
