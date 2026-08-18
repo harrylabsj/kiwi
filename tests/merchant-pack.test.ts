@@ -14,6 +14,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { LedgerStore } from "../src/negotiation/ledger/index.js";
+import type { NegotiationPhase } from "../src/negotiation/state/phase.js";
 import { migrateMemorySchema } from "../src/agent/memory/schema.js";
 import { WriteApprovalCandidateStore, executeApprovedCandidate } from "../src/agent/merchant/action-candidate.js";
 import { StaticCredentialBroker } from "../src/agent/merchant/credential-broker.js";
@@ -25,6 +26,49 @@ import { testMarketplace, testProfile, type TestClientOverrides } from "./helper
 
 const T0 = "2026-08-05T12:00:00+08:00";
 const PRINCIPAL = "merchant-agent:merchant-001";
+
+/** 写一个「进行中」磋商到临时 A2A ledger（phase 非终态），供 list_incoming_consultations 测试。 */
+function writeInProgressLedger(
+  sku: string,
+  qty: number,
+  priceMinor: number,
+  phase: NegotiationPhase = "OFFER_OPEN",
+): { dir: string; negotiationId: string } {
+  const dir = mkdtempSync(path.join(tmpdir(), "merchant-a2a-consult-"));
+  const ledger = new LedgerStore({ dir, now: () => T0 });
+  const negotiationId = "neg_inprogress_001";
+  const identity = { sender_identity: "mkt_veyquo", counterparty_identity: "buyer:*", actor: "merchant" } as const;
+  const capability = { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" } as const;
+  ledger.append({
+    event_kind: "state_transition",
+    negotiation_id: negotiationId,
+    identity,
+    capability,
+    state_transition: { from_phase: "OPEN", to_phase: phase },
+    outcome: { kind: "ok" },
+    occurred_at: T0,
+  });
+  ledger.append({
+    event_kind: "message_sent",
+    negotiation_id: negotiationId,
+    identity,
+    capability,
+    wire_payload: {
+      action: "conditional_offer",
+      payload: {
+        type: "conditional_offer",
+        terms: {
+          items: [
+            { sku, quantity: { value: qty, unit: "piece" }, unit_price: { currency: "CNY", amount_minor: priceMinor } },
+          ],
+        },
+      },
+    },
+    outcome: { kind: "ok" },
+    occurred_at: T0,
+  });
+  return { dir, negotiationId };
+}
 
 const TEST_KEY = "a".repeat(64);
 
@@ -275,23 +319,23 @@ describe("merchant write approval flow (§16)", () => {
 
 describe("merchant read-only surface (§15.3)", () => {
   it("lists catalog, inventory, consultations and the human-review queue", async () => {
-    const h = setupMerchant({});
-    const list = await h.getTool("list_catalog_products").execute("c1", {});
-    expect(list.content[0]?.type === "text" ? list.content[0].text : "").toContain("sku-001");
+    const { dir, negotiationId } = writeInProgressLedger("sku-001", 2, 8900);
+    try {
+      const h = setupMerchant({ a2aLedgerDir: dir });
+      const list = await h.getTool("list_catalog_products").execute("c1", {});
+      expect(list.content[0]?.type === "text" ? list.content[0].text : "").toContain("sku-001");
 
-    const inv = await h.getTool("get_inventory_snapshot").execute("c1", { sku: "sku-001" });
-    expect(inv.content[0]?.type === "text" ? inv.content[0].text : "").toContain('"stock":12');
+      const inv = await h.getTool("get_inventory_snapshot").execute("c1", { sku: "sku-001" });
+      expect(inv.content[0]?.type === "text" ? inv.content[0].text : "").toContain('"stock":12');
 
-    h.merchantClient.addConsultation({
-      conversation_id: "conv-merchant-001",
-      status: "waiting_merchant",
-      sku: "sku-001",
-      last_message: "请问可以便宜一些吗？",
-      last_message_at: T0,
-    });
-    const cons = await h.getTool("list_incoming_consultations").execute("c1", {});
-    expect(cons.content[0]?.type === "text" ? cons.content[0].text : "").toContain("conv-merchant-001");
-    expect(cons.content[0]?.type === "text" ? cons.content[0].text : "").toContain("便宜");
+      // list_incoming_consultations 读 A2A ledger 的进行中磋商（非终态）
+      const cons = await h.getTool("list_incoming_consultations").execute("c1", {});
+      const text = cons.content[0]?.type === "text" ? cons.content[0].text : "";
+      expect(text).toContain(negotiationId);
+      expect(text).toContain("sku-001");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -322,17 +366,17 @@ describe("private merchant value non-leak (§14, §19.3)", () => {
   });
 
   it("incoming consultation output never includes the private floor", async () => {
-    const h = setupMerchant({});
-    h.merchantClient.addConsultation({
-      conversation_id: "conv-merchant-001",
-      status: "waiting_merchant",
-      sku: "sku-001",
-      last_message: "最低能到多少？",
-      last_message_at: T0,
-    });
-    const result = await h.getTool("list_incoming_consultations").execute("c1", {});
-    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-    expect(text).not.toContain("80");
+    // 报价 89（8900 minor），底价 80 不进入 ledger/输出
+    const { dir } = writeInProgressLedger("sku-001", 2, 8900);
+    try {
+      const h = setupMerchant({ a2aLedgerDir: dir });
+      const result = await h.getTool("list_incoming_consultations").execute("c1", {});
+      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+      expect(text).toContain("89.00");
+      expect(text).not.toContain("80");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
