@@ -1,11 +1,11 @@
 # =============================================================================
 # Protected portfolio release workflow (P0, registry-facing).
 #
-# This is the ONLY workflow that publishes @harrylabsj/kiwi to npm and
-# kiwi-catalog / shopping-cli to PyPI. It is intentionally manual
-# (workflow_dispatch) and defaults to a DRY RUN (publish=false) that builds,
-# verifies, signs, and uploads the release bundle without touching any
-# registry.
+# This is the ONLY workflow that publishes @harrylabsj/kiwi and
+# @harrylabsj/kiwi-dsh-plugin to npm and kiwi-catalog / shopping-cli to PyPI.
+# It is intentionally manual (workflow_dispatch) and defaults to a DRY RUN
+# (publish=false) that builds, verifies, signs, and uploads the release bundle
+# without touching any registry.
 #
 # ################ PROTECTED ENVIRONMENT SETUP (required for publish=true) ####
 #
@@ -16,11 +16,12 @@
 #    `environment: kiwi-release`, which also namespaces the OIDC token.
 #
 # 2. npm Trusted Publisher (no npm token stored anywhere)
-#    Configure the @harrylabsj/kiwi npm package's publishing settings to accept
-#    OIDC from this repository (harrylabsj/kiwi), workflow path
-#    `.github/workflows/portfolio-release.yml`, environment `kiwi-release`.
-#    npm publish then uses `--provenance --access public` with the short-lived
-#    OIDC token; the repository keeps NO npm access token/secret.
+#    Configure BOTH the @harrylabsj/kiwi and @harrylabsj/kiwi-dsh-plugin npm
+#    packages' publishing settings to accept OIDC from this repository
+#    (harrylabsj/kiwi), workflow path `.github/workflows/portfolio-release.yml`,
+#    environment `kiwi-release`. npm publish then uses
+#    `--provenance --access public` with the short-lived OIDC token; the
+#    repository keeps NO npm access token/secret.
 #
 # 3. PyPI Trusted Publisher (no PyPI password/token stored anywhere)
 #    For BOTH the `kiwi-catalog` and `shopping-cli` PyPI projects, add a GitHub
@@ -34,7 +35,9 @@
 #
 # 4. Package version bump before every publish
 #    npm: bump `version` in package.json (and package-lock.json) for
-#         @harrylabsj/kiwi and commit. The dispatched central `ref` input is
+#         @harrylabsj/kiwi and in integrations/plugins/kiwi-dsh-plugin/package.json
+#         for @harrylabsj/kiwi-dsh-plugin, then commit. The dispatched central
+#         `ref` input is
 #         the immutable source for the kiwi bundle; portfolio.lock.json
 #         consumer SHAs (kiwi-catalog, shopping-cli) and contract_source_commit
 #         are the composition boundary, verified against the checked-out
@@ -259,9 +262,10 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf release
-          mkdir -p release/npm release/kiwi-catalog release/shopping-cli release/contracts release/sbom
+          mkdir -p release/npm release/kiwi-catalog release/shopping-cli release/contracts release/sbom release/dsh-plugin
 
           npm pack --pack-destination release/npm
+          (cd integrations/plugins/kiwi-dsh-plugin && npm pack --pack-destination "$GITHUB_WORKSPACE/release/dsh-plugin")
 
           (cd kiwi-catalog && uv sync --locked --extra api --extra dev && python -m build --sdist --wheel --outdir ../release/kiwi-catalog)
           (cd shopping-cli && uv sync --locked --extra api --extra dev && python -m build --sdist --wheel --outdir ../release/shopping-cli)
@@ -400,6 +404,63 @@ jobs:
             echo "published=true" >> "$GITHUB_OUTPUT"
           fi
 
+  publish-dsh-plugin:
+    name: Publish @harrylabsj/kiwi-dsh-plugin to npm (protected kiwi-release)
+    needs: build-once
+    if: inputs.publish == true
+    runs-on: ubuntu-latest
+    environment: kiwi-release
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout central source (read-only, for verify scripts)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Download immutable build artifact
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: portfolio-release
+          path: dist-artifact
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      # npm trusted publishing（OIDC）需要 npm >= 11.5.1；Node 22 自带 10.x。
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@11.19.0
+
+      - name: Verify downloaded release manifest before publishing
+        run: |
+          set -euo pipefail
+          node scripts/verify-release-manifest.mjs "$GITHUB_WORKSPACE/dist-artifact/release"
+
+      - id: publish
+        name: Publish dsh-plugin npm tarball with provenance (idempotent, skip if already published)
+        run: |
+          set -euo pipefail
+          TARBALL="$(find dist-artifact/release/dsh-plugin -maxdepth 1 -name '*.tgz' -print -quit)"
+          NAME="$(node -p "require('./integrations/plugins/kiwi-dsh-plugin/package.json').name")"
+          VERSION="$(node -p "require('./integrations/plugins/kiwi-dsh-plugin/package.json').version")"
+          if [ -z "${TARBALL}" ]; then
+            echo "::error::no dsh-plugin tarball under dist-artifact/release/dsh-plugin"
+            exit 1
+          fi
+          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
+            echo "== ${NAME}@${VERSION} already published to npm; skipping"
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          else
+            npm publish "${TARBALL}" --provenance --access public
+            echo "== published ${NAME}@${VERSION} to npm"
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          fi
+
   publish-kiwi-catalog:
     name: Publish kiwi-catalog to PyPI (protected kiwi-release)
     needs: build-once
@@ -530,7 +591,7 @@ jobs:
 
   verify-registry:
     name: Verify npm and PyPI downloads after publish (fail closed)
-    needs: [publish-npm, publish-kiwi-catalog, publish-shopping-cli]
+    needs: [publish-npm, publish-dsh-plugin, publish-kiwi-catalog, publish-shopping-cli]
     if: inputs.publish == true
     runs-on: ubuntu-latest
     permissions:
@@ -558,6 +619,7 @@ jobs:
           # registry 上是历史 run 构建（wheel/sdist 含打包时间戳，重建不保证
           # 逐字节一致），只校验 registry 自身摘要一致性。env 缺失默认 strict。
           VERIFY_FRESH_NPM: ${{ needs.publish-npm.outputs.published }}
+          VERIFY_FRESH_DSH_PLUGIN: ${{ needs.publish-dsh-plugin.outputs.published }}
           VERIFY_FRESH_KIWI_CATALOG: ${{ needs.publish-kiwi-catalog.outputs.published }}
           VERIFY_FRESH_SHOPPING_CLI: ${{ needs.publish-shopping-cli.outputs.published }}
         run: |

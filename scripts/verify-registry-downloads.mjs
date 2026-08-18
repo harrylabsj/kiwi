@@ -68,6 +68,31 @@ if (!npmEntry) {
 }
 
 // ---------------------------------------------------------------------------
+// dsh-plugin npm package (@harrylabsj/kiwi-dsh-plugin)
+// ---------------------------------------------------------------------------
+const dshEntry = manifest.files.find(
+  (entry) => entry.path.startsWith("dsh-plugin/") && entry.path.endsWith(".tgz"),
+);
+if (!dshEntry) {
+  throw new Error("release manifest has no dsh-plugin npm tarball entry under dsh-plugin/");
+}
+{
+  const tarballPath = join(releaseDir, dshEntry.path);
+  const { name, version } = npmTarballPackageJson(tarballPath);
+  const meta = await npmRegistryMetadata(name, version);
+  const buffer = await downloadBuffer(meta.tarball);
+  const fresh = isFreshPublish(process.env.VERIFY_FRESH_DSH_PLUGIN);
+  verifyNpmDownload(buffer, {
+    identity: { name, version },
+    integrity: meta.integrity,
+    sha256: fresh ? dshEntry.sha256 : undefined,
+  });
+  verified.push(
+    `npm ${name}@${version} verified (${meta.tarball})${fresh ? "" : " [registry digest only: predates this run]"}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // PyPI packages (kiwi-catalog and shopping-cli)
 // ---------------------------------------------------------------------------
 for (const pkgDir of ["kiwi-catalog", "shopping-cli"]) {

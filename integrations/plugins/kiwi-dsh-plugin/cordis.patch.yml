@@ -1,0 +1,35 @@
+# kiwi-dsh-plugin bundle patch（dsh plugin add 后自动合并进 profile）
+#
+# 两行：
+#   mcp-kiwi          —— 把 `kiwi mcp serve`（9 个 Sourcing Tools）挂成 DSH 的 MCP
+#                        插件（@deepseek-ai/dsh-mcp-client），工具以 mcp__kiwi__<name>
+#                        暴露。配置零动态值：不传 --db/--principal/--agent，由
+#                        kiwi-buyer-mcp 默认路径/env 解析 —— KIWI_MCP_DB →
+#                        ~/.kiwi/mcp/dsh.sqlite，KIWI_PRINCIPAL / KIWI_BUYER_AGENT
+#                        （父进程 env 透传给子进程，可自行设置）。
+#   kiwi-dsh-plugin   —— 本插件宿主代码加载，注册 kiwi-buyer SKILL（引导模型构造
+#                        合法 CommerceIntent，避免 contract_violation）。
+#
+# 覆盖：dsh 的 profile cordis.patch.yml 按 id 整体替换 config（非 deep-merge）。
+# 代理/内网环境（Clash fake-ip）需给 mcp-kiwi 的 args 追加
+#   - '--a2a-skip-dns-check'
+#   - 'true'
+- insert:
+    - id: mcp-kiwi
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: kiwi
+        transport: stdio
+        command: npx
+        args:
+          - '-y'
+          - '@harrylabsj/kiwi@latest'
+          - 'mcp'
+          - 'serve'
+        cwd: ''
+        toolCallTimeoutMs: 60000
+        failOnStartupError: false
+
+    - id: kiwi-dsh-plugin
+      name: '@harrylabsj/kiwi-dsh-plugin'
+      config: {}
