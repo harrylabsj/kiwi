@@ -30,7 +30,8 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir, userInfo } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -109,6 +110,8 @@ Usage:
 Product layer (product-strategy rev1.1 §10/§19):
   kiwi buyer --help                       Kiwi Buyer command tree
   kiwi merchant --help                    Kiwi Merchant command tree
+  kiwi setup-hermes                       One-click: wire kiwi-buyer-mcp into Hermes
+                                          (hermes mcp add + skills install)
   kiwi network --help                     Kiwi Network command tree
   kiwi demo [a|b]                         One-command local multi-merchant demo
                                           (Issue 13; 1 buyer + catalog + 3 merchants
@@ -1263,6 +1266,102 @@ async function cmdMerchantUp(args: ParsedArgs): Promise<number> {
   return EXIT.OK;
 }
 
+/**
+ * `kiwi setup-hermes`（买家侧）——一键把 Kiwi 买家连接器接入 Hermes：
+ * 配置 kiwi-buyer-mcp MCP server + 安装 kiwi-buyer skill。之后 Hermes 重启
+ * 即可调用 9 个采购工具。等价于手动执行：
+ *   hermes mcp add kiwi-buyer-mcp --command node --args <cli> mcp serve ...
+ *   hermes skills install <SKILL.md URL>
+ */
+async function cmdSetupHermes(): Promise<number> {
+  // 1. 检查 Hermes CLI
+  const hermesOk = spawnSync("hermes", ["--version"], { stdio: "ignore" }).status === 0;
+  if (!hermesOk) {
+    process.stderr.write("未检测到 Hermes CLI（hermes）——请先安装 Hermes，再运行本命令。\n");
+    return EXIT.CONFIG;
+  }
+
+  // 2. 本机 kiwi cli 路径（dist/cli.js）、principal、db 路径、skill 落盘路径
+  const cliPath = fileURLToPath(import.meta.url);
+  let username = "";
+  try {
+    username = userInfo().username;
+  } catch {
+    username = process.env.USER ?? "user";
+  }
+  const dbPath = path.join(homedir(), ".kiwi", "buyer.sqlite");
+  const skillUrl = "https://raw.githubusercontent.com/harrylabsj/kiwi/main/integrations/hosts/hermes/SKILL.md";
+  const skillPath = path.join(homedir(), ".hermes", "skills", "kiwi-buyer", "SKILL.md");
+  const configured: string[] = [];
+  const already: string[] = [];
+
+  // 3. MCP server：已存在则跳过，否则添加（避免 overwrite 交互提示）
+  const mcpList = spawnSync("hermes", ["mcp", "list"], { encoding: "utf-8" });
+  const mcpExists = (mcpList.stdout ?? "").includes("kiwi-buyer-mcp");
+  if (mcpExists) {
+    already.push("MCP server kiwi-buyer-mcp");
+  } else {
+    process.stdout.write("[setup-hermes] 配置 kiwi-buyer-mcp MCP server ...\n");
+    const mcp = spawnSync(
+      "hermes",
+      [
+        "mcp",
+        "add",
+        "kiwi-buyer-mcp",
+        "--command",
+        "node",
+        "--args",
+        cliPath,
+        "mcp",
+        "serve",
+        "--db",
+        dbPath,
+        "--principal",
+        `hermes:${username}`,
+        "--agent",
+        "buyer-agent:hermes",
+      ],
+      { stdio: "inherit" },
+    );
+    if (mcp.status !== 0) {
+      process.stderr.write(`hermes mcp add 失败（退出码 ${mcp.status ?? "?"}）\n`);
+      return EXIT.CONFIG;
+    }
+    configured.push("MCP server kiwi-buyer-mcp");
+  }
+
+  // 4. kiwi-buyer skill：已存在则跳过；否则 hermes install（失败则直接 fetch 落盘兜底）
+  if (existsSync(skillPath)) {
+    already.push("skill kiwi-buyer");
+  } else {
+    process.stdout.write("[setup-hermes] 安装 kiwi-buyer skill ...\n");
+    const skill = spawnSync("hermes", ["skills", "install", skillUrl, "--yes"], { stdio: "inherit" });
+    if (skill.status !== 0 || !existsSync(skillPath)) {
+      // 兜底：直接 fetch SKILL.md 写入 ~/.hermes/skills/kiwi-buyer/（Hermes skills 为 local 存储）
+      process.stdout.write("[setup-hermes] hermes skills install 不可用，改用直接写入 ...\n");
+      try {
+        const res = await fetch(skillUrl, { signal: AbortSignal.timeout(15000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const content = await res.text();
+        mkdirSync(path.dirname(skillPath), { recursive: true, mode: 0o700 });
+        writeFileSync(skillPath, content, { mode: 0o600 });
+      } catch (err) {
+        process.stderr.write(`安装 kiwi-buyer skill 失败：${err instanceof Error ? err.message : String(err)}\n`);
+        return EXIT.CONFIG;
+      }
+    }
+    configured.push("skill kiwi-buyer");
+  }
+
+  // 5. 报告
+  for (const item of already) process.stdout.write(`  ✓ ${item} 已配置，跳过\n`);
+  for (const item of configured) process.stdout.write(`  ✓ ${item} 已配置\n`);
+  process.stdout.write(
+    "✓ Kiwi 已接入 Hermes。请重启 Hermes（或开新会话），然后直接说出采购需求（如「帮我买 200 个 USB-C 扩展坞，7 天内到」）。\n",
+  );
+  return EXIT.OK;
+}
+
 function notImplementedProduct(name: string, target: string): number {
   process.stderr.write(
     `${name} 尚未实现（产品层完成定义 ${target}，见 docs/kiwi-product-layer-refactor-rev1.1.md §19）。\n`,
@@ -1316,6 +1415,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // 产品层命令树（product-strategy rev1.1 §10/§19；别名保留旧命令）
     if (cmd === "buyer") return await routeBuyer(sub, args);
     if (cmd === "merchant") return await routeMerchant(sub, args);
+    if (cmd === "setup-hermes") return await cmdSetupHermes();
     if (cmd === "network") return await routeNetwork(sub);
     if (cmd === "demo") return await cmdDemo(args);
     if (cmd === "doctor") {
