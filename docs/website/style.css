@@ -329,7 +329,7 @@ h2 { max-width: 19em; margin-top: 12px; font-size: clamp(1.8rem, 3.6vw, 2.75rem)
 .pilot-actions span { color: var(--ink-soft); font-size: .84rem; text-align: center; }
 
 /* 对外安装路径：先展示最短可执行路径，技术细节不挡住首次接入 */
-.quickstart-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin-top: 40px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--paper); }
+.quickstart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0; margin-top: 40px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--paper); }
 .quickstart-step { min-height: 275px; padding: 27px; border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; }
 .quickstart-step:last-child { border-right: 0; }
 .quickstart-number { color: var(--kiwi-700); font-family: Georgia, serif; font-size: 1.25rem; }
