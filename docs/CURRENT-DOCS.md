@@ -30,12 +30,16 @@ docs/kiwi-a2a-architecture-baseline.md
 docs/protocol/kiwi-negotiation-protocol-1.0.md
 ```
 
-### Current source candidate
+### Protected portfolio release（2026-08-18）
 
-- Kiwi 当前源码候选：`@harrylabsj/kiwi@0.7.15`，HEAD `4fd0207b7f9f45115fab86f73bd18bcf8424fe98`。
-- `kiwi-catalog` 当前组合候选：`0.2.3`，锁定提交 `8646bdd531f4712f5fbbdb75448e820fdb12b28b`。
-- `shopping-cli` 当前组合候选：`3.2.1`，锁定提交 `a8e4dbc50717bdf26bd507d6f9b28a95296a31d7`。
-- 当前候选尚未由本仓库文档证明已经完成 protected registry publish；在 workflow dry-run、正式发布和 `verify-registry` 通过前，不称为已发布版本。
+- Kiwi：`@harrylabsj/kiwi@0.7.18`（npm）。
+- `kiwi-catalog==0.2.4`（PyPI）。
+- `shopping-cli==3.2.3`（PyPI；包含 `SHOPPING_MERCHANT_ID` /
+  `KIWI_MERCHANT_ID` 与数据库环境变量支持）。
+- 受保护组合发布、keyless 签名/attestation、三注册表发布及下载后 manifest 校验全部通过：
+  `https://github.com/harrylabsj/kiwi/actions/runs/32086213727`。
+- 当前 `main` 在发布运行时之后继续增加商家公网向导和对外采用材料；不改变上述已发布
+  package version，后续运行时代码变更仍需新版本和同一受保护流程。
 
 ## Current protocol / architecture drafts
 
