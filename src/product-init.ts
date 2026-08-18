@@ -33,13 +33,48 @@
 
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { agentDataDir, ensurePathsForDir } from "./agent/agent-db.js";
 import { RUNTIME_VERSION } from "./config/profile.js";
 import { PROTOCOL_VERSION } from "./negotiation/types.js";
 import { detectShoppingCli, writeDefaultProfile } from "./product-cli.js";
+
+/**
+ * shopping-cli 商品库缺省路径（与 shopping-cli 的 DEFAULT_DB_PATH 一致：
+ * `~/.local/share/shopping-cli/shopping-cli.sqlite`）。商家无需设置
+ * `SHOPPING_DB_PATH`——import / publish 都用此缺省。
+ */
+export const DEFAULT_SHOPPING_DB_PATH = path.join(
+  homedir(),
+  ".local",
+  "share",
+  "shopping-cli",
+  "shopping-cli.sqlite",
+);
+
+/** 商家令牌 credentials 文件（0600；secret 不入 profile，命令启动时自动加载）。 */
+export const DEFAULT_CREDENTIALS_ENV_PATH = path.join(homedir(), ".kiwi", "credentials.env");
+
+/**
+ * 读取商家 credentials 文件（KEY=VALUE，0600）并填充 process.env（已存在不覆盖）。
+ * 让 `kiwi merchant init` 引导写入的 `KIWI_MERCHANT_TOKEN` 对 publish / start 生效。
+ */
+export function loadMerchantCredentials(credentialsPath: string = DEFAULT_CREDENTIALS_ENV_PATH): void {
+  if (!existsSync(credentialsPath)) return;
+  const content = readFileSync(credentialsPath, "utf-8");
+  for (const line of content.split(/\r?\n/)) {
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1).trim();
+    if (/^[A-Z][A-Z0-9_]*$/.test(key) && value !== "" && process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
 
 export function slugifyMerchantId(name: string): string {
   const slug = name
@@ -66,6 +101,12 @@ export interface MerchantInitOptions {
   shoppingCliDb?: string;
   /** kiwi-catalog base URL（publish/start 用）。 */
   catalogUrl?: string;
+  /** 公网 A2A 域名（写入 merchant_public.public_url；setup-public/start 据此无参运行）。 */
+  publicUrl?: string;
+  /** 商家令牌（secret；写入独立 0600 credentials 文件，不写 profile）。 */
+  merchantToken?: string;
+  /** credentials 文件路径（测试注入隔离用；缺省 DEFAULT_CREDENTIALS_ENV_PATH）。 */
+  credentialsPath?: string;
   /** 私有底价（minor 单位；merchant_policy.min_unit_price_private）。 */
   floorPriceMinor?: number;
   /** 自动磋商开关（merchant_policy.auto_negotiate，缺省 false）。 */
@@ -227,6 +268,9 @@ export async function merchantInit(
       auto_negotiate: options.autoNegotiate ?? false,
       human_review_on: ["below_floor", "exceptional_warranty", "suspicious_content"],
     },
+    ...(options.publicUrl !== undefined && options.publicUrl.trim() !== ""
+      ? { merchant_public: { public_url: options.publicUrl.trim().toLowerCase() } }
+      : {}),
   };
 
   const outputPath = options.outputPath ?? path.resolve("merchant.yaml");
@@ -250,6 +294,22 @@ export async function merchantInit(
     }
   }
 
+  // ── Step 3.5: 商家令牌 → 独立 credentials 文件（0600；secret 不入 profile）──
+  let credentialsWritten: MerchantInitStep | undefined;
+  if (options.merchantToken !== undefined && options.merchantToken.trim() !== "") {
+    const credentialsPath = options.credentialsPath ?? DEFAULT_CREDENTIALS_ENV_PATH;
+    try {
+      mkdirSync(path.dirname(credentialsPath), { recursive: true, mode: 0o700 });
+      writeFileSync(credentialsPath, `KIWI_MERCHANT_TOKEN=${options.merchantToken.trim()}\n`, { mode: 0o600 });
+      credentialsWritten = { ok: true, detail: credentialsPath };
+    } catch (err) {
+      credentialsWritten = {
+        ok: false,
+        detail: `写凭据失败：${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
   // ── Step 4: 初始化数据目录（AgentKernel state/sessions，0700）───────────
   let dataDirOk = true;
   let dataDirDetail = "";
@@ -261,7 +321,7 @@ export async function merchantInit(
     dataDirDetail = err instanceof Error ? err.message : String(err);
   }
 
-  const ok = written.ok && dataDirOk;
+  const ok = written.ok && dataDirOk && (credentialsWritten === undefined || credentialsWritten.ok);
   return {
     ok,
     profile_path: outputPath,
@@ -272,6 +332,7 @@ export async function merchantInit(
         : { ok: false, detail: detected.error ?? "not found" },
       shopping_cli_reachable: reachable,
       profile_written: written,
+      ...(credentialsWritten !== undefined ? { credentials_written: credentialsWritten } : {}),
       data_dir_initialized: dataDirOk ? { ok: true, detail: dataDirDetail } : { ok: false, detail: dataDirDetail },
     },
     warnings,

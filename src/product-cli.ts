@@ -93,15 +93,21 @@ Usage:
                                           [D1] 生成 merchant profile（只填 merchant_id
                                           即可，其余自动补全；TTY 交互提示；写默认
                                           profile，之后裸 kiwi 即按此运行）
-  kiwi merchant publish --profile <merchant.yaml> --shopping-cli-db <db>
+  kiwi merchant publish [--file <products.csv>]
                                           [D2] 注册 Agent + 发布 Listing 编排
-                                          （需 KIWI_CATALOG_OWNER_TOKEN_SECRET）
+                                          （--file 则先导入商品再发布；db 缺省
+                                          ~/.local/share/shopping-cli/...；token
+                                          从 credentials/环境变量取）
   kiwi merchant setup-public [--domain <域名>] [--port N] [--check]
                                           [D3] 公网 A2A 暴露引导：检测公网 IP、检查
                                           DNS、生成 Caddyfile、输出启动/验证命令
                                           （域名缺省从 KIWI_A2A_PUBLIC_URL 提取，
                                           与 merchant start 同一 env；well-known
                                           由节点自动生成）
+  kiwi merchant up [--domain <域名>] [--port N] [--caddyfile <path>]
+                                          [D3] 一条命令上线：setup-public → 起 Caddy
+                                          反代 → 起 A2A 节点，退出时清理 Caddy
+                                          （需已安装 Caddy）
   kiwi merchant listings                  [D2] 已发布 Listing 查看 —— 尚未实现
   kiwi merchant status                    [D1] Merchant 运行时状态 —— 尚未实现
   kiwi merchant doctor                    [D3] Merchant 侧组件健康 —— 尚未实现
