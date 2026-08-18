@@ -19,7 +19,7 @@
       <div class="hero-kicker">独立运行的企业商家入口</div>
       <h1>让买家 AI，直接找到你。</h1>
       <p class="tagline">把现有商品库、库存、价格和报价政策接入 Kiwi。你的商家运行时在自己的服务器上长期在线，按你的规则接收询价、报价、升级人工审核并交接成交。</p>
-      <div class="hero-actions"><a class="btn btn-solid" href="#contact">注册为商家</a><a class="btn btn-ghost" href="#install">查看四步接入</a><a class="btn btn-text" href="demo.html">查看演示 →</a></div>
+      <div class="hero-actions"><a class="btn btn-solid" href="#contact">注册为商家</a><a class="btn btn-ghost" href="#install">查看四步接入</a><a class="btn btn-text" href="demo.html">观看 Hermes 询价演示 →</a></div>
     </div>
     <div class="merchant-runtime">
       <div class="runtime-head"><span>商家运行时</span><b>● 在线</b></div>
@@ -53,15 +53,26 @@
 
   <section class="section" id="install"><div class="section-inner">
     <div class="kicker">安装与使用</div><h2>四步，让买家 AI 找到你。</h2>
-    <p class="lead">只需安装、初始化、上线、导入并发布。init 之后所有命令无需参数——域名、令牌、商品库都在 init 引导或缺省里。</p>
+    <p class="lead">准备一台安装了 Node.js 22 和 Caddy 的服务器、一个已解析到该服务器的域名，以及商家后台签发的令牌。初始化后不再重复填写 merchant-id 或数据库路径。</p>
     <div class="quickstart-grid">
       <article class="quickstart-step"><div class="quickstart-number">01</div><div class="surface-label">安装 Kiwi</div><h3>装一个主产品</h3><pre class="quickstart-code"><code>npm install -g @harrylabsj/kiwi</code></pre></article>
-      <article class="quickstart-step"><div class="quickstart-number">02</div><div class="surface-label">初始化商家</div><h3>引导填写配置</h3><pre class="quickstart-code"><code>kiwi merchant init</code></pre><p>引导输入商家名称、公网域名与商家令牌（都可回车跳过，稍后补）。自动安装数据引擎。</p></article>
-      <article class="quickstart-step"><div class="quickstart-number">03</div><div class="surface-label">上线</div><h3>一条命令起服务</h3><pre class="quickstart-code"><code>kiwi merchant up</code></pre><p>自动生成反代配置、启动 Caddy（需先安装）与 A2A 节点，并接入网络。域名 DNS 指向在域名商后台完成。</p></article>
+      <article class="quickstart-step"><div class="quickstart-number">02</div><div class="surface-label">初始化商家</div><h3>引导填写一次</h3><pre class="quickstart-code"><code>kiwi merchant init</code></pre><p>输入商家名称、公网域名与商家令牌。Kiwi 自动生成商家号、保存凭据并安装数据引擎。</p></article>
+      <article class="quickstart-step"><div class="quickstart-number">03</div><div class="surface-label">域名与上线</div><h3>让 A2A 端点可访问</h3><pre class="quickstart-code"><code>kiwi merchant up</code></pre><p>先在域名商后台把域名 A 记录指向服务器公网 IP；本命令随后生成反代配置并启动 Caddy 与 Kiwi Merchant Agent。</p></article>
       <article class="quickstart-step"><div class="quickstart-number">04</div><div class="surface-label">导入并发布</div><h3>让买家找得到你</h3><pre class="quickstart-code"><code>kiwi merchant publish \
   --file products.csv</code></pre><p>先导入商品再发布名称到发现网络。还没有商品 CSV？<a href="products-template.csv" download>下载导入模板 →</a></p></article>
     </div>
-    <div class="quickstart-note"><p><strong>你始终掌控：</strong>成本、底价、库存、订单和付款不会因为接入 Kiwi 而自动公开。发布只发商品名称、服务区域与配送时效提示；价格与供应事实留在本地，买家询价时再谈。</p></div>
+    <div class="quickstart-note"><p><strong>参数已经收起：</strong>商家号来自初始化生成的 profile，商品库使用默认路径或 <code>SHOPPING_DB_PATH</code>；因此发布时只需要商品文件。成本、底价、库存、订单和付款不会因为接入 Kiwi 而自动公开。</p></div>
+  </div></section>
+
+  <section class="section section-alt" id="verify"><div class="section-inner">
+    <div class="kicker">完成判定</div><h2>看到四个结果，才算真正接入。</h2>
+    <p class="lead">安装命令执行成功只是开始；公网端点、发现目录和真实询价都必须能够复核。</p>
+    <div class="process-line process-light">
+      <div><b>1</b><strong>Agent Card 可打开</strong><span><code>https://你的域名/.well-known/agent-card.json</code> 返回商家身份</span></div>
+      <div><b>2</b><strong>商品可被发现</strong><span>Kiwi 目录能够按商品名称搜索到你的企业</span></div>
+      <div><b>3</b><strong>Hermes 能询价</strong><span>测试需求产生稳定 task_id，并收到真实或明确失败的响应</span></div>
+      <div><b>4</b><strong>边界仍然成立</strong><span>私有底价、精确库存、订单和付款没有进入公开目录</span></div>
+    </div>
   </div></section>
 
   <section class="section section-alt"><div class="section-inner">
@@ -70,6 +81,15 @@
       <article class="surface-card"><div class="surface-label">留在企业内部</div><h3>成本、底价与客户条款</h3><p>这些字段不会因为注册到 Kiwi Catalog 而自动公开。</p></article>
       <article class="surface-card"><div class="surface-label">按需公开</div><h3>商品摘要与服务能力</h3><p>网络只看到你批准的公开投影、服务区域和可谈判能力。</p></article>
       <article class="surface-card"><div class="surface-label">回到企业系统</div><h3>真实订单、付款与履约</h3><p>Kiwi 只交接非绑定协议，不替商家收款或执行订单。</p></article>
+    </div>
+  </div></section>
+
+  <section class="section"><div class="section-inner boundary-layout">
+    <div><div class="kicker">公开案例</div><h2>把接入结果，变成客户可以验证的案例。</h2><p class="lead">案例只公开商家明确同意的身份、流程与聚合指标；不会公开 token、底价、客户资料或未授权报价。模板同时区分第一方演示与第三方采用，避免夸大证据。</p><div class="hero-actions"><a class="btn btn-green" href="case-template.html">查看公开案例模板</a><a class="btn btn-outline" href="case-template.md" download>下载 Markdown 模板</a></div></div>
+    <div class="boundary-list">
+      <div><span>参与方授权</span><p>企业名称、Logo、引语和截图均在发布前确认。</p></div>
+      <div><span>现实证据</span><p>记录 endpoint、时间、工具调用、task_id、响应与失败边界。</p></div>
+      <div><span>诚实结论</span><p>一家询价不写成多家比价；第一方演示不写成第三方采用。</p></div>
     </div>
   </div></section>
 

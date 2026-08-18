@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kiwi 公开案例模板 —— 用可核验证据讲清一次商家接入</title>
+  <meta name="description" content="Kiwi 商家公开案例模板：记录商家授权、接入背景、A2A endpoint、Hermes Buyer 询价证据、指标、边界与可复现步骤。">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="style.css?v=20260817-5">
+</head>
+<body>
+<nav class="nav"><div class="nav-inner"><a class="nav-logo" href="index.html">Kiwi</a><div class="nav-links">
+  <a href="index.html">首页</a><a href="buyers.html">买家</a><a href="merchants.html" class="active">商家</a><a href="developers.html">开发者</a><a href="https://catalog.kiwi.harrylabsj.com/portal/account">商家后台</a>
+</div></div></nav>
+
+<header class="hero">
+  <div class="hero-inner hero-grid">
+    <div><div class="hero-kicker">商家接入 · 公开证据</div><h1>把一次真实接入，写成可以复核的案例。</h1><p class="tagline">不是宣传稿，而是一份经过商家授权、能回答“谁接入了、怎么运行、结果如何、边界在哪里”的公开记录。</p><div class="hero-actions"><a class="btn btn-solid" href="case-template.md" download>下载 Markdown 模板</a><a class="btn btn-ghost" href="merchants.html#install">先完成商家接入</a></div></div>
+    <div class="merchant-runtime"><div class="runtime-head"><span>案例证据包</span><b>● 待商家确认</b></div><h3>企业名称 × Kiwi</h3><div class="runtime-metrics"><div><strong>接入证据</strong><span>公开 endpoint、商品投影、询价任务</span></div><div><strong>业务指标</strong><span>响应率、延迟、有效 RFQ、人工介入</span></div><div><strong>安全边界</strong><span>未公开字段、授权与 handoff 范围</span></div></div><div class="runtime-rfq"><small>发布原则</small><b>先核验，再授权，后公开</b><span>第一方演示与第三方采用必须分开标注</span></div></div>
+  </div>
+</header>
+
+<main>
+  <section class="section"><div class="section-inner">
+    <div class="kicker">使用规则</div><h2>先决定证据等级，再写结论。</h2>
+    <div class="surface-grid">
+      <article class="surface-card"><div class="surface-label">LEVEL 1</div><h3>第一方流程演示</h3><p>Kiwi 自有环境或自建商家完成。可以证明产品链路能运行，不能证明第三方采用。</p></article>
+      <article class="surface-card surface-card-strong"><div class="surface-label">LEVEL 2</div><h3>外部商家接入</h3><p>独立企业完成安装、公开 endpoint，并从 Hermes Buyer 收到真实询价。可作为第三方采用证据。</p></article>
+      <article class="surface-card"><div class="surface-label">LEVEL 3</div><h3>持续业务使用</h3><p>在约定窗口内持续产生 Qualified RFQ、响应与 handoff；用聚合指标说明重复价值。</p></article>
+    </div>
+  </div></section>
+
+  <section class="section section-dark"><div class="section-inner">
+    <div class="kicker kicker-light">案例正文</div><h2>八段就够，所有结论都有证据。</h2>
+    <div class="process-line">
+      <div><b>1</b><strong>一句话摘要</strong><span>商家是谁、接入了什么、验证到哪一步</span></div>
+      <div><b>2</b><strong>接入前问题</strong><span>原有获客、询价或系统边界</span></div>
+      <div><b>3</b><strong>实施方式</strong><span>安装、商品数据、域名与 Agent endpoint</span></div>
+      <div><b>4</b><strong>真实流程</strong><span>Hermes → Kiwi → Merchant 的逐步记录</span></div>
+      <div><b>5</b><strong>结果指标</strong><span>RFQ、成功率、响应时间与人工介入</span></div>
+      <div><b>6</b><strong>数据边界</strong><span>公开了什么、什么始终留在商家侧</span></div>
+      <div><b>7</b><strong>限制与失败</strong><span>如实记录单商家、过期报价和不可达端点</span></div>
+      <div><b>8</b><strong>复现与授权</strong><span>公开链接、时间、版本及商家确认</span></div>
+    </div>
+  </div></section>
+
+  <section class="section"><div class="section-inner boundary-layout">
+    <div><div class="kicker">最小证据包</div><h2>没有这些，就先不要发布。</h2><p class="lead">截图只能辅助说明，不能替代机器可读状态和双方确认。所有时间使用带时区格式，所有临时报价注明有效期。</p></div>
+    <div class="boundary-list">
+      <div><span>公开身份</span><p>商家名称或经批准的匿名名、网站、服务区域。</p></div>
+      <div><span>可达端点</span><p>Agent Card URL、核验时间与返回状态；不公开凭据。</p></div>
+      <div><span>任务证据</span><p>去敏后的 intent、工具链、task_id、报价或明确失败。</p></div>
+      <div><span>版本身份</span><p>Kiwi、shopping-cli、协议版本与案例日期。</p></div>
+      <div><span>商家授权</span><p>企业名称、Logo、引语、指标和截图逐项确认。</p></div>
+    </div>
+  </div></section>
+
+  <section class="section section-alt"><div class="section-inner">
+    <div class="kicker">绝不公开</div><h2>案例价值不建立在泄露之上。</h2>
+    <div class="surface-grid">
+      <article class="surface-card"><div class="surface-label">凭据</div><h3>Token、密钥与内部地址</h3><p>包括环境变量值、Authorization header、数据库路径与管理后台私链。</p></article>
+      <article class="surface-card"><div class="surface-label">商家私有事实</div><h3>成本、底价与精确库存</h3><p>除非商家为案例逐项书面授权，否则只使用聚合或删除后的结果。</p></article>
+      <article class="surface-card"><div class="surface-label">客户上下文</div><h3>个人资料与原始对话</h3><p>地址、邮箱、文件、长期记忆和客户条款默认不进入公开材料。</p></article>
+    </div>
+    <div class="notice evidence-note"><p><strong>发布前最后一问：</strong>商家是否明确同意公开这份版本？如果答案不是“是”，案例保持草稿或匿名。</p></div>
+  </div></section>
+
+  <section class="cta-band"><div class="section-inner cta-inner"><div><div class="kicker kicker-light">开始记录</div><h2>先保存证据，再写故事。</h2></div><div class="hero-actions"><a class="btn btn-solid" href="case-template.md" download>下载模板</a><a class="btn btn-ghost" href="demo.html">观看 Hermes 演示</a></div></div></section>
+</main>
+
+<footer class="footer"><div class="footer-inner"><div class="row"><div><p><strong>Kiwi 公开案例模板</strong> · 现实证据优先</p><p><a href="merchants.html">← 商家接入</a> · <a href="buyers.html">买家接入 →</a></p></div><div><p>第三方采用只由外部参与方和真实调用证明。</p></div></div></div></footer>
+</body>
+</html>
