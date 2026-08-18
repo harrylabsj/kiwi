@@ -20,10 +20,12 @@
           - dsh:<user>
           - --agent
           - buyer-agent:dsh
-          # A2A 可选（按需取消注释）：
-          # - --a2a-skip-dns-check true
-          # - --a2a-allow-private-ranges true
-          # - --a2a-timeout-ms 20000
+          # Clash fake-IP 代理环境必须：代理把域名解析成 198.18.0.0/15
+          # （benchmarking 保留网段），A2A 客户端 DNS 复查默认拒绝。
+          # 跳过 DNS 复查（信任 catalog 发布的商家域名；与 Hermes 同配置）。
+          # 非代理环境可去掉。
+          - --a2a-skip-dns-check
+          - "true"
         cwd: <KIWI_ROOT>
         toolCallTimeoutMs: 60000
         failOnStartupError: false
