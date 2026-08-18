@@ -1,7 +1,7 @@
 {
-  "id": "kiwi-buyer-openclaw",
+  "id": "kiwi",
   "name": "Kiwi Buyer Plugin",
-  "version": "0.7.15",
+  "version": "0.7.16",
   "description": "Kiwi buyer core sourcing & negotiation tools (catalog discovery → A2A direct merchant → RFQ → negotiate → approval → handoff) for OpenClaw.",
   "configSchema": {
     "type": "object",

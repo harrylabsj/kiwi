@@ -1,6 +1,6 @@
 {
-  "name": "kiwi-buyer-openclaw",
-  "version": "0.7.15",
+  "name": "kiwi",
+  "version": "0.7.16",
   "description": "Kiwi buyer core sourcing & negotiation tools for OpenClaw (catalog discovery → A2A direct merchant → RFQ → negotiate → approval → handoff).",
   "type": "module",
   "main": "index.js",
@@ -8,6 +8,9 @@
     "extensions": ["./index.js"],
     "compat": { "pluginApi": ">=2026.7.1" },
     "build": { "openclawVersion": "2026.7.1" }
+  },
+  "dependencies": {
+    "@harrylabsj/kiwi": "^0.7.15"
   },
   "peerDependencies": {
     "openclaw": ">=2026.7.1"
