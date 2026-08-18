@@ -40,6 +40,21 @@ export class SetupPublicError extends Error {
   }
 }
 
+/** 从 `KIWI_A2A_PUBLIC_URL`（https://<domain>）提取公网域名；无效返回 null。 */
+export function extractPublicDomain(publicUrl: string | undefined): string | null {
+  if (publicUrl === undefined || publicUrl.trim() === "") return null;
+  try {
+    const u = new URL(publicUrl.trim());
+    if (u.protocol !== "https:") return null;
+    if (u.username !== "" || u.password !== "") return null;
+    if (u.pathname !== "/" && u.pathname !== "") return null;
+    if (u.search !== "" || u.hash !== "") return null;
+    return u.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 /** 校验并归一化公网域名（无 scheme/path/port/userinfo）。 */
 export function validatePublicDomain(domain: string): string {
   const raw = String(domain ?? "").trim().toLowerCase();

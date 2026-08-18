@@ -99,7 +99,9 @@ Usage:
   kiwi merchant setup-public [--domain <域名>] [--port N] [--check]
                                           [D3] 公网 A2A 暴露引导：检测公网 IP、检查
                                           DNS、生成 Caddyfile、输出启动/验证命令
-                                          （well-known 由节点自动生成）
+                                          （域名缺省从 KIWI_A2A_PUBLIC_URL 提取，
+                                          与 merchant start 同一 env；well-known
+                                          由节点自动生成）
   kiwi merchant listings                  [D2] 已发布 Listing 查看 —— 尚未实现
   kiwi merchant status                    [D1] Merchant 运行时状态 —— 尚未实现
   kiwi merchant doctor                    [D3] Merchant 侧组件健康 —— 尚未实现

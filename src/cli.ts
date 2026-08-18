@@ -73,7 +73,7 @@ import readline from "node:readline";
 import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
 import { merchantPublish } from "./product-publish.js";
 import { catalogServe } from "./product-catalog.js";
-import { runMerchantSetupPublic, SetupPublicError, validatePublicDomain } from "./product-setup-public.js";
+import { extractPublicDomain, runMerchantSetupPublic, SetupPublicError, validatePublicDomain } from "./product-setup-public.js";
 
 const USAGE = `kiwi ${PRODUCT_VERSION} — commerce negotiation agent runtime
 
@@ -1075,7 +1075,9 @@ async function cmdDemo(args: ParsedArgs): Promise<number> {
 async function cmdMerchantSetupPublic(args: ParsedArgs): Promise<number> {
   const profile = requireProfile(args); // 无 --profile → fail-closed 提示先 init
   const port = args.port ?? (Number(process.env.KIWI_A2A_PORT ?? "") || 9000); // 与 startA2aNode 缺省一致
-  let domain = args.domain ?? "";
+  // 单一来源：缺省从 KIWI_A2A_PUBLIC_URL（merchant start 用的同一个 env）提取域名；
+  // --domain 显式覆盖；TTY 下再交互提示。
+  let domain = args.domain ?? extractPublicDomain(process.env.KIWI_A2A_PUBLIC_URL) ?? "";
   if (domain === "" && process.stdin.isTTY) {
     domain = await promptLine("公网域名（如 merchant.example.com，TLS 证书就用它）: ", "");
   }
