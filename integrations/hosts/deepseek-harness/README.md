@@ -56,7 +56,10 @@ DSH 的 MCP 插件把工具注册为 `mcp__<serverName>__<rawName>`。本接入 
   `mcp serve` 对 cwd 敏感（agentDataDir 相对路径），cwd 必须指向仓库根。
 - `--catalog-url` 缺省 `https://catalog.kiwi.harrylabsj.com`（公网发现），无需传。
 - `--principal` 建议按 DSH 用户区分（`dsh:<user>`）。
-- 可加 `--a2a-skip-dns-check true`（Clash fake-IP 等代理环境）等 A2A 可选参数。
+- **`--a2a-skip-dns-check true`（代理环境必须）**：Clash fake-IP 代理会把 merchant
+  域名解析成 `198.18.0.0/15`（benchmarking 保留网段），A2A 客户端 DNS 复查默认
+  fail-closed 拒绝 → "A2A endpoint host ... resolves to a reserved network"。跳过
+  DNS 复查即解决（信任 catalog 发布的商家域名；Hermes 集成同配置）。非代理环境可去掉。
 
 完整可复用文件见 [`mcp-servers.cordis.yml`](mcp-servers.cordis.yml)。
 
