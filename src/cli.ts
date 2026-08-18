@@ -29,6 +29,7 @@
  *                                           Managed-local product lifecycle.
  */
 
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,7 +69,7 @@ import {
   DEFAULT_PROFILE_PATH,
 } from "./product-cli.js";
 import { cmdWeixin, weixinUsage } from "./weixin/cli-weixin.js";
-import { merchantInit, slugifyMerchantId } from "./product-init.js";
+import { DEFAULT_SHOPPING_DB_PATH, loadMerchantCredentials, merchantInit, slugifyMerchantId } from "./product-init.js";
 import readline from "node:readline";
 import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
 import { merchantPublish } from "./product-publish.js";
@@ -173,6 +174,7 @@ interface ParsedArgs {
   domain?: string;
   check: boolean;
   caddyfile?: string;
+  file?: string;
 }
 
 /** 导出供测试（审查 P2-L：--a2a flag 解析回归锁定）。 */
@@ -215,6 +217,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let domain: string | undefined;
   let check = false;
   let caddyfile: string | undefined;
+  let file: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--profile") {
@@ -300,6 +303,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       check = true;
     } else if (arg === "--caddyfile") {
       caddyfile = argv[++i];
+    } else if (arg === "--file") {
+      file = argv[++i];
     } else if (arg !== undefined && arg.startsWith("--profile=")) {
       profile = arg.slice("--profile=".length);
     } else if (arg !== undefined && arg.startsWith("--dir=")) {
@@ -318,6 +323,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       domain = arg.slice("--domain=".length);
     } else if (arg !== undefined && arg.startsWith("--caddyfile=")) {
       caddyfile = arg.slice("--caddyfile=".length);
+    } else if (arg !== undefined && arg.startsWith("--file=")) {
+      file = arg.slice("--file=".length);
     } else if (arg !== undefined && !arg.startsWith("-")) {
       command.push(arg);
     } else {
@@ -364,6 +371,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   if (catalogDb !== undefined) out.catalogDb = catalogDb;
   if (domain !== undefined) out.domain = domain;
   if (caddyfile !== undefined) out.caddyfile = caddyfile;
+  if (file !== undefined) out.file = file;
   if (catalogHost !== undefined) out.catalogHost = catalogHost;
   return out;
 }
@@ -380,6 +388,21 @@ function requireProfile(args: ParsedArgs): AgentProfile {
     throw new ProfileError("--profile <file> is required");
   }
   return loadProfile(args.profile);
+}
+
+/**
+ * 读取 profile：`--profile` 优先；缺省回退 `KIWI_DEFAULT_PROFILE` env 或
+ * `DEFAULT_PROFILE_PATH`（`kiwi merchant init` 写入的默认路径）。文件不存在 →
+ * fail-closed 提示先 init。供商家命令（start/publish/setup-public）参数化使用，
+ * 让第 4-5 步不带 `--profile`。
+ */
+function requireProfileOrDefault(args: ParsedArgs): AgentProfile {
+  if (args.profile) return loadProfile(args.profile);
+  const fallback = process.env.KIWI_DEFAULT_PROFILE ?? DEFAULT_PROFILE_PATH;
+  if (existsSync(fallback)) return loadProfile(fallback);
+  throw new ProfileError(
+    `未找到商家配置（${fallback}）——先运行 kiwi merchant init，或用 --profile <file> 指定`,
+  );
 }
 
 
@@ -572,11 +595,12 @@ export function resolveServeDataDir(dataDir: string | undefined, agentId: string
   return dataDir ?? path.resolve(".kiwi", "agents", agentId);
 }
 async function cmdAgentServe(args: ParsedArgs): Promise<number> {
-  const profile = requireProfile(args);
+  const profile = requireProfileOrDefault(args);
   if (profile.role !== "merchant") {
     process.stderr.write("kiwi agent serve 需要 merchant profile（role: merchant）\n");
     return EXIT.CONFIG;
   }
+  loadMerchantCredentials(); // 加载 init 写入的 credentials.env（KIWI_MERCHANT_TOKEN）
   const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
   const merchantToken = process.env.KIWI_MERCHANT_TOKEN || "";
   // 审查 P1-09：serve 的初始 A2A 节点必须用稳定 dataDir——此前初始节点缺省走
@@ -584,11 +608,13 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
   // negotiation 可重开、已发 conditional offer 返回 offer_unknown。稳定目录
   // 让重启可恢复状态（resolveServeDataDir 见上）。
   const serveDataDir = resolveServeDataDir(args.dataDir, profile.agent_id);
+  const profilePublicUrl = profile.merchant_public?.public_url;
   let node: A2aNodeHandle | null = await startA2aNode({
     profile,
     catalog,
-    preferredPort: args.port,
+    preferredPort: args.port ?? profile.merchant_public?.a2a_port,
     dataDir: serveDataDir,
+    ...(profilePublicUrl ? { publicBaseUrl: `https://${profilePublicUrl}` } : {}),
     ...(merchantToken ? { ownerToken: merchantToken } : {}),
     ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
   });
@@ -853,6 +879,11 @@ async function cmdBuyerInit(args: ParsedArgs): Promise<number> {
     ...(args.force ? { force: true } : {}),
   });
   printJson(report);
+  if (report.ok) {
+    process.stdout.write(
+      "✓ 商家配置完成。下一步：`kiwi merchant up` 上线（需先装 Caddy、DNS 指向服务器）；或 `kiwi merchant setup-public` 查看公网配置。\n",
+    );
+  }
   return report.ok ? EXIT.OK : EXIT.CONFIG;
 }
 
@@ -920,6 +951,7 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   if (sub === "init") return await cmdMerchantInit(args);
   if (sub === "publish") return await cmdMerchantPublish(args);
   if (sub === "setup-public") return await cmdMerchantSetupPublic(args);
+  if (sub === "up") return await cmdMerchantUp(args);
   if (sub === "listings") return notImplementedProduct("kiwi merchant listings", "D2");
   if (sub === "status") return notImplementedProduct("kiwi merchant status", "D1");
   if (sub === "doctor") return notImplementedProduct("kiwi merchant doctor", "D3");
@@ -949,12 +981,17 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
   // --merchant-id / --name flag 优先，env 回退；TTY 下交互提示，缺省自动派生。
   let merchantId = args.merchantId ?? process.env.KIWI_MERCHANT_ID ?? "";
   let name = args.merchantName ?? process.env.KIWI_MERCHANT_NAME ?? "";
+  let publicUrl = "";
+  let merchantToken = "";
   if (process.stdin.isTTY) {
     merchantId = await promptLine(
       `merchant_id（回车自动生成${name !== "" ? `，建议 ${slugifyMerchantId(name)}` : ""}）: `,
       merchantId,
     );
     name = await promptLine(`商家名称（回车用缺省）: `, name);
+    publicUrl = await promptLine("公网域名（可选，回车跳过；如 merchant.example.com）: ", "");
+    if (publicUrl !== "") publicUrl = publicUrl.trim().toLowerCase();
+    merchantToken = await promptLine("商家令牌（从商家后台获取，可稍后设置；直接回车跳过）: ", "");
     // TTY 下可全回车：merchant_id 自动生成（避免固定名碰撞）。
     if (merchantId === "") merchantId = `merchant-${Math.random().toString(36).slice(2, 8)}`;
     if (name === "") name = merchantId;
@@ -972,6 +1009,8 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
   const report = await merchantInit({
     merchantName: name,
     ...(merchantId !== "" ? { merchantId } : {}),
+    ...(publicUrl !== "" ? { publicUrl } : {}),
+    ...(merchantToken !== "" ? { merchantToken } : {}),
     shoppingCliUrl: process.env.SHOPPING_CLI_URL ?? "http://127.0.0.1:8765",
     shoppingCliDb: process.env.SHOPPING_DB_PATH,
     catalogUrl: args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL,
@@ -993,31 +1032,47 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
  * fail-closed：任一步失败 → 非零退出 + 分步报告，不假装全成功。
  */
 async function cmdMerchantPublish(args: ParsedArgs): Promise<number> {
-  const profile = requireProfile(args);
+  const profile = requireProfileOrDefault(args);
   if (profile.role !== "merchant") {
     process.stderr.write("kiwi merchant publish 需要 merchant profile（role: merchant）\n");
     return EXIT.CONFIG;
   }
-  const shoppingCliDb = args.shoppingCliDb ?? process.env.SHOPPING_DB_PATH;
-  if (!shoppingCliDb) {
+  loadMerchantCredentials(); // 加载 init 写入的 credentials.env（KIWI_MERCHANT_TOKEN）
+  // 缺省路径与 shopping-cli 的 DEFAULT_DB_PATH 一致——商家无需设置 SHOPPING_DB_PATH。
+  const shoppingCliDb =
+    args.shoppingCliDb ?? process.env.SHOPPING_DB_PATH ?? DEFAULT_SHOPPING_DB_PATH;
+  // `--file <csv>`：先导入商品（shopping-cli import-csv-excel）再发布。
+  if (args.file !== undefined && args.file !== "") {
+    const imp = spawnSync(
+      "shopping-cli",
+      ["import-csv-excel", "--file", args.file, "--merchant", profile.agent_id, "--format", "json"],
+      { env: { ...process.env, SHOPPING_DB_PATH: shoppingCliDb }, stdio: "inherit" },
+    );
+    if (imp.status !== 0) {
+      process.stderr.write(
+        `商品导入失败（shopping-cli import-csv-excel 退出码 ${imp.status ?? "?"}）——请检查 CSV 格式\n`,
+      );
+      return EXIT.CONFIG;
+    }
+    process.stdout.write(`已导入商品：${args.file}\n`);
+  }
+  if (!existsSync(shoppingCliDb)) {
     process.stderr.write(
-      "--shopping-cli-db <path>（或 SHOPPING_DB_PATH）是必需的：shopping-cli 的 SQLite 数据库路径\n",
+      `shopping-cli 数据库不存在：${shoppingCliDb}（先运行 shopping-cli import-csv-excel 导入商品）\n`,
     );
     return EXIT.CONFIG;
   }
-  if (!existsSync(shoppingCliDb)) {
-    process.stderr.write(`shopping-cli 数据库不存在：${shoppingCliDb}\n`);
-    return EXIT.CONFIG;
-  }
   const ownerTokenSecret = process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET;
-  const merchantToken = process.env.KIWI_MERCHANT_TOKEN || "";
+  const merchantTokenEnv = profile.merchant_public?.merchant_token_env;
+  const merchantToken =
+    (merchantTokenEnv ? process.env[merchantTokenEnv] : undefined) || process.env.KIWI_MERCHANT_TOKEN || "";
   if (!merchantToken && !ownerTokenSecret) {
     process.stderr.write(
       "需要 KIWI_MERCHANT_TOKEN（随机 token，推荐）或 KIWI_CATALOG_OWNER_TOKEN_SECRET（legacy HMAC）\n",
     );
     return EXIT.CONFIG;
   }
-  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
+  const catalog = args.catalog ?? profile.merchant_public?.catalog_url ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
   const report = await merchantPublish({
     profile,
     catalogBaseUrl: catalog,
@@ -1073,11 +1128,11 @@ async function cmdDemo(args: ParsedArgs): Promise<number> {
  * well-known 文件由跑着的 `kiwi merchant start` 节点自动生成，商家无需手写。
  */
 async function cmdMerchantSetupPublic(args: ParsedArgs): Promise<number> {
-  const profile = requireProfile(args); // 无 --profile → fail-closed 提示先 init
-  const port = args.port ?? (Number(process.env.KIWI_A2A_PORT ?? "") || 9000); // 与 startA2aNode 缺省一致
-  // 单一来源：缺省从 KIWI_A2A_PUBLIC_URL（merchant start 用的同一个 env）提取域名；
-  // --domain 显式覆盖；TTY 下再交互提示。
-  let domain = args.domain ?? extractPublicDomain(process.env.KIWI_A2A_PUBLIC_URL) ?? "";
+  const profile = requireProfileOrDefault(args); // 无 --profile 时回退缺省 ~/.kiwi/kiwi.yaml
+  const port = args.port ?? profile.merchant_public?.a2a_port ?? (Number(process.env.KIWI_A2A_PORT ?? "") || 9000); // 与 startA2aNode 缺省一致
+  // 单一来源：--domain 显式 > profile.merchant_public.public_url（init 引导写入）>
+  // KIWI_A2A_PUBLIC_URL env 提取；TTY 下再交互提示。
+  let domain = args.domain ?? profile.merchant_public?.public_url ?? extractPublicDomain(process.env.KIWI_A2A_PUBLIC_URL) ?? "";
   if (domain === "" && process.stdin.isTTY) {
     domain = await promptLine("公网域名（如 merchant.example.com，TLS 证书就用它）: ", "");
   }
@@ -1132,6 +1187,80 @@ async function cmdMerchantSetupPublic(args: ParsedArgs): Promise<number> {
     }
     throw err;
   }
+}
+
+/**
+ * `kiwi merchant up`（D3）——一条命令上线：setup-public（生成 Caddyfile）→ 起 Caddy
+ * 反代（子进程）→ 起 A2A 节点 → 退出时清理 Caddy。把第 4 步三命令合成一个。
+ */
+async function cmdMerchantUp(args: ParsedArgs): Promise<number> {
+  const profile = requireProfileOrDefault(args);
+  if (profile.role !== "merchant") {
+    process.stderr.write("kiwi merchant up 需要 merchant profile（role: merchant）\n");
+    return EXIT.CONFIG;
+  }
+  loadMerchantCredentials(); // 加载 init 写入的 credentials.env（KIWI_MERCHANT_TOKEN）
+
+  // ── 域名 / 端口 / Caddyfile（profile 兜底）──
+  const domain =
+    args.domain ?? profile.merchant_public?.public_url ?? extractPublicDomain(process.env.KIWI_A2A_PUBLIC_URL) ?? "";
+  if (domain === "") {
+    process.stderr.write("需要公网域名——先 `kiwi merchant init` 填公网域名，或 --domain <域名>\n");
+    return EXIT.CONFIG;
+  }
+  const port = args.port ?? profile.merchant_public?.a2a_port ?? (Number(process.env.KIWI_A2A_PORT ?? "") || 9000);
+  const caddyfilePath = args.caddyfile ?? "Caddyfile.kiwi";
+
+  // ── setup-public：检测 IP / DNS 检查 / 生成 Caddyfile（幂等）──
+  await runMerchantSetupPublic({
+    domain,
+    port,
+    caddyfilePath,
+    merchantAgentId: profile.agent_id,
+    profilePath: args.profile,
+  });
+  process.stdout.write(`[merchant up] 域名 ${domain} · 端口 ${port} · Caddyfile ${caddyfilePath}\n`);
+
+  // ── 检查 Caddy 是否安装（fail-closed）──
+  const caddyOk = spawnSync("caddy", ["version"], { stdio: "ignore" }).status === 0;
+  if (!caddyOk) {
+    process.stderr.write(
+      "未检测到 Caddy（反代 + TLS）。请先安装：`brew install caddy`（或 https://caddyserver.com/download），然后重试。\n",
+    );
+    return EXIT.CONFIG;
+  }
+
+  // ── 起 Caddy 反代（子进程，日志透传）──
+  const caddy = spawn("caddy", ["run", "--config", caddyfilePath], { stdio: "inherit" });
+
+  // ── 起 A2A 节点（与 merchant start --no-chat 同一路径）──
+  const catalog = args.catalog ?? profile.merchant_public?.catalog_url ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
+  const merchantToken = process.env.KIWI_MERCHANT_TOKEN || "";
+  const serveDataDir = resolveServeDataDir(args.dataDir, profile.agent_id);
+  let node: A2aNodeHandle | null = await startA2aNode({
+    profile,
+    catalog,
+    preferredPort: port,
+    dataDir: serveDataDir,
+    ...(domain ? { publicBaseUrl: `https://${domain}` } : {}),
+    ...(merchantToken ? { ownerToken: merchantToken } : {}),
+    ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
+  });
+  process.stdout.write(
+    `[merchant up] A2A server: ${node.agentCardUrl}（local ${node.url}）· catalog: ${node.catalogAgentId ?? "?"}\n`,
+  );
+  process.stdout.write("[merchant up] 已上线 — Ctrl+C to stop（会同时停掉 Caddy 与节点）\n");
+
+  const shutdown = async (): Promise<void> => {
+    await node?.stop().catch(() => undefined);
+    node = null;
+    caddy.kill(); // SIGTERM → Caddy 优雅退出
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  await new Promise<never>(() => {});
+  return EXIT.OK;
 }
 
 function notImplementedProduct(name: string, target: string): number {

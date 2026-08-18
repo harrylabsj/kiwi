@@ -108,6 +108,30 @@ describe("merchant init (D1)", () => {
     }
   });
 
+  it("writes publicUrl into merchant_public.public_url（init 引导域名）", async () => {
+    const dir = tmpDir();
+    try {
+      const outputPath = path.join(dir, "merchant.yaml");
+      const report = await merchantInit({
+        merchantName: "Veyquo",
+        merchantId: "veyquo",
+        publicUrl: " Merchant.Example.COM ",
+        shoppingCliUrl: "http://127.0.0.1:8765",
+        outputPath,
+        spawnImpl: shoppingCliFoundSpawn(),
+        fetchImpl: healthOkFetch(),
+      });
+      expect(report.ok).toBe(true);
+      const profile = loadProfile(outputPath);
+      expect(profile.merchant_public?.public_url).toBe("merchant.example.com");
+      const raw = readFileSync(outputPath, "utf-8");
+      expect(raw).toContain("merchant_public");
+      expect(raw).toContain("public_url: merchant.example.com");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("missing shopping-cli warns but does not block generation", async () => {
     const dir = tmpDir();
     try {

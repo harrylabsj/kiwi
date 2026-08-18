@@ -155,6 +155,22 @@ export interface AgentProfile {
     /** iLink base URL 覆盖（可选；必须 https 或 loopback）。 */
     base_url?: string;
   };
+  /**
+   * 商家公网暴露与发布配置（`kiwi merchant init` 引导写入；setup-public / start /
+   * publish 据此无参运行）。secret 不写 profile——merchant_token_env 只存环境变量名。
+   */
+  merchant_public?: {
+    /** 公网 A2A 域名（→ KIWI_A2A_PUBLIC_URL）。 */
+    public_url?: string;
+    /** A2A 节点端口（→ KIWI_A2A_PORT；缺省 9000）。 */
+    a2a_port?: number;
+    /** shopping-cli 商品库路径（→ SHOPPING_DB_PATH）。 */
+    shopping_db_path?: string;
+    /** catalog base URL（→ KIWI_CATALOG_URL；缺省官方）。 */
+    catalog_url?: string;
+    /** 商家 token 环境变量名（值不写 profile）。 */
+    merchant_token_env?: string;
+  };
 }
 
 export class ProfileError extends Error {
@@ -188,6 +204,7 @@ const TOP_LEVEL_KEYS = [
   "buyer_policy",
   "weixin",
   "decision",
+  "merchant_public",
 ] as const;
 /** weixin 段白名单（微信远程控制通道配置；无 *_env 密钥字段——iLink 凭证运行时获取）。 */
 const WEIXIN_KEYS = ["allow_users", "base_url"] as const;
@@ -229,6 +246,7 @@ const BUYER_POLICY_KEYS = [
   "human_review_on",
 ] as const;
 const DECISION_KEYS = ["backend", "enabled"] as const;
+const MERCHANT_PUBLIC_KEYS = ["public_url", "a2a_port", "shopping_db_path", "catalog_url", "merchant_token_env"] as const;
 const DECISION_BACKENDS: readonly DecisionBackendKind[] = ["deterministic", "mock", "deepseek"];
 
 /** RFC 3339 date-time with an explicit timezone (offset or Z); naive times fail closed. */
@@ -591,6 +609,35 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     decisionSection = { backend: d.backend as DecisionBackendKind, ...(d.enabled !== undefined ? { enabled: d.enabled } : {}) };
   }
 
+  let merchantPublic: AgentProfile["merchant_public"] | undefined;
+  if (p.merchant_public !== undefined) {
+    req(isObject(p.merchant_public), `${source}: merchant_public must be a mapping`);
+    const mp = p.merchant_public;
+    rejectUnknownKeys(mp, MERCHANT_PUBLIC_KEYS, "merchant_public", source);
+    if (mp.public_url !== undefined) {
+      req(typeof mp.public_url === "string" && mp.public_url.trim() !== "", `${source}: merchant_public.public_url must be a non-empty string`);
+    }
+    if (mp.a2a_port !== undefined) {
+      req(Number.isInteger(mp.a2a_port) && Number(mp.a2a_port) > 0, `${source}: merchant_public.a2a_port must be a positive integer`);
+    }
+    if (mp.shopping_db_path !== undefined) {
+      req(typeof mp.shopping_db_path === "string" && mp.shopping_db_path.trim() !== "", `${source}: merchant_public.shopping_db_path must be a non-empty string`);
+    }
+    if (mp.catalog_url !== undefined) {
+      req(typeof mp.catalog_url === "string" && mp.catalog_url.trim() !== "", `${source}: merchant_public.catalog_url must be a non-empty string`);
+    }
+    if (mp.merchant_token_env !== undefined) {
+      req(REQUIRED_ENV_REF.test(String(mp.merchant_token_env)), `${source}: merchant_public.merchant_token_env must be an env var name`);
+    }
+    merchantPublic = {
+      ...(mp.public_url !== undefined ? { public_url: String(mp.public_url) } : {}),
+      ...(mp.a2a_port !== undefined ? { a2a_port: Number(mp.a2a_port) } : {}),
+      ...(mp.shopping_db_path !== undefined ? { shopping_db_path: String(mp.shopping_db_path) } : {}),
+      ...(mp.catalog_url !== undefined ? { catalog_url: String(mp.catalog_url) } : {}),
+      ...(mp.merchant_token_env !== undefined ? { merchant_token_env: String(mp.merchant_token_env) } : {}),
+    };
+  }
+
   let buyerPolicy: BuyerPolicy | undefined;
   if (p.buyer_policy !== undefined) {
     req(isObject(p.buyer_policy), `${source}: buyer_policy must be a mapping`);
@@ -714,6 +761,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     ...(buyerPolicy !== undefined ? { buyer_policy: buyerPolicy } : {}),
     ...(weixinSection !== undefined ? { weixin: weixinSection } : {}),
     ...(decisionSection !== undefined ? { decision: decisionSection } : {}),
+    ...(merchantPublic !== undefined ? { merchant_public: merchantPublic } : {}),
   };
   return profile;
 }
