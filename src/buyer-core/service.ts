@@ -61,6 +61,11 @@ export interface MerchantRecord {
   capabilities: string[];
   /** 该商家匹配查询的商品 SKU（marketplace 商品 FTS 路由），供 RFQ 用商家自有 SKU。 */
   matching_skus?: string[];
+  /**
+   * 配送时效摘要（商家按区域维护，如 `东北 3-4天；华北 1-2天`）。来自 listing
+   * 的 commercial_hints.lead_time_hint；买家发现/选择时的重要指标。
+   */
+  delivery?: string;
 }
 
 export interface MerchantIndex {

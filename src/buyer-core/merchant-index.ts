@@ -97,6 +97,7 @@ export class KiwiCatalogMerchantIndex {
           region: r.listing.regions?.[0],
           capabilities: [],
           matching_skus: [sku],
+          delivery: r.listing.commercial_hints?.lead_time_hint,
         });
       } else {
         existing.matching_skus = existing.matching_skus ? [...existing.matching_skus, sku] : [sku];
@@ -188,6 +189,7 @@ export class KiwiCatalogMerchantIndex {
         region: listing.listing.regions?.[0],
         capabilities: [],
         matching_skus: [listing.listing.source_product_ref ?? listing.listing.listing_id],
+        delivery: listing.listing.commercial_hints?.lead_time_hint,
       };
       if (agent !== undefined) {
         record.agent_card_url = agent.agent_card_url;
