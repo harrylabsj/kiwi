@@ -6,7 +6,7 @@
   <title>Kiwi 商家接入 —— 让买家 AI 直接找到你</title>
   <meta name="description" content="Kiwi 商家运行时连接你的商品库、库存与报价政策，让买家智能体找到你、向你询价、谈条件，并把结果交回你的成交系统。">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <link rel="stylesheet" href="style.css?v=20260817-4">
+  <link rel="stylesheet" href="style.css?v=20260817-5">
 </head>
 <body>
 <nav class="nav"><div class="nav-inner"><a class="nav-logo" href="index.html">Kiwi</a><div class="nav-links">
@@ -53,11 +53,14 @@
 
   <section class="section" id="install"><div class="section-inner">
     <div class="kicker">安装与使用</div><h2>三步开始接受 AI 采购请求。</h2>
-    <p class="lead">只需安装 Kiwi、初始化商家并发布商品。准备一份 CSV / Excel，Kiwi 团队可以协助导入和发布。</p>
+    <p class="lead">只需安装 Kiwi、初始化商家，再用 shopping-cli 上传商品并发布到 Kiwi Network。整个过程由商家自行完成。</p>
     <div class="quickstart-grid">
       <article class="quickstart-step"><div class="quickstart-number">01</div><div class="surface-label">安装 Kiwi</div><h3>装一个主产品</h3><pre class="quickstart-code"><code>npm install -g @harrylabsj/kiwi</code></pre></article>
       <article class="quickstart-step"><div class="quickstart-number">02</div><div class="surface-label">初始化商家</div><h3>让 Kiwi 带你完成设置</h3><pre class="quickstart-code"><code>kiwi merchant init</code></pre><p>Kiwi 会检查商品数据连接并生成商家配置。</p></article>
-      <article class="quickstart-step"><div class="quickstart-number">03</div><div class="surface-label">发布商品</div><h3>让买家找得到你</h3><p>准备一份 CSV / Excel，Kiwi 团队协助导入商品、发布到网络并开启询价。</p><a class="quickstart-link" href="#contact">开始商家接入 →</a></article>
+      <article class="quickstart-step"><div class="quickstart-number">03</div><div class="surface-label">上传并发布</div><h3>让买家找得到你</h3><pre class="quickstart-code"><code>shopping-cli import-csv-excel \
+  --file products.csv --merchant &lt;merchant-id&gt;
+kiwi merchant publish \
+  --shopping-cli-db &lt;db&gt;</code></pre><p>shopping-cli 管理商品事实，Kiwi Merchant 将公开投影发布到发现目录。</p><a class="quickstart-link" href="https://catalog.kiwi.harrylabsj.com/portal/account">打开商家后台 →</a></article>
     </div>
     <div class="quickstart-note"><p><strong>你始终掌控：</strong>成本、底价、库存、订单和付款不会因为接入 Kiwi 而自动公开。</p></div>
   </div></section>
@@ -72,7 +75,7 @@
   </div></section>
 
   <section class="section" id="contact"><div class="section-inner pilot-layout">
-    <div><div class="kicker">商家接入</div><h2>适合标准化办公、IT 配件和 B2B 供应商。</h2><p class="lead">准备一份商品 CSV、一个可长期在线的服务器和真实报价政策。Kiwi 团队协助完成商品发布、询价和成交交接。</p></div>
+    <div><div class="kicker">商家接入</div><h2>适合标准化办公、IT 配件和 B2B 供应商。</h2><p class="lead">准备一份商品 CSV、一个可长期在线的服务器和真实报价政策。按上面的三步完成发布后，即可接受买家询价。</p></div>
     <div class="pilot-actions"><a class="btn btn-green" href="https://catalog.kiwi.harrylabsj.com/portal/account">注册商家账户</a><a class="btn btn-outline" href="mailto:harrylabsj@gmail.com">联系 Kiwi 团队</a><span>微信：hddsh2025</span></div>
   </div></section>
 </main>
