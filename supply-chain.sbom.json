@@ -1,7 +1,7 @@
 {
   "sbom_version": 1,
   "package": "@harrylabsj/kiwi",
-  "package_version": "0.7.16",
+  "package_version": "0.7.18",
   "runtime_dependencies": [
     {
       "name": "@earendil-works/pi-agent-core",
@@ -35,14 +35,14 @@
     }
   ],
   "artifact": {
-    "name": "harrylabsj-kiwi-0.7.16.tgz",
-    "sha256": "6f0d94eb2dc63631614b8e0695ba78df19ebe12372f6b9d17c0f6f824c627f81",
-    "bytes": 1055272
+    "name": "harrylabsj-kiwi-0.7.18.tgz",
+    "sha256": "f5e98e3c570db9235fda19147e9d7464ac8466e0051007f4c956ba1333a9d0c4",
+    "bytes": 1067149
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-08-17T10:44:46.478Z"
+  "generated_at": "2026-08-18T05:51:38.151Z"
 }

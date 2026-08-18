@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.7.18 — 2026-08-18
+
+**商家配送时效（按区域）——发现/搜索可见**：
+
+- 商家新增**一个字段**维护按区域配送时效（如 `东北 3-4天；华北 1-2天`）：
+  `shopping-cli delivery set-time --merchant <id> --region <区域> --min-days <n>
+  --max-days <n>`、`delivery remove-time`、`delivery times`；字段存
+  `delivery_rules.delivery_times_json`（区域 → {min_days, max_days}，min/max 正
+  整数且 1 ≤ min ≤ max ≤ 365）。
+- 商品 listing 投影（shopping-cli 3.2.5）把商家时效填进公开发现 hint：
+  `commercial_hints.fulfillment_regions` + `lead_time_hint`（如 `东北 3-4天；华北
+  1-2天`），并回填 `regions`（区域搜索生效）。买家 `kiwi-catalog-listings` 经既有
+  `commercial_hints` 通道直接可见，无需改买家工具。
+- `kiwi_search` 商家结果（MerchantRecord）新增 `delivery` 字段（来自 listing 的
+  `commercial_hints.lead_time_hint`），配送时效成为买家发现/选择的重要指标。
+- 单价投影 `get_listing_projection` 修复：此前 `merchant_id` 缺省 "" 会让商家级
+  delivery_times 在该路径静默丢失（与 S-M3 同类 bug），现由商品 owner 派生。
+
+> 磋商报价真实化（买家区域传进 RFQ、商家 offer delivery_before 按区域计算）为
+> 二期，本期只做发现/搜索可见。配送时效是公开发现指标（买家询价前可见），价格
+> 与私密供应事实仍留在本地。
+
 ## v0.7.17 — 2026-08-18
 
 > v0.7.16 由 2026-08-17 的 workflow run 发布（缺下述新功能，不可覆盖）；本版
