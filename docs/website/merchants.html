@@ -59,8 +59,8 @@
       <article class="quickstart-step"><div class="quickstart-number">02</div><div class="surface-label">初始化商家</div><h3>让 Kiwi 带你完成设置</h3><pre class="quickstart-code"><code>kiwi merchant init</code></pre><p>Kiwi 会检查商品数据连接并生成商家配置。</p></article>
       <article class="quickstart-step"><div class="quickstart-number">03</div><div class="surface-label">上传并发布</div><h3>让买家找得到你</h3><pre class="quickstart-code"><code>shopping-cli import-csv-excel \
   --file products.csv --merchant &lt;merchant-id&gt;
-kiwi merchant publish \
-  --shopping-cli-db &lt;db&gt;</code></pre><p>shopping-cli 管理商品事实，Kiwi Merchant 将公开投影发布到发现目录。</p><a class="quickstart-link" href="https://catalog.kiwi.harrylabsj.com/portal/account">打开商家后台 →</a></article>
+SHOPPING_DB_PATH="$HOME/.local/share/shopping-cli/shopping-cli.sqlite" \
+  kiwi merchant publish</code></pre><p>shopping-cli 管理商品事实，Kiwi Merchant 从 SHOPPING_DB_PATH 读取数据库并将公开投影发布到发现目录。</p><a class="quickstart-link" href="https://catalog.kiwi.harrylabsj.com/portal/account">打开商家后台 →</a></article>
     </div>
     <div class="quickstart-note"><p><strong>你始终掌控：</strong>成本、底价、库存、订单和付款不会因为接入 Kiwi 而自动公开。</p></div>
   </div></section>
