@@ -373,7 +373,11 @@ export async function startTestA2aStack(
       published_at: NOW,
       updated_at: NOW,
       fresh_until: "2099-01-01T00:00:00Z",
-      commercial_hints: { moq: 50, supports_bulk_quote: true },
+      commercial_hints: {
+        moq: 50,
+        supports_bulk_quote: true,
+        lead_time_hint: "华东 1-2天",
+      },
     },
     merchant: { merchant_id: "merchant-001", display_name: "Test Merchant" },
     agent: {

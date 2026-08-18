@@ -41,6 +41,8 @@ describe("KiwiCatalogMerchantIndex（listings 感知发现）", () => {
       // listings 商品事实 → matching_skus；agents 身份 → agent_card_url（A2A 磋商必需）。
       expect(merchant.matching_skus).toEqual(["sku-001"]);
       expect(merchant.agent_card_url).toBe(`${stack.merchantUrl}/.well-known/agent-card.json`);
+      // 商家配送时效（commercial_hints.lead_time_hint）透出为发现指标。
+      expect(merchant.delivery).toBe("华东 1-2天");
       expect(merchant.capabilities).toContain("com.harrylabsj.kiwi.shopping.negotiation");
     } finally {
       await stack.stop();
