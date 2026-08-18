@@ -34,11 +34,11 @@
     <div class="kicker">接入方式</div><h2>同一个买家核心，多种薄接入。</h2>
     <p class="lead">不同宿主只负责安装、触发和展示；采购状态、权限、幂等与恢复始终由 Kiwi 买家核心负责。</p>
     <div class="surface-grid">
-      <article class="surface-card surface-card-strong" id="hermes-install"><div class="surface-label">首个真实宿主</div><h3>Hermes</h3><p>Hermes 保留对话、记忆和用户关系，Kiwi 负责跨商家采购。无需 clone 源码。</p><div class="host-install"><div class="surface-label">二步接入</div><pre><code>npm install -g @harrylabsj/kiwi
-kiwi setup-hermes</code></pre><span>setup-hermes 自动把 kiwi mcp serve 接成 Hermes 的 MCP server，并安装采购 skill。重启 Hermes 后直接说出采购需求（重启不算一步）。</span></div></article>
-      <article class="surface-card"><div class="surface-label">原生插件</div><h3>OpenClaw</h3><p>插件负责采购工具，Skill 负责识别采购意图。两条命令安装完成，不需要 clone 源码。</p><div class="host-install"><div class="surface-label">安装插件与 Skill</div><pre><code>openclaw plugins install clawhub:kiwi
+      <article class="surface-card surface-card-strong" id="hermes-install"><div class="surface-label">首个真实宿主</div><h3>Hermes</h3><p>Hermes 保留对话、记忆和用户关系，Kiwi 负责跨商家采购。</p><div class="host-install"><div class="surface-label">二步接入</div><pre><code>npm install -g @harrylabsj/kiwi
+kiwi setup-hermes</code></pre><span>setup-hermes 自动配置。重启 Hermes 后直接说出采购需求。</span></div></article>
+      <article class="surface-card"><div class="surface-label">原生插件</div><h3>OpenClaw</h3><p>插件负责采购工具，Skill 负责识别采购意图。</p><div class="host-install"><div class="surface-label">安装插件与 Skill</div><pre><code>openclaw plugins install clawhub:kiwi
 openclaw skills install kiwi-buyer</code></pre><span>安装后重启 OpenClaw Gateway，即可直接说出采购需求。</span></div></article>
-      <article class="surface-card"><div class="surface-label">开放接口</div><h3>任何 MCP 宿主</h3><p>连接同一 Kiwi MCP 服务，获得一致的意图、授权、任务和错误语义。</p><a href="developers.html">查看开发者文档 →</a></article>
+      <article class="surface-card"><div class="surface-label">开放接口</div><h3>任何 MCP 宿主</h3><p>连接同一 Kiwi MCP 服务，获得一致的意图、授权、任务和错误语义。</p></article>
     </div>
   </div></section>
 
@@ -59,21 +59,6 @@ openclaw skills install kiwi-buyer</code></pre><span>安装后重启 OpenClaw Ga
     </div>
   </div></section>
 
-  <section class="section section-alt" id="reference"><div class="section-inner">
-    <div class="kicker">参考运行方式</div><h2>独立命令行仍可用于测试与调试。</h2>
-    <p class="lead">产品主路径是宿主内接入；独立命令行保留为参考客户端和回归工具。</p>
-    <pre><code>npm install -g @harrylabsj/kiwi
-
-# 启动标准 MCP 服务，供 Hermes 或其他宿主连接
-kiwi mcp serve \
-  --db "$HOME/.kiwi/buyer.sqlite" \
-  --principal "buyer:local" \
-  --catalog-url "https://catalog.kiwi.harrylabsj.com"
-
-# 参考客户端
-kiwi buyer search "200 个 USB-C 扩展坞，7 天内到"</code></pre>
-    <div class="notice"><p><strong>诚实边界：</strong>Kiwi 绝不替用户下单、授权支付或预留库存；接受非绑定协议和成交交接必须经过授权门。</p></div>
-  </div></section>
 </main>
 
 <footer class="footer"><div class="footer-inner"><div class="row">
