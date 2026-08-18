@@ -1,0 +1,29 @@
+# DeepSeek Harness（dsh）Kiwi MCP 插件配置（可复用）
+#
+# 把以下 insert 追加到 ~/.dsh/profiles/web/cordis.patch.yml（先备份现有内容），
+# 替换 <KIWI_ROOT> 为本地 kiwi 仓库路径，然后 `dsh web` 重启。
+# 工具以 mcp__kiwi__<name> 暴露（如 mcp__kiwi__kiwi_search），共 9 个。
+- insert:
+    - id: mcp-kiwi
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: kiwi
+        transport: stdio
+        command: node
+        args:
+          - <KIWI_ROOT>/dist/cli.js
+          - mcp
+          - serve
+          - --db
+          - <KIWI_ROOT>/.kiwi/mcp/dsh.sqlite
+          - --principal
+          - dsh:<user>
+          - --agent
+          - buyer-agent:dsh
+          # A2A 可选（按需取消注释）：
+          # - --a2a-skip-dns-check true
+          # - --a2a-allow-private-ranges true
+          # - --a2a-timeout-ms 20000
+        cwd: <KIWI_ROOT>
+        toolCallTimeoutMs: 60000
+        failOnStartupError: false

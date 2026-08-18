@@ -72,7 +72,8 @@ src/buyer-core/
 src/mcp/
 src/http/
 integrations/hosts/hermes/
-integrations/harnesses/deepseek-harness/
+integrations/hosts/deepseek-harness/   # dsh Host 接入（kiwi-buyer-mcp 作为 MCP 插件）
+integrations/harnesses/deepseek-harness/   # dsh 受限 ReasoningBackend（contract gate）
 ```
 
 ## Compatibility（v2.5 语义不变量）
@@ -86,7 +87,7 @@ compatibility/knp-ucp-capability.md
 ```
 
 - UCP/KNP 边界：商品 truth 留在 Merchant/UCP；Kiwi 负责发现、路由、RFQ、Negotiation 和 handoff，不承担支付、订单或库存预留。
-- Host/Harness Matrix：Hermes 是当前首个真实 Host reference；DeepSeek Harness 是受限 contract gate；OpenClaw/Kimi/Codex/WorkBuddy 保持 AFTER GATE。
+- Host/Harness Matrix：Hermes 是当前首个真实 Host reference；DeepSeek Harness 有**双角色**——(1) 受限 ReasoningBackend（contract gate，`integrations/harnesses/deepseek-harness/`）验证 DecisionCandidate 契约，(2) 作为 Host Agent 平台让 kiwi-buyer-mcp 以 MCP 插件进入（`integrations/hosts/deepseek-harness/`，2026-08-18 已实测：dsh web 拉起 kiwi mcp serve、工具 mcp__kiwi__* 注册、子进程断连自动重连）；OpenClaw/Kimi/Codex/WorkBuddy 保持 AFTER GATE。
 - Merchant 三 Plane：Commerce Plane + Merchant Core 必须在 Intelligence/Ops 离线时继续工作，低于底价等异常进入 `human_required`。
 - OpenClaw 三角色分离：Buyer、Merchant Ops、ReasoningBackend 使用不同命名空间、凭据和状态目录；旧角色迁移不是当前试点前置条件。
 
