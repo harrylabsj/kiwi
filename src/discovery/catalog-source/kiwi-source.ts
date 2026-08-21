@@ -154,6 +154,7 @@ export class KiwiCatalogSource {
             ...(this.deps.authToken !== undefined
               ? { authorization: `Bearer ${this.deps.authToken}` }
               : {}),
+            ...(this.deps.buyerId !== undefined ? { "x-buyer-id": this.deps.buyerId } : {}),
           },
         });
       } catch (err) {

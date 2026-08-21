@@ -34,6 +34,8 @@ import type { MerchantRecord } from "./service.js";
 export interface KiwiCatalogMerchantIndexOptions {
   baseUrl: string;
   authToken?: string;
+  /** 稳定匿名买家身份（catalog 用量统计）；透传为 X-Buyer-Id 头。 */
+  buyerId?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
@@ -47,6 +49,7 @@ export class KiwiCatalogMerchantIndex {
     const deps: CatalogSourceDeps = {
       baseUrl: options.baseUrl,
       ...(options.authToken !== undefined ? { authToken: options.authToken } : {}),
+      ...(options.buyerId !== undefined ? { buyerId: options.buyerId } : {}),
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
     };

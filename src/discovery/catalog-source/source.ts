@@ -48,6 +48,8 @@ export interface CatalogSourceDeps {
   timeoutMs?: number;
   /** 可选 bearer 凭证（Authorization: Bearer …）。 */
   authToken?: string;
+  /** 稳定匿名买家身份（catalog 用量统计）；设置后以 X-Buyer-Id 头发送。 */
+  buyerId?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
