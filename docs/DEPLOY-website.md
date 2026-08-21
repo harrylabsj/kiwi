@@ -77,8 +77,7 @@ npx wrangler deploy        # 读取 docs/website/，上传差异资产，绑定�
 [ ] /buyers                               → 安装命令 + 工作方式四步 + 诚实边界（中文）
 [ ] /merchants                            → 安装命令 + 数据引擎自动装；注册商家账号（中文）
 [ ] /demo                                 → Hermes × Kiwi Buyer 完整动画演示（示例数据有明确标注）
-[ ] /case-template                        → 公开案例模板 + Markdown 下载
-[ ] /case-template.md                     → 可下载的公开案例 Markdown 模板
+[ ] /case-template / /case-template.md   → 404（2026-08-21 移除公开案例——内部信息）
 [ ] /developers                           → 源码/构建/代码位置（中文）
 [ ] /favicon.svg                          → 浏览器标签图标返回 200
 [ ] 页脚 Contact 行（email + 微信）
