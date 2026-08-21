@@ -1,0 +1,107 @@
+name: Integration / adoption feedback
+description: Report what happened while installing, integrating, or trying Kiwi with a real buyer or merchant workflow
+title: "adoption: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying Kiwi. This form is for real integration and adoption feedback,
+        including partial success. Please report what you tried and where the workflow
+        stopped; you do not need to propose a solution.
+
+        Do not include tokens, credentials, Authorization headers, private hostnames/IPs,
+        customer data, exact inventory, or production endpoints. For security issues,
+        use the private reporting path in `SECURITY.md` instead.
+  - type: dropdown
+    id: role
+    attributes:
+      label: Your role
+      options:
+        - Merchant / supplier
+        - Buyer / procurement user
+        - Host or agent integrator
+        - Protocol / developer contributor
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where did you get stuck or succeed?
+      options:
+        - Installation or prerequisites
+        - Merchant initialization
+        - Product import or publish
+        - Public endpoint / Agent Card
+        - Catalog discovery
+        - RFQ / quote retrieval
+        - Negotiation or agreement
+        - Handoff
+        - Documentation or onboarding
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: What were you trying to accomplish?
+      description: Describe the real workflow, product category, or integration goal in one or two paragraphs.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What did you try?
+      description: Include commands, configuration shape, request fields, and the point where the workflow changed or stopped. Remove private values.
+      placeholder: |
+        1. Installed ...
+        2. Configured ...
+        3. Ran ...
+        4. Observed ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected_actual
+    attributes:
+      label: Expected versus actual result
+      description: What did you expect, and what happened instead? Include exact error text when possible.
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround or manual effort
+      description: What did you do instead? How long did it take, and what would have made you continue?
+  - type: input
+    id: kiwi_version
+    attributes:
+      label: Kiwi version / commit
+      placeholder: "0.7.19 or full commit SHA"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and connected components
+      description: Node.js / OS, shopping-cli and kiwi-catalog versions, host agent, and deployment shape. Do not include secrets or private addresses.
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Reviewed diagnostics or evidence
+      description: Optional. Paste only redacted `kiwi doctor` output, task IDs safe to disclose, public URLs, or sanitized logs.
+  - type: dropdown
+    id: follow_up
+    attributes:
+      label: What follow-up would help?
+      options:
+        - I am willing to try again after a fix
+        - I am willing to do a 20-minute feedback interview
+        - A documentation answer would be enough
+        - No follow-up needed
+    validations:
+      required: true
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Anything else we should know?
+      description: Add links to public examples or the sentence you would use to describe the problem to another user.

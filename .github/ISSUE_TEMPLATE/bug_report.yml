@@ -8,7 +8,11 @@ body:
       value: |
         Thanks for taking the time to file a bug. A clear, minimal reproduction
         helps maintainers fix it faster. Please redact all secrets, personal
-        data, and production endpoints before submitting.
+        data, private hostnames/IPs, and production endpoints before submitting.
+        For configuration or connectivity problems, run `kiwi doctor --profile <file>`
+        and paste only the reviewed, redacted output below. The command never prints
+        secret values, but its diagnostics may still reveal endpoint names, paths,
+        provider details, or environment-variable names.
   - type: textarea
     id: summary
     attributes:
@@ -58,4 +62,4 @@ body:
     id: context
     attributes:
       label: Additional context
-      description: Logs, screenshots, or links that help diagnose the issue (redact secrets).
+      description: Logs, screenshots, links, or reviewed `kiwi doctor` output that help diagnose the issue. Redact secrets, private endpoints, paths, and customer data.

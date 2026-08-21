@@ -4,7 +4,7 @@
 [A2A](https://a2a-protocol.org/) 与 [UCP](https://ucp.dev/) 完成发现 → capability 协商 →
 磋商 → 非绑定协议。磋商以**非约束性商业协议**终止：不创建订单、不支付、不锁库存。
 
-**Kiwi 当前代码版本 0.7.8（2026-08-14）**：当前发布线包含 A2A 双栈、KNP/1.0 磋商、签名身份
+**Kiwi 当前代码版本 0.7.19**：当前发布线包含 A2A 双栈、KNP/1.0 磋商、签名身份
 与安全交接能力。A2A 1.0 线协议互操作以组合 conformance transcript 为准，不用历史审计
 文档替代运行证据。
 
@@ -178,6 +178,19 @@ npm run verify          # 全部 + 生产包冒烟
 - [`docs/protocol/kiwi-negotiation-protocol-1.0.md`](docs/protocol/kiwi-negotiation-protocol-1.0.md) — KNP/1.0 规范
 - [`docs/reviews/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md`](docs/reviews/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md) — 历史 v1.0 就绪度审计
 - [`CHANGELOG.md`](CHANGELOG.md) — 版本历史
+
+## 反馈与支持
+
+请先确认你使用的 Kiwi、`shopping-cli`、`kiwi-catalog` 版本，再选择最接近的入口：
+
+- [报告 Bug](https://github.com/harrylabsj/kiwi/issues/new?template=bug_report.yml) — 请附最小复现、版本和环境。
+- [集成 / 采用反馈](https://github.com/harrylabsj/kiwi/issues/new?template=integration_feedback.yml) — 记录安装、Agent Card、发现、RFQ、报价或 handoff 哪一步遇到问题。
+- [使用咨询](https://github.com/harrylabsj/kiwi/issues/new?template=usage_question.yml) — 不确定怎么配置或调用时使用。
+- [功能建议](https://github.com/harrylabsj/kiwi/issues/new?template=feature_request.yml) — 说明要解决的用户或协议问题，不要只提交实现方案。
+
+提交公开 Issue 前，请移除 token、密钥、Authorization header、私有域名或 IP、文件路径、客户资料和生产端点。
+`kiwi doctor` 是只读诊断工具；如附上输出，请先人工检查并脱敏。安全漏洞不要发公开 Issue，按
+[`SECURITY.md`](SECURITY.md) 的私密渠道报告。
 
 ## 许可
 
