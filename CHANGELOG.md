@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.7.20 — 2026-08-21
+
+**Buyer 身份透传 + 运营/采用素材**：
+- `feat(buyer-core)`：catalog 搜索携带 `X-Buyer-Id` 买家身份（catalog 用量统计/去重买家）。
+- `docs(strategy)`：产品战略升级基线 v2.5 系列文档与实现对齐说明。
+- `docs(feedback)`：采用反馈渠道——issue 模板、反馈台账、访谈提纲与触达话术。
+- `chore(scripts)`：Veyquo 端到端 RFQ 探测脚本（本地开发用）。
+- `docs(website)`：官网联系邮箱改 `1711496337@qq.com`；移除公开案例（内部信息）；商家页移除 Hermes 询价演示链接。
+- `chore(lock)`：重锚 kiwi-catalog → `c6a0795`（0.2.5，商家接入 + 买家统计）。
+
 ## v0.7.19 — 2026-08-18
 
 **DeepSeek Harness 一键安装插件（`@harrylabsj/kiwi-dsh-plugin`）**：
