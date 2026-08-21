@@ -1,0 +1,63 @@
+name: Usage question
+description: Ask how to configure or use Kiwi in a concrete buyer, merchant, or integration scenario
+title: "question: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the outcome you need rather than only asking which command
+        to run. Remove credentials, customer data, private endpoints, and local paths.
+        Security vulnerabilities belong in the private reporting path in `SECURITY.md`.
+  - type: dropdown
+    id: role
+    attributes:
+      label: Your role
+      options:
+        - Merchant / supplier
+        - Buyer / procurement user
+        - Host or agent integrator
+        - Protocol / developer contributor
+        - Evaluating Kiwi
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+      description: Include the product or integration scenario and the result you want.
+    validations:
+      required: true
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What have you tried?
+      description: Include commands, relevant configuration keys without values, and the observed output.
+      placeholder: |
+        Command:
+        Configuration keys:
+        Observed output:
+    validations:
+      required: true
+  - type: input
+    id: kiwi_version
+    attributes:
+      label: Kiwi version / commit
+      placeholder: "0.7.19 or full commit SHA"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Node.js / OS, connected component versions, and host agent. Do not include secrets or private addresses.
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Reviewed diagnostics
+      description: Optional. Paste only redacted `kiwi doctor` output or sanitized logs. Check for private URLs, paths, provider details, and customer data first.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Link to a public example, documentation page, or related issue if available.
