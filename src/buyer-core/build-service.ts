@@ -73,7 +73,12 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
     });
     negotiator = new MarketplaceNegotiator({ baseUrl: config.marketplaceUrl });
   } else if (config.catalogUrl !== undefined) {
-    merchantIndex = new KiwiCatalogMerchantIndex({ baseUrl: config.catalogUrl });
+    // buyerAgentId 是现成的稳定买家身份（--agent / KIWI_BUYER_AGENT），
+    // 透传为 X-Buyer-Id 供 kiwi-catalog 做 distinct-buyer 用量统计。
+    merchantIndex = new KiwiCatalogMerchantIndex({
+      baseUrl: config.catalogUrl,
+      buyerId: config.buyerAgentId,
+    });
     const a2a = {
       bearerToken: config.a2aBearerToken,
       allowPrivateRanges: config.a2aAllowPrivateRanges,

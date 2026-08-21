@@ -361,6 +361,30 @@ describe("KiwiCatalogSource", () => {
     });
   });
 
+  it("buyerId 设置时每请求携带 x-buyer-id 头，未设置时不携带", async () => {
+    const seen: Array<Record<string, string>> = [];
+    const capture = (async (_i: FetchInput, init?: FetchInit): Promise<Response> => {
+      seen.push((init?.headers ?? {}) as Record<string, string>);
+      return jsonResponse({ results: [] });
+    }) as typeof fetch;
+    const withBuyer = new KiwiCatalogSource({
+      baseUrl: "https://catalog.example",
+      fetchImpl: capture,
+      buyerId: "buyer-agent:kiwi-mcp",
+      authToken: "tok",
+    });
+    await withBuyer.searchRecords();
+    expect(seen[0]?.["x-buyer-id"]).toBe("buyer-agent:kiwi-mcp");
+    expect(seen[0]?.authorization).toBe("Bearer tok");
+
+    const withoutBuyer = new KiwiCatalogSource({
+      baseUrl: "https://catalog.example",
+      fetchImpl: capture,
+    });
+    await withoutBuyer.searchRecords();
+    expect(seen[1]?.["x-buyer-id"]).toBeUndefined();
+  });
+
   it("invalid_input：未知查询键 / 空 handoff 数组 / 非法 limit / 非法 baseUrl", async () => {
     const { fetchImpl } = kiwiFetch({ search: () => jsonResponse({ results: [] }) });
     const source = new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl });
