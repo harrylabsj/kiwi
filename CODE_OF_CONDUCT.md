@@ -60,7 +60,7 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement at the project's
-public contact: **harrylabsj@gmail.com** (also listed on the project website:
+public contact: **1711496337@qq.com** (also listed on the project website:
 <https://kiwi.harrylabsj.com>).
 
 All complaints will be reviewed and investigated promptly and fairly.
