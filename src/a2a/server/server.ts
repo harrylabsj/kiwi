@@ -246,6 +246,7 @@ export class A2AServer {
       logError: this.logError,
       throttle: this.throttle,
       genericResponder: options.genericResponder,
+      stats: options.stats,
     });
   }
 

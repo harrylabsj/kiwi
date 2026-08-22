@@ -76,6 +76,50 @@ export interface InboundPipelineOptions {
   throttle?: A2AServerThrottle;
   /** 通用（非 KNP）A2A 消息响应器（issue 10 / TCK）；缺省用 spec 一致的回显。 */
   genericResponder?: GenericMessageResponder;
+  /** 商家运营统计接缝（可选，仅 merchant 节点注入）：message_received 落账
+   *  成功后本地记录买家触达。记录失败绝不阻断消息处理。 */
+  stats?: BuyerContactRecorder;
+}
+
+/** 商家运营统计记录接缝（src/merchant/stats-store.ts 实现；结构化类型解耦）。 */
+export interface BuyerContactRecorder {
+  recordBuyerContact(event: BuyerContactRecord): void;
+}
+
+export interface BuyerContactRecord {
+  message_id: string;
+  buyer_identity: string;
+  negotiation_id: string;
+  exchange_id: string;
+  action: string;
+  skus: string[];
+  occurred_at: string;
+}
+
+/**
+ * 防御性提取 envelope 中讨论的 SKU（untrusted 输入已过 schema 校验，此处仍不假设
+ * 形状）：rfq → payload.items；offer → payload.terms.items；counter_offer →
+ * payload.proposed_terms.items；conditional_offer → payload.base_terms.items。
+ * inquiry 等无 SKU 动作与未知形状一律返回 []。
+ */
+export function extractEnvelopeSkus(envelope: NegotiationEnvelope): string[] {
+  const payload = envelope.payload as unknown as Record<string, unknown>;
+  const skus: string[] = [];
+  const collect = (container: unknown): void => {
+    if (container === null || typeof container !== "object") return;
+    const items = (container as Record<string, unknown>)["items"];
+    if (!Array.isArray(items)) return;
+    for (const item of items) {
+      if (item === null || typeof item !== "object") continue;
+      const sku = (item as Record<string, unknown>)["sku"];
+      if (typeof sku === "string" && sku !== "") skus.push(sku);
+    }
+  };
+  collect(payload);
+  collect(payload["terms"]);
+  collect(payload["proposed_terms"]);
+  collect(payload["base_terms"]);
+  return skus;
 }
 
 export interface SendMessageCaller {
@@ -217,6 +261,7 @@ export class InboundPipeline {
   private readonly logError: (message: string, err: unknown) => void;
   private readonly throttle: A2AServerThrottle | undefined;
   private readonly genericResponder: GenericMessageResponder;
+  private readonly stats: BuyerContactRecorder | undefined;
 
   constructor(options: InboundPipelineOptions) {
     this.handler = options.handler;
@@ -227,6 +272,7 @@ export class InboundPipeline {
     this.logError = options.logError;
     this.throttle = options.throttle;
     this.genericResponder = options.genericResponder ?? defaultGenericResponder;
+    this.stats = options.stats;
   }
 
   private toThrottleRequest(caller: SendMessageCaller): ThrottleRequest {
@@ -466,6 +512,25 @@ export class InboundPipeline {
           }
           this.logError("ledger append failed", err);
           throw internalServerError();
+        }
+
+        // 商家运营统计（可选接缝，仅 merchant 节点注入）：message_received 落账
+        // 成功即恰好一次（幂等重放/恢复路径都到不了这里）。统计是本地旁路——
+        // 记录失败绝不阻断消息处理，只进服务端日志。
+        if (this.stats !== undefined) {
+          try {
+            this.stats.recordBuyerContact({
+              message_id: envelope.message_id,
+              buyer_identity: senderIdentity,
+              negotiation_id: envelope.negotiation_id,
+              exchange_id: envelope.exchange_id,
+              action: envelope.action,
+              skus: extractEnvelopeSkus(envelope),
+              occurred_at: envelope.created_at,
+            });
+          } catch (statsErr) {
+            this.logError("buyer contact stats recording failed", statsErr);
+          }
         }
 
         try {

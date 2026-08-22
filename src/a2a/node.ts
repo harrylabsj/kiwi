@@ -60,6 +60,7 @@ import { defaultHandler } from "./server/handler.js";
 import { createMerchantHandler } from "./server/merchant-handler.js";
 import { LedgerStore } from "../negotiation/ledger/index.js";
 import { IdempotencyStore } from "../negotiation/idempotency/index.js";
+import { openMerchantStatsStore } from "../merchant/stats-store.js";
 import { pickFreePort } from "../supervisor/stack-config.js";
 import { registerCatalogAgent } from "../discovery/catalog-source/register.js";
 import { HttpMerchantClient } from "../agent/merchant/merchant-client.js";
@@ -417,6 +418,13 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
   const ledger = new LedgerStore({ dir, now });
   const idempotency = new IdempotencyStore({ dir, now });
 
+  // 商家运营统计（仅 merchant 角色）：买家触达落 <dataDir>/a2a/stats.sqlite，
+  // 只写本地、永不上报；供 `kiwi merchant stats` 读取。
+  const statsStore =
+    role === "merchant"
+      ? openMerchantStatsStore({ dbPath: path.join(dir, "stats.sqlite") })
+      : undefined;
+
   // merchant 定价确定性（不依赖 LLM）：merchantPolicy 提供 per-SKU floor/促销。
   const handler =
     role === "merchant"
@@ -465,6 +473,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     now,
     ...(authVerifier !== undefined ? { authVerifier } : {}),
     ...(a2aThrottle !== undefined ? { throttle: a2aThrottle } : {}),
+    ...(statsStore !== undefined ? { stats: statsStore } : {}),
   });
   const httpServer = server.createServer();
   await new Promise<void>((resolve) => httpServer.listen(port, "127.0.0.1", () => resolve()));
@@ -511,6 +520,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
         // （镜像 stop()），不留下监听中的孤儿节点。
         httpServer.closeAllConnections?.();
         await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+        statsStore?.close();
         releaseOwnerLock?.();
         if (isEphemeral) rmSync(dir, { recursive: true, force: true });
         throw err;
@@ -529,6 +539,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     async stop(): Promise<void> {
       httpServer.closeAllConnections?.();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      statsStore?.close();
       // 审查 BUG-03：持久形态不删除状态目录（重启恢复依赖它）；临时形态
       // （demo/测试）维持删除。owner 锁总是释放。
       releaseOwnerLock?.();
