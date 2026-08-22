@@ -22,6 +22,7 @@ import {
   KiwiCatalogSource,
 } from "../src/discovery/index.js";
 import { DESTINATION_TYPES } from "../src/handoff/destination.js";
+import { PRODUCT_VERSION } from "../src/product-cli.js";
 
 type FetchInput = Parameters<typeof fetch>[0];
 type FetchInit = NonNullable<Parameters<typeof fetch>[1]>;
@@ -376,6 +377,8 @@ describe("KiwiCatalogSource", () => {
     await withBuyer.searchRecords();
     expect(seen[0]?.["x-buyer-id"]).toBe("buyer-agent:kiwi-mcp");
     expect(seen[0]?.authorization).toBe("Bearer tok");
+    // 显式 UA:catalog 访问日志据此识别 kiwi buyer 及版本。
+    expect(seen[0]?.["user-agent"]).toBe(`kiwi-buyer/${PRODUCT_VERSION}`);
 
     const withoutBuyer = new KiwiCatalogSource({
       baseUrl: "https://catalog.example",
@@ -383,6 +386,7 @@ describe("KiwiCatalogSource", () => {
     });
     await withoutBuyer.searchRecords();
     expect(seen[1]?.["x-buyer-id"]).toBeUndefined();
+    expect(seen[1]?.["user-agent"]).toBe(`kiwi-buyer/${PRODUCT_VERSION}`);
   });
 
   it("invalid_input：未知查询键 / 空 handoff 数组 / 非法 limit / 非法 baseUrl", async () => {
