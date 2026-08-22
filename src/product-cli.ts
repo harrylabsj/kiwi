@@ -109,6 +109,11 @@ Usage:
                                           反代 → 起 A2A 节点，退出时清理 Caddy
                                           （需已安装 Caddy）
   kiwi merchant listings                  [D2] 已发布 Listing 查看 —— 尚未实现
+  kiwi merchant stats [--days N] [--data-dir <dir>]
+                                          商家侧运营统计：去重买家数 / 触达事件 /
+                                          磋商数 / SKU 热度（本地 stats.sqlite，
+                                          数据只在商家本机，不上报；天数 UTC，
+                                          缺省 14 天，1-90）
   kiwi merchant status                    [D1] Merchant 运行时状态 —— 尚未实现
   kiwi merchant doctor                    [D3] Merchant 侧组件健康 —— 尚未实现
 

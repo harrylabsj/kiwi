@@ -63,7 +63,8 @@ export {
 // TrustPolicy + 身份绑定）。实现位于 src/trust/identity。
 export { HttpMessageSignatureVerifier } from "../../trust/identity/index.js";
 export { declineHandler, defaultHandler, echoHandler } from "./handler.js";
-export { InboundPipeline } from "./pipeline.js";
+export { InboundPipeline, extractEnvelopeSkus } from "./pipeline.js";
+export type { BuyerContactRecorder, BuyerContactRecord } from "./pipeline.js";
 export { TaskRegistry, isKnownTaskState, newArtifactId, newTaskId } from "./task-registry.js";
 export {
   JSONRPC_CODES,

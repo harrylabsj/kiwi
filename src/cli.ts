@@ -73,6 +73,7 @@ import { cmdWeixin, weixinUsage } from "./weixin/cli-weixin.js";
 import { DEFAULT_SHOPPING_DB_PATH, loadMerchantCredentials, merchantInit, slugifyMerchantId } from "./product-init.js";
 import readline from "node:readline";
 import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
+import { merchantStats } from "./product-merchant.js";
 import { merchantPublish } from "./product-publish.js";
 import { catalogServe } from "./product-catalog.js";
 import { extractPublicDomain, runMerchantSetupPublic, SetupPublicError, validatePublicDomain } from "./product-setup-public.js";
@@ -157,6 +158,7 @@ interface ParsedArgs {
   ownerId?: string;
   autoNegotiate: boolean;
   limit?: string;
+  days?: string;
   category?: string;
   region?: string;
   listingType?: string;
@@ -200,6 +202,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let ownerId: string | undefined;
   let autoNegotiate = false;
   let limit: string | undefined;
+  let days: string | undefined;
   let category: string | undefined;
   let region: string | undefined;
   let listingType: string | undefined;
@@ -258,6 +261,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       autoNegotiate = true;
     } else if (arg === "--limit") {
       limit = argv[++i];
+    } else if (arg === "--days") {
+      days = argv[++i];
     } else if (arg === "--category") {
       category = argv[++i];
     } else if (arg === "--region") {
@@ -322,6 +327,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       merchantName = arg.slice("--name=".length);
     } else if (arg !== undefined && arg.startsWith("--data-dir=")) {
       dataDir = arg.slice("--data-dir=".length);
+    } else if (arg !== undefined && arg.startsWith("--days=")) {
+      days = arg.slice("--days=".length);
     } else if (arg !== undefined && arg.startsWith("--domain=")) {
       domain = arg.slice("--domain=".length);
     } else if (arg !== undefined && arg.startsWith("--caddyfile=")) {
@@ -365,6 +372,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   if (agentId !== undefined) out.agentId = agentId;
   if (ownerId !== undefined) out.ownerId = ownerId;
   if (limit !== undefined) out.limit = limit;
+  if (days !== undefined) out.days = days;
   if (category !== undefined) out.category = category;
   if (region !== undefined) out.region = region;
   if (listingType !== undefined) out.listingType = listingType;
@@ -955,11 +963,46 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   if (sub === "publish") return await cmdMerchantPublish(args);
   if (sub === "setup-public") return await cmdMerchantSetupPublic(args);
   if (sub === "up") return await cmdMerchantUp(args);
+  if (sub === "stats") return await cmdMerchantStats(args);
   if (sub === "listings") return notImplementedProduct("kiwi merchant listings", "D2");
   if (sub === "status") return notImplementedProduct("kiwi merchant status", "D1");
   if (sub === "doctor") return notImplementedProduct("kiwi merchant doctor", "D3");
   process.stderr.write(`unknown merchant command: ${sub}\n`);
   return EXIT.CONFIG;
+}
+
+/**
+ * `kiwi merchant stats`：商家侧运营统计（本地数据，不上报）——
+ * 多少个不同的买家联系过我、讨论了哪些 SKU。数据由 merchant A2A 节点
+ * 在收到买家 KNP 消息时自动写入 <dataDir>/a2a/stats.sqlite。
+ */
+async function cmdMerchantStats(args: ParsedArgs): Promise<number> {
+  const profile = requireProfileOrDefault(args);
+  if (profile.role !== "merchant") {
+    process.stderr.write("kiwi merchant stats 需要 merchant profile（role: merchant）\n");
+    return EXIT.CONFIG;
+  }
+  let days: number | undefined;
+  if (args.days !== undefined) {
+    const parsed = Number(args.days);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      process.stderr.write("--days 必须是正整数\n");
+      return EXIT.CONFIG;
+    }
+    days = parsed;
+  }
+  try {
+    const report = merchantStats({
+      agentId: profile.agent_id,
+      dataDir: resolveServeDataDir(args.dataDir, profile.agent_id),
+      ...(days !== undefined ? { days } : {}),
+    });
+    printJson(report);
+    return EXIT.OK;
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.CONFIG;
+  }
 }
 
 /**
