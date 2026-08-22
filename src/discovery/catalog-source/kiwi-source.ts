@@ -34,6 +34,7 @@
  */
 
 import { CatalogSourceError } from "./errors.js";
+import { PRODUCT_VERSION } from "../../product-cli.js";
 import { isRedirectResponse, readJsonBody, SafeHttpError } from "../../net/safe-http.js";
 import { validateBaseUrl } from "./source.js";
 import type { CatalogSourceDeps } from "./source.js";
@@ -151,6 +152,9 @@ export class KiwiCatalogSource {
           signal: controller.signal,
           headers: {
             accept: "application/json",
+            // 显式 UA:catalog 访问日志据此区分 kiwi buyer(含版本)与其他
+            // Node 脚本(undici 默认 UA 不可分辨)。
+            "user-agent": `kiwi-buyer/${PRODUCT_VERSION}`,
             ...(this.deps.authToken !== undefined
               ? { authorization: `Bearer ${this.deps.authToken}` }
               : {}),
