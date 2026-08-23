@@ -592,15 +592,39 @@ receipt 不影响 Buyer 本地 pull-only 关系成立。
 
 ## 14. 指标
 
-Buyer 私有指标：
+Buyer 私有指标（全部由 `kiwi buyer supplier metrics` 本地只读计算，单 principal
+视角；数据源为本机 state.sqlite。实现：`src/product-supplier.ts` 的
+`supplierMetrics()`；测试：`tests/product-supplier-metrics.test.ts`）。
 
-- save-after-RFQ conversion；
-- active watched/preferred relationships；
-- 7/30 天关系复用率；
-- relationship-assisted Qualified RFQ；
-- 重复 Merchant / Buyer；
-- 通知命中率、暂停率和删除率；
-- identity-change review 与 stale/unreachable 比例。
+Qualified RFQ 口径：仓库内无更严格定义，统一用可计算代理——`task_events` 中
+`type='a2a_negotiated'` 且 `payload.ok=true` 的成功终态事件（经 `buyer_tasks`
+限定本 principal）。输出同时给出成功/失败计数。
+
+- save-after-RFQ conversion：`supplier_save_suggested` 事件数为分母；其中 7 天内
+  同 `merchant_id` 建立关系（`supplier_relationships.created_at` 严格晚于建议事件
+  时间）的建议数为分子。输出建议数、转化数、比率（分母 0 → null）。
+- active watched/preferred relationships：`supplier_relationships` 按
+  `relationship_type × status` 全量计数（含 deleted），另给出
+  status=active 且 type∈{watched,preferred} 的计数。
+- 7/30 天关系复用率：分母=建立已满 7/30 天的关系（`created_at + 窗口 <= now`，
+  含非 active——复用是历史事实，新关系不进分母避免虚低）；分子=建立后 7/30 天内
+  对同 merchant 发生成功 RFQ 的关系数。**代理口径**：`a2a_negotiated` 事件无
+  `merchant_id` 字段，merchant 经 `catalog_agent_id`（对 `merchant_id` 或
+  `scope.catalog_agent_id`）或 `agent_card_url` 匹配。
+- relationship-assisted Qualified RFQ：分母=成功 RFQ 数；分子=RFQ 发生前已建立
+  同 merchant 关系且该关系当前 status=active 的 RFQ 数。**代理口径**：历史状态
+  不可重建，active 取当前状态。
+- 重复 Merchant / Buyer：成功 RFQ 按 `catalog_agent_id`（缺省 `agent_card_url`）
+  分组，给出 ≥1 次与 ≥2 次的 merchant 数（及无法识别 merchant 的 RFQ 数）；
+  本地单 principal，buyer 侧恒为 1。
+- 通知命中率、暂停率和删除率：暂停率=paused/全部关系，删除率=deleted/全部关系
+  （分母含 deleted）。**严格通知命中率暂不可计算**（本地不记录通知是否触达/被
+  用户采纳），输出 null + 原因；可计算代理为 observation 按 kind 计数，及
+  observation 对应关系当前仍是 active watched 的占比。
+- identity-change review 与 stale/unreachable 比例：review 比例=
+  status=review_required/全部关系；stale/unreachable 用代理——
+  `supplier_observation_state` 中 `failure_count>0` 或 `backoff_until>now` 的
+  来源占全部来源比例。
 
 Merchant 可见指标保持现实证据：
 

@@ -75,6 +75,7 @@ import readline from "node:readline";
 import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
 import {
   supplierList,
+  supplierMetrics,
   supplierPause,
   supplierPrefer,
   supplierRemove,
@@ -1003,6 +1004,10 @@ async function cmdBuyerSupplier(args: ParsedArgs): Promise<number> {
       printJson({ ok: true, count: relationships.length, relationships });
       return EXIT.OK;
     }
+    if (action === "metrics") {
+      printJson({ ok: true, metrics: await supplierMetrics(base) });
+      return EXIT.OK;
+    }
     if (action === "pause" || action === "remove") {
       if (id === undefined || id === "") {
         process.stderr.write(`supplier ${action} 需要 <relationship-id>\n`);
@@ -1016,7 +1021,7 @@ async function cmdBuyerSupplier(args: ParsedArgs): Promise<number> {
       return EXIT.OK;
     }
     process.stderr.write(
-      `unknown supplier command: ${action ?? ""}（save|watch|prefer|list|pause|remove）\n`,
+      `unknown supplier command: ${action ?? ""}（save|watch|prefer|list|metrics|pause|remove）\n`,
     );
     return EXIT.CONFIG;
   } catch (err) {

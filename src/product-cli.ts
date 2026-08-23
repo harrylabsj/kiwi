@@ -85,6 +85,7 @@ Usage:
   kiwi buyer supplier prefer <merchant-id> [--scope <范围>] [--expires 90d]
                                           [M1] 设为偏好供应商（人类确认；非交互需 --yes）
   kiwi buyer supplier list                 [M1] 查看本地供应商关系
+  kiwi buyer supplier metrics              [M0] 供应商关系指标（§14 口径，本地只读）
   kiwi buyer supplier pause <relationship-id>
                                           [M1] 暂停观察
   kiwi buyer supplier remove <relationship-id>

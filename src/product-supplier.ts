@@ -59,6 +59,7 @@ export interface SupplierSummary {
 function openSupplierStore(options: SupplierCommandOptions): {
   db: DatabaseSync;
   store: SupplierRelationshipStore;
+  principalId: string;
 } {
   const dataDir = options.dataDir ?? agentDataDir(options.agentId ?? "kiwi-assistant");
   const dbPath = path.join(dataDir, "state.sqlite");
@@ -76,7 +77,7 @@ function openSupplierStore(options: SupplierCommandOptions): {
       throw new Error("本地 Buyer principal 不存在——先运行 `kiwi buyer start` 完成初始化");
     }
     const store = new SupplierRelationshipStore({ db, principalId: principal.principal_id });
-    return { db, store };
+    return { db, store, principalId: principal.principal_id };
   } catch (err) {
     db.close();
     throw err;
@@ -311,6 +312,326 @@ export async function supplierRemove(options: SupplierIdOptions): Promise<Suppli
       );
     }
     return summarize(store.updateStatus(options.relationshipId, "deleted"));
+  } finally {
+    db.close();
+  }
+}
+
+// ---- M0 指标（pull-relationship 设计 v0.1 §13/§14） ------------------------------
+
+const DAY_MS = 24 * 3600 * 1000;
+
+export interface SupplierMetricsOptions extends SupplierCommandOptions {
+  /** 测试注入时钟；缺省真实时间。 */
+  now?: () => string;
+}
+
+/** 比率指标：永远给出分子/分母；分母为 0 时 value=null（不虚报 0 或 1）。 */
+export interface RatioMetric {
+  value: number | null;
+  numerator: number;
+  denominator: number;
+  note?: string;
+}
+
+export interface SupplierMetricsReport {
+  generated_at: string;
+  principal_id: string;
+  /** Qualified RFQ 的可计算代理口径（仓库内无更严格定义）。 */
+  qualified_rfq_definition: string;
+  successful_rfqs: number;
+  failed_rfqs: number;
+  /** §14 save-after-RFQ conversion：7 天内同 merchant 建立关系的建议占比。 */
+  save_after_rfq: RatioMetric;
+  /** §14 active watched/preferred relationships + 全量 type×status 分布。 */
+  relationships_by_type_status: {
+    total: number;
+    active_watched_preferred: number;
+    buckets: { relationship_type: string; status: string; count: number }[];
+  };
+  /** §14 7/30 天关系复用率（分母=建立已满窗口的关系，避免新关系虚低）。 */
+  reuse_7d: RatioMetric;
+  reuse_30d: RatioMetric;
+  /** §14 relationship-assisted Qualified RFQ。 */
+  relationship_assisted_rfq: RatioMetric;
+  /** §14 重复 Merchant / Buyer（单 principal 本地视角，buyer 恒为 1）。 */
+  repeat_merchants: {
+    merchants_with_successful_rfq: number;
+    merchants_with_repeat_rfq: number;
+    successful_rfqs: number;
+    unidentified_merchant_rfqs: number;
+  };
+  observations: {
+    total: number;
+    by_kind: Record<string, number>;
+    /** 可计算代理：observation 对应关系当前仍是 active watched 的占比。 */
+    on_active_watched: RatioMetric;
+    /** 严格通知命中率本地无记录，恒 null。 */
+    notification_hit_rate: { value: null; note: string };
+  };
+  /** §14 暂停率和删除率（占全部关系，含 deleted）。 */
+  lifecycle: { paused: RatioMetric; deleted: RatioMetric };
+  /** §14 identity-change review 与 stale/unreachable 代理。 */
+  health: { review_required: RatioMetric; degraded_sources: RatioMetric };
+}
+
+function ratio(numerator: number, denominator: number, note?: string): RatioMetric {
+  const m: RatioMetric = {
+    value: denominator === 0 ? null : numerator / denominator,
+    numerator,
+    denominator,
+  };
+  if (note !== undefined) m.note = note;
+  return m;
+}
+
+interface RfqEvent {
+  created_at: string;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * a2a_negotiated 事件没有 merchant_id 字段——用 catalog_agent_id（对
+ * relationship.merchant_id 或 scope.catalog_agent_id）或 agent_card_url 匹配
+ * merchant（代理口径，§14 注明）。
+ */
+function rfqMatchesRelationship(
+  payload: Record<string, unknown>,
+  rel: SupplierRelationship,
+): boolean {
+  const caid = payload.catalog_agent_id;
+  if (
+    typeof caid === "string" &&
+    caid !== "" &&
+    (rel.merchant_id === caid || rel.scope.catalog_agent_id === caid)
+  ) {
+    return true;
+  }
+  const cardUrl = payload.agent_card_url;
+  return typeof cardUrl === "string" && cardUrl !== "" && rel.agent_card_url === cardUrl;
+}
+
+/**
+ * `kiwi buyer supplier metrics`（§13 M0 / §14）：Buyer 本地只读指标。全部数据
+ * 来自本机 state.sqlite（supplier_relationships / supplier_observations /
+ * supplier_observation_state / task_events），单 principal 视角。算不出来的
+ * 指标如实给 null + 原因，不编造。
+ */
+export async function supplierMetrics(
+  options: SupplierMetricsOptions = {},
+): Promise<SupplierMetricsReport> {
+  const { db, store, principalId } = openSupplierStore(options);
+  try {
+    const now = new Date(
+      Date.parse(options.now !== undefined ? options.now() : new Date().toISOString()),
+    ).toISOString();
+    const nowMs = Date.parse(now);
+
+    const relationships = store.listRelationships({ includeDeleted: true });
+
+    const eventRows = db
+      .prepare(
+        `SELECT e.type AS type, e.payload_json AS payload_json, e.created_at AS created_at
+         FROM task_events e JOIN buyer_tasks t ON t.task_id = e.task_id
+         WHERE t.principal_id = ? AND e.type IN ('a2a_negotiated', 'supplier_save_suggested')
+         ORDER BY e.created_at, e.event_id`,
+      )
+      .all(principalId) as { type: string; payload_json: string; created_at: string }[];
+    const successfulRfqs: RfqEvent[] = [];
+    let failedRfqs = 0;
+    const suggestions: RfqEvent[] = [];
+    for (const row of eventRows) {
+      const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+      if (row.type === "supplier_save_suggested") {
+        suggestions.push({ created_at: row.created_at, payload });
+      } else if (payload.ok === true) {
+        successfulRfqs.push({ created_at: row.created_at, payload });
+      } else {
+        failedRfqs += 1;
+      }
+    }
+
+    // a. save-after-RFQ conversion：建议后 7 天内同 merchant 建立关系（含已删除，
+    //    转化是历史事实；created_at 严格晚于建议时间）。
+    let converted = 0;
+    for (const s of suggestions) {
+      const merchant = s.payload.merchant_id;
+      if (typeof merchant !== "string") continue;
+      const t = Date.parse(s.created_at);
+      const hit = relationships.some(
+        (r) =>
+          r.merchant_id === merchant &&
+          Date.parse(r.created_at) > t &&
+          Date.parse(r.created_at) <= t + 7 * DAY_MS,
+      );
+      if (hit) converted += 1;
+    }
+    const saveAfterRfq = ratio(converted, suggestions.length, "窗口=建议事件后 7 天");
+
+    // b. type × status 分布。
+    const bucketMap = new Map<string, number>();
+    let activeWatchedPreferred = 0;
+    for (const r of relationships) {
+      const key = `${r.relationship_type}/${r.status}`;
+      bucketMap.set(key, (bucketMap.get(key) ?? 0) + 1);
+      if (
+        r.status === "active" &&
+        (r.relationship_type === "watched" || r.relationship_type === "preferred")
+      ) {
+        activeWatchedPreferred += 1;
+      }
+    }
+    const buckets = [...bucketMap.entries()]
+      .map(([key, count]) => {
+        const [relationship_type, status] = key.split("/") as [string, string];
+        return { relationship_type, status, count };
+      })
+      .sort((a, b) =>
+        `${a.relationship_type}/${a.status}`.localeCompare(`${b.relationship_type}/${b.status}`),
+      );
+
+    // c. 7/30 天复用：分母=建立已满窗口的关系（含非 active，复用是历史事实）。
+    const reuse = (days: number): RatioMetric => {
+      const eligible = relationships.filter(
+        (r) => Date.parse(r.created_at) + days * DAY_MS <= nowMs,
+      );
+      let reused = 0;
+      for (const r of eligible) {
+        const t0 = Date.parse(r.created_at);
+        const hit = successfulRfqs.some((e) => {
+          const t = Date.parse(e.created_at);
+          return t >= t0 && t <= t0 + days * DAY_MS && rfqMatchesRelationship(e.payload, r);
+        });
+        if (hit) reused += 1;
+      }
+      return ratio(
+        reused,
+        eligible.length,
+        "merchant 经 catalog_agent_id/agent_card_url 匹配（a2a_negotiated 无 merchant_id，代理口径）",
+      );
+    };
+
+    // d. relationship-assisted：RFQ 发生前已建立且当前仍 active 的同 merchant 关系。
+    //    历史状态不可重建，用当前 status='active' 代理（口径文档注明）。
+    let assisted = 0;
+    for (const e of successfulRfqs) {
+      const t = Date.parse(e.created_at);
+      const hit = relationships.some(
+        (r) =>
+          r.status === "active" &&
+          Date.parse(r.created_at) <= t &&
+          rfqMatchesRelationship(e.payload, r),
+      );
+      if (hit) assisted += 1;
+    }
+    const assistedMetric = ratio(
+      assisted,
+      successfulRfqs.length,
+      "active 取当前状态（历史状态不可重建，代理口径）",
+    );
+
+    // e. 重复 Merchant：按 catalog_agent_id（缺省 agent_card_url）分组成功 RFQ。
+    const byMerchant = new Map<string, number>();
+    let unidentified = 0;
+    for (const e of successfulRfqs) {
+      const id = e.payload.catalog_agent_id ?? e.payload.agent_card_url;
+      if (typeof id === "string" && id !== "") {
+        byMerchant.set(id, (byMerchant.get(id) ?? 0) + 1);
+      } else {
+        unidentified += 1;
+      }
+    }
+    let repeatMerchants = 0;
+    for (const n of byMerchant.values()) {
+      if (n >= 2) repeatMerchants += 1;
+    }
+
+    // f. observation 面。
+    const obsRows = db
+      .prepare(
+        `SELECT o.kind AS kind, r.relationship_type AS relationship_type, r.status AS status
+         FROM supplier_observations o
+         JOIN supplier_relationships r ON r.relationship_id = o.relationship_id
+         WHERE r.principal_id = ?`,
+      )
+      .all(principalId) as { kind: string; relationship_type: string; status: string }[];
+    const byKind: Record<string, number> = {};
+    let onActiveWatched = 0;
+    for (const o of obsRows) {
+      byKind[o.kind] = (byKind[o.kind] ?? 0) + 1;
+      if (o.status === "active" && o.relationship_type === "watched") onActiveWatched += 1;
+    }
+
+    // g. lifecycle（分母含 deleted）。
+    const total = relationships.length;
+    const paused = relationships.filter((r) => r.status === "paused").length;
+    const deleted = relationships.filter((r) => r.status === "deleted").length;
+
+    // h. health。
+    const reviewRequired = relationships.filter((r) => r.status === "review_required").length;
+    const stateRows = db
+      .prepare(
+        `SELECT s.failure_count AS failure_count, s.backoff_until AS backoff_until
+         FROM supplier_observation_state s
+         JOIN supplier_relationships r ON r.relationship_id = s.relationship_id
+         WHERE r.principal_id = ?`,
+      )
+      .all(principalId) as { failure_count: number; backoff_until: string | null }[];
+    const degraded = stateRows.filter(
+      (s) =>
+        s.failure_count > 0 ||
+        (s.backoff_until !== null && Date.parse(s.backoff_until) > nowMs),
+    ).length;
+
+    return {
+      generated_at: now,
+      principal_id: principalId,
+      qualified_rfq_definition:
+        "代理口径：task_events 中 type='a2a_negotiated' 且 payload.ok=true 的成功终态事件" +
+        "（仓库内无更严格的 Qualified RFQ 定义）",
+      successful_rfqs: successfulRfqs.length,
+      failed_rfqs: failedRfqs,
+      save_after_rfq: saveAfterRfq,
+      relationships_by_type_status: {
+        total,
+        active_watched_preferred: activeWatchedPreferred,
+        buckets,
+      },
+      reuse_7d: reuse(7),
+      reuse_30d: reuse(30),
+      relationship_assisted_rfq: assistedMetric,
+      repeat_merchants: {
+        merchants_with_successful_rfq: byMerchant.size,
+        merchants_with_repeat_rfq: repeatMerchants,
+        successful_rfqs: successfulRfqs.length,
+        unidentified_merchant_rfqs: unidentified,
+      },
+      observations: {
+        total: obsRows.length,
+        by_kind: byKind,
+        on_active_watched: ratio(
+          onActiveWatched,
+          obsRows.length,
+          "代理口径：observation 对应关系当前仍是 active watched 的占比",
+        ),
+        notification_hit_rate: {
+          value: null,
+          note: "严格命中率不可计算：本地不记录通知是否触达/被用户采纳",
+        },
+      },
+      lifecycle: {
+        paused: ratio(paused, total),
+        deleted: ratio(deleted, total),
+      },
+      health: {
+        review_required: ratio(reviewRequired, total),
+        degraded_sources: ratio(
+          degraded,
+          stateRows.length,
+          "stale/unreachable 代理：failure_count>0 或 backoff_until>now",
+        ),
+      },
+    };
   } finally {
     db.close();
   }
