@@ -17,6 +17,7 @@ import {
   fakeConnectorProduct,
 } from "../src/agent/connector/fake-connector.js";
 import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
+import { SupplierRelationshipStore } from "../src/agent/supplier/store.js";
 import { buildBuyerTools, type BuyerToolDeps } from "../src/agent/buyer/buyer-tools.js";
 import {
   executeApprovedCandidate,
@@ -60,12 +61,14 @@ const productSource = {
 interface BuyerHarness {
   db: DatabaseSync;
   store: BuyerTaskStore;
+  supplierStore: SupplierRelationshipStore;
   approvals: WriteApprovalCandidateStore;
   mode: { value: "manual" | "supervised" | "autopilot" };
   hooks: Map<string, PendingHooks>;
   getTool: (name: string) => CallableTool;
   recordCalls: Array<Record<string, unknown>>;
   capture: CapturedInbound[];
+  setNow: (t: string) => void;
   stop: () => Promise<void>;
 }
 
@@ -92,6 +95,7 @@ async function setupBuyer(
      VALUES (?, 'buyer-001', 'buyer', 'zh-CN', 'Asia/Shanghai', 3, ?, ?)`,
   ).run(PRINCIPAL, T0, T0);
   const store = new BuyerTaskStore({ db, principalId: PRINCIPAL, now: () => clock });
+  const supplierStore = new SupplierRelationshipStore({ db, principalId: PRINCIPAL, now: () => clock });
   const connector = new FakeCommerceConnector([fakeConnectorProduct()]);
   const approvals = new WriteApprovalCandidateStore({
     db,
@@ -117,17 +121,22 @@ async function setupBuyer(
       recordCalls.push({ ...input });
       return `mem-${input.negotiationId}`;
     },
+    supplierStore,
   };
   const tools = buildBuyerTools(deps);
   return {
     db,
     store,
+    supplierStore,
     approvals,
     mode,
     hooks,
     getTool: (name) => tools.find((t) => t.name === name) as unknown as CallableTool,
     recordCalls,
     capture,
+    setNow: (t: string) => {
+      clock = t;
+    },
     stop: async () => undefined,
   };
 }
@@ -469,5 +478,160 @@ describe("negotiate_buyer_task", () => {
     expect(output.ok).toBe(true);
     // 83500 minor（835.00 元）——不是 100 倍的 8,350,000。
     expect(output.facts?.offerPriceMinor).toBe(83_500);
+  });
+});
+
+/**
+ * supplier_save_suggested（pull-relationship 设计 v0.1 §13 M0）：
+ * 真实 RFQ（KNP RFQ→offer→…→accept）成功结束后，本地建议 Buyer 保存该
+ * Merchant——只写建议事件，绝不自动保存；已有 active/paused 关系或 7 天
+ * 冷却窗口内已提示过同 merchant 时不重复提示；失败的 RFQ 不提示。
+ */
+describe("supplier_save_suggested (M0)", () => {
+  const MERCHANT_ID = "merchant-001";
+  const CATALOG_AGENT_ID = "cagt_test_merchant_001";
+  const DAY_MS = 24 * 3600 * 1000;
+
+  interface NegotiationOutput {
+    ok: boolean;
+    negotiation_id?: string;
+    supplier_save_suggested?: boolean;
+    error?: string;
+  }
+
+  /** supervised 全流程：发起 → 等待批准 → /approve → 执行 → 返回工具输出。 */
+  async function runApprovedNegotiation(
+    h: BuyerHarness,
+    taskId: string,
+    extraArgs: Record<string, unknown> = {},
+  ): Promise<NegotiationOutput> {
+    const tool = h.getTool("negotiate_buyer_task");
+    const first = await tool.execute("c1", { task_id: taskId, ...extraArgs });
+    expect(first.content[0]?.type === "text" ? first.content[0].text : "").toContain("等待批准");
+    const pending = h.approvals.listPending();
+    expect(pending).toHaveLength(1);
+    const candidate = pending[0] as NonNullable<(typeof pending)[number]>;
+    h.approvals.markApproved(candidate.candidate_id);
+    const outcome = await executeApprovedCandidate(
+      h.approvals,
+      candidate.candidate_id,
+      h.hooks.get(candidate.candidate_id) as PendingHooks,
+    );
+    if (outcome.kind === "executed") return outcome.output as NegotiationOutput;
+    // execute 返回 {ok:false} 时候选标 stale（见既有失败路径测试）。
+    return { ok: false, error: `candidate ${outcome.kind}` };
+  }
+
+  /** 带候选的 ready 任务：候选的 owner_agent_id/merchant_id 与测试栈一致。 */
+  async function createTaskWithCandidate(h: BuyerHarness): Promise<string> {
+    const { task_id } = await createReadyTask(h.store);
+    const cand = h.store.upsertCandidate({
+      task_id,
+      connector_id: "kiwi-catalog",
+      platform: "kiwi-catalog",
+      external_product_id: "lst_test_001",
+      sku: "sku-001",
+      merchant_id: MERCHANT_ID,
+      owner_agent_id: CATALOG_AGENT_ID,
+    });
+    h.store.updateCandidate(cand.candidate_id, {
+      candidate_status: "shortlisted",
+      eligibility: "eligible",
+    });
+    return task_id;
+  }
+
+  it("RFQ 成功完成 → 追加 supplier_save_suggested 事件（不自动保存关系）", async () => {
+    const s = await startTestA2aStack({ productSource, capture });
+    stacks.push(s);
+    const h = await setupBuyer({ catalog: s.catalogUrl });
+    const taskId = await createTaskWithCandidate(h);
+
+    const output = await runApprovedNegotiation(h, taskId);
+    expect(output.ok).toBe(true);
+    expect(output.supplier_save_suggested).toBe(true);
+
+    const event = h.store.taskEvents(taskId).find((e) => e.type === "supplier_save_suggested");
+    expect(event).toBeDefined();
+    // merchant_id 来自候选的结构化字段（owner_agent_id 匹配），不是远程文本。
+    expect(event?.payload.merchant_id).toBe(MERCHANT_ID);
+    expect(event?.payload.catalog_agent_id).toBe(CATALOG_AGENT_ID);
+    expect(event?.payload.negotiation_id).toBe(output.negotiation_id);
+    expect(String(event?.payload.hint)).toContain(`kiwi buyer supplier save ${MERCHANT_ID}`);
+
+    // 绝不自动保存：supplier_relationships 仍为空。
+    expect(h.supplierStore.listRelationships({ includeDeleted: true })).toHaveLength(0);
+  });
+
+  it("已有 active / paused 关系 → 不提示", async () => {
+    const s = await startTestA2aStack({ productSource, capture });
+    stacks.push(s);
+    const h = await setupBuyer({ catalog: s.catalogUrl });
+
+    // active 关系抑制提示。
+    const rel = h.supplierStore.saveRelationship({
+      merchant_id: MERCHANT_ID,
+      canonical_domain: "test.example",
+      agent_card_url: `${s.merchantUrl}/.well-known/agent-card.json`,
+      relationship_type: "saved",
+      consent_source: "human_explicit",
+    });
+    const task1 = await createTaskWithCandidate(h);
+    const out1 = await runApprovedNegotiation(h, task1);
+    expect(out1.ok).toBe(true);
+    expect(out1.supplier_save_suggested).toBe(false);
+    expect(h.store.taskEvents(task1).some((e) => e.type === "supplier_save_suggested")).toBe(false);
+
+    // paused 同样抑制（关系仍存在，只是暂停观察）。
+    h.supplierStore.updateStatus(rel.relationship_id, "paused");
+    const task2 = await createTaskWithCandidate(h);
+    const out2 = await runApprovedNegotiation(h, task2);
+    expect(out2.ok).toBe(true);
+    expect(out2.supplier_save_suggested).toBe(false);
+    expect(h.store.taskEvents(task2).some((e) => e.type === "supplier_save_suggested")).toBe(false);
+  });
+
+  it("冷却窗口：7 天内同 merchant 不重复提示，窗口过后再提示", async () => {
+    const s = await startTestA2aStack({ productSource, capture });
+    stacks.push(s);
+    const h = await setupBuyer({ catalog: s.catalogUrl });
+
+    const task1 = await createTaskWithCandidate(h);
+    const out1 = await runApprovedNegotiation(h, task1);
+    expect(out1.supplier_save_suggested).toBe(true);
+
+    // 6 天后另一次成功 RFQ（新任务、同 merchant）：冷却窗口内，不重复。
+    h.setNow(new Date(Date.parse(T0) + 6 * DAY_MS).toISOString());
+    const task2 = await createTaskWithCandidate(h);
+    const out2 = await runApprovedNegotiation(h, task2);
+    expect(out2.ok).toBe(true);
+    expect(out2.supplier_save_suggested).toBe(false);
+    expect(h.store.taskEvents(task2).some((e) => e.type === "supplier_save_suggested")).toBe(false);
+
+    // 8 天后（距首次建议 > 7 天）：再次提示。
+    h.setNow(new Date(Date.parse(T0) + 8 * DAY_MS).toISOString());
+    const task3 = await createTaskWithCandidate(h);
+    const out3 = await runApprovedNegotiation(h, task3);
+    expect(out3.ok).toBe(true);
+    expect(out3.supplier_save_suggested).toBe(true);
+    expect(
+      h.store.taskEvents(task3).filter((e) => e.type === "supplier_save_suggested"),
+    ).toHaveLength(1);
+  });
+
+  it("RFQ 失败（商家不存在）→ 不提示", async () => {
+    const s = await startTestA2aStack({ productSource });
+    stacks.push(s);
+    const h = await setupBuyer({ catalog: s.catalogUrl });
+    const { task_id } = await createReadyTask(h.store);
+
+    const output = await runApprovedNegotiation(h, task_id, {
+      catalog_agent_id: "cagt_missing",
+    });
+    expect(output.ok).toBe(false);
+    expect(h.store.getTask(task_id)?.status).toBe("ready");
+    expect(h.store.taskEvents(task_id).some((e) => e.type === "supplier_save_suggested")).toBe(
+      false,
+    );
   });
 });

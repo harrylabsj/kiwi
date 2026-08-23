@@ -53,6 +53,7 @@ import { buildNegotiationChatTools, writeGateText } from "../negotiation-chat.js
 import { routeWriteCandidate, type WriteGateDeps } from "../write-gate.js";
 import { runSearchCycle } from "./search-loop.js";
 import type { BuyerTaskStore } from "./task-store.js";
+import type { SupplierRelationshipStore } from "../supplier/store.js";
 import type { ConsultationLink, BuyerTaskStatus } from "./types.js";
 import type { TaskConstraints, TaskEvent, TaskIntent } from "./types.js";
 import { BuyerTaskError } from "./types.js";
@@ -251,6 +252,59 @@ export interface BuyerToolDeps {
    * 工具（agreement → 审批门 → 安全交接）；缺失时工具不挂载（fail closed）。
    */
   handoff?: { ledger: HandoffEventStore; idempotency: HandoffIdempotencyStore };
+  /**
+   * 供应商关系存储（pull-relationship 设计 v0.1 §13 M0；kernel 注入）。提供时
+   * RFQ 成功后写 `supplier_save_suggested` 本地建议事件；缺失时不建议。
+   * 绝不自动保存——保存只能由人类显式运行 `kiwi buyer supplier save`。
+   */
+  supplierStore?: SupplierRelationshipStore;
+}
+
+/** 同一 merchant 保存建议的冷却窗口：7 天内只提示一次（§13 M0，不刷屏）。 */
+const SUPPLIER_SAVE_SUGGESTION_COOLDOWN_MS = 7 * 24 * 3600 * 1000;
+
+/**
+ * RFQ 成功后的本地保存建议（§13 M0：在真实 RFQ 结束后询问 Buyer 是否愿意
+ * 保存该 Merchant）。只追加一条 `supplier_save_suggested` 任务事件（带
+ * merchant_id 与来源磋商引用），绝不写 supplier_relationships。幂等/不刷屏：
+ * 已有 active/paused 关系、或冷却窗口内已有同 merchant 的建议事件时不重复。
+ */
+function maybeSuggestSupplierSave(
+  deps: BuyerToolDeps,
+  input: {
+    task_id: string;
+    merchant_id: string;
+    catalog_agent_id: string;
+    negotiation_id: string;
+  },
+): boolean {
+  const supplierStore = deps.supplierStore;
+  if (supplierStore === undefined) return false; // 未接线 → 不建议（可选依赖）
+  const hasRelationship = supplierStore
+    .listRelationships({ statuses: ["active", "paused"] })
+    .some((r) => r.merchant_id === input.merchant_id);
+  if (hasRelationship) return false;
+  const since = new Date(
+    Date.parse(deps.now()) - SUPPLIER_SAVE_SUGGESTION_COOLDOWN_MS,
+  ).toISOString();
+  const recentlySuggested = deps.store
+    .eventsOfType("supplier_save_suggested", since)
+    .some((e) => e.payload.merchant_id === input.merchant_id);
+  if (recentlySuggested) return false;
+  return deps.store.appendEvent(
+    input.task_id,
+    "supplier_save_suggested",
+    {
+      merchant_id: input.merchant_id,
+      catalog_agent_id: input.catalog_agent_id,
+      negotiation_id: input.negotiation_id,
+      hint:
+        `可运行 \`kiwi buyer supplier save ${input.merchant_id}\` 保存该供应商` +
+        "（保存动作只能由人类显式执行，agent 不会自动保存）",
+    },
+    "model",
+    `supplier-save-suggested:${input.task_id}:${input.merchant_id}:${input.negotiation_id}`,
+  );
 }
 
 /**
@@ -436,6 +490,21 @@ async function executeNegotiateBuyerTask(
       "model",
       eventKey,
     );
+    // §13 M0：RFQ 成功后的本地保存建议。merchant_id 优先取任务候选中
+    // owner_agent_id 匹配者的结构化 merchant_id（catalog listing 字段，非
+    // 远程文本解析）；无候选时回退 catalog_agent_id——与 product-supplier.ts
+    // 的 `record.merchant_id ?? record.catalog_agent_id` 同一回退语义。
+    const merchantId =
+      store
+        .listCandidates(a.task_id)
+        .find((c) => c.owner_agent_id === result.catalogAgentId)?.merchant_id ??
+      result.catalogAgentId;
+    const supplierSaveSuggested = maybeSuggestSupplierSave(deps, {
+      task_id: a.task_id,
+      merchant_id: merchantId,
+      catalog_agent_id: result.catalogAgentId,
+      negotiation_id: result.negotiationId,
+    });
     await deps
       .recordNegotiation?.({
         negotiationId: result.negotiationId,
@@ -459,6 +528,7 @@ async function executeNegotiateBuyerTask(
       catalog_agent_id: result.catalogAgentId,
       agreement_id: result.agreement?.agreement_id ?? null,
       facts,
+      supplier_save_suggested: supplierSaveSuggested,
       summary: summarizeNegotiation(result),
     };
   } catch (err) {

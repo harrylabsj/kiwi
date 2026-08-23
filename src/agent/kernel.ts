@@ -445,8 +445,15 @@ export class AgentKernel {
       // 与 TaskScheduler 同一 DB、同一 tick 串行链；catalogSource 不可得时仍可
       // 做 Agent Card / UCP Profile 直拉（容错：可选依赖缺省不阻塞构造）。
       // trustStore 落 agent data dir（trust/ 子目录，首次观察时创建）。
+      // 同一 store 也注入 buyer 工具：RFQ 成功后的 supplier_save_suggested
+      // 本地建议要查已有关系（§13 M0）。
+      const supplierStore = new SupplierRelationshipStore({
+        db,
+        principalId: principal.principal_id,
+        now: clock,
+      });
       supplierScheduler = new SupplierScheduler({
-        store: new SupplierRelationshipStore({ db, principalId: principal.principal_id, now: clock }),
+        store: supplierStore,
         now: clock,
         ...(options.catalog !== undefined
           ? { catalogSource: new KiwiCatalogSource({ baseUrl: options.catalog }) }
@@ -480,6 +487,7 @@ export class AgentKernel {
         now: clock,
         recordNegotiation: (input) => rememberNegotiation(store, input),
         handoff: { ledger: handoffLedger, idempotency: handoffIdempotency },
+        supplierStore,
       });
     } else if (
       options.profile.role === "merchant" &&

@@ -468,6 +468,19 @@ export class BuyerTaskStore {
     return rows.map((r) => this.rowToEvent(r));
   }
 
+  /**
+   * 某类型在 since（含）之后的事件（跨任务扫描）——如 supplier_save_suggested
+   * 的冷却窗口判断：同一 merchant 的提示可能在不同任务上产生（§13 M0）。
+   */
+  eventsOfType(type: string, since: string): TaskEvent[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM task_events WHERE type = ? AND created_at >= ? ORDER BY created_at, event_id",
+      )
+      .all(type, since) as Record<string, unknown>[];
+    return rows.map((r) => this.rowToEvent(r));
+  }
+
   // ---- candidates & observations --------------------------------------------
 
   /**
