@@ -59,9 +59,9 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at the project's
-public contact: **1711496337@qq.com** (also listed on the project website:
-<https://kiwi.harrylabsj.com>).
+reported by opening a minimal GitHub issue that requests private contact from
+the maintainers. Do not include sensitive incident details in the public issue:
+<https://github.com/harrylabsj/kiwi/issues/new>.
 
 All complaints will be reviewed and investigated promptly and fairly.
 

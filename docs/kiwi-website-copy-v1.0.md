@@ -99,7 +99,7 @@ Kiwi Network——开放、受运营、可验证。
 ### 联系方式
 
 ```
-Contact: 1711496337@qq.com · 微信 hddsh2025
+Contact: https://github.com/harrylabsj/kiwi/issues
 ```
 
 ### 页脚信任行
