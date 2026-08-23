@@ -135,8 +135,8 @@ describe("schema v3 migration (§11.8, §16)", () => {
     const version = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as {
       v: number;
     };
-    expect(version.v).toBe(5);
-    expect(MEMORY_SCHEMA_VERSION).toBe(5);
+    expect(version.v).toBe(6);
+    expect(MEMORY_SCHEMA_VERSION).toBe(6);
     db.close();
   });
 

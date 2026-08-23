@@ -79,6 +79,16 @@ Usage:
   kiwi buyer search <需求描述>             [D4] Product-first 搜索（listing → Merchant
                                           Agent；--catalog/--limit/--category/--region）
   kiwi buyer tasks [--data-dir <dir>]      [D4] 查看 Buyer 任务（start 运行后）
+  kiwi buyer supplier save <merchant-id>   [M1] 保存供应商（不轮询；经 --catalog 解析）
+  kiwi buyer supplier watch <merchant-id> [--query <词>] [--region <区域>] [--interval <秒≥3600>]
+                                          [M1] 建立观察关系（人类确认；非交互需 --yes）
+  kiwi buyer supplier prefer <merchant-id> [--scope <范围>] [--expires 90d]
+                                          [M1] 设为偏好供应商（人类确认；非交互需 --yes）
+  kiwi buyer supplier list                 [M1] 查看本地供应商关系
+  kiwi buyer supplier pause <relationship-id>
+                                          [M1] 暂停观察
+  kiwi buyer supplier remove <relationship-id>
+                                          [M1] 删除关系（软删：立即停止拉取）
 
 Buyer 只需要 Kiwi；不感知 shopping-cli / kiwi-catalog。
 `;

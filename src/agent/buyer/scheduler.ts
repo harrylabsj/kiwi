@@ -32,6 +32,7 @@ import type { BuyerTaskStore } from "./task-store.js";
 import type { BuyerTask, ProductObservation, TrackingRule } from "./types.js";
 import { BuyerTaskError } from "./types.js";
 import type { KiwiCatalogSource } from "../../discovery/catalog-source/kiwi-source.js";
+import type { SupplierTickResult } from "../supplier/scheduler.js";
 
 export interface SchedulerOptions {
   store: BuyerTaskStore;
@@ -61,6 +62,8 @@ export interface TickResult {
   tasks_searched: string[];
   tasks_expired: string[];
   errors: string[];
+  /** M1：供应商关系 pull tick 汇总（buyer kernel 配置了 SupplierScheduler 时附加）。 */
+  supplier?: SupplierTickResult;
 }
 
 const DEFAULT_BUDGET: Required<TickBudget> = { max_requests: 20, max_rules: 50, max_tasks: 5 };

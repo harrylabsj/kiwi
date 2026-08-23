@@ -46,6 +46,9 @@ import {
 import { buildBuyerTools } from "./buyer/buyer-tools.js";
 import { TaskScheduler, type TickBudget, type TickResult } from "./buyer/scheduler.js";
 import { BuyerTaskStore } from "./buyer/task-store.js";
+import { SupplierScheduler } from "./supplier/scheduler.js";
+import { SupplierRelationshipStore } from "./supplier/store.js";
+import { TrustRecordStore } from "../trust/records/index.js";
 import { buildMemoryTools } from "./chat-tools.js";
 import type { CommerceConnector } from "./connector/types.js";
 import { AGENT_MODES, DEFAULT_AGENT_MODE, isAgentMode, type AgentMode } from "./mode.js";
@@ -279,6 +282,8 @@ export class AgentKernel {
   private closed = false;
   private readonly taskStore?: BuyerTaskStore;
   private readonly scheduler?: TaskScheduler;
+  /** M1：Buyer-owned supplier pull scheduler（buyer 角色构造；与 TaskScheduler 同一 tick 链）。 */
+  private readonly supplierScheduler?: SupplierScheduler;
   private readonly approvals?: WriteApprovalCandidateStore;
   /** v0.7.0 KTH：handoff 存储（open() 构造，buyer 角色注入）。 */
   private readonly handoffRuntime?: {
@@ -329,6 +334,7 @@ export class AgentKernel {
     harness: AgentHarness;
     taskStore?: BuyerTaskStore;
     scheduler?: TaskScheduler;
+    supplierScheduler?: SupplierScheduler;
     approvals?: WriteApprovalCandidateStore;
     handoffRuntime?: { ledger: HandoffEventStore; idempotency: HandoffIdempotencyStore };
     commerceClient?: CommerceClient;
@@ -349,6 +355,7 @@ export class AgentKernel {
     this.harness = options.harness;
     if (options.taskStore !== undefined) this.taskStore = options.taskStore;
     if (options.scheduler !== undefined) this.scheduler = options.scheduler;
+    if (options.supplierScheduler !== undefined) this.supplierScheduler = options.supplierScheduler;
     if (options.approvals !== undefined) this.approvals = options.approvals;
     if (options.handoffRuntime !== undefined) this.handoffRuntime = options.handoffRuntime;
     if (options.commerceClient !== undefined) this.commerceClient = options.commerceClient;
@@ -413,6 +420,7 @@ export class AgentKernel {
     approvals.expireForRecovery();
     let taskStore: BuyerTaskStore | undefined;
     let scheduler: TaskScheduler | undefined;
+    let supplierScheduler: SupplierScheduler | undefined;
     let buyerTools: ReturnType<typeof buildBuyerTools> = [];
     let merchantTools: ReturnType<typeof buildMerchantTools> = [];
     let handoffRuntime:
@@ -432,6 +440,18 @@ export class AgentKernel {
         ...(options.catalog !== undefined
           ? { catalogSource: new KiwiCatalogSource({ baseUrl: options.catalog }) }
           : {}),
+      });
+      // M1：Buyer-owned supplier pull scheduler（pull-relationship §7.1/§8）。
+      // 与 TaskScheduler 同一 DB、同一 tick 串行链；catalogSource 不可得时仍可
+      // 做 Agent Card / UCP Profile 直拉（容错：可选依赖缺省不阻塞构造）。
+      // trustStore 落 agent data dir（trust/ 子目录，首次观察时创建）。
+      supplierScheduler = new SupplierScheduler({
+        store: new SupplierRelationshipStore({ db, principalId: principal.principal_id, now: clock }),
+        now: clock,
+        ...(options.catalog !== undefined
+          ? { catalogSource: new KiwiCatalogSource({ baseUrl: options.catalog }) }
+          : {}),
+        trustStore: new TrustRecordStore({ dir: path.dirname(paths.db), now: clock }),
       });
       // v0.7.0 KTH：handoff 存储（Ledger 事件 + 执行幂等）落在 agent data dir，
       // 注入 buyer 工具（handoff_agreement 工具挂载）。
@@ -526,6 +546,7 @@ export class AgentKernel {
       now: clock,
       ...(taskStore !== undefined ? { taskStore } : {}),
       ...(scheduler !== undefined ? { scheduler } : {}),
+      ...(supplierScheduler !== undefined ? { supplierScheduler } : {}),
       ...(options.commerceClient !== undefined ? { commerceClient: options.commerceClient } : {}),
       ...(options.merchantClient !== undefined ? { merchantClient: options.merchantClient } : {}),
       ...(options.broker !== undefined ? { broker: options.broker } : {}),
@@ -834,16 +855,23 @@ export class AgentKernel {
       // 审查 P3：交付域同样清扫——DELIVERED/LAUNCHED 打开时限过期落
       // handoff_expired（此前该事件全仓无生产者，"过期未打开"不可观测）。
       this.handoffRuntime?.ledger.sweepExpiredHandoffs(this.clock());
-      if (this.scheduler === undefined) {
-        return {
-          checked_rules: 0,
-          notifications: [],
-          tasks_searched: [],
-          tasks_expired: [],
-          errors: [],
-        };
+      const empty: TickResult = {
+        checked_rules: 0,
+        notifications: [],
+        tasks_searched: [],
+        tasks_expired: [],
+        errors: [],
+      };
+      const result =
+        this.scheduler === undefined ? empty : await this.scheduler.tick(budget);
+      // M1：供应商关系 pull tick 走同一 kernel 串行链，共享请求预算；
+      // supplier tick 失败不影响 task tick 结果（错误进 supplier.errors）。
+      if (this.supplierScheduler !== undefined) {
+        result.supplier = await this.supplierScheduler.tick({
+          ...(budget.max_requests !== undefined ? { max_requests: budget.max_requests } : {}),
+        });
       }
-      return this.scheduler.tick(budget);
+      return result;
     });
   }
 

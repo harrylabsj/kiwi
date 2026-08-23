@@ -73,6 +73,14 @@ import { cmdWeixin, weixinUsage } from "./weixin/cli-weixin.js";
 import { DEFAULT_SHOPPING_DB_PATH, loadMerchantCredentials, merchantInit, slugifyMerchantId } from "./product-init.js";
 import readline from "node:readline";
 import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
+import {
+  supplierList,
+  supplierPause,
+  supplierPrefer,
+  supplierRemove,
+  supplierSave,
+  supplierWatch,
+} from "./product-supplier.js";
 import { merchantStats } from "./product-merchant.js";
 import { merchantPublish } from "./product-publish.js";
 import { catalogServe } from "./product-catalog.js";
@@ -180,6 +188,11 @@ interface ParsedArgs {
   check: boolean;
   caddyfile?: string;
   file?: string;
+  yes: boolean;
+  query?: string;
+  interval?: string;
+  scope?: string;
+  expires?: string;
 }
 
 /** 导出供测试（审查 P2-L：--a2a flag 解析回归锁定）。 */
@@ -224,6 +237,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let check = false;
   let caddyfile: string | undefined;
   let file: string | undefined;
+  let yes = false;
+  let query: string | undefined;
+  let interval: string | undefined;
+  let scope: string | undefined;
+  let expires: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--profile") {
@@ -313,6 +331,16 @@ export function parseArgs(argv: string[]): ParsedArgs {
       caddyfile = argv[++i];
     } else if (arg === "--file") {
       file = argv[++i];
+    } else if (arg === "--yes" || arg === "-y") {
+      yes = true;
+    } else if (arg === "--query") {
+      query = argv[++i];
+    } else if (arg === "--interval") {
+      interval = argv[++i];
+    } else if (arg === "--scope") {
+      scope = argv[++i];
+    } else if (arg === "--expires") {
+      expires = argv[++i];
     } else if (arg !== undefined && arg.startsWith("--profile=")) {
       profile = arg.slice("--profile=".length);
     } else if (arg !== undefined && arg.startsWith("--dir=")) {
@@ -335,6 +363,14 @@ export function parseArgs(argv: string[]): ParsedArgs {
       caddyfile = arg.slice("--caddyfile=".length);
     } else if (arg !== undefined && arg.startsWith("--file=")) {
       file = arg.slice("--file=".length);
+    } else if (arg !== undefined && arg.startsWith("--query=")) {
+      query = arg.slice("--query=".length);
+    } else if (arg !== undefined && arg.startsWith("--interval=")) {
+      interval = arg.slice("--interval=".length);
+    } else if (arg !== undefined && arg.startsWith("--scope=")) {
+      scope = arg.slice("--scope=".length);
+    } else if (arg !== undefined && arg.startsWith("--expires=")) {
+      expires = arg.slice("--expires=".length);
     } else if (arg !== undefined && !arg.startsWith("-")) {
       command.push(arg);
     } else {
@@ -357,6 +393,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     qrScale,
     noQr,
     check,
+    yes,
   };
   if (profile !== undefined) out.profile = profile;
   if (dir !== undefined) out.dir = dir;
@@ -384,6 +421,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
   if (caddyfile !== undefined) out.caddyfile = caddyfile;
   if (file !== undefined) out.file = file;
   if (catalogHost !== undefined) out.catalogHost = catalogHost;
+  if (query !== undefined) out.query = query;
+  if (interval !== undefined) out.interval = interval;
+  if (scope !== undefined) out.scope = scope;
+  if (expires !== undefined) out.expires = expires;
   return out;
 }
 
@@ -874,8 +915,114 @@ async function routeBuyer(sub: string | undefined, args: ParsedArgs): Promise<nu
   if (sub === "init") return await cmdBuyerInit(args);
   if (sub === "search") return await cmdBuyerSearch(args);
   if (sub === "tasks") return await cmdBuyerTasks(args);
+  if (sub === "supplier") return await cmdBuyerSupplier(args);
   process.stderr.write(`unknown buyer command: ${sub}\n`);
   return EXIT.CONFIG;
+}
+
+/**
+ * `kiwi buyer supplier ...`（pull-relationship 设计 v0.1 §11，M1）：
+ * Buyer-owned 本地供应商关系命令。save/watch/prefer 需要经 kiwi-catalog
+ * 解析 Merchant 公开 record；list/pause/remove 只操作本地 store。
+ */
+async function cmdBuyerSupplier(args: ParsedArgs): Promise<number> {
+  // command = ["buyer", "supplier", <action>, <id...>]
+  const action = args.command[2];
+  const id = args.command[3];
+  const base = {
+    ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+    ...(args.agentId !== undefined ? { agentId: args.agentId } : {}),
+  };
+  const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
+  /** watched/preferred 的人类明确确认：TTY 交互提问；非交互必须显式 --yes。 */
+  const consent = {
+    yes: args.yes,
+    ...(process.stdin.isTTY && !args.yes
+      ? {
+          confirm: async (): Promise<boolean> => {
+            const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+            try {
+              const answer = await new Promise<string>((resolve) => {
+                rl.question(
+                  "确认建立该供应商观察/偏好关系（Buyer 本地定期拉取公开信息）？[y/N] ",
+                  resolve,
+                );
+              });
+              return answer.trim().toLowerCase() === "y";
+            } finally {
+              rl.close();
+            }
+          },
+        }
+      : {}),
+  };
+  try {
+    if (action === "save" || action === "watch" || action === "prefer") {
+      if (id === undefined || id === "") {
+        process.stderr.write(`supplier ${action} 需要 <merchant-id>\n`);
+        return EXIT.CONFIG;
+      }
+      if (action === "save") {
+        printJson({ ok: true, relationship: await supplierSave({ ...base, merchantId: id, catalogUrl: catalog }) });
+      } else if (action === "watch") {
+        const intervalSeconds =
+          args.interval !== undefined ? Number(args.interval) : undefined;
+        if (args.interval !== undefined && !Number.isInteger(intervalSeconds)) {
+          process.stderr.write("--interval 必须是整数秒（≥3600）\n");
+          return EXIT.CONFIG;
+        }
+        printJson({
+          ok: true,
+          relationship: await supplierWatch({
+            ...base,
+            merchantId: id,
+            catalogUrl: catalog,
+            ...(args.query !== undefined ? { query: args.query } : {}),
+            ...(args.region !== undefined ? { region: args.region } : {}),
+            ...(intervalSeconds !== undefined ? { intervalSeconds } : {}),
+            ...consent,
+          }),
+        });
+      } else {
+        printJson({
+          ok: true,
+          relationship: await supplierPrefer({
+            ...base,
+            merchantId: id,
+            catalogUrl: catalog,
+            ...(args.scope !== undefined ? { scope: args.scope } : {}),
+            ...(args.expires !== undefined ? { expires: args.expires } : {}),
+            ...consent,
+          }),
+        });
+      }
+      return EXIT.OK;
+    }
+    if (action === "list") {
+      const relationships = await supplierList(base);
+      printJson({ ok: true, count: relationships.length, relationships });
+      return EXIT.OK;
+    }
+    if (action === "pause" || action === "remove") {
+      if (id === undefined || id === "") {
+        process.stderr.write(`supplier ${action} 需要 <relationship-id>\n`);
+        return EXIT.CONFIG;
+      }
+      const relationship =
+        action === "pause"
+          ? await supplierPause({ ...base, relationshipId: id })
+          : await supplierRemove({ ...base, relationshipId: id });
+      printJson({ ok: true, relationship });
+      return EXIT.OK;
+    }
+    process.stderr.write(
+      `unknown supplier command: ${action ?? ""}（save|watch|prefer|list|pause|remove）\n`,
+    );
+    return EXIT.CONFIG;
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.CONFIG;
+  }
 }
 
 /** `kiwi buyer init`（D4）：生成 buyer profile（无需 shopping-cli）。 */

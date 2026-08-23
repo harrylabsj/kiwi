@@ -24,7 +24,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const MEMORY_SCHEMA_VERSION = 5;
+export const MEMORY_SCHEMA_VERSION = 6;
 
 export class MigrationError extends Error {
   constructor(message: string) {
@@ -277,6 +277,72 @@ const MIGRATION_5 = `
 ALTER TABLE product_candidates ADD COLUMN merchant_name TEXT;
 `;
 
+const MIGRATION_6 = `
+-- M1 Buyer-owned supplier relationships（pull-relationship 设计 v0.1 §6）：
+-- 关系与观察规则属于 Buyer Core 本地，独立表，不塞进 buyer_tasks。
+CREATE TABLE supplier_relationships (
+  relationship_id TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+  merchant_id TEXT NOT NULL,
+  canonical_domain TEXT NOT NULL,
+  agent_card_url TEXT NOT NULL,
+  ucp_profile_url TEXT,
+  relationship_type TEXT NOT NULL CHECK (relationship_type IN ('saved','watched','preferred')),
+  scope_json TEXT NOT NULL DEFAULT '{}',
+  policy_json TEXT NOT NULL DEFAULT '{}',
+  consent_source TEXT NOT NULL CHECK (consent_source IN ('human_explicit','delegated_policy')),
+  status TEXT NOT NULL CHECK (status IN ('active','paused','review_required','expired','deleted')),
+  -- M3 receipt 预留列（§10）：M1 不实现 receipt 收发，receipt_status 恒为 'none'。
+  receipt_status TEXT NOT NULL DEFAULT 'none' CHECK (receipt_status IN ('none','attested','revoke_pending')),
+  receipt_expires_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT
+);
+CREATE INDEX idx_supplier_relationships_principal ON supplier_relationships (principal_id, status);
+
+CREATE TABLE supplier_observation_state (
+  relationship_id TEXT NOT NULL REFERENCES supplier_relationships(relationship_id),
+  source_type TEXT NOT NULL CHECK (source_type IN ('catalog_search','agent_card','ucp_profile','ucp_catalog')),
+  source_url_or_ref TEXT,
+  etag TEXT,
+  last_modified TEXT,
+  source_revision TEXT,
+  content_digest TEXT,
+  -- 上一次成功拉取的规范化快照（只含固定 DTO 字段），供下次 diff 出
+  -- listing_added/updated/withdrawn 等具体变化 kind。
+  snapshot_json TEXT,
+  last_checked_at TEXT,
+  last_success_at TEXT,
+  next_check_at TEXT,
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  backoff_until TEXT,
+  unchanged_count INTEGER NOT NULL DEFAULT 0,
+  last_verified_fingerprint TEXT,
+  PRIMARY KEY (relationship_id, source_type)
+);
+CREATE INDEX idx_supplier_obs_state_due ON supplier_observation_state (next_check_at)
+  WHERE next_check_at IS NOT NULL;
+
+-- 只存规范化事实差异（§6.3），不保存可执行远程内容；content_digest 去重。
+CREATE TABLE supplier_observations (
+  observation_id TEXT PRIMARY KEY,
+  relationship_id TEXT NOT NULL REFERENCES supplier_relationships(relationship_id),
+  kind TEXT NOT NULL CHECK (kind IN (
+    'listing_added','listing_updated','listing_withdrawn','capability_changed',
+    'availability_hint_changed','lead_time_hint_changed','profile_or_identity_changed',
+    'freshness_changed','unreachable')),
+  source_type TEXT NOT NULL CHECK (source_type IN ('catalog_search','agent_card','ucp_profile','ucp_catalog')),
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  content_digest TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  fresh_until TEXT,
+  verified INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (relationship_id, kind, content_digest)
+);
+CREATE INDEX idx_supplier_observations_rel ON supplier_observations (relationship_id, observed_at);
+`;
+
 /** Ordered migrations: version number -> SQL. */
 const MIGRATIONS: Readonly<Record<number, string>> = {
   1: MIGRATION_1,
@@ -284,6 +350,7 @@ const MIGRATIONS: Readonly<Record<number, string>> = {
   3: MIGRATION_3,
   4: MIGRATION_4,
   5: MIGRATION_5,
+  6: MIGRATION_6,
 };
 
 /**
