@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.22 — 2026-08-23
+
+**Buyer 供应商关系（M0/M1）+ 官网源码移入私有仓库**：
+- `feat(buyer)`：RFQ 成功后建议保存供应商——`supplier_save_suggested` 本地事件（M0）。
+- `feat(buyer)`：Buyer-owned 供应商关系——`supplier_relationships` 存储 + pull-only 观察调度（M1）。
+- `chore(website)`：官网源码移入私有运营仓库；公开仓库移除站点 bundle、Wrangler 配置与个人联系方式。
+
 ## v0.7.20 — 2026-08-21
 
 **Buyer 身份透传 + 运营/采用素材**：
