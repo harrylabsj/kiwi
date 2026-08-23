@@ -140,13 +140,13 @@ compatibility/knp-ucp-capability.md
 
 ```text
 docs/demos/hermes-buyer-demo.md       # 可重复执行的 Hermes Buyer 三分钟演示与实际复验边界
-docs/website/merchants.html           # 商家四步安装、完成判定和公开案例入口
-docs/website/case-template.html       # 面向外部商家的公开案例说明页
-docs/website/case-template.md         # 可下载、可复制的案例证据模板
 docs/feedback/merchant-interview-guide.md  # 20 分钟商家 / 集成方访谈提纲
 docs/feedback/feedback-log.md              # 结构化反馈台账模板
 docs/feedback/first-contact-message.md     # 首轮商家触达话术与发送前检查
 ```
+
+商家四步安装与公开网站由独立运维仓库维护，生产入口为
+<https://kiwi.harrylabsj.com/merchants>。
 
 公开案例必须先区分第一方流程演示、外部商家接入和持续业务使用；没有外部参与方和
 真实调用记录时，不称为第三方采用或多商家互操作。

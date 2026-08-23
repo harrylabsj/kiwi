@@ -76,5 +76,4 @@ npm run demo:hermes-buyer -- --print
 | 商家端点不可达 | 保留任务和失败原因，修复 endpoint 后重新询价 |
 | 报价过期 | 重新发起询价，不复用旧价格 |
 
-公开案例应使用 [`docs/website/case-template.md`](../website/case-template.md) 记录参与方、
-证据、指标、边界和商家授权。
+公开案例必须记录参与方、证据、指标、边界和商家授权。

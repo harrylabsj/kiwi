@@ -190,6 +190,6 @@ Local, offline drill scripts also exist:
 ## Related documentation
 
 - Runbook (Chinese, operator-focused): `docs/kiwi-protected-release-runbook-2026-08-09.md`
-- Website deployment: `docs/DEPLOY-website.md`
+- Production website: <https://kiwi.harrylabsj.com/>
 - Contribution guide: `CONTRIBUTING.md`
 - Security policy: `SECURITY.md`
