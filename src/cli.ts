@@ -981,6 +981,7 @@ async function cmdBuyerSupplier(args: ParsedArgs): Promise<number> {
             ...(args.query !== undefined ? { query: args.query } : {}),
             ...(args.region !== undefined ? { region: args.region } : {}),
             ...(intervalSeconds !== undefined ? { intervalSeconds } : {}),
+            ...(args.expires !== undefined ? { expires: args.expires } : {}),
             ...consent,
           }),
         });

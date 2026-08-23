@@ -58,6 +58,7 @@ export interface TickNotification {
 
 export interface TickResult {
   checked_rules: number;
+  requests_used: number;
   notifications: TickNotification[];
   tasks_searched: string[];
   tasks_expired: string[];
@@ -91,6 +92,7 @@ export class TaskScheduler {
     const now = this.now();
     const result: TickResult = {
       checked_rules: 0,
+      requests_used: 0,
       notifications: [],
       tasks_searched: [],
       tasks_expired: [],
@@ -142,6 +144,7 @@ export class TaskScheduler {
       }
       let observation: ProductObservation | undefined;
       requests += 1;
+      result.requests_used = requests;
       // §11.7: observation freshness TTL comes from the task's tracking
       // policy, not a hardcoded 30 minutes.
       const task = this.store.getTask(candidate.task_id);
@@ -252,13 +255,15 @@ export class TaskScheduler {
 
     let searched = 0;
     for (const task of searchQueue.values()) {
-      if (searched >= b.max_tasks) break;
+      if (searched >= b.max_tasks || requests >= b.max_requests) break;
       const connector = this.connectorFor(task.connector_scope.connectors[0] ?? "shopping-cli");
       if (connector === undefined) {
         result.errors.push(`no connector for task ${task.task_id}`);
         continue;
       }
       searched += 1;
+      requests += 1;
+      result.requests_used = requests;
       try {
         const before = new Set(
           this.store.listCandidates(task.task_id).map((c) => c.canonical_key),

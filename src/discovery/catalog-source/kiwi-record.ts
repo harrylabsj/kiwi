@@ -189,6 +189,8 @@ export interface ListingSearchResult {
  */
 export interface KiwiListingSearchQuery {
   q?: string;
+  /** 精确限定 listing owner，避免先做全局限量搜索再在本地过滤。 */
+  owner_agent_id?: string;
   listing_type?: ListingType;
   category?: string;
   brand?: string;

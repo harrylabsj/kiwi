@@ -31,6 +31,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { agentDataDir, openAgentDatabase } from "./agent/agent-db.js";
 import {
   SupplierRelationshipStore,
+  assertSupplierEndpointAuthority,
   type SupplierRelationship,
   type SupplierRelationshipType,
 } from "./agent/supplier/store.js";
@@ -97,6 +98,20 @@ async function resolveMerchant(catalogUrl: string, merchantId: string): Promise<
   if (record.agent_card_url === undefined) {
     throw new Error(`catalog record ${merchantId} 没有 agent_card_url，无法建立供应商关系`);
   }
+  if (
+    record.administrative_state !== "active" ||
+    record.freshness_state === "unreachable" ||
+    record.verification_level === "discovered"
+  ) {
+    throw new Error(
+      `catalog record ${merchantId} 当前不可建立自动供应商关系` +
+        `（admin=${record.administrative_state}, freshness=${record.freshness_state}, verification=${record.verification_level}）`,
+    );
+  }
+  assertSupplierEndpointAuthority(record.canonical_domain, record.agent_card_url);
+  if (record.ucp_profile_url !== undefined) {
+    assertSupplierEndpointAuthority(record.canonical_domain, record.ucp_profile_url);
+  }
   return {
     merchant_id: record.merchant_id ?? record.catalog_agent_id,
     catalog_agent_id: record.catalog_agent_id,
@@ -151,6 +166,8 @@ function parseExpiresDays(value: string): string {
   return new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
 }
 
+const DEFAULT_ACTIVE_RELATIONSHIP_EXPIRY = "90d";
+
 export interface SupplierSaveOptions extends SupplierCommandOptions {
   merchantId: string;
   catalogUrl?: string;
@@ -186,6 +203,8 @@ export interface SupplierWatchOptions extends SupplierCommandOptions {
   region?: string;
   /** 轮询间隔（秒）；缺省 6h，下限 1h（§8：不做分钟级轮询）。 */
   intervalSeconds?: number;
+  /** 如 "90d"；缺省 90d，主动观察关系不允许无限期。 */
+  expires?: string;
   yes?: boolean;
   confirm?: () => Promise<boolean>;
 }
@@ -221,6 +240,7 @@ export async function supplierWatch(options: SupplierWatchOptions): Promise<Supp
             ? { interval_seconds: options.intervalSeconds }
             : {},
         consent_source: "human_explicit",
+        expires_at: parseExpiresDays(options.expires ?? DEFAULT_ACTIVE_RELATIONSHIP_EXPIRY),
       }),
     );
   } finally {
@@ -257,9 +277,7 @@ export async function supplierPrefer(options: SupplierPreferOptions): Promise<Su
           catalog_agent_id: resolved.catalog_agent_id,
           ...(options.scope !== undefined ? { procurement_scope: options.scope } : {}),
         },
-        ...(options.expires !== undefined
-          ? { expires_at: parseExpiresDays(options.expires) }
-          : {}),
+        expires_at: parseExpiresDays(options.expires ?? DEFAULT_ACTIVE_RELATIONSHIP_EXPIRY),
         consent_source: "human_explicit",
       }),
     );

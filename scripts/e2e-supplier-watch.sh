@@ -12,8 +12,8 @@
 #     headers — pull-relationship §9.2);
 #   - a real buyer data dir initialized by `kiwi buyer start` (non-interactive:
 #     stdin EOF exits the chat loop right after kernel open), watched via the
-#     real CLI, then ticked by constructing the dist SupplierScheduler against
-#     the same state.sqlite (no CLI tick entry exists yet).
+#     real CLI, then ticked through AgentKernel.schedulerTick against the same
+#     state.sqlite.
 #
 # SSRF note: SupplierScheduler defaults allowLoopback=false (untrusted Agent
 # Cards must not target loopback). The negative phase below proves that guard
@@ -171,7 +171,7 @@ curl -sf "${MERCHANT_URL}/.well-known/agent-card.json" >/dev/null || {
 # --------------------------------------------------------------------------
 export KIWI_CATALOG_ADMIN_TOKEN="kiwi-e2e-supplier-admin-0123456789ab"
 export KIWI_CATALOG_OWNER_TOKEN_SECRET="kiwi-e2e-supplier-owner-0123456789"
-"${PY}" -m kiwi_catalog.scripts.kiwi_catalog_api \
+PYTHONPATH="${KIWI_CATALOG_DIR}" "${PY}" -m kiwi_catalog.scripts.kiwi_catalog_api \
   --db "${WORK}/catalog.sqlite" --host 127.0.0.1 --port "${CATALOG_PORT}" \
   >"${WORK}/catalog.log" 2>&1 &
 CATALOG_PID=$!
@@ -182,14 +182,14 @@ done
 curl -sf "${CATALOG_URL}/health" >/dev/null || {
   echo "kiwi-catalog did not start"; cat "${WORK}/catalog.log"; exit 1; }
 
-OWNER_TOKEN="$("${PY}" -c "from kiwi_catalog.api.auth import owner_token; print(owner_token('${MERCHANT_ID}'))")"
+OWNER_TOKEN="$(PYTHONPATH="${KIWI_CATALOG_DIR}" "${PY}" -c "from kiwi_catalog.api.auth import owner_token; print(owner_token('${MERCHANT_ID}'))")"
 
 echo "== registering merchant record in local catalog"
 python3 - "${MERCHANT_URL}" "${MERCHANT_ID}" "${OWNER_TOKEN}" <<'PYEOF' >"${WORK}/register.json"
 import json, sys
 merchant_url, merchant_id, owner_token = sys.argv[1:4]
 print(json.dumps({
-    "domain": "e2e-supplier.local",
+    "domain": "127.0.0.1",
     "display_name": "E2E Supplier Co.",
     "agent_card_url": f"{merchant_url}/.well-known/agent-card.json",
     "ucp_profile_url": f"{merchant_url}/.well-known/ucp",
@@ -205,7 +205,37 @@ REGISTER_JSON="$(curl -sf -X POST "${CATALOG_URL}/v1/agents/register" \
   --data-binary @"${WORK}/register.json")"
 echo "${REGISTER_JSON}" | json_get "['ok']" | grep -q True
 CAGT_ID="$(echo "${REGISTER_JSON}" | json_get "['agent']['catalog_agent_id']")"
+# 本地 fixture 无公网 DNS 验证；显式把 record 提升到已验证状态，以测试 Buyer
+# 对 verified+fresh+active 治理门后的真实 pull 路径。
+python3 - "${WORK}/catalog.sqlite" "${CAGT_ID}" <<'PYEOF'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("UPDATE catalog_agents SET verification_level='domain_verified' WHERE catalog_agent_id=?", (sys.argv[2],))
+conn.commit()
+PYEOF
 echo "== registered ${MERCHANT_ID} -> ${CAGT_ID}"
+
+# Cross-origin negative fixture: canonical cross-origin.example, identity endpoint 127.0.0.1.
+# Catalog may store it, but Buyer relationship creation must fail closed.
+python3 - "${MERCHANT_URL}" <<'PYEOF' >"${WORK}/register-cross-origin.json"
+import json, sys
+merchant_url = sys.argv[1]
+print(json.dumps({
+    "domain": "cross-origin.example",
+    "display_name": "Cross Origin Fixture",
+    "agent_card_url": f"{merchant_url}/.well-known/agent-card.json",
+    "hosting_mode": "direct_only",
+}))
+PYEOF
+BAD_REGISTER_JSON="$(curl -sf -X POST "${CATALOG_URL}/v1/agents/register" \
+  -H 'content-type: application/json' --data-binary @"${WORK}/register-cross-origin.json")"
+BAD_CAGT_ID="$(echo "${BAD_REGISTER_JSON}" | json_get "['agent']['catalog_agent_id']")"
+python3 - "${WORK}/catalog.sqlite" "${BAD_CAGT_ID}" <<'PYEOF'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("UPDATE catalog_agents SET verification_level='domain_verified' WHERE catalog_agent_id=?", (sys.argv[2],))
+conn.commit()
+PYEOF
 
 publish_listing() { # $1 = availability_hint, $2 = lead_time_hint
   python3 - "${CAGT_ID}" "${MERCHANT_ID}" "${OWNER_TOKEN}" "$1" "$2" <<'PYEOF' >"${WORK}/publish.json"
@@ -253,6 +283,15 @@ node "${KIWI_ROOT}/dist/cli.js" buyer start \
   --profile "${KIWI_ROOT}/examples/profiles/buyer.fake.yaml" \
   --data-dir "${NEG_DIR}" --no-a2a </dev/null >"${WORK}/buyer-neg-init.log" 2>&1
 
+echo "== cross-origin relationship creation must fail closed"
+if node "${KIWI_ROOT}/dist/cli.js" buyer supplier save "${BAD_CAGT_ID}" \
+  --catalog "${CATALOG_URL}" --data-dir "${BUYER_DIR}" >"${WORK}/bad-save.out" 2>"${WORK}/bad-save.err"; then
+  echo "cross-origin supplier save unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q "does not match canonical_domain" "${WORK}/bad-save.err"
+echo "OK: cross-origin catalog endpoint rejected before relationship creation"
+
 # --------------------------------------------------------------------------
 # 4. Real CLI: buyer supplier watch (both dirs).
 # --------------------------------------------------------------------------
@@ -268,27 +307,27 @@ python3 - "${BUYER_DIR}/state.sqlite" "${REL_ID}" <<'PYEOF'
 import sqlite3, sys
 db, rel = sys.argv[1], sys.argv[2]
 row = sqlite3.connect(db).execute(
-    "SELECT relationship_type, status, merchant_id, consent_source "
+    "SELECT relationship_type, status, merchant_id, consent_source, expires_at "
     "FROM supplier_relationships WHERE relationship_id=?", (rel,)).fetchone()
 assert row is not None, "no supplier_relationships row after watch"
 assert row[0] == "watched" and row[1] == "active", row
 assert row[2] == "mrc_e2e_supplier", row
 assert row[3] == "human_explicit", row
+assert row[4], "watched relationship must have a default expiry"
 print("OK: watched+active relationship row (consent human_explicit)")
 PYEOF
 
 # --------------------------------------------------------------------------
-# 5. Supplier tick driver: constructs the dist SupplierScheduler against the
-#    same state.sqlite (no CLI tick entry exists). --offset-hours moves the
+# 5. Supplier tick driver: opens the real AgentKernel and calls schedulerTick.
+#    --offset-hours moves the
 #    injected clock forward so due-checks fire without waiting 6h.
 # --------------------------------------------------------------------------
 cat >"${WORK}/supplier-tick.mjs" <<EOF
-import path from "node:path";
-import { openAgentDatabase } from "${KIWI_ROOT}/dist/agent/agent-db.js";
-import { SupplierRelationshipStore } from "${KIWI_ROOT}/dist/agent/supplier/store.js";
-import { SupplierScheduler } from "${KIWI_ROOT}/dist/agent/supplier/scheduler.js";
-import { KiwiCatalogSource } from "${KIWI_ROOT}/dist/discovery/catalog-source/kiwi-source.js";
-import { TrustRecordStore } from "${KIWI_ROOT}/dist/trust/records/store.js";
+import { ensurePathsForDir } from "${KIWI_ROOT}/dist/agent/agent-db.js";
+import { FakeCommerceConnector } from "${KIWI_ROOT}/dist/agent/connector/fake-connector.js";
+import { createFakeChatModels } from "${KIWI_ROOT}/dist/agent/fake-chat-model.js";
+import { AgentKernel } from "${KIWI_ROOT}/dist/agent/kernel.js";
+import { loadProfile } from "${KIWI_ROOT}/dist/config/profile.js";
 
 const args = process.argv.slice(2);
 const opt = (name, fallback) => {
@@ -300,25 +339,25 @@ const catalog = opt("--catalog", undefined);
 const allowLoopback = args.includes("--allow-loopback");
 const offsetHours = Number(opt("--offset-hours", "0"));
 
-const db = openAgentDatabase(path.join(dataDir, "state.sqlite"));
+const { models, model } = createFakeChatModels();
+const kernel = await AgentKernel.open({
+  profile: loadProfile("${KIWI_ROOT}/examples/profiles/buyer.fake.yaml"),
+  paths: ensurePathsForDir(dataDir),
+  models,
+  model,
+  connector: new FakeCommerceConnector(),
+  catalog,
+  now: () => new Date(Date.now() + offsetHours * 3600_000).toISOString(),
+  ...(allowLoopback ? { allowLoopback: true } : {}),
+});
 try {
-  const principal = db
-    .prepare("SELECT principal_id FROM principals WHERE role = 'buyer' ORDER BY created_at LIMIT 1")
-    .get();
-  if (principal === undefined) throw new Error("no buyer principal in " + dataDir);
-  const now = () => new Date(Date.now() + offsetHours * 3600_000).toISOString();
-  const store = new SupplierRelationshipStore({ db, principalId: principal.principal_id, now });
-  const scheduler = new SupplierScheduler({
-    store,
-    catalogSource: new KiwiCatalogSource({ baseUrl: catalog }),
-    trustStore: new TrustRecordStore({ dir: dataDir, now }),
-    now,
-    ...(allowLoopback ? { allowLoopback: true } : {}),
-  });
-  const result = await scheduler.tick();
-  console.log(JSON.stringify(result));
+  const tick = await kernel.schedulerTick();
+  if (tick.supplier === undefined) throw new Error("kernel did not construct supplier scheduler");
+  const supplier = tick.supplier;
+  supplier.kernel_requests_used = tick.requests_used + supplier.requests_used;
+  console.log(JSON.stringify(supplier));
 } finally {
-  db.close();
+  await kernel.close();
 }
 EOF
 
@@ -370,6 +409,13 @@ for src in ("catalog_search", "agent_card", "ucp_profile"):
 assert rows["agent_card"][1], "agent_card fingerprint not recorded"
 print("OK: state rows for catalog_search/agent_card/ucp_profile; agent card fingerprint recorded")
 PYEOF
+python3 - "${BUYER_DIR}" "${WORK}/trust-baseline.txt" <<'PYEOF'
+import glob, json, sys
+files = glob.glob(sys.argv[1] + "/trust/trust-*.json")
+assert len(files) == 1, files
+r = json.load(open(files[0]))
+open(sys.argv[2], "w").write(r["agent_card_fingerprint"])
+PYEOF
 
 # --------------------------------------------------------------------------
 # 8. Listing diff: republish with changed commercial_hints → next tick must
@@ -413,7 +459,7 @@ echo "== bump agent card version 1.0.0 -> 1.1.0"
 write_agent_card "1.1.0"
 
 echo "== tick 3 (expect profile_or_identity_changed + review_required)"
-TICK3="$(run_tick "${BUYER_DIR}" 14 --allow-loopback)"
+TICK3="$(run_tick "${BUYER_DIR}" 20 --allow-loopback)"
 echo "${TICK3}" | python3 -c "
 import json, sys
 r = json.load(sys.stdin)
@@ -431,9 +477,17 @@ status = sqlite3.connect(sys.argv[1]).execute(
 assert status == "review_required", status
 print("OK: relationship entered review_required")
 PYEOF
+python3 - "${BUYER_DIR}" "${WORK}/trust-baseline.txt" <<'PYEOF'
+import glob, json, sys
+r = json.load(open(glob.glob(sys.argv[1] + "/trust/trust-*.json")[0]))
+baseline = open(sys.argv[2]).read()
+assert r["agent_card_fingerprint"] == baseline, (baseline, r["agent_card_fingerprint"])
+assert r["successful_exchanges"] == 2, r
+print("OK: identity mismatch did not overwrite trusted fingerprint or count as exchange success")
+PYEOF
 
 echo "== tick 4 (review_required must halt automatic pulls)"
-TICK4="$(run_tick "${BUYER_DIR}" 21 --allow-loopback)"
+TICK4="$(run_tick "${BUYER_DIR}" 27 --allow-loopback)"
 echo "${TICK4}" | python3 -c "
 import json, sys
 r = json.load(sys.stdin)

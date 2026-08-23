@@ -267,7 +267,7 @@ const SUPPLIER_SAVE_SUGGESTION_COOLDOWN_MS = 7 * 24 * 3600 * 1000;
  * RFQ 成功后的本地保存建议（§13 M0：在真实 RFQ 结束后询问 Buyer 是否愿意
  * 保存该 Merchant）。只追加一条 `supplier_save_suggested` 任务事件（带
  * merchant_id 与来源磋商引用），绝不写 supplier_relationships。幂等/不刷屏：
- * 已有 active/paused 关系、或冷却窗口内已有同 merchant 的建议事件时不重复。
+ * 已有 active/paused/review_required 关系、或冷却窗口内已有同 merchant 的建议事件时不重复。
  */
 function maybeSuggestSupplierSave(
   deps: BuyerToolDeps,
@@ -281,7 +281,7 @@ function maybeSuggestSupplierSave(
   const supplierStore = deps.supplierStore;
   if (supplierStore === undefined) return false; // 未接线 → 不建议（可选依赖）
   const hasRelationship = supplierStore
-    .listRelationships({ statuses: ["active", "paused"] })
+    .listRelationships({ statuses: ["active", "paused", "review_required"] })
     .some((r) => r.merchant_id === input.merchant_id);
   if (hasRelationship) return false;
   const since = new Date(
@@ -499,12 +499,18 @@ async function executeNegotiateBuyerTask(
         .listCandidates(a.task_id)
         .find((c) => c.owner_agent_id === result.catalogAgentId)?.merchant_id ??
       result.catalogAgentId;
-    const supplierSaveSuggested = maybeSuggestSupplierSave(deps, {
-      task_id: a.task_id,
-      merchant_id: merchantId,
-      catalog_agent_id: result.catalogAgentId,
-      negotiation_id: result.negotiationId,
-    });
+    let supplierSaveSuggested = false;
+    try {
+      supplierSaveSuggested = maybeSuggestSupplierSave(deps, {
+        task_id: a.task_id,
+        merchant_id: merchantId,
+        catalog_agent_id: result.catalogAgentId,
+        negotiation_id: result.negotiationId,
+      });
+    } catch {
+      // 保存建议是辅助体验：关系库/事件冷却查询失败不得把已经成功并已落账的 RFQ 反转成失败。
+      supplierSaveSuggested = false;
+    }
     await deps
       .recordNegotiation?.({
         negotiationId: result.negotiationId,

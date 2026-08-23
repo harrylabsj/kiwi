@@ -556,6 +556,19 @@ describe("KiwiCatalogSource listing methods (v0.4 / CD #22-#24)", () => {
     expect(seenUrl).toContain("category=tea");
   });
 
+  it("searchListings serializes exact owner_agent_id filter", async () => {
+    let seenUrl = "";
+    const source = new KiwiCatalogSource({
+      baseUrl: "https://catalog.example",
+      fetchImpl: (async (input: FetchInput) => {
+        seenUrl = String(input);
+        return jsonResponse({ results: [], next_cursor: "" });
+      }) as typeof fetch,
+    });
+    await source.searchListings({ owner_agent_id: "cagt_owner_1" });
+    expect(seenUrl).toContain("owner_agent_id=cagt_owner_1");
+  });
+
   it("searchListings caps the total at limit across pages (limit 是总量不是页大小)", async () => {
     // 回归：limit 曾只当页大小，翻页直到无游标 → --limit 3 返回全部 4 条。
     const page1 = {

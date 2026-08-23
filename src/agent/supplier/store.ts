@@ -129,6 +129,37 @@ function opt(value: string | null): string | undefined {
   return value === null ? undefined : value;
 }
 
+function canonicalHostname(value: string): string {
+  const raw = value.trim().toLowerCase().replace(/\.$/, "");
+  if (raw === "") throw new SupplierStoreError("validation", "canonical_domain is required");
+  try {
+    return new URL(raw.includes("://") ? raw : `https://${raw}`).hostname.toLowerCase();
+  } catch {
+    throw new SupplierStoreError("validation", `invalid canonical_domain: ${value}`);
+  }
+}
+
+/** 身份端点默认 HTTPS、且必须与 canonical_domain 同 authority；仅字面 loopback 可用 HTTP。 */
+export function assertSupplierEndpointAuthority(canonicalDomain: string, endpoint: string): void {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new SupplierStoreError("validation", `invalid supplier endpoint URL: ${endpoint}`);
+  }
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  const loopback = host === "localhost" || host === "127.0.0.1" || host === "::1";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new SupplierStoreError("validation", `supplier endpoint must use HTTPS: ${endpoint}`);
+  }
+  if (host !== canonicalHostname(canonicalDomain)) {
+    throw new SupplierStoreError(
+      "validation",
+      `supplier endpoint authority ${host} does not match canonical_domain ${canonicalDomain}`,
+    );
+  }
+}
+
 export class SupplierRelationshipStore {
   private readonly db: DatabaseSync;
   private readonly principalId: string;
@@ -163,6 +194,10 @@ export class SupplierRelationshipStore {
     }
     if (input.merchant_id.trim() === "" || input.canonical_domain.trim() === "") {
       throw new SupplierStoreError("validation", "merchant_id and canonical_domain are required");
+    }
+    assertSupplierEndpointAuthority(input.canonical_domain, input.agent_card_url);
+    if (input.ucp_profile_url !== undefined) {
+      assertSupplierEndpointAuthority(input.canonical_domain, input.ucp_profile_url);
     }
     let expiresAt: string | null = null;
     if (input.expires_at !== undefined) {
@@ -314,6 +349,17 @@ export class SupplierRelationshipStore {
            AND r.relationship_type IN ('watched','preferred')
            AND (r.expires_at IS NULL OR r.expires_at > ?)
            AND (
+             NOT EXISTS (
+               SELECT 1 FROM supplier_observation_state s
+               WHERE s.relationship_id = r.relationship_id AND s.source_type = 'agent_card'
+             )
+             OR (
+               r.ucp_profile_url IS NOT NULL AND NOT EXISTS (
+                 SELECT 1 FROM supplier_observation_state s
+                 WHERE s.relationship_id = r.relationship_id AND s.source_type = 'ucp_profile'
+               )
+             )
+             OR
              NOT EXISTS (
                SELECT 1 FROM supplier_observation_state s
                WHERE s.relationship_id = r.relationship_id

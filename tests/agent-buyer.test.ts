@@ -302,6 +302,41 @@ describe("task state machine (§11.3)", () => {
   });
 });
 
+describe("principal-scoped task event scans", () => {
+  it("eventsOfType never leaks another buyer principal's events", () => {
+    const { db, store } = setup();
+    const own = createReadyTask(store);
+    db.prepare(
+      `INSERT INTO principals (principal_id, owner_id, role, locale, timezone, memory_schema_version, created_at, updated_at)
+       VALUES ('buyer-agent:buyer-002', 'buyer-002', 'buyer', 'zh-CN', 'Asia/Shanghai', 2, ?, ?)`,
+    ).run(T0, T0);
+    const otherStore = new BuyerTaskStore({
+      db,
+      principalId: "buyer-agent:buyer-002",
+      now: () => T0,
+    });
+    const other = createReadyTask(otherStore);
+    store.appendEvent(
+      own.task_id,
+      "supplier_save_suggested",
+      { merchant_id: "own" },
+      "model",
+      "suggest:own",
+    );
+    otherStore.appendEvent(
+      other.task_id,
+      "supplier_save_suggested",
+      { merchant_id: "other" },
+      "model",
+      "suggest:other",
+    );
+    expect(store.eventsOfType("supplier_save_suggested", "2000-01-01T00:00:00Z"))
+      .toHaveLength(1);
+    expect(store.eventsOfType("supplier_save_suggested", "2000-01-01T00:00:00Z")[0]?.payload)
+      .toMatchObject({ merchant_id: "own" });
+  });
+});
+
 describe("search cycle (§13)", () => {
   it("searches, filters hard constraints, ranks deterministically and shortlists", async () => {
     const { store, connector, now } = setup([

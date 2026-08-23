@@ -48,7 +48,7 @@ function catalogRecord(overrides: Record<string, unknown> = {}): Record<string, 
     principal_type: "merchant",
     merchant_id: "merchant-1",
     display_name: "ACME Industrial",
-    canonical_domain: "acme.example",
+    canonical_domain: "127.0.0.1",
     agent_card_url: CARD_URL,
     hosting_mode: "standalone",
     verification_level: "domain_verified",
@@ -119,7 +119,7 @@ function saveWatched(
 ): SupplierRelationship {
   return store.saveRelationship({
     merchant_id: "merchant-1",
-    canonical_domain: "acme.example",
+    canonical_domain: "127.0.0.1",
     agent_card_url: CARD_URL,
     relationship_type: "watched",
     ...overrides,
@@ -198,7 +198,7 @@ describe("supplier relationship store (§6)", () => {
     expect(() =>
       store.saveRelationship({
         merchant_id: "m",
-        canonical_domain: "d.example",
+        canonical_domain: "127.0.0.1",
         agent_card_url: CARD_URL,
         relationship_type: "followed" as never,
       }),
@@ -211,7 +211,7 @@ describe("supplier relationship store (§6)", () => {
     const { store, now, after } = setup();
     const saved = store.saveRelationship({
       merchant_id: "m-saved",
-      canonical_domain: "saved.example",
+      canonical_domain: "127.0.0.1",
       agent_card_url: CARD_URL,
       relationship_type: "saved",
     });
@@ -352,7 +352,7 @@ describe("supplier scheduler (§7.1/§8/§9.1)", () => {
       /^sha256:/,
     );
 
-    // tick 2：L1 可用性+digest 变化、L2 下架、L3 新上架、record 转 stale。
+    // tick 2：L1 可用性+digest 变化、L2 下架、L3 新上架。
     listings = [
       listingHit("L1", {
         listing_digest: "sha256:L1-v2",
@@ -360,7 +360,6 @@ describe("supplier scheduler (§7.1/§8/§9.1)", () => {
       }),
       listingHit("L3"),
     ];
-    catalogSource.getRecord = async () => catalogRecord({ freshness_state: "stale" });
     setNow(after(7 * HOUR));
     const second = await scheduler.tick();
     const kinds = store.listObservations(rel.relationship_id).map((o) => o.kind);
@@ -368,9 +367,71 @@ describe("supplier scheduler (§7.1/§8/§9.1)", () => {
     expect(kinds).toContain("listing_withdrawn");
     expect(kinds).toContain("listing_updated");
     expect(kinds).toContain("availability_hint_changed");
-    expect(kinds).toContain("freshness_changed");
     expect(second.notified).toHaveLength(1); // 多条变化合并一次通知
-    expect(second.observations.length).toBeGreaterThanOrEqual(5);
+    expect(second.observations.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("catalog governance degradation fails closed before endpoint pulls", async () => {
+    const { store, now } = setup();
+    const rel = saveWatched(store, { scope: { catalog_agent_id: "agent-1" } });
+    let listingCalls = 0;
+    const catalogSource = {
+      getRecord: async () => catalogRecord({ administrative_state: "suspended" }),
+      searchListings: async () => {
+        listingCalls += 1;
+        return [];
+      },
+    };
+    let endpointCalls = 0;
+    const scheduler = makeScheduler(
+      store,
+      now,
+      async () => {
+        endpointCalls += 1;
+        return jsonResponse(agentCard());
+      },
+      { catalogSource },
+    );
+    const result = await scheduler.tick();
+    expect(result.requests_used).toBe(1);
+    expect(listingCalls).toBe(0);
+    expect(endpointCalls).toBe(0);
+    expect(store.getRelationship(rel.relationship_id)?.status).toBe("review_required");
+  });
+
+  it("max_requests is exact: catalog record and listing search each spend one request", async () => {
+    const { store, now } = setup();
+    const rel = saveWatched(store, { scope: { catalog_agent_id: "agent-1" } });
+    let catalogCalls = 0;
+    let endpointCalls = 0;
+    const scheduler = makeScheduler(
+      store,
+      now,
+      async () => {
+        endpointCalls += 1;
+        return jsonResponse(agentCard());
+      },
+      {
+        catalogSource: {
+          getRecord: async () => {
+            catalogCalls += 1;
+            return catalogRecord();
+          },
+          searchListings: async () => {
+            catalogCalls += 1;
+            return [];
+          },
+        },
+      },
+    );
+    const first = await scheduler.tick({ max_requests: 2 });
+    expect(first.requests_used).toBe(2);
+    expect(catalogCalls).toBe(2);
+    expect(endpointCalls).toBe(0);
+    expect(store.getState(rel.relationship_id, "agent_card")).toBeUndefined();
+    const second = await scheduler.tick({ max_requests: 1 });
+    expect(second.requests_used).toBe(1);
+    expect(endpointCalls).toBe(1);
   });
 
   it("transient failure: exponential backoff with jitter inside ±10%", async () => {
@@ -428,7 +489,10 @@ describe("supplier scheduler (§7.1/§8/§9.1)", () => {
   it("SSRF / redirect rejection: no observation, no fetch, permanent backoff", async () => {
     const { store, now, after } = setup();
     // link-local 云元数据地址：静态 SSRF 判定拒绝。
-    const rel = saveWatched(store, { agent_card_url: "http://169.254.169.254/latest/meta-data" });
+    const rel = saveWatched(store, {
+      canonical_domain: "169.254.169.254",
+      agent_card_url: "https://169.254.169.254/latest/meta-data",
+    });
     let fetches = 0;
     const fetchFn = async (): Promise<Response> => {
       fetches += 1;
@@ -453,6 +517,23 @@ describe("supplier scheduler (§7.1/§8/§9.1)", () => {
     ).toBe(1);
   });
 
+  it("legacy cross-origin relationship is quarantined before any fetch", async () => {
+    const { db, store, now } = setup();
+    const rel = saveWatched(store);
+    // 模拟升级前已经存在的跨域脏数据；新 saveRelationship 会在写入时拒绝。
+    db.prepare(
+      "UPDATE supplier_relationships SET canonical_domain='merchant.example', agent_card_url='https://attacker.example/card' WHERE relationship_id=?",
+    ).run(rel.relationship_id);
+    let fetches = 0;
+    const result = await makeScheduler(store, now, async () => {
+      fetches += 1;
+      return jsonResponse(agentCard());
+    }).tick();
+    expect(fetches).toBe(0);
+    expect(store.getRelationship(rel.relationship_id)?.status).toBe("review_required");
+    expect(result.observations.map((o) => o.kind)).toContain("profile_or_identity_changed");
+  });
+
   it("restart recovery: a new scheduler instance resumes from the database", async () => {
     const { store, now, after, setNow } = setup();
     const rel = saveWatched(store);
@@ -468,6 +549,26 @@ describe("supplier scheduler (§7.1/§8/§9.1)", () => {
     const state = store.getState(rel.relationship_id, "agent_card");
     expect(state?.unchanged_count).toBe(1);
     expect(state?.next_check_at).toBe(new Date(Date.parse(now()) + 9 * HOUR).toISOString());
+  });
+
+  it("honors each source backoff independently and counts only real requests", async () => {
+    const { store, now, after, setNow } = setup();
+    const rel = saveWatched(store, { ucp_profile_url: UCP_URL });
+    const urls: string[] = [];
+    const fetchFn = async (input: string | URL | Request) => {
+      urls.push(String(input));
+      return String(input) === UCP_URL ? jsonResponse({ ucp: { version: "0.1" } }) : jsonResponse(agentCard());
+    };
+    await makeScheduler(store, now, fetchFn as typeof fetch).tick();
+    store.recordSourceFailure(rel.relationship_id, "agent_card", {
+      checked_at: now(),
+      backoff_at: after(24 * HOUR),
+    });
+    urls.length = 0;
+    setNow(after(7 * HOUR));
+    const result = await makeScheduler(store, now, fetchFn as typeof fetch).tick();
+    expect(urls).toEqual([UCP_URL]);
+    expect(result.requests_used).toBe(1);
   });
 
   it("ucp profile pulled when configured; change -> capability_changed", async () => {

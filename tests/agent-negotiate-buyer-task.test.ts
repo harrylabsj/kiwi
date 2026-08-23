@@ -563,7 +563,21 @@ describe("supplier_save_suggested (M0)", () => {
     expect(h.supplierStore.listRelationships({ includeDeleted: true })).toHaveLength(0);
   });
 
-  it("已有 active / paused 关系 → 不提示", async () => {
+  it("保存建议查询失败不反转已经成功的 RFQ", async () => {
+    const s = await startTestA2aStack({ productSource, capture });
+    stacks.push(s);
+    const h = await setupBuyer({ catalog: s.catalogUrl });
+    const taskId = await createTaskWithCandidate(h);
+    h.supplierStore.listRelationships = () => {
+      throw new Error("supplier relationship store unavailable");
+    };
+    const output = await runApprovedNegotiation(h, taskId);
+    expect(output.ok).toBe(true);
+    expect(output.supplier_save_suggested).toBe(false);
+    expect(h.store.getTask(taskId)?.status).toBe("selected_nonbinding");
+  });
+
+  it("已有 active / paused / review_required 关系 → 不提示", async () => {
     const s = await startTestA2aStack({ productSource, capture });
     stacks.push(s);
     const h = await setupBuyer({ catalog: s.catalogUrl });
@@ -571,7 +585,7 @@ describe("supplier_save_suggested (M0)", () => {
     // active 关系抑制提示。
     const rel = h.supplierStore.saveRelationship({
       merchant_id: MERCHANT_ID,
-      canonical_domain: "test.example",
+      canonical_domain: "127.0.0.1",
       agent_card_url: `${s.merchantUrl}/.well-known/agent-card.json`,
       relationship_type: "saved",
       consent_source: "human_explicit",
@@ -589,6 +603,12 @@ describe("supplier_save_suggested (M0)", () => {
     expect(out2.ok).toBe(true);
     expect(out2.supplier_save_suggested).toBe(false);
     expect(h.store.taskEvents(task2).some((e) => e.type === "supplier_save_suggested")).toBe(false);
+
+    h.supplierStore.updateStatus(rel.relationship_id, "review_required");
+    const task3 = await createTaskWithCandidate(h);
+    const out3 = await runApprovedNegotiation(h, task3);
+    expect(out3.ok).toBe(true);
+    expect(out3.supplier_save_suggested).toBe(false);
   });
 
   it("冷却窗口：7 天内同 merchant 不重复提示，窗口过后再提示", async () => {

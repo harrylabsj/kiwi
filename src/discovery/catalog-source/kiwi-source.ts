@@ -69,6 +69,7 @@ const KIWI_SEARCH_QUERY_KEYS: readonly string[] = [
 /** listing 搜索查询键白名单（v0.4 §8；未知键 fail-closed invalid_input）。 */
 const KIWI_LISTING_SEARCH_QUERY_KEYS: readonly string[] = [
   "q",
+  "owner_agent_id",
   "listing_type",
   "category",
   "brand",
@@ -358,6 +359,7 @@ function buildListingSearchQuery(query: KiwiListingSearchQuery): string {
     if (value !== undefined) entries.push([key, String(value)]);
   };
   push("q", query.q);
+  push("owner_agent_id", query.owner_agent_id);
   push("listing_type", query.listing_type);
   push("category", query.category);
   push("brand", query.brand);

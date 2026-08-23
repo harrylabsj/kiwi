@@ -52,6 +52,7 @@ import type {
   SupplierRelationshipStore,
   SupplierSourceType,
 } from "./store.js";
+import { assertSupplierEndpointAuthority, SupplierStoreError } from "./store.js";
 
 export interface SupplierSchedulerOptions {
   store: SupplierRelationshipStore;
@@ -82,6 +83,7 @@ export interface SupplierTickNotification {
 
 export interface SupplierTickResult {
   checked: number;
+  requests_used: number;
   observations: SupplierObservation[];
   notified: SupplierTickNotification[];
   errors: string[];
@@ -166,7 +168,13 @@ export class SupplierScheduler {
   async tick(budget: SupplierTickBudget = {}): Promise<SupplierTickResult> {
     const b = { ...DEFAULT_BUDGET, ...budget };
     const now = this.now();
-    const result: SupplierTickResult = { checked: 0, observations: [], notified: [], errors: [] };
+    const result: SupplierTickResult = {
+      checked: 0,
+      requests_used: 0,
+      observations: [],
+      notified: [],
+      errors: [],
+    };
     let requests = 0;
 
     // 惰性过期清扫（§8：关系和规则必须有 expiry）。
@@ -187,8 +195,10 @@ export class SupplierScheduler {
         this.store.listObservations(rel.relationship_id).map((o) => o.observation_id),
       );
       const halted = await this.checkRelationship(rel, now, result, () => {
+        if (requests >= b.max_requests) return false;
         requests += 1;
-        return requests <= b.max_requests;
+        result.requests_used = requests;
+        return true;
       });
       if (halted) break;
       const fresh = this.store
@@ -218,6 +228,21 @@ export class SupplierScheduler {
     result: SupplierTickResult,
     spend: () => boolean,
   ): Promise<boolean> {
+    try {
+      assertSupplierEndpointAuthority(rel.canonical_domain, rel.agent_card_url);
+      if (rel.ucp_profile_url !== undefined) {
+        assertSupplierEndpointAuthority(rel.canonical_domain, rel.ucp_profile_url);
+      }
+    } catch (err) {
+      this.requireReview(
+        rel,
+        now,
+        err instanceof Error ? err.message : String(err),
+        {},
+        "agent_card",
+      );
+      return false;
+    }
     const sources: SupplierSourceType[] = [];
     if (this.catalogSource !== undefined && typeof rel.scope.catalog_agent_id === "string") {
       sources.push("catalog_search");
@@ -226,13 +251,26 @@ export class SupplierScheduler {
     if (rel.ucp_profile_url !== undefined) sources.push("ucp_profile");
 
     for (const source of sources) {
-      if (!spend()) return true;
+      const state = this.store.getState(rel.relationship_id, source);
+      if (
+        (state?.backoff_until !== undefined &&
+          Date.parse(state.backoff_until) > Date.parse(now)) ||
+        (state?.next_check_at !== undefined &&
+          Date.parse(state.next_check_at) > Date.parse(now))
+      ) {
+        continue;
+      }
       if (source === "catalog_search") {
-        await this.checkCatalog(rel, now, result);
+        if (!(await this.checkCatalog(rel, now, result, spend))) return true;
+        if (this.store.getRelationship(rel.relationship_id)?.status === "review_required") {
+          return false;
+        }
       } else if (source === "agent_card") {
+        if (!spend()) return true;
         const fingerprintOk = await this.checkAgentCard(rel, now, result);
         if (!fingerprintOk) return false; // review_required：停止该关系后续自动拉取
       } else {
+        if (!spend()) return true;
         await this.checkUcpProfile(rel, now, result);
       }
     }
@@ -245,13 +283,42 @@ export class SupplierScheduler {
     rel: SupplierRelationship,
     now: string,
     result: SupplierTickResult,
-  ): Promise<void> {
+    spend: () => boolean,
+  ): Promise<boolean> {
     const source = this.catalogSource as KiwiCatalogSource;
     const catalogAgentId = rel.scope.catalog_agent_id as string;
     const previous = this.store.getState(rel.relationship_id, "catalog_search");
     let snapshot: CatalogSnapshot;
     try {
+      if (!spend()) return false;
       const record = await source.getRecord(catalogAgentId);
+      const identityChanged =
+        record.canonical_domain !== rel.canonical_domain ||
+        record.agent_card_url !== rel.agent_card_url ||
+        (record.ucp_profile_url ?? undefined) !== rel.ucp_profile_url ||
+        (record.merchant_id ?? record.catalog_agent_id) !== rel.merchant_id;
+      if (identityChanged) {
+        this.requireReview(rel, now, "catalog identity-bearing fields changed", {
+          catalog_agent_id: catalogAgentId,
+        });
+        return true;
+      }
+      assertSupplierEndpointAuthority(record.canonical_domain, record.agent_card_url as string);
+      if (record.ucp_profile_url !== undefined) {
+        assertSupplierEndpointAuthority(record.canonical_domain, record.ucp_profile_url);
+      }
+      if (
+        record.administrative_state !== "active" ||
+        record.freshness_state === "unreachable" ||
+        record.verification_level === "discovered"
+      ) {
+        this.requireReview(rel, now, "catalog governance no longer permits automatic pull", {
+          administrative_state: record.administrative_state,
+          freshness_state: record.freshness_state,
+          verification_level: record.verification_level,
+        });
+        return true;
+      }
       const query =
         typeof rel.scope.query === "string" && rel.scope.query !== ""
           ? rel.scope.query
@@ -260,15 +327,16 @@ export class SupplierScheduler {
         typeof rel.scope.region === "string" && rel.scope.region !== ""
           ? rel.scope.region
           : undefined;
+      if (!spend()) return false;
       const hits = await source.searchListings({
+        owner_agent_id: catalogAgentId,
         ...(query !== undefined ? { q: query } : {}),
         ...(region !== undefined ? { region } : {}),
-        limit: 100,
       });
       // 只保留该 Merchant 的 listing，且只映射固定 DTO 字段（远程自由文本
       // title/summary 不进快照、不进 observation payload、不进 prompt）。
       const listings: ListingSnapshotEntry[] = hits
-        .filter((h) => h.merchant.merchant_id === rel.merchant_id)
+        .filter((h) => h.listing.owner_agent_id === catalogAgentId)
         .map((h) => {
           const entry: ListingSnapshotEntry = {
             listing_id: h.listing.listing_id,
@@ -298,6 +366,10 @@ export class SupplierScheduler {
         listings,
       };
     } catch (err) {
+      if (err instanceof SupplierStoreError) {
+        this.requireReview(rel, now, err.message, { catalog_agent_id: catalogAgentId });
+        return true;
+      }
       const isRedirectReject =
         err instanceof CatalogSourceError && err.message.includes("redirect");
       const permanent =
@@ -313,7 +385,7 @@ export class SupplierScheduler {
         result,
         !isRedirectReject,
       );
-      return;
+      return true;
     }
 
     const digest = contentDigest(snapshot);
@@ -330,6 +402,27 @@ export class SupplierScheduler {
       snapshot: snapshot as unknown as Record<string, unknown>,
       unchanged,
     });
+    return true;
+  }
+
+  private requireReview(
+    rel: SupplierRelationship,
+    now: string,
+    reason: string,
+    details: Record<string, unknown>,
+    source: SupplierSourceType = "catalog_search",
+  ): void {
+    this.store.addObservation({
+      relationship_id: rel.relationship_id,
+      kind: "profile_or_identity_changed",
+      source_type: source,
+      payload: { reason, ...details },
+      content_digest: contentDigest({ kind: "profile_or_identity_changed", reason, ...details }),
+      observed_at: now,
+      fresh_until: now,
+      verified: true,
+    });
+    this.store.updateStatus(rel.relationship_id, "review_required");
   }
 
   private diffCatalogSnapshot(
@@ -421,21 +514,6 @@ export class SupplierScheduler {
     }
 
     const fingerprint = computeAgentCardFingerprint(card);
-    // trust 接线（§8：身份证据进 trust records，结论由评估器推导）。
-    try {
-      this.trustStore?.observe({
-        counterparty_identity: rel.canonical_domain,
-        kind: "exchange_success",
-        observed_at: now,
-        domain: rel.canonical_domain,
-        agent_card_fingerprint: fingerprint,
-      });
-    } catch (err) {
-      result.errors.push(
-        `trust observe ${rel.relationship_id}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
     const priorFingerprint = previous?.last_verified_fingerprint;
     if (priorFingerprint !== undefined && priorFingerprint !== fingerprint) {
       // §8 第 5 步：身份承载字段变化不得静默沿用旧信任——关系进
@@ -452,6 +530,21 @@ export class SupplierScheduler {
       });
       this.store.updateStatus(rel.relationship_id, "review_required");
       return false;
+    }
+
+    // 只有身份指纹仍一致时，才把本次拉取记为成功交换；变化不能覆盖旧信任。
+    try {
+      this.trustStore?.observe({
+        counterparty_identity: rel.canonical_domain,
+        kind: "exchange_success",
+        observed_at: now,
+        domain: rel.canonical_domain,
+        agent_card_fingerprint: fingerprint,
+      });
+    } catch (err) {
+      result.errors.push(
+        `trust observe ${rel.relationship_id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     // 指纹之外的卡片快照（固定字段；description 等自由文本不进快照）。

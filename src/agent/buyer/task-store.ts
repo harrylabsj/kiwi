@@ -475,9 +475,12 @@ export class BuyerTaskStore {
   eventsOfType(type: string, since: string): TaskEvent[] {
     const rows = this.db
       .prepare(
-        "SELECT * FROM task_events WHERE type = ? AND created_at >= ? ORDER BY created_at, event_id",
+        `SELECT e.* FROM task_events e
+         JOIN buyer_tasks t ON t.task_id = e.task_id
+         WHERE t.principal_id = ? AND e.type = ? AND e.created_at >= ?
+         ORDER BY e.created_at, e.event_id`,
       )
-      .all(type, since) as Record<string, unknown>[];
+      .all(this.principalId, type, since) as Record<string, unknown>[];
     return rows.map((r) => this.rowToEvent(r));
   }
 

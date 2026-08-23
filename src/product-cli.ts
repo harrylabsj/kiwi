@@ -80,7 +80,7 @@ Usage:
                                           Agent；--catalog/--limit/--category/--region）
   kiwi buyer tasks [--data-dir <dir>]      [D4] 查看 Buyer 任务（start 运行后）
   kiwi buyer supplier save <merchant-id>   [M1] 保存供应商（不轮询；经 --catalog 解析）
-  kiwi buyer supplier watch <merchant-id> [--query <词>] [--region <区域>] [--interval <秒≥3600>]
+  kiwi buyer supplier watch <merchant-id> [--query <词>] [--region <区域>] [--interval <秒≥3600>] [--expires 90d]
                                           [M1] 建立观察关系（人类确认；非交互需 --yes）
   kiwi buyer supplier prefer <merchant-id> [--scope <范围>] [--expires 90d]
                                           [M1] 设为偏好供应商（人类确认；非交互需 --yes）

@@ -108,6 +108,8 @@ export interface AgentKernelOptions {
   now?: () => string;
   /** agent catalog base URL（buyer `negotiate_buyer_task` 的 A2A 商家发现用）。 */
   catalog?: string;
+  /** 仅本地开发/E2E：允许 supplier pull 访问字面 loopback。 */
+  allowLoopback?: boolean;
 }
 
 /** A2A 磋商结果记忆记录（/negotiate 与 negotiate_buyer_task 共用形状）。 */
@@ -459,6 +461,7 @@ export class AgentKernel {
           ? { catalogSource: new KiwiCatalogSource({ baseUrl: options.catalog }) }
           : {}),
         trustStore: new TrustRecordStore({ dir: path.dirname(paths.db), now: clock }),
+        ...(options.allowLoopback === true ? { allowLoopback: true } : {}),
       });
       // v0.7.0 KTH：handoff 存储（Ledger 事件 + 执行幂等）落在 agent data dir，
       // 注入 buyer 工具（handoff_agreement 工具挂载）。
@@ -865,6 +868,7 @@ export class AgentKernel {
       this.handoffRuntime?.ledger.sweepExpiredHandoffs(this.clock());
       const empty: TickResult = {
         checked_rules: 0,
+        requests_used: 0,
         notifications: [],
         tasks_searched: [],
         tasks_expired: [],
@@ -875,8 +879,9 @@ export class AgentKernel {
       // M1：供应商关系 pull tick 走同一 kernel 串行链，共享请求预算；
       // supplier tick 失败不影响 task tick 结果（错误进 supplier.errors）。
       if (this.supplierScheduler !== undefined) {
+        const totalBudget = budget.max_requests ?? 20;
         result.supplier = await this.supplierScheduler.tick({
-          ...(budget.max_requests !== undefined ? { max_requests: budget.max_requests } : {}),
+          max_requests: Math.max(0, totalBudget - result.requests_used),
         });
       }
       return result;
