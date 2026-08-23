@@ -12,5 +12,10 @@ coverage/
 .scratch/
 .playwright-mcp/
 
+# Public website sources are maintained in the private operations repository.
+docs/website/
+wrangler.jsonc
+wrangler.harrylabs.jsonc
+
 # runtime agent data (ledger/memory) created by agent run/serve/chat
 .kiwi/
