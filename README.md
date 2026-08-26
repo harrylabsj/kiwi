@@ -13,8 +13,8 @@
 - 公开稳定 namespace：`com.harrylabsj.kiwi.shopping.negotiation`
 - spec：<https://kiwi.harrylabsj.com/a2a/extensions/negotiation/1.0>
 - schema：<https://kiwi.harrylabsj.com/schemas/negotiation/1.0/schema.json>
-- 完整规范：[`docs/protocol/kiwi-negotiation-protocol-1.0.md`](docs/protocol/kiwi-negotiation-protocol-1.0.md)
-- 架构基线：[`docs/kiwi-a2a-architecture-baseline.md`](docs/kiwi-a2a-architecture-baseline.md)
+- 完整规范：[`docs/protocol/kiwi-negotiation-protocol-1.0-rev1.4.md`](docs/protocol/kiwi-negotiation-protocol-1.0-rev1.4.md)
+- 架构基线：[`docs/kiwi-a2a-architecture-baseline-rev1.3.md`](docs/kiwi-a2a-architecture-baseline-rev1.3.md)
 
 KNP/1.0 九类核心对象（Inquiry / RFQ / Offer / CounterOffer / ConditionalOffer / Clarification /
 AcceptNonbinding / Withdraw/Decline/Cancel / AcceptedNonbindingAgreement）已冻结为 JSON Schema，
@@ -174,9 +174,8 @@ npm run verify          # 全部 + 生产包冒烟
 
 ## 文档
 
-- [`docs/kiwi-a2a-architecture-baseline.md`](docs/kiwi-a2a-architecture-baseline.md) — 架构基线（§41 完成定义）
-- [`docs/protocol/kiwi-negotiation-protocol-1.0.md`](docs/protocol/kiwi-negotiation-protocol-1.0.md) — KNP/1.0 规范
-- [`docs/reviews/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md`](docs/reviews/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md) — 历史 v1.0 就绪度审计
+- [`docs/kiwi-a2a-architecture-baseline-rev1.3.md`](docs/kiwi-a2a-architecture-baseline-rev1.3.md) — 架构基线（§41 完成定义）
+- [`docs/protocol/kiwi-negotiation-protocol-1.0-rev1.4.md`](docs/protocol/kiwi-negotiation-protocol-1.0-rev1.4.md) — KNP/1.0 规范
 - [`CHANGELOG.md`](CHANGELOG.md) — 版本历史
 
 ## 反馈与支持
