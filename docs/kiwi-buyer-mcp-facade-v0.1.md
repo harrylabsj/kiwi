@@ -99,8 +99,8 @@ verify:vectors + verify:package + verify:python-ref）。关键测试：
 ## 8. Hermes Host 接入状态（Phase 2 轨）
 
 已交付：
-- `integrations/hosts/hermes/SKILL.md`（kiwi-buyer skill）+ `mcp-servers.example.yaml`；
-  本机 `~/.hermes/config.yaml` 已接线 `mcp_servers.kiwi-buyer-mcp`
+- `integrations/hosts/hermes/mcp-servers.example.yaml`；本机 Hermes 配置已接线
+  `mcp_servers.kiwi-buyer-mcp`
   （`--marketplace-url :8765` + `--buyer-bootstrap-token` + `--catalog-url :8000`）。
 - Hermes 自动发现 7 个工具（`hermes mcp test` ✓ Connected, 7 tools）；真实对话
   调用 kiwi_search / kiwi_request_quotes / kiwi_get_task（端到端验证，如实报告）。
@@ -123,7 +123,7 @@ verify:vectors + verify:package + verify:python-ref）。关键测试：
 - **Merchant Independence**：`scripts/pilot/merchant-independence.sh` 关闭
   Hermes/推理 harness 后，marketplace + resident daemon 独立应答真实 RFQ
   （§7.4 Standalone-first 验证通过）。
-- **兼容性工件**：`compatibility/{ucp-knp-boundary,host-harness-matrix}.md`
+- **兼容性工件**：`compatibility/ucp-knp-boundary.md`
   （§6.10 语义不变量 + UCP/KNP 边界）。
 
 待接线（Phase 3 主体 / Phase 4）：

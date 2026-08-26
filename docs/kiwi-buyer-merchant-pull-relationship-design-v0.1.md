@@ -683,10 +683,7 @@ SSRF、凭据管理和 Host 会话所有权冲突。
 
 ## 18. 相关实现与文档
 
-- `docs/CURRENT-DOCS.md`
-- `docs/kiwi-product-strategy-implementation-alignment-2026-08-17.md`
 - `docs/agent-runtime-v0.3.md`（tracking rules / scheduler / observations）
-- `compatibility/merchant-three-plane.md`
 - `compatibility/ucp-knp-boundary.md`
 - `src/agent/buyer/scheduler.ts`
 - `src/agent/buyer/task-store.ts`

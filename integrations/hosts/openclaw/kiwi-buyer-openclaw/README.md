@@ -22,7 +22,7 @@ openclaw plugins install clawhub:kiwi
      "plugins": {
        "load": {
          "paths": [
-           "/Users/<user>/coding/kiwi/integrations/hosts/openclaw/kiwi-buyer-openclaw"
+           "<KIWI_ROOT>/integrations/hosts/openclaw/kiwi-buyer-openclaw"
          ]
        }
      }

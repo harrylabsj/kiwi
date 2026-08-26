@@ -99,11 +99,11 @@ kiwi> /negotiate cagt_...            # 磋商 → agreement（无副作用）
 >
 > **公网 merchant**：A2A 节点默认监听回环并广告回环地址（仅本机可达）。要让
 > 外部 buyer 经 DNS + 反向代理（Caddy/Nginx）发现并直连，用
-> `KIWI_A2A_PUBLIC_URL=https://<domain>`（如 `https://veyquo.com`）覆盖——
+> `KIWI_A2A_PUBLIC_URL=https://<domain>`（如 `https://merchant.example.com`）覆盖——
 > 节点仍绑定 `127.0.0.1:<port>`，但 Agent Card / UCP / catalog 注册都广告该
 > 公网 HTTPS 地址，注册域名缺省取 `<domain>`（`KIWI_CATALOG_DOMAIN` 仍优先）。
 >
-> **⚠️ 公网形态的认证前置条件（审查 BUG-02）**：广告地址非 loopback 时，节点
+> **⚠️ 公网形态的认证前置条件**：广告地址非 loopback 时，节点
 > **启动即失败**，除非显式配置入站认证验证器（`startA2aNode({authVerifier})`
 > 或 `A2AServer` 的等价接线）。原因：缺省 `LoopbackOnlyAuthVerifier` 只信任
 > socket 来源——反向代理从 `127.0.0.1` 连接节点，外部请求在应用层看起来就是
@@ -111,8 +111,8 @@ kiwi> /negotiate cagt_...            # 磋商 → agreement（无副作用）
 >
 > 公网部署必须二选一：
 > 1. **HTTP Message Signature 验证器**（推荐）：`HttpMessageSignatureVerifier`
->    校验 RFC 9421 签名 + content-digest（带 body 的请求强制绑定请求体，
->    见 BUG-06），对端须持有本节点信任的签名密钥；
+>    校验 RFC 9421 签名 + content-digest（带 body 的请求强制绑定请求体），
+>    对端须持有本节点信任的签名密钥；
 > 2. **明确、可审计的代理认证契约**：如反代层完成 TLS 客户端证书或等价强认证，
 >    并把验证结果以节点可审计的方式透传——不得只信任 `remoteAddress`。
 >

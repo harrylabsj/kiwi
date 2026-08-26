@@ -7,14 +7,13 @@ Handoff（KTH/0.1）安全交给外部成交入口。
 - **v0.6.0 已发布**（27/27 完成定义，2026-08-07；当日由 v1.0.0 回退版本号，
   KNP 协议身份不变）。
 - **v0.7.0 为 Draft**（Handoff + 产品拆分；完成定义 28/28 直接实证——CD #1–21 见
-  `docs/reviews/kiwi-commerce-v0.7.0-readiness-audit-2026-08-07.md`（rev1.4.1 基线）、
-  CD #22–28 见 `docs/reviews/kiwi-commerce-v1.1-product-first-readiness-audit-2026-08-07.md`
-  （rev1.5 Product-first，归档文件名保留）；不宣布发布，不宣称第三方互操作证据）。
+  `docs/reviews/kiwi-commerce-v0.7.0-readiness-audit-2026-08-07.md`（rev1.4.1 基线）；
+  不宣布发布，不宣称第三方互操作证据）。
 
 ## 文档地图
 
-- **`docs/CURRENT-DOCS.md` 是身份入口**：file mtime 不是版本权威；`status` /
-  `doc_revision` / 产品版本 / git commit-tag / 该清单共同决定文档身份。
+- file mtime 不是版本权威；`status` / `doc_revision` / 产品版本 / git commit-tag
+  共同决定文档身份。
 - 已发布权威：`docs/kiwi-a2a-architecture-baseline.md`（rev1.2）、
   `docs/protocol/kiwi-negotiation-protocol-1.0.md`。
 - v0.7.0 当前草稿：`docs/kiwi-commerce-v0.7.0-architecture-draft-rev1.5.md`（§42 =

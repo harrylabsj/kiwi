@@ -103,6 +103,3 @@ agent_card_url 误报 `merchant has no agent card URL`。
 `mcp__kiwi__kiwi_search("USB-C 扩展坞")` → `kiwi_request_quotes` → `kiwi_get_task`
 等报价 → 选候选 `kiwi_negotiate` 还价 → 用户确认后 `kiwi_accept_agreement` →
 `kiwi_get_agreement` 审计 → `kiwi_handoff`。
-
-> 与 Hermes 版同源；Hermes skill 的完整细节（架构图、更细的授权流程）见
-> `integrations/hosts/hermes/SKILL.md`。DSH 版仅工具名加 `mcp__kiwi__` 前缀。

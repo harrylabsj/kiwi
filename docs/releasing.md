@@ -15,9 +15,6 @@ These versions are release candidates until the protected workflow completes
 `publish=true` and `verify-registry`; the immutable release ref is the full
 40-character commit SHA passed to the workflow.
 
-For a hands-on operator walkthrough (Chinese), see
-[`docs/kiwi-protected-release-runbook-2026-08-09.md`](kiwi-protected-release-runbook-2026-08-09.md).
-
 ## Release topology
 
 Kiwi ships as a three-repository portfolio:
@@ -189,7 +186,6 @@ Local, offline drill scripts also exist:
 
 ## Related documentation
 
-- Runbook (Chinese, operator-focused): `docs/kiwi-protected-release-runbook-2026-08-09.md`
 - Production website: <https://kiwi.harrylabsj.com/>
 - Contribution guide: `CONTRIBUTING.md`
 - Security policy: `SECURITY.md`

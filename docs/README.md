@@ -1,7 +1,5 @@
 # Kiwi Commerce v1.1 rev1.4.1 Documentation Bundle
 
-Start with `docs/CURRENT-DOCS.md`.
-
 This is a consistency patch over rev1.4. It does not expand the architecture scope.
 
 Paths in this bundle resolve as if merged into the repo `docs/` root. The bundle

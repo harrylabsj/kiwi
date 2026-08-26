@@ -219,7 +219,7 @@ Keep as Hosted/Legacy infrastructure with an explicit decision:
 
 ```text
 - 存续原因：存量 hosted negotiation 链路仍在使用，且在 Direct A2A 上线并验证前没有替代通道
-- 维护承诺：修复 claim escape / fake claim 等 P0 可靠性问题（主架构 rev1.5 §37），维持存量可用性
+- 维护承诺：修复存量可靠性问题，维持存量可用性
 - 退役条件：Direct A2A + KiwiCatalogSource 验证通过后另行评估下线，不在 v0.7.0 范围内
 ```
 
