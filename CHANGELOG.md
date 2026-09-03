@@ -7,6 +7,10 @@
 - 商家 skill 支持版本化加载、按需读取和生产包校验，保持权限、审批和 Handoff 边界不变。
 - Hermes Buyer skill 改为公共路径，并优先从 npm 包内置资源安装；协议和架构文档统一指向当前权威版本。
 
+**依赖与 CI 治理**：
+- `chore(deps)`：eslint 10.8.1 / @eslint/js 10.0.1 / typescript-eslint 8.67 / typescript 6.0.3（渐进，TS7 待工具链适配）/ @types/node 26 / fast-uri 3.1.7（安全修复）。
+- `ci(codeql)`：init/autobuild/analyze 统一到 v4.37.7。
+
 ## v0.7.22 — 2026-08-23
 
 **Buyer 供应商关系（M0/M1）+ 官网源码移入私有仓库**：
