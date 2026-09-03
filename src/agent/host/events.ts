@@ -39,14 +39,16 @@ export interface AgentEventSink {
 export const NOOP_EVENT_SINK: AgentEventSink = { emit: () => undefined };
 
 const SENSITIVE_EVENT_KEY = /authorization|bearer|token|secret|password|credential|private_key|vault/i;
+const MAX_REDACTION_DEPTH = 20;
 
-function redactSensitiveKeys(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redactSensitiveKeys);
+function redactSensitiveKeys(value: unknown, depth = 0): unknown {
+  if (depth > MAX_REDACTION_DEPTH) return "[nested value omitted]";
+  if (Array.isArray(value)) return value.map((entry) => redactSensitiveKeys(entry, depth + 1));
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
         key,
-        SENSITIVE_EVENT_KEY.test(key) ? "[redacted]" : redactSensitiveKeys(entry),
+        SENSITIVE_EVENT_KEY.test(key) ? "[redacted]" : redactSensitiveKeys(entry, depth + 1),
       ]),
     );
   }
@@ -56,7 +58,11 @@ function redactSensitiveKeys(value: unknown): unknown {
 /** Tool inputs are operator-visible projections, never raw request/log payloads. */
 export function sanitizeHostEventData(type: AgentHostEventType, data: unknown): unknown {
   if (type !== "tool_call" && type !== "tool_result" && type !== "ui_partial" && type !== "text_delta") return data;
-  return sanitizeModelValue(redactSensitiveKeys(data), { maxChars: 4_000 });
+  try {
+    return sanitizeModelValue(redactSensitiveKeys(data), { maxChars: 4_000 });
+  } catch {
+    return { note: "payload omitted" };
+  }
 }
 
 /** Preserve emit order even when the underlying sink performs asynchronous I/O. */

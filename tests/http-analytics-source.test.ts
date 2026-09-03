@@ -86,6 +86,16 @@ describe("HttpMerchantAnalyticsSource", () => {
     expect(() => new HttpMerchantAnalyticsSource({ baseUrl: "https://user:pass@analytics.example.com" })).toThrow(/credentials/);
   });
 
+  it("maps empty 404 and auth responses before parsing their bodies", async () => {
+    const notFound = stubFetch(new Response("", { status: 404 }));
+    const source = new HttpMerchantAnalyticsSource({ baseUrl: "https://analytics.example.com", fetchImpl: notFound.fetchImpl });
+    await expect(source.queryMetric({ merchant_id: "merchant-001", metric: "roas", period: "7d", granularity: "day" })).resolves.toBeUndefined();
+
+    const unauthorized = stubFetch(new Response("", { status: 401 }));
+    const authSource = new HttpMerchantAnalyticsSource({ baseUrl: "https://analytics.example.com", fetchImpl: unauthorized.fetchImpl });
+    await expect(authSource.getMetrics({ merchant_id: "merchant-001", period: "7d" })).rejects.toThrow(/authorization failed/);
+  });
+
   it("rejects duplicate metric names from one remote response", async () => {
     const duplicate = stubFetch(new Response(JSON.stringify({
       ok: true,

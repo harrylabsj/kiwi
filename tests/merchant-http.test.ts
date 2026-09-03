@@ -132,6 +132,18 @@ function readSseUntil(route: string, expected: string): Promise<string> {
   });
 }
 
+function parseSseFrames(raw: string): Array<Record<string, string>> {
+  return raw
+    .split("\n\n")
+    .filter((frame) => frame.trim() !== "")
+    .map((frame) => Object.fromEntries(
+      frame.split("\n").filter((line) => line.includes(": ")).map((line) => {
+        const separator = line.indexOf(": ");
+        return [line.slice(0, separator), line.slice(separator + 2)];
+      }),
+    ));
+}
+
 describe("kiwi-merchant-http", () => {
   it("requires authentication and creates an isolated Merchant session", async () => {
     const unauthorized = await call("POST", "/v1/merchant/sessions", undefined, "wrong");
@@ -164,8 +176,9 @@ describe("kiwi-merchant-http", () => {
       "/v1/merchant/sessions/" + createdSession + "/events?after=0",
       "echo:最近有什么需要处理？",
     );
-    expect(events).toContain("event: message");
-    expect(events).toContain("id: 1");
+    const messageFrame = parseSseFrames(events).find((frame) => frame.event === "message");
+    expect(messageFrame?.id).toBe("1");
+    expect(JSON.parse(messageFrame?.data ?? "{}")).toMatchObject({ data: { text: "echo:最近有什么需要处理？" } });
 
     const forbidden = await call("GET", "/v1/merchant/sessions/" + createdSession, undefined, "other-token");
     expect(forbidden.status).toBe(401);
@@ -222,6 +235,69 @@ describe("kiwi-merchant-http", () => {
       await fetch(localBase + "/health");
       const expired = await fetch(localBase + "/v1/merchant/sessions/" + payload.session_id);
       expect(expired.status).toBe(404);
+    } finally {
+      await new Promise<void>((resolve) => local.close(() => resolve()));
+    }
+  });
+
+  it("reserves a session slot while kernel creation is pending", async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const creationStarted = new Promise<void>((resolve) => { started = resolve; });
+    const creationRelease = new Promise<void>((resolve) => { release = resolve; });
+    const local = createMerchantHttpServer({
+      profile,
+      dataRoot: "/tmp/kiwi-merchant-http-concurrency-test",
+      authenticate: async () => ({ principal_id: "principal-concurrency", merchant_id: "merchant-001" }),
+      maxSessions: 1,
+      kernelFactory: {
+        async create(input) {
+          started();
+          await creationRelease;
+          return new FakeKernel(input.eventSink);
+        },
+      },
+    });
+    await new Promise<void>((resolve) => local.listen(0, "127.0.0.1", resolve));
+    const address = local.address();
+    const localBase = "http://127.0.0.1:" + (typeof address === "object" && address !== null ? address.port : 0);
+    try {
+      const first = fetch(localBase + "/v1/merchant/sessions", { method: "POST" });
+      await creationStarted;
+      const second = await fetch(localBase + "/v1/merchant/sessions", { method: "POST" });
+      expect(second.status).toBe(429);
+      release();
+      expect((await first).status).toBe(201);
+    } finally {
+      await new Promise<void>((resolve) => local.close(() => resolve()));
+    }
+  });
+
+  it("keeps health checks successful when idle kernel cleanup fails", async () => {
+    let now = 1_000;
+    const local = createMerchantHttpServer({
+      profile,
+      dataRoot: "/tmp/kiwi-merchant-http-cleanup-test",
+      authenticate: async () => ({ principal_id: "principal-cleanup", merchant_id: "merchant-001" }),
+      sessionIdleTtlMs: 1_000,
+      nowMs: () => now,
+      kernelFactory: {
+        async create(input) {
+          const kernel = new FakeKernel(input.eventSink);
+          kernel.close = async () => { throw new Error("close failed"); };
+          return kernel;
+        },
+      },
+    });
+    await new Promise<void>((resolve) => local.listen(0, "127.0.0.1", resolve));
+    const address = local.address();
+    const localBase = "http://127.0.0.1:" + (typeof address === "object" && address !== null ? address.port : 0);
+    try {
+      const created = await fetch(localBase + "/v1/merchant/sessions", { method: "POST" });
+      expect(created.status).toBe(201);
+      now += 1_001;
+      const health = await fetch(localBase + "/health");
+      expect(health.status).toBe(200);
     } finally {
       await new Promise<void>((resolve) => local.close(() => resolve()));
     }

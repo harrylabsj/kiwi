@@ -194,7 +194,10 @@ function assistantText(message: AssistantMessage): string {
     .trim();
 }
 
-function toolResultSummary(result: unknown): string {
+const PRIVATE_TOOL_RESULT_NAMES = new Set(["view_private_thresholds"]);
+
+export function toolResultSummary(toolName: string, result: unknown): string {
+  if (PRIVATE_TOOL_RESULT_NAMES.has(toolName)) return "工具调用已完成。";
   if (result !== null && typeof result === "object") {
     const content = (result as { content?: unknown }).content;
     if (Array.isArray(content)) {
@@ -246,7 +249,7 @@ function attachHarnessHostEvents(
         tool: event.toolName,
         call_id: event.toolCallId,
         status: event.isError ? "error" : "ok",
-        summary: toolResultSummary(event.result),
+        summary: toolResultSummary(event.toolName, event.result),
       });
     }
   });

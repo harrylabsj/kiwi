@@ -4,6 +4,7 @@ import {
   SerializedEventSink,
   type AgentHostEvent,
 } from "../src/agent/host/events.js";
+import { toolResultSummary } from "../src/agent/kernel.js";
 
 function event(sequence: number): AgentHostEvent {
   return {
@@ -53,5 +54,20 @@ describe("Agent Host Events", () => {
     const text = JSON.stringify(sanitized);
     expect(text).not.toContain("<tool_result>");
     expect(text).not.toContain("should-not-escape");
+  });
+
+  it("does not project private threshold values into tool result summaries", () => {
+    expect(toolResultSummary("view_private_thresholds", {
+      content: [{ type: "text", text: "floor = 80.00; cost = 50.00" }],
+    })).toBe("工具调用已完成。");
+    expect(toolResultSummary("get_business_snapshot", {
+      content: [{ type: "text", text: "contact_events = 3" }],
+    })).toContain("contact_events = 3");
+  });
+
+  it("bounds hostile nesting and fails closed if sanitization throws", () => {
+    let value: unknown = "leaf";
+    for (let i = 0; i < 100; i += 1) value = { nested: value };
+    expect(JSON.stringify(sanitizeHostEventData("tool_result", value))).toContain("nested value omitted");
   });
 });

@@ -5,7 +5,6 @@ role: merchant
 description: 解释商品和库存变更候选，保证预览、审批、执行和失败恢复语义一致。
 required_tools:
   - get_pending_actions
-  - present_change_preview
 ---
 
 # Change approval

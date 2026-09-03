@@ -75,8 +75,9 @@ export function sanitizeModelText(
   // Repeat because removing one token can expose another adjacent token.
   for (let i = 0; i < 3; i += 1) {
     const next = text.replace(SPECIAL_TOKEN, " ").replace(TURN_MARKER, "$1");
-    text = next.replace(LEADING_TURN_MARKER, "");
-    if (text === next) break;
+    const cleaned = next.replace(LEADING_TURN_MARKER, "");
+    if (cleaned === text) break;
+    text = cleaned;
   }
   if (marker !== "") {
     const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -96,7 +97,7 @@ function modelValue(payload: unknown): string {
 
 /** True when a value carries one of Kiwi's model-visible external-data fences. */
 export function containsExternalFence(value: unknown): boolean {
-  if (typeof value === "string") return /<\s*\/?\s*kiwi_external_data_/i.test(value);
+  if (typeof value === "string") return /<\s*\/?\s*kiwi_(?:external|memory)_data(?:_|\b)/i.test(value);
   if (Array.isArray(value)) return value.some(containsExternalFence);
   if (value !== null && typeof value === "object") {
     return Object.values(value as Record<string, unknown>).some(containsExternalFence);
@@ -107,18 +108,18 @@ export function containsExternalFence(value: unknown): boolean {
 /** Sanitize every string in a JSON-like value without mutating the source. */
 export function sanitizeModelValue(
   value: unknown,
-  options: { maxChars?: number; depth?: number } = {},
+  options: { maxChars?: number; depth?: number; marker?: string } = {},
 ): unknown {
   const maxChars = Math.max(1, options.maxChars ?? DEFAULT_MEMORY_VALUE_MAX_CHARS);
   const maxDepth = Math.max(1, Math.min(options.depth ?? 8, 20));
   const visit = (entry: unknown, depth: number): unknown => {
     if (depth > maxDepth) return "[nested value omitted]";
-    if (typeof entry === "string") return sanitizeModelText(entry, { maxChars });
+    if (typeof entry === "string") return sanitizeModelText(entry, { maxChars, marker: options.marker });
     if (Array.isArray(entry)) return entry.map((item) => visit(item, depth + 1));
     if (entry !== null && typeof entry === "object") {
       return Object.fromEntries(
         Object.entries(entry as Record<string, unknown>).map(([key, item]) => [
-          sanitizeModelText(key, { maxChars: 128 }),
+          sanitizeModelText(key, { maxChars: 128, marker: options.marker }),
           visit(item, depth + 1),
         ]),
       );
@@ -128,7 +129,7 @@ export function sanitizeModelValue(
   const sanitized = visit(value, 0);
   const serialized = modelValue(sanitized);
   if (serialized.length <= maxChars) return sanitized;
-  return sanitizeModelText(serialized, { maxChars });
+  return sanitizeModelText(serialized, { maxChars, marker: options.marker });
 }
 
 /** Wrap sanitized data in a fixed, source-specific fence. */

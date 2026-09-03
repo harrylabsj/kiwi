@@ -254,4 +254,34 @@ describe("DefaultMerchantIntelligenceBackend", () => {
       rmSync(f.dataDir, { recursive: true, force: true });
     }
   });
+
+  it("deduplicates distinct buyers within week and month buckets", async () => {
+    const f = fixture();
+    try {
+      f.stats.recordBuyerContact({
+        message_id: "msg-2",
+        buyer_identity: "buyer-1",
+        negotiation_id: "neg-2",
+        exchange_id: "ex-2",
+        action: "rfq",
+        skus: ["sku-001"],
+        occurred_at: "2026-08-19T10:00:00.000Z",
+      });
+      const backend = new DefaultMerchantIntelligenceBackend({
+        merchant_id: "merchant-001",
+        data_dir: f.dataDir,
+        merchant_client: f.client,
+        approvals: f.approvals,
+        now: () => NOW,
+      });
+      const weekly = await backend.queryMetric({ merchant_id: "merchant-001", metric: "distinct_buyers", period: "14d", granularity: "week" });
+      const monthly = await backend.queryMetric({ merchant_id: "merchant-001", metric: "distinct_buyers", period: "14d", granularity: "month" });
+      expect(weekly.points.reduce((sum, point) => sum + point.value, 0)).toBe(1);
+      expect(monthly.points.reduce((sum, point) => sum + point.value, 0)).toBe(1);
+    } finally {
+      f.stats.close();
+      f.db.close();
+      rmSync(f.dataDir, { recursive: true, force: true });
+    }
+  });
 });

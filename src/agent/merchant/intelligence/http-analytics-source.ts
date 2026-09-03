@@ -170,6 +170,10 @@ export class HttpMerchantAnalyticsSource implements MerchantAnalyticsSource {
       if (isRedirectResponse(response)) {
         throw new MerchantAnalyticsHttpError("transport", "analytics endpoint must not redirect", response.status);
       }
+      if (response.status === 401 || response.status === 403) {
+        throw new MerchantAnalyticsHttpError("auth", "analytics authorization failed", response.status);
+      }
+      if (response.status === 404) return { status: response.status, payload: {} };
       let payload: unknown;
       try {
         payload = await readJsonBody(response, { maxBytes: this.maxResponseBytes, signal: controller.signal });
@@ -181,8 +185,6 @@ export class HttpMerchantAnalyticsSource implements MerchantAnalyticsSource {
         throw new MerchantAnalyticsHttpError("protocol", "analytics response is not valid JSON");
       }
       const body = object(payload, "analytics response must be an object");
-      if (response.status === 401 || response.status === 403) throw new MerchantAnalyticsHttpError("auth", "analytics authorization failed", response.status);
-      if (response.status === 404) return { status: response.status, payload: body };
       if (!response.ok || body.ok === false) throw new MerchantAnalyticsHttpError("unavailable", "analytics service returned an error", response.status);
       if (body.ok !== true) throw new MerchantAnalyticsHttpError("protocol", "analytics response must set ok=true", response.status);
       return { status: response.status, payload: body };

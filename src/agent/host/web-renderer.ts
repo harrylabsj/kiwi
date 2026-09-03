@@ -60,6 +60,15 @@ function boundedPush<T>(items: T[], item: T): void {
   while (items.length > MAX_ITEMS) items.shift();
 }
 
+function boundedSet<T>(items: Record<string, T>, key: string, value: T): void {
+  items[key] = value;
+  while (Object.keys(items).length > MAX_ITEMS) {
+    const oldest = Object.keys(items)[0];
+    if (oldest === undefined) break;
+    delete items[oldest];
+  }
+}
+
 function safePayload(value: unknown): unknown {
   return sanitizePresentationValue(value, { maxChars: 2_000, maxItems: MAX_ITEMS });
 }
@@ -124,20 +133,20 @@ export class MerchantWebEventRenderer {
         this.state.streamText = `${this.state.streamText}${text(data.text, 4_000)}`.slice(-20_000);
         break;
       case "grounding_started":
-        this.state.grounding[id(data.rule) || id(data.tool)] = { tool: id(data.tool), status: "running" };
+        boundedSet(this.state.grounding, id(data.rule) || id(data.tool), { tool: id(data.tool), status: "running" });
         break;
       case "grounding_completed":
-        this.state.grounding[id(data.rule) || id(data.tool)] = { tool: id(data.tool), status: id(data.status) };
+        boundedSet(this.state.grounding, id(data.rule) || id(data.tool), { tool: id(data.tool), status: id(data.status) });
         break;
       case "tool_call": {
         const callId = id(data.call_id);
         if (callId !== "") {
-          this.state.tools[callId] = {
+          boundedSet(this.state.tools, callId, {
             tool: id(data.tool),
             callId,
             status: "running",
             input: safePayload(data.input),
-          };
+          });
         }
         break;
       }
@@ -145,13 +154,13 @@ export class MerchantWebEventRenderer {
         const callId = id(data.call_id);
         if (callId !== "") {
           const current = this.state.tools[callId];
-          this.state.tools[callId] = {
+          boundedSet(this.state.tools, callId, {
             tool: id(data.tool) || current?.tool || "",
             callId,
             status: current?.status ?? "running",
             ...(current?.input === undefined ? {} : { input: current.input }),
             partial: safePayload(data.partial),
-          };
+          });
         }
         break;
       }
@@ -159,36 +168,36 @@ export class MerchantWebEventRenderer {
         const callId = id(data.call_id);
         if (callId !== "") {
           const current = this.state.tools[callId];
-          this.state.tools[callId] = {
+          boundedSet(this.state.tools, callId, {
             tool: id(data.tool) || current?.tool || "",
             callId,
             status: data.status === "error" ? "error" : "ok",
             ...(current?.input === undefined ? {} : { input: current.input }),
             summary: text(data.summary, 4_000),
             ...(current?.partial === undefined ? {} : { partial: current.partial }),
-          };
+          });
         }
         break;
       }
       case "ui": {
         const component = id(data.component);
-        if (component !== "") this.state.ui[component] = { payload: safePayload(data.payload), sequence: event.sequence };
+        if (component !== "") boundedSet(this.state.ui, component, { payload: safePayload(data.payload), sequence: event.sequence });
         break;
       }
       case "candidate_update": {
         const candidateId = id(data.candidate_id);
-        if (candidateId !== "") this.state.candidates[candidateId] = {
+        if (candidateId !== "") boundedSet(this.state.candidates, candidateId, {
           status: id(data.status),
           ...(data.preview === undefined ? {} : { preview: safePayload(data.preview) }),
-        };
+        });
         break;
       }
       case "negotiation_update": {
         const negotiationId = id(data.negotiation_id);
-        if (negotiationId !== "") this.state.negotiations[negotiationId] = {
+        if (negotiationId !== "") boundedSet(this.state.negotiations, negotiationId, {
           phase: id(data.phase),
           summary: text(data.summary),
-        };
+        });
         break;
       }
       case "progress":

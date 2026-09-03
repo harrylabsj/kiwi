@@ -93,9 +93,9 @@ export function renderMemoryBriefing(memories: RetrievedMemory[]): string | unde
   if (memories.length === 0) return undefined;
   const lines = memories.map((m) => {
     if (m.redaction_level === "metadata_only") {
-      return `- ${m.memory_id}（${m.namespace} · 置信度 ${m.confidence} · 私密）${sanitizeModelText(m.key, { maxChars: 128 })}: [私密值已加密保存，不要索要、猜测或回显]`;
+      return `- ${m.memory_id}（${m.namespace} · 置信度 ${m.confidence} · 私密）${sanitizeModelText(m.key, { maxChars: 128, marker: MEMORY_FENCE })}: [私密值已加密保存，不要索要、猜测或回显]`;
     }
-    return `- ${m.memory_id}（${m.namespace} · 置信度 ${m.confidence} · ${m.source_kind}）${sanitizeModelText(m.key, { maxChars: 128 })}: ${JSON.stringify(sanitizeModelValue(m.value))}`;
+    return `- ${m.memory_id}（${m.namespace} · 置信度 ${m.confidence} · ${m.source_kind}）${sanitizeModelText(m.key, { maxChars: 128, marker: MEMORY_FENCE })}: ${JSON.stringify(sanitizeModelValue(m.value, { marker: MEMORY_FENCE }))}`;
   });
   return [
     `<${MEMORY_FENCE}>`,

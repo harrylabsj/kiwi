@@ -64,6 +64,22 @@ function aggregateMetricPoints(
   return [...totals.entries()].map(([date, value]) => ({ date, value }));
 }
 
+function aggregateDistinctBuyerPoints(
+  rows: Array<{ day: string; buyer_identity: string }>,
+  granularity: "week" | "month",
+): MetricPoint[] {
+  const buckets = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const bucket = metricBucket(row.day, granularity);
+    const identities = buckets.get(bucket) ?? new Set<string>();
+    identities.add(row.buyer_identity);
+    buckets.set(bucket, identities);
+  }
+  return [...buckets.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([date, identities]) => ({ date, value: identities.size }));
+}
+
 function readStatsPath(dataDir: string): string {
   return path.join(dataDir, "a2a", "stats.sqlite");
 }
@@ -81,7 +97,7 @@ function extractNegotiation(
   let phase = tail.state_transition?.to_phase ?? "OPEN";
   let buyerIdentity = tail.identity.counterparty_identity;
   let updatedAt = tail.recorded_at;
-  let sku: string | undefined;
+  const skus = new Set<string>();
   let quantity: number | undefined;
   let price: number | undefined;
   let currency: string | undefined;
@@ -94,8 +110,11 @@ function extractNegotiation(
     const payload = event.wire_payload as {
       payload?: { terms?: { items?: Array<{ sku?: string; quantity?: { value?: number }; unit_price?: { amount_minor?: number; currency?: string } }> } };
     } | undefined;
-    const item = payload?.payload?.terms?.items?.[0];
-    if (item?.sku) sku = item.sku;
+    const items = payload?.payload?.terms?.items ?? [];
+    for (const item of items) {
+      if (item.sku) skus.add(item.sku);
+    }
+    const item = items[0];
     if (item?.quantity?.value !== undefined) quantity = item.quantity.value;
     if (item?.unit_price?.amount_minor !== undefined) price = item.unit_price.amount_minor;
     if (item?.unit_price?.currency !== undefined) currency = item.unit_price.currency;
@@ -104,7 +123,7 @@ function extractNegotiation(
     negotiation_id: negotiationId,
     phase,
     buyer_identity: buyerIdentity,
-    skus: sku === undefined ? [] : [sku],
+    skus: [...skus],
     ...(quantity === undefined ? {} : { quantity }),
     ...(price === undefined ? {} : { latest_price_minor: price }),
     ...(currency === undefined ? {} : { currency }),
@@ -272,9 +291,13 @@ export class DefaultMerchantIntelligenceBackend implements MerchantIntelligenceB
       return true;
     });
     const agreementsReached = agreementsReachedSince(this.dataDir, window.since);
-    const agreementRate = negotiations === null || negotiations === 0
+    const rawAgreementRate = negotiations === null || negotiations === 0
       ? null
       : Math.round((agreementsReached / negotiations) * 10_000) / 100;
+    const agreementRate = rawAgreementRate === null ? null : Math.min(100, Math.max(0, rawAgreementRate));
+    if (rawAgreementRate !== null && rawAgreementRate !== agreementRate) {
+      limitations.push({ source: "agreement_rate", note: "成交记录与触达统计窗口不完全一致，比例已限制在 0–100%" });
+    }
     if (negotiations === null) {
       limitations.push({ source: "negotiation_ledger", note: "无法计算 agreements_reached 和 agreement_rate" });
     } else if (negotiations === 0) {
@@ -382,6 +405,15 @@ export class DefaultMerchantIntelligenceBackend implements MerchantIntelligenceB
     }
     const store = openMerchantStatsStore({ dbPath: statsPath });
     try {
+      if (input.metric === "distinct_buyers" && granularity !== "day") {
+        return {
+          metric: input.metric,
+          unit: "count",
+          period: window.label,
+          granularity,
+          points: aggregateDistinctBuyerPoints(store.dailyBuyerIdentitiesSince(window.since), granularity),
+        };
+      }
       const daily = store.dailySince(window.since);
       const byDay = new Map(daily.map((row) => [row.day, row]));
       const days = Number(window.label.slice(0, -1));

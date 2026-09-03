@@ -6,7 +6,6 @@ description: 读取库存、识别低库存和处理需要审批的库存变更�
 required_tools:
   - get_inventory_snapshot
   - get_business_snapshot
-  - present_change_preview
 ---
 
 # Inventory operations

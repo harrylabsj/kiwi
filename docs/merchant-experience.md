@@ -43,10 +43,9 @@ merchant_experience:
 字段说明：
 
 - enabled 默认 false，缺省时保持 0.7.x 工具注册面。
-- intelligence 开启经营摘要、指标、磋商摘要和待审批读取。
-- grounding 开启“先读取权威事实、再调用模型”的 Merchant 规则。
-- presentation 开启结构化 Merchant UI 工具，仅在 Host 提供 eventSink 时挂载。
-- skills 开启本地版本化 SKILL.md 和 load_skill。
+- 当 enabled 为 true 时，intelligence、grounding、presentation 默认开启，显式设为 false 可关闭；它们分别提供经营摘要/指标、权威事实预取和结构化 Merchant UI。
+- presentation 仅在 Host 提供 eventSink 时挂载；没有 Host Event 时使用对应的文本工具和审批流程。
+- skills 默认关闭，只有显式设为 true 才加载本地版本化 SKILL.md 和 load_skill。
 - max_external_context_chars 范围为 1000–50000；每轮 memory + grounding 的动态
   briefing 另受 30000 字符代码级总上限约束。
 - max_presentation_items 范围为 1–50。
@@ -200,7 +199,7 @@ skills/merchant/human-review/SKILL.md
 skills/merchant/change-approval/SKILL.md
 ~~~
 
-Skill frontmatter 至少包含 name、version、role、description，可选 required_tools。
+Skill frontmatter 至少包含 name、description；version、role、required_tools 可选。required_tools 只列出所有宿主都能使用的核心工具，依赖 Host Event 的展示工具不作为必需工具。
 加载器拒绝非法名称、错误角色、超长正文、缺失 frontmatter 和目录逃逸路径。
 system prompt 只注入 skill catalog，正文由 load_skill 按需加载。
 
@@ -228,8 +227,8 @@ interface AgentEventSink {
 `TuiEventSink` 会将 `ui` payload 渲染为可读文本面板，并在输出前剥离终端控制字符；它是
 独立的可选 renderer，不会自动改变既有 CLI 的输出字节。
 
-Web/Buddy 宿主可使用 `MerchantWebEventRenderer` 把 SSE 中的 `AgentHostEvent` 折叠成有界、
-可序列化的 `MerchantWebViewState`。它会忽略重复/乱序 sequence，记录 replay gap，清洗
+Web/Buddy 宿主可使用 `MerchantWebEventRenderer` 把同一个 session 的 SSE 中的 `AgentHostEvent` 折叠成有界、
+可序列化的 `MerchantWebViewState`。每个 session 应使用独立 renderer；它会忽略重复/乱序 sequence，记录 replay gap，清洗
 消息、工具参数、UI payload 和审批预览；宿主只需把该 state 映射到自己的 React、原生或
 Buddy 组件，不需要访问 Kiwi 内部 DB。
 
@@ -252,7 +251,8 @@ error
 `text_delta` 来自 AgentHarness 的真实 `message_update`/`text_delta` 事件；`ui_partial` 来自
 工具执行的增量更新，不通过解析 stdout 伪造。事件是展示投影，不是业务状态权威。sink 失败不会阻止 candidate、Ledger 或业务写入。
 异步 sink 由 SerializedEventSink 串行投递；tool_call/tool_result 数据在进入 sink 前会
-剔除 credential/token/authorization 等字段并限制到 4000 字符。
+剔除 credential/token/authorization 等字段并限制到 4000 字符。Web 宿主必须把这些值按纯文本
+或结构化数据渲染，不得把未转义的模型文本交给 innerHTML 等 HTML 注入接口。
 
 当前已提供 createMerchantHttpServer()：
 

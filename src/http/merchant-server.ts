@@ -165,11 +165,11 @@ function sseEvent(event: AgentHostEvent): string {
     "data: " + JSON.stringify(event),
     "",
     "",
-  ].join("\\n");
+  ].join("\n");
 }
 
 function sseControlEvent(type: string, data: unknown): string {
-  return ["event: " + type, "data: " + JSON.stringify(data), "", ""].join("\\n");
+  return ["event: " + type, "data: " + JSON.stringify(data), "", ""].join("\n");
 }
 
 function writeSse(response: ServerResponse, event: string): void {
@@ -202,6 +202,7 @@ export function createMerchantHttpServer(options: MerchantHttpAdapterOptions): S
   const nowMs = options.nowMs ?? Date.now;
   const factory = options.kernelFactory ?? defaultFactory(options);
   const sessions = new Map<string, SessionRecord>();
+  let pendingSessions = 0;
 
   const authorize = async (request: IncomingMessage): Promise<MerchantHostIdentity> => {
     try {
@@ -230,7 +231,7 @@ export function createMerchantHttpServer(options: MerchantHttpAdapterOptions): S
     sessions.delete(session.sessionId);
     for (const subscriber of session.subscribers) subscriber.end();
     session.subscribers.clear();
-    await session.kernel.close();
+    await session.kernel.close().catch(() => undefined);
   };
 
   const sweepIdleSessions = async (): Promise<void> => {
@@ -238,7 +239,7 @@ export function createMerchantHttpServer(options: MerchantHttpAdapterOptions): S
     const expired = [...sessions.values()].filter(
       (session) => session.subscribers.size === 0 && session.lastAccessAt <= cutoff,
     );
-    await Promise.all(expired.map(closeSession));
+    await Promise.allSettled(expired.map(closeSession));
   };
 
   const getSession = (sessionId: string, identity: MerchantHostIdentity): SessionRecord => {
@@ -255,9 +256,11 @@ export function createMerchantHttpServer(options: MerchantHttpAdapterOptions): S
   };
 
   const createSession = async (identity: MerchantHostIdentity): Promise<SessionRecord> => {
-    if (sessions.size >= maxSessions) {
+    if (sessions.size + pendingSessions >= maxSessions) {
       throw new HttpError(429, "session_limit_reached", "merchant session limit reached");
     }
+    pendingSessions += 1;
+    try {
     const sessionId = randomUUID();
     const events: AgentHostEvent[] = [];
     let record: SessionRecord | undefined;
@@ -290,6 +293,9 @@ export function createMerchantHttpServer(options: MerchantHttpAdapterOptions): S
     };
     sessions.set(sessionId, record);
     return record;
+    } finally {
+      pendingSessions -= 1;
+    }
   };
 
   const handleEvents = (request: IncomingMessage, response: ServerResponse, session: SessionRecord): void => {
@@ -311,7 +317,7 @@ export function createMerchantHttpServer(options: MerchantHttpAdapterOptions): S
       if (event.sequence > after) writeSse(response, sseEvent(event));
     }
     session.subscribers.add(response);
-    const heartbeat = setInterval(() => writeSse(response, ": keep-alive\\n\\n"), 15_000);
+    const heartbeat = setInterval(() => writeSse(response, ": keep-alive\n\n"), 15_000);
     heartbeat.unref();
     response.on("close", () => {
       clearInterval(heartbeat);
@@ -426,12 +432,7 @@ export function createMerchantHttpServer(options: MerchantHttpAdapterOptions): S
   });
 
   server.on("close", () => {
-    for (const session of sessions.values()) {
-      for (const subscriber of session.subscribers) subscriber.end();
-      session.subscribers.clear();
-      void session.kernel.close();
-    }
-    sessions.clear();
+    void Promise.allSettled([...sessions.values()].map(closeSession));
   });
 
   return server;

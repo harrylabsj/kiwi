@@ -40,4 +40,14 @@ describe("MerchantWebEventRenderer", () => {
     expect(renderer.snapshot.progress).toEqual([{ message: "third" }]);
     expect(renderer.snapshot.replayGap).toEqual({ after: 0, oldest: 2 });
   });
+
+  it("bounds keyed event state for long-running sessions", () => {
+    const renderer = new MerchantWebEventRenderer();
+    for (let sequence = 1; sequence <= 110; sequence += 1) {
+      renderer.apply(event(sequence, "tool_call", { call_id: `call-${sequence}`, tool: "get_catalog" }));
+    }
+    expect(Object.keys(renderer.snapshot.tools)).toHaveLength(100);
+    expect(renderer.snapshot.tools["call-1"]).toBeUndefined();
+    expect(renderer.snapshot.tools["call-110"]).toBeDefined();
+  });
 });

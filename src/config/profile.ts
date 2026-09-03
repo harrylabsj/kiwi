@@ -655,7 +655,8 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     if (experience.max_external_context_chars !== undefined) {
       reqFinite(experience.max_external_context_chars, "merchant_experience.max_external_context_chars", source);
       req(
-        experience.max_external_context_chars >= 1_000 && experience.max_external_context_chars <= 50_000,
+        Number.isInteger(experience.max_external_context_chars) &&
+          experience.max_external_context_chars >= 1_000 && experience.max_external_context_chars <= 50_000,
         `${source}: merchant_experience.max_external_context_chars must be between 1000 and 50000`,
       );
     }

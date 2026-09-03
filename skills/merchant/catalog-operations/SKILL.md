@@ -6,7 +6,6 @@ description: 查看和维护商家自己的目录商品，展示公开字段和�
 required_tools:
   - list_catalog_products
   - get_catalog_product
-  - present_change_preview
 ---
 
 # Catalog operations

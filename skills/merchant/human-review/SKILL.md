@@ -6,7 +6,6 @@ description: 整理人工审核队列并向操作者呈现风险、公开事实�
 required_tools:
   - get_human_review_queue
   - get_pending_actions
-  - present_merchant_digest
 ---
 
 # Human review

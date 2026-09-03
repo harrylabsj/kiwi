@@ -299,6 +299,77 @@ describe("WeixinChannel 集成", () => {
     }
   });
 
+  it("批次处理中 stop() 只写入上一完整批次游标，并在重启后继续剩余消息", async () => {
+    const mock = await startMockServer();
+    const batch = [
+      {
+        from_user_id: PAIRED_USER,
+        message_id: "batch-1",
+        context_token: "ctx-1",
+        item_list: [{ type: 1, text_item: { text: "第一条" } }],
+      },
+      {
+        from_user_id: PAIRED_USER,
+        message_id: "batch-2",
+        context_token: "ctx-2",
+        item_list: [{ type: 1, text_item: { text: "第二条" } }],
+      },
+    ];
+    mock.updatesHandler = () => ({ ret: 0, msgs: batch, get_updates_buf: "cursor-next" });
+    const dir = workDir();
+    const files = seedCredentials(dir);
+    let firstStarted!: () => void;
+    const firstMessageStarted = new Promise<void>((resolve) => { firstStarted = resolve; });
+    let releaseFirst!: () => void;
+    const firstMessageRelease = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const firstKernel = {
+      async handleUserText() {
+        firstStarted();
+        await firstMessageRelease;
+        return { text: "first", quit: false };
+      },
+    } as unknown as AgentKernel;
+    const firstChannel = await WeixinChannel.open({
+      kernel: firstKernel,
+      apiBaseUrl: mock.base,
+      credentialsPath: files.creds,
+      syncBufPath: files.sync,
+      timings: { schedulerTickMs: 0, negotiateTickMs: 0 },
+    });
+    const firstRun = firstChannel.run();
+    await firstMessageStarted;
+    const stopping = firstChannel.stop();
+    releaseFirst();
+    await stopping;
+    await firstRun;
+
+    const interrupted = JSON.parse(readFileSync(files.sync, "utf-8")) as { get_updates_buf: string; seen: string[] };
+    expect(interrupted.get_updates_buf).toBe("");
+    expect(interrupted.seen).toHaveLength(1);
+
+    const processed: string[] = [];
+    const secondKernel = {
+      async handleUserText(text: string) {
+        processed.push(text);
+        return { text: "second", quit: false };
+      },
+    } as unknown as AgentKernel;
+    const secondChannel = await WeixinChannel.open({
+      kernel: secondKernel,
+      apiBaseUrl: mock.base,
+      credentialsPath: files.creds,
+      syncBufPath: files.sync,
+      timings: { schedulerTickMs: 0, negotiateTickMs: 0 },
+    });
+    const secondRun = secondChannel.run();
+    await waitFor(() => processed.includes("第二条"));
+    await secondChannel.stop();
+    await secondRun;
+    const resumed = JSON.parse(readFileSync(files.sync, "utf-8")) as { get_updates_buf: string };
+    expect(processed).toEqual(["第二条"]);
+    expect(resumed.get_updates_buf).toBe("cursor-next");
+  });
+
   it("长回复截断（>2000 字符）", async () => {
     const mock = await startMockServer();
     mock.updatesHandler = (n) =>
