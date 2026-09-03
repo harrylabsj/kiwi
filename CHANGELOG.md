@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.0 — 2026-09-03
+
+**Merchant Experience + 公共宿主接入**：
+- 商家 Agent 新增 intelligence、grounding、presentation、fencing 和 Host Event 能力，并提供独立 HTTP/SSE 接入层。
+- 商家 skill 支持版本化加载、按需读取和生产包校验，保持权限、审批和 Handoff 边界不变。
+- Hermes Buyer skill 改为公共路径，并优先从 npm 包内置资源安装；协议和架构文档统一指向当前权威版本。
+
 ## v0.7.22 — 2026-08-23
 
 **Buyer 供应商关系（M0/M1）+ 官网源码移入私有仓库**：
