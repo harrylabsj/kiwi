@@ -18,6 +18,13 @@ export default [
   },
   js.configs.recommended,
   {
+    // js@10 的 recommended 新增 no-useless-assignment，非项目本意约束。
+    // 后续清理无用赋值后可重新开启此规则。
+    rules: {
+      "no-useless-assignment": "off",
+    },
+  },
+  {
     // Node tooling scripts (fixture generators) run under Node directly.
     files: ["scripts/**/*.mjs"],
     languageOptions: {

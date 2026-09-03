@@ -305,6 +305,7 @@ export function resolveA2aThrottle(raw = process.env.KIWI_A2A_THROTTLE ?? ""): T
   } catch (err) {
     throw new Error(
       `KIWI_A2A_THROTTLE 非法: ${v}（可选 "1"/"true"/"on" 用默认档位，或 JSON ThrottleOptions）——${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 }
