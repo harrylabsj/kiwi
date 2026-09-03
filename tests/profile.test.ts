@@ -59,6 +59,15 @@ describe("profile loading", () => {
     expect(profile.merchant_policy?.min_unit_price_private).toBe(80);
   });
 
+  it("loads explicit prompt cache retention and rejects unsupported values", () => {
+    const withCache = `${VALID_YAML}\nmerchant_experience:\n  enabled: true\n  prompt_cache_retention: long\n`;
+    const profile = loadProfile(writeTemp(withCache));
+    expect(profile.merchant_experience?.prompt_cache_retention).toBe("long");
+
+    const bad = withCache.replace("prompt_cache_retention: long", "prompt_cache_retention: forever");
+    expect(() => loadProfile(writeTemp(bad))).toThrow(/prompt_cache_retention/);
+  });
+
   it("loads optional per-scope credential env refs (§15.4) and rejects bad ones", () => {
     const withCreds = VALID_YAML.replace(
       "  backend: local_marketplace",

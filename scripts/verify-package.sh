@@ -46,11 +46,20 @@ node --input-type=module -e "
   await import('@harrylabsj/kiwi/dist/weixin/ilink-client.js');
   await import('@harrylabsj/kiwi/dist/weixin/channel.js');
   await import('@harrylabsj/kiwi/dist/agent/kernel-builder.js');
+  await import('@harrylabsj/kiwi/dist/http/merchant-server.js');
   await import('@harrylabsj/kiwi/dist/commerce/http-client.js');
   await import('@harrylabsj/kiwi/dist/supervisor/stack-config.js');
   await import('@harrylabsj/kiwi/dist/supervisor/manage.js');
   const { wrapperPath } = await import('@harrylabsj/kiwi/dist/supervisor/manifest.js');
   const { existsSync } = await import('node:fs');
   if (!existsSync(wrapperPath())) throw new Error('child-runner wrapper.js missing from package');
+  const { SkillRegistry } = await import('@harrylabsj/kiwi/dist/agent/skills/registry.js');
+  const { join } = await import('node:path');
+  const registry = SkillRegistry.fromDir(join(process.cwd(), 'node_modules/@harrylabsj/kiwi/skills/merchant'), 'merchant');
+  if (!registry.names.includes('performance-insights')) throw new Error('merchant skills missing from package');
+  const { existsSync: skillExists } = await import('node:fs');
+  if (!skillExists(join(process.cwd(), 'node_modules/@harrylabsj/kiwi/skills/kiwi-buyer/SKILL.md'))) {
+    throw new Error('buyer skill missing from package');
+  }
   console.log('production package smoke OK');
 "

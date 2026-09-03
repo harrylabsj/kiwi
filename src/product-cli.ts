@@ -32,6 +32,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import packageJson from "../package.json" with { type: "json" };
 import { EXIT } from "./exit-codes.js";
 import { SHOPPING_CLI_COMPAT, compatRangeText, versionInRange } from "./product-compat.js";
 
@@ -55,8 +56,8 @@ export function writeDefaultProfile(yaml: string, profilePath?: string): void {
   writeFileSync(target, yaml, { mode: 0o600 });
 }
 
-/** 与 package.json / USAGE 同步的产品版本。 */
-export const PRODUCT_VERSION = "0.7.22";
+/** package.json 是发布版本的唯一来源，避免 CLI 与正式安装包版本漂移。 */
+export const PRODUCT_VERSION = packageJson.version;
 
 /**
  * 缺省 kiwi-catalog 地址（单一来源，cli.ts 各处解析一致）。

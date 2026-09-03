@@ -174,7 +174,7 @@ class NoThinkingStorage implements SessionStorage<JsonlSessionMetadata> {
 }
 
 /** Open (or create) the main conversation session with the no-thinking invariant. */
-export async function openMainSession(paths: AgentPaths): Promise<Session> {
+export async function openMainSession(paths: AgentPaths, sessionId = "main"): Promise<Session> {
   const fs = nodeFs0600();
   let storage: JsonlSessionStorage;
   try {
@@ -182,7 +182,7 @@ export async function openMainSession(paths: AgentPaths): Promise<Session> {
       ? await JsonlSessionStorage.open(fs, paths.mainSession)
       : await JsonlSessionStorage.create(fs, paths.mainSession, {
           cwd: paths.dir,
-          sessionId: "main",
+          sessionId,
         });
   } catch (e) {
     throw new AgentSessionError(

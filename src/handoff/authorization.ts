@@ -17,7 +17,7 @@
 /**
  * Kiwi v0.7.0 Transaction Handoff — AuthorizationProvider（AP2 边界，WP1）。
  *
- * 基线 §43 / docs/kiwi_a2a_v1.md §29 预留给 AuthorizationProvider 的 AP2 接缝：
+ * 架构基线 §43 / Handoff 规范预留给 AuthorizationProvider 的 AP2 接缝：
  * Kiwi 不实现真实 AP2（外部系统），只定义适配边界，并提供一个 fail-closed 默认
  * 实现（FailClosedAuthorizationProvider）——未配置真实 AP2 时：
  *   - createIntentMandate  → requires_user（把人导向外部 checkout，绝不伪造 mandate）；

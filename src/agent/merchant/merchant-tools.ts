@@ -32,6 +32,8 @@
 
 import type { AgentHarnessTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { AgentProfile } from "../../config/profile.js";
+import { fenceModelPayload } from "../context/fencing.js";
+import type { AgentHostEventType } from "../host/events.js";
 import type { CommerceDataSource } from "../../commerce/data-source.js";
 import type { CommerceClient } from "../../commerce/types.js";
 import { LedgerStore } from "../../negotiation/ledger/index.js";
@@ -50,6 +52,9 @@ import type {
 import { MerchantClientError } from "./types.js";
 import type { WriteGateDeps, WriteGateResult } from "../write-gate.js";
 import { routeWriteCandidate } from "../write-gate.js";
+import type { MerchantIntelligenceBackend } from "./intelligence/backend.js";
+import { createMerchantPresentationRegistry } from "./merchant-presentations.js";
+import { runPresentation } from "../presentation/runner.js";
 
 type Tool = AgentHarnessTool<undefined>;
 
@@ -72,6 +77,15 @@ function errorText(err: unknown): string {
 
 function optString(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+function experienceEnabled(profile: AgentProfile, capability: "intelligence" | "presentation"): boolean {
+  const config = profile.merchant_experience;
+  return config?.enabled === true && config[capability] !== false;
+}
+
+function experienceMaxChars(profile: AgentProfile): number {
+  return profile.merchant_experience?.max_external_context_chars ?? 12_000;
 }
 
 function parseProductInput(value: unknown): MerchantProductInput {
@@ -197,6 +211,12 @@ export interface MerchantToolDeps {
   /** 商家 A2A 节点 ledger 目录（`<dataDir>/a2a/ledger`）；提供时挂载
    *  `list_a2a_negotiations` 工具，让运营者查看真实发生的 A2A 磋商记录。 */
   a2aLedgerDir?: string;
+  /** Optional commerce-agents-style merchant application layer. */
+  intelligence?: MerchantIntelligenceBackend;
+  /** Optional host event projection; business state never depends on it. */
+  emitEvent?: (type: AgentHostEventType, data: unknown) => Promise<void>;
+  /** Process-bound principal id used by server enrichment. */
+  principalId?: string;
 }
 
 export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
@@ -227,7 +247,7 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
             stock: p.stock ?? null,
             paused: false,
           }));
-          return textResult(rows.length === 0 ? "目录为空。" : JSON.stringify(rows), {
+          return textResult(rows.length === 0 ? "目录为空。" : fenceModelPayload("merchant_api", rows, { maxChars: experienceMaxChars(profile) }), {
             count: rows.length,
             source: "data-source",
           });
@@ -240,7 +260,7 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
           stock: p.stock,
           paused: p.paused,
         }));
-        return textResult(rows.length === 0 ? "目录为空。" : JSON.stringify(rows), { count: rows.length });
+        return textResult(rows.length === 0 ? "目录为空。" : fenceModelPayload("merchant_api", rows, { maxChars: experienceMaxChars(profile) }), { count: rows.length });
       } catch (err) {
         return textResult(errorText(err));
       }
@@ -261,7 +281,7 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       try {
         const { sku } = params as { sku: string };
         const product = await merchantClient.getProduct(sku);
-        return textResult(JSON.stringify(productPreconditions(product)));
+        return textResult(fenceModelPayload("merchant_api", productPreconditions(product), { maxChars: experienceMaxChars(profile) }));
       } catch (err) {
         return textResult(errorText(err));
       }
@@ -282,7 +302,7 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       try {
         const { sku } = params as { sku: string };
         const snapshot = await merchantClient.getInventorySnapshot(sku);
-        return textResult(JSON.stringify(snapshot));
+        return textResult(fenceModelPayload("merchant_api", snapshot, { maxChars: experienceMaxChars(profile) }));
       } catch (err) {
         return textResult(errorText(err));
       }
@@ -342,7 +362,10 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       }
       rows.sort((a, b) => (a.at > b.at ? -1 : a.at < b.at ? 1 : 0));
       if (rows.length === 0) return textResult("当前没有进行中的磋商。", { count: 0 });
-      return textResult(`共 ${rows.length} 笔进行中磋商：\n${rows.map((r) => r.line).join("\n")}`, {
+      return textResult(fenceModelPayload("a2a_message", {
+        total: rows.length,
+        items: rows.map((r) => r.line),
+      }, { maxChars: experienceMaxChars(profile) }), {
         count: rows.length,
       });
     },
@@ -361,15 +384,13 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       try {
         const reviews = await merchantClient.getHumanReviewQueue(ownerId);
         if (reviews.length === 0) return textResult("人工处理队列为空。");
-        return textResult(
-          reviews
-            .map(
-              (r) =>
-                `· #${String(r.review_id)} ${r.sku} [${r.severity}] ${r.reason}（${r.conversation_id}）`,
-            )
-            .join("\n"),
-          { count: reviews.length },
-        );
+        return textResult(fenceModelPayload("human_review", reviews.map((r) => ({
+          review_id: r.review_id,
+          conversation_id: r.conversation_id,
+          sku: r.sku,
+          severity: r.severity,
+          reason: r.reason,
+        })), { maxChars: experienceMaxChars(profile) }), { count: reviews.length });
       } catch (err) {
         return textResult(errorText(err));
       }
@@ -669,6 +690,192 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     },
   };
 
+  const experienceTools: Tool[] = [];
+  if (experienceEnabled(profile, "intelligence") && deps.intelligence !== undefined) {
+    const intelligence = deps.intelligence;
+    const getBusinessSnapshot: Tool = {
+      name: "get_business_snapshot",
+      label: "读取经营摘要",
+      description: "读取当前商家经营摘要、咨询/磋商和待处理事项。只读；指标由服务端计算并注明数据限制。",
+      parameters: {
+        type: "object",
+        properties: {
+          period: {
+            type: "string",
+            pattern: "^(?:[1-9]|[1-8][0-9]|90)d$",
+            description: "UTC 统计窗口，1d 到 90d，例如 7d、14d、30d",
+          },
+        },
+        additionalProperties: false,
+      },
+      execute: async (_id, params) => {
+        try {
+          const period = optString((params as { period?: unknown }).period);
+          const snapshot = await intelligence.getBusinessSnapshot({
+            merchant_id: ownerId,
+            ...(period === undefined ? {} : { period }),
+          });
+          return textResult(fenceModelPayload("metric", snapshot, { maxChars: experienceMaxChars(profile) }), {
+            status: "ok",
+            metric: "business_snapshot",
+          });
+        } catch (err) {
+          return textResult(errorText(err));
+        }
+      },
+    };
+
+    const queryMetric: Tool = {
+      name: "query_merchant_metric",
+      label: "读取经营指标",
+      description: "读取一项按日/周/月聚合的商家指标。不可得的指标返回明确说明，不用零值代替。",
+      parameters: {
+        type: "object",
+        properties: {
+          metric: { type: "string", description: "指标名，例如 contact_events、negotiations" },
+          period: {
+            type: "string",
+            pattern: "^(?:[1-9]|[1-8][0-9]|90)d$",
+            description: "UTC 统计窗口，1d 到 90d，例如 7d、14d、30d",
+          },
+          granularity: { type: "string", enum: ["day", "week", "month"] },
+        },
+        required: ["metric"],
+        additionalProperties: false,
+      },
+      execute: async (_id, params) => {
+        try {
+          const p = params as { metric?: unknown; period?: unknown; granularity?: unknown };
+          const metric = optString(p.metric);
+          if (metric === undefined) return textResult("metric 必须是非空字符串。");
+          const granularity = p.granularity === "week" || p.granularity === "month" ? p.granularity : "day";
+          const series = await intelligence.queryMetric({
+            merchant_id: ownerId,
+            metric,
+            granularity,
+            ...(optString(p.period) === undefined ? {} : { period: optString(p.period) }),
+          });
+          return textResult(fenceModelPayload("metric", series, { maxChars: experienceMaxChars(profile) }), {
+            status: "ok",
+            metric,
+          });
+        } catch (err) {
+          return textResult(errorText(err));
+        }
+      },
+    };
+
+    const getNegotiationDigest: Tool = {
+      name: "get_negotiation_digest",
+      label: "读取磋商摘要",
+      description: "读取商家 A2A 磋商摘要。返回当前 phase、公开报价和是否需要人工；只读。",
+      parameters: {
+        type: "object",
+        properties: {
+          status: { type: "string", enum: ["active", "agreement", "all"] },
+          limit: { type: "integer", minimum: 1, maximum: 100 },
+        },
+        additionalProperties: false,
+      },
+      execute: async (_id, params) => {
+        try {
+          const p = params as { status?: unknown; limit?: unknown };
+          const status = p.status === "active" || p.status === "agreement" ? p.status : "all";
+          const rawLimit = typeof p.limit === "number" && Number.isFinite(p.limit) ? Math.trunc(p.limit) : 20;
+          const rows = await intelligence.getNegotiationDigest({
+            merchant_id: ownerId,
+            status,
+            limit: Math.max(1, Math.min(100, rawLimit)),
+          });
+          return textResult(fenceModelPayload("a2a_message", rows, { maxChars: experienceMaxChars(profile) }), {
+            status: "ok",
+            count: rows.length,
+          });
+        } catch (err) {
+          return textResult(errorText(err));
+        }
+      },
+    };
+
+    const getCatalogHealth: Tool = {
+      name: "get_catalog_health",
+      label: "读取目录健康度",
+      description: "读取商品总量、上下架状态和缺货数量；精确库存不可得时返回 null 及限制说明。",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      execute: async () => {
+        try {
+          const health = await intelligence.getCatalogHealth({ merchant_id: ownerId });
+          return textResult(fenceModelPayload("merchant_api", health, { maxChars: experienceMaxChars(profile) }), {
+            status: "ok",
+          });
+        } catch (err) {
+          return textResult(errorText(err));
+        }
+      },
+    };
+
+    const getPendingActions: Tool = {
+      name: "get_pending_actions",
+      label: "读取待审批操作",
+      description: "读取当前 principal 的待审批写操作。返回候选元数据，不返回私有阈值或凭据。",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      execute: async () => {
+        try {
+          const rows = await intelligence.getPendingActions();
+          return textResult(fenceModelPayload("merchant_api", rows, { maxChars: experienceMaxChars(profile) }), {
+            status: "ok",
+            count: rows.length,
+          });
+        } catch (err) {
+          return textResult(errorText(err));
+        }
+      },
+    };
+    experienceTools.push(getBusinessSnapshot, queryMetric, getCatalogHealth, getNegotiationDigest, getPendingActions);
+  }
+
+  if (experienceEnabled(profile, "presentation") && deps.emitEvent !== undefined) {
+    const registry = createMerchantPresentationRegistry();
+    const emitUi = async (component: string, payload: unknown): Promise<void> => {
+      await deps.emitEvent?.("ui", { component, payload });
+    };
+    const presentationContext = {
+      profile,
+      principalId: deps.principalId ?? ownerId,
+      merchantClient,
+      approvals,
+      ...(deps.intelligence !== undefined ? { intelligence: deps.intelligence } : {}),
+    };
+    for (const component of registry.list()) {
+      const presentationTool: Tool = {
+        name: component.toolName,
+        label: component.label,
+        description: component.description,
+        parameters: component.inputSchema,
+        execute: async (_id, params) => {
+          try {
+            const result = await runPresentation(
+              registry,
+              component.toolName,
+              params,
+              presentationContext,
+              emitUi,
+            );
+            return textResult(
+              component.toolName === "present_change_preview"
+                ? "已展示变更预览；尚未批准或执行。"
+                : `已展示${component.label.replace(/^展示/, "")}。`,
+              { component: result.component },
+            );
+          } catch (err) {
+            return textResult(errorText(err));
+          }
+        },
+      };
+      experienceTools.push(presentationTool);
+    }
+  }
+
   const negotiationTools =
     deps.commerceClient !== undefined
       ? buildNegotiationChatTools({
@@ -763,7 +970,10 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       rows.sort((a, b) => (a.at > b.at ? -1 : a.at < b.at ? 1 : 0));
       const recent = rows.slice(0, limit);
       if (recent.length === 0) return textResult("暂无 A2A 磋商记录。", { count: 0 });
-      return textResult(`共 ${rows.length} 笔 A2A 磋商（最近 ${recent.length} 笔）：\n${recent.map((r) => r.line).join("\n")}`, {
+      return textResult(fenceModelPayload("a2a_message", {
+        total: rows.length,
+        items: recent.map((r) => r.line),
+      }, { maxChars: experienceMaxChars(profile) }), {
         count: recent.length,
       });
     },
@@ -776,6 +986,7 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     listConsultations,
     humanReviewQueue,
     viewPrivateThresholds,
+    ...experienceTools,
     ...negotiationTools,
     createProduct,
     updateProduct,

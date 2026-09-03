@@ -70,6 +70,12 @@ export interface DailyBucket {
   negotiations: number;
 }
 
+/** 单日买家身份集合的去重行，用于跨日粒度聚合。 */
+export interface DailyBuyerIdentity {
+  day: string;
+  buyer_identity: string;
+}
+
 /** 单 SKU 聚合。 */
 export interface SkuStat {
   sku: string;
@@ -193,6 +199,20 @@ export class MerchantStatsStore {
       contact_events: r.contact_events,
       negotiations: r.negotiations,
     }));
+  }
+
+  /** 按日返回原始身份去重行，避免周/月把同一买家跨日重复相加。 */
+  dailyBuyerIdentitiesSince(sinceDay: string): DailyBuyerIdentity[] {
+    const rows = this.db
+      .prepare(
+        `SELECT substr(occurred_at, 1, 10) AS day, buyer_identity
+         FROM buyer_contact_events
+         WHERE substr(occurred_at, 1, 10) >= ?
+         GROUP BY day, buyer_identity
+         ORDER BY day, buyer_identity`,
+      )
+      .all(sinceDay) as unknown as DailyBuyerIdentity[];
+    return rows.map((row) => ({ day: row.day, buyer_identity: row.buyer_identity }));
   }
 
   /** SKU 热度榜（按触达事件数降序，sku 升序兜底，截断 limit）。 */

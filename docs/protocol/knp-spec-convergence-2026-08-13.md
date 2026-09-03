@@ -1,7 +1,7 @@
 # KNP/1.0 Spec Convergence（2026-08-13）
 
 > 本文把 KNP/1.0 开放互操作所需的规范收敛为一份可独立实施的文档（Issue 12）。
-> 它是协议正文 `docs/protocol/kiwi-negotiation-protocol-1.0.md` 的**收敛补充**：
+> 它是协议正文 `docs/protocol/kiwi-negotiation-protocol-1.0-rev1.4.md` 的**收敛补充**：
 > 已覆盖的章节直接引用，未覆盖或近期实证才改变的（A2A 1.0 carrier mapping /
 > 扩展激活细节 / 并发报价 / 差异矩阵 / 边界 / conformance vectors）在此给出具体内容。
 >

@@ -15,7 +15,7 @@
  */
 
 /**
- * Operator control plane types (docs/operator-tui-v0.2.md §5–§10).
+ * Operator control plane types (operator control-plane design §5–§10).
  *
  * Three state domains stay separate: the marketplace conversation (owned by
  * shopping-cli), the operator session (this private event stream), and the

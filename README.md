@@ -4,7 +4,7 @@
 [A2A](https://a2a-protocol.org/) 与 [UCP](https://ucp.dev/) 完成发现 → capability 协商 →
 磋商 → 非绑定协议。磋商以**非约束性商业协议**终止：不创建订单、不支付、不锁库存。
 
-**Kiwi 当前代码版本 0.7.20**：当前发布线包含 A2A 双栈、KNP/1.0 磋商、签名身份
+**Kiwi 当前代码版本 0.7.22**：当前发布线包含 A2A 双栈、KNP/1.0 磋商、签名身份
 与安全交接能力。A2A 1.0 线协议互操作以组合 conformance transcript 为准，不用历史审计
 文档替代运行证据。
 
@@ -159,6 +159,38 @@ node scripts/a2a-agent.mjs --role buyer                   # 交互式 buyer（�
 
 > `model.provider: fake` 使用内置确定性模型，无需任何凭据即可本地冒烟 / CI。
 
+### Merchant Experience（0.8 升级能力）
+
+Merchant profile 可选择开启基于 `commerce-agents` 设计借鉴的运营能力层：经营摘要、A2A
+磋商摘要、待审批操作、只读 grounding、外部数据 fencing、host presentation event 和
+Merchant HTTP/SSE adapter。
+该能力层不改变 KNP/A2A wire，也不绕过现有 `WriteApprovalCandidate`、HardPolicy 和
+审批流程。
+
+这里的 HardPolicy 是 profile 私有阈值、`clampHintsToHardPolicy()` 与写入/磋商 gates
+的组合设计概念，不是独立导出的类型。
+
+```yaml
+merchant_experience:
+  enabled: true
+  intelligence: true
+  grounding: true
+  presentation: true
+  skills: true
+  prompt_cache_retention: short
+```
+
+`enabled` 缺省为关闭，以保持旧 profile 的工具面兼容；安全 fencing 是全局行为，会改变
+外部工具结果的模型可见包装，但不改变工具名称、参数和写入语义。`skills: true` 时会从发布包中的
+`skills/merchant/` 加载版本化 `SKILL.md`，并挂载 `load_skill`；Skill 只提供流程原则，
+不能改变权限或审批规则。Host 若要接收结构化展示和 grounding 事件，可通过
+`buildChatKernel(profile, dataDir, catalog, eventSink)` 注入 `AgentEventSink`；没有 sink
+时不会挂载 presentation 工具，也不会产生 `text_delta`/`ui_partial` 流事件，但只读 Merchant
+能力和现有 TUI 行为不受影响。使用 `eventSink` 时，`text_delta`、工具生命周期、
+`ui_partial` 和审批 `candidate_update` 均来自 AgentHarness 正式事件接口。外部 Host
+可使用 createMerchantHttpServer() 接入独立 session、SSE 事件流和 candidate 审批。新
+能力的实现边界和工具清单见 [`docs/merchant-experience.md`](docs/merchant-experience.md)。
+
 ## 测试与质量
 
 ```bash
@@ -175,7 +207,11 @@ npm run verify          # 全部 + 生产包冒烟
 ## 文档
 
 - [`docs/kiwi-a2a-architecture-baseline-rev1.3.md`](docs/kiwi-a2a-architecture-baseline-rev1.3.md) — 架构基线（§41 完成定义）
+- [`docs/merchant-experience.md`](docs/merchant-experience.md) — Merchant Experience、Skills、Grounding、Fencing 与 Host Event
 - [`docs/protocol/kiwi-negotiation-protocol-1.0-rev1.4.md`](docs/protocol/kiwi-negotiation-protocol-1.0-rev1.4.md) — KNP/1.0 规范
+- [`docs/protocol/knp-spec-convergence-2026-08-13.md`](docs/protocol/knp-spec-convergence-2026-08-13.md) — KNP/1.0 实施收敛说明
+- [`docs/reviews/a2a-sdk-conformance-transcript.jsonl`](docs/reviews/a2a-sdk-conformance-transcript.jsonl) — A2A SDK 往返实证记录
+- [`skills/kiwi-buyer/SKILL.md`](skills/kiwi-buyer/SKILL.md) — Hermes Buyer 公共 skill
 - [`CHANGELOG.md`](CHANGELOG.md) — 版本历史
 
 ## 反馈与支持

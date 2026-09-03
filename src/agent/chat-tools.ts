@@ -35,6 +35,7 @@ import {
   parseMemoryScope,
 } from "./memory/types.js";
 import { VaultKeyError } from "./memory/vault.js";
+import { containsExternalFence, sanitizeModelText, sanitizeModelValue } from "./context/fencing.js";
 
 export const TOOL_REMEMBER = "remember";
 export const TOOL_FORGET_MEMORY = "forget_memory";
@@ -129,6 +130,12 @@ export function buildMemoryTools(store: MemoryStore, options: MemoryToolOptions 
             "restricted_value 与 restricted_kind 必须同时提供",
           );
         }
+        if (containsExternalFence(p.value) || containsExternalFence(p.reason_summary)) {
+          throw new MemoryError(
+            "validation",
+            "外部 fenced 数据或工具结果不能原样保存为 Principal Memory；只保存用户明确陈述的稳定事实",
+          );
+        }
         const restricted =
           p.restricted_value !== undefined && p.restricted_kind !== undefined
             ? { kind: p.restricted_kind, plaintext: String(p.restricted_value) }
@@ -136,7 +143,7 @@ export function buildMemoryTools(store: MemoryStore, options: MemoryToolOptions 
         const outcome: RememberOutcome = store.remember({
           namespace: p.namespace,
           key: p.key,
-          ...(restricted === undefined ? { value: p.value ?? null } : { restricted }),
+          ...(restricted === undefined ? { value: sanitizeModelValue(p.value ?? null) } : { restricted }),
           ...(p.scope !== undefined ? { scope: parseMemoryScope(p.scope) } : {}),
           source_kind: p.source_kind,
           sensitivity: p.sensitivity,
@@ -145,7 +152,7 @@ export function buildMemoryTools(store: MemoryStore, options: MemoryToolOptions 
           evidence: {
             source_type: "chat",
             source_ref: turnRef(),
-            summary: String(p.reason_summary ?? ""),
+            summary: sanitizeModelText(String(p.reason_summary ?? ""), { maxChars: 300 }),
           },
           actor: "model",
         });
@@ -228,11 +235,14 @@ export function buildMemoryTools(store: MemoryStore, options: MemoryToolOptions 
             "硬约束/敏感记忆请由操作者用 /correct 人工处理，模型不能直接修改。",
           );
         }
+        if (containsExternalFence(p.value)) {
+          return textResult("外部 fenced 数据或工具结果不能原样写入 Principal Memory。");
+        }
         const memory = store.correctMemory(
           p.memory_id,
-          { value: p.value },
+          { value: sanitizeModelValue(p.value) },
           "model",
-          p.reason ?? "模型推断用户纠正",
+          sanitizeModelText(p.reason ?? "模型推断用户纠正", { maxChars: 300 }),
         );
         return textResult(`已修正 ${memory.memory_id}（版本 ${memory.version}），旧值保留在审计事件中。`);
       } catch (err) {

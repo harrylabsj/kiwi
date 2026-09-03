@@ -70,7 +70,7 @@ function latestToolResultText(context: Context, toolName: string): string | unde
 
 /**
  * Structured influence of applied operator strategy directives on candidate
- * generation (docs/operator-tui-v0.2.md §7). Compiled by the operator runner
+ * generation (operator control-plane design §7). Compiled by the operator runner
  * from the session's directive list; never widens HardPolicy by itself — the
  * authoritative policy gates still run on the profile at submit time.
  */

@@ -89,6 +89,9 @@ export class WeixinChannel {
   private stopped = false;
   private runPromise: Promise<number> | null = null;
   private pollAbort: AbortController | null = null;
+  /** Latest server cursor, retained so stop() can flush it after abort. */
+  private syncBuf = "";
+  private syncStateReady = false;
   private timers: ReturnType<typeof setInterval>[] = [];
   private noticeFn: (line: string) => void;
 
@@ -173,6 +176,13 @@ export class WeixinChannel {
         // stop 后的轮询异常被 stopped 分支吞掉
       }
     }
+    if (this.syncStateReady) {
+      try {
+        saveSyncState(this.syncBufPath, { get_updates_buf: this.syncBuf, seen: [...this.seen] });
+      } catch (err) {
+        this.log(`[weixin] 同步游标写入失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   // ── 主循环 ──────────────────────────────────────────────────────────
@@ -190,6 +200,8 @@ export class WeixinChannel {
     try {
       const state = loadSyncState(this.syncBufPath);
       syncBuf = state.get_updates_buf;
+      this.syncBuf = syncBuf;
+      this.syncStateReady = true;
       for (const fp of state.seen) this.seen.add(fp);
     } catch (err) {
       // 审查 P3：损坏的同步状态必须 fail-closed——此前打日志后从头轮询，
@@ -205,6 +217,7 @@ export class WeixinChannel {
 
     let consecutiveProtocolErrors = 0;
     let fatalCount = 0;
+    let committedSyncBuf = syncBuf;
     // 审查 P2-M：在飞长轮询的 abort 句柄——stop() 的 pollAbort?.abort()
     // 此前是空操作（声明后从未赋值），Ctrl+C 退出被阻塞到轮询超时
     // （~55s）。现在 runLoop 创建 controller 并传入 getUpdates。
@@ -216,13 +229,15 @@ export class WeixinChannel {
         const result = await this.client.getUpdates(syncBuf, creds, pollSignal);
         consecutiveProtocolErrors = 0;
         fatalCount = 0;
-        syncBuf = result.next_sync_buf;
         for (const msg of result.messages) {
           await this.processMessage(msg);
           if (this.stopped) return 0;
         }
         // 每轮写穿游标 + 去重（重启零丢失）
-        saveSyncState(this.syncBufPath, { get_updates_buf: syncBuf, seen: [...this.seen] });
+        saveSyncState(this.syncBufPath, { get_updates_buf: result.next_sync_buf, seen: [...this.seen] });
+        syncBuf = result.next_sync_buf;
+        committedSyncBuf = syncBuf;
+        this.syncBuf = committedSyncBuf;
       } catch (err) {
         if (this.stopped) return 0;
         if (err instanceof WeixinError) {

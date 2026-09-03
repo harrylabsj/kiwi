@@ -15,7 +15,7 @@
  */
 
 /**
- * A2A v0.4 candidate model (docs/kiwi-a2a-architecture-baseline.md §7).
+ * A2A v0.4 candidate model (docs/kiwi-a2a-architecture-baseline-rev1.3.md §7).
  *
  * ActionCandidate is the unified base class semantics: "Agent 建议执行、但尚未
  * 真正执行的外部有副作用动作" — an external side-effectful action the agent
