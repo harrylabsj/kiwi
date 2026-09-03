@@ -26,7 +26,8 @@
  * 私钥仅存在于出站签名器（signer.ts）；本模块不保存、不解析私钥除外的任何 secret。
  */
 
-import { createPrivateKey, createPublicKey, type JsonWebKey, type KeyObject } from "node:crypto";
+import { createPrivateKey, createPublicKey, type KeyObject } from "node:crypto";
+import type { JsonWebKey } from "./jwk.js";
 import type { TrustLevel } from "./trust-policy.js";
 
 /** 本实现支持的签名算法（RFC 9421 alg 名见 RFC9421_ALG_NAMES）。 */

@@ -26,7 +26,8 @@
  * 「验签 + 卡片绑定」能力，不做强制决策。
  */
 
-import { createPublicKey, KeyObject, type JsonWebKey, verify as nodeVerify } from "node:crypto";
+import { createPublicKey, KeyObject, verify as nodeVerify } from "node:crypto";
+import type { JsonWebKey } from "./jwk.js";
 import { parseAgentCard } from "../../discovery/agent-card/index.js";
 import type { AgentCard } from "../../discovery/agent-card/index.js";
 import { canonicalize } from "../../negotiation/jcs.js";

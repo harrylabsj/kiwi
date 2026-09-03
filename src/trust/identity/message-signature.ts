@@ -32,9 +32,9 @@ import {
   createHash,
   sign as nodeSign,
   verify as nodeVerify,
-  type JsonWebKey,
   type KeyObject,
 } from "node:crypto";
+import type { JsonWebKey } from "./jwk.js";
 import type { A2AOutboundRequest } from "../../a2a/client/types.js";
 import {
   buildSignatureBase,
