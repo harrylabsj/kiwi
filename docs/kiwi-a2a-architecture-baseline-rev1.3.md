@@ -571,7 +571,7 @@ com.harrylabsj.kiwi.shopping.negotiation
 namespace 已替换为实际控制域名对应的 reverse-domain（`kiwi.example` 占位符已移除）。
 spec / schema 已在 `https://kiwi.harrylabsj.com` 真实托管（UCP origin 绑定已满足，2026-08-06 上线）。
 托管面：公开仓库 `harrylabsj/kiwi-spec`（Cloudflare Pages → `https://kiwi.harrylabsj.com`），
-协议正文以 `docs/protocol/kiwi-negotiation-protocol-1.0.md` 为权威源。
+协议正文以 `docs/protocol/kiwi-negotiation-protocol-1.0-rev1.4.md` 为权威源。
 
 UCP capability MUST 遵循：
 
@@ -2170,8 +2170,8 @@ Kiwi 只有同时满足以下条件才宣布 A2A v1.0：
 26. 没有支付副作用。
 27. 没有库存预留副作用。
 
-**A2A v1.0 已宣布（2026-08-07）**：上述 27 条完成定义经就绪度审计（
-`docs/reviews/kiwi-a2a-v1.0-readiness-audit-2026-08-06.md`）逐条实证满足（27/27）。
+**A2A v1.0 已宣布（2026-08-07）**：上述 27 条完成定义已由历史就绪度审计逐条实证满足（27/27）；
+当前公共仓库以 `docs/reviews/a2a-sdk-conformance-transcript.jsonl` 作为可复核的运行证据。
 namespace 与 schema 托管于 `https://kiwi.harrylabsj.com`（公开仓库 `harrylabsj/kiwi-spec`）。
 
 ---
@@ -2208,22 +2208,21 @@ v1.1 Handoff/Product Split 只有同时满足以下条件才算完成：
 
 ```text
 docs/
-  kiwi-a2a-architecture-baseline.md
-  kiwi-catalog-product-architecture.md
-  shopping-cli-commerce-data-hub.md
+  kiwi-a2a-architecture-baseline-rev1.3.md
+  merchant-experience.md
 
 docs/protocol/
-  kiwi-negotiation-protocol-1.0.md
-  kiwi-transaction-handoff-0.1.md
+  kiwi-negotiation-protocol-1.0-rev1.4.md
+  kiwi-transaction-handoff-0.1-rev0.3.md
 
-schemas/
-  ...
+contracts/negotiation/1.0/
+  schema.json
 
-test-vectors/
-  ...
+spec/conformance/
+  knp-1.0-vectors.json
 
-docs/testing/
-  kiwi-a2a-v1-test-plan.md
+contracts/conformance/python-service/
+  run.py
 ```
 
 规则：

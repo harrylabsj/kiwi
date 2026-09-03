@@ -57,5 +57,9 @@ node --input-type=module -e "
   const { join } = await import('node:path');
   const registry = SkillRegistry.fromDir(join(process.cwd(), 'node_modules/@harrylabsj/kiwi/skills/merchant'), 'merchant');
   if (!registry.names.includes('performance-insights')) throw new Error('merchant skills missing from package');
+  const { existsSync: skillExists } = await import('node:fs');
+  if (!skillExists(join(process.cwd(), 'node_modules/@harrylabsj/kiwi/skills/kiwi-buyer/SKILL.md'))) {
+    throw new Error('buyer skill missing from package');
+  }
   console.log('production package smoke OK');
 "

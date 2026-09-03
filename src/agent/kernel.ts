@@ -904,7 +904,7 @@ export class AgentKernel {
   /**
    * Change the runtime mode. Switching INTO autopilot requires an explicit
    * `confirm` — the same fail-closed rule as the operator control plane
-   * (docs/operator-tui-v0.2.md §8).
+   * (operator control-plane design §8).
    */
   setMode(mode: AgentMode, options?: { confirmed?: boolean }): { ok: boolean; error?: string } {
     if (!isAgentMode(mode)) {

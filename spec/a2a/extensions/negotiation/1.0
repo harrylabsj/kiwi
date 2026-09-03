@@ -4,7 +4,7 @@ doc_revision: "1.4"
 short_name: KNP/1.0
 status: Normative Specification (Released 2026-08-07; errata/editorial revision)
 date: 2026-08-07
-target_implementation: Kiwi v0.7.0 (draft; v0.6.0 发布身份见 kiwi-negotiation-protocol-1.0.md)
+target_implementation: Kiwi v0.7.0 (draft; v0.6.0 发布身份见 CHANGELOG.md)
 scope: Pre-transaction Agent-to-Agent commerce negotiation
 ---
 
@@ -1398,13 +1398,16 @@ Current repository authority:
 
 ```text
 docs/protocol/
-  kiwi-negotiation-protocol-1.0.md
+  kiwi-negotiation-protocol-1.0-rev1.4.md
 
 contracts/negotiation/1.0/
   schema.json
 ```
 
-Protocol test evidence currently lives in the repository test suite and readiness audit. This specification MUST NOT cite a standalone `schemas/` or `test-vectors/` directory unless those artifacts actually exist and are version-controlled.
+Protocol test evidence currently lives in the repository test suite and
+`docs/reviews/a2a-sdk-conformance-transcript.jsonl`. This specification MUST
+NOT cite a standalone `schemas/` or `test-vectors/` directory unless those
+artifacts actually exist and are version-controlled.
 
 A future dedicated vector bundle MAY be introduced, but its path becomes normative only after it is committed and referenced here.
 

@@ -5,7 +5,7 @@ Kiwi Negotiation Protocol (KNP) 的**独立 Python 参考实现**（Issue 11 / D
 互操作：RFC 8785 JCS digest / envelope 结构 / A2A 1.0 JSON-RPC 帧。
 
 「独立」= 不 import Kiwi runtime，按公开协议（`spec/schemas/negotiation/1.0/schema.json`
-+ `docs/protocol/kiwi-negotiation-protocol-1.0.md`）从零实现。证明开放互操作
++ `docs/protocol/kiwi-negotiation-protocol-1.0-rev1.4.md`）从零实现。证明开放互操作
 （不是 Kiwi 与自己互通）。
 
 ## 能力

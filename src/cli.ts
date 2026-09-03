@@ -30,7 +30,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1486,7 +1486,8 @@ async function cmdSetupHermes(): Promise<number> {
     username = process.env.USER ?? "user";
   }
   const dbPath = path.join(homedir(), ".kiwi", "buyer.sqlite");
-  const skillUrl = "https://raw.githubusercontent.com/harrylabsj/kiwi/main/integrations/hosts/hermes/SKILL.md";
+  const skillUrl = "https://raw.githubusercontent.com/harrylabsj/kiwi/main/skills/kiwi-buyer/SKILL.md";
+  const bundledSkillPath = fileURLToPath(new URL("../skills/kiwi-buyer/SKILL.md", import.meta.url));
   const skillPath = path.join(homedir(), ".hermes", "skills", "kiwi-buyer", "SKILL.md");
   const configured: string[] = [];
   const already: string[] = [];
@@ -1526,24 +1527,36 @@ async function cmdSetupHermes(): Promise<number> {
     configured.push("MCP server kiwi-buyer-mcp");
   }
 
-  // 4. kiwi-buyer skill：已存在则跳过；否则 hermes install（失败则直接 fetch 落盘兜底）
+  // 4. kiwi-buyer skill：优先使用 npm 包内置版本，避免依赖网络；否则从公共 URL 安装
   if (existsSync(skillPath)) {
     already.push("skill kiwi-buyer");
   } else {
     process.stdout.write("[setup-hermes] 安装 kiwi-buyer skill ...\n");
-    const skill = spawnSync("hermes", ["skills", "install", skillUrl, "--yes"], { stdio: "inherit" });
-    if (skill.status !== 0 || !existsSync(skillPath)) {
-      // 兜底：直接 fetch SKILL.md 写入 ~/.hermes/skills/kiwi-buyer/（Hermes skills 为 local 存储）
-      process.stdout.write("[setup-hermes] hermes skills install 不可用，改用直接写入 ...\n");
+    if (existsSync(bundledSkillPath)) {
+      process.stdout.write("[setup-hermes] 使用 npm 包内置 skill ...\n");
       try {
-        const res = await fetch(skillUrl, { signal: AbortSignal.timeout(15000) });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const content = await res.text();
         mkdirSync(path.dirname(skillPath), { recursive: true, mode: 0o700 });
-        writeFileSync(skillPath, content, { mode: 0o600 });
+        copyFileSync(bundledSkillPath, skillPath);
+        chmodSync(skillPath, 0o600);
       } catch (err) {
         process.stderr.write(`安装 kiwi-buyer skill 失败：${err instanceof Error ? err.message : String(err)}\n`);
         return EXIT.CONFIG;
+      }
+    } else {
+      const skill = spawnSync("hermes", ["skills", "install", skillUrl, "--yes"], { stdio: "inherit" });
+      if (skill.status !== 0 || !existsSync(skillPath)) {
+        // 兜底：直接 fetch SKILL.md 写入 ~/.hermes/skills/kiwi-buyer/（Hermes skills 为 local 存储）
+        process.stdout.write("[setup-hermes] hermes skills install 不可用，改用直接写入 ...\n");
+        try {
+          const res = await fetch(skillUrl, { signal: AbortSignal.timeout(15000) });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const content = await res.text();
+          mkdirSync(path.dirname(skillPath), { recursive: true, mode: 0o700 });
+          writeFileSync(skillPath, content, { mode: 0o600 });
+        } catch (err) {
+          process.stderr.write(`安装 kiwi-buyer skill 失败：${err instanceof Error ? err.message : String(err)}\n`);
+          return EXIT.CONFIG;
+        }
       }
     }
     configured.push("skill kiwi-buyer");
