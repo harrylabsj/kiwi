@@ -60,6 +60,26 @@ export interface MerchantDecisionConfig {
   enabled?: boolean;
 }
 
+/** Optional Merchant Experience layer inspired by commerce-agents. */
+export interface MerchantExperienceConfig {
+  /** Feature gate; omitted/false preserves the 0.7.x tool surface. */
+  enabled?: boolean;
+  /** Deterministic merchant snapshot/series/digest tools. */
+  intelligence?: boolean;
+  /** First-read rules for questions that require current backend facts. */
+  grounding?: boolean;
+  /** Structured host-facing presentation tools. */
+  presentation?: boolean;
+  /** Packaged, versioned merchant workflow skills. */
+  skills?: boolean;
+  /** Hard cap for model-visible external content. */
+  max_external_context_chars?: number;
+  /** Hard cap for one presentation collection. */
+  max_presentation_items?: number;
+  /** Optional provider prompt-cache retention; omitted preserves provider defaults. */
+  prompt_cache_retention?: "none" | "short" | "long";
+}
+
 /**
  * Buyer private policy (design §7.2). All fields are required: the local
  * private-policy gate is a security boundary, so a half-specified policy
@@ -148,6 +168,8 @@ export interface AgentProfile {
   buyer_policy?: BuyerPolicy;
   /** merchant 推理后端配置（DeepSeek Harness 运行时插件；仅 role=merchant）。 */
   decision?: MerchantDecisionConfig;
+  /** Optional commerce-agents-style merchant application layer. */
+  merchant_experience?: MerchantExperienceConfig;
   /** 微信远程控制通道（可选段；缺省 = 全默认）。 */
   weixin?: {
     /** 额外授权微信用户（配对扫描者始终自动授权；缺省 = 仅配对者）。 */
@@ -204,6 +226,7 @@ const TOP_LEVEL_KEYS = [
   "buyer_policy",
   "weixin",
   "decision",
+  "merchant_experience",
   "merchant_public",
 ] as const;
 /** weixin 段白名单（微信远程控制通道配置；无 *_env 密钥字段——iLink 凭证运行时获取）。 */
@@ -246,6 +269,16 @@ const BUYER_POLICY_KEYS = [
   "human_review_on",
 ] as const;
 const DECISION_KEYS = ["backend", "enabled"] as const;
+const MERCHANT_EXPERIENCE_KEYS = [
+  "enabled",
+  "intelligence",
+  "grounding",
+  "presentation",
+  "skills",
+  "max_external_context_chars",
+  "max_presentation_items",
+  "prompt_cache_retention",
+] as const;
 const MERCHANT_PUBLIC_KEYS = ["public_url", "a2a_port", "shopping_db_path", "catalog_url", "merchant_token_env"] as const;
 const DECISION_BACKENDS: readonly DecisionBackendKind[] = ["deterministic", "mock", "deepseek"];
 
@@ -609,6 +642,63 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     decisionSection = { backend: d.backend as DecisionBackendKind, ...(d.enabled !== undefined ? { enabled: d.enabled } : {}) };
   }
 
+  let merchantExperience: MerchantExperienceConfig | undefined;
+  if (p.merchant_experience !== undefined) {
+    req(isObject(p.merchant_experience), `${source}: merchant_experience must be a mapping`);
+    const experience = p.merchant_experience;
+    rejectUnknownKeys(experience, MERCHANT_EXPERIENCE_KEYS, "merchant_experience", source);
+    for (const key of ["enabled", "intelligence", "grounding", "presentation", "skills"] as const) {
+      if (experience[key] !== undefined) {
+        req(typeof experience[key] === "boolean", `${source}: merchant_experience.${key} must be a boolean`);
+      }
+    }
+    if (experience.max_external_context_chars !== undefined) {
+      reqFinite(experience.max_external_context_chars, "merchant_experience.max_external_context_chars", source);
+      req(
+        experience.max_external_context_chars >= 1_000 && experience.max_external_context_chars <= 50_000,
+        `${source}: merchant_experience.max_external_context_chars must be between 1000 and 50000`,
+      );
+    }
+    if (experience.max_presentation_items !== undefined) {
+      reqFinite(experience.max_presentation_items, "merchant_experience.max_presentation_items", source);
+      req(
+        Number.isInteger(experience.max_presentation_items) &&
+          experience.max_presentation_items >= 1 &&
+          experience.max_presentation_items <= 50,
+        `${source}: merchant_experience.max_presentation_items must be an integer between 1 and 50`,
+      );
+    }
+    if (experience.prompt_cache_retention !== undefined) {
+      req(
+        experience.prompt_cache_retention === "none" ||
+          experience.prompt_cache_retention === "short" ||
+          experience.prompt_cache_retention === "long",
+        `${source}: merchant_experience.prompt_cache_retention must be none, short or long`,
+      );
+    }
+    if (p.role !== "merchant") {
+      throw new ProfileError(`${source}: merchant_experience is only valid for role=merchant`);
+    }
+    const experienceBoolean = (key: "enabled" | "intelligence" | "grounding" | "presentation" | "skills"): boolean | undefined =>
+      experience[key] === undefined ? undefined : (experience[key] as boolean);
+    merchantExperience = {
+      ...(experienceBoolean("enabled") !== undefined ? { enabled: experienceBoolean("enabled") } : {}),
+      ...(experienceBoolean("intelligence") !== undefined ? { intelligence: experienceBoolean("intelligence") } : {}),
+      ...(experienceBoolean("grounding") !== undefined ? { grounding: experienceBoolean("grounding") } : {}),
+      ...(experienceBoolean("presentation") !== undefined ? { presentation: experienceBoolean("presentation") } : {}),
+      ...(experienceBoolean("skills") !== undefined ? { skills: experienceBoolean("skills") } : {}),
+      ...(experience.max_external_context_chars !== undefined
+        ? { max_external_context_chars: experience.max_external_context_chars }
+        : {}),
+      ...(experience.max_presentation_items !== undefined
+        ? { max_presentation_items: experience.max_presentation_items }
+        : {}),
+      ...(experience.prompt_cache_retention !== undefined
+        ? { prompt_cache_retention: experience.prompt_cache_retention }
+        : {}),
+    };
+  }
+
   let merchantPublic: AgentProfile["merchant_public"] | undefined;
   if (p.merchant_public !== undefined) {
     req(isObject(p.merchant_public), `${source}: merchant_public must be a mapping`);
@@ -761,6 +851,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     ...(buyerPolicy !== undefined ? { buyer_policy: buyerPolicy } : {}),
     ...(weixinSection !== undefined ? { weixin: weixinSection } : {}),
     ...(decisionSection !== undefined ? { decision: decisionSection } : {}),
+    ...(merchantExperience !== undefined ? { merchant_experience: merchantExperience } : {}),
     ...(merchantPublic !== undefined ? { merchant_public: merchantPublic } : {}),
   };
   return profile;

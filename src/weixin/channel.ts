@@ -89,6 +89,9 @@ export class WeixinChannel {
   private stopped = false;
   private runPromise: Promise<number> | null = null;
   private pollAbort: AbortController | null = null;
+  /** Latest server cursor, retained so stop() can flush it after abort. */
+  private syncBuf = "";
+  private syncStateReady = false;
   private timers: ReturnType<typeof setInterval>[] = [];
   private noticeFn: (line: string) => void;
 
@@ -173,6 +176,13 @@ export class WeixinChannel {
         // stop 后的轮询异常被 stopped 分支吞掉
       }
     }
+    if (this.syncStateReady) {
+      try {
+        saveSyncState(this.syncBufPath, { get_updates_buf: this.syncBuf, seen: [...this.seen] });
+      } catch (err) {
+        this.log(`[weixin] 同步游标写入失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   // ── 主循环 ──────────────────────────────────────────────────────────
@@ -190,6 +200,8 @@ export class WeixinChannel {
     try {
       const state = loadSyncState(this.syncBufPath);
       syncBuf = state.get_updates_buf;
+      this.syncBuf = syncBuf;
+      this.syncStateReady = true;
       for (const fp of state.seen) this.seen.add(fp);
     } catch (err) {
       // 审查 P3：损坏的同步状态必须 fail-closed——此前打日志后从头轮询，
@@ -217,6 +229,7 @@ export class WeixinChannel {
         consecutiveProtocolErrors = 0;
         fatalCount = 0;
         syncBuf = result.next_sync_buf;
+        this.syncBuf = syncBuf;
         for (const msg of result.messages) {
           await this.processMessage(msg);
           if (this.stopped) return 0;

@@ -33,3 +33,9 @@ merchant_policy:
     - below_floor
     - exceptional_warranty
     - suspicious_content
+merchant_experience:
+  enabled: true
+  intelligence: true
+  grounding: true
+  presentation: true
+  skills: true

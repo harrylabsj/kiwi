@@ -28,9 +28,10 @@
  *   MemoryStore) and deterministic slash commands to the operator.
  */
 
-import { AgentHarness, type Session, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { AgentHarness, type AgentHarnessEvent, type Session, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import type { AgentProfile } from "../config/profile.js";
 import type { CommerceClient } from "../commerce/types.js";
@@ -60,6 +61,17 @@ import {
 import type { CredentialBroker } from "./merchant/credential-broker.js";
 import type { MerchantClient } from "./merchant/types.js";
 import { buildMerchantTools } from "./merchant/merchant-tools.js";
+import { publicCandidatePreview } from "./merchant/merchant-enrichment.js";
+import { DefaultMerchantIntelligenceBackend } from "./merchant/intelligence/default-backend.js";
+import type { MerchantIntelligenceBackend } from "./merchant/intelligence/backend.js";
+import type { MerchantAnalyticsSource } from "./merchant/intelligence/types.js";
+import type { AgentEventSink, AgentHostEventType } from "./host/events.js";
+import { emitHostEvent, sanitizeHostEventData, SerializedEventSink } from "./host/events.js";
+import { fenceModelPayload } from "./context/fencing.js";
+import { groundingReads, type GroundingRead } from "./context/grounding.js";
+import { MERCHANT_GROUNDING_RULES, merchantGroundingContext } from "./merchant/merchant-grounding.js";
+import { SkillRegistry } from "./skills/registry.js";
+import { buildSkillTools } from "./skills/tools.js";
 import { DeterministicNegotiationRunner } from "../operator/runner.js";
 import type { DecisionHints } from "../runtime/fake-model.js";
 import type { BuyerTask } from "./buyer/types.js";
@@ -69,7 +81,7 @@ import { PrivateVault } from "./memory/vault.js";
 import { openMainSession } from "./session.js";
 import { registerCatalogAgent } from "../discovery/catalog-source/register.js";
 import { KiwiCatalogSource } from "../discovery/catalog-source/kiwi-source.js";
-import { baseSystemPrompt, renderMemoryBriefing } from "./system-prompt.js";
+import { baseSystemPrompt, combineDynamicBriefing, renderMemoryBriefing } from "./system-prompt.js";
 import type { DatabaseSync } from "node:sqlite";
 
 /** Execution hooks for a pending WriteApprovalCandidate (process-lifetime only). */
@@ -110,6 +122,12 @@ export interface AgentKernelOptions {
   catalog?: string;
   /** 仅本地开发/E2E：允许 supplier pull 访问字面 loopback。 */
   allowLoopback?: boolean;
+  /** Optional host projection for Merchant Experience integrations. */
+  eventSink?: AgentEventSink;
+  /** Transport session id used in host events; defaults to the local main session. */
+  eventSessionId?: string;
+  /** Optional authoritative sales/campaign/ROAS source for Merchant Intelligence. */
+  merchantAnalyticsSource?: MerchantAnalyticsSource;
 }
 
 /** A2A 磋商结果记忆记录（/negotiate 与 negotiate_buyer_task 共用形状）。 */
@@ -174,6 +192,64 @@ function assistantText(message: AssistantMessage): string {
     .map((b) => b.text)
     .join("\n")
     .trim();
+}
+
+function toolResultSummary(result: unknown): string {
+  if (result !== null && typeof result === "object") {
+    const content = (result as { content?: unknown }).content;
+    if (Array.isArray(content)) {
+      const text = content
+        .filter((item): item is { type: "text"; text: string } =>
+          item !== null && typeof item === "object" &&
+          (item as { type?: unknown }).type === "text" &&
+          typeof (item as { text?: unknown }).text === "string",
+        )
+        .map((item) => item.text)
+        .join("\n")
+        .trim();
+      if (text !== "") return text.slice(0, 1_000);
+    }
+  }
+  return "工具调用已完成。";
+}
+
+/** Bridge the stable AgentHarness stream/tool hooks into the optional host protocol. */
+function attachHarnessHostEvents(
+  harness: AgentHarness,
+  emitEvent: (type: AgentHostEventType, data: unknown) => Promise<void>,
+): () => void {
+  return harness.subscribe(async (event: AgentHarnessEvent) => {
+    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+      if (event.assistantMessageEvent.delta !== "") {
+        await emitEvent("text_delta", { text: event.assistantMessageEvent.delta });
+      }
+      return;
+    }
+    if (event.type === "tool_execution_start") {
+      await emitEvent("tool_call", {
+        tool: event.toolName,
+        call_id: event.toolCallId,
+        input: event.args,
+      });
+      return;
+    }
+    if (event.type === "tool_execution_update") {
+      await emitEvent("ui_partial", {
+        tool: event.toolName,
+        call_id: event.toolCallId,
+        partial: event.partialResult,
+      });
+      return;
+    }
+    if (event.type === "tool_execution_end") {
+      await emitEvent("tool_result", {
+        tool: event.toolName,
+        call_id: event.toolCallId,
+        status: event.isError ? "error" : "ok",
+        summary: toolResultSummary(event.result),
+      });
+    }
+  });
 }
 
 /** The owner's own Restricted memory values (Vault). Owner-only by isolation. */
@@ -295,6 +371,11 @@ export class AgentKernel {
   private readonly commerceClient?: CommerceClient;
   private readonly merchantClient?: MerchantClient;
   private readonly broker?: CredentialBroker;
+  private readonly merchantIntelligence?: MerchantIntelligenceBackend;
+  /** Optional host event projection; it never owns business state. */
+  private readonly emitEvent?: (type: AgentHostEventType, data: unknown) => Promise<void>;
+  /** Removes the optional AgentHarness stream bridge during kernel shutdown. */
+  private readonly unsubscribeHarnessEvents?: () => void;
   /** Shared mutable mode ref (tools read it via a getter before the kernel exists). */
   private readonly modeRef: { value: AgentMode } = { value: DEFAULT_AGENT_MODE };
   /** Live execution hooks for pending candidates (v0.3.0-C /approve). */
@@ -342,6 +423,9 @@ export class AgentKernel {
     commerceClient?: CommerceClient;
     merchantClient?: MerchantClient;
     broker?: CredentialBroker;
+    merchantIntelligence?: MerchantIntelligenceBackend;
+    emitEvent?: (type: AgentHostEventType, data: unknown) => Promise<void>;
+    unsubscribeHarnessEvents?: () => void;
     modeRef?: { value: AgentMode };
     pendingHooks?: Map<string, PendingActionHooks>;
     turnId: { current: string };
@@ -363,6 +447,9 @@ export class AgentKernel {
     if (options.commerceClient !== undefined) this.commerceClient = options.commerceClient;
     if (options.merchantClient !== undefined) this.merchantClient = options.merchantClient;
     if (options.broker !== undefined) this.broker = options.broker;
+    if (options.merchantIntelligence !== undefined) this.merchantIntelligence = options.merchantIntelligence;
+    this.emitEvent = options.emitEvent;
+    this.unsubscribeHarnessEvents = options.unsubscribeHarnessEvents;
     if (options.modeRef !== undefined) this.modeRef = options.modeRef;
     this.pendingHooks = options.pendingHooks ?? new Map();
     this.turnId = options.turnId;
@@ -393,7 +480,7 @@ export class AgentKernel {
     store.bindPrincipal(principal.principal_id);
     let session: Session;
     try {
-      session = await openMainSession(paths);
+      session = await openMainSession(paths, options.eventSessionId ?? MAIN_SESSION_ID);
     } catch (err) {
       db.close(); // never leak the SQLite handle on a fail-closed open
       throw err;
@@ -407,15 +494,39 @@ export class AgentKernel {
     const modeRef = { value: options.mode ?? DEFAULT_AGENT_MODE };
     const pendingHooks = new Map<string, PendingActionHooks>();
     const turnId = { current: MAIN_SESSION_ID };
-    const registerPending: (id: string, hooks: PendingActionHooks) => void = (id, hooks) => {
+    const registerPendingHooks: (id: string, hooks: PendingActionHooks) => void = (id, hooks) => {
       pendingHooks.set(id, hooks);
     };
+    const hostSequence = { value: 0 };
+    const hostSink = options.eventSink === undefined ? undefined : new SerializedEventSink(options.eventSink);
+    const emitEvent = options.eventSink === undefined
+      ? undefined
+      : async (type: AgentHostEventType, data: unknown): Promise<void> => {
+          hostSequence.value += 1;
+          await emitHostEvent(hostSink, {
+            eventId: `host-${hostSequence.value}`,
+            sessionId: options.eventSessionId ?? MAIN_SESSION_ID,
+            sequence: hostSequence.value,
+            type,
+            occurredAt: clock(),
+            data: sanitizeHostEventData(type, data),
+          });
+        };
 
     const approvals = new WriteApprovalCandidateStore({
       db,
       principalId: principal.principal_id,
       now: clock,
     });
+    const registerPending: (id: string, hooks: PendingActionHooks) => void = (id, hooks) => {
+      registerPendingHooks(id, hooks);
+      const candidate = approvals.get(id);
+      void emitEvent?.("candidate_update", {
+        candidate_id: id,
+        status: candidate?.status ?? "pending_approval",
+        preview: publicCandidatePreview(candidate),
+      });
+    };
     // Execution hooks are deliberately process-local. Invalidate durable
     // candidates before wiring tools so a restarted kernel never exposes a
     // /pending item that its /approve path cannot execute.
@@ -425,6 +536,18 @@ export class AgentKernel {
     let supplierScheduler: SupplierScheduler | undefined;
     let buyerTools: ReturnType<typeof buildBuyerTools> = [];
     let merchantTools: ReturnType<typeof buildMerchantTools> = [];
+    let merchantSkillTools: ReturnType<typeof buildSkillTools> = [];
+    let merchantIntelligence: MerchantIntelligenceBackend | undefined;
+    const merchantSkillRegistry =
+      options.profile.role === "merchant" &&
+      options.profile.merchant_experience?.enabled === true &&
+      options.profile.merchant_experience.skills === true
+        ? SkillRegistry.fromDir(
+            path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../skills/merchant"),
+            "merchant",
+          )
+        : new SkillRegistry([]);
+    merchantSkillTools = buildSkillTools(merchantSkillRegistry);
     let handoffRuntime:
       { ledger: HandoffEventStore; idempotency: HandoffIdempotencyStore } | undefined;
     if (options.profile.role === "buyer" && options.connector !== undefined) {
@@ -497,6 +620,22 @@ export class AgentKernel {
       options.merchantClient !== undefined &&
       options.broker !== undefined
     ) {
+      if (
+        options.profile.merchant_experience?.enabled === true &&
+        options.profile.merchant_experience.intelligence !== false
+      ) {
+        merchantIntelligence = new DefaultMerchantIntelligenceBackend({
+          merchant_id: principal.owner_id,
+          data_dir: path.dirname(paths.db),
+          principal_id: principal.principal_id,
+          merchant_client: options.merchantClient,
+          approvals,
+          ...(options.merchantAnalyticsSource !== undefined
+            ? { analytics_source: options.merchantAnalyticsSource }
+            : {}),
+          now: clock,
+        });
+      }
       merchantTools = buildMerchantTools({
         profile: options.profile,
         merchantClient: options.merchantClient,
@@ -504,18 +643,25 @@ export class AgentKernel {
         // fail closed，目录/库存只读与审批式写工具照常可用（见 §15.3/§15.4）。
         ...(options.commerceClient !== undefined ? { commerceClient: options.commerceClient } : {}),
         broker: options.broker,
+        principalId: principal.principal_id,
         approvals,
         mode: () => modeRef.value,
         registerPending,
         now: clock,
         privateValues: () => listRestrictedValues(store),
+        ...(merchantIntelligence !== undefined ? { intelligence: merchantIntelligence } : {}),
+        ...(emitEvent !== undefined ? { emitEvent } : {}),
         // 商家 A2A 节点 ledger 基础目录（<dataDir>/a2a）——LedgerStore 会再拼
         // /ledger 到 <dataDir>/a2a/ledger，list_a2a_negotiations 用。
         a2aLedgerDir: path.join(path.dirname(paths.db), "a2a"),
       });
     }
 
-    const base = baseSystemPrompt(options.profile, principal);
+    const base = baseSystemPrompt(
+      options.profile,
+      principal,
+      merchantSkillRegistry.names.length > 0 ? merchantSkillRegistry : undefined,
+    );
     let briefing: string | undefined;
     const harness = new AgentHarness({
       session,
@@ -525,12 +671,19 @@ export class AgentKernel {
         ...buildMemoryTools(store, { turnId: () => turnId.current }),
         ...buyerTools,
         ...merchantTools,
+        ...merchantSkillTools,
       ],
       systemPrompt: async () => (briefing === undefined ? base : `${base}\n\n${briefing}`),
       // §18.1: a hung model/provider request must NOT wedge the chat forever —
       // abort after the profile's turn timeout and surface an error text.
       streamOptions: {
         timeoutMs: options.profile.runtime.turn_timeout_seconds * 1000,
+        ...(options.profile.merchant_experience?.prompt_cache_retention !== undefined
+          ? {
+              cacheRetention: options.profile.merchant_experience.prompt_cache_retention,
+              sessionId: options.eventSessionId ?? MAIN_SESSION_ID,
+            }
+          : {}),
       },
       ...(options.thinkingLevel !== undefined ? { thinkingLevel: options.thinkingLevel } : {}),
     });
@@ -540,6 +693,10 @@ export class AgentKernel {
     if (options.model !== undefined) {
       await harness.setModel(options.model);
     }
+
+    const unsubscribeHarnessEvents = emitEvent === undefined
+      ? undefined
+      : attachHarnessHostEvents(harness, emitEvent);
 
     const kernel = new AgentKernel({
       profile: options.profile,
@@ -561,6 +718,9 @@ export class AgentKernel {
       ...(options.commerceClient !== undefined ? { commerceClient: options.commerceClient } : {}),
       ...(options.merchantClient !== undefined ? { merchantClient: options.merchantClient } : {}),
       ...(options.broker !== undefined ? { broker: options.broker } : {}),
+      ...(merchantIntelligence !== undefined ? { merchantIntelligence } : {}),
+      emitEvent,
+      ...(unsubscribeHarnessEvents !== undefined ? { unsubscribeHarnessEvents } : {}),
     });
     kernel.briefingSetter = (value) => {
       briefing = value;
@@ -798,17 +958,26 @@ export class AgentKernel {
     if (candidate === undefined) {
       throw new MemoryError("validation", `未知审批候选 ${candidateId}`);
     }
+    const report = async <T extends ApprovalExecutionResult>(result: T): Promise<T> => {
+      const current = this.approvals?.get(candidateId);
+      await this.emitEvent?.("candidate_update", {
+        candidate_id: candidateId,
+        status: current?.status ?? result.candidate.status,
+        preview: publicCandidatePreview(current ?? result.candidate),
+      });
+      return result;
+    };
     // manual 模式语义（评审项 P3-3）：manual = advice only（never executes）。
     // routeWriteCandidate 在 manual 分支仍注册执行钩子（供 /pending 显示与
     // /revise 重算），但批准路径必须拒绝——此前 /approve 绕过模式直接执行，
     // 与 operator 平面分叉（controller 对 advice_only 候选明确拒绝批准：
     // "manual 模式只提供建议，不自动提交"）。
     if (this.getMode() === "manual") {
-      return {
+      return report({
         kind: "not_approvable",
         candidate,
         reason: "manual 模式只提供建议，不自动执行（/approve 拒绝 advice-only 候选）",
-      };
+      });
     }
     const hooks = this.pendingHooks.get(candidateId);
     if (hooks === undefined) {
@@ -816,19 +985,19 @@ export class AgentKernel {
       // candidate cannot be re-validated against the current marketplace.
       if (candidate.status === "expired") {
         this.releasePending(candidateId);
-        return { kind: "expired", candidate };
+        return report({ kind: "expired", candidate });
       }
       if (candidate.status !== "pending_approval" && candidate.status !== "approved") {
         this.releasePending(candidateId);
-        return {
+        return report({
           kind: "not_approvable",
           candidate,
           reason: `候选 ${candidateId} 状态为 ${candidate.status}，不可批准。`,
-        };
+        });
       }
       const expired = this.approvals.expireCandidate(candidateId);
       this.releasePending(candidateId);
-      return { kind: "expired", candidate: expired };
+      return report({ kind: "expired", candidate: expired });
     }
     this.approvals.markApproved(candidateId);
     const outcome = await executeApprovedCandidate(this.approvals, candidateId, hooks);
@@ -837,7 +1006,7 @@ export class AgentKernel {
     if (outcome.kind !== "not_approvable") {
       this.releasePending(candidateId);
     }
-    return outcome;
+    return report(outcome);
   }
 
   /** Reject a pending/advice-only WriteApprovalCandidate. Never executes. */
@@ -850,6 +1019,11 @@ export class AgentKernel {
     }
     this.approvals.reject(candidateId);
     this.releasePending(candidateId);
+    void this.emitEvent?.("candidate_update", {
+      candidate_id: candidateId,
+      status: this.approvals.get(candidateId)?.status ?? "rejected",
+      preview: publicCandidatePreview(this.approvals.get(candidateId)),
+    });
     return { ok: true };
   }
 
@@ -1083,6 +1257,75 @@ export class AgentKernel {
     });
   }
 
+  private async runMerchantGroundingRead(read: GroundingRead): Promise<string> {
+    await this.emitEvent?.("grounding_started", {
+      rule: read.tool,
+      tool: read.tool,
+      reason: read.reason,
+    });
+    try {
+      let payload: unknown;
+      if (read.tool === "get_business_snapshot" && this.merchantIntelligence !== undefined) {
+        payload = await this.merchantIntelligence.getBusinessSnapshot({ merchant_id: this.principal.owner_id });
+      } else if (read.tool === "get_negotiation_digest" && this.merchantIntelligence !== undefined) {
+        payload = await this.merchantIntelligence.getNegotiationDigest({
+          merchant_id: this.principal.owner_id,
+          status: "active",
+          limit: 20,
+        });
+      } else if (read.tool === "get_pending_actions" && this.merchantIntelligence !== undefined) {
+        payload = await this.merchantIntelligence.getPendingActions();
+      } else if (read.tool === "get_catalog_health" && this.merchantIntelligence !== undefined) {
+        payload = await this.merchantIntelligence.getCatalogHealth({ merchant_id: this.principal.owner_id });
+      } else if (read.tool === "get_human_review_queue" && this.merchantClient !== undefined) {
+        payload = await this.merchantClient.getHumanReviewQueue(this.principal.owner_id);
+      } else if (read.tool === "list_catalog_products" && this.merchantClient !== undefined) {
+        payload = await this.merchantClient.listProducts(this.principal.owner_id);
+      } else {
+        throw new Error("grounding dependency is unavailable");
+      }
+      await this.emitEvent?.("grounding_completed", {
+        rule: read.tool,
+        tool: read.tool,
+        status: "ok",
+      });
+      return [
+        `[Grounding · ${read.reason}]`,
+        fenceModelPayload(
+          read.tool === "get_negotiation_digest" ? "a2a_message" : "merchant_api",
+          payload,
+          { maxChars: this.profile.merchant_experience?.max_external_context_chars ?? 12_000 },
+        ),
+      ].join("\n");
+    } catch {
+      await this.emitEvent?.("grounding_completed", {
+        rule: read.tool,
+        tool: read.tool,
+        status: "error",
+        retryable: true,
+      });
+      return `[Grounding · ${read.reason}] 当前权威读取不可用，不要把缺失数据当作零值。`;
+    }
+  }
+
+  /** Run at most two deterministic, read-only merchant grounding reads per turn. */
+  private async merchantGrounding(text: string): Promise<string | undefined> {
+    if (
+      this.profile.role !== "merchant" ||
+      this.profile.merchant_experience?.enabled !== true ||
+      this.profile.merchant_experience.grounding === false
+    ) {
+      return undefined;
+    }
+    const reads = groundingReads(
+      MERCHANT_GROUNDING_RULES,
+      merchantGroundingContext(this.profile, text),
+      2,
+    );
+    if (reads.length === 0) return undefined;
+    return (await Promise.all(reads.map((read) => this.runMerchantGroundingRead(read)))).join("\n\n");
+  }
+
   /**
    * 把一轮 A2A 磋商结果写入记忆（episode namespace，active 无需人工确认）：
    * 持久上下文，`/why` 可查、跨重启可恢复。
@@ -1097,12 +1340,16 @@ export class AgentKernel {
       if (text.startsWith("/")) {
         return await this.handleSlash(text);
       }
+      const startedAt = Date.now();
+      await this.emitEvent?.("message", { role: "user", text });
       const memories = this.store.retrieve({
         session_id: MAIN_SESSION_ID,
         purpose: "clarify",
         text,
       });
-      this.briefingSetter(renderMemoryBriefing(memories));
+      const memoryBriefing = renderMemoryBriefing(memories);
+      const groundingBriefing = await this.merchantGrounding(text);
+      this.briefingSetter(combineDynamicBriefing([memoryBriefing, groundingBriefing]));
       // Advance the turn id so several remember calls inside this one turn
       // dedup into a single evidence piece (§9.3).
       this.turnId.current = `${MAIN_SESSION_ID}:${++this.turnSeq}`;
@@ -1112,18 +1359,33 @@ export class AgentKernel {
         // §18.1: a model failure (throw OR empty response) must leave the
         // conversation and TUI intact.
         if (reply === "") {
+          await this.emitEvent?.("error", {
+            code: "empty_model_response",
+            message: "model returned an empty response",
+            retryable: true,
+          });
           return {
             text: "暂时没能给出有效回复——当前目录里可能没有匹配的商品或商家，也可能是这条需求还不够具体。补充品牌、型号或预算范围后再问我一次即可。",
             quit: false,
           };
         }
+        await this.emitEvent?.("message", { role: "assistant", text: reply });
         return { text: reply, quit: false };
       } catch (err) {
+        await this.emitEvent?.("error", {
+          code: "model_turn_failed",
+          message: err instanceof Error ? err.message : String(err),
+          retryable: true,
+        });
         return {
           text: `模型处理失败：${err instanceof Error ? err.message : String(err)}。对话状态未改变，请重试。`,
           quit: false,
         };
       } finally {
+        await this.emitEvent?.("turn_complete", {
+          elapsed_ms: Date.now() - startedAt,
+          stop_reason: "complete",
+        });
         this.briefingSetter(undefined);
       }
     });
@@ -1454,6 +1716,7 @@ export class AgentKernel {
     } catch {
       // best-effort flush; closing the store is what must not be skipped
     }
+    this.unsubscribeHarnessEvents?.();
     this.db.close();
   }
 }

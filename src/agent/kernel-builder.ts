@@ -34,6 +34,8 @@ import {
 } from "../config/profile.js";
 import { HttpCommerceClient } from "../commerce/http-client.js";
 import type { CommerceClient } from "../commerce/types.js";
+import type { AgentEventSink } from "./host/events.js";
+import type { MerchantAnalyticsSource } from "./merchant/intelligence/types.js";
 import { isFakeProvider, resolveThinkingLevel } from "../runtime/model.js";
 
 /** 裸 `kiwi` 的缺省 buyer profile（deepseek-v4-flash，环境变量可覆盖）。 */
@@ -95,6 +97,9 @@ export async function buildChatKernel(
   profile: AgentProfile,
   dataDir?: string,
   catalog?: string,
+  eventSink?: AgentEventSink,
+  eventSessionId?: string,
+  merchantAnalyticsSource?: MerchantAnalyticsSource,
 ): Promise<AgentKernel> {
   const paths = ensurePathsForDir(dataDir ?? agentDataDir(profile.agent_id));
 
@@ -201,6 +206,9 @@ export async function buildChatKernel(
     ...(merchantClient !== undefined ? { merchantClient } : {}),
     ...(broker !== undefined ? { broker } : {}),
     ...(catalog !== undefined ? { catalog } : {}),
+    ...(eventSink !== undefined ? { eventSink } : {}),
+    ...(eventSessionId !== undefined ? { eventSessionId } : {}),
+    ...(merchantAnalyticsSource !== undefined ? { merchantAnalyticsSource } : {}),
     ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
   });
 }

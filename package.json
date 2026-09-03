@@ -18,7 +18,8 @@
   "files": [
     "dist",
     "contracts",
-    "examples"
+    "examples",
+    "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
