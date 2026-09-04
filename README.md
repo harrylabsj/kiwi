@@ -226,6 +226,7 @@ npm run verify          # 全部 + 生产包冒烟
 - [`docs/protocol/knp-spec-convergence-2026-08-13.md`](docs/protocol/knp-spec-convergence-2026-08-13.md) — KNP/1.0 实施收敛说明
 - [`docs/reviews/a2a-sdk-conformance-transcript.jsonl`](docs/reviews/a2a-sdk-conformance-transcript.jsonl) — A2A SDK 往返实证记录
 - [`skills/kiwi-buyer/SKILL.md`](skills/kiwi-buyer/SKILL.md) — Hermes Buyer 公共 skill
+- [`integrations/hosts/workbuddy/kiwi-sourcing/README.md`](integrations/hosts/workbuddy/kiwi-sourcing/README.md) — WorkBuddy「Kiwi 采购询价」连接器、校验与提审说明
 - [`CHANGELOG.md`](CHANGELOG.md) — 版本历史
 
 ## 反馈与支持
