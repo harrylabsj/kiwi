@@ -50,3 +50,18 @@ node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /absolute/
 ```
 
 `kiwi-merchant-buddy/` 是应用后台人工配置草稿、头像、AI 客服准备技能与填写说明。v1.1.0 商家连接器资产已撤回；v1.1.1 已独立提交 OAuth MCP 连接器审核，ID `oc_0053ad85c92a6587`，目前待审。获批后由 Buddy 应用内置连接器引用；用户仍在 Buddy 内完成授权使用，不要求另行安装市场产品。腾讯客服要求补交专用商家测试账号。具体包与实机检查见[上架素材包](../../../docs/merchant-buddy/merchant-connector-submission-pack.md)和[检查单](../../../docs/merchant-buddy/workbuddy-e2e-checklist.md)。
+
+## Kiwi 采购询价连接器（`kiwi-sourcing/`）
+
+`kiwi-sourcing/` 是买方连接器的可维护源码（本地 stdio MCP + Skill，平台资产 `oc_bd73f860e3e2b5d3`），只使用既有九个买方工具，不需要任何商家凭据。校验与打包：
+
+```sh
+npm run verify:workbuddy
+npm run package:workbuddy     # 产出 release/workbuddy/kiwi-sourcing-<version>.zip
+```
+
+已发布副本的 `mcp.json` 固定 `@harrylabsj/kiwi@0.8.0`（该运行时没有 `network_search`），改 pin 属于单独的重新提交流程，见[双源检索发布计划](../../../docs/dual-source-search-release-plan.md) D7。
+
+WorkBuddy 是用户交互与采购编排入口，Kiwi Buyer Core 负责采购状态和审批，独立的 Kiwi
+Merchant Agent 继续持有商家私有商品、库存、报价策略、凭证和 Ledger。后续如建设商家经营
+Buddy 应用，它也只能作为独立 Merchant Agent 的运营控制面，不替代商家运行时。
