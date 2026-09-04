@@ -4,7 +4,7 @@
 [A2A](https://a2a-protocol.org/) 与 [UCP](https://ucp.dev/) 完成发现 → capability 协商 →
 磋商 → 非绑定协议。磋商以**非约束性商业协议**终止：不创建订单、不支付、不锁库存。
 
-**Kiwi 当前代码版本 0.7.22**：当前发布线包含 A2A 双栈、KNP/1.0 磋商、签名身份
+**Kiwi 当前代码版本 0.8.0**：当前发布线包含 A2A 双栈、KNP/1.0 磋商、签名身份
 与安全交接能力。A2A 1.0 线协议互操作以组合 conformance transcript 为准，不用历史审计
 文档替代运行证据。
 
@@ -212,6 +212,7 @@ npm run verify          # 全部 + 生产包冒烟
 - [`docs/protocol/knp-spec-convergence-2026-08-13.md`](docs/protocol/knp-spec-convergence-2026-08-13.md) — KNP/1.0 实施收敛说明
 - [`docs/reviews/a2a-sdk-conformance-transcript.jsonl`](docs/reviews/a2a-sdk-conformance-transcript.jsonl) — A2A SDK 往返实证记录
 - [`skills/kiwi-buyer/SKILL.md`](skills/kiwi-buyer/SKILL.md) — Hermes Buyer 公共 skill
+- [`integrations/hosts/workbuddy/kiwi-sourcing/README.md`](integrations/hosts/workbuddy/kiwi-sourcing/README.md) — WorkBuddy「Kiwi 采购询价」连接器、校验与提审说明
 - [`CHANGELOG.md`](CHANGELOG.md) — 版本历史
 
 ## 反馈与支持
