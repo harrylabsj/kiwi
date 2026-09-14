@@ -44,7 +44,7 @@ import type { CredentialBroker } from "../merchant/credential-broker.js";
 import { requireScopeCredential } from "../merchant/credential-broker.js";
 import {
   NEGOTIATE_DEAL_PRICE_MINOR,
-  NEGOTIATE_DELIVERY_BEFORE,
+  defaultNegotiateDeliveryBefore,
   NEGOTIATE_SKU,
   negotiateWithAgent,
   summarizeNegotiation,
@@ -384,7 +384,7 @@ async function executeNegotiateBuyerTask(
             return converted.lossless ? converted.amount_minor : NEGOTIATE_DEAL_PRICE_MINOR;
           })()
         : NEGOTIATE_DEAL_PRICE_MINOR,
-    deliveryBefore: intent.needed_by ?? NEGOTIATE_DELIVERY_BEFORE,
+    deliveryBefore: intent.needed_by ?? defaultNegotiateDeliveryBefore(),
     senderIdentity: deps.profile.agent_id,
     // 预算硬约束（单价上限）：成交价超此值即拒绝。优先 constraints.max_unit_price；
     // 只有总预算时按数量折算单价。

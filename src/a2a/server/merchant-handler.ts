@@ -61,7 +61,20 @@ export const MERCHANT_CURRENCY = "CNY";
 export const MERCHANT_OFFER_PRICE_MINOR = 85_000; // CNY 850.00
 export const MERCHANT_DEAL_PRICE_MINOR = 83_500; // CNY 835.00
 export const MERCHANT_QUANTITY = 200;
-export const MERCHANT_DELIVERY_BEFORE = "2026-08-20T18:00:00Z";
+/**
+ * 交期取值（V2 §8.5 P0-1）：merchant_policy.delivery_lead_days 配置的权威
+ * 交期（报价时间 + 天数），每次报价动态计算；未配置返回 undefined（terms
+ * 省略 delivery_before——明确未知，绝不报静态/过期日期）。固定日期常量已从
+ * 生产 terms 路径移除。
+ */
+export function resolveDeliveryBefore(
+  merchantPolicy: MerchantPolicy | undefined,
+  now: string,
+): string | undefined {
+  const leadDays = merchantPolicy?.delivery_lead_days;
+  if (leadDays === undefined) return undefined;
+  return new Date(Date.parse(now) + leadDays * 86_400_000).toISOString();
+}
 /** 批量促销默认门槛（merchant_policy.promos[sku].bulk_threshold 缺省值）。 */
 export const DEFAULT_BULK_THRESHOLD = 100;
 
@@ -157,7 +170,7 @@ function seedEnvelope(seed: EnvelopeSeed): ReturnType<typeof finalizeEnvelope> {
 export const OFFER_VALIDITY_MS = 24 * 60 * 60 * 1000;
 
 function offerTerms(
-  opts: { sku?: string; priceMinor: number; quantity: number; currency?: string; handoff_destination?: string },
+  opts: { sku?: string; priceMinor: number; quantity: number; currency?: string; handoff_destination?: string; deliveryBefore?: string },
   now: string,
 ) {
   return {
@@ -168,7 +181,10 @@ function offerTerms(
         unit_price: { currency: opts.currency ?? MERCHANT_CURRENCY, amount_minor: opts.priceMinor },
       },
     ],
-    fulfillment_terms: { delivery_before: MERCHANT_DELIVERY_BEFORE },
+    // V2 §8.5 P0-1：只报权威交期（delivery_lead_days 动态计算）；未配置则省略。
+    ...(opts.deliveryBefore !== undefined
+      ? { fulfillment_terms: { delivery_before: opts.deliveryBefore } }
+      : {}),
     // 商家声明的每商品成交入口（KTH handoff 目的地）：buyer 从 agreement 直读，
     // 不依赖 catalog 投影。
     ...(opts.handoff_destination !== undefined
@@ -562,6 +578,11 @@ export function createMerchantHandler(
           floorMajor: floorValue,
         };
       };
+      /** 权威交期（V2 §8.5 P0-1）：配置了 merchant_policy.delivery_lead_days 才
+       *  报具体 delivery_before（报价时间+天数，动态计算不过期）；未配置 → undefined，
+       *  terms 省略 delivery_before（明确未知）。 */
+      const deliveryBefore = (): string | undefined =>
+        resolveDeliveryBefore(options.merchantPolicy, now());
       /** 买家还价（major→minor；KNP 里 buyer counter 的 unit_price）。 */
       const clampToBounds = (minor: number, floor: number, list: number): number =>
         Math.min(list, Math.max(minor, floor));
@@ -596,7 +617,7 @@ export function createMerchantHandler(
             payload: {
               type: "offer",
               offer_id: newOfferId(),
-              terms: offerTerms({ sku, priceMinor: effectivePriceMinor, quantity, currency, handoff_destination }, now()),
+              terms: offerTerms({ sku, priceMinor: effectivePriceMinor, quantity, currency, handoff_destination, deliveryBefore: deliveryBefore() }, now()),
             },
             ...(note !== undefined ? { public_message: note } : {}),
           });
@@ -630,7 +651,7 @@ export function createMerchantHandler(
               type: "counter_offer",
               offer_id: newOfferId(),
               responding_to_offer_id: buyerOffer.offer_id ?? "",
-              proposed_terms: offerTerms({ sku, priceMinor: effectivePriceMinor, quantity, currency, handoff_destination }, now()),
+              proposed_terms: offerTerms({ sku, priceMinor: effectivePriceMinor, quantity, currency, handoff_destination, deliveryBefore: deliveryBefore() }, now()),
             },
             ...(note !== undefined ? { public_message: note } : {}),
           });
@@ -685,12 +706,12 @@ export function createMerchantHandler(
               offer_id: newOfferId(),
               responding_to_offer_id: counter.offer_id,
               // base = 还价响应（已 clamp 到 [floor, list]）——单台即得到该价。
-              base_terms: offerTerms({ sku, priceMinor: responsiveMinor, quantity, currency, handoff_destination }, now()),
+              base_terms: offerTerms({ sku, priceMinor: responsiveMinor, quantity, currency, handoff_destination, deliveryBefore: deliveryBefore() }, now()),
               conditions: [
                 {
                   when: { all: [{ field: "aggregate.total_quantity", op: "gte", value: bulkThreshold }] },
                   then_terms: offerTerms(
-                    { sku, priceMinor: bulkMinor, quantity, currency, handoff_destination },
+                    { sku, priceMinor: bulkMinor, quantity, currency, handoff_destination, deliveryBefore: deliveryBefore() },
                     now(),
                   ),
                 },
@@ -715,6 +736,13 @@ export function createMerchantHandler(
           // envelope（§8.2），in_reply_to 引用被回答的澄清消息（§8.5/§14
           // 强制，finalizeEnvelope 校验）。payload 形状规范未冻结（§14），
           // 携带 answers 便于对端结构化消费；人类可读文本走 public_message。
+          // 交期口径（V2 §8.5 P0-1）：配置了权威交期才报具体日期；未配置
+          // 明确告知需与商家确认，绝不报静态/过期日期。
+          const promised = deliveryBefore();
+          const answerText =
+            promised !== undefined
+              ? `delivery before ${promised}, payment terms negotiable (nonbinding)`
+              : "delivery timing to be confirmed with the merchant, payment terms negotiable (nonbinding)";
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -725,10 +753,10 @@ export function createMerchantHandler(
               type: "clarification_response",
               answers: questions.map((q) => ({
                 field: q.field ?? "…",
-                answer: `delivery before ${MERCHANT_DELIVERY_BEFORE}, payment terms negotiable (nonbinding)`,
+                answer: answerText,
               })),
             },
-            public_message: `delivery before ${MERCHANT_DELIVERY_BEFORE}, payment terms negotiable (nonbinding).`,
+            public_message: `${answerText}.`,
           });
           // 出站应答即恢复（restore 边，§21.2）：顶层推进已把相位挂到
           // AWAITING_CLARIFICATION，clarification_response 同轮弹回

@@ -57,7 +57,11 @@ import type { A2AMessage } from "../a2a/client/index.js";
 
 const CAPABILITY = "com.harrylabsj.kiwi.shopping.negotiation";
 const NOW = () => new Date().toISOString();
-const DELIVERY_BEFORE = "2026-08-20T18:00:00Z";
+/** 演示场景交期（天）：相对运行时间计算，不用固定日期（静态日期会过期，
+ *  V2 §8.5 P0-1；demo 是演示夹具，不参与生产报价）。 */
+const demoDate = (daysFromNow: number): string =>
+  new Date(Date.parse(NOW()) + daysFromNow * 86_400_000).toISOString();
+const demoDay = (daysFromNow: number): string => demoDate(daysFromNow).slice(0, 10);
 
 // ---------------------------------------------------------------------------
 // 场景定义（§6.2 A/B）
@@ -90,11 +94,11 @@ const SCENARIO_A: DemoScenario = {
   description: "一个 SKU、固定规格，聚焦价格/交期/批量折扣。",
   sku: "SKU-001",
   quantity: 200,
-  deliveryBefore: DELIVERY_BEFORE,
+  deliveryBefore: demoDate(14),
   merchants: [
-    { id: "merchant-alpha", name: "Alpha 保温杯厂", price: 880, dealDiscountPercent: 5, delivery: "2026-08-18", approvalRequired: false },
-    { id: "merchant-beta", name: "Beta 生活用品", price: 850, dealDiscountPercent: 8, delivery: "2026-08-20", approvalRequired: false },
-    { id: "merchant-gamma", name: "Gamma 批发行", price: 820, dealDiscountPercent: 10, delivery: "2026-08-25", approvalRequired: true },
+    { id: "merchant-alpha", name: "Alpha 保温杯厂", price: 880, dealDiscountPercent: 5, delivery: demoDay(12), approvalRequired: false },
+    { id: "merchant-beta", name: "Beta 生活用品", price: 850, dealDiscountPercent: 8, delivery: demoDay(14), approvalRequired: false },
+    { id: "merchant-gamma", name: "Gamma 批发行", price: 820, dealDiscountPercent: 10, delivery: demoDay(19), approvalRequired: true },
   ],
 };
 
@@ -103,11 +107,11 @@ const SCENARIO_B: DemoScenario = {
   description: "参数化规格（数量阶梯 + 交期约束），展示 ConditionalOffer 条件成交。",
   sku: "SKU-002",
   quantity: 500,
-  deliveryBefore: DELIVERY_BEFORE,
+  deliveryBefore: demoDate(14),
   merchants: [
-    { id: "merchant-delta", name: "Delta 精密件", price: 1250, dealDiscountPercent: 12, delivery: "2026-09-01", approvalRequired: false },
-    { id: "merchant-epsilon", name: "Epsilon 标准件", price: 1180, dealDiscountPercent: 6, delivery: "2026-08-30", approvalRequired: false },
-    { id: "merchant-zeta", name: "Zeta 总成厂", price: 1100, dealDiscountPercent: 15, delivery: "2026-09-10", approvalRequired: true },
+    { id: "merchant-delta", name: "Delta 精密件", price: 1250, dealDiscountPercent: 12, delivery: demoDay(26), approvalRequired: false },
+    { id: "merchant-epsilon", name: "Epsilon 标准件", price: 1180, dealDiscountPercent: 6, delivery: demoDay(24), approvalRequired: false },
+    { id: "merchant-zeta", name: "Zeta 总成厂", price: 1100, dealDiscountPercent: 15, delivery: demoDay(35), approvalRequired: true },
   ],
 };
 

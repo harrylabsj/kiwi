@@ -10,9 +10,9 @@
 import { afterAll, describe, expect, it } from "vitest";
 import {
   NEGOTIATE_DEAL_PRICE_MINOR,
-  NEGOTIATE_DELIVERY_BEFORE,
   NEGOTIATE_QUANTITY,
   NEGOTIATE_SKU,
+  defaultNegotiateDeliveryBefore,
   negotiateWithAgent,
 } from "../src/a2a/negotiate.js";
 import {
@@ -166,7 +166,13 @@ describe("negotiateWithAgent parameterization", () => {
     expect(result.ok).toBe(true);
     expect(result.facts?.sku).toBe(NEGOTIATE_SKU);
     expect(result.facts?.quantity).toBe(NEGOTIATE_QUANTITY);
-    expect(result.facts?.deliveryBefore).toBe(NEGOTIATE_DELIVERY_BEFORE);
+    // 缺省交期相对当前时间计算（now + 14 天；V2 §8.5 P0-1，不再是固定日期）
+    const delivery = result.facts?.deliveryBefore;
+    expect(delivery).toBeDefined();
+    expect(Date.parse(delivery ?? "")).toBeGreaterThan(Date.now());
+    expect(Date.parse(delivery ?? "")).toBeLessThanOrEqual(
+      Date.parse(defaultNegotiateDeliveryBefore()) + 1_000,
+    );
     expect(NEGOTIATE_DEAL_PRICE_MINOR).toBe(83_500);
   });
 

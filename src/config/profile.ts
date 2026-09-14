@@ -47,6 +47,11 @@ export interface MerchantPolicy {
   promos?: Record<string, { bulk_threshold?: number; bulk_discount_percent?: number }>;
   inventory_source?: string;
   quote_ttl_seconds?: number;
+  /** 权威交期（天，正数）：报价时 delivery_before = 报价时间 + delivery_lead_days，
+   *  每次报价动态计算（V2 §8.5 P0-1：不得对买家报静态/过期交期）。
+   *  未配置 → offer terms 省略 fulfillment_terms.delivery_before（交期明确未知，
+   *  clarification 应答不含具体日期，提示与商家确认）。 */
+  delivery_lead_days?: number;
   auto_negotiate?: boolean;
   human_review_on?: string[];
 }
@@ -269,6 +274,7 @@ const MERCHANT_POLICY_KEYS = [
   "promos",
   "inventory_source",
   "quote_ttl_seconds",
+  "delivery_lead_days",
   "auto_negotiate",
   "human_review_on",
 ] as const;
@@ -579,6 +585,10 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     if (mp.quote_ttl_seconds !== undefined) {
       reqFinite(mp.quote_ttl_seconds, "merchant_policy.quote_ttl_seconds", source);
       req(mp.quote_ttl_seconds > 0, `${source}: merchant_policy.quote_ttl_seconds must be > 0`);
+    }
+    if (mp.delivery_lead_days !== undefined) {
+      reqFinite(mp.delivery_lead_days, "merchant_policy.delivery_lead_days", source);
+      req(mp.delivery_lead_days > 0, `${source}: merchant_policy.delivery_lead_days must be > 0`);
     }
     if (mp.auto_negotiate !== undefined) {
       req(

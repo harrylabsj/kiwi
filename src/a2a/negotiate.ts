@@ -49,7 +49,15 @@ export const NEGOTIATE_SKU = "sku-001";
 export const NEGOTIATE_CURRENCY = "CNY";
 export const NEGOTIATE_QUANTITY = 200;
 export const NEGOTIATE_DEAL_PRICE_MINOR = 83_500;
-export const NEGOTIATE_DELIVERY_BEFORE = "2026-08-20T18:00:00Z";
+/** 买方缺省要求交期的相对窗口（天）：demo CLI 未显式给 needed_by/deliveryBefore
+ *  时的兜底。固定日期常量已移除（V2 §8.5 P0-1：静态交期会过期）。 */
+export const NEGOTIATE_DEFAULT_LEAD_DAYS = 14;
+
+/** 买方缺省要求交期：相对当前时间计算（now + NEGOTIATE_DEFAULT_LEAD_DAYS 天）。 */
+export function defaultNegotiateDeliveryBefore(now?: string): string {
+  const base = now !== undefined ? Date.parse(now) : Date.now();
+  return new Date(base + NEGOTIATE_DEFAULT_LEAD_DAYS * 86_400_000).toISOString();
+}
 
 export interface NegotiateOptions {
   /** agent catalog base URL。 */
@@ -67,7 +75,7 @@ export interface NegotiateOptions {
   sku?: string;
   /** 买方还价单价（minor 单位；缺省 835.00 分 = 83.50 元）。 */
   dealPriceMinor?: number;
-  /** 要求交期（RFC3339；缺省 2026-08-20T18:00:00Z）。 */
+  /** 要求交期（RFC3339；缺省 defaultNegotiateDeliveryBefore() = 当前时间 + 14 天）。 */
   deliveryBefore?: string;
   /** 发送方身份（缺省 buyer:a2a-demo）。 */
   senderIdentity?: string;
@@ -128,7 +136,7 @@ export function summarizeNegotiation(
   const a = result.agreement;
   const sku = f?.sku ?? NEGOTIATE_SKU;
   const quantity = f?.quantity ?? NEGOTIATE_QUANTITY;
-  const delivery = f?.deliveryBefore ?? NEGOTIATE_DELIVERY_BEFORE;
+  const delivery = f?.deliveryBefore ?? defaultNegotiateDeliveryBefore();
   const offerPrice = minorPrice(f?.offerPriceMinor);
   const dealPrice = minorPrice(f?.dealPriceMinor);
   const agreementId = String(a?.agreement_id ?? "");
@@ -266,7 +274,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
   const quantity = options.quantity ?? NEGOTIATE_QUANTITY;
   const sku = options.sku ?? NEGOTIATE_SKU;
   const counterPriceMinor = options.dealPriceMinor ?? NEGOTIATE_DEAL_PRICE_MINOR;
-  const deliveryBefore = options.deliveryBefore ?? NEGOTIATE_DELIVERY_BEFORE;
+  const deliveryBefore = options.deliveryBefore ?? defaultNegotiateDeliveryBefore();
   const senderIdentity = options.senderIdentity ?? "buyer:a2a-demo";
   const dir = mkdtempSync(path.join(tmpdir(), "kiwi-a2a-negotiate-"));
   const now = createMonotonicClock();

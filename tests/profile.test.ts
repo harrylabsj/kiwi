@@ -388,6 +388,25 @@ describe("profile strict validation", () => {
     expect(() =>
       loadProfile(writeTemp(withChange("quote_ttl_seconds: 300", "quote_ttl_seconds: 0"))),
     ).toThrow(/quote_ttl_seconds must be > 0/);
+    // delivery_lead_days（V2 §8.5 P0-1 权威交期）：必须为正数。
+    expect(() =>
+      loadProfile(
+        writeTemp(
+          withChange("quote_ttl_seconds: 300", "quote_ttl_seconds: 300\n  delivery_lead_days: 0"),
+        ),
+      ),
+    ).toThrow(/delivery_lead_days must be > 0/);
+    expect(() =>
+      loadProfile(
+        writeTemp(
+          withChange("quote_ttl_seconds: 300", "quote_ttl_seconds: 300\n  delivery_lead_days: soon"),
+        ),
+      ),
+    ).toThrow(/delivery_lead_days/);
+    const withLead = loadProfile(
+      writeTemp(withChange("quote_ttl_seconds: 300", "quote_ttl_seconds: 300\n  delivery_lead_days: 7")),
+    );
+    expect(withLead.merchant_policy?.delivery_lead_days).toBe(7);
     expect(() =>
       loadProfile(
         writeTemp(
