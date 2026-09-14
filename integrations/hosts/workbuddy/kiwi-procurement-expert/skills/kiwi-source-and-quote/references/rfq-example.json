@@ -1,0 +1,13 @@
+{
+  "intent": {
+    "intent_id": "example-usbc-docks-001",
+    "intent_type": "procurement",
+    "items": [
+      { "query": "USB-C 扩展坞", "quantity": { "value": 10, "unit": "台" }, "attributes": { "ports": ["HDMI", "USB-A"] } }
+    ],
+    "constraints": { "currency": "CNY", "delivery_location": "杭州", "mandatory_requirements": ["支持 HDMI 视频输出"] },
+    "context_projection": { "disclosure_boundary": "commerce_required", "projected_fields": ["items", "constraints"] }
+  },
+  "merchant_ids": ["example-merchant-from-search"],
+  "idempotency_key": "example-rfq-usbc-docks-001"
+}

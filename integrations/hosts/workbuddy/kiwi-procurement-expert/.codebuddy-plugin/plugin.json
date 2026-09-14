@@ -1,0 +1,40 @@
+{
+  "name": "kiwi-procurement-expert",
+  "version": "1.0.0",
+  "description": "Kiwi procurement expert for supplier discovery, quote comparison and nonbinding negotiation.",
+  "author": { "name": "harrylabsj" },
+  "homepage": "https://github.com/harrylabsj/kiwi",
+  "license": "Apache-2.0",
+  "agents": ["./agents/kiwi-procurement.md"],
+  "skills": [
+    "./skills/kiwi-source-and-quote",
+    "./skills/kiwi-compare-and-negotiate",
+    "./skills/kiwi-agreement-handoff"
+  ],
+  "expertType": "agent",
+  "agentName": "kiwi-procurement",
+  "displayName": { "zh": "海纳·采购专家", "en": "Haina · Procurement Expert" },
+  "profession": { "zh": "Kiwi 采购询价", "en": "Kiwi Sourcing and Quotes" },
+  "displayDescription": {
+    "zh": "整理采购需求、寻找供应商、比较报价与交期，在授权范围内议价，经你确认形成非约束性协议并提供后续入口。",
+    "en": "Clarifies sourcing needs, discovers suppliers, compares quotes and delivery terms, and negotiates within your mandate before confirmed nonbinding agreements and handoffs."
+  },
+  "avatar": "avatars/kiwi-procurement.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我整理采购需求，寻找合适的供应商",
+    "en": "Help me clarify my sourcing needs and find suitable suppliers"
+  },
+  "plugin": "kiwi-procurement-expert",
+  "tags": [
+    { "zh": "供应商发现", "en": "Supplier Discovery" },
+    { "zh": "询价比价", "en": "Quote Comparison" },
+    { "zh": "采购议价", "en": "Negotiation" }
+  ],
+  "quickPrompts": [
+    { "zh": "帮我整理采购需求，寻找合适的供应商", "en": "Help me clarify my sourcing needs and find suitable suppliers" },
+    { "zh": "比较已有报价，找出费用和交期差异", "en": "Compare existing quotes, costs and delivery terms" },
+    { "zh": "帮我制定议价方案，确认后向商家还价", "en": "Prepare a negotiation proposal and send it after my confirmation" }
+  ],
+  "dependencies": { "connectors": ["oc_bd73f860e3e2b5d3"] }
+}
