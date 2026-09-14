@@ -101,6 +101,12 @@ Usage:
   kiwi merchant start --profile <merchant.yaml> [--catalog <url>] [--port N] [--no-chat]
                                           Merchant A2A server + 注册 Kiwi Network
                                           （agent serve 别名）
+  kiwi merchant mcp serve [--profile <merchant.yaml>] [--host <host>] [--port N] [--data-dir <dir>]
+                                          Merchant Workbench 远程 MCP server（WorkBuddy
+                                          Buddy 应用；缺省 0.0.0.0:9100/mcp；Bearer token
+                                          认证：KIWI_MERCHANT_MCP_TOKEN 或 profile
+                                          merchant_mcp.token_env；非 loopback 无 token
+                                          拒绝启动）
   kiwi merchant init [--merchant-id <shopping-cli merchant_id>] [--name <商家名称>]
                                           [D1] 生成 merchant profile（只填 merchant_id
                                           即可，其余自动补全；TTY 交互提示；写默认

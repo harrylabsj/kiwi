@@ -36,8 +36,12 @@ import { fenceModelPayload } from "../context/fencing.js";
 import type { AgentHostEventType } from "../host/events.js";
 import type { CommerceDataSource } from "../../commerce/data-source.js";
 import type { CommerceClient } from "../../commerce/types.js";
-import { LedgerStore } from "../../negotiation/ledger/index.js";
-import { TERMINAL_PHASES } from "../../negotiation/state/phase.js";
+import {
+  MerchantWorkbenchError,
+  MerchantWorkbenchService,
+  parseProductPatch,
+  publicProductView,
+} from "../../merchant/workbench-service.js";
 import type { AgentMode } from "../mode.js";
 import { buildNegotiationChatTools, writeGateText } from "../negotiation-chat.js";
 import type { WriteApprovalCandidateStore } from "./action-candidate.js";
@@ -63,6 +67,15 @@ function textResult(text: string, details?: unknown): AgentToolResult<unknown> {
 }
 
 function errorText(err: unknown): string {
+  if (err instanceof MerchantWorkbenchError) {
+    const kindLabel: Record<string, string> = {
+      auth: "凭据被拒或缺失",
+      not_found: "未找到",
+      validation: "参数或服务校验失败",
+      unavailable: "暂时性错误",
+    };
+    return `商家操作失败（${kindLabel[err.kind] ?? err.kind}）：${err.message}`;
+  }
   if (err instanceof MerchantClientError) {
     const kindLabel: Record<string, string> = {
       auth: "凭据被拒或缺失",
@@ -79,7 +92,10 @@ function optString(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
-function experienceEnabled(profile: AgentProfile, capability: "intelligence" | "presentation"): boolean {
+function experienceEnabled(
+  profile: AgentProfile,
+  capability: "intelligence" | "presentation",
+): boolean {
   const config = profile.merchant_experience;
   return config?.enabled === true && config[capability] !== false;
 }
@@ -117,36 +133,6 @@ function parseProductInput(value: unknown): MerchantProductInput {
     ...(Array.isArray(v.delivery_attributes)
       ? { delivery_attributes: v.delivery_attributes.map(String) }
       : {}),
-  };
-}
-
-function parseChanges(value: unknown): MerchantProductPatch {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new MerchantClientError("validation", "changes 必须是对象");
-  }
-  const v = value as Record<string, unknown>;
-  const patch: MerchantProductPatch = {};
-  if (typeof v.title === "string") patch.title = v.title;
-  if (typeof v.price === "number" && Number.isFinite(v.price)) patch.price = v.price;
-  if (typeof v.stock === "number" && Number.isInteger(v.stock)) patch.stock = v.stock;
-  if (typeof v.currency === "string") patch.currency = v.currency;
-  if (typeof v.category === "string") patch.category = v.category;
-  if (Array.isArray(v.tags)) patch.tags = v.tags.map(String);
-  if (typeof v.description === "string") patch.description = v.description;
-  if (Array.isArray(v.delivery_attributes)) patch.delivery_attributes = v.delivery_attributes.map(String);
-  if (typeof v.paused === "boolean") patch.paused = v.paused;
-  return patch;
-}
-
-/** Public precondition snapshot of a product (no private values). */
-function productPreconditions(product: MerchantCatalogProduct): Record<string, unknown> {
-  return {
-    sku: product.sku,
-    merchant_id: product.merchant_id,
-    title: product.title,
-    price: product.price,
-    stock: product.stock,
-    paused: product.paused,
   };
 }
 
@@ -223,6 +209,19 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
   const { profile, merchantClient, broker, approvals, mode, now } = deps;
   const ownerId = profile.owner_id;
   const writeGateDeps = { mode, approvals, profile, now, registerPending: deps.registerPending };
+  // Merchant Workbench Facade（WorkBuddy 计划阶段一）：只读工具与草稿写工具的
+  // 业务逻辑下沉到不依赖 Pi Agent Core 的服务层；工具层只负责 fencing、文案与 details。
+  const workbench = new MerchantWorkbenchService({
+    profile,
+    merchantClient,
+    approvals,
+    mode,
+    now,
+    ...(deps.dataSource !== undefined ? { dataSource: deps.dataSource } : {}),
+    ...(deps.registerPending !== undefined ? { registerPending: deps.registerPending } : {}),
+    ...(deps.a2aLedgerDir !== undefined ? { a2aLedgerDir: deps.a2aLedgerDir } : {}),
+    ...(deps.intelligence !== undefined ? { intelligence: deps.intelligence } : {}),
+  });
 
   // ---- read-only tools -------------------------------------------------------
 
@@ -238,29 +237,25 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     execute: async (_id, _params) => {
       try {
         // Always the merchant's own catalog — never an arbitrary merchant_id.
-        if (deps.dataSource !== undefined) {
-          const facts = await deps.dataSource.getProducts({ limit: 100 });
-          const rows = facts.map((p) => ({
-            sku: p.sku,
-            title: p.title ?? "",
-            price: p.price_minor ?? 0,
-            stock: p.stock ?? null,
-            paused: false,
-          }));
-          return textResult(rows.length === 0 ? "目录为空。" : fenceModelPayload("merchant_api", rows, { maxChars: experienceMaxChars(profile) }), {
-            count: rows.length,
-            source: "data-source",
-          });
-        }
-        const products = await merchantClient.listProducts(ownerId);
-        const rows = products.map((p) => ({
+        const { items, source } = await workbench.listPublicProducts();
+        const rows = items.map((p) => ({
           sku: p.sku,
           title: p.title,
           price: p.price,
           stock: p.stock,
           paused: p.paused,
         }));
-        return textResult(rows.length === 0 ? "目录为空。" : fenceModelPayload("merchant_api", rows, { maxChars: experienceMaxChars(profile) }), { count: rows.length });
+        return textResult(
+          rows.length === 0
+            ? "目录为空。"
+            : fenceModelPayload("merchant_api", rows, { maxChars: experienceMaxChars(profile) }),
+          source === "data_source"
+            ? {
+                count: rows.length,
+                source: "data-source",
+              }
+            : { count: rows.length },
+        );
       } catch (err) {
         return textResult(errorText(err));
       }
@@ -280,8 +275,10 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     execute: async (_id, params) => {
       try {
         const { sku } = params as { sku: string };
-        const product = await merchantClient.getProduct(sku);
-        return textResult(fenceModelPayload("merchant_api", productPreconditions(product), { maxChars: experienceMaxChars(profile) }));
+        const product = await workbench.getPublicProduct(sku);
+        return textResult(
+          fenceModelPayload("merchant_api", product, { maxChars: experienceMaxChars(profile) }),
+        );
       } catch (err) {
         return textResult(errorText(err));
       }
@@ -301,8 +298,10 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     execute: async (_id, params) => {
       try {
         const { sku } = params as { sku: string };
-        const snapshot = await merchantClient.getInventorySnapshot(sku);
-        return textResult(fenceModelPayload("merchant_api", snapshot, { maxChars: experienceMaxChars(profile) }));
+        const snapshot = await workbench.getInventorySnapshot(sku);
+        return textResult(
+          fenceModelPayload("merchant_api", snapshot, { maxChars: experienceMaxChars(profile) }),
+        );
       } catch (err) {
         return textResult(errorText(err));
       }
@@ -322,52 +321,33 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       additionalProperties: false,
     },
     execute: async (_id, _params) => {
-      const ledgerDir = deps.a2aLedgerDir;
-      if (ledgerDir === undefined) {
+      if (deps.a2aLedgerDir === undefined) {
         return textResult("未配置 A2A ledger 目录，无法读取磋商记录。");
       }
-      const ledger = new LedgerStore({ dir: ledgerDir, now: deps.now });
-      const rows: Array<{ at: string; line: string }> = [];
-      for (const negotiationId of ledger.listNegotiations()) {
-        let phase = "OPEN";
-        let at = "";
-        let sku = "";
-        let qty: number | undefined;
-        let priceMinor: number | undefined;
-        for (const e of ledger.events(negotiationId)) {
-          if (e.recorded_at > at) at = e.recorded_at;
-          if (e.state_transition?.to_phase !== undefined) phase = e.state_transition.to_phase;
-          if (e.event_kind === "message_sent") {
-            const wp = e.wire_payload as
-              | {
-                  action?: string;
-                  payload?: {
-                    terms?: { items?: Array<{ sku?: string; quantity?: { value?: number }; unit_price?: { amount_minor?: number } }> };
-                  };
-                }
-              | undefined;
-            const item = wp?.payload?.terms?.items?.[0];
-            if (item?.sku !== undefined && item.sku !== "") sku = item.sku;
-            if (item?.quantity?.value !== undefined) qty = item.quantity.value;
-            if (item?.unit_price?.amount_minor !== undefined) priceMinor = item.unit_price.amount_minor;
-          }
-        }
-        // 已到终态（AGREEMENT_REACHED/DECLINED/WITHDRAWN/CANCELLED/EXPIRED）不算进行中
-        if ((TERMINAL_PHASES as readonly string[]).includes(phase)) continue;
-        const price = priceMinor !== undefined ? `，价 ${(priceMinor / 100).toFixed(2)} 元/件` : "";
-        rows.push({
-          at,
-          line: `· ${negotiationId}（${phase}）SKU=${sku || "-"} 数量=${qty ?? "-"}${price} ${at}`,
+      try {
+        const rows = await workbench.listActiveConsultations();
+        const lines = rows.map((r) => {
+          const price =
+            r.price_minor !== undefined ? `，价 ${(r.price_minor / 100).toFixed(2)} 元/件` : "";
+          return `· ${r.negotiation_id}（${r.phase}）SKU=${r.sku || "-"} 数量=${r.quantity ?? "-"}${price} ${r.recorded_at}`;
         });
+        if (lines.length === 0) return textResult("当前没有进行中的磋商。", { count: 0 });
+        return textResult(
+          fenceModelPayload(
+            "a2a_message",
+            {
+              total: lines.length,
+              items: lines,
+            },
+            { maxChars: experienceMaxChars(profile) },
+          ),
+          {
+            count: lines.length,
+          },
+        );
+      } catch (err) {
+        return textResult(errorText(err));
       }
-      rows.sort((a, b) => (a.at > b.at ? -1 : a.at < b.at ? 1 : 0));
-      if (rows.length === 0) return textResult("当前没有进行中的磋商。", { count: 0 });
-      return textResult(fenceModelPayload("a2a_message", {
-        total: rows.length,
-        items: rows.map((r) => r.line),
-      }, { maxChars: experienceMaxChars(profile) }), {
-        count: rows.length,
-      });
     },
   };
 
@@ -382,15 +362,12 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     },
     execute: async (_id, _params) => {
       try {
-        const reviews = await merchantClient.getHumanReviewQueue(ownerId);
+        const reviews = await workbench.listHumanReviews();
         if (reviews.length === 0) return textResult("人工处理队列为空。");
-        return textResult(fenceModelPayload("human_review", reviews.map((r) => ({
-          review_id: r.review_id,
-          conversation_id: r.conversation_id,
-          sku: r.sku,
-          severity: r.severity,
-          reason: r.reason,
-        })), { maxChars: experienceMaxChars(profile) }), { count: reviews.length });
+        return textResult(
+          fenceModelPayload("human_review", reviews, { maxChars: experienceMaxChars(profile) }),
+          { count: reviews.length },
+        );
       } catch (err) {
         return textResult(errorText(err));
       }
@@ -422,37 +399,33 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
         const input = parseProductInput((params as { product: unknown }).product);
         // A merchant's own catalog write always belongs to THIS merchant: an
         // omitted merchant_id must default to the profile owner, never empty.
-        const product =
-          input.merchant_id === "" ? { ...input, merchant_id: ownerId } : input;
+        const product = input.merchant_id === "" ? { ...input, merchant_id: ownerId } : input;
         const args = { product: { ...product } };
         const preconditions = { sku: product.sku, exists: false };
         const escalation = catalogEscalation(profile, { ...product }, undefined);
-        const outcome = await routeWriteCandidate(
-          writeGateDeps,
-          {
-            tool: "create_product",
-            arguments: args,
-            preconditions,
-            risk: "write_catalog",
-            execute: (approvedArgs) => {
-              const p = (approvedArgs as { product: MerchantProductInput }).product;
-              return merchantClient.createProduct(p);
-            },
-            // Re-read existence: if another worker created the SKU meanwhile,
-            // the old approval is stale and the create is superseded.
-            readPreconditions: async () => {
-              let exists = false;
-              try {
-                await merchantClient.getProduct(product.sku);
-                exists = true;
-              } catch {
-                exists = false;
-              }
-              return { sku: product.sku, exists };
-            },
-            autopilotEscalation: () => escalation,
+        const outcome = await routeWriteCandidate(writeGateDeps, {
+          tool: "create_product",
+          arguments: args,
+          preconditions,
+          risk: "write_catalog",
+          execute: (approvedArgs) => {
+            const p = (approvedArgs as { product: MerchantProductInput }).product;
+            return merchantClient.createProduct(p);
           },
-        );
+          // Re-read existence: if another worker created the SKU meanwhile,
+          // the old approval is stale and the create is superseded.
+          readPreconditions: async () => {
+            let exists = false;
+            try {
+              await merchantClient.getProduct(product.sku);
+              exists = true;
+            } catch {
+              exists = false;
+            }
+            return { sku: product.sku, exists };
+          },
+          autopilotEscalation: () => escalation,
+        });
         return writeGateText(outcome);
       } catch (err) {
         return textResult(errorText(err));
@@ -480,7 +453,7 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       if (!credential.ok) return textResult(credential.reason);
       try {
         const p = params as { sku: string; changes: unknown };
-        const patch = parseChanges(p.changes);
+        const patch = parseProductPatch(p.changes);
         if (Object.keys(patch).length === 0) {
           return textResult("changes 没有任何可修改字段。");
         }
@@ -491,26 +464,23 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
           return textResult(`商品 ${p.sku} 不存在。`);
         }
         const args = { sku: p.sku, changes: { ...patch } };
-        const preconditions = productPreconditions(current);
+        const preconditions = publicProductView(current);
         const escalation = catalogEscalation(profile, args, current);
-        const outcome = await routeWriteCandidate(
-          writeGateDeps,
-          {
-            tool: "update_product",
-            arguments: args,
-            preconditions,
-            risk: "write_catalog",
-            execute: (approvedArgs) => {
-              const a = approvedArgs as { sku: string; changes: MerchantProductPatch };
-              return merchantClient.updateProduct(a.sku, a.changes);
-            },
-            readPreconditions: async () => {
-              const fresh = await merchantClient.getProduct(p.sku);
-              return productPreconditions(fresh);
-            },
-            autopilotEscalation: () => escalation,
+        const outcome = await routeWriteCandidate(writeGateDeps, {
+          tool: "update_product",
+          arguments: args,
+          preconditions,
+          risk: "write_catalog",
+          execute: (approvedArgs) => {
+            const a = approvedArgs as { sku: string; changes: MerchantProductPatch };
+            return merchantClient.updateProduct(a.sku, a.changes);
           },
-        );
+          readPreconditions: async () => {
+            const fresh = await merchantClient.getProduct(p.sku);
+            return publicProductView(fresh);
+          },
+          autopilotEscalation: () => escalation,
+        });
         return writeGateText(outcome);
       } catch (err) {
         return textResult(errorText(err));
@@ -548,24 +518,21 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
           return textResult(`商品 ${p.sku} 不存在。`);
         }
         const args = { sku: p.sku, stock: p.stock };
-        const preconditions = productPreconditions(current);
-        const outcome = await routeWriteCandidate(
-          writeGateDeps,
-          {
-            tool: "update_inventory",
-            arguments: args,
-            preconditions,
-            risk: "update_inventory",
-            execute: (approvedArgs) => {
-              const a = approvedArgs as { sku: string; stock: number };
-              return merchantClient.updateInventory(a.sku, a.stock);
-            },
-            readPreconditions: async () => {
-              const fresh = await merchantClient.getProduct(p.sku);
-              return productPreconditions(fresh);
-            },
+        const preconditions = publicProductView(current);
+        const outcome = await routeWriteCandidate(writeGateDeps, {
+          tool: "update_inventory",
+          arguments: args,
+          preconditions,
+          risk: "update_inventory",
+          execute: (approvedArgs) => {
+            const a = approvedArgs as { sku: string; stock: number };
+            return merchantClient.updateInventory(a.sku, a.stock);
           },
-        );
+          readPreconditions: async () => {
+            const fresh = await merchantClient.getProduct(p.sku);
+            return publicProductView(fresh);
+          },
+        });
         return writeGateText(outcome);
       } catch (err) {
         return textResult(errorText(err));
@@ -601,24 +568,21 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
           return textResult(`商品 ${p.sku} 不存在。`);
         }
         const args = { sku: p.sku, paused: p.paused };
-        const preconditions = productPreconditions(current);
-        const outcome = await routeWriteCandidate(
-          writeGateDeps,
-          {
-            tool: "pause_or_resume_listing",
-            arguments: args,
-            preconditions,
-            risk: "listing_pause",
-            execute: (approvedArgs) => {
-              const a = approvedArgs as { sku: string; paused: boolean };
-              return merchantClient.pauseListing(a.sku, a.paused);
-            },
-            readPreconditions: async () => {
-              const fresh = await merchantClient.getProduct(p.sku);
-              return productPreconditions(fresh);
-            },
+        const preconditions = publicProductView(current);
+        const outcome = await routeWriteCandidate(writeGateDeps, {
+          tool: "pause_or_resume_listing",
+          arguments: args,
+          preconditions,
+          risk: "listing_pause",
+          execute: (approvedArgs) => {
+            const a = approvedArgs as { sku: string; paused: boolean };
+            return merchantClient.pauseListing(a.sku, a.paused);
           },
-        );
+          readPreconditions: async () => {
+            const fresh = await merchantClient.getProduct(p.sku);
+            return publicProductView(fresh);
+          },
+        });
         return writeGateText(outcome);
       } catch (err) {
         return textResult(errorText(err));
@@ -635,7 +599,10 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       type: "object",
       properties: {
         sku: { type: "string" },
-        changes: { type: "object", description: "计划修改的字段（title/price/stock/description 等）" },
+        changes: {
+          type: "object",
+          description: "计划修改的字段（title/price/stock/description 等）",
+        },
         reason: { type: "string" },
       },
       required: ["sku", "changes"],
@@ -646,44 +613,29 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       if (!credential.ok) return textResult(credential.reason);
       try {
         const p = params as { sku: string; changes: unknown; reason?: string };
-        const patch = parseChanges(p.changes);
+        // 保持工具层既有文案：空 patch / 商品不存在的提示在调用 Facade 前拦截。
+        const patch = parseProductPatch(p.changes);
         if (Object.keys(patch).length === 0) {
           return textResult("changes 没有任何可修改字段。");
         }
-        let current: MerchantCatalogProduct | undefined;
         try {
-          current = await merchantClient.getProduct(p.sku);
+          await merchantClient.getProduct(p.sku);
         } catch {
           return textResult(`商品 ${p.sku} 不存在。`);
         }
-        const args = { sku: p.sku, changes: { ...patch }, reason: optString(p.reason) ?? "" };
-        const outcome = await routeWriteCandidate(
-          writeGateDeps,
-          {
-            tool: "draft_product_change",
-            arguments: args,
-            preconditions: productPreconditions(current),
-            risk: "write_catalog",
-            // Drafts are ALWAYS pending (never auto-execute), even in autopilot.
-            force_pending: true,
-            execute: (approvedArgs) => {
-              const a = approvedArgs as { sku: string; changes: MerchantProductPatch };
-              return merchantClient.updateProduct(a.sku, a.changes);
-            },
-            readPreconditions: async () => {
-              const fresh = await merchantClient.getProduct(p.sku);
-              return productPreconditions(fresh);
-            },
-          },
-        );
-        if (outcome.kind === "pending_approval") {
+        const result = await workbench.draftProductChange({
+          sku: p.sku,
+          changes: patch,
+          reason: optString(p.reason) ?? "",
+        });
+        if (result.outcome.kind === "pending_approval") {
           return textResult(
-            `已生成变更草稿候选 ${outcome.candidate.candidate_id}（等待批准后才执行）。当前商品：` +
-              JSON.stringify(productPreconditions(current)),
-            { candidate_id: outcome.candidate.candidate_id, status: "pending_approval" },
+            `已生成变更草稿候选 ${result.outcome.candidate.candidate_id}（等待批准后才执行）。当前商品：` +
+              JSON.stringify(result.product),
+            { candidate_id: result.outcome.candidate.candidate_id, status: "pending_approval" },
           );
         }
-        return writeGateText(outcome);
+        return writeGateText(result.outcome);
       } catch (err) {
         return textResult(errorText(err));
       }
@@ -696,7 +648,8 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     const getBusinessSnapshot: Tool = {
       name: "get_business_snapshot",
       label: "读取经营摘要",
-      description: "读取当前商家经营摘要、咨询/磋商和待处理事项。只读；指标由服务端计算并注明数据限制。",
+      description:
+        "读取当前商家经营摘要、咨询/磋商和待处理事项。只读；指标由服务端计算并注明数据限制。",
       parameters: {
         type: "object",
         properties: {
@@ -715,10 +668,13 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
             merchant_id: ownerId,
             ...(period === undefined ? {} : { period }),
           });
-          return textResult(fenceModelPayload("metric", snapshot, { maxChars: experienceMaxChars(profile) }), {
-            status: "ok",
-            metric: "business_snapshot",
-          });
+          return textResult(
+            fenceModelPayload("metric", snapshot, { maxChars: experienceMaxChars(profile) }),
+            {
+              status: "ok",
+              metric: "business_snapshot",
+            },
+          );
         } catch (err) {
           return textResult(errorText(err));
         }
@@ -748,17 +704,21 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
           const p = params as { metric?: unknown; period?: unknown; granularity?: unknown };
           const metric = optString(p.metric);
           if (metric === undefined) return textResult("metric 必须是非空字符串。");
-          const granularity = p.granularity === "week" || p.granularity === "month" ? p.granularity : "day";
+          const granularity =
+            p.granularity === "week" || p.granularity === "month" ? p.granularity : "day";
           const series = await intelligence.queryMetric({
             merchant_id: ownerId,
             metric,
             granularity,
             ...(optString(p.period) === undefined ? {} : { period: optString(p.period) }),
           });
-          return textResult(fenceModelPayload("metric", series, { maxChars: experienceMaxChars(profile) }), {
-            status: "ok",
-            metric,
-          });
+          return textResult(
+            fenceModelPayload("metric", series, { maxChars: experienceMaxChars(profile) }),
+            {
+              status: "ok",
+              metric,
+            },
+          );
         } catch (err) {
           return textResult(errorText(err));
         }
@@ -781,16 +741,20 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
         try {
           const p = params as { status?: unknown; limit?: unknown };
           const status = p.status === "active" || p.status === "agreement" ? p.status : "all";
-          const rawLimit = typeof p.limit === "number" && Number.isFinite(p.limit) ? Math.trunc(p.limit) : 20;
+          const rawLimit =
+            typeof p.limit === "number" && Number.isFinite(p.limit) ? Math.trunc(p.limit) : 20;
           const rows = await intelligence.getNegotiationDigest({
             merchant_id: ownerId,
             status,
             limit: Math.max(1, Math.min(100, rawLimit)),
           });
-          return textResult(fenceModelPayload("a2a_message", rows, { maxChars: experienceMaxChars(profile) }), {
-            status: "ok",
-            count: rows.length,
-          });
+          return textResult(
+            fenceModelPayload("a2a_message", rows, { maxChars: experienceMaxChars(profile) }),
+            {
+              status: "ok",
+              count: rows.length,
+            },
+          );
         } catch (err) {
           return textResult(errorText(err));
         }
@@ -805,9 +769,12 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       execute: async () => {
         try {
           const health = await intelligence.getCatalogHealth({ merchant_id: ownerId });
-          return textResult(fenceModelPayload("merchant_api", health, { maxChars: experienceMaxChars(profile) }), {
-            status: "ok",
-          });
+          return textResult(
+            fenceModelPayload("merchant_api", health, { maxChars: experienceMaxChars(profile) }),
+            {
+              status: "ok",
+            },
+          );
         } catch (err) {
           return textResult(errorText(err));
         }
@@ -822,16 +789,25 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       execute: async () => {
         try {
           const rows = await intelligence.getPendingActions();
-          return textResult(fenceModelPayload("merchant_api", rows, { maxChars: experienceMaxChars(profile) }), {
-            status: "ok",
-            count: rows.length,
-          });
+          return textResult(
+            fenceModelPayload("merchant_api", rows, { maxChars: experienceMaxChars(profile) }),
+            {
+              status: "ok",
+              count: rows.length,
+            },
+          );
         } catch (err) {
           return textResult(errorText(err));
         }
       },
     };
-    experienceTools.push(getBusinessSnapshot, queryMetric, getCatalogHealth, getNegotiationDigest, getPendingActions);
+    experienceTools.push(
+      getBusinessSnapshot,
+      queryMetric,
+      getCatalogHealth,
+      getNegotiationDigest,
+      getPendingActions,
+    );
   }
 
   if (experienceEnabled(profile, "presentation") && deps.emitEvent !== undefined) {
@@ -902,10 +878,9 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       }
       const values = deps.privateValues();
       if (values.length === 0) return textResult("暂无私密阈值记忆。");
-      return textResult(
-        values.map((v) => `· ${v.key} = ${v.value}`).join("\n"),
-        { count: values.length },
-      );
+      return textResult(values.map((v) => `· ${v.key} = ${v.value}`).join("\n"), {
+        count: values.length,
+      });
     },
   };
 
@@ -925,57 +900,38 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
       additionalProperties: false,
     },
     execute: async (_id, params) => {
-      const ledgerDir = deps.a2aLedgerDir;
-      if (ledgerDir === undefined) {
+      if (deps.a2aLedgerDir === undefined) {
         return textResult("未配置 A2A ledger 目录，无法读取磋商记录。");
       }
-      const ledger = new LedgerStore({ dir: ledgerDir, now: deps.now });
-      const limit = Math.min(Math.max(Number((params as { limit?: unknown }).limit ?? 20) || 20, 1), 100);
-      const rows: Array<{ at: string; line: string }> = [];
-      for (const negotiationId of ledger.listNegotiations()) {
-        const events = ledger.events(negotiationId);
-        let at = "";
-        let lastAction = "";
-        let sku = "";
-        let qty: number | undefined;
-        let priceMinor: number | undefined;
-        let agreement = false;
-        for (const e of events) {
-          if (e.recorded_at > at) at = e.recorded_at;
-          if (e.event_kind === "message_sent") {
-            const wp = e.wire_payload as
-              | {
-                  action?: string;
-                  payload?: {
-                    terms?: { items?: Array<{ sku?: string; quantity?: { value?: number }; unit_price?: { amount_minor?: number } }> };
-                  };
-                }
-              | undefined;
-            if (wp?.action !== undefined) lastAction = wp.action;
-            const item = wp?.payload?.terms?.items?.[0];
-            if (item?.sku !== undefined && item.sku !== "") sku = item.sku;
-            if (item?.quantity?.value !== undefined) qty = item.quantity.value;
-            if (item?.unit_price?.amount_minor !== undefined) priceMinor = item.unit_price.amount_minor;
-          }
-          if (e.state_transition?.to_phase === "AGREEMENT_REACHED") agreement = true;
-        }
-        const price = priceMinor !== undefined ? `，价 ${(priceMinor / 100).toFixed(2)} 元/件` : "";
-        rows.push({
-          at,
-          line:
-            `· ${negotiationId}${agreement ? " ✅ 已达成协议" : `（${lastAction || "?"}）`} ` +
-            `SKU=${sku || "-"} 数量=${qty ?? "-"}${price} ${at}`,
+      try {
+        const { total, items } = await workbench.listA2aNegotiations(
+          (params as { limit?: unknown }).limit,
+        );
+        const lines = items.map((r) => {
+          const price =
+            r.price_minor !== undefined ? `，价 ${(r.price_minor / 100).toFixed(2)} 元/件` : "";
+          return (
+            `· ${r.negotiation_id}${r.agreement ? " ✅ 已达成协议" : `（${r.last_action || "?"}）`} ` +
+            `SKU=${r.sku || "-"} 数量=${r.quantity ?? "-"}${price} ${r.recorded_at}`
+          );
         });
+        if (lines.length === 0) return textResult("暂无 A2A 磋商记录。", { count: 0 });
+        return textResult(
+          fenceModelPayload(
+            "a2a_message",
+            {
+              total,
+              items: lines,
+            },
+            { maxChars: experienceMaxChars(profile) },
+          ),
+          {
+            count: lines.length,
+          },
+        );
+      } catch (err) {
+        return textResult(errorText(err));
       }
-      rows.sort((a, b) => (a.at > b.at ? -1 : a.at < b.at ? 1 : 0));
-      const recent = rows.slice(0, limit);
-      if (recent.length === 0) return textResult("暂无 A2A 磋商记录。", { count: 0 });
-      return textResult(fenceModelPayload("a2a_message", {
-        total: rows.length,
-        items: recent.map((r) => r.line),
-      }, { maxChars: experienceMaxChars(profile) }), {
-        count: recent.length,
-      });
     },
   };
 

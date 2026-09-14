@@ -1,0 +1,19 @@
+{
+  "title": "Kiwi 商家服务对接配置",
+  "title_en": "Kiwi Merchant Service Configuration",
+  "description": "连接您的 Kiwi 商家工作台服务。凭证仅存储在本机，不经过云端。",
+  "description_en": "Connect your Kiwi merchant workbench service. Credentials are stored locally only.",
+  "docUrl": "https://mcp.merchant.example.com/docs/token",
+  "docLabel": "如何获取访问令牌？",
+  "fields": [
+    {
+      "key": "KIWI_MERCHANT_MCP_TOKEN",
+      "label": "访问令牌（Bearer Token）",
+      "label_en": "Access Token",
+      "type": "password",
+      "required": true,
+      "placeholder": "由部署 Kiwi Merchant 的管理员提供",
+      "description": "调用商家 MCP 服务的 Bearer 令牌，对应服务端 KIWI_MERCHANT_MCP_TOKEN 环境变量；请向部署方索取，不要填写 shopping-cli 后端凭据。"
+    }
+  ]
+}

@@ -59,6 +59,23 @@ import { runTui } from "./operator/tui.js";
 import { runInit } from "./supervisor/init.js";
 import { runMcpServe } from "./mcp/cli.js";
 import { runHttpServe } from "./http/cli.js";
+import {
+  DEFAULT_MERCHANT_MCP_HOST,
+  DEFAULT_MERCHANT_MCP_PATH,
+  DEFAULT_MERCHANT_MCP_PORT,
+  startMerchantMcpServer,
+} from "./mcp/merchant-server.js";
+import { assertMerchantMcpAuthPolicy, resolveMerchantMcpVerifier } from "./mcp/merchant-auth.js";
+import { MerchantWorkbenchService } from "./merchant/workbench-service.js";
+import { ensurePathsForDir, openAgentDatabase } from "./agent/agent-db.js";
+import { WriteApprovalCandidateStore } from "./agent/merchant/action-candidate.js";
+import { ProfileCredentialBroker } from "./agent/merchant/credential-broker.js";
+import { FakeMerchantClient, fakeMerchantProduct } from "./agent/merchant/fake-merchant-client.js";
+import { HttpMerchantClient } from "./agent/merchant/merchant-client.js";
+import type { MerchantClient } from "./agent/merchant/types.js";
+import { DefaultMerchantIntelligenceBackend } from "./agent/merchant/intelligence/default-backend.js";
+import { MemoryStore } from "./agent/memory/store.js";
+import { PrivateVault } from "./agent/memory/vault.js";
 import { runDown, runStatus, runUp, SupervisorError } from "./supervisor/manage.js";
 import { parseLogLines, runLogs } from "./supervisor/logs.js";
 import { StackConfigError } from "./supervisor/stack-config.js";
@@ -1112,6 +1129,7 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
     return EXIT.OK;
   }
   if (sub === "start") return await cmdAgentServe(args);
+  if (sub === "mcp") return await cmdMerchantMcp(args);
   if (sub === "init") return await cmdMerchantInit(args);
   if (sub === "publish") return await cmdMerchantPublish(args);
   if (sub === "setup-public") return await cmdMerchantSetupPublic(args);
@@ -1122,6 +1140,135 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   if (sub === "doctor") return notImplementedProduct("kiwi merchant doctor", "D3");
   process.stderr.write(`unknown merchant command: ${sub}\n`);
   return EXIT.CONFIG;
+}
+
+/**
+ * `kiwi merchant mcp serve`：Merchant Workbench 标准远程 MCP server
+ * （WorkBuddy Buddy 应用开发计划 阶段二；官方 @modelcontextprotocol/sdk
+ * streamableHttp，独立端口/路径，不复用 A2A 端点）。
+ *
+ * 单商家一服务（MVP）：租户 = profile.owner_id。认证 = Bearer token
+ * （merchant_mcp.token_env 指向的环境变量，缺省 KIWI_MERCHANT_MCP_TOKEN）；
+ * fail-closed：非 loopback 监听且未配置 token 时拒绝启动。
+ *
+ * 审批闭环（阶段四）：draft 候选的执行钩子是进程级的——本进程生成的候选
+ * 直接可批准执行；启动时为库内遗留的 draft_product_change 候选重建钩子
+ * （recoverPendingDrafts），其他工具的遗留候选按 expireForRecovery 语义失效。
+ *
+ *   kiwi merchant mcp serve [--profile <file>] [--host <host>] [--port N] [--data-dir <dir>]
+ */
+async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
+  if (args.command[2] !== "serve") {
+    process.stderr.write(
+      "usage: kiwi merchant mcp serve [--profile <file>] [--host <host>] [--port N] [--data-dir <dir>]\n",
+    );
+    return EXIT.CONFIG;
+  }
+  const profile = requireProfileOrDefault(args);
+  if (profile.role !== "merchant") {
+    process.stderr.write("kiwi merchant mcp serve 需要 merchant profile（role: merchant）\n");
+    return EXIT.CONFIG;
+  }
+  loadMerchantCredentials(); // 加载 init 写入的 credentials.env（KIWI_MERCHANT_TOKEN）
+  const mcpConfig = profile.merchant_mcp;
+  if (mcpConfig?.enabled === false) {
+    process.stderr.write("profile merchant_mcp.enabled=false：MCP server 未启用\n");
+    return EXIT.CONFIG;
+  }
+  const host = args.catalogHost ?? mcpConfig?.host ?? DEFAULT_MERCHANT_MCP_HOST;
+  const port = args.port ?? mcpConfig?.port ?? DEFAULT_MERCHANT_MCP_PORT;
+  const mcpPath = mcpConfig?.path ?? DEFAULT_MERCHANT_MCP_PATH;
+  const verifier = resolveMerchantMcpVerifier(mcpConfig?.token_env);
+  let authWarning: string | undefined;
+  try {
+    authWarning = assertMerchantMcpAuthPolicy(host, verifier);
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.CONFIG;
+  }
+  if (authWarning !== undefined) process.stderr.write(`${authWarning}\n`);
+
+  // 依赖装配与 chat kernel 同一套：agent data dir + state.sqlite + 审批候选 store。
+  // 审批候选与对话内核共享同一 DB——MCP 生成的 draft 候选在内核侧 /pending 可见。
+  const paths = ensurePathsForDir(resolveServeDataDir(args.dataDir, profile.agent_id));
+  const db = openAgentDatabase(paths.db);
+  const now = () => new Date().toISOString();
+  const store = new MemoryStore({ db, vault: new PrivateVault(), now });
+  const principal = store.ensurePrincipal({
+    principal_id: profile.agent_id,
+    owner_id: profile.owner_id,
+    role: profile.role,
+  });
+  store.bindPrincipal(principal.principal_id);
+  const approvals = new WriteApprovalCandidateStore({
+    db,
+    principalId: principal.principal_id,
+    now,
+  });
+  // 执行钩子是进程级的：重启后遗留的 pending 候选无法被本进程执行。按
+  // expireForRecovery 语义把非本服务可恢复的候选先失效（防虚报死候选）；
+  // draft_product_change 候选的参数在库内、钩子可确定性重建，留给
+  // service.recoverPendingDrafts() 恢复（阶段四审批闭环）。
+  for (const candidate of approvals.listPending()) {
+    if (candidate.tool !== "draft_product_change") approvals.expireCandidate(candidate.candidate_id);
+  }
+
+  // merchantClient：fake provider 走离线 Fake，否则真实网关（同 kernel-builder）。
+  let merchantClient: MerchantClient;
+  if (isFakeProvider(profile)) {
+    merchantClient = new FakeMerchantClient({ products: [fakeMerchantProduct()] });
+  } else {
+    const broker = new ProfileCredentialBroker(profile);
+    merchantClient = new HttpMerchantClient(profile.commerce.base_url, broker);
+  }
+  const intelligence =
+    profile.merchant_experience?.enabled === true &&
+    profile.merchant_experience.intelligence !== false
+      ? new DefaultMerchantIntelligenceBackend({
+          merchant_id: profile.owner_id,
+          data_dir: paths.dir,
+          principal_id: principal.principal_id,
+          merchant_client: merchantClient,
+          approvals,
+          now,
+        })
+      : undefined;
+  const service = new MerchantWorkbenchService({
+    profile,
+    merchantClient,
+    approvals,
+    // MCP 写工具一律 force_pending 只产候选，mode 不影响执行安全；固定 supervised。
+    mode: () => "supervised",
+    now,
+    // 商家 A2A 节点 ledger 基础目录（LedgerStore 会再拼 /ledger）。
+    a2aLedgerDir: path.join(paths.dir, "a2a"),
+    ...(intelligence !== undefined ? { intelligence } : {}),
+  });
+  // 审批闭环（阶段四）：为重启前遗留的 draft 候选重建执行钩子，本进程即可
+  // 批准并执行（service.approveCandidate）。
+  const recoveredDrafts = service.recoverPendingDrafts();
+  const handle = await startMerchantMcpServer({
+    service,
+    host,
+    port,
+    path: mcpPath,
+    ...(verifier !== undefined ? { auth: verifier } : {}),
+    serverInfo: { name: "kiwi-merchant", version: PRODUCT_VERSION },
+  });
+  console.log(
+    `[merchant mcp] merchant ${profile.agent_id} MCP server: ${handle.url}` +
+      `（auth: ${verifier?.name ?? "none（loopback-only）"}；7 个 Workbench 工具）` +
+      (recoveredDrafts > 0 ? `；恢复 ${recoveredDrafts} 个待批准变更草稿` : ""),
+  );
+  const shutdown = async (): Promise<void> => {
+    await handle.close().catch(() => undefined);
+    db.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  await new Promise<never>(() => {});
+  return EXIT.OK;
 }
 
 /**

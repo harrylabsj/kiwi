@@ -1,0 +1,106 @@
+{
+  "$note": "Kiwi 商家运营工作台 Buddy 应用配置的本地草稿（用于导出预览与人工照着配置）。WorkBuddy 后台导出 JSON 的精确格式未公开，本文件为自定义清晰结构；提交前需在后台核对每个字段的对应表单项（见 README.md「需在后台核对的字段」）。",
+  "version": "1.0.0",
+  "identity": {
+    "appName": "Kiwi 商家运营工作台",
+    "appNameEn": "Kiwi Merchant Workbench",
+    "icon": "上传 256×256 PNG 应用头像（可复用连接器 icon.svg 的薄荷绿 kiwi 鸟风格重新出图）",
+    "简介": "面向 Kiwi 商家的运营工作台：查商品与库存、跟进买家 A2A 磋商、处理人工队列、生成待批准的商品变更草稿。",
+    "授权列表": "本应用连接器使用用户自填 Token（非 OAuth），无需配置 OAuth 授权项",
+    "授权回调URL": null,
+    "可信Origin": ["https://mcp.merchant.example.com"]
+  },
+  "home": {
+    "slogan": "店铺运营，先看清再动手",
+    "welcome": "你好，这里是 Kiwi 商家运营工作台。可以问我要商品目录、库存快照、买家磋商进展和经营摘要；改价格改库存我会先生成草稿，等你批准才执行。",
+    "modes": [
+      {
+        "key": "catalog",
+        "name": "商品查看",
+        "description": "浏览目录、查单品、看库存快照",
+        "systemPrompt": "你是 Kiwi 商家运营助手的「商品查看」模式。只读回答：目录用 merchant_list_products，单品用 merchant_get_product，库存用 merchant_get_inventory（回答时注明观察时间）。只使用工具返回的公开字段；不出现也不要索要底价、成本、利润等私密字段。数据不可得时如实说明，不编造。",
+        "tools": ["merchant_list_products", "merchant_get_product", "merchant_get_inventory"]
+      },
+      {
+        "key": "inquiry",
+        "name": "询价处理",
+        "description": "跟进买家 A2A 磋商记录与人工处理队列",
+        "systemPrompt": "你是 Kiwi 商家运营助手的「询价处理」模式。用 merchant_list_a2a_negotiations 查看磋商进展（相位、报价、是否达成协议），用 merchant_list_human_reviews 查看需要人工介入的事项并按 severity 排序汇报。磋商记录只读自 Kiwi Ledger：你不回价、不接受、不拒绝任何磋商；需要动作时提示用户到 Kiwi 侧处理。",
+        "tools": [
+          "merchant_list_a2a_negotiations",
+          "merchant_list_human_reviews",
+          "merchant_get_product"
+        ]
+      },
+      {
+        "key": "inventory-draft",
+        "name": "库存与变更草稿",
+        "description": "看库存、生成待批准的商品变更草稿",
+        "systemPrompt": "你是 Kiwi 商家运营助手的「库存与变更草稿」模式。查库存用 merchant_get_inventory（注明观察时间）。任何商品变更（价格/库存/上下架/文案）都用 merchant_draft_product_change 生成审批候选：返回 candidate_id 后明确告知「已生成草稿候选，等待你在 Kiwi 侧批准」，绝不声称已执行。用户没确认具体字段和新值时不生成草稿。",
+        "tools": [
+          "merchant_get_inventory",
+          "merchant_list_products",
+          "merchant_draft_product_change"
+        ]
+      }
+    ],
+    "capsules": [
+      {
+        "mode": "catalog",
+        "prompt": "我现在目录里有哪些商品？",
+        "bindTools": ["merchant_list_products"]
+      },
+      {
+        "mode": "catalog",
+        "prompt": "帮我看看 sku-001 的库存和当前售价",
+        "bindTools": ["merchant_get_product", "merchant_get_inventory"]
+      },
+      {
+        "mode": "catalog",
+        "prompt": "这周的经营情况怎么样？",
+        "bindTools": ["merchant_get_analytics"]
+      },
+      {
+        "mode": "inquiry",
+        "prompt": "最近有买家来磋商吗？进行到哪一步了？",
+        "bindTools": ["merchant_list_a2a_negotiations"]
+      },
+      {
+        "mode": "inquiry",
+        "prompt": "有没有需要我人工处理的事项？",
+        "bindTools": ["merchant_list_human_reviews"]
+      },
+      {
+        "mode": "inventory-draft",
+        "prompt": "把 sku-001 的价格调成 88 元，先生成草稿等我批准",
+        "bindTools": ["merchant_draft_product_change"]
+      },
+      {
+        "mode": "inventory-draft",
+        "prompt": "哪些商品快没库存了？",
+        "bindTools": ["merchant_list_products", "merchant_get_inventory"]
+      }
+    ],
+    "内置连接器": "kiwi-merchant（注意：官方文档要求首页内置连接器为 OAuth 认证的 MCP；本连接器是用户自填 Token 模式，若后台限制内置连接器仅支持 OAuth，则只在市场配置中上架，需在后台核对）"
+  },
+  "market": {
+    "connectors": ["kiwi-merchant"],
+    "skills": ["kiwi-merchant"],
+    "experts": [],
+    "精选场景": "可选：把「询价处理」模式的两个胶囊作为推荐位展示"
+  },
+  "misc": {
+    "跳过首次绑定应用授权": true,
+    "跳过原因": "连接器为用户自填 Token 模式（非 OAuth），按官方文档「其他配置」第 1 条可配置跳过首次绑定",
+    "绑定应用授权文案": "绑定后，即可获取「Kiwi 商家运营工作台」专业能力",
+    "输入框占位符": {
+      "zh": "问问我店铺的事：商品、库存、磋商、经营摘要…",
+      "en": "Ask about your store: catalog, inventory, negotiations, analytics…"
+    },
+    "模型配置": {
+      "source": "workbuddy_model_pool",
+      "note": "以 WorkBuddy 模型池为主，不引用 Kiwi 本地模型配置；建议勾选工具调用稳定的通用模型，默认模型按平台推荐设置。",
+      "defaultModel": null
+    }
+  }
+}

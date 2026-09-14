@@ -1,0 +1,104 @@
+{
+  "mcpServers": {
+    "kiwi-merchant": {
+      "type": "streamableHttp",
+      "url": "https://mcp.merchant.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${KIWI_MERCHANT_MCP_TOKEN}"
+      },
+      "timeout": 30000
+    }
+  },
+  "tools": [
+    {
+      "name": "merchant_list_products",
+      "description": "列出商家自己的目录商品（只读；公开字段白名单，无私有底价/成本）。",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "merchant_get_product",
+      "description": "按 SKU 读取商家目录中的一个商品（只读，公开字段白名单）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sku": { "type": "string", "description": "商品 SKU" },
+          "merchant_id": {
+            "type": "string",
+            "description": "租户校验（可选）：提供时必须等于本商家 merchant_id"
+          }
+        },
+        "required": ["sku"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "merchant_get_inventory",
+      "description": "读取一个商品的当前库存快照（含观察时间，不是永恒事实）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sku": { "type": "string", "description": "商品 SKU" }
+        },
+        "required": ["sku"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "merchant_list_a2a_negotiations",
+      "description": "列出商家节点的 A2A 磋商记录（结构化行：negotiation_id、相位、SKU、数量、报价、是否达成协议、时间）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "最多返回最近 N 笔（缺省 20，clamp 1..100）"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "merchant_list_human_reviews",
+      "description": "查看商家需要人工处理的队列（升级、超预算/超底价、转人工的磋商）。",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "merchant_get_analytics",
+      "description": "读取当前商家经营摘要（只读；指标由服务端计算。未配置指标后端时返回明确错误，不给演示数据）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "type": "string",
+            "pattern": "^(?:[1-9]|[1-8][0-9]|90)d$",
+            "description": "UTC 统计窗口，1d 到 90d，例如 7d、14d、30d"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "merchant_draft_product_change",
+      "description": "为一个商品变更生成审批候选（不立即执行，任何模式都不自动执行）。操作者批准后才会真正写入；只返回候选元数据。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sku": { "type": "string", "description": "商品 SKU" },
+          "changes": {
+            "type": "object",
+            "description": "计划修改的字段（title/price/stock/description 等）"
+          },
+          "reason": { "type": "string", "description": "变更原因（可选）" },
+          "merchant_id": {
+            "type": "string",
+            "description": "租户校验（可选）：提供时必须等于本商家 merchant_id"
+          }
+        },
+        "required": ["sku", "changes"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

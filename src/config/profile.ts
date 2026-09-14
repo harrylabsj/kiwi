@@ -193,6 +193,19 @@ export interface AgentProfile {
     /** 商家 token 环境变量名（值不写 profile）。 */
     merchant_token_env?: string;
   };
+  /**
+   * Merchant Workbench MCP server 配置（WorkBuddy Buddy 应用，阶段二；
+   * 仅 role=merchant）。token 只存环境变量名；缺省 host 0.0.0.0 / port 9100 /
+   * path /mcp，fail-closed：非 loopback 监听且未配置 token 时拒绝启动。
+   */
+  merchant_mcp?: {
+    enabled?: boolean;
+    host?: string;
+    port?: number;
+    path?: string;
+    /** Bearer token 环境变量名（缺省 KIWI_MERCHANT_MCP_TOKEN；值不写 profile）。 */
+    token_env?: string;
+  };
 }
 
 export class ProfileError extends Error {
@@ -228,6 +241,7 @@ const TOP_LEVEL_KEYS = [
   "decision",
   "merchant_experience",
   "merchant_public",
+  "merchant_mcp",
 ] as const;
 /** weixin 段白名单（微信远程控制通道配置；无 *_env 密钥字段——iLink 凭证运行时获取）。 */
 const WEIXIN_KEYS = ["allow_users", "base_url"] as const;
@@ -280,6 +294,11 @@ const MERCHANT_EXPERIENCE_KEYS = [
   "prompt_cache_retention",
 ] as const;
 const MERCHANT_PUBLIC_KEYS = ["public_url", "a2a_port", "shopping_db_path", "catalog_url", "merchant_token_env"] as const;
+/**
+ * merchant_mcp 段白名单（WorkBuddy Buddy 应用 MCP server；阶段二）。
+ * token 只存环境变量名（token_env），secret 值绝不写 profile。
+ */
+const MERCHANT_MCP_KEYS = ["enabled", "host", "port", "path", "token_env"] as const;
 const DECISION_BACKENDS: readonly DecisionBackendKind[] = ["deterministic", "mock", "deepseek"];
 
 /** RFC 3339 date-time with an explicit timezone (offset or Z); naive times fail closed. */
@@ -729,6 +748,51 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     };
   }
 
+  let merchantMcp: AgentProfile["merchant_mcp"] | undefined;
+  if (p.merchant_mcp !== undefined) {
+    req(isObject(p.merchant_mcp), `${source}: merchant_mcp must be a mapping`);
+    const mm = p.merchant_mcp;
+    rejectUnknownKeys(mm, MERCHANT_MCP_KEYS, "merchant_mcp", source);
+    // merchant-only 概念：buyer 配置 merchant_mcp → fail-closed。
+    if (p.role !== "merchant") {
+      req(false, `${source}: merchant_mcp is only valid for role=merchant`);
+    }
+    if (mm.enabled !== undefined) {
+      req(typeof mm.enabled === "boolean", `${source}: merchant_mcp.enabled must be a boolean`);
+    }
+    if (mm.host !== undefined) {
+      req(
+        typeof mm.host === "string" && mm.host.trim() !== "",
+        `${source}: merchant_mcp.host must be a non-empty string`,
+      );
+    }
+    if (mm.port !== undefined) {
+      req(
+        Number.isInteger(mm.port) && Number(mm.port) > 0 && Number(mm.port) <= 65535,
+        `${source}: merchant_mcp.port must be an integer between 1 and 65535`,
+      );
+    }
+    if (mm.path !== undefined) {
+      req(
+        typeof mm.path === "string" && /^\/[A-Za-z0-9/_-]*$/.test(mm.path),
+        `${source}: merchant_mcp.path must be a URL path like /mcp`,
+      );
+    }
+    if (mm.token_env !== undefined) {
+      req(
+        typeof mm.token_env === "string" && REQUIRED_ENV_REF.test(mm.token_env),
+        `${source}: merchant_mcp.token_env must name an environment variable; secrets must not be written into the profile`,
+      );
+    }
+    merchantMcp = {
+      ...(mm.enabled !== undefined ? { enabled: mm.enabled as boolean } : {}),
+      ...(mm.host !== undefined ? { host: String(mm.host) } : {}),
+      ...(mm.port !== undefined ? { port: Number(mm.port) } : {}),
+      ...(mm.path !== undefined ? { path: String(mm.path) } : {}),
+      ...(mm.token_env !== undefined ? { token_env: String(mm.token_env) } : {}),
+    };
+  }
+
   let buyerPolicy: BuyerPolicy | undefined;
   if (p.buyer_policy !== undefined) {
     req(isObject(p.buyer_policy), `${source}: buyer_policy must be a mapping`);
@@ -854,6 +918,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     ...(decisionSection !== undefined ? { decision: decisionSection } : {}),
     ...(merchantExperience !== undefined ? { merchant_experience: merchantExperience } : {}),
     ...(merchantPublic !== undefined ? { merchant_public: merchantPublic } : {}),
+    ...(merchantMcp !== undefined ? { merchant_mcp: merchantMcp } : {}),
   };
   return profile;
 }
