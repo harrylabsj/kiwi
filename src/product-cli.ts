@@ -107,6 +107,9 @@ Usage:
                                           认证：KIWI_MERCHANT_MCP_TOKEN 或 profile
                                           merchant_mcp.token_env；非 loopback 无 token
                                           拒绝启动）
+  kiwi merchant runtime <start|stop|status|health> [--profile <merchant.yaml>] [--data-dir <dir>]
+                                          Merchant 实例运行时管理：A2A + MCP 受管子进程，
+                                          异常退出自动重启，分项健康检查（V2 阶段一）
   kiwi merchant init [--merchant-id <shopping-cli merchant_id>] [--name <商家名称>]
                                           [D1] 生成 merchant profile（只填 merchant_id
                                           即可，其余自动补全；TTY 交互提示；写默认
@@ -126,14 +129,14 @@ Usage:
                                           [D3] 一条命令上线：setup-public → 起 Caddy
                                           反代 → 起 A2A 节点，退出时清理 Caddy
                                           （需已安装 Caddy）
-  kiwi merchant listings                  [D2] 已发布 Listing 查看 —— 尚未实现
   kiwi merchant stats [--days N] [--data-dir <dir>]
                                           商家侧运营统计：去重买家数 / 触达事件 /
                                           磋商数 / SKU 热度（本地 stats.sqlite，
                                           数据只在商家本机，不上报；天数 UTC，
                                           缺省 14 天，1-90）
-  kiwi merchant status                    [D1] Merchant 运行时状态 —— 尚未实现
-  kiwi merchant doctor                    [D3] Merchant 侧组件健康 —— 尚未实现
+                                          （F28：listings/status/doctor 占位命令已
+                                          从帮助移除——未实现的能力不宣传，见
+                                          docs/merchant-buddy-v2-dev-plan.md）
 
 Merchant = Kiwi Runtime + shopping-cli（Commerce Data Engine）。
 `;

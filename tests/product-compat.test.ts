@@ -43,10 +43,10 @@ describe("versionInRange (matrix single source)", () => {
     expect(versionInRange("shopping.py 2.0.0", SHOPPING_CLI_COMPAT)).toBe(true);
   });
 
-  it("rejects versions below min (无上限：3.0.0+ 均接受)", () => {
+  it("rejects versions below min or at/above 已验证上限（V2 P0-5：上限内才算实测兼容）", () => {
     expect(versionInRange("1.9.9", SHOPPING_CLI_COMPAT)).toBe(false);
-    expect(versionInRange("3.0.0", SHOPPING_CLI_COMPAT)).toBe(true); // 不限上界
-    expect(versionInRange("4.0.0", SHOPPING_CLI_COMPAT)).toBe(true);
+    expect(versionInRange("3.0.0", SHOPPING_CLI_COMPAT)).toBe(false); // 3.x 未实测
+    expect(versionInRange("4.0.0", SHOPPING_CLI_COMPAT)).toBe(false);
   });
 
   it("honors maxExclusive when present (有上限范围)", () => {
@@ -60,8 +60,8 @@ describe("versionInRange (matrix single source)", () => {
     expect(versionInRange("not-a-version", SHOPPING_CLI_COMPAT)).toBe(false);
   });
 
-  it("range text is human readable (无上限)", () => {
-    expect(compatRangeText(SHOPPING_CLI_COMPAT)).toBe(">= 2.0.0");
+  it("range text is human readable (含已验证上限)", () => {
+    expect(compatRangeText(SHOPPING_CLI_COMPAT)).toBe(">= 2.0.0 < 3.0.0");
     expect(compatRangeText({ min: "1.0.0", maxExclusive: "2.0.0" })).toBe(">= 1.0.0 < 2.0.0");
   });
 });

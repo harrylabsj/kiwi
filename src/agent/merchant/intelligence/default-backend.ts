@@ -84,6 +84,15 @@ function readStatsPath(dataDir: string): string {
   return path.join(dataDir, "a2a", "stats.sqlite");
 }
 
+/** KNP terms 形状（摘要提取用；items 第一项的 sku/quantity/unit_price）。 */
+type TermsPayload = {
+  items?: Array<{
+    sku?: string;
+    quantity?: { value?: number };
+    unit_price?: { amount_minor?: number; currency?: string };
+  }>;
+};
+
 function assertOwned(requested: string, owner: string): void {
   if (requested !== owner) throw new Error("merchant identity does not match the bound session");
 }
@@ -102,15 +111,29 @@ function extractNegotiation(
   let price: number | undefined;
   let currency: string | undefined;
   let agreementId: string | undefined;
+  let lastInboundAt = "";
+  let lastInboundAction = "";
+  let lastOutboundAt = "";
   for (const event of events) {
     if (event.recorded_at > updatedAt) updatedAt = event.recorded_at;
     if (event.state_transition?.to_phase !== undefined) phase = event.state_transition.to_phase;
     if (event.identity.counterparty_identity !== "") buyerIdentity = event.identity.counterparty_identity;
     if (event.agreement_id !== undefined) agreementId = event.agreement_id;
     const payload = event.wire_payload as {
-      payload?: { terms?: { items?: Array<{ sku?: string; quantity?: { value?: number }; unit_price?: { amount_minor?: number; currency?: string } }> } };
+      action?: string;
+      payload?: {
+        terms?: TermsPayload;
+        proposed_terms?: TermsPayload;
+        base_terms?: TermsPayload;
+        agreed_terms?: TermsPayload;
+      };
     } | undefined;
-    const items = payload?.payload?.terms?.items ?? [];
+    // V2 §8.7：terms 提取覆盖 offer(terms) / counter_offer(proposed_terms) /
+    // conditional_offer(base_terms) / 最终协议(agreed_terms)——此前只读 terms，
+    // 还价与成交价在摘要里静默丢失。
+    const p = payload?.payload;
+    const terms = p?.terms ?? p?.proposed_terms ?? p?.base_terms ?? p?.agreed_terms;
+    const items = terms?.items ?? [];
     for (const item of items) {
       if (item.sku) skus.add(item.sku);
     }
@@ -118,7 +141,21 @@ function extractNegotiation(
     if (item?.quantity?.value !== undefined) quantity = item.quantity.value;
     if (item?.unit_price?.amount_minor !== undefined) price = item.unit_price.amount_minor;
     if (item?.unit_price?.currency !== undefined) currency = item.unit_price.currency;
+    // needs_human_review（V2 §8.7）：不简单等价 AWAITING_CLARIFICATION——
+    // 非终态且最后一条消息是买家入站（offer/counter_offer/clarification 等待
+    // 商家回应）也算需要处理。
+    if (event.event_kind === "message_received") {
+      lastInboundAt = event.recorded_at;
+      lastInboundAction = payload?.action ?? "";
+    }
+    if (event.event_kind === "message_sent") {
+      if (event.recorded_at >= lastOutboundAt) lastOutboundAt = event.recorded_at;
+    }
   }
+  const awaitingMerchant =
+    lastInboundAt !== "" &&
+    lastInboundAt > lastOutboundAt &&
+    ["offer", "counter_offer", "clarification"].includes(lastInboundAction);
   return {
     negotiation_id: negotiationId,
     phase,
@@ -127,7 +164,9 @@ function extractNegotiation(
     ...(quantity === undefined ? {} : { quantity }),
     ...(price === undefined ? {} : { latest_price_minor: price }),
     ...(currency === undefined ? {} : { currency }),
-    needs_human_review: phase === "AWAITING_CLARIFICATION",
+    needs_human_review:
+      phase === "AWAITING_CLARIFICATION" ||
+      (!(TERMINAL_PHASES as readonly string[]).includes(phase) && awaitingMerchant),
     updated_at: updatedAt,
     ...(agreementId === undefined ? {} : { agreement_id: agreementId }),
   };

@@ -7,14 +7,24 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { parse } from "yaml";
 
-// kiwi-merchant-connector 打包校验（WorkBuddy Buddy 应用 阶段三）。
+// kiwi-merchant 连接器打包校验（WorkBuddy Buddy 应用 阶段三/阶段五）。
 // 风格对齐 package.mjs：Node assert、项目已有依赖（yaml）、系统 zip；
 // 只读校验不联网，只打包明确列出的文件，不覆盖已有压缩包。
+// 双 bundle：--bundle token（缺省，过渡）| --bundle oauth（正式）。
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../..");
-const bundle = path.join(here, "kiwi-merchant-connector");
-const files = ["connector-meta.json", "mcp.json", "token-schema.json", "icon.svg"];
+const argvBundle = process.argv.find((a) => a.startsWith("--bundle="));
+const bundleKind = argvBundle === undefined ? "token" : argvBundle.split("=")[1];
+assert(
+  bundleKind === "token" || bundleKind === "oauth",
+  `--bundle 只支持 token|oauth（实际 ${bundleKind}）`,
+);
+const bundle = path.join(here, `kiwi-merchant-connector${bundleKind === "oauth" ? "-oauth" : ""}`);
+const files =
+  bundleKind === "oauth"
+    ? ["connector-meta.json", "mcp.json", "icon.svg"]
+    : ["connector-meta.json", "mcp.json", "token-schema.json", "icon.svg"];
 
 function read(relative) {
   const full = path.resolve(bundle, relative);
@@ -57,11 +67,17 @@ function bilingualList(value, field) {
 const meta = readJson("connector-meta.json");
 assert(/^[a-z0-9-]+$/.test(meta.source), "source 必须 kebab-case");
 assert.equal(meta.type, "mcp");
-assert.equal(meta.auth_mode, "token");
+if (bundleKind === "token") {
+  assert.equal(meta.auth_mode, "token");
+  assert.equal(meta.source, "kiwi-merchant-token", "token 过渡包 source 须与 OAuth 包区分");
+} else {
+  assert(!("auth_mode" in meta), "OAuth 包省略 auth_mode（走 MCP 自带 OAuth 流程）");
+  assert.equal(meta.source, "kiwi-merchant", "OAuth 正式包 source");
+}
 assert(/^\d+\.\d+\.\d+$/.test(meta.version), "version 必须语义化");
 assert(
   /^\d+\.\d+\.\d+$/.test(meta.minWorkbuddyVersion),
-  "auth_mode=token 需声明 minWorkbuddyVersion",
+  "需声明 minWorkbuddyVersion（examples_* 需 4.24.0）",
 );
 bilingual(meta, "name");
 bilingual(meta, "description");
@@ -86,17 +102,22 @@ const headerRefs = new Set(
     [...String(v).matchAll(/\$\{([A-Z][A-Z0-9_]*)\}/g)].map((m) => m[1]),
   ),
 );
-assert(headerRefs.size > 0, "headers 必须用 ${VAR} 占位引用 token");
+if (bundleKind === "token") {
+  assert(headerRefs.size > 0, "headers 必须用 ${VAR} 占位引用 token");
+} else {
+  assert.deepEqual([...headerRefs], [], "OAuth 包不得携带 token 占位（走 OAuth 流程）");
+  assert(!("headers" in server), "OAuth 包不得配置 Authorization 头");
+}
 
 // 工具声明与 src/mcp/merchant-tools.ts 的工具名集合完全一致（防漂移；
 // description/inputSchema 全等比对见 tests/workbuddy-merchant-connector.test.ts）。
 const toolSource = readFileSync(path.join(root, "src/mcp/merchant-tools.ts"), "utf8");
 const sourceToolNames = new Set(
-  [...toolSource.matchAll(/name: "(merchant_[a-z0-9_]+)"/g)].map((m) => m[1]),
+  [...toolSource.matchAll(/name: "(kiwi_merchant_[a-z0-9_]+)"/g)].map((m) => m[1]),
 );
-assert.equal(sourceToolNames.size, 7, `源码应有 7 个工具，实际 ${sourceToolNames.size}`);
+assert.equal(sourceToolNames.size, 17, `源码应有 17 个工具，实际 ${sourceToolNames.size}`);
 const declared = mcp.tools ?? [];
-assert.equal(declared.length, 7, "mcp.json tools 应声明 7 个工具");
+assert.equal(declared.length, 17, "mcp.json tools 应声明 17 个工具");
 const declaredNames = new Set(declared.map((t) => t.name));
 assert.deepEqual(
   [...declaredNames].sort(),
@@ -116,32 +137,34 @@ for (const tool of declared) {
   );
 }
 
-// ── token-schema.json ───────────────────────────────────────────────
-const tokenSchema = readJson("token-schema.json");
-assert(typeof tokenSchema.title === "string" && tokenSchema.title.trim());
-assert(typeof tokenSchema.description === "string" && tokenSchema.description.trim());
-assert(Array.isArray(tokenSchema.fields) && tokenSchema.fields.length >= 1, "fields 至少一项");
-const fieldKeys = new Set();
-for (const field of tokenSchema.fields) {
-  assert(/^[A-Z][A-Z0-9_]*$/.test(field.key), `fields[].key 非法: ${field.key}`);
-  assert(typeof field.label === "string" && field.label.trim(), `${field.key} 缺 label`);
-  assert(
-    field.type === "text" || field.type === "password",
-    `${field.key} type 只能 text/password`,
+// ── token-schema.json（仅 token 过渡包；OAuth 包无此文件）───────────────
+if (bundleKind === "token") {
+  const tokenSchema = readJson("token-schema.json");
+  assert(typeof tokenSchema.title === "string" && tokenSchema.title.trim());
+  assert(typeof tokenSchema.description === "string" && tokenSchema.description.trim());
+  assert(Array.isArray(tokenSchema.fields) && tokenSchema.fields.length >= 1, "fields 至少一项");
+  const fieldKeys = new Set();
+  for (const field of tokenSchema.fields) {
+    assert(/^[A-Z][A-Z0-9_]*$/.test(field.key), `fields[].key 非法: ${field.key}`);
+    assert(typeof field.label === "string" && field.label.trim(), `${field.key} 缺 label`);
+    assert(
+      field.type === "text" || field.type === "password",
+      `${field.key} type 只能 text/password`,
+    );
+    assert(typeof field.required === "boolean", `${field.key} 缺 required`);
+    fieldKeys.add(field.key);
+  }
+  // ${VAR} 占位符与表单字段 key 一一对应（区分大小写）
+  assert.deepEqual(
+    [...headerRefs].sort(),
+    [...fieldKeys].sort(),
+    "mcp.json 占位符与 token-schema 字段 key 不一致",
   );
-  assert(typeof field.required === "boolean", `${field.key} 缺 required`);
-  fieldKeys.add(field.key);
+  const tokenField = tokenSchema.fields.find((f) => f.key === "KIWI_MERCHANT_MCP_TOKEN");
+  assert(tokenField, "缺 KIWI_MERCHANT_MCP_TOKEN 字段");
+  assert.equal(tokenField.type, "password", "敏感凭证字段必须 password 类型");
+  assert.equal(tokenField.required, true);
 }
-// ${VAR} 占位符与表单字段 key 一一对应（区分大小写）
-assert.deepEqual(
-  [...headerRefs].sort(),
-  [...fieldKeys].sort(),
-  "mcp.json 占位符与 token-schema 字段 key 不一致",
-);
-const tokenField = tokenSchema.fields.find((f) => f.key === "KIWI_MERCHANT_MCP_TOKEN");
-assert(tokenField, "缺 KIWI_MERCHANT_MCP_TOKEN 字段");
-assert.equal(tokenField.type, "password", "敏感凭证字段必须 password 类型");
-assert.equal(tokenField.required, true);
 
 // ── icon.svg ────────────────────────────────────────────────────────
 const icon = read("icon.svg").toString("utf8");
@@ -175,14 +198,14 @@ for (const relative of files) {
 }
 
 console.log(
-  `Validated ${meta.name} v${meta.version}: ${declared.length} tools, token-schema ${tokenSchema.fields.length} field(s), icon and skill.`,
+  `Validated ${meta.name} v${meta.version} [${bundleKind}]: ${declared.length} tools, icon and skill.`,
 );
 
-const args = process.argv.slice(2);
+const args = process.argv.slice(2).filter((a) => !a.startsWith("--bundle="));
 if (args.length === 1 && args[0] === "--check") process.exit(0);
 assert(
   args.length === 2 && args[0] === "--out",
-  "Usage: node package-merchant-connector.mjs --check | --out /path/package.zip",
+  "Usage: node package-merchant-connector.mjs [--bundle token|oauth] --check | --out /path/package.zip",
 );
 const output = path.resolve(args[1]);
 assert(output.endsWith(".zip"), "Output must be .zip");

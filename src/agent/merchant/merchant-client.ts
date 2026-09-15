@@ -45,6 +45,9 @@ import {
   parseMerchantCatalogProduct,
 } from "./types.js";
 import { readJsonBody } from "../../net/safe-http.js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { SHOPPING_CLI_COMPAT, compatRangeText, versionInRange } from "../../product-compat.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 /** 响应体大小上限（审查 P2-H 配套项：此前无上限，恶意网关可回传巨量 body）。 */
@@ -294,7 +297,12 @@ export class HttpMerchantClient implements MerchantClient {
     return reviews.map((r) => parseHumanReviewItem(r));
   }
 
-  /** shopping-cli 2.x has no listing pause endpoint — fail closed. */
+  /**
+   * 语义选型（V2 §8.3 P0-3）：pauseListing = **销售状态**（暂停/恢复销售，
+   *  catalog paused flag 语义），不是「catalog listing 撤回」，绝不用库存写零
+   *  伪装下架。上游 shopping-cli 2.x 无该端点 → fail closed 报「不可得」
+   *  （能力探测 listing_pause=false；审批候选仍会生成与记录，最终写入拒绝）。
+   */
   async pauseListing(_sku: string, _paused: boolean): Promise<MerchantCatalogProduct> {
     throw new MerchantClientError(
       "validation",
@@ -302,4 +310,86 @@ export class HttpMerchantClient implements MerchantClient {
         "该能力在真实 Connector 上 fail closed，只保留审批候选记录。",
     );
   }
+
+  // ---- capability probe（V2 阶段一/P0-5）--------------------------------------
+
+  /**
+   * 能力探测：对 shopping-cli 侧做版本/能力检查（GET /health），结果可落盘
+   * （persistPath，0600）供版本组合锁定与排查。fail-closed：网关故障或版本
+   * 不可判定 → ok:false，capabilities 全 false——调用方不得据此产生报价或
+   * 返回编造数据。能力清单按已实测的 shopping-cli 2.x 线标定：listing_pause /
+   * resolve_review 已知缺失（勿宣传；见 V2 计划 P0-3）。
+   */
+  async probeCapabilities(
+    options: { now?: () => string; persistPath?: string } = {},
+  ): Promise<MerchantCapabilityProbe> {
+    const probedAt = (options.now ?? (() => new Date().toISOString()))();
+    const unavailable: MerchantCapabilityProbe["capabilities"] = {
+      catalog_read: false,
+      catalog_write: false,
+      inventory_write: false,
+      listing_pause: false,
+      resolve_review: false,
+    };
+    let report: MerchantCapabilityProbe;
+    try {
+      const payload = (await this.request("GET", "/health")) as {
+        ok?: unknown;
+        version?: unknown;
+      };
+      const version = typeof payload.version === "string" ? payload.version : undefined;
+      const healthy = payload.ok === true;
+      report = {
+        ok: healthy,
+        probed_at: probedAt,
+        ...(version !== undefined ? { version } : {}),
+        // 版本不可判定 → 不支持（fail-closed）
+        version_supported:
+          version !== undefined && versionInRange(version, SHOPPING_CLI_COMPAT),
+        capabilities: healthy
+          ? {
+              catalog_read: true,
+              catalog_write: true,
+              inventory_write: true,
+              // shopping-cli 2.x 已知缺失（实测标定；升级上游后重新探测标定）
+              listing_pause: false,
+              resolve_review: false,
+            }
+          : unavailable,
+      };
+      if (healthy && report.version_supported === false) {
+        report.ok = false;
+        report.error = `shopping-cli 版本 ${version ?? "未知"} 超出已验证范围（${compatRangeText(SHOPPING_CLI_COMPAT)}）`;
+      }
+    } catch (err) {
+      report = {
+        ok: false,
+        probed_at: probedAt,
+        capabilities: unavailable,
+        error: `shopping-cli 不可达：${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    if (options.persistPath !== undefined) {
+      mkdirSync(dirname(options.persistPath), { recursive: true, mode: 0o700 });
+      writeFileSync(options.persistPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+    }
+    return report;
+  }
+}
+
+/** 能力探测结果（V2 阶段一/P0-5）：版本 + 能力清单，落盘可查询。 */
+export interface MerchantCapabilityProbe {
+  ok: boolean;
+  probed_at: string;
+  version?: string;
+  /** 版本在已验证兼容范围内（version 缺失或不支持 → false）。 */
+  version_supported?: boolean;
+  capabilities: {
+    catalog_read: boolean;
+    catalog_write: boolean;
+    inventory_write: boolean;
+    listing_pause: boolean;
+    resolve_review: boolean;
+  };
+  error?: string;
 }

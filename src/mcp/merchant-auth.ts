@@ -42,7 +42,17 @@ export interface MerchantMcpAuthContext {
   authorizationHeader?: string;
 }
 
-export type MerchantMcpAuthResult = { ok: true } | { ok: false; reason: string };
+export type MerchantMcpAuthResult =
+  | {
+      ok: true;
+      /** OAuth 校验通过时携带的授权上下文（principal/merchant/scope；V2 阶段一）。 */
+      authorization?: {
+        principal_id: string;
+        merchant_id: string;
+        scopes: string[];
+      };
+    }
+  | { ok: false; reason: string };
 
 /** MCP 入站校验器接口（Bearer 为当前唯一实现；OAuth 校验器后续叠加）。 */
 export interface MerchantMcpAuthVerifier {

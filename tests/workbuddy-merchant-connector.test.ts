@@ -53,23 +53,52 @@ function realToolDefinitions(): ReturnType<typeof buildMerchantMcpTools>["tools"
 }
 
 describe("workbuddy merchant connector 包", () => {
-  it("package-merchant-connector.mjs --check 通过", () => {
+  it("package-merchant-connector.mjs --check 通过（token 过渡包 + oauth 正式包）", () => {
     const result = spawnSync(process.execPath, [SCRIPT, "--check"], { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("7 tools");
+    expect(result.stdout).toContain("17 tools");
+    const oauth = spawnSync(process.execPath, [SCRIPT, "--bundle=oauth", "--check"], {
+      encoding: "utf8",
+    });
+    expect(oauth.status, oauth.stderr).toBe(0);
+    expect(oauth.stdout).toContain("[oauth]");
   });
 
-  it("mcp.json 工具声明与 src/mcp/merchant-tools.ts 全等（防漂移）", () => {
-    const mcp = JSON.parse(readFileSync(path.join(BUNDLE, "mcp.json"), "utf8")) as {
-      tools: Array<{ name: string; description: string; inputSchema: unknown }>;
-    };
+  it("mcp.json 工具声明与 src/mcp/merchant-tools.ts 全等（防漂移；token 与 oauth 两包同查）", () => {
+    const oauthBundle = path.join(path.dirname(BUNDLE), "kiwi-merchant-connector-oauth");
     const real = realToolDefinitions();
-    expect(mcp.tools.map((t) => t.name).sort()).toEqual(real.map((t) => t.name).sort());
-    for (const declared of mcp.tools) {
-      const source = real.find((t) => t.name === declared.name);
-      expect(source, `mcp.json 声明了源码不存在的工具 ${declared.name}`).toBeDefined();
-      expect(declared.description).toBe(source?.description);
-      expect(declared.inputSchema).toEqual(source?.inputSchema);
+    for (const dir of [BUNDLE, oauthBundle]) {
+      const mcp = JSON.parse(readFileSync(path.join(dir, "mcp.json"), "utf8")) as {
+        tools: Array<{ name: string; description: string; inputSchema: unknown }>;
+      };
+      expect(mcp.tools.map((t) => t.name).sort()).toEqual(real.map((t) => t.name).sort());
+      for (const declared of mcp.tools) {
+        const source = real.find((t) => t.name === declared.name);
+        expect(source, `${dir} 声明了源码不存在的工具 ${declared.name}`).toBeDefined();
+        expect(declared.description).toBe(source?.description);
+        expect(declared.inputSchema).toEqual(source?.inputSchema);
+      }
     }
+  });
+
+  it("OAuth 包：无 auth_mode、无 token 占位；token 包 source 已切 -token 后缀（双 source 过渡）", () => {
+    const oauthMeta = JSON.parse(
+      readFileSync(
+        path.join(path.dirname(BUNDLE), "kiwi-merchant-connector-oauth", "connector-meta.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect(oauthMeta.auth_mode).toBeUndefined();
+    expect(oauthMeta.source).toBe("kiwi-merchant");
+    const oauthMcp = readFileSync(
+      path.join(path.dirname(BUNDLE), "kiwi-merchant-connector-oauth", "mcp.json"),
+      "utf8",
+    );
+    expect(oauthMcp).not.toContain("Authorization");
+    const tokenMeta = JSON.parse(
+      readFileSync(path.join(BUNDLE, "connector-meta.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(tokenMeta.source).toBe("kiwi-merchant-token");
+    expect(tokenMeta.auth_mode).toBe("token");
   });
 });

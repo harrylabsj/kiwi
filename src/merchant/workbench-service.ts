@@ -198,6 +198,19 @@ export interface MerchantWorkbenchServiceDeps {
   intelligence?: MerchantIntelligenceBackend;
 }
 
+/** MCP 工具层依赖的服务面（结构类型；merchant-core 包装层同样满足）。 */
+export type MerchantWorkbenchSurface = Pick<
+  MerchantWorkbenchService,
+  | "listPublicProducts"
+  | "getPublicProduct"
+  | "getInventorySnapshot"
+  | "listA2aNegotiations"
+  | "listActiveConsultations"
+  | "listHumanReviews"
+  | "getAnalytics"
+  | "draftProductChange"
+>;
+
 export class MerchantWorkbenchService {
   private readonly profile: AgentProfile;
   private readonly merchantClient: MerchantClient;
@@ -228,6 +241,15 @@ export class MerchantWorkbenchService {
     if (deps.registerPending !== undefined) this.registerPending = deps.registerPending;
     if (deps.a2aLedgerDir !== undefined) this.a2aLedgerDir = deps.a2aLedgerDir;
     if (deps.intelligence !== undefined) this.intelligence = deps.intelligence;
+  }
+
+  /** 内部依赖只读访问（merchant-core 包装层/两轨适配用；不提供写路径）。 */
+  get merchantClientRef(): MerchantClient {
+    return this.merchantClient;
+  }
+
+  get ownerIdRef(): string {
+    return this.ownerId;
   }
 
   /** 列出本商家目录商品（白名单）；dataSource 优先，否则公开搜索端点按 owner 过滤。 */

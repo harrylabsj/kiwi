@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import {chmodSync, mkdtempSync, rmSync, statSync, writeFileSync} from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -64,7 +64,10 @@ describe("profile loading", () => {
     const profile = loadProfile(writeTemp(withCache));
     expect(profile.merchant_experience?.prompt_cache_retention).toBe("long");
 
-    const bad = withCache.replace("prompt_cache_retention: long", "prompt_cache_retention: forever");
+    const bad = withCache.replace(
+      "prompt_cache_retention: long",
+      "prompt_cache_retention: forever",
+    );
     expect(() => loadProfile(writeTemp(bad))).toThrow(/prompt_cache_retention/);
   });
 
@@ -399,14 +402,62 @@ describe("profile strict validation", () => {
     expect(() =>
       loadProfile(
         writeTemp(
-          withChange("quote_ttl_seconds: 300", "quote_ttl_seconds: 300\n  delivery_lead_days: soon"),
+          withChange(
+            "quote_ttl_seconds: 300",
+            "quote_ttl_seconds: 300\n  delivery_lead_days: soon",
+          ),
         ),
       ),
     ).toThrow(/delivery_lead_days/);
     const withLead = loadProfile(
-      writeTemp(withChange("quote_ttl_seconds: 300", "quote_ttl_seconds: 300\n  delivery_lead_days: 7")),
+      writeTemp(
+        withChange("quote_ttl_seconds: 300", "quote_ttl_seconds: 300\n  delivery_lead_days: 7"),
+      ),
     );
     expect(withLead.merchant_policy?.delivery_lead_days).toBe(7);
+    // merchant_mcp 段（V2）：enabled/auth_mode/public_url 校验与解析（启用/禁用两情形）
+    const mcpEnabled = loadProfile(
+      writeTemp(
+        withChange(
+          "quote_ttl_seconds: 300",
+          "quote_ttl_seconds: 300\nmerchant_mcp:\n  enabled: true\n  auth_mode: oauth\n  public_url: https://mcp.merchant.example.com",
+        ),
+      ),
+    );
+    expect(mcpEnabled.merchant_mcp).toMatchObject({
+      enabled: true,
+      auth_mode: "oauth",
+      public_url: "https://mcp.merchant.example.com",
+    });
+    const mcpDisabled = loadProfile(
+      writeTemp(
+        withChange(
+          "quote_ttl_seconds: 300",
+          "quote_ttl_seconds: 300\nmerchant_mcp:\n  enabled: false",
+        ),
+      ),
+    );
+    expect(mcpDisabled.merchant_mcp?.enabled).toBe(false);
+    expect(() =>
+      loadProfile(
+        writeTemp(
+          withChange(
+            "quote_ttl_seconds: 300",
+            "quote_ttl_seconds: 300\nmerchant_mcp:\n  auth_mode: kerberos",
+          ),
+        ),
+      ),
+    ).toThrow(/auth_mode must be token or oauth/);
+    expect(() =>
+      loadProfile(
+        writeTemp(
+          withChange(
+            "quote_ttl_seconds: 300",
+            "quote_ttl_seconds: 300\nmerchant_mcp:\n  public_url: http://insecure.example.com",
+          ),
+        ),
+      ),
+    ).toThrow(/public_url must be an https/);
     expect(() =>
       loadProfile(
         writeTemp(
@@ -551,7 +602,6 @@ function trackedMkdtemp(prefix: string): string {
   return dir;
 }
 
-
 describe("weixin section", () => {
   const wxYaml = (extra: string): string => `${VALID_YAML}weixin:
 ${extra}`;
@@ -585,14 +635,16 @@ ${entries}`);
   });
 
   it("rejects empty-string allow_users entries", () => {
-    expect(() =>
-      loadProfile(writeTemp(`${VALID_YAML}weixin:\n  allow_users:\n    - \n`)),
-    ).toThrow(/weixin.allow_users must be a list/);
+    expect(() => loadProfile(writeTemp(`${VALID_YAML}weixin:\n  allow_users:\n    - \n`))).toThrow(
+      /weixin.allow_users must be a list/,
+    );
   });
 
   it("rejects plain-http base_url (non-loopback)", () => {
     expect(() =>
-      loadProfile(writeTemp(wxAllow("    - wxid_owner\n") + "  base_url: http://ilinkai.weixin.qq.com\n")),
+      loadProfile(
+        writeTemp(wxAllow("    - wxid_owner\n") + "  base_url: http://ilinkai.weixin.qq.com\n"),
+      ),
     ).toThrow();
   });
 
@@ -609,7 +661,9 @@ describe("decision（DeepSeek Harness 运行时插件配置，§6.9）", () => {
   );
 
   it("valid: decision.backend=mock（无需 api_key_env）", () => {
-    const p = loadProfile(writeTemp(VALID_YAML + "\ndecision:\n  backend: mock\n  enabled: true\n"));
+    const p = loadProfile(
+      writeTemp(VALID_YAML + "\ndecision:\n  backend: mock\n  enabled: true\n"),
+    );
     expect(p.decision?.backend).toBe("mock");
     expect(p.decision?.enabled).toBe(true);
   });
@@ -621,9 +675,9 @@ describe("decision（DeepSeek Harness 运行时插件配置，§6.9）", () => {
   });
 
   it("rejects: 未知 decision 字段", () => {
-    expect(() => loadProfile(writeTemp(VALID_YAML + "\ndecision:\n  backend: mock\n  extra: x\n"))).toThrow(
-      /decision has unknown field "extra"/,
-    );
+    expect(() =>
+      loadProfile(writeTemp(VALID_YAML + "\ndecision:\n  backend: mock\n  extra: x\n")),
+    ).toThrow(/decision has unknown field "extra"/);
   });
 
   it("rejects: 未知 backend 值", () => {
@@ -633,9 +687,9 @@ describe("decision（DeepSeek Harness 运行时插件配置，§6.9）", () => {
   });
 
   it("rejects: enabled 非 boolean", () => {
-    expect(() => loadProfile(writeTemp(VALID_YAML + "\ndecision:\n  backend: mock\n  enabled: yes\n"))).toThrow(
-      /decision.enabled must be a boolean/,
-    );
+    expect(() =>
+      loadProfile(writeTemp(VALID_YAML + "\ndecision:\n  backend: mock\n  enabled: yes\n")),
+    ).toThrow(/decision.enabled must be a boolean/);
   });
 
   it("rejects: backend=deepseek 但缺 model.api_key_env", () => {
@@ -645,7 +699,9 @@ describe("decision（DeepSeek Harness 运行时插件配置，§6.9）", () => {
   });
 
   it("allows: backend=deepseek + enabled=false 无 api_key_env（禁用态不要求密钥）", () => {
-    const p = loadProfile(writeTemp(VALID_YAML + "\ndecision:\n  backend: deepseek\n  enabled: false\n"));
+    const p = loadProfile(
+      writeTemp(VALID_YAML + "\ndecision:\n  backend: deepseek\n  enabled: false\n"),
+    );
     expect(p.decision?.enabled).toBe(false);
   });
 

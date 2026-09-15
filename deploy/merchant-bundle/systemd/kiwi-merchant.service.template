@@ -1,0 +1,18 @@
+[Unit]
+Description=Kiwi Merchant（A2A 接待 + MCP 管理，merchant runtime supervise）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 单活 + 自动重启（V2 §5.3 阶段一形态；主备 fencing 留阶段四）
+ExecStart=/usr/bin/env node __PREFIX__/app/dist/cli.js merchant runtime start --data-dir __PREFIX__/data
+Restart=always
+RestartSec=5
+# 状态目录单 owner 写：只允许本服务写 __PREFIX__/data
+ReadWritePaths=__PREFIX__
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

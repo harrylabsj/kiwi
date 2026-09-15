@@ -1,0 +1,22 @@
+{
+  "name": "Kiwi 商家工作台",
+  "name_zh": "Kiwi 商家工作台",
+  "name_en": "Kiwi Merchant Workbench",
+  "description": "查看商品目录与库存、跟进 A2A 磋商记录和人工处理队列、读取经营摘要，并通过两阶段确认完成商品变更、库存调整、CSV 导入等经营写入。",
+  "description_zh": "查看商品目录与库存、跟进 A2A 磋商记录和人工处理队列、读取经营摘要，并通过两阶段确认完成商品变更、库存调整、CSV 导入等经营写入。",
+  "description_en": "Browse catalog and inventory, follow A2A negotiations and human reviews, read business snapshots, and complete merchant writes (product changes, inventory, CSV import) via a two-phase confirm flow.",
+  "source": "kiwi-merchant",
+  "type": "mcp",
+  "version": "1.0.0",
+  "minWorkbuddyVersion": "4.24.0",
+  "examples_zh": [
+    "我现在目录里有哪些商品？",
+    "最近有买家来磋商吗？进行到哪一步了？",
+    "帮我把 sku-001 的价格调成 88 元，先登记候选等我批准"
+  ],
+  "examples_en": [
+    "What products are in my catalog right now?",
+    "Any buyers negotiating with me recently? What stage are they at?",
+    "Prepare a price change of sku-001 to 88 CNY and wait for my approval"
+  ]
+}

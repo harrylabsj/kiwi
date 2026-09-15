@@ -5,7 +5,7 @@
   "description": "查看商品目录与库存、跟进 A2A 磋商记录和人工处理队列、读取经营摘要，并生成需批准后执行的商品变更草稿。",
   "description_zh": "查看商品目录与库存、跟进 A2A 磋商记录和人工处理队列、读取经营摘要，并生成需批准后执行的商品变更草稿。",
   "description_en": "Browse catalog and inventory, follow A2A negotiation records and the human review queue, read business snapshots, and draft product changes that require approval before execution.",
-  "source": "kiwi-merchant",
+  "source": "kiwi-merchant-token",
   "type": "mcp",
   "version": "1.0.0",
   "auth_mode": "token",

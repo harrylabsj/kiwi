@@ -210,6 +210,11 @@ export interface AgentProfile {
     path?: string;
     /** Bearer token 环境变量名（缺省 KIWI_MERCHANT_MCP_TOKEN；值不写 profile）。 */
     token_env?: string;
+    /** 认证模式：token = V1 静态 Bearer（过渡）；oauth = OAuth 2.1（V2 正式）。
+     *  缺省 token；非 loopback 监听且无可用认证时 fail-closed 拒绝启动。 */
+    auth_mode?: "token" | "oauth";
+    /** OAuth issuer / 公网 base URL（https；loopback 开发可省略走 http 推导）。 */
+    public_url?: string;
   };
 }
 
@@ -303,8 +308,10 @@ const MERCHANT_PUBLIC_KEYS = ["public_url", "a2a_port", "shopping_db_path", "cat
 /**
  * merchant_mcp 段白名单（WorkBuddy Buddy 应用 MCP server；阶段二）。
  * token 只存环境变量名（token_env），secret 值绝不写 profile。
+ * auth_mode（V2 阶段一）：token = V1 静态 Bearer（过渡）；oauth = 自建 OAuth
+ * 2.1 授权服务器（PKCE/动态注册）。public_url 为 OAuth issuer（生产必须 https）。
  */
-const MERCHANT_MCP_KEYS = ["enabled", "host", "port", "path", "token_env"] as const;
+const MERCHANT_MCP_KEYS = ["enabled", "host", "port", "path", "token_env", "auth_mode", "public_url"] as const;
 const DECISION_BACKENDS: readonly DecisionBackendKind[] = ["deterministic", "mock", "deepseek"];
 
 /** RFC 3339 date-time with an explicit timezone (offset or Z); naive times fail closed. */
@@ -794,12 +801,28 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
         `${source}: merchant_mcp.token_env must name an environment variable; secrets must not be written into the profile`,
       );
     }
+    if (mm.auth_mode !== undefined) {
+      req(
+        mm.auth_mode === "token" || mm.auth_mode === "oauth",
+        `${source}: merchant_mcp.auth_mode must be token or oauth`,
+      );
+    }
+    if (mm.public_url !== undefined) {
+      req(
+        typeof mm.public_url === "string" && /^https:\/\//.test(mm.public_url),
+        `${source}: merchant_mcp.public_url must be an https URL（OAuth issuer；本地开发可省略）`,
+      );
+    }
     merchantMcp = {
       ...(mm.enabled !== undefined ? { enabled: mm.enabled as boolean } : {}),
       ...(mm.host !== undefined ? { host: String(mm.host) } : {}),
       ...(mm.port !== undefined ? { port: Number(mm.port) } : {}),
       ...(mm.path !== undefined ? { path: String(mm.path) } : {}),
       ...(mm.token_env !== undefined ? { token_env: String(mm.token_env) } : {}),
+      ...(mm.auth_mode !== undefined
+        ? { auth_mode: mm.auth_mode as "token" | "oauth" }
+        : {}),
+      ...(mm.public_url !== undefined ? { public_url: String(mm.public_url) } : {}),
     };
   }
 

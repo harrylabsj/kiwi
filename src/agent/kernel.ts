@@ -630,7 +630,11 @@ export class AgentKernel {
         merchantIntelligence = new DefaultMerchantIntelligenceBackend({
           merchant_id: principal.owner_id,
           data_dir: path.dirname(paths.db),
-          principal_id: principal.principal_id,
+          // 口径修复（V2 阶段二遗留核查）：presentation enrich 以
+          // context.principalId 作为商家读取键（merchant_id 口径），backend 的
+          // principal 校验键必须同口径——用 agent_id 会让 digest/catalog 展示
+          // 在真实商家 profile（agent_id ≠ owner_id）下必然校验失败/读空。
+          principal_id: principal.owner_id,
           merchant_client: options.merchantClient,
           approvals,
           ...(options.merchantAnalyticsSource !== undefined

@@ -1,0 +1,328 @@
+{
+  "mcpServers": {
+    "kiwi-merchant": {
+      "type": "streamableHttp",
+      "url": "https://mcp.merchant.example.com/mcp",
+      "timeout": 30000
+    }
+  },
+  "tools": [
+    {
+      "name": "kiwi_merchant_list_products",
+      "description": "列出商家自己的目录商品（只读；公开字段白名单，无私有底价/成本）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_get_product",
+      "description": "按 SKU 读取商家目录中的一个商品（只读，公开字段白名单）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sku": {
+            "type": "string",
+            "description": "商品 SKU"
+          },
+          "merchant_id": {
+            "type": "string",
+            "description": "租户校验（可选）：提供时必须等于本商家 merchant_id"
+          }
+        },
+        "required": ["sku"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_get_inventory",
+      "description": "读取一个商品的当前库存快照（含观察时间，不是永恒事实）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sku": {
+            "type": "string",
+            "description": "商品 SKU"
+          }
+        },
+        "required": ["sku"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_list_a2a_negotiations",
+      "description": "列出商家节点的 A2A 磋商记录（结构化行：negotiation_id、相位、SKU、数量、报价、是否达成协议、时间）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "最多返回最近 N 笔（缺省 20，clamp 1..100）"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_list_human_reviews",
+      "description": "查看商家需要人工处理的队列（升级、超预算/超底价、转人工的磋商）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_get_analytics",
+      "description": "读取当前商家经营摘要（只读；指标由服务端计算。未配置指标后端时返回明确错误，不给演示数据）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "type": "string",
+            "pattern": "^(?:[1-9]|[1-8][0-9]|90)d$",
+            "description": "UTC 统计窗口，1d 到 90d，例如 7d、14d、30d"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_prepare_product_change",
+      "description": "为一个商品变更生成审批候选（不立即执行，任何模式都不自动执行）。操作者批准后才会真正写入；只返回候选元数据。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sku": {
+            "type": "string",
+            "description": "商品 SKU"
+          },
+          "changes": {
+            "type": "object",
+            "description": "计划修改的字段（title/price/stock/description 等）"
+          },
+          "reason": {
+            "type": "string",
+            "description": "变更原因（可选）"
+          },
+          "merchant_id": {
+            "type": "string",
+            "description": "租户校验（可选）：提供时必须等于本商家 merchant_id"
+          }
+        },
+        "required": ["sku", "changes"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_prepare_product_create",
+      "description": "登记商品创建命令（prepare：只产持久命令候选与预览，不执行）。经确认通道批准后才由执行器写入。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "product": {
+            "type": "object",
+            "description": "sku/title/price/stock 必填；currency/category/tags/description 可选"
+          },
+          "reason": {
+            "type": "string",
+            "description": "变更原因（可选）"
+          }
+        },
+        "required": ["product"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_prepare_inventory_update",
+      "description": "登记库存调整命令（prepare：只产候选与预览，不执行）。stock 必须是非负整数。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sku": {
+            "type": "string",
+            "description": "商品 SKU"
+          },
+          "stock": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "新的库存数量（>= 0）"
+          },
+          "reason": {
+            "type": "string",
+            "description": "变更原因（可选）"
+          }
+        },
+        "required": ["sku", "stock"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_prepare_listing_change",
+      "description": "登记商品销售状态变更（F08：暂停/恢复销售）。上游不支持时返回明确「不可得」，不降级为库存写零。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sku": {
+            "type": "string",
+            "description": "商品 SKU"
+          },
+          "paused": {
+            "type": "boolean",
+            "description": "true 暂停销售，false 恢复销售"
+          },
+          "reason": {
+            "type": "string",
+            "description": "变更原因（可选）"
+          }
+        },
+        "required": ["sku", "paused"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_prepare_review_resolve",
+      "description": "登记人工处理命令（F14 两轨路由：仅 shopping 轨可执行；A2A 轨报「不可得」——绝不跨轨调 shopping-cli resolve-review）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source_protocol": {
+            "type": "string",
+            "enum": ["a2a", "shopping"],
+            "description": "磋商来源轨道"
+          },
+          "source_id": {
+            "type": "string",
+            "description": "轨道内 id（conversation_id）"
+          },
+          "resolution": {
+            "type": "string",
+            "description": "处理结论"
+          },
+          "reason": {
+            "type": "string",
+            "description": "变更原因（可选）"
+          }
+        },
+        "required": ["source_protocol", "source_id", "resolution"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_prepare_policy_change",
+      "description": "登记策略变更命令（F17：执行器写入后热生效，不重启进程；硬策略由执行器强制）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "patch": {
+            "type": "object",
+            "description": "策略变更字段（merchant_policy 键）"
+          },
+          "reason": {
+            "type": "string",
+            "description": "变更原因（可选）"
+          }
+        },
+        "required": ["patch"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_execute_approved",
+      "description": "确认通道：批准并执行一个 pending 命令（按 command_id）。执行前重校验授权主体/前置版本/有效期/硬策略；重复执行幂等拒绝。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command_id": {
+            "type": "string",
+            "description": "prepare 返回的命令 id"
+          }
+        },
+        "required": ["command_id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_reject_candidate",
+      "description": "确认通道：拒绝一个 pending 命令（按 command_id），拒绝后不执行。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command_id": {
+            "type": "string",
+            "description": "prepare 返回的命令 id"
+          }
+        },
+        "required": ["command_id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_prepare_products_import",
+      "description": "CSV 商品导入（prepare：解析预览 + 逐行回执，不执行）。相同幂等键不重复导入；批准后逐行执行，部分成功逐项回执。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "csv": {
+            "type": "string",
+            "description": "CSV 文本（表头 sku,title,price,stock[,currency][,category][,description]）"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "幂等键（可选；缺省按 CSV 内容 hash）"
+          },
+          "reason": {
+            "type": "string",
+            "description": "变更原因（可选）"
+          }
+        },
+        "required": ["csv"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_prepare_products_withdraw",
+      "description": "批量撤回商品（listing 销售状态语义；prepare：只产候选，批准后执行；相同幂等键不重复撤回）。上游不支持时逐项回执明确失败。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "skus": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "要撤回的 SKU 列表"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "幂等键（可选）"
+          },
+          "reason": {
+            "type": "string",
+            "description": "变更原因（可选）"
+          }
+        },
+        "required": ["skus"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_get_operation",
+      "description": "查询长任务状态（operation_id；queued/running/succeeded/partially_failed/failed + 逐项回执）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "description": "长任务 id"
+          }
+        },
+        "required": ["operation_id"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

@@ -40,14 +40,18 @@ node integrations/hosts/workbuddy/package.mjs --out /absolute/path/kiwi-procurem
 
 ## Kiwi 商家工作台连接器与 Buddy 应用（阶段三）
 
-`kiwi-merchant-connector/` 是商家侧 MCP 连接器包（MCP + Skill 方案，`auth_mode: "token"` 用户自填 Token，`source: "kiwi-merchant"`，版本独立从 1.0.0 起），对应 `kiwi merchant mcp serve` 启动的远程 MCP 服务（`src/mcp/merchant-server.ts`，streamableHttp，7 个 `merchant_*` 工具）。`kiwi-merchant-buddy/` 是 Buddy 应用后台配置的本地草稿与填写说明。
+`kiwi-merchant-connector/` 是商家侧 MCP 连接器包（MCP + Skill 方案，`auth_mode: "token"` 用户自填 Token，`source: "kiwi-merchant"`，版本独立从 1.0.0 起），对应 `kiwi merchant mcp serve` 启动的远程 MCP 服务（`src/mcp/merchant-server.ts`，streamableHttp，7 个 `kiwi_merchant_*` 工具）。`kiwi-merchant-buddy/` 是 Buddy 应用后台配置的本地草稿与填写说明。
 
 校验与打包（在 Kiwi 仓库根目录运行，只读校验不联网）：
 
 ```sh
+# token 过渡包（缺省）/ OAuth 正式包（阶段五起正式交付走 oauth）
 node integrations/hosts/workbuddy/package-merchant-connector.mjs --check
-node integrations/hosts/workbuddy/package-merchant-connector.mjs --out /absolute/path/kiwi-merchant-connector-1.0.0.zip
+node integrations/hosts/workbuddy/package-merchant-connector.mjs --bundle=oauth --check
+node integrations/hosts/workbuddy/package-merchant-connector.mjs --bundle=oauth --out /absolute/path/kiwi-merchant-connector-oauth-1.0.0.zip
 ```
+
+两个包：`kiwi-merchant-connector/`（`source: "kiwi-merchant-token"`，用户自填 Token，过渡）与 `kiwi-merchant-connector-oauth/`（`source: "kiwi-merchant"`，OAuth 2.1，无 auth_mode、无 token 占位——走 WorkBuddy 内置 OAuth 流程）。平台要求同一服务两种方式必须两个不同 source，已照此拆分。
 
 脚本校验 connector-meta/mcp/token-schema 合法性、mcp.json 的 7 个工具名与 `src/mcp/merchant-tools.ts` 一致（防漂移的全等比对见 `tests/workbuddy-merchant-connector.test.ts`）、token 占位符与表单字段一一对应、icon.svg 无文字无脚本、SKILL.md frontmatter、包内无疑似凭据；只打包明确列出的 5 个文件，不覆盖已有压缩包。
 

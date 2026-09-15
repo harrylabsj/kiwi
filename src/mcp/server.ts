@@ -27,8 +27,18 @@
  */
 
 import { createInterface } from "node:readline";
-import { MCP_ERROR, type JsonRpcRequest, type JsonRpcResponse, type McpCallToolResult, type McpTool } from "./types.js";
-import { MCP_PROTOCOL_VERSIONS, type McpInitializeResult, type McpListToolsResult } from "./types.js";
+import {
+  MCP_ERROR,
+  type JsonRpcRequest,
+  type JsonRpcResponse,
+  type McpCallToolResult,
+  type McpTool,
+} from "./types.js";
+import {
+  MCP_PROTOCOL_VERSIONS,
+  type McpInitializeResult,
+  type McpListToolsResult,
+} from "./types.js";
 import { McpError } from "../buyer-core/errors.js";
 import type { KiwiToolDefinition } from "./types.js";
 
@@ -57,7 +67,11 @@ export class McpServer {
       return this.error(null, MCP_ERROR.PARSE_ERROR, "parse error: not valid JSON");
     }
     if (request.jsonrpc !== "2.0" || typeof request.method !== "string") {
-      return this.error(request.id, MCP_ERROR.INVALID_REQUEST, "invalid request: expected jsonrpc 2.0 request");
+      return this.error(
+        request.id,
+        MCP_ERROR.INVALID_REQUEST,
+        "invalid request: expected jsonrpc 2.0 request",
+      );
     }
 
     try {
@@ -72,7 +86,11 @@ export class McpServer {
         case "tools/call":
           return this.requireInit(request, () => this.handleCallTool(request));
         default:
-          return this.error(request.id, MCP_ERROR.METHOD_NOT_FOUND, `method not found: ${request.method}`);
+          return this.error(
+            request.id,
+            MCP_ERROR.METHOD_NOT_FOUND,
+            `method not found: ${request.method}`,
+          );
       }
     } catch (error) {
       if (error instanceof McpError) {
@@ -91,7 +109,11 @@ export class McpServer {
     fn: () => Promise<JsonRpcResponse> | JsonRpcResponse,
   ): Promise<JsonRpcResponse> {
     if (!this.initialized) {
-      return this.error(request.id, MCP_ERROR.SERVER_NOT_INITIALIZED, "server not initialized: call initialize first");
+      return this.error(
+        request.id,
+        MCP_ERROR.SERVER_NOT_INITIALIZED,
+        "server not initialized: call initialize first",
+      );
     }
     return fn();
   }
@@ -99,7 +121,10 @@ export class McpServer {
   private async handleInitialize(request: JsonRpcRequest): Promise<JsonRpcResponse> {
     const params = (request.params ?? {}) as { protocolVersion?: string };
     const requested = params.protocolVersion;
-    if (typeof requested !== "string" || !(MCP_PROTOCOL_VERSIONS as readonly string[]).includes(requested)) {
+    if (
+      typeof requested !== "string" ||
+      !(MCP_PROTOCOL_VERSIONS as readonly string[]).includes(requested)
+    ) {
       // version negotiation fail-closed：未知版本拒绝（§6.10 兼容矩阵 fail closed）。
       return this.error(
         request.id,
@@ -120,13 +145,11 @@ export class McpServer {
 
   private handleListTools(request: JsonRpcRequest): JsonRpcResponse {
     const result: McpListToolsResult = {
-      tools: [...this.tools.values()].map(
-        (t): McpTool => ({
-          name: t.name,
-          description: t.description,
-          inputSchema: t.inputSchema,
-        }),
-      ),
+      tools: [...this.tools.values()].map((t): McpTool => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema,
+      })),
     };
     return this.result(request.id, result);
   }
@@ -152,7 +175,12 @@ export class McpServer {
     return { jsonrpc: "2.0", id, result };
   }
 
-  private error(id: number | string | null, code: number, message: string, data?: unknown): JsonRpcResponse {
+  private error(
+    id: number | string | null,
+    code: number,
+    message: string,
+    data?: unknown,
+  ): JsonRpcResponse {
     return { jsonrpc: "2.0", id, error: { code, message, data } };
   }
 

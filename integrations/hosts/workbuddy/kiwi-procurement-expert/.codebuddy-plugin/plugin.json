@@ -32,9 +32,18 @@
     { "zh": "采购议价", "en": "Negotiation" }
   ],
   "quickPrompts": [
-    { "zh": "帮我整理采购需求，寻找合适的供应商", "en": "Help me clarify my sourcing needs and find suitable suppliers" },
-    { "zh": "比较已有报价，找出费用和交期差异", "en": "Compare existing quotes, costs and delivery terms" },
-    { "zh": "帮我制定议价方案，确认后向商家还价", "en": "Prepare a negotiation proposal and send it after my confirmation" }
+    {
+      "zh": "帮我整理采购需求，寻找合适的供应商",
+      "en": "Help me clarify my sourcing needs and find suitable suppliers"
+    },
+    {
+      "zh": "比较已有报价，找出费用和交期差异",
+      "en": "Compare existing quotes, costs and delivery terms"
+    },
+    {
+      "zh": "帮我制定议价方案，确认后向商家还价",
+      "en": "Prepare a negotiation proposal and send it after my confirmation"
+    }
   ],
   "dependencies": { "connectors": ["oc_bd73f860e3e2b5d3"] }
 }

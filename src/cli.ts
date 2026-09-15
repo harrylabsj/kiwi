@@ -30,7 +30,8 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,7 +67,31 @@ import {
   startMerchantMcpServer,
 } from "./mcp/merchant-server.js";
 import { assertMerchantMcpAuthPolicy, resolveMerchantMcpVerifier } from "./mcp/merchant-auth.js";
-import { MerchantWorkbenchService } from "./merchant/workbench-service.js";
+import type { MerchantMcpAuthVerifier } from "./mcp/merchant-auth.js";
+import { resolveMerchantMcpDirs } from "./mcp/merchant-dirs.js";
+import { MerchantOAuthServer, MerchantOAuthStore } from "./auth/merchant-oauth.js";
+import { MerchantOAuthVerifier } from "./auth/merchant-authorization.js";
+import { isLoopbackHost } from "./a2a/client/url-policy.js";
+import { MerchantRuntimeManager } from "./merchant-runtime/manager.js";
+import { collectMerchantHealth } from "./merchant-runtime/health.js";
+import { MerchantJobs, standardMerchantJobs } from "./merchant-runtime/jobs.js";
+import { runBackup } from "./merchant-runtime/backup.js";
+import { MerchantCoreService } from "./merchant-core/service.js";
+import { buildMerchantPresentationResources } from "./mcp/merchant-resources.js";
+import { merchantAdminSurface } from "./merchant-admin/pending-page.js";
+import { MerchantOperationStore } from "./merchant-core/operations.js";
+
+/** 读能力探测落盘记录的 listing_pause（F08 接线；记录缺失/损坏 → undefined 不判定）。 */
+function probeCapabilitiesListingPause(dataDir: string): boolean | undefined {
+  try {
+    const probe = JSON.parse(
+      readFileSync(path.join(dataDir, "capability-probe.json"), "utf8"),
+    ) as { capabilities?: { listing_pause?: boolean } };
+    return probe.capabilities?.listing_pause;
+  } catch {
+    return undefined;
+  }
+}
 import { ensurePathsForDir, openAgentDatabase } from "./agent/agent-db.js";
 import { WriteApprovalCandidateStore } from "./agent/merchant/action-candidate.js";
 import { ProfileCredentialBroker } from "./agent/merchant/credential-broker.js";
@@ -1130,6 +1155,7 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   }
   if (sub === "start") return await cmdAgentServe(args);
   if (sub === "mcp") return await cmdMerchantMcp(args);
+  if (sub === "runtime") return await cmdMerchantRuntime(args);
   if (sub === "init") return await cmdMerchantInit(args);
   if (sub === "publish") return await cmdMerchantPublish(args);
   if (sub === "setup-public") return await cmdMerchantSetupPublic(args);
@@ -1140,6 +1166,108 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   if (sub === "doctor") return notImplementedProduct("kiwi merchant doctor", "D3");
   process.stderr.write(`unknown merchant command: ${sub}\n`);
   return EXIT.CONFIG;
+}
+
+/**
+ * `kiwi merchant runtime start|stop|status|health`：Merchant 实例运行时管理
+ * （V2 阶段一 src/merchant-runtime/）。A2A 接待服务与 MCP 管理服务作为受管
+ * 子进程，异常退出自动重启（退避）；停止 A2A 后本管理入口可重启它。
+ *
+ *   kiwi merchant runtime start [--profile <file>] [--data-dir <dir>]   前台监控（Ctrl+C 停全部）
+ *   kiwi merchant runtime stop                                          停全部受管服务
+ *   kiwi merchant runtime status                                        进程状态（JSON）
+ *   kiwi merchant runtime health                                        分项健康报告（JSON）
+ */
+async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
+  const action = args.command[2];
+  if (action === undefined || !["start", "stop", "status", "health"].includes(action)) {
+    process.stderr.write(
+      "usage: kiwi merchant runtime <start|stop|status|health> [--profile <file>] [--data-dir <dir>]\n",
+    );
+    return EXIT.CONFIG;
+  }
+  const profile = requireProfileOrDefault(args);
+  if (profile.role !== "merchant") {
+    process.stderr.write("kiwi merchant runtime 需要 merchant profile（role: merchant）\n");
+    return EXIT.CONFIG;
+  }
+  const dirs = resolveMerchantMcpDirs({
+    ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+    agentId: profile.agent_id,
+  });
+  const cliEntry = fileURLToPath(import.meta.url);
+  const profileArgs = args.profile !== undefined ? ["--profile", args.profile] : [];
+  const manager = new MerchantRuntimeManager({
+    dir: dirs.merchantDataDir,
+    services: [
+      {
+        name: "a2a",
+        command: [process.execPath, cliEntry, "merchant", "start", "--no-chat", ...profileArgs],
+      },
+      {
+        name: "mcp",
+        command: [process.execPath, cliEntry, "merchant", "mcp", "serve", ...profileArgs],
+      },
+    ],
+  });
+
+  if (action === "status") {
+    process.stdout.write(`${JSON.stringify(manager.status(), null, 2)}\n`);
+    return EXIT.OK;
+  }
+  if (action === "health") {
+    const report = collectMerchantHealth({
+      dataDir: dirs.merchantDataDir,
+      services: manager.status(),
+    });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return report.ok ? EXIT.OK : EXIT.TRANSIENT;
+  }
+  if (action === "stop") {
+    for (const state of [...manager.status()].reverse()) {
+      await manager.stop(state.name);
+    }
+    process.stdout.write("[merchant runtime] 全部受管服务已停止\n");
+    return EXIT.OK;
+  }
+  // start：前台监控，异常退出自动重启；Ctrl+C 优雅关闭全部。
+  // 周期任务（V2 阶段四）：健康轮询（报告落 run/health.json）+ 持续备份。
+  const jobs = new MerchantJobs();
+  for (const job of standardMerchantJobs({
+    healthPoll: async () => {
+      const report = collectMerchantHealth({
+        dataDir: dirs.merchantDataDir,
+        services: manager.status(),
+      });
+      writeFileSync(
+        path.join(dirs.merchantDataDir, "runtime", "health.json"),
+        `${JSON.stringify(report, null, 2)}\n`,
+        { mode: 0o600 },
+      );
+    },
+    backupHook: async () => {
+      runBackup({
+        dataDir: dirs.merchantDataDir,
+        backupsDir: path.join(dirs.merchantDataDir, "backups"),
+      });
+    },
+    healthIntervalMs: 60_000,
+    backupIntervalMs: 5 * 60_000,
+  })) {
+    jobs.register(job);
+  }
+  jobs.start();
+  console.log("[merchant runtime] 监控 a2a + mcp（异常退出自动重启；健康轮询 + 持续备份；Ctrl+C 停全部）");
+  await manager.supervise();
+  const shutdown = async (): Promise<void> => {
+    jobs.stop();
+    await manager.shutdown();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  await new Promise<never>(() => {});
+  return EXIT.OK;
 }
 
 /**
@@ -1178,7 +1306,44 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
   const host = args.catalogHost ?? mcpConfig?.host ?? DEFAULT_MERCHANT_MCP_HOST;
   const port = args.port ?? mcpConfig?.port ?? DEFAULT_MERCHANT_MCP_PORT;
   const mcpPath = mcpConfig?.path ?? DEFAULT_MERCHANT_MCP_PATH;
-  const verifier = resolveMerchantMcpVerifier(mcpConfig?.token_env);
+  // 数据目录接线（V2 §5.1）：merchant/principal/transportSessionId 显式注入，
+  // 路径是 (dataDir, agentId) 的纯函数——重启稳定，传输会话不影响目录。
+  const dirs = resolveMerchantMcpDirs({ ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}), agentId: profile.agent_id });
+
+  // 认证模式（V2 阶段一）：oauth = 自建 OAuth 2.1 授权服务器（正式）；
+  // token = V1 静态 Bearer（过渡）。默认 token；fail-closed 判定见下。
+  const authMode = mcpConfig?.auth_mode ?? "token";
+  let oauth: MerchantOAuthServer | undefined;
+  let oauthDb: DatabaseSync | undefined;
+  let verifier: MerchantMcpAuthVerifier | undefined;
+  if (authMode === "oauth") {
+    // issuer：public_url（生产 https）优先；loopback 开发推导为 http://127.0.0.1:<port>。
+    const issuer =
+      mcpConfig?.public_url ??
+      (isLoopbackHost(host) ? `http://127.0.0.1:${port}` : undefined);
+    if (issuer === undefined) {
+      process.stderr.write(
+        "merchant_mcp.auth_mode=oauth 且监听非 loopback 地址时必须配置 merchant_mcp.public_url（https）作为 OAuth issuer\n",
+      );
+      return EXIT.CONFIG;
+    }
+    // 授权码/token/客户端注册落状态目录 oauth.sqlite（单 owner 写；0600）。
+    oauthDb = new DatabaseSync(path.join(dirs.merchantDataDir, "oauth.sqlite"));
+    chmodSync(path.join(dirs.merchantDataDir, "oauth.sqlite"), 0o600);
+    const oauthStore = new MerchantOAuthStore({ db: oauthDb });
+    oauth = new MerchantOAuthServer({
+      store: oauthStore,
+      issuer,
+      resource: `${issuer}${mcpPath}`,
+      connectorSource: "kiwi-merchant",
+      merchantName: profile.name ?? profile.owner_id,
+      principalId: profile.agent_id,
+      merchantId: profile.owner_id,
+    });
+    verifier = new MerchantOAuthVerifier({ store: oauthStore, expectedMerchantId: profile.owner_id });
+  } else {
+    verifier = resolveMerchantMcpVerifier(mcpConfig?.token_env);
+  }
   let authWarning: string | undefined;
   try {
     authWarning = assertMerchantMcpAuthPolicy(host, verifier);
@@ -1190,7 +1355,7 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
 
   // 依赖装配与 chat kernel 同一套：agent data dir + state.sqlite + 审批候选 store。
   // 审批候选与对话内核共享同一 DB——MCP 生成的 draft 候选在内核侧 /pending 可见。
-  const paths = ensurePathsForDir(resolveServeDataDir(args.dataDir, profile.agent_id));
+  const paths = ensurePathsForDir(dirs.merchantDataDir);
   const db = openAgentDatabase(paths.db);
   const now = () => new Date().toISOString();
   const store = new MemoryStore({ db, vault: new PrivateVault(), now });
@@ -1219,7 +1384,19 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
     merchantClient = new FakeMerchantClient({ products: [fakeMerchantProduct()] });
   } else {
     const broker = new ProfileCredentialBroker(profile);
-    merchantClient = new HttpMerchantClient(profile.commerce.base_url, broker);
+    const httpClient = new HttpMerchantClient(profile.commerce.base_url, broker);
+    merchantClient = httpClient;
+    // 能力探测（V2 阶段一/P0-5）：结果落盘供版本组合锁定；网关故障/版本超
+    // 上限 → 警示但不阻塞启动（报价路径本身 fail-closed，不产生报价）。
+    const probe = await httpClient.probeCapabilities({
+      persistPath: path.join(dirs.merchantDataDir, "capability-probe.json"),
+    });
+    if (!probe.ok) {
+      process.stderr.write(
+        `⚠️ [kiwi] shopping-cli 能力探测未通过：${probe.error ?? "未知原因"}；` +
+          "相关读取/报价在上游恢复前 fail-closed。\n",
+      );
+    }
   }
   const intelligence =
     profile.merchant_experience?.enabled === true &&
@@ -1227,13 +1404,17 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
       ? new DefaultMerchantIntelligenceBackend({
           merchant_id: profile.owner_id,
           data_dir: paths.dir,
-          principal_id: principal.principal_id,
+          // presentation context 的 principalId 用 owner_id（商家读取口径）——
+          // backend 的 principal 校验键与之对齐（MCP 服务侧统一 owner 口径）。
+          principal_id: profile.owner_id,
           merchant_client: merchantClient,
           approvals,
           now,
         })
       : undefined;
-  const service = new MerchantWorkbenchService({
+  // 共享业务入口（V2 阶段二）：merchant-core 包装 V1 facade（facade 语义不变），
+  // MCP 工具层经 core 调用；私密读取审计目录落 merchantDataDir/private-audit。
+  const service = new MerchantCoreService({
     profile,
     merchantClient,
     approvals,
@@ -1243,25 +1424,65 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
     // 商家 A2A 节点 ledger 基础目录（LedgerStore 会再拼 /ledger）。
     a2aLedgerDir: path.join(paths.dir, "a2a"),
     ...(intelligence !== undefined ? { intelligence } : {}),
+    auditDir: path.join(dirs.merchantDataDir, "private-audit"),
+    // 命令记录授权主体 = 审批 store principal（批准/拒绝主体一致性校验）。
+    commandPrincipalId: principal.principal_id,
+    // 长任务 operation store（与命令记录同一 state.sqlite，单 owner 写）。
+    operations: new MerchantOperationStore({ db, now }),
+    // F08 能力接线：能力探测落盘记录中 listing_pause=false 时 fail-closed「不可得」。
+    ...(probeCapabilitiesListingPause(dirs.merchantDataDir) !== undefined
+      ? { capabilities: { listing_pause: probeCapabilitiesListingPause(dirs.merchantDataDir) } }
+      : {}),
+    // F17 策略热更新接缝：覆盖层落 <dataDir>/policy-overrides.json（0600，即时生效）。
+    applyPolicyOverride: (patch) => {
+      const file = path.join(dirs.merchantDataDir, "policy-overrides.json");
+      writeFileSync(file, `${JSON.stringify({ updated_at: now(), patch }, null, 2)}\n`, {
+        mode: 0o600,
+      });
+    },
   });
-  // 审批闭环（阶段四）：为重启前遗留的 draft 候选重建执行钩子，本进程即可
-  // 批准并执行（service.approveCandidate）。
-  const recoveredDrafts = service.recoverPendingDrafts();
+  // 审批闭环（阶段三推广版）：恢复全部已注册写工具的 pending 命令（覆盖 V1
+  // recoverPendingDrafts 语义）；未注册工具的死候选标 expired。
+  const recovered = service.recoverPendingCommands();
+  // 七类 presentation → MCP 资源（V2 阶段二；私密类不进资源）。
+  const presentations = buildMerchantPresentationResources({
+    context: {
+      profile,
+      // presentation 的 enrich 以 principalId 作为商家读取口径（目录/intelligence
+      // 都按 merchant_id 校验）——用 owner_id，不用进程 principal（agent_id）。
+      principalId: profile.owner_id,
+      merchantClient,
+      approvals,
+      ...(intelligence !== undefined ? { intelligence } : {}),
+    },
+  });
   const handle = await startMerchantMcpServer({
     service,
     host,
     port,
     path: mcpPath,
     ...(verifier !== undefined ? { auth: verifier } : {}),
+    ...(oauth !== undefined ? { oauth } : {}),
+    presentations,
+    // 配套商家确认页面（V2 阶段三）：宿主无可验证确认接口时的确认通道。
+    ...(verifier !== undefined
+      ? {
+          admin: {
+            merchantName: profile.name ?? profile.owner_id,
+            surface: merchantAdminSurface(service),
+          },
+        }
+      : {}),
     serverInfo: { name: "kiwi-merchant", version: PRODUCT_VERSION },
   });
   console.log(
     `[merchant mcp] merchant ${profile.agent_id} MCP server: ${handle.url}` +
-      `（auth: ${verifier?.name ?? "none（loopback-only）"}；7 个 Workbench 工具）` +
-      (recoveredDrafts > 0 ? `；恢复 ${recoveredDrafts} 个待批准变更草稿` : ""),
+      `（auth: ${verifier?.name ?? "none（loopback-only）"}${authMode === "oauth" ? "，OAuth 端点已挂载" : ""}；kiwi_merchant_* 工具 + 展示资源）` +
+      (recovered.recovered > 0 ? `；恢复 ${recovered.recovered} 个待批准写命令` : ""),
   );
   const shutdown = async (): Promise<void> => {
     await handle.close().catch(() => undefined);
+    oauthDb?.close();
     db.close();
     process.exit(0);
   };

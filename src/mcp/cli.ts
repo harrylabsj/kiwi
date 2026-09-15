@@ -94,9 +94,7 @@ function readPolicy(options: McpServeOptions, principal: string): Record<string,
     }
   }
   const raw =
-    options.policy !== undefined
-      ? options.policy
-      : { ...DEFAULT_DELEGATION_POLICY, principal };
+    options.policy !== undefined ? options.policy : { ...DEFAULT_DELEGATION_POLICY, principal };
   assertNorthboundContractValid("delegation-policy", raw, "delegation policy");
   return raw;
 }
@@ -134,9 +132,7 @@ export async function runMcpServe(args: string[]): Promise<number> {
   // 持久 store 默认路径：--db → KIWI_MCP_DB env → ~/.kiwi/mcp/dsh.sqlite（HOME 基准，
   // 稳定可跨宿主；dsh/Hermes 等 host 不传 --db 时也能落一致位置，不再依赖 cwd）。
   const dbPath =
-    opts.db ??
-    process.env.KIWI_MCP_DB ??
-    path.join(homedir(), ".kiwi", "mcp", "dsh.sqlite");
+    opts.db ?? process.env.KIWI_MCP_DB ?? path.join(homedir(), ".kiwi", "mcp", "dsh.sqlite");
   // 单核心多包装：MCP 与 HTTP 共用同一 buildBuyerService（§6.3）。
   const service = buildBuyerService({
     dbPath,

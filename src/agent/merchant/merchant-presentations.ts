@@ -145,7 +145,19 @@ export function createMerchantPresentationRegistry(): PresentationRegistry {
           context.merchantClient.listProducts(context.principalId),
           intelligence(context).getCatalogHealth({ merchant_id: context.principalId }),
         ]);
-        return { health, products: products.slice(0, input.limit) };
+        // 白名单脱敏（V2 §8 防御层）：只取公开字段，不透传上游原始对象——
+        // 即使商品源返回了额外字段（底价/成本等）也不进展示负载。
+        return {
+          health,
+          products: products.slice(0, input.limit).map((p) => ({
+            sku: p.sku,
+            merchant_id: p.merchant_id,
+            title: p.title,
+            price: p.price,
+            stock: p.stock,
+            paused: p.paused,
+          })),
+        };
       },
     }))
     .register(component<NegotiationsInput, unknown>({
@@ -164,7 +176,18 @@ export function createMerchantPresentationRegistry(): PresentationRegistry {
       description: "展示需要人工处理的事项；审核原因和实体由服务端读取和补全。",
       inputSchema: { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 50 } }, additionalProperties: false },
       validate: parseHumanReview,
-      enrich: async (input, context) => ({ reviews: (await context.merchantClient.getHumanReviewQueue(context.principalId)).slice(0, input.limit) }),
+      enrich: async (input, context) => ({
+        // 白名单脱敏：只取公开字段（同 catalog 的防御层口径）。
+        reviews: (await context.merchantClient.getHumanReviewQueue(context.principalId))
+          .slice(0, input.limit)
+          .map((r) => ({
+            review_id: r.review_id,
+            conversation_id: r.conversation_id,
+            sku: r.sku,
+            severity: r.severity,
+            reason: r.reason,
+          })),
+      }),
     }))
     .register(component<ChangePreviewInput, unknown>({
       toolName: "present_change_preview",

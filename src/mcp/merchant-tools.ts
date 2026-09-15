@@ -22,12 +22,12 @@
  * （MerchantWorkbenchError → isError 带内返回，中文标签与 agent 工具层
  * errorText 一致）、响应体大小保护（超长截断并注明）与单次调用 30s 超时。
  *
- * 写类工具（merchant_draft_product_change）只返回审批候选元数据，绝不直接执行。
+ * 写类工具（kiwi_merchant_prepare_product_change）只返回审批候选元数据，绝不直接执行。
  */
 
 import type {
   DraftProductChangeResult,
-  MerchantWorkbenchService,
+  MerchantWorkbenchSurface,
 } from "../merchant/workbench-service.js";
 import { MerchantWorkbenchError } from "../merchant/workbench-service.js";
 
@@ -124,6 +124,51 @@ async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
   }
 }
 
+/** 命令写面（V2 阶段三；merchant-core 提供，facade 不具备——缺失时对应工具报「不可得」）。 */
+export type MerchantCommandSurface = {
+  prepareProductCreate(input: {
+    product: unknown;
+    reason?: string;
+  }): Promise<import("../merchant-core/commands.js").PreparedCommand>;
+  prepareInventoryUpdate(input: {
+    sku: string;
+    stock: number;
+    reason?: string;
+  }): Promise<import("../merchant-core/commands.js").PreparedCommand>;
+  prepareListingChange(input: {
+    sku: string;
+    paused: boolean;
+    reason?: string;
+  }): Promise<import("../merchant-core/commands.js").PreparedCommand>;
+  prepareReviewResolve(input: {
+    source_protocol: "a2a" | "shopping";
+    source_id: string;
+    resolution: string;
+    reason?: string;
+  }): Promise<import("../merchant-core/commands.js").PreparedCommand>;
+  preparePolicyChange(input: {
+    patch: Record<string, unknown>;
+    reason?: string;
+  }): Promise<import("../merchant-core/commands.js").PreparedCommand>;
+  executeApproved(commandId: string): Promise<unknown>;
+  rejectCandidate(commandId: string): Promise<unknown>;
+  prepareProductsImport(input: {
+    csv: string;
+    idempotency_key?: string;
+    reason?: string;
+  }): Promise<import("../merchant-core/commands.js").PreparedCommand>;
+  prepareProductsWithdraw(input: {
+    skus: string[];
+    idempotency_key?: string;
+    reason?: string;
+  }): Promise<import("../merchant-core/commands.js").PreparedCommand>;
+  getOperation(
+    operationId: string,
+  ):
+    | Promise<import("../merchant-core/operations.js").MerchantOperation>
+    | import("../merchant-core/operations.js").MerchantOperation;
+};
+
 /** draft_product_change 的候选元数据投影（只含公开字段，绝不回传执行结果）。 */
 function draftResultPayload(result: DraftProductChangeResult): Record<string, unknown> {
   const candidate = "candidate" in result.outcome ? result.outcome.candidate : undefined;
@@ -143,16 +188,84 @@ function draftResultPayload(result: DraftProductChangeResult): Record<string, un
   };
 }
 
+/** 命令写面守卫：facade-only 调用方缺命令面时 fail-closed 报「不可得」。 */
+function commandSurface(service: MerchantWorkbenchSurface): MerchantCommandSurface {
+  const s = service as Partial<MerchantCommandSurface>;
+  if (typeof s.prepareProductCreate !== "function") {
+    throw new MerchantWorkbenchError("unavailable", "命令写面不可用（需要 merchant-core 服务）");
+  }
+  return s as MerchantCommandSurface;
+}
+
+/** prepare 结果投影：候选元数据 + 预览（prepare 不执行）。 */
+function preparedPayload(prepared: {
+  candidate: {
+    candidate_id: string;
+    tool: string;
+    status: string;
+    risk: string;
+    expires_at: string;
+    created_at: string;
+  };
+  preview: Record<string, unknown>;
+}): Record<string, unknown> {
+  const c = prepared.candidate;
+  return {
+    kind: "pending_approval",
+    command_id: c.candidate_id,
+    tool: c.tool,
+    status: c.status,
+    risk: c.risk,
+    expires_at: c.expires_at,
+    created_at: c.created_at,
+    preview: prepared.preview,
+  };
+}
+
+/** 写类工具（scope 过滤：要求 merchant:write；其余只读工具要求 merchant:read）。 */
+const WRITE_TOOLS: ReadonlySet<string> = new Set([
+  "kiwi_merchant_prepare_product_change",
+  "kiwi_merchant_prepare_product_create",
+  "kiwi_merchant_prepare_inventory_update",
+  "kiwi_merchant_prepare_listing_change",
+  "kiwi_merchant_prepare_review_resolve",
+  "kiwi_merchant_prepare_policy_change",
+  "kiwi_merchant_execute_approved",
+  "kiwi_merchant_reject_candidate",
+  "kiwi_merchant_prepare_products_import",
+  "kiwi_merchant_prepare_products_withdraw",
+]);
+
+/** 工具所需最小 scope。 */
+export function requiredScopeForTool(name: string): "merchant:read" | "merchant:write" {
+  return WRITE_TOOLS.has(name) ? "merchant:write" : "merchant:read";
+}
+
+/** scope 判定：scopes === undefined 表示静态 token 过渡模式（全量放行）。 */
+function scopeAllows(scopes: string[] | undefined, required: string): boolean {
+  if (scopes === undefined) return true;
+  return scopes.includes(required);
+}
+
 /**
- * 构建 7 个 MVP 工具的定义与分发器。`call(name, args)` 返回 MCP CallToolResult
- * 形状；业务错误与未知工具名一律带内 isError 返回（中文说明）。
+ * 构建 7 个 MVP 工具的定义与分发器。`call(name, args, scopes)` 返回 MCP
+ * CallToolResult 形状；业务错误与未知工具名一律带内 isError 返回（中文说明）。
+ *
+ * scope 过滤（V2 阶段一）：scopes 来自 OAuth access_token 授权上下文；
+ * undefined = 静态 token 过渡模式（全量）。`listTools(scopes)` 只列出已授权
+ * 工具；`call` 逐次强制校验（服务端不依赖 tools/list 的展示过滤）。
  */
 export function buildMerchantMcpTools(
-  service: MerchantWorkbenchService,
+  service: MerchantWorkbenchSurface,
   options: MerchantMcpToolsOptions = {},
 ): {
   tools: MerchantMcpToolDefinition[];
-  call: (name: string, args: Record<string, unknown>) => Promise<MerchantMcpCallResult>;
+  listTools: (scopes?: string[]) => MerchantMcpToolDefinition[];
+  call: (
+    name: string,
+    args: Record<string, unknown>,
+    scopes?: string[],
+  ) => Promise<MerchantMcpCallResult>;
 } {
   const maxChars = options.maxChars ?? MERCHANT_MCP_MAX_RESPONSE_CHARS;
   const timeoutMs = options.requestTimeoutMs ?? MERCHANT_MCP_REQUEST_TIMEOUT_MS;
@@ -161,38 +274,38 @@ export function buildMerchantMcpTools(
     string,
     (args: Record<string, unknown>) => Promise<Record<string, unknown>>
   > = {
-    merchant_list_products: async () => {
+    kiwi_merchant_list_products: async () => {
       const { items, source } = await service.listPublicProducts();
       return { count: items.length, source, items };
     },
-    merchant_get_product: async (args) => {
+    kiwi_merchant_get_product: async (args) => {
       const product = await service.getPublicProduct(
         typeof args.sku === "string" ? args.sku : "",
         typeof args.merchant_id === "string" ? args.merchant_id : undefined,
       );
       return { product };
     },
-    merchant_get_inventory: async (args) => {
+    kiwi_merchant_get_inventory: async (args) => {
       const snapshot = await service.getInventorySnapshot(
         typeof args.sku === "string" ? args.sku : "",
       );
       return { snapshot };
     },
-    merchant_list_a2a_negotiations: async (args) => {
+    kiwi_merchant_list_a2a_negotiations: async (args) => {
       const { total, items } = await service.listA2aNegotiations(args.limit);
       return { total, count: items.length, items };
     },
-    merchant_list_human_reviews: async () => {
+    kiwi_merchant_list_human_reviews: async () => {
       const items = await service.listHumanReviews();
       return { count: items.length, items };
     },
-    merchant_get_analytics: async (args) => {
+    kiwi_merchant_get_analytics: async (args) => {
       const snapshot = await service.getAnalytics(
         typeof args.period === "string" ? args.period : undefined,
       );
       return { snapshot };
     },
-    merchant_draft_product_change: async (args) => {
+    kiwi_merchant_prepare_product_change: async (args) => {
       const result = await service.draftProductChange({
         sku: typeof args.sku === "string" ? args.sku : "",
         changes: args.changes,
@@ -200,6 +313,89 @@ export function buildMerchantMcpTools(
         ...(typeof args.merchant_id === "string" ? { merchant_id: args.merchant_id } : {}),
       });
       return draftResultPayload(result);
+    },
+    // ---- V2 阶段三写闭环工具（命令记录 + 执行器；全部 merchant:write scope）----
+    kiwi_merchant_prepare_product_create: async (args) =>
+      commandSurface(service)
+        .prepareProductCreate({
+          product: args.product,
+          ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
+        })
+        .then(preparedPayload),
+    kiwi_merchant_prepare_inventory_update: async (args) =>
+      commandSurface(service)
+        .prepareInventoryUpdate({
+          sku: typeof args.sku === "string" ? args.sku : "",
+          stock: typeof args.stock === "number" ? args.stock : -1,
+          ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
+        })
+        .then(preparedPayload),
+    kiwi_merchant_prepare_listing_change: async (args) =>
+      commandSurface(service)
+        .prepareListingChange({
+          sku: typeof args.sku === "string" ? args.sku : "",
+          paused: args.paused === true,
+          ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
+        })
+        .then(preparedPayload),
+    kiwi_merchant_prepare_review_resolve: async (args) =>
+      commandSurface(service)
+        .prepareReviewResolve({
+          source_protocol: args.source_protocol === "a2a" ? "a2a" : "shopping",
+          source_id: typeof args.source_id === "string" ? args.source_id : "",
+          resolution: typeof args.resolution === "string" ? args.resolution : "",
+          ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
+        })
+        .then(preparedPayload),
+    kiwi_merchant_prepare_policy_change: async (args) =>
+      commandSurface(service)
+        .preparePolicyChange({
+          patch: (args.patch ?? {}) as Record<string, unknown>,
+          ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
+        })
+        .then(preparedPayload),
+    kiwi_merchant_execute_approved: async (args) => {
+      const outcome = (await commandSurface(service).executeApproved(
+        typeof args.command_id === "string" ? args.command_id : "",
+      )) as { kind: string; candidate?: { candidate_id: string; status: string } };
+      return {
+        kind: outcome.kind,
+        command_id: outcome.candidate?.candidate_id ?? "",
+        status: outcome.candidate?.status ?? "",
+      };
+    },
+    kiwi_merchant_reject_candidate: async (args) => {
+      const candidate = (await commandSurface(service).rejectCandidate(
+        typeof args.command_id === "string" ? args.command_id : "",
+      )) as { candidate_id: string; status: string };
+      return { command_id: candidate.candidate_id, status: candidate.status };
+    },
+    // ---- V2 阶段四：CSV 导入/撤回（长任务 + 幂等）与 operation 查询 ----
+    kiwi_merchant_prepare_products_import: async (args) =>
+      commandSurface(service)
+        .prepareProductsImport({
+          csv: typeof args.csv === "string" ? args.csv : "",
+          ...(typeof args.idempotency_key === "string"
+            ? { idempotency_key: args.idempotency_key }
+            : {}),
+          ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
+        })
+        .then(preparedPayload),
+    kiwi_merchant_prepare_products_withdraw: async (args) =>
+      commandSurface(service)
+        .prepareProductsWithdraw({
+          skus: Array.isArray(args.skus) ? args.skus.map(String) : [],
+          ...(typeof args.idempotency_key === "string"
+            ? { idempotency_key: args.idempotency_key }
+            : {}),
+          ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
+        })
+        .then(preparedPayload),
+    kiwi_merchant_get_operation: async (args) => {
+      const op = await commandSurface(service).getOperation(
+        typeof args.operation_id === "string" ? args.operation_id : "",
+      );
+      return { operation: op as unknown as Record<string, unknown> };
     },
   };
 
@@ -211,12 +407,12 @@ export function buildMerchantMcpTools(
 
   const tools: MerchantMcpToolDefinition[] = [
     {
-      name: "merchant_list_products",
+      name: "kiwi_merchant_list_products",
       description: "列出商家自己的目录商品（只读；公开字段白名单，无私有底价/成本）。",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
     {
-      name: "merchant_get_product",
+      name: "kiwi_merchant_get_product",
       description: "按 SKU 读取商家目录中的一个商品（只读，公开字段白名单）。",
       inputSchema: {
         type: "object",
@@ -226,7 +422,7 @@ export function buildMerchantMcpTools(
       },
     },
     {
-      name: "merchant_get_inventory",
+      name: "kiwi_merchant_get_inventory",
       description: "读取一个商品的当前库存快照（含观察时间，不是永恒事实）。",
       inputSchema: {
         type: "object",
@@ -236,7 +432,7 @@ export function buildMerchantMcpTools(
       },
     },
     {
-      name: "merchant_list_a2a_negotiations",
+      name: "kiwi_merchant_list_a2a_negotiations",
       description:
         "列出商家节点的 A2A 磋商记录（结构化行：negotiation_id、相位、SKU、数量、报价、是否达成协议、时间）。",
       inputSchema: {
@@ -253,12 +449,12 @@ export function buildMerchantMcpTools(
       },
     },
     {
-      name: "merchant_list_human_reviews",
+      name: "kiwi_merchant_list_human_reviews",
       description: "查看商家需要人工处理的队列（升级、超预算/超底价、转人工的磋商）。",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
     {
-      name: "merchant_get_analytics",
+      name: "kiwi_merchant_get_analytics",
       description:
         "读取当前商家经营摘要（只读；指标由服务端计算。未配置指标后端时返回明确错误，不给演示数据）。",
       inputSchema: {
@@ -274,7 +470,7 @@ export function buildMerchantMcpTools(
       },
     },
     {
-      name: "merchant_draft_product_change",
+      name: "kiwi_merchant_prepare_product_change",
       description:
         "为一个商品变更生成审批候选（不立即执行，任何模式都不自动执行）。操作者批准后才会真正写入；只返回候选元数据。",
       inputSchema: {
@@ -292,16 +488,172 @@ export function buildMerchantMcpTools(
         additionalProperties: false,
       },
     },
+    {
+      name: "kiwi_merchant_prepare_product_create",
+      description:
+        "登记商品创建命令（prepare：只产持久命令候选与预览，不执行）。经确认通道批准后才由执行器写入。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          product: {
+            type: "object",
+            description: "sku/title/price/stock 必填；currency/category/tags/description 可选",
+          },
+          reason: { type: "string", description: "变更原因（可选）" },
+        },
+        required: ["product"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "kiwi_merchant_prepare_inventory_update",
+      description: "登记库存调整命令（prepare：只产候选与预览，不执行）。stock 必须是非负整数。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sku: skuParam,
+          stock: { type: "integer", minimum: 0, description: "新的库存数量（>= 0）" },
+          reason: { type: "string", description: "变更原因（可选）" },
+        },
+        required: ["sku", "stock"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "kiwi_merchant_prepare_listing_change",
+      description:
+        "登记商品销售状态变更（F08：暂停/恢复销售）。上游不支持时返回明确「不可得」，不降级为库存写零。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sku: skuParam,
+          paused: { type: "boolean", description: "true 暂停销售，false 恢复销售" },
+          reason: { type: "string", description: "变更原因（可选）" },
+        },
+        required: ["sku", "paused"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "kiwi_merchant_prepare_review_resolve",
+      description:
+        "登记人工处理命令（F14 两轨路由：仅 shopping 轨可执行；A2A 轨报「不可得」——绝不跨轨调 shopping-cli resolve-review）。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          source_protocol: {
+            type: "string",
+            enum: ["a2a", "shopping"],
+            description: "磋商来源轨道",
+          },
+          source_id: { type: "string", description: "轨道内 id（conversation_id）" },
+          resolution: { type: "string", description: "处理结论" },
+          reason: { type: "string", description: "变更原因（可选）" },
+        },
+        required: ["source_protocol", "source_id", "resolution"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "kiwi_merchant_prepare_policy_change",
+      description: "登记策略变更命令（F17：执行器写入后热生效，不重启进程；硬策略由执行器强制）。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          patch: { type: "object", description: "策略变更字段（merchant_policy 键）" },
+          reason: { type: "string", description: "变更原因（可选）" },
+        },
+        required: ["patch"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "kiwi_merchant_execute_approved",
+      description:
+        "确认通道：批准并执行一个 pending 命令（按 command_id）。执行前重校验授权主体/前置版本/有效期/硬策略；重复执行幂等拒绝。",
+      inputSchema: {
+        type: "object",
+        properties: { command_id: { type: "string", description: "prepare 返回的命令 id" } },
+        required: ["command_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "kiwi_merchant_reject_candidate",
+      description: "确认通道：拒绝一个 pending 命令（按 command_id），拒绝后不执行。",
+      inputSchema: {
+        type: "object",
+        properties: { command_id: { type: "string", description: "prepare 返回的命令 id" } },
+        required: ["command_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "kiwi_merchant_prepare_products_import",
+      description:
+        "CSV 商品导入（prepare：解析预览 + 逐行回执，不执行）。相同幂等键不重复导入；批准后逐行执行，部分成功逐项回执。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          csv: {
+            type: "string",
+            description:
+              "CSV 文本（表头 sku,title,price,stock[,currency][,category][,description]）",
+          },
+          idempotency_key: { type: "string", description: "幂等键（可选；缺省按 CSV 内容 hash）" },
+          reason: { type: "string", description: "变更原因（可选）" },
+        },
+        required: ["csv"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "kiwi_merchant_prepare_products_withdraw",
+      description:
+        "批量撤回商品（listing 销售状态语义；prepare：只产候选，批准后执行；相同幂等键不重复撤回）。上游不支持时逐项回执明确失败。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          skus: { type: "array", items: { type: "string" }, description: "要撤回的 SKU 列表" },
+          idempotency_key: { type: "string", description: "幂等键（可选）" },
+          reason: { type: "string", description: "变更原因（可选）" },
+        },
+        required: ["skus"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "kiwi_merchant_get_operation",
+      description:
+        "查询长任务状态（operation_id；queued/running/succeeded/partially_failed/failed + 逐项回执）。",
+      inputSchema: {
+        type: "object",
+        properties: { operation_id: { type: "string", description: "长任务 id" } },
+        required: ["operation_id"],
+        additionalProperties: false,
+      },
+    },
   ];
 
   const call = async (
     name: string,
     args: Record<string, unknown>,
+    scopes?: string[],
   ): Promise<MerchantMcpCallResult> => {
     const handler = handlers[name];
     if (handler === undefined) {
       // 未知工具名：带内 isError（连接器统一处理），而非 JSON-RPC 协议错误。
       return errorResult(new MerchantWorkbenchError("validation", `未知工具 ${name}`));
+    }
+    // scope 强制校验（服务端逐次执行，不依赖 tools/list 展示过滤）。
+    const required = requiredScopeForTool(name);
+    if (!scopeAllows(scopes, required)) {
+      return errorResult(
+        new MerchantWorkbenchError(
+          "auth",
+          `scope 不足：${name} 需要 ${required}（当前授权：${(scopes ?? []).join(" ") || "无"}）`,
+        ),
+      );
     }
     try {
       const payload = await withTimeout(handler(args), timeoutMs);
@@ -311,5 +663,8 @@ export function buildMerchantMcpTools(
     }
   };
 
-  return { tools, call };
+  const listTools = (scopes?: string[]): MerchantMcpToolDefinition[] =>
+    tools.filter((t) => scopeAllows(scopes, requiredScopeForTool(t.name)));
+
+  return { tools, listTools, call };
 }

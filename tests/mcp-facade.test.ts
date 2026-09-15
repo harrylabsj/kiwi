@@ -35,7 +35,8 @@ const POLICY = {
   version: "1.0",
   principal: "company:acme-test",
   created_at: TS,
-  expires_at: "2026-09-15T10:00:00+08:00",
+  // 持久远未来截止（同 helpers.ts 惯例：测试永不过期；原 2026-09-15 是时间炸弹）
+  expires_at: "2099-12-31T23:59:59+08:00",
   actions: {
     discover: { mode: "auto" },
     inquiry_rfq: { mode: "auto" },

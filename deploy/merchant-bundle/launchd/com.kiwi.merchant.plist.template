@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kiwi.merchant</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>node</string>
+    <string>__PREFIX__/app/dist/cli.js</string>
+    <string>merchant</string>
+    <string>runtime</string>
+    <string>start</string>
+    <string>--data-dir</string>
+    <string>__PREFIX__/data</string>
+  </array>
+  <!-- 单活 + 自动重启（V2 §5.3 阶段一形态；主备 fencing 留阶段四） -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>__PREFIX__/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PREFIX__/logs/launchd.err.log</string>
+</dict>
+</plist>

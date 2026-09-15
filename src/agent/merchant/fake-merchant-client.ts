@@ -40,12 +40,14 @@ export class FakeMerchantClient implements MerchantClient {
   private readonly reviews: HumanReviewItem[] = [];
   private now: string;
 
-  constructor(options: {
-    products?: MerchantCatalogProduct[];
-    consultations?: IncomingConsultation[];
-    reviews?: HumanReviewItem[];
-    now?: string;
-  } = {}) {
+  constructor(
+    options: {
+      products?: MerchantCatalogProduct[];
+      consultations?: IncomingConsultation[];
+      reviews?: HumanReviewItem[];
+      now?: string;
+    } = {},
+  ) {
     for (const p of options.products ?? []) this.products.set(p.sku, p);
     this.consultations.push(...(options.consultations ?? []));
     this.reviews.push(...(options.reviews ?? []));
@@ -114,6 +116,7 @@ export class FakeMerchantClient implements MerchantClient {
       ...(patch.delivery_attributes !== undefined
         ? { delivery_attributes: patch.delivery_attributes }
         : {}),
+      ...(patch.paused !== undefined ? { paused: patch.paused } : {}),
     };
     this.products.set(sku, updated);
     return updated;
@@ -157,7 +160,9 @@ export class FakeMerchantClient implements MerchantClient {
 }
 
 /** A merchant catalog fixture with shopping-cli field shapes. */
-export function fakeMerchantProduct(overrides: Partial<MerchantCatalogProduct> = {}): MerchantCatalogProduct {
+export function fakeMerchantProduct(
+  overrides: Partial<MerchantCatalogProduct> = {},
+): MerchantCatalogProduct {
   return {
     sku: "sku-001",
     merchant_id: "merchant-001",

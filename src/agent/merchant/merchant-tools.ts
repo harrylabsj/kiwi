@@ -817,7 +817,10 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
     };
     const presentationContext = {
       profile,
-      principalId: deps.principalId ?? ownerId,
+      // 口径修复（V2 阶段二遗留核查）：enrich 以 principalId 作为商家读取键
+      // （intelligence.assertOwned / listProducts 都按 merchant_id 口径）——
+      // 必须用 owner_id；传 agent_id 会导致 digest/catalog 展示校验失败或读空。
+      principalId: ownerId,
       merchantClient,
       approvals,
       ...(deps.intelligence !== undefined ? { intelligence: deps.intelligence } : {}),

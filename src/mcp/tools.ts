@@ -40,7 +40,12 @@ function err(error: unknown): McpCallToolResult {
     };
   }
   return {
-    content: [{ type: "text", text: `error internal_error: ${error instanceof Error ? error.message : String(error)}` }],
+    content: [
+      {
+        type: "text",
+        text: `error internal_error: ${error instanceof Error ? error.message : String(error)}`,
+      },
+    ],
     isError: true,
   };
 }
@@ -93,7 +98,7 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
     {
       name: "kiwi_request_quotes",
       description:
-        "向一个或多个商家发起询价。写操作；必须携带 idempotency_key（可选，缺省自动生成），返回稳定 task_id；KNP RFQ fan-out。CommerceIntent 必须满足冻结契约：intent.items 每项必须有 query（商品短词）与 quantity（{value, unit} 对象，如 {\"value\":2,\"unit\":\"台\"}）。示例 intent.items: [{\"query\":\"保温杯\",\"quantity\":{\"value\":2,\"unit\":\"台\"}}]。",
+        '向一个或多个商家发起询价。写操作；必须携带 idempotency_key（可选，缺省自动生成），返回稳定 task_id；KNP RFQ fan-out。CommerceIntent 必须满足冻结契约：intent.items 每项必须有 query（商品短词）与 quantity（{value, unit} 对象，如 {"value":2,"unit":"台"}）。示例 intent.items: [{"query":"保温杯","quantity":{"value":2,"unit":"台"}}]。',
       inputSchema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",
         type: "object",
@@ -118,7 +123,8 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
                     query: {
                       type: "string",
                       minLength: 1,
-                      description: "商品短词（如 保温杯），命中 catalog 标题/分类 LIKE；长规格词可能匹配不到",
+                      description:
+                        "商品短词（如 保温杯），命中 catalog 标题/分类 LIKE；长规格词可能匹配不到",
                     },
                     sku: { type: "string", minLength: 1 },
                     quantity: {
@@ -142,13 +148,20 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
         try {
           const result = await service.requestQuotes({
             intent: (args.intent ?? {}) as Record<string, unknown>,
-            idempotency_key: args.idempotency_key === undefined ? undefined : String(args.idempotency_key),
+            idempotency_key:
+              args.idempotency_key === undefined ? undefined : String(args.idempotency_key),
             merchant_ids:
               args.merchant_ids === undefined
                 ? undefined
                 : (args.merchant_ids as string[]).map(String),
           });
-          return ok(JSON.stringify({ task_id: result.task.task_id, task: result.task, created: result.created }));
+          return ok(
+            JSON.stringify({
+              task_id: result.task.task_id,
+              task: result.task,
+              created: result.created,
+            }),
+          );
         } catch (error) {
           return err(error);
         }

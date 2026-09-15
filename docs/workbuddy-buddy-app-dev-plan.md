@@ -45,13 +45,13 @@
 - MVP 工具：
 
   ```text
-  merchant_list_products
-  merchant_get_product
-  merchant_get_inventory
-  merchant_list_a2a_negotiations
-  merchant_list_human_reviews
-  merchant_get_analytics
-  merchant_draft_product_change
+  kiwi_merchant_list_products
+  kiwi_merchant_get_product
+  kiwi_merchant_get_inventory
+  kiwi_merchant_list_a2a_negotiations
+  kiwi_merchant_list_human_reviews
+  kiwi_merchant_get_analytics
+  kiwi_merchant_prepare_product_change
   ```
 
 - 修改：`src/cli.ts` 增加 `kiwi merchant mcp serve`；`src/config/profile.ts` 增加 WorkBuddy/租户配置引用；`src/product-cli.ts` 补帮助与状态说明。

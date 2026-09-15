@@ -46,7 +46,10 @@ for (const field of ["displayName", "profession", "displayDescription", "default
   bilingual(manifest[field]);
 }
 const descriptionLength = [...manifest.displayDescription.zh].length;
-assert(descriptionLength >= 40 && descriptionLength <= 50, `Chinese description: ${descriptionLength} chars, expected 40–50`);
+assert(
+  descriptionLength >= 40 && descriptionLength <= 50,
+  `Chinese description: ${descriptionLength} chars, expected 40–50`,
+);
 assert.equal(manifest.quickPrompts.length, 3);
 assert.equal(manifest.tags.length, 3);
 manifest.quickPrompts.forEach(bilingual);
@@ -83,7 +86,9 @@ const examplePath = "skills/kiwi-source-and-quote/references/rfq-example.json";
 const example = JSON.parse(read(examplePath));
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 addFormats(ajv);
-const schema = JSON.parse(readFileSync(path.join(root, "contracts/commerce-intent/1.0/schema.json")));
+const schema = JSON.parse(
+  readFileSync(path.join(root, "contracts/commerce-intent/1.0/schema.json")),
+);
 const validate = ajv.compile(schema);
 assert(validate(example.intent), JSON.stringify(validate.errors));
 assert(example.merchant_ids.length > 0 && example.idempotency_key);
@@ -95,11 +100,16 @@ assert.equal(avatar.readUInt32BE(16), 512);
 assert.equal(avatar.readUInt32BE(20), 512);
 assert(avatar.length <= 500 * 1024, "Avatar exceeds 500 KB");
 files.push(manifest.avatar);
-console.log(`Validated ${manifest.profession.zh} | ${manifest.displayName.zh} v${manifest.version}: ${skillNames.length} skills, ${toolNames.size} tools, CommerceIntent and avatar.`);
+console.log(
+  `Validated ${manifest.profession.zh} | ${manifest.displayName.zh} v${manifest.version}: ${skillNames.length} skills, ${toolNames.size} tools, CommerceIntent and avatar.`,
+);
 
 const args = process.argv.slice(2);
 if (args.length === 1 && args[0] === "--check") process.exit(0);
-assert(args.length === 2 && args[0] === "--out", "Usage: node package.mjs --check | --out /path/package.zip");
+assert(
+  args.length === 2 && args[0] === "--out",
+  "Usage: node package.mjs --check | --out /path/package.zip",
+);
 const output = path.resolve(args[1]);
 assert(output.endsWith(".zip"), "Output must be .zip");
 assert(!existsSync(output), "Output already exists; choose a new path");
@@ -109,7 +119,10 @@ const result = spawnSync("zip", ["-X", output, ...files], { cwd: bundle, encodin
 assert.equal(result.status, 0, result.error?.message ?? result.stderr);
 const listed = spawnSync("unzip", ["-Z1", output], { encoding: "utf8" });
 assert.equal(listed.status, 0, listed.stderr);
-assert.deepEqual(listed.stdout.trim().split("\n").sort(), files.map((p) => p.replace(/^\.\//, "")).sort());
+assert.deepEqual(
+  listed.stdout.trim().split("\n").sort(),
+  files.map((p) => p.replace(/^\.\//, "")).sort(),
+);
 const checked = spawnSync("unzip", ["-t", output], { encoding: "utf8" });
 assert.equal(checked.status, 0, checked.stdout + checked.stderr);
 console.log(`Created ${output}`);
