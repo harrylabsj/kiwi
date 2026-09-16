@@ -8,13 +8,14 @@
  *
  * 确定性：临时目录 + node -e 长寿子进程 + 注入时钟。
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MerchantRuntimeManager, MerchantRuntimeError } from "../src/merchant-runtime/manager.js";
 import { collectMerchantHealth } from "../src/merchant-runtime/health.js";
 import { MerchantJobs, standardMerchantJobs } from "../src/merchant-runtime/jobs.js";
+import { resolveMerchantMcpDirs } from "../src/mcp/merchant-dirs.js";
 
 const T0 = "2026-09-15T10:00:00.000Z";
 
@@ -165,7 +166,11 @@ describe("collectMerchantHealth", () => {
 });
 
 function mkdirRuntimeProbe(dir: string, probe: { ok: boolean; version: string }): void {
-  writeFileSync(path.join(dir, "capability-probe.json"), JSON.stringify(probe));
+  // BUG-05：探测记录带 probed_at（新鲜度判定）；fixture 与检查同钟（T0）
+  writeFileSync(
+    path.join(dir, "capability-probe.json"),
+    JSON.stringify({ ...probe, probed_at: T0 }),
+  );
 }
 
 describe("MerchantJobs", () => {
@@ -201,5 +206,52 @@ describe("MerchantJobs", () => {
     expect(() => jobs.register({ name: "y", intervalMs: 0, run: async () => {} })).toThrow();
     jobs.start();
     jobs.stop();
+  });
+});
+
+describe("BUG-04：runtime 子进程统一数据目录", () => {
+  it("A2A/MCP 子进程命令显式携带统一 --data-dir 与确定 cwd", async () => {
+    const { buildRuntimeServiceSpecs } = await import("../src/merchant-runtime/services.js");
+    const dirs = resolveMerchantMcpDirs({ dataDir: "/tmp/kiwi-unified-data", agentId: "m-1" });
+    const specs = buildRuntimeServiceSpecs({
+      dirs,
+      cliEntry: "dist/cli.js",
+      profileArgs: ["--profile", "m.yaml"],
+    });
+    expect(specs.map((s) => s.name).sort()).toEqual(["a2a", "mcp"]);
+    for (const spec of specs) {
+      expect(spec.command).toContain("--data-dir");
+      expect(spec.command[spec.command.indexOf("--data-dir") + 1]).toBe("/tmp/kiwi-unified-data");
+      expect(spec.cwd).toBe("/tmp/kiwi-unified-data");
+    }
+  });
+
+  it("集成：子进程在确定 cwd 下产生的文件落在同一数据根目录", async () => {
+    const dir = tmp();
+    // 桩子进程：接受 --data-dir，向 cwd 写标记文件后常驻
+    const stub =
+      "const fs=require('fs');fs.writeFileSync('marker-'+process.argv[1]+'.txt',process.cwd());setInterval(()=>{},1000)";
+    const manager = new MerchantRuntimeManager({
+      dir,
+      services: [
+        { name: "a2a", command: [process.execPath, "-e", stub, "a2a"], cwd: dir },
+        { name: "mcp", command: [process.execPath, "-e", stub, "mcp"], cwd: dir },
+      ],
+      now: () => T0,
+    });
+    await manager.start("a2a");
+    await manager.start("mcp");
+    const ok = await waitFor(
+      () => existsSync(path.join(dir, "marker-a2a.txt")) && existsSync(path.join(dir, "marker-mcp.txt")),
+    );
+    expect(ok).toBe(true);
+    // 标记内容即子进程 cwd —— 都在同一数据根目录（realpath 归一 macOS /tmp 符号链接）
+    const { realpathSync } = await import("node:fs");
+    const realDir = realpathSync(dir);
+    for (const marker of ["marker-a2a.txt", "marker-mcp.txt"]) {
+      const childCwd = readFileSync(path.join(dir, marker), "utf8");
+      expect(childCwd === dir || childCwd === realDir).toBe(true);
+    }
+    await manager.shutdown();
   });
 });

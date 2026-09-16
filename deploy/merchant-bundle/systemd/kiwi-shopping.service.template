@@ -1,0 +1,16 @@
+[Unit]
+Description=shopping-cli（Kiwi 商家数据引擎：商品/库存/交期权威源）
+After=network-online.target
+
+[Service]
+Type=simple
+# 启动命令由安装参数决定（--shopping-bin / --shopping-args）：本仓库只锁
+# shopping-cli 版本范围（versions.lock.json），不约定其 CLI 形态。
+ExecStart=__SHOPPING_BIN__ __SHOPPING_ARGS__
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -31,7 +31,15 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, userInfo } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,21 +81,55 @@ import { MerchantOAuthServer, MerchantOAuthStore } from "./auth/merchant-oauth.j
 import { MerchantOAuthVerifier } from "./auth/merchant-authorization.js";
 import { isLoopbackHost } from "./a2a/client/url-policy.js";
 import { MerchantRuntimeManager } from "./merchant-runtime/manager.js";
+import { buildRuntimeServiceSpecs } from "./merchant-runtime/services.js";
 import { collectMerchantHealth } from "./merchant-runtime/health.js";
 import { MerchantJobs, standardMerchantJobs } from "./merchant-runtime/jobs.js";
 import { runBackup } from "./merchant-runtime/backup.js";
 import { MerchantCoreService } from "./merchant-core/service.js";
+import { MerchantPolicyRuntime } from "./merchant-core/policy-runtime.js";
 import { buildMerchantPresentationResources } from "./mcp/merchant-resources.js";
 import { merchantAdminSurface } from "./merchant-admin/pending-page.js";
+import { MerchantAdminSessions, writeAdminCredentials } from "./auth/merchant-sessions.js";
 import { MerchantOperationStore } from "./merchant-core/operations.js";
 
 /** 读能力探测落盘记录的 listing_pause（F08 接线；记录缺失/损坏 → undefined 不判定）。 */
 function probeCapabilitiesListingPause(dataDir: string): boolean | undefined {
   try {
-    const probe = JSON.parse(
-      readFileSync(path.join(dataDir, "capability-probe.json"), "utf8"),
-    ) as { capabilities?: { listing_pause?: boolean } };
+    const probe = JSON.parse(readFileSync(path.join(dataDir, "capability-probe.json"), "utf8")) as {
+      capabilities?: { listing_pause?: boolean };
+    };
     return probe.capabilities?.listing_pause;
+  } catch {
+    return undefined;
+  }
+}
+
+function readRegistrationStatus(dataDir: string): { ok: boolean; error?: string } | undefined {
+  try {
+    const value = JSON.parse(readFileSync(path.join(dataDir, "registration.json"), "utf8")) as {
+      ok?: unknown;
+      error?: unknown;
+    };
+    return {
+      ok: value.ok === true,
+      ...(typeof value.error === "string" ? { error: value.error } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function countPendingMerchantCommands(dataDir: string): number | undefined {
+  try {
+    const db = new DatabaseSync(path.join(dataDir, "state.sqlite"));
+    try {
+      const row = db
+        .prepare("SELECT COUNT(*) AS count FROM action_candidates WHERE status = 'pending_approval'")
+        .get() as { count?: number } | undefined;
+      return typeof row?.count === "number" ? row.count : 0;
+    } finally {
+      db.close();
+    }
   } catch {
     return undefined;
   }
@@ -112,7 +154,12 @@ import {
   DEFAULT_PROFILE_PATH,
 } from "./product-cli.js";
 import { cmdWeixin, weixinUsage } from "./weixin/cli-weixin.js";
-import { DEFAULT_SHOPPING_DB_PATH, loadMerchantCredentials, merchantInit, slugifyMerchantId } from "./product-init.js";
+import {
+  DEFAULT_SHOPPING_DB_PATH,
+  loadMerchantCredentials,
+  merchantInit,
+  slugifyMerchantId,
+} from "./product-init.js";
 import readline from "node:readline";
 import { buyerInit, buyerSearch, buyerTasks } from "./product-buyer.js";
 import {
@@ -127,7 +174,12 @@ import {
 import { merchantStats } from "./product-merchant.js";
 import { merchantPublish } from "./product-publish.js";
 import { catalogServe } from "./product-catalog.js";
-import { extractPublicDomain, runMerchantSetupPublic, SetupPublicError, validatePublicDomain } from "./product-setup-public.js";
+import {
+  extractPublicDomain,
+  runMerchantSetupPublic,
+  SetupPublicError,
+  validatePublicDomain,
+} from "./product-setup-public.js";
 
 const USAGE = `kiwi ${PRODUCT_VERSION} — commerce negotiation agent runtime
 
@@ -500,7 +552,6 @@ function requireProfileOrDefault(args: ParsedArgs): AgentProfile {
   );
 }
 
-
 function printReportJsonl(report: TurnReport): void {
   process.stdout.write(`${JSON.stringify(report)}\n`);
 }
@@ -703,12 +754,20 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
   // negotiation 可重开、已发 conditional offer 返回 offer_unknown。稳定目录
   // 让重启可恢复状态（resolveServeDataDir 见上）。
   const serveDataDir = resolveServeDataDir(args.dataDir, profile.agent_id);
+  // BUG-07：A2A 进程的策略读端——与 MCP 写端共享 <dataDir>/policy-overrides.json，
+  // 每次报价 stat 文件 mtime，变化才重载（策略热更新跨进程立即生效）。
+  const policyRuntime = new MerchantPolicyRuntime({
+    basePolicy: profile.merchant_policy,
+    file: path.join(serveDataDir, "policy-overrides.json"),
+    now: () => new Date().toISOString(),
+  });
   const profilePublicUrl = profile.merchant_public?.public_url;
   let node: A2aNodeHandle | null = await startA2aNode({
     profile,
     catalog,
     preferredPort: args.port ?? profile.merchant_public?.a2a_port,
     dataDir: serveDataDir,
+    merchantPolicy: () => policyRuntime.current().policy,
     ...(profilePublicUrl ? { publicBaseUrl: `https://${profilePublicUrl}` } : {}),
     ...(merchantToken ? { ownerToken: merchantToken } : {}),
     ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
@@ -736,6 +795,7 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
         catalog,
         preferredPort: args.port,
         dataDir: serveDataDir,
+        merchantPolicy: () => policyRuntime.current().policy,
         ...(merchantToken ? { ownerToken: merchantToken } : {}),
         ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
       });
@@ -767,7 +827,11 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
   const kernel = await buildChatKernel(profile, args.dataDir, catalog);
   const kernels: AgentKernel[] = [kernel];
   const reload = async (file: string): Promise<AgentKernel> => {
-    const next = await buildChatKernel(loadProfile(resolveProfilePath(file)), args.dataDir, catalog);
+    const next = await buildChatKernel(
+      loadProfile(resolveProfilePath(file)),
+      args.dataDir,
+      catalog,
+    );
     kernels.push(next);
     return next;
   };
@@ -780,7 +844,14 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
   process.on("SIGTERM", shutdown);
   console.log("[agent serve] A2A server + 内置对话（/quit 退出整个进程）");
   try {
-    return await runChatTui({ kernel, input: process.stdin, output: process.stdout, reload, a2aNode, catalog });
+    return await runChatTui({
+      kernel,
+      input: process.stdin,
+      output: process.stdout,
+      reload,
+      a2aNode,
+      catalog,
+    });
   } finally {
     await a2aNode.stop();
     for (const k of kernels) await k.close().catch(() => undefined);
@@ -870,7 +941,11 @@ async function cmdChat(args: ParsedArgs, requiredRole?: AgentProfile["role"]): P
   const kernel = await buildChatKernel(profile, args.dataDir, catalog);
   const kernels: AgentKernel[] = [kernel];
   const reload = async (file: string): Promise<AgentKernel> => {
-    const next = await buildChatKernel(loadProfile(resolveProfilePath(file)), args.dataDir, catalog);
+    const next = await buildChatKernel(
+      loadProfile(resolveProfilePath(file)),
+      args.dataDir,
+      catalog,
+    );
     kernels.push(next);
     return next;
   };
@@ -910,7 +985,9 @@ async function cmdChat(args: ParsedArgs, requiredRole?: AgentProfile["role"]): P
     try {
       await a2aNode.rebuild(profile);
     } catch (err) {
-      process.stderr.write(`[a2a] 节点启动失败（对话继续）：${err instanceof Error ? err.message : String(err)}\n`);
+      process.stderr.write(
+        `[a2a] 节点启动失败（对话继续）：${err instanceof Error ? err.message : String(err)}\n`,
+      );
     }
   }
 
@@ -1006,10 +1083,12 @@ async function cmdBuyerSupplier(args: ParsedArgs): Promise<number> {
         return EXIT.CONFIG;
       }
       if (action === "save") {
-        printJson({ ok: true, relationship: await supplierSave({ ...base, merchantId: id, catalogUrl: catalog }) });
+        printJson({
+          ok: true,
+          relationship: await supplierSave({ ...base, merchantId: id, catalogUrl: catalog }),
+        });
       } else if (action === "watch") {
-        const intervalSeconds =
-          args.interval !== undefined ? Number(args.interval) : undefined;
+        const intervalSeconds = args.interval !== undefined ? Number(args.interval) : undefined;
         if (args.interval !== undefined && !Number.isInteger(intervalSeconds)) {
           process.stderr.write("--interval 必须是整数秒（≥3600）\n");
           return EXIT.CONFIG;
@@ -1199,16 +1278,8 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
   const profileArgs = args.profile !== undefined ? ["--profile", args.profile] : [];
   const manager = new MerchantRuntimeManager({
     dir: dirs.merchantDataDir,
-    services: [
-      {
-        name: "a2a",
-        command: [process.execPath, cliEntry, "merchant", "start", "--no-chat", ...profileArgs],
-      },
-      {
-        name: "mcp",
-        command: [process.execPath, cliEntry, "merchant", "mcp", "serve", ...profileArgs],
-      },
-    ],
+    // BUG-04：子进程显式携带统一 --data-dir 与确定 cwd（三槽位解析结果）。
+    services: buildRuntimeServiceSpecs({ dirs, cliEntry, profileArgs }),
   });
 
   if (action === "status") {
@@ -1216,9 +1287,13 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
     return EXIT.OK;
   }
   if (action === "health") {
+    const registration = readRegistrationStatus(dirs.merchantDataDir);
+    const pendingCommands = countPendingMerchantCommands(dirs.merchantDataDir);
     const report = collectMerchantHealth({
       dataDir: dirs.merchantDataDir,
       services: manager.status(),
+      ...(registration !== undefined ? { registration } : {}),
+      ...(pendingCommands !== undefined ? { pendingCommands } : {}),
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return report.ok ? EXIT.OK : EXIT.TRANSIENT;
@@ -1231,13 +1306,32 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
     return EXIT.OK;
   }
   // start：前台监控，异常退出自动重启；Ctrl+C 优雅关闭全部。
-  // 周期任务（V2 阶段四）：健康轮询（报告落 run/health.json）+ 持续备份。
+  // 周期任务（V2 阶段四 + BUG-05）：健康轮询先**实时**执行能力探测（不只读
+  // 启动时落盘的旧记录），再产出健康报告；持续备份。
+  // fake provider（离线演示）无真实上游：探测写 ok 桩并注明。
+  const probeClient = isFakeProvider(profile)
+    ? undefined
+    : new HttpMerchantClient(profile.commerce.base_url, new ProfileCredentialBroker(profile));
+  const probePath = path.join(dirs.merchantDataDir, "capability-probe.json");
   const jobs = new MerchantJobs();
   for (const job of standardMerchantJobs({
     healthPoll: async () => {
+      if (probeClient !== undefined) {
+        await probeClient.probeCapabilities({ persistPath: probePath });
+      } else {
+        writeFileSync(
+          probePath,
+          `${JSON.stringify({ ok: true, version: "fake", probed_at: new Date().toISOString(), capabilities: { catalog_read: true, catalog_write: true, inventory_write: true, listing_pause: true, resolve_review: true } }, null, 2)}\n`,
+          { mode: 0o600 },
+        );
+      }
+      const registration = readRegistrationStatus(dirs.merchantDataDir);
+      const pendingCommands = countPendingMerchantCommands(dirs.merchantDataDir);
       const report = collectMerchantHealth({
         dataDir: dirs.merchantDataDir,
         services: manager.status(),
+        ...(registration !== undefined ? { registration } : {}),
+        ...(pendingCommands !== undefined ? { pendingCommands } : {}),
       });
       writeFileSync(
         path.join(dirs.merchantDataDir, "runtime", "health.json"),
@@ -1257,7 +1351,9 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
     jobs.register(job);
   }
   jobs.start();
-  console.log("[merchant runtime] 监控 a2a + mcp（异常退出自动重启；健康轮询 + 持续备份；Ctrl+C 停全部）");
+  console.log(
+    "[merchant runtime] 监控 a2a + mcp（异常退出自动重启；健康轮询 + 持续备份；Ctrl+C 停全部）",
+  );
   await manager.supervise();
   const shutdown = async (): Promise<void> => {
     jobs.stop();
@@ -1286,6 +1382,40 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
  *   kiwi merchant mcp serve [--profile <file>] [--host <host>] [--port N] [--data-dir <dir>]
  */
 async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
+  // `kiwi merchant mcp admin-passwd`：初始化/重置管理员口令（BUG-01 账户来源：
+  // 单商家实例管理员 = 本实例 principal）。新口令只从环境变量读取
+  // （KIWI_MERCHANT_ADMIN_PASSWORD），绝不出现在命令行/日志；落盘为 scrypt 哈希。
+  if (args.command[2] === "admin-passwd") {
+    const profile = requireProfileOrDefault(args);
+    if (profile.role !== "merchant") {
+      process.stderr.write("kiwi merchant mcp admin-passwd 需要 merchant profile\n");
+      return EXIT.CONFIG;
+    }
+    const password = (process.env.KIWI_MERCHANT_ADMIN_PASSWORD ?? "").trim();
+    if (password === "") {
+      process.stderr.write(
+        "请通过环境变量 KIWI_MERCHANT_ADMIN_PASSWORD 提供新口令（至少 8 位；不要写在命令行）\n",
+      );
+      return EXIT.CONFIG;
+    }
+    const dirs = resolveMerchantMcpDirs({
+      ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+      agentId: profile.agent_id,
+    });
+    try {
+      writeAdminCredentials(dirs.merchantDataDir, {
+        principalId: profile.agent_id,
+        merchantId: profile.owner_id,
+        password,
+        force: args.force,
+      });
+    } catch (err) {
+      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+      return EXIT.CONFIG;
+    }
+    process.stdout.write("管理员口令已设置（哈希落盘 admin-credentials.json，0600）\n");
+    return EXIT.OK;
+  }
   if (args.command[2] !== "serve") {
     process.stderr.write(
       "usage: kiwi merchant mcp serve [--profile <file>] [--host <host>] [--port N] [--data-dir <dir>]\n",
@@ -1303,24 +1433,35 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
     process.stderr.write("profile merchant_mcp.enabled=false：MCP server 未启用\n");
     return EXIT.CONFIG;
   }
-  const host = args.catalogHost ?? mcpConfig?.host ?? DEFAULT_MERCHANT_MCP_HOST;
+  // 正式 WorkBuddy Connector 省略 auth_mode 即走 OAuth；显式 token 仅保留给
+  // 过渡连接器。无 public_url 时的 OAuth 默认只监听 loopback，避免意外把
+  // 未配置公网 issuer 的服务暴露在 0.0.0.0。
+  const authMode = mcpConfig?.auth_mode ?? "oauth";
+  const host =
+    args.catalogHost ??
+    mcpConfig?.host ??
+    (authMode === "oauth" && mcpConfig?.public_url === undefined
+      ? "127.0.0.1"
+      : DEFAULT_MERCHANT_MCP_HOST);
   const port = args.port ?? mcpConfig?.port ?? DEFAULT_MERCHANT_MCP_PORT;
   const mcpPath = mcpConfig?.path ?? DEFAULT_MERCHANT_MCP_PATH;
   // 数据目录接线（V2 §5.1）：merchant/principal/transportSessionId 显式注入，
   // 路径是 (dataDir, agentId) 的纯函数——重启稳定，传输会话不影响目录。
-  const dirs = resolveMerchantMcpDirs({ ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}), agentId: profile.agent_id });
+  const dirs = resolveMerchantMcpDirs({
+    ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+    agentId: profile.agent_id,
+  });
 
-  // 认证模式（V2 阶段一）：oauth = 自建 OAuth 2.1 授权服务器（正式）；
-  // token = V1 静态 Bearer（过渡）。默认 token；fail-closed 判定见下。
-  const authMode = mcpConfig?.auth_mode ?? "token";
+  // 认证模式（V2）：oauth = 自建 OAuth 2.1 授权服务器（正式）；
+  // token = V1 静态 Bearer（过渡）。fail-closed 判定见下。
   let oauth: MerchantOAuthServer | undefined;
   let oauthDb: DatabaseSync | undefined;
+  let oauthStore: MerchantOAuthStore | undefined;
   let verifier: MerchantMcpAuthVerifier | undefined;
   if (authMode === "oauth") {
     // issuer：public_url（生产 https）优先；loopback 开发推导为 http://127.0.0.1:<port>。
     const issuer =
-      mcpConfig?.public_url ??
-      (isLoopbackHost(host) ? `http://127.0.0.1:${port}` : undefined);
+      mcpConfig?.public_url ?? (isLoopbackHost(host) ? `http://127.0.0.1:${port}` : undefined);
     if (issuer === undefined) {
       process.stderr.write(
         "merchant_mcp.auth_mode=oauth 且监听非 loopback 地址时必须配置 merchant_mcp.public_url（https）作为 OAuth issuer\n",
@@ -1330,17 +1471,19 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
     // 授权码/token/客户端注册落状态目录 oauth.sqlite（单 owner 写；0600）。
     oauthDb = new DatabaseSync(path.join(dirs.merchantDataDir, "oauth.sqlite"));
     chmodSync(path.join(dirs.merchantDataDir, "oauth.sqlite"), 0o600);
-    const oauthStore = new MerchantOAuthStore({ db: oauthDb });
+    oauthStore = new MerchantOAuthStore({ db: oauthDb });
     oauth = new MerchantOAuthServer({
       store: oauthStore,
       issuer,
       resource: `${issuer}${mcpPath}`,
       connectorSource: "kiwi-merchant",
       merchantName: profile.name ?? profile.owner_id,
-      principalId: profile.agent_id,
       merchantId: profile.owner_id,
     });
-    verifier = new MerchantOAuthVerifier({ store: oauthStore, expectedMerchantId: profile.owner_id });
+    verifier = new MerchantOAuthVerifier({
+      store: oauthStore,
+      expectedMerchantId: profile.owner_id,
+    });
   } else {
     verifier = resolveMerchantMcpVerifier(mcpConfig?.token_env);
   }
@@ -1375,7 +1518,8 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
   // draft_product_change 候选的参数在库内、钩子可确定性重建，留给
   // service.recoverPendingDrafts() 恢复（阶段四审批闭环）。
   for (const candidate of approvals.listPending()) {
-    if (candidate.tool !== "draft_product_change") approvals.expireCandidate(candidate.candidate_id);
+    if (candidate.tool !== "draft_product_change")
+      approvals.expireCandidate(candidate.candidate_id);
   }
 
   // merchantClient：fake provider 走离线 Fake，否则真实网关（同 kernel-builder）。
@@ -1412,6 +1556,14 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
           now,
         })
       : undefined;
+  // BUG-07：运行中策略提供器（覆盖层 <merchantDataDir>/policy-overrides.json）。
+  // 本进程（MCP）为写端：校验 patch + 原子写完整生效策略；A2A 子进程为读端：
+  // 按文件 mtime 读取——策略变更跨进程立即生效，不再只落盘不生效。
+  const policyRuntime = new MerchantPolicyRuntime({
+    basePolicy: profile.merchant_policy,
+    file: path.join(dirs.merchantDataDir, "policy-overrides.json"),
+    now,
+  });
   // 共享业务入口（V2 阶段二）：merchant-core 包装 V1 facade（facade 语义不变），
   // MCP 工具层经 core 调用；私密读取审计目录落 merchantDataDir/private-audit。
   const service = new MerchantCoreService({
@@ -1427,19 +1579,19 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
     auditDir: path.join(dirs.merchantDataDir, "private-audit"),
     // 命令记录授权主体 = 审批 store principal（批准/拒绝主体一致性校验）。
     commandPrincipalId: principal.principal_id,
+    // BUG-02：一次性确认凭证存储（OAuth 模式；execute/reject 必须携带有效凭证）。
+    ...(oauthStore !== undefined ? { confirmations: oauthStore } : {}),
     // 长任务 operation store（与命令记录同一 state.sqlite，单 owner 写）。
     operations: new MerchantOperationStore({ db, now }),
     // F08 能力接线：能力探测落盘记录中 listing_pause=false 时 fail-closed「不可得」。
     ...(probeCapabilitiesListingPause(dirs.merchantDataDir) !== undefined
       ? { capabilities: { listing_pause: probeCapabilitiesListingPause(dirs.merchantDataDir) } }
       : {}),
-    // F17 策略热更新接缝：覆盖层落 <dataDir>/policy-overrides.json（0600，即时生效）。
-    applyPolicyOverride: (patch) => {
-      const file = path.join(dirs.merchantDataDir, "policy-overrides.json");
-      writeFileSync(file, `${JSON.stringify({ updated_at: now(), patch }, null, 2)}\n`, {
-        mode: 0o600,
-      });
-    },
+    // F17/BUG-07 策略热更新：经 MerchantPolicyRuntime 校验 + 原子写完整生效
+    // 策略（版本/digest 回执进命令记录）；A2A 进程按同一文件 mtime 读取生效。
+    applyPolicyOverride: (patch) => policyRuntime.apply(patch),
+    // 运行中策略读取：执行器硬策略（底价兜底）按当前生效策略校验。
+    currentPolicy: () => policyRuntime.current().policy,
   });
   // 审批闭环（阶段三推广版）：恢复全部已注册写工具的 pending 命令（覆盖 V1
   // recoverPendingDrafts 语义）；未注册工具的死候选标 expired。
@@ -1464,12 +1616,17 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
     ...(verifier !== undefined ? { auth: verifier } : {}),
     ...(oauth !== undefined ? { oauth } : {}),
     presentations,
-    // 配套商家确认页面（V2 阶段三）：宿主无可验证确认接口时的确认通道。
-    ...(verifier !== undefined
+    // 配套商家确认页面（BUG-01/03 修复后）：仅 OAuth 模式挂载（cookie 会话 +
+    // 一次性确认凭证；token 过渡模式无会话体系，确认走对话内核 /approve）。
+    ...(oauth !== undefined && oauthDb !== undefined && oauthStore !== undefined
       ? {
           admin: {
             merchantName: profile.name ?? profile.owner_id,
             surface: merchantAdminSurface(service),
+            sessions: new MerchantAdminSessions({ db: oauthDb }),
+            store: oauthStore,
+            adminDir: dirs.merchantDataDir,
+            secureCookies: (mcpConfig?.public_url ?? "").startsWith("https://"),
           },
         }
       : {}),
@@ -1632,14 +1789,20 @@ async function cmdMerchantPublish(args: ParsedArgs): Promise<number> {
   const ownerTokenSecret = process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET;
   const merchantTokenEnv = profile.merchant_public?.merchant_token_env;
   const merchantToken =
-    (merchantTokenEnv ? process.env[merchantTokenEnv] : undefined) || process.env.KIWI_MERCHANT_TOKEN || "";
+    (merchantTokenEnv ? process.env[merchantTokenEnv] : undefined) ||
+    process.env.KIWI_MERCHANT_TOKEN ||
+    "";
   if (!merchantToken && !ownerTokenSecret) {
     process.stderr.write(
       "需要 KIWI_MERCHANT_TOKEN（随机 token，推荐）或 KIWI_CATALOG_OWNER_TOKEN_SECRET（legacy HMAC）\n",
     );
     return EXIT.CONFIG;
   }
-  const catalog = args.catalog ?? profile.merchant_public?.catalog_url ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
+  const catalog =
+    args.catalog ??
+    profile.merchant_public?.catalog_url ??
+    process.env.KIWI_CATALOG_URL ??
+    DEFAULT_CATALOG_URL;
   const report = await merchantPublish({
     profile,
     catalogBaseUrl: catalog,
@@ -1650,9 +1813,7 @@ async function cmdMerchantPublish(args: ParsedArgs): Promise<number> {
     ...(args.shoppingCliMerchant !== undefined
       ? { shoppingCliMerchant: args.shoppingCliMerchant }
       : {}),
-    ...(args.allowEmptyProjectionReconcile
-      ? { allowEmptyProjectionReconcile: true }
-      : {}),
+    ...(args.allowEmptyProjectionReconcile ? { allowEmptyProjectionReconcile: true } : {}),
   });
   printJson(report);
   return report.ok ? EXIT.OK : EXIT.CONFIG;
@@ -1696,10 +1857,17 @@ async function cmdDemo(args: ParsedArgs): Promise<number> {
  */
 async function cmdMerchantSetupPublic(args: ParsedArgs): Promise<number> {
   const profile = requireProfileOrDefault(args); // 无 --profile 时回退缺省 ~/.kiwi/kiwi.yaml
-  const port = args.port ?? profile.merchant_public?.a2a_port ?? (Number(process.env.KIWI_A2A_PORT ?? "") || 9000); // 与 startA2aNode 缺省一致
+  const port =
+    args.port ??
+    profile.merchant_public?.a2a_port ??
+    (Number(process.env.KIWI_A2A_PORT ?? "") || 9000); // 与 startA2aNode 缺省一致
   // 单一来源：--domain 显式 > profile.merchant_public.public_url（init 引导写入）>
   // KIWI_A2A_PUBLIC_URL env 提取；TTY 下再交互提示。
-  let domain = args.domain ?? profile.merchant_public?.public_url ?? extractPublicDomain(process.env.KIWI_A2A_PUBLIC_URL) ?? "";
+  let domain =
+    args.domain ??
+    profile.merchant_public?.public_url ??
+    extractPublicDomain(process.env.KIWI_A2A_PUBLIC_URL) ??
+    "";
   if (domain === "" && process.stdin.isTTY) {
     domain = await promptLine("公网域名（如 merchant.example.com，TLS 证书就用它）: ", "");
   }
@@ -1729,7 +1897,9 @@ async function cmdMerchantSetupPublic(args: ParsedArgs): Promise<number> {
       profilePath: args.profile,
       checkNow: args.check,
     });
-    process.stdout.write(`merchant ${report.merchantAgentId} · 端口 ${report.port} · 域名 ${report.domain}\n`);
+    process.stdout.write(
+      `merchant ${report.merchantAgentId} · 端口 ${report.port} · 域名 ${report.domain}\n`,
+    );
     process.stdout.write(`公网 IP：${report.publicIp ?? "（未能自动检测，请手动确认）"}\n`);
     const dnsMsg: Record<"ok" | "mismatch" | "unresolved" | "skipped", string> = {
       ok: `DNS 已指向本机（${report.dns.resolved}）`,
@@ -1770,12 +1940,18 @@ async function cmdMerchantUp(args: ParsedArgs): Promise<number> {
 
   // ── 域名 / 端口 / Caddyfile（profile 兜底）──
   const domain =
-    args.domain ?? profile.merchant_public?.public_url ?? extractPublicDomain(process.env.KIWI_A2A_PUBLIC_URL) ?? "";
+    args.domain ??
+    profile.merchant_public?.public_url ??
+    extractPublicDomain(process.env.KIWI_A2A_PUBLIC_URL) ??
+    "";
   if (domain === "") {
     process.stderr.write("需要公网域名——先 `kiwi merchant init` 填公网域名，或 --domain <域名>\n");
     return EXIT.CONFIG;
   }
-  const port = args.port ?? profile.merchant_public?.a2a_port ?? (Number(process.env.KIWI_A2A_PORT ?? "") || 9000);
+  const port =
+    args.port ??
+    profile.merchant_public?.a2a_port ??
+    (Number(process.env.KIWI_A2A_PORT ?? "") || 9000);
   const caddyfilePath = args.caddyfile ?? "Caddyfile.kiwi";
 
   // ── setup-public：检测 IP / DNS 检查 / 生成 Caddyfile（幂等）──
@@ -1786,7 +1962,9 @@ async function cmdMerchantUp(args: ParsedArgs): Promise<number> {
     merchantAgentId: profile.agent_id,
     profilePath: args.profile,
   });
-  process.stdout.write(`[merchant up] 域名 ${domain} · 端口 ${port} · Caddyfile ${caddyfilePath}\n`);
+  process.stdout.write(
+    `[merchant up] 域名 ${domain} · 端口 ${port} · Caddyfile ${caddyfilePath}\n`,
+  );
 
   // ── 检查 Caddy 是否安装（fail-closed）──
   const caddyOk = spawnSync("caddy", ["version"], { stdio: "ignore" }).status === 0;
@@ -1801,7 +1979,11 @@ async function cmdMerchantUp(args: ParsedArgs): Promise<number> {
   const caddy = spawn("caddy", ["run", "--config", caddyfilePath], { stdio: "inherit" });
 
   // ── 起 A2A 节点（与 merchant start --no-chat 同一路径）──
-  const catalog = args.catalog ?? profile.merchant_public?.catalog_url ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
+  const catalog =
+    args.catalog ??
+    profile.merchant_public?.catalog_url ??
+    process.env.KIWI_CATALOG_URL ??
+    DEFAULT_CATALOG_URL;
   const merchantToken = process.env.KIWI_MERCHANT_TOKEN || "";
   const serveDataDir = resolveServeDataDir(args.dataDir, profile.agent_id);
   let node: A2aNodeHandle | null = await startA2aNode({
@@ -1854,7 +2036,8 @@ async function cmdSetupHermes(): Promise<number> {
     username = process.env.USER ?? "user";
   }
   const dbPath = path.join(homedir(), ".kiwi", "buyer.sqlite");
-  const skillUrl = "https://raw.githubusercontent.com/harrylabsj/kiwi/main/skills/kiwi-buyer/SKILL.md";
+  const skillUrl =
+    "https://raw.githubusercontent.com/harrylabsj/kiwi/main/skills/kiwi-buyer/SKILL.md";
   const bundledSkillPath = fileURLToPath(new URL("../skills/kiwi-buyer/SKILL.md", import.meta.url));
   const skillPath = path.join(homedir(), ".hermes", "skills", "kiwi-buyer", "SKILL.md");
   const configured: string[] = [];
@@ -1907,11 +2090,15 @@ async function cmdSetupHermes(): Promise<number> {
         copyFileSync(bundledSkillPath, skillPath);
         chmodSync(skillPath, 0o600);
       } catch (err) {
-        process.stderr.write(`安装 kiwi-buyer skill 失败：${err instanceof Error ? err.message : String(err)}\n`);
+        process.stderr.write(
+          `安装 kiwi-buyer skill 失败：${err instanceof Error ? err.message : String(err)}\n`,
+        );
         return EXIT.CONFIG;
       }
     } else {
-      const skill = spawnSync("hermes", ["skills", "install", skillUrl, "--yes"], { stdio: "inherit" });
+      const skill = spawnSync("hermes", ["skills", "install", skillUrl, "--yes"], {
+        stdio: "inherit",
+      });
       if (skill.status !== 0 || !existsSync(skillPath)) {
         // 兜底：直接 fetch SKILL.md 写入 ~/.hermes/skills/kiwi-buyer/（Hermes skills 为 local 存储）
         process.stdout.write("[setup-hermes] hermes skills install 不可用，改用直接写入 ...\n");
@@ -1922,7 +2109,9 @@ async function cmdSetupHermes(): Promise<number> {
           mkdirSync(path.dirname(skillPath), { recursive: true, mode: 0o700 });
           writeFileSync(skillPath, content, { mode: 0o600 });
         } catch (err) {
-          process.stderr.write(`安装 kiwi-buyer skill 失败：${err instanceof Error ? err.message : String(err)}\n`);
+          process.stderr.write(
+            `安装 kiwi-buyer skill 失败：${err instanceof Error ? err.message : String(err)}\n`,
+          );
           return EXIT.CONFIG;
         }
       }
@@ -2000,7 +2189,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return args.profile !== undefined ? await cmdDoctor(args) : await cmdProductDoctor();
     }
     if (cmd === "agent" && sub === "run") return await cmdAgentRun(args);
-    if (cmd === "agent" && sub === "serve") return await cmdAgentServe(args);  // 旧命令别名保留
+    if (cmd === "agent" && sub === "serve") return await cmdAgentServe(args); // 旧命令别名保留
     if (cmd === "tui") return await cmdTui(args);
     if (cmd === "chat") return await cmdChat(args);
     if (cmd === "weixin") {
@@ -2048,13 +2237,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (cmd === "mcp") {
       // `kiwi mcp serve` —— kiwi-buyer-mcp stdio server（战略 v2.5 §6.1）。
       if (sub === "serve") return await runMcpServe(args.command.slice(2));
-      process.stderr.write("usage: kiwi mcp serve [--db <file>] [--principal <id>] [--agent <id>] [--session <id>] [--policy <file>] [--catalog-url <url>] [--marketplace-url <url>] [--a2a-*]\n");
+      process.stderr.write(
+        "usage: kiwi mcp serve [--db <file>] [--principal <id>] [--agent <id>] [--session <id>] [--policy <file>] [--catalog-url <url>] [--marketplace-url <url>] [--a2a-*]\n",
+      );
       return EXIT.CONFIG;
     }
     if (cmd === "buyer-api") {
       // `kiwi buyer-api serve` —— Buyer Core 的 HTTP 包装（§6.3 单核心多包装）。
       if (sub === "serve") return await runHttpServe(args.command.slice(2));
-      process.stderr.write("usage: kiwi buyer-api serve [--db <file>] [--port <port>] [--host <host>] [--marketplace-url <url>] [--buyer-bootstrap-token <token>]\n");
+      process.stderr.write(
+        "usage: kiwi buyer-api serve [--db <file>] [--port <port>] [--host <host>] [--marketplace-url <url>] [--buyer-bootstrap-token <token>]\n",
+      );
       return EXIT.CONFIG;
     }
     if (cmd === "metrics") {
@@ -2082,7 +2275,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         }
         return EXIT.OK;
       }
-      process.stderr.write("usage: kiwi catalog serve [--db <file>] [--host <host>] [--port <port>]\n");
+      process.stderr.write(
+        "usage: kiwi catalog serve [--db <file>] [--host <host>] [--port <port>]\n",
+      );
       return EXIT.CONFIG;
     }
     if (cmd === "down") {

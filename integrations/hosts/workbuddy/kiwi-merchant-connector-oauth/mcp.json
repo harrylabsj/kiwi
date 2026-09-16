@@ -231,36 +231,6 @@
       }
     },
     {
-      "name": "kiwi_merchant_execute_approved",
-      "description": "确认通道：批准并执行一个 pending 命令（按 command_id）。执行前重校验授权主体/前置版本/有效期/硬策略；重复执行幂等拒绝。",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "command_id": {
-            "type": "string",
-            "description": "prepare 返回的命令 id"
-          }
-        },
-        "required": ["command_id"],
-        "additionalProperties": false
-      }
-    },
-    {
-      "name": "kiwi_merchant_reject_candidate",
-      "description": "确认通道：拒绝一个 pending 命令（按 command_id），拒绝后不执行。",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "command_id": {
-            "type": "string",
-            "description": "prepare 返回的命令 id"
-          }
-        },
-        "required": ["command_id"],
-        "additionalProperties": false
-      }
-    },
-    {
       "name": "kiwi_merchant_prepare_products_import",
       "description": "CSV 商品导入（prepare：解析预览 + 逐行回执，不执行）。相同幂等键不重复导入；批准后逐行执行，部分成功逐项回执。",
       "inputSchema": {

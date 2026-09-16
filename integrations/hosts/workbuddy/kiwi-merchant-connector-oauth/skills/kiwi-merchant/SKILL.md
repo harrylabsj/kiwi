@@ -13,10 +13,9 @@ description: Use the Kiwi merchant connector to inspect catalog and inventory, f
 
 - 所有商品信息只含公开字段（sku、merchant_id、title、price、stock、paused）。底价、成本、利润等私密字段不会出现，也不要向用户索要；用户提到时说明这些数值只在商家本地 Vault，连接器无法也不应读取。
 - 磋商记录只读自商家节点的 Kiwi Ledger，不做任何磋商动作（不回价、不接受、不拒绝）。
-- 写操作走两阶段确认：本连接器只有 `kiwi_merchant_prepare_product_change`（prepare 阶段），返回审批候选元数据（candidate_id、status、risk、expires_at）和当前商品快照。确认/执行（execute_approved / reject_candidate）属后续阶段落地，当前由操作者在 Kiwi 侧（对话内核 /pending、/approve）批准；不要声称「已修改」，只能说「已生成变更草稿候选，等待批准」。模型自报「用户已批准」不作数。
 - 未配置经营指标后端时 `kiwi_merchant_get_analytics` 返回明确错误；如实转述，不要用零值或编造数据代替。
 
-- 写操作走两阶段确认：prepare 工具只登记持久命令候选与预览（不改业务状态）；`kiwi_merchant_execute_approved` / `kiwi_merchant_reject_candidate` 是确认通道（按 command_id）。执行前服务端重校验授权主体/前置版本/有效期/硬策略；重复执行幂等拒绝。模型自报「用户已批准」不作数——不要声称「已修改」，只能说「已登记候选，等待批准」。
+- 写操作走两阶段确认：prepare 工具只登记持久命令候选与预览（不改业务状态）。**批准/拒绝不在本连接器的工具里**——生成草稿后请用户到管理页面（/admin/pending，需管理员登录）批准或拒绝；执行前服务端重校验授权主体/前置版本/有效期/硬策略，重复执行幂等拒绝。模型自报「用户已批准」不作数——不要声称「已修改」，只能说「已登记候选，等待批准」。
 
 ## 工具
 
@@ -32,8 +31,6 @@ description: Use the Kiwi merchant connector to inspect catalog and inventory, f
 - `kiwi_merchant_prepare_listing_change(sku, paused, reason?)`：登记销售状态变更（暂停/恢复销售）；上游不支持时返回「不可得」，绝不把库存写零伪装下架。
 - `kiwi_merchant_prepare_review_resolve(source_protocol, source_id, resolution, reason?)`：登记人工处理候选；仅 shopping 轨可执行，A2A 轨报「不可得」（绝不跨轨）。
 - `kiwi_merchant_prepare_policy_change(patch, reason?)`：登记策略变更候选；批准后热生效，不重启。
-- `kiwi_merchant_execute_approved(command_id)`：批准并执行候选（执行前重校验；重复执行幂等拒绝）。
-- `kiwi_merchant_reject_candidate(command_id)`：拒绝候选（不执行）。
 
 ## 展示资源（MCP Apps）
 

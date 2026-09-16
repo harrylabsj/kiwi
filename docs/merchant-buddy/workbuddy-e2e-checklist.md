@@ -36,7 +36,7 @@
 ### 4. 写闭环两阶段确认
 
 1. `kiwi_merchant_prepare_inventory_update` 登记候选 → 不执行（库存未变）。
-2. `kiwi_merchant_execute_approved`（command_id）→ 执行并回读。
+2. 到管理页面批准（/admin/pending，管理员登录 + 一次性确认凭证）→ 执行并回读。
 3. 重复执行同一 command_id → 拒绝（不重复执行）。
    - 证据：三步的工具返回 + 库存回读值。
 

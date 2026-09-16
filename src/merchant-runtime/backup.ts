@@ -15,12 +15,20 @@
  */
 
 /**
- * 持续备份（V2 阶段四：src/merchant-runtime/backup.ts；阶段一 jobs 接缝落地）。
+ * 持续备份（V2 阶段四 + BUG-06 修复：src/merchant-runtime/backup.ts）。
  *
- * 状态目录快照：复制 SQLite/JSONL/Ledger 等到 backups/<ISO 时间戳>/，
- * 写 manifest（文件清单 + 大小 + sha256）供恢复校验；轮换保留最近 N 份。
- * 恢复演练：restore(snapshot, target) 按 manifest 校验后回写。
- * RPO=0 口径：已确认询价/协议在 Ledger（<dataDir>/a2a/ledger）内，快照包含之。
+ * 事务一致性：
+ *   - SQLite 文件用 `VACUUM INTO`（读事务一致性快照；源库 WAL 模式下并发写
+ *     安全；busy 时短暂重试，仍失败则本轮备份 fail-closed 记错误）；
+ *   - 快照完成后实际打开备份库跑 `PRAGMA integrity_check`，不通过即删除该轮
+ *     快照并抛错（绝不留下不可恢复的快照）；
+ *   - Ledger 等文件类数据在 SQLite 快照之后复制——最终一致性边界：append
+ *     中的最后一行可能是部分写入，恢复端按 Ledger 链校验容错（文档化，
+ *     见 deploy/merchant-bundle/README.md）。
+ *
+ * RPO 口径（工程诚实）：周期快照的 RPO ≤ 备份周期（缺省 5 分钟），
+ * 不宣称 RPO=0；RPO=0 需同步持久化/持续复制（留主备阶段）。
+ * 快照写 manifest（文件清单 + 大小 + sha256）供恢复校验；轮换保留最近 N 份。
  */
 
 import { createHash } from "node:crypto";
@@ -35,6 +43,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 export interface BackupManifest {
   created_at: string;
@@ -60,6 +69,53 @@ function sha256File(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
+/**
+ * SQLite 事务一致性快照（BUG-06）：VACUUM INTO（读事务一致；源库 WAL 下并发
+ * 写安全）。busy/失败短暂重试，仍失败抛错（本轮备份 fail-closed）。
+ * 快照后打开备份库跑 integrity_check——不通过即抛错（调用方删除该轮快照）。
+ */
+function snapshotSqlite(src: string, dst: string): void {
+  mkdirSync(path.dirname(dst), { recursive: true, mode: 0o700 });
+  rmSync(dst, { force: true });
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let db: DatabaseSync | undefined;
+    try {
+      db = new DatabaseSync(src);
+      db.exec("PRAGMA busy_timeout = 2000");
+      // VACUUM INTO 目标路径防注入：单引号转义
+      db.exec(`VACUUM INTO '${dst.replaceAll("'", "''")}'`);
+      db.close();
+      db = undefined;
+      const check = new DatabaseSync(dst);
+      try {
+        const rows = check.prepare("PRAGMA integrity_check").all() as Array<{
+          integrity_check: string;
+        }>;
+        if (rows.length !== 1 || rows[0]?.integrity_check !== "ok") {
+          throw new Error(`备份库 integrity_check 未通过：${dst}（${JSON.stringify(rows)}）`);
+        }
+      } finally {
+        check.close();
+      }
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (db !== undefined) {
+        try {
+          db.close();
+        } catch {
+          // 忽略
+        }
+      }
+      rmSync(dst, { force: true });
+    }
+  }
+  throw new Error(
+    `SQLite 快照失败（${src}）：${lastErr instanceof Error ? lastErr.message : String(lastErr)}`,
+  );
+}
+
 /** 快照备份 + 轮换（keepLatest 份）。幂等：同时间戳目录复用覆盖。 */
 export function runBackup(options: {
   dataDir: string;
@@ -75,21 +131,43 @@ export function runBackup(options: {
 
   const files: string[] = [];
   walk(options.dataDir, options.dataDir, files);
-  // 不备份 backups 自身（若 backups 在 dataDir 内）与锁文件
+  // 不备份 backups 自身（若 backups 在 dataDir 内）、锁文件与 SQLite WAL/SHM 临时文件
   const included = files.filter(
-    (f) => !f.startsWith("backups") && !f.endsWith(".lock") && !f.endsWith(".tmp"),
+    (f) =>
+      !f.startsWith("backups") &&
+      !f.endsWith(".lock") &&
+      !f.endsWith(".tmp") &&
+      !f.endsWith(".sqlite-wal") &&
+      !f.endsWith(".sqlite-shm"),
   );
-  const manifest: BackupManifest = { created_at: now, source_dir: options.dataDir, files: [] };
-  for (const rel of included.sort()) {
-    const src = path.join(options.dataDir, rel);
-    const dst = path.join(snapshotDir, rel);
-    mkdirSync(path.dirname(dst), { recursive: true, mode: 0o700 });
-    cpSync(src, dst);
-    manifest.files.push({ path: rel, bytes: statSync(src).size, sha256: sha256File(src) });
+  try {
+    // SQLite 先行（VACUUM INTO 一致性快照），文件类随后（最终一致性边界见文件头）
+    const sorted = included.sort((a, b) => {
+      const aSql = a.endsWith(".sqlite") ? 0 : 1;
+      const bSql = b.endsWith(".sqlite") ? 0 : 1;
+      return aSql - bSql || (a < b ? -1 : 1);
+    });
+    const manifest: BackupManifest = { created_at: now, source_dir: options.dataDir, files: [] };
+    for (const rel of sorted) {
+      const src = path.join(options.dataDir, rel);
+      const dst = path.join(snapshotDir, rel);
+      if (rel.endsWith(".sqlite")) {
+        snapshotSqlite(src, dst);
+      } else {
+        mkdirSync(path.dirname(dst), { recursive: true, mode: 0o700 });
+        cpSync(src, dst);
+      }
+      // manifest 记录的是**快照内容**的摘要（dst），恢复校验的是快照自身完整性
+      manifest.files.push({ path: rel, bytes: statSync(dst).size, sha256: sha256File(dst) });
+    }
+    writeFileSync(path.join(snapshotDir, "manifest.json"), JSON.stringify(manifest, null, 2), {
+      mode: 0o600,
+    });
+  } catch (err) {
+    // 失败轮次不留半成品快照
+    rmSync(snapshotDir, { recursive: true, force: true });
+    throw err;
   }
-  writeFileSync(path.join(snapshotDir, "manifest.json"), JSON.stringify(manifest, null, 2), {
-    mode: 0o600,
-  });
 
   // 轮换：保留最近 keep 份
   const snapshots = readdirSync(options.backupsDir, { withFileTypes: true })
@@ -104,6 +182,9 @@ export function runBackup(options: {
     rmSync(path.join(options.backupsDir, old), { recursive: true, force: true });
     rotatedOut.push(old);
   }
+  const manifest = JSON.parse(
+    readFileSync(path.join(snapshotDir, "manifest.json"), "utf8"),
+  ) as BackupManifest;
   return { snapshot_dir: snapshotDir, manifest, rotated_out: rotatedOut };
 }
 

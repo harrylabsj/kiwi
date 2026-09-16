@@ -100,7 +100,7 @@ describe("验收组 1：商家纯度", () => {
   it("tools/list 无采购/买方能力；连接器 Skill 不挂买方工具", () => {
     const { core, db } = setupCore();
     const tools = buildMerchantMcpTools(core).listTools(undefined);
-    expect(tools.length).toBe(17);
+    expect(tools.length).toBe(15); // BUG-02：execute/reject 已移出 MCP 注册表
     for (const t of tools) {
       expect(t.name.startsWith("kiwi_merchant_")).toBe(true);
       expect(t.name).not.toMatch(/buyer|sourcing|supplier|purchase/i);
@@ -309,7 +309,7 @@ describe("验收组 9：灾难恢复", () => {
     const restored = restoreBackup({ snapshotDir: backup.snapshot_dir, targetDir: dataDir });
     expect(restored.verified).toBe(true);
     const reopened = new LedgerStore({ dir: ledgerDir, now: () => T0 });
-    expect(reopened.listNegotiations()).toContain("neg_rpo"); // RPO=0（已确认磋商不丢）
+    expect(reopened.listNegotiations()).toContain("neg_rpo"); // 备份集内含已确认磋商（RPO ≤ 备份周期口径）
     expect(PLATFORM_MANUAL["灾难恢复_主备实测"]).toContain("fencing");
   });
 });

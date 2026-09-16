@@ -26,7 +26,7 @@
  * 阶段一为单活形态；主备 fencing 留阶段四（V2 §5.3）。
  */
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -36,6 +36,8 @@ export interface ManagedServiceSpec {
   /** 完整 argv（如 [process.execPath, "dist/cli.js", "merchant", "start", "--no-chat"]）。 */
   command: string[];
   env?: Record<string, string>;
+  /** 确定的工作目录（BUG-04：缺省 = 数据根目录语义由调用方保证）。 */
+  cwd?: string;
 }
 
 export interface ManagedServiceState {
@@ -76,6 +78,12 @@ interface RunningChild {
   pid: number;
   restarts: number;
   stopped: boolean;
+}
+
+interface PidRecord {
+  pid: number;
+  command: string[];
+  cwd?: string;
 }
 
 export class MerchantRuntimeManager {
@@ -132,11 +140,49 @@ export class MerchantRuntimeManager {
   /** 读取 pidfile 里的存活状态（管理入口重启后据此恢复视图）。 */
   private livePid(name: string): number | undefined {
     try {
-      const pid = Number(readFileSync(this.pidFile(name), "utf8").trim());
-      return Number.isInteger(pid) && pid > 0 && pidAlive(pid) ? pid : undefined;
+      const record = JSON.parse(readFileSync(this.pidFile(name), "utf8")) as PidRecord;
+      if (!Number.isInteger(record.pid) || record.pid <= 0 || !pidAlive(record.pid)) return undefined;
+      if (!this.matchesProcess(record.pid, this.spec(name))) return undefined;
+      return record.pid;
     } catch {
       return undefined;
     }
+  }
+
+  /** PID 存活不等于仍是 Kiwi 子进程；校验命令行，避免 PID 复用误杀。 */
+  private matchesProcess(pid: number, spec: ManagedServiceSpec): boolean {
+    // Windows does not provide a portable command-line query through the
+    // standard Node APIs; keep the live-pid behavior there and rely on the
+    // service manager's per-instance directory isolation.
+    if (process.platform === "win32") return true;
+    try {
+      const commandLine = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+        encoding: "utf8",
+        timeout: 2_000,
+      }).trim();
+      return spec.command.every((arg) => arg === "" || commandLine.includes(arg));
+    } catch {
+      return false;
+    }
+  }
+
+  private scheduleRestart(name: string, previous: RunningChild): void {
+    const delay = backoffMs(previous.restarts);
+    setTimeout(() => {
+      if (!this.supervising || previous.stopped) return;
+      void this.start(name)
+        .then(() => {
+          const next = this.children.get(name);
+          if (next !== undefined) next.restarts = previous.restarts;
+        })
+        .catch(() => {
+          // 配置/权限/工作目录错误也按退避持续重试，保持 7×24 manager 存活。
+          if (this.supervising && !previous.stopped) {
+            previous.restarts = Math.min(previous.restarts + 1, 32);
+            this.scheduleRestart(name, previous);
+          }
+        });
+    }, delay).unref();
   }
 
   /** 启动服务（已在运行 → already_running 拒绝重复启动）。 */
@@ -150,16 +196,27 @@ export class MerchantRuntimeManager {
       detached: true,
       stdio: ["ignore", "ignore", "ignore"],
       env: { ...process.env, ...spec.env },
+      ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}),
     });
+    // An invalid executable emits `error` asynchronously; attach a listener
+    // before checking pid so a failed spawn cannot crash the runtime manager.
+    child.once("error", () => undefined);
     child.unref();
     if (child.pid === undefined) {
       throw new MerchantRuntimeError(`服务 ${name} 启动失败（无 pid）`, "spawn_failed");
     }
     const state: RunningChild = { pid: child.pid, restarts: 0, stopped: false };
     this.children.set(name, state);
-    writeFileSync(this.pidFile(name), `${child.pid}\n`, { mode: 0o600 });
+    writeFileSync(
+      this.pidFile(name),
+      `${JSON.stringify({ pid: child.pid, command: spec.command, ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}) })}\n`,
+      { mode: 0o600 },
+    );
     rmSync(this.exitFile(name), { force: true });
-    child.on("exit", (code) => {
+    let finalized = false;
+    const finalize = (code: number | null): void => {
+      if (finalized) return;
+      finalized = true;
       writeFileSync(
         this.exitFile(name),
         `${JSON.stringify({ exit_code: code, at: this.now() })}\n`,
@@ -171,18 +228,12 @@ export class MerchantRuntimeManager {
       // 异常退出自动重启（显式 stop 的不重启）；退避防崩溃风暴。
       if (current !== undefined && !current.stopped && this.supervising) {
         current.restarts += 1;
-        const delay = backoffMs(current.restarts);
-        setTimeout(() => {
-          if (this.supervising && !current.stopped) {
-            void this.start(name).then((s) => {
-              const next = this.children.get(name);
-              if (next !== undefined) next.restarts = current.restarts;
-              void s;
-            });
-          }
-        }, delay).unref();
+        this.scheduleRestart(name, current);
       }
-    });
+    };
+    // spawn 的 error 事件若无监听会成为未处理 EventEmitter 错误，直接退出 manager。
+    child.once("error", () => finalize(null));
+    child.once("exit", (code) => finalize(code));
     return this.stateOf(name);
   }
 

@@ -103,8 +103,10 @@ export interface MerchantHandlerOptions {
   allowDemoPriceFallback?: boolean;
   /** 条件成交折扣百分比（deal = base × (1 - pct/100)）；缺省 5。 */
   dealDiscountPercent?: number;
-  /** merchant policy：确定性定价的 floor / 促销（per-SKU，可配置）。 */
-  merchantPolicy?: MerchantPolicy;
+  /** merchant policy：确定性定价的 floor / 促销（per-SKU，可配置）。
+   *  BUG-07：也接受 provider（每次报价时取运行中生效策略）——A2A 与 MCP
+   *  是不同进程，策略经覆盖层文件跨进程生效，handler 每请求读取最新值。 */
+  merchantPolicy?: MerchantPolicy | (() => MerchantPolicy | undefined);
 }
 
 /**
@@ -264,6 +266,9 @@ export function createMerchantHandler(
   const { ledger, now, sender, counterparty } = options;
   const offerPriceMinor = options.offerPriceMinor ?? MERCHANT_OFFER_PRICE_MINOR;
   const allowDemoPriceFallback = options.allowDemoPriceFallback ?? false;
+  // BUG-07：merchantPolicy 支持静态值或 provider——每请求解析运行中策略。
+  const policyOf = (): MerchantPolicy | undefined =>
+    typeof options.merchantPolicy === "function" ? options.merchantPolicy() : options.merchantPolicy;
   const conditionalByNegotiation = new Map<string, { conditional: Record<string, unknown>; quantity: number }>();
   // 审查 P2-D：终态（AGREEMENT_REACHED / WITHDRAWN / DECLINED / CANCELLED）
   // 不得以同一 negotiation_id 重开（§17.4/§21.2）——运行时此前无任何终态
@@ -570,8 +575,8 @@ export function createMerchantHandler(
       // merchant 定价是**确定性**的（不依赖 LLM）：floor / 促销是 merchant 自己的
       // 可配置策略。per-SKU 私有 floor（major→minor lossless；SKU 未列出用全局默认）。
       const policyForSku = (sku: string): { floorMinor: number; floorMajor: number | undefined } => {
-        const floorValue =
-          options.merchantPolicy?.price_floors?.[sku] ?? options.merchantPolicy?.min_unit_price_private;
+        const mp = policyOf();
+        const floorValue = mp?.price_floors?.[sku] ?? mp?.min_unit_price_private;
         const floorConv = floorValue !== undefined ? losslessToMinorUnits(floorValue, 2) : undefined;
         return {
           floorMinor: floorConv !== undefined && floorConv.lossless ? floorConv.amount_minor : 0,
@@ -582,7 +587,7 @@ export function createMerchantHandler(
        *  报具体 delivery_before（报价时间+天数，动态计算不过期）；未配置 → undefined，
        *  terms 省略 delivery_before（明确未知）。 */
       const deliveryBefore = (): string | undefined =>
-        resolveDeliveryBefore(options.merchantPolicy, now());
+        resolveDeliveryBefore(policyOf(), now());
       /** 买家还价（major→minor；KNP 里 buyer counter 的 unit_price）。 */
       const clampToBounds = (minor: number, floor: number, list: number): number =>
         Math.min(list, Math.max(minor, floor));
@@ -682,7 +687,7 @@ export function createMerchantHandler(
               : priceMinor;
           // 可配置促销（merchant_policy.promos[sku]）：买满 bulk_threshold 台，
           // 批量价 = max(floor, min(还价, list×(1-d%/100)))，比单台更便宜。
-          const promo = options.merchantPolicy?.promos?.[sku];
+          const promo = policyOf()?.promos?.[sku];
           const bulkThreshold = promo?.bulk_threshold ?? DEFAULT_BULK_THRESHOLD;
           const bulkMinor =
             promo !== undefined

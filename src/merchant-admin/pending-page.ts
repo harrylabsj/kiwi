@@ -28,16 +28,26 @@ import type { MerchantCoreService } from "../merchant-core/service.js";
 
 export interface MerchantAdminSurface {
   listPending(): WriteApprovalCandidate[];
-  executeApproved(commandId: string): Promise<unknown>;
-  rejectCandidate(commandId: string): Promise<unknown>;
+  /** 批准并执行（认证主体 + 一次性确认凭证逐次传入，执行层逐项核对）。 */
+  executeApproved(
+    commandId: string,
+    principalId: string,
+    confirmationToken?: string,
+  ): Promise<unknown>;
+  rejectCandidate(
+    commandId: string,
+    principalId: string,
+    confirmationToken?: string,
+  ): Promise<unknown>;
 }
 
-/** 从 merchant-core 构造管理面（确认通道 = core 的 execute/reject）。 */
+/** 从 merchant-core 构造管理面（确认通道 = core 的命令日志）。 */
 export function merchantAdminSurface(core: MerchantCoreService): MerchantAdminSurface {
   return {
     listPending: () => core.listPendingCommands(),
-    executeApproved: (id) => core.executeApproved(id),
-    rejectCandidate: (id) => core.rejectCandidate(id),
+    executeApproved: (id, principalId, token) =>
+      core.commands.executeApproved(id, principalId, token),
+    rejectCandidate: (id, principalId, token) => core.commands.reject(id, principalId, token),
   };
 }
 
@@ -53,6 +63,7 @@ function escapeHtml(text: string): string {
 export function renderPendingPage(
   merchantName: string,
   commands: WriteApprovalCandidate[],
+  tokenFor?: (candidateId: string, action: "approve" | "reject") => string,
 ): string {
   const rows = commands
     .map(
@@ -65,7 +76,12 @@ export function renderPendingPage(
   <td>
     <form method="post" action="/admin/decision" style="display:inline">
       <input type="hidden" name="command_id" value="${escapeHtml(c.candidate_id)}">
+      <input type="hidden" name="confirmation" value="${escapeHtml(tokenFor?.(c.candidate_id, "approve") ?? "")}">
       <button type="submit" name="decision" value="approve">批准并执行</button>
+    </form>
+    <form method="post" action="/admin/decision" style="display:inline">
+      <input type="hidden" name="command_id" value="${escapeHtml(c.candidate_id)}">
+      <input type="hidden" name="confirmation" value="${escapeHtml(tokenFor?.(c.candidate_id, "reject") ?? "")}">
       <button type="submit" name="decision" value="reject">拒绝</button>
     </form>
   </td>

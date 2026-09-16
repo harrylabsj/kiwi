@@ -40,8 +40,11 @@ import {
   type MerchantWorkbenchServiceDeps,
 } from "../merchant/workbench-service.js";
 import type { MerchantIntelligenceBackend } from "../agent/merchant/intelligence/backend.js";
+import type { MerchantOAuthStore } from "../auth/merchant-oauth.js";
 import { MerchantCommandLog } from "./commands.js";
 import { MerchantExecutorRegistry, type ExecutorContext } from "./executor.js";
+import type { ApplyPolicyResult } from "./policy-runtime.js";
+import type { MerchantPolicy } from "../config/profile.js";
 import { parseProductCsv } from "./product-import.js";
 import type { MerchantOperation, MerchantOperationStore } from "./operations.js";
 import { credentialsPathFor, syncStatePathFor } from "../weixin/credentials.js";
@@ -68,12 +71,19 @@ export interface MerchantCoreServiceDeps extends MerchantWorkbenchServiceDeps {
     conversation_id: string;
     resolution: string;
   }) => Promise<unknown>;
-  /** F17：策略热更新写入接缝（可选；缺省执行时「不可得」）。 */
-  applyPolicyOverride?: (patch: Record<string, unknown>) => Promise<void> | void;
+  /** F17：策略热更新写入接缝（可选；缺省执行时「不可得」）。BUG-07：实现
+   *  须校验+原子写完整生效策略并返回版本/digest（见 MerchantPolicyRuntime）。 */
+  applyPolicyOverride?:
+    | ((patch: Record<string, unknown>) => Promise<ApplyPolicyResult>)
+    | ((patch: Record<string, unknown>) => ApplyPolicyResult);
+  /** 运行中策略读取（BUG-07）：配置后执行器硬策略按当前生效策略执行。 */
+  currentPolicy?: () => MerchantPolicy | undefined;
   /** 长任务 operation store（V2 阶段四；CSV 导入/撤回幂等与逐项回执）。 */
   operations?: MerchantOperationStore;
   /** merchantDataDir（F29 微信绑定状态读取等本地状态接缝）。 */
   merchantDataDir?: string;
+  /** 一次性确认凭证存储（BUG-02；配置后 execute/reject 必须携带有效凭证）。 */
+  confirmations?: MerchantOAuthStore;
 }
 
 export class MerchantCoreService {
@@ -85,7 +95,9 @@ export class MerchantCoreService {
   private readonly capabilities?: { listing_pause?: boolean };
   private readonly resolveShoppingReview?: MerchantCoreServiceDeps["resolveShoppingReview"];
   private readonly applyPolicyOverride?: MerchantCoreServiceDeps["applyPolicyOverride"];
+  private readonly currentPolicy?: MerchantCoreServiceDeps["currentPolicy"];
   private readonly commandPrincipalId: string;
+  private readonly confirmationStore?: MerchantOAuthStore;
   private readonly operationsStore?: MerchantOperationStore;
   private readonly merchantDataDir?: string;
   private readonly now: () => string;
@@ -109,8 +121,10 @@ export class MerchantCoreService {
     if (deps.resolveShoppingReview !== undefined)
       this.resolveShoppingReview = deps.resolveShoppingReview;
     if (deps.applyPolicyOverride !== undefined) this.applyPolicyOverride = deps.applyPolicyOverride;
+    if (deps.currentPolicy !== undefined) this.currentPolicy = deps.currentPolicy;
     if (deps.operations !== undefined) this.operationsStore = deps.operations;
     if (deps.merchantDataDir !== undefined) this.merchantDataDir = deps.merchantDataDir;
+    if (deps.confirmations !== undefined) this.confirmationStore = deps.confirmations;
   }
 
   // ---- V1 facade 委托（MCP 工具层经此调用） --------------------------------
@@ -161,6 +175,7 @@ export class MerchantCoreService {
         ...(this.applyPolicyOverride !== undefined
           ? { applyPolicyOverride: this.applyPolicyOverride }
           : {}),
+        ...(this.currentPolicy !== undefined ? { currentPolicy: this.currentPolicy } : {}),
         ...(this.resolveShoppingReview !== undefined
           ? { resolveShoppingReview: this.resolveShoppingReview }
           : {}),
@@ -173,6 +188,7 @@ export class MerchantCoreService {
         mode: this.modeRef,
         now: this.now,
         principalId: this.commandPrincipalId,
+        ...(this.confirmationStore !== undefined ? { confirmations: this.confirmationStore } : {}),
       });
     }
     return this.commandLogInstance;
@@ -243,14 +259,14 @@ export class MerchantCoreService {
     });
   }
 
-  /** 确认通道：批准并执行（授权主体一致性 + 重校验 + 幂等 + 回读）。 */
-  executeApproved(commandId: string) {
-    return this.commands.executeApproved(commandId, this.commandPrincipalId);
+  /** 确认通道：批准并执行（授权主体一致性 + 确认凭证 + 重校验 + 幂等 + 回读）。 */
+  executeApproved(commandId: string, confirmationToken?: string) {
+    return this.commands.executeApproved(commandId, this.commandPrincipalId, confirmationToken);
   }
 
   /** 确认通道：拒绝候选。 */
-  rejectCandidate(commandId: string) {
-    return this.commands.reject(commandId, this.commandPrincipalId);
+  rejectCandidate(commandId: string, confirmationToken?: string) {
+    return this.commands.reject(commandId, this.commandPrincipalId, confirmationToken);
   }
 
   /**

@@ -56,7 +56,7 @@ describe("workbuddy merchant connector 包", () => {
   it("package-merchant-connector.mjs --check 通过（token 过渡包 + oauth 正式包）", () => {
     const result = spawnSync(process.execPath, [SCRIPT, "--check"], { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("17 tools");
+    expect(result.stdout).toContain("15 tools");
     const oauth = spawnSync(process.execPath, [SCRIPT, "--bundle=oauth", "--check"], {
       encoding: "utf8",
     });

@@ -48,6 +48,9 @@ export interface MerchantHealthReport {
     product_source: { ok: boolean; version?: string; error?: string };
     data_dir: { ok: boolean; path: string; writable: boolean };
     disk: { ok: boolean; free_bytes?: number };
+    registration: { ok: boolean; error?: string; evaluated: boolean };
+    backlog: { ok: true; pending: number; threshold: number };
+    certificate: { ok: boolean; days_left?: number; evaluated: boolean };
   };
   /** 结构化告警事件（V2 阶段四 7×24；超阈值/失效即产生，可供通知通道消费）。 */
   alerts: MerchantAlert[];
@@ -59,6 +62,8 @@ export const MIN_FREE_BYTES = 100 * 1024 * 1024;
 export const BACKLOG_ALERT_THRESHOLD = 50;
 /** 证书临期告警阈值（天；缺省 14）。 */
 export const CERT_EXPIRING_DAYS = 14;
+/** 能力探测记录最大有效期（BUG-05；缺省 3 分钟 = 3 个健康轮询周期）。 */
+export const PROBE_MAX_AGE_MS = 180_000;
 
 export interface MerchantHealthDeps {
   /** merchantDataDir（V2 §5.1）。 */
@@ -73,6 +78,8 @@ export interface MerchantHealthDeps {
   registration?: { ok: boolean; error?: string };
   /** TLS 证书剩余天数（可选；配置了才评）。 */
   certDaysLeft?: number;
+  /** 能力探测记录最大有效期（BUG-05；过期记录判 unhealthy）。 */
+  probeMaxAgeMs?: number;
 }
 
 export function collectMerchantHealth(deps: MerchantHealthDeps): MerchantHealthReport {
@@ -85,17 +92,24 @@ export function collectMerchantHealth(deps: MerchantHealthDeps): MerchantHealthR
   };
 
   // 商品源：读能力探测落盘记录（探测动作在 mcp serve 启动/健康轮询时执行）。
+  // 商品源：读能力探测落盘记录（BUG-05：加新鲜度判定——超时/连接失败/HTTP
+  // 异常/记录过期均判 unhealthy；实时探测由周期任务执行，见 cli runtime start）。
   const probePath = path.join(deps.dataDir, "capability-probe.json");
+  const probeMaxAgeMs = deps.probeMaxAgeMs ?? PROBE_MAX_AGE_MS;
   let productSource: MerchantHealthReport["checks"]["product_source"];
   if (!existsSync(probePath)) {
     productSource = { ok: false, error: "无能力探测记录（capability-probe.json 不存在）" };
   } else {
     try {
       const probe = JSON.parse(readFileSync(probePath, "utf8")) as MerchantCapabilityProbe;
+      const probedAt = Date.parse(probe.probed_at);
+      const stale =
+        !Number.isFinite(probedAt) || Date.parse(checkedAt) - probedAt > probeMaxAgeMs;
       productSource = {
-        ok: probe.ok === true,
+        ok: probe.ok === true && !stale,
         ...(probe.version !== undefined ? { version: probe.version } : {}),
         ...(probe.error !== undefined ? { error: probe.error } : {}),
+        ...(stale ? { error: `能力探测记录过期（probed_at ${probe.probed_at}，超过 ${probeMaxAgeMs}ms 未刷新）` } : {}),
       };
     } catch (err) {
       productSource = {
@@ -124,6 +138,7 @@ export function collectMerchantHealth(deps: MerchantHealthDeps): MerchantHealthR
     freeBytes = undefined;
   }
 
+  const pending = deps.pendingCommands ?? 0;
   const checks = {
     processes,
     product_source: productSource,
@@ -131,6 +146,21 @@ export function collectMerchantHealth(deps: MerchantHealthDeps): MerchantHealthR
     disk: {
       ok: freeBytes !== undefined && freeBytes >= minFree,
       ...(freeBytes !== undefined ? { free_bytes: freeBytes } : {}),
+    },
+    // registration/certificate are optional inputs, but when supplied their
+    // critical failures must affect health.ok rather than only producing an
+    // alert that callers might ignore.
+    registration: {
+      ok: deps.registration?.ok ?? true,
+      evaluated: deps.registration !== undefined,
+      ...(deps.registration?.error !== undefined ? { error: deps.registration.error } : {}),
+    },
+    // Backlog is a warning condition and should not trigger process restart.
+    backlog: { ok: true as const, pending, threshold: BACKLOG_ALERT_THRESHOLD },
+    certificate: {
+      ok: deps.certDaysLeft === undefined || deps.certDaysLeft > 0,
+      evaluated: deps.certDaysLeft !== undefined,
+      ...(deps.certDaysLeft !== undefined ? { days_left: deps.certDaysLeft } : {}),
     },
   };
 
@@ -159,7 +189,6 @@ export function collectMerchantHealth(deps: MerchantHealthDeps): MerchantHealthR
       message: `catalog 注册失效：${deps.registration.error ?? "未知"}`,
     });
   }
-  const pending = deps.pendingCommands ?? 0;
   if (pending > BACKLOG_ALERT_THRESHOLD) {
     alerts.push({
       code: "backlog",

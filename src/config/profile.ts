@@ -354,6 +354,98 @@ function reqFinite(value: unknown, field: string, source: string): asserts value
 }
 
 /**
+ * merchant_policy 解析与校验（BUG-07 抽取）：profile 加载与策略热更新覆盖层
+ * （policy-overrides.json）共用同一套规则——未知字段、非法值一律拒绝，保证
+ * 运行中策略与启动 profile 的校验口径完全一致。校验失败抛 ProfileError。
+ */
+export function parseMerchantPolicy(value: unknown, source: string): MerchantPolicy {
+  req(isObject(value), `${source}: merchant_policy must be a mapping`);
+  const mp = value;
+  rejectUnknownKeys(mp, MERCHANT_POLICY_KEYS, "merchant_policy", source);
+  if (mp.min_unit_price_private !== undefined) {
+    reqFinite(mp.min_unit_price_private, "merchant_policy.min_unit_price_private", source);
+    req(
+      mp.min_unit_price_private >= 0,
+      `${source}: merchant_policy.min_unit_price_private must be >= 0`,
+    );
+  }
+  if (mp.max_auto_discount_percent !== undefined) {
+    reqFinite(mp.max_auto_discount_percent, "merchant_policy.max_auto_discount_percent", source);
+    req(
+      mp.max_auto_discount_percent >= 0 && mp.max_auto_discount_percent <= 100,
+      `${source}: merchant_policy.max_auto_discount_percent must be between 0 and 100`,
+    );
+  }
+  if (mp.inventory_source !== undefined) {
+    req(
+      typeof mp.inventory_source === "string" && mp.inventory_source.length > 0,
+      `${source}: merchant_policy.inventory_source must be a non-empty string`,
+    );
+  }
+  if (mp.quote_ttl_seconds !== undefined) {
+    reqFinite(mp.quote_ttl_seconds, "merchant_policy.quote_ttl_seconds", source);
+    req(mp.quote_ttl_seconds > 0, `${source}: merchant_policy.quote_ttl_seconds must be > 0`);
+  }
+  if (mp.delivery_lead_days !== undefined) {
+    reqFinite(mp.delivery_lead_days, "merchant_policy.delivery_lead_days", source);
+    req(mp.delivery_lead_days > 0, `${source}: merchant_policy.delivery_lead_days must be > 0`);
+  }
+  if (mp.auto_negotiate !== undefined) {
+    req(
+      typeof mp.auto_negotiate === "boolean",
+      `${source}: merchant_policy.auto_negotiate must be a boolean`,
+    );
+  }
+  if (mp.human_review_on !== undefined) {
+    req(
+      Array.isArray(mp.human_review_on) &&
+        mp.human_review_on.every((c) => typeof c === "string" && c.length > 0),
+      `${source}: merchant_policy.human_review_on must be a list of non-empty strings`,
+    );
+  }
+  // per-SKU floor / discount：`{ sku: number }`，键非空字符串，值有限且合理。
+  if (mp.price_floors !== undefined) {
+    req(isObject(mp.price_floors), `${source}: merchant_policy.price_floors must be a mapping`);
+    for (const [sku, floor] of Object.entries(mp.price_floors)) {
+      req(sku.length > 0, `${source}: merchant_policy.price_floors key must be a non-empty string`);
+      reqFinite(floor, `merchant_policy.price_floors.${sku}`, source);
+      req(floor >= 0, `${source}: merchant_policy.price_floors.${sku} must be >= 0`);
+    }
+  }
+  if (mp.sku_max_discount_percent !== undefined) {
+    req(
+      isObject(mp.sku_max_discount_percent),
+      `${source}: merchant_policy.sku_max_discount_percent must be a mapping`,
+    );
+    for (const [sku, pct] of Object.entries(mp.sku_max_discount_percent)) {
+      req(sku.length > 0, `${source}: merchant_policy.sku_max_discount_percent key must be a non-empty string`);
+      reqFinite(pct, `merchant_policy.sku_max_discount_percent.${sku}`, source);
+      req(pct >= 0 && pct <= 100, `${source}: merchant_policy.sku_max_discount_percent.${sku} must be between 0 and 100`);
+    }
+  }
+  if (mp.promos !== undefined) {
+    req(isObject(mp.promos), `${source}: merchant_policy.promos must be a mapping`);
+    for (const [sku, promo] of Object.entries(mp.promos)) {
+      req(sku.length > 0, `${source}: merchant_policy.promos key must be a non-empty string`);
+      req(isObject(promo), `${source}: merchant_policy.promos.${sku} must be a mapping`);
+      rejectUnknownKeys(promo as Record<string, unknown>, PROMO_KEYS, `merchant_policy.promos.${sku}`, source);
+      const p = promo as Record<string, unknown>;
+      if (p.bulk_threshold !== undefined) {
+        reqFinite(p.bulk_threshold, `merchant_policy.promos.${sku}.bulk_threshold`, source);
+        req(Number.isInteger(p.bulk_threshold) && (p.bulk_threshold as number) >= 1,
+          `${source}: merchant_policy.promos.${sku}.bulk_threshold must be a positive integer`);
+      }
+      if (p.bulk_discount_percent !== undefined) {
+        reqFinite(p.bulk_discount_percent, `merchant_policy.promos.${sku}.bulk_discount_percent`, source);
+        req((p.bulk_discount_percent as number) >= 0 && (p.bulk_discount_percent as number) <= 100,
+          `${source}: merchant_policy.promos.${sku}.bulk_discount_percent must be between 0 and 100`);
+      }
+    }
+  }
+  return { ...mp } as MerchantPolicy;
+}
+
+/**
  * Validate a base URL: http(s) only, no embedded credentials, and cleartext
  * HTTP only for loopback hosts (localhost / 127.0.0.1 / ::1).
  */
@@ -566,90 +658,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
 
   let merchantPolicy: MerchantPolicy | undefined;
   if (p.merchant_policy !== undefined) {
-    req(isObject(p.merchant_policy), `${source}: merchant_policy must be a mapping`);
-    const mp = p.merchant_policy;
-    rejectUnknownKeys(mp, MERCHANT_POLICY_KEYS, "merchant_policy", source);
-    if (mp.min_unit_price_private !== undefined) {
-      reqFinite(mp.min_unit_price_private, "merchant_policy.min_unit_price_private", source);
-      req(
-        mp.min_unit_price_private >= 0,
-        `${source}: merchant_policy.min_unit_price_private must be >= 0`,
-      );
-    }
-    if (mp.max_auto_discount_percent !== undefined) {
-      reqFinite(mp.max_auto_discount_percent, "merchant_policy.max_auto_discount_percent", source);
-      req(
-        mp.max_auto_discount_percent >= 0 && mp.max_auto_discount_percent <= 100,
-        `${source}: merchant_policy.max_auto_discount_percent must be between 0 and 100`,
-      );
-    }
-    if (mp.inventory_source !== undefined) {
-      req(
-        typeof mp.inventory_source === "string" && mp.inventory_source.length > 0,
-        `${source}: merchant_policy.inventory_source must be a non-empty string`,
-      );
-    }
-    if (mp.quote_ttl_seconds !== undefined) {
-      reqFinite(mp.quote_ttl_seconds, "merchant_policy.quote_ttl_seconds", source);
-      req(mp.quote_ttl_seconds > 0, `${source}: merchant_policy.quote_ttl_seconds must be > 0`);
-    }
-    if (mp.delivery_lead_days !== undefined) {
-      reqFinite(mp.delivery_lead_days, "merchant_policy.delivery_lead_days", source);
-      req(mp.delivery_lead_days > 0, `${source}: merchant_policy.delivery_lead_days must be > 0`);
-    }
-    if (mp.auto_negotiate !== undefined) {
-      req(
-        typeof mp.auto_negotiate === "boolean",
-        `${source}: merchant_policy.auto_negotiate must be a boolean`,
-      );
-    }
-    if (mp.human_review_on !== undefined) {
-      req(
-        Array.isArray(mp.human_review_on) &&
-          mp.human_review_on.every((c) => typeof c === "string" && c.length > 0),
-        `${source}: merchant_policy.human_review_on must be a list of non-empty strings`,
-      );
-    }
-    // per-SKU floor / discount：`{ sku: number }`，键非空字符串，值有限且合理。
-    if (mp.price_floors !== undefined) {
-      req(isObject(mp.price_floors), `${source}: merchant_policy.price_floors must be a mapping`);
-      for (const [sku, floor] of Object.entries(mp.price_floors)) {
-        req(sku.length > 0, `${source}: merchant_policy.price_floors key must be a non-empty string`);
-        reqFinite(floor, `merchant_policy.price_floors.${sku}`, source);
-        req(floor >= 0, `${source}: merchant_policy.price_floors.${sku} must be >= 0`);
-      }
-    }
-    if (mp.sku_max_discount_percent !== undefined) {
-      req(
-        isObject(mp.sku_max_discount_percent),
-        `${source}: merchant_policy.sku_max_discount_percent must be a mapping`,
-      );
-      for (const [sku, pct] of Object.entries(mp.sku_max_discount_percent)) {
-        req(sku.length > 0, `${source}: merchant_policy.sku_max_discount_percent key must be a non-empty string`);
-        reqFinite(pct, `merchant_policy.sku_max_discount_percent.${sku}`, source);
-        req(pct >= 0 && pct <= 100, `${source}: merchant_policy.sku_max_discount_percent.${sku} must be between 0 and 100`);
-      }
-    }
-    if (mp.promos !== undefined) {
-      req(isObject(mp.promos), `${source}: merchant_policy.promos must be a mapping`);
-      for (const [sku, promo] of Object.entries(mp.promos)) {
-        req(sku.length > 0, `${source}: merchant_policy.promos key must be a non-empty string`);
-        req(isObject(promo), `${source}: merchant_policy.promos.${sku} must be a mapping`);
-        rejectUnknownKeys(promo as Record<string, unknown>, PROMO_KEYS, `merchant_policy.promos.${sku}`, source);
-        const p = promo as Record<string, unknown>;
-        if (p.bulk_threshold !== undefined) {
-          reqFinite(p.bulk_threshold, `merchant_policy.promos.${sku}.bulk_threshold`, source);
-          req(Number.isInteger(p.bulk_threshold) && (p.bulk_threshold as number) >= 1,
-            `${source}: merchant_policy.promos.${sku}.bulk_threshold must be a positive integer`);
-        }
-        if (p.bulk_discount_percent !== undefined) {
-          reqFinite(p.bulk_discount_percent, `merchant_policy.promos.${sku}.bulk_discount_percent`, source);
-          req((p.bulk_discount_percent as number) >= 0 && (p.bulk_discount_percent as number) <= 100,
-            `${source}: merchant_policy.promos.${sku}.bulk_discount_percent must be between 0 and 100`);
-        }
-      }
-    }
-    merchantPolicy = { ...mp } as MerchantPolicy;
+    merchantPolicy = parseMerchantPolicy(p.merchant_policy, source);
   }
 
   let decisionSection: MerchantDecisionConfig | undefined;

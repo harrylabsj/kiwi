@@ -1,15 +1,20 @@
 [Unit]
 Description=Kiwi Merchant（A2A 接待 + MCP 管理，merchant runtime supervise）
-After=network-online.target
-Wants=network-online.target
+# shopping-cli 数据引擎依赖（BUG-09）：独立托管单元，先于本服务启动
+Wants=network-online.target kiwi-shopping.service
+After=network-online.target kiwi-shopping.service
 
 [Service]
 Type=simple
 # 单活 + 自动重启（V2 §5.3 阶段一形态；主备 fencing 留阶段四）
-ExecStart=/usr/bin/env node __PREFIX__/app/dist/cli.js merchant runtime start --data-dir __PREFIX__/data
+# 统一数据目录 + 安装的 merchant profile（BUG-04/BUG-09）
+ExecStart=/usr/bin/env node __PREFIX__/app/dist/cli.js merchant runtime start --profile __PREFIX__/config/profile.yaml --data-dir __PREFIX__/data
+# 实例自带凭据引用：<PREFIX>/.kiwi/credentials.env（KIWI_MERCHANT_TOKEN 等，
+# 安装器 --credentials-env 放置，0600）；服务内 HOME 指向实例前缀。
+Environment=HOME=__PREFIX__
 Restart=always
 RestartSec=5
-# 状态目录单 owner 写：只允许本服务写 __PREFIX__/data
+# 状态目录单 owner 写：只允许本服务写 __PREFIX__
 ReadWritePaths=__PREFIX__
 NoNewPrivileges=true
 PrivateTmp=true

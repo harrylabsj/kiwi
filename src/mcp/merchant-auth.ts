@@ -17,9 +17,9 @@
 /**
  * Merchant MCP Server 入站认证（WorkBuddy Buddy 应用开发计划 阶段二）。
  *
- * MVP 采用「用户自填 Token」模式：静态 Bearer token，恒定时间比较。
- * 校验器接口（MerchantMcpAuthVerifier）是叠加 OAuth 的接缝——后续 OAuth
- * 校验器实现同一接口即可替换/叠加，server 层不感知具体方案。
+ * 兼容「用户自填 Token」模式：静态 Bearer token，恒定时间比较。
+ * 正式 WorkBuddy 连接器使用 OAuth；此校验器保留给显式 token 过渡包。
+ * 校验器接口（MerchantMcpAuthVerifier）让两种方案共用 server 传输层。
  *
  * Token 来源与 A2A 一致的安全惯例：profile 只存环境变量名
  * （merchant_mcp.token_env，缺省 KIWI_MERCHANT_MCP_TOKEN），secret 值绝不写

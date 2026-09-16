@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS oauth_auth_requests (
   state TEXT,
   code_challenge TEXT NOT NULL,
   merchant_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -134,6 +135,36 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
   scope TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   revoked_at TEXT,
+  created_at TEXT NOT NULL
+);
+`;
+
+/** BUG-10 迁移：refresh_token 独立过期（老库 ALTER 补列，老数据按 created_at+30d
+ *  回填——比库创建时还旧的 refresh 自然过期，fail-closed）。 */
+const OAUTH_MIGRATION_REFRESH_EXPIRY = `
+ALTER TABLE oauth_tokens ADD COLUMN refresh_expires_at TEXT;
+UPDATE oauth_tokens SET refresh_expires_at =
+  strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+30 days') WHERE refresh_expires_at IS NULL;
+`;
+
+/** BUG-01 迁移：授权挂起单绑定认证主体（老库补 principal_id 列；老挂起单
+ *  10 分钟内过期，给空串占位即不可再被消费——consumeAuthRequest 拒绝）。 */
+const OAUTH_MIGRATION_AUTH_REQUEST_PRINCIPAL = `
+ALTER TABLE oauth_auth_requests ADD COLUMN principal_id TEXT NOT NULL DEFAULT '';
+`;
+
+/** BUG-02 一次性确认凭证：绑定候选内容摘要 + 主体 + 商家 + 动作 + 有效期，
+ *  单次用途（管理确认页批准/拒绝的唯一可信通道；模型 MCP 工具已移除）。 */
+const OAUTH_CONFIRMATIONS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS oauth_confirmations (
+  token_digest TEXT PRIMARY KEY,
+  candidate_id TEXT NOT NULL,
+  candidate_digest TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  merchant_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
   created_at TEXT NOT NULL
 );
 `;
@@ -163,6 +194,21 @@ export class MerchantOAuthStore {
     this.db = options.db;
     this.now = options.now ?? (() => new Date().toISOString());
     this.db.exec(OAUTH_SCHEMA);
+    this.db.exec(OAUTH_CONFIRMATIONS_SCHEMA);
+    // BUG-10 迁移：老库补 refresh_expires_at 列（列不存在时 ALTER；存在跳过）。
+    const columns = this.db.prepare("PRAGMA table_info(oauth_tokens)").all() as Array<{
+      name: string;
+    }>;
+    if (!columns.some((c) => c.name === "refresh_expires_at")) {
+      this.db.exec(OAUTH_MIGRATION_REFRESH_EXPIRY);
+    }
+    // BUG-01 迁移：老库补授权挂起单 principal_id 列（老挂起单不可再消费）。
+    const reqColumns = this.db.prepare("PRAGMA table_info(oauth_auth_requests)").all() as Array<{
+      name: string;
+    }>;
+    if (!reqColumns.some((c) => c.name === "principal_id")) {
+      this.db.exec(OAUTH_MIGRATION_AUTH_REQUEST_PRINCIPAL);
+    }
   }
 
   private isoAfter(ms: number): string {
@@ -217,13 +263,15 @@ export class MerchantOAuthStore {
     state?: string;
     code_challenge: string;
     merchant_id: string;
+    /** 认证主体（BUG-01：来自管理登录会话，不是启动参数）。 */
+    principal_id: string;
   }): string {
     const csrf = randomToken("oauth_req");
     this.db
       .prepare(
         `INSERT INTO oauth_auth_requests
-           (csrf, client_id, redirect_uri, scope, state, code_challenge, merchant_id, expires_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (csrf, client_id, redirect_uri, scope, state, code_challenge, merchant_id, principal_id, expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         csrf,
@@ -233,13 +281,14 @@ export class MerchantOAuthStore {
         input.state ?? null,
         input.code_challenge,
         input.merchant_id,
+        input.principal_id,
         this.isoAfter(OAUTH_AUTH_REQUEST_TTL_MS),
         this.now(),
       );
     return csrf;
   }
 
-  /** 取出并删除（一次性；过期视为不存在）。 */
+  /** 取出并删除（一次性；过期或缺认证主体（迁移老数据）视为不存在）。 */
   consumeAuthRequest(csrf: string):
     | {
         client_id: string;
@@ -248,6 +297,7 @@ export class MerchantOAuthStore {
         state?: string;
         code_challenge: string;
         merchant_id: string;
+        principal_id: string;
       }
     | undefined {
     const row = this.db.prepare("SELECT * FROM oauth_auth_requests WHERE csrf = ?").get(csrf) as
@@ -258,12 +308,14 @@ export class MerchantOAuthStore {
           state: string | null;
           code_challenge: string;
           merchant_id: string;
+          principal_id: string;
           expires_at: string;
         }
       | undefined;
     if (row === undefined) return undefined;
     this.db.prepare("DELETE FROM oauth_auth_requests WHERE csrf = ?").run(csrf);
     if (this.expired(row.expires_at)) return undefined;
+    if (row.principal_id === "") return undefined; // 迁移老挂起单：无认证主体
     return {
       client_id: row.client_id,
       redirect_uri: row.redirect_uri,
@@ -271,6 +323,7 @@ export class MerchantOAuthStore {
       ...(row.state !== null ? { state: row.state } : {}),
       code_challenge: row.code_challenge,
       merchant_id: row.merchant_id,
+      principal_id: row.principal_id,
     };
   }
 
@@ -350,8 +403,8 @@ export class MerchantOAuthStore {
     this.db
       .prepare(
         `INSERT INTO oauth_tokens
-           (access_digest, refresh_digest, client_id, principal_id, merchant_id, scope, expires_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (access_digest, refresh_digest, client_id, principal_id, merchant_id, scope, expires_at, refresh_expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         digestOf(accessToken),
@@ -361,6 +414,8 @@ export class MerchantOAuthStore {
         input.merchant_id,
         input.scope,
         this.isoAfter(OAUTH_ACCESS_TOKEN_TTL_MS),
+        // BUG-10：refresh 独立过期（30 天），不再永不过期。
+        this.isoAfter(OAUTH_REFRESH_TOKEN_TTL_MS),
         this.now(),
       );
     return {
@@ -398,32 +453,60 @@ export class MerchantOAuthStore {
     };
   }
 
-  /** 刷新轮换：核销旧 refresh，签发新 token 对。 */
+  /**
+   * 刷新轮换（BUG-10）：同一事务内验证旧 refresh 未撤销、未过期（独立
+   *  refresh_expires_at）并核销，再签发新 token 对——并发轮换只有一个成功
+   *  （UPDATE … WHERE revoked_at IS NULL 的条件更新，未命中即已被轮换）。
+   */
   rotateRefreshToken(
     refreshToken: string,
   ): { access_token: string; refresh_token: string; expires_in: number } | undefined {
     const digest = digestOf(refreshToken);
-    const row = this.db
-      .prepare("SELECT * FROM oauth_tokens WHERE refresh_digest = ?")
-      .get(digest) as
-      | {
-          client_id: string;
-          principal_id: string;
-          merchant_id: string;
-          scope: string;
-          revoked_at: string | null;
-        }
-      | undefined;
-    if (row === undefined || row.revoked_at !== null) return undefined;
-    this.db
-      .prepare("UPDATE oauth_tokens SET revoked_at = ? WHERE refresh_digest = ?")
-      .run(this.now(), digest);
-    return this.issueTokenPair({
-      client_id: row.client_id,
-      principal_id: row.principal_id,
-      merchant_id: row.merchant_id,
-      scope: row.scope,
-    });
+    const now = this.now();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db
+        .prepare("SELECT * FROM oauth_tokens WHERE refresh_digest = ?")
+        .get(digest) as
+        | {
+            client_id: string;
+            principal_id: string;
+            merchant_id: string;
+            scope: string;
+            revoked_at: string | null;
+            refresh_expires_at: string | null;
+          }
+        | undefined;
+      if (row === undefined || row.revoked_at !== null) {
+        this.db.exec("ROLLBACK");
+        return undefined;
+      }
+      // 独立 refresh 过期检查（迁移老数据已按 created_at+30d 回填）。
+      if (row.refresh_expires_at !== null && row.refresh_expires_at <= now) {
+        this.db.exec("ROLLBACK");
+        return undefined;
+      }
+      const revoked = this.db
+        .prepare(
+          "UPDATE oauth_tokens SET revoked_at = ? WHERE refresh_digest = ? AND revoked_at IS NULL",
+        )
+        .run(now, digest);
+      if (revoked.changes === 0) {
+        this.db.exec("ROLLBACK"); // 并发轮换：另一方先核销
+        return undefined;
+      }
+      const pair = this.issueTokenPair({
+        client_id: row.client_id,
+        principal_id: row.principal_id,
+        merchant_id: row.merchant_id,
+        scope: row.scope,
+      });
+      this.db.exec("COMMIT");
+      return pair;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
   }
 
   /** RFC 7009 撤销（access 或 refresh；幂等，未知 token 也视为成功）。 */
@@ -434,6 +517,108 @@ export class MerchantOAuthStore {
         "UPDATE oauth_tokens SET revoked_at = ? WHERE revoked_at IS NULL AND (access_digest = ? OR refresh_digest = ?)",
       )
       .run(this.now(), digest, digest);
+  }
+
+  // ---- 一次性确认凭证（BUG-02：批准/拒绝的唯一可信通道） --------------------
+
+  /**
+   * 签发一次性确认凭证（管理确认页渲染时按候选生成；绑定候选内容摘要 +
+   * 主体 + 商家 + 动作 + 10 分钟有效期）。返回明文 token（只进表单，不落库）。
+   */
+  createConfirmation(input: {
+    candidateId: string;
+    candidateDigest: string;
+    principalId: string;
+    merchantId: string;
+    action: "approve" | "reject";
+  }): string {
+    const token = randomToken("kcfrm");
+    this.db
+      .prepare(
+        `INSERT INTO oauth_confirmations
+           (token_digest, candidate_id, candidate_digest, principal_id, merchant_id, action, expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        digestOf(token),
+        input.candidateId,
+        input.candidateDigest,
+        input.principalId,
+        input.merchantId,
+        input.action,
+        this.isoAfter(OAUTH_CODE_TTL_MS),
+        this.now(),
+      );
+    return token;
+  }
+
+  /**
+   * 核销确认凭证（单次用途；逐项核对候选/摘要/主体/商家/动作，未过期未使用
+   * 才返回记录）。核对失败返回 undefined（fail-closed）。
+   */
+  consumeConfirmation(
+    token: string,
+    expected: {
+      candidateId: string;
+      candidateDigest: string;
+      principalId: string;
+      merchantId: string;
+      action: "approve" | "reject";
+    },
+  ):
+    | {
+        candidate_id: string;
+        principal_id: string;
+        action: "approve" | "reject";
+        created_at: string;
+      }
+    | undefined {
+    const digest = digestOf(token);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db
+        .prepare("SELECT * FROM oauth_confirmations WHERE token_digest = ?")
+        .get(digest) as
+        | {
+            candidate_id: string;
+            candidate_digest: string;
+            principal_id: string;
+            merchant_id: string;
+            action: "approve" | "reject";
+            expires_at: string;
+            used_at: string | null;
+            created_at: string;
+          }
+        | undefined;
+      const valid =
+        row !== undefined &&
+        row.used_at === null &&
+        row.expires_at > this.now() &&
+        row.candidate_id === expected.candidateId &&
+        row.candidate_digest === expected.candidateDigest &&
+        row.principal_id === expected.principalId &&
+        row.merchant_id === expected.merchantId &&
+        row.action === expected.action;
+      if (!valid) {
+        this.db.exec("ROLLBACK");
+        return undefined;
+      }
+      this.db
+        .prepare("UPDATE oauth_confirmations SET used_at = ? WHERE token_digest = ?")
+        .run(this.now(), digest);
+      this.db.exec("COMMIT");
+      return row === undefined
+        ? undefined
+        : {
+            candidate_id: row.candidate_id,
+            principal_id: row.principal_id,
+            action: row.action,
+            created_at: row.created_at,
+          };
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
   }
 }
 
@@ -449,8 +634,7 @@ export interface MerchantOAuthServerOptions {
   connectorSource: string;
   /** 授权页展示的商家名。 */
   merchantName: string;
-  /** 授权通过后 token 绑定的 principal / merchant（单商家实例固定）。 */
-  principalId: string;
+  /** 本实例归属商家（租户守卫；token 的 merchant_id 必须等于它——BUG-01）。 */
   merchantId: string;
   /** 支持的 scope（缺省 merchant:read / merchant:write）。 */
   scopes?: string[];
@@ -479,7 +663,6 @@ export class MerchantOAuthServer {
   private readonly resource: string;
   private readonly connectorSource: string;
   private readonly merchantName: string;
-  private readonly principalId: string;
   private readonly merchantId: string;
   private readonly scopes: string[];
 
@@ -494,7 +677,6 @@ export class MerchantOAuthServer {
     this.resource = options.resource;
     this.connectorSource = options.connectorSource;
     this.merchantName = options.merchantName;
-    this.principalId = options.principalId;
     this.merchantId = options.merchantId;
     this.scopes = options.scopes ?? ["merchant:read", "merchant:write"];
   }
@@ -569,7 +751,28 @@ export class MerchantOAuthServer {
   }
 
   /** GET /oauth/authorize：校验请求 → 授权确认页（CSRF 挂起单）。 */
-  authorize(query: Record<string, string | undefined>): OAuthHttpResult {
+  /**
+   * GET /oauth/authorize：校验请求 → 授权确认页（CSRF 挂起单）。
+   * BUG-01：授权前必须持有有效管理登录会话——未登录 → 303 登录页（回跳
+   * 原授权 URL）；会话商家 ≠ 本实例商家 → 拒绝（跨商家授权拒绝）。
+   * 挂起单绑定会话认证的 principal_id，授权码主体只能来自认证用户。
+   */
+  authorize(
+    query: Record<string, string | undefined>,
+    session?: { principal_id: string; merchant_id: string },
+  ): OAuthHttpResult {
+    if (session === undefined) {
+      const next = `/oauth/authorize?${new URLSearchParams(
+        Object.entries(query).filter((e): e is [string, string] => e[1] !== undefined),
+      ).toString()}`;
+      return {
+        status: 303,
+        headers: { location: `/admin/login?next=${encodeURIComponent(next)}` },
+      };
+    }
+    if (session.merchant_id !== this.merchantId) {
+      return oauthError(403, "access_denied", "登录用户不属于本商家实例（跨商家授权拒绝）");
+    }
     const fail = (error: string, description: string): OAuthHttpResult =>
       oauthError(400, error, description);
     const redirectUri = query.redirect_uri;
@@ -612,6 +815,7 @@ export class MerchantOAuthServer {
       ...(query.state !== undefined ? { state: query.state } : {}),
       code_challenge: query.code_challenge,
       merchant_id: this.merchantId,
+      principal_id: session.principal_id,
     });
     return {
       status: 200,
@@ -635,8 +839,11 @@ export class MerchantOAuthServer {
     };
   }
 
-  /** POST /oauth/authorize（表单）：CSRF 校验 → 授权码回跳 / access_denied。 */
-  authorizeSubmit(form: Record<string, string | undefined>): OAuthHttpResult {
+  /** POST /oauth/authorize（表单）：会话 + CSRF 校验 → 授权码回跳 / access_denied。 */
+  authorizeSubmit(
+    form: Record<string, string | undefined>,
+    session: { principal_id: string; merchant_id: string },
+  ): OAuthHttpResult {
     const pending =
       typeof form.csrf === "string" ? this.store.consumeAuthRequest(form.csrf) : undefined;
     if (pending === undefined) {
@@ -645,6 +852,12 @@ export class MerchantOAuthServer {
         "invalid_request",
         "授权请求无效或已过期（CSRF/state 校验失败），请重新发起",
       );
+    }
+    if (
+      session.merchant_id !== pending.merchant_id ||
+      session.principal_id !== pending.principal_id
+    ) {
+      return oauthError(403, "access_denied", "当前登录会话与授权请求主体不匹配");
     }
     if (form.decision !== "approve") {
       return redirectTo(pending.redirect_uri, {
@@ -657,7 +870,9 @@ export class MerchantOAuthServer {
       client_id: pending.client_id,
       redirect_uri: pending.redirect_uri,
       scope: pending.scope,
-      principal_id: this.principalId,
+      // BUG-01：token 主体来自挂起单中的认证用户（管理登录会话），
+      // 不再来自服务启动参数。
+      principal_id: pending.principal_id,
       merchant_id: pending.merchant_id,
       code_challenge: pending.code_challenge,
     });

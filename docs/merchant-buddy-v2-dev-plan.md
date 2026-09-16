@@ -6,16 +6,16 @@
 
 ## 一、与 V1 MVP 的 Delta
 
-| V2 要求                                                        | V1 现状                                                     | 差距                                                                                     |
-| -------------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| 标准远程 MCP adapter                                           | 已有（`src/mcp/merchant-server.ts`，无状态 streamableHttp） | 需加 OAuth、按 scope 过滤 tools/list                                                     |
-| 共享业务服务层                                                 | `src/merchant/workbench-service.ts`                         | 演进为 `src/merchant-core/`（service/commands/executor/operations/negotiation-adapters） |
-| 审批持久恢复                                                   | `recoverPendingDrafts`（重启重建钩子，仅 draft）            | 持久命令记录 + 固定执行器注册表，覆盖全部写工具                                          |
-| 连接器包                                                       | 已有（用户自填 token 模式）                                 | 内置连接器须 OAuth；token 模式仅作市场过渡                                               |
-| 工具命名/契约                                                  | `merchant_*` 7 个                                           | 改为 `kiwi_merchant_*`；写操作拆 `prepare_*` / `execute_approved` / `reject_candidate`   |
-| 展示组件                                                       | 七类 presentation 走内部 ui 事件                            | 映射为 MCP Apps 资源 + 文本降级                                                          |
-| 7×24 运维、部署包、运行时管理                                  | 未做                                                        | 全新（`src/merchant-runtime/`、`deploy/merchant-bundle/`）                               |
-| F01–F30 其余（init/publish/setup-public/记忆/私密面板/微信等） | 未接入                                                      | 主体工作量                                                                               |
+| V2 要求                                                        | V1 现状                                                     | 差距                                                                                                         |
+| -------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 标准远程 MCP adapter                                           | 已有（`src/mcp/merchant-server.ts`，无状态 streamableHttp） | 需加 OAuth、按 scope 过滤 tools/list                                                                         |
+| 共享业务服务层                                                 | `src/merchant/workbench-service.ts`                         | 演进为 `src/merchant-core/`（service/commands/executor/operations/negotiation-adapters）                     |
+| 审批持久恢复                                                   | `recoverPendingDrafts`（重启重建钩子，仅 draft）            | 持久命令记录 + 固定执行器注册表，覆盖全部写工具                                                              |
+| 连接器包                                                       | 已有（用户自填 token 模式）                                 | 内置连接器须 OAuth；token 模式仅作市场过渡                                                                   |
+| 工具命名/契约                                                  | `merchant_*` 7 个                                           | 改为 `kiwi_merchant_*`；写操作 prepare_*；批准/拒绝经管理页面（审查 BUG-02：execute/reject 不进 MCP 注册表） |
+| 展示组件                                                       | 七类 presentation 走内部 ui 事件                            | 映射为 MCP Apps 资源 + 文本降级                                                                              |
+| 7×24 运维、部署包、运行时管理                                  | 未做                                                        | 全新（`src/merchant-runtime/`、`deploy/merchant-bundle/`）                                                   |
+| F01–F30 其余（init/publish/setup-public/记忆/私密面板/微信等） | 未接入                                                      | 主体工作量                                                                                                   |
 
 ## 二、P0 现存问题（不等阶段排期）
 
@@ -58,7 +58,7 @@
 ### 阶段三：所有经营写入闭环（约 2–3 周）
 
 - ~~`src/merchant-core/commands.ts` / `executor.ts`~~（2026-09-15 已完成）：持久命令记录复用 `WriteApprovalCandidateStore`（tool/参数/前置版本 digest/授权主体/有效期/单次用途/状态机，state.sqlite 单 owner 写）；固定执行器注册表静态注册 7 个写工具（禁止动态分发）；恢复推广到全部写工具（`recoverPendingCommands`：已注册工具经注册表重建钩子，未注册的死候选标 expired），覆盖 V1 recoverPendingDrafts 语义。
-- ~~写链路闭环~~（已完成）：prepare → 预览（前后对照）→ 确认通道（`kiwi_merchant_execute_approved` / `kiwi_merchant_reject_candidate`，merchant:write scope + 授权主体一致性校验；模型自报不作证据）→ 执行器重校验（前置版本重读重哈希/有效期/硬策略——私有底价执行器强制且不透气数值）→ 幂等执行（重放 not_approvable）→ 回读校验 → 审计（store 状态流转 + content hash）。配套商家确认页面最小骨架：`src/merchant-admin/pending-page.ts`（/admin/pending + /admin/decision，Bearer 强制，PRG 回跳）。
+- ~~写链路闭环~~（已完成；审查第一批加固后形态）：prepare → 预览（前后对照）→ 确认通道（**管理确认页** `/admin/pending`：管理员 cookie 会话 + 一次性确认凭证（绑定候选摘要/主体/商家/动作，单次用途）；execute/reject 不在 MCP 注册表——模型不可自我批准）→ 执行器重校验（前置版本重读重哈希/有效期/硬策略——私有底价执行器强制且不透气数值）→ 幂等执行（重放 not_approvable）→ 回读校验 → 审计（store 状态流转 + content hash + 确认记录含批准人/时间）。配套商家确认页面最小骨架：`src/merchant-admin/pending-page.ts` + `src/auth/merchant-sessions.ts`（管理员口令 scrypt 哈希，`kiwi merchant mcp admin-passwd` 初始化）。
 - ~~覆盖写面~~（已完成）：prepare_product_create / prepare_inventory_update / prepare_listing_change（F08 销售状态语义，能力缺失 fail-closed「不可得」）/ prepare_review_resolve（F14 两轨：shopping 走 resolver，A2A 报「不可得」绝不跨轨）/ prepare_policy_change（F17 热更新：执行器写覆盖层即时生效）。
 - 阶段二遗留核查（已修复）：chat kernel presentation 接线的 principalId 口径不一致——`merchant-tools.ts` presentationContext 与 kernel 的 intelligence backend principal 校验键统一为 owner_id（此前 agent_id ≠ owner_id 时 digest/catalog 展示必然校验失败/读空）。
 - 验收：展示≠执行；无真实确认无法扩大权限；重复提交只执行一次；过期或对象已变更拒绝旧授权；重启恢复后再校验再执行——均有自动化测试（`tests/merchant-commands.test.ts`）。
@@ -70,7 +70,7 @@
 - ~~长任务 operation_id 异步机制~~（已完成）：`src/merchant-core/operations.ts`（queued/running/succeeded/partially_failed/failed；同幂等键返回同一 operation 不重复执行；与命令记录同一 state.sqlite）；`kiwi_merchant_get_operation` 查询工具（read scope）。
 - ~~微信绑定状态与事件查看（F29）~~（已完成只读面）：`getWeixinStatus()`（脱敏不返回 bot_token；无事件存储明确「不可得」）；绑定/撤销操作留后续。
 - ~~旧入口一致性~~（已核查 + 测试）：CLI/TUI 走 kernel/facade、MCP 走 merchant-core（包装同一 facade）——同一业务事实有测试锁定（stage4 一致性用例）；无大重构。
-- ~~7×24 加固~~（部分完成）：告警事件接入 health（进程/商品源/注册失效/积压/磁盘/证书临期，结构化 code+severity）；持续备份落地（`src/merchant-runtime/backup.ts`：快照 + manifest sha256 校验 + 轮换 + 恢复演练测试；RPO=0 口径：磋商 ledger 在备份集内）；jobs 调度器已接入 `runtime start`。主备 + fencing 只出设计（deploy/merchant-bundle/README），未引入分布式协调。
+- ~~7×24 加固~~（部分完成）：告警事件接入 health（进程/商品源/注册失效/积压/磁盘/证书临期，结构化 code+severity）；持续备份落地（`src/merchant-runtime/backup.ts`：VACUUM INTO 事务一致快照 + manifest sha256 校验 + 轮换 + 恢复演练测试；RPO 口径诚实：RPO ≤ 备份周期，磋商 ledger 在备份集内；RPO=0 需同步持久化，留主备阶段——BUG-06）；jobs 调度器已接入 `runtime start`。主备 + fencing 只出设计（deploy/merchant-bundle/README），未引入分布式协调。
 - 验收：见「五」后补的阶段四验收测试（`tests/merchant-buddy/stage4-acceptance.test.ts`）。
 
 ### 阶段五：完整验收与平台预览（约 1 周）
@@ -83,6 +83,25 @@
 - 连接器包切 OAuth 模式：`integrations/hosts/workbuddy/kiwi-merchant-connector-oauth/`（无 auth_mode、无 token 占位）；token 包保留为过渡（source 改 `kiwi-merchant-token`，双 source 符合平台要求）；打包脚本 `--bundle token|oauth` 双包校验。
 
 平台侧剩余（不可离线）：连接器/Buddy 应用提交审核、实机预览联调（按检查单留证据）、月度可用性与主备实测。
+
+## 代码审查修复记录（2026-09-15 第一批：安全，2 P0 + 2 P1）
+
+依据 `kiwi-merchant-buddy-v2-code-review.md`（基线 commit 0c3dcff）：
+
+- **BUG-01（P0）OAuth 授权前无商家身份认证**：新增管理登录会话（`src/auth/merchant-sessions.ts`：scrypt 口令哈希落 `admin-credentials.json` 0600 不明文、12h 会话 HttpOnly/SameSite=Lax/生产 Secure、可撤销可过期）；`/oauth/authorize` 无会话 → 303 登录页（回跳原 URL），会话商家 ≠ 实例商家 → 403；挂起单绑定认证 principal_id（迁移老库补列，老挂起单不可再消费），授权码主体只能来自认证用户。账户来源：`kiwi merchant mcp admin-passwd`（口令只从 KIWI_MERCHANT_ADMIN_PASSWORD 环境变量读取）；单商家实例管理员 = 本实例 principal（profile.agent_id）。
+- **BUG-02（P0）模型可自我批准**：`kiwi_merchant_execute_approved` / `kiwi_merchant_reject_candidate` 从 MCP 注册表移除（call 返回「未知工具」）；批准/拒绝唯一通道 = 管理确认页 + 一次性确认凭证（`oauth_confirmations` 表：绑定候选内容摘要 + 主体 + 商家 + 动作 + 10 分钟有效期，单次用途，事务内核销）；命令日志执行层逐项核对（候选摘要/主体/确认记录）。
+- **BUG-03（P1）管理确认页授权与 CSRF**：`/admin/pending` 需登录会话；`/admin/decision` 需会话 + 有效确认凭证（缺/重复/过期/错配 403）；认证 principal 传入 execute/reject 并与候选主体核对；Bearer-only 旧表单路径废弃（浏览器表单不携带 Header 的问题由 cookie 会话解决）。
+- **BUG-10（P1）Refresh Token 无独立过期**：`oauth_tokens` 加 `refresh_expires_at`（老库 ALTER 迁移 + 按 created_at+30d 回填）；轮换在同一事务内验证未撤销/未过期并核销（并发轮换只成功一次）。
+- 测试：`tests/merchant-admin-security.test.ts`（8 条，逐条对应验收条件）+ `tests/merchant-oauth.test.ts` 增补（BUG-10 过期/重放/并发/迁移）。
+
+## 代码审查修复记录（2026-09-15 第二/三批：运行链路 + 业务闭环，BUG-04~09 全量收官）
+
+- **BUG-04（P1）runtime 子进程未用统一数据目录**：`src/merchant-runtime/services.ts`——A2A/MCP 子进程显式携带 `--data-dir <merchantDataDir>` 与确定 cwd；健康/备份与子进程读写同一数据根。
+- **BUG-05（P1）商品源健康检查依赖陈旧探测文件**：`health.ts` 探测记录加 `checked_at`/`probed_at` 新鲜度判定（缺省 3 分钟 = 3 个健康轮询周期），过期/读取失败判 unhealthy；周期任务重刷探测。
+- **BUG-06（P1）在线备份不一致**：SQLite 改 `VACUUM INTO` 事务一致快照（busy 短暂重试，失败 fail-closed）；快照后实际打开备份库跑 `PRAGMA integrity_check`，不通过删除该轮快照并抛错；RPO 口径诚实化为 RPO ≤ 备份周期（RPO=0 留主备阶段）。
+- **BUG-07（P1）策略变更没有应用到运行时**：新增 `src/merchant-core/policy-runtime.ts`（`MerchantPolicyRuntime`）——写端 patch 与当前生效策略合并后用 `parseMerchantPolicy`（从 profile 校验逻辑抽取，与启动同一套规则）校验，原子写**完整生效策略**（tmp+rename 0600，含 version/updated_at），回执带版本/digest/applied_keys 进命令记录；读端（A2A 子进程）按文件 mtime 缓存跨进程读取，坏文件保留上一个良好策略并告警、legacy patch 文件忽略回退。A2A handler 的 `merchantPolicy` 接受 provider（每报价取运行中策略，`node.ts`→`merchant-handler.ts` 贯通）；执行器硬策略（私有底价）改按运行中策略校验（`ExecutorContext.currentPolicy`）。测试：`tests/merchant-policy-runtime.test.ts`（9 条：校验拒绝/原子写/版本 digest/重启延续/跨进程生效/坏文件 fail-safe/legacy 忽略/报价端到端）+ `tests/merchant-commands.test.ts` 增补（策略热更经真实运行时、硬策略跟随运行中策略）。
+- **BUG-08（P1）"全量完成"与验收矩阵不一致**：矩阵条目加 `v2Scope`（committed/deferred）与 `reach`（mcpTools/mcpResources/adminPage/cli 到达路径）——committed 条目必须 wired/partial（承诺项不得 pending）、deferred 必须 pending（延后项不得宣称交付）、partial 必须附受限说明、wired 必须声明到达路径且 mcpTools 逐个与真实 MCP 注册表核对；committed 集合在测试中冻结（15 项 = 10 wired + 5 partial，其余 15 项显式延后），撤销 covered≥16/wired≥4 最低阈值冒充口径；F15 因管理确认页闭环（BUG-01/02/03）诚实升级 wired，F17 备注 BUG-07 热生效。测试：`tests/merchant-buddy/acceptance-matrix.test.ts` 重写。
+- **BUG-09（P1）部署安装器生成不可运行实例**：`install.mjs` 现安装 Kiwi 运行应用（`--app-dir` 缺省仓库根；dist + package.json + 生产依赖复制到 `<prefix>/app`，缺一拒绝）、安装 merchant profile（`--profile` 必填，轻量校验 role: merchant + agent_id，落 `<prefix>/config/profile.yaml`）、放置实例凭据引用（`--credentials-env` → `<prefix>/.kiwi/credentials.env` 0600，值不读不记；缺省查 `~/.kiwi/credentials.env` 的 KIWI_MERCHANT_TOKEN，可显式跳过）、渲染服务单元统一 `--profile` + `--data-dir`（BUG-04），并新增 shopping-cli 独立托管单元（systemd Wants/After 依赖；launchd 无依赖排序由 KeepAlive 兜底，启动命令由 `--shopping-bin`/`--shopping-args` 决定——本仓库只锁版本范围不约定其 CLI 形态）；宣告完成前强制 preflight（真实执行安装产出的 `cli.js --version` 冒烟 + 服务单元渲染/profile/凭据核对），任一失败即安装失败。测试：`tests/deploy-merchant-bundle.test.ts` 扩到 9 条（缺 profile/非 merchant profile/裸 dist 缺依赖/凭据缺失拒绝 + 成功安装产物与冒烟）。
 
 **总计估算：9–13 周**；P0 修复（1–2 天）可与阶段一并行启动。
 

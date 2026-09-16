@@ -35,12 +35,13 @@ import {
   readFileSync,
   rmSync,
   unlinkSync,
+  writeFileSync,
   writeSync,
 } from "node:fs";
 import { createMonotonicClock } from "./clock.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AgentProfile } from "../config/profile.js";
+import type { AgentProfile, MerchantPolicy } from "../config/profile.js";
 import type { AuthVerifier } from "./server/types.js";
 import {
   A2AServer,
@@ -99,6 +100,9 @@ export interface A2aNodeOptions {
    *  缺省 LoopbackOnlyAuthVerifier 只信 socket 来源，反代从 127.0.0.1
    *  连接时外部请求在应用层就是 loopback 并被认证通过。未配置则启动失败。 */
   authVerifier?: AuthVerifier;
+  /** 商家定价策略（BUG-07）：缺省用 profile.merchant_policy（启动时静态值）；
+   *  传 provider 则每次报价取运行中生效策略（策略热更新跨进程立即生效）。 */
+  merchantPolicy?: MerchantPolicy | (() => MerchantPolicy | undefined);
 }
 
 export interface A2aNodeHandle {
@@ -114,6 +118,22 @@ export interface A2aNodeHandle {
   /** 节点签名身份（Issue 16 B / KIWI_A2A_AUTH=signature 时存在）。 */
   signingIdentity?: A2aSigningIdentity;
   stop(): Promise<void>;
+}
+
+function writeRegistrationStatus(
+  dataDir: string | undefined,
+  status: { ok: boolean; catalog_agent_id?: string; error?: string },
+): void {
+  if (dataDir === undefined) return;
+  try {
+    writeFileSync(
+      path.join(dataDir, "registration.json"),
+      `${JSON.stringify({ ...status, checked_at: new Date().toISOString() }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+  } catch {
+    // 状态落盘失败不改变 A2A 服务结果；健康检查会通过缺失/旧状态告警。
+  }
 }
 
 /** 现实单调时钟（审查 BUG-01）：墙钟 + 同进程严格单调；生产不得用固定
@@ -436,7 +456,9 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
           counterparty: "buyer:*",
           productSource: buildProductSource(profile),
           allowDemoPriceFallback: profile.commerce.allow_demo_price_fallback ?? false,
-          merchantPolicy: profile.merchant_policy,
+          // BUG-07：显式传入 provider（或静态值）时每次报价取运行中生效策略；
+          // 缺省仍是启动 profile 的静态策略。
+          merchantPolicy: options.merchantPolicy ?? profile.merchant_policy,
         })
       : defaultHandler();
 
@@ -504,6 +526,10 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
         ownerTokenSecret: options.ownerTokenSecret,
       });
       catalogAgentId = reg.catalogAgentId;
+      writeRegistrationStatus(options.dataDir, {
+        ok: reg.ok && catalogAgentId !== undefined,
+        ...(catalogAgentId !== undefined ? { catalog_agent_id: catalogAgentId } : {}),
+      });
     } catch (err) {
       // 审查 K-M11：注册失败必须可见——此前空 catch 静默吞掉，merchant 静默
       // 不在 catalog（buyer 只能 direct URL）且无任何日志。默认记录日志后继续
@@ -516,6 +542,10 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
             ? "KIWI_REQUIRE_CATALOG_REGISTRATION 已开启，节点启动失败（fail-closed）。"
             : "merchant 不会出现在 catalog，buyer 只能经 direct URL 磋商。"),
       );
+      writeRegistrationStatus(options.dataDir, {
+        ok: false,
+        error: detail,
+      });
       if (requireRegistration) {
         // fail-closed：注册失败即启动失败——先清理已创建的 server/锁/临时目录
         // （镜像 stop()），不留下监听中的孤儿节点。

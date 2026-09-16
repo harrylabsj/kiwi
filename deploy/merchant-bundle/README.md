@@ -27,8 +27,9 @@ WorkBuddy Buddy ──OAuth/MCP──▶ MCP 管理服务（查看/控制长期�
 
 ```text
 <prefix>/
-├── app/            # Kiwi 部署物（dist/；安装器不复制，由部署流程放置）
-├── config/         # install.json、服务单元（systemd/launchd）
+├── app/            # Kiwi 运行应用（安装器从 --app-dir 复制 dist/ + package.json + 生产依赖）
+├── .kiwi/          # 实例凭据引用 credentials.env（0600；服务内 HOME 指向前缀）
+├── config/         # install.json、merchant profile（profile.yaml）、服务单元（systemd/launchd）
 ├── data/           # 状态目录（单 owner 写；state.sqlite / a2a / oauth.sqlite / capability-probe.json）
 ├── run/            # pid 文件
 ├── logs/           # 服务日志
@@ -38,22 +39,32 @@ WorkBuddy Buddy ──OAuth/MCP──▶ MCP 管理服务（查看/控制长期�
 ## 安装器
 
 ```sh
+# 先准备生产构建暂存目录（也可直接用仓库根）：
+npm ci --omit=dev && npm run build
+
 node deploy/merchant-bundle/install.mjs --prefix /srv/kiwi-merchant --confirm-new-instance \
-  [--shopping-bin /usr/local/bin/shopping] [--dry-run]
+  --profile ./merchant.yaml \
+  [--app-dir /path/to/kiwi-build] [--credentials-env ./credentials.env] \
+  [--shopping-bin /usr/local/bin/shopping] --shopping-args "serve --port 8765" \
+  [--skip-credentials-check] [--dry-run]
 ```
 
-fail-closed 行为：
+fail-closed 行为（BUG-09：不产出"装完却起不来"的实例）：
 
 - 新实例必须显式 `--confirm-new-instance`；
 - 检测到已有安装（`data/` 非空或 `state.sqlite` 存在）→ 拒绝安装，**绝不新建空库替代已有安装**；升级路径留阶段四；
 - shopping-cli 版本不在已验证范围（`>= 2.0.0 < 3.0.0`，见 `versions.lock.json` 与 `src/product-compat.ts` 单一来源）→ 拒绝安装；
-- `--dry-run` 只输出布局与版本锁，不写盘。
+- `--profile` 必填且必须是 merchant profile（`role: merchant` + `agent_id`；完整 schema 校验由 cli 启动时执行）；
+- 应用包必须可运行：`--app-dir`（缺省仓库根）须含 `dist/cli.js`、`package.json`、非空 `node_modules/`——裸 dist 拒绝安装；
+- 凭据引用必须存在（`--credentials-env` 或 `~/.kiwi/credentials.env` 中的 `KIWI_MERCHANT_TOKEN`；值不读取不记录，仅存在性检查；确无凭据可 `--skip-credentials-check` 显式跳过并承担后续登录失败）；
+- 安装完成前强制 preflight：真实执行 `<prefix>/app/dist/cli.js --version` 冒烟、核对服务单元渲染（`--profile`/`--data-dir`）、核对 profile/凭据落位——任一失败即安装失败；
+- `--dry-run` 输出布局/应用/profile/服务计划与版本锁，不写盘。
 
 ## 服务托管
 
-- systemd：`config/kiwi-merchant.service`（安装时由模板渲染，含 `__PREFIX__` 替换）；
-- launchd：`config/com.kiwi.merchant.plist`（macOS）；
-- 两者都托管 `merchant runtime start`（管理进程），由它再管 a2a/mcp 子进程。
+- systemd：`config/kiwi-shopping.service`（数据引擎，`--shopping-bin`/`--shopping-args` 决定启动命令）与 `config/kiwi-merchant.service`（`Wants=/After=kiwi-shopping.service` 表达依赖）；均为安装时模板渲染；
+- launchd（macOS）：`config/com.kiwi.shopping.plist` 与 `config/com.kiwi.merchant.plist`（launchd 无依赖排序，由 KeepAlive 兜底：数据引擎未就绪时商品源探测 fail-closed，管理进程自动重启重试）；
+- 两者都托管 `merchant runtime start`（管理进程），统一 `--profile <prefix>/config/profile.yaml` 与 `--data-dir <prefix>/data`（BUG-04），由它再管 a2a/mcp 子进程。
 
 ## 健康与诊断
 

@@ -9,11 +9,12 @@
  *   transportSessionId；多传输会话共享同一 merchantDataDir；重启路径稳定；
  *   transportSessionId 不参与路径派生。
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpMerchantClient } from "../src/agent/merchant/merchant-client.js";
+import { collectMerchantHealth } from "../src/merchant-runtime/health.js";
 import { StaticCredentialBroker } from "../src/agent/merchant/credential-broker.js";
 import {
   resolveMerchantMcpDirs,
@@ -122,5 +123,84 @@ describe("merchant 数据目录接线（V2 §5.1）", () => {
 
   it("agentId 路径消毒（防路径逃逸）", () => {
     expect(() => resolveMerchantMcpDirs({ agentId: "../evil" })).toThrow();
+  });
+});
+
+describe("BUG-05：商品源健康检查不依赖陈旧探测文件", () => {
+  it("启动正常 → shopping-cli 宕机 → 实时再探测后健康变失败（一个探测周期语义）", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-bug05-"));
+    try {
+      const probePath = path.join(dir, "capability-probe.json");
+      let up = true;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          if (!up) throw new Error("connection refused");
+          return healthResponse({ ok: true, version: "2.1.0" });
+        }),
+      );
+      const client = new HttpMerchantClient(
+        "http://127.0.0.1:8765",
+        new StaticCredentialBroker({ catalog: "t" }),
+      );
+      // 周期 1：实时探测（正常）→ 健康 ok
+      await client.probeCapabilities({ persistPath: probePath });
+      const r1 = collectMerchantHealth({
+        dataDir: dir,
+        services: [],
+        now: () => new Date().toISOString(),
+      });
+      expect(r1.checks.product_source.ok).toBe(true);
+      // shopping-cli 宕机 → 周期 2：实时再探测（失败）→ 记录刷新为不可用 → 健康失败
+      up = false;
+      await client.probeCapabilities({ persistPath: probePath });
+      const r2 = collectMerchantHealth({
+        dataDir: dir,
+        services: [],
+        now: () => new Date().toISOString(),
+      });
+      expect(r2.checks.product_source.ok).toBe(false);
+      expect(r2.alerts.some((a) => a.code === "product_source_unavailable")).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("探测记录超过最大有效期 → 判 unhealthy（记录过期）", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-bug05-stale-"));
+    try {
+      writeFileSync(
+        path.join(dir, "capability-probe.json"),
+        JSON.stringify({ ok: true, version: "2.1.0", probed_at: "2026-09-15T10:00:00.000Z" }),
+      );
+      const report = collectMerchantHealth({
+        dataDir: dir,
+        services: [],
+        now: () => "2026-09-15T10:10:00.000Z", // 10 分钟前探测 → 过期
+        probeMaxAgeMs: 180_000,
+      });
+      expect(report.checks.product_source.ok).toBe(false);
+      expect(report.checks.product_source.error).toContain("过期");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("探测记录缺 probed_at → unhealthy（不可判定即失败）", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-bug05-nodate-"));
+    try {
+      writeFileSync(
+        path.join(dir, "capability-probe.json"),
+        JSON.stringify({ ok: true, version: "2.1.0" }),
+      );
+      const report = collectMerchantHealth({
+        dataDir: dir,
+        services: [],
+        now: () => new Date().toISOString(),
+      });
+      expect(report.checks.product_source.ok).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

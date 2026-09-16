@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kiwi.shopping</string>
+  <!-- 启动命令由安装参数决定（--shopping-bin / --shopping-args）：本仓库只锁
+       shopping-cli 版本范围（versions.lock.json），不约定其 CLI 形态。
+       launchd 无跨服务依赖排序：com.kiwi.merchant 的 KeepAlive + RestartSec
+       兜底（数据引擎未就绪时 Kiwi 侧商品源探测 fail-closed，管理进程自动重启重试）。 -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>exec __SHOPPING_BIN__ __SHOPPING_ARGS__</string>
+  </array>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>__PREFIX__/logs/shopping.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PREFIX__/logs/shopping.err.log</string>
+</dict>
+</plist>

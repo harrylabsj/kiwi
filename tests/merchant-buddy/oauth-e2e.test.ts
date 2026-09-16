@@ -24,6 +24,7 @@ import {
   type MerchantMcpServerHandle,
 } from "../../src/mcp/merchant-server.js";
 import { migrateMemorySchema } from "../../src/agent/memory/schema.js";
+import { MerchantAdminSessions, writeAdminCredentials } from "../../src/auth/merchant-sessions.js";
 import { WriteApprovalCandidateStore } from "../../src/agent/merchant/action-candidate.js";
 import {
   FakeMerchantClient,
@@ -33,6 +34,7 @@ import { testProfile } from "../helpers.js";
 
 const T0 = "2026-09-15T10:00:00.000Z";
 const PRINCIPAL = "merchant-agent:merchant-001";
+const ADMIN_PW = "e2e-admin-password-1";
 const VERIFIER = "e2e-code-verifier-0123456789abcdef0123456789abcdef";
 
 const dirs: string[] = [];
@@ -81,9 +83,16 @@ async function startStack(oauthDb: DatabaseSync): Promise<E2eStack> {
     resource: `${issuer}/mcp`,
     connectorSource: "kiwi-merchant",
     merchantName: "Veyquo 手工陶瓷",
-    principalId: PRINCIPAL,
     merchantId: "merchant-001",
     now: () => clock.value,
+  });
+  // BUG-01/03：管理面挂载（登录会话 + 一次性确认凭证）
+  const adminDir = mkdtempSync(path.join(tmpdir(), "kiwi-e2e-admin-"));
+  dirs.push(adminDir);
+  writeAdminCredentials(adminDir, {
+    principalId: PRINCIPAL,
+    merchantId: "merchant-001",
+    password: ADMIN_PW,
   });
   const handle = await startMerchantMcpServer({
     service: core,
@@ -91,6 +100,17 @@ async function startStack(oauthDb: DatabaseSync): Promise<E2eStack> {
     port: probe.port,
     oauth,
     auth: new MerchantOAuthVerifier({ store: oauthStore, expectedMerchantId: "merchant-001" }),
+    admin: {
+      merchantName: "Veyquo 手工陶瓷",
+      surface: {
+        listPending: () => [],
+        executeApproved: async () => ({}),
+        rejectCandidate: async () => ({}),
+      },
+      sessions: new MerchantAdminSessions({ db: oauthDb, now: () => clock.value }),
+      store: oauthStore,
+      adminDir,
+    },
   });
   return {
     issuer,
@@ -145,10 +165,18 @@ async function clientBindFlow(
   const client = (await reg.json()) as { client_id: string; redirect_uris: string[] };
   expect(client.redirect_uris).toEqual([redirectUri]);
 
-  // 4. PKCE 授权（授权页 → 同意 → code 回跳）
+  // 4. PKCE 授权（BUG-01：先管理员登录拿会话 cookie，再进授权页）
   const challenge = await import("node:crypto").then((c) =>
     c.createHash("sha256").update(VERIFIER).digest("base64url"),
   );
+  const login = await fetch(`${issuer}/admin/login`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ password: ADMIN_PW, next: "/admin/pending" }).toString(),
+    redirect: "manual",
+  });
+  expect(login.status).toBe(303);
+  const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
   const page = await fetch(
     `${asMeta.authorization_endpoint}?${new URLSearchParams({
       response_type: "code",
@@ -159,13 +187,17 @@ async function clientBindFlow(
       code_challenge: challenge,
       code_challenge_method: "S256",
     })}`,
+    { headers: { cookie } },
   );
   expect(page.status).toBe(200);
   const csrf = /name="csrf" value="([^"]+)"/.exec(await page.text())?.[1] ?? "";
   expect(csrf).not.toBe("");
   const submit = await fetch(asMeta.authorization_endpoint, {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      cookie,
+    },
     body: new URLSearchParams({ csrf, decision: "approve" }).toString(),
     redirect: "manual",
   });

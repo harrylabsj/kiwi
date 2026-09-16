@@ -23,6 +23,10 @@ import {
   MerchantOAuthVerifier,
   MERCHANT_OAUTH_SCOPES,
 } from "../src/auth/merchant-authorization.js";
+import { MerchantAdminSessions, writeAdminCredentials } from "../src/auth/merchant-sessions.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { MerchantWorkbenchService } from "../src/merchant/workbench-service.js";
 import {
   startMerchantMcpServer,
@@ -45,6 +49,8 @@ interface OAuthHarness {
   store: MerchantOAuthStore;
   server: MerchantOAuthServer;
   clock: { value: string };
+  /** BUG-01 修复后：authorize 需要管理登录会话主体。 */
+  session: { principal_id: string; merchant_id: string };
 }
 
 function setupOAuth(overrides: { merchantId?: string } = {}): OAuthHarness {
@@ -59,11 +65,15 @@ function setupOAuth(overrides: { merchantId?: string } = {}): OAuthHarness {
     resource: `${ISSUER}/mcp`,
     connectorSource: "kiwi-merchant",
     merchantName: "Veyquo 手工陶瓷",
-    principalId: "merchant-agent:merchant-001",
     merchantId: overrides.merchantId ?? "merchant-001",
     now: () => clock.value,
   });
-  return { store, server, clock };
+  return {
+    store,
+    server,
+    clock,
+    session: { principal_id: "merchant-agent:merchant-001", merchant_id: "merchant-001" },
+  };
 }
 
 function registerClient(server: MerchantOAuthServer, redirectUris: string[] = [CALLBACK]): string {
@@ -93,13 +103,13 @@ function fullFlow(h: OAuthHarness): {
   expires_in: number;
 } {
   const clientId = registerClient(h.server);
-  const page = h.server.authorize(authorizeQuery(clientId));
+  const page = h.server.authorize(authorizeQuery(clientId), h.session);
   expect(page.status).toBe(200);
   expect(page.html).toContain("Veyquo 手工陶瓷");
   expect(page.html).toContain("merchant:read");
   const csrf = /name="csrf" value="([^"]+)"/.exec(page.html ?? "")?.[1];
   expect(csrf).toBeTruthy();
-  const submit = h.server.authorizeSubmit({ csrf, decision: "approve" });
+  const submit = h.server.authorizeSubmit({ csrf, decision: "approve" }, h.session);
   expect(submit.status).toBe(302);
   const location = new URL(submit.headers?.location ?? "");
   expect(location.searchParams.get("state")).toBe("state-abc");
@@ -143,7 +153,6 @@ describe("redirect_uri 白名单与 issuer 守卫", () => {
           resource: "http://mcp.merchant.example.com/mcp",
           connectorSource: "kiwi-merchant",
           merchantName: "x",
-          principalId: "p",
           merchantId: "m",
         }),
     ).toThrow(/https/);
@@ -189,13 +198,19 @@ describe("authorize / token 流程", () => {
   it("缺 PKCE（非 S256）→ 回跳 invalid_request；未知 scope → invalid_scope", () => {
     const h = setupOAuth();
     const clientId = registerClient(h.server);
-    const noPkce = h.server.authorize({
-      ...authorizeQuery(clientId),
-      code_challenge_method: "plain",
-    });
+    const noPkce = h.server.authorize(
+      {
+        ...authorizeQuery(clientId),
+        code_challenge_method: "plain",
+      },
+      h.session,
+    );
     expect(noPkce.status).toBe(302);
     expect(noPkce.headers?.location).toContain("error=invalid_request");
-    const badScope = h.server.authorize({ ...authorizeQuery(clientId), scope: "merchant:admin" });
+    const badScope = h.server.authorize(
+      { ...authorizeQuery(clientId), scope: "merchant:admin" },
+      h.session,
+    );
     expect(badScope.status).toBe(302);
     expect(badScope.headers?.location).toContain("error=invalid_scope");
   });
@@ -203,27 +218,30 @@ describe("authorize / token 流程", () => {
   it("redirect_uri 与注册值不匹配 → 400 且不回跳（防开放重定向）", () => {
     const h = setupOAuth();
     const clientId = registerClient(h.server);
-    const result = h.server.authorize({
-      ...authorizeQuery(clientId),
-      redirect_uri: `${CALLBACK}x`,
-    });
+    const result = h.server.authorize(
+      {
+        ...authorizeQuery(clientId),
+        redirect_uri: `${CALLBACK}x`,
+      },
+      h.session,
+    );
     expect(result.status).toBe(400);
     expect(result.headers?.location).toBeUndefined();
-    const unknownClient = h.server.authorize(authorizeQuery("mcp_client_nope"));
+    const unknownClient = h.server.authorize(authorizeQuery("mcp_client_nope"), h.session);
     expect(unknownClient.status).toBe(400);
   });
 
   it("拒绝授权 → access_denied 回跳；CSRF 无效 → 400；授权页一次性", () => {
     const h = setupOAuth();
     const clientId = registerClient(h.server);
-    const page = h.server.authorize(authorizeQuery(clientId));
+    const page = h.server.authorize(authorizeQuery(clientId), h.session);
     const csrf = /name="csrf" value="([^"]+)"/.exec(page.html ?? "")?.[1] ?? "";
-    const denied = h.server.authorizeSubmit({ csrf, decision: "deny" });
+    const denied = h.server.authorizeSubmit({ csrf, decision: "deny" }, h.session);
     expect(denied.status).toBe(302);
     expect(denied.headers?.location).toContain("error=access_denied");
     // CSRF 一次性：同一 csrf 再用即失败
-    expect(h.server.authorizeSubmit({ csrf, decision: "approve" }).status).toBe(400);
-    expect(h.server.authorizeSubmit({ csrf: "oauth_req_forged", decision: "approve" }).status).toBe(
+    expect(h.server.authorizeSubmit({ csrf, decision: "approve" }, h.session).status).toBe(400);
+    expect(h.server.authorizeSubmit({ csrf: "oauth_req_forged", decision: "approve" }, h.session).status).toBe(
       400,
     );
   });
@@ -231,9 +249,9 @@ describe("authorize / token 流程", () => {
   it("授权码一次性 + PKCE 校验 + client/redirect_uri 匹配", () => {
     const h = setupOAuth();
     const clientId = registerClient(h.server);
-    const page = h.server.authorize(authorizeQuery(clientId));
+    const page = h.server.authorize(authorizeQuery(clientId), h.session);
     const csrf = /name="csrf" value="([^"]+)"/.exec(page.html ?? "")?.[1] ?? "";
-    const submit = h.server.authorizeSubmit({ csrf, decision: "approve" });
+    const submit = h.server.authorizeSubmit({ csrf, decision: "approve" }, h.session);
     const code = new URL(submit.headers?.location ?? "").searchParams.get("code") ?? "";
 
     const wrongVerifier = h.server.token({
@@ -258,9 +276,9 @@ describe("authorize / token 流程", () => {
     expect((afterFail.body as { error: string }).error).toBe("invalid_grant");
 
     // 正常路径：新授权码换 token 成功，且授权码一次性
-    const page2 = h.server.authorize(authorizeQuery(clientId));
+    const page2 = h.server.authorize(authorizeQuery(clientId), h.session);
     const csrf2 = /name="csrf" value="([^"]+)"/.exec(page2.html ?? "")?.[1] ?? "";
-    const submit2 = h.server.authorizeSubmit({ csrf: csrf2, decision: "approve" });
+    const submit2 = h.server.authorizeSubmit({ csrf: csrf2, decision: "approve" }, h.session);
     const code2 = new URL(submit2.headers?.location ?? "").searchParams.get("code") ?? "";
     const ok = h.server.token({
       grant_type: "authorization_code",
@@ -309,9 +327,9 @@ describe("authorize / token 流程", () => {
 
     // 授权码过期（时钟推进 11 分钟）
     const clientId = registerClient(h.server);
-    const page = h.server.authorize(authorizeQuery(clientId));
+    const page = h.server.authorize(authorizeQuery(clientId), h.session);
     const csrf = /name="csrf" value="([^"]+)"/.exec(page.html ?? "")?.[1] ?? "";
-    const submit = h.server.authorizeSubmit({ csrf, decision: "approve" });
+    const submit = h.server.authorizeSubmit({ csrf, decision: "approve" }, h.session);
     const code = new URL(submit.headers?.location ?? "").searchParams.get("code") ?? "";
     h.clock.value = new Date(Date.parse(T0) + 11 * 60 * 1000).toISOString();
     const expired = h.server.token({
@@ -323,6 +341,54 @@ describe("authorize / token 流程", () => {
     });
     expect(expired.status).toBe(400);
     expect((expired.body as { error: string }).error).toBe("invalid_grant");
+  });
+
+  it("BUG-10：refresh 30 天独立过期拒绝；旧 token 重放拒绝；迁移老数据回填", () => {
+    const h = setupOAuth();
+    const pair = fullFlow(h);
+    // 30 天内可轮换
+    h.clock.value = new Date(Date.parse(T0) + 29 * 24 * 3600 * 1000).toISOString();
+    const ok = h.server.token({ grant_type: "refresh_token", refresh_token: pair.refresh_token });
+    expect(ok.status).toBe(200);
+    // 旧 token 重放（已轮换核销）拒绝
+    const replay = h.server.token({
+      grant_type: "refresh_token",
+      refresh_token: pair.refresh_token,
+    });
+    expect(replay.status).toBe(400);
+    // 新 refresh 过 30 天独立过期
+    const rotated = (ok.body as { refresh_token: string }).refresh_token;
+    h.clock.value = new Date(Date.parse(T0) + 60 * 24 * 3600 * 1000).toISOString();
+    const expired = h.server.token({ grant_type: "refresh_token", refresh_token: rotated });
+    expect(expired.status).toBe(400);
+
+    // 迁移：老库（无 refresh_expires_at 列）ALTER 补列并回填 created_at+30d
+    const legacy = new DatabaseSync(":memory:");
+    legacy.exec(`CREATE TABLE oauth_tokens (
+      access_digest TEXT PRIMARY KEY, refresh_digest TEXT UNIQUE, client_id TEXT NOT NULL,
+      principal_id TEXT NOT NULL, merchant_id TEXT NOT NULL, scope TEXT NOT NULL,
+      expires_at TEXT NOT NULL, revoked_at TEXT, created_at TEXT NOT NULL)`);
+    const legacyStore = new MerchantOAuthStore({ db: legacy, now: () => T0 });
+    const issued = legacyStore.issueTokenPair({
+      client_id: "c",
+      principal_id: "p",
+      merchant_id: "m",
+      scope: "merchant:read",
+    });
+    // 回填后可轮换（created_at=T0 → 29 天后仍有效；迁移在构造时已执行）
+    const rotatedLegacy = legacyStore.rotateRefreshToken(issued.refresh_token);
+    expect(rotatedLegacy).toBeDefined();
+    legacy.close();
+  });
+
+  it("BUG-10：并发轮换只成功一次（同一 refresh 两个轮换调用）", () => {
+    const h = setupOAuth();
+    const pair = fullFlow(h);
+    const first = h.store.rotateRefreshToken(pair.refresh_token);
+    const second = h.store.rotateRefreshToken(pair.refresh_token);
+    expect(first).not.toBeNull();
+    expect(second).toBeUndefined(); // 后者因 revoked_at 条件更新未命中而失败
+    expect(first === undefined).toBe(false);
   });
 
   it("未知 grant_type → unsupported_grant_type", () => {
@@ -371,55 +437,100 @@ describe("OAuthBearerVerifier（租户与有效期）", () => {
   });
 });
 
+const ADMIN_PW = "test-admin-password-1";
+
+/** HTTP 栈：OAuth + 管理面（登录会话 + 确认凭证）挂载；返回已登录 cookie。 */
+async function startHttpStack(): Promise<{
+  issuer: string;
+  handle: MerchantMcpServerHandle;
+  cookie: string;
+  adminDir: string;
+  cleanup: () => Promise<void>;
+}> {
+  const clock = { value: T0 };
+  const sharedDb = new DatabaseSync(":memory:");
+  const oauthStore = new MerchantOAuthStore({ db: sharedDb, now: () => clock.value });
+  const db = new DatabaseSync(":memory:");
+  migrateMemorySchema(db);
+  db.prepare(
+    `INSERT INTO principals (principal_id, owner_id, role, locale, timezone, memory_schema_version, created_at, updated_at)
+     VALUES (?, 'merchant-001', 'merchant', 'zh-CN', 'Asia/Shanghai', 3, ?, ?)`,
+  ).run("merchant-agent:merchant-001", T0, T0);
+  const service = new MerchantWorkbenchService({
+    profile: testProfile(),
+    merchantClient: new FakeMerchantClient({ products: [fakeMerchantProduct()] }),
+    approvals: new WriteApprovalCandidateStore({
+      db,
+      principalId: "merchant-agent:merchant-001",
+      now: () => clock.value,
+    }),
+    mode: () => "supervised",
+    now: () => clock.value,
+  });
+  const probe = await startMerchantMcpServer({ service, host: "127.0.0.1", port: 0 });
+  const issuer = `http://127.0.0.1:${probe.port}`;
+  await probe.close();
+  const oauth = new MerchantOAuthServer({
+    store: oauthStore,
+    issuer,
+    resource: `${issuer}/mcp`,
+    connectorSource: "kiwi-merchant",
+    merchantName: "Veyquo 手工陶瓷",
+    merchantId: "merchant-001",
+    now: () => clock.value,
+  });
+  const adminDir = mkdtempSync(path.join(tmpdir(), "kiwi-admin-test-"));
+  writeAdminCredentials(adminDir, {
+    principalId: "merchant-agent:merchant-001",
+    merchantId: "merchant-001",
+    password: ADMIN_PW,
+  });
+  const handle = await startMerchantMcpServer({
+    service,
+    host: "127.0.0.1",
+    port: probe.port,
+    oauth,
+    auth: new MerchantOAuthVerifier({ store: oauthStore, expectedMerchantId: "merchant-001" }),
+    admin: {
+      merchantName: "Veyquo 手工陶瓷",
+      surface: {
+        listPending: () => [],
+        executeApproved: async () => ({}),
+        rejectCandidate: async () => ({}),
+      },
+      sessions: new MerchantAdminSessions({ db: sharedDb, now: () => clock.value }),
+      store: oauthStore,
+      adminDir,
+    },
+  });
+  const login = await fetch(`${issuer}/admin/login`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ password: ADMIN_PW, next: "/admin/pending" }).toString(),
+    redirect: "manual",
+  });
+  expect(login.status).toBe(303);
+  const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+  expect(cookie).toContain("kiwi_admin=");
+  return {
+    issuer,
+    handle,
+    cookie,
+    adminDir,
+    cleanup: async () => {
+      await handle.close();
+      db.close();
+      sharedDb.close();
+      rmSync(adminDir, { recursive: true, force: true });
+    },
+  };
+}
+
 describe("HTTP 端到端（OAuth 挂载到 MCP server）", () => {
   it("无 token 401 带 resource_metadata；OAuth 全流程后访问 /mcp 通过", async () => {
-    const clock = { value: T0 };
-    const oauthStore = new MerchantOAuthStore({
-      db: new DatabaseSync(":memory:"),
-      now: () => clock.value,
-    });
-    const db = new DatabaseSync(":memory:");
-    migrateMemorySchema(db);
-    db.prepare(
-      `INSERT INTO principals (principal_id, owner_id, role, locale, timezone, memory_schema_version, created_at, updated_at)
-       VALUES (?, 'merchant-001', 'merchant', 'zh-CN', 'Asia/Shanghai', 3, ?, ?)`,
-    ).run("merchant-agent:merchant-001", T0, T0);
-    const service = new MerchantWorkbenchService({
-      profile: testProfile(),
-      merchantClient: new FakeMerchantClient({ products: [fakeMerchantProduct()] }),
-      approvals: new WriteApprovalCandidateStore({
-        db,
-        principalId: "merchant-agent:merchant-001",
-        now: () => clock.value,
-      }),
-      mode: () => "supervised",
-      now: () => clock.value,
-    });
-
-    let handle: MerchantMcpServerHandle | undefined;
+    const stack = await startHttpStack();
+    const issuer = stack.issuer;
     try {
-      // 先起一次拿实际端口再重建（issuer 需要真实端口）
-      const probe = await startMerchantMcpServer({ service, host: "127.0.0.1", port: 0 });
-      const issuer = `http://127.0.0.1:${probe.port}`;
-      await probe.close();
-      const oauth = new MerchantOAuthServer({
-        store: oauthStore,
-        issuer,
-        resource: `${issuer}/mcp`,
-        connectorSource: "kiwi-merchant",
-        merchantName: "Veyquo 手工陶瓷",
-        principalId: "merchant-agent:merchant-001",
-        merchantId: "merchant-001",
-        now: () => clock.value,
-      });
-      handle = await startMerchantMcpServer({
-        service,
-        host: "127.0.0.1",
-        port: probe.port,
-        oauth,
-        auth: new MerchantOAuthVerifier({ store: oauthStore, expectedMerchantId: "merchant-001" }),
-      });
-
       // 元数据发现
       const meta = await fetch(`${issuer}/.well-known/oauth-authorization-server`);
       expect(meta.status).toBe(200);
@@ -444,13 +555,17 @@ describe("HTTP 端到端（OAuth 挂载到 MCP server）", () => {
       const clientId = ((await registered.json()) as { client_id: string }).client_id;
       const page = await fetch(
         `${issuer}/oauth/authorize?${new URLSearchParams(authorizeQuery(clientId)).toString()}`,
+        { headers: { cookie: stack.cookie } },
       );
       expect(page.status).toBe(200);
       const html = await page.text();
       const csrf = /name="csrf" value="([^"]+)"/.exec(html)?.[1] ?? "";
       const submit = await fetch(`${issuer}/oauth/authorize`, {
         method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          cookie: stack.cookie,
+        },
         body: new URLSearchParams({ csrf, decision: "approve" }).toString(),
         redirect: "manual",
       });
@@ -491,18 +606,17 @@ describe("HTTP 端到端（OAuth 挂载到 MCP server）", () => {
       });
       expect(allowed.status).toBe(200);
     } finally {
-      await handle?.close();
-      db.close();
+      await stack.cleanup();
     }
   });
 });
 
 describe("tools/list 按 scope 过滤（V2 阶段一）", () => {
-  /** 以指定 scope 走完整 OAuth 流程，拿到 access_token。 */
+  /** 以指定 scope 走完整 OAuth 流程（含管理登录会话 cookie），拿到 access_token。 */
   async function issueTokenWithScopes(
     issuer: string,
-    server: MerchantOAuthServer,
     scopes: string,
+    cookie: string,
   ): Promise<string> {
     const registered = await fetch(`${issuer}/oauth/register`, {
       method: "POST",
@@ -511,13 +625,16 @@ describe("tools/list 按 scope 过滤（V2 阶段一）", () => {
     });
     const clientId = ((await registered.json()) as { client_id: string }).client_id;
     const query = { ...authorizeQuery(clientId), scope: scopes };
-    const page = await fetch(
-      `${issuer}/oauth/authorize?${new URLSearchParams(query).toString()}`,
-    );
+    const page = await fetch(`${issuer}/oauth/authorize?${new URLSearchParams(query).toString()}`, {
+      headers: { cookie },
+    });
     const csrf = /name="csrf" value="([^"]+)"/.exec(await page.text())?.[1] ?? "";
     const submit = await fetch(`${issuer}/oauth/authorize`, {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        cookie,
+      },
       body: new URLSearchParams({ csrf, decision: "approve" }).toString(),
       redirect: "manual",
     });
@@ -536,7 +653,12 @@ describe("tools/list 按 scope 过滤（V2 阶段一）", () => {
     return ((await tokenRes.json()) as { access_token: string }).access_token;
   }
 
-  function mcpRpc(token: string, issuer: string, method: string, params: unknown): Promise<Response> {
+  function mcpRpc(
+    token: string,
+    issuer: string,
+    method: string,
+    params: unknown,
+  ): Promise<Response> {
     return fetch(`${issuer}/mcp`, {
       method: "POST",
       headers: {
@@ -549,50 +671,10 @@ describe("tools/list 按 scope 过滤（V2 阶段一）", () => {
   }
 
   it("read-only token：tools/list 过滤写工具；call 写工具返回 scope 不足", async () => {
-    const clock = { value: T0 };
-    const oauthStore = new MerchantOAuthStore({
-      db: new DatabaseSync(":memory:"),
-      now: () => clock.value,
-    });
-    const db = new DatabaseSync(":memory:");
-    migrateMemorySchema(db);
-    db.prepare(
-      `INSERT INTO principals (principal_id, owner_id, role, locale, timezone, memory_schema_version, created_at, updated_at)
-       VALUES (?, 'merchant-001', 'merchant', 'zh-CN', 'Asia/Shanghai', 3, ?, ?)`,
-    ).run("merchant-agent:merchant-001", T0, T0);
-    const service = new MerchantWorkbenchService({
-      profile: testProfile(),
-      merchantClient: new FakeMerchantClient({ products: [fakeMerchantProduct()] }),
-      approvals: new WriteApprovalCandidateStore({
-        db,
-        principalId: "merchant-agent:merchant-001",
-        now: () => clock.value,
-      }),
-      mode: () => "supervised",
-      now: () => clock.value,
-    });
-    const probe = await startMerchantMcpServer({ service, host: "127.0.0.1", port: 0 });
-    const issuer = `http://127.0.0.1:${probe.port}`;
-    await probe.close();
-    const oauth = new MerchantOAuthServer({
-      store: oauthStore,
-      issuer,
-      resource: `${issuer}/mcp`,
-      connectorSource: "kiwi-merchant",
-      merchantName: "Veyquo 手工陶瓷",
-      principalId: "merchant-agent:merchant-001",
-      merchantId: "merchant-001",
-      now: () => clock.value,
-    });
-    const handle = await startMerchantMcpServer({
-      service,
-      host: "127.0.0.1",
-      port: probe.port,
-      oauth,
-      auth: new MerchantOAuthVerifier({ store: oauthStore, expectedMerchantId: "merchant-001" }),
-    });
+    const stack = await startHttpStack();
+    const issuer = stack.issuer;
     try {
-      const readToken = await issueTokenWithScopes(issuer, oauth, "merchant:read");
+      const readToken = await issueTokenWithScopes(issuer, "merchant:read", stack.cookie);
       // initialize（无 scope 要求）
       await mcpRpc(readToken, issuer, "initialize", {
         protocolVersion: "2025-06-18",
@@ -601,8 +683,8 @@ describe("tools/list 按 scope 过滤（V2 阶段一）", () => {
       });
       const listRes = await mcpRpc(readToken, issuer, "tools/list", {});
       const tools = (
-        ((await listRes.json()) as { result: { tools: Array<{ name: string }> } }).result.tools
-      ).map((t) => t.name);
+        (await listRes.json()) as { result: { tools: Array<{ name: string }> } }
+      ).result.tools.map((t) => t.name);
       expect(tools).toContain("kiwi_merchant_list_products");
       expect(tools).not.toContain("kiwi_merchant_prepare_product_change");
       expect(tools.some((t) => t.includes("prepare_") || t.includes("execute_"))).toBe(false);
@@ -625,17 +707,20 @@ describe("tools/list 按 scope 过滤（V2 阶段一）", () => {
         ((await readRes.json()) as { result: { isError?: boolean } }).result.isError,
       ).toBeUndefined();
 
-      // 全量 scope → 7 个工具全列出
-      const fullToken = await issueTokenWithScopes(issuer, oauth, "merchant:read merchant:write");
+      // 全量 scope → 15 个工具全列出（execute/reject 已移出 MCP 注册表——BUG-02）
+      const fullToken = await issueTokenWithScopes(
+        issuer,
+        "merchant:read merchant:write",
+        stack.cookie,
+      );
       const fullList = await mcpRpc(fullToken, issuer, "tools/list", {});
       const fullTools = (
-        ((await fullList.json()) as { result: { tools: Array<{ name: string }> } }).result.tools
-      ).map((t) => t.name);
-      expect(fullTools).toHaveLength(17);
+        (await fullList.json()) as { result: { tools: Array<{ name: string }> } }
+      ).result.tools.map((t) => t.name);
+      expect(fullTools).toHaveLength(15);
       expect(fullTools).toContain("kiwi_merchant_prepare_product_change");
     } finally {
-      await handle.close();
-      db.close();
+      await stack.cleanup();
     }
   });
 });

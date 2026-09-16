@@ -54,6 +54,41 @@ import type { MerchantMcpAuthVerifier } from "./merchant-auth.js";
 import { buildMerchantMcpTools } from "./merchant-tools.js";
 import type { buildMerchantPresentationResources } from "./merchant-resources.js";
 import { renderPendingPage, type MerchantAdminSurface } from "../merchant-admin/pending-page.js";
+import {
+  ADMIN_SESSION_COOKIE,
+  readAdminCredentials,
+  renderAdminLoginPage,
+  verifyAdminPassword,
+  type MerchantAdminSessions,
+} from "../auth/merchant-sessions.js";
+import type { MerchantOAuthStore } from "../auth/merchant-oauth.js";
+import { contentHash } from "../agent/merchant/action-candidate.js";
+
+/** 从 Cookie 头取值（管理会话）。 */
+function cookieValue(req: IncomingMessage, name: string): string | undefined {
+  const header = req.headers.cookie;
+  if (header === undefined) return undefined;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
+  }
+  return undefined;
+}
+
+/** 只允许管理面内部相对路径，避免 XSS 和开放重定向。 */
+function safeAdminNext(value: string | undefined): string {
+  if (
+    value === undefined ||
+    value === "" ||
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("\\")
+  ) {
+    return "/admin/pending";
+  }
+  return value;
+}
 
 /** 缺省监听地址（远程连接器形态；fail-closed 由 merchant-auth 守卫）。 */
 export const DEFAULT_MERCHANT_MCP_HOST = "0.0.0.0";
@@ -77,8 +112,19 @@ export interface MerchantMcpServerOptions {
   oauth?: MerchantOAuthServer;
   /** 七类 presentation 的 MCP 资源（V2 阶段二；提供时挂载 resources/list|read）。 */
   presentations?: ReturnType<typeof buildMerchantPresentationResources>;
-  /** 配套商家确认页面（V2 阶段三；Bearer 认证强制，write 面）。 */
-  admin?: { merchantName: string; surface: MerchantAdminSurface };
+  /** 配套商家确认页面（V2 阶段三；BUG-01/03 修复后：cookie 会话 + 一次性
+   *  确认凭证；write 面由会话主体逐次校验）。 */
+  admin?: {
+    merchantName: string;
+    surface: MerchantAdminSurface;
+    sessions: MerchantAdminSessions;
+    /** 一次性确认凭证存储（oauth.sqlite）。 */
+    store: MerchantOAuthStore;
+    /** 管理员凭据目录（admin-credentials.json）。 */
+    adminDir: string;
+    /** https 部署置 true（cookie 加 Secure）。 */
+    secureCookies?: boolean;
+  };
   serverInfo?: { name: string; version: string };
   /** 响应体大小上限（字符）。 */
   maxChars?: number;
@@ -138,9 +184,12 @@ function createProtocolServer(
   }));
   if (presentations !== undefined) {
     server.setRequestHandler(ListResourcesRequestSchema, () => ({
-      resources: presentations.list(),
+      resources: scopes === undefined || scopes.includes("merchant:read") ? presentations.list() : [],
     }));
     server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      if (scopes !== undefined && !scopes.includes("merchant:read")) {
+        throw new Error("scope 不足：resources/read 需要 merchant:read");
+      }
       return await presentations.read(request.params.uri);
     });
   }
@@ -236,7 +285,16 @@ export async function startMerchantMcpServer(
       return true;
     }
     if (req.method === "GET" && p === "/oauth/authorize") {
-      writeOAuthResult(res, oauth.authorize(Object.fromEntries(url.searchParams.entries())));
+      // BUG-01：授权页需要管理登录会话（cookie）；无会话 → 303 登录页。
+      const sessionId = cookieValue(req, ADMIN_SESSION_COOKIE);
+      const session =
+        sessionId !== undefined && options.admin !== undefined
+          ? options.admin.sessions.getSession(sessionId)
+          : undefined;
+      writeOAuthResult(
+        res,
+        oauth.authorize(Object.fromEntries(url.searchParams.entries()), session),
+      );
       return true;
     }
     if (
@@ -244,12 +302,29 @@ export async function startMerchantMcpServer(
       (p === "/oauth/authorize" || p === "/oauth/token" || p === "/oauth/revoke")
     ) {
       const form = await readForm(req);
-      const result =
-        p === "/oauth/authorize"
-          ? oauth.authorizeSubmit(form)
-          : p === "/oauth/token"
-            ? oauth.token(form)
-            : oauth.revoke(form);
+      let result: OAuthHttpResult;
+      if (p === "/oauth/authorize") {
+        const sessionId = cookieValue(req, ADMIN_SESSION_COOKIE);
+        const session =
+          sessionId !== undefined && options.admin !== undefined
+            ? options.admin.sessions.getSession(sessionId)
+            : undefined;
+        if (session === undefined) {
+          writeOAuthResult(res, {
+            status: 401,
+            body: {
+              error: "login_required",
+              error_description: "授权提交需要有效的商家管理会话",
+            },
+          });
+          return true;
+        }
+        result = oauth.authorizeSubmit(form, session);
+      } else if (p === "/oauth/token") {
+        result = oauth.token(form);
+      } else {
+        result = oauth.revoke(form);
+      }
       writeOAuthResult(res, result);
       return true;
     }
@@ -264,46 +339,118 @@ export async function startMerchantMcpServer(
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (await routeOAuth(req, res, url)) return;
-      // 配套商家确认页面（V2 阶段三）：Bearer 认证强制（write 面由服务端逐次校验）。
+      // 配套商家管理面（BUG-01/03 修复后）：登录用 cookie 会话（HttpOnly/
+      // SameSite=Lax/生产 Secure）；/admin/pending 需会话；/admin/decision
+      // 需会话 + 一次性确认凭证（绑定候选摘要/主体/商家/动作，单次用途）。
       if (options.admin !== undefined && url.pathname.startsWith("/admin/")) {
-        const verdict = options.auth?.verify({
-          ...(typeof req.headers.authorization === "string"
-            ? { authorizationHeader: req.headers.authorization }
-            : {}),
-        });
-        if (verdict === undefined || !verdict.ok) {
-          writeJson(res, 401, {
-            error: "unauthorized",
-            message: "认证失败：需要有效的 Bearer token",
-          });
+        const admin = options.admin;
+        // 登录端点（公开；口令校验后签发会话）
+        if (url.pathname === "/admin/login") {
+          if (req.method === "GET") {
+            res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+            res.end(
+              renderAdminLoginPage({
+                next: safeAdminNext(url.searchParams.get("next") ?? undefined),
+              }),
+            );
+            return;
+          }
+          if (req.method === "POST") {
+            const form = await readForm(req);
+            const creds = readAdminCredentials(admin.adminDir);
+            const password = form.password ?? "";
+            if (creds === undefined || !verifyAdminPassword(password, creds.password_hash)) {
+              res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+              res.end(renderAdminLoginPage({ error: "口令错误或管理员未初始化" }));
+              return;
+            }
+            const session = admin.sessions.createSession({
+              principalId: creds.principal_id,
+              merchantId: creds.merchant_id,
+            });
+            const secure = admin.secureCookies === true ? "; Secure" : "";
+            res.writeHead(303, {
+              location: safeAdminNext(form.next),
+              "set-cookie": `${ADMIN_SESSION_COOKIE}=${session.sessionId}; HttpOnly; SameSite=Lax; Path=/${secure}`,
+            });
+            res.end();
+            return;
+          }
+        }
+        // 其余 /admin/* 需要有效会话
+        const sessionId = cookieValue(req, ADMIN_SESSION_COOKIE);
+        const session = sessionId !== undefined ? admin.sessions.getSession(sessionId) : undefined;
+        if (session === undefined) {
+          res.writeHead(303, { location: "/admin/login" });
+          res.end();
           return;
         }
         if (req.method === "GET" && url.pathname === "/admin/pending") {
+          const commands = admin.surface.listPending();
+          // 按候选签发一次性确认凭证（表单 CSRF + 确认绑定，单次用途）
+          const tokenFor = (candidateId: string, action: "approve" | "reject"): string => {
+            const candidate = commands.find((c) => c.candidate_id === candidateId);
+            if (candidate === undefined) return "";
+            return admin.store.createConfirmation({
+              candidateId,
+              candidateDigest: contentHash({
+                arguments: candidate.arguments,
+                preconditions: candidate.preconditions,
+              }),
+              principalId: session.principal_id,
+              merchantId: session.merchant_id,
+              action,
+            });
+          };
           res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-          res.end(
-            renderPendingPage(options.admin.merchantName, options.admin.surface.listPending()),
-          );
+          res.end(renderPendingPage(admin.merchantName, commands, tokenFor));
           return;
         }
         if (req.method === "POST" && url.pathname === "/admin/decision") {
           const form = await readForm(req);
           const commandId = form.command_id ?? "";
+          const action =
+            form.decision === "approve"
+              ? "approve"
+              : form.decision === "reject"
+                ? "reject"
+                : undefined;
+          if (action === undefined) {
+            writeJson(res, 400, {
+              error: "invalid_request",
+              message: "decision 必须是 approve/reject",
+            });
+            return;
+          }
+          const candidate = admin.surface.listPending().find((c) => c.candidate_id === commandId);
+          if (candidate === undefined) {
+            writeJson(res, 400, {
+              error: "not_found",
+              message: `未知或非 pending 命令 ${commandId}`,
+            });
+            return;
+          }
+          // 一次性确认凭证由执行层（命令日志）逐项核对并核销（候选内容摘要/
+          // 主体/商家/动作/有效期/单次用途）——路由不再预消费，防双重核销。
           try {
-            if (form.decision === "approve") {
-              await options.admin.surface.executeApproved(commandId);
-            } else if (form.decision === "reject") {
-              await options.admin.surface.rejectCandidate(commandId);
+            if (action === "approve") {
+              await admin.surface.executeApproved(
+                commandId,
+                session.principal_id,
+                form.confirmation,
+              );
             } else {
-              writeJson(res, 400, {
-                error: "invalid_request",
-                message: "decision 必须是 approve/reject",
-              });
-              return;
+              await admin.surface.rejectCandidate(
+                commandId,
+                session.principal_id,
+                form.confirmation,
+              );
             }
           } catch (err) {
-            writeJson(res, 400, {
-              error: "command_failed",
-              message: err instanceof Error ? err.message : String(err),
+            const message = err instanceof Error ? err.message : String(err);
+            writeJson(res, message.includes("确认凭证") ? 403 : 400, {
+              error: message.includes("确认凭证") ? "invalid_confirmation" : "command_failed",
+              message,
             });
             return;
           }

@@ -20,6 +20,7 @@ import {
   pkceS256,
 } from "../../src/auth/merchant-oauth.js";
 import { MerchantOAuthVerifier } from "../../src/auth/merchant-authorization.js";
+import { MerchantAdminSessions, writeAdminCredentials } from "../../src/auth/merchant-sessions.js";
 import { MerchantWorkbenchService } from "../../src/merchant/workbench-service.js";
 import {
   startMerchantMcpServer,
@@ -50,8 +51,9 @@ afterEach(() => {
 describe("阶段一验收 1：首次绑定到正确商家", () => {
   it("OAuth 全流程签发的 token 绑定实例 owner_id；越权租户拒绝", async () => {
     const clock = { value: T0 };
+    const oauthDb = new DatabaseSync(":memory:");
     const oauthStore = new MerchantOAuthStore({
-      db: new DatabaseSync(":memory:"),
+      db: oauthDb,
       now: () => clock.value,
     });
     const db = new DatabaseSync(":memory:");
@@ -83,9 +85,16 @@ describe("阶段一验收 1：首次绑定到正确商家", () => {
         resource: `${issuer}/mcp`,
         connectorSource: "kiwi-merchant",
         merchantName: "Veyquo 手工陶瓷",
-        principalId: profile.agent_id,
         merchantId: profile.owner_id,
         now: () => clock.value,
+      });
+      // BUG-01：授权前先管理员登录（会话 cookie）；管理面挂载
+      const adminDir = mkdtempSync(path.join(tmpdir(), "kiwi-stage1-admin-"));
+      dirs.push(adminDir);
+      writeAdminCredentials(adminDir, {
+        principalId: "merchant-agent:merchant-001",
+        merchantId: profile.owner_id,
+        password: "stage1-admin-pw",
       });
       handle = await startMerchantMcpServer({
         service,
@@ -96,7 +105,25 @@ describe("阶段一验收 1：首次绑定到正确商家", () => {
           store: oauthStore,
           expectedMerchantId: profile.owner_id,
         }),
+        admin: {
+          merchantName: "Veyquo 手工陶瓷",
+          surface: {
+            listPending: () => [],
+            executeApproved: async () => ({}),
+            rejectCandidate: async () => ({}),
+          },
+          sessions: new MerchantAdminSessions({ db: oauthDb, now: () => clock.value }),
+          store: oauthStore,
+          adminDir,
+        },
       });
+      const login = await fetch(`${issuer}/admin/login`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ password: "stage1-admin-pw" }).toString(),
+        redirect: "manual",
+      });
+      const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
 
       // 首次绑定全流程（register → authorize 同意 → token）
       const registered = await fetch(`${issuer}/oauth/register`, {
@@ -115,11 +142,15 @@ describe("阶段一验收 1：首次绑定到正确商家", () => {
           code_challenge: pkceS256(VERIFIER),
           code_challenge_method: "S256",
         })}`,
+        { headers: { cookie } },
       );
       const csrf = /name="csrf" value="([^"]+)"/.exec(await page.text())?.[1] ?? "";
       const submit = await fetch(`${issuer}/oauth/authorize`, {
         method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          cookie,
+        },
         body: new URLSearchParams({ csrf, decision: "approve" }).toString(),
         redirect: "manual",
       });

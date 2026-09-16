@@ -9,7 +9,7 @@
  * - F14 两轨：A2A 人审不报 shopping 通道；shopping 轨走 resolver；
  * - F17 策略热更新：执行器写入覆盖层即生效；硬策略（私有底价）执行器强制。
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -21,6 +21,7 @@ import {
   fakeMerchantProduct,
 } from "../src/agent/merchant/fake-merchant-client.js";
 import { MerchantCoreService, type MerchantCoreServiceDeps } from "../src/merchant-core/service.js";
+import { MerchantPolicyRuntime } from "../src/merchant-core/policy-runtime.js";
 import { testProfile } from "./helpers.js";
 
 const T0 = "2026-09-15T10:00:00.000Z";
@@ -168,6 +169,39 @@ describe("写闭环：prepare → 确认 → 执行", () => {
     expect((await client.getProduct("sku-001")).price).toBe(99); // 未写入
     db.close();
   });
+
+  it("BUG-07：硬策略按运行中生效策略校验（运行中把底价从 80 提到 90 后，85 元被拒）", async () => {
+    // testProfile min_unit_price_private = 80（base）；运行中策略可覆盖。
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-policy-floor-"));
+    dirs.push(dir);
+    const policyRuntime = new MerchantPolicyRuntime({
+      basePolicy: { min_unit_price_private: 80 },
+      file: path.join(dir, "policy-overrides.json"),
+      now: () => T0,
+    });
+    const { core, client, db } = setupCore({
+      applyPolicyOverride: (patch) => policyRuntime.apply(patch),
+      currentPolicy: () => policyRuntime.current().policy,
+    });
+    // base 底价 80：85 元合法，执行通过。
+    const p1 = await core.commands.prepare({
+      tool: "draft_product_change",
+      arguments: { sku: "sku-001", changes: { price: 85 }, reason: "" },
+    });
+    expect((await core.executeApproved(p1.candidate.candidate_id)).kind).toBe("executed");
+    // 运行中策略把底价提到 90 → 同样 85 元，执行层拒绝（证明读的是运行中策略，
+    // 不是启动 profile 的 80）。
+    policyRuntime.apply({ min_unit_price_private: 90 });
+    const p2 = await core.commands.prepare({
+      tool: "draft_product_change",
+      arguments: { sku: "sku-001", changes: { price: 85 }, reason: "" },
+    });
+    const outcome = await core.executeApproved(p2.candidate.candidate_id);
+    expect(outcome.kind).toBe("stale");
+    expect(outcome.kind === "stale" && outcome.reason).toContain("硬策略");
+    expect((await client.getProduct("sku-001")).price).toBe(85); // 未写入
+    db.close();
+  });
 });
 
 describe("写面覆盖（F08/F14/F17）", () => {
@@ -198,19 +232,28 @@ describe("写面覆盖（F08/F14/F17）", () => {
     db.close();
   });
 
-  it("F17 策略热更新：执行器写入覆盖层（不重启进程）", async () => {
+  it("F17 策略热更新：执行器经运行时校验+原子写完整生效策略（BUG-07）", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-policy-"));
     dirs.push(dir);
+    const policyRuntime = new MerchantPolicyRuntime({
+      basePolicy: undefined,
+      file: path.join(dir, "policy-overrides.json"),
+      now: () => T0,
+    });
     const { core, db } = setupCore({
-      applyPolicyOverride: (patch) => {
-        writeFileSync(path.join(dir, "policy-overrides.json"), JSON.stringify(patch));
-      },
+      applyPolicyOverride: (patch) => policyRuntime.apply(patch),
+      currentPolicy: () => policyRuntime.current().policy,
     });
     const prepared = await core.preparePolicyChange({ patch: { max_auto_discount_percent: 10 } });
     const outcome = await core.executeApproved(prepared.candidate.candidate_id);
     expect(outcome.kind).toBe("executed");
     const saved = JSON.parse(readFileSync(path.join(dir, "policy-overrides.json"), "utf8"));
-    expect(saved).toEqual({ max_auto_discount_percent: 10 });
+    // BUG-07：文件是**完整生效策略**（含 version/updated_at），不是裸 patch。
+    expect(saved.policy).toEqual({ max_auto_discount_percent: 10 });
+    expect(saved.version).toBe(1);
+    // 运行中策略立即生效（同进程执行器经 currentPolicy 读取）。
+    expect(policyRuntime.current().policy).toEqual({ max_auto_discount_percent: 10 });
+    expect(policyRuntime.current().version).toBe(1);
     db.close();
   });
 });
@@ -236,10 +279,10 @@ describe("配套商家确认页面（src/merchant-admin/ 最小骨架）", () =>
     const admin = merchantAdminSurface(core);
     const prepared = await core.prepareInventoryUpdate({ sku: "sku-001", stock: 3 });
     expect(admin.listPending()).toHaveLength(1);
-    await admin.executeApproved(prepared.candidate.candidate_id);
+    await admin.executeApproved(prepared.candidate.candidate_id, PRINCIPAL);
     expect((await client.getProduct("sku-001")).stock).toBe(3);
     const prepared2 = await core.prepareInventoryUpdate({ sku: "sku-001", stock: 9 });
-    await admin.rejectCandidate(prepared2.candidate.candidate_id);
+    await admin.rejectCandidate(prepared2.candidate.candidate_id, PRINCIPAL);
     expect((await client.getProduct("sku-001")).stock).toBe(3);
     db.close();
   });

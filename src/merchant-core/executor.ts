@@ -28,9 +28,10 @@
  */
 
 import type { MerchantClient, MerchantProductPatch } from "../agent/merchant/types.js";
-import type { AgentProfile } from "../config/profile.js";
+import type { AgentProfile, MerchantPolicy } from "../config/profile.js";
 import { publicProductView } from "../merchant/workbench-service.js";
 import { executeProductsImport } from "./product-import.js";
+import type { ApplyPolicyResult } from "./policy-runtime.js";
 import type { MerchantOperationStore } from "./operations.js";
 
 /** 执行器上下文（只读依赖 + 策略写接缝）。 */
@@ -41,8 +42,13 @@ export interface ExecutorContext {
   ownerId: string;
   /** 长任务 operation store（CSV 导入/撤回等；缺省时相关执行器 fail-closed）。 */
   operations?: MerchantOperationStore;
-  /** 策略热更新写入（F17；写入即时生效，不重启进程）。 */
-  applyPolicyOverride?: (patch: Record<string, unknown>) => Promise<void> | void;
+  /** 策略热更新写入（F17/BUG-07）：校验+原子写完整生效策略，返回版本/digest。 */
+  applyPolicyOverride?:
+    | ((patch: Record<string, unknown>) => Promise<ApplyPolicyResult>)
+    | ((patch: Record<string, unknown>) => ApplyPolicyResult);
+  /** 运行中策略读取（BUG-07）：配置后硬策略（底价兜底）按当前生效策略执行，
+   *  不再固定用启动 profile 的 merchant_policy。 */
+  currentPolicy?: () => MerchantPolicy | undefined;
   /** F14 两轨人工处理：shopping 轨 resolve（A2A 轨绝不进这里）。 */
   resolveShoppingReview?: (input: {
     conversation_id: string;
@@ -74,9 +80,12 @@ export class MerchantExecutorRegistry {
       const sku = String(args.sku ?? "");
       return publicProductView(await ctx.merchantClient.getProduct(sku));
     };
-    /** 硬策略强制（执行器层兜底）：价格变更不得低于私有底价。 */
+    /** 硬策略强制（执行器层兜底）：价格变更不得低于私有底价（BUG-07：按
+     *  运行中生效策略校验，未配置运行中策略时回退启动 profile）。 */
     const enforceFloor = (price: number | undefined): void => {
-      const floor = ctx.profile.merchant_policy?.min_unit_price_private;
+      const floor =
+        ctx.currentPolicy?.()?.min_unit_price_private ??
+        ctx.profile.merchant_policy?.min_unit_price_private;
       if (price !== undefined && floor !== undefined && price < floor) {
         throw new Error("执行被硬策略拒绝：价格低于私有底价（不透出底价数值）");
       }
@@ -163,15 +172,23 @@ export class MerchantExecutorRegistry {
         },
       },
       {
-        // F17 策略变更热更新：执行器写入覆盖层即生效，不重启进程。
+        // F17 策略变更热更新（BUG-07）：执行器经共享策略提供器校验+原子写
+        // 完整生效策略，A2A/执行器按运行中策略立即生效；回执带版本/digest。
         tool: "kiwi_merchant_prepare_policy_change",
         readPreconditions: async () => ({ scope: "merchant_policy" }),
         execute: async (args, c) => {
           if (c.applyPolicyOverride === undefined) {
             throw new Error("策略热更新接缝未配置（不可得）");
           }
-          await c.applyPolicyOverride((args.patch ?? {}) as Record<string, unknown>);
-          return { applied: true };
+          const patch = (args.patch ?? {}) as Record<string, unknown>;
+          const result = await c.applyPolicyOverride(patch);
+          return {
+            applied: true,
+            version: result.version,
+            digest: result.digest,
+            updated_at: result.updated_at,
+            applied_keys: result.applied_keys,
+          };
         },
       },
       {

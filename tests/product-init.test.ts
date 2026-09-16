@@ -98,6 +98,7 @@ describe("merchant init (D1)", () => {
       expect(profile.owner_id).toBe("seller-b");
       expect(profile.commerce.base_url).toBe("http://127.0.0.1:8765");
       expect(profile.merchant_policy?.min_unit_price_private).toBe(0);
+      expect(profile.merchant_mcp).toMatchObject({ enabled: true, auth_mode: "oauth" });
 
       // secret 不入 profile：token_env 只写环境变量名
       const raw = readFileSync(outputPath, "utf-8");

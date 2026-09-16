@@ -47,9 +47,8 @@ const EXPECTED_TOOL_NAMES = [
   "kiwi_merchant_prepare_listing_change",
   "kiwi_merchant_prepare_review_resolve",
   "kiwi_merchant_prepare_policy_change",
-  "kiwi_merchant_execute_approved",
-  "kiwi_merchant_reject_candidate",
   // V2 阶段四（CSV 导入/撤回长任务 + operation 查询）
+  // BUG-02：execute_approved/reject_candidate 不在 MCP 注册表（模型不可见）
   "kiwi_merchant_prepare_products_import",
   "kiwi_merchant_prepare_products_withdraw",
   "kiwi_merchant_get_operation",
@@ -159,7 +158,7 @@ function writeLedgerFixture(): string {
 }
 
 describe("merchant MCP server", () => {
-  it("initialize + tools/list：17 个工具（7 只读 + 10 写），schema 稳定", async () => {
+  it("initialize + tools/list：15 个工具（7 只读 + 8 写；execute/reject 不在注册表），schema 稳定", async () => {
     const h = await setupMcpServer();
     handles.push(h.handle);
     const client = await connectClient(h.url);

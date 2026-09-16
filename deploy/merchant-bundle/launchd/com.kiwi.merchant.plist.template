@@ -12,9 +12,17 @@
     <string>merchant</string>
     <string>runtime</string>
     <string>start</string>
+    <string>--profile</string>
+    <string>__PREFIX__/config/profile.yaml</string>
     <string>--data-dir</string>
     <string>__PREFIX__/data</string>
   </array>
+  <!-- 实例自带凭据引用：<PREFIX>/.kiwi/credentials.env（安装器 --credentials-env 放置） -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__PREFIX__</string>
+  </dict>
   <!-- 单活 + 自动重启（V2 §5.3 阶段一形态；主备 fencing 留阶段四） -->
   <key>KeepAlive</key>
   <true/>

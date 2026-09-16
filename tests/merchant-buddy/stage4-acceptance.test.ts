@@ -6,8 +6,8 @@
  *   kiwi_merchant_get_operation 查询；
  * - F25 注册检查（可达/失效可检测，fail-closed）与 F03 域名向导检查单；
  * - F29 微信绑定状态（脱敏、不可得明确）；
- * - 告警事件（进程/商品源/积压/磁盘/证书）与备份恢复演练（RPO=0 口径：
- *   磋商 ledger 在备份集内，损坏→恢复→校验）；
+ * - 告警事件（进程/商品源/积压/磁盘/证书）与备份恢复演练（RPO ≤ 备份周期
+ *   口径：磋商 ledger 在备份集内，损坏→恢复→校验；不宣称 RPO=0）；
  * - 旧入口一致性：core 直读与 MCP 工具返回同一业务事实。
  */
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -269,7 +269,11 @@ describe("7×24：告警与备份恢复演练", () => {
     const dataDir = tmp();
     const backupsDir = path.join(tmp(), "backups");
     mkdirSync(path.join(dataDir, "a2a", "ledger"), { recursive: true });
-    writeFileSync(path.join(dataDir, "state.sqlite"), "db-bytes");
+    // BUG-06：state.sqlite 用真实 SQLite（VACUUM INTO 一致性快照）
+    const stateDb = new DatabaseSync(path.join(dataDir, "state.sqlite"));
+    stateDb.exec("CREATE TABLE t (id INTEGER)");
+    stateDb.exec("INSERT INTO t VALUES (1),(2),(3)");
+    stateDb.close();
     writeFileSync(path.join(dataDir, "a2a", "ledger", "neg_1.jsonl"), '{"event":1}\n');
 
     const backup = runBackup({ dataDir, backupsDir, now: () => T0, keepLatest: 2 });
@@ -282,7 +286,11 @@ describe("7×24：告警与备份恢复演练", () => {
     writeFileSync(path.join(target, "state.sqlite"), "corrupted");
     const restored = restoreBackup({ snapshotDir: backup.snapshot_dir, targetDir: target });
     expect(restored.verified).toBe(true);
-    expect(readFileSync(path.join(target, "state.sqlite"), "utf8")).toBe("db-bytes");
+    const restoredDb = new DatabaseSync(path.join(target, "state.sqlite"));
+    expect(
+      (restoredDb.prepare("SELECT count(*) c FROM t").get() as { c: number }).c,
+    ).toBe(3); // 业务对账：行数一致
+    restoredDb.close();
     expect(readFileSync(path.join(target, "a2a", "ledger", "neg_1.jsonl"), "utf8")).toContain(
       "event",
     );
@@ -316,5 +324,54 @@ describe("旧入口一致性（CLI/TUI/MCP 同一业务事实）", () => {
       items: direct.items,
     });
     db.close();
+  });
+});
+
+describe("BUG-06：并发写入期间的事务一致备份", () => {
+  it("持续写入 + 多轮备份 → 恢复后 integrity_check 通过 + 业务对账（行数单调）", () => {
+    const dataDir = tmp();
+    const backupsDir = path.join(tmp(), "backups");
+    const dbPath = path.join(dataDir, "state.sqlite");
+    const writer = new DatabaseSync(dbPath);
+    writer.exec("PRAGMA journal_mode = WAL");
+    writer.exec("CREATE TABLE events (id INTEGER PRIMARY KEY, body TEXT)");
+
+    let round = 0;
+    for (let tick = 0; tick < 200; tick += 1) {
+      writer.exec(`INSERT INTO events (body) VALUES ('event-${tick}')`);
+      if (tick % 50 === 0) {
+        round += 1;
+        // 写入进行中执行备份（VACUUM INTO 一致性快照）
+        runBackup({
+          dataDir,
+          backupsDir,
+          now: () => `2026-09-15T10:0${round}:00.000Z`,
+        });
+      }
+    }
+    writer.close();
+
+    // 每轮快照：恢复 → integrity_check + 行数对账（≥ 快照时点数，单调不减）
+    const stamp = (t: string) => t.replace(/[:.]/g, "-"); // 与 runBackup 同名规则
+    const snapshots = (round: number) =>
+      path.join(backupsDir, stamp(`2026-09-15T10:0${round}:00.000Z`));
+    let prevCount = 0;
+    for (let r = 1; r <= round; r += 1) {
+      const target = tmp();
+      const restored = restoreBackup({ snapshotDir: snapshots(r), targetDir: target });
+      expect(restored.verified).toBe(true);
+      const db = new DatabaseSync(path.join(target, "state.sqlite"));
+      const integrity = db.prepare("PRAGMA integrity_check").all() as Array<{
+        integrity_check: string;
+      }>;
+      expect(integrity[0]?.integrity_check).toBe("ok");
+      const count = (db.prepare("SELECT count(*) c FROM events").get() as { c: number }).c;
+      expect(count).toBeGreaterThanOrEqual(prevCount); // 单调（快照时点递增）
+      expect(count).toBeGreaterThanOrEqual(1);
+      prevCount = count;
+      db.close();
+    }
+    // 最后一轮快照应接近全量（tick 150 时备份 → 151 行；容许边界）
+    expect(prevCount).toBeGreaterThanOrEqual(150);
   });
 });

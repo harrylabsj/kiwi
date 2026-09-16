@@ -230,8 +230,6 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set([
   "kiwi_merchant_prepare_listing_change",
   "kiwi_merchant_prepare_review_resolve",
   "kiwi_merchant_prepare_policy_change",
-  "kiwi_merchant_execute_approved",
-  "kiwi_merchant_reject_candidate",
   "kiwi_merchant_prepare_products_import",
   "kiwi_merchant_prepare_products_withdraw",
 ]);
@@ -354,22 +352,8 @@ export function buildMerchantMcpTools(
           ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
         })
         .then(preparedPayload),
-    kiwi_merchant_execute_approved: async (args) => {
-      const outcome = (await commandSurface(service).executeApproved(
-        typeof args.command_id === "string" ? args.command_id : "",
-      )) as { kind: string; candidate?: { candidate_id: string; status: string } };
-      return {
-        kind: outcome.kind,
-        command_id: outcome.candidate?.candidate_id ?? "",
-        status: outcome.candidate?.status ?? "",
-      };
-    },
-    kiwi_merchant_reject_candidate: async (args) => {
-      const candidate = (await commandSurface(service).rejectCandidate(
-        typeof args.command_id === "string" ? args.command_id : "",
-      )) as { candidate_id: string; status: string };
-      return { command_id: candidate.candidate_id, status: candidate.status };
-    },
+    // BUG-02：批准/拒绝已从 MCP 工具注册表移除（模型不可见不可调）——
+    // 确认只经管理页面（cookie 会话 + 一次性确认凭证）。
     // ---- V2 阶段四：CSV 导入/撤回（长任务 + 幂等）与 operation 查询 ----
     kiwi_merchant_prepare_products_import: async (args) =>
       commandSurface(service)
@@ -564,27 +548,6 @@ export function buildMerchantMcpTools(
           reason: { type: "string", description: "变更原因（可选）" },
         },
         required: ["patch"],
-        additionalProperties: false,
-      },
-    },
-    {
-      name: "kiwi_merchant_execute_approved",
-      description:
-        "确认通道：批准并执行一个 pending 命令（按 command_id）。执行前重校验授权主体/前置版本/有效期/硬策略；重复执行幂等拒绝。",
-      inputSchema: {
-        type: "object",
-        properties: { command_id: { type: "string", description: "prepare 返回的命令 id" } },
-        required: ["command_id"],
-        additionalProperties: false,
-      },
-    },
-    {
-      name: "kiwi_merchant_reject_candidate",
-      description: "确认通道：拒绝一个 pending 命令（按 command_id），拒绝后不执行。",
-      inputSchema: {
-        type: "object",
-        properties: { command_id: { type: "string", description: "prepare 返回的命令 id" } },
-        required: ["command_id"],
         additionalProperties: false,
       },
     },

@@ -39,6 +39,7 @@
 import type { AgentProfile } from "../config/profile.js";
 import type { AgentMode } from "../agent/mode.js";
 import {
+  contentHash,
   executeApprovedCandidate,
   WriteApprovalCandidateError,
   type ApprovalExecutionResult,
@@ -47,6 +48,7 @@ import {
 } from "../agent/merchant/action-candidate.js";
 import { routeWriteCandidate, type WriteGateResult } from "../agent/write-gate.js";
 import { MerchantWorkbenchError } from "../merchant/workbench-service.js";
+import type { MerchantOAuthStore } from "../auth/merchant-oauth.js";
 import type { ExecutorContext, MerchantExecutorRegistry } from "./executor.js";
 
 export interface MerchantCommandLogDeps {
@@ -58,6 +60,12 @@ export interface MerchantCommandLogDeps {
   now: () => string;
   /** 批准动作的调用主体（确认通道认证身份；必须等于命令记录主体）。 */
   principalId: string;
+  /**
+   * 一次性确认凭证存储（BUG-02）：配置后 execute/reject 必须携带有效确认
+   * 凭证（绑定候选内容摘要 + 主体 + 商家 + 动作，单次用途，过期/重复/不
+   * 匹配拒绝）——没有可信用户确认记录时，写操作无法执行。
+   */
+  confirmations?: MerchantOAuthStore;
 }
 
 export interface PreparedCommand {
@@ -127,12 +135,14 @@ export class MerchantCommandLog {
   }
 
   /**
-   * 批准并执行（确认通道；execute_approved 工具/管理页面调用）。
+   * 批准并执行（确认通道；管理页面调用）。
    * 授权主体一致性：调用主体必须等于命令记录主体（store 按 principal 绑定）。
+   * 配置了确认凭证存储时，必须携带与该候选内容/主体/动作匹配的一次性凭证。
    */
   async executeApproved(
     commandId: string,
     callerPrincipalId: string,
+    confirmationToken?: string,
   ): Promise<ApprovalExecutionResult> {
     if (callerPrincipalId !== this.deps.principalId) {
       throw new MerchantWorkbenchError("auth", "批准主体与命令记录主体不一致（跨主体批准拒绝）");
@@ -141,6 +151,25 @@ export class MerchantCommandLog {
       const candidate = this.deps.store.get(commandId);
       if (candidate === undefined) {
         throw new MerchantWorkbenchError("not_found", `未知命令 ${commandId}`);
+      }
+      // BUG-02：可信确认记录逐项核对（候选内容摘要/主体/商家/动作/有效期/单次）。
+      if (this.deps.confirmations !== undefined) {
+        const confirmation = this.deps.confirmations.consumeConfirmation(confirmationToken ?? "", {
+          candidateId: commandId,
+          candidateDigest: contentHash({
+            arguments: candidate.arguments,
+            preconditions: candidate.preconditions,
+          }),
+          principalId: callerPrincipalId,
+          merchantId: this.deps.profile.owner_id,
+          action: "approve",
+        });
+        if (confirmation === undefined) {
+          throw new MerchantWorkbenchError(
+            "validation",
+            "确认凭证无效/已使用/已过期或不匹配——没有可信用户确认记录时写操作不可执行",
+          );
+        }
       }
       const executor = this.deps.executors.get(candidate.tool);
       if (executor === undefined) {
@@ -177,14 +206,36 @@ export class MerchantCommandLog {
     }
   }
 
-  /** 拒绝候选（确认通道）。 */
-  async reject(commandId: string, callerPrincipalId: string): Promise<WriteApprovalCandidate> {
+  /** 拒绝候选（确认通道；同样需确认凭证）。 */
+  async reject(
+    commandId: string,
+    callerPrincipalId: string,
+    confirmationToken?: string,
+  ): Promise<WriteApprovalCandidate> {
     if (callerPrincipalId !== this.deps.principalId) {
       throw new MerchantWorkbenchError("auth", "拒绝主体与命令记录主体不一致");
     }
     const candidate = this.deps.store.get(commandId);
     if (candidate === undefined) {
       throw new MerchantWorkbenchError("not_found", `未知命令 ${commandId}`);
+    }
+    if (this.deps.confirmations !== undefined) {
+      const confirmation = this.deps.confirmations.consumeConfirmation(confirmationToken ?? "", {
+        candidateId: commandId,
+        candidateDigest: contentHash({
+          arguments: candidate.arguments,
+          preconditions: candidate.preconditions,
+        }),
+        principalId: callerPrincipalId,
+        merchantId: this.deps.profile.owner_id,
+        action: "reject",
+      });
+      if (confirmation === undefined) {
+        throw new MerchantWorkbenchError(
+          "validation",
+          "确认凭证无效/已使用/已过期或不匹配（reject）",
+        );
+      }
     }
     return this.deps.store.reject(commandId);
   }

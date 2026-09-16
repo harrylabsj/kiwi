@@ -268,6 +268,11 @@ export async function merchantInit(
       auto_negotiate: options.autoNegotiate ?? false,
       human_review_on: ["below_floor", "exceptional_warranty", "suspicious_content"],
     },
+    // WorkBuddy 正式连接器走 OAuth；token 仅作为显式配置的过渡模式。
+    merchant_mcp: {
+      enabled: true,
+      auth_mode: "oauth",
+    },
     ...(options.publicUrl !== undefined && options.publicUrl.trim() !== ""
       ? { merchant_public: { public_url: options.publicUrl.trim().toLowerCase() } }
       : {}),
