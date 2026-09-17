@@ -875,7 +875,8 @@ export class KiwiBuyerService {
     return undefined;
   }
 
-  private firstQuery(intent: Record<string, unknown>): string {    const items = Array.isArray(intent.items) ? (intent.items as Array<Record<string, unknown>>) : [];
+  private firstQuery(intent: Record<string, unknown>): string {
+    const items = Array.isArray(intent.items) ? (intent.items as Array<Record<string, unknown>>) : [];
     const first = items[0] ?? {};
     if (typeof first.query === "string" && first.query !== "") return first.query;
     if (typeof first.sku === "string" && first.sku !== "") return first.sku;

@@ -62,5 +62,7 @@ Buyer 只经 catalog 发现商家，再通过 A2A 直连 merchant；不要检查
 - `kiwi_accept_agreement` 和 `kiwi_handoff` 默认需要用户授权；不得让模型自行批准。
 - `authorization_denied`、`approval_denied` 是硬拒绝，不要自动重试。
 - `task_not_found`、`task_expired` 需要重新查询或重新询价。
+- `merchant_inquiry_unavailable` 表示该商家仅有第 0 版公开资料、未开通实时询价；
+  不要重试询价，改为展示其公开资料与店铺入口。
 - `partial_success` 时保留成功报价，并单独提示失败项。
 - 交易 handoff 只生成后续入口；在用户付款前应核验目标 URL，并明确说明 Kiwi 本身没有完成支付或下单。
