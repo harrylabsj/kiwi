@@ -94,7 +94,9 @@ assert(!("headers" in server), "OAuth 包不得配置 Authorization 头（走 OA
 
 let parsedUrl;
 try {
-  parsedUrl = new URL(server.url);
+  // 用 globalThis.URL（与 package-merchant-connector.mjs 同规）：该目录的 eslint
+  // 环境未声明 URL 全局，直接引用会被 no-undef 拦下。
+  parsedUrl = new globalThis.URL(server.url);
 } catch {
   assert.fail(`url 不是合法地址：${server.url}`);
 }
