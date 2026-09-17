@@ -15,6 +15,7 @@
 #   配对码：真实 CLI 生成一次性码 → 网关兑换（复用真实实现）→ 工具恢复；重用被拒
 #   离线恢复：实例重启（配对凭据落盘）与网关重启（凭据加密库 + OAuth 令牌落盘）后
 #     商家无需重新配对即可继续使用；目录能力同样不受影响
+#   7×24：网关停止期间商家实例仍对外服务（不依赖 Buddy 窗口）
 #   A/B 隔离：两个独立实例各自配对、各自路由，凭据互不通用
 #
 # 仅使用 loopback 地址与临时目录；不接触生产数据，不打印凭据明文。
@@ -461,6 +462,14 @@ pass "实例重启：配对凭据落盘仍在，商家无需重新配对"
 kill "${gateway_pid}" 2>/dev/null || true
 wait "${gateway_pid}" 2>/dev/null || true
 sleep 1
+# 7×24 独立性：网关（以及 Buddy）不在时，商家实例仍对外服务（A2A 接待与
+# MCP 管理都不依赖 Buddy 窗口）。这里以实例 MCP 直连验证「服务器独立运行」。
+direct=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${instance_port}/mcp" \
+  -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
+  -H "Authorization: Bearer ${instance_token}" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' 2>/dev/null || echo 000)
+[[ "${direct}" == "200" ]] || fail "网关停止时实例应仍可服务（实得 ${direct}）"
+pass "7×24 独立性：网关停止期间商家实例仍对外服务"
 start_gateway
 wait_health "${gateway_url}/health" "gateway（重启后）"
 status=$(mcp_call "${token_a}" tools/list)

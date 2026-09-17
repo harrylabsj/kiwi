@@ -162,6 +162,17 @@ KIWI_CATALOG_PUBLIC_BASE_URL=https://catalog.kiwi.harrylabsj.com           # 连
 # 可选：KIWI_CATALOG_CONNECTOR_MERCHANT_TOKEN_TTL_SECONDS（缺省 90 天）
 ```
 
+## 6.1 存活信号（WP6）
+
+| 参数 | 位置 | 缺省 | 说明 |
+| --- | --- | --- | --- |
+| `KIWI_AGENT_HEARTBEAT_SECONDS` | 商家实例进程 | 300 | A2A 节点向目录上报心跳的间隔；`0` 关闭（关闭后商家会在 TTL 后被判离线） |
+| `KIWI_CATALOG_AGENT_FRESH_TTL_SECONDS` | kiwi-catalog | 900 | 读时判定"新鲜"的窗口（60–86400，超范围自动夹取）；**必须显著大于心跳间隔** |
+
+A2A 节点在注册成功后会**立即心跳一次**（不等待首个间隔），随后按上表间隔循环——因此刚上线的商家不会被注册时的验证结论拖成"离线"。缺 owner 凭据时注册会退回匿名自助、心跳返回 403（fail-closed，不会静默）——生产部署必须配置 `KIWI_CATALOG_OWNER_TOKEN_SECRET` 或商家自己的 owner token。
+
+判定是**读时派生**且只降不升：商家服务器下线后，超过 TTL 即不再显示"可实时询价"（公开资料仍可查）；重新上线心跳一次即恢复。治理状态（suspended/rejected）优先，不因心跳复活。
+
 ## 7. 凭据清单与轮换
 
 | 凭据 | 持有方 | 作用范围 | 轮换方式 |
