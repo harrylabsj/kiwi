@@ -153,3 +153,72 @@ export async function registerCatalogAgent(
     verificationEnqueued: payload.verification_enqueued === true,
   };
 }
+
+/** 心跳结果（catalog 侧 last_seen_at 与生效 TTL）。 */
+export interface CatalogHeartbeatResult {
+  ok: true;
+  lastSeenAt: string;
+  freshTtlSeconds: number;
+}
+
+export interface CatalogHeartbeatInput {
+  catalogBaseUrl: string;
+  catalogAgentId: string;
+  /** owner 凭据：随机 token（优先）或 HMAC 派生 secret（legacy）。 */
+  ownerToken?: string;
+  ownerTokenSecret?: string;
+  merchantId?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}
+
+/**
+ * Agent 心跳（WP6 / 发布计划 §3.6）：只刷新 last_seen_at，不重新抓取资料。
+ *
+ * 商家 A2A 节点周期性调用；catalog 读侧按 last_seen_at + TTL 派生 freshness，
+ * 离线商家因此不再被采购专家标成"可实时询价"（公开资料仍可查）。
+ * 心跳间隔应显著小于 catalog 的 TTL（缺省 900s）。
+ */
+export async function sendCatalogAgentHeartbeat(
+  input: CatalogHeartbeatInput,
+): Promise<CatalogHeartbeatResult> {
+  const fetchImpl = input.fetchImpl ?? globalThis.fetch;
+  const base = normalizeCatalogBaseUrl(input.catalogBaseUrl);
+  const body: Record<string, string> = {};
+  if (input.ownerToken !== undefined && input.ownerToken !== "") {
+    body.owner_token = input.ownerToken;
+  } else if (input.ownerTokenSecret !== undefined && input.merchantId !== undefined) {
+    body.owner_token = createHmac("sha256", input.ownerTokenSecret)
+      .update(`kiwi-catalog-owner:${input.merchantId}`)
+      .digest("hex");
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 15_000);
+  try {
+    const res = await fetchImpl(
+      `${base}/v1/agent-catalog/agents/${encodeURIComponent(input.catalogAgentId)}/heartbeat`,
+      {
+        method: "POST",
+        // 出站纪律同 register：不跟随重定向（体里带 owner 凭据）。
+        redirect: "manual",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      },
+    );
+    const text = await res.text();
+    const payload = text === "" ? {} : (JSON.parse(text) as Record<string, unknown>);
+    if (!res.ok || payload.ok === false) {
+      const detail = typeof payload.error === "string" ? payload.error : `HTTP ${res.status}`;
+      throw new CatalogSourceError("request_failed", `catalog heartbeat failed: ${detail}`);
+    }
+    return {
+      ok: true,
+      lastSeenAt: typeof payload.last_seen_at === "string" ? payload.last_seen_at : "",
+      freshTtlSeconds:
+        typeof payload.fresh_ttl_seconds === "number" ? payload.fresh_ttl_seconds : 0,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}

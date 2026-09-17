@@ -67,6 +67,12 @@ export interface MerchantPublicationSummary {
   shop_url?: string;
 }
 
+/** 离线态（与 merchant-index 同口径）：未设置按 fresh 处理（向后兼容）。 */
+function agentIsFresh(record: MerchantRecord): boolean {
+  const state = record.freshness_state;
+  return state === undefined || (state !== "stale" && state !== "unreachable");
+}
+
 export interface MerchantRecord {
   merchant_id: string;
   name: string;
@@ -77,10 +83,17 @@ export interface MerchantRecord {
   agent_card_url?: string;
   capabilities: string[];
   /**
-   * 可实时询价（有可路由 Agent Card，能力来自 Agent 侧）。M0-only 商家恒 false；
-   * 未设置时按既有链路处理（marketplace 等 legacy 索引不透出该字段）。
+   * 可实时询价（有可路由 Agent Card **且 agent 新鲜**，能力来自 Agent 侧）。
+   * M0-only 商家恒 false；未设置时按既有链路处理（marketplace 等 legacy 索引
+   * 不透出该字段）。
    */
   inquiry_available?: boolean;
+  /**
+   * Agent 新鲜度（catalog 读时按 last_seen_at + TTL 派生，见 WP6）：`stale`/
+   * `unreachable` 表示商家服务可能已离线——不标"可实时询价"，但公开资料仍可查。
+   * 未设置（旧 catalog / legacy 索引）按 fresh 处理，向后兼容。
+   */
+  freshness_state?: "fresh" | "stale" | "unreachable";
   /**
    * 记录仅来自 M0 商家公开资料（无 Agent/Listing 侧命中）——RFQ 硬门依据。
    * v1 商家同时命中公开资料时此字段保持 undefined（实时能力不被降级）。
@@ -934,6 +947,17 @@ export class KiwiBuyerService {
           `商家 ${merchantId}（${record.name}）目前仅公开资料，尚未开通 Kiwi 实时询价；` +
             "可查看其公开资料与店铺入口，不能对其发起 kiwi_request_quotes",
           { merchant_id: merchantId },
+        );
+      }
+      // WP6 离线门：agent 存在但服务已离线（catalog 按 TTL 派生 freshness_state）。
+      // 与上一门区分：这里商家**开通过**实时询价，只是当前不在线——错误码不同，
+      // 处置也不同（稍后重试/联系商家，而不是"从未开通"）。
+      if (record !== undefined && !agentIsFresh(record)) {
+        throw new McpError(
+          "merchant_offline",
+          `商家 ${merchantId}（${record.name}）的服务当前不在线（未在有效期内上报心跳），` +
+            "暂不可实时询价；其公开资料仍可查看，可稍后重试",
+          { merchant_id: merchantId, freshness_state: record.freshness_state ?? "stale" },
         );
       }
     }

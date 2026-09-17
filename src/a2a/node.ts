@@ -63,7 +63,10 @@ import { LedgerStore } from "../negotiation/ledger/index.js";
 import { IdempotencyStore } from "../negotiation/idempotency/index.js";
 import { openMerchantStatsStore } from "../merchant/stats-store.js";
 import { pickFreePort } from "../supervisor/stack-config.js";
-import { registerCatalogAgent } from "../discovery/catalog-source/register.js";
+import {
+  registerCatalogAgent,
+  sendCatalogAgentHeartbeat,
+} from "../discovery/catalog-source/register.js";
 import { HttpMerchantClient } from "../agent/merchant/merchant-client.js";
 import { ProfileCredentialBroker } from "../agent/merchant/credential-broker.js";
 import type { MerchantProductSource } from "./server/merchant-handler.js";
@@ -505,6 +508,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
 
   // merchant 角色：自动注册进 catalog（buyer 据此发现）。
   let catalogAgentId: string | undefined;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   if (role === "merchant" && options.catalog !== undefined) {
     const safeAgentId = profile.agent_id.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
     // 注册域名：显式 KIWI_CATALOG_DOMAIN 优先；有公网广告地址则取其
@@ -530,6 +534,36 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
         ok: reg.ok && catalogAgentId !== undefined,
         ...(catalogAgentId !== undefined ? { catalog_agent_id: catalogAgentId } : {}),
       });
+      if (catalogAgentId !== undefined) {
+        // WP6 心跳：刷新 catalog 的 last_seen_at，读侧据此按 TTL 判定是否
+        // "可实时询价"（离线商家不再被标成可实时询价，公开资料仍可查）。
+        // 间隔缺省 300s（catalog TTL 缺省 900s）；KIWI_AGENT_HEARTBEAT_SECONDS=0 关闭。
+        const heartbeatSeconds = Number(process.env.KIWI_AGENT_HEARTBEAT_SECONDS ?? "300");
+        if (Number.isFinite(heartbeatSeconds) && heartbeatSeconds > 0) {
+          const heartbeat = (): void => {
+            void sendCatalogAgentHeartbeat({
+              catalogBaseUrl: String(options.catalog),
+              catalogAgentId: String(catalogAgentId),
+              ...(options.ownerToken !== undefined ? { ownerToken: options.ownerToken } : {}),
+              ...(options.ownerTokenSecret !== undefined
+                ? { ownerTokenSecret: options.ownerTokenSecret }
+                : {}),
+              merchantId: profile.agent_id,
+            }).catch((err) => {
+              // 心跳失败不致命：读侧会因超时把商家判为 stale（fail-visible）。
+              process.stderr.write(
+                `⚠️ [kiwi] catalog 心跳失败：${err instanceof Error ? err.message : String(err)}\n`,
+              );
+            });
+          };
+          // 注册后**立即**心跳一次：否则刚上线的商家要等满一个间隔才被判"在线"
+          // （注册时的验证结论可能是 stale，买家会看到"服务离线"）。
+          heartbeat();
+          const timer = setInterval(heartbeat, heartbeatSeconds * 1000);
+          heartbeatTimer = timer;
+          timer.unref?.();
+        }
+      }
     } catch (err) {
       // 审查 K-M11：注册失败必须可见——此前空 catch 静默吞掉，merchant 静默
       // 不在 catalog（buyer 只能 direct URL）且无任何日志。默认记录日志后继续
@@ -568,6 +602,10 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     catalogAgentId,
     ...(signingIdentity !== undefined ? { signingIdentity } : {}),
     async stop(): Promise<void> {
+      if (heartbeatTimer !== undefined) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = undefined;
+      }
       httpServer.closeAllConnections?.();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       statsStore?.close();

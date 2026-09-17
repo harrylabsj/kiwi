@@ -35,6 +35,7 @@ export type McpErrorCode =
   | "task_expired"
   | "agreement_not_found"
   | "merchant_inquiry_unavailable"
+  | "merchant_offline"
   | "store_corrupted"
   | "internal_error";
 
@@ -54,6 +55,7 @@ const CODE_TO_JSON_RPC: Record<McpErrorCode, number> = {
   task_expired: -32000,
   agreement_not_found: -32602,
   merchant_inquiry_unavailable: -32000,
+  merchant_offline: -32000,
   store_corrupted: -32603,
   internal_error: -32603,
 };
