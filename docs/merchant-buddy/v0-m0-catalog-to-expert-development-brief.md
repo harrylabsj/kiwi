@@ -64,4 +64,4 @@ WorkBuddy 内置商家 MCP 的首次绑定若挡住未部署服务器的新商�
 
 交付物：`kiwi-catalog` 迁移/API/门户及测试；`kiwi` 只读客户端/买方结果类型/RFQ 守卫及测试；WorkBuddy 商家 Buddy 与采购专家更新包；M0 端到端验收记录。
 
-设计背景见 [第 0 版总设计](v0-ai-cs-and-pull-subscriptions-design.md)。
+设计背景见 [第 0 版总设计](../v0-ai-cs-and-pull-subscriptions-design.md)。
