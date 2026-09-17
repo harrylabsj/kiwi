@@ -67,6 +67,7 @@ import {
 } from "../auth/merchant-sessions.js";
 import type { MerchantOAuthStore } from "../auth/merchant-oauth.js";
 import { contentHash } from "../agent/merchant/action-candidate.js";
+import { issuePairedCredential, redeemPairingCode } from "../auth/merchant-pairing.js";
 
 /** 从 Cookie 头取值（管理会话）。 */
 function cookieValue(req: IncomingMessage, name: string): string | undefined {
@@ -128,6 +129,20 @@ export interface MerchantMcpServerOptions {
     adminDir: string;
     /** https 部署置 true（cookie 加 Secure）。 */
     secureCookies?: boolean;
+  };
+  /**
+   * 一次性配对码兑换（设计 §8.4 第二期）：挂载 `POST /pairing/redeem`。
+   * 商家在实例机器上 `kiwi merchant mcp pair` 生成码，网关用它兑换内部凭据，
+   * 从而无需把长期令牌贴进表单。仅 token 模式（存在静态内部令牌）才有意义。
+   */
+  pairing?: {
+    /**
+     * 配对码与配对凭据所在目录（通常为实例数据目录）。兑换时会**新签**一份
+     * 配对凭据（最小授权：由实例签发并持有，网关只拿到调用凭据；重配对即轮换）。
+     */
+    dir: string;
+    /** 实例身份（回给网关留痕；不含任何凭据）。 */
+    instance: () => { ownerId: string; principalId: string };
   };
   serverInfo?: { name: string; version: string };
   /** 响应体大小上限（字符）。 */
@@ -429,6 +444,57 @@ export async function startMerchantMcpServer(
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (await routeOAuth(req, res, url)) return;
+      // 一次性配对码兑换（设计 §8.4 第二期）：只能兑换一次，过期即失效；
+      // 成功才返回内部凭据（供商家连接器网关按 merchant_id 路由使用）。
+      if (
+        options.pairing !== undefined &&
+        req.method === "POST" &&
+        url.pathname === "/pairing/redeem"
+      ) {
+        const nowMs = Date.now();
+        pruneRateLimits(nowMs);
+        const ip = clientKey(req);
+        const hits = registerHits.get(`pair:${ip}`);
+        if (hits === undefined || nowMs - hits.windowStart > 60 * 60 * 1000) {
+          registerHits.set(`pair:${ip}`, { count: 1, windowStart: nowMs });
+        } else {
+          hits.count += 1;
+          if (hits.count > 30) {
+            writeJson(res, 429, { error: "slow_down", message: "配对码尝试过于频繁" });
+            return;
+          }
+        }
+        let form: Record<string, string | undefined>;
+        try {
+          form = await readForm(req);
+        } catch {
+          writeJson(res, 400, { error: "invalid_request", message: "请求体解析失败" });
+          return;
+        }
+        const code = String(form.code ?? "");
+        if (!redeemPairingCode(options.pairing.dir, code)) {
+          writeJson(res, 403, {
+            error: "invalid_pairing_code",
+            message: "配对码无效或已过期（请在实例上重新生成）",
+          });
+          return;
+        }
+        const identity = options.pairing.instance();
+        // 兑换即签发：新凭据覆盖旧的（单槽轮换），明文只在此响应里出现一次。
+        const issued = issuePairedCredential(options.pairing.dir);
+        process.stderr.write(
+          `[merchant pairing] issued paired credential for owner=${identity.ownerId}` +
+            `（旧配对凭据已失效）\n`,
+        );
+        writeJson(res, 200, {
+          ok: true,
+          instance: { owner_id: identity.ownerId, principal_id: identity.principalId },
+          // 能力探测：实例自报名称/版本，供网关在绑定页展示与兼容性判断。
+          server_info: { name: serverInfo.name, version: serverInfo.version },
+          credential: issued.credential,
+        });
+        return;
+      }
       // 配套商家管理面（BUG-01/03 修复后）：登录用 cookie 会话（HttpOnly/
       // SameSite=Lax/生产 Secure）；/admin/pending 需会话；/admin/decision
       // 需会话 + 一次性确认凭证（绑定候选摘要/主体/商家/动作，单次用途）。

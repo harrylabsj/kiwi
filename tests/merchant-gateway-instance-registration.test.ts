@@ -14,8 +14,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   bindInstance,
+  bindInstanceViaPairing,
   InstanceRegistrationStore,
   probeInstance,
+  redeemInstancePairingCode,
   unbindInstance,
 } from "../src/merchant-gateway/instance-registration.js";
 import { GatewayCredentialVault } from "../src/merchant-gateway/credential-vault.js";
@@ -38,21 +40,63 @@ afterEach(async () => {
 interface FakeInstance {
   url: string;
   requests: Array<{ method: string; authorization: string }>;
+  /** 已消耗的配对码（单次语义）。 */
+  redeemedCodes: string[];
 }
 
 async function startFakeInstance(
-  behavior: { token?: string; status?: number; redirectTo?: string; body?: unknown } = {},
+  behavior: {
+    token?: string;
+    status?: number;
+    redirectTo?: string;
+    body?: unknown;
+    pairing?: {
+      code: string;
+      credential: string;
+      ownerId?: string;
+      /** false = /mcp 不接受该配对凭据（模拟兑换到用不了的凭据）。 */
+      acceptedForMcp?: boolean;
+    };
+  } = {},
 ): Promise<FakeInstance> {
   const requests: FakeInstance["requests"] = [];
+  const redeemedCodes: string[] = [];
   const server: Server = createServer((req, res) => {
     void (async () => {
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(chunk as Buffer);
-      let rpc: { method?: string } = {};
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      let rpc: { method?: string; code?: string } = {};
       try {
-        rpc = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as { method?: string };
+        rpc = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as {
+          method?: string;
+          code?: string;
+        };
       } catch {
         rpc = {};
+      }
+      if (req.method === "POST" && url.pathname === "/pairing/redeem") {
+        const pairing = behavior.pairing;
+        if (pairing === undefined || String(rpc.code ?? "") !== pairing.code) {
+          res.writeHead(403, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: false, message: "配对码无效或已过期" }));
+          return;
+        }
+        if (redeemedCodes.includes(pairing.code)) {
+          res.writeHead(403, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: false, message: "配对码已使用" }));
+          return;
+        }
+        redeemedCodes.push(pairing.code);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            instance: { owner_id: pairing.ownerId ?? "merchant-001", principal_id: "merchant-agent:merchant-001" },
+            credential: pairing.credential,
+          }),
+        );
+        return;
       }
       requests.push({
         method: String(rpc.method ?? ""),
@@ -68,7 +112,14 @@ async function startFakeInstance(
         res.end(JSON.stringify({ error: "nope" }));
         return;
       }
-      if (String(req.headers.authorization ?? "") !== `Bearer ${behavior.token ?? TOKEN}`) {
+      const presented = String(req.headers.authorization ?? "");
+      const accepted = [
+        `Bearer ${behavior.token ?? TOKEN}`,
+        ...(behavior.pairing !== undefined && behavior.pairing.acceptedForMcp !== false
+          ? [`Bearer ${behavior.pairing.credential}`]
+          : []),
+      ];
+      if (!accepted.includes(presented)) {
         res.writeHead(401, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;
@@ -102,7 +153,7 @@ async function startFakeInstance(
         server.closeAllConnections();
       }),
   );
-  return { url: `http://127.0.0.1:${port}/mcp`, requests };
+  return { url: `http://127.0.0.1:${port}/mcp`, requests, redeemedCodes };
 }
 
 function stack() {
@@ -230,6 +281,120 @@ describe("绑定与解绑", () => {
         { merchantId: MERCHANT, mcpUrl: instance.url, token: TOKEN },
       ),
     ).rejects.toThrowError(/db write failed/);
+    expect(credentials.get(`instance:${MERCHANT}`)).toBeUndefined();
+  });
+});
+
+describe("配对码绑定（§8.4 第二期）", () => {
+  it("兑换返回实例身份与凭据，且单次有效", async () => {
+    const instance = await startFakeInstance({
+      pairing: { code: "AAAA-BBBB-CCCC", credential: "paired-internal-token" },
+    });
+    const redeemed = await redeemInstancePairingCode(instance.url, "AAAA-BBBB-CCCC");
+    expect(redeemed.credential).toBe("paired-internal-token");
+    expect(redeemed.ownerId).toBe("merchant-001");
+    await expect(redeemInstancePairingCode(instance.url, "AAAA-BBBB-CCCC")).rejects.toThrowError(
+      /已使用|无效或已过期/,
+    );
+    await expect(redeemInstancePairingCode(instance.url, "ZZZZ-ZZZZ-ZZZZ")).rejects.toThrowError(
+      /无效或已过期/,
+    );
+  });
+
+  it("兑换端点固定在服务器根 /pairing/redeem，且受 URL 策略约束", async () => {
+    const instance = await startFakeInstance({
+      pairing: { code: "AAAA-BBBB-CCCC", credential: "tok" },
+    });
+    // 走的是 /pairing/redeem 而不是 /mcp：桩对 /mcp 的请求会记录 method
+    await redeemInstancePairingCode(instance.url, "AAAA-BBBB-CCCC");
+    expect(instance.requests).toHaveLength(0);
+    await expect(
+      redeemInstancePairingCode("http://merchant.example.com/mcp", "AAAA-BBBB-CCCC"),
+    ).rejects.toThrowError(/出站策略拒绝/);
+    await expect(redeemInstancePairingCode(instance.url, "  ")).rejects.toThrowError(/不能为空/);
+  });
+
+  it("绑定后记录实例自报版本与工具数（能力探测）", async () => {
+    const instance = await startFakeInstance({
+      pairing: { code: "AAAA-BBBB-CCCC", credential: "paired-token" },
+    });
+    const { registrations, credentials } = stack();
+    await bindInstanceViaPairing(
+      { registrations, credentials },
+      { merchantId: MERCHANT, mcpUrl: instance.url, code: "AAAA-BBBB-CCCC" },
+    );
+    const registration = registrations.get(MERCHANT);
+    expect(registration?.boundVia).toBe("pairing");
+    expect(registration?.toolCount).toBe(1);
+    expect(registration?.instanceName).toBe("fake");
+
+    const pasted = await startFakeInstance();
+    await bindInstance(
+      { registrations, credentials },
+      { merchantId: "mkt_paste_1", mcpUrl: pasted.url, token: TOKEN },
+    );
+    const pastedRegistration = registrations.get("mkt_paste_1");
+    expect(pastedRegistration?.boundVia).toBe("paste");
+    expect(pastedRegistration?.toolCount).toBe(1);
+    expect(pastedRegistration?.instanceName).toBe("fake");
+  });
+
+  it("兑换到的凭据用不了时拒绝绑定（不留半成品）", async () => {
+    const instance = await startFakeInstance({
+      pairing: { code: "AAAA-BBBB-CCCC", credential: "paired-token", acceptedForMcp: false },
+    });
+    const { registrations, credentials } = stack();
+    await expect(
+      bindInstanceViaPairing(
+        { registrations, credentials },
+        { merchantId: MERCHANT, mcpUrl: instance.url, code: "AAAA-BBBB-CCCC" },
+      ),
+    ).rejects.toThrowError(/401\/403/);
+    expect(registrations.get(MERCHANT)).toBeUndefined();
+    expect(credentials.get(`instance:${MERCHANT}`)).toBeUndefined();
+  });
+
+  it("配对绑定写入加密凭据与注册表；失败不留状态", async () => {
+    const instance = await startFakeInstance({
+      pairing: { code: "AAAA-BBBB-CCCC", credential: "paired-token" },
+    });
+    const { registrations, credentials } = stack();
+    const bound = await bindInstanceViaPairing(
+      { registrations, credentials },
+      { merchantId: MERCHANT, mcpUrl: instance.url, code: "AAAA-BBBB-CCCC" },
+    );
+    expect(bound.ownerId).toBe("merchant-001");
+    expect(registrations.get(MERCHANT)?.mcpUrl).toBe(instance.url);
+    expect(credentials.get(`instance:${MERCHANT}`)?.token).toBe("paired-token");
+
+    unbindInstance({ registrations, credentials }, MERCHANT);
+    await expect(
+      bindInstanceViaPairing(
+        { registrations, credentials },
+        { merchantId: MERCHANT, mcpUrl: instance.url, code: "WRONG-CODE-XXXX" },
+      ),
+    ).rejects.toThrowError(/无效或已过期/);
+    expect(registrations.get(MERCHANT)).toBeUndefined();
+    expect(credentials.get(`instance:${MERCHANT}`)).toBeUndefined();
+  });
+
+  it("配对绑定同样先过 URL 策略（注入兑换实现也不例外）", async () => {
+    const { registrations, credentials } = stack();
+    await expect(
+      bindInstanceViaPairing(
+        { registrations, credentials },
+        { merchantId: MERCHANT, mcpUrl: "https://10.0.0.1/mcp", code: "AAAA-BBBB-CCCC" },
+        {
+          redeem: async () => ({
+            credential: "tok",
+            ownerId: "o",
+            principalId: "p",
+            serverName: "kiwi-merchant",
+            serverVersion: "0.8.0",
+          }),
+        },
+      ),
+    ).rejects.toThrowError(/出站策略拒绝/);
     expect(credentials.get(`instance:${MERCHANT}`)).toBeUndefined();
   });
 });

@@ -75,7 +75,12 @@ import {
   DEFAULT_MERCHANT_MCP_PORT,
   startMerchantMcpServer,
 } from "./mcp/merchant-server.js";
-import { assertMerchantMcpAuthPolicy, resolveMerchantMcpVerifier } from "./mcp/merchant-auth.js";
+import {
+  assertMerchantMcpAuthPolicy,
+  CompositeMerchantMcpVerifier,
+  PairedCredentialVerifier,
+  resolveMerchantMcpVerifier,
+} from "./mcp/merchant-auth.js";
 import type { MerchantMcpAuthVerifier } from "./mcp/merchant-auth.js";
 import { resolveMerchantMcpDirs } from "./mcp/merchant-dirs.js";
 import { MerchantOAuthServer, MerchantOAuthStore } from "./auth/merchant-oauth.js";
@@ -91,6 +96,7 @@ import { MerchantPolicyRuntime } from "./merchant-core/policy-runtime.js";
 import { buildMerchantPresentationResources } from "./mcp/merchant-resources.js";
 import { merchantAdminSurface } from "./merchant-admin/pending-page.js";
 import { MerchantAdminSessions, writeAdminCredentials } from "./auth/merchant-sessions.js";
+import { createPairingCode, revokePairedCredential } from "./auth/merchant-pairing.js";
 import { MerchantOperationStore } from "./merchant-core/operations.js";
 
 /** 读能力探测落盘记录的 listing_pause（F08 接线；记录缺失/损坏 → undefined 不判定）。 */
@@ -1426,9 +1432,65 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
     process.stdout.write("管理员口令已设置（哈希落盘 admin-credentials.json，0600）\n");
     return EXIT.OK;
   }
+  // `kiwi merchant mcp pair`：生成一次性配对码（§8.4 第二期）。商家把它填进
+  // 商家连接器网关的绑定页，网关据此兑换内部凭据——不必把长期令牌贴进表单。
+  if (args.command[2] === "pair") {
+    const profile = requireProfileOrDefault(args);
+    if (profile.role !== "merchant") {
+      process.stderr.write("kiwi merchant mcp pair 需要 merchant profile（role: merchant）\n");
+      return EXIT.CONFIG;
+    }
+    const dirs = resolveMerchantMcpDirs({
+      ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+      agentId: profile.agent_id,
+    });
+    const { code, expiresAt } = createPairingCode(dirs.merchantDataDir);
+    const publicUrl = profile.merchant_mcp?.public_url?.replace(/\/+$/, "");
+    const port = args.port ?? profile.merchant_mcp?.port ?? DEFAULT_MERCHANT_MCP_PORT;
+    const mcpUrl = publicUrl !== undefined ? `${publicUrl}/mcp` : `http://127.0.0.1:${port}/mcp`;
+    const ttlMinutes = Math.max(1, Math.round((Date.parse(expiresAt) - Date.now()) / 60000));
+    process.stdout.write(
+      [
+        "一次性配对码已生成（本码只显示一次，用完或过期即失效）：",
+        "",
+        `  实例 MCP 地址：${mcpUrl}`,
+        `  配对码：       ${code}`,
+        `  有效期：       约 ${ttlMinutes} 分钟（至 ${expiresAt}）`,
+        "",
+        "在商家连接器网关的实例绑定页（https://<网关域名>/instance）选择「用配对码绑定」，",
+        "填入上面的地址与配对码即可；网关会用它兑换一份**新签发的**配对凭据"
+          + "（由本实例生成并持有，重配对即轮换），并加密保存。",
+        "配对码只证明「你在实例所在机器上」，商家身份仍以网关侧的目录 OAuth 连接为准。",
+        "",
+      ].join("\n"),
+    );
+    return EXIT.OK;
+  }
+  // `kiwi merchant mcp unpair`：吊销配对凭据（网关随后的调用会 401，直到重新配对）。
+  if (args.command[2] === "unpair") {
+    const profile = requireProfileOrDefault(args);
+    if (profile.role !== "merchant") {
+      process.stderr.write("kiwi merchant mcp unpair 需要 merchant profile（role: merchant）\n");
+      return EXIT.CONFIG;
+    }
+    const dirs = resolveMerchantMcpDirs({
+      ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+      agentId: profile.agent_id,
+    });
+    const revoked = revokePairedCredential(dirs.merchantDataDir);
+    process.stdout.write(
+      revoked
+        ? "已吊销配对凭据：网关侧需重新配对才能继续调用本实例。\n"
+        : "没有已签发的配对凭据（无需吊销）。\n",
+    );
+    return EXIT.OK;
+  }
   if (args.command[2] !== "serve") {
     process.stderr.write(
-      "usage: kiwi merchant mcp serve [--profile <file>] [--host <host>] [--port N] [--data-dir <dir>]\n",
+      "usage: kiwi merchant mcp serve [--profile <file>] [--host <host>] [--port N] [--data-dir <dir>]\n" +
+        "       kiwi merchant mcp pair [--profile <file>] [--data-dir <dir>]\n" +
+        "       kiwi merchant mcp unpair [--profile <file>] [--data-dir <dir>]\n" +
+        "       kiwi merchant mcp admin-passwd [--profile <file>] [--data-dir <dir>]\n",
     );
     return EXIT.CONFIG;
   }
@@ -1468,6 +1530,22 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
   let oauthDb: DatabaseSync | undefined;
   let oauthStore: MerchantOAuthStore | undefined;
   let verifier: MerchantMcpAuthVerifier | undefined;
+  // 会话与一次性确认凭证的存储**与认证模式无关**：写操作确认页（/admin/*）
+  // 在两种模式下都挂载——网关路由形态要求实例接受静态内部令牌（token 模式），
+  // 而商家仍必须能批准写候选，否则 prepare_* 只能等到期。
+  {
+    // 数据目录可能尚未创建（例如从未跑过 admin-passwd）：先建 0700，再预建库文件。
+    mkdirSync(dirs.merchantDataDir, { recursive: true, mode: 0o700 });
+    const oauthDbPath = path.join(dirs.merchantDataDir, "oauth.sqlite");
+    // 审查 P2：先以 0600 预建空文件再打开，消除「库已建、chmod 未执行」的
+    // 短暂默认权限窗口。
+    if (!existsSync(oauthDbPath)) {
+      writeFileSync(oauthDbPath, "", { mode: 0o600 });
+    }
+    oauthDb = new DatabaseSync(oauthDbPath);
+    chmodSync(oauthDbPath, 0o600);
+    oauthStore = new MerchantOAuthStore({ db: oauthDb });
+  }
   if (authMode === "oauth") {
     // issuer：public_url（生产 https）优先；loopback 开发推导为 http://127.0.0.1:<port>。
     const issuer =
@@ -1478,16 +1556,7 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
       );
       return EXIT.CONFIG;
     }
-    // 授权码/token/客户端注册落状态目录 oauth.sqlite（单 owner 写；0600）。
-    // 审查 P2：先以 0600 预建空文件再打开，消除「库已建、chmod 未执行」的
-    // 短暂默认权限窗口。
-    const oauthDbPath = path.join(dirs.merchantDataDir, "oauth.sqlite");
-    if (!existsSync(oauthDbPath)) {
-      writeFileSync(oauthDbPath, "", { mode: 0o600 });
-    }
-    oauthDb = new DatabaseSync(oauthDbPath);
-    chmodSync(oauthDbPath, 0o600);
-    oauthStore = new MerchantOAuthStore({ db: oauthDb });
+    // 授权码/token/客户端注册同样落 oauth.sqlite（上面已按 0600 打开）。
     oauth = new MerchantOAuthServer({
       store: oauthStore,
       issuer,
@@ -1502,24 +1571,31 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
     });
   } else {
     verifier = resolveMerchantMcpVerifier(mcpConfig?.token_env);
-    // 审查 P2：token 过渡模式的写闭环现状——BUG-02 后批准/执行只经管理
-    // 确认页（仅 OAuth 模式挂载）或对话内核 /approve；本 serve 进程两者都
-    // 没有，prepare_* 候选只能等到期。显式警示，不留「静默死路」。
+    // token 模式（含网关路由形态：实例只接受网关的静态内部令牌）下，写操作
+    // 确认页同样挂载，商家在 /admin/pending 批准候选。
     process.stderr.write(
-      "⚠️ [kiwi] merchant_mcp.auth_mode=token（过渡模式）：管理确认页未挂载，" +
-        "prepare_* 生成的写命令无法在本进程批准（到期自动失效）。\n" +
-        "  正式部署请改用 OAuth 模式（省略 auth_mode 并配置 public_url），\n" +
-        "  或由对话内核进程的 /approve 通道批准。\n",
+      "ℹ️ [kiwi] merchant_mcp.auth_mode=token：/mcp 使用静态内部令牌认证" +
+        "（网关路由形态的推荐配置）；写操作确认页仍挂载在 /admin/*，\n" +
+        "  需先 `kiwi merchant mcp admin-passwd` 设置管理员口令。\n",
     );
   }
   let authWarning: string | undefined;
   try {
+    // 策略按**静态 / OAuth** 校验器判定：组合校验器恒存在，若拿它判定会让
+    // 「非 loopback 且未配置任何凭据」的实例误判为已受保护而启动。
     authWarning = assertMerchantMcpAuthPolicy(host, verifier);
   } catch (err) {
     process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
     return EXIT.CONFIG;
   }
   if (authWarning !== undefined) process.stderr.write(`${authWarning}\n`);
+
+  // 配对凭据（§8.4 第二期，最小授权）：由本实例签发、网关持有；与静态令牌
+  // 并存，任一通过即放行。商家重配对即轮换，`unpair` 即吊销。
+  verifier = new CompositeMerchantMcpVerifier([
+    ...(verifier !== undefined ? [verifier] : []),
+    new PairedCredentialVerifier(dirs.merchantDataDir),
+  ]);
 
   // 依赖装配与 chat kernel 同一套：agent data dir + state.sqlite + 审批候选 store。
   // 审批候选与对话内核共享同一 DB——MCP 生成的 draft 候选在内核侧 /pending 可见。
@@ -1642,17 +1718,25 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
       ...(intelligence !== undefined ? { intelligence } : {}),
     },
   });
+  // 配对兑换：两种认证模式都挂载——凭据由本实例在兑换时新签，不依赖环境变量。
   const handle = await startMerchantMcpServer({
     service,
     host,
     port,
     path: mcpPath,
+    pairing: {
+      dir: dirs.merchantDataDir,
+      instance: () => ({
+        ownerId: profile.owner_id,
+        principalId: profile.agent_id,
+      }),
+    },
     ...(verifier !== undefined ? { auth: verifier } : {}),
     ...(oauth !== undefined ? { oauth } : {}),
     presentations,
-    // 配套商家确认页面（BUG-01/03 修复后）：仅 OAuth 模式挂载（cookie 会话 +
-    // 一次性确认凭证；token 过渡模式无会话体系，确认走对话内核 /approve）。
-    ...(oauth !== undefined && oauthDb !== undefined && oauthStore !== undefined
+    // 配套商家确认页面（BUG-01/03）：cookie 会话 + 一次性确认凭证，两种认证
+    // 模式下都挂载（会话/凭证存 oauth.sqlite，与 OAuth 授权服务器同库不同表）。
+    ...(oauthDb !== undefined && oauthStore !== undefined
       ? {
           admin: {
             merchantName: profile.name ?? profile.owner_id,

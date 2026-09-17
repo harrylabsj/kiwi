@@ -1,0 +1,279 @@
+{
+  "$note": [
+    "买方连接器 oc_bd73f860e3e2b5d3（source=kiwi-sourcing，本地 stdio，已发布 v1.0.0）的",
+    "工具输入契约基线。这 9 个工具是平台分发包中 Skill 所声明的已发布工具集合",
+    "（见 docs/merchant-buddy/workbuddy-connector-platform-verification-2026-09-17.md §2）。",
+    "任何改动都会被 tests/buyer-tool-contract.test.ts 拦下：已安装用户依赖这些名称与参数，",
+    "新增能力必须以增量工具（如 kiwi_follow_merchant 系列）交付，并走买方侧独立版本。"
+  ],
+  "tools": [
+    {
+      "name": "kiwi_search",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "category": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "kiwi_request_quotes",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "intent"
+        ],
+        "properties": {
+          "intent": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "intent_id",
+              "intent_type",
+              "items"
+            ],
+            "properties": {
+              "intent_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "intent_type": {
+                "type": "string",
+                "enum": [
+                  "purchase",
+                  "procurement",
+                  "inquiry"
+                ]
+              },
+              "items": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "required": [
+                    "query"
+                  ],
+                  "properties": {
+                    "query": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "商品短词（如 保温杯），命中 catalog 标题/分类 LIKE；长规格词可能匹配不到"
+                    },
+                    "sku": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "quantity": {
+                      "type": "object",
+                      "required": [
+                        "value",
+                        "unit"
+                      ],
+                      "properties": {
+                        "value": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "unit": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "merchant_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "kiwi_get_task",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "kiwi_negotiate",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "action",
+          "summary"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "counter_offer",
+              "clarification"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "kiwi_accept_agreement",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "candidate_id"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "candidate_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "approval_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "kiwi_get_agreement",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "agreement_id"
+        ],
+        "properties": {
+          "agreement_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "kiwi_handoff",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "agreement_id",
+          "destination_type"
+        ],
+        "properties": {
+          "agreement_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "approval_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "destination_type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "kiwi_approve",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "approval_id"
+        ],
+        "properties": {
+          "approval_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "kiwi_reject",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "approval_id"
+        ],
+        "properties": {
+          "approval_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ]
+}

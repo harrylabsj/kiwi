@@ -31,6 +31,7 @@
  */
 
 import { timingSafeEqual } from "node:crypto";
+import { matchesPairedCredential } from "../auth/merchant-pairing.js";
 
 import { isLoopbackHost } from "../a2a/client/url-policy.js";
 
@@ -94,6 +95,52 @@ export class StaticBearerTokenVerifier implements MerchantMcpAuthVerifier {
       return { ok: false, reason: "invalid bearer token" };
     }
     return { ok: true };
+  }
+}
+
+/**
+ * 配对凭据校验器（设计 §8.4 第二期，最小授权）：接受由**本实例**签发、
+ * 网关持有的那份凭据（`paired-credential.json`，只存摘要，逐请求恒定时间比较）。
+ * 与静态令牌并存——静态令牌是运维自己的入口，配对凭据是可随时轮换的那份。
+ */
+export class PairedCredentialVerifier implements MerchantMcpAuthVerifier {
+  readonly name = "paired-credential";
+  constructor(private readonly dir: string) {}
+
+  verify(ctx: MerchantMcpAuthContext): MerchantMcpAuthResult {
+    const header = ctx.authorizationHeader;
+    if (header === undefined || header === "") {
+      return { ok: false, reason: "missing Authorization header" };
+    }
+    const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+    if (match === null) {
+      return { ok: false, reason: "Authorization header is not a bearer token" };
+    }
+    if (!matchesPairedCredential(this.dir, match[1] ?? "")) {
+      return { ok: false, reason: "invalid paired credential" };
+    }
+    // 与静态令牌同语义：不带 scope（undefined = 全量），工具级门禁由网关侧
+    // 按**用户 OAuth 令牌**的 scope 逐次执行（mcp-proxy），实例不重复判定。
+    return { ok: true };
+  }
+}
+
+/**
+ * 组合校验器：任一子校验器通过即通过（静态令牌 + 配对凭据并存）。
+ * 全部失败时返回最后一个原因，不回显任何凭据内容。
+ */
+export class CompositeMerchantMcpVerifier implements MerchantMcpAuthVerifier {
+  readonly name = "composite";
+  constructor(private readonly verifiers: MerchantMcpAuthVerifier[]) {}
+
+  verify(ctx: MerchantMcpAuthContext): MerchantMcpAuthResult {
+    let last: MerchantMcpAuthResult = { ok: false, reason: "no verifier configured" };
+    for (const verifier of this.verifiers) {
+      const result = verifier.verify(ctx);
+      if (result.ok) return result;
+      last = result;
+    }
+    return last;
   }
 }
 

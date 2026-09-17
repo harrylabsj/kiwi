@@ -206,6 +206,7 @@ async function startEntry(): Promise<EntryStack> {
   const issuer = `http://127.0.0.1:${port}`;
   const oauthStore = new MerchantOAuthStore({ db });
   const registrations = new InstanceRegistrationStore({ db });
+  const redeemedCodes = new Set<string>();
   const vault = new GatewayCredentialVault({ db, secret: "entry-test-secret" });
   const registry = new TenantBackendRegistry(
     [],
@@ -236,7 +237,29 @@ async function startEntry(): Promise<EntryStack> {
       registrations,
       credentials: vault,
       // 联调替身：真实实现会真的打实例（见 instance-registration.test.ts）
-      probe: async (mcpUrl: string) => ({ mcpUrl, toolCount: 2 }),
+      probe: async (mcpUrl: string) => ({
+        mcpUrl,
+        toolCount: 2,
+        serverName: "kiwi-merchant",
+        serverVersion: "0.8.0",
+      }),
+      redeem: async (_mcpUrl: string, code: string) => {
+        const valid = "AAAA-BBBB-CCCC";
+        if (code.trim().toUpperCase() !== valid) {
+          throw new Error("配对码无效或已过期");
+        }
+        if (redeemedCodes.has(valid)) {
+          throw new Error("配对码已使用");
+        }
+        redeemedCodes.add(valid);
+        return {
+          credential: "paired-internal-token",
+          ownerId: "merchant-001",
+          principalId: "p",
+          serverName: "kiwi-merchant",
+          serverVersion: "0.8.0",
+        };
+      },
     },
     credentials: {
       put: (merchantId, token, expiresAt) => {
@@ -423,6 +446,58 @@ describe("实例自助绑定页（§8.4 第一期）", () => {
     expect(unbind.status).toBe(303);
     expect(stack.registrations.get(MERCHANT_ID)).toBeUndefined();
     expect(stack.registry.has(MERCHANT_ID)).toBe(false);
+  });
+
+  it("用一次性配对码绑定：兑换成功即落库，重复使用被拒", async () => {
+    const stack = await startEntry();
+    const bound = await connectAndAuthorize(stack);
+
+    const pair = await fetch(`${stack.issuer}/instance/pair`, {
+      method: "POST",
+      headers: { cookie: bound.cookie, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ mcp_url: INSTANCE_URL, code: "AAAA-BBBB-CCCC" }).toString(),
+      redirect: "manual",
+    });
+    expect(pair.status).toBe(303);
+    expect(pair.headers.get("location")).toBe("/instance?status=paired");
+    expect(stack.vault.get(`instance:${MERCHANT_ID}`)?.token).toBe("paired-internal-token");
+    expect(stack.registrations.get(MERCHANT_ID)?.mcpUrl).toBe(INSTANCE_URL);
+    expect(stack.registry.has(MERCHANT_ID)).toBe(true);
+
+    // 同一配对码不可重用；解绑后旧码也不能复活
+    const replay = await fetch(`${stack.issuer}/instance/pair`, {
+      method: "POST",
+      headers: { cookie: bound.cookie, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ mcp_url: INSTANCE_URL, code: "AAAA-BBBB-CCCC" }).toString(),
+      redirect: "manual",
+    });
+    expect(replay.status).toBe(303);
+    expect(replay.headers.get("location") ?? "").toContain("error=");
+  });
+
+  it("配对码页面不显示已存凭据，且换码不覆盖已有绑定（失败即无副作用）", async () => {
+    const stack = await startEntry();
+    const bound = await connectAndAuthorize(stack);
+    await fetch(`${stack.issuer}/instance/pair`, {
+      method: "POST",
+      headers: { cookie: bound.cookie, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ mcp_url: INSTANCE_URL, code: "AAAA-BBBB-CCCC" }).toString(),
+      redirect: "manual",
+    });
+    const page = await fetch(`${stack.issuer}/instance`, { headers: { cookie: bound.cookie } });
+    const html = await page.text();
+    expect(html).toContain("用一次性配对码绑定");
+    expect(html).not.toContain("paired-internal-token");
+
+    const bad = await fetch(`${stack.issuer}/instance/pair`, {
+      method: "POST",
+      headers: { cookie: bound.cookie, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ mcp_url: INSTANCE_URL, code: "WRONG-CODE-XXXX" }).toString(),
+      redirect: "manual",
+    });
+    expect(bad.headers.get("location") ?? "").toContain("error=");
+    // 失败不改变已绑定状态
+    expect(stack.vault.get(`instance:${MERCHANT_ID}`)?.token).toBe("paired-internal-token");
   });
 
   it("地址不合规时拒绝绑定且不留状态", async () => {

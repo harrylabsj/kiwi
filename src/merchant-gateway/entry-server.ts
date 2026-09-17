@@ -63,6 +63,7 @@ import { createProtocolServer, type ScopedMcpTools } from "../mcp/merchant-serve
 import type { MerchantCredentialStore } from "./credential-vault.js";
 import {
   bindInstance,
+  bindInstanceViaPairing,
   unbindInstance,
   type InstanceRegistrationWriter,
   type ProbeResult,
@@ -114,6 +115,15 @@ export interface GatewayEntryServerOptions {
     credentials: MerchantCredentialStore;
     /** 探活实现（缺省走真实网络）；测试可注入。 */
     probe?: (mcpUrl: string, token: string) => Promise<ProbeResult>;
+    /** 配对码兑换替身（缺省走真实网络）；测试可注入。 */
+    redeem?: (mcpUrl: string, code: string) => Promise<{
+      credential: string;
+      ownerId: string;
+      principalId: string;
+      serverName: string;
+      serverVersion: string;
+    }>;
+
   };
   /** 入站 Bearer 校验器（OAuth access token → 主体 + scope）。 */
   auth?: MerchantMcpAuthVerifier;
@@ -503,7 +513,16 @@ export async function startGatewayEntryServer(
 
   /** `/instance` 页面：展示当前绑定 + 绑定/解绑表单（需商家会话）。 */
   const renderInstancePage = (
-    registration: { mcpUrl: string; updatedAt: string } | undefined,
+    registration:
+      | {
+          mcpUrl: string;
+          updatedAt: string;
+          instanceName: string;
+          instanceVersion: string;
+          toolCount: number;
+          boundVia: string;
+        }
+      | undefined,
     notice: { kind: "ok" | "error"; text: string } | undefined,
     merchantId: string,
   ): string => {
@@ -512,10 +531,22 @@ export async function startGatewayEntryServer(
       notice === undefined
         ? ""
         : `<p class="${notice.kind === "ok" ? "ok" : "err"}">${escapeHtml(notice.text)}</p>`;
+    const version = bound
+      ? registration.instanceVersion === ""
+        ? "未上报（实例版本较旧；建议升级以获得配对码与凭据轮换）"
+        : `${escapeHtml(registration.instanceName || "kiwi-merchant")} v${escapeHtml(
+            registration.instanceVersion,
+          )}`
+      : "";
+    const bindingNote = bound
+      ? ` 连接方式：${registration.boundVia === "pairing" ? "一次性配对码" : registration.boundVia === "paste" ? "粘贴内部令牌" : "未知"}`
+      : "";
     const current = bound
       ? `<p>当前已绑定实例：<code>${escapeHtml(registration.mcpUrl)}</code>（更新于 ${escapeHtml(
           registration.updatedAt,
         )}）</p>
+       <p>实例版本：${version}${bindingNote}</p>
+       <p>可用工具：${registration.toolCount} 个（绑定当时探测；后续按实例实际能力动态刷新）</p>
        <form method="post" action="/instance/unbind">
          <button type="submit">解除绑定</button>
        </form>`
@@ -556,6 +587,19 @@ ${current}
   <p class="small">绑定前网关会带该令牌调用实例的 initialize 与 tools/list：
     地址可达、令牌正确、确为 MCP 实例，三者同时成立才会保存。</p>
 </div>
+<div class="card">
+  <h2 style="font-size:1.05rem;margin:0 0 6px">用一次性配对码绑定（推荐）</h2>
+  <p class="small">在实例所在机器上执行 <code>kiwi merchant mcp pair</code>，得到一次性配对码
+    （约 10 分钟有效、用完即失效）。这样无需把长期内部令牌填进表单。</p>
+  <form method="post" action="/instance/pair">
+    <label for="pair_url">实例 MCP 地址</label>
+    <input id="pair_url" name="mcp_url" placeholder="https://your-merchant.example/mcp" autocomplete="off">
+    <label for="pair_code">配对码</label>
+    <input id="pair_code" name="code" placeholder="XXXX-XXXX-XXXX" autocomplete="off">
+    <button type="submit">兑换并绑定</button>
+  </form>
+  <p class="small">网关会用它向实例兑换内部凭据（由实例侧生成，网关不签发），兑换成功后配对码立即作废。</p>
+</div>
 </body></html>`;
   };
 
@@ -585,6 +629,7 @@ ${current}
       const error = url.searchParams.get("error");
       if (error !== null) return { kind: "error", text: error };
       if (kind === "bound") return { kind: "ok", text: "实例已绑定（已探活通过）。" };
+      if (kind === "paired") return { kind: "ok", text: "实例已用配对码绑定（凭据已加密保存）。" };
       if (kind === "unbound")
         return { kind: "ok", text: "实例已解绑；目录公开资料与买家关注不受影响。" };
       return undefined;
@@ -598,11 +643,57 @@ ${current}
         renderInstancePage(
           registration === undefined
             ? undefined
-            : { mcpUrl: registration.mcpUrl, updatedAt: registration.updatedAt },
+            : {
+                mcpUrl: registration.mcpUrl,
+                updatedAt: registration.updatedAt,
+                instanceName: registration.instanceName,
+                instanceVersion: registration.instanceVersion,
+                toolCount: registration.toolCount,
+                boundVia: registration.boundVia,
+              },
           noticeFromQuery(),
           merchantId,
         ),
       );
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/instance/pair") {
+      let form: Record<string, string | undefined>;
+      try {
+        form = await readForm(req);
+      } catch {
+        res.writeHead(303, {
+          location: `/instance?error=${encodeURIComponent("表单解析失败，请重试")}`,
+          ...NO_STORE_HEADERS,
+        });
+        res.end();
+        return;
+      }
+      const mcpUrl = (form.mcp_url ?? "").trim();
+      const code = form.code ?? "";
+      try {
+        const bound = await bindInstanceViaPairing(
+          { registrations: binding.registrations, credentials: binding.credentials },
+          { merchantId, mcpUrl, code },
+          {
+            ...(binding.redeem !== undefined ? { redeem: binding.redeem } : {}),
+            ...(binding.probe !== undefined ? { probe: binding.probe } : {}),
+          },
+        );
+        process.stdout.write(
+          `[gateway entry] instance paired via code: merchant=${merchantId} owner=${bound.ownerId} url=${bound.mcpUrl}\n`,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        res.writeHead(303, {
+          location: `/instance?error=${encodeURIComponent(message)}`,
+          ...NO_STORE_HEADERS,
+        });
+        res.end();
+        return;
+      }
+      res.writeHead(303, { location: "/instance?status=paired", ...NO_STORE_HEADERS });
+      res.end();
       return;
     }
     if (
