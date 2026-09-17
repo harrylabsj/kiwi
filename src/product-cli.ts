@@ -107,6 +107,9 @@ Usage:
                                           认证：KIWI_MERCHANT_MCP_TOKEN 或 profile
                                           merchant_mcp.token_env；非 loopback 无 token
                                           拒绝启动）
+  kiwi merchant mcp pair [--profile <merchant.yaml>] [--data-dir <dir>]
+                                          生成一次性配对码（10 分钟、单次），用于把实例
+                                          绑定到商家连接器网关（不必粘贴长期令牌）
   kiwi merchant runtime <start|stop|status|health> [--profile <merchant.yaml>] [--data-dir <dir>]
                                           Merchant 实例运行时管理：A2A + MCP 受管子进程，
                                           异常退出自动重启，分项健康检查（V2 阶段一）

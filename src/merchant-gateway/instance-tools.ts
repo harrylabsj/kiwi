@@ -31,6 +31,7 @@ import type { MerchantAuthorization } from "../auth/merchant-authorization.js";
 import type { ScopedMcpTools } from "../mcp/merchant-server.js";
 import type { MerchantMcpCallResult, MerchantMcpToolDefinition } from "../mcp/merchant-tools.js";
 import { proxyTenantMcp } from "./mcp-proxy.js";
+import { createPinnedFetch } from "./pinned-fetch.js";
 import { TenantBackendError, TenantBackendRegistry } from "./tenant-registry.js";
 
 const DEFAULT_TOOL_CACHE_TTL_MS = 60_000;
@@ -166,7 +167,8 @@ export function buildInstanceTools(deps: InstanceToolDeps): ScopedMcpTools | und
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
       },
       deps.registry,
-      deps.fetchImpl ?? fetch,
+      // 商家实例是外部不可信端点：默认钉住已校验 IP（防 DNS 重绑定）。
+      deps.fetchImpl ?? createPinnedFetch(),
     );
     let payload: unknown;
     try {

@@ -39,15 +39,28 @@ import {
   TenantBackendError,
 } from "./tenant-registry.js";
 import { PRODUCT_VERSION } from "../product-cli.js";
+import { createPinnedFetch } from "./pinned-fetch.js";
 
 const REGISTRATION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS gateway_instance_registrations (
   merchant_id TEXT PRIMARY KEY,
   mcp_url TEXT NOT NULL,
+  instance_name TEXT NOT NULL DEFAULT '',
+  instance_version TEXT NOT NULL DEFAULT '',
+  tool_count INTEGER NOT NULL DEFAULT 0,
+  bound_via TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 `;
+
+/** 老库补列（逐列幂等 ALTER）。 */
+const REGISTRATION_COLUMNS: Array<{ name: string; ddl: string }> = [
+  { name: "instance_name", ddl: "TEXT NOT NULL DEFAULT ''" },
+  { name: "instance_version", ddl: "TEXT NOT NULL DEFAULT ''" },
+  { name: "tool_count", ddl: "INTEGER NOT NULL DEFAULT 0" },
+  { name: "bound_via", ddl: "TEXT NOT NULL DEFAULT ''" },
+];
 
 /** 实例内部凭据不设自动过期：生命周期由「解绑」「重新绑定覆盖」结束。 */
 export const INSTANCE_CREDENTIAL_NO_EXPIRY = "9999-12-31T23:59:59.999Z";
@@ -58,8 +71,25 @@ const PROBE_MAX_BYTES = 512 * 1024;
 export interface InstanceRegistration {
   merchantId: string;
   mcpUrl: string;
+  /** 实例自报名称与版本（能力探测结果；未上报则为空）。 */
+  instanceName: string;
+  instanceVersion: string;
+  /** 绑定当时探测到的工具数（0 = 未探测/未上报）。 */
+  toolCount: number;
+  /** 绑定方式：paste（粘贴令牌）| pairing（一次性配对码）。 */
+  boundVia: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** 绑定方式。 */
+export type InstanceBindingMethod = "paste" | "pairing";
+
+function asRecord(value: unknown, field: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TenantBackendError(`${field} 结构非法`, "invalid_config");
+  }
+  return value as Record<string, unknown>;
 }
 
 function credentialKey(merchantId: string): string {
@@ -75,36 +105,85 @@ export class InstanceRegistrationStore {
     this.db = options.db;
     this.now = options.now ?? (() => new Date().toISOString());
     this.db.exec(REGISTRATION_SCHEMA);
+    for (const column of REGISTRATION_COLUMNS) {
+      const columns = this.db
+        .prepare("PRAGMA table_info(gateway_instance_registrations)")
+        .all() as Array<{ name: string }>;
+      if (columns.some((entry) => entry.name === column.name)) continue;
+      this.db.exec(
+        `ALTER TABLE gateway_instance_registrations ADD COLUMN ${column.name} ${column.ddl}`,
+      );
+    }
   }
 
   get(merchantId: string): InstanceRegistration | undefined {
     const row = this.db
       .prepare(
-        "SELECT merchant_id, mcp_url, created_at, updated_at FROM gateway_instance_registrations WHERE merchant_id = ?",
+        `SELECT merchant_id, mcp_url, instance_name, instance_version, tool_count, bound_via,
+                created_at, updated_at
+           FROM gateway_instance_registrations WHERE merchant_id = ?`,
       )
       .get(merchantId) as
-      { merchant_id: string; mcp_url: string; created_at: string; updated_at: string } | undefined;
+      | {
+          merchant_id: string;
+          mcp_url: string;
+          instance_name: string;
+          instance_version: string;
+          tool_count: number;
+          bound_via: string;
+          created_at: string;
+          updated_at: string;
+        }
+      | undefined;
     if (row === undefined) return undefined;
     return {
       merchantId: row.merchant_id,
       mcpUrl: row.mcp_url,
+      instanceName: row.instance_name,
+      instanceVersion: row.instance_version,
+      toolCount: Number(row.tool_count ?? 0),
+      boundVia: row.bound_via,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
   }
 
-  upsert(merchantId: string, mcpUrl: string): InstanceRegistration {
+  upsert(
+    merchantId: string,
+    mcpUrl: string,
+    probe?: {
+      name?: string;
+      version?: string;
+      toolCount?: number;
+      boundVia?: InstanceBindingMethod;
+    },
+  ): InstanceRegistration {
     const now = this.now();
     const existing = this.get(merchantId);
     this.db
       .prepare(
-        `INSERT INTO gateway_instance_registrations(merchant_id, mcp_url, created_at, updated_at)
-         VALUES (?, ?, ?, ?)
+        `INSERT INTO gateway_instance_registrations(
+           merchant_id, mcp_url, instance_name, instance_version, tool_count, bound_via,
+           created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(merchant_id) DO UPDATE SET
            mcp_url = excluded.mcp_url,
+           instance_name = excluded.instance_name,
+           instance_version = excluded.instance_version,
+           tool_count = excluded.tool_count,
+           bound_via = excluded.bound_via,
            updated_at = excluded.updated_at`,
       )
-      .run(merchantId, mcpUrl, existing?.createdAt ?? now, now);
+      .run(
+        merchantId,
+        mcpUrl,
+        probe?.name ?? "",
+        probe?.version ?? "",
+        probe?.toolCount ?? 0,
+        probe?.boundVia ?? "",
+        existing?.createdAt ?? now,
+        now,
+      );
     return this.get(merchantId) as InstanceRegistration;
   }
 
@@ -122,7 +201,16 @@ export class InstanceRegistrationStore {
  */
 export interface InstanceRegistrationWriter {
   get(merchantId: string): InstanceRegistration | undefined;
-  upsert(merchantId: string, mcpUrl: string): InstanceRegistration;
+  upsert(
+    merchantId: string,
+    mcpUrl: string,
+    probe?: {
+      name?: string;
+      version?: string;
+      toolCount?: number;
+      boundVia?: InstanceBindingMethod;
+    },
+  ): InstanceRegistration;
   delete(merchantId: string): boolean;
 }
 
@@ -136,6 +224,9 @@ export interface InstanceBindingDeps {
 export interface ProbeResult {
   mcpUrl: string;
   toolCount: number;
+  /** 实例自报名称与版本（MCP initialize 的 serverInfo）；未上报则为空串。 */
+  serverName: string;
+  serverVersion: string;
 }
 
 async function rpcCall(
@@ -223,9 +314,22 @@ export async function probeInstance(
   if (typeof token !== "string" || token.trim() === "") {
     throw new TenantBackendError("实例内部令牌不能为空", "invalid_config");
   }
-  const fetchImpl = options.fetchImpl ?? fetch;
+  // 实例地址是商家提供的不可信输入：默认走**钉住式**出站（解析一次、按该 IP
+  // 建连，防 DNS 重绑定），不做二次解析。
+  const fetchImpl = options.fetchImpl ?? createPinnedFetch();
   const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS;
-  await rpcCall(url, token, "initialize", fetchImpl, timeoutMs);
+  const initialized = await rpcCall(url, token, "initialize", fetchImpl, timeoutMs);
+  const serverInfo = (() => {
+    const result = initialized.result;
+    if (result === null || typeof result !== "object") return { name: "", version: "" };
+    const info = (result as { serverInfo?: unknown }).serverInfo;
+    if (info === null || typeof info !== "object") return { name: "", version: "" };
+    const record = info as { name?: unknown; version?: unknown };
+    return {
+      name: typeof record.name === "string" ? record.name : "",
+      version: typeof record.version === "string" ? record.version : "",
+    };
+  })();
   const listed = await rpcCall(url, token, "tools/list", fetchImpl, timeoutMs);
   const result = listed.result;
   const tools =
@@ -240,7 +344,158 @@ export async function probeInstance(
       "invalid_config",
     );
   }
-  return { mcpUrl: url, toolCount: tools.length };
+  return {
+    mcpUrl: url,
+    toolCount: tools.length,
+    serverName: serverInfo.name,
+    serverVersion: serverInfo.version,
+  };
+}
+
+/**
+ * 网关侧：用一次性配对码兑换实例的内部凭据与身份（§8.4 第二期）。
+ *
+ * 端点固定在实例服务器根的 `/pairing/redeem`（不是 `/mcp`）；同样受 URL 策略
+ * 约束（https 或 loopback、无 userinfo/查询），不跟随重定向、带超时。
+ * 返回的凭据由**实例侧**生成并落盘，网关不参与签发。
+ */
+export async function redeemInstancePairingCode(
+  mcpUrl: string,
+  code: string,
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+): Promise<{
+  credential: string;
+  ownerId: string;
+  principalId: string;
+  serverName: string;
+  serverVersion: string;
+}> {
+  const canonical = canonicalInstanceUrl(mcpUrl);
+  const endpoint = new URL(canonical);
+  endpoint.pathname = "/pairing/redeem";
+  if (typeof code !== "string" || code.trim() === "") {
+    throw new TenantBackendError("配对码不能为空（请在实例上执行 kiwi merchant mcp pair）", "invalid_config");
+  }
+  const fetchImpl = options.fetchImpl ?? createPinnedFetch();
+  const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response;
+  let body: unknown;
+  try {
+    try {
+      response = await fetchImpl(endpoint.toString(), {
+        method: "POST",
+        redirect: "manual",
+        signal: controller.signal,
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json",
+          "user-agent": `kiwi-merchant-entry/${PRODUCT_VERSION}`,
+        },
+        body: JSON.stringify({ code: code.trim().toUpperCase() }),
+      });
+    } catch (err) {
+      const name = (err as { name?: string } | null)?.name;
+      throw new TenantBackendError(
+        name === "AbortError"
+          ? `配对兑换超时（${timeoutMs}ms）：${endpoint.origin}`
+          : `配对兑换失败：实例不可达（${endpoint.origin}）`,
+        "invalid_config",
+      );
+    }
+    if (response.status >= 300 && response.status < 400) {
+      throw new TenantBackendError("配对兑换返回重定向：拒绝", "invalid_config");
+    }
+    if (!response.ok) {
+      let message = `实例拒绝配对兑换（HTTP ${response.status}）`;
+      try {
+        const parsed = (await response.json()) as { message?: unknown };
+        if (typeof parsed.message === "string" && parsed.message.trim() !== "") {
+          message = parsed.message;
+        }
+      } catch {
+        // 保持默认信息
+      }
+      throw new TenantBackendError(message, "invalid_config");
+    }
+    const text = await response.text();
+    if (text.length > PROBE_MAX_BYTES) {
+      throw new TenantBackendError("配对兑换响应体过大：拒绝", "invalid_config");
+    }
+    try {
+      body = JSON.parse(text) as unknown;
+    } catch {
+      throw new TenantBackendError("配对兑换响应不是合法 JSON", "invalid_config");
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+  const record = asRecord(body, "配对兑换响应");
+  const credential = typeof record.credential === "string" ? record.credential.trim() : "";
+  if (record.ok !== true || credential === "") {
+    throw new TenantBackendError("配对兑换未返回可用凭据（实例版本过旧？）", "invalid_config");
+  }
+  const instance = asRecord(record.instance, "配对兑换响应.instance");
+  const serverInfo = (() => {
+    const info = (record as { server_info?: unknown }).server_info;
+    if (info === null || typeof info !== "object") return { name: "", version: "" };
+    const entry = info as { name?: unknown; version?: unknown };
+    return {
+      name: typeof entry.name === "string" ? entry.name : "",
+      version: typeof entry.version === "string" ? entry.version : "",
+    };
+  })();
+  return {
+    credential,
+    ownerId: typeof instance.owner_id === "string" ? instance.owner_id : "",
+    principalId: typeof instance.principal_id === "string" ? instance.principal_id : "",
+    serverName: serverInfo.name,
+    serverVersion: serverInfo.version,
+  };
+}
+
+/**
+ * 用配对码绑定：URL 策略 → 兑换 → 加密存凭据 → 记录地址。
+ * 兑换失败（码错/过期/实例过旧）不留任何状态。
+ */
+export async function bindInstanceViaPairing(
+  deps: InstanceBindingDeps,
+  input: { merchantId: string; mcpUrl: string; code: string },
+  options: {
+    redeem?: typeof redeemInstancePairingCode;
+    probe?: typeof probeInstance;
+  } = {},
+): Promise<{ mcpUrl: string; ownerId: string }> {
+  if (input.merchantId.trim() === "") {
+    throw new TenantBackendError("缺少商家身份", "invalid_config");
+  }
+  const canonical = canonicalInstanceUrl(input.mcpUrl);
+  const redeem = options.redeem ?? redeemInstancePairingCode;
+  const redeemed = await redeem(canonical, input.code, {
+    ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
+    ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
+  });
+  // 能力探测：兑换到的凭据必须真的能调通实例（tools/list）才落库——避免存下
+  // 一份用不了的凭据；同时记录实例自报名称/版本与工具数。
+  const prober = options.probe ?? probeInstance;
+  const probe = await prober(canonical, redeemed.credential, {
+    ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
+    ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
+  });
+  deps.credentials.put(credentialKey(input.merchantId), redeemed.credential, INSTANCE_CREDENTIAL_NO_EXPIRY);
+  try {
+    deps.registrations.upsert(input.merchantId, canonical, {
+      name: probe.serverName || redeemed.serverName,
+      version: probe.serverVersion || redeemed.serverVersion,
+      toolCount: probe.toolCount,
+      boundVia: "pairing",
+    });
+  } catch (err) {
+    deps.credentials.delete(credentialKey(input.merchantId));
+    throw err;
+  }
+  return { mcpUrl: canonical, ownerId: redeemed.ownerId };
 }
 
 /** 绑定：校验 → 探活 → 加密存凭据 → 记录地址。任一步失败都不留半成品状态。 */
@@ -265,7 +520,12 @@ export async function bindInstance(
   const probe = await prober(canonical, input.token);
   deps.credentials.put(credentialKey(input.merchantId), input.token, INSTANCE_CREDENTIAL_NO_EXPIRY);
   try {
-    deps.registrations.upsert(input.merchantId, canonical);
+    deps.registrations.upsert(input.merchantId, canonical, {
+      name: probe.serverName,
+      version: probe.serverVersion,
+      toolCount: probe.toolCount,
+      boundVia: "paste",
+    });
   } catch (err) {
     // 注册写入失败则撤销刚写入的凭据，避免「有凭据无路由」的半绑定。
     deps.credentials.delete(credentialKey(input.merchantId));

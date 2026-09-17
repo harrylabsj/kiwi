@@ -167,7 +167,12 @@ export async function proxyTenantMcp(
       body,
       signal: AbortSignal.timeout(30_000),
     });
-  } catch {
+  } catch (err) {
+    if (process.env.KIWI_GATEWAY_DEBUG_PROXY === "1") {
+      process.stderr.write(
+        `[gateway proxy] backend fetch failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}\n`,
+      );
+    }
     return json(502, { error: "backend_unavailable" });
   }
   if (upstream.status >= 300 && upstream.status < 400) {
