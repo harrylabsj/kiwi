@@ -48,9 +48,16 @@ export interface MerchantAuthorization {
 export class MerchantOAuthVerifier implements MerchantMcpAuthVerifier {
   readonly name = "oauth-bearer";
   private readonly store: MerchantOAuthStore;
-  private readonly expectedMerchantId: string;
+  private readonly expectedMerchantId: string | undefined;
 
-  constructor(options: { store: MerchantOAuthStore; expectedMerchantId: string }) {
+  constructor(options: { store: MerchantOAuthStore; expectedMerchantId?: string; multiMerchant?: boolean }) {
+    if (options.multiMerchant === true) {
+      if (options.expectedMerchantId !== undefined) {
+        throw new Error("通用 OAuth 校验器不能同时固定 expectedMerchantId");
+      }
+    } else if (!options.expectedMerchantId) {
+      throw new Error("单商家 OAuth 校验器必须配置 expectedMerchantId；通用网关须显式 multiMerchant=true");
+    }
     this.store = options.store;
     this.expectedMerchantId = options.expectedMerchantId;
   }
@@ -69,7 +76,7 @@ export class MerchantOAuthVerifier implements MerchantMcpAuthVerifier {
       return { ok: false, reason: "invalid or expired access token" };
     }
     // 租户校验（前置决策 3）：token 签发给哪个商家就只能访问哪个商家。
-    if (token.merchant_id !== this.expectedMerchantId) {
+    if (this.expectedMerchantId !== undefined && token.merchant_id !== this.expectedMerchantId) {
       return { ok: false, reason: "token merchant 不属于本实例（租户越权拒绝）" };
     }
     return {

@@ -56,9 +56,37 @@ export function workbuddyCallbackUri(source: string): string {
   return `workbuddy://workbuddy/mcp/connector%3A${source}/oauth/callback`;
 }
 
-/** redirect_uri 白名单判定：workbuddy 私有协议回调 或 http loopback 回退。 */
-export function isAllowedRedirectUri(uri: string, connectorSource: string): boolean {
-  if (uri === workbuddyCallbackUri(connectorSource)) return true;
+/**
+ * OAuth 回调策略（可配置：source、期望回调与 loopback 回退都随部署确定）。
+ *
+ * - ``expectedCallbackUri``：显式期望的回调地址；缺省按连接器 source 派生
+ *   WorkBuddy 私有协议回调（`workbuddy://…/connector%3A<source>/oauth/callback`）。
+ *   平台侧回调规则未实机核验前，保持“由 source 派生”即可；核验后如平台给出
+ *   不同形式，用本项覆盖而不改代码；
+ * - ``allowLoopbackFallback``：私有协议回调被平台拒绝时是否允许 http loopback
+ *   回退（官方文档的回退路径）。缺省 true；如需严格锁定为单一回调可置 false。
+ */
+export interface OAuthCallbackPolicy {
+  expectedCallbackUri?: string;
+  allowLoopbackFallback?: boolean;
+}
+
+/** 解析生效的期望回调地址（显式配置优先，否则按 source 派生）。 */
+export function expectedCallbackUri(
+  connectorSource: string,
+  policy: OAuthCallbackPolicy = {},
+): string {
+  return policy.expectedCallbackUri ?? workbuddyCallbackUri(connectorSource);
+}
+
+/** redirect_uri 白名单判定：期望回调（source 派生或显式配置） 或 http loopback 回退。 */
+export function isAllowedRedirectUri(
+  uri: string,
+  connectorSource: string,
+  policy: OAuthCallbackPolicy = {},
+): boolean {
+  if (uri === expectedCallbackUri(connectorSource, policy)) return true;
+  if (policy.allowLoopbackFallback === false) return false;
   try {
     const url = new URL(uri);
     return url.protocol === "http:" && isLoopbackHost(url.hostname);
@@ -680,12 +708,22 @@ export interface MerchantOAuthServerOptions {
   resource: string;
   /** 连接器 source（workbuddy 回调白名单用）。 */
   connectorSource: string;
-  /** 授权页展示的商家名。 */
-  merchantName: string;
-  /** 本实例归属商家（租户守卫；token 的 merchant_id 必须等于它——BUG-01）。 */
-  merchantId: string;
+  /** 单商家实例的展示名；通用网关省略时由已认证会话提供。 */
+  merchantName?: string;
+  /** 单商家实例归属商家；通用网关省略时由已认证会话决定。 */
+  merchantId?: string;
+  /** 只有通用网关才可开启：由经过验证的会话决定商家，不能意外省略 merchantId。 */
+  multiMerchant?: boolean;
   /** 支持的 scope（缺省 merchant:read / merchant:write）。 */
   scopes?: string[];
+  /** 回调策略（缺省按 connectorSource 派生 + 允许 loopback 回退）。 */
+  callbackPolicy?: OAuthCallbackPolicy;
+  /**
+   * 无会话时 authorize 的 303 落点（缺省单商家管理登录页 /admin/login）。
+   * 商家连接器入口传连接流程入口（如 /connect）：它负责把商家送到目录登录/注册，
+   * 完成后带着会话回到同一 authorize 请求。
+   */
+  loginPath?: string;
   now?: () => string;
 }
 
@@ -710,15 +748,24 @@ export class MerchantOAuthServer {
   private readonly issuer: string;
   private readonly resource: string;
   private readonly connectorSource: string;
-  private readonly merchantName: string;
-  private readonly merchantId: string;
+  private readonly merchantName: string | undefined;
+  private readonly merchantId: string | undefined;
   private readonly scopes: string[];
+  private readonly loginPath: string;
+  private readonly callbackPolicy: OAuthCallbackPolicy;
 
   constructor(options: MerchantOAuthServerOptions) {
     const issuerUrl = new URL(options.issuer);
     // 生产强制 HTTPS；本地开发可 http loopback（对齐连接器文档的本地回退）。
     if (issuerUrl.protocol !== "https:" && !isLoopbackHost(issuerUrl.hostname)) {
       throw new Error(`OAuth issuer 必须 https（或 loopback http 开发地址）：${options.issuer}`);
+    }
+    if (options.multiMerchant === true) {
+      if (options.merchantId !== undefined) {
+        throw new Error("通用 OAuth 入口不能同时固定 merchantId");
+      }
+    } else if (!options.merchantId) {
+      throw new Error("单商家 OAuth 入口必须配置 merchantId；通用入口须显式 multiMerchant=true");
     }
     this.store = options.store;
     this.issuer = options.issuer.replace(/\/+$/, "");
@@ -727,6 +774,8 @@ export class MerchantOAuthServer {
     this.merchantName = options.merchantName;
     this.merchantId = options.merchantId;
     this.scopes = options.scopes ?? ["merchant:read", "merchant:write"];
+    this.loginPath = options.loginPath ?? "/admin/login";
+    this.callbackPolicy = options.callbackPolicy ?? {};
   }
 
   /** RFC 9728 resource metadata URL（401 WWW-Authenticate 指引用）。 */
@@ -773,11 +822,12 @@ export class MerchantOAuthServer {
       return oauthError(400, "invalid_client_metadata", "redirect_uris 必须是非空字符串数组");
     }
     for (const uri of redirectUris as string[]) {
-      if (!isAllowedRedirectUri(uri, this.connectorSource)) {
+      if (!isAllowedRedirectUri(uri, this.connectorSource, this.callbackPolicy)) {
         return oauthError(
           400,
           "invalid_redirect_uri",
-          `redirect_uri 不在白名单（workbuddy 回调或 http loopback）：${uri}`,
+          `redirect_uri 不在白名单（期望 ${expectedCallbackUri(this.connectorSource, this.callbackPolicy)}` +
+            `${this.callbackPolicy.allowLoopbackFallback === false ? "，不允许 loopback 回退" : " 或 http loopback"}）：${uri}`,
         );
       }
     }
@@ -807,7 +857,7 @@ export class MerchantOAuthServer {
    */
   authorize(
     query: Record<string, string | undefined>,
-    session?: { principal_id: string; merchant_id: string },
+    session?: { principal_id: string; merchant_id: string; merchant_name?: string },
   ): OAuthHttpResult {
     if (session === undefined) {
       const next = `/oauth/authorize?${new URLSearchParams(
@@ -815,10 +865,13 @@ export class MerchantOAuthServer {
       ).toString()}`;
       return {
         status: 303,
-        headers: { location: `/admin/login?next=${encodeURIComponent(next)}` },
+        headers: { location: `${this.loginPath}?next=${encodeURIComponent(next)}` },
       };
     }
-    if (session.merchant_id !== this.merchantId) {
+    if (!session.merchant_id || !session.principal_id) {
+      return oauthError(403, "access_denied", "登录会话缺商家或授权主体");
+    }
+    if (this.merchantId !== undefined && session.merchant_id !== this.merchantId) {
       return oauthError(403, "access_denied", "登录用户不属于本商家实例（跨商家授权拒绝）");
     }
     const fail = (error: string, description: string): OAuthHttpResult =>
@@ -862,7 +915,7 @@ export class MerchantOAuthServer {
       scope: requestedScopes.join(" "),
       ...(query.state !== undefined ? { state: query.state } : {}),
       code_challenge: query.code_challenge,
-      merchant_id: this.merchantId,
+      merchant_id: session.merchant_id,
       principal_id: session.principal_id,
     });
     return {
@@ -873,7 +926,7 @@ export class MerchantOAuthServer {
 <head><meta charset="utf-8"><title>授权确认 — Kiwi 商家工作台</title></head>
 <body>
   <h1>Kiwi 商家运营工作台</h1>
-  <p>应用「${escapeHtml(client.client_name ?? query.client_id)}」（客户端自报名称）请求访问商家「${escapeHtml(this.merchantName)}」的：</p>
+  <p>应用「${escapeHtml(client.client_name ?? query.client_id)}」（客户端自报名称）请求访问商家「${escapeHtml(this.merchantName ?? session.merchant_name ?? session.merchant_id)}」的：</p>
   <p>客户端 ID：<code>${escapeHtml(client.client_id)}</code>（注册于 ${escapeHtml(client.created_at)}）。请核对该 ID 与连接器文档一致后再授权——client_name 为应用自报，不作为身份依据。</p>
   <ul>
     ${requestedScopes.map((s) => `<li>${escapeHtml(s)}</li>`).join("\n    ")}
@@ -886,6 +939,38 @@ export class MerchantOAuthServer {
 </body>
 </html>`,
     };
+  }
+
+  /**
+   * 授权流程在建立会话之前被中止（商家在目录拒绝了连接、连接失败）时的
+   * OAuth 2.1 错误回跳。
+   *
+   * 与 authorize 同一校验口径：client_id 与 redirect_uri 校验通过才回跳，
+   * 否则返回 400（防开放重定向）。客户端据此看到标准的 access_denied /
+   * server_error，而不是一个卡住的授权窗口。
+   */
+  authorizationError(
+    query: Record<string, string | undefined>,
+    error: string,
+    description: string,
+  ): OAuthHttpResult {
+    if (query.response_type !== "code") {
+      return oauthError(400, "invalid_request", "response_type 必须是 code");
+    }
+    if (query.client_id === undefined) return oauthError(400, "invalid_request", "缺 client_id");
+    const client = this.store.getClient(query.client_id);
+    if (client === undefined) {
+      return oauthError(400, "invalid_client", "未知 client_id（请先动态注册）");
+    }
+    const redirectUri = query.redirect_uri;
+    if (redirectUri === undefined || !client.redirect_uris.includes(redirectUri)) {
+      return oauthError(400, "invalid_request", "redirect_uri 与注册值不匹配（字符串精确匹配）");
+    }
+    return redirectTo(redirectUri, {
+      error,
+      error_description: description,
+      ...(query.state !== undefined ? { state: query.state } : {}),
+    });
   }
 
   /** POST /oauth/authorize（表单）：会话 + CSRF 校验 → 授权码回跳 / access_denied。 */
@@ -903,6 +988,9 @@ export class MerchantOAuthServer {
       );
     }
     if (
+      !session.merchant_id ||
+      !session.principal_id ||
+      (this.merchantId !== undefined && session.merchant_id !== this.merchantId) ||
       session.merchant_id !== pending.merchant_id ||
       session.principal_id !== pending.principal_id
     ) {

@@ -1,0 +1,16 @@
+{
+  "$note": [
+    "商家实例注册表（服务端唯一路由依据）。merchant_id 必须是 kiwi-catalog 注册后分配的稳定 id；",
+    "mcp_url 只接受 https，或同机 loopback http（必须显式端口、路径恰为 /mcp）。",
+    "凭据来源二选一：token_env（进程环境变量名，值写在 gateway.env）或 credential_kind=\"vault\"",
+    "（入口凭据保管库，键 instance:<merchant_id>，需配置 KIWI_GATEWAY_CREDENTIAL_KEY）。",
+    "两个字段同时出现会被拒绝启动。本文件 0600，不含任何密钥。"
+  ],
+  "tenants": [
+    {
+      "merchant_id": "mkt_replace_with_catalog_merchant_id",
+      "mcp_url": "http://127.0.0.1:9100/mcp",
+      "token_env": "VEYQUO_MCP_TOKEN"
+    }
+  ]
+}
