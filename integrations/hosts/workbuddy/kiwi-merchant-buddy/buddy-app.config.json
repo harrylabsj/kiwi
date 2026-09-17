@@ -50,6 +50,13 @@
           "kiwi_merchant_prepare_product_change",
           "kiwi_merchant_prepare_listing_change"
         ]
+      },
+      {
+        "key": "catalog-publish",
+        "name": "目录注册与发布（第 0 版）",
+        "description": "注册 Kiwi 商家目录、填写并发布商家及商品公开资料，让采购专家能搜到你",
+        "systemPrompt": "你是 Kiwi 商家运营助手的「目录注册与发布」模式（第 0 版），面向还没有部署 Kiwi Merchant 或 shopping-cli 专属服务器的新商家。本模式不使用任何 MCP 工具，也不要求商家先绑定 kiwi-merchant 连接器（首次绑定若阻塞可延后，升级到第 1 版实时询价时再主动连接）。你的职责是引导商家走完四步：1) 注册 Kiwi 商家目录：打开 kiwi-catalog 门户的 /portal/register 注册、完成邮箱验证并登录，获得稳定 merchant_id（你不代收目录账号密码，只引导打开页面和回到应用）；2) 填写商家及商品基本资料：公开商家名和至少一个商品名必填，类目、简介、已核验的公开店铺链接选填；客服 FAQ 可先调用 kiwi-merchant-cs-prep 技能整理成商家审核草稿，再带入发布表单；3) 审核并发布：引导商家在登录态核对公开预览后明确确认发布，发布接口成功会返回 publication_id、版本和发布时间；4) 验证：发布成功后建议商家到 WorkBuddy 的「Kiwi 采购询价」专家用商品词搜索验证可见性。资料状态只有四种：草稿、已发布、已撤回、发布失败；严格按发布接口回执显示状态——发布接口成功返回前，绝不显示「专家已可发现」或「已上线」；发布失败时如实说明并引导修改后重试。公开资料是商家声明内容：私有电话、邮箱、底价、账户凭据不进入公开字段。第 0 版商家在采购专家中显示为「资料可查」（不可实时询价），不要把它说成已开通实时询价或在线 Agent。",
+        "tools": []
       }
     ],
     "capsules": [
@@ -103,6 +110,21 @@
           "kiwi_merchant_list_products",
           "kiwi_merchant_get_inventory"
         ]
+      },
+      {
+        "mode": "catalog-publish",
+        "prompt": "我是新商家，没有自己的服务器，怎么让采购专家搜到我的商品？",
+        "bindTools": []
+      },
+      {
+        "mode": "catalog-publish",
+        "prompt": "帮我整理客服 FAQ，准备好要发布的公开资料",
+        "bindTools": []
+      },
+      {
+        "mode": "catalog-publish",
+        "prompt": "我的资料发布成功了吗？现在是什么状态？",
+        "bindTools": []
       }
     ],
     "内置连接器": "kiwi-merchant（OAuth 模式 MCP 连接器，source=kiwi-merchant，符合官方文档对首页内置连接器的 OAuth 要求；token 过渡包为独立 source kiwi-merchant-token，仅市场过渡用）"
@@ -120,6 +142,7 @@
   "misc": {
     "跳过首次绑定应用授权": false,
     "跳过原因": "连接器为 OAuth 模式，首次绑定需打开浏览器完成授权（服务端自建 OAuth 2.1 + PKCE），不可跳过；token 过渡包（kiwi-merchant-token）才可按官方文档配置跳过",
+    "第 0 版绑定策略": "「目录注册与发布（第 0 版）」模式面向未部署专属服务器的新商家，不使用 kiwi-merchant 连接器、不要求首次绑定；若平台强制首次绑定阻塞新商家，M0 上线前在预览态验证延后绑定流程，无法跳过时将该连接器改为商家升级第 1 版后主动连接。已连接商家继续使用商品查看/询价处理/库存与变更草稿三个模式。",
     "绑定应用授权文案": "绑定后，即可获取「Kiwi 商家运营工作台」专业能力",
     "输入框占位符": {
       "zh": "问问我店铺的事：商品、库存、磋商、经营摘要…",

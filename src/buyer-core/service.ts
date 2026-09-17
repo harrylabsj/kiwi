@@ -50,6 +50,18 @@ export type BuyerAction =
   | "handoff"
   | "payment";
 
+/** M0 商家公开资料命中摘要（merchant-buddy 第 0 版 §4；工具返回大小控制，不含 faq/summary）。 */
+export interface MerchantPublicationSummary {
+  publication_id: string;
+  /** 命中查询的商品名（商家声明）。 */
+  title: string;
+  source_kind: "merchant_declared";
+  updated_at: string;
+  published_at?: string;
+  category?: string;
+  shop_url?: string;
+}
+
 export interface MerchantRecord {
   merchant_id: string;
   name: string;
@@ -59,6 +71,18 @@ export interface MerchantRecord {
   ucp_profile_url?: string;
   agent_card_url?: string;
   capabilities: string[];
+  /**
+   * 可实时询价（有可路由 Agent Card，能力来自 Agent 侧）。M0-only 商家恒 false；
+   * 未设置时按既有链路处理（marketplace 等 legacy 索引不透出该字段）。
+   */
+  inquiry_available?: boolean;
+  /**
+   * 记录仅来自 M0 商家公开资料（无 Agent/Listing 侧命中）——RFQ 硬门依据。
+   * v1 商家同时命中公开资料时此字段保持 undefined（实时能力不被降级）。
+   */
+  source_kind?: "merchant_declared";
+  /** M0 公开资料命中（可并列于 v1 Agent 能力；商家声明内容，不是 Kiwi 背书）。 */
+  publications?: MerchantPublicationSummary[];
   /** 该商家匹配查询的商品 SKU（marketplace 商品 FTS 路由），供 RFQ 用商家自有 SKU。 */
   matching_skus?: string[];
   /**
@@ -76,6 +100,11 @@ export interface MerchantIndex {
    * catalog 的 title/category LIKE（否则丢 agent_card_url → A2A 无法磋商）。
    */
   resolveById(merchantId: string): Promise<MerchantRecord | undefined>;
+  /**
+   * 可选：上一次 search 的非致命降级说明（如某数据来源暂不可用但其余来源
+   * 仍返回了结果）。service 层拼进 kiwi_search 的 note，供宿主如实转述。
+   */
+  lastSearchNotes?(): string[];
 }
 
 export interface QuoteCandidateInput {
@@ -210,7 +239,9 @@ export class KiwiBuyerService {
         category: input.category,
         region: input.region,
       });
-      return { merchants };
+      const notes = this.merchantIndex.lastSearchNotes?.() ?? [];
+      // 单侧降级（如 M0 公开资料来源暂不可用）如实标注；不静默、不补全。
+      return notes.length > 0 ? { merchants, note: notes.join("；") } : { merchants };
     } catch (error) {
       // catalog 不可达：降级为可解释 note，不编造商家（§3.2 Discovery & Routing）。
       return {
@@ -235,6 +266,9 @@ export class KiwiBuyerService {
         `CommerceIntent 违反冻结契约：${intentErrors.join("; ")}`,
       );
     }
+    // M0 硬门（merchant-buddy 第 0 版 §4/§5）：仅有公开资料、无可路由 Agent 的
+    // 商家不得进入 RFQ。服务层显式拒绝（不只靠宿主提示词），在创建任务/消息之前。
+    await this.assertInquiryAvailable(input.merchant_ids);
     const policyId = this.policy.policy_id;
     const expiresAt = this.policy.expires_at;
     const idempotencyKey = input.idempotency_key ?? `req-${uuidv7()}`;
@@ -740,8 +774,7 @@ export class KiwiBuyerService {
     return undefined;
   }
 
-  private firstQuery(intent: Record<string, unknown>): string {
-    const items = Array.isArray(intent.items) ? (intent.items as Array<Record<string, unknown>>) : [];
+  private firstQuery(intent: Record<string, unknown>): string {    const items = Array.isArray(intent.items) ? (intent.items as Array<Record<string, unknown>>) : [];
     const first = items[0] ?? {};
     if (typeof first.query === "string" && first.query !== "") return first.query;
     if (typeof first.sku === "string" && first.sku !== "") return first.sku;
@@ -768,6 +801,40 @@ export class KiwiBuyerService {
       candidates: this.store.listCandidates(task.task_id),
       approval: this.store.listApprovalsByTask(task.task_id)[0],
     };
+  }
+
+  /**
+   * M0 RFQ 硬门：按 merchant_id 解析，确认目标不是"仅有 M0 公开资料"的商家。
+   *
+   * 判定依据 source_kind === "merchant_declared" 且无 agent_card_url——该组合只
+   * 在商家从未命中 Agent/Listing 侧时由索引标出；v1 商家（含同时发布 M0 资料
+   * 的）source_kind 为 undefined，不受此门影响，实时能力不被静态资料降级。
+   * 目录暂不可达时不改变既有行为（跳过本门，走 fetcher 的部分失败语义）。
+   */
+  private async assertInquiryAvailable(merchantIds?: string[]): Promise<void> {
+    if (merchantIds === undefined || merchantIds.length === 0) return;
+    const index = this.merchantIndex;
+    if (index === undefined) return;
+    for (const merchantId of merchantIds) {
+      let record: MerchantRecord | undefined;
+      try {
+        record = await index.resolveById(merchantId);
+      } catch {
+        continue;
+      }
+      if (
+        record !== undefined &&
+        record.source_kind === "merchant_declared" &&
+        record.agent_card_url === undefined
+      ) {
+        throw new McpError(
+          "merchant_inquiry_unavailable",
+          `商家 ${merchantId}（${record.name}）目前仅公开资料，尚未开通 Kiwi 实时询价；` +
+            "可查看其公开资料与店铺入口，不能对其发起 kiwi_request_quotes",
+          { merchant_id: merchantId },
+        );
+      }
+    }
   }
 
   private parsePayload<T>(json: string): T {

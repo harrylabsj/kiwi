@@ -22,14 +22,19 @@
  * URL 与 A2A Agent Card。真实商品信息由 Buyer 访问 Merchant 的 UCP Catalog /
  * 声明的权威 endpoint，kiwi-catalog 不是商品 truth source。
  *
- * 本实现包装现有 KiwiCatalogSource（/v1/agents）；search 失败（catalog 不可达）
- * 时由上层 service 降级为可解释 note，不编造商家。
+ * 本实现包装现有 KiwiCatalogSource（/v1/agents、/v1/listings）与
+ * MerchantPublicationsSource（/v1/merchant-publications，M0 商家公开资料）；
+ * search 失败（catalog 不可达）时由上层 service 降级为可解释 note，不编造商家。
  */
 
 import { KiwiCatalogSource } from "../discovery/catalog-source/kiwi-source.js";
+import {
+  MerchantPublicationsSource,
+  type MerchantPublicationRecord,
+} from "../discovery/catalog-source/merchant-publications.js";
 import type { CatalogSourceDeps } from "../discovery/catalog-source/source.js";
 import type { CatalogAgentRecord } from "../discovery/catalog-source/kiwi-record.js";
-import type { MerchantRecord } from "./service.js";
+import type { MerchantPublicationSummary, MerchantRecord } from "./service.js";
 
 export interface KiwiCatalogMerchantIndexOptions {
   baseUrl: string;
@@ -44,6 +49,9 @@ const VERIFIED_LEVELS = new Set(["domain_verified", "agent_verified", "commerce_
 
 export class KiwiCatalogMerchantIndex {
   private readonly source: KiwiCatalogSource;
+  private readonly publications: MerchantPublicationsSource;
+  /** 上一次 search 的非致命降级说明（单侧失败容忍时填充）。 */
+  private searchNotes: string[] = [];
 
   constructor(options: KiwiCatalogMerchantIndexOptions) {
     const deps: CatalogSourceDeps = {
@@ -54,21 +62,32 @@ export class KiwiCatalogMerchantIndex {
       ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
     };
     this.source = new KiwiCatalogSource(deps);
+    this.publications = new MerchantPublicationsSource(deps);
+  }
+
+  lastSearchNotes(): string[] {
+    return [...this.searchNotes];
   }
 
   /**
    * 商品查询 → catalog listings 搜索（/v1/listings/search，title/category/brand/
    * summary LIKE）找"能供应该商品的商家"，携带 matching_skus；商家身份/Agent Card
-   * → /v1/agents/search 补齐 agent_card_url/ucp_profile_url/capabilities。
+   * → /v1/agents/search 补齐 agent_card_url/ucp_profile_url/capabilities；M0 商家
+   * 公开资料 → /v1/merchant-publications/search 补"资料可查"商家（merchant-buddy
+   * 第 0 版 §4 M0 表步骤 4）。
    *
    * 合并语义（镜像 MarketplaceMerchantIndex 去重）：
+   * - 按 merchant_id 去重：同一商家同时命中 Agent/Listing 与 M0 公开资料时只显示
+   *   一个主体，公开资料并列在 publications；可实时询价能力（inquiry_available）
+   *   只来自 Agent 侧（agent_card_url），不因 M0 静态资料降级或虚标。
    * - listing 命中但 agents 无匹配的商家，用 getRecord(owner_agent_id) 定向补
    *   agent_card_url（商家数有界，不编造）。
-   * - catalog 不可达时按 service 层降级为可解释 note；单侧失败容忍（listings 端点
-   *   在旧 catalog 上可能不存在），双侧失败才 fail-closed。
+   * - 失败语义：Agent/Listing 两侧都失败且 publications 也失败才 fail-closed；
+   *   单侧（含 publications 端点不存在的旧 catalog）容忍并在 note 标注该来源
+   *   暂不可用，不凭模型记忆补全商家。
    */
   async search(query: string, opts?: { category?: string; region?: string }): Promise<MerchantRecord[]> {
-    const [listingsRes, agentsRes] = await Promise.allSettled([
+    const [listingsRes, agentsRes, publicationsRes] = await Promise.allSettled([
       this.source.searchListings({
         q: query,
         listing_type: "product",
@@ -77,13 +96,32 @@ export class KiwiCatalogMerchantIndex {
         limit: 50,
       }),
       this.source.searchRecords({ q: query }),
+      this.publications.searchPublications({
+        q: query,
+        ...(opts?.category !== undefined ? { category: opts.category } : {}),
+        limit: 50,
+      }),
     ]);
-    if (listingsRes.status === "rejected" && agentsRes.status === "rejected") {
-      // 双侧失败才抛（fail-closed）；单侧失败容忍，保留可用侧结果。
-      throw agentsRes.reason;
+    const agentSideFailed = listingsRes.status === "rejected" && agentsRes.status === "rejected";
+    const publicationsFailed = publicationsRes.status === "rejected";
+    this.searchNotes = [];
+    if (agentSideFailed && publicationsFailed) {
+      // 全侧失败才抛（fail-closed）；任何一侧可用都保留其结果。
+      throw agentsRes.status === "rejected" ? agentsRes.reason : publicationsRes.reason;
+    }
+    if (agentSideFailed) {
+      this.searchNotes.push(
+        "Agent/Listing 发现来源暂不可用，当前仅含商家公开资料（资料可查）结果",
+      );
+    }
+    if (publicationsFailed) {
+      this.searchNotes.push(
+        "商家公开资料（merchant-publications）来源暂不可用，当前仅含 Agent/Listing 结果",
+      );
     }
     const listings = listingsRes.status === "fulfilled" ? listingsRes.value : [];
     const agents = agentsRes.status === "fulfilled" ? agentsRes.value : [];
+    const publications = publicationsRes.status === "fulfilled" ? publicationsRes.value : [];
 
     const byId = new Map<string, MerchantRecord>();
     for (const r of listings) {
@@ -124,6 +162,28 @@ export class KiwiCatalogMerchantIndex {
         }
       }
     }
+    // M0 公开资料合并：同一 merchant_id 去重为一个主体；已有 Agent/Listing 命中
+    // 的商家只并列 publications（实时能力不被静态资料降级），仅 M0 命中的商家
+    // 标 source_kind=merchant_declared（RFQ 硬门依据），保留命中商品名/来源/更新时间。
+    for (const p of publications) {
+      const merchantId = p.merchant_id;
+      if (merchantId === "") continue;
+      const summary = mapPublication(p);
+      const existing = byId.get(merchantId);
+      if (existing === undefined) {
+        byId.set(merchantId, {
+          merchant_id: merchantId,
+          name: p.merchant_display_name,
+          verified: false,
+          ...(p.category !== undefined && p.category !== "" ? { category: p.category } : {}),
+          capabilities: [],
+          source_kind: "merchant_declared",
+          publications: [summary],
+        });
+      } else {
+        existing.publications = [...(existing.publications ?? []), summary];
+      }
+    }
     // listing 命中但缺 Agent Card 的商家：定向取 owner Agent record 补 agent_card_url
     // （A2A 磋商必需；商家数有界）。
     await Promise.all(
@@ -143,7 +203,12 @@ export class KiwiCatalogMerchantIndex {
         }
       }),
     );
-    return [...byId.values()];
+    // inquiry_available 只由 Agent 侧决定（有可路由 agent_card_url 才可实时询价）；
+    // M0-only 商家恒 false（设计 §4：不得把静态资料伪装成实时能力）。
+    return [...byId.values()].map((rec) => ({
+      ...rec,
+      inquiry_available: rec.agent_card_url !== undefined,
+    }));
   }
 
   /**
@@ -154,17 +219,26 @@ export class KiwiCatalogMerchantIndex {
    * 保温杯 预算82元"）未必命中 catalog 的 title/category LIKE，导致匹配不到、
    * 商家丢 agent_card_url（A2A 无法磋商）。此处按 merchant_id 直接解析：agents 面
    * 按 merchant_id/catalog_agent_id 匹配，listings 面按 merchant_id 匹配并补
-   * owner agent card。catalog 商家数小，全量扫描可接受。
+   * owner agent card，publications 面按 merchant_id 精确过滤。catalog 商家数小，
+   * 全量扫描可接受。
+   *
+   * M0：Agent/Listing 两侧都无命中、仅公开资料命中时返回 source_kind=
+   * merchant_declared 的记录（无 agent_card_url）——service 层 RFQ 硬门据此
+   * 拒绝，不编造可路由能力。
    */
   async resolveById(merchantId: string): Promise<MerchantRecord | undefined> {
     if (merchantId === undefined || merchantId === "") return undefined;
-    const [agentsRes, listingsRes] = await Promise.allSettled([
+    const [agentsRes, listingsRes, publicationsRes] = await Promise.allSettled([
       this.source.searchRecords({}),
       this.source.searchListings({ limit: 50 }),
+      this.publications.searchPublications({ merchant_id: merchantId, limit: 50 }),
     ]);
     if (agentsRes.status === "rejected" && listingsRes.status === "rejected") throw agentsRes.reason;
     const agents = agentsRes.status === "fulfilled" ? agentsRes.value : [];
     const listings = listingsRes.status === "fulfilled" ? listingsRes.value : [];
+    // publications 失败容忍（旧 catalog 无此端点）：M0 信息缺失时退化为既有行为。
+    const publications = publicationsRes.status === "fulfilled" ? publicationsRes.value : [];
+    const publicationSummaries = publications.map(mapPublication);
 
     // 审查：host 传入的 merchant_ids 可能来自 catalog_agent_id（cagt_…）或
     // merchant_id（mkt_…）。不能用 `??` 短路（merchant_id 存在时忽略 agent id，
@@ -180,8 +254,21 @@ export class KiwiCatalogMerchantIndex {
       ?? (listing !== undefined
         ? agents.find((a) => a.catalog_agent_id === listing.listing.owner_agent_id)
         : undefined);
-    if (listing === undefined && agent === undefined) return undefined;
-
+    if (listing === undefined && agent === undefined) {
+      // 仅 M0 公开资料命中：可解析但不可路由（inquiry_available=false）。
+      const first = publications[0];
+      if (first === undefined) return undefined;
+      return {
+        merchant_id: first.merchant_id,
+        name: first.merchant_display_name,
+        verified: false,
+        ...(first.category !== undefined && first.category !== "" ? { category: first.category } : {}),
+        capabilities: [],
+        inquiry_available: false,
+        source_kind: "merchant_declared",
+        publications: publicationSummaries,
+      };
+    }
     if (listing !== undefined) {
       // listing 优先：商品事实（matching_skus/category/region）+ agent card
       const record: MerchantRecord = {
@@ -210,10 +297,30 @@ export class KiwiCatalogMerchantIndex {
           // 商家不可达：保留已收集字段，不编造
         }
       }
+      if (publicationSummaries.length > 0) record.publications = publicationSummaries;
+      record.inquiry_available = record.agent_card_url !== undefined;
       return record;
     }
-    return mapRecord(agent as CatalogAgentRecord);
+    const mapped = mapRecord(agent as CatalogAgentRecord);
+    if (publicationSummaries.length > 0) mapped.publications = publicationSummaries;
+    mapped.inquiry_available = mapped.agent_card_url !== undefined;
+    return mapped;
   }
+}
+
+/** M0 公开资料 → 搜索投影摘要（不含 faq/summary 大字段，控制工具返回大小）。 */
+function mapPublication(record: MerchantPublicationRecord): MerchantPublicationSummary {
+  return {
+    publication_id: record.publication_id,
+    title: record.title,
+    source_kind: record.source_kind,
+    updated_at: record.updated_at,
+    ...(record.published_at !== undefined && record.published_at !== ""
+      ? { published_at: record.published_at }
+      : {}),
+    ...(record.category !== undefined && record.category !== "" ? { category: record.category } : {}),
+    ...(record.shop_url !== undefined && record.shop_url !== "" ? { shop_url: record.shop_url } : {}),
+  };
 }
 
 function mapRecord(record: CatalogAgentRecord): MerchantRecord {

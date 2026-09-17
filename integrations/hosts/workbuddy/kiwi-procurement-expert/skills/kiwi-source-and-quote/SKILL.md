@@ -7,13 +7,25 @@ description: Use the Kiwi connector to clarify product requirements, discover su
 
 有短商品词就调用 `kiwi_search(query, category?, region?)`，发现来自 catalog 的候选。只使用结果中的真实 merchant_id，买方不直连 shopping-cli 或另建本地 marketplace。
 
+## 搜索结果的两类商家
+
+`kiwi_search` 结果可能同时包含两类商家，展示时必须区分：
+
+- **可实时询价**（`inquiry_available=true`）：有可路由 Agent 的第 1 版商家，是 `kiwi_request_quotes` 的唯一合法对象。
+- **资料可查**（`inquiry_available=false`、`source_kind="merchant_declared"`）：仅有第 0 版公开资料的商家。其 `publications` 含命中商品名（`title`）、商家声明来源、更新时间（`updated_at`/`published_at`）和可选公开店铺入口（`shop_url`）。可以向用户展示这些信息并建议买家自行到原店铺查看，但：
+  - 不得把这些商家放进 `merchant_ids` 发起询价——服务层会拒绝并报 `merchant_inquiry_unavailable`（该商家目前仅公开资料，尚未开通 Kiwi 实时询价），不会产生任务；
+  - 不得声称已取得其库存、报价或已向其发出 RFQ；公开资料是商家声明内容，不是 Kiwi 背书，也不是实时数据；
+  - 同一商家同时有两版资料时只显示一个主体，说明实时询价能力来自其 Agent 侧，公开资料并列展示。
+
+结果带 `note` 时如实转述（如某数据来源暂不可用）；没有任何结果时如实说明没有搜到，不凭记忆或常识补出商家。
+
 区分硬要求与偏好：规格、数量和单位、币种、期望交期、交付地区、总预算/目标单价。缺失信息若影响询价才问，不捏造数量、预算、交期和地址。只找供应商时不发询价；用户明确要求向合适候选询价且范围足够明确时可执行，不重复索要同一授权。
 
 ## 请求构造
 
 调用 `kiwi_request_quotes(intent, merchant_ids, idempotency_key)`：
 
-- 始终传入非空 `merchant_ids`，从已发现且符合授权范围的候选中选择。当前实现省略该字段可能产生没有实际报价的空任务。
+- 始终传入非空 `merchant_ids`，从已发现、符合授权范围且 `inquiry_available=true` 的候选中选择。当前实现省略该字段可能产生没有实际报价的空任务。
 - `intent_id` 为本次需求的唯一标识；每项使用短 `query`，已知规格放在 `attributes` 或 `constraints.mandatory_requirements`，而不是把长规格堆进检索词。
 - 已确认数量使用 `{ "value": 2, "unit": "台" }`。总预算是 `constraints.budget`，目标单价是 `constraints.target_unit_price`；金额用币种最小单位整数，例如 CNY 200 元为 20000。预算底线默认只在宿主侧用于筛选，不自动披露给商家。
 - `deadline` 只使用用户给定/确认且带时区的 RFC3339 时间；不知道就省略。币种不得凭商品所在地推断。
