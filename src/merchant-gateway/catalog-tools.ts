@@ -28,6 +28,7 @@
 import type { ScopedMcpTools } from "../mcp/merchant-server.js";
 import type { MerchantMcpCallResult, MerchantMcpToolDefinition } from "../mcp/merchant-tools.js";
 import { CatalogSourceError } from "../discovery/catalog-source/errors.js";
+import { trimTrailingSlashes } from "../net/url.js";
 import type { MerchantPublicationClient } from "./catalog-publications.js";
 import type { MerchantCredentialStore } from "./credential-vault.js";
 
@@ -131,13 +132,6 @@ function readFaq(args: Record<string, unknown>): Array<{ question: string; answe
     if (question !== "" && answer !== "") items.push({ question, answer });
   }
   return items;
-}
-
-/** 去掉末尾斜杠（逐字符扫描，不用正则——避免回溯式写法的误报与隐患）。 */
-function trimTrailingSlashes(value: string): string {
-  let end = value.length;
-  while (end > 0 && value[end - 1] === "/") end -= 1;
-  return value.slice(0, end);
 }
 
 /**

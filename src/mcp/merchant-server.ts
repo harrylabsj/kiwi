@@ -633,10 +633,15 @@ export async function startMerchantMcpServer(
               );
             }
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            writeJson(res, message.includes("确认凭证") ? 403 : 400, {
-              error: message.includes("确认凭证") ? "invalid_confirmation" : "command_failed",
-              message,
+            // 不回显异常消息（可能含内部细节）：只按「确认凭证失效」与「其余失败」
+            // 两类给稳定结论，原文进 stderr。
+            const expired = err instanceof Error && err.message.includes("确认凭证");
+            process.stderr.write(
+              `[merchant mcp] /admin/decision 失败：${err instanceof Error ? err.message : String(err)}\n`,
+            );
+            writeJson(res, expired ? 403 : 400, {
+              error: expired ? "invalid_confirmation" : "command_failed",
+              message: expired ? "确认凭证无效或已过期，请刷新待批准页重试" : "审批未执行（详见服务日志）",
             });
             return;
           }
@@ -692,9 +697,10 @@ export async function startMerchantMcpServer(
             `[merchant mcp] /mcp body 解析失败：${err instanceof Error ? err.message : String(err)}\n`,
           );
         }
+        // 不回显异常消息：响应只给稳定结论，细节已在上面进 stderr。
         writeJson(res, tooLarge ? 413 : 400, {
           error: "invalid_request",
-          message: err instanceof Error ? err.message : String(err),
+          message: tooLarge ? "请求体超过大小上限" : "请求体无法解析",
         });
         return;
       }
@@ -718,11 +724,12 @@ export async function startMerchantMcpServer(
         await protocolServer.connect(transport);
         await transport.handleRequest(req, res, body);
       } catch (err) {
+        // 内部异常消息（可能含栈/上游响应内容）只进 stderr，不回显给调用方。
+        process.stderr.write(
+          `[merchant mcp] /mcp transport error：${err instanceof Error ? err.message : String(err)}\n`,
+        );
         if (!res.headersSent) {
-          writeJson(res, 500, {
-            error: "internal_error",
-            message: err instanceof Error ? err.message : String(err),
-          });
+          writeJson(res, 500, { error: "internal_error", message: "服务内部错误" });
         } else {
           res.end();
         }

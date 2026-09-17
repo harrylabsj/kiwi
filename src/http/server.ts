@@ -72,12 +72,17 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
   };
 
   const sendError = (res: ServerResponse, error: unknown): void => {
+    // McpError 是自有类型、消息为固定文案（只内插 id），可原样回给调用方。
     if (error instanceof McpError) {
       return send(res, 400, { ok: false, error: { code: error.code, message: error.message } });
     }
+    // 未预期异常：消息可能含栈/内部细节，只进 stderr，响应给稳定结论。
+    process.stderr.write(
+      `[buyer http] unhandled error: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
     return send(res, 500, {
       ok: false,
-      error: { code: "internal_error", message: error instanceof Error ? error.message : String(error) },
+      error: { code: "internal_error", message: "服务内部错误" },
     });
   };
 

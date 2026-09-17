@@ -34,6 +34,7 @@ import {
 } from "../discovery/catalog-source/merchant-publications.js";
 import type { CatalogSourceDeps } from "../discovery/catalog-source/source.js";
 import type { CatalogAgentRecord } from "../discovery/catalog-source/kiwi-record.js";
+import { trimTrailingSlashes } from "../net/url.js";
 import type { MerchantPublicationSummary, MerchantRecord } from "./service.js";
 
 export interface KiwiCatalogMerchantIndexOptions {
@@ -391,7 +392,7 @@ export class MarketplaceMerchantIndex {
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: MarketplaceMerchantIndexOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    this.baseUrl = trimTrailingSlashes(options.baseUrl);
     this.timeoutMs = options.timeoutMs ?? 5000;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
   }

@@ -25,6 +25,7 @@
  * candidate provenance；本实现从 task candidates 读取磋商上下文。
  */
 
+import { trimTrailingSlashes } from "../net/url.js";
 import type { NegotiationStep, Negotiator } from "./service.js";
 
 export interface MarketplaceNegotiatorOptions {
@@ -61,7 +62,7 @@ export class MarketplaceNegotiator implements Negotiator {
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: MarketplaceNegotiatorOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    this.baseUrl = trimTrailingSlashes(options.baseUrl);
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_MS;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.defaultDiscountRate = options.defaultDiscountRate ?? 0.1;
