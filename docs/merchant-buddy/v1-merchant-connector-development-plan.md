@@ -49,7 +49,7 @@
 | 实例工具：工具清单**从实例现取**（经 `mcp-proxy` 按令牌 scope + allowlist 过滤，TTL 60 秒缓存），调用经代理转发；实例不可达/未配对/凭据缺失时第 1 版工具不可见，**第 0 版不受影响** | `instance-tools.ts`、`tool-bundle.ts` |
 | 入口按已验证主体组合第 0 版与第 1 版工具束 | `cli.ts` |
 
-**验证**：`kiwi-catalog` `pytest` 759 项通过 + `ruff` 全绿；`kiwi` `vitest` 2375 项 / 185 文件通过 + `tsc --noEmit` + `eslint --max-warnings=0` 全绿；跨仓验收脚本 20/20 通过（见 WP8）。新增测试：`tests/test_connector_identity.py`（24 项）、`tests/merchant-gateway-entry.test.ts`（8 项）、`tests/merchant-gateway-catalog-tools.test.ts`（12 项）、`tests/merchant-gateway-cli.test.ts`（17 项）、`tests/merchant-gateway-instance-tools.test.ts`（11 项）。
+**验证**：`kiwi-catalog` `pytest` 759 项通过 + `ruff` 全绿；`kiwi` `vitest` 2375 项 / 185 文件通过 + `tsc --noEmit` + `eslint --max-warnings=0` 全绿；跨仓验收脚本 21/21 通过（见 WP8）。新增测试：`tests/test_connector_identity.py`（24 项）、`tests/merchant-gateway-entry.test.ts`（8 项）、`tests/merchant-gateway-catalog-tools.test.ts`（12 项）、`tests/merchant-gateway-cli.test.ts`（17 项）、`tests/merchant-gateway-instance-tools.test.ts`（11 项）。
 
 ### WP0 买方工具契约冻结（已发布连接器不受影响）
 
@@ -60,7 +60,7 @@
 
 ### WP8 跨仓端到端验收（真实 kiwi-catalog + 网关 + 桩商家实例）
 
-`scripts/v1-merchant-connector-acceptance.sh`（配套 `scripts/lib/merchant-instance-stub.mjs`）：起**真实 kiwi-catalog 本地实例**（临时库、loopback、console 邮箱验证）+ 网关入口 + 桩商家实例，跑完 20 项断言并全部通过：
+`scripts/v1-merchant-connector-acceptance.sh`（配套 `scripts/lib/merchant-instance-stub.mjs`）：起**真实 kiwi-catalog 本地实例**（临时库、loopback、console 邮箱验证）+ 网关入口 + 桩商家实例，跑完 21 项断言并全部通过：
 
 | 断言 | 说明 |
 | --- | --- |
@@ -78,6 +78,7 @@
 | 能力探测 | 粘贴绑定后绑定页显示实例自报版本（`merchant-instance-stub-A v0.0.0`）与探测到的工具数 |
 | 离线恢复 | 实例重启后凭据仍被接受、网关重启后目录与实例能力均可用（无需重新配对/连接） |
 | A/B 两实例隔离 | 两个独立实例各自配对、各自路由；A 的调用不增加 B 实例的请求计数 |
+| 7×24 独立性 | 网关停止期间商家实例仍直接对外服务（不依赖 Buddy 窗口） |
 
 可重复执行（连续多次通过，端口预检防止复用残留进程，退出后无残留进程与目录）。
 
@@ -127,10 +128,26 @@
 - Buddy 应用：首页四类入口 + 状态文案（设计 §5 状态表）+ 场景胶囊。
 - 预览实测：绑定实例后新增工具是否需要 Buddy 侧重连/刷新才可见。
 
-### WP6 7×24 与公开状态
+### WP6 7×24 与公开状态（已完成）
 
-- 商家服务由 runtime 常驻，关闭 Buddy 后仍接待（验收）。
-- 服务离线时买方专家不再显示「可实时询价」，公开资料仍可查；恢复后自动回到实时能力。当前买方侧 `inquiry_available` 只由 Agent Card 是否存在决定，**需要新鲜度/存活信号**才能满足该要求。
+| 侧 | 交付 |
+| --- | --- |
+| 商家（kiwi） | A2A 节点注册成功后**立即心跳一次**再进入循环（否则刚上线的商家要等满一个间隔才被判在线，而注册时的验证结论可能是 stale）；`kiwi` 侧缺省 300s（`KIWI_AGENT_HEARTBEAT_SECONDS=0` 关闭），带 owner 凭据调 catalog `/heartbeat`；失败写 stderr 但不致命（读侧会因超时判离线，fail-visible）。缺 owner 凭据时注册退回匿名自助、心跳 403——这是预期的 fail-closed |
+| 目录（kiwi-catalog） | `POST /v1/agent-catalog/agents/{id}/heartbeat`：轻量"我还在线"（**不重新抓取资料、不消耗验证队列**），刷新 `last_seen_at` 并把 active 商家复活为 fresh；治理状态优先（suspended/rejected 不因心跳复活） |
+| 目录（读时） | `freshness_state` 按 `last_seen_at` + `KIWI_CATALOG_AGENT_FRESH_TTL_SECONDS`（缺省 900s）**读时派生**：只降不升；无 `last_seen_at` 的旧数据保持 fresh（避免升级即全线离线）。不改存储态，因此上线后心跳一次即恢复 |
+| 买方（kiwi） | `inquiry_available` 要求 agent 新鲜（`stale`/`unreachable` → false，并给出"服务当前离线…公开资料仍可查"的降级说明）；RFQ 硬门新增 **`merchant_offline`** 错误码（与 `merchant_inquiry_unavailable` 区分：一个是从未开通，一个是暂不在线），不产生任务；工具描述与三个宿主 SKILL 文档同步 |
+
+**验收**：目录侧 8 项（派生只降不升/兼容、心跳刷新与治理优先、鉴权 fail-closed）、买方 3 项（stale/unreachable 降级、契约缺字段 fail-closed、RFQ 离线门）、心跳客户端 3 项（端点/凭据/不跟随重定向/失败可见）；跨仓脚本新增「网关停止期间商家实例仍对外服务」1 项（共 21 项）。
+
+**真机验证**（本地 catalog + 真实 `kiwi merchant start` A2A 节点，TTL 60s）：
+
+```
+商家上线（注册 + 立即心跳）      → freshness_state=fresh
+模拟离线（last_seen 老化 > TTL） → freshness_state=stale（存储态仍 fresh，读时降级）
+商家重新上线（心跳一次）          → freshness_state=fresh
+```
+
+**未覆盖**：买方 MCP 侧的端到端（真实节点 + 本地 catalog + 买方 `kiwi mcp serve` 三者联跑，验证 RFQ 返回 `merchant_offline`）——买方侧逻辑由单元测试覆盖（stale/unreachable 降级、缺字段 fail-closed、RFQ 离线门），脚本化留待与买方侧独立增量一起做。
 
 ### WP7 买方侧独立增量（不属商家交付依赖）
 
