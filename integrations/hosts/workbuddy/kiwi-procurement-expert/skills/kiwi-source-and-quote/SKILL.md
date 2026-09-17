@@ -21,6 +21,15 @@ description: Use the Kiwi connector to clarify product requirements, discover su
 
 区分硬要求与偏好：规格、数量和单位、币种、期望交期、交付地区、总预算/目标单价。缺失信息若影响询价才问，不捏造数量、预算、交期和地址。只找供应商时不发询价；用户明确要求向合适候选询价且范围足够明确时可执行，不重复索要同一授权。
 
+## 关注商家与公开动态
+
+买家可以显式关注商家、主动查看其公开动态（拉取式订阅）：
+
+- 只有买家**明确要求**“关注这个商家”时才调用 `kiwi_follow_merchant(merchant_id, category?, consent_version?)`；搜索、浏览公开资料、发起询价都不构成订阅，不得因这些行为替买家关注。可选 `category` 用于只关心某类目动态。
+- 买家问“我关注的商家有什么更新”时用 `kiwi_get_follow_updates`：返回按商家分组的公开事件（`product_added` / `product_updated` / `faq_updated` / `service_notice` / `publication_withdrawn`，只有公开字段），增量返回、看过后不重复。这些是商家发布的公开动态，不是实时库存/报价，也不是商家发给买家的消息——商家没有向关注者推送的通道。
+- 买家要求取消时用 `kiwi_unfollow_merchant`；买家想管理关注对象时用 `kiwi_list_follows` 展示当前活跃关注。取消后不再向买家展示该商家的更新。
+- 工具返回“需要先在 Kiwi 目录登录”或“会话已过期”时，如实转告买家并引导其完成 Kiwi 目录登录后重试；不得绕过、不得伪造买家身份。
+
 ## 请求构造
 
 调用 `kiwi_request_quotes(intent, merchant_ids, idempotency_key)`：

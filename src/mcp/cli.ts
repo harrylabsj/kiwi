@@ -26,6 +26,8 @@
  *                      未提供则用内置安全默认：读 AUTO、accept/handoff ASK、payment NEVER）
  *   --catalog-url      真实 merchant 网络：catalog 发现 → A2A 直连 merchant（listings
  *                      感知搜索 + A2AQuoteFetcher/A2ANegotiator）
+ *   --catalog-session  catalog 账号会话 token（M4 买家关注；默认 env
+ *                      KIWI_CATALOG_SESSION；未配置时关注工具返回登录引导）
  *   --marketplace-url  试点兼容：shopping-cli 直连（MarketplaceQuoteFetcher/Negotiator）
  *   --a2a-bearer-token / --a2a-allow-private-ranges / --a2a-skip-dns-check /
  *   --a2a-timeout-ms    A2A 轨可选配置
@@ -78,6 +80,8 @@ export interface McpServeOptions {
   catalogUrl?: string;
   marketplaceUrl?: string;
   buyerBootstrapToken?: string;
+  /** catalog 账号会话 token（M4 买家关注；默认 env KIWI_CATALOG_SESSION）。 */
+  catalogSessionToken?: string;
   a2aBearerToken?: string;
   a2aAllowPrivateRanges?: boolean;
   a2aSkipDnsCheck?: boolean;
@@ -112,6 +116,7 @@ export async function runMcpServe(args: string[]): Promise<number> {
     else if (flag === "--catalog-url") opts.catalogUrl = value;
     else if (flag === "--marketplace-url") opts.marketplaceUrl = value;
     else if (flag === "--buyer-bootstrap-token") opts.buyerBootstrapToken = value;
+    else if (flag === "--catalog-session") opts.catalogSessionToken = value;
     else if (flag === "--a2a-bearer-token") opts.a2aBearerToken = value;
     else if (flag === "--a2a-allow-private-ranges") opts.a2aAllowPrivateRanges = value === "true";
     else if (flag === "--a2a-skip-dns-check") opts.a2aSkipDnsCheck = value === "true";
@@ -143,6 +148,7 @@ export async function runMcpServe(args: string[]): Promise<number> {
     catalogUrl: opts.catalogUrl ?? DEFAULT_CATALOG_URL,
     marketplaceUrl: opts.marketplaceUrl,
     buyerBootstrapToken: opts.buyerBootstrapToken ?? process.env.SHOPPING_BUYER_BOOTSTRAP_TOKEN,
+    catalogSessionToken: opts.catalogSessionToken ?? process.env.KIWI_CATALOG_SESSION,
     a2aBearerToken: opts.a2aBearerToken,
     a2aAllowPrivateRanges: opts.a2aAllowPrivateRanges,
     a2aSkipDnsCheck: opts.a2aSkipDnsCheck,

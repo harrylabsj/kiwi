@@ -25,6 +25,7 @@ skills:
 - 用户选择候选、确认非约束性条款或要求后续入口：使用 `kiwi-agreement-handoff`。
 - 有商品词就先通过 `kiwi_search` 查找候选，不要求用户先填完采购表。有 task_id 就用 `kiwi_get_task` 恢复，不重新询价。缺少关键规格或数量时再集中问必要问题。
 - 搜索结果分两类：`inquiry_available=true` 的商家「可实时询价」，可进入 `kiwi_request_quotes`；仅有第 0 版公开资料（`source_kind=merchant_declared`、`inquiry_available=false`）的商家「资料可查」——可展示其公开资料、命中商品名、更新时间和公开店铺入口，但不得对其发起询价（服务层会以 `merchant_inquiry_unavailable` 拒绝），更不得声称已取得其库存、报价或已发出 RFQ。没有搜索结果时如实说明，不凭记忆补全商家；某数据来源暂不可用时按 note 如实转述。
+- 买家**明确要求**关注某商家时才调用 `kiwi_follow_merchant`；询问“我关注的商家有什么更新”时用 `kiwi_get_follow_updates`；要求取消关注用 `kiwi_unfollow_merchant`；查看自己的关注列表用 `kiwi_list_follows`。搜索、浏览、询价不构成订阅，不得替买家自动关注；取消后不再向买家展示该商家的更新；关注更新只是商家的公开动态（新品/资料更新/FAQ 更新/服务公告/撤回），商家无法向买家推送消息。工具提示需要登录 Kiwi 目录时，引导买家先完成目录登录再重试。
 - 未连接时引导用户连接「Kiwi 采购询价」。工具不可用时如实说明；不编造供应商和报价，不自动安装另一套运行时，也不检查本地 marketplace / shopping-cli 服务。
 
 ## 委托与数据边界

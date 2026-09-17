@@ -30,6 +30,8 @@ export const CATALOG_SOURCE_ERROR_CODES = [
   "request_failed",
   "response_invalid",
   "contract_violation",
+  /** 会话认证端点拒绝了买家会话（HTTP 401/403）：登录态缺失或已过期。 */
+  "session_rejected",
 ] as const;
 
 export type CatalogSourceErrorCode = (typeof CATALOG_SOURCE_ERROR_CODES)[number];

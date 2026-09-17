@@ -38,6 +38,11 @@ import {
   validateCommerceIntent,
   validateEffectiveAuthorization,
 } from "../contracts/northbound-schema.js";
+import { CatalogSourceError } from "../discovery/catalog-source/errors.js";
+import type {
+  BuyerFollowRecord,
+  BuyerFollowUpdateGroup,
+} from "../discovery/catalog-source/buyer-follows.js";
 import { McpError } from "./errors.js";
 import { TaskApprovalStore, type StoredApproval, type StoredTask } from "./store.js";
 
@@ -131,6 +136,24 @@ export interface QuoteFetcher {
   requestQuotes(intent: Record<string, unknown>, merchants: MerchantRecord[]): Promise<QuoteCandidateInput[]>;
 }
 
+/**
+ * 买家关注执行 seam（M4 拉取式订阅，merchant-buddy 第 0 版设计 §4/§2 买家
+ * 路径 3-5）。生产实现是 discovery/catalog-source 的 BuyerFollowsSource
+ * （catalog 账号会话认证）；未注入时关注工具返回"需要先在 Kiwi 目录登录"
+ * 的可解释引导（fail-closed，不伪造买家身份）。
+ */
+export interface BuyerFollowsClient {
+  follow(
+    merchantId: string,
+    opts?: { category?: string; consent_version?: string },
+  ): Promise<{ follow: BuyerFollowRecord; created: boolean }>;
+  unfollow(merchantId: string): Promise<{ merchant_id: string; following: false }>;
+  listFollows(): Promise<BuyerFollowRecord[]>;
+  /** 仅响应买家主动查询；水位语义在上游（返回什么再推进 last_seen_at）。 */
+  getUpdates(): Promise<BuyerFollowUpdateGroup[]>;
+}
+export type { BuyerFollowRecord, BuyerFollowUpdateGroup };
+
 export interface NegotiationStep {
   round: number;
   action: "counter_offer" | "clarification";
@@ -158,6 +181,8 @@ export interface KiwiBuyerServiceOptions {
   merchantIndex?: MerchantIndex;
   quoteFetcher?: QuoteFetcher;
   negotiator?: Negotiator;
+  /** 买家关注 seam（M4）；缺省时关注工具返回可解释登录引导。 */
+  followsClient?: BuyerFollowsClient;
   now?: () => string;
 }
 
@@ -209,6 +234,7 @@ export class KiwiBuyerService {
   private readonly merchantIndex?: MerchantIndex;
   private readonly quoteFetcher?: QuoteFetcher;
   private readonly negotiator?: Negotiator;
+  private readonly followsClient?: BuyerFollowsClient;
   private readonly now: () => string;
 
   constructor(options: KiwiBuyerServiceOptions) {
@@ -222,6 +248,7 @@ export class KiwiBuyerService {
     this.merchantIndex = options.merchantIndex;
     this.quoteFetcher = options.quoteFetcher;
     this.negotiator = options.negotiator;
+    this.followsClient = options.followsClient;
   }
 
   // ---- Northbound：kiwi_search ----------------------------------------------
@@ -248,6 +275,80 @@ export class KiwiBuyerService {
         merchants: [],
         note: `merchant index unreachable: ${error instanceof Error ? error.message : String(error)}`,
       };
+    }
+  }
+
+  // ---- Northbound：买家关注（M4 拉取式订阅）-----------------------------------
+
+  /**
+   * 显式关注一个商家。仅买家主动调用本方法构成订阅——搜索/浏览/询价不产生
+   * 关注行（上游同样只认显式 PUT）。
+   */
+  async followMerchant(input: {
+    merchant_id: string;
+    category?: string;
+    consent_version?: string;
+  }): Promise<{ follow: BuyerFollowRecord; created: boolean }> {
+    const merchantId = this.requireMerchantId(input.merchant_id);
+    return this.withFollows((client) =>
+      client.follow(merchantId, {
+        ...(input.category !== undefined ? { category: input.category } : {}),
+        ...(input.consent_version !== undefined ? { consent_version: input.consent_version } : {}),
+      }),
+    );
+  }
+
+  /** 取消关注（幂等）；取消后不再出现在关注列表与更新里。 */
+  async unfollowMerchant(input: {
+    merchant_id: string;
+  }): Promise<{ merchant_id: string; following: false }> {
+    const merchantId = this.requireMerchantId(input.merchant_id);
+    return this.withFollows((client) => client.unfollow(merchantId));
+  }
+
+  /** 我的活跃关注列表（买家管理面）。 */
+  async listFollows(): Promise<{ follows: BuyerFollowRecord[] }> {
+    const follows = await this.withFollows((client) => client.listFollows());
+    return { follows };
+  }
+
+  /** 主动拉取关注更新（仅响应买家主动询问；事件仅为商家公开动态）。 */
+  async getFollowUpdates(): Promise<{ updates: BuyerFollowUpdateGroup[] }> {
+    const updates = await this.withFollows((client) => client.getUpdates());
+    return { updates };
+  }
+
+  private requireMerchantId(raw: string): string {
+    const merchantId = String(raw ?? "").trim();
+    if (merchantId === "") {
+      throw new McpError("invalid_params", "merchant_id 必须是非空字符串");
+    }
+    return merchantId;
+  }
+
+  /**
+   * 关注 seam 统一入口：未配置会话 → 可解释登录引导（fail-closed，不伪造
+   * 买家身份）；catalog 拒绝会话（401/403）→ 引导重新登录。
+   */
+  private async withFollows<T>(work: (client: BuyerFollowsClient) => Promise<T>): Promise<T> {
+    const client = this.followsClient;
+    if (client === undefined) {
+      throw new McpError(
+        "invalid_request",
+        "未配置 Kiwi 目录买家会话：买家关注功能需要先在 Kiwi 目录登录" +
+          "（部署方配置 KIWI_CATALOG_SESSION / --catalog-session 后重试）",
+      );
+    }
+    try {
+      return await work(client);
+    } catch (error) {
+      if (error instanceof CatalogSourceError && error.code === "session_rejected") {
+        throw new McpError(
+          "invalid_request",
+          "Kiwi 目录买家会话已过期或无效：请重新登录 Kiwi 目录后重试",
+        );
+      }
+      throw error;
     }
   }
 

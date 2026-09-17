@@ -453,7 +453,7 @@ describe("Merchant Discovery（§3.2 kiwi-catalog 驱动）", () => {
 });
 
 describe("UCP/KNP boundary conformance（§6.1）", () => {
-  it("只暴露 Kiwi Sourcing Tools（9 个：7 高层 + approve/reject 审批），无 UCP/raw-KNP 工具", () => {
+  it("只暴露 Kiwi Sourcing Tools（13 个：7 高层 + approve/reject 审批 + 4 个买家关注），无 UCP/raw-KNP 工具", () => {
     const { service } = makeHarness(makeInMemoryStore());
     const names = buildKiwiTools(service).map((t) => t.name);
     expect(names.sort()).toEqual([...KIWI_SOURCING_TOOLS].sort());

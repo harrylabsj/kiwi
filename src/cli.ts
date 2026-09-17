@@ -2048,7 +2048,7 @@ async function cmdMerchantUp(args: ParsedArgs): Promise<number> {
 /**
  * `kiwi setup-hermes`（买家侧）——一键把 Kiwi 买家连接器接入 Hermes：
  * 配置 kiwi-buyer-mcp MCP server + 安装 kiwi-buyer skill。之后 Hermes 重启
- * 即可调用 9 个采购工具。等价于手动执行：
+ * 即可调用 13 个采购工具。等价于手动执行：
  *   hermes mcp add kiwi-buyer-mcp --command node --args <cli> mcp serve ...
  *   hermes skills install <SKILL.md URL>
  */

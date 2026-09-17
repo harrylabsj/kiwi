@@ -110,5 +110,9 @@ export const KIWI_SOURCING_TOOLS = [
   "kiwi_handoff",
   "kiwi_approve",
   "kiwi_reject",
+  "kiwi_follow_merchant",
+  "kiwi_unfollow_merchant",
+  "kiwi_list_follows",
+  "kiwi_get_follow_updates",
 ] as const;
 export type KiwiSourcingToolName = (typeof KIWI_SOURCING_TOOLS)[number];

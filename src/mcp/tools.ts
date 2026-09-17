@@ -15,11 +15,13 @@
  */
 
 /**
- * 7 个高层 Kiwi Sourcing Tools（战略 v2.5 §6.1，词表单一来源见 KIWI_SOURCING_TOOLS）。
+ * 高层 Kiwi Sourcing Tools（战略 v2.5 §6.1，词表单一来源见 KIWI_SOURCING_TOOLS）：
+ * 9 个采购/审批工具 + 4 个买家关注工具（M4 拉取式订阅）。
  *
  * 原则：不暴露 KNP 每个底层消息、不复制 UCP 的 Catalog/Checkout tools；宿主 Agent
  * 用少量跨 Merchant 高层工具完成『找供应商 → RFQ → 比较 → 磋商 → Agreement →
- * UCP handoff』编排。每个写工具绑定 idempotency_key 并返回稳定 task_id /
+ * UCP handoff』编排，买家关注工具只做显式关注/取消/列表/主动拉取公开动态（不把
+ * 商家运营工具暴露给买方）。每个写工具绑定 idempotency_key 并返回稳定 task_id /
  * candidate_id / approval_id / agreement_id（§6.2）。业务错误经 isError 带内返回，
  * 错误分类（McpError.code）作为跨宿主语义不变量（§6.10）。
  */
@@ -64,7 +66,7 @@ function approvalRequiredOrErr(error: unknown, extra: Record<string, unknown>): 
   return err(error);
 }
 
-/** 构造 7 个高层工具。任意 handler 抛出的 McpError 都会被转成 isError 结果。 */
+/** 构造全部高层工具。任意 handler 抛出的 McpError 都会被转成 isError 结果。 */
 export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] {
   const tools: Array<KiwiToolDefinition & { raw?: boolean }> = [
     {
@@ -350,6 +352,95 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
               }),
             ),
           );
+        } catch (error) {
+          return err(error);
+        }
+      },
+    },
+    {
+      name: "kiwi_follow_merchant",
+      description:
+        "显式关注一个商家（拉取式订阅）。仅买家主动调用：搜索、浏览、查看资料或发起询价都不构成订阅，不得因这些行为代替买家关注。关注后买家可用 kiwi_get_follow_updates 主动查看该商家的公开动态；商家无法向关注者推送消息。需要 Kiwi 目录登录态（未配置时返回登录引导）。",
+      inputSchema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: false,
+        required: ["merchant_id"],
+        properties: {
+          merchant_id: { type: "string", minLength: 1 },
+          category: { type: "string", description: "可选：只关心该类目的公开动态" },
+          consent_version: { type: "string", description: "可选：买家同意的订阅条款版本" },
+        },
+      },
+      async handle(args) {
+        try {
+          const result = await service.followMerchant({
+            merchant_id: args.merchant_id === undefined ? "" : String(args.merchant_id),
+            category: args.category === undefined ? undefined : String(args.category),
+            consent_version:
+              args.consent_version === undefined ? undefined : String(args.consent_version),
+          });
+          return ok(JSON.stringify(result));
+        } catch (error) {
+          return err(error);
+        }
+      },
+    },
+    {
+      name: "kiwi_unfollow_merchant",
+      description:
+        "取消关注一个商家（幂等）。仅买家主动调用；取消后该商家不再出现在关注列表，也不再展示其公开动态更新。",
+      inputSchema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: false,
+        required: ["merchant_id"],
+        properties: {
+          merchant_id: { type: "string", minLength: 1 },
+        },
+      },
+      async handle(args) {
+        try {
+          const result = await service.unfollowMerchant({
+            merchant_id: args.merchant_id === undefined ? "" : String(args.merchant_id),
+          });
+          return ok(JSON.stringify(result));
+        } catch (error) {
+          return err(error);
+        }
+      },
+    },
+    {
+      name: "kiwi_list_follows",
+      description:
+        "列出买家当前活跃关注的商家（关注管理面）。只读；需要 Kiwi 目录登录态（未配置时返回登录引导）。",
+      inputSchema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      async handle() {
+        try {
+          return ok(JSON.stringify(await service.listFollows()));
+        } catch (error) {
+          return err(error);
+        }
+      },
+    },
+    {
+      name: "kiwi_get_follow_updates",
+      description:
+        "查看买家关注的商家有什么公开更新。仅响应买家主动询问（如“我关注的商家有什么新动态”）时调用：按水位增量返回商家公开动态（product_added / product_updated / faq_updated / service_notice / publication_withdrawn，仅公开字段），返回后水位推进、不丢不重。拉取式订阅：商家无法向买家推送消息，本工具也不代表买家接收任何商家私信。",
+      inputSchema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      async handle() {
+        try {
+          return ok(JSON.stringify(await service.getFollowUpdates()));
         } catch (error) {
           return err(error);
         }

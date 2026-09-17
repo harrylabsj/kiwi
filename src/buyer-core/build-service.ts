@@ -23,6 +23,7 @@
  */
 
 import { assertNorthboundContractValid } from "../contracts/northbound-schema.js";
+import { BuyerFollowsSource } from "../discovery/catalog-source/buyer-follows.js";
 import { A2ANegotiator } from "./a2a-negotiator.js";
 import { A2AQuoteFetcher } from "./a2a-quote-fetcher.js";
 import { KiwiCatalogMerchantIndex, MarketplaceMerchantIndex } from "./merchant-index.js";
@@ -40,6 +41,11 @@ export interface BuyerServiceConfig {
   catalogUrl?: string;
   marketplaceUrl?: string;
   buyerBootstrapToken?: string;
+  /**
+   * catalog 账号会话 token（M4 买家关注；cookie kiwi_session）。缺省时关注
+   * 工具返回"需要先在 Kiwi 目录登录"的可解释引导，不伪造买家身份。
+   */
+  catalogSessionToken?: string;
   /** A2A 出站 bearer（服务器为 signature 认证时匿名放行可省）。 */
   a2aBearerToken?: string;
   /** A2A 允许打到私网/保留网段（SSRF 逃生门；本地试点直连时开）。 */
@@ -65,6 +71,7 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
   let merchantIndex;
   let quoteFetcher;
   let negotiator;
+  let followsClient;
   if (config.marketplaceUrl !== undefined) {
     merchantIndex = new MarketplaceMerchantIndex({ baseUrl: config.marketplaceUrl });
     quoteFetcher = new MarketplaceQuoteFetcher({
@@ -79,6 +86,15 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
       baseUrl: config.catalogUrl,
       buyerId: config.buyerAgentId,
     });
+    // M4 买家关注：仅在显式配置了 catalog 账号会话时接线；缺省不伪造身份，
+    // 由 service 层返回"需要先在 Kiwi 目录登录"的可解释引导。
+    if (config.catalogSessionToken !== undefined && config.catalogSessionToken !== "") {
+      followsClient = new BuyerFollowsSource({
+        baseUrl: config.catalogUrl,
+        sessionToken: config.catalogSessionToken,
+        buyerId: config.buyerAgentId,
+      });
+    }
     const a2a = {
       bearerToken: config.a2aBearerToken,
       allowPrivateRanges: config.a2aAllowPrivateRanges,
@@ -97,5 +113,6 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
     ...(merchantIndex !== undefined ? { merchantIndex } : {}),
     ...(quoteFetcher !== undefined ? { quoteFetcher } : {}),
     ...(negotiator !== undefined ? { negotiator } : {}),
+    ...(followsClient !== undefined ? { followsClient } : {}),
   });
 }
