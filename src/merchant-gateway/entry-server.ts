@@ -188,6 +188,23 @@ function safeResume(value: string | undefined): string | undefined {
   return path;
 }
 
+/**
+ * 二次同源校验：把相对路径按本服务 origin 解析一次，只有解析结果仍落在本服务时
+ * 才作为 `Location` 使用（否则回落到 `/`）。
+ *
+ * `safeResume` 已把取值限定为 `/oauth/authorize` 前缀，这里是纵深防御：将来若
+ * 放宽前缀白名单，也不会退化成开放重定向。
+ */
+function sameOriginPath(path: string, origin: string): string {
+  try {
+    const target = new URL(path, origin);
+    if (target.origin !== origin) return "/";
+    return `${target.pathname}${target.search}`;
+  } catch {
+    return "/";
+  }
+}
+
 function cookieValue(req: IncomingMessage, name: string): string | undefined {
   const header = req.headers.cookie;
   if (header === undefined) return undefined;
@@ -300,8 +317,8 @@ export async function startGatewayEntryServer(
 
   /** GET /connect/callback：目录回跳（携带一次性 code 或 access_denied）。 */
   const handleConnectCallback = async (res: ServerResponse, url: URL): Promise<void> => {
-    const resume = safeResume(url.searchParams.get("resume") ?? undefined);
-    if (resume === undefined) {
+    const resumeParam = safeResume(url.searchParams.get("resume") ?? undefined);
+    if (resumeParam === undefined) {
       writeHtml(
         res,
         400,
@@ -310,6 +327,7 @@ export async function startGatewayEntryServer(
       );
       return;
     }
+    const resume = sameOriginPath(resumeParam, url.origin);
     const denied = url.searchParams.get("error");
     if (denied !== null) {
       // 商家在目录拒绝（或目录返回错误）：按 OAuth 语义把失败带回客户端。
@@ -784,10 +802,16 @@ ${current}
     try {
       body = req.method === "POST" ? await readBody(req) : undefined;
     } catch (err) {
+      // 不回显异常消息（可能含内部细节）：响应只给稳定结论，细节进 stderr。
+      process.stderr.write(
+        `[gateway entry] mcp request body rejected: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
       const tooLarge = err instanceof Error && err.message.includes("exceeds");
       writeJson(res, tooLarge ? 413 : 400, {
         error: "invalid_request",
-        message: err instanceof Error ? err.message : String(err),
+        message: tooLarge ? "请求体超过大小上限" : "请求体无法解析",
       });
       return;
     }
@@ -806,11 +830,14 @@ ${current}
       await protocolServer.connect(transport);
       await transport.handleRequest(req, res, body);
     } catch (err) {
+      // 同上：内部异常消息（可能含上游响应内容）只进 stderr，不回显给调用方。
+      process.stderr.write(
+        `[gateway entry] mcp transport error: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
       if (!res.headersSent) {
-        writeJson(res, 500, {
-          error: "internal_error",
-          message: err instanceof Error ? err.message : String(err),
-        });
+        writeJson(res, 500, { error: "internal_error", message: "入口内部错误" });
       } else {
         res.end();
       }

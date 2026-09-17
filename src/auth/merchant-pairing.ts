@@ -57,16 +57,29 @@ function pairingPath(dir: string): string {
   return path.join(dir, PAIRING_FILE);
 }
 
-function generateCode(): string {
-  const groups: string[] = [];
-  for (let g = 0; g < CODE_GROUPS; g++) {
-    const bytes = randomBytes(CODE_GROUP_LEN);
-    let group = "";
-    for (const byte of bytes) {
+/** 拒绝采样的接受上限：256 不是字母表长度的整数倍，尾部余数区间必须丢弃。 */
+const CODE_ALPHABET_ACCEPT_LIMIT = 256 - (256 % CODE_ALPHABET.length);
+
+/**
+ * 生成一组字符（无偏）。
+ *
+ * `byte % 31` 直接取模会让字母表前 8 个字符的概率高出 1/8（9/256 vs 8/256），
+ * 因此丢弃落在不完整区间尾部的字节（约 3% 拒绝率）。
+ */
+function randomGroup(): string {
+  let group = "";
+  while (group.length < CODE_GROUP_LEN) {
+    for (const byte of randomBytes(CODE_GROUP_LEN - group.length)) {
+      if (byte >= CODE_ALPHABET_ACCEPT_LIMIT) continue;
       group += CODE_ALPHABET[byte % CODE_ALPHABET.length];
     }
-    groups.push(group);
   }
+  return group;
+}
+
+function generateCode(): string {
+  const groups: string[] = [];
+  for (let g = 0; g < CODE_GROUPS; g++) groups.push(randomGroup());
   return groups.join("-");
 }
 
