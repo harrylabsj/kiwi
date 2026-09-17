@@ -12,6 +12,10 @@
 #     工具清单随即出现实例工具，调用带该商家内部凭据打到实例
 #   租户隔离：未绑定的商家 B 看不到实例工具，且实例从未收到 B 的请求
 #   解绑：解绑后实例工具消失，第 0 版目录能力不受影响
+#   配对码：真实 CLI 生成一次性码 → 网关兑换（复用真实实现）→ 工具恢复；重用被拒
+#   离线恢复：实例重启（配对凭据落盘）与网关重启（凭据加密库 + OAuth 令牌落盘）后
+#     商家无需重新配对即可继续使用；目录能力同样不受影响
+#   A/B 隔离：两个独立实例各自配对、各自路由，凭据互不通用
 #
 # 仅使用 loopback 地址与临时目录；不接触生产数据，不打印凭据明文。
 set -euo pipefail
@@ -69,6 +73,11 @@ cleanup() {
     wait "${pid}" 2>/dev/null || true
   done
   sleep 1
+  # 排障用：V1_KEEP_CASE_DIR=1 时保留证据目录（含三个进程的日志）。
+  if [[ "${V1_KEEP_CASE_DIR:-0}" == "1" ]]; then
+    printf '（已保留证据目录：%s）\n' "${case_dir}"
+    return 0
+  fi
   case "${case_dir}" in
     /private/tmp/kiwi-v1-e2e.*) rm -rf -- "${case_dir}" ;;
   esac
@@ -160,21 +169,55 @@ cookie_b="$(cat "${case_dir}/merchant_b.cookie")"
 pass "商家 A=${merchant_a} 与 B=${merchant_b} 已注册并验证邮箱"
 
 # ── 3. 桩商家实例（只配给 A）+ 网关入口 ────────────────────────────────────
-KIWI_INSTANCE_STUB_TOKEN="${instance_token}" node "${kiwi_repo}/scripts/lib/merchant-instance-stub.mjs" \
-  --port "${instance_port}" --merchant-label A >"${case_dir}/stub.log" 2>&1 &
-pids+=("$!")
-sleep 1
+wait_stub() { # <port>
+  # 注意：不能写 `code=$(curl … || echo 000)`——curl 失败时自身已打印 000，
+  # 再 echo 会拼成 "000000"，让「未就绪」永远判为就绪（本脚本踩过）。
+  local port="$1" code
+  for _ in $(seq 1 40); do
+    if code=$(curl -sS -o /dev/null -w '%{http_code}' -X GET "http://127.0.0.1:${port}/" 2>/dev/null); then
+      [[ "${code}" != "000" ]] && return 0
+    fi
+    sleep 0.25
+  done
+  fail "stub 未就绪（http://127.0.0.1:${port}）"
+}
 
-(
-  cd "${kiwi_repo}"
-  exec env \
-    KIWI_CATALOG_CONNECTOR_TOKEN="${connector_token}" \
-    KIWI_GATEWAY_CREDENTIAL_KEY="${credential_key}" \
-    node dist/cli.js merchant gateway serve \
-      --public-url "${gateway_url}" --catalog-url "${catalog_url}" \
-      --port "${gateway_port}" --data-dir "${case_dir}/gateway"
-) >"${case_dir}/gateway.log" 2>&1 &
-pids+=("$!")
+# 启动一个桩实例（可多个）：<label> <port> <pairing_dir>；暴露 stub_pid_<label>。
+start_stub() {
+  local label="$1" port="$2" pairing_dir="$3"
+  KIWI_INSTANCE_STUB_TOKEN="${instance_token}" node "${kiwi_repo}/scripts/lib/merchant-instance-stub.mjs" \
+    --port "${port}" --merchant-label "${label}" \
+    --pairing-dir "${pairing_dir}" >>"${case_dir}/stub.log" 2>&1 &
+  local pid=$!
+  pids+=("${pid}")
+  # 注意：macOS 自带 bash 3.2 没有 `declare -g`，用显式赋值（仅需 A/B 两个）。
+  case "${label}" in
+    A) stub_pid_A="${pid}" ;;
+    B) stub_pid_B="${pid}" ;;
+    *) fail "未知 stub 标签：${label}" ;;
+  esac
+}
+start_stub A "${instance_port}" "${case_dir}/instance-pairing"
+wait_stub "${instance_port}"
+# 第二个独立实例（B 用；A/B 隔离验收）
+instance_port_b="${V1_INSTANCE_PORT_B:-18623}"
+start_stub B "${instance_port_b}" "${case_dir}/instance-pairing-b"
+wait_stub "${instance_port_b}"
+
+start_gateway() {
+  (
+    cd "${kiwi_repo}"
+    exec env \
+      KIWI_CATALOG_CONNECTOR_TOKEN="${connector_token}" \
+      KIWI_GATEWAY_CREDENTIAL_KEY="${credential_key}" \
+      node dist/cli.js merchant gateway serve \
+        --public-url "${gateway_url}" --catalog-url "${catalog_url}" \
+        --port "${gateway_port}" --data-dir "${case_dir}/gateway"
+  ) >>"${case_dir}/gateway.log" 2>&1 &
+  gateway_pid=$!
+  pids+=("${gateway_pid}")
+}
+start_gateway
 wait_health "${gateway_url}/health" "gateway"
 pass "网关入口起在 ${gateway_url}（无静态实例配置；商家走 /instance 自助绑定）"
 
@@ -271,7 +314,11 @@ grep -q '"method":"tools/list"' "${case_dir}/stub.log" || fail "绑定未对实�
 status=$(http GET "${gateway_url}/instance" "" "${gw_cookie_a}")
 grep -q "${instance_port}/mcp" "${case_dir}/body" || fail "绑定页未显示已绑定地址"
 if grep -q "${instance_token}" "${case_dir}/body"; then fail "绑定页回显了内部令牌"; fi
-pass "商家自助绑定实例：URL 策略 + 探活通过，令牌加密保存且不回显"
+# 能力探测：页面显示实例自报版本与探测到的工具数
+grep -q "实例版本：merchant-instance-stub-A v0.0.0" "${case_dir}/body" \
+  || fail "绑定页未显示实例自报版本：$(grep -o '实例版本：[^<]*' "${case_dir}/body" | head -1)"
+grep -q "可用工具：" "${case_dir}/body" || fail "绑定页未显示探测到的工具数"
+pass "商家自助绑定实例：URL 策略 + 探活通过，令牌加密保存且不回显（含版本/工具数）"
 
 status=$(mcp_call "${token_a}" tools/list)
 [[ "${status}" == "200" ]] || fail "tools/list: HTTP ${status} $(body)"
@@ -366,7 +413,101 @@ grep -q "kiwi_catalog_save_publication_draft" <<<"${tools_after_unbind}" || fail
 if grep -q "kiwi_merchant_" <<<"${tools_after_unbind}"; then fail "解绑后仍有实例工具：${tools_after_unbind}"; fi
 pass "解绑后实例工具消失，第 0 版目录工具仍可用"
 
+# ── 10. 重新绑定：一次性配对码（§8.4 第二期）──────────────────────────────
+# 用**真实 CLI** 在实例侧生成配对码（同一份 pairing.json 语义），桩用真实实现兑换。
+KIWI_MERCHANT_MCP_TOKEN="${instance_token}" node "${kiwi_repo}/dist/cli.js" merchant mcp pair \
+  --profile "${kiwi_repo}/examples/profiles/merchant.fake.yaml" \
+  --data-dir "${case_dir}/instance-pairing" >"${case_dir}/pair.out" 2>&1
+pair_code=$(sed -n 's/.*配对码：[[:space:]]*\([A-Z0-9-]*\).*/\1/p' "${case_dir}/pair.out" | head -1)
+[[ -n "${pair_code}" ]] || fail "未取得配对码：$(cat "${case_dir}/pair.out")"
+
+status=$(http_form "${gateway_url}/instance/pair" \
+  "mcp_url=http://127.0.0.1:${instance_port}/mcp&code=${pair_code}" "${gw_cookie_a}")
+[[ "${status}" == "303" ]] || fail "配对绑定: HTTP ${status} $(body)"
+[[ "$(header_location)" == "/instance?status=paired" ]] || fail "配对绑定未成功：$(header_location) $(body)"
+grep -q '"method":"pairing/redeem"' "${case_dir}/stub.log" || fail "实例未收到配对兑换请求"
+grep -q "stub_issued_paired_credential" "${case_dir}/stub.log" || fail "实例未签发配对凭据"
+status=$(mcp_call "${token_a}" tools/list)
+tools_after_pair=$(jq -r '.result.tools[].name' "${case_dir}/body" | tr '\n' ' ')
+grep -q "kiwi_merchant_list_products" <<<"${tools_after_pair}" || fail "配对绑定后缺实例工具：${tools_after_pair}"
+
+# 调用一次实例工具：网关必须改用**配对凭据**（而不是静态令牌）打到实例。
+status=$(mcp_call "${token_a}" tools/call '{"name":"kiwi_merchant_list_products","arguments":{}}')
+[[ "${status}" == "200" ]] || fail "配对后实例工具调用: HTTP ${status} $(body)"
+tail -n 20 "${case_dir}/stub.log" | grep -q '"kind":"paired"' \
+  || fail "配对后网关未使用配对凭据（仍用静态令牌？）"
+pass "配对码绑定：真实 CLI 生成码 → 网关兑换新签凭据 → 实例工具恢复并用配对凭据调用"
+
+status=$(http_form "${gateway_url}/instance/pair" \
+  "mcp_url=http://127.0.0.1:${instance_port}/mcp&code=${pair_code}" "${gw_cookie_a}")
+[[ "$(header_location)" == *"error="* ]] || fail "配对码重用未被拒绝：$(header_location)"
+pass "配对码单次有效：同一码再次兑换被拒绝"
+
+# ── 11. 离线恢复：实例重启 / 网关重启后无需重新配对 ───────────────────────
+kill "${stub_pid_A}" 2>/dev/null || true
+wait "${stub_pid_A}" 2>/dev/null || true
+sleep 1
+start_stub A "${instance_port}" "${case_dir}/instance-pairing"
+wait_stub "${instance_port}"
+status=$(mcp_call "${token_a}" tools/call '{"name":"kiwi_merchant_list_products","arguments":{}}')
+[[ "${status}" == "200" ]] || fail "实例重启后调用: HTTP ${status} $(body)"
+[[ "$(jq -r '.result.isError // false' "${case_dir}/body")" != "true" ]] \
+  || fail "实例重启后调用失败：$(jq -r '.result.content[0].text' "${case_dir}/body")"
+[[ "$(jq -r '.result.content[0].text | fromjson | .instance' "${case_dir}/body")" == "A" ]] \
+  || fail "实例重启后未路由到 A 的实例"
+if tail -n 5 "${case_dir}/stub.log" | grep -q "stub_rejected"; then fail "实例重启后拒绝了配对凭据"; fi
+pass "实例重启：配对凭据落盘仍在，商家无需重新配对"
+
+kill "${gateway_pid}" 2>/dev/null || true
+wait "${gateway_pid}" 2>/dev/null || true
+sleep 1
+start_gateway
+wait_health "${gateway_url}/health" "gateway（重启后）"
+status=$(mcp_call "${token_a}" tools/list)
+[[ "${status}" == "200" ]] || fail "网关重启后 tools/list: HTTP ${status} $(body)"
+tools_after_restart=$(jq -r '.result.tools[].name' "${case_dir}/body" | tr '\n' ' ')
+grep -q "kiwi_merchant_list_products" <<<"${tools_after_restart}" || fail "网关重启后缺实例工具"
+grep -q "kiwi_catalog_save_publication_draft" <<<"${tools_after_restart}" || fail "网关重启后缺目录工具"
+status=$(mcp_call "${token_a}" tools/call '{"name":"kiwi_catalog_get_merchant_profile","arguments":{}}')
+[[ "${status}" == "200" ]] || fail "网关重启后目录调用: HTTP ${status} $(body)"
+[[ "$(jq -r '.result.content[0].text | fromjson | .connected' "${case_dir}/body")" == "true" ]] \
+  || fail "网关重启后目录凭据不可用（应加密落盘）"
+pass "网关重启：OAuth 令牌、加密凭据与实例注册均落盘，商家无需重新连接"
+
+# ── 12. A/B 两实例隔离：各自配对、各自路由、互不可达 ──────────────────────
+gw_cookie_b="$(cat "${case_dir}/gw_cookie_b")"
+token_b="$(cat "${case_dir}/token_b")"
+
+KIWI_MERCHANT_MCP_TOKEN="${instance_token}" node "${kiwi_repo}/dist/cli.js" merchant mcp pair \
+  --profile "${kiwi_repo}/examples/profiles/merchant.fake.yaml" \
+  --data-dir "${case_dir}/instance-pairing-b" >"${case_dir}/pair-b.out" 2>&1
+pair_code_b=$(sed -n 's/.*配对码：[[:space:]]*\([A-Z0-9-]*\).*/\1/p' "${case_dir}/pair-b.out" | head -1)
+[[ -n "${pair_code_b}" ]] || fail "B 未取得配对码：$(cat "${case_dir}/pair-b.out")"
+status=$(http_form "${gateway_url}/instance/pair" \
+  "mcp_url=http://127.0.0.1:${instance_port_b}/mcp&code=${pair_code_b}" "${gw_cookie_b}")
+[[ "$(header_location)" == "/instance?status=paired" ]] || fail "B 配对绑定未成功：$(header_location) $(body)"
+
+b_tool_calls_before=$(grep -c '"label":"B".*"method":"tools/call"' "${case_dir}/stub.log" || true)
+status=$(mcp_call "${token_b}" tools/call '{"name":"kiwi_merchant_list_products","arguments":{}}')
+[[ "${status}" == "200" ]] || fail "B 实例工具调用: HTTP ${status} $(body)"
+[[ "$(jq -r '.result.content[0].text | fromjson | .instance' "${case_dir}/body")" == "B" ]] \
+  || fail "B 的调用未路由到 B 的实例"
+b_tool_calls_after_b=$(grep -c '"label":"B".*"method":"tools/call"' "${case_dir}/stub.log" || true)
+[[ "${b_tool_calls_after_b}" -gt "${b_tool_calls_before}" ]] || fail "B 的调用未打到 B 的实例"
+
+status=$(mcp_call "${token_a}" tools/call '{"name":"kiwi_merchant_list_products","arguments":{}}')
+[[ "${status}" == "200" ]] || fail "A 实例工具调用: HTTP ${status} $(body)"
+[[ "$(jq -r '.result.content[0].text | fromjson | .instance' "${case_dir}/body")" == "A" ]] \
+  || fail "A 的调用未路由到 A 的实例"
+b_tool_calls_after_a=$(grep -c '"label":"B".*"method":"tools/call"' "${case_dir}/stub.log" || true)
+[[ "${b_tool_calls_after_a}" == "${b_tool_calls_after_b}" ]] || fail "A 的调用打到了 B 的实例（隔离被破坏）"
+# 两个实例各自都用**配对凭据**接受调用（凭据由各自实例签发，互不通用）。
+paired_calls=$(grep -c '"kind":"paired"' "${case_dir}/stub.log" || true)
+[[ "${paired_calls}" -ge 4 ]] || fail "两个实例的配对凭据调用数异常（实得 ${paired_calls}）"
+pass "A/B 两实例隔离：各自配对、各自路由，A 的调用不达 B"
+
 printf '\n验收通过（loopback 开发形态；生产联调仍需外部核验）：\n'
-note "商家 A=${merchant_a}（自助绑定实例后已解绑）· 商家 B=${merchant_b}（未绑定）"
-note "公开资料 publication_id=${published_id} · 实例收到请求 ${requests_after_a} 次（仅 A）"
+note "商家 A=${merchant_a}（粘贴绑定 → 解绑 → 配对码绑定 → 实例/网关重启演练）"
+note "商家 B=${merchant_b}（先未绑定验证降级 → 后用配对码绑定其独立实例）"
+note "公开资料 publication_id=${published_id}（商家在门户确认后才公开）"
 note "证据目录：${case_dir}（退出时清理；catalog/gateway/stub 日志在其中）"
