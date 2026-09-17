@@ -100,7 +100,7 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
     {
       name: "kiwi_request_quotes",
       description:
-        '向一个或多个商家发起询价。写操作；必须携带 idempotency_key（可选，缺省自动生成），返回稳定 task_id；KNP RFQ fan-out。CommerceIntent 必须满足冻结契约：intent.items 每项必须有 query（商品短词）与 quantity（{value, unit} 对象，如 {"value":2,"unit":"台"}）。示例 intent.items: [{"query":"保温杯","quantity":{"value":2,"unit":"台"}}]。merchant_ids 仅接受 kiwi_search 中 inquiry_available=true 的商家；仅有第 0 版公开资料的商家会被服务层拒绝（merchant_inquiry_unavailable），不产生任务。',
+        '向一个或多个商家发起询价。写操作；必须携带 idempotency_key（可选，缺省自动生成），返回稳定 task_id；KNP RFQ fan-out。CommerceIntent 必须满足冻结契约：intent.items 每项必须有 query（商品短词）与 quantity（{value, unit} 对象，如 {"value":2,"unit":"台"}）。示例 intent.items: [{"query":"保温杯","quantity":{"value":2,"unit":"台"}}]。merchant_ids 仅接受 kiwi_search 中 inquiry_available=true 的商家；仅有第 0 版公开资料的商家会被服务层拒绝（merchant_inquiry_unavailable），服务当前不在线（心跳超时、freshness_state=stale/unreachable）的商家会被拒绝（merchant_offline），两者都不产生任务。',
       inputSchema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",
         type: "object",

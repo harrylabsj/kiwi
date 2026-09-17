@@ -12,6 +12,9 @@ description: Use the Kiwi connector to clarify product requirements, discover su
 `kiwi_search` 结果可能同时包含两类商家，展示时必须区分：
 
 - **可实时询价**（`inquiry_available=true`）：有可路由 Agent 的第 1 版商家，是 `kiwi_request_quotes` 的唯一合法对象。
+- `inquiry_available=false` 的商家不可发起 RFQ：`资料可查`（仅第 0 版公开资料，从未开通实时询价）
+  与 `服务当前不在线`（开通过但心跳超时，`merchant_offline`）是两种情况，措辞不要混用；
+  离线是暂时的，可建议稍后重试，不要说成「未开通」或「已下架」。
 - **资料可查**（`inquiry_available=false`、`source_kind="merchant_declared"`）：仅有第 0 版公开资料的商家。其 `publications` 含命中商品名（`title`）、商家声明来源、更新时间（`updated_at`/`published_at`）和可选公开店铺入口（`shop_url`）。可以向用户展示这些信息并建议买家自行到原店铺查看，但：
   - 不得把这些商家放进 `merchant_ids` 发起询价——服务层会拒绝并报 `merchant_inquiry_unavailable`（该商家目前仅公开资料，尚未开通 Kiwi 实时询价），不会产生任务；
   - 不得声称已取得其库存、报价或已向其发出 RFQ；公开资料是商家声明内容，不是 Kiwi 背书，也不是实时数据；

@@ -137,6 +137,76 @@ function makeService(fetchImpl: typeof fetch, quoteFetcher?: QuoteFetcher): Kiwi
   });
 }
 
+describe("WP6：Agent 新鲜度（服务离线不再标可实时询价）", () => {
+  it("agent 存在但 freshness_state=stale → inquiry_available=false，且给出降级说明", async () => {
+    const fetchImpl = stubCatalog({
+      agents: {
+        body: { results: [{ ...AGENT_V1, freshness_state: "stale" }], next_cursor: null },
+      },
+      listings: { body: EMPTY_LISTINGS },
+      publications: { body: { results: [], next_cursor: null } },
+    });
+    const index = new KiwiCatalogMerchantIndex({ baseUrl: "http://127.0.0.1:8000", fetchImpl });
+    const merchants = await index.search("保温杯");
+    const v1 = merchants.find((m) => m.merchant_id === "merchant-cat-001");
+    expect(v1?.inquiry_available).toBe(false);
+    expect(v1?.agent_card_url).toBeDefined();
+    expect(index.lastSearchNotes().join(" ")).toContain("服务当前离线");
+  });
+
+  it("unreachable 同样降级（fresh 之外的离线态都不可实时询价）", async () => {
+    const stale = stubCatalog({
+      agents: {
+        body: { results: [{ ...AGENT_V1, freshness_state: "unreachable" }], next_cursor: null },
+      },
+      listings: { body: EMPTY_LISTINGS },
+      publications: { body: { results: [], next_cursor: null } },
+    });
+    const indexStale = new KiwiCatalogMerchantIndex({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl: stale,
+    });
+    expect(
+      (await indexStale.search("保温杯")).find((m) => m.merchant_id === "merchant-cat-001")
+        ?.inquiry_available,
+    ).toBe(false);
+
+  });
+
+  it("记录缺 freshness_state（违反冻结契约）→ fail-closed，不标可实时询价", async () => {
+    // agent-record 契约把 freshness_state 列为必填：缺字段视为契约违规，
+    // 该来源判失败并如实标注——绝不因为没有新鲜度信息就默认"在线"。
+    const broken: Record<string, unknown> = { ...AGENT_V1 };
+    delete broken.freshness_state;
+    const fetchImpl = stubCatalog({
+      agents: { body: { results: [broken], next_cursor: null } },
+      listings: { body: EMPTY_LISTINGS },
+      publications: { body: { results: [], next_cursor: null } },
+    });
+    const index = new KiwiCatalogMerchantIndex({ baseUrl: "http://127.0.0.1:8000", fetchImpl });
+    const merchants = await index.search("保温杯");
+    expect(merchants.find((m) => m.merchant_id === "merchant-cat-001")).toBeUndefined();
+  });
+
+  it("RFQ 硬门：离线商家返回 merchant_offline，且不产生任务", async () => {
+    const fetchImpl = stubCatalog({
+      agents: {
+        body: { results: [{ ...AGENT_V1, freshness_state: "stale" }], next_cursor: null },
+      },
+      listings: { body: EMPTY_LISTINGS },
+      publications: { body: { results: [], next_cursor: null } },
+    });
+    const service = makeService(fetchImpl);
+    await expect(
+      service.requestQuotes({
+        intent: INTENT,
+        merchant_ids: ["merchant-cat-001"],
+        idempotency_key: "idem-wp6-1",
+      }),
+    ).rejects.toThrowError(/merchant_offline|不在线/);
+  });
+});
+
 describe("KiwiCatalogMerchantIndex：M0 公开资料三路合并", () => {
   it("同一商家同时命中 Agent 与公开资料时去重为一个主体，实时能力来自 Agent 侧", async () => {
     const fetchImpl = stubCatalog({

@@ -95,6 +95,8 @@ agent_card_url 误报 `merchant has no agent card URL`。
 - `task_not_found / task_expired`：重查或重新询价。
 - `contract_violation`：修正 intent（补 query、quantity 改 `{value,unit}` 对象）后重试。
 - `merchant_inquiry_unavailable`：该商家仅有第 0 版公开资料、未开通实时询价；
+- `merchant_offline`：该商家开通过实时询价，但服务当前离线（心跳超时）——公开资料仍可查，
+  可稍后重试，不要表述成「从未开通」；
   不可重试 RFQ，改为展示其公开资料与店铺入口。
 - `authorization_denied / approval_denied`：硬拒绝，不可重试。
 - `partial_success`：保留成功报价，失败项单独重试。

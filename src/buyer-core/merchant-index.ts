@@ -47,6 +47,15 @@ export interface KiwiCatalogMerchantIndexOptions {
 
 const VERIFIED_LEVELS = new Set(["domain_verified", "agent_verified", "commerce_verified"]);
 
+/** 离线态（catalog 读时按 TTL 派生的 freshness_state）。 */
+const STALE_FRESHNESS_STATES = new Set(["stale", "unreachable"]);
+
+/** agent 是否新鲜：未设置按 fresh 处理（旧 catalog / legacy 索引向后兼容）。 */
+function isAgentFresh(record: { freshness_state?: string }): boolean {
+  const state = record.freshness_state;
+  return state === undefined || !STALE_FRESHNESS_STATES.has(state);
+}
+
 export class KiwiCatalogMerchantIndex {
   private readonly source: KiwiCatalogSource;
   private readonly publications: MerchantPublicationsSource;
@@ -157,6 +166,7 @@ export class KiwiCatalogMerchantIndex {
         }
         existing.ucp_profile_url = r.ucp_profile_url ?? existing.ucp_profile_url;
         existing.agent_card_url = r.agent_card_url ?? existing.agent_card_url;
+        existing.freshness_state = r.freshness_state ?? existing.freshness_state;
         if (r.capabilities !== undefined && r.capabilities.length > 0) {
           existing.capabilities = [...r.capabilities];
         }
@@ -203,12 +213,23 @@ export class KiwiCatalogMerchantIndex {
         }
       }),
     );
-    // inquiry_available 只由 Agent 侧决定（有可路由 agent_card_url 才可实时询价）；
-    // M0-only 商家恒 false（设计 §4：不得把静态资料伪装成实时能力）。
-    return [...byId.values()].map((rec) => ({
+    // inquiry_available 只由 Agent 侧决定（有可路由 agent_card_url 才可实时询价），
+    // 且 agent 必须**新鲜**：商家服务离线后不再标"可实时询价"，但公开资料仍可查
+    // （WP6 / 发布计划 §3.6）。freshness_state 由 catalog 读时按 TTL 派生；缺字段
+    // （旧 catalog / legacy 来源）视为 fresh，保持向后兼容。
+    const records = [...byId.values()].map((rec) => ({
       ...rec,
-      inquiry_available: rec.agent_card_url !== undefined,
+      inquiry_available: rec.agent_card_url !== undefined && isAgentFresh(rec),
     }));
+    const staleCount = records.filter(
+      (rec) => rec.agent_card_url !== undefined && !isAgentFresh(rec),
+    ).length;
+    if (staleCount > 0) {
+      this.searchNotes.push(
+        `${staleCount} 个商家的服务当前离线（未在有效期内上报心跳），暂不可实时询价；公开资料仍可查`,
+      );
+    }
+    return records;
   }
 
   /**
@@ -335,6 +356,8 @@ function mapRecord(record: CatalogAgentRecord): MerchantRecord {
     ucp_profile_url: record.ucp_profile_url,
     agent_card_url: record.agent_card_url,
     capabilities: record.capabilities ? [...record.capabilities] : [],
+    // 新鲜度透传（WP6）：catalog 读时按 last_seen_at + TTL 派生。
+    freshness_state: record.freshness_state,
   };
 }
 
