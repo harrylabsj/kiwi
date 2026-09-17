@@ -110,6 +110,13 @@ Usage:
   kiwi merchant runtime <start|stop|status|health> [--profile <merchant.yaml>] [--data-dir <dir>]
                                           Merchant 实例运行时管理：A2A + MCP 受管子进程，
                                           异常退出自动重启，分项健康检查（V2 阶段一）
+  kiwi merchant gateway serve [--public-url <https url>] [--catalog-url <url>]
+                              [--source <name>] [--host <host>] [--port N] [--data-dir <dir>]
+                              [--tls-cert <file> --tls-key <file> | --trusted-proxy] [--check]
+                                          商家连接器（Kiwi 商家运营）远程 MCP 入口：商家
+                                          目录注册/发布（第 0 版）与自有实例路由（第 1 版）。
+                                          非 loopback 监听须直接 TLS 或显式 --trusted-proxy；
+                                          缺凭据加密密钥时关闭依赖加密存储的功能
   kiwi merchant init [--merchant-id <shopping-cli merchant_id>] [--name <商家名称>]
                                           [D1] 生成 merchant profile（只填 merchant_id
                                           即可，其余自动补全；TTY 交互提示；写默认

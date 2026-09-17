@@ -1,0 +1,30 @@
+[Unit]
+Description=Kiwi 商家连接器网关（Kiwi 商家运营 · 远程 MCP 入口）
+# 目录（kiwi-catalog）是身份权威：不可达时入口无法建立商家身份，但仍应保持
+# 运行（已连接的商家凭据与工具不受影响），因此只声明网络依赖，不硬失败。
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# 只监听 loopback；公网 TLS 由反向代理终止（见部署说明 §3）。
+# 凭据加密密钥等 env 放 __PREFIX__/gateway.env（0600），不进命令行、不进日志。
+EnvironmentFile=__PREFIX__/gateway.env
+ExecStart=/usr/bin/env node __PREFIX__/app/dist/cli.js merchant gateway serve \
+  --public-url __PUBLIC_URL__ \
+  --catalog-url __CATALOG_URL__ \
+  --host 127.0.0.1 --port 9200 \
+  --data-dir __PREFIX__/data \
+  --tenant-config __PREFIX__/tenants.json
+Restart=always
+RestartSec=5
+# 状态目录单 owner 写：只允许本服务写 __PREFIX__
+ReadWritePaths=__PREFIX__
+NoNewPrivileges=true
+PrivateTmp=true
+# 网关持有商家目录凭据（cmt_）与实例内部凭据的密文：限制可读范围。
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

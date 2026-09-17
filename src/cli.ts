@@ -68,6 +68,7 @@ import { runTui } from "./operator/tui.js";
 import { runInit } from "./supervisor/init.js";
 import { runMcpServe } from "./mcp/cli.js";
 import { runHttpServe } from "./http/cli.js";
+import { runGatewayServe } from "./merchant-gateway/cli.js";
 import {
   DEFAULT_MERCHANT_MCP_HOST,
   DEFAULT_MERCHANT_MCP_PATH,
@@ -2199,6 +2200,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // `kiwi buyer-api serve`：同样走独立 flag 集（--port/--host/--marketplace-url 等）。
   if (argv[0] === "buyer-api" && argv[1] === "serve") {
     return await runHttpServe(argv.slice(2));
+  }
+  // `kiwi merchant gateway serve`：商家连接器远程入口，独立 flag 集
+  // （--public-url / --catalog-url / --source / --tls-* 等，见 merchant-gateway/cli.ts）。
+  if (argv[0] === "merchant" && argv[1] === "gateway") {
+    return await runGatewayServe(argv.slice(2));
   }
   let args: ParsedArgs;
   try {

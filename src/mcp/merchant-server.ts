@@ -51,7 +51,11 @@ import {
 import type { MerchantWorkbenchSurface } from "../merchant/workbench-service.js";
 import type { MerchantOAuthServer, OAuthHttpResult } from "../auth/merchant-oauth.js";
 import type { MerchantMcpAuthVerifier } from "./merchant-auth.js";
-import { buildMerchantMcpTools } from "./merchant-tools.js";
+import {
+  buildMerchantMcpTools,
+  type MerchantMcpCallResult,
+  type MerchantMcpToolDefinition,
+} from "./merchant-tools.js";
 import type { buildMerchantPresentationResources } from "./merchant-resources.js";
 import { renderPendingPage, type MerchantAdminSurface } from "../merchant-admin/pending-page.js";
 import {
@@ -173,12 +177,25 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
 }
 
+/** 带 scope 的 MCP 工具束形状（merchant 工具与商家连接器目录工具共用）。 */
+export interface ScopedMcpTools {
+  /** 允许异步（网关需要先向实例取工具清单）；协议层会 await。 */
+  listTools(
+    scopes: string[] | undefined,
+  ): MerchantMcpToolDefinition[] | Promise<MerchantMcpToolDefinition[]>;
+  call(
+    name: string,
+    args: Record<string, unknown>,
+    scopes: string[] | undefined,
+  ): Promise<MerchantMcpCallResult>;
+}
+
 /** 每个请求独立的协议 Server（无状态模式），handlers 引用共享的工具分发器。
  *  scopes 来自本次请求的授权上下文（OAuth access_token）；undefined = 静态
  *  token 过渡模式（全量 scope）。tools/list 按 scope 过滤，tools/call 逐次强制。 */
-function createProtocolServer(
+export function createProtocolServer(
   serverInfo: { name: string; version: string },
-  toolsBundle: ReturnType<typeof buildMerchantMcpTools>,
+  toolsBundle: ScopedMcpTools,
   scopes: string[] | undefined,
   presentations?: ReturnType<typeof buildMerchantPresentationResources>,
 ): Server {
@@ -186,8 +203,8 @@ function createProtocolServer(
     { name: serverInfo.name, version: serverInfo.version },
     { capabilities: { tools: {}, ...(presentations !== undefined ? { resources: {} } : {}) } },
   );
-  server.setRequestHandler(ListToolsRequestSchema, () => ({
-    tools: toolsBundle.listTools(scopes),
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: await toolsBundle.listTools(scopes),
   }));
   if (presentations !== undefined) {
     server.setRequestHandler(ListResourcesRequestSchema, () => ({

@@ -162,6 +162,17 @@ describe("redirect_uri 白名单与 issuer 守卫", () => {
         }),
     ).toThrow(/https/);
   });
+
+  it("省略单商家归属不会静默开启通用租户授权", () => {
+    const store = new MerchantOAuthStore({ db: new DatabaseSync(":memory:") });
+    expect(() => new MerchantOAuthServer({
+      store,
+      issuer: ISSUER,
+      resource: `${ISSUER}/mcp`,
+      connectorSource: "kiwi-merchant",
+    })).toThrow(/multiMerchant=true/);
+    expect(() => new MerchantOAuthVerifier({ store })).toThrow(/multiMerchant=true/);
+  });
 });
 
 describe("元数据与注册", () => {
@@ -192,6 +203,56 @@ describe("元数据与注册", () => {
 });
 
 describe("authorize / token 流程", () => {
+  it("通用入口：同一 OAuth issuer 为 A/B 分别签发绑定已认证 merchant_id 的 token", () => {
+    const store = new MerchantOAuthStore({ db: new DatabaseSync(":memory:") });
+    const server = new MerchantOAuthServer({
+      store,
+      issuer: ISSUER,
+      resource: `${ISSUER}/mcp`,
+      connectorSource: "kiwi-merchant",
+      multiMerchant: true,
+    });
+    const clientId = registerClient(server);
+    const gatewayVerifier = new MerchantOAuthVerifier({ store, multiMerchant: true });
+
+    for (const session of [
+      { principal_id: "account:A", merchant_id: "merchant-A", merchant_name: "A 商家" },
+      { principal_id: "account:B", merchant_id: "merchant-B", merchant_name: "B 商家" },
+    ]) {
+      const page = server.authorize(authorizeQuery(clientId), session);
+      expect(page.status).toBe(200);
+      expect(page.html).toContain(session.merchant_name);
+      const csrf = /name="csrf" value="([^"]+)"/.exec(page.html ?? "")?.[1] ?? "";
+      const approved = server.authorizeSubmit({ csrf, decision: "approve" }, session);
+      expect(approved.status).toBe(302);
+      const code = new URL(approved.headers?.location ?? "").searchParams.get("code") ?? "";
+      const pair = server.token({
+        grant_type: "authorization_code",
+        client_id: clientId,
+        redirect_uri: CALLBACK,
+        code,
+        code_verifier: VERIFIER,
+      });
+      expect(pair.status).toBe(200);
+      const access = (pair.body as { access_token: string }).access_token;
+      const claim = gatewayVerifier.verify({ authorizationHeader: `Bearer ${access}` });
+      expect(claim.ok).toBe(true);
+      if (claim.ok) {
+        expect(claim.authorization?.merchant_id).toBe(session.merchant_id);
+        expect(claim.authorization?.principal_id).toBe(session.principal_id);
+      }
+      const wrongTenant = new MerchantOAuthVerifier({
+        store,
+        expectedMerchantId: session.merchant_id === "merchant-A" ? "merchant-B" : "merchant-A",
+      });
+      expect(wrongTenant.verify({ authorizationHeader: `Bearer ${access}` }).ok).toBe(false);
+    }
+    expect(server.authorize(authorizeQuery(clientId), {
+      principal_id: "account:empty",
+      merchant_id: "",
+    }).status).toBe(403);
+  });
+
   it("完整流程：register → 授权页（商家名+scope）→ 同意 → code → token", () => {
     const h = setupOAuth();
     const pair = fullFlow(h);
