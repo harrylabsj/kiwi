@@ -133,6 +133,13 @@ function readFaq(args: Record<string, unknown>): Array<{ question: string; answe
   return items;
 }
 
+/** 去掉末尾斜杠（逐字符扫描，不用正则——避免回溯式写法的误报与隐患）。 */
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+}
+
 /**
  * 构建绑定到某个已验证商家的目录工具束。
  *
@@ -141,7 +148,7 @@ function readFaq(args: Record<string, unknown>): Array<{ question: string; answe
  */
 export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): ScopedMcpTools {
   const maxChars = deps.toolOptions?.maxChars ?? DEFAULT_MAX_CHARS;
-  const portalUrl = `${deps.portalBaseUrl.replace(/\/+$/, "")}/portal/publications`;
+  const portalUrl = `${trimTrailingSlashes(deps.portalBaseUrl)}/portal/publications`;
 
   const credential = (): string => {
     const stored = deps.credentials.get(merchantId);
