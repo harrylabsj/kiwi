@@ -76,12 +76,20 @@ export function loadMerchantCredentials(credentialsPath: string = DEFAULT_CREDEN
   }
 }
 
+/** \u53bb\u6389\u9996\u5c3e\u8fde\u7eed\u7684\u77ed\u6a2a\u7ebf\uff08\u7ebf\u6027\u626b\u63cf\uff1b`/^-+|-+$/g` \u4f1a\u5728\u6bcf\u4e2a\u8d77\u59cb\u4f4d\u7f6e\u91cd\u8bd5\uff0c\u9000\u5316\u6210 O(N\u00b2)\uff09\u3002 */
+function trimEdgeDashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === "-") start += 1;
+  while (end > start && value[end - 1] === "-") end -= 1;
+  return value.slice(start, end);
+}
+
 export function slugifyMerchantId(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  // \u5165\u53c2\u662f**\u5546\u5bb6\u81ea\u5df1\u586b\u7684\u540d\u79f0**\uff0c\u957f\u5ea6\u7531\u8bf7\u6c42\u65b9\u51b3\u5b9a\uff1a\u6574\u6761\u94fe\u8def\u5fc5\u987b\u7ebf\u6027\u3002
+  const slug = trimEdgeDashes(
+    name.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-"),
+  );
   if (slug !== "") return slug;
   return `merchant-${randomBytes(3).toString("hex")}`;
 }

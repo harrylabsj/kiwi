@@ -26,6 +26,8 @@
  * Buyer Principal Memory。与 `kiwi.buyer.*`（Buyer Kit）完全分离。
  */
 
+import { trimTrailingSlashes } from "../net/url.js";
+
 export interface MerchantOpsServiceOptions {
   baseUrl: string;
   /** 商家 API token（merchant 作用域，非 buyer token）。 */
@@ -69,7 +71,7 @@ export class MerchantOpsService {
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: MerchantOpsServiceOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    this.baseUrl = trimTrailingSlashes(options.baseUrl);
     this.merchantToken = options.merchantToken;
     this.timeoutMs = options.timeoutMs ?? 5000;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;

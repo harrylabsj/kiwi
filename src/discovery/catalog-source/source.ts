@@ -36,6 +36,7 @@
 
 import { CatalogSourceError } from "./errors.js";
 import { isRedirectResponse, readJsonBody, SafeHttpError } from "../../net/safe-http.js";
+import { trimTrailingSlashes } from "../../net/url.js";
 import { validateCandidate } from "./schema.js";
 import type { CandidateAgent, CatalogSearchQuery } from "./types.js";
 
@@ -80,7 +81,7 @@ export function validateBaseUrl(value: string): string {
       "catalog baseUrl must not include query or fragment",
     );
   }
-  return value.replace(/\/+$/, "");
+  return trimTrailingSlashes(value);
 }
 
 const SEARCH_QUERY_KEYS: readonly (keyof CatalogSearchQuery)[] = [

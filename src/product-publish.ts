@@ -38,6 +38,7 @@ import { isLoopbackHost } from "./a2a/client/url-policy.js";
 import type { AgentProfile } from "./config/profile.js";
 import { registerCatalogAgent } from "./discovery/catalog-source/register.js";
 import { isRedirectResponse } from "./net/safe-http.js";
+import { trimTrailingSlashes } from "./net/url.js";
 import { SHOPPING_CLI_COMPAT, compatRangeText, versionInRange } from "./product-compat.js";
 
 export interface MerchantPublishOptions {
@@ -247,7 +248,7 @@ export async function merchantPublish(
   // 重复 publish 必须是安全操作（rev1.1 §4.5）：kiwi-catalog 一商家一 agent
   // 约束下二次 register 会 409——先按 merchant 查询已有 agent，有则复用。
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
-  const baseUrl = options.catalogBaseUrl.replace(/\/+$/, "");
+  const baseUrl = trimTrailingSlashes(options.catalogBaseUrl);
   let catalogAgentId: string | undefined;
   let agentError: string | undefined;
   try {

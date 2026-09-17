@@ -26,6 +26,7 @@
  */
 
 import { uuidv7 } from "@earendil-works/pi-ai";
+import { trimTrailingSlashes } from "../net/url.js";
 import type { QuoteCandidateInput, QuoteFetcher, MerchantRecord } from "./service.js";
 
 export interface MarketplaceQuoteFetcherOptions {
@@ -71,7 +72,7 @@ export class MarketplaceQuoteFetcher implements QuoteFetcher {
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: MarketplaceQuoteFetcherOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    this.baseUrl = trimTrailingSlashes(options.baseUrl);
     this.buyerBootstrapToken = options.buyerBootstrapToken;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_MS;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
