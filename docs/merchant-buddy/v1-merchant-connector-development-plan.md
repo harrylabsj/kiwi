@@ -49,11 +49,18 @@
 | 实例工具：工具清单**从实例现取**（经 `mcp-proxy` 按令牌 scope + allowlist 过滤，TTL 60 秒缓存），调用经代理转发；实例不可达/未配对/凭据缺失时第 1 版工具不可见，**第 0 版不受影响** | `instance-tools.ts`、`tool-bundle.ts` |
 | 入口按已验证主体组合第 0 版与第 1 版工具束 | `cli.ts` |
 
-**验证**：`kiwi-catalog` `pytest` 759 项通过 + `ruff` 全绿；`kiwi` `vitest` 2375 项 / 185 文件通过 + `tsc --noEmit` + `eslint --max-warnings=0` 全绿；跨仓验收脚本 15/15 通过（见 WP8）。新增测试：`tests/test_connector_identity.py`（24 项）、`tests/merchant-gateway-entry.test.ts`（8 项）、`tests/merchant-gateway-catalog-tools.test.ts`（12 项）、`tests/merchant-gateway-cli.test.ts`（17 项）、`tests/merchant-gateway-instance-tools.test.ts`（11 项）。
+**验证**：`kiwi-catalog` `pytest` 759 项通过 + `ruff` 全绿；`kiwi` `vitest` 2375 项 / 185 文件通过 + `tsc --noEmit` + `eslint --max-warnings=0` 全绿；跨仓验收脚本 20/20 通过（见 WP8）。新增测试：`tests/test_connector_identity.py`（24 项）、`tests/merchant-gateway-entry.test.ts`（8 项）、`tests/merchant-gateway-catalog-tools.test.ts`（12 项）、`tests/merchant-gateway-cli.test.ts`（17 项）、`tests/merchant-gateway-instance-tools.test.ts`（11 项）。
+
+### WP0 买方工具契约冻结（已发布连接器不受影响）
+
+| 交付 | 位置 |
+| --- | --- |
+| 已发布买方连接器（`oc_bd73f860e3e2b5d3` / `kiwi-sourcing`，本地 stdio）九个工具的**名称与 inputSchema** 逐字冻结为基线 | `tests/fixtures/buyer-tool-contract.json` |
+| 契约锁定测试：任何改动都会失败并指出被改的工具；新增能力必须以增量工具交付（第 0 版关注三件套即先例）；采购专家仍依赖原连接器 ID；商家连接器包不声明买方工具、不指向买方 source | `tests/buyer-tool-contract.test.ts` |
 
 ### WP8 跨仓端到端验收（真实 kiwi-catalog + 网关 + 桩商家实例）
 
-`scripts/v1-merchant-connector-acceptance.sh`（配套 `scripts/lib/merchant-instance-stub.mjs`）：起**真实 kiwi-catalog 本地实例**（临时库、loopback、console 邮箱验证）+ 网关入口 + 桩商家实例，跑完 15 项断言并全部通过：
+`scripts/v1-merchant-connector-acceptance.sh`（配套 `scripts/lib/merchant-instance-stub.mjs`）：起**真实 kiwi-catalog 本地实例**（临时库、loopback、console 邮箱验证）+ 网关入口 + 桩商家实例，跑完 20 项断言并全部通过：
 
 | 断言 | 说明 |
 | --- | --- |
@@ -66,6 +73,11 @@
 | 租户隔离 | 未配对实例的商家 B：第 0 版可用、无实例工具、桩从未收到 B 的请求 |
 | 未认证拒绝 | 无令牌 `/mcp` 返回 401 且带 `resource_metadata` 指引 |
 | 自助绑定与解绑 | 商家在 `/instance` 页面提交地址 + 内部令牌 → 探活（打桩实例的 initialize/tools/list）→ 工具清单出现实例工具；解绑后实例工具消失、第 0 版不受影响；页面不回显令牌 |
+| 一次性配对码与凭据轮换 | 真实 CLI 生成码 → 网关 `POST /instance/pair` 兑换（桩用真实配对实现）→ 实例工具恢复**且网关改用配对凭据调用实例**；同一码重用被拒 |
+| 出站钉住 | 单元测试覆盖：私网/保留段、公网域名解析到 loopback、多地址混入私网、解析失败/空结果一律拒绝；适配层 Host 头与路径、不跟随重定向、AbortSignal 生效 |
+| 能力探测 | 粘贴绑定后绑定页显示实例自报版本（`merchant-instance-stub-A v0.0.0`）与探测到的工具数 |
+| 离线恢复 | 实例重启后凭据仍被接受、网关重启后目录与实例能力均可用（无需重新配对/连接） |
+| A/B 两实例隔离 | 两个独立实例各自配对、各自路由；A 的调用不增加 B 实例的请求计数 |
 
 可重复执行（连续多次通过，端口预检防止复用残留进程，退出后无残留进程与目录）。
 
@@ -85,13 +97,17 @@
 | `/instance` 页面（需商家 OAuth 会话）：绑定/解绑；令牌只经表单提交、加密落库、页面与日志均不回显 | `entry-server.ts`、`cli.ts` |
 | 动态注册表：静态配置未命中时按 `merchant_id` 查商家自绑实例；解析时重校地址策略 | `tenant-registry.ts` |
 | 解绑：删除地址与凭据；目录公开资料与买家关注不受影响 | `instance-registration.ts` |
+| 一次性配对码（§8.4 第二期）：实例侧 `kiwi merchant mcp pair`（10 分钟 TTL、单次、只读可抄、只存摘要）+ `POST /pairing/redeem`；兑换时实例**新签**配对凭据（单槽、可轮换、可吊销，`unpair`），网关加密保存并使用；未升级实例仍可粘贴令牌 | `src/auth/merchant-pairing.ts`、`merchant-server.ts`、`entry-server.ts` |
+| token 模式也挂载写操作确认页：网关路由需要静态内部令牌，商家仍能批准写候选（原先只有 OAuth 模式有 `/admin/*`，两种要求无法同时满足） | `src/cli.ts` |
 
 剩余（未完成）：
 
-- **第二期配对码与凭据轮换**：实例侧一次性配对码（商家不再接触长期令牌）、网关签发并推送/轮换实例凭据、实例身份声明比对（防误配）、mTLS——需改商家实例产品面，取舍见设计文档 §4。
-- **请求时 DNS/IP 钉住**：当前只用 `assertSafeTargetUrl`（静态）+ 私网字面 IP/保留主机名拒绝；钉住未实现，因此**不得宣称已支持异地自托管**。
-- 能力探测（版本/能力上报）与离线恢复演练。
-- 三方联调：两台独立商家实例 A/B 的真机隔离验证。
+- ~~网关签发内部凭据与自动轮换~~ **已决定不做**（最小授权：凭据由实例签发与持有；轮换 = 商家重配对，吊销 = 实例侧 `unpair`）。替代已实现：配对凭据单槽轮换 + 静态令牌并存。
+- **mTLS**：**决定不做**（理由见配对设计 §4：钉住出站 + 实例签发可轮换凭据已覆盖主要风险，双向证书的签发/分发/轮换/吊销成本更高）。
+- ~~请求时 DNS/IP 钉住~~ **已实现**：解析一次 → 校验（含公网域名解析到 loopback）→ 按该 IP 建连（Host/SNI 仍为主机名）；实例调用（探活、配对兑换、工具转发）默认走钉住出站。
+- ~~能力探测（版本/能力上报）~~ **已实现**：绑定前实测（配对路径用兑换到的凭据调 `tools/list`，用不了即拒绝绑定），记录实例自报名称/版本与工具数并在绑定页展示。
+- ~~离线恢复演练~~ **已实现**：跨仓脚本覆盖实例重启与网关重启（凭据落盘，无需重新配对）。
+- ~~两台独立实例 A/B 真机隔离联调~~ **已覆盖**：跨仓脚本用两个独立实例（A/B 各自配对、各自路由、A 的调用不达 B）。**仍未覆盖**：真实公网部署下的端到端（依赖部署环境）。
 
 ### WP5 商家连接器包与上架
 

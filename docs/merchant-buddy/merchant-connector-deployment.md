@@ -117,7 +117,10 @@ kiwi merchant gateway serve \
 ```
 
 - 绑定 loopback 时**不需要** `--tls-cert` / `--trusted-proxy`（TLS 由反代终止）；若改为直接对外监听，则必须提供 TLS 材料或显式声明受信代理，否则拒绝启动。
-- 商家可**自助绑定**：登录态打开 `${publicUrl}/instance` 填「实例 MCP 地址 + 内部令牌」，网关会按同一套 URL 策略校验并探活（initialize + tools/list）后才保存；也可由运维用 `tenants.json` 预置（见 `deploy/gateway/tenants.example.json`，同机实例用 `http://127.0.0.1:9100/mcp`）。两者可并存：静态配置优先，未命中时查商家自绑。
+- 商家**自助绑定**有两条路径（登录态打开 `${publicUrl}/instance`）：
+  1. **配对码（推荐）**：在实例机器上 `kiwi merchant mcp pair` 生成一次性码（10 分钟、单次），填入页面 → 网关向实例兑换内部凭据并加密保存；
+  2. **粘贴内部令牌**：直接填地址 + 令牌，网关探活（initialize + tools/list）通过后保存。
+  两条路径都先过同一套 URL 策略；也可由运维用 `tenants.json` 预置（静态配置优先，未命中时查商家自绑）。
 - 令牌只经该页面提交（不进对话/模型），落库前 AES-256-GCM 加密；解绑即删除地址与凭据，目录资料不受影响。
 - 服务单元见 `deploy/gateway/kiwi-gateway.service.template`（把 `__PREFIX__` / `__PUBLIC_URL__` / `__CATALOG_URL__` 替换后安装）。
 
@@ -139,12 +142,15 @@ profile 中：
 
 ```yaml
 merchant_mcp:
-  # OAuth 模式的 issuer 要求 https：用公网域名，便于 /admin/* 会话与确认凭证工作。
-  # 绑定仍是 loopback，实例的 /mcp 与 /oauth/* 由反代挡住。
-  public_url: https://veyquo.com
+  # 网关路由形态：/mcp 使用静态内部令牌（网关持有同一个值）；
+  # 写操作确认页 /admin/* 在两种认证模式下都会挂载。
+  auth_mode: token
+  token_env: KIWI_MERCHANT_MCP_TOKEN
 ```
 
-- 保留 **OAuth 模式**：`/admin/*`（写候选批准页）只在 OAuth 模式挂载；token 过渡模式没有该页面，`prepare_*` 候选会无人批准而过期。
+- 为什么是 **token 模式**：网关按 `merchant_id` 路由时需要一个静态内部凭据；而 WorkBuddy 只连网关、不直连实例，实例不需要面向用户做 OAuth。
+- 写候选批准仍走实例的 `/admin/*`（会话 + 一次性确认凭证），需先执行
+  `KIWI_MERCHANT_ADMIN_PASSWORD=… kiwi merchant mcp admin-passwd` 初始化管理员口令。
 - A2A 侧按原有配置（如 `KIWI_A2A_PUBLIC_URL=https://veyquo.com`），由 9000 端口对外接待。
 
 ## 6. 目录（kiwi-catalog）侧配置
@@ -163,7 +169,8 @@ KIWI_CATALOG_PUBLIC_BASE_URL=https://catalog.kiwi.harrylabsj.com           # 连
 | `KIWI_CATALOG_CONNECTOR_TOKEN` | 网关 + 目录 | 仅创建/兑换一次性身份授权请求，**无商家数据访问** | 两侧同步改值 → 重启网关 |
 | `KIWI_GATEWAY_CREDENTIAL_KEY` | 仅网关 | 加密保管 `cmt_` 目录凭据与实例凭据 | **轮换会使已存凭据失效**：换新值后商家需重新连接一次（旧值建议保留一个维护窗口） |
 | `cmt_…`（商家目录凭据） | 网关（密文） | 读写该商家公开资料；发布仍须门户确认 | 重新连接即签发新凭据；`POST /v1/connector-identity/revoke` 可撤销 |
-| `KIWI_MERCHANT_MCP_TOKEN` | 网关 + 实例 | 网关 → 该实例的 MCP 调用 | 两侧同步改值 → 重启实例与网关；或商家在 `/instance` 重新绑定（覆盖旧值） |
+| `KIWI_MERCHANT_MCP_TOKEN` | 实例（+ 运维） | 实例 `/mcp` 的静态入口；网关也可用它绑定（粘贴方式） | 改 env → 重启实例；网关需重新绑定 |
+| **配对凭据** `pair_…` | 仅实例签发、网关持有 | 网关 → 该实例的 MCP 调用（配对方式） | 实例上重跑 `kiwi merchant mcp pair` → 网关重新配对即轮换（旧凭据立即失效）；`kiwi merchant mcp unpair` 即吊销 |
 | 实例管理员口令 | 商家 | `/admin/*` 登录 | `kiwi merchant mcp admin-passwd`（`KIWI_MERCHANT_ADMIN_PASSWORD` 环境变量传入） |
 | WorkBuddy 用户 OAuth token | WorkBuddy + 网关（摘要） | 用户 ↔ 网关 | 平台侧撤销/重连；入口只存摘要 |
 
@@ -173,6 +180,7 @@ KIWI_CATALOG_PUBLIC_BASE_URL=https://catalog.kiwi.harrylabsj.com           # 连
 2. 不要把实例的 `/mcp`、`/oauth/*` 放进公网路径，也不要用 `https://veyquo.com/mcp` 作为网关的后端地址（同机走 loopback 少一跳暴露面）。
 3. 不要把实例的 `/v1` 之类的目录接口透传出去：这两个域名都不承载目录服务。
 4. 不要在网关进程里放商家实例的私有状态路径；网关只需要实例的 URL 与内部令牌。
+5. 不要让实例域名解析到内网/云元数据地址：网关出站会解析一次并按该 IP 建连（钉住），解析结果落在私网/保留段（含公网域名解析到 `127.0.0.1`）一律拒绝——这是防 SSRF 与 DNS 重绑定的硬门，不是配置项。
 5. 不要复用 `deploy/merchant-bundle` 的单商家 OAuth 连接器包指向 Veyquo 实例上架（发布计划 §4 已明确 Veyquo 单实例包不可作为通用商家包）。
 
 ## 9. 部署后验收
@@ -196,10 +204,10 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://veyquo.com/admin/login    # �
 ss -ltnp | grep -E ':(9000|9100|9200)'
 ```
 
-端到端链路（发布闭环 + 自助绑定 + 实例路由 + 租户隔离 + 解绑）用仓库脚本在本地跑：
+端到端链路（发布闭环 + 自助绑定 + 配对码 + 实例路由 + 租户隔离 + 解绑）用仓库脚本在本地跑：
 
 ```sh
-bash scripts/v1-merchant-connector-acceptance.sh   # 15 项断言；loopback 形态
+bash scripts/v1-merchant-connector-acceptance.sh   # 17 项断言；loopback 形态
 ```
 
 ## 10. 回滚
