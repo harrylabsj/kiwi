@@ -45,7 +45,7 @@ npm ci --omit=dev && npm run build
 node deploy/merchant-bundle/install.mjs --prefix /srv/kiwi-merchant --confirm-new-instance \
   --profile ./merchant.yaml \
   [--app-dir /path/to/kiwi-build] [--credentials-env ./credentials.env] \
-  [--shopping-bin /usr/local/bin/shopping] --shopping-args "serve --port 8765" \
+  [--shopping-bin /usr/local/bin/shopping] --shopping-args "api serve --port 8765" \
   [--skip-credentials-check] [--dry-run]
 ```
 
@@ -53,7 +53,8 @@ fail-closed 行为（BUG-09：不产出"装完却起不来"的实例）：
 
 - 新实例必须显式 `--confirm-new-instance`；
 - 检测到已有安装（`data/` 非空或 `state.sqlite` 存在）→ 拒绝安装，**绝不新建空库替代已有安装**；升级路径留阶段四；
-- shopping-cli 版本不在已验证范围（`>= 2.0.0 < 3.0.0`，见 `versions.lock.json` 与 `src/product-compat.ts` 单一来源）→ 拒绝安装；
+- shopping-cli 版本低于兼容范围（`>= 2.0.0`，见 `versions.lock.json` 与 `src/product-compat.ts` 单一来源）→ 拒绝安装；
+- 运行时兼容以协议协商为准：启动时 probeCapabilities 消费网关 `/capabilities` 的 `protocol_versions`，不含 Kiwi 所需协议 → 拒绝启动；协商不可用回退 2.x legacy 已验证线（`< 3.0.0`），不可判定 fail-closed；
 - `--profile` 必填且必须是 merchant profile（`role: merchant` + `agent_id`；完整 schema 校验由 cli 启动时执行）；
 - 应用包必须可运行：`--app-dir`（缺省仓库根）须含 `dist/cli.js`、`package.json`、非空 `node_modules/`——裸 dist 拒绝安装；
 - 凭据引用必须存在（`--credentials-env` 或 `~/.kiwi/credentials.env` 中的 `KIWI_MERCHANT_TOKEN`；值不读取不记录，仅存在性检查；确无凭据可 `--skip-credentials-check` 显式跳过并承担后续登录失败）；

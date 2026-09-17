@@ -98,6 +98,7 @@ function authorizeQuery(clientId: string): Record<string, string> {
 
 /** 走完 register → authorize → 同意 → 换 token 全流程，返回 token 响应 body。 */
 function fullFlow(h: OAuthHarness): {
+  clientId: string;
   access_token: string;
   refresh_token: string;
   expires_in: number;
@@ -123,7 +124,11 @@ function fullFlow(h: OAuthHarness): {
     code_verifier: VERIFIER,
   });
   expect(token.status).toBe(200);
-  return token.body as { access_token: string; refresh_token: string; expires_in: number };
+  // clientId 一并返回：refresh grant 必须绑定原 client_id（RFC 6749 §6）。
+  return {
+    clientId,
+    ...(token.body as { access_token: string; refresh_token: string; expires_in: number }),
+  };
 }
 
 describe("redirect_uri 白名单与 issuer 守卫", () => {
@@ -307,12 +312,14 @@ describe("authorize / token 流程", () => {
     const refreshed = h.server.token({
       grant_type: "refresh_token",
       refresh_token: pair.refresh_token,
+      client_id: pair.clientId,
     });
     expect(refreshed.status).toBe(200);
     const newPair = refreshed.body as { access_token: string; refresh_token: string };
     const again = h.server.token({
       grant_type: "refresh_token",
       refresh_token: pair.refresh_token,
+      client_id: pair.clientId,
     });
     expect(again.status).toBe(400); // 旧 refresh 已轮换失效
     // revoke 新 access
@@ -348,19 +355,37 @@ describe("authorize / token 流程", () => {
     const pair = fullFlow(h);
     // 30 天内可轮换
     h.clock.value = new Date(Date.parse(T0) + 29 * 24 * 3600 * 1000).toISOString();
-    const ok = h.server.token({ grant_type: "refresh_token", refresh_token: pair.refresh_token });
+    const ok = h.server.token({
+      grant_type: "refresh_token",
+      refresh_token: pair.refresh_token,
+      client_id: pair.clientId,
+    });
     expect(ok.status).toBe(200);
     // 旧 token 重放（已轮换核销）拒绝
     const replay = h.server.token({
       grant_type: "refresh_token",
       refresh_token: pair.refresh_token,
+      client_id: pair.clientId,
     });
     expect(replay.status).toBe(400);
     // 新 refresh 过 30 天独立过期
     const rotated = (ok.body as { refresh_token: string }).refresh_token;
     h.clock.value = new Date(Date.parse(T0) + 60 * 24 * 3600 * 1000).toISOString();
-    const expired = h.server.token({ grant_type: "refresh_token", refresh_token: rotated });
+    const expired = h.server.token({
+      grant_type: "refresh_token",
+      refresh_token: rotated,
+      client_id: pair.clientId,
+    });
     expect(expired.status).toBe(400);
+
+    // 审查 P2：refresh grant 绑定原 client_id——换 client_id 直接拒绝
+    const wrongClient = h.server.token({
+      grant_type: "refresh_token",
+      refresh_token: pair.refresh_token,
+      client_id: "mcp_client_someone_else",
+    });
+    expect(wrongClient.status).toBe(400);
+    expect((wrongClient.body as { error: string }).error).toBe("invalid_grant");
 
     // 迁移：老库（无 refresh_expires_at 列）ALTER 补列并回填 created_at+30d
     const legacy = new DatabaseSync(":memory:");

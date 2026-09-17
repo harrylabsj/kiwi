@@ -140,12 +140,8 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
 `;
 
 /** BUG-10 迁移：refresh_token 独立过期（老库 ALTER 补列，老数据按 created_at+30d
- *  回填——比库创建时还旧的 refresh 自然过期，fail-closed）。 */
-const OAUTH_MIGRATION_REFRESH_EXPIRY = `
-ALTER TABLE oauth_tokens ADD COLUMN refresh_expires_at TEXT;
-UPDATE oauth_tokens SET refresh_expires_at =
-  strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+30 days') WHERE refresh_expires_at IS NULL;
-`;
+ *  回填——比库创建时还旧的 refresh 自然过期，fail-closed）。迁移与回填在构造
+ *  函数中以单事务执行（见构造函数审查 P2 注释），SQL 已内联。 */
 
 /** BUG-01 迁移：授权挂起单绑定认证主体（老库补 principal_id 列；老挂起单
  *  10 分钟内过期，给空串占位即不可再被消费——consumeAuthRequest 拒绝）。 */
@@ -195,12 +191,26 @@ export class MerchantOAuthStore {
     this.now = options.now ?? (() => new Date().toISOString());
     this.db.exec(OAUTH_SCHEMA);
     this.db.exec(OAUTH_CONFIRMATIONS_SCHEMA);
-    // BUG-10 迁移：老库补 refresh_expires_at 列（列不存在时 ALTER；存在跳过）。
+    // BUG-10 迁移：老库补 refresh_expires_at 列。审查 P2：ALTER 与回填
+    // UPDATE 在同一事务提交——半途崩溃不会留下「列存在但全 NULL」的库
+    // （NULL 行会让 refresh 永不过期，fail-open）；列已存在时仍幂等重跑
+    // 回填，补齐历史中断遗留的 NULL 行。
     const columns = this.db.prepare("PRAGMA table_info(oauth_tokens)").all() as Array<{
       name: string;
     }>;
-    if (!columns.some((c) => c.name === "refresh_expires_at")) {
-      this.db.exec(OAUTH_MIGRATION_REFRESH_EXPIRY);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (!columns.some((c) => c.name === "refresh_expires_at")) {
+        this.db.exec("ALTER TABLE oauth_tokens ADD COLUMN refresh_expires_at TEXT;");
+      }
+      this.db.exec(
+        "UPDATE oauth_tokens SET refresh_expires_at = " +
+          "strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+30 days') WHERE refresh_expires_at IS NULL;",
+      );
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
     }
     // BUG-01 迁移：老库补授权挂起单 principal_id 列（老挂起单不可再消费）。
     const reqColumns = this.db.prepare("PRAGMA table_info(oauth_auth_requests)").all() as Array<{
@@ -209,6 +219,22 @@ export class MerchantOAuthStore {
     if (!reqColumns.some((c) => c.name === "principal_id")) {
       this.db.exec(OAUTH_MIGRATION_AUTH_REQUEST_PRINCIPAL);
     }
+    this.cleanupExpired();
+  }
+
+  /**
+   * 过期行清理（审查 P2：此前全库只增不删，长期运行单调膨胀）。只删完全
+   * 失效的行：挂起单/授权码/一次性凭证按各自 expires_at；token 需 access
+   * 与 refresh 双过期（撤销行在 refresh 未过期前保留可查）。
+   */
+  cleanupExpired(): void {
+    const now = this.now();
+    this.db.prepare("DELETE FROM oauth_auth_requests WHERE expires_at <= ?").run(now);
+    this.db.prepare("DELETE FROM oauth_codes WHERE expires_at <= ?").run(now);
+    this.db.prepare("DELETE FROM oauth_confirmations WHERE expires_at <= ?").run(now);
+    this.db
+      .prepare("DELETE FROM oauth_tokens WHERE expires_at <= ? AND refresh_expires_at <= ?")
+      .run(now, now);
   }
 
   private isoAfter(ms: number): string {
@@ -358,7 +384,9 @@ export class MerchantOAuthStore {
     return code;
   }
 
-  /** 核销授权码（一次性；过期/已用返回 undefined）。 */
+  /** 核销授权码（一次性；过期/已用返回 undefined）。事务 + 条件更新：与
+   *  rotateRefreshToken 同口径，双进程误开同一 oauth.sqlite 时同一授权码也
+   *  只能被核销一次（审查 P2：原 SELECT→UPDATE 无原子性）。 */
   consumeCode(code: string):
     | {
         client_id: string;
@@ -370,24 +398,37 @@ export class MerchantOAuthStore {
       }
     | undefined {
     const digest = digestOf(code);
-    const row = this.db.prepare("SELECT * FROM oauth_codes WHERE code_digest = ?").get(digest) as
-      | {
-          client_id: string;
-          redirect_uri: string;
-          scope: string;
-          principal_id: string;
-          merchant_id: string;
-          code_challenge: string;
-          expires_at: string;
-          used_at: string | null;
-        }
-      | undefined;
-    if (row === undefined || row.used_at !== null) return undefined;
-    if (this.expired(row.expires_at)) return undefined;
-    this.db
-      .prepare("UPDATE oauth_codes SET used_at = ? WHERE code_digest = ?")
-      .run(this.now(), digest);
-    return row;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db.prepare("SELECT * FROM oauth_codes WHERE code_digest = ?").get(digest) as
+        | {
+            client_id: string;
+            redirect_uri: string;
+            scope: string;
+            principal_id: string;
+            merchant_id: string;
+            code_challenge: string;
+            expires_at: string;
+            used_at: string | null;
+          }
+        | undefined;
+      if (row === undefined || row.used_at !== null || this.expired(row.expires_at)) {
+        this.db.exec("ROLLBACK");
+        return undefined;
+      }
+      const used = this.db
+        .prepare("UPDATE oauth_codes SET used_at = ? WHERE code_digest = ? AND used_at IS NULL")
+        .run(this.now(), digest);
+      if (used.changes !== 1) {
+        this.db.exec("ROLLBACK"); // 并发核销：另一方先到
+        return undefined;
+      }
+      this.db.exec("COMMIT");
+      return row;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
   }
 
   // ---- tokens（access 1h / refresh 30d；刷新即轮换）----
@@ -460,6 +501,7 @@ export class MerchantOAuthStore {
    */
   rotateRefreshToken(
     refreshToken: string,
+    expectedClientId?: string,
   ): { access_token: string; refresh_token: string; expires_in: number } | undefined {
     const digest = digestOf(refreshToken);
     const now = this.now();
@@ -481,8 +523,14 @@ export class MerchantOAuthStore {
         this.db.exec("ROLLBACK");
         return undefined;
       }
-      // 独立 refresh 过期检查（迁移老数据已按 created_at+30d 回填）。
-      if (row.refresh_expires_at !== null && row.refresh_expires_at <= now) {
+      // 独立 refresh 过期检查（审查 P2：NULL = 迁移遗留的不可判定行，
+      // fail-closed 拒绝；正常路径构造函数迁移已回填，不会出现 NULL）。
+      if (row.refresh_expires_at === null || row.refresh_expires_at <= now) {
+        this.db.exec("ROLLBACK");
+        return undefined;
+      }
+      // RFC 6749 §6 / OAuth 2.1：refresh grant 绑定原 client_id（审查 P2）。
+      if (expectedClientId !== undefined && row.client_id !== expectedClientId) {
         this.db.exec("ROLLBACK");
         return undefined;
       }
@@ -825,7 +873,8 @@ export class MerchantOAuthServer {
 <head><meta charset="utf-8"><title>授权确认 — Kiwi 商家工作台</title></head>
 <body>
   <h1>Kiwi 商家运营工作台</h1>
-  <p>应用「${escapeHtml(client.client_name ?? query.client_id)}」请求访问商家「${escapeHtml(this.merchantName)}」的：</p>
+  <p>应用「${escapeHtml(client.client_name ?? query.client_id)}」（客户端自报名称）请求访问商家「${escapeHtml(this.merchantName)}」的：</p>
+  <p>客户端 ID：<code>${escapeHtml(client.client_id)}</code>（注册于 ${escapeHtml(client.created_at)}）。请核对该 ID 与连接器文档一致后再授权——client_name 为应用自报，不作为身份依据。</p>
   <ul>
     ${requestedScopes.map((s) => `<li>${escapeHtml(s)}</li>`).join("\n    ")}
   </ul>
@@ -922,7 +971,11 @@ export class MerchantOAuthServer {
       if (typeof form.refresh_token !== "string") {
         return oauthError(400, "invalid_request", "缺 refresh_token");
       }
-      const pair = this.store.rotateRefreshToken(form.refresh_token);
+      // RFC 6749 §6 / OAuth 2.1：refresh grant 必须携带原 client_id（审查 P2）。
+      if (typeof form.client_id !== "string" || form.client_id === "") {
+        return oauthError(400, "invalid_request", "refresh_token grant 缺 client_id");
+      }
+      const pair = this.store.rotateRefreshToken(form.refresh_token, form.client_id);
       if (pair === undefined) {
         return oauthError(400, "invalid_grant", "refresh_token 无效或已撤销");
       }

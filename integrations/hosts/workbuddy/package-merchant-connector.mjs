@@ -92,9 +92,25 @@ assert.equal(servers.length, 1, "一个连接器只配置一个 MCP Server");
 const [serverName, server] = servers[0];
 assert(/^[a-z0-9-]+$/.test(serverName), "mcpServers 键名必须 kebab-case");
 assert.equal(server.type, "streamableHttp");
+// 审查 P2：host 整体锚定——原正则只锚定开头，`https://mcp.example.com.evil.io/mcp`
+// 这类 attached-domain 可绕过「必须用占位域」的防泄漏校验。改用 URL 解析后
+// 校验 hostname 整体属于 example.com（或等于已批准的生产地址）。
+const isApprovedUrl = server.url === "https://merchant.kiwi.harrylabsj.com/mcp";
+let isTemplateUrl = false;
+if (!isApprovedUrl) {
+  try {
+    const parsed = new globalThis.URL(server.url);
+    isTemplateUrl =
+      parsed.protocol === "https:" &&
+      parsed.pathname === "/mcp" &&
+      (parsed.hostname === "example.com" || parsed.hostname.endsWith(".example.com"));
+  } catch {
+    isTemplateUrl = false;
+  }
+}
 assert(
-  /^https:\/\/[a-z0-9.-]+\.example\.com/.test(server.url),
-  "url 必须 https 且用 example.com 占位",
+  isApprovedUrl || isTemplateUrl,
+  "url 必须为已批准的生产 HTTPS MCP 地址或 example.com 模板地址",
 );
 assert.equal(server.timeout, 30000, "timeout 30000（30s 上限）");
 const headerRefs = new Set(

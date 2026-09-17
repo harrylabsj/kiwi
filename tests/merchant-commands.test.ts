@@ -15,7 +15,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { migrateMemorySchema } from "../src/agent/memory/schema.js";
-import { WriteApprovalCandidateStore } from "../src/agent/merchant/action-candidate.js";
+import {
+  WriteApprovalCandidateStore,
+  executeApprovedCandidate,
+} from "../src/agent/merchant/action-candidate.js";
 import {
   FakeMerchantClient,
   fakeMerchantProduct,
@@ -284,6 +287,63 @@ describe("配套商家确认页面（src/merchant-admin/ 最小骨架）", () =>
     const prepared2 = await core.prepareInventoryUpdate({ sku: "sku-001", stock: 9 });
     await admin.rejectCandidate(prepared2.candidate.candidate_id, PRINCIPAL);
     expect((await client.getProduct("sku-001")).stock).toBe(3);
+    db.close();
+  });
+
+  it("审批双通道并发：执行认领原子，第二通道 not_approvable 不重复执行（审查 P1）", async () => {
+    const db = new DatabaseSync(":memory:");
+    migrateMemorySchema(db);
+    db.prepare(
+      `INSERT INTO principals (principal_id, owner_id, role, locale, timezone, memory_schema_version, created_at, updated_at)
+       VALUES (?, 'merchant-001', 'merchant', 'zh-CN', 'Asia/Shanghai', 3, ?, ?)`,
+    ).run(PRINCIPAL, T0, T0);
+    const store = new WriteApprovalCandidateStore({ db, principalId: PRINCIPAL });
+    const prepared = store.create({
+      tool: "kiwi_merchant_prepare_inventory_update",
+      arguments: { sku: "sku-001", stock: 5 },
+      preconditions: { sku: "sku-001" },
+      risk: "low",
+      expires_at: "2026-12-31T23:59:59.000Z",
+    });
+    store.markApproved(prepared.candidate_id);
+
+    // 通道 A 认领后停在 await（模拟前置 HTTP 往返）；通道 B 此时走完整执行流。
+    let releaseA!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    let executions = 0;
+    const hooks = {
+      readPreconditions: async () => {
+        await gate; // A 卡在窗口内；B 的调用发生在窗口内
+        return { sku: "sku-001" };
+      },
+      execute: async () => {
+        executions += 1;
+        return { ok: true };
+      },
+    };
+    const promiseA = executeApprovedCandidate(store, prepared.candidate_id, hooks);
+    const outcomeB = await executeApprovedCandidate(store, prepared.candidate_id, hooks);
+    expect(outcomeB.kind).toBe("not_approvable");
+    expect(outcomeB.kind === "not_approvable" && outcomeB.reason).toContain("认领");
+    releaseA();
+    const outcomeA = await promiseA;
+    expect(outcomeA.kind).toBe("executed");
+    expect(executions).toBe(1);
+
+    // 崩溃恢复：已认领未终态的候选重启即 superseded，绝不二次执行。
+    const prepared2 = store.create({
+      tool: "kiwi_merchant_prepare_inventory_update",
+      arguments: { sku: "sku-001", stock: 6 },
+      preconditions: { sku: "sku-001" },
+      risk: "low",
+      expires_at: "2026-12-31T23:59:59.000Z",
+    });
+    store.markApproved(prepared2.candidate_id);
+    expect(store.claimForExecution(prepared2.candidate_id)).toBeDefined();
+    expect(store.supersedeExecuting()).toBe(1);
+    expect(store.get(prepared2.candidate_id)?.status).toBe("superseded");
     db.close();
   });
 });

@@ -181,10 +181,23 @@ export class MerchantPolicyRuntime {
     }
   }
 
-  /** 读端：文件签名变化才重载；坏文件保留上一个良好策略（同一坏文件告警一次）。 */
+  /** 读端：文件签名变化才重载；坏文件保留上一个良好策略（同一坏文件告警一次）。
+   *  审查 P2：文件被删除（sig === undefined）→ 显式告警一次并保留最后良好
+   *  策略（内存态永不静默冻结——操作者删除覆盖层的语义是「回退 profile」，
+   *  需两个进程都重启或显式恢复，此处必须让告警可见）。 */
   private reloadIfChanged(): void {
     const sig = this.statSig();
-    if (sig === undefined || sig === this.lastSig) return;
+    if (sig === undefined) {
+      if (this.lastSig !== undefined && sig !== this.warnedSig) {
+        this.log(
+          `[policy-runtime] ${this.file} 已消失（被删除？）：保留最后良好策略；` +
+            "如需回退 profile 策略请重启相关进程或重新写入完整策略文件",
+        );
+        this.warnedSig = sig;
+      }
+      return;
+    }
+    if (sig === this.lastSig) return;
     try {
       const raw = JSON.parse(readFileSync(this.file, "utf8")) as Partial<PolicyOverridesFile> & {
         patch?: unknown;

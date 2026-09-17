@@ -7,7 +7,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { migrateMemorySchema } from "../src/agent/memory/schema.js";
+import { MEMORY_SCHEMA_VERSION, migrateMemorySchema } from "../src/agent/memory/schema.js";
 import { SupplierScheduler } from "../src/agent/supplier/scheduler.js";
 import {
   SupplierRelationshipStore,
@@ -153,7 +153,7 @@ describe("supplier relationship store (§6)", () => {
     const row = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as {
       v: number;
     };
-    expect(row.v).toBe(6);
+    expect(row.v).toBe(MEMORY_SCHEMA_VERSION);
     expect(db.prepare("SELECT * FROM supplier_relationships").all()).toEqual([]);
     expect(db.prepare("SELECT * FROM supplier_observation_state").all()).toEqual([]);
     expect(db.prepare("SELECT * FROM supplier_observations").all()).toEqual([]);

@@ -33,6 +33,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 
 import type { IncomingConsultation } from "../agent/merchant/types.js";
+import { parseProductCreateInput } from "../agent/merchant/types.js";
 import type { A2aNegotiationRow } from "../merchant/workbench-service.js";
 import {
   MerchantWorkbenchError,
@@ -194,11 +195,22 @@ export class MerchantCoreService {
     return this.commandLogInstance;
   }
 
-  /** prepare：商品创建（force_pending 候选，绝不直接执行）。 */
+  /** prepare：商品创建（force_pending 候选，绝不直接执行）。入参白名单
+   *  校验 + merchant_id 钉死归属（审查 P1：否则批准后执行必然失败或可跨
+   *  商家写，白烧人工确认）。 */
   prepareProductCreate(input: { product: unknown; reason?: string }) {
+    let product: unknown;
+    try {
+      product = parseProductCreateInput(input.product, this.workbench.ownerIdRef);
+    } catch (err) {
+      throw new MerchantWorkbenchError(
+        "validation",
+        `product 入参不合法：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     return this.commands.prepare({
       tool: "kiwi_merchant_prepare_product_create",
-      arguments: { product: input.product },
+      arguments: { product },
       ...(input.reason !== undefined ? { reason: input.reason } : {}),
     });
   }
@@ -259,12 +271,14 @@ export class MerchantCoreService {
     });
   }
 
-  /** 确认通道：批准并执行（授权主体一致性 + 确认凭证 + 重校验 + 幂等 + 回读）。 */
+  /** 确认通道：批准并执行（确认凭证 + 重校验 + 幂等 + 回读）。单商家单主体
+   *  实例的便捷包装——主体恒为本实例 commandPrincipalId；跨主体校验在
+   *  commands.executeApproved（管理页传入会话主体时真实生效）。 */
   executeApproved(commandId: string, confirmationToken?: string) {
     return this.commands.executeApproved(commandId, this.commandPrincipalId, confirmationToken);
   }
 
-  /** 确认通道：拒绝候选。 */
+  /** 确认通道：拒绝候选（同上：单主体便捷包装）。 */
   rejectCandidate(commandId: string, confirmationToken?: string) {
     return this.commands.reject(commandId, this.commandPrincipalId, confirmationToken);
   }
@@ -288,9 +302,18 @@ export class MerchantCoreService {
     if (this.operationsStore === undefined) {
       throw new MerchantWorkbenchError("unavailable", "operation store 未配置（不可得）");
     }
-    const key =
-      input.idempotency_key ??
-      `csv-${createHash("sha256").update(input.csv).digest("hex").slice(0, 16)}`;
+    // 幂等键（审查 P1）：显式 key 与参数摘要绑定——同 key 同内容仍幂等重放，
+    // 同 key 不同内容不再碰撞（旧逻辑会静默返回旧 operation 并谎报成功）；
+    // 空/纯空白 key 拒绝（nullish 兜底不覆盖空串）。
+    const userKey = input.idempotency_key?.trim() ?? "";
+    if (input.idempotency_key !== undefined && userKey === "") {
+      throw new MerchantWorkbenchError(
+        "validation",
+        "idempotency_key 不能为空字符串（省略该参数即自动按内容摘要生成）",
+      );
+    }
+    const digest = createHash("sha256").update(input.csv).digest("hex").slice(0, 16);
+    const key = userKey !== "" ? `csv-${userKey}-${digest}` : `csv-${digest}`;
     // 预览：解析 + 新增/更新判定（逐行错误回执）
     const current = await this.workbench.merchantClientRef.listProducts(this.workbench.ownerIdRef);
     const { preview } = parseProductCsv(input.csv, new Set(current.map((p) => p.sku)));
@@ -312,9 +335,16 @@ export class MerchantCoreService {
     if (this.operationsStore === undefined) {
       throw new MerchantWorkbenchError("unavailable", "operation store 未配置（不可得）");
     }
-    const key =
-      input.idempotency_key ??
-      `withdraw-${createHash("sha256").update(input.skus.join(",")).digest("hex").slice(0, 16)}`;
+    // 幂等键（审查 P1）：与 CSV 导入同规则——显式 key 绑定 skus 摘要，空串拒绝。
+    const userKey = input.idempotency_key?.trim() ?? "";
+    if (input.idempotency_key !== undefined && userKey === "") {
+      throw new MerchantWorkbenchError(
+        "validation",
+        "idempotency_key 不能为空字符串（省略该参数即自动按内容摘要生成）",
+      );
+    }
+    const digest = createHash("sha256").update(input.skus.join(",")).digest("hex").slice(0, 16);
+    const key = userKey !== "" ? `withdraw-${userKey}-${digest}` : `withdraw-${digest}`;
     return this.commands.prepare({
       tool: "kiwi_merchant_prepare_products_withdraw",
       arguments: { skus: input.skus, idempotency_key: key },

@@ -115,15 +115,24 @@ describe("F04：CSV 导入闭环", () => {
     expect(fetched.receipts.some((r) => !r.ok && r.item === "line 4")).toBe(true);
     expect(fetched.receipts.filter((r) => r.ok)).toHaveLength(2);
 
-    // 幂等：相同幂等键再执行返回同一 operation，不重复导入
+    // 幂等键与内容摘要绑定（审查 P1）：同 key 不同内容 → 新 operation（不再
+    // 静默返回旧 operation 谎报成功）；同 key 同内容 → 真重放，同一 operation。
     const prepared2 = await core.prepareProductsImport({ csv: CSV_OK, idempotency_key: "imp-2" });
     const outcome2 = await core.executeApproved(prepared2.candidate.candidate_id);
     const op2 = (outcome2 as { output?: { operation_id?: string } }).output;
-    expect(op2?.operation_id).toBe(operationId);
+    expect(op2?.operation_id).not.toBe(operationId);
+
+    const prepared3 = await core.prepareProductsImport({
+      csv: CSV_OK + "sku-004,坏行,abc,1\n",
+      idempotency_key: "imp-2",
+    });
+    const outcome3 = await core.executeApproved(prepared3.candidate.candidate_id);
+    const op3 = (outcome3 as { output?: { operation_id?: string } }).output;
+    expect(op3?.operation_id).toBe(operationId);
     db.close();
   });
 
-  it("撤回逐项回执（上游不支持时逐项明确失败）", async () => {
+  it("撤回逐项回执（上游不支持时逐项明确失败；全部失败 → 候选 superseded 不谎报已执行）", async () => {
     const refusing = new FakeMerchantClient({ products: [fakeMerchantProduct()] });
     refusing.pauseListing = async () => {
       throw new Error("shopping-cli 2.x 不提供 listing pause 端点");
@@ -134,10 +143,10 @@ describe("F04：CSV 导入闭环", () => {
       idempotency_key: "wd-1",
     });
     const outcome = await core.executeApproved(prepared.candidate.candidate_id);
-    const op = (outcome as { output?: { status?: string; receipts?: Array<{ ok: boolean }> } })
-      .output;
-    expect(op?.status).toBe("failed");
-    expect(op?.receipts?.[0]?.ok).toBe(false);
+    // 审查 P1：operation 终态 failed → 输出 ok:false → 候选标 superseded
+    //（审计不再把「全部失败」记成已执行），提示重新生成候选。
+    expect(outcome.kind).toBe("stale");
+    expect(outcome.kind === "stale" && outcome.reason).toContain("执行失败");
     db.close();
   });
 });
@@ -237,11 +246,16 @@ describe("F29：微信绑定状态（只读、脱敏、不可得明确）", () =
 });
 
 describe("7×24：告警与备份恢复演练", () => {
-  it("告警：进程未运行/商品源不可用/积压/磁盘/证书临期", () => {
+  it("告警：进程未运行/商品源不可用/积压/磁盘/证书临期（备份新鲜，不产生 backup_stale）", () => {
     const dir = tmp();
     writeFileSync(
       path.join(dir, "capability-probe.json"),
       JSON.stringify({ ok: false, error: "down" }),
+    );
+    mkdirSync(path.join(dir, "backups"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "backups", "latest-backup.json"),
+      JSON.stringify({ created_at: T0 }),
     );
     const report = collectMerchantHealth({
       dataDir: dir,

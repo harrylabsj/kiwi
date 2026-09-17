@@ -28,6 +28,7 @@
  */
 
 import type { MerchantClient, MerchantProductPatch } from "../agent/merchant/types.js";
+import { parseProductCreateInput } from "../agent/merchant/types.js";
 import type { AgentProfile, MerchantPolicy } from "../config/profile.js";
 import { publicProductView } from "../merchant/workbench-service.js";
 import { executeProductsImport } from "./product-import.js";
@@ -81,12 +82,19 @@ export class MerchantExecutorRegistry {
       return publicProductView(await ctx.merchantClient.getProduct(sku));
     };
     /** 硬策略强制（执行器层兜底）：价格变更不得低于私有底价（BUG-07：按
-     *  运行中生效策略校验，未配置运行中策略时回退启动 profile）。 */
-    const enforceFloor = (price: number | undefined): void => {
+     *  运行中生效策略校验，未配置运行中策略时回退启动 profile）。price 为
+     *  undefined = 本次变更不涉及价格（跳过）；非有限数值一律拒绝（审查 P1：
+     *  恒 false 比较会让底价检查纸面化）。 */
+    const enforceFloor = (price: unknown): void => {
+      if (price === undefined) return;
       const floor =
         ctx.currentPolicy?.()?.min_unit_price_private ??
         ctx.profile.merchant_policy?.min_unit_price_private;
-      if (price !== undefined && floor !== undefined && price < floor) {
+      if (floor === undefined) return;
+      if (typeof price !== "number" || !Number.isFinite(price)) {
+        throw new Error("执行被硬策略拒绝：price 不是有限数值（不透出底价数值）");
+      }
+      if (price < floor) {
         throw new Error("执行被硬策略拒绝：价格低于私有底价（不透出底价数值）");
       }
     };
@@ -106,6 +114,8 @@ export class MerchantExecutorRegistry {
       },
       {
         tool: "kiwi_merchant_prepare_product_create",
+        // 审查 P1：执行前白名单重校验并钉死 merchant_id 归属——prepare 层
+        // 已校验（service），这里防御 store 参数被篡改/迁移旧库缺校验。
         readPreconditions: async (args) => {
           const product = (args.product ?? {}) as { sku?: string };
           const sku = String(product.sku ?? "");
@@ -120,13 +130,7 @@ export class MerchantExecutorRegistry {
           return { sku, exists };
         },
         execute: async (args, c) => {
-          const product = args.product as {
-            sku: string;
-            merchant_id: string;
-            title: string;
-            price: number;
-            stock: number;
-          };
+          const product = parseProductCreateInput(args.product, c.ownerId);
           enforceFloor(product.price);
           return c.merchantClient.createProduct(product);
         },
@@ -245,7 +249,9 @@ export class MerchantExecutorRegistry {
               });
             }
           }
-          return c.operations.finish(op.operation.operation_id, receipts);
+          const finished = c.operations.finish(op.operation.operation_id, receipts);
+          // 全部项失败 → ok:false（审查 P1：否则候选仍被标 executed，审计谎报成功）
+          return finished.status === "failed" ? { ok: false, operation: finished } : finished;
         },
       },
     ]);

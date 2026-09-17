@@ -53,9 +53,10 @@ function parseArgs(argv) {
     confirmNewInstance: false,
     dryRun: false,
     skipCredentialsCheck: false,
-    // 与 product-init 默认 shopping-cli base_url 8765 对齐；可用
-    // --shopping-args 覆盖为发行版实际启动参数。
-    shoppingArgs: "serve --port 8765",
+    // 与 product-init 默认 shopping-cli base_url 8765 对齐。审查 P2：3.x 的
+    // CLI 无顶层 serve（FastAPI 栈为 `shopping api serve`，需 [api] extra）；
+    // 可用 --shopping-args 覆盖为实际发行版/版本的启动命令。
+    shoppingArgs: "api serve --port 8765",
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -134,12 +135,16 @@ function resolveExecutable(bin) {
   return result.status === 0 && resolved !== "" ? resolved : bin;
 }
 
-/** 已有安装检测：<prefix>/data 存在且非空，或 state.sqlite 存在 → true。 */
+/** 已有安装检测：`<prefix>/data` 存在且非空、state.sqlite 或 config/install.json
+ *  存在 → true（审查 P2：安装后未首启前 data/ 为空——install.json 缺失会让
+ *  重跑安装器无确认覆盖 app/config/凭据）。 */
 export function detectExistingInstall(prefix) {
   const dataDir = path.join(prefix, "data");
   if (existsSync(path.join(dataDir, "state.sqlite"))) return "已有状态库 state.sqlite";
   if (existsSync(dataDir) && readdirSync(dataDir).length > 0)
     return `已有数据目录 ${dataDir}（非空）`;
+  if (existsSync(path.join(prefix, "config", "install.json")))
+    return "已有安装记录 config/install.json";
   return undefined;
 }
 
@@ -249,6 +254,17 @@ export function main(argv = process.argv.slice(2)) {
     const c = checkCredentialsEnv(credentials.source);
     credentialsOk = c.ok;
     if (!c.ok) fail(c.error);
+    // 审查 P2：入站 token 之外，profile 的 commerce.token_env（数据引擎凭据）
+    // 缺失时装得上、起不来（所有 shopping-cli 调用 fail-closed）——违背
+    // BUG-09 目标。同样只查存在性，不读不记值。
+    const profileText = readFileSync(profileSrc, "utf8");
+    const envText = readFileSync(credentials.source, "utf8");
+    for (const m of profileText.matchAll(/^\s*token_env:\s*([A-Z_][A-Z0-9_]*)\s*$/gm)) {
+      const name = m[1];
+      if (!new RegExp(`^${name}=`, "m").test(envText)) {
+        fail(`${credentials.source} 缺 ${name} 引用（profile commerce.token_env 指向的数据引擎凭据）`);
+      }
+    }
   }
 
   const layout = {

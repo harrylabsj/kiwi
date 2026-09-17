@@ -35,7 +35,8 @@ export interface MerchantAlert {
     | "registration_invalid"
     | "backlog"
     | "disk_low"
-    | "cert_expiring";
+    | "cert_expiring"
+    | "backup_stale";
   severity: "critical" | "warning";
   message: string;
 }
@@ -51,6 +52,7 @@ export interface MerchantHealthReport {
     registration: { ok: boolean; error?: string; evaluated: boolean };
     backlog: { ok: true; pending: number; threshold: number };
     certificate: { ok: boolean; days_left?: number; evaluated: boolean };
+    backup: { ok: true; evaluated: boolean; last_success_at?: string; error?: string };
   };
   /** 结构化告警事件（V2 阶段四 7×24；超阈值/失效即产生，可供通知通道消费）。 */
   alerts: MerchantAlert[];
@@ -80,6 +82,9 @@ export interface MerchantHealthDeps {
   certDaysLeft?: number;
   /** 能力探测记录最大有效期（BUG-05；过期记录判 unhealthy）。 */
   probeMaxAgeMs?: number;
+  /** 备份新鲜度（审查 P2：备份停摆进告警通道，不再只活在内存 jobs 里）。
+   *  读 <backupsDir>/latest-backup.json（runBackup 成功后原子落盘）。 */
+  backupMaxAgeMs?: number;
 }
 
 export function collectMerchantHealth(deps: MerchantHealthDeps): MerchantHealthReport {
@@ -139,6 +144,37 @@ export function collectMerchantHealth(deps: MerchantHealthDeps): MerchantHealthR
   }
 
   const pending = deps.pendingCommands ?? 0;
+
+  // 备份新鲜度（审查 P2）：runBackup 每次成功后落 latest-backup.json；
+  // 超过 maxAge（缺省 3×5min 备份周期）或从未成功 → 告警（warning，不翻转
+  // 整体 ok——进程/数据面健康不受备份停摆影响，但必须可见）。
+  const backupMaxAgeMs = deps.backupMaxAgeMs ?? 15 * 60_000;
+  const latestBackupPath = path.join(deps.dataDir, "backups", "latest-backup.json");
+  // backup 与 backlog 同为 warning 面：不翻转整体 ok（进程/数据面健康不受
+  // 备份停摆影响），停摆经 backup_stale 告警进入通知通道。
+  let backupStale: string | undefined;
+  let backupLastSuccessAt: string | undefined;
+  if (!existsSync(latestBackupPath)) {
+    backupStale = "尚无成功备份记录（latest-backup.json 不存在）";
+  } else {
+    try {
+      const record = JSON.parse(readFileSync(latestBackupPath, "utf8")) as {
+        created_at?: string;
+      };
+      const at = typeof record.created_at === "string" ? record.created_at : undefined;
+      const age = at !== undefined ? Date.parse(checkedAt) - Date.parse(at) : Number.NaN;
+      if (!Number.isFinite(age)) {
+        backupStale = "latest-backup.json 缺少有效 created_at";
+      } else if (age > backupMaxAgeMs) {
+        backupStale = `最近成功备份距今 ${Math.round(age / 60000)} 分钟（阈值 ${Math.round(backupMaxAgeMs / 60000)}）`;
+      } else if (at !== undefined) {
+        backupLastSuccessAt = at;
+      }
+    } catch (err) {
+      backupStale = `latest-backup.json 损坏：${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
   const checks = {
     processes,
     product_source: productSource,
@@ -157,6 +193,12 @@ export function collectMerchantHealth(deps: MerchantHealthDeps): MerchantHealthR
     },
     // Backlog is a warning condition and should not trigger process restart.
     backlog: { ok: true as const, pending, threshold: BACKLOG_ALERT_THRESHOLD },
+    backup: {
+      ok: true as const,
+      evaluated: true,
+      ...(backupLastSuccessAt !== undefined ? { last_success_at: backupLastSuccessAt } : {}),
+      ...(backupStale !== undefined ? { error: backupStale } : {}),
+    },
     certificate: {
       ok: deps.certDaysLeft === undefined || deps.certDaysLeft > 0,
       evaluated: deps.certDaysLeft !== undefined,
@@ -198,6 +240,13 @@ export function collectMerchantHealth(deps: MerchantHealthDeps): MerchantHealthR
   }
   if (!checks.disk.ok) {
     alerts.push({ code: "disk_low", severity: "warning", message: "磁盘余量低于下限" });
+  }
+  if (!checks.backup.ok) {
+    alerts.push({
+      code: "backup_stale",
+      severity: "warning",
+      message: `备份停摆：${checks.backup.error ?? "未知"}`,
+    });
   }
   if (deps.certDaysLeft !== undefined && deps.certDaysLeft <= CERT_EXPIRING_DAYS) {
     alerts.push({

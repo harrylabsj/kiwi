@@ -44,11 +44,14 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { writeFileAtomic } from "../fs/atomic-write.js";
 
 export interface BackupManifest {
   created_at: string;
   source_dir: string;
   files: Array<{ path: string; bytes: number; sha256: string }>;
+  /** 审查 P2：跳过未备份的路径（如 symlink），让恢复侧的数据缺口可见。 */
+  skipped?: string[];
 }
 
 export interface BackupResult {
@@ -57,11 +60,16 @@ export interface BackupResult {
   rotated_out: string[];
 }
 
-function walk(dir: string, base: string, out: string[]): void {
+function walk(dir: string, base: string, out: string[], skipped: string[]): void {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) walk(full, base, out);
+    if (entry.isDirectory()) walk(full, base, out, skipped);
     else if (entry.isFile()) out.push(path.relative(base, full));
+    else if (entry.isSymbolicLink()) {
+      // 审查 P2：symlink 数据静默丢弃会让恢复后出现「校验全绿」的数据缺口
+      // ——至少记入 manifest 跳过清单，让缺口可见。
+      skipped.push(path.relative(base, full));
+    }
   }
 }
 
@@ -77,11 +85,16 @@ function sha256File(file: string): string {
 function snapshotSqlite(src: string, dst: string): void {
   mkdirSync(path.dirname(dst), { recursive: true, mode: 0o700 });
   rmSync(dst, { force: true });
+  if (!existsSync(src)) {
+    // 审查 P2：DatabaseSync 缺省会静默建空库——源在 walk 与快照之间消失时
+    // 会产出「校验全绿」的空库快照（静默数据丢失）。fail-closed。
+    throw new Error(`SQLite 源库不存在，拒绝快照（fail-closed）：${src}`);
+  }
   let lastErr: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     let db: DatabaseSync | undefined;
     try {
-      db = new DatabaseSync(src);
+      db = new DatabaseSync(src, { readOnly: true });
       db.exec("PRAGMA busy_timeout = 2000");
       // VACUUM INTO 目标路径防注入：单引号转义
       db.exec(`VACUUM INTO '${dst.replaceAll("'", "''")}'`);
@@ -116,7 +129,9 @@ function snapshotSqlite(src: string, dst: string): void {
   );
 }
 
-/** 快照备份 + 轮换（keepLatest 份）。幂等：同时间戳目录复用覆盖。 */
+/** 快照备份 + 轮换（keepLatest 份）。幂等：同时间戳目录复用覆盖。
+ *  启动时清理孤儿快照目录（审查 P2：优雅关闭/崩溃打断备份留下的无 manifest
+ *  目录既不参与轮换也永不清理，反复在备份窗口重启可累积占满磁盘）。 */
 export function runBackup(options: {
   dataDir: string;
   backupsDir: string;
@@ -125,12 +140,31 @@ export function runBackup(options: {
 }): BackupResult {
   const now = (options.now ?? (() => new Date().toISOString()))();
   const keep = options.keepLatest ?? 10;
+  // 孤儿快照清理：无 manifest.json 且修改时间超过 1 小时的目录（1 小时缓冲
+  // 避免误删并发进行中的快照——jobs 已串行，此处是双保险）。
+  try {
+    for (const entry of readdirSync(options.backupsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const dir = path.join(options.backupsDir, entry.name);
+      if (existsSync(path.join(dir, "manifest.json"))) continue;
+      try {
+        if (Date.now() - statSync(dir).mtimeMs > 60 * 60 * 1000) {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      } catch {
+        // 单个目录清理失败不影响本轮备份
+      }
+    }
+  } catch {
+    // backups 目录不存在等：交给下方 mkdirSync
+  }
   const stamp = now.replace(/[:.]/g, "-");
   const snapshotDir = path.join(options.backupsDir, stamp);
   mkdirSync(snapshotDir, { recursive: true, mode: 0o700 });
 
   const files: string[] = [];
-  walk(options.dataDir, options.dataDir, files);
+  const skipped: string[] = [];
+  walk(options.dataDir, options.dataDir, files, skipped);
   // 不备份 backups 自身（若 backups 在 dataDir 内）、锁文件与 SQLite WAL/SHM 临时文件
   const included = files.filter(
     (f) =>
@@ -147,7 +181,12 @@ export function runBackup(options: {
       const bSql = b.endsWith(".sqlite") ? 0 : 1;
       return aSql - bSql || (a < b ? -1 : 1);
     });
-    const manifest: BackupManifest = { created_at: now, source_dir: options.dataDir, files: [] };
+    const manifest: BackupManifest = {
+      created_at: now,
+      source_dir: options.dataDir,
+      files: [],
+      ...(skipped.length > 0 ? { skipped } : {}),
+    };
     for (const rel of sorted) {
       const src = path.join(options.dataDir, rel);
       const dst = path.join(snapshotDir, rel);
@@ -163,6 +202,12 @@ export function runBackup(options: {
     writeFileSync(path.join(snapshotDir, "manifest.json"), JSON.stringify(manifest, null, 2), {
       mode: 0o600,
     });
+    // 审查 P2：成功备份的最新时间戳（health 的 backup_stale 告警读取）。
+    writeFileAtomic(
+      path.join(options.backupsDir, "latest-backup.json"),
+      `${JSON.stringify({ created_at: now, snapshot_dir: snapshotDir }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
   } catch (err) {
     // 失败轮次不留半成品快照
     rmSync(snapshotDir, { recursive: true, force: true });
@@ -196,9 +241,20 @@ export function restoreBackup(options: { snapshotDir: string; targetDir: string 
   const manifest = JSON.parse(
     readFileSync(path.join(options.snapshotDir, "manifest.json"), "utf8"),
   ) as BackupManifest;
+  // 路径越界守卫（审查 P2）：manifest 可能来自异地/他人，files[].path 含
+  // `..` 段或绝对路径即是任意文件写入原语——逐条校验后再落盘。
+  const targetRoot = path.resolve(options.targetDir);
+  const safeRel = (rel: string): string => {
+    const normalized = path.normalize(rel);
+    if (path.isAbsolute(normalized) || normalized.split(path.sep).includes("..")) {
+      throw new Error(`备份清单路径越界（拒绝恢复）：${rel}`);
+    }
+    return normalized;
+  };
   // 先校验完整性（manifest 内每个文件存在且 sha256 一致）——不完整拒绝恢复。
   for (const f of manifest.files) {
-    const src = path.join(options.snapshotDir, f.path);
+    const rel = safeRel(f.path);
+    const src = path.join(options.snapshotDir, rel);
     if (!existsSync(src)) throw new Error(`备份快照缺文件 ${f.path}（不完整，拒绝恢复）`);
     if (sha256File(src) !== f.sha256) {
       throw new Error(`备份快照文件 ${f.path} 摘要不一致（损坏，拒绝恢复）`);
@@ -206,9 +262,9 @@ export function restoreBackup(options: { snapshotDir: string; targetDir: string 
   }
   mkdirSync(options.targetDir, { recursive: true, mode: 0o700 });
   for (const f of manifest.files) {
-    const dst = path.join(options.targetDir, f.path);
+    const dst = path.join(targetRoot, safeRel(f.path));
     mkdirSync(path.dirname(dst), { recursive: true, mode: 0o700 });
-    cpSync(path.join(options.snapshotDir, f.path), dst);
+    cpSync(path.join(options.snapshotDir, safeRel(f.path)), dst);
   }
   return { restored: manifest.files.length, verified: true };
 }

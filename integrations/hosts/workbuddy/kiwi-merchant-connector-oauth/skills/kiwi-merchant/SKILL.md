@@ -31,6 +31,9 @@ description: Use the Kiwi merchant connector to inspect catalog and inventory, f
 - `kiwi_merchant_prepare_listing_change(sku, paused, reason?)`：登记销售状态变更（暂停/恢复销售）；上游不支持时返回「不可得」，绝不把库存写零伪装下架。
 - `kiwi_merchant_prepare_review_resolve(source_protocol, source_id, resolution, reason?)`：登记人工处理候选；仅 shopping 轨可执行，A2A 轨报「不可得」（绝不跨轨）。
 - `kiwi_merchant_prepare_policy_change(patch, reason?)`：登记策略变更候选；批准后热生效，不重启。
+- `kiwi_merchant_prepare_products_import(csv, idempotency_key?, reason?)`：登记 CSV 批量导入候选（sku/title/price/stock；逐行预览回执；同幂等键同内容重放幂等）。
+- `kiwi_merchant_prepare_products_withdraw(skus, idempotency_key?, reason?)`：登记批量撤回候选（销售状态语义；上游不支持时逐项「不可得」，绝不库存写零伪装下架）。
+- `kiwi_merchant_get_operation(operation_id)`：查询长任务 operation 状态与逐项回执（queued/running/succeeded/partially_failed/failed）。
 
 ## 展示资源（MCP Apps）
 

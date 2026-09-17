@@ -1,6 +1,6 @@
 {
   "kiwi": "0.8.0",
-  "shopping_cli": ">= 2.0.0 < 3.0.0",
+  "shopping_cli": ">= 2.0.0",
   "workbuddy_min": "4.24.0",
-  "note": "版本组合锁（V2 P0-5）：shopping_cli 上限为已验证上限，超上限 fail-closed；kiwi 版本在安装时以 package.json 实际值覆写。"
+  "note": "版本组合锁：shopping_cli 保留最低兼容门槛（安装期粗检）；运行时兼容性以协议协商为准（probeCapabilities 消费网关 /capabilities 的 protocol_versions，不兼容硬拒启动；协商不可用回退 2.x legacy 已验证线）。kiwi 版本在安装时以 package.json 实际值覆写。"
 }

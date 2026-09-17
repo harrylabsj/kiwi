@@ -1,7 +1,7 @@
 {
   "sbom_version": 1,
   "package": "@harrylabsj/kiwi",
-  "package_version": "0.7.22",
+  "package_version": "0.8.0",
   "runtime_dependencies": [
     {
       "name": "@earendil-works/pi-agent-core",
@@ -14,6 +14,12 @@
       "spec": "0.83.0",
       "resolved": "0.83.0",
       "integrity": "sha512-m3IZD4g3er0V8TC9+Vpgw/sjTKqcJlkcIBy/JvsgRubuuik3tAVzyugUg4rVrShIkkOT69mEd34NEqKUIsl6JQ=="
+    },
+    {
+      "name": "@modelcontextprotocol/sdk",
+      "spec": "^1.30.0",
+      "resolved": "1.30.0",
+      "integrity": "sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA=="
     },
     {
       "name": "ajv",
@@ -35,14 +41,14 @@
     }
   ],
   "artifact": {
-    "name": "harrylabsj-kiwi-0.7.22.tgz",
-    "sha256": "a70055bebfd7cf4991ef67795c4b6f8837b6f88d2e53a791b63f7c60030e8e9e",
-    "bytes": 1166990
+    "name": "harrylabsj-kiwi-0.8.0.tgz",
+    "sha256": "98ea9fb0e90683eb2d7d38f048ba78696ff4850f7c81ffde8e521eb253d19c4b",
+    "bytes": 1311988
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-09-03T11:54:47.010Z"
+  "generated_at": "2026-09-17T00:56:13.160Z"
 }

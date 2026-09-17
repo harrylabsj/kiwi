@@ -26,8 +26,12 @@
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
-export const OPERATION_STATUSES = [
-  "queued",
+/** running 状态的陈旧阈值（审查 P2）：超过该时长无更新视为进程中断残留，
+ *  同幂等键重入时标记 failed 并放行新任务。30 分钟 > 单行 HTTP 超时（10s）
+ *  × 批量行数的合理上限。 */
+export const RUNNING_STALE_MS = 30 * 60 * 1000;
+
+export const OPERATION_STATUSES = [  "queued",
   "running",
   "succeeded",
   "partially_failed",
@@ -72,7 +76,9 @@ export class MerchantOperationStore {
     this.db.exec(OPERATION_SCHEMA);
   }
 
-  /** 幂等创建：同 (kind, idempotency_key) 返回既有 operation（created=false）。 */
+  /** 幂等创建：同 (kind, idempotency_key) 返回既有 operation（created=false）。
+   *  审查 P2：命中 running 且长时间无更新（超过 RUNNING_STALE_MS，疑似进程
+   *  中断）→ 标 failed 后新建，避免同幂等键被永久卡死的 operation 吞掉。 */
   createOrGet(input: { kind: string; idempotencyKey: string }): {
     operation: MerchantOperation;
     created: boolean;
@@ -80,7 +86,27 @@ export class MerchantOperationStore {
     const existing = this.db
       .prepare("SELECT * FROM merchant_operations WHERE kind = ? AND idempotency_key = ?")
       .get(input.kind, input.idempotencyKey) as unknown as OperationRow | undefined;
-    if (existing !== undefined) return { operation: rowToOperation(existing), created: false };
+    if (existing !== undefined) {
+      if (
+        existing.status === "running" &&
+        Date.parse(this.now()) - Date.parse(existing.updated_at) > RUNNING_STALE_MS
+      ) {
+        this.set(
+          existing.operation_id,
+          "failed",
+          [
+            {
+              item: "(operation)",
+              ok: false,
+              detail: `任务在 running 状态停留超过 ${Math.round(RUNNING_STALE_MS / 60000)} 分钟（疑似进程中断），已标记失败`,
+            },
+          ],
+          "stale_running",
+        );
+      } else {
+        return { operation: rowToOperation(existing), created: false };
+      }
+    }
     const now = this.now();
     const id = `op_${randomBytes(12).toString("hex")}`;
     this.db

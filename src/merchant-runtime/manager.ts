@@ -142,15 +142,22 @@ export class MerchantRuntimeManager {
     try {
       const record = JSON.parse(readFileSync(this.pidFile(name), "utf8")) as PidRecord;
       if (!Number.isInteger(record.pid) || record.pid <= 0 || !pidAlive(record.pid)) return undefined;
-      if (!this.matchesProcess(record.pid, this.spec(name))) return undefined;
+      const matched = this.matchesProcess(record.pid, this.spec(name));
+      if (matched === false) return undefined;
+      // matched === true | "unknown"：unknown（ps 不可用/超时）时 pid 存活 +
+      // pidfile 记录即证据——按存活认领，绝不 fail-open 双 spawn（审查 P2）。
       return record.pid;
     } catch {
       return undefined;
     }
   }
 
-  /** PID 存活不等于仍是 Kiwi 子进程；校验命令行，避免 PID 复用误杀。 */
-  private matchesProcess(pid: number, spec: ManagedServiceSpec): boolean {
+  /**
+   * PID 存活不等于仍是 Kiwi 子进程；校验命令行，避免 PID 复用误杀。
+   * 返回 "unknown" = 查询手段失败（ps 缺失/超时）——不能证明进程不存在，
+   * 调用方按保守（存活）处理，绝不据此重拉新实例（审查 P2 fail-open 修复）。
+   */
+  private matchesProcess(pid: number, spec: ManagedServiceSpec): boolean | "unknown" {
     // Windows does not provide a portable command-line query through the
     // standard Node APIs; keep the live-pid behavior there and rely on the
     // service manager's per-instance directory isolation.
@@ -162,7 +169,7 @@ export class MerchantRuntimeManager {
       }).trim();
       return spec.command.every((arg) => arg === "" || commandLine.includes(arg));
     } catch {
-      return false;
+      return "unknown";
     }
   }
 
@@ -207,11 +214,27 @@ export class MerchantRuntimeManager {
     }
     const state: RunningChild = { pid: child.pid, restarts: 0, stopped: false };
     this.children.set(name, state);
-    writeFileSync(
-      this.pidFile(name),
-      `${JSON.stringify({ pid: child.pid, command: spec.command, ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}) })}\n`,
-      { mode: 0o600 },
-    );
+    try {
+      writeFileSync(
+        this.pidFile(name),
+        `${JSON.stringify({ pid: child.pid, command: spec.command, ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}) })}\n`,
+        { mode: 0o600 },
+      );
+    } catch (err) {
+      // 审查 P2：pidfile 写失败时子进程已在跑——不回滚就会出现「无 pidfile
+      // 的活子进程」，异常路径重试会双 spawn（双 a2a 抢账本/端口）。
+      this.children.delete(name);
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // 已退出
+      }
+      throw new MerchantRuntimeError(
+        `服务 ${name} pidfile 写入失败，已终止刚启动的子进程：` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        "spawn_failed",
+      );
+    }
     rmSync(this.exitFile(name), { force: true });
     let finalized = false;
     const finalize = (code: number | null): void => {
@@ -242,7 +265,29 @@ export class MerchantRuntimeManager {
     this.spec(name);
     const current = this.children.get(name);
     if (current !== undefined) current.stopped = true;
-    const pid = current?.pid ?? this.livePid(name);
+    let pid = current?.pid ?? this.livePid(name);
+    if (pid === undefined) {
+      // 审查 P2：spec（argv）变更后旧进程与新 spec 命令行不符，livePid 认领
+      // 不到——按 pidfile 原始记录的 command 校验并停掉，否则旧进程永远停
+      // 不掉且 start 会双跑（旧实例以旧策略继续对外报价）。
+      try {
+        const record = JSON.parse(readFileSync(this.pidFile(name), "utf8")) as PidRecord;
+        if (
+          Number.isInteger(record.pid) &&
+          record.pid > 0 &&
+          pidAlive(record.pid) &&
+          this.matchesProcess(record.pid, {
+            name,
+            command: record.command,
+            ...(record.cwd !== undefined ? { cwd: record.cwd } : {}),
+          }) !== false
+        ) {
+          pid = record.pid;
+        }
+      } catch {
+        // 无 pidfile / 解析失败：按无进程处理
+      }
+    }
     if (pid === undefined) {
       rmSync(this.pidFile(name), { force: true });
       return this.stateOf(name);

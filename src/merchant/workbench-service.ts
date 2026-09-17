@@ -133,7 +133,16 @@ export function parseProductPatch(value: unknown): MerchantProductPatch {
   if (typeof v.description === "string") patch.description = v.description;
   if (Array.isArray(v.delivery_attributes))
     patch.delivery_attributes = v.delivery_attributes.map(String);
-  if (typeof v.paused === "boolean") patch.paused = v.paused;
+  // 审查 P1：上游 PATCH /products 无 paused/active 字段（2.x/3.x 实测），
+  // draft 路径带 paused 会「批准执行成功但实际不生效」。显式拒绝并引导到
+  // prepare_listing_change（销售状态语义；当前引擎无端点时报「不可得」）。
+  if ("paused" in v) {
+    throw new MerchantWorkbenchError(
+      "validation",
+      "changes.paused 不受商品变更支持（上游 PATCH 无该字段，执行不会生效）；" +
+        "上下架请使用 kiwi_merchant_prepare_listing_change（销售状态语义）。",
+    );
+  }
   return patch;
 }
 
@@ -279,11 +288,15 @@ export class MerchantWorkbenchService {
     }
   }
 
-  /** 按 SKU 读取一个商品（白名单）。 */
+  /** 按 SKU 读取一个商品（白名单）。审查 P2：非本商家的 SKU 按未找到处理
+   *  （工具语义是「本商家目录中的商品」，不校验会返回其他商家的公开商品）。 */
   async getPublicProduct(sku: string, merchantId?: string): Promise<PublicProductView> {
     try {
       this.assertMerchantId(merchantId);
       const product = await this.merchantClient.getProduct(sku);
+      if (product.merchant_id !== this.ownerId) {
+        throw new MerchantWorkbenchError("not_found", `商品 ${sku} 不属于本商家`);
+      }
       return publicProductView(product);
     } catch (err) {
       throw toWorkbenchError(err);
@@ -443,6 +456,22 @@ export class MerchantWorkbenchService {
    * 幂等：重复批准不会重复执行（executed 后返回 not_approvable）。
    */
   async approveCandidate(candidateId: string): Promise<ApprovalExecutionResult> {
+    // 审查 P2：同候选并发批准串行化——前一个执行的 await 窗口内第二个调用
+    // 会看到 approved 状态而重复进入执行（与 kernel 的 enqueue 语义对齐）。
+    const pending = this.approveInFlight.get(candidateId);
+    if (pending !== undefined) await pending;
+    const exec = this.doApproveCandidate(candidateId);
+    this.approveInFlight.set(candidateId, exec.then(() => undefined, () => undefined));
+    try {
+      return await exec;
+    } finally {
+      this.approveInFlight.delete(candidateId);
+    }
+  }
+
+  private readonly approveInFlight = new Map<string, Promise<void>>();
+
+  private async doApproveCandidate(candidateId: string): Promise<ApprovalExecutionResult> {
     try {
       const candidate = this.approvals.get(candidateId);
       if (candidate === undefined) {

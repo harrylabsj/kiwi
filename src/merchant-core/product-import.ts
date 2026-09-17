@@ -148,7 +148,7 @@ export async function executeProductsImport(input: {
   merchantId: string;
   merchantClient: MerchantClient;
   operations: MerchantOperationStore;
-}): Promise<MerchantOperation> {
+}): Promise<MerchantOperation | { ok: false; operation: MerchantOperation }> {
   const existing = input.operations.createOrGet({
     kind: PRODUCTS_IMPORT_OPERATION_KIND,
     idempotencyKey: input.idempotencyKey,
@@ -189,12 +189,15 @@ export async function executeProductsImport(input: {
         });
       }
     }
-    return input.operations.finish(operation.operation_id, receipts);
+    const finished = input.operations.finish(operation.operation_id, receipts);
+    // 全部行失败 → ok:false（审查 P1：否则候选仍被标 executed，审计谎报成功）
+    return finished.status === "failed" ? { ok: false, operation: finished } : finished;
   } catch (err) {
-    return input.operations.finish(
+    const failed = input.operations.finish(
       operation.operation_id,
       [],
       err instanceof Error ? err.message : String(err),
     );
+    return { ok: false, operation: failed };
   }
 }

@@ -116,7 +116,6 @@ export class FakeMerchantClient implements MerchantClient {
       ...(patch.delivery_attributes !== undefined
         ? { delivery_attributes: patch.delivery_attributes }
         : {}),
-      ...(patch.paused !== undefined ? { paused: patch.paused } : {}),
     };
     this.products.set(sku, updated);
     return updated;
@@ -147,7 +146,12 @@ export class FakeMerchantClient implements MerchantClient {
   }
 
   async pauseListing(sku: string, paused: boolean): Promise<MerchantCatalogProduct> {
-    return this.updateProduct(sku, { paused });
+    // Fake 演示态支持 listing pause（真实引擎无该端点，HttpMerchantClient
+    // fail-closed）；直接改 paused 字段，不经 PATCH patch（真实网关无此字段）。
+    const product = this.requireProduct(sku);
+    const updated = { ...product, paused };
+    this.products.set(sku, updated);
+    return updated;
   }
 
   private requireProduct(sku: string): MerchantCatalogProduct {

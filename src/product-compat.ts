@@ -30,10 +30,19 @@ export interface VersionRange {
   maxExclusive?: string;
 }
 
-/** Kiwi 0.6.0 支持的 shopping-cli 版本范围（数据引擎契约面）：已验证 2.x 线，
- *  >= 2.0.0 < 3.0.0。上限是已验证上限（V2 P0-5：>= 2.0.0 无上限不等于接口
- *  能力合格——3.x 未实测，fail-closed 拒绝直到实测后抬升）。 */
+/** Kiwi Merchant 支持的 shopping-cli 版本范围（数据引擎契约面）：保留最低门槛，
+ * 兼容性以运行时协议协商为准（probeCapabilities 消费网关 /capabilities 的
+ * protocol_versions），而不是用过时的主版本上限阻塞升级。 */
 export const SHOPPING_CLI_COMPAT: VersionRange = {
+  min: "2.0.0",
+};
+
+/**
+ * Legacy 已验证线（协商不可用时的回退）：/capabilities 端点缺失、无权限或
+ * 瞬时故障时无法协商协议，只信任 2.x 已实测线；3.x 网关都带 /capabilities，
+ * 「3.x 却协商不了」按不可判定 fail-closed 处理（< 3.0.0 才回退放行）。
+ */
+export const SHOPPING_CLI_LEGACY_VERIFIED: VersionRange = {
   min: "2.0.0",
   maxExclusive: "3.0.0",
 };

@@ -24,7 +24,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const MEMORY_SCHEMA_VERSION = 6;
+export const MEMORY_SCHEMA_VERSION = 7;
 
 export class MigrationError extends Error {
   constructor(message: string) {
@@ -343,6 +343,14 @@ CREATE TABLE supplier_observations (
 CREATE INDEX idx_supplier_observations_rel ON supplier_observations (relationship_id, observed_at);
 `;
 
+const MIGRATION_7 = `
+-- 审查 P1（审批双通道竞态）：执行认领标记。status 的 CHECK 约束无法 ALTER，
+-- 故不新增状态值：认领 = approved 且 executing_at 非空（条件更新原子占位），
+-- 执行成功/失败后状态照常流转（executing_at 留作审计）；崩溃后重启恢复把
+-- approved + executing_at 非空的候选标 superseded（外部副作用不可判定）。
+ALTER TABLE action_candidates ADD COLUMN executing_at TEXT;
+`;
+
 /** Ordered migrations: version number -> SQL. */
 const MIGRATIONS: Readonly<Record<number, string>> = {
   1: MIGRATION_1,
@@ -351,6 +359,7 @@ const MIGRATIONS: Readonly<Record<number, string>> = {
   4: MIGRATION_4,
   5: MIGRATION_5,
   6: MIGRATION_6,
+  7: MIGRATION_7,
 };
 
 /**

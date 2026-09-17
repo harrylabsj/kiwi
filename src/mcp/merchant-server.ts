@@ -151,6 +151,13 @@ function writeJson(
   res.end(text);
 }
 
+/** RFC 6749 §5.1：token/授权/管理面响应必须 no-store（审查 P2：token 与
+ *  一次性确认凭证不得落入共享缓存）。 */
+const NO_STORE_HEADERS: Record<string, string> = {
+  "cache-control": "no-store",
+  pragma: "no-cache",
+};
+
 /** 读 POST body（超上限直接拒绝，绝不流入解析）。 */
 async function readBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -228,22 +235,44 @@ export async function startMerchantMcpServer(
   const transports = new Set<StreamableHTTPServerTransport>();
   let closing = false;
 
-  /** OAuth 端点结果写出（JSON / HTML 授权页 / 302 回跳）。 */
+  // 审查 P2：无认证端点限速（进程内计数，重启归零可接受——目标是抬高脚本
+  // 刷注册/在线爆破口令的成本，不做分布式级配额）。
+  const registerHits = new Map<string, { count: number; windowStart: number }>();
+  const loginFailures = new Map<string, { count: number; blockedUntil: number }>();
+  const REGISTER_LIMIT_PER_HOUR = 20;
+  const LOGIN_MAX_FAILURES = 10;
+  const LOGIN_BLOCK_MS = 5 * 60 * 1000;
+  const clientKey = (req: IncomingMessage): string => req.socket.remoteAddress ?? "unknown";
+  const pruneRateLimits = (nowMs: number): void => {
+    if (registerHits.size > 4096) {
+      for (const [k, v] of registerHits) {
+        if (nowMs - v.windowStart > 60 * 60 * 1000) registerHits.delete(k);
+      }
+    }
+    if (loginFailures.size > 4096) {
+      for (const [k, v] of loginFailures) {
+        if (nowMs >= v.blockedUntil && v.count === 0) loginFailures.delete(k);
+      }
+    }
+  };
+
+  /** OAuth 端点结果写出（JSON / HTML 授权页 / 302 回跳）。统一附加 no-store。 */
   const writeOAuthResult = (res: ServerResponse, result: OAuthHttpResult): void => {
+    const headers = { ...NO_STORE_HEADERS, ...(result.headers ?? {}) };
     if (result.html !== undefined) {
       res.writeHead(result.status, {
         "content-type": "text/html; charset=utf-8",
-        ...(result.headers ?? {}),
+        ...headers,
       });
       res.end(result.html);
       return;
     }
-    if (result.headers?.location !== undefined) {
-      res.writeHead(result.status, result.headers);
+    if (headers.location !== undefined) {
+      res.writeHead(result.status, headers);
       res.end();
       return;
     }
-    writeJson(res, result.status, result.body ?? {}, result.headers ?? {});
+    writeJson(res, result.status, result.body ?? {}, headers);
   };
 
   /** 读表单/JSON body（/oauth/token 等用 application/x-www-form-urlencoded）。 */
@@ -281,7 +310,39 @@ export async function startMerchantMcpServer(
       return true;
     }
     if (req.method === "POST" && p === "/oauth/register") {
-      writeOAuthResult(res, oauth.register(await readBody(req)));
+      // 限速（审查 P2）：注册无认证，按来源 IP 限每小时次数。
+      const nowMs = Date.now();
+      pruneRateLimits(nowMs);
+      const ip = clientKey(req);
+      const reg = registerHits.get(ip);
+      if (reg === undefined || nowMs - reg.windowStart > 60 * 60 * 1000) {
+        registerHits.set(ip, { count: 1, windowStart: nowMs });
+      } else {
+        reg.count += 1;
+        if (reg.count > REGISTER_LIMIT_PER_HOUR) {
+          writeJson(res, 429, {
+            error: "slow_down",
+            error_description: "too many client registrations from this source",
+          });
+          return true;
+        }
+      }
+      // RFC 7591：畸形 body 属客户端错误 → 400 invalid_client_metadata，
+      // 不冒泡成 500（审查 P2：此前 500 且顶层 catch 静默无日志）。
+      let body: unknown;
+      try {
+        body = await readBody(req);
+      } catch (err) {
+        process.stderr.write(
+          `[merchant oauth] /oauth/register body 解析失败：${err instanceof Error ? err.message : String(err)}\n`,
+        );
+        writeJson(res, 400, {
+          error: "invalid_client_metadata",
+          error_description: "request body must be valid JSON",
+        });
+        return true;
+      }
+      writeOAuthResult(res, oauth.register(body as Record<string, string | undefined>));
       return true;
     }
     if (req.method === "GET" && p === "/oauth/authorize") {
@@ -301,7 +362,19 @@ export async function startMerchantMcpServer(
       req.method === "POST" &&
       (p === "/oauth/authorize" || p === "/oauth/token" || p === "/oauth/revoke")
     ) {
-      const form = await readForm(req);
+      let form: Record<string, string | undefined>;
+      try {
+        form = await readForm(req);
+      } catch (err) {
+        process.stderr.write(
+          `[merchant oauth] ${p} body 解析失败：${err instanceof Error ? err.message : String(err)}\n`,
+        );
+        writeJson(res, 400, {
+          error: "invalid_request",
+          error_description: "malformed request body",
+        });
+        return true;
+      }
       let result: OAuthHttpResult;
       if (p === "/oauth/authorize") {
         const sessionId = cookieValue(req, ADMIN_SESSION_COOKIE);
@@ -344,10 +417,14 @@ export async function startMerchantMcpServer(
       // 需会话 + 一次性确认凭证（绑定候选摘要/主体/商家/动作，单次用途）。
       if (options.admin !== undefined && url.pathname.startsWith("/admin/")) {
         const admin = options.admin;
-        // 登录端点（公开；口令校验后签发会话）
+        // 登录端点（公开；口令校验后签发会话）。失败退避（审查 P2：scrypt
+        // 单次成本不足以挡在线爆破，按来源连续失败 10 次锁 5 分钟）。
         if (url.pathname === "/admin/login") {
           if (req.method === "GET") {
-            res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+            res.writeHead(200, {
+              "content-type": "text/html; charset=utf-8",
+              ...NO_STORE_HEADERS,
+            });
             res.end(
               renderAdminLoginPage({
                 next: safeAdminNext(url.searchParams.get("next") ?? undefined),
@@ -356,14 +433,36 @@ export async function startMerchantMcpServer(
             return;
           }
           if (req.method === "POST") {
+            const nowMs = Date.now();
+            pruneRateLimits(nowMs);
+            const ip = clientKey(req);
+            const failure = loginFailures.get(ip);
+            if (failure !== undefined && nowMs < failure.blockedUntil) {
+              res.writeHead(429, {
+                "content-type": "text/html; charset=utf-8",
+                ...NO_STORE_HEADERS,
+              });
+              res.end(renderAdminLoginPage({ error: "失败次数过多，请 5 分钟后再试" }));
+              return;
+            }
             const form = await readForm(req);
             const creds = readAdminCredentials(admin.adminDir);
             const password = form.password ?? "";
             if (creds === undefined || !verifyAdminPassword(password, creds.password_hash)) {
-              res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+              const count = (failure?.count ?? 0) + 1;
+              loginFailures.set(ip, {
+                count,
+                blockedUntil:
+                  count >= LOGIN_MAX_FAILURES ? nowMs + LOGIN_BLOCK_MS : failure?.blockedUntil ?? 0,
+              });
+              res.writeHead(200, {
+                "content-type": "text/html; charset=utf-8",
+                ...NO_STORE_HEADERS,
+              });
               res.end(renderAdminLoginPage({ error: "口令错误或管理员未初始化" }));
               return;
             }
+            loginFailures.delete(ip);
             const session = admin.sessions.createSession({
               principalId: creds.principal_id,
               merchantId: creds.merchant_id,
@@ -402,7 +501,11 @@ export async function startMerchantMcpServer(
               action,
             });
           };
-          res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          res.writeHead(200, {
+            "content-type": "text/html; charset=utf-8",
+            // 页面内嵌一次性确认凭证（审查 P2）：绝不进缓存。
+            ...NO_STORE_HEADERS,
+          });
           res.end(renderPendingPage(admin.merchantName, commands, tokenFor));
           return;
         }
@@ -499,7 +602,14 @@ export async function startMerchantMcpServer(
       try {
         body = req.method === "POST" ? await readBody(req) : undefined;
       } catch (err) {
-        writeJson(res, 413, {
+        // 超限 413；其余（JSON 解析失败等）属客户端错误 → 400（审查 P2）。
+        const tooLarge = err instanceof Error && err.message.includes("exceeds");
+        if (!tooLarge) {
+          process.stderr.write(
+            `[merchant mcp] /mcp body 解析失败：${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        }
+        writeJson(res, tooLarge ? 413 : 400, {
           error: "invalid_request",
           message: err instanceof Error ? err.message : String(err),
         });
@@ -534,7 +644,12 @@ export async function startMerchantMcpServer(
           res.end();
         }
       }
-    })().catch(() => {
+    })().catch((err) => {
+      // 审查 P2：顶层静默吞错让排障无迹——记错误摘要（不含 body 与凭据）。
+      process.stderr.write(
+        `[merchant mcp] ${req.method} ${req.url ?? "/"} 处理异常：` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
       if (!res.headersSent) writeJson(res, 500, { error: "internal_error" });
       else res.end();
     });

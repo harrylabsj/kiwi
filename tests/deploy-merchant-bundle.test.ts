@@ -2,7 +2,7 @@
  * deploy/merchant-bundle 安装器测试（V2 阶段一；BUG-09 修订）：
  * - 新实例必须显式 --confirm-new-instance；
  * - 已有安装（data 非空 / state.sqlite）拒绝，绝不新建空库替代；
- * - shopping-cli 版本超出已验证范围（>= 2.0.0 < 3.0.0）拒绝；
+ * - shopping-cli 版本低于兼容范围（>= 2.0.0）拒绝；
  * - BUG-09：缺 --profile / profile 非 merchant / 应用包缺 dist 或 node_modules
  *   / 凭据引用缺失 → 一律拒绝（不产出"装完却起不来"的实例）；
  * - 成功安装产出：目录布局 + 可运行应用（app/dist/cli.js + node_modules）+
@@ -76,11 +76,11 @@ function fakeProfile(): string {
   return file;
 }
 
-/** 实例凭据引用文件（值不参与断言）。 */
+/** 实例凭据引用文件（值不参与断言；token_env 名与 tests/helpers.ts profile 一致）。 */
 function fakeCredentialsEnv(): string {
   const dir = tmp();
   const file = path.join(dir, "credentials.env");
-  writeFileSync(file, "KIWI_MERCHANT_TOKEN=test-token\n");
+  writeFileSync(file, "KIWI_MERCHANT_TOKEN=test-token\nSHOPPING_AGENT_TOKEN=test-engine-token\n");
   return file;
 }
 
@@ -119,8 +119,8 @@ describe("deploy/merchant-bundle install.mjs", () => {
     expect(r.stderr).toContain("--confirm-new-instance");
   });
 
-  it("shopping-cli 版本超出已验证范围拒绝（版本锁 fail-closed）", () => {
-    const tooNew = run([
+  it("shopping-cli 版本低于兼容范围拒绝（版本锁 fail-closed）", () => {
+    const tooOld = run([
       "--prefix",
       path.join(tmp(), "inst"),
       "--confirm-new-instance",
@@ -129,11 +129,11 @@ describe("deploy/merchant-bundle install.mjs", () => {
       "--app-dir",
       fakeAppDir(),
       "--shopping-bin",
-      fakeShoppingBin("3.0.0"),
+      fakeShoppingBin("1.9.9"),
     ]);
-    expect(tooNew.status).toBe(1);
-    expect(tooNew.stderr).toContain("3.0.0");
-    expect(tooNew.stderr).toContain(">= 2.0.0 < 3.0.0");
+    expect(tooOld.status).toBe(1);
+    expect(tooOld.stderr).toContain("1.9.9");
+    expect(tooOld.stderr).toContain(">= 2.0.0");
 
     const missing = run([
       "--prefix",
@@ -273,7 +273,7 @@ describe("deploy/merchant-bundle install.mjs", () => {
     // install.json：版本锁 + preflight 全过
     const manifest = JSON.parse(readFileSync(path.join(prefix, "config", "install.json"), "utf8"));
     expect(manifest.shopping_cli_detected).toEqual({ major: 2, minor: 1, patch: 0 });
-    expect(manifest.versions.shopping_cli).toBe(">= 2.0.0 < 3.0.0");
+    expect(manifest.versions.shopping_cli).toBe(">= 2.0.0");
     expect(manifest.profile.target).toBe(path.join(prefix, "config", "profile.yaml"));
     expect(manifest.preflight.every((p: { ok: boolean }) => p.ok)).toBe(true);
     // 真实冒烟：安装产出的 cli 可执行（安装器 preflight 已跑，这里复核产物）
@@ -284,13 +284,15 @@ describe("deploy/merchant-bundle install.mjs", () => {
     expect(String(smoke.stdout)).toContain("kiwi");
   });
 
-  it("已有安装拒绝：data 非空或 state.sqlite 存在，不新建空库替代", () => {
+  it("已有安装拒绝：install.json / data 非空 / state.sqlite 存在，不新建空库替代", () => {
     const prefix = path.join(tmp(), "inst");
     const r1 = run(baseArgs(prefix));
     expect(r1.status).toBe(0);
-    // 二次安装（data/ 已被创建但为空——目录本身存在不算已有安装）
+    // 二次安装（审查 P2：install.json 已存在——已安装未首启的实例也不可被
+    // 无确认重装覆盖，app/config/凭据在升级路径落地前一律拒绝）
     const r2 = run(baseArgs(prefix));
-    expect(r2.status).toBe(0);
+    expect(r2.status).toBe(1);
+    expect(r2.stderr).toContain("已有安装");
     // 写入 state.sqlite 后 → 拒绝
     writeFileSync(path.join(prefix, "data", "state.sqlite"), "db");
     const r3 = run(baseArgs(prefix));

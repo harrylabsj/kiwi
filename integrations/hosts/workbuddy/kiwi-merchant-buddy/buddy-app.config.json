@@ -8,7 +8,9 @@
     "简介": "面向 Kiwi 商家的运营工作台：查商品与库存、跟进买家 A2A 磋商、处理人工队列、生成待批准的商品变更草稿。",
     "授权列表": "本应用连接器走 OAuth 2.1（WorkBuddy 内置 OAuth 管理器完成客户端流程，服务端端点由 Kiwi 商家实例自建），用户首次绑定时浏览器授权，无需自填 Token",
     "授权回调URL": "workbuddy://workbuddy/mcp/connector%3Akiwi-merchant/oauth/callback（WorkBuddy 私有协议，已在服务端白名单；拒绝时自动回退 http://127.0.0.1:{动态端口}/oauth/callback）",
-    "可信Origin": ["https://mcp.merchant.example.com"]
+    "可信Origin": [
+      "https://merchant.kiwi.harrylabsj.com"
+    ]
   },
   "home": {
     "slogan": "店铺运营，先看清再动手",
@@ -22,7 +24,8 @@
         "tools": [
           "kiwi_merchant_list_products",
           "kiwi_merchant_get_product",
-          "kiwi_merchant_get_inventory"
+          "kiwi_merchant_get_inventory",
+          "kiwi_merchant_get_analytics"
         ]
       },
       {
@@ -40,11 +43,12 @@
         "key": "inventory-draft",
         "name": "库存与变更草稿",
         "description": "看库存、生成待批准的商品变更草稿",
-        "systemPrompt": "你是 Kiwi 商家运营助手的「库存与变更草稿」模式。查库存用 kiwi_merchant_get_inventory（注明观察时间）。任何商品变更（价格/库存/上下架/文案）都用 kiwi_merchant_prepare_product_change 生成审批候选：返回 candidate_id 后明确告知「已生成草稿候选，等待你在 Kiwi 侧批准」，绝不声称已执行。用户没确认具体字段和新值时不生成草稿。",
+        "systemPrompt": "你是 Kiwi 商家运营助手的「库存与变更草稿」模式。查库存用 kiwi_merchant_get_inventory（注明观察时间）。商品变更（价格/库存/文案）用 kiwi_merchant_prepare_product_change 生成审批候选；上下架（暂停/恢复销售）只能用 kiwi_merchant_prepare_listing_change——商品变更草稿不支持上下架字段，生成候选也不会生效。返回 candidate_id 后明确告知「已生成草稿候选，等待你在 Kiwi 侧批准」，绝不声称已执行。用户没确认具体字段和新值时不生成草稿。",
         "tools": [
           "kiwi_merchant_get_inventory",
           "kiwi_merchant_list_products",
-          "kiwi_merchant_prepare_product_change"
+          "kiwi_merchant_prepare_product_change",
+          "kiwi_merchant_prepare_listing_change"
         ]
       }
     ],
@@ -52,44 +56,64 @@
       {
         "mode": "catalog",
         "prompt": "我现在目录里有哪些商品？",
-        "bindTools": ["kiwi_merchant_list_products"]
+        "bindTools": [
+          "kiwi_merchant_list_products"
+        ]
       },
       {
         "mode": "catalog",
         "prompt": "帮我看看 sku-001 的库存和当前售价",
-        "bindTools": ["kiwi_merchant_get_product", "kiwi_merchant_get_inventory"]
+        "bindTools": [
+          "kiwi_merchant_get_product",
+          "kiwi_merchant_get_inventory"
+        ]
       },
       {
         "mode": "catalog",
         "prompt": "这周的经营情况怎么样？",
-        "bindTools": ["kiwi_merchant_get_analytics"]
+        "bindTools": [
+          "kiwi_merchant_get_analytics"
+        ]
       },
       {
         "mode": "inquiry",
         "prompt": "最近有买家来磋商吗？进行到哪一步了？",
-        "bindTools": ["kiwi_merchant_list_a2a_negotiations"]
+        "bindTools": [
+          "kiwi_merchant_list_a2a_negotiations"
+        ]
       },
       {
         "mode": "inquiry",
         "prompt": "有没有需要我人工处理的事项？",
-        "bindTools": ["kiwi_merchant_list_human_reviews"]
+        "bindTools": [
+          "kiwi_merchant_list_human_reviews"
+        ]
       },
       {
         "mode": "inventory-draft",
         "prompt": "把 sku-001 的价格调成 88 元，先生成草稿等我批准",
-        "bindTools": ["kiwi_merchant_prepare_product_change"]
+        "bindTools": [
+          "kiwi_merchant_prepare_product_change"
+        ]
       },
       {
         "mode": "inventory-draft",
         "prompt": "哪些商品快没库存了？",
-        "bindTools": ["kiwi_merchant_list_products", "kiwi_merchant_get_inventory"]
+        "bindTools": [
+          "kiwi_merchant_list_products",
+          "kiwi_merchant_get_inventory"
+        ]
       }
     ],
     "内置连接器": "kiwi-merchant（OAuth 模式 MCP 连接器，source=kiwi-merchant，符合官方文档对首页内置连接器的 OAuth 要求；token 过渡包为独立 source kiwi-merchant-token，仅市场过渡用）"
   },
   "market": {
-    "connectors": ["kiwi-merchant"],
-    "skills": ["kiwi-merchant"],
+    "connectors": [
+      "kiwi-merchant"
+    ],
+    "skills": [
+      "kiwi-merchant"
+    ],
     "experts": [],
     "精选场景": "可选：把「询价处理」模式的两个胶囊作为推荐位展示"
   },

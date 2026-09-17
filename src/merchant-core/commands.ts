@@ -152,7 +152,18 @@ export class MerchantCommandLog {
       if (candidate === undefined) {
         throw new MerchantWorkbenchError("not_found", `未知命令 ${commandId}`);
       }
+      const executor = this.deps.executors.get(candidate.tool);
+      if (executor === undefined) {
+        // 未注册工具的命令不可执行——fail-closed 失效。
+        this.deps.store.expireCandidate(commandId);
+        throw new MerchantWorkbenchError(
+          "validation",
+          `命令 ${commandId} 的工具 ${candidate.tool} 未注册，已失效`,
+        );
+      }
       // BUG-02：可信确认记录逐项核对（候选内容摘要/主体/商家/动作/有效期/单次）。
+      // 审查 P2：核销放在候选存在性/可执行性核对**之后**——候选已死时点击
+      // 批准不再白烧一次性凭证。
       if (this.deps.confirmations !== undefined) {
         const confirmation = this.deps.confirmations.consumeConfirmation(confirmationToken ?? "", {
           candidateId: commandId,
@@ -170,15 +181,6 @@ export class MerchantCommandLog {
             "确认凭证无效/已使用/已过期或不匹配——没有可信用户确认记录时写操作不可执行",
           );
         }
-      }
-      const executor = this.deps.executors.get(candidate.tool);
-      if (executor === undefined) {
-        // 未注册工具的命令不可执行——fail-closed 失效。
-        this.deps.store.expireCandidate(commandId);
-        throw new MerchantWorkbenchError(
-          "validation",
-          `命令 ${commandId} 的工具 ${candidate.tool} 未注册，已失效`,
-        );
       }
       this.deps.store.markApproved(commandId); // 过期/非 pending → 抛错（fail-closed）
       const outcome = await executeApprovedCandidate(this.deps.store, commandId, {
@@ -243,9 +245,14 @@ export class MerchantCommandLog {
   /**
    * 重启恢复：从命令记录恢复全部已注册工具的 pending 命令（钩子按存储
    * 参数经注册表确定性重建）；未注册 tool 的命令 fail-closed 标 expired。
-   * 返回 { recovered, expiredUnknown }。
+   * 崩溃时停留在 executing 的候选一律 superseded（外部副作用不可判定，
+   * 绝不放行二次执行）。返回 { recovered, expiredUnknown, supersededExecuting }。
    */
-  recoverPending(): { recovered: number; expiredUnknown: number } {
+  recoverPending(): {
+    recovered: number;
+    expiredUnknown: number;
+    supersededExecuting: number;
+  } {
     let recovered = 0;
     let expiredUnknown = 0;
     for (const candidate of this.deps.store.listPending()) {
@@ -256,7 +263,8 @@ export class MerchantCommandLog {
         expiredUnknown += 1;
       }
     }
-    return { recovered, expiredUnknown };
+    const supersededExecuting = this.deps.store.supersedeExecuting();
+    return { recovered, expiredUnknown, supersededExecuting };
   }
 
   listPending(): WriteApprovalCandidate[] {

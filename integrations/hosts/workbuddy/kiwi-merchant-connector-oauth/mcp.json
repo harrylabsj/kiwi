@@ -2,7 +2,7 @@
   "mcpServers": {
     "kiwi-merchant": {
       "type": "streamableHttp",
-      "url": "https://mcp.merchant.example.com/mcp",
+      "url": "https://merchant.kiwi.harrylabsj.com/mcp",
       "timeout": 30000
     }
   },

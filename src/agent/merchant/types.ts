@@ -67,8 +67,6 @@ export interface MerchantProductPatch {
   tags?: string[];
   description?: string;
   delivery_attributes?: string[];
-  /** pause_or_resume_listing maps to this listing flag. */
-  paused?: boolean;
 }
 
 export interface IncomingConsultation {
@@ -177,6 +175,49 @@ export function parseMerchantCatalogProduct(value: unknown): MerchantCatalogProd
     paused: typeof v.paused === "boolean" ? v.paused : v.active === false,
     handoff_destination: typeof v.handoff_destination === "string" ? v.handoff_destination : undefined,
   };
+}
+
+/**
+ * 解析商品创建入参（白名单 + 类型校验；MCP/命令面共用）。merchant_id 强制
+ * 归属商家：缺省补 ownerId，传入不一致直接拒绝（防跨租户写）。非数值/负数
+ * price、负数或非整数 stock 一律拒绝——审批前的 prepare 即失败，不烧人工确认。
+ */
+export function parseProductCreateInput(
+  value: unknown,
+  ownerId: string,
+): MerchantProductInput {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("product 必须是对象");
+  }
+  const v = value as Record<string, unknown>;
+  const merchantId = typeof v.merchant_id === "string" && v.merchant_id !== "" ? v.merchant_id : ownerId;
+  if (merchantId !== ownerId) {
+    throw new TypeError(`product.merchant_id 与本实例商家不一致（不允许跨商家创建）`);
+  }
+  const sku = typeof v.sku === "string" ? v.sku.trim() : "";
+  if (sku === "") throw new TypeError("product.sku 必须是非空字符串");
+  const title = typeof v.title === "string" ? v.title.trim() : "";
+  if (title === "") throw new TypeError("product.title 必须是非空字符串");
+  if (typeof v.price !== "number" || !Number.isFinite(v.price) || v.price < 0) {
+    throw new TypeError("product.price 必须是非负有限数值");
+  }
+  if (typeof v.stock !== "number" || !Number.isInteger(v.stock) || v.stock < 0) {
+    throw new TypeError("product.stock 必须是非负整数");
+  }
+  const input: MerchantProductInput = {
+    merchant_id: merchantId,
+    sku,
+    title,
+    price: v.price,
+    stock: v.stock,
+  };
+  if (typeof v.currency === "string" && v.currency !== "") input.currency = v.currency;
+  if (typeof v.category === "string" && v.category !== "") input.category = v.category;
+  if (typeof v.description === "string") input.description = v.description;
+  if (Array.isArray(v.tags)) input.tags = stringArray(v.tags, "product.tags");
+  if (Array.isArray(v.delivery_attributes))
+    input.delivery_attributes = stringArray(v.delivery_attributes, "product.delivery_attributes");
+  return input;
 }
 
 export function parseInventorySnapshot(value: unknown, sku: string): InventorySnapshot {

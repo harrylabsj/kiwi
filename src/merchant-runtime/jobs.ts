@@ -40,6 +40,8 @@ export class MerchantJobs {
   private readonly jobs = new Map<string, MerchantJob>();
   private readonly timers = new Map<string, ReturnType<typeof setInterval>>();
   private readonly records = new Map<string, MerchantJobRunRecord>();
+  /** 在途任务（审查 P2：重入保护，防长备份与健康轮询自我重叠）。 */
+  private readonly inFlight = new Set<string>();
   private readonly now: () => string;
   private running = false;
 
@@ -54,10 +56,17 @@ export class MerchantJobs {
     this.records.set(job.name, { name: job.name, runs: 0 });
   }
 
-  /** 立即执行一次（异常隔离：记录 last_error，不抛出）。 */
+  /** 立即执行一次（异常隔离：记录 last_error，不抛出）。同任务在途时跳过
+   *  （审查 P2：与「串行执行」文档口径一致——长任务不与下一轮并发重叠）。 */
   async runOnce(name: string): Promise<MerchantJobRunRecord> {
     const job = this.jobs.get(name);
     if (job === undefined) throw new Error(`未知任务 ${name}`);
+    if (this.inFlight.has(name)) {
+      const record = this.records.get(name) as MerchantJobRunRecord;
+      record.last_run_at = this.now();
+      return { ...record };
+    }
+    this.inFlight.add(name);
     const record = this.records.get(name) as MerchantJobRunRecord;
     try {
       await job.run();
@@ -66,6 +75,8 @@ export class MerchantJobs {
     } catch (err) {
       record.last_run_at = this.now();
       record.last_error = err instanceof Error ? err.message : String(err);
+    } finally {
+      this.inFlight.delete(name);
     }
     record.runs += 1;
     return { ...record };

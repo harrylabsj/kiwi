@@ -23,7 +23,7 @@
 2. ~~`merchant listings/status/doctor` 占位命令宣传~~（已移除帮助文案宣传；命令保留明确「尚未实现」报错，侵入性最小）。
 3. ~~`pauseListing` 语义选型~~（已选定「销售状态」= catalog paused flag 语义，禁止库存写零伪装下架；上游 shopping-cli 2.x 无端点 → fail-closed 报「不可得」，能力探测标定 `listing_pause=false`；记录于 `merchant-client.ts` 注释）。
 4. ~~磋商摘要 terms 提取不全~~（已覆盖 counter_offer.proposed_terms / conditional_offer.base_terms / 最终协议 agreed_terms；needs_human_review = AWAITING_CLARIFICATION 或「非终态且最后一条为买家入站 offer/counter_offer/clarification 等待商家回应」）。
-5. ~~版本组合锁定~~（已验证上限：`SHOPPING_CLI_COMPAT` 改为 `>= 2.0.0 < 3.0.0`；`HttpMerchantClient.probeCapabilities()` 能力探测 + 结果落盘 `capability-probe.json`，`kiwi merchant mcp serve` 启动时执行，故障 fail-closed 警示不阻塞启动——报价路径本身已 fail-closed）。
+5. ~~版本组合锁定~~（2026-09-16 起由**协议协商**取代：安装期保留 `>= 2.0.0` 最低门槛粗检，运行时 `probeCapabilities()` 消费网关 `/capabilities` 的 `protocol_versions`，不含 `shopping.negotiation/0.1` → 硬拒启动；协商不可用回退 2.x legacy 已验证线（`< 3.0.0`），不可判定 fail-closed。详见附录第三批修复记录）。
 
 ## 三、前置决策
 
@@ -103,7 +103,26 @@
 - **BUG-08（P1）"全量完成"与验收矩阵不一致**：矩阵条目加 `v2Scope`（committed/deferred）与 `reach`（mcpTools/mcpResources/adminPage/cli 到达路径）——committed 条目必须 wired/partial（承诺项不得 pending）、deferred 必须 pending（延后项不得宣称交付）、partial 必须附受限说明、wired 必须声明到达路径且 mcpTools 逐个与真实 MCP 注册表核对；committed 集合在测试中冻结（15 项 = 10 wired + 5 partial，其余 15 项显式延后），撤销 covered≥16/wired≥4 最低阈值冒充口径；F15 因管理确认页闭环（BUG-01/02/03）诚实升级 wired，F17 备注 BUG-07 热生效。测试：`tests/merchant-buddy/acceptance-matrix.test.ts` 重写。
 - **BUG-09（P1）部署安装器生成不可运行实例**：`install.mjs` 现安装 Kiwi 运行应用（`--app-dir` 缺省仓库根；dist + package.json + 生产依赖复制到 `<prefix>/app`，缺一拒绝）、安装 merchant profile（`--profile` 必填，轻量校验 role: merchant + agent_id，落 `<prefix>/config/profile.yaml`）、放置实例凭据引用（`--credentials-env` → `<prefix>/.kiwi/credentials.env` 0600，值不读不记；缺省查 `~/.kiwi/credentials.env` 的 KIWI_MERCHANT_TOKEN，可显式跳过）、渲染服务单元统一 `--profile` + `--data-dir`（BUG-04），并新增 shopping-cli 独立托管单元（systemd Wants/After 依赖；launchd 无依赖排序由 KeepAlive 兜底，启动命令由 `--shopping-bin`/`--shopping-args` 决定——本仓库只锁版本范围不约定其 CLI 形态）；宣告完成前强制 preflight（真实执行安装产出的 `cli.js --version` 冒烟 + 服务单元渲染/profile/凭据核对），任一失败即安装失败。测试：`tests/deploy-merchant-bundle.test.ts` 扩到 9 条（缺 profile/非 merchant profile/裸 dist 缺依赖/凭据缺失拒绝 + 成功安装产物与冒烟）。
 
-**总计估算：9–13 周**；P0 修复（1–2 天）可与阶段一并行启动。
+## 代码审查修复记录（2026-09-16 第三批：1 P0 + 5 P1 + 全量 P2 加固）
+
+依据第三轮全量 code review（基线 main@04110a5 + 工作区版本范围改动）：
+
+- **P0/P1-6 版本锁改为协议协商**：本地 shopping-cli 已是 3.2.5，原「3.x 上限 fail-closed」决策由真实能力协商取代——`probeCapabilities()` 先读 `/health` 版本，再以 catalog 凭据读 `/capabilities` 的 `protocol_versions`，含 `shopping.negotiation/0.1` 才判兼容；`kiwi merchant mcp serve` 启动时 verdict=incompatible 硬拒（exit CONFIG），indeterminate/unhealthy（不可达/协商不可用/健康未过）警示不阻塞；协商不可用（端点缺失/无权限/瞬时故障）回退 legacy 已验证线 `SHOPPING_CLI_LEGACY_VERIFIED`（2.x 实测线），3.x 无协商不可判定 fail-closed。probe 报告新增 `verdict`/`protocol_versions` 字段；versions.lock note 与部署 README 同步。
+- **P1-1 create 白名单 + 钉归属**：`parseProductCreateInput`（types）prepare 层校验（sku/title 非空、price 有限非负、stock 非负整数、可选字段白名单、merchant_id 不一致直接拒绝），执行器重校验并强制 `merchant_id = ownerId`；`enforceFloor` 改收 unknown，非有限数值一律拒绝（原恒 false 比较让底价检查纸面化）。
+- **P1-2 审批执行原子认领**：新增 `action_candidates.executing_at` 列（MIGRATION_7，status CHECK 无法 ALTER 故不加状态值）——`claimForExecution()` 条件更新 approved 且未认领，changes=1 才执行；双通道（管理页/内核）并发第二个调用得 not_approvable；崩溃残留（approved+executing_at）由 `supersedeExecuting()` 在 recoverPending 时标 superseded（外部副作用不可判定，绝不二次执行）。
+- **P1-3 幂等键加固**：显式空/纯空白 key 拒绝（nullish 兜底不覆盖空串）；显式 key 与参数摘要绑定（`csv-<key>-<digest>` / `withdraw-<key>-<digest>`）——同 key 同内容真重放，同 key 不同内容不再静默返回旧 operation 谎报成功；import/withdraw 终态 failed → 输出 `ok:false` 走 supersede（审计不再把全部失败记成已执行）。
+- **P1-4 底价 fail-closed**：A2A 定价 `floorMinorForSku()` 底价已配置但无法无损换算（如 85.005）→ 返回 null，该 SKU decline temporarily_unavailable；绝不落到 0（等于关闭底价护栏）。
+- **P1-5 paused 静默失效**：上游 PATCH /products 无 paused/active（2.x/3.x 实测）——`parseProductPatch` 显式拒绝 `paused` 并引导到 `prepare_listing_change`；fake client 同步；buddy 配置 inventory-draft 提示词与工具列表修正。
+- **P2 OAuth/auth**：refresh 过期迁移单事务 + 幂等回填 + NULL 按 fail-closed 拒绝；refresh grant 强制校验 client_id（RFC 6749 §6）；token/授权/管理面响应统一 `Cache-Control: no-store`；oauth 库启动清理过期行（挂起单/授权码/凭证/双过期 token/管理会话）；consumeCode 事务 + 条件更新（双进程防重放）；/oauth/register 限速（20/小时/IP）+ /admin/login 失败锁 10 次锁 5 分钟；畸形 body → 400 + stderr 日志（不再 500 静默）；确认页显示 client_id/注册时间（client_name 标注自报）；profile 注释缺省值改 oauth（与 cli 实现一致）；a2a_port 上界 65535；admin-credentials 重置强制收紧 0600；oauth.sqlite 先 0600 预建再打开（消除权限窗口）。
+- **P2 MCP 工具层**：入参强转改 validation（paused 非布尔/source_protocol 非法枚举/stock 非数字/skus 非字符串数组一律拒绝，不再静默 coerce 反转意图）；listProducts 翻页聚合（原 limit=100 截断污染 CSV 存量判定）；operation running 超 30 分钟按中断标 failed 放行新任务；withTimeout 文案提示先查候选防重复提交；非业务异常收敛为统一文案（细节进 stderr）；get_product 校验商品归属（非本商家按未找到）；token 过渡模式 serve 启动警示写闭环死路（建议 OAuth 或内核 /approve）。
+- **P2 core/A2A**：reject 状态守卫（仅 pending/approved 可拒，executed 不可改写审计）；`resolveServeDataDir` 复用 `agentDirName` 消毒（读端=写端，非 ASCII agent_id 策略热更恢复生效）；policy-runtime 文件删除显式告警（不再静默冻结）；rfq/offer/counter_offer 出站 advancePhase 返回值检查（被拒不落账不发出，防相位分裂）；数量 0/负/小数 schema_invalid 拒绝；确认凭证核销移到候选存在性/可执行性核对之后（候选已死不白烧凭证）；service 便捷包装注释澄清主体口径。
+- **P2 runtime/备份**：MerchantJobs 同任务重入保护（与「串行执行」口径一致）；matchesProcess 失败区分「查无此进程」与「查询手段失败」（unknown 按存活认领，绝不双 spawn）；stop 按 pidfile 原始 command 认领旧进程（spec 变更后旧实例可停）；pidfile 写失败回滚并杀刚拉起的子进程；快照源库缺失 fail-closed + readOnly 打开（拒绝产出校验全绿的空库快照）；restoreBackup 路径越界守卫（`..`/绝对路径拒绝）；孤儿快照目录（无 manifest 且 >1h）启动清理；symlink 跳过项记入 manifest.skipped；成功备份原子写 latest-backup.json，health 新增 backup_stale 告警（备份停摆进通知通道）；capability-probe.json/health.json 原子写（防撕裂读假告警）；approveCandidate 同候选并发串行化。
+- **P2 交付物/文档**：打包 URL 占位校验改 URL 解析整体锚定 hostname（防 example.com.evil.io 绕过）；install.json 计入已有安装检测（已装未启实例不可无确认重装）；凭据检查覆盖 profile `commerce.token_env`（SHOPPING_* 数据引擎凭据，只查存在性）；默认 `--shopping-args` 改 `api serve --port 8765`（3.x 无顶层 serve）；workbuddy README 工具数 7→15、buddy README token/OAuth 矛盾消除（模块 1/2/4 与 config 对齐）、联调清单 15 工具；两包 SKILL.md 补 prepare_products_import/prepare_products_withdraw/get_operation；buddy 配置 catalog 模式补 get_analytics（胶囊绑定修正）。
+- **测试**：capability-probe 重写为协商语义（兼容/不兼容/legacy 回退/不可判定/不可达/落盘）；新增审批双通道并发认领回归 + refresh client_id 绑定回归；stage4 幂等/撤回断言按新语义更新；schema 版本断言 pin 到 MEMORY_SCHEMA_VERSION（7）；deploy 测试凭据 fixture 补数据引擎 token、二次安装断言按 install.json 语义更新。全量 vitest 2291 通过；lint/typecheck/build/contracts/vectors/harness/supply-chain/package 全绿。
+
+**遗留（显式未做）**：A2A `needs_human_review` 退化判定仍缺「买家已出价等商家回应」维度（需 scanLedger 补最后发言方，属功能性扩展）；stock 上限 clamp 未做（cache 库存不作为报价数量上限，保持当前协议口径）；token 过渡模式写闭环的完整方案（最小确认页）待产品决策。
+
+
 
 ## 五、主要风险
 

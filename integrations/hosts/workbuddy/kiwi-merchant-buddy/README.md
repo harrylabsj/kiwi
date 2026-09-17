@@ -9,7 +9,7 @@
 ### 模块 1：创建应用
 
 - 应用名称/简介/头像：取 `identity` 段；头像上传 256×256 PNG（复用连接器薄荷绿 kiwi 鸟风格，需另行出图，本仓库不放位图）。
-- 授权列表 / 授权回调 URL：本应用连接器为自填 Token（非 OAuth），不配置。
+- 授权列表 / 授权回调 URL：正式交付走 OAuth（`kiwi-merchant-connector-oauth`，无自填 Token）；按平台连接器 OAuth 流程配置。token 过渡连接器（`kiwi-merchant-connector`）才使用自填 Token，不配置授权。
 - 可信 Origin：填实际部署的 MCP 域名（草稿中为 `https://mcp.merchant.example.com` 占位）。
 - 创建后保存 Client ID 与 Client Secret（Secret 仅展示一次）。
 
@@ -18,7 +18,7 @@
 - 首页标题（Slogan）、欢迎语：取 `home.slogan` / `home.welcome`。
 - 工作模式：`home.modes` 三个（商品查看 / 询价处理 / 库存与变更草稿），各配 System Prompt 与绑定连接器工具。
 - 场景胶囊：`home.capsules` 七条，挂在对应模式上。
-- 内置连接器：官方要求内置连接器为 **OAuth 认证的 MCP**；本连接器是自填 Token 模式，若不满足则跳过内置连接器，改在模块 3 市场上架，并在模块 4 开启「跳过首次绑定应用授权」。**需在后台核对**。
+- 内置连接器：官方要求内置连接器为 **OAuth 认证的 MCP**——使用 OAuth 包（`kiwi-merchant-connector-oauth`）满足；token 过渡连接器不满足，若用过渡包则跳过内置连接器，改在模块 3 市场上架，并在模块 4 开启「跳过首次绑定应用授权」。**需在后台核对**。
 
 ### 模块 3：市场配置
 
@@ -27,7 +27,7 @@
 
 ### 模块 4：其他配置
 
-- 跳过首次绑定应用授权：开启（自填 Token 模式符合该条件）。
+- 跳过首次绑定应用授权：OAuth 正式包 = 关闭（走 WorkBuddy 内置 OAuth 绑定）；token 过渡连接器 = 开启（自填 Token 符合该条件）。
 - 绑定应用授权文案 / 输入框占位符（中英）：取 `misc` 段。
 - 模型：从平台模型池勾选工具调用稳定的通用模型，默认模型按平台推荐；不引用 Kiwi 本地模型配置。
 
@@ -51,7 +51,7 @@
    非 loopback 监听必须配置 token，否则服务 fail-closed 拒绝启动；公网入口用 HTTPS 反代（如 Caddy）到该端口，路径 `/mcp`。
 
 2. 用 WorkBuddy 导出/导入的预览 JSON（或按本草稿人工配置）创建预览态应用，连接器 URL 指向 staging 地址，表单填写 staging token。
-3. 逐项验证 7 个工具连通：目录列表、单品、库存、磋商记录、人工队列、经营摘要、变更草稿（确认只产候选不执行）。
+3. 逐项验证 15 个工具连通：目录列表/单品/库存/磋商记录/人工队列/经营摘要/变更草稿（只产候选）+ 商品创建/库存调整/上下架/磋商裁决/策略变更（prepare 候选）+ CSV 导入/批量撤回（operation）/operation 查询；写工具一律确认「只产候选不执行」。
 4. 验证失败路径：错误 token 401、未配置指标后端时经营摘要返回明确错误、未知 SKU 返回「未找到」。
 
 ## 需在 WorkBuddy 后台核对的字段

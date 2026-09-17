@@ -1,8 +1,10 @@
 /**
- * Merchant 能力探测与版本锁定测试（V2 阶段一/P0-5）：
- * - probeCapabilities：健康 + 版本在已验证范围 → 能力清单（listing_pause /
- *   resolve_review 已知缺失标定 false）；
- * - 网关故障 / 版本缺失 / 版本超上限 → fail-closed（ok:false，能力全 false，
+ * Merchant 能力探测与版本锁定测试（V2 阶段一/P0-5；协议协商升级）：
+ * - probeCapabilities：/health 版本 + /capabilities 协议通告（权威信号，
+ *   Kiwi 需要 shopping.negotiation/0.1）；协商不可用回退 legacy 已验证线
+ *   （2.x 实测线；3.x 无协商不可判定 fail-closed）；
+ * - 能力清单标定（listing_pause / resolve_review 已知缺失 false）；
+ * - 网关故障 / 协议不兼容 / 版本缺失 → fail-closed（ok:false，能力全 false，
  *   不产生报价、不编造数据）；
  * - persistPath 落盘可查询（版本组合锁定：先记录探测结果）；
  * - merchant 数据目录接线（V2 §5.1）：显式 merchantDataDir / principalDataDir /
@@ -45,21 +47,80 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("probeCapabilities（能力探测）", () => {
-  it("健康 + 已验证版本 → ok，能力清单标定（listing_pause/resolve_review=false）", async () => {
-    const client = clientWithHealth(() => healthResponse({ ok: true, version: "2.1.0" }));
+describe("probeCapabilities（能力探测；协议协商）", () => {
+  const CALIBRATED = {
+    catalog_read: true,
+    catalog_write: true,
+    inventory_write: true,
+    listing_pause: false,
+    resolve_review: false,
+  };
+
+  it("2.x 网关无 /capabilities → legacy 已验证线回退放行，能力清单标定", async () => {
+    const client = clientWithHealth((url) =>
+      url.endsWith("/capabilities")
+        ? healthResponse({ error: "not found" }, 404)
+        : healthResponse({ ok: true, version: "2.1.0" }),
+    );
     const probe = await client.probeCapabilities({ now: () => T0 });
     expect(probe.ok).toBe(true);
+    expect(probe.verdict).toBe("legacy");
     expect(probe.version).toBe("2.1.0");
     expect(probe.version_supported).toBe(true);
-    expect(probe.capabilities).toEqual({
-      catalog_read: true,
-      catalog_write: true,
-      inventory_write: true,
-      listing_pause: false,
-      resolve_review: false,
-    });
+    expect(probe.capabilities).toEqual(CALIBRATED);
     expect(probe.probed_at).toBe(T0);
+  });
+
+  it("3.x 网关 /capabilities 通告所需协议 → 协商兼容，记录 protocol_versions", async () => {
+    const client = clientWithHealth((url) =>
+      url.endsWith("/capabilities")
+        ? healthResponse({
+            ok: true,
+            capabilities: {
+              protocol_versions: ["shopping.negotiation/0.1"],
+              backend: "local_marketplace",
+            },
+          })
+        : healthResponse({ ok: true, version: "3.2.5" }),
+    );
+    const probe = await client.probeCapabilities({ now: () => T0 });
+    expect(probe.ok).toBe(true);
+    expect(probe.verdict).toBe("compatible");
+    expect(probe.version).toBe("3.2.5");
+    expect(probe.protocol_versions).toEqual(["shopping.negotiation/0.1"]);
+    expect(probe.version_supported).toBe(true);
+    expect(probe.capabilities).toEqual(CALIBRATED);
+  });
+
+  it("网关通告不含所需协议 → incompatible fail-closed（能力全 false）", async () => {
+    const client = clientWithHealth((url) =>
+      url.endsWith("/capabilities")
+        ? healthResponse({
+            ok: true,
+            capabilities: { protocol_versions: ["shopping.negotiation/9.9"] },
+          })
+        : healthResponse({ ok: true, version: "3.2.5" }),
+    );
+    const probe = await client.probeCapabilities({ now: () => T0 });
+    expect(probe.ok).toBe(false);
+    expect(probe.verdict).toBe("incompatible");
+    expect(probe.version_supported).toBe(false);
+    expect(probe.error).toContain("协议不兼容");
+    expect(Object.values(probe.capabilities).every((v) => v === false)).toBe(true);
+  });
+
+  it("3.x 网关协商不可用（无端点/无权限）→ 不可判定 fail-closed（不回退放行）", async () => {
+    const client = clientWithHealth((url) =>
+      url.endsWith("/capabilities")
+        ? healthResponse({ error: "forbidden" }, 403)
+        : healthResponse({ ok: true, version: "3.0.0" }),
+    );
+    const probe = await client.probeCapabilities({ now: () => T0 });
+    expect(probe.ok).toBe(false);
+    expect(probe.verdict).toBe("indeterminate");
+    expect(probe.version_supported).toBe(false);
+    expect(probe.error).toContain("legacy");
+    expect(Object.values(probe.capabilities).every((v) => v === false)).toBe(true);
   });
 
   it("网关不可达 → fail-closed（ok:false，能力全 false）", async () => {
@@ -72,17 +133,11 @@ describe("probeCapabilities（能力探测）", () => {
     expect(Object.values(probe.capabilities).every((v) => v === false)).toBe(true);
   });
 
-  it("版本缺失或超出已验证上限 → 不支持（版本组合锁定）", async () => {
+  it("版本缺失或过低且协商不可用 → 不支持（版本组合锁定）", async () => {
     const noVersion = clientWithHealth(() => healthResponse({ ok: true }));
     const p1 = await noVersion.probeCapabilities({ now: () => T0 });
     expect(p1.version_supported).toBe(false);
     expect(p1.ok).toBe(false);
-
-    const tooNew = clientWithHealth(() => healthResponse({ ok: true, version: "3.0.0" }));
-    const p2 = await tooNew.probeCapabilities({ now: () => T0 });
-    expect(p2.version_supported).toBe(false);
-    expect(p2.ok).toBe(false);
-    expect(p2.error).toContain(">= 2.0.0 < 3.0.0");
 
     const tooOld = clientWithHealth(() => healthResponse({ ok: true, version: "1.9.9" }));
     expect((await tooOld.probeCapabilities()).version_supported).toBe(false);
@@ -92,9 +147,16 @@ describe("probeCapabilities（能力探测）", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-probe-"));
     try {
       const file = path.join(dir, "capability-probe.json");
-      const client = clientWithHealth(() => healthResponse({ ok: true, version: "2.1.0" }));
+      const client = clientWithHealth((url) =>
+        url.endsWith("/capabilities")
+          ? healthResponse({ error: "not found" }, 404)
+          : healthResponse({ ok: true, version: "2.1.0" }),
+      );
       await client.probeCapabilities({ now: () => T0, persistPath: file });
-      const saved = JSON.parse(readFileSync(file, "utf8")) as { version?: string; ok: boolean };
+      const saved = JSON.parse(readFileSync(file, "utf8")) as {
+        version?: string;
+        ok: boolean;
+      };
       expect(saved.ok).toBe(true);
       expect(saved.version).toBe("2.1.0");
     } finally {

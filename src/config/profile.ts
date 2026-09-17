@@ -210,8 +210,9 @@ export interface AgentProfile {
     path?: string;
     /** Bearer token 环境变量名（缺省 KIWI_MERCHANT_MCP_TOKEN；值不写 profile）。 */
     token_env?: string;
-    /** 认证模式：token = V1 静态 Bearer（过渡）；oauth = OAuth 2.1（V2 正式）。
-     *  缺省 token；非 loopback 监听且无可用认证时 fail-closed 拒绝启动。 */
+    /** 认证模式：oauth = OAuth 2.1（V2 正式，缺省——正式 Connector 省略
+     *  auth_mode 即走 OAuth）；token = V1 静态 Bearer（过渡，须显式声明）。
+     *  非 loopback 监听且无可用认证时 fail-closed 拒绝启动。 */
     auth_mode?: "token" | "oauth";
     /** OAuth issuer / 公网 base URL（https；loopback 开发可省略走 http 推导）。 */
     public_url?: string;
@@ -754,7 +755,11 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
       req(typeof mp.public_url === "string" && mp.public_url.trim() !== "", `${source}: merchant_public.public_url must be a non-empty string`);
     }
     if (mp.a2a_port !== undefined) {
-      req(Number.isInteger(mp.a2a_port) && Number(mp.a2a_port) > 0, `${source}: merchant_public.a2a_port must be a positive integer`);
+      const a2aPort = Number(mp.a2a_port);
+      req(
+        Number.isInteger(a2aPort) && a2aPort > 0 && a2aPort <= 65535,
+        `${source}: merchant_public.a2a_port must be an integer in [1, 65535]`,
+      );
     }
     if (mp.shopping_db_path !== undefined) {
       req(typeof mp.shopping_db_path === "string" && mp.shopping_db_path.trim() !== "", `${source}: merchant_public.shopping_db_path must be a non-empty string`);

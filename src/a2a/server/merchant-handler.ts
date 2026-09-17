@@ -573,15 +573,22 @@ export function createMerchantHandler(
       }
 
       // merchant 定价是**确定性**的（不依赖 LLM）：floor / 促销是 merchant 自己的
-      // 可配置策略。per-SKU 私有 floor（major→minor lossless；SKU 未列出用全局默认）。
-      const policyForSku = (sku: string): { floorMinor: number; floorMajor: number | undefined } => {
+      // 可配置策略。per-SKU 私有 floor（major→minor lossless；SKU 未列出用全局
+      // 默认）。审查 P1：底价已配置但无法无损换算（如 85.005）→ 返回 null，
+      // 调用方必须 decline 该 SKU 报价——绝不落到 0（等于关闭底价护栏，
+      // fail-open 可低于底价成交），与商品价 lossy 即拒绝的方向保持一致。
+      /** 数量校验（审查 P2）：数量存在时必须是正整数——0/负数/小数按结构化
+       *  无效拒绝，不进 offer terms（否则批量价/条件成交按无意义数量求值）；
+       *  未报数量沿用 MERCHANT_QUANTITY 缺省口径（不变）。 */
+      const invalidQuantity = (raw: unknown): boolean =>
+        raw !== undefined &&
+        (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0);
+      const floorMinorForSku = (sku: string): number | null => {
         const mp = policyOf();
         const floorValue = mp?.price_floors?.[sku] ?? mp?.min_unit_price_private;
-        const floorConv = floorValue !== undefined ? losslessToMinorUnits(floorValue, 2) : undefined;
-        return {
-          floorMinor: floorConv !== undefined && floorConv.lossless ? floorConv.amount_minor : 0,
-          floorMajor: floorValue,
-        };
+        if (floorValue === undefined) return 0;
+        const conv = losslessToMinorUnits(floorValue, 2);
+        return conv.lossless ? conv.amount_minor : null;
       };
       /** 权威交期（V2 §8.5 P0-1）：配置了 merchant_policy.delivery_lead_days 才
        *  报具体 delivery_before（报价时间+天数，动态计算不过期）；未配置 → undefined，
@@ -606,8 +613,11 @@ export function createMerchantHandler(
             items?: { sku?: string; quantity?: { value?: number } }[];
           };
           const sku = payload.items?.[0]?.sku ?? MERCHANT_SKU;
-          const quantity = payload.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
-          const { floorMinor } = policyForSku(sku);
+          const quantityRaw = payload.items?.[0]?.quantity?.value;
+          if (invalidQuantity(quantityRaw)) return declineReply("schema_invalid");
+          const quantity = quantityRaw ?? MERCHANT_QUANTITY;
+          const floorMinor = floorMinorForSku(sku);
+          if (floorMinor === null) return declineReply("temporarily_unavailable");
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
@@ -628,10 +638,12 @@ export function createMerchantHandler(
           });
           // 审查 BUG-10：merchant 侧相位由自己的出站动作推进——rfq 的 offer
           // 回复是 OPEN→OFFER_OPEN 的边（入站侧 rfq 是起始动作无事件）。
-          await advancePhase(negotiationId, {
+          // 审查 P2：推进被拒（非法转换）→ 不落账不发出，防链上事实与相位机分裂。
+          const advanced = await advancePhase(negotiationId, {
             type: "offer",
             offer_id: String((reply.payload as { offer_id?: unknown }).offer_id ?? ""),
           });
+          if (!advanced) return declineReply("state_conflict");
           await appendSent(reply);
           return envelopeReply(reply);
         }
@@ -639,8 +651,11 @@ export function createMerchantHandler(
           // 商家还价：对 buyer 的 offer 回 counter_offer（真实商品价）。
           const buyerOffer = envelope.payload as { offer_id?: string; terms?: { items?: { sku?: string; quantity?: { value?: number } }[] } };
           const sku = buyerOffer.terms?.items?.[0]?.sku ?? MERCHANT_SKU;
-          const quantity = buyerOffer.terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
-          const { floorMinor } = policyForSku(sku);
+          const quantityRaw = buyerOffer.terms?.items?.[0]?.quantity?.value;
+          if (invalidQuantity(quantityRaw)) return declineReply("schema_invalid");
+          const quantity = quantityRaw ?? MERCHANT_QUANTITY;
+          const floorMinor = floorMinorForSku(sku);
+          if (floorMinor === null) return declineReply("temporarily_unavailable");
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
@@ -660,10 +675,12 @@ export function createMerchantHandler(
             },
             ...(note !== undefined ? { public_message: note } : {}),
           });
-          await advancePhase(negotiationId, {
+          // 审查 P2：推进被拒 → 不落账不发出（防 OFFER_OPEN 下重复还价分裂）。
+          const advanced = await advancePhase(negotiationId, {
             type: "counter_offer",
             offer_id: String((reply.payload as { offer_id?: unknown }).offer_id ?? ""),
           });
+          if (!advanced) return declineReply("state_conflict");
           await appendSent(reply);
           return envelopeReply(reply);
         }
@@ -673,9 +690,12 @@ export function createMerchantHandler(
             offer_id?: string;
           };
           const sku = counter.proposed_terms?.items?.[0]?.sku ?? MERCHANT_SKU;
-          const quantity = counter.proposed_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY;
+          const quantityRaw = counter.proposed_terms?.items?.[0]?.quantity?.value;
+          if (invalidQuantity(quantityRaw)) return declineReply("schema_invalid");
+          const quantity = quantityRaw ?? MERCHANT_QUANTITY;
           const buyerCounterMinor = counter.proposed_terms?.items?.[0]?.unit_price?.amount_minor;
-          const { floorMinor } = policyForSku(sku);
+          const floorMinor = floorMinorForSku(sku);
+          if (floorMinor === null) return declineReply("temporarily_unavailable");
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
@@ -728,10 +748,12 @@ export function createMerchantHandler(
             conditional: reply.payload as unknown as Record<string, unknown>,
             quantity,
           });
-          await advancePhase(negotiationId, {
+          // 审查 P2：推进被拒 → 不落账不发出。
+          const advanced = await advancePhase(negotiationId, {
             type: "conditional_offer",
             offer_id: String((reply.payload as { offer_id?: unknown }).offer_id ?? ""),
           });
+          if (!advanced) return declineReply("state_conflict");
           await appendSent(reply);
           return envelopeReply(reply);
         }

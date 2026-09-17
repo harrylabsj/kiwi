@@ -70,11 +70,16 @@ function errorResult(err: unknown): MerchantMcpCallResult {
       isError: true,
     };
   }
+  // 审查 P2：非业务异常（底层实现错误）不透出内部细节（文件路径/网关 URL
+  // 等）——对客户端收敛为统一文案，完整错误进服务端 stderr 日志。
+  process.stderr.write(
+    `[merchant mcp] 工具调用底层异常：${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+  );
   return {
     content: [
       {
         type: "text",
-        text: `商家操作失败：${err instanceof Error ? err.message : String(err)}`,
+        text: "商家操作失败（暂时性错误）：请稍后重试；若持续失败请查看服务端日志。",
       },
     ],
     isError: true,
@@ -110,9 +115,12 @@ async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
         timer = setTimeout(
           () =>
             reject(
+              // 审查 P2：超时不取消底层工作——prepare 可能仍已落库成功，
+              // 提示先查待批准列表，避免重试生成重复候选。
               new MerchantWorkbenchError(
                 "unavailable",
-                `请求超时（${Math.round(timeoutMs / 1000)}s 上限）`,
+                `请求超时（${Math.round(timeoutMs / 1000)}s 上限）；底层操作可能仍在完成——` +
+                  "写操作请先用只读工具查询待批准候选，确认未生成后再重试",
               ),
             ),
           timeoutMs,
@@ -186,6 +194,15 @@ function draftResultPayload(result: DraftProductChangeResult): Record<string, un
       : {}),
     product: result.product,
   };
+}
+
+/** 撤回 SKU 列表校验（审查 P2：此前 .map(String) 把非字符串元素静默变成
+ *  "[object Object]"，登记无效命令白烧人工确认）。 */
+function parseSkuList(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((s) => typeof s !== "string" || s.trim() === "")) {
+    throw new MerchantWorkbenchError("validation", "skus 必须是非空字符串数组");
+  }
+  return value;
 }
 
 /** 命令写面守卫：facade-only 调用方缺命令面时 fail-closed 报「不可得」。 */
@@ -320,31 +337,66 @@ export function buildMerchantMcpTools(
           ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
         })
         .then(preparedPayload),
-    kiwi_merchant_prepare_inventory_update: async (args) =>
-      commandSurface(service)
+    kiwi_merchant_prepare_inventory_update: async (args) => {
+      // 审查 P2：类型不符直接 validation（此前哨兵 -1 静默登记无效命令）。
+      if (typeof args.stock !== "number") {
+        throw new MerchantWorkbenchError("validation", "stock 必须是数字（非负整数）");
+      }
+      if (typeof args.sku !== "string" || args.sku.trim() === "") {
+        throw new MerchantWorkbenchError("validation", "sku 必须是非空字符串");
+      }
+      return commandSurface(service)
         .prepareInventoryUpdate({
-          sku: typeof args.sku === "string" ? args.sku : "",
-          stock: typeof args.stock === "number" ? args.stock : -1,
+          sku: args.sku,
+          stock: args.stock,
           ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
         })
-        .then(preparedPayload),
-    kiwi_merchant_prepare_listing_change: async (args) =>
-      commandSurface(service)
+        .then(preparedPayload);
+    },
+    kiwi_merchant_prepare_listing_change: async (args) => {
+      // 审查 P2：paused 非布尔直接拒绝——`"true" === true` 为 false 会把
+      // 「下架」请求静默变成「恢复销售」，反转操作者意图。
+      if (typeof args.paused !== "boolean") {
+        throw new MerchantWorkbenchError(
+          "validation",
+          "paused 必须是布尔值（true=暂停销售，false=恢复销售）",
+        );
+      }
+      if (typeof args.sku !== "string" || args.sku.trim() === "") {
+        throw new MerchantWorkbenchError("validation", "sku 必须是非空字符串");
+      }
+      return commandSurface(service)
         .prepareListingChange({
-          sku: typeof args.sku === "string" ? args.sku : "",
-          paused: args.paused === true,
+          sku: args.sku,
+          paused: args.paused,
           ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
         })
-        .then(preparedPayload),
-    kiwi_merchant_prepare_review_resolve: async (args) =>
-      commandSurface(service)
+        .then(preparedPayload);
+    },
+    kiwi_merchant_prepare_review_resolve: async (args) => {
+      // 审查 P2：非法枚举直接拒绝——此前非 "a2a" 一律静默落到 shopping
+      // 可执行轨道（含 "A2A"/拼写错误），违背「绝不跨轨」语义。
+      if (args.source_protocol !== "a2a" && args.source_protocol !== "shopping") {
+        throw new MerchantWorkbenchError(
+          "validation",
+          'source_protocol 必须是 "a2a" 或 "shopping"',
+        );
+      }
+      if (typeof args.source_id !== "string" || args.source_id.trim() === "") {
+        throw new MerchantWorkbenchError("validation", "source_id 必须是非空字符串");
+      }
+      if (typeof args.resolution !== "string" || args.resolution.trim() === "") {
+        throw new MerchantWorkbenchError("validation", "resolution 必须是非空字符串");
+      }
+      return commandSurface(service)
         .prepareReviewResolve({
-          source_protocol: args.source_protocol === "a2a" ? "a2a" : "shopping",
-          source_id: typeof args.source_id === "string" ? args.source_id : "",
-          resolution: typeof args.resolution === "string" ? args.resolution : "",
+          source_protocol: args.source_protocol,
+          source_id: args.source_id,
+          resolution: args.resolution,
           ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
         })
-        .then(preparedPayload),
+        .then(preparedPayload);
+    },
     kiwi_merchant_prepare_policy_change: async (args) =>
       commandSurface(service)
         .preparePolicyChange({
@@ -368,7 +420,7 @@ export function buildMerchantMcpTools(
     kiwi_merchant_prepare_products_withdraw: async (args) =>
       commandSurface(service)
         .prepareProductsWithdraw({
-          skus: Array.isArray(args.skus) ? args.skus.map(String) : [],
+          skus: parseSkuList(args.skus),
           ...(typeof args.idempotency_key === "string"
             ? { idempotency_key: args.idempotency_key }
             : {}),

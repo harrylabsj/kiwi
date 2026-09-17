@@ -128,6 +128,7 @@ async function clientBindFlow(
   issuer: string,
   redirectUri: string,
 ): Promise<{
+  client_id: string;
   access_token: string;
   refresh_token: string;
 }> {
@@ -220,7 +221,9 @@ async function clientBindFlow(
     }).toString(),
   });
   expect(tokenRes.status).toBe(200);
-  return (await tokenRes.json()) as { access_token: string; refresh_token: string };
+  // client_id 一并返回：refresh grant 必须绑定原 client_id（RFC 6749 §6）。
+  const body = (await tokenRes.json()) as { access_token: string; refresh_token: string };
+  return { client_id: client.client_id, ...body };
 }
 
 async function callTool(issuer: string, token: string, name: string): Promise<Response> {
@@ -247,7 +250,7 @@ describe("WorkBuddy OAuth 联调端到端（离线模拟）", () => {
   ])("首次绑定全流程（%s）→ 调用 → refresh → revoke 后拒绝", async (_label, redirectUri) => {
     const stack = await startStack(new DatabaseSync(":memory:"));
     try {
-      const tokens = await clientBindFlow(stack.issuer, redirectUri);
+      const { client_id: boundClientId, ...tokens } = await clientBindFlow(stack.issuer, redirectUri);
       // 带 token 调用 MCP 工具
       const ok = await callTool(stack.issuer, tokens.access_token, "kiwi_merchant_list_products");
       expect(ok.status).toBe(200);
@@ -261,6 +264,7 @@ describe("WorkBuddy OAuth 联调端到端（离线模拟）", () => {
         body: new URLSearchParams({
           grant_type: "refresh_token",
           refresh_token: tokens.refresh_token,
+          client_id: boundClientId,
         }).toString(),
       });
       expect(refreshed.status).toBe(200);
@@ -271,6 +275,7 @@ describe("WorkBuddy OAuth 联调端到端（离线模拟）", () => {
         body: new URLSearchParams({
           grant_type: "refresh_token",
           refresh_token: tokens.refresh_token,
+          client_id: boundClientId,
         }).toString(),
       });
       expect(staleRefresh.status).toBe(400);
@@ -298,7 +303,7 @@ describe("WorkBuddy OAuth 联调端到端（离线模拟）", () => {
     dirs.push(dir);
     const dbFile = path.join(dir, "oauth.sqlite");
     const first = await startStack(new DatabaseSync(dbFile));
-    const tokens = await clientBindFlow(first.issuer, workbuddyCallbackUri("kiwi-merchant"));
+    const { client_id: boundClientId, ...tokens } = await clientBindFlow(first.issuer, workbuddyCallbackUri("kiwi-merchant"));
     await first.close();
 
     // 重启（同一 oauth.sqlite 文件）：refresh 仍有效
@@ -310,6 +315,7 @@ describe("WorkBuddy OAuth 联调端到端（离线模拟）", () => {
         body: new URLSearchParams({
           grant_type: "refresh_token",
           refresh_token: tokens.refresh_token,
+          client_id: boundClientId,
         }).toString(),
       });
       expect(refreshed.status).toBe(200);
@@ -324,7 +330,7 @@ describe("WorkBuddy OAuth 联调端到端（离线模拟）", () => {
   it("MCP 资源边界：resources/list 全路径；未知资源与私密类拒绝", async () => {
     const stack = await startStack(new DatabaseSync(":memory:"));
     try {
-      const tokens = await clientBindFlow(stack.issuer, workbuddyCallbackUri("kiwi-merchant"));
+      const { client_id: _clientId, ...tokens } = await clientBindFlow(stack.issuer, workbuddyCallbackUri("kiwi-merchant"));
       // 本 stack 未挂 presentations（resources 能力缺省关闭）→ resources/list 报方法不存在
       const res = await fetch(`${stack.issuer}/mcp`, {
         method: "POST",

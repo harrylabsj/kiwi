@@ -30,7 +30,7 @@
  */
 
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -92,6 +92,8 @@ export function writeAdminCredentials(
   };
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   writeFileSync(file, `${JSON.stringify(creds, null, 2)}\n`, { mode: 0o600 });
+  // mode 参数对已存在文件不生效（审查 P2）：重置口令时收紧历史遗留的宽权限。
+  chmodSync(file, 0o600);
   return creds;
 }
 
@@ -130,6 +132,8 @@ export class MerchantAdminSessions {
     this.db = options.db;
     this.now = options.now ?? (() => new Date().toISOString());
     this.db.exec(ADMIN_SESSION_SCHEMA);
+    // 过期会话清理（审查 P2：管理会话表只增不删）。
+    this.db.prepare("DELETE FROM admin_sessions WHERE expires_at <= ?").run(this.now());
   }
 
   /** 登录成功签发会话（明文只在响应 cookie 中；落库为 sha256 摘要）。 */

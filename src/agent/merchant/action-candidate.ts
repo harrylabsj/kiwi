@@ -266,11 +266,59 @@ export class WriteApprovalCandidateStore {
     return this.setStatus(candidateId, "approved");
   }
 
+  /**
+   * 原子认领执行权（审查 P1：审批双通道 check-then-act 竞态）：对 approved
+   * 且未认领的候选条件更新 executing_at，changes=1 的那一个调用方才继续。
+   * 并发第二通道（管理页 / 对话内核 /approve）拿不到认领 → not_approvable。
+   * status 的 CHECK 约束无法 ALTER，故不新增状态值；执行成功走 markExecuted
+   * （executing_at 留作审计），失败路径统一 supersede，崩溃后由
+   * supersedeExecuting 在重启恢复时清理。
+   */
+  claimForExecution(candidateId: string): WriteApprovalCandidate | undefined {
+    const now = this.now();
+    const claimed = this.db
+      .prepare(
+        "UPDATE action_candidates SET executing_at = ?, updated_at = ? " +
+          "WHERE candidate_id = ? AND status = 'approved' AND executing_at IS NULL",
+      )
+      .run(now, now, candidateId);
+    if (Number(claimed.changes) !== 1) return undefined;
+    return this.get(candidateId) as WriteApprovalCandidate;
+  }
+
   markExecuted(candidateId: string): WriteApprovalCandidate {
     return this.setStatus(candidateId, "executed");
   }
 
+  /**
+   * 重启恢复：崩溃时停留在「已认领未终态」（approved + executing_at 非空）的
+   * 候选一律 superseded——外部副作用是否发生不可判定，绝不放行二次执行。
+   * 仅启动恢复路径调用（进程内不存在并发执行中候选）。返回处理数量。
+   */
+  supersedeExecuting(): number {
+    const r = this.db
+      .prepare(
+        "UPDATE action_candidates SET status = 'superseded', updated_at = ? " +
+          "WHERE status = 'approved' AND executing_at IS NOT NULL",
+      )
+      .run(this.now());
+    return Number(r.changes);
+  }
+
+  /** 拒绝候选（审查 P2 状态守卫）：仅 pending_approval/approved 可拒绝——
+   *  executed/superseded/expired 不可改写为 rejected（审计状态机不得回写
+   *  已发生的外部事实）。 */
   reject(candidateId: string): WriteApprovalCandidate {
+    const existing = this.get(candidateId);
+    if (existing === undefined) {
+      throw new WriteApprovalCandidateError("not_found", `no candidate ${candidateId}`);
+    }
+    if (existing.status !== "pending_approval" && existing.status !== "approved") {
+      throw new WriteApprovalCandidateError(
+        "conflict",
+        `candidate ${candidateId} is ${existing.status}, not rejectable`,
+      );
+    }
     return this.setStatus(candidateId, "rejected");
   }
 
@@ -360,6 +408,17 @@ export async function executeApprovedCandidate(
       kind: "not_approvable",
       candidate,
       reason: `候选 ${candidateId} 状态为 ${candidate.status}，不是 approved；不会执行。`,
+    };
+  }
+  // 原子认领（审查 P1：管理页与对话内核双通道 check-then-act 竞态）：
+  // approved → executing 条件更新，只有一个调用方拿得到执行权；此后即使
+  // 前置读取/执行耗时（await HTTP），第二通道也只会看到 not_approvable。
+  const claimed = store.claimForExecution(candidateId);
+  if (claimed === undefined) {
+    return {
+      kind: "not_approvable",
+      candidate: store.get(candidateId) as WriteApprovalCandidate,
+      reason: `候选 ${candidateId} 已被其他通道认领执行（非 approved 状态）；不会重复执行。`,
     };
   }
   let freshPreconditions: unknown;

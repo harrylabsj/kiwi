@@ -45,9 +45,13 @@ import {
   parseMerchantCatalogProduct,
 } from "./types.js";
 import { readJsonBody } from "../../net/safe-http.js";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { SHOPPING_CLI_COMPAT, compatRangeText, versionInRange } from "../../product-compat.js";
+import { writeFileAtomic } from "../../fs/atomic-write.js";
+import {
+  SHOPPING_CLI_LEGACY_VERIFIED,
+  compatRangeText,
+  versionInRange,
+} from "../../product-compat.js";
+import { PROTOCOL_VERSION } from "../../negotiation/types.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 /** 响应体大小上限（审查 P2-H 配套项：此前无上限，恶意网关可回传巨量 body）。 */
@@ -166,15 +170,33 @@ export class HttpMerchantClient implements MerchantClient {
     // 买家搜索默认排除缺货的行为不适用于商家自己的商品清单。
     // 审查 P2-1：精确库存是私密 inventory——带 catalog 凭据（可解析时）读，
     // 网关按 owner 校验后返回本商家精确 stock；未配置凭据则匿名读（无 stock）。
+    // 审查 P2：翻页聚合——此前硬编码 limit=100 无翻页，第 101+ 个商品对
+    // CSV 导入的存量判定不可见（误判 create → 批准后逐行冲突）。
     const token = this.broker.resolve("catalog");
-    const payload = (await this.request("GET", "/search/products", {
-      query: { limit: "100", offset: "0", include_out_of_stock: "1" },
-      ...(token !== undefined ? { token } : {}),
-    })) as { results?: unknown };
-    if (payload === null || typeof payload !== "object" || !Array.isArray(payload.results)) {
-      throw new MerchantClientError("validation", "search/products response lacks a results array");
+    const PAGE_LIMIT = 100;
+    const MAX_PAGES = 50; // 5000 件保护上限
+    const raw: unknown[] = [];
+    let offset = 0;
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      const payload = (await this.request("GET", "/search/products", {
+        query: {
+          limit: String(PAGE_LIMIT),
+          offset: String(offset),
+          include_out_of_stock: "1",
+        },
+        ...(token !== undefined ? { token } : {}),
+      })) as { results?: unknown };
+      if (payload === null || typeof payload !== "object" || !Array.isArray(payload.results)) {
+        throw new MerchantClientError(
+          "validation",
+          "search/products response lacks a results array",
+        );
+      }
+      raw.push(...payload.results);
+      if (payload.results.length < PAGE_LIMIT) break;
+      offset += PAGE_LIMIT;
     }
-    return payload.results
+    return raw
       .map((p) => parseMerchantCatalogProduct(p))
       .filter((p) => p.merchant_id === merchantId);
   }
@@ -311,14 +333,38 @@ export class HttpMerchantClient implements MerchantClient {
     );
   }
 
-  // ---- capability probe（V2 阶段一/P0-5）--------------------------------------
+  // ---- capability probe（V2 阶段一/P0-5；协议协商升级）------------------------
 
   /**
-   * 能力探测：对 shopping-cli 侧做版本/能力检查（GET /health），结果可落盘
-   * （persistPath，0600）供版本组合锁定与排查。fail-closed：网关故障或版本
-   * 不可判定 → ok:false，capabilities 全 false——调用方不得据此产生报价或
-   * 返回编造数据。能力清单按已实测的 shopping-cli 2.x 线标定：listing_pause /
-   * resolve_review 已知缺失（勿宣传；见 V2 计划 P0-3）。
+   * 读取网关协议通告（GET /capabilities，带 catalog 凭据）。返回协议版本清单；
+   * 端点缺失/无权限/瞬时故障抛 MerchantClientError（保留 kind），由探测方
+   * 按回退规则处理。响应 shape（shopping-cli core.capabilities_report）：
+   * { ok, capabilities: { protocol_versions: string[], backend, capabilities } }。
+   */
+  private async fetchGatewayProtocolVersions(): Promise<string[]> {
+    const payload = (await this.request("GET", "/capabilities", {
+      token: this.catalogToken(),
+    })) as { capabilities?: { protocol_versions?: unknown } };
+    const inner = payload?.capabilities;
+    const protocols = (inner as { protocol_versions?: unknown } | undefined)?.protocol_versions;
+    if (!Array.isArray(protocols) || protocols.some((p) => typeof p !== "string")) {
+      throw new MerchantClientError(
+        "validation",
+        "/capabilities 响应缺少 capabilities.protocol_versions 字符串数组",
+      );
+    }
+    return protocols as string[];
+  }
+
+  /**
+   * 能力探测（协议协商版）：GET /health 拿版本，GET /capabilities 拿协议通告，
+   * Kiwi 需要 `shopping.negotiation/0.1` 在通告清单内才算兼容。fail-closed：
+   * 网关故障、健康检查未过、协议不兼容或协商不可用且版本不可判定 → ok:false
+   * 且 capabilities 全 false——调用方不得据此产生报价或返回编造数据。
+   * 协商不可用（端点缺失/无权限/瞬时故障）时回退 legacy 已验证线（2.x 实测
+   * 线，见 SHOPPING_CLI_LEGACY_VERIFIED）；3.x 网关都带 /capabilities，「3.x
+   * 却协商不了」按不可判定 fail-closed。能力清单仍按 2.x/3.x 实测标定：
+   * listing_pause / resolve_review 已知缺失（勿宣传；见 V2 计划 P0-3）。
    */
   async probeCapabilities(
     options: { now?: () => string; persistPath?: string } = {},
@@ -331,6 +377,14 @@ export class HttpMerchantClient implements MerchantClient {
       listing_pause: false,
       resolve_review: false,
     };
+    const calibrated: MerchantCapabilityProbe["capabilities"] = {
+      catalog_read: true,
+      catalog_write: true,
+      inventory_write: true,
+      // shopping-cli 2.x/3.x 已知缺失（实测标定；升级上游后重新探测标定）
+      listing_pause: false,
+      resolve_review: false,
+    };
     let report: MerchantCapabilityProbe;
     try {
       const payload = (await this.request("GET", "/health")) as {
@@ -339,50 +393,98 @@ export class HttpMerchantClient implements MerchantClient {
       };
       const version = typeof payload.version === "string" ? payload.version : undefined;
       const healthy = payload.ok === true;
-      report = {
-        ok: healthy,
-        probed_at: probedAt,
-        ...(version !== undefined ? { version } : {}),
-        // 版本不可判定 → 不支持（fail-closed）
-        version_supported:
-          version !== undefined && versionInRange(version, SHOPPING_CLI_COMPAT),
-        capabilities: healthy
-          ? {
-              catalog_read: true,
-              catalog_write: true,
-              inventory_write: true,
-              // shopping-cli 2.x 已知缺失（实测标定；升级上游后重新探测标定）
-              listing_pause: false,
-              resolve_review: false,
-            }
-          : unavailable,
-      };
-      if (healthy && report.version_supported === false) {
-        report.ok = false;
-        report.error = `shopping-cli 版本 ${version ?? "未知"} 超出已验证范围（${compatRangeText(SHOPPING_CLI_COMPAT)}）`;
+      if (!healthy) {
+        report = {
+          ok: false,
+          probed_at: probedAt,
+          verdict: "unhealthy",
+          ...(version !== undefined ? { version } : {}),
+          version_supported: false,
+          capabilities: unavailable,
+          error: `shopping-cli 健康检查未通过（ok !== true）`,
+        };
+      } else {
+        // 协商优先：/capabilities 是兼容性的权威信号。
+        let protocols: string[] | undefined;
+        let negotiateFailure = "";
+        try {
+          protocols = await this.fetchGatewayProtocolVersions();
+        } catch (err) {
+          negotiateFailure = err instanceof Error ? err.message : String(err);
+        }
+        if (protocols !== undefined) {
+          const compatible = protocols.includes(PROTOCOL_VERSION);
+          report = {
+            ok: compatible,
+            probed_at: probedAt,
+            verdict: compatible ? "compatible" : "incompatible",
+            ...(version !== undefined ? { version } : {}),
+            version_supported: compatible,
+            protocol_versions: protocols,
+            capabilities: compatible ? calibrated : unavailable,
+            ...(compatible
+              ? {}
+              : {
+                  error:
+                    `shopping-cli 协议不兼容：网关通告 [${protocols.join(", ")}]，` +
+                    `Kiwi 需要 ${PROTOCOL_VERSION}`,
+                }),
+          };
+        } else {
+          // 协商不可用 → 回退 legacy 已验证线（2.x 实测线内才放行）。
+          const legacyOk = version !== undefined && versionInRange(version, SHOPPING_CLI_LEGACY_VERIFIED);
+          report = {
+            ok: legacyOk,
+            probed_at: probedAt,
+            verdict: legacyOk ? "legacy" : "indeterminate",
+            ...(version !== undefined ? { version } : {}),
+            version_supported: legacyOk,
+            capabilities: legacyOk ? calibrated : unavailable,
+            ...(legacyOk
+              ? {}
+              : {
+                  error:
+                    `无法经 /capabilities 协商协议（${negotiateFailure}）；` +
+                    `版本 ${version ?? "未知"} 不在 legacy 已验证线（${compatRangeText(SHOPPING_CLI_LEGACY_VERIFIED)}），fail-closed`,
+                }),
+          };
+        }
       }
     } catch (err) {
       report = {
         ok: false,
         probed_at: probedAt,
+        verdict: "indeterminate",
         capabilities: unavailable,
         error: `shopping-cli 不可达：${err instanceof Error ? err.message : String(err)}`,
       };
     }
     if (options.persistPath !== undefined) {
-      mkdirSync(dirname(options.persistPath), { recursive: true, mode: 0o700 });
-      writeFileSync(options.persistPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+      // 审查 P2：原子写——health 轮询与一次性命令并发读同一文件，非原子写
+      // 会产生撕裂读 → 假 critical 告警。
+      writeFileAtomic(
+        options.persistPath,
+        `${JSON.stringify(report, null, 2)}\n`,
+        { mode: 0o600 },
+      );
     }
     return report;
   }
 }
 
-/** 能力探测结果（V2 阶段一/P0-5）：版本 + 能力清单，落盘可查询。 */
+/**
+ * 能力探测结果（V2 阶段一/P0-5；协议协商升级）：版本 + 协议通告 + 能力清单，
+ * 落盘可查询。verdict 供启动方区分处置：incompatible = 硬拒绝（exit CONFIG）；
+ * indeterminate/unhealthy = 警示不阻塞（网关可能仍在启动，健康面持续 fail-closed）。
+ */
 export interface MerchantCapabilityProbe {
   ok: boolean;
   probed_at: string;
+  verdict: "compatible" | "incompatible" | "legacy" | "indeterminate" | "unhealthy";
   version?: string;
-  /** 版本在已验证兼容范围内（version 缺失或不支持 → false）。 */
+  /** 网关 /capabilities 通告的协议版本清单（协商成功时携带）。 */
+  protocol_versions?: string[];
+  /** 协商兼容或落在 legacy 已验证线（version 缺失或不支持 → false）。 */
   version_supported?: boolean;
   capabilities: {
     catalog_read: boolean;
