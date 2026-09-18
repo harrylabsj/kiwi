@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.9.0 — 2026-09-18
+
+**WorkBuddy 商家连接器（新）**：
+- 商家连接器「Kiwi 商家运营」的远程 MCP 入口（OAuth 2.1 + PKCE）：无会话 authorize → `/connect` → 目录注册/登录确认 → 一次性 code → 兑换 `merchant_id` 与商家目录凭据 → 入口会话 → 授权同意 → 授权码。买方连接器 `kiwi-sourcing` 的传输与鉴权**保持不变**（两个连接器 source、平台 ID、凭据互不通用）。
+- 五个 `kiwi_catalog_*` 目录工具（身份/草稿/请求发布/状态/撤回）：发布只产草稿并给出**门户确认入口**，模型不能自批发布。
+- 实例自助绑定与路由：粘贴内部令牌或一次性配对码（10 分钟 TTL、单次、只存 sha256）。按最小授权原则**凭据由实例签发与持有，网关不参与签发**；配对凭据单槽轮换、可吊销。未绑定实例不阻塞第 0 版目录能力。
+- 出站加固：静态 URL 策略 + DNS 钉住（解析→校验全部 IP→按 IP 连接，Host/SNI 保持域名）、`redirect: manual`、能力探测 fail-closed。
+
+**Kiwi Merchant Buddy V2（商家侧）**：
+- 商家 OAuth 2.1 授权服务器（PKCE / RFC 7591 动态注册 / refresh 轮换 / revoke）、scope 过滤、`merchant-runtime` 与 `deploy/merchant-bundle`。
+- `src/merchant-core/` 与 17 个 `kiwi_merchant_*` 工具、七类 presentation 映射；WorkBuddy 商家工作台远程 MCP 接入（四阶段）。
+- 三轮 review 修复：协议协商取代版本上限，审批/幂等/底价/运行时加固；写操作一律走审批候选，私密字段（底价/成本）零泄露。
+
+**买家侧**：
+- `feat(buyer)`：拉取式订阅工具——关注/更新/列表/取消 + 专家表达。
+- `feat(buyer)`：`kiwi_search` 合并 M0 商家公开资料 + RFQ 硬门 + 专家/Buddy 第 0 版表达。
+- `feat(buyer)`：Agent 新鲜度（WP6）——心搏 + 读时按 TTL 派生**有效**新鲜度（只降不升），商家服务离线后不再被标「可实时询价」，公开资料仍可查；新增 `merchant_offline` 错误码。
+- `fix(a2a)`：报价交期改为动态计算，不再对买家报过期固定日期。
+
+**宿主接入与安全**：
+- `feat(integrations)`：WorkBuddy 采购询价专家包 `kiwi-procurement-expert`。
+- `chore(deps)`：vitest 4.1.11（修复 GHSA-82fw-gwwq-j7x9）。
+- 安全收口：配对码取模偏差改为拒绝采样；`/mcp` 与 buyer HTTP 侧不再向调用方回显内部异常消息（只进 stderr）；7 处二次方回溯正则改为线性扫描（新增 `src/net/url.ts`，与旧写法逐例等价）；`/connect/callback` 的 `resume` 增加同源二次校验。
+
+**文档**：商家连接器发布计划、部署说明（同机网关 + 商家实例的 Host/路径分流）、实例配对安全设计、上架素材包；第 1 版产品流程与 onboarding 设计、Kiwi Merchant Buddy V2 开发计划。
+
 ## v0.8.0 — 2026-09-03
 
 **Merchant Experience + 公共宿主接入**：
