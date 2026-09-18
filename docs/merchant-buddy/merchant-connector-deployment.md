@@ -6,6 +6,10 @@
 
 **不适用范围**：多商家生产形态下把商家实例与网关长期共置（见 §12）。
 
+**现网核对**：本文的目标拓扑已于 2026-09-18 在 `kiwi-hk` 上落地并逐项验证（网关纯 `merchant.kiwi.harrylabsj.com`、
+实例身份在 `veyquo.com`、实例 MCP/OAuth 不对公网）。执行记录、迁移前后的实测与回滚方式见
+[现网拓扑实测与迁移记录](production-topology-gap-and-migration.md) §0。
+
 ---
 
 ## 1. 角色、域名与端口
