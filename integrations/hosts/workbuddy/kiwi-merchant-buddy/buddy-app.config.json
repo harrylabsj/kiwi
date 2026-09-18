@@ -1,26 +1,26 @@
 {
-  "$note": "Kiwi 商家运营 Buddy 应用配置的本地草稿（用于导出预览与人工照着配置）。WorkBuddy 后台导出 JSON 的精确格式未公开，本文件为自定义清晰结构；提交前需在后台核对每个字段的对应表单项（见 README.md「需在后台核对的字段」）。本版按「买方 / 商家两个连接器」方案更新：商家 Buddy 引用**新增的商家连接器**（source=kiwi-merchant，指向网关），采购专家仍引用已发布的买方连接器 oc_bd73f860e3e2b5d3（source=kiwi-sourcing，本地 stdio）。",
-  "version": "1.1.0",
+  "$note": "Kiwi 商家运营 Buddy 应用配置的本地草稿（用于导出预览与人工照着配置）。WorkBuddy 后台导出 JSON 的精确格式未公开，本文件为自定义清晰结构；提交前需在后台核对每个字段的对应表单项（见 README.md「需在后台核对的字段」）。本版按 2026-09-18 收窄后的定位重写：**网关只做第 0 版目录能力**（注册与发布公开资料），商家实例完全独立、与网关无连接（部署说明 §0「网关不碰实例」）。因此本应用只有「目录注册与发布」一个模式，不含任何实例读写能力。",
+  "version": "1.2.0",
   "identity": {
     "appName": "Kiwi 商家运营工作台",
     "appNameEn": "Kiwi Merchant Workbench",
     "icon": "上传 256×256 PNG 应用头像（可复用连接器 icon.svg 的薄荷绿 kiwi 鸟风格重新出图）",
-    "简介": "面向 Kiwi 商家的运营工作台：注册并发布公开资料让采购专家找到你；绑定自有 Kiwi Merchant 服务后，还可查商品与库存、跟进买家询价与人工队列、生成待批准的经营变更草稿。",
+    "简介": "面向 Kiwi 商家的运营工作台：注册 Kiwi 商家目录、起草并发布公开资料，让采购专家找到你。发布要你亲自在目录门户确认，我不会替你点确认。",
     "授权列表": "本应用需要两类授权，互不替代：① 平台应用级授权（本表单，用于应用自身的 Open API 能力，当前未申请任何用户数据权限）；② Kiwi 商家连接器的 OAuth 授权（source=kiwi-merchant，由 Kiwi 统一商家入口提供 OAuth 2.1 + PKCE 端点，用户首次绑定时在浏览器完成，无需自填 Token）。**应用级回调与连接器回调是两件事，不要混填**（见 README）。",
-    "授权回调URL": "本应用自身的 HTTPS 回调服务地址（接收平台 Open API 授权码；当前 M0/M1 不申请 Open API 权限，故未填写——提交前若确需权限，必须先部署可处理授权码的真实回调，不得填占位或无效 URL）。连接器回调另见 misc.连接器回调。",
+    "授权回调URL": "本应用自身的 HTTPS 回调服务地址（接收平台 Open API 授权码；当前不申请 Open API 权限，故未填写——提交前若确需权限，必须先部署可处理授权码的真实回调，不得填占位或无效 URL）。连接器回调另见 misc.连接器回调。",
     "可信Origin": [
       "https://merchant.kiwi.harrylabsj.com"
     ]
   },
   "home": {
-    "slogan": "先把资料发出去，再把店铺接进来",
-    "welcome": "你好，这里是 Kiwi 商家运营工作台。想被采购专家搜到，我可以帮你注册 Kiwi 目录、起草并发布公开资料；已经部署了自己的 Kiwi Merchant 服务，我还能查商品库存、跟进买家询价、生成待你批准的变更草稿。发布和写操作都要你亲自确认，我不会替你点确认。",
+    "slogan": "把资料发出去，让采购专家找到你",
+    "welcome": "你好，这里是 Kiwi 商家运营工作台。我可以帮你注册 Kiwi 目录、起草并发布公开资料，让采购专家搜到你。发布要你亲自去目录门户确认，我不会替你点确认。",
     "modes": [
       {
         "key": "catalog-publish",
         "name": "目录注册与发布",
         "description": "注册 Kiwi 商家目录、起草并发布公开资料，让采购专家搜到你",
-        "systemPrompt": "你是 Kiwi 商家运营助手的「目录注册与发布」模式。面向所有商家（有无专属服务器都可以）。你的职责：1) 若尚未连接，引导商家点首页的连接器绑定完成 Kiwi 目录注册/登录与邮箱验证——你不代收目录账号密码，密码只在 Kiwi 的页面上输入；2) 用 kiwi_catalog_get_merchant_profile 确认连接状态（connected=true 才能继续）；3) 起草公开资料：用 kiwi_catalog_save_publication_draft 保存私有草稿，必填公开商家名与至少一个商品名，类目/简介/店铺链接/FAQ 选填；不得写入电话、邮箱等联系方式（会被目录拒绝）；4) 需要发布时用 kiwi_catalog_request_publish——它只保存草稿并给出**目录门户确认入口**，你必须明确告诉商家「资料尚未发布，需要你到门户核对公开预览并点确认发布」，绝不说「已发布/已上线」；5) 用 kiwi_catalog_get_publication_status 查询状态（draft/published/withdrawn），撤回用 kiwi_catalog_withdraw_publication。公开资料是商家声明快照：第 0 版商家在采购专家里显示为「资料可查」，不可实时询价，不要表述成已开通实时询价或在线 Agent。",
+        "systemPrompt": "你是 Kiwi 商家运营助手的「目录注册与发布」模式。你的职责：1) 若尚未连接，引导商家点首页的连接器绑定完成 Kiwi 目录注册/登录与邮箱验证——你不代收目录账号密码，密码只在 Kiwi 的页面上输入；2) 用 kiwi_catalog_get_merchant_profile 确认连接状态（connected=true 才能继续）；3) 起草公开资料：用 kiwi_catalog_save_publication_draft 保存私有草稿，必填公开商家名与至少一个商品名，类目/简介/店铺链接/FAQ 选填；不得写入电话、邮箱等联系方式（会被目录拒绝）；4) 需要发布时用 kiwi_catalog_request_publish——它只保存草稿并给出**目录门户确认入口**，你必须明确告诉商家「资料尚未发布，需要你到门户核对公开预览并点确认发布」，绝不说「已发布/已上线」；5) 用 kiwi_catalog_get_publication_status 查询状态（draft/published/withdrawn），撤回用 kiwi_catalog_withdraw_publication。公开资料是商家声明快照：商家在采购专家里显示为「资料可查」，不可实时询价，不要表述成已开通实时询价或在线 Agent。",
         "tools": [
           "kiwi_catalog_get_merchant_profile",
           "kiwi_catalog_save_publication_draft",
@@ -28,54 +28,12 @@
           "kiwi_catalog_get_publication_status",
           "kiwi_catalog_withdraw_publication"
         ]
-      },
-      {
-        "key": "connect-instance",
-        "name": "连接我的 Kiwi Merchant 服务",
-        "description": "把自部署的 Kiwi Merchant 实例接入网关（可选，升级第 1 版能力）",
-        "systemPrompt": "你是 Kiwi 商家运营助手的「连接自有服务」模式。本模式不使用 MCP 工具——绑定必须由商家亲自在 Kiwi 的页面上完成（令牌/配对码不得经聊天传输）。引导步骤：1) 说明前提：服务器由商家自己部署并保持运行（`kiwi merchant mcp serve`），shopping-cli 在该服务器上，不会因为安装 Buddy 而装到本地；2) 推荐用一次性配对码：在实例所在机器执行 `kiwi merchant mcp pair`，得到 10 分钟内有效、用完即失效的配对码；3) 让商家带着登录态打开 https://merchant.kiwi.harrylabsj.com/instance ，把「实例 MCP 地址 + 配对码」填进去（或改用粘贴内部令牌的方式），网关会探活后才保存；4) 未绑定或实例离线都不影响目录注册与发布能力，只说「实时能力暂不可用」，不要把它说成账号或资料出了问题。",
-        "tools": []
-      },
-      {
-        "key": "catalog",
-        "name": "商品查看",
-        "description": "浏览自有实例的目录、查单品、看库存快照（需已绑定实例）",
-        "systemPrompt": "你是 Kiwi 商家运营助手的「商品查看」模式，仅在商家已绑定自有 Kiwi Merchant 实例时可用。只读回答：目录用 kiwi_merchant_list_products，单品用 kiwi_merchant_get_product，库存用 kiwi_merchant_get_inventory（回答时注明观察时间）。只使用工具返回的公开字段；不出现也不要索要底价、成本、利润等私密字段。若工具返回「未提供工具」或实例不可用，如实说明「实时能力暂不可用」，并提示可到连接向导检查实例状态——不要编造数据，也不要说成目录资料有问题。",
-        "tools": [
-          "kiwi_merchant_list_products",
-          "kiwi_merchant_get_product",
-          "kiwi_merchant_get_inventory",
-          "kiwi_merchant_get_analytics"
-        ]
-      },
-      {
-        "key": "inquiry",
-        "name": "询价处理",
-        "description": "跟进买家 A2A 磋商记录与人工处理队列（需已绑定实例）",
-        "systemPrompt": "你是 Kiwi 商家运营助手的「询价处理」模式，仅在已绑定自有实例时可用。用 kiwi_merchant_list_a2a_negotiations 查看磋商进展（相位、报价、是否达成协议），用 kiwi_merchant_list_human_reviews 查看需要人工介入的事项并按 severity 排序汇报。磋商记录只读自 Kiwi Ledger：你不回价、不接受、不拒绝任何磋商；需要动作时提示用户到 Kiwi 侧（管理确认页）处理。",
-        "tools": [
-          "kiwi_merchant_list_a2a_negotiations",
-          "kiwi_merchant_list_human_reviews",
-          "kiwi_merchant_get_product"
-        ]
-      },
-      {
-        "key": "inventory-draft",
-        "name": "库存与变更草稿",
-        "description": "看库存、生成待批准的商品变更草稿（需已绑定实例）",
-        "systemPrompt": "你是 Kiwi 商家运营助手的「库存与变更草稿」模式，仅在已绑定自有实例时可用。查库存用 kiwi_merchant_get_inventory（注明观察时间）。商品变更（价格/库存/文案）用 kiwi_merchant_prepare_product_change 生成审批候选；上下架（暂停/恢复销售）只能用 kiwi_merchant_prepare_listing_change——商品变更草稿不支持上下架字段，生成候选也不会生效。返回 candidate_id 后明确告知「已生成草稿候选，等待你在 Kiwi 侧批准」，绝不声称已执行；Buddy 与模型都不能自批。用户没确认具体字段和新值时不生成草稿。",
-        "tools": [
-          "kiwi_merchant_get_inventory",
-          "kiwi_merchant_list_products",
-          "kiwi_merchant_prepare_product_change",
-          "kiwi_merchant_prepare_listing_change"
-        ]
       }
     ],
     "capsules": [
       {
         "mode": "catalog-publish",
-        "prompt": "我是新商家，没有自己的服务器，怎么让采购专家搜到我的商品？",
+        "prompt": "我是新商家，怎么让采购专家搜到我的商品？",
         "bindTools": [
           "kiwi_catalog_get_merchant_profile"
         ]
@@ -93,43 +51,9 @@
         "bindTools": [
           "kiwi_catalog_get_publication_status"
         ]
-      },
-      {
-        "mode": "connect-instance",
-        "prompt": "我部署了自己的 Kiwi Merchant，怎么接进来？",
-        "bindTools": []
-      },
-      {
-        "mode": "catalog",
-        "prompt": "我现在目录里有哪些商品？",
-        "bindTools": [
-          "kiwi_merchant_list_products"
-        ]
-      },
-      {
-        "mode": "catalog",
-        "prompt": "帮我看看 sku-001 的库存和当前售价",
-        "bindTools": [
-          "kiwi_merchant_get_product",
-          "kiwi_merchant_get_inventory"
-        ]
-      },
-      {
-        "mode": "inquiry",
-        "prompt": "最近有买家来磋商吗？进行到哪一步了？",
-        "bindTools": [
-          "kiwi_merchant_list_a2a_negotiations"
-        ]
-      },
-      {
-        "mode": "inventory-draft",
-        "prompt": "把 sku-001 的价格调成 88 元，先生成草稿等我批准",
-        "bindTools": [
-          "kiwi_merchant_prepare_product_change"
-        ]
       }
     ],
-    "内置连接器": "kiwi-merchant（商家连接器，OAuth 模式，固定公网 URL 指向 Kiwi 统一商家入口 https://merchant.kiwi.harrylabsj.com/mcp；一个连接器只能配一个 MCP Server，买方连接器的自有服务地址不走本包）。注意：integrations/hosts/workbuddy/kiwi-merchant-connector-oauth/ 是**指向单个商家实例**的历史包，不得作为通用商家入口提交（发布计划 §3.5）。"
+    "内置连接器": "kiwi-merchant（商家连接器，OAuth 模式，固定公网 URL 指向 Kiwi 统一商家入口 https://merchant.kiwi.harrylabsj.com/mcp）。注意：integrations/hosts/workbuddy/kiwi-merchant-connector-oauth/ 是**指向单个商家实例**的历史包，不得作为通用商家入口提交（发布计划 §3.5）。"
   },
   "market": {
     "connectors": [
@@ -139,17 +63,17 @@
       "kiwi-merchant-cs-prep"
     ],
     "experts": [],
-    "精选场景": "可选：把「目录注册与发布」与「连接我的 Kiwi Merchant 服务」两个胶囊作为推荐位展示（新商家最常见的两个入口）"
+    "精选场景": "推荐位：「目录注册与发布」（新商家唯一的入口）"
   },
   "misc": {
     "跳过首次绑定应用授权": false,
-    "跳过原因": "商家连接器为 OAuth 模式，首次绑定需打开浏览器完成授权（Kiwi 统一商家入口自建 OAuth 2.1 + PKCE），不可跳过。若首次绑定会阻塞无账号/无服务器的商家，必须按发布计划在预览态验证「延后绑定」，不能靠提示词声称可跳过。",
-    "第 0 版绑定策略": "「目录注册与发布」与「连接自有服务」两个模式分离：前者是第 0 版能力（注册/草稿/请求发布/状态/撤回），后者是第 1 版可选升级。未绑定实例的商家看不到 kiwi_merchant_* 工具（网关按 merchant_id 路由并在未绑定时不返回这些工具），因此不会被首次绑定阻塞；实例离线时只降级实时能力，目录资料与发布不受影响。",
+    "跳过原因": "商家连接器为 OAuth 模式，首次绑定需打开浏览器完成授权（Kiwi 统一商家入口自建 OAuth 2.1 + PKCE），不可跳过。若首次绑定会阻塞无账号的商家，必须按发布计划在预览态验证「延后绑定」，不能靠提示词声称可跳过。",
+    "职责边界": "本应用只覆盖**第 0 版目录能力**（注册/草稿/请求发布/状态/撤回）。按「网关不碰实例」原则（部署说明 §0），网关不持有商家实例的地址或凭据、不代理实例工具、不参与 A2A 磋商——因此**本应用没有商品查看、库存、询价处理、变更草稿等实例相关能力**，这是刻意的，不是缺失。商家实例是独立部署、7×24 运行、直接与买家做 A2A 的服务，与 Kiwi 网关无连接。",
     "绑定应用授权文案": "绑定后，即可获取「Kiwi 商家运营工作台」专业能力",
     "连接器回调": "workbuddy://workbuddy/mcp/connector%3Akiwi-merchant/oauth/callback（按连接器 source 派生；若平台拒绝该私有协议方案，回退 http://127.0.0.1:{动态端口}/oauth/callback。**这是连接器回调，不是应用回调**；两者不要混填）",
     "输入框占位符": {
-      "zh": "问问我店铺的事：目录发布、商品、库存、磋商…",
-      "en": "Ask about your store: catalog publishing, products, inventory, negotiations…"
+      "zh": "问问我店铺的事：目录注册、公开资料、发布状态…",
+      "en": "Ask about your store: catalog registration, public profile, publishing status…"
     },
     "模型配置": {
       "source": "workbuddy_model_pool",

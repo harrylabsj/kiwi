@@ -1,6 +1,12 @@
 # 商家连接器（「Kiwi 商家运营」）开发计划
 
-状态：进行中（2026-09-17）。依据：[第 1 版设计](../v1-product-flow-and-onboarding-design.md)、[商家连接器独立发布计划](generic-merchant-connector-release-plan.md)、[平台核验记录](workbuddy-connector-platform-verification-2026-09-17.md)、[第 0 版设计](../v0-ai-cs-and-pull-subscriptions-design.md)。
+状态：进行中（2026-09-17）；**2026-09-18 收窄为只交付第 0 版**（见下方状态说明）。依据：[第 1 版设计](../v1-product-flow-and-onboarding-design.md)、[商家连接器独立发布计划](generic-merchant-connector-release-plan.md)、[平台核验记录](workbuddy-connector-platform-verification-2026-09-17.md)、[第 0 版设计](../v0-ai-cs-and-pull-subscriptions-design.md)。
+
+> **2026-09-18 收窄。** 按[「网关不碰实例」](merchant-connector-deployment.md)原则（部署说明 §0），
+> 网关只做第 0 版目录能力，商家实例独立运行、与网关无连接；买家经目录发现后直接与实例做 A2A。
+> 因此 **WP4（第 1 版实例路由）及其相关条目当前不采用**——实现代码保留作兜底，但不再作为交付与
+> 验收对象。阅读本文时请以 §1「已完成」中的**第 0 版部分**为准；涉及 `kiwi_merchant_*` 工具清单、
+> 实例配对、租户路由的段落属于保留形态，**不要按它们继续开发或验收**。
 
 **架构基线**：WorkBuddy 侧保留**买方、商家两个连接器**。买方连接器（`oc_bd73f860e3e2b5d3` / `kiwi-sourcing` / 本地 stdio / `npx @harrylabsj/kiwi@0.8.0 mcp serve`）本轮**不改动**传输、鉴权、身份或状态存储；本计划只交付**新增的商家连接器**（拟 `source=kiwi-merchant`，远程 HTTPS MCP + OAuth），它同时承载第 0 版目录能力与第 1 版自有服务路由。
 
