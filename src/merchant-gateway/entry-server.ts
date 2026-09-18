@@ -44,6 +44,7 @@
  *   - `next` / `resume` 只接受站内相对路径（防开放重定向）。
  */
 
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   createServer,
@@ -73,6 +74,8 @@ export const DEFAULT_GATEWAY_ENTRY_PORT = 9200;
 export const DEFAULT_GATEWAY_ENTRY_PATH = "/mcp";
 
 const MAX_BODY_BYTES = 1_048_576;
+const CONNECT_STATE_COOKIE = "kiwi_connect_state";
+const CONNECT_STATE_TTL_MS = 10 * 60 * 1000;
 const NO_STORE_HEADERS: Record<string, string> = {
   "cache-control": "no-store",
   pragma: "no-cache",
@@ -184,7 +187,11 @@ export function safeRelativePath(value: string | undefined): string | undefined 
 function safeResume(value: string | undefined): string | undefined {
   const path = safeRelativePath(value);
   if (path === undefined) return undefined;
-  if (path !== "/oauth/authorize" && !path.startsWith("/oauth/authorize?")) return undefined;
+  if (
+    path !== "/instance" &&
+    path !== "/oauth/authorize" &&
+    !path.startsWith("/oauth/authorize?")
+  ) return undefined;
   return path;
 }
 
@@ -192,8 +199,8 @@ function safeResume(value: string | undefined): string | undefined {
  * 二次同源校验：把相对路径按本服务 origin 解析一次，只有解析结果仍落在本服务时
  * 才作为 `Location` 使用（否则回落到 `/`）。
  *
- * `safeResume` 已把取值限定为 `/oauth/authorize` 前缀，这里是纵深防御：将来若
- * 放宽前缀白名单，也不会退化成开放重定向。
+ * `safeResume` 已把取值限定为授权端点或实例页，这里是纵深防御：将来若放宽
+ * 前缀白名单，也不会退化成开放重定向。
  */
 function sameOriginPath(path: string, origin: string): string {
   try {
@@ -262,6 +269,10 @@ export async function startGatewayEntryServer(
   const publicBaseUrl = options.publicBaseUrl.replace(/\/+$/, "");
   const clientLabel = options.clientLabel ?? "Kiwi 商家运营";
   let closing = false;
+  const pendingConnections = new Map<
+    string,
+    { requestId: string; resume: string; expiresAt: number }
+  >();
 
   const transports = new Set<StreamableHTTPServerTransport>();
 
@@ -311,12 +322,33 @@ export async function startGatewayEntryServer(
       );
       return;
     }
-    res.writeHead(303, { location: request.loginUrl, ...NO_STORE_HEADERS });
+    const state = randomBytes(32).toString("base64url");
+    pendingConnections.set(state, {
+      requestId: request.requestId,
+      resume,
+      expiresAt: Math.min(
+        Date.now() + CONNECT_STATE_TTL_MS,
+        Date.parse(request.expiresAt) || Date.now() + CONNECT_STATE_TTL_MS,
+      ),
+    });
+    for (const [key, pending] of pendingConnections) {
+      if (pending.expiresAt <= Date.now()) pendingConnections.delete(key);
+    }
+    const secure = publicBaseUrl.startsWith("https://") ? "; Secure" : "";
+    res.writeHead(303, {
+      location: request.loginUrl,
+      "set-cookie": `${CONNECT_STATE_COOKIE}=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(CONNECT_STATE_TTL_MS / 1000)}${secure}`,
+      ...NO_STORE_HEADERS,
+    });
     res.end();
   };
 
   /** GET /connect/callback：目录回跳（携带一次性 code 或 access_denied）。 */
-  const handleConnectCallback = async (res: ServerResponse, url: URL): Promise<void> => {
+  const handleConnectCallback = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+  ): Promise<void> => {
     const resumeParam = safeResume(url.searchParams.get("resume") ?? undefined);
     if (resumeParam === undefined) {
       writeHtml(
@@ -327,8 +359,27 @@ export async function startGatewayEntryServer(
       );
       return;
     }
-    const resume = sameOriginPath(resumeParam, url.origin);
+    const state = cookieValue(req, CONNECT_STATE_COOKIE);
+    const pending = state === undefined ? undefined : pendingConnections.get(state);
+    const requestId = url.searchParams.get("request_id") ?? "";
     const denied = url.searchParams.get("error");
+    if (
+      state === undefined ||
+      pending === undefined ||
+      pending.expiresAt <= Date.now() ||
+      (requestId !== "" && pending.requestId !== requestId)
+    ) {
+      if (state !== undefined) pendingConnections.delete(state);
+      writeHtml(
+        res,
+        400,
+        `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>连接状态无效</title></head><body>
+<h1>连接状态无效或已过期</h1><p>请返回 Buddy 重新发起连接。</p></body></html>`,
+      );
+      return;
+    }
+    pendingConnections.delete(state);
+    const resume = sameOriginPath(pending.resume, publicBaseUrl);
     if (denied !== null) {
       // 商家在目录拒绝（或目录返回错误）：按 OAuth 语义把失败带回客户端。
       res.writeHead(303, {
@@ -342,7 +393,6 @@ export async function startGatewayEntryServer(
       res.end();
       return;
     }
-    const requestId = url.searchParams.get("request_id") ?? "";
     const code = url.searchParams.get("code") ?? "";
     let identity: {
       merchantId: string;
@@ -350,7 +400,7 @@ export async function startGatewayEntryServer(
       credential: { accessToken: string; scope: string; expiresAt: string };
     };
     try {
-      identity = await options.identity.exchange({ requestId, code });
+      identity = await options.identity.exchange({ requestId: pending.requestId, code });
     } catch (err) {
       process.stderr.write(
         `[gateway entry] connector identity exchange failed: ${
@@ -389,7 +439,10 @@ export async function startGatewayEntryServer(
     const secure = options.secureCookies === true ? "; Secure" : "";
     res.writeHead(303, {
       location: resume,
-      "set-cookie": `${ADMIN_SESSION_COOKIE}=${session.sessionId}; HttpOnly; SameSite=Lax; Path=/${secure}`,
+      "set-cookie": [
+        `${ADMIN_SESSION_COOKIE}=${session.sessionId}; HttpOnly; SameSite=Lax; Path=/${secure}`,
+        `${CONNECT_STATE_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`,
+      ],
       ...NO_STORE_HEADERS,
     });
     res.end();
@@ -857,7 +910,7 @@ ${current}
         return;
       }
       if (req.method === "GET" && url.pathname === "/connect/callback") {
-        await handleConnectCallback(res, url);
+        await handleConnectCallback(req, res, url);
         return;
       }
       if (url.pathname === "/instance" || url.pathname.startsWith("/instance/")) {

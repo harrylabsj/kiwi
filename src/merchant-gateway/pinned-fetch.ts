@@ -64,6 +64,8 @@ export interface PinnedFetchOptions {
   resolveIp?: (hostname: string) => Promise<string[]>;
   /** 请求超时（毫秒）；缺省由调用方通过 AbortSignal 控制。 */
   timeoutMs?: number;
+  /** 响应体最大字节数；超限立即终止连接，避免先完整缓冲再检查。 */
+  maxResponseBytes?: number;
 }
 
 type RequestFn = typeof httpRequest;
@@ -159,6 +161,7 @@ export async function requestViaAddress(
   url: URL,
   address: string,
   init: FetchInit = {},
+  maxResponseBytes = 1_048_576,
 ): Promise<Response> {
   const method = init.method ?? "GET";
   const headers = headersToObject(init.headers);
@@ -188,8 +191,25 @@ export async function requestViaAddress(
       },
       (res) => {
         const chunks: Buffer[] = [];
-        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        let size = 0;
+        let settled = false;
+        const rejectOnce = (error: Error): void => {
+          if (settled) return;
+          settled = true;
+          rejectPromise(error);
+        };
+        res.on("data", (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > maxResponseBytes) {
+            res.destroy();
+            rejectOnce(new PinnedFetchError(`实例响应体超过 ${maxResponseBytes} 字节上限`));
+            return;
+          }
+          chunks.push(chunk);
+        });
         res.on("end", () => {
+          if (settled) return;
+          settled = true;
           resolvePromise(
             new Response(Buffer.concat(chunks), {
               status: res.statusCode ?? 0,
@@ -198,7 +218,7 @@ export async function requestViaAddress(
             }),
           );
         });
-        res.on("error", rejectPromise);
+        res.on("error", rejectOnce);
       },
     );
     req.on("error", (err) => {
@@ -245,7 +265,7 @@ export function createPinnedFetch(options: PinnedFetchOptions = {}): typeof fetc
         headers,
         ...(body !== undefined && body !== null ? { body } : {}),
         ...(requestInit.signal !== undefined ? { signal: requestInit.signal } : {}),
-      });
+      }, options.maxResponseBytes);
     }
 
     const pinnedIp = await resolvePinnedAddress(url.hostname, resolve);
@@ -254,7 +274,7 @@ export function createPinnedFetch(options: PinnedFetchOptions = {}): typeof fetc
       headers,
       ...(body !== undefined && body !== null ? { body } : {}),
       ...(requestInit.signal !== undefined ? { signal: requestInit.signal } : {}),
-    });
+    }, options.maxResponseBytes);
   };
   return pinnedFetch as typeof fetch;
 }

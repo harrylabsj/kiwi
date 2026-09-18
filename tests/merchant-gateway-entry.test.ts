@@ -89,7 +89,7 @@ async function startFakeCatalog(): Promise<FakeCatalog> {
               request_id: requestId,
               status: "pending",
               created_at: "2026-09-17T10:00:00+00:00",
-              expires_at: "2026-09-17T10:10:00+00:00",
+              expires_at: "2099-01-01T00:10:00+00:00",
             },
             login_url: `http://127.0.0.1:1/portal/connect?request_id=${requestId}`,
           }),
@@ -254,7 +254,7 @@ async function startEntry(): Promise<EntryStack> {
         redeemedCodes.add(valid);
         return {
           credential: "paired-internal-token",
-          ownerId: "merchant-001",
+          ownerId: MERCHANT_ID,
           principalId: "p",
           serverName: "kiwi-merchant",
           serverVersion: "0.8.0",
@@ -317,6 +317,8 @@ async function connectAndAuthorize(stack: EntryStack): Promise<BindResult> {
   // 2. 连接入口 → catalog 登录地址（并记录 return_url）。
   const connect = await fetch(`${issuer}${connectLocation}`, { redirect: "manual" });
   expect(connect.status).toBe(303);
+  const connectCookie = (connect.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+  expect(connectCookie).toContain("kiwi_connect_state=");
   expect(
     (connect.headers.get("location") ?? "").startsWith("http://127.0.0.1:1/portal/connect"),
   ).toBe(true);
@@ -326,7 +328,7 @@ async function connectAndAuthorize(stack: EntryStack): Promise<BindResult> {
   // 3. 商家在目录确认后，浏览器回到入口 callback（携带一次性 code）。
   const callback = await fetch(
     `${returnUrl}&request_id=${stack.catalog.lastRequestId()}&code=the-code`,
-    { redirect: "manual" },
+    { headers: { cookie: connectCookie }, redirect: "manual" },
   );
   expect(callback.status).toBe(303);
   const cookie = (callback.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
@@ -579,10 +581,14 @@ describe("商家连接器入口：连接与授权闭环", () => {
 
     const first = await fetch(authorizeUrl, { redirect: "manual" });
     const connectLocation = first.headers.get("location") ?? "";
-    await fetch(`${stack.issuer}${connectLocation}`, { redirect: "manual" });
+    const connect = await fetch(`${stack.issuer}${connectLocation}`, { redirect: "manual" });
+    const connectCookie = (connect.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
     const returnUrl = stack.catalog.lastReturnUrl();
 
-    const callback = await fetch(`${returnUrl}&error=access_denied`, { redirect: "manual" });
+    const callback = await fetch(`${returnUrl}&error=access_denied`, {
+      headers: { cookie: connectCookie },
+      redirect: "manual",
+    });
     expect(callback.status).toBe(303);
     expect(callback.headers.get("location") ?? "").toContain("connect=denied");
     const denied = await fetch(`${stack.issuer}${callback.headers.get("location") ?? ""}`, {
@@ -612,11 +618,18 @@ describe("商家连接器入口：连接与授权闭环", () => {
       code_challenge_method: "S256",
     }).toString()}`;
     const first = await fetch(authorizeUrl, { redirect: "manual" });
-    await fetch(`${stack.issuer}${first.headers.get("location") ?? ""}`, { redirect: "manual" });
-    const returnUrl = stack.catalog.lastReturnUrl();
-    const callback = await fetch(`${returnUrl}&request_id=x&code=the-code`, {
+    const connect = await fetch(`${stack.issuer}${first.headers.get("location") ?? ""}`, {
       redirect: "manual",
     });
+    const connectCookie = (connect.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+    const returnUrl = stack.catalog.lastReturnUrl();
+    const callback = await fetch(
+      `${returnUrl}&request_id=${stack.catalog.lastRequestId()}&code=the-code`,
+      {
+      headers: { cookie: connectCookie },
+      redirect: "manual",
+      },
+    );
     expect(callback.status).toBe(303);
     expect(callback.headers.get("set-cookie")).toBeNull();
     const failed = await fetch(`${stack.issuer}${callback.headers.get("location") ?? ""}`, {
@@ -625,6 +638,58 @@ describe("商家连接器入口：连接与授权闭环", () => {
     expect(new URL(failed.headers.get("location") ?? "").searchParams.get("error")).toBe(
       "server_error",
     );
+  });
+
+  it("目录回跳必须带当前浏览器发起连接时的状态 cookie", async () => {
+    const stack = await startEntry();
+    const redirectUri = workbuddyCallbackUri("kiwi-merchant");
+    const reg = await fetch(`${stack.issuer}/oauth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name: "WorkBuddy", redirect_uris: [redirectUri] }),
+    });
+    const client = (await reg.json()) as { client_id: string };
+    const authorizeUrl = `${stack.issuer}/oauth/authorize?${new URLSearchParams({
+      response_type: "code",
+      client_id: client.client_id,
+      redirect_uri: redirectUri,
+      code_challenge: CODE_CHALLENGE,
+      code_challenge_method: "S256",
+    }).toString()}`;
+    const first = await fetch(authorizeUrl, { redirect: "manual" });
+    const connect = await fetch(`${stack.issuer}${first.headers.get("location") ?? ""}`, {
+      redirect: "manual",
+    });
+    const returnUrl = stack.catalog.lastReturnUrl();
+    const callback = await fetch(`${returnUrl}&request_id=${stack.catalog.lastRequestId()}&code=the-code`, {
+      redirect: "manual",
+    });
+    expect(callback.status).toBe(400);
+    expect(await callback.text()).toContain("连接状态无效");
+    expect(connect.headers.get("set-cookie")).toContain("kiwi_connect_state=");
+  });
+
+  it("会话过期后访问实例绑定页可完成连接回跳", async () => {
+    const stack = await startEntry();
+    const first = await fetch(`${stack.issuer}/instance`, { redirect: "manual" });
+    expect(first.status).toBe(303);
+    const connect = await fetch(`${stack.issuer}${first.headers.get("location") ?? ""}`, {
+      redirect: "manual",
+    });
+    const connectCookie = (connect.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+    const returnUrl = stack.catalog.lastReturnUrl();
+    const callback = await fetch(`${returnUrl}&request_id=${stack.catalog.lastRequestId()}&code=the-code`, {
+      headers: { cookie: connectCookie },
+      redirect: "manual",
+    });
+    expect(callback.status).toBe(303);
+    expect(callback.headers.get("location")).toBe("/instance");
+    const sessionCookie = (callback.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+    const page = await fetch(`${stack.issuer}/instance`, {
+      headers: { cookie: sessionCookie },
+    });
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("连接我的 Kiwi Merchant 服务");
   });
 
   it("resume 指向站外时 callback 拒绝（防开放重定向）", async () => {
@@ -674,11 +739,18 @@ describe("商家连接器入口：连接与授权闭环", () => {
       code_challenge_method: "S256",
     }).toString()}`;
     const first = await fetch(authorizeUrl, { redirect: "manual" });
-    await fetch(`${stack.issuer}${first.headers.get("location") ?? ""}`, { redirect: "manual" });
-    const returnUrl = stack.catalog.lastReturnUrl();
-    const callback = await fetch(`${returnUrl}&request_id=x&code=the-code`, {
+    const connect = await fetch(`${stack.issuer}${first.headers.get("location") ?? ""}`, {
       redirect: "manual",
     });
+    const connectCookie = (connect.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+    const returnUrl = stack.catalog.lastReturnUrl();
+    const callback = await fetch(
+      `${returnUrl}&request_id=${stack.catalog.lastRequestId()}&code=the-code`,
+      {
+      headers: { cookie: connectCookie },
+      redirect: "manual",
+      },
+    );
     const cookie = (callback.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
     const page = await fetch(authorizeUrl, { headers: { cookie }, redirect: "manual" });
     const csrf = /name="csrf" value="([^"]+)"/.exec(await page.text())?.[1] ?? "";

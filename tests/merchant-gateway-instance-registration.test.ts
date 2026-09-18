@@ -92,7 +92,7 @@ async function startFakeInstance(
         res.end(
           JSON.stringify({
             ok: true,
-            instance: { owner_id: pairing.ownerId ?? "merchant-001", principal_id: "merchant-agent:merchant-001" },
+            instance: { owner_id: pairing.ownerId ?? MERCHANT, principal_id: `merchant-agent:${MERCHANT}` },
             credential: pairing.credential,
           }),
         );
@@ -292,7 +292,7 @@ describe("配对码绑定（§8.4 第二期）", () => {
     });
     const redeemed = await redeemInstancePairingCode(instance.url, "AAAA-BBBB-CCCC");
     expect(redeemed.credential).toBe("paired-internal-token");
-    expect(redeemed.ownerId).toBe("merchant-001");
+    expect(redeemed.ownerId).toBe(MERCHANT);
     await expect(redeemInstancePairingCode(instance.url, "AAAA-BBBB-CCCC")).rejects.toThrowError(
       /已使用|无效或已过期/,
     );
@@ -363,7 +363,7 @@ describe("配对码绑定（§8.4 第二期）", () => {
       { registrations, credentials },
       { merchantId: MERCHANT, mcpUrl: instance.url, code: "AAAA-BBBB-CCCC" },
     );
-    expect(bound.ownerId).toBe("merchant-001");
+    expect(bound.ownerId).toBe(MERCHANT);
     expect(registrations.get(MERCHANT)?.mcpUrl).toBe(instance.url);
     expect(credentials.get(`instance:${MERCHANT}`)?.token).toBe("paired-token");
 
@@ -374,6 +374,21 @@ describe("配对码绑定（§8.4 第二期）", () => {
         { merchantId: MERCHANT, mcpUrl: instance.url, code: "WRONG-CODE-XXXX" },
       ),
     ).rejects.toThrowError(/无效或已过期/);
+    expect(registrations.get(MERCHANT)).toBeUndefined();
+    expect(credentials.get(`instance:${MERCHANT}`)).toBeUndefined();
+  });
+
+  it("实例 owner_id 与目录商家不一致时拒绝绑定并不写入路由", async () => {
+    const instance = await startFakeInstance({
+      pairing: { code: "AAAA-BBBB-CCCC", credential: "paired-token", ownerId: "mkt_other" },
+    });
+    const { registrations, credentials } = stack();
+    await expect(
+      bindInstanceViaPairing(
+        { registrations, credentials },
+        { merchantId: MERCHANT, mcpUrl: instance.url, code: "AAAA-BBBB-CCCC" },
+      ),
+    ).rejects.toThrowError(/归属与当前商家不一致/);
     expect(registrations.get(MERCHANT)).toBeUndefined();
     expect(credentials.get(`instance:${MERCHANT}`)).toBeUndefined();
   });

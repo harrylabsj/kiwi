@@ -155,6 +155,13 @@ describe("公网入口与 TLS 边界", () => {
     );
     expect(expectError(opts({ publicUrl: "https://merchant.example/?x=1" }))).toContain("查询串");
   });
+
+  it("生产目录地址必须使用 HTTPS，loopback 开发地址可用 HTTP", () => {
+    expect(expectError(opts({ catalogUrl: "http://catalog.example" }))).toContain("HTTPS");
+    expect(expectOk(opts({ catalogUrl: "http://127.0.0.1:8600" })).publicUrl).toBe(
+      "https://merchant.example",
+    );
+  });
 });
 
 describe("凭据分工与功能开关", () => {

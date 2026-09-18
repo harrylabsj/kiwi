@@ -24,6 +24,7 @@
  *   2) **探活**：带该令牌调用实例的 initialize + tools/list，必须拿到合法
  *      JSON-RPC 结果——地址可达 + 凭据正确 + 确为 MCP 实例，三者同时成立
  *      才算「控制权证明」（不给人工审批留口子，也不接受自述 merchant_id）；
+ *      配对码路径还要求实例 owner_id 与当前目录 merchant_id 一致，避免误配；
  *   3) 令牌加密落库（`instance:<merchant_id>`），注册表记录 merchant_id → 地址。
  *
  * 令牌只在网关托管的页面里提交，**永不进入对话/模型上下文**（设计 §3.1）；
@@ -316,7 +317,7 @@ export async function probeInstance(
   }
   // 实例地址是商家提供的不可信输入：默认走**钉住式**出站（解析一次、按该 IP
   // 建连，防 DNS 重绑定），不做二次解析。
-  const fetchImpl = options.fetchImpl ?? createPinnedFetch();
+  const fetchImpl = options.fetchImpl ?? createPinnedFetch({ maxResponseBytes: PROBE_MAX_BYTES });
   const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS;
   const initialized = await rpcCall(url, token, "initialize", fetchImpl, timeoutMs);
   const serverInfo = (() => {
@@ -376,7 +377,7 @@ export async function redeemInstancePairingCode(
   if (typeof code !== "string" || code.trim() === "") {
     throw new TenantBackendError("配对码不能为空（请在实例上执行 kiwi merchant mcp pair）", "invalid_config");
   }
-  const fetchImpl = options.fetchImpl ?? createPinnedFetch();
+  const fetchImpl = options.fetchImpl ?? createPinnedFetch({ maxResponseBytes: PROBE_MAX_BYTES });
   const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -476,6 +477,20 @@ export async function bindInstanceViaPairing(
     ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
     ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
   });
+  // 配对码证明了调用方能操作某个实例，但还必须证明该实例就是当前目录商家
+  // 的实例。两套身份使用同一个稳定 merchant_id；不一致时拒绝落库，避免把
+  // 其他人的实例挂到当前账号下。未来若保留不同 ID，应由受信服务端显式提供
+  // ownershipVerifier，不能靠用户输入的映射。
+  if (
+    redeemed.ownerId.trim() === "" ||
+    redeemed.principalId.trim() === "" ||
+    redeemed.ownerId !== input.merchantId
+  ) {
+    throw new TenantBackendError(
+      "配对实例归属与当前商家不一致（请使用该商家 profile 生成的配对码）",
+      "invalid_config",
+    );
+  }
   // 能力探测：兑换到的凭据必须真的能调通实例（tools/list）才落库——避免存下
   // 一份用不了的凭据；同时记录实例自报名称/版本与工具数。
   const prober = options.probe ?? probeInstance;
