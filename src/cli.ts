@@ -1460,7 +1460,7 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
         "在商家连接器网关的实例绑定页（https://<网关域名>/instance）选择「用配对码绑定」，",
         "填入上面的地址与配对码即可；网关会用它兑换一份**新签发的**配对凭据"
           + "（由本实例生成并持有，重配对即轮换），并加密保存。",
-        "配对码只证明「你在实例所在机器上」，商家身份仍以网关侧的目录 OAuth 连接为准。",
+        "配对码证明你能操作实例；网关还会核对实例 profile.owner_id 与目录 OAuth 返回的 merchant_id 一致后才绑定。",
         "",
       ].join("\n"),
     );

@@ -226,15 +226,18 @@ export function validateGatewayServeOptions(
   if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(opts.source)) {
     return { ok: false, error: `--source 非法（小写字母/数字/连字符）：${opts.source}` };
   }
-  // 目录地址校验：http(s)、无 userinfo、无查询串。
+  // 目录地址校验：生产必须 HTTPS；只有 loopback 开发地址允许 HTTP。
   try {
     const catalogUrl = new URL(opts.catalogUrl);
     if (
       (catalogUrl.protocol !== "http:" && catalogUrl.protocol !== "https:") ||
+      (catalogUrl.protocol !== "https:" && !isLoopbackHost(catalogUrl.hostname)) ||
       catalogUrl.username !== "" ||
-      catalogUrl.password !== ""
+      catalogUrl.password !== "" ||
+      catalogUrl.search !== "" ||
+      catalogUrl.hash !== ""
     ) {
-      return { ok: false, error: `--catalog-url 非法：${opts.catalogUrl}` };
+      return { ok: false, error: `--catalog-url 必须是无凭据/查询串的 HTTPS 地址（loopback 开发可用 HTTP）：${opts.catalogUrl}` };
     }
   } catch {
     return { ok: false, error: `--catalog-url 非法：${opts.catalogUrl}` };

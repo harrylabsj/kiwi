@@ -36,7 +36,7 @@ import { TenantBackendError, TenantBackendRegistry } from "./tenant-registry.js"
 
 const DEFAULT_TOOL_CACHE_TTL_MS = 60_000;
 
-/** 工具清单缓存（每商家一条；TTL 内复用，避免每次 tools/list 都打实例）。 */
+/** 工具清单缓存（每商家、每授权 scope 一条；避免不同权限复用清单）。 */
 export class InstanceToolListCache {
   private readonly entries = new Map<
     string,
@@ -45,18 +45,24 @@ export class InstanceToolListCache {
 
   constructor(private readonly ttlMs: number = DEFAULT_TOOL_CACHE_TTL_MS) {}
 
-  get(merchantId: string, nowMs: number): MerchantMcpToolDefinition[] | undefined {
-    const entry = this.entries.get(merchantId);
+  get(merchantId: string, scopeKey: string, nowMs: number): MerchantMcpToolDefinition[] | undefined {
+    const key = `${merchantId}\u0000${scopeKey}`;
+    const entry = this.entries.get(key);
     if (entry === undefined) return undefined;
     if (entry.expiresAt <= nowMs) {
-      this.entries.delete(merchantId);
+      this.entries.delete(key);
       return undefined;
     }
     return entry.tools;
   }
 
-  set(merchantId: string, tools: MerchantMcpToolDefinition[], nowMs: number): void {
-    this.entries.set(merchantId, { tools, expiresAt: nowMs + this.ttlMs });
+  set(
+    merchantId: string,
+    scopeKey: string,
+    tools: MerchantMcpToolDefinition[],
+    nowMs: number,
+  ): void {
+    this.entries.set(`${merchantId}\u0000${scopeKey}`, { tools, expiresAt: nowMs + this.ttlMs });
   }
 
   clear(): void {
@@ -155,6 +161,8 @@ export function buildInstanceTools(deps: InstanceToolDeps): ScopedMcpTools | und
   const merchantId = deps.authorization.merchant_id;
   const cache = deps.cache ?? new InstanceToolListCache();
   const now = deps.now ?? (() => Date.now());
+  const scopeKey = (scopes: string[] | undefined): string =>
+    scopes === undefined ? "*" : [...new Set(scopes)].sort().join(" ");
 
   const rpc = async (
     method: string,
@@ -189,20 +197,20 @@ export function buildInstanceTools(deps: InstanceToolDeps): ScopedMcpTools | und
   };
 
   return {
-    listTools: async (_scopes) => {
+    listTools: async (scopes) => {
       // 工具清单由实例现取，mcp-proxy 已按**令牌 scope** 过滤（与 tools/call
       // 同一道门禁）并按工具名 allowlist 收敛；这里不再二次过滤，避免两处
       // 规则漂移。缓存的是该令牌视角下的清单，TTL 60 秒。
-      const cached = cache.get(merchantId, now());
+      const cached = cache.get(merchantId, scopeKey(scopes), now());
       if (cached !== undefined) return cached;
       const result = await rpc("tools/list", {});
       if (!result.ok) return []; // 实例不可达：第 1 版工具不可见，第 0 版照常
       const tools = parseToolList(result.payload);
-      if (tools.length > 0) cache.set(merchantId, tools, now());
+      if (tools.length > 0) cache.set(merchantId, scopeKey(scopes), tools, now());
       return tools;
     },
-    call: async (name, args, _scopes) => {
-      const cached = cache.get(merchantId, now());
+    call: async (name, args, scopes) => {
+      const cached = cache.get(merchantId, scopeKey(scopes), now());
       if (cached !== undefined && !cached.some((tool) => tool.name === name)) {
         return fail(`商家实例未提供工具 ${name}（或当前授权不含所需 scope）`);
       }

@@ -174,7 +174,7 @@ describe("实例工具：路由与隔离", () => {
       registry,
       authorization: auth("mkt_acme", ["merchant:read"]),
       fetchImpl: upstream.fetchImpl,
-      cache: new InstanceToolListCache(60_000),
+      cache,
       now: () => nowMs,
     });
     expect((await readOnly!.listTools(["merchant:read"])).map((t) => t.name)).toEqual([
