@@ -32,7 +32,7 @@
 | 目录商家接口接受该凭据（`Authorization: Bearer cmt_…`）：会话与凭据二选一，`merchant_id` 只来自服务端绑定；FastAPI 栈补齐 Authorization 头合并 | `kiwi-catalog/kiwi_catalog/api/handlers/merchant_publications.py`、`api/fastapi_routes.py` |
 | 凭据保管：AES-256-GCM（密钥 `KIWI_GATEWAY_CREDENTIAL_KEY`，缺失即 fail-closed），入口侧 `oauth.sqlite` 每商家一行 | `src/merchant-gateway/credential-vault.ts` |
 | 目录写客户端（草稿/详情/撤回；`inquiry_available=false` 作为契约不变量校验） | `src/merchant-gateway/catalog-publications.ts` |
-| 五个 `kiwi_catalog_*` 工具：profile / save_draft / request_publish / status / withdraw；`request_publish` **不发布**，只返回门户确认入口 | `src/merchant-gateway/catalog-tools.ts` |
+| 六个 `kiwi_catalog_*` 工具：profile / follower_stats / save_draft / request_publish / status / withdraw；`request_publish` **不发布**，只返回门户确认入口；`follower_stats` 只回匿名关注总数（无身份、无名单、无群发通道） | `src/merchant-gateway/catalog-tools.ts` |
 | 入口按已验证主体逐请求构造工具束（`toolsFor`），连接成功即写入凭据保管 | `src/merchant-gateway/entry-server.ts` |
 
 ### WP3 入口 CLI 与部署配置（设计 §3.2 / 发布计划 §2）

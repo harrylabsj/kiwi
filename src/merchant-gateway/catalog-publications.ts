@@ -187,6 +187,27 @@ export class MerchantPublicationClient {
     return toPublication(body.publication);
   }
 
+  /**
+   * 商家本人的匿名关注汇总（只读）：活跃关注者**总数**。
+   *
+   * 目录侧该接口的设计是**只回聚合数字**——不返回买家身份、不返回关注列表、也
+   * 不提供向关注者发消息的通道（kiwi-catalog `publication_stats` 的契约）。
+   * 本方法同样只取 `followers_total` 一个数，响应里的其它字段（浏览量、各资料
+   * 明细）不进入返回值，也就不会进模型上下文。
+   */
+  async fetchFollowerStats(token: string): Promise<{ followersTotal: number }> {
+    const body = await this.request(token, "GET", "/v1/merchant-publications/stats");
+    const stats = asRecord(body.stats, "stats");
+    const total = stats.followers_total;
+    if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
+      throw new CatalogSourceError(
+        "response_invalid",
+        "merchant-publications stats response is missing a non-negative numeric followers_total",
+      );
+    }
+    return { followersTotal: total };
+  }
+
   private async request(
     token: string,
     method: "GET" | "POST",
