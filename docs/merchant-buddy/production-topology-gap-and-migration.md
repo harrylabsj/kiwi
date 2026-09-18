@@ -1,8 +1,92 @@
-# 现网拓扑实测与迁移清单（kiwi-hk / 47.243.241.218）
+# 现网拓扑实测与迁移记录（kiwi-hk / 47.243.241.218）
 
-状态：2026-09-18 实测（只读侦察 + 域名切换后复验）。
+状态：2026-09-18 **迁移已执行完毕**（§0 为执行记录；§1 起为迁移前的实测与差异分析，保留作决策依据）。
 
-**目的**：把服务器上**实际跑着什么**记下来，与[部署说明](merchant-connector-deployment.md)的**目标拓扑**逐项对照，给出可独立回滚的迁移步骤。部署说明描述的是"应该长什么样"，本文描述的是"现在长什么样"，两者目前有实质差异。
+**目的**：记录服务器上实际跑着什么、与[部署说明](merchant-connector-deployment.md)目标拓扑的差异，以及消除差异的步骤。**迁移完成后，现网已与部署说明的目标拓扑一致**。
+
+---
+
+## 0. 执行记录（2026-09-18）
+
+### 0.1 迁移前查到的两个真实故障
+
+这次迁移不只是"对齐拓扑"，过程中查出并修掉了两个正在影响线上的问题：
+
+1. **商家对买家显示为离线（WP6 心跳缺失）**。目录的 `last_seen_at` 自 2026-09-16 22:58 起再没动过，
+   `freshness_state = stale`。根因：线上实例是 **0.8.0，不含 WP6 心跳**（`dist/a2a/node.js` 里
+   "heartbeat" 出现 0 次）；目录侧日志显示**从未收到过任何心跳请求**。
+
+2. **商家身份降级（域名与 card URL 不同源）**。目录里 `canonical_domain` 一直是 `veyquo.com`
+   （且 2026-08-14、09-04 的域控制/身份/能力三项验证**都 passed**），但 09-16 部署 v2 时 profile 写成了
+   `public_url: merchant.kiwi.harrylabsj.com`，把登记的 `agent_card_url` 改成旧域名 —— 与
+   `canonical_domain` 不同源，域控制验证过不去，`verification_status` 掉到 `stale`。
+
+   也就是说：**商家身份本来就是正确地挂在 `veyquo.com` 的，是 09-16 那次部署把它弄拧了。**
+
+### 0.2 做了什么
+
+| # | 动作 | 结果 |
+| --- | --- | --- |
+| A | 给 Caddy 三个站点加 access log（`/var/log/caddy/{catalog,veyquo,merchant}-access.log`，50MiB×5 滚动） | 迁移前后的流量依据已具备 |
+| C1 | `veyquo.com` 从旧 chat(8700) 改指实例：A2A → 9000、`/admin/*` → 9100、`/mcp`+`/oauth/*` → 404 | 实例身份落到 `veyquo.com` |
+| B | 实例 `app/` 升级到 **0.9.0**（旧 app 与 tarball 备份保留在 `/home/kiwi-merchant-v2/backups/`） | 获得 WP6 心跳与 `merchant mcp pair` |
+| D1 | profile 两处 `public_url` 改为 `veyquo.com` / `https://veyquo.com`（备份 `profile-pre-veyquo-*.yaml`） | 注册的 card URL 与 canonical_domain 同源 |
+| D2 | 重启实例 → 自动重新注册 | 复用同一 `cagt_V4sJmkIokmvx`，**无重复条目** |
+| C2 | 退役旧 chat 服务：`systemctl stop/disable kiwi-merchant` | 8700 释放；数据目录与 shopping-cli **未受影响** |
+| D4 | `merchant.kiwi.harrylabsj.com` 收敛为纯网关（移除 A2A 与 `/admin/*` 保留） | 与部署说明 §1/§3 目标一致 |
+
+### 0.3 迁移后验证
+
+```
+目录侧（catalog）
+  agent 数量               1（无重复）
+  canonical_domain         veyquo.com
+  verification_status      commerce_verified      ← 由 stale 恢复
+  freshness_state          fresh                  ← 由 stale 恢复
+  last_seen_at             2026-09-18T03:31:04Z   ← 心跳每 300s 推进
+  验证记录                  domain_control / agent_identity / commerce_capability 全部 passed
+  买家侧投影                agent_card = https://veyquo.com/.well-known/agent-card.json
+
+公网可达性
+  merchant.kiwi.harrylabsj.com/health                       200  网关
+  merchant.kiwi.harrylabsj.com/.well-known/oauth-*          200  网关
+  merchant.kiwi.harrylabsj.com/.well-known/agent-card.json  404  （已不再承载 A2A）
+  merchant.kiwi.harrylabsj.com/admin/login                  404  （已迁至 veyquo.com）
+  veyquo.com/.well-known/agent-card.json                    200  实例（自述 https://veyquo.com/）
+  veyquo.com/admin/login                                    200  实例确认页
+  veyquo.com/mcp                                            404  实例 MCP 不对公网
+  catalog.kiwi.harrylabsj.com/portal/login                  200  商家注册网站
+```
+
+心跳按 300s 稳定推进（11:26:04 启动即时一次 → 11:31:04 一次），`freshness_state` 保持 `fresh`。
+
+### 0.4 回滚
+
+每一步都有独立备份，按需回退：
+
+```sh
+# Caddy（三处，按时间选对应备份）
+sudo cp /etc/caddy/Caddyfile.bak-<ts>-pre-<阶段> /etc/caddy/Caddyfile && sudo systemctl reload caddy
+# 实例 app
+sudo mv /home/kiwi-merchant-v2/app.old-<ts> /home/kiwi-merchant-v2/app && sudo systemctl restart kiwi-merchant-v2
+# 实例 profile
+sudo cp /home/kiwi-merchant-v2/backups/profile-pre-veyquo-<ts>.yaml /home/kiwi-merchant-v2/config/profile.yaml
+# 旧 chat 服务
+sudo systemctl enable --now kiwi-merchant
+```
+
+### 0.5 遗留与后续
+
+1. **陈旧 endpoint 行**：`agent_endpoints` 里仍有 3 行 2026-08-08 遗留的测试数据
+   （`http://127.0.0.1:9000/.well-known/*`、`https://example.com/agent-card.json`，状态 `active`）。
+   买家侧投影不受影响（API 正确返回 veyquo.com 的地址），但建议清理，避免将来有消费者遍历 active 端点时误取。
+2. **第 1 版实例路由仍待绑定**：实例已具备 `merchant mcp pair`，但网关 `tenants.json` 仍是空注册表，
+   需要商家走 `/instance` 自助绑定（或运维预置）。
+3. **平台侧核验**（source 唯一性、连接器 ID、`workbuddy://` 回调）仍未实机验证 —— 连接器包在这些确认前不应提交上架。
+
+---
+
+## 1. 迁移前的现网实测（保留作依据）
 
 ---
 
@@ -61,7 +145,7 @@
 | 实例版本 | 未约定 | 0.8.0（**无 `merchant mcp pair`**） | 配对码自助绑定暂不可用 |
 | 单实例前缀原则 | 一个前缀一个 OS 用户 | 实例横跨 `/home/kiwi-merchant-v2` 与 `/home/kiwi-merchant` | "共置隔离"的边界比文档描述的更模糊 |
 
-## 5. 迁移步骤（四步，每步可独立回滚）
+## 5. 迁移步骤（四步，每步可独立回滚）—— 已于 2026-09-18 执行，见 §0
 
 ### A. 先补观测（低风险，建议先做）
 
@@ -98,14 +182,16 @@ log {
 3. **更新目录里登记的 `agent_card_url`** —— 它会改变买方发现地址，属于对外行为变更，
    需要单独评估（旧地址要不要保留一段重定向、要不要通知已发现该商家的买家）。
 
-## 6. 待决策
+## 6. 决策（2026-09-18 已定，见 §0 执行记录）
 
-| # | 事项 | 为什么需要你定 |
-| --- | --- | --- |
-| 1 | `8700` 旧 chat 服务还在用吗？ | 决定步骤 C 是"下线"还是"重新规划"；也决定 `veyquo.com` 这个域名要不要保留 |
-| 2 | 是否把实例身份迁到 `veyquo.com`？ | 会改变目录登记的发现地址，属对外变更，需要评估与公告 |
-| 3 | 实例是否升到 0.9.0？ | 决定配对码自助绑定（第 1 版实例路由）何时可用 |
-| 4 | 是否先开 Caddy access log？ | 决定后续所有流量判断有没有依据 |
+| # | 事项 | 决策 | 状态 |
+| --- | --- | --- | --- |
+| 1 | `8700` 旧 chat 服务去留 | 不再使用（商家端只需一套） | ✅ 已 stop + disable |
+| 2 | 实例身份是否迁到 `veyquo.com` | 迁 | ✅ 已迁，目录登记已更新 |
+| 3 | 实例是否升到 0.9.0 | 升 | ✅ 已升，心跳恢复 |
+| 4 | 是否先开 Caddy access log | 开 | ✅ 已开 |
+
+**决策依据**：§3 的实测事实（业务流量极低、两套 A2A 只有一套可发现）。
 
 ## 参考
 
