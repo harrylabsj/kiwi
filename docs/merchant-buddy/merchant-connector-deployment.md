@@ -101,11 +101,18 @@ server {
 ## 4. 网关配置
 
 ```sh
-# /opt/kiwi-gateway/gateway.env（0600）
+# /opt/kiwi-gateway/gateway.env（0600，属主与服务用户一致：kiwi-gateway）
 KIWI_CATALOG_CONNECTOR_TOKEN=<目录发给的 connector token>
 KIWI_GATEWAY_CREDENTIAL_KEY=<凭据加密密钥，高熵>
 VEYQUO_MCP_TOKEN=<与实例 KIWI_MERCHANT_MCP_TOKEN 同一个值>
 ```
+
+`KIWI_GATEWAY_CREDENTIAL_KEY` 缺失时网关**仍会启动**，但依赖加密存储的功能
+（第 0 版目录工具、第 1 版实例路由）会被标记为未启用——`--check` 的功能清单会
+如实显示，不会静默降级。生成方式：`openssl rand -base64 48`。
+
+`tenants.json` 可以先用空注册表（`{"tenants": []}`）：商家走 `/instance` 页面
+**自助绑定**（配对码或粘贴内部令牌），无需运维预置静态配置。
 
 ```sh
 kiwi merchant gateway serve \
@@ -162,7 +169,90 @@ KIWI_CATALOG_PUBLIC_BASE_URL=https://catalog.kiwi.harrylabsj.com           # 连
 # 可选：KIWI_CATALOG_CONNECTOR_MERCHANT_TOKEN_TTL_SECONDS（缺省 90 天）
 ```
 
-## 6.1 存活信号（WP6）
+## 6.1 目录的安装与升级：只用 PyPI 公开发布物
+
+**规则**：服务器上的 kiwi-catalog **只从 PyPI 公开发布版安装**，不在服务器上
+`git pull` / `pip install -e` 源码。理由有两条，缺一不可：
+
+1. **与用户拿到的是同一个东西**。PyPI 上的 wheel 就是用户 `pip install kiwi-catalog`
+   装到的制品；用源码目录就地安装会让线上跑的代码与公开发布物产生分叉，
+   线上问题无法在用户环境复现（反之亦然）。
+2. **制品已被发布流程校验过**。wheel/sdist 由 `portfolio-release.yml` 的
+   `publish=true` 受保护发布产生，并经 fail-closed 的 `verify-registry` 回读校验；
+   源码目录没有这层保证。
+
+kiwi-catalog 自己也这么定位：其 `docs/releasing.md` 写明本仓库是
+「portfolio release 的 **PyPI 消费者**」，回滚走「上一个已验证的 tag」，
+**不在服务器上直接 `git pull`**。
+
+### 升级步骤
+
+```sh
+# 1) 备份（三件套；DB 必须用 sqlite backup API，直接 cp 会漏掉 WAL 里已提交的内容）
+TS=$(date +%Y%m%d-%H%M%S)
+sudo python3 - "$TS" <<'PY'
+import sqlite3, sys, os
+ts = sys.argv[1]
+src = sqlite3.connect("/var/lib/kiwi-catalog/catalog.sqlite")
+dst = sqlite3.connect(f"/opt/kiwi-catalog-backups/catalog.sqlite.bak-{ts}")
+with dst:
+    src.backup(dst)           # 在线一致快照，包含 WAL 内容
+dst.close(); src.close()
+os.chmod(f"/opt/kiwi-catalog-backups/catalog.sqlite.bak-{ts}", 0o600)
+PY
+sudo sh -c "/opt/kiwi-catalog/.venv/bin/pip freeze > /opt/kiwi-catalog-backups/venv-freeze-$TS.txt"
+sudo tar czf /opt/kiwi-catalog-backups/kiwi-catalog-src-$TS.tgz -C /opt kiwi-catalog
+
+# 2) 从官方 index 安装（见下方「注意」：本机默认 index 是阿里云镜像）
+sudo /opt/kiwi-catalog/.venv/bin/pip install --upgrade \
+  --index-url https://pypi.org/simple/ 'kiwi-catalog[api]==<version>'
+
+# 3) 重启服务
+sudo systemctl restart kiwi-catalog
+
+# 4) 显式跑一次 schema 迁移（见下方「注意」：重启本身不会迁移）
+sudo -u kiwi-catalog /opt/kiwi-catalog/.venv/bin/python - <<'PY'
+from kiwi_catalog.db.session import open_connection
+conn = open_connection("/var/lib/kiwi-catalog/catalog.sqlite")   # 触发 init_db -> run_migrations
+print("schema user_version =", conn.execute("pragma user_version").fetchone()[0])
+conn.close()
+PY
+```
+
+### 注意（两条实测踩到的坑）
+
+- **本机 pip 默认走阿里云镜像**（`mirrors.cloud.aliyuncs.com`），新版本往往滞后数小时
+  到数天。升级时必须显式 `--index-url https://pypi.org/simple/`，否则会报
+  `No matching distribution found`（镜像上确实没有该版本，不是发布失败）。
+- **重启不会自动跑迁移**。服务对 DB 是懒加载：`/health` 不碰库，进程要等到第一个
+  **碰库的请求**才会 `open_connection()` → `init_db()` → `run_migrations()`。
+  刚重启完直接查 `user_version` 会看到旧值，容易误判成「迁移失败」。生产上请用
+  上面第 4 步**显式触发**，可控且可观察。
+
+### 验证清单（升级后）
+
+```text
+[ ] curl -s https://catalog.kiwi.harrylabsj.com/health                      → 200
+[ ] curl -s http://127.0.0.1:8600/v1/agent-catalog/agents                  → 200（既有读取路径正常）
+[ ] PRAGMA integrity_check → ok；user_version → 目标版本
+[ ] 既有数据行数与升级前一致（merchants / merchant_accounts / catalog_agents / commerce_listings）
+[ ] POST /v1/connector-identity/requests 无 token → 403（fail-closed）
+[ ] POST /v1/connector-identity/requests 带正确 token → 不再 403（鉴权通过，进入参数校验）
+```
+
+### 回滚
+
+```sh
+sudo /opt/kiwi-catalog/.venv/bin/pip install --upgrade \
+  --index-url https://pypi.org/simple/ 'kiwi-catalog[api]==<上一个已验证版本>'
+sudo systemctl restart kiwi-catalog
+```
+
+迁移**只增不减**（`create table if not exists` + `user_version` 门，整链包在 SAVEPOINT 里
+原子执行）：旧版本代码不会读新表，因此回滚不需要降级数据库；但如果新版本已写入
+新表数据，那些数据在回滚后不可见（保留在库中，再次升级即恢复）。
+
+## 6.2 存活信号（WP6）
 
 | 参数 | 位置 | 缺省 | 说明 |
 | --- | --- | --- | --- |

@@ -7,6 +7,13 @@ After=network-online.target
 
 [Service]
 Type=simple
+# 独立 OS 用户（部署说明 §2）：**不得以 root 运行**——网关持有商家目录凭据
+# （cmt_…）与实例内部凭据的密文，且只应能写自己的前缀目录。
+# 缺这一段时 systemd 默认以 root 启动，与 §2 的最小权限要求相悖。
+User=kiwi-gateway
+Group=kiwi-gateway
+# npm/node 需要一个可写的 HOME；不设会落到 /root 或不可写路径。
+Environment=HOME=__PREFIX__
 # 只监听 loopback；公网 TLS 由反向代理终止（见部署说明 §3）。
 # 凭据加密密钥等 env 放 __PREFIX__/gateway.env（0600），不进命令行、不进日志。
 EnvironmentFile=__PREFIX__/gateway.env
