@@ -155,6 +155,25 @@ describe("钉住式 fetch", () => {
     expect(response.headers.get("location")).toBe("https://evil.example/mcp");
   });
 
+  it("响应体超过上限时在适配层停止读取", async () => {
+    const server: Server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("x".repeat(257));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    cleanups.push(
+      () =>
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        }),
+    );
+    const address = server.address();
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+    await expect(
+      requestViaAddress(new URL(`http://127.0.0.1:${port}/mcp`), "127.0.0.1", {}, 256),
+    ).rejects.toThrow(/超过 256 字节/);
+  });
+
   it("AbortSignal 生效（超时/取消可中断）", async () => {
     const server: Server = createServer(() => {
       // 故意不响应
