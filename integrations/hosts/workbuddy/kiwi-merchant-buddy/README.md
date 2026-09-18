@@ -16,9 +16,10 @@
 ### 模块 2：首页配置
 
 - 首页标题（Slogan）、欢迎语：取 `home.slogan` / `home.welcome`。
-- 工作模式：按 `buddy-app.config.json` 配置的五个模式（目录注册与发布、连接自有服务、商品查看、询价处理、库存与变更草稿），各配 System Prompt 与商家连接器工具。
-- 场景胶囊：按配置文件中的胶囊逐项验证；目录注册与自有服务连接是两个独立入口。
-- 内置连接器：使用 `kiwi-merchant-gateway-connector` 的 OAuth MCP。未绑定商家实例时，第 0 版目录工具仍可用；实例工具应由网关按商家身份动态提供。
+- 工作模式：按 `buddy-app.config.json` **只配一个模式——「目录注册与发布」**（第 0 版：注册、草稿、请求发布、状态、撤回），配 System Prompt 与 `kiwi_catalog_*` 工具。
+  - **没有实例相关模式**（商品查看 / 询价处理 / 库存与变更草稿 / 连接自有服务）：按[「网关不碰实例」](../../../../docs/merchant-buddy/merchant-connector-deployment.md)原则（部署说明 §0）刻意去掉——网关不持有实例地址与凭据、不代理实例工具；商家实例独立部署、直接与买家做 A2A。若后台仍留有旧版的这些模式，按 1.2.0 配置覆盖。
+- 场景胶囊：按配置文件中的胶囊逐项验证（当前 3 个，全部落在「目录注册与发布」）。
+- 内置连接器：使用 `kiwi-merchant-gateway-connector` 的 OAuth MCP，只提供第 0 版目录工具。`kiwi_merchant_*` 实例工具**本就不该出现**，不要为此排障。
 
 ### 模块 3：市场配置
 

@@ -52,10 +52,12 @@ shasum -a 256 /abs/path/kiwi-merchant-gateway-<version>.zip
 | 应用级「授权回调URL」 | 本应用自己的 HTTPS 回调服务（接收平台 Open API 授权码）。当前不申请 Open API 权限 → 留空；确需权限时**先部署可处理授权码的真实回调**，不得填占位 URL |
 | 连接器回调 | `workbuddy://workbuddy/mcp/connector%3Akiwi-merchant/oauth/callback`（属于连接器包，不属于应用表单） |
 
-应用侧要点：
-- 模式：**目录注册与发布**（用 `kiwi_catalog_*`，发布必须引导到门户确认）、**连接我的 Kiwi Merchant 服务**（引导到 `https://merchant.kiwi.harrylabsj.com/instance`，令牌/配对码不经聊天）、商品查看 / 询价处理 / 库存与变更草稿（需已绑定实例）。
-- 未绑定实例的商家：走「目录注册与发布」不受影响（网关在未绑定时不返回 `kiwi_merchant_*` 工具），这是第 0 版不被首次绑定阻塞的技术保证。
+应用侧要点（**2026-09-18 收窄后**）：
+- 模式：**只有「目录注册与发布」**（用 `kiwi_catalog_*`，发布必须引导到门户确认）。
+- **没有实例相关能力**（商品查看 / 询价处理 / 变更草稿，以及此前的「连接我的 Kiwi Merchant 服务」引导）——按[「网关不碰实例」](merchant-connector-deployment.md)原则（部署说明 §0）刻意去掉，不是缺失：网关不持有实例地址与凭据、不代理实例工具；商家实例独立部署、直接与买家做 A2A。
 - 平台后台逐字段核对清单见 `kiwi-merchant-buddy/README.md`。
+
+> 提示：`buddy-app.config.json` 在 1.2.0 已按上述重写。若平台后台仍留有旧版本的模式配置，按 1.2.0 覆盖。
 
 ## 4. 提交前必须确认的外部事项
 
