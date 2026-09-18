@@ -17,7 +17,7 @@
 | source | `kiwi-merchant`（**需先在平台核对唯一性**） |
 | 入口 | `https://merchant.kiwi.harrylabsj.com/mcp`（固定 HTTPS，OAuth） |
 | 回调 | `workbuddy://workbuddy/mcp/connector%3Akiwi-merchant/oauth/callback`（按 source 派生；拒绝时回退 loopback） |
-| 声明工具 | **6 个 `kiwi_catalog_*`**（第 0 版目录能力：身份 / 关注总数 / 草稿 / 请求发布 / 状态 / 撤回）。按[「网关不碰实例」](merchant-connector-deployment.md)原则（部署说明 §0），**没有** `kiwi_merchant_*` 之类的实例工具——商家实例独立部署、直接与买家做 A2A |
+| 声明工具 | **6 个 `kiwi_catalog_*`**（第 0 版目录能力：身份 / **经营汇总（关注数+浏览量+各资料表现）** / 草稿 / 请求发布 / **读单条资料（含可编辑内容）** / 撤回）。按[「网关不碰实例」](merchant-connector-deployment.md)原则（部署说明 §0），**没有** `kiwi_merchant_*` 之类的实例工具——商家实例独立部署、直接与买家做 A2A |
 
 重新生成（提交前必须重跑，并核对 sha256）：
 
@@ -27,8 +27,8 @@ node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /abs/path/
 shasum -a 256 /abs/path/kiwi-merchant-gateway-<version>.zip
 ```
 
-本次构建产物（2026-09-18，含「关注总数」工具）：`kiwi-merchant-gateway-1.1.0.zip`，
-sha256 `28e12de1bb836f5c15c631d393b250c46842e1a7b32eb7b759b1ef8e9a50428a`。
+本次构建产物（2026-09-18，含「经营汇总」与「读单条资料含内容」）：`kiwi-merchant-gateway-1.1.0.zip`，
+sha256 `832d4b58c4711c1803afe839a388a40b239395beee9a1ab53f0fb35ce46f10df`。
 
 ZIP 只含 `connector-meta.json`、`mcp.json`、`icon.svg`；**提交前必须按上面的命令重跑并核对 sha256**，
 不要把不同版本的摘要混用（历史上 1.0.0 的摘要是 `6bda6977…`，与本次不可混）。

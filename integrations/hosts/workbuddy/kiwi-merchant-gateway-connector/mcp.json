@@ -24,8 +24,8 @@
       }
     },
     {
-      "name": "kiwi_catalog_get_follower_stats",
-      "description": "读取本商家在 Kiwi 目录的活跃关注者**总数**（只读，匿名汇总）。用于回答「有多少买家/用户在关注我」。只返回一个数字：目录不提供关注者身份、名单或联系方式，也没有向关注者群发消息的通道——不要向商家承诺任何群发或触达能力。",
+      "name": "kiwi_catalog_get_merchant_stats",
+      "description": "读取本商家在 Kiwi 目录的经营汇总（只读，匿名枚举）：活跃关注者总数、公开资料总浏览量、以及每条公开资料的状态与浏览量。用于回答「有多少买家在关注我」「我的公开资料有没有人看」「哪条资料被看得多」。目录**只提供数字**：不提供关注者身份、名单或联系方式，也没有向关注者群发消息的通道——不要向商家承诺任何群发、触达或导出名单的能力。",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -157,8 +157,8 @@
       }
     },
     {
-      "name": "kiwi_catalog_get_publication_status",
-      "description": "按 publication_id 查询公开资料状态（draft/published/withdrawn）、版本与更新时间。第 0 版资料恒为不可实时询价（inquiry_available=false）。",
+      "name": "kiwi_catalog_get_publication",
+      "description": "按 publication_id 读取一条公开资料的**当前内容**（商家名/商品名/类目/简介/店铺平台与链接/FAQ）与状态（draft/published/withdrawn）、版本、时间戳。改写文案前先用它看原文——不要凭记忆重写，否则会丢字段或编造内容。第 0 版资料恒为不可实时询价（inquiry_available=false）。",
       "inputSchema": {
         "type": "object",
         "properties": {

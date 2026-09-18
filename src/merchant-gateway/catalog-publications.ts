@@ -69,6 +69,24 @@ export interface PublicationDraftInput {
   expiresAt?: string;
 }
 
+/** 汇总里的一条公开资料（不含正文——正文由 `getPublication` 单独取）。 */
+export interface MerchantStatsPublication {
+  readonly publicationId: string;
+  readonly title: string;
+  readonly status: string;
+  readonly viewCount: number;
+  readonly publishedAt: string;
+}
+
+/**
+ * 商家经营汇总（匿名聚合）。目录只给数字，不给买家身份或名单。
+ */
+export interface MerchantStats {
+  readonly followersTotal: number;
+  readonly viewsTotal: number;
+  readonly publications: ReadonlyArray<MerchantStatsPublication>;
+}
+
 export interface PublicationSaveResult {
   readonly publication: MerchantPublicationView;
   readonly created: boolean;
@@ -188,24 +206,48 @@ export class MerchantPublicationClient {
   }
 
   /**
-   * 商家本人的匿名关注汇总（只读）：活跃关注者**总数**。
+   * 商家本人的匿名经营汇总（只读）：关注者总数 + 公开资料浏览量明细。
    *
    * 目录侧该接口的设计是**只回聚合数字**——不返回买家身份、不返回关注列表、也
    * 不提供向关注者发消息的通道（kiwi-catalog `publication_stats` 的契约）。
-   * 本方法同样只取 `followers_total` 一个数，响应里的其它字段（浏览量、各资料
-   * 明细）不进入返回值，也就不会进模型上下文。
+   * 本方法只透出聚合数与资料本身的可公开字段，响应里的其它内容不进入返回值，
+   * 也就不会进模型上下文。
    */
-  async fetchFollowerStats(token: string): Promise<{ followersTotal: number }> {
+  async fetchStats(token: string): Promise<MerchantStats> {
     const body = await this.request(token, "GET", "/v1/merchant-publications/stats");
     const stats = asRecord(body.stats, "stats");
-    const total = stats.followers_total;
-    if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
+    const followersTotal = stats.followers_total;
+    const viewsTotal = stats.views_total;
+    if (typeof followersTotal !== "number" || !Number.isFinite(followersTotal) || followersTotal < 0) {
       throw new CatalogSourceError(
         "response_invalid",
         "merchant-publications stats response is missing a non-negative numeric followers_total",
       );
     }
-    return { followersTotal: total };
+    if (typeof viewsTotal !== "number" || !Number.isFinite(viewsTotal) || viewsTotal < 0) {
+      throw new CatalogSourceError(
+        "response_invalid",
+        "merchant-publications stats response is missing a non-negative numeric views_total",
+      );
+    }
+    const rawPublications = stats.publications;
+    const publications: MerchantStatsPublication[] = [];
+    if (Array.isArray(rawPublications)) {
+      for (const item of rawPublications) {
+        const record = asRecord(item, "stats.publications[]");
+        publications.push({
+          publicationId: asString(record, "publication_id"),
+          title: asString(record, "title"),
+          status: asString(record, "status"),
+          viewCount:
+            typeof record.view_count === "number" && Number.isFinite(record.view_count)
+              ? record.view_count
+              : 0,
+          publishedAt: asString(record, "published_at"),
+        });
+      }
+    }
+    return { followersTotal, viewsTotal, publications };
   }
 
   private async request(

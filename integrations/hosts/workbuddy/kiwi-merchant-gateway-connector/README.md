@@ -3,20 +3,20 @@
 状态：**已提交 WorkBuddy 审核，尚未发布**（2026-09-18）。平台连接器 ID `oc_f6eb7fea361ac64e`；上架后仍须实机验收 OAuth 与工具。
 
 > **⚠️ 仓库版本与已提交版本不一致。** 提交的是 **v1.0.0 / 5 个工具**；此后仓库新增了
-> `kiwi_catalog_get_follower_stats`（商家查看关注总数），当前构建为 **1.1.0 / 6 个工具**
-> （sha256 见[上架素材包](../../../../docs/merchant-buddy/merchant-connector-submission-pack.md) §1）。
-> **上架前需按平台流程重新提交该包**，否则已上架版本不含关注总数工具。平台是否允许
-> 覆盖已提交版本、或需新建版本号，属外部待核验项。
+> 经营汇总（关注数 + 浏览量）并把「读单条资料」扩展为**带回可编辑内容**，当前构建为
+> **1.1.0 / 6 个工具**（sha256 见[上架素材包](../../../../docs/merchant-buddy/merchant-connector-submission-pack.md) §1）。
+> **上架前需按平台流程重新提交该包**，否则已上架版本不含经营汇总与文案改写所需的读内容能力。
+> 平台是否允许覆盖已提交版本、或需新建版本号，属外部待核验项。
 
 指向 **Kiwi 商家连接器网关**（多商家共享入口，`https://merchant.kiwi.harrylabsj.com/mcp`，远程 HTTPS MCP + OAuth）。商家在 OAuth 授权页完成目录注册/登录后，网关按已验证 `merchant_id` 提供**第 0 版目录能力**（本包静态声明的 6 个工具）：
 
 | 工具 | 用途 |
 | --- | --- |
 | `kiwi_catalog_get_merchant_profile` | 连接状态与公开资料管理入口 |
-| `kiwi_catalog_get_follower_stats` | 本商家的**活跃关注者总数**（匿名汇总：无身份、无名单、无群发通道） |
+| `kiwi_catalog_get_merchant_stats` | **经营汇总**：关注者总数 + 公开资料总浏览量 + 各资料的状态与浏览量（匿名聚合：无身份、无名单、无群发通道） |
 | `kiwi_catalog_save_publication_draft` | 保存私有草稿 |
 | `kiwi_catalog_request_publish` | 保存草稿并给出**门户确认入口**（不发布） |
-| `kiwi_catalog_get_publication_status` | 查询资料状态 |
+| `kiwi_catalog_get_publication` | 读取一条资料的**当前内容**（商家名/商品名/类目/简介/店铺链接/FAQ）与状态 |
 | `kiwi_catalog_withdraw_publication` | 撤回资料 |
 
 按[「网关不碰实例」](../../../../docs/merchant-buddy/merchant-connector-deployment.md)原则（部署说明 §0），**没有** `kiwi_merchant_*` 之类的实例工具：商家实例独立部署、与网关无连接，买家经目录发现后**直接**与实例做 A2A。
