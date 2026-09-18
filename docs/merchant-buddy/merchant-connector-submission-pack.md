@@ -17,7 +17,7 @@
 | source | `kiwi-merchant`（**需先在平台核对唯一性**） |
 | 入口 | `https://merchant.kiwi.harrylabsj.com/mcp`（固定 HTTPS，OAuth） |
 | 回调 | `workbuddy://workbuddy/mcp/connector%3Akiwi-merchant/oauth/callback`（按 source 派生；拒绝时回退 loopback） |
-| 声明工具 | 5 个 `kiwi_catalog_*`（第 0 版目录能力）；第 1 版实例工具按商家实例**动态出现**，故不静态声明 |
+| 声明工具 | **6 个 `kiwi_catalog_*`**（第 0 版目录能力：身份 / 关注总数 / 草稿 / 请求发布 / 状态 / 撤回）。按[「网关不碰实例」](merchant-connector-deployment.md)原则（部署说明 §0），**没有** `kiwi_merchant_*` 之类的实例工具——商家实例独立部署、直接与买家做 A2A |
 
 重新生成（提交前必须重跑，并核对 sha256）：
 
@@ -27,7 +27,11 @@ node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /abs/path/
 shasum -a 256 /abs/path/kiwi-merchant-gateway-<version>.zip
 ```
 
-本次实际提交产物：`kiwi-merchant-gateway-1.0.0.zip`，sha256 `6bda6977eaea72bd6f5d2c452955511c0f10b16ba82ac80384686e1f19db927f`。ZIP 只含 `connector-meta.json`、`mcp.json`、`icon.svg`；与早期 1.1.0 试包的摘要不可混用。
+本次构建产物（2026-09-18，含「关注总数」工具）：`kiwi-merchant-gateway-1.1.0.zip`，
+sha256 `28e12de1bb836f5c15c631d393b250c46842e1a7b32eb7b759b1ef8e9a50428a`。
+
+ZIP 只含 `connector-meta.json`、`mcp.json`、`icon.svg`；**提交前必须按上面的命令重跑并核对 sha256**，
+不要把不同版本的摘要混用（历史上 1.0.0 的摘要是 `6bda6977…`，与本次不可混）。
 
 离线校验覆盖（脚本 + 测试，均随 CI 跑）：
 - 包结构与字段合法性；`url` 必须 https + `/mcp` + **不得落在商家自有实例域名**；

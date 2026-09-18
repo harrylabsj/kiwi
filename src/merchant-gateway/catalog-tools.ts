@@ -35,6 +35,7 @@ import type { MerchantCredentialStore } from "./credential-vault.js";
 const READ_TOOLS: ReadonlySet<string> = new Set([
   "kiwi_catalog_get_merchant_profile",
   "kiwi_catalog_get_publication_status",
+  "kiwi_catalog_get_follower_stats",
 ]);
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
   "kiwi_catalog_save_publication_draft",
@@ -201,6 +202,18 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
         maxChars,
       );
     },
+    kiwi_catalog_get_follower_stats: async () => {
+      const { followersTotal } = await deps.client.fetchFollowerStats(credential());
+      return ok(
+        {
+          merchant_id: merchantId,
+          followers_total: followersTotal,
+          note:
+            "活跃关注者总数（匿名汇总）。目录只提供总数：不提供关注者身份或名单，也没有向关注者群发消息的通道。",
+        },
+        maxChars,
+      );
+    },
     kiwi_catalog_save_publication_draft: async (args) => {
       const input = draftInput(args);
       if (input.merchantDisplayName === "" || input.title === "") {
@@ -281,6 +294,14 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
       name: "kiwi_catalog_get_merchant_profile",
       description:
         "读取当前已连接商家的目录身份与连接状态（只读）。返回 merchant_id、目录凭据是否可用，以及公开资料管理入口地址。",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    {
+      name: "kiwi_catalog_get_follower_stats",
+      description:
+        "读取本商家在 Kiwi 目录的活跃关注者**总数**（只读，匿名汇总）。" +
+        "用于回答「有多少买家/用户在关注我」。只返回一个数字：目录不提供关注者身份、" +
+        "名单或联系方式，也没有向关注者群发消息的通道——不要向商家承诺任何群发或触达能力。",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
     {

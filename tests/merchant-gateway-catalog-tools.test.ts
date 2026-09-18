@@ -61,7 +61,7 @@ function publicationView(
 }
 
 interface RecordedCall {
-  method: "saveDraft" | "getPublication" | "withdraw";
+  method: "saveDraft" | "getPublication" | "withdraw" | "fetchFollowerStats";
   token: string;
   input?: PublicationDraftInput | string;
 }
@@ -89,6 +89,11 @@ function fakeClient(calls: RecordedCall[], options: { fail?: boolean } = {}) {
     withdraw: async (token: string, publicationId: string) => {
       calls.push({ method: "withdraw", token, input: publicationId });
       return publicationView({ publication_id: publicationId, status: "withdrawn" });
+    },
+    fetchFollowerStats: async (token: string) => {
+      calls.push({ method: "fetchFollowerStats", token });
+      if (options.fail === true) throw new Error("目录暂不可用");
+      return { followersTotal: 42 };
     },
   } as unknown as MerchantPublicationClient;
 }
@@ -253,6 +258,27 @@ describe("目录工具（kiwi_catalog_*）", () => {
       ["getPublication", "mpub_9"],
     ]);
     expect(calls.every((c) => c.token === CREDENTIAL)).toBe(true);
+  });
+
+  it("关注总数：用该商家的目录凭据读匿名汇总，只回总数不回买家身份", async () => {
+    const calls: RecordedCall[] = [];
+    const { bundle } = tools(calls);
+    const result = await bundle.call("kiwi_catalog_get_follower_stats", {}, ["catalog:read"]);
+    expect(calls.map((c) => c.method)).toEqual(["fetchFollowerStats"]);
+    // 凭据取自会话绑定的 merchant_id，不看入参。
+    expect(calls[0]?.token).toBe(CREDENTIAL);
+    const payload = text(result);
+    expect(payload).toContain("42");
+    // 隐私：只回总数，明示没有名单与群发通道，避免模型向商家承诺触达能力。
+    expect(payload).toContain("匿名汇总");
+    expect(payload).not.toContain("@");
+  });
+
+  it("关注总数需要 catalog:read；scope 不足时拒绝", async () => {
+    const { bundle } = tools([]);
+    const result = await bundle.call("kiwi_catalog_get_follower_stats", {}, ["catalog:write"]);
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("catalog:read");
   });
 
   it("目录故障时返回可解释错误而不是抛异常", async () => {

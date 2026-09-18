@@ -1,9 +1,9 @@
 {
   "$note": [
     "商家连接器（Kiwi 商家运营）的 WorkBuddy 连接器包：远程 HTTPS MCP + OAuth。",
-    "tools 为平台解析用的非标准信息字段（平台以运行时 tools/list 为准）；此处只声明",
-    "第 0 版目录工具——商家在网关 /instance 页面绑定自有实例后，tools/list 会出现",
-    "该实例的 kiwi_merchant_* 工具（属动态能力，不在此静态声明）。",
+    "tools 为平台解析用的非标准信息字段（平台以运行时 tools/list 为准）；此处声明的",
+    "就是入口提供的全部工具（第 0 版目录能力）。按「网关不碰实例」原则（部署说明 §0），",
+    "网关**不提供** kiwi_merchant_* 之类的实例工具——商家实例独立部署、直接与买家做 A2A。",
     "url 必须指向受信任的网关入口；提交前需确认域名归属（见部署说明 §1）。"
   ],
   "mcpServers": {
@@ -17,6 +17,15 @@
     {
       "name": "kiwi_catalog_get_merchant_profile",
       "description": "读取当前已连接商家的目录身份与连接状态（只读）。返回 merchant_id、目录凭据是否可用，以及公开资料管理入口地址。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_catalog_get_follower_stats",
+      "description": "读取本商家在 Kiwi 目录的活跃关注者**总数**（只读，匿名汇总）。用于回答「有多少买家/用户在关注我」。只返回一个数字：目录不提供关注者身份、名单或联系方式，也没有向关注者群发消息的通道——不要向商家承诺任何群发或触达能力。",
       "inputSchema": {
         "type": "object",
         "properties": {},

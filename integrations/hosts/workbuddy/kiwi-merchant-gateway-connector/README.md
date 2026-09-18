@@ -1,11 +1,25 @@
 # kiwi-merchant-gateway-connector — 商家连接器（「Kiwi 商家运营」）包
 
-状态：**已提交 WorkBuddy 审核，尚未发布**（2026-09-18）。平台连接器 ID `oc_f6eb7fea361ac64e`，v1.0.0；上架后仍须实机验收 OAuth 与工具。
+状态：**已提交 WorkBuddy 审核，尚未发布**（2026-09-18）。平台连接器 ID `oc_f6eb7fea361ac64e`；上架后仍须实机验收 OAuth 与工具。
 
-指向 **Kiwi 商家连接器网关**（多商家共享入口，`https://merchant.kiwi.harrylabsj.com/mcp`，远程 HTTPS MCP + OAuth）。商家在 OAuth 授权页完成目录注册/登录后，网关按已验证 `merchant_id` 提供：
+> **⚠️ 仓库版本与已提交版本不一致。** 提交的是 **v1.0.0 / 5 个工具**；此后仓库新增了
+> `kiwi_catalog_get_follower_stats`（商家查看关注总数），当前构建为 **1.1.0 / 6 个工具**
+> （sha256 见[上架素材包](../../../../docs/merchant-buddy/merchant-connector-submission-pack.md) §1）。
+> **上架前需按平台流程重新提交该包**，否则已上架版本不含关注总数工具。平台是否允许
+> 覆盖已提交版本、或需新建版本号，属外部待核验项。
 
-- **第 0 版目录能力**（本包静态声明的 5 个工具）：商家公开资料的草稿、请求发布（仍需商家在目录门户确认）、状态查询、撤回；
-- **第 1 版实例能力**（动态）：商家在网关 `/instance` 页面绑定自有 Kiwi Merchant 实例后，`tools/list` 会多出该实例的 `kiwi_merchant_*` 工具（清单从实例现取、按令牌 scope 过滤）。
+指向 **Kiwi 商家连接器网关**（多商家共享入口，`https://merchant.kiwi.harrylabsj.com/mcp`，远程 HTTPS MCP + OAuth）。商家在 OAuth 授权页完成目录注册/登录后，网关按已验证 `merchant_id` 提供**第 0 版目录能力**（本包静态声明的 6 个工具）：
+
+| 工具 | 用途 |
+| --- | --- |
+| `kiwi_catalog_get_merchant_profile` | 连接状态与公开资料管理入口 |
+| `kiwi_catalog_get_follower_stats` | 本商家的**活跃关注者总数**（匿名汇总：无身份、无名单、无群发通道） |
+| `kiwi_catalog_save_publication_draft` | 保存私有草稿 |
+| `kiwi_catalog_request_publish` | 保存草稿并给出**门户确认入口**（不发布） |
+| `kiwi_catalog_get_publication_status` | 查询资料状态 |
+| `kiwi_catalog_withdraw_publication` | 撤回资料 |
+
+按[「网关不碰实例」](../../../../docs/merchant-buddy/merchant-connector-deployment.md)原则（部署说明 §0），**没有** `kiwi_merchant_*` 之类的实例工具：商家实例独立部署、与网关无连接，买家经目录发现后**直接**与实例做 A2A。
 
 ## 与既有包的区别（不要混用）
 
@@ -19,7 +33,7 @@
 
 ```sh
 node integrations/hosts/workbuddy/package-gateway-connector.mjs --check
-node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /abs/path/kiwi-merchant-gateway-1.0.0.zip
+node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /abs/path/kiwi-merchant-gateway-1.1.0.zip
 ```
 
 脚本只读、不联网、不覆盖已有压缩包。校验：meta/mcp/icon 合法性、`url` 必须为 https 且路径 `/mcp` 且**不在**商家自有实例域名上、`tools` 声明与 `src/merchant-gateway/catalog-tools.ts` 实现名字一致、包内无疑似凭据。
@@ -34,9 +48,9 @@ node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /abs/path/
 4. **OAuth 回调**：按 source 派生为
    `workbuddy://workbuddy/mcp/connector%3Akiwi-merchant/oauth/callback`，
    并验证平台规定的 loopback 回退；Buddy 应用级回调另行配置，二者不要混用。
-5. **工具可见性**：绑定实例后新增的工具是否需要在 Buddy 侧重连/刷新才可见——属预览实测项。
+5. **工具可见性**：连接器版本更新（如本次新增的关注总数工具）后，已在用的 Buddy 是否需重连/刷新才看到新工具——属预览实测项。
 
 ## 注意
 
-- 本包不声明第 1 版实例工具：那些工具按商家实例现取，静态声明会与实际不符。
-- 未绑定实例的商家照常使用第 0 版能力（注册、草稿、发布、撤回），**不会**因为没部署服务器而被阻塞。
+- 本包**只声明第 0 版目录工具**；按「网关不碰实例」原则，入口不会出现实例工具，声明与运行时一致。
+- 商家**无需部署任何服务器**即可使用全部能力（注册、草稿、请求发布、状态、撤回、关注总数）——第 0 版不依赖实例。
