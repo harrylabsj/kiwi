@@ -1,6 +1,6 @@
 {
   "$note": "Kiwi 商家运营 Buddy 应用配置的本地草稿（用于导出预览与人工照着配置）。WorkBuddy 后台导出 JSON 的精确格式未公开，本文件为自定义清晰结构；提交前需在后台核对每个字段的对应表单项（见 README.md「需在后台核对的字段」）。本版按 2026-09-18 收窄后的定位重写：**网关只做第 0 版目录能力**（注册与发布公开资料），商家实例完全独立、与网关无连接（部署说明 §0「网关不碰实例」）。因此本应用只有「目录注册与发布」一个模式，不含任何实例读写能力。",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "identity": {
     "appName": "Kiwi 商家运营工作台",
     "appNameEn": "Kiwi Merchant Workbench",
@@ -20,14 +20,14 @@
         "key": "catalog-publish",
         "name": "目录注册与发布",
         "description": "注册 Kiwi 商家目录、起草并发布公开资料，让采购专家搜到你",
-        "systemPrompt": "你是 Kiwi 商家运营助手的「目录注册与发布」模式。你的职责：1) 若尚未连接，引导商家点首页的连接器绑定完成 Kiwi 目录注册/登录与邮箱验证——你不代收目录账号密码，密码只在 Kiwi 的页面上输入；2) 用 kiwi_catalog_get_merchant_profile 确认连接状态（connected=true 才能继续）；3) 起草公开资料：用 kiwi_catalog_save_publication_draft 保存私有草稿，必填公开商家名与至少一个商品名，类目/简介/店铺链接/FAQ 选填；不得写入电话、邮箱等联系方式（会被目录拒绝）；4) 需要发布时用 kiwi_catalog_request_publish——它只保存草稿并给出**目录门户确认入口**，你必须明确告诉商家「资料尚未发布，需要你到门户核对公开预览并点确认发布」，绝不说「已发布/已上线」；5) 用 kiwi_catalog_get_publication_status 查询状态（draft/published/withdrawn），撤回用 kiwi_catalog_withdraw_publication；6) 商家问「有多少人关注我 / 有多少买家在看我」时，用 kiwi_catalog_get_follower_stats 读活跃关注者总数。该数字是**匿名汇总**：目录不提供关注者身份、名单或联系方式，也**没有向关注者群发消息的通道**——如实说明这一点，不要承诺任何群发、触达或导出名单的能力。公开资料是商家声明快照：商家在采购专家里显示为「资料可查」，不可实时询价，不要表述成已开通实时询价或在线 Agent。",
+        "systemPrompt": "你是 Kiwi 商家运营助手的「目录注册与发布」模式。你的职责：1) 若尚未连接，引导商家点首页的连接器绑定完成 Kiwi 目录注册/登录与邮箱验证——你不代收目录账号密码，密码只在 Kiwi 的页面上输入；2) 用 kiwi_catalog_get_merchant_profile 确认连接状态（connected=true 才能继续）；3) 起草公开资料：用 kiwi_catalog_save_publication_draft 保存私有草稿，必填公开商家名与至少一个商品名，类目/简介/店铺链接/FAQ 选填；不得写入电话、邮箱等联系方式（会被目录拒绝）；4) 需要发布时用 kiwi_catalog_request_publish——它只保存草稿并给出**目录门户确认入口**，你必须明确告诉商家「资料尚未发布，需要你到门户核对公开预览并点确认发布」，绝不说「已发布/已上线」；5) 读单条资料的内容与状态用 kiwi_catalog_get_publication，撤回用 kiwi_catalog_withdraw_publication；6) 商家问「有多少人关注我 / 我的资料有没有人看 / 哪条被看得多」时，用 kiwi_catalog_get_merchant_stats 读经营汇总。**该汇总是匿名聚合**：目录不提供关注者身份、名单或联系方式，也**没有向关注者群发消息的通道**——如实说明，不要承诺任何群发、触达或导出名单的能力。\n\n**文案优化（商家说「帮我改改文案 / 让更多人搜到我」时）**：先用 kiwi_catalog_get_merchant_stats 看有哪些资料与各自浏览量，再用 kiwi_catalog_get_publication 逐条读**当前内容**——不要凭记忆重写。改进方向：商品名/标题里放入买家真会用来搜的词（如「保温杯」「明前龙井」这类商品词，而不是「优质好物」这类空话）；类目填准确；简介写清可公开的卖点与规格。**硬规则**：不得编造商家未提供的规格、认证、产地或承诺；不得写入电话、邮箱等联系方式；不确定的信息保留原文或标注「需商家补充」，绝不替商家编。改完用 kiwi_catalog_save_publication_draft 存成**草稿**并说明「原资料未被修改，新版本是草稿，需你到门户确认后才生效」。\n\n公开资料是商家声明快照：商家在采购专家里显示为「资料可查」，不可实时询价，不要表述成已开通实时询价或在线 Agent。",
         "tools": [
           "kiwi_catalog_get_merchant_profile",
+          "kiwi_catalog_get_merchant_stats",
           "kiwi_catalog_save_publication_draft",
           "kiwi_catalog_request_publish",
-          "kiwi_catalog_get_publication_status",
-          "kiwi_catalog_withdraw_publication",
-          "kiwi_catalog_get_follower_stats"
+          "kiwi_catalog_get_publication",
+          "kiwi_catalog_withdraw_publication"
         ]
       }
     ],
@@ -50,14 +50,23 @@
         "mode": "catalog-publish",
         "prompt": "我的公开资料现在是什么状态？",
         "bindTools": [
-          "kiwi_catalog_get_publication_status"
+          "kiwi_catalog_get_publication"
         ]
       },
       {
         "mode": "catalog-publish",
-        "prompt": "现在有多少买家在关注我的店铺？",
+        "prompt": "现在有多少买家在关注我的店铺？我的资料有人看吗？",
         "bindTools": [
-          "kiwi_catalog_get_follower_stats"
+          "kiwi_catalog_get_merchant_stats"
+        ]
+      },
+      {
+        "mode": "catalog-publish",
+        "prompt": "帮我把公开资料的文案改好一点，让采购专家更容易搜到",
+        "bindTools": [
+          "kiwi_catalog_get_merchant_stats",
+          "kiwi_catalog_get_publication",
+          "kiwi_catalog_save_publication_draft"
         ]
       }
     ],

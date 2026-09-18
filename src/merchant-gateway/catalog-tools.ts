@@ -34,8 +34,8 @@ import type { MerchantCredentialStore } from "./credential-vault.js";
 
 const READ_TOOLS: ReadonlySet<string> = new Set([
   "kiwi_catalog_get_merchant_profile",
-  "kiwi_catalog_get_publication_status",
-  "kiwi_catalog_get_follower_stats",
+  "kiwi_catalog_get_merchant_stats",
+  "kiwi_catalog_get_publication",
 ]);
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
   "kiwi_catalog_save_publication_draft",
@@ -202,14 +202,23 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
         maxChars,
       );
     },
-    kiwi_catalog_get_follower_stats: async () => {
-      const { followersTotal } = await deps.client.fetchFollowerStats(credential());
+    kiwi_catalog_get_merchant_stats: async () => {
+      const stats = await deps.client.fetchStats(credential());
       return ok(
         {
           merchant_id: merchantId,
-          followers_total: followersTotal,
+          followers_total: stats.followersTotal,
+          views_total: stats.viewsTotal,
+          publications: stats.publications.map((item) => ({
+            publication_id: item.publicationId,
+            title: item.title,
+            status: item.status,
+            view_count: item.viewCount,
+            published_at: item.publishedAt,
+          })),
           note:
-            "活跃关注者总数（匿名汇总）。目录只提供总数：不提供关注者身份或名单，也没有向关注者群发消息的通道。",
+            "关注与浏览均为**匿名汇总**：目录只提供数字，不提供买家身份、名单或联系方式，" +
+            "也没有向关注者群发消息的通道。浏览量统计的是公开资料被查看的次数。",
         },
         maxChars,
       );
@@ -254,7 +263,7 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
         maxChars,
       );
     },
-    kiwi_catalog_get_publication_status: async (args) => {
+    kiwi_catalog_get_publication: async (args) => {
       const publicationId = readString(args, "publication_id");
       if (publicationId === "") return fail("缺少 publication_id");
       const publication = await deps.client.getPublication(credential(), publicationId);
@@ -269,6 +278,16 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
           updated_at: publication.updated_at,
           expires_at: publication.expires_at,
           inquiry_available: publication.inquiry_available,
+          // 当前可编辑内容：改写文案前先看原文，避免凭记忆重写（会丢字段或编造）。
+          content: {
+            merchant_display_name: publication.merchant_display_name,
+            title: publication.title,
+            category: publication.category,
+            summary: publication.summary,
+            shop_platform: publication.shop_platform,
+            shop_url: publication.shop_url,
+            faq: publication.faq.map((item) => ({ question: item.question, answer: item.answer })),
+          },
         },
         maxChars,
       );
@@ -297,11 +316,12 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
     {
-      name: "kiwi_catalog_get_follower_stats",
+      name: "kiwi_catalog_get_merchant_stats",
       description:
-        "读取本商家在 Kiwi 目录的活跃关注者**总数**（只读，匿名汇总）。" +
-        "用于回答「有多少买家/用户在关注我」。只返回一个数字：目录不提供关注者身份、" +
-        "名单或联系方式，也没有向关注者群发消息的通道——不要向商家承诺任何群发或触达能力。",
+        "读取本商家在 Kiwi 目录的经营汇总（只读，匿名枚举）：活跃关注者总数、公开资料总浏览量、" +
+        "以及每条公开资料的状态与浏览量。用于回答「有多少买家在关注我」「我的公开资料有没有人看」" +
+        "「哪条资料被看得多」。目录**只提供数字**：不提供关注者身份、名单或联系方式，也没有向" +
+        "关注者群发消息的通道——不要向商家承诺任何群发、触达或导出名单的能力。",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
     {
@@ -318,9 +338,11 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
       inputSchema: PUBLICATION_INPUT_SCHEMA,
     },
     {
-      name: "kiwi_catalog_get_publication_status",
+      name: "kiwi_catalog_get_publication",
       description:
-        "按 publication_id 查询公开资料状态（draft/published/withdrawn）、版本与更新时间。第 0 版资料恒为不可实时询价（inquiry_available=false）。",
+        "按 publication_id 读取一条公开资料的**当前内容**（商家名/商品名/类目/简介/店铺平台与链接/FAQ）" +
+        "与状态（draft/published/withdrawn）、版本、时间戳。改写文案前先用它看原文——不要凭记忆重写，" +
+        "否则会丢字段或编造内容。第 0 版资料恒为不可实时询价（inquiry_available=false）。",
       inputSchema: PUBLICATION_ID_SCHEMA,
     },
     {

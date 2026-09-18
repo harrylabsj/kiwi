@@ -61,7 +61,7 @@ function publicationView(
 }
 
 interface RecordedCall {
-  method: "saveDraft" | "getPublication" | "withdraw" | "fetchFollowerStats";
+  method: "saveDraft" | "getPublication" | "withdraw" | "fetchStats";
   token: string;
   input?: PublicationDraftInput | string;
 }
@@ -84,16 +84,35 @@ function fakeClient(calls: RecordedCall[], options: { fail?: boolean } = {}) {
     },
     getPublication: async (token: string, publicationId: string) => {
       calls.push({ method: "getPublication", token, input: publicationId });
-      return publicationView({ publication_id: publicationId, status: "published" });
+      return publicationView({
+        publication_id: publicationId,
+        status: "published",
+        category: "茶",
+        summary: "明前采摘",
+        shop_url: "https://acme.example/shop",
+        faq: [{ question: "保修多久？", answer: "一年" }],
+      });
     },
     withdraw: async (token: string, publicationId: string) => {
       calls.push({ method: "withdraw", token, input: publicationId });
       return publicationView({ publication_id: publicationId, status: "withdrawn" });
     },
-    fetchFollowerStats: async (token: string) => {
-      calls.push({ method: "fetchFollowerStats", token });
+    fetchStats: async (token: string) => {
+      calls.push({ method: "fetchStats", token });
       if (options.fail === true) throw new Error("目录暂不可用");
-      return { followersTotal: 42 };
+      return {
+        followersTotal: 42,
+        viewsTotal: 120,
+        publications: [
+          {
+            publicationId: "mpub_1",
+            title: "明前龙井",
+            status: "published",
+            viewCount: 100,
+            publishedAt: NOW,
+          },
+        ],
+      };
     },
   } as unknown as MerchantPublicationClient;
 }
@@ -235,7 +254,7 @@ describe("目录工具（kiwi_catalog_*）", () => {
     const calls: RecordedCall[] = [];
     const { bundle } = tools(calls, { withCredential: false });
     const result = await bundle.call(
-      "kiwi_catalog_get_publication_status",
+      "kiwi_catalog_get_publication",
       { publication_id: "mpub_1" },
       ["catalog:read"],
     );
@@ -250,7 +269,7 @@ describe("目录工具（kiwi_catalog_*）", () => {
     await bundle.call("kiwi_catalog_withdraw_publication", { publication_id: "mpub_9" }, [
       "catalog:write",
     ]);
-    await bundle.call("kiwi_catalog_get_publication_status", { publication_id: "mpub_9" }, [
+    await bundle.call("kiwi_catalog_get_publication", { publication_id: "mpub_9" }, [
       "catalog:read",
     ]);
     expect(calls.map((c) => [c.method, c.input])).toEqual([
@@ -260,23 +279,60 @@ describe("目录工具（kiwi_catalog_*）", () => {
     expect(calls.every((c) => c.token === CREDENTIAL)).toBe(true);
   });
 
-  it("关注总数：用该商家的目录凭据读匿名汇总，只回总数不回买家身份", async () => {
+  it("读单条资料带回**可编辑内容**：改写文案前能拿到原文，不必凭记忆重写", async () => {
     const calls: RecordedCall[] = [];
     const { bundle } = tools(calls);
-    const result = await bundle.call("kiwi_catalog_get_follower_stats", {}, ["catalog:read"]);
-    expect(calls.map((c) => c.method)).toEqual(["fetchFollowerStats"]);
-    // 凭据取自会话绑定的 merchant_id，不看入参。
-    expect(calls[0]?.token).toBe(CREDENTIAL);
-    const payload = text(result);
-    expect(payload).toContain("42");
-    // 隐私：只回总数，明示没有名单与群发通道，避免模型向商家承诺触达能力。
-    expect(payload).toContain("匿名汇总");
-    expect(payload).not.toContain("@");
+    const result = await bundle.call("kiwi_catalog_get_publication", { publication_id: "mpub_1" }, [
+      "catalog:read",
+    ]);
+    const payload = JSON.parse(text(result)) as {
+      status: string;
+      content: {
+        merchant_display_name: string;
+        title: string;
+        category: string;
+        summary: string;
+        shop_url: string;
+        faq: Array<{ question: string; answer: string }>;
+      };
+    };
+    expect(payload.status).toBe("published");
+    expect(payload.content).toEqual({
+      merchant_display_name: "Acme 商贸",
+      title: "明前龙井",
+      category: "茶",
+      summary: "明前采摘",
+      shop_platform: "",
+      shop_url: "https://acme.example/shop",
+      faq: [{ question: "保修多久？", answer: "一年" }],
+    });
   });
 
-  it("关注总数需要 catalog:read；scope 不足时拒绝", async () => {
+  it("经营汇总：用该商家的目录凭据读匿名聚合，含关注数与各资料浏览量", async () => {
+    const calls: RecordedCall[] = [];
+    const { bundle } = tools(calls);
+    const result = await bundle.call("kiwi_catalog_get_merchant_stats", {}, ["catalog:read"]);
+    expect(calls.map((c) => c.method)).toEqual(["fetchStats"]);
+    // 凭据取自会话绑定的 merchant_id，不看入参。
+    expect(calls[0]?.token).toBe(CREDENTIAL);
+    const payload = JSON.parse(text(result)) as {
+      followers_total: number;
+      views_total: number;
+      publications: Array<{ publication_id: string; view_count: number }>;
+    };
+    expect(payload.followers_total).toBe(42);
+    expect(payload.views_total).toBe(120);
+    expect(payload.publications).toEqual([
+      expect.objectContaining({ publication_id: "mpub_1", view_count: 100 }),
+    ]);
+    // 隐私：只回聚合数字，明示没有名单与群发通道，避免模型向商家承诺触达能力。
+    expect(text(result)).toContain("匿名");
+    expect(text(result)).not.toContain("@");
+  });
+
+  it("经营汇总需要 catalog:read；scope 不足时拒绝", async () => {
     const { bundle } = tools([]);
-    const result = await bundle.call("kiwi_catalog_get_follower_stats", {}, ["catalog:write"]);
+    const result = await bundle.call("kiwi_catalog_get_merchant_stats", {}, ["catalog:write"]);
     expect(result.isError).toBe(true);
     expect(text(result)).toContain("catalog:read");
   });
