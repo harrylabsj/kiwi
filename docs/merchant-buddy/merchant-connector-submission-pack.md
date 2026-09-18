@@ -1,6 +1,8 @@
 # 商家连接器上架素材包（提交前必读）
 
-状态：素材就绪、**未提交**（2026-09-17）。依据：[商家连接器独立发布计划](generic-merchant-connector-release-plan.md)、[平台核验记录](workbuddy-connector-platform-verification-2026-09-17.md)、[第 1 版设计](../v1-product-flow-and-onboarding-design.md)。
+状态：**WorkBuddy 审核中，尚未发布**（2026-09-18）。依据：[商家连接器独立发布计划](generic-merchant-connector-release-plan.md)、[平台核验记录](workbuddy-connector-platform-verification-2026-09-17.md)、[第 1 版设计](../v1-product-flow-and-onboarding-design.md)。
+
+2026-09-18 提交回执：生产网关已运行 Kiwi 0.9.0 + 安全修复 `d9ab95a`（构建源为隔离工作树 `9baebd4`），`/health` 与 OAuth 元数据公网正常，旧 `dist` 保留在 `/opt/kiwi-gateway/app/dist.prev-108c25e9` 供回滚。WorkBuddy 解析 `kiwi-merchant-gateway-1.0.0.zip` 后生成新连接器 ID **`oc_f6eb7fea361ac64e`**，选择「商家自营 - B2b(商品批发/门店管理)」类目，平台资产列表显示「审核中 v1.0.0」。平台提示预计 7 个工作日内出结果；审批通过及用户侧真实 OAuth/工具预览尚待验收。
 
 **提交顺序**：先连接器（拿到平台生成的新 ID）→ 再 Buddy 应用（引用该 ID）→ 最后预览与实机验收。**不得**先提交应用。
 
@@ -25,7 +27,7 @@ node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /abs/path/
 shasum -a 256 /abs/path/kiwi-merchant-gateway-<version>.zip
 ```
 
-本次构建产物（供对照，**提交前请以最新构建为准**）：`kiwi-merchant-gateway-1.1.0.zip`，sha256 `b4766196ac94ac8b04738e3b4795b7662c6a6441f999fc2091352d5d140b47ea`。
+本次实际提交产物：`kiwi-merchant-gateway-1.0.0.zip`，sha256 `6bda6977eaea72bd6f5d2c452955511c0f10b16ba82ac80384686e1f19db927f`。ZIP 只含 `connector-meta.json`、`mcp.json`、`icon.svg`；与早期 1.1.0 试包的摘要不可混用。
 
 离线校验覆盖（脚本 + 测试，均随 CI 跑）：
 - 包结构与字段合法性；`url` 必须 https + `/mcp` + **不得落在商家自有实例域名**；
@@ -35,8 +37,8 @@ shasum -a 256 /abs/path/kiwi-merchant-gateway-<version>.zip
 ## 2. 平台步骤（连接器）
 
 1. 上传 ZIP → 平台解析并生成连接器 ID → 核对信息（名称、source、工具、回调）。
-2. 记录 **新连接器 ID**（不得复用买方 `oc_bd73f860e3e2b5d3`）。
-3. 提交审核 → 审核通过后记录版本号与发布状态（作为验收证据留存）。
+2. 已记录 **新连接器 ID `oc_f6eb7fea361ac64e`**（与买方 `oc_bd73f860e3e2b5d3` 不同）。
+3. 已提交审核；审核通过后继续记录正式发布状态、进行 WorkBuddy 实机 OAuth 和工具验收，再把该 ID 配置到商家 Buddy 应用。
 4. **若平台拒绝 `workbuddy://` 私有协议回调**：确认回退 `http://127.0.0.1:{动态端口}/oauth/callback` 是否被接受；两条都不行则停下评审，不改入口形态。
 
 ## 3. Buddy 应用
@@ -59,9 +61,9 @@ shasum -a 256 /abs/path/kiwi-merchant-gateway-<version>.zip
 
 | # | 事项 | 由谁解决 | 未确认时的后果 |
 | --- | --- | --- | --- |
-| 1 | `kiwi-merchant` source 是否已被占用 | 平台核验 | source 冲突会让包解析失败或与既有资产混淆 |
-| 2 | 新连接器 ID（平台生成） | 平台流程 | 无法绑定 Buddy 应用 |
-| 3 | `merchant.kiwi.harrylabsj.com` 从"Veyquo 单实例"切换为网关入口的时机 | 部署方（见部署说明 §10） | 连接器指向的入口若仍是单实例，其他商家授权会落到 Veyquo |
+| 1 | `kiwi-merchant` source 是否已被占用 | 平台已接受包并生成新 ID；正式发布时再核对 | source 冲突会让包解析失败或与既有资产混淆 |
+| 2 | 新连接器 ID（平台生成） | 已获得 `oc_f6eb7fea361ac64e` | 审核通过后供 Buddy 应用引用 |
+| 3 | `merchant.kiwi.harrylabsj.com` 从 Veyquo 单实例切换为网关入口 | 已完成；`/health` 返回 `kiwi-merchant-entry` | 需维持公网健康与安全修复版本 |
 | 4 | 平台对 `workbuddy://` 私有协议回调与 loopback 回退的接受情况 | 平台预览 | 授权无法回跳 |
 | 5 | 绑定实例后新增工具是否需要 Buddy 侧重连/刷新 | 平台预览 | 商家绑定后可能看不到实例工具，需在文案里给出「重连一次」的指引 |
 

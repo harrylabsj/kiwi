@@ -1,6 +1,6 @@
 # kiwi-merchant-gateway-connector — 商家连接器（「Kiwi 商家运营」）包
 
-状态：**已备好但未提交平台**（2026-09-17）。上架前置见下方「提交前必须确认」。
+状态：**已提交 WorkBuddy 审核，尚未发布**（2026-09-18）。平台连接器 ID `oc_f6eb7fea361ac64e`，v1.0.0；上架后仍须实机验收 OAuth 与工具。
 
 指向 **Kiwi 商家连接器网关**（多商家共享入口，`https://merchant.kiwi.harrylabsj.com/mcp`，远程 HTTPS MCP + OAuth）。商家在 OAuth 授权页完成目录注册/登录后，网关按已验证 `merchant_id` 提供：
 
@@ -28,9 +28,9 @@ node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /abs/path/
 
 ## 提交前必须确认（外部事项）
 
-1. **source 唯一性**：`kiwi-merchant` 是否已被占用（发布计划 §5）。
-2. **新平台 ID**：由创建流程生成，**不得**复用买方 `oc_bd73f860e3e2b5d3`。
-3. **入口域名**：`merchant.kiwi.harrylabsj.com` 当前指向的仍是单商家实例，切换方案与时机见部署说明 §1、§10。
+1. **source 唯一性**：包已通过上传解析并生成新 ID，待审核通过后核对正式市场记录。
+2. **新平台 ID**：`oc_f6eb7fea361ac64e`，与买方 `oc_bd73f860e3e2b5d3` 分开。
+3. **入口域名**：`merchant.kiwi.harrylabsj.com` 已切换为商家网关；公网 `/health` 返回 `kiwi-merchant-entry`，OAuth 元数据提供 catalog/merchant scope。
 4. **OAuth 回调**：按 source 派生为
    `workbuddy://workbuddy/mcp/connector%3Akiwi-merchant/oauth/callback`，
    并验证平台规定的 loopback 回退；Buddy 应用级回调另行配置，二者不要混用。
