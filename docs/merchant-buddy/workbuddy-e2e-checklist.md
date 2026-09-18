@@ -1,5 +1,12 @@
 # WorkBuddy 实机联调检查单（Kiwi Merchant Buddy）
 
+> **2026-09-18 收窄：本检查单里的实例工具步骤当前不适用。** 按
+> [「网关不碰实例」](merchant-connector-deployment.md)原则（部署说明 §0），商家 Buddy 只
+> 做第 0 版目录能力（注册与发布），**不提供 `kiwi_merchant_*` 实例工具**；商家实例独立
+> 运行、直接与买家做 A2A。下文凡涉及 `kiwi_merchant_*`（商品/库存/变更候选/磋商）的
+> 步骤保留作"若将来启用实例路由"的检查项，**当前不要据此判定联调失败**。
+> 第 0 版相关的步骤（目录注册、草稿、请求发布、门户确认、状态、撤回）仍然有效。
+
 本检查单覆盖无法离线自动化的联调步骤。离线已自动化部分见
 `tests/merchant-buddy/`（oauth-e2e / acceptance-groups / stage1/2/4-acceptance）。
 

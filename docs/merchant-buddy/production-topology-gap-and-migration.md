@@ -80,8 +80,9 @@ sudo systemctl enable --now kiwi-merchant
 1. **陈旧 endpoint 行**：`agent_endpoints` 里仍有 3 行 2026-08-08 遗留的测试数据
    （`http://127.0.0.1:9000/.well-known/*`、`https://example.com/agent-card.json`，状态 `active`）。
    买家侧投影不受影响（API 正确返回 veyquo.com 的地址），但建议清理，避免将来有消费者遍历 active 端点时误取。
-2. **第 1 版实例路由仍待绑定**：实例已具备 `merchant mcp pair`，但网关 `tenants.json` 仍是空注册表，
-   需要商家走 `/instance` 自助绑定（或运维预置）。
+2. ~~第 1 版实例路由仍待绑定~~ → **2026-09-18 收窄：按「网关不碰实例」原则不采用**。
+   网关只做第 0 版目录能力；商家实例独立运行，买家经目录发现后直接与其 A2A。
+   `tenants.json` 保持空注册表即为正确状态，**不要去绑**（见部署说明 §0）。
 3. **平台侧核验**（source 唯一性、连接器 ID、`workbuddy://` 回调）仍未实机验证 —— 连接器包在这些确认前不应提交上架。
 
 ---
