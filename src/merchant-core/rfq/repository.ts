@@ -951,6 +951,17 @@ export class RfqRepository {
       if (quote.status !== "PENDING_APPROVAL") {
         throw new RfqError("approval_stale", `报价状态为 ${quote.status}，不是 PENDING_APPROVAL`);
       }
+      // 事务内复查 case 终态与需求 revision（§8.1/§9.2 C：与外层校验构成防御纵深）。
+      const kase = this.getCase(quote.case_id);
+      if (kase === undefined) {
+        throw new RfqError("not_found", `未知询盘 ${quote.case_id}`);
+      }
+      if (kase.stage === "CLOSED" || kase.stage === "CANCELLED") {
+        throw new RfqError("case_closed", `询盘 ${quote.case_id} 已是终态 ${kase.stage}；批准失效`);
+      }
+      if (kase.current_revision !== quote.case_revision) {
+        throw new RfqError("approval_stale", "需求已更新（case_revision 变化）；旧批准失效");
+      }
       // 前置重验：报价有效期（服务端时钟）。
       if (Date.parse(quote.valid_until) <= Date.parse(this.now())) {
         throw new RfqError("approval_stale", "报价已过有效期，批准失效");
@@ -1189,7 +1200,20 @@ export class RfqRepository {
         )
         .run(this.merchantId, input.principalId, input.operation, input.key, digest, this.now());
     });
-    const result = await input.run();
+    let result: T;
+    try {
+      result = await input.run();
+    } catch (err) {
+      // 确定性失败（run() 抛出）：结果已确定为失败而非未知——清理 tombstone，
+      // 与同步路径语义一致（失败不留残键；同键可修正后重试）。进程崩溃留下的
+      // tombstone 无结果仍按 OPERATION_UNKNOWN 处理（§10.3）。
+      this.db
+        .prepare(
+          "DELETE FROM rfq_idempotency WHERE merchant_id = ? AND principal_id = ? AND operation = ? AND idem_key = ? AND result_json IS NULL",
+        )
+        .run(this.merchantId, input.principalId, input.operation, input.key);
+      throw err;
+    }
     this.tx(() => {
       this.db
         .prepare(
@@ -1204,6 +1228,21 @@ export class RfqRepository {
         );
     });
     return { result, replayed: false };
+  }
+
+  /**
+   * 幂等记录保留清理（§10.3：建议保留 30 天；prepare/激活类关键幂等跟随
+   * 对应报价保留策略，不清理）。返回删除条数。
+   */
+  pruneIdempotency(input: { olderThanDays: number; preserveOperations: string[] }): number {
+    const cutoff = new Date(Date.parse(this.now()) - input.olderThanDays * 86_400_000).toISOString();
+    const placeholders = input.preserveOperations.map(() => "?").join(", ");
+    const result = this.db
+      .prepare(
+        `DELETE FROM rfq_idempotency WHERE created_at < ?${placeholders ? ` AND operation NOT IN (${placeholders})` : ""}`,
+      )
+      .run(cutoff, ...input.preserveOperations);
+    return Number(result.changes);
   }
 
   createJob(operation: string): RfqJobRow {

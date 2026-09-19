@@ -53,6 +53,7 @@ import {
   evaluateFreshness,
   resolveFactSnapshot,
   type FactSnapshotDraft,
+  type FreshnessOverrides,
 } from "./fact-resolver.js";
 import type { RfqPolicyContext } from "./policy.js";
 import { RfqArtifactStore } from "./artifacts.js";
@@ -86,6 +87,18 @@ export interface RfqPriceResult {
   blockers: string[];
 }
 
+/** 幂等记录保留天数（§10.3 建议初值；发布/移交类跟随报价保留，不清理）。 */
+export const IDEMPOTENCY_RETENTION_DAYS = 30;
+/**
+ * 幂等保留清理的保护名单：发布/移交准备类关键幂等不提前清理（§10.3）。
+ * 有界清理任务（RFQ-014）实现时必须查询本名单——名单内 operation 的
+ * 幂等记录跟随对应报价保留策略，不适用 30 天保留。
+ */
+export const IDEMPOTENCY_PRESERVE_OPERATIONS: ReadonlySet<string> = new Set([
+  "rfq.prepare_release",
+  "rfq.prepare_handoff",
+]);
+
 /** 调用上下文（传输层验证后注入；未经验证的模型字段不能构造）。 */
 export interface RfqCallContext {
   /** 已认证主体（OAuth subject / 管理页会话主体）。 */
@@ -107,6 +120,10 @@ export interface RfqServiceDeps {
   /** 审批候选状态查询（恢复同步用；来自审批 store）。 */
   candidateStatus?: (candidateId: string) => string | undefined;
   policyVersion: () => string;
+  /** 报价有效期天数（缺省 7；模型工具面不暴露该参数，§13.1）。 */
+  quoteValidityDays?: number;
+  /** 新鲜度阈值覆盖（缺省 FRESHNESS_SECONDS；§6.3 试点参数）。 */
+  freshnessSeconds?: FreshnessOverrides;
 }
 
 export interface RfqCaseView {
@@ -165,8 +182,14 @@ export class MerchantRfqService {
     if (typeof cmd.content !== "string" || cmd.content.trim() === "") {
       throw new RfqError("source_invalid", "询盘内容不能为空");
     }
-    if (cmd.content.length > 100 * 1024) {
-      throw new RfqError("source_invalid", "单个粘贴文本上限 100 KB（超限拒绝，不截断）");
+    // 输入上限（§17.3）：粘贴文本 100 KB；CSV 2 MB（行数上限由 parseCsvInquiry
+    // 把关）。超限明确拒绝，不截断后继续正式报价。
+    const maxBytes = cmd.kind === "csv" ? 2 * 1024 * 1024 : 100 * 1024;
+    if (Buffer.byteLength(cmd.content, "utf8") > maxBytes) {
+      throw new RfqError(
+        "source_invalid",
+        `单个${cmd.kind === "csv" ? "CSV" : "粘贴文本"}上限 ${Math.floor(maxBytes / 1024)} KB（超限拒绝，不截断）`,
+      );
     }
     const { result, replayed } = this.repo().withIdempotency({
       principalId: ctx.principalId,
@@ -286,17 +309,23 @@ export class MerchantRfqService {
     caseId: string;
     expectedRevision: number;
     changes: ExtractionProposalEntry[];
+    /**
+     * 客户新消息原文（§5.2：客户的新消息创建新的来源记录）。提供时以
+     * kind=customer_feedback 落 SourceRecord，变更引用必须落在该原文内；
+     * 缺省时变更引用必须落在当前单一主来源原文内（fail-closed）。
+     */
+    source?: { content: string };
     idempotencyKey: string;
-  }): { case_id: string; revision: number; stage: RfqStage; blockers: RfqBlocker[]; superseded_quote: string | null; replayed: boolean } {
+  }): { case_id: string; revision: number; stage: RfqStage; blockers: RfqBlocker[]; superseded_quote: string | null; source_id: string | null; replayed: boolean } {
     this.assertActor(ctx);
     const { result, replayed } = this.repo().withIdempotency({
       principalId: ctx.principalId,
       operation: "rfq.revise",
       key: cmd.idempotencyKey,
-      request: { case_id: cmd.caseId, expected_revision: cmd.expectedRevision, changes: cmd.changes },
+      request: { case_id: cmd.caseId, expected_revision: cmd.expectedRevision, changes: cmd.changes, source: cmd.source ?? null },
       run: () => this.reviseOnce(ctx, cmd),
       serialize: (r) => r,
-      deserialize: (stored) => JSON.parse(stored) as RfqReviseResult,
+      deserialize: (stored) => JSON.parse(stored) as RfqReviseResult & { source_id: string | null },
     });
     return { ...result, replayed };
   }
@@ -305,7 +334,8 @@ export class MerchantRfqService {
     caseId: string;
     expectedRevision: number;
     changes: ExtractionProposalEntry[];
-  }): RfqReviseResult {
+    source?: { content: string };
+  }): RfqReviseResult & { source_id: string | null } {
     const kase = this.repo().getCase(cmd.caseId);
     if (kase === undefined) throw new RfqError("not_found", `未知询盘 ${cmd.caseId}`);
     if (kase.stage === "CLOSED" || kase.stage === "CANCELLED") {
@@ -313,16 +343,42 @@ export class MerchantRfqService {
     }
     const current = this.repo().getCaseRevision(cmd.caseId, kase.current_revision);
     if (current === undefined) throw new RfqError("not_found", `询盘 ${cmd.caseId} 缺少当前 revision`);
+    // 修订材料：优先客户新消息（新建来源记录）；否则必须存在单一主来源
+    // 供引用核验——不再对「无来源」做自证式校验（fail-closed，§5.2/§6.2）。
+    let newSource: { source_id: string } | undefined;
+    if (cmd.source !== undefined) {
+      if (typeof cmd.source.content !== "string" || cmd.source.content.trim() === "") {
+        throw new RfqError("source_invalid", "修订来源内容不能为空");
+      }
+      if (Buffer.byteLength(cmd.source.content, "utf8") > 100 * 1024) {
+        throw new RfqError("source_invalid", "修订来源上限 100 KB（超限拒绝，不截断）");
+      }
+      newSource = this.repo().createSource({
+        caseId: cmd.caseId,
+        kind: "customer_feedback",
+        content: cmd.source.content,
+        receivedAt: this.deps.now(),
+        submittedBy: ctx.actor,
+        synthetic: false,
+      }).source;
+    }
     const sources = current.source_ids;
     const primarySource = sources.length === 1 ? sources[0] : undefined;
-    const spanSource = primarySource !== undefined ? (this.repo().getSource(primarySource)?.content ?? "") : "";
+    const sourceId = newSource?.source_id ?? primarySource;
+    if (sourceId === undefined) {
+      throw new RfqError("validation", "修订需要客户新消息原文（source.content）或单一主来源材料");
+    }
+    const material = newSource !== undefined ? cmd.source!.content : (this.repo().getSource(sourceId)?.content ?? "");
     const outcome = applyExtractionProposal({
       fields: current.fields,
       entries: cmd.changes,
-      sourceContent: spanSource === "" ? (cmd.changes[0]?.quote ?? " ") : spanSource,
-      sourceId: primarySource ?? "operator",
-      span: spanSource === "" ? (cmd.changes[0]?.quote ?? " ") : spanSource,
+      sourceContent: material,
+      sourceId,
+      span: material,
     });
+    const sourceIds = newSource !== undefined && !sources.includes(newSource.source_id)
+      ? [...sources, newSource.source_id]
+      : sources;
     const blockers = computeBlockers(outcome.fields);
     // 关键需求更新 → 先建新 revision，再使旧审批失效（§8.2）。
     const { case: updated, revision } = this.repo().createCaseRevision({
@@ -330,7 +386,7 @@ export class MerchantRfqService {
       expectedVersion: kase.version,
       fields: outcome.fields,
       blockers,
-      sourceIds: sources,
+      sourceIds,
     });
     let superseded: string | null = null;
     if (kase.current_quote_id !== null) {
@@ -350,6 +406,7 @@ export class MerchantRfqService {
       stage: updated.stage,
       blockers,
       superseded_quote: superseded,
+      source_id: newSource?.source_id ?? null,
     };
   }
 
@@ -378,6 +435,39 @@ export class MerchantRfqService {
           expectedVersion: cmd.expectedRevision,
           stage: cmd.outcome,
         });
+        // 未决审批一并失效（§8.1）：DRAFT/VALIDATED/PENDING_APPROVAL 报价 →
+        // SUPERSEDED，其 PENDING_APPROVAL 发布 → SUPERSEDED（后续确认返回
+        // APPROVAL_STALE）。APPROVED/EXPORTED 与审计保留，不重写历史。
+        for (const quote of this.repo().listQuotesForCase(cmd.caseId)) {
+          if (!["DRAFT", "VALIDATED", "PENDING_APPROVAL"].includes(quote.status)) continue;
+          this.repo().transitionQuote({
+            quoteId: quote.quote_id,
+            revision: quote.revision,
+            from: [quote.status],
+            to: "SUPERSEDED",
+            actor: ctx.actor,
+            reason: `询盘${cmd.outcome === "CANCELLED" ? "已取消" : "已关闭"}；未决审批失效`,
+          });
+          for (const release of this.repo().listReleasesForQuote(quote.quote_id, quote.revision)) {
+            if (release.status === "PENDING_APPROVAL") {
+              this.repo().transitionRelease(release.release_id, ["PENDING_APPROVAL"], "SUPERSEDED");
+            }
+          }
+        }
+        // 指针指向的已替代版本清空（指针失效；stage 保持终态）。
+        if (kase.current_quote_id !== null) {
+          const pointerQuote = kase.current_quote_id !== null && kase.current_quote_revision !== null
+            ? this.repo().getQuote(kase.current_quote_id, kase.current_quote_revision)
+            : undefined;
+          if (pointerQuote === undefined || pointerQuote.status === "SUPERSEDED") {
+            this.repo().updateCurrentQuote({
+              caseId: cmd.caseId,
+              expectedVersion: updated.version,
+              quoteId: null,
+              quoteRevision: null,
+            });
+          }
+        }
         this.audit(ctx, "rfq.close", `case:${cmd.caseId}`, cmd.outcome);
         return { case_id: updated.case_id, stage: updated.stage };
       },

@@ -104,6 +104,7 @@ import {
 import { RfqRepository } from "./merchant-core/rfq/repository.js";
 import { RfqArtifactStore, ensureArtifactRoot } from "./merchant-core/rfq/artifacts.js";
 import { RfqReleaseCoordinator } from "./merchant-core/rfq/release-coordinator.js";
+import { rfqPolicyConfigFromMerchantPolicy } from "./merchant-core/rfq/policy.js";
 import { MerchantClientCommerceDataSource } from "./merchant-core/rfq/data-source-adapter.js";
 import { MerchantAdminSessions, writeAdminCredentials } from "./auth/merchant-sessions.js";
 import { createPairingCode, revokePairedCredential } from "./auth/merchant-pairing.js";
@@ -1706,8 +1707,12 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
       repo: rfqRepo,
       artifacts: rfqArtifacts,
       now,
-      // 策略版本 = 运行中生效策略的 digest（变化即报价/候选失效，§7.3）。
-      currentPolicy: () => ({ version: rfqPolicyVersion(), config: undefined }),
+      // 策略版本 = 运行中生效策略的 digest（变化即报价/候选失效，§7.3）；
+      // 硬策略配置从运行中商家策略装配（元→分映射；映射不到的检查不启用）。
+      currentPolicy: () => ({
+        version: rfqPolicyVersion(),
+        config: rfqPolicyConfigFromMerchantPolicy(policyRuntime.current().policy),
+      }),
     });
     return {
       executors: rfqCoordinator.buildExecutors(),

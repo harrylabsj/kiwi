@@ -246,12 +246,16 @@ export interface PricingLineInput {
   discount_minor: number;
   tax_basis: TaxBasis;
   tax_rate_bps: number;
+  /** 字段证据来源（pricing-input.schema.json 必填；持久化时由服务层填）。 */
+  evidence_source_ids?: string[];
 }
 
 export interface PricingShippingInput {
   amount_minor: number;
   tax_basis: TaxBasis;
   tax_rate_bps: number;
+  /** 字段证据来源（pricing-input.schema.json 必填；持久化时由服务层填）。 */
+  evidence_source_ids?: string[];
 }
 
 /** PricingEngine 的纯函数输入（§7.4：不接受模型提交的最终金额）。 */

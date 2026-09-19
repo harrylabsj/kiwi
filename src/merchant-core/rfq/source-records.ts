@@ -180,7 +180,9 @@ export function parseCsvInquiry(raw: string): CsvInquiry {
     );
   }
   if (rows.length === 0) throw new RfqError("source_invalid", "CSV 缺少数据行");
-  if (rows.length > 100) throw new RfqError("source_invalid", "CSV 最多 100 行数据");
+  // 输入上限（§17.3）：单 CSV 最多 1,000 行数据（单份报价 100 行上限由计价
+  // 引擎另行把关——超限明确拒绝，不截断后继续正式报价）。
+  if (rows.length > 1000) throw new RfqError("source_invalid", "CSV 最多 1000 行数据（超出请分批导入）");
   const col = (name: string): number => header.findIndex((h) => h.trim() === name);
   const out = rows.map((r, idx) => {
     const lineId = (r[col("line_id")] ?? "").trim() || `L${idx + 1}`;

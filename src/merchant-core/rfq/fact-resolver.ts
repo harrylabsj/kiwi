@@ -37,6 +37,9 @@ export const FRESHNESS_SECONDS = {
   rules: 24 * 60 * 60,
 } as const;
 
+/** 部署可调的新鲜度阈值（缺省用 FRESHNESS_SECONDS；§6.3 试点参数）。 */
+export type FreshnessOverrides = Partial<Record<keyof typeof FRESHNESS_SECONDS, number>>;
+
 export interface FactSnapshotDraft {
   snapshot_id: string;
   merchant_id: string;
@@ -61,6 +64,8 @@ function toField(input: {
   source: string;
   verified_at?: string;
   freshForSeconds?: number;
+  /** 缺省新鲜期（未显式给 freshForSeconds 的字段用；部署可调）。 */
+  defaultFreshSeconds?: number;
   nowIso: string;
 }): FactField {
   // 上游未提供 verified_at/source_version 时如实记读取时点 + "unknown"；
@@ -73,7 +78,7 @@ function toField(input: {
     source: input.source,
     source_version: input.verified_at === undefined ? "unknown" : `verified:${verified_at}`,
     verified_at,
-    expires_at: isoAt(verified_at, input.freshForSeconds ?? FRESHNESS_SECONDS.rules),
+    expires_at: isoAt(verified_at, input.freshForSeconds ?? input.defaultFreshSeconds ?? FRESHNESS_SECONDS.rules),
     visibility: "model_public",
   };
 }
@@ -144,7 +149,10 @@ export async function resolveFactSnapshot(input: {
   skus: string[];
   snapshotId: string;
   nowIso: string;
+  /** 部署可调阈值（缺省 FRESHNESS_SECONDS；§6.3 试点参数）。 */
+  freshness?: FreshnessOverrides;
 }): Promise<FactSnapshotDraft> {
+  const thresholds = { ...FRESHNESS_SECONDS, ...(input.freshness ?? {}) };
   const fields: FactField[] = [];
   const uniqueSkus = [...new Set(input.skus)].sort();
   for (const sku of uniqueSkus) {
@@ -167,6 +175,7 @@ export async function resolveFactSnapshot(input: {
           source: "shopping-cli",
           // 本地推导字段：读取时即观察到（诚实时间戳，非上游伪造）。
           verified_at: input.nowIso,
+          ...(input.freshness !== undefined ? { defaultFreshSeconds: thresholds.rules } : {}),
           nowIso: input.nowIso,
         }),
       );
@@ -180,6 +189,7 @@ export async function resolveFactSnapshot(input: {
           value: null,
           authority: "LOCAL_AUTHORITATIVE",
           source: "shopping-cli",
+          ...(input.freshness !== undefined ? { defaultFreshSeconds: thresholds.rules } : {}),
           nowIso: input.nowIso,
         }),
       );
@@ -191,7 +201,8 @@ export async function resolveFactSnapshot(input: {
           authority: price.authority,
           source: price.source,
           ...(price.verified_at !== undefined ? { verified_at: price.verified_at } : {}),
-          freshForSeconds: FRESHNESS_SECONDS.price,
+          freshForSeconds: thresholds.price,
+          ...(input.freshness !== undefined ? { defaultFreshSeconds: thresholds.rules } : {}),
           nowIso: input.nowIso,
         }),
       );
@@ -202,7 +213,8 @@ export async function resolveFactSnapshot(input: {
           authority: price.authority,
           source: price.source,
           ...(price.verified_at !== undefined ? { verified_at: price.verified_at } : {}),
-          freshForSeconds: FRESHNESS_SECONDS.price,
+          freshForSeconds: thresholds.price,
+          ...(input.freshness !== undefined ? { defaultFreshSeconds: thresholds.rules } : {}),
           nowIso: input.nowIso,
         }),
       );
@@ -217,7 +229,8 @@ export async function resolveFactSnapshot(input: {
         authority: inventory?.authority ?? "LOCAL_AUTHORITATIVE",
         source: inventory?.source ?? "shopping-cli",
         ...(inventory?.verified_at !== undefined ? { verified_at: inventory.verified_at } : {}),
-        freshForSeconds: FRESHNESS_SECONDS.inventory,
+        freshForSeconds: thresholds.inventory,
+        ...(input.freshness !== undefined ? { defaultFreshSeconds: thresholds.rules } : {}),
         nowIso: input.nowIso,
       }),
     );
@@ -228,6 +241,7 @@ export async function resolveFactSnapshot(input: {
         authority: "LOCAL_AUTHORITATIVE",
         source: "shopping-cli",
         verified_at: input.nowIso,
+        ...(input.freshness !== undefined ? { defaultFreshSeconds: thresholds.rules } : {}),
         nowIso: input.nowIso,
       }),
     );
