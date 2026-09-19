@@ -210,14 +210,48 @@ export class RfqArtifactStore {
     return content;
   }
 
-  /** 未引用产物回收（有界清理；只删除本 store 命名空间内文件）。 */
-  cleanupUnreferenced(referencedRelativePaths: Set<string>, quoteIdPrefix: string): number {
-    const dir = path.join(this.deps.root, "rfq-artifacts", quoteIdPrefix);
+  /**
+   * 未引用产物回收（有界清理；只删除本 store 命名空间内文件）。
+   * olderThanMs：文件 mtime 早于该时间戳才回收（TTL，§10.4）——刚渲染的
+   * 文件即使尚未入库也不立即删除；缺省 = 不看 TTL（原语义）。
+   */
+  cleanupUnreferenced(
+    referencedRelativePaths: Set<string>,
+    quoteIdPrefix: string,
+    opts: { olderThanMs?: number } = {},
+  ): number {
+    return this.cleanupPrefix(this.prefixDir(quoteIdPrefix), "rfq-artifacts", quoteIdPrefix, referencedRelativePaths, opts.olderThanMs);
+  }
+
+  /** 全前缀扫描回收（root/rfq-artifacts 下每个 quote 前缀目录）。 */
+  cleanupUnreferencedAll(referencedRelativePaths: Set<string>, opts: { olderThanMs?: number } = {}): number {
+    const base = path.join(this.deps.root, "rfq-artifacts");
+    let removed = 0;
+    for (const prefix of readdirNames(base)) {
+      removed += this.cleanupPrefix(path.join(base, prefix), "rfq-artifacts", prefix, referencedRelativePaths, opts.olderThanMs);
+    }
+    return removed;
+  }
+
+  private prefixDir(quoteIdPrefix: string): string {
+    return path.join(this.deps.root, "rfq-artifacts", quoteIdPrefix);
+  }
+
+  private cleanupPrefix(
+    dir: string,
+    baseSegment: string,
+    prefix: string,
+    referencedRelativePaths: Set<string>,
+    olderThanMs: number | undefined,
+  ): number {
     let removed = 0;
     try {
       for (const name of readdirNames(dir)) {
-        if (!referencedRelativePaths.has(path.join("rfq-artifacts", quoteIdPrefix, name))) {
-          rmFile(path.join(dir, name));
+        const absolute = path.join(dir, name);
+        if (statSync(absolute).isDirectory()) continue;
+        if (olderThanMs !== undefined && statSync(absolute).mtimeMs >= olderThanMs) continue;
+        if (!referencedRelativePaths.has(path.join(baseSegment, prefix, name))) {
+          rmFile(absolute);
           removed += 1;
         }
       }

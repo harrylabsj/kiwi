@@ -136,6 +136,8 @@ export class RfqReleaseCoordinator {
     const warnings: string[] = [];
     const now = this.deps.now();
     const artifactId = `art_${randomUUID()}`;
+    // 产物文件先落盘（文件系统无事务，失败/回滚留下的孤儿文件由
+    // cleanupOrphanArtifacts 按 TTL 回收，§10.4）；DB 写全部进入事务。
     const written = this.deps.artifacts.write({
       artifactId,
       quoteId: quote.quote_id,
@@ -143,51 +145,60 @@ export class RfqReleaseCoordinator {
       projection,
     });
     const releaseId = `rel_${randomUUID()}`;
-    this.deps.repo.saveArtifact({
-      artifact_id: artifactId,
-      merchant_id: this.deps.repo.merchantId,
-      quote_id: quote.quote_id,
-      quote_revision: quote.revision,
-      content_sha256: written.content_sha256,
-      template_version: written.template_version,
-      content_type: written.content_type,
-      relative_path: written.relative_path,
-      activated: false,
-      created_at: now,
-    });
-    this.deps.repo.createRelease({
-      release_id: releaseId,
-      merchant_id: this.deps.repo.merchantId,
-      quote_id: quote.quote_id,
-      quote_revision: quote.revision,
-      candidate_id: "",
-      artifact_id: artifactId,
-      artifact_sha256: written.content_sha256,
-      public_projection_digest: publicProjectionDigest(projection),
-      recipient_ref: recipientRef,
-      policy_version: quote.policy_version,
-      fact_fingerprint: quote.fact_fingerprint,
-      status: "PENDING_APPROVAL",
-      created_at: now,
-      updated_at: now,
-    });
-    const candidateId = await input.prepareCandidate({ releaseId });
-    this.deps.repo.updateReleaseCandidate(releaseId, candidateId);
-    // VALIDATED → PENDING_APPROVAL（§8.1：正式产物已渲染、摘要固定、审批候选落盘）。
-    this.deps.repo.transitionQuote({
-      quoteId: quote.quote_id,
-      revision: quote.revision,
-      from: ["VALIDATED"],
-      to: "PENDING_APPROVAL",
-      actor: input.actor,
-      reason: `发布候选 ${candidateId} 已登记（产物摘要已冻结）`,
-    });
-    this.deps.repo.appendAudit({
-      actor: input.actor,
-      operation: "rfq.prepare_release",
-      objectDigest: `release:${releaseId}`,
-      result: "PENDING_APPROVAL",
-      traceId: randomUUID(),
+    // §10.2 UnitOfWork：产物行、release 行、候选登记（同一 SQLite 连接的
+    // 审批 store）、报价状态转移与审计在同一事务内全部提交或全部回滚——
+    // 「候选已插入、release 半提交」的中间态不存在。
+    // 顺序约束：prepareCandidate 的 readPreconditions 要读 release 行绑定
+    // 摘要/收件人/策略版本，必须先 createRelease（candidate_id 先空、登记后
+    // 回填），否则前置读取 not_found。
+    const candidateId = await this.deps.repo.runInTransactionAsync(async () => {
+      this.deps.repo.saveArtifact({
+        artifact_id: artifactId,
+        merchant_id: this.deps.repo.merchantId,
+        quote_id: quote.quote_id,
+        quote_revision: quote.revision,
+        content_sha256: written.content_sha256,
+        template_version: written.template_version,
+        content_type: written.content_type,
+        relative_path: written.relative_path,
+        activated: false,
+        created_at: now,
+      });
+      this.deps.repo.createRelease({
+        release_id: releaseId,
+        merchant_id: this.deps.repo.merchantId,
+        quote_id: quote.quote_id,
+        quote_revision: quote.revision,
+        candidate_id: "",
+        artifact_id: artifactId,
+        artifact_sha256: written.content_sha256,
+        public_projection_digest: publicProjectionDigest(projection),
+        recipient_ref: recipientRef,
+        policy_version: quote.policy_version,
+        fact_fingerprint: quote.fact_fingerprint,
+        status: "PENDING_APPROVAL",
+        created_at: now,
+        updated_at: now,
+      });
+      const cid = await input.prepareCandidate({ releaseId });
+      this.deps.repo.updateReleaseCandidate(releaseId, cid);
+      // VALIDATED → PENDING_APPROVAL（§8.1：正式产物已渲染、摘要固定、审批候选落盘）。
+      this.deps.repo.transitionQuote({
+        quoteId: quote.quote_id,
+        revision: quote.revision,
+        from: ["VALIDATED"],
+        to: "PENDING_APPROVAL",
+        actor: input.actor,
+        reason: `发布候选 ${cid} 已登记（产物摘要已冻结）`,
+      });
+      this.deps.repo.appendAudit({
+        actor: input.actor,
+        operation: "rfq.prepare_release",
+        objectDigest: `release:${releaseId}`,
+        result: "PENDING_APPROVAL",
+        traceId: randomUUID(),
+      });
+      return cid;
     });
     return {
       release_id: releaseId,
@@ -230,6 +241,12 @@ export class RfqReleaseCoordinator {
     const freshness = evaluateFreshness(JSON.parse(snapshot.fields_json) as FactField[], this.deps.now());
     if (freshness.stale.length > 0 || freshness.missing_verification.length > 0) {
       throw new RfqError("fact_stale", "关键事实已过期或缺少验证信息；请刷新事实并重新生成报价版本");
+    }
+    // 策略版本重验（§7.3）：批准前策略变化 → 旧批准失效，不沿用旧批准执行
+    // （与 prepareRelease 的重验同一来源；策略不得借批准动作夹带变更）。
+    const currentPolicy = this.deps.currentPolicy();
+    if (currentPolicy.version !== quote.policy_version) {
+      throw new RfqError("policy_requires_review", "策略版本已变化；旧批准失效，请重新计价并准备发布");
     }
     const { release: after } = this.deps.repo.activateReleaseAtomic({
       releaseId: input.releaseId,

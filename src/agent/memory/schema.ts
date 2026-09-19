@@ -479,7 +479,8 @@ CREATE TABLE rfq_delivery_records (
   release_id TEXT,
   status TEXT NOT NULL CHECK (status IN ('NOT_SENT','REPORTED_SENT','RECEIPT_VERIFIED','DELIVERY_UNKNOWN')),
   channel TEXT NOT NULL CHECK (channel IN ('manual_wechat','manual_email','manual_other','integrated_channel')),
-  evidence_ref TEXT NOT NULL,
+  -- 契约口径（delivery-record.schema.json）：NOT_SENT 下 evidence_ref 可为 null。
+  evidence_ref TEXT,
   recorded_by TEXT NOT NULL,
   recorded_at TEXT NOT NULL
 );

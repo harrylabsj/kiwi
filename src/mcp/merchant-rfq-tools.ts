@@ -141,6 +141,7 @@ const RFQ_ERROR_LABEL: Record<string, string> = {
   idempotency_conflict: "同幂等键不同请求",
   operation_unknown: "结果尚未确定",
   case_closed: "询盘已取消或关闭",
+  quote_expired: "报价已过有效期",
 };
 
 function rfqErrorResult(err: unknown): MerchantMcpCallResult {
@@ -244,6 +245,9 @@ export function buildRfqMcpTools(
     },
     kiwi_merchant_rfq_revise: async (args) => {
       const rfq = surface?.rfq ?? unavailable();
+      // 设计边界（§11.2 工具表）：revise 工具面不含 source.content——客户新
+      // 消息建新来源记录的通道按设计不经模型工具暴露（管理页/CLI 后续接入）；
+      // 因此 changes 的原文引用只能落在当前主来源原文内（服务层 fail-closed）。
       const changes = Array.isArray(args.changes) ? (args.changes as Record<string, unknown>[]) : [];
       return await rfq.revise(rfqContext(), {
         caseId: str(args.case_id, "case_id"),
@@ -269,6 +273,10 @@ export function buildRfqMcpTools(
       const rfq = surface?.rfq ?? unavailable();
       await rfq.getCase(rfqContext(), str(args.case_id, "case_id")); // 归属校验
       return await rfq.searchProducts(rfqContext(), {
+        // line_id 在工具 schema 中 required（宿主侧强制）；handler 层提供即
+        // 服务端校验其存在性，缺省容忍（直接调用方兼容，服务层行校验同样把关）。
+        caseId: str(args.case_id, "case_id"),
+        ...(typeof args.line_id === "string" && args.line_id.trim() !== "" ? { lineId: args.line_id } : {}),
         query: str(args.query, "query"),
         ...(args.limit !== undefined ? { limit: int(args.limit, "limit") } : {}),
       }) as unknown as Record<string, unknown>;

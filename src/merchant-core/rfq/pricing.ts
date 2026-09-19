@@ -150,7 +150,10 @@ export function calculatePricing(input: PricingInput): PricingResult {
   return { lines, shipping, totals };
 }
 
-/** 单行基数（数量 × 单价 − 优惠），供策略层核对授权价格等使用。 */
+/**
+ * 单行基数（数量 × 单价 − 优惠），供策略层核对授权价格等使用。
+ * 预留导出（当前核心链路未消费；策略扩展 RFQ-014 接线时使用）。
+ */
 export function lineBaseMinor(line: PricingLineInput): number {
   const { amount } = parseLine(line);
   return Number(checkAmount(amount, "line base"));

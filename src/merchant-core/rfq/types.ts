@@ -49,7 +49,8 @@ export type RfqErrorCode =
   | "approval_stale"
   | "idempotency_conflict"
   | "operation_unknown"
-  | "case_closed";
+  | "case_closed"
+  | "quote_expired";
 
 export class RfqError extends Error {
   readonly code: RfqErrorCode;

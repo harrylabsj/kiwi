@@ -120,8 +120,11 @@ export interface RfqServiceDeps {
   /** 审批候选状态查询（恢复同步用；来自审批 store）。 */
   candidateStatus?: (candidateId: string) => string | undefined;
   policyVersion: () => string;
-  /** 报价有效期天数（缺省 7；模型工具面不暴露该参数，§13.1）。 */
-  quoteValidityDays?: number;
+  /**
+   * 报价有效期天数（缺省 7；模型工具面不暴露该参数，§13.1——调整走部署
+   * 配置/策略）。函数注入：运行中策略热更新后，下一次计价即时生效。
+   */
+  quoteValidityDays?: () => number | undefined;
   /** 新鲜度阈值覆盖（缺省 FRESHNESS_SECONDS；§6.3 试点参数）。 */
   freshnessSeconds?: FreshnessOverrides;
 }
@@ -594,7 +597,7 @@ export class MerchantRfqService {
   }
 
   /** 商品搜索（§6.4：完整性显式；「当前页无匹配」≠「全库不存在」）。 */
-  async searchProducts(ctx: RfqCallContext, q: { query: string; limit?: number }): Promise<{
+  async searchProducts(ctx: RfqCallContext, q: { query: string; limit?: number; caseId?: string; lineId?: string }): Promise<{
     items: ProductFact[];
     next_cursor: string | null;
     complete: boolean;
@@ -602,6 +605,19 @@ export class MerchantRfqService {
     source_version: string | null;
   }> {
     this.assertActor(ctx);
+    // lineId 是工具面的行定位上下文（§11.2 match 行级候选）：必须是当前
+    // revision 中真实存在的需求行，防止对不存在的行做「看似有据」的搜索。
+    if (q.lineId !== undefined) {
+      if (q.caseId === undefined) {
+        throw new RfqError("validation", "lineId 必须与 caseId 同时提供");
+      }
+      const kase = this.repo().getCase(q.caseId);
+      if (kase === undefined) throw new RfqError("not_found", `未知询盘 ${q.caseId}`);
+      const revision = this.repo().getCaseRevision(q.caseId, kase.current_revision);
+      if (revision === undefined || !revision.fields.lines.some((l) => l.line_id === q.lineId)) {
+        throw new RfqError("validation", `询盘 ${q.caseId} 当前 revision 不存在需求行 ${q.lineId}`);
+      }
+    }
     const limit = Math.min(Math.max(q.limit ?? 20, 1), 100);
     const items = await this.deps.dataSource.getProducts({ query: q.query, limit });
     // 上游单页 limit 能力不构成完整目录保证（§6.4；cursor 契约与
@@ -882,7 +898,9 @@ export class MerchantRfqService {
     const output = calculatePricing(pricingInput);
     // 硬策略（含底价兜底；拒绝只返回理由码）。报价有效期缺省 7 天（模型
     // 不可改变有效期——工具面不暴露该参数；调整走部署配置/策略，§13.1）。
-    const validityDays = this.deps.quoteValidityDays ?? 7;
+    // 有效期与策略的 max_valid_until_days 同源于 quote_ttl_seconds（cli 装配），
+    // 两侧同用向下取整到天，避免「策略 TTL < 缺省 7 天 → 计价必拒」的错配。
+    const validityDays = this.deps.quoteValidityDays?.() ?? 7;
     const validUntil = new Date(Date.parse(this.deps.now()) + validityDays * 86_400_000).toISOString();
     const policyCtx: RfqPolicyContext = {
       merchantId: this.repo().merchantId,
@@ -1055,6 +1073,15 @@ export class MerchantRfqService {
     if (quote === undefined || (quote.status !== "APPROVED" && quote.status !== "EXPORTED")) {
       throw new RfqError("forbidden", "产物对应的报价不是已批准状态");
     }
+    // 报价过期（§13.1 报价有效期）→ 新正式下载关闭：不假称客户手中的历史
+    // 副本消失，审计与已导出记录不受影响；需要重新提供则重新计价发布。
+    const projection = JSON.parse(quote.projection_json) as { valid_until?: string };
+    if (
+      projection.valid_until !== undefined &&
+      Date.parse(projection.valid_until) <= Date.parse(this.deps.now())
+    ) {
+      throw new RfqError("quote_expired", `报价已过有效期（${projection.valid_until}）；正式下载关闭，请重新计价发布`);
+    }
     const content = this.deps.artifacts.read(artifact);
     if (quote.status === "APPROVED") {
       this.repo().markQuoteExported({ quoteId: quote.quote_id, revision: quote.revision, actor: ctx.actor });
@@ -1208,7 +1235,27 @@ export class MerchantRfqService {
   pruneExpiredIdempotency(): number {
     return this.repo().pruneIdempotency({
       olderThanDays: IDEMPOTENCY_RETENTION_DAYS,
-      preserveOperations: [...IDEMPOTENCY_PRESERVE_OPERATIONS],
+      preserveOperations: IDEMPOTENCY_PRESERVE_OPERATIONS,
     });
+  }
+
+  /**
+   * 孤儿产物回收（§10.4 临时产物 TTL）：文件已渲染但事务回滚的孤儿文件、
+   * 以及无有效发布引用且超 TTL 的未激活产物行。被有效 release（含待批准）
+   * 引用的文件一律保留；不假称外部已获取的副本消失。启动维护时调用。
+   */
+  cleanupOrphanArtifacts(input: { ttlSeconds: number }): { files_removed: number; rows_removed: number } {
+    if (!Number.isFinite(input.ttlSeconds) || input.ttlSeconds < 0) {
+      throw new RfqError("validation", "ttlSeconds 必须是非负数");
+    }
+    const nowMs = Date.parse(this.deps.now());
+    const cutoffMs = nowMs - input.ttlSeconds * 1000;
+    const referenced = new Set(this.repo().listValidReleaseArtifactPaths());
+    const filesRemoved = this.deps.artifacts.cleanupUnreferencedAll(referenced, { olderThanMs: cutoffMs });
+    const rowsRemoved = this.repo().deleteUnreferencedUnactivatedArtifacts(
+      new Date(cutoffMs).toISOString(),
+      referenced,
+    );
+    return { files_removed: filesRemoved, rows_removed: rowsRemoved };
   }
 }

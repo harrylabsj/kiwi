@@ -1741,6 +1741,14 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
         // 审批候选状态（恢复同步：候选已死的发布标 SUPERSEDED，§9.5）。
         candidateStatus: (candidateId: string) => approvals.get(candidateId)?.status,
         policyVersion: rfqPolicyVersion,
+        // 报价有效期跟随运行中策略 TTL（§13.1：调整走部署配置/策略）。与
+        // rfqPolicyConfigFromMerchantPolicy 的 max_valid_until_days 同用向下
+        // 取整到天（TTL < 86400s 时两侧同为 1 天），避免「策略 TTL 短于
+        // 缺省 7 天 → 计价必拒」的装配错配。
+        quoteValidityDays: () => {
+          const ttl = policyRuntime.current().policy?.quote_ttl_seconds;
+          return ttl !== undefined && ttl > 0 ? Math.max(1, Math.floor(ttl / 86_400)) : undefined;
+        },
       }),
     };
   })();
@@ -1779,6 +1787,9 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
   // RFQ 恢复同步：候选已死的发布请求标 SUPERSEDED（不冒充外部已撤销）。
   const rfqRecovered = rfqStack?.service.recoverReleases() ?? 0;
   void rfqRecovered; // 数量仅在需要排障时打日志（避免正常启动噪音）。
+  // RFQ 幂等记录保留清理（§10.3：30 天；prepare/移交准备类跟随报价保留）。
+  const rfqPruned = rfqStack?.service.pruneExpiredIdempotency() ?? 0;
+  void rfqPruned; // 数量仅在需要排障时打日志（避免正常启动噪音）。
   // 七类 presentation → MCP 资源（V2 阶段二；私密类不进资源）。
   const presentations = buildMerchantPresentationResources({
     context: {

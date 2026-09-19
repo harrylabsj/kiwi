@@ -21,8 +21,11 @@
  *     不在 Kiwi 再造 ERP 连接层或第二个商品主库。
  *   - 每字段记录权威（LOCAL_AUTHORITATIVE/UPSTREAM_PROXY/READ_ONLY）、来源、
  *     verified_at 与新鲜度阈值；冲突权威由数据侧 fail-closed，这里不静默择优。
- *   - 事实指纹只包含业务值、权威来源（与源标识）；verified_at / expires_at
- *     不进入内容指纹——单纯重读时间变化不使审批必然失效，新鲜度单独检查。
+ *   - 事实指纹只包含业务值、权威来源（与源标识）与源版本；verified_at /
+ *     expires_at 不进入内容指纹——单纯重读时间变化不使审批必然失效，新鲜度
+ *     单独检查。源版本由数据源显式提供（CommerceField.source_version），
+ *     绝不从 verified_at 派生（读取时间不是版本）；无版本的自权威数据以
+ *     "local-authoritative" 稳定标记声明——值变化经 value 进入指纹即失效。
  *   - 建议阈值：库存 60 秒、价格 300 秒（v0.1.1 §6.3，试点可调参数）。
  */
 
@@ -57,26 +60,32 @@ function isoAt(iso: string, seconds: number): string {
   return new Date(Date.parse(iso) + seconds * 1000).toISOString();
 }
 
+/** 自权威数据的稳定版本标记：无外部版本号，值变化经 value 进入指纹（FA-07）。 */
+const LOCAL_AUTHORITY_VERSION = "local-authoritative";
+
 function toField(input: {
   field_path: string;
   value: FactField["value"];
   authority: FactAuthority;
   source: string;
   verified_at?: string;
+  /** 上游显式提供的源版本；缺省 "unknown"（发布硬门阻断，§6.3）。 */
+  sourceVersion?: string;
   freshForSeconds?: number;
   /** 缺省新鲜期（未显式给 freshForSeconds 的字段用；部署可调）。 */
   defaultFreshSeconds?: number;
   nowIso: string;
 }): FactField {
-  // 上游未提供 verified_at/source_version 时如实记读取时点 + "unknown"；
-  // source_version === "unknown" 的关键字段在发布硬门阻断（§6.3）。
+  // 上游未提供 verified_at 时如实记读取时点；source_version 只来自显式
+  // 透传，绝不从 verified_at 派生——读取时间不是版本（FA-07：不用读取
+  // 时间伪造验证）。source_version === "unknown" 的关键字段在发布硬门阻断。
   const verified_at = input.verified_at ?? input.nowIso;
   return {
     field_path: input.field_path,
     value: input.value,
     authority: input.authority,
     source: input.source,
-    source_version: input.verified_at === undefined ? "unknown" : `verified:${verified_at}`,
+    source_version: input.sourceVersion ?? "unknown",
     verified_at,
     expires_at: isoAt(verified_at, input.freshForSeconds ?? input.defaultFreshSeconds ?? FRESHNESS_SECONDS.rules),
     visibility: "model_public",
@@ -98,7 +107,7 @@ export function factFingerprint(fields: FactField[]): string {
 async function safePrice(
   dataSource: CommerceDataSource,
   sku: string,
-): Promise<{ currency: string; amount_minor: number; authority: FactAuthority; source: string; verified_at?: string } | undefined> {
+): Promise<{ currency: string; amount_minor: number; authority: FactAuthority; source: string; verified_at?: string; source_version?: string } | undefined> {
   try {
     const field = await dataSource.getPrice(sku);
     if (field === undefined) return undefined;
@@ -108,6 +117,7 @@ async function safePrice(
       authority: field.authority,
       source: field.source,
       ...(field.verified_at !== undefined ? { verified_at: field.verified_at } : {}),
+      ...(field.source_version !== undefined ? { source_version: field.source_version } : {}),
     };
   } catch (err) {
     if (err instanceof CommerceError && err.code === "not_found") return undefined;
@@ -118,7 +128,7 @@ async function safePrice(
 async function safeInventory(
   dataSource: CommerceDataSource,
   sku: string,
-): Promise<{ value: number; authority: FactAuthority; source: string; verified_at?: string } | undefined> {
+): Promise<{ value: number; authority: FactAuthority; source: string; verified_at?: string; source_version?: string } | undefined> {
   try {
     const field = await dataSource.getInventory(sku);
     return field === undefined ? undefined : { ...field };
@@ -175,6 +185,7 @@ export async function resolveFactSnapshot(input: {
           source: "shopping-cli",
           // 本地推导字段：读取时即观察到（诚实时间戳，非上游伪造）。
           verified_at: input.nowIso,
+          sourceVersion: LOCAL_AUTHORITY_VERSION,
           ...(input.freshness !== undefined ? { defaultFreshSeconds: thresholds.rules } : {}),
           nowIso: input.nowIso,
         }),
@@ -189,6 +200,7 @@ export async function resolveFactSnapshot(input: {
           value: null,
           authority: "LOCAL_AUTHORITATIVE",
           source: "shopping-cli",
+          sourceVersion: LOCAL_AUTHORITY_VERSION,
           ...(input.freshness !== undefined ? { defaultFreshSeconds: thresholds.rules } : {}),
           nowIso: input.nowIso,
         }),
@@ -201,6 +213,7 @@ export async function resolveFactSnapshot(input: {
           authority: price.authority,
           source: price.source,
           ...(price.verified_at !== undefined ? { verified_at: price.verified_at } : {}),
+          sourceVersion: price.source_version,
           freshForSeconds: thresholds.price,
           ...(input.freshness !== undefined ? { defaultFreshSeconds: thresholds.rules } : {}),
           nowIso: input.nowIso,
@@ -213,6 +226,7 @@ export async function resolveFactSnapshot(input: {
           authority: price.authority,
           source: price.source,
           ...(price.verified_at !== undefined ? { verified_at: price.verified_at } : {}),
+          sourceVersion: price.source_version,
           freshForSeconds: thresholds.price,
           ...(input.freshness !== undefined ? { defaultFreshSeconds: thresholds.rules } : {}),
           nowIso: input.nowIso,
@@ -229,6 +243,7 @@ export async function resolveFactSnapshot(input: {
         authority: inventory?.authority ?? "LOCAL_AUTHORITATIVE",
         source: inventory?.source ?? "shopping-cli",
         ...(inventory?.verified_at !== undefined ? { verified_at: inventory.verified_at } : {}),
+        sourceVersion: inventory?.source_version,
         freshForSeconds: thresholds.inventory,
         ...(input.freshness !== undefined ? { defaultFreshSeconds: thresholds.rules } : {}),
         nowIso: input.nowIso,
@@ -241,6 +256,7 @@ export async function resolveFactSnapshot(input: {
         authority: "LOCAL_AUTHORITATIVE",
         source: "shopping-cli",
         verified_at: input.nowIso,
+        sourceVersion: LOCAL_AUTHORITY_VERSION,
         ...(input.freshness !== undefined ? { defaultFreshSeconds: thresholds.rules } : {}),
         nowIso: input.nowIso,
       }),

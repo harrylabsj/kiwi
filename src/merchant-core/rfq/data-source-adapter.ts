@@ -43,6 +43,14 @@ export interface MerchantClientCommerceDataSourceDeps {
   now?: () => string;
 }
 
+/**
+ * 自权威数据的稳定源版本标记：商家 facade 是数据权威本体，无外部版本号
+ * 可言——版本基准 = 权威自身，业务值变化经 value 进入事实指纹即失效
+ * （§6.3）。绝不以读取时间充当版本（FA-07：不用读取时间伪造验证）；
+ * verified_at 仅作新鲜度锚点（观察时点）。
+ */
+const LOCAL_AUTHORITY_VERSION = "local-authoritative";
+
 export class MerchantClientCommerceDataSource implements CommerceDataSource {
   private readonly deps: MerchantClientCommerceDataSourceDeps;
 
@@ -113,6 +121,7 @@ export class MerchantClientCommerceDataSource implements CommerceDataSource {
         authority: "LOCAL_AUTHORITATIVE",
         source: "merchant-client",
         verified_at: snapshot.observed_at,
+        source_version: LOCAL_AUTHORITY_VERSION,
       };
     } catch (err) {
       if (err instanceof CommerceError && err.code === "not_found") return undefined;
@@ -137,6 +146,7 @@ export class MerchantClientCommerceDataSource implements CommerceDataSource {
       authority: "LOCAL_AUTHORITATIVE",
       source: "merchant-client",
       verified_at: this.nowIso(),
+      source_version: LOCAL_AUTHORITY_VERSION,
     };
   }
 

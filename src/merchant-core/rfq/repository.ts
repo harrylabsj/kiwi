@@ -145,7 +145,8 @@ export interface RfqDeliveryRow {
   release_id: string | null;
   status: "NOT_SENT" | "REPORTED_SENT" | "RECEIPT_VERIFIED" | "DELIVERY_UNKNOWN";
   channel: string;
-  evidence_ref: string;
+  /** 契约口径可空（NOT_SENT 无证据）；REPORTED_SENT 写入路径恒为非空字符串。 */
+  evidence_ref: string | null;
   recorded_by: string;
   recorded_at: string;
 }
@@ -223,6 +224,28 @@ export class RfqRepository {
     }
   }
 
+  /**
+   * 跨仓库单元事务（§10.2 UnitOfWork port）：生产装配中审批候选 store 与本
+   * 仓库共用同一 SQLite 连接，work 内的候选登记与本仓库写在同一
+   * BEGIN/COMMIT 内全部提交或全部回滚。work 只做本地同步 DB 写（await 仅
+   * 微任务桥接，无外部 I/O），事务不跨外部调用。
+   */
+  async runInTransactionAsync<T>(work: () => Promise<T> | T): Promise<T> {
+    if (this.inTx) return await work();
+    this.inTx = true;
+    this.db.exec("BEGIN");
+    try {
+      const result = await work();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    } finally {
+      this.inTx = false;
+    }
+  }
+
   private id(prefix: string): string {
     return `${prefix}_${randomUUID()}`;
   }
@@ -289,7 +312,11 @@ export class RfqRepository {
     return current;
   }
 
-  /** 新需求 revision：单调递增；stage 按 current_revision 重算（v0.1.1 §8.1）。 */
+  /**
+   * 新需求 revision：单调递增；stage 按 current_revision 重算（v0.1.1 §8.1）。
+   * blockers 不落库（只用于本次 stage 判定）；读取端一律按 fields 用
+   * computeBlockers 重算（确定性），getCaseRevision 返回空数组是既定语义。
+   */
   createCaseRevision(input: {
     caseId: string;
     expectedVersion: number;
@@ -817,6 +844,36 @@ export class RfqRepository {
     }
   }
 
+  /** 有效发布（未撤销/未停用）引用的产物相对路径——清理时必须保留的文件。 */
+  listValidReleaseArtifactPaths(): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT a.relative_path AS relative_path
+           FROM rfq_artifacts a
+           JOIN rfq_releases r ON r.artifact_id = a.artifact_id AND r.merchant_id = a.merchant_id
+          WHERE r.merchant_id = ? AND r.status IN ('PENDING_APPROVAL', 'APPROVED', 'EXPORTED')`,
+      )
+      .all(this.merchantId) as Array<{ relative_path: string }>;
+    return rows.map((r) => r.relative_path);
+  }
+
+  /**
+   * 删除无有效发布引用且未激活的过期产物行（文件由 artifacts store 回收；
+   * §10.4 临时产物 TTL）。返回删除行数。
+   */
+  deleteUnreferencedUnactivatedArtifacts(cutoffIso: string, referencedPaths: ReadonlySet<string>): number {
+    const preserved = [...referencedPaths];
+    const placeholders = preserved.map(() => "?").join(", ");
+    const result = this.db
+      .prepare(
+        `DELETE FROM rfq_artifacts
+          WHERE merchant_id = ? AND activated = 0 AND created_at < ?
+            AND relative_path NOT IN (${placeholders})`,
+      )
+      .run(this.merchantId, cutoffIso, ...preserved);
+    return Number(result.changes);
+  }
+
   createRelease(row: RfqReleaseRow): void {
     this.db
       .prepare(
@@ -873,8 +930,8 @@ export class RfqRepository {
         throw new RfqError("approval_stale", `发布 ${releaseId} 状态为 ${current.status}，不能转移到 ${to}`);
       }
       this.db
-        .prepare("UPDATE rfq_release_requests SET status = ?, updated_at = ? WHERE release_id = ? AND status = ?")
-        .run(to, this.now(), releaseId, current.status);
+        .prepare("UPDATE rfq_release_requests SET status = ?, updated_at = ? WHERE release_id = ? AND merchant_id = ? AND status = ?")
+        .run(to, this.now(), releaseId, this.merchantId, current.status);
       return this.getRelease(releaseId) as RfqReleaseRow;
     });
   }
@@ -974,9 +1031,13 @@ export class RfqRepository {
         actor: input.actor,
         reason: "可信批准 + 一次性凭证消费 + 事实与策略重验通过",
       });
-      this.db
-        .prepare("UPDATE rfq_release_requests SET status = 'APPROVED', updated_at = ? WHERE release_id = ? AND status = 'PENDING_APPROVAL'")
-        .run(this.now(), input.releaseId);
+      const releaseUpdate = this.db
+        .prepare("UPDATE rfq_release_requests SET status = 'APPROVED', updated_at = ? WHERE release_id = ? AND merchant_id = ? AND status = 'PENDING_APPROVAL'")
+        .run(this.now(), input.releaseId, this.merchantId);
+      if (Number(releaseUpdate.changes) !== 1) {
+        // 理论不可达（同事务快照内 release 已读为 PENDING_APPROVAL）；防御纵深。
+        throw new RfqError("approval_stale", `发布 ${input.releaseId} 并发转移失败`);
+      }
       this.activateArtifact(release.artifact_id);
       // current 指针指向已批准版本；stage → PRICED（判定对象=当前指针）。
       this.updateCurrentQuoteInTx({
@@ -1083,8 +1144,8 @@ export class RfqRepository {
       const current = this.getHandoff(handoffId);
       if (current === undefined) throw new RfqError("not_found", `未知移交 ${handoffId}`);
       this.db
-        .prepare("UPDATE rfq_handoffs SET status = ?, recorded_by = ?, updated_at = ? WHERE handoff_id = ? AND status = ?")
-        .run(status, actor, this.now(), handoffId, current.status);
+        .prepare("UPDATE rfq_handoffs SET status = ?, recorded_by = ?, updated_at = ? WHERE handoff_id = ? AND merchant_id = ? AND status = ?")
+        .run(status, actor, this.now(), handoffId, this.merchantId, current.status);
       return this.getHandoff(handoffId) as RfqHandoffRow;
     });
   }
@@ -1234,14 +1295,15 @@ export class RfqRepository {
    * 幂等记录保留清理（§10.3：建议保留 30 天；prepare/激活类关键幂等跟随
    * 对应报价保留策略，不清理）。返回删除条数。
    */
-  pruneIdempotency(input: { olderThanDays: number; preserveOperations: string[] }): number {
+  pruneIdempotency(input: { olderThanDays: number; preserveOperations: ReadonlySet<string> }): number {
     const cutoff = new Date(Date.parse(this.now()) - input.olderThanDays * 86_400_000).toISOString();
-    const placeholders = input.preserveOperations.map(() => "?").join(", ");
+    const preserved = [...input.preserveOperations];
+    const placeholders = preserved.map(() => "?").join(", ");
     const result = this.db
       .prepare(
         `DELETE FROM rfq_idempotency WHERE created_at < ?${placeholders ? ` AND operation NOT IN (${placeholders})` : ""}`,
       )
-      .run(cutoff, ...input.preserveOperations);
+      .run(cutoff, ...preserved);
     return Number(result.changes);
   }
 

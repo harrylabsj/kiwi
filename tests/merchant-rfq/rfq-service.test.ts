@@ -353,6 +353,26 @@ describe("RFQ 事实与计价", () => {
     s.db.close();
   });
 
+  it("事实重读：业务值不变 → 指纹不变，单纯重读不使当前报价失效（§6.3）", async () => {
+    const clock = { value: T0 };
+    const s = setup({ clock, priceUnit: "yuan" });
+    const { caseId, quote, facts } = await pricedCase(s);
+    // 时钟推进后重读：price 的 verified_at（观察时点）变化、业务值与
+    // 源版本不变 → 指纹不变 → 当前报价保持有效（不因重读被替代）。
+    clock.value = "2026-09-15T10:02:00.000Z";
+    const facts2 = await s.service.refreshFacts(s.ctx, {
+      caseId,
+      expectedRevision: s.service.getCase(s.ctx, caseId).revision,
+      idempotencyKey: "facts-reread",
+    });
+    expect(facts2.fingerprint).toBe(facts.fingerprint);
+    expect(facts2.superseded_quote).toBeNull();
+    const view = s.service.getCase(s.ctx, caseId);
+    expect(view.case.current_quote_id).toBe(quote.quote_id);
+    expect(view.case.stage).toBe("PRICED");
+    s.db.close();
+  });
+
   it("库存缺失不是零：stock 记 null（不可得），availability 独立记录（FA-04）", async () => {
     // 无 stock 的商品：不把缺字段当 0，可售数量不可承诺。
     const s = setup({ priceUnit: "yuan", products: [fakeMerchantProduct({ stock: undefined })] });
@@ -400,18 +420,29 @@ describe("RFQ 事实与计价", () => {
   });
 });
 
-/** 桩数据源：verified_at 跟随测试时钟（模拟真实上游随时间重新验证）。 */
+/**
+ * 桩数据源：verified_at 跟随测试时钟（模拟真实上游随时间重新验证）。
+ * source_version 显式跟随验证状态前进——上游真正重新验证时版本变化、
+ * 指纹变化使旧报价失效（§6.3 源版本变化即失效）；读取本身不产生版本。
+ */
 function clockedSource(now: () => string): CommerceDataSource {
   return {
     getProduct: async (sku) =>
       sku === "sku-001" ? { sku, title: "手写陶瓷杯", currency: "CNY", availability_hint: "in_stock" } : undefined,
     getProducts: async () => [],
-    getInventory: async () => ({ value: 12, authority: "LOCAL_AUTHORITATIVE", source: "stub", verified_at: now() }),
+    getInventory: async () => ({
+      value: 12,
+      authority: "LOCAL_AUTHORITATIVE",
+      source: "stub",
+      verified_at: now(),
+      source_version: `verified:${now()}`,
+    }),
     getPrice: async () => ({
       value: { currency: "CNY", amount_minor: 9900 },
       authority: "LOCAL_AUTHORITATIVE",
       source: "stub",
       verified_at: now(),
+      source_version: `verified:${now()}`,
     }),
     getPublicListing: async () => ({}),
     health: async () => ({ ok: true, service: "stub" }),
