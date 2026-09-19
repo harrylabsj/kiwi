@@ -1,0 +1,27 @@
+{
+  "name": "Kiwi 询报价工作台",
+  "name_zh": "Kiwi 询报价工作台",
+  "name_en": "Kiwi RFQ Workbench",
+  "description": "整理客户询盘、核对规格与 SKU、生成确定性报价草稿、比较新旧报价，并把待批准发布引导到可信管理页；导出与发送状态分开记录。",
+  "description_zh": "整理客户询盘、核对规格与 SKU、生成确定性报价草稿、比较新旧报价，并把待批准发布引导到可信管理页；导出与发送状态分开记录。",
+  "description_en": "Structure customer inquiries, align specs and SKUs, produce deterministic quote drafts, compare quote revisions, and route pending releases to the trusted admin page; export and delivery states are recorded separately.",
+  "source": "kiwi-rfq-workbench-token",
+  "type": "mcp",
+  "version": "1.0.0",
+  "auth_mode": "token",
+  "minWorkbuddyVersion": "4.24.0",
+  "examples_zh": [
+    "客户这段话究竟要什么，还缺什么？帮我整理这份询盘",
+    "这几个规格对应哪个 SKU？列出候选和依据",
+    "按当前条件出一版报价",
+    "客户改了数量，重新报一版，并跟旧版比较差异",
+    "有哪些报价在等我批准？批准后我导出发给客户"
+  ],
+  "examples_en": [
+    "Structure this customer inquiry: what are they asking for and what is missing?",
+    "Which SKUs match these specs? Show candidates and evidence",
+    "Draft a quote under the current confirmed terms",
+    "The customer changed the quantity — re-quote and compare with the old version",
+    "Which quote releases are waiting for my approval?"
+  ]
+}

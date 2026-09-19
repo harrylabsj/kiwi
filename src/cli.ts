@@ -97,6 +97,7 @@ import { buildMerchantPresentationResources } from "./mcp/merchant-resources.js"
 import { merchantAdminSurface } from "./merchant-admin/pending-page.js";
 import { rfqAdminSurface } from "./merchant-admin/rfq-page.js";
 import { buildRfqMcpTools } from "./mcp/merchant-rfq-tools.js";
+import { buildRfqPresentationResources } from "./mcp/merchant-rfq-resources.js";
 import {
   MerchantRfqService,
 } from "./merchant-core/rfq/service.js";
@@ -1849,6 +1850,15 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
               }),
             }, { releaseEnabled: rfqReleaseEnabled }),
             admin: rfqAdminSurface(service),
+            // MCP Apps 展示资源（ui://kiwi-rfq/*；宿主不支持时结构化文本降级）。
+            resources: buildRfqPresentationResources({
+              rfq: rfqStack.service,
+              callContext: () => ({
+                principalId: principal.principal_id,
+                actor: principal.principal_id,
+                traceId: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              }),
+            }),
           },
         }
       : {}),

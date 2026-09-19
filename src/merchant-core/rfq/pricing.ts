@@ -98,7 +98,10 @@ function parseLine(raw: PricingLineInput): { lineId: string; amount: bigint; bas
   if (raw.tax_basis !== "EXCLUSIVE" && raw.tax_basis !== "INCLUSIVE") {
     throw new RfqError("pricing_invalid", `tax_basis(${raw.line_id}) 必须是 EXCLUSIVE 或 INCLUSIVE`);
   }
-  const amount = BigInt(quantity) * BigInt(unitPrice) - BigInt(discount);
+  // 中间量 quantity × unit_price_minor 与行优惠后金额同受上限约束（§7.1）：
+  // 乘积越界先拒绝，不允许「大基数 + 大优惠」抵消后通过。
+  const base = checkAmount(BigInt(quantity) * BigInt(unitPrice), `quantity × unit_price_minor(${raw.line_id})`);
+  const amount = base - BigInt(discount);
   if (amount < 0n) {
     throw new RfqError("pricing_invalid", `行 ${raw.line_id} 优惠超过行基数`);
   }

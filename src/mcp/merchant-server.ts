@@ -151,6 +151,8 @@ export interface MerchantMcpServerOptions {
       ): Promise<MerchantMcpCallResult>;
     };
     admin: RfqAdminSurface;
+    /** RFQ 展示资源（ui://kiwi-rfq/*；§12.4 可选，宿主不支持时降级文本）。 */
+    resources?: ReturnType<typeof import("./merchant-rfq-resources.js").buildRfqPresentationResources>;
   };
   /**
    * 一次性配对码兑换（设计 §8.4 第二期）：挂载 `POST /pairing/redeem`。
@@ -235,23 +237,38 @@ export function createProtocolServer(
   toolsBundle: ScopedMcpTools,
   scopes: string[] | undefined,
   presentations?: ReturnType<typeof buildMerchantPresentationResources>,
+  rfqResources?: ReturnType<typeof import("./merchant-rfq-resources.js").buildRfqPresentationResources>,
 ): Server {
+  const hasResources = presentations !== undefined || rfqResources !== undefined;
   const server = new Server(
     { name: serverInfo.name, version: serverInfo.version },
-    { capabilities: { tools: {}, ...(presentations !== undefined ? { resources: {} } : {}) } },
+    { capabilities: { tools: {}, ...(hasResources ? { resources: {} } : {}) } },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: await toolsBundle.listTools(scopes),
   }));
-  if (presentations !== undefined) {
-    server.setRequestHandler(ListResourcesRequestSchema, () => ({
-      resources: scopes === undefined || scopes.includes("merchant:read") ? presentations.list() : [],
-    }));
+  if (hasResources) {
+    server.setRequestHandler(ListResourcesRequestSchema, () => {
+      if (scopes !== undefined && !scopes.includes("merchant:read")) return { resources: [] };
+      return {
+        resources: [
+          ...(presentations?.list() ?? []),
+          ...(rfqResources?.list() ?? []),
+        ],
+      };
+    });
     server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
       if (scopes !== undefined && !scopes.includes("merchant:read")) {
         throw new Error("scope 不足：resources/read 需要 merchant:read");
       }
-      return await presentations.read(request.params.uri);
+      // 按前缀路由：ui://kiwi-rfq/* 走 RFQ 展示资源，其余走 merchant presentations。
+      if (rfqResources !== undefined && request.params.uri.startsWith("ui://kiwi-rfq/")) {
+        return await rfqResources.read(request.params.uri);
+      }
+      if (presentations !== undefined) {
+        return await presentations.read(request.params.uri);
+      }
+      throw new Error(`未知资源 ${request.params.uri}`);
     });
   }
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -759,11 +776,18 @@ export async function startMerchantMcpServer(
           }
           if (req.method === "POST" && (parts[4] === "approve" || parts[4] === "reject")) {
             const form = await readForm(req);
+            // release_id → 候选 id 解析：批准/拒绝作用于命令日志候选。
+            const detail = rfqAdmin.admin.releaseDetail(releaseId, session.principal_id);
+            const commandId = detail.candidate_id;
+            if (commandId === "") {
+              writeJson(res, 400, { error: "not_found", message: "该发布没有可操作的审批候选" });
+              return;
+            }
             try {
               if (parts[4] === "approve") {
-                await rfqAdmin.admin.approveRelease(releaseId, session.principal_id, form.confirmation);
+                await rfqAdmin.admin.approveRelease(commandId, session.principal_id, form.confirmation);
               } else {
-                await rfqAdmin.admin.rejectRelease(releaseId, session.principal_id, form.confirmation);
+                await rfqAdmin.admin.rejectRelease(commandId, session.principal_id, form.confirmation);
               }
             } catch (err) {
               const expired = err instanceof Error && err.message.includes("确认凭证");
@@ -865,6 +889,7 @@ export async function startMerchantMcpServer(
         toolsBundle,
         scopes,
         options.presentations,
+        options.rfq?.resources,
       );
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,

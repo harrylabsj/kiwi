@@ -1,0 +1,541 @@
+{
+  "mcpServers": {
+    "kiwi-rfq-workbench": {
+      "type": "streamableHttp",
+      "url": "https://rfq-workbench.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${KIWI_RFQ_MCP_TOKEN}"
+      },
+      "timeout": 30000
+    }
+  },
+  "tools": [
+    {
+      "name": "kiwi_merchant_rfq_ingest",
+      "description": "导入客户询盘（粘贴文本或 RFC 4180 CSV；保存未批准询盘与字段提取建议）。关键数量/单位/SKU 保持未确认——由商家具名确认。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "manual_text",
+                  "csv"
+                ],
+                "description": "来源类型"
+              },
+              "content": {
+                "type": "string",
+                "description": "询盘原文（≤100KB；不自动拉取私人会话）"
+              },
+              "display_name": {
+                "type": "string",
+                "description": "客户显示名（可选）"
+              },
+              "external_ref": {
+                "type": "string",
+                "description": "外部引用（可选）"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          "proposal": {
+            "type": "object",
+            "description": "字段提取建议（可选；每个字段必须带原文 quote，全部保持未确认）",
+            "properties": {
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "幂等键（同键同内容重放，同键不同内容拒绝）"
+          }
+        },
+        "required": [
+          "source",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_rfq_get",
+      "description": "读取询盘当前需求、阻断项、报价版本与发布状态（只读）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "description": "询盘 case_id"
+          }
+        },
+        "required": [
+          "case_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_rfq_revise",
+      "description": "修订需求（客户改了数量/地址等）：产生新 revision 并使旧报价审批失效。changes 每项必须带原文引用。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "description": "询盘 case_id"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "期望的询盘 revision（乐观锁）"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "字段变更（field_path/value/quote/line_id）"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "幂等键（同键同内容重放，同键不同内容拒绝）"
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "changes",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_rfq_close",
+      "description": "操作者显式取消或关闭询盘（终态）。未决审批候选一并失效；已导出文件与审计保留。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "description": "询盘 case_id"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "期望的询盘 revision（乐观锁）"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "CANCELLED",
+              "CLOSED"
+            ],
+            "description": "取消或正常关闭"
+          },
+          "reason": {
+            "type": "string",
+            "description": "原因（可选）"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "幂等键（同键同内容重放，同键不同内容拒绝）"
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "outcome",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_rfq_match",
+      "description": "搜索商品候选（只读；不自动确认 SKU）。complete=false 表示触顶截断——不等于全库不存在。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "description": "询盘 case_id"
+          },
+          "line_id": {
+            "type": "string",
+            "description": "需求行 id"
+          },
+          "query": {
+            "type": "string",
+            "description": "搜索词"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "返回上限（缺省 20）"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "翻页游标（可选）"
+          }
+        },
+        "required": [
+          "case_id",
+          "line_id",
+          "query"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_rfq_confirm_items",
+      "description": "核对具名确认引用（只读核对）：selections 必须携带服务端签发的 confirmation_ref——来自管理页/CLI 表单，模型不能自报已确认。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "description": "询盘 case_id"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "期望的询盘 revision（乐观锁）"
+          },
+          "selections": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "line_id": {
+                  "type": "string"
+                },
+                "sku": {
+                  "type": "string"
+                },
+                "confirmation_ref": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "line_id",
+                "sku",
+                "confirmation_ref"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "幂等键（同键同内容重放，同键不同内容拒绝）"
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "selections",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_rfq_refresh_facts",
+      "description": "建立新事实快照（价格/库存权威字段与新鲜度）。指纹变化会使旧报价审批失效。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "description": "询盘 case_id"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "期望的询盘 revision（乐观锁）"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "幂等键（同键同内容重放，同键不同内容拒绝）"
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_rfq_price",
+      "description": "确定性计价（Core 计算，不收模型提交的金额）：单价只来自已授权快照；产出不可变报价版本。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "description": "询盘 case_id"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "期望的询盘 revision（乐观锁）"
+          },
+          "snapshot_id": {
+            "type": "string",
+            "description": "事实快照 id（refresh_facts 返回）"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "幂等键（同键同内容重放，同键不同内容拒绝）"
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "snapshot_id",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_rfq_compare",
+      "description": "比较两版报价的字段级差异，并标注旧版失效原因（只读）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "from_quote_ref": {
+            "type": "object",
+            "properties": {
+              "quote_id": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "quote_id",
+              "revision"
+            ],
+            "additionalProperties": false
+          },
+          "to_quote_ref": {
+            "type": "object",
+            "properties": {
+              "quote_id": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "quote_id",
+              "revision"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "from_quote_ref",
+          "to_quote_ref"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_rfq_prepare_release",
+      "description": "准备正式发布（prepare：渲染最终文件并冻结哈希，登记审批候选与预览）。批准必须由商家在可信管理页完成。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "description": "询盘 case_id"
+          },
+          "quote_ref": {
+            "type": "object",
+            "properties": {
+              "quote_id": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "quote_id",
+              "revision"
+            ],
+            "additionalProperties": false
+          },
+          "recipient_ref": {
+            "type": "string",
+            "description": "收件对象（缺省用需求里已确认的收件对象）"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "幂等键（同键同内容重放，同键不同内容拒绝）"
+          }
+        },
+        "required": [
+          "case_id",
+          "quote_ref",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_rfq_get_release",
+      "description": "查询发布/批准/导出状态与授权产物引用（只读；不含确认凭证）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "release_id": {
+            "type": "string",
+            "description": "发布 id"
+          }
+        },
+        "required": [
+          "release_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_rfq_record_delivery",
+      "description": "记录操作者自述的发送（REPORTED_SENT）：必须引用操作者提供的证据；导出状态不冒充发送状态，证据等级不可由模型提升。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "quote_ref": {
+            "type": "object",
+            "properties": {
+              "quote_id": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "quote_id",
+              "revision"
+            ],
+            "additionalProperties": false
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "manual_wechat",
+              "manual_email",
+              "manual_other",
+              "integrated_channel"
+            ]
+          },
+          "evidence_ref": {
+            "type": "string",
+            "description": "操作者提供的证据引用（非空）"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "幂等键（同键同内容重放，同键不同内容拒绝）"
+          }
+        },
+        "required": [
+          "quote_ref",
+          "channel",
+          "evidence_ref",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_rfq_prepare_handoff",
+      "description": "准备移交包的批准（只准备，不提交目标系统）：包已生成 ≠ 目标系统已受理；批准在可信管理页完成。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "quote_ref": {
+            "type": "object",
+            "properties": {
+              "quote_id": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "quote_id",
+              "revision"
+            ],
+            "additionalProperties": false
+          },
+          "target_ref": {
+            "type": "string",
+            "description": "目标系统引用"
+          },
+          "intent_evidence_ref": {
+            "type": "string",
+            "description": "客户意向证据引用"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "幂等键（同键同内容重放，同键不同内容拒绝）"
+          }
+        },
+        "required": [
+          "quote_ref",
+          "target_ref",
+          "intent_evidence_ref",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_rfq_get_job",
+      "description": "查询长任务作业状态（QUEUED/RUNNING/SUCCEEDED/FAILED/CANCELLED/UNKNOWN；只读）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "description": "作业 id"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

@@ -421,6 +421,38 @@ export class MerchantRfqService {
     };
   }
 
+  /** 报价只读视图（MCP 资源/compare 用；只含授权投影与事件投影）。 */
+  getQuoteView(ctx: RfqCallContext, quoteId: string, revision: number): {
+    quote_id: string;
+    revision: number;
+    case_id: string;
+    case_revision: number;
+    status: QuoteStatus;
+    valid_until: string;
+    projection: PublicQuoteView;
+    invalid_reason?: string;
+    events: Array<{ event: string; actor: string; at: string; reason: string | null }>;
+  } {
+    this.assertActor(ctx);
+    const quote = this.repo().getQuote(quoteId, revision);
+    if (quote === undefined) throw new RfqError("not_found", `未知报价 ${quoteId}@${revision}`);
+    const now = this.deps.now();
+    const invalid = invalidReasonOf(quote.status, quote.valid_until, now);
+    return {
+      quote_id: quote.quote_id,
+      revision: quote.revision,
+      case_id: quote.case_id,
+      case_revision: quote.case_revision,
+      status: quote.status,
+      valid_until: quote.valid_until,
+      projection: { ...(JSON.parse(quote.projection_json) as Omit<PublicQuoteView, "status">), status: quote.status },
+      ...(invalid !== undefined ? { invalid_reason: invalid } : {}),
+      events: this.repo()
+        .listQuoteEvents(quoteId, revision)
+        .map((e) => ({ event: e.event, actor: e.actor, at: e.at, reason: e.reason })),
+    };
+  }
+
   /** 管理页列表（案例级摘要）。 */
   listCases(ctx: RfqCallContext, limit = 50): RfqCaseView[] {
     this.assertActor(ctx);

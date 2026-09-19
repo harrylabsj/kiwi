@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- original icon: slate-blue kiwi bird silhouette holding a quote tag; no text, no brand marks -->
+  <ellipse cx="29" cy="32" rx="17" ry="15" fill="#8FB8D8"/>
+  <ellipse cx="29" cy="32" rx="17" ry="15" stroke="#2F5578" stroke-width="2"/>
+  <path d="M44 34 C 53 38, 57 45, 53 54" stroke="#2F5578" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="36" cy="27" r="2" fill="#16293B"/>
+  <path d="M24 47 L24 55 M24 55 L20 57 M24 55 L27 57" stroke="#2F5578" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M34 47 L34 55 M34 55 L31 57 M34 55 L38 57" stroke="#2F5578" stroke-width="2.4" stroke-linecap="round"/>
+  <rect x="44" y="12" width="12" height="9" rx="1.5" fill="#2F5578"/>
+  <path d="M47 21 L47 25 L51 21" fill="#2F5578"/>
+  <circle cx="47.5" cy="16.5" r="1.1" fill="#DCE9F4"/>
+  <circle cx="52.5" cy="16.5" r="1.1" fill="#DCE9F4"/>
+</svg>
