@@ -59,6 +59,12 @@ import {
 import type { buildMerchantPresentationResources } from "./merchant-resources.js";
 import { renderPendingPage, type MerchantAdminSurface } from "../merchant-admin/pending-page.js";
 import {
+  renderRfqCasePage,
+  renderRfqDashboard,
+  renderRfqReleasePage,
+  type RfqAdminSurface,
+} from "../merchant-admin/rfq-page.js";
+import {
   ADMIN_SESSION_COOKIE,
   readAdminCredentials,
   renderAdminLoginPage,
@@ -129,6 +135,22 @@ export interface MerchantMcpServerOptions {
     adminDir: string;
     /** https 部署置 true（cookie 加 Secure）。 */
     secureCookies?: boolean;
+  };
+  /**
+   * 询报价工作台（设计 v0.1.1 §11.2/§11.4）：tools 合并进 /mcp 工具面
+   * （rfq_* 工具走同一 scope 体系）；admin 提供 /admin/rfq/* 管理页路由
+   * （批准/下载只在此通道——模型工具面没有 approve）。
+   */
+  rfq?: {
+    tools: {
+      listTools(scopes: string[] | undefined): MerchantMcpToolDefinition[];
+      call(
+        name: string,
+        args: Record<string, unknown>,
+        scopes: string[] | undefined,
+      ): Promise<MerchantMcpCallResult>;
+    };
+    admin: RfqAdminSurface;
   };
   /**
    * 一次性配对码兑换（设计 §8.4 第二期）：挂载 `POST /pairing/redeem`。
@@ -256,12 +278,24 @@ export async function startMerchantMcpServer(
   const port = options.port ?? DEFAULT_MERCHANT_MCP_PORT;
   const mcpPath = options.path ?? DEFAULT_MERCHANT_MCP_PATH;
   const serverInfo = options.serverInfo ?? { name: "kiwi-merchant-workbench", version: "0.0.0" };
-  const toolsBundle = buildMerchantMcpTools(options.service, {
+  const merchantTools = buildMerchantMcpTools(options.service, {
     ...(options.maxChars !== undefined ? { maxChars: options.maxChars } : {}),
     ...(options.requestTimeoutMs !== undefined
       ? { requestTimeoutMs: options.requestTimeoutMs }
       : {}),
   });
+  // RFQ 工具束合并（v0.1.1 §11.2）：同一 scope 体系逐次强制；名字分发按
+  // 前缀路由——rfq_* 走 RFQ 束，其余走 merchant 束。
+  const rfqOptions = options.rfq;
+  const toolsBundle: ScopedMcpTools = rfqOptions === undefined
+    ? merchantTools
+    : {
+        listTools: (scopes) => [...merchantTools.listTools(scopes), ...rfqOptions.tools.listTools(scopes)],
+        call: async (name, args, scopes) =>
+          name.startsWith("kiwi_merchant_rfq_")
+            ? rfqOptions.tools.call(name, args, scopes)
+            : merchantTools.call(name, args, scopes),
+      };
 
   // 活跃连接跟踪：close() 时连同 transport 一起关闭，优雅退出。
   const transports = new Set<StreamableHTTPServerTransport>();
@@ -648,6 +682,128 @@ export async function startMerchantMcpServer(
           // 回跳待批准页（PRG 模式）
           res.writeHead(303, { location: "/admin/pending" });
           res.end();
+          return;
+        }
+        // ---- RFQ 管理页（v0.1.1 §11.4；批准/下载只在此通道） ------------------
+        const rfqAdmin = options.rfq;
+      if (rfqAdmin !== undefined && url.pathname === "/admin/rfq" && req.method === "GET") {
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...NO_STORE_HEADERS });
+          res.end(
+            renderRfqDashboard(admin.merchantName, rfqAdmin.admin.listCases(session.principal_id, 50)),
+          );
+          return;
+        }
+        if (rfqAdmin !== undefined && url.pathname.startsWith("/admin/rfq/cases/")) {
+          const parts = url.pathname.split("/").filter((p) => p !== "");
+          // /admin/rfq/cases/{id}[/confirm|/close]
+          const caseId = parts[3] ?? "";
+          if (req.method === "GET" && parts.length === 4) {
+            res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...NO_STORE_HEADERS });
+            res.end(renderRfqCasePage(admin.merchantName, rfqAdmin.admin.getCase(caseId, session.principal_id)));
+            return;
+          }
+          if (req.method === "POST" && parts[4] === "confirm") {
+            const form = await readForm(req);
+            const sku = (form.sku ?? "").trim();
+            if (sku === "") {
+              writeJson(res, 400, { error: "invalid_request", message: "确认需要 SKU（先在需求行选择商品）" });
+              return;
+            }
+            const result = rfqAdmin.admin.confirmLines({
+              caseId: caseId,
+              expectedRevision: Number(form.expected_revision ?? "0"),
+              selections: [{ line_id: form.line_id ?? "", sku }],
+              principalId: session.principal_id,
+            });
+            writeJson(res, 200, { ok: true, result });
+            return;
+          }
+          if (req.method === "POST" && parts[4] === "close") {
+            const form = await readForm(req);
+            const outcome = form.outcome === "CLOSED" ? "CLOSED" : "CANCELLED";
+            const result = rfqAdmin.admin.closeCase({
+              caseId: caseId,
+              expectedRevision: Number(form.expected_revision ?? "0"),
+              outcome,
+              principalId: session.principal_id,
+            });
+            res.writeHead(303, { location: "/admin/rfq" });
+            res.end();
+            void result;
+            return;
+          }
+        }
+        if (rfqAdmin !== undefined && url.pathname.startsWith("/admin/rfq/releases/")) {
+          const parts = url.pathname.split("/").filter((p) => p !== "");
+          const releaseId = parts[3] ?? "";
+          if (req.method === "GET" && parts.length === 4) {
+            const detail = rfqAdmin.admin.releaseDetail(releaseId, session.principal_id);
+            // 一次性确认凭证（绑定候选内容摘要 + 主体 + 商家 + 动作；单次用途）
+            const tokenFor = (candidateId: string, action: "approve" | "reject"): string => {
+              const candidate = rfqAdmin.admin.candidateFor(candidateId);
+              if (candidate === undefined) return "";
+              return admin.store.createConfirmation({
+                candidateId,
+                candidateDigest: contentHash({
+                  arguments: candidate.arguments,
+                  preconditions: candidate.preconditions,
+                }),
+                principalId: session.principal_id,
+                merchantId: session.merchant_id,
+                action,
+              });
+            };
+            res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...NO_STORE_HEADERS });
+            res.end(renderRfqReleasePage(admin.merchantName, detail, tokenFor));
+            return;
+          }
+          if (req.method === "POST" && (parts[4] === "approve" || parts[4] === "reject")) {
+            const form = await readForm(req);
+            try {
+              if (parts[4] === "approve") {
+                await rfqAdmin.admin.approveRelease(releaseId, session.principal_id, form.confirmation);
+              } else {
+                await rfqAdmin.admin.rejectRelease(releaseId, session.principal_id, form.confirmation);
+              }
+            } catch (err) {
+              const expired = err instanceof Error && err.message.includes("确认凭证");
+              process.stderr.write(
+                `[merchant mcp] /admin/rfq/releases 决策失败：${err instanceof Error ? err.message : String(err)}\n`,
+              );
+              writeJson(res, expired ? 403 : 400, {
+                error: expired ? "invalid_confirmation" : "command_failed",
+                message: expired ? "确认凭证无效或已过期，请刷新页面重试" : "审批未执行（详见服务日志）",
+              });
+              return;
+            }
+            res.writeHead(303, { location: `/admin/rfq/releases/${encodeURIComponent(releaseId)}` });
+            res.end();
+            return;
+          }
+        }
+        if (rfqAdmin !== undefined && req.method === "GET" && url.pathname.startsWith("/admin/rfq/artifacts/")) {
+          const artifactId = url.pathname.split("/").filter((p) => p !== "")[3] ?? "";
+          try {
+            const file = rfqAdmin.admin.downloadArtifact(artifactId, session.principal_id);
+            res.writeHead(200, {
+              "content-type": file.content_type,
+              // 下载响应不落缓存（产物字节绑定批准摘要）。
+              ...NO_STORE_HEADERS,
+              "content-disposition": `attachment; filename="${file.filename.replaceAll('"', "")}"`,
+            });
+            res.end(file.content);
+          } catch (err) {
+            process.stderr.write(
+              `[merchant mcp] 产物下载失败：${err instanceof Error ? err.message : String(err)}\n`,
+            );
+            writeJson(res, 403, { error: "download_forbidden", message: "产物不可下载（未激活/摘要不一致/归属不符）" });
+          }
+          return;
+        }
+        if (rfqAdmin !== undefined && req.method === "POST" && /^\/admin\/rfq\/handoffs\/[^/]+\/owner-recorded$/.test(url.pathname)) {
+          const handoffId = url.pathname.split("/").filter((p) => p !== "")[3] ?? "";
+          const result = rfqAdmin.admin.markHandoffOwnerRecorded(handoffId, session.principal_id);
+          writeJson(res, 200, { ok: true, result });
           return;
         }
         writeJson(res, 404, { error: "not_found" });

@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:rfq-workbench:0.1.0:fact-snapshot",
+  "title": "FactSnapshot",
+  "description": "候选开发契约；记录结构不等于模型工具输入。权限、引用一致性与跨字段约束由服务端校验。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "merchant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "snapshot_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "case_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "fetched_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "content_fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "complete": {
+      "type": "boolean"
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "field_path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "value": {},
+          "authority": {
+            "type": "string",
+            "enum": [
+              "LOCAL_AUTHORITATIVE",
+              "UPSTREAM_PROXY",
+              "READ_ONLY"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "source_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "verified_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "model_public",
+              "operator_only"
+            ]
+          }
+        },
+        "required": [
+          "field_path",
+          "value",
+          "authority",
+          "source",
+          "source_version",
+          "verified_at",
+          "expires_at",
+          "visibility"
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 1000
+    },
+    "synthetic": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "merchant_id",
+    "snapshot_id",
+    "case_id",
+    "case_revision",
+    "fetched_at",
+    "content_fingerprint",
+    "complete",
+    "fields",
+    "synthetic"
+  ]
+}

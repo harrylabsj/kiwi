@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "authority": "kiwi/contracts",
-  "bundle_sha256": "2350ecaacebb791cd980cc2886511359e356378a6f18cdecc1ac6331c31b0e70",
+  "bundle_sha256": "4a045a50c9c084dc50850002345c62618be8f9743219e7cd3f299aa9fe9771c9",
   "contracts": [
     {
       "id": "commerce-intent",
@@ -80,6 +80,54 @@
       "version": "0.1",
       "path": "contracts/shopping.negotiation/0.1/snapshot.schema.json",
       "sha256": "3684e5674917b1d3777e298d9e18e34f3f124d1ba7534540de08023be45a4e27"
+    },
+    {
+      "id": "merchant-rfq-delivery-record",
+      "version": "0.1.0",
+      "path": "contracts/merchant-rfq/0.1.0/delivery-record.schema.json",
+      "sha256": "a49bf130a1da087ba32ae0b97d89785829acdcd71f744cdc023e9720b4bfbf24"
+    },
+    {
+      "id": "merchant-rfq-fact-snapshot",
+      "version": "0.1.0",
+      "path": "contracts/merchant-rfq/0.1.0/fact-snapshot.schema.json",
+      "sha256": "393e875e64afe4dca8d4e2eb6b094006c0c10a6b0c620bcad0534d85f1341a6e"
+    },
+    {
+      "id": "merchant-rfq-handoff-record",
+      "version": "0.1.0",
+      "path": "contracts/merchant-rfq/0.1.0/handoff-record.schema.json",
+      "sha256": "ea6a8177d351542493e4992865eddf84f778335765dc5d2c28172f6a70d14029"
+    },
+    {
+      "id": "merchant-rfq-pricing-input",
+      "version": "0.1.0",
+      "path": "contracts/merchant-rfq/0.1.0/pricing-input.schema.json",
+      "sha256": "c22cfb4ddb76b6e6e6b866a0d0a06d83b9a0847924b4801415861d9cce7493ed"
+    },
+    {
+      "id": "merchant-rfq-quote-revision",
+      "version": "0.1.0",
+      "path": "contracts/merchant-rfq/0.1.0/quote-revision.schema.json",
+      "sha256": "e089db6aa725b1ac5c0a7bd248e69298ca3a1a5af9437f086490b9ca096a770e"
+    },
+    {
+      "id": "merchant-rfq-release-request",
+      "version": "0.1.0",
+      "path": "contracts/merchant-rfq/0.1.0/release-request.schema.json",
+      "sha256": "aeff815962e28232da2b8784b6e61b80e04bbdcbdd40ff13801514e26911164b"
+    },
+    {
+      "id": "merchant-rfq-rfq-case",
+      "version": "0.1.0",
+      "path": "contracts/merchant-rfq/0.1.0/rfq-case.schema.json",
+      "sha256": "20d384a302602707bd3562e891edb5e7558f5e825251b35f90d51409cbe36cb6"
+    },
+    {
+      "id": "merchant-rfq-source-record",
+      "version": "0.1.0",
+      "path": "contracts/merchant-rfq/0.1.0/source-record.schema.json",
+      "sha256": "822f6b17ab3b77479385e092c50b04355a84b0820fba74a57d4ab38aa60415ad"
     }
   ]
 }

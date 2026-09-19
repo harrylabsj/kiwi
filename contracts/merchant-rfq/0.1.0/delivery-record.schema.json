@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:rfq-workbench:0.1.0:delivery-record",
+  "title": "DeliveryRecord",
+  "description": "候选开发契约；记录结构不等于模型工具输入。权限、引用一致性与跨字段约束由服务端校验。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "merchant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "delivery_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "quote_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "quote_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "release_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "NOT_SENT",
+        "REPORTED_SENT",
+        "RECEIPT_VERIFIED",
+        "DELIVERY_UNKNOWN"
+      ]
+    },
+    "channel": {
+      "type": "string",
+      "enum": [
+        "manual_wechat",
+        "manual_email",
+        "manual_other",
+        "integrated_channel"
+      ]
+    },
+    "evidence_ref": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recorded_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "verification": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "channel_api",
+                "signed_receipt"
+              ]
+            },
+            "issuer": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "receipt_ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "verified_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "method",
+            "issuer",
+            "receipt_ref",
+            "verified_at"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "synthetic": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "merchant_id",
+    "delivery_id",
+    "quote_id",
+    "quote_revision",
+    "release_id",
+    "status",
+    "channel",
+    "evidence_ref",
+    "recorded_by",
+    "recorded_at",
+    "verification",
+    "synthetic"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "RECEIPT_VERIFIED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "verification": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "channel_api",
+                  "signed_receipt"
+                ]
+              },
+              "issuer": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "receipt_ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "verified_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "method",
+              "issuer",
+              "receipt_ref",
+              "verified_at"
+            ]
+          },
+          "channel": {
+            "const": "integrated_channel"
+          },
+          "evidence_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "REPORTED_SENT"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "verification": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ]
+}

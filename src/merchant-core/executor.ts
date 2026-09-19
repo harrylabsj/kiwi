@@ -60,6 +60,8 @@ export interface ExecutorContext {
 /** 固定执行器（一个 tool 一个）。 */
 export interface CommandExecutor {
   readonly tool: string;
+  /** 风险语义（缺省 write_catalog；报价发布类为 release_quote，v0.1.1 §9.1）。 */
+  readonly risk?: string;
   /** 重读目标对象前置状态（版本/digest 比对用）。 */
   readPreconditions(args: Record<string, unknown>): Promise<Record<string, unknown>>;
   /** 执行已批准参数。 */
@@ -75,8 +77,9 @@ export class MerchantExecutorRegistry {
     for (const e of executors) this.registry.set(e.tool, e);
   }
 
-  /** 静态构造（固定白名单；新增写面必须显式加执行器）。 */
-  static buildDefault(ctx: ExecutorContext): MerchantExecutorRegistry {
+  /** 静态构造（固定白名单；新增写面必须显式加执行器）。extras 供子服务
+   *  （如 RFQ 发布执行器）静态合并——同样是启动期一次建成，禁止动态注册。 */
+  static buildDefault(ctx: ExecutorContext, extras: CommandExecutor[] = []): MerchantExecutorRegistry {
     const productPreconditions = async (args: Record<string, unknown>) => {
       const sku = String(args.sku ?? "");
       return publicProductView(await ctx.merchantClient.getProduct(sku));
@@ -254,6 +257,7 @@ export class MerchantExecutorRegistry {
           return finished.status === "failed" ? { ok: false, operation: finished } : finished;
         },
       },
+      ...extras,
     ]);
   }
 

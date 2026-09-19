@@ -85,6 +85,15 @@ export interface MerchantCoreServiceDeps extends MerchantWorkbenchServiceDeps {
   merchantDataDir?: string;
   /** 一次性确认凭证存储（BUG-02；配置后 execute/reject 必须携带有效凭证）。 */
   confirmations?: MerchantOAuthStore;
+  /**
+   * RFQ 子服务（询报价工作台设计 v0.1.1 §11.1）：配置后启用 rfq 工具面、
+   * 发布/移交执行器与管理页路由；不配置时对应能力 fail-closed「不可得」。
+   */
+  rfq?: {
+    service: import("./rfq/service.js").MerchantRfqService;
+    /** RFQ 固定执行器（发布/移交；静态合并进注册表）。 */
+    executors: import("./executor.js").CommandExecutor[];
+  };
 }
 
 export class MerchantCoreService {
@@ -101,6 +110,7 @@ export class MerchantCoreService {
   private readonly confirmationStore?: MerchantOAuthStore;
   private readonly operationsStore?: MerchantOperationStore;
   private readonly merchantDataDir?: string;
+  private readonly rfqDeps?: MerchantCoreServiceDeps["rfq"];
   private readonly now: () => string;
   private readonly principalId: string;
   private readonly approvalsRef: MerchantWorkbenchServiceDeps["approvals"];
@@ -126,6 +136,12 @@ export class MerchantCoreService {
     if (deps.operations !== undefined) this.operationsStore = deps.operations;
     if (deps.merchantDataDir !== undefined) this.merchantDataDir = deps.merchantDataDir;
     if (deps.confirmations !== undefined) this.confirmationStore = deps.confirmations;
+    if (deps.rfq !== undefined) this.rfqDeps = deps.rfq;
+  }
+
+  /** RFQ 子服务（未配置 → undefined；工具面 fail-closed）。 */
+  get rfqService(): import("./rfq/service.js").MerchantRfqService | undefined {
+    return this.rfqDeps?.service;
   }
 
   // ---- V1 facade 委托（MCP 工具层经此调用） --------------------------------
@@ -183,7 +199,10 @@ export class MerchantCoreService {
       };
       this.commandLogInstance = new MerchantCommandLog({
         store: this.approvalsRef,
-        executors: MerchantExecutorRegistry.buildDefault(executorContext),
+        executors: MerchantExecutorRegistry.buildDefault(
+          executorContext,
+          this.rfqDeps?.executors ?? [],
+        ),
         executorContext,
         profile: this.profileRef,
         mode: this.modeRef,
