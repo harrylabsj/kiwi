@@ -6,6 +6,6 @@
 - `skills/{rfq-intake,quote-build-review,quote-release-followup}/SKILL.md` — 三个技能草稿（§12.3）。
 - 打包校验：`node package-rfq-workbench-connector.mjs --check`；出包 `--out <path>.zip`。
 
-**仍属 M4 未完成项**：真实 WorkBuddy 实机（L2 证据）、每商家 URL/OAuth 配置实测、平台资源 ID 与生产地址批准（`mcp.json` 目前为 rfq-workbench.example.com 模板域）。不得把仿真测试当作实机证据。
+**仍属 M4 未完成项**：真实 WorkBuddy 实机（L2 证据）、每商家 URL/OAuth 配置实测、平台资源 ID 与生产地址批准（`mcp.json` 目前为 rfq-workbench.example.com 模板域）。不得把仿真测试当作实机证据。实机验收操作步骤见 [L2 实机验收清单](../../../docs/merchant-rfq-pilot/l2-host-checklist.md)。
 
 公共目录网关仍只做目录，不提供商家实例路由。具名确认走独立管理页或受认证的CLI；任何模型工具均不拥有批准权限。MCP Apps UI为可选增强，文本降级不得丢失事实或绕过审批。

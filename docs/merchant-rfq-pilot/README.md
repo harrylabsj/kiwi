@@ -34,3 +34,4 @@
 | [golden-fields-template.csv](golden-fields-template.csv) | 金标字段表模板（盲审口径） |
 | [measurement-sheet.md](measurement-sheet.md) | 计时与指标记录表（安装分摊/整理/执行/核验/返工/复用） |
 | [safety-checklist.md](safety-checklist.md) | 每日安全硬门核对单 |
+| [l2-host-checklist.md](l2-host-checklist.md) | M4 私有宿主 L2 实机验收清单（进入试点的先决条件） |
