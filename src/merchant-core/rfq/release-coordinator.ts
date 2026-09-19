@@ -33,10 +33,11 @@
 import { randomUUID } from "node:crypto";
 import type { CommandExecutor } from "../executor.js";
 import { publicProjectionDigest } from "./quote-revisions.js";
-import { rfqContentDigest, RfqError, type PublicQuoteView } from "./types.js";
+import { rfqContentDigest, RfqError, type FactField, type PublicQuoteView } from "./types.js";
 import type { RfqArtifactStore } from "./artifacts.js";
 import type { RfqRepository } from "./repository.js";
 import { buildHandoffPacket, type HandoffPacket } from "./handoff.js";
+import { evaluateFreshness } from "./fact-resolver.js";
 import { validateQuotePolicy, type RfqPolicyConfig, type RfqPolicyContext } from "./policy.js";
 
 export const RELEASE_TOOL = "kiwi_merchant_prepare_quote_release";
@@ -220,6 +221,16 @@ export class RfqReleaseCoordinator {
     if (kase.current_revision !== quote.case_revision) {
       throw new RfqError("approval_stale", "需求已更新（case_revision 变化）；旧批准失效，请重新准备发布");
     }
+    // 前置重验：事实值指纹与新鲜度（§9.2 C）——快照被替换/指纹不匹配或
+    // 关键事实超期（服务端时钟）均阻断，不能带着过期事实激活正式文件。
+    const snapshot = this.deps.repo.getSnapshot(quote.snapshot_id);
+    if (snapshot === undefined || snapshot.case_id !== quote.case_id || snapshot.content_fingerprint !== quote.fact_fingerprint) {
+      throw new RfqError("fact_stale", "事实快照缺失或指纹不匹配；请刷新事实并重新生成报价版本");
+    }
+    const freshness = evaluateFreshness(JSON.parse(snapshot.fields_json) as FactField[], this.deps.now());
+    if (freshness.stale.length > 0 || freshness.missing_verification.length > 0) {
+      throw new RfqError("fact_stale", "关键事实已过期或缺少验证信息；请刷新事实并重新生成报价版本");
+    }
     const { release: after } = this.deps.repo.activateReleaseAtomic({
       releaseId: input.releaseId,
       actor: input.actor,
@@ -277,6 +288,10 @@ export class RfqReleaseCoordinator {
     const revision = kase === undefined ? undefined : this.deps.repo.getCaseRevision(quote.case_id, kase.current_revision);
     if (kase === undefined || revision === undefined) {
       throw new RfqError("not_found", `询盘 ${quote.case_id} 状态不可得`);
+    }
+    // 终态询盘拒绝新的工作成果（§8.1：CASE_CLOSED；已批准文件与审计保留）。
+    if (kase.stage === "CLOSED" || kase.stage === "CANCELLED") {
+      throw new RfqError("case_closed", `询盘 ${quote.case_id} 已是终态 ${kase.stage}；不能准备移交`);
     }
     const projectionInput = JSON.parse(quote.projection_json) as Omit<PublicQuoteView, "status">;
     const { packet, digest } = buildHandoffPacket({

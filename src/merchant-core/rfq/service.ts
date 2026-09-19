@@ -1208,7 +1208,7 @@ export class MerchantRfqService {
   pruneExpiredIdempotency(): number {
     return this.repo().pruneIdempotency({
       olderThanDays: IDEMPOTENCY_RETENTION_DAYS,
-      preserveOperations: IDEMPOTENCY_PRESERVE_OPERATIONS,
+      preserveOperations: [...IDEMPOTENCY_PRESERVE_OPERATIONS],
     });
   }
 }

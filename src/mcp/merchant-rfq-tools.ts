@@ -34,6 +34,72 @@ import type { MerchantMcpCallResult, MerchantMcpToolDefinition } from "./merchan
 
 /** RFQ 工具的响应大小上限（与 merchant 工具同缺省）。 */
 const RFQ_MAX_RESPONSE_CHARS = 12_000;
+/** 单个字符串字段的保留上限（超长原文做「有界预览」，绝不截断 JSON 本体）。 */
+const RFQ_MAX_FIELD_CHARS = 1_200;
+/** 数组元素保留上限（超限标记省略，不静默截断）。 */
+const RFQ_MAX_ARRAY_ITEMS = 100;
+
+interface BoundState {
+  elided: string[];
+}
+
+/**
+ * 有界投影（§2.3/§11.3：不沿用「截断业务 JSON」的做法）：超长字符串替换为
+ * 预览 + 省略标记，超长数组保留前缀并显式标注——输出始终是合法 JSON，且
+ * complete=false 与被省略字段路径显式返回，绝不把部分数据冒充完整事实。
+ */
+function boundValue(value: unknown, path: string, state: BoundState): unknown {
+  if (typeof value === "string") {
+    if (value.length > RFQ_MAX_FIELD_CHARS) {
+      state.elided.push(path === "" ? "(root)" : path);
+      return `${value.slice(0, 200)}…[有界预览，原文共 ${value.length} 字符]`;
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const items = value.map((v, i) => boundValue(v, `${path}[${i}]`, state));
+    if (items.length > RFQ_MAX_ARRAY_ITEMS) {
+      state.elided.push(`${path}[${RFQ_MAX_ARRAY_ITEMS}..${items.length - 1}]`);
+      return items.slice(0, RFQ_MAX_ARRAY_ITEMS);
+    }
+    return items;
+  }
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = boundValue(v, path === "" ? k : `${path}.${k}`, state);
+    }
+    return out;
+  }
+  return value;
+}
+
+function okRfq(payload: Record<string, unknown>): MerchantMcpCallResult {
+  const text = JSON.stringify(payload);
+  if (text.length <= RFQ_MAX_RESPONSE_CHARS) {
+    return { content: [{ type: "text", text }], structuredContent: payload };
+  }
+  // 超限 → 有界投影（不截断 JSON 本体）：省略字段显式标注 complete=false。
+  const state: BoundState = { elided: [] };
+  const bounded = boundValue(payload, "", state) as Record<string, unknown>;
+  const boundedText = JSON.stringify({ ...bounded, complete: false, elided_fields: state.elided });
+  if (boundedText.length <= RFQ_MAX_RESPONSE_CHARS) {
+    return {
+      content: [{ type: "text", text: boundedText }],
+      structuredContent: { ...bounded, complete: false, elided_fields: state.elided },
+    };
+  }
+  // 有界投影后仍超限（极端大对象）：显式失败并指引，不返回部分数据。
+  return {
+    content: [
+      {
+        type: "text",
+        text: `询报价响应过大（序列化后 ${text.length} 字符，超出 ${RFQ_MAX_RESPONSE_CHARS} 上限）。请缩小查询范围（如按 case/quote 单个读取、减少行数）后重试；本次不返回任何部分数据。`,
+      },
+    ],
+    isError: true,
+  };
+}
 
 /** 需要工作流准备权限（merchant:write）的 RFQ 工具；其余只读（merchant:read）。 */
 const RFQ_WRITE_TOOLS: ReadonlySet<string> = new Set([
@@ -93,24 +159,6 @@ function rfqErrorResult(err: unknown): MerchantMcpCallResult {
       { type: "text", text: "询报价操作失败（暂时性错误）：请稍后重试；若持续失败请查看服务端日志。" },
     ],
     isError: true,
-  };
-}
-
-function okRfq(payload: Record<string, unknown>): MerchantMcpCallResult {
-  const text = JSON.stringify(payload);
-  if (text.length <= RFQ_MAX_RESPONSE_CHARS) {
-    return { content: [{ type: "text", text }], structuredContent: payload };
-  }
-  return {
-    content: [
-      {
-        type: "text",
-        text:
-          `${text.slice(0, Math.max(1, RFQ_MAX_RESPONSE_CHARS - 1))}…` +
-          `（响应过大已截断：共 ${text.length} 字符；请缩小查询范围）`,
-      },
-    ],
-    structuredContent: { truncated: true, total_chars: text.length },
   };
 }
 

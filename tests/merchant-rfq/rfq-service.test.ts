@@ -31,6 +31,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { migrateMemorySchema } from "../../src/agent/memory/schema.js";
 import { contentHash, WriteApprovalCandidateStore } from "../../src/agent/merchant/action-candidate.js";
 import { FakeMerchantClient, fakeMerchantProduct } from "../../src/agent/merchant/fake-merchant-client.js";
+import type { MerchantCatalogProduct } from "../../src/agent/merchant/types.js";
 import { MerchantOAuthStore } from "../../src/auth/merchant-oauth.js";
 import { MerchantCoreService } from "../../src/merchant-core/service.js";
 import { MerchantRfqService, type RfqCallContext } from "../../src/merchant-core/rfq/service.js";
@@ -38,6 +39,7 @@ import { RfqRepository } from "../../src/merchant-core/rfq/repository.js";
 import { RfqArtifactStore, ensureArtifactRoot, renderCustomerQuotePdfAscii } from "../../src/merchant-core/rfq/artifacts.js";
 import { RfqReleaseCoordinator } from "../../src/merchant-core/rfq/release-coordinator.js";
 import { MerchantClientCommerceDataSource } from "../../src/merchant-core/rfq/data-source-adapter.js";
+import type { CommerceDataSource } from "../../src/commerce/data-source.js";
 import {
   buildRfqMcpTools,
   requiredScopeForRfqTool,
@@ -60,7 +62,14 @@ afterEach(() => {
 
 const INQUIRY = "你好，我们需要手写陶瓷杯 10 个，含税，税率13%，运费10元，7天内发货，款到发货。收件人：张三";
 
-function setup(options: { clock?: { value: string }; priceUnit?: "minor" | "yuan" } = {}) {
+function setup(
+  options: {
+    clock?: { value: string };
+    priceUnit?: "minor" | "yuan";
+    products?: MerchantCatalogProduct[];
+    dataSource?: CommerceDataSource;
+  } = {},
+) {
   const clock = options.clock ?? { value: T0 };
   const now = () => clock.value;
   const db = new DatabaseSync(":memory:");
@@ -71,16 +80,18 @@ function setup(options: { clock?: { value: string }; priceUnit?: "minor" | "yuan
   ).run(PRINCIPAL, T0, T0);
   const approvals = new WriteApprovalCandidateStore({ db, principalId: PRINCIPAL, now });
   const confirmations = new MerchantOAuthStore({ db: new DatabaseSync(":memory:"), now });
-  const client = new FakeMerchantClient({ products: [fakeMerchantProduct()], now: T0 });
+  const client = new FakeMerchantClient({ products: options.products ?? [fakeMerchantProduct()], now: T0 });
   const root = mkdtempSync(path.join(tmpdir(), "kiwi-rfq-"));
   dirs.push(root);
   ensureArtifactRoot(root);
-  const dataSource = new MerchantClientCommerceDataSource({
-    client,
-    merchantId: MERCHANT,
-    ...(options.priceUnit !== undefined ? { priceUnit: options.priceUnit } : {}),
-    now,
-  });
+  const dataSource =
+    options.dataSource ??
+    new MerchantClientCommerceDataSource({
+      client,
+      merchantId: MERCHANT,
+      ...(options.priceUnit !== undefined ? { priceUnit: options.priceUnit } : {}),
+      now,
+    });
   const repo = new RfqRepository({ db, merchantId: MERCHANT, now });
   const artifacts = new RfqArtifactStore({ root, now });
   const coordinator = new RfqReleaseCoordinator({
@@ -159,6 +170,27 @@ async function pricedCase(s: ReturnType<typeof setup>) {
     idempotencyKey: "price-1",
   });
   return { ingest, caseId, confirmed, facts, quote };
+}
+
+/** 管理页通道：签发一次性凭证并批准执行（与「三阶段发布」同一流程）。 */
+async function approveAndExecute(
+  s: ReturnType<typeof setup>,
+  release: { candidate_id: string },
+): Promise<{ kind: string; reason?: string }> {
+  const candidate = s.core.listPendingCommands().find((c) => c.candidate_id === release.candidate_id);
+  if (candidate === undefined) throw new Error(`候选不存在：${release.candidate_id}`);
+  const token = s.confirmations.createConfirmation({
+    candidateId: release.candidate_id,
+    candidateDigest: contentHash({
+      arguments: (candidate as NonNullable<typeof candidate>).arguments,
+      preconditions: (candidate as NonNullable<typeof candidate>).preconditions,
+    }),
+    principalId: PRINCIPAL,
+    merchantId: MERCHANT,
+    action: "approve",
+  });
+  const outcome = await s.core.commands.executeApproved(release.candidate_id, PRINCIPAL, token);
+  return { kind: outcome.kind, ...(outcome.kind === "stale" ? { reason: outcome.reason } : {}) };
 }
 
 describe("RFQ 导入与提取", () => {
@@ -321,6 +353,26 @@ describe("RFQ 事实与计价", () => {
     s.db.close();
   });
 
+  it("库存缺失不是零：stock 记 null（不可得），availability 独立记录（FA-04）", async () => {
+    // 无 stock 的商品：不把缺字段当 0，可售数量不可承诺。
+    const s = setup({ priceUnit: "yuan", products: [fakeMerchantProduct({ stock: undefined })] });
+    const { caseId, facts, quote } = await pricedCase(s);
+    const snapshot = s.repo.getSnapshot(facts.snapshot_id);
+    expect(snapshot).toBeDefined();
+    const fields = JSON.parse((snapshot as NonNullable<typeof snapshot>).fields_json) as Array<{
+      field_path: string;
+      value: unknown;
+    }>;
+    const stock = fields.find((f) => f.field_path === "products.sku-001.stock");
+    expect(stock?.value).toBeNull();
+    const availability = fields.find((f) => f.field_path === "products.sku-001.availability");
+    expect(availability?.value).toBe("unknown");
+    // 库存不可得不阻断计价，但计价结果不承诺任何可售数量
+    expect(quote.status).toBe("VALIDATED");
+    expect(JSON.stringify(s.service.getCase(s.ctx, caseId))).not.toMatch(/库存\s*[:：]?\s*12|stock["']?\s*[:=]\s*12/u);
+    s.db.close();
+  });
+
   it("compare：两版报价字段级差异 + 失效原因", async () => {
     const s = setup({ priceUnit: "yuan" });
     const { caseId, quote } = await pricedCase(s);
@@ -347,6 +399,24 @@ describe("RFQ 事实与计价", () => {
     s.db.close();
   });
 });
+
+/** 桩数据源：verified_at 跟随测试时钟（模拟真实上游随时间重新验证）。 */
+function clockedSource(now: () => string): CommerceDataSource {
+  return {
+    getProduct: async (sku) =>
+      sku === "sku-001" ? { sku, title: "手写陶瓷杯", currency: "CNY", availability_hint: "in_stock" } : undefined,
+    getProducts: async () => [],
+    getInventory: async () => ({ value: 12, authority: "LOCAL_AUTHORITATIVE", source: "stub", verified_at: now() }),
+    getPrice: async () => ({
+      value: { currency: "CNY", amount_minor: 9900 },
+      authority: "LOCAL_AUTHORITATIVE",
+      source: "stub",
+      verified_at: now(),
+    }),
+    getPublicListing: async () => ({}),
+    health: async () => ({ ok: true, service: "stub" }),
+  };
+}
 
 describe("RFQ 审批与发布", () => {
   it("模型/工具面没有 approve 工具；无凭证执行被拒（模型自批不是证据）", async () => {
@@ -404,6 +474,148 @@ describe("RFQ 审批与发布", () => {
     expect(view.quotes.find((q) => q.quote_id === quote.quote_id)?.status).toBe("EXPORTED");
     // 跨主体批准拒绝
     await expect(s.core.commands.reject(release.candidate_id, "other-principal")).rejects.toThrow(/主体不一致/u);
+    s.db.close();
+  });
+
+  it("库存事实超过60秒新鲜期：激活阻断，刷新后重新发布成功（FA-05）", async () => {
+    const clock = { value: T0 };
+    const s = setup({ clock, dataSource: clockedSource(() => clock.value) });
+    const { caseId, quote } = await pricedCase(s);
+    const release = await s.service.prepareRelease(s.ctx, {
+      caseId,
+      quoteId: quote.quote_id,
+      revision: quote.revision,
+      idempotencyKey: "rel-fa05",
+      prepareCandidate: s.prepareCandidate,
+    });
+    // 时钟推过库存新鲜期（60s；价格 300s 内仍新鲜）——不能带着过期事实激活
+    clock.value = "2026-09-15T10:01:01.000Z";
+    const outcome = await approveAndExecute(s, release);
+    expect(outcome.kind).toBe("stale");
+    expect(outcome.reason).toContain("关键事实已过期");
+    // 触发刷新：库存重新验证 → 指纹变化 → 旧报价替代 → 重新计价与发布
+    const facts2 = await s.service.refreshFacts(s.ctx, {
+      caseId,
+      expectedRevision: s.service.getCase(s.ctx, caseId).revision,
+      idempotencyKey: "facts-fa05",
+    });
+    expect(facts2.superseded_quote).toBe(quote.quote_id);
+    const quote2 = await s.service.price(s.ctx, {
+      caseId,
+      expectedRevision: s.service.getCase(s.ctx, caseId).revision,
+      snapshotId: facts2.snapshot_id,
+      idempotencyKey: "price-fa05",
+    });
+    const release2 = await s.service.prepareRelease(s.ctx, {
+      caseId,
+      quoteId: quote2.quote_id,
+      revision: quote2.revision,
+      idempotencyKey: "rel-fa05-2",
+      prepareCandidate: s.prepareCandidate,
+    });
+    expect((await approveAndExecute(s, release2)).kind).toBe("executed");
+    s.db.close();
+  });
+
+  it("价格事实超过300秒时限：发布阻断（FACT_STALE），重新生成并批准后放行（FA-06）", async () => {
+    const clock = { value: T0 };
+    const s = setup({ clock, dataSource: clockedSource(() => clock.value) });
+    const { caseId, quote } = await pricedCase(s);
+    const release = await s.service.prepareRelease(s.ctx, {
+      caseId,
+      quoteId: quote.quote_id,
+      revision: quote.revision,
+      idempotencyKey: "rel-fa06",
+      prepareCandidate: s.prepareCandidate,
+    });
+    clock.value = "2026-09-15T10:05:01.000Z";
+    const outcome = await approveAndExecute(s, release);
+    expect(outcome.kind).toBe("stale");
+    expect(outcome.reason).toContain("关键事实已过期");
+    // 刷新事实（价格/库存按当前时钟重新验证）→ 重新生成报价版本 → 重新走三阶段
+    const facts2 = await s.service.refreshFacts(s.ctx, {
+      caseId,
+      expectedRevision: s.service.getCase(s.ctx, caseId).revision,
+      idempotencyKey: "facts-fa06",
+    });
+    const quote2 = await s.service.price(s.ctx, {
+      caseId,
+      expectedRevision: s.service.getCase(s.ctx, caseId).revision,
+      snapshotId: facts2.snapshot_id,
+      idempotencyKey: "price-fa06",
+    });
+    expect(quote2.quote_id).not.toBe(quote.quote_id);
+    const release2 = await s.service.prepareRelease(s.ctx, {
+      caseId,
+      quoteId: quote2.quote_id,
+      revision: quote2.revision,
+      idempotencyKey: "rel-fa06-2",
+      prepareCandidate: s.prepareCandidate,
+    });
+    expect((await approveAndExecute(s, release2)).kind).toBe("executed");
+    s.db.close();
+  });
+
+  it("事实缺验证信息：source_version 未知在计价即阻断，不用读取时间伪造验证（FA-07）", async () => {
+    // 价格字段不带 verified_at → source_version 如实记 "unknown"（绝不拿当前时间顶替）
+    const s = setup({
+      dataSource: {
+        getProduct: async (sku) =>
+          sku === "sku-001" ? { sku, title: "手写陶瓷杯", currency: "CNY", availability_hint: "in_stock" } : undefined,
+        getProducts: async () => [],
+        getInventory: async () => ({ value: 12, authority: "LOCAL_AUTHORITATIVE", source: "stub", verified_at: T0 }),
+        getPrice: async () => ({
+          value: { currency: "CNY", amount_minor: 9900 },
+          authority: "LOCAL_AUTHORITATIVE",
+          source: "stub",
+        }),
+        getPublicListing: async () => ({}),
+        health: async () => ({ ok: true, service: "stub" }),
+      },
+    });
+    const ingest = await s.service.ingest(s.ctx, {
+      kind: "manual_text",
+      content: INQUIRY,
+      idempotencyKey: "ing-fa07",
+      proposal: {
+        entries: [
+          { field_path: "lines.quantity", line_id: "L1", value: 10, quote: "10 个" },
+          { field_path: "terms.tax_basis", value: "INCLUSIVE", quote: "含税" },
+          { field_path: "terms.tax_rate_bps", value: 1300, quote: "13%" },
+          { field_path: "terms.shipping_known", value: true, quote: "运费10元" },
+          { field_path: "terms.shipping_minor", value: 1000, quote: "运费10元" },
+          { field_path: "terms.delivery_date", value: "7天内发货", quote: "7天内发货" },
+          { field_path: "terms.payment_terms", value: "款到发货", quote: "款到发货" },
+          { field_path: "recipient_ref", value: "张三", quote: "收件人：张三" },
+        ],
+      },
+    });
+    const caseId = ingest.case_id;
+    const confirmed = s.service.confirmLines(s.ctx, {
+      caseId,
+      expectedRevision: s.service.getCase(s.ctx, caseId).revision,
+      selections: [{ line_id: "L1", sku: "sku-001", quantity: 10, unit: "个" }],
+    });
+    const facts = await s.service.refreshFacts(s.ctx, {
+      caseId,
+      expectedRevision: confirmed.revision,
+      idempotencyKey: "facts-fa07",
+    });
+    const snapshot = s.repo.getSnapshot(facts.snapshot_id);
+    const fields = JSON.parse((snapshot as NonNullable<typeof snapshot>).fields_json) as Array<{
+      field_path: string;
+      source_version: string;
+    }>;
+    expect(fields.find((f) => f.field_path === "products.sku-001.price_minor")?.source_version).toBe("unknown");
+    // 快照可建，但计价即阻断（FACT_STALE）——比等到发布前拦截更早一步
+    expect(() =>
+      s.service.price(s.ctx, {
+        caseId,
+        expectedRevision: confirmed.revision,
+        snapshotId: facts.snapshot_id,
+        idempotencyKey: "price-fa07",
+      }),
+    ).toThrow(/缺少源版本\/验证信息/u);
     s.db.close();
   });
 
@@ -554,6 +766,57 @@ describe("RFQ MCP 工具面", () => {
     expect(result.isError).toBeUndefined();
     expect(result.structuredContent).toMatchObject({ missing: ["L1"] });
     s.db.close();
+  });
+
+  it("响应超限：有界投影 complete=false 显式省略；结构超界显式失败不返回部分数据（HO-07）", async () => {
+    const mkSurface = (s: ReturnType<typeof setup>) => ({
+      rfq: s.service,
+      prepareReleaseCandidate: s.prepareCandidate,
+      prepareHandoffCandidate: async () => "cand-x",
+      callContext: () => ({ principalId: PRINCIPAL, actor: PRINCIPAL, traceId: "t" }),
+    });
+    // 1) 超长字符串字段 → 有界预览 + complete=false + elided_fields（始终合法 JSON）
+    const s1 = setup({ priceUnit: "yuan" });
+    const bundle1 = buildRfqMcpTools(mkSurface(s1), { releaseEnabled: true });
+    const { caseId } = await pricedCase(s1);
+    s1.client.updateProduct("sku-001", { title: "精".repeat(20_000) });
+    const bounded = await bundle1.call("kiwi_merchant_rfq_match", { case_id: caseId, query: "精" }, ["merchant:read"]);
+    expect(bounded.isError).toBeUndefined();
+    const boundedView = bounded.structuredContent as { complete: boolean; elided_fields: string[]; items: Array<{ title: string }> };
+    expect(boundedView.complete).toBe(false);
+    expect(boundedView.elided_fields.length).toBeGreaterThan(0);
+    expect(boundedView.items[0]?.title).toContain("有界预览");
+    expect(JSON.stringify(boundedView).length).toBeLessThanOrEqual(12_000);
+    s1.db.close();
+
+    // 2) 结构性超界（100 个元素仍超限）→ 显式失败；绝不切断 JSON 冒充完整
+    const many = Array.from({ length: 120 }, (_, i) =>
+      fakeMerchantProduct({
+        sku: `sku-${String(i).padStart(3, "0")}`,
+        title: `手工陶瓷系列精选款${i}号——350ml 手写釉下彩马克杯，家庭办公两相宜，安全健康可微波，附防烫杯套与原厂两年质保`.repeat(2),
+      }),
+    );
+    const s2 = setup({ priceUnit: "yuan", products: many });
+    const bundle2 = buildRfqMcpTools(mkSurface(s2), { releaseEnabled: true });
+    const ingested = await s2.service.ingest(s2.ctx, { kind: "manual_text", content: INQUIRY, idempotencyKey: "ing-ho07" });
+    const oversized = await bundle2.call(
+      "kiwi_merchant_rfq_match",
+      { case_id: ingested.case_id, query: "陶瓷", limit: 100 },
+      ["merchant:read"],
+    );
+    expect(oversized.isError).toBe(true);
+    expect(oversized.structuredContent).toBeUndefined();
+    expect(oversized.content[0]?.type === "text" ? oversized.content[0].text : "").toContain("不返回任何部分数据");
+    // 3) 分页：默认 limit 20 显式分页，complete=false 不声称首页即全量
+    const paged = await bundle2.call(
+      "kiwi_merchant_rfq_match",
+      { case_id: ingested.case_id, query: "陶瓷" },
+      ["merchant:read"],
+    );
+    const pagedView = paged.structuredContent as { complete: boolean; items: unknown[]; next_cursor: string | null };
+    expect(pagedView.items).toHaveLength(20);
+    expect(pagedView.complete).toBe(false);
+    s2.db.close();
   });
 
   it("管理页：总览渲染转义外部内容；surface 可列出/关闭询盘", async () => {

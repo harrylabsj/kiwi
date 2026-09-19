@@ -91,6 +91,10 @@ export const L1_EVIDENCE: Record<string, EvidenceEntry> = {
   // ---- 事实与完整性 ----
   "FA-02": { tests: ["价格单位口径未声明 → 价格事实不可得（不猜测元/分）"] },
   "FA-03": { tests: ["价格单位口径未声明 → 价格事实不可得（不猜测元/分）"] },
+  "FA-04": { tests: ["库存缺失不是零：stock 记 null"], note: "availability 独立记录 unknown；计价不因库存不可得阻断，也不承诺可售数量" },
+  "FA-05": { tests: ["库存事实超过60秒新鲜期：激活阻断"], note: "服务端时钟判新鲜（非页面展示时间）；阻断后刷新 → 重新计价发布成功" },
+  "FA-06": { tests: ["价格事实超过300秒时限：发布阻断"], note: "FACT_STALE；刷新事实 → 新报价版本 → 重新批准后放行" },
+  "FA-07": { tests: ["事实缺验证信息：source_version 未知在计价即阻断"], note: "快照 source_version 如实记 unknown（不用读取时间伪造）；计价层与激活层双重承载" },
   // ---- 计价与规则（rfq-pricing.test.ts）----
   "PR-01": { tests: ["%s：逐位一致", "含税/未税拆分与交接包参考实现一致（双向核验）"] },
   "PR-02": { tests: ["%s：逐位一致", "含税/未税拆分与交接包参考实现一致（双向核验）"] },
@@ -130,7 +134,8 @@ export const L1_EVIDENCE: Record<string, EvidenceEntry> = {
   "HO-02": { tests: ["MCP 全流程 + 管理页批准下载 + 展示资源 + 重启独立性"], note: "宿主仿真：实例私有 MCP 直连全流程；真实客户端待 L2" },
   "HO-05": { tests: ["MCP 全流程 + 管理页批准下载 + 展示资源 + 重启独立性"], note: "展示资源 JSON+文本双 content；宿主无 Apps 时结构化文本可用" },
   "HO-08": { tests: ["MCP 全流程 + 管理页批准下载 + 展示资源 + 重启独立性"], note: "宿主仿真：进程重启后状态/候选/产物完整" },
-  "HO-09": { tests: ["pipeline:npm run verify（195 文件 2506 测试）"], note: "由 verify 流水线承载（lint/typecheck/build/test/contracts/vectors/harness/supply-chain/package/python-ref）；meta 测试校验锚点前缀" },
+  "HO-07": { tests: ["响应超限：有界投影 complete=false 显式省略"], note: "宿主仿真：超限字符串有界预览+complete=false；结构超界显式失败不返回部分数据；match 默认 20 条显式分页。真实客户端待 L2" },
+  "HO-09": { tests: ["pipeline:npm run verify（197 文件 2516 测试）"], note: "由 verify 流水线承载（lint/typecheck/build/test/contracts/vectors/harness/supply-chain/package/python-ref）；meta 测试校验锚点前缀" },
 };
 
 export interface MatrixLoadResult {
