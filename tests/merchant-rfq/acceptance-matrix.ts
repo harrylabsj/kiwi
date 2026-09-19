@@ -66,6 +66,7 @@ export const EVIDENCE_TESTS = {
   pricing: "tests/merchant-rfq/rfq-pricing.test.ts",
   service: "tests/merchant-rfq/rfq-service.test.ts",
   e2e: "tests/merchant-rfq/rfq-e2e-host.test.ts",
+  m3: "tests/merchant-rfq/rfq-m3-handoff.test.ts",
 } as const;
 
 /**
@@ -112,30 +113,50 @@ export const L1_EVIDENCE: Record<string, EvidenceEntry> = {
   "AP-03": { tests: ["模型/工具面没有 approve 工具；无凭证执行被拒（模型自批不是证据）", "14 个工具契约：rfq_* 前缀、写工具 scope、无 approve、确认需服务端引用"] },
   "AP-04": { tests: ["三阶段发布：批准激活 → 下载成功才 EXPORTED → 摘要绑定"], note: "跨主体批准拒绝（commands.executeApproved 主体一致性）" },
   "AP-05": { tests: ["需求修订使旧审批失效：新 revision 创建后旧候选 superseded"] },
+  "AP-06": { tests: ["收件人变更：换收件人被拒；需求修订后旧批准失效需新候选"], note: "内容与收件人一起绑定；换收件人拒绝 + 修订后旧候选 superseded" },
+  "AP-07": { tests: ["规则变化：批准前策略版本变化 → 执行重验失败，不沿用旧批准"], note: "激活时以 currentPolicy 与计价同源重验" },
   "AP-08": { tests: ["MCP 全流程 + 管理页批准下载 + 展示资源 + 重启独立性"], note: "已核销凭证重放 → 403；过期路径由凭证 10 分钟 TTL 承载" },
+  "AP-09": { tests: ["并发批准：CAS 认领保证最多一次激活；凭证一次性"], note: "claimForExecution 原子认领；已核销凭证重放拒绝" },
   "AP-10": { tests: ["需求修订使旧审批失效：新 revision 创建后旧候选 superseded"], note: "候选绑定 preconditions（摘要/收件人/策略版本），失配即 superseded" },
   // ---- 并发与恢复 ----
   "ST-01": { tests: ["CANCELLED 终态：拒绝计价与发布；BLOCKERS 不可消除"], note: "expected_version CAS 由 closeCase/revise 校验路径覆盖" },
+  "ST-02": { tests: ["跨对象一致事务：候选插入后数据库失败 → 候选/release/幂等全回滚，重试干净"], note: "§10.2 UnitOfWork：候选登记与 release/报价状态/审计同事务；重试不产生重复 release" },
+  "ST-03": { tests: ["报价版本不可变：v2 生成后 v1 内容摘要与文件哈希不变，diff 完整"] },
+  "ST-04": { tests: ["超时后查询：同键进行中按 OPERATION_UNKNOWN 拒绝盲重放，完成后重放同结果"], note: "tombstone 先行；进行中拒绝盲重放；完成后同键重放同一 release/candidate" },
   "ST-05": { tests: ["MCP 全流程 + 管理页批准下载 + 展示资源 + 重启独立性"], note: "重启后 registered 工具的 pending 候选保留（recoverPending 语义）" },
   "ST-06": { tests: ["恢复同步：候选已死的发布标 SUPERSEDED（不冒充外部已撤销）"] },
+  "ST-07": { tests: ["临时文件孤儿：回滚孤儿按 TTL 回收；被有效 release 引用的文件保留"], note: "cleanupOrphanArtifacts：文件 mtime TTL + 有效 release 引用保留 + 未引用行回收" },
   "ST-08": { tests: ["三阶段发布：批准激活 → 下载成功才 EXPORTED → 摘要绑定"], note: "activateReleaseAtomic 单事务（报价/release/产物）" },
   "ST-09": { tests: ["MCP 全流程 + 管理页批准下载 + 展示资源 + 重启独立性"] },
+  "ST-10": { tests: ["备份恢复演练：文件库复制恢复后报价/发布/产物状态完整"], note: "L1 文件级演练（关闭后复制→新连接恢复）；真实 RPO/恢复耗时需部署环境实测，不声称 RPO=0" },
   // ---- 投影与文件 ----
   "EX-01": { tests: ["三阶段发布：批准激活 → 下载成功才 EXPORTED → 摘要绑定"], note: "正式文件只由 PublicQuoteView 渲染（白名单投影）" },
   "EX-02": { tests: ["模型/工具面没有 approve 工具；无凭证执行被拒（模型自批不是证据）"] },
+  "EX-03": { tests: ["跨商家下载：另一商家不可见、不可读，不泄露存在性"], note: "仓库按 merchant_id 隔离；not_found 不泄露存在性/文件名/内容" },
   "EX-04": { tests: ["三阶段发布：批准激活 → 下载成功才 EXPORTED → 摘要绑定"], note: "下载前 sha256 与批准摘要核对（摘要不一致 fail-closed）" },
   "EX-05": { tests: ["发送记录：只有已批准/已导出报价可记录；必须引用操作者证据", "MCP 全流程 + 管理页批准下载 + 展示资源 + 重启独立性"] },
   "EX-06": { tests: ["MCP 全流程 + 管理页批准下载 + 展示资源 + 重启独立性"], note: "REPORTED_SENT 必须引用操作者证据" },
   "EX-07": { tests: ["MCP 全流程 + 管理页批准下载 + 展示资源 + 重启独立性"], note: "展示资源 JSON + 文本摘要双 content 同源" },
   "EX-08": { tests: ["管理页：总览渲染转义外部内容；surface 可列出/关闭询盘"], note: "正式文件为不可执行纯文本；CSV 导出未开放" },
+  "EX-09": { tests: ["分页长单：100 行文件逐行完整、金额与逐行证据无裁切"], note: "文本正式文件逐行/金额完整无省略；PDF 分页与重复表头待 CJK 渲染器（§14.3 待确认项）" },
+  "EX-10": { tests: ["过期与停用：报价过期后正式下载关闭；发布停用不可下载"], note: "valid_until 过期 → quote_expired 拒绝新正式下载；SUPERSEDED 不可下载；不假称外部副本消失" },
   // ---- 协议与移交 ----
   "KN-01": { tests: ["CSV：BOM/引号转义可解析；未识别列与非法数量整文件拒绝"], note: "ingest kind 白名单 manual_text/csv；KNP 身份伪造无接口" },
+  "KN-02": { tests: ["协议状态不抹平：统一列表保留 source_protocol/source_id 与各自协议状态"] },
+  "KN-03": { tests: ["跨轨执行拒绝：A2A 来源误调 shopping 通道 → 守卫与能力不可得"], note: "适配层路由守卫 + 服务层 unavailable（CAPABILITY_UNAVAILABLE 语义）" },
+  "KN-04": { tests: ["手工移交准备：只产待批准文件包 origin=manual_quote；无订单/付款/锁库存"], note: "包形状固定（无动作字段）；数据面无 order/checkout 通道（KN-08 同承载）" },
+  "KN-05": { tests: ["内部记录不算外部受理：OWNER_RECORDED 之后无任何 TARGET_VERIFIED 通道"], note: "状态机单向；重复记录拒绝；无回执写入接口" },
+  "KN-06": { tests: ["伪造目标回执与摘要绑定：自答回执整体拒绝（fail-closed）"], note: "KN-06/07：回执验证入口 fail-closed；issuer/audience/handoff_id/packet_digest 绑定校验随目标回执通道（M6）实现" },
+  "KN-07": { tests: ["伪造目标回执与摘要绑定：自答回执整体拒绝（fail-closed）"], note: "同上；可信回执通道存在前整体拒绝，不存在「仅凭 200 OK 判定受理」路径" },
+  "KN-08": { tests: ["手工移交准备：只产待批准文件包 origin=manual_quote；无订单/付款/锁库存"], note: "rfq_ 表无 order/checkout/payment；目标适配器属 M6，实现时按 quote/sales_case/handoff_inbox 白名单加守卫" },
+  "KN-09": { tests: ["条件无损映射：包内嵌完整需求与报价投影（条款不丢）"], note: "锁定包内容无损基线；KNP 转换遇不可表达条款的拒绝语义随 M6 A2A 桥规格化" },
+  "KN-10": { tests: ["移交重放：同幂等键重放同一移交包，不重复登记"], note: "prepare 幂等重放安全；外部目标超时 UNKNOWN 标记与人工对账随 M6 外部执行通道" },
   // ---- 宿主与系统回归（宿主仿真；实机属 L2）----
   "HO-02": { tests: ["MCP 全流程 + 管理页批准下载 + 展示资源 + 重启独立性"], note: "宿主仿真：实例私有 MCP 直连全流程；真实客户端待 L2" },
   "HO-05": { tests: ["MCP 全流程 + 管理页批准下载 + 展示资源 + 重启独立性"], note: "展示资源 JSON+文本双 content；宿主无 Apps 时结构化文本可用" },
   "HO-08": { tests: ["MCP 全流程 + 管理页批准下载 + 展示资源 + 重启独立性"], note: "宿主仿真：进程重启后状态/候选/产物完整" },
   "HO-07": { tests: ["响应超限：有界投影 complete=false 显式省略"], note: "宿主仿真：超限字符串有界预览+complete=false；结构超界显式失败不返回部分数据；match 默认 20 条显式分页。真实客户端待 L2" },
-  "HO-09": { tests: ["pipeline:npm run verify（197 文件 2516 测试）"], note: "由 verify 流水线承载（lint/typecheck/build/test/contracts/vectors/harness/supply-chain/package/python-ref）；meta 测试校验锚点前缀" },
+  "HO-09": { tests: ["pipeline:npm run verify（199 文件 2538 测试）"], note: "由 verify 流水线承载（lint/typecheck/build/test/contracts/vectors/harness/supply-chain/package/python-ref）；meta 测试校验锚点前缀" },
 };
 
 export interface MatrixLoadResult {

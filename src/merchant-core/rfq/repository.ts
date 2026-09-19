@@ -850,8 +850,8 @@ export class RfqRepository {
       .prepare(
         `SELECT DISTINCT a.relative_path AS relative_path
            FROM rfq_artifacts a
-           JOIN rfq_releases r ON r.artifact_id = a.artifact_id AND r.merchant_id = a.merchant_id
-          WHERE r.merchant_id = ? AND r.status IN ('PENDING_APPROVAL', 'APPROVED', 'EXPORTED')`,
+           JOIN rfq_release_requests r ON r.artifact_id = a.artifact_id AND r.merchant_id = a.merchant_id
+          WHERE a.merchant_id = ? AND r.status IN ('PENDING_APPROVAL', 'APPROVED', 'EXPORTED')`,
       )
       .all(this.merchantId) as Array<{ relative_path: string }>;
     return rows.map((r) => r.relative_path);
@@ -863,12 +863,14 @@ export class RfqRepository {
    */
   deleteUnreferencedUnactivatedArtifacts(cutoffIso: string, referencedPaths: ReadonlySet<string>): number {
     const preserved = [...referencedPaths];
-    const placeholders = preserved.map(() => "?").join(", ");
+    const referencedClause =
+      preserved.length > 0
+        ? ` AND relative_path NOT IN (${preserved.map(() => "?").join(", ")})`
+        : "";
     const result = this.db
       .prepare(
         `DELETE FROM rfq_artifacts
-          WHERE merchant_id = ? AND activated = 0 AND created_at < ?
-            AND relative_path NOT IN (${placeholders})`,
+          WHERE merchant_id = ? AND activated = 0 AND created_at < ?${referencedClause}`,
       )
       .run(this.merchantId, cutoffIso, ...preserved);
     return Number(result.changes);
