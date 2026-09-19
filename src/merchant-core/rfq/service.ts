@@ -640,6 +640,17 @@ export class MerchantRfqService {
     for (const sel of cmd.selections) {
       const line = fields.lines.find((l) => l.line_id === sel.line_id);
       if (line === undefined) throw new RfqError("validation", `未知 line_id：${sel.line_id}`);
+      // 服务层入参校验（防御纵深；路由层同样把关）：空 SKU 不允许进入
+      // 「已确认」状态——否则会以空 SKU 通过 READY 门。
+      if (typeof sel.sku !== "string" || sel.sku.trim() === "") {
+        throw new RfqError("validation", `行 ${sel.line_id} 确认需要非空 SKU`);
+      }
+      if (sel.quantity !== undefined && (!Number.isSafeInteger(sel.quantity) || sel.quantity < 1 || sel.quantity > 100_000)) {
+        throw new RfqError("validation", `行 ${sel.line_id} 数量必须是 1..100000 的整数`);
+      }
+      if (sel.unit !== undefined && (typeof sel.unit !== "string" || sel.unit.trim() === "")) {
+        throw new RfqError("validation", `行 ${sel.line_id} 单位必须是非空字符串`);
+      }
       line.sku = sel.sku;
       if (sel.quantity !== undefined) line.quantity = sel.quantity;
       if (sel.unit !== undefined) line.unit = sel.unit;
@@ -738,6 +749,7 @@ export class MerchantRfqService {
           skus,
           snapshotId,
           nowIso: this.deps.now(),
+          ...(this.deps.freshnessSeconds !== undefined ? { freshness: this.deps.freshnessSeconds } : {}),
         });
         this.repo().saveSnapshot({
           snapshotId,
@@ -850,6 +862,9 @@ export class MerchantRfqService {
         discount_minor: 0,
         tax_basis: revision.fields.terms.tax_basis as "EXCLUSIVE" | "INCLUSIVE",
         tax_rate_bps: revision.fields.terms.tax_rate_bps as number,
+        // 字段证据来源（pricing-input.schema.json 必填）：行级证据缺省回溯
+        // 到需求 revision 的来源清单（不为空，满足 minItems 1）。
+        evidence_source_ids: line.evidence_source_ids.length > 0 ? line.evidence_source_ids : [...revision.source_ids],
       };
     });
     const pricingInput: PricingInput = {
@@ -861,12 +876,14 @@ export class MerchantRfqService {
         amount_minor: revision.fields.terms.shipping_minor as number,
         tax_basis: revision.fields.terms.tax_basis as "EXCLUSIVE" | "INCLUSIVE",
         tax_rate_bps: revision.fields.terms.tax_rate_bps as number,
+        evidence_source_ids: [...revision.source_ids],
       },
     };
     const output = calculatePricing(pricingInput);
     // 硬策略（含底价兜底；拒绝只返回理由码）。报价有效期缺省 7 天（模型
-    // 不可改变有效期——工具面不暴露该参数；调整走策略配置，§13.1）。
-    const validUntil = new Date(Date.parse(this.deps.now()) + 7 * 86_400_000).toISOString();
+    // 不可改变有效期——工具面不暴露该参数；调整走部署配置/策略，§13.1）。
+    const validityDays = this.deps.quoteValidityDays ?? 7;
+    const validUntil = new Date(Date.parse(this.deps.now()) + validityDays * 86_400_000).toISOString();
     const policyCtx: RfqPolicyContext = {
       merchantId: this.repo().merchantId,
       lines: pricingLines.map((l) => ({ sku: l.sku, quantity: l.quantity, unit: l.unit, unit_price_minor: l.unit_price_minor })),
@@ -1163,17 +1180,35 @@ export class MerchantRfqService {
     };
   }
 
-  /** 启动恢复同步：候选已死的发布标 SUPERSEDED（不冒充「外部操作已撤销」）。 */
+  /**
+   * 启动恢复同步（§9.5）：候选已死 **或报价已不在 PENDING_APPROVAL**（prepare
+   * 崩溃窗口：候选存活但 quote 停在 VALIDATED 等）的发布标 SUPERSEDED——
+   * 不冒充「外部操作已撤销」，只是让投影与业务状态一致。
+   */
   recoverReleases(): number {
     if (this.deps.candidateStatus === undefined) return 0;
     let recovered = 0;
     for (const release of this.repo().listReleasesByStatus("PENDING_APPROVAL")) {
       const status = this.deps.candidateStatus(release.candidate_id);
-      if (status === undefined || (status !== "pending_approval" && status !== "approved")) {
-        this.repo().transitionRelease(release.release_id, ["PENDING_APPROVAL"], "SUPERSEDED");
-        recovered += 1;
+      const candidateAlive = status === "pending_approval" || status === "approved";
+      if (candidateAlive) {
+        const quote = this.repo().getQuote(release.quote_id, release.quote_revision);
+        if (quote !== undefined && quote.status === "PENDING_APPROVAL") continue;
       }
+      this.repo().transitionRelease(release.release_id, ["PENDING_APPROVAL"], "SUPERSEDED");
+      recovered += 1;
     }
     return recovered;
+  }
+
+  /**
+   * 幂等记录保留清理（§10.3：30 天；prepare/移交准备类关键幂等跟随报价
+   * 保留策略，不清理）。启动维护时调用。
+   */
+  pruneExpiredIdempotency(): number {
+    return this.repo().pruneIdempotency({
+      olderThanDays: IDEMPOTENCY_RETENTION_DAYS,
+      preserveOperations: IDEMPOTENCY_PRESERVE_OPERATIONS,
+    });
   }
 }
