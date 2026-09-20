@@ -177,10 +177,10 @@ function readDeployDirFacts(deployDir) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const deployMode = options.deployDir !== undefined;
-  const entry = path.join(options.artifact, "dist", "cloud", "main.js");
+  const entry = path.join(options.artifact, "app", "cloud", "main.js");
   if (!existsSync(entry)) throw new Error(`制品入口不存在：${entry}`);
   const deployFacts = deployMode ? readDeployDirFacts(options.artifact) : undefined;
-  const buildManifestPath = path.join(options.artifact, "build-manifest.json");
+  const buildManifestPath = path.join(options.artifact, "artifact-manifest.json");
   const buildManifest = existsSync(buildManifestPath)
     ? JSON.parse(readFileSync(buildManifestPath, "utf8"))
     : undefined;
@@ -208,7 +208,7 @@ async function main() {
         KIWI_COMMERCE_URL: commerce.url,
       };
 
-  const child = spawn(process.execPath, ["dist/cloud/main.js"], {
+  const child = spawn(process.execPath, ["app/cloud/main.js"], {
     cwd: options.artifact, // 平台实测 cwd=/workspace（制品根）
     env: childEnv,
     stdio: ["ignore", "pipe", "pipe"],
@@ -267,7 +267,7 @@ async function main() {
       // 信封必须带合法 digest（KNP schema 要求）：用制品自带的实现计算，
       // 不手写摘要——冒烟脚本不该自己发明协议字段。
       const { finalizeEnvelope } = await import(
-        path.join(options.artifact, "dist", "negotiation", "domain", "envelope.js")
+        path.join(options.artifact, "app", "negotiation", "domain", "envelope.js")
       );
       // 每次运行用唯一 id：状态目录跨运行保留，固定 id 会撞上 KNP 相位/幂等
       // （第二次冒烟会因 state_conflict 被 decline——冒烟必须可重复）。

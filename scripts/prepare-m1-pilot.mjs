@@ -82,7 +82,7 @@ function sha256(file) {
 
 function main() {
   const options = parseArgs(process.argv.slice(2));
-  if (!existsSync(path.join(options.artifact, "dist", "cloud", "main.js"))) {
+  if (!existsSync(path.join(options.artifact, "app", "cloud", "main.js"))) {
     throw new Error(`制品不存在：${options.artifact}（先跑 scripts/build-cloud-artifact.mjs）`);
   }
   const remote = (relative) => `${options.remoteRoot.replace(/\/+$/, "")}/${relative}`;
@@ -191,7 +191,7 @@ function main() {
     { path: "pilot/merchant.yaml", local: profilePath },
     { path: "pilot/products.json", local: productsPath },
   ];
-  const buildManifestPath = path.join(options.out, "build-manifest.json");
+  const buildManifestPath = path.join(options.out, "artifact-manifest.json");
   const buildManifest = existsSync(buildManifestPath)
     ? JSON.parse(readFileSync(buildManifestPath, "utf8"))
     : undefined;

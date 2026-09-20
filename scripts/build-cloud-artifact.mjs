@@ -21,7 +21,9 @@
  *   node scripts/build-cloud-artifact.mjs [--out <dir>] [--skip-build] [--artifact-uri <https://…>]
  *
  * 产出目录（默认 build/cloud-artifact/）：
- *   dist/           编译产物（入口 dist/cloud/main.js）
+ *   app/            编译产物（入口 app/cloud/main.js）
+ *                   ——不叫 dist/：平台发布工具会把"build output"（dist 等）
+ *                   排除在上传之外，而本制品既是编译产物又是运行代码。
  *   contracts/      运行期读取的 JSON Schema（协议唯一权威源）
  *   node_modules/   仅生产依赖（不需要平台侧 npm install）
  *   package.json    制品自述（main/start 指向云端入口；无 devDependencies）
@@ -205,7 +207,7 @@ function parsePackageJson(file) {
 
 function collectReachablePackages(outDir) {
   const needed = new Set();
-  const distRoot = path.join(outDir, "dist");
+  const distRoot = path.join(outDir, "app");
   // 只从云端入口出发（不是整个 dist——否则所有文件都会被判"可达"）。
   const entry = path.join(distRoot, "cloud", "main.js");
   if (!existsSync(entry)) throw new Error(`入口不存在：${entry}`);
@@ -309,7 +311,9 @@ function main() {
   process.stdout.write(`[cloud-artifact] 组装 ${options.out} …\n`);
   rmSync(options.out, { recursive: true, force: true });
   mkdirSync(options.out, { recursive: true });
-  cpSync(distDir, path.join(options.out, "dist"), { recursive: true });
+  // 目录名用 app/ 而非 dist/：平台的发布工具排除 "build output"，src 编译产物
+  // 同时也是运行代码，被排除后沙箱里就没有可执行的入口（实测 MODULE_NOT_FOUND）。
+  cpSync(distDir, path.join(options.out, "app"), { recursive: true });
   cpSync(contractsDir, path.join(options.out, "contracts"), { recursive: true });
 
   // 制品 package.json：只声明生产依赖 + 云端入口；平台不需要 npm install。
@@ -320,7 +324,7 @@ function main() {
     private: true,
     type: "module",
     main: "index.js",
-    scripts: { start: "node dist/cloud/main.js" },
+    scripts: { start: "node index.js" },
     // engines 在依赖裁剪后由实际随包依赖决定（见 computeShippedEngines）。
     dependencies: rootPkg.dependencies,
   };
@@ -330,9 +334,9 @@ function main() {
   writeFileSync(
     path.join(options.out, "index.js"),
     [
-      "// 平台入口兜底：调用云端 Runtime 入口（真实实现见 dist/cloud/main.js）。",
+      "// 平台入口兜底：调用云端 Runtime 入口（真实实现见 app/cloud/main.js）。",
       '// 注意：不能只 import——main.js 有"直接执行才启动"的保护，import 不会启动。',
-      'import { runCloudMain } from "./dist/cloud/main.js";',
+      'import { runCloudMain } from "./app/cloud/main.js";',
       "",
       "const code = await runCloudMain();",
       "if (code !== 0) process.exit(code);",
@@ -404,7 +408,7 @@ function main() {
     source_commit: gitCommit(),
     built_at: new Date().toISOString(),
     node_version: process.versions.node,
-    entry: "dist/cloud/main.js",
+    entry: "app/cloud/main.js",
     artifact_sha256: artifactSha256,
     dependency_lock_sha256: dependencyLockDigest(options.out),
     file_count_excluding_node_modules: files.length,
@@ -415,8 +419,9 @@ function main() {
       "本文件是本机构建事实；平台安装/冷启动证据在 evidence/runs/<date>-M1/ 另记。",
     ],
   };
+  // 不叫 build-manifest：文件名同样避开 "build" 前缀，避免被发布工具过滤。
   writeFileSync(
-    path.join(options.out, "build-manifest.json"),
+    path.join(options.out, "artifact-manifest.json"),
     `${JSON.stringify(buildManifest, null, 2)}\n`,
   );
 
