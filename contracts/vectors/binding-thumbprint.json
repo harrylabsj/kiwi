@@ -1,0 +1,15 @@
+{
+  "$comment": "跨语言锁：kiwi(TS) 与 kiwi-catalog(Python) 必须对同一 JWK 得到同一 key_thumbprint，并对同一 payload/签名身份产出**逐字节相同**的 compact JWS（Ed25519 签名确定性）。",
+  "vector_version": 1,
+  "kid": "catalog-issuer-vector-2026",
+  "public_jwk": {
+    "kty": "OKP",
+    "crv": "Ed25519",
+    "x": "PKgLO3S6UFVpZqFxIGCpBJ0cCnYqObAZGFp2tycvaQs"
+  },
+  "private_key_pem": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIDWTJ9pQFSeRx3Abzp7CBJ5qAdUZN98/crUN1hMZI8mY\n-----END PRIVATE KEY-----\n",
+  "payload_string": "{\"schema_version\":\"0.1.2\",\"scope\":\"a2a-runtime\",\"agent_id\":\"cagt_vector_demo\"}",
+  "expected_thumbprint": "sha256:ba92f94fd89e682bae49416b83d9039eeb5ea9300992660a669f17d3a87b01a1",
+  "expected_jws": "eyJ0eXAiOiJraXdpLXJ1bnRpbWUtYmluZGluZy1jbGFpbXMiLCJhbGciOiJFZERTQSIsImtpZCI6ImNhdGFsb2ctaXNzdWVyLXZlY3Rvci0yMDI2In0.eyJzY2hlbWFfdmVyc2lvbiI6IjAuMS4yIiwic2NvcGUiOiJhMmEtcnVudGltZSIsImFnZW50X2lkIjoiY2FndF92ZWN0b3JfZGVtbyJ9.mdpZ1JCbUoEzhWQHEyEBvMvWIo7pAH0fiamS9jXpZKZsUsTOLlObxxL4rp4W_96oAJM83r2SB6Fv94I2RohVBg",
+  "canonical_jwk_json": "{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"PKgLO3S6UFVpZqFxIGCpBJ0cCnYqObAZGFp2tycvaQs\"}"
+}
