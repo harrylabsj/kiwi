@@ -152,6 +152,8 @@ export function signBindingChallenge(
 export interface VerifyChallengeOptions {
   /** 验收方时钟（可注入）。 */
   now?: () => Date;
+  /** 期望的签名 kid（可选；给出时强制比对——用于验收方有可信 kid 名单的场景）。 */
+  expectedKeyId?: string;
   /** 允许的算法（缺省仅 EdDSA；设计 §11.4 固定 Ed25519/EdDSA）。 */
   allowedAlg?: readonly string[];
 }
@@ -208,8 +210,9 @@ export function verifyBindingChallengeProof(input: {
   options?: VerifyChallengeOptions;
 }): VerifiedChallengeProof {
   const { challenge, proofJws, publicKey, store } = input;
-  const now = (input.options?.now ?? (() => new Date()))();
-  const allowedAlg = input.options?.allowedAlg ?? ["EdDSA"];
+  const options = input.options ?? {};
+  const now = (options.now ?? (() => new Date()))();
+  const allowedAlg = options.allowedAlg ?? ["EdDSA"];
 
   // 1) 公钥指纹必须与挑战一致（先钉死"是这把钥匙"，再验签）。
   const jwk: JsonWebKey =
@@ -254,9 +257,12 @@ export function verifyBindingChallengeProof(input: {
   if (payload.toString("utf8") !== challengeSubject(challenge)) {
     throw new BindingProofError("SUBJECT_MISMATCH", "证明内容与挑战主体不一致（受限结构校验失败）");
   }
-  if (keyid !== undefined && keyid !== challenge.agent_id && keyid !== challenge.key_thumbprint) {
-    // kid 只作为提示：不匹配时记录为可疑，但不覆盖指纹这一硬约束。
-    throw new BindingProofError("KID_MISMATCH", `证明 kid=${keyid} 与绑定身份不符`);
+  // kid 语义（§11.4「由可信 kid 选择验证公钥」）：本流程的公钥是**按指纹钉死**的
+  // （比按 kid 选择更强），因此 kid 只在验收方显式给出期望值时强制比对；
+  // 未给出时不做「kid 必须等于 agent_id/指纹」的推断——keyid 是不透明标签
+  // （云端实现里 keyid 是公网 origin），拿它当身份会误拒合法证明。
+  if (options.expectedKeyId !== undefined && keyid !== options.expectedKeyId) {
+    throw new BindingProofError("KID_MISMATCH", `证明 kid=${keyid} 期望 ${options.expectedKeyId}`);
   }
 
   // 5) 一次性消费（原子：同一挑战第二次成功核验必须失败）。

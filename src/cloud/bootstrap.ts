@@ -36,7 +36,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { createA2aNodeCore, createA2aAuthVerifier } from "../a2a/node.js";
-import { loadOrCreateA2aSigningIdentity } from "../a2a/signing-key.js";
+import { loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/signing-key.js";
 import { loadProfile, ProfileError } from "../config/profile.js";
 import {
   assembleMerchantRuntime,
@@ -55,6 +55,8 @@ import {
   loadCloudConfig,
   type CloudRuntimeConfig,
 } from "./config.js";
+import { createChallengeResponder } from "./binding/runtime-challenge.js";
+import type { BindingChallengeStore } from "./binding/proofs.js";
 import { createCloudRouter } from "./http-router.js";
 import { createFileProductSource, type CloudProductSourceHandle } from "./product-source.js";
 import { runReadiness, type ReadinessCheckResult, type ReadinessReport } from "./readiness.js";
@@ -66,6 +68,8 @@ export interface CloudBootstrapOptions {
   env?: Record<string, string | undefined>;
   artifactRoot?: string;
   log?: (line: string) => void;
+  /** 一次性挑战存储（缺省进程内；多实例/重启场景由调用方注入）。 */
+  challengeStore?: BindingChallengeStore;
 }
 
 export interface CloudInstance {
@@ -192,11 +196,12 @@ export async function bootstrapCloudRuntime(
   }
 
   // 3) A2A 核心：签名身份 + 入站认证（弱模式已在配置层拒绝）。
+  //
+  // Runtime 身份**始终**创建（M2 §6.3：Runtime 首次启动生成持久密钥，公钥摘要
+  // 绑定到开通意图）。即使入站认证用 bearer，绑定/挑战也需要这把持久密钥；
+  // 公钥随 Agent Card 公开（非秘密），私钥留在状态目录、不出进程。
   const signingKeyDir = config.dataDir;
-  const signingIdentity =
-    config.a2aAuth.mode === "signature"
-      ? loadOrCreateA2aSigningIdentity(signingKeyDir, config.publicOrigin)
-      : undefined;
+  const signingIdentity = loadOrCreateA2aSigningIdentity(signingKeyDir, config.publicOrigin);
   const bearerToken =
     config.a2aAuth.mode === "bearer"
       ? (options.env ?? process.env)[config.a2aAuth.tokenEnv]
@@ -273,6 +278,14 @@ export async function bootstrapCloudRuntime(
     merchantHandler: merchantHandler.handler,
     readiness,
     a2aPaths: [CLOUD_A2A_PATH],
+    // 绑定挑战应答（M2 §6.3）：只签发给本实例的受限结构挑战，一次性、有速率上限。
+    challengeHandler: createChallengeResponder({
+      signingIdentity: toJwsSigningIdentity(signingIdentity),
+      expectedMerchantId: profile.owner_id,
+      expectedAgentId: profile.agent_id,
+      currentGeneration: 1,
+      ...(options.challengeStore !== undefined ? { store: options.challengeStore } : {}),
+    }),
     version: PRODUCT_VERSION,
   });
   const server = createServer(router);

@@ -51,6 +51,29 @@ export interface BindingClaims {
   status: "active" | "revoked";
 }
 
+/**
+ * 契约冲突与规范化（**需 Catalog/需求方确认，暂以显式映射落地**）：
+ *
+ * `runtime-binding-claims.schema.json` 的 `agent_id` 模式是
+ * `^[A-Za-z][A-Za-z0-9_-]{2,95}$`——**不允许冒号**；而 Kiwi profile 的 agent_id
+ * 形如 `merchant-agent:<owner_id>`（见 examples/profiles/*.yaml）。
+ *
+ * 这里做**显式、可追溯**的规范化，而不是静默改身份：
+ *   - 非法字符（冒号等）→ `-`；长度按模式裁剪到 96；
+ *   - 归一结果与原始 agent_id **一并**进入绑定记录（`agent_id_raw`）与审计，
+ *     保证可回溯；
+ *   - 归一后仍不符合模式 → 抛错（绝不签发一个"看起来合法"的错身份）。
+ *
+ * 该映射是否被 Catalog/需求方接受，属 M3 前的契约确认项（已记入 M2 证据）。
+ */
+export function toBindingAgentId(agentId: string): string {
+  const normalized = agentId.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 96);
+  if (!ID_PATTERN.test(normalized)) {
+    throw new Error(`agent_id 归一后仍不符合绑定声明模式：${agentId} → ${normalized}`);
+  }
+  return normalized;
+}
+
 export type ClaimsValidation =
   | { ok: true; claims: BindingClaims }
   | { ok: false; errors: string[] };

@@ -204,9 +204,10 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
       expect(reserved.status).toBe(404);
       expect((await reserved.json()) as { error: string }).toMatchObject({ error: "reserved_path" });
 
-      // M2 才实现的绑定挑战：明确 501，不空实现。
+      // 绑定挑战（M2 已实装）：空 body / 结构不完整 → 400，绝不空实现。
       const challenge = await fetch(`${base}/control/challenge`, { method: "POST" });
-      expect(challenge.status).toBe(501);
+      expect(challenge.status).toBe(400);
+      expect((await challenge.json()) as { error?: string }).toMatchObject({ error: "invalid_challenge" });
     } finally {
       await instance.close();
     }

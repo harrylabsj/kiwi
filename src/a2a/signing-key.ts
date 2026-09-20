@@ -30,6 +30,8 @@ import { createPublicKey, generateKeyPairSync } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { HttpMessageSigner } from "../trust/identity/index.js";
+import type { JwsSigningIdentity } from "../trust/identity/jws.js";
+import { privateKeyObject } from "../trust/identity/keys.js";
 import type { KeyProfile, KeyResolver, SigningKey } from "../trust/identity/index.js";
 
 export const A2A_SIGNING_KEY_FILE = "a2a-signing-key.json";
@@ -43,6 +45,18 @@ export interface A2aSigningIdentity {
   publicKeyPem: string;
   /** Ed25519 raw 公钥（32B）。 */
   publicKeyRaw: Buffer;
+}
+
+/**
+ * 把 A2A 签名身份转成 JWS 签发身份（JWS 需要 KeyObject；PEM 只做一次转换）。
+ * 供绑定声明/挑战证明等 Kiwi 自有信任材料复用同一把持久密钥。
+ */
+export function toJwsSigningIdentity(identity: A2aSigningIdentity): JwsSigningIdentity {
+  return {
+    keyid: identity.keyid,
+    algorithm: identity.algorithm,
+    privateKey: privateKeyObject(identity.privateKeyPem),
+  };
 }
 
 /** 生成新的 Ed25519 签名身份（keyid = 调用方指定的稳定身份键）。 */
