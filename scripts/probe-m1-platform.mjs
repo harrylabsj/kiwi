@@ -177,8 +177,15 @@ async function main() {
     { body: reserved.text.slice(0, 300) },
   );
 
+  // 挑战端点：M1 时代是 501 占位；M2 起已实装（空 body → 400 invalid_challenge）。
+  // 该检查只断言"端点存在且不空实现"，两种语义都算通过（回归用）。
   const challenge = await timedFetch(`${origin}/control/challenge`, { method: "POST" });
-  record("challenge_not_implemented", challenge.status === 501, `status=${challenge.status} ${challenge.ms}ms`);
+  const challengeBody = jsonOr(challenge.text);
+  record(
+    "challenge_endpoint_present",
+    challenge.status === 501 || (challenge.status === 400 && challengeBody?.error === "invalid_challenge"),
+    `status=${challenge.status} error=${String(challengeBody?.error ?? "")} ${challenge.ms}ms`,
+  );
 
   // 5) 商家面（可达性；未登录应被会话门挡住或给登录页）
   const adminLogin = await timedFetch(`${origin}/admin/login`);
