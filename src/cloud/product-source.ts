@@ -248,6 +248,9 @@ export function createFileProductSource(options: FileProductSourceOptions): Clou
           currency: record.currency,
           title: record.title,
           ...(record.stock !== undefined ? { stock: record.stock } : {}),
+          // 把有效期一并交给 handler（纵深防御：source 已按有效期拒绝，handler
+          // 再按同一条款判定，避免"另一个商品源忘了判"的缺口）。
+          valid_until: record.valid_until,
         };
       },
     },

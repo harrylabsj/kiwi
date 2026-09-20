@@ -281,6 +281,59 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
     ).rejects.toBeInstanceOf(CloudStartupError);
   });
 
+  it("T043：A2A 侧身份不得调用商家管理与策略接口（会话门 + 无任何私密数据）", async () => {
+    const commerce = await startFakeCommerce(TEST_SKU);
+    const dataDir = tempDir("kiwi-cloud-admin-");
+    const profilePath = writeCloudProfile(dataDir, commerce);
+    trackEnv("KIWI_COMMERCE_URL", commerce);
+    const port = await freePort();
+    const instance = await bootstrapCloudRuntime({
+      env: cloudEnv({ port, dataDir, profilePath, sku: TEST_SKU }),
+      artifactRoot: "/workspace",
+      log: () => {},
+    });
+    try {
+      const base = `http://127.0.0.1:${port}`;
+      // 管理面：未持会话一律被会话门挡住（303 → 登录页），不返回任何业务数据。
+      for (const path of ["/admin/pending", "/merchant/api/policy", "/merchant/api/status", "/admin/rfq"]) {
+        const res = await fetch(`${base}${path}`, { redirect: "manual" });
+        expect([302, 303]).toContain(res.status);
+        const body = await res.text();
+        expect(body).not.toMatch(/price_floors|min_unit_price_private|amount_minor/);
+      }
+      // 提交审批同样需要会话（POST 亦被拒，不可能凭 A2A 身份批准任何写命令）。
+      const decision = await fetch(`${base}/admin/decision`, {
+        method: "POST",
+        redirect: "manual",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "command_id=x&decision=approve&confirmation=y",
+      });
+      expect([302, 303]).toContain(decision.status);
+      // A2A 面没有任何 approve 动作（KNP 词表内不存在审批动作）。
+      const a2a = await fetch(`${base}/a2a`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "A2A-Version": "1.0" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "t043",
+          method: "SendMessage",
+          params: {
+            message: {
+              role: "ROLE_USER",
+              parts: [{ data: { knp_envelope: { action: "approve", capability: "x" } }, mediaType: "application/json" }],
+              messageId: "msg_t043",
+            },
+          },
+        }),
+      });
+      const a2aBody = await a2a.text();
+      expect(a2aBody).not.toContain("agreement");
+      expect(a2aBody).not.toMatch(/amount_minor/);
+    } finally {
+      await instance.close();
+    }
+  });
+
   it("演示价回退开启的 profile → 拒绝启动", async () => {
     const dataDir = tempDir("kiwi-cloud-demo-");
     const profilePath = writeCloudProfile(dataDir, "http://127.0.0.1:1", {

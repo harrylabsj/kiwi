@@ -117,7 +117,15 @@ export interface MerchantHandlerOptions {
 export interface MerchantProductSource {
   getProduct(
     sku: string,
-  ): Promise<{ price: number; currency: string; title?: string; stock?: number; handoff_destination?: string }>;
+  ): Promise<{
+    price: number;
+    currency: string;
+    title?: string;
+    stock?: number;
+    handoff_destination?: string;
+    /** 数据有效期（ISO）：过期即不得自动报价（设计 §10.1「数据到期后停止自动报价」）。 */
+    valid_until?: string;
+  }>;
 }
 
 /**
@@ -373,7 +381,15 @@ export function createMerchantHandler(
   const PRICE_CACHE_TTL_MS = 10 * 60 * 1000;
   const priceBySku = new Map<
     string,
-    { priceMinor: number; currency: string; at: number; handoff_destination?: string; stock?: number; title?: string }
+    {
+      priceMinor: number;
+      currency: string;
+      at: number;
+      handoff_destination?: string;
+      stock?: number;
+      title?: string;
+      valid_until?: string;
+    }
   >();
 
   /** 从真实商品源解析 SKU 价目；源不可用/查不到时回退演示价并返回注记。 */
@@ -387,6 +403,7 @@ export function createMerchantHandler(
     handoff_destination?: string;
     stock?: number;
     title?: string;
+    valid_until?: string;
   }> => {
     const cached = priceBySku.get(sku);
     // force=true（成交前重验，T047）绕过缓存：许可有效性必须按**当前**商品事实
@@ -417,6 +434,7 @@ export function createMerchantHandler(
             : {}),
           ...(product.stock !== undefined ? { stock: product.stock } : {}),
           ...(product.title !== undefined ? { title: product.title } : {}),
+          ...(product.valid_until !== undefined ? { valid_until: product.valid_until } : {}),
         };
         priceBySku.set(sku, resolved);
         return resolved;
@@ -631,6 +649,21 @@ export function createMerchantHandler(
         return applyDiscountPercentMinor(listMinor, pct);
       };
 
+
+      /**
+       * 商品事实闸门（T046）：数据过期或数量超过可得库存 → 明确不可报价。
+       * 设计 §10.1：「数据到期后停止相关自动报价或注明需人工确认，不把库存未知
+       * 说成有货」。**不在这里做任何兜底定价**（演示价已在配置层被云端拒绝）。
+       */
+      const factsUnusable = (facts: { valid_until?: string; stock?: number }, quantity: number): boolean => {
+        if (facts.valid_until !== undefined) {
+          const until = Date.parse(facts.valid_until);
+          if (!Number.isFinite(until) || until < Date.parse(now())) return true;
+        }
+        if (facts.stock !== undefined && quantity > facts.stock) return true;
+        return false;
+      };
+
       switch (envelope.action) {
         case "inquiry": {
           // 入站消息由 A2A pipeline 统一落 message_received（§22）；这里不再
@@ -653,6 +686,7 @@ export function createMerchantHandler(
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
+          if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           // 确定性：offer = list 价（公开价）。list < floor 是配置矛盾——此时
           // 用 floor 兜底会把私有底价直接报给买家（T045 泄露面），因此拒绝自动报价。
           if (priceMinor < floorMinor) return declineReply("approval_required");
@@ -693,6 +727,7 @@ export function createMerchantHandler(
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
+          if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           // 确定性：counter = list 价（公开价）；list < floor 时拒绝自动报价
           // （用 floor 兜底＝把底价报给买家）。
           if (priceMinor < floorMinor) return declineReply("approval_required");
@@ -735,6 +770,7 @@ export function createMerchantHandler(
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
+          if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           // 确定性（无 LLM）：买家还价只在**公开折扣边界**内响应——
           // 边界 = list×(1-max_auto_discount_percent)，是公开策略值；
           // 高于 list 压到 list，低于公开边界抬到公开边界。
