@@ -320,6 +320,83 @@ describe("云端名片解析（公开读 + 声明验签）", () => {
     expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("catalog:contract_violation");
   });
 
+  it.each([
+    ["私网 IPv4", "https://10.0.0.5/a2a"],
+    ["loopback", "https://127.0.0.1/a2a"],
+    ["cloud metadata", "https://169.254.169.254/latest/meta-data"],
+    ["IPv6 loopback", "https://[::1]/a2a"],
+    ["保留主机名", "https://metadata.google.internal/a2a"],
+  ])("T035：声明背书危险目标（%s）→ UNSAFE_TARGET", async (_label, endpoint) => {
+    // 声明侧也危险：注意 claims schema 本身只放行 https、无 userinfo，所以
+    // http / 内嵌凭据这两种形态只能在**名片**侧表达（见下一个用例）。
+    const { source: cloud } = source({
+      cardBody: card({
+        supportedInterfaces: [
+          { url: endpoint, protocolBinding: "JSONRPC", protocolVersion: "1.0" },
+        ],
+      }),
+      bindingBody: bindingDocument({ claims: claims({ a2aEndpoint: endpoint }) }),
+    });
+    expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("UNSAFE_TARGET");
+  });
+
+  it("T035：名片声明的非 https 接口 → UNSAFE_TARGET（即使声明没指向它）", async () => {
+    const { source: cloud } = source({
+      cardBody: card({
+        supportedInterfaces: [
+          { url: A2A_ENDPOINT, protocolBinding: "JSONRPC", protocolVersion: "1.0" },
+          { url: "http://merchant.example/a2a", protocolBinding: "JSONRPC", protocolVersion: "1.0" },
+        ],
+      }),
+    });
+    expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("UNSAFE_TARGET");
+  });
+
+  it("T035：名片声明的内嵌凭据接口 → 更早一层就被拒（名片结构校验，纵深防御）", async () => {
+    const { source: cloud } = source({
+      cardBody: card({
+        supportedInterfaces: [
+          { url: A2A_ENDPOINT, protocolBinding: "JSONRPC", protocolVersion: "1.0" },
+          {
+            url: "https://user:pass@merchant.example/a2a",
+            protocolBinding: "JSONRPC",
+            protocolVersion: "1.0",
+          },
+        ],
+      }),
+    });
+    // 名片结构校验本身就拒绝 userinfo；即使它能过，下面的 URL 策略也会拦。
+    expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toContain("AgentCardError");
+  });
+
+  it("T035：运行时 origin 指向私网也要拒（不能只在端点上设防）", async () => {
+    const { source: cloud } = source({
+      bindingBody: bindingDocument({
+        claims: claims({
+          runtimeOrigin: "https://192.168.1.10",
+          a2aEndpoint: A2A_ENDPOINT,
+        }),
+      }),
+    });
+    expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("UNSAFE_TARGET");
+  });
+
+  it("T035：名片里另有 metadata 接口（声明未指向它）也要拒——整张名片必须干净", async () => {
+    const { source: cloud } = source({
+      cardBody: card({
+        supportedInterfaces: [
+          { url: A2A_ENDPOINT, protocolBinding: "JSONRPC", protocolVersion: "1.0" },
+          {
+            url: "https://169.254.169.254/a2a",
+            protocolBinding: "JSONRPC",
+            protocolVersion: "1.0",
+          },
+        ],
+      }),
+    });
+    expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("UNSAFE_TARGET");
+  });
+
   it("对端试图重定向 → 拒绝跟随（不把凭据/请求转发给第三方）", async () => {
     const { source: cloud } = source({ cardStatus: 302, cardBody: {} });
     expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("catalog:request_failed");

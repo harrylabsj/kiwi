@@ -41,6 +41,7 @@
 import type { KeyObject } from "node:crypto";
 
 import { validateAgentCard } from "../agent-card/validate.js";
+import { assertSafeTargetUrl } from "../../a2a/client/url-policy.js";
 import type { AgentCard } from "../agent-card/types.js";
 import { CatalogSourceError } from "./errors.js";
 import { isRedirectResponse, readJsonBody, SafeHttpError } from "../../net/safe-http.js";
@@ -63,10 +64,14 @@ import type { SigningKey } from "../../trust/identity/keys.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-/** 声明被拒（签名/发行者/时间窗/与观测事实不符）。绝不吞掉、绝不降级为"部分可信"。 */
+/** 声明被拒（签名/发行者/时间窗/与观测事实不符/危险目标）。绝不降级为"部分可信"。 */
 export class BindingRejectionError extends CatalogSourceError {
   /** 拒绝码，供调用方分流处置（如 EXPIRED 可重取，BAD_SIGNATURE 应告警）。 */
-  readonly refusalCode: VerifyBindingRefusalCode | "ISSUER_MISMATCH" | "RESPONSE_INVALID";
+  readonly refusalCode:
+    | VerifyBindingRefusalCode
+    | "ISSUER_MISMATCH"
+    | "RESPONSE_INVALID"
+    | "UNSAFE_TARGET";
 
   constructor(refusalCode: BindingRejectionError["refusalCode"], message: string) {
     super("binding_rejected", message);
@@ -403,6 +408,24 @@ export class CloudCardSource {
         "ENDPOINT_MISMATCH",
         `声明背书端点 ${verifiedClaims.a2a_endpoint} 不在名片声明的 JSONRPC 接口内（${endpoints.join(", ")}）`,
       );
+    }
+
+    // 3b) T035：声明与名片声明的目标都必须是**公网可达的 https 目标**。
+    //     私网/metadata/loopback/内嵌凭据目标一律拒绝——"声明里写了就直接连"正是
+    //     SSRF 的入口。`allowLoopback` 显式关掉：这两份输入都来自不可信的对端。
+    for (const [label, value] of [
+      ["a2a_endpoint", verifiedClaims.a2a_endpoint],
+      ["runtime_origin", verifiedClaims.runtime_origin],
+      ...endpoints.map((url, index) => [`supportedInterfaces[${index}].url`, url] as const),
+    ] as ReadonlyArray<readonly [string, string]>) {
+      try {
+        assertSafeTargetUrl(value, { allowLoopback: false });
+      } catch (err) {
+        throw new BindingRejectionError(
+          "UNSAFE_TARGET",
+          `${label} 不是可安全连接的目标（${value}）：${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     // 4) 外壳报告的发行者必须与 JWS 头里的 kid 一致（选钥匙的是 JWS 头，不是外壳；
