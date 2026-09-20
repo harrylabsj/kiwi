@@ -150,8 +150,10 @@ describe("T048：超范围交易（下单/付款/锁库存）不执行", () => {
         proposed_terms: { items: [{ sku: "SKU-001", quantity: { value: 200 }, unit_price: { amount_minor: 84000 } }] },
       }),
     );
+    expect(counter.kind).toBe("accepted");
+    const counterMessage = counter.kind === "accepted" ? counter.message : undefined;
     const payload = (
-      counter.message?.parts[0] as unknown as { data?: { knp_envelope?: { payload?: Record<string, unknown> } } }
+      counterMessage?.parts[0] as unknown as { data?: { knp_envelope?: { payload?: Record<string, unknown> } } }
     ).data?.knp_envelope?.payload;
     const { evaluateConditionalOffer } = await import("../src/negotiation/condition/evaluator.js");
     const { contentDigest } = await import("../src/negotiation/jcs.js");
