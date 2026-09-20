@@ -75,53 +75,19 @@ import {
   DEFAULT_MERCHANT_MCP_PORT,
   startMerchantMcpServer,
 } from "./mcp/merchant-server.js";
-import {
-  assertMerchantMcpAuthPolicy,
-  CompositeMerchantMcpVerifier,
-  PairedCredentialVerifier,
-  resolveMerchantMcpVerifier,
-} from "./mcp/merchant-auth.js";
-import type { MerchantMcpAuthVerifier } from "./mcp/merchant-auth.js";
 import { resolveMerchantMcpDirs } from "./mcp/merchant-dirs.js";
-import { MerchantOAuthServer, MerchantOAuthStore } from "./auth/merchant-oauth.js";
-import { MerchantOAuthVerifier } from "./auth/merchant-authorization.js";
-import { isLoopbackHost } from "./a2a/client/url-policy.js";
+import { MerchantPolicyRuntime } from "./merchant-core/policy-runtime.js";
+import { writeAdminCredentials } from "./auth/merchant-sessions.js";
+import { createPairingCode, revokePairedCredential } from "./auth/merchant-pairing.js";
+import {
+  assembleMerchantRuntime,
+  type MerchantRuntimeAssembly,
+} from "./mcp/merchant-runtime-assembly.js";
 import { MerchantRuntimeManager } from "./merchant-runtime/manager.js";
 import { buildRuntimeServiceSpecs } from "./merchant-runtime/services.js";
 import { collectMerchantHealth } from "./merchant-runtime/health.js";
 import { MerchantJobs, standardMerchantJobs } from "./merchant-runtime/jobs.js";
 import { runBackup } from "./merchant-runtime/backup.js";
-import { MerchantCoreService } from "./merchant-core/service.js";
-import { MerchantPolicyRuntime } from "./merchant-core/policy-runtime.js";
-import { buildMerchantPresentationResources } from "./mcp/merchant-resources.js";
-import { merchantAdminSurface } from "./merchant-admin/pending-page.js";
-import { rfqAdminSurface } from "./merchant-admin/rfq-page.js";
-import { buildRfqMcpTools } from "./mcp/merchant-rfq-tools.js";
-import { buildRfqPresentationResources } from "./mcp/merchant-rfq-resources.js";
-import {
-  MerchantRfqService,
-} from "./merchant-core/rfq/service.js";
-import { RfqRepository } from "./merchant-core/rfq/repository.js";
-import { RfqArtifactStore, ensureArtifactRoot } from "./merchant-core/rfq/artifacts.js";
-import { RfqReleaseCoordinator } from "./merchant-core/rfq/release-coordinator.js";
-import { rfqPolicyConfigFromMerchantPolicy } from "./merchant-core/rfq/policy.js";
-import { MerchantClientCommerceDataSource } from "./merchant-core/rfq/data-source-adapter.js";
-import { MerchantAdminSessions, writeAdminCredentials } from "./auth/merchant-sessions.js";
-import { createPairingCode, revokePairedCredential } from "./auth/merchant-pairing.js";
-import { MerchantOperationStore } from "./merchant-core/operations.js";
-import { createHash } from "node:crypto";
-
-/** 读能力探测落盘记录的 listing_pause（F08 接线；记录缺失/损坏 → undefined 不判定）。 */
-function probeCapabilitiesListingPause(dataDir: string): boolean | undefined {
-  try {
-    const probe = JSON.parse(readFileSync(path.join(dataDir, "capability-probe.json"), "utf8")) as {
-      capabilities?: { listing_pause?: boolean };
-    };
-    return probe.capabilities?.listing_pause;
-  } catch {
-    return undefined;
-  }
-}
 
 function readRegistrationStatus(dataDir: string): { ok: boolean; error?: string } | undefined {
   try {
@@ -153,16 +119,10 @@ function countPendingMerchantCommands(dataDir: string): number | undefined {
     return undefined;
   }
 }
-import { agentDirName, DEFAULT_AGENTS_ROOT, ensurePathsForDir, openAgentDatabase } from "./agent/agent-db.js";
+import { agentDirName, DEFAULT_AGENTS_ROOT } from "./agent/agent-db.js";
 import { writeFileAtomic } from "./fs/atomic-write.js";
-import { WriteApprovalCandidateStore } from "./agent/merchant/action-candidate.js";
 import { ProfileCredentialBroker } from "./agent/merchant/credential-broker.js";
-import { FakeMerchantClient, fakeMerchantProduct } from "./agent/merchant/fake-merchant-client.js";
 import { HttpMerchantClient } from "./agent/merchant/merchant-client.js";
-import type { MerchantClient } from "./agent/merchant/types.js";
-import { DefaultMerchantIntelligenceBackend } from "./agent/merchant/intelligence/default-backend.js";
-import { MemoryStore } from "./agent/memory/store.js";
-import { PrivateVault } from "./agent/memory/vault.js";
 import { runDown, runStatus, runUp, SupervisorError } from "./supervisor/manage.js";
 import { parseLogLines, runLogs } from "./supervisor/logs.js";
 import { StackConfigError } from "./supervisor/stack-config.js";
@@ -1536,359 +1496,32 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
     agentId: profile.agent_id,
   });
 
-  // 认证模式（V2）：oauth = 自建 OAuth 2.1 授权服务器（正式）；
-  // token = V1 静态 Bearer（过渡）。fail-closed 判定见下。
-  let oauth: MerchantOAuthServer | undefined;
-  let oauthDb: DatabaseSync | undefined;
-  let oauthStore: MerchantOAuthStore | undefined;
-  let verifier: MerchantMcpAuthVerifier | undefined;
-  // 会话与一次性确认凭证的存储**与认证模式无关**：写操作确认页（/admin/*）
-  // 在两种模式下都挂载——网关路由形态要求实例接受静态内部令牌（token 模式），
-  // 而商家仍必须能批准写候选，否则 prepare_* 只能等到期。
-  {
-    // 数据目录可能尚未创建（例如从未跑过 admin-passwd）：先建 0700，再预建库文件。
-    mkdirSync(dirs.merchantDataDir, { recursive: true, mode: 0o700 });
-    const oauthDbPath = path.join(dirs.merchantDataDir, "oauth.sqlite");
-    // 审查 P2：先以 0600 预建空文件再打开，消除「库已建、chmod 未执行」的
-    // 短暂默认权限窗口。
-    if (!existsSync(oauthDbPath)) {
-      writeFileSync(oauthDbPath, "", { mode: 0o600 });
-    }
-    oauthDb = new DatabaseSync(oauthDbPath);
-    chmodSync(oauthDbPath, 0o600);
-    oauthStore = new MerchantOAuthStore({ db: oauthDb });
-  }
-  if (authMode === "oauth") {
-    // issuer：public_url（生产 https）优先；loopback 开发推导为 http://127.0.0.1:<port>。
-    const issuer =
-      mcpConfig?.public_url ?? (isLoopbackHost(host) ? `http://127.0.0.1:${port}` : undefined);
-    if (issuer === undefined) {
-      process.stderr.write(
-        "merchant_mcp.auth_mode=oauth 且监听非 loopback 地址时必须配置 merchant_mcp.public_url（https）作为 OAuth issuer\n",
-      );
-      return EXIT.CONFIG;
-    }
-    // 授权码/token/客户端注册同样落 oauth.sqlite（上面已按 0600 打开）。
-    oauth = new MerchantOAuthServer({
-      store: oauthStore,
-      issuer,
-      resource: `${issuer}${mcpPath}`,
-      connectorSource: "kiwi-merchant",
-      merchantName: profile.name ?? profile.owner_id,
-      merchantId: profile.owner_id,
-    });
-    verifier = new MerchantOAuthVerifier({
-      store: oauthStore,
-      expectedMerchantId: profile.owner_id,
-    });
-  } else {
-    verifier = resolveMerchantMcpVerifier(mcpConfig?.token_env);
-    // token 模式（含网关路由形态：实例只接受网关的静态内部令牌）下，写操作
-    // 确认页同样挂载，商家在 /admin/pending 批准候选。
-    process.stderr.write(
-      "ℹ️ [kiwi] merchant_mcp.auth_mode=token：/mcp 使用静态内部令牌认证" +
-        "（网关路由形态的推荐配置）；写操作确认页仍挂载在 /admin/*，\n" +
-        "  需先 `kiwi merchant mcp admin-passwd` 设置管理员口令。\n",
-    );
-  }
-  let authWarning: string | undefined;
+  let assembly: MerchantRuntimeAssembly;
   try {
-    // 策略按**静态 / OAuth** 校验器判定：组合校验器恒存在，若拿它判定会让
-    // 「非 loopback 且未配置任何凭据」的实例误判为已受保护而启动。
-    authWarning = assertMerchantMcpAuthPolicy(host, verifier);
+    assembly = await assembleMerchantRuntime({
+      profile,
+      dataDir: dirs.merchantDataDir,
+      host,
+      port,
+      mcpPath,
+      authMode,
+      ...(mcpConfig?.public_url !== undefined ? { issuer: mcpConfig.public_url } : {}),
+      ...(mcpConfig?.token_env !== undefined ? { tokenEnv: mcpConfig.token_env } : {}),
+    });
   } catch (err) {
+    // 装配失败（认证策略/上游协议/issuer 等）→ 拒绝启动，不回退弱配置。
     process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
     return EXIT.CONFIG;
   }
-  if (authWarning !== undefined) process.stderr.write(`${authWarning}\n`);
-
-  // 配对凭据（§8.4 第二期，最小授权）：由本实例签发、网关持有；与静态令牌
-  // 并存，任一通过即放行。商家重配对即轮换，`unpair` 即吊销。
-  verifier = new CompositeMerchantMcpVerifier([
-    ...(verifier !== undefined ? [verifier] : []),
-    new PairedCredentialVerifier(dirs.merchantDataDir),
-  ]);
-
-  // 依赖装配与 chat kernel 同一套：agent data dir + state.sqlite + 审批候选 store。
-  // 审批候选与对话内核共享同一 DB——MCP 生成的 draft 候选在内核侧 /pending 可见。
-  const paths = ensurePathsForDir(dirs.merchantDataDir);
-  const db = openAgentDatabase(paths.db);
-  const now = () => new Date().toISOString();
-  const store = new MemoryStore({ db, vault: new PrivateVault(), now });
-  const principal = store.ensurePrincipal({
-    principal_id: profile.agent_id,
-    owner_id: profile.owner_id,
-    role: profile.role,
-  });
-  store.bindPrincipal(principal.principal_id);
-  const approvals = new WriteApprovalCandidateStore({
-    db,
-    principalId: principal.principal_id,
-    now,
-  });
-  // 执行钩子是进程级的：重启后遗留的 pending 候选无法被本进程执行。按
-  // expireForRecovery 语义把非本服务可恢复的候选先失效（防虚报死候选）；
-  // draft_product_change 候选的参数在库内、钩子可确定性重建，留给
-  // service.recoverPendingDrafts() 恢复（阶段四审批闭环）。
-  for (const candidate of approvals.listPending()) {
-    if (candidate.tool !== "draft_product_change")
-      approvals.expireCandidate(candidate.candidate_id);
-  }
-
-  // merchantClient：fake provider 走离线 Fake，否则真实网关（同 kernel-builder）。
-  let merchantClient: MerchantClient;
-  if (isFakeProvider(profile)) {
-    merchantClient = new FakeMerchantClient({ products: [fakeMerchantProduct()] });
-  } else {
-    const broker = new ProfileCredentialBroker(profile);
-    const httpClient = new HttpMerchantClient(profile.commerce.base_url, broker);
-    merchantClient = httpClient;
-    // 能力探测（V2 阶段一/P0-5；协议协商升级）：结果落盘供版本组合锁定。
-    // verdict=incompatible（网关通告不含 Kiwi 需要的协议版本）→ 硬拒绝启动；
-    // indeterminate/unhealthy（不可达/协商不可用且不可判定/健康未过）→ 警示
-    // 但不阻塞（网关可能仍在启动，报价路径本身 fail-closed，不产生报价）。
-    const probe = await httpClient.probeCapabilities({
-      persistPath: path.join(dirs.merchantDataDir, "capability-probe.json"),
-    });
-    if (probe.verdict === "incompatible") {
-      process.stderr.write(
-        `[kiwi] shopping-cli 协议不兼容，拒绝启动：${probe.error ?? "未知原因"}。\n` +
-          "升级或更换 shopping-cli 网关（需支持 shopping.negotiation/0.1）后重试。\n",
-      );
-      return EXIT.CONFIG;
-    }
-    if (!probe.ok) {
-      process.stderr.write(
-        `⚠️ [kiwi] shopping-cli 能力探测未通过：${probe.error ?? "未知原因"}；` +
-          "相关读取/报价在上游恢复前 fail-closed。\n",
-      );
-    }
-  }
-  const intelligence =
-    profile.merchant_experience?.enabled === true &&
-    profile.merchant_experience.intelligence !== false
-      ? new DefaultMerchantIntelligenceBackend({
-          merchant_id: profile.owner_id,
-          data_dir: paths.dir,
-          // presentation context 的 principalId 用 owner_id（商家读取口径）——
-          // backend 的 principal 校验键与之对齐（MCP 服务侧统一 owner 口径）。
-          principal_id: profile.owner_id,
-          merchant_client: merchantClient,
-          approvals,
-          now,
-        })
-      : undefined;
-  // BUG-07：运行中策略提供器（覆盖层 <merchantDataDir>/policy-overrides.json）。
-  // 本进程（MCP）为写端：校验 patch + 原子写完整生效策略；A2A 子进程为读端：
-  // 按文件 mtime 读取——策略变更跨进程立即生效，不再只落盘不生效。
-  const policyRuntime = new MerchantPolicyRuntime({
-    basePolicy: profile.merchant_policy,
-    file: path.join(dirs.merchantDataDir, "policy-overrides.json"),
-    now,
-  });
-  // 共享业务入口（V2 阶段二）：merchant-core 包装 V1 facade（facade 语义不变），
-  // MCP 工具层经 core 调用；私密读取审计目录落 merchantDataDir/private-audit。
-  // ---- 询报价工作台（设计 v0.1.1 §17.2：rfq_core 缺省开；rfq_release 缺省关）----
-  const rfqEnabled = process.env.KIWI_RFQ_ENABLED !== "0";
-  const rfqReleaseEnabled = process.env.KIWI_RFQ_RELEASE === "1";
-  const rfqPriceUnitRaw = process.env.KIWI_RFQ_PRICE_UNIT;
-  const rfqPriceUnit =
-    rfqPriceUnitRaw === "minor" || rfqPriceUnitRaw === "yuan" ? rfqPriceUnitRaw : undefined;
-  const rfqStack = (() => {
-    if (!rfqEnabled) return undefined;
-    ensureArtifactRoot(dirs.merchantDataDir);
-    const rfqRepo = new RfqRepository({ db, merchantId: profile.owner_id, now });
-    const rfqArtifacts = new RfqArtifactStore({ root: dirs.merchantDataDir, now });
-    const rfqPolicyVersion = (): string => {
-      const running = policyRuntime.current();
-      return `policy-${running.version}-${running.digest.slice(0, 12)}`;
-    };
-    const rfqCoordinator = new RfqReleaseCoordinator({
-      repo: rfqRepo,
-      artifacts: rfqArtifacts,
-      now,
-      // 策略版本 = 运行中生效策略的 digest（变化即报价/候选失效，§7.3）；
-      // 硬策略配置从运行中商家策略装配（元→分映射；映射不到的检查不启用）。
-      currentPolicy: () => ({
-        version: rfqPolicyVersion(),
-        config: rfqPolicyConfigFromMerchantPolicy(policyRuntime.current().policy),
-      }),
-    });
-    return {
-      executors: rfqCoordinator.buildExecutors(),
-      coordinator: rfqCoordinator,
-      service: new MerchantRfqService({
-        repo: rfqRepo,
-        dataSource: new MerchantClientCommerceDataSource({
-          client: merchantClient,
-          merchantId: profile.owner_id,
-          // 价格单位口径必须显式声明（不猜测元/分，§2.3/§21.2）。
-          ...(rfqPriceUnit !== undefined ? { priceUnit: rfqPriceUnit } : {}),
-        }),
-        artifacts: rfqArtifacts,
-        coordinator: rfqCoordinator,
-        now,
-        // 具名确认引用（服务端签发；模型自报确认不作数，§11.2）。
-        confirmationMinter: (input) =>
-          `cfm_${createHash("sha256")
-            .update(
-              [input.caseId, String(input.revision), input.lineId, input.sku, input.actor, now()].join(
-                "\u0000",
-              ),
-            )
-            .digest("hex")
-            .slice(0, 24)}`,
-        // 审批候选状态（恢复同步：候选已死的发布标 SUPERSEDED，§9.5）。
-        candidateStatus: (candidateId: string) => approvals.get(candidateId)?.status,
-        policyVersion: rfqPolicyVersion,
-        // 报价有效期跟随运行中策略 TTL（§13.1：调整走部署配置/策略）。与
-        // rfqPolicyConfigFromMerchantPolicy 的 max_valid_until_days 同用向下
-        // 取整到天（TTL < 86400s 时两侧同为 1 天），避免「策略 TTL 短于
-        // 缺省 7 天 → 计价必拒」的装配错配。
-        quoteValidityDays: () => {
-          const ttl = policyRuntime.current().policy?.quote_ttl_seconds;
-          return ttl !== undefined && ttl > 0 ? Math.max(1, Math.floor(ttl / 86_400)) : undefined;
-        },
-      }),
-    };
-  })();
-  const service = new MerchantCoreService({
-    profile,
-    merchantClient,
-    approvals,
-    // MCP 写工具一律 force_pending 只产候选，mode 不影响执行安全；固定 supervised。
-    mode: () => "supervised",
-    now,
-    // 商家 A2A 节点 ledger 基础目录（LedgerStore 会再拼 /ledger）。
-    a2aLedgerDir: path.join(paths.dir, "a2a"),
-    ...(intelligence !== undefined ? { intelligence } : {}),
-    auditDir: path.join(dirs.merchantDataDir, "private-audit"),
-    // 命令记录授权主体 = 审批 store principal（批准/拒绝主体一致性校验）。
-    commandPrincipalId: principal.principal_id,
-    // BUG-02：一次性确认凭证存储（OAuth 模式；execute/reject 必须携带有效凭证）。
-    ...(oauthStore !== undefined ? { confirmations: oauthStore } : {}),
-    // 长任务 operation store（与命令记录同一 state.sqlite，单 owner 写）。
-    operations: new MerchantOperationStore({ db, now }),
-    // F08 能力接线：能力探测落盘记录中 listing_pause=false 时 fail-closed「不可得」。
-    ...(probeCapabilitiesListingPause(dirs.merchantDataDir) !== undefined
-      ? { capabilities: { listing_pause: probeCapabilitiesListingPause(dirs.merchantDataDir) } }
-      : {}),
-    // F17/BUG-07 策略热更新：经 MerchantPolicyRuntime 校验 + 原子写完整生效
-    // 策略（版本/digest 回执进命令记录）；A2A 进程按同一文件 mtime 读取生效。
-    applyPolicyOverride: (patch) => policyRuntime.apply(patch),
-    // 运行中策略读取：执行器硬策略（底价兜底）按当前生效策略校验。
-    currentPolicy: () => policyRuntime.current().policy,
-    // 询报价子服务（v0.1.1 §11.1）：未配置时 rfq 工具面 fail-closed「不可得」。
-    ...(rfqStack !== undefined ? { rfq: { service: rfqStack.service, executors: rfqStack.executors } } : {}),
-  });
-  // 审批闭环（阶段三推广版）：恢复全部已注册写工具的 pending 命令（覆盖 V1
-  // recoverPendingDrafts 语义）；未注册工具的死候选标 expired。
-  const recovered = service.recoverPendingCommands();
-  // RFQ 恢复同步：候选已死的发布请求标 SUPERSEDED（不冒充外部已撤销）。
-  const rfqRecovered = rfqStack?.service.recoverReleases() ?? 0;
-  void rfqRecovered; // 数量仅在需要排障时打日志（避免正常启动噪音）。
-  // RFQ 幂等记录保留清理（§10.3：30 天；prepare/移交准备类跟随报价保留）。
-  const rfqPruned = rfqStack?.service.pruneExpiredIdempotency() ?? 0;
-  void rfqPruned; // 数量仅在需要排障时打日志（避免正常启动噪音）。
-  // 七类 presentation → MCP 资源（V2 阶段二；私密类不进资源）。
-  const presentations = buildMerchantPresentationResources({
-    context: {
-      profile,
-      // presentation 的 enrich 以 principalId 作为商家读取口径（目录/intelligence
-      // 都按 merchant_id 校验）——用 owner_id，不用进程 principal（agent_id）。
-      principalId: profile.owner_id,
-      merchantClient,
-      approvals,
-      ...(intelligence !== undefined ? { intelligence } : {}),
-    },
-  });
-  // 配对兑换：两种认证模式都挂载——凭据由本实例在兑换时新签，不依赖环境变量。
-  const handle = await startMerchantMcpServer({
-    service,
-    host,
-    port,
-    path: mcpPath,
-    pairing: {
-      dir: dirs.merchantDataDir,
-      instance: () => ({
-        ownerId: profile.owner_id,
-        principalId: profile.agent_id,
-      }),
-    },
-    ...(verifier !== undefined ? { auth: verifier } : {}),
-    ...(oauth !== undefined ? { oauth } : {}),
-    presentations,
-    // 配套商家确认页面（BUG-01/03）：cookie 会话 + 一次性确认凭证，两种认证
-    // 模式下都挂载（会话/凭证存 oauth.sqlite，与 OAuth 授权服务器同库不同表）。
-    ...(oauthDb !== undefined && oauthStore !== undefined
-      ? {
-          admin: {
-            merchantName: profile.name ?? profile.owner_id,
-            surface: merchantAdminSurface(service),
-            sessions: new MerchantAdminSessions({ db: oauthDb }),
-            store: oauthStore,
-            adminDir: dirs.merchantDataDir,
-            secureCookies: (mcpConfig?.public_url ?? "").startsWith("https://"),
-          },
-        }
-      : {}),
-    // 询报价工具面与管理页（v0.1.1 §11.2/§11.4；rfq_core 开时挂载）。
-    ...(rfqStack !== undefined
-      ? {
-          rfq: {
-            tools: buildRfqMcpTools({
-              rfq: rfqStack.service,
-              // 发布候选登记接缝：经 MerchantCommandLog（release_quote 风险语义）。
-              prepareReleaseCandidate: async (args) => {
-                const prepared = await service.commands.prepare({
-                  tool: "kiwi_merchant_prepare_quote_release",
-                  arguments: { release_id: args.releaseId },
-                });
-                return prepared.candidate.candidate_id;
-              },
-              prepareHandoffCandidate: async (args) => {
-                const prepared = await service.commands.prepare({
-                  tool: "kiwi_merchant_prepare_quote_handoff",
-                  arguments: {
-                    handoff_id: args.handoffId,
-                    packet_json: args.packetJson,
-                    packet_digest: args.packetDigest,
-                  },
-                });
-                return prepared.candidate.candidate_id;
-              },
-              // AuthContext 服务端工厂：单商家单主体实例的调用主体固定
-              // （与命令记录主体一致；不取模型参数，§11.1/§9.3）。
-              callContext: () => ({
-                principalId: principal.principal_id,
-                actor: principal.principal_id,
-                traceId: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              }),
-            }, { releaseEnabled: rfqReleaseEnabled }),
-            admin: rfqAdminSurface(service),
-            // MCP Apps 展示资源（ui://kiwi-rfq/*；宿主不支持时结构化文本降级）。
-            resources: buildRfqPresentationResources({
-              rfq: rfqStack.service,
-              callContext: () => ({
-                principalId: principal.principal_id,
-                actor: principal.principal_id,
-                traceId: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              }),
-            }),
-          },
-        }
-      : {}),
-    serverInfo: { name: "kiwi-merchant", version: PRODUCT_VERSION },
-  });
+  const handle = await startMerchantMcpServer(assembly.serverOptions);
   console.log(
     `[merchant mcp] merchant ${profile.agent_id} MCP server: ${handle.url}` +
-      `（auth: ${verifier?.name ?? "none（loopback-only）"}${authMode === "oauth" ? "，OAuth 端点已挂载" : ""}；kiwi_merchant_* 工具 + 展示资源）` +
-      (recovered.recovered > 0 ? `；恢复 ${recovered.recovered} 个待批准写命令` : ""),
+      `（auth: ${assembly.authLabel}${assembly.authMode === "oauth" ? "，OAuth 端点已挂载" : ""}；kiwi_merchant_* 工具 + 展示资源）` +
+      (assembly.recovered.recovered > 0 ? `；恢复 ${assembly.recovered.recovered} 个待批准写命令` : ""),
   );
   const shutdown = async (): Promise<void> => {
     await handle.close().catch(() => undefined);
-    oauthDb?.close();
-    db.close();
+    await assembly.close().catch(() => undefined);
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

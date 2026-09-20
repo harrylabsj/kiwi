@@ -183,6 +183,17 @@ export interface MerchantMcpServerHandle {
   close: () => Promise<void>;
 }
 
+/**
+ * 商家 HTTP 处理器句柄（不含监听）：供单端口组合使用（云端 §8.2 把商家面与
+ * A2A 面挂到同一端口），也可单独测试路由而不占端口。
+ */
+export interface MerchantHttpHandlerHandle {
+  /** node:http request listener：/mcp + /oauth/* + /pairing/* + /admin/*。 */
+  handler: (req: IncomingMessage, res: ServerResponse) => void;
+  /** 关闭活跃 MCP transport（不涉及 http server，server 归调用方）。 */
+  close: () => Promise<void>;
+}
+
 function writeJson(
   res: ServerResponse,
   status: number,
@@ -285,14 +296,14 @@ export function createProtocolServer(
 }
 
 /**
- * 启动 Merchant MCP Server（streamable HTTP，无状态）。
- * 返回 handle 含实际 host/port（port 传 0 时取 ephemeral 端口）与优雅关闭。
+ * 组装商家 HTTP 处理器（/mcp + /oauth/* + /pairing/* + /admin/*），**不绑定端口**。
+ *
+ * 云端单端口部署需要把这些路由与 A2A 路由挂到同一监听上（设计 §8.2），因此把
+ * 路由闭包从 `startMerchantMcpServer` 抽出共享；CLI 路径行为不变。
  */
-export async function startMerchantMcpServer(
+export function createMerchantHttpHandler(
   options: MerchantMcpServerOptions,
-): Promise<MerchantMcpServerHandle> {
-  const host = options.host ?? DEFAULT_MERCHANT_MCP_HOST;
-  const port = options.port ?? DEFAULT_MERCHANT_MCP_PORT;
+): MerchantHttpHandlerHandle {
   const mcpPath = options.path ?? DEFAULT_MERCHANT_MCP_PATH;
   const serverInfo = options.serverInfo ?? { name: "kiwi-merchant-workbench", version: "0.0.0" };
   const merchantTools = buildMerchantMcpTools(options.service, {
@@ -491,7 +502,7 @@ export async function startMerchantMcpServer(
     return false;
   };
 
-  const httpServer: HttpServer = createServer((req, res) => {
+  const handler = (req: IncomingMessage, res: ServerResponse): void => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (await routeOAuth(req, res, url)) return;
@@ -924,7 +935,33 @@ export async function startMerchantMcpServer(
       if (!res.headersSent) writeJson(res, 500, { error: "internal_error" });
       else res.end();
     });
-  });
+  };
+
+  return {
+    handler,
+    close: async () => {
+      if (closing) return;
+      closing = true;
+      for (const transport of transports) {
+        await transport.close().catch(() => undefined);
+      }
+      transports.clear();
+    },
+  };
+}
+
+/**
+ * 启动 Merchant MCP Server（streamable HTTP，无状态）。
+ * 返回 handle 含实际 host/port（port 传 0 时取 ephemeral 端口）与优雅关闭。
+ */
+export async function startMerchantMcpServer(
+  options: MerchantMcpServerOptions,
+): Promise<MerchantMcpServerHandle> {
+  const host = options.host ?? DEFAULT_MERCHANT_MCP_HOST;
+  const port = options.port ?? DEFAULT_MERCHANT_MCP_PORT;
+  const mcpPath = options.path ?? DEFAULT_MERCHANT_MCP_PATH;
+  const { handler, close: closeHandler } = createMerchantHttpHandler(options);
+  const httpServer: HttpServer = createServer(handler);
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once("error", reject);
@@ -939,12 +976,7 @@ export async function startMerchantMcpServer(
     path: mcpPath,
     url: `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${boundPort}${mcpPath}`,
     close: async () => {
-      if (closing) return;
-      closing = true;
-      for (const transport of transports) {
-        await transport.close().catch(() => undefined);
-      }
-      transports.clear();
+      await closeHandler();
       await new Promise<void>((resolve) => {
         httpServer.close(() => resolve());
         httpServer.closeAllConnections();

@@ -271,37 +271,77 @@ interface AuthFromEnvContext {
  *   放行**（无预共享密钥的开放互操作：任何 kiwi buyer 可与任何 kiwi merchant
  *   沟通；签名请求获更高信任）。
  */
+/**
+ * 构造入站认证验证器（审查 BUG-02 的显式形态）：自托管由 KIWI_A2A_AUTH 解析
+ * 后调用，云端入口直接按配置调用——两条路径共用同一实现，不建第二份。
+ *
+ * 模式：
+ * - ``loopback`` → LoopbackOnlyAuthVerifier（只信 socket 来源，仅自托管/反代边界）；
+ * - ``none`` → NoneAuthVerifier（显式可信网络/测试；云端配置层已拒绝）；
+ * - ``bearer`` → StaticBearerAuthVerifier（预共享令牌）；
+ * - ``signature`` → HTTP Message Signature（RFC 9421）：节点自持 Ed25519 密钥对，
+ *   验签方按 keyid→公钥 resolver；匿名请求按 T0 放行（开放互操作），签名请求
+ *   获更高信任。
+ */
+export function createA2aAuthVerifier(
+  options: A2aAuthVerifierOptions,
+): AuthVerifier {
+  if (options.mode === "loopback") return new LoopbackOnlyAuthVerifier();
+  if (options.mode === "none") return new NoneAuthVerifier();
+  if (options.mode === "bearer") {
+    const token = options.bearerToken ?? "";
+    if (token === "") throw new Error("bearer 模式需要非空令牌");
+    return new StaticBearerAuthVerifier(token);
+  }
+  const identity = loadOrCreateA2aSigningIdentity(options.signingKeyDir, options.signingKeyId);
+  // Issue 16 B：trusted-keys 注册表（<dataDir>/a2a-trusted-keys.json）——
+  // 运营者把可信对端（buyer）的公钥放进来，其签名请求即被验签并提升身份。
+  let trustedKeys: ReturnType<typeof loadA2aTrustedKeys> = [];
+  const trustedFile = path.join(options.signingKeyDir, "a2a-trusted-keys.json");
+  if (existsSync(trustedFile)) {
+    trustedKeys = loadA2aTrustedKeys(trustedFile);
+  }
+  const advertised = new URL(options.advertisedBase);
+  return new HttpMessageSignatureVerifier({
+    resolver: resolveA2aSignatureResolver(identity, trustedKeys),
+    scheme: advertised.protocol === "https:" ? "https" : "http",
+    expectedAuthority: advertised.hostname,
+    // 设计意图：匿名 T0 放行，签名请求更高信任——不阻塞任何 kiwi buyer。
+    anonymousTrustLevel: "T0",
+    anonymousIdentity: "anonymous",
+    // 审查 M2：此前未接 nonceStore——签名请求的 nonce 永不被校验，重放保护
+    // 失效（JWS/nonce 机制是死代码）。接入内存 nonce 存储后，T1+ 键可强制 nonce。
+    nonceStore: new InMemoryNonceStore(),
+  });
+}
+
+/** createA2aAuthVerifier 的显式入参（替代直接读环境变量的隐式形态）。 */
+export interface A2aAuthVerifierOptions {
+  mode: "loopback" | "none" | "bearer" | "signature";
+  /** bearer 模式的预共享令牌。 */
+  bearerToken?: string;
+  /** 签名密钥目录（持久 dataDir 或临时目录）。 */
+  signingKeyDir: string;
+  /** 签名 keyid（公网用 advertised origin，否则 role:agent_id）。 */
+  signingKeyId: string;
+  advertisedBase: string;
+}
+
 function authVerifierFromEnv(ctx: AuthFromEnvContext): AuthVerifier | undefined {
   const raw = (process.env.KIWI_A2A_AUTH ?? "").trim();
   if (raw === "") return undefined;
-  if (raw === "loopback") return new LoopbackOnlyAuthVerifier();
-  if (raw === "none") return new NoneAuthVerifier();
-  if (raw === "signature") {
-    const identity = loadOrCreateA2aSigningIdentity(ctx.signingKeyDir, ctx.signingKeyId);
-    // Issue 16 B：trusted-keys 注册表（<dataDir>/a2a-trusted-keys.json）——
-    // 运营者把可信对端（buyer）的公钥放进来，其签名请求即被验签并提升身份。
-    let trustedKeys: ReturnType<typeof loadA2aTrustedKeys> = [];
-    const trustedFile = path.join(ctx.signingKeyDir, "a2a-trusted-keys.json");
-    if (existsSync(trustedFile)) {
-      trustedKeys = loadA2aTrustedKeys(trustedFile);
-    }
-    const advertised = new URL(ctx.advertisedBase);
-    return new HttpMessageSignatureVerifier({
-      resolver: resolveA2aSignatureResolver(identity, trustedKeys),
-      scheme: advertised.protocol === "https:" ? "https" : "http",
-      expectedAuthority: advertised.hostname,
-      // 设计意图：匿名 T0 放行，签名请求更高信任——不阻塞任何 kiwi buyer。
-      anonymousTrustLevel: "T0",
-      anonymousIdentity: "anonymous",
-      // 审查 M2：此前未接 nonceStore——签名请求的 nonce 永不被校验，重放保护
-      // 失效（JWS/nonce 机制是死代码）。接入内存 nonce 存储后，T1+ 键可强制 nonce。
-      nonceStore: new InMemoryNonceStore(),
-    });
-  }
+  const shared = {
+    signingKeyDir: ctx.signingKeyDir,
+    signingKeyId: ctx.signingKeyId,
+    advertisedBase: ctx.advertisedBase,
+  };
+  if (raw === "loopback") return createA2aAuthVerifier({ mode: "loopback", ...shared });
+  if (raw === "none") return createA2aAuthVerifier({ mode: "none", ...shared });
+  if (raw === "signature") return createA2aAuthVerifier({ mode: "signature", ...shared });
   if (raw.startsWith("bearer:")) {
     const token = raw.slice("bearer:".length).trim();
     if (token === "") throw new Error("KIWI_A2A_AUTH=bearer:<token> 需要非空 token");
-    return new StaticBearerAuthVerifier(token);
+    return createA2aAuthVerifier({ mode: "bearer", bearerToken: token, ...shared });
   }
   throw new Error(
     `KIWI_A2A_AUTH 未知模式: ${raw}（可选 loopback | none | bearer:<token> | signature）`,
@@ -334,6 +374,180 @@ export function resolveA2aThrottle(raw = process.env.KIWI_A2A_THROTTLE ?? ""): T
 }
 
 /** 启动一个 A2A 节点（按 profile 角色）。 */
+export interface A2aNodeCoreOptions {
+  profile: AgentProfile;
+  /** 对外广告地址（决定 Card/UCP 内的 baseUrl）。 */
+  advertisedBase: string;
+  /** A2A 端点路径：自托管形态 "/"；云端单端口用 "/a2a"（设计 §8.2）。 */
+  a2aPath?: string;
+  /** 持久状态目录；缺省临时目录（demo/测试形态，close 时删除）。 */
+  dataDir?: string;
+  /** 入站认证验证器（公网广告地址必须提供，否则等价于无应用层认证）。 */
+  authVerifier?: AuthVerifier;
+  /** 签名身份（signature 形态：Card 内公开签名公钥）。 */
+  signingIdentity?: A2aSigningIdentity;
+  /** 反滥用限流（KIWI_A2A_THROTTLE 解析结果）。 */
+  throttle?: ThrottleOptions;
+  /** 运行中商家策略（缺省 profile.merchant_policy 静态值）。 */
+  merchantPolicy?: MerchantPolicy | (() => MerchantPolicy | undefined);
+  /**
+   * 商品源覆盖（缺省按 profile.commerce 构造 HTTP 商品源）。
+   * 云端可注入"商家上传商品表"式实现（设计 §10.1）。
+   */
+  productSource?: MerchantProductSource;
+}
+
+export interface A2aNodeCore {
+  server: A2AServer;
+  ledger: LedgerStore;
+  idempotency: IdempotencyStore;
+  /** 状态目录（持久形态 <dataDir>/a2a；临时形态为 mkdtemp 目录）。 */
+  dir: string;
+  /** 临时形态：close() 连同状态目录一并删除。 */
+  ephemeral: boolean;
+  /** 真实商品源（merchant 角色）：就绪检查与报价共用同一实例。 */
+  productSource?: MerchantProductSource;
+  /** 释放核心资源：统计库、owner 锁、临时目录（不涉及 http server）。 */
+  close: () => void;
+}
+
+/**
+ * 组装 A2A 核心（Ledger/幂等/merchant handler/Card 配置），**不监听端口**。
+ *
+ * 云端单端口入口（设计 §8.2）把 `server.handler()` 挂进共享路由；自托管
+ * `startA2aNode` 仍自己 listen。两条路径共用同一份装配，避免第二份漂移实现。
+ */
+export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
+  const profile = options.profile;
+  const role = profile.role;
+  const advertisedBase = options.advertisedBase;
+  const a2aPath = options.a2aPath ?? "/";
+  // 审查 BUG-03：持久形态（dataDir）——Ledger/幂等落 <dataDir>/a2a/，
+  // stop 不删除；临时形态（demo/测试）维持 mkdtemp + stop 删除。
+  const isEphemeral = options.dataDir === undefined;
+  const dir = isEphemeral
+    ? mkdtempSync(path.join(tmpdir(), "kiwi-a2a-node-"))
+    : (() => {
+        const stateDir = path.join(options.dataDir!, "a2a");
+        mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+        return stateDir;
+      })();
+  // 单 owner 协调（审查 BUG-03）：同一状态目录只允许一个节点实例——exclusive
+  // lock 文件 + PID；崩溃残留（PID 已死）自动接管，存活实例则启动失败。
+  let releaseOwnerLock: (() => void) | undefined;
+  if (!isEphemeral) {
+    const lockPath = path.join(dir, "owner.lock");
+    const stealIfStale = (): void => {
+      if (!existsSync(lockPath)) return;
+      const pidText = readFileSync(lockPath, "utf-8").trim();
+      const pid = Number(pidText);
+      if (Number.isInteger(pid) && pid > 0) {
+        try {
+          process.kill(pid, 0); // 存活 → 不接管
+          throw new Error(
+            `A2A 状态目录已被其他进程占用（pid ${pid}）：${dir}——请先停止该进程或换 --data-dir`,
+          );
+        } catch (err) {
+          if (err instanceof Error && err.message.startsWith("A2A 状态目录")) throw err;
+          // ESRCH：进程已死，残留锁可接管
+        }
+      }
+      unlinkSync(lockPath);
+    };
+    stealIfStale();
+    const fd = openSync(lockPath, "wx");
+    writeSync(fd, String(process.pid));
+    closeSync(fd);
+    releaseOwnerLock = (): void => {
+      try {
+        unlinkSync(lockPath);
+      } catch {
+        // 已不存在/无权限：忽略
+      }
+    };
+    process.once("exit", releaseOwnerLock);
+  }
+  const now = monotonicNow();
+  const ledger = new LedgerStore({ dir, now });
+  const idempotency = new IdempotencyStore({ dir, now });
+
+  // 商家运营统计（仅 merchant 角色）：买家触达落 <dataDir>/a2a/stats.sqlite，
+  // 只写本地、永不上报；供 `kiwi merchant stats` 读取。
+  const statsStore =
+    role === "merchant"
+      ? openMerchantStatsStore({ dbPath: path.join(dir, "stats.sqlite") })
+      : undefined;
+
+  // merchant 定价确定性（不依赖 LLM）：merchantPolicy 提供 per-SKU floor/促销。
+  // 商品源构造一次、经 core 暴露给就绪检查（同一实例，避免第二份读取路径）。
+  const productSource =
+    role === "merchant" ? (options.productSource ?? buildProductSource(profile)) : undefined;
+  const handler =
+    role === "merchant"
+      ? createMerchantHandler({
+          ledger,
+          now,
+          sender: profile.agent_id,
+          counterparty: "buyer:*",
+          productSource: productSource as MerchantProductSource,
+          allowDemoPriceFallback: profile.commerce.allow_demo_price_fallback ?? false,
+          // BUG-07：显式传入 provider（或静态值）时每次报价取运行中生效策略；
+          // 缺省仍是启动 profile 的静态策略。
+          merchantPolicy: options.merchantPolicy ?? profile.merchant_policy,
+        })
+      : defaultHandler();
+
+  const holder = { baseUrl: advertisedBase };
+  const server = new A2AServer({
+    // A2AServerOptions.card 是 AgentCardConfigProvider：返回 config，server 内部再 buildAgentCard。
+    // name 用干净显示名，不掺 agent_id（形如 agent:token，会被 card secret 扫描器判为 card_has_secret）。
+    card: () => ({
+      name: role === "merchant" ? "Kiwi A2A Merchant" : "Kiwi A2A Buyer",
+      description: "Kiwi A2A node",
+      providerOrganization: "Kiwi",
+      version: "1.0.0",
+      baseUrl: holder.baseUrl,
+      a2aPath,
+      // Issue 16 B：签名模式发布节点公开签名密钥（非 secret），对端据此验签。
+      ...(options.signingIdentity !== undefined
+        ? {
+            securityScheme: {
+              name: "kiwi-signature",
+              type: "kiwi-http-message-signature",
+              keyid: options.signingIdentity.keyid,
+              publicKeyPem: options.signingIdentity.publicKeyPem,
+              algorithm: options.signingIdentity.algorithm,
+            },
+          }
+        : {}),
+    }),
+    // 发布 UCP Profile（/.well-known/ucp）：注册广告了 ucp_profile_url，
+    // 端点就必须真实可拉——否则 catalog 验证的 profile 阶段拉 UCP 404 →
+    // freshness=unreachable → buyer 发现被 BLOCKED 列表挡掉。
+    ucp: true,
+    ledger,
+    idempotency,
+    handler,
+    now,
+    ...(options.authVerifier !== undefined ? { authVerifier: options.authVerifier } : {}),
+    ...(options.throttle !== undefined ? { throttle: options.throttle } : {}),
+    ...(statsStore !== undefined ? { stats: statsStore } : {}),
+  });
+  return {
+    server,
+    ledger,
+    idempotency,
+    dir,
+    ephemeral: isEphemeral,
+    ...(productSource !== undefined ? { productSource } : {}),
+    close: () => {
+      statsStore?.close();
+      releaseOwnerLock?.();
+      if (isEphemeral) rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
 export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHandle> {
   const { profile } = options;
   const role = profile.role;
@@ -393,117 +607,19 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
         `公网节点建议使用 KIWI_A2A_AUTH=bearer:<token> 或 HTTP Message Signature 验证器。\n`,
     );
   }
-  // 审查 BUG-03：持久形态（dataDir）——Ledger/幂等落 <dataDir>/a2a/，
-  // stop 不删除；临时形态（demo/测试）维持 mkdtemp + stop 删除。
-  const isEphemeral = options.dataDir === undefined;
-  const dir = isEphemeral
-    ? mkdtempSync(path.join(tmpdir(), "kiwi-a2a-node-"))
-    : (() => {
-        const stateDir = path.join(options.dataDir!, "a2a");
-        mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-        return stateDir;
-      })();
-  // 单 owner 协调（审查 BUG-03）：同一状态目录只允许一个节点实例——exclusive
-  // lock 文件 + PID；崩溃残留（PID 已死）自动接管，存活实例则启动失败。
-  let releaseOwnerLock: (() => void) | undefined;
-  if (!isEphemeral) {
-    const lockPath = path.join(dir, "owner.lock");
-    const stealIfStale = (): void => {
-      if (!existsSync(lockPath)) return;
-      const pidText = readFileSync(lockPath, "utf-8").trim();
-      const pid = Number(pidText);
-      if (Number.isInteger(pid) && pid > 0) {
-        try {
-          process.kill(pid, 0); // 存活 → 不接管
-          throw new Error(
-            `A2A 状态目录已被其他进程占用（pid ${pid}）：${dir}——请先停止该进程或换 --data-dir`,
-          );
-        } catch (err) {
-          if (err instanceof Error && err.message.startsWith("A2A 状态目录")) throw err;
-          // ESRCH：进程已死，残留锁可接管
-        }
-      }
-      unlinkSync(lockPath);
-    };
-    stealIfStale();
-    const fd = openSync(lockPath, "wx");
-    writeSync(fd, String(process.pid));
-    closeSync(fd);
-    releaseOwnerLock = (): void => {
-      try {
-        unlinkSync(lockPath);
-      } catch {
-        // 已不存在/无权限：忽略
-      }
-    };
-    process.once("exit", releaseOwnerLock);
-  }
-  const now = monotonicNow();
-  const ledger = new LedgerStore({ dir, now });
-  const idempotency = new IdempotencyStore({ dir, now });
-
-  // 商家运营统计（仅 merchant 角色）：买家触达落 <dataDir>/a2a/stats.sqlite，
-  // 只写本地、永不上报；供 `kiwi merchant stats` 读取。
-  const statsStore =
-    role === "merchant"
-      ? openMerchantStatsStore({ dbPath: path.join(dir, "stats.sqlite") })
-      : undefined;
-
-  // merchant 定价确定性（不依赖 LLM）：merchantPolicy 提供 per-SKU floor/促销。
-  const handler =
-    role === "merchant"
-      ? createMerchantHandler({
-          ledger,
-          now,
-          sender: profile.agent_id,
-          counterparty: "buyer:*",
-          productSource: buildProductSource(profile),
-          allowDemoPriceFallback: profile.commerce.allow_demo_price_fallback ?? false,
-          // BUG-07：显式传入 provider（或静态值）时每次报价取运行中生效策略；
-          // 缺省仍是启动 profile 的静态策略。
-          merchantPolicy: options.merchantPolicy ?? profile.merchant_policy,
-        })
-      : defaultHandler();
-
-  const holder = { baseUrl: advertisedBase };
-  const server = new A2AServer({
-    // A2AServerOptions.card 是 AgentCardConfigProvider：返回 config，server 内部再 buildAgentCard。
-    // name 用干净显示名，不掺 agent_id（形如 agent:token，会被 card secret 扫描器判为 card_has_secret）。
-    card: () => ({
-      name: role === "merchant" ? "Kiwi A2A Merchant" : "Kiwi A2A Buyer",
-      description: "Kiwi A2A node",
-      providerOrganization: "Kiwi",
-      version: "1.0.0",
-      baseUrl: holder.baseUrl,
-      a2aPath: "/",
-      // Issue 16 B：签名模式发布节点公开签名密钥（非 secret），对端据此验签。
-      ...(signingIdentity !== undefined
-        ? {
-            securityScheme: {
-              name: "kiwi-signature",
-              type: "kiwi-http-message-signature",
-              keyid: signingIdentity.keyid,
-              publicKeyPem: signingIdentity.publicKeyPem,
-              algorithm: signingIdentity.algorithm,
-            },
-          }
-        : {}),
-    }),
-    // 发布 UCP Profile（/.well-known/ucp）：注册广告了 ucp_profile_url，
-    // 端点就必须真实可拉——否则 catalog 验证的 profile 阶段拉 UCP 404 →
-    // freshness=unreachable → buyer 发现被 BLOCKED 列表挡掉。
-    ucp: true,
-    ledger,
-    idempotency,
-    handler,
-    now,
+  const core = createA2aNodeCore({
+    profile,
+    advertisedBase,
+    ...(options.dataDir !== undefined ? { dataDir: options.dataDir } : {}),
     ...(authVerifier !== undefined ? { authVerifier } : {}),
+    ...(signingIdentity !== undefined ? { signingIdentity } : {}),
     ...(a2aThrottle !== undefined ? { throttle: a2aThrottle } : {}),
-    ...(statsStore !== undefined ? { stats: statsStore } : {}),
+    ...(options.merchantPolicy !== undefined ? { merchantPolicy: options.merchantPolicy } : {}),
   });
+  const { server } = core;
+
   const httpServer = server.createServer();
   await new Promise<void>((resolve) => httpServer.listen(port, "127.0.0.1", () => resolve()));
-  holder.baseUrl = advertisedBase;
   const agentCardUrl = `${advertisedBase}/.well-known/agent-card.json`;
 
   // merchant 角色：自动注册进 catalog（buyer 据此发现）。
@@ -585,9 +701,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
         // （镜像 stop()），不留下监听中的孤儿节点。
         httpServer.closeAllConnections?.();
         await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-        statsStore?.close();
-        releaseOwnerLock?.();
-        if (isEphemeral) rmSync(dir, { recursive: true, force: true });
+        core.close();
         throw err;
       }
       catalogAgentId = undefined;
@@ -608,11 +722,9 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
       }
       httpServer.closeAllConnections?.();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-      statsStore?.close();
       // 审查 BUG-03：持久形态不删除状态目录（重启恢复依赖它）；临时形态
       // （demo/测试）维持删除。owner 锁总是释放。
-      releaseOwnerLock?.();
-      if (isEphemeral) rmSync(dir, { recursive: true, force: true });
+      core.close();
     },
   };
 }

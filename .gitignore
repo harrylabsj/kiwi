@@ -19,3 +19,6 @@ wrangler.harrylabs.jsonc
 
 # runtime agent data (ledger/memory) created by agent run/serve/chat
 .kiwi/
+
+# 云端制品构建产物（scripts/build-cloud-artifact.mjs）
+build/

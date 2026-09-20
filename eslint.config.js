@@ -14,6 +14,9 @@ export default [
       "coverage/**",
       "kiwi-catalog/**",
       "shopping-cli/**",
+      // 云端制品构建产物（scripts/build-cloud-artifact.mjs）：内含第三方包，
+      // 不是本仓源码，不参与 lint。
+      "build/**",
     ],
   },
   js.configs.recommended,

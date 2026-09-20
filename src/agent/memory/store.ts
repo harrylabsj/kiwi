@@ -39,7 +39,9 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
-import { uuidv7 } from "@earendil-works/pi-ai";
+// 标识符生成用仓库自有实现（negotiation/domain/identifiers）：避免
+// 「内存存储为了生成 ID 而静态依赖模型 SDK」把整套 provider SDK 拖进制品。
+import { uuidv7 } from "../../negotiation/domain/identifiers.js";
 import type {
   EvidenceSourceType,
   MemoryEventRecord,

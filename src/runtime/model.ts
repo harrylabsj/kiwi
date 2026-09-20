@@ -61,9 +61,9 @@ const PROVIDER_BASE_URL: Record<string, string> = {
   // model.base_url in the profile.
 };
 
-export function isFakeProvider(profile: AgentProfile): boolean {
-  return profile.model.provider === "fake";
-}
+// 判定逻辑在叶子模块（config/provider-kind.ts）：本文件静态依赖 pi-ai，
+// 云端入口只需要 fake 判定，不应因此被拖入整套模型 SDK。
+export { isFakeProvider } from "../config/provider-kind.js";
 
 /**
  * Map profile model.thinking_level onto Pi's ThinkingLevel (agent-core 0.83:
