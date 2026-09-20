@@ -136,7 +136,8 @@ describe("schema v3 migration (§11.8, §16)", () => {
       v: number;
     };
     expect(version.v).toBe(MEMORY_SCHEMA_VERSION);
-    expect(MEMORY_SCHEMA_VERSION).toBe(7);
+    // MIGRATION_8：询报价工作台 rfq_ 表族（设计 v0.1.1 §10.1）。
+    expect(MEMORY_SCHEMA_VERSION).toBe(8);
     db.close();
   });
 

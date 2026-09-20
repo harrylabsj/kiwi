@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:rfq-workbench:0.1.0:quote-revision",
+  "title": "QuoteRevision",
+  "description": "候选开发契约；记录结构不等于模型工具输入。权限、引用一致性与跨字段约束由服务端校验。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "merchant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "quote_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "case_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "snapshot_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "client_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "recipient_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "pricing_input": {
+      "$ref": "urn:kiwi:rfq-workbench:0.1.0:pricing-input"
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "net_minor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000000
+        },
+        "tax_minor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000000
+        },
+        "gross_minor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000000
+        }
+      },
+      "required": [
+        "net_minor",
+        "tax_minor",
+        "gross_minor"
+      ]
+    },
+    "policy_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "fact_fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "content_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "valid_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "delivery_terms": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "payment_terms": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "DRAFT",
+        "VALIDATED",
+        "PENDING_APPROVAL",
+        "APPROVED",
+        "EXPORTED",
+        "REJECTED",
+        "SUPERSEDED",
+        "EXPIRED"
+      ]
+    },
+    "nonbinding_execution_boundary": {
+      "const": true
+    },
+    "synthetic": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "merchant_id",
+    "quote_id",
+    "revision",
+    "case_id",
+    "case_revision",
+    "snapshot_id",
+    "client_ref",
+    "recipient_ref",
+    "pricing_input",
+    "totals",
+    "policy_version",
+    "fact_fingerprint",
+    "content_digest",
+    "valid_until",
+    "created_at",
+    "delivery_terms",
+    "payment_terms",
+    "status",
+    "nonbinding_execution_boundary",
+    "synthetic"
+  ]
+}

@@ -111,7 +111,9 @@ export class MerchantCommandLog {
         tool: input.tool,
         arguments: args,
         preconditions,
-        risk: "write_catalog",
+        // 风险语义来自执行器声明（报价发布为 release_quote，§9.1——
+        // 不把报价发布冒充商品修改 write_catalog）。
+        risk: executor.risk ?? "write_catalog",
         // 命令一律 pending：确认通道批准后才执行（任何模式都不自动执行）。
         force_pending: true,
         execute: (approvedArgs) => executor.execute(approvedArgs, this.deps.executorContext),

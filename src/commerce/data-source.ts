@@ -44,6 +44,11 @@ export interface CommerceField<T> {
   readonly source: string;
   /** 字段最后验证/更新时间（RFC 3339，可选）。 */
   readonly verified_at?: string;
+  /**
+   * 上游为该字段提供的版本标识（可选）。缺省时消费方如实记 "unknown"
+   * （RFQ 发布硬门按缺验证阻断，§6.3）；绝不把读取时间冒充版本。
+   */
+  readonly source_version?: string;
 }
 
 /** 商品事实（public-only；成本/底价等私有数据绝不进入本边界）。 */

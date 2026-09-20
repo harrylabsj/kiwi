@@ -1,0 +1,713 @@
+{
+  "schema_version": "0.1.0",
+  "artifact_kind": "MCP_TOOL_DESIGN_NOT_WORKBUDDY_MANIFEST",
+  "notes": [
+    "权限标记是本方案概念，不是已配置的平台scope。",
+    "工具输入不承载可信merchant/principal；由已验证上下文注入。",
+    "annotations只是提示，授权由服务端执行。",
+    "正式outputSchema及SDK注册代码在RFQ-012实现；此文件不宣称能直接安装。"
+  ],
+  "tools": [
+    {
+      "name": "kiwi_merchant_rfq_ingest",
+      "description": "导入未信任文本/CSV形成未确认需求；不会发布或发送。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "manual_text",
+                  "csv"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000000
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "kind",
+              "text",
+              "label"
+            ]
+          },
+          "client_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "source",
+          "client_ref",
+          "idempotency_key"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:workflow_prepare",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    },
+    {
+      "name": "kiwi_merchant_rfq_get",
+      "description": "读取当前需求、版本与阻断项。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "case_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:read",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    },
+    {
+      "name": "kiwi_merchant_rfq_revise",
+      "description": "提交字段修订建议；涉及关键字段时清除旧确认并增加版本。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "changes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "field_path": {
+                  "type": "string",
+                  "enum": [
+                    "query",
+                    "quantity",
+                    "unit",
+                    "recipient_ref",
+                    "tax_basis",
+                    "tax_rate_bps",
+                    "shipping_minor",
+                    "delivery_terms",
+                    "payment_terms"
+                  ]
+                },
+                "line_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "proposed_value": {
+                  "type": [
+                    "string",
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "field_path",
+                "proposed_value"
+              ]
+            }
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "idempotency_key",
+          "changes"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:workflow_prepare",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    },
+    {
+      "name": "kiwi_merchant_rfq_close",
+      "description": "操作者显式取消或关闭询盘 case；未决审批候选一并失效（APPROVAL_STALE），不删除既有审计与已导出版本。终态后拒绝新的计价、发布与确认请求。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "CANCELLED",
+              "CLOSED"
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "outcome",
+          "idempotency_key"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:workflow_prepare",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    },
+    {
+      "name": "kiwi_merchant_rfq_match",
+      "description": "按授权商品源搜索候选；不代表用户已选定SKU。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "line_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "case_id",
+          "line_id",
+          "query"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:read",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    },
+    {
+      "name": "kiwi_merchant_rfq_confirm_items",
+      "description": "消费服务端已验证且绑定版本的具名确认引用；模型不能自行宣告已确认。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "selections": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "line_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "sku": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "confirmation_ref": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "required": [
+                "line_id",
+                "sku",
+                "confirmation_ref"
+              ]
+            }
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "idempotency_key",
+          "selections"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:workflow_prepare",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    },
+    {
+      "name": "kiwi_merchant_rfq_refresh_facts",
+      "description": "读取权威数据建立版本快照；不修改商品源。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "idempotency_key"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:workflow_prepare",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    },
+    {
+      "name": "kiwi_merchant_rfq_price",
+      "description": "由Core读取事实和规则并确定性计价；不得提供最终金额覆盖计算。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "snapshot_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "idempotency_key",
+          "snapshot_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:workflow_prepare",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    },
+    {
+      "name": "kiwi_merchant_rfq_compare",
+      "description": "比较两个不可变报价版本及条款差异。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "from_quote_ref": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "quote_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "quote_id",
+              "revision"
+            ]
+          },
+          "to_quote_ref": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "quote_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "quote_id",
+              "revision"
+            ]
+          }
+        },
+        "required": [
+          "from_quote_ref",
+          "to_quote_ref"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:read",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    },
+    {
+      "name": "kiwi_merchant_rfq_prepare_release",
+      "description": "只准备绑定报价、收件人和最终文件哈希的审批候选；绝不批准。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "quote_ref": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "quote_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "quote_id",
+              "revision"
+            ]
+          },
+          "recipient_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "quote_ref",
+          "recipient_ref",
+          "expected_revision",
+          "idempotency_key"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:workflow_prepare",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    },
+    {
+      "name": "kiwi_merchant_rfq_get_release",
+      "description": "读取候选和发布状态；不向模型返回确认token或长效下载密钥。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "release_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "release_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:read",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    },
+    {
+      "name": "kiwi_merchant_rfq_record_delivery",
+      "description": "仅记录用户自述REPORTED_SENT；不是送达验证。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "quote_ref": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "quote_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "quote_id",
+              "revision"
+            ]
+          },
+          "channel": {
+            "enum": [
+              "manual_wechat",
+              "manual_email",
+              "manual_other"
+            ]
+          },
+          "evidence_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "quote_ref",
+          "channel",
+          "evidence_ref",
+          "idempotency_key"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:workflow_prepare",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    },
+    {
+      "name": "kiwi_merchant_rfq_prepare_handoff",
+      "description": "仅准备已批准报价的移交材料与审批；不创建订单、付款或占库存。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "quote_ref": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "quote_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "quote_id",
+              "revision"
+            ]
+          },
+          "target_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "intent_evidence_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "quote_ref",
+          "target_ref",
+          "intent_evidence_ref",
+          "idempotency_key"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:workflow_prepare",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    },
+    {
+      "name": "kiwi_merchant_rfq_get_job",
+      "description": "读取持久作业状态。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "job_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "design_authorization": "merchant:read",
+      "design_status": "PROPOSED_NOT_REGISTERED"
+    }
+  ]
+}

@@ -1,0 +1,375 @@
+[
+  {
+    "id": "V01-main",
+    "input": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 10,
+          "unit_price_minor": 12900,
+          "discount_minor": 1000,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 1300,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 1000,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    },
+    "expected_totals": {
+      "net_minor": 129000,
+      "tax_minor": 16640,
+      "gross_minor": 145640
+    }
+  },
+  {
+    "id": "V02-inclusive",
+    "input": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 3,
+          "unit_price_minor": 9000,
+          "discount_minor": 1000,
+          "tax_basis": "INCLUSIVE",
+          "tax_rate_bps": 1300,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 0,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    },
+    "expected_totals": {
+      "net_minor": 23009,
+      "tax_minor": 2991,
+      "gross_minor": 26000
+    }
+  },
+  {
+    "id": "V03-half-cent",
+    "input": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 1,
+          "unit_price_minor": 1,
+          "discount_minor": 0,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 5000,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 0,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    },
+    "expected_totals": {
+      "net_minor": 1,
+      "tax_minor": 1,
+      "gross_minor": 2
+    }
+  },
+  {
+    "id": "V04-inclusive-half",
+    "input": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 1,
+          "unit_price_minor": 1,
+          "discount_minor": 0,
+          "tax_basis": "INCLUSIVE",
+          "tax_rate_bps": 10000,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 0,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    },
+    "expected_totals": {
+      "net_minor": 0,
+      "tax_minor": 1,
+      "gross_minor": 1
+    }
+  },
+  {
+    "id": "V05-zero",
+    "input": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 1,
+          "unit_price_minor": 0,
+          "discount_minor": 0,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 0,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 0,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    },
+    "expected_totals": {
+      "net_minor": 0,
+      "tax_minor": 0,
+      "gross_minor": 0
+    }
+  },
+  {
+    "id": "V06-full-discount",
+    "input": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 2,
+          "unit_price_minor": 500,
+          "discount_minor": 1000,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 1300,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 0,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    },
+    "expected_totals": {
+      "net_minor": 0,
+      "tax_minor": 0,
+      "gross_minor": 0
+    }
+  },
+  {
+    "id": "V07-shipping-inclusive",
+    "input": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 1,
+          "unit_price_minor": 10000,
+          "discount_minor": 0,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 0,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 113,
+        "tax_basis": "INCLUSIVE",
+        "tax_rate_bps": 1300,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    },
+    "expected_totals": {
+      "net_minor": 10100,
+      "tax_minor": 13,
+      "gross_minor": 10113
+    }
+  },
+  {
+    "id": "V08-cap",
+    "input": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 1,
+          "unit_price_minor": 1000000000000,
+          "discount_minor": 0,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 0,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 0,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    },
+    "expected_totals": {
+      "net_minor": 1000000000000,
+      "tax_minor": 0,
+      "gross_minor": 1000000000000
+    }
+  },
+  {
+    "id": "V09-round-per-line",
+    "input": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 1,
+          "unit_price_minor": 1,
+          "discount_minor": 0,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 5000,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        },
+        {
+          "line_id": "L2",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 1,
+          "unit_price_minor": 1,
+          "discount_minor": 0,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 5000,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 0,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    },
+    "expected_totals": {
+      "net_minor": 2,
+      "tax_minor": 2,
+      "gross_minor": 4
+    }
+  },
+  {
+    "id": "V10-inclusive-standard",
+    "input": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 1,
+          "unit_price_minor": 11300,
+          "discount_minor": 0,
+          "tax_basis": "INCLUSIVE",
+          "tax_rate_bps": 1300,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 0,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    },
+    "expected_totals": {
+      "net_minor": 10000,
+      "tax_minor": 1300,
+      "gross_minor": 11300
+    }
+  }
+]

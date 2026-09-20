@@ -1,0 +1,357 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:rfq-workbench:0.1.0:rfq-case",
+  "title": "RfqCase",
+  "description": "候选开发契约；记录结构不等于模型工具输入。权限、引用一致性与跨字段约束由服务端校验。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "merchant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "current_quote_revision": {
+      "description": "当前有效报价版本的指针；尚无报价时为 null。服务端维护，随版本替代、失效与 case 关闭同步更新。",
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "NEW",
+        "NEEDS_CLARIFICATION",
+        "READY",
+        "PRICED",
+        "CLOSED",
+        "CANCELLED"
+      ]
+    },
+    "client_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "recipient_ref": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "minItems": 1,
+      "maxItems": 100
+    },
+    "lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "line_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "sku": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confirmation": {
+            "type": "string",
+            "enum": [
+              "unconfirmed",
+              "confirmed"
+            ]
+          },
+          "confirmation_ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence_source_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "minItems": 1,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "line_id",
+          "query",
+          "sku",
+          "quantity",
+          "unit",
+          "confirmation",
+          "confirmation_ref",
+          "evidence_source_ids"
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 100
+    },
+    "terms": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "const": "CNY"
+        },
+        "tax_basis": {
+          "type": "string",
+          "enum": [
+            "UNKNOWN",
+            "INCLUSIVE",
+            "EXCLUSIVE"
+          ]
+        },
+        "tax_rate_bps": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shipping_known": {
+          "type": "boolean"
+        },
+        "shipping_minor": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delivery_date": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payment_terms": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "currency",
+        "tax_basis",
+        "tax_rate_bps",
+        "shipping_known",
+        "shipping_minor",
+        "delivery_date",
+        "payment_terms"
+      ]
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "synthetic": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "merchant_id",
+    "case_id",
+    "revision",
+    "stage",
+    "client_ref",
+    "recipient_ref",
+    "source_ids",
+    "lines",
+    "terms",
+    "updated_at",
+    "synthetic"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "stage": {
+            "enum": [
+              "READY",
+              "PRICED"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "recipient_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "lines": {
+            "items": {
+              "properties": {
+                "sku": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "quantity": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100000
+                },
+                "unit": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                },
+                "confirmation": {
+                  "const": "confirmed"
+                },
+                "confirmation_ref": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              }
+            }
+          },
+          "terms": {
+            "properties": {
+              "tax_basis": {
+                "type": "string",
+                "enum": [
+                  "INCLUSIVE",
+                  "EXCLUSIVE"
+                ]
+              },
+              "tax_rate_bps": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "shipping_known": {
+                "const": true
+              },
+              "shipping_minor": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000000
+              },
+              "delivery_date": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "payment_terms": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

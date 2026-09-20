@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:rfq-workbench:0.1.0:pricing-input",
+  "title": "PricingInput",
+  "description": "候选开发契约；记录结构不等于模型工具输入。权限、引用一致性与跨字段约束由服务端校验。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "currency": {
+      "const": "CNY"
+    },
+    "rounding": {
+      "const": "HALF_UP_LINE"
+    },
+    "lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "line_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "sku": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "unit_price_minor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000000000
+          },
+          "discount_minor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000000000
+          },
+          "tax_basis": {
+            "type": "string",
+            "enum": [
+              "INCLUSIVE",
+              "EXCLUSIVE"
+            ]
+          },
+          "tax_rate_bps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "evidence_source_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "minItems": 1,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "line_id",
+          "sku",
+          "unit",
+          "quantity",
+          "unit_price_minor",
+          "discount_minor",
+          "tax_basis",
+          "tax_rate_bps",
+          "evidence_source_ids"
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 100
+    },
+    "shipping": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "amount_minor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000000
+        },
+        "tax_basis": {
+          "type": "string",
+          "enum": [
+            "INCLUSIVE",
+            "EXCLUSIVE"
+          ]
+        },
+        "tax_rate_bps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "evidence_source_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 1,
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "amount_minor",
+        "tax_basis",
+        "tax_rate_bps",
+        "evidence_source_ids"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "currency",
+    "rounding",
+    "lines",
+    "shipping"
+  ]
+}

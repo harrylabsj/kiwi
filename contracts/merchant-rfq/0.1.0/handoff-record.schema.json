@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:rfq-workbench:0.1.0:handoff-record",
+  "title": "HandoffRecord",
+  "description": "候选开发契约；记录结构不等于模型工具输入。权限、引用一致性与跨字段约束由服务端校验。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "merchant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "handoff_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "origin": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "manual_quote"
+            },
+            "quote_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "release_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "kind",
+            "quote_id",
+            "revision",
+            "release_id"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "knp_agreement"
+            },
+            "agreement_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "agreement_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "kind",
+            "agreement_id",
+            "agreement_digest"
+          ]
+        }
+      ]
+    },
+    "target_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "intent_evidence_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "packet_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PACKET_READY",
+        "OWNER_RECORDED",
+        "TARGET_VERIFIED",
+        "REJECTED",
+        "UNKNOWN"
+      ]
+    },
+    "receipt": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "target_api",
+                "signed_receipt"
+              ]
+            },
+            "issuer": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "handoff_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "packet_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "target_object_type": {
+              "type": "string",
+              "enum": [
+                "erp_quote",
+                "sales_case",
+                "handoff_inbox"
+              ]
+            },
+            "target_object_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "verified_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "method",
+            "issuer",
+            "handoff_id",
+            "packet_digest",
+            "target_object_type",
+            "target_object_id",
+            "verified_at"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "synthetic": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "merchant_id",
+    "handoff_id",
+    "origin",
+    "target_ref",
+    "intent_evidence_ref",
+    "packet_digest",
+    "status",
+    "receipt",
+    "created_at",
+    "synthetic"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "TARGET_VERIFIED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "receipt": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "target_api",
+                  "signed_receipt"
+                ]
+              },
+              "issuer": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "handoff_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "packet_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "target_object_type": {
+                "type": "string",
+                "enum": [
+                  "erp_quote",
+                  "sales_case",
+                  "handoff_inbox"
+                ]
+              },
+              "target_object_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "verified_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "method",
+              "issuer",
+              "handoff_id",
+              "packet_digest",
+              "target_object_type",
+              "target_object_id",
+              "verified_at"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

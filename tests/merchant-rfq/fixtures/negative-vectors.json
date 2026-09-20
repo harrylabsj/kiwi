@@ -1,0 +1,548 @@
+[
+  {
+    "id": "N01-fractional-quantity",
+    "schema": "pricing-input",
+    "expected_failure": "schema",
+    "data": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 1.5,
+          "unit_price_minor": 12900,
+          "discount_minor": 1000,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 1300,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 1000,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    }
+  },
+  {
+    "id": "N02-unknown-tax",
+    "schema": "pricing-input",
+    "expected_failure": "schema",
+    "data": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 10,
+          "unit_price_minor": 12900,
+          "discount_minor": 1000,
+          "tax_basis": "UNKNOWN",
+          "tax_rate_bps": 1300,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 1000,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    }
+  },
+  {
+    "id": "N03-negative-price",
+    "schema": "pricing-input",
+    "expected_failure": "schema",
+    "data": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 10,
+          "unit_price_minor": -1,
+          "discount_minor": 1000,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 1300,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 1000,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    }
+  },
+  {
+    "id": "N04-other-currency",
+    "schema": "pricing-input",
+    "expected_failure": "schema",
+    "data": {
+      "schema_version": "0.1.0",
+      "currency": "USD",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 10,
+          "unit_price_minor": 12900,
+          "discount_minor": 1000,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 1300,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 1000,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    }
+  },
+  {
+    "id": "N05-excess-discount",
+    "schema": "pricing-input",
+    "expected_failure": "semantic",
+    "data": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 10,
+          "unit_price_minor": 12900,
+          "discount_minor": 999999,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 1300,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 1000,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    }
+  },
+  {
+    "id": "N06-total-overflow",
+    "schema": "pricing-input",
+    "expected_failure": "semantic",
+    "data": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 100000,
+          "unit_price_minor": 1000000000000,
+          "discount_minor": 1000,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 1300,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 1000,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    }
+  },
+  {
+    "id": "N07-ready-unconfirmed",
+    "schema": "rfq-case",
+    "expected_failure": "schema",
+    "data": {
+      "schema_version": "0.1.0",
+      "merchant_id": "merchant-demo-only",
+      "case_id": "rfq-demo-001",
+      "revision": 1,
+      "stage": "READY",
+      "client_ref": "client-demo",
+      "recipient_ref": "recipient-demo",
+      "source_ids": [
+        "src-rfq-001"
+      ],
+      "lines": [
+        {
+          "line_id": "L1",
+          "query": "演示商品A",
+          "sku": "SKU-A",
+          "quantity": 10,
+          "unit": "件",
+          "confirmation": "unconfirmed",
+          "confirmation_ref": "trusted-ui-fixture-only",
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "terms": {
+        "currency": "CNY",
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 1300,
+        "shipping_known": true,
+        "shipping_minor": 1000,
+        "delivery_date": "SYNTHETIC：2026-09-23之前发货",
+        "payment_terms": "SYNTHETIC：线下另行确认，不执行支付"
+      },
+      "updated_at": "2026-09-19T01:00:00Z",
+      "synthetic": true
+    }
+  },
+  {
+    "id": "N08-ready-shipping-unknown",
+    "schema": "rfq-case",
+    "expected_failure": "schema",
+    "data": {
+      "schema_version": "0.1.0",
+      "merchant_id": "merchant-demo-only",
+      "case_id": "rfq-demo-001",
+      "revision": 1,
+      "stage": "READY",
+      "client_ref": "client-demo",
+      "recipient_ref": "recipient-demo",
+      "source_ids": [
+        "src-rfq-001"
+      ],
+      "lines": [
+        {
+          "line_id": "L1",
+          "query": "演示商品A",
+          "sku": "SKU-A",
+          "quantity": 10,
+          "unit": "件",
+          "confirmation": "confirmed",
+          "confirmation_ref": "trusted-ui-fixture-only",
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "terms": {
+        "currency": "CNY",
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 1300,
+        "shipping_known": false,
+        "shipping_minor": 1000,
+        "delivery_date": "SYNTHETIC：2026-09-23之前发货",
+        "payment_terms": "SYNTHETIC：线下另行确认，不执行支付"
+      },
+      "updated_at": "2026-09-19T01:00:00Z",
+      "synthetic": true
+    }
+  },
+  {
+    "id": "N09-forged-approval-field",
+    "schema": "release-request",
+    "expected_failure": "schema",
+    "data": {
+      "schema_version": "0.1.0",
+      "merchant_id": "merchant-demo-only",
+      "release_id": "release-demo-001",
+      "candidate_id": "candidate-demo-001",
+      "quote_id": "quote-demo-001",
+      "quote_revision": 1,
+      "principal_id": "owner-demo",
+      "recipient_ref": "recipient-demo",
+      "quote_content_digest": "sha256:641b30a8e4fcf097fc52e2cb9bf694a49d2761210b674082b00213cfad06c391",
+      "artifact_id": "artifact-demo-001",
+      "artifact_sha256": "sha256:8a9aa730ed18eb792a8afa541226675d198c498a6c95f7b492b24909ff01b452",
+      "template_version": "customer-quote-v0.1.0",
+      "policy_version": "policy-demo-v1",
+      "fact_fingerprint": "sha256:9bb38d0709f558e290f1088180fe5f0a46fd0314c95c8f69f18119208d97d51e",
+      "created_at": "2026-09-19T01:00:00Z",
+      "expires_at": "2026-09-19T01:15:00Z",
+      "status": "PENDING_APPROVAL",
+      "synthetic": true,
+      "approved": true,
+      "public_projection_digest": "sha256:94d787f4db4727f621cdf2307db64a0bc947f73ae8fe3294fe7eed6724f31cdc"
+    }
+  },
+  {
+    "id": "N10-fake-delivery-receipt",
+    "schema": "delivery-record",
+    "expected_failure": "schema",
+    "data": {
+      "schema_version": "0.1.0",
+      "merchant_id": "merchant-demo-only",
+      "delivery_id": "delivery-demo-001",
+      "quote_id": "quote-approved-fixture",
+      "quote_revision": 1,
+      "release_id": "release-approved-fixture",
+      "status": "RECEIPT_VERIFIED",
+      "channel": "manual_email",
+      "evidence_ref": "manual-note-fixture",
+      "recorded_by": "owner-demo",
+      "recorded_at": "2026-09-19T01:00:00Z",
+      "verification": null,
+      "synthetic": true
+    }
+  },
+  {
+    "id": "N11-fake-handoff-receipt",
+    "schema": "handoff-record",
+    "expected_failure": "schema",
+    "data": {
+      "schema_version": "0.1.0",
+      "merchant_id": "merchant-demo-only",
+      "handoff_id": "handoff-demo-001",
+      "origin": {
+        "kind": "manual_quote",
+        "quote_id": "quote-approved-fixture",
+        "revision": 1,
+        "release_id": "release-approved-fixture"
+      },
+      "target_ref": "erp-inbox-fixture",
+      "intent_evidence_ref": "customer-interest-fixture",
+      "packet_digest": "sha256:7fd06643ef1409ee460f9adf6a19cc7c10e86e2ef6fa8b99fdc879985575bba0",
+      "status": "TARGET_VERIFIED",
+      "receipt": null,
+      "created_at": "2026-09-19T01:00:00Z",
+      "synthetic": true
+    }
+  },
+  {
+    "id": "N12-tampered-totals",
+    "schema": "quote-revision",
+    "expected_failure": "semantic",
+    "data": {
+      "schema_version": "0.1.0",
+      "merchant_id": "merchant-demo-only",
+      "quote_id": "quote-demo-001",
+      "revision": 1,
+      "case_id": "rfq-demo-001",
+      "case_revision": 1,
+      "snapshot_id": "facts-demo-001",
+      "client_ref": "client-demo",
+      "recipient_ref": "recipient-demo",
+      "pricing_input": {
+        "schema_version": "0.1.0",
+        "currency": "CNY",
+        "rounding": "HALF_UP_LINE",
+        "lines": [
+          {
+            "line_id": "L1",
+            "sku": "SKU-A",
+            "unit": "件",
+            "quantity": 10,
+            "unit_price_minor": 12900,
+            "discount_minor": 1000,
+            "tax_basis": "EXCLUSIVE",
+            "tax_rate_bps": 1300,
+            "evidence_source_ids": [
+              "src-rfq-001"
+            ]
+          }
+        ],
+        "shipping": {
+          "amount_minor": 1000,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 0,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      },
+      "totals": {
+        "net_minor": 129000,
+        "tax_minor": 16640,
+        "gross_minor": 1
+      },
+      "policy_version": "policy-demo-v1",
+      "fact_fingerprint": "sha256:9bb38d0709f558e290f1088180fe5f0a46fd0314c95c8f69f18119208d97d51e",
+      "content_digest": "sha256:641b30a8e4fcf097fc52e2cb9bf694a49d2761210b674082b00213cfad06c391",
+      "valid_until": "2026-09-20T01:00:00Z",
+      "created_at": "2026-09-19T01:00:00Z",
+      "delivery_terms": "SYNTHETIC：2026-09-23之前发货",
+      "payment_terms": "SYNTHETIC：线下另行确认，不执行支付",
+      "status": "VALIDATED",
+      "nonbinding_execution_boundary": true,
+      "synthetic": true
+    }
+  },
+  {
+    "id": "N13-past-release-expiry",
+    "schema": "release-request",
+    "expected_failure": "semantic",
+    "data": {
+      "schema_version": "0.1.0",
+      "merchant_id": "merchant-demo-only",
+      "release_id": "release-demo-001",
+      "candidate_id": "candidate-demo-001",
+      "quote_id": "quote-demo-001",
+      "quote_revision": 1,
+      "principal_id": "owner-demo",
+      "recipient_ref": "recipient-demo",
+      "quote_content_digest": "sha256:641b30a8e4fcf097fc52e2cb9bf694a49d2761210b674082b00213cfad06c391",
+      "artifact_id": "artifact-demo-001",
+      "artifact_sha256": "sha256:8a9aa730ed18eb792a8afa541226675d198c498a6c95f7b492b24909ff01b452",
+      "template_version": "customer-quote-v0.1.0",
+      "policy_version": "policy-demo-v1",
+      "fact_fingerprint": "sha256:9bb38d0709f558e290f1088180fe5f0a46fd0314c95c8f69f18119208d97d51e",
+      "created_at": "2026-09-19T01:00:00Z",
+      "expires_at": "2026-09-18T01:00:00Z",
+      "status": "PENDING_APPROVAL",
+      "synthetic": true,
+      "public_projection_digest": "sha256:94d787f4db4727f621cdf2307db64a0bc947f73ae8fe3294fe7eed6724f31cdc"
+    }
+  },
+  {
+    "id": "N14-duplicate-line",
+    "schema": "pricing-input",
+    "expected_failure": "semantic",
+    "data": {
+      "schema_version": "0.1.0",
+      "currency": "CNY",
+      "rounding": "HALF_UP_LINE",
+      "lines": [
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 10,
+          "unit_price_minor": 12900,
+          "discount_minor": 1000,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 1300,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        },
+        {
+          "line_id": "L1",
+          "sku": "SKU-A",
+          "unit": "件",
+          "quantity": 10,
+          "unit_price_minor": 12900,
+          "discount_minor": 1000,
+          "tax_basis": "EXCLUSIVE",
+          "tax_rate_bps": 1300,
+          "evidence_source_ids": [
+            "src-rfq-001"
+          ]
+        }
+      ],
+      "shipping": {
+        "amount_minor": 1000,
+        "tax_basis": "EXCLUSIVE",
+        "tax_rate_bps": 0,
+        "evidence_source_ids": [
+          "src-rfq-001"
+        ]
+      }
+    }
+  },
+  {
+    "id": "N15-stock-private-cost",
+    "schema": "fact-snapshot",
+    "expected_failure": "semantic",
+    "data": {
+      "schema_version": "0.1.0",
+      "merchant_id": "merchant-demo-only",
+      "snapshot_id": "facts-demo-001",
+      "case_id": "rfq-demo-001",
+      "case_revision": 1,
+      "fetched_at": "2026-09-19T01:00:00Z",
+      "content_fingerprint": "sha256:9bb38d0709f558e290f1088180fe5f0a46fd0314c95c8f69f18119208d97d51e",
+      "complete": true,
+      "fields": [
+        {
+          "field_path": "SKU-A.floor_price",
+          "value": 12900,
+          "authority": "LOCAL_AUTHORITATIVE",
+          "source": "shopping-cli-fixture",
+          "source_version": "fixture-v1",
+          "verified_at": "2026-09-19T01:00:00Z",
+          "expires_at": "2026-09-19T01:05:00Z",
+          "visibility": "model_public"
+        },
+        {
+          "field_path": "SKU-A.stock",
+          "value": 100,
+          "authority": "LOCAL_AUTHORITATIVE",
+          "source": "shopping-cli-fixture",
+          "source_version": "fixture-v1",
+          "verified_at": "2026-09-19T01:00:00Z",
+          "expires_at": "2026-09-19T01:01:00Z",
+          "visibility": "operator_only"
+        }
+      ],
+      "synthetic": true
+    }
+  },
+  {
+    "id": "N16-reported-verified",
+    "schema": "delivery-record",
+    "expected_failure": "schema",
+    "data": {
+      "schema_version": "0.1.0",
+      "merchant_id": "merchant-demo-only",
+      "delivery_id": "delivery-demo-001",
+      "quote_id": "quote-approved-fixture",
+      "quote_revision": 1,
+      "release_id": "release-approved-fixture",
+      "status": "REPORTED_SENT",
+      "channel": "manual_email",
+      "evidence_ref": "manual-note-fixture",
+      "recorded_by": "owner-demo",
+      "recorded_at": "2026-09-19T01:00:00Z",
+      "verification": {
+        "method": "channel_api",
+        "issuer": "x",
+        "receipt_ref": "x",
+        "verified_at": "2026-09-19T01:00:00Z"
+      },
+      "synthetic": true
+    }
+  }
+]

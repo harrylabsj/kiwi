@@ -24,7 +24,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const MEMORY_SCHEMA_VERSION = 7;
+export const MEMORY_SCHEMA_VERSION = 8;
 
 export class MigrationError extends Error {
   constructor(message: string) {
@@ -351,6 +351,195 @@ const MIGRATION_7 = `
 ALTER TABLE action_candidates ADD COLUMN executing_at TEXT;
 `;
 
+const MIGRATION_8 = `
+-- 询报价工作台（设计 v0.1.1 §10.1；新增逻辑表，rfq_ 前缀，单 owner 写）。
+-- 四个状态域独立维护（RFQ stage / quote lifecycle / delivery / handoff），
+-- 状态之间绝不相互推导；模型输出不是审批凭证。
+CREATE TABLE rfq_cases (
+  case_id TEXT PRIMARY KEY,
+  merchant_id TEXT NOT NULL,
+  current_revision INTEGER NOT NULL,
+  current_quote_id TEXT,
+  current_quote_revision INTEGER,
+  stage TEXT NOT NULL CHECK (stage IN ('NEW','NEEDS_CLARIFICATION','READY','PRICED','CLOSED','CANCELLED')),
+  version INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_rfq_cases_merchant ON rfq_cases (merchant_id, stage);
+
+CREATE TABLE rfq_case_revisions (
+  case_id TEXT NOT NULL REFERENCES rfq_cases(case_id),
+  revision INTEGER NOT NULL,
+  fields_json TEXT NOT NULL,
+  source_ids_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (case_id, revision)
+);
+
+CREATE TABLE rfq_sources (
+  source_id TEXT PRIMARY KEY,
+  case_id TEXT NOT NULL REFERENCES rfq_cases(case_id),
+  merchant_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('manual_text','csv','customer_feedback','manual_fact')),
+  content_sha256 TEXT NOT NULL,
+  content TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  submitted_by TEXT NOT NULL,
+  synthetic INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (case_id, content_sha256)
+);
+
+CREATE TABLE rfq_fact_snapshots (
+  snapshot_id TEXT PRIMARY KEY,
+  case_id TEXT NOT NULL REFERENCES rfq_cases(case_id),
+  case_revision INTEGER NOT NULL,
+  merchant_id TEXT NOT NULL,
+  fields_json TEXT NOT NULL,
+  content_fingerprint TEXT NOT NULL,
+  complete INTEGER NOT NULL DEFAULT 1,
+  fetched_at TEXT NOT NULL,
+  synthetic INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_rfq_snapshots_case ON rfq_fact_snapshots (case_id, fetched_at);
+
+CREATE TABLE rfq_quote_revisions (
+  quote_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  case_id TEXT NOT NULL REFERENCES rfq_cases(case_id),
+  case_revision INTEGER NOT NULL,
+  merchant_id TEXT NOT NULL,
+  snapshot_id TEXT NOT NULL REFERENCES rfq_fact_snapshots(snapshot_id),
+  fact_fingerprint TEXT NOT NULL,
+  pricing_input_json TEXT NOT NULL,
+  pricing_output_json TEXT NOT NULL,
+  projection_json TEXT NOT NULL,
+  content_digest TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  valid_until TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN (
+    'DRAFT','VALIDATED','PENDING_APPROVAL','APPROVED','EXPORTED','REJECTED','SUPERSEDED','EXPIRED')),
+  status_reason TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (quote_id, revision)
+);
+CREATE INDEX idx_rfq_quotes_case ON rfq_quote_revisions (case_id, status);
+
+-- 报价生命周期事件投影（当前状态 = 最新事件；内容不可变，状态走事件表）。
+CREATE TABLE rfq_quote_events (
+  event_id TEXT PRIMARY KEY,
+  quote_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  event TEXT NOT NULL CHECK (event IN (
+    'PENDING_APPROVAL','APPROVED','EXPORTED','REJECTED','SUPERSEDED','EXPIRED','VALIDATED')),
+  actor TEXT NOT NULL,
+  reason TEXT,
+  at TEXT NOT NULL
+);
+CREATE INDEX idx_rfq_quote_events ON rfq_quote_events (quote_id, revision, at);
+
+CREATE TABLE rfq_release_requests (
+  release_id TEXT PRIMARY KEY,
+  merchant_id TEXT NOT NULL,
+  quote_id TEXT NOT NULL,
+  quote_revision INTEGER NOT NULL,
+  candidate_id TEXT NOT NULL,
+  artifact_id TEXT NOT NULL,
+  artifact_sha256 TEXT NOT NULL,
+  public_projection_digest TEXT NOT NULL,
+  recipient_ref TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  fact_fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN (
+    'PENDING_APPROVAL','APPROVED','EXPORTED','REJECTED','SUPERSEDED','EXPIRED')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_rfq_releases_quote ON rfq_release_requests (quote_id, quote_revision, status);
+
+CREATE TABLE rfq_artifacts (
+  artifact_id TEXT PRIMARY KEY,
+  merchant_id TEXT NOT NULL,
+  quote_id TEXT NOT NULL,
+  quote_revision INTEGER NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  template_version TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  relative_path TEXT NOT NULL,
+  activated INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE rfq_delivery_records (
+  delivery_id TEXT PRIMARY KEY,
+  merchant_id TEXT NOT NULL,
+  quote_id TEXT NOT NULL,
+  quote_revision INTEGER NOT NULL,
+  release_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('NOT_SENT','REPORTED_SENT','RECEIPT_VERIFIED','DELIVERY_UNKNOWN')),
+  channel TEXT NOT NULL CHECK (channel IN ('manual_wechat','manual_email','manual_other','integrated_channel')),
+  -- 契约口径（delivery-record.schema.json）：NOT_SENT 下 evidence_ref 可为 null。
+  evidence_ref TEXT,
+  recorded_by TEXT NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+CREATE INDEX idx_rfq_deliveries_quote ON rfq_delivery_records (quote_id, quote_revision);
+
+CREATE TABLE rfq_handoffs (
+  handoff_id TEXT PRIMARY KEY,
+  merchant_id TEXT NOT NULL,
+  quote_id TEXT NOT NULL,
+  quote_revision INTEGER NOT NULL,
+  origin_kind TEXT NOT NULL CHECK (origin_kind IN ('manual_quote','knp_agreement')),
+  target_ref TEXT NOT NULL,
+  intent_evidence_ref TEXT NOT NULL,
+  packet_digest TEXT NOT NULL,
+  packet_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('PACKET_READY','OWNER_RECORDED','TARGET_VERIFIED','REJECTED','UNKNOWN')),
+  receipt_json TEXT,
+  recorded_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- 幂等契约（§10.3）：merchant+principal+operation+key 唯一；同键同请求
+-- 摘要重放同一结果，同键不同摘要 IDEMPOTENCY_CONFLICT。
+CREATE TABLE rfq_idempotency (
+  merchant_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  idem_key TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  result_json TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (merchant_id, principal_id, operation, idem_key)
+);
+
+CREATE TABLE rfq_jobs (
+  job_id TEXT PRIMARY KEY,
+  merchant_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('QUEUED','RUNNING','SUCCEEDED','FAILED','CANCELLED','UNKNOWN')),
+  progress INTEGER NOT NULL DEFAULT 0,
+  checkpoint_json TEXT,
+  error_code TEXT,
+  result_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE rfq_audit_events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  object_digest TEXT NOT NULL,
+  result TEXT NOT NULL,
+  trace_id TEXT NOT NULL
+);
+`;
+
 /** Ordered migrations: version number -> SQL. */
 const MIGRATIONS: Readonly<Record<number, string>> = {
   1: MIGRATION_1,
@@ -360,6 +549,7 @@ const MIGRATIONS: Readonly<Record<number, string>> = {
   5: MIGRATION_5,
   6: MIGRATION_6,
   7: MIGRATION_7,
+  8: MIGRATION_8,
 };
 
 /**

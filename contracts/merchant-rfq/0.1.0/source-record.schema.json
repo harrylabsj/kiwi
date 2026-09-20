@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:rfq-workbench:0.1.0:source-record",
+  "title": "SourceRecord",
+  "description": "候选开发契约；记录结构不等于模型工具输入。权限、引用一致性与跨字段约束由服务端校验。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "merchant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "manual_text",
+        "csv",
+        "customer_feedback",
+        "manual_fact"
+      ]
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "content_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "received_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "locator": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "text_span"
+            },
+            "character_start": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "character_end": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "offset_unit": {
+              "const": "unicode_code_point"
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          },
+          "required": [
+            "kind",
+            "character_start",
+            "character_end",
+            "offset_unit",
+            "description"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "csv_cell"
+            },
+            "row_start": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "row_end": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "columns": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          },
+          "required": [
+            "kind",
+            "row_start",
+            "row_end",
+            "columns",
+            "description"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "manual_note"
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          },
+          "required": [
+            "kind",
+            "description"
+          ]
+        }
+      ]
+    },
+    "submitted_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "synthetic": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "merchant_id",
+    "source_id",
+    "case_id",
+    "kind",
+    "content_sha256",
+    "content_ref",
+    "received_at",
+    "locator",
+    "submitted_by",
+    "synthetic"
+  ]
+}

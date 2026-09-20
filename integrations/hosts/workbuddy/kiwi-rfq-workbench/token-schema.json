@@ -1,0 +1,19 @@
+{
+  "title": "Kiwi 询报价工作台对接配置",
+  "title_en": "Kiwi RFQ Workbench Configuration",
+  "description": "连接您的 Kiwi 询报价工作台实例。凭证仅存储在本机，不经过云端。",
+  "description_en": "Connect your Kiwi RFQ workbench instance. Credentials are stored locally only.",
+  "docUrl": "https://rfq-workbench.example.com/docs/token",
+  "docLabel": "如何获取访问令牌？",
+  "fields": [
+    {
+      "key": "KIWI_RFQ_MCP_TOKEN",
+      "label": "访问令牌（Bearer Token）",
+      "label_en": "Access Token",
+      "type": "password",
+      "required": true,
+      "placeholder": "由部署 Kiwi 询报价工作台的实例管理员提供",
+      "description": "调用实例私有 MCP（/mcp）的 Bearer 令牌，需具备 merchant:read / merchant:write scope；请向实例部署方索取，不要填写 shopping-cli 后端凭据或目录网关凭据。"
+    }
+  ]
+}
