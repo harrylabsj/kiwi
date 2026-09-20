@@ -207,6 +207,8 @@ export async function bootstrapCloudRuntime(
     signingKeyDir,
     signingKeyId: signingIdentity?.keyid ?? config.publicOrigin,
     advertisedBase: config.publicOrigin,
+    // 云端必须按声明 origin 重建目标 URI：平台网关会改写入站 Host（M0 事实 #4）。
+    authoritySource: "declared",
   });
   // 商品源：配置文件给了商品表就用"商家上传商品表"路径（设计 §10.1），
   // 否则沿用 HTTP 商品源（shopping-cli 开放层）。两条路径都不含演示价回退。

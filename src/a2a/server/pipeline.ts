@@ -53,7 +53,7 @@ import {
 } from "./errors.js";
 import { A2AServerThrottle, domainFromUcpProfile, type ThrottleRequest } from "./throttle.js";
 import type { TrustLevel } from "../../trust/identity/trust-policy.js";
-import { isKnownTaskState, newArtifactId, newTaskId, TaskRegistry } from "./task-registry.js";
+import { isKnownTaskState, newArtifactId, newTaskId, TaskRegistry, type TaskOwner } from "./task-registry.js";
 import type {
   InboundNegotiationContext,
   NegotiationHandler,
@@ -456,8 +456,10 @@ export class InboundPipeline {
         }
 
         // 7. 生成任务 → 落 Ledger → 幂等 commit（证据交叉引用）。
+        // 任务归属 = 本次调用的认证身份（T044）：匿名身份不参与私有任务，
+        // 归属写入内存注册表并在 Ledger 事件里留存（恢复时据此过滤）。
         const task = buildTask(handlerResult, handlerCtx, this.now);
-        this.tasks.set(taskId, task);
+        this.tasks.set(taskId, task, { identity: senderIdentity, identityVerified: caller.identityVerified === true });
 
         let ledgerEvent: LedgerEvent;
         try {
@@ -574,23 +576,25 @@ export class InboundPipeline {
     }
   }
 
-  /** tasks/get：内存优先，miss 时回退 Ledger 视图（§23 恢复第 4 步）。 */
-  async getTask(taskId: string): Promise<A2ATask | null> {
-    const inMemory = this.tasks.get(taskId);
+  /** tasks/get：内存优先，miss 时回退 Ledger 视图（§23 恢复第 4 步）。
+   *  **归属过滤**：非本人（或匿名）一律 null——不区分"不存在"与"非本人"。 */
+  async getTask(taskId: string, owner: TaskOwner): Promise<A2ATask | null> {
+    const inMemory = this.tasks.get(taskId, owner);
     if (inMemory !== null) return inMemory;
-    return this.tasks.resolveFromLedger(this.ledger, taskId);
+    return this.tasks.resolveFromLedger(this.ledger, taskId, owner);
   }
 
-  /** ListTasks（issue 10 / TCK CORE-LIST）：返回内存任务列表。 */
-  listTasks(): { tasks: A2ATask[] } {
-    return { tasks: this.tasks.list() };
+  /** ListTasks（issue 10 / TCK CORE-LIST）：返回**本人**任务列表。 */
+  listTasks(owner: TaskOwner): { tasks: A2ATask[] } {
+    return { tasks: this.tasks.list(owner) };
   }
 
-  /** CancelTask（issue 10 / TCK CORE-CANCEL）。 */
+  /** CancelTask（issue 10 / TCK CORE-CANCEL）：仅本人任务可取消。 */
   cancelTask(
     taskId: string,
+    owner: TaskOwner,
   ): { ok: boolean; outcome: "canceled" | "not_found" | "not_cancelable" } {
-    return this.tasks.cancel(taskId);
+    return this.tasks.cancel(taskId, owner);
   }
 
   /**
@@ -599,7 +603,7 @@ export class InboundPipeline {
    * parts 为 artifact + 生成 contextId）。让 A2A 1.0 server 对任意消息合规
    * （KNP 是扩展，非 A2A 必载）。响应器可注入（TCK 参考场景）。
    */
-  sendGenericMessage(message: Record<string, unknown>): GenericSendResult {
+  sendGenericMessage(message: Record<string, unknown>, owner: TaskOwner): GenericSendResult {
     const taskId = newTaskId();
     const contextId =
       typeof message.contextId === "string" && message.contextId.length > 0
@@ -624,7 +628,7 @@ export class InboundPipeline {
           ? { artifacts: t.artifacts as unknown as A2ATask["artifacts"] }
           : {}),
       };
-      this.tasks.set(taskId, task);
+      this.tasks.set(taskId, task, owner);
       return { task };
     }
     // 响应器契约：task XOR message；两者皆缺即内部错误（fail-closed）。
@@ -632,9 +636,9 @@ export class InboundPipeline {
     return { message: result.message };
   }
 
-  /** 内存任务注册表是否已存在该任务（issue 10 / TCK CORE-MULTI-004）。 */
-  hasTask(taskId: string): boolean {
-    return this.tasks.get(taskId) !== null;
+  /** 内存任务注册表是否已存在**本人**任务（issue 10 / TCK CORE-MULTI-004）。 */
+  hasTask(taskId: string, owner: TaskOwner): boolean {
+    return this.tasks.get(taskId, owner) !== null;
   }
 }
 

@@ -306,6 +306,7 @@ export function createA2aAuthVerifier(
     resolver: resolveA2aSignatureResolver(identity, trustedKeys),
     scheme: advertised.protocol === "https:" ? "https" : "http",
     expectedAuthority: advertised.hostname,
+    ...(options.authoritySource !== undefined ? { authoritySource: options.authoritySource } : {}),
     // 设计意图：匿名 T0 放行，签名请求更高信任——不阻塞任何 kiwi buyer。
     anonymousTrustLevel: "T0",
     anonymousIdentity: "anonymous",
@@ -320,6 +321,13 @@ export interface A2aAuthVerifierOptions {
   mode: "loopback" | "none" | "bearer" | "signature";
   /** bearer 模式的预共享令牌。 */
   bearerToken?: string;
+  /**
+   * 目标 URI 的 authority 来源（signature 模式）：
+   * - `host-header`（缺省）：反代保留 Host 的自托管形态；
+   * - `declared`：云端形态——平台网关会改写入站 Host（M0 事实 #4），
+   *   必须按声明的公开 origin 重建，否则签名请求一律验签失败。
+   */
+  authoritySource?: "host-header" | "declared";
   /** 签名密钥目录（持久 dataDir 或临时目录）。 */
   signingKeyDir: string;
   /** 签名 keyid（公网用 advertised origin，否则 role:agent_id）。 */

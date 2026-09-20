@@ -41,47 +41,79 @@ export function isKnownTaskState(value: unknown): value is A2ATaskState {
   return typeof value === "string" && (A2A_TASK_STATES as readonly string[]).includes(value);
 }
 
+/** 任务归属：以认证身份标识为准（匿名主体不参与私有任务）。 */
+export interface TaskOwner {
+  identity: string;
+  identityVerified: boolean;
+}
+
+/**
+ * 匿名主体判定。`NoneAuthVerifier` 给所有匿名调用者同一个常量身份
+ * `"anonymous"`——如果把它当作可共享主体，任何人都能读到别人的任务
+ * （T044「匿名 task 串读」）。按设计 §13.3 权限矩阵，首版对匿名主体
+ * **不开放私有任务**：匿名查询任务一律拒绝（authentication_required）。
+ */
+export function isAnonymousOwner(owner: TaskOwner): boolean {
+  return owner.identity.trim() === "" || owner.identity === "anonymous";
+}
+
 export class TaskRegistry {
-  private readonly tasks = new Map<string, A2ATask>();
+  private readonly tasks = new Map<string, { task: A2ATask; owner: TaskOwner }>();
 
-  set(taskId: string, task: A2ATask): void {
-    this.tasks.set(taskId, task);
+  set(taskId: string, task: A2ATask, owner: TaskOwner): void {
+    this.tasks.set(taskId, { task, owner });
   }
 
-  get(taskId: string): A2ATask | null {
-    const task = this.tasks.get(taskId);
-    return task === undefined ? null : task;
+  /** 读取：归属不符一律返回 null（不区分"不存在"与"非本人"，不泄露存在性）。 */
+  get(taskId: string, owner: TaskOwner): A2ATask | null {
+    if (isAnonymousOwner(owner)) return null;
+    const entry = this.tasks.get(taskId);
+    if (entry === undefined) return null;
+    return entry.owner.identity === owner.identity ? entry.task : null;
   }
 
-  /** 全部在内存中的任务（issue 10 / TCK CORE-LIST：ListTasks）。 */
-  list(): A2ATask[] {
-    return [...this.tasks.values()];
+  /** 列出**本人**任务（issue 10 / TCK CORE-LIST：ListTasks）。 */
+  list(owner: TaskOwner): A2ATask[] {
+    if (isAnonymousOwner(owner)) return [];
+    return [...this.tasks.values()]
+      .filter((entry) => entry.owner.identity === owner.identity)
+      .map((entry) => entry.task);
   }
 
-  /** 取消（issue 10 / TCK CORE-CANCEL）：非终态 → canceled；未知 → not_found；
-   *  终态 → not_cancelable。 */
+  /** 取消（issue 10 / TCK CORE-CANCEL）：非终态 → canceled；未知/非本人 →
+   *  not_found（不泄露存在性）；终态 → not_cancelable。 */
   cancel(
     taskId: string,
+    owner: TaskOwner,
   ): { ok: boolean; outcome: "canceled" | "not_found" | "not_cancelable" } {
-    const task = this.tasks.get(taskId);
-    if (task === undefined) return { ok: false, outcome: "not_found" };
-    const state = task.status.state;
+    if (isAnonymousOwner(owner)) return { ok: false, outcome: "not_found" };
+    const entry = this.tasks.get(taskId);
+    if (entry === undefined || entry.owner.identity !== owner.identity) {
+      return { ok: false, outcome: "not_found" };
+    }
+    const state = entry.task.status.state;
     if (state === "completed" || state === "canceled" || state === "failed") {
       return { ok: false, outcome: "not_cancelable" };
     }
-    this.tasks.set(taskId, { ...task, status: { ...task.status, state: "canceled" } });
+    this.tasks.set(taskId, {
+      task: { ...entry.task, status: { ...entry.task.status, state: "canceled" } },
+      owner: entry.owner,
+    });
     return { ok: true, outcome: "canceled" };
   }
 
   /**
-   * 从 Ledger 还原任务视图：扫描事件，命中 remote_task_id === taskId 的首条
-   * 记录，返回最小 A2ATask（id + status.state）。结果不依赖内存状态。
-   * 未命中返回 null。
+   * 从 Ledger 还原任务视图：扫描事件，命中 `remote_task_id === taskId` 的
+   * 首条记录，返回最小 A2ATask（id + status.state）；**同时按事件内的身份
+   * 快照做归属过滤**——重启恢复不能让任务变成"谁都能读"。
    */
-  resolveFromLedger(ledger: LedgerStore, taskId: string): A2ATask | null {
+  resolveFromLedger(ledger: LedgerStore, taskId: string, owner: TaskOwner): A2ATask | null {
+    if (isAnonymousOwner(owner)) return null;
     for (const negotiationId of ledger.listNegotiations()) {
       for (const event of ledger.events(negotiationId)) {
         if (event.remote_task_id !== taskId) continue;
+        const eventSender = event.identity?.sender_identity;
+        if (typeof eventSender === "string" && eventSender !== owner.identity) return null;
         const result = event.outcome.kind === "ok" ? event.outcome.result : undefined;
         const state = result === undefined ? undefined : result["task_state"];
         if (isKnownTaskState(state)) {

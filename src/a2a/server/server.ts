@@ -68,6 +68,7 @@ import {
   internalServerError,
   JSONRPC_CODES,
   payloadTooLarge,
+  protocolError,
   rateLimited,
   ServerProtocolError,
 } from "./errors.js";
@@ -196,6 +197,17 @@ function sendJsonError(
 function sendText(res: http.ServerResponse, status: number, text: string): void {
   res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
   res.end(text);
+}
+
+/**
+ * 任务归属工具（T044）：把调用者映射为任务归属。
+ *
+ * 匿名主体（NoneAuthVerifier 的常量身份 "anonymous"）**不参与私有任务**：
+ * 任务端点对它一律返回 authentication_required，避免所有匿名调用者共享同一
+ * 身份而互相读到任务（设计 §13.3 权限矩阵：首版不开放私有任务）。
+ */
+export function anonymousCaller(caller: Caller): boolean {
+  return caller.identity.trim() === "" || caller.identity === "anonymous";
 }
 
 export class A2AServer {
@@ -505,9 +517,9 @@ export class A2AServer {
         case METHOD_GET_TASK:
           return this.upperTaskState(await this.handleTasksGet(params, caller, ucpAgentProfile));
         case METHOD_LIST_TASKS:
-          return this.handleListTasks();
+          return this.handleListTasks(caller);
         case METHOD_CANCEL_TASK:
-          return this.upperTaskState(await this.handleCancelTask(params));
+          return this.upperTaskState(await this.handleCancelTask(params, caller));
         case METHOD_GET_EXTENDED_AGENT_CARD:
           return this.handleGetExtendedAgentCard();
         // issue 10 / TCK JSONRPC-SSE-002：不支持的操作返回标准错误码而非
@@ -595,7 +607,10 @@ export class A2AServer {
     // 消息语义约束。
     if (!hasKnp) {
       if (typeof rawMessage.taskId === "string" && rawMessage.taskId.length > 0) {
-        const existing = await this.pipeline.getTask(rawMessage.taskId);
+        const existing = await this.pipeline.getTask(rawMessage.taskId, {
+          identity: caller.identity,
+          identityVerified: caller.identityVerified === true,
+        });
         if (existing === null) {
           // CORE-MULTI-004：不存在的 taskId → TaskNotFound。
           throw new ServerProtocolError({
@@ -627,7 +642,10 @@ export class A2AServer {
           });
         }
       }
-      const generic = this.pipeline.sendGenericMessage(rawMessage);
+      const generic = this.pipeline.sendGenericMessage(rawMessage, {
+        identity: caller.identity,
+        identityVerified: caller.identityVerified === true,
+      });
       return this.upperTaskState(generic);
     }
     const decoded = {
@@ -767,7 +785,13 @@ export class A2AServer {
         throw rateLimited(decision.retryAfterSeconds, decision.reason);
       }
     }
-    const task = await this.pipeline.getTask(id);
+    if (anonymousCaller(caller)) {
+      throw protocolError("authentication_required", "task access requires an authenticated identity");
+    }
+    const task = await this.pipeline.getTask(id, {
+      identity: caller.identity,
+      identityVerified: caller.identityVerified === true,
+    });
     if (task === null) {
       throw new ServerProtocolError({
         code: JSONRPC_CODES.TASK_NOT_FOUND,
@@ -778,9 +802,13 @@ export class A2AServer {
     return { task };
   }
 
-  /** ListTasks（issue 10 / TCK CORE-LIST）：返回任务列表（1.0 wire state）。 */
-  private handleListTasks(): unknown {
-    const tasks = this.pipeline.listTasks().tasks.map((t) => {
+  /** ListTasks（issue 10 / TCK CORE-LIST）：返回**本人**任务列表（1.0 wire state）。 */
+  private handleListTasks(caller: Caller): unknown {
+    if (anonymousCaller(caller)) {
+      throw protocolError("authentication_required", "task access requires an authenticated identity");
+    }
+    const owner = { identity: caller.identity, identityVerified: caller.identityVerified === true };
+    const tasks = this.pipeline.listTasks(owner).tasks.map((t) => {
       const up = this.upperTaskState({ task: t });
       return (up as { task: unknown }).task;
     });
@@ -788,7 +816,10 @@ export class A2AServer {
   }
 
   /** CancelTask（issue 10 / TCK CORE-CANCEL）。 */
-  private async handleCancelTask(params: unknown): Promise<unknown> {
+  private async handleCancelTask(params: unknown, caller: Caller): Promise<unknown> {
+    if (anonymousCaller(caller)) {
+      throw protocolError("authentication_required", "task access requires an authenticated identity");
+    }
     const p = requireParamsObject(params);
     const id = p.id;
     if (typeof id !== "string" || id.length === 0) {
@@ -797,7 +828,10 @@ export class A2AServer {
         message: "params.id must be a non-empty string",
       });
     }
-    const result = this.pipeline.cancelTask(id);
+    const result = this.pipeline.cancelTask(id, {
+      identity: caller.identity,
+      identityVerified: caller.identityVerified === true,
+    });
     if (result.outcome === "not_found") {
       throw new ServerProtocolError({
         code: JSONRPC_CODES.TASK_NOT_FOUND,
@@ -814,7 +848,10 @@ export class A2AServer {
     }
     // getTask 是 async（内存优先，Ledger 兜底）；必须 await，否则 Promise 被
     // 序列化为 {}（TCK CORE-CANCEL：CancelTask 响应必须带 task.id）。
-    const task = await this.pipeline.getTask(id);
+    const task = await this.pipeline.getTask(id, {
+      identity: caller.identity,
+      identityVerified: caller.identityVerified === true,
+    });
     return { task: task ?? { id, status: { state: "canceled" as const } } };
   }
 

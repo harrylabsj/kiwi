@@ -84,6 +84,14 @@ export interface HttpMessageSignatureVerifierOptions {
    * （undefined）保持 Host 头行为（反代/本地拓扑下向后兼容）。
    */
   expectedAuthority?: string;
+  /**
+   * 目标 URI 的 authority 来源：
+   *   - `host-header`（缺省，向后兼容）：采信入站 Host——适用于反代保留 Host
+   *     的自托管形态，并用 expectedAuthority 做跨主机重放绑定；
+   *   - `declared`：用**声明的 expectedAuthority** 重建，忽略入站 Host——云端
+   *     形态必须如此（平台网关会改写 Host，见 M0 事实 #4；入站 Host 不可信）。
+   */
+  authoritySource?: "host-header" | "declared";
 }
 
 /**
@@ -139,6 +147,7 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
   private readonly maxClockSkewSeconds: number;
   private readonly maxSignatureAgeSeconds: number;
   private readonly expectedAuthority: string | undefined;
+  private readonly authoritySource: "host-header" | "declared";
   /** scheme 是否显式配置（公网 https 节点经反代终结 TLS 时必须显式 https）。 */
   private readonly schemeExplicit: boolean;
 
@@ -155,6 +164,7 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
     this.maxClockSkewSeconds = options.maxClockSkewSeconds ?? 300;
     this.maxSignatureAgeSeconds = options.maxSignatureAgeSeconds ?? 900;
     this.expectedAuthority = options.expectedAuthority;
+    this.authoritySource = options.authoritySource ?? "host-header";
   }
 
   verify(ctx: AuthContext): AuthResult {
@@ -173,7 +183,13 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
     }
 
     // 签名请求：重建 @target-uri / @authority（服务端只有 origin-form req.url）。
-    const authority = headerValue(headers, "host") ?? "";
+    // 云上形态（M0 实测：网关把入站 Host 改写为沙箱子域）：目标 URI 必须按**声明
+    // 的公开 origin** 重建，绝不能采信入站 Host——否则签名者按公开 origin 签、
+    // 节点按被改写的 Host 重建，验签必败（等于把签名认证整条废掉）。
+    // 采信入站 Host 只适用于"反代保留 Host"的自托管形态（缺省，向后兼容）。
+    const declaredAuthority =
+      this.authoritySource === "declared" ? (this.expectedAuthority ?? "") : "";
+    const authority = declaredAuthority !== "" ? declaredAuthority : (headerValue(headers, "host") ?? "");
     // scheme 优先级：节点**显式**配置了 scheme + expectedAuthority（声明固定公网
     // 身份，如 https://veyquo.com，反代终结 TLS、本地 socket 是 http）时，
     // @target-uri 必须用节点声明的 scheme——否则签名者按 https 签、节点按本地 http
@@ -197,6 +213,7 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
     // 会把非默认端口的合法签名全拒（匿名却照常放行，签名认证形同虚设）。
     // hostname 归一比较：端口差异不构成跨主机重放，hostname 不同仍拒绝。
     if (
+      this.authoritySource !== "declared" &&
       this.expectedAuthority !== undefined &&
       authorityHostname(authority) !== authorityHostname(this.expectedAuthority)
     ) {
