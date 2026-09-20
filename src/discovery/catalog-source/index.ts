@@ -25,6 +25,17 @@
 export { ShoppingCliCatalogSource } from "./source.js";
 export type { CatalogSourceDeps } from "./source.js";
 export { KiwiCatalogSource } from "./kiwi-source.js";
+export {
+  BindingRejectionError,
+  CloudBindingTrustCache,
+  CloudCardSource,
+  jsonRpcEndpoints,
+  trustedKeyThumbprint,
+  type CloudAgentResolution,
+  type CloudBindingDocument,
+  type CloudCardDeps,
+  type PublishedCardRead,
+} from "./cloud-card.js";
 export { CatalogSourceError } from "./errors.js";
 export type { CatalogSourceErrorCode } from "./errors.js";
 export { validateCatalogAgentRecord, validateListingRecord, validateListingSearchResult } from "./kiwi-schema.js";

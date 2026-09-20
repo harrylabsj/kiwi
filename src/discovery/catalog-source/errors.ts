@@ -23,6 +23,9 @@
  *   - response_invalid   响应体不是契约要求的信封结构（缺 results / catalog_agent）；
  *   - contract_violation 候选元素未通过 CandidateAgent DTO schema 校验，或 contract
  *                        注解非 candidate-agent / 非 1.x（视为协议级违规）。
+ *   - binding_rejected   运行时绑定声明被拒（签名/发行者/时间窗/与观测事实不符）。
+ *                        见 cloud-card.ts 的 `BindingRejectionError`；**绝不降级为
+ *                        "部分可信"**，调用方按 refusalCode 分流处置。
  */
 
 export const CATALOG_SOURCE_ERROR_CODES = [
@@ -32,6 +35,7 @@ export const CATALOG_SOURCE_ERROR_CODES = [
   "contract_violation",
   /** 会话认证端点拒绝了买家会话（HTTP 401/403）：登录态缺失或已过期。 */
   "session_rejected",
+  "binding_rejected",
 ] as const;
 
 export type CatalogSourceErrorCode = (typeof CATALOG_SOURCE_ERROR_CODES)[number];
