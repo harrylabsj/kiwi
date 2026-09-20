@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:merchant-cloud:0.1.2:card-publication-request",
+  "title": "Kiwi Merchant Cloud 名片发布请求 0.1.2",
+  "description": "POST /v1/agents/{id}/card-publications 的请求体（创建**不可变** revision，不激活）。激活/暂停/撤回是独立端点（/publish、/pause、/withdraw），带 CAS 的 expected_revision。请求签名走 x-kiwi-binding-jws，不进 body。",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["publication"],
+  "properties": {
+    "publication": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "schema_version",
+        "agent_id",
+        "binding_id",
+        "generation",
+        "expected_revision",
+        "wire_profile",
+        "card_digest",
+        "agent_card"
+      ],
+      "properties": {
+        "schema_version": { "const": "0.1.2" },
+        "agent_id": {
+          "type": "string",
+          "description": "必须与路由上的 catalog_agent_id 一致。"
+        },
+        "binding_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "发布由**当前活动绑定**背书；签名必须覆盖它。"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "CAS 前置条件：不等于当前活动 revision 时拒绝（旧 revision 不能覆盖新 revision）。"
+        },
+        "wire_profile": {
+          "const": "a2a-1.0"
+        },
+        "card_digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "由发布方（Runtime）计算并经其请求签名背书；Catalog 只存不算，避免自造规范化。"
+        },
+        "agent_card": {
+          "type": "object",
+          "required": ["name", "version", "url", "supportedInterfaces"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "version": { "type": "string", "minLength": 1 },
+            "url": { "type": "string", "minLength": 1 },
+            "supportedInterfaces": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["url", "protocolBinding"],
+                "properties": {
+                  "url": { "type": "string", "minLength": 1 },
+                  "protocolBinding": { "type": "string", "minLength": 1 },
+                  "protocolVersion": { "type": "string", "minLength": 1 }
+                }
+              },
+              "description": "至少一项的 url 必须等于绑定的 a2a_endpoint（不得指向 Catalog 自己）。"
+            }
+          },
+          "description": "标准 Agent Card；含私密字段（成本/底价/密钥/token 等）时整次发布被拒，旧活动名片不受影响。"
+        }
+      }
+    }
+  }
+}

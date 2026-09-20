@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:merchant-cloud:0.1.2:runtime-binding-request",
+  "title": "Kiwi Merchant Cloud runtime-binding 创建/轮换请求 0.1.2",
+  "description": "POST /v1/agents/{id}/runtime-bindings 的请求体。请求签名（x-kiwi-binding-jws，EdDSA）不在 body 里——owner token 与密码学凭据都不进 JSON（设计 §14.1）。首次绑定需 admin_token 闸门；轮换由当前活动绑定的私钥签名授权。",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["binding"],
+  "properties": {
+    "binding": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "runtime_origin",
+        "a2a_endpoint",
+        "key_jwk",
+        "key_id",
+        "generation",
+        "service_epoch"
+      ],
+      "properties": {
+        "runtime_origin": {
+          "type": "string",
+          "pattern": "^https://",
+          "description": "Runtime 的公开 origin；私网 / loopback / cloud metadata / 保留主机名一律拒绝（T035）。"
+        },
+        "a2a_endpoint": {
+          "type": "string",
+          "pattern": "^https://",
+          "description": "A2A 端点；同样受 T035 端点策略约束。"
+        },
+        "key_jwk": {
+          "type": "object",
+          "required": ["kty", "crv", "x"],
+          "properties": {
+            "kty": { "const": "OKP" },
+            "crv": { "const": "Ed25519" },
+            "x": { "type": "string", "minLength": 1 }
+          },
+          "description": "Runtime 的签名公钥；key_thumbprint 由它按 RFC 7638 必需成员子集 + sha256 计算，跨语言锁定。"
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Runtime 侧的部署代次；换址/重部署须递增，旧绑定不复活。"
+        },
+        "service_epoch": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "binding_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{2,95}$",
+          "description": "可选：调用方指定 binding_id；省略时由 Catalog 生成。"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "可选：绑定到期时间（ISO 8601）。"
+        }
+      }
+    },
+    "admin_token": {
+      "type": "string",
+      "minLength": 1,
+      "description": "首次绑定/管理员轮换的受控注册闸门；M4 开通向导落地后换成商家授权 + 端点挑战。"
+    }
+  }
+}

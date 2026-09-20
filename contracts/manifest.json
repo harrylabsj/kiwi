@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "authority": "kiwi/contracts",
-  "bundle_sha256": "4a045a50c9c084dc50850002345c62618be8f9743219e7cd3f299aa9fe9771c9",
+  "bundle_sha256": "3e4e58f5e1673383cea485ebca41bf00ad1e8fe6f191f45eb721d1835f948d36",
   "contracts": [
     {
       "id": "commerce-intent",
@@ -128,6 +128,30 @@
       "version": "0.1.0",
       "path": "contracts/merchant-rfq/0.1.0/source-record.schema.json",
       "sha256": "822f6b17ab3b77479385e092c50b04355a84b0820fba74a57d4ab38aa60415ad"
+    },
+    {
+      "id": "runtime-binding-claims",
+      "version": "0.1.2",
+      "path": "contracts/runtime-binding/0.1.2/claims.schema.json",
+      "sha256": "dacdacf7099c595cf70899994d3778f33f0476757426555c31168fbfd6660d4e"
+    },
+    {
+      "id": "runtime-binding-document",
+      "version": "0.1.2",
+      "path": "contracts/runtime-binding/0.1.2/document.schema.json",
+      "sha256": "9a7a0cc4e86b0f3b87f20dcb3b4721b28c797136ce5173d636daa76962329925"
+    },
+    {
+      "id": "runtime-binding-request",
+      "version": "0.1.2",
+      "path": "contracts/runtime-binding/0.1.2/binding-request.schema.json",
+      "sha256": "7788b5722614b0ae4ccb47657a64f75be9dac13f962a50aa6a1937c3761b7b15"
+    },
+    {
+      "id": "card-publication-request",
+      "version": "0.1.2",
+      "path": "contracts/card-publication/0.1.2/request.schema.json",
+      "sha256": "9053e039b8d59c0bbb2d9c73a6d1219491148f28346e1202355605aa5311c72e"
     }
   ]
 }

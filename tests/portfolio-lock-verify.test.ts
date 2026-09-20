@@ -36,7 +36,7 @@ const SCRIPT = fileURLToPath(
 // commit（CLI 级合法用例用它，因为 CLI 从自身位置读取真实 kiwi 根）。
 // 与 contracts/manifest.json 的 bundle_sha256 保持一致（新增 merchant-rfq 契约后更新）；
 // source_commit 指向承载该 bundle 的提交（5c775be 引入本 bundle 时重锚）。
-const REAL_BUNDLE_SHA = "4a045a50c9c084dc50850002345c62618be8f9743219e7cd3f299aa9fe9771c9";
+const REAL_BUNDLE_SHA = "3e4e58f5e1673383cea485ebca41bf00ad1e8fe6f191f45eb721d1835f948d36";
 const REAL_SOURCE_COMMIT = "5c775be11867fbfa1809d78d3dfdbec89a65d8a6";
 
 const tempDirs: string[] = [];

@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:merchant-cloud:0.1.2:runtime-binding-document",
+  "title": "Kiwi Merchant Cloud runtime-binding 读响应 0.1.2",
+  "description": "GET /v1/agents/{id}/runtime-binding 的响应体（Catalog 签发）。公开读，不含平台 applicationId / 用户 ID 等控制面私有信息。properties.claims 是 runtime-binding/0.1.2/claims.schema.json 的**逐字段内联副本**（测试锁定两者一致）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "claims",
+    "claims_jws",
+    "issuer_kid",
+    "issuer_thumbprint",
+    "governance"
+  ],
+  "properties": {
+    "claims": {
+      "title": "Kiwi Merchant Cloud runtime-binding-claims 0.1.2",
+      "description": "新增内部设计契约。不是WorkBuddy官方接口；不构成平台成功、密码学或生产就绪证明。",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "0.1.2"
+        },
+        "binding_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{2,95}$"
+        },
+        "binding_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "merchant_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{2,95}$"
+        },
+        "agent_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{2,95}$"
+        },
+        "workload_ref": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{2,95}$"
+        },
+        "runtime_origin": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "a2a_endpoint": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "card_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "key_thumbprint": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "service_epoch": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "issued_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "const": "a2a-runtime"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "revoked"
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "binding_id",
+        "binding_version",
+        "merchant_id",
+        "agent_id",
+        "workload_ref",
+        "runtime_origin",
+        "a2a_endpoint",
+        "card_url",
+        "key_id",
+        "key_thumbprint",
+        "service_epoch",
+        "issued_at",
+        "expires_at",
+        "issuer",
+        "scope",
+        "status"
+      ]
+    },
+    "claims_jws": {
+      "type": "string",
+      "minLength": 1,
+      "description": "compact JWS（EdDSA，typ=kiwi-runtime-binding-claims），载荷必须是 claims 字段的逐字段同一对象。"
+    },
+    "issuer_kid": {
+      "type": "string",
+      "minLength": 1,
+      "description": "必须与 claims_jws 头部的 kid 一致：选信任钥匙的是 JWS 头，不是本字段。"
+    },
+    "issuer_thumbprint": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "发行者公钥指纹；Buyer 必须与本地可信钥匙的指纹比对。"
+    },
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "publication_state"
+      ],
+      "properties": {
+        "publication_state": {
+          "enum": [
+            "ACTIVE",
+            "PAUSED",
+            "WITHDRAWN"
+          ]
+        }
+      }
+    },
+    "card_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "活动名片版本（信任缓存的元组分；公开元数据，非敏感）。"
+    },
+    "card_etag": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Catalog 对公开读地址响应体的 ETag 承诺；Buyer 用它做 If-None-Match 重验证。"
+    }
+  }
+}
