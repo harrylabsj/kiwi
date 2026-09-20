@@ -1,16 +1,14 @@
 {
   "$note": "Kiwi 商家运营 Buddy 应用配置的本地草稿（用于导出预览与人工照着配置）。WorkBuddy 后台导出 JSON 的精确格式未公开，本文件为自定义清晰结构；提交前需在后台核对每个字段的对应表单项（见 README.md「需在后台核对的字段」）。本版按 2026-09-18 收窄后的定位重写：**网关只做第 0 版目录能力**（注册与发布公开资料），商家实例完全独立、与网关无连接（部署说明 §0「网关不碰实例」）。因此本应用只有「目录注册与发布」一个模式，不含任何实例读写能力。",
-  "version": "1.4.0",
+  "version": "1.4.2",
   "identity": {
     "appName": "Kiwi 商家运营工作台",
     "appNameEn": "Kiwi Merchant Workbench",
-    "icon": "上传 256×256 PNG 应用头像（可复用连接器 icon.svg 的薄荷绿 kiwi 鸟风格重新出图）",
-    "简介": "面向 Kiwi 商家的运营工作台：注册 Kiwi 商家目录、起草并发布公开资料，让采购专家找到你。发布要你亲自在目录门户确认，我不会替你点确认。",
+    "icon": "avatars/kiwi-merchant-buddy.png（256×256 PNG，上传至 Buddy 创建页）",
+    "简介": "注册 Kiwi 商家目录、起草公开资料并在门户确认发布，让采购专家按商品词发现你；可查看匿名经营汇总和准备客服回复草稿，不接待实时询价。",
     "授权列表": "本应用需要两类授权，互不替代：① 平台应用级授权（本表单，用于应用自身的 Open API 能力，当前未申请任何用户数据权限）；② Kiwi 商家连接器的 OAuth 授权（source=kiwi-merchant，由 Kiwi 统一商家入口提供 OAuth 2.1 + PKCE 端点，用户首次绑定时在浏览器完成，无需自填 Token）。**应用级回调与连接器回调是两件事，不要混填**（见 README）。",
     "授权回调URL": "本应用自身的 HTTPS 回调服务地址（接收平台 Open API 授权码；当前不申请 Open API 权限，故未填写——提交前若确需权限，必须先部署可处理授权码的真实回调，不得填占位或无效 URL）。连接器回调另见 misc.连接器回调。",
-    "可信Origin": [
-      "https://merchant.kiwi.harrylabsj.com"
-    ]
+    "可信Origin": ["https://merchant.kiwi.harrylabsj.com"]
   },
   "home": {
     "slogan": "把资料发出去，让采购专家找到你",
@@ -35,30 +33,22 @@
       {
         "mode": "catalog-publish",
         "prompt": "我是新商家，怎么让采购专家搜到我的商品？",
-        "bindTools": [
-          "kiwi_catalog_get_merchant_profile"
-        ]
+        "bindTools": ["kiwi_catalog_get_merchant_profile"]
       },
       {
         "mode": "catalog-publish",
         "prompt": "帮我起草一条公开资料草稿，我要先在门户确认再发布",
-        "bindTools": [
-          "kiwi_catalog_save_publication_draft"
-        ]
+        "bindTools": ["kiwi_catalog_save_publication_draft"]
       },
       {
         "mode": "catalog-publish",
         "prompt": "我的公开资料现在是什么状态？",
-        "bindTools": [
-          "kiwi_catalog_get_publication"
-        ]
+        "bindTools": ["kiwi_catalog_get_publication"]
       },
       {
         "mode": "catalog-publish",
         "prompt": "现在有多少买家在关注我的店铺？我的资料有人看吗？",
-        "bindTools": [
-          "kiwi_catalog_get_merchant_stats"
-        ]
+        "bindTools": ["kiwi_catalog_get_merchant_stats"]
       },
       {
         "mode": "catalog-publish",
@@ -70,17 +60,13 @@
         ]
       }
     ],
-    "内置连接器": "kiwi-merchant（商家连接器，OAuth 模式，固定公网 URL 指向 Kiwi 统一商家入口 https://merchant.kiwi.harrylabsj.com/mcp）。注意：integrations/hosts/workbuddy/kiwi-merchant-connector-oauth/ 是**指向单个商家实例**的历史包，不得作为通用商家入口提交（发布计划 §3.5）。"
+    "内置连接器": "oc_c86216e2a36110bf（source=kiwi-merchant，商家连接器，OAuth 模式，固定公网 URL 指向 Kiwi 统一商家入口 https://merchant.kiwi.harrylabsj.com/mcp）。注意：integrations/hosts/workbuddy/kiwi-merchant-connector-oauth/ 是**指向单个商家实例**的历史包，不得作为通用商家入口提交（发布计划 §3.5）。"
   },
   "market": {
-    "connectors": [
-      "kiwi-merchant"
-    ],
-    "skills": [
-      "kiwi-merchant-cs-prep"
-    ],
+    "connectors": ["oc_c86216e2a36110bf"],
+    "skills": ["kiwi-merchant-cs-prep"],
     "experts": [],
-    "精选场景": "推荐位：「目录注册与发布」（新商家唯一的入口）"
+    "精选场景": "暂不配置（该市场推荐位关联专家/专家团；本应用暂无内置专家）"
   },
   "misc": {
     "跳过首次绑定应用授权": false,

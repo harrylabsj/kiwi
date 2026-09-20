@@ -1,12 +1,8 @@
 # kiwi-merchant-gateway-connector — 商家连接器（「Kiwi 商家运营」）包
 
-状态：**已提交 WorkBuddy 审核，尚未发布**（2026-09-18）。平台连接器 ID `oc_f6eb7fea361ac64e`；上架后仍须实机验收 OAuth 与工具。
+状态：**新资产 v1.1.0 已提交 WorkBuddy 审核，尚未发布**（2026-09-20）。平台连接器 ID `oc_c86216e2a36110bf`；原 v1.0.0 草稿 `oc_f6eb7fea361ac64e` 已由用户删除。审核通过后仍须实机验收 OAuth 与 6 个工具。详见[上架素材包](../../../../docs/merchant-buddy/merchant-connector-submission-pack.md)。
 
-> **⚠️ 仓库版本与已提交版本不一致。** 提交的是 **v1.0.0 / 5 个工具**；此后仓库新增了
-> 经营汇总（关注数 + 浏览量）并把「读单条资料」扩展为**带回可编辑内容**，当前构建为
-> **1.1.0 / 6 个工具**（sha256 见[上架素材包](../../../../docs/merchant-buddy/merchant-connector-submission-pack.md) §1）。
-> **上架前需按平台流程重新提交该包**，否则已上架版本不含经营汇总与文案改写所需的读内容能力。
-> 平台是否允许覆盖已提交版本、或需新建版本号，属外部待核验项。
+> **版本迁移记录**：原 v1.0.0 包只有 5 个工具。同 ID 重传 v1.1.0 未持久化；用户随后删除了旧草稿，再创建新资产 `oc_c86216e2a36110bf`。新资产的提交页及资产列表均显示 **v1.1.0 / 审核中**；6 个目录工具在仓库契约中通过校验，WorkBuddy 用户侧可见性仍待审核通过后验证。包摘要见[上架素材包](../../../../docs/merchant-buddy/merchant-connector-submission-pack.md) §1。
 
 指向 **Kiwi 商家连接器网关**（多商家共享入口，`https://merchant.kiwi.harrylabsj.com/mcp`，远程 HTTPS MCP + OAuth）。商家在 OAuth 授权页完成目录注册/登录后，网关按已验证 `merchant_id` 提供**第 0 版目录能力**（本包静态声明的 6 个工具）：
 
@@ -43,7 +39,7 @@ node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /abs/path/
 ## 提交前必须确认（外部事项）
 
 1. **source 唯一性**：包已通过上传解析并生成新 ID，待审核通过后核对正式市场记录。
-2. **新平台 ID**：`oc_f6eb7fea361ac64e`，与买方 `oc_bd73f860e3e2b5d3` 分开。
+2. **新平台 ID**：`oc_c86216e2a36110bf`，与已删除旧商家 ID `oc_f6eb7fea361ac64e`、买方 `oc_bd73f860e3e2b5d3` 分开。
 3. **入口域名**：`merchant.kiwi.harrylabsj.com` 已切换为商家网关；公网 `/health` 返回 `kiwi-merchant-entry`，OAuth 元数据提供 catalog/merchant scope。
 4. **OAuth 回调**：按 source 派生为
    `workbuddy://workbuddy/mcp/connector%3Akiwi-merchant/oauth/callback`，

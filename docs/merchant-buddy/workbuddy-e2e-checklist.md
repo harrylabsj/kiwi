@@ -1,68 +1,40 @@
-# WorkBuddy 实机联调检查单（Kiwi Merchant Buddy）
+# WorkBuddy 实机联调检查单（Kiwi 商家 Buddy 第 0 版）
 
-> **2026-09-18 收窄：本检查单里的实例工具步骤当前不适用。** 按
-> [「网关不碰实例」](merchant-connector-deployment.md)原则（部署说明 §0），商家 Buddy 只
-> 做第 0 版目录能力（注册与发布），**不提供 `kiwi_merchant_*` 实例工具**；商家实例独立
-> 运行、直接与买家做 A2A。下文凡涉及 `kiwi_merchant_*`（商品/库存/变更候选/磋商）的
-> 步骤保留作"若将来启用实例路由"的检查项，**当前不要据此判定联调失败**。
-> 第 0 版相关的步骤（目录注册、草稿、请求发布、门户确认、状态、撤回）仍然有效。
+状态：待实机执行（2026-09-20）。当前以[「网关不碰实例」](merchant-connector-deployment.md) §0 为准：应用只提供目录注册、公开资料与匿名经营汇总；AI 客服技能只准备私有草稿。**不提供商家实例的商品/库存/询价工具，也不承担 7×24 接待。**
 
-本检查单覆盖无法离线自动化的联调步骤。离线已自动化部分见
-`tests/merchant-buddy/`（oauth-e2e / acceptance-groups / stage1/2/4-acceptance）。
+## 前置与版本
 
-## 前置
+- 商家连接器 `oc_c86216e2a36110bf` 已通过 v1.1.0 审核、安装后 `tools/list` 能看到 6 个 `kiwi_catalog_*` 工具。当前平台显示**审核中 v1.1.0**，尚未发布，**此前置未满足**；旧版 ID `oc_f6eb7fea361ac64e` 已删除，不得再引用。
+- `kiwi-merchant-cs-prep` 单独技能已通过审核并可在应用市场引用；当前 `os_dc3a52407574eb77` 审核中，尚未上架。
+- Buddy 应用按 `integrations/hosts/workbuddy/kiwi-merchant-buddy/buddy-app.config.json` v1.4.2 人工配置，内置连接器选择 `oc_c86216e2a36110bf`，上传头像文件 `avatars/kiwi-merchant-buddy.png`。该 JSON 是本地草稿，不能直接当平台导出文件导入。
+- 测试使用专用商家账号和可公开的测试商品名，记录时间、输入、响应与截图；**不要向真实买家发测试询价或消息**。
 
-- staging 部署：`deploy/merchant-bundle/install.mjs` 安装，`kiwi merchant runtime start` 运行；
-  MCP 服务 `merchant_mcp.auth_mode: oauth` + `public_url: https://<staging 域名>`。
-- 连接器 zip：`package-merchant-connector.mjs --bundle=oauth --out <path>.zip`（token 过渡包用缺省 --bundle=token）。
-- Buddy 应用配置：`integrations/hosts/workbuddy/kiwi-merchant-buddy/`（buddy-app.config.json + README）。
+## 1. 无实例新商家首次打开与绑定
 
-## 步骤与预期
+1. 在 WorkBuddy 预览态用全新商家身份打开应用。确认首次内置 OAuth 绑定可以引导到 Kiwi 目录的注册/邮箱验证；不得要求部署自己的服务器或输入本机 token。
+2. 完成目录注册/验证/授权后调用 `kiwi_catalog_get_merchant_profile`，应返回当前商家身份，不能看到其他商家资料。
+3. 取消授权一次，预期显示可恢复的失败提示，不得误称已连接；再完成授权。
+4. 若 Buddy 的首次绑定弹窗会在商家完成注册前硬阻塞且无法注册，记录截图并暂停最终提交；不能靠提示词声称可延后绑定。
 
-### 1. 连接器上架与首次绑定（OAuth）
+## 2. 草稿、门户确认与买家发现
 
-1. 提交 OAuth 连接器包审核 → 市场可见。
-2. Buddy 应用绑定连接器 → 应弹出商家 OAuth 授权页（显示商家名 + merchant:read/write scope）。
-   - 预期：同意 → 回调成功；拒绝 → access_denied 且不产生 token。
-3. 首次调用 `kiwi_merchant_list_products` → 返回真实目录（白名单字段）。
-   - 证据：截图/录屏 + 工具返回 JSON 留存。
+1. 用 `kiwi_catalog_save_publication_draft` 保存商家名和至少一个商品名，得到 `publication_id`；此时采购专家按商品词搜索**不应**看到该草稿。
+2. 用 `kiwi_catalog_request_publish` 获得门户确认入口。Buddy 应明确说“尚未发布”，不得代商家点击确认。
+3. 商家到目录门户核对公开预览并确认发布。用 `kiwi_catalog_get_publication` 回读已发布内容与状态。
+4. 采购专家用商品词搜索，预期出现该商家、来源与更新时间，并标注 `inquiry_available=false`；尝试 `kiwi_request_quotes` 应得到 `merchant_inquiry_unavailable` 且不产生任务。
+5. 商家撤回测试资料，再次搜索应不可作为已发布商家被发现。
 
-### 2. 重连与续期
+## 3. 经营汇总、文案与客服准备
 
-1. 等待 access_token 过期（1 小时）或重启 WorkBuddy → 再次调用工具。
-   - 预期：WorkBuddy 自动用 refresh_token 续期，用户无感知。
-2. 服务重启（`runtime stop` → `start`）后已绑定连接仍可用（refresh_token 落盘 oauth.sqlite）。
-   - 证据：重启前后同一调用均成功。
+1. 用 `kiwi_catalog_get_merchant_stats` 核对匿名关注数与各资料浏览量；不得出现关注者身份、联系方式或群发入口。
+2. 对已发布资料发起“改进文案”：先用 `kiwi_catalog_get_publication` 读当前内容，生成不编造规格/承诺的改稿，保存为**新草稿**；原资料不得自动被覆盖或发布。
+3. 在应用市场打开 `kiwi-merchant-cs-prep`，提供无敏感数据的测试材料，产出带来源、待确认项与转人工标记的 FAQ/回复**草稿**；不得声称已自动接待或向客户发送。
 
-### 3. 权限撤销
+## 4. OAuth、隔离与故障
 
-1. 用户在连接器设置中断开/撤销授权。
-   - 预期：服务端 revoke 后工具调用 401；列表/读取全部拒绝。
-   - 证据：撤销前后两次调用对比。
+1. A/B 两个商家各自授权，交叉读取/撤回他人 `publication_id` 必须拒绝。
+2. 断开/撤销授权后，目录工具不能继续读写；重新授权后恢复。令牌续期与重启后的行为需观察，不预设客户端自动恢复。
+3. 网关离线、目录不可达、凭据缺失时，应失败关闭并给出可理解的错误；不得误报发布成功。
+4. 留存 WorkBuddy 预览版本、连接器实际版本与工具列表、每步截图/响应、OAuth 回跳结果和异常复现。通过后才提交应用最终配置审核。
 
-### 4. 写闭环两阶段确认
-
-1. `kiwi_merchant_prepare_inventory_update` 登记候选 → 不执行（库存未变）。
-2. 到管理页面批准（/admin/pending，管理员登录 + 一次性确认凭证）→ 执行并回读。
-3. 重复执行同一 command_id → 拒绝（不重复执行）。
-   - 证据：三步的工具返回 + 库存回读值。
-
-### 5. MCP Apps 资源
-
-1. 宿主支持时：resources/list 出现 7 个 `kiwi-merchant://presentation/*` 资源，read 返回 JSON + 文本摘要。
-2. 宿主不支持时：仅用工具文本结果完成同等业务（降级不丢字段）。
-
-### 6. 故障演练（staging）
-
-1. 停 shopping-cli → 报价 decline（temporarily_unavailable），能力探测落盘报告不可用，不演示价接待。
-2. 停 A2A（runtime stop a2a）→ 管理入口 `kiwi merchant runtime start`/restart 恢复。
-3. 备份恢复演练：备份 → 删除状态目录 → 恢复 → 磋商记录完整（RPO=0）。
-
-### 7. 证据留存
-
-- 每步留存：操作时间（UTC）、输入、返回 JSON/截图、预期/实际对比。
-- 归档到发布申请附件；平台审核问题逐条回填到本检查单。
-
-## 版本组合（联调基线）
-
-见 `deploy/merchant-bundle/versions.lock.json`（kiwi 0.8.0 / shopping-cli >=2.0.0 <3.0.0 / WorkBuddy >=4.24.0）。
+旧版实例 MCP、库存两阶段审批、shopping-cli 与 A2A 的检查属于**独立商家实例**验收，不作为此 Buddy 第 0 版的发布门槛。

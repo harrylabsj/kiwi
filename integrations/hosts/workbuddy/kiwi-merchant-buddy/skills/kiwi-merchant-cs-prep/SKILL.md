@@ -5,6 +5,7 @@ display_name_en: Kiwi Merchant Support Prep
 description: Help merchants prepare sourced customer-service FAQs, draft replies and human-handoff rules in Kiwi Merchant Buddy without connecting a merchant server. Use for 商品问答、售后知识整理、客服话术、模拟顾客提问和转人工规则；不要自动向客户发消息。
 description_zh: 根据商家资料整理客服知识、起草有依据的回复，并识别需要人工处理的问题。
 description_en: Prepare sourced support FAQs and reply drafts with clear human-handoff decisions.
+category: writing
 version: 0.1.0
 author: harrylabsj
 ---
@@ -108,7 +109,7 @@ author: harrylabsj
 发布状态：未发布
 ```
 
-批量 FAQ 使用同样字段逐条列出；FAQ 条目字段模板见 [references/faq-template.md](references/faq-template.md)。规则：
+批量 FAQ 时先读取 @references/faq-template.md，逐条使用其中的时间、来源和有效期字段。规则：
 
 - 每条草稿独立勾选“公开”，不存在一键全部公开。
 - “可公开”建议只在有可靠来源、无私密字段、非承诺性内容时给出；它仍是建议，不等于商家已确认。
@@ -126,7 +127,7 @@ author: harrylabsj
 
 - 问题内容要脱敏：不写入客户姓名、电话、完整订单号、截图原文。
 - 高影响缺口（价格、退款、交付承诺）排在前面，并标注“在补充前，此类问题一律 handoff”。
-- 批量缺口模板同样见 [references/faq-template.md](references/faq-template.md)。
+- 批量缺口清单时读取 @references/faq-template.md 中的缺口记录模板。
 
 ## 示例
 

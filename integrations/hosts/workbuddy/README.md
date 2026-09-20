@@ -38,21 +38,13 @@ node integrations/hosts/workbuddy/package.mjs --out /absolute/path/kiwi-procurem
 
 内置 ImageGen 生成的原创插画，保存为 `kiwi-procurement-expert/avatars/kiwi-procurement.png`。提示词：绿色 kiwi 鸟，戴圆框眼镜、拿三项勾选清单，薄荷绿/深绿与少量暖橙，浅色背景，居中留白，无文字、无品牌标识；用于采购专家头像。
 
-## Kiwi 商家工作台连接器与 Buddy 应用（阶段三）
+## Kiwi 商家连接器与 Buddy 应用（当前第 0 版）
 
-`kiwi-merchant-connector/` 是商家侧 MCP 连接器包（MCP + Skill 方案，版本独立从 1.0.0 起），对应 `kiwi merchant mcp serve` 启动的远程 MCP 服务（`src/mcp/merchant-server.ts`，streamableHttp，15 个 `kiwi_merchant_*` 工具）。`kiwi-merchant-buddy/` 是 Buddy 应用后台配置的本地草稿与填写说明。
-
-校验与打包（在 Kiwi 仓库根目录运行，只读校验不联网）：
+当前通用包是 `kiwi-merchant-gateway-connector/`：`source=kiwi-merchant`、固定 HTTPS 网关入口、OAuth，**只暴露 6 个 `kiwi_catalog_*` 目录工具**。按[部署说明](../../../docs/merchant-buddy/merchant-connector-deployment.md) §0，网关不连接商家实例、不代理库存或询价工具。不要把历史 `kiwi-merchant-connector/`（单实例 token）或 `kiwi-merchant-connector-oauth/`（单实例 OAuth）包提交为通用入口。
 
 ```sh
-# token 过渡包（缺省）/ OAuth 正式包（阶段五起正式交付走 oauth）
-node integrations/hosts/workbuddy/package-merchant-connector.mjs --check
-node integrations/hosts/workbuddy/package-merchant-connector.mjs --bundle=oauth --check
-node integrations/hosts/workbuddy/package-merchant-connector.mjs --bundle=oauth --out /absolute/path/kiwi-merchant-connector-oauth-1.0.0.zip
+node integrations/hosts/workbuddy/package-gateway-connector.mjs --check
+node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /absolute/path/kiwi-merchant-gateway-1.1.0.zip
 ```
 
-两个包：`kiwi-merchant-connector/`（`source: "kiwi-merchant-token"`，`auth_mode: "token"` 用户自填 Token，过渡）与 `kiwi-merchant-connector-oauth/`（`source: "kiwi-merchant"`，OAuth 2.1，无 auth_mode、无 token 占位——走 WorkBuddy 内置 OAuth 流程）。平台要求同一服务两种方式必须两个不同 source，已照此拆分。
-
-脚本校验 connector-meta/mcp/token-schema 合法性、mcp.json 的 15 个工具名与 `src/mcp/merchant-tools.ts` 一致（防漂移的全等比对见 `tests/workbuddy-merchant-connector.test.ts`）、token 占位符与表单字段一一对应、icon.svg 无文字无脚本、SKILL.md frontmatter、包内无疑似凭据；只打包明确列出的 5 个文件，不覆盖已有压缩包。
-
-提交：连接器目录打包后按开放平台「连接器」流程提交审核；Buddy 应用按 `kiwi-merchant-buddy/README.md` 逐模块人工配置。本适配不自动提交平台、不更新连接器、不发布 npm。staging 联调步骤见 `kiwi-merchant-buddy/README.md`；`mcp.json` 的 `tools` 声明与 `token-schema.json` 的 `docUrl` 等需在后台核对的字段也在其中列出。
+`kiwi-merchant-buddy/` 是应用后台人工配置草稿、头像、AI 客服准备技能与填写说明。用户已删除旧商家草稿 `oc_f6eb7fea361ac64e`；新商家连接器 `oc_c86216e2a36110bf` 已提交审核，平台显示 v1.1.0。审核通过并验证 6 个工具后，才能完成 Buddy 最终配置审核。具体包摘要、技能包与实机检查见[上架素材包](../../../docs/merchant-buddy/merchant-connector-submission-pack.md)和[检查单](../../../docs/merchant-buddy/workbuddy-e2e-checklist.md)。

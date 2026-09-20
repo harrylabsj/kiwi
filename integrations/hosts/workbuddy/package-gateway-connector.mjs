@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 //
 // 与 kiwi-merchant-connector（单商家 Veyquo 实例 / token 过渡）是**不同的发布对象**：
 // 本包指向受信任的网关入口（多商家），source 同为 kiwi-merchant，靠 OAuth 授权页
-// 由商家在目录侧确认身份后路由到各自实例。发布计划 §3.5 要求：不得把指向
+// 由商家在目录侧确认身份后访问目录能力，不路由到商家实例。发布计划 §3.5 要求：不得把指向
 // Veyquo 单实例的包当作通用商家入口提交。
 //
 // 校验（只读、不联网）：
@@ -20,7 +20,7 @@ import { spawnSync } from "node:child_process";
 //   - 包内无疑似凭据。
 // 用法：
 //   node package-gateway-connector.mjs --check
-//   node package-gateway-connector.mjs --out /abs/path/kiwi-merchant-gateway-1.0.0.zip
+//   node package-gateway-connector.mjs --out /abs/path/kiwi-merchant-gateway-1.1.0.zip
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../..");

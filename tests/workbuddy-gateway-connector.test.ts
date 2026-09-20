@@ -80,6 +80,21 @@ describe("商家连接器包：声明与实现一致", () => {
 });
 
 describe("商家连接器包：身份与回调与买方分离", () => {
+  it("六工具版本不沿用已提交的 v1.0.0 标识，也不宣传实例能力", () => {
+    const meta = readJson("connector-meta.json") as {
+      version: string;
+      description_zh: string;
+      description_en: string;
+    };
+    const mcp = readJson("mcp.json") as { tools: unknown[] };
+    expect(mcp.tools).toHaveLength(6);
+    expect(meta.version).toMatch(/^\d+\.\d+\.\d+$/);
+    const [major = 0, minor = 0] = meta.version.split(".").map(Number);
+    expect(major > 1 || (major === 1 && minor >= 1)).toBe(true);
+    expect(meta.description_zh).not.toMatch(/绑定自有.*服务后|查看商品与库存|跟进买家询价/);
+    expect(meta.description_en).not.toMatch(/after connecting your own|follow buyer inquiries/);
+  });
+
   it("source 与入口 CLI 的缺省 source 一致", () => {
     const meta = readJson("connector-meta.json");
     expect(meta.source).toBe(DEFAULT_MERCHANT_CONNECTOR_SOURCE);
