@@ -121,6 +121,48 @@ function dependencyLockDigest(outDir) {
   return `sha256:${createHash("sha256").update(lines.join("\n")).digest("hex")}`;
 }
 
+
+/**
+ * 按**实际随包依赖**计算 engines 下界。
+ *
+ * 仓库根 package.json 的 engines 由全量依赖决定（pi-agent-core/pi-ai 要求
+ * >=22.19.0）；云端薄切片已把模型 SDK 裁掉，若原样继承该声明，就会带着一个
+ * 与实际运行时无关的下界上平台（M0 实测平台 Node 为 v22.13.1），可能直接
+ * 触发引擎校验失败。因此这里取随包依赖 engines.node 的最大下界。
+ */
+function computeShippedEngines(outDir) {
+  const modulesDir = path.join(outDir, "node_modules");
+  const floors = [];
+  const complex = [];
+  for (const entry of readdirSync(modulesDir, { withFileTypes: true })) {
+    const pkgs = entry.name.startsWith("@")
+      ? readdirSync(path.join(modulesDir, entry.name)).map((n) => `${entry.name}/${n}`)
+      : [entry.name];
+    for (const name of pkgs) {
+      const pkg = parsePackageJson(path.join(modulesDir, name, "package.json"));
+      const range = pkg?.engines?.node;
+      if (typeof range !== "string") continue;
+      const match = /^>=\s*(\d+)\.(\d+)\.(\d+)$/.exec(range.trim());
+      if (match === null) {
+        complex.push(`${name}: ${range}`);
+        continue;
+      }
+      floors.push({
+        name,
+        version: `${match[1]}.${match[2]}.${match[3]}`,
+        parts: [Number(match[1]), Number(match[2]), Number(match[3])],
+      });
+    }
+  }
+  floors.sort((a, b) => {
+    for (let i = 0; i < 3; i += 1) {
+      if (a.parts[i] !== b.parts[i]) return b.parts[i] - a.parts[i];
+    }
+    return 0;
+  });
+  return { highest: floors[0], complex };
+}
+
 function gitCommit() {
   return execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
 }
@@ -279,7 +321,7 @@ function main() {
     type: "module",
     main: "index.js",
     scripts: { start: "node dist/cloud/main.js" },
-    engines: rootPkg.engines,
+    // engines 在依赖裁剪后由实际随包依赖决定（见 computeShippedEngines）。
     dependencies: rootPkg.dependencies,
   };
   writeFileSync(path.join(options.out, "package.json"), `${JSON.stringify(artifactPkg, null, 2)}\n`);
@@ -317,6 +359,28 @@ function main() {
   );
 
   // 摘要与准入检查（node_modules 逐文件哈希太慢，按聚合摘要 + 顶层校验文件数）。
+  // engines：裁剪后再写/修正（按实际随包依赖）。
+  const shippedEngines = computeShippedEngines(options.out);
+  const pkgPath = path.join(options.out, "package.json");
+  const writtenPkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+  // 自身代码下界：本切片用 node:sqlite（DatabaseSync，≥22.5）；不继承仓库根的
+  // >=22.19.0——那是 pi-ai/pi-agent-core 的要求，而这两个包已被裁掉。
+  const CODE_NODE_FLOOR = [22, 5, 0];
+  const floorParts =
+    shippedEngines.highest === undefined
+      ? CODE_NODE_FLOOR
+      : shippedEngines.highest.parts.some((value, i) => value > CODE_NODE_FLOOR[i])
+        ? shippedEngines.highest.parts
+        : CODE_NODE_FLOOR;
+  writtenPkg.engines = { node: `>=${floorParts.join(".")}` };
+  writeFileSync(pkgPath, `${JSON.stringify(writtenPkg, null, 2)}\n`);
+  if (shippedEngines.highest !== undefined) {
+    process.stdout.write(
+      `[cloud-artifact] engines.node => ${writtenPkg.engines.node}` +
+        `（随包依赖最高要求：${shippedEngines.highest.name}）\n`,
+    );
+  }
+
   const files = listFiles(options.out).filter((f) => !f.rel.startsWith("node_modules/"));
   assertAdmissible(listFiles(options.out));
   const digestLines = files
