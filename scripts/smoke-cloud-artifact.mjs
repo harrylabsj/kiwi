@@ -269,12 +269,15 @@ async function main() {
       const { finalizeEnvelope } = await import(
         path.join(options.artifact, "dist", "negotiation", "domain", "envelope.js")
       );
+      // 每次运行用唯一 id：状态目录跨运行保留，固定 id 会撞上 KNP 相位/幂等
+      // （第二次冒烟会因 state_conflict 被 decline——冒烟必须可重复）。
+      const runId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
       const envelope = finalizeEnvelope({
         capability: "com.harrylabsj.kiwi.shopping.negotiation",
         protocol_version: "1.0",
-        negotiation_id: "neg_smoke",
-        exchange_id: "ex_smoke",
-        message_id: "msg_smoke_rfq",
+        negotiation_id: `neg_smoke_${runId}`,
+        exchange_id: `ex_smoke_${runId}`,
+        message_id: `msg_smoke_${runId}`,
         actor: "buyer",
         action: "rfq",
         created_at: new Date().toISOString(),
@@ -289,13 +292,13 @@ async function main() {
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
-          id: "smoke-rfq",
+          id: `smoke-rfq-${runId}`,
           method: "SendMessage",
           params: {
             message: {
               role: "ROLE_USER",
               parts: [{ data: { knp_envelope: envelope }, mediaType: "application/json" }],
-              messageId: "msg_smoke_rfq",
+              messageId: `msg_smoke_${runId}`,
             },
           },
         }),
