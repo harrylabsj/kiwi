@@ -35,7 +35,7 @@
 import type { JwsSigningIdentity } from "../../trust/identity/jws.js";
 import { signCompactJws } from "../../trust/identity/jws.js";
 import { BindingAuditLog, RevocationSet } from "./audit.js";
-import { buildBindingClaims, validateBindingClaims, type BindingClaims, type BuildBindingClaimsInput } from "./claims.js";
+import { buildBindingClaims, validateBindingClaims, type BindingClaims, type BuildBindingClaimsInput } from "../../trust/binding/claims.js";
 import type { MerchantAuthorizationProof, VerifiedChallengeProof } from "./proofs.js";
 
 export type IssuanceRefusalCode =

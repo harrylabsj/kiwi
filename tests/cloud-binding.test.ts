@@ -26,7 +26,7 @@ import {
   type BindingChallenge,
 } from "../src/cloud/binding/proofs.js";
 import { createChallengeResponder } from "../src/cloud/binding/runtime-challenge.js";
-import { publicKeyThumbprint } from "../src/cloud/binding/thumbprint.js";
+import { publicKeyThumbprint } from "../src/trust/binding/thumbprint.js";
 import { verifyCompactJws, type JwsSigningIdentity } from "../src/trust/identity/jws.js";
 
 const MERCHANT = "merchant-pilot-001";
@@ -113,7 +113,7 @@ async function postChallenge(base: string, challenge: unknown) {
 
 describe("契约冲突：agent_id 归一（显式、可追溯）", () => {
   it("profile 的 agent_id 含冒号（契约不允许）→ 显式归一，非法值不静默通过", async () => {
-    const { toBindingAgentId } = await import("../src/cloud/binding/claims.js");
+    const { toBindingAgentId } = await import("../src/trust/binding/claims.js");
     expect(toBindingAgentId(PROFILE_AGENT_ID)).toBe(AGENT);
     // 归一后仍不合模式 → 抛错（绝不签发"看起来合法"的错身份）
     expect(() => toBindingAgentId(":")).toThrow();

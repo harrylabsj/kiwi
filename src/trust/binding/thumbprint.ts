@@ -31,8 +31,8 @@
 
 import { createHash, createPublicKey } from "node:crypto";
 import type { KeyObject } from "node:crypto";
-import type { JsonWebKey } from "../../trust/identity/jwk.js";
-import type { SigningKey } from "../../trust/identity/keys.js";
+import type { JsonWebKey } from "../identity/jwk.js";
+import type { SigningKey } from "../identity/keys.js";
 
 export class ThumbprintError extends Error {
   readonly code: string;

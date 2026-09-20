@@ -38,7 +38,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import { signCompactJws, verifyCompactJws, JwsError, type JwsSigningIdentity } from "../../trust/identity/jws.js";
 import type { JsonWebKey } from "../../trust/identity/jwk.js";
-import { isThumbprint, jwkThumbprint } from "./thumbprint.js";
+import { isThumbprint, jwkThumbprint } from "../../trust/binding/thumbprint.js";
 
 export type ChallengePurpose = "endpoint" | "key-custody";
 

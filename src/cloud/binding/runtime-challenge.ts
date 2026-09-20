@@ -36,7 +36,7 @@ import {
   signBindingChallenge,
   type BindingChallenge,
 } from "./proofs.js";
-import { isThumbprint, publicKeyThumbprint } from "./thumbprint.js";
+import { isThumbprint, publicKeyThumbprint } from "../../trust/binding/thumbprint.js";
 import { createHash, createPublicKey } from "node:crypto";
 
 export interface ChallengeResponderOptions {
