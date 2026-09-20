@@ -192,13 +192,13 @@ function conditionalBaseMinor(result: NegotiationHandlerResult): number {
 }
 
 describe("A2A 报价使用运行中策略（BUG-07 端到端）", () => {
-  it("提高底价后，下一次 counter_offer 的确定性基线立即采用新底价", async () => {
+  it("改变公开折扣策略后，下一次 counter_offer 的确定性基线立即采用新边界", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-policy-e2e-"));
     dirs.push(dir);
     const file = path.join(dir, "policy-overrides.json");
     // 读端（A2A 进程口径）：provider 每请求取运行中策略。
     const policyRuntime = new MerchantPolicyRuntime({
-      basePolicy: { price_floors: { "SKU-001": 60 } },
+      basePolicy: { price_floors: { "SKU-001": 60 }, max_auto_discount_percent: 5 },
       file,
       now: () => NOW,
     });
@@ -228,13 +228,15 @@ describe("A2A 报价使用运行中策略（BUG-07 端到端）", () => {
       );
     const rfq = (negotiationId: string) =>
       envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }, negotiationId);
-    // 变更前：底价 60 元，还价 70 元 ∈ [60, 85] → 基线 = 还价 7000。
+    // 变更前：list 85000 minor，公开折扣 5% → 公开边界 80750；还价 7000 低于边界 → 压回 80750。
+    // （注意：这里观察的是**公开策略**而不是私有底价——底价不再直接决定回价，
+    //  这正是 T045「不泄露底价」修复后的语义。）
     await run(handler, rfq(NEG_A));
-    expect(conditionalBaseMinor(await run(handler, counter(NEG_A)))).toBe(7000);
-    // 商家提高底价 60 → 80（经写端 apply；等价于 MCP 进程写入文件）。
-    policyRuntime.apply({ price_floors: { "SKU-001": 80 } });
-    // 变更后：**下一次报价**使用新策略——还价 70 元 < 新底价 80 元 → 基线抬到 8000。
+    expect(conditionalBaseMinor(await run(handler, counter(NEG_A)))).toBe(80750);
+    // 商家把公开折扣放宽到 20%（经写端 apply；等价于 MCP 进程写入文件）。
+    policyRuntime.apply({ max_auto_discount_percent: 20 });
+    // 变更后：**下一次报价**即采用新边界 68000（还价 7000 仍低于边界 → 压回 68000）。
     await run(handler, rfq(NEG_B));
-    expect(conditionalBaseMinor(await run(handler, counter(NEG_B)))).toBe(8000);
+    expect(conditionalBaseMinor(await run(handler, counter(NEG_B)))).toBe(68000);
   });
 });

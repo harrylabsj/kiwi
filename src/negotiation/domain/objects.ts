@@ -218,6 +218,13 @@ export interface ConditionalOffer {
   /** §13.1 示例允许空 base_terms；§12.2 要求可独立求值。 */
   base_terms: TermSet;
   conditions: ConditionRule[];
+  /**
+   * Kiwi 扩展（非 KNP 必需字段，Schema 允许 additionalProperties）：
+   * 该报价所依据的**运行中规则摘要**与**商品事实指纹**。接受成交前必须重验
+   * （设计 §10.2 / T047：审批时规则或商品已变 → 旧许可失效，不得按旧价成交）。
+   */
+  policy_digest?: string;
+  product_fingerprint?: string;
 }
 
 function validateConditionValue(
@@ -321,6 +328,14 @@ export function validateConditionalOffer(value: unknown, path = "/payload"): Con
         : validateIdentifier(obj.responding_to_offer_id, `${path}/responding_to_offer_id`),
     base_terms: validateTermSet(obj.base_terms, `${path}/base_terms`),
     conditions,
+    // Kiwi 扩展字段：解析时保留（用于 accept 前重验规则/商品是否变化）；
+    // 形状非法即拒绝（fail-closed，不能带着坏摘要进入成交判定）。
+    ...(obj.policy_digest !== undefined
+      ? { policy_digest: requireDigest(obj.policy_digest, `${path}/policy_digest`) }
+      : {}),
+    ...(obj.product_fingerprint !== undefined
+      ? { product_fingerprint: requireDigest(obj.product_fingerprint, `${path}/product_fingerprint`) }
+      : {}),
   };
 }
 

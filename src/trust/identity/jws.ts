@@ -19,6 +19,8 @@
  *
  * - `verifyCompactJws`：RFC 7515 compact 形态 `header.payload.signature`
  *   （各段 base64url）。EdDSA → Ed25519；ES256 → P-256 + SHA-256（原始 r||s）。
+ * - `signCompactJws`：与验签对称的签发（固定 Ed25519/EdDSA，无 none/算法回退），
+ *   供绑定声明等 Kiwi 自有信任材料使用（设计 §11.4）。
  * - `verifyAgentCardJws`：JWS 负载必须是该 Agent Card 的规范化 JSON；比较用
  *   JCS（RFC 8785），因此 key 顺序 / 可选字段缺省不影响比对。
  *
@@ -26,12 +28,17 @@
  * 「验签 + 卡片绑定」能力，不做强制决策。
  */
 
-import { createPublicKey, KeyObject, verify as nodeVerify } from "node:crypto";
+import { createPublicKey, KeyObject, sign as nodeSign, verify as nodeVerify } from "node:crypto";
 import type { JsonWebKey } from "./jwk.js";
 import { parseAgentCard } from "../../discovery/agent-card/index.js";
 import type { AgentCard } from "../../discovery/agent-card/index.js";
 import { canonicalize } from "../../negotiation/jcs.js";
-import { publicKeyObject, type KeyResolver, type SigningKey } from "./keys.js";
+import {
+  publicKeyObject,
+  type KeyResolver,
+  type SignatureAlgorithm,
+  type SigningKey,
+} from "./keys.js";
 
 export type JwsErrorCode =
   | "malformed"
@@ -149,6 +156,53 @@ function verifyJwsSignature(
     default:
       throw new JwsError("unsupported_algorithm", `unsupported JWS alg ${alg}`);
   }
+}
+
+/** JWS 签发方视图：私钥材料 + 该密钥的身份（与验签的 SigningKey 对称）。 */
+export interface JwsSigningIdentity {
+  keyid: string;
+  algorithm: SignatureAlgorithm;
+  /** 私钥（node:crypto KeyObject；由 PEM/JWK/seed 构造）。 */
+  privateKey: KeyObject;
+}
+
+export interface SignCompactJwsOptions {
+  /** 附加 header 字段（如 typ）。alg/kid 由实现写入，不接受覆盖。 */
+  extraHeader?: Record<string, unknown>;
+}
+
+/**
+ * 签发 compact JWS（EdDSA / ES256），与 `verifyCompactJws` 严格对称：
+ * - 算法由**密钥的 algorithm** 决定（ed25519 → EdDSA，es256 → ES256），
+ *   不接受调用方指定，也不存在 none/算法回退；
+ * - header 固定写 `alg` 与 `kid`（kid = 签发身份 keyid，验证方据此选公钥）；
+ * - payload 为对象时用 JCS 规范化（RFC 8785），与卡片/声明摘要口径一致。
+ */
+export function signCompactJws(
+  payload: Buffer | string | Record<string, unknown>,
+  identity: JwsSigningIdentity,
+  options: SignCompactJwsOptions = {},
+): string {
+  const alg = identity.algorithm === "ed25519" ? "EdDSA" : "ES256";
+  const payloadBytes =
+    Buffer.isBuffer(payload)
+      ? payload
+      : typeof payload === "string"
+        ? Buffer.from(payload, "utf8")
+        : Buffer.from(canonicalize(payload), "utf8");
+  const header: Record<string, unknown> = {
+    ...(options.extraHeader ?? {}),
+    alg,
+    kid: identity.keyid,
+  };
+  const headerSegment = Buffer.from(JSON.stringify(header), "utf8").toString("base64url");
+  const payloadSegment = payloadBytes.toString("base64url");
+  const signingInput = Buffer.from(`${headerSegment}.${payloadSegment}`, "ascii");
+  const signature =
+    alg === "EdDSA"
+      ? nodeSign(null, signingInput, identity.privateKey)
+      : nodeSign("sha256", signingInput, { key: identity.privateKey, dsaEncoding: "ieee-p1363" });
+  return `${headerSegment}.${payloadSegment}.${signature.toString("base64url")}`;
 }
 
 /** 读取 compact JWS 的 kid（不验签）；畸形返回 undefined。 */

@@ -299,36 +299,61 @@ describe("createMerchantHandler 确定性定价（无 LLM）+ 可配置促销", 
     }
   });
 
-  it("rfq→offer：list 低于 floor → 抬到 floor（¥60 < floor ¥80）", async () => {
+  it("rfq→offer：list 低于 floor（配置矛盾）→ 拒绝自动报价，不以底价兜底（T045 不泄底价）", async () => {
     const { handler, stop } = await setupHandler({
       productPrice: 60,
       merchantPolicy: { price_floors: { "SKU-001": 80 } },
     });
     try {
       const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
-      expect(offerPriceMinor(res)).toBe(8000);
+      // 旧行为把 floor(80) 当报价回给买家——一次询价即拿到私有底价。
+      // 现行为：公开价低于私有底价属配置矛盾，拒绝自动报价（协议词表 approval_required），
+      // 响应里不出现任何金额。
+      expect(res.kind).toBe("declined");
+      expect((res as { reasonCode?: string }).reasonCode).toBe("approval_required");
+      expect(JSON.stringify(res)).not.toContain("8000");
     } finally {
       stop();
     }
   });
 
-  it("counter_offer：买家还价高于 floor → base = 还价（确定性接受）", async () => {
+  it("counter_offer：未公布折扣边界（无 max_auto_discount/促销）→ 还价压回 list，不自动折扣", async () => {
     const { handler, stop } = await setupHandler({ merchantPolicy: { price_floors: { "SKU-001": 80 } } });
     try {
       await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
-      const res = await run(handler, counterFor(84000)); // 840 元 ∈ [floor 80, list 850]
-      expect(conditionalBaseMinor(res)).toBe(84000);
+      const res = await run(handler, counterFor(84000)); // 840 元：高于 floor，但商家未公布折扣
+      // 自动折扣必须有**明确公布的边界**（max_auto_discount_percent / 促销），
+      // 不能因为"高于底价"就自动让价；否则底价区间可通过二分探测反推。
+      expect(conditionalBaseMinor(res)).toBe(85000);
     } finally {
       stop();
     }
   });
 
-  it("counter_offer：买家还价低于 floor → base = floor（抬到私有底价）", async () => {
-    const { handler, stop } = await setupHandler({ merchantPolicy: { price_floors: { "SKU-001": 80 } } });
+  it("counter_offer：还价低于公开边界且公开边界低于私有底价 → 拒绝自动报价（不泄露底价）", async () => {
+    const { handler, stop } = await setupHandler({
+      merchantPolicy: { price_floors: { "SKU-001": 800 }, max_auto_discount_percent: 10 },
+    });
     try {
       await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
-      const res = await run(handler, counterFor(7000)); // 70 元 < floor 80 元 → 8000
-      expect(conditionalBaseMinor(res)).toBe(8000);
+      const res = await run(handler, counterFor(50000)); // 公开边界 765 元 < 底价 800 元
+      expect(res.kind).toBe("declined");
+      expect((res as { reasonCode?: string }).reasonCode).toBe("approval_required");
+      expect(JSON.stringify(res)).not.toContain("80000");
+    } finally {
+      stop();
+    }
+  });
+
+  it("counter_offer：还价低于公开边界 → base = 公开边界（不是底价）", async () => {
+    const { handler, stop } = await setupHandler({
+      merchantPolicy: { price_floors: { "SKU-001": 600 }, max_auto_discount_percent: 10 },
+    });
+    try {
+      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
+      const res = await run(handler, counterFor(50000)); // 500 元 < 公开边界 765 元
+      // 响应 = 公开边界 76500（所有人都知道"最多 10% 折扣"），绝不回落到 60000。
+      expect(conditionalBaseMinor(res)).toBe(76500);
     } finally {
       stop();
     }
@@ -359,7 +384,7 @@ describe("createMerchantHandler 确定性定价（无 LLM）+ 可配置促销", 
     }
   });
 
-  it("促销：批量折扣不突破 floor", async () => {
+  it("促销：批量价低于私有底价 → 不挂该条件（不广告无法兑现的价，也不借 then_terms 泄露底价）", async () => {
     const { handler, stop } = await setupHandler({
       productPrice: 89,
       merchantPolicy: { price_floors: { "SKU-001": 85 }, promos: { "SKU-001": { bulk_threshold: 10, bulk_discount_percent: 20 } } },
@@ -367,19 +392,26 @@ describe("createMerchantHandler 确定性定价（无 LLM）+ 可配置促销", 
     try {
       await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 50 } }] }));
       const res = await run(handler, counterFor(8900, 50));
-      // 批量价 = max(floor 8500, min(8900, applyDiscount(8900,20)=7120)) = 8500
-      expect(offerPriceMinor(res)).toBe(8500);
+      // 旧行为把 then_terms 压到 floor(8500)，等于向买家公布底价。
+      // 现行为：促销价无法兑现时不下发该条件，报价停在公开价 8900。
+      expect(conditionalBaseMinor(res)).toBe(8900);
+      const serialized = JSON.stringify(res);
+      expect(serialized).not.toContain("8500"); // 底价不出现在任何响应字段里
+      expect(serialized).toContain('"conditions":[]');
     } finally {
       stop();
     }
   });
 
-  it("无 policy → floor 0，还价即接受（base = 还价）", async () => {
+  it("无 policy → 不自动折扣（base = list）；不存在任何会被暴露的底价", async () => {
     const { handler, stop } = await setupHandler({});
     try {
       await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
       const res = await run(handler, counterFor(5000));
-      expect(conditionalBaseMinor(res)).toBe(5000);
+      expect(conditionalBaseMinor(res)).toBe(85000);
+      // 只对**价格字段**断言（整串比对会被 digest 里的十六进制数字误伤）。
+      const prices = [...JSON.stringify(res).matchAll(/"amount_minor":(\d+)/g)].map((m) => m[1]);
+      expect(prices).toEqual(["85000"]);
     } finally {
       stop();
     }

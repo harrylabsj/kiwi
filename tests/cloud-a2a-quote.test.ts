@@ -274,16 +274,14 @@ describe("T018：无 LLM 的真实商品确定性报价（A2A 1.0）", () => {
     expect(payload?.terms?.valid_until).toBeDefined();
   });
 
-  it("商品 list 价低于私有底价 → offer 抬到底价（绝不低于底价，且不泄露底价本身）", async () => {
+  it("list 价低于私有底价（配置矛盾）→ 拒绝自动报价，且响应中不出现底价金额（T045）", async () => {
     const { base } = await startInstance(50.0, 80.0);
     const { body } = await sendRfq(base, "msg_t018_floor");
-    const envelope = findEnvelope(body["result"]);
-    const payload = envelope?.["payload"] as { terms?: OfferTerms } | undefined;
-    expect(envelope?.["action"]).toBe("offer");
-    // floor 80.00 元 = 8000 minor：offer 必须 ≥ floor（此处等于 floor）
-    expect(payload?.terms?.items?.[0]?.unit_price?.amount_minor).toBe(8_000);
-    // 响应里不得出现底价以外的策略信息（public_message 只允许商品 note）
-    expect(JSON.stringify(body)).not.toContain("min_unit_price_private");
+    const serialized = JSON.stringify(body);
+    // 旧行为把 floor(8000) 当报价回给买家——一次询价即精确泄露私有底价。
+    // 现行为：结构性拒绝（协议词表 approval_required），不返回任何价格。
+    expect(serialized).toContain("approval_required");
+    expect(serialized).not.toMatch(/amount_minor/);
   });
 
   it("商品源无此 SKU → 明确 decline，不回退演示价", async () => {

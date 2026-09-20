@@ -379,6 +379,7 @@ export function createMerchantHandler(
   /** 从真实商品源解析 SKU 价目；源不可用/查不到时回退演示价并返回注记。 */
   const resolveProduct = async (
     sku: string,
+    resolveOptions: { force?: boolean } = {},
   ): Promise<{
     priceMinor: number;
     currency: string;
@@ -388,7 +389,9 @@ export function createMerchantHandler(
     title?: string;
   }> => {
     const cached = priceBySku.get(sku);
-    if (cached !== undefined) {
+    // force=true（成交前重验，T047）绕过缓存：许可有效性必须按**当前**商品事实
+    // 判定，而不是十分钟内的历史快照。
+    if (cached !== undefined && resolveOptions.force !== true) {
       if (Date.parse(now()) - cached.at <= PRICE_CACHE_TTL_MS) return cached;
       priceBySku.delete(sku); // TTL 过期：重新解析（价格会变）
     }
@@ -440,6 +443,7 @@ export function createMerchantHandler(
    *  null（调用方 decline temporarily_unavailable），否则返回解析结果。 */
   const resolveProductOrDecline = async (
     sku: string,
+    options: { force?: boolean } = {},
   ): Promise<{
     priceMinor: number;
     currency: string;
@@ -449,7 +453,7 @@ export function createMerchantHandler(
     title?: string;
   } | null> => {
     try {
-      return await resolveProduct(sku);
+      return await resolveProduct(sku, options);
     } catch (err) {
       if (err instanceof ProductSourceUnavailableError) return null;
       throw err;
@@ -598,6 +602,34 @@ export function createMerchantHandler(
       /** 买家还价（major→minor；KNP 里 buyer counter 的 unit_price）。 */
       const clampToBounds = (minor: number, floor: number, list: number): number =>
         Math.min(list, Math.max(minor, floor));
+      /**
+       * 对买家可见的**自动折扣边界**（公开策略值：max_auto_discount_percent）。
+       *
+       * 安全要点（T045「不泄露底价」）：商家对买家的任何报价都必须 clamp 到
+       * **公开边界**而不是 clamp 到私有底价——把还价 clamp 到底价再回给买家，
+       * 等于一次极低还价即可探出私有底价（一次探测即泄露精确值）。
+       * 私有底价只用来判断「这个价能不能自动报」，绝不出现在返回的条款里。
+       */
+      /**
+       * 运行中规则的摘要（T047）：接受成交前必须重验——商家改了规则/促销/底价后，
+      * 旧 conditional 的许可即失效，不能按旧价成交（设计 §10.2「审批时商品/规则
+       * 已变化 → 使旧候选失效或重新确认，不能执行过期许可」）。
+       */
+      const policyDigest = (): string => contentDigest((policyOf() ?? {}) as never);
+      /** 商品事实指纹（T047）：价格/币种变化同样使旧许可失效。 */
+      const productFingerprint = (facts: { sku: string; priceMinor: number; currency: string }): string =>
+        contentDigest({ sku: facts.sku, priceMinor: facts.priceMinor, currency: facts.currency } as never);
+
+      const publicDiscountBoundMinor = (listMinor: number, sku: string): number => {
+        const policy = policyOf();
+        const autoRaw = policy?.max_auto_discount_percent;
+        const auto = typeof autoRaw === "number" && Number.isFinite(autoRaw) && autoRaw > 0 ? autoRaw : 0;
+        // 促销本身是**公开条款**（promos[sku].bulk_discount_percent），因此公开边界
+        // 取其与自动折扣的较大者；未公布任何折扣时边界 = list（不自动折扣）。
+        const promoPct = policy?.promos?.[sku]?.bulk_discount_percent ?? 0;
+        const pct = Math.max(auto, Number.isFinite(promoPct) && promoPct > 0 ? promoPct : 0);
+        return applyDiscountPercentMinor(listMinor, pct);
+      };
 
       switch (envelope.action) {
         case "inquiry": {
@@ -621,8 +653,10 @@ export function createMerchantHandler(
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
-          // 确定性：offer = list 价，clamp 到 ≥ floor（永不低于私有底价；无 LLM）。
-          const effectivePriceMinor = Math.max(priceMinor, floorMinor);
+          // 确定性：offer = list 价（公开价）。list < floor 是配置矛盾——此时
+          // 用 floor 兜底会把私有底价直接报给买家（T045 泄露面），因此拒绝自动报价。
+          if (priceMinor < floorMinor) return declineReply("approval_required");
+          const effectivePriceMinor = priceMinor;
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -659,8 +693,10 @@ export function createMerchantHandler(
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
-          // 确定性：counter = list 价，clamp 到 ≥ floor。
-          const effectivePriceMinor = Math.max(priceMinor, floorMinor);
+          // 确定性：counter = list 价（公开价）；list < floor 时拒绝自动报价
+          // （用 floor 兜底＝把底价报给买家）。
+          if (priceMinor < floorMinor) return declineReply("approval_required");
+          const effectivePriceMinor = priceMinor;
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -699,14 +735,23 @@ export function createMerchantHandler(
           const product = await resolveProductOrDecline(sku);
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
-          // 确定性（无 LLM）：买家还价在 [floor, list] 内响应——高于 floor 就接受，
-          // 低于 floor 抬到 floor，高于 list 压到 list。
+          // 确定性（无 LLM）：买家还价只在**公开折扣边界**内响应——
+          // 边界 = list×(1-max_auto_discount_percent)，是公开策略值；
+          // 高于 list 压到 list，低于公开边界抬到公开边界。
+          // 关键：绝不把还价 clamp 到私有底价再回给买家（那样一次极低还价
+          // 即可探出底价精确值，T045）。
+          const publicBoundMinor = publicDiscountBoundMinor(priceMinor, sku);
           const responsiveMinor =
             typeof buyerCounterMinor === "number" && Number.isFinite(buyerCounterMinor)
-              ? clampToBounds(buyerCounterMinor, floorMinor, priceMinor)
+              ? clampToBounds(buyerCounterMinor, publicBoundMinor, priceMinor)
               : priceMinor;
+          if (responsiveMinor < floorMinor) {
+            // 公开边界低于私有底价：该区间不能自动报价，交人工/审批处理，且不返回价格。
+            return declineReply("approval_required");
+          }
           // 可配置促销（merchant_policy.promos[sku]）：买满 bulk_threshold 台，
-          // 批量价 = max(floor, min(还价, list×(1-d%/100)))，比单台更便宜。
+          // 批量价 = min(还价响应, list×(1-d%/100))，同样 clamp 到公开边界；
+          // 若该价低于私有底价则**不挂这条条件**（不广告无法兑现的价）。
           const promo = policyOf()?.promos?.[sku];
           const bulkThreshold = promo?.bulk_threshold ?? DEFAULT_BULK_THRESHOLD;
           const bulkMinor =
@@ -716,10 +761,13 @@ export function createMerchantHandler(
                     responsiveMinor,
                     applyDiscountPercentMinor(priceMinor, promo.bulk_discount_percent ?? 0),
                   ),
-                  floorMinor,
+                  publicBoundMinor,
                   priceMinor,
                 )
-              : responsiveMinor;
+              : undefined;
+          const promotionalMinor = bulkMinor !== undefined && bulkMinor < responsiveMinor && bulkMinor >= floorMinor
+            ? bulkMinor
+            : undefined;
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -730,17 +778,25 @@ export function createMerchantHandler(
               type: "conditional_offer",
               offer_id: newOfferId(),
               responding_to_offer_id: counter.offer_id,
+              // 许可绑定（T047）：本次报价依据的规则摘要与商品事实指纹；accept 时重验。
+              policy_digest: policyDigest(),
+              product_fingerprint: productFingerprint({ sku, priceMinor, currency }),
               // base = 还价响应（已 clamp 到 [floor, list]）——单台即得到该价。
               base_terms: offerTerms({ sku, priceMinor: responsiveMinor, quantity, currency, handoff_destination, deliveryBefore: deliveryBefore() }, now()),
-              conditions: [
-                {
-                  when: { all: [{ field: "aggregate.total_quantity", op: "gte", value: bulkThreshold }] },
-                  then_terms: offerTerms(
-                    { sku, priceMinor: bulkMinor, quantity, currency, handoff_destination, deliveryBefore: deliveryBefore() },
-                    now(),
-                  ),
-                },
-              ],
+              // conditions 可空（§13：空 conditions 等价 base_terms）。促销价低于
+              // 私有底价时不挂条件——不广告无法兑现的价，也不借 then_terms 泄露底价。
+              conditions:
+                promotionalMinor !== undefined
+                  ? [
+                      {
+                        when: { all: [{ field: "aggregate.total_quantity", op: "gte", value: bulkThreshold }] },
+                        then_terms: offerTerms(
+                          { sku, priceMinor: promotionalMinor, quantity, currency, handoff_destination, deliveryBefore: deliveryBefore() },
+                          now(),
+                        ),
+                      },
+                    ]
+                  : [],
             },
             ...(note !== undefined ? { public_message: note } : {}),
           });
@@ -831,6 +887,35 @@ export function createMerchantHandler(
           const presentedDigest = acceptPayload.terms_digest ?? "";
           if (presentedDigest === "" || presentedDigest !== contentDigest(agreedTerms as never)) {
             return declineReply("terms_digest_mismatch");
+          }
+          // T047：许可有效性重验——规则或商品事实在报价之后发生变化，旧许可即失效。
+          // 必须在相位推进/产出协议之前判定（拒绝不得留下任何终态副作用）。
+          const acceptedConditionalPayload = acceptedConditional.conditional as {
+            policy_digest?: string;
+            product_fingerprint?: string;
+            base_terms?: { items?: { sku?: string }[] };
+          };
+          const currentPolicyDigest = policyDigest();
+          if (
+            acceptedConditionalPayload.policy_digest !== undefined &&
+            acceptedConditionalPayload.policy_digest !== currentPolicyDigest
+          ) {
+            return declineReply("approval_required");
+          }
+          const acceptedSku = acceptedConditionalPayload.base_terms?.items?.[0]?.sku;
+          if (acceptedConditionalPayload.product_fingerprint !== undefined && acceptedSku !== undefined) {
+            const refreshed = await resolveProductOrDecline(acceptedSku, { force: true });
+            if (
+              refreshed === null ||
+              productFingerprint({
+                sku: acceptedSku,
+                priceMinor: refreshed.priceMinor,
+                currency: refreshed.currency,
+              }) !== acceptedConditionalPayload.product_fingerprint
+            ) {
+              // 商品价/币种变化或商品源已不可用 → 旧许可失效，需重新确认。
+              return declineReply("approval_required");
+            }
           }
           // 审查 P1-C：相位机是权威守卫——§15 校验通过后、构建协议之前先
           // 推进相位并检查返回值（BUG-10 语义不变：被拒的 accept 不得进入
