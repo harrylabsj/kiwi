@@ -253,8 +253,14 @@ async function main() {
     const reservedBody = await reserved.json().catch(() => ({}));
     record("cloud_reserved", reserved.status === 404 && reservedBody.error === "reserved_path", reservedBody.error ?? "");
 
+    // 绑定挑战端点（M2 实装）：空 body / 结构不完整 → 400 invalid_challenge（绝不空实现）。
     const challenge = await fetch(`${base}/control/challenge`, { method: "POST" });
-    record("challenge_not_implemented", challenge.status === 501, `status=${challenge.status}`);
+    const challengeBody = await challenge.json().catch(() => ({}));
+    record(
+      "challenge_endpoint",
+      challenge.status === 400 && challengeBody.error === "invalid_challenge",
+      `status=${challenge.status} error=${challengeBody.error ?? ""}`,
+    );
 
     const readyAfter = await fetch(`${base}/readyz`);
     record("readyz_stable", readyAfter.status === 200, `status=${readyAfter.status}`);
