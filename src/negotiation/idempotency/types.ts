@@ -111,3 +111,21 @@ export class IdempotencyConflictError extends Error {
     this.record = record;
   }
 }
+
+/**
+ * in-flight 标记（T022）：处理**开始**时写入的事实，正常提交后清除。
+ *
+ * 用途：识别"上一次处理开始了但没留下提交记录"的崩溃窗口——此时业务结果未知，
+ * 重试方应走对账（reconciliation）而不是重跑 handler（否则可能二次对外报价）。
+ */
+export interface IdempotencyInFlightMarker {
+  sender_identity: string;
+  message_id: string;
+  /** wire digest（与幂等记录同口径）。 */
+  digest: string;
+  /** 处理开始时间（RFC 3339）。 */
+  started_at: string;
+}
+
+/** in-flight 标记的陈旧窗口（超过即视为陈旧，不再阻断重试；缺省 24h）。 */
+export const DEFAULT_INFLIGHT_STALE_MS = 24 * 60 * 60 * 1000;

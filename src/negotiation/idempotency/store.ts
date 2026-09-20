@@ -52,7 +52,8 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../jcs.js";
-import { IdempotencyConflictError, computeRetentionDeadline, idempotencyKey } from "./types.js";
+import { IdempotencyConflictError, computeRetentionDeadline, idempotencyKey, DEFAULT_INFLIGHT_STALE_MS } from "./types.js";
+import type { IdempotencyInFlightMarker } from "./types.js";
 import type {
   IdempotencyCheckInput,
   IdempotencyCommitInput,
@@ -93,7 +94,7 @@ export class IdempotencyStore {
     return path.resolve(dir, name);
   }
 
-  private writeFileAtomic(filePath: string, record: IdempotencyRecord): void {
+  private writeFileAtomic(filePath: string, record: IdempotencyRecord | IdempotencyInFlightMarker): void {
     const tmp = `${filePath}.tmp-${process.pid}-${++tmpSeq}`;
     const fd = openSync(tmp, "wx", 0o600);
     try {
@@ -125,6 +126,84 @@ export class IdempotencyStore {
       return null;
     }
     return record as IdempotencyRecord;
+  }
+
+  private inFlightPath(key: string): string {
+    const dir = this.ensureIndexDir();
+    return path.join(dir, `inflight-${sha256Hex(key).slice(0, 32)}.json`);
+  }
+
+  /**
+   * 写入"处理已开始"标记（T022：写入途中崩溃的一致性窗口）。
+   *
+   * 动机：handler 可能在管线落账/提交**之前**就产生对外副作用（例如已发出报价、
+   * 已推进相位）。若此时进程崩溃，幂等索引里既没有记录、Ledger 也可能没有
+   * message_received——重试会**再跑一遍 handler**，产生第二次对外报价。
+   * 处理开始前落这个标记后，重试方可以识别"上一次结果未知"，走对账而不是重跑。
+   *
+   * 记号只记录事实（谁/哪条消息/摘要/开始时间），不含业务结果。
+   */
+  markInFlight(input: { sender_identity: string; message_id: string; digest: string }): IdempotencyInFlightMarker {
+    const key = idempotencyKey(input.sender_identity, input.message_id);
+    const file = this.inFlightPath(key);
+    const existing = this.readInFlight(input.sender_identity, input.message_id);
+    if (existing !== null) {
+      // 同一 digest 重复标记：保留**最早**的开始时间（更保守，不会把窗口缩短）。
+      if (existing.digest === input.digest) return existing;
+      // 不同 digest：说明同一 (sender, message_id) 被换了内容重放——直接冲突。
+      throw new IdempotencyConflictError(
+        {
+          sender_identity: input.sender_identity,
+          message_id: input.message_id,
+          digest: existing.digest,
+          negotiation_id: "",
+          outcome: { kind: "error", code: "idempotency_conflict", message: "in-flight digest mismatch" },
+          recorded_at: existing.started_at,
+          expires_at: existing.started_at,
+        },
+        input.digest,
+      );
+    }
+    const marker: IdempotencyInFlightMarker = {
+      sender_identity: input.sender_identity,
+      message_id: input.message_id,
+      digest: input.digest,
+      started_at: this.now(),
+    };
+    this.writeFileAtomic(file, marker);
+    return marker;
+  }
+
+  /** 读取 in-flight 标记；超过 staleAfterMs 视为陈旧（不再阻断，交给对账与 Ledger 证据）。 */
+  readInFlight(
+    senderIdentity: string,
+    messageId: string,
+    options: { staleAfterMs?: number } = {},
+  ): IdempotencyInFlightMarker | null {
+    const key = idempotencyKey(senderIdentity, messageId);
+    const file = this.inFlightPath(key);
+    if (!existsSync(file)) return null;
+    let marker: IdempotencyInFlightMarker;
+    try {
+      marker = JSON.parse(readFileSync(file, "utf8")) as IdempotencyInFlightMarker;
+    } catch {
+      // 标记文件损坏：按"存在但不可读"处理 → 视为未知状态（fail-closed）。
+      return {
+        sender_identity: senderIdentity,
+        message_id: messageId,
+        digest: "",
+        started_at: new Date(0).toISOString(),
+      };
+    }
+    const staleAfterMs = options.staleAfterMs ?? DEFAULT_INFLIGHT_STALE_MS;
+    if (Date.parse(this.now()) - Date.parse(marker.started_at) > staleAfterMs) return null;
+    return marker;
+  }
+
+  /** 清除 in-flight 标记（提交成功后调用）。 */
+  clearInFlight(senderIdentity: string, messageId: string): void {
+    const key = idempotencyKey(senderIdentity, messageId);
+    rmSync(this.inFlightPath(key), { force: true });
   }
 
   /** 记录是否已过期（expires_at <= nowIso）。 */

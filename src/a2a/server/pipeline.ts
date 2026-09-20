@@ -344,6 +344,7 @@ export class InboundPipeline {
         ledger_event_id: prior.event.event_id,
         ledger_event_digest: prior.event.event_digest,
       });
+      this.idempotency.clearInFlight(senderIdentity, envelope.message_id);
     } catch (commitErr) {
       this.logError("idempotency commit failed during ledger recovery", commitErr);
     }
@@ -431,6 +432,25 @@ export class InboundPipeline {
         if (priorOnLedger !== null && priorOnLedger.event.identity.sender_identity === senderIdentity) {
           return this.recoverFromLedgerEvidence(senderIdentity, envelope, priorOnLedger);
         }
+
+        // 5.5 崩溃窗口守卫（T022）：若上一次处理"开始了但没留下提交记录"
+        // （in-flight 标记仍在），说明业务结果未知——**不重跑 handler**（handler
+        // 可能在落账/提交之前就已对外产生副作用，例如已发出报价），改为明确要求
+        // 对账（协议词表 reconciliation_required）。陈旧标记不阻断（见 store）。
+        const inFlight = this.idempotency.readInFlight(senderIdentity, envelope.message_id);
+        if (inFlight !== null) {
+          throw protocolError(
+            "reconciliation_required",
+            `message_id ${envelope.message_id} has an unfinished attempt (started at ${inFlight.started_at}); ` +
+              "result unknown — reconcile before retrying",
+          );
+        }
+        // 处理开始前落标记：标记随提交清除；进程若在此之前崩溃，标记会留下。
+        this.idempotency.markInFlight({
+          sender_identity: senderIdentity,
+          message_id: envelope.message_id,
+          digest: envelope.digest,
+        });
 
         // 6. 路由给 NegotiationHandler。
         const taskId = newTaskId();
@@ -545,6 +565,8 @@ export class InboundPipeline {
             ledger_event_id: ledgerEvent.event_id,
             ledger_event_digest: ledgerEvent.event_digest,
           });
+          // 提交成功 → 清除"处理已开始"标记（T022：窗口就此关闭）。
+          this.idempotency.clearInFlight(senderIdentity, envelope.message_id);
         } catch (err) {
           // commit 的并发兜底（异 digest）——本锁内不应发生；仍 fail-closed。
           if (err instanceof IdempotencyConflictError) {
