@@ -335,6 +335,43 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
     }
   });
 
+  it("T030：首访者不能自动成为管理员（未初始化口令时任何登录尝试都不发放会话）", async () => {
+    const commerce = await startFakeCommerce(TEST_SKU);
+    const dataDir = tempDir("kiwi-cloud-firstvisitor-");
+    const profilePath = writeCloudProfile(dataDir, commerce);
+    trackEnv("KIWI_COMMERCE_URL", commerce);
+    const port = await freePort();
+    const instance = await bootstrapCloudRuntime({
+      env: cloudEnv({ port, dataDir, profilePath, sku: TEST_SKU }),
+      artifactRoot: "/workspace",
+      log: () => {},
+    });
+    try {
+      const base = `http://127.0.0.1:${port}`;
+      // 未初始化管理员口令时：任何口令都不会签发会话（页面明确说明"未初始化"）。
+      const login = await fetch(`${base}/admin/login`, {
+        method: "POST",
+        redirect: "manual",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "password=let-me-in&next=/admin/pending",
+      });
+      expect(login.status).toBe(200);
+      const body = await login.text();
+      expect(body).toContain("未初始化");
+      expect(login.headers.get("set-cookie")).toBeNull();
+      // 没有会话 → 管理面仍然进不去。
+      const pending = await fetch(`${base}/admin/pending`, { redirect: "manual" });
+      expect([302, 303]).toContain(pending.status);
+      // 也不存在任何"自助注册管理员"的入口。
+      for (const path of ["/admin/register", "/merchant/api/admin", "/admin/setup"]) {
+        const res = await fetch(`${base}${path}`, { method: "POST", redirect: "manual" });
+        expect([302, 303, 404, 405]).toContain(res.status);
+      }
+    } finally {
+      await instance.close();
+    }
+  });
+
   it("演示价回退开启的 profile → 拒绝启动", async () => {
     const dataDir = tempDir("kiwi-cloud-demo-");
     const profilePath = writeCloudProfile(dataDir, "http://127.0.0.1:1", {
