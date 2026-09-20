@@ -37,6 +37,14 @@ export {
   type PublishedCardRead,
 } from "./cloud-card.js";
 export { CatalogSourceError } from "./errors.js";
+export {
+  CARD_HOSTING_CATALOG,
+  COMMUNICATION_MODE_A2A_DIRECT,
+  describeCloudHosting,
+  legacyHostingModeForCloudAgent,
+  type CloudHostingAxes,
+  type DescribeCloudHostingOptions,
+} from "./cloud-hosting.js";
 export type { CatalogSourceErrorCode } from "./errors.js";
 export { validateCatalogAgentRecord, validateListingRecord, validateListingSearchResult } from "./kiwi-schema.js";
 export {

@@ -15,6 +15,11 @@ import { describe, expect, it } from "vitest";
 import { CloudBindingTrustCache, CloudCardSource } from "../src/discovery/catalog-source/cloud-card.js";
 import type { CloudAgentResolution } from "../src/discovery/catalog-source/cloud-card.js";
 import { BindingRejectionError, CatalogSourceError } from "../src/discovery/catalog-source/index.js";
+import {
+  describeCloudHosting,
+  legacyHostingModeForCloudAgent,
+} from "../src/discovery/catalog-source/cloud-hosting.js";
+import { normalizeHostingMode } from "../src/discovery/catalog-source/types.js";
 import { buildBindingClaims } from "../src/trust/binding/claims.js";
 import { publicKeyThumbprint, jwkThumbprint } from "../src/trust/binding/thumbprint.js";
 import { signCompactJws, type JwsSigningIdentity } from "../src/trust/identity/jws.js";
@@ -481,6 +486,45 @@ describe("指纹工具的口径一致", () => {
       x: string;
     };
     expect(jwkThumbprint(jwk)).toBe(ISSUER_THUMBPRINT);
+  });
+});
+
+describe("T041：三个互不替代的托管轴 + 旧通道不破坏", () => {
+  it("已校验的云端解析结果 → card_hosting=catalog / a2a-direct；runtime_hosting 由调用方给", async () => {
+    const { source: cloud } = source();
+    const resolved = await cloud.resolveCloudAgent(AGENT_ID);
+    const axes = describeCloudHosting(resolved, { runtimeHosting: "workbuddy_cloud" });
+    expect(axes).toEqual({
+      card_hosting: "catalog",
+      runtime_hosting: "workbuddy_cloud",
+      communication_mode: "a2a-direct",
+    });
+  });
+
+  it("runtime_hosting 是部署事实：不给就报错，绝不替调用方猜", async () => {
+    const { source: cloud } = source();
+    const resolved = await cloud.resolveCloudAgent(AGENT_ID);
+    expect(() => describeCloudHosting(resolved, { runtimeHosting: "   " })).toThrow(
+      /runtimeHosting/,
+    );
+  });
+
+  it("只接受端点由声明背书的解析结果（拒绝伪造的中间对象）", () => {
+    expect(() =>
+      describeCloudHosting(
+        { endpoint: "https://evil.example/a2a", claims: { a2a_endpoint: A2A_ENDPOINT } },
+        { runtimeHosting: "workbuddy_cloud" },
+      ),
+    ).toThrow(/已校验/);
+  });
+
+  it("云端商家在旧 hosting.mode 下记为 direct_only——绝不是 hosted_only", () => {
+    expect(legacyHostingModeForCloudAgent()).toBe("direct_only");
+    // 旧枚举语义本身不动：legacy hosted 记录仍然归一化为 hosted_only
+    expect(normalizeHostingMode("hosted")).toBe("hosted_only");
+    expect(normalizeHostingMode("direct")).toBe("direct_only");
+    // 云端商家不会被写成 hosted_only（hosted_only 意味着"询价走 Catalog 通道"）
+    expect(legacyHostingModeForCloudAgent()).not.toBe(normalizeHostingMode("hosted"));
   });
 });
 
