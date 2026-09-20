@@ -33,7 +33,7 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 export const PAIRING_FILE = "pairing.json";
@@ -44,9 +44,28 @@ const CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
 const CODE_GROUPS = 3;
 const CODE_GROUP_LEN = 4;
 
+/**
+ * 配对码的**绑定元组**（设计 §6.3：单次消费、短 TTL，绑定
+ * merchant_id/intent_id/generation/公钥摘要/回跳目标；重放、过期、跨商家和
+ * 另一部署代次均拒绝）。
+ */
+export interface PairingBinding {
+  merchant_id: string;
+  /** 开通意图（同一商家的多次开通相互区分）。 */
+  intent_id?: string;
+  /** 部署代次：换代次后旧配对码失效。 */
+  generation: number;
+  /** Runtime 公钥指纹：配对必须指向同一把钥匙。 */
+  key_thumbprint: string;
+  /** 回跳目标（可选）：只作为记录，不参与放行判定。 */
+  redirect_target?: string;
+}
+
 export interface PairingState {
   expiresAt: string;
   createdAt: string;
+  /** 绑定元组（旧格式配对文件没有这个字段——视为未绑定，按旧语义放行）。 */
+  binding?: PairingBinding;
 }
 
 function digest(code: string): string {
@@ -88,8 +107,8 @@ function generateCode(): string {
  */
 export function createPairingCode(
   dir: string,
-  options: { ttlMs?: number; now?: () => Date } = {},
-): { code: string; expiresAt: string } {
+  options: { ttlMs?: number; now?: () => Date; binding?: PairingBinding } = {},
+): { code: string; expiresAt: string; binding?: PairingBinding } {
   const now = options.now ?? (() => new Date());
   const ttlMs = options.ttlMs ?? DEFAULT_PAIRING_TTL_MS;
   const createdAt = now();
@@ -104,6 +123,7 @@ export function createPairingCode(
         code_digest: digest(code),
         created_at: createdAt.toISOString(),
         expires_at: expiresAt.toISOString(),
+        ...(options.binding !== undefined ? { binding: options.binding } : {}),
       },
       null,
       2,
@@ -111,7 +131,11 @@ export function createPairingCode(
     { mode: 0o600 },
   );
   chmodSync(file, 0o600);
-  return { code, expiresAt: expiresAt.toISOString() };
+  return {
+    code,
+    expiresAt: expiresAt.toISOString(),
+    ...(options.binding !== undefined ? { binding: options.binding } : {}),
+  };
 }
 
 // ── 配对凭据（最小授权：由实例侧签发并持有，网关只拿到调用凭据）────────────
@@ -209,33 +233,103 @@ export function readPairingState(
   if (expiresAt === "") return undefined;
   const now = (options.now ?? (() => new Date()))();
   if (expiresAt <= now.toISOString()) return undefined;
-  return { createdAt, expiresAt };
+  const bindingRaw = (raw as { binding?: unknown }).binding;
+  const binding =
+    bindingRaw !== null &&
+    typeof bindingRaw === "object" &&
+    typeof (bindingRaw as PairingBinding).merchant_id === "string" &&
+    typeof (bindingRaw as PairingBinding).generation === "number" &&
+    typeof (bindingRaw as PairingBinding).key_thumbprint === "string"
+      ? (bindingRaw as PairingBinding)
+      : undefined;
+  return { createdAt, expiresAt, ...(binding !== undefined ? { binding } : {}) };
 }
 
 /**
  * 兑换配对码：成功即删除（单次），失败不动状态（仍可重试到过期）。
+ *
+ * 绑定校验（T025/T027）：调用方给出期望的 merchant/generation/公钥指纹时，
+ * 必须与配对码内的绑定元组**逐项一致**——跨商家、异代次、换钥匙一律拒绝。
+ * 未给出期望值（旧调用方）时按旧语义放行（向后兼容）。
+ */
+export type PairingRedeemOutcome =
+  | { ok: true; binding?: PairingBinding }
+  | {
+      ok: false;
+      code: "no_code" | "expired" | "invalid_code" | "replayed" | "binding_mismatch";
+      reason?: string;
+    };
+
+/**
+ * 兑换配对码（原子单次消费 + 绑定校验）。成功返回绑定元组；失败给出稳定原因。
+ *
+ * 原子性：单次消费用 **rename 竞争**实现——并发/重放兑换里只有 rename 成功的那
+ * 一个赢家（其余拿到 ENOENT），因此"第二次兑换"必然失败（T026），不依赖
+ * 读-删之间的时间窗。
+ */
+export function redeemPairingCodeBound(
+  dir: string,
+  code: string,
+  options: {
+    now?: () => Date;
+    expect?: { merchant_id?: string; generation?: number; key_thumbprint?: string };
+  } = {},
+): PairingRedeemOutcome {
+  const file = pairingPath(dir);
+  if (!existsSync(file)) return { ok: false, code: "no_code" };
+  const state = readPairingState(dir, options);
+  if (state === undefined) {
+    rmSync(file, { force: true }); // 过期即清理，避免残留
+    return { ok: false, code: "expired" };
+  }
+  let stored: { code_digest?: unknown };
+  try {
+    stored = JSON.parse(readFileSync(file, "utf8")) as typeof stored;
+  } catch {
+    return { ok: false, code: "invalid_code" };
+  }
+  if (typeof stored.code_digest !== "string" || stored.code_digest === "") {
+    return { ok: false, code: "invalid_code" };
+  }
+  // 恒定时间比较：配对码是短码，明文比较会泄漏前缀（审查口径与凭据校验一致）。
+  const expected = Buffer.from(stored.code_digest, "hex");
+  const presented = Buffer.from(digest(String(code ?? "")), "hex");
+  if (expected.length !== presented.length || !timingSafeEqual(expected, presented)) {
+    return { ok: false, code: "invalid_code" };
+  }
+  // 绑定校验（T025/T027）：给出期望值时必须逐项一致。
+  const binding = state.binding;
+  const expect = options.expect;
+  if (expect !== undefined && binding !== undefined) {
+    if (expect.merchant_id !== undefined && expect.merchant_id !== binding.merchant_id) {
+      return { ok: false, code: "binding_mismatch", reason: "merchant_id" };
+    }
+    if (expect.generation !== undefined && expect.generation !== binding.generation) {
+      return { ok: false, code: "binding_mismatch", reason: "generation" };
+    }
+    if (expect.key_thumbprint !== undefined && expect.key_thumbprint !== binding.key_thumbprint) {
+      return { ok: false, code: "binding_mismatch", reason: "key_thumbprint" };
+    }
+  }
+  // 原子单次消费：rename 成功者才是赢家（并发/重放只有一个能成功）。
+  const consumed = `${file}.consumed`;
+  try {
+    renameSync(file, consumed);
+  } catch {
+    return { ok: false, code: "replayed" };
+  }
+  rmSync(consumed, { force: true });
+  return { ok: true, ...(binding !== undefined ? { binding } : {}) };
+}
+
+/**
+ * 兼容薄封装（旧调用方）：只回答"兑换是否成功"。
+ * 新代码请用 redeemPairingCodeBound 取绑定元组与失败原因。
  */
 export function redeemPairingCode(
   dir: string,
   code: string,
   options: { now?: () => Date } = {},
 ): boolean {
-  const file = pairingPath(dir);
-  if (!existsSync(file)) return false;
-  const state = readPairingState(dir, options);
-  if (state === undefined) {
-    // 已过期：清理掉，避免残留
-    rmSync(file, { force: true });
-    return false;
-  }
-  let stored: { code_digest?: unknown };
-  try {
-    stored = JSON.parse(readFileSync(file, "utf8")) as typeof stored;
-  } catch {
-    return false;
-  }
-  if (typeof stored.code_digest !== "string" || stored.code_digest === "") return false;
-  if (stored.code_digest !== digest(String(code ?? ""))) return false;
-  rmSync(file, { force: true });
-  return true;
+  return redeemPairingCodeBound(dir, code, options).ok;
 }
