@@ -587,7 +587,7 @@ describe("Workbench /merchant/api/v1 — RFC 9457 与兼容读取", () => {
     expect(body["request_id"]).toBe(res.headers.get("x-request-id"));
   });
 
-  it("复用同一应用服务读取状态；未知路由明确 404 Problem", async () => {
+  it("复用同一应用服务读取状态；已知但未装配的资源明确 503，未知路由 404", async () => {
     const auth = await login("owner");
     const status = await fetch(`${base}/merchant/api/v1/runtime/status`, {
       headers: { cookie: auth.cookie },
@@ -602,9 +602,9 @@ describe("Workbench /merchant/api/v1 — RFC 9457 与兼容读取", () => {
     const missing = await fetch(`${base}/merchant/api/v1/promotions`, {
       headers: { cookie: auth.cookie },
     });
-    expect(missing.status).toBe(404);
+    expect(missing.status).toBe(503);
     expect(missing.headers.get("content-type")).toContain("application/problem+json");
-    expect(await missing.json()).toMatchObject({ code: "RESOURCE_NOT_FOUND", status: 404 });
+    expect(await missing.json()).toMatchObject({ code: "DEPENDENCY_UNAVAILABLE", status: 503 });
 
     const products = await fetch(`${base}/merchant/api/v1/products`, {
       headers: { cookie: auth.cookie },

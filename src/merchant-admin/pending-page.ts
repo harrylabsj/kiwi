@@ -81,6 +81,16 @@ export interface MerchantAdminSurface {
     grantId: string;
     reason?: string;
   }): Promise<unknown> | unknown;
+  preparePromotionPublish?(input: {
+    promotionId: string;
+    expectedRevision: number;
+    reason?: string;
+  }): Promise<unknown> | unknown;
+  preparePromotionWithdraw?(input: {
+    promotionId: string;
+    expectedRevision: number;
+    reason?: string;
+  }): Promise<unknown> | unknown;
 }
 
 /** 从 merchant-core 构造管理面（确认通道 = core 的命令日志）。 */
@@ -90,14 +100,15 @@ export function merchantAdminSurface(core: MerchantCoreService): MerchantAdminSu
     executeApproved: (id, principalId, token) =>
       core.commands.executeApproved(id, principalId, token),
     rejectCandidate: (id, principalId, token) => core.commands.reject(id, principalId, token),
-    executeCommittedDecision: (input, verifier) =>
-      core.executeCommittedDecision(input, verifier),
+    executeCommittedDecision: (input, verifier) => core.executeCommittedDecision(input, verifier),
     getCandidate: (id) => core.getCommand(id),
     prepareBroadcastPublish: (input) => core.prepareBroadcastPublish(input),
     prepareBroadcastRevise: (input) => core.prepareBroadcastRevise(input),
     prepareBroadcastWithdraw: (input) => core.prepareBroadcastWithdraw(input),
     prepareGrantCreate: (input) => core.prepareGrantCreate(input),
     prepareGrantRevoke: (input) => core.prepareGrantRevoke(input),
+    preparePromotionPublish: (input) => core.preparePromotionPublish(input),
+    preparePromotionWithdraw: (input) => core.preparePromotionWithdraw(input),
   };
 }
 

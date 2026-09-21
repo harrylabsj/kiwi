@@ -95,7 +95,10 @@ export class MerchantGrantStore {
       throw new MerchantGrantError("invalid_input", "unknown grant action");
     }
     const selector = normalizeSelector(input.resourceType, input.resourceSelector);
-    if (!Number.isFinite(Date.parse(input.expiresAt)) || Date.parse(input.expiresAt) <= Date.parse(this.now())) {
+    if (
+      !Number.isFinite(Date.parse(input.expiresAt)) ||
+      Date.parse(input.expiresAt) <= Date.parse(this.now())
+    ) {
       throw new MerchantGrantError("invalid_input", "grant expiry must be in the future");
     }
     const stamp = this.now();
@@ -153,7 +156,9 @@ export class MerchantGrantStore {
       if (row === undefined) throw new MerchantGrantError("not_found", "unknown active grant");
       const stamp = this.now();
       this.db
-        .prepare("UPDATE merchant_operator_grants SET revoked_at=? WHERE grant_id=? AND revoked_at IS NULL")
+        .prepare(
+          "UPDATE merchant_operator_grants SET revoked_at=? WHERE grant_id=? AND revoked_at IS NULL",
+        )
         .run(stamp, grantId);
       const generation = this.bumpGeneration(actor.merchantId, row.subject_id, stamp);
       this.db.exec("commit");
@@ -204,7 +209,11 @@ export class MerchantGrantStore {
 
   authorize(
     context: VerifiedActorContext,
-    input: { action: GrantAction; resourceType: GrantResourceType; resourceIds?: readonly string[] },
+    input: {
+      action: GrantAction;
+      resourceType: GrantResourceType;
+      resourceIds?: readonly string[];
+    },
   ): { authorized: boolean; generation: number; grantIds: string[] } {
     const actor = assertVerifiedActor(context);
     const generation = this.authorizationGeneration(actor.merchantId, actor.actorId);
@@ -217,7 +226,11 @@ export class MerchantGrantStore {
   authorizeSubject(
     merchantId: string,
     subjectId: string,
-    input: { action: GrantAction; resourceType: GrantResourceType; resourceIds?: readonly string[] },
+    input: {
+      action: GrantAction;
+      resourceType: GrantResourceType;
+      resourceIds?: readonly string[];
+    },
   ): { authorized: boolean; generation: number; grantIds: string[] } {
     const generation = this.authorizationGeneration(merchantId, subjectId);
     const rows = this.db
@@ -226,19 +239,19 @@ export class MerchantGrantStore {
          WHERE merchant_id=? AND subject_id=? AND action=? AND resource_type=?
            AND revoked_at IS NULL AND expires_at>?`,
       )
-      .all(
-        merchantId,
-        subjectId,
-        input.action,
-        input.resourceType,
-        this.now(),
-      ) as Array<{ grant_id: string; resource_selector_json: string }>;
+      .all(merchantId, subjectId, input.action, input.resourceType, this.now()) as Array<{
+      grant_id: string;
+      resource_selector_json: string;
+    }>;
     const resources = [...new Set(input.resourceIds ?? [])];
     const matched: string[] = [];
     const covered = new Set<string>();
     let all = false;
     for (const row of rows) {
-      const selector = JSON.parse(row.resource_selector_json) as { kind: string; sku_ids?: string[] };
+      const selector = JSON.parse(row.resource_selector_json) as {
+        kind: string;
+        sku_ids?: string[];
+      };
       if (input.resourceType === "merchant" && selector.kind === "merchant") {
         matched.push(row.grant_id);
         all = true;
@@ -249,7 +262,8 @@ export class MerchantGrantStore {
         matched.push(row.grant_id);
       }
     }
-    const authorized = all || (resources.length > 0 && resources.every((resource) => covered.has(resource)));
+    const authorized =
+      all || (resources.length > 0 && resources.every((resource) => covered.has(resource)));
     return { authorized, generation, grantIds: authorized ? matched : [] };
   }
 
@@ -271,14 +285,13 @@ export function isCurrentGrantAuthorization(
   input: {
     merchantId: string;
     actorId: string;
-    action: "broadcast.draft" | "broadcast.decide";
+    action: GrantAction;
+    resourceType?: GrantResourceType;
+    resourceIds?: readonly string[];
     snapshot: Readonly<Record<string, unknown>>;
   },
 ): boolean {
-  if (
-    input.snapshot["actor_id"] !== input.actorId ||
-    input.snapshot["action"] !== input.action
-  ) {
+  if (input.snapshot["actor_id"] !== input.actorId || input.snapshot["action"] !== input.action) {
     return false;
   }
   if (input.snapshot["actor_role"] === "owner") return true;
@@ -287,7 +300,8 @@ export function isCurrentGrantAuthorization(
   if (!Number.isInteger(expectedGeneration)) return false;
   const current = store.authorizeSubject(input.merchantId, input.actorId, {
     action: input.action,
-    resourceType: "merchant",
+    resourceType: input.resourceType ?? "merchant",
+    ...(input.resourceIds !== undefined ? { resourceIds: input.resourceIds } : {}),
   });
   return current.authorized && current.generation === expectedGeneration;
 }
@@ -304,7 +318,10 @@ function normalizeSelector(
   }
   if (selector === "all_products") return { kind: "all_products" };
   if (!Array.isArray(selector) || selector.length === 0) {
-    throw new MerchantGrantError("invalid_input", "product selector requires all_products or SKU ids");
+    throw new MerchantGrantError(
+      "invalid_input",
+      "product selector requires all_products or SKU ids",
+    );
   }
   const skuIds = [...new Set(selector.map((value) => requireText(String(value), "sku")))].sort();
   return { kind: "sku_ids", sku_ids: skuIds };
@@ -323,7 +340,9 @@ function grantProjection(row: Record<string, unknown>): MerchantGrantProjection 
     merchant_id: String(row["merchant_id"]),
     action: String(row["action"]) as GrantAction,
     resource_type: String(row["resource_type"]) as GrantResourceType,
-    resource_selector: JSON.parse(String(row["resource_selector_json"])) as MerchantGrantProjection["resource_selector"],
+    resource_selector: JSON.parse(
+      String(row["resource_selector_json"]),
+    ) as MerchantGrantProjection["resource_selector"],
     expires_at: String(row["expires_at"]),
     grant_version: Number(row["grant_version"]),
     granted_by: String(row["granted_by"]),

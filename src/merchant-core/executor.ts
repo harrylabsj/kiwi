@@ -67,7 +67,11 @@ export interface CommandExecutor {
   /** 重读目标对象前置状态（版本/digest 比对用）。 */
   readPreconditions(args: Record<string, unknown>): Promise<Record<string, unknown>>;
   /** 执行已批准参数。 */
-  execute(args: Record<string, unknown>, ctx: ExecutorContext): Promise<unknown>;
+  execute(
+    args: Record<string, unknown>,
+    ctx: ExecutorContext,
+    decision?: { kind: "committed"; operationId: string; actorId: string },
+  ): Promise<unknown>;
   /** 执行后回读校验（可选；返回 false/抛错 = 回读不一致）。 */
   verifyAfter?(args: Record<string, unknown>, ctx: ExecutorContext): Promise<void>;
 }
@@ -81,7 +85,10 @@ export class MerchantExecutorRegistry {
 
   /** 静态构造（固定白名单；新增写面必须显式加执行器）。extras 供子服务
    *  （如 RFQ 发布执行器）静态合并——同样是启动期一次建成，禁止动态注册。 */
-  static buildDefault(ctx: ExecutorContext, extras: CommandExecutor[] = []): MerchantExecutorRegistry {
+  static buildDefault(
+    ctx: ExecutorContext,
+    extras: CommandExecutor[] = [],
+  ): MerchantExecutorRegistry {
     const productPreconditions = async (args: Record<string, unknown>) => {
       const sku = String(args.sku ?? "");
       return publicProductView(await ctx.merchantClient.getProduct(sku));

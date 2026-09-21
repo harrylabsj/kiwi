@@ -54,11 +54,10 @@ import {
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
 import { MerchantFeedStore } from "../merchant/feed-store.js";
 import { createBroadcastExecutors } from "../merchant/feed-executors.js";
-import {
-  isCurrentGrantAuthorization,
-  MerchantGrantStore,
-} from "../merchant/grant-store.js";
+import { isCurrentGrantAuthorization, MerchantGrantStore } from "../merchant/grant-store.js";
 import { createGrantExecutors } from "../merchant/grant-executors.js";
+import { MerchantPromotionStore } from "../merchant/promotion-store.js";
+import { createPromotionExecutors } from "../merchant/promotion-executors.js";
 import { OnboardingStore } from "./onboarding/store.js";
 import {
   ManagementError,
@@ -148,7 +147,10 @@ function loadOrCreateFeedCursorKey(dataDir: string): Buffer {
   const read = (): Buffer => {
     const key = Buffer.from(readFileSync(file, "utf8").trim(), "base64url");
     if (key.length !== 32) {
-      throw new CloudStartupError("FEED_CURSOR_KEY_INVALID", "Feed cursor key must decode to 32 bytes");
+      throw new CloudStartupError(
+        "FEED_CURSOR_KEY_INVALID",
+        "Feed cursor key must decode to 32 bytes",
+      );
     }
     return key;
   };
@@ -176,8 +178,7 @@ function probeAuthoritativeStorage(dataDir: string): ReadinessCheckResult {
     db.exec("CREATE TABLE IF NOT EXISTS readyz_probe (id INTEGER PRIMARY KEY, at TEXT NOT NULL)");
     db.prepare("INSERT INTO readyz_probe (at) VALUES (?)").run(new Date().toISOString());
     const row = db.prepare("SELECT COUNT(*) AS count FROM readyz_probe").get() as
-      | { count?: number }
-      | undefined;
+      { count?: number } | undefined;
     db.exec("ROLLBACK");
     return (row?.count ?? 0) > 0 ? { ok: true } : { ok: false, code: "STORAGE_READBACK_FAILED" };
   } catch {
@@ -232,6 +233,7 @@ export async function bootstrapCloudRuntime(
   let assembly: MerchantRuntimeAssembly;
   let feedStoreForExecutors: MerchantFeedStore | undefined;
   let grantStoreForExecutors: MerchantGrantStore | undefined;
+  let promotionStoreForExecutors: MerchantPromotionStore | undefined;
   try {
     assembly = await assembleMerchantRuntime({
       profile,
@@ -265,6 +267,10 @@ export async function bootstrapCloudRuntime(
         ...createGrantExecutors({
           merchantId: profile.owner_id,
           getStore: () => grantStoreForExecutors,
+        }),
+        ...createPromotionExecutors({
+          merchantId: profile.owner_id,
+          getStore: () => promotionStoreForExecutors,
         }),
       ],
       log,
@@ -351,7 +357,9 @@ export async function bootstrapCloudRuntime(
         if (fileProductSource !== undefined) {
           // 文件式商品源：只回可用性原因码（不含价格）。
           const check = fileProductSource.describeSku(probeSku);
-          return check.available ? { ok: true } : { ok: false, code: check.code ?? "PRODUCTS_UNAVAILABLE" };
+          return check.available
+            ? { ok: true }
+            : { ok: false, code: check.code ?? "PRODUCTS_UNAVAILABLE" };
         }
         try {
           const product = await core.productSource.getProduct(probeSku);
@@ -385,8 +393,10 @@ export async function bootstrapCloudRuntime(
       cursorKey: loadOrCreateFeedCursorKey(config.dataDir),
     });
     const grantStore = new MerchantGrantStore({ db: managementDb });
+    const promotionStore = new MerchantPromotionStore({ db: managementDb });
     feedStoreForExecutors = feedStore;
     grantStoreForExecutors = grantStore;
+    promotionStoreForExecutors = promotionStore;
     publicFeedHandler = createMerchantFeedApiHandler({
       merchantId: profile.owner_id,
       store: feedStore,
@@ -433,7 +443,10 @@ export async function bootstrapCloudRuntime(
                 records = fileProductSource.list();
               } catch (err) {
                 if (err instanceof ProductTableError) {
-                  throw new ManagementError("unavailable", `product table unavailable (${err.code})`);
+                  throw new ManagementError(
+                    "unavailable",
+                    `product table unavailable (${err.code})`,
+                  );
                 }
                 throw err;
               }
@@ -482,7 +495,10 @@ export async function bootstrapCloudRuntime(
             },
           }
         : {}),
-      drafts: new MerchantImportDraftStore({ db: managementDb, now: () => new Date().toISOString() }),
+      drafts: new MerchantImportDraftStore({
+        db: managementDb,
+        now: () => new Date().toISOString(),
+      }),
       operations: new MerchantManagementOperationStore({ db: managementDb }),
       // M4 §5.4：开通向导与 /admin/onboarding 读**同一份** OnboardingStore（同一个
       // state.sqlite），不复制状态机。`platformEvidence` 适配器**故意不配**——平台侧
@@ -492,6 +508,7 @@ export async function bootstrapCloudRuntime(
       workbenchConfirmations,
       workbenchFeed: feedStore,
       workbenchGrants: grantStore,
+      workbenchPromotions: promotionStore,
       ...(adminOptions.surface.prepareBroadcastPublish !== undefined
         ? { prepareBroadcastPublish: adminOptions.surface.prepareBroadcastPublish }
         : {}),
@@ -506,6 +523,12 @@ export async function bootstrapCloudRuntime(
         : {}),
       ...(adminOptions.surface.prepareGrantRevoke !== undefined
         ? { prepareGrantRevoke: adminOptions.surface.prepareGrantRevoke }
+        : {}),
+      ...(adminOptions.surface.preparePromotionPublish !== undefined
+        ? { preparePromotionPublish: adminOptions.surface.preparePromotionPublish }
+        : {}),
+      ...(adminOptions.surface.preparePromotionWithdraw !== undefined
+        ? { preparePromotionWithdraw: adminOptions.surface.preparePromotionWithdraw }
         : {}),
       serviceState,
       readiness: async () => {
@@ -535,7 +558,15 @@ export async function bootstrapCloudRuntime(
                 : isCurrentGrantAuthorization(grantStore, {
                     merchantId: profile.owner_id,
                     actorId: lease.actorId,
-                    action: "broadcast.decide",
+                    action: action === "product.decide" ? "product.decide" : "broadcast.decide",
+                    ...(action === "product.decide"
+                      ? {
+                          resourceType: "product" as const,
+                          resourceIds: Array.isArray(authorization["resource_ids"])
+                            ? authorization["resource_ids"].map((value) => String(value))
+                            : [],
+                        }
+                      : {}),
                     snapshot: authorization,
                   });
             if (!allowed) {
@@ -585,7 +616,9 @@ export async function bootstrapCloudRuntime(
       void worker
         .runOnce()
         .catch((error: unknown) => {
-          log(`[kiwi-cloud] Workbench reconciliation tick failed: ${error instanceof Error ? error.message : String(error)}\n`);
+          log(
+            `[kiwi-cloud] Workbench reconciliation tick failed: ${error instanceof Error ? error.message : String(error)}\n`,
+          );
         })
         .finally(() => {
           workerRunning = false;

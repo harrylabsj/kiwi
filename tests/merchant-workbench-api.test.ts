@@ -14,6 +14,8 @@ import { createVerifiedActorContext } from "../src/merchant/application/actor.js
 import { MerchantFeedStore } from "../src/merchant/feed-store.js";
 import { BROADCAST_TOOLS } from "../src/merchant/feed-executors.js";
 import { GRANT_TOOLS } from "../src/merchant/grant-executors.js";
+import { PROMOTION_TOOLS } from "../src/merchant/promotion-executors.js";
+import { MerchantPromotionStore } from "../src/merchant/promotion-store.js";
 import {
   MerchantGrantStore,
   type GrantAction,
@@ -45,8 +47,13 @@ const candidate: WriteApprovalCandidate = {
   updated_at: NOW.toISOString(),
 };
 const pending: WriteApprovalCandidate[] = [candidate];
-const feed = new MerchantFeedStore({ db, cursorKey: randomBytes(32), now: () => NOW.toISOString() });
+const feed = new MerchantFeedStore({
+  db,
+  cursorKey: randomBytes(32),
+  now: () => NOW.toISOString(),
+});
 const grants = new MerchantGrantStore({ db, now: () => NOW.toISOString() });
+const promotions = new MerchantPromotionStore({ db, now: () => NOW.toISOString() });
 
 let server: Server;
 let base: string;
@@ -97,6 +104,23 @@ function preparedGrant(input: {
   return { candidate: item };
 }
 
+function preparedPromotion(input: { promotionId: string; expectedRevision: number }): {
+  candidate: WriteApprovalCandidate;
+} {
+  const item: WriteApprovalCandidate = {
+    ...candidate,
+    candidate_id: `candidate-promotion-${pending.length}`,
+    tool: PROMOTION_TOOLS.publish,
+    arguments: {
+      promotion_id: input.promotionId,
+      expected_revision: input.expectedRevision,
+    },
+    arguments_hash: `sha256:promotion-${pending.length}`,
+  };
+  pending.push(item);
+  return { candidate: item };
+}
+
 beforeAll(async () => {
   confirmations.persistVerifiedCredential({
     registrationVerified: true,
@@ -125,8 +149,10 @@ beforeAll(async () => {
       workbenchConfirmations: confirmations,
       workbenchFeed: feed,
       workbenchGrants: grants,
+      workbenchPromotions: promotions,
       prepareBroadcastPublish: preparedBroadcast,
       prepareGrantCreate: preparedGrant,
+      preparePromotionPublish: preparedPromotion,
       webauthnRegistration: {
         rpName: "Kiwi Merchant",
         rpId: RP_ID,
@@ -460,5 +486,162 @@ describe("Workbench v1 trusted confirmation API", () => {
         },
       },
     });
+  });
+
+  it("stores promotion drafts but requires a candidate and product-scoped decision to publish", async () => {
+    const privateAudience = await post("/merchant/api/v1/promotions/drafts", {
+      sku_refs: ["sku-1"],
+      rule: {
+        kind: "limited_price",
+        unit_price: { currency: "CNY", amount_minor: "9999" },
+      },
+      audience: "followers",
+      starts: "2026-09-21T12:00:00Z",
+      ends: "2026-09-22T12:00:00Z",
+      timezone: "UTC",
+    });
+    expect(privateAudience.status).toBe(422);
+
+    const draft = await post("/merchant/api/v1/promotions/drafts", {
+      sku_refs: ["sku-1"],
+      rule: {
+        kind: "limited_price",
+        unit_price: { currency: "CNY", amount_minor: "9999" },
+      },
+      audience: "public",
+      starts: "2026-09-21T12:00:00Z",
+      ends: "2026-09-22T12:00:00Z",
+      timezone: "UTC",
+    });
+    expect(draft.status).toBe(201);
+    const created = (await draft.json()) as { promotion_id: string; revision: number };
+    expect(promotions.getPromotion(MERCHANT, created.promotion_id)?.status).toBe("draft");
+
+    const publishDraft = await post(
+      `/merchant/api/v1/promotions/${created.promotion_id}/publish-drafts`,
+      { expected_revision: created.revision },
+    );
+    expect(publishDraft.status).toBe(201);
+    const prepared = (await publishDraft.json()) as { candidate: WriteApprovalCandidate };
+    expect(prepared.candidate.tool).toBe(PROMOTION_TOOLS.publish);
+    expect(promotions.getPromotion(MERCHANT, created.promotion_id)?.status).toBe("draft");
+
+    const confirmation = await post("/merchant/api/v1/confirmations", {
+      candidate_id: prepared.candidate.candidate_id,
+      decision: "approve",
+    });
+    expect(confirmation.status).toBe(201);
+    const descriptor = (await confirmation.json()) as { confirmation_id: string };
+    const projection = await fetch(
+      `${base}/merchant/api/v1/confirmations/${descriptor.confirmation_id}`,
+      { headers: { cookie: auth.cookie } },
+    );
+    expect(await projection.json()).toMatchObject({
+      snapshot: {
+        decision_authorization: {
+          action: "product.decide",
+          resource_type: "product",
+          resource_ids: ["sku-1"],
+        },
+      },
+    });
+  });
+
+  it("requires complete SKU coverage and separate product draft/decide grants", async () => {
+    const operatorId = "operator:promotion-api";
+    const operatorAuth = await createAuth(operatorId, "operator");
+    confirmations.persistVerifiedCredential({
+      registrationVerified: true,
+      credentialId: "credential-promotion-operator-api",
+      merchantId: MERCHANT,
+      actorId: operatorId,
+      publicKeyPem: keyPair.publicKey.export({ type: "spki", format: "pem" }).toString(),
+      rpId: RP_ID,
+      origin: ORIGIN,
+    });
+    const owner = createVerifiedActorContext({
+      actorId: ACTOR,
+      merchantId: MERCHANT,
+      role: "owner",
+      authMethod: "admin-session",
+      generation: 1,
+      requestId: "test-promotion-owner",
+      expiresAt: "2027-09-21T12:00:00.000Z",
+    });
+    const promotionBody = (skuRefs: string[]) => ({
+      sku_refs: skuRefs,
+      rule: {
+        kind: "limited_price",
+        unit_price: { currency: "CNY", amount_minor: "8888" },
+      },
+      audience: "public",
+      starts: "2026-09-21T12:00:00Z",
+      ends: "2026-09-22T12:00:00Z",
+      timezone: "UTC",
+    });
+    expect(
+      (
+        await postWithAuth(
+          "/merchant/api/v1/promotions/drafts",
+          promotionBody(["sku-granted"]),
+          operatorAuth,
+        )
+      ).status,
+    ).toBe(403);
+    grants.createGrant(owner, {
+      subjectId: operatorId,
+      action: "product.draft",
+      resourceType: "product",
+      resourceSelector: ["sku-granted"],
+      expiresAt: "2027-09-21T12:00:00.000Z",
+    });
+    expect(
+      (
+        await postWithAuth(
+          "/merchant/api/v1/promotions/drafts",
+          promotionBody(["sku-granted", "sku-denied"]),
+          operatorAuth,
+        )
+      ).status,
+    ).toBe(403);
+    const draft = await postWithAuth(
+      "/merchant/api/v1/promotions/drafts",
+      promotionBody(["sku-granted"]),
+      operatorAuth,
+    );
+    expect(draft.status).toBe(201);
+    const created = (await draft.json()) as { promotion_id: string; revision: number };
+    const preparedResponse = await postWithAuth(
+      `/merchant/api/v1/promotions/${created.promotion_id}/publish-drafts`,
+      { expected_revision: created.revision },
+      operatorAuth,
+    );
+    expect(preparedResponse.status).toBe(201);
+    const prepared = (await preparedResponse.json()) as { candidate: WriteApprovalCandidate };
+    expect(
+      (
+        await postWithAuth(
+          "/merchant/api/v1/confirmations",
+          { candidate_id: prepared.candidate.candidate_id, decision: "approve" },
+          operatorAuth,
+        )
+      ).status,
+    ).toBe(403);
+    grants.createGrant(owner, {
+      subjectId: operatorId,
+      action: "product.decide",
+      resourceType: "product",
+      resourceSelector: ["sku-granted"],
+      expiresAt: "2027-09-21T12:00:00.000Z",
+    });
+    expect(
+      (
+        await postWithAuth(
+          "/merchant/api/v1/confirmations",
+          { candidate_id: prepared.candidate.candidate_id, decision: "approve" },
+          operatorAuth,
+        )
+      ).status,
+    ).toBe(201);
   });
 });

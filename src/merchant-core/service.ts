@@ -51,6 +51,7 @@ import {
 } from "./executor.js";
 import { BROADCAST_TOOLS } from "../merchant/feed-executors.js";
 import { GRANT_TOOLS } from "../merchant/grant-executors.js";
+import { PROMOTION_TOOLS } from "../merchant/promotion-executors.js";
 import type { GrantAction, GrantResourceType } from "../merchant/grant-store.js";
 import type { ApplyPolicyResult } from "./policy-runtime.js";
 import type { MerchantPolicy } from "../config/profile.js";
@@ -161,8 +162,7 @@ export class MerchantCoreService {
    * 回执只含版本与摘要——策略数值本身不出现在任何回执（红线 6）。
    */
   get policyApplier():
-    | ((patch: Record<string, unknown>) => Promise<{ version: number; digest: string }>)
-    | undefined {
+    ((patch: Record<string, unknown>) => Promise<{ version: number; digest: string }>) | undefined {
     if (this.applyPolicyOverride === undefined) return undefined;
     const apply = this.applyPolicyOverride;
     return async (patch) => {
@@ -226,10 +226,10 @@ export class MerchantCoreService {
       };
       this.commandLogInstance = new MerchantCommandLog({
         store: this.approvalsRef,
-        executors: MerchantExecutorRegistry.buildDefault(
-          executorContext,
-          [...(this.rfqDeps?.executors ?? []), ...this.extraExecutors],
-        ),
+        executors: MerchantExecutorRegistry.buildDefault(executorContext, [
+          ...(this.rfqDeps?.executors ?? []),
+          ...this.extraExecutors,
+        ]),
         executorContext,
         profile: this.profileRef,
         mode: this.modeRef,
@@ -392,16 +392,42 @@ export class MerchantCoreService {
     });
   }
 
-  prepareGrantRevoke(input: {
-    ownerActorId: string;
-    grantId: string;
-    reason?: string;
-  }) {
+  prepareGrantRevoke(input: { ownerActorId: string; grantId: string; reason?: string }) {
     return this.commands.prepare({
       tool: GRANT_TOOLS.revoke,
       arguments: {
         owner_actor_id: input.ownerActorId,
         grant_id: input.grantId,
+      },
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    });
+  }
+
+  preparePromotionPublish(input: {
+    promotionId: string;
+    expectedRevision: number;
+    reason?: string;
+  }) {
+    return this.commands.prepare({
+      tool: PROMOTION_TOOLS.publish,
+      arguments: {
+        promotion_id: input.promotionId,
+        expected_revision: input.expectedRevision,
+      },
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    });
+  }
+
+  preparePromotionWithdraw(input: {
+    promotionId: string;
+    expectedRevision: number;
+    reason?: string;
+  }) {
+    return this.commands.prepare({
+      tool: PROMOTION_TOOLS.withdraw,
+      arguments: {
+        promotion_id: input.promotionId,
+        expected_revision: input.expectedRevision,
       },
       ...(input.reason !== undefined ? { reason: input.reason } : {}),
     });

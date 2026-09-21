@@ -72,10 +72,7 @@ import {
   type OperationReceipt,
   type PageQuery,
 } from "../../merchant/application/service.js";
-import {
-  managementRequestDigest,
-  MerchantManagementOperationStore,
-} from "./operation-store.js";
+import { managementRequestDigest, MerchantManagementOperationStore } from "./operation-store.js";
 import type { MutableServiceState } from "./service-state.js";
 import { OnboardingStore } from "../../cloud/onboarding/store.js";
 import { requestsDisabledLocalImplementation } from "../../cloud/onboarding/local-fallback.js";
@@ -91,6 +88,11 @@ import type { RegistrationResponseJSON } from "@simplewebauthn/server";
 import { BROADCAST_TOOLS } from "../../merchant/feed-executors.js";
 import { MerchantFeedError, type MerchantFeedStore } from "../../merchant/feed-store.js";
 import { GRANT_TOOLS } from "../../merchant/grant-executors.js";
+import { PROMOTION_TOOLS } from "../../merchant/promotion-executors.js";
+import {
+  MerchantPromotionError,
+  type MerchantPromotionStore,
+} from "../../merchant/promotion-store.js";
 import {
   GRANT_ACTIONS,
   MerchantGrantError,
@@ -177,6 +179,7 @@ export interface MerchantManagementApiOptions {
   workbenchFeed?: MerchantFeedStore;
   /** Scoped Operator grant authority (owner is explicitly exempt from scoped grants). */
   workbenchGrants?: MerchantGrantStore;
+  workbenchPromotions?: MerchantPromotionStore;
   prepareBroadcastPublish?: (input: {
     broadcast: Record<string, unknown>;
     authorization: Record<string, unknown>;
@@ -207,6 +210,16 @@ export interface MerchantManagementApiOptions {
   prepareGrantRevoke?: (input: {
     ownerActorId: string;
     grantId: string;
+    reason?: string;
+  }) => Promise<unknown> | unknown;
+  preparePromotionPublish?: (input: {
+    promotionId: string;
+    expectedRevision: number;
+    reason?: string;
+  }) => Promise<unknown> | unknown;
+  preparePromotionWithdraw?: (input: {
+    promotionId: string;
+    expectedRevision: number;
     reason?: string;
   }) => Promise<unknown> | unknown;
   /** Independent registration authorization. Management session alone must never satisfy this callback. */
@@ -383,12 +396,9 @@ export function createMerchantManagementApiHandler(
       const auth = requireActor(req);
       authorizeOrThrow(auth.ctx, "approvals:read");
       const feed = requireWorkbenchFeed();
-      writeJson(
-        res,
-        200,
-        feed.listBroadcasts(auth.ctx.merchantId, pageQuery(url)),
-        { "x-request-id": requestId },
-      );
+      writeJson(res, 200, feed.listBroadcasts(auth.ctx.merchantId, pageQuery(url)), {
+        "x-request-id": requestId,
+      });
       return;
     }
     if (rest === "/operator-grants") {
@@ -398,6 +408,29 @@ export function createMerchantManagementApiHandler(
       writeJson(res, 200, grants.listGrants(auth.ctx.merchantId, pageQuery(url)), {
         "x-request-id": requestId,
       });
+      return;
+    }
+    if (rest === "/promotions") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "products:read");
+      writeJson(
+        res,
+        200,
+        requireWorkbenchPromotions().listPromotions(auth.ctx.merchantId, pageQuery(url)),
+        { "x-request-id": requestId },
+      );
+      return;
+    }
+    const promotionMatch = /^\/promotions\/([^/]+)$/.exec(rest);
+    if (promotionMatch !== null) {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "products:read");
+      const value = requireWorkbenchPromotions().getPromotion(
+        auth.ctx.merchantId,
+        pathSegment(promotionMatch[1] ?? ""),
+      );
+      if (value === undefined) throw new ManagementError("not_found", "unknown promotion");
+      writeJson(res, 200, value, { "x-request-id": requestId });
       return;
     }
     const broadcastMatch = /^\/broadcasts\/([^/]+)$/.exec(rest);
@@ -538,7 +571,8 @@ export function createMerchantManagementApiHandler(
       ).toISOString();
       const decisionAuthorization =
         authorizeBroadcastCandidate(auth.ctx, candidate, "broadcast.decide") ??
-        authorizeGrantCandidate(auth.ctx, candidate);
+        authorizeGrantCandidate(auth.ctx, candidate) ??
+        authorizePromotionCandidate(auth.ctx, candidate);
       const confirmation = confirmations.createRequest({
         merchantId: auth.ctx.merchantId,
         actorId: auth.ctx.actorId,
@@ -617,7 +651,10 @@ export function createMerchantManagementApiHandler(
       const assertion: WebAuthnAssertionInput = {
         credentialId: requireString(assertionFields["credential_id"], "credential_id"),
         clientDataJSON: requireString(assertionFields["client_data_json"], "client_data_json"),
-        authenticatorData: requireString(assertionFields["authenticator_data"], "authenticator_data"),
+        authenticatorData: requireString(
+          assertionFields["authenticator_data"],
+          "authenticator_data",
+        ),
         signature: requireString(assertionFields["signature"], "signature"),
       };
       const candidate = options.listPending().find((item) => item.candidate_id === candidateId);
@@ -626,7 +663,8 @@ export function createMerchantManagementApiHandler(
       }
       const currentAuthorization =
         authorizeBroadcastCandidate(auth.ctx, candidate, "broadcast.decide") ??
-        authorizeGrantCandidate(auth.ctx, candidate);
+        authorizeGrantCandidate(auth.ctx, candidate) ??
+        authorizePromotionCandidate(auth.ctx, candidate);
       if (currentAuthorization !== undefined) {
         const confirmationId = requireString(fields["confirmation_id"], "confirmation_id");
         const frozen = requireWorkbenchConfirmations().requestProjection({
@@ -696,7 +734,8 @@ export function createMerchantManagementApiHandler(
       let prepared: unknown;
       if (action === "publish") {
         const channel = options.prepareBroadcastPublish;
-        if (channel === undefined) throw new ManagementError("unavailable", "broadcast prepare is unavailable");
+        if (channel === undefined)
+          throw new ManagementError("unavailable", "broadcast prepare is unavailable");
         prepared = await channel({
           broadcast: requireObject(fields["broadcast"], "broadcast"),
           authorization,
@@ -704,7 +743,8 @@ export function createMerchantManagementApiHandler(
         });
       } else if (action === "revise") {
         const channel = options.prepareBroadcastRevise;
-        if (channel === undefined) throw new ManagementError("unavailable", "broadcast prepare is unavailable");
+        if (channel === undefined)
+          throw new ManagementError("unavailable", "broadcast prepare is unavailable");
         prepared = await channel({
           broadcastId: requireString(fields["broadcast_id"], "broadcast_id"),
           expectedRevision: requireInteger(fields["expected_revision"], "expected_revision"),
@@ -714,7 +754,8 @@ export function createMerchantManagementApiHandler(
         });
       } else {
         const channel = options.prepareBroadcastWithdraw;
-        if (channel === undefined) throw new ManagementError("unavailable", "broadcast prepare is unavailable");
+        if (channel === undefined)
+          throw new ManagementError("unavailable", "broadcast prepare is unavailable");
         prepared = await channel({
           broadcastId: requireString(fields["broadcast_id"], "broadcast_id"),
           expectedRevision: requireInteger(fields["expected_revision"], "expected_revision"),
@@ -748,7 +789,8 @@ export function createMerchantManagementApiHandler(
       let prepared: unknown;
       if (action === "create") {
         const channel = options.prepareGrantCreate;
-        if (channel === undefined) throw new ManagementError("unavailable", "grant prepare is unavailable");
+        if (channel === undefined)
+          throw new ManagementError("unavailable", "grant prepare is unavailable");
         prepared = await channel({
           ownerActorId: auth.ctx.actorId,
           subjectId: requireString(fields["subject_id"], "subject_id"),
@@ -760,7 +802,8 @@ export function createMerchantManagementApiHandler(
         });
       } else if (action === "revoke") {
         const channel = options.prepareGrantRevoke;
-        if (channel === undefined) throw new ManagementError("unavailable", "grant prepare is unavailable");
+        if (channel === undefined)
+          throw new ManagementError("unavailable", "grant prepare is unavailable");
         prepared = await channel({
           ownerActorId: auth.ctx.actorId,
           grantId: requireString(fields["grant_id"], "grant_id"),
@@ -769,6 +812,66 @@ export function createMerchantManagementApiHandler(
       } else {
         throw new ManagementError("invalid_input", "action must be create or revoke");
       }
+      writeJson(res, 201, prepared, { "x-request-id": requestId });
+      return;
+    }
+
+    if (rest === "/promotions/drafts") {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "products:draft");
+      const fields = objectFields(await readJsonBody(req), [
+        "sku_refs",
+        "rule",
+        "audience",
+        "starts",
+        "ends",
+        "timezone",
+        "ends_date_inclusive",
+        "stackable",
+        "priority",
+      ]);
+      const skuRefs = requireStringArray(fields["sku_refs"], "sku_refs");
+      authorizeProductAction(auth.ctx, "product.draft", skuRefs);
+      const created = requireWorkbenchPromotions().createDraft(auth.ctx.merchantId, {
+        skuRefs,
+        rule: fields["rule"],
+        audience: requirePublicAudience(fields["audience"]),
+        starts: requireString(fields["starts"], "starts"),
+        ends: requireString(fields["ends"], "ends"),
+        timezone: requireString(fields["timezone"], "timezone"),
+        ...(fields["ends_date_inclusive"] === true ? { endsDateInclusive: true } : {}),
+        ...(fields["stackable"] === true ? { stackable: true } : {}),
+        ...(fields["priority"] !== undefined
+          ? { priority: requireInteger(fields["priority"], "priority") }
+          : {}),
+      });
+      writeJson(res, 201, created, { "x-request-id": requestId });
+      return;
+    }
+
+    const promotionDraftMatch = /^\/promotions\/([^/]+)\/(publish|withdraw)-drafts$/.exec(rest);
+    if (promotionDraftMatch !== null) {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "products:draft");
+      const promotionId = pathSegment(promotionDraftMatch[1] ?? "");
+      const promotion = requireWorkbenchPromotions().getPromotion(auth.ctx.merchantId, promotionId);
+      if (promotion === undefined) throw new ManagementError("not_found", "unknown promotion");
+      authorizeProductAction(auth.ctx, "product.draft", promotion.sku_refs);
+      const fields = objectFields(await readJsonBody(req), ["expected_revision", "reason"]);
+      const expectedRevision = requireInteger(fields["expected_revision"], "expected_revision");
+      const reason = optionalString(fields["reason"], "reason");
+      const publish = promotionDraftMatch[2] === "publish";
+      const channel = publish ? options.preparePromotionPublish : options.preparePromotionWithdraw;
+      if (channel === undefined) {
+        throw new ManagementError("unavailable", "promotion candidate preparation is unavailable");
+      }
+      const prepared = await channel({
+        promotionId,
+        expectedRevision,
+        ...(reason !== undefined ? { reason } : {}),
+      });
       writeJson(res, 201, prepared, { "x-request-id": requestId });
       return;
     }
@@ -806,20 +909,55 @@ export function createMerchantManagementApiHandler(
     return options.workbenchGrants;
   }
 
+  function requireWorkbenchPromotions(): MerchantPromotionStore {
+    if (options.workbenchPromotions === undefined) {
+      throw new ManagementError("unavailable", "Workbench promotion authority is not configured");
+    }
+    return options.workbenchPromotions;
+  }
+
   function authorizeBroadcastAction(
     actor: VerifiedActorContext,
     action: "broadcast.draft" | "broadcast.decide",
   ): { generation: number; grantIds: string[] } {
     if (actor.role === "owner") {
       return {
-        generation: options.workbenchGrants?.authorizationGeneration(actor.merchantId, actor.actorId) ?? 0,
+        generation:
+          options.workbenchGrants?.authorizationGeneration(actor.merchantId, actor.actorId) ?? 0,
         grantIds: [],
       };
     }
     const grants = options.workbenchGrants;
-    if (grants === undefined) throw new ManagementError("forbidden", "scoped grants are unavailable");
+    if (grants === undefined)
+      throw new ManagementError("forbidden", "scoped grants are unavailable");
     const result = grants.authorize(actor, { action, resourceType: "merchant" });
-    if (!result.authorized) throw new ManagementError("forbidden", `missing scoped grant: ${action}`);
+    if (!result.authorized)
+      throw new ManagementError("forbidden", `missing scoped grant: ${action}`);
+    return { generation: result.generation, grantIds: result.grantIds };
+  }
+
+  function authorizeProductAction(
+    actor: VerifiedActorContext,
+    action: "product.draft" | "product.decide",
+    resourceIds: readonly string[],
+  ): { generation: number; grantIds: string[] } {
+    if (actor.role === "owner") {
+      return {
+        generation:
+          options.workbenchGrants?.authorizationGeneration(actor.merchantId, actor.actorId) ?? 0,
+        grantIds: [],
+      };
+    }
+    const grants = options.workbenchGrants;
+    if (grants === undefined)
+      throw new ManagementError("forbidden", "scoped grants are unavailable");
+    const result = grants.authorize(actor, {
+      action,
+      resourceType: "product",
+      resourceIds,
+    });
+    if (!result.authorized)
+      throw new ManagementError("forbidden", `missing scoped grant: ${action}`);
     return { generation: result.generation, grantIds: result.grantIds };
   }
 
@@ -828,7 +966,11 @@ export function createMerchantManagementApiHandler(
     candidate: WriteApprovalCandidate,
     action: "broadcast.decide",
   ): Record<string, unknown> | undefined {
-    if (!Object.values(BROADCAST_TOOLS).includes(candidate.tool as (typeof BROADCAST_TOOLS)[keyof typeof BROADCAST_TOOLS])) {
+    if (
+      !Object.values(BROADCAST_TOOLS).includes(
+        candidate.tool as (typeof BROADCAST_TOOLS)[keyof typeof BROADCAST_TOOLS],
+      )
+    ) {
       return undefined;
     }
     authorizeOrThrow(actor, "broadcast:decide");
@@ -846,7 +988,11 @@ export function createMerchantManagementApiHandler(
     actor: VerifiedActorContext,
     candidate: WriteApprovalCandidate,
   ): Record<string, unknown> | undefined {
-    if (!Object.values(GRANT_TOOLS).includes(candidate.tool as (typeof GRANT_TOOLS)[keyof typeof GRANT_TOOLS])) {
+    if (
+      !Object.values(GRANT_TOOLS).includes(
+        candidate.tool as (typeof GRANT_TOOLS)[keyof typeof GRANT_TOOLS],
+      )
+    ) {
       return undefined;
     }
     authorizeOrThrow(actor, "grants:manage");
@@ -857,6 +1003,33 @@ export function createMerchantManagementApiHandler(
       actor_id: actor.actorId,
       actor_role: actor.role,
       action: "grants.manage",
+    };
+  }
+
+  function authorizePromotionCandidate(
+    actor: VerifiedActorContext,
+    candidate: WriteApprovalCandidate,
+  ): Record<string, unknown> | undefined {
+    if (
+      !Object.values(PROMOTION_TOOLS).includes(
+        candidate.tool as (typeof PROMOTION_TOOLS)[keyof typeof PROMOTION_TOOLS],
+      )
+    ) {
+      return undefined;
+    }
+    authorizeOrThrow(actor, "products:decide");
+    const promotionId = String(candidate.arguments["promotion_id"] ?? "");
+    const promotion = requireWorkbenchPromotions().getPromotion(actor.merchantId, promotionId);
+    if (promotion === undefined) throw new ManagementError("not_found", "unknown promotion");
+    const scoped = authorizeProductAction(actor, "product.decide", promotion.sku_refs);
+    return {
+      actor_id: actor.actorId,
+      actor_role: actor.role,
+      action: "product.decide",
+      resource_type: "product",
+      resource_ids: promotion.sku_refs,
+      authorization_generation: scoped.generation,
+      matched_grant_ids: scoped.grantIds,
     };
   }
 
@@ -923,7 +1096,11 @@ export function createMerchantManagementApiHandler(
     const approvalMatch = /^\/approvals\/([^/]+)$/.exec(rest);
     if (approvalMatch !== null) {
       const auth = requireActor(req);
-      writeJson(res, 200, await readService.getApproval(auth.ctx, pathSegment(approvalMatch[1] ?? "")));
+      writeJson(
+        res,
+        200,
+        await readService.getApproval(auth.ctx, pathSegment(approvalMatch[1] ?? "")),
+      );
       return;
     }
     const operationMatch = /^\/operations\/([^/]+)$/.exec(rest);
@@ -975,7 +1152,12 @@ export function createMerchantManagementApiHandler(
     }
     const decisionMatch = /^\/approvals\/([^/]+)\/(approve|reject)$/.exec(rest);
     if (decisionMatch !== null) {
-      await postApprovalDecision(req, res, pathSegment(decisionMatch[1] ?? ""), decisionMatch[2] === "approve");
+      await postApprovalDecision(
+        req,
+        res,
+        pathSegment(decisionMatch[1] ?? ""),
+        decisionMatch[2] === "approve",
+      );
       return;
     }
     if (rest === "/products/import-drafts") {
@@ -1062,7 +1244,11 @@ export function createMerchantManagementApiHandler(
       return;
     }
     if (probed.kind === "conflict") {
-      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      writeJson(
+        res,
+        409,
+        errorBody("conflict", "idempotency key was already used with a different request"),
+      );
       return;
     }
     const begun = operations.begin({
@@ -1077,7 +1263,11 @@ export function createMerchantManagementApiHandler(
       return;
     }
     if (begun.kind === "conflict") {
-      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      writeJson(
+        res,
+        409,
+        errorBody("conflict", "idempotency key was already used with a different request"),
+      );
       return;
     }
     try {
@@ -1138,7 +1328,11 @@ export function createMerchantManagementApiHandler(
       throw new ManagementError("invalid_input", `unknown wizard step: ${stepId}`);
     }
 
-    const requestDigest = managementRequestDigest({ record_id: recordId, step: stepId, expected_revision: expectedRevision });
+    const requestDigest = managementRequestDigest({
+      record_id: recordId,
+      step: stepId,
+      expected_revision: expectedRevision,
+    });
     const probed = operations.probe({
       merchantId: auth.ctx.merchantId,
       actorId: auth.ctx.actorId,
@@ -1151,7 +1345,11 @@ export function createMerchantManagementApiHandler(
       return;
     }
     if (probed.kind === "conflict") {
-      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      writeJson(
+        res,
+        409,
+        errorBody("conflict", "idempotency key was already used with a different request"),
+      );
       return;
     }
     const begun = operations.begin({
@@ -1166,7 +1364,11 @@ export function createMerchantManagementApiHandler(
       return;
     }
     if (begun.kind === "conflict") {
-      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      writeJson(
+        res,
+        409,
+        errorBody("conflict", "idempotency key was already used with a different request"),
+      );
       return;
     }
     try {
@@ -1263,8 +1465,17 @@ export function createMerchantManagementApiHandler(
     res: ServerResponse,
     recordId: string,
   ): Promise<void> {
-    await onboardSimpleCommand(res, req, recordId, "onboarding.consent_refused", (store, record, note) =>
-      store.recordConsentRefused(record.recordId, record.revision, note !== undefined ? { note } : {}),
+    await onboardSimpleCommand(
+      res,
+      req,
+      recordId,
+      "onboarding.consent_refused",
+      (store, record, note) =>
+        store.recordConsentRefused(
+          record.recordId,
+          record.revision,
+          note !== undefined ? { note } : {},
+        ),
     );
   }
 
@@ -1299,7 +1510,10 @@ export function createMerchantManagementApiHandler(
         `record is at revision ${record.revision}, expected ${expectedRevision}`,
       );
     }
-    const requestDigest = managementRequestDigest({ record_id: recordId, expected_revision: expectedRevision });
+    const requestDigest = managementRequestDigest({
+      record_id: recordId,
+      expected_revision: expectedRevision,
+    });
     const probed = operations.probe({
       merchantId: auth.ctx.merchantId,
       actorId: auth.ctx.actorId,
@@ -1312,7 +1526,11 @@ export function createMerchantManagementApiHandler(
       return;
     }
     if (probed.kind === "conflict") {
-      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      writeJson(
+        res,
+        409,
+        errorBody("conflict", "idempotency key was already used with a different request"),
+      );
       return;
     }
     const begun = operations.begin({
@@ -1327,7 +1545,11 @@ export function createMerchantManagementApiHandler(
       return;
     }
     if (begun.kind === "conflict") {
-      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      writeJson(
+        res,
+        409,
+        errorBody("conflict", "idempotency key was already used with a different request"),
+      );
       return;
     }
     try {
@@ -1366,11 +1588,17 @@ export function createMerchantManagementApiHandler(
         throw new ManagementError("invalid_input", `unsupported confirmation target: ${target}`);
       }
       authorizeOrThrow(auth.ctx, "service:resume");
-      const expectedRevision = requireInteger(fields.expected_service_revision, "expected_service_revision");
+      const expectedRevision = requireInteger(
+        fields.expected_service_revision,
+        "expected_service_revision",
+      );
       if (expectedRevision !== options.serviceState.serviceRevision) {
         throw new ManagementError("precondition_changed", "service revision changed");
       }
-      const targetDigest = managementRequestDigest({ target, expected_service_revision: expectedRevision });
+      const targetDigest = managementRequestDigest({
+        target,
+        expected_service_revision: expectedRevision,
+      });
       const confirmation = operations.createConfirmation({
         merchantId: auth.ctx.merchantId,
         actorId: auth.ctx.actorId,
@@ -1404,7 +1632,10 @@ export function createMerchantManagementApiHandler(
     }
     const argumentsHash = requireString(fields.arguments_hash, "arguments_hash");
     const preconditionsHash = requireString(fields.preconditions_hash, "preconditions_hash");
-    if (candidate.arguments_hash !== argumentsHash || candidate.preconditions_hash !== preconditionsHash) {
+    if (
+      candidate.arguments_hash !== argumentsHash ||
+      candidate.preconditions_hash !== preconditionsHash
+    ) {
       throw new ManagementError("precondition_changed", "candidate changed since preview");
     }
     if (Date.parse(candidate.expires_at) <= now().getTime()) {
@@ -1412,7 +1643,10 @@ export function createMerchantManagementApiHandler(
     }
     const confirmationRef = options.mintCandidateConfirmation({
       candidateId,
-      candidateDigest: contentHash({ arguments: candidate.arguments, preconditions: candidate.preconditions }),
+      candidateDigest: contentHash({
+        arguments: candidate.arguments,
+        preconditions: candidate.preconditions,
+      }),
       principalId: auth.session.principal_id,
       merchantId: auth.session.merchant_id,
       action,
@@ -1469,7 +1703,11 @@ export function createMerchantManagementApiHandler(
       return;
     }
     if (begun.kind === "conflict") {
-      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      writeJson(
+        res,
+        409,
+        errorBody("conflict", "idempotency key was already used with a different request"),
+      );
       return;
     }
 
@@ -1501,7 +1739,10 @@ export function createMerchantManagementApiHandler(
       if (message.includes("确认凭证")) {
         // core 凭证校验拒绝 = 未执行（凭证未被核销）：释放占位，重新签确认后原键可重试。
         operations.release(begun.operationId);
-        respondError(res, new ManagementError("forbidden", "confirmation reference is invalid or expired"));
+        respondError(
+          res,
+          new ManagementError("forbidden", "confirmation reference is invalid or expired"),
+        );
         return;
       }
       // 无法证明「未执行」→ 记 unknown，保留对账路径（BD §11.1），绝不自动重做。
@@ -1525,7 +1766,10 @@ export function createMerchantManagementApiHandler(
     const body = await readJsonBody(req);
     const fields = objectFields(body, ["reason", "expected_service_revision", "idempotency_key"]);
     authorizeOrThrow(auth.ctx, "service:pause");
-    const expectedRevision = requireInteger(fields.expected_service_revision, "expected_service_revision");
+    const expectedRevision = requireInteger(
+      fields.expected_service_revision,
+      "expected_service_revision",
+    );
     const idempotencyKey = requireString(fields.idempotency_key, "idempotency_key");
     const reason = optionalString(fields.reason, "reason");
     if (expectedRevision !== options.serviceState.serviceRevision) {
@@ -1547,7 +1791,11 @@ export function createMerchantManagementApiHandler(
       return;
     }
     if (begun.kind === "conflict") {
-      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      writeJson(
+        res,
+        409,
+        errorBody("conflict", "idempotency key was already used with a different request"),
+      );
       return;
     }
     try {
@@ -1582,7 +1830,10 @@ export function createMerchantManagementApiHandler(
       "idempotency_key",
     ]);
     authorizeOrThrow(auth.ctx, "service:resume");
-    const expectedRevision = requireInteger(fields.expected_service_revision, "expected_service_revision");
+    const expectedRevision = requireInteger(
+      fields.expected_service_revision,
+      "expected_service_revision",
+    );
     const confirmationRef = requireString(fields.confirmation_ref, "confirmation_ref");
     const idempotencyKey = requireString(fields.idempotency_key, "idempotency_key");
     if (expectedRevision !== options.serviceState.serviceRevision) {
@@ -1616,7 +1867,11 @@ export function createMerchantManagementApiHandler(
       return;
     }
     if (begun.kind === "conflict") {
-      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      writeJson(
+        res,
+        409,
+        errorBody("conflict", "idempotency key was already used with a different request"),
+      );
       return;
     }
     // 就绪门：恢复前重新取就绪结论；失败/异常都发生在迁移之前 → 释放占位。
@@ -1625,7 +1880,10 @@ export function createMerchantManagementApiHandler(
       readiness = await options.readiness();
     } catch {
       operations.release(begun.operationId);
-      respondError(res, new ManagementError("unavailable", "readiness check failed; refusing to resume"));
+      respondError(
+        res,
+        new ManagementError("unavailable", "readiness check failed; refusing to resume"),
+      );
       return;
     }
     const failedChecks = Object.entries(readiness.checks)
@@ -1679,7 +1937,10 @@ export function createMerchantManagementApiHandler(
       throw err;
     }
     if (table.merchant_id !== options.merchantId) {
-      throw new ManagementError("forbidden", "product table merchant_id does not match this instance");
+      throw new ManagementError(
+        "forbidden",
+        "product table merchant_id does not match this instance",
+      );
     }
     let base: { digest: string; records: CloudProductRecord[] };
     try {
@@ -1720,7 +1981,13 @@ export function createMerchantManagementApiHandler(
       digest,
       reused: created.reused,
       base_digest: base.digest === "" ? null : base.digest,
-      preview: { rows_total: table.products.length, added, updated, unchanged, removed: removedCount },
+      preview: {
+        rows_total: table.products.length,
+        added,
+        updated,
+        unchanged,
+        removed: removedCount,
+      },
     });
   }
 
@@ -1774,7 +2041,11 @@ export function createMerchantManagementApiHandler(
       return;
     }
     if (probed.kind === "conflict") {
-      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      writeJson(
+        res,
+        409,
+        errorBody("conflict", "idempotency key was already used with a different request"),
+      );
       return;
     }
     if (draft.status === "committed") {
@@ -1792,7 +2063,11 @@ export function createMerchantManagementApiHandler(
       return;
     }
     if (begun.kind === "conflict") {
-      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      writeJson(
+        res,
+        409,
+        errorBody("conflict", "idempotency key was already used with a different request"),
+      );
       return;
     }
     try {
@@ -1820,10 +2095,18 @@ export function createMerchantManagementApiHandler(
         return;
       }
       // 文件系统失败且无法证明「未生效」→ 记 unknown，先查 GET /products 对账。
-      log(`[merchant-management] products.import_commit 执行异常：${err instanceof Error ? err.message : String(err)}\n`);
+      log(
+        `[merchant-management] products.import_commit 执行异常：${err instanceof Error ? err.message : String(err)}\n`,
+      );
       const receipt = staticReceipt(begun.operationId, "products.import_commit", "unknown");
       operations.complete(begun.operationId, "unknown", receipt);
-      respondError(res, new ManagementError("unavailable", `commit outcome unknown; query operation ${begun.operationId} and GET /products before retrying`));
+      respondError(
+        res,
+        new ManagementError(
+          "unavailable",
+          `commit outcome unknown; query operation ${begun.operationId} and GET /products before retrying`,
+        ),
+      );
     }
   }
 
@@ -1909,7 +2192,11 @@ export function createMerchantManagementApiHandler(
       return;
     }
     if (probed.kind === "conflict") {
-      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      writeJson(
+        res,
+        409,
+        errorBody("conflict", "idempotency key was already used with a different request"),
+      );
       return;
     }
     if (draft.status === "committed") {
@@ -1927,7 +2214,11 @@ export function createMerchantManagementApiHandler(
       return;
     }
     if (begun.kind === "conflict") {
-      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      writeJson(
+        res,
+        409,
+        errorBody("conflict", "idempotency key was already used with a different request"),
+      );
       return;
     }
     let patch: Record<string, unknown>;
@@ -1952,7 +2243,10 @@ export function createMerchantManagementApiHandler(
       // apply 是「校验 + 原子写」：校验失败未生效 → 释放占位可修正重试
       // （错误消息来自 runtime 校验层，不含策略数值本身）。
       operations.release(begun.operationId);
-      respondError(res, new ManagementError("invalid_input", err instanceof Error ? err.message : String(err)));
+      respondError(
+        res,
+        new ManagementError("invalid_input", err instanceof Error ? err.message : String(err)),
+      );
     }
   }
 
@@ -2053,7 +2347,9 @@ export function createMerchantManagementApiHandler(
       resource_ref: null,
       result_revision: null,
       created_at: stamp,
-      ...(status === "succeeded" || status === "failed" ? { completed_at: stamp } : { completed_at: null }),
+      ...(status === "succeeded" || status === "failed"
+        ? { completed_at: stamp }
+        : { completed_at: null }),
       support_id: `sup_${operationId.slice(-8)}`,
     };
   }
@@ -2189,8 +2485,30 @@ function requireGrantResourceType(value: unknown): GrantResourceType {
 
 function requireGrantSelector(value: unknown): "merchant" | "all_products" | readonly string[] {
   if (value === "merchant" || value === "all_products") return value;
-  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string")) {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((item) => typeof item !== "string")
+  ) {
     throw new ManagementError("invalid_input", "resource_selector is invalid");
+  }
+  return value;
+}
+
+function requireStringArray(value: unknown, field: string): string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((item) => typeof item !== "string")
+  ) {
+    throw new ManagementError("invalid_input", `${field} must be a non-empty string array`);
+  }
+  return value;
+}
+
+function requirePublicAudience(value: unknown): "public" {
+  if (value !== "public") {
+    throw new ManagementError("invalid_input", "audience must be public");
   }
   return value;
 }
@@ -2272,6 +2590,16 @@ function writeWorkbenchProblem(
 }
 
 function respondWorkbenchError(res: ServerResponse, error: unknown, requestId: string): void {
+  if (error instanceof MerchantPromotionError) {
+    const code: WorkbenchProblemCode =
+      error.code === "not_found"
+        ? "RESOURCE_NOT_FOUND"
+        : error.code === "version_conflict"
+          ? "VERSION_CONFLICT"
+          : "VALIDATION_ERROR";
+    writeWorkbenchProblem(res, code, requestId, "促销请求未完成", error.message);
+    return;
+  }
   if (error instanceof MerchantGrantError) {
     const code: WorkbenchProblemCode =
       error.code === "not_found"

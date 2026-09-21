@@ -265,7 +265,11 @@ export class MerchantCommandLog {
     return await executeApprovedCandidate(this.deps.store, input.candidateId, {
       readPreconditions: () => executor.readPreconditions(candidate.arguments),
       execute: async (approvedArgs) => {
-        const output = await executor.execute(approvedArgs, this.deps.executorContext);
+        const output = await executor.execute(approvedArgs, this.deps.executorContext, {
+          kind: "committed",
+          operationId: input.operationId,
+          actorId: input.actorId,
+        });
         await executor.verifyAfter?.(approvedArgs, this.deps.executorContext);
         return output;
       },
@@ -291,10 +295,7 @@ export class MerchantCommandLog {
     }
     const executor = this.deps.executors.get(candidate.tool);
     if (executor?.requiresCommittedDecision === true) {
-      throw new MerchantWorkbenchError(
-        "auth",
-        "该命令只接受已持久提交的 Workbench WebAuthn 决定",
-      );
+      throw new MerchantWorkbenchError("auth", "该命令只接受已持久提交的 Workbench WebAuthn 决定");
     }
     if (this.deps.confirmations !== undefined) {
       const confirmation = this.deps.confirmations.consumeConfirmation(confirmationToken ?? "", {
