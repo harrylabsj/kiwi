@@ -32,6 +32,7 @@
     "verify:contracts": "node scripts/verify-contracts.mjs",
     "verify:package": "bash scripts/verify-package.sh",
     "verify:portfolio-lock": "node scripts/verify-portfolio-lock-candidate.mjs",
+    "probe:workbench-capacity": "npm run build && node scripts/workbench-capacity-probe.mjs",
     "verify:python-ref": "cd spec/examples/python && python3 -m unittest discover -s tests -t .",
     "demo:hermes-buyer": "bash scripts/demo-hermes-buyer.sh",
     "verify:harness": "node integrations/harnesses/deepseek-harness/validate-contract-cases.mjs",
