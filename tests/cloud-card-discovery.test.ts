@@ -411,6 +411,37 @@ describe("云端名片解析（公开读 + 声明验签）", () => {
     const { source: cloud } = source({ cardStatus: 503, bindingStatus: 503, cardBody: {} });
     expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("catalog:request_failed");
   });
+
+  it("Catalog 真的连不上（网络层失败）→ 同样直接失败，没有「离线兜底」", async () => {
+    const offline = (async () => {
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof fetch;
+    const cloud = new CloudCardSource({
+      baseUrl: CATALOG,
+      trust: trust(),
+      fetchImpl: offline,
+      now: () => NOW,
+    });
+    expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("catalog:request_failed");
+  });
+
+  it("Catalog 挂起（超时）→ 直接失败，不无限等待", async () => {
+    const hanging = (async (_input: unknown, init?: { signal?: AbortSignal }) => {
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+        );
+      });
+    }) as unknown as typeof fetch;
+    const cloud = new CloudCardSource({
+      baseUrl: CATALOG,
+      trust: trust(),
+      fetchImpl: hanging,
+      timeoutMs: 30,
+      now: () => NOW,
+    });
+    expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("catalog:request_failed");
+  });
 });
 
 describe("条件请求与信任缓存（§12.1）", () => {
