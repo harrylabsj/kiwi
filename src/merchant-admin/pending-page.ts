@@ -92,6 +92,10 @@ export interface MerchantAdminSurface {
     authorization: Record<string, unknown>;
     reason?: string;
   }): Promise<unknown> | unknown;
+  prepareServiceResume?(input: {
+    expectedRevision: number;
+    reason?: string;
+  }): Promise<unknown> | unknown;
   prepareBroadcastPublish?(input: {
     broadcast: Record<string, unknown>;
     authorization: Record<string, unknown>;
@@ -156,6 +160,7 @@ export function merchantAdminSurface(core: MerchantCoreService): MerchantAdminSu
     prepareListingChange: (input) => core.prepareListingChange(input),
     prepareExactProductCreate: (input) => core.prepareExactProductCreate(input),
     prepareExactProductMoneyUpdate: (input) => core.prepareExactProductMoneyUpdate(input),
+    prepareServiceResume: (input) => core.prepareServiceResume(input),
     prepareBroadcastPublish: (input) => core.prepareBroadcastPublish(input),
     prepareBroadcastRevise: (input) => core.prepareBroadcastRevise(input),
     prepareBroadcastWithdraw: (input) => core.prepareBroadcastWithdraw(input),

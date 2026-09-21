@@ -26,11 +26,11 @@
  */
 
 import { ManagementError, type ServiceState } from "../../merchant/application/service.js";
+import type { DatabaseSync } from "node:sqlite";
 
 /** A2A 闸门形状（与 createA2aNodeCore 的 serviceAvailability.check 同形）。 */
 export type ServiceGateCheck =
-  | { accepting: true }
-  | { accepting: false; state: string; reason: string };
+  { accepting: true } | { accepting: false; state: string; reason: string };
 
 const SERVICE_STATE_VALUES: ReadonlySet<string> = new Set([
   "OPERATING",
@@ -43,6 +43,7 @@ export class MutableServiceState {
   private stateValue: ServiceState;
   private revisionValue: number;
   private stateReason: string;
+  private persistence?: { db: DatabaseSync; merchantId: string };
 
   constructor(initial: ServiceState = "OPERATING") {
     this.stateValue = initial;
@@ -55,12 +56,44 @@ export class MutableServiceState {
    * 无法识别的声明按 DEGRADED 关闸——绝不静默营业。
    */
   static fromDeclared(raw: string | undefined): MutableServiceState {
-    const declared = String(raw ?? "").trim().toUpperCase();
+    const declared = String(raw ?? "")
+      .trim()
+      .toUpperCase();
     if (declared === "" || declared === "OPERATING") return new MutableServiceState("OPERATING");
     if (SERVICE_STATE_VALUES.has(declared)) {
       return new MutableServiceState(declared as ServiceState);
     }
     return new MutableServiceState("DEGRADED");
+  }
+
+  attachPersistence(db: DatabaseSync, merchantId: string): void {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS workbench_service_control (
+        merchant_id TEXT PRIMARY KEY,
+        state TEXT NOT NULL CHECK(state IN ('OPERATING','PAUSED','WITHDRAWN','DEGRADED')),
+        revision INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    const row = db
+      .prepare("SELECT state, revision, reason FROM workbench_service_control WHERE merchant_id=?")
+      .get(merchantId) as { state: ServiceState; revision: number; reason: string } | undefined;
+    this.persistence = { db, merchantId };
+    if (row === undefined) {
+      this.insertCurrent();
+      return;
+    }
+    // A persisted safety state wins over an implicit OPERATING startup. An explicit
+    // non-operating declaration may only tighten a previously operating row.
+    if (row.state === "OPERATING" && this.stateValue !== "OPERATING") {
+      this.revisionValue = row.revision + 1;
+      this.persistCurrent(row.revision);
+      return;
+    }
+    this.stateValue = row.state;
+    this.revisionValue = row.revision;
+    this.stateReason = row.reason;
   }
 
   get state(): ServiceState {
@@ -88,9 +121,17 @@ export class MutableServiceState {
     }
     if (this.stateValue === "PAUSED") return { service_revision: this.revisionValue };
     const text = String(reason ?? "").trim();
+    const previousState = this.stateValue;
+    const previousReason = this.stateReason;
     this.stateValue = "PAUSED";
     this.stateReason = text === "" ? "paused by the operator" : `paused by the operator: ${text}`;
-    this.revisionValue += 1;
+    try {
+      this.advancePersistedRevision();
+    } catch (error) {
+      this.stateValue = previousState;
+      this.stateReason = previousReason;
+      throw error;
+    }
     return { service_revision: this.revisionValue };
   }
 
@@ -104,12 +145,73 @@ export class MutableServiceState {
     }
     if (!readinessOk) {
       const detail = failedChecks.length > 0 ? ` (${failedChecks.join(",")})` : "";
-      throw new ManagementError("unavailable", `readiness gate failed; refusing to resume${detail}`);
+      throw new ManagementError(
+        "unavailable",
+        `readiness gate failed; refusing to resume${detail}`,
+      );
     }
     if (this.stateValue === "OPERATING") return { service_revision: this.revisionValue };
+    const previousState = this.stateValue;
+    const previousReason = this.stateReason;
     this.stateValue = "OPERATING";
     this.stateReason = "";
-    this.revisionValue += 1;
+    try {
+      this.advancePersistedRevision();
+    } catch (error) {
+      this.stateValue = previousState;
+      this.stateReason = previousReason;
+      throw error;
+    }
     return { service_revision: this.revisionValue };
+  }
+
+  private insertCurrent(): void {
+    const persistence = this.persistence;
+    if (persistence === undefined) return;
+    persistence.db
+      .prepare(
+        `INSERT INTO workbench_service_control
+         (merchant_id, state, revision, reason, updated_at) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        persistence.merchantId,
+        this.stateValue,
+        this.revisionValue,
+        this.stateReason,
+        new Date().toISOString(),
+      );
+  }
+
+  private advancePersistedRevision(): void {
+    const previous = this.revisionValue;
+    this.revisionValue += 1;
+    try {
+      this.persistCurrent(previous);
+    } catch (error) {
+      this.revisionValue = previous;
+      throw error;
+    }
+  }
+
+  private persistCurrent(expectedRevision: number): void {
+    const persistence = this.persistence;
+    if (persistence === undefined) return;
+    const changed = persistence.db
+      .prepare(
+        `UPDATE workbench_service_control
+         SET state=?, revision=?, reason=?, updated_at=?
+         WHERE merchant_id=? AND revision=?`,
+      )
+      .run(
+        this.stateValue,
+        this.revisionValue,
+        this.stateReason,
+        new Date().toISOString(),
+        persistence.merchantId,
+        expectedRevision,
+      );
+    if (changed.changes !== 1) {
+      throw new ManagementError("conflict", "service control revision changed concurrently");
+    }
   }
 }

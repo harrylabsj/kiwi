@@ -53,6 +53,7 @@ import { BROADCAST_TOOLS } from "../merchant/feed-executors.js";
 import { GRANT_TOOLS } from "../merchant/grant-executors.js";
 import { PROMOTION_TOOLS } from "../merchant/promotion-executors.js";
 import { EXACT_PRODUCT_TOOLS } from "../merchant/exact-product-executors.js";
+import { SERVICE_CONTROL_TOOLS } from "../merchant/service-control-executors.js";
 import { parseExactMoney, type ExactMoney } from "../merchant/application/money.js";
 import type { GrantAction, GrantResourceType } from "../merchant/grant-store.js";
 import type { ApplyPolicyResult } from "./policy-runtime.js";
@@ -537,6 +538,14 @@ export class MerchantCoreService {
         expected_authority_version: input.expectedAuthorityVersion,
         authorization: input.authorization,
       },
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    });
+  }
+
+  prepareServiceResume(input: { expectedRevision: number; reason?: string }) {
+    return this.commands.prepare({
+      tool: SERVICE_CONTROL_TOOLS.resume,
+      arguments: { expected_revision: input.expectedRevision },
       ...(input.reason !== undefined ? { reason: input.reason } : {}),
     });
   }

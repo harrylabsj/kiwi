@@ -97,6 +97,7 @@ import {
   type ExactMoney,
 } from "../../merchant/application/money.js";
 import { EXACT_PRODUCT_TOOLS } from "../../merchant/exact-product-executors.js";
+import { SERVICE_CONTROL_TOOLS } from "../../merchant/service-control-executors.js";
 import { BROADCAST_TOOLS } from "../../merchant/feed-executors.js";
 import { MerchantFeedError, type MerchantFeedStore } from "../../merchant/feed-store.js";
 import { GRANT_TOOLS } from "../../merchant/grant-executors.js";
@@ -246,6 +247,10 @@ export interface MerchantManagementApiOptions {
     money: ExactMoney;
     expectedAuthorityVersion: number;
     authorization: Record<string, unknown>;
+    reason?: string;
+  }) => Promise<unknown> | unknown;
+  prepareServiceResume?: (input: {
+    expectedRevision: number;
     reason?: string;
   }) => Promise<unknown> | unknown;
   prepareBroadcastRevise?: (input: {
@@ -740,6 +745,95 @@ export function createMerchantManagementApiHandler(
     rest: string,
     requestId: string,
   ): Promise<void> {
+    if (rest === "/runtime/safety-stops") {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "service:pause");
+      const fields = objectFields(await readJsonBody(req), [
+        "expected_revision",
+        "reason",
+        "idempotency_key",
+      ]);
+      const expectedRevision = requireInteger(fields["expected_revision"], "expected_revision");
+      const reason = optionalString(fields["reason"], "reason");
+      const idempotencyKey = requireString(fields["idempotency_key"], "idempotency_key");
+      const requestDigest = managementRequestDigest({
+        expected_revision: expectedRevision,
+        reason: reason ?? null,
+      });
+      const begun = operations.begin({
+        merchantId: auth.ctx.merchantId,
+        actorId: auth.ctx.actorId,
+        commandType: "runtime.safety_stop",
+        idempotencyKey,
+        requestDigest,
+      });
+      if (begun.kind === "conflict") {
+        throw new ManagementError("conflict", "idempotency key was reused with another request");
+      }
+      if (begun.kind === "replay") {
+        writeJson(res, 200, begun.receipt, { "x-request-id": requestId });
+        return;
+      }
+      if (expectedRevision !== options.serviceState.serviceRevision) {
+        operations.release(begun.operationId);
+        throw new ManagementError("precondition_changed", "service revision changed");
+      }
+      try {
+        const applied = options.serviceState.pause(reason);
+        const receipt: OperationReceipt = {
+          ...staticReceipt(begun.operationId, "runtime.safety_stop", "succeeded"),
+          resource_ref: "service",
+          result_revision: applied.service_revision,
+          completed_at: now().toISOString(),
+        };
+        operations.complete(begun.operationId, "succeeded", receipt);
+        writeJson(res, 200, receipt, { "x-request-id": requestId });
+      } catch (error) {
+        operations.release(begun.operationId);
+        throw error;
+      }
+      return;
+    }
+
+    if (rest === "/runtime/mode-drafts") {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "service:resume");
+      if (auth.ctx.role !== "owner") {
+        throw new ManagementError("forbidden", "only owner can prepare service recovery");
+      }
+      const fields = objectFields(await readJsonBody(req), [
+        "target_state",
+        "expected_revision",
+        "reason",
+      ]);
+      if (fields["target_state"] !== "OPERATING") {
+        throw new ManagementError(
+          "invalid_input",
+          "runtime mode draft currently supports target_state=OPERATING only",
+        );
+      }
+      const expectedRevision = requirePositiveInteger(
+        fields["expected_revision"],
+        "expected_revision",
+      );
+      if (expectedRevision !== options.serviceState.serviceRevision) {
+        throw new ManagementError("precondition_changed", "service revision changed");
+      }
+      const channel = options.prepareServiceResume;
+      if (channel === undefined) {
+        throw new ManagementError("unavailable", "service recovery candidate is unavailable");
+      }
+      const reason = optionalString(fields["reason"], "reason");
+      const prepared = await channel({
+        expectedRevision,
+        ...(reason !== undefined ? { reason } : {}),
+      });
+      writeJson(res, 201, prepared, { "x-request-id": requestId });
+      return;
+    }
+
     if (rest === "/webauthn/registrations/options") {
       const auth = requireActor(req);
       assertWriteGuards(req, auth.sessionId);
@@ -801,7 +895,8 @@ export function createMerchantManagementApiHandler(
         authorizeBroadcastCandidate(auth.ctx, candidate, "broadcast.decide") ??
         authorizeGrantCandidate(auth.ctx, candidate) ??
         authorizePromotionCandidate(auth.ctx, candidate) ??
-        authorizeProductCandidate(auth.ctx, candidate);
+        authorizeProductCandidate(auth.ctx, candidate) ??
+        authorizeServiceControlCandidate(auth.ctx, candidate);
       const confirmation = confirmations.createRequest({
         merchantId: auth.ctx.merchantId,
         actorId: auth.ctx.actorId,
@@ -894,7 +989,8 @@ export function createMerchantManagementApiHandler(
         authorizeBroadcastCandidate(auth.ctx, candidate, "broadcast.decide") ??
         authorizeGrantCandidate(auth.ctx, candidate) ??
         authorizePromotionCandidate(auth.ctx, candidate) ??
-        authorizeProductCandidate(auth.ctx, candidate);
+        authorizeProductCandidate(auth.ctx, candidate) ??
+        authorizeServiceControlCandidate(auth.ctx, candidate);
       if (currentAuthorization !== undefined) {
         const confirmationId = requireString(fields["confirmation_id"], "confirmation_id");
         const frozen = requireWorkbenchConfirmations().requestProjection({
@@ -1616,6 +1712,24 @@ export function createMerchantManagementApiHandler(
       resource_ids: [sku],
       authorization_generation: scoped.generation,
       matched_grant_ids: scoped.grantIds,
+    };
+  }
+
+  function authorizeServiceControlCandidate(
+    actor: VerifiedActorContext,
+    candidate: WriteApprovalCandidate,
+  ): Record<string, unknown> | undefined {
+    if (candidate.tool !== SERVICE_CONTROL_TOOLS.resume) return undefined;
+    authorizeOrThrow(actor, "service:resume");
+    if (actor.role !== "owner") {
+      throw new ManagementError("forbidden", "only owner can decide service recovery");
+    }
+    return {
+      actor_id: actor.actorId,
+      actor_role: actor.role,
+      action: "service.resume",
+      authorization_generation: 0,
+      matched_grant_ids: [],
     };
   }
 

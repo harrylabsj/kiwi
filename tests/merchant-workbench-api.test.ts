@@ -20,6 +20,7 @@ import { PROMOTION_TOOLS } from "../src/merchant/promotion-executors.js";
 import { MerchantPromotionStore } from "../src/merchant/promotion-store.js";
 import { EXACT_PRODUCT_TOOLS } from "../src/merchant/exact-product-executors.js";
 import type { ExactMoney } from "../src/merchant/application/money.js";
+import { SERVICE_CONTROL_TOOLS } from "../src/merchant/service-control-executors.js";
 import { PromotionBroadcastWorkflowStore } from "../src/merchant/promotion-broadcast-workflow.js";
 import {
   MerchantGrantStore,
@@ -68,6 +69,7 @@ const promotionWorkflows = new PromotionBroadcastWorkflowStore({
   db,
   now: () => NOW.toISOString(),
 });
+const serviceState = new MutableServiceState("OPERATING");
 
 let server: Server;
 let base: string;
@@ -139,6 +141,20 @@ function preparedExactProduct(input: {
       authorization: input.authorization,
     },
     arguments_hash: `sha256:exact-product-${pending.length}`,
+  };
+  pending.push(item);
+  return { candidate: item };
+}
+
+function preparedServiceResume(input: { expectedRevision: number }): {
+  candidate: WriteApprovalCandidate;
+} {
+  const item: WriteApprovalCandidate = {
+    ...candidate,
+    candidate_id: `candidate-service-resume-${pending.length}`,
+    tool: SERVICE_CONTROL_TOOLS.resume,
+    arguments: { expected_revision: input.expectedRevision },
+    arguments_hash: `sha256:service-resume-${pending.length}`,
   };
   pending.push(item);
   return { candidate: item };
@@ -225,7 +241,7 @@ beforeAll(async () => {
       executeDecision: async () => {},
       drafts: new MerchantImportDraftStore({ db, now: () => NOW.toISOString() }),
       operations,
-      serviceState: new MutableServiceState("OPERATING"),
+      serviceState,
       readiness: async () => ({ ready: true, checks: {} }),
       workbenchConfirmations: confirmations,
       workbenchReconciliation: reconciliations,
@@ -300,6 +316,7 @@ beforeAll(async () => {
       prepareListingChange: preparedProductChange,
       prepareExactProductCreate: preparedExactProduct,
       prepareExactProductMoneyUpdate: preparedExactProduct,
+      prepareServiceResume: preparedServiceResume,
       prepareGrantCreate: preparedGrant,
       preparePromotionPublish: preparedPromotion,
       webauthnRegistration: {
@@ -1143,5 +1160,56 @@ describe("Workbench v1 trusted confirmation API", () => {
     const updateBody = (await updated.json()) as { candidate: WriteApprovalCandidate };
     expect(updateBody.candidate.tool).toBe(EXACT_PRODUCT_TOOLS.updateMoney);
     expect(JSON.stringify(updateBody.candidate.arguments)).not.toContain("floor");
+  });
+
+  it("applies a direct idempotent safety stop without a confirmation ceremony", async () => {
+    const first = await post("/merchant/api/v1/runtime/safety-stops", {
+      expected_revision: 1,
+      reason: "operator incident response",
+      idempotency_key: "safety-stop-1",
+    });
+    expect(first.status).toBe(200);
+    const receipt = (await first.json()) as { operation_id: string; result_revision: number };
+    expect(receipt.result_revision).toBe(2);
+    expect(serviceState.state).toBe("PAUSED");
+
+    const replay = await post("/merchant/api/v1/runtime/safety-stops", {
+      expected_revision: 1,
+      reason: "operator incident response",
+      idempotency_key: "safety-stop-1",
+    });
+    expect(((await replay.json()) as { operation_id: string }).operation_id).toBe(
+      receipt.operation_id,
+    );
+
+    const recoveryDraft = await post("/merchant/api/v1/runtime/mode-drafts", {
+      target_state: "OPERATING",
+      expected_revision: 2,
+      reason: "incident resolved",
+    });
+    expect(recoveryDraft.status).toBe(201);
+    const recovery = (await recoveryDraft.json()) as { candidate: WriteApprovalCandidate };
+    expect(recovery.candidate.tool).toBe(SERVICE_CONTROL_TOOLS.resume);
+    expect(serviceState.state).toBe("PAUSED");
+    const recoveryConfirmation = await post("/merchant/api/v1/confirmations", {
+      candidate_id: recovery.candidate.candidate_id,
+      decision: "approve",
+    });
+    expect(recoveryConfirmation.status).toBe(201);
+
+    const viewer = await createAuth("viewer:safety", "viewer");
+    expect(
+      (
+        await postWithAuth(
+          "/merchant/api/v1/runtime/safety-stops",
+          {
+            expected_revision: 2,
+            reason: "forbidden",
+            idempotency_key: "viewer-stop",
+          },
+          viewer,
+        )
+      ).status,
+    ).toBe(403);
   });
 });

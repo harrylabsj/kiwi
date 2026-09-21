@@ -62,6 +62,7 @@ import { MerchantPromotionStore } from "../merchant/promotion-store.js";
 import { createPromotionExecutors } from "../merchant/promotion-executors.js";
 import { PromotionBroadcastWorkflowStore } from "../merchant/promotion-broadcast-workflow.js";
 import { recoverPromotionBroadcastWorkflows } from "../merchant/promotion-broadcast-recovery.js";
+import { createServiceControlExecutors } from "../merchant/service-control-executors.js";
 import { OnboardingStore } from "./onboarding/store.js";
 import {
   ManagementError,
@@ -232,6 +233,7 @@ export async function bootstrapCloudRuntime(
   // 生产禁演示价回退（设计 §10.2）：演示价会让"商品源失联"看起来像有报价。
   assertNoDemoPriceFallback(profile);
   assertDataDirNotClobbered(config.dataDir);
+  const serviceState = MutableServiceState.fromDeclared(options.env?.KIWI_CLOUD_SERVICE_STATE);
 
   // 2) 商家面装配（审批/策略/商品/RFQ/工具面）；认证走 OAuth（issuer = 公网 origin）。
   let assembly: MerchantRuntimeAssembly;
@@ -239,6 +241,8 @@ export async function bootstrapCloudRuntime(
   let grantStoreForExecutors: MerchantGrantStore | undefined;
   let promotionStoreForExecutors: MerchantPromotionStore | undefined;
   let promotionWorkflowStoreForExecutors: PromotionBroadcastWorkflowStore | undefined;
+  let readinessForServiceControl:
+    (() => Promise<{ ready: boolean; checks: Record<string, { ok: boolean }> }>) | undefined;
   try {
     assembly = await assembleMerchantRuntime({
       profile,
@@ -312,6 +316,15 @@ export async function bootstrapCloudRuntime(
             return prepared.candidate.candidate_id;
           },
         }),
+        ...createServiceControlExecutors({
+          state: serviceState,
+          readiness: async () => {
+            if (readinessForServiceControl === undefined) {
+              throw new Error("readiness provider is not configured");
+            }
+            return await readinessForServiceControl();
+          },
+        }),
       ],
       log,
     });
@@ -356,7 +369,6 @@ export async function bootstrapCloudRuntime(
   // 没配而被拒绝接待（实测：接就绪后 T018 与"过期商品表"用例当场被拒）。正确映射要
   // 与"过期商品该不该停业"一起决定，属暂停/撤回控制落地时的事；在那之前这里只认
   // **操作者显式声明**的状态，绝不替商家判断。
-  const serviceState = MutableServiceState.fromDeclared(options.env?.KIWI_CLOUD_SERVICE_STATE);
   const serviceAvailability = {
     check: (): { accepting: true } | { accepting: false; state: string; reason: string } =>
       serviceState.gateCheck(),
@@ -429,6 +441,10 @@ export async function bootstrapCloudRuntime(
         return current.digest !== "" ? { ok: true } : { ok: false, code: "POLICY_EMPTY" };
       },
     });
+  readinessForServiceControl = async () => {
+    const report = await readiness();
+    return { ready: report.ready, checks: report.checks };
+  };
 
   // 4.5) BD-02：私有管理 API（/merchant/api/*）。会话与 /admin 同源；业务经共用
   //      MerchantApplicationService；权威操作记录落 state.sqlite。管理面未装配
@@ -442,6 +458,7 @@ export async function bootstrapCloudRuntime(
   let reconciliationTimer: ReturnType<typeof setInterval> | undefined;
   if (adminOptions !== undefined) {
     managementDb = new DatabaseSync(path.join(config.dataDir, "state.sqlite"));
+    serviceState.attachPersistence(managementDb, profile.owner_id);
     const workbenchConfirmations = new WorkbenchConfirmationStore({ db: managementDb });
     const reconciliationStore = new WorkbenchReconciliationStore({ db: managementDb });
     const workbenchCursorKey = loadOrCreateFeedCursorKey(config.dataDir);
@@ -629,6 +646,9 @@ export async function bootstrapCloudRuntime(
             prepareExactProductMoneyUpdate: adminOptions.surface.prepareExactProductMoneyUpdate,
           }
         : {}),
+      ...(adminOptions.surface.prepareServiceResume !== undefined
+        ? { prepareServiceResume: adminOptions.surface.prepareServiceResume }
+        : {}),
       ...(adminOptions.surface.prepareBroadcastRevise !== undefined
         ? { prepareBroadcastRevise: adminOptions.surface.prepareBroadcastRevise }
         : {}),
@@ -669,7 +689,7 @@ export async function bootstrapCloudRuntime(
           if (authorization !== undefined) {
             const action = String(authorization["action"] ?? "");
             const allowed =
-              action === "grants.manage"
+              action === "grants.manage" || action === "service.resume"
                 ? authorization["actor_id"] === lease.actorId &&
                   authorization["actor_role"] === "owner"
                 : isCurrentGrantAuthorization(grantStore, {
