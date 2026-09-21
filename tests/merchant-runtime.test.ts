@@ -250,7 +250,10 @@ describe("BUG-04：runtime 子进程统一数据目录", () => {
     const realDir = realpathSync(dir);
     for (const marker of ["marker-a2a.txt", "marker-mcp.txt"]) {
       const childCwd = readFileSync(path.join(dir, marker), "utf8");
-      expect(childCwd === dir || childCwd === realDir).toBe(true);
+      // macOS 的 /tmp、/var 与 /private/* 可能经不止一层符号链接/卷归一化；比较
+      // realpath 才是在验证“同一个数据根目录”，枚举两种字符串形态会在并行 CI
+      // 中产生与业务无关的假失败。
+      expect(realpathSync(childCwd)).toBe(realDir);
     }
     await manager.shutdown();
   });
