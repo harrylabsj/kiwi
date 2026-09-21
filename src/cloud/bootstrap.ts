@@ -31,7 +31,8 @@
  */
 
 import { createServer, type Server } from "node:http";
-import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -39,10 +40,12 @@ import { createA2aNodeCore, createA2aAuthVerifier } from "../a2a/node.js";
 import { loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/signing-key.js";
 import { loadProfile, ProfileError } from "../config/profile.js";
 import { createMerchantManagementApiHandler } from "../http/merchant-management/api.js";
+import { createMerchantFeedApiHandler } from "../http/merchant-feed-api.js";
 import { MerchantImportDraftStore } from "../http/merchant-management/draft-store.js";
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
+import { MerchantFeedStore } from "../merchant/feed-store.js";
 import { OnboardingStore } from "./onboarding/store.js";
 import {
   ManagementError,
@@ -124,6 +127,26 @@ function assertDataDirNotClobbered(dataDir: string): void {
           "权威状态不可信，拒绝启动",
       );
     }
+  }
+}
+
+function loadOrCreateFeedCursorKey(dataDir: string): Buffer {
+  const file = path.join(dataDir, "feed-cursor.key");
+  const read = (): Buffer => {
+    const key = Buffer.from(readFileSync(file, "utf8").trim(), "base64url");
+    if (key.length !== 32) {
+      throw new CloudStartupError("FEED_CURSOR_KEY_INVALID", "Feed cursor key must decode to 32 bytes");
+    }
+    return key;
+  };
+  if (existsSync(file)) return read();
+  const generated = randomBytes(32);
+  try {
+    writeFileSync(file, `${generated.toString("base64url")}\n`, { mode: 0o600, flag: "wx" });
+    return generated;
+  } catch (error) {
+    if ((error as { code?: string }).code === "EEXIST") return read();
+    throw new CloudStartupError("FEED_CURSOR_KEY_WRITE_FAILED", "cannot persist Feed cursor key");
   }
 }
 
@@ -310,8 +333,17 @@ export async function bootstrapCloudRuntime(
   const applyPolicyOverride = assembly.service.policyApplier;
   let managementDb: DatabaseSync | undefined;
   let merchantApiHandler: CloudRequestListener | undefined;
+  let publicFeedHandler: CloudRequestListener | undefined;
   if (adminOptions !== undefined) {
     managementDb = new DatabaseSync(path.join(config.dataDir, "state.sqlite"));
+    const feedStore = new MerchantFeedStore({
+      db: managementDb,
+      cursorKey: loadOrCreateFeedCursorKey(config.dataDir),
+    });
+    publicFeedHandler = createMerchantFeedApiHandler({
+      merchantId: profile.owner_id,
+      store: feedStore,
+    });
     merchantApiHandler = createMerchantManagementApiHandler({
       merchantId: profile.owner_id,
       // 单代次实例（与 M2 挑战应答的 currentGeneration 同值）；代次切换属 BD-05。
@@ -434,6 +466,7 @@ export async function bootstrapCloudRuntime(
     a2aHandler: core.server.handler(),
     merchantHandler: merchantHandler.handler,
     ...(merchantApiHandler !== undefined ? { merchantApiHandler } : {}),
+    ...(publicFeedHandler !== undefined ? { publicFeedHandler } : {}),
     merchantHomePage,
     readiness,
     a2aPaths: [CLOUD_A2A_PATH],

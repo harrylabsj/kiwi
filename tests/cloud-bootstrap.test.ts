@@ -205,6 +205,16 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
       expect(readyBody.checks.products?.ok).toBe(true);
       expect(readyBody.checks.storage?.ok).toBe(true);
 
+      // Workbench Feed：匿名公开读，不接收凭据；空 Feed 仍返回可推进 cursor。
+      const feed = await fetch(`${base}/public/v1/updates`);
+      expect(feed.status).toBe(200);
+      expect(feed.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
+      expect((await feed.json()) as { events: unknown[] }).toMatchObject({ events: [] });
+      const credentialedFeed = await fetch(`${base}/public/v1/updates`, {
+        headers: { authorization: "Bearer forbidden-on-public-feed" },
+      });
+      expect(credentialedFeed.status).toBe(422);
+
       // 平台数据面路径：业务不接管。
       const reserved = await fetch(`${base}/.cloud/database/rest/items`);
       expect(reserved.status).toBe(404);

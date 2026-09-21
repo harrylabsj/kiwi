@@ -49,6 +49,8 @@ export interface CloudRouterOptions {
   merchantHomePage?: CloudRequestListener;
   /** Buyer 关注/隐私面；只有配置了可验证 Buyer 身份解析器时才挂载。 */
   buyerHandler?: CloudRequestListener;
+  /** 匿名公开 Feed；不得与 Buyer/管理认证缓存边界混用。 */
+  publicFeedHandler?: CloudRequestListener;
   /** 就绪检查（每次请求重新执行，不缓存）。 */
   readiness: () => Promise<ReadinessReport>;
   /** A2A 端点路径（与 A2AServer 的 cardConfig.a2aPath 保持一致）。 */
@@ -167,6 +169,14 @@ export function createCloudRouter(options: CloudRouterOptions): CloudRequestList
       (pathname === "/buyer/v1" || pathname.startsWith("/buyer/v1/"))
     ) {
       options.buyerHandler(req, res);
+      return;
+    }
+
+    if (
+      options.publicFeedHandler !== undefined &&
+      (pathname === "/public/v1" || pathname.startsWith("/public/v1/"))
+    ) {
+      options.publicFeedHandler(req, res);
       return;
     }
 

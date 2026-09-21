@@ -29,7 +29,7 @@ import { A2AQuoteFetcher } from "./a2a-quote-fetcher.js";
 import { KiwiCatalogMerchantIndex, MarketplaceMerchantIndex } from "./merchant-index.js";
 import { MarketplaceNegotiator } from "./negotiator.js";
 import { MarketplaceQuoteFetcher } from "./quote-fetcher.js";
-import { KiwiBuyerService } from "./service.js";
+import { KiwiBuyerService, type BuyerFollowsClient } from "./service.js";
 import { TaskApprovalStore } from "./store.js";
 
 export interface BuyerServiceConfig {
@@ -46,6 +46,8 @@ export interface BuyerServiceConfig {
    * 工具返回"需要先在 Kiwi 目录登录"的可解释引导，不伪造买家身份。
    */
   catalogSessionToken?: string;
+  /** New merchant-authoritative follow/feed client. Takes precedence over legacy Catalog follows. */
+  merchantSubscriptionsClient?: BuyerFollowsClient;
   /** A2A 出站 bearer（服务器为 signature 认证时匿名放行可省）。 */
   a2aBearerToken?: string;
   /** A2A 允许打到私网/保留网段（SSRF 逃生门；本地试点直连时开）。 */
@@ -88,7 +90,9 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
     });
     // M4 买家关注：仅在显式配置了 catalog 账号会话时接线；缺省不伪造身份，
     // 由 service 层返回"需要先在 Kiwi 目录登录"的可解释引导。
-    if (config.catalogSessionToken !== undefined && config.catalogSessionToken !== "") {
+    if (config.merchantSubscriptionsClient !== undefined) {
+      followsClient = config.merchantSubscriptionsClient;
+    } else if (config.catalogSessionToken !== undefined && config.catalogSessionToken !== "") {
       followsClient = new BuyerFollowsSource({
         baseUrl: config.catalogUrl,
         sessionToken: config.catalogSessionToken,
