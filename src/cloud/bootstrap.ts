@@ -42,6 +42,7 @@ import { loadProfile, ProfileError } from "../config/profile.js";
 import { createMerchantManagementApiHandler } from "../http/merchant-management/api.js";
 import { createMerchantFeedApiHandler } from "../http/merchant-feed-api.js";
 import { createMerchantFollowApiHandler } from "../http/merchant-follow-api.js";
+import { createMerchantEngagementApiHandler } from "../http/merchant-engagement-api.js";
 import { MerchantImportDraftStore } from "../http/merchant-management/draft-store.js";
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
 import { createTrustedWorkbenchPageHandler } from "../http/merchant-management/trusted-page.js";
@@ -57,6 +58,7 @@ import { MutableServiceState } from "../http/merchant-management/service-state.j
 import { WorkbenchEventProjectionStore } from "../http/merchant-management/event-projection.js";
 import { MerchantFeedStore } from "../merchant/feed-store.js";
 import { MerchantFollowStore } from "../merchant/follow-store.js";
+import { MerchantEngagementStore } from "../merchant/engagement-store.js";
 import { createBroadcastExecutors } from "../merchant/feed-executors.js";
 import { isCurrentGrantAuthorization, MerchantGrantStore } from "../merchant/grant-store.js";
 import { createGrantExecutors } from "../merchant/grant-executors.js";
@@ -473,6 +475,7 @@ export async function bootstrapCloudRuntime(
     });
     const grantStore = new MerchantGrantStore({ db: managementDb });
     const followStore = new MerchantFollowStore({ db: managementDb });
+    const engagementStore = new MerchantEngagementStore({ db: managementDb });
     const promotionStore = new MerchantPromotionStore({ db: managementDb });
     const promotionWorkflowStore = new PromotionBroadcastWorkflowStore({ db: managementDb });
     const eventProjectionStore = new WorkbenchEventProjectionStore({
@@ -505,34 +508,50 @@ export async function bootstrapCloudRuntime(
       merchantId: profile.owner_id,
       store: feedStore,
     });
-    buyerHandler = createMerchantFollowApiHandler({
+    const resolveVerifiedBuyer = async (
+      request: import("node:http").IncomingMessage,
+      body?: Buffer,
+    ) => {
+      const socketTls = request.socket as { encrypted?: boolean };
+      const result = await authVerifier.verify({
+        remoteAddress: request.socket.remoteAddress,
+        authorizationHeader: request.headers.authorization,
+        method: request.method ?? "",
+        url: request.url ?? "",
+        scheme: socketTls.encrypted === true ? "https" : "http",
+        headers: request.headers,
+        body,
+      });
+      if (
+        !result.authenticated ||
+        result.identityVerified !== true ||
+        typeof result.identity !== "string" ||
+        result.identity.trim() === ""
+      ) {
+        return undefined;
+      }
+      return {
+        merchantId: profile.owner_id,
+        buyerPrincipalId: result.identity,
+      };
+    };
+    const followHandler = createMerchantFollowApiHandler({
       merchantId: profile.owner_id,
       store: followStore,
-      resolveBuyer: async (request, body) => {
-        const socketTls = request.socket as { encrypted?: boolean };
-        const result = await authVerifier.verify({
-          remoteAddress: request.socket.remoteAddress,
-          authorizationHeader: request.headers.authorization,
-          method: request.method ?? "",
-          url: request.url ?? "",
-          scheme: socketTls.encrypted === true ? "https" : "http",
-          headers: request.headers,
-          body,
-        });
-        if (
-          !result.authenticated ||
-          result.identityVerified !== true ||
-          typeof result.identity !== "string" ||
-          result.identity.trim() === ""
-        ) {
-          return undefined;
-        }
-        return {
-          merchantId: profile.owner_id,
-          buyerPrincipalId: result.identity,
-        };
-      },
+      resolveBuyer: resolveVerifiedBuyer,
     });
+    const engagementHandler = createMerchantEngagementApiHandler({
+      merchantId: profile.owner_id,
+      store: engagementStore,
+      broadcastExists: (broadcastId) =>
+        feedStore.getBroadcast(profile.owner_id, broadcastId) !== undefined,
+      resolveBuyer: async (request, body) => await resolveVerifiedBuyer(request, body),
+    });
+    buyerHandler = (request, response) => {
+      const pathname = new URL(request.url ?? "/", "http://buyer.internal").pathname;
+      if (pathname === "/buyer/v1/follow") followHandler(request, response);
+      else engagementHandler(request, response);
+    };
     merchantApiHandler = createMerchantManagementApiHandler({
       merchantId: profile.owner_id,
       // 单代次实例（与 M2 挑战应答的 currentGeneration 同值）；代次切换属 BD-05。
@@ -641,6 +660,7 @@ export async function bootstrapCloudRuntime(
       workbenchReconciliation: reconciliationStore,
       workbenchEvents: eventProjectionStore,
       followerSummary: () => followStore.activeCount(profile.owner_id),
+      engagementSummary: () => engagementStore.summary(profile.owner_id),
       workbenchFeed: feedStore,
       workbenchGrants: grantStore,
       workbenchPromotions: promotionStore,

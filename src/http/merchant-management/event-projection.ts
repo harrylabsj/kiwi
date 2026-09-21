@@ -42,6 +42,7 @@ export class WorkbenchEventProjectionStore {
       ...this.feedEvents(merchantId),
       ...this.promotionEvents(merchantId),
       ...this.alertEvents(merchantId),
+      ...this.engagementEvents(merchantId),
     ]
       .filter(
         (event) =>
@@ -164,6 +165,26 @@ export class WorkbenchEventProjectionStore {
         category: String(row["category"]),
         severity: String(row["severity"]),
       },
+    }));
+  }
+
+  private engagementEvents(merchantId: string): WorkbenchTimelineEvent[] {
+    const rows = this.safeAll(
+      `SELECT event_id, buyer_principal_id, broadcast_id, event_type, occurred_at
+       FROM merchant_broadcast_engagement WHERE merchant_id=?`,
+      merchantId,
+    );
+    return rows.map((row) => ({
+      event_id: `engagement:${String(row["event_id"])}`,
+      event_type: `broadcast.${String(row["event_type"])}`,
+      aggregate_id: String(row["broadcast_id"]),
+      aggregate_version: null,
+      occurred_at: String(row["occurred_at"]),
+      actor_ref: String(row["buyer_principal_id"]),
+      correlation_id: null,
+      visibility: "merchant_private",
+      schema_version: "1",
+      summary: {},
     }));
   }
 

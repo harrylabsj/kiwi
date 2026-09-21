@@ -213,6 +213,7 @@ export interface MerchantManagementApiOptions {
   workbenchEvents?: WorkbenchEventProjectionStore;
   quotePreview?: (sku: string, quantity: number) => Promise<WorkbenchQuoteResult>;
   followerSummary?: () => number;
+  engagementSummary?: () => { received: number; presented: number; clicked: number };
   prepareBroadcastPublish?: (input: {
     broadcast: Record<string, unknown>;
     authorization: Record<string, unknown>;
@@ -505,6 +506,10 @@ export function createMerchantManagementApiHandler(
                   observable: true,
                   value: { active_verified_subjects: options.followerSummary() },
                 },
+          engagement:
+            options.engagementSummary === undefined
+              ? { observable: false, value: null, reason: "engagement_authority_unavailable" }
+              : { observable: true, value: options.engagementSummary() },
           negotiations: negotiationsOverview,
         },
         { "x-request-id": requestId },
