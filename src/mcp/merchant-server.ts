@@ -49,6 +49,10 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import type { MerchantWorkbenchSurface } from "../merchant/workbench-service.js";
+import {
+  formatAppOAuthCallbackLog,
+  handleAppOAuthCallback,
+} from "../auth/app-oauth-callback.js";
 import type { MerchantOAuthServer, OAuthHttpResult } from "../auth/merchant-oauth.js";
 import type { MerchantMcpAuthVerifier } from "./merchant-auth.js";
 import {
@@ -408,6 +412,20 @@ export function createMerchantHttpHandler(
     res: ServerResponse,
     url: URL,
   ): Promise<boolean> => {
+    // 应用级 OAuth 回调（开放平台 → Buddy 应用的 Open API 授权链）：与连接器级
+    // OAuth（下方各端点，需 options.oauth）是两条互不相通的链路，不依赖连接器
+    // 授权服务器配置。只接收与留痕，code 永不兑换（模块注释详见 app-oauth-callback）。
+    if (req.method === "GET" && url.pathname === "/oauth/callback") {
+      const callback = handleAppOAuthCallback(url.searchParams);
+      process.stderr.write(`${formatAppOAuthCallbackLog(callback.log)}\n`);
+      res.writeHead(callback.status, {
+        "content-type": "text/html; charset=utf-8",
+        ...NO_STORE_HEADERS,
+        "x-content-type-options": "nosniff",
+      });
+      res.end(callback.html);
+      return true;
+    }
     const oauth = options.oauth;
     if (oauth === undefined) return false;
     const p = url.pathname;

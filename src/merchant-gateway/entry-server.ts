@@ -57,6 +57,10 @@ import { createServer as createSecureServer } from "node:https";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import type { MerchantAuthorization } from "../auth/merchant-authorization.js";
+import {
+  formatAppOAuthCallbackLog,
+  handleAppOAuthCallback,
+} from "../auth/app-oauth-callback.js";
 import type { MerchantOAuthServer, OAuthHttpResult } from "../auth/merchant-oauth.js";
 import { ADMIN_SESSION_COOKIE, type MerchantAdminSessions } from "../auth/merchant-sessions.js";
 import type { MerchantMcpAuthVerifier } from "../mcp/merchant-auth.js";
@@ -455,6 +459,15 @@ export async function startGatewayEntryServer(
   ): Promise<boolean> => {
     const oauth = options.oauth;
     const p = url.pathname;
+    // 应用级 OAuth 回调（开放平台 → Buddy 应用的 Open API 授权链）：与连接器级
+    // OAuth（下方 authorize/token 等）是两条互不相通的链路。只接收与留痕，
+    // code 永不兑换（模块注释详见 app-oauth-callback）。
+    if (req.method === "GET" && p === "/oauth/callback") {
+      const callback = handleAppOAuthCallback(url.searchParams);
+      process.stderr.write(`${formatAppOAuthCallbackLog(callback.log)}\n`);
+      writeHtml(res, callback.status, callback.html);
+      return true;
+    }
     if (req.method === "GET" && p === "/.well-known/oauth-protected-resource") {
       writeOAuthResult(res, oauth.protectedResourceMetadata());
       return true;

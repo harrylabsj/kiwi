@@ -781,3 +781,27 @@ describe("商家连接器入口：连接与授权闭环", () => {
     expect(tools).not.toContain("kiwi_catalog_save_publication_draft");
   });
 });
+
+describe("应用级 OAuth 回调（GET /oauth/callback，开放平台 → 应用链路）", () => {
+  it("code 回跳 → 200 授权完成页，code 值绝不回显；error 回跳显示净化错误码", async () => {
+    const stack = await startEntry();
+    const ok = await fetch(`${stack.issuer}/oauth/callback?code=SECRET-CODE-77&state=xyz`);
+    expect(ok.status).toBe(200);
+    const okHtml = await ok.text();
+    expect(okHtml).toContain("授权完成");
+    expect(okHtml).not.toContain("SECRET-CODE-77");
+    expect(ok.headers.get("cache-control")).toContain("no-store");
+
+    const denied = await fetch(`${stack.issuer}/oauth/callback?error=access_denied`);
+    expect(denied.status).toBe(200);
+    const deniedHtml = await denied.text();
+    expect(deniedHtml).toContain("授权未完成");
+    expect(deniedHtml).toContain("access_denied");
+  });
+
+  it("非平台回跳（无参数）→ 400", async () => {
+    const stack = await startEntry();
+    const res = await fetch(`${stack.issuer}/oauth/callback`);
+    expect(res.status).toBe(400);
+  });
+});
