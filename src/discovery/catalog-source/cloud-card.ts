@@ -110,6 +110,14 @@ export interface CloudCardDeps {
    * Catalog 的不同环境/租户不互相串味。
    */
   sourceId?: string;
+  /**
+   * **仅受控本地集成/测试**：放行 loopback 目标（生产必须是 false，缺省即 false）。
+   *
+   * 与 `A2AClientOptions.allowPrivateRanges` 同一性质的开闸：它只影响"字面
+   * loopback"这一条判定，DNS 解析到内网的目标仍由连接时复查兜底。任何把它设为
+   * true 的生产配置都等于关掉 T035 的一半，必须显式承担。
+   */
+  allowLoopbackTargets?: boolean;
 }
 
 /** 解析结果：名片 + 已验签的绑定声明 + 信任缓存键。 */
@@ -419,7 +427,7 @@ export class CloudCardSource {
       ...endpoints.map((url, index) => [`supportedInterfaces[${index}].url`, url] as const),
     ] as ReadonlyArray<readonly [string, string]>) {
       try {
-        assertSafeTargetUrl(value, { allowLoopback: false });
+        assertSafeTargetUrl(value, { allowLoopback: this.deps.allowLoopbackTargets ?? false });
       } catch (err) {
         throw new BindingRejectionError(
           "UNSAFE_TARGET",
