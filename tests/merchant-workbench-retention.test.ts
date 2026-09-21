@@ -1,8 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import {
   recommendedRetentionPolicy,
+  replayDeletionSuppressions,
   WorkbenchRetentionError,
   WorkbenchRetentionStore,
 } from "../src/privacy/workbench-retention.js";
@@ -153,5 +157,67 @@ describe("Workbench retention and Buyer privacy requests", () => {
     );
     expect(() => retention.transition(request.requestId, "COMPLETED")).toThrow(/controlled nodes/u);
     db.close();
+  });
+
+  it("replays deletion suppression before an older backup can serve restored data", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-retention-restore-"));
+    const livePath = path.join(dir, "live.sqlite");
+    const backupPath = path.join(dir, "backup.sqlite");
+    const restoredPath = path.join(dir, "restored.sqlite");
+    try {
+      const liveDb = new DatabaseSync(livePath);
+      const follow = new MerchantFollowStore({ db: liveDb });
+      const engagement = new MerchantEngagementStore({ db: liveDb });
+      const retention = new WorkbenchRetentionStore({ db: liveDb });
+      configure(retention);
+      const initial = follow.read("m1", "buyer-restore");
+      follow.mutate({
+        merchantId: "m1",
+        buyerPrincipalId: "buyer-restore",
+        action: "follow",
+        expectedRevision: 0,
+        mutationContext: initial.mutation_contexts.follow.ref,
+        idempotencyKey: "follow-backup",
+        requestDigest: followRequestDigest({ action: "follow-backup" }),
+      });
+      engagement.record({
+        merchantId: "m1",
+        buyerPrincipalId: "buyer-restore",
+        broadcastId: "broadcast-backup",
+        eventType: "received",
+        idempotencyKey: "received-backup",
+        occurredAt: "2026-09-21T12:00:00.000Z",
+      });
+      liveDb.exec(`VACUUM INTO '${backupPath.replaceAll("'", "''")}'`);
+      retention.receiveBuyerDeletionRequest({
+        merchantId: "m1",
+        buyerPrincipalId: "buyer-restore",
+      });
+      const suppressions = retention.activeSuppressions();
+      expect(suppressions).toHaveLength(1);
+      liveDb.close();
+
+      copyFileSync(backupPath, restoredPath);
+      const restoredDb = new DatabaseSync(restoredPath);
+      const restoredFollow = new MerchantFollowStore({ db: restoredDb });
+      const restoredEngagement = new MerchantEngagementStore({ db: restoredDb });
+      expect(restoredFollow.activeCount("m1")).toBe(1);
+      expect(restoredEngagement.summary("m1").received).toBe(1);
+      const replayed = replayDeletionSuppressions(
+        restoredDb,
+        suppressions,
+        "2026-09-22T00:00:00.000Z",
+      );
+      expect(replayed).toMatchObject({ applied: 1 });
+      expect(replayed.deletedRows).toBeGreaterThanOrEqual(2);
+      expect(restoredFollow.activeCount("m1")).toBe(0);
+      expect(restoredEngagement.summary("m1").received).toBe(0);
+      expect(
+        new WorkbenchRetentionStore({ db: restoredDb }).canRestoreSubject("m1", "buyer-restore", 0),
+      ).toBe(false);
+      restoredDb.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

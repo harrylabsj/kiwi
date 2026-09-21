@@ -51,6 +51,14 @@ export interface PrivacyRequestRecord {
   updatedAt: string;
 }
 
+export interface DeletionSuppressionRecord {
+  merchantId: string;
+  buyerPrincipalId: string;
+  consentGeneration: number;
+  expiresAt: string;
+  createdAt: string;
+}
+
 const TRANSITIONS: Readonly<Record<PrivacyRequestStatus, readonly PrivacyRequestStatus[]>> = {
   RECEIVED: ["IDENTITY_CHECK", "RESTRICTED"],
   IDENTITY_CHECK: ["SCOPED", "RESTRICTED"],
@@ -409,6 +417,28 @@ export class WorkbenchRetentionStore {
     return backupGeneration > suppression.consent_generation;
   }
 
+  activeSuppressions(): DeletionSuppressionRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT merchant_id, buyer_principal_id, consent_generation, expires_at, created_at
+         FROM workbench_deletion_suppressions WHERE expires_at>? ORDER BY merchant_id, buyer_principal_id`,
+      )
+      .all(this.now()) as Array<{
+      merchant_id: string;
+      buyer_principal_id: string;
+      consent_generation: number;
+      expires_at: string;
+      created_at: string;
+    }>;
+    return rows.map((row) => ({
+      merchantId: row.merchant_id,
+      buyerPrincipalId: row.buyer_principal_id,
+      consentGeneration: row.consent_generation,
+      expiresAt: row.expires_at,
+      createdAt: row.created_at,
+    }));
+  }
+
   private assertDeletionComplete(requestId: string): void {
     const rows = this.db
       .prepare(
@@ -543,4 +573,57 @@ function requireText(value: string, field: string): string {
 
 function clean(value: string): string {
   return String(value ?? "").trim();
+}
+
+export function replayDeletionSuppressions(
+  db: DatabaseSync,
+  records: readonly DeletionSuppressionRecord[],
+  now: string = new Date().toISOString(),
+): { applied: number; deletedRows: number } {
+  new WorkbenchRetentionStore({ db, now: () => now });
+  let applied = 0;
+  let deletedRows = 0;
+  db.exec("begin immediate");
+  try {
+    for (const record of records) {
+      if (Date.parse(record.expiresAt) <= Date.parse(now)) continue;
+      db.prepare(
+        `INSERT INTO workbench_deletion_suppressions
+         (merchant_id, buyer_principal_id, consent_generation, expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(merchant_id, buyer_principal_id) DO UPDATE SET
+           consent_generation=max(consent_generation, excluded.consent_generation),
+           expires_at=max(expires_at, excluded.expires_at),
+           created_at=excluded.created_at`,
+      ).run(
+        record.merchantId,
+        record.buyerPrincipalId,
+        record.consentGeneration,
+        record.expiresAt,
+        record.createdAt,
+      );
+      applied += 1;
+      for (const table of [
+        "merchant_follow_idempotency",
+        "merchant_follow_mutation_contexts",
+        "merchant_follow_relations",
+        "merchant_broadcast_engagement",
+      ]) {
+        const exists = db
+          .prepare("SELECT 1 present FROM sqlite_master WHERE type='table' AND name=?")
+          .get(table) as { present: number } | undefined;
+        if (exists === undefined) continue;
+        deletedRows += Number(
+          db
+            .prepare(`DELETE FROM ${table} WHERE merchant_id=? AND buyer_principal_id=?`)
+            .run(record.merchantId, record.buyerPrincipalId).changes,
+        );
+      }
+    }
+    db.exec("commit");
+    return { applied, deletedRows };
+  } catch (error) {
+    db.exec("rollback");
+    throw error;
+  }
 }
