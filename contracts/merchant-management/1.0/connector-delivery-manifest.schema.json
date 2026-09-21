@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:merchant-management:1.0:connector-delivery-manifest",
+  "title": "Kiwi 连接能力内置交付清单 1.0",
+  "description": "connector-delivery-manifest.json（BD 设计 §16.1）——本专项**独立**交付清单；通过 parent_release_manifest.sha256 引用云端总发布清单（D1），不向其 Schema 塞未定义字段。签名/证明走 detached 机制：「文件内自带 hash」不构成可信。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "delivery_version",
+    "source_commit",
+    "runtime_version",
+    "runtime_artifact",
+    "lockfile_sha256",
+    "build_environment_ref",
+    "management_api_major",
+    "compatible_buddy_versions",
+    "enabled_modes",
+    "migration_version",
+    "rollback_policy_ref",
+    "parent_release_manifest"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "delivery_version": { "type": "string", "minLength": 1, "description": "交付版本（与 Kiwi 软件版本、协议版本分开），如 2026-09-21.1。" },
+    "source_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$", "description": "完整 git 提交。" },
+    "runtime_version": { "type": "string", "minLength": 1, "description": "实际 Kiwi 运行版本（package.json version）。" },
+    "runtime_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["bound", "not_produced"], "description": "bound=已绑定真正上传的制品；not_produced=本轮无制品（不得对外交付）。" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "path": { "type": "string", "description": "制品相对引用（可选；不含凭据）。" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "bound" } } },
+          "then": { "required": ["status", "sha256"] }
+        }
+      ]
+    },
+    "lockfile_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "完整依赖解析锁（package-lock.json）摘要。" },
+    "build_environment_ref": { "type": "string", "minLength": 1, "description": "工具链/平台证据（node 版本、OS/arch、CI 标识）。" },
+    "management_api_major": { "type": "integer", "minimum": 1, "description": "本制品实现的管理 API major。" },
+    "compatible_buddy_versions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "声明并**测试**支持的 UI/工具客户端范围；空数组 = 未声明（不得声称兼容）。"
+    },
+    "enabled_modes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["page", "mcp_readonly"],
+      "properties": {
+        "page": { "const": true, "description": "同源管理页为必选模式。" },
+        "mcp_readonly": { "type": "boolean", "description": "对话只读工具（BD-06）：仅 B07 实测与 UC37–40 通过后才可为 true。" }
+      }
+    },
+    "migration_version": { "type": "integer", "minimum": 0 },
+    "rollback_policy_ref": { "type": "string", "minLength": 1, "description": "可执行的恢复/回滚策略文档（仓库相对路径，必须存在）。" },
+    "parent_release_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "ref"],
+      "properties": {
+        "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "云端总发布清单（D1 release-manifest）摘要；null = 尚未挂接（不得据此声称通过总设计门槛）。" },
+        "ref": { "type": "string", "minLength": 1, "description": "总发布清单的引用说明。" }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "可选交付注记（不含秘密）。"
+    }
+  }
+}

@@ -22,3 +22,4 @@ wrangler.harrylabs.jsonc
 
 # 云端制品构建产物（scripts/build-cloud-artifact.mjs）
 build/
+delivery/
