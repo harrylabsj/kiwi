@@ -23,6 +23,17 @@ const token = args.tokenEnv === undefined ? undefined : process.env[args.tokenEn
 if (args.tokenEnv !== undefined && (token === undefined || token === "")) {
   throw new Error(`alert webhook token env ${args.tokenEnv} is missing`);
 }
+let healthUrl;
+if (args.healthUrl !== undefined) {
+  if (args.merchant === undefined) throw new Error("--merchant is required with --health-url");
+  healthUrl = new URL(args.healthUrl);
+  if (
+    healthUrl.protocol !== "https:" &&
+    !["127.0.0.1", "localhost", "::1"].includes(healthUrl.hostname)
+  ) {
+    throw new Error("health URL must use HTTPS unless it is loopback");
+  }
+}
 
 const db = new DatabaseSync(args.db);
 db.exec("pragma journal_mode=WAL; pragma busy_timeout=5000");
@@ -49,6 +60,27 @@ process.once("SIGINT", () => (stopping = true));
 process.once("SIGTERM", () => (stopping = true));
 try {
   do {
+    if (healthUrl !== undefined) {
+      try {
+        const response = await fetch(healthUrl, {
+          redirect: "error",
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) throw new Error(`health probe returned HTTP ${response.status}`);
+        store.recordRuntimeProbe({
+          merchantId: args.merchant,
+          publicOrigin: healthUrl.origin,
+          healthy: true,
+        });
+      } catch (error) {
+        store.recordRuntimeProbe({
+          merchantId: args.merchant,
+          publicOrigin: healthUrl.origin,
+          healthy: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     const result = await worker.runOnce();
     process.stdout.write(`${JSON.stringify({ at: new Date().toISOString(), result })}\n`);
     if (args.once === true) break;
@@ -71,6 +103,8 @@ function parseArgs(values) {
     if (value === "--db") out.db = next;
     else if (value === "--webhook") out.webhook = next;
     else if (value === "--token-env") out.tokenEnv = next;
+    else if (value === "--health-url") out.healthUrl = next;
+    else if (value === "--merchant") out.merchant = next;
     else throw new Error(`unknown argument: ${value}`);
     index += 1;
   }

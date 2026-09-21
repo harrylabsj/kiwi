@@ -66,4 +66,49 @@ describe("standalone external alert delivery", () => {
     expect(store.finish(newLease, { delivered: true })).toBe(true);
     db.close();
   });
+
+  it("creates and resolves a Runtime-offline episode from the independent probe", () => {
+    const { db, store } = fixture();
+    db.prepare(
+      "UPDATE workbench_alerts SET resolved_at='2026-09-22T00:00:00.000Z' WHERE alert_id='alert-1'",
+    ).run();
+    const failed = store.recordRuntimeProbe({
+      merchantId: "merchant-1",
+      publicOrigin: "https://merchant.example",
+      healthy: false,
+      error: "fetch failed token=private",
+    });
+    expect(failed.changed).toBe(true);
+    expect(
+      store.recordRuntimeProbe({
+        merchantId: "merchant-1",
+        publicOrigin: "https://merchant.example",
+        healthy: false,
+        error: "still down",
+      }).changed,
+    ).toBe(false);
+    expect(store.enqueueOutstanding()).toBeGreaterThan(0);
+    const lease = store.lease("probe-worker")!;
+    expect(lease.severity).toBe("critical");
+    expect(lease.category).toBe("runtime_offline");
+    expect(lease.summary).not.toContain("private");
+    expect(store.finish(lease, { delivered: true })).toBe(true);
+
+    expect(
+      store.recordRuntimeProbe({
+        merchantId: "merchant-1",
+        publicOrigin: "https://merchant.example",
+        healthy: true,
+      }).changed,
+    ).toBe(true);
+    const reopened = store.recordRuntimeProbe({
+      merchantId: "merchant-1",
+      publicOrigin: "https://merchant.example",
+      healthy: false,
+      error: "offline again",
+    });
+    expect(reopened.changed).toBe(true);
+    expect(store.enqueueOutstanding()).toBeGreaterThan(0);
+    db.close();
+  });
 });

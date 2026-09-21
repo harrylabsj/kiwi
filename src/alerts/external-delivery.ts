@@ -164,6 +164,59 @@ export class ExternalAlertDeliveryStore {
       .get(alertId) as { status: string; attempts: number; last_error: string | null } | undefined;
   }
 
+  recordRuntimeProbe(input: {
+    merchantId: string;
+    publicOrigin: string;
+    healthy: boolean;
+    error?: string;
+  }): { alertId?: string; changed: boolean } {
+    const resource = `runtime:${input.publicOrigin}`;
+    const episode = "runtime-offline";
+    const stamp = this.now();
+    if (input.healthy) {
+      const changed = this.options.db
+        .prepare(
+          `UPDATE workbench_alerts SET resolved_at=?
+           WHERE merchant_id=? AND category='runtime_offline' AND resource=? AND episode=?
+             AND resolved_at IS NULL`,
+        )
+        .run(stamp, input.merchantId, resource, episode);
+      return { changed: changed.changes === 1 };
+    }
+    const existing = this.options.db
+      .prepare(
+        `SELECT alert_id, resolved_at FROM workbench_alerts
+         WHERE merchant_id=? AND category='runtime_offline' AND resource=? AND episode=?`,
+      )
+      .get(input.merchantId, resource, episode) as
+      { alert_id: string; resolved_at: string | null } | undefined;
+    const alertId = existing?.alert_id ?? `wba_${randomBytes(12).toString("hex")}`;
+    const summary = `Runtime health probe failed: ${sanitize(input.error ?? "unreachable")}`;
+    if (existing === undefined) {
+      this.options.db
+        .prepare(
+          `INSERT INTO workbench_alerts
+           (alert_id, merchant_id, category, resource, episode, severity, summary, created_at)
+           VALUES (?, ?, 'runtime_offline', ?, ?, 'critical', ?, ?)`,
+        )
+        .run(alertId, input.merchantId, resource, episode, summary, stamp);
+      return { alertId, changed: true };
+    }
+    if (existing.resolved_at !== null) {
+      this.options.db
+        .prepare(
+          `UPDATE workbench_alerts SET resolved_at=NULL, acknowledged_at=NULL,
+             acknowledged_by=NULL, summary=?, created_at=? WHERE alert_id=?`,
+        )
+        .run(summary, stamp, alertId);
+      this.options.db
+        .prepare("DELETE FROM workbench_alert_deliveries WHERE alert_id=?")
+        .run(alertId);
+      return { alertId, changed: true };
+    }
+    return { alertId, changed: false };
+  }
+
   private now(): string {
     return this.options.now?.() ?? new Date().toISOString();
   }
