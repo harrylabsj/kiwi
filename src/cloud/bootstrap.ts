@@ -41,6 +41,7 @@ import { loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/sig
 import { loadProfile, ProfileError } from "../config/profile.js";
 import { createMerchantManagementApiHandler } from "../http/merchant-management/api.js";
 import { createMerchantFeedApiHandler } from "../http/merchant-feed-api.js";
+import { createMerchantFollowApiHandler } from "../http/merchant-follow-api.js";
 import { MerchantImportDraftStore } from "../http/merchant-management/draft-store.js";
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
 import { createTrustedWorkbenchPageHandler } from "../http/merchant-management/trusted-page.js";
@@ -55,6 +56,7 @@ import {
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
 import { WorkbenchEventProjectionStore } from "../http/merchant-management/event-projection.js";
 import { MerchantFeedStore } from "../merchant/feed-store.js";
+import { MerchantFollowStore } from "../merchant/follow-store.js";
 import { createBroadcastExecutors } from "../merchant/feed-executors.js";
 import { isCurrentGrantAuthorization, MerchantGrantStore } from "../merchant/grant-store.js";
 import { createGrantExecutors } from "../merchant/grant-executors.js";
@@ -457,6 +459,7 @@ export async function bootstrapCloudRuntime(
   let managementDb: DatabaseSync | undefined;
   let merchantApiHandler: CloudRequestListener | undefined;
   let publicFeedHandler: CloudRequestListener | undefined;
+  let buyerHandler: CloudRequestListener | undefined;
   let reconciliationTimer: ReturnType<typeof setInterval> | undefined;
   if (adminOptions !== undefined) {
     managementDb = new DatabaseSync(path.join(config.dataDir, "state.sqlite"));
@@ -469,6 +472,7 @@ export async function bootstrapCloudRuntime(
       cursorKey: workbenchCursorKey,
     });
     const grantStore = new MerchantGrantStore({ db: managementDb });
+    const followStore = new MerchantFollowStore({ db: managementDb });
     const promotionStore = new MerchantPromotionStore({ db: managementDb });
     const promotionWorkflowStore = new PromotionBroadcastWorkflowStore({ db: managementDb });
     const eventProjectionStore = new WorkbenchEventProjectionStore({
@@ -500,6 +504,34 @@ export async function bootstrapCloudRuntime(
     publicFeedHandler = createMerchantFeedApiHandler({
       merchantId: profile.owner_id,
       store: feedStore,
+    });
+    buyerHandler = createMerchantFollowApiHandler({
+      merchantId: profile.owner_id,
+      store: followStore,
+      resolveBuyer: async (request, body) => {
+        const socketTls = request.socket as { encrypted?: boolean };
+        const result = await authVerifier.verify({
+          remoteAddress: request.socket.remoteAddress,
+          authorizationHeader: request.headers.authorization,
+          method: request.method ?? "",
+          url: request.url ?? "",
+          scheme: socketTls.encrypted === true ? "https" : "http",
+          headers: request.headers,
+          body,
+        });
+        if (
+          !result.authenticated ||
+          result.identityVerified !== true ||
+          typeof result.identity !== "string" ||
+          result.identity.trim() === ""
+        ) {
+          return undefined;
+        }
+        return {
+          merchantId: profile.owner_id,
+          buyerPrincipalId: result.identity,
+        };
+      },
     });
     merchantApiHandler = createMerchantManagementApiHandler({
       merchantId: profile.owner_id,
@@ -608,6 +640,7 @@ export async function bootstrapCloudRuntime(
       workbenchConfirmations,
       workbenchReconciliation: reconciliationStore,
       workbenchEvents: eventProjectionStore,
+      followerSummary: () => followStore.activeCount(profile.owner_id),
       workbenchFeed: feedStore,
       workbenchGrants: grantStore,
       workbenchPromotions: promotionStore,
@@ -811,6 +844,7 @@ export async function bootstrapCloudRuntime(
     merchantHandler: merchantHandler.handler,
     ...(merchantApiHandler !== undefined ? { merchantApiHandler } : {}),
     ...(publicFeedHandler !== undefined ? { publicFeedHandler } : {}),
+    ...(buyerHandler !== undefined ? { buyerHandler } : {}),
     trustedPageHandler: createTrustedWorkbenchPageHandler(),
     merchantHomePage,
     readiness,

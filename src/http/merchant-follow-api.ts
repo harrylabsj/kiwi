@@ -8,7 +8,10 @@ import {
   MerchantFollowError,
   type MerchantFollowStore,
 } from "../merchant/follow-store.js";
-import { createWorkbenchProblem, type WorkbenchProblemCode } from "./merchant-management/problem.js";
+import {
+  createWorkbenchProblem,
+  type WorkbenchProblemCode,
+} from "./merchant-management/problem.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -23,6 +26,7 @@ export interface MerchantFollowApiOptions {
   /** Must verify a credential/delegation; never derive identity from request JSON. */
   resolveBuyer: (
     request: IncomingMessage,
+    body?: Buffer,
   ) => VerifiedBuyerPrincipal | undefined | Promise<VerifiedBuyerPrincipal | undefined>;
 }
 
@@ -31,7 +35,13 @@ export function createMerchantFollowApiHandler(
 ): (req: IncomingMessage, res: ServerResponse) => void {
   return (req, res) => {
     void handle(req, res).catch(() => {
-      writeProblem(res, "INTERNAL_ERROR", requestId(), "内部错误", "请求未完成。请使用请求编号联系支持。");
+      writeProblem(
+        res,
+        "INTERNAL_ERROR",
+        requestId(),
+        "内部错误",
+        "请求未完成。请使用请求编号联系支持。",
+      );
     });
   };
 
@@ -48,7 +58,22 @@ export function createMerchantFollowApiHandler(
       writeProblem(res, "RESOURCE_NOT_FOUND", id, "资源不存在", "Buyer follow 路由不存在。");
       return;
     }
-    const principal = await options.resolveBuyer(req);
+    let rawBody: Buffer | undefined;
+    if (req.method === "PUT") {
+      try {
+        rawBody = await readBody(req);
+      } catch (error) {
+        writeProblem(
+          res,
+          "VALIDATION_ERROR",
+          id,
+          "请求正文无效",
+          error instanceof Error ? error.message : "请求正文无效。",
+        );
+        return;
+      }
+    }
+    const principal = await options.resolveBuyer(req, rawBody);
     if (principal === undefined) {
       writeProblem(res, "UNAUTHENTICATED", id, "需要认证", "需要可验证的 Buyer 身份或委托。");
       return;
@@ -61,13 +86,22 @@ export function createMerchantFollowApiHandler(
 
     if (req.method === "GET" || req.method === "HEAD") {
       const result = options.store.read(options.merchantId, principal.buyerPrincipalId);
-      writeJson(res, 200, result, id, { etag: followEtag(result.follow.epoch, result.follow.revision) });
+      writeJson(res, 200, result, id, {
+        etag: followEtag(result.follow.epoch, result.follow.revision),
+      });
       return;
     }
     if (req.method !== "PUT" && req.method !== "DELETE") {
-      writeProblem(res, "VALIDATION_ERROR", id, "请求方法不可用", "该路由只接受 GET、PUT、DELETE。", {
-        allow: "GET, PUT, DELETE",
-      });
+      writeProblem(
+        res,
+        "VALIDATION_ERROR",
+        id,
+        "请求方法不可用",
+        "该路由只接受 GET、PUT、DELETE。",
+        {
+          allow: "GET, PUT, DELETE",
+        },
+      );
       return;
     }
 
@@ -100,7 +134,7 @@ export function createMerchantFollowApiHandler(
     let body: Record<string, unknown> = {};
     if (req.method === "PUT") {
       try {
-        body = await readObject(req);
+        body = readObject(rawBody ?? Buffer.alloc(0));
       } catch (error) {
         writeProblem(
           res,
@@ -111,9 +145,17 @@ export function createMerchantFollowApiHandler(
         );
         return;
       }
-      const unexpected = Object.keys(body).filter((field) => !["category", "consent_version"].includes(field));
+      const unexpected = Object.keys(body).filter(
+        (field) => !["category", "consent_version"].includes(field),
+      );
       if (unexpected.length > 0) {
-        writeProblem(res, "VALIDATION_ERROR", id, "存在未知字段", `未知字段：${unexpected.join(", ")}`);
+        writeProblem(
+          res,
+          "VALIDATION_ERROR",
+          id,
+          "存在未知字段",
+          `未知字段：${unexpected.join(", ")}`,
+        );
         return;
       }
     }
@@ -160,7 +202,7 @@ function respondStoreError(res: ServerResponse, id: string, error: unknown): voi
   writeProblem(res, mapping[error.code], id, "关注关系未更新", error.message);
 }
 
-async function readObject(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readBody(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
@@ -169,8 +211,12 @@ async function readObject(req: IncomingMessage): Promise<Record<string, unknown>
     if (size > MAX_BODY_BYTES) throw new Error("请求正文超过 16 KiB 限制。");
     chunks.push(buffer);
   }
-  if (chunks.length === 0) return {};
-  const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  return Buffer.concat(chunks);
+}
+
+function readObject(body: Buffer): Record<string, unknown> {
+  if (body.length === 0) return {};
+  const parsed = JSON.parse(body.toString("utf8")) as unknown;
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("请求正文必须是 JSON 对象。");
   }

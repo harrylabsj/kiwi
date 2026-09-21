@@ -8,13 +8,15 @@ import { MerchantFollowStore } from "../src/merchant/follow-store.js";
 const store = new MerchantFollowStore({ db: new DatabaseSync(":memory:") });
 let server: Server;
 let base: string;
+let authenticatedBody: Buffer | undefined;
 
 beforeAll(async () => {
   server = createServer(
     createMerchantFollowApiHandler({
       merchantId: "m1",
       store,
-      resolveBuyer: (req) => {
+      resolveBuyer: (req, body) => {
+        authenticatedBody = body;
         const auth = req.headers.authorization;
         if (auth === "Bearer buyer-1") return { merchantId: "m1", buyerPrincipalId: "buyer-1" };
         if (auth === "Bearer wrong-merchant") {
@@ -79,6 +81,10 @@ describe("merchant-follow/1 HTTP adapter", () => {
       { category: "office", consent_version: "v1" },
     );
     expect(followed.status).toBe(200);
+    expect(JSON.parse(authenticatedBody?.toString("utf8") ?? "{}")).toEqual({
+      category: "office",
+      consent_version: "v1",
+    });
     const etag1 = followed.headers.get("etag")!;
     expect(await followed.json()).toMatchObject({ follow: { following: true, revision: 1 } });
 

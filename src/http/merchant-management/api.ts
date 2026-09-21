@@ -212,6 +212,7 @@ export interface MerchantManagementApiOptions {
   };
   workbenchEvents?: WorkbenchEventProjectionStore;
   quotePreview?: (sku: string, quantity: number) => Promise<WorkbenchQuoteResult>;
+  followerSummary?: () => number;
   prepareBroadcastPublish?: (input: {
     broadcast: Record<string, unknown>;
     authorization: Record<string, unknown>;
@@ -493,11 +494,17 @@ export function createMerchantManagementApiHandler(
                   observable: true,
                   value: options.workbenchPromotions.summary(auth.ctx.merchantId),
                 },
-          followers: {
-            observable: false,
-            value: null,
-            reason: "verified_buyer_identity_resolver_unavailable",
-          },
+          followers:
+            options.followerSummary === undefined
+              ? {
+                  observable: false,
+                  value: null,
+                  reason: "verified_buyer_identity_resolver_unavailable",
+                }
+              : {
+                  observable: true,
+                  value: { active_verified_subjects: options.followerSummary() },
+                },
           negotiations: negotiationsOverview,
         },
         { "x-request-id": requestId },

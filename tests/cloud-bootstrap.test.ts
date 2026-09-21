@@ -118,7 +118,7 @@ function writeCloudProfile(
       "  token_env: KIWI_TEST_COMMERCE_TOKEN",
       "  backend: local_marketplace",
       // 云端生产禁演示价回退：profile 打开时启动必须失败（T018 的前置约束）。
-      `  allow_demo_price_fallback: ${options.demoPriceFallback === true ? "true" : "false"}`, 
+      `  allow_demo_price_fallback: ${options.demoPriceFallback === true ? "true" : "false"}`,
       "model:",
       "  provider: fake",
       "  model: fake-merchant-model",
@@ -200,7 +200,10 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
       expect(await live.json()).toEqual({ ok: true, node: process.version });
       const ready = await fetch(`${base}/readyz`);
       expect(ready.status).toBe(200);
-      const readyBody = (await ready.json()) as { ready: boolean; checks: Record<string, { ok: boolean }> };
+      const readyBody = (await ready.json()) as {
+        ready: boolean;
+        checks: Record<string, { ok: boolean }>;
+      };
       expect(readyBody.ready).toBe(true);
       expect(readyBody.checks.products?.ok).toBe(true);
       expect(readyBody.checks.storage?.ok).toBe(true);
@@ -215,15 +218,27 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
       });
       expect(credentialedFeed.status).toBe(422);
 
+      // Shared A2A bearer authenticates a service channel but cannot identify an
+      // individual Buyer for a follow relationship.
+      const sharedBearerFollow = await fetch(`${base}/buyer/v1/follow`, {
+        headers: { authorization: "Bearer test-bearer-token" },
+      });
+      expect(sharedBearerFollow.status).toBe(401);
+      expect(await sharedBearerFollow.json()).toMatchObject({ code: "UNAUTHENTICATED" });
+
       // 平台数据面路径：业务不接管。
       const reserved = await fetch(`${base}/.cloud/database/rest/items`);
       expect(reserved.status).toBe(404);
-      expect((await reserved.json()) as { error: string }).toMatchObject({ error: "reserved_path" });
+      expect((await reserved.json()) as { error: string }).toMatchObject({
+        error: "reserved_path",
+      });
 
       // 绑定挑战（M2 已实装）：空 body / 结构不完整 → 400，绝不空实现。
       const challenge = await fetch(`${base}/control/challenge`, { method: "POST" });
       expect(challenge.status).toBe(400);
-      expect((await challenge.json()) as { error?: string }).toMatchObject({ error: "invalid_challenge" });
+      expect((await challenge.json()) as { error?: string }).toMatchObject({
+        error: "invalid_challenge",
+      });
     } finally {
       await instance.close();
     }
@@ -320,7 +335,11 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
         const body = await res.text();
         expect(body).not.toMatch(/price_floors|min_unit_price_private|amount_minor/);
       }
-      for (const path of ["/merchant/api/policy", "/merchant/api/status", "/merchant/api/approvals"]) {
+      for (const path of [
+        "/merchant/api/policy",
+        "/merchant/api/status",
+        "/merchant/api/approvals",
+      ]) {
         const res = await fetch(`${base}${path}`, { redirect: "manual" });
         expect(res.status).toBe(401);
         const body = await res.text();
@@ -347,7 +366,12 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
           params: {
             message: {
               role: "ROLE_USER",
-              parts: [{ data: { knp_envelope: { action: "approve", capability: "x" } }, mediaType: "application/json" }],
+              parts: [
+                {
+                  data: { knp_envelope: { action: "approve", capability: "x" } },
+                  mediaType: "application/json",
+                },
+              ],
               messageId: "msg_t043",
             },
           },
