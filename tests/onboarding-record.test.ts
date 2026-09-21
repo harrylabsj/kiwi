@@ -112,6 +112,65 @@ describe("T029：只有权威证据能推进状态", () => {
   });
 });
 
+describe("T007：平台确认框被拒绝", () => {
+  it("拒绝授权 → **保持等待**，绝不显示已开通，也不代确认", () => {
+    const s = store();
+    const record = s.openIntent(open());
+    const awaiting = s.advance({
+      recordId: record.recordId,
+      expectedRevision: 0,
+      nextStatus: "AWAITING_PLATFORM_CONSENT",
+      step: "login-binding",
+    });
+    const refused = s.recordConsentRefused(awaiting.recordId, awaiting.revision, {
+      note: "商家在平台确认框点了拒绝",
+    });
+    // 状态不变：还在等；没有 applicationId；也没有被写成 ACTIVE
+    expect(refused.status).toBe("AWAITING_PLATFORM_CONSENT");
+    expect(refused.applicationId).toBeNull();
+    expect(refused.revision).toBe(awaiting.revision + 1);
+    expect(refused.lastError).toContain("拒绝");
+    // 拒绝这件事被留痕（审计能看到"商家拒绝了"，而不是含糊的"未知失败"）
+    const evidence = s.evidenceFor(record.recordId);
+    expect(evidence.some((e) => e.summary.includes("consent refused"))).toBe(true);
+    expect(evidence.every((e) => !e.authoritative)).toBe(true);
+  });
+
+  it("拒绝后商家仍可重新授权，也可撤销意图", () => {
+    const s = store();
+    const record = s.openIntent(open());
+    let current = s.advance({
+      recordId: record.recordId,
+      expectedRevision: 0,
+      nextStatus: "AWAITING_PLATFORM_CONSENT",
+    });
+    current = s.recordConsentRefused(current.recordId, current.revision);
+    // 重新授权：权威回执到达 → 正常推进
+    const activated = s.advance({
+      recordId: current.recordId,
+      expectedRevision: current.revision,
+      nextStatus: "ACTIVATED",
+      evidence: platformEvidence({ applicationId: "wbapp_AGAIN", generation: 1, source: "inspectOwnedApplication" }),
+    });
+    expect(activated.status).toBe("ACTIVATED");
+
+    // 另一条路：拒绝后直接撤销
+    const other = s.openIntent(open({ merchantId: "merchant-onb-2", idempotencyKey: "key-2" }));
+    const waiting = s.advance({
+      recordId: other.recordId,
+      expectedRevision: 0,
+      nextStatus: "AWAITING_PLATFORM_CONSENT",
+    });
+    expect(s.cancel(waiting.recordId, waiting.revision).status).toBe("CANCELLED");
+  });
+
+  it("不在等待授权时记录「拒绝」是非法调用（不能把别处的失败伪装成商家拒绝）", () => {
+    const s = store();
+    const record = s.openIntent(open());
+    expect(() => s.recordConsentRefused(record.recordId, 0)).toThrow(/awaiting platform consent/);
+  });
+});
+
 describe("T008/T009：重复点击与响应丢失", () => {
   it("同幂等键 + 同请求摘要 → 返回同一条记录，不新建", () => {
     const s = store();

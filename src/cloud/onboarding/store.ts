@@ -355,6 +355,48 @@ export class OnboardingStore {
     return this.requireRecord(recordId);
   }
 
+  /**
+   * 商家在平台确认框**拒绝**授权（T007）。
+   *
+   * 语义上这不是"失败"，而是"还在等"：**状态不变**（仍 AWAITING_PLATFORM_CONSENT），
+   * applicationId 仍为 null，也绝不显示已开通。代确认、把拒绝当同意、或把状态推进
+   * 到下一格都属于伪造商家意图——所以这里只记录，不改状态。
+   *
+   * 商家随后仍可重试（重新授权）或 `cancel()`（撤销意图）。
+   */
+  recordConsentRefused(
+    recordId: string,
+    expectedRevision: number,
+    input: { note?: string } = {},
+  ): OnboardingRecord {
+    const record = this.requireRecord(recordId);
+    assertRevision(record, expectedRevision);
+    if (record.status !== "AWAITING_PLATFORM_CONSENT") {
+      throw new OnboardingError(
+        "illegal_transition",
+        `consent refusal only applies while awaiting platform consent (status ${record.status})`,
+      );
+    }
+    this.recordEvidence(recordId, {
+      kind: "user_consent_receipt",
+      summary: `consent refused: ${input.note ?? "merchant declined in the platform dialog"}`,
+      observedAt: this.now(),
+    });
+    this.db
+      .prepare(
+        "update onboarding_records set revision = ?, last_error = ?, updated_at = ?"
+          + " where record_id = ? and revision = ?",
+      )
+      .run(
+        record.revision + 1,
+        sanitizeError(input.note ?? "merchant declined platform consent; still waiting"),
+        this.now(),
+        recordId,
+        expectedRevision,
+      );
+    return this.requireRecord(recordId);
+  }
+
   /** 商家撤销开通意图。**不自动删已有云资源**（§7.1）。 */
   cancel(recordId: string, expectedRevision: number): OnboardingRecord {
     const record = this.requireRecord(recordId);
