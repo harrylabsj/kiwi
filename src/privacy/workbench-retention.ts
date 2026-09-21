@@ -61,7 +61,12 @@ const TRANSITIONS: Readonly<Record<PrivacyRequestStatus, readonly PrivacyRequest
   PARTIAL_EXTERNAL: [],
 };
 
-const REQUIRED_NODES = ["runtime-primary", "buyer-preferences", "runtime-cache", "controlled-backup"] as const;
+const REQUIRED_NODES = [
+  "runtime-primary",
+  "buyer-preferences",
+  "runtime-cache",
+  "controlled-backup",
+] as const;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS workbench_retention_policy (
@@ -111,10 +116,7 @@ CREATE TABLE IF NOT EXISTS workbench_deletion_suppressions (
 
 export class WorkbenchRetentionError extends Error {
   readonly code:
-    | "POLICY_INVALID"
-    | "REQUEST_NOT_FOUND"
-    | "ILLEGAL_TRANSITION"
-    | "DELETION_INCOMPLETE";
+    "POLICY_INVALID" | "REQUEST_NOT_FOUND" | "ILLEGAL_TRANSITION" | "DELETION_INCOMPLETE";
 
   constructor(code: WorkbenchRetentionError["code"], message: string) {
     super(message);
@@ -143,14 +145,18 @@ export class WorkbenchRetentionStore {
     }
     const byCategory = new Map(entries.map((entry) => [entry.category, entry]));
     if (byCategory.size !== RETENTION_CATEGORIES.length) {
-      throw new WorkbenchRetentionError("POLICY_INVALID", "retention policy categories are duplicated or missing");
+      throw new WorkbenchRetentionError(
+        "POLICY_INVALID",
+        "retention policy categories are duplicated or missing",
+      );
     }
     const stamp = this.now();
     this.db.exec("begin immediate");
     try {
       for (const category of RETENTION_CATEGORIES) {
         const entry = byCategory.get(category);
-        if (entry === undefined) throw new WorkbenchRetentionError("POLICY_INVALID", `missing ${category}`);
+        if (entry === undefined)
+          throw new WorkbenchRetentionError("POLICY_INVALID", `missing ${category}`);
         if (
           clean(entry.processor) === "" ||
           clean(entry.purpose) === "" ||
@@ -221,6 +227,7 @@ export class WorkbenchRetentionStore {
              consent_generation=consent_generation+1, marketing_allowed=0, updated_at=excluded.updated_at`,
         )
         .run(merchantId, buyerPrincipalId, stamp);
+      this.stopRuntimeMarketingAndFollow(merchantId, buyerPrincipalId, stamp);
       const subject = this.db
         .prepare(
           `SELECT consent_generation FROM workbench_privacy_subjects
@@ -267,7 +274,11 @@ export class WorkbenchRetentionStore {
     }
   }
 
-  transition(requestId: string, next: PrivacyRequestStatus, limitationReason?: string): PrivacyRequestRecord {
+  transition(
+    requestId: string,
+    next: PrivacyRequestStatus,
+    limitationReason?: string,
+  ): PrivacyRequestRecord {
     const current = this.requireRequest(requestId);
     if (!TRANSITIONS[current.status].includes(next)) {
       throw new WorkbenchRetentionError(
@@ -309,6 +320,66 @@ export class WorkbenchRetentionStore {
     }
   }
 
+  processRuntimePrimary(requestId: string): { receiptRef: string; deletedRows: number } {
+    const request = this.requireRequest(requestId);
+    if (request.status !== "PROCESSING") {
+      throw new WorkbenchRetentionError(
+        "ILLEGAL_TRANSITION",
+        "runtime-primary deletion requires PROCESSING status",
+      );
+    }
+    let deletedRows = 0;
+    this.db.exec("begin immediate");
+    try {
+      for (const [table, where] of [
+        ["merchant_follow_idempotency", "merchant_id=? AND buyer_principal_id=?"],
+        ["merchant_follow_mutation_contexts", "merchant_id=? AND buyer_principal_id=?"],
+        ["merchant_follow_relations", "merchant_id=? AND buyer_principal_id=?"],
+        ["merchant_broadcast_engagement", "merchant_id=? AND buyer_principal_id=?"],
+      ] as const) {
+        if (!this.tableExists(table)) continue;
+        deletedRows += Number(
+          this.db
+            .prepare(`DELETE FROM ${table} WHERE ${where}`)
+            .run(request.merchantId, request.buyerPrincipalId).changes,
+        );
+      }
+      const receiptRef = `runtime-primary:${requestId}:${request.consentGeneration}:${deletedRows}`;
+      const changed = this.db
+        .prepare(
+          `UPDATE workbench_privacy_deletion_tasks
+           SET status='completed', receipt_ref=?, updated_at=?
+           WHERE request_id=? AND node_id='runtime-primary' AND status!='completed'`,
+        )
+        .run(receiptRef, this.now(), requestId);
+      if (changed.changes !== 1) {
+        const current = this.db
+          .prepare(
+            `SELECT receipt_ref FROM workbench_privacy_deletion_tasks
+             WHERE request_id=? AND node_id='runtime-primary' AND status='completed'`,
+          )
+          .get(requestId) as { receipt_ref: string } | undefined;
+        this.db.exec("commit");
+        return { receiptRef: current?.receipt_ref ?? receiptRef, deletedRows: 0 };
+      }
+      this.db.exec("commit");
+      return { receiptRef, deletedRows };
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  getRequest(requestId: string, merchantId: string): PrivacyRequestRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT request_id FROM workbench_privacy_requests
+         WHERE request_id=? AND merchant_id=?`,
+      )
+      .get(requestId, merchantId) as { request_id: string } | undefined;
+    return row === undefined ? undefined : this.requireRequest(row.request_id);
+  }
+
   marketingAllowed(merchantId: string, buyerPrincipalId: string): boolean {
     const row = this.db
       .prepare(
@@ -319,16 +390,20 @@ export class WorkbenchRetentionStore {
     return row?.marketing_allowed === 1;
   }
 
-  canRestoreSubject(merchantId: string, buyerPrincipalId: string, backupGeneration: number): boolean {
+  canRestoreSubject(
+    merchantId: string,
+    buyerPrincipalId: string,
+    backupGeneration: number,
+  ): boolean {
     const suppression = this.db
       .prepare(
         `SELECT consent_generation, expires_at FROM workbench_deletion_suppressions
          WHERE merchant_id=? AND buyer_principal_id=?`,
       )
       .get(merchantId, buyerPrincipalId) as
-      | { consent_generation: number; expires_at: string }
-      | undefined;
-    if (suppression === undefined || Date.parse(suppression.expires_at) <= Date.parse(this.now())) return true;
+      { consent_generation: number; expires_at: string } | undefined;
+    if (suppression === undefined || Date.parse(suppression.expires_at) <= Date.parse(this.now()))
+      return true;
     // 等于删除代次的备份也可能在清理完成前生成，必须先重放抑制；只有显式产生的
     // 更高新同意代次才可恢复经营用途。
     return backupGeneration > suppression.consent_generation;
@@ -336,7 +411,9 @@ export class WorkbenchRetentionStore {
 
   private assertDeletionComplete(requestId: string): void {
     const rows = this.db
-      .prepare("SELECT node_id, status, receipt_ref FROM workbench_privacy_deletion_tasks WHERE request_id=?")
+      .prepare(
+        "SELECT node_id, status, receipt_ref FROM workbench_privacy_deletion_tasks WHERE request_id=?",
+      )
       .all(requestId) as Array<{ node_id: string; status: string; receipt_ref: string | null }>;
     if (
       rows.length !== REQUIRED_NODES.length ||
@@ -347,6 +424,54 @@ export class WorkbenchRetentionStore {
         "all controlled nodes must return completed receipts before the request can be completed",
       );
     }
+  }
+
+  private stopRuntimeMarketingAndFollow(
+    merchantId: string,
+    buyerPrincipalId: string,
+    stamp: string,
+  ): void {
+    if (!this.tableExists("merchant_follow_subject_epochs")) return;
+    this.db
+      .prepare(
+        `INSERT INTO merchant_follow_subject_epochs
+         (merchant_id, buyer_principal_id, epoch, updated_at) VALUES (?, ?, 1, ?)
+         ON CONFLICT(merchant_id, buyer_principal_id) DO UPDATE SET
+           epoch=epoch+1, updated_at=excluded.updated_at`,
+      )
+      .run(merchantId, buyerPrincipalId, stamp);
+    const epoch = (
+      this.db
+        .prepare(
+          `SELECT epoch FROM merchant_follow_subject_epochs
+           WHERE merchant_id=? AND buyer_principal_id=?`,
+        )
+        .get(merchantId, buyerPrincipalId) as { epoch: number }
+    ).epoch;
+    if (this.tableExists("merchant_follow_relations")) {
+      this.db
+        .prepare(
+          `UPDATE merchant_follow_relations SET status='cancelled', revision=revision+1,
+             epoch=?, updated_at=?, cancelled_at=?
+           WHERE merchant_id=? AND buyer_principal_id=? AND status='active'`,
+        )
+        .run(epoch, stamp, stamp, merchantId, buyerPrincipalId);
+    }
+    if (this.tableExists("merchant_follow_mutation_contexts")) {
+      this.db
+        .prepare(
+          `UPDATE merchant_follow_mutation_contexts SET used_at=?
+           WHERE merchant_id=? AND buyer_principal_id=? AND used_at IS NULL`,
+        )
+        .run(stamp, merchantId, buyerPrincipalId);
+    }
+  }
+
+  private tableExists(table: string): boolean {
+    const row = this.db
+      .prepare("SELECT 1 present FROM sqlite_master WHERE type='table' AND name=?")
+      .get(table) as { present: number } | undefined;
+    return row?.present === 1;
   }
 
   private requireRequest(requestId: string): PrivacyRequestRecord {
@@ -411,7 +536,8 @@ export function recommendedRetentionPolicy(input: {
 
 function requireText(value: string, field: string): string {
   const text = clean(value);
-  if (text === "") throw new WorkbenchRetentionError("POLICY_INVALID", `${field} must be non-empty`);
+  if (text === "")
+    throw new WorkbenchRetentionError("POLICY_INVALID", `${field} must be non-empty`);
   return text;
 }
 

@@ -99,6 +99,7 @@ import {
 import { EXACT_PRODUCT_TOOLS } from "../../merchant/exact-product-executors.js";
 import { SERVICE_CONTROL_TOOLS } from "../../merchant/service-control-executors.js";
 import type { WorkbenchQuoteResult } from "../../merchant/quote-calculator.js";
+import type { WorkbenchRetentionStore } from "../../privacy/workbench-retention.js";
 import { BROADCAST_TOOLS } from "../../merchant/feed-executors.js";
 import { MerchantFeedError, type MerchantFeedStore } from "../../merchant/feed-store.js";
 import { GRANT_TOOLS } from "../../merchant/grant-executors.js";
@@ -214,6 +215,7 @@ export interface MerchantManagementApiOptions {
   quotePreview?: (sku: string, quantity: number) => Promise<WorkbenchQuoteResult>;
   followerSummary?: () => number;
   engagementSummary?: () => { received: number; presented: number; clicked: number };
+  workbenchRetention?: WorkbenchRetentionStore;
   prepareBroadcastPublish?: (input: {
     broadcast: Record<string, unknown>;
     authorization: Record<string, unknown>;
@@ -710,6 +712,31 @@ export function createMerchantManagementApiHandler(
           ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
           ...(query.limit !== undefined ? { limit: query.limit } : {}),
         }),
+        { "x-request-id": requestId },
+      );
+      return;
+    }
+    const privacyRequestMatch = /^\/privacy-requests\/([^/]+)$/u.exec(rest);
+    if (privacyRequestMatch !== null) {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "operations:read");
+      const request = options.workbenchRetention?.getRequest(
+        pathSegment(privacyRequestMatch[1] ?? ""),
+        auth.ctx.merchantId,
+      );
+      if (request === undefined) {
+        throw new ManagementError("not_found", "unknown privacy request");
+      }
+      writeJson(
+        res,
+        200,
+        {
+          request_id: request.requestId,
+          status: request.status,
+          consent_generation: request.consentGeneration,
+          received_at: request.receivedAt,
+          updated_at: request.updatedAt,
+        },
         { "x-request-id": requestId },
       );
       return;

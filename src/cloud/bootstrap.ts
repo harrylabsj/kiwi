@@ -43,6 +43,7 @@ import { createMerchantManagementApiHandler } from "../http/merchant-management/
 import { createMerchantFeedApiHandler } from "../http/merchant-feed-api.js";
 import { createMerchantFollowApiHandler } from "../http/merchant-follow-api.js";
 import { createMerchantEngagementApiHandler } from "../http/merchant-engagement-api.js";
+import { createMerchantPrivacyApiHandler } from "../http/merchant-privacy-api.js";
 import { MerchantImportDraftStore } from "../http/merchant-management/draft-store.js";
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
 import { createTrustedWorkbenchPageHandler } from "../http/merchant-management/trusted-page.js";
@@ -59,6 +60,10 @@ import { WorkbenchEventProjectionStore } from "../http/merchant-management/event
 import { MerchantFeedStore } from "../merchant/feed-store.js";
 import { MerchantFollowStore } from "../merchant/follow-store.js";
 import { MerchantEngagementStore } from "../merchant/engagement-store.js";
+import {
+  recommendedRetentionPolicy,
+  WorkbenchRetentionStore,
+} from "../privacy/workbench-retention.js";
 import { createBroadcastExecutors } from "../merchant/feed-executors.js";
 import { isCurrentGrantAuthorization, MerchantGrantStore } from "../merchant/grant-store.js";
 import { createGrantExecutors } from "../merchant/grant-executors.js";
@@ -476,6 +481,23 @@ export async function bootstrapCloudRuntime(
     const grantStore = new MerchantGrantStore({ db: managementDb });
     const followStore = new MerchantFollowStore({ db: managementDb });
     const engagementStore = new MerchantEngagementStore({ db: managementDb });
+    const retentionStore = new WorkbenchRetentionStore({ db: managementDb });
+    const retentionProcessor = String(
+      (options.env ?? process.env).KIWI_RETENTION_PROCESSOR ?? "",
+    ).trim();
+    const retentionBasis = String((options.env ?? process.env).KIWI_RETENTION_BASIS ?? "").trim();
+    const retentionReviewAt = String(
+      (options.env ?? process.env).KIWI_RETENTION_REVIEW_AT ?? "",
+    ).trim();
+    if (retentionProcessor !== "" && retentionBasis !== "" && retentionReviewAt !== "") {
+      retentionStore.configurePolicy(
+        recommendedRetentionPolicy({
+          processor: retentionProcessor,
+          basis: retentionBasis,
+          reviewAt: retentionReviewAt,
+        }),
+      );
+    }
     const promotionStore = new MerchantPromotionStore({ db: managementDb });
     const promotionWorkflowStore = new PromotionBroadcastWorkflowStore({ db: managementDb });
     const eventProjectionStore = new WorkbenchEventProjectionStore({
@@ -547,10 +569,17 @@ export async function bootstrapCloudRuntime(
         feedStore.getBroadcast(profile.owner_id, broadcastId) !== undefined,
       resolveBuyer: async (request, body) => await resolveVerifiedBuyer(request, body),
     });
+    const privacyHandler = createMerchantPrivacyApiHandler({
+      merchantId: profile.owner_id,
+      store: retentionStore,
+      resolveBuyer: resolveVerifiedBuyer,
+    });
     buyerHandler = (request, response) => {
       const pathname = new URL(request.url ?? "/", "http://buyer.internal").pathname;
       if (pathname === "/buyer/v1/follow") followHandler(request, response);
-      else engagementHandler(request, response);
+      else if (pathname.startsWith("/buyer/v1/privacy-requests")) {
+        privacyHandler(request, response);
+      } else engagementHandler(request, response);
     };
     merchantApiHandler = createMerchantManagementApiHandler({
       merchantId: profile.owner_id,
@@ -661,6 +690,7 @@ export async function bootstrapCloudRuntime(
       workbenchEvents: eventProjectionStore,
       followerSummary: () => followStore.activeCount(profile.owner_id),
       engagementSummary: () => engagementStore.summary(profile.owner_id),
+      workbenchRetention: retentionStore,
       workbenchFeed: feedStore,
       workbenchGrants: grantStore,
       workbenchPromotions: promotionStore,
