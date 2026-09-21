@@ -299,12 +299,21 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
     });
     try {
       const base = `http://127.0.0.1:${port}`;
-      // 管理面：未持会话一律被会话门挡住（303 → 登录页），不返回任何业务数据。
-      // M4：新加的管理入口同样在会话门之后（不能因为"只是状态"就放开）
-      for (const path of ["/admin/pending", "/merchant/api/policy", "/merchant/api/status", "/admin/rfq", "/admin/onboarding"]) {
+      // 管理面：未持会话一律被会话门挡住，不返回任何业务数据。
+      // /admin/*（HTML 页）→ 303 登录页；/merchant/api/*（BD-02 管理 API，
+      // 契约 merchant-management/1）→ 401 JSON——同一会话门，不同的响应格式。
+      for (const path of ["/admin/pending", "/admin/rfq", "/admin/onboarding"]) {
         const res = await fetch(`${base}${path}`, { redirect: "manual" });
         expect([302, 303]).toContain(res.status);
         const body = await res.text();
+        expect(body).not.toMatch(/price_floors|min_unit_price_private|amount_minor/);
+      }
+      for (const path of ["/merchant/api/policy", "/merchant/api/status", "/merchant/api/approvals"]) {
+        const res = await fetch(`${base}${path}`, { redirect: "manual" });
+        expect(res.status).toBe(401);
+        const body = await res.text();
+        const json = JSON.parse(body) as { code?: string };
+        expect(json["code"]).toBe("unauthorized");
         expect(body).not.toMatch(/price_floors|min_unit_price_private|amount_minor/);
       }
       // 提交审批同样需要会话（POST 亦被拒，不可能凭 A2A 身份批准任何写命令）。

@@ -38,6 +38,9 @@ import { DatabaseSync } from "node:sqlite";
 import { createA2aNodeCore, createA2aAuthVerifier } from "../a2a/node.js";
 import { loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/signing-key.js";
 import { loadProfile, ProfileError } from "../config/profile.js";
+import { createMerchantManagementApiHandler } from "../http/merchant-management/api.js";
+import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
+import { MutableServiceState } from "../http/merchant-management/service-state.js";
 import {
   assembleMerchantRuntime,
   MerchantAssemblyError,
@@ -57,7 +60,7 @@ import {
 } from "./config.js";
 import { createChallengeResponder } from "./binding/runtime-challenge.js";
 import type { BindingChallengeStore } from "./binding/proofs.js";
-import { createCloudRouter } from "./http-router.js";
+import { createCloudRouter, type CloudRequestListener } from "./http-router.js";
 import { createFileProductSource, type CloudProductSourceHandle } from "./product-source.js";
 import { runReadiness, type ReadinessCheckResult, type ReadinessReport } from "./readiness.js";
 
@@ -221,28 +224,19 @@ export async function bootstrapCloudRuntime(
     config.productsFile !== undefined
       ? createFileProductSource({ file: config.productsFile, merchantId: profile.owner_id })
       : undefined;
-  // 服务可取用性闸门（M4 §5.4/T012）：**由显式服务状态驱动**，缺省正常接待。
+  // 服务可取用性闸门（M4 §5.4/T012 + BD-02）：由可变服务状态驱动——初始值来自
+  // 操作者显式环境声明，之后可经管理 API 暂停/恢复（owner + 确认 + 就绪门）。
   //
   // 为什么不接就绪检查：就绪语义与业务可取用性**不是一回事**——就绪里含"探针 SKU
   // 是否配置/商品数据是否新鲜"这类核对项，把它们当成"停业"会让正常营业的商家因探针
   // 没配而被拒绝接待（实测：接就绪后 T018 与"过期商品表"用例当场被拒）。正确映射要
   // 与"过期商品该不该停业"一起决定，属暂停/撤回控制落地时的事；在那之前这里只认
   // **操作者显式声明**的状态，绝不替商家判断。
-  const declaredServiceState = String(options.env?.KIWI_CLOUD_SERVICE_STATE ?? "")
-    .trim()
-    .toUpperCase();
-  const serviceAvailability =
-    declaredServiceState === "" || declaredServiceState === "OPERATING"
-      ? undefined
-      : {
-          check: ():
-            | { accepting: true }
-            | { accepting: false; state: string; reason: string } => ({
-            accepting: false,
-            state: declaredServiceState,
-            reason: "service state declared by the operator",
-          }),
-        };
+  const serviceState = MutableServiceState.fromDeclared(options.env?.KIWI_CLOUD_SERVICE_STATE);
+  const serviceAvailability = {
+    check: (): { accepting: true } | { accepting: false; state: string; reason: string } =>
+      serviceState.gateCheck(),
+  };
   const core = createA2aNodeCore({
     profile,
     advertisedBase: config.publicOrigin,
@@ -294,11 +288,61 @@ export async function bootstrapCloudRuntime(
       },
     });
 
-  // 5) 单端口路由：A2A 面 / 商家面 / 探针，各自鉴权边界不变。
+  // 4.5) BD-02：私有管理 API（/merchant/api/*）。会话与 /admin 同源；业务经共用
+  //      MerchantApplicationService；权威操作记录落 state.sqlite。管理面未装配
+  //      （无 admin 会话）时不挂载——/merchant/api 维持别名/404 旧行为。
+  const adminOptions = assembly.serverOptions.admin;
+  let managementDb: DatabaseSync | undefined;
+  let merchantApiHandler: CloudRequestListener | undefined;
+  if (adminOptions !== undefined) {
+    managementDb = new DatabaseSync(path.join(config.dataDir, "state.sqlite"));
+    merchantApiHandler = createMerchantManagementApiHandler({
+      merchantId: profile.owner_id,
+      // 单代次实例（与 M2 挑战应答的 currentGeneration 同值）；代次切换属 BD-05。
+      generation: () => 1,
+      runtimeVersion: PRODUCT_VERSION,
+      sessions: adminOptions.sessions,
+      ...(adminOptions.secureCookies === true ? { secureCookies: true } : {}),
+      allowedOrigins: [config.publicOrigin],
+      listPending: () => adminOptions.surface.listPending(),
+      mintCandidateConfirmation: (input) => adminOptions.store.createConfirmation(input),
+      executeDecision: async (input) => {
+        if (input.approve) {
+          await adminOptions.surface.executeApproved(
+            input.candidateId,
+            input.actorId,
+            input.confirmationRef,
+          );
+        } else {
+          await adminOptions.surface.rejectCandidate(
+            input.candidateId,
+            input.actorId,
+            input.confirmationRef,
+          );
+        }
+      },
+      policy: () => {
+        const current = assembly.policy();
+        return current.digest === ""
+          ? undefined
+          : { version: current.version, digest: current.digest };
+      },
+      operations: new MerchantManagementOperationStore({ db: managementDb }),
+      serviceState,
+      readiness: async () => {
+        const report = await readiness();
+        return { ready: report.ready, checks: report.checks };
+      },
+      log,
+    });
+  }
+
+  // 5) 单端口路由：A2A 面 / 商家面 / 管理面 / 探针，各自鉴权边界不变。
   const merchantHandler = createMerchantHttpHandler(assembly.serverOptions);
   const router = createCloudRouter({
     a2aHandler: core.server.handler(),
     merchantHandler: merchantHandler.handler,
+    ...(merchantApiHandler !== undefined ? { merchantApiHandler } : {}),
     readiness,
     a2aPaths: [CLOUD_A2A_PATH],
     // 绑定挑战应答（M2 §6.3）：只签发给本实例的受限结构挑战，一次性、有速率上限。
@@ -335,6 +379,7 @@ export async function bootstrapCloudRuntime(
       });
     });
   } catch (err) {
+    managementDb?.close();
     core.close();
     await assembly.close().catch(() => undefined);
     throw err;
@@ -371,6 +416,7 @@ export async function bootstrapCloudRuntime(
       await merchantHandler.close().catch(() => undefined);
       core.close();
       await assembly.close().catch(() => undefined);
+      managementDb?.close();
     },
   };
 }

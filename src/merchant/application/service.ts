@@ -73,6 +73,25 @@ export interface ApprovalPage {
   next_cursor: string | null;
 }
 
+/** BD §13.2 的最小公开商品投影（成本/底价在私有策略区，绝不经此通道）。 */
+export interface MerchantProductProjection {
+  sku: string;
+  title: string | null;
+  currency: string;
+  /** 价格（major units，与 MerchantProductSource 的既有单位契约一致）。 */
+  price: number;
+  price_unit: string | null;
+  min_order_qty: number | null;
+  valid_until: string | null;
+  updated_at: string | null;
+  status: string;
+}
+
+export interface MerchantProductPage {
+  items: MerchantProductProjection[];
+  next_cursor: string | null;
+}
+
 /** BD §11.1 OperationReceipt。`unknown` 必须保留查询/对账路径。 */
 export const OPERATION_STATUSES = ["accepted", "running", "succeeded", "failed", "unknown"] as const;
 export type OperationStatus = (typeof OPERATION_STATUSES)[number];
@@ -178,6 +197,16 @@ export interface MerchantApplicationDeps {
   }) => Promise<{ operationId: string; status: OperationStatus; resultRevision?: number }>;
   /** 操作回执查询（超时/重启后对账用）。 */
   getOperation: (operationId: string) => OperationReceipt | undefined;
+  /**
+   * 当前规则版本与摘要（**脱敏**：策略内容不经理由此通道；§7.2 敏感视图需
+   * 独立权限）。缺省或摘要为空 → unavailable，不伪造规则。
+   */
+  policy?: () => { version: number; digest: string } | undefined;
+  /**
+   * 公开商品分页投影（真实商品源接入属 BD-03；缺省 → unavailable，
+   * **不伪造空目录**——空目录会让「源失联」看起来像「无商品」）。
+   */
+  products?: (query: PageQuery) => Promise<MerchantProductPage>;
   now?: () => Date;
 }
 
@@ -249,6 +278,32 @@ export class MerchantApplicationService {
       throw new ManagementError("not_found", `unknown operation: ${operationId}`);
     }
     return receipt;
+  }
+
+  /** GET /merchant/api/policy —— 规则版本与摘要（脱敏；内容不在此通道）。 */
+  async getPolicy(ctx: VerifiedActorContext): Promise<{ policy_revision: number; digest: string }> {
+    this.authorize(ctx, "policy:read");
+    const current = this.deps.policy?.();
+    if (current === undefined || current.digest === "") {
+      throw new ManagementError("unavailable", "policy projection is not available");
+    }
+    return { policy_revision: current.version, digest: current.digest };
+  }
+
+  /** GET /merchant/api/products —— 公开商品投影分页；无商品源时 503，不伪造空目录。 */
+  async listProducts(
+    ctx: VerifiedActorContext,
+    query: PageQuery = {},
+  ): Promise<MerchantProductPage> {
+    this.authorize(ctx, "products:read");
+    const source = this.deps.products;
+    if (source === undefined) {
+      throw new ManagementError(
+        "unavailable",
+        "product source does not expose a management listing yet",
+      );
+    }
+    return source(query);
   }
 
   // ── 写：确认链与审批 ────────────────────────────────────────────────

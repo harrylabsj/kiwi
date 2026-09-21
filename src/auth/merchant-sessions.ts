@@ -34,6 +34,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
+import { MERCHANT_ROLES, type MerchantRole } from "../merchant/application/actor.js";
+
 /** 管理会话有效期（12 小时）。 */
 export const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -114,7 +116,8 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   merchant_id TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   revoked_at TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'owner'
 );
 `;
 
@@ -122,6 +125,8 @@ export interface AdminSession {
   principal_id: string;
   merchant_id: string;
   expires_at: string;
+  /** 会话角色（BD §7.2 owner/operator/viewer；历史行迁移为 owner）。 */
+  role: MerchantRole;
 }
 
 export class MerchantAdminSessions {
@@ -132,22 +137,37 @@ export class MerchantAdminSessions {
     this.db = options.db;
     this.now = options.now ?? (() => new Date().toISOString());
     this.db.exec(ADMIN_SESSION_SCHEMA);
+    this.migrateRoleColumn();
     // 过期会话清理（审查 P2：管理会话表只增不删）。
     this.db.prepare("DELETE FROM admin_sessions WHERE expires_at <= ?").run(this.now());
   }
 
+  /** 既有库迁移：admin_sessions 补 role 列（历史会话按 owner 处理）。 */
+  private migrateRoleColumn(): void {
+    const columns = this.db
+      .prepare("SELECT name FROM pragma_table_info('admin_sessions')")
+      .all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "role")) {
+      this.db.exec("ALTER TABLE admin_sessions ADD COLUMN role TEXT NOT NULL DEFAULT 'owner'");
+    }
+  }
+
   /** 登录成功签发会话（明文只在响应 cookie 中；落库为 sha256 摘要）。 */
-  createSession(input: { principalId: string; merchantId: string }): {
+  createSession(input: { principalId: string; merchantId: string; role?: MerchantRole }): {
     sessionId: string;
     expiresAt: string;
   } {
+    const role = input.role ?? "owner";
+    if (!MERCHANT_ROLES.includes(role)) {
+      throw new Error(`unknown merchant role: ${String(role)}`);
+    }
     const sessionId = `kadm_${randomBytes(24).toString("base64url")}`;
     const expiresAt = new Date(Date.parse(this.now()) + ADMIN_SESSION_TTL_MS).toISOString();
     this.db
       .prepare(
-        "INSERT INTO admin_sessions (session_digest, principal_id, merchant_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO admin_sessions (session_digest, principal_id, merchant_id, expires_at, created_at, role) VALUES (?, ?, ?, ?, ?, ?)",
       )
-      .run(sessionDigest(sessionId), input.principalId, input.merchantId, expiresAt, this.now());
+      .run(sessionDigest(sessionId), input.principalId, input.merchantId, expiresAt, this.now(), role);
     return { sessionId, expiresAt };
   }
 
@@ -156,7 +176,13 @@ export class MerchantAdminSessions {
     const row = this.db
       .prepare("SELECT * FROM admin_sessions WHERE session_digest = ?")
       .get(sessionDigest(sessionId)) as
-      | { principal_id: string; merchant_id: string; expires_at: string; revoked_at: string | null }
+      | {
+          principal_id: string;
+          merchant_id: string;
+          expires_at: string;
+          revoked_at: string | null;
+          role: string | null;
+        }
       | undefined;
     if (row === undefined || row.revoked_at !== null) return undefined;
     if (row.expires_at <= this.now()) return undefined;
@@ -164,6 +190,7 @@ export class MerchantAdminSessions {
       principal_id: row.principal_id,
       merchant_id: row.merchant_id,
       expires_at: row.expires_at,
+      role: normalizeRole(row.role),
     };
   }
 
@@ -180,6 +207,12 @@ export class MerchantAdminSessions {
 function sessionDigest(value: string): string {
   // 会话 id 是高熵随机串，sha256 摘要落库（与 oauth token 同口径）
   return createHash("sha256").update(value).digest("hex");
+}
+
+function normalizeRole(raw: string | null): MerchantRole {
+  // 迁移前创建的历史行 role 为空（DEFAULT 'owner' 只对新 ALTER 行生效）——
+  // 缺失/未知一律按 owner 处理（历史管理员语义），不按最低权限静默降权。
+  return MERCHANT_ROLES.includes(raw as MerchantRole) ? (raw as MerchantRole) : "owner";
 }
 
 function escapeHtml(text: string): string {
