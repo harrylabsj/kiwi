@@ -298,13 +298,9 @@ export function createMerchantManagementApiHandler(
       writeJson(res, 200, await readService.getStatus(auth.ctx), { "x-request-id": requestId });
       return;
     }
-    if (rest === "/products") {
-      const auth = requireActor(req);
-      writeJson(res, 200, await readService.listProducts(auth.ctx, pageQuery(url)), {
-        "x-request-id": requestId,
-      });
-      return;
-    }
+    // `/products` 暂不复用 legacy major-unit Number 投影。Workbench v1 要求
+    // currency + amount_minor 十进制整数字符串；精确数据源接线前明确 404，不能把
+    // 旧浮点价格重新包装成“精确金额”。
     if (rest === "/approvals") {
       const auth = requireActor(req);
       writeJson(res, 200, await readService.listApprovals(auth.ctx, pageQuery(url)), {

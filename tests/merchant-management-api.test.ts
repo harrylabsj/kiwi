@@ -605,6 +605,15 @@ describe("Workbench /merchant/api/v1 — RFC 9457 与兼容读取", () => {
     expect(missing.status).toBe(404);
     expect(missing.headers.get("content-type")).toContain("application/problem+json");
     expect(await missing.json()).toMatchObject({ code: "RESOURCE_NOT_FOUND", status: 404 });
+
+    const products = await fetch(`${base}/merchant/api/v1/products`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(products.status).toBe(404);
+    expect(await products.json()).toMatchObject({
+      code: "RESOURCE_NOT_FOUND",
+      status: 404,
+    });
   });
 
   it("legacy /merchant/api/* 继续使用既有契约，不被静默改写", async () => {
