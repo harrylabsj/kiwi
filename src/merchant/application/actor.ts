@@ -47,7 +47,9 @@ export const MERCHANT_PERMISSIONS = [
   "policy:draft",
   "approvals:decide",
   "service:pause",
-  // owner 专属：恢复接待、读敏感策略、删资源
+  // owner 专属：开通（创建云资源——BD §7.2「权限扩张/资源删除由 owner」同族）、
+  // 恢复接待、读敏感策略、删资源
+  "onboarding:manage",
   "policy:read_sensitive",
   "service:resume",
   "resources:delete",
@@ -81,6 +83,7 @@ const ROLE_PERMISSIONS: Readonly<Record<MerchantRole, readonly MerchantPermissio
     "policy:draft",
     "approvals:decide",
     "service:pause",
+    "onboarding:manage",
     "policy:read_sensitive",
     "service:resume",
     "resources:delete",

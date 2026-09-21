@@ -77,6 +77,9 @@ import {
   MerchantManagementOperationStore,
 } from "./operation-store.js";
 import type { MutableServiceState } from "./service-state.js";
+import { OnboardingStore } from "../../cloud/onboarding/store.js";
+import { checkStepSubmission, planWizard, WIZARD_STEPS } from "../../cloud/onboarding/steps.js";
+import type { AuthoritativeEvidence, Evidence } from "../../cloud/onboarding/types.js";
 
 const API_PREFIX = "/merchant/api";
 const MAX_BODY_BYTES = 1_048_576;
@@ -134,6 +137,21 @@ export interface MerchantManagementApiOptions {
   serviceState: MutableServiceState;
   /** 就绪结论提供者（/status 与 resume 就绪门共用；只回检查名，不回细节）。 */
   readiness: () => Promise<{ ready: boolean; checks: Record<string, { ok: boolean }> }>;
+  /**
+   * 开通向导（M4 §5.4；读写同一份 `OnboardingStore`）。
+   *
+   * **权威证据只从 `platformEvidence` 取**（服务端适配器），**绝不接受请求体自报**——
+   * 否则客户端就能伪造"平台查询回执"，正是 T029 要挡的事。未配置该适配器时：
+   * 需要权威证据的步骤一律 **503**（不推进），确定性步骤（登录绑定）照常可走。
+   */
+  onboarding?: {
+    store: OnboardingStore;
+    platformEvidence?: (input: {
+      stepId: string;
+      recordId: string;
+      /** 平台报告的 applicationId（适配器从真实回执里取，不来自请求）。 */
+    }) => Promise<AuthoritativeEvidence | undefined>;
+  };
   log?: (line: string) => void;
   now?: () => Date;
 }
@@ -270,6 +288,14 @@ export function createMerchantManagementApiHandler(
       writeJson(res, 200, await readService.listProducts(auth.ctx, pageQuery(url)));
       return;
     }
+    if (rest === "/onboarding") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "onboarding:manage");
+      const channel = onboardingChannel();
+      const record = channel.store.activeRecord(auth.ctx.merchantId) ?? null;
+      writeJson(res, 200, { record, plan: record === null ? null : planWizard(record) });
+      return;
+    }
     if (rest === "/policy") {
       const auth = requireActor(req);
       writeJson(res, 200, await readService.getPolicy(auth.ctx));
@@ -304,6 +330,25 @@ export function createMerchantManagementApiHandler(
   async function routePost(req: IncomingMessage, res: ServerResponse, rest: string): Promise<void> {
     if (rest === "/confirmations") {
       await postConfirmation(req, res);
+      return;
+    }
+    if (rest === "/onboarding/intents") {
+      await postOnboardingIntent(req, res);
+      return;
+    }
+    const advanceMatch = /^\/onboarding\/([^/]+)\/advance$/.exec(rest);
+    if (advanceMatch !== null) {
+      await postOnboardingAdvance(req, res, pathSegment(advanceMatch[1] ?? ""));
+      return;
+    }
+    const cancelMatch = /^\/onboarding\/([^/]+)\/cancel$/.exec(rest);
+    if (cancelMatch !== null) {
+      await postOnboardingCancel(req, res, pathSegment(cancelMatch[1] ?? ""));
+      return;
+    }
+    const refusedMatch = /^\/onboarding\/([^/]+)\/consent-refused$/.exec(rest);
+    if (refusedMatch !== null) {
+      await postOnboardingConsentRefused(req, res, pathSegment(refusedMatch[1] ?? ""));
       return;
     }
     if (rest === "/service/pause") {
@@ -350,6 +395,332 @@ export function createMerchantManagementApiHandler(
    * 非候选命令目前仅 service.resume（管理确认表，单次核销）。
    * **确认引用不能由普通对话工具申请**（§7.3）——本端点只接受页面会话。
    */
+
+  // ── 开通向导（M4 §5.4）──────────────────────────────────────────────
+  //
+  // 写在这里而不是 /admin/*：那是"审核面"（一次性确认凭证、无 CSRF），本 API 面
+  // 已有会话→主体 + CSRF + 幂等四元组 + 错误码映射，向导是商家自己的操作（BD §9）。
+
+  /** 向导依赖；未配置 → 503（不伪造一个能用的向导）。 */
+  function onboardingChannel(): NonNullable<MerchantManagementApiOptions["onboarding"]> {
+    const channel = options.onboarding;
+    if (channel === undefined) {
+      throw new ManagementError("unavailable", "onboarding is not configured");
+    }
+    return channel;
+  }
+
+  /**
+   * POST /onboarding/intents —— 打开/复用开通意图（§7.1：重复点击只返回同一条）。
+   *
+   * 幂等：同键同摘要回原结果、同键不同摘要 409（与其它写命令同口径）。
+   */
+  async function postOnboardingIntent(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const auth = requireActor(req);
+    assertWriteGuards(req, auth.sessionId);
+    const body = await readJsonBody(req);
+    const fields = objectFields(body, [
+      "intent_id",
+      "version_digest",
+      "idempotency_key",
+      "new_generation",
+    ]);
+    authorizeOrThrow(auth.ctx, "onboarding:manage");
+    const channel = onboardingChannel();
+    const intentId = requireString(fields["intent_id"], "intent_id");
+    const versionDigest = requireString(fields["version_digest"], "version_digest");
+    const idempotencyKey = requireString(fields["idempotency_key"], "idempotency_key");
+    const newGeneration = fields["new_generation"] === true;
+    const requestDigest = managementRequestDigest({
+      intent_id: intentId,
+      version_digest: versionDigest,
+      new_generation: newGeneration,
+    });
+    const probed = operations.probe({
+      merchantId: auth.ctx.merchantId,
+      actorId: auth.ctx.actorId,
+      commandType: "onboarding.open_intent",
+      idempotencyKey,
+      requestDigest,
+    });
+    if (probed.kind === "replay") {
+      writeJson(res, 200, probed.receipt);
+      return;
+    }
+    if (probed.kind === "conflict") {
+      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      return;
+    }
+    const begun = operations.begin({
+      merchantId: auth.ctx.merchantId,
+      actorId: auth.ctx.actorId,
+      commandType: "onboarding.open_intent",
+      idempotencyKey,
+      requestDigest,
+    });
+    if (begun.kind === "replay") {
+      writeJson(res, 200, begun.receipt);
+      return;
+    }
+    if (begun.kind === "conflict") {
+      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      return;
+    }
+    try {
+      const record = channel.store.openIntent({
+        merchantId: auth.ctx.merchantId,
+        intentId,
+        versionDigest,
+        idempotencyKey: `onb-open:${idempotencyKey}`,
+        requestDigest,
+        ...(newGeneration ? { newGeneration: true } : {}),
+      });
+      const receipt: OperationReceipt = {
+        ...staticReceipt(begun.operationId, "onboarding.open_intent", "succeeded"),
+        resource_ref: `onboarding:${record.recordId}`,
+        completed_at: now().toISOString(),
+      };
+      operations.complete(begun.operationId, "succeeded", receipt);
+      writeJson(res, 200, { ...receipt, record });
+      return;
+    } catch (err) {
+      // 存储层拒绝（非法输入/冲突）→ 释放占位；未产生业务效果，可修正后原键重试。
+      operations.release(begun.operationId);
+      respondError(res, err);
+      return;
+    }
+  }
+
+  /**
+   * POST /onboarding/{id}/advance —— 推进**一步**（§5.4）。
+   *
+   * 证据纪律（T007/T029）：请求体**只能给 `note`（留痕用）**，不能给权威证据。
+   * 需要权威证据的步骤由服务端 `platformEvidence` 适配器去平台取回执；适配器未配置
+   * 或取不到 → **不推进**（503 / 拒绝），绝不接受客户端自称的"查询回执"。
+   */
+  async function postOnboardingAdvance(
+    req: IncomingMessage,
+    res: ServerResponse,
+    recordId: string,
+  ): Promise<void> {
+    const auth = requireActor(req);
+    assertWriteGuards(req, auth.sessionId);
+    const body = await readJsonBody(req);
+    const fields = objectFields(body, ["step", "expected_revision", "idempotency_key", "note"]);
+    authorizeOrThrow(auth.ctx, "onboarding:manage");
+    const channel = onboardingChannel();
+    const stepId = requireString(fields["step"], "step");
+    const expectedRevision = requireInteger(fields["expected_revision"], "expected_revision");
+    const idempotencyKey = requireString(fields["idempotency_key"], "idempotency_key");
+    const note = optionalString(fields["note"], "note");
+
+    const record = channel.store.getRecord(recordId);
+    if (record === undefined || record.merchantId !== auth.ctx.merchantId) {
+      // 不区分"不存在"与"不归本商家"（防枚举）
+      throw new ManagementError("not_found", `unknown onboarding record: ${recordId}`);
+    }
+    const definition = WIZARD_STEPS.find((step) => step.id === stepId);
+    if (definition === undefined) {
+      throw new ManagementError("invalid_input", `unknown wizard step: ${stepId}`);
+    }
+
+    const requestDigest = managementRequestDigest({ record_id: recordId, step: stepId, expected_revision: expectedRevision });
+    const probed = operations.probe({
+      merchantId: auth.ctx.merchantId,
+      actorId: auth.ctx.actorId,
+      commandType: "onboarding.advance",
+      idempotencyKey,
+      requestDigest,
+    });
+    if (probed.kind === "replay") {
+      writeJson(res, 200, probed.receipt);
+      return;
+    }
+    if (probed.kind === "conflict") {
+      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      return;
+    }
+    const begun = operations.begin({
+      merchantId: auth.ctx.merchantId,
+      actorId: auth.ctx.actorId,
+      commandType: "onboarding.advance",
+      idempotencyKey,
+      requestDigest,
+    });
+    if (begun.kind === "replay") {
+      writeJson(res, 200, begun.receipt);
+      return;
+    }
+    if (begun.kind === "conflict") {
+      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      return;
+    }
+    try {
+      // 证据获取与准入判定排在**幂等探测之后**：同键重放必须先回原回执（UC20），
+      // 不能被"适配器未配置/取不到回执"的 503 抢先——那是两条不同的语义。
+      let evidence: Evidence | undefined;
+      if (definition.requiresAuthoritativeEvidence) {
+        const adapter = channel.platformEvidence;
+        if (adapter === undefined) {
+          operations.release(begun.operationId);
+          throw new ManagementError(
+            "tool_binding_unavailable",
+            `step ${stepId} needs authoritative platform evidence; the platform adapter is not configured`,
+          );
+        }
+        const obtained = await adapter({ stepId, recordId: record.recordId });
+        if (obtained === undefined) {
+          operations.release(begun.operationId);
+          throw new ManagementError(
+            "unavailable",
+            `platform did not return an authoritative receipt for step ${stepId}`,
+          );
+        }
+        evidence = obtained;
+      } else if (note !== undefined) {
+        // 非权威留痕（例如商家拒绝的原因）：记录，但不推进任何状态（§7.2）。
+        channel.store.recordPendingEvidence(record.recordId, {
+          kind: "text_claim",
+          summary: note,
+          observedAt: now().toISOString(),
+        });
+      }
+
+      // 提交前准入判定（状态不对/证据不足都在写之前拒，避免半途改状态）。
+      const verdict = checkStepSubmission(record, definition.id, evidence);
+      if (!verdict.ok) {
+        operations.release(begun.operationId);
+        throw new ManagementError(
+          verdict.code === "evidence_not_authoritative" ? "forbidden" : "conflict",
+          verdict.reason,
+        );
+      }
+
+      const advanced = channel.store.advance({
+        recordId: record.recordId,
+        expectedRevision,
+        nextStatus: definition.advancesTo,
+        step: definition.id,
+        ...(evidence !== undefined ? { evidence } : {}),
+      });
+      const receipt: OperationReceipt = {
+        ...staticReceipt(begun.operationId, "onboarding.advance", "succeeded"),
+        resource_ref: `onboarding:${advanced.recordId}`,
+        result_revision: advanced.revision,
+        completed_at: now().toISOString(),
+      };
+      operations.complete(begun.operationId, "succeeded", receipt);
+      writeJson(res, 200, { ...receipt, record: advanced });
+      return;
+    } catch (err) {
+      // 状态/证据被存储层拒 → 未产生效果，释放占位。
+      operations.release(begun.operationId);
+      respondError(res, err);
+      return;
+    }
+  }
+
+  /** POST /onboarding/{id}/cancel —— 撤销开通意图（终态；不自动删已有云资源）。 */
+  async function postOnboardingCancel(
+    req: IncomingMessage,
+    res: ServerResponse,
+    recordId: string,
+  ): Promise<void> {
+    await onboardSimpleCommand(res, req, recordId, "onboarding.cancel", (store, record) =>
+      store.cancel(record.recordId, record.revision),
+    );
+  }
+
+  /** POST /onboarding/{id}/consent-refused —— T007：商家拒绝授权 = 保持等待。 */
+  async function postOnboardingConsentRefused(
+    req: IncomingMessage,
+    res: ServerResponse,
+    recordId: string,
+  ): Promise<void> {
+    await onboardSimpleCommand(res, req, recordId, "onboarding.consent_refused", (store, record, note) =>
+      store.recordConsentRefused(record.recordId, record.revision, note !== undefined ? { note } : {}),
+    );
+  }
+
+  /** cancel / consent-refused 共用的薄编排（同幂等口径，避免两份重复代码）。 */
+  async function onboardSimpleCommand(
+    res: ServerResponse,
+    req: IncomingMessage,
+    recordId: string,
+    commandType: string,
+    run: (
+      store: OnboardingStore,
+      record: { recordId: string; merchantId: string; revision: number },
+      note: string | undefined,
+    ) => unknown,
+  ): Promise<void> {
+    const auth = requireActor(req);
+    assertWriteGuards(req, auth.sessionId);
+    const body = await readJsonBody(req);
+    const fields = objectFields(body, ["expected_revision", "idempotency_key", "note"]);
+    authorizeOrThrow(auth.ctx, "onboarding:manage");
+    const channel = onboardingChannel();
+    const expectedRevision = requireInteger(fields["expected_revision"], "expected_revision");
+    const idempotencyKey = requireString(fields["idempotency_key"], "idempotency_key");
+    const note = optionalString(fields["note"], "note");
+    const record = channel.store.getRecord(recordId);
+    if (record === undefined || record.merchantId !== auth.ctx.merchantId) {
+      throw new ManagementError("not_found", `unknown onboarding record: ${recordId}`);
+    }
+    if (record.revision !== expectedRevision) {
+      throw new ManagementError(
+        "precondition_changed",
+        `record is at revision ${record.revision}, expected ${expectedRevision}`,
+      );
+    }
+    const requestDigest = managementRequestDigest({ record_id: recordId, expected_revision: expectedRevision });
+    const probed = operations.probe({
+      merchantId: auth.ctx.merchantId,
+      actorId: auth.ctx.actorId,
+      commandType,
+      idempotencyKey,
+      requestDigest,
+    });
+    if (probed.kind === "replay") {
+      writeJson(res, 200, probed.receipt);
+      return;
+    }
+    if (probed.kind === "conflict") {
+      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      return;
+    }
+    const begun = operations.begin({
+      merchantId: auth.ctx.merchantId,
+      actorId: auth.ctx.actorId,
+      commandType,
+      idempotencyKey,
+      requestDigest,
+    });
+    if (begun.kind === "replay") {
+      writeJson(res, 200, begun.receipt);
+      return;
+    }
+    if (begun.kind === "conflict") {
+      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      return;
+    }
+    try {
+      const updated = run(channel.store, record, note);
+      const receipt: OperationReceipt = {
+        ...staticReceipt(begun.operationId, commandType, "succeeded"),
+        resource_ref: `onboarding:${record.recordId}`,
+        completed_at: now().toISOString(),
+      };
+      operations.complete(begun.operationId, "succeeded", receipt);
+      writeJson(res, 200, { ...receipt, record: updated });
+      return;
+    } catch (err) {
+      operations.release(begun.operationId);
+      respondError(res, err);
+      return;
+    }
+  }
+
   async function postConfirmation(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const auth = requireActor(req);
     assertWriteGuards(req, auth.sessionId);
@@ -1080,7 +1451,8 @@ function isKnownPath(rest: string): boolean {
     rest === "/service/pause" ||
     rest === "/service/resume" ||
     rest === "/products/import-drafts" ||
-    rest === "/policy/drafts"
+    rest === "/policy/drafts" ||
+    rest === "/onboarding"
   ) {
     return true;
   }
@@ -1088,7 +1460,8 @@ function isKnownPath(rest: string): boolean {
     /^\/approvals\/[^/]+(\/approve|\/reject)?$/.test(rest) ||
     /^\/operations\/[^/]+$/.test(rest) ||
     /^\/products\/import-drafts\/[^/]+\/commit$/.test(rest) ||
-    /^\/policy\/drafts\/[^/]+\/commit$/.test(rest)
+    /^\/policy\/drafts\/[^/]+\/commit$/.test(rest) ||
+    /^\/onboarding\/([^/]+)\/(advance|cancel|consent-refused)$/.test(rest)
   );
 }
 

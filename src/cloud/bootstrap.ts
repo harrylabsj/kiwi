@@ -43,6 +43,7 @@ import { MerchantImportDraftStore } from "../http/merchant-management/draft-stor
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
+import { OnboardingStore } from "./onboarding/store.js";
 import {
   ManagementError,
   type MerchantProductPage,
@@ -404,6 +405,11 @@ export async function bootstrapCloudRuntime(
         : {}),
       drafts: new MerchantImportDraftStore({ db: managementDb, now: () => new Date().toISOString() }),
       operations: new MerchantManagementOperationStore({ db: managementDb }),
+      // M4 §5.4：开通向导与 /admin/onboarding 读**同一份** OnboardingStore（同一个
+      // state.sqlite），不复制状态机。`platformEvidence` 适配器**故意不配**——平台侧
+      // 取回执的能力尚未落地，因此需要权威证据的步骤会明确 503（不推进），
+      // 绝不用请求体自报的证据顶上（T029）。
+      onboarding: { store: new OnboardingStore(managementDb) },
       serviceState,
       readiness: async () => {
         const report = await readiness();
