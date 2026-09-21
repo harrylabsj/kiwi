@@ -690,8 +690,13 @@ describe("merchant management api — 策略草稿（BD-03，红线 6）", () =>
     });
     expect(draft.status).toBe(200);
     const draftText = JSON.stringify(draft.json);
-    expect(draftText.includes("floor_overrides")).toBe(false);
-    expect(draftText.includes("80")).toBe(false);
+    // 泄漏探针必须是结构化形态（JSON 键名 / JSON 值）：响应里的 draft_id 是
+    // 随机 hex、digest 是 sha256 hex——子串 "80" 恰好出现在其中是 ~7% 概率的
+    // 正常事件（CI 实测踩中），不是补丁内容泄漏。红线 6 禁止的是补丁的键与
+    // 值作为数据出现在响应里。
+    expect(draftText.includes('"floor_overrides"')).toBe(false);
+    expect(draftText.includes('": 80')).toBe(false);
+    expect(draftText.includes('"80"')).toBe(false);
     const committed = await call("POST", `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`, {
       ...owner,
       body: { expected_draft_digest: draft.json["digest"], idempotency_key: "pc1" },
@@ -700,7 +705,7 @@ describe("merchant management api — 策略草稿（BD-03，红线 6）", () =>
     expect(committed.json["result_revision"]).toBe(4);
     expect(policyApplyMock).toHaveBeenCalledWith(patch);
     const receiptText = JSON.stringify(committed.json);
-    expect(receiptText.includes("floor_overrides")).toBe(false);
+    expect(receiptText.includes('"floor_overrides"')).toBe(false);
   });
 
   it("apply 校验失败 → 400 且草稿保留可重试；提交状态互斥", async () => {
