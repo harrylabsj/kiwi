@@ -17,6 +17,20 @@ export const GRANT_ACTIONS = [
 export type GrantAction = (typeof GRANT_ACTIONS)[number];
 export type GrantResourceType = "merchant" | "product";
 
+export interface MerchantGrantProjection {
+  grant_id: string;
+  subject_id: string;
+  merchant_id: string;
+  action: GrantAction;
+  resource_type: GrantResourceType;
+  resource_selector: { kind: "merchant" | "all_products" | "sku_ids"; sku_ids?: string[] };
+  expires_at: string;
+  grant_version: number;
+  granted_by: string;
+  created_at: string;
+  revoked_at: string | null;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS merchant_operator_grants (
   grant_id TEXT PRIMARY KEY,
@@ -160,6 +174,34 @@ export class MerchantGrantStore {
     return row?.generation ?? 0;
   }
 
+  getGrant(merchantId: string, grantId: string): MerchantGrantProjection | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM merchant_operator_grants WHERE merchant_id=? AND grant_id=?")
+      .get(merchantId, grantId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : grantProjection(row);
+  }
+
+  listGrants(
+    merchantId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ): { items: MerchantGrantProjection[]; next_cursor: string | null } {
+    const offset = options.cursor === undefined ? 0 : Number.parseInt(options.cursor, 10);
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new MerchantGrantError("invalid_input", "grant cursor is invalid");
+    }
+    const limit = Math.min(Math.max(options.limit ?? 50, 1), 100);
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM merchant_operator_grants WHERE merchant_id=?
+         ORDER BY created_at DESC, grant_id LIMIT ? OFFSET ?`,
+      )
+      .all(merchantId, limit + 1, offset) as Array<Record<string, unknown>>;
+    return {
+      items: rows.slice(0, limit).map(grantProjection),
+      next_cursor: rows.length > limit ? String(offset + limit) : null,
+    };
+  }
+
   authorize(
     context: VerifiedActorContext,
     input: { action: GrantAction; resourceType: GrantResourceType; resourceIds?: readonly string[] },
@@ -272,4 +314,20 @@ function requireText(value: string, field: string): string {
   const text = String(value ?? "").trim();
   if (text === "") throw new MerchantGrantError("invalid_input", `${field} must be non-empty`);
   return text;
+}
+
+function grantProjection(row: Record<string, unknown>): MerchantGrantProjection {
+  return {
+    grant_id: String(row["grant_id"]),
+    subject_id: String(row["subject_id"]),
+    merchant_id: String(row["merchant_id"]),
+    action: String(row["action"]) as GrantAction,
+    resource_type: String(row["resource_type"]) as GrantResourceType,
+    resource_selector: JSON.parse(String(row["resource_selector_json"])) as MerchantGrantProjection["resource_selector"],
+    expires_at: String(row["expires_at"]),
+    grant_version: Number(row["grant_version"]),
+    granted_by: String(row["granted_by"]),
+    created_at: String(row["created_at"]),
+    revoked_at: row["revoked_at"] === null ? null : String(row["revoked_at"]),
+  };
 }

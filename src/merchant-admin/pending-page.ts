@@ -29,6 +29,7 @@ import type {
   CommittedDecisionProof,
   CommittedDecisionVerifier,
 } from "../merchant-core/commands.js";
+import type { GrantAction, GrantResourceType } from "../merchant/grant-store.js";
 
 export interface MerchantAdminSurface {
   listPending(): WriteApprovalCandidate[];
@@ -66,6 +67,20 @@ export interface MerchantAdminSurface {
     authorization: Record<string, unknown>;
     reason?: string;
   }): Promise<unknown> | unknown;
+  prepareGrantCreate?(input: {
+    ownerActorId: string;
+    subjectId: string;
+    action: GrantAction;
+    resourceType: GrantResourceType;
+    resourceSelector: "merchant" | "all_products" | readonly string[];
+    expiresAt: string;
+    reason?: string;
+  }): Promise<unknown> | unknown;
+  prepareGrantRevoke?(input: {
+    ownerActorId: string;
+    grantId: string;
+    reason?: string;
+  }): Promise<unknown> | unknown;
 }
 
 /** 从 merchant-core 构造管理面（确认通道 = core 的命令日志）。 */
@@ -81,6 +96,8 @@ export function merchantAdminSurface(core: MerchantCoreService): MerchantAdminSu
     prepareBroadcastPublish: (input) => core.prepareBroadcastPublish(input),
     prepareBroadcastRevise: (input) => core.prepareBroadcastRevise(input),
     prepareBroadcastWithdraw: (input) => core.prepareBroadcastWithdraw(input),
+    prepareGrantCreate: (input) => core.prepareGrantCreate(input),
+    prepareGrantRevoke: (input) => core.prepareGrantRevoke(input),
   };
 }
 

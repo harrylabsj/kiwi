@@ -13,7 +13,12 @@ import { WorkbenchConfirmationStore } from "../src/http/merchant-management/weba
 import { createVerifiedActorContext } from "../src/merchant/application/actor.js";
 import { MerchantFeedStore } from "../src/merchant/feed-store.js";
 import { BROADCAST_TOOLS } from "../src/merchant/feed-executors.js";
-import { MerchantGrantStore } from "../src/merchant/grant-store.js";
+import { GRANT_TOOLS } from "../src/merchant/grant-executors.js";
+import {
+  MerchantGrantStore,
+  type GrantAction,
+  type GrantResourceType,
+} from "../src/merchant/grant-store.js";
 
 const MERCHANT = "merchant-wb-api";
 const ACTOR = "owner:merchant-wb-api";
@@ -66,6 +71,32 @@ function preparedBroadcast(input: {
   return { candidate: item };
 }
 
+function preparedGrant(input: {
+  ownerActorId: string;
+  subjectId: string;
+  action: GrantAction;
+  resourceType: GrantResourceType;
+  resourceSelector: "merchant" | "all_products" | readonly string[];
+  expiresAt: string;
+}): { candidate: WriteApprovalCandidate } {
+  const item: WriteApprovalCandidate = {
+    ...candidate,
+    candidate_id: `candidate-grant-${pending.length}`,
+    tool: GRANT_TOOLS.create,
+    arguments: {
+      owner_actor_id: input.ownerActorId,
+      subject_id: input.subjectId,
+      grant_action: input.action,
+      resource_type: input.resourceType,
+      resource_selector: input.resourceSelector,
+      expires_at: input.expiresAt,
+    },
+    arguments_hash: `sha256:grant-${pending.length}`,
+  };
+  pending.push(item);
+  return { candidate: item };
+}
+
 beforeAll(async () => {
   confirmations.persistVerifiedCredential({
     registrationVerified: true,
@@ -95,6 +126,7 @@ beforeAll(async () => {
       workbenchFeed: feed,
       workbenchGrants: grants,
       prepareBroadcastPublish: preparedBroadcast,
+      prepareGrantCreate: preparedGrant,
       webauthnRegistration: {
         rpName: "Kiwi Merchant",
         rpId: RP_ID,
@@ -387,5 +419,46 @@ describe("Workbench v1 trusted confirmation API", () => {
     );
     expect(revoked.status).toBe(403);
     expect(await revoked.json()).toMatchObject({ code: "PERMISSION_REVOKED" });
+  });
+
+  it("makes Owner grant changes candidates and exposes no direct grant mutation route", async () => {
+    const before = grants.listGrants(MERCHANT).items.length;
+    const drafted = await post("/merchant/api/v1/operator-grant-drafts", {
+      action: "create",
+      subject_id: "operator:new",
+      grant_action: "broadcast.draft",
+      resource_type: "merchant",
+      resource_selector: "merchant",
+      expires_at: "2027-09-21T12:00:00.000Z",
+    });
+    expect(drafted.status).toBe(201);
+    const body = (await drafted.json()) as { candidate: WriteApprovalCandidate };
+    expect(body.candidate.tool).toBe(GRANT_TOOLS.create);
+    expect(grants.listGrants(MERCHANT).items).toHaveLength(before);
+
+    const direct = await post("/merchant/api/v1/operator-grants", {
+      subject_id: "operator:new",
+    });
+    expect(direct.status).toBe(404);
+
+    const created = await post("/merchant/api/v1/confirmations", {
+      candidate_id: body.candidate.candidate_id,
+      decision: "approve",
+    });
+    expect(created.status).toBe(201);
+    const descriptor = (await created.json()) as { confirmation_id: string };
+    const projection = await fetch(
+      `${base}/merchant/api/v1/confirmations/${descriptor.confirmation_id}`,
+      { headers: { cookie: auth.cookie } },
+    );
+    expect(await projection.json()).toMatchObject({
+      snapshot: {
+        decision_authorization: {
+          actor_id: ACTOR,
+          actor_role: "owner",
+          action: "grants.manage",
+        },
+      },
+    });
   });
 });

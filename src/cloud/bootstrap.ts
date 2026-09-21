@@ -58,6 +58,7 @@ import {
   isCurrentGrantAuthorization,
   MerchantGrantStore,
 } from "../merchant/grant-store.js";
+import { createGrantExecutors } from "../merchant/grant-executors.js";
 import { OnboardingStore } from "./onboarding/store.js";
 import {
   ManagementError,
@@ -240,26 +241,32 @@ export async function bootstrapCloudRuntime(
       mcpPath: MCP_PATH,
       authMode: "oauth",
       issuer: config.publicOrigin,
-      extraExecutors: createBroadcastExecutors({
-        merchantId: profile.owner_id,
-        getStore: () => feedStoreForExecutors,
-        authorizeExecution: (args) => {
-          const authorization = recordValue(args["authorization"]);
-          const actorId = String(authorization["actor_id"] ?? "");
-          const grants = grantStoreForExecutors;
-          if (
-            grants === undefined ||
-            !isCurrentGrantAuthorization(grants, {
-              merchantId: profile.owner_id,
-              actorId,
-              action: "broadcast.draft",
-              snapshot: authorization,
-            })
-          ) {
-            throw new Error("broadcast draft authorization is missing");
-          }
-        },
-      }),
+      extraExecutors: [
+        ...createBroadcastExecutors({
+          merchantId: profile.owner_id,
+          getStore: () => feedStoreForExecutors,
+          authorizeExecution: (args) => {
+            const authorization = recordValue(args["authorization"]);
+            const actorId = String(authorization["actor_id"] ?? "");
+            const grants = grantStoreForExecutors;
+            if (
+              grants === undefined ||
+              !isCurrentGrantAuthorization(grants, {
+                merchantId: profile.owner_id,
+                actorId,
+                action: "broadcast.draft",
+                snapshot: authorization,
+              })
+            ) {
+              throw new Error("broadcast draft authorization is missing");
+            }
+          },
+        }),
+        ...createGrantExecutors({
+          merchantId: profile.owner_id,
+          getStore: () => grantStoreForExecutors,
+        }),
+      ],
       log,
     });
   } catch (err) {
@@ -494,6 +501,12 @@ export async function bootstrapCloudRuntime(
       ...(adminOptions.surface.prepareBroadcastWithdraw !== undefined
         ? { prepareBroadcastWithdraw: adminOptions.surface.prepareBroadcastWithdraw }
         : {}),
+      ...(adminOptions.surface.prepareGrantCreate !== undefined
+        ? { prepareGrantCreate: adminOptions.surface.prepareGrantCreate }
+        : {}),
+      ...(adminOptions.surface.prepareGrantRevoke !== undefined
+        ? { prepareGrantRevoke: adminOptions.surface.prepareGrantRevoke }
+        : {}),
       serviceState,
       readiness: async () => {
         const report = await readiness();
@@ -514,13 +527,19 @@ export async function bootstrapCloudRuntime(
             lease.operationId,
           );
           if (authorization !== undefined) {
-            if (!isCurrentGrantAuthorization(grantStore, {
-              merchantId: profile.owner_id,
-              actorId: lease.actorId,
-              action: "broadcast.decide",
-              snapshot: authorization,
-            })) {
-              return { status: "failed", error: "broadcast decision authorization was revoked" };
+            const action = String(authorization["action"] ?? "");
+            const allowed =
+              action === "grants.manage"
+                ? authorization["actor_id"] === lease.actorId &&
+                  authorization["actor_role"] === "owner"
+                : isCurrentGrantAuthorization(grantStore, {
+                    merchantId: profile.owner_id,
+                    actorId: lease.actorId,
+                    action: "broadcast.decide",
+                    snapshot: authorization,
+                  });
+            if (!allowed) {
+              return { status: "failed", error: "Workbench decision authorization was revoked" };
             }
           }
           await adminOptions.surface.executeCommittedDecision(

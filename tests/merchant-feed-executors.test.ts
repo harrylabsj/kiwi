@@ -3,7 +3,10 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
 import { migrateMemorySchema } from "../src/agent/memory/schema.js";
-import { WriteApprovalCandidateStore } from "../src/agent/merchant/action-candidate.js";
+import {
+  contentHash,
+  WriteApprovalCandidateStore,
+} from "../src/agent/merchant/action-candidate.js";
 import { FakeMerchantClient, fakeMerchantProduct } from "../src/agent/merchant/fake-merchant-client.js";
 import { MerchantFeedStore } from "../src/merchant/feed-store.js";
 import { createBroadcastExecutors } from "../src/merchant/feed-executors.js";
@@ -52,7 +55,35 @@ describe("approval-gated Feed executors", () => {
     const publish = await core.prepareBroadcastPublish({ broadcast: content("Initial") });
     const broadcastId = String(publish.candidate.arguments.broadcast_id);
     expect(feed.getBroadcast("merchant-001", broadcastId)).toBeUndefined();
-    expect((await core.executeApproved(publish.candidate.candidate_id)).kind).toBe("executed");
+    await expect(core.executeApproved(publish.candidate.candidate_id)).rejects.toThrow(/WebAuthn/);
+    expect(feed.getBroadcast("merchant-001", broadcastId)).toBeUndefined();
+    db.close();
+  });
+
+  it("publish/revise/withdraw executors apply after the committed-decision gate", async () => {
+    const { db, feed, core } = fixture();
+    const execute = async (candidateId: string) => {
+      const candidate = core.getCommand(candidateId)!;
+      const verifier = {
+        verifyCommittedDecision: (input: { actionDigest: string }) =>
+          input.actionDigest === contentHash({
+            arguments: candidate.arguments,
+            preconditions: candidate.preconditions,
+          }),
+      };
+      return await core.executeCommittedDecision(
+        {
+          operationId: `operation-${candidateId}`,
+          candidateId,
+          actorId: PRINCIPAL,
+          decision: "approve",
+        },
+        verifier,
+      );
+    };
+    const publish = await core.prepareBroadcastPublish({ broadcast: content("Initial") });
+    const broadcastId = String(publish.candidate.arguments.broadcast_id);
+    expect(await execute(publish.candidate.candidate_id)).toMatchObject({ kind: "executed" });
     expect(feed.getBroadcast("merchant-001", broadcastId)).toMatchObject({
       title: "Initial",
       revision: 1,
@@ -65,7 +96,7 @@ describe("approval-gated Feed executors", () => {
       broadcast: content("Revised"),
     });
     expect(feed.getBroadcast("merchant-001", broadcastId)?.title).toBe("Initial");
-    expect((await core.executeApproved(revise.candidate.candidate_id)).kind).toBe("executed");
+    expect(await execute(revise.candidate.candidate_id)).toMatchObject({ kind: "executed" });
     expect(feed.getBroadcast("merchant-001", broadcastId)).toMatchObject({
       title: "Revised",
       revision: 2,
@@ -75,7 +106,7 @@ describe("approval-gated Feed executors", () => {
       broadcastId,
       expectedRevision: 2,
     });
-    expect((await core.executeApproved(withdraw.candidate.candidate_id)).kind).toBe("executed");
+    expect(await execute(withdraw.candidate.candidate_id)).toMatchObject({ kind: "executed" });
     expect(feed.getBroadcast("merchant-001", broadcastId)).toMatchObject({
       revision: 3,
       status: "withdrawn",
@@ -96,7 +127,22 @@ describe("approval-gated Feed executors", () => {
     const { db, feed, core } = fixture();
     const publish = await core.prepareBroadcastPublish({ broadcast: content("Initial") });
     const id = String(publish.candidate.arguments.broadcast_id);
-    await core.executeApproved(publish.candidate.candidate_id);
+    const publishCandidate = core.getCommand(publish.candidate.candidate_id)!;
+    await core.executeCommittedDecision(
+      {
+        operationId: "operation-publish",
+        candidateId: publish.candidate.candidate_id,
+        actorId: PRINCIPAL,
+        decision: "approve",
+      },
+      {
+        verifyCommittedDecision: (input) =>
+          input.actionDigest === contentHash({
+            arguments: publishCandidate.arguments,
+            preconditions: publishCandidate.preconditions,
+          }),
+      },
+    );
     const stale = await core.prepareBroadcastRevise({
       broadcastId: id,
       expectedRevision: 1,
@@ -108,7 +154,24 @@ describe("approval-gated Feed executors", () => {
       body: "Concurrent update",
       audience: "public",
     });
-    expect((await core.executeApproved(stale.candidate.candidate_id)).kind).toBe("stale");
+    const staleCandidate = core.getCommand(stale.candidate.candidate_id)!;
+    expect(
+      await core.executeCommittedDecision(
+          {
+            operationId: "operation-stale",
+            candidateId: stale.candidate.candidate_id,
+            actorId: PRINCIPAL,
+            decision: "approve",
+          },
+          {
+            verifyCommittedDecision: (input) =>
+              input.actionDigest === contentHash({
+                arguments: staleCandidate.arguments,
+                preconditions: staleCandidate.preconditions,
+              }),
+          },
+        ),
+    ).toMatchObject({ kind: "stale" });
     expect(feed.getBroadcast("merchant-001", id)?.title).toBe("Concurrent");
     db.close();
   });

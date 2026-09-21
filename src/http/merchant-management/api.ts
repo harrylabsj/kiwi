@@ -90,8 +90,12 @@ import {
 import type { RegistrationResponseJSON } from "@simplewebauthn/server";
 import { BROADCAST_TOOLS } from "../../merchant/feed-executors.js";
 import { MerchantFeedError, type MerchantFeedStore } from "../../merchant/feed-store.js";
+import { GRANT_TOOLS } from "../../merchant/grant-executors.js";
 import {
+  GRANT_ACTIONS,
   MerchantGrantError,
+  type GrantAction,
+  type GrantResourceType,
   type MerchantGrantStore,
 } from "../../merchant/grant-store.js";
 
@@ -189,6 +193,20 @@ export interface MerchantManagementApiOptions {
     broadcastId: string;
     expectedRevision: number;
     authorization: Record<string, unknown>;
+    reason?: string;
+  }) => Promise<unknown> | unknown;
+  prepareGrantCreate?: (input: {
+    ownerActorId: string;
+    subjectId: string;
+    action: GrantAction;
+    resourceType: GrantResourceType;
+    resourceSelector: "merchant" | "all_products" | readonly string[];
+    expiresAt: string;
+    reason?: string;
+  }) => Promise<unknown> | unknown;
+  prepareGrantRevoke?: (input: {
+    ownerActorId: string;
+    grantId: string;
     reason?: string;
   }) => Promise<unknown> | unknown;
   /** Independent registration authorization. Management session alone must never satisfy this callback. */
@@ -373,6 +391,15 @@ export function createMerchantManagementApiHandler(
       );
       return;
     }
+    if (rest === "/operator-grants") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "grants:manage");
+      const grants = requireWorkbenchGrants();
+      writeJson(res, 200, grants.listGrants(auth.ctx.merchantId, pageQuery(url)), {
+        "x-request-id": requestId,
+      });
+      return;
+    }
     const broadcastMatch = /^\/broadcasts\/([^/]+)$/.exec(rest);
     if (broadcastMatch !== null) {
       const auth = requireActor(req);
@@ -509,7 +536,9 @@ export function createMerchantManagementApiHandler(
       const expiresAt = new Date(
         Math.min(Date.parse(candidate.expires_at), now().getTime() + CONFIRMATION_TTL_MS),
       ).toISOString();
-      const decisionAuthorization = authorizeBroadcastCandidate(auth.ctx, candidate, "broadcast.decide");
+      const decisionAuthorization =
+        authorizeBroadcastCandidate(auth.ctx, candidate, "broadcast.decide") ??
+        authorizeGrantCandidate(auth.ctx, candidate);
       const confirmation = confirmations.createRequest({
         merchantId: auth.ctx.merchantId,
         actorId: auth.ctx.actorId,
@@ -595,11 +624,9 @@ export function createMerchantManagementApiHandler(
       if (candidate === undefined || candidate.status !== "pending_approval") {
         throw new ManagementError("not_found", `unknown pending candidate: ${candidateId}`);
       }
-      const currentAuthorization = authorizeBroadcastCandidate(
-        auth.ctx,
-        candidate,
-        "broadcast.decide",
-      );
+      const currentAuthorization =
+        authorizeBroadcastCandidate(auth.ctx, candidate, "broadcast.decide") ??
+        authorizeGrantCandidate(auth.ctx, candidate);
       if (currentAuthorization !== undefined) {
         const confirmationId = requireString(fields["confirmation_id"], "confirmation_id");
         const frozen = requireWorkbenchConfirmations().requestProjection({
@@ -699,6 +726,53 @@ export function createMerchantManagementApiHandler(
       return;
     }
 
+    if (rest === "/operator-grant-drafts") {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "grants:manage");
+      if (auth.ctx.role !== "owner") {
+        throw new ManagementError("forbidden", "only owner can prepare grant changes");
+      }
+      const fields = objectFields(await readJsonBody(req), [
+        "action",
+        "subject_id",
+        "grant_action",
+        "resource_type",
+        "resource_selector",
+        "expires_at",
+        "grant_id",
+        "reason",
+      ]);
+      const action = requireString(fields["action"], "action");
+      const reason = optionalString(fields["reason"], "reason");
+      let prepared: unknown;
+      if (action === "create") {
+        const channel = options.prepareGrantCreate;
+        if (channel === undefined) throw new ManagementError("unavailable", "grant prepare is unavailable");
+        prepared = await channel({
+          ownerActorId: auth.ctx.actorId,
+          subjectId: requireString(fields["subject_id"], "subject_id"),
+          action: requireGrantAction(fields["grant_action"]),
+          resourceType: requireGrantResourceType(fields["resource_type"]),
+          resourceSelector: requireGrantSelector(fields["resource_selector"]),
+          expiresAt: requireString(fields["expires_at"], "expires_at"),
+          ...(reason !== undefined ? { reason } : {}),
+        });
+      } else if (action === "revoke") {
+        const channel = options.prepareGrantRevoke;
+        if (channel === undefined) throw new ManagementError("unavailable", "grant prepare is unavailable");
+        prepared = await channel({
+          ownerActorId: auth.ctx.actorId,
+          grantId: requireString(fields["grant_id"], "grant_id"),
+          ...(reason !== undefined ? { reason } : {}),
+        });
+      } else {
+        throw new ManagementError("invalid_input", "action must be create or revoke");
+      }
+      writeJson(res, 201, prepared, { "x-request-id": requestId });
+      return;
+    }
+
     writeWorkbenchProblem(
       res,
       "RESOURCE_NOT_FOUND",
@@ -723,6 +797,13 @@ export function createMerchantManagementApiHandler(
       throw new ManagementError("unavailable", "Workbench Feed authority is not configured");
     }
     return options.workbenchFeed;
+  }
+
+  function requireWorkbenchGrants(): MerchantGrantStore {
+    if (options.workbenchGrants === undefined) {
+      throw new ManagementError("unavailable", "Workbench grant authority is not configured");
+    }
+    return options.workbenchGrants;
   }
 
   function authorizeBroadcastAction(
@@ -758,6 +839,24 @@ export function createMerchantManagementApiHandler(
       action,
       authorization_generation: scoped.generation,
       matched_grant_ids: scoped.grantIds,
+    };
+  }
+
+  function authorizeGrantCandidate(
+    actor: VerifiedActorContext,
+    candidate: WriteApprovalCandidate,
+  ): Record<string, unknown> | undefined {
+    if (!Object.values(GRANT_TOOLS).includes(candidate.tool as (typeof GRANT_TOOLS)[keyof typeof GRANT_TOOLS])) {
+      return undefined;
+    }
+    authorizeOrThrow(actor, "grants:manage");
+    if (actor.role !== "owner") {
+      throw new ManagementError("forbidden", "only owner can decide grant changes");
+    }
+    return {
+      actor_id: actor.actorId,
+      actor_role: actor.role,
+      action: "grants.manage",
     };
   }
 
@@ -2070,6 +2169,28 @@ function requireInteger(value: unknown, field: string): number {
 function requireDecision(value: unknown): "approve" | "reject" {
   if (value !== "approve" && value !== "reject") {
     throw new ManagementError("invalid_input", "decision must be approve or reject");
+  }
+  return value;
+}
+
+function requireGrantAction(value: unknown): GrantAction {
+  if (typeof value !== "string" || !GRANT_ACTIONS.includes(value as GrantAction)) {
+    throw new ManagementError("invalid_input", "grant_action is invalid");
+  }
+  return value as GrantAction;
+}
+
+function requireGrantResourceType(value: unknown): GrantResourceType {
+  if (value !== "merchant" && value !== "product") {
+    throw new ManagementError("invalid_input", "resource_type must be merchant or product");
+  }
+  return value;
+}
+
+function requireGrantSelector(value: unknown): "merchant" | "all_products" | readonly string[] {
+  if (value === "merchant" || value === "all_products") return value;
+  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string")) {
+    throw new ManagementError("invalid_input", "resource_selector is invalid");
   }
   return value;
 }

@@ -62,6 +62,8 @@ export interface CommandExecutor {
   readonly tool: string;
   /** 风险语义（缺省 write_catalog；报价发布类为 release_quote，v0.1.1 §9.1）。 */
   readonly risk?: string;
+  /** True when legacy /admin confirmation tokens are insufficient; only committed WebAuthn decisions may execute/reject. */
+  readonly requiresCommittedDecision?: boolean;
   /** 重读目标对象前置状态（版本/digest 比对用）。 */
   readPreconditions(args: Record<string, unknown>): Promise<Record<string, unknown>>;
   /** 执行已批准参数。 */

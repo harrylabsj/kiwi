@@ -23,6 +23,7 @@ export function createBroadcastExecutors(options: {
     {
       tool: BROADCAST_TOOLS.publish,
       risk: "broadcast_publish",
+      requiresCommittedDecision: true,
       readPreconditions: async (args) => ({
         broadcast_id: String(args.broadcast_id ?? ""),
         exists: store().getBroadcast(options.merchantId, String(args.broadcast_id ?? "")) !== undefined,
@@ -43,6 +44,7 @@ export function createBroadcastExecutors(options: {
     {
       tool: BROADCAST_TOOLS.revise,
       risk: "broadcast_publish",
+      requiresCommittedDecision: true,
       readPreconditions: async (args) =>
         broadcastPrecondition(
           store().getBroadcast(options.merchantId, String(args.broadcast_id ?? "")),
@@ -66,6 +68,7 @@ export function createBroadcastExecutors(options: {
     {
       tool: BROADCAST_TOOLS.withdraw,
       risk: "broadcast_publish",
+      requiresCommittedDecision: true,
       readPreconditions: async (args) =>
         broadcastPrecondition(
           store().getBroadcast(options.merchantId, String(args.broadcast_id ?? "")),

@@ -50,6 +50,8 @@ import {
   type ExecutorContext,
 } from "./executor.js";
 import { BROADCAST_TOOLS } from "../merchant/feed-executors.js";
+import { GRANT_TOOLS } from "../merchant/grant-executors.js";
+import type { GrantAction, GrantResourceType } from "../merchant/grant-store.js";
 import type { ApplyPolicyResult } from "./policy-runtime.js";
 import type { MerchantPolicy } from "../config/profile.js";
 import { parseProductCsv } from "./product-import.js";
@@ -362,6 +364,44 @@ export class MerchantCoreService {
         broadcast_id: input.broadcastId,
         expected_revision: input.expectedRevision,
         ...(input.authorization !== undefined ? { authorization: input.authorization } : {}),
+      },
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    });
+  }
+
+  prepareGrantCreate(input: {
+    ownerActorId: string;
+    subjectId: string;
+    action: GrantAction;
+    resourceType: GrantResourceType;
+    resourceSelector: "merchant" | "all_products" | readonly string[];
+    expiresAt: string;
+    reason?: string;
+  }) {
+    return this.commands.prepare({
+      tool: GRANT_TOOLS.create,
+      arguments: {
+        owner_actor_id: input.ownerActorId,
+        subject_id: input.subjectId,
+        grant_action: input.action,
+        resource_type: input.resourceType,
+        resource_selector: input.resourceSelector,
+        expires_at: input.expiresAt,
+      },
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    });
+  }
+
+  prepareGrantRevoke(input: {
+    ownerActorId: string;
+    grantId: string;
+    reason?: string;
+  }) {
+    return this.commands.prepare({
+      tool: GRANT_TOOLS.revoke,
+      arguments: {
+        owner_actor_id: input.ownerActorId,
+        grant_id: input.grantId,
       },
       ...(input.reason !== undefined ? { reason: input.reason } : {}),
     });
