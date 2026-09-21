@@ -34,10 +34,10 @@ const SCRIPT = fileURLToPath(
 
 // 真实 kiwi contracts/manifest.json 的固定 bundle digest 与 contract source
 // commit（CLI 级合法用例用它，因为 CLI 从自身位置读取真实 kiwi 根）。
-// 与 contracts/manifest.json 的 bundle_sha256 保持一致（新增 merchant-management/1 契约后更新）；
-// source_commit 指向承载该 bundle 的提交（e88a4db 引入本 bundle 时重锚）。
-const REAL_BUNDLE_SHA = "7d4aab32bd5866af5656e2dc7690944a3c512f0f73168f337ed8c74d1f9e5db7";
-const REAL_SOURCE_COMMIT = "e88a4db40fa5c6ce0c2fc272ef70790432e70c70";
+// 与 contracts/manifest.json 的 bundle_sha256 保持一致（新增 connector-delivery-manifest 契约后更新）；
+// source_commit 指向承载该 bundle 的提交（8af397c 引入本 bundle 时重锚）。
+const REAL_BUNDLE_SHA = "705ea5e2bf530664e7527fcaa9c19e314ea43ab6ad788e851633241e373fa37a";
+const REAL_SOURCE_COMMIT = "8af397c78e5d3d1aa725e2c297507b96c9af2e0a";
 
 const tempDirs: string[] = [];
 function makeTempDir(): string {
