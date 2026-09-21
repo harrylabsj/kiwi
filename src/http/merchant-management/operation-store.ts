@@ -108,6 +108,21 @@ export class MerchantManagementOperationStore {
   }
 
   /**
+   * 只读幂等探测（不建占位）：同键同摘要 → replay；同键异摘要 → conflict；
+   * 未见过 → miss（后续仍需 `begin()` 建占位）。用于「幂等必须先于终态检查」
+   * 的路径（如草稿已 committed 的重放仍要回原回执，UC20）。
+   */
+  probe(
+    input: OperationKey & { requestDigest: string },
+  ): { kind: "replay"; receipt: OperationReceipt } | { kind: "conflict" } | { kind: "miss" } {
+    const row = this.rowByKey(input);
+    if (row === undefined) return { kind: "miss" };
+    const outcome = this.outcomeFromRow(row, input.requestDigest);
+    if (outcome.kind === "conflict") return { kind: "conflict" };
+    return { kind: "replay", receipt: outcome.receipt };
+  }
+
+  /**
    * 幂等入口：同键同摘要 → replay（原回执）；同键异摘要 → conflict；
    * 否则新建 running 占位并返回 operationId。并发同键由 UNIQUE 约束兜底。
    */
@@ -224,7 +239,10 @@ export class MerchantManagementOperationStore {
       | undefined;
   }
 
-  private outcomeFromRow(row: OperationRow, requestDigest: string): BeginOutcome {
+  private outcomeFromRow(
+    row: OperationRow,
+    requestDigest: string,
+  ): { kind: "replay"; receipt: OperationReceipt } | { kind: "conflict" } {
     if (row.request_digest !== requestDigest) return { kind: "conflict" };
     return { kind: "replay", receipt: JSON.parse(row.receipt_json) as OperationReceipt };
   }

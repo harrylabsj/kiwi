@@ -47,6 +47,14 @@ import { contentHash } from "../../agent/merchant/action-candidate.js";
 import type { AdminSession, MerchantAdminSessions } from "../../auth/merchant-sessions.js";
 import { ADMIN_SESSION_COOKIE } from "../../auth/merchant-sessions.js";
 import {
+  parseProductTable,
+  ProductTableError,
+  productTableDigest,
+  type CloudProductRecord,
+  type CloudProductTable,
+} from "../../cloud/product-source.js";
+import { MerchantImportDraftStore } from "./draft-store.js";
+import {
   ActorContextError,
   assertVerifiedActor,
   createVerifiedActorContext,
@@ -108,6 +116,19 @@ export interface MerchantManagementApiOptions {
   policy?: () => { version: number; digest: string } | undefined;
   /** 公开商品分页投影（真实商品源接入属 BD-03；缺省 → 503，不伪造空目录）。 */
   products?: (query: PageQuery) => Promise<MerchantProductPage>;
+  /**
+   * 商品导入落盘通道（配置 KIWI_CLOUD_PRODUCTS_FILE 后可用；缺省 → 503）。
+   * currentTable 供预览与 CAS 基准；commit 必须**原子**（temp+rename，
+   * 全批成功或全批不变，BD §10.1）。
+   */
+  productsImport?: {
+    currentTable: () => { digest: string; records: CloudProductRecord[] };
+    commit: (table: CloudProductTable) => { digest: string };
+  };
+  /** 策略草稿提交（MerchantPolicyRuntime.apply；缺省 → 503）。回执只含版本与摘要。 */
+  policyApply?: (patch: Record<string, unknown>) => Promise<{ version: number; digest: string }>;
+  /** 管理草稿存储（权威存储；**策略草稿原文不出现在任何 API 响应**，红线 6）。 */
+  drafts: MerchantImportDraftStore;
   /** 权威操作/确认记录（state.sqlite）。 */
   operations: MerchantManagementOperationStore;
   serviceState: MutableServiceState;
@@ -296,6 +317,24 @@ export function createMerchantManagementApiHandler(
     const decisionMatch = /^\/approvals\/([^/]+)\/(approve|reject)$/.exec(rest);
     if (decisionMatch !== null) {
       await postApprovalDecision(req, res, pathSegment(decisionMatch[1] ?? ""), decisionMatch[2] === "approve");
+      return;
+    }
+    if (rest === "/products/import-drafts") {
+      await postProductsImportDraft(req, res);
+      return;
+    }
+    const importCommitMatch = /^\/products\/import-drafts\/([^/]+)\/commit$/.exec(rest);
+    if (importCommitMatch !== null) {
+      await postProductsImportCommit(req, res, pathSegment(importCommitMatch[1] ?? ""));
+      return;
+    }
+    if (rest === "/policy/drafts") {
+      await postPolicyDraft(req, res);
+      return;
+    }
+    const policyCommitMatch = /^\/policy\/drafts\/([^/]+)\/commit$/.exec(rest);
+    if (policyCommitMatch !== null) {
+      await postPolicyCommit(req, res, pathSegment(policyCommitMatch[1] ?? ""));
       return;
     }
     if (isKnownPath(rest)) {
@@ -616,6 +655,310 @@ export function createMerchantManagementApiHandler(
     }
   }
 
+  // ── 商品导入（BD §10.1：校验预览 → 确认提交；全批成功或全批不变）────────
+
+  /**
+   * POST /products/import-drafts —— 整表严格校验（任何行错误 → 整表拒绝并报
+   * 行号）+ 当前表 CAS（base_digest）+ 增/改/留/删预览；只存草稿，不动商品表。
+   * 语义是**整表替换**：新表未包含的 SKU 提交后即移除（预览给出 removed 数）。
+   */
+  async function postProductsImportDraft(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const auth = requireActor(req);
+    assertWriteGuards(req, auth.sessionId);
+    const body = await readJsonBody(req);
+    const fields = objectFields(body, ["table", "base_digest", "idempotency_key"]);
+    authorizeOrThrow(auth.ctx, "products:import");
+    const importChannel = options.productsImport;
+    if (importChannel === undefined) {
+      throw new ManagementError("unavailable", "product import storage is not configured");
+    }
+    let table: CloudProductTable;
+    try {
+      table = parseProductTable(fields["table"], "request body");
+    } catch (err) {
+      if (err instanceof ProductTableError) {
+        throw new ManagementError("invalid_input", err.message);
+      }
+      throw err;
+    }
+    if (table.merchant_id !== options.merchantId) {
+      throw new ManagementError("forbidden", "product table merchant_id does not match this instance");
+    }
+    let base: { digest: string; records: CloudProductRecord[] };
+    try {
+      base = importChannel.currentTable();
+    } catch (err) {
+      if (err instanceof ProductTableError) {
+        throw new ManagementError("unavailable", `current product table unavailable (${err.code})`);
+      }
+      throw err;
+    }
+    const baseDigest = optionalString(fields["base_digest"], "base_digest");
+    if (baseDigest !== undefined && baseDigest !== base.digest) {
+      throw new ManagementError("precondition_changed", "product table changed since preview");
+    }
+    const currentBySku = new Map(base.records.map((record) => [record.sku, record]));
+    let added = 0;
+    let updated = 0;
+    let unchanged = 0;
+    for (const record of table.products) {
+      const previous = currentBySku.get(record.sku);
+      if (previous === undefined) added += 1;
+      else if (JSON.stringify(previous) === JSON.stringify(record)) unchanged += 1;
+      else updated += 1;
+    }
+    const removedCount = base.records.filter(
+      (record) => !table.products.some((item) => item.sku === record.sku),
+    ).length;
+    const digest = productTableDigest(table);
+    const created = options.drafts.create({
+      merchantId: auth.ctx.merchantId,
+      kind: "products_import",
+      payloadJson: JSON.stringify(table),
+      payloadDigest: digest,
+      ...(base.digest !== "" ? { baseDigest: base.digest } : {}),
+    });
+    writeJson(res, 200, {
+      draft_id: created.draftId,
+      digest,
+      reused: created.reused,
+      base_digest: base.digest === "" ? null : base.digest,
+      preview: { rows_total: table.products.length, added, updated, unchanged, removed: removedCount },
+    });
+  }
+
+  /** POST /products/import-drafts/{id}/commit —— 原子落盘；结果不可分辨时记 unknown。 */
+  async function postProductsImportCommit(
+    req: IncomingMessage,
+    res: ServerResponse,
+    draftId: string,
+  ): Promise<void> {
+    const auth = requireActor(req);
+    assertWriteGuards(req, auth.sessionId);
+    const body = await readJsonBody(req);
+    const fields = objectFields(body, ["expected_draft_digest", "idempotency_key"]);
+    authorizeOrThrow(auth.ctx, "products:import");
+    const importChannel = options.productsImport;
+    if (importChannel === undefined) {
+      throw new ManagementError("unavailable", "product import storage is not configured");
+    }
+    const draft = options.drafts.getPayload(auth.ctx.merchantId, draftId);
+    if (draft === undefined) {
+      throw new ManagementError("not_found", `unknown draft: ${draftId}`);
+    }
+    if (draft.kind !== "products_import") {
+      throw new ManagementError("invalid_input", "draft is not a products import");
+    }
+    const expectedDigest = requireString(fields["expected_draft_digest"], "expected_draft_digest");
+    if (expectedDigest !== draft.payload_digest) {
+      throw new ManagementError("precondition_changed", "draft digest does not match");
+    }
+    let table: CloudProductTable;
+    try {
+      table = JSON.parse(draft.payload_json) as CloudProductTable;
+    } catch {
+      throw new ManagementError("invalid_input", "draft payload is corrupted");
+    }
+    const idempotencyKey = requireString(fields["idempotency_key"], "idempotency_key");
+    const requestDigest = managementRequestDigest({
+      draft_id: draftId,
+      expected_draft_digest: expectedDigest,
+    });
+    // 幂等探测先于草稿状态检查：同键重放必须回原回执，不能被「已提交」挡住（UC20）。
+    const probed = operations.probe({
+      merchantId: auth.ctx.merchantId,
+      actorId: auth.ctx.actorId,
+      commandType: "products.import_commit",
+      idempotencyKey,
+      requestDigest,
+    });
+    if (probed.kind === "replay") {
+      writeJson(res, 200, probed.receipt);
+      return;
+    }
+    if (probed.kind === "conflict") {
+      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      return;
+    }
+    if (draft.status === "committed") {
+      throw new ManagementError("conflict", "draft has already been committed");
+    }
+    const begun = operations.begin({
+      merchantId: auth.ctx.merchantId,
+      actorId: auth.ctx.actorId,
+      commandType: "products.import_commit",
+      idempotencyKey,
+      requestDigest,
+    });
+    if (begun.kind === "replay") {
+      writeJson(res, 200, begun.receipt);
+      return;
+    }
+    if (begun.kind === "conflict") {
+      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      return;
+    }
+    try {
+      const written = importChannel.commit(table);
+      const marked = options.drafts.markCommitted(auth.ctx.merchantId, draftId);
+      if (!marked) {
+        // 并发重复提交：文件已写入同一内容，占位释放即可（不产生第二份业务效果）。
+        operations.release(begun.operationId);
+        writeJson(res, 409, errorBody("conflict", "draft has already been committed"));
+        return;
+      }
+      const receipt: OperationReceipt = {
+        ...staticReceipt(begun.operationId, "products.import_commit", "succeeded"),
+        resource_ref: `products-table:${written.digest}`,
+        completed_at: now().toISOString(),
+      };
+      operations.complete(begun.operationId, "succeeded", receipt);
+      writeJson(res, 200, receipt);
+      return;
+    } catch (err) {
+      if (err instanceof ProductTableError) {
+        // 落盘前的校验/租户失败：商品表未动 → 释放占位，可修正后原键重试。
+        operations.release(begun.operationId);
+        respondError(res, new ManagementError("invalid_input", err.message));
+        return;
+      }
+      // 文件系统失败且无法证明「未生效」→ 记 unknown，先查 GET /products 对账。
+      log(`[merchant-management] products.import_commit 执行异常：${err instanceof Error ? err.message : String(err)}\n`);
+      const receipt = staticReceipt(begun.operationId, "products.import_commit", "unknown");
+      operations.complete(begun.operationId, "unknown", receipt);
+      respondError(res, new ManagementError("unavailable", `commit outcome unknown; query operation ${begun.operationId} and GET /products before retrying`));
+    }
+  }
+
+  // ── 策略草稿（BD §7.4：敏感原文只进私有存储；API 只见摘要与版本）──────────
+
+  /** POST /policy/drafts —— patch 原文入库；响应只含 draft_id 与摘要。 */
+  async function postPolicyDraft(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const auth = requireActor(req);
+    assertWriteGuards(req, auth.sessionId);
+    const body = await readJsonBody(req);
+    const fields = objectFields(body, ["patch", "expected_policy_revision"]);
+    authorizeOrThrow(auth.ctx, "policy:draft");
+    const patch = fields["patch"];
+    if (patch === null || typeof patch !== "object" || Array.isArray(patch)) {
+      throw new ManagementError("invalid_input", "patch must be a JSON object");
+    }
+    const current = options.policy?.();
+    const expectedRevision = fields["expected_policy_revision"];
+    if (expectedRevision !== undefined) {
+      const expected = requireInteger(expectedRevision, "expected_policy_revision");
+      if (current === undefined || current.version !== expected) {
+        throw new ManagementError("precondition_changed", "policy revision changed");
+      }
+    }
+    const patchObject = patch as Record<string, unknown>;
+    const digest = managementRequestDigest(patchObject);
+    const created = options.drafts.create({
+      merchantId: auth.ctx.merchantId,
+      kind: "policy_override",
+      payloadJson: JSON.stringify(patchObject),
+      payloadDigest: digest,
+      ...(current !== undefined ? { baseDigest: current.digest } : {}),
+    });
+    writeJson(res, 200, {
+      draft_id: created.draftId,
+      digest,
+      reused: created.reused,
+      base_digest: current?.digest ?? null,
+    });
+  }
+
+  /** POST /policy/drafts/{id}/commit —— 应用策略补丁；回执只含版本与摘要（红线 6）。 */
+  async function postPolicyCommit(
+    req: IncomingMessage,
+    res: ServerResponse,
+    draftId: string,
+  ): Promise<void> {
+    const auth = requireActor(req);
+    assertWriteGuards(req, auth.sessionId);
+    const body = await readJsonBody(req);
+    const fields = objectFields(body, ["expected_draft_digest", "idempotency_key"]);
+    authorizeOrThrow(auth.ctx, "policy:draft");
+    const apply = options.policyApply;
+    if (apply === undefined) {
+      throw new ManagementError("unavailable", "policy apply is not configured");
+    }
+    const draft = options.drafts.getPayload(auth.ctx.merchantId, draftId);
+    if (draft === undefined) {
+      throw new ManagementError("not_found", `unknown draft: ${draftId}`);
+    }
+    if (draft.kind !== "policy_override") {
+      throw new ManagementError("invalid_input", "draft is not a policy override");
+    }
+    const expectedDigest = requireString(fields["expected_draft_digest"], "expected_draft_digest");
+    if (expectedDigest !== draft.payload_digest) {
+      throw new ManagementError("precondition_changed", "draft digest does not match");
+    }
+    const idempotencyKey = requireString(fields["idempotency_key"], "idempotency_key");
+    const requestDigest = managementRequestDigest({
+      draft_id: draftId,
+      expected_draft_digest: expectedDigest,
+    });
+    // 幂等探测先于草稿状态检查（同 UC20：重放不被「已提交」挡住）。
+    const probed = operations.probe({
+      merchantId: auth.ctx.merchantId,
+      actorId: auth.ctx.actorId,
+      commandType: "policy.commit",
+      idempotencyKey,
+      requestDigest,
+    });
+    if (probed.kind === "replay") {
+      writeJson(res, 200, probed.receipt);
+      return;
+    }
+    if (probed.kind === "conflict") {
+      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      return;
+    }
+    if (draft.status === "committed") {
+      throw new ManagementError("conflict", "draft has already been committed");
+    }
+    const begun = operations.begin({
+      merchantId: auth.ctx.merchantId,
+      actorId: auth.ctx.actorId,
+      commandType: "policy.commit",
+      idempotencyKey,
+      requestDigest,
+    });
+    if (begun.kind === "replay") {
+      writeJson(res, 200, begun.receipt);
+      return;
+    }
+    if (begun.kind === "conflict") {
+      writeJson(res, 409, errorBody("conflict", "idempotency key was already used with a different request"));
+      return;
+    }
+    let patch: Record<string, unknown>;
+    try {
+      patch = JSON.parse(draft.payload_json) as Record<string, unknown>;
+    } catch {
+      throw new ManagementError("invalid_input", "draft payload is corrupted");
+    }
+    try {
+      const applied = await apply(patch);
+      options.drafts.markCommitted(auth.ctx.merchantId, draftId);
+      const receipt: OperationReceipt = {
+        ...staticReceipt(begun.operationId, "policy.commit", "succeeded"),
+        resource_ref: `policy:v${applied.version}`,
+        result_revision: applied.version,
+        completed_at: now().toISOString(),
+      };
+      operations.complete(begun.operationId, "succeeded", receipt);
+      writeJson(res, 200, receipt);
+      return;
+    } catch (err) {
+      // apply 是「校验 + 原子写」：校验失败未生效 → 释放占位可修正重试
+      // （错误消息来自 runtime 校验层，不含策略数值本身）。
+      operations.release(begun.operationId);
+      respondError(res, new ManagementError("invalid_input", err instanceof Error ? err.message : String(err)));
+    }
+  }
+
   // ── 认证与防护 ─────────────────────────────────────────────────────
 
   function requireActor(req: IncomingMessage): {
@@ -735,11 +1078,18 @@ function isKnownPath(rest: string): boolean {
     rest === "/approvals" ||
     rest === "/confirmations" ||
     rest === "/service/pause" ||
-    rest === "/service/resume"
+    rest === "/service/resume" ||
+    rest === "/products/import-drafts" ||
+    rest === "/policy/drafts"
   ) {
     return true;
   }
-  return /^\/approvals\/[^/]+(\/approve|\/reject)?$/.test(rest) || /^\/operations\/[^/]+$/.test(rest);
+  return (
+    /^\/approvals\/[^/]+(\/approve|\/reject)?$/.test(rest) ||
+    /^\/operations\/[^/]+$/.test(rest) ||
+    /^\/products\/import-drafts\/[^/]+\/commit$/.test(rest) ||
+    /^\/policy\/drafts\/[^/]+\/commit$/.test(rest)
+  );
 }
 
 function pageQuery(url: URL): PageQuery {

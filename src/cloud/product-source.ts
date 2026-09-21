@@ -29,7 +29,8 @@
  *   - merchant_id 是租户边界：表内商家与运行实例不一致即拒绝加载。
  */
 
-import { readFileSync, statSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import type { MerchantProductSource } from "../a2a/server/merchant-handler.js";
 
 /** 商品表 schema 版本（与交接包控制面同版）。 */
@@ -168,6 +169,8 @@ export interface CloudProductSourceHandle {
   source: MerchantProductSource;
   /** 当前表里该 SKU 是否可自动报价（就绪/诊断用，不泄露价格）。 */
   describeSku: (sku: string) => { available: boolean; code?: string };
+  /** 全量商品记录（管理页投影用，BD-03；表不可读时抛 ProductTableError）。 */
+  list: () => CloudProductRecord[];
 }
 
 /**
@@ -232,6 +235,7 @@ export function createFileProductSource(options: FileProductSourceOptions): Clou
 
   return {
     describeSku: availability,
+    list: () => load().products,
     source: {
       async getProduct(sku: string) {
         const check = availability(sku);
@@ -255,4 +259,62 @@ export function createFileProductSource(options: FileProductSourceOptions): Clou
       },
     },
   };
+}
+
+// ── 管理面：商品表快照/摘要/原子提交（BD-03 §10.1 导入草稿的落盘通道）────────
+
+/** 规范化摘要：products 按 sku 排序后整体 JSON sha256（内容变则摘要变）。 */
+export function productTableDigest(table: CloudProductTable): string {
+  const canonical = {
+    ...table,
+    products: [...table.products].sort((left, right) => left.sku.localeCompare(right.sku)),
+  };
+  return `sha256:${createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
+}
+
+export interface ProductTableSnapshot {
+  /** 文件不存在 → undefined（首次导入前的合法空态）。 */
+  table: CloudProductTable | undefined;
+  /** 空表摘要为空串（CAS 基准）。 */
+  digest: string;
+  records: CloudProductRecord[];
+}
+
+/** 读当前商品表快照（管理面读投影与导入 CAS 共用；解析/租户失败抛错 → 上层 503）。 */
+export function loadProductTableSnapshot(file: string, merchantId: string): ProductTableSnapshot {
+  if (!existsSync(file)) {
+    return { table: undefined, digest: "", records: [] };
+  }
+  const raw = readFileSync(file, "utf8");
+  const table = parseProductTable(JSON.parse(raw) as unknown, file);
+  if (table.merchant_id !== merchantId) {
+    throw new ProductTableError(
+      "PRODUCT_TABLE_TENANT_MISMATCH",
+      `商品表 merchant_id=${table.merchant_id} 与运行实例 ${merchantId} 不一致：拒绝加载`,
+    );
+  }
+  return { table, digest: productTableDigest(table), records: table.products };
+}
+
+/**
+ * 原子替换商品表：写同目录临时文件（0600）后 rename——要么整表生效、要么
+ * 原表原样（全批成功或全批不变，BD §10.1）。写盘前再过一次严格解析与租户
+ * 校验（纵深防御：草稿入库时已验过一次）。
+ */
+export function commitProductTable(
+  file: string,
+  merchantId: string,
+  table: CloudProductTable,
+): { digest: string } {
+  const checked = parseProductTable(table, file);
+  if (checked.merchant_id !== merchantId) {
+    throw new ProductTableError(
+      "PRODUCT_TABLE_TENANT_MISMATCH",
+      `商品表 merchant_id=${checked.merchant_id} 与运行实例 ${merchantId} 不一致：拒绝写入`,
+    );
+  }
+  const tmp = `${file}.tmp-${randomBytes(6).toString("hex")}`;
+  writeFileSync(tmp, `${JSON.stringify(table, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tmp, file);
+  return { digest: productTableDigest(checked) };
 }

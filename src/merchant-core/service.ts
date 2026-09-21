@@ -144,6 +144,21 @@ export class MerchantCoreService {
     return this.rfqDeps?.service;
   }
 
+  /**
+   * BD-03 管理面策略提交入口（未配置策略运行时 → undefined）。
+   * 回执只含版本与摘要——策略数值本身不出现在任何回执（红线 6）。
+   */
+  get policyApplier():
+    | ((patch: Record<string, unknown>) => Promise<{ version: number; digest: string }>)
+    | undefined {
+    if (this.applyPolicyOverride === undefined) return undefined;
+    const apply = this.applyPolicyOverride;
+    return async (patch) => {
+      const applied = await apply(patch);
+      return { version: applied.version, digest: applied.digest };
+    };
+  }
+
   // ---- V1 facade 委托（MCP 工具层经此调用） --------------------------------
 
   listPublicProducts() {

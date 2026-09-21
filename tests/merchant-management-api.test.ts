@@ -14,15 +14,25 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { ADMIN_SESSION_COOKIE, MerchantAdminSessions } from "../src/auth/merchant-sessions.js";
 import type { MerchantRole } from "../src/merchant/application/actor.js";
 import type { WriteApprovalCandidate } from "../src/agent/merchant/action-candidate.js";
+import { createCloudRouter } from "../src/cloud/http-router.js";
+import {
+  commitProductTable,
+  loadProductTableSnapshot,
+} from "../src/cloud/product-source.js";
 import {
   createMerchantManagementApiHandler,
   type MerchantManagementApiOptions,
 } from "../src/http/merchant-management/api.js";
+import { MerchantImportDraftStore } from "../src/http/merchant-management/draft-store.js";
+import { renderMerchantManagementPage } from "../src/http/merchant-management/page.js";
 import { MerchantManagementOperationStore } from "../src/http/merchant-management/operation-store.js";
 import { MutableServiceState } from "../src/http/merchant-management/service-state.js";
 
@@ -50,6 +60,12 @@ const mintCandidateConfirmation = vi.fn<
 const readiness = vi.fn<() => Promise<{ ready: boolean; checks: Record<string, { ok: boolean }> }>>(
   async () => ({ ready: true, checks: {} }),
 );
+const policyApplyMock = vi.fn<
+  (patch: Record<string, unknown>) => Promise<{ version: number; digest: string }>
+>(async () => ({ version: 4, digest: "sha256:policy-new" }));
+
+const importDir = mkdtempSync(path.join(tmpdir(), "kiwi-mgmt-import-"));
+const productsFile = path.join(importDir, "products.json");
 
 const options: MerchantManagementApiOptions = {
   merchantId: MERCHANT,
@@ -64,6 +80,16 @@ const options: MerchantManagementApiOptions = {
     candidates = candidates.filter((item) => item.candidate_id !== input.candidateId);
   },
   policy: () => ({ version: 3, digest: "sha256:policy" }),
+  productsImport: {
+    currentTable: () => {
+      const snapshot = loadProductTableSnapshot(productsFile, MERCHANT);
+      return { digest: snapshot.digest, records: snapshot.records };
+    },
+    commit: (table: Parameters<typeof commitProductTable>[2]) =>
+      commitProductTable(productsFile, MERCHANT, table),
+  },
+  policyApply: (patch: Record<string, unknown>) => policyApplyMock(patch),
+  drafts: new MerchantImportDraftStore({ db: operationsDb, now: () => FIXED_NOW.toISOString() }),
   operations,
   serviceState,
   readiness: () => readiness(),
@@ -112,6 +138,8 @@ beforeEach(() => {
   mintCandidateConfirmation.mockClear();
   readiness.mockReset();
   readiness.mockImplementation(async () => ({ ready: true, checks: {} }));
+  policyApplyMock.mockReset();
+  policyApplyMock.mockImplementation(async () => ({ version: 4, digest: "sha256:policy-new" }));
 });
 
 async function login(role: MerchantRole = "owner", merchantId = MERCHANT): Promise<{ cookie: string; csrf: string }> {
@@ -564,5 +592,179 @@ describe("merchant admin sessions — 角色迁移（BD-02 会话改造）", () 
     expect(migrated.getSession(viewer.sessionId)?.role).toBe("viewer");
     const legacyRow = migrated.createSession({ principalId: "admin:y", merchantId: MERCHANT });
     expect(migrated.getSession(legacyRow.sessionId)?.role).toBe("owner");
+  });
+});
+
+// ── BD-03：商品导入与策略草稿（BD 设计 §10.1/§7.4）────────────────────────
+
+function productTable(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schema_version: "0.1.2",
+    merchant_id: MERCHANT,
+    source: "merchant_upload",
+    generated_at: "2026-09-21T09:00:00Z",
+    products: [
+      {
+        sku: "SKU-1",
+        title: "测试商品",
+        currency: "CNY",
+        unit: "piece",
+        price: 99.5,
+        moq: 2,
+        updated_at: "2026-09-21T09:00:00Z",
+        valid_until: "2099-01-01T00:00:00Z",
+        status: "active",
+      },
+    ],
+    ...overrides,
+  };
+}
+
+describe("merchant management api — 商品导入（BD-03）", () => {
+  it("校验预览 → 原子提交 → 幂等重放；重复提交草稿 → 409（UC28）", async () => {
+    const auth = await login("owner");
+    const draft = await call("POST", "/merchant/api/products/import-drafts", {
+      ...auth,
+      body: { table: productTable(), idempotency_key: "d1" },
+    });
+    expect(draft.status).toBe(200);
+    expect(draft.json["preview"]).toMatchObject({ rows_total: 1, added: 1, removed: 0 });
+    const digest = String(draft.json["digest"]);
+    const committed = await call("POST", `/merchant/api/products/import-drafts/${String(draft.json["draft_id"])}/commit`, {
+      ...auth,
+      body: { expected_draft_digest: digest, idempotency_key: "c1" },
+    });
+    expect(committed.status).toBe(200);
+    expect(committed.json["status"]).toBe("succeeded");
+    // 文件真实写入且可解析（全批生效）
+    const snapshot = loadProductTableSnapshot(productsFile, MERCHANT);
+    expect(snapshot.records).toHaveLength(1);
+    expect(snapshot.records[0]?.sku).toBe("SKU-1");
+    // 同键同内容重放 → 原回执（UC20 语义在导入同样成立）
+    const replay = await call("POST", `/merchant/api/products/import-drafts/${String(draft.json["draft_id"])}/commit`, {
+      ...auth,
+      body: { expected_draft_digest: digest, idempotency_key: "c1" },
+    });
+    expect(replay.status).toBe(200);
+    expect(replay.json["operation_id"]).toBe(committed.json["operation_id"]);
+    // 已提交草稿再提交 → 409
+    const again = await call("POST", `/merchant/api/products/import-drafts/${String(draft.json["draft_id"])}/commit`, {
+      ...auth,
+      body: { expected_draft_digest: digest, idempotency_key: "c2" },
+    });
+    expect(again.status).toBe(409);
+  });
+
+  it("行级校验失败整表拒绝（400 报行号）；base_digest 不符 → 409；租户不符 → 403", async () => {
+    const auth = await login("owner");
+    const badRow = await call("POST", "/merchant/api/products/import-drafts", {
+      ...auth,
+      body: {
+        table: productTable({ products: [{ sku: "S", title: "t", currency: "CNY", unit: "piece", price: "abc", updated_at: "2026-09-21T09:00:00Z", valid_until: "2099-01-01T00:00:00Z", status: "active" }] }),
+        idempotency_key: "bad",
+      },
+    });
+    expect(badRow.status).toBe(400);
+    expect(String(badRow.json["message"])).toContain("price");
+    const draft = await call("POST", "/merchant/api/products/import-drafts", {
+      ...auth,
+      body: { table: productTable(), base_digest: "sha256:stale", idempotency_key: "cas" },
+    });
+    expect(draft.status).toBe(409);
+    expect(draft.json["code"]).toBe("precondition_changed");
+    const foreign = await call("POST", "/merchant/api/products/import-drafts", {
+      ...auth,
+      body: { table: productTable({ merchant_id: "merchant-999" }), idempotency_key: "tn" },
+    });
+    expect(foreign.status).toBe(403);
+  });
+});
+
+describe("merchant management api — 策略草稿（BD-03，红线 6）", () => {
+  it("草稿响应不含敏感原文；提交回执只有版本与摘要；原文可复用提交", async () => {
+    const owner = await login("owner");
+    const patch = { floor_overrides: { "SKU-1": 80 } };
+    const draft = await call("POST", "/merchant/api/policy/drafts", {
+      ...owner,
+      body: { patch, expected_policy_revision: 3 },
+    });
+    expect(draft.status).toBe(200);
+    const draftText = JSON.stringify(draft.json);
+    expect(draftText.includes("floor_overrides")).toBe(false);
+    expect(draftText.includes("80")).toBe(false);
+    const committed = await call("POST", `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`, {
+      ...owner,
+      body: { expected_draft_digest: draft.json["digest"], idempotency_key: "pc1" },
+    });
+    expect(committed.status).toBe(200);
+    expect(committed.json["result_revision"]).toBe(4);
+    expect(policyApplyMock).toHaveBeenCalledWith(patch);
+    const receiptText = JSON.stringify(committed.json);
+    expect(receiptText.includes("floor_overrides")).toBe(false);
+  });
+
+  it("apply 校验失败 → 400 且草稿保留可重试；提交状态互斥", async () => {
+    const owner = await login("owner");
+    policyApplyMock.mockRejectedValue(new Error("策略补丁字段不合法"));
+    const draft = await call("POST", "/merchant/api/policy/drafts", {
+      ...owner,
+      body: { patch: { bad: true } },
+    });
+    const failed = await call("POST", `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`, {
+      ...owner,
+      body: { expected_draft_digest: draft.json["digest"], idempotency_key: "pf1" },
+    });
+    expect(failed.status).toBe(400);
+    policyApplyMock.mockImplementation(async () => ({ version: 5, digest: "sha256:v5" }));
+    const retry = await call("POST", `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`, {
+      ...owner,
+      body: { expected_draft_digest: draft.json["digest"], idempotency_key: "pf2" },
+    });
+    expect(retry.status).toBe(200);
+    expect(retry.json["result_revision"]).toBe(5);
+    const again = await call("POST", `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`, {
+      ...owner,
+      body: { expected_draft_digest: draft.json["digest"], idempotency_key: "pf3" },
+    });
+    expect(again.status).toBe(409);
+  });
+});
+
+describe("merchant management page — 同源工作台壳（BD-03）", () => {
+  it("GET /merchant/ 返回静态壳：含工作台文案，不含业务数据与敏感词", async () => {
+    const router = createCloudRouter({
+      a2aHandler: (_req, res) => {
+        res.end();
+      },
+      merchantHandler: (_req, res) => {
+        res.end();
+      },
+      merchantHomePage: (_req, res) => {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        res.end(renderMerchantManagementPage());
+      },
+      readiness: async () => ({ ready: true, checks: {}, checked_at: FIXED_NOW.toISOString() }),
+      version: "test",
+    });
+    const pageServer = createServer(router);
+    await new Promise<void>((resolve) => pageServer.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = pageServer.address();
+      const pageBase =
+        "http://127.0.0.1:" + (typeof address === "object" && address !== null ? address.port : 0);
+      const res = await fetch(pageBase + "/merchant/");
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("商家工作台");
+      expect(html).toContain("/merchant/api/session");
+      expect(html).not.toMatch(/price_floors|min_unit_price_private|password/);
+      // 别名仍生效：/merchant/ 之外的商家面路径走 merchantHandler（测试桩 → 2xx），
+      // 这里只验证路由不崩、不落入管理页。
+      const aliased = await fetch(pageBase + "/merchant/onboarding", { redirect: "manual" });
+      expect(aliased.status).toBeLessThan(500);
+    } finally {
+      pageServer.closeAllConnections();
+      await new Promise<void>((resolve) => pageServer.close(() => resolve()));
+    }
   });
 });

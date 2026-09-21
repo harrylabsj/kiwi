@@ -39,8 +39,15 @@ import { createA2aNodeCore, createA2aAuthVerifier } from "../a2a/node.js";
 import { loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/signing-key.js";
 import { loadProfile, ProfileError } from "../config/profile.js";
 import { createMerchantManagementApiHandler } from "../http/merchant-management/api.js";
+import { MerchantImportDraftStore } from "../http/merchant-management/draft-store.js";
+import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
+import {
+  ManagementError,
+  type MerchantProductPage,
+  type PageQuery,
+} from "../merchant/application/service.js";
 import {
   assembleMerchantRuntime,
   MerchantAssemblyError,
@@ -61,7 +68,13 @@ import {
 import { createChallengeResponder } from "./binding/runtime-challenge.js";
 import type { BindingChallengeStore } from "./binding/proofs.js";
 import { createCloudRouter, type CloudRequestListener } from "./http-router.js";
-import { createFileProductSource, type CloudProductSourceHandle } from "./product-source.js";
+import {
+  commitProductTable,
+  createFileProductSource,
+  loadProductTableSnapshot,
+  ProductTableError,
+  type CloudProductSourceHandle,
+} from "./product-source.js";
 import { runReadiness, type ReadinessCheckResult, type ReadinessReport } from "./readiness.js";
 
 /** 云端 A2A 端点路径（设计 §8.2；与自托管根路径不同，便于同端口分发）。 */
@@ -292,6 +305,8 @@ export async function bootstrapCloudRuntime(
   //      MerchantApplicationService；权威操作记录落 state.sqlite。管理面未装配
   //      （无 admin 会话）时不挂载——/merchant/api 维持别名/404 旧行为。
   const adminOptions = assembly.serverOptions.admin;
+  const productsFilePath = config.productsFile;
+  const applyPolicyOverride = assembly.service.policyApplier;
   let managementDb: DatabaseSync | undefined;
   let merchantApiHandler: CloudRequestListener | undefined;
   if (adminOptions !== undefined) {
@@ -327,6 +342,67 @@ export async function bootstrapCloudRuntime(
           ? undefined
           : { version: current.version, digest: current.digest };
       },
+      // 商品投影/导入：仅在配置了商品表文件时可用；ProductTableError → 503
+      //（不让「表不可读」伪装成「无商品」）。价格即商品表的 major units（元），
+      // 与 MerchantProductSource 契约同单位，不经换算（金额单位红线）。
+      ...(fileProductSource !== undefined && productsFilePath !== undefined
+        ? {
+            products: async (query: PageQuery): Promise<MerchantProductPage> => {
+              let records;
+              try {
+                records = fileProductSource.list();
+              } catch (err) {
+                if (err instanceof ProductTableError) {
+                  throw new ManagementError("unavailable", `product table unavailable (${err.code})`);
+                }
+                throw err;
+              }
+              const offset =
+                query.cursor !== undefined
+                  ? Math.max(0, Number.parseInt(query.cursor, 10) || 0)
+                  : 0;
+              const limit = Math.min(Math.max(query.limit ?? 50, 1), 100);
+              const nowMs = Date.now();
+              const items = records.slice(offset, offset + limit).map((record) => ({
+                sku: record.sku,
+                title: record.title,
+                currency: record.currency,
+                price: record.price,
+                price_unit: record.unit,
+                min_order_qty: record.moq ?? null,
+                valid_until: record.valid_until,
+                updated_at: record.updated_at,
+                status:
+                  record.status === "paused"
+                    ? "paused"
+                    : Date.parse(record.valid_until) < nowMs
+                      ? "expired"
+                      : "active",
+              }));
+              return {
+                items,
+                next_cursor: offset + limit < records.length ? String(offset + limit) : null,
+              };
+            },
+            productsImport: {
+              currentTable: () => {
+                const snapshot = loadProductTableSnapshot(productsFilePath, profile.owner_id);
+                return { digest: snapshot.digest, records: snapshot.records };
+              },
+              commit: (table: Parameters<typeof commitProductTable>[2]) =>
+                commitProductTable(productsFilePath, profile.owner_id, table),
+            },
+          }
+        : {}),
+      ...(applyPolicyOverride !== undefined
+        ? {
+            policyApply: async (patch: Record<string, unknown>) => {
+              const applied = await applyPolicyOverride(patch);
+              return { version: applied.version, digest: applied.digest };
+            },
+          }
+        : {}),
+      drafts: new MerchantImportDraftStore({ db: managementDb, now: () => new Date().toISOString() }),
       operations: new MerchantManagementOperationStore({ db: managementDb }),
       serviceState,
       readiness: async () => {
@@ -337,12 +413,22 @@ export async function bootstrapCloudRuntime(
     });
   }
 
+  // 4.6) 商家工作台首页（/merchant/ 静态壳；数据经 /merchant/api/* 认证获取）。
+  const merchantHomePage: CloudRequestListener = (_req, res) => {
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    });
+    res.end(renderMerchantManagementPage());
+  };
+
   // 5) 单端口路由：A2A 面 / 商家面 / 管理面 / 探针，各自鉴权边界不变。
   const merchantHandler = createMerchantHttpHandler(assembly.serverOptions);
   const router = createCloudRouter({
     a2aHandler: core.server.handler(),
     merchantHandler: merchantHandler.handler,
     ...(merchantApiHandler !== undefined ? { merchantApiHandler } : {}),
+    merchantHomePage,
     readiness,
     a2aPaths: [CLOUD_A2A_PATH],
     // 绑定挑战应答（M2 §6.3）：只签发给本实例的受限结构挑战，一次性、有速率上限。

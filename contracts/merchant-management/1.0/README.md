@@ -19,6 +19,14 @@
 | POST `/approvals/{id}/reject` | 拒绝并审计 |
 | POST `/service/pause` | 暂停接待（拒新询价，既有任务不受影响） |
 | POST `/service/resume` | 恢复接待（owner + 确认引用 + 就绪门） |
+| POST `/products/import-drafts` | 商品表整表校验 + CAS + 预览（增/改/留/删行数）；不动现有商品 |
+| POST `/products/import-drafts/{id}/commit` | 原子提交（temp+rename，全批成功或全批不变；**整表替换语义**） |
+| POST `/policy/drafts` | 策略补丁草稿；**响应与回执只含 draft_id/摘要/版本，绝不含补丁原文** |
+| POST `/policy/drafts/{id}/commit` | 提交生效（`MerchantPolicyRuntime.apply`，版本递增） |
+
+草稿语义（BD §10.1）：校验/预览（draft）与生效（commit）分离；提交是幂等命令
+（同键同摘要回放原回执）；草稿一次性（committed 后不可复用）。商品导入是
+**整表替换**——新表未包含的 SKU 提交后移除，预览给出 removed 计数。
 
 `/events`（SSE）属同 major 的可选端点，本版未提供。
 

@@ -42,6 +42,11 @@ export interface CloudRouterOptions {
    * （管理面与审核页是两个权限面，不能混）。未提供时该前缀维持旧行为。
    */
   merchantApiHandler?: CloudRequestListener;
+  /**
+   * 商家工作台首页（BD §9.1 的 `/merchant/` 静态壳；不含数据，数据请求仍须
+   * 认证）。精确匹配 `/merchant` 与 `/merchant/`；必须先于别名接管。
+   */
+  merchantHomePage?: CloudRequestListener;
   /** 就绪检查（每次请求重新执行，不缓存）。 */
   readiness: () => Promise<ReadinessReport>;
   /** A2A 端点路径（与 A2AServer 的 cardConfig.a2aPath 保持一致）。 */
@@ -140,7 +145,16 @@ export function createCloudRouter(options: CloudRouterOptions): CloudRequestList
       return;
     }
 
-    // 5) 商家面：/merchant/* 别名映射到现有 /admin/*（设计 §8.2 路由名）。
+    // 5) 商家工作台首页：/merchant 与 /merchant/（BD §9.1 静态壳；先于别名）。
+    if (
+      options.merchantHomePage !== undefined &&
+      (pathname === "/merchant" || pathname === "/merchant/")
+    ) {
+      options.merchantHomePage(req, res);
+      return;
+    }
+
+    // 6) 商家面：/merchant/* 别名映射到现有 /admin/*（设计 §8.2 路由名）。
     if (startsWithAny(pathname, MERCHANT_PREFIXES) || startsWithAny(pathname, MERCHANT_WELL_KNOWN)) {
       if (pathname === "/merchant" || pathname.startsWith("/merchant/")) {
         req.url = `/admin${pathname.slice("/merchant".length)}${url.search}`;
@@ -149,13 +163,13 @@ export function createCloudRouter(options: CloudRouterOptions): CloudRequestList
       return;
     }
 
-    // 6) A2A 面：公开 Card/发现 + A2A 端点。
+    // 7) A2A 面：公开 Card/发现 + A2A 端点。
     if (startsWithAny(pathname, A2A_WELL_KNOWN) || a2aPaths.includes(pathname)) {
       options.a2aHandler(req, res);
       return;
     }
 
-    // 7) 兜底：最小 404（不回显请求路径之外的信息）。
+    // 8) 兜底：最小 404（不回显请求路径之外的信息）。
     writeJson(res, 404, { error: "not_found" }, NO_STORE);
   };
 }
