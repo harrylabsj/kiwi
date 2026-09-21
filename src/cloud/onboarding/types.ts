@@ -123,6 +123,19 @@ export interface PendingEvidence {
 
 export type Evidence = AuthoritativeEvidence | PendingEvidence;
 
+/**
+ * 平台适配器明确报告“云服务不可用”的失败形态。平台有时会同时建议调用方切到
+ * 本地实现；Kiwi 的经营能力裁定是不启用该兜底，调用层必须显式拒绝该建议。
+ */
+export interface PlatformAdapterFailure {
+  kind: "platform_failure";
+  code: string;
+  useLocalImplementation?: boolean;
+  detail?: string;
+}
+
+export type PlatformEvidenceResult = AuthoritativeEvidence | PlatformAdapterFailure | undefined;
+
 export function isAuthoritative(evidence: Evidence): evidence is AuthoritativeEvidence {
   if (evidence.kind !== "platform_query") return false;
   // 权威证据本身也要自洽：没有来源标识 / 没有回执时间 / applicationId 为空的

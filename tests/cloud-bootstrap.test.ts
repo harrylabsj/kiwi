@@ -195,7 +195,9 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
       expect(admin.headers.get("content-type")).toContain("text/html");
 
       // 探针：/livez 最小应答；/readyz 反映真实就绪（商品可读 + 存储可写 + 策略装载）。
-      expect((await fetch(`${base}/livez`)).status).toBe(200);
+      const live = await fetch(`${base}/livez`);
+      expect(live.status).toBe(200);
+      expect(await live.json()).toEqual({ ok: true, node: process.version });
       const ready = await fetch(`${base}/readyz`);
       expect(ready.status).toBe(200);
       const readyBody = (await ready.json()) as { ready: boolean; checks: Record<string, { ok: boolean }> };

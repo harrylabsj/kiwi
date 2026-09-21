@@ -100,8 +100,14 @@ export function createCloudRouter(options: CloudRouterOptions): CloudRequestList
     }
 
     // 2) 探针。平台拦截 /healthz，业务存活以 /livez 为准。
-    if (pathname === "/healthz" || pathname === "/livez") {
+    if (pathname === "/healthz") {
       writeJson(res, 200, { ok: true }, NO_STORE);
+      return;
+    }
+    if (pathname === "/livez") {
+      // T001 收口：由实际 Node 进程自证运行时版本。只回非敏感的 process.version，
+      // 不依赖平台失败栈、镜像标签或部署记录推断。
+      writeJson(res, 200, { ok: true, node: process.version }, NO_STORE);
       return;
     }
     if (pathname === "/readyz") {

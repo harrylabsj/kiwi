@@ -221,6 +221,39 @@ describe("T008/T009：重复点击与响应丢失", () => {
     expect(second.generation).toBe(2);
     expect(s.activeRecord("merchant-onb-1")?.recordId).toBe(second.recordId);
   });
+
+  it("两个数据库连接共享唯一当前槽；取消新代次不会复活旧写者", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-onboarding-slot-"));
+    const dbPath = path.join(dir, "state.sqlite");
+    const firstDb = new DatabaseSync(dbPath);
+    const secondDb = new DatabaseSync(dbPath);
+    try {
+      const firstStore = new OnboardingStore(firstDb);
+      const secondStore = new OnboardingStore(secondDb);
+      const original = firstStore.openIntent(open({ idempotencyKey: "slot-a" }));
+      const reused = secondStore.openIntent(open({ idempotencyKey: "slot-b" }));
+      expect(reused.recordId).toBe(original.recordId);
+
+      const replacement = firstStore.openIntent(
+        open({ idempotencyKey: "slot-next", newGeneration: true }),
+      );
+      expect(replacement.generation).toBe(2);
+      expect(secondStore.activeRecord("merchant-onb-1")?.recordId).toBe(replacement.recordId);
+
+      firstStore.cancel(replacement.recordId, replacement.revision);
+      // 旧代次记录仍用于审计，但当前槽已经清空；绝不把旧写者重新提升为活动代次。
+      expect(secondStore.getRecord(original.recordId)?.status).toBe("DRAFT");
+      expect(secondStore.activeRecord("merchant-onb-1")).toBeUndefined();
+      const slots = secondDb
+        .prepare("select count(*) as count from onboarding_slots where merchant_id = ?")
+        .get("merchant-onb-1") as { count: number };
+      expect(slots.count).toBe(0);
+    } finally {
+      firstDb.close();
+      secondDb.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("T010：读服务端记录续办，且必须先查平台", () => {

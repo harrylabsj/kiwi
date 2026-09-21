@@ -132,6 +132,7 @@ function candidate(overrides: Partial<WriteApprovalCandidate> = {}): WriteApprov
 
 beforeEach(() => {
   candidates = [candidate()];
+  serviceState.resume(true, []);
   mintCounter = 0;
   executeDecision.mockReset();
   executeDecision.mockImplementation(async () => {});
@@ -567,6 +568,51 @@ describe("merchant management api — 只读投影与路由", () => {
     const auth = await login("owner");
     expect((await call("GET", "/merchant/api/nope", auth)).status).toBe(404);
     expect((await call("GET", "/merchant/api/confirmations", auth)).status).toBe(405);
+  });
+});
+
+describe("Workbench /merchant/api/v1 — RFC 9457 与兼容读取", () => {
+  it("未登录读取 runtime/status 返回 application/problem+json", async () => {
+    const res = await fetch(`${base}/merchant/api/v1/runtime/status`);
+    expect(res.status).toBe(401);
+    expect(res.headers.get("content-type")).toContain("application/problem+json");
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      type: "urn:kiwi:problem:unauthenticated",
+      status: 401,
+      code: "UNAUTHENTICATED",
+      retryable: false,
+      recovery_action: "reauthenticate",
+    });
+    expect(body["request_id"]).toBe(res.headers.get("x-request-id"));
+  });
+
+  it("复用同一应用服务读取状态；未知路由明确 404 Problem", async () => {
+    const auth = await login("owner");
+    const status = await fetch(`${base}/merchant/api/v1/runtime/status`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({
+      api_version: "1",
+      runtime_version: "test-runtime",
+      service_state: "OPERATING",
+    });
+
+    const missing = await fetch(`${base}/merchant/api/v1/promotions`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get("content-type")).toContain("application/problem+json");
+    expect(await missing.json()).toMatchObject({ code: "RESOURCE_NOT_FOUND", status: 404 });
+  });
+
+  it("legacy /merchant/api/* 继续使用既有契约，不被静默改写", async () => {
+    const legacy = await fetch(`${base}/merchant/api/status`);
+    expect(legacy.status).toBe(401);
+    expect(legacy.headers.get("content-type")).toContain("application/json");
+    expect(legacy.headers.get("content-type")).not.toContain("application/problem+json");
+    expect(await legacy.json()).toMatchObject({ code: "unauthorized" });
   });
 });
 

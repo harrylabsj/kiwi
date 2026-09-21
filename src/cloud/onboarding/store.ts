@@ -65,6 +65,15 @@ create table if not exists onboarding_records (
 );
 create index if not exists idx_onboarding_merchant
   on onboarding_records(merchant_id, environment, agent_slot);
+create table if not exists onboarding_slots (
+  merchant_id text not null,
+  environment text not null,
+  agent_slot text not null,
+  current_record_id text not null,
+  generation integer not null,
+  updated_at text not null,
+  primary key (merchant_id, environment, agent_slot)
+);
 create table if not exists onboarding_idempotency (
   idempotency_key text primary key,
   merchant_id text not null,
@@ -160,7 +169,12 @@ export class OnboardingStore {
   constructor(db: DatabaseSync, options: { now?: () => string } = {}) {
     this.db = db;
     this.now = options.now ?? (() => new Date().toISOString());
+    // 多进程/多连接同时打开开通意图时，允许竞争者等待当前短事务完成，而不是在
+    // 第一次锁竞争时直接 SQLITE_BUSY。真正的唯一性由 onboarding_slots 的复合主键
+    // 与 openIntent() 的 BEGIN IMMEDIATE 共同保证，不依赖单进程 mutex。
+    this.db.exec("pragma busy_timeout = 5000");
     this.db.exec(SCHEMA);
+    this.backfillSlots();
   }
 
   /**
@@ -176,66 +190,91 @@ export class OnboardingStore {
     const idempotencyKey = requireNonEmpty(input.idempotencyKey, "idempotencyKey");
     const requestDigest = requireNonEmpty(input.requestDigest, "requestDigest");
 
-    const seen = this.db
-      .prepare("select merchant_id, request_digest, record_id from onboarding_idempotency where idempotency_key = ?")
-      .get(idempotencyKey) as
-      | { merchant_id: string; request_digest: string; record_id: string }
-      | undefined;
-    if (seen !== undefined) {
-      // 同 key 不同摘要 = 复用了幂等键做另一件事 → 冲突（§7.2）。
-      if (seen.request_digest !== requestDigest || seen.merchant_id !== merchantId) {
-        throw new OnboardingError(
-          "conflict",
-          `idempotency key ${idempotencyKey} was used with a different request digest or merchant`,
-        );
+    // 读幂等键 → 读当前槽 → 插记录 → 切换槽 → 记幂等回执必须是一个存储原子
+    // 边界。否则两个 Runtime/worker 可同时观察到“无活跃记录”并各自插入一条。
+    // BEGIN IMMEDIATE 在读取前取得写保留锁；第二个连接会等待，随后读到同一槽位。
+    this.db.exec("begin immediate");
+    try {
+      const seen = this.db
+        .prepare("select merchant_id, request_digest, record_id from onboarding_idempotency where idempotency_key = ?")
+        .get(idempotencyKey) as
+        | { merchant_id: string; request_digest: string; record_id: string }
+        | undefined;
+      if (seen !== undefined) {
+        // 同 key 不同摘要 = 复用了幂等键做另一件事 → 冲突（§7.2）。
+        if (seen.request_digest !== requestDigest || seen.merchant_id !== merchantId) {
+          throw new OnboardingError(
+            "conflict",
+            `idempotency key ${idempotencyKey} was used with a different request digest or merchant`,
+          );
+        }
+        const replay = this.requireRecord(seen.record_id);
+        this.db.exec("commit");
+        return replay;
       }
-      return this.requireRecord(seen.record_id);
-    }
 
-    const active = this.activeRecord(merchantId);
-    if (active !== undefined && input.newGeneration !== true) {
-      // §7.1：一个商家重复点击只返回同一活跃记录。
-      this.rememberIdempotency(idempotencyKey, merchantId, requestDigest, active.recordId);
-      return active;
-    }
+      const active = this.activeRecord(merchantId);
+      if (active !== undefined && input.newGeneration !== true) {
+        // §7.1：一个商家重复点击只返回当前槽指向的同一记录。
+        this.rememberIdempotency(idempotencyKey, merchantId, requestDigest, active.recordId);
+        this.db.exec("commit");
+        return active;
+      }
 
-    const generation = input.newGeneration === true ? this.nextGeneration(merchantId) : 1;
-    const recordId = `onb_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
-    const catalogAgentId = input.catalogAgentId ?? `cagt_${intentId.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 40)}`;
-    const stamp = this.now();
-    this.db
-      .prepare(
-        "insert into onboarding_records (record_id, intent_id, merchant_id, environment, agent_slot,"
-          + " generation, catalog_agent_id, card_url, version_digest, application_id, runtime_origin_host,"
-          + " status, revision, last_successful_step, last_error, created_at, updated_at)"
-          + " values (?, ?, ?, 'production', 'primary', ?, ?, ?, ?, null, null, 'DRAFT', 0, null, null, ?, ?)",
-      )
-      .run(
-        recordId,
-        intentId,
-        merchantId,
-        generation,
-        catalogAgentId,
-        // 稳定名片地址在**创建意图时**就预留（§7.1：不等待"注册后才知道 Card 地址"）
-        `/v1/agents/${catalogAgentId}/agent-card.json`,
-        versionDigest,
-        stamp,
-        stamp,
-      );
-    this.rememberIdempotency(idempotencyKey, merchantId, requestDigest, recordId);
-    return this.requireRecord(recordId);
+      const generation = input.newGeneration === true ? this.nextGeneration(merchantId) : 1;
+      const recordId = `onb_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
+      const catalogAgentId = input.catalogAgentId ?? `cagt_${intentId.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 40)}`;
+      const stamp = this.now();
+      this.db
+        .prepare(
+          "insert into onboarding_records (record_id, intent_id, merchant_id, environment, agent_slot,"
+            + " generation, catalog_agent_id, card_url, version_digest, application_id, runtime_origin_host,"
+            + " status, revision, last_successful_step, last_error, created_at, updated_at)"
+            + " values (?, ?, ?, 'production', 'primary', ?, ?, ?, ?, null, null, 'DRAFT', 0, null, null, ?, ?)",
+        )
+        .run(
+          recordId,
+          intentId,
+          merchantId,
+          generation,
+          catalogAgentId,
+          // 稳定名片地址在**创建意图时**就预留（§7.1：不等待"注册后才知道 Card 地址"）
+          `/v1/agents/${catalogAgentId}/agent-card.json`,
+          versionDigest,
+          stamp,
+          stamp,
+        );
+      this.db
+        .prepare(
+          "insert into onboarding_slots"
+            + " (merchant_id, environment, agent_slot, current_record_id, generation, updated_at)"
+            + " values (?, 'production', 'primary', ?, ?, ?)"
+            + " on conflict(merchant_id, environment, agent_slot) do update set"
+            + " current_record_id = excluded.current_record_id, generation = excluded.generation,"
+            + " updated_at = excluded.updated_at",
+        )
+        .run(merchantId, recordId, generation, stamp);
+      this.rememberIdempotency(idempotencyKey, merchantId, requestDigest, recordId);
+      const created = this.requireRecord(recordId);
+      this.db.exec("commit");
+      return created;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   /** 商家当前活跃记录（无则 undefined）。 */
   activeRecord(merchantId: string): OnboardingRecord | undefined {
-    const rows = this.db
+    const row = this.db
       .prepare(
-        "select * from onboarding_records where merchant_id = ? and environment = 'production'"
-          + " and agent_slot = 'primary' order by generation desc",
+        "select r.* from onboarding_slots s join onboarding_records r"
+          + " on r.record_id = s.current_record_id"
+          + " where s.merchant_id = ? and s.environment = 'production' and s.agent_slot = 'primary'",
       )
-      .all(requireNonEmpty(merchantId, "merchantId")) as Record<string, unknown>[];
-    const active = rows.find((row) => !TERMINAL_STATUSES.has(row["status"] as OnboardingStatus));
-    return active === undefined ? undefined : toRecord(active);
+      .get(requireNonEmpty(merchantId, "merchantId")) as Record<string, unknown> | undefined;
+    if (row === undefined || TERMINAL_STATUSES.has(row["status"] as OnboardingStatus)) return undefined;
+    return toRecord(row);
   }
 
   getRecord(recordId: string): OnboardingRecord | undefined {
@@ -399,13 +438,31 @@ export class OnboardingStore {
 
   /** 商家撤销开通意图。**不自动删已有云资源**（§7.1）。 */
   cancel(recordId: string, expectedRevision: number): OnboardingRecord {
-    const record = this.requireRecord(recordId);
-    assertRevision(record, expectedRevision);
-    assertTransition(record.status, "CANCELLED");
-    this.db
-      .prepare("update onboarding_records set status = 'CANCELLED', revision = ?, updated_at = ? where record_id = ? and revision = ?")
-      .run(record.revision + 1, this.now(), recordId, expectedRevision);
-    return this.requireRecord(recordId);
+    this.db.exec("begin immediate");
+    try {
+      const record = this.requireRecord(recordId);
+      assertRevision(record, expectedRevision);
+      assertTransition(record.status, "CANCELLED");
+      const stamp = this.now();
+      const changed = this.db
+        .prepare("update onboarding_records set status = 'CANCELLED', revision = ?, updated_at = ? where record_id = ? and revision = ?")
+        .run(record.revision + 1, stamp, recordId, expectedRevision);
+      if (changed.changes !== 1) {
+        throw new OnboardingError("stale_revision", `record ${recordId} changed while cancelling`);
+      }
+      this.db
+        .prepare(
+          "delete from onboarding_slots where merchant_id = ? and environment = ?"
+            + " and agent_slot = ? and current_record_id = ?",
+        )
+        .run(record.merchantId, record.environment, record.agentSlot, recordId);
+      const cancelled = this.requireRecord(recordId);
+      this.db.exec("commit");
+      return cancelled;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   /** 该记录的全部证据（审计/回溯用）。 */
@@ -472,6 +529,29 @@ export class OnboardingStore {
       .prepare("select max(generation) as max_generation from onboarding_records where merchant_id = ?")
       .get(merchantId) as { max_generation: number | null } | undefined;
     return (row?.max_generation ?? 0) + 1;
+  }
+
+  /**
+   * 从旧版仅有 records 的数据库建立“当前槽”指针。只选每个槽位最新的一条非终态
+   * 记录；即使历史上已经发生双插，也不会把两条都恢复成当前写者。
+   */
+  private backfillSlots(): void {
+    this.db.exec(`
+      insert or ignore into onboarding_slots
+        (merchant_id, environment, agent_slot, current_record_id, generation, updated_at)
+      select r.merchant_id, r.environment, r.agent_slot, r.record_id, r.generation, r.updated_at
+      from onboarding_records r
+      where r.status <> 'CANCELLED'
+        and r.record_id = (
+          select r2.record_id from onboarding_records r2
+          where r2.merchant_id = r.merchant_id
+            and r2.environment = r.environment
+            and r2.agent_slot = r.agent_slot
+            and r2.status <> 'CANCELLED'
+          order by r2.generation desc, r2.updated_at desc, r2.record_id desc
+          limit 1
+        )
+    `);
   }
 
   private requireRecord(recordId: string): OnboardingRecord {

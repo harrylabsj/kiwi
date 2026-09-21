@@ -22,7 +22,7 @@ import { MerchantImportDraftStore } from "../src/http/merchant-management/draft-
 import { MerchantManagementOperationStore } from "../src/http/merchant-management/operation-store.js";
 import { MutableServiceState } from "../src/http/merchant-management/service-state.js";
 import { OnboardingStore } from "../src/cloud/onboarding/store.js";
-import type { AuthoritativeEvidence } from "../src/cloud/onboarding/types.js";
+import type { PlatformEvidenceResult } from "../src/cloud/onboarding/types.js";
 
 const FIXED_NOW = new Date("2026-09-21T10:00:00Z");
 const MERCHANT = "merchant-001";
@@ -37,7 +37,7 @@ const store = new OnboardingStore(db, { now: () => FIXED_NOW.toISOString() });
 
 /** 平台适配器：默认"取不到回执"（真实形态——平台能力尚未落地）。 */
 const platformEvidence = vi.fn<
-  (input: { stepId: string; recordId: string }) => Promise<AuthoritativeEvidence | undefined>
+  (input: { stepId: string; recordId: string }) => Promise<PlatformEvidenceResult>
 >(async () => undefined);
 
 let withPlatformAdapter = true;
@@ -239,6 +239,32 @@ describe("T029/T007：证据只能来自服务端", () => {
     });
     expect(res.status).toBe(503);
     expect(String(res.json["message"])).toContain("did not return an authoritative receipt");
+  });
+
+  it("平台建议 useLocalImplementation → 明确 503，状态不推进且不启用本地经营兜底", async () => {
+    const auth = await login("owner", MERCHANT);
+    const recordId = await openIntent(auth);
+    await call(base, "POST", `/merchant/api/onboarding/${recordId}/advance`, {
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      origin: ORIGIN,
+      body: { step: "login-binding", expected_revision: 0, idempotency_key: nextKey("k") },
+    });
+    platformEvidence.mockImplementation(async () => ({
+      kind: "platform_failure",
+      code: "cloud_service_unavailable",
+      useLocalImplementation: true,
+    }));
+    const res = await call(base, "POST", `/merchant/api/onboarding/${recordId}/advance`, {
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      origin: ORIGIN,
+      body: { step: "platform-consent", expected_revision: 1, idempotency_key: nextKey("k") },
+    });
+    expect(res.status).toBe(503);
+    expect(String(res.json["message"])).toContain("local implementation fallback is disabled");
+    expect(store.getRecord(recordId)?.status).toBe("AWAITING_PLATFORM_CONSENT");
+    expect(store.getRecord(recordId)?.applicationId).toBeNull();
   });
 
   it("请求体里塞证据字段一律被拒（未知字段 fail-closed）——客户端不能自报回执", async () => {

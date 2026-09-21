@@ -78,10 +78,13 @@ import {
 } from "./operation-store.js";
 import type { MutableServiceState } from "./service-state.js";
 import { OnboardingStore } from "../../cloud/onboarding/store.js";
+import { requestsDisabledLocalImplementation } from "../../cloud/onboarding/local-fallback.js";
 import { checkStepSubmission, planWizard, WIZARD_STEPS } from "../../cloud/onboarding/steps.js";
-import type { AuthoritativeEvidence, Evidence } from "../../cloud/onboarding/types.js";
+import type { Evidence, PlatformEvidenceResult } from "../../cloud/onboarding/types.js";
+import { createWorkbenchProblem, type WorkbenchProblemCode } from "./problem.js";
 
 const API_PREFIX = "/merchant/api";
+const WORKBENCH_API_PREFIX = "/merchant/api/v1";
 const MAX_BODY_BYTES = 1_048_576;
 /** 非候选写命令确认引用的有效期（BD §7.3：短时、单次）。 */
 const CONFIRMATION_TTL_MS = 5 * 60 * 1000;
@@ -150,7 +153,7 @@ export interface MerchantManagementApiOptions {
       stepId: string;
       recordId: string;
       /** 平台报告的 applicationId（适配器从真实回执里取，不来自请求）。 */
-    }) => Promise<AuthoritativeEvidence | undefined>;
+    }) => Promise<PlatformEvidenceResult>;
   };
   log?: (line: string) => void;
   now?: () => Date;
@@ -232,6 +235,28 @@ export function createMerchantManagementApiHandler(
       writeJson(res, 404, errorBody("not_found", "unknown management api path"));
       return;
     }
+    if (pathname === WORKBENCH_API_PREFIX || pathname.startsWith(`${WORKBENCH_API_PREFIX}/`)) {
+      const requestId = `req_${randomBytes(12).toString("hex")}`;
+      const rest =
+        pathname === WORKBENCH_API_PREFIX ? "/" : pathname.slice(WORKBENCH_API_PREFIX.length);
+      try {
+        if (method !== "GET") {
+          writeWorkbenchProblem(
+            res,
+            "VALIDATION_ERROR",
+            requestId,
+            "请求方法不可用",
+            "该 Workbench 路由当前只接受 GET。",
+            { allow: "GET" },
+          );
+          return;
+        }
+        await routeWorkbenchV1Get(req, res, url, rest, requestId);
+      } catch (error) {
+        respondWorkbenchError(res, error, requestId);
+      }
+      return;
+    }
     const rest = pathname === API_PREFIX ? "/" : pathname.slice(API_PREFIX.length);
 
     try {
@@ -259,6 +284,64 @@ export function createMerchantManagementApiHandler(
   }
 
   // ── 只读路由（认证即鉴权入口；业务授权在服务层逐次复核）────────────────
+
+  /** Workbench v1 读取面复用同一应用服务；未实现路由明确失败，不返回假数据。 */
+  async function routeWorkbenchV1Get(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+    rest: string,
+    requestId: string,
+  ): Promise<void> {
+    if (rest === "/runtime/status") {
+      const auth = requireActor(req);
+      writeJson(res, 200, await readService.getStatus(auth.ctx), { "x-request-id": requestId });
+      return;
+    }
+    if (rest === "/products") {
+      const auth = requireActor(req);
+      writeJson(res, 200, await readService.listProducts(auth.ctx, pageQuery(url)), {
+        "x-request-id": requestId,
+      });
+      return;
+    }
+    if (rest === "/approvals") {
+      const auth = requireActor(req);
+      writeJson(res, 200, await readService.listApprovals(auth.ctx, pageQuery(url)), {
+        "x-request-id": requestId,
+      });
+      return;
+    }
+    const approvalMatch = /^\/approvals\/([^/]+)$/.exec(rest);
+    if (approvalMatch !== null) {
+      const auth = requireActor(req);
+      writeJson(
+        res,
+        200,
+        await readService.getApproval(auth.ctx, pathSegment(approvalMatch[1] ?? "")),
+        { "x-request-id": requestId },
+      );
+      return;
+    }
+    const operationMatch = /^\/operations\/([^/]+)$/.exec(rest);
+    if (operationMatch !== null) {
+      const auth = requireActor(req);
+      writeJson(
+        res,
+        200,
+        readService.getOperation(auth.ctx, pathSegment(operationMatch[1] ?? "")),
+        { "x-request-id": requestId },
+      );
+      return;
+    }
+    writeWorkbenchProblem(
+      res,
+      "RESOURCE_NOT_FOUND",
+      requestId,
+      "资源不存在",
+      "Workbench API 路由不存在或尚未实现。",
+    );
+  }
 
   async function routeGet(
     req: IncomingMessage,
@@ -569,6 +652,18 @@ export function createMerchantManagementApiHandler(
           );
         }
         const obtained = await adapter({ stepId, recordId: record.recordId });
+        if (requestsDisabledLocalImplementation(obtained)) {
+          throw new ManagementError(
+            "unavailable",
+            `platform capability ${obtained.code || "cloud_service_unavailable"} is unavailable; local implementation fallback is disabled`,
+          );
+        }
+        if (obtained?.kind === "platform_failure") {
+          throw new ManagementError(
+            "unavailable",
+            `platform did not return an authoritative receipt (${obtained.code || "platform_failure"})`,
+          );
+        }
         if (obtained === undefined) {
           operations.release(begun.operationId);
           throw new ManagementError(
@@ -1566,6 +1661,89 @@ function writeJson(
     ...extra,
   });
   res.end(JSON.stringify(body));
+}
+
+function writeWorkbenchProblem(
+  res: ServerResponse,
+  code: WorkbenchProblemCode,
+  requestId: string,
+  title: string,
+  detail: string,
+  details?: Readonly<Record<string, unknown>>,
+): void {
+  const body = createWorkbenchProblem(code, {
+    title,
+    detail,
+    requestId,
+    ...(details !== undefined ? { details } : {}),
+  });
+  if (res.headersSent) {
+    res.end();
+    return;
+  }
+  res.writeHead(body.status, {
+    "content-type": "application/problem+json; charset=utf-8",
+    "cache-control": "no-store",
+    pragma: "no-cache",
+    "x-request-id": requestId,
+  });
+  res.end(JSON.stringify(body));
+}
+
+function respondWorkbenchError(res: ServerResponse, error: unknown, requestId: string): void {
+  if (error instanceof ActorContextError) {
+    if (error.code === "expired_context") {
+      writeWorkbenchProblem(
+        res,
+        "UNAUTHENTICATED",
+        requestId,
+        "需要重新登录",
+        "管理会话或主体上下文已经过期。",
+      );
+      return;
+    }
+    writeWorkbenchProblem(
+      res,
+      "INTERNAL_ERROR",
+      requestId,
+      "主体校验失败",
+      "主体上下文完整性校验失败。",
+    );
+    return;
+  }
+  if (error instanceof ManagementError) {
+    const mapping: Readonly<Record<string, WorkbenchProblemCode>> = {
+      unauthorized: "UNAUTHENTICATED",
+      forbidden: "PERMISSION_REVOKED",
+      not_found: "RESOURCE_NOT_FOUND",
+      conflict: "VERSION_CONFLICT",
+      precondition_changed: "VERSION_CONFLICT",
+      invalid_input: "VALIDATION_ERROR",
+      rate_limited: "RATE_LIMITED",
+      unavailable: "DEPENDENCY_UNAVAILABLE",
+      tool_binding_unavailable: "DEPENDENCY_UNAVAILABLE",
+      update_required: "VERSION_CONFLICT",
+    };
+    writeWorkbenchProblem(
+      res,
+      mapping[error.code] ?? "INTERNAL_ERROR",
+      requestId,
+      "请求未完成",
+      error.message,
+      { support_id: error.supportId },
+    );
+    return;
+  }
+  process.stderr.write(
+    `[merchant-management] Workbench 未预期异常：${error instanceof Error ? error.message : String(error)}\n`,
+  );
+  writeWorkbenchProblem(
+    res,
+    "INTERNAL_ERROR",
+    requestId,
+    "内部错误",
+    "请求未完成，请使用请求编号联系支持。",
+  );
 }
 
 function respondError(res: ServerResponse, err: unknown): void {

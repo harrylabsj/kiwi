@@ -32,6 +32,7 @@
  */
 
 import type { ReadinessReport } from "../readiness.js";
+import type { PlatformAdapterFailure, PlatformEvidenceResult } from "./types.js";
 
 /** 本地可见的发布治理状态（与 Catalog 侧 ACTIVE/PAUSED/WITHDRAWN 同词汇）。 */
 export type LocalPublicationState = "NONE" | "ACTIVE" | "PAUSED" | "WITHDRAWN";
@@ -75,6 +76,16 @@ export interface LocalFallbackView {
    * 权威边界声明：**本地视图不是权威状态**。调用方必须原样展示，不得省略。
    */
   authorityNote: string;
+}
+
+/**
+ * 平台失败响应是否要求启用本地实现。这个字段只能触发“明确拒绝并保持安全态”，
+ * 绝不能被当作继续开通、发布或恢复营业的许可。
+ */
+export function requestsDisabledLocalImplementation(
+  result: PlatformEvidenceResult,
+): result is PlatformAdapterFailure & { useLocalImplementation: true } {
+  return result?.kind === "platform_failure" && result.useLocalImplementation === true;
 }
 
 const AUTHORITY_NOTE =

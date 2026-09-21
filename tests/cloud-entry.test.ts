@@ -261,7 +261,9 @@ describe("单端口路由分发（T016）", () => {
   it("探针：/healthz 与 /livez 最小应答，/readyz 反映就绪", async () => {
     const { base } = await startRouter({ ready: true });
     expect((await fetch(`${base}/healthz`)).status).toBe(200);
-    expect((await fetch(`${base}/livez`)).status).toBe(200);
+    const live = await fetch(`${base}/livez`);
+    expect(live.status).toBe(200);
+    expect(await live.json()).toEqual({ ok: true, node: process.version });
     const ready = await fetch(`${base}/readyz`);
     expect(ready.status).toBe(200);
     const body = (await ready.json()) as { ready: boolean; checks: Record<string, { ok: boolean }> };

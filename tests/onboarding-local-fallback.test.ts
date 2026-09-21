@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   degradedRecoveryAsk,
   deriveLocalFallback,
+  requestsDisabledLocalImplementation,
   type LocalFallbackInput,
 } from "../src/cloud/onboarding/local-fallback.js";
 
@@ -99,6 +100,23 @@ describe("治理状态：暂停与撤回", () => {
 });
 
 describe("权威边界：本地视图不得自行宣布恢复", () => {
+  it("平台建议 useLocalImplementation 时明确拒绝启用经营兜底", () => {
+    expect(
+      requestsDisabledLocalImplementation({
+        kind: "platform_failure",
+        code: "cloud_service_unavailable",
+        useLocalImplementation: true,
+      }),
+    ).toBe(true);
+    expect(
+      requestsDisabledLocalImplementation({
+        kind: "platform_failure",
+        code: "cloud_service_unavailable",
+        useLocalImplementation: false,
+      }),
+    ).toBe(false);
+  });
+
   it("控制面不可达 → 必须对账，并给出待确认问题；权威声明原样带出", () => {
     const strict = input({ publicationState: "ACTIVE", controlPlaneReachable: false });
     const view = deriveLocalFallback(strict);
