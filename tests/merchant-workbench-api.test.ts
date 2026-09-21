@@ -90,6 +90,30 @@ function preparedBroadcast(input: {
   return { candidate: item };
 }
 
+function preparedProductChange(input: {
+  sku: string;
+  authorization: Record<string, unknown>;
+  stock?: number;
+  paused?: boolean;
+}): { candidate: WriteApprovalCandidate } {
+  const inventory = input.stock !== undefined;
+  const item: WriteApprovalCandidate = {
+    ...candidate,
+    candidate_id: `candidate-product-${pending.length}`,
+    tool: inventory
+      ? "kiwi_merchant_prepare_inventory_update"
+      : "kiwi_merchant_prepare_listing_change",
+    arguments: {
+      sku: input.sku,
+      ...(inventory ? { stock: input.stock } : { paused: input.paused }),
+      authorization: input.authorization,
+    },
+    arguments_hash: `sha256:product-${pending.length}`,
+  };
+  pending.push(item);
+  return { candidate: item };
+}
+
 function preparedGrant(input: {
   ownerActorId: string;
   subjectId: string;
@@ -207,6 +231,8 @@ beforeAll(async () => {
         }),
       },
       prepareBroadcastPublish: preparedBroadcast,
+      prepareInventoryUpdate: preparedProductChange,
+      prepareListingChange: preparedProductChange,
       prepareGrantCreate: preparedGrant,
       preparePromotionPublish: preparedPromotion,
       webauthnRegistration: {
@@ -856,5 +882,89 @@ describe("Workbench v1 trusted confirmation API", () => {
       broadcast_candidate_id: body.candidate.candidate_id,
     });
     expect(promotions.getPromotion(MERCHANT, promotion.promotion_id)?.revision).toBe(2);
+  });
+
+  it("gates inventory/listing drafts and decisions with separate SKU grants", async () => {
+    const operatorId = "operator:product-change-api";
+    const operatorAuth = await createAuth(operatorId, "operator");
+    confirmations.persistVerifiedCredential({
+      registrationVerified: true,
+      credentialId: "credential-product-change-operator-api",
+      merchantId: MERCHANT,
+      actorId: operatorId,
+      publicKeyPem: keyPair.publicKey.export({ type: "spki", format: "pem" }).toString(),
+      rpId: RP_ID,
+      origin: ORIGIN,
+    });
+    const owner = createVerifiedActorContext({
+      actorId: ACTOR,
+      merchantId: MERCHANT,
+      role: "owner",
+      authMethod: "admin-session",
+      generation: 1,
+      requestId: "test-product-change-owner",
+      expiresAt: "2027-09-21T12:00:00.000Z",
+    });
+    const body = { kind: "inventory_update", sku: "sku-change", stock: 8 };
+    expect((await postWithAuth("/merchant/api/v1/change-drafts", body, operatorAuth)).status).toBe(
+      403,
+    );
+    grants.createGrant(owner, {
+      subjectId: operatorId,
+      action: "product.draft",
+      resourceType: "product",
+      resourceSelector: ["sku-change"],
+      expiresAt: "2027-09-21T12:00:00.000Z",
+    });
+    const drafted = await postWithAuth("/merchant/api/v1/change-drafts", body, operatorAuth);
+    expect(drafted.status).toBe(201);
+    const prepared = (await drafted.json()) as { candidate: WriteApprovalCandidate };
+    expect(prepared.candidate).toMatchObject({
+      tool: "kiwi_merchant_prepare_inventory_update",
+      arguments: {
+        sku: "sku-change",
+        stock: 8,
+        authorization: {
+          action: "product.draft",
+          resource_ids: ["sku-change"],
+        },
+      },
+    });
+    expect(
+      (
+        await postWithAuth(
+          "/merchant/api/v1/confirmations",
+          { candidate_id: prepared.candidate.candidate_id, decision: "approve" },
+          operatorAuth,
+        )
+      ).status,
+    ).toBe(403);
+    grants.createGrant(owner, {
+      subjectId: operatorId,
+      action: "product.decide",
+      resourceType: "product",
+      resourceSelector: ["sku-change"],
+      expiresAt: "2027-09-21T12:00:00.000Z",
+    });
+    const confirmation = await postWithAuth(
+      "/merchant/api/v1/confirmations",
+      { candidate_id: prepared.candidate.candidate_id, decision: "approve" },
+      operatorAuth,
+    );
+    expect(confirmation.status).toBe(201);
+    const confirmationBody = (await confirmation.json()) as { confirmation_id: string };
+    const projection = await fetch(
+      `${base}/merchant/api/v1/confirmations/${confirmationBody.confirmation_id}`,
+      { headers: { cookie: operatorAuth.cookie } },
+    );
+    expect(await projection.json()).toMatchObject({
+      snapshot: {
+        decision_authorization: {
+          action: "product.decide",
+          resource_type: "product",
+          resource_ids: ["sku-change"],
+        },
+      },
+    });
   });
 });

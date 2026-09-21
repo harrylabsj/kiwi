@@ -55,6 +55,8 @@ export interface ExecutorContext {
     conversation_id: string;
     resolution: string;
   }) => Promise<unknown>;
+  /** Cloud Workbench requires committed WebAuthn decisions for product writes. */
+  requireCommittedProductDecisions?: boolean;
 }
 
 /** 固定执行器（一个 tool 一个）。 */
@@ -114,6 +116,7 @@ export class MerchantExecutorRegistry {
       // V1 草稿候选（内部 tool 名不变——写门/恢复机制的历史标识）
       {
         tool: "draft_product_change",
+        requiresCommittedDecision: ctx.requireCommittedProductDecisions === true,
         readPreconditions: productPreconditions,
         execute: async (args, c) => {
           const changes = (args.changes ?? {}) as MerchantProductPatch;
@@ -126,6 +129,7 @@ export class MerchantExecutorRegistry {
       },
       {
         tool: "kiwi_merchant_prepare_product_create",
+        requiresCommittedDecision: ctx.requireCommittedProductDecisions === true,
         // 审查 P1：执行前白名单重校验并钉死 merchant_id 归属——prepare 层
         // 已校验（service），这里防御 store 参数被篡改/迁移旧库缺校验。
         readPreconditions: async (args) => {
@@ -149,6 +153,7 @@ export class MerchantExecutorRegistry {
       },
       {
         tool: "kiwi_merchant_prepare_product_update",
+        requiresCommittedDecision: ctx.requireCommittedProductDecisions === true,
         readPreconditions: productPreconditions,
         execute: async (args, c) => {
           const changes = (args.changes ?? {}) as MerchantProductPatch;
@@ -158,6 +163,7 @@ export class MerchantExecutorRegistry {
       },
       {
         tool: "kiwi_merchant_prepare_inventory_update",
+        requiresCommittedDecision: ctx.requireCommittedProductDecisions === true,
         readPreconditions: productPreconditions,
         execute: async (args, c) =>
           c.merchantClient.updateInventory(String(args.sku), Number(args.stock)),
@@ -166,6 +172,7 @@ export class MerchantExecutorRegistry {
         // F08 语义落地：销售状态（paused flag）；上游 shopping-cli 2.x 无端点
         // → client fail-closed 报「不可得」（不库存写零伪装下架）。
         tool: "kiwi_merchant_prepare_listing_change",
+        requiresCommittedDecision: ctx.requireCommittedProductDecisions === true,
         readPreconditions: productPreconditions,
         execute: async (args, c) =>
           c.merchantClient.pauseListing(String(args.sku), args.paused === true),

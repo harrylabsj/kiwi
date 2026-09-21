@@ -198,6 +198,18 @@ export interface MerchantManagementApiOptions {
     workflowId?: string;
     reason?: string;
   }) => Promise<unknown> | unknown;
+  prepareInventoryUpdate?: (input: {
+    sku: string;
+    stock: number;
+    authorization: Record<string, unknown>;
+    reason?: string;
+  }) => Promise<unknown> | unknown;
+  prepareListingChange?: (input: {
+    sku: string;
+    paused: boolean;
+    authorization: Record<string, unknown>;
+    reason?: string;
+  }) => Promise<unknown> | unknown;
   prepareBroadcastRevise?: (input: {
     broadcastId: string;
     expectedRevision: number;
@@ -692,7 +704,8 @@ export function createMerchantManagementApiHandler(
       const decisionAuthorization =
         authorizeBroadcastCandidate(auth.ctx, candidate, "broadcast.decide") ??
         authorizeGrantCandidate(auth.ctx, candidate) ??
-        authorizePromotionCandidate(auth.ctx, candidate);
+        authorizePromotionCandidate(auth.ctx, candidate) ??
+        authorizeProductCandidate(auth.ctx, candidate);
       const confirmation = confirmations.createRequest({
         merchantId: auth.ctx.merchantId,
         actorId: auth.ctx.actorId,
@@ -784,7 +797,8 @@ export function createMerchantManagementApiHandler(
       const currentAuthorization =
         authorizeBroadcastCandidate(auth.ctx, candidate, "broadcast.decide") ??
         authorizeGrantCandidate(auth.ctx, candidate) ??
-        authorizePromotionCandidate(auth.ctx, candidate);
+        authorizePromotionCandidate(auth.ctx, candidate) ??
+        authorizeProductCandidate(auth.ctx, candidate);
       if (currentAuthorization !== undefined) {
         const confirmationId = requireString(fields["confirmation_id"], "confirmation_id");
         const frozen = requireWorkbenchConfirmations().requestProjection({
@@ -882,6 +896,71 @@ export function createMerchantManagementApiHandler(
           authorization,
           ...(reason !== undefined ? { reason } : {}),
         });
+      }
+      writeJson(res, 201, prepared, { "x-request-id": requestId });
+      return;
+    }
+
+    if (rest === "/change-drafts") {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "products:draft");
+      const fields = objectFields(await readJsonBody(req), [
+        "kind",
+        "sku",
+        "stock",
+        "paused",
+        "reason",
+      ]);
+      const kind = requireString(fields["kind"], "kind");
+      const sku = requireString(fields["sku"], "sku");
+      const scoped = authorizeProductAction(auth.ctx, "product.draft", [sku]);
+      const authorization: Record<string, unknown> = {
+        actor_id: auth.ctx.actorId,
+        actor_role: auth.ctx.role,
+        action: "product.draft",
+        resource_type: "product",
+        resource_ids: [sku],
+        authorization_generation: scoped.generation,
+        matched_grant_ids: scoped.grantIds,
+      };
+      const reason = optionalString(fields["reason"], "reason");
+      let prepared: unknown;
+      if (kind === "inventory_update") {
+        const channel = options.prepareInventoryUpdate;
+        if (channel === undefined) {
+          throw new ManagementError(
+            "unavailable",
+            "inventory candidate preparation is unavailable",
+          );
+        }
+        const stock = requireInteger(fields["stock"], "stock");
+        if (stock < 0) throw new ManagementError("invalid_input", "stock must be non-negative");
+        prepared = await channel({
+          sku,
+          stock,
+          authorization,
+          ...(reason !== undefined ? { reason } : {}),
+        });
+      } else if (kind === "listing_change") {
+        const channel = options.prepareListingChange;
+        if (channel === undefined) {
+          throw new ManagementError("unavailable", "listing candidate preparation is unavailable");
+        }
+        if (typeof fields["paused"] !== "boolean") {
+          throw new ManagementError("invalid_input", "paused must be a boolean");
+        }
+        prepared = await channel({
+          sku,
+          paused: fields["paused"],
+          authorization,
+          ...(reason !== undefined ? { reason } : {}),
+        });
+      } else {
+        throw new ManagementError(
+          "invalid_input",
+          "kind must be inventory_update or listing_change",
+        );
       }
       writeJson(res, 201, prepared, { "x-request-id": requestId });
       return;
@@ -1277,6 +1356,69 @@ export function createMerchantManagementApiHandler(
       action: "product.decide",
       resource_type: "product",
       resource_ids: promotion.sku_refs,
+      authorization_generation: scoped.generation,
+      matched_grant_ids: scoped.grantIds,
+    };
+  }
+
+  function authorizeProductCandidate(
+    actor: VerifiedActorContext,
+    candidate: WriteApprovalCandidate,
+  ): Record<string, unknown> | undefined {
+    const productScopedTools = new Set([
+      "draft_product_change",
+      "kiwi_merchant_prepare_product_update",
+      "kiwi_merchant_prepare_inventory_update",
+      "kiwi_merchant_prepare_listing_change",
+    ]);
+    const createsProduct = candidate.tool === "kiwi_merchant_prepare_product_create";
+    if (!createsProduct && !productScopedTools.has(candidate.tool)) return undefined;
+    authorizeOrThrow(actor, "products:decide");
+    if (createsProduct) {
+      const product = requireObject(candidate.arguments["product"], "candidate product");
+      const sku = requireString(product["sku"], "candidate product.sku");
+      const generation =
+        options.workbenchGrants?.authorizationGeneration(actor.merchantId, actor.actorId) ?? 0;
+      if (actor.role !== "owner") {
+        const grants = options.workbenchGrants;
+        if (grants === undefined) {
+          throw new ManagementError("forbidden", "scoped grants are unavailable");
+        }
+        const result = grants.authorize(actor, {
+          action: "product.create",
+          resourceType: "merchant",
+        });
+        if (!result.authorized) {
+          throw new ManagementError("forbidden", "missing scoped grant: product.create");
+        }
+        return {
+          actor_id: actor.actorId,
+          actor_role: actor.role,
+          action: "product.create",
+          resource_type: "merchant",
+          resource_ids: [sku],
+          authorization_generation: result.generation,
+          matched_grant_ids: result.grantIds,
+        };
+      }
+      return {
+        actor_id: actor.actorId,
+        actor_role: actor.role,
+        action: "product.create",
+        resource_type: "merchant",
+        resource_ids: [sku],
+        authorization_generation: generation,
+        matched_grant_ids: [],
+      };
+    }
+    const sku = requireString(candidate.arguments["sku"], "candidate sku");
+    const scoped = authorizeProductAction(actor, "product.decide", [sku]);
+    return {
+      actor_id: actor.actorId,
+      actor_role: actor.role,
+      action: "product.decide",
+      resource_type: "product",
+      resource_ids: [sku],
       authorization_generation: scoped.generation,
       matched_grant_ids: scoped.grantIds,
     };

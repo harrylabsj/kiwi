@@ -108,6 +108,8 @@ export interface MerchantRuntimeAssemblyOptions {
   log?: (line: string) => void;
   /** Extra Workbench executors fixed at startup. */
   extraExecutors?: CommandExecutor[];
+  /** Require committed Workbench WebAuthn decisions for product writes. */
+  requireCommittedProductDecisions?: boolean;
 }
 
 export interface MerchantRuntimeAssembly {
@@ -349,9 +351,14 @@ export async function assembleMerchantRuntime(
         confirmationMinter: (input) =>
           `cfm_${createHash("sha256")
             .update(
-              [input.caseId, String(input.revision), input.lineId, input.sku, input.actor, now()].join(
-                "\u0000",
-              ),
+              [
+                input.caseId,
+                String(input.revision),
+                input.lineId,
+                input.sku,
+                input.actor,
+                now(),
+              ].join("\u0000"),
             )
             .digest("hex")
             .slice(0, 24)}`,
@@ -396,8 +403,13 @@ export async function assembleMerchantRuntime(
     // 运行中策略读取：执行器硬策略（底价兜底）按当前生效策略校验。
     currentPolicy: () => policyRuntime.current().policy,
     // 询报价子服务（v0.1.1 §11.1）：未配置时 rfq 工具面 fail-closed「不可得」。
-    ...(rfqStack !== undefined ? { rfq: { service: rfqStack.service, executors: rfqStack.executors } } : {}),
+    ...(rfqStack !== undefined
+      ? { rfq: { service: rfqStack.service, executors: rfqStack.executors } }
+      : {}),
     ...(options.extraExecutors !== undefined ? { extraExecutors: options.extraExecutors } : {}),
+    ...(options.requireCommittedProductDecisions === true
+      ? { requireCommittedProductDecisions: true }
+      : {}),
   });
   // 审批闭环（阶段三推广版）：恢复全部已注册写工具的 pending 命令（覆盖 V1
   // recoverPendingDrafts 语义）；未注册工具的死候选标 expired。
@@ -463,35 +475,38 @@ export async function assembleMerchantRuntime(
     ...(rfqStack !== undefined
       ? {
           rfq: {
-            tools: buildRfqMcpTools({
-              rfq: rfqStack.service,
-              // 发布候选登记接缝：经 MerchantCommandLog（release_quote 风险语义）。
-              prepareReleaseCandidate: async (args) => {
-                const prepared = await service.commands.prepare({
-                  tool: "kiwi_merchant_prepare_quote_release",
-                  arguments: { release_id: args.releaseId },
-                });
-                return prepared.candidate.candidate_id;
+            tools: buildRfqMcpTools(
+              {
+                rfq: rfqStack.service,
+                // 发布候选登记接缝：经 MerchantCommandLog（release_quote 风险语义）。
+                prepareReleaseCandidate: async (args) => {
+                  const prepared = await service.commands.prepare({
+                    tool: "kiwi_merchant_prepare_quote_release",
+                    arguments: { release_id: args.releaseId },
+                  });
+                  return prepared.candidate.candidate_id;
+                },
+                prepareHandoffCandidate: async (args) => {
+                  const prepared = await service.commands.prepare({
+                    tool: "kiwi_merchant_prepare_quote_handoff",
+                    arguments: {
+                      handoff_id: args.handoffId,
+                      packet_json: args.packetJson,
+                      packet_digest: args.packetDigest,
+                    },
+                  });
+                  return prepared.candidate.candidate_id;
+                },
+                // AuthContext 服务端工厂：单商家单主体实例的调用主体固定
+                // （与命令记录主体一致；不取模型参数，§11.1/§9.3）。
+                callContext: () => ({
+                  principalId: principal.principal_id,
+                  actor: principal.principal_id,
+                  traceId: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                }),
               },
-              prepareHandoffCandidate: async (args) => {
-                const prepared = await service.commands.prepare({
-                  tool: "kiwi_merchant_prepare_quote_handoff",
-                  arguments: {
-                    handoff_id: args.handoffId,
-                    packet_json: args.packetJson,
-                    packet_digest: args.packetDigest,
-                  },
-                });
-                return prepared.candidate.candidate_id;
-              },
-              // AuthContext 服务端工厂：单商家单主体实例的调用主体固定
-              // （与命令记录主体一致；不取模型参数，§11.1/§9.3）。
-              callContext: () => ({
-                principalId: principal.principal_id,
-                actor: principal.principal_id,
-                traceId: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              }),
-            }, { releaseEnabled: rfqReleaseEnabled }),
+              { releaseEnabled: rfqReleaseEnabled },
+            ),
             admin: rfqAdminSurface(service),
             // MCP Apps 展示资源（ui://kiwi-rfq/*；宿主不支持时结构化文本降级）。
             resources: buildRfqPresentationResources({

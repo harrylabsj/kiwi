@@ -247,6 +247,7 @@ export async function bootstrapCloudRuntime(
       mcpPath: MCP_PATH,
       authMode: "oauth",
       issuer: config.publicOrigin,
+      requireCommittedProductDecisions: true,
       extraExecutors: [
         ...createBroadcastExecutors({
           merchantId: profile.owner_id,
@@ -598,6 +599,12 @@ export async function bootstrapCloudRuntime(
       ...(adminOptions.surface.prepareBroadcastPublish !== undefined
         ? { prepareBroadcastPublish: adminOptions.surface.prepareBroadcastPublish }
         : {}),
+      ...(adminOptions.surface.prepareInventoryUpdate !== undefined
+        ? { prepareInventoryUpdate: adminOptions.surface.prepareInventoryUpdate }
+        : {}),
+      ...(adminOptions.surface.prepareListingChange !== undefined
+        ? { prepareListingChange: adminOptions.surface.prepareListingChange }
+        : {}),
       ...(adminOptions.surface.prepareBroadcastRevise !== undefined
         ? { prepareBroadcastRevise: adminOptions.surface.prepareBroadcastRevise }
         : {}),
@@ -644,7 +651,10 @@ export async function bootstrapCloudRuntime(
                 : isCurrentGrantAuthorization(grantStore, {
                     merchantId: profile.owner_id,
                     actorId: lease.actorId,
-                    action: action === "product.decide" ? "product.decide" : "broadcast.decide",
+                    action:
+                      action === "product.decide" || action === "product.create"
+                        ? action
+                        : "broadcast.decide",
                     ...(action === "product.decide"
                       ? {
                           resourceType: "product" as const,
@@ -652,7 +662,9 @@ export async function bootstrapCloudRuntime(
                             ? authorization["resource_ids"].map((value) => String(value))
                             : [],
                         }
-                      : {}),
+                      : action === "product.create"
+                        ? { resourceType: "merchant" as const }
+                        : {}),
                     snapshot: authorization,
                   });
             if (!allowed) {

@@ -104,6 +104,34 @@ describe("写闭环：prepare → 确认 → 执行", () => {
     db.close();
   });
 
+  it("cloud Workbench product writes reject legacy approval and accept committed decisions", async () => {
+    const { core, client, db } = setupCore({ requireCommittedProductDecisions: true });
+    const prepared = await core.prepareInventoryUpdate({ sku: "sku-001", stock: 4 });
+    await expect(core.executeApproved(prepared.candidate.candidate_id)).rejects.toThrow(/WebAuthn/);
+    expect((await client.getProduct("sku-001")).stock).toBe(12);
+    const candidate = core.getCommand(prepared.candidate.candidate_id)!;
+    expect(
+      await core.executeCommittedDecision(
+        {
+          operationId: "operation-inventory-committed",
+          candidateId: candidate.candidate_id,
+          actorId: PRINCIPAL,
+          decision: "approve",
+        },
+        {
+          verifyCommittedDecision: (input) =>
+            input.actionDigest ===
+            contentHash({
+              arguments: candidate.arguments,
+              preconditions: candidate.preconditions,
+            }),
+        },
+      ),
+    ).toMatchObject({ kind: "executed" });
+    expect((await client.getProduct("sku-001")).stock).toBe(4);
+    db.close();
+  });
+
   it("前置版本变更（对象已改）→ 旧授权 stale/superseded，绝不执行", async () => {
     const { core, client, store, db } = setupCore();
     const prepared = await core.prepareInventoryUpdate({ sku: "sku-001", stock: 5 });
@@ -301,8 +329,9 @@ describe("配套商家确认页面（src/merchant-admin/ 最小骨架）", () =>
       preconditions: prepared.candidate.preconditions,
     });
     const verifier = {
-      verifyCommittedDecision: vi.fn((input: { operationId: string; actionDigest: string }) =>
-        input.operationId === "op-webauthn-1" && input.actionDigest === digest,
+      verifyCommittedDecision: vi.fn(
+        (input: { operationId: string; actionDigest: string }) =>
+          input.operationId === "op-webauthn-1" && input.actionDigest === digest,
       ),
     };
     const outcome = await admin.executeCommittedDecision!(

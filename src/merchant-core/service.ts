@@ -105,6 +105,7 @@ export interface MerchantCoreServiceDeps extends MerchantWorkbenchServiceDeps {
   };
   /** Additional Workbench executors fixed at Runtime startup. */
   extraExecutors?: CommandExecutor[];
+  requireCommittedProductDecisions?: boolean;
 }
 
 export class MerchantCoreService {
@@ -123,6 +124,7 @@ export class MerchantCoreService {
   private readonly merchantDataDir?: string;
   private readonly rfqDeps?: MerchantCoreServiceDeps["rfq"];
   private readonly extraExecutors: CommandExecutor[];
+  private readonly depsRequireCommittedProductDecisions: boolean;
   private readonly now: () => string;
   private readonly principalId: string;
   private readonly approvalsRef: MerchantWorkbenchServiceDeps["approvals"];
@@ -150,6 +152,7 @@ export class MerchantCoreService {
     if (deps.confirmations !== undefined) this.confirmationStore = deps.confirmations;
     if (deps.rfq !== undefined) this.rfqDeps = deps.rfq;
     this.extraExecutors = deps.extraExecutors ?? [];
+    this.depsRequireCommittedProductDecisions = deps.requireCommittedProductDecisions === true;
   }
 
   /** RFQ 子服务（未配置 → undefined；工具面 fail-closed）。 */
@@ -226,6 +229,9 @@ export class MerchantCoreService {
         ...(this.resolveShoppingReview !== undefined
           ? { resolveShoppingReview: this.resolveShoppingReview }
           : {}),
+        ...(this.depsRequireCommittedProductDecisions
+          ? { requireCommittedProductDecisions: true }
+          : {}),
       };
       this.commandLogInstance = new MerchantCommandLog({
         store: this.approvalsRef,
@@ -247,7 +253,11 @@ export class MerchantCoreService {
   /** prepare：商品创建（force_pending 候选，绝不直接执行）。入参白名单
    *  校验 + merchant_id 钉死归属（审查 P1：否则批准后执行必然失败或可跨
    *  商家写，白烧人工确认）。 */
-  prepareProductCreate(input: { product: unknown; reason?: string }) {
+  prepareProductCreate(input: {
+    product: unknown;
+    authorization?: Record<string, unknown>;
+    reason?: string;
+  }) {
     let product: unknown;
     try {
       product = parseProductCreateInput(input.product, this.workbench.ownerIdRef);
@@ -259,25 +269,42 @@ export class MerchantCoreService {
     }
     return this.commands.prepare({
       tool: "kiwi_merchant_prepare_product_create",
-      arguments: { product },
+      arguments: {
+        product,
+        ...(input.authorization !== undefined ? { authorization: input.authorization } : {}),
+      },
       ...(input.reason !== undefined ? { reason: input.reason } : {}),
     });
   }
 
   /** prepare：库存调整。 */
-  prepareInventoryUpdate(input: { sku: string; stock: number; reason?: string }) {
+  prepareInventoryUpdate(input: {
+    sku: string;
+    stock: number;
+    authorization?: Record<string, unknown>;
+    reason?: string;
+  }) {
     if (!Number.isInteger(input.stock) || input.stock < 0) {
       throw new MerchantWorkbenchError("validation", "stock 必须是非负整数");
     }
     return this.commands.prepare({
       tool: "kiwi_merchant_prepare_inventory_update",
-      arguments: { sku: input.sku, stock: input.stock },
+      arguments: {
+        sku: input.sku,
+        stock: input.stock,
+        ...(input.authorization !== undefined ? { authorization: input.authorization } : {}),
+      },
       ...(input.reason !== undefined ? { reason: input.reason } : {}),
     });
   }
 
   /** prepare：listing 销售状态变更（F08 语义；上游不支持 → fail-closed「不可得」）。 */
-  async prepareListingChange(input: { sku: string; paused: boolean; reason?: string }) {
+  async prepareListingChange(input: {
+    sku: string;
+    paused: boolean;
+    authorization?: Record<string, unknown>;
+    reason?: string;
+  }) {
     if (this.capabilities?.listing_pause === false) {
       throw new MerchantWorkbenchError(
         "unavailable",
@@ -286,7 +313,11 @@ export class MerchantCoreService {
     }
     return this.commands.prepare({
       tool: "kiwi_merchant_prepare_listing_change",
-      arguments: { sku: input.sku, paused: input.paused },
+      arguments: {
+        sku: input.sku,
+        paused: input.paused,
+        ...(input.authorization !== undefined ? { authorization: input.authorization } : {}),
+      },
       ...(input.reason !== undefined ? { reason: input.reason } : {}),
     });
   }

@@ -56,6 +56,18 @@ export interface MerchantAdminSurface {
     verifier: CommittedDecisionVerifier,
   ): Promise<unknown>;
   getCandidate?(commandId: string): WriteApprovalCandidate | undefined;
+  prepareInventoryUpdate?(input: {
+    sku: string;
+    stock: number;
+    authorization: Record<string, unknown>;
+    reason?: string;
+  }): Promise<unknown> | unknown;
+  prepareListingChange?(input: {
+    sku: string;
+    paused: boolean;
+    authorization: Record<string, unknown>;
+    reason?: string;
+  }): Promise<unknown> | unknown;
   prepareBroadcastPublish?(input: {
     broadcast: Record<string, unknown>;
     authorization: Record<string, unknown>;
@@ -114,6 +126,8 @@ export function merchantAdminSurface(core: MerchantCoreService): MerchantAdminSu
     rejectCandidate: (id, principalId, token) => core.commands.reject(id, principalId, token),
     executeCommittedDecision: (input, verifier) => core.executeCommittedDecision(input, verifier),
     getCandidate: (id) => core.getCommand(id),
+    prepareInventoryUpdate: (input) => core.prepareInventoryUpdate(input),
+    prepareListingChange: (input) => core.prepareListingChange(input),
     prepareBroadcastPublish: (input) => core.prepareBroadcastPublish(input),
     prepareBroadcastRevise: (input) => core.prepareBroadcastRevise(input),
     prepareBroadcastWithdraw: (input) => core.prepareBroadcastWithdraw(input),
