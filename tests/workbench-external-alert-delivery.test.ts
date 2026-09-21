@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ExternalAlertDeliveryStore,
   ExternalAlertDeliveryWorker,
+  probeRuntimeHealth,
 } from "../src/alerts/external-delivery.js";
 import { WorkbenchConfirmationStore } from "../src/http/merchant-management/webauthn-confirmation.js";
 import { WorkbenchReconciliationStore } from "../src/http/merchant-management/reconciliation-worker.js";
@@ -109,6 +110,44 @@ describe("standalone external alert delivery", () => {
     });
     expect(reopened.changed).toBe(true);
     expect(store.enqueueOutstanding()).toBeGreaterThan(0);
+    db.close();
+  });
+
+  it("executes the Runtime health fetch and persists failure and recovery", async () => {
+    const { db, store } = fixture();
+    db.prepare(
+      "UPDATE workbench_alerts SET resolved_at='2026-09-22T00:00:00.000Z' WHERE alert_id='alert-1'",
+    ).run();
+    const healthUrl = new URL("http://127.0.0.1:8787/livez");
+    const failed = await probeRuntimeHealth(store, {
+      merchantId: "merchant-1",
+      healthUrl,
+      fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(new Response("down", { status: 503 })),
+    });
+    expect(failed).toMatchObject({ changed: true, healthy: false });
+    const alert = db
+      .prepare(
+        `SELECT severity, summary, resolved_at FROM workbench_alerts
+         WHERE merchant_id='merchant-1' AND category='runtime_offline'`,
+      )
+      .get() as { severity: string; summary: string; resolved_at: string | null };
+    expect(alert).toMatchObject({ severity: "critical", resolved_at: null });
+    expect(alert.summary).toContain("HTTP 503");
+
+    const recovered = await probeRuntimeHealth(store, {
+      merchantId: "merchant-1",
+      healthUrl,
+      fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 })),
+    });
+    expect(recovered).toMatchObject({ changed: true, healthy: true });
+    expect(
+      db
+        .prepare(
+          `SELECT resolved_at FROM workbench_alerts
+           WHERE merchant_id='merchant-1' AND category='runtime_offline'`,
+        )
+        .get(),
+    ).toMatchObject({ resolved_at: "2026-09-22T00:00:00.000Z" });
     db.close();
   });
 });

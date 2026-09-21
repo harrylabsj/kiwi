@@ -222,6 +222,42 @@ export class ExternalAlertDeliveryStore {
   }
 }
 
+export async function probeRuntimeHealth(
+  store: ExternalAlertDeliveryStore,
+  input: {
+    merchantId: string;
+    healthUrl: URL;
+    fetchImpl?: typeof globalThis.fetch;
+  },
+): Promise<{ alertId?: string; changed: boolean; healthy: boolean }> {
+  const fetchImpl = input.fetchImpl ?? globalThis.fetch;
+  try {
+    const response = await fetchImpl(input.healthUrl, {
+      redirect: "error",
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`health probe returned HTTP ${response.status}`);
+    return {
+      ...store.recordRuntimeProbe({
+        merchantId: input.merchantId,
+        publicOrigin: input.healthUrl.origin,
+        healthy: true,
+      }),
+      healthy: true,
+    };
+  } catch (error) {
+    return {
+      ...store.recordRuntimeProbe({
+        merchantId: input.merchantId,
+        publicOrigin: input.healthUrl.origin,
+        healthy: false,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+      healthy: false,
+    };
+  }
+}
+
 export class ExternalAlertDeliveryWorker {
   constructor(
     private readonly store: ExternalAlertDeliveryStore,

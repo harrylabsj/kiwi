@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   ExternalAlertDeliveryStore,
   ExternalAlertDeliveryWorker,
+  probeRuntimeHealth,
 } from "../dist/alerts/external-delivery.js";
 
 const args = parseArgs(process.argv.slice(2));
@@ -61,25 +62,10 @@ process.once("SIGTERM", () => (stopping = true));
 try {
   do {
     if (healthUrl !== undefined) {
-      try {
-        const response = await fetch(healthUrl, {
-          redirect: "error",
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (!response.ok) throw new Error(`health probe returned HTTP ${response.status}`);
-        store.recordRuntimeProbe({
-          merchantId: args.merchant,
-          publicOrigin: healthUrl.origin,
-          healthy: true,
-        });
-      } catch (error) {
-        store.recordRuntimeProbe({
-          merchantId: args.merchant,
-          publicOrigin: healthUrl.origin,
-          healthy: false,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      await probeRuntimeHealth(store, {
+        merchantId: args.merchant,
+        healthUrl,
+      });
     }
     const result = await worker.runOnce();
     process.stdout.write(`${JSON.stringify({ at: new Date().toISOString(), result })}\n`);
