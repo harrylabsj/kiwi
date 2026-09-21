@@ -44,6 +44,7 @@ import { PrivateVault } from "../agent/memory/vault.js";
 import { MerchantOAuthVerifier } from "../auth/merchant-authorization.js";
 import { MerchantOAuthServer, MerchantOAuthStore } from "../auth/merchant-oauth.js";
 import { MerchantAdminSessions } from "../auth/merchant-sessions.js";
+import { OnboardingStore } from "../cloud/onboarding/store.js";
 import { rfqAdminSurface } from "../merchant-admin/rfq-page.js";
 import { merchantAdminSurface } from "../merchant-admin/pending-page.js";
 import { MerchantOperationStore } from "../merchant-core/operations.js";
@@ -91,6 +92,11 @@ export interface MerchantRuntimeAssemblyOptions {
   port: number;
   /** MCP 端点路径（同时决定 OAuth resource）。 */
   mcpPath: string;
+  /**
+   * 控制面（Catalog）当前是否可达。缺省 false——"不知道"不等于"正常"，
+   * 管理入口据此要求商家先对账（M4 §5.4）。
+   */
+  catalogReachable?: boolean;
   /** 商家面认证模式：oauth（自建授权服务器）或 token（静态 Bearer，过渡）。 */
   authMode: "oauth" | "token";
   /** oauth 模式的 issuer（生产 https 公网地址；缺省按 loopback 推导）。 */
@@ -437,6 +443,15 @@ export async function assembleMerchantRuntime(
             store: oauthStore,
             adminDir: options.dataDir,
             secureCookies: (options.issuer ?? "").startsWith("https://"),
+            // M4 §5.4：管理入口如实展示开通状态与本地兜底视图（服务端权威，
+            // 不在前端推断）。控制面可达性由本进程已知的配置决定，缺省按不可达
+            // ——"不知道"不等于"正常"。
+            onboarding: {
+              store: new OnboardingStore(oauthDb),
+              merchantId: profile.owner_id,
+              controlPlaneReachable: options.catalogReachable === true,
+              readiness: async () => ({ ready: true, checks: {} }),
+            },
           },
         }
       : {}),

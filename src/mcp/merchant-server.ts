@@ -57,6 +57,10 @@ import {
   type MerchantMcpToolDefinition,
 } from "./merchant-tools.js";
 import type { buildMerchantPresentationResources } from "./merchant-resources.js";
+import { OnboardingStore } from "../cloud/onboarding/store.js";
+import { deriveLocalFallback, degradedRecoveryAsk } from "../cloud/onboarding/local-fallback.js";
+import { planWizard } from "../cloud/onboarding/steps.js";
+import type { ReadinessReport } from "../cloud/readiness.js";
 import { renderPendingPage, type MerchantAdminSurface } from "../merchant-admin/pending-page.js";
 import {
   renderRfqCasePage,
@@ -135,6 +139,18 @@ export interface MerchantMcpServerOptions {
     adminDir: string;
     /** https 部署置 true（cookie 加 Secure）。 */
     secureCookies?: boolean;
+    /**
+     * 开通记录（M4 §5.4）：配置后 /admin/onboarding 返回**服务端权威**的开通状态、
+     * 向导计划与本地兜底视图——管理入口如实展示现状，不在前端推断。
+     */
+    onboarding?: {
+      store: OnboardingStore;
+      merchantId: string;
+      /** 控制面（Catalog）是否可达；不可达时视图要求先对账。 */
+      controlPlaneReachable: boolean;
+      /** 本地就绪报告提供者（组件维度）。 */
+      readiness: () => Promise<Pick<ReadinessReport, "ready" | "checks">>;
+    };
   };
   /**
    * 询报价工作台（设计 v0.1.1 §11.2/§11.4）：tools 合并进 /mcp 工具面
@@ -652,6 +668,42 @@ export function createMerchantHttpHandler(
             ...NO_STORE_HEADERS,
           });
           res.end(renderPendingPage(admin.merchantName, commands, tokenFor));
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/admin/onboarding") {
+          const onboarding = options.admin?.onboarding;
+          if (onboarding === undefined) {
+            res.writeHead(404, { "content-type": "application/json" });
+            res.end(JSON.stringify({ ok: false, error: "onboarding is not configured" }));
+            return;
+          }
+          const record = onboarding.store.activeRecord(onboarding.merchantId) ?? null;
+          const plan = record === null ? null : planWizard(record);
+          const readiness = await onboarding.readiness();
+          const fallback = deriveLocalFallback({
+            publicationState:
+              record === null
+                ? "NONE"
+                : record.status === "PUBLISHED"
+                  ? "ACTIVE"
+                  : "NONE",
+            readiness,
+            controlPlaneReachable: onboarding.controlPlaneReachable,
+          });
+          res.writeHead(200, { "content-type": "application/json", ...NO_STORE_HEADERS });
+          res.end(
+            JSON.stringify({
+              ok: true,
+              record,
+              plan,
+              fallback,
+              recovery_ask: degradedRecoveryAsk({
+                publicationState: record?.status === "PUBLISHED" ? "ACTIVE" : "NONE",
+                readiness,
+                controlPlaneReachable: onboarding.controlPlaneReachable,
+              }),
+            }),
+          );
           return;
         }
         if (req.method === "POST" && url.pathname === "/admin/decision") {

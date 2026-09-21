@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { bootstrapCloudRuntime, CloudStartupError } from "../src/cloud/bootstrap.js";
+import { writeAdminCredentials } from "../src/auth/merchant-sessions.js";
 import { CloudConfigError } from "../src/cloud/config.js";
 
 const dirs: string[] = [];
@@ -94,6 +95,9 @@ async function startFakeCommerce(sku: string): Promise<string> {
 }
 
 const TEST_SKU = "test-sku-m1";
+/** 云端测试 profile 的商家身份（与 writeCloudProfile 写出的 owner_id 一致）。 */
+const MERCHANT_ID = "merchant-001";
+const ADMIN_PASSWORD = "cloud-admin-password-1";
 
 function writeCloudProfile(
   dataDir: string,
@@ -296,7 +300,8 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
     try {
       const base = `http://127.0.0.1:${port}`;
       // 管理面：未持会话一律被会话门挡住（303 → 登录页），不返回任何业务数据。
-      for (const path of ["/admin/pending", "/merchant/api/policy", "/merchant/api/status", "/admin/rfq"]) {
+      // M4：新加的管理入口同样在会话门之后（不能因为"只是状态"就放开）
+      for (const path of ["/admin/pending", "/merchant/api/policy", "/merchant/api/status", "/admin/rfq", "/admin/onboarding"]) {
         const res = await fetch(`${base}${path}`, { redirect: "manual" });
         expect([302, 303]).toContain(res.status);
         const body = await res.text();
@@ -330,6 +335,74 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
       const a2aBody = await a2a.text();
       expect(a2aBody).not.toContain("agreement");
       expect(a2aBody).not.toMatch(/amount_minor/);
+    } finally {
+      await instance.close();
+    }
+  });
+
+  it("M4：管理入口如实展示开通状态（首次未发布 = 不接待，且要求先对账）", async () => {
+    const commerce = await startFakeCommerce(TEST_SKU);
+    const dataDir = tempDir("kiwi-cloud-onboarding-");
+    const profilePath = writeCloudProfile(dataDir, commerce);
+    trackEnv("KIWI_COMMERCE_URL", commerce);
+    const port = await freePort();
+    // 管理员口令初始化（与 CLI `merchant mcp admin-passwd` 同一落盘格式）
+    writeAdminCredentials(dataDir, {
+      principalId: `merchant-agent:${MERCHANT_ID}`,
+      merchantId: MERCHANT_ID,
+      password: ADMIN_PASSWORD,
+    });
+    const instance = await bootstrapCloudRuntime({
+      env: cloudEnv({ port, dataDir, profilePath, sku: TEST_SKU }),
+      artifactRoot: "/workspace",
+      log: () => {},
+    });
+    try {
+      const base = `http://127.0.0.1:${port}`;
+      // 未持会话：被会话门挡住，不返回任何数据
+      const gated = await fetch(`${base}/admin/onboarding`, { redirect: "manual" });
+      expect(gated.status).toBe(303);
+      expect(gated.headers.get("location")).toContain("/admin/login");
+
+      // 登录后：拿到**服务端权威**的开通状态（新商家 = 无记录 + 首次未发布）
+      const login = await fetch(`${base}/admin/login`, {
+        method: "POST",
+        redirect: "manual",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: `password=${ADMIN_PASSWORD}&next=/admin/onboarding`,
+      });
+      expect(login.status).toBe(303);
+      const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+      expect(cookie).toContain("kiwi_admin=");
+
+      const response = await fetch(`${base}/admin/onboarding`, {
+        redirect: "manual",
+        headers: { cookie },
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        ok: boolean;
+        record: unknown;
+        plan: unknown;
+        fallback: {
+          state: string;
+          acceptsNewInquiries: boolean;
+          requiresControlPlaneReconciliation: boolean;
+          authorityNote: string;
+        };
+        recovery_ask: string[];
+      };
+      expect(body.ok).toBe(true);
+      expect(body.record).toBeNull();
+      expect(body.plan).toBeNull();
+      expect(body.fallback.state).toBe("FIRST_TIME_UNPUBLISHED");
+      // 关键闸门：首次未发布**不接待**，且本地不冒充权威
+      expect(body.fallback.acceptsNewInquiries).toBe(false);
+      expect(body.fallback.requiresControlPlaneReconciliation).toBe(true);
+      expect(body.fallback.authorityNote).toContain("不是权威状态");
+      expect(body.recovery_ask.length).toBeGreaterThan(0);
+      // 该响应含开通状态，绝不进缓存
+      expect(response.headers.get("cache-control")).toContain("no-store");
     } finally {
       await instance.close();
     }
