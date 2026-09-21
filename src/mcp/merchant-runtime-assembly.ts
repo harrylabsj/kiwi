@@ -58,6 +58,7 @@ import { MerchantRfqService } from "../merchant-core/rfq/service.js";
 import { MerchantCoreService } from "../merchant-core/service.js";
 import type { CommandExecutor } from "../merchant-core/executor.js";
 import { createExactProductExecutors } from "../merchant/exact-product-executors.js";
+import { decimalMajorToMinor } from "../merchant/application/money.js";
 import {
   assertMerchantMcpAuthPolicy,
   CompositeMerchantMcpVerifier,
@@ -124,6 +125,8 @@ export interface MerchantRuntimeAssembly {
   authLabel: string;
   /** 运行中生效策略的版本与摘要（就绪检查用；不含策略内容）。 */
   policy: () => { version: number; digest: string };
+  /** Internal only: current private floor converted exactly for quote eligibility. */
+  privateFloorMinor: (sku: string, currency: string) => string | undefined;
   /** 关闭装配持有的数据库连接（不涉及 http server）。 */
   close: () => Promise<void>;
 }
@@ -536,6 +539,13 @@ export async function assembleMerchantRuntime(
     policy: () => {
       const current = policyRuntime.current();
       return { version: current.version, digest: current.digest };
+    },
+    privateFloorMinor: (sku, currency) => {
+      const policy = policyRuntime.current().policy;
+      if (policy === undefined) return undefined;
+      const floor = policy.price_floors?.[sku] ?? policy.min_unit_price_private;
+      if (floor === undefined) return undefined;
+      return decimalMajorToMinor(currency, String(floor)).amount_minor;
     },
     close: async () => {
       oauthDb?.close();

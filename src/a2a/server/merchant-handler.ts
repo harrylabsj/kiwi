@@ -39,6 +39,8 @@ import { contentDigest } from "../../negotiation/jcs.js";
 import { evaluateConditionalOffer } from "../../negotiation/condition/evaluator.js";
 import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
 import type { MerchantPolicy } from "../../config/profile.js";
+import { WORKBENCH_CURRENCY_TABLE_VERSION } from "../../merchant/application/money.js";
+import { calculateWorkbenchQuote } from "../../merchant/quote-calculator.js";
 import {
   createNegotiationPhase,
   isTerminalPhase,
@@ -530,6 +532,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
     quantity: number,
     basePriceMinor: number,
     currency: string,
+    floorMinor: number,
   ):
     | { kind: "none" }
     | {
@@ -548,17 +551,33 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
       return { kind: "unavailable" };
     }
     if (value === undefined) return { kind: "none" };
-    if (
-      value.currency !== currency ||
-      !/^(0|[1-9][0-9]*)$/u.test(value.amountMinor) ||
-      Date.parse(value.endsAt) <= Date.parse(now())
-    ) {
+    const calculated = calculateWorkbenchQuote({
+      base: {
+        currency,
+        amount_minor: String(basePriceMinor),
+        currency_table_version: WORKBENCH_CURRENCY_TABLE_VERSION,
+      },
+      quantity,
+      privateFloorMinor: String(floorMinor),
+      promotions: [
+        {
+          promotion_id: value.promotionId,
+          revision: value.revision,
+          unit_price: {
+            currency: value.currency,
+            amount_minor: value.amountMinor,
+            currency_table_version: WORKBENCH_CURRENCY_TABLE_VERSION,
+          },
+          ends_at: value.endsAt,
+          priority: 0,
+        },
+      ],
+    });
+    if (calculated.status !== "quoted" || calculated.source.kind !== "promotion") {
       return { kind: "invalid" };
     }
-    const amount = BigInt(value.amountMinor);
-    if (amount > BigInt(Number.MAX_SAFE_INTEGER)) return { kind: "invalid" };
-    const priceMinor = Number(amount);
-    if (priceMinor > basePriceMinor) return { kind: "invalid" };
+    if (Date.parse(value.endsAt) <= Date.parse(now())) return { kind: "invalid" };
+    const priceMinor = Number(calculated.unit_price.amount_minor);
     return {
       kind: "applied",
       priceMinor,
@@ -790,7 +809,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
-          const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency);
+          const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
           if (promotion.kind === "unavailable") return declineReply("temporarily_unavailable");
           if (promotion.kind === "invalid") return declineReply("approval_required");
           // 确定性：offer = list 价（公开价）。list < floor 是配置矛盾——此时
@@ -849,7 +868,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
-          const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency);
+          const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
           if (promotion.kind === "unavailable") return declineReply("temporarily_unavailable");
           if (promotion.kind === "invalid") return declineReply("approval_required");
           // 确定性：counter = list 价（公开价）；list < floor 时拒绝自动报价
@@ -913,7 +932,13 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
-          const authorityPromotion = resolvePromotionQuote(sku, quantity, priceMinor, currency);
+          const authorityPromotion = resolvePromotionQuote(
+            sku,
+            quantity,
+            priceMinor,
+            currency,
+            floorMinor,
+          );
           if (authorityPromotion.kind === "unavailable") {
             return declineReply("temporarily_unavailable");
           }

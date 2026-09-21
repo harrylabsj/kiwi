@@ -63,6 +63,8 @@ import { createPromotionExecutors } from "../merchant/promotion-executors.js";
 import { PromotionBroadcastWorkflowStore } from "../merchant/promotion-broadcast-workflow.js";
 import { recoverPromotionBroadcastWorkflows } from "../merchant/promotion-broadcast-recovery.js";
 import { createServiceControlExecutors } from "../merchant/service-control-executors.js";
+import { calculateWorkbenchQuote } from "../merchant/quote-calculator.js";
+import { WORKBENCH_CURRENCY_TABLE_VERSION } from "../merchant/application/money.js";
 import { OnboardingStore } from "./onboarding/store.js";
 import {
   ManagementError,
@@ -626,6 +628,28 @@ export async function bootstrapCloudRuntime(
             exactProducts: {
               list: () => adminOptions.surface.listExactProducts!(),
               get: (sku: string) => adminOptions.surface.getExactProduct!(sku),
+            },
+          }
+        : {}),
+      ...(adminOptions.surface.getExactProduct !== undefined
+        ? {
+            quotePreview: async (sku: string, quantity: number) => {
+              const product = await adminOptions.surface.getExactProduct!(sku);
+              const promotions = promotionStore.activeForSku(profile.owner_id, sku, quantity);
+              if (product.currency_table_version !== WORKBENCH_CURRENCY_TABLE_VERSION) {
+                throw new Error("exact product currency table version mismatch");
+              }
+              const privateFloorMinor = assembly.privateFloorMinor(sku, product.currency);
+              return calculateWorkbenchQuote({
+                base: {
+                  currency: product.currency,
+                  amount_minor: product.price_minor,
+                  currency_table_version: WORKBENCH_CURRENCY_TABLE_VERSION,
+                },
+                quantity,
+                promotions,
+                ...(privateFloorMinor !== undefined ? { privateFloorMinor } : {}),
+              });
             },
           }
         : {}),

@@ -98,6 +98,7 @@ import {
 } from "../../merchant/application/money.js";
 import { EXACT_PRODUCT_TOOLS } from "../../merchant/exact-product-executors.js";
 import { SERVICE_CONTROL_TOOLS } from "../../merchant/service-control-executors.js";
+import type { WorkbenchQuoteResult } from "../../merchant/quote-calculator.js";
 import { BROADCAST_TOOLS } from "../../merchant/feed-executors.js";
 import { MerchantFeedError, type MerchantFeedStore } from "../../merchant/feed-store.js";
 import { GRANT_TOOLS } from "../../merchant/grant-executors.js";
@@ -210,6 +211,7 @@ export interface MerchantManagementApiOptions {
     get: (sku: string) => Promise<ExactMerchantProduct>;
   };
   workbenchEvents?: WorkbenchEventProjectionStore;
+  quotePreview?: (sku: string, quantity: number) => Promise<WorkbenchQuoteResult>;
   prepareBroadcastPublish?: (input: {
     broadcast: Record<string, unknown>;
     authorization: Record<string, unknown>;
@@ -793,6 +795,22 @@ export function createMerchantManagementApiHandler(
         operations.release(begun.operationId);
         throw error;
       }
+      return;
+    }
+
+    if (rest === "/pricing/previews") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "products:read");
+      const fields = objectFields(await readJsonBody(req), ["sku", "quantity"]);
+      const channel = options.quotePreview;
+      if (channel === undefined) {
+        throw new ManagementError("unavailable", "shared quote calculator is unavailable");
+      }
+      const result = await channel(
+        requireString(fields["sku"], "sku"),
+        requirePositiveInteger(fields["quantity"], "quantity"),
+      );
+      writeJson(res, 200, result, { "x-request-id": requestId });
       return;
     }
 

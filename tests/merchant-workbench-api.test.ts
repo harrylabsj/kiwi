@@ -21,6 +21,7 @@ import { MerchantPromotionStore } from "../src/merchant/promotion-store.js";
 import { EXACT_PRODUCT_TOOLS } from "../src/merchant/exact-product-executors.js";
 import type { ExactMoney } from "../src/merchant/application/money.js";
 import { SERVICE_CONTROL_TOOLS } from "../src/merchant/service-control-executors.js";
+import { calculateWorkbenchQuote } from "../src/merchant/quote-calculator.js";
 import { PromotionBroadcastWorkflowStore } from "../src/merchant/promotion-broadcast-workflow.js";
 import {
   MerchantGrantStore,
@@ -311,6 +312,29 @@ beforeAll(async () => {
           handoff_destination: "",
         }),
       },
+      quotePreview: async (_sku, quantity) =>
+        calculateWorkbenchQuote({
+          base: {
+            currency: "CNY",
+            amount_minor: "9999",
+            currency_table_version: "kiwi-workbench-currency-v1-2026-09-21",
+          },
+          quantity,
+          promotions: [
+            {
+              promotion_id: "promotion-preview-1",
+              revision: 2,
+              unit_price: {
+                currency: "CNY",
+                amount_minor: "9250",
+                currency_table_version: "kiwi-workbench-currency-v1-2026-09-21",
+              },
+              ends_at: "2026-09-22T12:00:00.000Z",
+              priority: 10,
+            },
+          ],
+          privateFloorMinor: "9000",
+        }),
       prepareBroadcastPublish: preparedBroadcast,
       prepareInventoryUpdate: preparedProductChange,
       prepareListingChange: preparedProductChange,
@@ -483,6 +507,23 @@ describe("Workbench v1 trusted confirmation API", () => {
       sku: "sku-exact-1",
       money: { amount_minor: "9999" },
     });
+  });
+
+  it("uses the shared exact quote calculator for management previews", async () => {
+    const response = await post("/merchant/api/v1/pricing/previews", {
+      sku: "sku-exact-1",
+      quantity: 10,
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      status: "quoted",
+      unit_price: { currency: "CNY", amount_minor: "9250" },
+      source: { kind: "promotion", promotion_id: "promotion-preview-1", revision: 2 },
+      valid_until_cap: "2026-09-22T12:00:00.000Z",
+      calculator_version: "kiwi-quote/1",
+    });
+    expect(JSON.stringify(body)).not.toContain("9000");
   });
 
   it("lists and acknowledges persistent alerts without resolving the business fault", async () => {
