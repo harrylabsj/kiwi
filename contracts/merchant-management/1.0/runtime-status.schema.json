@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:merchant-management:1.0:runtime-status",
+  "title": "Kiwi 商家管理 RuntimeStatus 1.0",
+  "description": "GET /merchant/api/status 响应体（BD 设计 §11.1）。不含秘密；readiness.failed_checks 只含检查名，不含细节。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "runtime_version",
+    "generation",
+    "service_state",
+    "readiness",
+    "capabilities",
+    "observed_at"
+  ],
+  "properties": {
+    "api_version": { "type": "string", "pattern": "^[0-9]+$", "description": "管理契约 major（本版恒 \"1\"）。" },
+    "runtime_version": { "type": "string", "minLength": 1 },
+    "generation": { "type": "integer", "minimum": 0, "description": "当前部署代次；旧代次不得继续产生业务写入（§12.3）。" },
+    "service_state": { "enum": ["OPERATING", "PAUSED", "WITHDRAWN", "DEGRADED"] },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ready", "failed_checks"],
+      "properties": {
+        "ready": { "type": "boolean" },
+        "failed_checks": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "未通过检查的**名字**（稳定码），不含细节与凭据。" }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["management_page", "dialog_tools"],
+      "properties": {
+        "management_page": { "type": "boolean", "description": "同源管理页（必选能力）。" },
+        "dialog_tools": { "type": "boolean", "description": "对话私有只读工具（B07 通过前恒 false，§4.2）。" }
+      }
+    },
+    "observed_at": { "type": "string", "format": "date-time" }
+  }
+}

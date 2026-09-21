@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:merchant-management:1.0:runtime-management-descriptor",
+  "title": "Kiwi RuntimeManagementDescriptor 1.0",
+  "description": "私有只读绑定描述对象（BD 设计 §6.3）。仅供当前商家授权的入口经可信控制面获取；**不含任何凭据**（Token/Cookie/平台密钥/商家私钥/底价都禁止）。它不是认证凭据：打开地址本身不授予管理权限。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "binding_ref",
+    "merchant_id",
+    "agent_id",
+    "runtime_origin",
+    "management_base_path",
+    "binding_version",
+    "deployment_generation",
+    "status",
+    "expires_at",
+    "management_api_major"
+  ],
+  "properties": {
+    "binding_ref": { "type": "string", "minLength": 1, "description": "开通记录/绑定引用。" },
+    "merchant_id": { "type": "string", "minLength": 1 },
+    "agent_id": { "type": "string", "minLength": 1 },
+    "runtime_origin": { "type": "string", "pattern": "^https://", "description": "经验证的 Runtime origin（来自可信控制面，不来自模型输出或自由文本）。" },
+    "management_base_path": { "type": "string", "pattern": "^/", "description": "管理页基路径（如 /merchant/）。" },
+    "binding_version": { "type": "integer", "minimum": 0 },
+    "deployment_generation": { "type": "integer", "minimum": 0 },
+    "status": { "type": "string", "minLength": 1 },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "management_api_major": { "type": "integer", "minimum": 1, "description": "受支持的管理 API major；入口先核对再导航。" },
+    "mcp_path": { "type": "string", "pattern": "^/", "description": "可选：本实例 MCP 路径（B07 通过前不返回）。" }
+  }
+}

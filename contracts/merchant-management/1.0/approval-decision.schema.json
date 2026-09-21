@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:merchant-management:1.0:approval-decision",
+  "title": "Kiwi 商家管理 ApprovalDecision 1.0",
+  "description": "POST /merchant/api/approvals/{id}/approve|reject 请求体（BD 设计 §11.1/§11.2）。actor/merchant 从会话派生，**不在正文里**（UC10）；哈希即条件更新证明——与预览不符返回 precondition_changed(409)，旧确认不能继续使用（§10.3）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["arguments_hash", "preconditions_hash", "confirmation_ref", "idempotency_key"],
+  "properties": {
+    "arguments_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]+$", "description": "来自预览的 arguments_hash。" },
+    "preconditions_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]+$" },
+    "confirmation_ref": { "type": "string", "minLength": 1, "description": "由可信页面流程（POST /confirmations）签发的一次性确认引用；approved=true、聊天「同意」与自造引用一律无效（§7.3）。" },
+    "reason": { "type": "string", "maxLength": 500, "description": "可选原因（reject 常用；写入审计）。" },
+    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 200, "description": "调用方生成的幂等键；重试必须复用原键，不得为同一逻辑操作换新键（§10.2）。" }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:merchant-management:1.0:approval-preview",
+  "title": "Kiwi 商家管理 ApprovalPreview 1.0",
+  "description": "GET /merchant/api/approvals 与 /approvals/{id} 的条目（BD 设计 §11.1）。**不泄露受限值**：只有可显示摘要与参数/前置状态哈希，绝不含参数原文、底价或成本。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "candidate_id",
+    "status",
+    "expires_at",
+    "summary",
+    "arguments_hash",
+    "preconditions_hash",
+    "related_revision"
+  ],
+  "properties": {
+    "candidate_id": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "minLength": 1, "description": "既有候选状态机的取值（如 pending_approval）；本契约不复制该状态机。" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "summary": { "type": "string", "description": "脱敏的可显示摘要。" },
+    "arguments_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]+$", "description": "服务端参数摘要（approve 的条件更新依据之一）。" },
+    "preconditions_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]+$" },
+    "related_revision": { "type": "integer", "minimum": 0, "description": "相关对象版本；候选对象尚无持久 revision 时由服务层给出占位值。" }
+  }
+}

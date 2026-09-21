@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:merchant-management:1.0:operation-receipt",
+  "title": "Kiwi 商家管理 OperationReceipt 1.0",
+  "description": "写命令的持久回执（BD 设计 §11.1）。accepted 只表示可靠受理；succeeded 才表示已提交结果；unknown 必须保留查询/对账路径（GET /merchant/api/operations/{id}），不能当作失败自动重做。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "operation_id",
+    "command_type",
+    "status",
+    "resource_ref",
+    "result_revision",
+    "created_at",
+    "completed_at",
+    "support_id"
+  ],
+  "properties": {
+    "operation_id": { "type": "string", "minLength": 1 },
+    "command_type": { "type": "string", "minLength": 1, "examples": ["approval.approve", "approval.reject", "service.pause", "service.resume"] },
+    "status": { "enum": ["accepted", "running", "succeeded", "failed", "unknown"] },
+    "resource_ref": { "type": ["string", "null"], "description": "目标对象引用（候选 id 或 \"service\"）。" },
+    "result_revision": { "type": ["integer", "null"], "minimum": 0 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": ["string", "null"], "format": "date-time", "description": "终态时间；running/unknown/accepted 为 null。" },
+    "support_id": { "type": "string", "minLength": 1, "description": "脱敏诊断引用；不含秘密与堆栈。" }
+  }
+}

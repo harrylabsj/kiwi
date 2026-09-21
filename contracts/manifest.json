@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "authority": "kiwi/contracts",
-  "bundle_sha256": "3e4e58f5e1673383cea485ebca41bf00ad1e8fe6f191f45eb721d1835f948d36",
+  "bundle_sha256": "7d4aab32bd5866af5656e2dc7690944a3c512f0f73168f337ed8c74d1f9e5db7",
   "contracts": [
     {
       "id": "commerce-intent",
@@ -152,6 +152,42 @@
       "version": "0.1.2",
       "path": "contracts/card-publication/0.1.2/request.schema.json",
       "sha256": "9053e039b8d59c0bbb2d9c73a6d1219491148f28346e1202355605aa5311c72e"
+    },
+    {
+      "id": "merchant-management-runtime-status",
+      "version": "1.0",
+      "path": "contracts/merchant-management/1.0/runtime-status.schema.json",
+      "sha256": "6ac15f81c9443dd6a1401ae45d40d956b1967af1952985a7856e0b79ff6e354f"
+    },
+    {
+      "id": "merchant-management-approval-preview",
+      "version": "1.0",
+      "path": "contracts/merchant-management/1.0/approval-preview.schema.json",
+      "sha256": "2bd48d77482677a8a142c8e751da10fd678dd66a2bc6d72014c17f459ad519fa"
+    },
+    {
+      "id": "merchant-management-approval-decision",
+      "version": "1.0",
+      "path": "contracts/merchant-management/1.0/approval-decision.schema.json",
+      "sha256": "e3e606bd6d4ae152910de304b283207d5407e4f7a31f9dfcffb5ec8e9d07aa6c"
+    },
+    {
+      "id": "merchant-management-operation-receipt",
+      "version": "1.0",
+      "path": "contracts/merchant-management/1.0/operation-receipt.schema.json",
+      "sha256": "f247d3060f93aa0cdc986152c39d3ec7f821e5ddf370274b795b85df7902059f"
+    },
+    {
+      "id": "merchant-management-management-error",
+      "version": "1.0",
+      "path": "contracts/merchant-management/1.0/management-error.schema.json",
+      "sha256": "20feb287235c383769407fd673457a30166ef5778e148e56e9f92310c69221a3"
+    },
+    {
+      "id": "merchant-management-runtime-descriptor",
+      "version": "1.0",
+      "path": "contracts/merchant-management/1.0/runtime-management-descriptor.schema.json",
+      "sha256": "cb284a6b03119219967090562e4723371e9052f31f51d06b790ab4602b144af0"
     }
   ]
 }

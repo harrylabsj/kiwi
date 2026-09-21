@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:merchant-management:1.0:management-error",
+  "title": "Kiwi 商家管理 ManagementError 1.0",
+  "description": "管理 API 错误响应体（BD 设计 §11.1/§11.3）。不附秘密与堆栈；跨商家对象按 not_found 统一返回，不透露对方存在。仅适用于 /merchant/api/*；A2A 与 MCP 各自保持自己的协议错误格式。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "message", "retryable", "support_id"],
+  "properties": {
+    "code": {
+      "enum": [
+        "unauthorized",
+        "forbidden",
+        "not_found",
+        "conflict",
+        "precondition_changed",
+        "invalid_input",
+        "rate_limited",
+        "unavailable",
+        "tool_binding_unavailable",
+        "update_required"
+      ]
+    },
+    "message": { "type": "string", "minLength": 1 },
+    "retryable": { "type": "boolean" },
+    "support_id": { "type": "string", "minLength": 1 },
+    "next_action": { "type": "string", "minLength": 1, "description": "可选的下一步指引（中文、面向商家）。" },
+    "operation_id": { "type": "string", "minLength": 1, "description": "结果未知时附上，供 GET /operations/{id} 对账。" }
+  }
+}
