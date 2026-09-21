@@ -107,6 +107,16 @@ export interface MerchantHandlerOptions {
    *  BUG-07：也接受 provider（每次报价时取运行中生效策略）——A2A 与 MCP
    *  是不同进程，策略经覆盖层文件跨进程生效，handler 每请求读取最新值。 */
   merchantPolicy?: MerchantPolicy | (() => MerchantPolicy | undefined);
+  /** Workbench promotion authority used by the deterministic quote path. */
+  promotionPrice?: (input: { sku: string; quantity: number }) =>
+    | {
+        promotionId: string;
+        revision: number;
+        currency: string;
+        amountMinor: string;
+        endsAt: string;
+      }
+    | undefined;
 }
 
 /**
@@ -115,9 +125,7 @@ export interface MerchantHandlerOptions {
  * 约定一致，也符合 shopping-cli wire 值；测试桩 `{price: 99}` → 9900 minor 同此）。
  */
 export interface MerchantProductSource {
-  getProduct(
-    sku: string,
-  ): Promise<{
+  getProduct(sku: string): Promise<{
     price: number;
     currency: string;
     title?: string;
@@ -134,9 +142,7 @@ export interface MerchantProductSource {
  * 未知 SKU → 抛错（resolveProduct 默认 fail-closed decline，仅显式开启
  * allowDemoPriceFallback 时才回退演示价）。
  */
-export function dataSourceProductSource(
-  dataSource: CommerceDataSource,
-): MerchantProductSource {
+export function dataSourceProductSource(dataSource: CommerceDataSource): MerchantProductSource {
   return {
     async getProduct(sku: string) {
       const fact = await dataSource.getProduct(sku);
@@ -180,9 +186,23 @@ function seedEnvelope(seed: EnvelopeSeed): ReturnType<typeof finalizeEnvelope> {
 export const OFFER_VALIDITY_MS = 24 * 60 * 60 * 1000;
 
 function offerTerms(
-  opts: { sku?: string; priceMinor: number; quantity: number; currency?: string; handoff_destination?: string; deliveryBefore?: string },
+  opts: {
+    sku?: string;
+    priceMinor: number;
+    quantity: number;
+    currency?: string;
+    handoff_destination?: string;
+    deliveryBefore?: string;
+    validUntilCap?: string;
+  },
   now: string,
 ) {
+  const defaultValidUntil = Date.parse(now) + OFFER_VALIDITY_MS;
+  const cap = opts.validUntilCap === undefined ? undefined : Date.parse(opts.validUntilCap);
+  const validUntil =
+    cap !== undefined && Number.isFinite(cap)
+      ? Math.min(defaultValidUntil, cap)
+      : defaultValidUntil;
   return {
     items: [
       {
@@ -200,7 +220,7 @@ function offerTerms(
     ...(opts.handoff_destination !== undefined
       ? { handoff_destination: opts.handoff_destination }
       : {}),
-    valid_until: new Date(Date.parse(now) + OFFER_VALIDITY_MS).toISOString(),
+    valid_until: new Date(validUntil).toISOString(),
   };
 }
 
@@ -226,7 +246,10 @@ function buildAgreement(input: {
   };
 }
 
-const textReply = (text: string, taskState: "working" | "completed" = "working"): NegotiationHandlerResult => ({
+const textReply = (
+  text: string,
+  taskState: "working" | "completed" = "working",
+): NegotiationHandlerResult => ({
   kind: "accepted",
   taskState,
   message: {
@@ -251,7 +274,9 @@ class ProductSourceUnavailableError extends Error {
 
 /** 商业拒绝（offer 未知/已关闭/terms_digest 不匹配/终态重开）。
  * decline 消息由 pipeline 按 reason_code 自动构造。 */
-const declineReply = (reasonCode: ProtocolErrorCode = "state_conflict"): NegotiationHandlerResult => ({
+const declineReply = (
+  reasonCode: ProtocolErrorCode = "state_conflict",
+): NegotiationHandlerResult => ({
   kind: "declined",
   reasonCode,
   taskState: "completed",
@@ -268,16 +293,19 @@ const envelopeReply = (reply: ReturnType<typeof finalizeEnvelope>): NegotiationH
 });
 
 /** 构造生产 merchant KNP handler。 */
-export function createMerchantHandler(
-  options: MerchantHandlerOptions,
-): NegotiationHandler {
+export function createMerchantHandler(options: MerchantHandlerOptions): NegotiationHandler {
   const { ledger, now, sender, counterparty } = options;
   const offerPriceMinor = options.offerPriceMinor ?? MERCHANT_OFFER_PRICE_MINOR;
   const allowDemoPriceFallback = options.allowDemoPriceFallback ?? false;
   // BUG-07：merchantPolicy 支持静态值或 provider——每请求解析运行中策略。
   const policyOf = (): MerchantPolicy | undefined =>
-    typeof options.merchantPolicy === "function" ? options.merchantPolicy() : options.merchantPolicy;
-  const conditionalByNegotiation = new Map<string, { conditional: Record<string, unknown>; quantity: number }>();
+    typeof options.merchantPolicy === "function"
+      ? options.merchantPolicy()
+      : options.merchantPolicy;
+  const conditionalByNegotiation = new Map<
+    string,
+    { conditional: Record<string, unknown>; quantity: number }
+  >();
   // 审查 P2-D：终态（AGREEMENT_REACHED / WITHDRAWN / DECLINED / CANCELLED）
   // 不得以同一 negotiation_id 重开（§17.4/§21.2）——运行时此前无任何终态
   // 守卫：连发两份 accept 可产出两份 agreement、withdraw 后可再次成交。
@@ -305,7 +333,8 @@ export function createMerchantHandler(
     negotiationId: string,
     event: NegotiationPhaseEvent,
   ): Promise<boolean> => {
-    const state = phaseStateByNegotiation.get(negotiationId) ?? createNegotiationPhase(negotiationId);
+    const state =
+      phaseStateByNegotiation.get(negotiationId) ?? createNegotiationPhase(negotiationId);
     let next: NegotiationPhaseState;
     try {
       next = transitionPhase(state, event);
@@ -320,10 +349,13 @@ export function createMerchantHandler(
   };
 
   /** 入站 action → 相位机事件（inquiry/rfq 是起始动作，无转换）。 */
-  const actionToPhaseEvent = (
-    envelope: { action: string; payload?: unknown },
-  ): NegotiationPhaseEvent | undefined => {
-    const offerId = String((envelope.payload as { offer_id?: unknown } | undefined)?.offer_id ?? "");
+  const actionToPhaseEvent = (envelope: {
+    action: string;
+    payload?: unknown;
+  }): NegotiationPhaseEvent | undefined => {
+    const offerId = String(
+      (envelope.payload as { offer_id?: unknown } | undefined)?.offer_id ?? "",
+    );
     switch (envelope.action) {
       case "offer":
         return { type: "offer", offer_id: offerId };
@@ -340,9 +372,21 @@ export function createMerchantHandler(
       case "accept_nonbinding":
         return { type: "accept_nonbinding", offer_id: offerId };
       case "withdraw":
-        return { type: "withdraw", scope: (envelope.payload as { scope?: string } | undefined)?.scope === "negotiation" ? "negotiation" : "offer" };
+        return {
+          type: "withdraw",
+          scope:
+            (envelope.payload as { scope?: string } | undefined)?.scope === "negotiation"
+              ? "negotiation"
+              : "offer",
+        };
       case "decline":
-        return { type: "decline", scope: (envelope.payload as { scope?: string } | undefined)?.scope === "negotiation" ? "negotiation" : "offer" };
+        return {
+          type: "decline",
+          scope:
+            (envelope.payload as { scope?: string } | undefined)?.scope === "negotiation"
+              ? "negotiation"
+              : "offer",
+        };
       case "cancel":
         return { type: "cancel" };
       default:
@@ -360,7 +404,10 @@ export function createMerchantHandler(
   ): Promise<void> => {
     const current = phaseStateByNegotiation.get(negotiationId);
     const effectiveFrom = fromPhase ?? current?.phase ?? "OPEN";
-    phaseStateByNegotiation.set(negotiationId, { ...(current ?? createNegotiationPhase(negotiationId)), phase: toPhase });
+    phaseStateByNegotiation.set(negotiationId, {
+      ...(current ?? createNegotiationPhase(negotiationId)),
+      phase: toPhase,
+    });
     await ledger.append({
       event_kind: "state_transition",
       negotiation_id: negotiationId,
@@ -478,6 +525,49 @@ export function createMerchantHandler(
     }
   };
 
+  const resolvePromotionQuote = (
+    sku: string,
+    quantity: number,
+    basePriceMinor: number,
+    currency: string,
+  ):
+    | { kind: "none" }
+    | {
+        kind: "applied";
+        priceMinor: number;
+        promotionId: string;
+        revision: number;
+        endsAt: string;
+      }
+    | { kind: "invalid" | "unavailable" } => {
+    if (options.promotionPrice === undefined) return { kind: "none" };
+    let value: ReturnType<NonNullable<MerchantHandlerOptions["promotionPrice"]>>;
+    try {
+      value = options.promotionPrice({ sku, quantity });
+    } catch {
+      return { kind: "unavailable" };
+    }
+    if (value === undefined) return { kind: "none" };
+    if (
+      value.currency !== currency ||
+      !/^(0|[1-9][0-9]*)$/u.test(value.amountMinor) ||
+      Date.parse(value.endsAt) <= Date.parse(now())
+    ) {
+      return { kind: "invalid" };
+    }
+    const amount = BigInt(value.amountMinor);
+    if (amount > BigInt(Number.MAX_SAFE_INTEGER)) return { kind: "invalid" };
+    const priceMinor = Number(amount);
+    if (priceMinor > basePriceMinor) return { kind: "invalid" };
+    return {
+      kind: "applied",
+      priceMinor,
+      promotionId: value.promotionId,
+      revision: value.revision,
+      endsAt: value.endsAt,
+    };
+  };
+
   const appendSent = async (reply: ReturnType<typeof finalizeEnvelope>): Promise<void> => {
     await ledger.append({
       event_kind: "message_sent",
@@ -527,9 +617,12 @@ export function createMerchantHandler(
       }
       if (event.event_kind !== "message_sent") continue;
       const envelope = event.wire_payload as
-        | { action?: string; payload?: Record<string, unknown> }
-        | undefined;
-      if (envelope?.action === "offer" || envelope?.action === "counter_offer" || envelope?.action === "conditional_offer") {
+        { action?: string; payload?: Record<string, unknown> } | undefined;
+      if (
+        envelope?.action === "offer" ||
+        envelope?.action === "counter_offer" ||
+        envelope?.action === "conditional_offer"
+      ) {
         const offerId = (envelope.payload as { offer_id?: string } | undefined)?.offer_id;
         if (typeof offerId === "string" && offerId !== "") activeOfferId = offerId;
       }
@@ -555,7 +648,8 @@ export function createMerchantHandler(
       phase,
       ...(phase === "AWAITING_CLARIFICATION" && lastTransitionFrom !== undefined
         ? {
-            resume_phase: lastTransitionFrom === "OFFER_OPEN" ? ("OFFER_OPEN" as const) : ("OPEN" as const),
+            resume_phase:
+              lastTransitionFrom === "OFFER_OPEN" ? ("OFFER_OPEN" as const) : ("OPEN" as const),
             ...(activeOfferId !== undefined ? { active_offer_id: activeOfferId } : {}),
           }
         : phase === "OFFER_OPEN" && activeOfferId !== undefined
@@ -603,8 +697,7 @@ export function createMerchantHandler(
        *  无效拒绝，不进 offer terms（否则批量价/条件成交按无意义数量求值）；
        *  未报数量沿用 MERCHANT_QUANTITY 缺省口径（不变）。 */
       const invalidQuantity = (raw: unknown): boolean =>
-        raw !== undefined &&
-        (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0);
+        raw !== undefined && (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0);
       const floorMinorForSku = (sku: string): number | null => {
         const mp = policyOf();
         const floorValue = mp?.price_floors?.[sku] ?? mp?.min_unit_price_private;
@@ -615,8 +708,7 @@ export function createMerchantHandler(
       /** 权威交期（V2 §8.5 P0-1）：配置了 merchant_policy.delivery_lead_days 才
        *  报具体 delivery_before（报价时间+天数，动态计算不过期）；未配置 → undefined，
        *  terms 省略 delivery_before（明确未知）。 */
-      const deliveryBefore = (): string | undefined =>
-        resolveDeliveryBefore(policyOf(), now());
+      const deliveryBefore = (): string | undefined => resolveDeliveryBefore(policyOf(), now());
       /** 买家还价（major→minor；KNP 里 buyer counter 的 unit_price）。 */
       const clampToBounds = (minor: number, floor: number, list: number): number =>
         Math.min(list, Math.max(minor, floor));
@@ -630,18 +722,27 @@ export function createMerchantHandler(
        */
       /**
        * 运行中规则的摘要（T047）：接受成交前必须重验——商家改了规则/促销/底价后，
-      * 旧 conditional 的许可即失效，不能按旧价成交（设计 §10.2「审批时商品/规则
+       * 旧 conditional 的许可即失效，不能按旧价成交（设计 §10.2「审批时商品/规则
        * 已变化 → 使旧候选失效或重新确认，不能执行过期许可」）。
        */
       const policyDigest = (): string => contentDigest((policyOf() ?? {}) as never);
       /** 商品事实指纹（T047）：价格/币种变化同样使旧许可失效。 */
-      const productFingerprint = (facts: { sku: string; priceMinor: number; currency: string }): string =>
-        contentDigest({ sku: facts.sku, priceMinor: facts.priceMinor, currency: facts.currency } as never);
+      const productFingerprint = (facts: {
+        sku: string;
+        priceMinor: number;
+        currency: string;
+      }): string =>
+        contentDigest({
+          sku: facts.sku,
+          priceMinor: facts.priceMinor,
+          currency: facts.currency,
+        } as never);
 
       const publicDiscountBoundMinor = (listMinor: number, sku: string): number => {
         const policy = policyOf();
         const autoRaw = policy?.max_auto_discount_percent;
-        const auto = typeof autoRaw === "number" && Number.isFinite(autoRaw) && autoRaw > 0 ? autoRaw : 0;
+        const auto =
+          typeof autoRaw === "number" && Number.isFinite(autoRaw) && autoRaw > 0 ? autoRaw : 0;
         // 促销本身是**公开条款**（promos[sku].bulk_discount_percent），因此公开边界
         // 取其与自动折扣的较大者；未公布任何折扣时边界 = list（不自动折扣）。
         const promoPct = policy?.promos?.[sku]?.bulk_discount_percent ?? 0;
@@ -649,13 +750,15 @@ export function createMerchantHandler(
         return applyDiscountPercentMinor(listMinor, pct);
       };
 
-
       /**
        * 商品事实闸门（T046）：数据过期或数量超过可得库存 → 明确不可报价。
        * 设计 §10.1：「数据到期后停止相关自动报价或注明需人工确认，不把库存未知
        * 说成有货」。**不在这里做任何兜底定价**（演示价已在配置层被云端拒绝）。
        */
-      const factsUnusable = (facts: { valid_until?: string; stock?: number }, quantity: number): boolean => {
+      const factsUnusable = (
+        facts: { valid_until?: string; stock?: number },
+        quantity: number,
+      ): boolean => {
         if (facts.valid_until !== undefined) {
           const until = Date.parse(facts.valid_until);
           if (!Number.isFinite(until) || until < Date.parse(now())) return true;
@@ -687,10 +790,14 @@ export function createMerchantHandler(
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
+          const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency);
+          if (promotion.kind === "unavailable") return declineReply("temporarily_unavailable");
+          if (promotion.kind === "invalid") return declineReply("approval_required");
           // 确定性：offer = list 价（公开价）。list < floor 是配置矛盾——此时
           // 用 floor 兜底会把私有底价直接报给买家（T045 泄露面），因此拒绝自动报价。
-          if (priceMinor < floorMinor) return declineReply("approval_required");
-          const effectivePriceMinor = priceMinor;
+          const effectivePriceMinor =
+            promotion.kind === "applied" ? promotion.priceMinor : priceMinor;
+          if (effectivePriceMinor < floorMinor) return declineReply("approval_required");
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -700,7 +807,18 @@ export function createMerchantHandler(
             payload: {
               type: "offer",
               offer_id: newOfferId(),
-              terms: offerTerms({ sku, priceMinor: effectivePriceMinor, quantity, currency, handoff_destination, deliveryBefore: deliveryBefore() }, now()),
+              terms: offerTerms(
+                {
+                  sku,
+                  priceMinor: effectivePriceMinor,
+                  quantity,
+                  currency,
+                  handoff_destination,
+                  deliveryBefore: deliveryBefore(),
+                  ...(promotion.kind === "applied" ? { validUntilCap: promotion.endsAt } : {}),
+                },
+                now(),
+              ),
             },
             ...(note !== undefined ? { public_message: note } : {}),
           });
@@ -717,7 +835,10 @@ export function createMerchantHandler(
         }
         case "offer": {
           // 商家还价：对 buyer 的 offer 回 counter_offer（真实商品价）。
-          const buyerOffer = envelope.payload as { offer_id?: string; terms?: { items?: { sku?: string; quantity?: { value?: number } }[] } };
+          const buyerOffer = envelope.payload as {
+            offer_id?: string;
+            terms?: { items?: { sku?: string; quantity?: { value?: number } }[] };
+          };
           const sku = buyerOffer.terms?.items?.[0]?.sku ?? MERCHANT_SKU;
           const quantityRaw = buyerOffer.terms?.items?.[0]?.quantity?.value;
           if (invalidQuantity(quantityRaw)) return declineReply("schema_invalid");
@@ -728,10 +849,14 @@ export function createMerchantHandler(
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
+          const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency);
+          if (promotion.kind === "unavailable") return declineReply("temporarily_unavailable");
+          if (promotion.kind === "invalid") return declineReply("approval_required");
           // 确定性：counter = list 价（公开价）；list < floor 时拒绝自动报价
           // （用 floor 兜底＝把底价报给买家）。
-          if (priceMinor < floorMinor) return declineReply("approval_required");
-          const effectivePriceMinor = priceMinor;
+          const effectivePriceMinor =
+            promotion.kind === "applied" ? promotion.priceMinor : priceMinor;
+          if (effectivePriceMinor < floorMinor) return declineReply("approval_required");
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -742,7 +867,18 @@ export function createMerchantHandler(
               type: "counter_offer",
               offer_id: newOfferId(),
               responding_to_offer_id: buyerOffer.offer_id ?? "",
-              proposed_terms: offerTerms({ sku, priceMinor: effectivePriceMinor, quantity, currency, handoff_destination, deliveryBefore: deliveryBefore() }, now()),
+              proposed_terms: offerTerms(
+                {
+                  sku,
+                  priceMinor: effectivePriceMinor,
+                  quantity,
+                  currency,
+                  handoff_destination,
+                  deliveryBefore: deliveryBefore(),
+                  ...(promotion.kind === "applied" ? { validUntilCap: promotion.endsAt } : {}),
+                },
+                now(),
+              ),
             },
             ...(note !== undefined ? { public_message: note } : {}),
           });
@@ -757,7 +893,13 @@ export function createMerchantHandler(
         }
         case "counter_offer": {
           const counter = envelope.payload as {
-            proposed_terms?: { items?: { sku?: string; quantity?: { value?: number }; unit_price?: { amount_minor?: number } }[] };
+            proposed_terms?: {
+              items?: {
+                sku?: string;
+                quantity?: { value?: number };
+                unit_price?: { amount_minor?: number };
+              }[];
+            };
             offer_id?: string;
           };
           const sku = counter.proposed_terms?.items?.[0]?.sku ?? MERCHANT_SKU;
@@ -771,16 +913,25 @@ export function createMerchantHandler(
           if (product === null) return declineReply("temporarily_unavailable");
           const { priceMinor, currency, note, handoff_destination } = product;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
+          const authorityPromotion = resolvePromotionQuote(sku, quantity, priceMinor, currency);
+          if (authorityPromotion.kind === "unavailable") {
+            return declineReply("temporarily_unavailable");
+          }
+          if (authorityPromotion.kind === "invalid") return declineReply("approval_required");
           // 确定性（无 LLM）：买家还价只在**公开折扣边界**内响应——
           // 边界 = list×(1-max_auto_discount_percent)，是公开策略值；
           // 高于 list 压到 list，低于公开边界抬到公开边界。
           // 关键：绝不把还价 clamp 到私有底价再回给买家（那样一次极低还价
           // 即可探出底价精确值，T045）。
           const publicBoundMinor = publicDiscountBoundMinor(priceMinor, sku);
-          const responsiveMinor =
+          const policyResponsiveMinor =
             typeof buyerCounterMinor === "number" && Number.isFinite(buyerCounterMinor)
               ? clampToBounds(buyerCounterMinor, publicBoundMinor, priceMinor)
               : priceMinor;
+          const responsiveMinor =
+            authorityPromotion.kind === "applied"
+              ? Math.min(policyResponsiveMinor, authorityPromotion.priceMinor)
+              : policyResponsiveMinor;
           if (responsiveMinor < floorMinor) {
             // 公开边界低于私有底价：该区间不能自动报价，交人工/审批处理，且不返回价格。
             return declineReply("approval_required");
@@ -801,9 +952,10 @@ export function createMerchantHandler(
                   priceMinor,
                 )
               : undefined;
-          const promotionalMinor = bulkMinor !== undefined && bulkMinor < responsiveMinor && bulkMinor >= floorMinor
-            ? bulkMinor
-            : undefined;
+          const promotionalMinor =
+            bulkMinor !== undefined && bulkMinor < responsiveMinor && bulkMinor >= floorMinor
+              ? bulkMinor
+              : undefined;
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -818,16 +970,40 @@ export function createMerchantHandler(
               policy_digest: policyDigest(),
               product_fingerprint: productFingerprint({ sku, priceMinor, currency }),
               // base = 还价响应（已 clamp 到 [floor, list]）——单台即得到该价。
-              base_terms: offerTerms({ sku, priceMinor: responsiveMinor, quantity, currency, handoff_destination, deliveryBefore: deliveryBefore() }, now()),
+              base_terms: offerTerms(
+                {
+                  sku,
+                  priceMinor: responsiveMinor,
+                  quantity,
+                  currency,
+                  handoff_destination,
+                  deliveryBefore: deliveryBefore(),
+                  ...(authorityPromotion.kind === "applied"
+                    ? { validUntilCap: authorityPromotion.endsAt }
+                    : {}),
+                },
+                now(),
+              ),
               // conditions 可空（§13：空 conditions 等价 base_terms）。促销价低于
               // 私有底价时不挂条件——不广告无法兑现的价，也不借 then_terms 泄露底价。
               conditions:
                 promotionalMinor !== undefined
                   ? [
                       {
-                        when: { all: [{ field: "aggregate.total_quantity", op: "gte", value: bulkThreshold }] },
+                        when: {
+                          all: [
+                            { field: "aggregate.total_quantity", op: "gte", value: bulkThreshold },
+                          ],
+                        },
                         then_terms: offerTerms(
-                          { sku, priceMinor: promotionalMinor, quantity, currency, handoff_destination, deliveryBefore: deliveryBefore() },
+                          {
+                            sku,
+                            priceMinor: promotionalMinor,
+                            quantity,
+                            currency,
+                            handoff_destination,
+                            deliveryBefore: deliveryBefore(),
+                          },
                           now(),
                         ),
                       },
@@ -850,7 +1026,8 @@ export function createMerchantHandler(
           return envelopeReply(reply);
         }
         case "clarification": {
-          const questions = (envelope.payload as { questions?: { field?: string }[] }).questions ?? [];
+          const questions =
+            (envelope.payload as { questions?: { field?: string }[] }).questions ?? [];
           // 方案B（协议完整）：商家的应答是结构化 clarification_response
           // envelope（§8.2），in_reply_to 引用被回答的澄清消息（§8.5/§14
           // 强制，finalizeEnvelope 校验）。payload 形状规范未冻结（§14），
@@ -896,7 +1073,8 @@ export function createMerchantHandler(
           // 或 accept 的 offer_id 与所存 conditional 不匹配 → 拒绝成交。此前
           // 无前置时回退基础价照样产出 agreement，从未发出的 offer_id 也照样
           // 成交（agreement 指向不存在的 offer，审计溯源断裂）。
-          const storedOfferId = (stored?.conditional as { offer_id?: string } | undefined)?.offer_id ?? "";
+          const storedOfferId =
+            (stored?.conditional as { offer_id?: string } | undefined)?.offer_id ?? "";
           const acceptedConditional =
             stored !== undefined && acceptedOfferId !== "" && acceptedOfferId === storedOfferId
               ? stored
@@ -939,7 +1117,10 @@ export function createMerchantHandler(
             return declineReply("approval_required");
           }
           const acceptedSku = acceptedConditionalPayload.base_terms?.items?.[0]?.sku;
-          if (acceptedConditionalPayload.product_fingerprint !== undefined && acceptedSku !== undefined) {
+          if (
+            acceptedConditionalPayload.product_fingerprint !== undefined &&
+            acceptedSku !== undefined
+          ) {
             const refreshed = await resolveProductOrDecline(acceptedSku, { force: true });
             if (
               refreshed === null ||
@@ -982,7 +1163,12 @@ export function createMerchantHandler(
           // 协商终态：conditional 不再需要（评审项 L3：此前永久累积）。
           conditionalByNegotiation.delete(negotiationId);
           closedNegotiations.add(negotiationId);
-          return { kind: "accepted", taskState: "completed", artifactParts: [artifactPart], message };
+          return {
+            kind: "accepted",
+            taskState: "completed",
+            artifactParts: [artifactPart],
+            message,
+          };
         }
         case "withdraw": {
           const scope = (envelope.payload as { scope?: string }).scope ?? "offer";
@@ -1014,5 +1200,4 @@ export function createMerchantHandler(
       }
     },
   };
-
 }

@@ -69,7 +69,7 @@ import {
 } from "../discovery/catalog-source/register.js";
 import { HttpMerchantClient } from "../agent/merchant/merchant-client.js";
 import { ProfileCredentialBroker } from "../agent/merchant/credential-broker.js";
-import type { MerchantProductSource } from "./server/merchant-handler.js";
+import type { MerchantHandlerOptions, MerchantProductSource } from "./server/merchant-handler.js";
 
 export interface A2aNodeOptions {
   profile: AgentProfile;
@@ -106,6 +106,7 @@ export interface A2aNodeOptions {
   /** 商家定价策略（BUG-07）：缺省用 profile.merchant_policy（启动时静态值）；
    *  传 provider 则每次报价取运行中生效策略（策略热更新跨进程立即生效）。 */
   merchantPolicy?: MerchantPolicy | (() => MerchantPolicy | undefined);
+  promotionPrice?: MerchantHandlerOptions["promotionPrice"];
 }
 
 export interface A2aNodeHandle {
@@ -214,9 +215,7 @@ function resolveAdvertisedBase(publicBaseUrl: string | undefined, loopbackUrl: s
   try {
     parsed = new URL(normalized);
   } catch {
-    throw new Error(
-      `KIWI_A2A_PUBLIC_URL 不是合法 URL: ${raw!}（应为 https://<host> 形式）`,
-    );
+    throw new Error(`KIWI_A2A_PUBLIC_URL 不是合法 URL: ${raw!}（应为 https://<host> 形式）`);
   }
   if (parsed.protocol !== "https:") {
     throw new Error(`KIWI_A2A_PUBLIC_URL 必须是 https URL（公网广告不接受 http）: ${raw}`);
@@ -283,9 +282,7 @@ interface AuthFromEnvContext {
  *   验签方按 keyid→公钥 resolver；匿名请求按 T0 放行（开放互操作），签名请求
  *   获更高信任。
  */
-export function createA2aAuthVerifier(
-  options: A2aAuthVerifierOptions,
-): AuthVerifier {
+export function createA2aAuthVerifier(options: A2aAuthVerifierOptions): AuthVerifier {
   if (options.mode === "loopback") return new LoopbackOnlyAuthVerifier();
   if (options.mode === "none") return new NoneAuthVerifier();
   if (options.mode === "bearer") {
@@ -363,7 +360,9 @@ function authVerifierFromEnv(ctx: AuthFromEnvContext): AuthVerifier | undefined 
  * - 其它 → 按 JSON 解析为 ThrottleOptions 覆盖（如
  *   `{"windowMs":60000,"tiers":{"T0":{"identityRequestsPerWindow":60}}}`）。
  */
-export function resolveA2aThrottle(raw = process.env.KIWI_A2A_THROTTLE ?? ""): ThrottleOptions | undefined {
+export function resolveA2aThrottle(
+  raw = process.env.KIWI_A2A_THROTTLE ?? "",
+): ThrottleOptions | undefined {
   const v = raw.trim();
   if (v === "" || v === "0" || v === "false" || v === "off") return undefined;
   if (v === "1" || v === "true" || v === "on") return {};
@@ -398,6 +397,7 @@ export interface A2aNodeCoreOptions {
   throttle?: ThrottleOptions;
   /** 运行中商家策略（缺省 profile.merchant_policy 静态值）。 */
   merchantPolicy?: MerchantPolicy | (() => MerchantPolicy | undefined);
+  promotionPrice?: MerchantHandlerOptions["promotionPrice"];
   /**
    * 商品源覆盖（缺省按 profile.commerce 构造 HTTP 商品源）。
    * 云端可注入"商家上传商品表"式实现（设计 §10.1）。
@@ -507,6 +507,9 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           // BUG-07：显式传入 provider（或静态值）时每次报价取运行中生效策略；
           // 缺省仍是启动 profile 的静态策略。
           merchantPolicy: options.merchantPolicy ?? profile.merchant_policy,
+          ...(options.promotionPrice !== undefined
+            ? { promotionPrice: options.promotionPrice }
+            : {}),
         })
       : defaultHandler();
 
@@ -568,7 +571,8 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
   const { profile } = options;
   const role = profile.role;
   const preferred =
-    options.preferredPort ?? (Number(process.env.KIWI_A2A_PORT ?? "") || (role === "merchant" ? 9000 : 9001));
+    options.preferredPort ??
+    (Number(process.env.KIWI_A2A_PORT ?? "") || (role === "merchant" ? 9000 : 9001));
   const { port, url } = await listenPort(preferred);
   const advertisedBase = resolveAdvertisedBase(options.publicBaseUrl, url);
   // 审查 BUG-02：公网广告形态必须显式认证——LoopbackOnlyAuthVerifier 只信
@@ -580,7 +584,8 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
   // 持久 dataDir 优先（密钥/trusted-keys/出站 env 同源）；临时用
   // <tmpdir>/kiwi-a2a-signing-<agent_id>（demo/测试，重启换钥可接受）。
   const signatureMode = (process.env.KIWI_A2A_AUTH ?? "").trim() === "signature";
-  const signingKeyDir = options.dataDir ?? path.join(tmpdir(), `kiwi-a2a-signing-${profile.agent_id}`);
+  const signingKeyDir =
+    options.dataDir ?? path.join(tmpdir(), `kiwi-a2a-signing-${profile.agent_id}`);
   const signingIdentity: A2aSigningIdentity | undefined = signatureMode
     ? loadOrCreateA2aSigningIdentity(
         signingKeyDir,
@@ -589,17 +594,25 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
           : `${role}:${profile.agent_id}`,
       )
     : undefined;
-  const authVerifier = options.authVerifier ?? authVerifierFromEnv({
-    signingKeyDir,
-    signingKeyId:
-      signingIdentity?.keyid ?? (isLoopbackAdvertised(advertisedBase) ? `${role}:${profile.agent_id}` : new URL(advertisedBase).origin),
-    role,
-    advertisedBase,
-  });
+  const authVerifier =
+    options.authVerifier ??
+    authVerifierFromEnv({
+      signingKeyDir,
+      signingKeyId:
+        signingIdentity?.keyid ??
+        (isLoopbackAdvertised(advertisedBase)
+          ? `${role}:${profile.agent_id}`
+          : new URL(advertisedBase).origin),
+      role,
+      advertisedBase,
+    });
   // 出站签名（Issue 16 B）：节点自持密钥 → 出站 A2A 请求自动签名。
   // A2ADirectChannel 的 env 回退读 KIWI_A2A_SIGNING_KEY_FILE；这里把节点密钥
   // 文件指向自身（缺省不覆盖显式配置），使本进程的 outbound 都用同一身份。
-  if (signingIdentity !== undefined && (process.env.KIWI_A2A_SIGNING_KEY_FILE ?? "").trim() === "") {
+  if (
+    signingIdentity !== undefined &&
+    (process.env.KIWI_A2A_SIGNING_KEY_FILE ?? "").trim() === ""
+  ) {
     process.env.KIWI_A2A_SIGNING_KEY_FILE = path.join(signingKeyDir, "a2a-signing-key.json");
   }
   // 反滥用限流（§31）：KIWI_A2A_THROTTLE 非空即启用（默认档位表 / JSON 覆盖）。
@@ -631,6 +644,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     ...(signingIdentity !== undefined ? { signingIdentity } : {}),
     ...(a2aThrottle !== undefined ? { throttle: a2aThrottle } : {}),
     ...(options.merchantPolicy !== undefined ? { merchantPolicy: options.merchantPolicy } : {}),
+    ...(options.promotionPrice !== undefined ? { promotionPrice: options.promotionPrice } : {}),
   });
   const { server } = core;
 

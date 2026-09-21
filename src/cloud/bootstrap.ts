@@ -330,6 +330,22 @@ export async function bootstrapCloudRuntime(
     ...(signingIdentity !== undefined ? { signingIdentity } : {}),
     ...(fileProductSource !== undefined ? { productSource: fileProductSource.source } : {}),
     ...(serviceAvailability !== undefined ? { serviceAvailability } : {}),
+    promotionPrice: ({ sku, quantity }) => {
+      const promotion = promotionStoreForExecutors?.activeForSku(
+        profile.owner_id,
+        sku,
+        quantity,
+      )[0];
+      return promotion === undefined
+        ? undefined
+        : {
+            promotionId: promotion.promotion_id,
+            revision: promotion.revision,
+            currency: promotion.unit_price.currency,
+            amountMinor: promotion.unit_price.amount_minor,
+            endsAt: promotion.ends_at,
+          };
+    },
   });
 
   // 4) 就绪检查（无敏感值；stale 商品/未配置探针 SKU 都算未就绪，不冒充可用）。
