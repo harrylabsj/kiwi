@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:merchant-workbench:1.0:problem",
+  "title": "Kiwi Merchant Workbench Problem Details 1.0",
+  "description": "RFC 9457 response for /merchant/api/v1/* only. A2A, MCP and legacy /merchant/api/* retain their locked envelopes.",
+  "type": "object",
+  "required": ["type", "title", "status", "detail", "code", "request_id", "retryable", "recovery_action"],
+  "properties": {
+    "type": { "type": "string", "pattern": "^urn:kiwi:problem:[a-z0-9-]+$" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+    "detail": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "code": {
+      "enum": [
+        "VALIDATION_ERROR", "UNAUTHENTICATED", "PERMISSION_REVOKED", "RESOURCE_NOT_FOUND",
+        "VERSION_CONFLICT", "PRECONDITION_FAILED", "PRECONDITION_REQUIRED",
+        "APPROVAL_ALREADY_DECIDED", "CANDIDATE_EXPIRED", "CONFIRMATION_REQUIRED",
+        "CONFIRMATION_EXPIRED", "CONFIRMATION_INVALID", "CONFIRMATION_CHANNEL_UNAVAILABLE",
+        "IDEMPOTENCY_KEY_REUSED", "IDEMPOTENCY_WINDOW_EXPIRED", "OPERATION_RESULT_UNKNOWN",
+        "DEPENDENCY_UNAVAILABLE", "CATALOG_UNAVAILABLE", "PRODUCT_SOURCE_UNAVAILABLE",
+        "LLM_UNAVAILABLE", "BROADCAST_PUBLISH_FAILED", "RATE_LIMITED", "RUNTIME_PAUSED",
+        "RUNTIME_RECOVERING", "SERVICE_AUTH_REVOKED", "FEED_RESET_REQUIRED",
+        "FEED_CURSOR_INVALID", "SNAPSHOT_EXPIRED", "MONEY_PRECISION_UNRECOVERABLE",
+        "MONEY_RANGE_EXCEEDED", "RETENTION_RESTRICTED", "STORAGE_CAPACITY_EXCEEDED",
+        "COMPLIANCE_REVIEW_REQUIRED", "INTERNAL_ERROR"
+      ]
+    },
+    "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "operation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "retryable": { "type": "boolean" },
+    "recovery_action": {
+      "enum": ["none", "reauthenticate", "refresh_resource", "confirm", "query_operation", "retry_same_operation", "resync_feed", "open_support"]
+    },
+    "details": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true,
+  "oneOf": [
+    {"properties":{"code":{"const":"VALIDATION_ERROR"},"type":{"const":"urn:kiwi:problem:validation-error"},"status":{"const":422},"retryable":{"const":false},"recovery_action":{"const":"refresh_resource"}}},
+    {"properties":{"code":{"const":"UNAUTHENTICATED"},"type":{"const":"urn:kiwi:problem:unauthenticated"},"status":{"const":401},"retryable":{"const":false},"recovery_action":{"const":"reauthenticate"}}},
+    {"properties":{"code":{"const":"PERMISSION_REVOKED"},"type":{"const":"urn:kiwi:problem:permission-revoked"},"status":{"const":403},"retryable":{"const":false},"recovery_action":{"const":"open_support"}}},
+    {"properties":{"code":{"const":"RESOURCE_NOT_FOUND"},"type":{"const":"urn:kiwi:problem:resource-not-found"},"status":{"const":404},"retryable":{"const":false},"recovery_action":{"const":"none"}}},
+    {"properties":{"code":{"const":"VERSION_CONFLICT"},"type":{"const":"urn:kiwi:problem:version-conflict"},"status":{"const":409},"retryable":{"const":false},"recovery_action":{"const":"refresh_resource"}}},
+    {"properties":{"code":{"const":"PRECONDITION_FAILED"},"type":{"const":"urn:kiwi:problem:precondition-failed"},"status":{"const":412},"retryable":{"const":false},"recovery_action":{"const":"refresh_resource"}}},
+    {"properties":{"code":{"const":"PRECONDITION_REQUIRED"},"type":{"const":"urn:kiwi:problem:precondition-required"},"status":{"const":428},"retryable":{"const":false},"recovery_action":{"const":"refresh_resource"}}},
+    {"properties":{"code":{"const":"APPROVAL_ALREADY_DECIDED"},"type":{"const":"urn:kiwi:problem:approval-already-decided"},"status":{"const":409},"retryable":{"const":false},"recovery_action":{"const":"refresh_resource"}}},
+    {"properties":{"code":{"const":"CANDIDATE_EXPIRED"},"type":{"const":"urn:kiwi:problem:candidate-expired"},"status":{"const":410},"retryable":{"const":false},"recovery_action":{"const":"refresh_resource"}}},
+    {"properties":{"code":{"const":"CONFIRMATION_REQUIRED"},"type":{"const":"urn:kiwi:problem:confirmation-required"},"status":{"const":403},"retryable":{"const":false},"recovery_action":{"const":"confirm"}}},
+    {"properties":{"code":{"const":"CONFIRMATION_EXPIRED"},"type":{"const":"urn:kiwi:problem:confirmation-expired"},"status":{"const":410},"retryable":{"const":false},"recovery_action":{"const":"confirm"}}},
+    {"properties":{"code":{"const":"CONFIRMATION_INVALID"},"type":{"const":"urn:kiwi:problem:confirmation-invalid"},"status":{"const":403},"retryable":{"const":false},"recovery_action":{"const":"confirm"}}},
+    {"properties":{"code":{"const":"CONFIRMATION_CHANNEL_UNAVAILABLE"},"type":{"const":"urn:kiwi:problem:confirmation-channel-unavailable"},"status":{"const":503},"retryable":{"const":false},"recovery_action":{"const":"open_support"}}},
+    {"properties":{"code":{"const":"IDEMPOTENCY_KEY_REUSED"},"type":{"const":"urn:kiwi:problem:idempotency-key-reused"},"status":{"const":409},"retryable":{"const":false},"recovery_action":{"const":"refresh_resource"}}},
+    {"properties":{"code":{"const":"IDEMPOTENCY_WINDOW_EXPIRED"},"type":{"const":"urn:kiwi:problem:idempotency-window-expired"},"status":{"const":409},"retryable":{"const":false},"recovery_action":{"const":"refresh_resource"}}},
+    {"required":["operation_id"],"properties":{"code":{"const":"OPERATION_RESULT_UNKNOWN"},"type":{"const":"urn:kiwi:problem:operation-result-unknown"},"status":{"const":504},"retryable":{"const":false},"recovery_action":{"const":"query_operation"}}},
+    {"properties":{"code":{"const":"DEPENDENCY_UNAVAILABLE"},"type":{"const":"urn:kiwi:problem:dependency-unavailable"},"status":{"const":503},"retryable":{"const":true},"recovery_action":{"const":"retry_same_operation"}}},
+    {"properties":{"code":{"const":"CATALOG_UNAVAILABLE"},"type":{"const":"urn:kiwi:problem:catalog-unavailable"},"status":{"const":503},"retryable":{"const":true},"recovery_action":{"const":"retry_same_operation"}}},
+    {"properties":{"code":{"const":"PRODUCT_SOURCE_UNAVAILABLE"},"type":{"const":"urn:kiwi:problem:product-source-unavailable"},"status":{"const":503},"retryable":{"const":true},"recovery_action":{"const":"retry_same_operation"}}},
+    {"properties":{"code":{"const":"LLM_UNAVAILABLE"},"type":{"const":"urn:kiwi:problem:llm-unavailable"},"status":{"const":503},"retryable":{"const":true},"recovery_action":{"const":"retry_same_operation"}}},
+    {"properties":{"code":{"const":"BROADCAST_PUBLISH_FAILED"},"type":{"const":"urn:kiwi:problem:broadcast-publish-failed"},"status":{"const":503},"retryable":{"const":false},"recovery_action":{"const":"query_operation"}}},
+    {"properties":{"code":{"const":"RATE_LIMITED"},"type":{"const":"urn:kiwi:problem:rate-limited"},"status":{"const":429},"retryable":{"const":true},"recovery_action":{"const":"retry_same_operation"}}},
+    {"properties":{"code":{"const":"RUNTIME_PAUSED"},"type":{"const":"urn:kiwi:problem:runtime-paused"},"status":{"const":409},"retryable":{"const":false},"recovery_action":{"const":"none"}}},
+    {"properties":{"code":{"const":"RUNTIME_RECOVERING"},"type":{"const":"urn:kiwi:problem:runtime-recovering"},"status":{"const":503},"retryable":{"const":false},"recovery_action":{"const":"open_support"}}},
+    {"properties":{"code":{"const":"SERVICE_AUTH_REVOKED"},"type":{"const":"urn:kiwi:problem:service-auth-revoked"},"status":{"const":403},"retryable":{"const":false},"recovery_action":{"const":"open_support"}}},
+    {"properties":{"code":{"const":"FEED_RESET_REQUIRED"},"type":{"const":"urn:kiwi:problem:feed-reset-required"},"status":{"const":409},"retryable":{"const":false},"recovery_action":{"const":"resync_feed"}}},
+    {"properties":{"code":{"const":"FEED_CURSOR_INVALID"},"type":{"const":"urn:kiwi:problem:feed-cursor-invalid"},"status":{"const":400},"retryable":{"const":false},"recovery_action":{"const":"resync_feed"}}},
+    {"properties":{"code":{"const":"SNAPSHOT_EXPIRED"},"type":{"const":"urn:kiwi:problem:snapshot-expired"},"status":{"const":410},"retryable":{"const":false},"recovery_action":{"const":"resync_feed"}}},
+    {"properties":{"code":{"const":"MONEY_PRECISION_UNRECOVERABLE"},"type":{"const":"urn:kiwi:problem:money-precision-unrecoverable"},"status":{"const":422},"retryable":{"const":false},"recovery_action":{"const":"refresh_resource"}}},
+    {"properties":{"code":{"const":"MONEY_RANGE_EXCEEDED"},"type":{"const":"urn:kiwi:problem:money-range-exceeded"},"status":{"const":422},"retryable":{"const":false},"recovery_action":{"const":"refresh_resource"}}},
+    {"properties":{"code":{"const":"RETENTION_RESTRICTED"},"type":{"const":"urn:kiwi:problem:retention-restricted"},"status":{"const":409},"retryable":{"const":false},"recovery_action":{"const":"open_support"}}},
+    {"properties":{"code":{"const":"STORAGE_CAPACITY_EXCEEDED"},"type":{"const":"urn:kiwi:problem:storage-capacity-exceeded"},"status":{"const":507},"retryable":{"const":false},"recovery_action":{"const":"open_support"}}},
+    {"properties":{"code":{"const":"COMPLIANCE_REVIEW_REQUIRED"},"type":{"const":"urn:kiwi:problem:compliance-review-required"},"status":{"const":409},"retryable":{"const":false},"recovery_action":{"const":"open_support"}}},
+    {"properties":{"code":{"const":"INTERNAL_ERROR"},"type":{"const":"urn:kiwi:problem:internal-error"},"status":{"const":500},"retryable":{"const":false},"recovery_action":{"const":"open_support"}}}
+  ]
+}

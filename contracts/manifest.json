@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "authority": "kiwi/contracts",
-  "bundle_sha256": "705ea5e2bf530664e7527fcaa9c19e314ea43ab6ad788e851633241e373fa37a",
+  "bundle_sha256": "bcce9c88bafa4ced2362c17688b86600476d5d6063a44f55b3302e255fc1662d",
   "contracts": [
     {
       "id": "commerce-intent",
@@ -194,6 +194,18 @@
       "version": "1.0",
       "path": "contracts/merchant-management/1.0/connector-delivery-manifest.schema.json",
       "sha256": "cad7c8735d0b1684176b4871a17b9b3b1831b6600b745ee2551e753bfcade82d"
+    },
+    {
+      "id": "merchant-workbench-problem",
+      "version": "1.0",
+      "path": "contracts/merchant-workbench/1.0/problem.schema.json",
+      "sha256": "0763b5106af2fa3ad6a2b180dd2cbe7476844a4a7089bca1a2d978eaa949fe34"
+    },
+    {
+      "id": "merchant-workbench-money",
+      "version": "1.0",
+      "path": "contracts/merchant-workbench/1.0/money.schema.json",
+      "sha256": "f7f52cde540607fc0ff7185b6681171317d0f24bea5a68f8012061478ca93265"
     }
   ]
 }

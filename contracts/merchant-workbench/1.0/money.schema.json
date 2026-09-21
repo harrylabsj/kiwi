@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kiwi:merchant-workbench:1.0:money",
+  "title": "Kiwi Merchant Workbench Exact Money 1.0",
+  "description": "Exact non-negative money at the Workbench management boundary. The locked KNP wire may adapt amount_minor to a safe JSON integer only after range validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["currency", "amount_minor", "currency_table_version"],
+  "properties": {
+    "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "amount_minor": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "maxLength": 16,
+      "description": "Must be <= 9007199254740991 when adapted to the locked KNP JSON-number wire."
+    },
+    "currency_table_version": { "const": "kiwi-workbench-currency-v1-2026-09-21" }
+  }
+}
