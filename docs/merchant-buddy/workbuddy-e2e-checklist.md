@@ -4,7 +4,7 @@
 
 ## 前置与版本
 
-- 商家连接器 `oc_c86216e2a36110bf` 已通过 v1.1.0 审核、安装后 `tools/list` 能看到 6 个 `kiwi_catalog_*` 工具。当前平台显示**审核中 v1.1.0**，尚未发布，**此前置未满足**；旧版 ID `oc_f6eb7fea361ac64e` 已删除，不得再引用。
+- 商家连接器 `oc_c86216e2a36110bf` 已通过 v1.1.0 审核、安装后 `tools/list` 能看到 6 个 `kiwi_catalog_*` 工具。**该资产已于 2026-09-21 由需求负责人撤回，此前置未满足且当前无可用连接器 ID**；旧版 ID `oc_f6eb7fea361ac64e` 已删除，不得再引用。重新提交与否待定。
 - `kiwi-merchant-cs-prep` 单独技能已通过审核并可在应用市场引用；当前 `os_dc3a52407574eb77` 审核中，尚未上架。
 - Buddy 应用按 `integrations/hosts/workbuddy/kiwi-merchant-buddy/buddy-app.config.json` v1.4.2 人工配置，内置连接器选择 `oc_c86216e2a36110bf`，上传头像文件 `avatars/kiwi-merchant-buddy.png`。该 JSON 是本地草稿，不能直接当平台导出文件导入。
 - 测试使用专用商家账号和可公开的测试商品名，记录时间、输入、响应与截图；**不要向真实买家发测试询价或消息**。
