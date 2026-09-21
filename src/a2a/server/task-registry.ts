@@ -60,6 +60,21 @@ export function isAnonymousOwner(owner: TaskOwner): boolean {
 export class TaskRegistry {
   private readonly tasks = new Map<string, { task: A2ATask; owner: TaskOwner }>();
 
+  /**
+   * 按上下文 id 找既有任务（只读）。
+   *
+   * 用途：区分"**新的**询价"与"**既有**会话的后续消息"——服务暂停/撤回时前者必须
+   * 被拒，后者不能被无辜牵连（T012：停止受影响的新询价，不是把所有在途会话掐掉）。
+   */
+  findByContextId(contextId: string): A2ATask | undefined {
+    const wanted = String(contextId ?? "");
+    if (wanted === "") return undefined;
+    for (const entry of this.tasks.values()) {
+      if (entry.task.contextId === wanted) return entry.task;
+    }
+    return undefined;
+  }
+
   set(taskId: string, task: A2ATask, owner: TaskOwner): void {
     this.tasks.set(taskId, { task, owner });
   }

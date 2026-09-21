@@ -598,6 +598,11 @@ export class InboundPipeline {
     }
   }
 
+  /** 按上下文 id 找既有任务（M4 §5.4/T012：区分"新询价"与"既有会话续聊"）。 */
+  findTaskByContextId(contextId: string): A2ATask | undefined {
+    return this.tasks.findByContextId(contextId);
+  }
+
   /** tasks/get：内存优先，miss 时回退 Ledger 视图（§23 恢复第 4 步）。
    *  **归属过滤**：非本人（或匿名）一律 null——不区分"不存在"与"非本人"。 */
   async getTask(taskId: string, owner: TaskOwner): Promise<A2ATask | null> {

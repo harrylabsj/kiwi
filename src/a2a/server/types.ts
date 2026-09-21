@@ -170,6 +170,17 @@ export interface NegotiationHandler {
   handle(ctx: InboundNegotiationContext): Promise<NegotiationHandlerResult>;
 }
 
+/**
+ * 服务可取用性（M4 §5.4/T012）。
+ *
+ * `accepting: false` 时：**新的**询价被拒（JSON-RPC `UNAVAILABLE`），既有会话的
+ * 后续消息照常处理。`state` 是给对端的可读状态（PAUSED/WITHDRAWN/DEGRADED），
+ * **不含**商家私密信息。
+ */
+export interface ServiceAvailability {
+  check: () => { accepting: true } | { accepting: false; state: string; reason: string };
+}
+
 export interface A2AServerOptions {
   /** Agent Card 配置（provider 函数在每次 well-known 请求时求值）。 */
   card: AgentCardConfigProvider;
@@ -199,6 +210,11 @@ export interface A2AServerOptions {
    * 传 ThrottleOptions 由 server 构造；也可直接注入 A2AServerThrottle 实例（测试用）。
    */
   throttle?: ThrottleOptions | A2AServerThrottle;
+  /**
+   * 服务可取用性闸门（M4 §5.4/T012）。配置后：暂停/撤回/故障时**拒绝新的询价**，
+   * 既有会话的后续消息不受影响。缺省不设闸门（保持既有部署语义不变）。
+   */
+  serviceAvailability?: ServiceAvailability;
   /**
    * 通用（非 KNP）A2A 消息响应器（issue 10 / TCK）。缺省用 spec 一致的回显；
    * conformance SUT 注入 TCK 参考场景（messageId 前缀路由）。

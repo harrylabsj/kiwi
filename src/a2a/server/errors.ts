@@ -75,6 +75,14 @@ export const JSONRPC_CODES = {
   AUTH_ERROR: -32051,
   /** body 超限载体：protocol_code = payload_too_large。 */
   PAYLOAD_TOO_LARGE: -32052,
+  /**
+   * 服务当前不接待**新**询价（M4 §5.4/T012：暂停/撤回/故障）。
+   *
+   * 服务端自定义段（-320xx，与 -32052 PAYLOAD_TOO_LARGE 同段）：A2A v1.0 未定义
+   * "服务暂不可用"的专用码，而对端必须能把这个错误与"参数错/方法不存在"区分开——
+   * 它应当重试或走别的通道，而不是改请求。
+   */
+  UNAVAILABLE: -32053,
 } as const;
 
 export interface JsonRpcErrorBody {

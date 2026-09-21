@@ -78,6 +78,7 @@ import type {
   AgentCardConfigProvider,
   AuthVerifier,
   A2AServerOptions,
+  ServiceAvailability,
 } from "./types.js";
 
 const DEFAULT_MAX_PAYLOAD_BYTES = 1024 * 1024;
@@ -210,6 +211,20 @@ export function anonymousCaller(caller: Caller): boolean {
   return caller.identity.trim() === "" || caller.identity === "anonymous";
 }
 
+/** 从 SendMessage params 里取 contextId（顶层或 message 内），取不到返回 undefined。 */
+function paramsContextId(params: unknown): string | undefined {
+  if (params === null || typeof params !== "object") return undefined;
+  const p = params as Record<string, unknown>;
+  const direct = p["contextId"];
+  if (typeof direct === "string" && direct !== "") return direct;
+  const message = p["message"];
+  if (message !== null && typeof message === "object") {
+    const nested = (message as Record<string, unknown>)["contextId"];
+    if (typeof nested === "string" && nested !== "") return nested;
+  }
+  return undefined;
+}
+
 export class A2AServer {
   private readonly cardConfig: AgentCardConfigProvider;
   private readonly authVerifier: AuthVerifier;
@@ -219,6 +234,8 @@ export class A2AServer {
   private readonly ucpOptions: UcpPublishOptions | undefined;
   private readonly pipeline: InboundPipeline;
   private readonly throttle: A2AServerThrottle | undefined;
+  /** 服务是否接待**新**询价（M4；缺省 undefined = 不设闸门）。 */
+  private readonly serviceAvailability: ServiceAvailability | undefined;
 
   constructor(options: A2AServerOptions) {
     this.cardConfig = options.card;
@@ -243,6 +260,10 @@ export class A2AServer {
 
     const handler = options.handler ?? defaultHandler();
     const tasks = new TaskRegistry();
+    // 服务可取用性（M4 §5.4/T012）：暂停/撤回/故障时**拒绝新的询价**，但既有会话
+    // 的后续消息照常处理（"停止受影响的新询价"不是把所有在途会话掐断）。
+    // 缺省 undefined = 现状行为（不改变既有部署语义）。
+    this.serviceAvailability = options.serviceAvailability;
     this.throttle =
       options.throttle === undefined
         ? undefined
@@ -512,8 +533,25 @@ export class A2AServer {
         });
       }
       switch (method) {
-        case METHOD_SEND_MESSAGE:
+        case METHOD_SEND_MESSAGE: {
+          // M4 §5.4/T012：暂停/撤回/故障时拒绝**新**询价。既有多轮会话（消息带着
+          // 一个既有任务的 contextId）继续处理——"停止受影响的新询价"不等于把在途
+          // 会话掐断。
+          const availability = this.serviceAvailability?.check();
+          if (availability !== undefined && !availability.accepting) {
+            const contextId = paramsContextId(params);
+            const continuing =
+              contextId !== undefined && this.pipeline.findTaskByContextId(contextId) !== undefined;
+            if (!continuing) {
+              throw new ServerProtocolError({
+                code: JSONRPC_CODES.UNAVAILABLE,
+                message: `service is not accepting new inquiries (state: ${availability.state})`,
+                data: { state: availability.state, reason: availability.reason },
+              });
+            }
+          }
           return this.handleMessageSendV1(params, caller, ucpAgentProfile);
+        }
         case METHOD_GET_TASK:
           return this.upperTaskState(await this.handleTasksGet(params, caller, ucpAgentProfile));
         case METHOD_LIST_TASKS:

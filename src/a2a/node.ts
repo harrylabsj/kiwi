@@ -42,7 +42,7 @@ import { createMonotonicClock } from "./clock.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AgentProfile, MerchantPolicy } from "../config/profile.js";
-import type { AuthVerifier } from "./server/types.js";
+import type { AuthVerifier, ServiceAvailability } from "./server/types.js";
 import {
   A2AServer,
   LoopbackOnlyAuthVerifier,
@@ -403,6 +403,11 @@ export interface A2aNodeCoreOptions {
    * 云端可注入"商家上传商品表"式实现（设计 §10.1）。
    */
   productSource?: MerchantProductSource;
+  /**
+   * 服务可取用性闸门（M4 §5.4/T012）：暂停/撤回/故障时拒绝**新**询价。
+   * 缺省不设闸门。云端由 bootstrap 按就绪检查接入。
+   */
+  serviceAvailability?: ServiceAvailability;
 }
 
 export interface A2aNodeCore {
@@ -533,6 +538,9 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     // 端点就必须真实可拉——否则 catalog 验证的 profile 阶段拉 UCP 404 →
     // freshness=unreachable → buyer 发现被 BLOCKED 列表挡掉。
     ucp: true,
+    ...(options.serviceAvailability !== undefined
+      ? { serviceAvailability: options.serviceAvailability }
+      : {}),
     ledger,
     idempotency,
     handler,

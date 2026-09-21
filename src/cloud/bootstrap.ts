@@ -221,6 +221,28 @@ export async function bootstrapCloudRuntime(
     config.productsFile !== undefined
       ? createFileProductSource({ file: config.productsFile, merchantId: profile.owner_id })
       : undefined;
+  // 服务可取用性闸门（M4 §5.4/T012）：**由显式服务状态驱动**，缺省正常接待。
+  //
+  // 为什么不接就绪检查：就绪语义与业务可取用性**不是一回事**——就绪里含"探针 SKU
+  // 是否配置/商品数据是否新鲜"这类核对项，把它们当成"停业"会让正常营业的商家因探针
+  // 没配而被拒绝接待（实测：接就绪后 T018 与"过期商品表"用例当场被拒）。正确映射要
+  // 与"过期商品该不该停业"一起决定，属暂停/撤回控制落地时的事；在那之前这里只认
+  // **操作者显式声明**的状态，绝不替商家判断。
+  const declaredServiceState = String(options.env?.KIWI_CLOUD_SERVICE_STATE ?? "")
+    .trim()
+    .toUpperCase();
+  const serviceAvailability =
+    declaredServiceState === "" || declaredServiceState === "OPERATING"
+      ? undefined
+      : {
+          check: ():
+            | { accepting: true }
+            | { accepting: false; state: string; reason: string } => ({
+            accepting: false,
+            state: declaredServiceState,
+            reason: "service state declared by the operator",
+          }),
+        };
   const core = createA2aNodeCore({
     profile,
     advertisedBase: config.publicOrigin,
@@ -229,6 +251,7 @@ export async function bootstrapCloudRuntime(
     authVerifier,
     ...(signingIdentity !== undefined ? { signingIdentity } : {}),
     ...(fileProductSource !== undefined ? { productSource: fileProductSource.source } : {}),
+    ...(serviceAvailability !== undefined ? { serviceAvailability } : {}),
   });
 
   // 4) 就绪检查（无敏感值；stale 商品/未配置探针 SKU 都算未就绪，不冒充可用）。
