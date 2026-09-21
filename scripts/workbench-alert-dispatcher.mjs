@@ -8,6 +8,7 @@ import {
   ExternalAlertDeliveryWorker,
   probeRuntimeHealth,
 } from "../dist/alerts/external-delivery.js";
+import { ClockSafetyStore, probeReferenceClock } from "../dist/merchant/clock-safety.js";
 
 const args = parseArgs(process.argv.slice(2));
 if (args.db === undefined || args.webhook === undefined) {
@@ -35,10 +36,22 @@ if (args.healthUrl !== undefined) {
     throw new Error("health URL must use HTTPS unless it is loopback");
   }
 }
+let timeUrl;
+if (args.timeUrl !== undefined) {
+  if (args.merchant === undefined) throw new Error("--merchant is required with --time-url");
+  timeUrl = new URL(args.timeUrl);
+  if (
+    timeUrl.protocol !== "https:" &&
+    !["127.0.0.1", "localhost", "::1"].includes(timeUrl.hostname)
+  ) {
+    throw new Error("reference clock URL must use HTTPS unless it is loopback");
+  }
+}
 
 const db = new DatabaseSync(args.db);
 db.exec("pragma journal_mode=WAL; pragma busy_timeout=5000");
 const store = new ExternalAlertDeliveryStore({ db });
+const clockSafety = new ClockSafetyStore({ db, alerts: store });
 const worker = new ExternalAlertDeliveryWorker(store, {
   workerId: `external-alert:${process.pid}`,
   send: async (payload) => {
@@ -61,6 +74,17 @@ process.once("SIGINT", () => (stopping = true));
 process.once("SIGTERM", () => (stopping = true));
 try {
   do {
+    let clockProbe;
+    if (timeUrl !== undefined) {
+      try {
+        clockProbe = await probeReferenceClock(clockSafety, {
+          merchantId: args.merchant,
+          referenceUrl: timeUrl,
+        });
+      } catch {
+        clockProbe = { status: "unavailable" };
+      }
+    }
     if (healthUrl !== undefined) {
       await probeRuntimeHealth(store, {
         merchantId: args.merchant,
@@ -68,7 +92,9 @@ try {
       });
     }
     const result = await worker.runOnce();
-    process.stdout.write(`${JSON.stringify({ at: new Date().toISOString(), result })}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ at: new Date().toISOString(), result, ...(clockProbe === undefined ? {} : { clock_probe: clockProbe }) })}\n`,
+    );
     if (args.once === true) break;
     await delay(result === "idle" ? 5_000 : 250);
   } while (!stopping);
@@ -90,6 +116,7 @@ function parseArgs(values) {
     else if (value === "--webhook") out.webhook = next;
     else if (value === "--token-env") out.tokenEnv = next;
     else if (value === "--health-url") out.healthUrl = next;
+    else if (value === "--time-url") out.timeUrl = next;
     else if (value === "--merchant") out.merchant = next;
     else throw new Error(`unknown argument: ${value}`);
     index += 1;

@@ -68,6 +68,7 @@ import { createBroadcastExecutors } from "../merchant/feed-executors.js";
 import { isCurrentGrantAuthorization, MerchantGrantStore } from "../merchant/grant-store.js";
 import { createGrantExecutors } from "../merchant/grant-executors.js";
 import { MerchantPromotionStore } from "../merchant/promotion-store.js";
+import { ClockSafetyStore, probeReferenceClock } from "../merchant/clock-safety.js";
 import { createPromotionExecutors } from "../merchant/promotion-executors.js";
 import { PromotionBroadcastWorkflowStore } from "../merchant/promotion-broadcast-workflow.js";
 import { recoverPromotionBroadcastWorkflows } from "../merchant/promotion-broadcast-recovery.js";
@@ -468,11 +469,13 @@ export async function bootstrapCloudRuntime(
   let publicFeedHandler: CloudRequestListener | undefined;
   let buyerHandler: CloudRequestListener | undefined;
   let reconciliationTimer: ReturnType<typeof setInterval> | undefined;
+  let clockTimer: ReturnType<typeof setInterval> | undefined;
   if (adminOptions !== undefined) {
     managementDb = new DatabaseSync(path.join(config.dataDir, "state.sqlite"));
     serviceState.attachPersistence(managementDb, profile.owner_id);
     const workbenchConfirmations = new WorkbenchConfirmationStore({ db: managementDb });
     const reconciliationStore = new WorkbenchReconciliationStore({ db: managementDb });
+    const clockSafety = new ClockSafetyStore({ db: managementDb, alerts: reconciliationStore });
     const workbenchCursorKey = loadOrCreateFeedCursorKey(config.dataDir);
     const feedStore = new MerchantFeedStore({
       db: managementDb,
@@ -498,7 +501,7 @@ export async function bootstrapCloudRuntime(
         }),
       );
     }
-    const promotionStore = new MerchantPromotionStore({ db: managementDb });
+    const promotionStore = new MerchantPromotionStore({ db: managementDb, clockSafety });
     const promotionWorkflowStore = new PromotionBroadcastWorkflowStore({ db: managementDb });
     const eventProjectionStore = new WorkbenchEventProjectionStore({
       db: managementDb,
@@ -508,6 +511,35 @@ export async function bootstrapCloudRuntime(
     grantStoreForExecutors = grantStore;
     promotionStoreForExecutors = promotionStore;
     promotionWorkflowStoreForExecutors = promotionWorkflowStore;
+
+    const referenceTimeUrl = String(
+      (options.env ?? process.env).KIWI_REFERENCE_TIME_URL ?? "",
+    ).trim();
+    if (referenceTimeUrl !== "") {
+      const referenceUrl = requireSecureProbeUrl(referenceTimeUrl, "KIWI_REFERENCE_TIME_URL");
+      let clockProbeRunning = false;
+      const probeClock = (): void => {
+        if (clockProbeRunning) return;
+        clockProbeRunning = true;
+        void probeReferenceClock(clockSafety, {
+          merchantId: profile.owner_id,
+          referenceUrl,
+        })
+          .catch(() => {
+            log("[kiwi-cloud] reference clock probe failed; prior clock-safety state retained\n");
+          })
+          .finally(() => {
+            clockProbeRunning = false;
+          });
+      };
+      clockTimer = setInterval(probeClock, 60_000);
+      clockTimer.unref();
+      probeClock();
+    } else {
+      log(
+        "[kiwi-cloud] KIWI_REFERENCE_TIME_URL is unset; time-sensitive promotion writes remain paused\n",
+      );
+    }
 
     await recoverPromotionBroadcastWorkflows({
       merchantId: profile.owner_id,
@@ -934,6 +966,7 @@ export async function bootstrapCloudRuntime(
     });
   } catch (err) {
     if (reconciliationTimer !== undefined) clearInterval(reconciliationTimer);
+    if (clockTimer !== undefined) clearInterval(clockTimer);
     managementDb?.close();
     core.close();
     await assembly.close().catch(() => undefined);
@@ -970,6 +1003,7 @@ export async function bootstrapCloudRuntime(
       });
       await merchantHandler.close().catch(() => undefined);
       if (reconciliationTimer !== undefined) clearInterval(reconciliationTimer);
+      if (clockTimer !== undefined) clearInterval(clockTimer);
       core.close();
       await assembly.close().catch(() => undefined);
       managementDb?.close();
@@ -991,4 +1025,17 @@ function recordValue(value: unknown): Record<string, unknown> {
     throw new Error("broadcast authorization snapshot is missing");
   }
   return value as Record<string, unknown>;
+}
+
+function requireSecureProbeUrl(value: string, field: string): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new CloudStartupError("INVALID_CONFIG", `${field} must be a valid URL`);
+  }
+  if (url.protocol !== "https:" && !["127.0.0.1", "localhost", "::1"].includes(url.hostname)) {
+    throw new CloudStartupError("INVALID_CONFIG", `${field} must use HTTPS unless it is loopback`);
+  }
+  return url;
 }

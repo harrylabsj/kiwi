@@ -172,6 +172,60 @@ export class WorkbenchReconciliationStore {
     return changed.changes === 1;
   }
 
+  recordClockSkew(input: { merchantId: string; paused: boolean; offsetMs: number }): void {
+    const stamp = this.now();
+    if (!input.paused) {
+      this.db
+        .prepare(
+          `UPDATE workbench_alerts SET resolved_at=?
+           WHERE merchant_id=? AND category='clock_skew' AND resource='clock:system'
+             AND episode='clock-skew' AND resolved_at IS NULL`,
+        )
+        .run(stamp, input.merchantId);
+      return;
+    }
+    const existing = this.db
+      .prepare(
+        `SELECT alert_id, resolved_at FROM workbench_alerts
+         WHERE merchant_id=? AND category='clock_skew' AND resource='clock:system'
+           AND episode='clock-skew'`,
+      )
+      .get(input.merchantId) as { alert_id: string; resolved_at: string | null } | undefined;
+    const summary = `System clock skew exceeded limit: offset_ms=${Math.round(input.offsetMs)}`;
+    if (existing === undefined) {
+      this.db
+        .prepare(
+          `INSERT INTO workbench_alerts
+           (alert_id, merchant_id, category, resource, episode, severity, summary, created_at)
+           VALUES (?, ?, 'clock_skew', 'clock:system', 'clock-skew', 'critical', ?, ?)`,
+        )
+        .run(`wba_${randomBytes(12).toString("hex")}`, input.merchantId, summary, stamp);
+      return;
+    }
+    if (existing.resolved_at === null) {
+      this.db
+        .prepare("UPDATE workbench_alerts SET severity='critical', summary=? WHERE alert_id=?")
+        .run(summary, existing.alert_id);
+      return;
+    }
+    this.db
+      .prepare(
+        `UPDATE workbench_alerts SET severity='critical', summary=?, created_at=?, resolved_at=NULL,
+           acknowledged_at=NULL, acknowledged_by=NULL WHERE alert_id=?`,
+      )
+      .run(summary, stamp, existing.alert_id);
+    const deliveriesPresent = this.db
+      .prepare(
+        "SELECT 1 present FROM sqlite_master WHERE type='table' AND name='workbench_alert_deliveries'",
+      )
+      .get() as { present: number } | undefined;
+    if (deliveriesPresent?.present === 1) {
+      this.db
+        .prepare("DELETE FROM workbench_alert_deliveries WHERE alert_id=?")
+        .run(existing.alert_id);
+    }
+  }
+
   leaseOutbox(merchantId: string, workerId: string, leaseMs = 30_000): OutboxLease | undefined {
     const stamp = this.now();
     const leaseExpires = new Date(Date.parse(stamp) + leaseMs).toISOString();

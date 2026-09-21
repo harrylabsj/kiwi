@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import { parseExactMoney, type ExactMoney } from "./application/money.js";
+import { ClockSafetyError, type ClockSafetyStore } from "./clock-safety.js";
 import {
   parsePromotionBoundary,
   promotionIsActive,
@@ -75,7 +76,7 @@ export interface PromotionProjection {
 }
 
 export class MerchantPromotionError extends Error {
-  readonly code: "validation_error" | "not_found" | "version_conflict";
+  readonly code: "validation_error" | "not_found" | "version_conflict" | "clock_skew";
   constructor(code: MerchantPromotionError["code"], message: string) {
     super(message);
     this.name = "MerchantPromotionError";
@@ -86,10 +87,16 @@ export class MerchantPromotionError extends Error {
 export class MerchantPromotionStore {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
+  private readonly clockSafety?: Pick<ClockSafetyStore, "assertTimeSensitiveWritesAllowed">;
 
-  constructor(options: { db: DatabaseSync; now?: () => string }) {
+  constructor(options: {
+    db: DatabaseSync;
+    now?: () => string;
+    clockSafety?: Pick<ClockSafetyStore, "assertTimeSensitiveWritesAllowed">;
+  }) {
     this.db = options.db;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.clockSafety = options.clockSafety;
     this.db.exec("pragma busy_timeout=5000");
     this.db.exec(SCHEMA);
   }
@@ -108,6 +115,7 @@ export class MerchantPromotionStore {
       priority?: number;
     },
   ): { promotion_id: string; revision: number } {
+    this.assertClockSafe(merchantId);
     if (input.audience !== "public") {
       throw new MerchantPromotionError("validation_error", "promotion audience must be public");
     }
@@ -183,6 +191,7 @@ export class MerchantPromotionStore {
     expectedRevision: number,
     input: { publishedBy: string; approvalRef: string },
   ): { promotion_id: string; revision: number } {
+    this.assertClockSafe(merchantId);
     return this.transition(merchantId, promotionId, expectedRevision, "draft", "published", input);
   }
 
@@ -271,6 +280,7 @@ export class MerchantPromotionStore {
     const rows = this.db
       .prepare("SELECT * FROM merchant_promotions WHERE merchant_id=? AND status='published'")
       .all(merchantId) as Array<Record<string, unknown>>;
+    if (rows.length > 0) this.assertClockSafe(merchantId);
     return rows
       .map((row) => this.project(row))
       .filter(
@@ -290,6 +300,17 @@ export class MerchantPromotionStore {
         (left, right) =>
           right.priority - left.priority || left.promotion_id.localeCompare(right.promotion_id),
       );
+  }
+
+  private assertClockSafe(merchantId: string): void {
+    try {
+      this.clockSafety?.assertTimeSensitiveWritesAllowed(merchantId);
+    } catch (error) {
+      if (error instanceof ClockSafetyError) {
+        throw new MerchantPromotionError("clock_skew", error.message);
+      }
+      throw error;
+    }
   }
 
   private transition(

@@ -3432,11 +3432,13 @@ function respondWorkbenchError(res: ServerResponse, error: unknown, requestId: s
   }
   if (error instanceof MerchantPromotionError) {
     const code: WorkbenchProblemCode =
-      error.code === "not_found"
-        ? "RESOURCE_NOT_FOUND"
-        : error.code === "version_conflict"
-          ? "VERSION_CONFLICT"
-          : "VALIDATION_ERROR";
+      error.code === "clock_skew"
+        ? "RUNTIME_PAUSED"
+        : error.code === "not_found"
+          ? "RESOURCE_NOT_FOUND"
+          : error.code === "version_conflict"
+            ? "VERSION_CONFLICT"
+            : "VALIDATION_ERROR";
     writeWorkbenchProblem(res, code, requestId, "促销请求未完成", error.message);
     return;
   }
