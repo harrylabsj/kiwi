@@ -7,7 +7,10 @@ import {
   contentHash,
   WriteApprovalCandidateStore,
 } from "../src/agent/merchant/action-candidate.js";
-import { FakeMerchantClient, fakeMerchantProduct } from "../src/agent/merchant/fake-merchant-client.js";
+import {
+  FakeMerchantClient,
+  fakeMerchantProduct,
+} from "../src/agent/merchant/fake-merchant-client.js";
 import { MerchantFeedStore } from "../src/merchant/feed-store.js";
 import { createBroadcastExecutors } from "../src/merchant/feed-executors.js";
 import { MerchantCoreService } from "../src/merchant-core/service.js";
@@ -26,6 +29,7 @@ function fixture() {
   ).run(PRINCIPAL, NOW, NOW);
   const approvals = new WriteApprovalCandidateStore({ db, principalId: PRINCIPAL, now: () => NOW });
   const feed = new MerchantFeedStore({ db, cursorKey: randomBytes(32), now: () => NOW });
+  const publishedWorkflows: string[] = [];
   const core = new MerchantCoreService({
     profile: testProfile(),
     merchantClient: new FakeMerchantClient({ products: [fakeMerchantProduct()] }),
@@ -36,9 +40,12 @@ function fixture() {
     extraExecutors: createBroadcastExecutors({
       merchantId: "merchant-001",
       getStore: () => feed,
+      onPublished: (args) => {
+        if (typeof args.workflow_id === "string") publishedWorkflows.push(args.workflow_id);
+      },
     }),
   });
-  return { db, feed, core };
+  return { db, feed, core, publishedWorkflows };
 }
 
 const content = (title: string) => ({
@@ -66,7 +73,8 @@ describe("approval-gated Feed executors", () => {
       const candidate = core.getCommand(candidateId)!;
       const verifier = {
         verifyCommittedDecision: (input: { actionDigest: string }) =>
-          input.actionDigest === contentHash({
+          input.actionDigest ===
+          contentHash({
             arguments: candidate.arguments,
             preconditions: candidate.preconditions,
           }),
@@ -137,7 +145,8 @@ describe("approval-gated Feed executors", () => {
       },
       {
         verifyCommittedDecision: (input) =>
-          input.actionDigest === contentHash({
+          input.actionDigest ===
+          contentHash({
             arguments: publishCandidate.arguments,
             preconditions: publishCandidate.preconditions,
           }),
@@ -157,22 +166,53 @@ describe("approval-gated Feed executors", () => {
     const staleCandidate = core.getCommand(stale.candidate.candidate_id)!;
     expect(
       await core.executeCommittedDecision(
-          {
-            operationId: "operation-stale",
-            candidateId: stale.candidate.candidate_id,
-            actorId: PRINCIPAL,
-            decision: "approve",
-          },
-          {
-            verifyCommittedDecision: (input) =>
-              input.actionDigest === contentHash({
-                arguments: staleCandidate.arguments,
-                preconditions: staleCandidate.preconditions,
-              }),
-          },
-        ),
+        {
+          operationId: "operation-stale",
+          candidateId: stale.candidate.candidate_id,
+          actorId: PRINCIPAL,
+          decision: "approve",
+        },
+        {
+          verifyCommittedDecision: (input) =>
+            input.actionDigest ===
+            contentHash({
+              arguments: staleCandidate.arguments,
+              preconditions: staleCandidate.preconditions,
+            }),
+        },
+      ),
     ).toMatchObject({ kind: "stale" });
     expect(feed.getBroadcast("merchant-001", id)?.title).toBe("Concurrent");
+    db.close();
+  });
+
+  it("notifies the promotion workflow only after Feed publish succeeds", async () => {
+    const { db, feed, core, publishedWorkflows } = fixture();
+    const prepared = await core.prepareBroadcastPublish({
+      broadcast: content("Workflow announcement"),
+      workflowId: "pwf-test",
+    });
+    const candidate = core.getCommand(prepared.candidate.candidate_id)!;
+    await core.executeCommittedDecision(
+      {
+        operationId: "operation-workflow-broadcast",
+        candidateId: candidate.candidate_id,
+        actorId: PRINCIPAL,
+        decision: "approve",
+      },
+      {
+        verifyCommittedDecision: (input) =>
+          input.actionDigest ===
+          contentHash({
+            arguments: candidate.arguments,
+            preconditions: candidate.preconditions,
+          }),
+      },
+    );
+    expect(
+      feed.getBroadcast("merchant-001", String(candidate.arguments.broadcast_id)),
+    ).toBeDefined();
+    expect(publishedWorkflows).toEqual(["pwf-test"]);
     db.close();
   });
 });

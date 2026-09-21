@@ -52,6 +52,7 @@ export interface MerchantAdminSurface {
   prepareBroadcastPublish?(input: {
     broadcast: Record<string, unknown>;
     authorization: Record<string, unknown>;
+    workflowId?: string;
     reason?: string;
   }): Promise<unknown> | unknown;
   prepareBroadcastRevise?(input: {
@@ -84,6 +85,8 @@ export interface MerchantAdminSurface {
   preparePromotionPublish?(input: {
     promotionId: string;
     expectedRevision: number;
+    workflowId?: string;
+    broadcastAuthorization?: Record<string, unknown>;
     reason?: string;
   }): Promise<unknown> | unknown;
   preparePromotionWithdraw?(input: {

@@ -13,6 +13,10 @@ export function createBroadcastExecutors(options: {
   merchantId: string;
   getStore: () => MerchantFeedStore | undefined;
   authorizeExecution?: (args: Readonly<Record<string, unknown>>) => void;
+  onPublished?: (
+    args: Readonly<Record<string, unknown>>,
+    result: { broadcast_id: string; revision: number },
+  ) => void;
 }): CommandExecutor[] {
   const store = (): MerchantFeedStore => {
     const value = options.getStore();
@@ -26,15 +30,18 @@ export function createBroadcastExecutors(options: {
       requiresCommittedDecision: true,
       readPreconditions: async (args) => ({
         broadcast_id: String(args.broadcast_id ?? ""),
-        exists: store().getBroadcast(options.merchantId, String(args.broadcast_id ?? "")) !== undefined,
+        exists:
+          store().getBroadcast(options.merchantId, String(args.broadcast_id ?? "")) !== undefined,
       }),
       execute: async (args) => {
         options.authorizeExecution?.(args);
-        return store().publishWithId(
+        const published = store().publishWithId(
           options.merchantId,
           String(args.broadcast_id ?? ""),
           requireBroadcastInput(args.input),
         );
+        options.onPublished?.(args, published);
+        return published;
       },
       verifyAfter: async (args) => {
         const value = store().getBroadcast(options.merchantId, String(args.broadcast_id ?? ""));
@@ -60,7 +67,10 @@ export function createBroadcastExecutors(options: {
       },
       verifyAfter: async (args) => {
         const expected = requireInteger(args.expected_revision, "expected_revision") + 1;
-        if (store().getBroadcast(options.merchantId, String(args.broadcast_id ?? ""))?.revision !== expected) {
+        if (
+          store().getBroadcast(options.merchantId, String(args.broadcast_id ?? ""))?.revision !==
+          expected
+        ) {
           throw new Error("broadcast revision readback failed");
         }
       },
@@ -82,7 +92,10 @@ export function createBroadcastExecutors(options: {
         );
       },
       verifyAfter: async (args) => {
-        if (store().getBroadcast(options.merchantId, String(args.broadcast_id ?? ""))?.status !== "withdrawn") {
+        if (
+          store().getBroadcast(options.merchantId, String(args.broadcast_id ?? ""))?.status !==
+          "withdrawn"
+        ) {
           throw new Error("broadcast withdraw readback failed");
         }
       },
@@ -125,9 +138,7 @@ function requireBroadcastInput(value: unknown): BroadcastInput {
     title: String(row.title ?? ""),
     body: String(row.body ?? ""),
     audience: "public",
-    ...(Array.isArray(row.sku_refs)
-      ? { skuRefs: row.sku_refs.map((item) => String(item)) }
-      : {}),
+    ...(Array.isArray(row.sku_refs) ? { skuRefs: row.sku_refs.map((item) => String(item)) } : {}),
     ...(typeof row.promotion_ref === "string" ? { promotionRef: row.promotion_ref } : {}),
     ...(typeof row.effective_until === "string" ? { effectiveUntil: row.effective_until } : {}),
   };

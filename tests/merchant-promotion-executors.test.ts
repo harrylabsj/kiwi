@@ -8,6 +8,7 @@ import {
 } from "../src/agent/merchant/action-candidate.js";
 import { FakeMerchantClient } from "../src/agent/merchant/fake-merchant-client.js";
 import { createPromotionExecutors } from "../src/merchant/promotion-executors.js";
+import { PromotionBroadcastWorkflowStore } from "../src/merchant/promotion-broadcast-workflow.js";
 import { MerchantPromotionStore } from "../src/merchant/promotion-store.js";
 import { MerchantCoreService } from "../src/merchant-core/service.js";
 import { testProfile } from "./helpers.js";
@@ -100,6 +101,86 @@ describe("approval-gated promotion executors", () => {
       revision: 3,
       approval_ref: "operation-withdraw",
     });
+    db.close();
+  });
+
+  it("persists partial completion when promotion succeeds but broadcast draft creation fails", async () => {
+    const db = new DatabaseSync(":memory:");
+    const promotions = new MerchantPromotionStore({ db, now: () => NOW });
+    const workflows = new PromotionBroadcastWorkflowStore({ db, now: () => NOW });
+    const draft = promotions.createDraft("merchant-001", {
+      skuRefs: ["sku-1"],
+      rule: {
+        kind: "limited_price",
+        unit_price: { currency: "CNY", amount_minor: "9999" },
+      },
+      audience: "public",
+      starts: "2026-09-21T00:00:00Z",
+      ends: "2026-09-22T00:00:00Z",
+      timezone: "UTC",
+    });
+    const workflow = workflows.create({
+      merchantId: "merchant-001",
+      promotionId: draft.promotion_id,
+      broadcast: {
+        kind: "promotion_notice",
+        title: "Promotion live",
+        body: "Promotion details",
+        audience: "public",
+      },
+    });
+    const executor = createPromotionExecutors({
+      merchantId: "merchant-001",
+      getStore: () => promotions,
+      getWorkflowStore: () => workflows,
+      prepareBroadcast: () => {
+        throw new Error("candidate store unavailable");
+      },
+    })[0]!;
+    const output = (await executor.execute(
+      {
+        promotion_id: draft.promotion_id,
+        expected_revision: 1,
+        workflow_id: workflow.workflow_id,
+        broadcast_authorization: {
+          actor_id: "owner:merchant-001",
+          actor_role: "owner",
+          action: "broadcast.draft",
+          authorization_generation: 0,
+          matched_grant_ids: [],
+        },
+      },
+      {} as never,
+      {
+        kind: "committed",
+        operationId: "operation-publish-partial",
+        actorId: "owner:merchant-001",
+      },
+    )) as { workflow: { status: string } };
+    expect(output.workflow.status).toBe("partial");
+    expect(promotions.getPromotion("merchant-001", draft.promotion_id)).toMatchObject({
+      status: "published",
+      revision: 2,
+    });
+    expect(workflows.get("merchant-001", workflow.workflow_id)).toMatchObject({
+      status: "partial",
+      promotion_revision: 2,
+      last_error: "candidate store unavailable",
+    });
+
+    // Retry advances only the broadcast side; promotion revision remains unchanged.
+    workflows.markBroadcastPending(
+      "merchant-001",
+      workflow.workflow_id,
+      "candidate-broadcast-retry",
+    );
+    expect(workflows.get("merchant-001", workflow.workflow_id)).toMatchObject({
+      status: "broadcast_pending",
+      broadcast_candidate_id: "candidate-broadcast-retry",
+    });
+    workflows.markCompleted("merchant-001", workflow.workflow_id);
+    expect(workflows.get("merchant-001", workflow.workflow_id)?.status).toBe("completed");
+    expect(promotions.getPromotion("merchant-001", draft.promotion_id)?.revision).toBe(2);
     db.close();
   });
 });

@@ -2,6 +2,7 @@
 
 import type { CommandExecutor } from "../merchant-core/executor.js";
 import type { MerchantPromotionStore } from "./promotion-store.js";
+import type { PromotionBroadcastWorkflowStore } from "./promotion-broadcast-workflow.js";
 
 export const PROMOTION_TOOLS = {
   publish: "kiwi_workbench_promotion_publish",
@@ -11,6 +12,12 @@ export const PROMOTION_TOOLS = {
 export function createPromotionExecutors(options: {
   merchantId: string;
   getStore: () => MerchantPromotionStore | undefined;
+  getWorkflowStore?: () => PromotionBroadcastWorkflowStore | undefined;
+  prepareBroadcast?: (input: {
+    broadcast: Record<string, unknown>;
+    authorization: Record<string, unknown>;
+    workflowId: string;
+  }) => Promise<string> | string;
 }): CommandExecutor[] {
   const store = (): MerchantPromotionStore => {
     const value = options.getStore();
@@ -40,8 +47,8 @@ export function createPromotionExecutors(options: {
       risk: "promotion_publish",
       requiresCommittedDecision: true,
       readPreconditions: precondition,
-      execute: async (args, _context, decision) =>
-        store().publish(
+      execute: async (args, _context, decision) => {
+        const published = store().publish(
           options.merchantId,
           requireText(args["promotion_id"], "promotion_id"),
           requireRevision(args["expected_revision"]),
@@ -49,7 +56,45 @@ export function createPromotionExecutors(options: {
             publishedBy: requireCommitted(decision).actorId,
             approvalRef: requireCommitted(decision).operationId,
           },
-        ),
+        );
+        const workflowId = optionalText(args["workflow_id"]);
+        const workflows = options.getWorkflowStore?.();
+        if (workflowId === undefined || workflows === undefined) return published;
+        const workflow = workflows.markPromotionPublished(
+          options.merchantId,
+          workflowId,
+          published.revision,
+        );
+        if (!workflow.broadcast_requested) return { promotion: published, workflow };
+        const broadcast = workflows.broadcastContent(options.merchantId, workflowId);
+        try {
+          const authorization = requireRecord(
+            args["broadcast_authorization"],
+            "broadcast_authorization",
+          );
+          if (broadcast === undefined || options.prepareBroadcast === undefined) {
+            throw new Error("broadcast candidate preparation is unavailable");
+          }
+          const candidateId = await options.prepareBroadcast({
+            broadcast,
+            authorization,
+            workflowId,
+          });
+          return {
+            promotion: published,
+            workflow: workflows.markBroadcastPending(options.merchantId, workflowId, candidateId),
+          };
+        } catch (error) {
+          return {
+            promotion: published,
+            workflow: workflows.markPartial(
+              options.merchantId,
+              workflowId,
+              error instanceof Error ? error.message : String(error),
+            ),
+          };
+        }
+      },
       verifyAfter: async (args) => {
         const value = store().getPromotion(
           options.merchantId,
@@ -101,4 +146,15 @@ function requireCommitted(
   if (value?.kind !== "committed")
     throw new Error("promotion execution requires a committed decision");
   return value;
+}
+
+function optionalText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
+
+function requireRecord(value: unknown, field: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${field} is required`);
+  }
+  return value as Record<string, unknown>;
 }

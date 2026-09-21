@@ -16,6 +16,7 @@ import { BROADCAST_TOOLS } from "../src/merchant/feed-executors.js";
 import { GRANT_TOOLS } from "../src/merchant/grant-executors.js";
 import { PROMOTION_TOOLS } from "../src/merchant/promotion-executors.js";
 import { MerchantPromotionStore } from "../src/merchant/promotion-store.js";
+import { PromotionBroadcastWorkflowStore } from "../src/merchant/promotion-broadcast-workflow.js";
 import {
   MerchantGrantStore,
   type GrantAction,
@@ -54,6 +55,10 @@ const feed = new MerchantFeedStore({
 });
 const grants = new MerchantGrantStore({ db, now: () => NOW.toISOString() });
 const promotions = new MerchantPromotionStore({ db, now: () => NOW.toISOString() });
+const promotionWorkflows = new PromotionBroadcastWorkflowStore({
+  db,
+  now: () => NOW.toISOString(),
+});
 
 let server: Server;
 let base: string;
@@ -62,6 +67,7 @@ let auth: { cookie: string; csrf: string };
 function preparedBroadcast(input: {
   broadcast: Record<string, unknown>;
   authorization: Record<string, unknown>;
+  workflowId?: string;
 }): { candidate: WriteApprovalCandidate } {
   const item: WriteApprovalCandidate = {
     ...candidate,
@@ -71,6 +77,7 @@ function preparedBroadcast(input: {
       broadcast_id: `bct_${randomBytes(16).toString("base64url")}`,
       input: input.broadcast,
       authorization: input.authorization,
+      ...(input.workflowId !== undefined ? { workflow_id: input.workflowId } : {}),
     },
     arguments_hash: `sha256:broadcast-${pending.length}`,
   };
@@ -104,7 +111,12 @@ function preparedGrant(input: {
   return { candidate: item };
 }
 
-function preparedPromotion(input: { promotionId: string; expectedRevision: number }): {
+function preparedPromotion(input: {
+  promotionId: string;
+  expectedRevision: number;
+  workflowId?: string;
+  broadcastAuthorization?: Record<string, unknown>;
+}): {
   candidate: WriteApprovalCandidate;
 } {
   const item: WriteApprovalCandidate = {
@@ -114,6 +126,10 @@ function preparedPromotion(input: { promotionId: string; expectedRevision: numbe
     arguments: {
       promotion_id: input.promotionId,
       expected_revision: input.expectedRevision,
+      ...(input.workflowId !== undefined ? { workflow_id: input.workflowId } : {}),
+      ...(input.broadcastAuthorization !== undefined
+        ? { broadcast_authorization: input.broadcastAuthorization }
+        : {}),
     },
     arguments_hash: `sha256:promotion-${pending.length}`,
   };
@@ -150,6 +166,7 @@ beforeAll(async () => {
       workbenchFeed: feed,
       workbenchGrants: grants,
       workbenchPromotions: promotions,
+      promotionBroadcastWorkflows: promotionWorkflows,
       prepareBroadcastPublish: preparedBroadcast,
       prepareGrantCreate: preparedGrant,
       preparePromotionPublish: preparedPromotion,
@@ -519,11 +536,40 @@ describe("Workbench v1 trusted confirmation API", () => {
 
     const publishDraft = await post(
       `/merchant/api/v1/promotions/${created.promotion_id}/publish-drafts`,
-      { expected_revision: created.revision },
+      {
+        expected_revision: created.revision,
+        broadcast: {
+          kind: "promotion_notice",
+          title: "Promotion prepared",
+          body: "The promotion will be announced after it is published.",
+          audience: "public",
+        },
+      },
     );
     expect(publishDraft.status).toBe(201);
-    const prepared = (await publishDraft.json()) as { candidate: WriteApprovalCandidate };
+    const prepared = (await publishDraft.json()) as {
+      candidate: WriteApprovalCandidate;
+      workflow_id: string;
+    };
     expect(prepared.candidate.tool).toBe(PROMOTION_TOOLS.publish);
+    expect(prepared.candidate.arguments).toMatchObject({
+      workflow_id: prepared.workflow_id,
+      broadcast_authorization: {
+        actor_id: ACTOR,
+        actor_role: "owner",
+        action: "broadcast.draft",
+      },
+    });
+    const workflowResponse = await fetch(
+      `${base}/merchant/api/v1/promotion-workflows/${prepared.workflow_id}`,
+      { headers: { cookie: auth.cookie } },
+    );
+    expect(await workflowResponse.json()).toMatchObject({
+      promotion_id: created.promotion_id,
+      promotion_candidate_id: prepared.candidate.candidate_id,
+      broadcast_requested: true,
+      status: "promotion_pending",
+    });
     expect(promotions.getPromotion(MERCHANT, created.promotion_id)?.status).toBe("draft");
 
     const confirmation = await post("/merchant/api/v1/confirmations", {
@@ -643,5 +689,51 @@ describe("Workbench v1 trusted confirmation API", () => {
         )
       ).status,
     ).toBe(201);
+  });
+
+  it("retries only the broadcast side of a partial promotion workflow", async () => {
+    const promotion = promotions.createDraft(MERCHANT, {
+      skuRefs: ["sku-retry"],
+      rule: {
+        kind: "limited_price",
+        unit_price: { currency: "CNY", amount_minor: "7777" },
+      },
+      audience: "public",
+      starts: "2026-09-21T12:00:00Z",
+      ends: "2026-09-22T12:00:00Z",
+      timezone: "UTC",
+    });
+    promotions.publish(MERCHANT, promotion.promotion_id, 1, {
+      publishedBy: ACTOR,
+      approvalRef: "operation-published",
+    });
+    const workflow = promotionWorkflows.create({
+      merchantId: MERCHANT,
+      promotionId: promotion.promotion_id,
+      broadcast: {
+        kind: "promotion_notice",
+        title: "Retry announcement",
+        body: "Only this broadcast candidate should be retried.",
+        audience: "public",
+      },
+    });
+    promotionWorkflows.markPromotionPublished(MERCHANT, workflow.workflow_id, 2);
+    promotionWorkflows.markPartial(MERCHANT, workflow.workflow_id, "candidate store unavailable");
+
+    const retried = await post(
+      `/merchant/api/v1/promotion-workflows/${workflow.workflow_id}/retry-broadcast`,
+      {},
+    );
+    expect(retried.status).toBe(201);
+    const body = (await retried.json()) as {
+      candidate: WriteApprovalCandidate;
+      workflow: { status: string; broadcast_candidate_id: string };
+    };
+    expect(body.candidate.tool).toBe(BROADCAST_TOOLS.publish);
+    expect(body.workflow).toMatchObject({
+      status: "broadcast_pending",
+      broadcast_candidate_id: body.candidate.candidate_id,
+    });
+    expect(promotions.getPromotion(MERCHANT, promotion.promotion_id)?.revision).toBe(2);
   });
 });

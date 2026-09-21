@@ -320,6 +320,7 @@ export class MerchantCoreService {
   prepareBroadcastPublish(input: {
     broadcast: Record<string, unknown>;
     authorization?: Record<string, unknown>;
+    workflowId?: string;
     reason?: string;
   }) {
     return this.commands.prepare({
@@ -328,6 +329,7 @@ export class MerchantCoreService {
         broadcast_id: `bct_${randomBytes(16).toString("base64url")}`,
         input: input.broadcast,
         ...(input.authorization !== undefined ? { authorization: input.authorization } : {}),
+        ...(input.workflowId !== undefined ? { workflow_id: input.workflowId } : {}),
       },
       ...(input.reason !== undefined ? { reason: input.reason } : {}),
     });
@@ -406,6 +408,8 @@ export class MerchantCoreService {
   preparePromotionPublish(input: {
     promotionId: string;
     expectedRevision: number;
+    workflowId?: string;
+    broadcastAuthorization?: Record<string, unknown>;
     reason?: string;
   }) {
     return this.commands.prepare({
@@ -413,6 +417,10 @@ export class MerchantCoreService {
       arguments: {
         promotion_id: input.promotionId,
         expected_revision: input.expectedRevision,
+        ...(input.workflowId !== undefined ? { workflow_id: input.workflowId } : {}),
+        ...(input.broadcastAuthorization !== undefined
+          ? { broadcast_authorization: input.broadcastAuthorization }
+          : {}),
       },
       ...(input.reason !== undefined ? { reason: input.reason } : {}),
     });

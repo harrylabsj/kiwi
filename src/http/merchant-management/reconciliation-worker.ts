@@ -59,6 +59,21 @@ export type OperationResult =
   | { status: "failed"; error: string }
   | { status: "unknown"; error: string };
 
+export function committedDecisionOutcomeResult(outcome: unknown): OperationResult {
+  if (
+    outcome !== null &&
+    typeof outcome === "object" &&
+    "kind" in outcome &&
+    (outcome as { kind?: unknown }).kind !== "executed"
+  ) {
+    return {
+      status: "failed",
+      error: `candidate execution ended as ${String((outcome as { kind?: unknown }).kind)}`,
+    };
+  }
+  return { status: "succeeded" };
+}
+
 interface OutboxRow {
   merchant_id: string;
   operation_id: string;
@@ -261,8 +276,7 @@ export class WorkbenchReconciliationStore {
            WHERE operation_id=? AND status='leased' AND lease_owner=? AND fencing_token=?`,
         )
         .get(lease.operationId, lease.workerId, lease.fencingToken) as
-        | { attempts: number; first_unknown_at: string }
-        | undefined;
+        { attempts: number; first_unknown_at: string } | undefined;
       if (owned === undefined) {
         this.db.exec("rollback");
         return false;
@@ -274,9 +288,15 @@ export class WorkbenchReconciliationStore {
              SET status='completed', lease_owner=NULL, lease_expires_at=NULL, updated_at=?, last_error=?
              WHERE operation_id=?`,
           )
-          .run(stamp, result.status === "failed" ? sanitize(result.error) : null, lease.operationId);
+          .run(
+            stamp,
+            result.status === "failed" ? sanitize(result.error) : null,
+            lease.operationId,
+          );
         this.db
-          .prepare("UPDATE workbench_approval_operations SET status=?, updated_at=? WHERE operation_id=?")
+          .prepare(
+            "UPDATE workbench_approval_operations SET status=?, updated_at=? WHERE operation_id=?",
+          )
           .run(result.status, stamp, lease.operationId);
         this.db.exec("commit");
         return true;

@@ -49,6 +49,7 @@ import { WorkbenchConfirmationStore } from "../http/merchant-management/webauthn
 import {
   WorkbenchReconciliationStore,
   WorkbenchReconciliationWorker,
+  committedDecisionOutcomeResult,
   type OperationResult,
 } from "../http/merchant-management/reconciliation-worker.js";
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
@@ -58,6 +59,7 @@ import { isCurrentGrantAuthorization, MerchantGrantStore } from "../merchant/gra
 import { createGrantExecutors } from "../merchant/grant-executors.js";
 import { MerchantPromotionStore } from "../merchant/promotion-store.js";
 import { createPromotionExecutors } from "../merchant/promotion-executors.js";
+import { PromotionBroadcastWorkflowStore } from "../merchant/promotion-broadcast-workflow.js";
 import { OnboardingStore } from "./onboarding/store.js";
 import {
   ManagementError,
@@ -234,6 +236,7 @@ export async function bootstrapCloudRuntime(
   let feedStoreForExecutors: MerchantFeedStore | undefined;
   let grantStoreForExecutors: MerchantGrantStore | undefined;
   let promotionStoreForExecutors: MerchantPromotionStore | undefined;
+  let promotionWorkflowStoreForExecutors: PromotionBroadcastWorkflowStore | undefined;
   try {
     assembly = await assembleMerchantRuntime({
       profile,
@@ -263,6 +266,17 @@ export async function bootstrapCloudRuntime(
               throw new Error("broadcast draft authorization is missing");
             }
           },
+          onPublished: (args) => {
+            const workflowId =
+              typeof args["workflow_id"] === "string" ? args["workflow_id"] : undefined;
+            if (workflowId !== undefined) {
+              const workflows = promotionWorkflowStoreForExecutors;
+              if (workflows === undefined) {
+                throw new Error("promotion workflow authority is unavailable");
+              }
+              workflows.markCompleted(profile.owner_id, workflowId);
+            }
+          },
         }),
         ...createGrantExecutors({
           merchantId: profile.owner_id,
@@ -271,6 +285,29 @@ export async function bootstrapCloudRuntime(
         ...createPromotionExecutors({
           merchantId: profile.owner_id,
           getStore: () => promotionStoreForExecutors,
+          getWorkflowStore: () => promotionWorkflowStoreForExecutors,
+          prepareBroadcast: async ({ broadcast, authorization, workflowId }) => {
+            const actorId = String(authorization["actor_id"] ?? "");
+            const grants = grantStoreForExecutors;
+            if (
+              grants === undefined ||
+              !isCurrentGrantAuthorization(grants, {
+                merchantId: profile.owner_id,
+                actorId,
+                action: "broadcast.draft",
+                snapshot: authorization,
+              })
+            ) {
+              throw new Error("broadcast draft authorization changed after promotion approval");
+            }
+            const prepared = await assembly.service.prepareBroadcastPublish({
+              broadcast,
+              authorization,
+              workflowId,
+              reason: "promotion workflow generated broadcast draft",
+            });
+            return prepared.candidate.candidate_id;
+          },
         }),
       ],
       log,
@@ -410,9 +447,11 @@ export async function bootstrapCloudRuntime(
     });
     const grantStore = new MerchantGrantStore({ db: managementDb });
     const promotionStore = new MerchantPromotionStore({ db: managementDb });
+    const promotionWorkflowStore = new PromotionBroadcastWorkflowStore({ db: managementDb });
     feedStoreForExecutors = feedStore;
     grantStoreForExecutors = grantStore;
     promotionStoreForExecutors = promotionStore;
+    promotionWorkflowStoreForExecutors = promotionWorkflowStore;
     publicFeedHandler = createMerchantFeedApiHandler({
       merchantId: profile.owner_id,
       store: feedStore,
@@ -525,6 +564,7 @@ export async function bootstrapCloudRuntime(
       workbenchFeed: feedStore,
       workbenchGrants: grantStore,
       workbenchPromotions: promotionStore,
+      promotionBroadcastWorkflows: promotionWorkflowStore,
       ...(adminOptions.surface.prepareBroadcastPublish !== undefined
         ? { prepareBroadcastPublish: adminOptions.surface.prepareBroadcastPublish }
         : {}),
@@ -589,7 +629,7 @@ export async function bootstrapCloudRuntime(
               return { status: "failed", error: "Workbench decision authorization was revoked" };
             }
           }
-          await adminOptions.surface.executeCommittedDecision(
+          const outcome = await adminOptions.surface.executeCommittedDecision(
             {
               operationId: lease.operationId,
               candidateId: lease.candidateId,
@@ -598,7 +638,7 @@ export async function bootstrapCloudRuntime(
             },
             workbenchConfirmations,
           );
-          return { status: "succeeded" };
+          return committedDecisionOutcomeResult(outcome);
         } catch (error) {
           // The executor may have crossed an external side-effect boundary before throwing.
           // Never resubmit: persist UNKNOWN and let the query path reconcile the same operation.

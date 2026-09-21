@@ -93,6 +93,7 @@ import {
   MerchantPromotionError,
   type MerchantPromotionStore,
 } from "../../merchant/promotion-store.js";
+import type { PromotionBroadcastWorkflowStore } from "../../merchant/promotion-broadcast-workflow.js";
 import {
   GRANT_ACTIONS,
   MerchantGrantError,
@@ -180,9 +181,11 @@ export interface MerchantManagementApiOptions {
   /** Scoped Operator grant authority (owner is explicitly exempt from scoped grants). */
   workbenchGrants?: MerchantGrantStore;
   workbenchPromotions?: MerchantPromotionStore;
+  promotionBroadcastWorkflows?: PromotionBroadcastWorkflowStore;
   prepareBroadcastPublish?: (input: {
     broadcast: Record<string, unknown>;
     authorization: Record<string, unknown>;
+    workflowId?: string;
     reason?: string;
   }) => Promise<unknown> | unknown;
   prepareBroadcastRevise?: (input: {
@@ -215,6 +218,8 @@ export interface MerchantManagementApiOptions {
   preparePromotionPublish?: (input: {
     promotionId: string;
     expectedRevision: number;
+    workflowId?: string;
+    broadcastAuthorization?: Record<string, unknown>;
     reason?: string;
   }) => Promise<unknown> | unknown;
   preparePromotionWithdraw?: (input: {
@@ -431,6 +436,20 @@ export function createMerchantManagementApiHandler(
       );
       if (value === undefined) throw new ManagementError("not_found", "unknown promotion");
       writeJson(res, 200, value, { "x-request-id": requestId });
+      return;
+    }
+    const promotionWorkflowMatch = /^\/promotion-workflows\/([^/]+)$/.exec(rest);
+    if (promotionWorkflowMatch !== null) {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "operations:read");
+      const workflow = options.promotionBroadcastWorkflows?.get(
+        auth.ctx.merchantId,
+        pathSegment(promotionWorkflowMatch[1] ?? ""),
+      );
+      if (workflow === undefined) {
+        throw new ManagementError("not_found", "unknown promotion broadcast workflow");
+      }
+      writeJson(res, 200, workflow, { "x-request-id": requestId });
       return;
     }
     const broadcastMatch = /^\/broadcasts\/([^/]+)$/.exec(rest);
@@ -859,7 +878,11 @@ export function createMerchantManagementApiHandler(
       const promotion = requireWorkbenchPromotions().getPromotion(auth.ctx.merchantId, promotionId);
       if (promotion === undefined) throw new ManagementError("not_found", "unknown promotion");
       authorizeProductAction(auth.ctx, "product.draft", promotion.sku_refs);
-      const fields = objectFields(await readJsonBody(req), ["expected_revision", "reason"]);
+      const fields = objectFields(await readJsonBody(req), [
+        "expected_revision",
+        "reason",
+        "broadcast",
+      ]);
       const expectedRevision = requireInteger(fields["expected_revision"], "expected_revision");
       const reason = optionalString(fields["reason"], "reason");
       const publish = promotionDraftMatch[2] === "publish";
@@ -867,12 +890,118 @@ export function createMerchantManagementApiHandler(
       if (channel === undefined) {
         throw new ManagementError("unavailable", "promotion candidate preparation is unavailable");
       }
-      const prepared = await channel({
-        promotionId,
-        expectedRevision,
-        ...(reason !== undefined ? { reason } : {}),
+      const broadcast =
+        fields["broadcast"] === undefined
+          ? undefined
+          : requireObject(fields["broadcast"], "broadcast");
+      let workflowId: string | undefined;
+      let broadcastAuthorization: Record<string, unknown> | undefined;
+      if (publish) {
+        if (options.promotionBroadcastWorkflows === undefined) {
+          throw new ManagementError("unavailable", "promotion workflow authority is unavailable");
+        }
+        if (broadcast !== undefined) {
+          authorizeOrThrow(auth.ctx, "broadcast:draft");
+          const scoped = authorizeBroadcastAction(auth.ctx, "broadcast.draft");
+          broadcastAuthorization = {
+            actor_id: auth.ctx.actorId,
+            actor_role: auth.ctx.role,
+            action: "broadcast.draft",
+            authorization_generation: scoped.generation,
+            matched_grant_ids: scoped.grantIds,
+          };
+        }
+        workflowId = options.promotionBroadcastWorkflows.create({
+          merchantId: auth.ctx.merchantId,
+          promotionId,
+          ...(broadcast !== undefined ? { broadcast } : {}),
+        }).workflow_id;
+      }
+      let prepared: unknown;
+      try {
+        prepared = await channel({
+          promotionId,
+          expectedRevision,
+          ...(workflowId !== undefined ? { workflowId } : {}),
+          ...(broadcastAuthorization !== undefined ? { broadcastAuthorization } : {}),
+          ...(reason !== undefined ? { reason } : {}),
+        });
+        if (workflowId !== undefined) {
+          const candidateId = candidateIdFromPreparation(prepared);
+          if (
+            !options.promotionBroadcastWorkflows!.bindPromotionCandidate(
+              auth.ctx.merchantId,
+              workflowId,
+              candidateId,
+            )
+          ) {
+            throw new Error("promotion workflow candidate binding failed");
+          }
+        }
+      } catch (error) {
+        if (workflowId !== undefined) {
+          options.promotionBroadcastWorkflows?.markFailed(
+            auth.ctx.merchantId,
+            workflowId,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        throw error;
+      }
+      const response =
+        workflowId !== undefined &&
+        prepared !== null &&
+        typeof prepared === "object" &&
+        !Array.isArray(prepared)
+          ? { ...(prepared as Record<string, unknown>), workflow_id: workflowId }
+          : prepared;
+      writeJson(res, 201, response, { "x-request-id": requestId });
+      return;
+    }
+
+    const retryPromotionBroadcast = /^\/promotion-workflows\/([^/]+)\/retry-broadcast$/.exec(rest);
+    if (retryPromotionBroadcast !== null) {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "broadcast:draft");
+      const workflows = options.promotionBroadcastWorkflows;
+      const prepare = options.prepareBroadcastPublish;
+      if (workflows === undefined || prepare === undefined) {
+        throw new ManagementError("unavailable", "promotion broadcast retry is unavailable");
+      }
+      const workflowId = pathSegment(retryPromotionBroadcast[1] ?? "");
+      if (workflows.get(auth.ctx.merchantId, workflowId)?.status !== "partial") {
+        throw new ManagementError("conflict", "workflow is not in a retryable partial state");
+      }
+      const broadcast = workflows.broadcastContent(auth.ctx.merchantId, workflowId);
+      if (broadcast === undefined) {
+        throw new ManagementError("conflict", "workflow is not in a retryable partial state");
+      }
+      const scoped = authorizeBroadcastAction(auth.ctx, "broadcast.draft");
+      const authorization = {
+        actor_id: auth.ctx.actorId,
+        actor_role: auth.ctx.role,
+        action: "broadcast.draft",
+        authorization_generation: scoped.generation,
+        matched_grant_ids: scoped.grantIds,
+      };
+      const prepared = await prepare({
+        broadcast,
+        authorization,
+        workflowId,
+        reason: "retry promotion workflow broadcast draft only",
       });
-      writeJson(res, 201, prepared, { "x-request-id": requestId });
+      const candidateId = candidateIdFromPreparation(prepared);
+      const workflow = workflows.markBroadcastPending(auth.ctx.merchantId, workflowId, candidateId);
+      writeJson(
+        res,
+        201,
+        {
+          ...(prepared as Record<string, unknown>),
+          workflow,
+        },
+        { "x-request-id": requestId },
+      );
       return;
     }
 
@@ -2511,6 +2640,12 @@ function requirePublicAudience(value: unknown): "public" {
     throw new ManagementError("invalid_input", "audience must be public");
   }
   return value;
+}
+
+function candidateIdFromPreparation(value: unknown): string {
+  const prepared = requireObject(value, "prepared candidate");
+  const candidate = requireObject(prepared["candidate"], "prepared candidate.candidate");
+  return requireString(candidate["candidate_id"], "prepared candidate.candidate_id");
 }
 
 function cookieValue(req: IncomingMessage, name: string): string | undefined {
