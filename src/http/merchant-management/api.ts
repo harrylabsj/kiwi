@@ -108,6 +108,10 @@ import {
 import type { PromotionBroadcastWorkflowStore } from "../../merchant/promotion-broadcast-workflow.js";
 import type { WorkbenchReconciliationStore } from "./reconciliation-worker.js";
 import {
+  WorkbenchEventProjectionError,
+  type WorkbenchEventProjectionStore,
+} from "./event-projection.js";
+import {
   GRANT_ACTIONS,
   MerchantGrantError,
   type GrantAction,
@@ -204,6 +208,7 @@ export interface MerchantManagementApiOptions {
     list: () => Promise<ExactMerchantProduct[]>;
     get: (sku: string) => Promise<ExactMerchantProduct>;
   };
+  workbenchEvents?: WorkbenchEventProjectionStore;
   prepareBroadcastPublish?: (input: {
     broadcast: Record<string, unknown>;
     authorization: Record<string, unknown>;
@@ -669,6 +674,25 @@ export function createMerchantManagementApiHandler(
       writeJson(res, 200, store.listAlerts(auth.ctx.merchantId, pageQuery(url)), {
         "x-request-id": requestId,
       });
+      return;
+    }
+    if (rest === "/events") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "operations:read");
+      const store = options.workbenchEvents;
+      if (store === undefined) {
+        throw new ManagementError("unavailable", "Workbench event projection is not configured");
+      }
+      const query = pageQuery(url);
+      writeJson(
+        res,
+        200,
+        store.list(auth.ctx.merchantId, {
+          ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
+          ...(query.limit !== undefined ? { limit: query.limit } : {}),
+        }),
+        { "x-request-id": requestId },
+      );
       return;
     }
     const confirmationMatch = /^\/confirmations\/([^/]+)$/.exec(rest);
@@ -3207,11 +3231,14 @@ function writeWorkbenchProblem(
 }
 
 function respondWorkbenchError(res: ServerResponse, error: unknown, requestId: string): void {
+  if (error instanceof WorkbenchEventProjectionError) {
+    writeWorkbenchProblem(res, "VALIDATION_ERROR", requestId, "事件游标无效", error.message);
+    return;
+  }
   if (error instanceof WorkbenchMoneyError) {
     writeWorkbenchProblem(
       res,
-      error.code === "MONEY_RANGE_EXCEEDED" ||
-        error.code === "MONEY_PRECISION_UNRECOVERABLE"
+      error.code === "MONEY_RANGE_EXCEEDED" || error.code === "MONEY_PRECISION_UNRECOVERABLE"
         ? error.code
         : "VALIDATION_ERROR",
       requestId,

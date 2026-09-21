@@ -53,6 +53,7 @@ import {
   type OperationResult,
 } from "../http/merchant-management/reconciliation-worker.js";
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
+import { WorkbenchEventProjectionStore } from "../http/merchant-management/event-projection.js";
 import { MerchantFeedStore } from "../merchant/feed-store.js";
 import { createBroadcastExecutors } from "../merchant/feed-executors.js";
 import { isCurrentGrantAuthorization, MerchantGrantStore } from "../merchant/grant-store.js";
@@ -443,13 +444,18 @@ export async function bootstrapCloudRuntime(
     managementDb = new DatabaseSync(path.join(config.dataDir, "state.sqlite"));
     const workbenchConfirmations = new WorkbenchConfirmationStore({ db: managementDb });
     const reconciliationStore = new WorkbenchReconciliationStore({ db: managementDb });
+    const workbenchCursorKey = loadOrCreateFeedCursorKey(config.dataDir);
     const feedStore = new MerchantFeedStore({
       db: managementDb,
-      cursorKey: loadOrCreateFeedCursorKey(config.dataDir),
+      cursorKey: workbenchCursorKey,
     });
     const grantStore = new MerchantGrantStore({ db: managementDb });
     const promotionStore = new MerchantPromotionStore({ db: managementDb });
     const promotionWorkflowStore = new PromotionBroadcastWorkflowStore({ db: managementDb });
+    const eventProjectionStore = new WorkbenchEventProjectionStore({
+      db: managementDb,
+      cursorKey: workbenchCursorKey,
+    });
     feedStoreForExecutors = feedStore;
     grantStoreForExecutors = grantStore;
     promotionStoreForExecutors = promotionStore;
@@ -582,6 +588,7 @@ export async function bootstrapCloudRuntime(
       onboarding: { store: new OnboardingStore(managementDb) },
       workbenchConfirmations,
       workbenchReconciliation: reconciliationStore,
+      workbenchEvents: eventProjectionStore,
       workbenchFeed: feedStore,
       workbenchGrants: grantStore,
       workbenchPromotions: promotionStore,

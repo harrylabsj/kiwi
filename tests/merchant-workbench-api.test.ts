@@ -11,6 +11,7 @@ import { MerchantManagementOperationStore } from "../src/http/merchant-managemen
 import { MutableServiceState } from "../src/http/merchant-management/service-state.js";
 import { WorkbenchConfirmationStore } from "../src/http/merchant-management/webauthn-confirmation.js";
 import { WorkbenchReconciliationStore } from "../src/http/merchant-management/reconciliation-worker.js";
+import { WorkbenchEventProjectionStore } from "../src/http/merchant-management/event-projection.js";
 import { createVerifiedActorContext } from "../src/merchant/application/actor.js";
 import { MerchantFeedStore } from "../src/merchant/feed-store.js";
 import { BROADCAST_TOOLS } from "../src/merchant/feed-executors.js";
@@ -38,6 +39,7 @@ const reconciliations = new WorkbenchReconciliationStore({
   db,
   now: () => NOW.toISOString(),
 });
+const eventProjection = new WorkbenchEventProjectionStore({ db, cursorKey: randomBytes(32) });
 const keyPair = generateKeyPairSync("ec", { namedCurve: "P-256" });
 const credentialId = "credential-workbench-api";
 const candidate: WriteApprovalCandidate = {
@@ -227,6 +229,7 @@ beforeAll(async () => {
       readiness: async () => ({ ready: true, checks: {} }),
       workbenchConfirmations: confirmations,
       workbenchReconciliation: reconciliations,
+      workbenchEvents: eventProjection,
       workbenchFeed: feed,
       workbenchGrants: grants,
       workbenchPromotions: promotions,
@@ -497,6 +500,28 @@ describe("Workbench v1 trusted confirmation API", () => {
       viewer,
     );
     expect(forbidden.status).toBe(403);
+  });
+
+  it("returns the redacted management event timeline and rejects a tampered cursor", async () => {
+    const first = await fetch(`${base}/merchant/api/v1/events?limit=1`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(first.status).toBe(200);
+    const body = (await first.json()) as {
+      items: Array<{ visibility: string; summary: Record<string, unknown> }>;
+      next_cursor: string | null;
+    };
+    expect(body.items[0]).toMatchObject({
+      visibility: "merchant_private",
+      schema_version: "1",
+    });
+    expect(JSON.stringify(body.items)).not.toMatch(/token|password|action_digest|floor/u);
+    const tampered = await fetch(
+      `${base}/merchant/api/v1/events?cursor=${encodeURIComponent(`${body.next_cursor}x`)}`,
+      { headers: { cookie: auth.cookie } },
+    );
+    expect(tampered.status).toBe(422);
+    expect(await tampered.json()).toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
   it("issues registration options only through the independent authorization callback", async () => {
