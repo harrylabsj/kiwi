@@ -42,13 +42,13 @@
   ],
   "artifact": {
     "name": "harrylabsj-kiwi-0.10.0.tgz",
-    "sha256": "79cb03fcd36183860d8b0808032696cb0246b7dc7fc8f5a2877a3162b0dfc474",
-    "bytes": 1635747
+    "sha256": "1c6adcf1445ef99236911a64fc8091a9ace2293392feba4f09e11782caff6f81",
+    "bytes": 1637012
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-09-21T00:22:04.767Z"
+  "generated_at": "2026-09-21T00:26:18.273Z"
 }

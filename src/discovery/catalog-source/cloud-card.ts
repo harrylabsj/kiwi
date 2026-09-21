@@ -375,18 +375,34 @@ export class CloudCardSource {
    * 可信的结果**——Buyer 拿到的 `CloudAgentResolution` 意味着"这份名片确实由
    * 持有该 Runtime 钥匙的那台机器代表，且这就是我读到的那个商家"。
    */
-  async resolveCloudAgent(agentId: string): Promise<CloudAgentResolution> {
+  async resolveCloudAgent(
+    agentId: string,
+    options: { cachedCardEtag?: string; cachedCard?: AgentCard } = {},
+  ): Promise<CloudAgentResolution> {
     const id = this.requireAgentId(agentId);
     const cardUrl = this.cardUrl(id);
+    // §12.1 的"重验证"：带上上次的 ETag 做条件请求，Catalog 回 304 就复用缓存名片
+    // （省掉一次完整 body），但**绑定声明照常重新读取并重新验签**——304 只说明名片
+    // 内容没变，不说明"上次验过的声明现在仍然有效"。
+    const conditional = options.cachedCardEtag !== undefined && options.cachedCard !== undefined;
     const [card, binding] = await Promise.all([
-      this.fetchPublishedCard(id),
+      this.fetchPublishedCard(id, conditional ? { ifNoneMatch: options.cachedCardEtag } : {}),
       this.fetchRuntimeBinding(id),
     ]);
+    let resolvedCard: AgentCard;
     if (card.notModified) {
-      // 本方法不传 If-None-Match，304 说明对端行为异常。
-      throw new CatalogSourceError("response_invalid", "catalog returned 304 for an unconditional GET");
+      if (!conditional || options.cachedCard === undefined) {
+        // 未带 If-None-Match 却收到 304：对端行为异常。
+        throw new CatalogSourceError(
+          "response_invalid",
+          "catalog returned 304 for an unconditional GET",
+        );
+      }
+      resolvedCard = options.cachedCard;
+    } else {
+      resolvedCard = card.card;
     }
-    const endpoints = jsonRpcEndpoints(card.card);
+    const endpoints = jsonRpcEndpoints(resolvedCard);
 
     // 1) 验签 + 完整 claims 校验 + 与观测事实比对（agent_id / card_url）。
     const verified = verifyBindingClaims(binding.claims_jws, {
@@ -473,7 +489,7 @@ export class CloudCardSource {
 
     return {
       agentId: id,
-      card: card.card,
+      card: resolvedCard,
       claims: verifiedClaims,
       issuerKid: verified.issuer_kid,
       issuerThumbprint: trustedThumbprint,
@@ -506,6 +522,8 @@ export class CloudBindingTrustCache {
     string,
     { resolution: CloudAgentResolution; expiresAtMs: number }
   >();
+  /** agentId → 最近一次的缓存键：重验证入口只知道 agentId，需要一个反查索引。 */
+  private readonly latestByAgent = new Map<string, string>();
 
   set(resolution: CloudAgentResolution): void {
     const expiresAtMs = Date.parse(resolution.claims.expires_at);
@@ -513,6 +531,7 @@ export class CloudBindingTrustCache {
       resolution,
       expiresAtMs: Number.isNaN(expiresAtMs) ? 0 : expiresAtMs,
     });
+    this.latestByAgent.set(resolution.agentId, resolution.trustKey);
   }
 
   get(trustKey: string, now: Date = new Date()): CloudAgentResolution | undefined {
@@ -520,9 +539,18 @@ export class CloudBindingTrustCache {
     if (entry === undefined) return undefined;
     if (entry.expiresAtMs <= now.getTime()) {
       this.entries.delete(trustKey);
+      if (this.latestByAgent.get(entry.resolution.agentId) === trustKey) {
+        this.latestByAgent.delete(entry.resolution.agentId);
+      }
       return undefined;
     }
     return entry.resolution;
+  }
+
+  /** 该商家最近一次**未过期**的解析结果（用于条件重验证，不代表结果仍然可信）。 */
+  latestFor(agentId: string, now: Date = new Date()): CloudAgentResolution | undefined {
+    const key = this.latestByAgent.get(agentId);
+    return key === undefined ? undefined : this.get(key, now);
   }
 
   get size(): number {

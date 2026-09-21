@@ -70,7 +70,7 @@ import { computeCapabilityIntersection, intersectionView } from "./ucp/intersect
 import type { UcpIntersectionView } from "./ucp/intersect.js";
 import type { UcpProfile } from "./ucp/types.js";
 import { normalizeHostingMode } from "./catalog-source/index.js";
-import { CloudCardSource } from "./catalog-source/cloud-card.js";
+import { CloudBindingTrustCache, CloudCardSource } from "./catalog-source/cloud-card.js";
 import type {
   CandidateAgent,
   CatalogSearchQuery,
@@ -124,6 +124,15 @@ export interface CatalogDiscoveryDeps {
    * 已验证身份，正是设计要禁止的降级。
    */
   cloud?: CloudCardSource;
+  /**
+   * 信任缓存（§12.1）。提供后，同一商家的重复解析会带上次的 ETag 做**条件请求**：
+   * Catalog 回 304 就复用缓存名片（省一次 body 传输），但**绑定声明照常重取重验签**
+   * ——304 只说明名片内容没变，不说明上次验过的声明现在仍有效。
+   *
+   * 这也是 T058「有效旧会话可直连」的落点：声明在有效期内时解析结果可直接复用
+   * （`CloudBindingTrustCache.latestFor`），过期即失效。
+   */
+  cloudTrustCache?: CloudBindingTrustCache;
 }
 
 export interface DiscoveryDeps {
@@ -278,11 +287,15 @@ function applyHostingMode(candidates: ChannelCandidate[], mode: HostingMode): Ch
 
 export class AgentDiscovery {
   private readonly deps: DiscoveryDeps;
+  /** 未显式传入时使用的内部信任缓存（构造一次，跨多次解析复用）。 */
+  private readonly cloudTrust: CloudBindingTrustCache;
   private readonly ucpResolver: UcpResolver | undefined;
   private readonly ucpLocalProfile: UcpProfile | undefined;
 
   constructor(deps: DiscoveryDeps = {}) {
     this.deps = deps;
+    // 信任缓存要在**所有早退分支之前**初始化：构造顺序不因 UCP 开关而变。
+    this.cloudTrust = deps.catalog?.cloudTrustCache ?? new CloudBindingTrustCache();
     const ucpDeps = deps.ucp;
     if (ucpDeps === undefined || ucpDeps.disabled === true) {
       this.ucpResolver = undefined;
@@ -635,7 +648,13 @@ export class AgentDiscovery {
     if (agentId === "") {
       throw new DiscoveryError("card_fetch_failed", `cloud candidate card URL has no agent id: ${cardUrl}`);
     }
-    const resolved = await cloud.resolveCloudAgent(agentId);
+    const cache = this.cloudTrust;
+    const cached = cache.latestFor(agentId);
+    const resolved = await cloud.resolveCloudAgent(
+      agentId,
+      cached?.cardEtag != null ? { cachedCardEtag: cached.cardEtag, cachedCard: cached.card } : {},
+    );
+    cache.set(resolved);
     const profile = this.profileFromCard(resolved.card, {
       source: `catalog-card:${cardUrl}`,
     });

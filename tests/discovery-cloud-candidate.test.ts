@@ -14,7 +14,10 @@ import { describe, expect, it } from "vitest";
 
 import { AgentDiscovery } from "../src/discovery/resolve.js";
 import { isCatalogHostedCardUrl } from "../src/discovery/resolve.js";
-import { CloudCardSource } from "../src/discovery/catalog-source/cloud-card.js";
+import {
+  CloudBindingTrustCache,
+  CloudCardSource,
+} from "../src/discovery/catalog-source/cloud-card.js";
 import { buildBindingClaims } from "../src/trust/binding/claims.js";
 import { signCompactJws, type JwsSigningIdentity } from "../src/trust/identity/jws.js";
 import type { CandidateAgent } from "../src/discovery/catalog-source/index.js";
@@ -87,6 +90,11 @@ function catalogFetch(capture: Capture): typeof fetch {
       ),
     });
     if (url === CARD_URL) {
+      // 真的实现条件请求语义：带上当前 ETag → 304（无 body）。否则"重验证复用"
+      // 这条路径根本没被走到，只有一个"发了头"的空断言。
+      if (init?.headers?.["if-none-match"] === '"c2-etag"') {
+        return new Response(null, { status: 304, headers: { etag: '"c2-etag"' } });
+      }
       return new Response(JSON.stringify(CARD), {
         status: 200,
         headers: { "content-type": "application/json", etag: '"c2-etag"' },
@@ -208,6 +216,54 @@ describe("C2：目录发现接入云端名片（验签 + 独立凭据作用域�
     });
     await expect(discovery.resolveViaCatalog()).rejects.toThrow(/configured catalog origin/);
     expect(capture.calls).toEqual([]);
+  });
+
+  it("重复解析走条件重验证：304 复用缓存名片，但声明照常重取重验签", async () => {
+    const capture: Capture = { calls: [] };
+    const discovery = discoveryWith(capture, true);
+    const first = await discovery.resolveViaCatalog();
+    expect(first).toHaveLength(1);
+    const cardCallsAfterFirst = capture.calls.filter((c) => c.url === CARD_URL).length;
+
+    // 第二次：带 If-None-Match（上次的 ETag），并复用缓存名片
+    const second = await discovery.resolveViaCatalog();
+    expect(second).toHaveLength(1);
+    const conditional = capture.calls.filter(
+      (c) => c.url === CARD_URL && c.headers["if-none-match"] === '"c2-etag"',
+    );
+    expect(conditional).toHaveLength(1);
+    expect(capture.calls.filter((c) => c.url === CARD_URL).length).toBe(cardCallsAfterFirst + 1);
+    // 304 路径真的被走到了：第二次解析用的就是缓存里的那张名片
+    expect(second[0]?.profile.agent_card).toEqual(first[0]?.profile.agent_card);
+    // 绑定声明**每次都要重取**——304 只说明名片没变，不代表上次的声明仍然有效
+    expect(
+      capture.calls.filter((c) => c.url.endsWith("/runtime-binding")).length,
+    ).toBe(2);
+    // 复用缓存名片后，档案内容与首次一致（端点仍由声明背书）
+    expect(second[0]?.profile.agent_card.name).toBe(first[0]?.profile.agent_card.name);
+  });
+
+  it("未过期的缓存条目可被直接取用（T058 有效旧会话），过期即失效", async () => {
+    const capture: Capture = { calls: [] };
+    const discovery = discoveryWith(capture, true);
+    const results = await discovery.resolveViaCatalog();
+    expect(results[0]?.profile.agent_card.name).toBe("C2 Cloud Merchant Agent");
+
+    const cache = new CloudBindingTrustCache();
+    const cloud = new CloudCardSource({
+      baseUrl: CATALOG,
+      trust: {
+        resolveIssuerKey: (kid: string) => (kid === ISSUER_KID ? issuer.publicKey : undefined),
+      },
+      fetchImpl: catalogFetch({ calls: [] }),
+      now: () => NOW,
+    });
+    const resolved = await cloud.resolveCloudAgent(AGENT_ID);
+    cache.set(resolved);
+    expect(cache.latestFor(AGENT_ID, NOW)?.trustKey).toBe(resolved.trustKey);
+    expect(cache.latestFor(AGENT_ID, new Date(Date.parse(resolved.claims.expires_at) + 1))).toBeUndefined();
+    // 索引也随之清理（不留下"指向已过期条目"的悬垂键）
+    expect(cache.size).toBe(0);
   });
 
   it("稳定读地址的识别是路径形状（不靠端口/主机名硬编码）", () => {
