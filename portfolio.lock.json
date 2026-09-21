@@ -1,19 +1,19 @@
 {
   "lock_version": 1,
-  "contract_bundle_sha256": "2350ecaacebb791cd980cc2886511359e356378a6f18cdecc1ac6331c31b0e70",
-  "contract_source_commit": "009bc25cdae2668c8fd19ccedcc4e0c64a34f6be",
+  "contract_bundle_sha256": "705ea5e2bf530664e7527fcaa9c19e314ea43ab6ad788e851633241e373fa37a",
+  "contract_source_commit": "8af397c78e5d3d1aa725e2c297507b96c9af2e0a",
   "repositories": {
     "kiwi": {
       "repository": "harrylabsj/kiwi",
-      "commit": "46d5dcbe01d7cd3858d516c9b88242b0908a8edc"
+      "commit": "99025927a76de17f4474ab48e73f9c0e271fb4df"
     },
     "kiwi-catalog": {
       "repository": "harrylabsj/kiwi-catalog",
-      "commit": "967362902f2df0d39e6db6bdec579d1923d154da"
+      "commit": "23a34d2c77417dbc3361ea0dd9fa8bc23e9fc43f"
     },
     "shopping-cli": {
       "repository": "harrylabsj/shopping-cli",
-      "commit": "fb1268acc0dacae7619cfed4f05163da810e6bc5"
+      "commit": "be8a031f12d2f1b24aa9557836a5eeb64efd146b"
     }
   }
 }
