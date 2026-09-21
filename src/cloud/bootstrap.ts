@@ -580,6 +580,7 @@ export async function bootstrapCloudRuntime(
       // 绝不用请求体自报的证据顶上（T029）。
       onboarding: { store: new OnboardingStore(managementDb) },
       workbenchConfirmations,
+      workbenchReconciliation: reconciliationStore,
       workbenchFeed: feedStore,
       workbenchGrants: grantStore,
       workbenchPromotions: promotionStore,

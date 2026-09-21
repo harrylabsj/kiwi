@@ -182,6 +182,19 @@ describe("Workbench persistent reconciliation worker", () => {
         }
       ).severity,
     ).toBe("critical");
+    const alerts = store.listAlerts(MERCHANT);
+    expect(alerts.items).toHaveLength(1);
+    expect(alerts.items[0]).toMatchObject({
+      severity: "critical",
+      acknowledged_at: null,
+      resolved_at: null,
+    });
+    expect(store.acknowledgeAlert(MERCHANT, alerts.items[0]!.alert_id, "operator-1")).toBe(true);
+    expect(store.listAlerts(MERCHANT).items[0]).toMatchObject({
+      acknowledged_by: "operator-1",
+      acknowledged_at: expect.any(String),
+      resolved_at: null,
+    });
     expect(await worker.runOnce()).toBe("idle");
   });
 });

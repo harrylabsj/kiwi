@@ -98,6 +98,7 @@ import {
   type MerchantPromotionStore,
 } from "../../merchant/promotion-store.js";
 import type { PromotionBroadcastWorkflowStore } from "../../merchant/promotion-broadcast-workflow.js";
+import type { WorkbenchReconciliationStore } from "./reconciliation-worker.js";
 import {
   GRANT_ACTIONS,
   MerchantGrantError,
@@ -190,6 +191,7 @@ export interface MerchantManagementApiOptions {
     list: (limit?: number) => Promise<{ total: number; items: A2aNegotiationRow[] }>;
     get: (negotiationId: string) => Promise<A2aNegotiationRow>;
   };
+  workbenchReconciliation?: WorkbenchReconciliationStore;
   prepareBroadcastPublish?: (input: {
     broadcast: Record<string, unknown>;
     authorization: Record<string, unknown>;
@@ -571,6 +573,18 @@ export function createMerchantManagementApiHandler(
         readService.getOperation(auth.ctx, pathSegment(operationMatch[1] ?? "")),
         { "x-request-id": requestId },
       );
+      return;
+    }
+    if (rest === "/alerts") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "operations:read");
+      const store = options.workbenchReconciliation;
+      if (store === undefined) {
+        throw new ManagementError("unavailable", "Workbench alert authority is not configured");
+      }
+      writeJson(res, 200, store.listAlerts(auth.ctx.merchantId, pageQuery(url)), {
+        "x-request-id": requestId,
+      });
       return;
     }
     const confirmationMatch = /^\/confirmations\/([^/]+)$/.exec(rest);
@@ -1090,6 +1104,24 @@ export function createMerchantManagementApiHandler(
         },
         { "x-request-id": requestId },
       );
+      return;
+    }
+
+    const acknowledgeAlert = /^\/alerts\/([^/]+)\/acknowledgements$/.exec(rest);
+    if (acknowledgeAlert !== null) {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "alerts:ack");
+      objectFields(await readJsonBody(req), []);
+      const store = options.workbenchReconciliation;
+      if (store === undefined) {
+        throw new ManagementError("unavailable", "Workbench alert authority is not configured");
+      }
+      const alertId = pathSegment(acknowledgeAlert[1] ?? "");
+      if (!store.acknowledgeAlert(auth.ctx.merchantId, alertId, auth.ctx.actorId)) {
+        throw new ManagementError("not_found", "unknown alert");
+      }
+      writeJson(res, 200, { alert_id: alertId, acknowledged: true }, { "x-request-id": requestId });
       return;
     }
 

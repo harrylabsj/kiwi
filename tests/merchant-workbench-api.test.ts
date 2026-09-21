@@ -10,6 +10,7 @@ import { MerchantImportDraftStore } from "../src/http/merchant-management/draft-
 import { MerchantManagementOperationStore } from "../src/http/merchant-management/operation-store.js";
 import { MutableServiceState } from "../src/http/merchant-management/service-state.js";
 import { WorkbenchConfirmationStore } from "../src/http/merchant-management/webauthn-confirmation.js";
+import { WorkbenchReconciliationStore } from "../src/http/merchant-management/reconciliation-worker.js";
 import { createVerifiedActorContext } from "../src/merchant/application/actor.js";
 import { MerchantFeedStore } from "../src/merchant/feed-store.js";
 import { BROADCAST_TOOLS } from "../src/merchant/feed-executors.js";
@@ -31,6 +32,10 @@ const NOW = new Date("2026-09-21T12:00:00.000Z");
 const db = new DatabaseSync(":memory:");
 const sessions = new MerchantAdminSessions({ db: new DatabaseSync(":memory:") });
 const confirmations = new WorkbenchConfirmationStore({ db, now: () => NOW.toISOString() });
+const reconciliations = new WorkbenchReconciliationStore({
+  db,
+  now: () => NOW.toISOString(),
+});
 const keyPair = generateKeyPairSync("ec", { namedCurve: "P-256" });
 const credentialId = "credential-workbench-api";
 const candidate: WriteApprovalCandidate = {
@@ -138,6 +143,12 @@ function preparedPromotion(input: {
 }
 
 beforeAll(async () => {
+  db.prepare(
+    `INSERT INTO workbench_alerts
+     (alert_id, merchant_id, category, resource, episode, severity, summary, created_at)
+     VALUES ('alert-workbench-1', ?, 'operation_unknown', 'operation-1', 'episode-1',
+             'warning', 'Operation result needs review', ?)`,
+  ).run(MERCHANT, NOW.toISOString());
   confirmations.persistVerifiedCredential({
     registrationVerified: true,
     credentialId,
@@ -163,6 +174,7 @@ beforeAll(async () => {
       serviceState: new MutableServiceState("OPERATING"),
       readiness: async () => ({ ready: true, checks: {} }),
       workbenchConfirmations: confirmations,
+      workbenchReconciliation: reconciliations,
       workbenchFeed: feed,
       workbenchGrants: grants,
       workbenchPromotions: promotions,
@@ -333,6 +345,40 @@ describe("Workbench v1 trusted confirmation API", () => {
       sku: "sku-1",
       price_minor: 9999,
     });
+  });
+
+  it("lists and acknowledges persistent alerts without resolving the business fault", async () => {
+    const list = await fetch(`${base}/merchant/api/v1/alerts`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({
+      items: [
+        {
+          alert_id: "alert-workbench-1",
+          acknowledged_at: null,
+          resolved_at: null,
+        },
+      ],
+    });
+    const acknowledged = await post(
+      "/merchant/api/v1/alerts/alert-workbench-1/acknowledgements",
+      {},
+    );
+    expect(acknowledged.status).toBe(200);
+    expect(reconciliations.listAlerts(MERCHANT).items[0]).toMatchObject({
+      acknowledged_by: ACTOR,
+      acknowledged_at: NOW.toISOString(),
+      resolved_at: null,
+    });
+
+    const viewer = await createAuth("viewer:alerts", "viewer");
+    const forbidden = await postWithAuth(
+      "/merchant/api/v1/alerts/alert-workbench-1/acknowledgements",
+      {},
+      viewer,
+    );
+    expect(forbidden.status).toBe(403);
   });
 
   it("issues registration options only through the independent authorization callback", async () => {

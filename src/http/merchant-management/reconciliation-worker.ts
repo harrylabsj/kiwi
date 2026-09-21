@@ -105,6 +105,7 @@ export class WorkbenchReconciliationStore {
     this.jitter = options.jitter ?? (() => Math.random() * 0.4 - 0.2);
     this.db.exec("pragma busy_timeout = 5000");
     this.db.exec(SCHEMA);
+    ensureColumn(this.db, "workbench_alerts", "acknowledged_by", "TEXT");
   }
 
   candidateIdForOperation(operationId: string): string | undefined {
@@ -112,6 +113,63 @@ export class WorkbenchReconciliationStore {
       .prepare("SELECT candidate_id FROM workbench_approval_decisions WHERE operation_id=?")
       .get(operationId) as { candidate_id: string } | undefined;
     return row?.candidate_id;
+  }
+
+  listAlerts(
+    merchantId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ): {
+    items: Array<{
+      alert_id: string;
+      category: string;
+      resource: string;
+      episode: string;
+      severity: "warning" | "critical";
+      summary: string;
+      created_at: string;
+      acknowledged_at: string | null;
+      acknowledged_by: string | null;
+      resolved_at: string | null;
+    }>;
+    next_cursor: string | null;
+  } {
+    const offset = options.cursor === undefined ? 0 : Number.parseInt(options.cursor, 10);
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("alert cursor is invalid");
+    const limit = Math.min(Math.max(options.limit ?? 50, 1), 100);
+    const rows = this.db
+      .prepare(
+        `SELECT alert_id, category, resource, episode, severity, summary, created_at,
+                acknowledged_at, acknowledged_by, resolved_at
+         FROM workbench_alerts WHERE merchant_id=?
+         ORDER BY resolved_at IS NULL DESC, created_at DESC, alert_id LIMIT ? OFFSET ?`,
+      )
+      .all(merchantId, limit + 1, offset) as Array<Record<string, unknown>>;
+    return {
+      items: rows.slice(0, limit).map((row) => ({
+        alert_id: String(row["alert_id"]),
+        category: String(row["category"]),
+        resource: String(row["resource"]),
+        episode: String(row["episode"]),
+        severity: String(row["severity"]) as "warning" | "critical",
+        summary: String(row["summary"]),
+        created_at: String(row["created_at"]),
+        acknowledged_at: row["acknowledged_at"] === null ? null : String(row["acknowledged_at"]),
+        acknowledged_by: row["acknowledged_by"] === null ? null : String(row["acknowledged_by"]),
+        resolved_at: row["resolved_at"] === null ? null : String(row["resolved_at"]),
+      })),
+      next_cursor: rows.length > limit ? String(offset + limit) : null,
+    };
+  }
+
+  acknowledgeAlert(merchantId: string, alertId: string, actorId: string): boolean {
+    const changed = this.db
+      .prepare(
+        `UPDATE workbench_alerts SET acknowledged_at=COALESCE(acknowledged_at, ?),
+          acknowledged_by=COALESCE(acknowledged_by, ?)
+         WHERE merchant_id=? AND alert_id=?`,
+      )
+      .run(this.now(), actorId, merchantId, alertId);
+    return changed.changes === 1;
   }
 
   leaseOutbox(merchantId: string, workerId: string, leaseMs = 30_000): OutboxLease | undefined {
@@ -407,4 +465,11 @@ function sanitize(value: string): string {
   return String(value ?? "")
     .replace(/\b(Bearer|token|api[_-]?key|secret|password)\b\s*[:=]?\s*\S+/gi, "$1 [redacted]")
     .slice(0, 500);
+}
+
+function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
