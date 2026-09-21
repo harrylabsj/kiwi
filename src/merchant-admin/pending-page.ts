@@ -48,6 +48,24 @@ export interface MerchantAdminSurface {
     verifier: CommittedDecisionVerifier,
   ): Promise<unknown>;
   getCandidate?(commandId: string): WriteApprovalCandidate | undefined;
+  prepareBroadcastPublish?(input: {
+    broadcast: Record<string, unknown>;
+    authorization: Record<string, unknown>;
+    reason?: string;
+  }): Promise<unknown> | unknown;
+  prepareBroadcastRevise?(input: {
+    broadcastId: string;
+    expectedRevision: number;
+    broadcast: Record<string, unknown>;
+    authorization: Record<string, unknown>;
+    reason?: string;
+  }): Promise<unknown> | unknown;
+  prepareBroadcastWithdraw?(input: {
+    broadcastId: string;
+    expectedRevision: number;
+    authorization: Record<string, unknown>;
+    reason?: string;
+  }): Promise<unknown> | unknown;
 }
 
 /** 从 merchant-core 构造管理面（确认通道 = core 的命令日志）。 */
@@ -60,6 +78,9 @@ export function merchantAdminSurface(core: MerchantCoreService): MerchantAdminSu
     executeCommittedDecision: (input, verifier) =>
       core.executeCommittedDecision(input, verifier),
     getCandidate: (id) => core.getCommand(id),
+    prepareBroadcastPublish: (input) => core.prepareBroadcastPublish(input),
+    prepareBroadcastRevise: (input) => core.prepareBroadcastRevise(input),
+    prepareBroadcastWithdraw: (input) => core.prepareBroadcastWithdraw(input),
   };
 }
 

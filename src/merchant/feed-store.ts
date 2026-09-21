@@ -148,7 +148,76 @@ export class MerchantFeedStore {
 
   publish(merchantId: string, input: BroadcastInput): { broadcast_id: string; revision: number } {
     const broadcastId = `bct_${randomBytes(16).toString("base64url")}`;
+    return this.publishWithId(merchantId, broadcastId, input);
+  }
+
+  publishWithId(
+    merchantId: string,
+    broadcastId: string,
+    input: BroadcastInput,
+  ): { broadcast_id: string; revision: number } {
+    if (!/^bct_[A-Za-z0-9_-]{16,128}$/.test(broadcastId)) {
+      throw new MerchantFeedError("validation_error", "broadcast_id shape is invalid");
+    }
     return this.writeBroadcast(merchantId, broadcastId, 0, "published", input);
+  }
+
+  getBroadcast(
+    merchantId: string,
+    broadcastId: string,
+  ): (BroadcastInput & { broadcast_id: string; revision: number; status: "published" | "withdrawn" }) | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM merchant_broadcasts WHERE merchant_id=? AND broadcast_id=?")
+      .get(merchantId, broadcastId) as Record<string, unknown> | undefined;
+    if (row === undefined) return undefined;
+    return {
+      broadcast_id: String(row["broadcast_id"]),
+      revision: Number(row["revision"]),
+      status: String(row["status"]) as "published" | "withdrawn",
+      kind: String(row["kind"]),
+      title: String(row["title"]),
+      body: String(row["body"]),
+      skuRefs: JSON.parse(String(row["sku_refs_json"])) as string[],
+      ...(row["promotion_ref"] === null ? {} : { promotionRef: String(row["promotion_ref"]) }),
+      ...(row["effective_until"] === null
+        ? {}
+        : { effectiveUntil: String(row["effective_until"]) }),
+      audience: "public",
+    };
+  }
+
+  listBroadcasts(
+    merchantId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ): {
+    items: Array<
+      BroadcastInput & {
+        broadcast_id: string;
+        revision: number;
+        status: "published" | "withdrawn";
+      }
+    >;
+    next_cursor: string | null;
+  } {
+    const offset = options.cursor === undefined ? 0 : Number.parseInt(options.cursor, 10);
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new MerchantFeedError("validation_error", "broadcast cursor is invalid");
+    }
+    const limit = Math.min(Math.max(options.limit ?? 50, 1), 100);
+    const rows = this.db
+      .prepare(
+        `SELECT broadcast_id FROM merchant_broadcasts
+         WHERE merchant_id=? ORDER BY updated_at DESC, broadcast_id LIMIT ? OFFSET ?`,
+      )
+      .all(merchantId, limit + 1, offset) as Array<{ broadcast_id: string }>;
+    const items = rows
+      .slice(0, limit)
+      .map((row) => this.getBroadcast(merchantId, row.broadcast_id))
+      .filter((item): item is NonNullable<typeof item> => item !== undefined);
+    return {
+      items,
+      next_cursor: rows.length > limit ? String(offset + limit) : null,
+    };
   }
 
   revise(

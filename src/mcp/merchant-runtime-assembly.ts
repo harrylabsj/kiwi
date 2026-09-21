@@ -56,6 +56,7 @@ import { RfqReleaseCoordinator } from "../merchant-core/rfq/release-coordinator.
 import { RfqRepository } from "../merchant-core/rfq/repository.js";
 import { MerchantRfqService } from "../merchant-core/rfq/service.js";
 import { MerchantCoreService } from "../merchant-core/service.js";
+import type { CommandExecutor } from "../merchant-core/executor.js";
 import {
   assertMerchantMcpAuthPolicy,
   CompositeMerchantMcpVerifier,
@@ -105,6 +106,8 @@ export interface MerchantRuntimeAssemblyOptions {
   tokenEnv?: string;
   /** 日志出口（缺省 stderr）。 */
   log?: (line: string) => void;
+  /** Extra Workbench executors fixed at startup. */
+  extraExecutors?: CommandExecutor[];
 }
 
 export interface MerchantRuntimeAssembly {
@@ -394,6 +397,7 @@ export async function assembleMerchantRuntime(
     currentPolicy: () => policyRuntime.current().policy,
     // 询报价子服务（v0.1.1 §11.1）：未配置时 rfq 工具面 fail-closed「不可得」。
     ...(rfqStack !== undefined ? { rfq: { service: rfqStack.service, executors: rfqStack.executors } } : {}),
+    ...(options.extraExecutors !== undefined ? { extraExecutors: options.extraExecutors } : {}),
   });
   // 审批闭环（阶段三推广版）：恢复全部已注册写工具的 pending 命令（覆盖 V1
   // recoverPendingDrafts 语义）；未注册工具的死候选标 expired。

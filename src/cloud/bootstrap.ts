@@ -53,6 +53,11 @@ import {
 } from "../http/merchant-management/reconciliation-worker.js";
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
 import { MerchantFeedStore } from "../merchant/feed-store.js";
+import { createBroadcastExecutors } from "../merchant/feed-executors.js";
+import {
+  isCurrentGrantAuthorization,
+  MerchantGrantStore,
+} from "../merchant/grant-store.js";
 import { OnboardingStore } from "./onboarding/store.js";
 import {
   ManagementError,
@@ -224,6 +229,8 @@ export async function bootstrapCloudRuntime(
 
   // 2) 商家面装配（审批/策略/商品/RFQ/工具面）；认证走 OAuth（issuer = 公网 origin）。
   let assembly: MerchantRuntimeAssembly;
+  let feedStoreForExecutors: MerchantFeedStore | undefined;
+  let grantStoreForExecutors: MerchantGrantStore | undefined;
   try {
     assembly = await assembleMerchantRuntime({
       profile,
@@ -233,6 +240,26 @@ export async function bootstrapCloudRuntime(
       mcpPath: MCP_PATH,
       authMode: "oauth",
       issuer: config.publicOrigin,
+      extraExecutors: createBroadcastExecutors({
+        merchantId: profile.owner_id,
+        getStore: () => feedStoreForExecutors,
+        authorizeExecution: (args) => {
+          const authorization = recordValue(args["authorization"]);
+          const actorId = String(authorization["actor_id"] ?? "");
+          const grants = grantStoreForExecutors;
+          if (
+            grants === undefined ||
+            !isCurrentGrantAuthorization(grants, {
+              merchantId: profile.owner_id,
+              actorId,
+              action: "broadcast.draft",
+              snapshot: authorization,
+            })
+          ) {
+            throw new Error("broadcast draft authorization is missing");
+          }
+        },
+      }),
       log,
     });
   } catch (err) {
@@ -350,6 +377,9 @@ export async function bootstrapCloudRuntime(
       db: managementDb,
       cursorKey: loadOrCreateFeedCursorKey(config.dataDir),
     });
+    const grantStore = new MerchantGrantStore({ db: managementDb });
+    feedStoreForExecutors = feedStore;
+    grantStoreForExecutors = grantStore;
     publicFeedHandler = createMerchantFeedApiHandler({
       merchantId: profile.owner_id,
       store: feedStore,
@@ -453,6 +483,17 @@ export async function bootstrapCloudRuntime(
       // 绝不用请求体自报的证据顶上（T029）。
       onboarding: { store: new OnboardingStore(managementDb) },
       workbenchConfirmations,
+      workbenchFeed: feedStore,
+      workbenchGrants: grantStore,
+      ...(adminOptions.surface.prepareBroadcastPublish !== undefined
+        ? { prepareBroadcastPublish: adminOptions.surface.prepareBroadcastPublish }
+        : {}),
+      ...(adminOptions.surface.prepareBroadcastRevise !== undefined
+        ? { prepareBroadcastRevise: adminOptions.surface.prepareBroadcastRevise }
+        : {}),
+      ...(adminOptions.surface.prepareBroadcastWithdraw !== undefined
+        ? { prepareBroadcastWithdraw: adminOptions.surface.prepareBroadcastWithdraw }
+        : {}),
       serviceState,
       readiness: async () => {
         const report = await readiness();
@@ -469,6 +510,19 @@ export async function bootstrapCloudRuntime(
           return { status: "failed", error: "committed-decision execution is not configured" };
         }
         try {
+          const authorization = workbenchConfirmations.authorizationSnapshotForOperation(
+            lease.operationId,
+          );
+          if (authorization !== undefined) {
+            if (!isCurrentGrantAuthorization(grantStore, {
+              merchantId: profile.owner_id,
+              actorId: lease.actorId,
+              action: "broadcast.decide",
+              snapshot: authorization,
+            })) {
+              return { status: "failed", error: "broadcast decision authorization was revoked" };
+            }
+          }
           await adminOptions.surface.executeCommittedDecision(
             {
               operationId: lease.operationId,
@@ -628,4 +682,11 @@ export function renderStartupFailure(err: unknown): string {
   }
   if (err instanceof Error) return `[kiwi-cloud] 启动失败：${err.message}\n`;
   return `[kiwi-cloud] 启动失败：${String(err)}\n`;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("broadcast authorization snapshot is missing");
+  }
+  return value as Record<string, unknown>;
 }

@@ -422,6 +422,22 @@ export class WorkbenchConfirmationStore {
     return row?.matched === 1;
   }
 
+  authorizationSnapshotForOperation(operationId: string): Record<string, unknown> | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT r.snapshot_json FROM workbench_approval_decisions d
+         JOIN workbench_confirmation_requests r ON r.confirmation_id=d.confirmation_id
+         WHERE d.operation_id=?`,
+      )
+      .get(operationId) as { snapshot_json: string } | undefined;
+    if (row === undefined) return undefined;
+    const snapshot = JSON.parse(row.snapshot_json) as Record<string, unknown>;
+    const authorization = snapshot["decision_authorization"];
+    return authorization !== null && typeof authorization === "object" && !Array.isArray(authorization)
+      ? (authorization as Record<string, unknown>)
+      : undefined;
+  }
+
   createRequest(input: {
     merchantId: string;
     actorId: string;

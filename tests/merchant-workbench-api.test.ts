@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -10,6 +10,10 @@ import { MerchantImportDraftStore } from "../src/http/merchant-management/draft-
 import { MerchantManagementOperationStore } from "../src/http/merchant-management/operation-store.js";
 import { MutableServiceState } from "../src/http/merchant-management/service-state.js";
 import { WorkbenchConfirmationStore } from "../src/http/merchant-management/webauthn-confirmation.js";
+import { createVerifiedActorContext } from "../src/merchant/application/actor.js";
+import { MerchantFeedStore } from "../src/merchant/feed-store.js";
+import { BROADCAST_TOOLS } from "../src/merchant/feed-executors.js";
+import { MerchantGrantStore } from "../src/merchant/grant-store.js";
 
 const MERCHANT = "merchant-wb-api";
 const ACTOR = "owner:merchant-wb-api";
@@ -35,10 +39,32 @@ const candidate: WriteApprovalCandidate = {
   created_at: NOW.toISOString(),
   updated_at: NOW.toISOString(),
 };
+const pending: WriteApprovalCandidate[] = [candidate];
+const feed = new MerchantFeedStore({ db, cursorKey: randomBytes(32), now: () => NOW.toISOString() });
+const grants = new MerchantGrantStore({ db, now: () => NOW.toISOString() });
 
 let server: Server;
 let base: string;
 let auth: { cookie: string; csrf: string };
+
+function preparedBroadcast(input: {
+  broadcast: Record<string, unknown>;
+  authorization: Record<string, unknown>;
+}): { candidate: WriteApprovalCandidate } {
+  const item: WriteApprovalCandidate = {
+    ...candidate,
+    candidate_id: `candidate-broadcast-${pending.length}`,
+    tool: BROADCAST_TOOLS.publish,
+    arguments: {
+      broadcast_id: `bct_${randomBytes(16).toString("base64url")}`,
+      input: input.broadcast,
+      authorization: input.authorization,
+    },
+    arguments_hash: `sha256:broadcast-${pending.length}`,
+  };
+  pending.push(item);
+  return { candidate: item };
+}
 
 beforeAll(async () => {
   confirmations.persistVerifiedCredential({
@@ -58,7 +84,7 @@ beforeAll(async () => {
       runtimeVersion: "test",
       sessions,
       allowedOrigins: [ORIGIN],
-      listPending: () => [candidate],
+      listPending: () => pending,
       mintCandidateConfirmation: () => "legacy-token-not-used",
       executeDecision: async () => {},
       drafts: new MerchantImportDraftStore({ db, now: () => NOW.toISOString() }),
@@ -66,6 +92,9 @@ beforeAll(async () => {
       serviceState: new MutableServiceState("OPERATING"),
       readiness: async () => ({ ready: true, checks: {} }),
       workbenchConfirmations: confirmations,
+      workbenchFeed: feed,
+      workbenchGrants: grants,
+      prepareBroadcastPublish: preparedBroadcast,
       webauthnRegistration: {
         rpName: "Kiwi Merchant",
         rpId: RP_ID,
@@ -98,16 +127,35 @@ afterAll(async () => {
 });
 
 async function post(path: string, body: unknown): Promise<Response> {
+  return await postWithAuth(path, body, auth);
+}
+
+async function postWithAuth(
+  path: string,
+  body: unknown,
+  credentials: { cookie: string; csrf: string },
+): Promise<Response> {
   return await fetch(`${base}${path}`, {
     method: "POST",
     headers: {
-      cookie: auth.cookie,
+      cookie: credentials.cookie,
       origin: ORIGIN,
-      "x-csrf-token": auth.csrf,
+      "x-csrf-token": credentials.csrf,
       "content-type": "application/json",
     },
     body: JSON.stringify(body),
   });
+}
+
+async function createAuth(
+  principalId: string,
+  role: "owner" | "operator" | "viewer",
+): Promise<{ cookie: string; csrf: string }> {
+  const session = sessions.createSession({ principalId, merchantId: MERCHANT, role });
+  const cookie = `${ADMIN_SESSION_COOKIE}=${session.sessionId}`;
+  const response = await fetch(`${base}/merchant/api/session`, { headers: { cookie } });
+  const body = (await response.json()) as { csrf_token: string };
+  return { cookie, csrf: body.csrf_token };
 }
 
 function assertion(challenge: string): {
@@ -218,5 +266,126 @@ describe("Workbench v1 trusted confirmation API", () => {
       body: JSON.stringify({ candidate_id: candidate.candidate_id, decision: "reject" }),
     });
     expect(noCsrf.status).toBe(403);
+  });
+
+  it("creates broadcast candidates only, and exposes no direct Feed write route", async () => {
+    const drafted = await post("/merchant/api/v1/broadcasts/drafts", {
+      action: "publish",
+      broadcast: {
+        kind: "service_notice",
+        title: "Candidate only",
+        body: "No direct Feed mutation",
+        audience: "public",
+      },
+    });
+    expect(drafted.status).toBe(201);
+    const body = (await drafted.json()) as { candidate: WriteApprovalCandidate };
+    const broadcastId = String(body.candidate.arguments.broadcast_id);
+    expect(feed.getBroadcast(MERCHANT, broadcastId)).toBeUndefined();
+
+    const direct = await post("/merchant/api/v1/broadcasts", {
+      title: "must not write",
+    });
+    expect(direct.status).toBe(404);
+  });
+
+  it("requires distinct Operator draft/decide grants and invalidates confirmation after revoke", async () => {
+    const operatorId = "operator:merchant-wb-api";
+    const operatorAuth = await createAuth(operatorId, "operator");
+    confirmations.persistVerifiedCredential({
+      registrationVerified: true,
+      credentialId: "credential-operator-workbench-api",
+      merchantId: MERCHANT,
+      actorId: operatorId,
+      publicKeyPem: keyPair.publicKey.export({ type: "spki", format: "pem" }).toString(),
+      rpId: RP_ID,
+      origin: ORIGIN,
+    });
+    const owner = createVerifiedActorContext({
+      actorId: ACTOR,
+      merchantId: MERCHANT,
+      role: "owner",
+      authMethod: "admin-session",
+      generation: 1,
+      requestId: "test-owner-grants",
+      expiresAt: "2027-09-21T12:00:00.000Z",
+    });
+    const withoutDraftGrant = await postWithAuth(
+      "/merchant/api/v1/broadcasts/drafts",
+      {
+        action: "publish",
+        broadcast: {
+          kind: "service_notice",
+          title: "Denied operator candidate",
+          body: "No grant",
+          audience: "public",
+        },
+      },
+      operatorAuth,
+    );
+    expect(withoutDraftGrant.status).toBe(403);
+    grants.createGrant(owner, {
+      subjectId: operatorId,
+      action: "broadcast.draft",
+      resourceType: "merchant",
+      resourceSelector: "merchant",
+      expiresAt: "2027-09-21T12:00:00.000Z",
+    });
+    const drafted = await postWithAuth(
+      "/merchant/api/v1/broadcasts/drafts",
+      {
+        action: "publish",
+        broadcast: {
+          kind: "service_notice",
+          title: "Operator candidate",
+          body: "Grant separation",
+          audience: "public",
+        },
+      },
+      operatorAuth,
+    );
+    expect(drafted.status).toBe(201);
+    const draftedBody = (await drafted.json()) as { candidate: WriteApprovalCandidate };
+
+    const noDecideGrant = await postWithAuth(
+      "/merchant/api/v1/confirmations",
+      { candidate_id: draftedBody.candidate.candidate_id, decision: "approve" },
+      operatorAuth,
+    );
+    expect(noDecideGrant.status).toBe(403);
+
+    const decideGrant = grants.createGrant(owner, {
+      subjectId: operatorId,
+      action: "broadcast.decide",
+      resourceType: "merchant",
+      resourceSelector: "merchant",
+      expiresAt: "2027-09-21T12:00:00.000Z",
+    });
+    const created = await postWithAuth(
+      "/merchant/api/v1/confirmations",
+      { candidate_id: draftedBody.candidate.candidate_id, decision: "approve" },
+      operatorAuth,
+    );
+    expect(created.status).toBe(201);
+    const descriptor = (await created.json()) as { confirmation_id: string };
+    const optionsResponse = await postWithAuth(
+      `/merchant/api/v1/confirmations/${descriptor.confirmation_id}/assertion-options`,
+      {},
+      operatorAuth,
+    );
+    const assertionOptions = (await optionsResponse.json()) as { challenge: string };
+    grants.revokeGrant(owner, decideGrant.grant_id);
+    const revoked = await postWithAuth(
+      `/merchant/api/v1/approvals/${draftedBody.candidate.candidate_id}/decisions`,
+      {
+        confirmation_id: descriptor.confirmation_id,
+        decision: "approve",
+        expected_version: 1,
+        assertion: assertion(assertionOptions.challenge),
+      },
+      operatorAuth,
+    );
+    expect(revoked.status).toBe(403);
+    expect(await revoked.json()).toMatchObject({ code: "PERMISSION_REVOKED" });
   });
 });

@@ -88,6 +88,12 @@ import {
   type WorkbenchConfirmationStore,
 } from "./webauthn-confirmation.js";
 import type { RegistrationResponseJSON } from "@simplewebauthn/server";
+import { BROADCAST_TOOLS } from "../../merchant/feed-executors.js";
+import { MerchantFeedError, type MerchantFeedStore } from "../../merchant/feed-store.js";
+import {
+  MerchantGrantError,
+  type MerchantGrantStore,
+} from "../../merchant/grant-store.js";
 
 const API_PREFIX = "/merchant/api";
 const WORKBENCH_API_PREFIX = "/merchant/api/v1";
@@ -163,6 +169,28 @@ export interface MerchantManagementApiOptions {
   };
   /** Workbench v1 trusted confirmation authority; absent means strong-confirmation routes fail closed. */
   workbenchConfirmations?: WorkbenchConfirmationStore;
+  /** Workbench Feed authority. Writes remain candidate-only through the prepare callbacks. */
+  workbenchFeed?: MerchantFeedStore;
+  /** Scoped Operator grant authority (owner is explicitly exempt from scoped grants). */
+  workbenchGrants?: MerchantGrantStore;
+  prepareBroadcastPublish?: (input: {
+    broadcast: Record<string, unknown>;
+    authorization: Record<string, unknown>;
+    reason?: string;
+  }) => Promise<unknown> | unknown;
+  prepareBroadcastRevise?: (input: {
+    broadcastId: string;
+    expectedRevision: number;
+    broadcast: Record<string, unknown>;
+    authorization: Record<string, unknown>;
+    reason?: string;
+  }) => Promise<unknown> | unknown;
+  prepareBroadcastWithdraw?: (input: {
+    broadcastId: string;
+    expectedRevision: number;
+    authorization: Record<string, unknown>;
+    reason?: string;
+  }) => Promise<unknown> | unknown;
   /** Independent registration authorization. Management session alone must never satisfy this callback. */
   webauthnRegistration?: {
     rpName: string;
@@ -333,6 +361,30 @@ export function createMerchantManagementApiHandler(
       });
       return;
     }
+    if (rest === "/broadcasts") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "approvals:read");
+      const feed = requireWorkbenchFeed();
+      writeJson(
+        res,
+        200,
+        feed.listBroadcasts(auth.ctx.merchantId, pageQuery(url)),
+        { "x-request-id": requestId },
+      );
+      return;
+    }
+    const broadcastMatch = /^\/broadcasts\/([^/]+)$/.exec(rest);
+    if (broadcastMatch !== null) {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "approvals:read");
+      const value = requireWorkbenchFeed().getBroadcast(
+        auth.ctx.merchantId,
+        pathSegment(broadcastMatch[1] ?? ""),
+      );
+      if (value === undefined) throw new ManagementError("not_found", "unknown broadcast");
+      writeJson(res, 200, value, { "x-request-id": requestId });
+      return;
+    }
     const approvalMatch = /^\/approvals\/([^/]+)$/.exec(rest);
     if (approvalMatch !== null) {
       const auth = requireActor(req);
@@ -457,6 +509,7 @@ export function createMerchantManagementApiHandler(
       const expiresAt = new Date(
         Math.min(Date.parse(candidate.expires_at), now().getTime() + CONFIRMATION_TTL_MS),
       ).toISOString();
+      const decisionAuthorization = authorizeBroadcastCandidate(auth.ctx, candidate, "broadcast.decide");
       const confirmation = confirmations.createRequest({
         merchantId: auth.ctx.merchantId,
         actorId: auth.ctx.actorId,
@@ -477,6 +530,9 @@ export function createMerchantManagementApiHandler(
           preconditions: candidate.preconditions,
           risk: candidate.risk,
           candidate_expires_at: candidate.expires_at,
+          ...(decisionAuthorization !== undefined
+            ? { decision_authorization: decisionAuthorization }
+            : {}),
         },
         expectedVersion: 1,
         expiresAt,
@@ -539,6 +595,25 @@ export function createMerchantManagementApiHandler(
       if (candidate === undefined || candidate.status !== "pending_approval") {
         throw new ManagementError("not_found", `unknown pending candidate: ${candidateId}`);
       }
+      const currentAuthorization = authorizeBroadcastCandidate(
+        auth.ctx,
+        candidate,
+        "broadcast.decide",
+      );
+      if (currentAuthorization !== undefined) {
+        const confirmationId = requireString(fields["confirmation_id"], "confirmation_id");
+        const frozen = requireWorkbenchConfirmations().requestProjection({
+          confirmationId,
+          merchantId: auth.ctx.merchantId,
+          actorId: auth.ctx.actorId,
+        }).snapshot["decision_authorization"];
+        if (!sameAuthorizationGeneration(frozen, currentAuthorization)) {
+          throw new ManagementError(
+            "forbidden",
+            "broadcast authorization changed after confirmation was created",
+          );
+        }
+      }
       const outcome = requireWorkbenchConfirmations().finalizeDecision({
         confirmationId: requireString(fields["confirmation_id"], "confirmation_id"),
         merchantId: auth.ctx.merchantId,
@@ -567,6 +642,63 @@ export function createMerchantManagementApiHandler(
       return;
     }
 
+    if (rest === "/broadcasts/drafts") {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "broadcast:draft");
+      const fields = objectFields(await readJsonBody(req), [
+        "action",
+        "broadcast_id",
+        "expected_revision",
+        "broadcast",
+        "reason",
+      ]);
+      const action = requireString(fields["action"], "action");
+      if (action !== "publish" && action !== "revise" && action !== "withdraw") {
+        throw new ManagementError("invalid_input", "action must be publish, revise or withdraw");
+      }
+      const scoped = authorizeBroadcastAction(auth.ctx, "broadcast.draft");
+      const authorization: Record<string, unknown> = {
+        actor_id: auth.ctx.actorId,
+        actor_role: auth.ctx.role,
+        action: "broadcast.draft",
+        authorization_generation: scoped.generation,
+        matched_grant_ids: scoped.grantIds,
+      };
+      const reason = optionalString(fields["reason"], "reason");
+      let prepared: unknown;
+      if (action === "publish") {
+        const channel = options.prepareBroadcastPublish;
+        if (channel === undefined) throw new ManagementError("unavailable", "broadcast prepare is unavailable");
+        prepared = await channel({
+          broadcast: requireObject(fields["broadcast"], "broadcast"),
+          authorization,
+          ...(reason !== undefined ? { reason } : {}),
+        });
+      } else if (action === "revise") {
+        const channel = options.prepareBroadcastRevise;
+        if (channel === undefined) throw new ManagementError("unavailable", "broadcast prepare is unavailable");
+        prepared = await channel({
+          broadcastId: requireString(fields["broadcast_id"], "broadcast_id"),
+          expectedRevision: requireInteger(fields["expected_revision"], "expected_revision"),
+          broadcast: requireObject(fields["broadcast"], "broadcast"),
+          authorization,
+          ...(reason !== undefined ? { reason } : {}),
+        });
+      } else {
+        const channel = options.prepareBroadcastWithdraw;
+        if (channel === undefined) throw new ManagementError("unavailable", "broadcast prepare is unavailable");
+        prepared = await channel({
+          broadcastId: requireString(fields["broadcast_id"], "broadcast_id"),
+          expectedRevision: requireInteger(fields["expected_revision"], "expected_revision"),
+          authorization,
+          ...(reason !== undefined ? { reason } : {}),
+        });
+      }
+      writeJson(res, 201, prepared, { "x-request-id": requestId });
+      return;
+    }
+
     writeWorkbenchProblem(
       res,
       "RESOURCE_NOT_FOUND",
@@ -584,6 +716,49 @@ export function createMerchantManagementApiHandler(
       );
     }
     return options.workbenchConfirmations;
+  }
+
+  function requireWorkbenchFeed(): MerchantFeedStore {
+    if (options.workbenchFeed === undefined) {
+      throw new ManagementError("unavailable", "Workbench Feed authority is not configured");
+    }
+    return options.workbenchFeed;
+  }
+
+  function authorizeBroadcastAction(
+    actor: VerifiedActorContext,
+    action: "broadcast.draft" | "broadcast.decide",
+  ): { generation: number; grantIds: string[] } {
+    if (actor.role === "owner") {
+      return {
+        generation: options.workbenchGrants?.authorizationGeneration(actor.merchantId, actor.actorId) ?? 0,
+        grantIds: [],
+      };
+    }
+    const grants = options.workbenchGrants;
+    if (grants === undefined) throw new ManagementError("forbidden", "scoped grants are unavailable");
+    const result = grants.authorize(actor, { action, resourceType: "merchant" });
+    if (!result.authorized) throw new ManagementError("forbidden", `missing scoped grant: ${action}`);
+    return { generation: result.generation, grantIds: result.grantIds };
+  }
+
+  function authorizeBroadcastCandidate(
+    actor: VerifiedActorContext,
+    candidate: WriteApprovalCandidate,
+    action: "broadcast.decide",
+  ): Record<string, unknown> | undefined {
+    if (!Object.values(BROADCAST_TOOLS).includes(candidate.tool as (typeof BROADCAST_TOOLS)[keyof typeof BROADCAST_TOOLS])) {
+      return undefined;
+    }
+    authorizeOrThrow(actor, "broadcast:decide");
+    const scoped = authorizeBroadcastAction(actor, action);
+    return {
+      actor_id: actor.actorId,
+      actor_role: actor.role,
+      action,
+      authorization_generation: scoped.generation,
+      matched_grant_ids: scoped.grantIds,
+    };
   }
 
   async function requireRegistrationAuthorization(
@@ -1859,6 +2034,27 @@ function requireString(value: unknown, field: string): string {
   return value;
 }
 
+function requireObject(value: unknown, field: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ManagementError("invalid_input", `${field} must be a JSON object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function sameAuthorizationGeneration(
+  frozen: unknown,
+  current: Readonly<Record<string, unknown>>,
+): boolean {
+  if (frozen === null || typeof frozen !== "object" || Array.isArray(frozen)) return false;
+  const value = frozen as Record<string, unknown>;
+  return (
+    value["actor_id"] === current["actor_id"] &&
+    value["actor_role"] === current["actor_role"] &&
+    value["action"] === current["action"] &&
+    value["authorization_generation"] === current["authorization_generation"]
+  );
+}
+
 function optionalString(value: unknown, field: string): string | undefined {
   if (value === undefined) return undefined;
   return requireString(value, field);
@@ -1955,6 +2151,26 @@ function writeWorkbenchProblem(
 }
 
 function respondWorkbenchError(res: ServerResponse, error: unknown, requestId: string): void {
+  if (error instanceof MerchantGrantError) {
+    const code: WorkbenchProblemCode =
+      error.code === "not_found"
+        ? "RESOURCE_NOT_FOUND"
+        : error.code === "invalid_input"
+          ? "VALIDATION_ERROR"
+          : "PERMISSION_REVOKED";
+    writeWorkbenchProblem(res, code, requestId, "授权未通过", error.message);
+    return;
+  }
+  if (error instanceof MerchantFeedError) {
+    const code: WorkbenchProblemCode =
+      error.code === "not_found"
+        ? "RESOURCE_NOT_FOUND"
+        : error.code === "version_conflict"
+          ? "VERSION_CONFLICT"
+          : "VALIDATION_ERROR";
+    writeWorkbenchProblem(res, code, requestId, "广播请求未完成", error.message);
+    return;
+  }
   if (error instanceof WorkbenchConfirmationError) {
     const mapping: Record<WorkbenchConfirmationError["code"], WorkbenchProblemCode> = {
       invalid_registration: "CONFIRMATION_INVALID",

@@ -46,6 +46,8 @@ export const MERCHANT_PERMISSIONS = [
   "products:import",
   "policy:draft",
   "approvals:decide",
+  "broadcast:draft",
+  "broadcast:decide",
   "service:pause",
   // owner 专属：开通（创建云资源——BD §7.2「权限扩张/资源删除由 owner」同族）、
   // 恢复接待、读敏感策略、删资源
@@ -53,6 +55,7 @@ export const MERCHANT_PERMISSIONS = [
   "policy:read_sensitive",
   "service:resume",
   "resources:delete",
+  "grants:manage",
 ] as const;
 export type MerchantPermission = (typeof MERCHANT_PERMISSIONS)[number];
 
@@ -71,6 +74,8 @@ const ROLE_PERMISSIONS: Readonly<Record<MerchantRole, readonly MerchantPermissio
     "products:import",
     "policy:draft",
     "approvals:decide",
+    "broadcast:draft",
+    "broadcast:decide",
     "service:pause",
   ],
   owner: [
@@ -82,11 +87,14 @@ const ROLE_PERMISSIONS: Readonly<Record<MerchantRole, readonly MerchantPermissio
     "products:import",
     "policy:draft",
     "approvals:decide",
+    "broadcast:draft",
+    "broadcast:decide",
     "service:pause",
     "onboarding:manage",
     "policy:read_sensitive",
     "service:resume",
     "resources:delete",
+    "grants:manage",
   ],
 };
 

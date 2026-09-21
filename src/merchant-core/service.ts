@@ -29,7 +29,7 @@
  */
 
 import { appendFileSync, mkdirSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 
 import type { IncomingConsultation } from "../agent/merchant/types.js";
@@ -44,7 +44,12 @@ import type { MerchantIntelligenceBackend } from "../agent/merchant/intelligence
 import type { MerchantOAuthStore } from "../auth/merchant-oauth.js";
 import { MerchantCommandLog } from "./commands.js";
 import type { CommittedDecisionProof, CommittedDecisionVerifier } from "./commands.js";
-import { MerchantExecutorRegistry, type ExecutorContext } from "./executor.js";
+import {
+  MerchantExecutorRegistry,
+  type CommandExecutor,
+  type ExecutorContext,
+} from "./executor.js";
+import { BROADCAST_TOOLS } from "../merchant/feed-executors.js";
 import type { ApplyPolicyResult } from "./policy-runtime.js";
 import type { MerchantPolicy } from "../config/profile.js";
 import { parseProductCsv } from "./product-import.js";
@@ -95,6 +100,8 @@ export interface MerchantCoreServiceDeps extends MerchantWorkbenchServiceDeps {
     /** RFQ 固定执行器（发布/移交；静态合并进注册表）。 */
     executors: import("./executor.js").CommandExecutor[];
   };
+  /** Additional Workbench executors fixed at Runtime startup. */
+  extraExecutors?: CommandExecutor[];
 }
 
 export class MerchantCoreService {
@@ -112,6 +119,7 @@ export class MerchantCoreService {
   private readonly operationsStore?: MerchantOperationStore;
   private readonly merchantDataDir?: string;
   private readonly rfqDeps?: MerchantCoreServiceDeps["rfq"];
+  private readonly extraExecutors: CommandExecutor[];
   private readonly now: () => string;
   private readonly principalId: string;
   private readonly approvalsRef: MerchantWorkbenchServiceDeps["approvals"];
@@ -138,6 +146,7 @@ export class MerchantCoreService {
     if (deps.merchantDataDir !== undefined) this.merchantDataDir = deps.merchantDataDir;
     if (deps.confirmations !== undefined) this.confirmationStore = deps.confirmations;
     if (deps.rfq !== undefined) this.rfqDeps = deps.rfq;
+    this.extraExecutors = deps.extraExecutors ?? [];
   }
 
   /** RFQ 子服务（未配置 → undefined；工具面 fail-closed）。 */
@@ -217,7 +226,7 @@ export class MerchantCoreService {
         store: this.approvalsRef,
         executors: MerchantExecutorRegistry.buildDefault(
           executorContext,
-          this.rfqDeps?.executors ?? [],
+          [...(this.rfqDeps?.executors ?? []), ...this.extraExecutors],
         ),
         executorContext,
         profile: this.profileRef,
@@ -302,6 +311,58 @@ export class MerchantCoreService {
     return this.commands.prepare({
       tool: "kiwi_merchant_prepare_policy_change",
       arguments: { patch: input.patch },
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    });
+  }
+
+  prepareBroadcastPublish(input: {
+    broadcast: Record<string, unknown>;
+    authorization?: Record<string, unknown>;
+    reason?: string;
+  }) {
+    return this.commands.prepare({
+      tool: BROADCAST_TOOLS.publish,
+      arguments: {
+        broadcast_id: `bct_${randomBytes(16).toString("base64url")}`,
+        input: input.broadcast,
+        ...(input.authorization !== undefined ? { authorization: input.authorization } : {}),
+      },
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    });
+  }
+
+  prepareBroadcastRevise(input: {
+    broadcastId: string;
+    expectedRevision: number;
+    broadcast: Record<string, unknown>;
+    authorization?: Record<string, unknown>;
+    reason?: string;
+  }) {
+    return this.commands.prepare({
+      tool: BROADCAST_TOOLS.revise,
+      arguments: {
+        broadcast_id: input.broadcastId,
+        expected_revision: input.expectedRevision,
+        input: input.broadcast,
+        ...(input.authorization !== undefined ? { authorization: input.authorization } : {}),
+      },
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    });
+  }
+
+  prepareBroadcastWithdraw(input: {
+    broadcastId: string;
+    expectedRevision: number;
+    authorization?: Record<string, unknown>;
+    reason?: string;
+  }) {
+    return this.commands.prepare({
+      tool: BROADCAST_TOOLS.withdraw,
+      arguments: {
+        broadcast_id: input.broadcastId,
+        expected_revision: input.expectedRevision,
+        ...(input.authorization !== undefined ? { authorization: input.authorization } : {}),
+      },
       ...(input.reason !== undefined ? { reason: input.reason } : {}),
     });
   }
