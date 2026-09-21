@@ -32,6 +32,13 @@ import type {
 import type { GrantAction, GrantResourceType } from "../merchant/grant-store.js";
 
 export interface MerchantAdminSurface {
+  listA2aNegotiations?(limit?: unknown): Promise<{
+    total: number;
+    items: import("../merchant/workbench-service.js").A2aNegotiationRow[];
+  }>;
+  getA2aNegotiation?(
+    negotiationId: string,
+  ): Promise<import("../merchant/workbench-service.js").A2aNegotiationRow>;
   listPending(): WriteApprovalCandidate[];
   /** 批准并执行（认证主体 + 一次性确认凭证逐次传入，执行层逐项核对）。 */
   executeApproved(
@@ -99,6 +106,8 @@ export interface MerchantAdminSurface {
 /** 从 merchant-core 构造管理面（确认通道 = core 的命令日志）。 */
 export function merchantAdminSurface(core: MerchantCoreService): MerchantAdminSurface {
   return {
+    listA2aNegotiations: (limit) => core.listA2aNegotiations(limit),
+    getA2aNegotiation: (negotiationId) => core.getA2aNegotiation(negotiationId),
     listPending: () => core.listPendingCommands(),
     executeApproved: (id, principalId, token) =>
       core.commands.executeApproved(id, principalId, token),

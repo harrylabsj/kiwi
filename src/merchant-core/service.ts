@@ -185,6 +185,9 @@ export class MerchantCoreService {
   listA2aNegotiations(limit?: unknown) {
     return this.workbench.listA2aNegotiations(limit);
   }
+  getA2aNegotiation(negotiationId: string) {
+    return this.workbench.getA2aNegotiation(negotiationId);
+  }
   listActiveConsultations() {
     return this.workbench.listActiveConsultations();
   }

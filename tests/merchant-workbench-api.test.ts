@@ -167,6 +167,33 @@ beforeAll(async () => {
       workbenchGrants: grants,
       workbenchPromotions: promotions,
       promotionBroadcastWorkflows: promotionWorkflows,
+      negotiations: {
+        list: async () => ({
+          total: 1,
+          items: [
+            {
+              negotiation_id: "neg-workbench-1",
+              phase: "OFFER_OPEN",
+              last_action: "offer",
+              sku: "sku-1",
+              quantity: 2,
+              price_minor: 9999,
+              agreement: false,
+              recorded_at: NOW.toISOString(),
+            },
+          ],
+        }),
+        get: async (negotiationId) => ({
+          negotiation_id: negotiationId,
+          phase: "OFFER_OPEN",
+          last_action: "offer",
+          sku: "sku-1",
+          quantity: 2,
+          price_minor: 9999,
+          agreement: false,
+          recorded_at: NOW.toISOString(),
+        }),
+      },
       prepareBroadcastPublish: preparedBroadcast,
       prepareGrantCreate: preparedGrant,
       preparePromotionPublish: preparedPromotion,
@@ -282,9 +309,29 @@ describe("Workbench v1 trusted confirmation API", () => {
         reason: "verified_buyer_identity_resolver_unavailable",
       },
       negotiations: {
-        observable: false,
-        value: null,
+        observable: true,
+        value: { total: 1 },
       },
+    });
+  });
+
+  it("lists and reads A2A negotiation projections without inventing a second state machine", async () => {
+    const list = await fetch(`${base}/merchant/api/v1/negotiations?limit=10`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({
+      total: 1,
+      items: [{ negotiation_id: "neg-workbench-1", phase: "OFFER_OPEN" }],
+    });
+    const detail = await fetch(`${base}/merchant/api/v1/negotiations/neg-workbench-1`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({
+      negotiation_id: "neg-workbench-1",
+      sku: "sku-1",
+      price_minor: 9999,
     });
   });
 

@@ -85,6 +85,10 @@ import {
   type WorkbenchConfirmationStore,
 } from "./webauthn-confirmation.js";
 import type { RegistrationResponseJSON } from "@simplewebauthn/server";
+import {
+  MerchantWorkbenchError,
+  type A2aNegotiationRow,
+} from "../../merchant/workbench-service.js";
 import { BROADCAST_TOOLS } from "../../merchant/feed-executors.js";
 import { MerchantFeedError, type MerchantFeedStore } from "../../merchant/feed-store.js";
 import { GRANT_TOOLS } from "../../merchant/grant-executors.js";
@@ -182,6 +186,10 @@ export interface MerchantManagementApiOptions {
   workbenchGrants?: MerchantGrantStore;
   workbenchPromotions?: MerchantPromotionStore;
   promotionBroadcastWorkflows?: PromotionBroadcastWorkflowStore;
+  negotiations?: {
+    list: (limit?: number) => Promise<{ total: number; items: A2aNegotiationRow[] }>;
+    get: (negotiationId: string) => Promise<A2aNegotiationRow>;
+  };
   prepareBroadcastPublish?: (input: {
     broadcast: Record<string, unknown>;
     authorization: Record<string, unknown>;
@@ -388,6 +396,23 @@ export function createMerchantManagementApiHandler(
       const pendingApprovals = options
         .listPending()
         .filter((candidate) => candidate.status === "pending_approval").length;
+      let negotiationsOverview: Record<string, unknown> = {
+        observable: false,
+        value: null,
+        reason: "unified_negotiation_projection_unavailable",
+      };
+      if (options.negotiations !== undefined) {
+        try {
+          const result = await options.negotiations.list(1);
+          negotiationsOverview = { observable: true, value: { total: result.total } };
+        } catch {
+          negotiationsOverview = {
+            observable: false,
+            value: null,
+            reason: "negotiation_authority_unavailable",
+          };
+        }
+      }
       writeJson(
         res,
         200,
@@ -414,11 +439,7 @@ export function createMerchantManagementApiHandler(
             value: null,
             reason: "verified_buyer_identity_resolver_unavailable",
           },
-          negotiations: {
-            observable: false,
-            value: null,
-            reason: "unified_negotiation_projection_unavailable",
-          },
+          negotiations: negotiationsOverview,
         },
         { "x-request-id": requestId },
       );
@@ -435,6 +456,30 @@ export function createMerchantManagementApiHandler(
     if (rest === "/approvals") {
       const auth = requireActor(req);
       writeJson(res, 200, await readService.listApprovals(auth.ctx, pageQuery(url)), {
+        "x-request-id": requestId,
+      });
+      return;
+    }
+    if (rest === "/negotiations") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "approvals:read");
+      const channel = options.negotiations;
+      if (channel === undefined) {
+        throw new ManagementError("unavailable", "negotiation authority is not configured");
+      }
+      const query = pageQuery(url);
+      writeJson(res, 200, await channel.list(query.limit), { "x-request-id": requestId });
+      return;
+    }
+    const negotiationMatch = /^\/negotiations\/([^/]+)$/.exec(rest);
+    if (negotiationMatch !== null) {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "approvals:read");
+      const channel = options.negotiations;
+      if (channel === undefined) {
+        throw new ManagementError("unavailable", "negotiation authority is not configured");
+      }
+      writeJson(res, 200, await channel.get(pathSegment(negotiationMatch[1] ?? "")), {
         "x-request-id": requestId,
       });
       return;
@@ -2768,6 +2813,18 @@ function writeWorkbenchProblem(
 }
 
 function respondWorkbenchError(res: ServerResponse, error: unknown, requestId: string): void {
+  if (error instanceof MerchantWorkbenchError) {
+    const code: WorkbenchProblemCode =
+      error.kind === "not_found"
+        ? "RESOURCE_NOT_FOUND"
+        : error.kind === "validation"
+          ? "VALIDATION_ERROR"
+          : error.kind === "auth"
+            ? "PERMISSION_REVOKED"
+            : "DEPENDENCY_UNAVAILABLE";
+    writeWorkbenchProblem(res, code, requestId, "磋商请求未完成", error.message);
+    return;
+  }
   if (error instanceof MerchantPromotionError) {
     const code: WorkbenchProblemCode =
       error.code === "not_found"

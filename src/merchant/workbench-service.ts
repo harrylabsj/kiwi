@@ -326,6 +326,16 @@ export class MerchantWorkbenchService {
     return { total: rows.length, items: rows.slice(0, clamped) };
   }
 
+  async getA2aNegotiation(negotiationId: string): Promise<A2aNegotiationRow> {
+    const id = String(negotiationId ?? "").trim();
+    if (id === "") throw new MerchantWorkbenchError("validation", "negotiation_id 不能为空");
+    const value = this.scanLedger(false).find((row) => row.negotiation_id === id);
+    if (value === undefined) {
+      throw new MerchantWorkbenchError("not_found", `未找到磋商 ${id}`);
+    }
+    return value;
+  }
+
   /** 只留**进行中**（非终态）的磋商。未配置 ledger 目录时 fail-closed 抛 unavailable。 */
   async listActiveConsultations(): Promise<A2aNegotiationRow[]> {
     return this.scanLedger(true);
@@ -461,7 +471,13 @@ export class MerchantWorkbenchService {
     const pending = this.approveInFlight.get(candidateId);
     if (pending !== undefined) await pending;
     const exec = this.doApproveCandidate(candidateId);
-    this.approveInFlight.set(candidateId, exec.then(() => undefined, () => undefined));
+    this.approveInFlight.set(
+      candidateId,
+      exec.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
     try {
       return await exec;
     } finally {

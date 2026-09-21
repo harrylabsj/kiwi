@@ -421,6 +421,10 @@ describe("A2A 磋商记录", () => {
       agreement: true,
       recorded_at: T0,
     });
+    await expect(h.service.getA2aNegotiation(done.negotiationId)).resolves.toEqual(doneRow);
+    await expect(h.service.getA2aNegotiation("neg_missing")).rejects.toMatchObject({
+      kind: "not_found",
+    });
     const activeRow = items.find((r) => r.negotiation_id === "neg_active_001");
     expect(activeRow).toMatchObject({ phase: "OFFER_OPEN", agreement: false, sku: "" });
     h.cleanup();

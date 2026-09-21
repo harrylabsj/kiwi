@@ -584,6 +584,16 @@ export async function bootstrapCloudRuntime(
       workbenchGrants: grantStore,
       workbenchPromotions: promotionStore,
       promotionBroadcastWorkflows: promotionWorkflowStore,
+      ...(adminOptions.surface.listA2aNegotiations !== undefined &&
+      adminOptions.surface.getA2aNegotiation !== undefined
+        ? {
+            negotiations: {
+              list: (limit?: number) => adminOptions.surface.listA2aNegotiations!(limit),
+              get: (negotiationId: string) =>
+                adminOptions.surface.getA2aNegotiation!(negotiationId),
+            },
+          }
+        : {}),
       ...(adminOptions.surface.prepareBroadcastPublish !== undefined
         ? { prepareBroadcastPublish: adminOptions.surface.prepareBroadcastPublish }
         : {}),
