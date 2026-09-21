@@ -34,7 +34,8 @@ describe("persistent clock-safety guard", () => {
       db,
       now: () => "2026-09-22T00:00:10.000Z",
     });
-    const clock = new ClockSafetyStore({ db, alerts });
+    let currentTime = BASE;
+    const clock = new ClockSafetyStore({ db, alerts, nowMs: () => currentTime });
     const promotions = new MerchantPromotionStore({
       db,
       now: () => "2026-09-22T00:00:00.000Z",
@@ -49,6 +50,7 @@ describe("persistent clock-safety guard", () => {
         localTimeMs: BASE + 2_001,
       }),
     ).toMatchObject({ status: "healthy", consecutive_breaches: 1, offset_ms: 2_001 });
+    currentTime = BASE + 2_001;
     const draft = promotions.createDraft(MERCHANT, promotionInput());
     promotions.publish(MERCHANT, draft.promotion_id, 1, {
       publishedBy: "owner-clock",
@@ -83,6 +85,8 @@ describe("persistent clock-safety guard", () => {
     ).toMatchObject({ status: "healthy", consecutive_breaches: 0 });
     expect(alerts.listAlerts(MERCHANT).items[0]?.resolved_at).not.toBeNull();
     expect(promotions.createDraft(MERCHANT, promotionInput()).revision).toBe(1);
+    currentTime = BASE + 121_001;
+    expect(() => promotions.createDraft(MERCHANT, promotionInput())).toThrow(/sample is stale/);
     db.close();
   });
 
@@ -96,7 +100,7 @@ describe("persistent clock-safety guard", () => {
       db,
       now: () => "2026-09-22T00:00:10.000Z",
     });
-    const clock = new ClockSafetyStore({ db, alerts });
+    const clock = new ClockSafetyStore({ db, alerts, nowMs: () => BASE + 2_600 });
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValue(

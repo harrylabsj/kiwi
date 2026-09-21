@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 const DEFAULT_MAX_ABS_OFFSET_MS = 2_000;
 const DEFAULT_BREACH_LIMIT = 2;
+const DEFAULT_MAX_SAMPLE_AGE_MS = 120_000;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS merchant_clock_safety (
@@ -46,22 +47,31 @@ export class ClockSafetyStore {
   private readonly alerts?: ClockSafetyAlertSink;
   private readonly maxAbsOffsetMs: number;
   private readonly breachLimit: number;
+  private readonly maxSampleAgeMs: number;
+  private readonly nowMs: () => number;
 
   constructor(options: {
     db: DatabaseSync;
     alerts?: ClockSafetyAlertSink;
     maxAbsOffsetMs?: number;
     breachLimit?: number;
+    maxSampleAgeMs?: number;
+    nowMs?: () => number;
   }) {
     this.db = options.db;
     this.alerts = options.alerts;
     this.maxAbsOffsetMs = options.maxAbsOffsetMs ?? DEFAULT_MAX_ABS_OFFSET_MS;
     this.breachLimit = options.breachLimit ?? DEFAULT_BREACH_LIMIT;
+    this.maxSampleAgeMs = options.maxSampleAgeMs ?? DEFAULT_MAX_SAMPLE_AGE_MS;
+    this.nowMs = options.nowMs ?? Date.now;
     if (!Number.isSafeInteger(this.maxAbsOffsetMs) || this.maxAbsOffsetMs < 0) {
       throw new Error("maxAbsOffsetMs must be a non-negative integer");
     }
     if (!Number.isSafeInteger(this.breachLimit) || this.breachLimit < 1) {
       throw new Error("breachLimit must be a positive integer");
+    }
+    if (!Number.isSafeInteger(this.maxSampleAgeMs) || this.maxSampleAgeMs < 1) {
+      throw new Error("maxSampleAgeMs must be a positive integer");
     }
     this.db.exec("pragma busy_timeout=5000");
     this.db.exec(SCHEMA);
@@ -164,6 +174,17 @@ export class ClockSafetyStore {
       throw new ClockSafetyError(
         "clock_unverified",
         "reference clock has not been verified; time-sensitive writes are paused",
+      );
+    }
+    const sampleAgeMs = this.nowMs() - Date.parse(status.local_at ?? "");
+    if (
+      !Number.isFinite(sampleAgeMs) ||
+      sampleAgeMs > this.maxSampleAgeMs ||
+      sampleAgeMs < -this.maxAbsOffsetMs
+    ) {
+      throw new ClockSafetyError(
+        "clock_unverified",
+        "reference clock sample is stale; time-sensitive writes are paused",
       );
     }
     if (status.status === "paused") {
