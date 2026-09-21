@@ -30,8 +30,11 @@ import type {
   CommittedDecisionVerifier,
 } from "../merchant-core/commands.js";
 import type { GrantAction, GrantResourceType } from "../merchant/grant-store.js";
+import type { ExactMoney } from "../merchant/application/money.js";
 
 export interface MerchantAdminSurface {
+  listExactProducts?(): Promise<import("../agent/merchant/types.js").ExactMerchantProduct[]>;
+  getExactProduct?(sku: string): Promise<import("../agent/merchant/types.js").ExactMerchantProduct>;
   listA2aNegotiations?(limit?: unknown): Promise<{
     total: number;
     items: import("../merchant/workbench-service.js").A2aNegotiationRow[];
@@ -65,6 +68,27 @@ export interface MerchantAdminSurface {
   prepareListingChange?(input: {
     sku: string;
     paused: boolean;
+    authorization: Record<string, unknown>;
+    reason?: string;
+  }): Promise<unknown> | unknown;
+  prepareExactProductCreate?(input: {
+    sku: string;
+    title: string;
+    money: ExactMoney;
+    stock: number;
+    expectedAuthorityVersion: number;
+    authorization: Record<string, unknown>;
+    description?: string;
+    category?: string;
+    tags?: string[];
+    deliveryAttributes?: string[];
+    handoffDestination?: string;
+    reason?: string;
+  }): Promise<unknown> | unknown;
+  prepareExactProductMoneyUpdate?(input: {
+    sku: string;
+    money: ExactMoney;
+    expectedAuthorityVersion: number;
     authorization: Record<string, unknown>;
     reason?: string;
   }): Promise<unknown> | unknown;
@@ -118,6 +142,8 @@ export interface MerchantAdminSurface {
 /** 从 merchant-core 构造管理面（确认通道 = core 的命令日志）。 */
 export function merchantAdminSurface(core: MerchantCoreService): MerchantAdminSurface {
   return {
+    listExactProducts: () => core.listExactProducts(),
+    getExactProduct: (sku) => core.getExactProduct(sku),
     listA2aNegotiations: (limit) => core.listA2aNegotiations(limit),
     getA2aNegotiation: (negotiationId) => core.getA2aNegotiation(negotiationId),
     listPending: () => core.listPendingCommands(),
@@ -128,6 +154,8 @@ export function merchantAdminSurface(core: MerchantCoreService): MerchantAdminSu
     getCandidate: (id) => core.getCommand(id),
     prepareInventoryUpdate: (input) => core.prepareInventoryUpdate(input),
     prepareListingChange: (input) => core.prepareListingChange(input),
+    prepareExactProductCreate: (input) => core.prepareExactProductCreate(input),
+    prepareExactProductMoneyUpdate: (input) => core.prepareExactProductMoneyUpdate(input),
     prepareBroadcastPublish: (input) => core.prepareBroadcastPublish(input),
     prepareBroadcastRevise: (input) => core.prepareBroadcastRevise(input),
     prepareBroadcastWithdraw: (input) => core.prepareBroadcastWithdraw(input),

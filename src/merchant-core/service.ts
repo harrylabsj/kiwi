@@ -52,6 +52,8 @@ import {
 import { BROADCAST_TOOLS } from "../merchant/feed-executors.js";
 import { GRANT_TOOLS } from "../merchant/grant-executors.js";
 import { PROMOTION_TOOLS } from "../merchant/promotion-executors.js";
+import { EXACT_PRODUCT_TOOLS } from "../merchant/exact-product-executors.js";
+import { parseExactMoney, type ExactMoney } from "../merchant/application/money.js";
 import type { GrantAction, GrantResourceType } from "../merchant/grant-store.js";
 import type { ApplyPolicyResult } from "./policy-runtime.js";
 import type { MerchantPolicy } from "../config/profile.js";
@@ -181,6 +183,12 @@ export class MerchantCoreService {
   }
   getPublicProduct(sku: string, merchantId?: string) {
     return this.workbench.getPublicProduct(sku, merchantId);
+  }
+  listExactProducts() {
+    return this.workbench.merchantClientRef.listExactProducts(this.workbench.ownerIdRef);
+  }
+  getExactProduct(sku: string) {
+    return this.workbench.merchantClientRef.getExactProduct(this.workbench.ownerIdRef, sku);
   }
   getInventorySnapshot(sku: string) {
     return this.workbench.getInventorySnapshot(sku);
@@ -470,6 +478,64 @@ export class MerchantCoreService {
       arguments: {
         promotion_id: input.promotionId,
         expected_revision: input.expectedRevision,
+      },
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    });
+  }
+
+  prepareExactProductCreate(input: {
+    sku: string;
+    title: string;
+    money: ExactMoney;
+    stock: number;
+    expectedAuthorityVersion: number;
+    authorization: Record<string, unknown>;
+    description?: string;
+    category?: string;
+    tags?: string[];
+    deliveryAttributes?: string[];
+    handoffDestination?: string;
+    reason?: string;
+  }) {
+    const money = parseExactMoney(input.money, { requireOperatingSupport: true });
+    return this.commands.prepare({
+      tool: EXACT_PRODUCT_TOOLS.create,
+      arguments: {
+        sku: input.sku,
+        title: input.title,
+        money,
+        stock: input.stock,
+        expected_authority_version: input.expectedAuthorityVersion,
+        authorization: input.authorization,
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.category !== undefined ? { category: input.category } : {}),
+        ...(input.tags !== undefined ? { tags: input.tags } : {}),
+        ...(input.deliveryAttributes !== undefined
+          ? { delivery_attributes: input.deliveryAttributes }
+          : {}),
+        ...(input.handoffDestination !== undefined
+          ? { handoff_destination: input.handoffDestination }
+          : {}),
+      },
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    });
+  }
+
+  prepareExactProductMoneyUpdate(input: {
+    sku: string;
+    money: ExactMoney;
+    expectedAuthorityVersion: number;
+    authorization: Record<string, unknown>;
+    reason?: string;
+  }) {
+    const money = parseExactMoney(input.money, { requireOperatingSupport: true });
+    return this.commands.prepare({
+      tool: EXACT_PRODUCT_TOOLS.updateMoney,
+      arguments: {
+        sku: input.sku,
+        money,
+        expected_authority_version: input.expectedAuthorityVersion,
+        authorization: input.authorization,
       },
       ...(input.reason !== undefined ? { reason: input.reason } : {}),
     });

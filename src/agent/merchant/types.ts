@@ -69,6 +69,38 @@ export interface MerchantProductPatch {
   delivery_attributes?: string[];
 }
 
+export interface ExactMerchantProduct {
+  sku: string;
+  merchant_id: string;
+  title: string;
+  description: string;
+  category: string;
+  tags: string[];
+  stock: number;
+  currency: string;
+  price_minor: string;
+  currency_table_version: string;
+  authority_version: number;
+  delivery_attributes: string[];
+  handoff_destination: string;
+}
+
+export interface ExactMerchantProductInput {
+  merchant_id: string;
+  sku: string;
+  title: string;
+  price_minor: string;
+  stock: number;
+  expected_authority_version: number;
+  currency: string;
+  currency_table_version: string;
+  description?: string;
+  category?: string;
+  tags?: string[];
+  delivery_attributes?: string[];
+  handoff_destination?: string;
+}
+
 export interface IncomingConsultation {
   conversation_id: string;
   /** e.g. waiting_merchant / waiting_buyer / human_required / closed. */
@@ -119,6 +151,16 @@ export interface MerchantClient {
   getHumanReviewQueue(merchantId: string): Promise<HumanReviewItem[]>;
   /** Pause/resume a listing (fail closed on gateways without this endpoint). */
   pauseListing(sku: string, paused: boolean): Promise<MerchantCatalogProduct>;
+  listExactProducts(merchantId: string): Promise<ExactMerchantProduct[]>;
+  getExactProduct(merchantId: string, sku: string): Promise<ExactMerchantProduct>;
+  createExactProduct(input: ExactMerchantProductInput): Promise<ExactMerchantProduct>;
+  updateExactProductMoney(input: {
+    merchant_id: string;
+    sku: string;
+    price_minor: string;
+    currency_table_version: string;
+    expected_authority_version: number;
+  }): Promise<ExactMerchantProduct>;
 }
 
 export class MerchantClientError extends Error {
@@ -144,6 +186,42 @@ function reqString(value: unknown, at: string): string {
 function reqNumber(value: unknown, at: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) fail(`${at} must be a finite number`);
   return value;
+}
+
+function reqInteger(value: unknown, at: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) fail(`${at} must be an integer`);
+  return value;
+}
+
+function reqMinorText(value: unknown, at: string): string {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/u.test(value)) {
+    fail(`${at} must be an exact non-negative minor-unit string`);
+  }
+  return value;
+}
+
+export function parseExactMerchantProduct(value: unknown): ExactMerchantProduct {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    fail("exact product must be an object");
+  }
+  const v = value as Record<string, unknown>;
+  return {
+    sku: reqString(v.sku, "product.sku"),
+    merchant_id: reqString(v.merchant_id, "product.merchant_id"),
+    title: reqString(v.title, "product.title"),
+    description: typeof v.description === "string" ? v.description : "",
+    category: typeof v.category === "string" ? v.category : "",
+    tags: Array.isArray(v.tags) ? stringArray(v.tags, "product.tags") : [],
+    stock: reqInteger(v.stock, "product.stock"),
+    currency: reqString(v.currency, "product.currency"),
+    price_minor: reqMinorText(v.price_minor, "product.price_minor"),
+    currency_table_version: reqString(v.currency_table_version, "product.currency_table_version"),
+    authority_version: reqInteger(v.authority_version, "product.authority_version"),
+    delivery_attributes: Array.isArray(v.delivery_attributes)
+      ? stringArray(v.delivery_attributes, "product.delivery_attributes")
+      : [],
+    handoff_destination: typeof v.handoff_destination === "string" ? v.handoff_destination : "",
+  };
 }
 
 function stringArray(value: unknown, at: string): string[] {
@@ -173,7 +251,8 @@ export function parseMerchantCatalogProduct(value: unknown): MerchantCatalogProd
       ? stringArray(v.delivery_attributes, "product.delivery_attributes")
       : [],
     paused: typeof v.paused === "boolean" ? v.paused : v.active === false,
-    handoff_destination: typeof v.handoff_destination === "string" ? v.handoff_destination : undefined,
+    handoff_destination:
+      typeof v.handoff_destination === "string" ? v.handoff_destination : undefined,
   };
 }
 
@@ -182,15 +261,13 @@ export function parseMerchantCatalogProduct(value: unknown): MerchantCatalogProd
  * 归属商家：缺省补 ownerId，传入不一致直接拒绝（防跨租户写）。非数值/负数
  * price、负数或非整数 stock 一律拒绝——审批前的 prepare 即失败，不烧人工确认。
  */
-export function parseProductCreateInput(
-  value: unknown,
-  ownerId: string,
-): MerchantProductInput {
+export function parseProductCreateInput(value: unknown, ownerId: string): MerchantProductInput {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError("product 必须是对象");
   }
   const v = value as Record<string, unknown>;
-  const merchantId = typeof v.merchant_id === "string" && v.merchant_id !== "" ? v.merchant_id : ownerId;
+  const merchantId =
+    typeof v.merchant_id === "string" && v.merchant_id !== "" ? v.merchant_id : ownerId;
   if (merchantId !== ownerId) {
     throw new TypeError(`product.merchant_id 与本实例商家不一致（不允许跨商家创建）`);
   }

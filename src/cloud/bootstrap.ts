@@ -596,6 +596,15 @@ export async function bootstrapCloudRuntime(
             },
           }
         : {}),
+      ...(adminOptions.surface.listExactProducts !== undefined &&
+      adminOptions.surface.getExactProduct !== undefined
+        ? {
+            exactProducts: {
+              list: () => adminOptions.surface.listExactProducts!(),
+              get: (sku: string) => adminOptions.surface.getExactProduct!(sku),
+            },
+          }
+        : {}),
       ...(adminOptions.surface.prepareBroadcastPublish !== undefined
         ? { prepareBroadcastPublish: adminOptions.surface.prepareBroadcastPublish }
         : {}),
@@ -604,6 +613,14 @@ export async function bootstrapCloudRuntime(
         : {}),
       ...(adminOptions.surface.prepareListingChange !== undefined
         ? { prepareListingChange: adminOptions.surface.prepareListingChange }
+        : {}),
+      ...(adminOptions.surface.prepareExactProductCreate !== undefined
+        ? { prepareExactProductCreate: adminOptions.surface.prepareExactProductCreate }
+        : {}),
+      ...(adminOptions.surface.prepareExactProductMoneyUpdate !== undefined
+        ? {
+            prepareExactProductMoneyUpdate: adminOptions.surface.prepareExactProductMoneyUpdate,
+          }
         : {}),
       ...(adminOptions.surface.prepareBroadcastRevise !== undefined
         ? { prepareBroadcastRevise: adminOptions.surface.prepareBroadcastRevise }

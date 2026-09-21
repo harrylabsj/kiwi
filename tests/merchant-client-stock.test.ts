@@ -9,9 +9,81 @@ import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
 import { StaticCredentialBroker } from "../src/agent/merchant/credential-broker.js";
 import { HttpMerchantClient } from "../src/agent/merchant/merchant-client.js";
-import { parseMerchantCatalogProduct } from "../src/agent/merchant/types.js";
+import {
+  parseExactMerchantProduct,
+  parseMerchantCatalogProduct,
+} from "../src/agent/merchant/types.js";
 
 describe("merchant read path exact-stock semantics (P2-1)", () => {
+  it("parses exact product money without accepting JSON numbers", () => {
+    expect(
+      parseExactMerchantProduct({
+        sku: "tea-a",
+        merchant_id: "seller-a",
+        title: "Longjing Gift Box",
+        stock: 5,
+        currency: "CNY",
+        price_minor: "8800",
+        currency_table_version: "kiwi-workbench-currency-v1-2026-09-21",
+        authority_version: 1,
+      }),
+    ).toMatchObject({ price_minor: "8800", stock: 5 });
+    expect(() =>
+      parseExactMerchantProduct({
+        sku: "tea-a",
+        merchant_id: "seller-a",
+        title: "Longjing Gift Box",
+        stock: 5,
+        currency: "CNY",
+        price_minor: 8800,
+        currency_table_version: "kiwi-workbench-currency-v1-2026-09-21",
+        authority_version: 1,
+      }),
+    ).toThrow(/minor-unit string/);
+  });
+
+  it("listExactProducts uses the merchant endpoint and catalog credential", async () => {
+    let seenUrl = "";
+    let seenAuth = "";
+    const server = createServer((req, res) => {
+      seenUrl = req.url ?? "";
+      seenAuth = req.headers.authorization ?? "";
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify({
+          ok: true,
+          items: [
+            {
+              sku: "tea-a",
+              merchant_id: "seller-a",
+              title: "Longjing Gift Box",
+              stock: 5,
+              currency: "CNY",
+              price_minor: "8800",
+              currency_table_version: "kiwi-workbench-currency-v1-2026-09-21",
+              authority_version: 1,
+            },
+          ],
+          next_offset: null,
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const client = new HttpMerchantClient(
+        `http://127.0.0.1:${port}`,
+        new StaticCredentialBroker({ catalog: "tok-catalog" }),
+      );
+      expect(await client.listExactProducts("seller-a")).toMatchObject([
+        { sku: "tea-a", price_minor: "8800" },
+      ]);
+      expect(seenUrl).toContain("/v1/merchant/products/exact?merchant_id=seller-a");
+      expect(seenAuth).toBe("Bearer tok-catalog");
+    } finally {
+      server.close();
+    }
+  });
   it("parses product without exact stock (anonymous read)", () => {
     const product = parseMerchantCatalogProduct({
       sku: "tea-a",

@@ -31,6 +31,8 @@
 import type { CredentialBroker } from "./credential-broker.js";
 import type {
   HumanReviewItem,
+  ExactMerchantProduct,
+  ExactMerchantProductInput,
   IncomingConsultation,
   InventorySnapshot,
   MerchantCatalogProduct,
@@ -41,6 +43,7 @@ import type {
 import {
   MerchantClientError,
   parseHumanReviewItem,
+  parseExactMerchantProduct,
   parseIncomingConsultation,
   parseMerchantCatalogProduct,
 } from "./types.js";
@@ -62,11 +65,7 @@ export class HttpMerchantClient implements MerchantClient {
   private readonly broker: CredentialBroker;
   private readonly timeoutMs: number;
 
-  constructor(
-    baseUrl: string,
-    broker: CredentialBroker,
-    options: { timeoutMs?: number } = {},
-  ) {
+  constructor(baseUrl: string, broker: CredentialBroker, options: { timeoutMs?: number } = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.broker = broker;
     // 审查 K-M1：超时可注入（测试用短超时验证 body 停滞不再永久挂起）。
@@ -201,6 +200,70 @@ export class HttpMerchantClient implements MerchantClient {
       .filter((p) => p.merchant_id === merchantId);
   }
 
+  async listExactProducts(merchantId: string): Promise<ExactMerchantProduct[]> {
+    const items: ExactMerchantProduct[] = [];
+    let offset = 0;
+    for (let page = 0; page < 50; page += 1) {
+      const payload = (await this.request("GET", "/v1/merchant/products/exact", {
+        query: { merchant_id: merchantId, limit: "100", offset: String(offset) },
+        token: this.catalogToken(),
+      })) as { items?: unknown; next_offset?: unknown };
+      if (!Array.isArray(payload.items)) {
+        throw new MerchantClientError("validation", "exact product list response is invalid");
+      }
+      items.push(...payload.items.map(parseExactMerchantProduct));
+      if (payload.next_offset === null || payload.next_offset === undefined) return items;
+      if (typeof payload.next_offset !== "number" || !Number.isSafeInteger(payload.next_offset)) {
+        throw new MerchantClientError("validation", "exact product next_offset is invalid");
+      }
+      offset = payload.next_offset;
+    }
+    throw new MerchantClientError("validation", "exact product pagination exceeded 5000 items");
+  }
+
+  async getExactProduct(merchantId: string, sku: string): Promise<ExactMerchantProduct> {
+    const payload = (await this.request(
+      "GET",
+      `/v1/merchant/products/${encodeURIComponent(sku)}/exact`,
+      {
+        query: { merchant_id: merchantId },
+        token: this.catalogToken(),
+      },
+    )) as { product?: unknown };
+    return parseExactMerchantProduct(payload.product);
+  }
+
+  async createExactProduct(input: ExactMerchantProductInput): Promise<ExactMerchantProduct> {
+    const payload = (await this.request("POST", "/v1/merchant/products/exact", {
+      body: input,
+      token: this.catalogToken(),
+    })) as { product?: unknown };
+    return parseExactMerchantProduct(payload.product);
+  }
+
+  async updateExactProductMoney(input: {
+    merchant_id: string;
+    sku: string;
+    price_minor: string;
+    currency_table_version: string;
+    expected_authority_version: number;
+  }): Promise<ExactMerchantProduct> {
+    const payload = (await this.request(
+      "PATCH",
+      `/v1/merchant/products/${encodeURIComponent(input.sku)}/money`,
+      {
+        body: {
+          merchant_id: input.merchant_id,
+          price_minor: input.price_minor,
+          currency_table_version: input.currency_table_version,
+          expected_authority_version: input.expected_authority_version,
+        },
+        token: this.catalogToken(),
+      },
+    )) as { product?: unknown };
+    return parseExactMerchantProduct(payload.product);
+  }
+
   async getProduct(sku: string): Promise<MerchantCatalogProduct> {
     // 审查 P2-1：精确库存仅向商品所属商户本人开放——带 catalog 凭据
     // （可解析时）读，网关按 owner 校验；未配置凭据则匿名读（availability）。
@@ -283,7 +346,10 @@ export class HttpMerchantClient implements MerchantClient {
       token,
     })) as { product?: unknown };
     if (payload === null || typeof payload !== "object" || payload.product === undefined) {
-      throw new MerchantClientError("validation", "update inventory response lacks a product object");
+      throw new MerchantClientError(
+        "validation",
+        "update inventory response lacks a product object",
+      );
     }
     return parseMerchantCatalogProduct(payload.product);
   }
@@ -297,7 +363,10 @@ export class HttpMerchantClient implements MerchantClient {
       { token: this.catalogToken() },
     )) as { conversations?: unknown };
     if (payload === null || typeof payload !== "object" || !Array.isArray(payload.conversations)) {
-      throw new MerchantClientError("validation", "conversations response lacks a conversations array");
+      throw new MerchantClientError(
+        "validation",
+        "conversations response lacks a conversations array",
+      );
     }
     return payload.conversations.map((c) => parseIncomingConsultation(c));
   }
@@ -432,7 +501,8 @@ export class HttpMerchantClient implements MerchantClient {
           };
         } else {
           // 协商不可用 → 回退 legacy 已验证线（2.x 实测线内才放行）。
-          const legacyOk = version !== undefined && versionInRange(version, SHOPPING_CLI_LEGACY_VERIFIED);
+          const legacyOk =
+            version !== undefined && versionInRange(version, SHOPPING_CLI_LEGACY_VERIFIED);
           report = {
             ok: legacyOk,
             probed_at: probedAt,
@@ -462,11 +532,7 @@ export class HttpMerchantClient implements MerchantClient {
     if (options.persistPath !== undefined) {
       // 审查 P2：原子写——health 轮询与一次性命令并发读同一文件，非原子写
       // 会产生撕裂读 → 假 critical 告警。
-      writeFileAtomic(
-        options.persistPath,
-        `${JSON.stringify(report, null, 2)}\n`,
-        { mode: 0o600 },
-      );
+      writeFileAtomic(options.persistPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
     }
     return report;
   }

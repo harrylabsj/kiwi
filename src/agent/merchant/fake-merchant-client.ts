@@ -26,6 +26,8 @@
 import { MerchantClientError } from "./types.js";
 import type {
   HumanReviewItem,
+  ExactMerchantProduct,
+  ExactMerchantProductInput,
   IncomingConsultation,
   InventorySnapshot,
   MerchantCatalogProduct,
@@ -36,6 +38,7 @@ import type {
 
 export class FakeMerchantClient implements MerchantClient {
   private readonly products = new Map<string, MerchantCatalogProduct>();
+  private readonly exactProducts = new Map<string, ExactMerchantProduct>();
   private readonly consultations: IncomingConsultation[] = [];
   private readonly reviews: HumanReviewItem[] = [];
   private now: string;
@@ -43,12 +46,14 @@ export class FakeMerchantClient implements MerchantClient {
   constructor(
     options: {
       products?: MerchantCatalogProduct[];
+      exactProducts?: ExactMerchantProduct[];
       consultations?: IncomingConsultation[];
       reviews?: HumanReviewItem[];
       now?: string;
     } = {},
   ) {
     for (const p of options.products ?? []) this.products.set(p.sku, p);
+    for (const p of options.exactProducts ?? []) this.exactProducts.set(p.sku, p);
     this.consultations.push(...(options.consultations ?? []));
     this.reviews.push(...(options.reviews ?? []));
     this.now = options.now ?? "2026-08-03T15:00:00+08:00";
@@ -71,6 +76,73 @@ export class FakeMerchantClient implements MerchantClient {
 
   async listProducts(merchantId: string): Promise<MerchantCatalogProduct[]> {
     return [...this.products.values()].filter((p) => p.merchant_id === merchantId);
+  }
+
+  async listExactProducts(merchantId: string): Promise<ExactMerchantProduct[]> {
+    return [...this.exactProducts.values()].filter((product) => product.merchant_id === merchantId);
+  }
+
+  async getExactProduct(merchantId: string, sku: string): Promise<ExactMerchantProduct> {
+    const product = this.exactProducts.get(sku);
+    if (product === undefined || product.merchant_id !== merchantId) {
+      throw new MerchantClientError("not_found", `no exact product ${sku}`);
+    }
+    return product;
+  }
+
+  async createExactProduct(input: ExactMerchantProductInput): Promise<ExactMerchantProduct> {
+    if (this.products.has(input.sku) || this.exactProducts.has(input.sku)) {
+      throw new MerchantClientError("validation", `product ${input.sku} already exists`);
+    }
+    const product: ExactMerchantProduct = {
+      sku: input.sku,
+      merchant_id: input.merchant_id,
+      title: input.title,
+      description: input.description ?? "",
+      category: input.category ?? "",
+      tags: input.tags ?? [],
+      stock: input.stock,
+      currency: input.currency,
+      price_minor: input.price_minor,
+      currency_table_version: input.currency_table_version,
+      authority_version: input.expected_authority_version,
+      delivery_attributes: input.delivery_attributes ?? [],
+      handoff_destination: input.handoff_destination ?? "",
+    };
+    this.exactProducts.set(product.sku, product);
+    this.products.set(product.sku, {
+      sku: product.sku,
+      merchant_id: product.merchant_id,
+      title: product.title,
+      description: product.description,
+      category: product.category,
+      tags: product.tags,
+      price: Number(product.price_minor) / 100,
+      currency: product.currency,
+      stock: product.stock,
+      delivery_attributes: product.delivery_attributes,
+      paused: false,
+      handoff_destination: product.handoff_destination,
+    });
+    return product;
+  }
+
+  async updateExactProductMoney(input: {
+    merchant_id: string;
+    sku: string;
+    price_minor: string;
+    currency_table_version: string;
+    expected_authority_version: number;
+  }): Promise<ExactMerchantProduct> {
+    const current = await this.getExactProduct(input.merchant_id, input.sku);
+    if (current.authority_version !== input.expected_authority_version) {
+      throw new MerchantClientError("validation", "exact money authority version changed");
+    }
+    const updated = { ...current, price_minor: input.price_minor };
+    this.exactProducts.set(input.sku, updated);
+    const legacy = this.requireProduct(input.sku);
+    this.products.set(input.sku, { ...legacy, price: Number(input.price_minor) / 100 });
+    return updated;
   }
 
   async getProduct(sku: string): Promise<MerchantCatalogProduct> {

@@ -89,6 +89,14 @@ import {
   MerchantWorkbenchError,
   type A2aNegotiationRow,
 } from "../../merchant/workbench-service.js";
+import type { ExactMerchantProduct } from "../../agent/merchant/types.js";
+import {
+  parseExactMoney,
+  WorkbenchMoneyError,
+  WORKBENCH_CURRENCY_TABLE_VERSION,
+  type ExactMoney,
+} from "../../merchant/application/money.js";
+import { EXACT_PRODUCT_TOOLS } from "../../merchant/exact-product-executors.js";
 import { BROADCAST_TOOLS } from "../../merchant/feed-executors.js";
 import { MerchantFeedError, type MerchantFeedStore } from "../../merchant/feed-store.js";
 import { GRANT_TOOLS } from "../../merchant/grant-executors.js";
@@ -192,6 +200,10 @@ export interface MerchantManagementApiOptions {
     get: (negotiationId: string) => Promise<A2aNegotiationRow>;
   };
   workbenchReconciliation?: WorkbenchReconciliationStore;
+  exactProducts?: {
+    list: () => Promise<ExactMerchantProduct[]>;
+    get: (sku: string) => Promise<ExactMerchantProduct>;
+  };
   prepareBroadcastPublish?: (input: {
     broadcast: Record<string, unknown>;
     authorization: Record<string, unknown>;
@@ -207,6 +219,27 @@ export interface MerchantManagementApiOptions {
   prepareListingChange?: (input: {
     sku: string;
     paused: boolean;
+    authorization: Record<string, unknown>;
+    reason?: string;
+  }) => Promise<unknown> | unknown;
+  prepareExactProductCreate?: (input: {
+    sku: string;
+    title: string;
+    money: ExactMoney;
+    stock: number;
+    expectedAuthorityVersion: number;
+    authorization: Record<string, unknown>;
+    description?: string;
+    category?: string;
+    tags?: string[];
+    deliveryAttributes?: string[];
+    handoffDestination?: string;
+    reason?: string;
+  }) => Promise<unknown> | unknown;
+  prepareExactProductMoneyUpdate?: (input: {
+    sku: string;
+    money: ExactMoney;
+    expectedAuthorityVersion: number;
     authorization: Record<string, unknown>;
     reason?: string;
   }) => Promise<unknown> | unknown;
@@ -464,9 +497,48 @@ export function createMerchantManagementApiHandler(
       writeJson(res, 200, await readService.getStatus(auth.ctx), { "x-request-id": requestId });
       return;
     }
-    // `/products` 暂不复用 legacy major-unit Number 投影。Workbench v1 要求
-    // currency + amount_minor 十进制整数字符串；精确数据源接线前明确 404，不能把
-    // 旧浮点价格重新包装成“精确金额”。
+    if (rest === "/products") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "products:read");
+      const channel = options.exactProducts;
+      if (channel === undefined) {
+        throw new ManagementError("unavailable", "exact product authority is not configured");
+      }
+      const query = pageQuery(url);
+      const offset = query.cursor === undefined ? 0 : Number.parseInt(query.cursor, 10);
+      if (!Number.isSafeInteger(offset) || offset < 0) {
+        throw new ManagementError("invalid_input", "product cursor is invalid");
+      }
+      const limit = Math.min(query.limit ?? 50, 100);
+      const all = await channel.list();
+      writeJson(
+        res,
+        200,
+        {
+          items: all.slice(offset, offset + limit).map(exactProductProjection),
+          next_cursor: offset + limit < all.length ? String(offset + limit) : null,
+          total: all.length,
+        },
+        { "x-request-id": requestId },
+      );
+      return;
+    }
+    const productMatch = /^\/products\/([^/]+)$/.exec(rest);
+    if (productMatch !== null) {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "products:read");
+      const channel = options.exactProducts;
+      if (channel === undefined) {
+        throw new ManagementError("unavailable", "exact product authority is not configured");
+      }
+      writeJson(
+        res,
+        200,
+        exactProductProjection(await channel.get(pathSegment(productMatch[1] ?? ""))),
+        { "x-request-id": requestId },
+      );
+      return;
+    }
     if (rest === "/approvals") {
       const auth = requireActor(req);
       writeJson(res, 200, await readService.listApprovals(auth.ctx, pageQuery(url)), {
@@ -908,18 +980,29 @@ export function createMerchantManagementApiHandler(
       const fields = objectFields(await readJsonBody(req), [
         "kind",
         "sku",
+        "title",
+        "money",
+        "expected_authority_version",
         "stock",
         "paused",
+        "description",
+        "category",
+        "tags",
+        "delivery_attributes",
+        "handoff_destination",
         "reason",
       ]);
       const kind = requireString(fields["kind"], "kind");
       const sku = requireString(fields["sku"], "sku");
-      const scoped = authorizeProductAction(auth.ctx, "product.draft", [sku]);
+      const createExact = kind === "product_create_exact";
+      const scoped = createExact
+        ? authorizeProductCreateAction(auth.ctx)
+        : authorizeProductAction(auth.ctx, "product.draft", [sku]);
       const authorization: Record<string, unknown> = {
         actor_id: auth.ctx.actorId,
         actor_role: auth.ctx.role,
-        action: "product.draft",
-        resource_type: "product",
+        action: createExact ? "product.create" : "product.draft",
+        resource_type: createExact ? "merchant" : "product",
         resource_ids: [sku],
         authorization_generation: scoped.generation,
         matched_grant_ids: scoped.grantIds,
@@ -956,10 +1039,66 @@ export function createMerchantManagementApiHandler(
           authorization,
           ...(reason !== undefined ? { reason } : {}),
         });
+      } else if (kind === "product_create_exact") {
+        const channel = options.prepareExactProductCreate;
+        if (channel === undefined) {
+          throw new ManagementError(
+            "unavailable",
+            "exact product creation candidate preparation is unavailable",
+          );
+        }
+        prepared = await channel({
+          sku,
+          title: requireString(fields["title"], "title"),
+          money: requireExactMoneyInput(fields["money"]),
+          stock: requireNonNegativeInteger(fields["stock"], "stock"),
+          expectedAuthorityVersion: requirePositiveInteger(
+            fields["expected_authority_version"],
+            "expected_authority_version",
+          ),
+          authorization,
+          ...(typeof fields["description"] === "string"
+            ? { description: fields["description"] }
+            : {}),
+          ...(typeof fields["category"] === "string" ? { category: fields["category"] } : {}),
+          ...(fields["tags"] !== undefined
+            ? { tags: requireStringArray(fields["tags"], "tags") }
+            : {}),
+          ...(fields["delivery_attributes"] !== undefined
+            ? {
+                deliveryAttributes: requireStringArray(
+                  fields["delivery_attributes"],
+                  "delivery_attributes",
+                ),
+              }
+            : {}),
+          ...(typeof fields["handoff_destination"] === "string"
+            ? { handoffDestination: fields["handoff_destination"] }
+            : {}),
+          ...(reason !== undefined ? { reason } : {}),
+        });
+      } else if (kind === "product_money_update_exact") {
+        const channel = options.prepareExactProductMoneyUpdate;
+        if (channel === undefined) {
+          throw new ManagementError(
+            "unavailable",
+            "exact product money candidate preparation is unavailable",
+          );
+        }
+        prepared = await channel({
+          sku,
+          money: requireExactMoneyInput(fields["money"]),
+          expectedAuthorityVersion: requirePositiveInteger(
+            fields["expected_authority_version"],
+            "expected_authority_version",
+          ),
+          authorization,
+          ...(reason !== undefined ? { reason } : {}),
+        });
       } else {
         throw new ManagementError(
           "invalid_input",
-          "kind must be inventory_update or listing_change",
+          "kind must be inventory_update, listing_change, product_create_exact or product_money_update_exact",
         );
       }
       writeJson(res, 201, prepared, { "x-request-id": requestId });
@@ -1289,6 +1428,30 @@ export function createMerchantManagementApiHandler(
     return { generation: result.generation, grantIds: result.grantIds };
   }
 
+  function authorizeProductCreateAction(actor: VerifiedActorContext): {
+    generation: number;
+    grantIds: string[];
+  } {
+    if (actor.role === "owner") {
+      return {
+        generation:
+          options.workbenchGrants?.authorizationGeneration(actor.merchantId, actor.actorId) ?? 0,
+        grantIds: [],
+      };
+    }
+    const grants = options.workbenchGrants;
+    if (grants === undefined)
+      throw new ManagementError("forbidden", "scoped grants are unavailable");
+    const result = grants.authorize(actor, {
+      action: "product.create",
+      resourceType: "merchant",
+    });
+    if (!result.authorized) {
+      throw new ManagementError("forbidden", "missing scoped grant: product.create");
+    }
+    return { generation: result.generation, grantIds: result.grantIds };
+  }
+
   function authorizeBroadcastCandidate(
     actor: VerifiedActorContext,
     candidate: WriteApprovalCandidate,
@@ -1370,13 +1533,21 @@ export function createMerchantManagementApiHandler(
       "kiwi_merchant_prepare_product_update",
       "kiwi_merchant_prepare_inventory_update",
       "kiwi_merchant_prepare_listing_change",
+      EXACT_PRODUCT_TOOLS.updateMoney,
     ]);
-    const createsProduct = candidate.tool === "kiwi_merchant_prepare_product_create";
+    const createsProduct =
+      candidate.tool === "kiwi_merchant_prepare_product_create" ||
+      candidate.tool === EXACT_PRODUCT_TOOLS.create;
     if (!createsProduct && !productScopedTools.has(candidate.tool)) return undefined;
     authorizeOrThrow(actor, "products:decide");
     if (createsProduct) {
-      const product = requireObject(candidate.arguments["product"], "candidate product");
-      const sku = requireString(product["sku"], "candidate product.sku");
+      const sku =
+        candidate.tool === EXACT_PRODUCT_TOOLS.create
+          ? requireString(candidate.arguments["sku"], "candidate sku")
+          : requireString(
+              requireObject(candidate.arguments["product"], "candidate product")["sku"],
+              "candidate product.sku",
+            );
       const generation =
         options.workbenchGrants?.authorizationGeneration(actor.merchantId, actor.actorId) ?? 0;
       if (actor.role !== "owner") {
@@ -2853,6 +3024,18 @@ function requireInteger(value: unknown, field: string): number {
   return value;
 }
 
+function requireNonNegativeInteger(value: unknown, field: string): number {
+  const integer = requireInteger(value, field);
+  if (integer < 0) throw new ManagementError("invalid_input", `${field} must be non-negative`);
+  return integer;
+}
+
+function requirePositiveInteger(value: unknown, field: string): number {
+  const integer = requireInteger(value, field);
+  if (integer < 1) throw new ManagementError("invalid_input", `${field} must be positive`);
+  return integer;
+}
+
 function requireDecision(value: unknown): "approve" | "reject" {
   if (value !== "approve" && value !== "reject") {
     throw new ManagementError("invalid_input", "decision must be approve or reject");
@@ -2908,6 +3091,43 @@ function candidateIdFromPreparation(value: unknown): string {
   const prepared = requireObject(value, "prepared candidate");
   const candidate = requireObject(prepared["candidate"], "prepared candidate.candidate");
   return requireString(candidate["candidate_id"], "prepared candidate.candidate_id");
+}
+
+function exactProductProjection(product: ExactMerchantProduct): Record<string, unknown> {
+  if (product.currency_table_version !== WORKBENCH_CURRENCY_TABLE_VERSION) {
+    throw new ManagementError(
+      "unavailable",
+      "exact product currency table version does not match Workbench v1",
+    );
+  }
+  return {
+    sku: product.sku,
+    merchant_id: product.merchant_id,
+    title: product.title,
+    description: product.description,
+    category: product.category,
+    tags: product.tags,
+    stock: product.stock,
+    money: {
+      currency: product.currency,
+      amount_minor: product.price_minor,
+      currency_table_version: product.currency_table_version,
+    },
+    authority_version: product.authority_version,
+    delivery_attributes: product.delivery_attributes,
+    handoff_destination: product.handoff_destination,
+  };
+}
+
+function requireExactMoneyInput(value: unknown): ExactMoney {
+  const record = requireObject(value, "money");
+  if (record["currency_table_version"] !== WORKBENCH_CURRENCY_TABLE_VERSION) {
+    throw new ManagementError(
+      "invalid_input",
+      `money.currency_table_version must be ${WORKBENCH_CURRENCY_TABLE_VERSION}`,
+    );
+  }
+  return parseExactMoney(record, { requireOperatingSupport: true });
 }
 
 function cookieValue(req: IncomingMessage, name: string): string | undefined {
@@ -2987,6 +3207,19 @@ function writeWorkbenchProblem(
 }
 
 function respondWorkbenchError(res: ServerResponse, error: unknown, requestId: string): void {
+  if (error instanceof WorkbenchMoneyError) {
+    writeWorkbenchProblem(
+      res,
+      error.code === "MONEY_RANGE_EXCEEDED" ||
+        error.code === "MONEY_PRECISION_UNRECOVERABLE"
+        ? error.code
+        : "VALIDATION_ERROR",
+      requestId,
+      "金额请求未完成",
+      error.message,
+    );
+    return;
+  }
   if (error instanceof MerchantWorkbenchError) {
     const code: WorkbenchProblemCode =
       error.kind === "not_found"

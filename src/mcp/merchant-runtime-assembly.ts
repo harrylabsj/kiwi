@@ -57,6 +57,7 @@ import { RfqRepository } from "../merchant-core/rfq/repository.js";
 import { MerchantRfqService } from "../merchant-core/rfq/service.js";
 import { MerchantCoreService } from "../merchant-core/service.js";
 import type { CommandExecutor } from "../merchant-core/executor.js";
+import { createExactProductExecutors } from "../merchant/exact-product-executors.js";
 import {
   assertMerchantMcpAuthPolicy,
   CompositeMerchantMcpVerifier,
@@ -406,7 +407,10 @@ export async function assembleMerchantRuntime(
     ...(rfqStack !== undefined
       ? { rfq: { service: rfqStack.service, executors: rfqStack.executors } }
       : {}),
-    ...(options.extraExecutors !== undefined ? { extraExecutors: options.extraExecutors } : {}),
+    extraExecutors: [
+      ...createExactProductExecutors({ merchantId: profile.owner_id, client: merchantClient }),
+      ...(options.extraExecutors ?? []),
+    ],
     ...(options.requireCommittedProductDecisions === true
       ? { requireCommittedProductDecisions: true }
       : {}),

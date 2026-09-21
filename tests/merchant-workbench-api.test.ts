@@ -17,6 +17,8 @@ import { BROADCAST_TOOLS } from "../src/merchant/feed-executors.js";
 import { GRANT_TOOLS } from "../src/merchant/grant-executors.js";
 import { PROMOTION_TOOLS } from "../src/merchant/promotion-executors.js";
 import { MerchantPromotionStore } from "../src/merchant/promotion-store.js";
+import { EXACT_PRODUCT_TOOLS } from "../src/merchant/exact-product-executors.js";
+import type { ExactMoney } from "../src/merchant/application/money.js";
 import { PromotionBroadcastWorkflowStore } from "../src/merchant/promotion-broadcast-workflow.js";
 import {
   MerchantGrantStore,
@@ -109,6 +111,32 @@ function preparedProductChange(input: {
       authorization: input.authorization,
     },
     arguments_hash: `sha256:product-${pending.length}`,
+  };
+  pending.push(item);
+  return { candidate: item };
+}
+
+function preparedExactProduct(input: {
+  sku: string;
+  authorization: Record<string, unknown>;
+  title?: string;
+  money: ExactMoney;
+  stock?: number;
+  expectedAuthorityVersion: number;
+}): { candidate: WriteApprovalCandidate } {
+  const create = input.title !== undefined;
+  const item: WriteApprovalCandidate = {
+    ...candidate,
+    candidate_id: `candidate-exact-product-${pending.length}`,
+    tool: create ? EXACT_PRODUCT_TOOLS.create : EXACT_PRODUCT_TOOLS.updateMoney,
+    arguments: {
+      sku: input.sku,
+      ...(create ? { title: input.title, stock: input.stock } : {}),
+      money: input.money,
+      expected_authority_version: input.expectedAuthorityVersion,
+      authorization: input.authorization,
+    },
+    arguments_hash: `sha256:exact-product-${pending.length}`,
   };
   pending.push(item);
   return { candidate: item };
@@ -230,9 +258,45 @@ beforeAll(async () => {
           recorded_at: NOW.toISOString(),
         }),
       },
+      exactProducts: {
+        list: async () => [
+          {
+            sku: "sku-exact-1",
+            merchant_id: MERCHANT,
+            title: "Exact Product",
+            description: "",
+            category: "test",
+            tags: [],
+            stock: 5,
+            currency: "CNY",
+            price_minor: "9999",
+            currency_table_version: "kiwi-workbench-currency-v1-2026-09-21",
+            authority_version: 1,
+            delivery_attributes: [],
+            handoff_destination: "",
+          },
+        ],
+        get: async (sku) => ({
+          sku,
+          merchant_id: MERCHANT,
+          title: "Exact Product",
+          description: "",
+          category: "test",
+          tags: [],
+          stock: 5,
+          currency: "CNY",
+          price_minor: "9999",
+          currency_table_version: "kiwi-workbench-currency-v1-2026-09-21",
+          authority_version: 1,
+          delivery_attributes: [],
+          handoff_destination: "",
+        }),
+      },
       prepareBroadcastPublish: preparedBroadcast,
       prepareInventoryUpdate: preparedProductChange,
       prepareListingChange: preparedProductChange,
+      prepareExactProductCreate: preparedExactProduct,
+      prepareExactProductMoneyUpdate: preparedExactProduct,
       prepareGrantCreate: preparedGrant,
       preparePromotionPublish: preparedPromotion,
       webauthnRegistration: {
@@ -370,6 +434,34 @@ describe("Workbench v1 trusted confirmation API", () => {
       negotiation_id: "neg-workbench-1",
       sku: "sku-1",
       price_minor: 9999,
+    });
+  });
+
+  it("lists and reads exact product money without a legacy Number projection", async () => {
+    const list = await fetch(`${base}/merchant/api/v1/products`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({
+      total: 1,
+      items: [
+        {
+          sku: "sku-exact-1",
+          money: {
+            currency: "CNY",
+            amount_minor: "9999",
+            currency_table_version: "kiwi-workbench-currency-v1-2026-09-21",
+          },
+          authority_version: 1,
+        },
+      ],
+    });
+    const detail = await fetch(`${base}/merchant/api/v1/products/sku-exact-1`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(await detail.json()).toMatchObject({
+      sku: "sku-exact-1",
+      money: { amount_minor: "9999" },
     });
   });
 
@@ -966,5 +1058,65 @@ describe("Workbench v1 trusted confirmation API", () => {
         },
       },
     });
+  });
+
+  it("creates exact product price candidates and rejects legacy numeric money", async () => {
+    const invalid = await post("/merchant/api/v1/change-drafts", {
+      kind: "product_create_exact",
+      sku: "sku-new-exact",
+      title: "New Exact Product",
+      money: {
+        currency: "CNY",
+        amount_minor: 9999,
+        currency_table_version: "kiwi-workbench-currency-v1-2026-09-21",
+      },
+      stock: 3,
+      expected_authority_version: 1,
+    });
+    expect(invalid.status).toBe(422);
+
+    const created = await post("/merchant/api/v1/change-drafts", {
+      kind: "product_create_exact",
+      sku: "sku-new-exact",
+      title: "New Exact Product",
+      money: {
+        currency: "CNY",
+        amount_minor: "9999",
+        currency_table_version: "kiwi-workbench-currency-v1-2026-09-21",
+      },
+      stock: 3,
+      expected_authority_version: 1,
+    });
+    expect(created.status).toBe(201);
+    const createBody = (await created.json()) as { candidate: WriteApprovalCandidate };
+    expect(createBody.candidate.tool).toBe(EXACT_PRODUCT_TOOLS.create);
+    expect(JSON.stringify(createBody.candidate.arguments)).not.toContain("floor");
+    const createConfirmation = await post("/merchant/api/v1/confirmations", {
+      candidate_id: createBody.candidate.candidate_id,
+      decision: "approve",
+    });
+    const createDescriptor = (await createConfirmation.json()) as { confirmation_id: string };
+    const createProjection = await fetch(
+      `${base}/merchant/api/v1/confirmations/${createDescriptor.confirmation_id}`,
+      { headers: { cookie: auth.cookie } },
+    );
+    expect(await createProjection.json()).toMatchObject({
+      snapshot: { decision_authorization: { action: "product.create" } },
+    });
+
+    const updated = await post("/merchant/api/v1/change-drafts", {
+      kind: "product_money_update_exact",
+      sku: "sku-exact-1",
+      money: {
+        currency: "CNY",
+        amount_minor: "9250",
+        currency_table_version: "kiwi-workbench-currency-v1-2026-09-21",
+      },
+      expected_authority_version: 1,
+    });
+    expect(updated.status).toBe(201);
+    const updateBody = (await updated.json()) as { candidate: WriteApprovalCandidate };
+    expect(updateBody.candidate.tool).toBe(EXACT_PRODUCT_TOOLS.updateMoney);
+    expect(JSON.stringify(updateBody.candidate.arguments)).not.toContain("floor");
   });
 });

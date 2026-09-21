@@ -23,10 +23,7 @@ import { ADMIN_SESSION_COOKIE, MerchantAdminSessions } from "../src/auth/merchan
 import type { MerchantRole } from "../src/merchant/application/actor.js";
 import type { WriteApprovalCandidate } from "../src/agent/merchant/action-candidate.js";
 import { createCloudRouter } from "../src/cloud/http-router.js";
-import {
-  commitProductTable,
-  loadProductTableSnapshot,
-} from "../src/cloud/product-source.js";
+import { commitProductTable, loadProductTableSnapshot } from "../src/cloud/product-source.js";
 import {
   createMerchantManagementApiHandler,
   type MerchantManagementApiOptions,
@@ -43,7 +40,10 @@ const ORIGIN = "https://merchant.example";
 const sessionsDb = new DatabaseSync(":memory:");
 const operationsDb = new DatabaseSync(":memory:");
 const sessions = new MerchantAdminSessions({ db: sessionsDb });
-const operations = new MerchantManagementOperationStore({ db: operationsDb, now: () => FIXED_NOW.toISOString() });
+const operations = new MerchantManagementOperationStore({
+  db: operationsDb,
+  now: () => FIXED_NOW.toISOString(),
+});
 const serviceState = new MutableServiceState("OPERATING");
 
 let candidates: WriteApprovalCandidate[] = [];
@@ -103,8 +103,7 @@ beforeAll(async () => {
   server = createServer(createMerchantManagementApiHandler(options));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
-  base =
-    "http://127.0.0.1:" + (typeof address === "object" && address !== null ? address.port : 0);
+  base = "http://127.0.0.1:" + (typeof address === "object" && address !== null ? address.port : 0);
 });
 
 afterAll(async () => {
@@ -143,7 +142,10 @@ beforeEach(() => {
   policyApplyMock.mockImplementation(async () => ({ version: 4, digest: "sha256:policy-new" }));
 });
 
-async function login(role: MerchantRole = "owner", merchantId = MERCHANT): Promise<{ cookie: string; csrf: string }> {
+async function login(
+  role: MerchantRole = "owner",
+  merchantId = MERCHANT,
+): Promise<{ cookie: string; csrf: string }> {
   const { sessionId } = sessions.createSession({
     principalId: `admin:${merchantId}`,
     merchantId,
@@ -173,7 +175,10 @@ async function call(
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
   });
   const text = await res.text();
-  return { status: res.status, json: text === "" ? {} : (JSON.parse(text) as Record<string, unknown>) };
+  return {
+    status: res.status,
+    json: text === "" ? {} : (JSON.parse(text) as Record<string, unknown>),
+  };
 }
 
 async function mintApprovalConfirmation(
@@ -237,13 +242,23 @@ describe("merchant management api — 认证与防护", () => {
     const auth = await login("owner");
     const missing = await call("POST", "/merchant/api/confirmations", {
       cookie: auth.cookie,
-      body: { candidate_id: "act_1", action: "approve", arguments_hash: "sha256:args", preconditions_hash: "sha256:pre" },
+      body: {
+        candidate_id: "act_1",
+        action: "approve",
+        arguments_hash: "sha256:args",
+        preconditions_hash: "sha256:pre",
+      },
     });
     expect(missing.status).toBe(403);
     const wrong = await call("POST", "/merchant/api/confirmations", {
       cookie: auth.cookie,
       csrf: "definitely-wrong",
-      body: { candidate_id: "act_1", action: "approve", arguments_hash: "sha256:args", preconditions_hash: "sha256:pre" },
+      body: {
+        candidate_id: "act_1",
+        action: "approve",
+        arguments_hash: "sha256:args",
+        preconditions_hash: "sha256:pre",
+      },
     });
     expect(wrong.status).toBe(403);
     expect(mintCounter).toBe(0);
@@ -255,7 +270,12 @@ describe("merchant management api — 认证与防护", () => {
       cookie: auth.cookie,
       csrf: auth.csrf,
       origin: "https://evil.example",
-      body: { candidate_id: "act_1", action: "approve", arguments_hash: "sha256:args", preconditions_hash: "sha256:pre" },
+      body: {
+        candidate_id: "act_1",
+        action: "approve",
+        arguments_hash: "sha256:args",
+        preconditions_hash: "sha256:pre",
+      },
     });
     expect(res.status).toBe(403);
   });
@@ -302,7 +322,11 @@ describe("merchant management api — 审批链路与幂等", () => {
     expect(approved.json["resource_ref"]).toBe("act_1");
     expect(String(approved.json["operation_id"]).startsWith("mop_")).toBe(true);
     expect(executeDecision).toHaveBeenCalledTimes(1);
-    const queried = await call("GET", `/merchant/api/operations/${String(approved.json["operation_id"])}`, auth);
+    const queried = await call(
+      "GET",
+      `/merchant/api/operations/${String(approved.json["operation_id"])}`,
+      auth,
+    );
     expect(queried.status).toBe(200);
     expect(queried.json["operation_id"]).toBe(approved.json["operation_id"]);
   });
@@ -470,7 +494,11 @@ describe("merchant management api — 暂停与恢复", () => {
     const owner = await login("owner");
     const paused = await call("POST", "/merchant/api/service/pause", {
       ...owner,
-      body: { expected_service_revision: serviceState.serviceRevision, reason: "维护", idempotency_key: "p1" },
+      body: {
+        expected_service_revision: serviceState.serviceRevision,
+        reason: "维护",
+        idempotency_key: "p1",
+      },
     });
     expect(paused.status).toBe(200);
     expect(paused.json["status"]).toBe("succeeded");
@@ -609,10 +637,10 @@ describe("Workbench /merchant/api/v1 — RFC 9457 与兼容读取", () => {
     const products = await fetch(`${base}/merchant/api/v1/products`, {
       headers: { cookie: auth.cookie },
     });
-    expect(products.status).toBe(404);
+    expect(products.status).toBe(503);
     expect(await products.json()).toMatchObject({
-      code: "RESOURCE_NOT_FOUND",
-      status: 404,
+      code: "DEPENDENCY_UNAVAILABLE",
+      status: 503,
     });
   });
 
@@ -685,10 +713,14 @@ describe("merchant management api — 商品导入（BD-03）", () => {
     expect(draft.status).toBe(200);
     expect(draft.json["preview"]).toMatchObject({ rows_total: 1, added: 1, removed: 0 });
     const digest = String(draft.json["digest"]);
-    const committed = await call("POST", `/merchant/api/products/import-drafts/${String(draft.json["draft_id"])}/commit`, {
-      ...auth,
-      body: { expected_draft_digest: digest, idempotency_key: "c1" },
-    });
+    const committed = await call(
+      "POST",
+      `/merchant/api/products/import-drafts/${String(draft.json["draft_id"])}/commit`,
+      {
+        ...auth,
+        body: { expected_draft_digest: digest, idempotency_key: "c1" },
+      },
+    );
     expect(committed.status).toBe(200);
     expect(committed.json["status"]).toBe("succeeded");
     // 文件真实写入且可解析（全批生效）
@@ -696,17 +728,25 @@ describe("merchant management api — 商品导入（BD-03）", () => {
     expect(snapshot.records).toHaveLength(1);
     expect(snapshot.records[0]?.sku).toBe("SKU-1");
     // 同键同内容重放 → 原回执（UC20 语义在导入同样成立）
-    const replay = await call("POST", `/merchant/api/products/import-drafts/${String(draft.json["draft_id"])}/commit`, {
-      ...auth,
-      body: { expected_draft_digest: digest, idempotency_key: "c1" },
-    });
+    const replay = await call(
+      "POST",
+      `/merchant/api/products/import-drafts/${String(draft.json["draft_id"])}/commit`,
+      {
+        ...auth,
+        body: { expected_draft_digest: digest, idempotency_key: "c1" },
+      },
+    );
     expect(replay.status).toBe(200);
     expect(replay.json["operation_id"]).toBe(committed.json["operation_id"]);
     // 已提交草稿再提交 → 409
-    const again = await call("POST", `/merchant/api/products/import-drafts/${String(draft.json["draft_id"])}/commit`, {
-      ...auth,
-      body: { expected_draft_digest: digest, idempotency_key: "c2" },
-    });
+    const again = await call(
+      "POST",
+      `/merchant/api/products/import-drafts/${String(draft.json["draft_id"])}/commit`,
+      {
+        ...auth,
+        body: { expected_draft_digest: digest, idempotency_key: "c2" },
+      },
+    );
     expect(again.status).toBe(409);
   });
 
@@ -715,7 +755,20 @@ describe("merchant management api — 商品导入（BD-03）", () => {
     const badRow = await call("POST", "/merchant/api/products/import-drafts", {
       ...auth,
       body: {
-        table: productTable({ products: [{ sku: "S", title: "t", currency: "CNY", unit: "piece", price: "abc", updated_at: "2026-09-21T09:00:00Z", valid_until: "2099-01-01T00:00:00Z", status: "active" }] }),
+        table: productTable({
+          products: [
+            {
+              sku: "S",
+              title: "t",
+              currency: "CNY",
+              unit: "piece",
+              price: "abc",
+              updated_at: "2026-09-21T09:00:00Z",
+              valid_until: "2099-01-01T00:00:00Z",
+              status: "active",
+            },
+          ],
+        }),
         idempotency_key: "bad",
       },
     });
@@ -752,10 +805,14 @@ describe("merchant management api — 策略草稿（BD-03，红线 6）", () =>
     expect(draftText.includes('"floor_overrides"')).toBe(false);
     expect(draftText.includes('": 80')).toBe(false);
     expect(draftText.includes('"80"')).toBe(false);
-    const committed = await call("POST", `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`, {
-      ...owner,
-      body: { expected_draft_digest: draft.json["digest"], idempotency_key: "pc1" },
-    });
+    const committed = await call(
+      "POST",
+      `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`,
+      {
+        ...owner,
+        body: { expected_draft_digest: draft.json["digest"], idempotency_key: "pc1" },
+      },
+    );
     expect(committed.status).toBe(200);
     expect(committed.json["result_revision"]).toBe(4);
     expect(policyApplyMock).toHaveBeenCalledWith(patch);
@@ -770,22 +827,34 @@ describe("merchant management api — 策略草稿（BD-03，红线 6）", () =>
       ...owner,
       body: { patch: { bad: true } },
     });
-    const failed = await call("POST", `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`, {
-      ...owner,
-      body: { expected_draft_digest: draft.json["digest"], idempotency_key: "pf1" },
-    });
+    const failed = await call(
+      "POST",
+      `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`,
+      {
+        ...owner,
+        body: { expected_draft_digest: draft.json["digest"], idempotency_key: "pf1" },
+      },
+    );
     expect(failed.status).toBe(400);
     policyApplyMock.mockImplementation(async () => ({ version: 5, digest: "sha256:v5" }));
-    const retry = await call("POST", `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`, {
-      ...owner,
-      body: { expected_draft_digest: draft.json["digest"], idempotency_key: "pf2" },
-    });
+    const retry = await call(
+      "POST",
+      `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`,
+      {
+        ...owner,
+        body: { expected_draft_digest: draft.json["digest"], idempotency_key: "pf2" },
+      },
+    );
     expect(retry.status).toBe(200);
     expect(retry.json["result_revision"]).toBe(5);
-    const again = await call("POST", `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`, {
-      ...owner,
-      body: { expected_draft_digest: draft.json["digest"], idempotency_key: "pf3" },
-    });
+    const again = await call(
+      "POST",
+      `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`,
+      {
+        ...owner,
+        body: { expected_draft_digest: draft.json["digest"], idempotency_key: "pf3" },
+      },
+    );
     expect(again.status).toBe(409);
   });
 });
@@ -800,7 +869,10 @@ describe("merchant management page — 同源工作台壳（BD-03）", () => {
         res.end();
       },
       merchantHomePage: (_req, res) => {
-        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        });
         res.end(renderMerchantManagementPage());
       },
       readiness: async () => ({ ready: true, checks: {}, checked_at: FIXED_NOW.toISOString() }),
