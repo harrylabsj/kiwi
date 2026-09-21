@@ -25,6 +25,10 @@
 
 import type { WriteApprovalCandidate } from "../agent/merchant/action-candidate.js";
 import type { MerchantCoreService } from "../merchant-core/service.js";
+import type {
+  CommittedDecisionProof,
+  CommittedDecisionVerifier,
+} from "../merchant-core/commands.js";
 
 export interface MerchantAdminSurface {
   listPending(): WriteApprovalCandidate[];
@@ -39,6 +43,11 @@ export interface MerchantAdminSurface {
     principalId: string,
     confirmationToken?: string,
   ): Promise<unknown>;
+  executeCommittedDecision?(
+    input: Omit<CommittedDecisionProof, "actionDigest">,
+    verifier: CommittedDecisionVerifier,
+  ): Promise<unknown>;
+  getCandidate?(commandId: string): WriteApprovalCandidate | undefined;
 }
 
 /** 从 merchant-core 构造管理面（确认通道 = core 的命令日志）。 */
@@ -48,6 +57,9 @@ export function merchantAdminSurface(core: MerchantCoreService): MerchantAdminSu
     executeApproved: (id, principalId, token) =>
       core.commands.executeApproved(id, principalId, token),
     rejectCandidate: (id, principalId, token) => core.commands.reject(id, principalId, token),
+    executeCommittedDecision: (input, verifier) =>
+      core.executeCommittedDecision(input, verifier),
+    getCandidate: (id) => core.getCommand(id),
   };
 }
 

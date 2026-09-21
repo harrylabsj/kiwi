@@ -75,6 +75,18 @@ export interface PreparedCommand {
   outcome: WriteGateResult;
 }
 
+export interface CommittedDecisionProof {
+  operationId: string;
+  candidateId: string;
+  actorId: string;
+  decision: "approve" | "reject";
+  actionDigest: string;
+}
+
+export interface CommittedDecisionVerifier {
+  verifyCommittedDecision(input: CommittedDecisionProof): boolean;
+}
+
 export class MerchantCommandLog {
   private readonly deps: MerchantCommandLogDeps;
 
@@ -208,6 +220,54 @@ export class MerchantCommandLog {
         err instanceof Error ? err.message : String(err),
       );
     }
+  }
+
+  /**
+   * Execute a decision already committed by the Workbench WebAuthn transaction.
+   * No legacy confirmation token is minted: the verifier must match operation, candidate,
+   * actor, decision and the freshly recomputed immutable candidate digest.
+   */
+  async executeCommittedDecision(
+    input: Omit<CommittedDecisionProof, "actionDigest">,
+    verifier: CommittedDecisionVerifier,
+  ): Promise<ApprovalExecutionResult | WriteApprovalCandidate> {
+    const candidate = this.deps.store.get(input.candidateId);
+    if (candidate === undefined) {
+      throw new MerchantWorkbenchError("not_found", `未知命令 ${input.candidateId}`);
+    }
+    const actionDigest = contentHash({
+      arguments: candidate.arguments,
+      preconditions: candidate.preconditions,
+    });
+    if (!verifier.verifyCommittedDecision({ ...input, actionDigest })) {
+      throw new MerchantWorkbenchError(
+        "validation",
+        "committed WebAuthn decision does not match the current candidate snapshot",
+      );
+    }
+    if (input.decision === "reject") return this.deps.store.reject(input.candidateId);
+
+    const executor = this.deps.executors.get(candidate.tool);
+    if (executor === undefined) {
+      this.deps.store.expireCandidate(input.candidateId);
+      throw new MerchantWorkbenchError(
+        "validation",
+        `命令 ${input.candidateId} 的工具 ${candidate.tool} 未注册，已失效`,
+      );
+    }
+    this.deps.store.markApproved(input.candidateId);
+    return await executeApprovedCandidate(this.deps.store, input.candidateId, {
+      readPreconditions: () => executor.readPreconditions(candidate.arguments),
+      execute: async (approvedArgs) => {
+        const output = await executor.execute(approvedArgs, this.deps.executorContext);
+        await executor.verifyAfter?.(approvedArgs, this.deps.executorContext);
+        return output;
+      },
+    });
+  }
+
+  getCandidate(commandId: string): WriteApprovalCandidate | undefined {
+    return this.deps.store.get(commandId);
   }
 
   /** 拒绝候选（确认通道；同样需确认凭证）。 */

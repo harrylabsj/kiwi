@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS workbench_confirmation_requests (
   decision TEXT NOT NULL CHECK (decision IN ('approve','reject')),
   operation_id TEXT NOT NULL,
   action_digest TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL,
   expected_version INTEGER NOT NULL,
   challenge TEXT NOT NULL,
   expires_at TEXT NOT NULL,
@@ -165,6 +166,12 @@ export class WorkbenchConfirmationStore {
     ensureColumn(this.db, "workbench_approval_outbox", "lease_owner", "TEXT");
     ensureColumn(this.db, "workbench_approval_outbox", "lease_expires_at", "TEXT");
     ensureColumn(this.db, "workbench_approval_outbox", "attempts", "INTEGER NOT NULL DEFAULT 0");
+    ensureColumn(
+      this.db,
+      "workbench_confirmation_requests",
+      "snapshot_json",
+      "TEXT NOT NULL DEFAULT '{}'",
+    );
   }
 
   persistVerifiedCredential(input: {
@@ -208,6 +215,38 @@ export class WorkbenchConfirmationStore {
     return result.changes === 1;
   }
 
+  hasUsableCredential(merchantId: string, actorId: string): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT 1 present FROM workbench_webauthn_credentials
+         WHERE merchant_id=? AND actor_id=? AND revoked_at IS NULL LIMIT 1`,
+      )
+      .get(merchantId, actorId) as { present: number } | undefined;
+    return row?.present === 1;
+  }
+
+  verifyCommittedDecision(input: {
+    operationId: string;
+    candidateId: string;
+    actorId: string;
+    decision: "approve" | "reject";
+    actionDigest: string;
+  }): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT 1 matched FROM workbench_approval_decisions
+         WHERE operation_id=? AND candidate_id=? AND actor_id=? AND decision=? AND action_digest=?`,
+      )
+      .get(
+        input.operationId,
+        input.candidateId,
+        input.actorId,
+        input.decision,
+        input.actionDigest,
+      ) as { matched: number } | undefined;
+    return row?.matched === 1;
+  }
+
   createRequest(input: {
     merchantId: string;
     actorId: string;
@@ -216,6 +255,7 @@ export class WorkbenchConfirmationStore {
     decision: "approve" | "reject";
     operationId: string;
     actionDigest: string;
+    actionSnapshot: Readonly<Record<string, unknown>>;
     expectedVersion: number;
     expiresAt: string;
   }): ConfirmationRequest {
@@ -240,8 +280,9 @@ export class WorkbenchConfirmationStore {
       .prepare(
         `INSERT INTO workbench_confirmation_requests
          (confirmation_id, request_ref, merchant_id, actor_id, candidate_id, approval_generation,
-          decision, operation_id, action_digest, expected_version, challenge, expires_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          decision, operation_id, action_digest, snapshot_json, expected_version, challenge,
+          expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         confirmationId,
@@ -253,12 +294,96 @@ export class WorkbenchConfirmationStore {
         input.decision,
         requireText(input.operationId, "operationId"),
         requireSha256(input.actionDigest),
+        JSON.stringify(input.actionSnapshot),
         input.expectedVersion,
         challenge,
         input.expiresAt,
         this.now(),
       );
     return { confirmationId, requestRef, challenge, expiresAt: input.expiresAt };
+  }
+
+  requestProjection(input: {
+    confirmationId: string;
+    merchantId: string;
+    actorId: string;
+  }): {
+    confirmation_id: string;
+    candidate_id: string;
+    decision: "approve" | "reject";
+    operation_id: string;
+    expected_version: number;
+    snapshot: Record<string, unknown>;
+    expires_at: string;
+  } {
+    const row = this.requireRequest(input.confirmationId);
+    if (row.merchant_id !== input.merchantId || row.actor_id !== input.actorId) {
+      throw new WorkbenchConfirmationError(
+        "confirmation_binding_mismatch",
+        "confirmation belongs to another merchant or actor",
+      );
+    }
+    const snapshotRow = this.db
+      .prepare("SELECT snapshot_json FROM workbench_confirmation_requests WHERE confirmation_id=?")
+      .get(input.confirmationId) as { snapshot_json: string };
+    return {
+      confirmation_id: row.confirmation_id,
+      candidate_id: row.candidate_id,
+      decision: row.decision,
+      operation_id: row.operation_id,
+      expected_version: row.expected_version,
+      snapshot: JSON.parse(snapshotRow.snapshot_json) as Record<string, unknown>,
+      expires_at: row.expires_at,
+    };
+  }
+
+  assertionOptions(input: {
+    confirmationId: string;
+    merchantId: string;
+    actorId: string;
+  }): {
+    challenge: string;
+    rp_id: string;
+    allow_credentials: Array<{ id: string; type: "public-key" }>;
+    user_verification: "required";
+    expires_at: string;
+  } {
+    const row = this.requireRequest(input.confirmationId);
+    if (row.merchant_id !== input.merchantId || row.actor_id !== input.actorId) {
+      throw new WorkbenchConfirmationError(
+        "confirmation_binding_mismatch",
+        "confirmation belongs to another merchant or actor",
+      );
+    }
+    const credentials = this.db
+      .prepare(
+        `SELECT credential_id, rp_id FROM workbench_webauthn_credentials
+         WHERE merchant_id=? AND actor_id=? AND revoked_at IS NULL ORDER BY credential_id`,
+      )
+      .all(input.merchantId, input.actorId) as Array<{ credential_id: string; rp_id: string }>;
+    if (credentials.length === 0) {
+      throw new WorkbenchConfirmationError(
+        "credential_unavailable",
+        "actor has no verified, non-revoked WebAuthn credential",
+      );
+    }
+    const rpId = credentials[0]!.rp_id;
+    if (credentials.some((credential) => credential.rp_id !== rpId)) {
+      throw new WorkbenchConfirmationError(
+        "credential_unavailable",
+        "actor credentials do not share the confirmation RP ID",
+      );
+    }
+    return {
+      challenge: row.challenge,
+      rp_id: rpId,
+      allow_credentials: credentials.map((credential) => ({
+        id: credential.credential_id,
+        type: "public-key" as const,
+      })),
+      user_verification: "required",
+      expires_at: row.expires_at,
+    };
   }
 
   finalizeDecision(input: {

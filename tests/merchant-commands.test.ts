@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { migrateMemorySchema } from "../src/agent/memory/schema.js";
 import {
   WriteApprovalCandidateStore,
+  contentHash,
   executeApprovedCandidate,
 } from "../src/agent/merchant/action-candidate.js";
 import {
@@ -287,6 +288,51 @@ describe("配套商家确认页面（src/merchant-admin/ 最小骨架）", () =>
     const prepared2 = await core.prepareInventoryUpdate({ sku: "sku-001", stock: 9 });
     await admin.rejectCandidate(prepared2.candidate.candidate_id, PRINCIPAL);
     expect((await client.getProduct("sku-001")).stock).toBe(3);
+    db.close();
+  });
+
+  it("已提交 WebAuthn 决定经 verifier 执行，不生成或接受 legacy token", async () => {
+    const { merchantAdminSurface } = await import("../src/merchant-admin/pending-page.js");
+    const { core, client, db } = setupCore();
+    const admin = merchantAdminSurface(core);
+    const prepared = await core.prepareInventoryUpdate({ sku: "sku-001", stock: 4 });
+    const digest = contentHash({
+      arguments: prepared.candidate.arguments,
+      preconditions: prepared.candidate.preconditions,
+    });
+    const verifier = {
+      verifyCommittedDecision: vi.fn((input: { operationId: string; actionDigest: string }) =>
+        input.operationId === "op-webauthn-1" && input.actionDigest === digest,
+      ),
+    };
+    const outcome = await admin.executeCommittedDecision!(
+      {
+        operationId: "op-webauthn-1",
+        candidateId: prepared.candidate.candidate_id,
+        actorId: PRINCIPAL,
+        decision: "approve",
+      },
+      verifier,
+    );
+    expect(outcome).toMatchObject({ kind: "executed" });
+    expect((await client.getProduct("sku-001")).stock).toBe(4);
+    expect(verifier.verifyCommittedDecision).toHaveBeenCalledWith(
+      expect.objectContaining({ actionDigest: digest, decision: "approve" }),
+    );
+
+    const rejected = await core.prepareInventoryUpdate({ sku: "sku-001", stock: 7 });
+    await expect(
+      admin.executeCommittedDecision!(
+        {
+          operationId: "forged-operation",
+          candidateId: rejected.candidate.candidate_id,
+          actorId: PRINCIPAL,
+          decision: "approve",
+        },
+        verifier,
+      ),
+    ).rejects.toThrow(/does not match/);
+    expect((await client.getProduct("sku-001")).stock).toBe(4);
     db.close();
   });
 

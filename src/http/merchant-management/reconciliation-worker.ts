@@ -40,6 +40,9 @@ export interface OutboxLease {
   actionStep: string;
   workerId: string;
   fencingToken: number;
+  actorId: string;
+  decision: "approve" | "reject";
+  actionDigest: string;
 }
 
 export interface ReconciliationLease {
@@ -63,6 +66,9 @@ interface OutboxRow {
   approval_generation: number;
   action_step: string;
   fencing_token: number;
+  actor_id: string;
+  decision: "approve" | "reject";
+  action_digest: string;
 }
 
 interface ReconciliationRow {
@@ -86,6 +92,13 @@ export class WorkbenchReconciliationStore {
     this.db.exec(SCHEMA);
   }
 
+  candidateIdForOperation(operationId: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT candidate_id FROM workbench_approval_decisions WHERE operation_id=?")
+      .get(operationId) as { candidate_id: string } | undefined;
+    return row?.candidate_id;
+  }
+
   leaseOutbox(merchantId: string, workerId: string, leaseMs = 30_000): OutboxLease | undefined {
     const stamp = this.now();
     const leaseExpires = new Date(Date.parse(stamp) + leaseMs).toISOString();
@@ -94,7 +107,7 @@ export class WorkbenchReconciliationStore {
       const row = this.db
         .prepare(
           `SELECT o.merchant_id, o.operation_id, d.candidate_id, d.approval_generation,
-                  o.action_step, o.fencing_token
+                  o.action_step, o.fencing_token, d.actor_id, d.decision, d.action_digest
            FROM workbench_approval_outbox o
            JOIN workbench_approval_decisions d ON d.operation_id = o.operation_id
            WHERE o.merchant_id = ?
@@ -132,6 +145,9 @@ export class WorkbenchReconciliationStore {
         actionStep: row.action_step,
         workerId,
         fencingToken: token,
+        actorId: row.actor_id,
+        decision: row.decision,
+        actionDigest: row.action_digest,
       };
     } catch (error) {
       this.db.exec("rollback");

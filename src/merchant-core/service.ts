@@ -43,6 +43,7 @@ import {
 import type { MerchantIntelligenceBackend } from "../agent/merchant/intelligence/backend.js";
 import type { MerchantOAuthStore } from "../auth/merchant-oauth.js";
 import { MerchantCommandLog } from "./commands.js";
+import type { CommittedDecisionProof, CommittedDecisionVerifier } from "./commands.js";
 import { MerchantExecutorRegistry, type ExecutorContext } from "./executor.js";
 import type { ApplyPolicyResult } from "./policy-runtime.js";
 import type { MerchantPolicy } from "../config/profile.js";
@@ -315,6 +316,17 @@ export class MerchantCoreService {
   /** 确认通道：拒绝候选（同上：单主体便捷包装）。 */
   rejectCandidate(commandId: string, confirmationToken?: string) {
     return this.commands.reject(commandId, this.commandPrincipalId, confirmationToken);
+  }
+
+  executeCommittedDecision(
+    input: Omit<CommittedDecisionProof, "actionDigest">,
+    verifier: CommittedDecisionVerifier,
+  ) {
+    return this.commands.executeCommittedDecision(input, verifier);
+  }
+
+  getCommand(commandId: string) {
+    return this.commands.getCandidate(commandId);
   }
 
   /**

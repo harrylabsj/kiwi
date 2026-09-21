@@ -82,6 +82,11 @@ import { requestsDisabledLocalImplementation } from "../../cloud/onboarding/loca
 import { checkStepSubmission, planWizard, WIZARD_STEPS } from "../../cloud/onboarding/steps.js";
 import type { Evidence, PlatformEvidenceResult } from "../../cloud/onboarding/types.js";
 import { createWorkbenchProblem, type WorkbenchProblemCode } from "./problem.js";
+import {
+  WorkbenchConfirmationError,
+  type WebAuthnAssertionInput,
+  type WorkbenchConfirmationStore,
+} from "./webauthn-confirmation.js";
 
 const API_PREFIX = "/merchant/api";
 const WORKBENCH_API_PREFIX = "/merchant/api/v1";
@@ -155,6 +160,8 @@ export interface MerchantManagementApiOptions {
       /** 平台报告的 applicationId（适配器从真实回执里取，不来自请求）。 */
     }) => Promise<PlatformEvidenceResult>;
   };
+  /** Workbench v1 trusted confirmation authority; absent means strong-confirmation routes fail closed. */
+  workbenchConfirmations?: WorkbenchConfirmationStore;
   log?: (line: string) => void;
   now?: () => Date;
 }
@@ -240,18 +247,25 @@ export function createMerchantManagementApiHandler(
       const rest =
         pathname === WORKBENCH_API_PREFIX ? "/" : pathname.slice(WORKBENCH_API_PREFIX.length);
       try {
-        if (method !== "GET") {
+        if (method === "GET") {
+          await routeWorkbenchV1Get(req, res, url, rest, requestId);
+          return;
+        }
+        if (method === "POST") {
+          await routeWorkbenchV1Post(req, res, rest, requestId);
+          return;
+        }
+        {
           writeWorkbenchProblem(
             res,
             "VALIDATION_ERROR",
             requestId,
             "请求方法不可用",
-            "该 Workbench 路由当前只接受 GET。",
-            { allow: "GET" },
+            "该 Workbench 路由当前只接受 GET/POST。",
+            { allow: "GET, POST" },
           );
           return;
         }
-        await routeWorkbenchV1Get(req, res, url, rest, requestId);
       } catch (error) {
         respondWorkbenchError(res, error, requestId);
       }
@@ -330,6 +344,21 @@ export function createMerchantManagementApiHandler(
       );
       return;
     }
+    const confirmationMatch = /^\/confirmations\/([^/]+)$/.exec(rest);
+    if (confirmationMatch !== null) {
+      const auth = requireActor(req);
+      writeJson(
+        res,
+        200,
+        requireWorkbenchConfirmations().requestProjection({
+          confirmationId: pathSegment(confirmationMatch[1] ?? ""),
+          merchantId: auth.ctx.merchantId,
+          actorId: auth.ctx.actorId,
+        }),
+        { "x-request-id": requestId },
+      );
+      return;
+    }
     writeWorkbenchProblem(
       res,
       "RESOURCE_NOT_FOUND",
@@ -337,6 +366,162 @@ export function createMerchantManagementApiHandler(
       "资源不存在",
       "Workbench API 路由不存在或尚未实现。",
     );
+  }
+
+  async function routeWorkbenchV1Post(
+    req: IncomingMessage,
+    res: ServerResponse,
+    rest: string,
+    requestId: string,
+  ): Promise<void> {
+    if (rest === "/confirmations") {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "approvals:decide");
+      const confirmations = requireWorkbenchConfirmations();
+      if (!confirmations.hasUsableCredential(auth.ctx.merchantId, auth.ctx.actorId)) {
+        throw new WorkbenchConfirmationError(
+          "credential_unavailable",
+          "actor has no verified WebAuthn credential",
+        );
+      }
+      const fields = objectFields(await readJsonBody(req), ["candidate_id", "decision"]);
+      const candidateId = requireString(fields["candidate_id"], "candidate_id");
+      const decision = requireDecision(fields["decision"]);
+      const candidate = options.listPending().find((item) => item.candidate_id === candidateId);
+      if (candidate === undefined || candidate.status !== "pending_approval") {
+        throw new ManagementError("not_found", `unknown pending candidate: ${candidateId}`);
+      }
+      const expiresAt = new Date(
+        Math.min(Date.parse(candidate.expires_at), now().getTime() + CONFIRMATION_TTL_MS),
+      ).toISOString();
+      const confirmation = confirmations.createRequest({
+        merchantId: auth.ctx.merchantId,
+        actorId: auth.ctx.actorId,
+        candidateId,
+        approvalGeneration: 1,
+        decision,
+        operationId: `wop_${randomBytes(16).toString("hex")}`,
+        actionDigest: contentHash({
+          arguments: candidate.arguments,
+          preconditions: candidate.preconditions,
+        }),
+        actionSnapshot: {
+          merchant_id: auth.ctx.merchantId,
+          candidate_id: candidateId,
+          decision,
+          tool: candidate.tool,
+          arguments: candidate.arguments,
+          preconditions: candidate.preconditions,
+          risk: candidate.risk,
+          candidate_expires_at: candidate.expires_at,
+        },
+        expectedVersion: 1,
+        expiresAt,
+      });
+      writeJson(
+        res,
+        201,
+        {
+          confirmation_id: confirmation.confirmationId,
+          request_ref: confirmation.requestRef,
+          expires_at: confirmation.expiresAt,
+        },
+        { "x-request-id": requestId },
+      );
+      return;
+    }
+
+    const optionsMatch = /^\/confirmations\/([^/]+)\/assertion-options$/.exec(rest);
+    if (optionsMatch !== null) {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      writeJson(
+        res,
+        200,
+        requireWorkbenchConfirmations().assertionOptions({
+          confirmationId: pathSegment(optionsMatch[1] ?? ""),
+          merchantId: auth.ctx.merchantId,
+          actorId: auth.ctx.actorId,
+        }),
+        { "x-request-id": requestId },
+      );
+      return;
+    }
+
+    const decisionMatch = /^\/approvals\/([^/]+)\/decisions$/.exec(rest);
+    if (decisionMatch !== null) {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "approvals:decide");
+      const candidateId = pathSegment(decisionMatch[1] ?? "");
+      const fields = objectFields(await readJsonBody(req), [
+        "confirmation_id",
+        "decision",
+        "expected_version",
+        "assertion",
+      ]);
+      const assertionFields = objectFields(fields["assertion"], [
+        "credential_id",
+        "client_data_json",
+        "authenticator_data",
+        "signature",
+      ]);
+      const assertion: WebAuthnAssertionInput = {
+        credentialId: requireString(assertionFields["credential_id"], "credential_id"),
+        clientDataJSON: requireString(assertionFields["client_data_json"], "client_data_json"),
+        authenticatorData: requireString(assertionFields["authenticator_data"], "authenticator_data"),
+        signature: requireString(assertionFields["signature"], "signature"),
+      };
+      const candidate = options.listPending().find((item) => item.candidate_id === candidateId);
+      if (candidate === undefined || candidate.status !== "pending_approval") {
+        throw new ManagementError("not_found", `unknown pending candidate: ${candidateId}`);
+      }
+      const outcome = requireWorkbenchConfirmations().finalizeDecision({
+        confirmationId: requireString(fields["confirmation_id"], "confirmation_id"),
+        merchantId: auth.ctx.merchantId,
+        actorId: auth.ctx.actorId,
+        candidateId,
+        approvalGeneration: 1,
+        decision: requireDecision(fields["decision"]),
+        actionDigest: contentHash({
+          arguments: candidate.arguments,
+          preconditions: candidate.preconditions,
+        }),
+        expectedVersion: requireInteger(fields["expected_version"], "expected_version"),
+        assertion,
+      });
+      writeJson(
+        res,
+        outcome.kind === "decided" ? 202 : 200,
+        {
+          operation_id: outcome.operationId,
+          status: outcome.kind === "decided" ? "accepted" : "already_decided",
+          decision: outcome.decision,
+          ...(outcome.kind === "already_decided" ? { decided_by: outcome.actorId } : {}),
+        },
+        { "x-request-id": requestId },
+      );
+      return;
+    }
+
+    writeWorkbenchProblem(
+      res,
+      "RESOURCE_NOT_FOUND",
+      requestId,
+      "资源不存在",
+      "Workbench 写路由不存在或尚未实现。",
+    );
+  }
+
+  function requireWorkbenchConfirmations(): WorkbenchConfirmationStore {
+    if (options.workbenchConfirmations === undefined) {
+      throw new WorkbenchConfirmationError(
+        "credential_unavailable",
+        "trusted confirmation channel is not configured",
+      );
+    }
+    return options.workbenchConfirmations;
   }
 
   async function routeGet(
@@ -1610,6 +1795,13 @@ function requireInteger(value: unknown, field: string): number {
   return value;
 }
 
+function requireDecision(value: unknown): "approve" | "reject" {
+  if (value !== "approve" && value !== "reject") {
+    throw new ManagementError("invalid_input", "decision must be approve or reject");
+  }
+  return value;
+}
+
 function cookieValue(req: IncomingMessage, name: string): string | undefined {
   const header = req.headers.cookie;
   if (header === undefined) return undefined;
@@ -1687,6 +1879,19 @@ function writeWorkbenchProblem(
 }
 
 function respondWorkbenchError(res: ServerResponse, error: unknown, requestId: string): void {
+  if (error instanceof WorkbenchConfirmationError) {
+    const mapping: Record<WorkbenchConfirmationError["code"], WorkbenchProblemCode> = {
+      invalid_registration: "CONFIRMATION_INVALID",
+      confirmation_not_found: "RESOURCE_NOT_FOUND",
+      confirmation_expired: "CONFIRMATION_EXPIRED",
+      confirmation_consumed: "CONFIRMATION_INVALID",
+      confirmation_binding_mismatch: "CONFIRMATION_INVALID",
+      credential_unavailable: "CONFIRMATION_CHANNEL_UNAVAILABLE",
+      assertion_invalid: "CONFIRMATION_INVALID",
+    };
+    writeWorkbenchProblem(res, mapping[error.code], requestId, "可信确认未完成", error.message);
+    return;
+  }
   if (error instanceof ActorContextError) {
     if (error.code === "expired_context") {
       writeWorkbenchProblem(

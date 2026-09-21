@@ -44,6 +44,12 @@ import { createMerchantFeedApiHandler } from "../http/merchant-feed-api.js";
 import { MerchantImportDraftStore } from "../http/merchant-management/draft-store.js";
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
+import { WorkbenchConfirmationStore } from "../http/merchant-management/webauthn-confirmation.js";
+import {
+  WorkbenchReconciliationStore,
+  WorkbenchReconciliationWorker,
+  type OperationResult,
+} from "../http/merchant-management/reconciliation-worker.js";
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
 import { MerchantFeedStore } from "../merchant/feed-store.js";
 import { OnboardingStore } from "./onboarding/store.js";
@@ -334,8 +340,11 @@ export async function bootstrapCloudRuntime(
   let managementDb: DatabaseSync | undefined;
   let merchantApiHandler: CloudRequestListener | undefined;
   let publicFeedHandler: CloudRequestListener | undefined;
+  let reconciliationTimer: ReturnType<typeof setInterval> | undefined;
   if (adminOptions !== undefined) {
     managementDb = new DatabaseSync(path.join(config.dataDir, "state.sqlite"));
+    const workbenchConfirmations = new WorkbenchConfirmationStore({ db: managementDb });
+    const reconciliationStore = new WorkbenchReconciliationStore({ db: managementDb });
     const feedStore = new MerchantFeedStore({
       db: managementDb,
       cursorKey: loadOrCreateFeedCursorKey(config.dataDir),
@@ -442,6 +451,7 @@ export async function bootstrapCloudRuntime(
       // 取回执的能力尚未落地，因此需要权威证据的步骤会明确 503（不推进），
       // 绝不用请求体自报的证据顶上（T029）。
       onboarding: { store: new OnboardingStore(managementDb) },
+      workbenchConfirmations,
       serviceState,
       readiness: async () => {
         const report = await readiness();
@@ -449,6 +459,67 @@ export async function bootstrapCloudRuntime(
       },
       log,
     });
+
+    const worker = new WorkbenchReconciliationWorker(reconciliationStore, {
+      workerId: `runtime:${profile.agent_id}`,
+      merchantId: profile.owner_id,
+      execute: async (lease): Promise<OperationResult> => {
+        if (adminOptions.surface.executeCommittedDecision === undefined) {
+          return { status: "failed", error: "committed-decision execution is not configured" };
+        }
+        try {
+          await adminOptions.surface.executeCommittedDecision(
+            {
+              operationId: lease.operationId,
+              candidateId: lease.candidateId,
+              actorId: lease.actorId,
+              decision: lease.decision,
+            },
+            workbenchConfirmations,
+          );
+          return { status: "succeeded" };
+        } catch (error) {
+          // The executor may have crossed an external side-effect boundary before throwing.
+          // Never resubmit: persist UNKNOWN and let the query path reconcile the same operation.
+          return {
+            status: "unknown",
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+      query: async (lease): Promise<OperationResult> => {
+        if (adminOptions.surface.getCandidate === undefined) {
+          return { status: "failed", error: "candidate query is not configured" };
+        }
+        const candidate = adminOptions.surface.getCandidate(
+          reconciliationStore.candidateIdForOperation(lease.operationId) ?? "",
+        );
+        if (candidate === undefined) return { status: "failed", error: "candidate is unavailable" };
+        if (candidate.status === "executed" || candidate.status === "rejected") {
+          return { status: "succeeded" };
+        }
+        if (candidate.status === "expired" || candidate.status === "superseded") {
+          return { status: "failed", error: `candidate ended as ${candidate.status}` };
+        }
+        return { status: "unknown", error: `candidate remains ${candidate.status}` };
+      },
+    });
+    let workerRunning = false;
+    const tick = (): void => {
+      if (workerRunning) return;
+      workerRunning = true;
+      void worker
+        .runOnce()
+        .catch((error: unknown) => {
+          log(`[kiwi-cloud] Workbench reconciliation tick failed: ${error instanceof Error ? error.message : String(error)}\n`);
+        })
+        .finally(() => {
+          workerRunning = false;
+        });
+    };
+    reconciliationTimer = setInterval(tick, 5_000);
+    reconciliationTimer.unref();
+    tick();
   }
 
   // 4.6) 商家工作台首页（/merchant/ 静态壳；数据经 /merchant/api/* 认证获取）。
@@ -504,6 +575,7 @@ export async function bootstrapCloudRuntime(
       });
     });
   } catch (err) {
+    if (reconciliationTimer !== undefined) clearInterval(reconciliationTimer);
     managementDb?.close();
     core.close();
     await assembly.close().catch(() => undefined);
@@ -539,6 +611,7 @@ export async function bootstrapCloudRuntime(
         server.closeAllConnections();
       });
       await merchantHandler.close().catch(() => undefined);
+      if (reconciliationTimer !== undefined) clearInterval(reconciliationTimer);
       core.close();
       await assembly.close().catch(() => undefined);
       managementDb?.close();

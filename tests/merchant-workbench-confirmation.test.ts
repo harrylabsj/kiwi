@@ -56,6 +56,7 @@ function request(
     decision: input.decision ?? "approve",
     operationId: input.operationId ?? `operation-${actorId}`,
     actionDigest: input.digest ?? DIGEST,
+    actionSnapshot: { merchant: MERCHANT, candidate: input.candidateId ?? "candidate-1" },
     expectedVersion: input.version ?? 7,
     expiresAt: EXPIRES,
   });
@@ -131,11 +132,52 @@ describe("Workbench WebAuthn trusted confirmation", () => {
     const { db, store, actors } = fixture();
     const actor = actors[0]!;
     const confirmation = request(store, actor.actorId);
+    expect(
+      store.requestProjection({
+        confirmationId: confirmation.confirmationId,
+        merchantId: MERCHANT,
+        actorId: actor.actorId,
+      }),
+    ).toMatchObject({
+      candidate_id: "candidate-1",
+      decision: "approve",
+      snapshot: { merchant: MERCHANT, candidate: "candidate-1" },
+    });
+    expect(
+      store.assertionOptions({
+        confirmationId: confirmation.confirmationId,
+        merchantId: MERCHANT,
+        actorId: actor.actorId,
+      }),
+    ).toMatchObject({
+      challenge: confirmation.challenge,
+      rp_id: RP_ID,
+      user_verification: "required",
+      allow_credentials: [{ id: actor.credentialId, type: "public-key" }],
+    });
     expect(store.finalizeDecision(decisionInput(confirmation, actor))).toEqual({
       kind: "decided",
       decision: "approve",
       operationId: "operation-owner-a",
     });
+    expect(
+      store.verifyCommittedDecision({
+        operationId: "operation-owner-a",
+        candidateId: "candidate-1",
+        actorId: actor.actorId,
+        decision: "approve",
+        actionDigest: DIGEST,
+      }),
+    ).toBe(true);
+    expect(
+      store.verifyCommittedDecision({
+        operationId: "forged",
+        candidateId: "candidate-1",
+        actorId: actor.actorId,
+        decision: "approve",
+        actionDigest: DIGEST,
+      }),
+    ).toBe(false);
     for (const table of [
       "workbench_approval_decisions",
       "workbench_approval_operations",
