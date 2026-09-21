@@ -14,7 +14,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { bootstrapCloudRuntime } from "../src/cloud/bootstrap.js";
+import { bootstrapCloudRuntime, CloudStartupError } from "../src/cloud/bootstrap.js";
 import { finalizeEnvelope } from "../src/negotiation/domain/envelope.js";
 import { CAPABILITY } from "./negotiation-helpers.js";
 
@@ -145,22 +145,31 @@ async function startInstance(priceMajor: number, floorMajor = 80.0, available = 
   const dataDir = tempDir("kiwi-t018-");
   const profilePath = writeProfile(dataDir, commerce, floorMajor);
   trackEnv("KIWI_COMMERCE_URL", commerce);
-  const port = await freePort();
-  const instance = await bootstrapCloudRuntime({
-    env: {
-      PORT: String(port),
-      KIWI_CLOUD_PUBLIC_ORIGIN: "https://t018-runtime.example.app.workbuddy.host",
-      KIWI_CLOUD_DATA_DIR: dataDir,
-      KIWI_CLOUD_PROFILE: profilePath,
-      KIWI_CLOUD_A2A_AUTH: `bearer:KIWI_T018_TOKEN`,
-      KIWI_T018_TOKEN: BEARER,
-      KIWI_CLOUD_READINESS_SKU: SKU,
-    },
-    artifactRoot: "/workspace",
-    log: () => {},
-  });
-  instances.push(instance);
-  return { base: `http://127.0.0.1:${port}`, dataDir };
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const port = await freePort();
+    try {
+      const instance = await bootstrapCloudRuntime({
+        env: {
+          PORT: String(port),
+          KIWI_CLOUD_PUBLIC_ORIGIN: "https://t018-runtime.example.app.workbuddy.host",
+          KIWI_CLOUD_DATA_DIR: dataDir,
+          KIWI_CLOUD_PROFILE: profilePath,
+          KIWI_CLOUD_A2A_AUTH: `bearer:KIWI_T018_TOKEN`,
+          KIWI_T018_TOKEN: BEARER,
+          KIWI_CLOUD_READINESS_SKU: SKU,
+        },
+        artifactRoot: "/workspace",
+        log: () => {},
+      });
+      instances.push(instance);
+      return { base: `http://127.0.0.1:${port}`, dataDir };
+    } catch (error) {
+      if (!(error instanceof CloudStartupError) || error.code !== "PORT_IN_USE" || attempt === 4) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("unreachable: port retry loop exhausted");
 }
 
 function rfqEnvelope(messageId: string) {

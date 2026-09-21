@@ -512,6 +512,32 @@ export class WorkbenchConfirmationStore {
     };
   }
 
+  requestProjectionByRef(input: {
+    requestRef: string;
+    merchantId: string;
+    actorId: string;
+  }): ReturnType<WorkbenchConfirmationStore["requestProjection"]> {
+    const row = this.db
+      .prepare(
+        `SELECT confirmation_id FROM workbench_confirmation_requests
+         WHERE request_ref=? AND merchant_id=? AND actor_id=?`,
+      )
+      .get(input.requestRef, input.merchantId, input.actorId) as
+      | { confirmation_id: string }
+      | undefined;
+    if (row === undefined) {
+      throw new WorkbenchConfirmationError(
+        "confirmation_not_found",
+        "unknown confirmation request reference",
+      );
+    }
+    return this.requestProjection({
+      confirmationId: row.confirmation_id,
+      merchantId: input.merchantId,
+      actorId: input.actorId,
+    });
+  }
+
   assertionOptions(input: {
     confirmationId: string;
     merchantId: string;

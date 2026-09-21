@@ -43,6 +43,7 @@ import { createMerchantManagementApiHandler } from "../http/merchant-management/
 import { createMerchantFeedApiHandler } from "../http/merchant-feed-api.js";
 import { MerchantImportDraftStore } from "../http/merchant-management/draft-store.js";
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
+import { createTrustedWorkbenchPageHandler } from "../http/merchant-management/trusted-page.js";
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
 import { WorkbenchConfirmationStore } from "../http/merchant-management/webauthn-confirmation.js";
 import {
@@ -538,6 +539,7 @@ export async function bootstrapCloudRuntime(
     merchantHandler: merchantHandler.handler,
     ...(merchantApiHandler !== undefined ? { merchantApiHandler } : {}),
     ...(publicFeedHandler !== undefined ? { publicFeedHandler } : {}),
+    trustedPageHandler: createTrustedWorkbenchPageHandler(),
     merchantHomePage,
     readiness,
     a2aPaths: [CLOUD_A2A_PATH],

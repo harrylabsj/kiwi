@@ -51,6 +51,8 @@ export interface CloudRouterOptions {
   buyerHandler?: CloudRequestListener;
   /** 匿名公开 Feed；不得与 Buyer/管理认证缓存边界混用。 */
   publicFeedHandler?: CloudRequestListener;
+  /** 独立顶层 WebAuthn 注册/确认页。 */
+  trustedPageHandler?: CloudRequestListener;
   /** 就绪检查（每次请求重新执行，不缓存）。 */
   readiness: () => Promise<ReadinessReport>;
   /** A2A 端点路径（与 A2AServer 的 cardConfig.a2aPath 保持一致）。 */
@@ -161,6 +163,14 @@ export function createCloudRouter(options: CloudRouterOptions): CloudRequestList
       (pathname === "/merchant" || pathname === "/merchant/")
     ) {
       options.merchantHomePage(req, res);
+      return;
+    }
+
+    if (
+      options.trustedPageHandler !== undefined &&
+      (pathname === "/merchant/trusted" || pathname.startsWith("/merchant/trusted/"))
+    ) {
+      options.trustedPageHandler(req, res);
       return;
     }
 

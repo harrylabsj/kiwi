@@ -370,6 +370,21 @@ export function createMerchantManagementApiHandler(
       );
       return;
     }
+    const confirmationRefMatch = /^\/confirmations\/by-ref\/([^/]+)$/.exec(rest);
+    if (confirmationRefMatch !== null) {
+      const auth = requireActor(req);
+      writeJson(
+        res,
+        200,
+        requireWorkbenchConfirmations().requestProjectionByRef({
+          requestRef: pathSegment(confirmationRefMatch[1] ?? ""),
+          merchantId: auth.ctx.merchantId,
+          actorId: auth.ctx.actorId,
+        }),
+        { "x-request-id": requestId },
+      );
+      return;
+    }
     writeWorkbenchProblem(
       res,
       "RESOURCE_NOT_FOUND",
