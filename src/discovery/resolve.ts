@@ -70,6 +70,7 @@ import { computeCapabilityIntersection, intersectionView } from "./ucp/intersect
 import type { UcpIntersectionView } from "./ucp/intersect.js";
 import type { UcpProfile } from "./ucp/types.js";
 import { normalizeHostingMode } from "./catalog-source/index.js";
+import { CloudCardSource } from "./catalog-source/cloud-card.js";
 import type {
   CandidateAgent,
   CatalogSearchQuery,
@@ -115,6 +116,14 @@ export interface CatalogDiscoveryDeps {
    * unreachable}；true 时这些候选也进入 fresh resolve（风险自负，文档注明）。
    */
   includeBlocked?: boolean;
+  /**
+   * **云端托管名片**的验签来源（M3，设计 §11.4/§12.1）。候选的 `agent_card_url`
+   * 指向 Catalog 稳定读地址时，必须经它做绑定验签才能升级为可信档案。
+   *
+   * 不配置时：这类候选被**跳过**（fail-closed）——把"从目录读到的名片"直接当成
+   * 已验证身份，正是设计要禁止的降级。
+   */
+  cloud?: CloudCardSource;
 }
 
 export interface DiscoveryDeps {
@@ -199,6 +208,34 @@ const BLOCKED_CATALOG_VERIFICATION_STATUSES: ReadonlySet<VerificationStatus> = n
 ]);
 
 const WELL_KNOWN_AGENT_CARD_PATH = "/.well-known/agent-card.json";
+
+/**
+ * Catalog **云端托管名片的稳定读地址**（设计 §11.3 / M3）：
+ * `/v1/agents/{catalog_agent_id}/agent-card.json`。
+ *
+ * 认出它有两个用处，都属 §12.2 的凭据作用域分离与 T042：
+ *   1. 这类地址**匿名可读**，抓取时绝不携带 `deps.headers`（商家 A2A 出站凭据）；
+ *   2. 它是"名片由 Catalog 托管"的信号——这种名片必须走 `CloudCardSource`
+ *      做绑定验签，而不能只靠通用 fetch 就当已验证。
+ */
+const CATALOG_HOSTED_CARD_PATH = /^\/v1\/agents\/[^/]+\/agent-card\.json$/;
+
+function normOriginWithSlash(value: string): string {
+  try {
+    return `${new URL(value).origin}/`;
+  } catch {
+    return value;
+  }
+}
+
+export function isCatalogHostedCardUrl(url: string | URL): boolean {
+  try {
+    const parsed = typeof url === "string" ? new URL(url) : url;
+    return CATALOG_HOSTED_CARD_PATH.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * 从校验后的 UCP profile 挑出 a2a transport 服务的 endpoint（Agent Card URL）。
@@ -318,7 +355,14 @@ export class AgentDiscovery {
         response = await fetchImpl(safeUrl.href, {
           redirect: "manual",
           signal: controller.signal,
-          headers: { accept: "application/json", ...this.deps.headers },
+          // 凭据作用域分离（设计 §12.2 / T042）：Catalog 的公开读地址**不带任何凭据**。
+          // 它本来就是匿名可读的（这正是"独立凭据作用域"的前提），而 deps.headers 是
+          // 给商家 A2A 节点的出站凭据——把它们发给 Catalog 等于把商家令牌交给目录方，
+          // 也让"抓 Card"与"访问 Runtime"共用了一套凭据。
+          headers: {
+            accept: "application/json",
+            ...(isCatalogHostedCardUrl(safeUrl) ? {} : this.deps.headers),
+          },
         });
       } catch (err) {
         throw new DiscoveryError(
@@ -446,6 +490,28 @@ export class AgentDiscovery {
 
     const raw = await this.fetchCard(cardUrl);
 
+    return this.profileFromCard(raw, {
+      source:
+        input.agentCardUrl !== undefined
+          ? `card:${input.agentCardUrl}`
+          : `domain:${input.domain ?? url}`,
+      ...(ucpProfile !== undefined ? { ucp_profile: ucpProfile } : {}),
+      ...(ucpIntersection !== undefined ? { ucp_intersection: ucpIntersection } : {}),
+      ...(ucpFallbackReason !== undefined ? { ucp_fallback_reason: ucpFallbackReason } : {}),
+    });
+  }
+
+  /**
+   * 已取得的 Card → CounterpartyProfile（解析、通道候选、fail-closed 判定）。
+   *
+   * 抽出来是为了让**云端托管名片**复用同一条校验/通道路径：那条路径的 Card 来自
+   * `CloudCardSource`（已经过绑定验签），但"Card 内容 → 通道候选"的规则必须完全
+   * 一致——否则云端名片会比直连名片更宽松或更严格，两条路各自漂移。
+   */
+  private profileFromCard(
+    raw: unknown,
+    extras: Pick<CounterpartyProfile, "source"> & Partial<CounterpartyProfile>,
+  ): CounterpartyProfile {
     let card: AgentCard;
     try {
       card = parseAgentCard(raw);
@@ -476,17 +542,11 @@ export class AgentDiscovery {
     }
 
     return {
+      ...extras,
       identity: this.identityFor(card),
-      source:
-        input.agentCardUrl !== undefined
-          ? `card:${input.agentCardUrl}`
-          : `domain:${input.domain ?? url}`,
       agent_card: card,
       intersection,
       channel_candidates: candidates,
-      ...(ucpProfile !== undefined ? { ucp_profile: ucpProfile } : {}),
-      ...(ucpIntersection !== undefined ? { ucp_intersection: ucpIntersection } : {}),
-      ...(ucpFallbackReason !== undefined ? { ucp_fallback_reason: ucpFallbackReason } : {}),
     };
   }
 
@@ -522,6 +582,14 @@ export class AgentDiscovery {
       if (!this.isCatalogCandidateAllowed(candidate)) continue;
       const input = this.resolveInputForCandidate(candidate);
       if (input === undefined) continue;
+      if (input.agentCardUrl !== undefined && isCatalogHostedCardUrl(input.agentCardUrl)) {
+        // 云端托管名片：必须经绑定验签（§11.4/§12.1），不走通用 fetch 路径。
+        // 未配置 cloud 来源 → 跳过该候选（fail-closed，绝不把目录读到的东西当已验证）。
+        const cloud = catalogDeps.cloud;
+        if (cloud === undefined) continue;
+        results.push(await this.resolveCloudCandidate(candidate, input.agentCardUrl, cloud));
+        continue;
+      }
       // 现有 resolve() 实时拉取校验（fresh verification）。失败 propagate。
       const profile = await this.resolve(input);
       const channelCandidates = applyHostingMode(
@@ -538,6 +606,50 @@ export class AgentDiscovery {
   private isCatalogCandidateAllowed(candidate: CandidateAgent): boolean {
     if (this.deps.catalog?.includeBlocked === true) return true;
     return !BLOCKED_CATALOG_VERIFICATION_STATUSES.has(candidate.verification.status);
+  }
+
+  /**
+   * 云端托管候选 → 已验签档案（M3 / 设计 §12.1）。
+   *
+   * 与通用路径的差别**只有 Card 的来源与验签**：Card 与绑定声明都从 Catalog 公开读
+   * 地址取得（**不带任何凭据**），经 `CloudCardSource` 完成签名验证、发行者比对、
+   * 端点归属与 SSRF 检查；此后"Card → 通道候选"完全走同一条 `profileFromCard`，
+   * 两条路不各自漂移。
+   */
+  private async resolveCloudCandidate(
+    candidate: CandidateAgent,
+    cardUrl: string,
+    cloud: CloudCardSource,
+  ): Promise<ResolvedCatalogCandidate> {
+    const parsed = new URL(cardUrl);
+    // 候选指向的 Catalog 必须就是**我们配置了信任根的那个**：换一个 origin 意味着
+    // 换一套发行者，而信任根是本地的——不匹配就拒绝，绝不"跟着候选换信任根"。
+    if (`${parsed.origin}/` !== normOriginWithSlash(cloud.cardUrl("x")) || !isCatalogHostedCardUrl(parsed)) {
+      throw new DiscoveryError(
+        "card_fetch_failed",
+        `cloud candidate card URL must be on the configured catalog origin: ${cardUrl}`,
+      );
+    }
+    const segments = parsed.pathname.split("/").filter((segment) => segment.length > 0);
+    const agentId = decodeURIComponent(segments[segments.length - 2] ?? "");
+    if (agentId === "") {
+      throw new DiscoveryError("card_fetch_failed", `cloud candidate card URL has no agent id: ${cardUrl}`);
+    }
+    const resolved = await cloud.resolveCloudAgent(agentId);
+    const profile = this.profileFromCard(resolved.card, {
+      source: `catalog-card:${cardUrl}`,
+    });
+    const channelCandidates = applyHostingMode(
+      profile.channel_candidates,
+      normalizeHostingMode(candidate.hosting.mode),
+    );
+    if (channelCandidates.length === 0) {
+      throw new DiscoveryError(
+        "no_channel_candidate",
+        `no usable channel candidate for cloud agent "${agentId}" under hosting mode ${candidate.hosting.mode} (fail-closed)`,
+      );
+    }
+    return { candidate, profile: { ...profile, channel_candidates: channelCandidates } };
   }
 
   /**
