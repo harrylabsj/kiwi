@@ -87,6 +87,7 @@ import {
   type WebAuthnAssertionInput,
   type WorkbenchConfirmationStore,
 } from "./webauthn-confirmation.js";
+import type { RegistrationResponseJSON } from "@simplewebauthn/server";
 
 const API_PREFIX = "/merchant/api";
 const WORKBENCH_API_PREFIX = "/merchant/api/v1";
@@ -162,6 +163,16 @@ export interface MerchantManagementApiOptions {
   };
   /** Workbench v1 trusted confirmation authority; absent means strong-confirmation routes fail closed. */
   workbenchConfirmations?: WorkbenchConfirmationStore;
+  /** Independent registration authorization. Management session alone must never satisfy this callback. */
+  webauthnRegistration?: {
+    rpName: string;
+    rpId: string;
+    origin: string;
+    authorize: (
+      request: IncomingMessage,
+      actor: VerifiedActorContext,
+    ) => boolean | Promise<boolean>;
+  };
   log?: (line: string) => void;
   now?: () => Date;
 }
@@ -374,6 +385,42 @@ export function createMerchantManagementApiHandler(
     rest: string,
     requestId: string,
   ): Promise<void> {
+    if (rest === "/webauthn/registrations/options") {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      const registration = await requireRegistrationAuthorization(req, auth.ctx);
+      const begun = await requireWorkbenchConfirmations().beginCredentialRegistration({
+        merchantId: auth.ctx.merchantId,
+        actorId: auth.ctx.actorId,
+        rpName: registration.rpName,
+        rpId: registration.rpId,
+        origin: registration.origin,
+        userName: auth.ctx.actorId,
+        userDisplayName: auth.ctx.actorId,
+      });
+      writeJson(res, 201, begun, { "x-request-id": requestId });
+      return;
+    }
+
+    const registrationVerify = /^\/webauthn\/registrations\/([^/]+)\/verify$/.exec(rest);
+    if (registrationVerify !== null) {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      await requireRegistrationAuthorization(req, auth.ctx);
+      const body = await readJsonBody(req);
+      if (body === null || typeof body !== "object" || Array.isArray(body)) {
+        throw new ManagementError("invalid_input", "registration response must be an object");
+      }
+      const result = await requireWorkbenchConfirmations().finishCredentialRegistration({
+        registrationId: pathSegment(registrationVerify[1] ?? ""),
+        merchantId: auth.ctx.merchantId,
+        actorId: auth.ctx.actorId,
+        response: body as unknown as RegistrationResponseJSON,
+      });
+      writeJson(res, 201, result, { "x-request-id": requestId });
+      return;
+    }
+
     if (rest === "/confirmations") {
       const auth = requireActor(req);
       assertWriteGuards(req, auth.sessionId);
@@ -522,6 +569,20 @@ export function createMerchantManagementApiHandler(
       );
     }
     return options.workbenchConfirmations;
+  }
+
+  async function requireRegistrationAuthorization(
+    req: IncomingMessage,
+    actor: VerifiedActorContext,
+  ): Promise<NonNullable<MerchantManagementApiOptions["webauthnRegistration"]>> {
+    const registration = options.webauthnRegistration;
+    if (registration === undefined || !(await registration.authorize(req, actor))) {
+      throw new WorkbenchConfirmationError(
+        "credential_unavailable",
+        "independent WebAuthn registration authorization is unavailable",
+      );
+    }
+    return registration;
   }
 
   async function routeGet(

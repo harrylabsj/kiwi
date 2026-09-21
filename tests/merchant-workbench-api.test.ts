@@ -66,6 +66,14 @@ beforeAll(async () => {
       serviceState: new MutableServiceState("OPERATING"),
       readiness: async () => ({ ready: true, checks: {} }),
       workbenchConfirmations: confirmations,
+      webauthnRegistration: {
+        rpName: "Kiwi Merchant",
+        rpId: RP_ID,
+        origin: ORIGIN,
+        // Test injection represents an independent registration channel; production bootstrap
+        // intentionally does not configure this callback until a real channel is verified.
+        authorize: () => true,
+      },
       now: () => NOW,
     }),
   );
@@ -129,6 +137,35 @@ function assertion(challenge: string): {
 }
 
 describe("Workbench v1 trusted confirmation API", () => {
+  it("issues registration options only through the independent authorization callback", async () => {
+    const response = await post("/merchant/api/v1/webauthn/registrations/options", {});
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as {
+      registration_id: string;
+      options: { challenge: string; rp: { id: string }; authenticatorSelection: object };
+    };
+    expect(body).toMatchObject({
+      registration_id: expect.stringMatching(/^wrg_/),
+      options: {
+        challenge: expect.any(String),
+        rp: { id: RP_ID },
+        authenticatorSelection: { userVerification: "required" },
+      },
+    });
+    const forged = await post(
+      `/merchant/api/v1/webauthn/registrations/${encodeURIComponent(body.registration_id)}/verify`,
+      {
+        id: "forged",
+        rawId: "forged",
+        response: { clientDataJSON: "forged", attestationObject: "forged" },
+        clientExtensionResults: {},
+        type: "public-key",
+      },
+    );
+    expect(forged.status).toBe(403);
+    expect(await forged.json()).toMatchObject({ code: "CONFIRMATION_INVALID" });
+  });
+
   it("freezes a server snapshot, returns assertion options and atomically accepts the decision", async () => {
     const created = await post("/merchant/api/v1/confirmations", {
       candidate_id: candidate.candidate_id,

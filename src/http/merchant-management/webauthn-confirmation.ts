@@ -11,12 +11,21 @@
  */
 
 import {
+  createPublicKey,
   createHash,
   randomBytes,
   timingSafeEqual,
   verify as verifySignature,
+  webcrypto,
 } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+  type RegistrationResponseJSON,
+  type VerifiedRegistrationResponse,
+} from "@simplewebauthn/server";
+import { COSEALG, convertCOSEtoPKCS } from "@simplewebauthn/server/helpers";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS workbench_webauthn_credentials (
@@ -29,6 +38,17 @@ CREATE TABLE IF NOT EXISTS workbench_webauthn_credentials (
   sign_count INTEGER NOT NULL,
   created_at TEXT NOT NULL,
   revoked_at TEXT
+);
+CREATE TABLE IF NOT EXISTS workbench_webauthn_registrations (
+  registration_id TEXT PRIMARY KEY,
+  merchant_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  challenge TEXT NOT NULL,
+  rp_id TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  used_at TEXT
 );
 CREATE TABLE IF NOT EXISTS workbench_confirmation_requests (
   confirmation_id TEXT PRIMARY KEY,
@@ -157,10 +177,16 @@ export class WorkbenchConfirmationError extends Error {
 export class WorkbenchConfirmationStore {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
+  private readonly registrationVerifier: typeof verifyRegistrationResponse;
 
-  constructor(options: { db: DatabaseSync; now?: () => string }) {
+  constructor(options: {
+    db: DatabaseSync;
+    now?: () => string;
+    registrationVerifier?: typeof verifyRegistrationResponse;
+  }) {
     this.db = options.db;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.registrationVerifier = options.registrationVerifier ?? verifyRegistrationResponse;
     this.db.exec("pragma busy_timeout = 5000");
     this.db.exec(SCHEMA);
     ensureColumn(this.db, "workbench_approval_outbox", "lease_owner", "TEXT");
@@ -172,6 +198,155 @@ export class WorkbenchConfirmationStore {
       "snapshot_json",
       "TEXT NOT NULL DEFAULT '{}'",
     );
+  }
+
+  async beginCredentialRegistration(input: {
+    merchantId: string;
+    actorId: string;
+    rpName: string;
+    rpId: string;
+    origin: string;
+    userName: string;
+    userDisplayName: string;
+  }): Promise<{
+    registration_id: string;
+    expires_at: string;
+    options: Awaited<ReturnType<typeof generateRegistrationOptions>>;
+  }> {
+    const merchantId = requireText(input.merchantId, "merchantId");
+    const actorId = requireText(input.actorId, "actorId");
+    const rpId = requireText(input.rpId, "rpId");
+    const origin = requireHttpsOrigin(input.origin);
+    if (new URL(origin).hostname !== rpId && !new URL(origin).hostname.endsWith(`.${rpId}`)) {
+      throw new WorkbenchConfirmationError(
+        "invalid_registration",
+        "registration origin is outside the RP ID",
+      );
+    }
+    const challenge = randomBytes(32).toString("base64url");
+    const registrationId = `wrg_${randomBytes(18).toString("base64url")}`;
+    const stamp = this.now();
+    const expiresAt = new Date(Date.parse(stamp) + 5 * 60 * 1000).toISOString();
+    const existing = this.db
+      .prepare(
+        `SELECT credential_id FROM workbench_webauthn_credentials
+         WHERE merchant_id=? AND actor_id=? AND revoked_at IS NULL ORDER BY credential_id`,
+      )
+      .all(merchantId, actorId) as Array<{ credential_id: string }>;
+    const options = await generateRegistrationOptions({
+      rpName: requireText(input.rpName, "rpName"),
+      rpID: rpId,
+      userName: requireText(input.userName, "userName"),
+      userDisplayName: requireText(input.userDisplayName, "userDisplayName"),
+      userID: createHash("sha256").update(`${merchantId}\0${actorId}`).digest(),
+      challenge,
+      timeout: 5 * 60 * 1000,
+      attestationType: "none",
+      excludeCredentials: existing.map((credential) => ({ id: credential.credential_id })),
+      authenticatorSelection: {
+        userVerification: "required",
+        residentKey: "preferred",
+      },
+      supportedAlgorithmIDs: [COSEALG.ES256],
+    });
+    this.db
+      .prepare(
+        `INSERT INTO workbench_webauthn_registrations
+         (registration_id, merchant_id, actor_id, challenge, rp_id, origin,
+          expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(registrationId, merchantId, actorId, challenge, rpId, origin, expiresAt, stamp);
+    return { registration_id: registrationId, expires_at: expiresAt, options };
+  }
+
+  async finishCredentialRegistration(input: {
+    registrationId: string;
+    merchantId: string;
+    actorId: string;
+    response: RegistrationResponseJSON;
+  }): Promise<{ credential_id: string }> {
+    const row = this.db
+      .prepare("SELECT * FROM workbench_webauthn_registrations WHERE registration_id=?")
+      .get(input.registrationId) as unknown as
+      | {
+          merchant_id: string;
+          actor_id: string;
+          challenge: string;
+          rp_id: string;
+          origin: string;
+          expires_at: string;
+          used_at: string | null;
+        }
+      | undefined;
+    if (
+      row === undefined ||
+      row.merchant_id !== input.merchantId ||
+      row.actor_id !== input.actorId ||
+      row.used_at !== null
+    ) {
+      throw new WorkbenchConfirmationError("invalid_registration", "registration is missing, used or misbound");
+    }
+    if (Date.parse(row.expires_at) <= Date.parse(this.now())) {
+      throw new WorkbenchConfirmationError("invalid_registration", "registration challenge expired");
+    }
+    let verified: VerifiedRegistrationResponse;
+    try {
+      verified = await this.registrationVerifier({
+        response: input.response,
+        expectedChallenge: row.challenge,
+        expectedOrigin: row.origin,
+        expectedRPID: row.rp_id,
+        expectedType: "webauthn.create",
+        requireUserPresence: true,
+        requireUserVerification: true,
+        supportedAlgorithmIDs: [COSEALG.ES256],
+      });
+    } catch {
+      throw new WorkbenchConfirmationError("invalid_registration", "WebAuthn attestation verification failed");
+    }
+    if (!verified.verified || !verified.registrationInfo.userVerified) {
+      throw new WorkbenchConfirmationError("invalid_registration", "WebAuthn registration was not UV verified");
+    }
+    const rawPublicKey = convertCOSEtoPKCS(verified.registrationInfo.credential.publicKey);
+    const cryptoKey = await webcrypto.subtle.importKey(
+      "raw",
+      rawPublicKey,
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["verify"],
+    );
+    const spki = Buffer.from(await webcrypto.subtle.exportKey("spki", cryptoKey));
+    const publicKeyPem = createPublicKey({ key: spki, format: "der", type: "spki" })
+      .export({ format: "pem", type: "spki" })
+      .toString();
+
+    this.db.exec("begin immediate");
+    try {
+      const consumed = this.db
+        .prepare(
+          `UPDATE workbench_webauthn_registrations SET used_at=?
+           WHERE registration_id=? AND used_at IS NULL AND expires_at>?`,
+        )
+        .run(this.now(), input.registrationId, this.now());
+      if (consumed.changes !== 1) {
+        throw new WorkbenchConfirmationError("invalid_registration", "registration was consumed concurrently");
+      }
+      this.persistVerifiedCredential({
+        registrationVerified: true,
+        credentialId: verified.registrationInfo.credential.id,
+        merchantId: input.merchantId,
+        actorId: input.actorId,
+        publicKeyPem,
+        rpId: row.rp_id,
+        origin: row.origin,
+        signCount: verified.registrationInfo.credential.counter,
+      });
+      this.db.exec("commit");
+      return { credential_id: verified.registrationInfo.credential.id };
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   persistVerifiedCredential(input: {

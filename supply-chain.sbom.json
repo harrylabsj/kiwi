@@ -22,6 +22,12 @@
       "integrity": "sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA=="
     },
     {
+      "name": "@simplewebauthn/server",
+      "spec": "14.0.2",
+      "resolved": "14.0.2",
+      "integrity": "sha512-g+m/xv9/8FRWsDY22CwsTYRzt3WwS9fJrR3P7eY3Ti01FXH5FQ36Xn55v6D+5tb6VajlqOj4hywP/Vxsb6a3Sg=="
+    },
+    {
       "name": "ajv",
       "spec": "8.20.0",
       "resolved": "8.20.0",
@@ -42,13 +48,13 @@
   ],
   "artifact": {
     "name": "harrylabsj-kiwi-0.11.0.tgz",
-    "sha256": "d0588c3efbba10c3957b5aa4b66cee53fa753c7b9926de2f192c6c892f3f0865",
-    "bytes": 1793594
+    "sha256": "c5b6dc4fb47337a100a29cfead229b6ef5df868b700db580fbf22bc5e5b81c27",
+    "bytes": 1796452
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-09-21T13:07:53.713Z"
+  "generated_at": "2026-09-21T13:28:02.923Z"
 }

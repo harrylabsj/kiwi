@@ -1,6 +1,11 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import type {
+  RegistrationResponseJSON,
+  VerifiedRegistrationResponse,
+} from "@simplewebauthn/server";
+import { isoCBOR } from "@simplewebauthn/server/helpers";
 
 import {
   WorkbenchConfirmationError,
@@ -128,6 +133,82 @@ function decisionInput(
 }
 
 describe("Workbench WebAuthn trusted confirmation", () => {
+  it("persists a credential only after server-side attestation + UV verification", async () => {
+    const pair = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const jwk = pair.publicKey.export({ format: "jwk" });
+    const x = Buffer.from(jwk.x ?? "", "base64url");
+    const y = Buffer.from(jwk.y ?? "", "base64url");
+    const cose = isoCBOR.encode(
+      new Map<number, number | Uint8Array>([
+        [1, 2],
+        [3, -7],
+        [-1, 1],
+        [-2, x],
+        [-3, y],
+      ]),
+    );
+    const verified: VerifiedRegistrationResponse = {
+      verified: true,
+      registrationInfo: {
+        fmt: "none",
+        aaguid: "00000000-0000-0000-0000-000000000000",
+        credential: { id: "registered-credential", publicKey: cose, counter: 0 },
+        credentialType: "public-key",
+        attestationObject: new Uint8Array(),
+        userVerified: true,
+        credentialDeviceType: "singleDevice",
+        credentialBackedUp: false,
+        origin: ORIGIN,
+        rpID: RP_ID,
+      },
+    };
+    const registrationDb = new DatabaseSync(":memory:");
+    const registrationStore = new WorkbenchConfirmationStore({
+      db: registrationDb,
+      now: () => NOW,
+      registrationVerifier: async () => verified,
+    });
+    const begun = await registrationStore.beginCredentialRegistration({
+      merchantId: MERCHANT,
+      actorId: "owner-registration",
+      rpName: "Kiwi Merchant",
+      rpId: RP_ID,
+      origin: ORIGIN,
+      userName: "owner-registration",
+      userDisplayName: "Owner",
+    });
+    expect(begun.options).toMatchObject({
+      challenge: expect.any(String),
+      rp: { id: RP_ID },
+      authenticatorSelection: { userVerification: "required" },
+    });
+    const response: RegistrationResponseJSON = {
+      id: "registered-credential",
+      rawId: "registered-credential",
+      response: { clientDataJSON: "dummy", attestationObject: "dummy" },
+      clientExtensionResults: {},
+      type: "public-key",
+    };
+    await expect(
+      registrationStore.finishCredentialRegistration({
+        registrationId: begun.registration_id,
+        merchantId: MERCHANT,
+        actorId: "owner-registration",
+        response,
+      }),
+    ).resolves.toEqual({ credential_id: "registered-credential" });
+    expect(registrationStore.hasUsableCredential(MERCHANT, "owner-registration")).toBe(true);
+    await expect(
+      registrationStore.finishCredentialRegistration({
+        registrationId: begun.registration_id,
+        merchantId: MERCHANT,
+        actorId: "owner-registration",
+        response,
+      }),
+    ).rejects.toThrow(/missing, used or misbound/);
+    registrationDb.close();
+  });
+
   it("validates the assertion and atomically creates decision, operation and outbox", () => {
     const { db, store, actors } = fixture();
     const actor = actors[0]!;
