@@ -36,6 +36,7 @@ describe("Merchant public Feed", () => {
     const revised = store.revise("m1", published.broadcast_id, 1, input("Revised"));
     expect(revised.revision).toBe(2);
     store.withdraw("m1", published.broadcast_id, 2);
+    expect(store.summary("m1")).toEqual({ total: 1, published: 0, withdrawn: 1 });
     const remaining = store.read("m1", { cursor: first.next_cursor });
     expect(remaining.kind).toBe("events");
     if (remaining.kind === "events") {
@@ -56,17 +57,17 @@ describe("Merchant public Feed", () => {
       kind: "not_modified",
       etag: first.etag,
     });
-    expect(() => store.read("m1", { cursor: `${first.next_cursor}tampered`, ifNoneMatch: first.etag })).toThrow(
-      /cursor/,
-    );
+    expect(() =>
+      store.read("m1", { cursor: `${first.next_cursor}tampered`, ifNoneMatch: first.etag }),
+    ).toThrow(/cursor/);
 
     store.publish("m1", input("also expired"));
     advance(31 * 24 * 60 * 60 * 1000);
     store.publish("m1", input("new retained"));
     store.sweep();
-    expect(() => store.read("m1", { cursor: first.next_cursor, ifNoneMatch: first.etag })).toThrowError(
-      MerchantFeedError,
-    );
+    expect(() =>
+      store.read("m1", { cursor: first.next_cursor, ifNoneMatch: first.etag }),
+    ).toThrowError(MerchantFeedError);
   });
 
   it("creates a consistent paged snapshot with a high-water cursor", () => {
@@ -87,7 +88,9 @@ describe("Merchant public Feed", () => {
 
   it("rejects non-public audience, rich/control content, invalid precision and stale revisions", () => {
     const { store } = fixture();
-    expect(() => store.publish("m1", { ...input(), audience: "private" as never })).toThrow(/audience/);
+    expect(() => store.publish("m1", { ...input(), audience: "private" as never })).toThrow(
+      /audience/,
+    );
     expect(() => store.publish("m1", { ...input(), body: "bad\u202Etext" })).toThrow(/content/);
     expect(() => store.publish("m1", { ...input(), body: "x".repeat(4001) })).toThrow(/content/);
     const item = store.publish("m1", input());

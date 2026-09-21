@@ -382,6 +382,48 @@ export function createMerchantManagementApiHandler(
     rest: string,
     requestId: string,
   ): Promise<void> {
+    if (rest === "/overview") {
+      const auth = requireActor(req);
+      const runtime = await readService.getStatus(auth.ctx);
+      const pendingApprovals = options
+        .listPending()
+        .filter((candidate) => candidate.status === "pending_approval").length;
+      writeJson(
+        res,
+        200,
+        {
+          generated_at: now().toISOString(),
+          runtime,
+          approvals: { observable: true, pending: pendingApprovals },
+          broadcasts:
+            options.workbenchFeed === undefined
+              ? { observable: false, value: null, reason: "feed_authority_unavailable" }
+              : {
+                  observable: true,
+                  value: options.workbenchFeed.summary(auth.ctx.merchantId),
+                },
+          promotions:
+            options.workbenchPromotions === undefined
+              ? { observable: false, value: null, reason: "promotion_authority_unavailable" }
+              : {
+                  observable: true,
+                  value: options.workbenchPromotions.summary(auth.ctx.merchantId),
+                },
+          followers: {
+            observable: false,
+            value: null,
+            reason: "verified_buyer_identity_resolver_unavailable",
+          },
+          negotiations: {
+            observable: false,
+            value: null,
+            reason: "unified_negotiation_projection_unavailable",
+          },
+        },
+        { "x-request-id": requestId },
+      );
+      return;
+    }
     if (rest === "/runtime/status") {
       const auth = requireActor(req);
       writeJson(res, 200, await readService.getStatus(auth.ctx), { "x-request-id": requestId });

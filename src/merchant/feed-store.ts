@@ -165,7 +165,13 @@ export class MerchantFeedStore {
   getBroadcast(
     merchantId: string,
     broadcastId: string,
-  ): (BroadcastInput & { broadcast_id: string; revision: number; status: "published" | "withdrawn" }) | undefined {
+  ):
+    | (BroadcastInput & {
+        broadcast_id: string;
+        revision: number;
+        status: "published" | "withdrawn";
+      })
+    | undefined {
     const row = this.db
       .prepare("SELECT * FROM merchant_broadcasts WHERE merchant_id=? AND broadcast_id=?")
       .get(merchantId, broadcastId) as Record<string, unknown> | undefined;
@@ -220,6 +226,22 @@ export class MerchantFeedStore {
     };
   }
 
+  summary(merchantId: string): {
+    total: number;
+    published: number;
+    withdrawn: number;
+  } {
+    const rows = this.db
+      .prepare(
+        `SELECT status, count(*) count FROM merchant_broadcasts
+         WHERE merchant_id=? GROUP BY status`,
+      )
+      .all(merchantId) as Array<{ status: "published" | "withdrawn"; count: number }>;
+    const published = rows.find((row) => row.status === "published")?.count ?? 0;
+    const withdrawn = rows.find((row) => row.status === "withdrawn")?.count ?? 0;
+    return { total: published + withdrawn, published, withdrawn };
+  }
+
   revise(
     merchantId: string,
     broadcastId: string,
@@ -267,10 +289,14 @@ export class MerchantFeedStore {
     options: { cursor?: string; limit?: number; ifNoneMatch?: string } = {},
   ): FeedReadResult {
     const state = this.state(merchantId);
-    const afterSeq = options.cursor === undefined ? 0 : this.decodeCursor(merchantId, state, options.cursor);
+    const afterSeq =
+      options.cursor === undefined ? 0 : this.decodeCursor(merchantId, state, options.cursor);
     const min = this.minRetainedSeq(merchantId, state.epoch);
     if (afterSeq > 0 && min !== undefined && afterSeq < min - 1) {
-      throw new MerchantFeedError("feed_reset_required", "cursor predates the retained Feed window");
+      throw new MerchantFeedError(
+        "feed_reset_required",
+        "cursor predates the retained Feed window",
+      );
     }
     const limit = Math.min(Math.max(options.limit ?? 50, 1), 50);
     const rows = this.db
@@ -304,7 +330,11 @@ export class MerchantFeedStore {
     return { kind: "events", ...representation, etag };
   }
 
-  createSnapshot(merchantId: string): { snapshot_id: string; high_water_cursor: string; expires_at: string } {
+  createSnapshot(merchantId: string): {
+    snapshot_id: string;
+    high_water_cursor: string;
+    expires_at: string;
+  } {
     const state = this.state(merchantId);
     const rows = this.db
       .prepare(
@@ -329,7 +359,15 @@ export class MerchantFeedStore {
          (snapshot_id, merchant_id, epoch, high_water_seq, content_json, expires_at, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(snapshotId, merchantId, state.epoch, highWater, JSON.stringify(content), expiresAt, stamp);
+      .run(
+        snapshotId,
+        merchantId,
+        state.epoch,
+        highWater,
+        JSON.stringify(content),
+        expiresAt,
+        stamp,
+      );
     return {
       snapshot_id: snapshotId,
       high_water_cursor: this.encodeCursor(merchantId, state, highWater),
@@ -390,7 +428,9 @@ export class MerchantFeedStore {
       }
       if (
         eventType === "revised" &&
-        (existing === undefined || existing.revision !== expectedRevision || existing.status !== "published")
+        (existing === undefined ||
+          existing.revision !== expectedRevision ||
+          existing.status !== "published")
       ) {
         throw new MerchantFeedError("version_conflict", "broadcast revision/status changed");
       }
@@ -505,8 +545,7 @@ export class MerchantFeedStore {
          WHERE merchant_id=? AND broadcast_id=?`,
       )
       .get(merchantId, broadcastId) as
-      | { revision: number; status: string; published_at: string }
-      | undefined;
+      { revision: number; status: string; published_at: string } | undefined;
   }
 
   private minRetainedSeq(merchantId: string, epoch: number): number | undefined {
@@ -531,7 +570,8 @@ export class MerchantFeedStore {
       throw new MerchantFeedError("feed_cursor_invalid", "malformed Feed cursor");
     }
     const expected = createHmac("sha256", this.cursorKey).update(payload).digest("base64url");
-    if (signature !== expected) throw new MerchantFeedError("feed_cursor_invalid", "Feed cursor signature mismatch");
+    if (signature !== expected)
+      throw new MerchantFeedError("feed_cursor_invalid", "Feed cursor signature mismatch");
     let parsed: { merchant?: unknown; feed?: unknown; epoch?: unknown; seq?: unknown };
     try {
       parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as typeof parsed;
@@ -547,7 +587,10 @@ export class MerchantFeedStore {
       parsed.seq < 0 ||
       parsed.seq >= state.next_seq
     ) {
-      throw new MerchantFeedError("feed_cursor_invalid", "Feed cursor does not match this feed/epoch");
+      throw new MerchantFeedError(
+        "feed_cursor_invalid",
+        "Feed cursor does not match this feed/epoch",
+      );
     }
     return parsed.seq;
   }
@@ -566,18 +609,36 @@ function normalizeBroadcast(input: BroadcastInput): {
   }
   const kind = normalizeText(input.kind, "kind", 1, 64);
   const title = normalizeText(input.title, "title", 1, 120);
-  const body = normalizeText(input.body.replaceAll("\r\n", "\n").replaceAll("\r", "\n"), "body", 1, 4000);
+  const body = normalizeText(
+    input.body.replaceAll("\r\n", "\n").replaceAll("\r", "\n"),
+    "body",
+    1,
+    4000,
+  );
   if (Buffer.byteLength(body, "utf8") > 16 * 1024) {
     throw new MerchantFeedError("validation_error", "body exceeds 16 KiB UTF-8 limit");
   }
-  const skuRefs = [...new Set(input.skuRefs ?? [])].map((sku) => normalizeText(sku, "sku_ref", 1, 160));
-  if (skuRefs.length > 50) throw new MerchantFeedError("validation_error", "sku_refs exceeds 50 entries");
-  const promotionRef = input.promotionRef === undefined ? null : normalizeText(input.promotionRef, "promotion_ref", 1, 160);
+  const skuRefs = [...new Set(input.skuRefs ?? [])].map((sku) =>
+    normalizeText(sku, "sku_ref", 1, 160),
+  );
+  if (skuRefs.length > 50)
+    throw new MerchantFeedError("validation_error", "sku_refs exceeds 50 entries");
+  const promotionRef =
+    input.promotionRef === undefined
+      ? null
+      : normalizeText(input.promotionRef, "promotion_ref", 1, 160);
   const effectiveUntil = input.effectiveUntil ?? null;
   if (effectiveUntil !== null && !Number.isFinite(Date.parse(effectiveUntil))) {
     throw new MerchantFeedError("validation_error", "effective_until must be an ISO timestamp");
   }
-  const normalized = { kind, title, body, sku_refs: skuRefs, promotion_ref: promotionRef, effective_until: effectiveUntil };
+  const normalized = {
+    kind,
+    title,
+    body,
+    sku_refs: skuRefs,
+    promotion_ref: promotionRef,
+    effective_until: effectiveUntil,
+  };
   if (Buffer.byteLength(JSON.stringify(normalized), "utf8") > 24 * 1024) {
     throw new MerchantFeedError("validation_error", "normalized broadcast exceeds 24 KiB");
   }
@@ -589,7 +650,13 @@ function normalizeText(value: string, field: string, min: number, max: number): 
   const length = [...normalized].length;
   const forbiddenControl = [...normalized].some((character) => {
     const code = character.codePointAt(0) ?? 0;
-    return code <= 0x08 || code === 0x0b || code === 0x0c || (code >= 0x0e && code <= 0x1f) || code === 0x7f;
+    return (
+      code <= 0x08 ||
+      code === 0x0b ||
+      code === 0x0c ||
+      (code >= 0x0e && code <= 0x1f) ||
+      code === 0x7f
+    );
   });
   if (length < min || length > max || forbiddenControl || FORBIDDEN_BIDI.test(normalized)) {
     throw new MerchantFeedError("validation_error", `${field} length/content is invalid`);

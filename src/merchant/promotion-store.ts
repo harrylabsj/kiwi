@@ -230,6 +230,29 @@ export class MerchantPromotionStore {
     };
   }
 
+  summary(merchantId: string): {
+    total: number;
+    draft: number;
+    scheduled: number;
+    active: number;
+    ended: number;
+    withdrawn: number;
+  } {
+    const rows = this.db
+      .prepare("SELECT * FROM merchant_promotions WHERE merchant_id=?")
+      .all(merchantId) as Array<Record<string, unknown>>;
+    const result = {
+      total: rows.length,
+      draft: 0,
+      scheduled: 0,
+      active: 0,
+      ended: 0,
+      withdrawn: 0,
+    };
+    for (const row of rows) result[this.project(row).effective_state] += 1;
+    return result;
+  }
+
   activeForSku(
     merchantId: string,
     sku: string,

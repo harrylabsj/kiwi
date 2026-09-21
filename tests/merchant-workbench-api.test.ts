@@ -260,6 +260,34 @@ function assertion(challenge: string): {
 }
 
 describe("Workbench v1 trusted confirmation API", () => {
+  it("returns a source-backed overview and marks unavailable metrics unobservable", async () => {
+    const response = await fetch(`${base}/merchant/api/v1/overview`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      runtime: { service_state: "OPERATING" },
+      approvals: { observable: true, pending: expect.any(Number) },
+      broadcasts: {
+        observable: true,
+        value: { total: expect.any(Number), published: expect.any(Number) },
+      },
+      promotions: {
+        observable: true,
+        value: { total: expect.any(Number), active: expect.any(Number) },
+      },
+      followers: {
+        observable: false,
+        value: null,
+        reason: "verified_buyer_identity_resolver_unavailable",
+      },
+      negotiations: {
+        observable: false,
+        value: null,
+      },
+    });
+  });
+
   it("issues registration options only through the independent authorization callback", async () => {
     const response = await post("/merchant/api/v1/webauthn/registrations/options", {});
     expect(response.status).toBe(201);

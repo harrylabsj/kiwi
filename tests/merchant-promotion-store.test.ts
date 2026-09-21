@@ -35,6 +35,12 @@ describe("Merchant promotion authority", () => {
     expect(store.activeForSku("merchant-1", "sku-1", 1)).toMatchObject([
       { unit_price: { currency: "CNY", amount_minor: "9999" } },
     ]);
+    expect(store.summary("merchant-1")).toMatchObject({
+      total: 1,
+      active: 1,
+      draft: 0,
+      ended: 0,
+    });
     now = "2026-09-22T00:00:00.000Z";
     expect(store.activeForSku("merchant-1", "sku-1", 1)).toEqual([]);
     expect(store.getPromotion("merchant-1", created.promotion_id)?.effective_state).toBe("ended");
