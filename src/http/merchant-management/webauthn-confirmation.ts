@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS workbench_approval_outbox (
   action_step TEXT NOT NULL,
   fencing_token INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('pending','leased','completed','failed')),
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   PRIMARY KEY (merchant_id, operation_id, action_step)
 );
@@ -159,6 +162,9 @@ export class WorkbenchConfirmationStore {
     this.now = options.now ?? (() => new Date().toISOString());
     this.db.exec("pragma busy_timeout = 5000");
     this.db.exec(SCHEMA);
+    ensureColumn(this.db, "workbench_approval_outbox", "lease_owner", "TEXT");
+    ensureColumn(this.db, "workbench_approval_outbox", "lease_expires_at", "TEXT");
+    ensureColumn(this.db, "workbench_approval_outbox", "attempts", "INTEGER NOT NULL DEFAULT 0");
   }
 
   persistVerifiedCredential(input: {
@@ -353,7 +359,7 @@ export class WorkbenchConfirmationStore {
         .prepare(
           `INSERT INTO workbench_approval_outbox
            (merchant_id, operation_id, action_step, fencing_token, status, created_at)
-           VALUES (?, ?, 'execute-approved-candidate', 1, 'pending', ?)`,
+           VALUES (?, ?, 'execute-approved-candidate', 0, 'pending', ?)`,
         )
         .run(input.merchantId, freshRequest.operation_id, stamp);
       this.db.exec("commit");
@@ -518,4 +524,11 @@ function requireHttpsOrigin(value: string): string {
     throw new Error("origin must be an exact HTTPS origin without path, query or fragment");
   }
   return text;
+}
+
+function ensureColumn(db: DatabaseSync, table: string, column: string, declaration: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((entry) => entry.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${declaration}`);
+  }
 }
