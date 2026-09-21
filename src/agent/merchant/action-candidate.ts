@@ -288,6 +288,16 @@ export class WriteApprovalCandidateStore {
     return this.get(candidateId) as WriteApprovalCandidate;
   }
 
+  executionWasClaimed(candidateId: string): boolean | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT executing_at FROM action_candidates
+         WHERE candidate_id=? AND principal_id=?`,
+      )
+      .get(candidateId, this.principalId) as { executing_at: string | null } | undefined;
+    return row === undefined ? undefined : row.executing_at !== null;
+  }
+
   markExecuted(candidateId: string): WriteApprovalCandidate {
     return this.setStatus(candidateId, "executed");
   }

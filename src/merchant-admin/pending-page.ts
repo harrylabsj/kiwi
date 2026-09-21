@@ -59,6 +59,7 @@ export interface MerchantAdminSurface {
     verifier: CommittedDecisionVerifier,
   ): Promise<unknown>;
   getCandidate?(commandId: string): WriteApprovalCandidate | undefined;
+  candidateExecutionWasClaimed?(commandId: string): boolean | undefined;
   prepareInventoryUpdate?(input: {
     sku: string;
     stock: number;
@@ -156,6 +157,7 @@ export function merchantAdminSurface(core: MerchantCoreService): MerchantAdminSu
     rejectCandidate: (id, principalId, token) => core.commands.reject(id, principalId, token),
     executeCommittedDecision: (input, verifier) => core.executeCommittedDecision(input, verifier),
     getCandidate: (id) => core.getCommand(id),
+    candidateExecutionWasClaimed: (id) => core.commandExecutionWasClaimed(id),
     prepareInventoryUpdate: (input) => core.prepareInventoryUpdate(input),
     prepareListingChange: (input) => core.prepareListingChange(input),
     prepareExactProductCreate: (input) => core.prepareExactProductCreate(input),

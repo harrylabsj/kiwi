@@ -416,7 +416,9 @@ describe("配套商家确认页面（src/merchant-admin/ 最小骨架）", () =>
       expires_at: "2026-12-31T23:59:59.000Z",
     });
     store.markApproved(prepared2.candidate_id);
+    expect(store.executionWasClaimed(prepared2.candidate_id)).toBe(false);
     expect(store.claimForExecution(prepared2.candidate_id)).toBeDefined();
+    expect(store.executionWasClaimed(prepared2.candidate_id)).toBe(true);
     expect(store.supersedeExecuting()).toBe(1);
     expect(store.get(prepared2.candidate_id)?.status).toBe("superseded");
     db.close();

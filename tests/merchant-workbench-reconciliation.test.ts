@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { WorkbenchConfirmationStore } from "../src/http/merchant-management/webauthn-confirmation.js";
 import {
+  candidateReconciliationResult,
   committedDecisionOutcomeResult,
   WorkbenchReconciliationStore,
   WorkbenchReconciliationWorker,
@@ -67,6 +68,24 @@ describe("Workbench persistent reconciliation worker", () => {
     expect(committedDecisionOutcomeResult({ kind: "expired" })).toEqual({
       status: "failed",
       error: "candidate execution ended as expired",
+    });
+  });
+  it("keeps terminal candidates UNKNOWN when execution had already been claimed", () => {
+    expect(candidateReconciliationResult({ status: "superseded", executionClaimed: true })).toEqual(
+      {
+        status: "unknown",
+        error: "candidate ended as superseded after execution may have started",
+      },
+    );
+    expect(candidateReconciliationResult({ status: "expired", executionClaimed: false })).toEqual({
+      status: "failed",
+      error: "candidate ended as expired before execution",
+    });
+    expect(
+      candidateReconciliationResult({ status: "superseded", executionClaimed: undefined }),
+    ).toMatchObject({ status: "unknown" });
+    expect(candidateReconciliationResult({ status: "executed", executionClaimed: true })).toEqual({
+      status: "succeeded",
     });
   });
   it("expired lease is fenced: the old worker cannot commit after a new token is issued", () => {

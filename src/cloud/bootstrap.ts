@@ -52,6 +52,7 @@ import { WorkbenchConfirmationStore } from "../http/merchant-management/webauthn
 import {
   WorkbenchReconciliationStore,
   WorkbenchReconciliationWorker,
+  candidateReconciliationResult,
   committedDecisionOutcomeResult,
   type OperationResult,
 } from "../http/merchant-management/reconciliation-worker.js";
@@ -881,13 +882,12 @@ export async function bootstrapCloudRuntime(
           reconciliationStore.candidateIdForOperation(lease.operationId) ?? "",
         );
         if (candidate === undefined) return { status: "failed", error: "candidate is unavailable" };
-        if (candidate.status === "executed" || candidate.status === "rejected") {
-          return { status: "succeeded" };
-        }
-        if (candidate.status === "expired" || candidate.status === "superseded") {
-          return { status: "failed", error: `candidate ended as ${candidate.status}` };
-        }
-        return { status: "unknown", error: `candidate remains ${candidate.status}` };
+        return candidateReconciliationResult({
+          status: candidate.status,
+          executionClaimed: adminOptions.surface.candidateExecutionWasClaimed?.(
+            candidate.candidate_id,
+          ),
+        });
       },
     });
     let workerRunning = false;

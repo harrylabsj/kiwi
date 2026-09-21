@@ -280,6 +280,10 @@ export class MerchantCommandLog {
     return this.deps.store.get(commandId);
   }
 
+  executionWasClaimed(commandId: string): boolean | undefined {
+    return this.deps.store.executionWasClaimed(commandId);
+  }
+
   /** 拒绝候选（确认通道；同样需确认凭证）。 */
   async reject(
     commandId: string,

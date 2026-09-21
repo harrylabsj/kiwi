@@ -74,6 +74,25 @@ export function committedDecisionOutcomeResult(outcome: unknown): OperationResul
   return { status: "succeeded" };
 }
 
+export function candidateReconciliationResult(input: {
+  status: string;
+  executionClaimed: boolean | undefined;
+}): OperationResult {
+  if (input.status === "executed" || input.status === "rejected") {
+    return { status: "succeeded" };
+  }
+  if (input.status === "expired" || input.status === "superseded") {
+    if (input.executionClaimed === false) {
+      return { status: "failed", error: `candidate ended as ${input.status} before execution` };
+    }
+    return {
+      status: "unknown",
+      error: `candidate ended as ${input.status} after execution may have started`,
+    };
+  }
+  return { status: "unknown", error: `candidate remains ${input.status}` };
+}
+
 interface OutboxRow {
   merchant_id: string;
   operation_id: string;
