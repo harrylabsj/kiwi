@@ -518,6 +518,12 @@ export class CloudCardSource {
  *     当成"现在仍然有效"。
  */
 export class CloudBindingTrustCache {
+  /**
+   * 时钟可注入：过期判定绝不能依赖真实墙钟，否则夹具的短有效期声明会在
+   * 真实时间越过过期点后让测试定时失败（2026-09-21 实测踩中）。
+   */
+  constructor(private readonly clock: () => Date = () => new Date()) {}
+
   private readonly entries = new Map<
     string,
     { resolution: CloudAgentResolution; expiresAtMs: number }
@@ -534,7 +540,7 @@ export class CloudBindingTrustCache {
     this.latestByAgent.set(resolution.agentId, resolution.trustKey);
   }
 
-  get(trustKey: string, now: Date = new Date()): CloudAgentResolution | undefined {
+  get(trustKey: string, now: Date = this.clock()): CloudAgentResolution | undefined {
     const entry = this.entries.get(trustKey);
     if (entry === undefined) return undefined;
     if (entry.expiresAtMs <= now.getTime()) {
@@ -548,7 +554,7 @@ export class CloudBindingTrustCache {
   }
 
   /** 该商家最近一次**未过期**的解析结果（用于条件重验证，不代表结果仍然可信）。 */
-  latestFor(agentId: string, now: Date = new Date()): CloudAgentResolution | undefined {
+  latestFor(agentId: string, now: Date = this.clock()): CloudAgentResolution | undefined {
     const key = this.latestByAgent.get(agentId);
     return key === undefined ? undefined : this.get(key, now);
   }

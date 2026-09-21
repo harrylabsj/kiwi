@@ -139,6 +139,9 @@ function discoveryWith(capture: Capture, withCloud: boolean): AgentDiscovery {
         searchCandidates: async () => [candidate(CARD_URL)],
         getCandidate: async () => candidate(CARD_URL),
       },
+      // 信任缓存的过期判定也用夹具时钟：真实墙钟越过声明的 expires_at
+      // （NOW+900s）后，条件重验证会静默退化为无条件请求（2026-09-21 实测）。
+      cloudTrustCache: new CloudBindingTrustCache(() => NOW),
       ...(withCloud ? { cloud } : {}),
     },
   });
