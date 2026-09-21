@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS merchant_promotion_broadcast_workflows (
   promotion_revision INTEGER,
   broadcast_requested INTEGER NOT NULL CHECK(broadcast_requested IN (0,1)),
   broadcast_json TEXT,
+  broadcast_authorization_json TEXT,
   broadcast_candidate_id TEXT,
   status TEXT NOT NULL CHECK(status IN (
     'promotion_pending','promotion_published','broadcast_pending','partial','completed','failed'
@@ -45,12 +46,19 @@ export class PromotionBroadcastWorkflowStore {
   constructor(private readonly options: { db: DatabaseSync; now?: () => string }) {
     this.options.db.exec("pragma busy_timeout=5000");
     this.options.db.exec(SCHEMA);
+    ensureColumn(
+      this.options.db,
+      "merchant_promotion_broadcast_workflows",
+      "broadcast_authorization_json",
+      "TEXT",
+    );
   }
 
   create(input: {
     merchantId: string;
     promotionId: string;
     broadcast?: Readonly<Record<string, unknown>>;
+    broadcastAuthorization?: Readonly<Record<string, unknown>>;
   }): PromotionBroadcastWorkflowProjection {
     const workflowId = `pwf_${randomBytes(16).toString("base64url")}`;
     const stamp = this.now();
@@ -58,8 +66,8 @@ export class PromotionBroadcastWorkflowStore {
       .prepare(
         `INSERT INTO merchant_promotion_broadcast_workflows
          (workflow_id, merchant_id, promotion_id, broadcast_requested, broadcast_json,
-          status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'promotion_pending', ?, ?)`,
+          broadcast_authorization_json, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'promotion_pending', ?, ?)`,
       )
       .run(
         workflowId,
@@ -67,6 +75,9 @@ export class PromotionBroadcastWorkflowStore {
         requireText(input.promotionId, "promotionId"),
         input.broadcast === undefined ? 0 : 1,
         input.broadcast === undefined ? null : JSON.stringify(input.broadcast),
+        input.broadcastAuthorization === undefined
+          ? null
+          : JSON.stringify(input.broadcastAuthorization),
         stamp,
         stamp,
       );
@@ -130,7 +141,8 @@ export class PromotionBroadcastWorkflowStore {
       .prepare(
         `UPDATE merchant_promotion_broadcast_workflows
          SET status='partial', last_error=?, updated_at=?
-         WHERE merchant_id=? AND workflow_id=? AND status IN ('promotion_published','partial')`,
+         WHERE merchant_id=? AND workflow_id=?
+           AND status IN ('promotion_published','broadcast_pending','partial')`,
       )
       .run(sanitize(error), this.now(), merchantId, workflowId);
     if (changed.changes !== 1) throw new Error("workflow cannot enter partial state");
@@ -184,6 +196,35 @@ export class PromotionBroadcastWorkflowStore {
       : (JSON.parse(row.broadcast_json) as Record<string, unknown>);
   }
 
+  listForRecovery(merchantId: string): Array<{
+    workflow: PromotionBroadcastWorkflowProjection;
+    broadcast?: Record<string, unknown>;
+    broadcastAuthorization?: Record<string, unknown>;
+  }> {
+    const rows = this.options.db
+      .prepare(
+        `SELECT * FROM merchant_promotion_broadcast_workflows
+         WHERE merchant_id=? AND status IN (
+           'promotion_pending','promotion_published','broadcast_pending'
+         ) ORDER BY created_at, workflow_id`,
+      )
+      .all(merchantId) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      workflow: project(row),
+      ...(typeof row["broadcast_json"] === "string"
+        ? { broadcast: JSON.parse(row["broadcast_json"]) as Record<string, unknown> }
+        : {}),
+      ...(typeof row["broadcast_authorization_json"] === "string"
+        ? {
+            broadcastAuthorization: JSON.parse(row["broadcast_authorization_json"]) as Record<
+              string,
+              unknown
+            >,
+          }
+        : {}),
+    }));
+  }
+
   private require(merchantId: string, workflowId: string): PromotionBroadcastWorkflowProjection {
     const value = this.get(merchantId, workflowId);
     if (value === undefined) throw new Error("unknown promotion broadcast workflow");
@@ -223,4 +264,11 @@ function requireText(value: string, field: string): string {
   const text = String(value ?? "").trim();
   if (text === "") throw new Error(`${field} is required`);
   return text;
+}
+
+function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }

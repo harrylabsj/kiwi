@@ -915,6 +915,7 @@ export function createMerchantManagementApiHandler(
           merchantId: auth.ctx.merchantId,
           promotionId,
           ...(broadcast !== undefined ? { broadcast } : {}),
+          ...(broadcastAuthorization !== undefined ? { broadcastAuthorization } : {}),
         }).workflow_id;
       }
       let prepared: unknown;

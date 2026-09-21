@@ -60,6 +60,7 @@ import { createGrantExecutors } from "../merchant/grant-executors.js";
 import { MerchantPromotionStore } from "../merchant/promotion-store.js";
 import { createPromotionExecutors } from "../merchant/promotion-executors.js";
 import { PromotionBroadcastWorkflowStore } from "../merchant/promotion-broadcast-workflow.js";
+import { recoverPromotionBroadcastWorkflows } from "../merchant/promotion-broadcast-recovery.js";
 import { OnboardingStore } from "./onboarding/store.js";
 import {
   ManagementError,
@@ -452,6 +453,24 @@ export async function bootstrapCloudRuntime(
     grantStoreForExecutors = grantStore;
     promotionStoreForExecutors = promotionStore;
     promotionWorkflowStoreForExecutors = promotionWorkflowStore;
+
+    await recoverPromotionBroadcastWorkflows({
+      merchantId: profile.owner_id,
+      workflows: promotionWorkflowStore,
+      promotions: promotionStore,
+      grants: grantStore,
+      listPending: () => adminOptions.surface.listPending(),
+      getCandidate: (candidateId) => adminOptions.surface.getCandidate?.(candidateId),
+      prepareBroadcast: async ({ broadcast, authorization, workflowId }) => {
+        const prepared = await assembly.service.prepareBroadcastPublish({
+          broadcast,
+          authorization,
+          workflowId,
+          reason: "startup recovery for published promotion",
+        });
+        return prepared.candidate.candidate_id;
+      },
+    });
     publicFeedHandler = createMerchantFeedApiHandler({
       merchantId: profile.owner_id,
       store: feedStore,
