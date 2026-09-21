@@ -37,6 +37,7 @@ import type {
   InventorySnapshot,
   MerchantCatalogProduct,
   MerchantClient,
+  MerchantProductOperation,
   MerchantProductInput,
   MerchantProductPatch,
 } from "./types.js";
@@ -44,6 +45,7 @@ import {
   MerchantClientError,
   parseHumanReviewItem,
   parseExactMerchantProduct,
+  parseMerchantProductOperation,
   parseIncomingConsultation,
   parseMerchantCatalogProduct,
 } from "./types.js";
@@ -242,6 +244,7 @@ export class HttpMerchantClient implements MerchantClient {
   }
 
   async updateExactProductMoney(input: {
+    operation_id: string;
     merchant_id: string;
     sku: string;
     price_minor: string;
@@ -253,6 +256,7 @@ export class HttpMerchantClient implements MerchantClient {
       `/v1/merchant/products/${encodeURIComponent(input.sku)}/money`,
       {
         body: {
+          operation_id: input.operation_id,
           merchant_id: input.merchant_id,
           price_minor: input.price_minor,
           currency_table_version: input.currency_table_version,
@@ -262,6 +266,21 @@ export class HttpMerchantClient implements MerchantClient {
       },
     )) as { product?: unknown };
     return parseExactMerchantProduct(payload.product);
+  }
+
+  async getExactProductOperation(
+    merchantId: string,
+    operationId: string,
+  ): Promise<MerchantProductOperation> {
+    const payload = (await this.request(
+      "GET",
+      `/v1/merchant/product-operations/${encodeURIComponent(operationId)}`,
+      {
+        query: { merchant_id: merchantId },
+        token: this.catalogToken(),
+      },
+    )) as { operation?: unknown };
+    return parseMerchantProductOperation(payload.operation);
   }
 
   async getProduct(sku: string): Promise<MerchantCatalogProduct> {

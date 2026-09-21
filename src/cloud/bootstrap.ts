@@ -875,6 +875,14 @@ export async function bootstrapCloudRuntime(
         }
       },
       query: async (lease): Promise<OperationResult> => {
+        if (adminOptions.surface.queryCommittedDecisionOutcome !== undefined) {
+          return await adminOptions.surface.queryCommittedDecisionOutcome({
+            operationId: lease.operationId,
+            candidateId: lease.candidateId,
+            actorId: lease.actorId,
+            decision: lease.decision,
+          });
+        }
         if (adminOptions.surface.getCandidate === undefined) {
           return { status: "failed", error: "candidate query is not configured" };
         }

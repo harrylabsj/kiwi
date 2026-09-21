@@ -577,6 +577,10 @@ export class MerchantCoreService {
     return this.commands.executionWasClaimed(commandId);
   }
 
+  queryCommittedDecisionOutcome(input: Omit<CommittedDecisionProof, "actionDigest">) {
+    return this.commands.queryCommittedDecisionOutcome(input);
+  }
+
   /**
    * 重启恢复（阶段三推广版）：恢复全部已注册写工具的 pending 命令
    * （覆盖 V1 recoverPendingDrafts 语义并推广）；未注册工具的死候选标 expired。

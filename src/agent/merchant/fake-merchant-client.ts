@@ -33,12 +33,14 @@ import type {
   MerchantCatalogProduct,
   MerchantClient,
   MerchantProductInput,
+  MerchantProductOperation,
   MerchantProductPatch,
 } from "./types.js";
 
 export class FakeMerchantClient implements MerchantClient {
   private readonly products = new Map<string, MerchantCatalogProduct>();
   private readonly exactProducts = new Map<string, ExactMerchantProduct>();
+  private readonly exactOperations = new Map<string, MerchantProductOperation>();
   private readonly consultations: IncomingConsultation[] = [];
   private readonly reviews: HumanReviewItem[] = [];
   private now: string;
@@ -91,6 +93,13 @@ export class FakeMerchantClient implements MerchantClient {
   }
 
   async createExactProduct(input: ExactMerchantProductInput): Promise<ExactMerchantProduct> {
+    const replay = this.exactOperations.get(input.operation_id);
+    if (replay !== undefined) {
+      if (replay.operation_kind !== "exact_product_create" || replay.sku !== input.sku) {
+        throw new MerchantClientError("validation", "operation id was reused");
+      }
+      return this.getExactProduct(input.merchant_id, input.sku);
+    }
     if (this.products.has(input.sku) || this.exactProducts.has(input.sku)) {
       throw new MerchantClientError("validation", `product ${input.sku} already exists`);
     }
@@ -124,16 +133,32 @@ export class FakeMerchantClient implements MerchantClient {
       paused: false,
       handoff_destination: product.handoff_destination,
     });
+    this.exactOperations.set(input.operation_id, {
+      operation_id: input.operation_id,
+      merchant_id: input.merchant_id,
+      operation_kind: "exact_product_create",
+      sku: input.sku,
+      status: "succeeded",
+      created_at: this.now,
+    });
     return product;
   }
 
   async updateExactProductMoney(input: {
+    operation_id: string;
     merchant_id: string;
     sku: string;
     price_minor: string;
     currency_table_version: string;
     expected_authority_version: number;
   }): Promise<ExactMerchantProduct> {
+    const replay = this.exactOperations.get(input.operation_id);
+    if (replay !== undefined) {
+      if (replay.operation_kind !== "exact_product_money_update" || replay.sku !== input.sku) {
+        throw new MerchantClientError("validation", "operation id was reused");
+      }
+      return this.getExactProduct(input.merchant_id, input.sku);
+    }
     const current = await this.getExactProduct(input.merchant_id, input.sku);
     if (current.authority_version !== input.expected_authority_version) {
       throw new MerchantClientError("validation", "exact money authority version changed");
@@ -142,7 +167,26 @@ export class FakeMerchantClient implements MerchantClient {
     this.exactProducts.set(input.sku, updated);
     const legacy = this.requireProduct(input.sku);
     this.products.set(input.sku, { ...legacy, price: Number(input.price_minor) / 100 });
+    this.exactOperations.set(input.operation_id, {
+      operation_id: input.operation_id,
+      merchant_id: input.merchant_id,
+      operation_kind: "exact_product_money_update",
+      sku: input.sku,
+      status: "succeeded",
+      created_at: this.now,
+    });
     return updated;
+  }
+
+  async getExactProductOperation(
+    merchantId: string,
+    operationId: string,
+  ): Promise<MerchantProductOperation> {
+    const operation = this.exactOperations.get(operationId);
+    if (operation === undefined || operation.merchant_id !== merchantId) {
+      throw new MerchantClientError("not_found", `no exact product operation ${operationId}`);
+    }
+    return operation;
   }
 
   async getProduct(sku: string): Promise<MerchantCatalogProduct> {

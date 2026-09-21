@@ -29,9 +29,10 @@ export function createExactProductExecutors(options: {
         }
         return { sku, exists };
       },
-      execute: async (args) => {
+      execute: async (args, _context, decision) => {
         const money = parseExactMoney(args["money"], { requireOperatingSupport: true });
         return await options.client.createExactProduct({
+          operation_id: requireCommitted(decision).operationId,
           merchant_id: options.merchantId,
           sku: requireText(args["sku"], "sku"),
           title: requireText(args["title"], "title"),
@@ -68,6 +69,16 @@ export function createExactProductExecutors(options: {
           throw new Error("exact product create readback failed");
         }
       },
+      queryOutcome: async (args, _context, decision) => {
+        const operation = await options.client.getExactProductOperation(
+          options.merchantId,
+          decision.operationId,
+        );
+        return operation.operation_kind === "exact_product_create" &&
+          operation.sku === requireText(args["sku"], "sku")
+          ? { status: "succeeded" }
+          : { status: "unknown", error: "exact product create receipt does not match" };
+      },
     },
     {
       tool: EXACT_PRODUCT_TOOLS.updateMoney,
@@ -86,9 +97,10 @@ export function createExactProductExecutors(options: {
           authority_version: current.authority_version,
         };
       },
-      execute: async (args) => {
+      execute: async (args, _context, decision) => {
         const money = parseExactMoney(args["money"], { requireOperatingSupport: true });
         return await options.client.updateExactProductMoney({
+          operation_id: requireCommitted(decision).operationId,
           merchant_id: options.merchantId,
           sku: requireText(args["sku"], "sku"),
           price_minor: money.amount_minor,
@@ -109,8 +121,27 @@ export function createExactProductExecutors(options: {
           throw new Error("exact product money update readback failed");
         }
       },
+      queryOutcome: async (args, _context, decision) => {
+        const operation = await options.client.getExactProductOperation(
+          options.merchantId,
+          decision.operationId,
+        );
+        return operation.operation_kind === "exact_product_money_update" &&
+          operation.sku === requireText(args["sku"], "sku")
+          ? { status: "succeeded" }
+          : { status: "unknown", error: "exact product money receipt does not match" };
+      },
     },
   ];
+}
+
+function requireCommitted(
+  value: { kind: "committed"; operationId: string; actorId: string } | undefined,
+): { operationId: string; actorId: string } {
+  if (value?.kind !== "committed") {
+    throw new Error("exact product execution requires a committed decision");
+  }
+  return value;
 }
 
 function requireText(value: unknown, field: string): string {

@@ -76,6 +76,16 @@ export interface CommandExecutor {
   ): Promise<unknown>;
   /** 执行后回读校验（可选；返回 false/抛错 = 回读不一致）。 */
   verifyAfter?(args: Record<string, unknown>, ctx: ExecutorContext): Promise<void>;
+  /** Query the authoritative downstream receipt for an operation after an uncertain write. */
+  queryOutcome?(
+    args: Record<string, unknown>,
+    ctx: ExecutorContext,
+    decision: { operationId: string; actorId: string },
+  ): Promise<
+    | { status: "succeeded" }
+    | { status: "failed"; error: string }
+    | { status: "unknown"; error: string }
+  >;
 }
 
 export class MerchantExecutorRegistry {

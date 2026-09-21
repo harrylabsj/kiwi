@@ -86,6 +86,7 @@ export interface ExactMerchantProduct {
 }
 
 export interface ExactMerchantProductInput {
+  operation_id: string;
   merchant_id: string;
   sku: string;
   title: string;
@@ -99,6 +100,15 @@ export interface ExactMerchantProductInput {
   tags?: string[];
   delivery_attributes?: string[];
   handoff_destination?: string;
+}
+
+export interface MerchantProductOperation {
+  operation_id: string;
+  merchant_id: string;
+  operation_kind: "exact_product_create" | "exact_product_money_update";
+  sku: string;
+  status: "succeeded";
+  created_at: string;
 }
 
 export interface IncomingConsultation {
@@ -155,12 +165,17 @@ export interface MerchantClient {
   getExactProduct(merchantId: string, sku: string): Promise<ExactMerchantProduct>;
   createExactProduct(input: ExactMerchantProductInput): Promise<ExactMerchantProduct>;
   updateExactProductMoney(input: {
+    operation_id: string;
     merchant_id: string;
     sku: string;
     price_minor: string;
     currency_table_version: string;
     expected_authority_version: number;
   }): Promise<ExactMerchantProduct>;
+  getExactProductOperation(
+    merchantId: string,
+    operationId: string,
+  ): Promise<MerchantProductOperation>;
 }
 
 export class MerchantClientError extends Error {
@@ -221,6 +236,26 @@ export function parseExactMerchantProduct(value: unknown): ExactMerchantProduct 
       ? stringArray(v.delivery_attributes, "product.delivery_attributes")
       : [],
     handoff_destination: typeof v.handoff_destination === "string" ? v.handoff_destination : "",
+  };
+}
+
+export function parseMerchantProductOperation(value: unknown): MerchantProductOperation {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    fail("merchant product operation must be an object");
+  }
+  const v = value as Record<string, unknown>;
+  const operationKind = reqString(v.operation_kind, "operation.operation_kind");
+  if (operationKind !== "exact_product_create" && operationKind !== "exact_product_money_update") {
+    fail("operation.operation_kind is invalid");
+  }
+  if (v.status !== "succeeded") fail("operation.status is invalid");
+  return {
+    operation_id: reqString(v.operation_id, "operation.operation_id"),
+    merchant_id: reqString(v.merchant_id, "operation.merchant_id"),
+    operation_kind: operationKind,
+    sku: reqString(v.sku, "operation.sku"),
+    status: "succeeded",
+    created_at: reqString(v.created_at, "operation.created_at"),
   };
 }
 

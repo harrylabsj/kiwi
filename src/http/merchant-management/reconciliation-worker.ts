@@ -48,6 +48,9 @@ export interface OutboxLease {
 export interface ReconciliationLease {
   merchantId: string;
   operationId: string;
+  candidateId: string;
+  actorId: string;
+  decision: "approve" | "reject";
   workerId: string;
   fencingToken: number;
   attempts: number;
@@ -108,6 +111,9 @@ interface OutboxRow {
 interface ReconciliationRow {
   merchant_id: string;
   operation_id: string;
+  candidate_id: string;
+  actor_id: string;
+  decision: "approve" | "reject";
   attempts: number;
   first_unknown_at: string;
   fencing_token: number;
@@ -362,11 +368,13 @@ export class WorkbenchReconciliationStore {
     try {
       const row = this.db
         .prepare(
-          `SELECT merchant_id, operation_id, attempts, first_unknown_at, fencing_token
-           FROM workbench_reconciliation_jobs
-           WHERE (status='pending' AND next_attempt_at <= ?)
-              OR (status='leased' AND lease_expires_at <= ?)
-           ORDER BY next_attempt_at, operation_id LIMIT 1`,
+          `SELECT j.merchant_id, j.operation_id, j.attempts, j.first_unknown_at,
+                  j.fencing_token, d.candidate_id, d.actor_id, d.decision
+           FROM workbench_reconciliation_jobs j
+           JOIN workbench_approval_decisions d ON d.operation_id=j.operation_id
+           WHERE (j.status='pending' AND j.next_attempt_at <= ?)
+              OR (j.status='leased' AND j.lease_expires_at <= ?)
+           ORDER BY j.next_attempt_at, j.operation_id LIMIT 1`,
         )
         .get(stamp, stamp) as unknown as ReconciliationRow | undefined;
       if (row === undefined) {
@@ -386,6 +394,9 @@ export class WorkbenchReconciliationStore {
       return {
         merchantId: row.merchant_id,
         operationId: row.operation_id,
+        candidateId: row.candidate_id,
+        actorId: row.actor_id,
+        decision: row.decision,
         workerId,
         fencingToken: token,
         attempts: row.attempts,

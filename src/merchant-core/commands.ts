@@ -284,6 +284,49 @@ export class MerchantCommandLog {
     return this.deps.store.executionWasClaimed(commandId);
   }
 
+  async queryCommittedDecisionOutcome(
+    input: Omit<CommittedDecisionProof, "actionDigest">,
+  ): Promise<
+    | { status: "succeeded" }
+    | { status: "failed"; error: string }
+    | { status: "unknown"; error: string }
+  > {
+    const candidate = this.deps.store.get(input.candidateId);
+    if (candidate === undefined) {
+      return { status: "failed", error: "committed candidate is unavailable" };
+    }
+    if (candidate.status === "executed" || candidate.status === "rejected") {
+      return { status: "succeeded" };
+    }
+    const claimed = this.deps.store.executionWasClaimed(input.candidateId);
+    if (
+      claimed === false &&
+      (candidate.status === "expired" || candidate.status === "superseded")
+    ) {
+      return { status: "failed", error: `candidate ended as ${candidate.status} before execution` };
+    }
+    const executor = this.deps.executors.get(candidate.tool);
+    if (input.decision !== "approve" || executor?.queryOutcome === undefined) {
+      return {
+        status: "unknown",
+        error: `no downstream operation query adapter for ${candidate.tool}`,
+      };
+    }
+    try {
+      const outcome = await executor.queryOutcome(candidate.arguments, this.deps.executorContext, {
+        operationId: input.operationId,
+        actorId: input.actorId,
+      });
+      if (outcome.status === "succeeded") this.deps.store.markExecuted(input.candidateId);
+      return outcome;
+    } catch (error) {
+      return {
+        status: "unknown",
+        error: `downstream operation query failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
   /** 拒绝候选（确认通道；同样需确认凭证）。 */
   async reject(
     commandId: string,

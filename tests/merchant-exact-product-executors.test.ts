@@ -98,6 +98,58 @@ describe("exact-money product executors", () => {
       kind: "executed",
     });
     expect((await client.getExactProduct("merchant-001", "sku-exact")).price_minor).toBe("9250");
+
+    const uncertain = await core.prepareExactProductCreate({
+      sku: "sku-uncertain",
+      title: "Uncertain Product",
+      money: money("5000"),
+      stock: 2,
+      expectedAuthorityVersion: 1,
+      authorization: { actor_id: "owner:merchant-001", action: "product.create" },
+    });
+    approvals.markApproved(uncertain.candidate.candidate_id);
+    approvals.claimForExecution(uncertain.candidate.candidate_id);
+    await client.createExactProduct({
+      operation_id: "operation-uncertain",
+      merchant_id: "merchant-001",
+      sku: "sku-uncertain",
+      title: "Uncertain Product",
+      price_minor: "5000",
+      stock: 2,
+      expected_authority_version: 1,
+      currency: "CNY",
+      currency_table_version: WORKBENCH_CURRENCY_TABLE_VERSION,
+    });
+    approvals.supersede(uncertain.candidate.candidate_id);
+    await expect(
+      core.queryCommittedDecisionOutcome({
+        operationId: "operation-uncertain",
+        candidateId: uncertain.candidate.candidate_id,
+        actorId: "owner:merchant-001",
+        decision: "approve",
+      }),
+    ).resolves.toEqual({ status: "succeeded" });
+    expect(core.getCommand(uncertain.candidate.candidate_id)?.status).toBe("executed");
+
+    const missing = await core.prepareExactProductCreate({
+      sku: "sku-missing-receipt",
+      title: "Missing Receipt",
+      money: money("5100"),
+      stock: 1,
+      expectedAuthorityVersion: 1,
+      authorization: { actor_id: "owner:merchant-001", action: "product.create" },
+    });
+    approvals.markApproved(missing.candidate.candidate_id);
+    approvals.claimForExecution(missing.candidate.candidate_id);
+    approvals.supersede(missing.candidate.candidate_id);
+    await expect(
+      core.queryCommittedDecisionOutcome({
+        operationId: "operation-missing",
+        candidateId: missing.candidate.candidate_id,
+        actorId: "owner:merchant-001",
+        decision: "approve",
+      }),
+    ).resolves.toMatchObject({ status: "unknown" });
     db.close();
   });
 });

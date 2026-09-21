@@ -84,6 +84,43 @@ describe("merchant read path exact-stock semantics (P2-1)", () => {
       server.close();
     }
   });
+  it("queries an exact product operation receipt with the merchant credential", async () => {
+    let seenUrl = "";
+    let seenAuth = "";
+    const server = createServer((req, res) => {
+      seenUrl = req.url ?? "";
+      seenAuth = req.headers.authorization ?? "";
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify({
+          ok: true,
+          operation: {
+            operation_id: "operation-1",
+            merchant_id: "seller-a",
+            operation_kind: "exact_product_money_update",
+            sku: "tea-a",
+            status: "succeeded",
+            created_at: "2026-09-22T00:00:00Z",
+          },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const client = new HttpMerchantClient(
+        `http://127.0.0.1:${port}`,
+        new StaticCredentialBroker({ catalog: "tok-catalog" }),
+      );
+      await expect(
+        client.getExactProductOperation("seller-a", "operation-1"),
+      ).resolves.toMatchObject({ operation_id: "operation-1", status: "succeeded" });
+      expect(seenUrl).toContain("/v1/merchant/product-operations/operation-1?merchant_id=seller-a");
+      expect(seenAuth).toBe("Bearer tok-catalog");
+    } finally {
+      server.close();
+    }
+  });
   it("parses product without exact stock (anonymous read)", () => {
     const product = parseMerchantCatalogProduct({
       sku: "tea-a",
