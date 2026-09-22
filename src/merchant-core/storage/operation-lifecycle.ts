@@ -18,6 +18,7 @@ export type LifecycleBegin<TReceipt> =
 
 export interface LifecycleReceiptRow<TReceipt> {
   operationId: string;
+  scope: Readonly<Record<string, string>>;
   requestDigest: string;
   receipt: TReceipt;
 }
@@ -130,15 +131,16 @@ export class OperationLifecycleReceipts<TReceipt> {
     row: LifecycleReceiptRow<TReceipt> | undefined,
   ): LifecycleProbe<TReceipt> {
     if (row === undefined) return { kind: "miss" };
-    if (row.requestDigest !== intent.requestDigest) return { kind: "conflict" };
-    return { kind: "replay", operationId: row.operationId, receipt: row.receipt };
+    return this.existingOutcome(intent, row);
   }
 
   private existingOutcome(
     intent: LifecycleIntent,
     row: LifecycleReceiptRow<TReceipt>,
   ): Exclude<LifecycleProbe<TReceipt>, { kind: "miss" }> {
-    if (row.requestDigest !== intent.requestDigest) return { kind: "conflict" };
+    if (!sameScope(row.scope, intent.scope) || row.requestDigest !== intent.requestDigest) {
+      return { kind: "conflict" };
+    }
     return { kind: "replay", operationId: row.operationId, receipt: row.receipt };
   }
 
@@ -150,4 +152,16 @@ export class OperationLifecycleReceipts<TReceipt> {
     if (!Number.isFinite(nowMs)) throw new Error("operation lifecycle clock returned invalid time");
     this.persistence.pruneCompletedBefore(new Date(nowMs - this.retentionMs).toISOString());
   }
+}
+
+function sameScope(
+  left: Readonly<Record<string, string>>,
+  right: Readonly<Record<string, string>>,
+): boolean {
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key])
+  );
 }

@@ -15,10 +15,7 @@ interface Receipt {
 class ConflictError extends Error {}
 
 class MemoryPersistence implements LifecycleReceiptPersistence<Receipt> {
-  readonly rows = new Map<
-    string,
-    LifecycleReceiptRow<Receipt> & { scope: string; completed: boolean }
-  >();
+  readonly rows = new Map<string, LifecycleReceiptRow<Receipt> & { completed: boolean }>();
   failNextInsert = false;
   readonly pruneCompletedBefore = vi.fn((_cutoffIso: string) => 0);
 
@@ -49,9 +46,9 @@ class MemoryPersistence implements LifecycleReceiptPersistence<Receipt> {
   }
 
   getById(operationId: string, scope: Readonly<Record<string, string>>): Receipt | undefined {
-    const encodedScope = JSON.stringify(scope);
     return [...this.rows.values()].find(
-      (item) => item.operationId === operationId && item.scope === encodedScope,
+      (item) =>
+        item.operationId === operationId && JSON.stringify(item.scope) === JSON.stringify(scope),
     )?.receipt;
   }
 
@@ -69,16 +66,16 @@ class MemoryPersistence implements LifecycleReceiptPersistence<Receipt> {
     if (this.rows.has(key)) throw new Error("unique conflict");
     this.rows.set(key, {
       operationId,
+      scope: intent.scope,
       requestDigest: intent.requestDigest,
       receipt,
-      scope: JSON.stringify(intent.scope),
       completed,
     });
   }
 }
 
 function keyOf(intent: LifecycleIntent): string {
-  return `${JSON.stringify(intent.scope)}:${intent.idempotencyKey}`;
+  return intent.idempotencyKey;
 }
 
 function intent(digest = "sha256:a"): LifecycleIntent {
@@ -114,6 +111,12 @@ describe("OperationLifecycleReceipts", () => {
       receipt: { status: "running" },
     });
     expect(lifecycle.probe(intent("sha256:b"))).toEqual({ kind: "conflict" });
+    expect(
+      lifecycle.probe({
+        ...intent(),
+        scope: { merchantId: "merchant-2", actorId: "owner-1", commandType: "test" },
+      }),
+    ).toEqual({ kind: "conflict" });
   });
 
   it("completes, scopes get and does not release terminal receipts", () => {
