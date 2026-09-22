@@ -71,6 +71,16 @@ export class LedgerPayloadSegmentStore {
     return { digest, bytes: Buffer.byteLength(encoded), path: relative, created_at: this.now() };
   }
 
+  /** Internal preflight helpers used to clean up failed segmented appends. */
+  relativePathFor(value: unknown): string {
+    const encoded = canonicalize(value);
+    return `${sha256Hex(encoded)}.json`;
+  }
+
+  hasPath(relative: string): boolean {
+    return existsSync(this.filePath(relative));
+  }
+
   get<T = unknown>(ref: LedgerPayloadSegmentRef): T {
     const target = this.filePath(ref.path);
     const encoded = readFileSync(target, "utf8");

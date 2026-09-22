@@ -261,6 +261,14 @@ export class LedgerStore {
    * segments. The hash-linked Ledger retains only references and digests.
    */
   appendSegmented(content: LedgerEventContent): LedgerEvent {
+    const wireRelative = content.wire_payload === undefined
+      ? undefined
+      : this.payloadSegments.relativePathFor(content.wire_payload);
+    const outcomeRelative = content.outcome.kind === "ok" && content.outcome.result !== undefined
+      ? this.payloadSegments.relativePathFor(content.outcome.result)
+      : undefined;
+    const wireExisted = wireRelative !== undefined && this.payloadSegments.hasPath(wireRelative);
+    const outcomeExisted = outcomeRelative !== undefined && this.payloadSegments.hasPath(outcomeRelative);
     const wireRef = content.wire_payload === undefined
       ? undefined
       : this.payloadSegments.put(content.wire_payload);
@@ -280,7 +288,16 @@ export class LedgerStore {
       outcome,
     };
     delete segmented.wire_payload;
-    return this.append(segmented);
+    try {
+      return this.append(segmented);
+    } catch (error) {
+      // append performs chain validation and atomic rewrite after segment writes.
+      // Remove only files created by this attempt; shared content-addressed files
+      // that predated the attempt remain valid for other events.
+      if (wireRef !== undefined && !wireExisted) this.payloadSegments.remove(wireRef);
+      if (outcomeRef !== undefined && !outcomeExisted) this.payloadSegments.remove(outcomeRef);
+      throw error;
+    }
   }
 
   /** Resolve external payload references for trusted recovery/read paths. */
