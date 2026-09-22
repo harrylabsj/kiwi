@@ -39,6 +39,7 @@ export type {
   LedgerStateTransition,
   LedgerVerifyError,
   LedgerVerifyResult,
+  LedgerPayloadSegments,
 } from "./event.js";
 export { LedgerStore, ledgerFileName } from "./store.js";
 export type { LedgerHighWaterMark, LedgerStoreOptions } from "./store.js";

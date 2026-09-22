@@ -106,6 +106,8 @@ export interface LedgerEventContent {
   wire_digest?: string;
   /** wire payload = 收发时的 envelope 内容（不含 transport signature 字段）。 */
   wire_payload?: Record<string, unknown>;
+  /** Optional externalized payload references; raw正文 is intentionally absent. */
+  payload_segments?: LedgerPayloadSegments;
   /** Phase 状态转换（如该事件驱动了状态机推进）。 */
   state_transition?: LedgerStateTransition;
   // v0.7.0 KTH 字段（KTH rev0.3 §5.1/§12：候选与交付事件绑定溯源与证据）。
@@ -124,6 +126,11 @@ export interface LedgerEventContent {
   outcome: LedgerOutcome;
   /** 业务发生时间（如 envelope.created_at），RFC 3339。 */
   occurred_at: string;
+}
+
+export interface LedgerPayloadSegments {
+  wire_payload?: import("./payload-segments.js").LedgerPayloadSegmentRef;
+  outcome_result?: import("./payload-segments.js").LedgerPayloadSegmentRef;
 }
 
 /** 完整 Ledger 事件。 */
@@ -276,6 +283,7 @@ export function eventContentAddressable(
     capability: content.capability,
     wire_digest: content.wire_digest,
     wire_payload: content.wire_payload,
+    payload_segments: content.payload_segments,
     state_transition: content.state_transition,
     // v0.7.0 KTH 字段（JCS 跳过 undefined，KNP 事件向后兼容；KTH 事件的
     // 溯源/证据字段必须纳入 digest——否则篡改 terms_digest/evidence 无法

@@ -55,6 +55,7 @@ import { sha256Hex } from "../jcs.js";
 import { LedgerError, computeEventDigest, eventContentAddressable } from "./event.js";
 import { assertNoForbiddenContent, isLedgerEvent, newLedgerEventId } from "./event.js";
 import type { LedgerEvent, LedgerEventContent, LedgerVerifyResult } from "./event.js";
+import { LedgerPayloadSegmentStore } from "./payload-segments.js";
 
 export interface LedgerHighWaterMark {
   negotiation_id: string;
@@ -72,6 +73,8 @@ export interface LedgerStoreOptions {
   now?: () => string;
   /** 跨进程 append 锁等待上限（ms，缺省 5000）；超时 fail-closed。 */
   lockTimeoutMs?: number;
+  /** Optional external payload store used by appendSegmented. */
+  payloadSegments?: LedgerPayloadSegmentStore;
 }
 
 /** append 锁轮询间隔（ms）与陈旧阈值（持锁超此即视为崩溃残留，可自愈）。 */
@@ -94,12 +97,14 @@ export class LedgerStore {
   private readonly ledgerDir: string;
   private readonly now: () => string;
   private readonly lockTimeoutMs: number;
+  private readonly payloadSegments?: LedgerPayloadSegmentStore;
 
   constructor(options: LedgerStoreOptions) {
     this.baseDir = options.dir;
     this.ledgerDir = path.join(options.dir, "ledger");
     this.now = options.now ?? (() => new Date().toISOString());
     this.lockTimeoutMs = options.lockTimeoutMs ?? 5000;
+    this.payloadSegments = options.payloadSegments;
   }
 
   /**
@@ -246,6 +251,36 @@ export class LedgerStore {
   append(content: LedgerEventContent): LedgerEvent {
     // 跨进程互斥（评审项 B1）：整个 load→verify→rewrite 在链级文件锁内。
     return this.withChainLock(content.negotiation_id, () => this.appendUnlocked(content));
+  }
+
+  /**
+   * Append an event with large/personal正文 externalized into content-addressed
+   * segments. The hash-linked Ledger retains only references and digests.
+   */
+  appendSegmented(content: LedgerEventContent): LedgerEvent {
+    if (this.payloadSegments === undefined) {
+      throw new LedgerError("ledger_invalid_identity", "appendSegmented requires payloadSegments store");
+    }
+    const wireRef = content.wire_payload === undefined
+      ? undefined
+      : this.payloadSegments.put(content.wire_payload);
+    const outcomeRef = content.outcome.kind === "ok" && content.outcome.result !== undefined
+      ? this.payloadSegments.put(content.outcome.result)
+      : undefined;
+    const outcome = content.outcome.kind === "ok" && content.outcome.result !== undefined
+      ? { kind: "ok" as const }
+      : content.outcome;
+    const segmented: LedgerEventContent = {
+      ...content,
+      payload_segments: {
+        ...(content.payload_segments ?? {}),
+        ...(wireRef === undefined ? {} : { wire_payload: wireRef }),
+        ...(outcomeRef === undefined ? {} : { outcome_result: outcomeRef }),
+      },
+      outcome,
+    };
+    delete segmented.wire_payload;
+    return this.append(segmented);
   }
 
   private appendUnlocked(content: LedgerEventContent): LedgerEvent {
