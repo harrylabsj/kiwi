@@ -664,3 +664,48 @@ export function replayDeletionSuppressions(
     return { applied, deletedRows };
   });
 }
+
+/**
+ * Build deletion handlers for optional SQLite-backed preference/cache tables.
+ * Only an explicit allowlist is touched; absent tables are treated as an
+ * empty node and still produce an auditable receipt. Controlled backups are
+ * intentionally not included because physical/cryptographic erasure requires
+ * the backup provider's own verified API.
+ */
+export function createSqlDeletionHandlers(db: DatabaseSync):
+  Partial<Record<PrivacyDeletionNode, PrivacyDeletionNodeHandler>> {
+  const deleteFromAllowlist = (node: PrivacyDeletionNode, tables: readonly string[]): PrivacyDeletionNodeHandler =>
+    ({ requestId, merchantId, buyerPrincipalId, consentGeneration }) => {
+      let deletedRows = 0;
+      for (const table of tables) {
+        if (!tableExists(db, table)) continue;
+        deletedRows += Number(
+          db.prepare(`DELETE FROM ${table} WHERE merchant_id=? AND buyer_principal_id=?`)
+            .run(merchantId, buyerPrincipalId).changes,
+        );
+      }
+      return {
+        receiptRef: `${node}:${requestId}:${consentGeneration}:${deletedRows}`,
+        deletedRows,
+      };
+    };
+  return {
+    "buyer-preferences": deleteFromAllowlist("buyer-preferences", [
+      "buyer_preferences",
+      "merchant_buyer_preferences",
+      "buyer_preference_cache",
+    ]),
+    "runtime-cache": deleteFromAllowlist("runtime-cache", [
+      "runtime_cache",
+      "merchant_runtime_cache",
+      "buyer_runtime_cache",
+    ]),
+  };
+}
+
+function tableExists(db: DatabaseSync, table: string): boolean {
+  const row = db.prepare("SELECT 1 present FROM sqlite_master WHERE type='table' AND name=?").get(table) as
+    | { present: number }
+    | undefined;
+  return row?.present === 1;
+}

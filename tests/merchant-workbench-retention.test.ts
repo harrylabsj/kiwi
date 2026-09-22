@@ -6,6 +6,7 @@ import path from "node:path";
 
 import {
   recommendedRetentionPolicy,
+  createSqlDeletionHandlers,
   replayDeletionSuppressions,
   WorkbenchRetentionError,
   WorkbenchRetentionStore,
@@ -253,5 +254,22 @@ describe("Workbench retention and Buyer privacy requests", () => {
     });
     expect(calls).toBe(1);
     expect(() => store.processDeletionNode(request.requestId, "runtime-cache")).toThrow(/no controlled processor/);
+  });
+
+  it("deletes only allowlisted preference/cache tables and emits receipts", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE TABLE buyer_preferences (merchant_id TEXT, buyer_principal_id TEXT, value TEXT)");
+    db.prepare("INSERT INTO buyer_preferences VALUES ('m1','b1','x')").run();
+    const handlers = createSqlDeletionHandlers(db);
+    const result = handlers["buyer-preferences"]!({
+      requestId: "wpr_test",
+      merchantId: "m1",
+      buyerPrincipalId: "b1",
+      consentGeneration: 2,
+    });
+    expect(result.deletedRows).toBe(1);
+    expect(result.receiptRef).toContain("buyer-preferences:wpr_test:2:1");
+    expect((db.prepare("SELECT count(*) count FROM buyer_preferences").get() as { count: number }).count).toBe(0);
+    db.close();
   });
 });

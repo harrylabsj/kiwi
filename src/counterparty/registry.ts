@@ -47,6 +47,8 @@ export interface ChannelRuntimeDeps {
   now?: () => string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /** Payload segmentation defaults on for assembled production channels. */
+  segmentPayloads?: boolean;
 }
 
 /**
@@ -84,6 +86,7 @@ export async function openChannel(
         now: deps.now,
         fetchImpl: deps.fetchImpl,
         timeoutMs: deps.timeoutMs ?? input.timeoutMs,
+        segmentPayloads: deps.segmentPayloads ?? true,
       });
       return channel.open(input);
     }
@@ -101,6 +104,7 @@ export async function openChannel(
         client,
         ledger: deps.ledger,
         now: deps.now,
+        segmentPayloads: deps.segmentPayloads ?? true,
       });
       return channel.open(input);
     }
