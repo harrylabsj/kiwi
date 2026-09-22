@@ -34,6 +34,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { OperationReceipt } from "../../merchant/application/service.js";
+import {
+  OperationLifecycleReceipts,
+  type LifecycleIntent,
+  type LifecycleReceiptPersistence,
+} from "../../merchant-core/storage/operation-lifecycle.js";
 
 const MANAGEMENT_OPERATION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS merchant_management_operations (
@@ -97,15 +102,134 @@ interface OperationRow {
   receipt_json: string;
 }
 
+type StoredOperationStatus = "accepted" | "running" | "succeeded" | "failed" | "unknown";
+
+interface StoredManagementReceipt {
+  status: StoredOperationStatus;
+  receipt: OperationReceipt;
+}
+
 export class MerchantManagementOperationStore {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
+  private readonly lifecycle: OperationLifecycleReceipts<StoredManagementReceipt>;
 
   constructor(options: { db: DatabaseSync; now?: () => string }) {
     this.db = options.db;
     this.now = options.now ?? (() => new Date().toISOString());
     this.db.exec("pragma busy_timeout=5000");
     this.db.exec(MANAGEMENT_OPERATION_SCHEMA);
+    const persistence: LifecycleReceiptPersistence<StoredManagementReceipt> = {
+      findByKey: (intent) => {
+        const scope = managementScope(intent);
+        const row = this.db
+          .prepare(
+            "SELECT * FROM merchant_management_operations WHERE merchant_id = ? AND actor_id = ? AND command_type = ? AND idempotency_key = ?",
+          )
+          .get(
+            scope.merchantId,
+            scope.actorId,
+            scope.commandType,
+            intent.idempotencyKey,
+          ) as unknown as OperationRow | undefined;
+        return row === undefined
+          ? undefined
+          : {
+              operationId: row.operation_id,
+              scope: {
+                merchantId: row.merchant_id,
+                actorId: row.actor_id,
+                commandType: row.command_type,
+              },
+              requestDigest: row.request_digest,
+              receipt: storedReceipt(row),
+            };
+      },
+      insertRunning: (intent, operationId, pending) => {
+        const scope = managementScope(intent);
+        const stamp = this.now();
+        this.db
+          .prepare(
+            `INSERT INTO merchant_management_operations
+             (merchant_id, actor_id, command_type, idempotency_key, request_digest, operation_id,
+              status, receipt_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            scope.merchantId,
+            scope.actorId,
+            scope.commandType,
+            intent.idempotencyKey,
+            intent.requestDigest,
+            operationId,
+            pending.status,
+            JSON.stringify(pending.receipt),
+            stamp,
+            stamp,
+          );
+      },
+      insertTerminal: (intent, operationId, terminal) => {
+        const scope = managementScope(intent);
+        const stamp = this.now();
+        this.db
+          .prepare(
+            `INSERT INTO merchant_management_operations
+             (merchant_id, actor_id, command_type, idempotency_key, request_digest, operation_id,
+              status, receipt_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            scope.merchantId,
+            scope.actorId,
+            scope.commandType,
+            intent.idempotencyKey,
+            intent.requestDigest,
+            operationId,
+            terminal.status,
+            JSON.stringify(terminal.receipt),
+            stamp,
+            stamp,
+          );
+      },
+      updateTerminal: (operationId, terminal) => {
+        this.db
+          .prepare(
+            "UPDATE merchant_management_operations SET status = ?, receipt_json = ?, updated_at = ? WHERE operation_id = ?",
+          )
+          .run(terminal.status, JSON.stringify(terminal.receipt), this.now(), operationId);
+      },
+      deleteRunning: (operationId) => {
+        this.db
+          .prepare(
+            "DELETE FROM merchant_management_operations WHERE operation_id = ? AND status = 'running'",
+          )
+          .run(operationId);
+      },
+      getById: (operationId, scope) => {
+        const merchantId = scope["merchantId"];
+        if (merchantId === undefined)
+          throw new Error("management operation merchant scope is missing");
+        const row = this.db
+          .prepare(
+            "SELECT * FROM merchant_management_operations WHERE operation_id = ? AND merchant_id = ?",
+          )
+          .get(operationId, merchantId) as unknown as OperationRow | undefined;
+        return row === undefined ? undefined : storedReceipt(row);
+      },
+    };
+    this.lifecycle = new OperationLifecycleReceipts({
+      persistence,
+      operationId: () => `mop_${randomBytes(12).toString("hex")}`,
+      pendingReceipt: (operationId, intent) => {
+        const scope = managementScope(intent);
+        return {
+          status: "running",
+          receipt: this.pendingReceipt(operationId, scope.commandType),
+        };
+      },
+      conflictError: (message) => new Error(message),
+      now: this.now,
+    });
   }
 
   /**
@@ -116,11 +240,10 @@ export class MerchantManagementOperationStore {
   probe(
     input: OperationKey & { requestDigest: string },
   ): { kind: "replay"; receipt: OperationReceipt } | { kind: "conflict" } | { kind: "miss" } {
-    const row = this.rowByKey(input);
-    if (row === undefined) return { kind: "miss" };
-    const outcome = this.outcomeFromRow(row, input.requestDigest);
-    if (outcome.kind === "conflict") return { kind: "conflict" };
-    return { kind: "replay", receipt: outcome.receipt };
+    const outcome = this.lifecycle.probe(managementIntent(input));
+    return outcome.kind === "replay"
+      ? { kind: "replay", receipt: outcome.receipt.receipt }
+      : outcome;
   }
 
   /**
@@ -128,45 +251,15 @@ export class MerchantManagementOperationStore {
    * 否则新建 running 占位并返回 operationId。并发同键由 UNIQUE 约束兜底。
    */
   begin(input: OperationKey & { requestDigest: string }): BeginOutcome {
-    const existing = this.rowByKey(input);
-    if (existing !== undefined) {
-      return this.outcomeFromRow(existing, input.requestDigest);
-    }
-    const operationId = `mop_${randomBytes(12).toString("hex")}`;
-    const stamp = this.now();
-    try {
-      this.db
-        .prepare(
-          `INSERT INTO merchant_management_operations
-           (merchant_id, actor_id, command_type, idempotency_key, request_digest, operation_id, status, receipt_json, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
-        )
-        .run(
-          input.merchantId,
-          input.actorId,
-          input.commandType,
-          input.idempotencyKey,
-          input.requestDigest,
-          operationId,
-          JSON.stringify(this.pendingReceipt(operationId, input)),
-          stamp,
-          stamp,
-        );
-      return { kind: "execute", operationId };
-    } catch (err) {
-      const raced = this.rowByKey(input);
-      if (raced !== undefined) return this.outcomeFromRow(raced, input.requestDigest);
-      throw err;
-    }
+    const outcome = this.lifecycle.begin(managementIntent(input));
+    return outcome.kind === "replay"
+      ? { kind: "replay", receipt: outcome.receipt.receipt }
+      : outcome;
   }
 
   /** 落终态回执（succeeded/failed/unknown；调用方保证 operationId 属本次执行）。 */
   complete(operationId: string, status: "succeeded" | "failed" | "unknown", receipt: OperationReceipt): void {
-    this.db
-      .prepare(
-        "UPDATE merchant_management_operations SET status = ?, receipt_json = ?, updated_at = ? WHERE operation_id = ?",
-      )
-      .run(status, JSON.stringify(receipt), this.now(), operationId);
+    this.lifecycle.complete(operationId, { status, receipt });
   }
 
   /**
@@ -174,19 +267,12 @@ export class MerchantManagementOperationStore {
    * 用原键重试。只删 running——终态行不可被本方法触碰。
    */
   release(operationId: string): void {
-    this.db
-      .prepare(
-        "DELETE FROM merchant_management_operations WHERE operation_id = ? AND status = 'running'",
-      )
-      .run(operationId);
+    this.lifecycle.release(operationId);
   }
 
   /** 操作回执查询（GET /operations/{id}）；merchant_id 归属不符 → undefined（上层 404）。 */
   get(operationId: string, merchantId: string): OperationReceipt | undefined {
-    const row = this.db
-      .prepare("SELECT * FROM merchant_management_operations WHERE operation_id = ? AND merchant_id = ?")
-      .get(operationId, merchantId) as unknown as OperationRow | undefined;
-    return row === undefined ? undefined : (JSON.parse(row.receipt_json) as OperationReceipt);
+    return this.lifecycle.get(operationId, { merchantId })?.receipt;
   }
 
   /**
@@ -230,28 +316,10 @@ export class MerchantManagementOperationStore {
     return result.changes === 1;
   }
 
-  private rowByKey(input: OperationKey): OperationRow | undefined {
-    return this.db
-      .prepare(
-        "SELECT * FROM merchant_management_operations WHERE merchant_id = ? AND actor_id = ? AND command_type = ? AND idempotency_key = ?",
-      )
-      .get(input.merchantId, input.actorId, input.commandType, input.idempotencyKey) as unknown as
-      | OperationRow
-      | undefined;
-  }
-
-  private outcomeFromRow(
-    row: OperationRow,
-    requestDigest: string,
-  ): { kind: "replay"; receipt: OperationReceipt } | { kind: "conflict" } {
-    if (row.request_digest !== requestDigest) return { kind: "conflict" };
-    return { kind: "replay", receipt: JSON.parse(row.receipt_json) as OperationReceipt };
-  }
-
-  private pendingReceipt(operationId: string, input: OperationKey): OperationReceipt {
+  private pendingReceipt(operationId: string, commandType: string): OperationReceipt {
     return {
       operation_id: operationId,
-      command_type: input.commandType,
+      command_type: commandType,
       status: "running",
       resource_ref: null,
       result_revision: null,
@@ -260,4 +328,37 @@ export class MerchantManagementOperationStore {
       support_id: `sup_${operationId.slice(-8)}`,
     };
   }
+}
+
+function managementIntent(input: OperationKey & { requestDigest: string }): LifecycleIntent {
+  return {
+    scope: {
+      merchantId: input.merchantId,
+      actorId: input.actorId,
+      commandType: input.commandType,
+    },
+    idempotencyKey: input.idempotencyKey,
+    requestDigest: input.requestDigest,
+  };
+}
+
+function managementScope(intent: LifecycleIntent): {
+  merchantId: string;
+  actorId: string;
+  commandType: string;
+} {
+  const merchantId = intent.scope["merchantId"];
+  const actorId = intent.scope["actorId"];
+  const commandType = intent.scope["commandType"];
+  if (merchantId === undefined || actorId === undefined || commandType === undefined) {
+    throw new Error("management operation lifecycle scope is incomplete");
+  }
+  return { merchantId, actorId, commandType };
+}
+
+function storedReceipt(row: OperationRow): StoredManagementReceipt {
+  return {
+    status: row.status as StoredOperationStatus,
+    receipt: JSON.parse(row.receipt_json) as OperationReceipt,
+  };
 }

@@ -18,6 +18,11 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
+import {
+  OperationLifecycleReceipts,
+  type LifecycleIntent,
+  type LifecycleReceiptPersistence,
+} from "../merchant-core/storage/operation-lifecycle.js";
 
 /** 回执标识（输入侧）。`operationKind` 与执行器工具一一对应，`requestHash`
  *  覆盖语义输入：同 operation_id 换请求内容必须冲突，字段顺序不得造成假冲突。 */
@@ -50,10 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_${table}_owner
 }
 
 export class MerchantOperationReceipts {
-  private readonly db: DatabaseSync;
-  private readonly table: string;
-  private readonly entityColumn: string;
-  private readonly now: () => string;
+  private readonly lifecycle: OperationLifecycleReceipts<OperationReceiptRecord>;
   private readonly conflictError: (message: string) => Error;
 
   constructor(options: {
@@ -64,11 +66,64 @@ export class MerchantOperationReceipts {
     /** 各 store 自己的错误类型（version_conflict），由调用方注入。 */
     conflictError: (message: string) => Error;
   }) {
-    this.db = options.db;
-    this.table = options.table;
-    this.entityColumn = options.entityColumn;
-    this.now = options.now;
     this.conflictError = options.conflictError;
+    const persistence: LifecycleReceiptPersistence<OperationReceiptRecord> = {
+      findByKey: (intent) => {
+        const row = options.db
+          .prepare(`SELECT * FROM ${options.table} WHERE operation_id=?`)
+          .get(intent.idempotencyKey) as Record<string, unknown> | undefined;
+        return row === undefined
+          ? undefined
+          : {
+              operationId: String(row["operation_id"]),
+              scope: {
+                merchantId: String(row["merchant_id"]),
+                operationKind: String(row["operation_kind"]),
+              },
+              requestDigest: String(row["request_hash"]),
+              receipt: receiptFromRow(row, options.entityColumn),
+            };
+      },
+      insertTerminal: (intent, operationId, receipt) => {
+        options.db
+          .prepare(
+            `INSERT INTO ${options.table}
+             (operation_id, merchant_id, operation_kind, ${options.entityColumn}, request_hash,
+              response_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            operationId,
+            requireScope(intent, "merchantId"),
+            requireScope(intent, "operationKind"),
+            receipt.entity_id,
+            intent.requestDigest,
+            JSON.stringify(receipt.response),
+            options.now(),
+          );
+      },
+      updateTerminal: () => {
+        throw new Error("terminal-only operation receipts cannot update an existing receipt");
+      },
+      deleteRunning: () => {
+        throw new Error("terminal-only operation receipts do not have running rows");
+      },
+      getById: (operationId, scope) => {
+        const row = options.db
+          .prepare(`SELECT * FROM ${options.table} WHERE operation_id=? AND merchant_id=?`)
+          .get(operationId, requireScope({ scope }, "merchantId")) as
+          Record<string, unknown> | undefined;
+        return row === undefined ? undefined : receiptFromRow(row, options.entityColumn);
+      },
+    };
+    this.lifecycle = new OperationLifecycleReceipts({
+      persistence,
+      operationId: () => {
+        throw new Error("terminal-only operation receipts require a caller-supplied operation ID");
+      },
+      conflictError: options.conflictError,
+      now: options.now,
+    });
   }
 
   /**
@@ -82,22 +137,12 @@ export class MerchantOperationReceipts {
     operation: OperationReceiptIntent | undefined,
   ): OperationReceiptRecord | undefined {
     if (operation === undefined) return undefined;
-    const row = this.db
-      .prepare(`SELECT * FROM ${this.table} WHERE operation_id=?`)
-      .get(operation.operationId) as Record<string, unknown> | undefined;
-    if (row === undefined) return undefined;
-    if (
-      String(row["merchant_id"]) !== merchantId ||
-      String(row["request_hash"]) !== operation.requestHash ||
-      String(row["operation_kind"]) !== operation.operationKind
-    ) {
+    const outcome = this.lifecycle.probe(lifecycleIntent(merchantId, operation));
+    if (outcome.kind === "miss") return undefined;
+    if (outcome.kind === "conflict") {
       throw this.conflictError("operation_id was reused with a different merchant or request");
     }
-    return {
-      operation_kind: String(row["operation_kind"]),
-      entity_id: String(row[this.entityColumn]),
-      response: JSON.parse(String(row["response_json"])) as Record<string, unknown>,
-    };
+    return outcome.receipt;
   }
 
   /** 同事务落回执（调用方须在事务内）。未带 operation 时不落（非决定路径）。 */
@@ -108,34 +153,41 @@ export class MerchantOperationReceipts {
     response: Record<string, unknown>,
   ): void {
     if (operation === undefined) return;
-    this.db
-      .prepare(
-        `INSERT INTO ${this.table}
-         (operation_id, merchant_id, operation_kind, ${this.entityColumn}, request_hash,
-          response_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        operation.operationId,
-        merchantId,
-        operation.operationKind,
-        entityId,
-        operation.requestHash,
-        JSON.stringify(response),
-        this.now(),
-      );
+    this.lifecycle.recordTerminal(lifecycleIntent(merchantId, operation), operation.operationId, {
+      operation_kind: operation.operationKind,
+      entity_id: entityId,
+      response,
+    });
   }
 
   /** 对账查询：按商家隔离，用 operationId 查本次操作落的回执。 */
   get(merchantId: string, operationId: string): OperationReceiptRecord | undefined {
-    const row = this.db
-      .prepare(`SELECT * FROM ${this.table} WHERE operation_id=? AND merchant_id=?`)
-      .get(operationId, merchantId) as Record<string, unknown> | undefined;
-    if (row === undefined) return undefined;
-    return {
-      operation_kind: String(row["operation_kind"]),
-      entity_id: String(row[this.entityColumn]),
-      response: JSON.parse(String(row["response_json"])) as Record<string, unknown>,
-    };
+    return this.lifecycle.get(operationId, { merchantId });
   }
+}
+
+function lifecycleIntent(merchantId: string, operation: OperationReceiptIntent): LifecycleIntent {
+  return {
+    scope: { merchantId, operationKind: operation.operationKind },
+    idempotencyKey: operation.operationId,
+    requestDigest: operation.requestHash,
+  };
+}
+
+function receiptFromRow(
+  row: Record<string, unknown>,
+  entityColumn: string,
+): OperationReceiptRecord {
+  return {
+    operation_kind: String(row["operation_kind"]),
+    entity_id: String(row[entityColumn]),
+    response: JSON.parse(String(row["response_json"])) as Record<string, unknown>,
+  };
+}
+
+function requireScope(intent: Pick<LifecycleIntent, "scope">, field: string): string {
+  const value = intent.scope[field];
+  if (value === undefined || value === "")
+    throw new Error(`operation lifecycle scope ${field} is missing`);
+  return value;
 }

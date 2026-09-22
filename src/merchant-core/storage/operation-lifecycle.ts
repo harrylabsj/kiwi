@@ -25,7 +25,7 @@ export interface LifecycleReceiptRow<TReceipt> {
 
 export interface LifecycleReceiptPersistence<TReceipt> {
   findByKey(intent: LifecycleIntent): LifecycleReceiptRow<TReceipt> | undefined;
-  insertRunning(intent: LifecycleIntent, operationId: string, pending: TReceipt): void;
+  insertRunning?(intent: LifecycleIntent, operationId: string, pending: TReceipt): void;
   insertTerminal(intent: LifecycleIntent, operationId: string, receipt: TReceipt): void;
   updateTerminal(operationId: string, receipt: TReceipt): void;
   deleteRunning(operationId: string): void;
@@ -36,7 +36,7 @@ export interface LifecycleReceiptPersistence<TReceipt> {
 export class OperationLifecycleReceipts<TReceipt> {
   private readonly persistence: LifecycleReceiptPersistence<TReceipt>;
   private readonly operationId: () => string;
-  private readonly pendingReceipt: (operationId: string, intent: LifecycleIntent) => TReceipt;
+  private readonly pendingReceipt?: (operationId: string, intent: LifecycleIntent) => TReceipt;
   private readonly conflictError: (message: string) => Error;
   private readonly now: () => string;
   private readonly retentionMs?: number;
@@ -44,7 +44,7 @@ export class OperationLifecycleReceipts<TReceipt> {
   constructor(options: {
     persistence: LifecycleReceiptPersistence<TReceipt>;
     operationId: () => string;
-    pendingReceipt: (operationId: string, intent: LifecycleIntent) => TReceipt;
+    pendingReceipt?: (operationId: string, intent: LifecycleIntent) => TReceipt;
     conflictError: (message: string) => Error;
     now: () => string;
     retentionMs?: number;
@@ -72,6 +72,9 @@ export class OperationLifecycleReceipts<TReceipt> {
     this.prune();
     const existing = this.persistence.findByKey(intent);
     if (existing !== undefined) return this.existingOutcome(intent, existing);
+    if (this.persistence.insertRunning === undefined || this.pendingReceipt === undefined) {
+      throw new Error("running lifecycle is not supported by this persistence adapter");
+    }
     const operationId = this.operationId();
     try {
       this.persistence.insertRunning(intent, operationId, this.pendingReceipt(operationId, intent));
@@ -85,6 +88,11 @@ export class OperationLifecycleReceipts<TReceipt> {
 
   complete(operationId: string, receipt: TReceipt): void {
     this.persistence.updateTerminal(operationId, receipt);
+  }
+
+  /** Caller-owned transaction mode: persist a terminal receipt with a caller-supplied ID. */
+  recordTerminal(intent: LifecycleIntent, operationId: string, receipt: TReceipt): void {
+    this.persistence.insertTerminal(intent, operationId, receipt);
   }
 
   release(operationId: string): void {
@@ -122,7 +130,7 @@ export class OperationLifecycleReceipts<TReceipt> {
     // A uniqueness failure here occurs after the effect ran. Replaying would hide a possible
     // duplicate side effect, so never compensate it here: caller-owned BEGIN IMMEDIATE must
     // serialize runOnce users, and any violation is surfaced for rollback/UNKNOWN handling.
-    this.persistence.insertTerminal(input.intent, operationId, receipt);
+    this.recordTerminal(input.intent, operationId, receipt);
     return { replayed: false, operationId, receipt };
   }
 

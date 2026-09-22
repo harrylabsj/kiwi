@@ -206,4 +206,32 @@ describe("OperationLifecycleReceipts", () => {
     });
     expect(() => lifecycle.probe(intent())).toThrow(/invalid time/);
   });
+
+  it("supports terminal-only adapters but rejects begin without running persistence", () => {
+    const persistence = new MemoryPersistence();
+    const terminalOnly: LifecycleReceiptPersistence<Receipt> = {
+      ...persistence,
+      findByKey: (value) => persistence.findByKey(value),
+      insertTerminal: (value, operationId, receipt) =>
+        persistence.insertTerminal(value, operationId, receipt),
+      updateTerminal: (operationId, receipt) => persistence.updateTerminal(operationId, receipt),
+      deleteRunning: (operationId) => persistence.deleteRunning(operationId),
+      getById: (operationId, scope) => persistence.getById(operationId, scope),
+    };
+    const lifecycle = new OperationLifecycleReceipts<Receipt>({
+      persistence: terminalOnly,
+      operationId: () => "operation-1",
+      conflictError: (message) => new ConflictError(message),
+      now: () => "2026-09-22T08:00:00.000Z",
+    });
+    expect(() => lifecycle.begin(intent())).toThrow(/running lifecycle is not supported/);
+    lifecycle.recordTerminal(intent(), "operation-1", {
+      status: "succeeded",
+      value: "done",
+    });
+    expect(lifecycle.probe(intent())).toMatchObject({
+      kind: "replay",
+      operationId: "operation-1",
+    });
+  });
 });
