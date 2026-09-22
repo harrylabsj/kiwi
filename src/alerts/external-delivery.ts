@@ -5,6 +5,11 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { recordClockSkewAlert } from "../merchant-core/storage/clock-skew-alerts.js";
 import { sanitize } from "../merchant-core/storage/redact.js";
+import {
+  LeasedJobStore,
+  type LeasedJobHandle,
+  type LeasedJobPersistence,
+} from "../merchant-core/storage/leased-job.js";
 import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
 
 const SCHEMA = `
@@ -39,13 +44,42 @@ export interface ExternalAlertLease {
 }
 
 export class ExternalAlertDeliveryStore {
+  private readonly leasePersistence: LeasedJobPersistence<
+    ExternalAlertLease,
+    { delivered: true } | { delivered: false; error: string }
+  >;
+
   constructor(private readonly options: { db: DatabaseSync; now?: () => string }) {
     options.db.exec("pragma busy_timeout=5000");
     options.db.exec(SCHEMA);
+    this.leasePersistence = {
+      inTransaction: (fn) => inImmediateTransaction(this.options.db, fn),
+      enqueueOutstanding: (now) => this.enqueueOutstandingAt(now),
+      leaseCandidate: (now) => {
+        const row = this.options.db
+          .prepare(
+            `SELECT d.delivery_id, d.fencing_token
+             FROM workbench_alert_deliveries d JOIN workbench_alerts a ON a.alert_id=d.alert_id
+             WHERE (d.status='pending' AND d.next_attempt_at<=?)
+                OR (d.status='leased' AND d.lease_expires_at<=?)
+             ORDER BY CASE a.severity WHEN 'critical' THEN 0 ELSE 1 END,
+                      d.next_attempt_at, d.delivery_id LIMIT 1`,
+          )
+          .get(now, now) as { delivery_id: string; fencing_token: number } | undefined;
+        return row === undefined
+          ? undefined
+          : { jobId: row.delivery_id, fencingToken: Number(row.fencing_token) };
+      },
+      claim: (input) => this.claimLease(input),
+      finish: (input) => this.finishLease(input.lease.payload, input.result, input.now),
+    };
   }
 
   enqueueOutstanding(): number {
-    const stamp = this.now();
+    return this.enqueueOutstandingAt(this.now());
+  }
+
+  private enqueueOutstandingAt(stamp: string): number {
     const rows = this.options.db
       .prepare(
         `SELECT alert_id, merchant_id FROM workbench_alerts
@@ -76,61 +110,101 @@ export class ExternalAlertDeliveryStore {
   }
 
   lease(workerId: string, leaseMs = 30_000): ExternalAlertLease | undefined {
-    const stamp = this.now();
-    const expires = new Date(Date.parse(stamp) + leaseMs).toISOString();
-    return inImmediateTransaction(this.options.db, () => {
-      const row = this.options.db
-        .prepare(
-          `SELECT d.*, a.severity, a.category, a.summary, a.created_at alert_created_at
-           FROM workbench_alert_deliveries d
-           JOIN workbench_alerts a ON a.alert_id=d.alert_id
-           WHERE (d.status='pending' AND d.next_attempt_at<=?)
-              OR (d.status='leased' AND d.lease_expires_at<=?)
-           ORDER BY CASE a.severity WHEN 'critical' THEN 0 ELSE 1 END,
-                    d.next_attempt_at, d.delivery_id LIMIT 1`,
-        )
-        .get(stamp, stamp) as Record<string, unknown> | undefined;
-      if (row === undefined) {
-        // 早退在 fn 内 return：无写入，wrapper 提交空事务（与 rollback 等价）
-        return undefined;
-      }
-      const token = Number(row["fencing_token"]) + 1;
-      const changed = this.options.db
-        .prepare(
-          `UPDATE workbench_alert_deliveries
-           SET status='leased', lease_owner=?, lease_expires_at=?, fencing_token=?,
-               attempts=attempts+1, updated_at=?
-           WHERE delivery_id=? AND fencing_token=?`,
-        )
-        .run(
-          workerId,
-          expires,
-          token,
-          stamp,
-          String(row["delivery_id"]),
-          Number(row["fencing_token"]),
-        );
-      if (changed.changes !== 1) throw new Error("external alert lease CAS failed");
-      return {
-        deliveryId: String(row["delivery_id"]),
-        alertId: String(row["alert_id"]),
-        merchantId: String(row["merchant_id"]),
-        severity: String(row["severity"]) as "warning" | "critical",
-        category: String(row["category"]),
-        summary: sanitize(String(row["summary"])),
-        createdAt: String(row["alert_created_at"]),
-        attempts: Number(row["attempts"]) + 1,
-        workerId,
-        fencingToken: token,
-      };
-    });
+    const leased = new LeasedJobStore<
+      ExternalAlertLease,
+      { delivered: true } | { delivered: false; error: string }
+    >({
+      persistence: this.leasePersistence,
+      now: () => this.now(),
+      leaseMs,
+    }).lease(workerId);
+    return leased?.payload;
   }
 
   finish(
     lease: ExternalAlertLease,
     result: { delivered: true } | { delivered: false; error: string },
   ): boolean {
-    const stamp = this.now();
+    return new LeasedJobStore<
+      ExternalAlertLease,
+      { delivered: true } | { delivered: false; error: string }
+    >({
+      persistence: this.leasePersistence,
+      now: () => this.now(),
+      leaseMs: 30_000,
+    }).finish(
+      {
+        jobId: lease.deliveryId,
+        workerId: lease.workerId,
+        fencingToken: lease.fencingToken,
+        attempts: lease.attempts,
+        payload: lease,
+      },
+      result,
+    );
+  }
+
+  private claimLease(input: {
+    jobId: string;
+    workerId: string;
+    expectedFencingToken: number;
+    nextFencingToken: number;
+    leaseExpiresAt: string;
+    now: string;
+  }): LeasedJobHandle<ExternalAlertLease> | undefined {
+    const changed = this.options.db
+      .prepare(
+        `UPDATE workbench_alert_deliveries
+         SET status='leased', lease_owner=?, lease_expires_at=?, fencing_token=?,
+             attempts=attempts+1, updated_at=?
+         WHERE delivery_id=? AND fencing_token=?
+           AND ((status='pending' AND next_attempt_at<=?)
+             OR (status='leased' AND lease_expires_at<=?))`,
+      )
+      .run(
+        input.workerId,
+        input.leaseExpiresAt,
+        input.nextFencingToken,
+        input.now,
+        input.jobId,
+        input.expectedFencingToken,
+        input.now,
+        input.now,
+      );
+    if (changed.changes !== 1) return undefined;
+    const row = this.options.db
+      .prepare(
+        `SELECT d.*, a.severity, a.category, a.summary, a.created_at alert_created_at
+         FROM workbench_alert_deliveries d JOIN workbench_alerts a ON a.alert_id=d.alert_id
+         WHERE d.delivery_id=?`,
+      )
+      .get(input.jobId) as Record<string, unknown>;
+    const payload: ExternalAlertLease = {
+      deliveryId: String(row["delivery_id"]),
+      alertId: String(row["alert_id"]),
+      merchantId: String(row["merchant_id"]),
+      severity: String(row["severity"]) as "warning" | "critical",
+      category: String(row["category"]),
+      summary: sanitize(String(row["summary"])),
+      createdAt: String(row["alert_created_at"]),
+      attempts: Number(row["attempts"]),
+      workerId: input.workerId,
+      fencingToken: input.nextFencingToken,
+    };
+    return {
+      jobId: input.jobId,
+      workerId: input.workerId,
+      fencingToken: input.nextFencingToken,
+      attempts: payload.attempts,
+      payload,
+    };
+  }
+
+  private finishLease(
+    lease: ExternalAlertLease,
+    result: { delivered: true } | { delivered: false; error: string },
+    stamp: string,
+  ): boolean {
     const terminalFailure = !result.delivered && lease.attempts >= 10;
     const delayMs = Math.min(15 * 60_000, 5_000 * 2 ** Math.min(lease.attempts - 1, 8));
     const changed = this.options.db
@@ -307,4 +381,3 @@ export class ExternalAlertDeliveryWorker {
     }
   }
 }
-
