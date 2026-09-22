@@ -291,6 +291,29 @@ export class HttpMerchantClient implements MerchantClient {
     return parseExactMerchantProduct(payload.product);
   }
 
+  async updateListingExact(input: {
+    operation_id: string;
+    merchant_id: string;
+    sku: string;
+    paused: boolean;
+    currency_table_version: string;
+  }): Promise<ExactMerchantProduct> {
+    const payload = (await this.request(
+      "PATCH",
+      `/v1/merchant/products/${encodeURIComponent(input.sku)}/listing`,
+      {
+        body: {
+          operation_id: input.operation_id,
+          merchant_id: input.merchant_id,
+          paused: input.paused,
+          currency_table_version: input.currency_table_version,
+        },
+        token: this.catalogToken(),
+      },
+    )) as { product?: unknown };
+    return parseExactMerchantProduct(payload.product);
+  }
+
   async getProductOperation(
     merchantId: string,
     operationId: string,
@@ -302,8 +325,14 @@ export class HttpMerchantClient implements MerchantClient {
         query: { merchant_id: merchantId },
         token: this.catalogToken(),
       },
-    )) as { operation?: unknown };
-    return parseMerchantProductOperation(payload.operation);
+    )) as { operation?: unknown; result?: unknown };
+    const operation = parseMerchantProductOperation(payload.operation);
+    // result 是回执响应体（上游 response_json）：listing 对账要从中核对 paused
+    // 目标态。缺/异形时保持缺省（对账按不可判定处理，不编造）。
+    if (payload.result !== null && typeof payload.result === "object" && !Array.isArray(payload.result)) {
+      return { ...operation, result: payload.result as Record<string, unknown> };
+    }
+    return operation;
   }
 
   async getProduct(sku: string): Promise<MerchantCatalogProduct> {
@@ -433,14 +462,19 @@ export class HttpMerchantClient implements MerchantClient {
   /**
    * 语义选型（V2 §8.3 P0-3）：pauseListing = **销售状态**（暂停/恢复销售，
    *  catalog paused flag 语义），不是「catalog listing 撤回」，绝不用库存写零
-   *  伪装下架。上游 shopping-cli 2.x 无该端点 → fail closed 报「不可得」
-   *  （能力探测 listing_pause=false；审批候选仍会生成与记录，最终写入拒绝）。
+   *  伪装下架。
+   *
+   *  legacy 路径保持 fail-closed（照库存对 legacy `updateInventory` 的处置：
+   *  旧面不动，写面整条切 v1）：上游 v31 起虽有 v1 listing 端点，但它**要求
+   *  operation_id**——只能来自已提交决定，本签名给不出；硬造一个会让「回执」
+   *  与「决定」脱钩（「有回执 ⟺ 有决定」是 v1 可对账的根基）。写面由
+   *  `updateListingExact` + v1 listing 执行器接管。
    */
   async pauseListing(_sku: string, _paused: boolean): Promise<MerchantCatalogProduct> {
     throw new MerchantClientError(
       "validation",
-      "shopping-cli 2.x 不提供 listing pause/resume 端点（active 为目录内部字段）；" +
-        "该能力在真实 Connector 上 fail closed，只保留审批候选记录。",
+      "legacy pauseListing 不可用：v1 listing 端点要求 operation_id（只能来自已提交决定），" +
+        "该签名给不出；上下架写面已切到 v1 执行器（kiwi_merchant_prepare_listing_change）。",
     );
   }
 
@@ -474,8 +508,10 @@ export class HttpMerchantClient implements MerchantClient {
    * 且 capabilities 全 false——调用方不得据此产生报价或返回编造数据。
    * 协商不可用（端点缺失/无权限/瞬时故障）时回退 legacy 已验证线（2.x 实测
    * 线，见 SHOPPING_CLI_LEGACY_VERIFIED）；3.x 网关都带 /capabilities，「3.x
-   * 却协商不了」按不可判定 fail-closed。能力清单仍按 2.x/3.x 实测标定：
-   * listing_pause / resolve_review 已知缺失（勿宣传；见 V2 计划 P0-3）。
+   * 却协商不了」按不可判定 fail-closed。能力清单仍按实测标定：listing_pause
+   * 自上游 schema v31（v1 listing 端点，B 线上下架）起可用，标定翻 true
+   * （对尚未升级的网关，写入在执行期如实失败，不再前置掩盖）；resolve_review
+   * 已知缺失（勿宣传；见 V2 计划 P0-3）。
    */
   async probeCapabilities(
     options: { now?: () => string; persistPath?: string } = {},
@@ -492,8 +528,11 @@ export class HttpMerchantClient implements MerchantClient {
       catalog_read: true,
       catalog_write: true,
       inventory_write: true,
+      // 上游 schema v31 起提供 v1 listing 端点（同事务回执，B 线上下架）→ 标定翻
+      // true。静态标定不区分网关版本：对尚未升级的网关，写入在执行期如实失败
+      // （honest failure），好过继续按「已知缺失」前置掩盖一个已存在的能力。
+      listing_pause: true,
       // shopping-cli 2.x/3.x 已知缺失（实测标定；升级上游后重新探测标定）
-      listing_pause: false,
       resolve_review: false,
     };
     let report: MerchantCapabilityProbe;

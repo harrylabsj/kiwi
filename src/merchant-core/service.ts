@@ -307,7 +307,7 @@ export class MerchantCoreService {
     });
   }
 
-  /** prepare：listing 销售状态变更（F08 语义；上游不支持 → fail-closed「不可得」）。 */
+  /** prepare：listing 销售状态变更（F08 语义；能力探测 listing_pause=false → fail-closed「不可得」，不降级为库存写零）。 */
   async prepareListingChange(input: {
     sku: string;
     paused: boolean;

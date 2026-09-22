@@ -1,11 +1,13 @@
-// v1 库存写入的客户端路径 + 回执（B 线）。
+// v1 上下架写入的客户端路径 + 回执（B 线：上下架）。
 //
-// 这条链路存在的唯一理由：**让库存写入可对账**。legacy 的 `updateInventory` 走
-// `PATCH /products/{sku}`，不落回执，于是外部写落进 UNKNOWN 时无法查明副作用是否
-// 真的发生过。本文件锁定三个适配点：
-//   1. wire：PATCH 到 v1 库存端点，body 带 operation_id，凭据走 catalog token；
-//   2. 词表：`product_inventory_update` 被解析器接受，未知 kind 仍被拒；
-//   3. 替身：写入落回执、同 operation_id 重放不产生第二次效果、异 sku 复用被拒。
+// 这条链路存在的唯一理由：**让上下架写入可对账**。legacy `pauseListing` 在上游
+// 连状态都没有（fail-closed 报「不可得」），不落回执，于是外部写落进 UNKNOWN 时
+// 无法查明副作用是否真的发生过。本文件锁定三个适配点：
+//   1. wire：PATCH 到 v1 listing 端点，body 带 operation_id 与严格 bool 的
+//      paused，凭据走 catalog token；
+//   2. 词表：`product_listing_change` 被解析器接受，未知 kind 仍被拒；
+//   3. 替身：写入落回执（响应体携带 paused 目标态）、同 operation_id 重放不
+//      产生第二次效果、异 sku 复用被拒、两套读面同步。
 import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
 import { StaticCredentialBroker } from "../src/agent/merchant/credential-broker.js";
@@ -19,7 +21,7 @@ import {
 
 const CURRENCY_TABLE = "kiwi-workbench-currency-v1-2026-09-21";
 
-function exactProduct(sku = "tea-a", stock = 5): ExactMerchantProduct {
+function exactProduct(sku = "tea-a", listingPaused = false): ExactMerchantProduct {
   return {
     sku,
     merchant_id: "seller-a",
@@ -27,7 +29,8 @@ function exactProduct(sku = "tea-a", stock = 5): ExactMerchantProduct {
     description: "",
     category: "",
     tags: [],
-    stock,
+    stock: 5,
+    listing_paused: listingPaused,
     currency: "CNY",
     price_minor: "8800",
     currency_table_version: CURRENCY_TABLE,
@@ -37,7 +40,7 @@ function exactProduct(sku = "tea-a", stock = 5): ExactMerchantProduct {
   };
 }
 
-function legacyProduct(sku = "tea-a", stock = 5): MerchantCatalogProduct {
+function legacyProduct(sku = "tea-a", paused = false): MerchantCatalogProduct {
   return {
     sku,
     merchant_id: "seller-a",
@@ -47,14 +50,14 @@ function legacyProduct(sku = "tea-a", stock = 5): MerchantCatalogProduct {
     tags: [],
     price: 88,
     currency: "CNY",
-    stock,
+    stock: 5,
     delivery_attributes: [],
-    paused: false,
+    paused,
   };
 }
 
-describe("v1 库存写入：wire 形状", () => {
-  it("PATCH 到库存端点，body 带 operation_id，用 catalog 凭据", async () => {
+describe("v1 上下架写入：wire 形状", () => {
+  it("PATCH 到 listing 端点，body 带 operation_id 与严格 bool 的 paused，用 catalog 凭据", async () => {
     let seenUrl = "";
     let seenAuth = "";
     let seenBody = "";
@@ -64,7 +67,7 @@ describe("v1 库存写入：wire 形状", () => {
       req.on("data", (c) => (seenBody += String(c)));
       req.on("end", () => {
         res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({ ok: true, product: exactProduct("tea-a", 42) }));
+        res.end(JSON.stringify({ ok: true, product: exactProduct("tea-a", true) }));
       });
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -74,30 +77,32 @@ describe("v1 库存写入：wire 形状", () => {
         `http://127.0.0.1:${port}`,
         new StaticCredentialBroker({ catalog: "tok-catalog" }),
       );
-      const updated = await client.updateInventoryExact({
-        operation_id: "operation-inventory-1",
+      const updated = await client.updateListingExact({
+        operation_id: "operation-listing-1",
         merchant_id: "seller-a",
         sku: "tea-a",
-        stock: 42,
+        paused: true,
         currency_table_version: CURRENCY_TABLE,
       });
-      expect(updated).toMatchObject({ sku: "tea-a", stock: 42, price_minor: "8800" });
-      expect(seenUrl).toContain("/v1/merchant/products/tea-a/inventory");
+      expect(updated).toMatchObject({ sku: "tea-a", listing_paused: true, price_minor: "8800" });
+      expect(seenUrl).toContain("/v1/merchant/products/tea-a/listing");
       expect(seenAuth).toBe("Bearer tok-catalog");
       const body = JSON.parse(seenBody) as Record<string, unknown>;
       expect(body).toMatchObject({
-        operation_id: "operation-inventory-1",
+        operation_id: "operation-listing-1",
         merchant_id: "seller-a",
-        stock: 42,
+        paused: true,
         currency_table_version: CURRENCY_TABLE,
       });
+      // paused 必须以 JSON bool 上 wire（"false" 这类串会被上游拒，且语义方向相反）
+      expect(typeof body["paused"]).toBe("boolean");
     } finally {
       server.close();
     }
   });
 });
 
-describe("operation kind 词表", () => {
+describe("operation kind 词表（listing）", () => {
   const base = {
     operation_id: "op-1",
     merchant_id: "seller-a",
@@ -106,18 +111,10 @@ describe("operation kind 词表", () => {
     created_at: "2026-09-22T00:00:00Z",
   };
 
-  it("接受 product_inventory_update", () => {
+  it("接受 product_listing_change", () => {
     expect(
-      parseMerchantProductOperation({ ...base, operation_kind: "product_inventory_update" }),
-    ).toMatchObject({ operation_kind: "product_inventory_update" });
-  });
-
-  it("仍然接受既有两个 exact kind", () => {
-    for (const kind of ["exact_product_create", "exact_product_money_update"] as const) {
-      expect(parseMerchantProductOperation({ ...base, operation_kind: kind })).toMatchObject({
-        operation_kind: kind,
-      });
-    }
+      parseMerchantProductOperation({ ...base, operation_kind: "product_listing_change" }),
+    ).toMatchObject({ operation_kind: "product_listing_change" });
   });
 
   it("未知 kind 仍然被拒（fail-closed）", () => {
@@ -127,7 +124,7 @@ describe("operation kind 词表", () => {
   });
 });
 
-describe("替身：写入落回执且可重放", () => {
+describe("替身：上下架写入落回执且可重放", () => {
   function client(): FakeMerchantClient {
     return new FakeMerchantClient({
       products: [legacyProduct()],
@@ -135,53 +132,55 @@ describe("替身：写入落回执且可重放", () => {
     });
   }
 
-  it("写入后回执可按 operation_id 查回，且库存与两套读面一致", async () => {
+  it("写入后回执可按 operation_id 查回，响应体带 paused 目标态，两套读面一致", async () => {
     const c = client();
-    const updated = await c.updateInventoryExact({
-      operation_id: "op-inv",
+    const updated = await c.updateListingExact({
+      operation_id: "op-lst",
       merchant_id: "seller-a",
       sku: "tea-a",
-      stock: 42,
+      paused: true,
       currency_table_version: CURRENCY_TABLE,
     });
-    expect(updated.stock).toBe(42);
+    expect(updated.listing_paused).toBe(true);
     // legacy 读面同步（两套读面不能各说各话）
-    expect((await c.getProduct("tea-a")).stock).toBe(42);
-    const receipt = await c.getProductOperation("seller-a", "op-inv");
+    expect((await c.getProduct("tea-a")).paused).toBe(true);
+    const receipt = await c.getProductOperation("seller-a", "op-lst");
     expect(receipt).toMatchObject({
-      operation_kind: "product_inventory_update",
+      operation_kind: "product_listing_change",
       sku: "tea-a",
       status: "succeeded",
     });
+    // 回执响应体携带 paused 目标态——对账核对的是语义，不只是状态
+    expect((receipt.result?.["product"] as { listing_paused?: unknown }).listing_paused).toBe(true);
   });
 
   it("同 operation_id 重放返回原状态，不产生第二次效果", async () => {
     const c = client();
-    await c.updateInventoryExact({
+    await c.updateListingExact({
       operation_id: "op-replay",
       merchant_id: "seller-a",
       sku: "tea-a",
-      stock: 7,
+      paused: true,
       currency_table_version: CURRENCY_TABLE,
     });
-    // 中间改一次
-    await c.updateInventoryExact({
+    // 中间改一次（恢复销售）
+    await c.updateListingExact({
       operation_id: "op-other",
       merchant_id: "seller-a",
       sku: "tea-a",
-      stock: 99,
+      paused: false,
       currency_table_version: CURRENCY_TABLE,
     });
-    const replay = await c.updateInventoryExact({
+    const replay = await c.updateListingExact({
       operation_id: "op-replay",
       merchant_id: "seller-a",
       sku: "tea-a",
-      stock: 7,
+      paused: true,
       currency_table_version: CURRENCY_TABLE,
     });
     // 重放**不覆盖**中间那次改动——这正是"重放不等于重做"
-    expect(replay.stock).toBe(99);
-    expect((await c.getProduct("tea-a")).stock).toBe(99);
+    expect(replay.listing_paused).toBe(false);
+    expect((await c.getProduct("tea-a")).paused).toBe(false);
   });
 
   it("同 operation_id 复用到别的 sku → 拒", async () => {
@@ -189,19 +188,19 @@ describe("替身：写入落回执且可重放", () => {
       products: [legacyProduct("tea-a"), legacyProduct("tea-b")],
       exactProducts: [exactProduct("tea-a"), exactProduct("tea-b")],
     });
-    await c.updateInventoryExact({
+    await c.updateListingExact({
       operation_id: "op-reuse",
       merchant_id: "seller-a",
       sku: "tea-a",
-      stock: 7,
+      paused: true,
       currency_table_version: CURRENCY_TABLE,
     });
     await expect(
-      c.updateInventoryExact({
+      c.updateListingExact({
         operation_id: "op-reuse",
         merchant_id: "seller-a",
         sku: "tea-b",
-        stock: 7,
+        paused: true,
         currency_table_version: CURRENCY_TABLE,
       }),
     ).rejects.toThrow(/operation id was reused/);

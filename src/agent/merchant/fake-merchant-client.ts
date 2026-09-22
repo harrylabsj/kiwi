@@ -208,6 +208,40 @@ export class FakeMerchantClient implements MerchantClient {
     return updated;
   }
 
+  async updateListingExact(input: {
+    operation_id: string;
+    merchant_id: string;
+    sku: string;
+    paused: boolean;
+    currency_table_version: string;
+  }): Promise<ExactMerchantProduct> {
+    const replay = this.exactOperations.get(input.operation_id);
+    if (replay !== undefined) {
+      if (replay.operation_kind !== "product_listing_change" || replay.sku !== input.sku) {
+        throw new MerchantClientError("validation", "operation id was reused");
+      }
+      return this.getExactProduct(input.merchant_id, input.sku);
+    }
+    const current = await this.getExactProduct(input.merchant_id, input.sku);
+    const updated = { ...current, listing_paused: input.paused };
+    this.exactProducts.set(input.sku, updated);
+    // 两套读面不能各说各话：legacy 读面的 paused 同步（照 updateInventoryExact
+    // 同步 stock 的口径）。
+    const legacy = this.requireProduct(input.sku);
+    this.products.set(input.sku, { ...legacy, paused: input.paused });
+    this.exactOperations.set(input.operation_id, {
+      operation_id: input.operation_id,
+      merchant_id: input.merchant_id,
+      operation_kind: "product_listing_change",
+      sku: input.sku,
+      status: "succeeded",
+      created_at: this.now,
+      // 回执响应体携带 paused 目标态（对账核对的语义字段，照上游 response_json 形状）。
+      result: { ok: true, product: updated, idempotent: false },
+    });
+    return updated;
+  }
+
   async getProductOperation(
     merchantId: string,
     operationId: string,
@@ -292,8 +326,9 @@ export class FakeMerchantClient implements MerchantClient {
   }
 
   async pauseListing(sku: string, paused: boolean): Promise<MerchantCatalogProduct> {
-    // Fake 演示态支持 listing pause（真实引擎无该端点，HttpMerchantClient
-    // fail-closed）；直接改 paused 字段，不经 PATCH patch（真实网关无此字段）。
+    // Fake 演示态支持 listing pause（真实 Connector 的 legacy pauseListing
+    // fail-closed——v1 端点要求 operation_id，该签名给不出；真实写面走
+    // updateListingExact）；直接改 paused 字段，不经 PATCH patch（真实网关无此字段）。
     const product = this.requireProduct(sku);
     const updated = { ...product, paused };
     this.products.set(sku, updated);

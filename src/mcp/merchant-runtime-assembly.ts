@@ -59,6 +59,7 @@ import { MerchantCoreService } from "../merchant-core/service.js";
 import type { CommandExecutor } from "../merchant-core/executor.js";
 import { createExactProductExecutors } from "../merchant/exact-product-executors.js";
 import { createInventoryExecutors } from "../merchant/inventory-executors.js";
+import { createListingExecutors } from "../merchant/listing-executors.js";
 import { decimalMajorToMinor } from "../merchant/application/money.js";
 import {
   assertMerchantMcpAuthPolicy,
@@ -414,6 +415,7 @@ export async function assembleMerchantRuntime(
     extraExecutors: [
       ...createExactProductExecutors({ merchantId: profile.owner_id, client: merchantClient }),
       ...createInventoryExecutors({ merchantId: profile.owner_id, client: merchantClient }),
+      ...createListingExecutors({ merchantId: profile.owner_id, client: merchantClient }),
       ...(options.extraExecutors ?? []),
     ],
     ...(options.requireCommittedProductDecisions === true

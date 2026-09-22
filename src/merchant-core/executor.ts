@@ -179,8 +179,10 @@ export class MerchantExecutorRegistry {
           c.merchantClient.updateInventory(String(args.sku), Number(args.stock)),
       },
       {
-        // F08 语义落地：销售状态（paused flag）；上游 shopping-cli 2.x 无端点
-        // → client fail-closed 报「不可得」（不库存写零伪装下架）。
+        // F08 语义落地：销售状态（paused flag）。写面已被 v1 listing 执行器
+        // （src/merchant/listing-executors.ts，extras 后写覆盖本条）接管——上游
+        // v31 起有真实端点与同事务回执；本条 legacy 仅作兜底保留（真实
+        // Connector 的 legacy pauseListing 仍 fail-closed，不用库存写零伪装下架）。
         tool: "kiwi_merchant_prepare_listing_change",
         requiresCommittedDecision: ctx.requireCommittedProductDecisions === true,
         readPreconditions: productPreconditions,

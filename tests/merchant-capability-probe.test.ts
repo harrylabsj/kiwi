@@ -3,7 +3,7 @@
  * - probeCapabilities：/health 版本 + /capabilities 协议通告（权威信号，
  *   Kiwi 需要 shopping.negotiation/0.1）；协商不可用回退 legacy 已验证线
  *   （2.x 实测线；3.x 无协商不可判定 fail-closed）；
- * - 能力清单标定（listing_pause / resolve_review 已知缺失 false）；
+ * - 能力清单标定（listing_pause 自上游 v31 起可用 true；resolve_review 已知缺失 false）；
  * - 网关故障 / 协议不兼容 / 版本缺失 → fail-closed（ok:false，能力全 false，
  *   不产生报价、不编造数据）；
  * - persistPath 落盘可查询（版本组合锁定：先记录探测结果）；
@@ -52,7 +52,7 @@ describe("probeCapabilities（能力探测；协议协商）", () => {
     catalog_read: true,
     catalog_write: true,
     inventory_write: true,
-    listing_pause: false,
+    listing_pause: true,
     resolve_review: false,
   };
 

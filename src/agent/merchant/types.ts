@@ -77,6 +77,9 @@ export interface ExactMerchantProduct {
   category: string;
   tags: string[];
   stock: number;
+  /** 销售状态（true = 暂停销售/下架）。上游 schema v31 起 v1 面投影携带；
+   *  更老网关没有该字段 → undefined（调用方按「不可判定」处理，不得当成 false）。 */
+  listing_paused?: boolean;
   currency: string;
   price_minor: string;
   currency_table_version: string;
@@ -103,16 +106,17 @@ export interface ExactMerchantProductInput {
 }
 
 /**
- * 下游 operation 的 kind 词表——**与 shopping-cli 的 CHECK 约束同源**。
+ * 下游 operation 的 kind 词表——**与 shopping-cli 的枚举表同源**。
  *
- * 收敛到一处是刻意的：上游 migration_029/030 把词表写进了 CHECK，于是每加一个 kind
- * 都要重建表；这里若再枚举一遍（类型 + 解析器两处），就会变成"改一处忘一处"。
- * 加 kind 时：本数组 + 上游 CHECK（需迁移重建）同步改。
+ * 收敛到一处是刻意的：上游 v31 起词表在枚举表 `merchant_product_operation_kinds`
+ * （此前是 CHECK，每加 kind 要重建表）；这里若再枚举一遍（类型 + 解析器两处），
+ * 就会变成"改一处忘一处"。加 kind 时：本数组 + 上游枚举表播种（迁移加行）同步改。
  */
 export const MERCHANT_PRODUCT_OPERATION_KINDS = [
   "exact_product_create",
   "exact_product_money_update",
   "product_inventory_update",
+  "product_listing_change",
 ] as const;
 export type MerchantProductOperationKind = (typeof MERCHANT_PRODUCT_OPERATION_KINDS)[number];
 
@@ -123,6 +127,13 @@ export interface MerchantProductOperation {
   sku: string;
   status: "succeeded";
   created_at: string;
+  /**
+   * 回执响应体（上游 response_json 经查询端点原样带回）。listing 对账要核对
+   * **paused 目标态**——回执存在且 kind/sku 对上还不够，响应体里的目标态与
+   * 请求语义一致才判 succeeded（同 id 同 sku 异 paused 的请求上游按冲突拒绝，
+   * 留下的回执反映的是**另一次**写）。
+   */
+  result?: Record<string, unknown>;
 }
 
 export interface IncomingConsultation {
@@ -203,6 +214,26 @@ export interface MerchantClient {
     currency_table_version: string;
   }): Promise<ExactMerchantProduct>;
 
+  /**
+   * v1 上下架写入（暂停/恢复销售）+ **同事务 operation receipt**（B 线：上下架）。
+   *
+   * 与 legacy `pauseListing` 的区别：**有真实端点且可对账**。legacy 路径在上游
+   * 根本没有状态可写（fail-closed 报「不可得」）；本方法写
+   * `products.listing_paused`（暂停销售的唯一事实来源，刻意不用库存写零伪装
+   * 下架）并落回执，于是外部写落进 UNKNOWN 时可按 `operation_id` 查明副作用
+   * 是否真的发生过。回执经 `getProductOperation` 查询，其 `result.product.
+   * listing_paused` 是 paused 目标态的对账依据。
+   *
+   * 前置：商家须在 exact 线上（v1 面口径，回执投影读金额权威）。
+   */
+  updateListingExact(input: {
+    operation_id: string;
+    merchant_id: string;
+    sku: string;
+    paused: boolean;
+    currency_table_version: string;
+  }): Promise<ExactMerchantProduct>;
+
   getProductOperation(
     merchantId: string,
     operationId: string,
@@ -259,6 +290,8 @@ export function parseExactMerchantProduct(value: unknown): ExactMerchantProduct 
     category: typeof v.category === "string" ? v.category : "",
     tags: Array.isArray(v.tags) ? stringArray(v.tags, "product.tags") : [],
     stock: reqInteger(v.stock, "product.stock"),
+    // 可选：上游 v31 起 v1 面投影携带；更老网关缺字段保持 undefined（不假装 false）。
+    ...(typeof v.listing_paused === "boolean" ? { listing_paused: v.listing_paused } : {}),
     currency: reqString(v.currency, "product.currency"),
     price_minor: reqMinorText(v.price_minor, "product.price_minor"),
     currency_table_version: reqString(v.currency_table_version, "product.currency_table_version"),
