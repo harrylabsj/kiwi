@@ -51,11 +51,18 @@ export class MutableServiceState {
    */
   private resumeOperationIdValue: string | null = null;
   private persistence?: { db: DatabaseSync; merchantId: string };
+  /**
+   * 业务时钟（P2-1 刀 2 补注入）：落库的 updated_at 是业务时间，必须可钉死——
+   * 字面量墙钟是「上午绿下午红」那类缺陷的同族（见 clock-injection-contract.test.ts
+   * 头注释）。可选注入、缺省回退墙钟，与全仓构造器注入同例。
+   */
+  private readonly now: () => string;
 
-  constructor(initial: ServiceState = "OPERATING") {
+  constructor(initial: ServiceState = "OPERATING", options: { now?: () => string } = {}) {
     this.stateValue = initial;
     this.revisionValue = 1;
     this.stateReason = initial === "OPERATING" ? "" : "declared by the operator";
+    this.now = options.now ?? (() => new Date().toISOString());
   }
 
   /**
@@ -213,7 +220,7 @@ export class MutableServiceState {
         this.stateValue,
         this.revisionValue,
         this.stateReason,
-        new Date().toISOString(),
+        this.now(),
         this.resumeOperationIdValue,
       );
   }
@@ -242,7 +249,7 @@ export class MutableServiceState {
         this.stateValue,
         this.revisionValue,
         this.stateReason,
-        new Date().toISOString(),
+        this.now(),
         this.resumeOperationIdValue,
         persistence.merchantId,
         expectedRevision,

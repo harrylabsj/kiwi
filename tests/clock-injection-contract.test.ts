@@ -30,8 +30,14 @@
  *    夹具，应把它替换成「冻结时钟 → 跑 handoff → 断言证据时间等于冻结值」的行为断言。
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { MutableServiceState } from "../src/http/merchant-management/service-state.js";
+import { FileLeaseStore } from "../src/negotiation/lease/store.js";
 
 const SRC = path.join(process.cwd(), "src");
 
@@ -93,5 +99,66 @@ describe("时钟注入契约", () => {
   it("kernel 确实声明了统一时钟（防止上一条断言因字段被改名而空转）", () => {
     const source = readFileSync(path.join(SRC, "agent", "kernel.ts"), "utf8");
     expect(source).toMatch(/private readonly clock:\s*\(\)\s*=>\s*string/);
+  });
+});
+
+describe("P2-1 刀 2 补注入：这两处的时间现在真的可钉死（行为断言）", () => {
+  // 这两处此前是「无可注入接口的字面量墙钟」——与上面两条契约断言防的同族，
+  // 但连注入入口都没有。补注入后，钉死时间必须真实决定落库与租约判定。
+
+  it("MutableServiceState：落库 updated_at 走注入时钟（insert 与 persist 两条路径）", () => {
+    let t = "2026-09-22T00:00:00.000Z";
+    const db = new DatabaseSync(":memory:");
+    const state = new MutableServiceState("OPERATING", { now: () => t });
+    state.attachPersistence(db, "merchant-clock");
+    const updatedAt = () =>
+      (
+        db
+          .prepare("SELECT updated_at FROM workbench_service_control WHERE merchant_id=?")
+          .get("merchant-clock") as { updated_at: string }
+      ).updated_at;
+    // insertCurrent 路径（首次 attach 落行）
+    expect(updatedAt()).toBe(t);
+    // persistCurrent 路径（状态迁移落库）
+    t = "2026-09-22T01:02:03.000Z";
+    state.pause("clock test");
+    expect(updatedAt()).toBe(t);
+  });
+
+  const leaseDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of leaseDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  function leaseStore(nowMs: () => number): FileLeaseStore {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-lease-clock-"));
+    leaseDirs.push(dir);
+    return new FileLeaseStore(dir, { nowMs });
+  }
+
+  it("FileLeaseStore.acquire：过期接管按注入的 nowMs 判定（不依赖墙钟等待）", () => {
+    let t = 1_800_000_000_000;
+    const s = leaseStore(() => t);
+    expect(s.acquire("k", "owner-a", 1_000)).toBe(true);
+    // 注入时间推进到 TTL 之内：不接管
+    t += 999;
+    expect(s.acquire("k", "owner-b", 1_000)).toBe(false);
+    // 注入时间越过 TTL：崩溃残留被接管——无需等真实时间流逝
+    t += 2;
+    expect(s.acquire("k", "owner-b", 1_000)).toBe(true);
+  });
+
+  it("FileLeaseStore.renew：续约写出的截止时间同样按注入时钟计算", () => {
+    let t = 1_800_000_000_000;
+    const s = leaseStore(() => t);
+    expect(s.acquire("k", "owner-a", 1_000)).toBe(true);
+    t += 500;
+    // 续约：expires = 当前注入时间 + TTL = t0+1500
+    expect(s.renew("k", "owner-a", 1_000)).toBe(true);
+    // t0+1499：续约后的窗口仍然有效，不接管
+    t += 999;
+    expect(s.acquire("k", "owner-b", 1_000)).toBe(false);
+    // t0+1501：越过续约后的截止 → 接管
+    t += 2;
+    expect(s.acquire("k", "owner-b", 1_000)).toBe(true);
   });
 });

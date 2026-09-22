@@ -49,15 +49,22 @@ function leasePath(dir: string, key: string): string {
 
 export class FileLeaseStore {
   private readonly dir: string;
+  /**
+   * 业务时钟（P2-1 刀 2 补注入），单位毫秒：本 store 的时间语义是 TTL/过期接管
+   * 比较（`expires_at` 与「现在」都是 epoch ms），故注入 `nowMs` 而非全仓主流的
+   * ISO `now`——单位照上下文选，不硬套。可选注入、缺省回退墙钟，与全仓同例。
+   */
+  private readonly nowMs: () => number;
 
-  constructor(dir: string) {
+  constructor(dir: string, options: { nowMs?: () => number } = {}) {
     this.dir = dir;
+    this.nowMs = options.nowMs ?? Date.now;
   }
 
   /** 获取独占租约；被占且未过期 → false；崩溃残留（过期）→ 接管重试。 */
   acquire(key: string, owner: string, ttlMs: number): boolean {
     const path = leasePath(this.dir, key);
-    const now = Date.now();
+    const now = this.nowMs();
     try {
       const fd = openSync(path, "wx");
       writeSync(fd, JSON.stringify({ owner, expires_at: now + ttlMs }));
@@ -96,7 +103,7 @@ export class FileLeaseStore {
       const tmp = `${path}.tmp-${process.pid}`;
       const fd = openSync(tmp, "wx", 0o600);
       try {
-        writeSync(fd, JSON.stringify({ owner, expires_at: Date.now() + ttlMs }));
+        writeSync(fd, JSON.stringify({ owner, expires_at: this.nowMs() + ttlMs }));
         fsyncSync(fd);
       } finally {
         closeSync(fd);
