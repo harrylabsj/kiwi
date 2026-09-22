@@ -12,10 +12,10 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-const store = (): FileLeaseStore => {
+const store = (nowMs?: () => number): FileLeaseStore => {
   const dir = mkdtempSync(path.join(tmpdir(), "kiwi-lease-"));
   dirs.push(dir);
-  return new FileLeaseStore(dir);
+  return new FileLeaseStore(dir, nowMs === undefined ? {} : { nowMs });
 };
 
 describe("FileLeaseStore（BUG-07）", () => {
@@ -35,17 +35,12 @@ describe("FileLeaseStore（BUG-07）", () => {
   });
 
   it("崩溃残留：过期租约被接管，未过期不被接管", () => {
-    const s = store();
-    // 过期残留（TTL 1ms 已过）
+    let now = 0;
+    const s = store(() => now);
     expect(s.acquire("stale", "old-owner", 1)).toBe(true);
     expect(s.acquire("stale", "new-owner", 10_000)).toBe(false); // 未过期不接管
-    // 等过期
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        expect(s.acquire("stale", "new-owner", 10_000)).toBe(true); // 过期接管
-        resolve();
-      }, 10);
-    });
+    now = 2;
+    expect(s.acquire("stale", "new-owner", 10_000)).toBe(true); // 过期接管
   });
 
   it("fencing：旧 owner 的迟到 release 不删除新 owner 的租约", () => {
