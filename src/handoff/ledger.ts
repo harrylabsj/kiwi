@@ -177,6 +177,10 @@ export class HandoffEventStore {
     return this.store.events(negotiationId);
   }
 
+  resolvePayload(event: LedgerEvent): LedgerEvent {
+    return this.store.resolvePayload(event);
+  }
+
   /** 全部已落账的 negotiation_id（/handoff 列表用）。 */
   listNegotiations(): string[] {
     return this.store.listNegotiations();

@@ -550,7 +550,7 @@ export class MerchantWorkbenchService {
         agreement: false,
         recorded_at: "",
       };
-      for (const e of ledger.events(negotiationId)) {
+      for (const e of ledger.events(negotiationId).map((event) => ledger.resolvePayload(event))) {
         if (e.recorded_at > row.recorded_at) row.recorded_at = e.recorded_at;
         if (e.state_transition?.to_phase !== undefined) {
           row.phase = e.state_transition.to_phase;

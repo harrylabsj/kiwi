@@ -1451,7 +1451,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         }
         // 审计链：stale 候选之后的新候选链接到被它取代的候选
         //（supersedes_candidate_id；此前从不写入，stale 后的新候选是审计孤儿）。
-        const lastStale = [...handoff.ledger.events(agreement.negotiation_id)]
+        const lastStale = [...handoff.ledger.events(agreement.negotiation_id).map((event) => handoff.ledger.resolvePayload(event))]
           .reverse()
           .find((e) => e.event_kind === "handoff_candidate_stale");
         const candidate = createHandoffCandidate({

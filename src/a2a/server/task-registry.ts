@@ -125,7 +125,7 @@ export class TaskRegistry {
   resolveFromLedger(ledger: LedgerStore, taskId: string, owner: TaskOwner): A2ATask | null {
     if (isAnonymousOwner(owner)) return null;
     for (const negotiationId of ledger.listNegotiations()) {
-      for (const event of ledger.events(negotiationId)) {
+      for (const event of ledger.events(negotiationId).map((entry) => ledger.resolvePayload(entry))) {
         if (event.remote_task_id !== taskId) continue;
         const eventSender = event.identity?.sender_identity;
         if (typeof eventSender === "string" && eventSender !== owner.identity) return null;

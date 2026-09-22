@@ -176,7 +176,7 @@ function agreementsReachedSince(dataDir: string, since: string): number {
   const ledger = new LedgerStore({ dir: path.join(dataDir, "a2a"), now: utcNow });
   let count = 0;
   for (const negotiationId of ledger.listNegotiations()) {
-    if (ledger.events(negotiationId).some((event) =>
+    if (ledger.events(negotiationId).map((event) => ledger.resolvePayload(event)).some((event) =>
       event.state_transition?.to_phase === "AGREEMENT_REACHED" && event.recorded_at.slice(0, 10) >= since,
     )) {
       count += 1;
@@ -504,7 +504,7 @@ export class DefaultMerchantIntelligenceBackend implements MerchantIntelligenceB
     const wanted = input.status ?? "all";
     const rows: NegotiationDigestItem[] = [];
     for (const negotiationId of ledger.listNegotiations()) {
-      const row = extractNegotiation(negotiationId, ledger.events(negotiationId));
+      const row = extractNegotiation(negotiationId, ledger.events(negotiationId).map((event) => ledger.resolvePayload(event)));
       if (row === undefined) continue;
       const active = !(TERMINAL_PHASES as readonly string[]).includes(row.phase);
       const agreement = row.agreement_id !== undefined || row.phase === "AGREEMENT_REACHED";

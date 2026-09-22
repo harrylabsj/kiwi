@@ -619,7 +619,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
     // active_offer_id / last conditional_offer 一次算出。此前按 phase 与
     // conditional 分两趟遍历每条链，长驻 merchant 启动时间随磋商数线性放大
     // （O(total events) 的全量恢复是正确性必需，这里只减掉冗余遍历）。
-    const events = ledger.events(negotiationId);
+    const events = ledger.events(negotiationId).map((event) => ledger.resolvePayload(event));
     let phase: NegotiationPhase = "OPEN";
     // 审查 K-M15：恢复完整相位状态——AWAITING_CLARIFICATION 的 resume_phase
     // 由「进入它的转换的 from_phase」推导（进入只能是 OPEN/OFFER_OPEN）；

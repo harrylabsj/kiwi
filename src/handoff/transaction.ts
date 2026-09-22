@@ -160,7 +160,7 @@ async function executeHandoffUnlocked(input: ExecuteHandoffInput): Promise<Execu
     // 清理失败不影响执行（fail-safe 方向；下次执行再试）。
   }
   const negotiationId = candidate.negotiation_id;
-  const events = ledger.events(negotiationId);
+  const events = ledger.events(negotiationId).map((event) => ledger.resolvePayload(event));
   const candidateEvents = events.filter((e) => e.handoff_candidate_id === candidate.handoff_candidate_id);
   const state = foldCandidateLifecycle(candidateEvents);
   const now = input.now ?? (() => new Date().toISOString());

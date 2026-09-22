@@ -766,7 +766,7 @@ export class AgentKernel {
     }> = [];
     const handoffs: Array<{ handoff_id: string; delivery: string }> = [];
     for (const negotiationId of this.handoffRuntime.ledger.listNegotiations()) {
-      const events = this.handoffRuntime.ledger.events(negotiationId);
+      const events = this.handoffRuntime.ledger.events(negotiationId).map((event) => this.handoffRuntime!.ledger.resolvePayload(event));
       const seenCandidates = new Set<string>();
       const seenHandoffs = new Set<string>();
       for (const event of events) {
@@ -818,7 +818,7 @@ export class AgentKernel {
   /** 模拟 OS/browser/deep-link handler 启动（LAUNCHED；不证明页面加载）。 */
   async launchHandoff(handoffId: string, negotiationId: string): Promise<string> {
     if (this.handoffRuntime === undefined) return "Handoff 未启用。";
-    const events = this.handoffRuntime.ledger.events(negotiationId);
+    const events = this.handoffRuntime.ledger.events(negotiationId).map((event) => this.handoffRuntime!.ledger.resolvePayload(event));
     const handoffEvents = events.filter((e) => e.handoff_id === handoffId);
     if (handoffEvents.length === 0)
       return `未知 handoff ${handoffId}（negotiation ${negotiationId}）。`;
@@ -854,7 +854,7 @@ export class AgentKernel {
   /** 本地回调证据：handoff-open 演示（OPENED_CONFIRMED 证据门，KTH §9）。 */
   async confirmHandoffOpened(handoffId: string, negotiationId: string): Promise<string> {
     if (this.handoffRuntime === undefined) return "Handoff 未启用。";
-    const events = this.handoffRuntime.ledger.events(negotiationId);
+    const events = this.handoffRuntime.ledger.events(negotiationId).map((event) => this.handoffRuntime!.ledger.resolvePayload(event));
     const handoffEvents = events.filter((e) => e.handoff_id === handoffId);
     if (handoffEvents.length === 0)
       return `未知 handoff ${handoffId}（negotiation ${negotiationId}）。`;

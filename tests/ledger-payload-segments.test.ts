@@ -53,6 +53,8 @@ describe("Ledger payload segments", () => {
       expect(event.outcome).toEqual({ kind: "ok" });
       expect(event.payload_segments?.wire_payload).toBeDefined();
       expect(event.payload_segments?.outcome_result).toBeDefined();
+      expect(ledger.resolvePayload(event).wire_payload).toEqual({ action: "rfq", message_id: "m1" });
+      expect(ledger.resolvePayload(event).outcome).toEqual({ kind: "ok", result: { accepted: true } });
       expect(segments.get(event.payload_segments!.wire_payload!)).toEqual({ action: "rfq", message_id: "m1" });
       expect(segments.get(event.payload_segments!.outcome_result!)).toEqual({ accepted: true });
       expect(ledger.verifyChain("neg-segmented").valid).toBe(true);

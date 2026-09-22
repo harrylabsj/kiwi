@@ -97,14 +97,17 @@ export class LedgerStore {
   private readonly ledgerDir: string;
   private readonly now: () => string;
   private readonly lockTimeoutMs: number;
-  private readonly payloadSegments?: LedgerPayloadSegmentStore;
+  private readonly payloadSegments: LedgerPayloadSegmentStore;
 
   constructor(options: LedgerStoreOptions) {
     this.baseDir = options.dir;
     this.ledgerDir = path.join(options.dir, "ledger");
     this.now = options.now ?? (() => new Date().toISOString());
     this.lockTimeoutMs = options.lockTimeoutMs ?? 5000;
-    this.payloadSegments = options.payloadSegments;
+    this.payloadSegments = options.payloadSegments ?? new LedgerPayloadSegmentStore({
+      dir: path.join(options.dir, "segments"),
+      now: this.now,
+    });
   }
 
   /**
@@ -258,9 +261,6 @@ export class LedgerStore {
    * segments. The hash-linked Ledger retains only references and digests.
    */
   appendSegmented(content: LedgerEventContent): LedgerEvent {
-    if (this.payloadSegments === undefined) {
-      throw new LedgerError("ledger_invalid_identity", "appendSegmented requires payloadSegments store");
-    }
     const wireRef = content.wire_payload === undefined
       ? undefined
       : this.payloadSegments.put(content.wire_payload);
@@ -281,6 +281,23 @@ export class LedgerStore {
     };
     delete segmented.wire_payload;
     return this.append(segmented);
+  }
+
+  /** Resolve external payload references for trusted recovery/read paths. */
+  resolvePayload(event: LedgerEvent): LedgerEvent {
+    const refs = event.payload_segments;
+    if (refs === undefined) return event;
+    const wirePayload = refs.wire_payload === undefined
+      ? undefined
+      : this.payloadSegments.get<Record<string, unknown>>(refs.wire_payload);
+    const outcomeResult = refs.outcome_result === undefined
+      ? undefined
+      : this.payloadSegments.get<Record<string, unknown>>(refs.outcome_result);
+    return {
+      ...event,
+      ...(wirePayload === undefined ? {} : { wire_payload: wirePayload }),
+      ...(outcomeResult === undefined ? {} : { outcome: { kind: "ok", result: outcomeResult } }),
+    };
   }
 
   private appendUnlocked(content: LedgerEventContent): LedgerEvent {

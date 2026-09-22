@@ -298,7 +298,7 @@ export class NegotiationRecovery {
     let events: LedgerEvent[];
     let hwm: LedgerHighWaterMark;
     try {
-      events = ledger.events(negotiationId);
+      events = ledger.events(negotiationId).map((event) => ledger.resolvePayload(event));
       hwm = ledger.highWaterMark(negotiationId);
     } catch (err) {
       return this.required(
