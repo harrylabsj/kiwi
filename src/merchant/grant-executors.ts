@@ -1,10 +1,14 @@
 /** Owner-only, WebAuthn-committed scoped grant mutation executors. */
 
+import { contentHash } from "../agent/merchant/action-candidate.js";
 import type { CommandExecutor } from "../merchant-core/executor.js";
 import { createVerifiedActorContext } from "./application/actor.js";
 import {
   GRANT_ACTIONS,
+  GRANT_OPERATION_KINDS,
   type GrantAction,
+  type GrantOperation,
+  type GrantOperationKind,
   type GrantResourceType,
   type MerchantGrantStore,
 } from "./grant-store.js";
@@ -23,6 +27,58 @@ export function createGrantExecutors(options: {
     if (value === undefined) throw new Error("Merchant grant authority is not configured");
     return value;
   };
+  /**
+   * 构造本次操作的回执标识。`requestHash` 覆盖**语义输入**（不是读取时的原始 JSON）：
+   * 同 operation_id 换了请求内容必须冲突，而字段顺序/无关字段不得造成假冲突。
+   */
+  const operationFor = (
+    operationKind: GrantOperationKind,
+    args: Readonly<Record<string, unknown>>,
+    decision: { kind: "committed"; operationId: string; actorId: string } | undefined,
+  ): GrantOperation => ({
+    operationId: requireCommitted(decision).operationId,
+    operationKind,
+    requestHash: contentHash({
+      operation_kind: operationKind,
+      merchant_id: options.merchantId,
+      subject_id: args.subject_id ?? null,
+      grant_action: args.grant_action ?? null,
+      resource_type: args.resource_type ?? null,
+      resource_selector: args.resource_selector ?? null,
+      expires_at: args.expires_at ?? null,
+      grant_id: args.grant_id ?? null,
+    }),
+  });
+
+  /**
+   * 对账适配器：写后不确定时按 operation_id 查**我们自己的**回执。
+   *
+   * 授权写是 kiwi 内部写，没有下游服务可问——回执落在 grant store 自己的表里，
+   * 且与效果**同事务**。没有这个适配器时 `MerchantCommandLog.reconcile` 会返回
+   * unknown +「no downstream operation query adapter」，把一次可自动判定的对账
+   * 变成人工升级。
+   */
+  const queryOutcome =
+    (operationKind: GrantOperationKind) =>
+    async (
+      args: Record<string, unknown>,
+      _ctx: unknown,
+      decision: { operationId: string },
+    ): Promise<{ status: "succeeded" } | { status: "unknown"; error: string }> => {
+      const receipt = store().getOperation(options.merchantId, decision.operationId);
+      if (receipt === undefined || receipt.operation_kind !== operationKind) {
+        return { status: "unknown", error: "grant receipt does not match" };
+      }
+      // create 的 grant_id 由服务端生成，args 里没有，只能按 kind 核对；
+      // revoke 必须核对回执对着的是同一个 grant。
+      if (
+        operationKind === GRANT_OPERATION_KINDS.revoke &&
+        receipt.grant_id !== String(args["grant_id"] ?? "")
+      ) {
+        return { status: "unknown", error: "grant receipt does not match" };
+      }
+      return { status: "succeeded" };
+    };
   return [
     {
       tool: GRANT_TOOLS.create,
@@ -35,14 +91,19 @@ export function createGrantExecutors(options: {
           requireText(args["subject_id"], "subject_id"),
         ),
       }),
-      execute: async (args) =>
-        store().createGrant(ownerContext(options.merchantId, args), {
-          subjectId: requireText(args["subject_id"], "subject_id"),
-          action: requireAction(args["grant_action"]),
-          resourceType: requireResourceType(args["resource_type"]),
-          resourceSelector: requireSelector(args["resource_selector"]),
-          expiresAt: requireText(args["expires_at"], "expires_at"),
-        }),
+      execute: async (args, _context, decision) =>
+        store().createGrant(
+          ownerContext(options.merchantId, args),
+          {
+            subjectId: requireText(args["subject_id"], "subject_id"),
+            action: requireAction(args["grant_action"]),
+            resourceType: requireResourceType(args["resource_type"]),
+            resourceSelector: requireSelector(args["resource_selector"]),
+            expiresAt: requireText(args["expires_at"], "expires_at"),
+          },
+          operationFor(GRANT_OPERATION_KINDS.create, args, decision),
+        ),
+      queryOutcome: queryOutcome(GRANT_OPERATION_KINDS.create),
     },
     {
       tool: GRANT_TOOLS.revoke,
@@ -66,13 +127,24 @@ export function createGrantExecutors(options: {
               ),
             };
       },
-      execute: async (args) =>
+      execute: async (args, _context, decision) =>
         store().revokeGrant(
           ownerContext(options.merchantId, args),
           requireText(args["grant_id"], "grant_id"),
+          operationFor(GRANT_OPERATION_KINDS.revoke, args, decision),
         ),
+      queryOutcome: queryOutcome(GRANT_OPERATION_KINDS.revoke),
     },
   ];
+}
+
+function requireCommitted(
+  value: { kind: "committed"; operationId: string; actorId: string } | undefined,
+): { operationId: string; actorId: string } {
+  if (value?.kind !== "committed") {
+    throw new Error("grant execution requires a committed decision");
+  }
+  return value;
 }
 
 function ownerContext(merchantId: string, args: Readonly<Record<string, unknown>>) {

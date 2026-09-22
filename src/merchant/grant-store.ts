@@ -54,10 +54,44 @@ CREATE TABLE IF NOT EXISTS merchant_grant_generations (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (merchant_id, subject_id)
 );
+CREATE TABLE IF NOT EXISTS merchant_grant_operations (
+  operation_id TEXT PRIMARY KEY,
+  merchant_id TEXT NOT NULL,
+  operation_kind TEXT NOT NULL,
+  grant_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_merchant_grant_operations_owner
+  ON merchant_grant_operations(merchant_id, operation_id);
 `;
 
+/**
+ * 授权写操作的回执标识。**operationKind 与执行器工具一一对应**，`queryOutcome`
+ * 据它判断"查到的回执是不是我这次操作"（与广播回执同口径，见 feed-store）。
+ */
+export interface GrantOperation {
+  operationId: string;
+  operationKind: GrantOperationKind;
+  requestHash: string;
+}
+
+export const GRANT_OPERATION_KINDS = {
+  create: "grant_create",
+  revoke: "grant_revoke",
+} as const;
+export type GrantOperationKind = (typeof GRANT_OPERATION_KINDS)[keyof typeof GRANT_OPERATION_KINDS];
+
+/** 操作级回执（对账查询的返回形状）。 */
+export interface GrantOperationReceipt {
+  operation_kind: GrantOperationKind;
+  grant_id: string;
+  response: Record<string, unknown>;
+}
+
 export class MerchantGrantError extends Error {
-  readonly code: "invalid_input" | "forbidden" | "not_found";
+  readonly code: "invalid_input" | "forbidden" | "not_found" | "version_conflict";
   constructor(code: MerchantGrantError["code"], message: string) {
     super(message);
     this.name = "MerchantGrantError";
@@ -91,6 +125,7 @@ export class MerchantGrantStore {
       resourceSelector: "all_products" | readonly string[] | "merchant";
       expiresAt: string;
     },
+    operation?: GrantOperation,
   ): { grant_id: string; grant_version: number; authorization_generation: number } {
     const actor = assertVerifiedActor(owner, new Date(this.now()));
     if (actor.role !== "owner" || !actor.permissions.has("grants:manage")) {
@@ -110,6 +145,16 @@ export class MerchantGrantStore {
     const stamp = this.now();
     this.db.exec("begin immediate");
     try {
+      // 重放判定必须在写之前（同 operation_id 同请求回原回执，不产生第二次效果）
+      const replay = this.replayOperation(actor.merchantId, operation);
+      if (replay !== undefined) {
+        this.db.exec("commit");
+        return replay.response as {
+          grant_id: string;
+          grant_version: number;
+          authorization_generation: number;
+        };
+      }
       const generation = this.bumpGeneration(actor.merchantId, subject, stamp);
       const row = this.db
         .prepare(
@@ -138,21 +183,37 @@ export class MerchantGrantStore {
           actor.actorId,
           stamp,
         );
+      const response = {
+        grant_id: grantId,
+        grant_version: version,
+        authorization_generation: generation,
+      };
+      this.writeOperation(actor.merchantId, operation, grantId, response);
       this.db.exec("commit");
-      return { grant_id: grantId, grant_version: version, authorization_generation: generation };
+      return response;
     } catch (error) {
       this.db.exec("rollback");
       throw error;
     }
   }
 
-  revokeGrant(owner: VerifiedActorContext, grantId: string): number {
+  revokeGrant(
+    owner: VerifiedActorContext,
+    grantId: string,
+    operation?: GrantOperation,
+  ): number {
     const actor = assertVerifiedActor(owner, new Date(this.now()));
     if (actor.role !== "owner" || !actor.permissions.has("grants:manage")) {
       throw new MerchantGrantError("forbidden", "only owner can revoke grants");
     }
     this.db.exec("begin immediate");
     try {
+      // 重放判定必须在写之前（同 operation_id 同请求回原回执，不产生第二次效果）
+      const replay = this.replayOperation(actor.merchantId, operation);
+      if (replay !== undefined) {
+        this.db.exec("commit");
+        return Number(replay.response["authorization_generation"]);
+      }
       const row = this.db
         .prepare(
           `SELECT subject_id FROM merchant_operator_grants
@@ -167,6 +228,10 @@ export class MerchantGrantStore {
         )
         .run(stamp, grantId);
       const generation = this.bumpGeneration(actor.merchantId, row.subject_id, stamp);
+      this.writeOperation(actor.merchantId, operation, grantId, {
+        grant_id: grantId,
+        authorization_generation: generation,
+      });
       this.db.exec("commit");
       return generation;
     } catch (error) {
@@ -183,6 +248,80 @@ export class MerchantGrantStore {
       )
       .get(merchantId, subjectId) as { generation: number } | undefined;
     return row?.generation ?? 0;
+  }
+
+  /**
+   * 对账查询：按商家隔离，用 operationId（= committed decision 的 operationId）
+   * 查本次授权写落的回执。授权是 kiwi 内部写，没有下游服务可问——回执就落在
+   * 自己的表里，且与效果**同事务**（「有回执 ⟺ 效果已提交」）。
+   */
+  getOperation(merchantId: string, operationId: string): GrantOperationReceipt | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM merchant_grant_operations WHERE merchant_id=? AND operation_id=?")
+      .get(merchantId, operationId) as Record<string, unknown> | undefined;
+    if (row === undefined) return undefined;
+    return {
+      operation_kind: String(row["operation_kind"]) as GrantOperationKind,
+      grant_id: String(row["grant_id"]),
+      response: JSON.parse(String(row["response_json"])) as Record<string, unknown>,
+    };
+  }
+
+  /**
+   * 重放判定（与广播同口径）：同 operation_id 同请求 → 回原回执；
+   * 同 operation_id 异请求/异商家 → version_conflict，绝不静默复用。
+   * 未带 operation 时返回 undefined（非决定路径不开回执）。
+   */
+  private replayOperation(
+    merchantId: string,
+    operation: GrantOperation | undefined,
+  ): GrantOperationReceipt | undefined {
+    if (operation === undefined) return undefined;
+    const row = this.db
+      .prepare("SELECT * FROM merchant_grant_operations WHERE operation_id=?")
+      .get(operation.operationId) as Record<string, unknown> | undefined;
+    if (row === undefined) return undefined;
+    if (
+      String(row["merchant_id"]) !== merchantId ||
+      String(row["request_hash"]) !== operation.requestHash ||
+      String(row["operation_kind"]) !== operation.operationKind
+    ) {
+      throw new MerchantGrantError(
+        "version_conflict",
+        "operation_id was reused with a different merchant or request",
+      );
+    }
+    return {
+      operation_kind: String(row["operation_kind"]) as GrantOperationKind,
+      grant_id: String(row["grant_id"]),
+      response: JSON.parse(String(row["response_json"])) as Record<string, unknown>,
+    };
+  }
+
+  /** 同事务落回执（调用方须在事务内）。未带 operation 时不落（非决定路径）。 */
+  private writeOperation(
+    merchantId: string,
+    operation: GrantOperation | undefined,
+    grantId: string,
+    response: Record<string, unknown>,
+  ): void {
+    if (operation === undefined) return;
+    this.db
+      .prepare(
+        `INSERT INTO merchant_grant_operations
+         (operation_id, merchant_id, operation_kind, grant_id, request_hash,
+          response_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        operation.operationId,
+        merchantId,
+        operation.operationKind,
+        grantId,
+        operation.requestHash,
+        JSON.stringify(response),
+        this.now(),
+      );
   }
 
   getGrant(merchantId: string, grantId: string): MerchantGrantProjection | undefined {
