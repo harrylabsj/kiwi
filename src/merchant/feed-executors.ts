@@ -1,7 +1,14 @@
 /** Static Merchant Core executors for approval-gated broadcast writes. */
 
+import { contentHash } from "../agent/merchant/action-candidate.js";
 import type { CommandExecutor } from "../merchant-core/executor.js";
-import type { BroadcastInput, MerchantFeedStore } from "./feed-store.js";
+import {
+  BROADCAST_OPERATION_KINDS,
+  type BroadcastInput,
+  type BroadcastOperationKind,
+  type FeedOperation,
+  type MerchantFeedStore,
+} from "./feed-store.js";
 
 export const BROADCAST_TOOLS = {
   publish: "kiwi_workbench_broadcast_publish",
@@ -23,6 +30,48 @@ export function createBroadcastExecutors(options: {
     if (value === undefined) throw new Error("Merchant Feed authority is not configured");
     return value;
   };
+  /**
+   * 构造本次操作的回执标识。`requestHash` 覆盖**语义输入**（不是读取时的原始 JSON）：
+   * 同 operation_id 换了请求内容必须冲突，而字段顺序/无关字段不得造成假冲突。
+   */
+  const operationFor = (
+    operationKind: BroadcastOperationKind,
+    args: Readonly<Record<string, unknown>>,
+    decision: { kind: "committed"; operationId: string; actorId: string } | undefined,
+  ): FeedOperation => ({
+    operationId: requireCommitted(decision).operationId,
+    operationKind,
+    requestHash: contentHash({
+      operation_kind: operationKind,
+      merchant_id: options.merchantId,
+      broadcast_id: String(args.broadcast_id ?? ""),
+      expected_revision: args.expected_revision ?? null,
+      input: args.input ?? null,
+    }),
+  });
+
+  /**
+   * 对账适配器：写后不确定时按 operation_id 查**我们自己的**回执。
+   *
+   * 广播是 kiwi 内部写，没有下游服务可问——回执就落在 feed store 自己的表里，
+   * 且与效果**同事务**。没有这个适配器时 `MerchantCommandLog.reconcile` 会返回
+   * unknown +「no downstream operation query adapter」，把一次可自动判定的对账
+   * 变成人工升级。
+   */
+  const queryOutcome = (operationKind: BroadcastOperationKind) =>
+    async (
+      args: Record<string, unknown>,
+      _ctx: unknown,
+      decision: { operationId: string },
+    ): Promise<{ status: "succeeded" } | { status: "unknown"; error: string }> => {
+      const receipt = store().getOperation(options.merchantId, decision.operationId);
+      return receipt !== undefined &&
+        receipt.operation_kind === operationKind &&
+        receipt.broadcast_id === String(args.broadcast_id ?? "")
+        ? { status: "succeeded" }
+        : { status: "unknown", error: "broadcast receipt does not match" };
+    };
+
   return [
     {
       tool: BROADCAST_TOOLS.publish,
@@ -33,16 +82,18 @@ export function createBroadcastExecutors(options: {
         exists:
           store().getBroadcast(options.merchantId, String(args.broadcast_id ?? "")) !== undefined,
       }),
-      execute: async (args) => {
+      execute: async (args, _context, decision) => {
         options.authorizeExecution?.(args);
         const published = store().publishWithId(
           options.merchantId,
           String(args.broadcast_id ?? ""),
           requireBroadcastInput(args.input),
+          operationFor(BROADCAST_OPERATION_KINDS.publish, args, decision),
         );
         options.onPublished?.(args, published);
         return published;
       },
+      queryOutcome: queryOutcome(BROADCAST_OPERATION_KINDS.publish),
       verifyAfter: async (args) => {
         const value = store().getBroadcast(options.merchantId, String(args.broadcast_id ?? ""));
         if (value?.status !== "published") throw new Error("broadcast publish readback failed");
@@ -56,15 +107,17 @@ export function createBroadcastExecutors(options: {
         broadcastPrecondition(
           store().getBroadcast(options.merchantId, String(args.broadcast_id ?? "")),
         ),
-      execute: async (args) => {
+      execute: async (args, _context, decision) => {
         options.authorizeExecution?.(args);
         return store().revise(
           options.merchantId,
           String(args.broadcast_id ?? ""),
           requireInteger(args.expected_revision, "expected_revision"),
           requireBroadcastInput(args.input),
+          operationFor(BROADCAST_OPERATION_KINDS.revise, args, decision),
         );
       },
+      queryOutcome: queryOutcome(BROADCAST_OPERATION_KINDS.revise),
       verifyAfter: async (args) => {
         const expected = requireInteger(args.expected_revision, "expected_revision") + 1;
         if (
@@ -83,14 +136,16 @@ export function createBroadcastExecutors(options: {
         broadcastPrecondition(
           store().getBroadcast(options.merchantId, String(args.broadcast_id ?? "")),
         ),
-      execute: async (args) => {
+      execute: async (args, _context, decision) => {
         options.authorizeExecution?.(args);
         return store().withdraw(
           options.merchantId,
           String(args.broadcast_id ?? ""),
           requireInteger(args.expected_revision, "expected_revision"),
+          operationFor(BROADCAST_OPERATION_KINDS.withdraw, args, decision),
         );
       },
+      queryOutcome: queryOutcome(BROADCAST_OPERATION_KINDS.withdraw),
       verifyAfter: async (args) => {
         if (
           store().getBroadcast(options.merchantId, String(args.broadcast_id ?? ""))?.status !==
@@ -125,6 +180,15 @@ function broadcastPrecondition(
     effective_until: value.effectiveUntil ?? null,
     audience: value.audience,
   };
+}
+
+function requireCommitted(
+  value: { kind: "committed"; operationId: string; actorId: string } | undefined,
+): { operationId: string; actorId: string } {
+  if (value?.kind !== "committed") {
+    throw new Error("broadcast execution requires a committed decision");
+  }
+  return value;
 }
 
 function requireBroadcastInput(value: unknown): BroadcastInput {

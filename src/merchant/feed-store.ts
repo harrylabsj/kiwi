@@ -62,7 +62,36 @@ CREATE TABLE IF NOT EXISTS merchant_feed_snapshots (
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS merchant_feed_operations (
+  operation_id TEXT PRIMARY KEY,
+  merchant_id TEXT NOT NULL,
+  operation_kind TEXT NOT NULL,
+  broadcast_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_merchant_feed_operations_owner
+  ON merchant_feed_operations(merchant_id, operation_id);
 `;
+
+/**
+ * 广播写操作的回执标识。**operationKind 与执行器工具一一对应**，`queryOutcome`
+ * 据它判断"查到的回执是不是我这次操作"。
+ */
+export interface FeedOperation {
+  operationId: string;
+  operationKind: BroadcastOperationKind;
+  requestHash: string;
+}
+
+export const BROADCAST_OPERATION_KINDS = {
+  publish: "broadcast_publish",
+  revise: "broadcast_revise",
+  withdraw: "broadcast_withdraw",
+} as const;
+export type BroadcastOperationKind =
+  (typeof BROADCAST_OPERATION_KINDS)[keyof typeof BROADCAST_OPERATION_KINDS];
 
 export interface BroadcastInput {
   kind: string;
@@ -155,11 +184,12 @@ export class MerchantFeedStore {
     merchantId: string,
     broadcastId: string,
     input: BroadcastInput,
+    operation?: FeedOperation,
   ): { broadcast_id: string; revision: number } {
     if (!/^bct_[A-Za-z0-9_-]{16,128}$/.test(broadcastId)) {
       throw new MerchantFeedError("validation_error", "broadcast_id shape is invalid");
     }
-    return this.writeBroadcast(merchantId, broadcastId, 0, "published", input);
+    return this.writeBroadcast(merchantId, broadcastId, 0, "published", input, operation);
   }
 
   getBroadcast(
@@ -247,18 +277,32 @@ export class MerchantFeedStore {
     broadcastId: string,
     expectedRevision: number,
     input: BroadcastInput,
+    operation?: FeedOperation,
   ): { broadcast_id: string; revision: number } {
-    return this.writeBroadcast(merchantId, broadcastId, expectedRevision, "revised", input);
+    return this.writeBroadcast(
+      merchantId,
+      broadcastId,
+      expectedRevision,
+      "revised",
+      input,
+      operation,
+    );
   }
 
   withdraw(
     merchantId: string,
     broadcastId: string,
     expectedRevision: number,
+    operation?: FeedOperation,
   ): { broadcast_id: string; revision: number } {
     const stamp = this.now();
     this.db.exec("begin immediate");
     try {
+      const replay = this.replayOperation(merchantId, operation);
+      if (replay !== undefined) {
+        this.db.exec("commit");
+        return replay;
+      }
       const current = this.broadcastRow(merchantId, broadcastId);
       if (current === undefined) throw new MerchantFeedError("not_found", "unknown broadcast");
       if (current.revision !== expectedRevision || current.status !== "published") {
@@ -275,6 +319,10 @@ export class MerchantFeedStore {
         broadcast_id: broadcastId,
         revision,
         status: "withdrawn",
+      });
+      this.recordOperation(merchantId, operation, broadcastId, {
+        broadcast_id: broadcastId,
+        revision,
       });
       this.db.exec("commit");
       return { broadcast_id: broadcastId, revision };
@@ -417,11 +465,18 @@ export class MerchantFeedStore {
     expectedRevision: number,
     eventType: "published" | "revised",
     input: BroadcastInput,
+    operation?: FeedOperation,
   ): { broadcast_id: string; revision: number } {
     const content = normalizeBroadcast(input);
     const stamp = this.now();
     this.db.exec("begin immediate");
     try {
+      // 重放判定必须在写之前（同 operation_id 同请求回原回执，不产生第二次效果）
+      const replay = this.replayOperation(merchantId, operation);
+      if (replay !== undefined) {
+        this.db.exec("commit");
+        return replay;
+      }
       const existing = this.broadcastRow(merchantId, broadcastId);
       if (eventType === "published" && existing !== undefined) {
         throw new MerchantFeedError("version_conflict", "broadcast already exists");
@@ -475,12 +530,100 @@ export class MerchantFeedStore {
         )
         .run(merchantId, broadcastId, revision, JSON.stringify(payload), stamp);
       this.appendEvent(merchantId, eventType, broadcastId, revision, payload);
+      // 回执与效果同事务：要么都提交、要么都不提交，于是「有回执 ⟺ 效果已提交」
+      this.recordOperation(merchantId, operation, broadcastId, {
+        broadcast_id: broadcastId,
+        revision,
+      });
       this.db.exec("commit");
       return { broadcast_id: broadcastId, revision };
     } catch (error) {
       this.db.exec("rollback");
       throw error;
     }
+  }
+
+  /**
+   * 回执重放判定。**必须在写之前调用，且在调用方的同一事务内**：
+   * 同 operation_id + 同请求摘要 → 返回原回执（不产生第二次效果）；
+   * 同 operation_id + 不同请求 → 冲突（不静默复用）。
+   * 未带 operation 时返回 undefined（`publish()` 等非决定路径不开回执）。
+   */
+  private replayOperation(
+    merchantId: string,
+    operation: FeedOperation | undefined,
+  ): { broadcast_id: string; revision: number } | undefined {
+    if (operation === undefined) return undefined;
+    const row = this.db
+      .prepare("SELECT * FROM merchant_feed_operations WHERE operation_id=?")
+      .get(operation.operationId) as Record<string, unknown> | undefined;
+    if (row === undefined) return undefined;
+    if (
+      String(row["merchant_id"]) !== merchantId ||
+      String(row["request_hash"]) !== operation.requestHash ||
+      String(row["operation_kind"]) !== operation.operationKind
+    ) {
+      throw new MerchantFeedError(
+        "version_conflict",
+        "operation_id was reused with a different merchant or request",
+      );
+    }
+    return JSON.parse(String(row["response_json"])) as {
+      broadcast_id: string;
+      revision: number;
+    };
+  }
+
+  private recordOperation(
+    merchantId: string,
+    operation: FeedOperation | undefined,
+    broadcastId: string,
+    response: { broadcast_id: string; revision: number },
+  ): void {
+    if (operation === undefined) return;
+    this.db
+      .prepare(
+        `INSERT INTO merchant_feed_operations
+         (operation_id, merchant_id, operation_kind, broadcast_id, request_hash,
+          response_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        operation.operationId,
+        merchantId,
+        operation.operationKind,
+        broadcastId,
+        operation.requestHash,
+        JSON.stringify(response),
+        this.now(),
+      );
+  }
+
+  /** 按 operation_id 查回执（对账用；只向所属商家开放）。 */
+  getOperation(
+    merchantId: string,
+    operationId: string,
+  ):
+    | {
+        operation_id: string;
+        merchant_id: string;
+        operation_kind: string;
+        broadcast_id: string;
+        revision: number;
+      }
+    | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM merchant_feed_operations WHERE operation_id=? AND merchant_id=?")
+      .get(operationId, merchantId) as Record<string, unknown> | undefined;
+    if (row === undefined) return undefined;
+    const response = JSON.parse(String(row["response_json"])) as { revision?: unknown };
+    return {
+      operation_id: String(row["operation_id"]),
+      merchant_id: String(row["merchant_id"]),
+      operation_kind: String(row["operation_kind"]),
+      broadcast_id: String(row["broadcast_id"]),
+      revision: Number(response.revision ?? 0),
+    };
   }
 
   private appendEvent(
