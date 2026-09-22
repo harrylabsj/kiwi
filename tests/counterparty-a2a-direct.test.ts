@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { finalizeEnvelope } from "../src/negotiation/domain/envelope.js";
 import type { NegotiationEnvelope } from "../src/negotiation/domain/envelope.js";
-import { LedgerStore } from "../src/negotiation/ledger/index.js";
+import { LedgerPayloadSegmentStore, LedgerStore } from "../src/negotiation/ledger/index.js";
 import { IdempotencyStore } from "../src/negotiation/idempotency/index.js";
 import { FileLeaseStore } from "../src/negotiation/lease/store.js";
 import { A2AServer, echoHandler } from "../src/a2a/server/index.js";
@@ -72,20 +72,44 @@ async function startServer(handler: NonNullable<A2AServerOptions["handler"]>): P
   return started;
 }
 
-function clientFor(url: string): { channel: A2ADirectChannel; dir: string } {
+function clientFor(url: string, segmentPayloads = false): { channel: A2ADirectChannel; dir: string } {
   const dir = mkdtempSync(path.join(tmpdir(), "kiwi-direct-client-"));
+  const ledger = new LedgerStore({
+    dir,
+    now: () => NOW,
+    ...(segmentPayloads ? { payloadSegments: new LedgerPayloadSegmentStore({ dir: path.join(dir, "segments"), now: () => NOW }) } : {}),
+  });
   return {
     channel: new A2ADirectChannel({
       url,
-      ledger: new LedgerStore({ dir, now: () => NOW }),
+      ledger,
       idempotency: new IdempotencyStore({ dir, now: () => NOW }),
       now: () => NOW,
+      ...(segmentPayloads ? { segmentPayloads: true } : {}),
     }),
     dir,
   };
 }
 
 describe("A2ADirectChannel: send/getState 端到端", () => {
+  it("可选分段模式只在 Ledger 中保存出站 payload 引用", async () => {
+    const srv = await startServer(echoHandler());
+    const { channel, dir } = clientFor(srv.url, true);
+    try {
+      const handle = await channel.open(OPEN_INPUT);
+      const envelope = finalizeEnvelope(validEnvelopeFields());
+      await handle.send({ envelope });
+      const event = new LedgerStore({ dir, now: () => NOW }).events(NEGOTIATION_ID).find(
+        (entry) => entry.event_kind === "message_sent",
+      );
+      expect(event?.wire_payload).toBeUndefined();
+      expect(event?.payload_segments?.wire_payload).toBeDefined();
+      await handle.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("send 写入 ledger（message_sent）并幂等 commit，getState 返回远端 task", async () => {
     const srv = await startServer(echoHandler());
     const { channel, dir } = clientFor(srv.url);

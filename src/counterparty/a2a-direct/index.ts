@@ -44,6 +44,7 @@ import type { FileLeaseHandle, FileLeaseStore } from "../../negotiation/lease/st
 import { randomUUID as cryptoRandomUUID } from "node:crypto";
 import type {
   LedgerCapabilitySnapshot,
+  LedgerEventContent,
   LedgerIdentitySnapshot,
   LedgerStore,
 } from "../../negotiation/ledger/index.js";
@@ -82,6 +83,8 @@ export interface A2ADirectChannelOptions {
   /** 全临界区 ownership 租约（审查 BUG-07）：共享持久目录时提供——并发
    *  direct send 同 key 只允许一个 owner 执行（check→HTTP→ledger→commit）。 */
   lease?: FileLeaseStore;
+  /** Opt-in privacy mode: externalize message payload through LedgerStore segments. */
+  segmentPayloads?: boolean;
   skipDnsCheck?: boolean;
   resolveIp?: (hostname: string) => Promise<string[]>;
 }
@@ -98,6 +101,7 @@ export class A2ADirectChannel implements CounterpartyChannel {
   private readonly idempotency?: IdempotencyStore;
   private readonly lease?: FileLeaseStore;
   private readonly now: () => string;
+  private readonly segmentPayloads: boolean;
 
   constructor(options: A2ADirectChannelOptions) {
     this.client = new A2AClient({
@@ -119,6 +123,7 @@ export class A2ADirectChannel implements CounterpartyChannel {
     this.idempotency = options.idempotency;
     this.lease = options.lease;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.segmentPayloads = options.segmentPayloads === true;
   }
 
   async open(input: ChannelOpenInput): Promise<ChannelHandle> {
@@ -128,6 +133,7 @@ export class A2ADirectChannel implements CounterpartyChannel {
       idempotency: this.idempotency,
       ...(this.lease !== undefined ? { lease: this.lease } : {}),
       now: this.now,
+      segmentPayloads: this.segmentPayloads,
       negotiationId: input.negotiation_id,
       senderIdentity: input.sender_identity,
       identity: input.identity,
@@ -142,6 +148,7 @@ interface A2ADirectHandleDeps {
   idempotency?: IdempotencyStore;
   /** 审查 BUG-07：全临界区租约（透传自 channel options）。 */
   lease?: FileLeaseStore;
+  segmentPayloads: boolean;
   now: () => string;
   negotiationId: string;
   senderIdentity: string;
@@ -306,7 +313,7 @@ class A2ADirectHandle implements ChannelHandle {
 
     // 出站落账（§22 / §23：message_sent 证据，含 wire_digest + wire_payload）。
     if (this.deps.ledger !== undefined) {
-      this.deps.ledger.append({
+      const eventContent: LedgerEventContent = {
         event_kind: "message_sent",
         negotiation_id: this.deps.negotiationId,
         exchange_id: envelope.exchange_id,
@@ -323,7 +330,9 @@ class A2ADirectHandle implements ChannelHandle {
         wire_payload: envelope as unknown as Record<string, unknown>,
         outcome: { kind: "ok" },
         occurred_at: this.deps.now(),
-      });
+      };
+      if (this.deps.segmentPayloads) this.deps.ledger.appendSegmented(eventContent);
+      else this.deps.ledger.append(eventContent);
     }
 
     // 幂等 commit（§20）。
