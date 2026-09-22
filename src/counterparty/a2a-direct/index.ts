@@ -40,7 +40,7 @@ import { A2ATaskPoller, recordTaskObservation } from "../../a2a/task/index.js";
 import { validateEnvelope, verifyEnvelopeDigest } from "../../negotiation/domain/envelope.js";
 import type { NegotiationEnvelope } from "../../negotiation/domain/envelope.js";
 import type { IdempotencyStore } from "../../negotiation/idempotency/index.js";
-import type { FileLeaseStore } from "../../negotiation/lease/store.js";
+import type { FileLeaseHandle, FileLeaseStore } from "../../negotiation/lease/store.js";
 import { randomUUID as cryptoRandomUUID } from "node:crypto";
 import type {
   LedgerCapabilitySnapshot,
@@ -237,7 +237,8 @@ class A2ADirectHandle implements ChannelHandle {
     // 崩溃接管）覆盖整段，第二个并发 send fail-closed。
     const leaseKey = `${this.deps.senderIdentity}:${envelope.message_id}`;
     const leaseOwner = `${process.pid}:${cryptoRandomUUID()}`;
-    if (this.deps.lease !== undefined && !this.deps.lease.acquire(leaseKey, leaseOwner, OUTBOUND_LEASE_TTL_MS)) {
+    let lease = this.deps.lease?.acquire(leaseKey, leaseOwner, OUTBOUND_LEASE_TTL_MS);
+    if (this.deps.lease !== undefined && lease === undefined) {
       throw new ChannelError(
         "a2a-direct",
         "idempotency_conflict",
@@ -245,9 +246,9 @@ class A2ADirectHandle implements ChannelHandle {
       );
     }
     try {
-      return await this.sendUnlocked(input, envelope, message, ref);
+      return await this.sendUnlocked(input, envelope, message, ref, lease);
     } finally {
-      this.deps.lease?.release(leaseKey, leaseOwner);
+      if (lease !== undefined) this.deps.lease?.release(lease);
     }
   }
 
@@ -257,6 +258,7 @@ class A2ADirectHandle implements ChannelHandle {
     envelope: NegotiationEnvelope,
     message: A2AMessage,
     ref: RemoteRef,
+    lease?: FileLeaseHandle,
   ): Promise<ChannelSendResult> {
     // 协议幂等 check（§20）：(sender_identity, message_id)。
     if (this.deps.idempotency !== undefined) {
@@ -288,6 +290,18 @@ class A2ADirectHandle implements ChannelHandle {
       task = await this.deps.client.sendMessage(message, ref.context_id);
     } catch (err) {
       throw this.toChannelError(err);
+    }
+
+    if (lease !== undefined) {
+      const renewed = this.deps.lease?.renew(lease, OUTBOUND_LEASE_TTL_MS);
+      if (renewed === undefined || this.deps.lease?.isCurrent(renewed) !== true) {
+        throw new ChannelError(
+          "a2a-direct",
+          "send_failed",
+          `message_id ${envelope.message_id} outcome unknown because the send lease was fenced`,
+        );
+      }
+      lease = renewed;
     }
 
     // 出站落账（§22 / §23：message_sent 证据，含 wire_digest + wire_payload）。

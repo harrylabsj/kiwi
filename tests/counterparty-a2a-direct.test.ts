@@ -21,6 +21,7 @@ import { finalizeEnvelope } from "../src/negotiation/domain/envelope.js";
 import type { NegotiationEnvelope } from "../src/negotiation/domain/envelope.js";
 import { LedgerStore } from "../src/negotiation/ledger/index.js";
 import { IdempotencyStore } from "../src/negotiation/idempotency/index.js";
+import { FileLeaseStore } from "../src/negotiation/lease/store.js";
 import { A2AServer, echoHandler } from "../src/a2a/server/index.js";
 import type { A2AServerOptions } from "../src/a2a/server/index.js";
 import { A2ADirectChannel } from "../src/counterparty/index.js";
@@ -193,6 +194,47 @@ describe("A2ADirectChannel: send/getState 端到端", () => {
         channel: "a2a-direct",
         code: "send_failed",
       });
+      await handle.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("远端返回后 lease 被接管：不落旧 token 的 Ledger/幂等事实", async () => {
+    const srv = await startServer(echoHandler());
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-direct-fenced-"));
+    let nowMs = 0;
+    const ledger = new LedgerStore({ dir, now: () => NOW });
+    const idempotency = new IdempotencyStore({ dir, now: () => NOW });
+    const channel = new A2ADirectChannel({
+      url: srv.url,
+      ledger,
+      idempotency,
+      lease: new FileLeaseStore(dir, { nowMs: () => nowMs }),
+      now: () => NOW,
+      fetchImpl: async (input, init) => {
+        const response = await fetch(input, init);
+        nowMs = 31_000;
+        return response;
+      },
+    });
+    try {
+      const handle = await channel.open(OPEN_INPUT);
+      const envelope = finalizeEnvelope(validEnvelopeFields());
+      await expect(handle.send({ envelope })).rejects.toMatchObject({
+        code: "send_failed",
+        message: expect.stringContaining("lease was fenced"),
+      });
+      expect(
+        ledger.events(NEGOTIATION_ID).filter((event) => event.event_kind === "message_sent"),
+      ).toEqual([]);
+      expect(
+        idempotency.check({
+          sender_identity: OPEN_INPUT.sender_identity,
+          message_id: envelope.message_id,
+          digest: envelope.digest,
+        }).status,
+      ).toBe("new");
       await handle.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });

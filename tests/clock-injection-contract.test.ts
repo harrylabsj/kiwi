@@ -138,27 +138,27 @@ describe("P2-1 刀 2 补注入：这两处的时间现在真的可钉死（行�
   it("FileLeaseStore.acquire：过期接管按注入的 nowMs 判定（不依赖墙钟等待）", () => {
     let t = 1_800_000_000_000;
     const s = leaseStore(() => t);
-    expect(s.acquire("k", "owner-a", 1_000)).toBe(true);
+    expect(s.acquire("k", "owner-a", 1_000)).toBeDefined();
     // 注入时间推进到 TTL 之内：不接管
     t += 999;
-    expect(s.acquire("k", "owner-b", 1_000)).toBe(false);
+    expect(s.acquire("k", "owner-b", 1_000)).toBeUndefined();
     // 注入时间越过 TTL：崩溃残留被接管——无需等真实时间流逝
     t += 2;
-    expect(s.acquire("k", "owner-b", 1_000)).toBe(true);
+    expect(s.acquire("k", "owner-b", 1_000)).toBeDefined();
   });
 
   it("FileLeaseStore.renew：续约写出的截止时间同样按注入时钟计算", () => {
     let t = 1_800_000_000_000;
     const s = leaseStore(() => t);
-    expect(s.acquire("k", "owner-a", 1_000)).toBe(true);
+    const lease = s.acquire("k", "owner-a", 1_000)!;
     t += 500;
     // 续约：expires = 当前注入时间 + TTL = t0+1500
-    expect(s.renew("k", "owner-a", 1_000)).toBe(true);
+    expect(s.renew(lease, 1_000)).toBeDefined();
     // t0+1499：续约后的窗口仍然有效，不接管
     t += 999;
-    expect(s.acquire("k", "owner-b", 1_000)).toBe(false);
+    expect(s.acquire("k", "owner-b", 1_000)).toBeUndefined();
     // t0+1501：越过续约后的截止 → 接管
     t += 2;
-    expect(s.acquire("k", "owner-b", 1_000)).toBe(true);
+    expect(s.acquire("k", "owner-b", 1_000)).toBeDefined();
   });
 });
