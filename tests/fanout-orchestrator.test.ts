@@ -514,6 +514,20 @@ describe("比较集聚合排序", () => {
 });
 
 describe("每腿独立 Ledger 链", () => {
+  it("可选分段模式将每腿 wire payload 外置", async () => {
+    const dir = freshDir();
+    const ledger = new LedgerStore({ dir });
+    const { orchestrator } = createOrchestrator(
+      { "a.example": { kind: "offer", unitPriceMinor: 85000 } },
+      { ledger, segmentPayloads: true },
+    );
+    await orchestrator.fanout([leg("a.example", { negotiation_id: "neg_segmented" })]);
+    const event = ledger.events("neg_segmented").find((entry) => entry.payload_segments?.wire_payload !== undefined);
+    expect(event?.wire_payload).toBeUndefined();
+    expect(event?.payload_segments?.wire_payload).toBeDefined();
+    expect(ledger.resolvePayload(event!).wire_payload).toBeDefined();
+  });
+
   it("每腿以独立 negotiation_id 落账；错误腿落 error 事件；链可校验", async () => {
     const dir = freshDir();
     const ledger = new LedgerStore({ dir });

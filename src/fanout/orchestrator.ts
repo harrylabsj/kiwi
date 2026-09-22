@@ -70,6 +70,8 @@ export interface FanoutOrchestratorDeps {
   openChannel: (profile: CounterpartyProfile, input: ChannelOpenInput) => Promise<ChannelHandle>;
   /** 每腿独立 Ledger 链（以 negotiation_id 为键）；缺省不落账。 */
   ledger?: LedgerStore;
+  /** Opt-in privacy mode: externalize RFQ/offer wire payloads. */
+  segmentPayloads?: boolean;
   /** envelope capability（缺省 knp.a2a.direct）。 */
   capability?: string;
   /** 从 RemoteState 提取远端最新 KNP envelope（缺省 direct 通道形状）。 */
@@ -308,7 +310,8 @@ export class FanoutOrchestrator {
   /** 每腿独立落账；缺省 Ledger 为 no-op。append 失败向上抛（audit trail 损坏 = fail-closed）。 */
   private appendLedger(content: LedgerEventContent): void {
     if (this.deps.ledger === undefined) return;
-    this.deps.ledger.append(content);
+    if (this.deps.segmentPayloads === true) this.deps.ledger.appendSegmented(content);
+    else this.deps.ledger.append(content);
   }
 
   /**
