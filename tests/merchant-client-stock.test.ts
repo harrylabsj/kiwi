@@ -113,7 +113,7 @@ describe("merchant read path exact-stock semantics (P2-1)", () => {
         new StaticCredentialBroker({ catalog: "tok-catalog" }),
       );
       await expect(
-        client.getExactProductOperation("seller-a", "operation-1"),
+        client.getProductOperation("seller-a", "operation-1"),
       ).resolves.toMatchObject({ operation_id: "operation-1", status: "succeeded" });
       expect(seenUrl).toContain("/v1/merchant/product-operations/operation-1?merchant_id=seller-a");
       expect(seenAuth).toBe("Bearer tok-catalog");

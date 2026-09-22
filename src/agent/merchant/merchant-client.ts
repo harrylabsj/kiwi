@@ -268,7 +268,30 @@ export class HttpMerchantClient implements MerchantClient {
     return parseExactMerchantProduct(payload.product);
   }
 
-  async getExactProductOperation(
+  async updateInventoryExact(input: {
+    operation_id: string;
+    merchant_id: string;
+    sku: string;
+    stock: number;
+    currency_table_version: string;
+  }): Promise<ExactMerchantProduct> {
+    const payload = (await this.request(
+      "PATCH",
+      `/v1/merchant/products/${encodeURIComponent(input.sku)}/inventory`,
+      {
+        body: {
+          operation_id: input.operation_id,
+          merchant_id: input.merchant_id,
+          stock: input.stock,
+          currency_table_version: input.currency_table_version,
+        },
+        token: this.catalogToken(),
+      },
+    )) as { product?: unknown };
+    return parseExactMerchantProduct(payload.product);
+  }
+
+  async getProductOperation(
     merchantId: string,
     operationId: string,
   ): Promise<MerchantProductOperation> {

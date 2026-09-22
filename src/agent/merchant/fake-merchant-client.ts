@@ -178,7 +178,37 @@ export class FakeMerchantClient implements MerchantClient {
     return updated;
   }
 
-  async getExactProductOperation(
+  async updateInventoryExact(input: {
+    operation_id: string;
+    merchant_id: string;
+    sku: string;
+    stock: number;
+    currency_table_version: string;
+  }): Promise<ExactMerchantProduct> {
+    const replay = this.exactOperations.get(input.operation_id);
+    if (replay !== undefined) {
+      if (replay.operation_kind !== "product_inventory_update" || replay.sku !== input.sku) {
+        throw new MerchantClientError("validation", "operation id was reused");
+      }
+      return this.getExactProduct(input.merchant_id, input.sku);
+    }
+    const current = await this.getExactProduct(input.merchant_id, input.sku);
+    const updated = { ...current, stock: input.stock };
+    this.exactProducts.set(input.sku, updated);
+    const legacy = this.requireProduct(input.sku);
+    this.products.set(input.sku, { ...legacy, stock: input.stock });
+    this.exactOperations.set(input.operation_id, {
+      operation_id: input.operation_id,
+      merchant_id: input.merchant_id,
+      operation_kind: "product_inventory_update",
+      sku: input.sku,
+      status: "succeeded",
+      created_at: this.now,
+    });
+    return updated;
+  }
+
+  async getProductOperation(
     merchantId: string,
     operationId: string,
   ): Promise<MerchantProductOperation> {

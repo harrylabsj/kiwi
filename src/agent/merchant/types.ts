@@ -102,10 +102,24 @@ export interface ExactMerchantProductInput {
   handoff_destination?: string;
 }
 
+/**
+ * 下游 operation 的 kind 词表——**与 shopping-cli 的 CHECK 约束同源**。
+ *
+ * 收敛到一处是刻意的：上游 migration_029/030 把词表写进了 CHECK，于是每加一个 kind
+ * 都要重建表；这里若再枚举一遍（类型 + 解析器两处），就会变成"改一处忘一处"。
+ * 加 kind 时：本数组 + 上游 CHECK（需迁移重建）同步改。
+ */
+export const MERCHANT_PRODUCT_OPERATION_KINDS = [
+  "exact_product_create",
+  "exact_product_money_update",
+  "product_inventory_update",
+] as const;
+export type MerchantProductOperationKind = (typeof MERCHANT_PRODUCT_OPERATION_KINDS)[number];
+
 export interface MerchantProductOperation {
   operation_id: string;
   merchant_id: string;
-  operation_kind: "exact_product_create" | "exact_product_money_update";
+  operation_kind: MerchantProductOperationKind;
   sku: string;
   status: "succeeded";
   created_at: string;
@@ -172,7 +186,24 @@ export interface MerchantClient {
     currency_table_version: string;
     expected_authority_version: number;
   }): Promise<ExactMerchantProduct>;
-  getExactProductOperation(
+  /**
+   * v1 库存写入 + **同事务 operation receipt**（B 线）。
+   *
+   * 与 `updateInventory`（legacy 路径）的区别是**可对账**：本方法落回执，于是外部写
+   * 落进 UNKNOWN 时可以按 `operation_id` **查明副作用是否真的发生过**，而不是拿
+   * **当前**库存值去猜**历史**操作的结果。回执经 `getProductOperation` 查询。
+   *
+   * 前置：商家须在 exact 线上（v1 面口径，回执投影读金额权威）。
+   */
+  updateInventoryExact(input: {
+    operation_id: string;
+    merchant_id: string;
+    sku: string;
+    stock: number;
+    currency_table_version: string;
+  }): Promise<ExactMerchantProduct>;
+
+  getProductOperation(
     merchantId: string,
     operationId: string,
   ): Promise<MerchantProductOperation>;
@@ -245,14 +276,14 @@ export function parseMerchantProductOperation(value: unknown): MerchantProductOp
   }
   const v = value as Record<string, unknown>;
   const operationKind = reqString(v.operation_kind, "operation.operation_kind");
-  if (operationKind !== "exact_product_create" && operationKind !== "exact_product_money_update") {
+  if (!(MERCHANT_PRODUCT_OPERATION_KINDS as readonly string[]).includes(operationKind)) {
     fail("operation.operation_kind is invalid");
   }
   if (v.status !== "succeeded") fail("operation.status is invalid");
   return {
     operation_id: reqString(v.operation_id, "operation.operation_id"),
     merchant_id: reqString(v.merchant_id, "operation.merchant_id"),
-    operation_kind: operationKind,
+    operation_kind: operationKind as MerchantProductOperationKind,
     sku: reqString(v.sku, "operation.sku"),
     status: "succeeded",
     created_at: reqString(v.created_at, "operation.created_at"),

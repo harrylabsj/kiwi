@@ -70,7 +70,7 @@ export function createExactProductExecutors(options: {
         }
       },
       queryOutcome: async (args, _context, decision) => {
-        const operation = await options.client.getExactProductOperation(
+        const operation = await options.client.getProductOperation(
           options.merchantId,
           decision.operationId,
         );
@@ -122,7 +122,7 @@ export function createExactProductExecutors(options: {
         }
       },
       queryOutcome: async (args, _context, decision) => {
-        const operation = await options.client.getExactProductOperation(
+        const operation = await options.client.getProductOperation(
           options.merchantId,
           decision.operationId,
         );
