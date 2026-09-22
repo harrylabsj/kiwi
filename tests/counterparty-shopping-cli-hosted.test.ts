@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { finalizeEnvelope } from "../src/negotiation/domain/envelope.js";
-import { LedgerStore } from "../src/negotiation/ledger/index.js";
+import { LedgerPayloadSegmentStore, LedgerStore } from "../src/negotiation/ledger/index.js";
 import { ShoppingCliHostedChannel } from "../src/counterparty/index.js";
 import { createFakeMarketplace } from "../src/commerce/fake-client.js";
 import { CAPABILITY, validConditionalOffer } from "./negotiation-helpers.js";
@@ -154,6 +154,27 @@ describe("ShoppingCliHostedChannel: send（claim 内部机制 + 结算）", () =
     }
   });
 
+  it("可选分段模式只在 hosted Ledger 保存 payload 引用", async () => {
+    const mk = marketplace();
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-hosted-segmented-"));
+    try {
+      const ledger = new LedgerStore({
+        dir,
+        now: () => NOW,
+        payloadSegments: new LedgerPayloadSegmentStore({ dir: path.join(dir, "segments"), now: () => NOW }),
+      });
+      const channel = new ShoppingCliHostedChannel({ client: mk.merchant, ledger, now: () => NOW, segmentPayloads: true });
+      const handle = await channel.open(openInput());
+      await handle.send({ envelope: declineEnvelope() });
+      const sent = ledger.events(CONV).find((e) => e.event_kind === "message_sent");
+      expect(sent?.wire_payload).toBeUndefined();
+      expect(sent?.payload_segments?.wire_payload).toBeDefined();
+      await handle.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("受保护语义 conditional_offer → unsupported_action，claim 被 release", async () => {
     const mk = marketplace();
     const channel = new ShoppingCliHostedChannel({ client: mk.merchant, now: () => NOW });
@@ -234,4 +255,3 @@ describe("ShoppingCliHostedChannel: close 生命周期", () => {
     });
   });
 });
-

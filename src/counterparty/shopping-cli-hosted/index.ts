@@ -43,7 +43,7 @@ import type { PolicyResult } from "../../negotiation/types.js";
 import { LegacyNegotiationAdapter } from "../../protocol/legacy-shopping-negotiation/adapter.js";
 import { legacyMessageIdToKnp } from "../../protocol/legacy-shopping-negotiation/mapping.js";
 import { PROTOCOL_VERSION, type NegotiationSnapshot } from "../../negotiation/types.js";
-import type { LedgerStore } from "../../negotiation/ledger/index.js";
+import type { LedgerEventContent, LedgerStore } from "../../negotiation/ledger/index.js";
 import {
   ChannelError,
   type ChannelEventHandler,
@@ -63,6 +63,8 @@ export interface ShoppingCliHostedChannelOptions {
   now?: () => string;
   /** 本方 agent 标识（幂等键前缀）；缺省 "kiwi.hosted"。 */
   agentId?: string;
+  /** Opt-in privacy mode: externalize outbound message payloads. */
+  segmentPayloads?: boolean;
 }
 
 const HOSTED_CAPABILITY = { capability: "shopping.negotiation.hosted", protocol_version: "0.1" } as const;
@@ -78,6 +80,7 @@ export class ShoppingCliHostedChannel implements CounterpartyChannel {
   private readonly ledger?: LedgerStore;
   private readonly now: () => string;
   private readonly agentId: string;
+  private readonly segmentPayloads: boolean;
   private readonly adapter = new LegacyNegotiationAdapter();
 
   constructor(options: ShoppingCliHostedChannelOptions) {
@@ -85,6 +88,7 @@ export class ShoppingCliHostedChannel implements CounterpartyChannel {
     this.ledger = options.ledger;
     this.now = options.now ?? (() => new Date().toISOString());
     this.agentId = options.agentId ?? "kiwi.hosted";
+    this.segmentPayloads = options.segmentPayloads === true;
   }
 
   async open(input: ChannelOpenInput): Promise<ChannelHandle> {
@@ -93,6 +97,7 @@ export class ShoppingCliHostedChannel implements CounterpartyChannel {
       ledger: this.ledger,
       now: this.now,
       agentId: this.agentId,
+      segmentPayloads: this.segmentPayloads,
       adapter: this.adapter,
       negotiationId: input.negotiation_id,
       senderIdentity: input.sender_identity,
@@ -110,6 +115,7 @@ interface ShoppingCliHostedHandleDeps {
   ledger?: LedgerStore;
   now: () => string;
   agentId: string;
+  segmentPayloads: boolean;
   adapter: LegacyNegotiationAdapter;
   negotiationId: string;
   senderIdentity: string;
@@ -294,7 +300,7 @@ class ShoppingCliHostedHandle implements ChannelHandle {
 
     // 5. 出站落账（§22：message_sent 证据）。
     if (this.deps.ledger !== undefined) {
-      this.deps.ledger.append({
+      const eventContent: LedgerEventContent = {
         event_kind: "message_sent",
         negotiation_id: this.deps.negotiationId,
         message_id: envelope.message_id,
@@ -312,7 +318,9 @@ class ShoppingCliHostedHandle implements ChannelHandle {
           result: { policy_result: policy.result, message_id: policy.message_id },
         },
         occurred_at: this.deps.now(),
-      });
+      };
+      if (this.deps.segmentPayloads) this.deps.ledger.appendSegmented(eventContent);
+      else this.deps.ledger.append(eventContent);
     }
 
     // ref 指向被 claim 的消息（getState 的权威快照仍以 claim 为锚，§21）。
