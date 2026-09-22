@@ -7,6 +7,11 @@ import { recordClockSkewAlert } from "../../merchant-core/storage/clock-skew-ale
 import { sanitize } from "../../merchant-core/storage/redact.js";
 import { ensureColumn } from "../../merchant-core/storage/schema.js";
 import { inImmediateTransaction } from "../../merchant-core/storage/transaction.js";
+import {
+  LeasedJobStore,
+  type LeasedJobHandle,
+  type LeasedJobPersistence,
+} from "../../merchant-core/storage/leased-job.js";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS workbench_reconciliation_jobs (
@@ -128,6 +133,12 @@ export class WorkbenchReconciliationStore {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
   private readonly jitter: () => number;
+  private readonly reconciliationLeasePersistence: LeasedJobPersistence<
+    ReconciliationLease,
+    OperationResult
+  >;
+  private reconciliationInTransaction = false;
+  private outboxInTransaction = false;
 
   constructor(options: { db: DatabaseSync; now?: () => string; jitter?: () => number }) {
     this.db = options.db;
@@ -136,6 +147,33 @@ export class WorkbenchReconciliationStore {
     this.db.exec("pragma busy_timeout = 5000");
     this.db.exec(SCHEMA);
     ensureColumn(this.db, "workbench_alerts", "acknowledged_by", "TEXT");
+    this.reconciliationLeasePersistence = {
+      inTransaction: (fn) =>
+        inImmediateTransaction(this.db, () => {
+          this.reconciliationInTransaction = true;
+          try {
+            return fn();
+          } finally {
+            this.reconciliationInTransaction = false;
+          }
+        }),
+      enqueueOutstanding: () => 0,
+      leaseCandidate: (stamp) => {
+        const row = this.db
+          .prepare(
+            `SELECT operation_id, fencing_token FROM workbench_reconciliation_jobs
+             WHERE (status='pending' AND next_attempt_at <= ?)
+                OR (status='leased' AND lease_expires_at <= ?)
+             ORDER BY next_attempt_at, operation_id LIMIT 1`,
+          )
+          .get(stamp, stamp) as { operation_id: string; fencing_token: number } | undefined;
+        return row === undefined
+          ? undefined
+          : { jobId: row.operation_id, fencingToken: Number(row.fencing_token) };
+      },
+      claim: (input) => this.claimReconciliationLease(input),
+      finish: (input) => this.finishReconciliation(input.lease.payload, input.result),
+    };
   }
 
   candidateIdForOperation(operationId: string): string | undefined {
@@ -209,59 +247,22 @@ export class WorkbenchReconciliationStore {
   }
 
   leaseOutbox(merchantId: string, workerId: string, leaseMs = 30_000): OutboxLease | undefined {
-    const stamp = this.now();
-    const leaseExpires = new Date(Date.parse(stamp) + leaseMs).toISOString();
-    return inImmediateTransaction(this.db, () => {
-      const row = this.db
-        .prepare(
-          `SELECT o.merchant_id, o.operation_id, d.candidate_id, d.approval_generation,
-                  o.action_step, o.fencing_token, d.actor_id, d.decision, d.action_digest
-           FROM workbench_approval_outbox o
-           JOIN workbench_approval_decisions d ON d.operation_id = o.operation_id
-           WHERE o.merchant_id = ?
-             AND (o.status = 'pending' OR (o.status = 'leased' AND o.lease_expires_at <= ?))
-           ORDER BY o.created_at, o.operation_id LIMIT 1`,
-        )
-        .get(merchantId, stamp) as unknown as OutboxRow | undefined;
-      if (row === undefined) {
-        // 早退在 fn 内 return：无写入，wrapper 提交空事务（与 rollback 等价）
-        return undefined;
-      }
-      const token = row.fencing_token + 1;
-      const changed = this.db
-        .prepare(
-          `UPDATE workbench_approval_outbox
-           SET status='leased', lease_owner=?, lease_expires_at=?, fencing_token=?, attempts=attempts+1
-           WHERE merchant_id=? AND operation_id=? AND action_step=? AND fencing_token=?`,
-        )
-        .run(
-          workerId,
-          leaseExpires,
-          token,
-          row.merchant_id,
-          row.operation_id,
-          row.action_step,
-          row.fencing_token,
-        );
-      if (changed.changes !== 1) throw new Error("outbox lease CAS failed");
-      return {
-        merchantId: row.merchant_id,
-        operationId: row.operation_id,
-        candidateId: row.candidate_id,
-        approvalGeneration: row.approval_generation,
-        actionStep: row.action_step,
-        workerId,
-        fencingToken: token,
-        actorId: row.actor_id,
-        decision: row.decision,
-        actionDigest: row.action_digest,
-      };
-    });
+    return this.outboxLeaseStore(merchantId, leaseMs).lease(workerId)?.payload;
   }
 
   finishOutbox(lease: OutboxLease, result: OperationResult): boolean {
-    const stamp = this.now();
-    return inImmediateTransaction(this.db, () => {
+    if (!this.outboxInTransaction) {
+      return inImmediateTransaction(this.db, () => {
+        this.outboxInTransaction = true;
+        try {
+          return this.finishOutbox(lease, result);
+        } finally {
+          this.outboxInTransaction = false;
+        }
+      });
+    }
+    {
+      const stamp = this.now();
       const terminal = result.status === "failed" ? "failed" : "completed";
       const changed = this.db
         .prepare(
@@ -305,53 +306,167 @@ export class WorkbenchReconciliationStore {
           );
       }
       return true;
-    });
+    }
+  }
+
+  private outboxLeaseStore(
+    merchantId: string,
+    leaseMs: number,
+  ): LeasedJobStore<OutboxLease, OperationResult> {
+    const persistence: LeasedJobPersistence<OutboxLease, OperationResult> = {
+      inTransaction: (fn) =>
+        inImmediateTransaction(this.db, () => {
+          this.outboxInTransaction = true;
+          try {
+            return fn();
+          } finally {
+            this.outboxInTransaction = false;
+          }
+        }),
+      enqueueOutstanding: () => 0,
+      leaseCandidate: (stamp) => {
+        const row = this.db
+          .prepare(
+            `SELECT operation_id, fencing_token FROM workbench_approval_outbox
+             WHERE merchant_id=?
+               AND (status='pending' OR (status='leased' AND lease_expires_at<=?))
+             ORDER BY created_at, operation_id LIMIT 1`,
+          )
+          .get(merchantId, stamp) as { operation_id: string; fencing_token: number } | undefined;
+        return row === undefined
+          ? undefined
+          : { jobId: row.operation_id, fencingToken: Number(row.fencing_token) };
+      },
+      claim: (input) => {
+        const changed = this.db
+          .prepare(
+            `UPDATE workbench_approval_outbox
+             SET status='leased', lease_owner=?, lease_expires_at=?, fencing_token=?, attempts=attempts+1
+             WHERE merchant_id=? AND operation_id=? AND fencing_token=?
+               AND (status='pending' OR (status='leased' AND lease_expires_at<=?))`,
+          )
+          .run(
+            input.workerId,
+            input.leaseExpiresAt,
+            input.nextFencingToken,
+            merchantId,
+            input.jobId,
+            input.expectedFencingToken,
+            input.now,
+          );
+        if (changed.changes !== 1) return undefined;
+        const row = this.db
+          .prepare(
+            `SELECT o.merchant_id, o.operation_id, d.candidate_id, d.approval_generation,
+                    o.action_step, o.fencing_token, d.actor_id, d.decision, d.action_digest
+             FROM workbench_approval_outbox o
+             JOIN workbench_approval_decisions d ON d.operation_id=o.operation_id
+             WHERE o.merchant_id=? AND o.operation_id=?`,
+          )
+          .get(merchantId, input.jobId) as unknown as OutboxRow;
+        const payload: OutboxLease = {
+          merchantId: row.merchant_id,
+          operationId: row.operation_id,
+          candidateId: row.candidate_id,
+          approvalGeneration: row.approval_generation,
+          actionStep: row.action_step,
+          workerId: input.workerId,
+          fencingToken: input.nextFencingToken,
+          actorId: row.actor_id,
+          decision: row.decision,
+          actionDigest: row.action_digest,
+        };
+        return {
+          jobId: input.jobId,
+          workerId: input.workerId,
+          fencingToken: input.nextFencingToken,
+          attempts: 0,
+          payload,
+        };
+      },
+      finish: (input) => this.finishOutbox(input.lease.payload, input.result),
+    };
+    return new LeasedJobStore({ persistence, now: () => this.now(), leaseMs });
   }
 
   leaseReconciliation(workerId: string, leaseMs = 30_000): ReconciliationLease | undefined {
-    const stamp = this.now();
-    const expires = new Date(Date.parse(stamp) + leaseMs).toISOString();
-    return inImmediateTransaction(this.db, () => {
-      const row = this.db
-        .prepare(
-          `SELECT j.merchant_id, j.operation_id, j.attempts, j.first_unknown_at,
-                  j.fencing_token, d.candidate_id, d.actor_id, d.decision
-           FROM workbench_reconciliation_jobs j
-           JOIN workbench_approval_decisions d ON d.operation_id=j.operation_id
-           WHERE (j.status='pending' AND j.next_attempt_at <= ?)
-              OR (j.status='leased' AND j.lease_expires_at <= ?)
-           ORDER BY j.next_attempt_at, j.operation_id LIMIT 1`,
-        )
-        .get(stamp, stamp) as unknown as ReconciliationRow | undefined;
-      if (row === undefined) {
-        return undefined;
-      }
-      const token = row.fencing_token + 1;
-      const changed = this.db
-        .prepare(
-          `UPDATE workbench_reconciliation_jobs
-           SET status='leased', lease_owner=?, lease_expires_at=?, fencing_token=?, updated_at=?
-           WHERE operation_id=? AND fencing_token=?`,
-        )
-        .run(workerId, expires, token, stamp, row.operation_id, row.fencing_token);
-      if (changed.changes !== 1) throw new Error("reconciliation lease CAS failed");
-      return {
-        merchantId: row.merchant_id,
-        operationId: row.operation_id,
-        candidateId: row.candidate_id,
-        actorId: row.actor_id,
-        decision: row.decision,
-        workerId,
-        fencingToken: token,
-        attempts: row.attempts,
-        firstUnknownAt: row.first_unknown_at,
-      };
-    });
+    const handle = new LeasedJobStore<ReconciliationLease, OperationResult>({
+      persistence: this.reconciliationLeasePersistence,
+      now: () => this.now(),
+      leaseMs,
+    }).lease(workerId);
+    return handle?.payload;
+  }
+
+  private claimReconciliationLease(input: {
+    jobId: string;
+    workerId: string;
+    expectedFencingToken: number;
+    nextFencingToken: number;
+    leaseExpiresAt: string;
+    now: string;
+  }): LeasedJobHandle<ReconciliationLease> | undefined {
+    const changed = this.db
+      .prepare(
+        `UPDATE workbench_reconciliation_jobs
+         SET status='leased', lease_owner=?, lease_expires_at=?, fencing_token=?, updated_at=?
+         WHERE operation_id=? AND fencing_token=?
+           AND ((status='pending' AND next_attempt_at <= ?)
+             OR (status='leased' AND lease_expires_at <= ?))`,
+      )
+      .run(
+        input.workerId,
+        input.leaseExpiresAt,
+        input.nextFencingToken,
+        input.now,
+        input.jobId,
+        input.expectedFencingToken,
+        input.now,
+        input.now,
+      );
+    if (changed.changes !== 1) return undefined;
+    const row = this.db
+      .prepare(
+        `SELECT j.merchant_id, j.operation_id, j.attempts, j.first_unknown_at,
+                j.fencing_token, d.candidate_id, d.actor_id, d.decision
+         FROM workbench_reconciliation_jobs j
+         JOIN workbench_approval_decisions d ON d.operation_id=j.operation_id
+         WHERE j.operation_id=?`,
+      )
+      .get(input.jobId) as unknown as ReconciliationRow;
+    const payload: ReconciliationLease = {
+      merchantId: row.merchant_id,
+      operationId: row.operation_id,
+      candidateId: row.candidate_id,
+      actorId: row.actor_id,
+      decision: row.decision,
+      workerId: input.workerId,
+      fencingToken: input.nextFencingToken,
+      attempts: row.attempts,
+      firstUnknownAt: row.first_unknown_at,
+    };
+    return {
+      jobId: input.jobId,
+      workerId: input.workerId,
+      fencingToken: input.nextFencingToken,
+      attempts: row.attempts,
+      payload,
+    };
   }
 
   finishReconciliation(lease: ReconciliationLease, result: OperationResult): boolean {
     const stamp = this.now();
-    return inImmediateTransaction(this.db, () => {
+    if (!this.reconciliationInTransaction) {
+      return inImmediateTransaction(this.db, () => {
+        this.reconciliationInTransaction = true;
+        try {
+          return this.finishReconciliation(lease, result);
+        } finally {
+          this.reconciliationInTransaction = false;
+        }
+      });
+    }
+    {
       const owned = this.db
         .prepare(
           `SELECT attempts, first_unknown_at FROM workbench_reconciliation_jobs
@@ -415,7 +530,7 @@ export class WorkbenchReconciliationStore {
         }
       }
       return true;
-    });
+    }
   }
 
   private upsertAlert(
@@ -479,4 +594,3 @@ function retryDelayMs(attempts: number, jitter: number): number {
   const boundedJitter = Math.min(0.2, Math.max(-0.2, jitter));
   return Math.round(seconds * 1000 * (1 + boundedJitter));
 }
-
