@@ -184,20 +184,29 @@ export class WriteApprovalCandidateStore {
   /** Expire pending/approved candidates past their deadline. Returns count. */
   expireDue(): number {
     const now = this.now();
-    const due = this.db
-      .prepare(
-        `SELECT candidate_id FROM action_candidates
-         WHERE principal_id = ? AND status IN ('pending_approval','approved') AND expires_at < ?`,
-      )
-      .all(this.principalId, now) as { candidate_id: string }[];
-    for (const { candidate_id } of due) {
-      this.db
+    // SELECT + 循环 UPDATE 包进事务（P2-1 刀 1 补漏）：autocommit 下中途失败会
+    // 留下"一部分候选已 expired、另一部分还 pending"的半截清扫。
+    this.db.exec("begin immediate");
+    try {
+      const due = this.db
         .prepare(
-          "UPDATE action_candidates SET status = 'expired', updated_at = ? WHERE candidate_id = ?",
+          `SELECT candidate_id FROM action_candidates
+           WHERE principal_id = ? AND status IN ('pending_approval','approved') AND expires_at < ?`,
         )
-        .run(now, candidate_id);
+        .all(this.principalId, now) as { candidate_id: string }[];
+      for (const { candidate_id } of due) {
+        this.db
+          .prepare(
+            "UPDATE action_candidates SET status = 'expired', updated_at = ? WHERE candidate_id = ?",
+          )
+          .run(now, candidate_id);
+      }
+      this.db.exec("commit");
+      return due.length;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
     }
-    return due.length;
   }
 
   /**
@@ -209,23 +218,32 @@ export class WriteApprovalCandidateStore {
    */
   expireForRecovery(): number {
     const now = this.now();
-    const recoverable = this.db
-      .prepare(
-        `SELECT candidate_id FROM action_candidates
-         WHERE principal_id = ? AND status IN ('pending_approval','approved')`,
-      )
-      .all(this.principalId) as { candidate_id: string }[];
-    for (const { candidate_id } of recoverable) {
-      this.db
+    // SELECT + 循环 UPDATE 包进事务（P2-1 刀 1 补漏，同 expireDue）：重启恢复
+    // 清扫要么全部生效、要么全部不生效，不留半截。
+    this.db.exec("begin immediate");
+    try {
+      const recoverable = this.db
         .prepare(
-          `UPDATE action_candidates
-           SET status = 'expired', updated_at = ?
-           WHERE candidate_id = ? AND principal_id = ?
-             AND status IN ('pending_approval','approved')`,
+          `SELECT candidate_id FROM action_candidates
+           WHERE principal_id = ? AND status IN ('pending_approval','approved')`,
         )
-        .run(now, candidate_id, this.principalId);
+        .all(this.principalId) as { candidate_id: string }[];
+      for (const { candidate_id } of recoverable) {
+        this.db
+          .prepare(
+            `UPDATE action_candidates
+             SET status = 'expired', updated_at = ?
+             WHERE candidate_id = ? AND principal_id = ?
+               AND status IN ('pending_approval','approved')`,
+          )
+          .run(now, candidate_id, this.principalId);
+      }
+      this.db.exec("commit");
+      return recoverable.length;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
     }
-    return recoverable.length;
   }
 
   /** Expire one live candidate when its process-local execution hook is gone. */

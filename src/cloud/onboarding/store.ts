@@ -307,35 +307,37 @@ export class OnboardingStore {
     assertRevision(record, input.expectedRevision);
     assertTransition(record.status, input.nextStatus);
 
-    // **先留痕，再判定**：被拒的"文本 applicationId / LLM 说完成了"同样要进审计，
-    // 否则"有人说它开通了"这件事在系统里完全不可见——那正是要防的东西。
-    if (input.evidence !== undefined) {
-      this.recordEvidence(record.recordId, input.evidence);
-    }
-
-    let applicationId = record.applicationId;
     const evidence = input.evidence;
     const authoritative = evidence !== undefined && isAuthoritative(evidence);
 
+    // 两条**拒绝路径**不进下面的事务：「先留痕，再判定」（原顺序保持）——被拒的
+    // "文本 applicationId / LLM 说完成了"同样要进审计，否则"有人说它开通了"这件事
+    // 在系统里完全不可见——那正是要防的东西。证据必须持久化，不能随回滚消失（T029）。
+    //
     // applicationId 的**唯一**写入点：权威回执。且只要拿到权威回执就**必须**与已
     // 持久化的那个一致——不一致就阻断（T011），与"这次想到哪个状态"无关。
-    if (authoritative) {
-      if (record.applicationId !== null && record.applicationId !== evidence.applicationId) {
-        this.markBlocked(
-          record,
-          `platform reported a different applicationId (${evidence.applicationId})`,
-        );
-        throw new OnboardingError(
-          "application_id_mismatch",
-          `platform reported applicationId ${evidence.applicationId}, record holds ${record.applicationId}`,
-        );
-      }
-      applicationId = evidence.applicationId;
+    if (
+      authoritative &&
+      record.applicationId !== null &&
+      record.applicationId !== evidence.applicationId
+    ) {
+      this.recordEvidence(record.recordId, evidence);
+      this.markBlocked(
+        record,
+        `platform reported a different applicationId (${evidence.applicationId})`,
+      );
+      throw new OnboardingError(
+        "application_id_mismatch",
+        `platform reported applicationId ${evidence.applicationId}, record holds ${record.applicationId}`,
+      );
     }
 
     // 进入关键状态而没有权威证据 → 拒（T029：文本 applicationId 与 LLM 的"已完成"
     // 永远到不了这里）。
     if (AUTHORITATIVE_REQUIRED.has(input.nextStatus) && !authoritative) {
+      if (evidence !== undefined) {
+        this.recordEvidence(record.recordId, evidence);
+      }
       throw new OnboardingError(
         "evidence_not_authoritative",
         `transition ${record.status} → ${input.nextStatus} requires authoritative platform evidence`
@@ -343,25 +345,39 @@ export class OnboardingStore {
       );
     }
 
+    const applicationId =
+      evidence !== undefined && authoritative ? evidence.applicationId : record.applicationId;
     const stamp = this.now();
     const revision = record.revision + 1;
-    this.db
-      .prepare(
-        "update onboarding_records set status = ?, revision = ?, application_id = ?,"
-          + " runtime_origin_host = coalesce(?, runtime_origin_host),"
-          + " last_successful_step = coalesce(?, last_successful_step), last_error = null, updated_at = ?"
-          + " where record_id = ? and revision = ?",
-      )
-      .run(
-        input.nextStatus,
-        revision,
-        applicationId,
-        input.runtimeOriginHost ?? null,
-        input.step ?? null,
-        stamp,
-        record.recordId,
-        input.expectedRevision,
-      );
+    // 成功路径的 recordEvidence + UPDATE 必须是一个存储原子边界（P2-1 刀 1 补漏）：
+    // autocommit 下崩在两句之间会留下"有证据但状态没推进"的半截写。
+    this.db.exec("begin immediate");
+    try {
+      if (evidence !== undefined) {
+        this.recordEvidence(record.recordId, evidence);
+      }
+      this.db
+        .prepare(
+          "update onboarding_records set status = ?, revision = ?, application_id = ?,"
+            + " runtime_origin_host = coalesce(?, runtime_origin_host),"
+            + " last_successful_step = coalesce(?, last_successful_step), last_error = null, updated_at = ?"
+            + " where record_id = ? and revision = ?",
+        )
+        .run(
+          input.nextStatus,
+          revision,
+          applicationId,
+          input.runtimeOriginHost ?? null,
+          input.step ?? null,
+          stamp,
+          record.recordId,
+          input.expectedRevision,
+        );
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
     return this.requireRecord(record.recordId);
   }
 
@@ -381,17 +397,27 @@ export class OnboardingStore {
     expectedRevision: number,
     input: { reason: string; retryable: boolean; now?: string },
   ): OnboardingRecord {
-    const record = this.requireRecord(recordId);
-    assertRevision(record, expectedRevision);
-    const next: OnboardingStatus = input.retryable ? "FAILED_RETRYABLE" : "BLOCKED";
-    assertTransition(record.status, next);
-    this.db
-      .prepare(
-        "update onboarding_records set status = ?, revision = ?, last_error = ?, updated_at = ?"
-          + " where record_id = ? and revision = ?",
-      )
-      .run(next, record.revision + 1, sanitizeError(input.reason), this.now(), recordId, expectedRevision);
-    return this.requireRecord(recordId);
+    // 读判 + UPDATE 包进事务（P2-1 刀 1 补漏）：与 advance/cancel 同一存储原子
+    // 边界口径——防并发写者插在"读到的 revision"与"条件 UPDATE"之间，也防后续
+    // 给本方法加第二条写语句时退化成 autocommit 半截写。
+    this.db.exec("begin immediate");
+    try {
+      const record = this.requireRecord(recordId);
+      assertRevision(record, expectedRevision);
+      const next: OnboardingStatus = input.retryable ? "FAILED_RETRYABLE" : "BLOCKED";
+      assertTransition(record.status, next);
+      this.db
+        .prepare(
+          "update onboarding_records set status = ?, revision = ?, last_error = ?, updated_at = ?"
+            + " where record_id = ? and revision = ?",
+        )
+        .run(next, record.revision + 1, sanitizeError(input.reason), this.now(), recordId, expectedRevision);
+      this.db.exec("commit");
+      return this.requireRecord(recordId);
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   /**
@@ -416,23 +442,32 @@ export class OnboardingStore {
         `consent refusal only applies while awaiting platform consent (status ${record.status})`,
       );
     }
-    this.recordEvidence(recordId, {
-      kind: "user_consent_receipt",
-      summary: `consent refused: ${input.note ?? "merchant declined in the platform dialog"}`,
-      observedAt: this.now(),
-    });
-    this.db
-      .prepare(
-        "update onboarding_records set revision = ?, last_error = ?, updated_at = ?"
-          + " where record_id = ? and revision = ?",
-      )
-      .run(
-        record.revision + 1,
-        sanitizeError(input.note ?? "merchant declined platform consent; still waiting"),
-        this.now(),
-        recordId,
-        expectedRevision,
-      );
+    // recordEvidence + UPDATE 必须是一个存储原子边界（P2-1 刀 1 补漏）：autocommit
+    // 下崩在两句之间会留下"有拒绝留痕但 revision 没推进"的半截写。
+    this.db.exec("begin immediate");
+    try {
+      this.recordEvidence(recordId, {
+        kind: "user_consent_receipt",
+        summary: `consent refused: ${input.note ?? "merchant declined in the platform dialog"}`,
+        observedAt: this.now(),
+      });
+      this.db
+        .prepare(
+          "update onboarding_records set revision = ?, last_error = ?, updated_at = ?"
+            + " where record_id = ? and revision = ?",
+        )
+        .run(
+          record.revision + 1,
+          sanitizeError(input.note ?? "merchant declined platform consent; still waiting"),
+          this.now(),
+          recordId,
+          expectedRevision,
+        );
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
     return this.requireRecord(recordId);
   }
 

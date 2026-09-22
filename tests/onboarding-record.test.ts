@@ -459,3 +459,62 @@ describe("§7.3：平台适配器只定义能力，未映射的禁止成功空�
     expect(err.message).toContain("not mapped");
   });
 });
+
+describe("写路径原子性（P2-1 刀 1 补漏）", () => {
+  /**
+   * 包装真实 db：匹配 `match` 的 UPDATE 在 run 时抛错（模拟中途存储失败）。
+   * OnboardingStore 构造期只用 exec（pragma/SCHEMA/backfill），运行期用 prepare。
+   */
+  function failingUpdate(real: DatabaseSync, match: string): DatabaseSync {
+    return {
+      exec: (sql: string) => real.exec(sql),
+      prepare: (sql: string) => {
+        if (sql.includes(match)) {
+          return {
+            run: () => {
+              throw new Error("injected storage failure");
+            },
+          };
+        }
+        return real.prepare(sql);
+      },
+    } as unknown as DatabaseSync;
+  }
+
+  it("advance：UPDATE 失败 → recordEvidence 的效果也不存在（不留半截写）", () => {
+    const s = new OnboardingStore(
+      failingUpdate(new DatabaseSync(":memory:"), "set status = ?, revision = ?, application_id = ?"),
+    );
+    const record = s.openIntent(open());
+    expect(() =>
+      s.advance({
+        recordId: record.recordId,
+        expectedRevision: 0,
+        nextStatus: "AWAITING_PLATFORM_CONSENT",
+        evidence: { kind: "text_claim", summary: "LLM: 快了", observedAt: "2026-09-21T00:00:00Z" },
+      }),
+    ).toThrow(/injected storage failure/);
+    // 无事务时这里会观察到证据已留痕但状态没推进（半截写）
+    expect(s.getRecord(record.recordId)?.status).toBe("DRAFT");
+    expect(s.evidenceFor(record.recordId)).toHaveLength(0);
+  });
+
+  it("recordConsentRefused：UPDATE 失败 → recordEvidence 的效果也不存在", () => {
+    const s = new OnboardingStore(
+      failingUpdate(new DatabaseSync(":memory:"), "set revision = ?, last_error = ?, updated_at = ?"),
+    );
+    const record = s.openIntent(open());
+    s.advance({ recordId: record.recordId, expectedRevision: 0, nextStatus: "AWAITING_PLATFORM_CONSENT" });
+    expect(() =>
+      s.recordConsentRefused(record.recordId, 1, { note: "merchant declined" }),
+    ).toThrow(/injected storage failure/);
+    const after = s.getRecord(record.recordId);
+    expect(after?.status).toBe("AWAITING_PLATFORM_CONSENT");
+    expect(after?.revision).toBe(1);
+    expect(s.evidenceFor(record.recordId)).toHaveLength(0);
+  });
+
+  // fail() 只有一条写语句（requireRecord 是 SELECT，无副作用）：不存在可注入的
+  // "半截状态"——单语句天然原子，变异证明无断言对象（照 v5 §4.4 口径如实标注，
+  // 不声称证明）。其包装的意义是与 advance/cancel 同一存储原子边界口径。
+});
