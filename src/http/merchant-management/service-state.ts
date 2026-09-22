@@ -43,6 +43,13 @@ export class MutableServiceState {
   private stateValue: ServiceState;
   private revisionValue: number;
   private stateReason: string;
+  /**
+   * 最近一次 resume 的操作引用（= committed decision 的 operationId），与状态迁移
+   * 在**同一个 UPDATE** 里落库（「查到引用 ⟺ 效果已提交」），供对账适配器反查——
+   * 服务恢复是 kiwi 内部写，没有下游服务可问。每行只留最近一次 resume 的引用：
+   * 被后续操作覆盖后对账得 unknown（保守升级人工，不会误判）。无持久化时为空。
+   */
+  private resumeOperationIdValue: string | null = null;
   private persistence?: { db: DatabaseSync; merchantId: string };
 
   constructor(initial: ServiceState = "OPERATING") {
@@ -73,12 +80,24 @@ export class MutableServiceState {
         state TEXT NOT NULL CHECK(state IN ('OPERATING','PAUSED','WITHDRAWN','DEGRADED')),
         revision INTEGER NOT NULL,
         reason TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        resume_operation_id TEXT
       )
     `);
+    // 既有库缺列时补上（SQLite 支持 ADD COLUMN，无需重建表；幂等判定读表结构）
+    const columns = db.prepare("PRAGMA table_info(workbench_service_control)").all() as Array<{
+      name: string;
+    }>;
+    if (!columns.some((column) => column.name === "resume_operation_id")) {
+      db.exec("ALTER TABLE workbench_service_control ADD COLUMN resume_operation_id TEXT");
+    }
     const row = db
-      .prepare("SELECT state, revision, reason FROM workbench_service_control WHERE merchant_id=?")
-      .get(merchantId) as { state: ServiceState; revision: number; reason: string } | undefined;
+      .prepare(
+        "SELECT state, revision, reason, resume_operation_id FROM workbench_service_control WHERE merchant_id=?",
+      )
+      .get(merchantId) as
+      | { state: ServiceState; revision: number; reason: string; resume_operation_id: string | null }
+      | undefined;
     this.persistence = { db, merchantId };
     if (row === undefined) {
       this.insertCurrent();
@@ -94,6 +113,7 @@ export class MutableServiceState {
     this.stateValue = row.state;
     this.revisionValue = row.revision;
     this.stateReason = row.reason;
+    this.resumeOperationIdValue = row.resume_operation_id;
   }
 
   get state(): ServiceState {
@@ -107,6 +127,11 @@ export class MutableServiceState {
 
   get reason(): string {
     return this.stateReason;
+  }
+
+  /** 最近一次 resume 的操作引用（对账用；无持久化或无记录时为 null）。 */
+  get lastResumeOperationId(): string | null {
+    return this.resumeOperationIdValue;
   }
 
   gateCheck(): ServiceGateCheck {
@@ -138,8 +163,14 @@ export class MutableServiceState {
   /**
    * 恢复：`readinessOk=false` → 503 且状态不变（就绪门，BD §10.1）。
    * 撤回态不可经 resume 复活。
+   * `operationId`：committed decision 的操作标识，与状态迁移同一个 UPDATE 落库，
+   * 供写后不确定时的对账反查；非决定路径（管理 API 直通）不传、不落引用。
    */
-  resume(readinessOk: boolean, failedChecks: readonly string[]): { service_revision: number } {
+  resume(
+    readinessOk: boolean,
+    failedChecks: readonly string[],
+    operationId?: string,
+  ): { service_revision: number } {
     if (this.stateValue === "WITHDRAWN") {
       throw new ManagementError("conflict", "service is withdrawn; resume is not applicable");
     }
@@ -153,13 +184,16 @@ export class MutableServiceState {
     if (this.stateValue === "OPERATING") return { service_revision: this.revisionValue };
     const previousState = this.stateValue;
     const previousReason = this.stateReason;
+    const previousOperationId = this.resumeOperationIdValue;
     this.stateValue = "OPERATING";
     this.stateReason = "";
+    this.resumeOperationIdValue = operationId ?? null;
     try {
       this.advancePersistedRevision();
     } catch (error) {
       this.stateValue = previousState;
       this.stateReason = previousReason;
+      this.resumeOperationIdValue = previousOperationId;
       throw error;
     }
     return { service_revision: this.revisionValue };
@@ -171,7 +205,8 @@ export class MutableServiceState {
     persistence.db
       .prepare(
         `INSERT INTO workbench_service_control
-         (merchant_id, state, revision, reason, updated_at) VALUES (?, ?, ?, ?, ?)`,
+         (merchant_id, state, revision, reason, updated_at, resume_operation_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(
         persistence.merchantId,
@@ -179,6 +214,7 @@ export class MutableServiceState {
         this.revisionValue,
         this.stateReason,
         new Date().toISOString(),
+        this.resumeOperationIdValue,
       );
   }
 
@@ -199,7 +235,7 @@ export class MutableServiceState {
     const changed = persistence.db
       .prepare(
         `UPDATE workbench_service_control
-         SET state=?, revision=?, reason=?, updated_at=?
+         SET state=?, revision=?, reason=?, updated_at=?, resume_operation_id=?
          WHERE merchant_id=? AND revision=?`,
       )
       .run(
@@ -207,6 +243,7 @@ export class MutableServiceState {
         this.revisionValue,
         this.stateReason,
         new Date().toISOString(),
+        this.resumeOperationIdValue,
         persistence.merchantId,
         expectedRevision,
       );
