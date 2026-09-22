@@ -77,6 +77,17 @@ const REQUIRED_NODES = [
   "runtime-cache",
   "controlled-backup",
 ] as const;
+export type PrivacyDeletionNode = (typeof REQUIRED_NODES)[number];
+export interface PrivacyDeletionNodeResult {
+  receiptRef: string;
+  deletedRows?: number;
+}
+export type PrivacyDeletionNodeHandler = (input: {
+  requestId: string;
+  merchantId: string;
+  buyerPrincipalId: string;
+  consentGeneration: number;
+}) => PrivacyDeletionNodeResult;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS workbench_retention_policy (
@@ -126,7 +137,11 @@ CREATE TABLE IF NOT EXISTS workbench_deletion_suppressions (
 
 export class WorkbenchRetentionError extends Error {
   readonly code:
-    "POLICY_INVALID" | "REQUEST_NOT_FOUND" | "ILLEGAL_TRANSITION" | "DELETION_INCOMPLETE";
+    | "POLICY_INVALID"
+    | "REQUEST_NOT_FOUND"
+    | "ILLEGAL_TRANSITION"
+    | "DELETION_INCOMPLETE"
+    | "DELETION_NODE_UNAVAILABLE";
 
   constructor(code: WorkbenchRetentionError["code"], message: string) {
     super(message);
@@ -138,10 +153,16 @@ export class WorkbenchRetentionError extends Error {
 export class WorkbenchRetentionStore {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
+  private readonly deletionHandlers: Partial<Record<PrivacyDeletionNode, PrivacyDeletionNodeHandler>>;
 
-  constructor(options: { db: DatabaseSync; now?: () => string }) {
+  constructor(options: {
+    db: DatabaseSync;
+    now?: () => string;
+    deletionHandlers?: Partial<Record<PrivacyDeletionNode, PrivacyDeletionNodeHandler>>;
+  }) {
     this.db = options.db;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.deletionHandlers = options.deletionHandlers ?? {};
     this.db.exec("pragma busy_timeout = 5000");
     this.db.exec(SCHEMA);
   }
@@ -362,6 +383,41 @@ export class WorkbenchRetentionStore {
       }
       return { receiptRef, deletedRows };
     });
+  }
+
+  /** Execute an externally-owned cleanup node with an idempotent receipt boundary. */
+  processDeletionNode(requestId: string, nodeId: PrivacyDeletionNode): PrivacyDeletionNodeResult {
+    if (nodeId === "runtime-primary") return this.processRuntimePrimary(requestId);
+    const request = this.requireRequest(requestId);
+    if (request.status !== "PROCESSING") {
+      throw new WorkbenchRetentionError(
+        "ILLEGAL_TRANSITION",
+        "deletion node requires PROCESSING status",
+      );
+    }
+    const existing = this.db
+      .prepare(
+        "SELECT status, receipt_ref FROM workbench_privacy_deletion_tasks WHERE request_id=? AND node_id=?",
+      )
+      .get(requestId, nodeId) as { status: string; receipt_ref: string | null } | undefined;
+    if (existing?.status === "completed" && existing.receipt_ref !== null) {
+      return { receiptRef: existing.receipt_ref, deletedRows: 0 };
+    }
+    const handler = this.deletionHandlers[nodeId];
+    if (handler === undefined) {
+      throw new WorkbenchRetentionError(
+        "DELETION_NODE_UNAVAILABLE",
+        `deletion node ${nodeId} has no controlled processor`,
+      );
+    }
+    const result = handler({
+      requestId,
+      merchantId: request.merchantId,
+      buyerPrincipalId: request.buyerPrincipalId,
+      consentGeneration: request.consentGeneration,
+    });
+    this.recordDeletionTask({ requestId, nodeId, status: "completed", receiptRef: result.receiptRef });
+    return result;
   }
 
   getRequest(requestId: string, merchantId: string): PrivacyRequestRecord | undefined {

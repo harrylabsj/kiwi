@@ -94,6 +94,8 @@ function respondStoreError(res: ServerResponse, id: string, error: unknown): voi
   const code: WorkbenchProblemCode =
     error.code === "POLICY_INVALID"
       ? "COMPLIANCE_REVIEW_REQUIRED"
+      : error.code === "DELETION_NODE_UNAVAILABLE"
+        ? "DEPENDENCY_UNAVAILABLE"
       : error.code === "REQUEST_NOT_FOUND"
         ? "RESOURCE_NOT_FOUND"
         : "VERSION_CONFLICT";

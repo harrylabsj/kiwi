@@ -220,4 +220,38 @@ describe("Workbench retention and Buyer privacy requests", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("runs externally-owned deletion nodes through an idempotent receipt boundary", () => {
+    const { store } = fixture();
+    configure(store);
+    const request = store.receiveBuyerDeletionRequest({ merchantId: "m1", buyerPrincipalId: "buyer-1" });
+    store.transition(request.requestId, "IDENTITY_CHECK");
+    store.transition(request.requestId, "SCOPED");
+    store.transition(request.requestId, "PROCESSING");
+    let calls = 0;
+    const controlled = new WorkbenchRetentionStore({
+      db: new DatabaseSync(":memory:"),
+      deletionHandlers: {
+        "buyer-preferences": ({ buyerPrincipalId }) => {
+          calls += 1;
+          return { receiptRef: `preferences:${buyerPrincipalId}`, deletedRows: 2 };
+        },
+      },
+    });
+    configure(controlled);
+    const other = controlled.receiveBuyerDeletionRequest({ merchantId: "m1", buyerPrincipalId: "buyer-1" });
+    controlled.transition(other.requestId, "IDENTITY_CHECK");
+    controlled.transition(other.requestId, "SCOPED");
+    controlled.transition(other.requestId, "PROCESSING");
+    expect(controlled.processDeletionNode(other.requestId, "buyer-preferences")).toEqual({
+      receiptRef: "preferences:buyer-1",
+      deletedRows: 2,
+    });
+    expect(controlled.processDeletionNode(other.requestId, "buyer-preferences")).toEqual({
+      receiptRef: "preferences:buyer-1",
+      deletedRows: 0,
+    });
+    expect(calls).toBe(1);
+    expect(() => store.processDeletionNode(request.requestId, "runtime-cache")).toThrow(/no controlled processor/);
+  });
 });
