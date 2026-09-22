@@ -56,7 +56,8 @@ manifest.quickPrompts.forEach(bilingual);
 manifest.tags.forEach(bilingual);
 assert.deepEqual(manifest.defaultInitPrompt, manifest.quickPrompts[0]);
 assert.equal(manifest.dependencies.connectors.length, 1);
-assert(/^oc_[a-f0-9]+$/.test(manifest.dependencies.connectors[0]));
+// Desktop 5.6.0 resolves connector dependencies by source, not open-platform asset ID.
+assert.equal(manifest.dependencies.connectors[0], "kiwi-sourcing");
 assert.equal(manifest.agents.length, 1);
 const agent = frontmatter(manifest.agents[0]);
 assert.equal(agent.meta.name, manifest.agentName);

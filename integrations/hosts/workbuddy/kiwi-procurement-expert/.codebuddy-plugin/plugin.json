@@ -1,6 +1,6 @@
 {
   "name": "kiwi-procurement-expert",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Kiwi procurement expert for supplier discovery, quote comparison and nonbinding negotiation.",
   "author": { "name": "harrylabsj" },
   "homepage": "https://github.com/harrylabsj/kiwi",
@@ -45,5 +45,5 @@
       "en": "Prepare a negotiation proposal and send it after my confirmation"
     }
   ],
-  "dependencies": { "connectors": ["oc_bd73f860e3e2b5d3"] }
+  "dependencies": { "connectors": ["kiwi-sourcing"] }
 }

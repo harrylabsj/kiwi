@@ -82,7 +82,7 @@ describe("买方已发布工具契约（冻结）", () => {
 });
 
 describe("买方连接器身份（不随商家连接器改变）", () => {
-  it("采购专家仍依赖已发布的买方连接器 ID 与 source", () => {
+  it("采购专家使用桌面端可解析的买方 source，而非开放平台资产 ID", () => {
     const pluginPath = path.join(
       process.cwd(),
       "integrations/hosts/workbuddy/kiwi-procurement-expert/.codebuddy-plugin/plugin.json",
@@ -90,7 +90,15 @@ describe("买方连接器身份（不随商家连接器改变）", () => {
     const plugin = JSON.parse(readFileSync(pluginPath, "utf8")) as {
       dependencies?: { connectors?: string[] };
     };
-    expect(plugin.dependencies?.connectors).toEqual(["oc_bd73f860e3e2b5d3"]);
+    // WorkBuddy 5.6.0 getConnectorConfigById matches entry.source || entry.name.
+    // The published asset ID oc_bd73f860e3e2b5d3 is for platform management only.
+    const publishedEntries = [{ source: "kiwi-sourcing", name: "Kiwi 采购询价" }];
+    expect(plugin.dependencies?.connectors).toEqual(["kiwi-sourcing"]);
+    for (const configId of plugin.dependencies?.connectors ?? []) {
+      expect(
+        publishedEntries.find((entry) => (entry.source || entry.name) === configId),
+      ).toBeDefined();
+    }
   });
 
   it("商家连接器包不声明买方工具，也不指向买方 source", () => {

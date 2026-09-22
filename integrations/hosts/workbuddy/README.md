@@ -4,7 +4,9 @@
 
 `kiwi-procurement-expert/` 是完整专家包，包含 `.codebuddy-plugin/plugin.json`、Agent、三个预加载技能和 512×512 PNG 头像。专家只使用既有 Kiwi 买方 MCP 九个工具，复用现有审批与状态机。
 
-连接器依赖 `oc_bd73f860e3e2b5d3` 来自用户提供的 WorkBuddy「Kiwi 采购询价」截图。包结构校验不能证明平台连接器当前状态和实际工具版本；首次安装联调需在 WorkBuddy 核对该 ID 以及九个工具是否可用。
+专家 v1.0.1 的 `dependencies.connectors` 使用桌面端运行时 source **`kiwi-sourcing`**。开放平台资产 ID **`oc_bd73f860e3e2b5d3`** 继续用于管理已发布连接器，两者不能互换。WorkBuddy 5.6.0 的 `getConnectorConfigById` 只按 `entry.source || entry.name` 查找；v1.0.0 误填资产 ID，会在启动 MCP 前报 `Connector not found`。
+
+升级时保留原专家的平台 ID，上传 v1.0.1 包并检查平台生成的依赖仍为 `kiwi-sourcing`；若平台强制改写为 `oc_…`，需由 WorkBuddy 修复资产 ID 到 source 的映射。更新后重新载入专家，再从连接器面板连接 Kiwi，确认九个已发布买方工具可用。本修复不改变买方连接器配置、工具契约或 Kiwi 运行时版本。
 
 ## 校验与打包
 
@@ -12,7 +14,7 @@
 
 ```sh
 node integrations/hosts/workbuddy/package.mjs --check
-node integrations/hosts/workbuddy/package.mjs --out /absolute/path/kiwi-procurement-expert-1.0.0.zip
+node integrations/hosts/workbuddy/package.mjs --out /absolute/path/kiwi-procurement-expert-1.0.1.zip
 ```
 
 脚本校验两层职称/花名一致、技能路径/预加载一致、PNG 尺寸和大小、引用的工具仍在 MCP 源码中、示例满足 CommerceIntent 契约；只打包明确列出的专家文件，不带数据库、凭据、运行时或 macOS 元数据，不覆盖已有压缩包。
