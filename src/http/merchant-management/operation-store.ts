@@ -104,6 +104,7 @@ export class MerchantManagementOperationStore {
   constructor(options: { db: DatabaseSync; now?: () => string }) {
     this.db = options.db;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.db.exec("pragma busy_timeout=5000");
     this.db.exec(MANAGEMENT_OPERATION_SCHEMA);
   }
 
