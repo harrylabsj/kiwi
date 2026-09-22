@@ -3,6 +3,9 @@
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { recordClockSkewAlert } from "../../merchant-core/storage/clock-skew-alerts.js";
+import { sanitize } from "../../merchant-core/storage/redact.js";
+import { ensureColumn } from "../../merchant-core/storage/schema.js";
 import { inImmediateTransaction } from "../../merchant-core/storage/transaction.js";
 
 const SCHEMA = `
@@ -200,57 +203,9 @@ export class WorkbenchReconciliationStore {
   }
 
   recordClockSkew(input: { merchantId: string; paused: boolean; offsetMs: number }): void {
-    const stamp = this.now();
-    if (!input.paused) {
-      this.db
-        .prepare(
-          `UPDATE workbench_alerts SET resolved_at=?
-           WHERE merchant_id=? AND category='clock_skew' AND resource='clock:system'
-             AND episode='clock-skew' AND resolved_at IS NULL`,
-        )
-        .run(stamp, input.merchantId);
-      return;
-    }
-    const existing = this.db
-      .prepare(
-        `SELECT alert_id, resolved_at FROM workbench_alerts
-         WHERE merchant_id=? AND category='clock_skew' AND resource='clock:system'
-           AND episode='clock-skew'`,
-      )
-      .get(input.merchantId) as { alert_id: string; resolved_at: string | null } | undefined;
-    const summary = `System clock skew exceeded limit: offset_ms=${Math.round(input.offsetMs)}`;
-    if (existing === undefined) {
-      this.db
-        .prepare(
-          `INSERT INTO workbench_alerts
-           (alert_id, merchant_id, category, resource, episode, severity, summary, created_at)
-           VALUES (?, ?, 'clock_skew', 'clock:system', 'clock-skew', 'critical', ?, ?)`,
-        )
-        .run(`wba_${randomBytes(12).toString("hex")}`, input.merchantId, summary, stamp);
-      return;
-    }
-    if (existing.resolved_at === null) {
-      this.db
-        .prepare("UPDATE workbench_alerts SET severity='critical', summary=? WHERE alert_id=?")
-        .run(summary, existing.alert_id);
-      return;
-    }
-    this.db
-      .prepare(
-        `UPDATE workbench_alerts SET severity='critical', summary=?, created_at=?, resolved_at=NULL,
-           acknowledged_at=NULL, acknowledged_by=NULL WHERE alert_id=?`,
-      )
-      .run(summary, stamp, existing.alert_id);
-    const deliveriesPresent = this.db
-      .prepare(
-        "SELECT 1 present FROM sqlite_master WHERE type='table' AND name='workbench_alert_deliveries'",
-      )
-      .get() as { present: number } | undefined;
-    if (deliveriesPresent?.present === 1) {
-      this.db
-        .prepare("DELETE FROM workbench_alert_deliveries WHERE alert_id=?")
-        .run(existing.alert_id);
-    }
+    // 原语见 merchant-core/storage/clock-skew-alerts.ts（刀 3：与 external-delivery
+    // 共享一份实现；表存在性守卫语义由该模块头的说明保持）。
+    recordClockSkewAlert(this.db, this.now(), input);
   }
 
   leaseOutbox(merchantId: string, workerId: string, leaseMs = 30_000): OutboxLease | undefined {
@@ -525,15 +480,3 @@ function retryDelayMs(attempts: number, jitter: number): number {
   return Math.round(seconds * 1000 * (1 + boundedJitter));
 }
 
-function sanitize(value: string): string {
-  return String(value ?? "")
-    .replace(/\b(Bearer|token|api[_-]?key|secret|password)\b\s*[:=]?\s*\S+/gi, "$1 [redacted]")
-    .slice(0, 500);
-}
-
-function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  if (!columns.some((item) => item.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  }
-}

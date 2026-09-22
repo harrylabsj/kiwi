@@ -3,6 +3,8 @@
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { recordClockSkewAlert } from "../merchant-core/storage/clock-skew-alerts.js";
+import { sanitize } from "../merchant-core/storage/redact.js";
 import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
 
 const SCHEMA = `
@@ -215,49 +217,9 @@ export class ExternalAlertDeliveryStore {
   }
 
   recordClockSkew(input: { merchantId: string; paused: boolean; offsetMs: number }): void {
-    const stamp = this.now();
-    if (!input.paused) {
-      this.options.db
-        .prepare(
-          `UPDATE workbench_alerts SET resolved_at=?
-           WHERE merchant_id=? AND category='clock_skew' AND resource='clock:system'
-             AND episode='clock-skew' AND resolved_at IS NULL`,
-        )
-        .run(stamp, input.merchantId);
-      return;
-    }
-    const existing = this.options.db
-      .prepare(
-        `SELECT alert_id, resolved_at FROM workbench_alerts
-         WHERE merchant_id=? AND category='clock_skew' AND resource='clock:system'
-           AND episode='clock-skew'`,
-      )
-      .get(input.merchantId) as { alert_id: string; resolved_at: string | null } | undefined;
-    const alertId = existing?.alert_id ?? `wba_${randomBytes(12).toString("hex")}`;
-    const summary = `System clock skew exceeded limit: offset_ms=${Math.round(input.offsetMs)}`;
-    if (existing === undefined) {
-      this.options.db
-        .prepare(
-          `INSERT INTO workbench_alerts
-           (alert_id, merchant_id, category, resource, episode, severity, summary, created_at)
-           VALUES (?, ?, 'clock_skew', 'clock:system', 'clock-skew', 'critical', ?, ?)`,
-        )
-        .run(alertId, input.merchantId, summary, stamp);
-      return;
-    }
-    if (existing.resolved_at === null) {
-      this.options.db
-        .prepare("UPDATE workbench_alerts SET severity='critical', summary=? WHERE alert_id=?")
-        .run(summary, alertId);
-      return;
-    }
-    this.options.db
-      .prepare(
-        `UPDATE workbench_alerts SET severity='critical', summary=?, created_at=?, resolved_at=NULL,
-           acknowledged_at=NULL, acknowledged_by=NULL WHERE alert_id=?`,
-      )
-      .run(summary, stamp, alertId);
-    this.options.db.prepare("DELETE FROM workbench_alert_deliveries WHERE alert_id=?").run(alertId);
+    // 原语见 merchant-core/storage/clock-skew-alerts.ts（刀 3：与
+    // reconciliation-worker 共享一份实现；本库投递表恒存在，守卫恒真，行为不变）。
+    recordClockSkewAlert(this.options.db, this.now(), input);
   }
 
   private now(): string {
@@ -346,8 +308,3 @@ export class ExternalAlertDeliveryWorker {
   }
 }
 
-function sanitize(value: string): string {
-  return String(value ?? "")
-    .replace(/\b(Bearer|token|api[_-]?key|secret|password)\b\s*[:=]?\s*\S+/giu, "$1 [redacted]")
-    .slice(0, 500);
-}

@@ -27,6 +27,7 @@ import {
 } from "@simplewebauthn/server";
 import { COSEALG, convertCOSEtoPKCS } from "@simplewebauthn/server/helpers";
 
+import { ensureColumn } from "../../merchant-core/storage/schema.js";
 import { inImmediateTransaction } from "../../merchant-core/storage/transaction.js";
 
 const SCHEMA = `
@@ -867,9 +868,3 @@ function requireHttpsOrigin(value: string): string {
   return text;
 }
 
-function ensureColumn(db: DatabaseSync, table: string, column: string, declaration: string): void {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  if (!columns.some((entry) => entry.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${declaration}`);
-  }
-}

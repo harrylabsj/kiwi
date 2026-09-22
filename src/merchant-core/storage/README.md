@@ -6,6 +6,11 @@
 
 - `transaction.ts` — `inImmediateTransaction`：事务包装（刀 1）。定型与逃逸口
   规则见模块头。
+- `redact.ts` — `sanitize`：落库前错误文本脱敏（刀 3，原三处逐字复制收敛）。
+- `schema.ts` — `ensureColumn`：幂等加列（刀 3，原三处逐字复制收敛）。
+- `clock-skew-alerts.ts` — `recordClockSkewAlert`：clock_skew 告警 upsert +
+  复活时作废旧投递（刀 3，原两处近似复制收敛；表存在性守卫的统一口径见
+  模块头）。
 
 ## 时钟定型（刀 2；v5 交接报告 §1.1 三类结论成文化）
 

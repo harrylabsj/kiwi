@@ -3,6 +3,9 @@
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { sanitize } from "../merchant-core/storage/redact.js";
+import { ensureColumn } from "../merchant-core/storage/schema.js";
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS merchant_promotion_broadcast_workflows (
   workflow_id TEXT PRIMARY KEY,
@@ -254,21 +257,9 @@ function project(row: Record<string, unknown>): PromotionBroadcastWorkflowProjec
   };
 }
 
-function sanitize(value: string): string {
-  return String(value ?? "")
-    .replace(/\b(Bearer|token|api[_-]?key|secret|password)\b\s*[:=]?\s*\S+/giu, "$1 [redacted]")
-    .slice(0, 500);
-}
-
 function requireText(value: string, field: string): string {
   const text = String(value ?? "").trim();
   if (text === "") throw new Error(`${field} is required`);
   return text;
 }
 
-function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  if (!columns.some((item) => item.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  }
-}
