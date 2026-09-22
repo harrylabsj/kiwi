@@ -50,4 +50,36 @@ describe("MerchantWebEventRenderer", () => {
     expect(renderer.snapshot.tools["call-1"]).toBeUndefined();
     expect(renderer.snapshot.tools["call-110"]).toBeDefined();
   });
+
+  it("projects RFC 9457 recovery metadata without trusting unknown actions", () => {
+    const renderer = new MerchantWebEventRenderer();
+    renderer.apply(event(1, "error", {
+      code: "OPERATION_RESULT_UNKNOWN",
+      detail: "查询原操作。",
+      recovery_action: "query_operation",
+      operation_id: "op-1",
+      retryable: false,
+    }));
+    renderer.apply(event(2, "error", {
+      code: "FUTURE_CODE",
+      detail: "未知错误",
+      recovery_action: "retry_everything",
+      retryable: true,
+    }));
+    expect(renderer.snapshot.errors).toEqual([
+      {
+        code: "OPERATION_RESULT_UNKNOWN",
+        message: "查询原操作。",
+        retryable: false,
+        recoveryAction: "query_operation",
+        operationId: "op-1",
+      },
+      {
+        code: "FUTURE_CODE",
+        message: "未知错误",
+        retryable: true,
+        recoveryAction: "unknown",
+      },
+    ]);
+  });
 });

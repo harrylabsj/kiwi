@@ -37,9 +37,39 @@ export interface MerchantWebViewState {
   candidates: Record<string, { status: string; preview?: unknown }>;
   negotiations: Record<string, { phase: string; summary: string }>;
   progress: Array<{ message: string; operation?: string; step?: string }>;
-  errors: Array<{ code: string; message: string; retryable?: boolean }>;
+  errors: Array<{
+    code: string;
+    message: string;
+    retryable?: boolean;
+    recoveryAction?: MerchantWebRecoveryAction;
+    operationId?: string;
+  }>;
   replayGap?: { after: number; oldest: number };
 }
+
+/** RFC 9457 recovery actions understood by the host UI. Unknown server values
+ * are deliberately mapped to `unknown` so the client never auto-retries. */
+export type MerchantWebRecoveryAction =
+  | "none"
+  | "reauthenticate"
+  | "refresh_resource"
+  | "confirm"
+  | "query_operation"
+  | "retry_same_operation"
+  | "resync_feed"
+  | "open_support"
+  | "unknown";
+
+const RECOVERY_ACTIONS = new Set<MerchantWebRecoveryAction>([
+  "none",
+  "reauthenticate",
+  "refresh_resource",
+  "confirm",
+  "query_operation",
+  "retry_same_operation",
+  "resync_feed",
+  "open_support",
+]);
 
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -208,12 +238,21 @@ export class MerchantWebEventRenderer {
         });
         break;
       case "error":
+        {
+          const recovery = id(data.recovery_action);
+          const recoveryAction = RECOVERY_ACTIONS.has(recovery as MerchantWebRecoveryAction)
+            ? (recovery as MerchantWebRecoveryAction)
+            : "unknown";
+          const operationId = id(data.operation_id);
         boundedPush(this.state.errors, {
           code: id(data.code),
-          message: text(data.message),
+          message: text(data.message ?? data.detail),
           ...(typeof data.retryable === "boolean" ? { retryable: data.retryable } : {}),
+          recoveryAction,
+          ...(operationId === "" ? {} : { operationId }),
         });
         break;
+        }
       default:
         break;
     }
