@@ -67,6 +67,12 @@ export class MerchantGrantError extends Error {
 
 export class MerchantGrantStore {
   private readonly db: DatabaseSync;
+  /**
+   * 注入时钟。**必须一并传给 `assertVerifiedActor`**——否则它只控制 grant 过期，
+   * 不控制主体校验，注入时钟就是半个钟：调用方把时间钉死也没用，主体仍按墙钟判
+   * 过期，测试会随真实时间变红（2026-09-22 实际发生过一次）。
+   * 同口径见 `MerchantApplicationService` 与 `merchant-management/api.ts`。
+   */
   private readonly now: () => string;
 
   constructor(options: { db: DatabaseSync; now?: () => string }) {
@@ -86,7 +92,7 @@ export class MerchantGrantStore {
       expiresAt: string;
     },
   ): { grant_id: string; grant_version: number; authorization_generation: number } {
-    const actor = assertVerifiedActor(owner);
+    const actor = assertVerifiedActor(owner, new Date(this.now()));
     if (actor.role !== "owner" || !actor.permissions.has("grants:manage")) {
       throw new MerchantGrantError("forbidden", "only owner can create grants");
     }
@@ -141,7 +147,7 @@ export class MerchantGrantStore {
   }
 
   revokeGrant(owner: VerifiedActorContext, grantId: string): number {
-    const actor = assertVerifiedActor(owner);
+    const actor = assertVerifiedActor(owner, new Date(this.now()));
     if (actor.role !== "owner" || !actor.permissions.has("grants:manage")) {
       throw new MerchantGrantError("forbidden", "only owner can revoke grants");
     }
@@ -215,7 +221,7 @@ export class MerchantGrantStore {
       resourceIds?: readonly string[];
     },
   ): { authorized: boolean; generation: number; grantIds: string[] } {
-    const actor = assertVerifiedActor(context);
+    const actor = assertVerifiedActor(context, new Date(this.now()));
     const generation = this.authorizationGeneration(actor.merchantId, actor.actorId);
     if (actor.role === "owner") return { authorized: true, generation, grantIds: [] };
     if (actor.role !== "operator") return { authorized: false, generation, grantIds: [] };
