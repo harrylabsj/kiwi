@@ -3,6 +3,11 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import {
+  MerchantOperationReceipts,
+  operationReceiptsSchema,
+} from "./operation-receipts.js";
+
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const SNAPSHOT_TTL_MS = 10 * 60 * 1000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -62,17 +67,7 @@ CREATE TABLE IF NOT EXISTS merchant_feed_snapshots (
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS merchant_feed_operations (
-  operation_id TEXT PRIMARY KEY,
-  merchant_id TEXT NOT NULL,
-  operation_kind TEXT NOT NULL,
-  broadcast_id TEXT NOT NULL,
-  request_hash TEXT NOT NULL,
-  response_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_merchant_feed_operations_owner
-  ON merchant_feed_operations(merchant_id, operation_id);
+${operationReceiptsSchema("merchant_feed_operations", "broadcast_id")}
 `;
 
 /**
@@ -165,12 +160,20 @@ export class MerchantFeedStore {
   private readonly db: DatabaseSync;
   private readonly cursorKey: Buffer;
   private readonly now: () => string;
+  private readonly receipts: MerchantOperationReceipts;
 
   constructor(options: { db: DatabaseSync; cursorKey: Buffer; now?: () => string }) {
     if (options.cursorKey.length < 32) throw new Error("cursorKey must contain at least 32 bytes");
     this.db = options.db;
     this.cursorKey = Buffer.from(options.cursorKey);
     this.now = options.now ?? (() => new Date().toISOString());
+    this.receipts = new MerchantOperationReceipts({
+      db: options.db,
+      table: "merchant_feed_operations",
+      entityColumn: "broadcast_id",
+      now: this.now,
+      conflictError: (message) => new MerchantFeedError("version_conflict", message),
+    });
     this.db.exec("pragma busy_timeout = 5000");
     this.db.exec(SCHEMA);
   }
@@ -544,34 +547,17 @@ export class MerchantFeedStore {
   }
 
   /**
-   * 回执重放判定。**必须在写之前调用，且在调用方的同一事务内**：
-   * 同 operation_id + 同请求摘要 → 返回原回执（不产生第二次效果）；
-   * 同 operation_id + 不同请求 → 冲突（不静默复用）。
-   * 未带 operation 时返回 undefined（`publish()` 等非决定路径不开回执）。
+   * 回执重放判定（原语见 operation-receipts.ts）。**必须在写之前调用，且在调用方
+   * 的同一事务内**。未带 operation 时返回 undefined（`publish()` 等非决定路径不开
+   * 回执）。
    */
   private replayOperation(
     merchantId: string,
     operation: FeedOperation | undefined,
   ): { broadcast_id: string; revision: number } | undefined {
-    if (operation === undefined) return undefined;
-    const row = this.db
-      .prepare("SELECT * FROM merchant_feed_operations WHERE operation_id=?")
-      .get(operation.operationId) as Record<string, unknown> | undefined;
-    if (row === undefined) return undefined;
-    if (
-      String(row["merchant_id"]) !== merchantId ||
-      String(row["request_hash"]) !== operation.requestHash ||
-      String(row["operation_kind"]) !== operation.operationKind
-    ) {
-      throw new MerchantFeedError(
-        "version_conflict",
-        "operation_id was reused with a different merchant or request",
-      );
-    }
-    return JSON.parse(String(row["response_json"])) as {
-      broadcast_id: string;
-      revision: number;
-    };
+    const receipt = this.receipts.replay(merchantId, operation);
+    if (receipt === undefined) return undefined;
+    return receipt.response as { broadcast_id: string; revision: number };
   }
 
   private recordOperation(
@@ -580,23 +566,7 @@ export class MerchantFeedStore {
     broadcastId: string,
     response: { broadcast_id: string; revision: number },
   ): void {
-    if (operation === undefined) return;
-    this.db
-      .prepare(
-        `INSERT INTO merchant_feed_operations
-         (operation_id, merchant_id, operation_kind, broadcast_id, request_hash,
-          response_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        operation.operationId,
-        merchantId,
-        operation.operationKind,
-        broadcastId,
-        operation.requestHash,
-        JSON.stringify(response),
-        this.now(),
-      );
+    this.receipts.record(merchantId, operation, broadcastId, response);
   }
 
   /** 按 operation_id 查回执（对账用；只向所属商家开放）。 */
@@ -612,17 +582,14 @@ export class MerchantFeedStore {
         revision: number;
       }
     | undefined {
-    const row = this.db
-      .prepare("SELECT * FROM merchant_feed_operations WHERE operation_id=? AND merchant_id=?")
-      .get(operationId, merchantId) as Record<string, unknown> | undefined;
-    if (row === undefined) return undefined;
-    const response = JSON.parse(String(row["response_json"])) as { revision?: unknown };
+    const receipt = this.receipts.get(merchantId, operationId);
+    if (receipt === undefined) return undefined;
     return {
-      operation_id: String(row["operation_id"]),
-      merchant_id: String(row["merchant_id"]),
-      operation_kind: String(row["operation_kind"]),
-      broadcast_id: String(row["broadcast_id"]),
-      revision: Number(response.revision ?? 0),
+      operation_id: operationId,
+      merchant_id: merchantId,
+      operation_kind: receipt.operation_kind,
+      broadcast_id: receipt.entity_id,
+      revision: Number((receipt.response as { revision?: unknown }).revision ?? 0),
     };
   }
 

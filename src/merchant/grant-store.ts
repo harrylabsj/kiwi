@@ -4,6 +4,10 @@ import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import { assertVerifiedActor, type VerifiedActorContext } from "./application/actor.js";
+import {
+  MerchantOperationReceipts,
+  operationReceiptsSchema,
+} from "./operation-receipts.js";
 
 export const GRANT_ACTIONS = [
   "product.read",
@@ -54,17 +58,7 @@ CREATE TABLE IF NOT EXISTS merchant_grant_generations (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (merchant_id, subject_id)
 );
-CREATE TABLE IF NOT EXISTS merchant_grant_operations (
-  operation_id TEXT PRIMARY KEY,
-  merchant_id TEXT NOT NULL,
-  operation_kind TEXT NOT NULL,
-  grant_id TEXT NOT NULL,
-  request_hash TEXT NOT NULL,
-  response_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_merchant_grant_operations_owner
-  ON merchant_grant_operations(merchant_id, operation_id);
+${operationReceiptsSchema("merchant_grant_operations", "grant_id")}
 `;
 
 /**
@@ -108,10 +102,18 @@ export class MerchantGrantStore {
    * 同口径见 `MerchantApplicationService` 与 `merchant-management/api.ts`。
    */
   private readonly now: () => string;
+  private readonly receipts: MerchantOperationReceipts;
 
   constructor(options: { db: DatabaseSync; now?: () => string }) {
     this.db = options.db;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.receipts = new MerchantOperationReceipts({
+      db: options.db,
+      table: "merchant_grant_operations",
+      entityColumn: "grant_id",
+      now: this.now,
+      conflictError: (message) => new MerchantGrantError("version_conflict", message),
+    });
     this.db.exec("pragma busy_timeout=5000");
     this.db.exec(SCHEMA);
   }
@@ -253,22 +255,21 @@ export class MerchantGrantStore {
   /**
    * 对账查询：按商家隔离，用 operationId（= committed decision 的 operationId）
    * 查本次授权写落的回执。授权是 kiwi 内部写，没有下游服务可问——回执就落在
-   * 自己的表里，且与效果**同事务**（「有回执 ⟺ 效果已提交」）。
+   * 自己的表里，且与效果**同事务**（「有回执 ⟺ 效果已提交」；原语见
+   * operation-receipts.ts）。
    */
   getOperation(merchantId: string, operationId: string): GrantOperationReceipt | undefined {
-    const row = this.db
-      .prepare("SELECT * FROM merchant_grant_operations WHERE merchant_id=? AND operation_id=?")
-      .get(merchantId, operationId) as Record<string, unknown> | undefined;
-    if (row === undefined) return undefined;
+    const receipt = this.receipts.get(merchantId, operationId);
+    if (receipt === undefined) return undefined;
     return {
-      operation_kind: String(row["operation_kind"]) as GrantOperationKind,
-      grant_id: String(row["grant_id"]),
-      response: JSON.parse(String(row["response_json"])) as Record<string, unknown>,
+      operation_kind: receipt.operation_kind as GrantOperationKind,
+      grant_id: receipt.entity_id,
+      response: receipt.response,
     };
   }
 
   /**
-   * 重放判定（与广播同口径）：同 operation_id 同请求 → 回原回执；
+   * 重放判定（原语见 operation-receipts.ts）：同 operation_id 同请求 → 回原回执；
    * 同 operation_id 异请求/异商家 → version_conflict，绝不静默复用。
    * 未带 operation 时返回 undefined（非决定路径不开回执）。
    */
@@ -276,25 +277,12 @@ export class MerchantGrantStore {
     merchantId: string,
     operation: GrantOperation | undefined,
   ): GrantOperationReceipt | undefined {
-    if (operation === undefined) return undefined;
-    const row = this.db
-      .prepare("SELECT * FROM merchant_grant_operations WHERE operation_id=?")
-      .get(operation.operationId) as Record<string, unknown> | undefined;
-    if (row === undefined) return undefined;
-    if (
-      String(row["merchant_id"]) !== merchantId ||
-      String(row["request_hash"]) !== operation.requestHash ||
-      String(row["operation_kind"]) !== operation.operationKind
-    ) {
-      throw new MerchantGrantError(
-        "version_conflict",
-        "operation_id was reused with a different merchant or request",
-      );
-    }
+    const receipt = this.receipts.replay(merchantId, operation);
+    if (receipt === undefined) return undefined;
     return {
-      operation_kind: String(row["operation_kind"]) as GrantOperationKind,
-      grant_id: String(row["grant_id"]),
-      response: JSON.parse(String(row["response_json"])) as Record<string, unknown>,
+      operation_kind: receipt.operation_kind as GrantOperationKind,
+      grant_id: receipt.entity_id,
+      response: receipt.response,
     };
   }
 
@@ -305,23 +293,7 @@ export class MerchantGrantStore {
     grantId: string,
     response: Record<string, unknown>,
   ): void {
-    if (operation === undefined) return;
-    this.db
-      .prepare(
-        `INSERT INTO merchant_grant_operations
-         (operation_id, merchant_id, operation_kind, grant_id, request_hash,
-          response_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        operation.operationId,
-        merchantId,
-        operation.operationKind,
-        grantId,
-        operation.requestHash,
-        JSON.stringify(response),
-        this.now(),
-      );
+    this.receipts.record(merchantId, operation, grantId, response);
   }
 
   getGrant(merchantId: string, grantId: string): MerchantGrantProjection | undefined {
