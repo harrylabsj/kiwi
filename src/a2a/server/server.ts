@@ -274,6 +274,7 @@ export class A2AServer {
       handler,
       idempotency: options.idempotency,
       ledger: options.ledger,
+      segmentPayloads: options.segmentPayloads,
       tasks,
       now: this.now,
       logError: this.logError,

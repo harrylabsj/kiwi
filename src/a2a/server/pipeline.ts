@@ -40,7 +40,7 @@ import type { NegotiationEnvelope } from "../../negotiation/domain/envelope.js";
 import { IdempotencyConflictError, idempotencyKey } from "../../negotiation/idempotency/index.js";
 import type { IdempotencyRecord, IdempotencyStore } from "../../negotiation/idempotency/index.js";
 import { LedgerError, LedgerStore } from "../../negotiation/ledger/index.js";
-import type { LedgerEvent } from "../../negotiation/ledger/index.js";
+import type { LedgerEvent, LedgerEventContent } from "../../negotiation/ledger/index.js";
 import type { A2AMessage, A2ATask, A2ATaskState } from "../client/index.js";
 import { extractKnpEnvelope, parseInboundMessage } from "./inbound-message.js";
 import {
@@ -69,6 +69,7 @@ export interface InboundPipelineOptions {
   handler: NegotiationHandler;
   idempotency: IdempotencyStore;
   ledger: LedgerStore;
+  segmentPayloads?: boolean;
   tasks: TaskRegistry;
   now: () => string;
   logError: (message: string, err: unknown) => void;
@@ -256,6 +257,7 @@ export class InboundPipeline {
   private readonly handler: NegotiationHandler;
   private readonly idempotency: IdempotencyStore;
   private readonly ledger: LedgerStore;
+  private readonly segmentPayloads: boolean;
   private readonly tasks: TaskRegistry;
   private readonly now: () => string;
   private readonly logError: (message: string, err: unknown) => void;
@@ -267,6 +269,7 @@ export class InboundPipeline {
     this.handler = options.handler;
     this.idempotency = options.idempotency;
     this.ledger = options.ledger;
+    this.segmentPayloads = options.segmentPayloads === true;
     this.tasks = options.tasks;
     this.now = options.now;
     this.logError = options.logError;
@@ -483,7 +486,7 @@ export class InboundPipeline {
 
         let ledgerEvent: LedgerEvent;
         try {
-          ledgerEvent = this.ledger.append({
+          const eventContent: LedgerEventContent = {
             event_kind: "message_received",
             negotiation_id: envelope.negotiation_id,
             exchange_id: envelope.exchange_id,
@@ -510,7 +513,10 @@ export class InboundPipeline {
             wire_payload: envelope as unknown as Record<string, unknown>,
             outcome: { kind: "ok", result: { task_id: taskId, task_state: task.status.state } },
             occurred_at: envelope.created_at,
-          });
+          };
+          ledgerEvent = this.segmentPayloads
+            ? this.ledger.appendSegmented(eventContent)
+            : this.ledger.append(eventContent);
         } catch (err) {
           if (err instanceof LedgerError && err.code === "ledger_forbidden_content") {
             // 内容策略违规：envelope 携带 ledger 不得记录的保留键（§28/§36-5）。

@@ -48,6 +48,7 @@ interface StartOptions {
   handler?: NegotiationHandler;
   authVerifier?: AuthVerifier;
   maxPayloadBytes?: number;
+  segmentPayloads?: boolean;
   a2aPath?: string;
   cardOverrides?: Partial<AgentCardConfig>;
 }
@@ -91,6 +92,7 @@ async function startServer(options: StartOptions = {}, sharedDir?: string): Prom
     ...(options.handler !== undefined ? { handler: options.handler } : {}),
     ...(options.authVerifier !== undefined ? { authVerifier: options.authVerifier } : {}),
     ...(options.maxPayloadBytes !== undefined ? { maxPayloadBytes: options.maxPayloadBytes } : {}),
+    ...(options.segmentPayloads === true ? { segmentPayloads: true } : {}),
   });
   const httpServer = server.createServer();
   const url = await listen(httpServer);
@@ -221,6 +223,17 @@ describe("A2A Server: Agent Card（well-known）", () => {
 // ---------------------------------------------------------------------------
 
 describe("A2A Server: message/send 正例", () => {
+  it("可选分段模式将入站 envelope 外置到 payload segment", async () => {
+    const { url, ledger } = await startServer({ segmentPayloads: true });
+    const client = new A2AClient({ url: `${url}/`, version: "0.3" });
+    const envelope = finalizeEnvelope(validEnvelopeFields());
+    await client.sendMessage(knpMessage(envelope), "ctx-segmented");
+    const event = ledger.events(NEGOTIATION_ID).find((entry) => entry.event_kind === "message_received");
+    expect(event?.wire_payload).toBeUndefined();
+    expect(event?.payload_segments?.wire_payload).toBeDefined();
+    expect(ledger.resolvePayload(event!).wire_payload).toBeDefined();
+  });
+
   it("round-trips a KNP envelope in a data part and records ledger + idempotency", async () => {
     const { url, ledger, idempotency } = await startServer();
     const client = new A2AClient({ url: `${url}/`, version: "0.3" });

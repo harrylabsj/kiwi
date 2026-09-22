@@ -186,6 +186,8 @@ export interface A2AServerOptions {
   card: AgentCardConfigProvider;
   /** 落账（基线 §22）：入站处理证据 append-only 记录。 */
   ledger: LedgerStore;
+  /** Opt-in privacy mode: externalize inbound/outbound envelope payloads. */
+  segmentPayloads?: boolean;
   /** 协议幂等（子规范 §20）：(sender_identity, message_id) 三态判定。 */
   idempotency: IdempotencyStore;
   /** 业务路由；缺省用 declineHandler（fail-closed，未接线引擎时拒绝一切）。 */
