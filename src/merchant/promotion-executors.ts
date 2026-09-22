@@ -41,6 +41,28 @@ export function createPromotionExecutors(options: {
           rule: promotion.rule,
         };
   };
+  /**
+   * 对账适配器：写后不确定时按 operationId（= approval_ref）查**我们自己的**
+   * 权威行。促销是 kiwi 内部写，没有下游服务可问——approval_ref 与状态迁移在
+   * 同一个 `begin immediate` 里提交（见 store.transition），查到引用且状态与
+   * 本次操作的目标态一致即成功。没有这个适配器时 `MerchantCommandLog.reconcile`
+   * 会返回 unknown +「no downstream operation query adapter」，把一次可自动
+   * 判定的对账变成人工升级。
+   */
+  const queryOutcome =
+    (expectedStatus: "published" | "withdrawn") =>
+    async (
+      args: Record<string, unknown>,
+      _ctx: unknown,
+      decision: { operationId: string },
+    ): Promise<{ status: "succeeded" } | { status: "unknown"; error: string }> => {
+      const receipt = store().getOperation(options.merchantId, decision.operationId);
+      return receipt !== undefined &&
+        receipt.promotion_id === String(args["promotion_id"] ?? "") &&
+        receipt.status === expectedStatus
+        ? { status: "succeeded" }
+        : { status: "unknown", error: "promotion receipt does not match" };
+    };
   return [
     {
       tool: PROMOTION_TOOLS.publish,
@@ -95,6 +117,7 @@ export function createPromotionExecutors(options: {
           };
         }
       },
+      queryOutcome: queryOutcome("published"),
       verifyAfter: async (args) => {
         const value = store().getPromotion(
           options.merchantId,
@@ -118,6 +141,7 @@ export function createPromotionExecutors(options: {
             approvalRef: requireCommitted(decision).operationId,
           },
         ),
+      queryOutcome: queryOutcome("withdrawn"),
       verifyAfter: async (args) => {
         const value = store().getPromotion(
           options.merchantId,

@@ -211,6 +211,22 @@ export class MerchantPromotionStore {
     );
   }
 
+  /**
+   * 对账查询：按商家隔离，用 approval_ref（= committed decision 的 operationId）
+   * 反查本次状态迁移落的那一行。
+   *
+   * 促销与广播不同，不建独立回执表：publish/withdraw 在 `begin immediate` 里把
+   * approval_ref 与状态迁移写进**同一个 UPDATE**，「查到引用 ⟺ 效果已提交」。
+   * 代价是每行只保留**最近一次**操作的引用——若本次操作之后又有新操作覆盖了
+   * approval_ref，这里返回 undefined，对账得 unknown（保守升级为人工，不会误判）。
+   */
+  getOperation(merchantId: string, operationId: string): PromotionProjection | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM merchant_promotions WHERE merchant_id=? AND approval_ref=?")
+      .get(merchantId, operationId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : this.project(row);
+  }
+
   getPromotion(merchantId: string, promotionId: string): PromotionProjection | undefined {
     const row = this.db
       .prepare("SELECT * FROM merchant_promotions WHERE merchant_id=? AND promotion_id=?")
