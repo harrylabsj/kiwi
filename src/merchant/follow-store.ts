@@ -3,6 +3,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
+
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -157,8 +159,7 @@ export class MerchantFollowStore {
       throw new MerchantFollowError("invalid_input", "expectedRevision must be a non-negative integer");
     }
 
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const idempotent = this.db
         .prepare(
           `SELECT action, request_digest, response_json, expires_at
@@ -182,9 +183,8 @@ export class MerchantFollowStore {
           );
         }
         const original = JSON.parse(idempotent.response_json) as FollowMutationResult;
-        const replay = { ...original, follow: this.current(merchant, buyer), replayed: true };
-        this.db.exec("commit");
-        return replay;
+        // 早退在 fn 内 return：只读重放由 wrapper 提交空事务（与 rollback 等价）
+        return { ...original, follow: this.current(merchant, buyer), replayed: true };
       }
 
       const context = this.requireContext(input.mutationContext);
@@ -272,12 +272,8 @@ export class MerchantFollowStore {
           new Date(Date.parse(stamp) + SEVEN_DAYS_MS).toISOString(),
           stamp,
         );
-      this.db.exec("commit");
       return result;
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   /** Privacy deletion/revocation: cancel and advance epoch so in-flight contexts cannot revive. */
@@ -285,8 +281,7 @@ export class MerchantFollowStore {
     const merchant = requireText(merchantId, "merchantId");
     const buyer = requireText(buyerPrincipalId, "buyerPrincipalId");
     const stamp = this.now();
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const current = this.current(merchant, buyer);
       const nextEpoch = current.epoch + 1;
       this.db
@@ -310,13 +305,8 @@ export class MerchantFollowStore {
            WHERE merchant_id=? AND buyer_principal_id=? AND used_at IS NULL`,
         )
         .run(stamp, merchant, buyer);
-      const view = this.current(merchant, buyer);
-      this.db.exec("commit");
-      return view;
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+      return this.current(merchant, buyer);
+    });
   }
 
   activeCount(merchantId: string): number {

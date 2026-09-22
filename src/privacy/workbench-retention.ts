@@ -3,6 +3,8 @@
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
+
 export const PRIVACY_REQUEST_STATUSES = [
   "RECEIVED",
   "IDENTITY_CHECK",
@@ -159,8 +161,7 @@ export class WorkbenchRetentionStore {
       );
     }
     const stamp = this.now();
-    this.db.exec("begin immediate");
-    try {
+    inImmediateTransaction(this.db, () => {
       for (const category of RETENTION_CATEGORIES) {
         const entry = byCategory.get(category);
         if (entry === undefined)
@@ -196,11 +197,7 @@ export class WorkbenchRetentionStore {
             stamp,
           );
       }
-      this.db.exec("commit");
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   policyReady(): boolean {
@@ -224,8 +221,7 @@ export class WorkbenchRetentionStore {
     const buyerPrincipalId = requireText(input.buyerPrincipalId, "buyerPrincipalId");
     const stamp = this.now();
     const requestId = `wpr_${randomBytes(16).toString("base64url")}`;
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       this.db
         .prepare(
           `INSERT INTO workbench_privacy_subjects
@@ -273,13 +269,8 @@ export class WorkbenchRetentionStore {
           new Date(Date.parse(stamp) + 42 * 24 * 60 * 60 * 1000).toISOString(),
           stamp,
         );
-      const record = this.requireRequest(requestId);
-      this.db.exec("commit");
-      return record;
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+      return this.requireRequest(requestId);
+    });
   }
 
   transition(
@@ -337,8 +328,7 @@ export class WorkbenchRetentionStore {
       );
     }
     let deletedRows = 0;
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       for (const [table, where] of [
         ["merchant_follow_idempotency", "merchant_id=? AND buyer_principal_id=?"],
         ["merchant_follow_mutation_contexts", "merchant_id=? AND buyer_principal_id=?"],
@@ -367,15 +357,11 @@ export class WorkbenchRetentionStore {
              WHERE request_id=? AND node_id='runtime-primary' AND status='completed'`,
           )
           .get(requestId) as { receipt_ref: string } | undefined;
-        this.db.exec("commit");
+        // 已完成早退（幂等重放）：fn 内 return，wrapper 提交（与手写 commit 一致）
         return { receiptRef: current?.receipt_ref ?? receiptRef, deletedRows: 0 };
       }
-      this.db.exec("commit");
       return { receiptRef, deletedRows };
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   getRequest(requestId: string, merchantId: string): PrivacyRequestRecord | undefined {
@@ -583,8 +569,7 @@ export function replayDeletionSuppressions(
   new WorkbenchRetentionStore({ db, now: () => now });
   let applied = 0;
   let deletedRows = 0;
-  db.exec("begin immediate");
-  try {
+  return inImmediateTransaction(db, () => {
     for (const record of records) {
       if (Date.parse(record.expiresAt) <= Date.parse(now)) continue;
       db.prepare(
@@ -620,10 +605,6 @@ export function replayDeletionSuppressions(
         );
       }
     }
-    db.exec("commit");
     return { applied, deletedRows };
-  } catch (error) {
-    db.exec("rollback");
-    throw error;
-  }
+  });
 }

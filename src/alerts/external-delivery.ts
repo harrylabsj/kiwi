@@ -3,6 +3,8 @@
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS workbench_alert_deliveries (
   delivery_id TEXT PRIMARY KEY,
@@ -74,8 +76,7 @@ export class ExternalAlertDeliveryStore {
   lease(workerId: string, leaseMs = 30_000): ExternalAlertLease | undefined {
     const stamp = this.now();
     const expires = new Date(Date.parse(stamp) + leaseMs).toISOString();
-    this.options.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.options.db, () => {
       const row = this.options.db
         .prepare(
           `SELECT d.*, a.severity, a.category, a.summary, a.created_at alert_created_at
@@ -88,7 +89,7 @@ export class ExternalAlertDeliveryStore {
         )
         .get(stamp, stamp) as Record<string, unknown> | undefined;
       if (row === undefined) {
-        this.options.db.exec("commit");
+        // 早退在 fn 内 return：无写入，wrapper 提交空事务（与 rollback 等价）
         return undefined;
       }
       const token = Number(row["fencing_token"]) + 1;
@@ -108,7 +109,6 @@ export class ExternalAlertDeliveryStore {
           Number(row["fencing_token"]),
         );
       if (changed.changes !== 1) throw new Error("external alert lease CAS failed");
-      this.options.db.exec("commit");
       return {
         deliveryId: String(row["delivery_id"]),
         alertId: String(row["alert_id"]),
@@ -121,10 +121,7 @@ export class ExternalAlertDeliveryStore {
         workerId,
         fencingToken: token,
       };
-    } catch (error) {
-      this.options.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   finish(

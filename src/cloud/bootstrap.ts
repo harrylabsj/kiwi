@@ -192,6 +192,9 @@ function probeAuthoritativeStorage(dataDir: string): ReadinessCheckResult {
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(dbPath);
+    // P2-1 逃逸口（merchant-core/storage/transaction.ts 模块头的逃逸口规则）：
+    // 保留手写事务——这里的**主动 ROLLBACK 不是异常路径，而是探针的目的本身**
+    // （写后不留痕）。wrapper 的「fn 返回即 commit」语义与探针目标相反。
     db.exec("BEGIN IMMEDIATE");
     db.exec("CREATE TABLE IF NOT EXISTS readyz_probe (id INTEGER PRIMARY KEY, at TEXT NOT NULL)");
     db.prepare("INSERT INTO readyz_probe (at) VALUES (?)").run(new Date().toISOString());

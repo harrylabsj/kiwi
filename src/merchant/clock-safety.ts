@@ -2,6 +2,8 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
+import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
+
 const DEFAULT_MAX_ABS_OFFSET_MS = 2_000;
 const DEFAULT_BREACH_LIMIT = 2;
 const DEFAULT_MAX_SAMPLE_AGE_MS = 120_000;
@@ -90,9 +92,7 @@ export class ClockSafetyStore {
     const breached = Math.abs(offsetMs) > this.maxAbsOffsetMs;
     const localAt = new Date(input.localTimeMs).toISOString();
     const referenceAt = new Date(input.referenceTimeMs).toISOString();
-    let paused = false;
-    this.db.exec("begin immediate");
-    try {
+    const paused = inImmediateTransaction(this.db, () => {
       const previous = this.db
         .prepare(
           "SELECT status, consecutive_breaches, paused_at FROM merchant_clock_safety WHERE merchant_id=?",
@@ -103,9 +103,9 @@ export class ClockSafetyStore {
       const consecutiveBreaches = breached
         ? Math.min((previous?.consecutive_breaches ?? 0) + 1, this.breachLimit)
         : 0;
-      paused =
+      const pausedNow =
         breached && (previous?.status === "paused" || consecutiveBreaches >= this.breachLimit);
-      const pausedAt = paused ? (previous?.paused_at ?? localAt) : null;
+      const pausedAt = pausedNow ? (previous?.paused_at ?? localAt) : null;
       this.db
         .prepare(
           `INSERT INTO merchant_clock_safety
@@ -123,7 +123,7 @@ export class ClockSafetyStore {
         )
         .run(
           merchantId,
-          paused ? "paused" : "healthy",
+          pausedNow ? "paused" : "healthy",
           consecutiveBreaches,
           offsetMs,
           referenceAt,
@@ -131,11 +131,9 @@ export class ClockSafetyStore {
           pausedAt,
           localAt,
         );
-      this.db.exec("commit");
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+      return pausedNow;
+    });
+    // 告警是事务外副作用（不进 fn）：只有状态已提交才告警，且告警失败不回滚状态。
     this.alerts?.recordClockSkew({ merchantId, paused, offsetMs });
     return this.status(merchantId);
   }

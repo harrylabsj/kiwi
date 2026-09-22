@@ -3,6 +3,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
+
 export const ENGAGEMENT_EVENT_TYPES = ["received", "presented", "clicked"] as const;
 export type EngagementEventType = (typeof ENGAGEMENT_EVENT_TYPES)[number];
 
@@ -66,8 +68,7 @@ export class MerchantEngagementStore {
         }),
       )
       .digest("hex");
-    this.options.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.options.db, () => {
       const replay = this.options.db
         .prepare(
           `SELECT event_id, request_digest FROM merchant_broadcast_engagement
@@ -81,7 +82,7 @@ export class MerchantEngagementStore {
             "idempotency key was reused for another engagement fact",
           );
         }
-        this.options.db.exec("commit");
+        // 早退在 fn 内 return：只读重放由 wrapper 提交空事务（与 rollback 等价）
         return { event_id: replay.event_id, replayed: true };
       }
       const requiredPrior =
@@ -111,7 +112,6 @@ export class MerchantEngagementStore {
         )
         .get(merchantId, buyerId, broadcastId, input.eventType) as { event_id: string } | undefined;
       if (existing !== undefined) {
-        this.options.db.exec("commit");
         return { event_id: existing.event_id, replayed: true };
       }
       const eventId = `beg_${randomBytes(16).toString("base64url")}`;
@@ -133,12 +133,8 @@ export class MerchantEngagementStore {
           input.occurredAt,
           this.now(),
         );
-      this.options.db.exec("commit");
       return { event_id: eventId, replayed: false };
-    } catch (error) {
-      this.options.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   summary(merchantId: string): {

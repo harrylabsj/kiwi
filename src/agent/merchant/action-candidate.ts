@@ -35,6 +35,8 @@
 
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+
+import { inImmediateTransaction } from "../../merchant-core/storage/transaction.js";
 // 标识符生成用仓库自有实现（negotiation/domain/identifiers）：避免
 // 「内存存储为了生成 ID 而静态依赖模型 SDK」把整套 provider SDK 拖进制品。
 import { uuidv7 } from "../../negotiation/domain/identifiers.js";
@@ -186,8 +188,7 @@ export class WriteApprovalCandidateStore {
     const now = this.now();
     // SELECT + 循环 UPDATE 包进事务（P2-1 刀 1 补漏）：autocommit 下中途失败会
     // 留下"一部分候选已 expired、另一部分还 pending"的半截清扫。
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const due = this.db
         .prepare(
           `SELECT candidate_id FROM action_candidates
@@ -201,12 +202,8 @@ export class WriteApprovalCandidateStore {
           )
           .run(now, candidate_id);
       }
-      this.db.exec("commit");
       return due.length;
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   /**
@@ -220,8 +217,7 @@ export class WriteApprovalCandidateStore {
     const now = this.now();
     // SELECT + 循环 UPDATE 包进事务（P2-1 刀 1 补漏，同 expireDue）：重启恢复
     // 清扫要么全部生效、要么全部不生效，不留半截。
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const recoverable = this.db
         .prepare(
           `SELECT candidate_id FROM action_candidates
@@ -238,12 +234,8 @@ export class WriteApprovalCandidateStore {
           )
           .run(now, candidate_id, this.principalId);
       }
-      this.db.exec("commit");
       return recoverable.length;
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   /** Expire one live candidate when its process-local execution hook is gone. */

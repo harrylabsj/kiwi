@@ -3,6 +3,7 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
 import {
   MerchantOperationReceipts,
   operationReceiptsSchema,
@@ -299,11 +300,10 @@ export class MerchantFeedStore {
     operation?: FeedOperation,
   ): { broadcast_id: string; revision: number } {
     const stamp = this.now();
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const replay = this.replayOperation(merchantId, operation);
       if (replay !== undefined) {
-        this.db.exec("commit");
+        // 早退在 fn 内 return：只读重放由 wrapper 提交空事务（与 rollback 等价）
         return replay;
       }
       const current = this.broadcastRow(merchantId, broadcastId);
@@ -327,12 +327,8 @@ export class MerchantFeedStore {
         broadcast_id: broadcastId,
         revision,
       });
-      this.db.exec("commit");
       return { broadcast_id: broadcastId, revision };
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   read(
@@ -472,12 +468,10 @@ export class MerchantFeedStore {
   ): { broadcast_id: string; revision: number } {
     const content = normalizeBroadcast(input);
     const stamp = this.now();
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       // 重放判定必须在写之前（同 operation_id 同请求回原回执，不产生第二次效果）
       const replay = this.replayOperation(merchantId, operation);
       if (replay !== undefined) {
-        this.db.exec("commit");
         return replay;
       }
       const existing = this.broadcastRow(merchantId, broadcastId);
@@ -538,12 +532,8 @@ export class MerchantFeedStore {
         broadcast_id: broadcastId,
         revision,
       });
-      this.db.exec("commit");
       return { broadcast_id: broadcastId, revision };
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   /**

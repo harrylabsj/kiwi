@@ -41,6 +41,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import { isLoopbackHost } from "../a2a/client/url-policy.js";
+import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
 
 /** 授权码有效期（10 分钟，一次性使用）。 */
 export const OAUTH_CODE_TTL_MS = 10 * 60 * 1000;
@@ -226,8 +227,7 @@ export class MerchantOAuthStore {
     const columns = this.db.prepare("PRAGMA table_info(oauth_tokens)").all() as Array<{
       name: string;
     }>;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    inImmediateTransaction(this.db, () => {
       if (!columns.some((c) => c.name === "refresh_expires_at")) {
         this.db.exec("ALTER TABLE oauth_tokens ADD COLUMN refresh_expires_at TEXT;");
       }
@@ -235,11 +235,7 @@ export class MerchantOAuthStore {
         "UPDATE oauth_tokens SET refresh_expires_at = " +
           "strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+30 days') WHERE refresh_expires_at IS NULL;",
       );
-      this.db.exec("COMMIT");
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+    });
     // BUG-01 迁移：老库补授权挂起单 principal_id 列（老挂起单不可再消费）。
     const reqColumns = this.db.prepare("PRAGMA table_info(oauth_auth_requests)").all() as Array<{
       name: string;
@@ -426,8 +422,7 @@ export class MerchantOAuthStore {
       }
     | undefined {
     const digest = digestOf(code);
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const row = this.db.prepare("SELECT * FROM oauth_codes WHERE code_digest = ?").get(digest) as
         | {
             client_id: string;
@@ -441,22 +436,18 @@ export class MerchantOAuthStore {
           }
         | undefined;
       if (row === undefined || row.used_at !== null || this.expired(row.expires_at)) {
-        this.db.exec("ROLLBACK");
+        // 只读早退：fn 内 return，wrapper 提交空事务（与 ROLLBACK 等价）
         return undefined;
       }
       const used = this.db
         .prepare("UPDATE oauth_codes SET used_at = ? WHERE code_digest = ? AND used_at IS NULL")
         .run(this.now(), digest);
       if (used.changes !== 1) {
-        this.db.exec("ROLLBACK"); // 并发核销：另一方先到
+        // 并发核销：另一方先到。UPDATE 零变更，提交空事务与 ROLLBACK 等价。
         return undefined;
       }
-      this.db.exec("COMMIT");
       return row;
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+    });
   }
 
   // ---- tokens（access 1h / refresh 30d；刷新即轮换）----
@@ -533,8 +524,7 @@ export class MerchantOAuthStore {
   ): { access_token: string; refresh_token: string; expires_in: number } | undefined {
     const digest = digestOf(refreshToken);
     const now = this.now();
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const row = this.db
         .prepare("SELECT * FROM oauth_tokens WHERE refresh_digest = ?")
         .get(digest) as
@@ -548,18 +538,16 @@ export class MerchantOAuthStore {
           }
         | undefined;
       if (row === undefined || row.revoked_at !== null) {
-        this.db.exec("ROLLBACK");
+        // 只读早退：fn 内 return，wrapper 提交空事务（与 ROLLBACK 等价）
         return undefined;
       }
       // 独立 refresh 过期检查（审查 P2：NULL = 迁移遗留的不可判定行，
       // fail-closed 拒绝；正常路径构造函数迁移已回填，不会出现 NULL）。
       if (row.refresh_expires_at === null || row.refresh_expires_at <= now) {
-        this.db.exec("ROLLBACK");
         return undefined;
       }
       // RFC 6749 §6 / OAuth 2.1：refresh grant 绑定原 client_id（审查 P2）。
       if (expectedClientId !== undefined && row.client_id !== expectedClientId) {
-        this.db.exec("ROLLBACK");
         return undefined;
       }
       const revoked = this.db
@@ -568,21 +556,16 @@ export class MerchantOAuthStore {
         )
         .run(now, digest);
       if (revoked.changes === 0) {
-        this.db.exec("ROLLBACK"); // 并发轮换：另一方先核销
+        // 并发轮换：另一方先核销。UPDATE 零变更，提交空事务与 ROLLBACK 等价。
         return undefined;
       }
-      const pair = this.issueTokenPair({
+      return this.issueTokenPair({
         client_id: row.client_id,
         principal_id: row.principal_id,
         merchant_id: row.merchant_id,
         scope: row.scope,
       });
-      this.db.exec("COMMIT");
-      return pair;
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+    });
   }
 
   /** RFC 7009 撤销（access 或 refresh；幂等，未知 token 也视为成功）。 */
@@ -650,8 +633,7 @@ export class MerchantOAuthStore {
       }
     | undefined {
     const digest = digestOf(token);
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const row = this.db
         .prepare("SELECT * FROM oauth_confirmations WHERE token_digest = ?")
         .get(digest) as
@@ -676,13 +658,12 @@ export class MerchantOAuthStore {
         row.merchant_id === expected.merchantId &&
         row.action === expected.action;
       if (!valid) {
-        this.db.exec("ROLLBACK");
+        // 只读早退：fn 内 return，wrapper 提交空事务（与 ROLLBACK 等价）
         return undefined;
       }
       this.db
         .prepare("UPDATE oauth_confirmations SET used_at = ? WHERE token_digest = ?")
         .run(this.now(), digest);
-      this.db.exec("COMMIT");
       return row === undefined
         ? undefined
         : {
@@ -691,10 +672,7 @@ export class MerchantOAuthStore {
             action: row.action,
             created_at: row.created_at,
           };
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+    });
   }
 }
 

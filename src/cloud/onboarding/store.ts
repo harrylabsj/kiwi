@@ -33,6 +33,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { inImmediateTransaction } from "../../merchant-core/storage/transaction.js";
 import {
   isAuthoritative,
   ONBOARDING_TRANSITIONS,
@@ -193,8 +194,7 @@ export class OnboardingStore {
     // 读幂等键 → 读当前槽 → 插记录 → 切换槽 → 记幂等回执必须是一个存储原子
     // 边界。否则两个 Runtime/worker 可同时观察到“无活跃记录”并各自插入一条。
     // BEGIN IMMEDIATE 在读取前取得写保留锁；第二个连接会等待，随后读到同一槽位。
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const seen = this.db
         .prepare("select merchant_id, request_digest, record_id from onboarding_idempotency where idempotency_key = ?")
         .get(idempotencyKey) as
@@ -208,16 +208,14 @@ export class OnboardingStore {
             `idempotency key ${idempotencyKey} was used with a different request digest or merchant`,
           );
         }
-        const replay = this.requireRecord(seen.record_id);
-        this.db.exec("commit");
-        return replay;
+        // 早退在 fn 内 return：只读路径由 wrapper 提交空事务（与 rollback 等价）。
+        return this.requireRecord(seen.record_id);
       }
 
       const active = this.activeRecord(merchantId);
       if (active !== undefined && input.newGeneration !== true) {
         // §7.1：一个商家重复点击只返回当前槽指向的同一记录。
         this.rememberIdempotency(idempotencyKey, merchantId, requestDigest, active.recordId);
-        this.db.exec("commit");
         return active;
       }
 
@@ -255,13 +253,8 @@ export class OnboardingStore {
         )
         .run(merchantId, recordId, generation, stamp);
       this.rememberIdempotency(idempotencyKey, merchantId, requestDigest, recordId);
-      const created = this.requireRecord(recordId);
-      this.db.exec("commit");
-      return created;
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+      return this.requireRecord(recordId);
+    });
   }
 
   /** 商家当前活跃记录（无则 undefined）。 */
@@ -351,8 +344,7 @@ export class OnboardingStore {
     const revision = record.revision + 1;
     // 成功路径的 recordEvidence + UPDATE 必须是一个存储原子边界（P2-1 刀 1 补漏）：
     // autocommit 下崩在两句之间会留下"有证据但状态没推进"的半截写。
-    this.db.exec("begin immediate");
-    try {
+    inImmediateTransaction(this.db, () => {
       if (evidence !== undefined) {
         this.recordEvidence(record.recordId, evidence);
       }
@@ -373,11 +365,7 @@ export class OnboardingStore {
           record.recordId,
           input.expectedRevision,
         );
-      this.db.exec("commit");
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
     return this.requireRecord(record.recordId);
   }
 
@@ -400,8 +388,7 @@ export class OnboardingStore {
     // 读判 + UPDATE 包进事务（P2-1 刀 1 补漏）：与 advance/cancel 同一存储原子
     // 边界口径——防并发写者插在"读到的 revision"与"条件 UPDATE"之间，也防后续
     // 给本方法加第二条写语句时退化成 autocommit 半截写。
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const record = this.requireRecord(recordId);
       assertRevision(record, expectedRevision);
       const next: OnboardingStatus = input.retryable ? "FAILED_RETRYABLE" : "BLOCKED";
@@ -412,12 +399,8 @@ export class OnboardingStore {
             + " where record_id = ? and revision = ?",
         )
         .run(next, record.revision + 1, sanitizeError(input.reason), this.now(), recordId, expectedRevision);
-      this.db.exec("commit");
       return this.requireRecord(recordId);
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   /**
@@ -444,8 +427,7 @@ export class OnboardingStore {
     }
     // recordEvidence + UPDATE 必须是一个存储原子边界（P2-1 刀 1 补漏）：autocommit
     // 下崩在两句之间会留下"有拒绝留痕但 revision 没推进"的半截写。
-    this.db.exec("begin immediate");
-    try {
+    inImmediateTransaction(this.db, () => {
       this.recordEvidence(recordId, {
         kind: "user_consent_receipt",
         summary: `consent refused: ${input.note ?? "merchant declined in the platform dialog"}`,
@@ -463,18 +445,13 @@ export class OnboardingStore {
           recordId,
           expectedRevision,
         );
-      this.db.exec("commit");
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
     return this.requireRecord(recordId);
   }
 
   /** 商家撤销开通意图。**不自动删已有云资源**（§7.1）。 */
   cancel(recordId: string, expectedRevision: number): OnboardingRecord {
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const record = this.requireRecord(recordId);
       assertRevision(record, expectedRevision);
       assertTransition(record.status, "CANCELLED");
@@ -491,13 +468,8 @@ export class OnboardingStore {
             + " and agent_slot = ? and current_record_id = ?",
         )
         .run(record.merchantId, record.environment, record.agentSlot, recordId);
-      const cancelled = this.requireRecord(recordId);
-      this.db.exec("commit");
-      return cancelled;
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+      return this.requireRecord(recordId);
+    });
   }
 
   /** 该记录的全部证据（审计/回溯用）。 */

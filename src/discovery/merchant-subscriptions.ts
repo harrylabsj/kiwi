@@ -3,6 +3,8 @@
 import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
+import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
+
 import type {
   BuyerFollowRecord,
   BuyerFollowUpdateGroup,
@@ -211,6 +213,8 @@ export class MerchantSubscriptionClient implements BuyerFollowsClient {
     if (typeof descriptor["snapshot_id"] !== "string" || typeof descriptor["high_water_cursor"] !== "string") {
       throw new Error("snapshot descriptor is invalid");
     }
+    // 绑定为局部常量：元素访问的类型收窄不进闭包（事务 fn 是回调）。
+    const highWaterCursor: string = descriptor["high_water_cursor"];
     let offset = 0;
     const active: Array<Record<string, unknown>> = [];
     while (true) {
@@ -226,8 +230,7 @@ export class MerchantSubscriptionClient implements BuyerFollowsClient {
       if (typeof body["next_offset"] !== "number") throw new Error("snapshot next_offset is invalid");
       offset = body["next_offset"];
     }
-    this.db.exec("begin immediate");
-    try {
+    inImmediateTransaction(this.db, () => {
       this.db.prepare("DELETE FROM buyer_merchant_feed_events WHERE merchant_id=?").run(merchantId);
       for (const item of active) {
         const broadcastId = String(item["broadcast_id"] ?? "");
@@ -249,12 +252,8 @@ export class MerchantSubscriptionClient implements BuyerFollowsClient {
       }
       this.db
         .prepare("UPDATE buyer_merchant_subscriptions SET feed_cursor=?, updated_at=? WHERE merchant_id=?")
-        .run(descriptor["high_water_cursor"], this.now(), merchantId);
-      this.db.exec("commit");
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+        .run(highWaterCursor, this.now(), merchantId);
+    });
   }
 
   private applyEventsAndCursor(
@@ -262,8 +261,7 @@ export class MerchantSubscriptionClient implements BuyerFollowsClient {
     events: MerchantPublicEvent[],
     cursor: string,
   ): void {
-    this.db.exec("begin immediate");
-    try {
+    inImmediateTransaction(this.db, () => {
       for (const event of events) {
         this.db
           .prepare(
@@ -285,11 +283,7 @@ export class MerchantSubscriptionClient implements BuyerFollowsClient {
       this.db
         .prepare("UPDATE buyer_merchant_subscriptions SET feed_cursor=?, updated_at=? WHERE merchant_id=?")
         .run(cursor, this.now(), merchantId);
-      this.db.exec("commit");
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   private savePreference(

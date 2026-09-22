@@ -3,6 +3,8 @@
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
+
 import { parseExactMoney, type ExactMoney } from "./application/money.js";
 import { ClockSafetyError, type ClockSafetyStore } from "./clock-safety.js";
 import {
@@ -148,8 +150,7 @@ export class MerchantPromotionStore {
     }
     const promotionId = `prm_${randomBytes(16).toString("base64url")}`;
     const stamp = this.now();
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       this.db
         .prepare(
           `INSERT INTO merchant_promotions
@@ -177,12 +178,8 @@ export class MerchantPromotionStore {
           stamp,
         );
       this.writeRevision(merchantId, promotionId, 1);
-      this.db.exec("commit");
       return { promotion_id: promotionId, revision: 1 };
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   publish(
@@ -342,8 +339,7 @@ export class MerchantPromotionStore {
     }
     const stamp = this.now();
     const revision = expectedRevision + 1;
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const changed = this.db
         .prepare(
           `UPDATE merchant_promotions SET revision=?, status=?, published_by=?, approval_ref=?, updated_at=?
@@ -367,12 +363,8 @@ export class MerchantPromotionStore {
         throw new MerchantPromotionError("version_conflict", "promotion revision/status changed");
       }
       this.writeRevision(merchantId, promotionId, revision);
-      this.db.exec("commit");
       return { promotion_id: promotionId, revision };
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   private writeRevision(merchantId: string, promotionId: string, revision: number): void {

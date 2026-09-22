@@ -27,6 +27,8 @@ import {
 } from "@simplewebauthn/server";
 import { COSEALG, convertCOSEtoPKCS } from "@simplewebauthn/server/helpers";
 
+import { inImmediateTransaction } from "../../merchant-core/storage/transaction.js";
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS workbench_webauthn_credentials (
   credential_id TEXT PRIMARY KEY,
@@ -320,8 +322,7 @@ export class WorkbenchConfirmationStore {
       .export({ format: "pem", type: "spki" })
       .toString();
 
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const consumed = this.db
         .prepare(
           `UPDATE workbench_webauthn_registrations SET used_at=?
@@ -341,12 +342,8 @@ export class WorkbenchConfirmationStore {
         origin: row.origin,
         signCount: verified.registrationInfo.credential.counter,
       });
-      this.db.exec("commit");
       return { credential_id: verified.registrationInfo.credential.id };
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   persistVerifiedCredential(input: {
@@ -623,91 +620,93 @@ export class WorkbenchConfirmationStore {
     );
     const nextSignCount = verifyAssertion(request, credential, input.assertion, this.now());
 
-    this.db.exec("begin immediate");
     try {
-      const freshRequest = this.requireRequest(input.confirmationId);
-      assertRequestBinding(freshRequest, input);
-      const freshCredential = this.requireCredential(
-        input.assertion.credentialId,
-        input.merchantId,
-        input.actorId,
-      );
-      if (freshCredential.sign_count !== credential.sign_count) {
-        throw new WorkbenchConfirmationError("assertion_invalid", "credential counter changed");
-      }
-      const existing = this.readDecision(
-        input.merchantId,
-        input.candidateId,
-        input.approvalGeneration,
-      );
-      if (existing !== undefined) {
-        this.db.exec("rollback");
-        return {
-          kind: "already_decided",
-          decision: existing.decision,
-          operationId: existing.operation_id,
-          actorId: existing.actor_id,
-        };
-      }
-      const stamp = this.now();
-      this.db
-        .prepare(
-          `UPDATE workbench_webauthn_credentials SET sign_count = ?
-           WHERE credential_id = ? AND sign_count = ? AND revoked_at IS NULL`,
-        )
-        .run(nextSignCount, freshCredential.credential_id, freshCredential.sign_count);
-      const consumed = this.db
-        .prepare(
-          `UPDATE workbench_confirmation_requests SET consumed_at = ?
-           WHERE confirmation_id = ? AND consumed_at IS NULL AND expires_at > ?`,
-        )
-        .run(stamp, freshRequest.confirmation_id, stamp);
-      if (consumed.changes !== 1) {
-        throw new WorkbenchConfirmationError("confirmation_consumed", "confirmation was already consumed");
-      }
-      this.db
-        .prepare(
-          `INSERT INTO workbench_approval_decisions
-           (merchant_id, candidate_id, approval_generation, decision, actor_id, confirmation_id,
-            operation_id, action_digest, decided_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
+      return inImmediateTransaction(this.db, (): DecisionOutcome => {
+        const freshRequest = this.requireRequest(input.confirmationId);
+        assertRequestBinding(freshRequest, input);
+        const freshCredential = this.requireCredential(
+          input.assertion.credentialId,
           input.merchantId,
-          input.candidateId,
-          input.approvalGeneration,
-          input.decision,
           input.actorId,
-          freshRequest.confirmation_id,
-          freshRequest.operation_id,
-          input.actionDigest,
-          stamp,
         );
-      this.db
-        .prepare(
-          `INSERT INTO workbench_approval_operations
-           (operation_id, merchant_id, candidate_id, approval_generation, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'accepted', ?, ?)`,
-        )
-        .run(
-          freshRequest.operation_id,
+        if (freshCredential.sign_count !== credential.sign_count) {
+          throw new WorkbenchConfirmationError("assertion_invalid", "credential counter changed");
+        }
+        const existing = this.readDecision(
           input.merchantId,
           input.candidateId,
           input.approvalGeneration,
-          stamp,
-          stamp,
         );
-      this.db
-        .prepare(
-          `INSERT INTO workbench_approval_outbox
-           (merchant_id, operation_id, action_step, fencing_token, status, created_at)
-           VALUES (?, ?, 'execute-approved-candidate', 0, 'pending', ?)`,
-        )
-        .run(input.merchantId, freshRequest.operation_id, stamp);
-      this.db.exec("commit");
-      return { kind: "decided", decision: input.decision, operationId: freshRequest.operation_id };
+        if (existing !== undefined) {
+          // 已决定早退：此刻只有只读语句，fn 内 return 由 wrapper 提交空事务——
+          // 与原 rollback 完全等价（零持久效果），且不经下方 catch 的 winner 重查。
+          return {
+            kind: "already_decided",
+            decision: existing.decision,
+            operationId: existing.operation_id,
+            actorId: existing.actor_id,
+          };
+        }
+        const stamp = this.now();
+        this.db
+          .prepare(
+            `UPDATE workbench_webauthn_credentials SET sign_count = ?
+             WHERE credential_id = ? AND sign_count = ? AND revoked_at IS NULL`,
+          )
+          .run(nextSignCount, freshCredential.credential_id, freshCredential.sign_count);
+        const consumed = this.db
+          .prepare(
+            `UPDATE workbench_confirmation_requests SET consumed_at = ?
+             WHERE confirmation_id = ? AND consumed_at IS NULL AND expires_at > ?`,
+          )
+          .run(stamp, freshRequest.confirmation_id, stamp);
+        if (consumed.changes !== 1) {
+          throw new WorkbenchConfirmationError("confirmation_consumed", "confirmation was already consumed");
+        }
+        this.db
+          .prepare(
+            `INSERT INTO workbench_approval_decisions
+             (merchant_id, candidate_id, approval_generation, decision, actor_id, confirmation_id,
+              operation_id, action_digest, decided_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            input.merchantId,
+            input.candidateId,
+            input.approvalGeneration,
+            input.decision,
+            input.actorId,
+            freshRequest.confirmation_id,
+            freshRequest.operation_id,
+            input.actionDigest,
+            stamp,
+          );
+        this.db
+          .prepare(
+            `INSERT INTO workbench_approval_operations
+             (operation_id, merchant_id, candidate_id, approval_generation, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'accepted', ?, ?)`,
+          )
+          .run(
+            freshRequest.operation_id,
+            input.merchantId,
+            input.candidateId,
+            input.approvalGeneration,
+            stamp,
+            stamp,
+          );
+        this.db
+          .prepare(
+            `INSERT INTO workbench_approval_outbox
+             (merchant_id, operation_id, action_step, fencing_token, status, created_at)
+             VALUES (?, ?, 'execute-approved-candidate', 0, 'pending', ?)`,
+          )
+          .run(input.merchantId, freshRequest.operation_id, stamp);
+        return { kind: "decided", decision: input.decision, operationId: freshRequest.operation_id };
+      });
     } catch (error) {
-      this.db.exec("rollback");
+      // 并发败者补偿（原手写 catch 语义逐字保留）：wrapper 已回滚，这里重查
+      // 是否已有 winner 先落地——有则按 already_decided 正常返回，否则原样抛出。
       const winner = this.readDecision(
         input.merchantId,
         input.candidateId,

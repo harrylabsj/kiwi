@@ -3,6 +3,8 @@
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
+
 import { assertVerifiedActor, type VerifiedActorContext } from "./application/actor.js";
 import {
   MerchantOperationReceipts,
@@ -145,12 +147,11 @@ export class MerchantGrantStore {
       throw new MerchantGrantError("invalid_input", "grant expiry must be in the future");
     }
     const stamp = this.now();
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       // 重放判定必须在写之前（同 operation_id 同请求回原回执，不产生第二次效果）
       const replay = this.replayOperation(actor.merchantId, operation);
       if (replay !== undefined) {
-        this.db.exec("commit");
+        // 早退在 fn 内 return：只读重放由 wrapper 提交空事务（与 rollback 等价）
         return replay.response as {
           grant_id: string;
           grant_version: number;
@@ -191,12 +192,8 @@ export class MerchantGrantStore {
         authorization_generation: generation,
       };
       this.writeOperation(actor.merchantId, operation, grantId, response);
-      this.db.exec("commit");
       return response;
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   revokeGrant(
@@ -208,12 +205,10 @@ export class MerchantGrantStore {
     if (actor.role !== "owner" || !actor.permissions.has("grants:manage")) {
       throw new MerchantGrantError("forbidden", "only owner can revoke grants");
     }
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       // 重放判定必须在写之前（同 operation_id 同请求回原回执，不产生第二次效果）
       const replay = this.replayOperation(actor.merchantId, operation);
       if (replay !== undefined) {
-        this.db.exec("commit");
         return Number(replay.response["authorization_generation"]);
       }
       const row = this.db
@@ -234,12 +229,8 @@ export class MerchantGrantStore {
         grant_id: grantId,
         authorization_generation: generation,
       });
-      this.db.exec("commit");
       return generation;
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   authorizationGeneration(merchantId: string, subjectId: string): number {

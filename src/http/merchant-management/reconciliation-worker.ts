@@ -3,6 +3,8 @@
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import { inImmediateTransaction } from "../../merchant-core/storage/transaction.js";
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS workbench_reconciliation_jobs (
   operation_id TEXT PRIMARY KEY,
@@ -254,8 +256,7 @@ export class WorkbenchReconciliationStore {
   leaseOutbox(merchantId: string, workerId: string, leaseMs = 30_000): OutboxLease | undefined {
     const stamp = this.now();
     const leaseExpires = new Date(Date.parse(stamp) + leaseMs).toISOString();
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const row = this.db
         .prepare(
           `SELECT o.merchant_id, o.operation_id, d.candidate_id, d.approval_generation,
@@ -268,7 +269,7 @@ export class WorkbenchReconciliationStore {
         )
         .get(merchantId, stamp) as unknown as OutboxRow | undefined;
       if (row === undefined) {
-        this.db.exec("commit");
+        // 早退在 fn 内 return：无写入，wrapper 提交空事务（与 rollback 等价）
         return undefined;
       }
       const token = row.fencing_token + 1;
@@ -288,7 +289,6 @@ export class WorkbenchReconciliationStore {
           row.fencing_token,
         );
       if (changed.changes !== 1) throw new Error("outbox lease CAS failed");
-      this.db.exec("commit");
       return {
         merchantId: row.merchant_id,
         operationId: row.operation_id,
@@ -301,16 +301,12 @@ export class WorkbenchReconciliationStore {
         decision: row.decision,
         actionDigest: row.action_digest,
       };
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   finishOutbox(lease: OutboxLease, result: OperationResult): boolean {
     const stamp = this.now();
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const terminal = result.status === "failed" ? "failed" : "completed";
       const changed = this.db
         .prepare(
@@ -328,7 +324,7 @@ export class WorkbenchReconciliationStore {
           lease.fencingToken,
         );
       if (changed.changes !== 1) {
-        this.db.exec("rollback");
+        // CAS 未命中 = 零变更：fn 内 return，wrapper 提交空事务（与原 rollback 等价）
         return false;
       }
       this.db
@@ -353,19 +349,14 @@ export class WorkbenchReconciliationStore {
             stamp,
           );
       }
-      this.db.exec("commit");
       return true;
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   leaseReconciliation(workerId: string, leaseMs = 30_000): ReconciliationLease | undefined {
     const stamp = this.now();
     const expires = new Date(Date.parse(stamp) + leaseMs).toISOString();
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const row = this.db
         .prepare(
           `SELECT j.merchant_id, j.operation_id, j.attempts, j.first_unknown_at,
@@ -378,7 +369,6 @@ export class WorkbenchReconciliationStore {
         )
         .get(stamp, stamp) as unknown as ReconciliationRow | undefined;
       if (row === undefined) {
-        this.db.exec("commit");
         return undefined;
       }
       const token = row.fencing_token + 1;
@@ -390,7 +380,6 @@ export class WorkbenchReconciliationStore {
         )
         .run(workerId, expires, token, stamp, row.operation_id, row.fencing_token);
       if (changed.changes !== 1) throw new Error("reconciliation lease CAS failed");
-      this.db.exec("commit");
       return {
         merchantId: row.merchant_id,
         operationId: row.operation_id,
@@ -402,16 +391,12 @@ export class WorkbenchReconciliationStore {
         attempts: row.attempts,
         firstUnknownAt: row.first_unknown_at,
       };
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   finishReconciliation(lease: ReconciliationLease, result: OperationResult): boolean {
     const stamp = this.now();
-    this.db.exec("begin immediate");
-    try {
+    return inImmediateTransaction(this.db, () => {
       const owned = this.db
         .prepare(
           `SELECT attempts, first_unknown_at FROM workbench_reconciliation_jobs
@@ -420,7 +405,7 @@ export class WorkbenchReconciliationStore {
         .get(lease.operationId, lease.workerId, lease.fencingToken) as
         { attempts: number; first_unknown_at: string } | undefined;
       if (owned === undefined) {
-        this.db.exec("rollback");
+        // 租约不属于本 worker（只读判定）：fn 内 return，wrapper 提交空事务
         return false;
       }
       if (result.status !== "unknown") {
@@ -440,7 +425,6 @@ export class WorkbenchReconciliationStore {
             "UPDATE workbench_approval_operations SET status=?, updated_at=? WHERE operation_id=?",
           )
           .run(result.status, stamp, lease.operationId);
-        this.db.exec("commit");
         return true;
       }
 
@@ -475,12 +459,8 @@ export class WorkbenchReconciliationStore {
           this.upsertAlert(lease, "warning", "UNKNOWN 结果持续未确认", stamp);
         }
       }
-      this.db.exec("commit");
       return true;
-    } catch (error) {
-      this.db.exec("rollback");
-      throw error;
-    }
+    });
   }
 
   private upsertAlert(
