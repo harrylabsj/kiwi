@@ -846,7 +846,7 @@ export class AgentKernel {
         capability: "com.harrylabsj.kiwi.shopping.negotiation",
         protocol_version: "1.0",
       },
-      now: () => new Date().toISOString(),
+      now: this.clock,
     });
     return `handoff ${handoffId} 已启动（LAUNCHED）——不证明页面加载。`;
   }
@@ -883,8 +883,8 @@ export class AgentKernel {
         capability: "com.harrylabsj.kiwi.shopping.negotiation",
         protocol_version: "1.0",
       },
-      now: () => new Date().toISOString(),
-      evidence: { kind: "local_callback", handoff_id: handoffId, at: new Date().toISOString() },
+      now: this.clock,
+      evidence: { kind: "local_callback", handoff_id: handoffId, at: this.clock() },
     });
     return `handoff ${handoffId} 已确认打开（OPENED_CONFIRMED，evidence=local_callback）。`;
   }
