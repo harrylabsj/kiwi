@@ -20,7 +20,7 @@ import { spawnSync } from "node:child_process";
 //   - 包内无疑似凭据。
 // 用法：
 //   node package-gateway-connector.mjs --check
-//   node package-gateway-connector.mjs --out /abs/path/kiwi-merchant-gateway-1.1.0.zip
+//   node package-gateway-connector.mjs --out /abs/path/kiwi-merchant-gateway-<version>.zip
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../..");

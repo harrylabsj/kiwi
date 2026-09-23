@@ -1,8 +1,8 @@
 # kiwi-merchant-gateway-connector — 商家连接器（「Kiwi 商家运营」）包
 
-状态：**该资产已由需求负责人撤回（2026-09-21）**；历史：v1.1.0 曾提交 WorkBuddy 审核未发布（2026-09-20）。平台连接器 ID `oc_c86216e2a36110bf`（**撤回后不得再引用**）；原 v1.0.0 草稿 `oc_f6eb7fea361ac64e` 已由用户删除。审核通过后仍须实机验收 OAuth 与 6 个工具。详见[上架素材包](../../../../docs/merchant-buddy/merchant-connector-submission-pack.md)。
+状态：WorkBuddy 已解析 v1.1.1 并生成新草稿资产 ID `oc_0053ad85c92a6587`；**尚未提交审核**，等待专用 OAuth 测试账号。此前 v1.1.0 的平台资产已撤回，旧 ID `oc_c86216e2a36110bf` 不得再引用；原 v1.0.0 草稿 `oc_f6eb7fea361ac64e` 已删除。审核通过后仍须实机验收 OAuth 与 6 个工具。详见[上架素材包](../../../../docs/merchant-buddy/merchant-connector-submission-pack.md)。
 
-> **版本迁移记录**：原 v1.0.0 包只有 5 个工具。同 ID 重传 v1.1.0 未持久化；用户随后删除了旧草稿，再创建新资产 `oc_c86216e2a36110bf`。新资产的提交页及资产列表均显示 **v1.1.0 / 审核中**；6 个目录工具在仓库契约中通过校验，WorkBuddy 用户侧可见性仍待审核通过后验证。包摘要见[上架素材包](../../../../docs/merchant-buddy/merchant-connector-submission-pack.md) §1。
+> **版本迁移记录**：原 v1.0.0 包只有 5 个工具。同 ID 重传 v1.1.0 未持久化；之后创建的新资产也已撤回。此次重新提交递增至 v1.1.1，使用平台生成的新资产 ID；WorkBuddy 用户侧工具可见性仍待审核通过后验证。
 
 指向 **Kiwi 商家连接器网关**（多商家共享入口，`https://merchant.kiwi.harrylabsj.com/mcp`，远程 HTTPS MCP + OAuth）。商家在 OAuth 授权页完成目录注册/登录后，网关按已验证 `merchant_id` 提供**第 0 版目录能力**（本包静态声明的 6 个工具）：
 
@@ -29,7 +29,7 @@
 
 ```sh
 node integrations/hosts/workbuddy/package-gateway-connector.mjs --check
-node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /abs/path/kiwi-merchant-gateway-1.1.0.zip
+node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /abs/path/kiwi-merchant-gateway-1.1.1.zip
 ```
 
 脚本只读、不联网、不覆盖已有压缩包。校验：meta/mcp/icon 合法性、`url` 必须为 https 且路径 `/mcp` 且**不在**商家自有实例域名上、`tools` 声明与 `src/merchant-gateway/catalog-tools.ts` 实现名字一致、包内无疑似凭据。
@@ -39,7 +39,7 @@ node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /abs/path/
 ## 提交前必须确认（外部事项）
 
 1. **source 唯一性**：包已通过上传解析并生成新 ID，待审核通过后核对正式市场记录。
-2. **新平台 ID**：`oc_c86216e2a36110bf`，与已删除旧商家 ID `oc_f6eb7fea361ac64e`、买方 `oc_bd73f860e3e2b5d3` 分开。
+2. **新平台 ID**：本轮上传后由 WorkBuddy 生成；不得复用已撤回的 `oc_c86216e2a36110bf`、已删除的 `oc_f6eb7fea361ac64e` 或买方 `oc_bd73f860e3e2b5d3`。
 3. **入口域名**：`merchant.kiwi.harrylabsj.com` 已切换为商家网关；公网 `/health` 返回 `kiwi-merchant-entry`，OAuth 元数据提供 catalog/merchant scope。
 4. **OAuth 回调**：按 source 派生为
    `workbuddy://workbuddy/mcp/connector%3Akiwi-merchant/oauth/callback`，

@@ -46,7 +46,7 @@ node integrations/hosts/workbuddy/package.mjs --out /absolute/path/kiwi-procurem
 
 ```sh
 node integrations/hosts/workbuddy/package-gateway-connector.mjs --check
-node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /absolute/path/kiwi-merchant-gateway-1.1.0.zip
+node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /absolute/path/kiwi-merchant-gateway-1.1.1.zip
 ```
 
-`kiwi-merchant-buddy/` 是应用后台人工配置草稿、头像、AI 客服准备技能与填写说明。用户已删除旧商家草稿 `oc_f6eb7fea361ac64e`；新商家连接器 `oc_c86216e2a36110bf`（v1.1.0）**已于 2026-09-21 由需求负责人撤回**，当前无可用连接器 ID，是否重新提交待定。审核通过并验证 6 个工具后，才能完成 Buddy 最终配置审核。具体包摘要、技能包与实机检查见[上架素材包](../../../docs/merchant-buddy/merchant-connector-submission-pack.md)和[检查单](../../../docs/merchant-buddy/workbuddy-e2e-checklist.md)。
+`kiwi-merchant-buddy/` 是应用后台人工配置草稿、头像、AI 客服准备技能与填写说明。v1.1.0 商家连接器资产已撤回；按 2026-09-24 决策，以 v1.1.1 独立重新申请 OAuth MCP 连接器资产，审核通过后由 Buddy 应用内置连接器引用新 ID。用户仍在 Buddy 内完成授权使用，不要求另行安装市场产品。提交需要专用商家测试账号。具体包与实机检查见[上架素材包](../../../docs/merchant-buddy/merchant-connector-submission-pack.md)和[检查单](../../../docs/merchant-buddy/workbuddy-e2e-checklist.md)。

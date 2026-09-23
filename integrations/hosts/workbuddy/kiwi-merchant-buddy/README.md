@@ -2,7 +2,7 @@
 
 `buddy-app.config.json` 是 Buddy 后台配置的本地草稿：官方文档说明后台「支持导出配置 JSON 文件在本地环境测试验证」，但导出格式未公开。本文件为自定义清晰结构，供导出预览和人工照着配置；每次退出配置前后台导出文件，下次导入还原（官方最佳实践第 5 条）。
 
-对应连接器包见 `../kiwi-merchant-gateway-connector/`（远程 HTTPS MCP + OAuth，source=`kiwi-merchant`，新平台 ID `oc_c86216e2a36110bf`，审核中 v1.1.0）。
+对应连接器包见 `../kiwi-merchant-gateway-connector/`（远程 HTTPS MCP + OAuth，source=`kiwi-merchant`）。v1.1.0 的旧平台资产已撤回；正在准备以 v1.1.1 重新提交，获批后使用 WorkBuddy 新生成的资产 ID 配置 Buddy 内置连接器。
 
 ## 五个后台模块怎么填
 
@@ -25,7 +25,7 @@
 
 ### 模块 3：市场配置
 
-- 连接器：v1.1.0 审核通过后选 `oc_c86216e2a36110bf`，且须核对其已暴露 6 个目录工具；旧版 ID `oc_f6eb7fea361ac64e` 已由用户删除，不得再引用。技能：`skills/kiwi-merchant-cs-prep/` 已作为 `os_dc3a52407574eb77` 提交审核，发布后再加入应用市场。它只准备客服 FAQ/回复草稿，不自动接待客户。
+- 连接器：待 v1.1.1 审核通过后，使用平台新生成的资产 ID 配置 Buddy 内置连接器，并核对其只暴露预期的 6 个目录工具。不得引用已撤回/删除的历史资产 ID。技能：`skills/kiwi-merchant-cs-prep/` 已作为 `os_dc3a52407574eb77` 提交审核，发布后再加入应用市场。它只准备客服 FAQ/回复草稿，不自动接待客户。
 - 专家：不配置；专家页精选场景也不配置（需要关联专家/专家团）。
 
 ### 模块 4：其他配置

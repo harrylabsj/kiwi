@@ -7,7 +7,7 @@
   "description_en": "Connect to the Kiwi merchant catalog to draft, review and withdraw public profiles, and view aggregate follower and page-view counts. Merchants must confirm publication in the catalog portal. This connector does not access merchant instances, inventory or live inquiries.",
   "source": "kiwi-merchant",
   "type": "mcp",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "minWorkbuddyVersion": "4.24.0",
   "examples_zh": [
     "我是新商家，怎么把商品发布到 Kiwi 目录让采购专家搜到？",
