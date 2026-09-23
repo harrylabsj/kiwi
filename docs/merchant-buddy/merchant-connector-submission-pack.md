@@ -1,6 +1,7 @@
 # 商家连接器上架素材包（提交前必读）
 
-状态（2026-09-24）：**v1.1.1 已重新提交 WorkBuddy 审核**，新连接器 ID `oc_0053ad85c92a6587`，平台列表显示「审核中」，平台提示预计 7 个工作日内出结果。通过后由 Buddy 应用内置引用；不作为要求用户另行安装的市场产品。旧资产 `oc_c86216e2a36110bf` 已撤回，不得复用。腾讯客服要求补充可登录的专用 Kiwi 商家测试账号以完成 OAuth 测试；该账号尚未选定，测试账号邮件尚未发送。
+状态（2026-09-24）：**v1.1.1 已重新提交 WorkBuddy 审核**，新连接器 ID `oc_0053ad85c92a6587`，平台列表显示「审核中」，平台提示预计 7 个工作日内出结果。通过后由 Buddy 应用内置引用；不作为要求用户另行安装的市场产品。旧资产 `oc_c86216e2a36110bf` 已撤回，不得复用。专用 Kiwi 商家测试账号已完成登录及 OAuth/MCP 冒烟验证；腾讯客服补交测试账号的邮件尚未发送。
+2026-09-24 生产 OAuth / MCP 测试（`platform_live_oauth_smoke`）：测试账号在无痕登录页以提供的凭据登录成功，商家 ID `mkt_m_4Rv9MpqdxHs`；OAuth 2.1 + PKCE 授权码流程成功，授予 `catalog:read` / `catalog:write`；MCP `initialize`、`tools/list` 成功，返回预期 6 个目录工具；profile、匿名统计读取、保存私有草稿、请求发布（仍为 draft）、读取草稿均成功。草稿 ID `mpub_nBcqH-l7LPvrcA6s` 未公开，匿名搜索仍不可见；测试 access token 已撤销。未测试撤回成功路径，因为账号无公开测试资料，撤回需要先在门户确认发布。
 历史（2026-09-20 核对）：新商家连接器 `oc_c86216e2a36110bf` 曾提交 WorkBuddy 审核，平台列表显示 v1.1.0，未发布即被撤回。旧 v1.0.0 草稿 `oc_f6eb7fea361ac64e` 已由用户删除。AI 客服准备技能 `os_dc3a52407574eb77` 已提交审核；Buddy 应用基础审核仍受平台授权表单阻碍。依据：[商家连接器独立发布计划](generic-merchant-connector-release-plan.md)、[平台核验记录](workbuddy-connector-platform-verification-2026-09-17.md)、[第 1 版设计](../v1-product-flow-and-onboarding-design.md)。
 
 2026-09-18 首次提交回执：生产网关已运行 Kiwi 0.9.0 + 安全修复 `d9ab95a`（构建源为隔离工作树 `9baebd4`），`/health` 与 OAuth 元数据公网正常，旧 `dist` 保留在 `/opt/kiwi-gateway/app/dist.prev-108c25e9` 供回滚。WorkBuddy 解析 `kiwi-merchant-gateway-1.0.0.zip` 后生成新连接器 ID **`oc_f6eb7fea361ac64e`**，选择「商家自营 - B2b(商品批发/门店管理)」类目。审批通过及用户侧真实 OAuth/工具预览尚待验收。
