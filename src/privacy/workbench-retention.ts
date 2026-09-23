@@ -81,6 +81,7 @@ export type PrivacyDeletionNode = (typeof REQUIRED_NODES)[number];
 export interface PrivacyDeletionNodeResult {
   receiptRef: string;
   deletedRows?: number;
+  deletedArtifacts?: number;
 }
 export type PrivacyDeletionNodeHandler = (input: {
   requestId: string;
@@ -389,19 +390,39 @@ export class WorkbenchRetentionStore {
   processDeletionNode(requestId: string, nodeId: PrivacyDeletionNode): PrivacyDeletionNodeResult {
     if (nodeId === "runtime-primary") return this.processRuntimePrimary(requestId);
     const request = this.requireRequest(requestId);
-    if (request.status !== "PROCESSING") {
-      throw new WorkbenchRetentionError(
-        "ILLEGAL_TRANSITION",
-        "deletion node requires PROCESSING status",
-      );
-    }
     const existing = this.db
       .prepare(
         "SELECT status, receipt_ref FROM workbench_privacy_deletion_tasks WHERE request_id=? AND node_id=?",
       )
       .get(requestId, nodeId) as { status: string; receipt_ref: string | null } | undefined;
     if (existing?.status === "completed" && existing.receipt_ref !== null) {
-      return { receiptRef: existing.receipt_ref, deletedRows: 0 };
+      return {
+        receiptRef: existing.receipt_ref,
+        ...(nodeId === "controlled-backup" ? { deletedArtifacts: 0 } : { deletedRows: 0 }),
+      };
+    }
+    if (request.status !== "PROCESSING") {
+      throw new WorkbenchRetentionError(
+        "ILLEGAL_TRANSITION",
+        "deletion node requires PROCESSING status",
+      );
+    }
+    if (nodeId === "controlled-backup") {
+      const prerequisites = this.db
+        .prepare(
+          `SELECT node_id, status, receipt_ref FROM workbench_privacy_deletion_tasks
+           WHERE request_id=? AND node_id IN ('runtime-primary','buyer-preferences','runtime-cache')`,
+        )
+        .all(requestId) as Array<{ node_id: string; status: string; receipt_ref: string | null }>;
+      if (
+        prerequisites.length !== 3 ||
+        prerequisites.some((task) => task.status !== "completed" || clean(task.receipt_ref ?? "") === "")
+      ) {
+        throw new WorkbenchRetentionError(
+          "DELETION_INCOMPLETE",
+          "controlled backups cannot be erased before live deletion processors return receipts",
+        );
+      }
     }
     const handler = this.deletionHandlers[nodeId];
     if (handler === undefined) {

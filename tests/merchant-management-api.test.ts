@@ -644,6 +644,33 @@ describe("Workbench /merchant/api/v1 — RFC 9457 与兼容读取", () => {
     });
   });
 
+  it("v1 管理页写路由的拒绝响应统一使用 RFC 9457", async () => {
+    const auth = await login("owner");
+    for (const [path, body] of [
+      ["/merchant/api/v1/products/import-drafts", { unexpected: true }],
+      ["/merchant/api/v1/policy/drafts", { unexpected: true }],
+    ] as const) {
+      const response = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers: {
+          cookie: auth.cookie,
+          origin: ORIGIN,
+          "content-type": "application/json",
+          "x-csrf-token": auth.csrf,
+        },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(422);
+      expect(response.headers.get("content-type")).toContain("application/problem+json");
+      expect(await response.json()).toMatchObject({
+        status: 422,
+        code: "VALIDATION_ERROR",
+        retryable: false,
+        recovery_action: "refresh_resource",
+      });
+    }
+  });
+
   it("legacy /merchant/api/* 继续使用既有契约，不被静默改写", async () => {
     const legacy = await fetch(`${base}/merchant/api/status`);
     expect(legacy.status).toBe(401);
@@ -889,6 +916,13 @@ describe("merchant management page — 同源工作台壳（BD-03）", () => {
       const html = await res.text();
       expect(html).toContain("商家工作台");
       expect(html).toContain("/merchant/api/session");
+      expect(html).toContain('var API = "/merchant/api/v1"');
+      expect(html).toContain("application/problem+json");
+      expect(html).toContain("recovery_action");
+      expect(html).toContain("x-csrf-token");
+      expect(html).toContain("/merchant/trusted/confirm?ref=");
+      expect(html).not.toContain('call("GET", "/status")');
+      expect(html).not.toContain('call("GET", "/products")');
       expect(html).not.toMatch(/price_floors|min_unit_price_private|password/);
       // 别名仍生效：/merchant/ 之外的商家面路径走 merchantHandler（测试桩 → 2xx），
       // 这里只验证路由不崩、不落入管理页。

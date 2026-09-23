@@ -77,6 +77,7 @@ export function renderMerchantManagementPage(): string {
 "use strict";
 var CSRF = "";
 var ROLE = "";
+var API = "/merchant/api/v1";
 var $ = function (id) { return document.getElementById(id); };
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -90,17 +91,50 @@ function bar(msg, isErr) {
   b.style.display = "block";
   if (!isErr) setTimeout(function () { b.style.display = "none"; }, 4000);
 }
+function recoveryHint(action) {
+  return {
+    none: "请勿重复操作。",
+    reauthenticate: "请重新登录后再试。",
+    refresh_resource: "请刷新页面并核对最新状态。",
+    confirm: "请在可信确认页完成授权。",
+    query_operation: "结果尚未确认，请先查询原操作状态，不要重新提交。",
+    retry_same_operation: "服务确认操作未生效；如需重试，请沿用原操作。",
+    resync_feed: "请重新同步资料游标。",
+    open_support: "请联系支持并提供请求编号。",
+    unknown: "恢复方式尚不明确，请勿自动重试。",
+  }[action] || "恢复方式尚不明确，请勿自动重试。";
+}
+async function apiError(res) {
+  var problem;
+  if ((res.headers.get("content-type") || "").toLowerCase().indexOf("application/problem+json") >= 0) {
+    try { problem = await res.clone().json(); } catch (_) { problem = null; }
+  }
+  if (problem && typeof problem === "object" && typeof problem.detail === "string") {
+    var text = problem.detail;
+    if (problem.operation_id) text += "（操作 " + problem.operation_id + "）";
+    if (problem.request_id) text += "（请求 " + problem.request_id + "）";
+    return new Error(text + " " + recoveryHint(problem.recovery_action));
+  }
+  var fallback = await res.json().catch(function () { return {}; });
+  return new Error((fallback.message || fallback.detail || fallback.code || ("HTTP " + res.status)) + "。请勿自动重复提交。");
+}
 function call(method, path, body) {
-  return fetch("/merchant/api" + path, {
+  var headers = {};
+  if (body !== undefined) {
+    headers["content-type"] = "application/json";
+    if (CSRF) headers["x-csrf-token"] = CSRF;
+  }
+  return fetch(API + path, {
     method: method,
-    headers: body !== undefined ? { "content-type": "application/json" } : {},
+    credentials: "same-origin",
+    headers: headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   }).then(function (res) {
-    return res.json().catch(function () { return {}; }).then(function (json) {
+    if (!res.ok) {
       if (res.status === 401) { showLogin(); throw new Error("需要登录"); }
-      if (!res.ok) throw new Error(json.message || json.code || ("HTTP " + res.status));
-      return json;
-    });
+      return apiError(res).then(function (error) { throw error; });
+    }
+    return res.json();
   });
 }
 function showLogin() {
@@ -117,7 +151,7 @@ function statePill(state) {
 
 var views = {
   status: function () {
-    return call("GET", "/status").then(function (s) {
+    return call("GET", "/runtime/status").then(function (s) {
       var failed = s.readiness && s.readiness.failed_checks || [];
       var html = '<div class="card"><h2>运行状态</h2><table>' +
         "<tr><th>服务状态</th><td>" + statePill(s.service_state) + "</td></tr>" +
@@ -144,17 +178,16 @@ var views = {
     });
   },
   products: function () {
-    return call("GET", "/products").then(function (p) {
+    return call("GET", "/products?limit=100").then(function (p) {
       var rows = (p.items || []).map(function (it) {
-        var pill = it.status === "active" ? "ok" : (it.status === "paused" ? "warn" : "bad");
-        var name = { active: "在售", paused: "已暂停", expired: "已过期" }[it.status] || it.status;
+        var money = it.money || {};
         return "<tr><td>" + esc(it.sku) + "</td><td>" + esc(it.title) + "</td><td>" +
-          esc(it.currency) + " " + esc(it.price) + " / " + esc(it.price_unit || "-") + "</td><td>" +
-          esc(it.min_order_qty == null ? "-" : it.min_order_qty) + "</td><td>" +
-          '<span class="pill ' + pill + '">' + esc(name) + "</span></td><td>" + esc(it.valid_until || "-") + "</td></tr>";
+          esc(money.currency || "-") + " " + esc(money.amount_minor == null ? "-" : money.amount_minor) +
+          "（最小币单位）</td><td>" + esc(it.stock == null ? "-" : it.stock) + "</td><td>" +
+          esc(it.authority_version == null ? "-" : it.authority_version) + "</td></tr>";
       }).join("");
       return '<div class="card"><h2>当前商品（' + (p.items || []).length + "）</h2>" +
-        (rows ? "<table><tr><th>SKU</th><th>名称</th><th>价格</th><th>起订量</th><th>状态</th><th>有效期</th></tr>" + rows + "</table>"
+        (rows ? "<table><tr><th>SKU</th><th>名称</th><th>价格（最小币单位）</th><th>库存</th><th>版本</th></tr>" + rows + "</table>"
               : '<p class="muted">暂无商品。</p>') + "</div>" +
         '<div class="card"><h2>导入商品表（整表替换）</h2>' +
         '<p class="muted">选择商品表 JSON 文件：先校验预览，确认后整批生效（不成功的批次不改动现有商品）。</p>' +
@@ -193,26 +226,16 @@ var views = {
   },
 };
 
-function pauseService() {
-  currentRevision(function (s) {
-    call("POST", "/service/pause", {
-      expected_service_revision: s.service_revision,
-      reason: "商家在工作台暂停",
-      idempotency_key: key("pause"),
-    }).then(function () { bar("已暂停接待"); refresh(); })
-      .catch(function (e) { bar("暂停失败：" + e.message, true); });
-  });
-}
 </script>
 <script>
-/* 暂停/恢复与规则/导入/审批的命令实现（revision 以 /status 的 service_revision 为准）。 */
+/* 暂停/恢复与规则/导入/审批的命令实现。 */
 function currentRevision(cb) {
-  fetch("/merchant/api/status").then(function (r) { return r.json(); }).then(cb);
+  call("GET", "/runtime/status").then(cb).catch(function (e) { bar(e.message, true); });
 }
 function pauseService() {
   currentRevision(function (s) {
-    call("POST", "/service/pause", {
-      expected_service_revision: s.service_revision,
+    call("POST", "/runtime/safety-stops", {
+      expected_revision: s.service_revision,
       reason: "商家在工作台暂停",
       idempotency_key: key("pause"),
     }).then(function () { bar("已暂停接待"); refresh(); })
@@ -221,37 +244,25 @@ function pauseService() {
 }
 function resumeService() {
   currentRevision(function (s) {
-    call("POST", "/confirmations", { target: "service.resume", expected_service_revision: s.service_revision })
-      .then(function (c) {
-        return call("POST", "/service/resume", {
-          expected_service_revision: s.service_revision,
-          confirmation_ref: c.confirmation_ref,
-          idempotency_key: key("resume"),
-        });
-      })
-      .then(function () { bar("已恢复接待"); refresh(); })
+    call("POST", "/runtime/mode-drafts", {
+      target_state: "OPERATING",
+      expected_revision: s.service_revision,
+      reason: "商家在工作台申请恢复接待",
+    }).then(function (draft) {
+      return trustedDecision(draft.candidate.candidate_id, "approve");
+    }).then(function () { bar("已准备可信确认，请在确认页完成恢复接待"); })
       .catch(function (e) { bar("恢复失败：" + e.message, true); });
   });
 }
-function decide(candidateId, approve) {
-  call("GET", "/approvals/" + encodeURIComponent(candidateId)).then(function (preview) {
-    return call("POST", "/confirmations", {
-      candidate_id: candidateId,
-      action: approve ? "approve" : "reject",
-      arguments_hash: preview.arguments_hash,
-      preconditions_hash: preview.preconditions_hash,
-    }).then(function (c) {
-      return call("POST", "/approvals/" + encodeURIComponent(candidateId) + "/" + (approve ? "approve" : "reject"), {
-        arguments_hash: preview.arguments_hash,
-        preconditions_hash: preview.preconditions_hash,
-        confirmation_ref: c.confirmation_ref,
-        idempotency_key: key(approve ? "approve" : "reject"),
-      });
+function trustedDecision(candidateId, decision) {
+  return call("POST", "/confirmations", { candidate_id: candidateId, decision: decision })
+    .then(function (confirmation) {
+      window.location.assign("/merchant/trusted/confirm?ref=" + encodeURIComponent(confirmation.request_ref));
     });
-  }).then(function (receipt) {
-    bar("已执行（回执 " + receipt.operation_id + "，状态 " + receipt.status + "）");
-    refresh();
-  }).catch(function (e) { bar("操作失败：" + e.message, true); });
+}
+function decide(candidateId, approve) {
+  trustedDecision(candidateId, approve ? "approve" : "reject")
+    .catch(function (e) { bar("操作失败：" + e.message, true); });
 }
 var pendingImport = null;
 function previewImport() {
@@ -320,7 +331,7 @@ Array.prototype.forEach.call(document.querySelectorAll("#tabs button"), function
     refresh();
   });
 });
-fetch("/merchant/api/session").then(function (res) {
+fetch("/merchant/api/session", { credentials: "same-origin" }).then(function (res) {
   if (res.status === 401) { showLogin(); return null; }
   return res.json();
 }).then(function (session) {

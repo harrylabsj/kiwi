@@ -65,6 +65,7 @@ import {
   recommendedRetentionPolicy,
   WorkbenchRetentionStore,
 } from "../privacy/workbench-retention.js";
+import { createLocalBackupDeletionHandler } from "../privacy/local-backup-deletion.js";
 import { createBroadcastExecutors } from "../merchant/feed-executors.js";
 import { isCurrentGrantAuthorization, MerchantGrantStore } from "../merchant/grant-store.js";
 import { createGrantExecutors } from "../merchant/grant-executors.js";
@@ -488,7 +489,15 @@ export async function bootstrapCloudRuntime(
     const grantStore = new MerchantGrantStore({ db: managementDb });
     const followStore = new MerchantFollowStore({ db: managementDb });
     const engagementStore = new MerchantEngagementStore({ db: managementDb });
-    const retentionStore = new WorkbenchRetentionStore({ db: managementDb });
+    const retentionStore = new WorkbenchRetentionStore({
+      db: managementDb,
+      deletionHandlers: {
+        "controlled-backup": createLocalBackupDeletionHandler({
+          dataDir: config.dataDir,
+          backupsDir: path.join(config.dataDir, "backups"),
+        }),
+      },
+    });
     const retentionProcessor = String(
       (options.env ?? process.env).KIWI_RETENTION_PROCESSOR ?? "",
     ).trim();

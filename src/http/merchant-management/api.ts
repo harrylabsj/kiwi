@@ -1090,6 +1090,28 @@ export function createMerchantManagementApiHandler(
       return;
     }
 
+    // The v1 Workbench page uses these same application services. Keeping the
+    // handlers shared avoids a second import/policy implementation while the
+    // surrounding v1 dispatcher maps thrown errors to RFC 9457 Problem Details.
+    if (rest === "/products/import-drafts") {
+      await postProductsImportDraft(req, res);
+      return;
+    }
+    const importCommitMatch = /^\/products\/import-drafts\/([^/]+)\/commit$/.exec(rest);
+    if (importCommitMatch !== null) {
+      await postProductsImportCommit(req, res, pathSegment(importCommitMatch[1] ?? ""));
+      return;
+    }
+    if (rest === "/policy/drafts") {
+      await postPolicyDraft(req, res);
+      return;
+    }
+    const policyCommitMatch = /^\/policy\/drafts\/([^/]+)\/commit$/.exec(rest);
+    if (policyCommitMatch !== null) {
+      await postPolicyCommit(req, res, pathSegment(policyCommitMatch[1] ?? ""));
+      return;
+    }
+
     if (rest === "/broadcasts/drafts") {
       const auth = requireActor(req);
       assertWriteGuards(req, auth.sessionId);

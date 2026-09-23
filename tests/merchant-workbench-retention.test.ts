@@ -1,6 +1,15 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -14,6 +23,8 @@ import {
 import { MerchantFollowStore } from "../src/merchant/follow-store.js";
 import { MerchantEngagementStore } from "../src/merchant/engagement-store.js";
 import { followRequestDigest } from "../src/merchant/follow-store.js";
+import { createLocalBackupDeletionHandler } from "../src/privacy/local-backup-deletion.js";
+import { runBackup } from "../src/merchant-runtime/backup.js";
 
 function fixture() {
   const db = new DatabaseSync(":memory:");
@@ -271,5 +282,108 @@ describe("Workbench retention and Buyer privacy requests", () => {
     expect(result.receiptRef).toContain("buyer-preferences:wpr_test:2:1");
     expect((db.prepare("SELECT count(*) count FROM buyer_preferences").get() as { count: number }).count).toBe(0);
     db.close();
+  });
+
+  it("erases all verified local backup generations after live deletion receipts", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "kiwi-controlled-backup-delete-"));
+    const dataDir = path.join(root, "merchant-data");
+    const backupsDir = path.join(dataDir, "backups");
+    mkdirSync(dataDir, { recursive: true });
+    const db = new DatabaseSync(path.join(dataDir, "state.sqlite"));
+    try {
+      const follow = new MerchantFollowStore({ db });
+      const engagement = new MerchantEngagementStore({ db });
+      const retention = new WorkbenchRetentionStore({
+        db,
+        deletionHandlers: {
+          ...createSqlDeletionHandlers(db),
+          "controlled-backup": createLocalBackupDeletionHandler({ dataDir, backupsDir }),
+        },
+      });
+      configure(retention);
+      db.exec("CREATE TABLE buyer_preferences (merchant_id TEXT, buyer_principal_id TEXT)");
+      db.prepare("INSERT INTO buyer_preferences VALUES ('m1', 'buyer-erasure')").run();
+      const state = follow.read("m1", "buyer-erasure");
+      follow.mutate({
+        merchantId: "m1",
+        buyerPrincipalId: "buyer-erasure",
+        action: "follow",
+        expectedRevision: state.follow.revision,
+        mutationContext: state.mutation_contexts.follow.ref,
+        idempotencyKey: "follow-before-backup-delete",
+        requestDigest: followRequestDigest({ action: "follow-before-backup-delete" }),
+      });
+      engagement.record({
+        merchantId: "m1",
+        buyerPrincipalId: "buyer-erasure",
+        broadcastId: "broadcast-before-backup-delete",
+        eventType: "received",
+        idempotencyKey: "received-before-backup-delete",
+        occurredAt: "2026-09-21T12:00:00.000Z",
+      });
+
+      runBackup({ dataDir, backupsDir, now: () => "2026-09-21T12:01:00.000Z" });
+      const request = retention.receiveBuyerDeletionRequest({ merchantId: "m1", buyerPrincipalId: "buyer-erasure" });
+      runBackup({ dataDir, backupsDir, now: () => "2026-09-21T12:02:00.000Z" });
+      retention.transition(request.requestId, "IDENTITY_CHECK");
+      retention.transition(request.requestId, "SCOPED");
+      retention.transition(request.requestId, "PROCESSING");
+
+      expect(() => retention.processDeletionNode(request.requestId, "controlled-backup")).toThrow(
+        /before live deletion processors/u,
+      );
+      retention.processRuntimePrimary(request.requestId);
+      retention.processDeletionNode(request.requestId, "buyer-preferences");
+      retention.processDeletionNode(request.requestId, "runtime-cache");
+
+      const erased = retention.processDeletionNode(request.requestId, "controlled-backup");
+      expect(erased).toEqual({
+        receiptRef: `local-backup:${request.requestId}:${request.consentGeneration}:purged-2`,
+        deletedArtifacts: 2,
+      });
+      expect(readdirSync(backupsDir)).toEqual([]);
+      expect(existsSync(path.join(backupsDir, "latest-backup.json"))).toBe(false);
+      expect(retention.transition(request.requestId, "COMPLETED").status).toBe("COMPLETED");
+      const replay = retention.processDeletionNode(request.requestId, "controlled-backup");
+      expect(replay).toEqual({ receiptRef: erased.receiptRef, deletedArtifacts: 0 });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to purge an unrecognized backup generation without deleting valid siblings", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "kiwi-controlled-backup-owner-"));
+    const dataDir = path.join(root, "merchant-data");
+    const backupsDir = path.join(dataDir, "backups");
+    const otherDataDir = path.join(root, "other-data");
+    try {
+      mkdirSync(dataDir, { recursive: true });
+      runBackup({ dataDir, backupsDir, now: () => "2026-09-21T12:03:00.000Z" });
+      const bad = path.join(backupsDir, "foreign-snapshot");
+      mkdirSync(bad);
+      writeFileSync(
+        path.join(bad, "manifest.json"),
+        JSON.stringify({
+          created_at: "2026-09-21T12:04:00.000Z",
+          source_dir: otherDataDir,
+          files: [],
+        }),
+      );
+      const handler = createLocalBackupDeletionHandler({ dataDir, backupsDir });
+      expect(() =>
+        handler({
+          requestId: "wpr_test",
+          merchantId: "m1",
+          buyerPrincipalId: "buyer-1",
+          consentGeneration: 1,
+        }),
+      ).toThrow(/different data directory/u);
+      expect(existsSync(path.join(backupsDir, "2026-09-21T12-03-00-000Z", "manifest.json"))).toBe(true);
+      expect(existsSync(path.join(bad, "manifest.json"))).toBe(true);
+      expect(readFileSync(path.join(backupsDir, "latest-backup.json"), "utf8")).toContain("snapshot_dir");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
