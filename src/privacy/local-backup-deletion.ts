@@ -1,8 +1,9 @@
 /** Physical erasure for the Runtime's own, file-backed backup generations. */
 
-import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
+import { runBackup } from "../merchant-runtime/backup.js";
 import type { PrivacyDeletionNodeHandler } from "./workbench-retention.js";
 
 interface LocalBackupManifest {
@@ -30,19 +31,19 @@ export function createLocalBackupDeletionHandler(options: {
 
   return ({ requestId, consentGeneration }) => {
     if (!existsSync(backupsDir)) {
-      return {
-        receiptRef: `local-backup:${requestId}:${consentGeneration}:empty`,
-        deletedArtifacts: 0,
-      };
+      // runBackup creates the controlled directory and an integrity-checked
+      // post-erasure snapshot. Keep recovery available even for a first run.
     }
-    const rootStat = lstatSync(backupsDir);
-    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-      throw new Error("controlled backup directory is not a real directory");
+    if (existsSync(backupsDir)) {
+      const rootStat = lstatSync(backupsDir);
+      if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+        throw new Error("controlled backup directory is not a real directory");
+      }
     }
 
-    const entries = readdirSync(backupsDir, { withFileTypes: true });
+    const entries = existsSync(backupsDir) ? readdirSync(backupsDir, { withFileTypes: true }) : [];
     const snapshots: string[] = [];
-    let latestMarker: string | undefined;
+    let newestCreatedAt = Number.NEGATIVE_INFINITY;
     for (const entry of entries) {
       const full = path.join(backupsDir, entry.name);
       if (entry.name === "latest-backup.json") {
@@ -50,7 +51,6 @@ export function createLocalBackupDeletionHandler(options: {
         if (!markerStat.isFile() || markerStat.isSymbolicLink()) {
           throw new Error("controlled backup latest marker is not a regular file");
         }
-        latestMarker = full;
         continue;
       }
       if (!entry.isDirectory()) {
@@ -73,17 +73,32 @@ export function createLocalBackupDeletionHandler(options: {
         throw new Error(`backup manifest belongs to a different data directory: ${entry.name}`);
       }
       snapshots.push(full);
+      newestCreatedAt = Math.max(newestCreatedAt, Date.parse(manifest.created_at));
     }
 
-    // Validate the complete set before deleting any generation.
-    for (const snapshot of snapshots) rmSync(snapshot, { recursive: true, force: false });
-    if (latestMarker !== undefined) unlinkSync(latestMarker);
-    const remaining = readdirSync(backupsDir);
-    if (remaining.length !== 0) {
-      throw new Error("controlled backup directory was not fully cleared");
+    // Choose a generation newer than every validated snapshot so lexical
+    // rotation cannot accidentally keep an older, pre-erasure copy if the
+    // system clock moved backwards.
+    const wallClockMs = Date.now();
+    const snapshotAt = new Date(
+      Number.isFinite(newestCreatedAt) ? Math.max(wallClockMs, newestCreatedAt + 1) : wallClockMs,
+    ).toISOString();
+    const replacement = runBackup({
+      dataDir,
+      backupsDir,
+      now: () => snapshotAt,
+      keepLatest: 1,
+    });
+    const retainedSnapshots = readdirSync(backupsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && existsSync(path.join(backupsDir, entry.name, "manifest.json")))
+      .map((entry) => path.resolve(backupsDir, entry.name));
+    if (retainedSnapshots.length !== 1 || retainedSnapshots[0] !== path.resolve(replacement.snapshot_dir)) {
+      throw new Error("controlled backup rotation did not retain only the verified post-erasure snapshot");
     }
     return {
-      receiptRef: `local-backup:${requestId}:${consentGeneration}:purged-${snapshots.length}`,
+      receiptRef:
+        `local-backup:${requestId}:${consentGeneration}:replaced-${snapshots.length}:` +
+        `fresh-${path.basename(replacement.snapshot_dir)}`,
       deletedArtifacts: snapshots.length,
     };
   };

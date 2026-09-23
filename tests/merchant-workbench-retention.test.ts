@@ -303,6 +303,8 @@ describe("Workbench retention and Buyer privacy requests", () => {
       configure(retention);
       db.exec("CREATE TABLE buyer_preferences (merchant_id TEXT, buyer_principal_id TEXT)");
       db.prepare("INSERT INTO buyer_preferences VALUES ('m1', 'buyer-erasure')").run();
+      db.exec("CREATE TABLE merchant_settings (merchant_id TEXT PRIMARY KEY, setting TEXT NOT NULL)");
+      db.prepare("INSERT INTO merchant_settings VALUES ('m1', 'preserve-me')").run();
       const state = follow.read("m1", "buyer-erasure");
       follow.mutate({
         merchantId: "m1",
@@ -337,12 +339,26 @@ describe("Workbench retention and Buyer privacy requests", () => {
       retention.processDeletionNode(request.requestId, "runtime-cache");
 
       const erased = retention.processDeletionNode(request.requestId, "controlled-backup");
-      expect(erased).toEqual({
-        receiptRef: `local-backup:${request.requestId}:${request.consentGeneration}:purged-2`,
-        deletedArtifacts: 2,
-      });
-      expect(readdirSync(backupsDir)).toEqual([]);
-      expect(existsSync(path.join(backupsDir, "latest-backup.json"))).toBe(false);
+      expect(erased.receiptRef).toContain(
+        `local-backup:${request.requestId}:${request.consentGeneration}:replaced-2:fresh-`,
+      );
+      expect(erased.deletedArtifacts).toBe(2);
+      const latest = JSON.parse(readFileSync(path.join(backupsDir, "latest-backup.json"), "utf8")) as {
+        snapshot_dir: string;
+      };
+      const snapshotDirs = readdirSync(backupsDir).filter((name) => name !== "latest-backup.json");
+      expect(snapshotDirs).toEqual([path.basename(latest.snapshot_dir)]);
+      const cleanSnapshot = new DatabaseSync(path.join(latest.snapshot_dir, "state.sqlite"), { readOnly: true });
+      try {
+        expect(
+          (cleanSnapshot.prepare("SELECT count(*) count FROM merchant_follow_relations WHERE buyer_principal_id='buyer-erasure'").get() as { count: number }).count,
+        ).toBe(0);
+        expect(
+          (cleanSnapshot.prepare("SELECT count(*) count FROM merchant_settings WHERE merchant_id='m1' AND setting='preserve-me'").get() as { count: number }).count,
+        ).toBe(1);
+      } finally {
+        cleanSnapshot.close();
+      }
       expect(retention.transition(request.requestId, "COMPLETED").status).toBe("COMPLETED");
       const replay = retention.processDeletionNode(request.requestId, "controlled-backup");
       expect(replay).toEqual({ receiptRef: erased.receiptRef, deletedArtifacts: 0 });
