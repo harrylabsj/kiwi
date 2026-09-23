@@ -51,6 +51,7 @@ export interface PrivacyRequestRecord {
   consentGeneration: number;
   receivedAt: string;
   updatedAt: string;
+  limitationReason?: string;
 }
 
 export interface DeletionSuppressionRecord {
@@ -73,6 +74,7 @@ const TRANSITIONS: Readonly<Record<PrivacyRequestStatus, readonly PrivacyRequest
 
 const REQUIRED_NODES = [
   "runtime-primary",
+  "negotiation-ledger",
   "buyer-preferences",
   "runtime-cache",
   "controlled-backup",
@@ -80,6 +82,8 @@ const REQUIRED_NODES = [
 export type PrivacyDeletionNode = (typeof REQUIRED_NODES)[number];
 export interface PrivacyDeletionNodeResult {
   receiptRef: string;
+  status?: "completed" | "restricted";
+  limitationReason?: string;
   deletedRows?: number;
   deletedArtifacts?: number;
 }
@@ -411,11 +415,11 @@ export class WorkbenchRetentionStore {
       const prerequisites = this.db
         .prepare(
           `SELECT node_id, status, receipt_ref FROM workbench_privacy_deletion_tasks
-           WHERE request_id=? AND node_id IN ('runtime-primary','buyer-preferences','runtime-cache')`,
+           WHERE request_id=? AND node_id IN ('runtime-primary','negotiation-ledger','buyer-preferences','runtime-cache')`,
         )
         .all(requestId) as Array<{ node_id: string; status: string; receipt_ref: string | null }>;
       if (
-        prerequisites.length !== 3 ||
+        prerequisites.length !== 4 ||
         prerequisites.some((task) => task.status !== "completed" || clean(task.receipt_ref ?? "") === "")
       ) {
         throw new WorkbenchRetentionError(
@@ -437,7 +441,15 @@ export class WorkbenchRetentionStore {
       buyerPrincipalId: request.buyerPrincipalId,
       consentGeneration: request.consentGeneration,
     });
-    this.recordDeletionTask({ requestId, nodeId, status: "completed", receiptRef: result.receiptRef });
+    const taskStatus = result.status ?? "completed";
+    this.recordDeletionTask({ requestId, nodeId, status: taskStatus, receiptRef: result.receiptRef });
+    if (taskStatus === "restricted") {
+      this.transition(
+        requestId,
+        "PARTIAL_EXTERNAL",
+        result.limitationReason ?? "A controlled privacy node reported an incomplete deletion scope.",
+      );
+    }
     return result;
   }
 
@@ -579,6 +591,7 @@ export class WorkbenchRetentionStore {
           consent_generation: number;
           received_at: string;
           updated_at: string;
+          limitation_reason: string | null;
         }
       | undefined;
     if (row === undefined) {
@@ -592,6 +605,7 @@ export class WorkbenchRetentionStore {
       consentGeneration: row.consent_generation,
       receivedAt: row.received_at,
       updatedAt: row.updated_at,
+      ...(row.limitation_reason !== null ? { limitationReason: row.limitation_reason } : {}),
     };
   }
 }

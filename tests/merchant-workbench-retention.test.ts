@@ -24,7 +24,9 @@ import { MerchantFollowStore } from "../src/merchant/follow-store.js";
 import { MerchantEngagementStore } from "../src/merchant/engagement-store.js";
 import { followRequestDigest } from "../src/merchant/follow-store.js";
 import { createLocalBackupDeletionHandler } from "../src/privacy/local-backup-deletion.js";
+import { createLedgerPayloadDeletionHandler } from "../src/privacy/ledger-payload-deletion.js";
 import { runBackup } from "../src/merchant-runtime/backup.js";
+import { LedgerPayloadRedactedError, LedgerStore } from "../src/negotiation/ledger/index.js";
 
 function fixture() {
   const db = new DatabaseSync(":memory:");
@@ -69,8 +71,8 @@ describe("Workbench retention and Buyer privacy requests", () => {
         db.prepare("SELECT count(*) count FROM workbench_privacy_deletion_tasks").get() as {
           count: number;
         }
-      ).count,
-    ).toBe(4);
+    ).count,
+    ).toBe(5);
     const second = store.receiveBuyerDeletionRequest({
       merchantId: "m1",
       buyerPrincipalId: "buyer-1",
@@ -92,6 +94,7 @@ describe("Workbench retention and Buyer privacy requests", () => {
     expect(() => store.transition(request.requestId, "COMPLETED")).toThrow(/controlled nodes/);
     for (const nodeId of [
       "runtime-primary",
+      "negotiation-ledger",
       "buyer-preferences",
       "runtime-cache",
       "controlled-backup",
@@ -297,6 +300,9 @@ describe("Workbench retention and Buyer privacy requests", () => {
         db,
         deletionHandlers: {
           ...createSqlDeletionHandlers(db),
+          "negotiation-ledger": createLedgerPayloadDeletionHandler({
+            dir: path.join(dataDir, "a2a"),
+          }),
           "controlled-backup": createLocalBackupDeletionHandler({ dataDir, backupsDir }),
         },
       });
@@ -335,6 +341,7 @@ describe("Workbench retention and Buyer privacy requests", () => {
         /before live deletion processors/u,
       );
       retention.processRuntimePrimary(request.requestId);
+      retention.processDeletionNode(request.requestId, "negotiation-ledger");
       retention.processDeletionNode(request.requestId, "buyer-preferences");
       retention.processDeletionNode(request.requestId, "runtime-cache");
 
@@ -362,6 +369,56 @@ describe("Workbench retention and Buyer privacy requests", () => {
       expect(retention.transition(request.requestId, "COMPLETED").status).toBe("COMPLETED");
       const replay = retention.processDeletionNode(request.requestId, "controlled-backup");
       expect(replay).toEqual({ receiptRef: erased.receiptRef, deletedArtifacts: 0 });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts segmented Ledger bodies without rewriting the chain and reports retained identity as partial", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "kiwi-ledger-privacy-delete-"));
+    const dataDir = path.join(root, "merchant-data");
+    const ledgerDir = path.join(dataDir, "a2a");
+    mkdirSync(dataDir, { recursive: true });
+    const db = new DatabaseSync(path.join(dataDir, "state.sqlite"));
+    try {
+      const ledger = new LedgerStore({ dir: ledgerDir });
+      const event = ledger.appendSegmented({
+        event_kind: "message_received",
+        negotiation_id: "neg-private-buyer",
+        identity: { sender_identity: "buyer-ledger-id", counterparty_identity: "merchant-ledger-id", actor: "buyer" },
+        capability: { capability: "rfq", protocol_version: "KNP/1.0" },
+        wire_digest: "sha256:buyer-wire",
+        wire_payload: { action: "rfq", body: "buyer personal request text" },
+        outcome: { kind: "ok", result: { accepted: true } },
+        occurred_at: "2026-09-23T10:00:00.000Z",
+      });
+      const retention = new WorkbenchRetentionStore({
+        db,
+        deletionHandlers: {
+          "negotiation-ledger": createLedgerPayloadDeletionHandler({ dir: ledgerDir }),
+        },
+      });
+      configure(retention);
+      const request = retention.receiveBuyerDeletionRequest({
+        merchantId: "m1",
+        buyerPrincipalId: "buyer-ledger-id",
+      });
+      retention.transition(request.requestId, "IDENTITY_CHECK");
+      retention.transition(request.requestId, "SCOPED");
+      retention.transition(request.requestId, "PROCESSING");
+
+      const result = retention.processDeletionNode(request.requestId, "negotiation-ledger");
+      expect(result.status).toBe("restricted");
+      expect(result.receiptRef).toContain("segments-2");
+      expect(ledger.verifyChain("neg-private-buyer").valid).toBe(true);
+      expect(() => ledger.resolvePayload(event)).toThrow(LedgerPayloadRedactedError);
+      const status = retention.getRequest(request.requestId, "m1");
+      expect(status).toMatchObject({
+        status: "PARTIAL_EXTERNAL",
+        limitationReason: expect.stringContaining("identity_envelope_retained"),
+      });
+      expect(ledger.events("neg-private-buyer")[0]?.identity.sender_identity).toBe("buyer-ledger-id");
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });

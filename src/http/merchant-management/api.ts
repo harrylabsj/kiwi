@@ -736,6 +736,9 @@ export function createMerchantManagementApiHandler(
           consent_generation: request.consentGeneration,
           received_at: request.receivedAt,
           updated_at: request.updatedAt,
+          ...(request.limitationReason !== undefined
+            ? { limitation_reason: request.limitationReason }
+            : {}),
         },
         { "x-request-id": requestId },
       );

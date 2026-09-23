@@ -66,6 +66,7 @@ import {
   WorkbenchRetentionStore,
 } from "../privacy/workbench-retention.js";
 import { createLocalBackupDeletionHandler } from "../privacy/local-backup-deletion.js";
+import { createLedgerPayloadDeletionHandler } from "../privacy/ledger-payload-deletion.js";
 import { createBroadcastExecutors } from "../merchant/feed-executors.js";
 import { isCurrentGrantAuthorization, MerchantGrantStore } from "../merchant/grant-store.js";
 import { createGrantExecutors } from "../merchant/grant-executors.js";
@@ -492,6 +493,9 @@ export async function bootstrapCloudRuntime(
     const retentionStore = new WorkbenchRetentionStore({
       db: managementDb,
       deletionHandlers: {
+        "negotiation-ledger": createLedgerPayloadDeletionHandler({
+          dir: path.join(config.dataDir, "a2a"),
+        }),
         "controlled-backup": createLocalBackupDeletionHandler({
           dataDir: config.dataDir,
           backupsDir: path.join(config.dataDir, "backups"),

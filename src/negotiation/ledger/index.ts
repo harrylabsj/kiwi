@@ -42,6 +42,14 @@ export type {
   LedgerPayloadSegments,
 } from "./event.js";
 export { LedgerStore, ledgerFileName } from "./store.js";
-export type { LedgerHighWaterMark, LedgerStoreOptions } from "./store.js";
-export { LedgerPayloadSegmentStore } from "./payload-segments.js";
-export type { LedgerPayloadSegmentRef, LedgerPayloadSegmentStoreOptions } from "./payload-segments.js";
+export type {
+  LedgerHighWaterMark,
+  LedgerIdentityPayloadRedactionReport,
+  LedgerStoreOptions,
+} from "./store.js";
+export { LedgerPayloadRedactedError, LedgerPayloadSegmentStore } from "./payload-segments.js";
+export type {
+  LedgerPayloadRedactionReceipt,
+  LedgerPayloadSegmentRef,
+  LedgerPayloadSegmentStoreOptions,
+} from "./payload-segments.js";

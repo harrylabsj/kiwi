@@ -56,6 +56,26 @@ import { LedgerError, computeEventDigest, eventContentAddressable } from "./even
 import { assertNoForbiddenContent, isLedgerEvent, newLedgerEventId } from "./event.js";
 import type { LedgerEvent, LedgerEventContent, LedgerVerifyResult } from "./event.js";
 import { LedgerPayloadSegmentStore } from "./payload-segments.js";
+import type { LedgerPayloadSegmentRef } from "./payload-segments.js";
+
+export interface LedgerIdentityPayloadRedactionReport {
+  status: "completed" | "restricted";
+  matchedNegotiations: number;
+  matchedEvents: number;
+  redactedSegments: number;
+  sharedSegments: number;
+  inlinePayloadEvents: number;
+  receiptIds: string[];
+  limitations: Array<"identity_envelope_retained" | "inline_payload_retained" | "shared_segment_retained">;
+}
+
+function requireNonEmptyText(value: string, field: string): string {
+  const text = String(value ?? "").trim();
+  if (text.length === 0 || text.length > 256) {
+    throw new LedgerError("ledger_invalid_identity", `${field} must contain 1..256 characters`);
+  }
+  return text;
+}
 
 export interface LedgerHighWaterMark {
   negotiation_id: string;
@@ -314,6 +334,103 @@ export class LedgerStore {
       ...event,
       ...(wirePayload === undefined ? {} : { wire_payload: wirePayload }),
       ...(outcomeResult === undefined ? {} : { outcome: { kind: "ok", result: outcomeResult } }),
+    };
+  }
+
+  /**
+   * Redact external payloads for one independently verified protocol identity.
+   * The caller must derive senderIdentity from the same authenticated
+   * principal used to accept the privacy request; request JSON is not a valid
+   * source. Event envelopes are never rewritten. Any retained identity,
+   * inline payload or shared content-addressed segment makes the report
+   * restricted so callers cannot claim full erasure.
+   */
+  redactPayloadsForIdentity(input: {
+    senderIdentity: string;
+    redactionId: string;
+    redactedAt?: string;
+  }): LedgerIdentityPayloadRedactionReport {
+    const senderIdentity = requireNonEmptyText(input.senderIdentity, "senderIdentity");
+    const redactionId = requireNonEmptyText(input.redactionId, "redactionId");
+    const identityMatches = (event: LedgerEvent): boolean =>
+      event.identity.sender_identity === senderIdentity ||
+      event.identity.counterparty_identity === senderIdentity;
+    const allEvents: LedgerEvent[] = [];
+    for (const negotiationId of this.listNegotiations()) {
+      const events = this.events(negotiationId);
+      const verified = this.verifyEvents(events);
+      if (!verified.valid) {
+        throw new LedgerError(
+          "ledger_append_only_violation",
+          `refusing privacy redaction for ${negotiationId}: existing chain invalid (${verified.error?.code})`,
+        );
+      }
+      allEvents.push(...events);
+    }
+
+    const matchedNegotiations = new Set<string>();
+    let matchedEvents = 0;
+    let inlinePayloadEvents = 0;
+    const usage = new Map<
+      string,
+      { ref: LedgerPayloadSegmentRef; matched: boolean; unrelated: boolean }
+    >();
+    for (const event of allEvents) {
+      const matched = identityMatches(event);
+      if (matched) {
+        matchedNegotiations.add(event.negotiation_id);
+        matchedEvents += 1;
+        if (event.wire_payload !== undefined || (event.outcome.kind === "ok" && event.outcome.result !== undefined)) {
+          inlinePayloadEvents += 1;
+        }
+      }
+      const refs = [
+        event.payload_segments?.wire_payload,
+        event.payload_segments?.outcome_result,
+      ].filter((ref): ref is LedgerPayloadSegmentRef => ref !== undefined);
+      for (const ref of refs) {
+        const prior = usage.get(ref.path);
+        if (prior !== undefined && prior.ref.digest !== ref.digest) {
+          throw new LedgerError("ledger_chain_corrupt", "conflicting segment digests use the same Ledger path");
+        }
+        usage.set(ref.path, {
+          ref,
+          matched: matched || prior?.matched === true,
+          unrelated: !matched || prior?.unrelated === true,
+        });
+      }
+    }
+
+    let redactedSegments = 0;
+    let sharedSegments = 0;
+    const receiptIds: string[] = [];
+    for (const item of usage.values()) {
+      if (!item.matched) continue;
+      if (item.unrelated) {
+        sharedSegments += 1;
+        continue;
+      }
+      const receipt = this.payloadSegments.redact(item.ref, {
+        redactionId,
+        ...(input.redactedAt !== undefined ? { redactedAt: input.redactedAt } : {}),
+      });
+      redactedSegments += 1;
+      receiptIds.push(receipt.receiptId);
+    }
+
+    const limitations: LedgerIdentityPayloadRedactionReport["limitations"] = [];
+    if (matchedEvents > 0) limitations.push("identity_envelope_retained");
+    if (inlinePayloadEvents > 0) limitations.push("inline_payload_retained");
+    if (sharedSegments > 0) limitations.push("shared_segment_retained");
+    return {
+      status: limitations.length === 0 ? "completed" : "restricted",
+      matchedNegotiations: matchedNegotiations.size,
+      matchedEvents,
+      redactedSegments,
+      sharedSegments,
+      inlinePayloadEvents,
+      receiptIds,
+      limitations,
     };
   }
 

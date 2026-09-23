@@ -86,6 +86,9 @@ function projection(record: import("../privacy/workbench-retention.js").PrivacyR
     consent_generation: record.consentGeneration,
     received_at: record.receivedAt,
     updated_at: record.updatedAt,
+    ...(record.limitationReason !== undefined
+      ? { limitation_reason: record.limitationReason }
+      : {}),
   };
 }
 
