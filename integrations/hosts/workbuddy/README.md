@@ -49,4 +49,4 @@ node integrations/hosts/workbuddy/package-gateway-connector.mjs --check
 node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /absolute/path/kiwi-merchant-gateway-1.1.1.zip
 ```
 
-`kiwi-merchant-buddy/` 是应用后台人工配置草稿、头像、AI 客服准备技能与填写说明。v1.1.0 商家连接器资产已撤回；按 2026-09-24 决策，以 v1.1.1 独立重新申请 OAuth MCP 连接器资产，审核通过后由 Buddy 应用内置连接器引用新 ID。用户仍在 Buddy 内完成授权使用，不要求另行安装市场产品。提交需要专用商家测试账号。具体包与实机检查见[上架素材包](../../../docs/merchant-buddy/merchant-connector-submission-pack.md)和[检查单](../../../docs/merchant-buddy/workbuddy-e2e-checklist.md)。
+`kiwi-merchant-buddy/` 是应用后台人工配置草稿、头像、AI 客服准备技能与填写说明。v1.1.0 商家连接器资产已撤回；v1.1.1 已独立提交 OAuth MCP 连接器审核，ID `oc_0053ad85c92a6587`，目前待审。获批后由 Buddy 应用内置连接器引用；用户仍在 Buddy 内完成授权使用，不要求另行安装市场产品。腾讯客服要求补交专用商家测试账号。具体包与实机检查见[上架素材包](../../../docs/merchant-buddy/merchant-connector-submission-pack.md)和[检查单](../../../docs/merchant-buddy/workbuddy-e2e-checklist.md)。

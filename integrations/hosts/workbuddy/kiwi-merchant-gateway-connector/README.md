@@ -1,6 +1,6 @@
 # kiwi-merchant-gateway-connector — 商家连接器（「Kiwi 商家运营」）包
 
-状态：WorkBuddy 已解析 v1.1.1 并生成新草稿资产 ID `oc_0053ad85c92a6587`；**尚未提交审核**，等待专用 OAuth 测试账号。此前 v1.1.0 的平台资产已撤回，旧 ID `oc_c86216e2a36110bf` 不得再引用；原 v1.0.0 草稿 `oc_f6eb7fea361ac64e` 已删除。审核通过后仍须实机验收 OAuth 与 6 个工具。详见[上架素材包](../../../../docs/merchant-buddy/merchant-connector-submission-pack.md)。
+状态：WorkBuddy 已于 2026-09-24 收到 v1.1.1 审核申请，连接器 ID `oc_0053ad85c92a6587`，当前「审核中」。客服要求另外提供专用 OAuth 测试账号；此前 v1.1.0 的平台资产已撤回，旧 ID `oc_c86216e2a36110bf` 不得再引用；原 v1.0.0 草稿 `oc_f6eb7fea361ac64e` 已删除。审核通过后仍须实机验收 OAuth 与 6 个工具。详见[上架素材包](../../../../docs/merchant-buddy/merchant-connector-submission-pack.md)。
 
 > **版本迁移记录**：原 v1.0.0 包只有 5 个工具。同 ID 重传 v1.1.0 未持久化；之后创建的新资产也已撤回。此次重新提交递增至 v1.1.1，使用平台生成的新资产 ID；WorkBuddy 用户侧工具可见性仍待审核通过后验证。
 

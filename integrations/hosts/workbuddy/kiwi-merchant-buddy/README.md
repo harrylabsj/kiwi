@@ -2,7 +2,7 @@
 
 `buddy-app.config.json` 是 Buddy 后台配置的本地草稿：官方文档说明后台「支持导出配置 JSON 文件在本地环境测试验证」，但导出格式未公开。本文件为自定义清晰结构，供导出预览和人工照着配置；每次退出配置前后台导出文件，下次导入还原（官方最佳实践第 5 条）。
 
-对应连接器包见 `../kiwi-merchant-gateway-connector/`（远程 HTTPS MCP + OAuth，source=`kiwi-merchant`）。v1.1.0 的旧平台资产已撤回；正在准备以 v1.1.1 重新提交，获批后使用 WorkBuddy 新生成的资产 ID 配置 Buddy 内置连接器。
+对应连接器包见 `../kiwi-merchant-gateway-connector/`（远程 HTTPS MCP + OAuth，source=`kiwi-merchant`）。v1.1.0 的旧平台资产已撤回；v1.1.1 已提交审核，当前 ID `oc_0053ad85c92a6587`，获批并完成 OAuth 实测后配置到 Buddy 内置连接器。
 
 ## 五个后台模块怎么填
 

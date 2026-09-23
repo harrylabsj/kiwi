@@ -1,6 +1,6 @@
 # 商家连接器上架素材包（提交前必读）
 
-状态（2026-09-24）：**已决定重新独立提交商家 OAuth MCP 连接器**，获批后由 Buddy 应用内置引用；不作为要求用户另行安装的市场产品。旧资产 `oc_c86216e2a36110bf` 已撤回，不得复用。v1.1.1 已打包并上传解析，WorkBuddy 新建草稿资产 ID `oc_0053ad85c92a6587`，类目与展示信息已核对；**尚未提交审核**。审核需要可登录的专用 Kiwi 商家测试账号，目前待确认/准备。
+状态（2026-09-24）：**v1.1.1 已重新提交 WorkBuddy 审核**，新连接器 ID `oc_0053ad85c92a6587`，平台列表显示「审核中」。通过后由 Buddy 应用内置引用；不作为要求用户另行安装的市场产品。旧资产 `oc_c86216e2a36110bf` 已撤回，不得复用。腾讯客服要求补充可登录的专用 Kiwi 商家测试账号以完成 OAuth 测试；该账号尚未选定，测试账号邮件尚未发送。
 历史（2026-09-20 核对）：新商家连接器 `oc_c86216e2a36110bf` 曾提交 WorkBuddy 审核，平台列表显示 v1.1.0，未发布即被撤回。旧 v1.0.0 草稿 `oc_f6eb7fea361ac64e` 已由用户删除。AI 客服准备技能 `os_dc3a52407574eb77` 已提交审核；Buddy 应用基础审核仍受平台授权表单阻碍。依据：[商家连接器独立发布计划](generic-merchant-connector-release-plan.md)、[平台核验记录](workbuddy-connector-platform-verification-2026-09-17.md)、[第 1 版设计](../v1-product-flow-and-onboarding-design.md)。
 
 2026-09-18 首次提交回执：生产网关已运行 Kiwi 0.9.0 + 安全修复 `d9ab95a`（构建源为隔离工作树 `9baebd4`），`/health` 与 OAuth 元数据公网正常，旧 `dist` 保留在 `/opt/kiwi-gateway/app/dist.prev-108c25e9` 供回滚。WorkBuddy 解析 `kiwi-merchant-gateway-1.0.0.zip` 后生成新连接器 ID **`oc_f6eb7fea361ac64e`**，选择「商家自营 - B2b(商品批发/门店管理)」类目。审批通过及用户侧真实 OAuth/工具预览尚待验收。
@@ -45,10 +45,10 @@ ZIP 只含 `connector-meta.json`、`mcp.json`、`icon.svg`；**提交前必须�
 
 ## 2. 平台步骤（连接器）
 
-1. 已上传 v1.1.1 ZIP 并生成草稿 ID `oc_0053ad85c92a6587`；待 OAuth 测试账号就绪后提交审核。
+1. 已上传并提交 v1.1.1；资产 ID `oc_0053ad85c92a6587`，当前审核中。
 2. 不复用已撤回 `oc_c86216e2a36110bf`、已删除 `oc_f6eb7fea361ac64e` 或买方 `oc_bd73f860e3e2b5d3`。
-3. 向 WorkBuddy 审核提供专用 Kiwi 商家测试账号，验证 OAuth 与 6 个目录工具。
-4. 审核通过后核对真实 `tools/list` 与 OAuth 回跳，再把新生成的 ID 配置到 Buddy 应用内置连接器字段。
+3. 通过客服要求的邮箱渠道补交专用 Kiwi 商家测试账号，供审核方测试 OAuth 与 6 个目录工具。
+4. 审核通过后核对真实 `tools/list` 与 OAuth 回跳，再把新 ID 配置到 Buddy 应用内置连接器字段。
 5. **若平台拒绝 `workbuddy://` 私有协议回调**：确认回退 `http://127.0.0.1:{动态端口}/oauth/callback` 是否被接受；两条都不行则停下评审，不改入口形态。
 
 ## 3. Buddy 应用

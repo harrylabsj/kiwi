@@ -94,7 +94,7 @@
         "bindTools": []
       }
     ],
-    "内置连接器": "【独立连接器资产 v1.1.1 已上传解析，草稿 ID oc_0053ad85c92a6587；待测试账号后提交审核】Buddy 内置连接器指向 Kiwi 商家共享网关 https://merchant.kiwi.harrylabsj.com/mcp，OAuth 2.1 + PKCE（source=kiwi-merchant）。审核通过后才在 Buddy 应用后台引用该新 ID。v1.1.0 资产 oc_c86216e2a36110bf 已撤回，**不得再引用**。商家仍在 Buddy 应用内完成连接与 OAuth 授权，不需要另行发现/安装商家市场产品。另：integrations/hosts/workbuddy/kiwi-merchant-connector-oauth/ 是指向单个商家实例的历史包，不得作为通用商家入口提交（发布计划 §3.5）。"
+    "内置连接器": "【独立连接器资产 v1.1.1 审核中；ID oc_0053ad85c92a6587】Buddy 内置连接器指向 Kiwi 商家共享网关 https://merchant.kiwi.harrylabsj.com/mcp，OAuth 2.1 + PKCE（source=kiwi-merchant）。审核通过并核对 OAuth/tools/list 后，再在 Buddy 应用后台引用该 ID。v1.1.0 资产 oc_c86216e2a36110bf 已撤回，**不得再引用**。商家仍在 Buddy 应用内完成连接与 OAuth 授权，不需要另行发现/安装商家市场产品。另：integrations/hosts/workbuddy/kiwi-merchant-connector-oauth/ 是指向单个商家实例的历史包，不得作为通用商家入口提交（发布计划 §3.5）。"
   },
   "market": {
     "connectors": [],
