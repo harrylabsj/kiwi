@@ -2,7 +2,7 @@
 
 版本：v0.1（2026-09-25）
 依据：《Kiwi-Buyer 双来源搜索设计文档 v1.1》§12/§19；场景清单 `tests/fixtures/dual-source-search-cases.json`
-状态：Hermes 一侧已按本文步骤实测通过（证据见 §4）；**WorkBuddy 一侧未实测**（§3）。
+状态：两端均已实测（Hermes 证据见 §4，WorkBuddy 证据见 §3）；C 可收口。
 
 ---
 
@@ -74,6 +74,13 @@ hermes -z "只做只读搜索，不要发起询价或调用写工具。只用 mc
 
 3. 记录：是否出现互联网工具、分区是否符合、措辞是否守住「无匹配 vs 查询未完成」的边界。
 
+**C2 已执行（2026-09-26），两条证据：**
+
+1. **客户端 trace（2026-09-21 真实专家会话）**：轨迹显示该会话加载了专家技能（`Skill(kiwi-source-and-quote)`）、**真实调用 `WebSearch` 4 次**并拿到结果，另通过 `workbuddy_request_mcp_connection` 请求连接 MCP（当时连接被跳过，模型如实说明「无法在 Kiwi 上搜索供应商」而非编造商家）。→ **专家会话具备互联网检索工具**（工具可用性属宿主级）。
+2. **无头复现（CodeBuddy CLI 2.158.0 + 专家 1.1.0 + 本地运行时 + 桩目录）**：同一套技能文本下，模型同时走通 Network 与互联网两路，输出分源；标注 `page_reference`、声明「未读取原页面不核实」、不评最低价、不生成到手价、明确把外部候选排除出 `kiwi_request_quotes`；主动核对 MOQ（候选 MOQ 10 vs 用户要 2）与硬条件缺口；`network_search` 原样返回 `completed + has_candidates` 并被正确解读为「不等于已满足全部硬条件」；写工具调用 0 次。两次权限被拒的中间运行中，模型**拒绝编造 `network_search`**，并把「工具被拒」正确映射为 `not_searched + undetermined` 且声明「不是无匹配」。
+
+**保留**：桌面端专家面板的新鲜会话未实操（工具可用性由 trace 佐证）；如需在面板复核，按上面 5 条提示走一遍即可。
+
 ### 3.1 无头 CLI 路线（可由助手执行，免手动点界面）
 
 WorkBuddy 客户端自带无头 CLI（`-p` 打印模式 + `--channels` 加载插件/专家）：
@@ -85,6 +92,22 @@ CB="/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/cod
 
 **前置**：该 CLI 的登录态与桌面端**各自独立**，需先登录一次——直接运行 `"$CB"`，在交互提示里执行 `/login`。
 本机实测（2026-09-26）：未登录时返回 `Authentication required. Please use /login command to sign in`；登录后上面的命令即可承载 §3 的五条提示词，输出可直接判读。
+
+**本机已就绪的形态（2026-09-26）**：`~/.local/bin/codebuddy`（2.158.0，已登录）；本地专家市场 `experts` 已加入该 CLI 并安装 `kiwi-procurement-expert@experts` 1.1.0。
+**无头跑专家（只读白名单 + 桩目录，无外部副作用）**：
+
+```sh
+# 1) 桩 catalog（响应受 /tmp/cbc-scratch/catalog-mode.txt 控制：candidates | hang | error）
+node /tmp/cbc-scratch/stub-catalog.mjs &
+# 2) 一次只读专家会话
+~/.local/bin/codebuddy -p "<§3 的提示词>" \
+  --channels plugin:kiwi-procurement-expert@experts --agent kiwi-procurement \
+  --mcp-config /tmp/cbc-scratch/kiwi-mcp.json \
+  --tools "WebSearch,WebFetch,Read,ToolSearch,Skill,DeferExecuteTool,WaitForMcpServers" -y \
+  --output-format text
+```
+
+注意：`--allowedTools` 不足以放行 MCP 调用（要经 `DeferExecuteTool`）；桩目录是为了不触碰真实商家（否则专家有权限时会真的发起询价）。
 
 ## 4. 本次实测记录（2026-09-25，Hermes）
 
@@ -105,5 +128,5 @@ CB="/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/cod
 1. ~~**两个 kiwi MCP 源同时在场**~~ **已收敛（2026-09-26）**：`~/.hermes/config.yaml` 的直连 `kiwi-buyer-mcp` 已注释（备份 `config.yaml.bak-20260926`），其参数（`--db` 指向 `~/coding/kiwi/.kiwi/mcp/hermes.sqlite`、`--principal hermes:jianghaidong`、`--agent buyer-agent:hermes`、`--catalog-url`、`--a2a-skip-dns-check`）已移植到插件副本的 `mcp.json`；Hermes 现在只有一个源（工具前缀 `mcp__kb__*`，9 个工具）。同时刷新了 `~/.hermes/skills/kiwi-buyer/SKILL.md`（原为 2026-09-04 的旧副本，不含双来源规则；备份 `.bak-20260926`），并更新了 `kiwi-purchase-execution` 里指向旧前缀的参考文件。**后果**：工具前缀从 `mcp__kiwi_buyer_mcp__*` 变为 `mcp__kb__*`，其它引用该前缀的笔记/提示词需同步。
 2. **测试副本的 `mcp.json` 指向本地构建**：`~/.hermes/plugins/kiwi` 是拷贝，不是仓库；仓库内仍 pin 0.8.0。结束后应删除或还原该副本。
 3. **pin 未升级**：线上用户（插件目录安装）仍是 0.8.0，看不到 `network_search`；升级属发布流程（工作包 D）。
-4. **WorkBuddy 互联网工具未知**：若不开放，按设计 §15 记录阻塞并另行设计共享适配器，不得以文案代替能力。
+4. ~~**WorkBuddy 互联网工具未知**~~ **已确认可用（2026-09-26）**：客户端 trace 显示专家会话真实调用过 `WebSearch`；无头复现也走通两路。设计 §15 的「共享互联网适配器」不必启动。
 5. **`hermes plugins validate` 的既有告警**：`skill:kiwi-buyer: metadata must map string keys to string values`（`metadata.hermes.tags` 是数组），本次改动未引入，未处理。
