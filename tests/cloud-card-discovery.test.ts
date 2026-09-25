@@ -440,7 +440,7 @@ describe("云端名片解析（公开读 + 声明验签）", () => {
       timeoutMs: 30,
       now: () => NOW,
     });
-    expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("catalog:request_failed");
+    expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("catalog:request_timeout");
   });
 });
 

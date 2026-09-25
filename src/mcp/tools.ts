@@ -72,7 +72,7 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
     {
       name: "kiwi_search",
       description:
-        "发现候选供应商，并按需跨商家搜索商品。只读。内部语义：Merchant routing + UCP Catalog orchestration + trust/freshness。结果中 inquiry_available=true 的商家可实时询价（可进入 kiwi_request_quotes）；inquiry_available=false 且 source_kind=merchant_declared 的商家仅有第 0 版公开资料（资料可查，含命中商品名/更新时间/店铺入口），不可发起询价。",
+        "发现候选供应商，并按需跨商家搜索商品。只读。只覆盖 Kiwi Network（Kiwi 网络内商家）：互联网电商商品不在本工具范围内，须由宿主自身的检索/取页工具完成，不得用本结果冒充外部平台信息。内部语义：Merchant routing + UCP Catalog orchestration + trust/freshness。返回 network_search 说明本次 Network 查询的真实状态（status: completed/partial/timeout/error/not_searched；result_state: has_candidates/no_match/undetermined）——只有 completed + no_match 才能说「本次没有匹配」；超时、失败、部分完成、未搜索都不得表述为「没有供应商」。结果中 inquiry_available=true 的商家可实时询价（可进入 kiwi_request_quotes）；inquiry_available=false 且 source_kind=merchant_declared 的商家仅有第 0 版公开资料（资料可查，含命中商品名/更新时间/店铺入口），不可发起询价。products 是商家既有资料投影（basis=merchant_listed；price.kind=merchant_listed_price 为商家资料价，无价则 to_be_quoted），未经本次询价确认，不得当作报价、库存或交期承诺。",
       inputSchema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",
         type: "object",
@@ -91,7 +91,15 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
             category: args.category === undefined ? undefined : String(args.category),
             region: args.region === undefined ? undefined : String(args.region),
           });
-          return ok(JSON.stringify({ merchants: result.merchants, note: result.note }));
+          // 旧字段 merchants/note 原样保留（已发布宿主在用）；
+          // network_search 为增量字段：本次 Network 查询的结构化状态。
+          return ok(
+            JSON.stringify({
+              merchants: result.merchants,
+              note: result.note,
+              network_search: result.network_search,
+            }),
+          );
         } catch (error) {
           return err(error);
         }

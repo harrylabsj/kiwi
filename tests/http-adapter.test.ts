@@ -8,6 +8,9 @@ import { type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { buildBuyerService } from "../src/buyer-core/build-service.js";
+import { KiwiCatalogMerchantIndex } from "../src/buyer-core/merchant-index.js";
+import { KiwiBuyerService } from "../src/buyer-core/service.js";
+import { TaskApprovalStore } from "../src/buyer-core/store.js";
 import { createBuyerHttpServer } from "../src/http/server.js";
 
 const POLICY = {
@@ -95,6 +98,61 @@ describe("kiwi-buyer-http（单核心多包装）", () => {
   it("404 未知路由", async () => {
     const { status } = await call("GET", "/nope");
     expect(status).toBe(404);
+  });
+
+  it("POST /search 未注入 MerchantIndex → network_search=not_searched（不是无匹配）", async () => {
+    const { status, json } = await call("POST", "/search", { query: "扩展坞" });
+    expect(status).toBe(200);
+    const result = (json.result ?? {}) as {
+      merchants: unknown[];
+      network_search: { status: string; result_state: string };
+    };
+    expect(result.merchants).toEqual([]);
+    expect(result.network_search.status).toBe("not_searched");
+    expect(result.network_search.result_state).toBe("undetermined");
+  });
+
+  it("POST /search 与 MCP 同状态语义：三路完成无命中 → completed + no_match", async () => {
+    const stubFetch = (async (): Promise<Response> => {
+      return new Response(JSON.stringify({ results: [], next_cursor: null }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const service = new KiwiBuyerService({
+      store: new TaskApprovalStore({ dbPath: ":memory:" }),
+      principal: "company:http-test",
+      buyerAgentId: "buyer-agent:http",
+      sessionId: "http-session-search",
+      delegationPolicy: POLICY,
+      merchantIndex: new KiwiCatalogMerchantIndex({
+        baseUrl: "http://127.0.0.1:8000",
+        fetchImpl: stubFetch,
+        now: () => "2026-09-25T10:00:00Z",
+      }),
+    });
+    const searchServer = createBuyerHttpServer({ service });
+    await new Promise<void>((resolve) => searchServer.listen(0, "127.0.0.1", resolve));
+    try {
+      const addr = searchServer.address();
+      const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+      const res = await fetch(`http://127.0.0.1:${port}/search`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: "扩展坞" }),
+      });
+      const json = (await res.json()) as {
+        result: { network_search: { status: string; result_state: string; searched_at: string } };
+      };
+      expect(res.status).toBe(200);
+      expect(json.result.network_search).toMatchObject({
+        status: "completed",
+        result_state: "no_match",
+        searched_at: "2026-09-25T10:00:00Z",
+      });
+    } finally {
+      await new Promise<void>((resolve) => searchServer.close(() => resolve()));
+    }
   });
 
   it("POST /approvals 创建持久审批（宿主适配面）", async () => {

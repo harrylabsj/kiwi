@@ -408,6 +408,10 @@ describe("Merchant Discovery（§3.2 kiwi-catalog 驱动）", () => {
     const result = await service.search({ query: "扩展坞" });
     expect(result.merchants).toEqual([]);
     expect(result.note).toContain("unreachable");
+    // 双来源搜索（设计 v1.1 §7/§17）：目录不可达是"查询失败"，不是"没有匹配"。
+    expect(result.network_search.status).toBe("error");
+    expect(result.network_search.result_state).toBe("undetermined");
+    expect(result.network_search.source).toBe("kiwi_network");
   });
 
   it("KiwiCatalogMerchantIndex 从 /v1/agents 映射 merchant 记录", async () => {

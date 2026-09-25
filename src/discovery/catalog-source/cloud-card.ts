@@ -291,7 +291,7 @@ export class CloudCardSource {
         const name = (err as { name?: string } | null)?.name;
         const detail = err instanceof Error ? err.message : String(err);
         throw new CatalogSourceError(
-          "request_failed",
+          name === "AbortError" ? "request_timeout" : "request_failed",
           name === "AbortError"
             ? `catalog request timed out after ${timeoutMs}ms: ${url}`
             : `catalog request failed: ${url} (${detail})`,
@@ -319,7 +319,7 @@ export class CloudCardSource {
       } catch (err) {
         if (controller.signal.aborted) {
           throw new CatalogSourceError(
-            "request_failed",
+            "request_timeout",
             `catalog request timed out after ${timeoutMs}ms while reading response: ${url}`,
           );
         }

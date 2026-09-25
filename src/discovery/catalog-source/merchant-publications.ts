@@ -192,7 +192,7 @@ export class MerchantPublicationsSource {
         const name = (err as { name?: string } | null)?.name;
         const detail = err instanceof Error ? err.message : String(err);
         throw new CatalogSourceError(
-          "request_failed",
+          name === "AbortError" ? "request_timeout" : "request_failed",
           name === "AbortError"
             ? `kiwi-catalog request timed out after ${timeoutMs}ms: ${url}`
             : `kiwi-catalog request failed: ${url} (${detail})`,
@@ -205,8 +205,13 @@ export class MerchantPublicationsSource {
         );
       }
       if (!response.ok) {
+        // 404/405 = 该 catalog 部署没有这个端点：属于"能力不存在"而非"本次查询失败"，
+        // 买方搜索据此标 not_searched（设计 v1.1 §7「未搜索 = 能力不可用」），
+        // 避免把旧目录说成"查询失败"或"没有匹配"。
         throw new CatalogSourceError(
-          "request_failed",
+          response.status === 404 || response.status === 405
+            ? "endpoint_unavailable"
+            : "request_failed",
           `kiwi-catalog request returned HTTP ${response.status} from ${url}`,
         );
       }
@@ -215,7 +220,7 @@ export class MerchantPublicationsSource {
       } catch (err) {
         if (controller.signal.aborted) {
           throw new CatalogSourceError(
-            "request_failed",
+            "request_timeout",
             `kiwi-catalog request timed out after ${timeoutMs}ms while reading response: ${url}`,
           );
         }
@@ -235,8 +240,8 @@ export class MerchantPublicationsSource {
   /**
    * 公开检索商家公开资料（仅 published 未过期由上游保证）。分页完整拉取，
    * 跨页按 publication_id 去重；limit 是总返回上限而非页大小（同 searchRecords
-   * 的历史教训）。旧 catalog 无此端点时抛 request_failed（HTTP 404），由
-   * 调用方（KiwiCatalogMerchantIndex）按单侧失败容忍处理。
+   * 的历史教训）。旧 catalog 无此端点时抛 endpoint_unavailable（HTTP 404/405），
+   * 由调用方（KiwiCatalogMerchantIndex）按"该来源未搜索"容忍处理。
    */
   async searchPublications(
     query: MerchantPublicationSearchQuery = {},

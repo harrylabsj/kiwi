@@ -36,6 +36,24 @@ import type { CatalogSourceDeps } from "../discovery/catalog-source/source.js";
 import type { CatalogAgentRecord } from "../discovery/catalog-source/kiwi-record.js";
 import { trimTrailingSlashes } from "../net/url.js";
 import type { MerchantPublicationSummary, MerchantRecord } from "./service.js";
+import {
+  classifyComponentFailure,
+  summarizeNetworkSearch,
+  type NetworkSearchComponent,
+  type NetworkSearchComponentName,
+  type NetworkSearchDiagnostics,
+} from "./network-search.js";
+import { MAX_PRODUCTS_PER_MERCHANT, summarizeListing } from "./product-summary.js";
+
+/** 三路 allSettled 结果 → 组件状态（fulfilled 即 completed，rejected 按错误码分类）。 */
+function componentOf(
+  name: NetworkSearchComponentName,
+  result: PromiseSettledResult<unknown[]>,
+): NetworkSearchComponent {
+  return result.status === "fulfilled"
+    ? { name, status: "completed" }
+    : classifyComponentFailure(name, result.reason);
+}
 
 export interface KiwiCatalogMerchantIndexOptions {
   baseUrl: string;
@@ -44,6 +62,8 @@ export interface KiwiCatalogMerchantIndexOptions {
   buyerId?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /** 可注入时钟（`network_search.searched_at`）；缺省系统时间。 */
+  now?: () => string;
 }
 
 const VERIFIED_LEVELS = new Set(["domain_verified", "agent_verified", "commerce_verified"]);
@@ -60,6 +80,7 @@ function isAgentFresh(record: { freshness_state?: string }): boolean {
 export class KiwiCatalogMerchantIndex {
   private readonly source: KiwiCatalogSource;
   private readonly publications: MerchantPublicationsSource;
+  private readonly now: () => string;
   /** 上一次 search 的非致命降级说明（单侧失败容忍时填充）。 */
   private searchNotes: string[] = [];
 
@@ -73,6 +94,7 @@ export class KiwiCatalogMerchantIndex {
     };
     this.source = new KiwiCatalogSource(deps);
     this.publications = new MerchantPublicationsSource(deps);
+    this.now = options.now ?? (() => new Date().toISOString());
   }
 
   lastSearchNotes(): string[] {
@@ -97,6 +119,35 @@ export class KiwiCatalogMerchantIndex {
    *   暂不可用，不凭模型记忆补全商家。
    */
   async search(query: string, opts?: { category?: string; region?: string }): Promise<MerchantRecord[]> {
+    const outcome = await this.runSearch(query, opts);
+    if (outcome.failure !== undefined) throw outcome.failure;
+    return outcome.merchants;
+  }
+
+  /**
+   * 与 `search` 同源，但把**本次**查询的组件状态随结果返回：诊断随结果走，
+   * 不依赖可被并发搜索覆盖的实例级 `lastSearchNotes`（设计 §17）。
+   *
+   * 与 `search` 的唯一差别：全侧失败不抛错——失败本身就是要如实上报的状态
+   * （`status: timeout|error` + `result_state: undetermined`），由 service 汇总
+   * 进 `network_search`；`search()` 保留原 fail-closed 抛错契约供旧调用方使用。
+   */
+  async searchWithDiagnostics(
+    query: string,
+    opts?: { category?: string; region?: string },
+  ): Promise<{ merchants: MerchantRecord[]; diagnostics: NetworkSearchDiagnostics }> {
+    const outcome = await this.runSearch(query, opts);
+    return { merchants: outcome.merchants, diagnostics: outcome.diagnostics };
+  }
+
+  private async runSearch(
+    query: string,
+    opts?: { category?: string; region?: string },
+  ): Promise<{
+    merchants: MerchantRecord[];
+    diagnostics: NetworkSearchDiagnostics;
+    failure?: unknown;
+  }> {
     const [listingsRes, agentsRes, publicationsRes] = await Promise.allSettled([
       this.source.searchListings({
         q: query,
@@ -112,22 +163,31 @@ export class KiwiCatalogMerchantIndex {
         limit: 50,
       }),
     ]);
-    const agentSideFailed = listingsRes.status === "rejected" && agentsRes.status === "rejected";
-    const publicationsFailed = publicationsRes.status === "rejected";
-    this.searchNotes = [];
-    if (agentSideFailed && publicationsFailed) {
-      // 全侧失败才抛（fail-closed）；任何一侧可用都保留其结果。
-      throw agentsRes.status === "rejected" ? agentsRes.reason : publicationsRes.reason;
-    }
+    // 组件级状态：成功/超时/失败/能力缺失必须分开上报（设计 §7/§17），
+    // 宿主据此如实说明，而不是把"目录不可达"说成"没有匹配"。
+    const components: NetworkSearchComponent[] = [
+      componentOf("listings", listingsRes),
+      componentOf("agents", agentsRes),
+      componentOf("merchant_publications", publicationsRes),
+    ];
+    const statusOf = (name: NetworkSearchComponentName): NetworkSearchComponent["status"] =>
+      components.find((component) => component.name === name)?.status ?? "not_searched";
+    const listingsStatus = statusOf("listings");
+    const agentsStatus = statusOf("agents");
+    const publicationsStatus = statusOf("merchant_publications");
+    const agentSideFailed = listingsStatus !== "completed" && agentsStatus !== "completed";
+    const notes: string[] = [];
     if (agentSideFailed) {
-      this.searchNotes.push(
-        "Agent/Listing 发现来源暂不可用，当前仅含商家公开资料（资料可查）结果",
+      notes.push("Agent/Listing 发现来源暂不可用，当前仅含商家公开资料（资料可查）结果");
+    } else if (listingsStatus !== "completed" || agentsStatus !== "completed") {
+      // 单侧不可用：仍有结果可展示，但覆盖确实不完整（设计 §17 要求单个内部
+      // 来源失败也能被标为部分完成）。只读 note 的旧宿主据此保守表述。
+      notes.push(
+        `${listingsStatus !== "completed" ? "商品（listings）" : "商家（agents）"}来源本次查询未完成，当前结果覆盖不完整`,
       );
     }
-    if (publicationsFailed) {
-      this.searchNotes.push(
-        "商家公开资料（merchant-publications）来源暂不可用，当前仅含 Agent/Listing 结果",
-      );
+    if (publicationsStatus !== "completed") {
+      notes.push("商家公开资料（merchant-publications）来源暂不可用，当前仅含 Agent/Listing 结果");
     }
     const listings = listingsRes.status === "fulfilled" ? listingsRes.value : [];
     const agents = agentsRes.status === "fulfilled" ? agentsRes.value : [];
@@ -138,6 +198,7 @@ export class KiwiCatalogMerchantIndex {
       const merchantId = r.merchant.merchant_id ?? r.listing.owner_agent_id;
       if (merchantId === undefined || merchantId === "") continue;
       const sku = r.listing.source_product_ref ?? r.listing.listing_id;
+      const product = summarizeListing(r);
       const existing = byId.get(merchantId);
       if (existing === undefined) {
         byId.set(merchantId, {
@@ -149,9 +210,14 @@ export class KiwiCatalogMerchantIndex {
           capabilities: [],
           matching_skus: [sku],
           delivery: r.listing.commercial_hints?.lead_time_hint,
+          products: [product],
         });
       } else {
         existing.matching_skus = existing.matching_skus ? [...existing.matching_skus, sku] : [sku];
+        // 商品摘要按 catalog 返回顺序取前 N 条（控制工具返回体积，设计 §17）。
+        if ((existing.products?.length ?? 0) < MAX_PRODUCTS_PER_MERCHANT) {
+          existing.products = [...(existing.products ?? []), product];
+        }
       }
     }
     for (const r of agents) {
@@ -226,11 +292,38 @@ export class KiwiCatalogMerchantIndex {
       (rec) => rec.agent_card_url !== undefined && !isAgentFresh(rec),
     ).length;
     if (staleCount > 0) {
-      this.searchNotes.push(
+      notes.push(
         `${staleCount} 个商家的服务当前离线（未在有效期内上报心跳），暂不可实时询价；公开资料仍可查`,
       );
     }
-    return records;
+    // 商家离线是候选的可询价状态，不改变来源查询状态（设计 §17）。
+    const completedCount = components.filter((component) => component.status === "completed").length;
+    const attemptedCount = components.filter((component) => component.status !== "not_searched").length;
+    let failure: unknown;
+    if (completedCount === 0 && attemptedCount > 0) {
+      // 全侧失败才抛（fail-closed）；任何一侧可用都保留其结果。
+      if (agentsRes.status === "rejected") {
+        failure = agentsRes.reason;
+      } else if (publicationsRes.status === "rejected") {
+        failure = publicationsRes.reason;
+      }
+      // note 必须显式说明"查询未完成"：只读 note 的宿主（含旧版）不能把它
+      // 当成"没有匹配"（设计 §7 故障处理）。
+      notes.push(
+        `Kiwi Network 本次查询未完成：${failure instanceof Error ? failure.message : String(failure)}`,
+      );
+    }
+    const diagnostics = summarizeNetworkSearch({
+      components,
+      candidateCount: records.length,
+      searchedAt: this.now(),
+      notes,
+    });
+    // 兼容 lastSearchNotes（实例级，旧调用方/宿主）；诊断本身随结果返回。
+    this.searchNotes = notes;
+    return failure === undefined
+      ? { merchants: records, diagnostics }
+      : { merchants: records, diagnostics, failure };
   }
 
   /**

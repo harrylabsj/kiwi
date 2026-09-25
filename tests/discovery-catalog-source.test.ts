@@ -230,7 +230,7 @@ describe("ShoppingCliCatalogSource", () => {
     });
 
     await expect(source.searchCandidates()).rejects.toMatchObject({
-      code: "request_failed",
+      code: "request_timeout",
       message: /timed out/,
     });
   });

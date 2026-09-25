@@ -267,6 +267,15 @@ describe("KiwiCatalogMerchantIndex：M0 公开资料三路合并", () => {
     expect(result.merchants[0]?.merchant_id).toBe("merchant-cat-001");
     expect(result.note).toContain("商家公开资料");
     expect(result.note).toContain("暂不可用");
+    // 旧 catalog 无该端点 = 能力不存在（not_searched），不是本次查询失败；
+    // 来源标 partial（覆盖不完整），已取得的候选照常上报。
+    expect(result.network_search.components).toEqual([
+      { name: "listings", status: "completed" },
+      { name: "agents", status: "completed" },
+      { name: "merchant_publications", status: "not_searched", reason: "endpoint_unavailable" },
+    ]);
+    expect(result.network_search.status).toBe("partial");
+    expect(result.network_search.result_state).toBe("has_candidates");
   });
 
   it("Agent/Listing 双侧失败：保留 M0 公开资料结果并标注，不 fail-closed", async () => {
@@ -286,7 +295,7 @@ describe("KiwiCatalogMerchantIndex：M0 公开资料三路合并", () => {
     expect(result.note).toContain("暂不可用");
   });
 
-  it("全侧失败：fail-closed 降级为可解释 note，不凭模型记忆补全商家", async () => {
+  it("全侧失败：不补全商家，如实上报查询未完成 + structured 失败状态（search 仍 fail-closed）", async () => {
     const fetchImpl = stubCatalog({
       agents: { status: 500 },
       listings: { status: 500 },
@@ -295,7 +304,19 @@ describe("KiwiCatalogMerchantIndex：M0 公开资料三路合并", () => {
     const service = makeService(fetchImpl);
     const result = await service.search({ query: "保温杯" });
     expect(result.merchants).toEqual([]);
-    expect(result.note).toContain("unreachable");
+    // note 必须显式说明"查询未完成"：只读 note 的宿主（含已发布版本）不得当成"没有匹配"。
+    expect(result.note).toContain("查询未完成");
+    expect(result.network_search.status).toBe("error");
+    expect(result.network_search.result_state).toBe("undetermined");
+    expect(result.network_search.components).toEqual([
+      { name: "listings", status: "error", reason: "request_failed" },
+      { name: "agents", status: "error", reason: "request_failed" },
+      { name: "merchant_publications", status: "error", reason: "request_failed" },
+    ]);
+    expect(result.network_search.searched_at).toBeDefined();
+    // 索引层 search 保持 fail-closed 抛错契约（旧调用方依赖）。
+    const index = new KiwiCatalogMerchantIndex({ baseUrl: "http://127.0.0.1:8000", fetchImpl });
+    await expect(index.search("保温杯")).rejects.toThrow();
   });
 
   it("公开资料投影违反 M0 不变量（inquiry_available=true）→ 该来源按失败容忍，不污染结果", async () => {

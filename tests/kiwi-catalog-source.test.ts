@@ -357,7 +357,7 @@ describe("KiwiCatalogSource", () => {
       timeoutMs: 50,
     });
     await expect(source3.searchRecords()).rejects.toMatchObject({
-      code: "request_failed",
+      code: "request_timeout",
       message: /timed out/,
     });
   });

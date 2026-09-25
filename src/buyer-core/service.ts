@@ -44,6 +44,13 @@ import type {
   BuyerFollowUpdateGroup,
 } from "../discovery/catalog-source/buyer-follows.js";
 import { McpError } from "./errors.js";
+import {
+  failedSearchDiagnostics,
+  legacySearchDiagnostics,
+  notSearchedDiagnostics,
+  type NetworkSearchDiagnostics,
+} from "./network-search.js";
+import type { MerchantProductSummary } from "./product-summary.js";
 import { TaskApprovalStore, type StoredApproval, type StoredTask } from "./store.js";
 
 export type BuyerAction =
@@ -108,10 +115,29 @@ export interface MerchantRecord {
    * 的 commercial_hints.lead_time_hint；买家发现/选择时的重要指标。
    */
   delivery?: string;
+  /**
+   * 命中商品摘要（catalog listing 的真实字段投影，每商家≤
+   * MAX_PRODUCTS_PER_MERCHANT 条）；宿主据此展示商品名/规格/商家资料价/起订量/
+   * 交期。只有 listing 命中才有——仅 Agent/M0 公开资料的商家不设置（不补造）。
+   */
+  products?: MerchantProductSummary[];
 }
 
 export interface MerchantIndex {
   search(query: string, opts?: { category?: string; region?: string }): Promise<MerchantRecord[]>;
+  /**
+   * 可选：与 `search` 同源，但把**本次**查询的组件状态随结果返回——诊断不依赖
+   * 可被并发搜索覆盖的实例级 `lastSearchNotes`（设计 v1.1 §17）。实现了本方法的
+   * 索引由 service 优先使用；未实现时 service 回退到 `search` + `lastSearchNotes`
+   * 并按保守口径汇总。
+   *
+   * 约定：全侧失败**不抛错**——失败/超时是必须如实上报的状态，由返回的
+   * `diagnostics.status`/`result_state` 表达（`search` 保留原 fail-closed 抛错）。
+   */
+  searchWithDiagnostics?(
+    query: string,
+    opts?: { category?: string; region?: string },
+  ): Promise<{ merchants: MerchantRecord[]; diagnostics: NetworkSearchDiagnostics }>;
   /**
    * 按 merchant_id 解析完整记录（含 agent_card_url / matching_skus）。requestQuotes
    * 在 intent query 文本搜索匹配不到商家时用此兜底——不依赖用户意图文本恰好命中
@@ -270,23 +296,57 @@ export class KiwiBuyerService {
     query: string;
     category?: string;
     region?: string;
-  }): Promise<{ merchants: MerchantRecord[]; note?: string }> {
-    if (this.merchantIndex === undefined) {
-      return { merchants: [], note: "merchant index not wired; discovery pending" };
+  }): Promise<{
+    merchants: MerchantRecord[];
+    note?: string;
+    /** Network 一路的结构化查询状态（双来源搜索设计 v1.1 §17）；互联网一路由宿主自答。 */
+    network_search: NetworkSearchDiagnostics;
+  }> {
+    const index = this.merchantIndex;
+    if (index === undefined) {
+      return {
+        merchants: [],
+        note: "merchant index not wired; discovery pending",
+        network_search: notSearchedDiagnostics(),
+      };
     }
+    const searchedAt = this.now();
     try {
-      const merchants = await this.merchantIndex.search(input.query, {
+      if (index.searchWithDiagnostics !== undefined) {
+        const { merchants, diagnostics } = await index.searchWithDiagnostics(input.query, {
+          category: input.category,
+          region: input.region,
+        });
+        // 单侧降级/离线说明如实标注；不静默、不补全。
+        return {
+          merchants,
+          ...(diagnostics.notes.length > 0 ? { note: diagnostics.notes.join("；") } : {}),
+          network_search: diagnostics,
+        };
+      }
+      // 旧版/第三方索引：只有 merchants + 实例级 lastSearchNotes（可被并发覆盖）。
+      const merchants = await index.search(input.query, {
         category: input.category,
         region: input.region,
       });
-      const notes = this.merchantIndex.lastSearchNotes?.() ?? [];
-      // 单侧降级（如 M0 公开资料来源暂不可用）如实标注；不静默、不补全。
-      return notes.length > 0 ? { merchants, note: notes.join("；") } : { merchants };
+      const notes = index.lastSearchNotes?.() ?? [];
+      const diagnostics = legacySearchDiagnostics({
+        candidateCount: merchants.length,
+        searchedAt,
+        notes,
+      });
+      return {
+        merchants,
+        ...(notes.length > 0 ? { note: notes.join("；") } : {}),
+        network_search: diagnostics,
+      };
     } catch (error) {
-      // catalog 不可达：降级为可解释 note，不编造商家（§3.2 Discovery & Routing）。
+      // 目录不可达/查询失败：如实报错，不编造商家、也不表述为无匹配。
+      const note = `merchant index unreachable: ${error instanceof Error ? error.message : String(error)}`;
       return {
         merchants: [],
-        note: `merchant index unreachable: ${error instanceof Error ? error.message : String(error)}`,
+        note,
+        network_search: failedSearchDiagnostics({ searchedAt, error, note }),
       };
     }
   }

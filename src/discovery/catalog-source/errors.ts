@@ -19,7 +19,14 @@
  *
  * 任何校验 / 网络失败都必须抛 CatalogSourceError，绝不静默容错、不自动降级：
  *   - invalid_input      调用方给了非法查询（类型 / 取值错误）；
- *   - request_failed     HTTP 非 2xx、网络异常或超时；
+ *   - request_failed     HTTP 非 2xx 或网络异常（不含超时）；
+ *   - request_timeout    请求超出配置时限（AbortSignal 中止）。与 request_failed
+ *                        分开，买方搜索才能如实把来源标为"超时"而非"失败"
+ *                        （双来源搜索设计 v1.1 §7/§17：无匹配 / 失败 / 超时 /
+ *                        部分完成必须可区分，不能从提示词文本猜错误类型）；
+ *   - endpoint_unavailable 该 catalog 部署没有这个端点（HTTP 404/405）。属于
+ *                        "能力不存在"而非"本次查询失败"，买方据此标 not_searched
+ *                        （设计 §7「未搜索」= 能力不可用）；
  *   - response_invalid   响应体不是契约要求的信封结构（缺 results / catalog_agent）；
  *   - contract_violation 候选元素未通过 CandidateAgent DTO schema 校验，或 contract
  *                        注解非 candidate-agent / 非 1.x（视为协议级违规）。
@@ -31,6 +38,8 @@
 export const CATALOG_SOURCE_ERROR_CODES = [
   "invalid_input",
   "request_failed",
+  "request_timeout",
+  "endpoint_unavailable",
   "response_invalid",
   "contract_violation",
   /** 会话认证端点拒绝了买家会话（HTTP 401/403）：登录态缺失或已过期。 */
