@@ -74,6 +74,18 @@ hermes -z "只做只读搜索，不要发起询价或调用写工具。只用 mc
 
 3. 记录：是否出现互联网工具、分区是否符合、措辞是否守住「无匹配 vs 查询未完成」的边界。
 
+### 3.1 无头 CLI 路线（可由助手执行，免手动点界面）
+
+WorkBuddy 客户端自带无头 CLI（`-p` 打印模式 + `--channels` 加载插件/专家）：
+
+```sh
+CB="/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy"
+"$CB" -p "<提示>" --channels plugin:kiwi-procurement-expert@experts --output-format text
+```
+
+**前置**：该 CLI 的登录态与桌面端**各自独立**，需先登录一次——直接运行 `"$CB"`，在交互提示里执行 `/login`。
+本机实测（2026-09-26）：未登录时返回 `Authentication required. Please use /login command to sign in`；登录后上面的命令即可承载 §3 的五条提示词，输出可直接判读。
+
 ## 4. 本次实测记录（2026-09-25，Hermes）
 
 - **会话 1（pin 0.8.0）**：技能被读取并按新口径编排；实际调用 `kiwi_search` + `web_search`，产出分源结果（Network 空 + 互联网 3 条，均带平台与链接与「不能当报价」免责）；`network_search: 无`（旧运行时符合预期）。
@@ -90,7 +102,7 @@ hermes -z "只做只读搜索，不要发起询价或调用写工具。只用 mc
 
 ## 5. 已知干扰项与风险
 
-1. **两个 kiwi MCP 源同时在场**：`~/.hermes/config.yaml` 里有直连 `kiwi-buyer-mcp`（全局安装的 `@harrylabsj/kiwi@0.8.0`，cwd 指向本仓），插件又注册了 `kb`。会话可能任选一套（会话 1 就选了直连那套）。验收前应明确用哪一套，或收敛为单一来源，避免「以为在测新版、其实在用旧版」。
+1. ~~**两个 kiwi MCP 源同时在场**~~ **已收敛（2026-09-26）**：`~/.hermes/config.yaml` 的直连 `kiwi-buyer-mcp` 已注释（备份 `config.yaml.bak-20260926`），其参数（`--db` 指向 `~/coding/kiwi/.kiwi/mcp/hermes.sqlite`、`--principal hermes:jianghaidong`、`--agent buyer-agent:hermes`、`--catalog-url`、`--a2a-skip-dns-check`）已移植到插件副本的 `mcp.json`；Hermes 现在只有一个源（工具前缀 `mcp__kb__*`，9 个工具）。同时刷新了 `~/.hermes/skills/kiwi-buyer/SKILL.md`（原为 2026-09-04 的旧副本，不含双来源规则；备份 `.bak-20260926`），并更新了 `kiwi-purchase-execution` 里指向旧前缀的参考文件。**后果**：工具前缀从 `mcp__kiwi_buyer_mcp__*` 变为 `mcp__kb__*`，其它引用该前缀的笔记/提示词需同步。
 2. **测试副本的 `mcp.json` 指向本地构建**：`~/.hermes/plugins/kiwi` 是拷贝，不是仓库；仓库内仍 pin 0.8.0。结束后应删除或还原该副本。
 3. **pin 未升级**：线上用户（插件目录安装）仍是 0.8.0，看不到 `network_search`；升级属发布流程（工作包 D）。
 4. **WorkBuddy 互联网工具未知**：若不开放，按设计 §15 记录阻塞并另行设计共享适配器，不得以文案代替能力。
