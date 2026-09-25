@@ -1,7 +1,7 @@
 {
   "name": "kiwi-procurement-expert",
-  "version": "1.0.1",
-  "description": "Kiwi procurement expert for supplier discovery, quote comparison and nonbinding negotiation.",
+  "version": "1.1.0",
+  "description": "Kiwi procurement expert for supplier discovery, quote comparison and nonbinding negotiation, with dual-source sourcing (Kiwi Network merchants plus internet e-commerce listings when the host session provides web tools).",
   "author": { "name": "harrylabsj" },
   "homepage": "https://github.com/harrylabsj/kiwi",
   "license": "Apache-2.0",
@@ -16,8 +16,8 @@
   "displayName": { "zh": "海纳·采购专家", "en": "Haina · Procurement Expert" },
   "profession": { "zh": "Kiwi 采购询价", "en": "Kiwi Sourcing and Quotes" },
   "displayDescription": {
-    "zh": "整理采购需求、寻找供应商、比较报价与交期，在授权范围内议价，经你确认形成非约束性协议并提供后续入口。",
-    "en": "Clarifies sourcing needs, discovers suppliers, compares quotes and delivery terms, and negotiates within your mandate before confirmed nonbinding agreements and handoffs."
+    "zh": "整理采购需求，同时查找网络商家与互联网电商商品，比较报价与交期，在授权范围内议价并形成非约束性协议。",
+    "en": "Clarifies sourcing needs, searches both network merchants and internet listings, compares quotes and delivery terms, and negotiates within your mandate before nonbinding agreements."
   },
   "avatar": "avatars/kiwi-procurement.png",
   "categoryId": "12-IndustryConsultant",
@@ -37,8 +37,8 @@
       "en": "Help me clarify my sourcing needs and find suitable suppliers"
     },
     {
-      "zh": "比较已有报价，找出费用和交期差异",
-      "en": "Compare existing quotes, costs and delivery terms"
+      "zh": "比较商家报价与互联网商品信息，找出费用和交期差异",
+      "en": "Compare merchant quotes and internet listings on cost and delivery terms"
     },
     {
       "zh": "帮我制定议价方案，确认后向商家还价",

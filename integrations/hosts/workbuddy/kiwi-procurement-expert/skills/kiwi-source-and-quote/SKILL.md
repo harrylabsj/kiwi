@@ -5,7 +5,7 @@ description: Use the Kiwi connector to clarify product requirements, discover su
 
 # 需求整理与询价
 
-有短商品词就调用 `kiwi_search(query, category?, region?)`，发现来自 catalog 的候选。只使用结果中的真实 merchant_id，买方不直连 shopping-cli 或另建本地 marketplace。
+有短商品词就调用 `kiwi_search(query, category?, region?)`，发现 Kiwi Network 内的候选；本会话若提供互联网检索/网页读取工具，同轮再查一路外部电商商品，两路结果**分区展示**（见「双来源结果」）。只使用结果中的真实 merchant_id，买方不直连 shopping-cli 或另建本地 marketplace。
 
 ## 搜索结果的两类商家
 
@@ -20,7 +20,37 @@ description: Use the Kiwi connector to clarify product requirements, discover su
   - 不得声称已取得其库存、报价或已向其发出 RFQ；公开资料是商家声明内容，不是 Kiwi 背书，也不是实时数据；
   - 同一商家同时有两版资料时只显示一个主体，说明实时询价能力来自其 Agent 侧，公开资料并列展示。
 
-结果带 `note` 时如实转述（如某数据来源暂不可用）；没有任何结果时如实说明没有搜到，不凭记忆或常识补出商家。
+结果带 `note` 时如实转述（如某数据来源暂不可用）；没有任何结果时也必须区分原因——只有 `network_search` 为 `completed` + `no_match` 才说「本次没有匹配」，其余情况说明查询未完成或覆盖不完整（见下），不凭记忆或常识补出商家。
+
+## 双来源结果
+
+采购搜索覆盖两个来源，分别展示、分别标注出处，不混成一张列表：
+
+| 来源 | 展示名称 | 谁提供 |
+|---|---|---|
+| Kiwi Network | Kiwi Network · 网络内商家 | `kiwi_search`（只覆盖这一路） |
+| 互联网电商 | 互联网电商 · 平台商品 | 本会话的互联网检索/网页读取工具；没有就如实说明未检索互联网，不得宣称已双来源 |
+
+用户限定来源（「只看 Kiwi Network」）时只查该来源，不暗示另一路查过。每个来源默认先展示最多 3 条最相关结果，条目按以下模板给出：
+
+- 商品名称；商家或店铺名称（未知就说明未知）；
+- 关键规格与与需求的差异（缺失项明确标出）；
+- 价格：标明类型与适用单位——页面参考价 `page_reference`、商家资料价 `merchant_listed_price`、商家报价 `merchant_quoted`、待询价 `to_be_quoted`；
+- 起订量、库存与交期、税费与运费：只有真实字段才填值，未知标「待确认」，不按零计算；
+- 来源依据：外部结果给平台名与原始链接（未读取原页面不得标为已核实）；Network 结果给可追溯的商品资料（`products[].listing_id`）；
+- 信息时间：区分「本次查询时间」与「资料更新时间」，两者都不代表实时库存。
+
+`network_search` 状态决定结论怎么写：
+
+| status / result_state | 写法 |
+|---|---|
+| `completed` + `no_match` | 「本次没有匹配」（Network 覆盖完整） |
+| `completed` + `has_candidates` | 展示候选，不声称已满足全部硬性条件 |
+| `partial`（含 `undetermined`） | 展示已取到的结果，明确说明覆盖不完整 |
+| `timeout` / `error` | 说明本次暂时查不到 → 先展示互联网一路，不得写成「没有供应商」 |
+| `not_searched` | 说明该来源未执行（用户限定或能力不可用），不得写成没有匹配 |
+
+外部候选是只读信息：不得放进 `kiwi_request_quotes` 的 `merchant_ids`，不得当作 Kiwi Network 商家，也不适用 Kiwi 协议与交接状态；需要时提供原始链接或拟好的询价内容。
 
 区分硬要求与偏好：规格、数量和单位、币种、期望交期、交付地区、总预算/目标单价。缺失信息若影响询价才问，不捏造数量、预算、交期和地址。只找供应商时不发询价；用户明确要求向合适候选询价且范围足够明确时可执行，不重复索要同一授权。
 

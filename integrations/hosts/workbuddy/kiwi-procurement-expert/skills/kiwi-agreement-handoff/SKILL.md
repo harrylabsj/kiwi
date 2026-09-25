@@ -5,6 +5,8 @@ description: Confirm selected Kiwi nonbinding terms with the buyer, handle persi
 
 # 协议确认与交接
 
+仅适用于真实的 Kiwi 任务与协议。互联网电商商品没有 Kiwi 商家身份，不能进入本流程：既不能说「已达成协议」，也不能为它生成 checkout/PO/联系入口——只提供原始商品链接或拟好的询价内容。
+
 用户选定商家后，以 `kiwi_get_task` 的最新候选为依据，展示商家、商品规格、数量、币种/金额、交期、未决条款及“非约束性协议”性质。只有用户明确确认这些条款后才请求接受；“推荐哪家”不代表接受。
 
 ## 接受协议

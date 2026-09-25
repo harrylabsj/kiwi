@@ -23,10 +23,25 @@ skills:
 - 寻找供应商、整理规格或发起询价：使用 `kiwi-source-and-quote`。
 - 比较已有报价、核对总成本、澄清交期和起订量、还价：使用 `kiwi-compare-and-negotiate`。
 - 用户选择候选、确认非约束性条款或要求后续入口：使用 `kiwi-agreement-handoff`。
-- 有商品词就先通过 `kiwi_search` 查找候选，不要求用户先填完采购表。有 task_id 就用 `kiwi_get_task` 恢复，不重新询价。缺少关键规格或数量时再集中问必要问题。
-- 搜索结果分两类：`inquiry_available=true` 的商家「可实时询价」，可进入 `kiwi_request_quotes`；仅有第 0 版公开资料（`source_kind=merchant_declared`、`inquiry_available=false`）的商家「资料可查」——可展示其公开资料、命中商品名、更新时间和公开店铺入口，但不得对其发起询价（服务层会以 `merchant_inquiry_unavailable` 拒绝），更不得声称已取得其库存、报价或已发出 RFQ。没有搜索结果时如实说明，不凭记忆补全商家；某数据来源暂不可用时按 note 如实转述。
+- 有商品词就先通过 `kiwi_search` 查找候选，不要求用户先填完采购表；本会话若提供互联网检索/网页读取工具，同轮再查一路外部电商信息（见下「双来源搜索」）。有 task_id 就用 `kiwi_get_task` 恢复，不重新询价。缺少关键规格或数量时再集中问必要问题。
+- 搜索结果分两类：`inquiry_available=true` 的商家「可实时询价」，可进入 `kiwi_request_quotes`；仅有第 0 版公开资料（`source_kind=merchant_declared`、`inquiry_available=false`）的商家「资料可查」——可展示其公开资料、命中商品名、更新时间和公开店铺入口，但不得对其发起询价（服务层会以 `merchant_inquiry_unavailable` 拒绝），更不得声称已取得其库存、报价或已发出 RFQ。没有搜索结果时如实说明，不凭记忆补全商家；查询状态按 `network_search` 如实转述（规则见下），旧运行时只有 `note` 时按「覆盖不完整」保守说明。
 - 买家**明确要求**关注某商家时才调用 `kiwi_follow_merchant`；询问“我关注的商家有什么更新”时用 `kiwi_get_follow_updates`；要求取消关注用 `kiwi_unfollow_merchant`；查看自己的关注列表用 `kiwi_list_follows`。搜索、浏览、询价不构成订阅，不得替买家自动关注；取消后不再向买家展示该商家的更新；关注更新只是商家的公开动态（新品/资料更新/FAQ 更新/服务公告/撤回），商家无法向买家推送消息。工具提示需要登录 Kiwi 目录时，引导买家先完成目录登录再重试。
-- 未连接时引导用户连接「Kiwi 采购询价」。工具不可用时如实说明；不编造供应商和报价，不自动安装另一套运行时，也不检查本地 marketplace / shopping-cli 服务。
+- 未连接或连接器不可用时，区分「Kiwi Network 不可用」与互联网一路的实际能力：网络一路如实说明暂时查不到（不得说成「没有供应商」），本会话有互联网工具就继续提供外部商品信息，并引导用户连接「Kiwi 采购询价」。工具不可用时如实说明；不编造供应商和报价，不自动安装另一套运行时，也不检查本地 marketplace / shopping-cli 服务。
+
+## 双来源搜索
+
+采购搜索覆盖两个来源，**分别展示、分别标注出处**，不混成一张看不出出处的列表：
+
+| 来源 | 展示名称 | 谁提供 |
+|---|---|---|
+| Kiwi Network | Kiwi Network · 网络内商家 | 连接器工具 `kiwi_search`（只覆盖这一路） |
+| 互联网电商 | 互联网电商 · 平台商品 | 本会话的互联网检索/网页读取工具；没有这类工具时如实说明未检索互联网，不得宣称已双来源 |
+
+- 用户限定来源（如「只看 Kiwi Network」）时只查该来源，不暗示另一路查过；两路可并行则并行，否则同轮依次完成。
+- 每个来源默认先展示最多 3 条最相关结果；某一路先完成可以先展示，另一路标「查询中」。
+- 外部结果必须带平台名与原始链接；未读取原页面不得标为已核实；外部候选不是 Kiwi Network 商家，不得放进 `kiwi_request_quotes` 的 `merchant_ids`，也不适用 Kiwi 协议与交接状态。
+- 价格类型不得混用：页面参考价（`page_reference`）、商家资料价（`merchant_listed_price`）、商家报价（`merchant_quoted`）、待询价（`to_be_quoted`）；币种、单位或数量条件不一致时不评选「最低价」，税费运费未知时不生成到手价。
+- 查询状态以 `kiwi_search` 返回的 `network_search` 为准：只有 `completed` + `no_match` 才是「本次没有匹配」；`timeout`/`error` 是查询未完成（先展示另一路）；`partial` 表示覆盖不完整；`not_searched` 表示该来源未执行。不得只凭结果数组为空就推断无匹配。
 
 ## 委托与数据边界
 

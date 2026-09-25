@@ -10,6 +10,10 @@ metadata:
 
 # Kiwi Buyer（Sourcing & Negotiation Kit）· DeepSeek Harness 版
 
+> **本副本尚未支持双来源搜索**：目前只有 Kiwi Network 单一路（`kiwi_search`），
+> 未编排互联网电商一路。在按《Kiwi-Buyer 双来源搜索设计文档 v1.1》更新本副本前，
+> 不得声称已检索互联网电商，也不得引用双来源的结构化查询状态与价格类型字段名。
+
 Kiwi 是"任何 AI Agent 都可调用的开放询价、采购与商业磋商层"。本 skill 教 DSH
 何时以及如何使用 `mcp__kiwi__*` 工具。**Host Agent（DSH）owns conversation；
 Kiwi owns cross-merchant sourcing and commercial negotiation。**
