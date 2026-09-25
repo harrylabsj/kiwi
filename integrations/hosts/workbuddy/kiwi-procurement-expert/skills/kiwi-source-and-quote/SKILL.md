@@ -50,6 +50,8 @@ description: Use the Kiwi connector to clarify product requirements, discover su
 | `timeout` / `error` | 说明本次暂时查不到 → 先展示互联网一路，不得写成「没有供应商」 |
 | `not_searched` | 说明该来源未执行（用户限定或能力不可用），不得写成没有匹配 |
 
+当前连接器 pin 的运行时可能不返回 `network_search`（旧版本）。此时按结果数组与 `note` 保守判断：`note` 非空 → 说明覆盖不完整，按「查询未完整完成」表述；空数组且无 `note` → 可以说「本次没有搜到」，但不得推断网络不可用或市场没有供应。
+
 外部候选是只读信息：不得放进 `kiwi_request_quotes` 的 `merchant_ids`，不得当作 Kiwi Network 商家，也不适用 Kiwi 协议与交接状态；需要时提供原始链接或拟好的询价内容。
 
 区分硬要求与偏好：规格、数量和单位、币种、期望交期、交付地区、总预算/目标单价。缺失信息若影响询价才问，不捏造数量、预算、交期和地址。只找供应商时不发询价；用户明确要求向合适候选询价且范围足够明确时可执行，不重复索要同一授权。
