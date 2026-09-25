@@ -46,11 +46,24 @@ hermes -z "只做只读搜索，不要发起询价或调用写工具。只用 mc
 | 外部结果 | 带平台名与原始链接；未读取原页面不标「已核实」；不进入 `kiwi_request_quotes` |
 | 旧运行时 | pin 0.8.0 时无 `network_search`，回复按「空即无匹配」保守表述，不编造状态 |
 
-## 3. WorkBuddy 验收步骤（待执行）
+## 3. WorkBuddy 验收步骤
+
+**本地预览态已装好（2026-09-26）**：本地专家市场的源目录
+`~/.workbuddy/plugins/marketplaces/experts/plugins/kiwi-procurement-expert` 与安装副本
+`~/.workbuddy/plugins/cache/experts/kiwi-procurement-expert/1.1.0` 已更新为 v1.1.0，
+注册表 `~/.workbuddy/plugins/installed_plugins.json` 的 kiwi 条目指向 1.1.0；1.0.0
+目录保留可回滚，注册表备份为同目录 `.bak-20260926`，市场源快照在
+`/tmp/workbuddy-backup-20260926/`。**重启 WorkBuddy 后生效。**
+
+**本轮的运行时限制**：已发布连接器 `kiwi-sourcing` v1.0.0 pin 的是
+`@harrylabsj/kiwi@0.8.0`，因此**本轮不会出现 `network_search`**——按技能里的「旧运行时」
+口径判定（`note` 非空 → 覆盖不完整；空数组且无 `note` → 可说本次没有搜到）。该连接器
+`allowed-tools` 只有 9 个工具，专家文本引用的 4 个关注工具（`kiwi_follow_merchant` 等）
+在当前环境不存在，关注类行为不在本次验收范围。
 
 前置未知项：**专家会话是否能使用宿主互联网检索/网页读取工具**——包内不能声明（`package.mjs` 禁止 `tools` 键），工作台宿主环境已启用 `agent-browser` / `playwright-cli` 插件，但专家是否可见未实测。
 
-1. 把专家包安装/更新到 1.1.0（平台提交后）或本地预览态加载 `integrations/hosts/workbuddy/kiwi-procurement-expert`。
+1. 重启 WorkBuddy，打开「Kiwi 采购询价」专家，确认版本为 1.1.0；若仍显示 1.0.0，用上节的备份与市场源回滚后再走平台提交路径。
 2. 在专家会话依次走以下提示，逐条对照 §12 判据（清单见 fixture）：
 
    - 「帮我找 316 不锈钢保温杯，2 个，杭州」→ 期望：Network 与（若有工具）互联网分区展示
