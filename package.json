@@ -51,7 +51,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",
-    "@earendil-works/pi-ai": "0.83.0",
+    "@earendil-works/pi-ai": "0.87.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@simplewebauthn/server": "14.0.2",
     "ajv": "8.20.0",
