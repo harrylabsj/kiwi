@@ -3,7 +3,8 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startA2aNode } from "../src/a2a/node.js";
+import { a2aCardSigningIdentity, startA2aNode } from "../src/a2a/node.js";
+import { generateA2aSigningIdentity } from "../src/a2a/signing-key.js";
 import { NoneAuthVerifier } from "../src/a2a/server/index.js";
 import { testProfile } from "./helpers.js";
 
@@ -16,6 +17,18 @@ afterEach(() => {
 });
 
 const buyerProfile = () => testProfile({ role: "buyer" });
+
+describe("A2A Card authentication declaration", () => {
+  it.each(["bearer", "none", "loopback", ""])("does not advertise the enrollment key as A2A signature auth in %s mode", (mode) => {
+    const enrollmentIdentity = generateA2aSigningIdentity("https://merchant.example");
+    expect(a2aCardSigningIdentity(mode, enrollmentIdentity)).toBeUndefined();
+  });
+
+  it("advertises the same persistent key only when the actual inbound mode verifies signatures", () => {
+    const enrollmentIdentity = generateA2aSigningIdentity("https://merchant.example");
+    expect(a2aCardSigningIdentity("signature", enrollmentIdentity)).toBe(enrollmentIdentity);
+  });
+});
 
 /** 临时设置/清除 KIWI_A2A_AUTH，结束后恢复原值。 */
 const withAuthEnv = async (value: string | undefined, fn: () => Promise<void>): Promise<void> => {

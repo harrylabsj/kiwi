@@ -52,9 +52,12 @@ import {
 } from "./server/index.js";
 import { HttpMessageSignatureVerifier, InMemoryNonceStore } from "../trust/identity/index.js";
 import {
+  A2A_SIGNING_KEY_FILE,
   loadA2aTrustedKeys,
+  loadA2aSigningIdentityFromFile,
   loadOrCreateA2aSigningIdentity,
   resolveA2aSignatureResolver,
+  toJwsSigningIdentity,
   type A2aSigningIdentity,
 } from "./signing-key.js";
 import { defaultHandler } from "./server/handler.js";
@@ -62,6 +65,7 @@ import { createMerchantHandler } from "./server/merchant-handler.js";
 import { LedgerStore } from "../negotiation/ledger/index.js";
 import { IdempotencyStore } from "../negotiation/idempotency/index.js";
 import { openMerchantStatsStore } from "../merchant/stats-store.js";
+import { createServer } from "node:http";
 import { pickFreePort } from "../supervisor/stack-config.js";
 import {
   registerCatalogAgent,
@@ -70,6 +74,9 @@ import {
 import { HttpMerchantClient } from "../agent/merchant/merchant-client.js";
 import { ProfileCredentialBroker } from "../agent/merchant/credential-broker.js";
 import type { MerchantHandlerOptions, MerchantProductSource } from "./server/merchant-handler.js";
+import { createEnrollmentChallengeResponder, readEnrollmentStore } from "../cloud/binding/enrollment-challenge.js";
+import { startEnrollmentHeartbeat, type EnrollmentHeartbeat } from "../cloud/binding/enrollment-heartbeat.js";
+import { publicKeyThumbprint } from "../trust/binding/thumbprint.js";
 
 export interface A2aNodeOptions {
   profile: AgentProfile;
@@ -424,6 +431,14 @@ export interface A2aNodeCore {
   close: () => void;
 }
 
+/** 只有真实入站HTTP Message Signature模式才把Runtime公钥声明为A2A认证能力。 */
+export function a2aCardSigningIdentity(
+  authMode: string,
+  enrollmentIdentity: A2aSigningIdentity | undefined,
+): A2aSigningIdentity | undefined {
+  return authMode === "signature" ? enrollmentIdentity : undefined;
+}
+
 /**
  * 组装 A2A 核心（Ledger/幂等/merchant handler/Card 配置），**不监听端口**。
  *
@@ -450,6 +465,12 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
   let releaseOwnerLock: (() => void) | undefined;
   if (!isEphemeral) {
     const lockPath = path.join(dir, "owner.lock");
+    const rotationLockPath = path.join(dir, "key-rotation.lock");
+    const assertNoKeyRotation = (): void => {
+      if (existsSync(rotationLockPath)) {
+        throw new Error(`A2A signing key rotation is in progress for ${dir}; retry Runtime start after it completes`);
+      }
+    };
     const stealIfStale = (): void => {
       if (!existsSync(lockPath)) return;
       const pidText = readFileSync(lockPath, "utf-8").trim();
@@ -467,7 +488,9 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
       }
       unlinkSync(lockPath);
     };
+    assertNoKeyRotation();
     stealIfStale();
+    assertNoKeyRotation();
     const fd = openSync(lockPath, "wx");
     writeSync(fd, String(process.pid));
     closeSync(fd);
@@ -479,6 +502,15 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
       }
     };
     process.once("exit", releaseOwnerLock);
+    try {
+      // Close the race where rotation begins immediately after owner.lock creation.
+      assertNoKeyRotation();
+    } catch (err) {
+      process.removeListener("exit", releaseOwnerLock);
+      releaseOwnerLock();
+      releaseOwnerLock = undefined;
+      throw err;
+    }
   }
   const now = monotonicNow();
   const ledger = new LedgerStore({ dir, now });
@@ -516,11 +548,13 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
   const holder = { baseUrl: advertisedBase };
   const server = new A2AServer({
     // A2AServerOptions.card 是 AgentCardConfigProvider：返回 config，server 内部再 buildAgentCard。
-    // name 用干净显示名，不掺 agent_id（形如 agent:token，会被 card secret 扫描器判为 card_has_secret）。
+    // 只使用商家明确配置的公开名称，不从 agent_id 或私密业务资料推导。
     card: () => ({
-      name: role === "merchant" ? "Kiwi A2A Merchant" : "Kiwi A2A Buyer",
-      description: "Kiwi A2A node",
-      providerOrganization: "Kiwi",
+      name: role === "merchant" ? profile.name ?? "Kiwi 商家" : "Kiwi A2A Buyer",
+      description: role === "merchant"
+        ? "采购方 Agent 可发现并向本店发送询价；本服务仅按商家已配置规则报价。"
+        : "Kiwi buyer agent",
+      providerOrganization: role === "merchant" ? profile.name ?? "商家" : "Kiwi",
       version: "1.0.0",
       baseUrl: holder.baseUrl,
       a2aPath,
@@ -586,7 +620,9 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
   const signatureMode = (process.env.KIWI_A2A_AUTH ?? "").trim() === "signature";
   const signingKeyDir =
     options.dataDir ?? path.join(tmpdir(), `kiwi-a2a-signing-${profile.agent_id}`);
-  const signingIdentity: A2aSigningIdentity | undefined = signatureMode
+  // enrollmentSigningIdentity 永远只用于 Runtime 对 Catalog 的绑定/挑战/心跳证明；
+  // A2A signingIdentity 仅在入站 authVerifier 实际采用 signature 模式时用于名片声明。
+  const enrollmentSigningIdentity: A2aSigningIdentity | undefined = signatureMode || role === "merchant"
     ? loadOrCreateA2aSigningIdentity(
         signingKeyDir,
         !isLoopbackAdvertised(advertisedBase)
@@ -594,12 +630,16 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
           : `${role}:${profile.agent_id}`,
       )
     : undefined;
+  const a2aSigningIdentity = a2aCardSigningIdentity(
+    (process.env.KIWI_A2A_AUTH ?? "").trim(),
+    enrollmentSigningIdentity,
+  );
   const authVerifier =
     options.authVerifier ??
     authVerifierFromEnv({
       signingKeyDir,
       signingKeyId:
-        signingIdentity?.keyid ??
+        enrollmentSigningIdentity?.keyid ??
         (isLoopbackAdvertised(advertisedBase)
           ? `${role}:${profile.agent_id}`
           : new URL(advertisedBase).origin),
@@ -610,7 +650,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
   // A2ADirectChannel 的 env 回退读 KIWI_A2A_SIGNING_KEY_FILE；这里把节点密钥
   // 文件指向自身（缺省不覆盖显式配置），使本进程的 outbound 都用同一身份。
   if (
-    signingIdentity !== undefined &&
+    a2aSigningIdentity !== undefined &&
     (process.env.KIWI_A2A_SIGNING_KEY_FILE ?? "").trim() === ""
   ) {
     process.env.KIWI_A2A_SIGNING_KEY_FILE = path.join(signingKeyDir, "a2a-signing-key.json");
@@ -641,21 +681,66 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     advertisedBase,
     ...(options.dataDir !== undefined ? { dataDir: options.dataDir } : {}),
     ...(authVerifier !== undefined ? { authVerifier } : {}),
-    ...(signingIdentity !== undefined ? { signingIdentity } : {}),
+    ...(a2aSigningIdentity !== undefined ? { signingIdentity: a2aSigningIdentity } : {}),
     ...(a2aThrottle !== undefined ? { throttle: a2aThrottle } : {}),
     ...(options.merchantPolicy !== undefined ? { merchantPolicy: options.merchantPolicy } : {}),
     ...(options.promotionPrice !== undefined ? { promotionPrice: options.promotionPrice } : {}),
   });
+  if (enrollmentSigningIdentity !== undefined && options.dataDir !== undefined) {
+    const persisted = loadA2aSigningIdentityFromFile(path.join(signingKeyDir, A2A_SIGNING_KEY_FILE));
+    if (publicKeyThumbprint(persisted.publicKeyPem) !== publicKeyThumbprint(enrollmentSigningIdentity.publicKeyPem)) {
+      core.close();
+      throw new Error("Runtime signing key changed during startup; refusing to serve with a stale in-memory identity. Retry after key rotation completes.");
+    }
+  }
   const { server } = core;
 
-  const httpServer = server.createServer();
+  const nodeHandler = server.handler();
+  const challengeHandler = role === "merchant" && enrollmentSigningIdentity !== undefined && options.dataDir !== undefined
+    ? createEnrollmentChallengeResponder({
+        dataDir: options.dataDir,
+        signingIdentity: toJwsSigningIdentity(enrollmentSigningIdentity),
+      })
+    : undefined;
+  const httpServer = createServer((req, res) => {
+    if (req.url?.split("?", 1)[0] === "/.well-known/kiwi-binding-challenge") {
+      if (challengeHandler === undefined) {
+        res.writeHead(503, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "runtime_identity_unavailable" }));
+      } else challengeHandler(req, res);
+      return;
+    }
+    nodeHandler(req, res);
+  });
+  httpServer.on("clientError", () => {
+    // 畸形请求不得使公开 Runtime 崩溃。
+  });
   await new Promise<void>((resolve) => httpServer.listen(port, "127.0.0.1", () => resolve()));
   const agentCardUrl = `${advertisedBase}/.well-known/agent-card.json`;
 
   // merchant 角色：自动注册进 catalog（buyer 据此发现）。
-  let catalogAgentId: string | undefined;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-  if (role === "merchant" && options.catalog !== undefined) {
+  let enrollmentHeartbeat: EnrollmentHeartbeat | undefined;
+  const enrollmentSessions = role === "merchant" && options.dataDir !== undefined
+    ? readEnrollmentStore(options.dataDir).sessions
+    : [];
+  const pendingEnrollment = enrollmentSessions.find((session) => ["preparing", "authorized", "bound"].includes(session.status))
+    ?? enrollmentSessions.find((session) => session.status === "published");
+  const enrollmentAgentId = pendingEnrollment !== undefined
+    ? (pendingEnrollment as unknown as { catalog_agent_id?: string }).catalog_agent_id
+    : undefined;
+  let catalogAgentId: string | undefined = enrollmentAgentId;
+  if (pendingEnrollment?.status === "published" && enrollmentAgentId !== undefined) {
+    writeRegistrationStatus(options.dataDir, { ok: true, catalog_agent_id: enrollmentAgentId });
+  }
+  if (role === "merchant" && options.dataDir !== undefined && enrollmentSigningIdentity !== undefined) {
+    enrollmentHeartbeat = startEnrollmentHeartbeat({
+      dataDir: options.dataDir,
+      signingIdentity: toJwsSigningIdentity(enrollmentSigningIdentity),
+      onError: (err) => process.stderr.write(`⚠️ [kiwi] ${err.message}\n`),
+    });
+  }
+  if (role === "merchant" && options.catalog !== undefined && pendingEnrollment === undefined) {
     const safeAgentId = profile.agent_id.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
     // 注册域名：显式 KIWI_CATALOG_DOMAIN 优先；有公网广告地址则取其
     // hostname（域名就是对外身份，catalog 据此做 well-known 域控制验证）；
@@ -744,12 +829,13 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     advertisedUrl: advertisedBase,
     agentCardUrl,
     catalogAgentId,
-    ...(signingIdentity !== undefined ? { signingIdentity } : {}),
+    ...(a2aSigningIdentity !== undefined ? { signingIdentity: a2aSigningIdentity } : {}),
     async stop(): Promise<void> {
       if (heartbeatTimer !== undefined) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = undefined;
       }
+      enrollmentHeartbeat?.stop();
       httpServer.closeAllConnections?.();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       // 审查 BUG-03：持久形态不删除状态目录（重启恢复依赖它）；临时形态

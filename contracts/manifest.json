@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "authority": "kiwi/contracts",
-  "bundle_sha256": "bcce9c88bafa4ced2362c17688b86600476d5d6063a44f55b3302e255fc1662d",
+  "bundle_sha256": "a867a10774c7990f585e57ea186262a46a2eeb62e75d81f0e8606940dc30a4bb",
   "contracts": [
     {
       "id": "commerce-intent",
@@ -139,7 +139,7 @@
       "id": "runtime-binding-document",
       "version": "0.1.2",
       "path": "contracts/runtime-binding/0.1.2/document.schema.json",
-      "sha256": "9a7a0cc4e86b0f3b87f20dcb3b4721b28c797136ce5173d636daa76962329925"
+      "sha256": "752860e06c8af8739385efed02e6c09f70ccec4d115b56479c4a4290f0d28697"
     },
     {
       "id": "runtime-binding-request",

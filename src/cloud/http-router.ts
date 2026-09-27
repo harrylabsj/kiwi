@@ -59,6 +59,8 @@ export interface CloudRouterOptions {
   a2aPaths?: readonly string[];
   /** 绑定挑战（M2）；缺省时 /control/challenge 明确返回 501，不空实现。 */
   challengeHandler?: CloudRequestListener;
+  /** Catalog enrollment 挑战（独立 Runtime 与 WorkBuddy 共用；不得要求浏览器会话）。 */
+  enrollmentChallengeHandler?: CloudRequestListener;
   /** 供 /livez 回显的版本号（非敏感）。 */
   version: string;
 }
@@ -114,6 +116,13 @@ export function createCloudRouter(options: CloudRouterOptions): CloudRequestList
       // T001 收口：由实际 Node 进程自证运行时版本。只回非敏感的 process.version，
       // 不依赖平台失败栈、镜像标签或部署记录推断。
       writeJson(res, 200, { ok: true, node: process.version }, NO_STORE);
+      return;
+    }
+
+    if (pathname === "/.well-known/kiwi-binding-challenge") {
+      if (options.enrollmentChallengeHandler === undefined) {
+        writeJson(res, 503, { error: "enrollment_challenge_unavailable" }, NO_STORE);
+      } else options.enrollmentChallengeHandler(req, res);
       return;
     }
     if (pathname === "/readyz") {

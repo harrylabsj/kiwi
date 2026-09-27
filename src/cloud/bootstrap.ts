@@ -36,8 +36,9 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { createA2aNodeCore, createA2aAuthVerifier } from "../a2a/node.js";
-import { loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/signing-key.js";
+import { a2aCardSigningIdentity, createA2aNodeCore, createA2aAuthVerifier } from "../a2a/node.js";
+import { A2A_SIGNING_KEY_FILE, loadA2aSigningIdentityFromFile, loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/signing-key.js";
+import { publicKeyThumbprint } from "../trust/binding/thumbprint.js";
 import { loadProfile, ProfileError } from "../config/profile.js";
 import { createMerchantManagementApiHandler } from "../http/merchant-management/api.js";
 import { createMerchantFeedApiHandler } from "../http/merchant-feed-api.js";
@@ -79,6 +80,14 @@ import { createServiceControlExecutors } from "../merchant/service-control-execu
 import { calculateWorkbenchQuote } from "../merchant/quote-calculator.js";
 import { WORKBENCH_CURRENCY_TABLE_VERSION } from "../merchant/application/money.js";
 import { OnboardingStore } from "./onboarding/store.js";
+import { CatalogClient } from "./catalog-client.js";
+import { createEnrollmentChallengeResponder } from "./binding/enrollment-challenge.js";
+import { startEnrollmentHeartbeat, type EnrollmentHeartbeat } from "./binding/enrollment-heartbeat.js";
+import {
+  catalogPlatformEvidenceAdapter,
+  reconcileBinding,
+  type CatalogPipelineDeps,
+} from "./onboarding/catalog-pipeline.js";
 import {
   ManagementError,
   type MerchantProductPage,
@@ -360,6 +369,7 @@ export async function bootstrapCloudRuntime(
   // 公钥随 Agent Card 公开（非秘密），私钥留在状态目录、不出进程。
   const signingKeyDir = config.dataDir;
   const signingIdentity = loadOrCreateA2aSigningIdentity(signingKeyDir, config.publicOrigin);
+  const a2aSigningIdentity = a2aCardSigningIdentity(config.a2aAuth.mode, signingIdentity);
   const bearerToken =
     config.a2aAuth.mode === "bearer"
       ? (options.env ?? process.env)[config.a2aAuth.tokenEnv]
@@ -397,7 +407,7 @@ export async function bootstrapCloudRuntime(
     a2aPath: CLOUD_A2A_PATH,
     dataDir: config.dataDir,
     authVerifier,
-    ...(signingIdentity !== undefined ? { signingIdentity } : {}),
+    ...(a2aSigningIdentity !== undefined ? { signingIdentity: a2aSigningIdentity } : {}),
     ...(fileProductSource !== undefined ? { productSource: fileProductSource.source } : {}),
     ...(serviceAvailability !== undefined ? { serviceAvailability } : {}),
     promotionPrice: ({ sku, quantity }) => {
@@ -417,6 +427,11 @@ export async function bootstrapCloudRuntime(
           };
     },
   });
+  const persistedIdentity = loadA2aSigningIdentityFromFile(path.join(signingKeyDir, A2A_SIGNING_KEY_FILE));
+  if (publicKeyThumbprint(persistedIdentity.publicKeyPem) !== publicKeyThumbprint(signingIdentity.publicKeyPem)) {
+    core.close();
+    throw new CloudStartupError("SIGNING_KEY_CHANGED_DURING_STARTUP", "Runtime key rotated during startup; retry after the rotation completes.");
+  }
 
   // 4) 就绪检查（无敏感值；stale 商品/未配置探针 SKU 都算未就绪，不冒充可用）。
   const probeSku = config.readinessSku;
@@ -476,9 +491,104 @@ export async function bootstrapCloudRuntime(
   let buyerHandler: CloudRequestListener | undefined;
   let reconciliationTimer: ReturnType<typeof setInterval> | undefined;
   let clockTimer: ReturnType<typeof setInterval> | undefined;
+  let bindingReconcileTimer: ReturnType<typeof setInterval> | undefined;
+  let enrollmentHeartbeat: EnrollmentHeartbeat | undefined;
   if (adminOptions !== undefined) {
     managementDb = new DatabaseSync(path.join(config.dataDir, "state.sqlite"));
     serviceState.attachPersistence(managementDb, profile.owner_id);
+
+    // 开通向导通道（M4 §5.4 + P3 §4.6）：store 与 /admin 同库；配了 catalog_url 时
+    // 接上 Catalog 串联（绑定/发布的权威证据适配器 + DEPLOYED_UNBOUND 后台对账）。
+    const onboardingStore = new OnboardingStore(managementDb);
+    type OnboardingChannel = NonNullable<
+      Parameters<typeof createMerchantManagementApiHandler>[0]["onboarding"]
+    >;
+    let onboardingChannel: OnboardingChannel = { store: onboardingStore, enrollmentStateDir: config.dataDir };
+    if (config.catalogUrl !== undefined) {
+      const catalogPipeline: CatalogPipelineDeps = {
+        store: onboardingStore,
+        dataDir: config.dataDir,
+        client: new CatalogClient({ baseUrl: config.catalogUrl }),
+        identity: {
+          signingIdentity: toJwsSigningIdentity(signingIdentity),
+          keyId: signingIdentity?.keyid ?? config.publicOrigin,
+        },
+        // runtime_origin 只取自 KIWI_CLOUD_PUBLIC_ORIGIN（loadCloudConfig 已强校验）。
+        runtimeOrigin: config.publicOrigin,
+        // 单代次实例（与 M2 挑战应答的 currentGeneration 同值）；代次切换属 BD-05。
+        generation: 1,
+        serviceEpoch: 1,
+        // 名片与 A2A server 自发的 well-known 卡同源（name/securityScheme 对齐 node.ts）。
+        card: {
+          name: profile.name ?? "Kiwi 商家",
+          description: "采购方 Agent 可发现并向本店发送询价；本服务仅按商家已配置规则报价。",
+          providerOrganization: profile.name ?? "商家",
+          version: "1.0.0",
+          ...(a2aSigningIdentity !== undefined
+            ? {
+                securityScheme: {
+                  name: "kiwi-signature",
+                  type: "kiwi-http-message-signature",
+                  keyid: a2aSigningIdentity.keyid,
+                  publicKeyPem: a2aSigningIdentity.publicKeyPem,
+                  algorithm: a2aSigningIdentity.algorithm,
+                },
+              }
+            : {}),
+        },
+        serviceCheck: async () => {
+          const report = await readiness();
+          const failed = Object.entries(report.checks)
+            .filter(([, result]) => !result.ok)
+            .map(([name]) => name);
+          return { ok: report.ready, detail: failed.join(", ") || "not ready" };
+        },
+        // 后台对账的单次等待窗口：短超时、多次 tick，不长时间占住事件循环。
+        awaitOptions: { timeoutMs: 10_000, pollIntervalMs: 2_000 },
+      };
+      onboardingChannel = {
+        store: onboardingStore,
+        enrollmentStateDir: config.dataDir,
+        platformEvidence: catalogPlatformEvidenceAdapter(catalogPipeline),
+      };
+      // Catalog device enrollment：授权页确认后，绑定、就绪检查和名片发布由后台
+      // 按持久状态续办；商家不需要再次批准同一份公开信息。
+      let reconcileRunning = false;
+      let awaitingHintLogged = false;
+      const bindingReconcileTick = (): void => {
+        if (reconcileRunning) return;
+        const active = onboardingStore.activeRecord(profile.owner_id);
+        if (active === undefined || !["DEPLOYED_UNBOUND", "BOUND", "VERIFYING", "READY_TO_PUBLISH"].includes(active.status)) return;
+        reconcileRunning = true;
+        void reconcileBinding(active, catalogPipeline)
+          .then((outcome) => {
+            if (outcome.kind === "awaiting_portal_confirmation") {
+              if (!awaitingHintLogged) {
+                log(`[kiwi-cloud] ${outcome.hint}\n`);
+                awaitingHintLogged = true;
+              }
+            } else {
+              awaitingHintLogged = false;
+              log(
+                `[kiwi-cloud] 绑定已在门户确认（binding_id=${outcome.confirmed.bindingId}），` +
+                  `开通记录推进到 ${outcome.record.status}\n`,
+              );
+            }
+          })
+          .catch((err: unknown) => {
+            awaitingHintLogged = false;
+            log(
+              `[kiwi-cloud] 绑定对账失败：${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          })
+          .finally(() => {
+            reconcileRunning = false;
+          });
+      };
+      bindingReconcileTimer = setInterval(bindingReconcileTick, 30_000);
+      bindingReconcileTimer.unref();
+      bindingReconcileTick();
+    }
     const workbenchConfirmations = new WorkbenchConfirmationStore({ db: managementDb });
     const reconciliationStore = new WorkbenchReconciliationStore({ db: managementDb });
     const clockSafety = new ClockSafetyStore({ db: managementDb, alerts: reconciliationStore });
@@ -730,10 +840,13 @@ export async function bootstrapCloudRuntime(
       }),
       operations: new MerchantManagementOperationStore({ db: managementDb }),
       // M4 §5.4：开通向导与 /admin/onboarding 读**同一份** OnboardingStore（同一个
-      // state.sqlite），不复制状态机。`platformEvidence` 适配器**故意不配**——平台侧
-      // 取回执的能力尚未落地，因此需要权威证据的步骤会明确 503（不推进），
-      // 绝不用请求体自报的证据顶上（T029）。
-      onboarding: { store: new OnboardingStore(managementDb) },
+      // state.sqlite），不复制状态机。`platformEvidence` 适配器分两种情况：
+      //   - 配了 catalog_url（KIWI_CATALOG_URL）：由 Catalog 串联（§4.6/P3）接管
+      //     「服务检查」与「确认公开信息」两步的权威证据（S3 绑定确认 + S4 发布激活），
+      //     其余步骤（平台授权/商品确认）维持未配置 → 503（平台回执能力未落地，
+      //       绝不用请求体自报的证据顶上，T029）；
+      //   - 未配 catalog_url：适配器整体不配置，需要权威证据的步骤明确 503。
+      onboarding: onboardingChannel,
       workbenchConfirmations,
       workbenchReconciliation: reconciliationStore,
       workbenchEvents: eventProjectionStore,
@@ -943,6 +1056,15 @@ export async function bootstrapCloudRuntime(
     res.end(renderMerchantManagementPage());
   };
 
+  if (signingIdentity !== undefined) {
+    enrollmentHeartbeat = startEnrollmentHeartbeat({
+      dataDir: config.dataDir,
+      signingIdentity: toJwsSigningIdentity(signingIdentity),
+      isReady: async () => (await readiness()).ready,
+      onError: (err) => log(`[kiwi-cloud] ${err.message}\n`),
+    });
+  }
+
   // 5) 单端口路由：A2A 面 / 商家面 / 管理面 / 探针，各自鉴权边界不变。
   const merchantHandler = createMerchantHttpHandler(assembly.serverOptions);
   const router = createCloudRouter({
@@ -962,6 +1084,10 @@ export async function bootstrapCloudRuntime(
       expectedAgentId: profile.agent_id,
       currentGeneration: 1,
       ...(options.challengeStore !== undefined ? { store: options.challengeStore } : {}),
+    }),
+    enrollmentChallengeHandler: createEnrollmentChallengeResponder({
+      dataDir: config.dataDir,
+      signingIdentity: toJwsSigningIdentity(signingIdentity),
     }),
     version: PRODUCT_VERSION,
   });
@@ -991,6 +1117,8 @@ export async function bootstrapCloudRuntime(
   } catch (err) {
     if (reconciliationTimer !== undefined) clearInterval(reconciliationTimer);
     if (clockTimer !== undefined) clearInterval(clockTimer);
+    if (bindingReconcileTimer !== undefined) clearInterval(bindingReconcileTimer);
+    enrollmentHeartbeat?.stop();
     managementDb?.close();
     core.close();
     await assembly.close().catch(() => undefined);
@@ -1028,6 +1156,8 @@ export async function bootstrapCloudRuntime(
       await merchantHandler.close().catch(() => undefined);
       if (reconciliationTimer !== undefined) clearInterval(reconciliationTimer);
       if (clockTimer !== undefined) clearInterval(clockTimer);
+      if (bindingReconcileTimer !== undefined) clearInterval(bindingReconcileTimer);
+      enrollmentHeartbeat?.stop();
       core.close();
       await assembly.close().catch(() => undefined);
       managementDb?.close();

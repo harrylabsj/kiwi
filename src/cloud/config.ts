@@ -69,6 +69,12 @@ export interface CloudRuntimeConfig {
   a2aAuth: CloudA2aAuth;
   /** readyz 单检查超时（毫秒）：探针不得挂起。 */
   readinessTimeoutMs: number;
+  /**
+   * Catalog 控制面根 URL（设计 §4.6 的写路径对端）。**可选**：未配置时
+   * 开通向导的绑定/发布串联不接线（需要权威证据的步骤维持 503），
+   * 绝不用假地址假装能发布。
+   */
+  catalogUrl?: string;
 }
 
 /** 制品随包发布的目录：权威状态目录不得落在其中（会被 deploy 覆盖）。 */
@@ -218,6 +224,7 @@ export interface CloudConfigFile {
   profile?: string;
   products_file?: string;
   readiness_sku?: string;
+  catalog_url?: string;
   bind_host?: string;
   readyz_timeout_ms?: number;
   a2a_auth?: { mode?: string } | string;
@@ -313,6 +320,9 @@ export function loadCloudConfig(
 
   const productsFile = readEnv(env, "KIWI_CLOUD_PRODUCTS_FILE") ?? fromFile(file.products_file);
   const readinessSku = readEnv(env, "KIWI_CLOUD_READINESS_SKU") ?? fromFile(file.readiness_sku);
+  const catalogUrl = parseCatalogUrl(
+    readEnv(env, "KIWI_CATALOG_URL") ?? fromFile(file.catalog_url),
+  );
 
   return {
     port,
@@ -324,9 +334,32 @@ export function loadCloudConfig(
     configFile,
     ...(productsFile !== undefined ? { productsFile: path.resolve(productsFile) } : {}),
     ...(readinessSku !== undefined ? { readinessSku } : {}),
+    ...(catalogUrl !== undefined ? { catalogUrl } : {}),
     a2aAuth,
     readinessTimeoutMs: Math.floor(readinessTimeoutMs),
   };
+}
+
+/** Catalog 控制面根 URL：可缺省；给出时必须 https（loopback 联调允许 http）、不带查询。 */
+function parseCatalogUrl(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new CloudConfigError("CATALOG_URL_INVALID", `catalog_url 不是合法 URL：${raw}`);
+  }
+  const loopback = isLoopbackOrigin(url);
+  if (url.protocol !== "https:" && !(loopback && url.protocol === "http:")) {
+    throw new CloudConfigError(
+      "CATALOG_URL_INSECURE",
+      `catalog_url 必须是 https（仅 loopback 本地联调允许 http）：${raw}`,
+    );
+  }
+  if (url.search !== "" || url.hash !== "") {
+    throw new CloudConfigError("CATALOG_URL_INVALID", `catalog_url 不得带查询/片段：${raw}`);
+  }
+  return url.toString().replace(/\/+$/, "");
 }
 
 /** 供启动日志使用的脱敏摘要（不含令牌、密钥与账号标识）。 */

@@ -62,6 +62,7 @@ import {
 } from "./merchant-tools.js";
 import type { buildMerchantPresentationResources } from "./merchant-resources.js";
 import { OnboardingStore } from "../cloud/onboarding/store.js";
+import { readEnrollmentStore } from "../cloud/binding/enrollment-challenge.js";
 import { deriveLocalFallback, degradedRecoveryAsk } from "../cloud/onboarding/local-fallback.js";
 import { planWizard } from "../cloud/onboarding/steps.js";
 import type { ReadinessReport } from "../cloud/readiness.js";
@@ -149,6 +150,8 @@ export interface MerchantMcpServerOptions {
      */
     onboarding?: {
       store: OnboardingStore;
+      /** 安全配对信息目录；不得向 WorkBuddy 暴露 device_code/grant。 */
+      enrollmentStateDir?: string;
       merchantId: string;
       /** 控制面（Catalog）是否可达；不可达时视图要求先对账。 */
       controlPlaneReachable: boolean;
@@ -697,6 +700,11 @@ export function createMerchantHttpHandler(
           }
           const record = onboarding.store.activeRecord(onboarding.merchantId) ?? null;
           const plan = record === null ? null : planWizard(record);
+          const enrollment = record === null || onboarding.enrollmentStateDir === undefined
+            ? undefined
+            : readEnrollmentStore(onboarding.enrollmentStateDir).sessions
+                .map((session) => session as typeof session & { owner_ref?: string; user_code?: string; verification_uri?: string })
+                .find((session) => session.owner_ref === record.recordId);
           const readiness = await onboarding.readiness();
           const fallback = deriveLocalFallback({
             publicationState:
@@ -714,6 +722,15 @@ export function createMerchantHttpHandler(
               ok: true,
               record,
               plan,
+              ...(enrollment !== undefined ? {
+                connect: {
+                  enrollment_id: enrollment.enrollment_id,
+                  status: enrollment.status,
+                  user_code: enrollment.user_code,
+                  verification_uri: enrollment.verification_uri,
+                  expires_at: enrollment.expires_at,
+                },
+              } : {}),
               fallback,
               recovery_ask: degradedRecoveryAsk({
                 publicationState: record?.status === "PUBLISHED" ? "ACTIVE" : "NONE",

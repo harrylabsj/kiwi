@@ -109,6 +109,23 @@ describe("M3 云端契约 schema", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("首绑后尚无活动名片可用 UNPUBLISHED；未知治理态仍拒绝", () => {
+    expect(
+      validateRuntimeBindingDocument({
+        ...DOCUMENT,
+        governance: { publication_state: "UNPUBLISHED" },
+        card_revision: null,
+        card_etag: null,
+      }),
+    ).toEqual([]);
+    expect(
+      validateRuntimeBindingDocument({
+        ...DOCUMENT,
+        governance: { publication_state: "LIVE" },
+      }).length,
+    ).toBeGreaterThan(0);
+  });
+
   it("创建/轮换请求与名片发布请求的形状合规", () => {
     expect(validateCloudContract("runtime-binding-request", BINDING_REQUEST)).toEqual([]);
     expect(validateCloudContract("card-publication-request", PUBLICATION_REQUEST)).toEqual([]);

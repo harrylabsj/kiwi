@@ -134,10 +134,12 @@
       ],
       "properties": {
         "publication_state": {
+          "description": "ACTIVE 可接待新询价；PAUSED 保留公开信息但暂停营业；WITHDRAWN 已撤回；UNPUBLISHED 表示绑定已建立但尚无活动名片，不能作为已发布或可询价证明。",
           "enum": [
             "ACTIVE",
             "PAUSED",
-            "WITHDRAWN"
+            "WITHDRAWN",
+            "UNPUBLISHED"
           ]
         }
       }

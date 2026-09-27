@@ -71,7 +71,8 @@ export class BindingRejectionError extends CatalogSourceError {
     | VerifyBindingRefusalCode
     | "ISSUER_MISMATCH"
     | "RESPONSE_INVALID"
-    | "UNSAFE_TARGET";
+    | "UNSAFE_TARGET"
+    | "NOT_PUBLISHED";
 
   constructor(refusalCode: BindingRejectionError["refusalCode"], message: string) {
     super("binding_rejected", message);
@@ -482,9 +483,15 @@ export class CloudCardSource {
       );
     }
 
-    // 6) 治理状态：撤回的名片即便声明仍在有效期内也不得使用。
+    // 6) 治理状态：只有已发布/暂停的公开名片可解析；UNPUBLISHED 与未知状态 fail closed。
     if (binding.governance.publication_state === "WITHDRAWN") {
       throw new BindingRejectionError("REVOKED", "名片已撤回（publication_state=WITHDRAWN）");
+    }
+    if (binding.governance.publication_state === "UNPUBLISHED") {
+      throw new BindingRejectionError("NOT_PUBLISHED", "名片尚未发布（publication_state=UNPUBLISHED）");
+    }
+    if (binding.governance.publication_state !== "ACTIVE" && binding.governance.publication_state !== "PAUSED") {
+      throw new BindingRejectionError("RESPONSE_INVALID", `Catalog 治理状态未知，拒绝解析：${binding.governance.publication_state}`);
     }
 
     return {

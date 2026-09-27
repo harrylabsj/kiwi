@@ -101,6 +101,8 @@ Usage:
   kiwi merchant start --profile <merchant.yaml> [--catalog <url>] [--port N] [--no-chat]
                                           Merchant A2A server + 注册 Kiwi Network
                                           （agent serve 别名）
+  kiwi merchant connect [--profile <merchant.yaml>] [--catalog <url>] [--data-dir <dir>]
+                                          登录授权当前 Runtime，自动绑定并发布名片
   kiwi merchant mcp serve [--profile <merchant.yaml>] [--host <host>] [--port N] [--data-dir <dir>]
                                           Merchant Workbench 远程 MCP server（WorkBuddy
                                           Buddy 应用；缺省 0.0.0.0:9100/mcp；Bearer token
@@ -110,9 +112,12 @@ Usage:
   kiwi merchant mcp pair [--profile <merchant.yaml>] [--data-dir <dir>]
                                           生成一次性配对码（10 分钟、单次），用于把实例
                                           绑定到商家连接器网关（不必粘贴长期令牌）
-  kiwi merchant runtime <start|stop|status|health> [--profile <merchant.yaml>] [--data-dir <dir>]
+  kiwi merchant runtime <start|stop|status|health|rotate-key> [--profile <merchant.yaml>] [--data-dir <dir>]
                                           Merchant 实例运行时管理：A2A + MCP 受管子进程，
                                           异常退出自动重启，分项健康检查（V2 阶段一）
+  kiwi merchant runtime rotate-key [--profile <merchant.yaml>] [--data-dir <dir>]
+                                          Runtime疑似泄漏/需要恢复时，在先停止服务后轮换
+                                          本地密钥；旧绑定只在Catalog确认新绑定后撤销
   kiwi merchant gateway serve [--public-url <https url>] [--catalog-url <url>]
                               [--source <name>] [--host <host>] [--port N] [--data-dir <dir>]
                               [--tls-cert <file> --tls-key <file> | --trusted-proxy] [--check]
@@ -121,14 +126,20 @@ Usage:
                                           非 loopback 监听须直接 TLS 或显式 --trusted-proxy；
                                           缺凭据加密密钥时关闭依赖加密存储的功能
   kiwi merchant init [--merchant-id <shopping-cli merchant_id>] [--name <商家名称>]
+                     [--merchant-token <商家令牌>]
                                           [D1] 生成 merchant profile（只填 merchant_id
                                           即可，其余自动补全；TTY 交互提示；写默认
                                           profile，之后裸 kiwi 即按此运行）
+                                          （--merchant-token：非交互令牌注入入口，
+                                          供 WorkBuddy 云端应用等无终端环境——过渡
+                                          方案（设计 §4.8 路线 A）；令牌会留在
+                                          shell 历史，交互终端请改用 TTY 提示输入）
   kiwi merchant publish [--file <products.csv>]
                                           [D2] 注册 Agent + 发布 Listing 编排
                                           （--file 则先导入商品再发布；db 缺省
-                                          ~/.local/share/shopping-cli/...；token
-                                          从 credentials/环境变量取）
+                                          ~/.local/share/shopping-cli/...；已连接的
+                                          Runtime 用绑定签名，但仍需管理员批准Listings；
+                                          direct兼容模式继续从credentials/环境变量取token）
   kiwi merchant setup-public [--domain <域名>] [--port N] [--check]
                                           [D3] 公网 A2A 暴露引导：检测公网 IP、检查
                                           DNS、生成 Caddyfile、输出启动/验证命令

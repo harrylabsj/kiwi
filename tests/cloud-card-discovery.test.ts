@@ -314,6 +314,28 @@ describe("云端名片解析（公开读 + 声明验签）", () => {
     expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("REVOKED");
   });
 
+  it("治理状态 PAUSED 保留现有解析行为", async () => {
+    const { source: cloud } = source({
+      bindingBody: bindingDocument({ governance: { publication_state: "PAUSED" } }),
+    });
+    const resolved = await cloud.resolveCloudAgent(AGENT_ID);
+    expect(resolved.publicationState).toBe("PAUSED");
+  });
+
+  it("治理状态 UNPUBLISHED → fail closed（首发前绑定不能成为Buyer候选）", async () => {
+    const { source: cloud } = source({
+      bindingBody: bindingDocument({ governance: { publication_state: "UNPUBLISHED" } }),
+    });
+    expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("NOT_PUBLISHED");
+  });
+
+  it("治理状态未知 → RESPONSE_INVALID", async () => {
+    const { source: cloud } = source({
+      bindingBody: bindingDocument({ governance: { publication_state: "PENDING" } }),
+    });
+    expect(await refusalOf(() => cloud.resolveCloudAgent(AGENT_ID))).toBe("RESPONSE_INVALID");
+  });
+
   it("名片声明没有 JSONRPC 接口 → 契约违规（不猜端点）", async () => {
     const { source: cloud } = source({
       cardBody: card({

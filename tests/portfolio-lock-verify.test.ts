@@ -36,7 +36,7 @@ const SCRIPT = fileURLToPath(
 // commit（CLI 级合法用例用它，因为 CLI 从自身位置读取真实 kiwi 根）。
 // 与 contracts/manifest.json 的 bundle_sha256 保持一致（新增 Workbench Problem/Money 契约后更新）；
 // source_commit 指向承载该 bundle 的提交（af21fa2 引入本 bundle）。
-const REAL_BUNDLE_SHA = "bcce9c88bafa4ced2362c17688b86600476d5d6063a44f55b3302e255fc1662d";
+const REAL_BUNDLE_SHA = "a867a10774c7990f585e57ea186262a46a2eeb62e75d81f0e8606940dc30a4bb";
 const REAL_SOURCE_COMMIT = "af21fa275f8d14f58a2922c7d977b1d94a8a01ac";
 
 const tempDirs: string[] = [];

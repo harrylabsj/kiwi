@@ -474,7 +474,10 @@ export async function assembleMerchantRuntime(
             // 不在前端推断）。控制面可达性由本进程已知的配置决定，缺省按不可达
             // ——"不知道"不等于"正常"。
             onboarding: {
-              store: new OnboardingStore(oauthDb),
+              // M4：与bootstrap的Cloud onboarding共用 merchant state.sqlite，避免
+              // WorkBuddy /admin/onboarding显示一条空的OAuth库记录。
+              store: new OnboardingStore(db),
+              enrollmentStateDir: options.dataDir,
               merchantId: profile.owner_id,
               controlPlaneReachable: options.catalogReachable === true,
               readiness: async () => ({ ready: true, checks: {} }),

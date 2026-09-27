@@ -102,7 +102,7 @@ export const WIZARD_STEPS: readonly WizardStepDefinition[] = [
   {
     id: "service-check",
     title: "服务检查",
-    ask: "系统自动检查接待能力（存储、商品、直连、隔离）。有问题会告诉你哪里不对。",
+    ask: "打开 Catalog 授权页核对店铺公开信息和配对码，并点击「连接此服务并发布」。系统随后自动绑定、检查接待能力并发布名片；有问题会告诉你原因。",
     // `DEPLOYED_UNBOUND → BOUND → VERIFYING` 是**后台对账**：授权/持钥证明与检查
     // 本身由系统完成，不是商家点出来的。商家看到的"服务检查"这一步，是检查**跑完
     // 且通过**（VERIFYING → READY_TO_PUBLISH）——所以这一步的准入状态是 VERIFYING。
@@ -115,7 +115,7 @@ export const WIZARD_STEPS: readonly WizardStepDefinition[] = [
   {
     id: "public-profile",
     title: "确认公开信息",
-    ask: "确认对外公开的名片内容，然后发布。发布后买家才能在目录里找到你。",
+    ask: "名片已按你在 Catalog 授权页确认的内容自动发布；无需再次确认。",
     requiresStatus: ["READY_TO_PUBLISH"],
     advancesTo: "PUBLISHED",
     requiresAuthoritativeEvidence: true,

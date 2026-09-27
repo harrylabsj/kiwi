@@ -20,19 +20,16 @@
  *
  * 编排层在 kiwi 仓，调两仓能力（组件独立发布，§12）：
  *
- *   1. 确认/注册 owner Agent  → kiwi-catalog POST /v1/agent-catalog/agents/register
- *      （owner_token = HMAC-SHA256("kiwi-catalog-owner:" + merchant_id)，
- *       与 kiwi-catalog api/auth.py 逐字节一致；注册幂等 upsert）
- *   2. 读投影并发布 listings  → spawn `shopping listings projections list`（只读）
- *      取 public-only 投影 → 逐条直连 kiwi-catalog POST /v1/listings/publish
- *      （v3.0 起 publish 面归独立 kiwi-catalog 服务，行级幂等在服务端；
- *       owner token 直传优先，否则按 register 同公式 HMAC 派生）
- *      随后 reconcile：投影中消失的商品 POST /v1/listings/{id}/withdraw
- *   3. 汇总分步状态           → fail-closed：agent 注册失败则短路
- *      （listings 依赖 owner agent 存在），listings 失败报错不假装全成功。
+ *   1. 确认 Agent             → 已连接 Runtime 直接复用已验证 enrollment；
+ *      direct 兼容模式仍走 owner-token lookup/register。
+ *   2. 读取 public-only 投影  → spawn `shopping listings projections list`（只读），
+ *      逐条发布。已连接 Runtime 使用绑定私钥签名并携带 Idempotency-Key；Catalog
+ *      仍逐次检查 admin-approved owner-token entitlement。direct 兼容方式使用旧 owner token。
+ *   3. 自查并 reconcile       → 按相同身份模式签名查询与撤回已消失的商品；
+ *      任一写入/自查失败均如实报告，绝不降级为另一种身份。
  */
 
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { isLoopbackHost } from "./a2a/client/url-policy.js";
 import type { AgentProfile } from "./config/profile.js";
@@ -40,6 +37,13 @@ import { registerCatalogAgent } from "./discovery/catalog-source/register.js";
 import { isRedirectResponse } from "./net/safe-http.js";
 import { trimTrailingSlashes } from "./net/url.js";
 import { SHOPPING_CLI_COMPAT, compatRangeText, versionInRange } from "./product-compat.js";
+import { CatalogClient } from "./cloud/catalog-client.js";
+import {
+  canonicalizeCatalogListing,
+  ListingEnrollmentError,
+  resolveSignedListingContext,
+  signedListingDigest,
+} from "./cloud/listing-publisher.js";
 
 export interface MerchantPublishOptions {
   /** merchant profile（role: merchant；agent_id = catalog merchant_id）。 */
@@ -52,6 +56,10 @@ export interface MerchantPublishOptions {
   ownerToken?: string;
   /** shopping-cli SQLite 数据库路径（listings publish-listings --db）。 */
   shoppingCliDb: string;
+  /** Runtime 状态目录（merchant connect 写入的 enrollment/key 状态）。 */
+  dataDir?: string;
+  /** 当前公开 Runtime origin（用于拒绝地址迁移后的旧绑定）。 */
+  runtimeOrigin?: string;
   /** shopping-cli 可执行名/路径（缺省 "shopping"）。 */
   shoppingCliPath?: string;
   /** shopping-cli 侧 merchant_id（投影过滤；缺省 = profile.agent_id）。
@@ -78,6 +86,8 @@ export interface StepAgent {
 
 export interface StepListings {
   ok: boolean;
+  authorization_mode?: "owner_token" | "runtime_binding";
+  reconcile_complete?: boolean;
   skipped_reason?: string;
   published?: number;
   skipped?: number;
@@ -244,14 +254,55 @@ export async function merchantPublish(
     ...(versionText !== "" ? { version: versionText } : {}),
   };
 
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const baseUrl = trimTrailingSlashes(options.catalogBaseUrl);
+  const catalogClient = new CatalogClient({ baseUrl, fetchImpl });
+  let signedEnrollment: Awaited<ReturnType<typeof resolveSignedListingContext>> = null;
+  if (options.dataDir !== undefined) {
+    try {
+      signedEnrollment = await resolveSignedListingContext({
+        dataDir: options.dataDir,
+        profile,
+        catalogBaseUrl: baseUrl,
+        ...(options.runtimeOrigin !== undefined ? { runtimeOrigin: options.runtimeOrigin } : {}),
+        client: catalogClient,
+      });
+    } catch (err) {
+      const detail = err instanceof ListingEnrollmentError ? `${err.code}: ${err.message}` : err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        steps: {
+          shopping_cli_compat: compatStep,
+          agent: { ok: false, error: detail },
+          listings: { ok: false, authorization_mode: "runtime_binding", skipped_reason: detail },
+        },
+      };
+    }
+  }
+  const ownerCredentialAvailable =
+    (options.ownerToken !== undefined && options.ownerToken !== "") ||
+    (options.ownerTokenSecret !== undefined && options.ownerTokenSecret !== "");
+  if (signedEnrollment === null && !ownerCredentialAvailable) {
+    const detail = "listing publication requires an approved Runtime enrollment or KIWI_MERCHANT_TOKEN; no owner token or HMAC secret was sent";
+    return {
+      ok: false,
+      steps: {
+        shopping_cli_compat: compatStep,
+        agent: { ok: false, error: detail },
+        listings: { ok: false, authorization_mode: "owner_token", skipped_reason: detail },
+      },
+    };
+  }
+
   // ── Step 1: 确认/注册 owner Agent（幂等：先查复用，没有再注册）──────────
   // 重复 publish 必须是安全操作（rev1.1 §4.5）：kiwi-catalog 一商家一 agent
   // 约束下二次 register 会 409——先按 merchant 查询已有 agent，有则复用。
-  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
-  const baseUrl = trimTrailingSlashes(options.catalogBaseUrl);
-  let catalogAgentId: string | undefined;
+  let catalogAgentId: string | undefined = signedEnrollment?.agentId;
   let agentError: string | undefined;
   try {
+    if (signedEnrollment !== null) {
+      // Enrollment 已在 Catalog 认证并绑定；signed mode 不读 owner-token lookup/register APIs。
+    } else {
     const lookupUrl = `${baseUrl}/v1/agent-catalog/merchants/${encodeURIComponent(catalogMerchantId)}/agents`;
     const lookup = await catalogFetch(fetchImpl, lookupUrl, { signal: AbortSignal.timeout(15_000) });
     if (lookup.ok) {
@@ -274,6 +325,7 @@ export async function merchantPublish(
         timeoutMs: 15_000,
       });
       catalogAgentId = reg.catalogAgentId;
+    }
     }
   } catch (err) {
     agentError = err instanceof Error ? err.message : String(err);
@@ -360,8 +412,9 @@ export async function merchantPublish(
   // 逐条直连 catalog publish（投影是 canonical payload 子集；owner 身份由
   // 发布方补齐：merchant_id / owner_agent_id / owner_token / handoff 默认）。
   // owner token：直传优先，否则 HMAC 派生（与 register 一致）。
-  const effectiveOwnerToken =
-    options.ownerToken !== undefined && options.ownerToken !== ""
+  const effectiveOwnerToken = signedEnrollment !== null
+    ? ""
+    : options.ownerToken !== undefined && options.ownerToken !== ""
       ? options.ownerToken
       : options.ownerTokenSecret !== undefined
         ? createHmac("sha256", options.ownerTokenSecret)
@@ -396,136 +449,147 @@ export async function merchantPublish(
     // 字段均可选，省略仍通过 schema 校验）。
     const { handoff_destination: rawHandoff, ...projectionWire } = wireFields;
     const handoffRef = typeof rawHandoff === "string" ? rawHandoff.trim() : "";
-    const body: Record<string, unknown> = {
-      ...projectionWire,
-      merchant_id: catalogMerchantId,
-      owner_agent_id: catalogAgentId,
-      owner_token: effectiveOwnerToken,
-    };
+    const listingContent: Record<string, unknown> = { ...projectionWire };
     if (/^https?:\/\/\S+$/.test(handoffRef)) {
-      body.handoff_destination_types = ["external_checkout_url"];
-      body.handoff_destination_ref = handoffRef;
+      listingContent.handoff_destination_types = ["external_checkout_url"];
+      listingContent.handoff_destination_ref = handoffRef;
     }
-    if (typeof body.owner_token !== "string" || body.owner_token === "") {
-      reportErrors.push(`${ref}: no owner token (KIWI_MERCHANT_TOKEN 或 secret 派生)`);
-      continue;
-    }
-    try {
-      const res = await catalogFetch(fetchImpl, `${baseUrl}/v1/listings/publish`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(20_000),
-      });
-      const payload = (await res.json()) as { ok?: boolean; error?: string; listing?: { listing_id?: string } };
-      if (res.ok && payload.ok === true) {
-        publishedRefs.push(ref);
-      } else {
-        reportErrors.push(`${ref}: ${payload.error ?? `HTTP ${res.status}`}`);
+
+    if (signedEnrollment !== null) {
+      try {
+        const body = canonicalizeCatalogListing(listingContent, signedEnrollment.agentId, signedEnrollment.merchantId);
+        const listingDigest = signedListingDigest(body);
+        const idempotencyKey = `kiwi-listing:${createHash("sha256").update(`${signedEnrollment.bindingId}:${listingDigest}`).digest("hex")}`;
+        const receipt = await catalogClient.publishSignedListing({
+          catalogAgentId: signedEnrollment.agentId,
+          merchantId: signedEnrollment.merchantId,
+          bindingId: signedEnrollment.bindingId,
+          idempotencyKey,
+          listingDigest,
+          listing: body,
+        }, signedEnrollment.signingIdentity);
+        if (receipt.listingId !== "") publishedRefs.push(ref);
+      } catch (err) {
+        const remoteCode = err instanceof Error && "remoteCode" in err && typeof err.remoteCode === "string" ? err.remoteCode : undefined;
+        reportErrors.push(`${ref}: ${remoteCode ?? (err instanceof Error ? err.message : String(err))}`);
       }
-    } catch (err) {
-      reportErrors.push(`${ref}: ${err instanceof Error ? err.message : String(err)}`);
+    } else {
+      const body: Record<string, unknown> = {
+        ...listingContent,
+        merchant_id: catalogMerchantId,
+        owner_agent_id: catalogAgentId,
+        owner_token: effectiveOwnerToken,
+      };
+      if (typeof body.owner_token !== "string" || body.owner_token === "") {
+        reportErrors.push(`${ref}: no owner token (KIWI_MERCHANT_TOKEN 或 secret 派生)`);
+        continue;
+      }
+      try {
+        const res = await catalogFetch(fetchImpl, `${baseUrl}/v1/listings/publish`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(20_000),
+        });
+        const payload = (await res.json()) as { ok?: boolean; error?: string; listing?: { listing_id?: string } };
+        if (res.ok && payload.ok === true) {
+          publishedRefs.push(ref);
+        } else {
+          reportErrors.push(`${ref}: ${payload.error ?? `HTTP ${res.status}`}`);
+        }
+      } catch (err) {
+        reportErrors.push(`${ref}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 
-  // ── Step 2b: reconcile——投影消失的商品 withdraw（data-hub DoD #5）──────
-  // products.active=0 或已删除的商品不再出现在投影里；拉取本 agent 现有
-  // product listings（自查端点，owner_token 经 query），与投影 ref 集合
-  // diff，多出的下架（capability listing 不在投影集合，不处理）。服务端
-  // 对已 WITHDRAWN 幂等返回；SUSPENDED 的 listing 也允许商家 withdraw。
-  const projectedRefs = new Set(
-    projections.map((p) => String(p.source_product_ref ?? "")).filter((ref) => ref !== ""),
-  );
-  // 审查 P1-B（2026-08-10 复验）：空投影 + 既有 ACTIVE product listing =
-  // 配置错误典型信号（--shopping-cli-merchant 不匹配 / --shopping-cli-db
-  // 指向空库）——此前 reconcile 会把自查端点返回的全部 listing 下架且
-  // 报告仍 ok:true，自动化发布不告警。fail-closed：拒绝下架，除非显式
-  // allowEmptyProjectionReconcile。自查失败不在此重复判定（下方循环会报）。
+  // ── Step 2b: listing self-list + withdraw reconciliation ────────────────
+  const projectedRefs = new Set(projections.map((p) => String(p.source_product_ref ?? "")).filter((ref) => ref !== ""));
+  const signedContext = signedEnrollment === null ? undefined : {
+    catalogAgentId: signedEnrollment.agentId,
+    merchantId: signedEnrollment.merchantId,
+    bindingId: signedEnrollment.bindingId,
+    keyId: signedEnrollment.keyId,
+  };
   let reconcileBlocked = false;
+  let reconcileComplete = true;
+  const withdrawnRefs: string[] = [];
+
+  const readListingPage = async (cursor?: string) => {
+    if (signedEnrollment !== null && signedContext !== undefined) {
+      return await catalogClient.listSignedListings(signedContext, signedEnrollment.signingIdentity, {
+        limit: 100,
+        ...(cursor !== undefined ? { cursor } : {}),
+      });
+    }
+    const url =
+      `${baseUrl}/v1/agents/${encodeURIComponent(catalogAgentId!)}/listings` +
+      `?owner_token=${encodeURIComponent(effectiveOwnerToken)}&limit=100` +
+      (cursor !== undefined ? `&cursor=${encodeURIComponent(cursor)}` : "");
+    const response = await catalogFetch(fetchImpl, url, { signal: AbortSignal.timeout(15_000) });
+    const payload = await response.json() as { ok?: boolean; results?: Array<Record<string, unknown>>; next_cursor?: string; error?: string };
+    if (!response.ok || payload.ok !== true) throw new Error(payload.error ?? `HTTP ${response.status}`);
+    return { results: payload.results ?? [], ...(payload.next_cursor ? { nextCursor: payload.next_cursor } : {}) };
+  };
+
+  // 空投影必须先成功自查；否则绝不假设没有旧发布，也不报告 reconcile 完成。
   if (projections.length === 0 && options.allowEmptyProjectionReconcile !== true) {
-    const probeUrl =
-      `${baseUrl}/v1/agents/${encodeURIComponent(catalogAgentId)}/listings` +
-      `?owner_token=${encodeURIComponent(effectiveOwnerToken)}&limit=100`;
     try {
-      const probeRes = await catalogFetch(fetchImpl, probeUrl, { signal: AbortSignal.timeout(15_000) });
-      const probePayload = (await probeRes.json()) as {
-        ok?: boolean;
-        results?: Array<Record<string, unknown>>;
-      };
-      if (probeRes.ok && probePayload.ok === true) {
-        const hasActiveProductListing = (probePayload.results ?? []).some(
-          (rec) =>
-            String(rec.listing_type ?? "") === "product" &&
-            String(rec.publication_state ?? "") !== "WITHDRAWN",
-        );
-        if (hasActiveProductListing) {
-          reconcileBlocked = true;
-          reportErrors.push(
-            "投影为空但 catalog 存在 ACTIVE product listing：拒绝 reconcile 下架" +
-              "（疑似 --shopping-cli-merchant 不匹配或 --shopping-cli-db 指向空库）；" +
-              "如确需全部下架请显式传 --allow-empty-projection",
-          );
-        }
+      const probe = await readListingPage();
+      if (probe.results.some((rec) => String(rec.listing_type ?? "") === "product" && String(rec.publication_state ?? "") !== "WITHDRAWN")) {
+        reconcileBlocked = true;
+        reconcileComplete = false;
+        reportErrors.push("投影为空但 catalog 存在 ACTIVE product listing：拒绝 reconcile 下架；如确需全部下架请显式传 --allow-empty-projection");
       }
-    } catch {
-      // 探测失败交给下方 reconcile 循环报错（fail-closed 语义一致）
+    } catch (err) {
+      reconcileBlocked = true;
+      reconcileComplete = false;
+      const remoteCode = err instanceof Error && "remoteCode" in err && typeof err.remoteCode === "string" ? err.remoteCode : undefined;
+      reportErrors.push(`empty projection self-list failed: ${remoteCode ?? (err instanceof Error ? err.message : String(err))}`);
     }
   }
-  const withdrawnRefs: string[] = [];
-  try {
-    let cursor: string | undefined;
-    for (;;) {
-      if (reconcileBlocked) break;
-      const listUrl =
-        `${baseUrl}/v1/agents/${encodeURIComponent(catalogAgentId)}/listings` +
-        `?owner_token=${encodeURIComponent(effectiveOwnerToken)}&limit=100` +
-        (cursor !== undefined ? `&cursor=${encodeURIComponent(cursor)}` : "");
-      const listRes = await catalogFetch(fetchImpl, listUrl, { signal: AbortSignal.timeout(15_000) });
-      const listPayload = (await listRes.json()) as {
-        ok?: boolean;
-        results?: Array<Record<string, unknown>>;
-        next_cursor?: string;
-        error?: string;
-      };
-      if (!listRes.ok || listPayload.ok !== true) {
-        reportErrors.push(`withdraw reconcile failed: ${listPayload.error ?? `HTTP ${listRes.status}`}`);
-        break;
-      }
-      for (const rec of listPayload.results ?? []) {
-        // 只 diff product listing：capability listing 不在投影集合，不处理
-        if (String(rec.listing_type ?? "") !== "product") continue;
-        const ref = String(rec.source_product_ref ?? "");
-        if (ref === "" || projectedRefs.has(ref)) continue;
-        if (String(rec.publication_state ?? "") === "WITHDRAWN") continue;
-        const listingId = String(rec.listing_id ?? "");
-        if (listingId === "") continue;
-        try {
-          const wRes = await catalogFetch(
-            fetchImpl,
-            `${baseUrl}/v1/listings/${encodeURIComponent(listingId)}/withdraw`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ owner_token: effectiveOwnerToken }),
-              signal: AbortSignal.timeout(20_000),
-            },
-          );
-          const wPayload = (await wRes.json()) as { ok?: boolean; error?: string };
-          if (wRes.ok && wPayload.ok === true) {
-            withdrawnRefs.push(ref);
-          } else {
-            reportErrors.push(`${ref}: withdraw ${wPayload.error ?? `HTTP ${wRes.status}`}`);
+
+  if (!reconcileBlocked) {
+    try {
+      let cursor: string | undefined;
+      for (;;) {
+        const page = await readListingPage(cursor);
+        for (const rec of page.results) {
+          if (String(rec.listing_type ?? "") !== "product") continue;
+          const ref = String(rec.source_product_ref ?? "");
+          if (ref === "" || projectedRefs.has(ref) || String(rec.publication_state ?? "") === "WITHDRAWN") continue;
+          const listingId = String(rec.listing_id ?? "");
+          if (listingId === "") continue;
+          try {
+            if (signedEnrollment !== null && signedContext !== undefined) {
+              const idempotencyKey = `kiwi-withdraw:${createHash("sha256").update(`${signedEnrollment.bindingId}:${listingId}`).digest("hex")}`;
+              await catalogClient.withdrawSignedListing(signedContext, signedEnrollment.signingIdentity, { listingId, idempotencyKey });
+              withdrawnRefs.push(ref);
+            } else {
+              const response = await catalogFetch(fetchImpl, `${baseUrl}/v1/listings/${encodeURIComponent(listingId)}/withdraw`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ owner_token: effectiveOwnerToken }),
+                signal: AbortSignal.timeout(20_000),
+              });
+              const payload = await response.json() as { ok?: boolean; error?: string };
+              if (response.ok && payload.ok === true) withdrawnRefs.push(ref);
+              else throw new Error(payload.error ?? `HTTP ${response.status}`);
+            }
+          } catch (err) {
+            const remoteCode = err instanceof Error && "remoteCode" in err && typeof err.remoteCode === "string" ? err.remoteCode : undefined;
+            reportErrors.push(`${ref}: withdraw ${remoteCode ?? (err instanceof Error ? err.message : String(err))}`);
+            reconcileComplete = false;
           }
-        } catch (err) {
-          reportErrors.push(`${ref}: withdraw ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (page.nextCursor === undefined) break;
+        cursor = page.nextCursor;
       }
-      const next = listPayload.next_cursor;
-      if (typeof next !== "string" || next === "") break;
-      cursor = next;
+    } catch (err) {
+      const remoteCode = err instanceof Error && "remoteCode" in err && typeof err.remoteCode === "string" ? err.remoteCode : undefined;
+      reportErrors.push(`withdraw reconcile failed: ${remoteCode ?? (err instanceof Error ? err.message : String(err))}`);
+      reconcileComplete = false;
     }
-  } catch (err) {
-    reportErrors.push(`withdraw reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   const ok = reportErrors.length === 0;
@@ -536,6 +600,8 @@ export async function merchantPublish(
       agent: { ok: true, catalog_agent_id: catalogAgentId },
       listings: {
         ok,
+        authorization_mode: signedEnrollment === null ? "owner_token" : "runtime_binding",
+        reconcile_complete: reconcileComplete,
         published: publishedRefs.length,
         skipped: skippedRefs.length,
         withdrawn: withdrawnRefs.length,

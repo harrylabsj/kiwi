@@ -102,7 +102,7 @@ const ADMIN_PASSWORD = "cloud-admin-password-1";
 function writeCloudProfile(
   dataDir: string,
   commerceUrl: string,
-  options: { demoPriceFallback?: boolean } = {},
+  options: { demoPriceFallback?: boolean; name?: string } = {},
 ): string {
   const profilePath = path.join(dataDir, "merchant.yaml");
   writeFileSync(
@@ -111,6 +111,7 @@ function writeCloudProfile(
       "runtime_version: 0.6.0",
       "protocol_version: shopping.negotiation/0.1",
       "agent_id: merchant-agent:merchant-001",
+      ...(options.name !== undefined ? [`name: ${JSON.stringify(options.name)}`] : []),
       "role: merchant",
       "owner_id: merchant-001",
       "commerce:",
@@ -172,7 +173,7 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
   it("单端口同时提供 Card / 商家面 / 探针，平台保留路径不被接管", async () => {
     const commerce = await startFakeCommerce(TEST_SKU);
     const dataDir = tempDir("kiwi-cloud-ok-");
-    const profilePath = writeCloudProfile(dataDir, commerce);
+    const profilePath = writeCloudProfile(dataDir, commerce, { name: "Harbor Tools" });
     trackEnv("KIWI_COMMERCE_URL", commerce);
     const port = await freePort();
     const instance = await bootstrapCloudRuntime({
@@ -187,7 +188,7 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
       const card = await fetch(`${base}/.well-known/agent-card.json`);
       expect(card.status).toBe(200);
       const cardBody = (await card.json()) as { name?: string; url?: string };
-      expect(cardBody.name).toBe("Kiwi A2A Merchant");
+      expect(cardBody.name).toBe("Harbor Tools");
 
       // 商家面：/admin/login 可达（会话鉴权在 handler 内部，公开路径给人脸看）。
       const admin = await fetch(`${base}/admin/login`);

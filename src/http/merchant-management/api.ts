@@ -75,6 +75,7 @@ import {
 import { managementRequestDigest, MerchantManagementOperationStore } from "./operation-store.js";
 import type { MutableServiceState } from "./service-state.js";
 import { OnboardingStore } from "../../cloud/onboarding/store.js";
+import { readEnrollmentStore } from "../../cloud/binding/enrollment-challenge.js";
 import { requestsDisabledLocalImplementation } from "../../cloud/onboarding/local-fallback.js";
 import { checkStepSubmission, planWizard, WIZARD_STEPS } from "../../cloud/onboarding/steps.js";
 import type { Evidence, PlatformEvidenceResult } from "../../cloud/onboarding/types.js";
@@ -188,6 +189,8 @@ export interface MerchantManagementApiOptions {
    */
   onboarding?: {
     store: OnboardingStore;
+    /** 只读安全配对信息的目录；设备码和许可永不经此 API 返回。 */
+    enrollmentStateDir?: string;
     platformEvidence?: (input: {
       stepId: string;
       recordId: string;
@@ -1862,7 +1865,24 @@ export function createMerchantManagementApiHandler(
       authorizeOrThrow(auth.ctx, "onboarding:manage");
       const channel = onboardingChannel();
       const record = channel.store.activeRecord(auth.ctx.merchantId) ?? null;
-      writeJson(res, 200, { record, plan: record === null ? null : planWizard(record) });
+      const enrollment = record === null || channel.enrollmentStateDir === undefined
+        ? undefined
+        : readEnrollmentStore(channel.enrollmentStateDir).sessions
+            .map((session) => session as typeof session & { owner_ref?: string; user_code?: string; verification_uri?: string })
+            .find((session) => session.owner_ref === record.recordId);
+      writeJson(res, 200, {
+        record,
+        plan: record === null ? null : planWizard(record),
+        ...(enrollment !== undefined ? {
+          connect: {
+            enrollment_id: enrollment.enrollment_id,
+            status: enrollment.status,
+            user_code: enrollment.user_code,
+            verification_uri: enrollment.verification_uri,
+            expires_at: enrollment.expires_at,
+          },
+        } : {}),
+      });
       return;
     }
     if (rest === "/policy") {
