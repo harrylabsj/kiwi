@@ -98,9 +98,13 @@ jobs:
           # --certificate-oidc-issuer are verify-only flags (rejected / meaningless
           # here); the keyless identity is bound by the ambient GitHub Actions OIDC
           # token and is enforced by the verify-blob step below.
+          # cosign v3 (installed by cosign-installer v4.x) defaults to
+          # --new-bundle-format: --output-signature/--output-certificate are
+          # ignored and a --bundle path is REQUIRED (empty path -> "open : no
+          # such file or directory"). Emit one self-contained Sigstore bundle
+          # carrying signature + Fulcio certificate + Rekor entry.
           cosign sign-blob --yes \
-            --output-signature portfolio-release.tgz.sig \
-            --output-certificate portfolio-release.tgz.pem \
+            --bundle portfolio-release.tgz.sigstore.json \
             portfolio-release.tgz
 
       - name: Verify bundle signature and certificate identity (fail closed)
@@ -110,8 +114,7 @@ jobs:
           # Pin the exact workflow file and the ref this dispatch ran on so a
           # certificate minted by any other workflow/ref cannot pass.
           cosign verify-blob \
-            --certificate portfolio-release.tgz.pem \
-            --signature portfolio-release.tgz.sig \
+            --bundle portfolio-release.tgz.sigstore.json \
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-rehearsal.yml@${GITHUB_REF}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             portfolio-release.tgz
@@ -120,8 +123,7 @@ jobs:
           name: portfolio-release-rehearsal
           path: |
             portfolio-release.tgz
-            portfolio-release.tgz.sig
-            portfolio-release.tgz.pem
+            portfolio-release.tgz.sigstore.json
       - uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
         with:
           subject-path: portfolio-release.tgz

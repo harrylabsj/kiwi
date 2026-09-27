@@ -306,9 +306,13 @@ jobs:
           # --certificate-oidc-issuer are verify-only flags (rejected / meaningless
           # here); the keyless identity is bound by the ambient GitHub Actions OIDC
           # token and is enforced by the verify-blob step below.
+          # cosign v3 (installed by cosign-installer v4.x) defaults to
+          # --new-bundle-format: --output-signature/--output-certificate are
+          # ignored and a --bundle path is REQUIRED (empty path -> "open : no
+          # such file or directory"). Emit one self-contained Sigstore bundle
+          # carrying signature + Fulcio certificate + Rekor entry.
           cosign sign-blob --yes \
-            --output-signature portfolio-release.tgz.sig \
-            --output-certificate portfolio-release.tgz.pem \
+            --bundle portfolio-release.tgz.sigstore.json \
             portfolio-release.tgz
 
       - name: Verify bundle signature and certificate identity (fail closed)
@@ -318,20 +322,18 @@ jobs:
           # Pin the exact workflow file and the ref this dispatch ran on so a
           # certificate minted by any other workflow/ref cannot pass.
           cosign verify-blob \
-            --certificate portfolio-release.tgz.pem \
-            --signature portfolio-release.tgz.sig \
+            --bundle portfolio-release.tgz.sigstore.json \
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/portfolio-release.yml@${GITHUB_REF}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             portfolio-release.tgz
 
-      - name: Upload release bundle, manifest, signature, certificate, and release dir
+      - name: Upload release bundle, manifest, sigstore bundle, and release dir
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: portfolio-release
           path: |
             portfolio-release.tgz
-            portfolio-release.tgz.sig
-            portfolio-release.tgz.pem
+            portfolio-release.tgz.sigstore.json
             release/
 
       - name: Attest build provenance
