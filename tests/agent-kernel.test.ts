@@ -7,7 +7,7 @@
  *
  * Deterministic: faux providers, temp agent dirs, injected clock.
  */
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -187,6 +187,30 @@ describe("main conversation and session persistence", () => {
     const paths = pathsFor("agent");
     writeFileSync(paths.mainSession, "not json at all\n{broken\n");
     await expect(openKernel("agent")).rejects.toThrow(AgentSessionError);
+  });
+
+  it("fails closed when a valid session header is followed by a malformed line", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const paths = pathsFor("agent");
+    const kernel = await openKernel("agent");
+    await kernel.close();
+    appendFileSync(paths.mainSession, "{broken\n");
+    const corruptedLog = readFileSync(paths.mainSession, "utf8");
+
+    await expect(openKernel("agent")).rejects.toThrow(AgentSessionError);
+    expect(readFileSync(paths.mainSession, "utf8")).toBe(corruptedLog);
+  });
+
+  it("does not reset a corrupted session when its previous model differs", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const paths = pathsFor("agent");
+    const kernel = await openKernel("agent");
+    await kernel.close();
+    appendFileSync(paths.mainSession, '{"type":"model_change","provider":"other","modelId":"other"}\n{broken\n');
+    const corruptedLog = readFileSync(paths.mainSession, "utf8");
+
+    await expect(openKernel("agent")).rejects.toThrow(AgentSessionError);
+    expect(readFileSync(paths.mainSession, "utf8")).toBe(corruptedLog);
   });
 
   it("model 变更 → 会话重置（新模型不读旧模型消息）；同模型重开保留", async () => {

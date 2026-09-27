@@ -32,11 +32,11 @@
  *   mode (0644 under the default umask), so every write path (`_persist`,
  *   `_rewriteFile`) is wrapped with a chmod re-assertion;
  * - a corrupted log fails closed (AgentSessionError) instead of loading a
- *   guessed session state — SessionManager.open rejects invalid files and
- *   we translate that into AgentSessionError.
+ *   guessed session state — malformed lines are rejected before calling
+ *   SessionManager.open, which would otherwise skip them.
  */
 
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AgentPaths } from "./agent-db.js";
@@ -125,6 +125,23 @@ function enforce0600(file: string | undefined | null): void {
   }
 }
 
+/** SessionManager silently skips malformed JSONL lines, so reject them first. */
+export function validateSessionLog(file: string): void {
+  const lines = readFileSync(file, "utf8").split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  for (const [index, line] of lines.entries()) {
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      throw new Error(`invalid JSONL at line ${index + 1}`);
+    }
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`invalid session entry at line ${index + 1}`);
+    }
+  }
+}
+
 export interface MainSessionManager {
   manager: SessionManager;
   /** True when an existing session file was opened (vs. freshly created). */
@@ -147,6 +164,7 @@ export function openMainSessionManager(
   let manager: SessionManager;
   try {
     if (existed) {
+      validateSessionLog(paths.mainSession);
       manager = SessionManager.open(paths.mainSession, dir, cwd);
     } else {
       manager = SessionManager.create(cwd, dir, { id: sessionId });

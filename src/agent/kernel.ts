@@ -87,7 +87,9 @@ import { MemoryStore } from "./memory/store.js";
 import { MemoryError, type MemoryItem, type Principal } from "./memory/types.js";
 import { PrivateVault } from "./memory/vault.js";
 import {
+  AgentSessionError,
   openMainSessionManager,
+  validateSessionLog,
   type MainSessionManager,
 } from "./session.js";
 import { registerCatalogAgent } from "../discovery/catalog-source/register.js";
@@ -508,6 +510,16 @@ export class AgentKernel {
     // 会话来自不同模型（如 fake→deepseek）时重置：旧模型的消息会让新模型首轮
     // 产生空响应（模型没有返回任何文本）。模型变更 = 新的对话历史。
     if (options.model !== undefined && existsSync(paths.mainSession)) {
+      // 先验证完整日志，避免损坏行被 sessionLastModel 跳过后直接删除旧会话。
+      try {
+        validateSessionLog(paths.mainSession);
+      } catch (e) {
+        throw new AgentSessionError(
+          `cannot open main session ${paths.mainSession}: ${
+            e instanceof Error ? e.message : String(e)
+          } (failing closed)`,
+        );
+      }
       const sessionModel = sessionLastModel(paths.mainSession);
       if (
         sessionModel !== undefined &&
