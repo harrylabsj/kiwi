@@ -1197,7 +1197,10 @@ export class CatalogClient {
           const errorPayload = await readJsonBody(response, { signal: controller.signal, maxBytes: 16 * 1024 });
           if (isRecord(errorPayload)) {
             const rawCode = errorPayload["error"] ?? errorPayload["code"];
-            if (typeof rawCode === "string" && /^[A-Z0-9_]{1,80}$/.test(rawCode)) remoteCode = rawCode;
+            if (typeof rawCode === "string") {
+              const match = /^([A-Z][A-Z0-9_]{1,79})(?::|$)/.exec(rawCode);
+              if (match) remoteCode = match[1];
+            }
           }
         } catch {
           // Error bodies are advisory; the HTTP status remains authoritative.

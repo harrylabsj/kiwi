@@ -8,6 +8,8 @@
 与安全交接能力。A2A 1.0 线协议互操作以组合 conformance transcript 为准，不用历史审计
 文档替代运行证据。
 
+商家注册、一次连接确认和默认 20 个可配置商品名额的现行流程见 [商家接入与商品名额设计 v0.6](docs/merchant-onboarding-listing-capacity-v0.6.md)。
+
 ## 协议：KNP/1.0
 
 - 公开稳定 namespace：`com.harrylabsj.kiwi.shopping.negotiation`

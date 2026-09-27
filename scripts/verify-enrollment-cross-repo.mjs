@@ -137,17 +137,11 @@ assert.equal(r.status, 200, r.text);
 const cookie = r.headers["set-cookie"].split(";")[0];
 r = dispatch("GET", `/v1/accounts/enrollments/${session.enrollmentId}`, undefined, { cookie });
 assert.equal(r.status, 200, r.text);
-r = dispatch("POST", "/v1/accounts/token-request", {}, { cookie });
+r = dispatch("GET", "/v1/accounts/me", undefined, { cookie });
 assert.equal(r.status, 200, r.text);
-const tokenApplicationId = JSON.parse(r.text).application_id;
-r = dispatch(
-  "POST",
-  `/v1/merchants/applications/${tokenApplicationId}/approve`,
-  {},
-  { authorization: "Bearer cross-test-only-admin" },
-);
-assert.equal(r.status, 200, "admin listing approval failed: " + JSON.parse(r.text).error);
-console.log("PASS admin Listings approval gate (owner token remains server-side)");
+assert.deepEqual(JSON.parse(r.text).listing_capacity.active_used, 0);
+assert.deepEqual(JSON.parse(r.text).listing_capacity.active_limit, 20);
+console.log("PASS verified account automatically receives configurable free Listings capacity");
 r = dispatch(
   "POST",
   `/v1/accounts/enrollments/${session.enrollmentId}/authorize`,
@@ -304,14 +298,18 @@ const listingResult = await client.publishSignedListing(
   identity,
 );
 assert.ok(listingResult.listingId);
+r = dispatch("GET", "/v1/accounts/me", undefined, { cookie });
+assert.equal(JSON.parse(r.text).listing_capacity.active_used, 1);
 const selfListings = await client.listSignedListings(listingContext, identity, { limit: 100 });
 assert.ok(selfListings.results.some((item) => item["listing_id"] === listingResult.listingId));
 await client.withdrawSignedListing(listingContext, identity, {
   listingId: listingResult.listingId,
   idempotencyKey: `cross-withdraw-${listingResult.listingId}`,
 });
+r = dispatch("GET", "/v1/accounts/me", undefined, { cookie });
+assert.equal(JSON.parse(r.text).listing_capacity.active_used, 0);
 console.log(
-  "PASS approved Runtime publishes, reads and withdraws listings without sending an owner token",
+  "PASS signed Runtime publishes, reads and withdraws listings without an owner token; withdrawal frees capacity",
 );
 writeFileSync(
   `${config.dataDir}/merchant-enrollments.json`,
@@ -415,7 +413,7 @@ console.log(
       "public card and discovery",
       "signed heartbeat",
       "tamper and paused publication rejection",
-      "approved, tokenless signed Listings publish/self-list/withdraw",
+      "automatic free capacity and signed Listings publish/self-list/withdraw",
     ],
     requests: calls.length,
     temporaryRoot: root,

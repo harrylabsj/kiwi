@@ -1263,7 +1263,7 @@ async function cmdMerchantConnect(args: ParsedArgs): Promise<number> {
     });
     process.stdout.write(
       `已上线：Catalog Agent ${result.agentId}，绑定 ${result.bindingId}，名片 revision ${result.cardRevision}。\n` +
-      "商品 listings 仍需配置有效 owner token；名片上线不代表商品目录权限已开通。\n",
+      "商品发布使用当前 Runtime 绑定签名，并受 Catalog 商家方案额度限制；可在商家后台查看已用名额。\n",
     );
     return EXIT.OK;
   } catch (err) {

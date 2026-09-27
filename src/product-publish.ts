@@ -20,13 +20,13 @@
  *
  * 编排层在 kiwi 仓，调两仓能力（组件独立发布，§12）：
  *
- *   1. 确认 Agent             → 已连接 Runtime 直接复用已验证 enrollment；
- *      direct 兼容模式仍走 owner-token lookup/register。
+ *   1. 确认 Agent             → 已连接 Runtime 复用已验证 enrollment；
+ *      没有已发布接入时拒绝发布，不回退到 owner token。
  *   2. 读取 public-only 投影  → spawn `shopping listings projections list`（只读），
  *      逐条发布。已连接 Runtime 使用绑定私钥签名并携带 Idempotency-Key；Catalog
- *      仍逐次检查 admin-approved owner-token entitlement。direct 兼容方式使用旧 owner token。
- *   3. 自查并 reconcile       → 按相同身份模式签名查询与撤回已消失的商品；
- *      任一写入/自查失败均如实报告，绝不降级为另一种身份。
+ *      逐次检查 Catalog 中独立的商家方案和商品名额。
+ *   3. 自查并 reconcile       → 绑定签名查询与撤回已消失的商品；
+ *      任一写入/自查失败均如实报告。
  */
 
 import { createHash, createHmac } from "node:crypto";
@@ -50,9 +50,9 @@ export interface MerchantPublishOptions {
   profile: AgentProfile;
   /** kiwi-catalog base URL（缺省由调用方解析 KIWI_CATALOG_URL）。 */
   catalogBaseUrl: string;
-  /** KIWI_CATALOG_OWNER_TOKEN_SECRET（owner token 派生，legacy）。 */
+  /** 已废弃的调用参数；不会作为 Listings 凭据使用。 */
   ownerTokenSecret?: string;
-  /** 商家随机 owner token（v12+ 双路径；优先于 HMAC 派生）。 */
+  /** 已废弃的调用参数；不会作为 Listings 凭据使用。 */
   ownerToken?: string;
   /** shopping-cli SQLite 数据库路径（listings publish-listings --db）。 */
   shoppingCliDb: string;
@@ -279,17 +279,14 @@ export async function merchantPublish(
       };
     }
   }
-  const ownerCredentialAvailable =
-    (options.ownerToken !== undefined && options.ownerToken !== "") ||
-    (options.ownerTokenSecret !== undefined && options.ownerTokenSecret !== "");
-  if (signedEnrollment === null && !ownerCredentialAvailable) {
-    const detail = "listing publication requires an approved Runtime enrollment or KIWI_MERCHANT_TOKEN; no owner token or HMAC secret was sent";
+  if (signedEnrollment === null) {
+    const detail = "请先运行 kiwi merchant connect 完成 Runtime 连接和名片发布；商品发布不需要配置 owner token";
     return {
       ok: false,
       steps: {
         shopping_cli_compat: compatStep,
         agent: { ok: false, error: detail },
-        listings: { ok: false, authorization_mode: "owner_token", skipped_reason: detail },
+        listings: { ok: false, authorization_mode: "runtime_binding", skipped_reason: detail },
       },
     };
   }
@@ -471,7 +468,13 @@ export async function merchantPublish(
         if (receipt.listingId !== "") publishedRefs.push(ref);
       } catch (err) {
         const remoteCode = err instanceof Error && "remoteCode" in err && typeof err.remoteCode === "string" ? err.remoteCode : undefined;
-        reportErrors.push(`${ref}: ${remoteCode ?? (err instanceof Error ? err.message : String(err))}`);
+        const guidance: Record<string, string> = {
+          LISTINGS_CAPACITY_EXCEEDED: "商品名额已满：请下架一个商品，或在 Catalog 升级/调整额度；此商品未发布，可稍后重试",
+          LISTINGS_ENTITLEMENT_SUSPENDED: "商品发布资格已暂停：请在 Catalog 查看状态；此商品未发布",
+          LISTINGS_ACCOUNT_NOT_READY: "商家账号尚未完成邮箱验证或已暂停：请先到 Catalog 处理",
+          LISTINGS_GOVERNANCE_HOLD: "该商品被平台暂停：请联系管理员解除，重新发布不能恢复",
+        };
+        reportErrors.push(`${ref}: ${remoteCode && guidance[remoteCode] ? guidance[remoteCode] : remoteCode ?? (err instanceof Error ? err.message : String(err))}`);
       }
     } else {
       const body: Record<string, unknown> = {
