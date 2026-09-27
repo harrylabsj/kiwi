@@ -160,14 +160,14 @@ function collisionClient(): { client: CommerceClient; claims: { conversation_id:
 }
 
 async function openAutopilotKernel(client: CommerceClient): Promise<AgentKernel> {
-  const { models, model } = createFakeChatModels();
+  const { providers, model } = createFakeChatModels();
   const dir = mkdtempSync(path.join(tmpdir(), "kiwi-autotick-"));
   workDir = dir;
   const paths = ensurePathsForDir(dir);
   return AgentKernel.open({
     profile: testProfile(), // merchant（多会话场景）
     paths,
-    models,
+    providers,
     model,
     vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
     commerceClient: client,

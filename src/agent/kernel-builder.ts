@@ -103,7 +103,7 @@ export async function buildChatKernel(
 ): Promise<AgentKernel> {
   const paths = ensurePathsForDir(dataDir ?? agentDataDir(profile.agent_id));
 
-  let models: AgentKernelOptions["models"];
+  let providers: AgentKernelOptions["providers"];
   let model: AgentKernelOptions["model"];
   let connector: AgentKernelOptions["connector"];
   let thinkingLevel: ReturnType<typeof resolveThinkingLevel>;
@@ -111,7 +111,7 @@ export async function buildChatKernel(
   let broker: AgentKernelOptions["broker"];
   let commerceClient: AgentKernelOptions["commerceClient"];
   if (isFakeProvider(profile)) {
-    ({ models, model } = createFakeChatModels());
+    ({ providers, model } = createFakeChatModels());
     if (profile.role === "buyer") {
       const { FakeCommerceConnector, fakeConnectorProduct } = await import(
         "./connector/fake-connector.js"
@@ -154,7 +154,7 @@ export async function buildChatKernel(
       );
       throw new ProfileError(`no built-in model ${profile.model.provider}/${profile.model.model}`);
     }
-    models = collection;
+    providers = [...collection.getProviders()];
     model = found;
     thinkingLevel = resolveThinkingLevel(profile);
     if (profile.role === "buyer") {
@@ -198,7 +198,7 @@ export async function buildChatKernel(
   return AgentKernel.open({
     profile,
     paths,
-    models,
+    providers,
     model,
     ...(mode !== undefined ? { mode } : {}),
     ...(connector !== undefined ? { connector } : {}),

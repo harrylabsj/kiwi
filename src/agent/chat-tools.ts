@@ -24,7 +24,8 @@
  * write, and tool results never contain chain-of-thought.
  */
 
-import type { AgentHarnessTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { KiwiTool } from "./kiwi-tool.js";
 import type { MemoryStore, RememberOutcome } from "./memory/store.js";
 import {
   isMemoryNamespace,
@@ -41,7 +42,7 @@ export const TOOL_REMEMBER = "remember";
 export const TOOL_FORGET_MEMORY = "forget_memory";
 export const TOOL_CORRECT_MEMORY = "correct_memory";
 
-type Tool = AgentHarnessTool<undefined>;
+type Tool = KiwiTool;
 
 function textResult(text: string, details?: unknown): AgentToolResult<unknown> {
   return { content: [{ type: "text", text }], details };

@@ -685,12 +685,12 @@ describe("P2: expiry timezone, evidence dedup and shared Vault refs", () => {
       explicit_user_statement: true,
       reason_summary: "用户陈述",
     };
-    await rememberTool!.execute("c1", params, undefined, undefined, undefined);
-    await rememberTool!.execute("c2", params, undefined, undefined, undefined);
+    await rememberTool!.execute("c1", params);
+    await rememberTool!.execute("c2", params);
     expect(store.listMemories({})[0]?.evidence_count).toBe(1);
     // A later turn counts as a distinct evidence window.
     turn.current = "session:main:2";
-    await rememberTool!.execute("c3", params, undefined, undefined, undefined);
+    await rememberTool!.execute("c3", params);
     expect(store.listMemories({})[0]?.evidence_count).toBe(2);
   });
 
@@ -708,10 +708,10 @@ describe("P2: expiry timezone, evidence dedup and shared Vault refs", () => {
     const tools = buildMemoryTools(store);
     const forget = tools.find((t) => t.name === "forget_memory");
     const correct = tools.find((t) => t.name === "correct_memory");
-    const f = await forget!.execute("c1", { memory_id: id }, undefined, undefined, undefined);
+    const f = await forget!.execute("c1", { memory_id: id });
     expect((f.content[0] as { type: "text"; text: string }).text).toContain("/forget");
     expect(store.getMemory(id)?.status).not.toBe("deleted");
-    const c = await correct!.execute("c2", { memory_id: id, value: { max: 2 } }, undefined, undefined, undefined);
+    const c = await correct!.execute("c2", { memory_id: id, value: { max: 2 } });
     expect((c.content[0] as { type: "text"; text: string }).text).toContain("/correct");
     expect(store.getMemory(id)?.value).toEqual({ max: 1 });
   });

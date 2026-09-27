@@ -53,11 +53,11 @@ describe("runChatTui /handoff（#17）", () => {
       capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
     });
 
-    const { models, model } = createFakeChatModels();
+    const { providers, model } = createFakeChatModels();
     const kernel = await AgentKernel.open({
       profile: testBuyerProfile(),
       paths,
-      models,
+      providers,
       model,
       vault: new PrivateVault(new EnvKeyProvider("a".repeat(64))),
       connector: new FakeCommerceConnector([fakeConnectorProduct()]),
@@ -104,11 +104,11 @@ describe("runChatTui /handoff（#17）", () => {
       capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
     });
 
-    const { models, model } = createFakeChatModels();
+    const { providers, model } = createFakeChatModels();
     const kernel = await AgentKernel.open({
       profile: testBuyerProfile(),
       paths,
-      models,
+      providers,
       model,
       vault: new PrivateVault(new EnvKeyProvider("a".repeat(64))),
       connector: new FakeCommerceConnector([fakeConnectorProduct()]),
@@ -166,11 +166,11 @@ describe("runChatTui /handoff（#17）", () => {
       capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
     });
 
-    const { models, model } = createFakeChatModels();
+    const { providers, model } = createFakeChatModels();
     const kernel = await AgentKernel.open({
       profile: testBuyerProfile(),
       paths,
-      models,
+      providers,
       model,
       vault: new PrivateVault(new EnvKeyProvider("a".repeat(64))),
       connector: new FakeCommerceConnector([fakeConnectorProduct()]),

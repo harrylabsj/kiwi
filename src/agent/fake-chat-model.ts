@@ -26,8 +26,8 @@
  * the AgentHarness.
  */
 
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
-import type { Context, Model, MutableModels } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+import type { Context, Model, Provider } from "@earendil-works/pi-ai";
 import {
   TOOL_CORRECT_MEMORY,
   TOOL_FORGET_MEMORY,
@@ -136,11 +136,9 @@ function respond(context: Context) {
   );
 }
 
-/** A Models collection whose only model is the deterministic chat fake. */
-export function createFakeChatModels(): { models: MutableModels; model: Model<string> } {
+/** A provider set whose only model is the deterministic chat fake. */
+export function createFakeChatModels(): { providers: Provider[]; model: Model<string> } {
   const handle = fauxProvider({ models: [{ id: FAKE_CHAT_MODEL_ID, name: FAKE_CHAT_MODEL_ID }] });
   handle.setResponses([respond, respond, respond, respond]);
-  const models = createModels();
-  models.setProvider(handle.provider);
-  return { models, model: handle.getModel() };
+  return { providers: [handle.provider], model: handle.getModel() };
 }

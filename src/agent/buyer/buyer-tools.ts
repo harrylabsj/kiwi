@@ -21,7 +21,8 @@
  */
 
 import { createHash } from "node:crypto";
-import type { AgentHarnessTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { KiwiTool } from "../kiwi-tool.js";
 import {
   HandoffIdempotencyStore,
   HandoffEventStore,
@@ -59,7 +60,7 @@ import type { TaskConstraints, TaskEvent, TaskIntent } from "./types.js";
 import { BuyerTaskError } from "./types.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
 
-type Tool = AgentHarnessTool<undefined>;
+type Tool = KiwiTool;
 
 function textResult(text: string, details?: unknown): AgentToolResult<unknown> {
   return { content: [{ type: "text", text }], details };

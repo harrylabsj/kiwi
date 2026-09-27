@@ -162,10 +162,10 @@ describe("DefaultMerchantIntelligenceBackend", () => {
       const presentDigest = tools.find((tool) => tool.name === "present_merchant_digest");
       expect(getSnapshot).toBeDefined();
       expect(presentDigest).toBeDefined();
-      const snapshot = await getSnapshot?.execute("test", {}, undefined, undefined, undefined);
+      const snapshot = await getSnapshot?.execute("test", {});
       expect(snapshot?.content[0]).toMatchObject({ type: "text" });
       expect((snapshot?.content[0] as { text: string }).text).toContain("kiwi_external_data_metric");
-      await presentDigest?.execute("test", {}, undefined, undefined, undefined);
+      await presentDigest?.execute("test", {});
       expect(events.some((event) => event.type === "ui")).toBe(true);
     } finally {
       f.stats.close();

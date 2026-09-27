@@ -7,20 +7,20 @@
  *
  * Deterministic: faux providers, temp agent dirs, injected clock.
  */
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  createModels,
   fauxAssistantMessage,
   fauxProvider,
   fauxThinking,
   fauxToolCall,
+  type Api,
   type FauxResponseStep,
   type FauxResponseFactory,
   type Model,
-  type MutableModels,
+  type Provider,
 } from "@earendil-works/pi-ai";
 import { ensurePathsForDir } from "../src/agent/agent-db.js";
 import {
@@ -48,14 +48,12 @@ function pathsFor(name: string) {
 }
 
 function scriptedChatModels(steps: FauxResponseStep[]): {
-  models: MutableModels;
+  providers: Provider<Api>[];
   model: Model<string>;
 } {
   const handle = fauxProvider({ models: [{ id: "fake-chat-model", name: "fake-chat-model" }] });
   handle.setResponses(steps);
-  const models = createModels();
-  models.setProvider(handle.provider);
-  return { models, model: handle.getModel() };
+  return { providers: [handle.provider], model: handle.getModel() };
 }
 
 async function openKernel(
@@ -66,13 +64,13 @@ async function openKernel(
     buyer?: boolean;
   } = {},
 ): Promise<AgentKernel> {
-  const { models, model } = options.steps
+  const { providers, model } = options.steps
     ? scriptedChatModels(options.steps)
     : createFakeChatModels();
   return AgentKernel.open({
     profile: options.buyer === true ? testBuyerProfile() : testProfile(),
     paths: pathsFor(name),
-    models,
+    providers,
     model,
     vault: options.vault ?? new PrivateVault(new EnvKeyProvider(TEST_KEY)),
   });
@@ -86,13 +84,13 @@ describe("main conversation and session persistence", () => {
       captured.push({ cacheRetention: options?.cacheRetention, sessionId: options?.sessionId });
       return fauxAssistantMessage("缓存配置已生效");
     };
-    const { models, model } = scriptedChatModels([response]);
+    const { providers, model } = scriptedChatModels([response]);
     const kernel = await AgentKernel.open({
       profile: testProfile({
         merchant_experience: { enabled: true, prompt_cache_retention: "long" },
       }),
       paths: pathsFor("cache"),
-      models,
+      providers,
       model,
       eventSessionId: "cache-session",
       vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
@@ -191,14 +189,38 @@ describe("main conversation and session persistence", () => {
     await expect(openKernel("agent")).rejects.toThrow(AgentSessionError);
   });
 
+  it("fails closed when a valid session header is followed by a malformed line", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const paths = pathsFor("agent");
+    const kernel = await openKernel("agent");
+    await kernel.close();
+    appendFileSync(paths.mainSession, "{broken\n");
+    const corruptedLog = readFileSync(paths.mainSession, "utf8");
+
+    await expect(openKernel("agent")).rejects.toThrow(AgentSessionError);
+    expect(readFileSync(paths.mainSession, "utf8")).toBe(corruptedLog);
+  });
+
+  it("does not reset a corrupted session when its previous model differs", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const paths = pathsFor("agent");
+    const kernel = await openKernel("agent");
+    await kernel.close();
+    appendFileSync(paths.mainSession, '{"type":"model_change","provider":"other","modelId":"other"}\n{broken\n');
+    const corruptedLog = readFileSync(paths.mainSession, "utf8");
+
+    await expect(openKernel("agent")).rejects.toThrow(AgentSessionError);
+    expect(readFileSync(paths.mainSession, "utf8")).toBe(corruptedLog);
+  });
+
   it("model 变更 → 会话重置（新模型不读旧模型消息）；同模型重开保留", async () => {
     workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
     const paths = pathsFor("agent");
-    const { models, model } = createFakeChatModels();
+    const { providers, model } = createFakeChatModels();
     const kernel = await AgentKernel.open({
       profile: testProfile(),
       paths,
-      models,
+      providers,
       model,
       vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
     });
@@ -218,12 +240,11 @@ describe("main conversation and session persistence", () => {
       fauxAssistantMessage("换模型后的回复 4"),
       fauxAssistantMessage("换模型后的回复 5"),
     ]);
-    const otherModels = createModels();
-    otherModels.setProvider(otherHandle.provider);
+    const otherModels = [otherHandle.provider];
     const kernel2 = await AgentKernel.open({
       profile: testProfile(),
       paths,
-      models: otherModels,
+      providers: otherModels,
       model: otherHandle.getModel(),
       vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
     });
@@ -235,7 +256,7 @@ describe("main conversation and session persistence", () => {
     const kernel2b = await AgentKernel.open({
       profile: testProfile(),
       paths,
-      models: otherModels,
+      providers: otherModels,
       model: otherHandle.getModel(),
       vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
     });
@@ -247,7 +268,7 @@ describe("main conversation and session persistence", () => {
     const kernel3 = await AgentKernel.open({
       profile: testProfile(),
       paths,
-      models: otherModels,
+      providers: otherModels,
       model: otherHandle.getModel(),
       vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
     });

@@ -5,6 +5,7 @@ import {
   type AssistantMessage,
   type AssistantMessageEvent,
   type FauxResponseStep,
+  type JsonObject,
 } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { createScriptedFakeStreamFn } from "../src/runtime/fake-model.js";
@@ -18,7 +19,7 @@ function scriptedTurn(decisionArgs: unknown): FauxResponseStep[] {
   if (decisionArgs) {
     steps.push(
       fauxAssistantMessage([
-        fauxToolCall(TOOL_SUBMIT_DECISION, decisionArgs as Record<string, unknown>),
+        fauxToolCall(TOOL_SUBMIT_DECISION, decisionArgs as unknown as JsonObject),
       ]),
     );
   } else {
@@ -86,10 +87,10 @@ describe("merchant single turn (fake model + fake marketplace)", () => {
       fauxAssistantMessage([fauxToolCall(TOOL_GET_SNAPSHOT, {})]),
       // First attempt leaks the private floor -> rejected_retryable.
       fauxAssistantMessage([
-        fauxToolCall(TOOL_SUBMIT_DECISION, validDecision({ public_message: "底价 80 元给你" })),
+        fauxToolCall(TOOL_SUBMIT_DECISION, validDecision({ public_message: "底价 80 元给你" }) as unknown as JsonObject),
       ]),
       // Repaired attempt.
-      fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, validDecision())]),
+      fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, validDecision() as unknown as JsonObject)]),
     ]);
     const report = await runMerchantTurn({ profile: testProfile(), client, streamFn });
     expect(report.outcome.kind).toBe("accepted");
@@ -101,7 +102,7 @@ describe("merchant single turn (fake model + fake marketplace)", () => {
     const { streamFn } = createScriptedFakeStreamFn([
       fauxAssistantMessage([fauxToolCall(TOOL_GET_SNAPSHOT, {})]),
       fauxAssistantMessage([
-        fauxToolCall(TOOL_SUBMIT_DECISION, validDecision({ public_message: "底价 80 元给你" })),
+        fauxToolCall(TOOL_SUBMIT_DECISION, validDecision({ public_message: "底价 80 元给你" }) as unknown as JsonObject),
       ]),
       fauxAssistantMessage("好的我再想想。"),
     ]);
@@ -138,9 +139,9 @@ describe("merchant single turn (fake model + fake marketplace)", () => {
     const { streamFn } = createScriptedFakeStreamFn([
       fauxAssistantMessage([fauxToolCall(TOOL_GET_SNAPSHOT, {})]),
       fauxAssistantMessage([
-        fauxToolCall(TOOL_SUBMIT_DECISION, validDecision({ conversation_id: "conv-someone-else" })),
+        fauxToolCall(TOOL_SUBMIT_DECISION, validDecision({ conversation_id: "conv-someone-else" }) as unknown as JsonObject),
       ]),
-      fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, validDecision())]),
+      fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, validDecision() as unknown as JsonObject)]),
     ]);
     const report = await runMerchantTurn({ profile: testProfile(), client, streamFn });
     expect(report.outcome.kind).toBe("accepted");
@@ -153,7 +154,7 @@ describe("merchant single turn (fake model + fake marketplace)", () => {
     const { streamFn } = createScriptedFakeStreamFn([
       fauxAssistantMessage([fauxToolCall("bash", { command: "env" })]),
       fauxAssistantMessage([fauxToolCall(TOOL_GET_SNAPSHOT, {})]),
-      fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, validDecision())]),
+      fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, validDecision() as unknown as JsonObject)]),
     ]);
     const report = await runMerchantTurn({ profile: testProfile(), client, streamFn });
     expect(report.outcome.kind).toBe("accepted");
@@ -199,12 +200,12 @@ describe("max_retries enforcement (first submission + repair attempts)", () => {
         fauxAssistantMessage([
           fauxToolCall(TOOL_SUBMIT_DECISION, {
             ...validDecision({ public_message: `底价 80 元给你（第 ${i + 1} 次）` }),
-          }),
+          } as unknown as JsonObject),
         ]),
       );
     }
     if (thenValid) {
-      steps.push(fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, validDecision())]));
+      steps.push(fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, validDecision() as unknown as JsonObject)]));
     }
     return steps;
   }

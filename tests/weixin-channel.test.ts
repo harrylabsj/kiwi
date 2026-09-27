@@ -119,11 +119,11 @@ function seedCredentials(dir: string, userId: string = PAIRED_USER): { creds: st
 
 async function openKernel(dir: string): Promise<AgentKernel> {
   const paths = ensurePathsForDir(path.join(dir, "agent"));
-  const { models, model } = createFakeChatModels();
+  const { providers, model } = createFakeChatModels();
   return AgentKernel.open({
     profile: testProfile(),
     paths,
-    models,
+    providers,
     model,
     vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
   });
@@ -390,16 +390,15 @@ describe("WeixinChannel 集成", () => {
     const dir = workDir();
     const files = seedCredentials(dir);
     // 注入一个返回超长回复的 kernel：用 scripted 模型
-    const { fauxProvider, createModels, fauxAssistantMessage } = await import("@earendil-works/pi-ai");
+    const { fauxProvider, fauxAssistantMessage } = await import("@earendil-works/pi-ai");
     const handle = fauxProvider({ models: [{ id: "fake-chat-model", name: "fake-chat-model" }] });
     handle.setResponses([fauxAssistantMessage("长".repeat(2500))]);
-    const models = createModels();
-    models.setProvider(handle.provider);
+    const providers = [handle.provider];
     const paths = ensurePathsForDir(path.join(dir, "agent2"));
     const kernel = await AgentKernel.open({
       profile: testProfile(),
       paths,
-      models,
+      providers,
       model: handle.getModel(),
       vault: new PrivateVault(new EnvKeyProvider(TEST_KEY)),
     });

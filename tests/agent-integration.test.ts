@@ -14,13 +14,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  createModels,
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
   type FauxResponseStep,
   type Model,
-  type MutableModels,
+  type Provider,
 } from "@earendil-works/pi-ai";
 import { ensurePathsForDir } from "../src/agent/agent-db.js";
 import { runSearchCycle } from "../src/agent/buyer/search-loop.js";
@@ -47,14 +46,12 @@ function pathsFor(name: string) {
 }
 
 function scriptedChatModels(steps: FauxResponseStep[]): {
-  models: MutableModels;
+  providers: Provider[];
   model: Model<string>;
 } {
   const handle = fauxProvider({ models: [{ id: "fake-chat-model", name: "fake-chat-model" }] });
   handle.setResponses(steps);
-  const models = createModels();
-  models.setProvider(handle.provider);
-  return { models, model: handle.getModel() };
+  return { providers: [handle.provider], model: handle.getModel() };
 }
 
 describe("buyer/merchant dual-instance consultation path (§19.4, §20-C)", () => {

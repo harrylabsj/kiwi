@@ -30,7 +30,8 @@
  * approval.
  */
 
-import type { AgentHarnessTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { KiwiTool } from "../kiwi-tool.js";
 import type { AgentProfile } from "../../config/profile.js";
 import { fenceModelPayload } from "../context/fencing.js";
 import type { AgentHostEventType } from "../host/events.js";
@@ -60,7 +61,7 @@ import type { MerchantIntelligenceBackend } from "./intelligence/backend.js";
 import { createMerchantPresentationRegistry } from "./merchant-presentations.js";
 import { runPresentation } from "../presentation/runner.js";
 
-type Tool = AgentHarnessTool<undefined>;
+type Tool = KiwiTool;
 
 function textResult(text: string, details?: unknown): AgentToolResult<unknown> {
   return { content: [{ type: "text", text }], details };

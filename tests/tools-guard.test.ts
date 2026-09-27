@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { JsonObject } from "@earendil-works/pi-ai";
 import {
   buildMerchantTools,
   createToolGuard,
@@ -23,7 +24,7 @@ function guardContext(name: string, args: unknown) {
       type: "toolCall" as const,
       id: "t1",
       name,
-      arguments: args as Record<string, unknown>,
+      arguments: args as unknown as JsonObject,
     },
     args,
     assistantMessage: {} as never,
