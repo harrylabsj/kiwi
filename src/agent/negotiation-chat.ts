@@ -33,7 +33,8 @@
  * lives in the CredentialBroker.
  */
 
-import type { AgentHarnessTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { KiwiTool } from "./kiwi-tool.js";
 import type { AgentProfile } from "../config/profile.js";
 import { idempotencyKey, type CommerceClient } from "../commerce/types.js";
 import {
@@ -50,7 +51,7 @@ import { requireScopeCredential } from "./merchant/credential-broker.js";
 import type { NegotiationSnapshot } from "../negotiation/types.js";
 import { routeWriteCandidate, type WriteGateDeps } from "./write-gate.js";
 
-type Tool = AgentHarnessTool<undefined>;
+type Tool = KiwiTool;
 
 function textResult(text: string, details?: unknown): AgentToolResult<unknown> {
   return { content: [{ type: "text", text }], details };

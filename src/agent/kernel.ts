@@ -28,11 +28,19 @@
  *   MemoryStore) and deterministic slash commands to the operator.
  */
 
-import { AgentHarness, type AgentHarnessEvent, type Session, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AgentHarnessTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import {
+  createAgentSession,
+  createExtensionRuntime,
+  ModelRuntime,
+  SettingsManager,
+  type AgentSession,
+  type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
+import type { Api, Model, Provider } from "@earendil-works/pi-ai";
 import type { AgentProfile } from "../config/profile.js";
 import type { CommerceClient } from "../commerce/types.js";
 import { ensureAgentPaths, openAgentDatabase, type AgentPaths } from "./agent-db.js";
@@ -78,7 +86,10 @@ import type { BuyerTask } from "./buyer/types.js";
 import { MemoryStore } from "./memory/store.js";
 import { MemoryError, type MemoryItem, type Principal } from "./memory/types.js";
 import { PrivateVault } from "./memory/vault.js";
-import { openMainSession } from "./session.js";
+import {
+  openMainSessionManager,
+  type MainSessionManager,
+} from "./session.js";
 import { registerCatalogAgent } from "../discovery/catalog-source/register.js";
 import { KiwiCatalogSource } from "../discovery/catalog-source/kiwi-source.js";
 import { baseSystemPrompt, combineDynamicBriefing, renderMemoryBriefing } from "./system-prompt.js";
@@ -100,7 +111,17 @@ export interface AgentKernelOptions {
   profile: AgentProfile;
   /** Injectable paths (tests); defaults to .kiwi/agents/<agent_id>. */
   paths?: AgentPaths;
-  models: Models;
+  /**
+   * pi-ai model runtime (0.87): the sole model/auth surface handed to
+   * createAgentSession. When omitted, a runtime is built and the providers
+   * from `models` are registered into it (test/fake path).
+   */
+  modelRuntime?: ModelRuntime;
+  /**
+   * Extra providers to register into the model runtime (legacy `Models`
+   * collections from tests; each provider is registered natively).
+   */
+  providers?: Provider[];
   model: Model<Api>;
   thinkingLevel?: ThinkingLevel;
   vault?: PrivateVault;
@@ -186,14 +207,6 @@ export interface KernelReply {
   quit: boolean;
 }
 
-function assistantText(message: AssistantMessage): string {
-  return message.content
-    .filter((b): b is { type: "text"; text: string } => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
-}
-
 const PRIVATE_TOOL_RESULT_NAMES = new Set(["view_private_thresholds"]);
 
 export function toolResultSummary(toolName: string, result: unknown): string {
@@ -216,12 +229,12 @@ export function toolResultSummary(toolName: string, result: unknown): string {
   return "工具调用已完成。";
 }
 
-/** Bridge the stable AgentHarness stream/tool hooks into the optional host protocol. */
-function attachHarnessHostEvents(
-  harness: AgentHarness,
+/** Bridge AgentSession events into the optional host protocol. */
+function attachSessionHostEvents(
+  session: AgentSession,
   emitEvent: (type: AgentHostEventType, data: unknown) => Promise<void>,
 ): () => void {
-  return harness.subscribe(async (event: AgentHarnessEvent) => {
+  return session.subscribe(async (event) => {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       if (event.assistantMessageEvent.delta !== "") {
         await emitEvent("text_delta", { text: event.assistantMessageEvent.delta });
@@ -308,6 +321,41 @@ const COMMANDS_HELP = `/memory [preferences|private]  查看记忆概览 / 学�
 /help                      本帮助
 /quit                      退出`;
 
+/**
+ * Build a ModelRuntime for callers that only supply legacy provider objects
+ * (tests / fake chat models): providers are registered natively so their
+ * streamFn and static model lists stay authoritative.
+ */
+async function buildModelRuntime(
+  options: Pick<AgentKernelOptions, "providers">,
+): Promise<ModelRuntime> {
+  const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+  for (const provider of options.providers ?? []) {
+    runtime.registerNativeProvider(provider);
+  }
+  return runtime;
+}
+
+/**
+ * §18.1 对位：0.87 的 AgentSession 没有 harness 时代的 per-session
+ * streamOptions 注入口，profile 的 prompt_cache_retention 只能在
+ * ModelRuntime 边界补齐——包装 streamSimple，为未显式指定 cacheRetention
+ * 的请求补上 profile 值（compaction 等的显式取值不受影响）。
+ */
+function withPromptCacheRetention(
+  runtime: ModelRuntime,
+  retention: "none" | "short" | "long" | undefined,
+): ModelRuntime {
+  if (retention === undefined) return runtime;
+  const original = runtime.streamSimple.bind(runtime);
+  runtime.streamSimple = (model, context, options) =>
+    original(model, context, {
+      ...options,
+      cacheRetention: options?.cacheRetention ?? retention,
+    });
+  return runtime;
+}
+
 /** 读会话 JSONL 中最后一条模型记录（model_change 或 assistant 消息的 provider/model）。 */
 function sessionLastModel(file: string): { provider: string; modelId: string } | undefined {
   let last: { provider: string; modelId: string } | undefined;
@@ -353,8 +401,7 @@ export class AgentKernel {
   private readonly paths: AgentPaths;
   private readonly db: DatabaseSync;
   private readonly store: MemoryStore;
-  private readonly session: Session;
-  private readonly harness: AgentHarness;
+  private readonly session: AgentSession;
   private briefing: string | undefined;
   /** 统一时钟（构造注入或墙钟；与 open() 的 clock 闭包同源语义）。 */
   private readonly clock: () => string;
@@ -378,7 +425,7 @@ export class AgentKernel {
   /** Optional host event projection; it never owns business state. */
   private readonly emitEvent?: (type: AgentHostEventType, data: unknown) => Promise<void>;
   /** Removes the optional AgentHarness stream bridge during kernel shutdown. */
-  private readonly unsubscribeHarnessEvents?: () => void;
+  private readonly unsubscribeSessionEvents?: () => void;
   /** Shared mutable mode ref (tools read it via a getter before the kernel exists). */
   private readonly modeRef: { value: AgentMode } = { value: DEFAULT_AGENT_MODE };
   /** Live execution hooks for pending candidates (v0.3.0-C /approve). */
@@ -416,8 +463,7 @@ export class AgentKernel {
     db: DatabaseSync;
     store: MemoryStore;
     principal: Principal;
-    session: Session;
-    harness: AgentHarness;
+    session: AgentSession;
     taskStore?: BuyerTaskStore;
     scheduler?: TaskScheduler;
     supplierScheduler?: SupplierScheduler;
@@ -428,7 +474,7 @@ export class AgentKernel {
     broker?: CredentialBroker;
     merchantIntelligence?: MerchantIntelligenceBackend;
     emitEvent?: (type: AgentHostEventType, data: unknown) => Promise<void>;
-    unsubscribeHarnessEvents?: () => void;
+    unsubscribeSessionEvents?: () => void;
     modeRef?: { value: AgentMode };
     pendingHooks?: Map<string, PendingActionHooks>;
     turnId: { current: string };
@@ -441,7 +487,6 @@ export class AgentKernel {
     this.store = options.store;
     this.principal = options.principal;
     this.session = options.session;
-    this.harness = options.harness;
     if (options.taskStore !== undefined) this.taskStore = options.taskStore;
     if (options.scheduler !== undefined) this.scheduler = options.scheduler;
     if (options.supplierScheduler !== undefined) this.supplierScheduler = options.supplierScheduler;
@@ -452,7 +497,7 @@ export class AgentKernel {
     if (options.broker !== undefined) this.broker = options.broker;
     if (options.merchantIntelligence !== undefined) this.merchantIntelligence = options.merchantIntelligence;
     this.emitEvent = options.emitEvent;
-    this.unsubscribeHarnessEvents = options.unsubscribeHarnessEvents;
+    this.unsubscribeSessionEvents = options.unsubscribeSessionEvents;
     if (options.modeRef !== undefined) this.modeRef = options.modeRef;
     this.pendingHooks = options.pendingHooks ?? new Map();
     this.turnId = options.turnId;
@@ -481,9 +526,13 @@ export class AgentKernel {
       role: options.profile.role,
     });
     store.bindPrincipal(principal.principal_id);
-    let session: Session;
+    let mainSessionManager: MainSessionManager;
     try {
-      session = await openMainSession(paths, options.eventSessionId ?? MAIN_SESSION_ID);
+      mainSessionManager = openMainSessionManager(
+        paths,
+        paths.dir,
+        options.eventSessionId ?? MAIN_SESSION_ID,
+      );
     } catch (err) {
       db.close(); // never leak the SQLite handle on a fail-closed open
       throw err;
@@ -670,40 +719,68 @@ export class AgentKernel {
       merchantSkillRegistry.names.length > 0 ? merchantSkillRegistry : undefined,
     );
     let briefing: string | undefined;
-    const harness = new AgentHarness({
-      session,
-      models: options.models,
+    // §18.1 对位：0.87 的请求超时走 settings（providerRetry.timeoutMs /
+    // httpIdleTimeoutMs），kernel 侧另有 Promise.race 兜底。inMemory 设置避免
+    // 读写用户 ~/.pi/agent 的全局配置。
+    const settingsManager = SettingsManager.inMemory({
+      retry: {
+        provider: {
+          timeoutMs: options.profile.runtime.turn_timeout_seconds * 1000,
+        },
+      },
+      httpIdleTimeoutMs: options.profile.runtime.turn_timeout_seconds * 1000,
+    });
+    const modelRuntime = withPromptCacheRetention(
+      options.modelRuntime ?? (await buildModelRuntime(options)),
+      options.profile.merchant_experience?.prompt_cache_retention,
+    );
+    const kiwiTools: AgentHarnessTool<undefined>[] = [
+      ...buildMemoryTools(store, { turnId: () => turnId.current }),
+      ...buyerTools,
+      ...merchantTools,
+      ...merchantSkillTools,
+    ];
+    const customTools: ToolDefinition[] = kiwiTools.map((tool) => ({
+      name: tool.name,
+      label: tool.label,
+      description: tool.description,
+      parameters: tool.parameters,
+      // 0.87 harness declares six execute parameters (toolContext/invocation/
+      // context trailing); every kiwi tool implements only (id, params), so
+      // the adapter forwards exactly those two.
+      execute: async (toolCallId, params) =>
+        (tool.execute as (
+          id: string,
+          callParams: typeof params,
+        ) => ReturnType<AgentHarnessTool<undefined>["execute"]>)(toolCallId, params),
+    }));
+    const { session: agentSession } = await createAgentSession({
+      cwd: paths.dir,
       model: options.model,
-      tools: [
-        ...buildMemoryTools(store, { turnId: () => turnId.current }),
-        ...buyerTools,
-        ...merchantTools,
-        ...merchantSkillTools,
-      ],
-      systemPrompt: async () => (briefing === undefined ? base : `${base}\n\n${briefing}`),
-      // §18.1: a hung model/provider request must NOT wedge the chat forever —
-      // abort after the profile's turn timeout and surface an error text.
-      streamOptions: {
-        timeoutMs: options.profile.runtime.turn_timeout_seconds * 1000,
-        ...(options.profile.merchant_experience?.prompt_cache_retention !== undefined
-          ? {
-              cacheRetention: options.profile.merchant_experience.prompt_cache_retention,
-              sessionId: options.eventSessionId ?? MAIN_SESSION_ID,
-            }
-          : {}),
+      modelRuntime: modelRuntime,
+      settingsManager,
+      sessionManager: mainSessionManager.manager,
+      customTools,
+      noTools: "builtin",
+      resourceLoader: {
+        getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
+        getSkills: () => ({ skills: [], diagnostics: [] }),
+        getPrompts: () => ({ prompts: [], diagnostics: [] }),
+        getThemes: () => ({ themes: [], diagnostics: [] }),
+        getAgentsFiles: () => ({ agentsFiles: [] }),
+        // 每次 rebuild 都会读取：briefing setter 改字段后由下一 turn 生效。
+        getSystemPrompt: () => (briefing === undefined ? base : `${base}\n\n${briefing}`),
+        getSystemPromptSource: () => undefined,
+        getAppendSystemPrompt: () => [],
+        getAppendSystemPromptSources: () => [],
+        extendResources: () => {},
+        reload: async () => {},
       },
       ...(options.thinkingLevel !== undefined ? { thinkingLevel: options.thinkingLevel } : {}),
     });
-    // 强制使用 profile 指定的模型：pi-agent-core 会从 session 的 model_change
-    // 记录恢复历史模型——同一 agent_id 换过模型（如 fake→deepseek）时，旧会话
-    // 会把 fake 模型恢复回来覆盖新传入的 real 模型。显式 setModel 覆盖之。
-    if (options.model !== undefined) {
-      await harness.setModel(options.model);
-    }
-
-    const unsubscribeHarnessEvents = emitEvent === undefined
+    const unsubscribeSessionEvents = emitEvent === undefined
       ? undefined
-      : attachHarnessHostEvents(harness, emitEvent);
+      : attachSessionHostEvents(agentSession, emitEvent);
 
     const kernel = new AgentKernel({
       profile: options.profile,
@@ -711,8 +788,7 @@ export class AgentKernel {
       db,
       store,
       principal,
-      session,
-      harness,
+      session: agentSession,
       approvals,
       ...(handoffRuntime !== undefined ? { handoffRuntime } : {}),
       modeRef,
@@ -727,7 +803,7 @@ export class AgentKernel {
       ...(options.broker !== undefined ? { broker: options.broker } : {}),
       ...(merchantIntelligence !== undefined ? { merchantIntelligence } : {}),
       emitEvent,
-      ...(unsubscribeHarnessEvents !== undefined ? { unsubscribeHarnessEvents } : {}),
+      ...(unsubscribeSessionEvents !== undefined ? { unsubscribeSessionEvents } : {}),
     });
     kernel.briefingSetter = (value) => {
       briefing = value;
@@ -1257,11 +1333,14 @@ export class AgentKernel {
    * （消除"两个脑"）。
    */
   async injectContext(text: string): Promise<void> {
-    await this.harness.appendMessage({
+    // 0.87：走 sessionManager 纯入列（不触发模型），下轮 prompt 时进入
+    // buildSessionProjection。appendMessage 已被消毒包装拦截 thinking。
+    this.session.sessionManager.appendMessage({
       role: "user",
       content: `[系统记录] ${text}`,
       timestamp: Date.now(),
     });
+    this.session.refreshContext();
   }
 
   private async runMerchantGroundingRead(read: GroundingRead): Promise<string> {
@@ -1361,8 +1440,48 @@ export class AgentKernel {
       // dedup into a single evidence piece (§9.3).
       this.turnId.current = `${MAIN_SESSION_ID}:${++this.turnSeq}`;
       try {
-        const message = await this.harness.prompt(text);
-        const reply = assistantText(message);
+        // 0.87：session.prompt 返回 void；assistant 文本从事件流收集。
+        let reply = "";
+        const collect = (event: { type: string; message?: { role: string; content?: unknown } }) => {
+          if (
+            event.type === "message_end" &&
+            event.message?.role === "assistant" &&
+            Array.isArray(event.message.content)
+          ) {
+            const text = (event.message.content as Array<{ type: string; text?: string }>)
+              .filter((b) => b.type === "text")
+              .map((b) => b.text ?? "")
+              .join("");
+            if (text !== "") reply = text;
+          }
+        };
+        const unsubscribe = this.session.subscribe(
+          collect as Parameters<typeof this.session.subscribe>[0],
+        );
+        const timeoutMs = this.profile.runtime.turn_timeout_seconds * 1000;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), timeoutMs);
+        });
+        try {
+          const outcome = await Promise.race([
+            this.session.prompt(text).then(() => "done" as const),
+            timeout,
+          ]);
+          if (outcome === "timeout") {
+            await this.session.abort();
+            await this.session.waitForIdle();
+            reply = "";
+            await this.emitEvent?.("error", {
+              code: "model_turn_timeout",
+              message: `model turn exceeded ${this.profile.runtime.turn_timeout_seconds}s`,
+              retryable: true,
+            });
+          }
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+          unsubscribe();
+        }
         // §18.1: a model failure (throw OR empty response) must leave the
         // conversation and TUI intact.
         if (reply === "") {
@@ -1719,11 +1838,11 @@ export class AgentKernel {
       // 链上错误已各自 catch（this.chain 赋值时 catch），此处仅确保等待完成。
     }
     try {
-      await this.harness.waitForIdle();
+      await this.session.waitForIdle();
     } catch {
       // best-effort flush; closing the store is what must not be skipped
     }
-    this.unsubscribeHarnessEvents?.();
+    this.unsubscribeSessionEvents?.();
     this.db.close();
   }
 }

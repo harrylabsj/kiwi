@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
+import type { JsonObject } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { FakeCommerceClient } from "../src/commerce/fake-client.js";
 import { CommerceError, type CommerceClient } from "../src/commerce/types.js";
@@ -20,7 +21,7 @@ function scriptedTurn(decisionArgs: unknown): FauxResponseStep[] {
   return [
     fauxAssistantMessage([fauxToolCall(TOOL_GET_SNAPSHOT, {})]),
     fauxAssistantMessage([
-      fauxToolCall(TOOL_SUBMIT_DECISION, decisionArgs as Record<string, unknown>),
+      fauxToolCall(TOOL_SUBMIT_DECISION, decisionArgs as unknown as JsonObject),
     ]),
   ];
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
+import type { JsonObject } from "@earendil-works/pi-ai";
 import type { FakeCommerceClient } from "../src/commerce/fake-client.js";
 import {
   createScriptedFakeStreamFn,
@@ -27,7 +28,7 @@ function scriptedTurn(decisionArgs: unknown): FauxResponseStep[] {
   if (decisionArgs) {
     steps.push(
       fauxAssistantMessage([
-        fauxToolCall(TOOL_SUBMIT_DECISION, decisionArgs as Record<string, unknown>),
+        fauxToolCall(TOOL_SUBMIT_DECISION, decisionArgs as unknown as JsonObject),
       ]),
     );
   } else {
@@ -111,10 +112,10 @@ describe("buyer single turn (fake model + shared fake marketplace)", () => {
       fauxAssistantMessage([
         fauxToolCall(TOOL_SUBMIT_DECISION, {
           ...buyerAcceptDecision({ public_message: "我的最高预算是 200，89 元可以" }),
-        }),
+        } as unknown as JsonObject),
       ]),
       // Repaired: same decision without budget wording.
-      fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, { ...buyerAcceptDecision() })]),
+      fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, { ...buyerAcceptDecision() } as unknown as JsonObject)]),
     ]);
     const report = await runNegotiationTurn({
       profile: testBuyerProfile(),
@@ -200,9 +201,9 @@ describe("buyer single turn (fake model + shared fake marketplace)", () => {
       fauxAssistantMessage([
         fauxToolCall(TOOL_SUBMIT_DECISION, {
           ...buyerAcceptDecision({ conversation_id: "conv-someone-else" }),
-        }),
+        } as unknown as JsonObject),
       ]),
-      fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, { ...buyerAcceptDecision() })]),
+      fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, { ...buyerAcceptDecision() } as unknown as JsonObject)]),
     ]);
     const report = await runNegotiationTurn({
       profile: testBuyerProfile(),
@@ -225,10 +226,10 @@ describe("buyer single turn (fake model + shared fake marketplace)", () => {
       fauxAssistantMessage([
         fauxToolCall(TOOL_SUBMIT_DECISION, {
           ...buyerAcceptDecision({ public_message: "我的最高预算是 200" }),
-        }),
+        } as unknown as JsonObject),
       ]),
       // Repair attempt would exceed the budget and must be blocked locally.
-      fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, { ...buyerAcceptDecision() })]),
+      fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, { ...buyerAcceptDecision() } as unknown as JsonObject)]),
     ]);
     const report = await runNegotiationTurn({ profile, client: market.buyer, streamFn });
     expect(report.outcome.kind).toBe("failed");

@@ -5,15 +5,21 @@
   "runtime_dependencies": [
     {
       "name": "@earendil-works/pi-agent-core",
-      "spec": "0.83.0",
-      "resolved": "0.83.0",
-      "integrity": "sha512-RorGp9OH5l3ElpuC5a5ZQ2eWcchZGXflXRzVGkV99y3y6tT+LLNyxoYIdVKvTKWEObwhExeQbTH0fI2tE4iX4g=="
+      "spec": "0.87.1",
+      "resolved": "0.87.1",
+      "integrity": "sha512-Zev3B0HK7YS5A4EZQ2XnEqiJuirx6QBiltJ+LpmjV5a/+2IU0cfKtIfnkNkORK707XOvKBY2WRtk7cAwHpbh2Q=="
     },
     {
       "name": "@earendil-works/pi-ai",
-      "spec": "0.83.0",
-      "resolved": "0.83.0",
-      "integrity": "sha512-m3IZD4g3er0V8TC9+Vpgw/sjTKqcJlkcIBy/JvsgRubuuik3tAVzyugUg4rVrShIkkOT69mEd34NEqKUIsl6JQ=="
+      "spec": "0.87.1",
+      "resolved": "0.87.1",
+      "integrity": "sha512-X/3PfQBnnoeVdO9Cv8zHghUMglzlgNZYGNzoPnbRoGnHl3Rw3TlA2UKSUB7BRHUOxMryHXYa8dnjWZlbRheDZA=="
+    },
+    {
+      "name": "@earendil-works/pi-coding-agent",
+      "spec": "0.87.1",
+      "resolved": "0.87.1",
+      "integrity": "sha512-m8ArJUtVcQMSe1lLE/Ei7vX/JV7O39sWmWBsXV2NOU70F0qCp8GubA24pT3LnwTmM6LL2xV80/h6sQg85n69ew=="
     },
     {
       "name": "@modelcontextprotocol/sdk",
@@ -48,13 +54,13 @@
   ],
   "artifact": {
     "name": "harrylabsj-kiwi-0.11.0.tgz",
-    "sha256": "254aef8e19936c5cb2bb81716c90434603091a9365536343016c06dabbd035a6",
-    "bytes": 2018188
+    "sha256": "f83394ded9e8f102e87961a4b57c5267c647863063916a570e599b049f6b2123",
+    "bytes": 2005445
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-09-27T02:44:33.472Z"
+  "generated_at": "2026-09-27T03:59:00.485Z"
 }

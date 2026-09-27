@@ -35,11 +35,11 @@ function stubTruecolorEnv(): void {
 }
 
 async function openKernel(): Promise<AgentKernel> {
-  const { models, model } = createFakeChatModels();
+  const { providers, model } = createFakeChatModels();
   return AgentKernel.open({
     profile: testProfile(),
     paths: ensurePathsForDir(path.join(workDir, "agent")),
-    models,
+    providers,
     model,
     vault: new PrivateVault(new EnvKeyProvider("a".repeat(64))),
   });

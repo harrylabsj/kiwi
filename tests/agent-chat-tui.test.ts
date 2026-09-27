@@ -59,11 +59,11 @@ afterEach(() => {
 
 
 async function setup(): Promise<AgentKernel> {
-  const { models, model } = createFakeChatModels();
+  const { providers, model } = createFakeChatModels();
   return AgentKernel.open({
     profile: testProfile(),
     paths: ensurePathsForDir(path.join(workDir, "agent")),
-    models,
+    providers,
     model,
     vault: new PrivateVault(new EnvKeyProvider("a".repeat(64))),
   });
@@ -129,11 +129,11 @@ describe("runChatTui", () => {
     });
     db.close();
 
-    const { models, model } = createFakeChatModels();
+    const { providers, model } = createFakeChatModels();
     const kernel = await AgentKernel.open({
       profile: testBuyerProfile(),
       paths,
-      models,
+      providers,
       model,
       connector: new AlwaysFlakyConnector(),
       vault: new PrivateVault(new EnvKeyProvider("a".repeat(64))),

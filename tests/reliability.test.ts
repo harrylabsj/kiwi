@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
+import type { JsonObject } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { FakeCommerceClient } from "../src/commerce/fake-client.js";
 import { CommerceError } from "../src/commerce/types.js";
@@ -32,7 +33,7 @@ function scriptedTurn(decisionArgs: unknown): FauxResponseStep[] {
   return [
     fauxAssistantMessage([fauxToolCall(TOOL_GET_SNAPSHOT, {})]),
     fauxAssistantMessage([
-      fauxToolCall(TOOL_SUBMIT_DECISION, decisionArgs as Record<string, unknown>),
+      fauxToolCall(TOOL_SUBMIT_DECISION, decisionArgs as unknown as JsonObject),
     ]),
   ];
 }
@@ -345,7 +346,7 @@ describe("settlement escapes and shutdown edge cases", () => {
       fauxAssistantMessage([fauxToolCall(TOOL_GET_SNAPSHOT, {})]),
       // Leaks the private floor -> rejected_retryable.
       fauxAssistantMessage([
-        fauxToolCall(TOOL_SUBMIT_DECISION, validDecision({ public_message: "底价 80 元给你" })),
+        fauxToolCall(TOOL_SUBMIT_DECISION, validDecision({ public_message: "底价 80 元给你" }) as unknown as JsonObject),
       ]),
       fauxAssistantMessage("好的我再想想。"),
     ]);

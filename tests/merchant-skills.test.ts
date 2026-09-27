@@ -24,10 +24,10 @@ describe("Merchant skills registry", () => {
     const registry = SkillRegistry.fromDir(ROOT, "merchant");
     const tool = buildSkillTools(registry)[0];
     expect(tool).toBeDefined();
-    const loaded = await tool?.execute("test", { skill_name: "performance-insights" }, undefined, undefined, undefined);
+    const loaded = await tool?.execute("test", { skill_name: "performance-insights" });
     expect(loaded?.content[0]).toMatchObject({ type: "text" });
     expect((loaded?.content[0] as { text: string }).text).toContain("Performance insights");
-    const missing = await tool?.execute("test", { skill_name: "missing" }, undefined, undefined, undefined);
+    const missing = await tool?.execute("test", { skill_name: "missing" });
     expect((missing?.content[0] as { text: string }).text).toContain("没有名为 missing");
   });
 });

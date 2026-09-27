@@ -1,7 +1,8 @@
-import type { AgentHarnessTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { KiwiTool } from "../kiwi-tool.js";
 import type { SkillRegistry } from "./registry.js";
 
-type Tool = AgentHarnessTool<undefined>;
+type Tool = KiwiTool;
 
 function textResult(text: string, details?: unknown): AgentToolResult<unknown> {
   return { content: [{ type: "text", text }], details };

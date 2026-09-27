@@ -695,7 +695,7 @@ describe("private budget vaulting (§11.2, §6.3)", () => {
     });
     const getTask = tools.find((t) => t.name === "get_buyer_task");
     expect(getTask).toBeDefined();
-    const result = await getTask!.execute("call-1", { task_id: task.task_id }, undefined, undefined, undefined);
+    const result = await getTask!.execute("call-1", { task_id: task.task_id });
     const text = (result.content[0] as { type: "text"; text: string }).text;
     expect(text).not.toContain("2499");
     expect(text).toContain("私密预算");
@@ -758,7 +758,7 @@ describe("connector failure classification (§18.1, §18.2)", () => {
       now,
     });
     const getTask = tools.find((t) => t.name === "get_buyer_task");
-    const result = await getTask!.execute("call-1", { task_id: task.task_id }, undefined, undefined, undefined);
+    const result = await getTask!.execute("call-1", { task_id: task.task_id });
     const text = (result.content[0] as { type: "text"; text: string }).text;
     expect(text).toContain("tracking");
     expect(text).toContain("上次搜索失败");
@@ -796,9 +796,6 @@ describe("write-gate coverage for buyer tools (§16)", () => {
     const result = await create!.execute(
       "c1",
       { goal_text: "买一个杯子", intent: { query_text: "杯" } },
-      undefined,
-      undefined,
-      undefined,
     );
     const text = (result.content[0] as { type: "text"; text: string }).text;
     expect(text).toContain("manual 模式");
@@ -814,9 +811,6 @@ describe("write-gate coverage for buyer tools (§16)", () => {
     const result = await addRule!.execute(
       "c1",
       { task_id: task.task_id, rule_type: "price_below", condition: { threshold: 90 }, interval_seconds: 1800 },
-      undefined,
-      undefined,
-      undefined,
     );
     const text = (result.content[0] as { type: "text"; text: string }).text;
     expect(text).toContain("manual 模式");
@@ -834,14 +828,14 @@ describe("write-gate coverage for buyer tools (§16)", () => {
     // manual: advice only — never records the selection.
     const manual = toolsWithMode("manual", store, db, connector);
     const select = manual.tools.find((t) => t.name === "select_product_nonbinding");
-    const manualResult = await select!.execute("c1", args, undefined, undefined, undefined);
+    const manualResult = await select!.execute("c1", args);
     expect((manualResult.content[0] as { type: "text"; text: string }).text).toContain("manual 模式");
     expect(store.getTask(ready.task_id)?.status).not.toBe("selected_nonbinding");
 
     // supervised: a local non-binding marker — executes directly, no /approve.
     const supervised = toolsWithMode("supervised", store, db, connector);
     const select2 = supervised.tools.find((t) => t.name === "select_product_nonbinding");
-    const supervisedResult = await select2!.execute("c1", args, undefined, undefined, undefined);
+    const supervisedResult = await select2!.execute("c1", args);
     expect((supervisedResult.content[0] as { type: "text"; text: string }).text).toContain("已记录非绑定选定");
     expect(store.getTask(ready.task_id)?.status).toBe("selected_nonbinding");
     expect(supervised.approvals.listPending()).toHaveLength(0);
@@ -855,10 +849,10 @@ describe("write-gate coverage for buyer tools (§16)", () => {
     const args = { task_id: ready.task_id, candidate_id: candidateId, user_instruction: "就这个" };
     const tools = toolsWithMode("supervised", store, db, connector);
     const select = tools.tools.find((t) => t.name === "select_product_nonbinding");
-    const first = await select!.execute("c1", args, undefined, undefined, undefined);
+    const first = await select!.execute("c1", args);
     expect((first.content[0] as { type: "text"; text: string }).text).toContain("已记录非绑定选定");
     // 重试同一 select（幂等键内容寻址 → 事件去重，不产生第二条 selected）
-    await select!.execute("c2", args, undefined, undefined, undefined);
+    await select!.execute("c2", args);
     const selectedEvents = store.taskEvents(ready.task_id).filter((e) => e.type === "selected");
     expect(selectedEvents).toHaveLength(1);
   });
@@ -992,8 +986,8 @@ describe("P2: expiry, observation freshness and event dedup", () => {
       intent: { query_text: "杯", category: "kitchenware" },
       run_search: false,
     };
-    await create!.execute("c1", args, undefined, undefined, undefined);
-    const r2 = await create!.execute("c2", args, undefined, undefined, undefined);
+    await create!.execute("c1", args);
+    const r2 = await create!.execute("c2", args);
     expect(store.listTasks()).toHaveLength(1);
     expect((r2.content[0] as { type: "text"; text: string }).text).toContain("已存在");
   });
@@ -1011,9 +1005,6 @@ describe("P2: expiry, observation freshness and event dedup", () => {
         expires_at: "2026-08-10T00:00:00+08:00",
         run_search: false,
       },
-      undefined,
-      undefined,
-      undefined,
     );
     const task = store.listTasks()[0];
     expect(task?.expires_at).toBe("2026-08-09T16:00:00.000Z");
@@ -1032,9 +1023,6 @@ describe("P2: expiry, observation freshness and event dedup", () => {
         constraints: { max_total_price: 240 },
         run_search: false,
       },
-      undefined,
-      undefined,
-      undefined,
     );
     const task = store.listTasks()[0] as BuyerTask;
     expect(task.intent.quantity).toBe(2);
@@ -1108,9 +1096,6 @@ describe("search_listings 透出 handoff_destination（P3-11）", () => {
     const result = await search!.execute(
       "call-1",
       { need_description: "保温杯" },
-      undefined,
-      undefined,
-      undefined,
     );
     const rows = JSON.parse(toolText(result)) as Record<string, unknown>[];
     expect(rows).toHaveLength(1);
@@ -1131,9 +1116,6 @@ describe("search_listings 透出 handoff_destination（P3-11）", () => {
         handoff_destination_types: rows[0]?.handoff_destination_types,
         handoff_destination_ref: rows[0]?.handoff_destination_ref,
       },
-      undefined,
-      undefined,
-      undefined,
     );
     const event = store.taskEvents(task.task_id).find((e) => e.type === "candidate_shortlisted");
     expect(event?.payload.handoff_destination_ref).toBe(declaredRef);
@@ -1147,9 +1129,6 @@ describe("search_listings 透出 handoff_destination（P3-11）", () => {
     const result = await search!.execute(
       "call-1",
       { need_description: "保温杯" },
-      undefined,
-      undefined,
-      undefined,
     );
     const rows = JSON.parse(toolText(result)) as Record<string, unknown>[];
     expect(rows).toHaveLength(1);

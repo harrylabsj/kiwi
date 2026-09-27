@@ -33,7 +33,7 @@ import {
   type FauxResponseStep,
 } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Context } from "@earendil-works/pi-ai";
+import type { Context, JsonObject } from "@earendil-works/pi-ai";
 import type { AgentProfile } from "../config/profile.js";
 import {
   PROTOCOL_VERSION,
@@ -202,7 +202,9 @@ export function createDeterministicMerchantStreamFn(profile: AgentProfile): Stre
       }
       const snapshot = JSON.parse(snapshotText) as NegotiationSnapshot;
       const decision = deterministicMerchantDecision(snapshot, quoteTtl);
-      return fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, { ...decision })]);
+      return fauxAssistantMessage([
+        fauxToolCall(TOOL_SUBMIT_DECISION, { ...decision } as unknown as JsonObject),
+      ]);
     },
     // Safety net if the first response was consumed by a retry.
     (context: Context) => {
@@ -212,7 +214,9 @@ export function createDeterministicMerchantStreamFn(profile: AgentProfile): Stre
       }
       const snapshot = JSON.parse(snapshotText) as NegotiationSnapshot;
       const decision = deterministicMerchantDecision(snapshot, quoteTtl);
-      return fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, { ...decision })]);
+      return fauxAssistantMessage([
+        fauxToolCall(TOOL_SUBMIT_DECISION, { ...decision } as unknown as JsonObject),
+      ]);
     },
   ]);
 
@@ -379,7 +383,9 @@ export function createDeterministicBuyerStreamFn(profile: AgentProfile): StreamF
     }
     const snapshot = JSON.parse(snapshotText) as NegotiationSnapshot;
     const decision = deterministicBuyerDecision(snapshot, policy);
-    return fauxAssistantMessage([fauxToolCall(TOOL_SUBMIT_DECISION, { ...decision })]);
+    return fauxAssistantMessage([
+      fauxToolCall(TOOL_SUBMIT_DECISION, { ...decision } as unknown as JsonObject),
+    ]);
   };
   // Second entry is a safety net if the first response was consumed by a retry.
   handle.setResponses([respond, respond]);
