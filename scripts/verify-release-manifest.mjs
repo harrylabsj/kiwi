@@ -36,6 +36,47 @@ if (manifest.schema !== "kiwi.portfolio.release-manifest.v1" || !Array.isArray(m
   throw new Error("unsupported release manifest");
 }
 
+if (manifest.product_index !== undefined) {
+  const indexPath = manifest.product_index;
+  if (typeof indexPath !== "string" || indexPath !== "portfolio-release-index.json") {
+    throw new Error("manifest product_index must be portfolio-release-index.json");
+  }
+  if (!manifest.files.some((file) => file.path === indexPath) || !sums.some((entry) => entry.path === indexPath)) {
+    throw new Error("portfolio release index must be covered by SHA256SUMS and release manifest files");
+  }
+  const index = JSON.parse(await readFile(safePath(indexPath), "utf8"));
+  const expectedIds = new Set([
+    "kiwi", "kiwi-catalog", "shopping-cli", "kiwi-dsh-plugin", "hermes-plugin-kiwi",
+    "kiwi-catalog-admin", "workbuddy-procurement-expert", "workbuddy-merchant-app",
+    "workbuddy-merchant-connector", "workbuddy-kiwi-sourcing-connector",
+  ]);
+  if (index.schema !== "kiwi.portfolio.release-index.v1" || index.product_count !== expectedIds.size || !Array.isArray(index.products)) {
+    throw new Error("unsupported or incomplete portfolio release index");
+  }
+  const products = new Map(index.products.map((product) => [product.id, product]));
+  if (products.size !== expectedIds.size || [...expectedIds].some((id) => !products.has(id))) {
+    throw new Error("portfolio release index must contain each product exactly once");
+  }
+  const filesByPath = new Map(manifest.files.map((file) => [file.path, file.sha256]));
+  for (const product of products.values()) {
+    if (!Array.isArray(product.artifacts)) throw new Error(`${product.id}: artifacts must be an array`);
+    if (product.delivery === "artifact-in-bundle" && product.artifacts.length === 0) {
+      throw new Error(`${product.id}: artifact-in-bundle product has no artifacts`);
+    }
+    if (product.delivery === "external-reference-only" && product.artifacts.length !== 0) {
+      throw new Error(`${product.id}: external-reference-only product unexpectedly includes artifacts`);
+    }
+    if (!new Set(["artifact-in-bundle", "external-reference-only"]).has(product.delivery)) {
+      throw new Error(`${product.id}: unsupported delivery state`);
+    }
+    for (const artifact of product.artifacts) {
+      if (filesByPath.get(artifact.path) !== artifact.sha256) {
+        throw new Error(`${product.id}: artifact ${artifact.path} is missing or has a different digest in release manifest`);
+      }
+    }
+  }
+}
+
 const sumByPath = new Map(sums.map((entry) => [entry.path, entry.sha256]));
 for (const entry of manifest.files) {
   if (!entry || typeof entry.path !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256)) {
