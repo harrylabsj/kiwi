@@ -1,6 +1,6 @@
 {
   "schema": "kiwi.portfolio.products.v1",
-  "snapshot_date": "2026-09-27",
+  "snapshot_date": "2026-09-28",
   "version_policy": "Versions remain independent by product. The portfolio release bundle binds each available source commit, package version, candidate artifact hash, and external approval state.",
   "products": [
     {
@@ -12,19 +12,19 @@
       "release_controller": "portfolio-release",
       "artifact": "release/npm/*.tgz",
       "state": "candidate",
-      "last_known_registry_version": "0.10.0",
+      "last_known_registry_version": "0.11.0",
       "gates": ["full Kiwi verify", "protected kiwi-release environment", "npm trusted publishing"]
     },
     {
       "id": "kiwi-catalog",
       "name": "Kiwi Catalog",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "version_source": { "type": "toml", "scope": "consumer", "path": "kiwi-catalog/pyproject.toml", "field": "project.version" },
       "channel": "PyPI",
       "release_controller": "portfolio-release",
       "artifact": "release/kiwi-catalog/*",
       "state": "candidate",
-      "last_known_registry_version": "0.2.2",
+      "last_known_registry_version": "0.5.0",
       "gates": ["locked tests", "contract lock", "protected kiwi-release environment", "PyPI trusted publishing"]
     },
     {
@@ -64,17 +64,17 @@
     },
     {
       "id": "kiwi-catalog-admin",
-      "name": "Private Catalog operations extension",
-      "version": "0.1.0",
+      "name": "Private Catalog merchant and operations extension",
+      "version": "0.2.0",
       "version_source": { "type": "external-toml", "scope": "private", "path": "pyproject.toml", "field": "project.version" },
       "repository": "harrylabsj/kiwi-catalog-admin",
-      "source_commit": "7cdf683927eaa5a26b905f38a985f30a3b45be2a",
+      "source_commit": "b1b38a3eca7b56b058bc32296ecc7c989c9d712e",
       "channel": "private Git tag",
       "release_controller": "private extension repository",
       "artifact": null,
       "bundle_reason": "The source repository is private; its package is tracked by immutable repository and commit references instead of being copied into the public portfolio artifact.",
-      "state": "main-pushed; release tag pending",
-      "requires": ["kiwi-catalog >=0.5.0,<0.6"]
+      "state": "release-tagged v0.2.0; deployment pending",
+      "requires": ["kiwi-catalog >=0.5.1,<0.6"]
     },
     {
       "id": "workbuddy-procurement-expert",

@@ -6,12 +6,12 @@
 
 | 产品 ID | 当前版本来源 | 发布渠道 | 当前交付状态 | 主要门槛 |
 | --- | --- | --- | --- | --- |
-| `kiwi` | `package.json` | npm，由受保护的 Portfolio workflow 发布 | 源码 0.11.0；台账记载 npm 已知版本 0.10.0 | `npm run verify`、签名与 `kiwi-release` 环境审批 |
-| `kiwi-catalog` | `kiwi-catalog/pyproject.toml` | PyPI，由 Portfolio workflow 发布 | 源码 0.5.0，最近发布记录 0.2.2 | 锁定测试、契约锁、签名与环境审批 |
+| `kiwi` | `package.json` | npm，由受保护的 Portfolio workflow 发布 | 0.11.0 已在 npm registry 验证 | `npm run verify`、签名与 `kiwi-release` 环境审批 |
+| `kiwi-catalog` | `kiwi-catalog/pyproject.toml` | PyPI，由 Portfolio workflow 发布 | 候选 0.5.1；registry 最新已验证为 0.5.0 | 锁定测试、契约锁、签名与环境审批 |
 | `shopping-cli` | `shopping-cli/pyproject.toml` | PyPI，由 Portfolio workflow 发布 | 源码 3.2.5；发布状态由每次 registry 验证确定 | 锁定测试、契约锁、签名与环境审批 |
 | `kiwi-dsh-plugin` | `integrations/plugins/kiwi-dsh-plugin/package.json` | npm，由 Portfolio workflow 发布 | 0.1.0，central npm 发布通道 | 插件校验、签名与环境审批 |
 | `hermes-plugin-kiwi` | Hermes 仓库 `plugin.json` | GitHub 插件仓库 + Hermes 上游目录 | 仓库 tag v1.2.1；目录 pin 单独核对 | 固定仓库 SHA、插件校验、新会话冒烟、上游目录 PR |
-| `kiwi-catalog-admin` | 私有仓库 `pyproject.toml` | 私有 Git tag，不发 PyPI | 0.1.0，私有 main 已推送；正式 tag 另行创建 | Catalog 0.5.x 兼容、Ruff/mypy/pytest、私有仓库 CI |
+| `kiwi-catalog-admin` | 私有仓库 `pyproject.toml` | 私有 Git tag，不发 PyPI | v0.2.0 已打 tag；生产部署待完成 | Catalog 0.5.x 兼容、Ruff/mypy/pytest、私有仓库 CI |
 | `workbuddy-procurement-expert` | 专家包 `.codebuddy-plugin/plugin.json` | WorkBuddy 专家审核 | 本地候选 1.1.0；平台最近记录 v1.0.0 | 打包校验、WorkBuddy 预览和平台审核 |
 | `workbuddy-merchant-app` | `buddy-app.config.json` | WorkBuddy App Builder | 本地草稿 1.5.0；没有平台应用 ID | 应用级授权/回调、预览和平台审核 |
 | `workbuddy-merchant-connector` | `connector-meta.json` | WorkBuddy 连接器审核 | v1.1.1，资产 `oc_0053ad85c92a6587` 审核中 | 专用测试账号、OAuth/MCP 预览和平台审核 |
