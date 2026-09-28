@@ -12,15 +12,22 @@
  *      version + integrity，缺 integrity/未知版本 → fail-closed）；
  *   2) npm pack 计算发布物 sha256（发布物哈希）；
  *   3) 输出 supply-chain.sbom.json（可审计）。
+ *
+ * 完整性守卫（WP21 教训）：files 白名单里的普通路径（如 dist）若缺失，npm pack
+ * 不会报错、只会静默打出缺 dist 的小 tarball。因此打包前要求各白名单目录存在，
+ * 打包后要求它们真的进入 tarball，否则 fail-closed。
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// 测试可通过 KIWI_SUPPLY_CHAIN_ROOT 指向 fixture 根目录。
+const root = process.env.KIWI_SUPPLY_CHAIN_ROOT
+  ? path.resolve(process.env.KIWI_SUPPLY_CHAIN_ROOT)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
 const lock = JSON.parse(readFileSync(path.join(root, "package-lock.json"), "utf8"));
 
@@ -52,11 +59,40 @@ for (const [name, spec] of Object.entries(runtimeDeps)) {
 if (process.exitCode) process.exit(process.exitCode);
 
 // 2) 发布物哈希：npm pack → sha256。
+// files 白名单里的普通路径（无 glob 字符）必须存在且进入 tarball。
+const plainFileEntries = (packageJson.files ?? []).filter(
+  (entry) => typeof entry === "string" && !/[*?[\]]/.test(entry),
+);
+const missingEntries = plainFileEntries.filter((entry) => !existsSync(path.join(root, entry)));
+if (missingEntries.length > 0) {
+  fail(
+    `package.json files 白名单指向的目录缺失（发布物将不完整）：${missingEntries.join(", ")}；dist 缺失通常意味着未先 npm run build`,
+  );
+}
+if (process.exitCode) process.exit(process.exitCode);
+
 const work = mkdtempSync(path.join(tmpdir(), "kiwi-sbom-"));
-const packed = execFileSync("npm", ["pack", "--silent", "--pack-destination", work], {
+const packOutput = execFileSync("npm", ["pack", "--json", "--silent", "--pack-destination", work], {
   cwd: root,
   encoding: "utf8",
 }).trim();
+const packInfo = JSON.parse(packOutput)[0];
+const packed = packInfo.filename;
+if (plainFileEntries.length > 0 && !Array.isArray(packInfo.files)) {
+  fail("npm pack 未返回文件清单（npm 过旧？），无法核验发布物完整性");
+} else {
+  const packedPaths = (packInfo.files ?? []).map((file) => file.path);
+  const packedTopDirs = new Set(
+    packedPaths.filter((p) => p.includes("/")).map((p) => p.slice(0, p.indexOf("/"))),
+  );
+  const notPacked = plainFileEntries.filter(
+    (entry) => !packedPaths.includes(entry) && !packedTopDirs.has(entry),
+  );
+  if (notPacked.length > 0) {
+    fail(`打包产物缺少 files 白名单目录：${notPacked.join(", ")}（目录为空或被排除）`);
+  }
+}
+if (process.exitCode) process.exit(process.exitCode);
 const tarball = readFileSync(path.join(work, packed));
 const artifactSha256 = createHash("sha256").update(tarball).digest("hex");
 
