@@ -408,6 +408,14 @@ export function parseCsv(text: string): string[][] {
 
 // ── xlsx 读取（ZIP + sheet XML；零依赖）───────────────────────────────
 
+/**
+ * xlsx 读取的 zip 炸弹防护上限（验收修复）：入口已有压缩文件 ≤4 MiB 的限制，
+ * 但 deflate 可把 4 MiB 膨胀到 GB 级——单条目与全部条目的解压总量都必须封顶。
+ */
+export const XLSX_MAX_ZIP_ENTRIES = 128;
+export const XLSX_MAX_ENTRY_BYTES = 32 * 1024 * 1024;
+export const XLSX_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
+
 interface ZipEntry {
   name: string;
   method: number;
@@ -416,8 +424,17 @@ interface ZipEntry {
   localOffset: number;
 }
 
-/** 最小 ZIP 读取器：EOCD → 中央目录 → 本地头定位数据；支持 stored/deflate。 */
-function readZipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
+interface ZipReader {
+  /** 按需解压单个条目（缓存结果并计入总量）；不存在 → undefined。 */
+  read: (name: string) => Uint8Array | undefined;
+}
+
+/**
+ * 最小 ZIP 读取器：EOCD → 中央目录（只登记，不解压）→ 按需读本地头与数据。
+ * 只在 read() 时才解压（未引用的条目不消耗内存），解压前后都按声明的大小
+ * 校验，任何超限或声明不实都按 zip 炸弹拒绝。
+ */
+function createZipReader(bytes: Uint8Array): ZipReader {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let eocd = -1;
   for (let i = bytes.length - 22; i >= 0 && i >= bytes.length - 22 - 65536; i -= 1) {
@@ -428,8 +445,14 @@ function readZipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
   }
   if (eocd < 0) throw new TabularImportError("PARSE_ERROR", "不是合法的 xlsx 文件（找不到 ZIP 目录）");
   const entryCount = view.getUint16(eocd + 10, true);
+  if (entryCount > XLSX_MAX_ZIP_ENTRIES) {
+    throw new TabularImportError(
+      "LIMIT_ZIP_ENTRIES",
+      `xlsx 的 ZIP 条目数 ${entryCount} 超过上限 ${XLSX_MAX_ZIP_ENTRIES}，拒绝读取`,
+    );
+  }
   const cdOffset = view.getUint32(eocd + 16, true);
-  const entries: ZipEntry[] = [];
+  const entries = new Map<string, ZipEntry>();
   let cursor = cdOffset;
   for (let index = 0; index < entryCount; index += 1) {
     if (cursor + 46 > bytes.length || view.getUint32(cursor, true) !== 0x02014b50) {
@@ -443,11 +466,23 @@ function readZipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
     const commentLength = view.getUint16(cursor + 32, true);
     const localOffset = view.getUint32(cursor + 42, true);
     const name = new TextDecoder().decode(bytes.subarray(cursor + 46, cursor + 46 + nameLength));
-    entries.push({ name, method, compressedSize, uncompressedSize, localOffset });
+    entries.set(name, { name, method, compressedSize, uncompressedSize, localOffset });
     cursor += 46 + nameLength + extraLength + commentLength;
   }
-  const files = new Map<string, Uint8Array>();
-  for (const entry of entries) {
+
+  const cache = new Map<string, Uint8Array>();
+  let totalInflated = 0;
+  const read = (name: string): Uint8Array | undefined => {
+    const cached = cache.get(name);
+    if (cached !== undefined) return cached;
+    const entry = entries.get(name);
+    if (entry === undefined) return undefined;
+    if (entry.uncompressedSize > XLSX_MAX_ENTRY_BYTES) {
+      throw new TabularImportError(
+        "ZIP_BOMB",
+        `xlsx 内部文件 ${name} 声明解压后 ${entry.uncompressedSize} 字节，超过单条目上限 ${XLSX_MAX_ENTRY_BYTES} 字节（疑似 zip 炸弹），拒绝读取`,
+      );
+    }
     const local = entry.localOffset;
     if (local + 30 > bytes.length || view.getUint32(local, true) !== 0x04034b50) {
       throw new TabularImportError("PARSE_ERROR", `xlsx 的本地文件头损坏：${entry.name}`);
@@ -459,18 +494,48 @@ function readZipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
     let content: Uint8Array;
     if (entry.method === 0) {
       content = data;
+      if (content.length !== entry.uncompressedSize) {
+        throw new TabularImportError(
+          "ZIP_BOMB",
+          `xlsx 内部文件 ${name} 声明大小 ${entry.uncompressedSize} 字节与实际 ${content.length} 字节不符（疑似 zip 炸弹），拒绝读取`,
+        );
+      }
     } else if (entry.method === 8) {
       try {
-        content = new Uint8Array(inflateRawSync(Buffer.from(data)));
-      } catch {
+        content = new Uint8Array(
+          inflateRawSync(Buffer.from(data), { maxOutputLength: XLSX_MAX_ENTRY_BYTES }),
+        );
+      } catch (err) {
+        // 输出超过 maxOutputLength 时 Node 抛 RangeError/ERR_BUFFER_TOO_LARGE。
+        if (err instanceof RangeError) {
+          throw new TabularImportError(
+            "ZIP_BOMB",
+            `xlsx 内部文件 ${name} 解压输出超过单条目上限 ${XLSX_MAX_ENTRY_BYTES} 字节（疑似 zip 炸弹），拒绝读取`,
+          );
+        }
         throw new TabularImportError("PARSE_ERROR", `xlsx 内部文件解压失败：${entry.name}`);
+      }
+      if (content.length !== entry.uncompressedSize) {
+        throw new TabularImportError(
+          "ZIP_BOMB",
+          `xlsx 内部文件 ${name} 解压后 ${content.length} 字节与声明的 ${entry.uncompressedSize} 字节不符（疑似 zip 炸弹），拒绝读取`,
+        );
       }
     } else {
       throw new TabularImportError("PARSE_ERROR", `xlsx 使用了不支持的压缩方式：${entry.name}`);
     }
-    files.set(entry.name, content);
-  }
-  return files;
+    totalInflated += content.length;
+    if (totalInflated > XLSX_MAX_TOTAL_BYTES) {
+      throw new TabularImportError(
+        "ZIP_BOMB",
+        `xlsx 内部文件累计解压 ${totalInflated} 字节，超过总上限 ${XLSX_MAX_TOTAL_BYTES} 字节（疑似 zip 炸弹），拒绝读取`,
+      );
+    }
+    cache.set(name, content);
+    return content;
+  };
+
+  return { read };
 }
 
 function decodeXmlEntities(text: string): string {
@@ -508,14 +573,14 @@ export function parseXlsx(bytes: Uint8Array): string[][] {
   if (bytes.length > TABULAR_IMPORT_MAX_BYTES) {
     throw new TabularImportError("LIMIT_BYTES", `文件超过上限 ${TABULAR_IMPORT_MAX_BYTES} 字节`);
   }
-  const files = readZipEntries(bytes);
-  const sheetPath = resolveFirstSheetPath(files);
-  const sheetXml = files.get(sheetPath);
+  const reader = createZipReader(bytes);
+  const sheetPath = resolveFirstSheetPath(reader);
+  const sheetXml = reader.read(sheetPath);
   if (sheetXml === undefined) {
     throw new TabularImportError("PARSE_ERROR", `xlsx 里找不到工作表：${sheetPath}`);
   }
-  const shared = readSharedStrings(files.get("xl/sharedStrings.xml"));
-  const dateStyles = readDateStyles(files.get("xl/styles.xml"));
+  const shared = readSharedStrings(reader.read("xl/sharedStrings.xml"));
+  const dateStyles = readDateStyles(reader.read("xl/styles.xml"));
   const xml = new TextDecoder().decode(sheetXml);
 
   const rows: string[][] = [];
@@ -555,9 +620,9 @@ export function parseXlsx(bytes: Uint8Array): string[][] {
   return rows.filter((line) => !line.every((cell) => cell === ""));
 }
 
-function resolveFirstSheetPath(files: ReadonlyMap<string, Uint8Array>): string {
-  const workbook = files.get("xl/workbook.xml");
-  const rels = files.get("xl/_rels/workbook.xml.rels");
+function resolveFirstSheetPath(reader: ZipReader): string {
+  const workbook = reader.read("xl/workbook.xml");
+  const rels = reader.read("xl/_rels/workbook.xml.rels");
   if (workbook !== undefined && rels !== undefined) {
     const rid = /<sheet[^>]*\br:id="(rId\d+)"/.exec(new TextDecoder().decode(workbook))?.[1];
     if (rid !== undefined) {

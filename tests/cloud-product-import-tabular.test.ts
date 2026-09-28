@@ -6,6 +6,7 @@
  * 模板 roundtrip（CSV 与 xlsx）、默认列、未识别列、xlsx 日期序列号。
  */
 import { describe, expect, it } from "vitest";
+import { deflateRawSync } from "node:zlib";
 
 import {
   convertTabularImport,
@@ -15,6 +16,9 @@ import {
   renderImportTemplateXlsx,
   TABULAR_IMPORT_MAX_COLUMNS,
   TABULAR_IMPORT_MAX_ROWS,
+  XLSX_MAX_ENTRY_BYTES,
+  XLSX_MAX_TOTAL_BYTES,
+  XLSX_MAX_ZIP_ENTRIES,
   type TabularImportResult,
 } from "../src/cloud/product-import-tabular.js";
 
@@ -334,6 +338,118 @@ describe("xlsx 模板 roundtrip 与日期序列", () => {
   });
 });
 
+
+describe("xlsx zip 炸弹防护（验收修复）", () => {
+  const SHEET_MINIMAL =
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>` +
+    `<row r="1"><c r="A1" t="inlineStr"><is><t>sku</t></is></c><c r="B1" t="inlineStr"><is><t>title</t></is></c>` +
+    `<c r="C1" t="inlineStr"><is><t>currency</t></is></c><c r="D1" t="inlineStr"><is><t>unit</t></is></c>` +
+    `<c r="E1" t="inlineStr"><is><t>price</t></is></c><c r="F1" t="inlineStr"><is><t>valid_until</t></is></c></row>` +
+    `<row r="2"><c r="A2" t="inlineStr"><is><t>B-1</t></is></c><c r="B2" t="inlineStr"><is><t>杯子</t></is></c>` +
+    `<c r="C2" t="inlineStr"><is><t>CNY</t></is></c><c r="D2" t="inlineStr"><is><t>个</t></is></c>` +
+    `<c r="E2"><v>9.9</v></c><c r="F2" t="inlineStr"><is><t>2027-12-31</t></is></c></row>` +
+    `</sheetData></worksheet>`;
+
+  function baseEntries(overrides: Partial<TestZipEntry> = {}): TestZipEntry[] {
+    return [
+      { name: "[Content_Types].xml", content: contentTypes() },
+      { name: "_rels/.rels", content: rels() },
+      { name: "xl/workbook.xml", content: workbook() },
+      { name: "xl/_rels/workbook.xml.rels", content: workbookRels() },
+      { name: "xl/worksheets/sheet1.xml", content: SHEET_MINIMAL, ...overrides },
+    ];
+  }
+
+  it("deflate 条目（真实 Excel 存法）仍可正常解析", () => {
+    const bytes = buildTestXlsx(baseEntries().map((e) => ({ ...e, deflate: true })));
+    const result = convertTabularImport({ kind: "xlsx", bytes }, OPTIONS);
+    expect(result.ok).toBe(true);
+    expect(result.table?.products[0]?.sku).toBe("B-1");
+  });
+
+  it("声明的解压大小超过单条目上限 → ZIP_BOMB 拒绝（不解压）", () => {
+    const bytes = buildTestXlsx(
+      baseEntries({
+        deflate: true,
+        content: "x".repeat(1024),
+        declaredUncompressedSize: XLSX_MAX_ENTRY_BYTES + 1,
+      }),
+    );
+    const result = convertTabularImport({ kind: "xlsx", bytes }, OPTIONS);
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]?.code).toBe("ZIP_BOMB");
+    expect(result.errors[0]?.message).toContain(String(XLSX_MAX_ENTRY_BYTES));
+  });
+
+  it("声明大小与实际解压不符 → ZIP_BOMB 拒绝", () => {
+    const bytes = buildTestXlsx(
+      baseEntries({ deflate: true, content: "x".repeat(1024 * 1024), declaredUncompressedSize: 100 }),
+    );
+    const result = convertTabularImport({ kind: "xlsx", bytes }, OPTIONS);
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]?.code).toBe("ZIP_BOMB");
+    expect(result.errors[0]?.message).toContain("不符");
+  });
+
+  it("真实 zip 炸弹：声明在限内但解压输出冲破单条目上限 → ZIP_BOMB", () => {
+    // 40 MiB 高度可压缩数据；声明 20 MiB（≤32 MiB，骗过声明检查），
+    // 解压输出触发 inflateRawSync 的 maxOutputLength。
+    const bomb = Buffer.alloc(40 * 1024 * 1024, 0x41);
+    const bytes = buildTestXlsx(
+      baseEntries({
+        deflate: true,
+        content: bomb,
+        declaredUncompressedSize: 20 * 1024 * 1024,
+      }),
+    );
+    expect(bytes.length).toBeLessThan(4 * 1024 * 1024); // 压缩包本身很小——正是炸弹形态
+    const result = convertTabularImport({ kind: "xlsx", bytes }, OPTIONS);
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]?.code).toBe("ZIP_BOMB");
+    expect(result.errors[0]?.message).toContain("单条目上限");
+  });
+
+  it("多条目累计解压超过总上限 → ZIP_BOMB 拒绝（单条目均在限内）", () => {
+    const half = 20 * 1024 * 1024;
+    expect(XLSX_MAX_TOTAL_BYTES).toBeLessThan(2 * half);
+    const bytes = buildTestXlsx([
+      { name: "[Content_Types].xml", content: contentTypes() },
+      { name: "_rels/.rels", content: rels() },
+      { name: "xl/workbook.xml", content: workbook() },
+      { name: "xl/_rels/workbook.xml.rels", content: workbookRels() },
+      { name: "xl/sharedStrings.xml", content: `<sst>${"<si><t>x</t></si>".repeat(1024)}${"x".repeat(half - 20480)}</sst>`, deflate: true },
+      { name: "xl/worksheets/sheet1.xml", content: SHEET_MINIMAL + `<!--${"y".repeat(half)}-->`, deflate: true },
+    ]);
+    const result = convertTabularImport({ kind: "xlsx", bytes }, OPTIONS);
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]?.code).toBe("ZIP_BOMB");
+    expect(result.errors[0]?.message).toContain("总上限");
+  });
+
+  it("ZIP 条目数超过上限 → LIMIT_ZIP_ENTRIES 拒绝", () => {
+    const entries = baseEntries();
+    for (let i = 0; i < XLSX_MAX_ZIP_ENTRIES + 1; i += 1) {
+      entries.push({ name: `xl/dummy-${i}.bin`, content: "0" });
+    }
+    const bytes = buildTestXlsx(entries);
+    const result = convertTabularImport({ kind: "xlsx", bytes }, OPTIONS);
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]?.code).toBe("LIMIT_ZIP_ENTRIES");
+    expect(result.errors[0]?.message).toContain(String(XLSX_MAX_ZIP_ENTRIES));
+  });
+
+  it("未引用的条目不会被解压（惰性读取不放大炸弹）", () => {
+    // 一个声明 100 MiB 的无关条目不影响读取：它从未被 read()。
+    const bytes = buildTestXlsx([
+      ...baseEntries(),
+      { name: "xl/evil-unused.bin", content: "z", declaredUncompressedSize: 100 * 1024 * 1024 },
+    ]);
+    const result = convertTabularImport({ kind: "xlsx", bytes }, OPTIONS);
+    expect(result.ok).toBe(true);
+  });
+});
+
 // ── 测试内嵌的最小 stored-xlsx 构造器（与模块生成器同构，仅测试用）──────
 
 function crc32(bytes: Uint8Array): number {
@@ -356,22 +472,38 @@ function crc32Table(): number[] {
   return cachedTable;
 }
 
-function buildTestXlsx(entries: ReadonlyArray<{ name: string; content: string }>): Uint8Array {
+interface TestZipEntry {
+  name: string;
+  content: string | Uint8Array;
+  /** 以 deflate 存放（真实 Excel 的存法）；默认 stored。 */
+  deflate?: boolean;
+  /** 覆写 ZIP 头里声明的解压大小（构造声明不实的条目，测 zip 炸弹防护）。 */
+  declaredUncompressedSize?: number;
+}
+
+function buildTestXlsx(entries: ReadonlyArray<TestZipEntry>): Uint8Array {
   const encoder = new TextEncoder();
   const locals: Uint8Array[] = [];
   const centrals: Uint8Array[] = [];
   let offset = 0;
   for (const entry of entries) {
     const nameBytes = encoder.encode(entry.name);
-    const dataBytes = encoder.encode(entry.content);
-    const crc = crc32(dataBytes);
+    const rawBytes =
+      typeof entry.content === "string" ? encoder.encode(entry.content) : entry.content;
+    const dataBytes = entry.deflate
+      ? new Uint8Array(deflateRawSync(Buffer.from(rawBytes)))
+      : rawBytes;
+    const declared = entry.declaredUncompressedSize ?? rawBytes.length;
+    const method = entry.deflate ? 8 : 0;
+    const crc = crc32(rawBytes);
     const local = new Uint8Array(30 + nameBytes.length);
     const lv = new DataView(local.buffer);
     lv.setUint32(0, 0x04034b50, true);
     lv.setUint16(4, 20, true);
+    lv.setUint16(8, method, true);
     lv.setUint32(14, crc, true);
     lv.setUint32(18, dataBytes.length, true);
-    lv.setUint32(22, dataBytes.length, true);
+    lv.setUint32(22, declared, true);
     lv.setUint16(26, nameBytes.length, true);
     local.set(nameBytes, 30);
     const central = new Uint8Array(46 + nameBytes.length);
@@ -379,9 +511,10 @@ function buildTestXlsx(entries: ReadonlyArray<{ name: string; content: string }>
     cv.setUint32(0, 0x02014b50, true);
     cv.setUint16(4, 20, true);
     cv.setUint16(6, 20, true);
+    cv.setUint16(10, method, true);
     cv.setUint32(16, crc, true);
     cv.setUint32(20, dataBytes.length, true);
-    cv.setUint32(24, dataBytes.length, true);
+    cv.setUint32(24, declared, true);
     cv.setUint16(28, nameBytes.length, true);
     cv.setUint32(42, offset, true);
     central.set(nameBytes, 46);
