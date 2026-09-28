@@ -1,6 +1,6 @@
 {
   "name": "@harrylabsj/kiwi",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Kiwi: standalone A2A commerce negotiation agent runtime (Pi Agent Core + shopping-cli Commerce API)",
   "type": "module",
   "license": "Apache-2.0",
@@ -33,6 +33,7 @@
     "verify:contracts": "node scripts/verify-contracts.mjs",
     "verify:package": "bash scripts/verify-package.sh",
     "verify:portfolio-products": "node scripts/verify-portfolio-products.mjs",
+    "verify:cloud-release-candidate": "node scripts/verify-cloud-package-candidate.mjs",
     "verify:portfolio-lock": "node scripts/verify-portfolio-lock-candidate.mjs",
     "probe:workbench-capacity": "npm run build && node scripts/workbench-capacity-probe.mjs",
     "soak:workbench": "npm run build && node scripts/workbench-soak.mjs",

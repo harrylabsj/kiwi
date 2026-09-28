@@ -3,20 +3,22 @@
   "name_zh": "Kiwi 商家运营",
   "name_en": "Kiwi Merchant Operations",
   "description": "连接 Kiwi 商家目录，起草公开资料、获取门户确认入口、查询与撤回资料，并查看匿名关注数及浏览量；采购专家可按商品词发现已发布商家。实际发布需商家在目录门户确认；不连接商家自有实例，不处理商品库存或实时询价。",
-  "description_zh": "连接 Kiwi 商家目录，起草公开资料、获取门户确认入口、查询与撤回资料，并查看匿名关注数及浏览量；采购专家可按商品词发现已发布商家。实际发布需商家在目录门户确认；不连接商家自有实例，不处理商品库存或实时询价。",
-  "description_en": "Connect to the Kiwi merchant catalog to draft, review and withdraw public profiles, and view aggregate follower and page-view counts. Merchants must confirm publication in the catalog portal. This connector does not access merchant instances, inventory or live inquiries.",
+  "description_zh": "连接 Kiwi 商家目录，查看开通、名片发布、心跳在线状态与商品名额，起草公开资料、获取门户确认入口、查询与撤回资料，并查看匿名关注数及浏览量；采购专家可按商品词发现已发布商家。实际发布需商家在目录门户确认；不连接商家自有实例，不处理商品库存或实时询价。",
+  "description_en": "Connect to the Kiwi merchant catalog to check onboarding, listing publication, heartbeat presence and product quota; draft, review and withdraw public profiles; and view aggregate follower and page-view counts. Merchants must confirm publication in the catalog portal. This connector does not access merchant instances, inventory or live inquiries.",
   "source": "kiwi-merchant",
   "type": "mcp",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "minWorkbuddyVersion": "4.24.0",
   "examples_zh": [
     "我是新商家，怎么把商品发布到 Kiwi 目录让采购专家搜到？",
     "帮我起草一条公开资料草稿，我要先在门户确认再发布",
-    "我的资料现在是什么状态？有没有被撤回？"
+    "我的资料现在是什么状态？有没有被撤回？",
+    "我的服务上线了吗？心跳和商品名额是什么状态？"
   ],
   "examples_en": [
     "I'm a new merchant — how do I publish my products to the Kiwi catalog so the sourcing expert can find me?",
     "Draft a catalog profile for me; I'll confirm and publish it in the portal",
-    "What's the current status of my catalog profile? Was anything withdrawn?"
+    "What's the current status of my catalog profile? Was anything withdrawn?",
+    "Is my service online? What are its heartbeat and product quota status?"
   ]
 }

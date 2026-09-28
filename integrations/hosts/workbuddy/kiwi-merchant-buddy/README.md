@@ -2,7 +2,7 @@
 
 `buddy-app.config.json` 是 Buddy 后台配置的本地草稿：官方文档说明后台「支持导出配置 JSON 文件在本地环境测试验证」，但导出格式未公开。本文件为自定义清晰结构，供导出预览和人工照着配置；每次退出配置前后台导出文件，下次导入还原（官方最佳实践第 5 条）。
 
-对应连接器包见 `../kiwi-merchant-gateway-connector/`（远程 HTTPS MCP + OAuth，source=`kiwi-merchant`）。v1.1.0 的旧平台资产已撤回；v1.1.1 已提交审核，当前 ID `oc_0053ad85c92a6587`，获批并完成 OAuth 实测后配置到 Buddy 内置连接器。
+对应连接器包见 `../kiwi-merchant-gateway-connector/`（远程 HTTPS MCP + OAuth，source=`kiwi-merchant`）。v1.1.0 的旧平台资产已撤回；WP22 正准备 v1.2.0 七工具候选送审包；尚未上传，需平台生成新 ID 并完成审核后配置到 Buddy 内置连接器。
 
 ## 五个后台模块怎么填
 
@@ -25,7 +25,7 @@
 
 ### 模块 3：市场配置
 
-- 连接器：待 v1.1.1 审核通过后，使用平台新生成的资产 ID 配置 Buddy 内置连接器，并核对其只暴露预期的 6 个目录工具。不得引用已撤回/删除的历史资产 ID。技能三个：`skills/kiwi-merchant-cs-prep/` 已作为 `os_dc3a52407574eb77` 提交审核，发布后再加入应用市场，它只准备客服 FAQ/回复草稿，不自动接待客户；`skills/kiwi-cloud-deploy/`（1.7.0 新增）云端接待一键部署，**需单独提交技能资产审核**；执行路径已按 V1 实测改用 `workbuddy_sites_deploy`（首次发布取地址 → prepare → 同一应用再发布 → 自检）、发布参数已回填（WP17，绑定 0.11.0 合并线产物），剩余前置为**真实发布实测**（费用/弹窗需东哥确认）与 npm 正式发布后复核 integrity，见配置 `$pending.skills`；`skills/kiwi-product-import/`（1.7.0 内 WP12 新增）商品导入表整理（列映射确认 → 生成模板一致 CSV + 问题清单 → 引导工作台上传），**需单独提交技能资产审核**（不依赖平台工具，审核前可退回普通任务执行），见配置 `$pending.skills`。「日常运营」模式「整理商品」胶囊以 `bindSkills` 表达技能绑定；平台若不支持胶囊级技能绑定，以模式 skills 为准。
+- 连接器：待 v1.2.0 审核通过后，使用平台新生成的资产 ID 配置 Buddy 内置连接器，并核对其只暴露预期的 7 个目录工具。不得引用已撤回/删除的历史资产 ID。技能三个：`skills/kiwi-merchant-cs-prep/` 已作为 `os_dc3a52407574eb77` 提交审核，发布后再加入应用市场，它只准备客服 FAQ/回复草稿，不自动接待客户；`skills/kiwi-cloud-deploy/`（1.7.0 新增）云端接待一键部署，**需单独提交技能资产审核**；执行路径已按 V1 实测改用 `workbuddy_sites_deploy`（首次发布取地址 → prepare → 同一应用再发布 → 自检）、发布参数已回填（WP17，绑定 0.11.0 合并线产物），剩余前置为**真实发布实测**（费用/弹窗需东哥确认）与 npm 正式发布后复核 integrity，见配置 `$pending.skills`；`skills/kiwi-product-import/`（1.7.0 内 WP12 新增）商品导入表整理（列映射确认 → 生成模板一致 CSV + 问题清单 → 引导工作台上传），**需单独提交技能资产审核**（不依赖平台工具，审核前可退回普通任务执行），见配置 `$pending.skills`。「日常运营」模式「整理商品」胶囊以 `bindSkills` 表达技能绑定；平台若不支持胶囊级技能绑定，以模式 skills 为准。
 - 专家：不配置；专家页精选场景也不配置（需要关联专家/专家团）。
 
 ### 模块 4：其他配置
@@ -36,7 +36,7 @@
 
 ### 模块 5：预览调试
 
-提交审核前用预览链接在 WorkBuddy 客户端打开预览态，逐项过一遍各模式与全部胶囊；另外手动验证市场中的三个技能。`kiwi-cloud-deploy` 的预览要点：①确认会话里是否存在发布工具 `workbuddy_sites_deploy`（V1 实测该工具存在、无 inspect/activate/deploy）——不存在时应按方案 B 原样输出 `references/fallback-prompt.md` 提示词（占位已可用 release.json 回填值替换）；②核对 `references/release.json` 三个值与技能正文一致（0.11.0 / sha256 / sha512）；③一次性口令只展示一次；④真实发布实测未做，预览里不得宣称一键上云已验证。`kiwi-product-import` 的预览要点：①贴一段含底价列的商品表格，应先确认列映射并剔除底价列、不编造缺失价格；②生成的 CSV 列名应与工作台「商品与导入」页模板一致（`references/columns.md`）；③应提醒整表替换语义并引导商家本人在工作台上传确认。
+提交审核前用预览链接在 WorkBuddy 客户端打开预览态，逐项过一遍各模式与全部胶囊；另外手动验证市场中的三个技能。`kiwi-cloud-deploy` 的预览要点：①确认会话里是否存在发布工具 `workbuddy_sites_deploy`（V1 实测该工具存在、无 inspect/activate/deploy）——不存在时应按方案 B 原样输出 `references/fallback-prompt.md` 提示词（占位已发布后可用 release.json 回填值替换）；②核对 `references/release.json` 三个值与技能正文一致（0.12.0 / sha256 / sha512）；③一次性口令只展示一次；④真实发布实测未做，预览里不得宣称一键上云已验证。`kiwi-product-import` 的预览要点：①贴一段含底价列的商品表格，应先确认列映射并剔除底价列、不编造缺失价格；②生成的 CSV 列名应与工作台「商品与导入」页模板一致（`references/columns.md`）；③应提醒整表替换语义并引导商家本人在工作台上传确认。
 
 ## 发布流程
 
@@ -64,6 +64,6 @@
 ## 需在 WorkBuddy 后台核对的字段
 
 - `connector-meta.json`：OAuth 包省略 `auth_mode`；`source: "kiwi-merchant"` 的全局唯一性；平台生成的新连接器 ID 不得复用买方 `oc_bd73f860e3e2b5d3`。
-- `mcp.json`：`tools` 数组是**非标准信息性声明**（官方 schema 无此字段，平台实际以 MCP `tools/list` 为准）；若后台校验拒绝未知字段，先核对运行时 6 个目录工具，再按平台要求调整包。`src/merchant-gateway/catalog-tools.ts` 是工具实现基线，本版没有实例工具。
+- `mcp.json`：`tools` 数组是**非标准信息性声明**（官方 schema 无此字段，平台实际以 MCP `tools/list` 为准）；若后台校验拒绝未知字段，先核对运行时 7 个目录工具，再按平台要求调整包。`src/merchant-gateway/catalog-tools.ts` 是工具实现基线，本版没有实例工具。
 - `mcp.json`：URL 必须指向真实多商家网关的 HTTPS `/mcp`；不能指向单个商家实例。
 - Buddy 后台：内置连接器的 OAuth 限制、「跳过首次绑定」的适用性、应用 icon 设计规范（16px、线宽 1.2px、有断口）与连接器 icon 的关系。

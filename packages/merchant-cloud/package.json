@@ -1,10 +1,14 @@
 {
   "name": "@harrylabsj/kiwi-merchant-cloud",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Kiwi merchant cloud runtime package",
   "license": "Apache-2.0",
   "type": "module",
   "main": "index.js",
   "files": ["app", "contracts", "node_modules", "index.js", "runtime-package.json", "prepare.mjs", "build-manifest.json"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harrylabsj/kiwi.git"
+  },
   "scripts": { "prepare-cloud": "node prepare.mjs" }
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.12.0 — 2026-09-29
+
+- Add read-only `kiwi_catalog_get_service_status` to the WorkBuddy merchant gateway connector tool contract.
+- Add `@harrylabsj/kiwi-merchant-cloud` to the signed portfolio release artifact and protected npm publisher job.
+- Prepare a post-publication registry-integrity backfill for the `kiwi-cloud-deploy` release pin.
+
 ## v0.10.0 — 2026-09-18
 
 **商家连接器：网关职责收敛为第 0 版目录能力**：

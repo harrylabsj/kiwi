@@ -114,6 +114,7 @@ function writeProfile(dir, commerceUrl) {
       "runtime_version: 0.6.0",
       "protocol_version: shopping.negotiation/0.1",
       "agent_id: merchant-agent:merchant-001",
+      'name: "Kiwi A2A Merchant"',
       "role: merchant",
       "owner_id: merchant-001",
       "commerce:",

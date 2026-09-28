@@ -257,7 +257,7 @@ sudo tar czf /opt/kiwi-catalog-backups/kiwi-catalog-src-$TS.tgz -C /opt kiwi-cat
 
 # 2) 从官方 index 安装（见下方「注意」：本机默认 index 是阿里云镜像）
 sudo /opt/kiwi-catalog/.venv/bin/pip install --upgrade \
-  --index-url https://pypi.org/simple/ 'kiwi-catalog[api]==<version>'
+  --index-url https://pypi.org/simple/ 'kiwi-catalog[api]==0.5.2'
 
 # 3) 重启服务
 sudo systemctl restart kiwi-catalog
@@ -296,7 +296,7 @@ PY
 
 ```sh
 sudo /opt/kiwi-catalog/.venv/bin/pip install --upgrade \
-  --index-url https://pypi.org/simple/ 'kiwi-catalog[api]==<上一个已验证版本>'
+  --index-url https://pypi.org/simple/ 'kiwi-catalog[api]==0.5.1'
 sudo systemctl restart kiwi-catalog
 ```
 
@@ -304,7 +304,46 @@ sudo systemctl restart kiwi-catalog
 原子执行）：旧版本代码不会读新表，因此回滚不需要降级数据库；但如果新版本已写入
 新表数据，那些数据在回滚后不可见（保留在库中，再次升级即恢复）。
 
-## 6.2 存活信号（WP6）
+## 6.2 网关升级到 Kiwi 0.12.0（使用 npm 发布包）
+
+仅在 `@harrylabsj/kiwi@0.12.0` 已正式发布并通过 portfolio `verify-registry` 后执行。服务继续从 `/opt/kiwi-gateway/app/dist/cli.js` 启动；先把 npm tarball 解到同文件系统的 staging 目录，再安装生产依赖并原子替换目录。以下命令由维护者在服务器 shell 中逐条运行：
+
+```sh
+set -euo pipefail
+TS=$(date +%Y%m%d-%H%M%S)
+TMP=$(mktemp -d)
+sudo mkdir -p /opt/kiwi-gateway/backups
+sudo cp -a /opt/kiwi-gateway/app "/opt/kiwi-gateway/backups/app-$TS"
+npm pack @harrylabsj/kiwi@0.12.0 --registry=https://registry.npmjs.org/ --pack-destination "$TMP"
+sudo mkdir "/opt/kiwi-gateway/app.next-$TS"
+sudo tar -xzf "$TMP/harrylabsj-kiwi-0.12.0.tgz" -C "/opt/kiwi-gateway/app.next-$TS" --strip-components=1
+sudo npm install --prefix "/opt/kiwi-gateway/app.next-$TS" --omit=dev --ignore-scripts --registry=https://registry.npmjs.org/
+sudo chown -R kiwi-gateway:kiwi-gateway "/opt/kiwi-gateway/app.next-$TS"
+node --version  # must satisfy package engines.node >=22.19.0
+sudo mv /opt/kiwi-gateway/app "/opt/kiwi-gateway/app.prev-$TS"
+sudo mv "/opt/kiwi-gateway/app.next-$TS" /opt/kiwi-gateway/app
+sudo systemctl restart kiwi-gateway
+sudo systemctl --no-pager --full status kiwi-gateway
+curl -fsS https://merchant.kiwi.harrylabsj.com/health
+rm -rf "$TMP"
+```
+
+先保留 `/opt/kiwi-gateway/app.prev-$TS` 与 `.tgz`，验收通过后再按运维保留策略清理。运行用户、`gateway.env`、`data/`、`tenants.json` 和反向代理配置均沿用原值。
+
+### 回滚网关代码
+
+服务异常时恢复备份目录并重启；数据库与凭据数据目录不要回滚或覆盖：
+
+```sh
+TS=<上面记录的时间戳>
+sudo mv /opt/kiwi-gateway/app "/opt/kiwi-gateway/app.failed-$TS"
+sudo cp -a "/opt/kiwi-gateway/app.prev-$TS" /opt/kiwi-gateway/app
+sudo systemctl restart kiwi-gateway
+sudo systemctl --no-pager --full status kiwi-gateway
+curl -fsS https://merchant.kiwi.harrylabsj.com/health
+```
+
+## 6.3 存活信号（WP6）
 
 | 参数 | 位置 | 缺省 | 说明 |
 | --- | --- | --- | --- |
@@ -355,6 +394,17 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://veyquo.com/admin/login    # �
 
 # 4) 绑定与监听只在内网
 ss -ltnp | grep -E ':(9000|9100|9200)'
+
+# 5) 目录服务状态接口（已连接商家自己的 catalog:read access token）
+curl -fsS -H "Authorization: Bearer ${KIWI_MERCHANT_ACCESS_TOKEN}" \
+  https://catalog.kiwi.harrylabsj.com/v1/accounts/me/service-status | jq .
+
+# 6) OAuth 授权后的网关工具冒烟（将 access token 放入当前 shell，不写入文档/命令历史）
+curl -fsS -H "Authorization: Bearer ${KIWI_MERCHANT_ACCESS_TOKEN}" \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -H 'MCP-Protocol-Version: 2025-03-26' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kiwi_catalog_get_service_status","arguments":{}}}' \
+  https://merchant.kiwi.harrylabsj.com/mcp | jq .
 ```
 
 端到端链路（发布闭环 + 自助绑定 + 配对码 + 实例路由 + 租户隔离 + 解绑）用仓库脚本在本地跑：

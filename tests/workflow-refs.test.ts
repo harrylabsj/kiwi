@@ -182,3 +182,37 @@ describe("GitHub workflow action refs", () => {
     expect(src).toMatch(/lock\.bundle_sha256 !== portfolio\.contract_bundle_sha256/);
   });
 });
+
+describe("merchant-cloud protected portfolio release", () => {
+  it("builds and signs the cloud package into its dedicated artifact path", () => {
+    const doc = YAML.parse(readFileSync(join(WORKFLOWS_DIR, "portfolio-release.yml"), "utf8")) as {
+      jobs: Record<string, { steps?: Array<{ name?: string; run?: string }> }>;
+    };
+    const build = doc.jobs["build-once"];
+    const runs = (build?.steps ?? []).map((step) => step.run ?? "").join("\n");
+    expect(runs).toContain("node scripts/build-cloud-artifact.mjs --skip-build");
+    expect(runs).toContain("node scripts/smoke-cloud-artifact.mjs --artifact build/cloud-artifact");
+    expect(runs).toContain("node scripts/build-cloud-package.mjs");
+    expect(runs).toContain("release/npm/kiwi-merchant-cloud");
+    expect(runs).toContain("npm run verify:cloud-release-candidate");
+  });
+
+  it("keeps the cloud npm publisher protected and includes it in registry verification", () => {
+    const doc = YAML.parse(readFileSync(join(WORKFLOWS_DIR, "portfolio-release.yml"), "utf8")) as {
+      jobs: Record<string, {
+        if?: string;
+        environment?: string;
+        permissions?: Record<string, string>;
+        needs?: string[];
+        steps?: Array<{ run?: string }>;
+      }>;
+    };
+    const publish = doc.jobs["publish-kiwi-merchant-cloud"];
+    expect(publish?.if).toBe("inputs.publish == true");
+    expect(publish?.environment).toBe("kiwi-release");
+    expect(publish?.permissions?.["id-token"]).toBe("write");
+    expect(publish?.steps?.map((step) => step.run ?? "").join("\n")).toContain("npm publish \"${TARBALL}\" --provenance --access public");
+    expect(doc.jobs["verify-registry"]?.needs).toContain("publish-kiwi-merchant-cloud");
+    expect(doc.jobs["verify-registry"]?.steps?.map((step) => step.run ?? "").join("\n")).toContain("verify-registry-downloads.mjs");
+  });
+});
