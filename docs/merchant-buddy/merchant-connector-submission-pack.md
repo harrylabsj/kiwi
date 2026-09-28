@@ -1,6 +1,6 @@
 # 商家连接器上架素材包（提交前必读）
 
-状态（2026-09-24）：**v1.1.1 已重新提交 WorkBuddy 审核**，新连接器 ID `oc_0053ad85c92a6587`，平台列表显示「审核中」，平台提示预计 7 个工作日内出结果。通过后由 Buddy 应用内置引用；不作为要求用户另行安装的市场产品。旧资产 `oc_c86216e2a36110bf` 已撤回，不得复用。专用 Kiwi 商家测试账号已完成登录及 OAuth/MCP 冒烟验证；腾讯客服补交测试账号的邮件尚未发送。
+状态（2026-09-29，WP22）：**v1.2.0 送审候选包**已准备，含 7 个只读/目录操作工具，新增服务状态查询；尚未上传 WorkBuddy、尚无 v1.2.0 资产 ID。历史 v1.1.1 资产 `oc_0053ad85c92a6587` 与其审核状态需东哥在平台核对，不能视为 v1.2.0 审核通过。通过后由 Buddy 应用内置引用；不作为要求用户另行安装的市场产品。
 2026-09-24 生产 OAuth / MCP 测试（`platform_live_oauth_smoke`）：测试账号在无痕登录页以提供的凭据登录成功，商家 ID `mkt_m_4Rv9MpqdxHs`；OAuth 2.1 + PKCE 授权码流程成功，授权范围为 `catalog:read` / `catalog:write`；MCP `initialize`、`tools/list` 成功，返回预期 6 个目录工具；profile、匿名统计读取、保存私有草稿、请求发布（仍为 draft）、读取草稿均成功。草稿 ID `mpub_nBcqH-l7LPvrcA6s` 未公开，目录匿名搜索确认不可见；测试 access token 已撤销。撤回成功路径未测，因为账号无公开测试资料，撤回前需要商家门户确认发布；未创建公开 listing。
 历史（2026-09-20 核对）：新商家连接器 `oc_c86216e2a36110bf` 曾提交 WorkBuddy 审核，平台列表显示 v1.1.0，未发布即被撤回。旧 v1.0.0 草稿 `oc_f6eb7fea361ac64e` 已由用户删除。AI 客服准备技能 `os_dc3a52407574eb77` 已提交审核；Buddy 应用基础审核仍受平台授权表单阻碍。依据：[商家连接器独立发布计划](generic-merchant-connector-release-plan.md)、[平台核验记录](workbuddy-connector-platform-verification-2026-09-17.md)、[第 1 版设计](../v1-product-flow-and-onboarding-design.md)。
 
@@ -10,7 +10,7 @@
 
 2026-09-20 新资产提交回执：直接上传下述 v1.1.0 包，平台生成 **`oc_c86216e2a36110bf`**；解析、确认页均显示 v1.1.0 与准确目录能力介绍，服务类目为「商家自营 - B2b(商品批发/门店管理)」。提交页提示审核已受理，返回资产列表确认 **「审核中 v1.1.0 · oc_c86216e2a36110bf」**。这不是已发布或 OAuth 实机验收通过。
 
-**本轮流程状态**：v1.1.1 已上传并提交审核 → 待补专用 OAuth 测试账号 → 审核通过后核对真实 `tools/list` 与 OAuth 回跳 → 把新 ID 配置到 Buddy 内置连接器 → Buddy 应用创建审核/草稿配置 → 预览实机验收 → 应用最终审核。用户侧仍从 Buddy 内绑定，不要求独立安装商家连接器。基础信息创建审核不等于应用已上线。
+**历史流程状态**：v1.1.1 曾上传并提交审核。**WP22 当前状态**：v1.2.0 候选包尚未上传；东哥需检查 v1.1.1 审核状态与测试账号，上传 1.2.0 后由平台生成新 ID，再核对真实 `tools/list` 与 OAuth 回跳并更新 Buddy 内置连接器。用户侧仍从 Buddy 内绑定，不要求独立安装商家连接器。基础信息创建审核不等于应用已上线。
 
 ---
 
@@ -23,7 +23,7 @@
 | source | `kiwi-merchant`（**需先在平台核对唯一性**） |
 | 入口 | `https://merchant.kiwi.harrylabsj.com/mcp`（固定 HTTPS，OAuth） |
 | 回调 | `workbuddy://workbuddy/mcp/connector%3Akiwi-merchant/oauth/callback`（按 source 派生；拒绝时回退 loopback） |
-| 声明工具 | **6 个 `kiwi_catalog_*`**（第 0 版目录能力：身份 / **经营汇总（关注数+浏览量+各资料表现）** / 草稿 / 请求发布 / **读单条资料（含可编辑内容）** / 撤回）。按[「网关不碰实例」](merchant-connector-deployment.md)原则（部署说明 §0），**没有** `kiwi_merchant_*` 之类的实例工具——商家实例独立部署、直接与买家做 A2A |
+| 声明工具 | **7 个 `kiwi_catalog_*`**（第 0 版目录能力：身份 / **经营汇总（关注数+浏览量+各资料表现）** / 草稿 / 请求发布 / **读单条资料（含可编辑内容）** / 撤回）。按[「网关不碰实例」](merchant-connector-deployment.md)原则（部署说明 §0），**没有** `kiwi_merchant_*` 之类的实例工具——商家实例独立部署、直接与买家做 A2A |
 
 重新生成（提交前必须重跑，并核对 sha256）：
 
@@ -33,7 +33,7 @@ node integrations/hosts/workbuddy/package-gateway-connector.mjs --out /abs/path/
 shasum -a 256 /abs/path/kiwi-merchant-gateway-<version>.zip
 ```
 
-**本轮提审包（2026-09-24）**：`/private/tmp/kiwi-merchant-gateway-1.1.1.zip`，SHA-256 `e7b665ee24c57948219f383ddd375827f515c4db5b86b1f2c89cbaa593612fac`。已核对 `connector-meta.json.version=1.1.1`、6 个 `kiwi_catalog_*` 工具、OAuth MCP 入口与凭据扫描。审核账号就绪后上传并提交审核。
+**WP22 送审候选包（2026-09-29）**：`/private/tmp/kiwi-merchant-gateway-1.2.0.zip`，SHA-256 `63dcee3bc099ccf166e9e660aca25106673d6295cd5ae9e2c6ff6c9aab2d65c6`；核对 `connector-meta.json.version=1.2.0`、7 个工具、OAuth MCP 入口与凭据扫描。需东哥确认平台注册并提交审核。
 **旧包禁用**：先前文件名为 `kiwi-merchant-gateway-1.1.0.zip`（摘要 `832d4b58…`）的 ZIP **包内仍写 v1.0.0**，不能用于新版本提交。
 
 ZIP 只含 `connector-meta.json`、`mcp.json`、`icon.svg`；**提交前必须按上面的命令重跑并核对 sha256**，
@@ -46,11 +46,20 @@ ZIP 只含 `connector-meta.json`、`mcp.json`、`icon.svg`；**提交前必须�
 
 ## 2. 平台步骤（连接器）
 
-1. 已上传并提交 v1.1.1；资产 ID `oc_0053ad85c92a6587`，当前审核中。
+1. **历史**：v1.1.1 使用过资产 ID `oc_0053ad85c92a6587`；请先在平台核实该旧版本的现状。v1.2.0 尚未上传，提交后必须使用平台新生成的 ID。
 2. 不复用已撤回 `oc_c86216e2a36110bf`、已删除 `oc_f6eb7fea361ac64e` 或买方 `oc_bd73f860e3e2b5d3`。
-3. 通过客服要求的邮箱渠道补交专用 Kiwi 商家测试账号，供审核方测试 OAuth 与 6 个目录工具。
-4. 审核通过后核对真实 `tools/list` 与 OAuth 回跳，再把新 ID 配置到 Buddy 应用内置连接器字段。
+3. 通过客服要求的邮箱渠道补交专用 Kiwi 商家测试账号，供审核方测试 OAuth 与 7 个目录工具。
+4. 审核通过后核对真实 `tools/list` 与 OAuth 回跳，再把 v1.2.0 新 ID 配置到 Buddy 应用内置连接器字段。
 5. **若平台拒绝 `workbuddy://` 私有协议回调**：确认回退 `http://127.0.0.1:{动态端口}/oauth/callback` 是否被接受；两条都不行则停下评审，不改入口形态。
+
+## 2.1 两项 WorkBuddy 技能送审材料
+
+两项技能都需要作为独立技能资产提交；目录、说明、示例和权限声明以技能文件为准。连接器和技能分别审核，技能不得宣称未实测的生产部署已经成功。
+
+| 技能 | 描述与材料 | 示例任务 | 权限说明 |
+| --- | --- | --- | --- |
+| `kiwi-cloud-deploy` | [SKILL.md](../../integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/SKILL.md)、`references/fallback-prompt.md`、`references/release.json`；校验已发布的 Kiwi 商家云包，按商家本人确认与平台发布工具完成部署，并核对目录服务状态。 | 「帮我把 Kiwi 商家接待服务部署到云端」「检查我的服务是否已上线」 | 仅读取公开发布参数和本地文件；使用 WorkBuddy Sites 部署工具前须由商家确认平台授权/费用弹窗；不收集密码、验证码、token，不修改商家业务数据。正式发版后需运行回填脚本更新 `release.json`。 |
+| `kiwi-product-import` | [SKILL.md](../../integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-product-import/SKILL.md)、`references/columns.md`；按商家提供的模板映射商品列，剔除成本/底价等私密字段，生成可导入 CSV 与待补信息清单。 | 「把这份商品表整理成工作台可导入文件」「检查哪些商品字段还缺信息」 | 只处理商家主动提供的文件；不访问外部系统、不上传或导入、不代替商家确认；生成物由商家本人复核并在工作台导入。 |
 
 ## 3. Buddy 应用
 

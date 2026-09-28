@@ -1,8 +1,8 @@
 # =============================================================================
 # Protected portfolio release workflow (P0, registry-facing).
 #
-# This is the central build and publication workflow for all ten Kiwi product
-# forms. Registry publication remains limited to Kiwi, DSH, Catalog, and
+# This is the central build and publication workflow for all eleven Kiwi product
+# forms. Registry publication includes Kiwi, merchant-cloud, DSH, Catalog, and
 # shopping-cli; other channels are included as signed artifacts or pinned
 # external references and keep their own human/platform approval gates.
 # It is intentionally manual (workflow_dispatch) and defaults to a DRY RUN
@@ -18,12 +18,17 @@
 #    `environment: kiwi-release`, which also namespaces the OIDC token.
 #
 # 2. npm Trusted Publisher (no npm token stored anywhere)
-#    Configure BOTH the @harrylabsj/kiwi and @harrylabsj/kiwi-dsh-plugin npm
+#    Configure the @harrylabsj/kiwi, @harrylabsj/kiwi-dsh-plugin, and
+#    @harrylabsj/kiwi-merchant-cloud npm
 #    packages' publishing settings to accept OIDC from this repository
 #    (harrylabsj/kiwi), workflow path `.github/workflows/portfolio-release.yml`,
 #    environment `kiwi-release`. npm publish then uses
 #    `--provenance --access public` with the short-lived OIDC token; the
 #    repository keeps NO npm access token/secret.
+#    A new npm package cannot be configured as a Trusted Publisher until the
+#    package exists on npm. For merchant-cloud, the maintainer must manually
+#    publish the first reviewed tarball once, then add this Trusted Publisher;
+#    all later versions use this protected OIDC job.
 #
 # 3. PyPI Trusted Publisher (no PyPI password/token stored anywhere)
 #    For BOTH the `kiwi-catalog` and `shopping-cli` PyPI projects, add a GitHub
@@ -62,7 +67,7 @@ on:
     inputs:
       publish:
         description: >-
-          Actually publish the four npm/PyPI packages. Defaults to false
+          Actually publish the five npm/PyPI packages. Defaults to false
           (build every available portfolio artifact, sign, and upload only).
           Requires the protected kiwi-release
           environment and npm/PyPI Trusted Publisher mappings (see header).
@@ -278,13 +283,18 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf release
-          mkdir -p release/npm release/kiwi-catalog release/shopping-cli release/contracts release/sbom release/dsh-plugin release/hermes release/workbuddy
+          mkdir -p release/npm/kiwi-merchant-cloud release/kiwi-catalog release/shopping-cli release/contracts release/sbom release/dsh-plugin release/hermes release/workbuddy
 
           cp portfolio.lock.json release/portfolio.lock.json
           cp portfolio-products.json release/portfolio-products.json
           node scripts/verify-portfolio-products.mjs --require-external --hermes-root hermes-plugin-kiwi
 
           npm pack --pack-destination release/npm
+          node scripts/build-cloud-artifact.mjs --skip-build
+          node scripts/smoke-cloud-artifact.mjs --artifact build/cloud-artifact
+          node scripts/build-cloud-package.mjs
+          npm pack ./build/cloud-package --pack-destination release/npm/kiwi-merchant-cloud
+          npm run verify:cloud-release-candidate
           (cd integrations/plugins/kiwi-dsh-plugin && npm pack --pack-destination "$GITHUB_WORKSPACE/release/dsh-plugin")
 
           WB_EXPERT_VERSION="$(node -p "require('./integrations/hosts/workbuddy/kiwi-procurement-expert/.codebuddy-plugin/plugin.json').version")"
@@ -301,7 +311,7 @@ jobs:
           (cd kiwi-catalog && uv sync --locked --extra api --extra dev && python -m build --sdist --wheel --outdir ../release/kiwi-catalog)
           (cd shopping-cli && uv sync --locked --extra api --extra dev && python -m build --sdist --wheel --outdir ../release/shopping-cli)
 
-          # Build a signed inventory covering all ten product forms. The two
+          # Build a signed inventory covering all eleven product forms. The two
           # external/private products are recorded with their immutable source
           # or platform evidence and an explicit external-reference-only state;
           # private source is never copied into this public workflow artifact.
@@ -504,6 +514,60 @@ jobs:
             echo "published=true" >> "$GITHUB_OUTPUT"
           fi
 
+  publish-kiwi-merchant-cloud:
+    name: Publish @harrylabsj/kiwi-merchant-cloud to npm (protected kiwi-release)
+    needs: build-once
+    if: inputs.publish == true
+    runs-on: ubuntu-latest
+    environment: kiwi-release
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout central source (read-only, for verify scripts)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Download immutable build artifact
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: portfolio-release
+          path: dist-artifact
+
+      - name: Setup Node 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@11.19.0
+
+      - name: Verify downloaded release manifest before publishing
+        run: node scripts/verify-release-manifest.mjs "$GITHUB_WORKSPACE/dist-artifact/release"
+
+      - id: publish
+        name: Publish exact merchant-cloud npm tarball with provenance (idempotent)
+        run: |
+          set -euo pipefail
+          TARBALL="$(find dist-artifact/release/npm/kiwi-merchant-cloud -maxdepth 1 -name '*.tgz' -print -quit)"
+          NAME="$(node -p "require('./packages/merchant-cloud/package.json').name")"
+          VERSION="$(node -p "require('./packages/merchant-cloud/package.json').version")"
+          if [ -z "${TARBALL}" ]; then
+            echo "::error::no merchant-cloud tarball under dist-artifact/release/npm/kiwi-merchant-cloud"
+            exit 1
+          fi
+          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
+            echo "== ${NAME}@${VERSION} already published to npm; skipping"
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          else
+            npm publish "${TARBALL}" --provenance --access public
+            echo "== published ${NAME}@${VERSION} to npm"
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          fi
+
   publish-kiwi-catalog:
     name: Publish kiwi-catalog to PyPI (protected kiwi-release)
     needs: build-once
@@ -634,7 +698,7 @@ jobs:
 
   verify-registry:
     name: Verify npm and PyPI downloads after publish (fail closed)
-    needs: [publish-npm, publish-dsh-plugin, publish-kiwi-catalog, publish-shopping-cli]
+    needs: [publish-npm, publish-dsh-plugin, publish-kiwi-merchant-cloud, publish-kiwi-catalog, publish-shopping-cli]
     if: inputs.publish == true
     runs-on: ubuntu-latest
     permissions:
@@ -663,6 +727,7 @@ jobs:
           # 逐字节一致），只校验 registry 自身摘要一致性。env 缺失默认 strict。
           VERIFY_FRESH_NPM: ${{ needs.publish-npm.outputs.published }}
           VERIFY_FRESH_DSH_PLUGIN: ${{ needs.publish-dsh-plugin.outputs.published }}
+          VERIFY_FRESH_KIWI_MERCHANT_CLOUD: ${{ needs.publish-kiwi-merchant-cloud.outputs.published }}
           VERIFY_FRESH_KIWI_CATALOG: ${{ needs.publish-kiwi-catalog.outputs.published }}
           VERIFY_FRESH_SHOPPING_CLI: ${{ needs.publish-shopping-cli.outputs.published }}
         run: |

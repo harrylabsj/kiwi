@@ -1,12 +1,12 @@
 {
   "schema": "kiwi.portfolio.products.v1",
-  "snapshot_date": "2026-09-28",
+  "snapshot_date": "2026-09-29",
   "version_policy": "Versions remain independent by product. The portfolio release bundle binds each available source commit, package version, candidate artifact hash, and external approval state.",
   "products": [
     {
       "id": "kiwi-merchant-cloud",
       "name": "Kiwi Merchant Cloud",
-      "version": "0.11.0",
+      "version": "0.12.0",
       "version_source": { "type": "json", "scope": "central", "path": "packages/merchant-cloud/package.json", "field": "version" },
       "channel": "npm",
       "release_controller": "portfolio-release",
@@ -17,7 +17,7 @@
     {
       "id": "kiwi",
       "name": "Kiwi runtime",
-      "version": "0.11.0",
+      "version": "0.12.0",
       "version_source": { "type": "json", "scope": "central", "path": "package.json", "field": "version" },
       "channel": "npm",
       "release_controller": "portfolio-release",
@@ -29,13 +29,13 @@
     {
       "id": "kiwi-catalog",
       "name": "Kiwi Catalog",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "version_source": { "type": "toml", "scope": "consumer", "path": "kiwi-catalog/pyproject.toml", "field": "project.version" },
       "channel": "PyPI",
       "release_controller": "portfolio-release",
       "artifact": "release/kiwi-catalog/*",
       "state": "candidate",
-      "last_known_registry_version": "0.5.0",
+      "last_known_registry_version": "0.5.1",
       "gates": ["locked tests", "contract lock", "protected kiwi-release environment", "PyPI trusted publishing"]
     },
     {
@@ -115,13 +115,13 @@
     {
       "id": "workbuddy-merchant-connector",
       "name": "WorkBuddy merchant connector",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "version_source": { "type": "json", "scope": "central", "path": "integrations/hosts/workbuddy/kiwi-merchant-gateway-connector/connector-meta.json", "field": "version" },
       "channel": "WorkBuddy connector review",
       "release_controller": "WorkBuddy platform submission",
-      "artifact": "release/workbuddy/kiwi-merchant-gateway-connector-1.1.1.zip",
-      "platform_asset_id": "oc_0053ad85c92a6587",
-      "state": "review pending",
+      "artifact": "release/workbuddy/kiwi-merchant-gateway-connector-1.2.0.zip",
+      "platform_asset_id": null,
+      "state": "candidate; not submitted",
       "gates": ["package validation", "dedicated test account", "OAuth/MCP preview", "platform review"]
     },
     {

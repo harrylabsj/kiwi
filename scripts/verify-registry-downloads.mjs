@@ -41,30 +41,31 @@ const manifest = await loadManifest(releaseDir);
 const verified = [];
 
 // ---------------------------------------------------------------------------
-// npm package
+// npm packages (Kiwi runtime and merchant-cloud)
 // ---------------------------------------------------------------------------
-const npmEntry = manifest.files.find(
+const npmEntries = manifest.files.filter(
   (entry) => entry.path.startsWith("npm/") && entry.path.endsWith(".tgz"),
 );
-if (!npmEntry) {
+if (npmEntries.length < 2) {
   throw new Error("release manifest has no npm tarball entry under npm/");
 }
-{
+for (const npmEntry of npmEntries) {
   const tarballPath = join(releaseDir, npmEntry.path);
   const { name, version } = npmTarballPackageJson(tarballPath);
   const meta = await npmRegistryMetadata(name, version);
   const buffer = await downloadBuffer(meta.tarball);
   // 本 run 幂等跳过的版本：registry 上是历史构建，不与新 manifest 比字节，
   // 只校验 registry 自身 integrity（防替换）；真实发布的版本严格对比。
-  const fresh = isFreshPublish(process.env.VERIFY_FRESH_NPM);
+  const freshFlag = name === "@harrylabsj/kiwi-merchant-cloud"
+    ? process.env.VERIFY_FRESH_KIWI_MERCHANT_CLOUD
+    : process.env.VERIFY_FRESH_NPM;
+  const fresh = isFreshPublish(freshFlag);
   verifyNpmDownload(buffer, {
     identity: { name, version },
     integrity: meta.integrity,
     sha256: fresh ? npmEntry.sha256 : undefined,
   });
-  verified.push(
-    `npm ${name}@${version} verified (${meta.tarball})${fresh ? "" : " [registry digest only: predates this run]"}`,
-  );
+  verified.push(`npm ${name}@${version} verified (${meta.tarball})${fresh ? "" : " [registry digest only: predates this run]"}`);
 }
 
 // ---------------------------------------------------------------------------
