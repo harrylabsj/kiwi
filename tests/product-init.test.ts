@@ -89,7 +89,7 @@ describe("merchant init (D1)", () => {
       expect(report.steps.shopping_cli_detected.ok).toBe(true);
       expect(report.steps.shopping_cli_reachable.ok).toBe(true);
       expect(report.steps.data_dir_initialized.ok).toBe(true);
-      expect(report.warnings).toEqual([]);
+      expect(report.warnings).toContain("商品 API 可达；能力协商会在 Runtime 启动时以独立商品服务凭据进行。");
 
       // 生成文件可被 loadProfile 读取（可用性验证）
       const profile = loadProfile(outputPath);
@@ -102,7 +102,9 @@ describe("merchant init (D1)", () => {
 
       // secret 不入 profile：token_env 只写环境变量名
       const raw = readFileSync(outputPath, "utf-8");
-      expect(raw).toContain("token_env: SHOPPING_MERCHANT_TOKEN");
+      expect(raw).toContain("token_env: KIWI_MERCHANT_TOKEN");
+      expect(raw).toContain("catalog_url: https://catalog.kiwi.harrylabsj.com");
+      expect(profile.merchant_runtime?.data_dir).toContain("seller-b");
       expect(raw).not.toMatch(/api_key:\s*\S+/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -128,6 +130,27 @@ describe("merchant init (D1)", () => {
       const raw = readFileSync(outputPath, "utf-8");
       expect(raw).toContain("merchant_public");
       expect(raw).toContain("public_url: merchant.example.com");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists an overridden Runtime data directory and reuses an existing same-merchant profile", async () => {
+    const dir = tmpDir();
+    try {
+      const outputPath = path.join(dir, "merchant.yaml");
+      const dataDir = path.join(dir, "runtime-state");
+      const options = {
+        merchantName: "Resume Merchant", merchantId: "resume-merchant", outputPath, dataDir,
+        catalogUrl: "https://catalog.example.test", spawnImpl: shoppingCliFoundSpawn(), fetchImpl: healthOkFetch(),
+      };
+      const first = await merchantInit(options);
+      const saved = readFileSync(outputPath, "utf-8");
+      const second = await merchantInit(options);
+      expect(first.steps.data_dir_initialized.detail).toBe(dataDir);
+      expect(loadProfile(outputPath).merchant_runtime?.data_dir).toBe(dataDir);
+      expect(second.steps.profile_written.detail).toContain("沿用已有商家配置");
+      expect(readFileSync(outputPath, "utf-8")).toBe(saved);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -319,7 +342,7 @@ describe("merchant init (D1)", () => {
 
       expect(report.ok).toBe(true);
       expect(pipCalled).toBe(false);
-      expect(report.warnings).toEqual([]);
+      expect(report.warnings).toContain("商品 API 可达；能力协商会在 Runtime 启动时以独立商品服务凭据进行。");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

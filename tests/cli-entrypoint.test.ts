@@ -93,6 +93,12 @@ describe("agent serve 稳定 dataDir（审查 P1-09）", () => {
     expect(resolveServeDataDir("/tmp/kiwi-state", "merchant-acme")).toBe("/tmp/kiwi-state");
   });
 
+  it("profile 保存的 data-dir 在没有 CLI 覆盖时生效", () => {
+    expect(resolveServeDataDir(undefined, "merchant-acme", "/var/lib/kiwi/veyquo")).toBe(
+      "/var/lib/kiwi/veyquo",
+    );
+  });
+
   it("绝不回退到临时目录（mkdtemp 形态只在 startA2aNode 无 dataDir 时出现）", () => {
     const dir = resolveServeDataDir(undefined, "merchant-acme");
     expect(dir.startsWith(path.resolve(".kiwi", "agents"))).toBe(true);

@@ -131,12 +131,20 @@ describe("product CLI command tree (D0)", () => {
     expect(stderr).toContain("--profile");
   });
 
-  it("merchant init (D1) validates required identity instead of not-implemented", async () => {
-    const { code, stderr } = await run(["merchant", "init"]);
-    expect(code).toBe(EXIT.CONFIG);
-    expect(stderr).not.toContain("尚未实现");
-    // 非交互且无身份 → fail-closed 要求 --merchant-id / --name（TTY 下才自动生成）
-    expect(stderr).toContain("--merchant-id");
+  it("merchant init (D1) uses defaults when no identity flags are supplied", async () => {
+    const originalCwd = process.cwd();
+    const isolatedCwd = mkdtempSync(path.join(tmpdir(), "kiwi-init-defaults-"));
+    process.chdir(isolatedCwd);
+    try {
+      const { code, stderr, stdout } = await run(["merchant", "init", "--no-install"]);
+      expect(code).toBe(EXIT.OK);
+      expect(stdout).toContain("profile_path");
+      expect(stdout).toContain("merchant-");
+      expect(stderr).not.toContain("尚未实现");
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(isolatedCwd, { recursive: true, force: true });
+    }
   });
 
   it("merchant init accepts --merchant-id / --name flags (D1 flag 解析回归)", async () => {

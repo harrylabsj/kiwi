@@ -43,6 +43,7 @@ import {
 import { homedir, userInfo } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Writable } from "node:stream";
 
 import { startA2aNode, type A2aNodeHandle } from "./a2a/node.js";
 import type { ChatA2aNode } from "./agent/chat-tui.js";
@@ -237,6 +238,7 @@ interface ParsedArgs {
   merchantId?: string;
   merchantName?: string;
   merchantToken?: string;
+  publicUrl?: string;
   output?: string;
   force: boolean;
   noInstall: boolean;
@@ -286,6 +288,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let merchantId: string | undefined;
   let merchantName: string | undefined;
   let merchantToken: string | undefined;
+  let publicUrl: string | undefined;
   let output: string | undefined;
   let force = false;
   let noInstall = false;
@@ -341,6 +344,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       merchantId = argv[++i];
     } else if (arg === "--merchant-token") {
       merchantToken = argv[++i];
+    } else if (arg === "--public-url") {
+      publicUrl = argv[++i];
     } else if (arg === "--name") {
       merchantName = argv[++i];
     } else if (arg === "--output") {
@@ -434,6 +439,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       merchantId = arg.slice("--merchant-id=".length);
     } else if (arg !== undefined && arg.startsWith("--merchant-token=")) {
       merchantToken = arg.slice("--merchant-token=".length);
+    } else if (arg !== undefined && arg.startsWith("--public-url=")) {
+      publicUrl = arg.slice("--public-url=".length);
     } else if (arg !== undefined && arg.startsWith("--name=")) {
       merchantName = arg.slice("--name=".length);
     } else if (arg !== undefined && arg.startsWith("--data-dir=")) {
@@ -489,6 +496,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   if (merchantId !== undefined) out.merchantId = merchantId;
   if (merchantName !== undefined) out.merchantName = merchantName;
   if (merchantToken !== undefined) out.merchantToken = merchantToken;
+  if (publicUrl !== undefined) out.publicUrl = publicUrl;
   if (output !== undefined) out.output = output;
   if (agentId !== undefined) out.agentId = agentId;
   if (ownerId !== undefined) out.ownerId = ownerId;
@@ -728,8 +736,12 @@ async function cmdTui(args: ParsedArgs): Promise<number> {
  *  policy-overrides / agent-db）同一消毒口径（审查 P2：此前读端用原始
  *  agent_id、写端消毒，非 ASCII agent_id 下策略热更新对 A2A 静默不生效）；
  *  重启后 Ledger/幂等/终态可恢复；显式 --data-dir 覆盖。绝不回退到临时目录。 */
-export function resolveServeDataDir(dataDir: string | undefined, agentId: string): string {
-  return dataDir ?? path.resolve(DEFAULT_AGENTS_ROOT, agentDirName(agentId));
+export function resolveServeDataDir(dataDir: string | undefined, agentId: string, profileDataDir?: string): string {
+  return dataDir ?? profileDataDir ?? path.resolve(DEFAULT_AGENTS_ROOT, agentDirName(agentId));
+}
+
+function configuredDataDir(args: ParsedArgs, profile: AgentProfile): string | undefined {
+  return args.dataDir ?? profile.merchant_runtime?.data_dir;
 }
 async function cmdAgentServe(args: ParsedArgs): Promise<number> {
   const profile = requireProfileOrDefault(args);
@@ -744,7 +756,7 @@ async function cmdAgentServe(args: ParsedArgs): Promise<number> {
   // mkdtemp 临时目录且 stop 时删除，重启后 Ledger/幂等/终态全丢：已终态
   // negotiation 可重开、已发 conditional offer 返回 offer_unknown。稳定目录
   // 让重启可恢复状态（resolveServeDataDir 见上）。
-  const serveDataDir = resolveServeDataDir(args.dataDir, profile.agent_id);
+  const serveDataDir = resolveServeDataDir(args.dataDir, profile.agent_id, profile.merchant_runtime?.data_dir);
   // BUG-07：A2A 进程的策略读端——与 MCP 写端共享 <dataDir>/policy-overrides.json，
   // 每次报价 stat 文件 mtime，变化才重载（策略热更新跨进程立即生效）。
   const policyRuntime = new MerchantPolicyRuntime({
@@ -959,7 +971,7 @@ async function cmdChat(args: ParsedArgs, requiredRole?: AgentProfile["role"]): P
         preferredPort: args.port,
         // 审查：chat 起的 A2A 节点同样要持久 dataDir——否则 Ledger/幂等/签名密钥
         // 全落临时目录，重启后磋商状态与签名身份丢失（Issue 16 B）。
-        dataDir: resolveServeDataDir(args.dataDir, (p as AgentProfile).agent_id),
+        dataDir: resolveServeDataDir(args.dataDir, (p as AgentProfile).agent_id, (p as AgentProfile).merchant_runtime?.data_dir),
         ...(merchantToken ? { ownerToken: merchantToken } : {}),
         ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
       });
@@ -1243,7 +1255,7 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
 async function cmdMerchantConnect(args: ParsedArgs): Promise<number> {
   try {
     const profile = requireProfileOrDefault(args);
-    const dataDir = resolveServeDataDir(args.dataDir, profile.agent_id);
+    const dataDir = resolveServeDataDir(args.dataDir, profile.agent_id, profile.merchant_runtime?.data_dir);
     const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? profile.merchant_public?.catalog_url ?? DEFAULT_CATALOG_URL;
     const publicOrigin = process.env.KIWI_CLOUD_PUBLIC_ORIGIN ?? process.env.KIWI_A2A_PUBLIC_URL ?? profile.merchant_public?.public_url;
     const result = await connectMerchant({
@@ -1296,7 +1308,7 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
     return EXIT.CONFIG;
   }
   const dirs = resolveMerchantMcpDirs({
-    ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+    ...(configuredDataDir(args, profile) !== undefined ? { dataDir: configuredDataDir(args, profile) } : {}),
     agentId: profile.agent_id,
   });
   if (action === "rotate-key") {
@@ -1458,7 +1470,7 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
       return EXIT.CONFIG;
     }
     const dirs = resolveMerchantMcpDirs({
-      ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+      ...(configuredDataDir(args, profile) !== undefined ? { dataDir: configuredDataDir(args, profile) } : {}),
       agentId: profile.agent_id,
     });
     try {
@@ -1484,7 +1496,7 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
       return EXIT.CONFIG;
     }
     const dirs = resolveMerchantMcpDirs({
-      ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+      ...(configuredDataDir(args, profile) !== undefined ? { dataDir: configuredDataDir(args, profile) } : {}),
       agentId: profile.agent_id,
     });
     const { code, expiresAt } = createPairingCode(dirs.merchantDataDir);
@@ -1517,7 +1529,7 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
       return EXIT.CONFIG;
     }
     const dirs = resolveMerchantMcpDirs({
-      ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+      ...(configuredDataDir(args, profile) !== undefined ? { dataDir: configuredDataDir(args, profile) } : {}),
       agentId: profile.agent_id,
     });
     const revoked = revokePairedCredential(dirs.merchantDataDir);
@@ -1563,7 +1575,7 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
   // 数据目录接线（V2 §5.1）：merchant/principal/transportSessionId 显式注入，
   // 路径是 (dataDir, agentId) 的纯函数——重启稳定，传输会话不影响目录。
   const dirs = resolveMerchantMcpDirs({
-    ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
+    ...(configuredDataDir(args, profile) !== undefined ? { dataDir: configuredDataDir(args, profile) } : {}),
     agentId: profile.agent_id,
   });
 
@@ -1624,7 +1636,7 @@ async function cmdMerchantStats(args: ParsedArgs): Promise<number> {
   try {
     const report = merchantStats({
       agentId: profile.agent_id,
-      dataDir: resolveServeDataDir(args.dataDir, profile.agent_id),
+      dataDir: resolveServeDataDir(args.dataDir, profile.agent_id, profile.merchant_runtime?.data_dir),
       ...(days !== undefined ? { days } : {}),
     });
     printJson(report);
@@ -1653,13 +1665,42 @@ function promptLine(text: string, fallback: string): Promise<string> {
   });
 }
 
+/** Read a secret in a TTY without echoing it. */
+function promptSecret(text: string): Promise<string> {
+  if (!process.stdin.isTTY) return Promise.resolve("");
+  process.stdout.write(text);
+  const hiddenOutput = new Writable({ write(_chunk, _encoding, callback) { callback(); } });
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: hiddenOutput, terminal: true });
+    rl.question("", (answer) => {
+      rl.close();
+      process.stdout.write("\n");
+      resolve(answer.trim());
+    });
+  });
+}
+
 async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
-  // --merchant-id / --name flag 优先，env 回退；TTY 下交互提示，缺省自动派生。
+  // 无参数时续用默认 profile；首次运行仅询问商家名称，其余使用默认值。
   let merchantId = args.merchantId ?? process.env.KIWI_MERCHANT_ID ?? "";
   let name = args.merchantName ?? process.env.KIWI_MERCHANT_NAME ?? "";
-  let publicUrl = "";
-  // --merchant-token（设计 §4.7 未决 1 / §4.8 路线 A）：非交互环境的令牌注入入口，
-  // 供 WorkBuddy 云端应用等没有终端的部署使用；TTY 下未给 flag 时仍走交互提示。
+  const outputPath = args.output ?? args.profile ?? process.env.KIWI_DEFAULT_PROFILE ?? DEFAULT_PROFILE_PATH;
+  if (existsSync(outputPath) && !args.force && merchantId === "" && name === "") {
+    try {
+      const existing = loadProfile(outputPath);
+      if (existing.role === "merchant") {
+        merchantId = existing.agent_id;
+        name = existing.name ?? existing.owner_id;
+      }
+    } catch {
+      // merchantInit reports safely and preserves unknown/corrupt files.
+    }
+  }
+  let publicUrl = args.publicUrl ?? process.env.KIWI_A2A_PUBLIC_URL ?? "";
+  if (publicUrl === "" && existsSync(outputPath)) {
+    try { publicUrl = loadProfile(outputPath).merchant_public?.public_url ?? ""; } catch { /* validated by init */ }
+  }
+  // 商品服务令牌仅连接 shopping-cli；TTY 隐藏输入并写入本机 credentials 文件。
   let merchantToken = args.merchantToken ?? "";
   if (process.stdin.isTTY) {
     merchantId = await promptLine(
@@ -1667,20 +1708,19 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
       merchantId,
     );
     name = await promptLine(`商家名称（回车用缺省）: `, name);
-    publicUrl = await promptLine("公网域名（可选，回车跳过；如 merchant.example.com）: ", "");
+    publicUrl = await promptLine("公网 Runtime HTTPS 地址（回车稍后配置）: ", publicUrl);
     if (publicUrl !== "") publicUrl = publicUrl.trim().toLowerCase();
     if (merchantToken === "") {
-      merchantToken = await promptLine("商家令牌（从商家后台获取，可稍后设置；直接回车跳过）: ", "");
+      loadMerchantCredentials();
+      merchantToken = process.env.KIWI_MERCHANT_TOKEN ?? "";
+      if (merchantToken === "") merchantToken = await promptSecret("shopping-cli 商品服务令牌（回车稍后配置；输入不回显）: ");
     }
     // TTY 下可全回车：merchant_id 自动生成（避免固定名碰撞）。
     if (merchantId === "") merchantId = `merchant-${Math.random().toString(36).slice(2, 8)}`;
     if (name === "") name = merchantId;
   } else if (merchantId === "" && name === "") {
-    // 非交互且无任何身份 → fail-closed（不自动生成碰撞身份）。
-    process.stderr.write(
-      "--merchant-id <id> 或 --name <商家名称> 至少填一个（TTY 下可交互回车自动生成）。\n",
-    );
-    return EXIT.CONFIG;
+    merchantId = `merchant-${Math.random().toString(36).slice(2, 8)}`;
+    name = merchantId;
   } else {
     // 系统补全：merchant_id 缺省从名称派生；名称缺省用 merchant_id。
     if (merchantId === "") merchantId = slugifyMerchantId(name);
@@ -1692,24 +1732,70 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
     ...(publicUrl !== "" ? { publicUrl } : {}),
     ...(merchantToken !== "" ? { merchantToken } : {}),
     shoppingCliUrl: process.env.SHOPPING_CLI_URL ?? "http://127.0.0.1:8765",
-    shoppingCliDb: process.env.SHOPPING_DB_PATH,
+    shoppingCliDb: args.shoppingCliDb ?? process.env.SHOPPING_DB_PATH,
     catalogUrl: args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL,
+    ...(args.dataDir !== undefined ? { dataDir: args.dataDir } : {}),
     floorPriceMinor: 0,
-    ...(args.output !== undefined ? { outputPath: args.output } : {}),
+    outputPath,
     ...(args.force ? { force: true } : {}),
     // 数据引擎默认自动安装（合一体验）；--no-install 显式禁用（受限/CI）
     autoInstallShoppingCli: !args.noInstall,
   });
-  printJson(report);
+  if (merchantToken !== "") process.env.KIWI_MERCHANT_TOKEN = merchantToken;
+  else loadMerchantCredentials();
+  let sourceCapabilities = report.steps.product_source_capabilities;
+  if (report.steps.shopping_cli_reachable.ok) {
+    try {
+      const profile = loadProfile(report.profile_path);
+      const probe = await new HttpMerchantClient(profile.commerce.base_url, new ProfileCredentialBroker(profile)).probeCapabilities();
+      sourceCapabilities = {
+        ok: probe.ok,
+        detail: [probe.verdict, probe.version ? `shopping-cli ${probe.version}` : undefined,
+          probe.protocol_versions ? `protocols ${probe.protocol_versions.join(", ")}` : undefined,
+          probe.error].filter(Boolean).join("；"),
+      };
+    } catch (err) {
+      sourceCapabilities = { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  let enrollment: { ok: boolean; detail: string } | undefined;
+  const configuredOrigin = args.publicUrl ?? publicUrl;
+  if (configuredOrigin !== "") {
+    try {
+      const profile = loadProfile(report.profile_path);
+      const result = await connectMerchant({
+        profile,
+        dataDir: resolveServeDataDir(args.dataDir, profile.agent_id, profile.merchant_runtime?.data_dir),
+        catalogUrl: args.catalog ?? process.env.KIWI_CATALOG_URL ?? profile.merchant_public?.catalog_url ?? DEFAULT_CATALOG_URL,
+        publicOrigin: configuredOrigin,
+        output: (line) => process.stdout.write(`${line}\n`),
+        ...(process.platform !== "win32" ? { openBrowser: (url: string) => {
+          const command = process.platform === "darwin" ? "open" : "xdg-open";
+          const child = spawn(command, [url], { detached: true, stdio: "ignore" });
+          child.once("error", () => process.stderr.write("无法自动打开浏览器；请使用上方授权链接打开。\n"));
+          child.unref();
+        } } : {}),
+      });
+      enrollment = { ok: true, detail: `绑定 ${result.bindingId}，Agent ${result.agentId}，名片 revision ${result.cardRevision}` };
+    } catch (err) {
+      enrollment = { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  printJson({ ...report, steps: { ...report.steps, product_source_capabilities: sourceCapabilities,
+    ...(enrollment !== undefined ? { runtime_enrollment: enrollment } : {}) } });
   for (const warning of report.warnings) {
     process.stderr.write(`warning: ${warning}\n`);
   }
+  if (!sourceCapabilities.ok) process.stderr.write(`商品源能力尚未通过：${sourceCapabilities.detail ?? "未验证"}\n`);
+  if (enrollment !== undefined && !enrollment.ok) {
+    process.stderr.write(`Runtime enrollment 未完成：${enrollment.detail}\n`);
+    return EXIT.TRANSIENT;
+  }
+  if (configuredOrigin === "") {
+    process.stderr.write("尚未提供公网 Runtime 地址；Catalog 账号授权和绑定未完成。先让 Agent Card 可经 HTTPS 公网访问，再设置 --public-url 重跑 init 继续。\n");
+  }
   if (args.merchantToken !== undefined && report.ok) {
-    process.stderr.write(
-      "商家令牌已写入 ~/.kiwi/credentials.env（0600）。\n" +
-        "注意：--merchant-token 是 WorkBuddy 云端应用的**过渡**注入入口（设计 §4.8 路线 A）；" +
-        "令牌会留在 shell 历史/部署日志里，建议改用密钥挂载或事后清理，长期方案见路线 B（令牌在云路径退场）。\n",
-    );
+    process.stderr.write("shopping-cli 商品服务令牌已写入 ~/.kiwi/credentials.env（0600）；它不用于 Kiwi Catalog Runtime 绑定。\n");
   }
   return report.ok ? EXIT.OK : EXIT.CONFIG;
 }
@@ -1727,7 +1813,10 @@ async function cmdMerchantPublish(args: ParsedArgs): Promise<number> {
   loadMerchantCredentials(); // 加载 init 写入的 credentials.env（KIWI_MERCHANT_TOKEN）
   // 缺省路径与 shopping-cli 的 DEFAULT_DB_PATH 一致——商家无需设置 SHOPPING_DB_PATH。
   const shoppingCliDb =
-    args.shoppingCliDb ?? process.env.SHOPPING_DB_PATH ?? DEFAULT_SHOPPING_DB_PATH;
+    args.shoppingCliDb ??
+    profile.merchant_public?.shopping_db_path ??
+    process.env.SHOPPING_DB_PATH ??
+    DEFAULT_SHOPPING_DB_PATH;
   // `--file <csv>`：先导入商品（shopping-cli import-csv-excel）再发布。
   if (args.file !== undefined && args.file !== "") {
     const imp = spawnSync(
@@ -1766,7 +1855,7 @@ async function cmdMerchantPublish(args: ParsedArgs): Promise<number> {
     ...(merchantToken ? { ownerToken: merchantToken } : {}),
     ...(ownerTokenSecret ? { ownerTokenSecret } : {}),
     shoppingCliDb,
-    dataDir: resolveServeDataDir(args.dataDir, profile.agent_id),
+    dataDir: resolveServeDataDir(args.dataDir, profile.agent_id, profile.merchant_runtime?.data_dir),
     ...(process.env.KIWI_A2A_PUBLIC_URL ?? profile.merchant_public?.public_url
       ? { runtimeOrigin: process.env.KIWI_A2A_PUBLIC_URL ?? profile.merchant_public?.public_url }
       : {}),
@@ -1946,7 +2035,7 @@ async function cmdMerchantUp(args: ParsedArgs): Promise<number> {
     process.env.KIWI_CATALOG_URL ??
     DEFAULT_CATALOG_URL;
   const merchantToken = process.env.KIWI_MERCHANT_TOKEN || "";
-  const serveDataDir = resolveServeDataDir(args.dataDir, profile.agent_id);
+  const serveDataDir = resolveServeDataDir(args.dataDir, profile.agent_id, profile.merchant_runtime?.data_dir);
   let node: A2aNodeHandle | null = await startA2aNode({
     profile,
     catalog,

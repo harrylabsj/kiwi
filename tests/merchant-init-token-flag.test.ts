@@ -1,9 +1,9 @@
 /**
- * §4.7 未决 1 / §4.8 路线 A：`--merchant-token` 非交互令牌注入入口（过渡）。
+ * `--merchant-token` 非交互商品服务令牌入口。
  *
  * 覆盖：
  *   - parseArgs 两种形式（空格 / =）都能解析；
- *   - 帮助文案标注它是 WorkBuddy 云端应用的过渡入口；
+ *   - 帮助文案区分 shopping-cli 商品服务令牌与 Catalog Runtime 绑定；
  *   - 非交互路径：flag 令牌经 merchantInit 写入 credentials.env（0600），
  *     secret 不进 profile yaml。
  */
@@ -57,13 +57,15 @@ describe("--merchant-token（路线 A 过渡入口）", () => {
     expect(parseArgs(["merchant", "init", "--merchant-token", "tok_abc"]).merchantToken).toBe("tok_abc");
     expect(parseArgs(["merchant", "init", "--merchant-token=tok_xyz"]).merchantToken).toBe("tok_xyz");
     expect(parseArgs(["merchant", "init"]).merchantToken).toBeUndefined();
+    expect(parseArgs(["merchant", "init", "--public-url", "https://merchant.example.test"]).publicUrl).toBe("https://merchant.example.test");
+    expect(parseArgs(["merchant", "init", "--public-url=https://merchant.example.test"]).publicUrl).toBe("https://merchant.example.test");
   });
 
-  it("帮助文案标注：这是 WorkBuddy 云端应用的过渡注入入口", () => {
+  it("帮助文案标注：令牌仅用于商品服务，不用于 Runtime 绑定", () => {
     const help = productHelp("merchant");
     expect(help).toContain("--merchant-token");
-    expect(help).toContain("WorkBuddy");
-    expect(help).toContain("过渡");
+    expect(help).toContain("只用于 shopping-cli");
+    expect(help).toContain("不用于");
   });
 
   it("非交互注入：令牌写入 credentials.env（0600），不进 profile yaml", async () => {
@@ -88,7 +90,7 @@ describe("--merchant-token（路线 A 过渡入口）", () => {
       ).credentials_written;
       expect(written).toMatchObject({ ok: true, detail: credentialsPath });
 
-      // 0600 + 内容恰为 KIWI_MERCHANT_TOKEN 行。
+      // 0600 + 商品服务凭据独立保存。
       expect(statSync(credentialsPath).mode & 0o777).toBe(0o600);
       expect(readFileSync(credentialsPath, "utf-8")).toBe("KIWI_MERCHANT_TOKEN=tok_cloud_secret\n");
 

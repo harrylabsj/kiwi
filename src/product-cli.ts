@@ -22,8 +22,8 @@
  * 工程上仍是多组件（kiwi / shopping-cli / kiwi-catalog），产品层只做统一入口：
  * - `kiwi merchant start` = `kiwi agent serve` 别名（Merchant A2A server）；
  * - `kiwi buyer start` = `kiwi chat` 别名（Buyer 对话入口）；
- * - 骨架命令（init/publish/listings/search/tasks）输出明确的"尚未实现
- *   （D-x）"提示并指向 rev1.1 §19 完成定义——不假装可用；
+ * - merchant init 提供商家配置、商品 API 探测和可续办的 Runtime enrollment；
+ * - 仍未实现的 listings/search/tasks 明确提示并指向 rev1.1 §19 完成定义；
  * - `kiwi doctor`（无 --profile）= 三组件聚合健康检查（D0 最小版；
  *   D3 补版本兼容矩阵）。
  */
@@ -125,15 +125,18 @@ Usage:
                                           目录注册/发布（第 0 版）与自有实例路由（第 1 版）。
                                           非 loopback 监听须直接 TLS 或显式 --trusted-proxy；
                                           缺凭据加密密钥时关闭依赖加密存储的功能
-  kiwi merchant init [--merchant-id <shopping-cli merchant_id>] [--name <商家名称>]
-                     [--merchant-token <商家令牌>]
-                                          [D1] 生成 merchant profile（只填 merchant_id
-                                          即可，其余自动补全；TTY 交互提示；写默认
-                                          profile，之后裸 kiwi 即按此运行）
-                                          （--merchant-token：非交互令牌注入入口，
-                                          供 WorkBuddy 云端应用等无终端环境——过渡
-                                          方案（设计 §4.8 路线 A）；令牌会留在
-                                          shell 历史，交互终端请改用 TTY 提示输入）
+  kiwi merchant init [--name <商家名称>] [--merchant-id <shopping-cli merchant_id>]
+                     [--profile <路径>] [--catalog <URL>] [--data-dir <路径>]
+                     [--public-url <HTTPS 地址>] [--merchant-token <商品服务令牌>]
+                                          一站式初始化：检查 shopping-cli、生成或续用
+                                          profile/data-dir；提供公网地址时继续 Catalog
+                                          账号授权、Runtime 绑定和 Agent Card 发布。
+                                          缺省 profile ~/.kiwi/kiwi.yaml，catalog 官方，
+                                          data-dir 按 agent_id 派生；均可覆盖。
+                                          shopping-cli API 与 HTTPS Runtime 需已在线；
+                                          未就绪时保留进度并说明未完成环节。
+                                          商品服务令牌只用于 shopping-cli，不用于
+                                          Kiwi Catalog Runtime 绑定。
   kiwi merchant publish [--file <products.csv>]
                                           [D2] 注册 Agent + 发布 Listing 编排
                                           （--file 则先导入商品再发布；db 缺省

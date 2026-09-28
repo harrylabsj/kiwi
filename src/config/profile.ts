@@ -198,6 +198,8 @@ export interface AgentProfile {
     /** 商家 token 环境变量名（值不写 profile）。 */
     merchant_token_env?: string;
   };
+  /** Kiwi Runtime persistent state directory. */
+  merchant_runtime?: { data_dir?: string };
   /**
    * Merchant Workbench MCP server 配置（WorkBuddy Buddy 应用，阶段二；
    * 仅 role=merchant）。token 只存环境变量名；缺省 host 0.0.0.0 / port 9100 /
@@ -252,6 +254,7 @@ const TOP_LEVEL_KEYS = [
   "decision",
   "merchant_experience",
   "merchant_public",
+  "merchant_runtime",
   "merchant_mcp",
 ] as const;
 /** weixin 段白名单（微信远程控制通道配置；无 *_env 密钥字段——iLink 凭证运行时获取）。 */
@@ -306,6 +309,7 @@ const MERCHANT_EXPERIENCE_KEYS = [
   "prompt_cache_retention",
 ] as const;
 const MERCHANT_PUBLIC_KEYS = ["public_url", "a2a_port", "shopping_db_path", "catalog_url", "merchant_token_env"] as const;
+const MERCHANT_RUNTIME_KEYS = ["data_dir"] as const;
 /**
  * merchant_mcp 段白名单（WorkBuddy Buddy 应用 MCP server；阶段二）。
  * token 只存环境变量名（token_env），secret 值绝不写 profile。
@@ -926,6 +930,19 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     };
   }
 
+  let merchantRuntime: AgentProfile["merchant_runtime"];
+  if (p.merchant_runtime !== undefined) {
+    req(isObject(p.merchant_runtime), `${source}: merchant_runtime must be a mapping`);
+    rejectUnknownKeys(p.merchant_runtime, MERCHANT_RUNTIME_KEYS, "merchant_runtime", source);
+    if (p.merchant_runtime.data_dir !== undefined) {
+      req(typeof p.merchant_runtime.data_dir === "string" && p.merchant_runtime.data_dir.trim() !== "",
+        `${source}: merchant_runtime.data_dir must be a non-empty string`);
+    }
+    merchantRuntime = {
+      ...(typeof p.merchant_runtime.data_dir === "string" ? { data_dir: p.merchant_runtime.data_dir } : {}),
+    };
+  }
+
   rejectUnknownKeys(p, TOP_LEVEL_KEYS, "profile", source);
 
   const profile: AgentProfile = {
@@ -965,6 +982,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     ...(decisionSection !== undefined ? { decision: decisionSection } : {}),
     ...(merchantExperience !== undefined ? { merchant_experience: merchantExperience } : {}),
     ...(merchantPublic !== undefined ? { merchant_public: merchantPublic } : {}),
+    ...(merchantRuntime !== undefined ? { merchant_runtime: merchantRuntime } : {}),
     ...(merchantMcp !== undefined ? { merchant_mcp: merchantMcp } : {}),
   };
   return profile;
