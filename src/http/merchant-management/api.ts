@@ -53,6 +53,12 @@ import {
   type CloudProductRecord,
   type CloudProductTable,
 } from "../../cloud/product-source.js";
+import {
+  convertTabularImport,
+  renderImportTemplateCsv,
+  renderImportTemplateXlsx,
+  TABULAR_IMPORT_MAX_BYTES,
+} from "../../cloud/product-import-tabular.js";
 import { MerchantImportDraftStore } from "./draft-store.js";
 import {
   ActorContextError,
@@ -90,6 +96,15 @@ import {
   MerchantWorkbenchError,
   type A2aNegotiationRow,
 } from "../../merchant/workbench-service.js";
+import {
+  NEGOTIATION_STATUS_FILTERS,
+  type NegotiationObserver,
+  type NegotiationStatusFilter,
+} from "../../merchant/negotiation-observer.js";
+import {
+  parseReportPeriod,
+  type OperationsReportBuilder,
+} from "../../merchant/operations-report.js";
 import type { ExactMerchantProduct } from "../../agent/merchant/types.js";
 import {
   parseExactMoney,
@@ -213,6 +228,14 @@ export interface MerchantManagementApiOptions {
     list: (limit?: number) => Promise<{ total: number; items: A2aNegotiationRow[] }>;
     get: (negotiationId: string) => Promise<A2aNegotiationRow>;
   };
+  /**
+   * 会话旁观投影（WP11）：分页（offset cursor）+ 状态过滤 + 单条时间线。
+   * 配置后 `/negotiations` 走本通道（limit-only 查询语义不变）；未配置时
+   * 维持上面的 legacy 通道（仅 limit）。
+   */
+  negotiationObserver?: NegotiationObserver;
+  /** 运营报告聚合（WP11）：stats-store + 磋商账本 → day/week/month 报告。 */
+  operationsReports?: OperationsReportBuilder;
   workbenchReconciliation?: WorkbenchReconciliationStore;
   exactProducts?: {
     list: () => Promise<ExactMerchantProduct[]>;
@@ -405,7 +428,7 @@ export function createMerchantManagementApiHandler(
           return;
         }
         if (method === "POST") {
-          await routeWorkbenchV1Post(req, res, rest, requestId);
+          await routeWorkbenchV1Post(req, res, rest, requestId, url);
           return;
         }
         {
@@ -560,6 +583,38 @@ export function createMerchantManagementApiHandler(
       );
       return;
     }
+    if (rest === "/products/import-template") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "products:read");
+      const format = url.searchParams.get("format");
+      if (format !== "csv" && format !== "xlsx") {
+        throw new ManagementError("invalid_input", "format must be csv or xlsx");
+      }
+      if (res.headersSent) {
+        res.end();
+        return;
+      }
+      if (format === "csv") {
+        const body = renderImportTemplateCsv();
+        res.writeHead(200, {
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": 'attachment; filename="kiwi-product-import-template.csv"',
+          "cache-control": "no-store",
+          "x-request-id": requestId,
+        });
+        res.end(body);
+        return;
+      }
+      const bytes = renderImportTemplateXlsx();
+      res.writeHead(200, {
+        "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "content-disposition": 'attachment; filename="kiwi-product-import-template.xlsx"',
+        "cache-control": "no-store",
+        "x-request-id": requestId,
+      });
+      res.end(Buffer.from(bytes));
+      return;
+    }
     const productMatch = /^\/products\/([^/]+)$/.exec(rest);
     if (productMatch !== null) {
       const auth = requireActor(req);
@@ -586,11 +641,37 @@ export function createMerchantManagementApiHandler(
     if (rest === "/negotiations") {
       const auth = requireActor(req);
       authorizeOrThrow(auth.ctx, "approvals:read");
+      const query = pageQuery(url);
+      const statusRaw = url.searchParams.get("status");
+      if (statusRaw !== null && statusRaw !== "" && !(NEGOTIATION_STATUS_FILTERS as readonly string[]).includes(statusRaw)) {
+        throw new ManagementError("invalid_input", "status must be active, agreement or all");
+      }
+      const observer = options.negotiationObserver;
+      if (observer !== undefined) {
+        writeJson(
+          res,
+          200,
+          observer.list({
+            ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
+            ...(query.limit !== undefined ? { limit: query.limit } : {}),
+            ...(statusRaw !== null && statusRaw !== ""
+              ? { status: statusRaw as NegotiationStatusFilter }
+              : {}),
+          }),
+          { "x-request-id": requestId },
+        );
+        return;
+      }
+      if (statusRaw !== null && statusRaw !== "") {
+        throw new ManagementError(
+          "unavailable",
+          "status filtering requires the negotiation observer projection",
+        );
+      }
       const channel = options.negotiations;
       if (channel === undefined) {
         throw new ManagementError("unavailable", "negotiation authority is not configured");
       }
-      const query = pageQuery(url);
       writeJson(res, 200, await channel.list(query.limit), { "x-request-id": requestId });
       return;
     }
@@ -598,11 +679,31 @@ export function createMerchantManagementApiHandler(
     if (negotiationMatch !== null) {
       const auth = requireActor(req);
       authorizeOrThrow(auth.ctx, "approvals:read");
+      const observer = options.negotiationObserver;
+      if (observer !== undefined) {
+        writeJson(res, 200, observer.timeline(pathSegment(negotiationMatch[1] ?? "")), {
+          "x-request-id": requestId,
+        });
+        return;
+      }
       const channel = options.negotiations;
       if (channel === undefined) {
         throw new ManagementError("unavailable", "negotiation authority is not configured");
       }
       writeJson(res, 200, await channel.get(pathSegment(negotiationMatch[1] ?? "")), {
+        "x-request-id": requestId,
+      });
+      return;
+    }
+    if (rest === "/reports") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "operations:read");
+      const builder = options.operationsReports;
+      if (builder === undefined) {
+        throw new ManagementError("unavailable", "operations report authority is not configured");
+      }
+      const periodRaw = url.searchParams.get("period");
+      writeJson(res, 200, builder.build(parseReportPeriod(periodRaw)), {
         "x-request-id": requestId,
       });
       return;
@@ -799,6 +900,7 @@ export function createMerchantManagementApiHandler(
     res: ServerResponse,
     rest: string,
     requestId: string,
+    url: URL,
   ): Promise<void> {
     if (rest === "/runtime/safety-stops") {
       const auth = requireActor(req);
@@ -1116,8 +1218,16 @@ export function createMerchantManagementApiHandler(
       await postProductsImportCommit(req, res, pathSegment(importCommitMatch[1] ?? ""));
       return;
     }
+    if (rest === "/products/import-parse") {
+      await postProductsImportParse(req, res, url);
+      return;
+    }
     if (rest === "/policy/drafts") {
       await postPolicyDraft(req, res);
+      return;
+    }
+    if (rest === "/policy/form-drafts") {
+      await postPolicyFormDraft(req, res);
       return;
     }
     const policyCommitMatch = /^\/policy\/drafts\/([^/]+)\/commit$/.exec(rest);
@@ -2812,6 +2922,54 @@ export function createMerchantManagementApiHandler(
     });
   }
 
+  /**
+   * POST /products/import-parse?format=csv|xlsx —— 把商家上传的 CSV/xlsx 原文
+   * （WP12）转换为商品表草稿：表头映射报告 + 逐行问题清单。无状态（不落盘），
+   * 商家确认后仍走 import-drafts 严格校验与整表替换预览；服务端解析保证工作
+   * 台、脚本与技能共用同一实现（`product-import-tabular.ts`）。
+   */
+  async function postProductsImportParse(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    const auth = requireActor(req);
+    assertWriteGuards(req, auth.sessionId);
+    authorizeOrThrow(auth.ctx, "products:import");
+    const format = url.searchParams.get("format");
+    if (format !== "csv" && format !== "xlsx") {
+      throw new ManagementError("invalid_input", "format must be csv or xlsx");
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += (chunk as Buffer).length;
+      if (size > TABULAR_IMPORT_MAX_BYTES) {
+        throw new ManagementError(
+          "invalid_input",
+          `文件超过上限 ${TABULAR_IMPORT_MAX_BYTES} 字节，请分批导入或精简表格`,
+        );
+      }
+      chunks.push(chunk as Buffer);
+    }
+    if (chunks.length === 0) {
+      throw new ManagementError("invalid_input", "request body required");
+    }
+    const buffer = Buffer.concat(chunks);
+    const result = convertTabularImport(
+      format === "csv"
+        ? { kind: "csv", text: buffer.toString("utf8") }
+        : { kind: "xlsx", bytes: new Uint8Array(buffer) },
+      { merchantId: options.merchantId, now: () => now() },
+    );
+    writeJson(res, 200, {
+      ok: result.ok,
+      ...(result.table !== undefined ? { table: result.table } : {}),
+      report: result.report,
+      errors: result.errors,
+    });
+  }
+
   /** POST /products/import-drafts/{id}/commit —— 原子落盘；结果不可分辨时记 unknown。 */
   async function postProductsImportCommit(
     req: IncomingMessage,
@@ -2966,6 +3124,79 @@ export function createMerchantManagementApiHandler(
       digest,
       reused: created.reused,
       base_digest: current?.digest ?? null,
+    });
+  }
+
+  /**
+   * POST /policy/form-drafts —— 常用规则表单（WP11）：表单友好字段 → 服务端映射
+   * 为 policy schema 字段，走与 JSON patch 完全相同的草稿→确认提交流程。
+   * schema 字段名只出现在服务端（页面壳不含策略内部字段名，隐私守卫不变）。
+   */
+  async function postPolicyFormDraft(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const auth = requireActor(req);
+    assertWriteGuards(req, auth.sessionId);
+    authorizeOrThrow(auth.ctx, "policy:draft");
+    const fields = objectFields(await readJsonBody(req), [
+      "auto",
+      "floor",
+      "discount",
+      "lead_days",
+      "ttl_seconds",
+      "human_review",
+    ]);
+    const patch: Record<string, unknown> = {};
+    if (fields["auto"] !== undefined) {
+      if (fields["auto"] !== "on" && fields["auto"] !== "off") {
+        throw new ManagementError("invalid_input", "auto must be on or off");
+      }
+      patch["auto_negotiate"] = fields["auto"] === "on";
+    }
+    if (fields["floor"] !== undefined) {
+      patch["min_unit_price_private"] = requireNonNegativeNumber(fields["floor"], "floor");
+    }
+    if (fields["discount"] !== undefined) {
+      const discount = requireNonNegativeNumber(fields["discount"], "discount");
+      if (discount > 100) {
+        throw new ManagementError("invalid_input", "discount must be between 0 and 100");
+      }
+      patch["max_auto_discount_percent"] = discount;
+    }
+    if (fields["lead_days"] !== undefined) {
+      patch["delivery_lead_days"] = requirePositiveNumber(fields["lead_days"], "lead_days");
+    }
+    if (fields["ttl_seconds"] !== undefined) {
+      patch["quote_ttl_seconds"] = requirePositiveInteger(fields["ttl_seconds"], "ttl_seconds");
+    }
+    if (fields["human_review"] !== undefined) {
+      const triggers = requireStringArray(fields["human_review"], "human_review");
+      for (const trigger of triggers) {
+        if (!HUMAN_REVIEW_TRIGGERS.includes(trigger)) {
+          throw new ManagementError(
+            "invalid_input",
+            `human_review trigger must be one of ${HUMAN_REVIEW_TRIGGERS.join(", ")}`,
+          );
+        }
+      }
+      patch["human_review_on"] = triggers;
+    }
+    if (Object.keys(patch).length === 0) {
+      throw new ManagementError("invalid_input", "form submitted no changes");
+    }
+    const current = options.policy?.();
+    const digest = managementRequestDigest(patch);
+    const created = options.drafts.create({
+      merchantId: auth.ctx.merchantId,
+      kind: "policy_override",
+      payloadJson: JSON.stringify(patch),
+      payloadDigest: digest,
+      ...(current !== undefined ? { baseDigest: current.digest } : {}),
+    });
+    writeJson(res, 200, {
+      draft_id: created.draftId,
+      digest,
+      reused: created.reused,
+      base_digest: current?.digest ?? null,
+      applied_keys: Object.keys(patch),
     });
   }
 
@@ -3194,6 +3425,8 @@ function isKnownPath(rest: string): boolean {
     rest === "/service/pause" ||
     rest === "/service/resume" ||
     rest === "/products/import-drafts" ||
+    rest === "/products/import-parse" ||
+    rest === "/products/import-template" ||
     rest === "/policy/drafts" ||
     rest === "/onboarding"
   ) {
@@ -3294,6 +3527,23 @@ function requirePositiveInteger(value: unknown, field: string): number {
   if (integer < 1) throw new ManagementError("invalid_input", `${field} must be positive`);
   return integer;
 }
+
+/** 表单数值允许小数（元/百分比），但必须有限且非负（或正数，见下）。 */
+function requireNonNegativeNumber(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new ManagementError("invalid_input", `${field} must be a non-negative number`);
+  }
+  return value;
+}
+
+function requirePositiveNumber(value: unknown, field: string): number {
+  const number = requireNonNegativeNumber(value, field);
+  if (number === 0) throw new ManagementError("invalid_input", `${field} must be positive`);
+  return number;
+}
+
+/** human_review_on 已知触发词（product-init/supervisor 初始化口径）。 */
+const HUMAN_REVIEW_TRIGGERS = ["below_floor", "exceptional_warranty", "suspicious_content"];
 
 function requireDecision(value: unknown): "approve" | "reject" {
   if (value !== "approve" && value !== "reject") {

@@ -179,6 +179,27 @@ export class MerchantStatsStore {
     };
   }
 
+  /**
+   * 有界窗口总量（sinceDay 含、untilDayExclusive 不含；运营报告的周期与
+   * 对比周期用）。跨日的 distinct 计数在 SQL 内一次完成，不做日桶累加。
+   */
+  windowTotals(sinceDay: string, untilDayExclusive: string): ContactTotals {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(DISTINCT buyer_identity) AS distinct_buyers,
+                COUNT(*) AS contact_events,
+                COUNT(DISTINCT negotiation_id) AS negotiations
+         FROM buyer_contact_events
+         WHERE substr(occurred_at, 1, 10) >= ? AND substr(occurred_at, 1, 10) < ?`,
+      )
+      .get(sinceDay, untilDayExclusive) as unknown as TotalsRow;
+    return {
+      distinct_buyers: row.distinct_buyers,
+      contact_events: row.contact_events,
+      negotiations: row.negotiations,
+    };
+  }
+
   /** 按日聚合（只返回有数据的天；零填充由调用方做）。 */
   dailySince(sinceDay: string): DailyBucket[] {
     const rows = this.db
