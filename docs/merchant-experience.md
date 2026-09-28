@@ -287,6 +287,34 @@ A2A 协商继续使用 KNP policy gate；Handoff 继续使用独立的 handoff a
 本文所称 HardPolicy 是设计概念，指 profile 私有阈值、clampHintsToHardPolicy() 与
 write/negotiation gates 的组合，不是独立导出的类型。
 
+## 云端工作台：会话旁观与运营报告（WP11）
+
+商家工作台（`/merchant/`，`src/http/merchant-management/page.ts`）在原有四个标签外
+新增「会话旁观」「运营报告」两个只读标签，并给「报价规则」加了常用字段表单：
+
+- **会话旁观**：`GET /merchant/api/v1/negotiations`（offset cursor 分页、按最近
+  落账时间倒序、`status=active|agreement|all` 过滤）与
+  `GET /merchant/api/v1/negotiations/{id}`（时间线：双方消息 / 相位迁移 / 人工
+  交接，含规则溯源与转人工标记）。投影在
+  `src/merchant/negotiation-observer.ts`，与 workbench-service 同一账本事实源。
+  只读——不能从工作台向买家发消息；买家只以协议身份出现（A2A sender
+  identity），不展示私密联系方式；出站报价的规则数值（底价/折扣）按红线不进入
+  任何返回值，`rule_summary` 只描述来源（本节点规则引擎自动生成 / 账本自带的
+  policy_digest），没有账本事实时明确「不可得」。
+- **运营报告**：`GET /merchant/api/v1/reports?period=day|week|month`，聚合在
+  `src/merchant/operations-report.ts`。去重买家 / 触达 / 磋商 / SKU 热度来自
+  merchant stats-store（`<dataDir>/a2a/stats.sqlite`），达成非绑定协议与进入
+  人工处理来自账本状态迁移；与上一周期对比，窗口一律 UTC（week 为 ISO 周一
+  始）。stats 文件不存在 → 对应指标 `available=false` + 原因（页面显示
+  「不可得」），不编造数值。「最近询价关键词」只统计问题 code 原文计数，
+  主题归纳留给后续 LLM 工作。
+- **规则表单**：`POST /merchant/api/v1/policy/form-drafts` 接收表单友好字段
+  （auto / floor / discount / lead_days / ttl_seconds / human_review），服务端
+  映射为 policy schema 字段生成策略草稿，提交生效仍走既有
+  `/policy/drafts/{id}/commit`（校验 + 原子写 + 回执只含版本与摘要）。per-SKU
+  映射与促销继续用 JSON patch 高级模式；起订量（MOQ）属商品表字段，不在
+  policy 表单内。
+
 ## 开发与验证
 
 ~~~bash
@@ -310,6 +338,7 @@ tests/merchant-skills.test.ts
 tests/merchant-http.test.ts
 tests/merchant-presentation.test.ts
 tests/http-analytics-source.test.ts
+tests/merchant-workbench-observe-report.test.ts
 ~~~
 
 当前代码已通过 lint、typecheck、build、全量测试和生产包 smoke。具体视觉组件和 Buddy/Web
