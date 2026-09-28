@@ -65,15 +65,15 @@
     {
       "id": "kiwi-catalog-admin",
       "name": "Private Catalog merchant and operations extension",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "version_source": { "type": "external-toml", "scope": "private", "path": "pyproject.toml", "field": "project.version" },
       "repository": "harrylabsj/kiwi-catalog-admin",
-      "source_commit": "b1b38a3eca7b56b058bc32296ecc7c989c9d712e",
+      "source_commit": "7139f24c504088fc42f7cb3a4e38b3198f51b931",
       "channel": "private Git tag",
       "release_controller": "private extension repository",
       "artifact": null,
       "bundle_reason": "The source repository is private; its package is tracked by immutable repository and commit references instead of being copied into the public portfolio artifact.",
-      "state": "release-tagged v0.2.0; deployment pending",
+      "state": "v0.2.1 deployed to production on 2026-09-28",
       "requires": ["kiwi-catalog >=0.5.1,<0.6"]
     },
     {
