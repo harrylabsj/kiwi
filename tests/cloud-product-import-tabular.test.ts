@@ -52,7 +52,8 @@ describe("convertTabularImport — 表头识别", () => {
       price: 29.9,
       status: "active",
     });
-    expect(result.table?.merchant_id).toBe("merchant-001");
+    expect(result.table?.runtime_owner_id).toBe("merchant-001");
+    expect(result.table?.merchant_id).toBeUndefined();
     expect(result.table?.source).toBe("merchant_upload");
   });
 
