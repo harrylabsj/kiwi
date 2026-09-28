@@ -18,14 +18,14 @@
 ### 模块 2：首页配置
 
 - 首页标题（Slogan）、欢迎语：取 `home.slogan` / `home.welcome`。
-- 工作模式：按 `buddy-app.config.json` 配 4 个模式——①注册开通 ②日常运营 ③曝光优化 ④客服准备，各配 System Prompt 与 `kiwi_catalog_*` 工具；「注册开通」模式另挂技能 `kiwi-cloud-deploy`（1.7.0 起，云端接待一键部署）。
+- 工作模式：按 `buddy-app.config.json` 配 4 个模式——①注册开通 ②日常运营 ③曝光优化 ④客服准备，各配 System Prompt 与 `kiwi_catalog_*` 工具；「注册开通」模式另挂技能 `kiwi-cloud-deploy`（1.7.0 起，云端接待一键部署），「日常运营」模式另挂技能 `kiwi-product-import`（1.7.0 内 WP12 新增，商品导入表整理）。
   - **没有实例读写模式**（商品查看 / 询价处理 / 库存与变更草稿）：按[「网关不碰实例」](../../../../docs/merchant-buddy/merchant-connector-deployment.md)原则（部署说明 §0）刻意去掉——网关不持有实例地址与凭据、不代理实例工具；商家实例独立部署、直接与买家做 A2A。`kiwi-cloud-deploy` 不经网关：它在商家自己的 Buddy 会话里用平台云发布工具（inspect/activate/deploy）把接待运行时部署到**商家名下**的云端应用。
 - 场景胶囊：按配置文件中的胶囊逐项验证（注册开通 7 个、日常运营 6 个、曝光优化 6 个、客服准备 5 个）。注册开通模式的「一键开通云端接待」「升级接待服务」（1.7.0，替换了与「上线检查」重复的「开通进度」）依赖技能资产与 V1 验证，未就绪前预览会按方案 B 输出提示词。
 - 内置连接器：使用 `kiwi-merchant-gateway-connector` 的 OAuth MCP，只提供目录工具。`kiwi_merchant_*` 实例工具**本就不该出现**，不要为此排障。
 
 ### 模块 3：市场配置
 
-- 连接器：待 v1.1.1 审核通过后，使用平台新生成的资产 ID 配置 Buddy 内置连接器，并核对其只暴露预期的 6 个目录工具。不得引用已撤回/删除的历史资产 ID。技能两个：`skills/kiwi-merchant-cs-prep/` 已作为 `os_dc3a52407574eb77` 提交审核，发布后再加入应用市场，它只准备客服 FAQ/回复草稿，不自动接待客户；`skills/kiwi-cloud-deploy/`（1.7.0 新增）云端接待一键部署，**需单独提交技能资产审核**，且提交前必须关闭：V1（会话内 inspect/activate/deploy 可用性）实测、`references/release.json` 发布参数占位回填（依赖 WP2/3 的 `@harrylabsj/kiwi-merchant-cloud` 包），见配置 `$pending.skills`。
+- 连接器：待 v1.1.1 审核通过后，使用平台新生成的资产 ID 配置 Buddy 内置连接器，并核对其只暴露预期的 6 个目录工具。不得引用已撤回/删除的历史资产 ID。技能三个：`skills/kiwi-merchant-cs-prep/` 已作为 `os_dc3a52407574eb77` 提交审核，发布后再加入应用市场，它只准备客服 FAQ/回复草稿，不自动接待客户；`skills/kiwi-cloud-deploy/`（1.7.0 新增）云端接待一键部署，**需单独提交技能资产审核**，且提交前必须关闭：V1（会话内 inspect/activate/deploy 可用性）实测、`references/release.json` 发布参数占位回填（依赖 WP2/3 的 `@harrylabsj/kiwi-merchant-cloud` 包），见配置 `$pending.skills`；`skills/kiwi-product-import/`（1.7.0 内 WP12 新增）商品导入表整理（列映射确认 → 生成模板一致 CSV + 问题清单 → 引导工作台上传），**需单独提交技能资产审核**（不依赖平台工具，审核前可退回普通任务执行），见配置 `$pending.skills`。「日常运营」模式「整理商品」胶囊以 `bindSkills` 表达技能绑定；平台若不支持胶囊级技能绑定，以模式 skills 为准。
 - 专家：不配置；专家页精选场景也不配置（需要关联专家/专家团）。
 
 ### 模块 4：其他配置
@@ -36,7 +36,7 @@
 
 ### 模块 5：预览调试
 
-提交审核前用预览链接在 WorkBuddy 客户端打开预览态，逐项过一遍各模式与全部胶囊；另外手动验证市场中的两个技能。`kiwi-cloud-deploy` 的预览要点：①确认会话里是否存在平台云发布工具（V1 实测点）——不存在时应按方案 B 原样输出 `references/fallback-prompt.md` 提示词；②`references/release.json` 未回填占位时应拒绝实际部署、只讲解流程；③一次性口令只展示一次。
+提交审核前用预览链接在 WorkBuddy 客户端打开预览态，逐项过一遍各模式与全部胶囊；另外手动验证市场中的三个技能。`kiwi-cloud-deploy` 的预览要点：①确认会话里是否存在平台云发布工具（V1 实测点）——不存在时应按方案 B 原样输出 `references/fallback-prompt.md` 提示词；②`references/release.json` 未回填占位时应拒绝实际部署、只讲解流程；③一次性口令只展示一次。`kiwi-product-import` 的预览要点：①贴一段含底价列的商品表格，应先确认列映射并剔除底价列、不编造缺失价格；②生成的 CSV 列名应与工作台「商品与导入」页模板一致（`references/columns.md`）；③应提醒整表替换语义并引导商家本人在工作台上传确认。
 
 ## 发布流程
 
