@@ -979,7 +979,7 @@ describe("Workbench /merchant/api/v1 — WP12 表格导入（CSV/xlsx 解析与�
     expect(await bad.json()).toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
-  it("POST /products/import-parse 转换 CSV：返回商品表与映射报告；merchant_id 来自服务端", async () => {
+  it("POST /products/import-parse 转换 CSV：返回商品表与映射报告；runtime_owner_id 来自服务端", async () => {
     const auth = await login("owner");
     const res = await fetch(`${base}/merchant/api/v1/products/import-parse?format=csv`, {
       method: "POST",
@@ -990,7 +990,8 @@ describe("Workbench /merchant/api/v1 — WP12 表格导入（CSV/xlsx 解析与�
     const json = (await res.json()) as Record<string, unknown>;
     expect(json["ok"]).toBe(true);
     const table = json["table"] as Record<string, unknown>;
-    expect(table["merchant_id"]).toBe(MERCHANT);
+    expect(table["runtime_owner_id"]).toBe(MERCHANT);
+    expect(table["merchant_id"]).toBeUndefined();
     expect((table["products"] as unknown[]).length).toBe(1);
     const report = json["report"] as Record<string, unknown>;
     expect(report["rows"]).toBe(1);

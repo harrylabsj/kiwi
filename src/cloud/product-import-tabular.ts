@@ -971,6 +971,8 @@ export interface TabularImportResult {
 }
 
 export interface TabularImportOptions {
+  /** 运行实例租户 id（写入 runtime_owner_id；Catalog 确认后的 merchant_id 由
+   *  import-drafts 的服务端 prepareTable 注入，转换层不猜、不采信上传方）。 */
   merchantId: string;
   now?: () => Date;
 }
@@ -1224,7 +1226,9 @@ export function convertTabularImport(
 
   const table: CloudProductTable = {
     schema_version: PRODUCT_TABLE_SCHEMA_VERSION,
-    merchant_id: options.merchantId,
+    // WP5 语义：merchant_id 是 Catalog 确认后的身份，只在绑定后由服务端注入；
+    // 转换产物只声明本地租户边界 runtime_owner_id（绑定前导入即保存，不因此被拒）。
+    runtime_owner_id: options.merchantId,
     source: "merchant_upload",
     generated_at: now().toISOString(),
     products,
