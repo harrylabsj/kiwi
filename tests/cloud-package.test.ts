@@ -44,6 +44,14 @@ function run(pkg: string, out: string, ...args: string[]) {
   return spawnSync(process.execPath, [path.join(pkg, "prepare.mjs"), "--origin", "https://merchant.example", "--out", out, ...args], { encoding: "utf8" });
 }
 
+function runWithEnv(pkg: string, out: string, env: Record<string, string>, ...args: string[]) {
+  return spawnSync(
+    process.execPath,
+    [path.join(pkg, "prepare.mjs"), "--origin", "https://merchant.example", "--out", out, ...args],
+    { encoding: "utf8", env: { ...process.env, ...env } },
+  );
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -68,8 +76,8 @@ describe("merchant cloud package prepare", () => {
   it("generates a unique runtime identity and an empty persistent production product table", () => {
     const { root, out } = fixture();
     const firstOut = path.join(path.dirname(out), "deploy-first");
-    const first = run(root, firstOut);
-    const second = run(root, out);
+    const second = runWithEnv(root, out, { KIWI_CLOUD_PLATFORM_WORKSPACE: "/nonexistent-kiwi-wp19" });
+    const first = runWithEnv(root, firstOut, { KIWI_CLOUD_PLATFORM_WORKSPACE: "/nonexistent-kiwi-wp19" });
     expect(first.status).toBe(0);
     expect(second.status).toBe(0);
     const firstReceipt = JSON.parse(first.stdout.split("\n")[0] ?? "{}");
@@ -80,10 +88,50 @@ describe("merchant cloud package prepare", () => {
     const profile = readFileSync(path.join(out, "pilot", "merchant.yaml"), "utf8");
     expect(profile).toContain(`agent_id: ${secondReceipt.agent_id}`);
     const config = JSON.parse(readFileSync(path.join(out, "cloud.config.json"), "utf8"));
-    expect(config.products_file).toBe("/workspace/.kiwi-runtime/products.json");
+    // 本机（无 /workspace）缺省用部署目录旁的一次性临时目录（WP17 §3.3 遗留改进）。
+    expect(config.data_dir).toMatch(/[/\\]\.kiwi-runtime-[^/\\]+$/);
+    expect(path.dirname(config.data_dir as string)).toBe(path.dirname(out));
+    expect(String(config.data_dir).startsWith(`${out}${path.sep}`)).toBe(false);
+    expect(existsSync(config.data_dir as string)).toBe(true);
+    expect(config.products_file).toBe(path.join(config.data_dir as string, "products.json"));
     expect(existsSync(path.join(out, "pilot", "products.json"))).toBe(false);
     expect(existsSync(path.join(out, "app", "cloud-sample"))).toBe(false);
     expect(config.merchant_name_needs_update).toBe(true);
+  });
+
+  it("keeps the platform default data dir when the platform workspace exists", () => {
+    const { root, out } = fixture();
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "kiwi-wp19-workspace-"));
+    const result = runWithEnv(root, out, { KIWI_CLOUD_PLATFORM_WORKSPACE: workspace });
+    expect(result.status).toBe(0);
+    const config = JSON.parse(readFileSync(path.join(out, "cloud.config.json"), "utf8"));
+    expect(config.data_dir).toBe(path.join(workspace, ".kiwi-runtime"));
+    expect(config.products_file).toBe(path.join(workspace, ".kiwi-runtime", "products.json"));
+  });
+
+  it("defaults the sample merchant display name so the smoke passes without extra flags", () => {
+    const { root, out } = fixture();
+    const sampleOut = path.join(path.dirname(out), "deploy-sample");
+    const result = runWithEnv(
+      root,
+      sampleOut,
+      { KIWI_CLOUD_PLATFORM_WORKSPACE: "/nonexistent-kiwi-wp19" },
+      "--sample",
+      "--catalog-url",
+      "http://127.0.0.1:8123",
+      "--allow-insecure-catalog",
+    );
+    expect(result.status).toBe(0);
+    const profile = readFileSync(path.join(sampleOut, "pilot", "merchant.yaml"), "utf8");
+    expect(profile).toContain('name: "Kiwi A2A Merchant"');
+    const config = JSON.parse(readFileSync(path.join(sampleOut, "cloud.config.json"), "utf8"));
+    expect(config.merchant_name_needs_update).toBe(true);
+    // 非 sample 部署缺省名保持占位口径，样例名不外溢。
+    const plain = run(root, path.join(path.dirname(out), "deploy-plain"));
+    expect(plain.status).toBe(0);
+    const plainProfile = readFileSync(path.join(path.dirname(out), "deploy-plain", "pilot", "merchant.yaml"), "utf8");
+    expect(plainProfile).toContain('name: "待设置商家名称"');
+    expect(plainProfile).not.toContain("Kiwi A2A Merchant");
   });
 
   it("requires HTTPS Catalog; loopback HTTP needs the explicit flag and sample rejects production", () => {

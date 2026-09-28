@@ -1,11 +1,24 @@
 #!/usr/bin/env node
 import { createHash, randomBytes, scryptSync } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PACKAGE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CATALOG_URL = "https://catalog.kiwi.harrylabsj.com";
+// --data-dir 缺省：/workspace 存在（WorkBuddy 云端宿主，cwd=/workspace）时沿用平台默认
+// /workspace/.kiwi-runtime；本机（开发/冒烟宿主）没有 /workspace，缺省改用部署目录旁的
+// 一次性临时目录，避免冷启动因创建不了平台路径而 ENOENT（WP17 报告 §3.3）。
+// KIWI_CLOUD_PLATFORM_WORKSPACE 仅用于测试/特殊宿主覆盖该探测路径。
+const PLATFORM_WORKSPACE_DIR = process.env.KIWI_CLOUD_PLATFORM_WORKSPACE ?? "/workspace";
+// 样例商家名：与包内 app/cloud-sample 夹具、scripts/smoke-cloud-artifact.mjs 的 agent_card 断言一致；
+// --sample 且未显式给 --merchant-name 时使用，使冒烟无需额外参数即可通过。
+const SAMPLE_MERCHANT_NAME = "Kiwi A2A Merchant";
+
+function defaultDataDir(outDir) {
+  if (existsSync(PLATFORM_WORKSPACE_DIR)) return path.join(PLATFORM_WORKSPACE_DIR, ".kiwi-runtime");
+  return mkdtempSync(path.join(path.dirname(outDir), ".kiwi-runtime-"));
+}
 
 function parseArgs(argv) {
   const options = { origin: undefined, out: undefined, dataDir: undefined, catalogUrl: DEFAULT_CATALOG_URL, allowInsecureCatalog: false, sample: false, merchantName: undefined, adminBootstrap: false };
@@ -149,12 +162,12 @@ function main() {
   const options = parseArgs(process.argv.slice(2));
   const publicOrigin = validateOrigin(options.origin);
   const catalogUrl = validateCatalogUrl(options.catalogUrl, options);
-  const merchantName = options.merchantName?.trim() || "待设置商家名称";
+  const merchantName = options.merchantName?.trim() || (options.sample ? SAMPLE_MERCHANT_NAME : "待设置商家名称");
   if (merchantName.length > 80 || hasControlCharacters(merchantName)) throw new Error("--merchant-name 最长 80 个字符且不得包含控制字符");
   const manifest = verifyManifest();
   const out = path.resolve(options.out);
   if (out === PACKAGE_ROOT || out.startsWith(`${PACKAGE_ROOT}${path.sep}`)) throw new Error("部署目录必须在包目录之外");
-  const dataDirRaw = options.dataDir ?? "/workspace/.kiwi-runtime";
+  const dataDirRaw = options.dataDir ?? defaultDataDir(out);
   if (!path.isAbsolute(dataDirRaw)) throw new Error("--data-dir 必须是部署目录外的绝对路径");
   const dataDir = path.resolve(dataDirRaw);
   if (dataDir === out || dataDir.startsWith(`${out}${path.sep}`)) throw new Error("--data-dir 必须是部署目录外的绝对路径");

@@ -12,7 +12,8 @@
           "config": {
             "header": {
               "visible": true,
-              "title": ""
+              "title": "Kiwi商家·让采购专家找到你",
+              "titleEn": "Kiwi Merchant·Get found by buyers"
             },
             "modes": {
               "defaultSelected": "onboarding",
@@ -22,7 +23,7 @@
                   "title": "注册开通",
                   "titleEn": "Onboarding",
                   "iconFileName": "mode-onboarding.svg",
-                  "systemPromptAppend": "你是 Kiwi 商家应用的「注册开通」模式。开通只有三步：①注册或登录 Kiwi 商家账号并验证邮箱；②添加本应用（商家已在使用本应用即视为完成）；③核对配对码，点一次「连接此服务并发布」。\n1) 先判断阶段：调用 kiwi_catalog_get_service_status 读取开通状态；若该工具不可用，用 kiwi_catalog_get_merchant_profile 判断账号是否已连接。按阶段只讲下一步要做的一件事，不要一次倒出全部流程。\n2) 注册/登录：引导商家使用本应用的连接入口，会打开 Kiwi 的页面，页面上可选「注册」或「登录」。新商家填写商家名称和联系方式并验证邮箱；注册即获得免费方案（默认 20 个同时在架的商品名额），无需人工审批。若验证邮箱后连接已失效，引导重新发起连接即可。\n3) 连接并发布：配对码显示在本应用的商家工作台。请商家打开 Catalog 授权页，核对两处配对码一致、公开预览无误，再亲自点击「连接此服务并发布」。配对码和链接都不是授权凭证，提醒商家不要把配对码发给他人；你不读取、不转述配对码。\n4) 名片由系统在 Catalog 端自动生成和维护；不要让商家填写域名、agent_id、公钥等技术信息，商家追问时再简要解释。\n5) 上线判断：只有 kiwi_catalog_get_service_status 显示名片已发布且在线状态正常时，才能说「已上线，采购方可以发现你并发来询价」；否则如实说明卡在哪一步和下一步动作。不确定就说不确定。\n6) 若平台弹出云资源或费用授权，以平台确认框显示为准，不要说免费，也不能代为确认。\n7) 商品与报价规则属于日常运营：开通完成后建议商家切换到「日常运营」模式。\n8) 云端接待部署（胶囊「一键开通云端接待」/「升级接待服务」）按 kiwi-cloud-deploy 技能执行：开通前先确认商家已连接 Kiwi 账号（kiwi_catalog_get_merchant_profile）；严格按 inspect→activate→取包校验→prepare→deploy→自检→引导确认的顺序，不跳步、不伪造回执；若平台弹出云资源或费用授权，以弹窗显示为准，不承诺免费；部署失败时把平台报错原样贴给商家，不修改部署包重试。工作台一次性首登口令只展示一次并提醒商家保存（这是「不在对话里收集密码」的唯一例外：仅展示技能生成的一次性口令，不从商家处收集）。会话缺少云发布工具（V1 未验证）时改输出技能内置的方案 B 提示词并说明。\n通用边界：你不在对话里收集任何密码、邮箱验证码、配对码、密钥或 token；不代商家点击任何确认按钮；不编造状态、价格、库存、交期或平台费用。接待边界：上线后商家服务按商家设定的规则自动答复询价，超出规则的进入工作台待审批；磋商结果是非约束性共识，不下单、不收款、不锁库存。",
+                  "systemPromptAppend": "你是 Kiwi 商家应用的「注册开通」模式。开通只有三步：①注册或登录 Kiwi 商家账号并验证邮箱；②添加本应用（商家已在使用本应用即视为完成）；③核对配对码，点一次「连接此服务并发布」。\n1) 先判断阶段：调用 kiwi_catalog_get_service_status 读取开通状态；若该工具不可用，用 kiwi_catalog_get_merchant_profile 判断账号是否已连接。按阶段只讲下一步要做的一件事，不要一次倒出全部流程。\n2) 注册/登录：引导商家使用本应用的连接入口，会打开 Kiwi 的页面，页面上可选「注册」或「登录」。新商家填写商家名称和联系方式并验证邮箱；注册即获得免费方案（默认 20 个同时在架的商品名额），无需人工审批。若验证邮箱后连接已失效，引导重新发起连接即可。\n3) 连接并发布：配对码显示在本应用的商家工作台。请商家打开 Catalog 授权页，核对两处配对码一致、公开预览无误，再亲自点击「连接此服务并发布」。配对码和链接都不是授权凭证，提醒商家不要把配对码发给他人；你不读取、不转述配对码。\n4) 名片由系统在 Catalog 端自动生成和维护；不要让商家填写域名、agent_id、公钥等技术信息，商家追问时再简要解释。\n5) 上线判断：只有 kiwi_catalog_get_service_status 显示名片已发布且在线状态正常时，才能说「已上线，采购方可以发现你并发来询价」；否则如实说明卡在哪一步和下一步动作。不确定就说不确定。\n6) 若平台弹出云资源或费用授权，以平台确认框显示为准，不要说免费，也不能代为确认。\n7) 商品与报价规则属于日常运营：开通完成后建议商家切换到「日常运营」模式。\n8) 云端接待部署（胶囊「一键开通云端接待」/「升级接待服务」）按 kiwi-cloud-deploy 技能执行：开通前先确认商家已连接 Kiwi 账号（kiwi_catalog_get_merchant_profile）；严格按取包校验→首次 workbuddy_sites_deploy 发布取得公网地址→prepare --origin→同一应用再次发布→自检→引导确认的顺序，不跳步、不伪造回执（工具名与参数以平台实际为准）；若平台弹出云资源或费用授权，以弹窗显示为准，不承诺免费；部署失败时把平台报错原样贴给商家，不修改部署包重试。工作台一次性首登口令只展示一次并提醒商家保存（这是「不在对话里收集密码」的唯一例外：仅展示技能生成的一次性口令，不从商家处收集）。会话缺少发布工具时改输出技能内置的方案 B 提示词并说明。\n通用边界：你不在对话里收集任何密码、邮箱验证码、配对码、密钥或 token；不代商家点击任何确认按钮；不编造状态、价格、库存、交期或平台费用。接待边界：上线后商家服务按商家设定的规则自动答复询价，超出规则的进入工作台待审批；磋商结果是非约束性共识，不下单、不收款、不锁库存。",
                   "skills": [],
                   "scenes": [
                     {
@@ -30,6 +31,7 @@
                       "title": "注册账号",
                       "titleEn": "Sign up",
                       "iconFileName": "cap-register.svg",
+                      "expertId": "exp-onboarding-advisor",
                       "systemPromptAppend": "先判断商家处于开通哪一步：优先用 kiwi_catalog_get_service_status 读取开通状态；该工具不可用时改用 kiwi_catalog_get_merchant_profile 判断账号是否已连接。按阶段只讲下一步要做的一件事，不一次倒出全部流程。",
                       "templates": [
                         {
@@ -67,6 +69,7 @@
                       "title": "连接发布",
                       "titleEn": "Connect & Publish",
                       "iconFileName": "cap-connect.svg",
+                      "expertId": "exp-onboarding-advisor",
                       "systemPromptAppend": "配对码显示在本应用的商家工作台；用 kiwi_catalog_get_service_status 确认连接与发布状态后，再引导商家打开 Catalog 授权页，核对两处配对码一致、公开预览无误，由商家亲自点击「连接此服务并发布」。配对码和链接都不是授权凭证，提醒商家不要外发；你不读取、不转述配对码。",
                       "templates": [
                         {
@@ -104,6 +107,7 @@
                       "title": "上线检查",
                       "titleEn": "Go-live Check",
                       "iconFileName": "cap-golive.svg",
+                      "expertId": "exp-onboarding-advisor",
                       "systemPromptAppend": "只有 kiwi_catalog_get_service_status 显示名片已发布且在线状态正常时，才能说「已上线，采购方可以发现你并发来询价」；否则如实说明卡在哪一步和下一步动作，不确定就说不确定。",
                       "templates": [
                         {
@@ -141,6 +145,7 @@
                       "title": "邮箱验证",
                       "titleEn": "Email Verification",
                       "iconFileName": "cap-email.svg",
+                      "expertId": "exp-onboarding-advisor",
                       "systemPromptAppend": "用 kiwi_catalog_get_merchant_profile 判断账号是否已连接；验证邮箱后连接失效属正常情况，引导重新发起连接即可。",
                       "templates": [
                         {
@@ -178,7 +183,8 @@
                       "title": "一键上云",
                       "titleEn": "One-click Cloud",
                       "iconFileName": "cap-cloud.svg",
-                      "systemPromptAppend": "云端接待的开通与升级都按 kiwi-cloud-deploy 技能执行：开通前先确认商家已连接 Kiwi 账号（kiwi_catalog_get_merchant_profile）；严格按 inspect→activate→取包校验→prepare→deploy→自检→引导确认的顺序，不跳步、不伪造回执；部署失败时把平台报错原样贴给商家，不修改部署包重试；会话缺少云发布工具时改输出技能内置的方案 B 提示词并说明。",
+                      "expertId": "exp-onboarding-advisor",
+                      "systemPromptAppend": "云端接待的开通与升级都按 kiwi-cloud-deploy 技能执行：开通前先确认商家已连接 Kiwi 账号（kiwi_catalog_get_merchant_profile）；严格按 取包校验→首次发布取地址→prepare --origin→同一应用再发布→自检→上线核对 的顺序，不跳步（一律用平台的站点发布/下线工具，工具名与参数以平台实际提供为准）；上线判断只认 kiwi_catalog_get_service_status；不伪造回执、不代商家点击费用或授权弹窗；部署失败时把平台报错原样贴给商家，不修改部署包重试；会话缺少发布工具时改输出技能内置的方案 B 提示词并说明。",
                       "templates": [
                         {
                           "id": "t17",
@@ -225,6 +231,7 @@
                       "title": "整理商品",
                       "titleEn": "Product Prep",
                       "iconFileName": "cap-products.svg",
+                      "expertId": "exp-operations-assistant",
                       "systemPromptAppend": "按 kiwi-product-import 技能执行：先与商家逐列确认映射，生成与工作台「商品与导入」页可下载的 CSV/Excel 模板完全一致的文件，并附问题清单；列名不确定时请商家下载模板或提供列名，不要自创。绝不编造价格/库存/规格/有效期，缺失标「需商家补充」；疑似底价/成本/进价列一律剔除；每次提醒整表替换语义——表里没有的 SKU 提交后会被下架，首次导入建议小批量试；上传与确认导入由商家本人在工作台完成。",
                       "templates": [
                         {
@@ -262,6 +269,7 @@
                       "title": "报价规则",
                       "titleEn": "Quote Rules",
                       "iconFileName": "cap-rules.svg",
+                      "expertId": "exp-operations-assistant",
                       "templates": [
                         {
                           "id": "t25",
@@ -298,6 +306,7 @@
                       "title": "商品名额",
                       "titleEn": "Listing Slots",
                       "iconFileName": "cap-slots.svg",
+                      "expertId": "exp-operations-assistant",
                       "systemPromptAppend": "用 kiwi_catalog_get_service_status 读取商品名额（已用/总数）与服务在线状态；名额满时说明需先下架商品释放名额，或联系 Kiwi 调整额度，不承诺付费扩容。",
                       "templates": [
                         {
@@ -335,6 +344,7 @@
                       "title": "待审批",
                       "titleEn": "Approvals",
                       "iconFileName": "cap-approvals.svg",
+                      "expertId": "exp-operations-assistant",
                       "templates": [
                         {
                           "id": "t33",
@@ -371,6 +381,7 @@
                       "title": "接待状态",
                       "titleEn": "Service Status",
                       "iconFileName": "cap-reception.svg",
+                      "expertId": "exp-operations-assistant",
                       "systemPromptAppend": "用 kiwi_catalog_get_service_status 读取服务在线状态并如实转述；不承诺在线时长，休眠/重启等情况如实说明。",
                       "templates": [
                         {
@@ -418,6 +429,7 @@
                       "title": "浏览数据",
                       "titleEn": "Views",
                       "iconFileName": "cap-views.svg",
+                      "expertId": "exp-reports-analyst",
                       "systemPromptAppend": "用 kiwi_catalog_get_merchant_stats 读经营汇总；该汇总是匿名聚合：只有关注人数和浏览量，没有关注者身份、名单或联系方式，也没有群发通道——如实说明，不承诺触达或导出。",
                       "templates": [
                         {
@@ -455,6 +467,7 @@
                       "title": "关注人数",
                       "titleEn": "Followers",
                       "iconFileName": "cap-followers.svg",
+                      "expertId": "exp-reports-analyst",
                       "systemPromptAppend": "用 kiwi_catalog_get_merchant_stats 读关注人数；汇总是匿名聚合，没有关注者名单或联系方式，也没有群发通道——如实说明，不承诺触达或导出。",
                       "templates": [
                         {
@@ -492,6 +505,7 @@
                       "title": "优化文案",
                       "titleEn": "Copywriting",
                       "iconFileName": "cap-copy.svg",
+                      "expertId": "exp-visibility-coach",
                       "systemPromptAppend": "改文案前先用 kiwi_catalog_get_publication 逐条读取当前内容，不凭记忆重写；改好后用 kiwi_catalog_save_publication_draft 存草稿；需要生效时用 kiwi_catalog_request_publish，并明确告诉商家「尚未发布，需要你到门户核对预览并确认」，撤回用 kiwi_catalog_withdraw_publication。",
                       "templates": [
                         {
@@ -529,6 +543,7 @@
                       "title": "搜索词",
                       "titleEn": "Search Terms",
                       "iconFileName": "cap-search.svg",
+                      "expertId": "exp-visibility-coach",
                       "systemPromptAppend": "用 kiwi_catalog_get_publication 逐条读取当前标题与类目再检查，不凭记忆重写。",
                       "templates": [
                         {
@@ -566,6 +581,7 @@
                       "title": "资料体检",
                       "titleEn": "Profile Audit",
                       "iconFileName": "cap-audit.svg",
+                      "expertId": "exp-visibility-coach",
                       "systemPromptAppend": "用 kiwi_catalog_get_publication 逐条读取当前内容，用 kiwi_catalog_get_merchant_stats 读浏览与关注数据，对照检查缺项；不确定的标「需商家补充」。",
                       "templates": [
                         {
@@ -617,6 +633,7 @@
                       "title": "整理问答",
                       "titleEn": "FAQ Prep",
                       "iconFileName": "cap-faq.svg",
+                      "expertId": "exp-cs-coach",
                       "templates": [
                         {
                           "id": "t61",
@@ -653,6 +670,7 @@
                       "title": "售后话术",
                       "titleEn": "Aftersales Scripts",
                       "iconFileName": "cap-scripts.svg",
+                      "expertId": "exp-cs-coach",
                       "templates": [
                         {
                           "id": "t65",
@@ -689,6 +707,7 @@
                       "title": "模拟提问",
                       "titleEn": "Mock Questions",
                       "iconFileName": "cap-mock.svg",
+                      "expertId": "exp-cs-coach",
                       "templates": [
                         {
                           "id": "t69",
@@ -725,6 +744,7 @@
                       "title": "转人工",
                       "titleEn": "Escalation",
                       "iconFileName": "cap-escalate.svg",
+                      "expertId": "exp-cs-coach",
                       "templates": [
                         {
                           "id": "t73",
@@ -761,6 +781,7 @@
                       "title": "回复检查",
                       "titleEn": "Reply Check",
                       "iconFileName": "cap-reply-check.svg",
+                      "expertId": "exp-cs-coach",
                       "templates": [
                         {
                           "id": "t77",
