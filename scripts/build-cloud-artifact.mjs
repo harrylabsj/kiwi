@@ -52,6 +52,7 @@ const FORBIDDEN_STATE_PATTERNS = [
   /(^|\/)stats\.sqlite$/,
   /(^|\/)owner\.lock$/,
   /(^|\/)admin-credentials\.json$/,
+  /(^|\/)merchant-identity\.json$/,
   /(^|\/)a2a-signing-key\.json$/,
   /(^|\/)a2a-trusted-keys\.json$/,
   /(^|\/)policy-overrides\.json$/,

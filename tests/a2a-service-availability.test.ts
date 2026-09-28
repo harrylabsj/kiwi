@@ -167,6 +167,7 @@ describe("T012：显式暂停 → 停止新询价（真实 HTTP 面）", () => {
         KIWI_CLOUD_PUBLIC_ORIGIN: "https://t012-runtime.example.app.workbuddy.host",
         KIWI_CLOUD_DATA_DIR: dataDir,
         KIWI_CLOUD_PROFILE: profilePath,
+        KIWI_CATALOG_URL: "https://catalog.test",
         KIWI_CLOUD_A2A_AUTH: "bearer:KIWI_T012_TOKEN",
         KIWI_T012_TOKEN: BEARER,
         // 操作者显式声明服务状态（M4 §5.4/T012）——缺省不设闸门

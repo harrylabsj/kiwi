@@ -30,7 +30,8 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { MerchantProductSource } from "../a2a/server/merchant-handler.js";
 
 /** 商品表 schema 版本（与交接包控制面同版）。 */
@@ -62,11 +63,32 @@ export interface CloudProductRecord {
 
 export interface CloudProductTable {
   schema_version: string;
-  merchant_id: string;
+  /** Catalog-confirmed merchant id; omitted until an authorized binding exists. */
+  merchant_id?: string;
+  /** Local runtime tenant id; never used as a Catalog merchant id. */
+  runtime_owner_id?: string;
   /** 来源标记：商家上传 / 测试夹具。 */
   source: "merchant_upload" | "test_fixture";
   generated_at: string;
   products: CloudProductRecord[];
+}
+
+/** Seed an empty persistent production table once; never reset merchant data on redeploy. */
+export function ensureInitialEmptyProductTable(file: string, runtimeOwnerId: string): void {
+  if (existsSync(file)) return;
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const emptyTable: CloudProductTable = {
+    schema_version: PRODUCT_TABLE_SCHEMA_VERSION,
+    runtime_owner_id: runtimeOwnerId,
+    source: "merchant_upload",
+    generated_at: new Date().toISOString(),
+    products: [],
+  };
+  try {
+    writeFileSync(file, `${JSON.stringify(emptyTable, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+  } catch (error) {
+    if ((error as { code?: string }).code !== "EEXIST") throw error;
+  }
 }
 
 export class ProductTableError extends Error {
@@ -101,8 +123,8 @@ export function parseProductTable(value: unknown, source: string): CloudProductT
   }
   const table = value as Record<string, unknown>;
   const productsRaw = table["products"];
-  if (!Array.isArray(productsRaw) || productsRaw.length === 0) {
-    throw new ProductTableError("PRODUCT_TABLE_EMPTY", `商品表没有商品条目：${source}`);
+  if (!Array.isArray(productsRaw)) {
+    throw new ProductTableError("PRODUCT_TABLE_INVALID", `商品表 products 必须是数组：${source}`);
   }
   const products: CloudProductRecord[] = productsRaw.map((item, index) => {
     if (item === null || typeof item !== "object" || Array.isArray(item)) {
@@ -149,9 +171,18 @@ export function parseProductTable(value: unknown, source: string): CloudProductT
       ...(record["test"] === true ? { test: true } : {}),
     };
   });
+  const merchantId = table["merchant_id"];
+  const runtimeOwnerId = table["runtime_owner_id"];
+  if (merchantId !== undefined && (typeof merchantId !== "string" || merchantId.trim() === "")) {
+    throw new ProductTableError("PRODUCT_TABLE_INVALID", "商品表 merchant_id 必须是非空字符串");
+  }
+  if (runtimeOwnerId !== undefined && (typeof runtimeOwnerId !== "string" || runtimeOwnerId.trim() === "")) {
+    throw new ProductTableError("PRODUCT_TABLE_INVALID", "商品表 runtime_owner_id 必须是非空字符串");
+  }
   return {
     schema_version: requireString(table["schema_version"], "schema_version"),
-    merchant_id: requireString(table["merchant_id"], "merchant_id"),
+    ...(typeof merchantId === "string" ? { merchant_id: merchantId } : {}),
+    ...(typeof runtimeOwnerId === "string" ? { runtime_owner_id: runtimeOwnerId } : {}),
     source: table["source"] === "test_fixture" ? "test_fixture" : "merchant_upload",
     generated_at: requireIso(table["generated_at"], "generated_at"),
     products,
@@ -207,10 +238,10 @@ export function createFileProductSource(options: FileProductSourceOptions): Clou
         `商品表不是合法 JSON：${options.file}（${err instanceof Error ? err.message : String(err)}）`,
       );
     }
-    if (table.merchant_id !== options.merchantId) {
+    if ((table.runtime_owner_id ?? table.merchant_id) !== options.merchantId) {
       throw new ProductTableError(
         "PRODUCT_TABLE_TENANT_MISMATCH",
-        `商品表 merchant_id=${table.merchant_id} 与运行实例 ${options.merchantId} 不一致：拒绝加载`,
+        `商品表 runtime owner 与运行实例 ${options.merchantId} 不一致：拒绝加载`,
       );
     }
     cached = { mtimeMs, table };
@@ -221,13 +252,20 @@ export function createFileProductSource(options: FileProductSourceOptions): Clou
     load().products.find((product) => product.sku === sku);
 
   const availability = (sku: string): { available: boolean; code?: string } => {
-    let record: CloudProductRecord | undefined;
+    let table: CloudProductTable;
     try {
-      record = findSku(sku);
+      table = load();
     } catch (err) {
       return { available: false, code: err instanceof ProductTableError ? err.code : "PRODUCT_TABLE_ERROR" };
     }
-    if (record === undefined) return { available: false, code: "PRODUCT_NOT_IN_TABLE" };
+    if (table.products.length > 0 && table.merchant_id === undefined) {
+      return { available: false, code: "CATALOG_BINDING_REQUIRED" };
+    }
+    const record = table.products.find((product) => product.sku === sku);
+    if (record === undefined) {
+      if (load().products.length === 0) return { available: false, code: "PRODUCTS_NOT_CONFIGURED" };
+      return { available: false, code: "PRODUCT_NOT_IN_TABLE" };
+    }
     if (record.status !== "active") return { available: false, code: "PRODUCT_PAUSED" };
     if (Date.parse(record.valid_until) < now()) return { available: false, code: "PRODUCT_EXPIRED" };
     return { available: true };
@@ -287,10 +325,10 @@ export function loadProductTableSnapshot(file: string, merchantId: string): Prod
   }
   const raw = readFileSync(file, "utf8");
   const table = parseProductTable(JSON.parse(raw) as unknown, file);
-  if (table.merchant_id !== merchantId) {
+  if ((table.runtime_owner_id ?? table.merchant_id) !== merchantId) {
     throw new ProductTableError(
       "PRODUCT_TABLE_TENANT_MISMATCH",
-      `商品表 merchant_id=${table.merchant_id} 与运行实例 ${merchantId} 不一致：拒绝加载`,
+      `商品表 runtime owner 与运行实例 ${merchantId} 不一致：拒绝加载`,
     );
   }
   return { table, digest: productTableDigest(table), records: table.products };
@@ -307,14 +345,26 @@ export function commitProductTable(
   table: CloudProductTable,
 ): { digest: string } {
   const checked = parseProductTable(table, file);
-  if (checked.merchant_id !== merchantId) {
+  if ((checked.runtime_owner_id ?? checked.merchant_id) !== merchantId) {
     throw new ProductTableError(
       "PRODUCT_TABLE_TENANT_MISMATCH",
-      `商品表 merchant_id=${checked.merchant_id} 与运行实例 ${merchantId} 不一致：拒绝写入`,
+      `商品表 runtime owner 与运行实例 ${merchantId} 不一致：拒绝写入`,
     );
   }
   const tmp = `${file}.tmp-${randomBytes(6).toString("hex")}`;
   writeFileSync(tmp, `${JSON.stringify(table, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, file);
   return { digest: productTableDigest(checked) };
+}
+
+/** Stamp the Catalog-confirmed merchant id after device enrollment; never infer it from local owner_id. */
+export function bindProductTableToCatalog(file: string, runtimeOwnerId: string, catalogMerchantId: string): void {
+  const snapshot = loadProductTableSnapshot(file, runtimeOwnerId);
+  const current = snapshot.table;
+  if (current === undefined) throw new ProductTableError("PRODUCTS_NOT_CONFIGURED", "商品表尚未初始化");
+  if (current.merchant_id !== undefined && current.merchant_id !== catalogMerchantId) {
+    throw new ProductTableError("CATALOG_MERCHANT_MISMATCH", "Catalog 确认的商家身份与商品表绑定不一致");
+  }
+  if (current.merchant_id === catalogMerchantId) return;
+  commitProductTable(file, runtimeOwnerId, { ...current, merchant_id: catalogMerchantId, runtime_owner_id: runtimeOwnerId });
 }

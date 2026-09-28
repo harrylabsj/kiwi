@@ -154,7 +154,7 @@ export interface InboundNegotiationContext {
 
 export type NegotiationHandlerResult =
   | { kind: "accepted"; taskState?: A2ATaskState; message?: A2AMessage; artifactParts?: A2APart[] }
-  | { kind: "declined"; reasonCode?: string; taskState?: A2ATaskState }
+  | { kind: "declined"; reasonCode?: string; message?: string; taskState?: A2ATaskState }
   | { kind: "error"; protocolCode: ProtocolErrorCode; message: string };
 
 /**
