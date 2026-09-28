@@ -41,8 +41,11 @@ const platformEvidence = vi.fn<
 >(async () => undefined);
 
 let withPlatformAdapter = true;
+let productsMissing = false;
 const baseOptions = () => ({
   merchantId: MERCHANT,
+  merchantName: "待设置商家名称",
+  merchantNameNeedsUpdate: true,
   generation: () => 1,
   runtimeVersion: "test-runtime",
   sessions,
@@ -53,7 +56,10 @@ const baseOptions = () => ({
   drafts: new MerchantImportDraftStore({ db, now: () => FIXED_NOW.toISOString() }),
   operations,
   serviceState: new MutableServiceState("OPERATING"),
-  readiness: async () => ({ ready: true, checks: {} }),
+  readiness: async () => ({
+    ready: !productsMissing,
+    checks: { products: productsMissing ? { ok: false, code: "PRODUCTS_NOT_CONFIGURED" } : { ok: true } },
+  }),
   now: () => FIXED_NOW,
   onboarding: {
     store,
@@ -98,6 +104,7 @@ beforeEach(() => {
   if (active !== undefined) store.cancel(active.recordId, active.revision);
   platformEvidence.mockReset();
   platformEvidence.mockImplementation(async () => undefined);
+  productsMissing = false;
   withPlatformAdapter = true;
 });
 
@@ -181,6 +188,7 @@ describe("权限：开通是 owner 专属", () => {
   });
 
   it("owner 可以打开意图；GET 返回由记录推导的计划（T010）", async () => {
+    productsMissing = true;
     const merchantId = MERCHANT;
     const auth = await login("owner", merchantId);
     const recordId = await openIntent(auth);
@@ -188,8 +196,15 @@ describe("权限：开通是 owner 专属", () => {
 
     const got = await call(base, "GET", "/merchant/api/onboarding", { cookie: auth.cookie });
     expect(got.status).toBe(200);
-    const plan = got.json["plan"] as { currentStep: string };
+    const plan = got.json["plan"] as { currentStep: string; steps: Array<{ id: string; ask: string }> };
     expect(plan.currentStep).toBe("login-binding");
+    expect(plan.steps.some((step) => step.id === "catalog-confirm")).toBe(true);
+    expect(plan.steps.find((step) => step.id === "service-check")?.ask).toContain("配对码");
+    expect(plan.steps.find((step) => step.id === "service-check")?.ask).toContain("Catalog 授权页");
+    expect(got.json["setup_notices"]).toEqual([
+      { code: "products_required", message: "请先导入商品；导入后系统会自动继续服务检查，当前不会报价或发布名片。" },
+      { code: "merchant_name_required", message: "请设置商家显示名后再确认公开资料。" },
+    ]);
   });
 });
 

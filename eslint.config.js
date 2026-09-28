@@ -35,6 +35,12 @@ export default [
     },
   },
   {
+    files: ["packages/**/*.mjs"],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
+  {
     // kiwi-dsh-plugin（纯 ESM JS 插件包）在 dsh 宿主下以 Node 运行。
     files: ["integrations/plugins/kiwi-dsh-plugin/**/*.{js,mjs}"],
     languageOptions: {

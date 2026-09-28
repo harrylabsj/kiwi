@@ -266,11 +266,16 @@ const textReply = (
 /** 商品源不可用（源宕机/未知 SKU/价格 lossy）且未开 demo 回退时抛出。
  *  handle 层捕获后 decline（temporarily_unavailable），而非报演示价。 */
 class ProductSourceUnavailableError extends Error {
+  readonly sourceCode?: string;
+
   constructor(sku: string, cause?: unknown) {
     super(
       `商品源不可用（${sku}）：${cause instanceof Error ? cause.message : String(cause ?? "")}`.trim(),
     );
     this.name = "ProductSourceUnavailableError";
+    this.sourceCode = cause !== null && typeof cause === "object" && typeof (cause as { code?: unknown }).code === "string"
+      ? (cause as { code: string }).code
+      : undefined;
   }
 }
 
@@ -278,9 +283,11 @@ class ProductSourceUnavailableError extends Error {
  * decline 消息由 pipeline 按 reason_code 自动构造。 */
 const declineReply = (
   reasonCode: ProtocolErrorCode = "state_conflict",
+  message?: string,
 ): NegotiationHandlerResult => ({
   kind: "declined",
   reasonCode,
+  ...(message !== undefined ? { message } : {}),
   taskState: "completed",
 });
 
@@ -511,18 +518,25 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
   const resolveProductOrDecline = async (
     sku: string,
     options: { force?: boolean } = {},
-  ): Promise<{
+  ): Promise<{ product: {
     priceMinor: number;
     currency: string;
     note?: string;
     handoff_destination?: string;
     stock?: number;
     title?: string;
-  } | null> => {
+  } } | { declined: NegotiationHandlerResult }> => {
     try {
-      return await resolveProduct(sku, options);
+      return { product: await resolveProduct(sku, options) };
     } catch (err) {
-      if (err instanceof ProductSourceUnavailableError) return null;
+      if (err instanceof ProductSourceUnavailableError) {
+        return { declined: declineReply(
+          "temporarily_unavailable",
+          err.sourceCode === "PRODUCTS_NOT_CONFIGURED"
+            ? "暂无可报价商品，请先导入商品；导入后系统会继续服务检查。"
+            : undefined,
+        ) };
+      }
       throw err;
     }
   };
@@ -791,8 +805,10 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           // 入站消息由 A2A pipeline 统一落 message_received（§22）；这里不再
           // 重复落账——此前 appendSent(envelope) 把买家的 inquiry 记为 merchant
           // 自己"发送"（sender=merchant），审计语义错位且重复。
+          const resolved = await resolveProductOrDecline(MERCHANT_SKU);
+          if ("declined" in resolved) return resolved.declined;
           return textReply(
-            `We carry ${MERCHANT_SKU} at ${(offerPriceMinor / 100).toFixed(2)} ${MERCHANT_CURRENCY}/piece; ask for delivery details.`,
+            `We carry ${resolved.product.title ?? MERCHANT_SKU} at ${(resolved.product.priceMinor / 100).toFixed(2)} ${resolved.product.currency}/piece; ask for delivery details.`,
           );
         }
         case "rfq": {
@@ -805,8 +821,9 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           const quantity = quantityRaw ?? MERCHANT_QUANTITY;
           const floorMinor = floorMinorForSku(sku);
           if (floorMinor === null) return declineReply("temporarily_unavailable");
-          const product = await resolveProductOrDecline(sku);
-          if (product === null) return declineReply("temporarily_unavailable");
+          const resolved = await resolveProductOrDecline(sku);
+          if ("declined" in resolved) return resolved.declined;
+          const product = resolved.product;
           const { priceMinor, currency, note, handoff_destination } = product;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
@@ -864,8 +881,9 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           const quantity = quantityRaw ?? MERCHANT_QUANTITY;
           const floorMinor = floorMinorForSku(sku);
           if (floorMinor === null) return declineReply("temporarily_unavailable");
-          const product = await resolveProductOrDecline(sku);
-          if (product === null) return declineReply("temporarily_unavailable");
+          const resolved = await resolveProductOrDecline(sku);
+          if ("declined" in resolved) return resolved.declined;
+          const product = resolved.product;
           const { priceMinor, currency, note, handoff_destination } = product;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
@@ -928,8 +946,9 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           const buyerCounterMinor = counter.proposed_terms?.items?.[0]?.unit_price?.amount_minor;
           const floorMinor = floorMinorForSku(sku);
           if (floorMinor === null) return declineReply("temporarily_unavailable");
-          const product = await resolveProductOrDecline(sku);
-          if (product === null) return declineReply("temporarily_unavailable");
+          const resolved = await resolveProductOrDecline(sku);
+          if ("declined" in resolved) return resolved.declined;
+          const product = resolved.product;
           const { priceMinor, currency, note, handoff_destination } = product;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const authorityPromotion = resolvePromotionQuote(
@@ -1148,11 +1167,11 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           ) {
             const refreshed = await resolveProductOrDecline(acceptedSku, { force: true });
             if (
-              refreshed === null ||
+              "declined" in refreshed ||
               productFingerprint({
                 sku: acceptedSku,
-                priceMinor: refreshed.priceMinor,
-                currency: refreshed.currency,
+                priceMinor: refreshed.product.priceMinor,
+                currency: refreshed.product.currency,
               }) !== acceptedConditionalPayload.product_fingerprint
             ) {
               // 商品价/币种变化或商品源已不可用 → 旧许可失效，需重新确认。

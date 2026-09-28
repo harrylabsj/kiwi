@@ -67,12 +67,12 @@ afterEach(() => {
 });
 
 describe("portfolio release index", () => {
-  it("indexes all ten forms, binds available artifacts, and validates the signed file manifest", async () => {
+  it("indexes all eleven forms, binds available artifacts, and validates the signed file manifest", async () => {
     const release = tempDir();
     fixtureArtifacts(release);
     const index = await buildPortfolioReleaseIndex({ catalog, releaseDir: release });
-    expect(index.product_count).toBe(10);
-    expect(index.products.filter((product) => product.delivery === "artifact-in-bundle")).toHaveLength(8);
+    expect(index.product_count).toBe(11);
+    expect(index.products.filter((product) => product.delivery === "artifact-in-bundle")).toHaveLength(9);
     expect(index.products.filter((product) => product.delivery === "external-reference-only").map((product) => product.id).sort())
       .toEqual(["kiwi-catalog-admin", "workbuddy-kiwi-sourcing-connector"]);
 

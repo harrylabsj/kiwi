@@ -32,7 +32,7 @@
 
 import { createServer, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -81,7 +81,7 @@ import { calculateWorkbenchQuote } from "../merchant/quote-calculator.js";
 import { WORKBENCH_CURRENCY_TABLE_VERSION } from "../merchant/application/money.js";
 import { OnboardingStore } from "./onboarding/store.js";
 import { CatalogClient } from "./catalog-client.js";
-import { createEnrollmentChallengeResponder } from "./binding/enrollment-challenge.js";
+import { createEnrollmentChallengeResponder, readEnrollmentStore } from "./binding/enrollment-challenge.js";
 import { startEnrollmentHeartbeat, type EnrollmentHeartbeat } from "./binding/enrollment-heartbeat.js";
 import {
   catalogPlatformEvidenceAdapter,
@@ -114,13 +114,16 @@ import { createChallengeResponder } from "./binding/runtime-challenge.js";
 import type { BindingChallengeStore } from "./binding/proofs.js";
 import { createCloudRouter, type CloudRequestListener } from "./http-router.js";
 import {
+  bindProductTableToCatalog,
   commitProductTable,
   createFileProductSource,
+  ensureInitialEmptyProductTable,
   loadProductTableSnapshot,
   ProductTableError,
   type CloudProductSourceHandle,
 } from "./product-source.js";
 import { runReadiness, type ReadinessCheckResult, type ReadinessReport } from "./readiness.js";
+import { loadOrCreateMerchantIdentity } from "./merchant-identity.js";
 
 /** 云端 A2A 端点路径（设计 §8.2；与自托管根路径不同，便于同端口分发）。 */
 export const CLOUD_A2A_PATH = "/a2a";
@@ -169,6 +172,61 @@ function assertDataDirNotClobbered(dataDir: string): void {
       );
     }
   }
+}
+
+/** 首次部署时把随部署目录下发的一次性管理员凭据导入权威状态目录。 */
+function importAdminBootstrap(
+  artifactRoot: string,
+  dataDir: string,
+  expectedIdentity: { agent_id: string; owner_id: string },
+  log: (line: string) => void,
+): void {
+  const source = path.join(artifactRoot, "admin-bootstrap.json");
+  if (!existsSync(source)) return;
+  const target = path.join(dataDir, "admin-credentials.json");
+  if (existsSync(target)) {
+    log("[kiwi-cloud] 已忽略管理员引导文件：状态目录已有凭据\n");
+    rmSync(source, { force: true });
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(source, "utf8"));
+  } catch {
+    throw new CloudStartupError("ADMIN_BOOTSTRAP_INVALID", "管理员引导文件不是合法 JSON");
+  }
+  if (
+    parsed === null || typeof parsed !== "object" || Array.isArray(parsed) ||
+    typeof (parsed as Record<string, unknown>).principal_id !== "string" ||
+    typeof (parsed as Record<string, unknown>).merchant_id !== "string" ||
+    typeof (parsed as Record<string, unknown>).password_hash !== "string" ||
+    !/^scrypt\$16384\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$/.test(String((parsed as Record<string, unknown>).password_hash)) ||
+    typeof (parsed as Record<string, unknown>).created_at !== "string"
+  ) {
+    throw new CloudStartupError("ADMIN_BOOTSTRAP_INVALID", "管理员引导文件格式无效");
+  }
+  if (
+    (parsed as Record<string, unknown>).principal_id !== expectedIdentity.agent_id ||
+    (parsed as Record<string, unknown>).merchant_id !== expectedIdentity.owner_id
+  ) {
+    log("[kiwi-cloud] 已忽略管理员引导文件：身份与状态目录不一致\n");
+    rmSync(source, { force: true });
+    return;
+  }
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  try {
+    writeFileSync(target, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+    chmodSync(target, 0o600);
+  } catch (error) {
+    if ((error as { code?: string }).code === "EEXIST") {
+      log("[kiwi-cloud] 已忽略管理员引导文件：状态目录已有凭据\n");
+      rmSync(source, { force: true });
+      return;
+    }
+    throw new CloudStartupError("ADMIN_BOOTSTRAP_IMPORT_FAILED", "无法导入管理员引导凭据");
+  }
+  rmSync(source, { force: true });
+  log("[kiwi-cloud] 已导入一次性管理员引导凭据\n");
 }
 
 function loadOrCreateFeedCursorKey(dataDir: string): Buffer {
@@ -260,6 +318,13 @@ export async function bootstrapCloudRuntime(
   // 生产禁演示价回退（设计 §10.2）：演示价会让"商品源失联"看起来像有报价。
   assertNoDemoPriceFallback(profile);
   assertDataDirNotClobbered(config.dataDir);
+  profile = loadOrCreateMerchantIdentity(config.dataDir, profile, {
+    merchantNameNeedsUpdate: config.merchantNameNeedsUpdate,
+  });
+  if (config.productsFile !== undefined && !config.sample) {
+    ensureInitialEmptyProductTable(config.productsFile, profile.owner_id);
+  }
+  importAdminBootstrap(config.artifactRoot, config.dataDir, profile, log);
   const serviceState = MutableServiceState.fromDeclared(options.env?.KIWI_CLOUD_SERVICE_STATE);
 
   // 2) 商家面装配（审批/策略/商品/RFQ/工具面）；认证走 OAuth（issuer = 公网 origin）。
@@ -451,16 +516,21 @@ export async function bootstrapCloudRuntime(
       storage: () => probeAuthoritativeStorage(config.dataDir),
       products: async () => {
         if (core.productSource === undefined) return { ok: false, code: "PRODUCTS_SOURCE_ABSENT" };
+        if (fileProductSource !== undefined) {
+          try {
+            const products = fileProductSource.list();
+            if (products.length === 0) return { ok: false, code: "PRODUCTS_NOT_CONFIGURED" };
+            const sku = probeSku ?? products[0]?.sku;
+            if (sku === undefined) return { ok: false, code: "PRODUCTS_NOT_CONFIGURED" };
+            const check = fileProductSource.describeSku(sku);
+            return check.available ? { ok: true } : { ok: false, code: check.code ?? "PRODUCTS_UNAVAILABLE" };
+          } catch (error) {
+            return { ok: false, code: error instanceof ProductTableError ? error.code : "PRODUCTS_UNAVAILABLE" };
+          }
+        }
         if (probeSku === undefined || probeSku === "") {
           // 未配置探针 SKU：M1 必须用授权真实测试商品，不能凭"进程活着"判就绪。
           return { ok: false, code: "PRODUCTS_PROBE_SKU_UNSET" };
-        }
-        if (fileProductSource !== undefined) {
-          // 文件式商品源：只回可用性原因码（不含价格）。
-          const check = fileProductSource.describeSku(probeSku);
-          return check.available
-            ? { ok: true }
-            : { ok: false, code: check.code ?? "PRODUCTS_UNAVAILABLE" };
         }
         try {
           const product = await core.productSource.getProduct(probeSku);
@@ -493,6 +563,7 @@ export async function bootstrapCloudRuntime(
   let clockTimer: ReturnType<typeof setInterval> | undefined;
   let bindingReconcileTimer: ReturnType<typeof setInterval> | undefined;
   let enrollmentHeartbeat: EnrollmentHeartbeat | undefined;
+  let catalogMerchantIdForProducts: () => string | undefined = () => undefined;
   if (adminOptions !== undefined) {
     managementDb = new DatabaseSync(path.join(config.dataDir, "state.sqlite"));
     serviceState.attachPersistence(managementDb, profile.owner_id);
@@ -500,6 +571,17 @@ export async function bootstrapCloudRuntime(
     // 开通向导通道（M4 §5.4 + P3 §4.6）：store 与 /admin 同库；配了 catalog_url 时
     // 接上 Catalog 串联（绑定/发布的权威证据适配器 + DEPLOYED_UNBOUND 后台对账）。
     const onboardingStore = new OnboardingStore(managementDb);
+    catalogMerchantIdForProducts = () => {
+      const active = onboardingStore.activeRecord(profile.owner_id);
+      if (active === undefined) return undefined;
+      const state = readEnrollmentStore(config.dataDir).sessions
+        .map((session) => session as typeof session & { owner_ref?: string; merchant_id?: string })
+        .find((session) => session.owner_ref === active.recordId &&
+          ["authorized", "bound", "published"].includes(session.status));
+      return typeof state?.merchant_id === "string" && state.merchant_id.trim() !== ""
+        ? state.merchant_id
+        : undefined;
+    };
     type OnboardingChannel = NonNullable<
       Parameters<typeof createMerchantManagementApiHandler>[0]["onboarding"]
     >;
@@ -537,6 +619,10 @@ export async function bootstrapCloudRuntime(
             : {}),
         },
         serviceCheck: async () => {
+          const catalogMerchantId = catalogMerchantIdForProducts();
+          if (catalogMerchantId !== undefined && productsFilePath !== undefined && !config.sample) {
+            bindProductTableToCatalog(productsFilePath, profile.owner_id, catalogMerchantId);
+          }
           const report = await readiness();
           const failed = Object.entries(report.checks)
             .filter(([, result]) => !result.ok)
@@ -742,6 +828,8 @@ export async function bootstrapCloudRuntime(
     };
     merchantApiHandler = createMerchantManagementApiHandler({
       merchantId: profile.owner_id,
+      merchantName: profile.name ?? "待设置商家名称",
+      merchantNameNeedsUpdate: config.merchantNameNeedsUpdate && profile.name === "待设置商家名称",
       // 单代次实例（与 M2 挑战应答的 currentGeneration 同值）；代次切换属 BD-05。
       generation: () => 1,
       runtimeVersion: PRODUCT_VERSION,
@@ -820,6 +908,17 @@ export async function bootstrapCloudRuntime(
               currentTable: () => {
                 const snapshot = loadProductTableSnapshot(productsFilePath, profile.owner_id);
                 return { digest: snapshot.digest, records: snapshot.records };
+              },
+              prepareTable: (table) => {
+                const catalogMerchantId = catalogMerchantIdForProducts();
+                const { merchant_id: _untrustedMerchantId, ...unboundTable } = table;
+                return {
+                  ...unboundTable,
+                  runtime_owner_id: profile.owner_id,
+                  ...(config.sample
+                    ? { merchant_id: profile.owner_id }
+                    : catalogMerchantId !== undefined ? { merchant_id: catalogMerchantId } : {}),
+                };
               },
               commit: (table: Parameters<typeof commitProductTable>[2]) =>
                 commitProductTable(productsFilePath, profile.owner_id, table),
@@ -1080,7 +1179,7 @@ export async function bootstrapCloudRuntime(
     // 绑定挑战应答（M2 §6.3）：只签发给本实例的受限结构挑战，一次性、有速率上限。
     challengeHandler: createChallengeResponder({
       signingIdentity: toJwsSigningIdentity(signingIdentity),
-      expectedMerchantId: profile.owner_id,
+      expectedMerchantId: catalogMerchantIdForProducts,
       expectedAgentId: profile.agent_id,
       currentGeneration: 1,
       ...(options.challengeStore !== undefined ? { store: options.challengeStore } : {}),

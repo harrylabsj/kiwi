@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Validate the portfolio's ten-product release catalog and its version sources.
+ * Validate the portfolio's eleven-product release catalog and its version sources.
  * Consumer and public external checkouts can be supplied by the release job.
  */
 import assert from "node:assert/strict";
@@ -14,7 +14,7 @@ const catalog = JSON.parse(readFileSync(path.join(root, "portfolio-products.json
 const SHA40 = /^[a-f0-9]{40}$/;
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const EXPECTED_IDS = [
-  "kiwi", "kiwi-catalog", "shopping-cli", "kiwi-dsh-plugin", "hermes-plugin-kiwi",
+  "kiwi-merchant-cloud", "kiwi", "kiwi-catalog", "shopping-cli", "kiwi-dsh-plugin", "hermes-plugin-kiwi",
   "kiwi-catalog-admin", "workbuddy-procurement-expert", "workbuddy-merchant-app",
   "workbuddy-merchant-connector", "workbuddy-kiwi-sourcing-connector",
 ];
@@ -61,7 +61,7 @@ function readVersion(product, source, hermesRoot) {
 
 const options = parseArgs(process.argv.slice(2));
 assert.equal(catalog.schema, "kiwi.portfolio.products.v1", "unsupported product catalog schema");
-assert.equal(catalog.products.length, EXPECTED_IDS.length, "portfolio must enumerate all ten product forms");
+assert.equal(catalog.products.length, EXPECTED_IDS.length, "portfolio must enumerate all eleven product forms");
 const ids = new Set();
 const validated = [];
 const deferred = [];
@@ -89,7 +89,7 @@ for (const product of catalog.products) {
   assert.equal(current, product.version, `${product.id}: manifest ${product.version} != source ${current}`);
   validated.push(product.id);
 }
-assert.deepEqual(ids, new Set(EXPECTED_IDS), "portfolio product ids differ from the registered 10-product set");
+assert.deepEqual(ids, new Set(EXPECTED_IDS), "portfolio product ids differ from the registered 11-product set");
 
 const hermes = catalog.products.find((product) => product.id === "hermes-plugin-kiwi");
 if (options.hermesRoot) {
