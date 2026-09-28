@@ -53,6 +53,12 @@ import {
   type CloudProductRecord,
   type CloudProductTable,
 } from "../../cloud/product-source.js";
+import {
+  convertTabularImport,
+  renderImportTemplateCsv,
+  renderImportTemplateXlsx,
+  TABULAR_IMPORT_MAX_BYTES,
+} from "../../cloud/product-import-tabular.js";
 import { MerchantImportDraftStore } from "./draft-store.js";
 import {
   ActorContextError,
@@ -422,7 +428,7 @@ export function createMerchantManagementApiHandler(
           return;
         }
         if (method === "POST") {
-          await routeWorkbenchV1Post(req, res, rest, requestId);
+          await routeWorkbenchV1Post(req, res, rest, requestId, url);
           return;
         }
         {
@@ -575,6 +581,38 @@ export function createMerchantManagementApiHandler(
         },
         { "x-request-id": requestId },
       );
+      return;
+    }
+    if (rest === "/products/import-template") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "products:read");
+      const format = url.searchParams.get("format");
+      if (format !== "csv" && format !== "xlsx") {
+        throw new ManagementError("invalid_input", "format must be csv or xlsx");
+      }
+      if (res.headersSent) {
+        res.end();
+        return;
+      }
+      if (format === "csv") {
+        const body = renderImportTemplateCsv();
+        res.writeHead(200, {
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": 'attachment; filename="kiwi-product-import-template.csv"',
+          "cache-control": "no-store",
+          "x-request-id": requestId,
+        });
+        res.end(body);
+        return;
+      }
+      const bytes = renderImportTemplateXlsx();
+      res.writeHead(200, {
+        "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "content-disposition": 'attachment; filename="kiwi-product-import-template.xlsx"',
+        "cache-control": "no-store",
+        "x-request-id": requestId,
+      });
+      res.end(Buffer.from(bytes));
       return;
     }
     const productMatch = /^\/products\/([^/]+)$/.exec(rest);
@@ -862,6 +900,7 @@ export function createMerchantManagementApiHandler(
     res: ServerResponse,
     rest: string,
     requestId: string,
+    url: URL,
   ): Promise<void> {
     if (rest === "/runtime/safety-stops") {
       const auth = requireActor(req);
@@ -1177,6 +1216,10 @@ export function createMerchantManagementApiHandler(
     const importCommitMatch = /^\/products\/import-drafts\/([^/]+)\/commit$/.exec(rest);
     if (importCommitMatch !== null) {
       await postProductsImportCommit(req, res, pathSegment(importCommitMatch[1] ?? ""));
+      return;
+    }
+    if (rest === "/products/import-parse") {
+      await postProductsImportParse(req, res, url);
       return;
     }
     if (rest === "/policy/drafts") {
@@ -2879,6 +2922,54 @@ export function createMerchantManagementApiHandler(
     });
   }
 
+  /**
+   * POST /products/import-parse?format=csv|xlsx —— 把商家上传的 CSV/xlsx 原文
+   * （WP12）转换为商品表草稿：表头映射报告 + 逐行问题清单。无状态（不落盘），
+   * 商家确认后仍走 import-drafts 严格校验与整表替换预览；服务端解析保证工作
+   * 台、脚本与技能共用同一实现（`product-import-tabular.ts`）。
+   */
+  async function postProductsImportParse(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    const auth = requireActor(req);
+    assertWriteGuards(req, auth.sessionId);
+    authorizeOrThrow(auth.ctx, "products:import");
+    const format = url.searchParams.get("format");
+    if (format !== "csv" && format !== "xlsx") {
+      throw new ManagementError("invalid_input", "format must be csv or xlsx");
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += (chunk as Buffer).length;
+      if (size > TABULAR_IMPORT_MAX_BYTES) {
+        throw new ManagementError(
+          "invalid_input",
+          `文件超过上限 ${TABULAR_IMPORT_MAX_BYTES} 字节，请分批导入或精简表格`,
+        );
+      }
+      chunks.push(chunk as Buffer);
+    }
+    if (chunks.length === 0) {
+      throw new ManagementError("invalid_input", "request body required");
+    }
+    const buffer = Buffer.concat(chunks);
+    const result = convertTabularImport(
+      format === "csv"
+        ? { kind: "csv", text: buffer.toString("utf8") }
+        : { kind: "xlsx", bytes: new Uint8Array(buffer) },
+      { merchantId: options.merchantId, now: () => now() },
+    );
+    writeJson(res, 200, {
+      ok: result.ok,
+      ...(result.table !== undefined ? { table: result.table } : {}),
+      report: result.report,
+      errors: result.errors,
+    });
+  }
+
   /** POST /products/import-drafts/{id}/commit —— 原子落盘；结果不可分辨时记 unknown。 */
   async function postProductsImportCommit(
     req: IncomingMessage,
@@ -3334,6 +3425,8 @@ function isKnownPath(rest: string): boolean {
     rest === "/service/pause" ||
     rest === "/service/resume" ||
     rest === "/products/import-drafts" ||
+    rest === "/products/import-parse" ||
+    rest === "/products/import-template" ||
     rest === "/policy/drafts" ||
     rest === "/onboarding"
   ) {

@@ -934,3 +934,129 @@ describe("merchant management page — 同源工作台壳（BD-03）", () => {
     }
   });
 });
+
+describe("Workbench /merchant/api/v1 — WP12 表格导入（CSV/xlsx 解析与模板）", () => {
+  const TEMPLATE_HEADER = "sku,title,currency,unit,price,valid_until";
+  const TEMPLATE_ROW = "T-1,测试商品,CNY,个,9.9,2027-12-31";
+  const TEMPLATE_CSV = `${TEMPLATE_HEADER}\n${TEMPLATE_ROW}`;
+
+  it("GET /products/import-template 未登录 401；登录后返回 CSV 模板（含双写表头与示例行）", async () => {
+    const anon = await fetch(`${base}/merchant/api/v1/products/import-template?format=csv`);
+    expect(anon.status).toBe(401);
+
+    const auth = await login("owner");
+    const res = await fetch(`${base}/merchant/api/v1/products/import-template?format=csv`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/csv");
+    expect(res.headers.get("content-disposition")).toContain("kiwi-product-import-template.csv");
+    const raw = new Uint8Array(await res.arrayBuffer());
+    // BOM：Excel 直接打开不乱码（fetch 的 res.text() 会剥 BOM，故按字节验证）
+    expect(raw[0]).toBe(0xef);
+    expect(raw[1]).toBe(0xbb);
+    expect(raw[2]).toBe(0xbf);
+    const text = new TextDecoder().decode(raw);
+    expect(text).toContain("商品编号/sku");
+    expect(text).toContain("DEMO-001");
+  });
+
+  it("GET /products/import-template?format=xlsx 返回可解析的 xlsx；其他 format 拒绝", async () => {
+    const auth = await login("owner");
+    const res = await fetch(`${base}/merchant/api/v1/products/import-template?format=xlsx`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("spreadsheetml");
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes[0]).toBe(0x50); // PK 魔数
+    expect(bytes[1]).toBe(0x4b);
+
+    const bad = await fetch(`${base}/merchant/api/v1/products/import-template?format=tsv`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(bad.status).toBe(422);
+    expect(await bad.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("POST /products/import-parse 转换 CSV：返回商品表与映射报告；merchant_id 来自服务端", async () => {
+    const auth = await login("owner");
+    const res = await fetch(`${base}/merchant/api/v1/products/import-parse?format=csv`, {
+      method: "POST",
+      headers: { cookie: auth.cookie, origin: ORIGIN, "content-type": "text/csv", "x-csrf-token": auth.csrf },
+      body: `\ufeff${TEMPLATE_CSV}`,
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json["ok"]).toBe(true);
+    const table = json["table"] as Record<string, unknown>;
+    expect(table["merchant_id"]).toBe(MERCHANT);
+    expect((table["products"] as unknown[]).length).toBe(1);
+    const report = json["report"] as Record<string, unknown>;
+    expect(report["rows"]).toBe(1);
+  });
+
+  it("POST /products/import-parse 拒绝含成本列的表（COST_COLUMN），且不返回 table", async () => {
+    const auth = await login("owner");
+    const csv = `${TEMPLATE_HEADER},底价\n${TEMPLATE_ROW},5.5`;
+    const res = await fetch(`${base}/merchant/api/v1/products/import-parse?format=csv`, {
+      method: "POST",
+      headers: { cookie: auth.cookie, origin: ORIGIN, "content-type": "text/csv", "x-csrf-token": auth.csrf },
+      body: csv,
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json["ok"]).toBe(false);
+    expect(json["table"]).toBeUndefined();
+    const errors = json["errors"] as Array<Record<string, unknown>>;
+    expect(errors.some((e) => e["code"] === "COST_COLUMN")).toBe(true);
+  });
+
+  it("POST /products/import-parse 校验 CSRF 与 format 参数", async () => {
+    const auth = await login("owner");
+    const noCsrf = await fetch(`${base}/merchant/api/v1/products/import-parse?format=csv`, {
+      method: "POST",
+      headers: { cookie: auth.cookie, origin: ORIGIN, "content-type": "text/csv" },
+      body: TEMPLATE_CSV,
+    });
+    expect(noCsrf.status).toBe(403);
+
+    const badFormat = await fetch(`${base}/merchant/api/v1/products/import-parse?format=pdf`, {
+      method: "POST",
+      headers: { cookie: auth.cookie, origin: ORIGIN, "content-type": "text/csv", "x-csrf-token": auth.csrf },
+      body: "x",
+    });
+    expect(badFormat.status).toBe(422);
+  });
+
+  it("POST /products/import-parse 接受服务端生成的 xlsx 模板并完成整链：parse → import-drafts 预览", async () => {
+    const auth = await login("owner");
+    const template = await fetch(`${base}/merchant/api/v1/products/import-template?format=xlsx`, {
+      headers: { cookie: auth.cookie },
+    });
+    const bytes = new Uint8Array(await template.arrayBuffer());
+
+    const parsed = await fetch(`${base}/merchant/api/v1/products/import-parse?format=xlsx`, {
+      method: "POST",
+      headers: {
+        cookie: auth.cookie,
+        origin: ORIGIN,
+        "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "x-csrf-token": auth.csrf,
+      },
+      body: bytes,
+    });
+    expect(parsed.status).toBe(200);
+    const parseJson = (await parsed.json()) as Record<string, unknown>;
+    expect(parseJson["ok"]).toBe(true);
+
+    const draft = await call("POST", "/merchant/api/v1/products/import-drafts", {
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      origin: ORIGIN,
+      body: { table: parseJson["table"] },
+    });
+    expect(draft.status).toBe(200);
+    expect(draft.json["preview"]).toMatchObject({ rows_total: 2, added: 2 });
+  });
+});
