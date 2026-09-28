@@ -46,7 +46,7 @@ if (manifest.product_index !== undefined) {
   }
   const index = JSON.parse(await readFile(safePath(indexPath), "utf8"));
   const expectedIds = new Set([
-    "kiwi", "kiwi-catalog", "shopping-cli", "kiwi-dsh-plugin", "hermes-plugin-kiwi",
+    "kiwi-merchant-cloud", "kiwi", "kiwi-catalog", "shopping-cli", "kiwi-dsh-plugin", "hermes-plugin-kiwi",
     "kiwi-catalog-admin", "workbuddy-procurement-expert", "workbuddy-merchant-app",
     "workbuddy-merchant-connector", "workbuddy-kiwi-sourcing-connector",
   ]);
