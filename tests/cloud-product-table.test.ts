@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { bootstrapCloudRuntime } from "../src/cloud/bootstrap.js";
-import { bindProductTableToCatalog, commitProductTable, createFileProductSource, parseProductTable, ProductTableError } from "../src/cloud/product-source.js";
+import { bindProductTableToCatalog, commitProductTable, createFileProductSource, ensureInitialEmptyProductTable, parseProductTable, ProductTableError } from "../src/cloud/product-source.js";
 import { finalizeEnvelope } from "../src/negotiation/domain/envelope.js";
 import { CAPABILITY } from "./negotiation-helpers.js";
 
@@ -164,6 +164,23 @@ describe("商品表解析与查询（fail-closed）", () => {
     const stored = JSON.parse(readFileSync(file, "utf8"));
     expect(stored.merchant_id).toBe("catalog-confirmed-merchant");
     expect(stored.runtime_owner_id).toBe(MERCHANT);
+  });
+
+  it("只在首次启动 seed 空表；升级时保留已经导入的商品", () => {
+    const dir = tempDir("kiwi-table-initial-seed-");
+    const file = path.join(dir, "products.json");
+    ensureInitialEmptyProductTable(file, MERCHANT);
+    let table = JSON.parse(readFileSync(file, "utf8"));
+    expect(table.products).toEqual([]);
+    expect(table.merchant_id).toBeUndefined();
+    expect(table.runtime_owner_id).toBe(MERCHANT);
+    const imported = JSON.parse(productTable());
+    imported.runtime_owner_id = MERCHANT;
+    commitProductTable(file, MERCHANT, imported);
+    ensureInitialEmptyProductTable(file, "new-deployment-owner");
+    table = JSON.parse(readFileSync(file, "utf8"));
+    expect(table.products).toHaveLength(1);
+    expect(table.runtime_owner_id).toBe(MERCHANT);
   });
 
   it("表不可读 → 明确错误码（不是空结果）", async () => {

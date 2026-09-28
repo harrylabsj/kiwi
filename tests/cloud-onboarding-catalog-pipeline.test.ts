@@ -255,6 +255,7 @@ describe("device enrollment reconciliation", () => {
     fake.setAuthorized(true);
     await expect(reconcileBinding(store.getRecord(record.recordId)!, deps)).rejects.toMatchObject({ code: "SERVICE_CHECK_UNAVAILABLE" });
     expect(store.getRecord(record.recordId)!.status).toBe("VERIFYING");
+    expect(fake.counts).toEqual({ create: 1, poll: 2, bind: 1, publish: 0, activate: 0 });
     ready = true;
     const outcome = await reconcileBinding(store.getRecord(record.recordId)!, deps);
     expect(outcome.record.status).toBe("PUBLISHED");
