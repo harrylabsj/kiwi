@@ -1,0 +1,7 @@
+{
+  "$note": "云端接待部署的固定发布参数。三个占位（{{PACKAGE_VERSION}}、{{AGGREGATE_DIGEST}}、{{NPM_INTEGRITY}}）由项目经理在 WP2/3 交付 @harrylabsj/kiwi-merchant-cloud 并完成发布门禁后统一回填；三者必须来自同一次 portfolio release（版本号、build-manifest.json 聚合摘要、npm tarball sha512 integrity 一一对应）。回填前：技能与方案 B 提示词只能讲解流程，不可实际取包部署。",
+  "npm_package": "@harrylabsj/kiwi-merchant-cloud",
+  "package_version": "{{PACKAGE_VERSION}}",
+  "aggregate_digest": "{{AGGREGATE_DIGEST}}",
+  "npm_integrity": "{{NPM_INTEGRITY}}"
+}
