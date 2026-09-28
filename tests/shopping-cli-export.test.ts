@@ -8,7 +8,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { convertTabularImport, TABULAR_TEMPLATE_HEADER } from "../src/cloud/product-import-tabular.js";
 import { buildShoppingCliExportCsv, TEMPLATE_HEADER } from "../scripts/export-shopping-cli-products.mjs";
