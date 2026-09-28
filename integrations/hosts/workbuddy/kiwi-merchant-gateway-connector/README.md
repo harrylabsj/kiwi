@@ -4,10 +4,11 @@
 
 > **版本迁移记录**：原 v1.0.0 包只有 5 个工具。同 ID 重传 v1.1.0 未持久化；之后创建的新资产也已撤回。此次重新提交递增至 v1.1.1，使用平台生成的新资产 ID；WorkBuddy 用户侧工具可见性仍待审核通过后验证。
 
-指向 **Kiwi 商家连接器网关**（多商家共享入口，`https://merchant.kiwi.harrylabsj.com/mcp`，远程 HTTPS MCP + OAuth）。商家在 OAuth 授权页完成目录注册/登录后，网关按已验证 `merchant_id` 提供**第 0 版目录能力**（本包静态声明的 6 个工具）：
+指向 **Kiwi 商家连接器网关**（多商家共享入口，`https://merchant.kiwi.harrylabsj.com/mcp`，远程 HTTPS MCP + OAuth）。商家在 OAuth 授权页完成目录注册/登录后，网关按已验证 `merchant_id` 提供目录能力（本包静态声明的 7 个工具）：
 
 | 工具 | 用途 |
 | --- | --- |
+| `kiwi_catalog_get_service_status` | **服务状态**：开通进度、名片发布/验证级别、心跳新鲜度及商品已用/总名额；只有名片已发布且心跳新鲜才可称为「已上线」 |
 | `kiwi_catalog_get_merchant_profile` | 连接状态与公开资料管理入口 |
 | `kiwi_catalog_get_merchant_stats` | **经营汇总**：关注者总数 + 公开资料总浏览量 + 各资料的状态与浏览量（匿名聚合：无身份、无名单、无群发通道） |
 | `kiwi_catalog_save_publication_draft` | 保存私有草稿 |

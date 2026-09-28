@@ -87,6 +87,32 @@ export interface MerchantStats {
   readonly publications: ReadonlyArray<MerchantStatsPublication>;
 }
 
+/** 商家当前上云/名片/心跳/商品名额状态，只读自 Catalog。 */
+export interface MerchantServiceStatus {
+  readonly account: { readonly merchant_id: string; readonly email_verified: boolean };
+  readonly onboarding: {
+    readonly status:
+      | "not_started"
+      | "awaiting_merchant_confirmation"
+      | "binding"
+      | "published"
+      | "paused"
+      | "failed";
+    readonly authorization_url: string;
+    readonly expires_at: string;
+  };
+  readonly card: {
+    readonly published: boolean;
+    readonly origin: string;
+    readonly verification_level: string;
+  };
+  readonly presence: {
+    readonly state: "fresh" | "stale" | "unknown";
+    readonly last_seen_at: string;
+  };
+  readonly listings: { readonly used: number; readonly total: number; readonly plan: string | null };
+}
+
 export interface PublicationSaveResult {
   readonly publication: MerchantPublicationView;
   readonly created: boolean;
@@ -248,6 +274,79 @@ export class MerchantPublicationClient {
       }
     }
     return { followersTotal, viewsTotal, publications };
+  }
+
+  /** 当前连接器凭据商家的服务状态（不接收 merchant_id、不返回配对密钥材料）。 */
+  async fetchServiceStatus(token: string): Promise<MerchantServiceStatus> {
+    const body = await this.request(token, "GET", "/v1/accounts/me/service-status");
+    const account = asRecord(body.account, "account");
+    const onboarding = asRecord(body.onboarding, "onboarding");
+    const card = asRecord(body.card, "card");
+    const presence = asRecord(body.presence, "presence");
+    const listings = asRecord(body.listings, "listings");
+    const onboardingStatuses = new Set([
+      "not_started",
+      "awaiting_merchant_confirmation",
+      "binding",
+      "published",
+      "paused",
+      "failed",
+    ]);
+    const presenceStates = new Set(["fresh", "stale", "unknown"]);
+    const status = asString(onboarding, "status");
+    const presenceState = asString(presence, "state");
+    const used = listings.used;
+    const total = listings.total;
+    if (
+      asString(account, "merchant_id") === "" ||
+      typeof account.email_verified !== "boolean" ||
+      !onboardingStatuses.has(status) ||
+      !presenceStates.has(presenceState) ||
+      typeof card.published !== "boolean" ||
+      typeof used !== "number" || !Number.isSafeInteger(used) || used < 0 ||
+      typeof total !== "number" || !Number.isSafeInteger(total) || total < 0 ||
+      !(typeof listings.plan === "string" || listings.plan === null)
+    ) {
+      throw new CatalogSourceError("response_invalid", "service-status response violates its schema");
+    }
+    const authorizationUrl = asString(onboarding, "authorization_url");
+    if (authorizationUrl !== "") {
+      let parsed: URL;
+      try {
+        parsed = new URL(authorizationUrl);
+      } catch {
+        throw new CatalogSourceError("response_invalid", "service-status authorization_url is invalid");
+      }
+      const configuredOrigin = new URL(this.baseUrl).origin;
+      if (
+        parsed.origin !== configuredOrigin ||
+        !parsed.pathname.startsWith("/portal/connect/") ||
+        parsed.search !== "" || parsed.hash !== ""
+      ) {
+        throw new CatalogSourceError("response_invalid", "service-status authorization_url is not a Catalog page URL");
+      }
+    }
+    return {
+      account: {
+        merchant_id: asString(account, "merchant_id"),
+        email_verified: account.email_verified,
+      },
+      onboarding: {
+        status: status as MerchantServiceStatus["onboarding"]["status"],
+        authorization_url: authorizationUrl,
+        expires_at: asString(onboarding, "expires_at"),
+      },
+      card: {
+        published: card.published,
+        origin: asString(card, "origin"),
+        verification_level: asString(card, "verification_level"),
+      },
+      presence: {
+        state: presenceState as MerchantServiceStatus["presence"]["state"],
+        last_seen_at: asString(presence, "last_seen_at"),
+      },
+      listings: { used, total, plan: listings.plan as string | null },
+    };
   }
 
   private async request(
