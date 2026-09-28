@@ -336,8 +336,6 @@ describe("xlsx 模板 roundtrip 与日期序列", () => {
 
 // ── 测试内嵌的最小 stored-xlsx 构造器（与模块生成器同构，仅测试用）──────
 
-import { createHash } from "node:crypto";
-
 function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
   for (const byte of bytes) {
@@ -405,8 +403,6 @@ function buildTestXlsx(entries: ReadonlyArray<{ name: string; content: string }>
     out.set(chunk, cursor);
     cursor += chunk.length;
   }
-  // 确认测试构造器与产物 CRC 逻辑可用（防手写错误静默通过）。
-  createHash("sha256").update(out);
   return out;
 }
 
