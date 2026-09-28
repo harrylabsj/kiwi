@@ -207,7 +207,7 @@ function normalizeHeader(raw: string): string {
   return raw
     .normalize("NFKC")
     .toLowerCase()
-    .replace(/[\s\-_·•、，,。.：:；;（）()\[\]【】{}*#"'’“”]/g, "");
+    .replace(/[\s\-_·•、，,。.：:；;（）()[\]【】{}*#"'’“”]/g, "");
 }
 
 function buildAliasIndex(): Map<string, TabularField> {
