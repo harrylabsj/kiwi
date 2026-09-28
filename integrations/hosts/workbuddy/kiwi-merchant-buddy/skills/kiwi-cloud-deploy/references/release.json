@@ -1,7 +1,7 @@
 {
-  "$note": "云端接待部署的固定发布参数。三个占位（{{PACKAGE_VERSION}}、{{AGGREGATE_DIGEST}}、{{NPM_INTEGRITY}}）由项目经理在 WP2/3 交付 @harrylabsj/kiwi-merchant-cloud 并完成发布门禁后统一回填；三者必须来自同一次 portfolio release（版本号、build-manifest.json 聚合摘要、npm tarball sha512 integrity 一一对应）。回填前：技能与方案 B 提示词只能讲解流程，不可实际取包部署。",
+  "$note": "云端接待部署的固定发布参数（WP17 回填，2026-09-28）。三个值绑定同一次发布构建：@harrylabsj/kiwi-merchant-cloud 0.11.0（release/merchant-buddy-1 合并线，build-manifest source_commit 2df795a）——aggregate_digest 对应包内 build-manifest.json 的 artifact_sha256，npm_integrity 对应 npm tarball 的 dist.integrity。注意：这是 WP11/WP12 并入后重新打包的摘要，与 WP5 单独交付时的摘要不同（制品新增工作台旁观/运营报告/商品导入功能使内容变化）；版本号不变仍为 0.11.0。包尚未正式发布到 npm；正式 trusted publishing 后以 registry 侧 dist.integrity 复核，不一致则停止并上报。",
   "npm_package": "@harrylabsj/kiwi-merchant-cloud",
-  "package_version": "{{PACKAGE_VERSION}}",
-  "aggregate_digest": "{{AGGREGATE_DIGEST}}",
-  "npm_integrity": "{{NPM_INTEGRITY}}"
+  "package_version": "0.11.0",
+  "aggregate_digest": "sha256:7dd1b825e3a71bf59a8171cefdb651009d16cf89d9bd3f290d4e5382d91f654d",
+  "npm_integrity": "sha512-L3RnP4/m0k5NjKvZvkYrqUxEHvP7tS1rDoZbIjR/HB5dJNAqW3jGyMUDstK+X0S6kHBojdbmSJ6XEG1XwfUQYg=="
 }
