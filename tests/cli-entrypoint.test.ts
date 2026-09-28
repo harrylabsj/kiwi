@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { parseArgs, resolveServeDataDir } from "../src/cli.js";
+import { normalizeMerchantRuntimeOriginInput, parseArgs, resolveServeDataDir } from "../src/cli.js";
 
 const DIST_CLI = path.resolve(__dirname, "..", "dist", "cli.js");
 const PRODUCT_VERSION = (JSON.parse(readFileSync(path.resolve(__dirname, "..", "package.json"), "utf-8")) as { version: string }).version;
@@ -103,6 +103,22 @@ describe("agent serve 稳定 dataDir（审查 P1-09）", () => {
     const dir = resolveServeDataDir(undefined, "merchant-acme");
     expect(dir.startsWith(path.resolve(".kiwi", "agents"))).toBe(true);
     expect(dir).not.toContain("kiwi-a2a-node-");
+  });
+});
+
+describe("merchant init Runtime 地址输入", () => {
+  it("bare domains and IPv4 addresses become HTTPS origins", () => {
+    expect(normalizeMerchantRuntimeOriginInput("merchant.example.com")).toBe(
+      "https://merchant.example.com",
+    );
+    expect(normalizeMerchantRuntimeOriginInput("203.0.113.20")).toBe("https://203.0.113.20");
+  });
+
+  it("supports IPv6 literals and preserves explicitly supplied schemes", () => {
+    expect(normalizeMerchantRuntimeOriginInput("2001:db8::4")).toBe("https://[2001:db8::4]");
+    expect(normalizeMerchantRuntimeOriginInput("http://merchant.example.com")).toBe(
+      "http://merchant.example.com",
+    );
   });
 });
 

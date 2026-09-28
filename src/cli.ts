@@ -31,6 +31,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
+import { isIP } from "node:net";
 import {
   chmodSync,
   copyFileSync,
@@ -158,6 +159,7 @@ import { merchantStats } from "./product-merchant.js";
 import { merchantPublish } from "./product-publish.js";
 import { catalogServe } from "./product-catalog.js";
 import {
+  detectPublicIp,
   extractPublicDomain,
   runMerchantSetupPublic,
   SetupPublicError,
@@ -742,6 +744,14 @@ export function resolveServeDataDir(dataDir: string | undefined, agentId: string
 
 function configuredDataDir(args: ParsedArgs, profile: AgentProfile): string | undefined {
   return args.dataDir ?? profile.merchant_runtime?.data_dir;
+}
+
+/** Accept a domain or bare IP as shorthand for its HTTPS origin. */
+export function normalizeMerchantRuntimeOriginInput(input: string): string {
+  const value = input.trim();
+  if (value === "" || /^https?:\/\//i.test(value)) return value;
+  const unwrapped = value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
+  return isIP(unwrapped) === 6 ? `https://[${unwrapped}]` : `https://${value}`;
 }
 async function cmdAgentServe(args: ParsedArgs): Promise<number> {
   const profile = requireProfileOrDefault(args);
@@ -1708,8 +1718,21 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
       merchantId,
     );
     name = await promptLine(`商家名称（回车用缺省）: `, name);
-    publicUrl = await promptLine("公网 Runtime HTTPS 地址（回车稍后配置）: ", publicUrl);
-    if (publicUrl !== "") publicUrl = publicUrl.trim().toLowerCase();
+    let addressPrompt = "公网 Runtime 地址（域名或 HTTPS 地址；回车稍后配置）: ";
+    if (publicUrl === "") {
+      const detectedIp = await detectPublicIp();
+      if (detectedIp !== null) {
+        process.stdout.write(`检测到服务器出口公网 IPv4：${detectedIp}\n` +
+          "它只是候选地址；是否可用还要验证公网 HTTPS 证书、端口和 Agent Card。已有域名建议优先使用。\n");
+        addressPrompt = `公网 Runtime 地址（域名或 https://${detectedIp}；回车稍后配置）: `;
+      } else {
+        process.stdout.write("暂时无法自动检测服务器公网 IP；你仍可输入公网域名或 HTTPS 地址。\n");
+      }
+    }
+    publicUrl = await promptLine(addressPrompt, publicUrl);
+    if (publicUrl !== "") {
+      publicUrl = normalizeMerchantRuntimeOriginInput(publicUrl);
+    }
     if (merchantToken === "") {
       loadMerchantCredentials();
       merchantToken = process.env.KIWI_MERCHANT_TOKEN ?? "";
