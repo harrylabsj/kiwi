@@ -133,6 +133,7 @@ Usage:
                                           账号授权、Runtime 绑定和 Agent Card 发布。
                                           缺省 profile ~/.kiwi/kiwi.yaml，catalog 官方，
                                           data-dir 按 agent_id 派生；均可覆盖。
+                                          交互时会检测服务器公网 IPv4，可直接输入域名或 IP。
                                           shopping-cli API 与 HTTPS Runtime 需已在线；
                                           未就绪时保留进度并说明未完成环节。
                                           商品服务令牌只用于 shopping-cli，不用于
