@@ -61,7 +61,7 @@ function publicationView(
 }
 
 interface RecordedCall {
-  method: "saveDraft" | "getPublication" | "withdraw" | "fetchStats";
+  method: "saveDraft" | "getPublication" | "withdraw" | "fetchStats" | "fetchServiceStatus";
   token: string;
   input?: PublicationDraftInput | string;
 }
@@ -112,6 +112,20 @@ function fakeClient(calls: RecordedCall[], options: { fail?: boolean } = {}) {
             publishedAt: NOW,
           },
         ],
+      };
+    },
+    fetchServiceStatus: async (token: string) => {
+      calls.push({ method: "fetchServiceStatus", token });
+      return {
+        account: { merchant_id: MERCHANT_ID, email_verified: true },
+        onboarding: {
+          status: "awaiting_merchant_confirmation" as const,
+          authorization_url: "https://catalog.kiwi.example/portal/connect/enr_1",
+          expires_at: "2026-09-17T10:10:00.000Z",
+        },
+        card: { published: false, origin: "", verification_level: "discovered" },
+        presence: { state: "unknown" as const, last_seen_at: "" },
+        listings: { used: 0, total: 20, plan: "free" },
       };
     },
   } as unknown as MerchantPublicationClient;
@@ -177,12 +191,32 @@ describe("目录工具（kiwi_catalog_*）", () => {
     const { bundle } = tools([]);
     const readOnly = (await bundle.listTools(["catalog:read"])).map((t) => t.name);
     expect(readOnly).toContain("kiwi_catalog_get_merchant_profile");
+    expect(readOnly).toContain("kiwi_catalog_get_service_status");
     expect(readOnly).not.toContain("kiwi_catalog_save_publication_draft");
     const full = (await bundle.listTools(["catalog:read", "catalog:write"])).map((t) => t.name);
     expect(full).toContain("kiwi_catalog_save_publication_draft");
     expect(full).toContain("kiwi_catalog_request_publish");
     expect(full).toContain("kiwi_catalog_withdraw_publication");
     expect(await bundle.listTools(undefined)).toHaveLength(full.length);
+  });
+
+  it("服务状态透传当前凭据并给出如实上线判定边界", async () => {
+    const calls: RecordedCall[] = [];
+    const { bundle } = tools(calls);
+    const result = await bundle.call("kiwi_catalog_get_service_status", {}, ["catalog:read"]);
+    const payload = JSON.parse(text(result)) as {
+      onboarding: { status: string; authorization_url: string };
+      card: { published: boolean };
+      presence: { state: string };
+      note: string;
+    };
+    expect(payload.onboarding.status).toBe("awaiting_merchant_confirmation");
+    expect(payload.onboarding.authorization_url).toContain("/portal/connect/");
+    expect(payload.card.published).toBe(false);
+    expect(payload.presence.state).toBe("unknown");
+    expect(payload.note).toContain("card.published=true");
+    expect(text(result)).not.toContain("user_code");
+    expect(calls).toEqual([{ method: "fetchServiceStatus", token: CREDENTIAL }]);
   });
 
   it("scope 不足时写工具被拒绝（不只靠 tools/list 过滤）", async () => {

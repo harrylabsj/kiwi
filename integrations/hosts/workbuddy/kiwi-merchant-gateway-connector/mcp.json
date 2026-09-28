@@ -15,6 +15,15 @@
   },
   "tools": [
     {
+      "name": "kiwi_catalog_get_service_status",
+      "description": "读取当前商家的开通进度、名片发布、心跳新鲜度和商品名额（只读）。只有 card.published=true 且 presence.state=fresh 时，才可告诉商家「已上线」。待商家确认时只返回 Catalog 授权页 URL 与过期时间，不返回配对码、device_code、grant 或 owner token。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "kiwi_catalog_get_merchant_profile",
       "description": "读取当前已连接商家的目录身份与连接状态（只读）。返回 merchant_id、目录凭据是否可用，以及公开资料管理入口地址。",
       "inputSchema": {
