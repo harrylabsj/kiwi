@@ -62,6 +62,8 @@ import { WorkbenchEventProjectionStore } from "../http/merchant-management/event
 import { MerchantFeedStore } from "../merchant/feed-store.js";
 import { MerchantFollowStore } from "../merchant/follow-store.js";
 import { MerchantEngagementStore } from "../merchant/engagement-store.js";
+import { createNegotiationObserver } from "../merchant/negotiation-observer.js";
+import { createOperationsReportBuilder } from "../merchant/operations-report.js";
 import {
   recommendedRetentionPolicy,
   WorkbenchRetentionStore,
@@ -867,6 +869,12 @@ export async function bootstrapCloudRuntime(
             },
           }
         : {}),
+      // WP11 会话旁观/运营报告：与 A2A 节点同一事实源（<dataDir>/a2a 账本 +
+      // stats.sqlite），只读投影，不新增写路径。
+      negotiationObserver: createNegotiationObserver({
+        ledgerDir: path.join(config.dataDir, "a2a"),
+      }),
+      operationsReports: createOperationsReportBuilder({ dataDir: config.dataDir }),
       ...(adminOptions.surface.listExactProducts !== undefined &&
       adminOptions.surface.getExactProduct !== undefined
         ? {

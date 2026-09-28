@@ -90,6 +90,15 @@ import {
   MerchantWorkbenchError,
   type A2aNegotiationRow,
 } from "../../merchant/workbench-service.js";
+import {
+  NEGOTIATION_STATUS_FILTERS,
+  type NegotiationObserver,
+  type NegotiationStatusFilter,
+} from "../../merchant/negotiation-observer.js";
+import {
+  parseReportPeriod,
+  type OperationsReportBuilder,
+} from "../../merchant/operations-report.js";
 import type { ExactMerchantProduct } from "../../agent/merchant/types.js";
 import {
   parseExactMoney,
@@ -209,6 +218,14 @@ export interface MerchantManagementApiOptions {
     list: (limit?: number) => Promise<{ total: number; items: A2aNegotiationRow[] }>;
     get: (negotiationId: string) => Promise<A2aNegotiationRow>;
   };
+  /**
+   * 会话旁观投影（WP11）：分页（offset cursor）+ 状态过滤 + 单条时间线。
+   * 配置后 `/negotiations` 走本通道（limit-only 查询语义不变）；未配置时
+   * 维持上面的 legacy 通道（仅 limit）。
+   */
+  negotiationObserver?: NegotiationObserver;
+  /** 运营报告聚合（WP11）：stats-store + 磋商账本 → day/week/month 报告。 */
+  operationsReports?: OperationsReportBuilder;
   workbenchReconciliation?: WorkbenchReconciliationStore;
   exactProducts?: {
     list: () => Promise<ExactMerchantProduct[]>;
@@ -578,11 +595,37 @@ export function createMerchantManagementApiHandler(
     if (rest === "/negotiations") {
       const auth = requireActor(req);
       authorizeOrThrow(auth.ctx, "approvals:read");
+      const query = pageQuery(url);
+      const statusRaw = url.searchParams.get("status");
+      if (statusRaw !== null && statusRaw !== "" && !(NEGOTIATION_STATUS_FILTERS as readonly string[]).includes(statusRaw)) {
+        throw new ManagementError("invalid_input", "status must be active, agreement or all");
+      }
+      const observer = options.negotiationObserver;
+      if (observer !== undefined) {
+        writeJson(
+          res,
+          200,
+          observer.list({
+            ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
+            ...(query.limit !== undefined ? { limit: query.limit } : {}),
+            ...(statusRaw !== null && statusRaw !== ""
+              ? { status: statusRaw as NegotiationStatusFilter }
+              : {}),
+          }),
+          { "x-request-id": requestId },
+        );
+        return;
+      }
+      if (statusRaw !== null && statusRaw !== "") {
+        throw new ManagementError(
+          "unavailable",
+          "status filtering requires the negotiation observer projection",
+        );
+      }
       const channel = options.negotiations;
       if (channel === undefined) {
         throw new ManagementError("unavailable", "negotiation authority is not configured");
       }
-      const query = pageQuery(url);
       writeJson(res, 200, await channel.list(query.limit), { "x-request-id": requestId });
       return;
     }
@@ -590,11 +633,31 @@ export function createMerchantManagementApiHandler(
     if (negotiationMatch !== null) {
       const auth = requireActor(req);
       authorizeOrThrow(auth.ctx, "approvals:read");
+      const observer = options.negotiationObserver;
+      if (observer !== undefined) {
+        writeJson(res, 200, observer.timeline(pathSegment(negotiationMatch[1] ?? "")), {
+          "x-request-id": requestId,
+        });
+        return;
+      }
       const channel = options.negotiations;
       if (channel === undefined) {
         throw new ManagementError("unavailable", "negotiation authority is not configured");
       }
       writeJson(res, 200, await channel.get(pathSegment(negotiationMatch[1] ?? "")), {
+        "x-request-id": requestId,
+      });
+      return;
+    }
+    if (rest === "/reports") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "operations:read");
+      const builder = options.operationsReports;
+      if (builder === undefined) {
+        throw new ManagementError("unavailable", "operations report authority is not configured");
+      }
+      const periodRaw = url.searchParams.get("period");
+      writeJson(res, 200, builder.build(parseReportPeriod(periodRaw)), {
         "x-request-id": requestId,
       });
       return;
@@ -1110,6 +1173,10 @@ export function createMerchantManagementApiHandler(
     }
     if (rest === "/policy/drafts") {
       await postPolicyDraft(req, res);
+      return;
+    }
+    if (rest === "/policy/form-drafts") {
+      await postPolicyFormDraft(req, res);
       return;
     }
     const policyCommitMatch = /^\/policy\/drafts\/([^/]+)\/commit$/.exec(rest);
@@ -2950,6 +3017,79 @@ export function createMerchantManagementApiHandler(
     });
   }
 
+  /**
+   * POST /policy/form-drafts —— 常用规则表单（WP11）：表单友好字段 → 服务端映射
+   * 为 policy schema 字段，走与 JSON patch 完全相同的草稿→确认提交流程。
+   * schema 字段名只出现在服务端（页面壳不含策略内部字段名，隐私守卫不变）。
+   */
+  async function postPolicyFormDraft(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const auth = requireActor(req);
+    assertWriteGuards(req, auth.sessionId);
+    authorizeOrThrow(auth.ctx, "policy:draft");
+    const fields = objectFields(await readJsonBody(req), [
+      "auto",
+      "floor",
+      "discount",
+      "lead_days",
+      "ttl_seconds",
+      "human_review",
+    ]);
+    const patch: Record<string, unknown> = {};
+    if (fields["auto"] !== undefined) {
+      if (fields["auto"] !== "on" && fields["auto"] !== "off") {
+        throw new ManagementError("invalid_input", "auto must be on or off");
+      }
+      patch["auto_negotiate"] = fields["auto"] === "on";
+    }
+    if (fields["floor"] !== undefined) {
+      patch["min_unit_price_private"] = requireNonNegativeNumber(fields["floor"], "floor");
+    }
+    if (fields["discount"] !== undefined) {
+      const discount = requireNonNegativeNumber(fields["discount"], "discount");
+      if (discount > 100) {
+        throw new ManagementError("invalid_input", "discount must be between 0 and 100");
+      }
+      patch["max_auto_discount_percent"] = discount;
+    }
+    if (fields["lead_days"] !== undefined) {
+      patch["delivery_lead_days"] = requirePositiveNumber(fields["lead_days"], "lead_days");
+    }
+    if (fields["ttl_seconds"] !== undefined) {
+      patch["quote_ttl_seconds"] = requirePositiveInteger(fields["ttl_seconds"], "ttl_seconds");
+    }
+    if (fields["human_review"] !== undefined) {
+      const triggers = requireStringArray(fields["human_review"], "human_review");
+      for (const trigger of triggers) {
+        if (!HUMAN_REVIEW_TRIGGERS.includes(trigger)) {
+          throw new ManagementError(
+            "invalid_input",
+            `human_review trigger must be one of ${HUMAN_REVIEW_TRIGGERS.join(", ")}`,
+          );
+        }
+      }
+      patch["human_review_on"] = triggers;
+    }
+    if (Object.keys(patch).length === 0) {
+      throw new ManagementError("invalid_input", "form submitted no changes");
+    }
+    const current = options.policy?.();
+    const digest = managementRequestDigest(patch);
+    const created = options.drafts.create({
+      merchantId: auth.ctx.merchantId,
+      kind: "policy_override",
+      payloadJson: JSON.stringify(patch),
+      payloadDigest: digest,
+      ...(current !== undefined ? { baseDigest: current.digest } : {}),
+    });
+    writeJson(res, 200, {
+      draft_id: created.draftId,
+      digest,
+      reused: created.reused,
+      base_digest: current?.digest ?? null,
+      applied_keys: Object.keys(patch),
+    });
+  }
+
   /** POST /policy/drafts/{id}/commit —— 应用策略补丁；回执只含版本与摘要（红线 6）。 */
   async function postPolicyCommit(
     req: IncomingMessage,
@@ -3275,6 +3415,23 @@ function requirePositiveInteger(value: unknown, field: string): number {
   if (integer < 1) throw new ManagementError("invalid_input", `${field} must be positive`);
   return integer;
 }
+
+/** 表单数值允许小数（元/百分比），但必须有限且非负（或正数，见下）。 */
+function requireNonNegativeNumber(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new ManagementError("invalid_input", `${field} must be a non-negative number`);
+  }
+  return value;
+}
+
+function requirePositiveNumber(value: unknown, field: string): number {
+  const number = requireNonNegativeNumber(value, field);
+  if (number === 0) throw new ManagementError("invalid_input", `${field} must be positive`);
+  return number;
+}
+
+/** human_review_on 已知触发词（product-init/supervisor 初始化口径）。 */
+const HUMAN_REVIEW_TRIGGERS = ["below_floor", "exceptional_warranty", "suspicious_content"];
 
 function requireDecision(value: unknown): "approve" | "reject" {
   if (value !== "approve" && value !== "reject") {

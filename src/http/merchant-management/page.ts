@@ -61,6 +61,12 @@ export function renderMerchantManagementPage(): string {
   .muted { color: #6b7a8c; font-size: 12px; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   pre.digest { font: 11px ui-monospace, monospace; color: #6b7a8c; word-break: break-all; margin: 4px 0; }
+  label { font-weight: 400; font-size: 12px; }
+  select { border: 1px solid #c9d3dd; border-radius: 6px; padding: 4px 6px; font-size: 12px; background: #fff; }
+  .trendrow { display: flex; align-items: center; gap: 8px; margin: 3px 0; font-size: 12px; }
+  .trendrow > span:first-child { width: 44px; color: #6b7a8c; }
+  .trendbar { flex: 1; height: 10px; background: #eef1f4; border-radius: 5px; overflow: hidden; }
+  .trendfill { height: 100%; background: #1e4066; }
 </style>
 </head>
 <body>
@@ -69,6 +75,8 @@ export function renderMerchantManagementPage(): string {
   <button data-v="status" class="on">服务状态</button>
   <button data-v="products">商品与导入</button>
   <button data-v="approvals">待审批</button>
+  <button data-v="negotiations">会话旁观</button>
+  <button data-v="reports">运营报告</button>
   <button data-v="policy">报价规则</button>
 </nav>
 <main id="view"><div class="card">加载中…</div></main>
@@ -210,6 +218,88 @@ var views = {
         '<p class="muted">批准/拒绝只在本页完成；对话里的“同意”不构成批准。</p></div>';
     });
   },
+  negotiations: function () {
+    var qs = "/negotiations?limit=20&status=" + encodeURIComponent(NEG_STATUS) +
+      (NEG_CURSOR ? "&cursor=" + encodeURIComponent(NEG_CURSOR) : "");
+    return call("GET", qs).then(function (page) {
+      if (NEG_OPEN) return negotiationDetail(NEG_OPEN);
+      var filters = [["all", "全部"], ["active", "进行中"], ["agreement", "已达成"]].map(function (f) {
+        return '<button class="act' + (NEG_STATUS === f[0] ? " primary" : "") + '" onclick="setNegStatus(\\'' + f[0] + '\\')">' + f[1] + "</button>";
+      }).join(" ");
+      var rows = (page.items || []).map(function (it) {
+        return "<tr><td>" + esc(it.recorded_at) + "</td><td>" + esc(it.negotiation_id) + "</td>" +
+          "<td>" + phasePill(it.phase, it.agreement) + "</td><td>" + esc(it.sku || "-") + "</td>" +
+          "<td>" + esc(it.quantity == null ? "-" : it.quantity) + "</td>" +
+          "<td>" + esc(it.price_minor == null ? "-" : it.price_minor) + "</td>" +
+          "<td>" + (it.needs_attention ? '<span class="pill warn">待回应</span>' : '<span class="muted">—</span>') + "</td>" +
+          '<td><button class="act" onclick="openNegotiation(\\'' + esc(it.negotiation_id) + '\\')">查看时间线</button></td></tr>';
+      }).join("");
+      var pager = '<div class="row" style="margin-top:8px">' +
+        (NEG_CURSOR ? '<button class="act" onclick="negPage(\\'\\')">上一页</button>' : "") +
+        (page.next_cursor ? '<button class="act" onclick="negPage(\\'' + esc(page.next_cursor) + '\\')">下一页</button>' : "") +
+        '<span class="muted">共 ' + (page.total == null ? "-" : page.total) + " 条</span></div>";
+      return '<div class="card"><h2>会话旁观（只读）</h2>' +
+        '<div class="row" style="margin-bottom:8px">' + filters + "</div>" +
+        (rows ? "<table><tr><th>最近活动</th><th>磋商</th><th>相位</th><th>SKU</th><th>数量</th><th>单价（最小币单位）</th><th>待回应</th><th>操作</th></tr>" + rows + "</table>"
+              : '<p class="muted">当前过滤条件下没有磋商记录。</p>') + pager +
+        '<p class="muted">本页仅旁观：不能在这里向买家发送消息；回复都在接待会话内完成。买家只以协议身份出现，不展示私密联系方式。</p></div>';
+    });
+  },
+  reports: function () {
+    var periods = [["day", "今日"], ["week", "本周"], ["month", "本月"]].map(function (p) {
+      return '<button class="act' + (REP_PERIOD === p[0] ? " primary" : "") + '" onclick="setRepPeriod(\\'' + p[0] + '\\')">' + p[1] + "</button>";
+    }).join(" ");
+    return call("GET", "/reports?period=" + encodeURIComponent(REP_PERIOD)).then(function (r) {
+      var names = {
+        distinct_buyers: "去重买家数",
+        contact_events: "询价/触达事件",
+        negotiations: "磋商数",
+        agreements_reached: "达成非绑定协议",
+        human_escalations: "进入人工处理",
+      };
+      var rows = Object.keys(names).map(function (key) {
+        var m = (r.metrics || {})[key] || {};
+        if (!m.available) {
+          return "<tr><th>" + names[key] + "</th><td>" + esc(UNAVAILABLE_LABEL) +
+            '</td><td class="muted">' + esc(unavailableReason(m.reason)) + "</td><td>-</td></tr>";
+        }
+        var pct = m.change_pct == null ? "-" : (m.change_pct > 0 ? "+" : "") + m.change_pct + "%";
+        var delta = m.delta > 0 ? "+" + m.delta : String(m.delta);
+        return "<tr><th>" + names[key] + "</th><td>" + esc(m.value) + "</td><td>" + esc(m.previous) +
+          "</td><td>" + esc(delta) + "（" + esc(pct) + "）</td></tr>";
+      }).join("");
+      var skuRows = (r.top_skus || []).map(function (s) {
+        return "<tr><td>" + esc(s.sku) + "</td><td>" + esc(s.contact_events) + "</td><td>" +
+          esc(s.distinct_buyers) + "</td><td>" + esc(s.negotiations) + "</td></tr>";
+      }).join("");
+      var terms = (r.recent_inquiry_terms || []).map(function (t) {
+        return "<tr><td>" + esc(t.token) + "</td><td>" + esc(t.count) + "</td></tr>";
+      }).join("");
+      var trend = (r.series || []).map(function (p) {
+        var max = 1;
+        (r.series || []).forEach(function (q) { if (q.contact_events > max) max = q.contact_events; });
+        var w = Math.round((p.contact_events / max) * 100);
+        return '<div class="trendrow"><span class="muted">' + esc(p.day.slice(5)) + "</span>" +
+          '<div class="trendbar"><div class="trendfill" style="width:' + w + '%"></div></div>' +
+          "<span>" + esc(p.contact_events) + "</span></div>";
+      }).join("");
+      return '<div class="card"><h2>运营报告</h2><div class="row" style="margin-bottom:8px">' + periods + "</div>" +
+        '<p class="muted">窗口 ' + esc(r.window && r.window.since) + " 至 " + esc(r.window && r.window.until_exclusive) +
+        "（UTC）；对比上一周期 " + esc(r.previous_window && r.previous_window.since) + " 至 " +
+        esc(r.previous_window && r.previous_window.until_exclusive) + "。</p>" +
+        "<table><tr><th>指标</th><th>本周期</th><th>上一周期</th><th>变化</th></tr>" + rows + "</table>" +
+        '<p class="muted">「进入人工处理」= 磋商进入澄清等待或生成人工交接候选；非绑定协议按账本 AGREEMENT_REACHED 事实统计。</p></div>' +
+        '<div class="card"><h2>SKU 热度 Top 10</h2>' +
+        (skuRows ? "<table><tr><th>SKU</th><th>触达</th><th>去重买家</th><th>磋商</th></tr>" + skuRows + "</table>"
+                 : '<p class="muted">' + esc(UNAVAILABLE_LABEL) + "（没有触达统计数据）</p>") + "</div>" +
+        '<div class="card"><h2>最近询价关键词（原文计数）</h2>' +
+        (terms ? "<table><tr><th>问题 code</th><th>次数</th></tr>" + terms + "</table>"
+               : '<p class="muted">当前窗口没有询价问题记录。</p>') +
+        '<p class="muted">仅统计买家询价问题 code 原文出现次数；主题归纳（LLM）属后续工作。</p></div>' +
+        '<div class="card"><h2>触达趋势（按日）</h2>' +
+        (trend || '<p class="muted">' + esc(UNAVAILABLE_LABEL) + "</p>") + "</div>";
+    });
+  },
   policy: function () {
     return call("GET", "/policy").then(function (pol) {
       return '<div class="card"><h2>当前报价规则</h2><table>' +
@@ -217,7 +307,25 @@ var views = {
         '<tr><th>内容摘要</th><td><pre class="digest">' + esc(pol.digest) + "</pre></td></tr></table>" +
         '<p class="muted">底价等敏感值不出现在本页接口；提交草稿后由系统校验并原子生效。</p></div>' +
         (ROLE === "owner" || ROLE === "operator"
-          ? '<div class="card"><h2>提交规则调整草稿（JSON patch）</h2>' +
+          ? '<div class="card"><h2>常用规则表单</h2>' +
+            '<p class="muted">留空的字段不会写进补丁（不修改现有值）；当前值因隐私不回显。提交后生成规则变更草稿，再确认才生效。</p>' +
+            '<table>' +
+            '<tr><th>自动应价</th><td><select id="pf-auto"><option value="">不修改</option><option value="on">开启</option><option value="off">关闭</option></select>' +
+            '<span class="muted">关闭后新询价转人工处理</span></td></tr>' +
+            '<tr><th>全局最低单价（元）</th><td><input type="text" id="pf-floor" placeholder="留空不修改"></td></tr>' +
+            '<tr><th>最大自动折扣（%）</th><td><input type="text" id="pf-discount" placeholder="0–100，留空不修改"></td></tr>' +
+            '<tr><th>交期承诺（天）</th><td><input type="text" id="pf-lead" placeholder="正数，留空不修改"></td></tr>' +
+            '<tr><th>报价有效期（秒）</th><td><input type="text" id="pf-ttl" placeholder="正数，留空不修改"></td></tr>' +
+            '<tr><th>超出范围转人工</th><td><span class="row">' +
+            '<label><input type="checkbox" id="pf-hr-below" checked> 低于底价</label>' +
+            '<label><input type="checkbox" id="pf-hr-warranty"> 特殊售后条款</label>' +
+            '<label><input type="checkbox" id="pf-hr-suspicious"> 可疑内容</label></span>' +
+            '<select id="pf-hr"><option value="">不修改</option><option value="set">按左侧勾选设置</option></select></td></tr>' +
+            "</table>" +
+            '<div class="row" style="margin-top:8px"><button class="act primary" onclick="draftPolicyForm()">生成规则草稿</button>' +
+            '<span class="muted">per-SKU 底价/折扣、促销与库存来源请用下方高级模式。</span></div><div id="polformresult"></div></div>' +
+            '<div class="card"><h2>高级：JSON patch 模式</h2>' +
+            '<p class="muted">适合 per-SKU 底价/折扣映射、促销与库存来源等完整 patch；字段名以策略 schema 文档为准，不在页面枚举。</p>' +
             '<textarea id="patch" rows="8"></textarea>' +
             '<div class="row" style="margin-top:8px"><button class="act" onclick="draftPolicy()">保存草稿</button>' +
             '<span class="muted">保存后生成草稿摘要，再点提交才生效。</span></div><div id="polresult"></div></div>'
@@ -231,6 +339,107 @@ var views = {
 /* 暂停/恢复与规则/导入/审批的命令实现。 */
 function currentRevision(cb) {
   call("GET", "/runtime/status").then(cb).catch(function (e) { bar(e.message, true); });
+}
+/* 会话旁观 / 运营报告的视图状态（只读；不能从这里发消息）。 */
+var NEG_STATUS = "all";
+var NEG_CURSOR = "";
+var NEG_OPEN = null;
+var REP_PERIOD = "day";
+var UNAVAILABLE_LABEL = "不可得";
+function unavailableReason(reason) {
+  return {
+    merchant_stats_unavailable: "没有买家触达统计数据（stats.sqlite 不存在）",
+    negotiation_ledger_unavailable: "磋商账本不可读",
+  }[reason] || "数据源未配置";
+}
+function phasePill(phase, agreement) {
+  if (agreement) return '<span class="pill ok">已达成</span>';
+  var map = {
+    OPEN: ["", "开放"], AWAITING_CLARIFICATION: ["warn", "澄清等待"],
+    OFFER_OPEN: ["", "报价中"], DECLINED: ["bad", "已婉拒"],
+    WITHDRAWN: ["bad", "已撤回"], CANCELLED: ["bad", "已取消"], EXPIRED: ["warn", "已过期"],
+  };
+  var it = map[phase] || ["warn", phase];
+  return it[0] ? '<span class="pill ' + it[0] + '">' + esc(it[1]) + "</span>" : '<span class="pill">' + esc(it[1]) + "</span>";
+}
+function setNegStatus(status) { NEG_STATUS = status; NEG_CURSOR = ""; NEG_OPEN = null; refresh(); }
+function negPage(cursor) { NEG_CURSOR = cursor; refresh(); }
+function openNegotiation(id) { NEG_OPEN = id; refresh(); }
+function closeNegotiation() { NEG_OPEN = null; refresh(); }
+function negotiationDetail(id) {
+  return call("GET", "/negotiations/" + encodeURIComponent(id)).then(function (d) {
+    var entries = (d.timeline || []).map(function (e) {
+      var who = e.direction === "buyer" ? '<span class="pill">买家</span>'
+        : e.direction === "merchant" ? '<span class="pill">商家</span>'
+        : '<span class="muted">系统</span>';
+      var rule = e.rule_summary ? esc(e.rule_summary) : '<span class="muted">' + UNAVAILABLE_LABEL + "</span>";
+      return "<tr><td>" + esc(e.at) + "</td><td>" + who + "</td><td>" + esc(e.action) + "</td>" +
+        "<td>" + esc(e.summary) + "</td><td>" + rule + "</td>" +
+        "<td>" + (e.manual_review ? '<span class="pill warn">转人工</span>' : "—") + "</td></tr>";
+    }).join("");
+    return '<div class="card"><h2>磋商 ' + esc(d.negotiation_id) + "（时间线）</h2>" +
+      '<button class="act" onclick="closeNegotiation()">← 返回列表</button>' +
+      "<table><tr><th>相位</th><td>" + phasePill(d.phase, d.agreement) + "</td></tr>" +
+      "<tr><th>SKU</th><td>" + esc(d.sku || "-") + "</td></tr>" +
+      "<tr><th>数量</th><td>" + esc(d.quantity == null ? "-" : d.quantity) + "</td></tr>" +
+      "<tr><th>最新单价（最小币单位）</th><td>" + esc(d.price_minor == null ? "-" : d.price_minor) + "</td></tr>" +
+      "<tr><th>买家（协议身份）</th><td>" + esc(d.buyer_ref) + "</td></tr>" +
+      "<tr><th>最近活动</th><td>" + esc(d.recorded_at) + "</td></tr></table>" +
+      (entries
+        ? "<table style=\\"margin-top:10px\\"><tr><th>时间</th><th>方向</th><th>动作</th><th>内容</th><th>规则依据</th><th>人工</th></tr>" + entries + "</table>"
+        : '<p class="muted">账本中没有消息事件。</p>') +
+      '<p class="muted">「规则依据」不可得 = 账本未记录该步的规则事实；规则数值属私有数据，不在旁观视图展示。本页只读。</p></div>';
+  });
+}
+function setRepPeriod(period) { REP_PERIOD = period; refresh(); }
+function numberOrUndefined(raw) {
+  var trimmed = String(raw == null ? "" : raw).trim();
+  if (trimmed === "") return undefined;
+  var value = Number(trimmed);
+  return Number.isFinite(value) ? value : NaN;
+}
+function draftPolicyForm() {
+  var form = {};
+  var auto = $("pf-auto") ? $("pf-auto").value : "";
+  if (auto === "on" || auto === "off") form.auto = auto;
+  var floor = numberOrUndefined($("pf-floor") && $("pf-floor").value);
+  if (floor !== undefined) {
+    if (Number.isNaN(floor) || floor < 0) { bar("最低单价须为非负数字（元）", true); return; }
+    form.floor = floor;
+  }
+  var discount = numberOrUndefined($("pf-discount") && $("pf-discount").value);
+  if (discount !== undefined) {
+    if (Number.isNaN(discount) || discount < 0 || discount > 100) { bar("最大折扣须在 0–100 之间", true); return; }
+    form.discount = discount;
+  }
+  var lead = numberOrUndefined($("pf-lead") && $("pf-lead").value);
+  if (lead !== undefined) {
+    if (Number.isNaN(lead) || lead <= 0) { bar("交期承诺须为正数（天）", true); return; }
+    form.lead_days = lead;
+  }
+  var ttl = numberOrUndefined($("pf-ttl") && $("pf-ttl").value);
+  if (ttl !== undefined) {
+    if (Number.isNaN(ttl) || ttl <= 0 || !Number.isInteger(ttl)) { bar("报价有效期须为正整数（秒）", true); return; }
+    form.ttl_seconds = ttl;
+  }
+  var hrMode = $("pf-hr") ? $("pf-hr").value : "";
+  if (hrMode === "set") {
+    var triggers = [];
+    if ($("pf-hr-below") && $("pf-hr-below").checked) triggers.push("below_floor");
+    if ($("pf-hr-warranty") && $("pf-hr-warranty").checked) triggers.push("exceptional_warranty");
+    if ($("pf-hr-suspicious") && $("pf-hr-suspicious").checked) triggers.push("suspicious_content");
+    form.human_review = triggers;
+  }
+  if (Object.keys(form).length === 0) { bar("所有字段都留空：没有可提交的修改", true); return; }
+  call("POST", "/policy/form-drafts", form)
+    .then(function (draft) {
+      $("polformresult").innerHTML = '<div class="card" style="margin-top:10px;background:#fbfcfd">' +
+        "本次涉及字段：<b>" + esc((draft.applied_keys || []).join("、")) + "</b>；草稿 <b>" + esc(draft.draft_id) + "</b>" +
+        '<pre class="digest">' + esc(draft.digest) + "</pre>" +
+        '<button class="act primary" onclick="commitPolicy(\\'' + esc(draft.draft_id) + '\\',\\'' + esc(draft.digest) + '\\')">确认提交生效</button>' +
+        '<p class="muted">提交后由服务端按策略 schema 校验并原子生效（与高级模式同一确认流程）。</p></div>';
+    })
+    .catch(function (e) { bar("表单草稿未保存：" + e.message, true); });
 }
 function pauseService() {
   currentRevision(function (s) {
