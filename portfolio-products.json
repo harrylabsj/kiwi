@@ -103,11 +103,11 @@
     {
       "id": "workbuddy-merchant-app",
       "name": "WorkBuddy merchant operations app",
-      "version": "1.5.0",
+      "version": "1.6.0",
       "version_source": { "type": "json", "scope": "central", "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/buddy-app.config.json", "field": "version" },
       "channel": "WorkBuddy app review",
       "release_controller": "WorkBuddy app builder; manual configuration",
-      "artifact": "release/workbuddy/kiwi-merchant-buddy-config-1.5.0.json",
+      "artifact": "release/workbuddy/kiwi-merchant-buddy-config-1.6.0.json",
       "platform_asset_id": null,
       "state": "local configuration draft; app creation review blocked",
       "gates": ["platform app authorization and callback", "preview", "platform review"]
