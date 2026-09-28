@@ -217,6 +217,7 @@ function buildTask(
     message = {
       role: "agent",
       parts: [
+        ...(result.message !== undefined ? [{ kind: "text" as const, text: result.message }] : []),
         {
           kind: "data",
           data: { decline: true, reason_code: result.reasonCode ?? "declined" },

@@ -175,6 +175,7 @@ function main() {
       {
         public_origin: options.appOrigin,
         data_dir: dataDir,
+        catalog_url: "https://catalog.kiwi.harrylabsj.com",
         profile: remote("pilot/merchant.yaml"),
         products_file: remote("pilot/products.json"),
         readiness_sku: options.sku,

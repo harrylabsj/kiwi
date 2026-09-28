@@ -132,6 +132,8 @@ const CONFIRMATION_TTL_MS = 5 * 60 * 1000;
 export interface MerchantManagementApiOptions {
   /** 本实例商家（服务端绑定；不来自请求）。 */
   merchantId: string;
+  merchantName?: string;
+  merchantNameNeedsUpdate?: boolean;
   /** 当前部署代次（单代次实例恒 1；代次切换后旧代次不得再产生业务写入）。 */
   generation: () => number;
   runtimeVersion: string;
@@ -169,6 +171,8 @@ export interface MerchantManagementApiOptions {
    */
   productsImport?: {
     currentTable: () => { digest: string; records: CloudProductRecord[] };
+    /** Attach local runtime ownership and the Catalog-confirmed merchant id. */
+    prepareTable?: (table: CloudProductTable) => CloudProductTable;
     commit: (table: CloudProductTable) => { digest: string };
   };
   /** 策略草稿提交（MerchantPolicyRuntime.apply；缺省 → 503）。回执只含版本与摘要。 */
@@ -179,7 +183,7 @@ export interface MerchantManagementApiOptions {
   operations: MerchantManagementOperationStore;
   serviceState: MutableServiceState;
   /** 就绪结论提供者（/status 与 resume 就绪门共用；只回检查名，不回细节）。 */
-  readiness: () => Promise<{ ready: boolean; checks: Record<string, { ok: boolean }> }>;
+  readiness: () => Promise<{ ready: boolean; checks: Record<string, { ok: boolean; code?: string }> }>;
   /**
    * 开通向导（M4 §5.4；读写同一份 `OnboardingStore`）。
    *
@@ -523,7 +527,11 @@ export function createMerchantManagementApiHandler(
     }
     if (rest === "/runtime/status") {
       const auth = requireActor(req);
-      writeJson(res, 200, await readService.getStatus(auth.ctx), { "x-request-id": requestId });
+      writeJson(res, 200, {
+        ...await readService.getStatus(auth.ctx),
+        merchant_name: options.merchantName ?? null,
+        merchant_name_needs_update: options.merchantNameNeedsUpdate === true,
+      }, { "x-request-id": requestId });
       return;
     }
     if (rest === "/products") {
@@ -1865,6 +1873,15 @@ export function createMerchantManagementApiHandler(
       authorizeOrThrow(auth.ctx, "onboarding:manage");
       const channel = onboardingChannel();
       const record = channel.store.activeRecord(auth.ctx.merchantId) ?? null;
+      const readiness = await options.readiness();
+      const setupNotices = [
+        ...(readiness.checks.products?.code === "PRODUCTS_NOT_CONFIGURED"
+          ? [{ code: "products_required", message: "请先导入商品；导入后系统会自动继续服务检查，当前不会报价或发布名片。" }]
+          : []),
+        ...(options.merchantNameNeedsUpdate === true
+          ? [{ code: "merchant_name_required", message: "请设置商家显示名后再确认公开资料。" }]
+          : []),
+      ];
       const enrollment = record === null || channel.enrollmentStateDir === undefined
         ? undefined
         : readEnrollmentStore(channel.enrollmentStateDir).sessions
@@ -1873,6 +1890,7 @@ export function createMerchantManagementApiHandler(
       writeJson(res, 200, {
         record,
         plan: record === null ? null : planWizard(record),
+        setup_notices: setupNotices,
         ...(enrollment !== undefined ? {
           connect: {
             enrollment_id: enrollment.enrollment_id,
@@ -2732,16 +2750,17 @@ export function createMerchantManagementApiHandler(
     let table: CloudProductTable;
     try {
       table = parseProductTable(fields["table"], "request body");
+      table = importChannel.prepareTable?.(table) ?? table;
     } catch (err) {
       if (err instanceof ProductTableError) {
         throw new ManagementError("invalid_input", err.message);
       }
       throw err;
     }
-    if (table.merchant_id !== options.merchantId) {
+    if ((table.runtime_owner_id ?? table.merchant_id) !== options.merchantId) {
       throw new ManagementError(
         "forbidden",
-        "product table merchant_id does not match this instance",
+        "product table runtime owner does not match this instance",
       );
     }
     let base: { digest: string; records: CloudProductRecord[] };

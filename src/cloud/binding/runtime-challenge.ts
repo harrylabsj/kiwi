@@ -43,7 +43,7 @@ export interface ChallengeResponderOptions {
   /** Runtime 自持签名身份（私钥不出进程）。 */
   signingIdentity: JwsSigningIdentity;
   /** 本实例的商家/agent/代次：挑战必须与之一致。 */
-  expectedMerchantId: string;
+  expectedMerchantId: string | (() => string | undefined);
   expectedAgentId: string;
   currentGeneration: number;
   /** 应答过的一次性记录（默认进程内）。 */
@@ -168,6 +168,13 @@ export function createChallengeResponder(
         writeJson(res, 400, { error: "invalid_challenge", message: "挑战结构不完整或字段非法" });
         return;
       }
+      const expectedMerchantId = typeof options.expectedMerchantId === "function"
+        ? options.expectedMerchantId()
+        : options.expectedMerchantId;
+      if (expectedMerchantId === undefined) {
+        writeJson(res, 503, { error: "catalog_binding_missing", message: "Catalog 尚未确认商家身份" });
+        return;
+      }
       // 挑战必须发给**本实例**：指纹不符即拒绝（不替他人签名）。
       if (challenge.key_thumbprint !== ownThumbprint) {
         writeJson(res, 403, {
@@ -176,7 +183,7 @@ export function createChallengeResponder(
         });
         return;
       }
-      if (challenge.merchant_id !== options.expectedMerchantId || challenge.agent_id !== options.expectedAgentId) {
+      if (challenge.merchant_id !== expectedMerchantId || challenge.agent_id !== options.expectedAgentId) {
         writeJson(res, 403, { error: "identity_mismatch", message: "挑战的商家/agent 与本实例不一致" });
         return;
       }

@@ -164,6 +164,7 @@ function cloudEnv(options: {
     KIWI_CLOUD_DATA_DIR: options.dataDir,
     KIWI_CLOUD_PROFILE: options.profilePath,
     KIWI_CLOUD_A2A_AUTH: options.auth ?? "bearer:KIWI_TEST_A2A_TOKEN",
+    KIWI_CATALOG_URL: "https://catalog.test",
     KIWI_TEST_A2A_TOKEN: "test-bearer-token",
     ...(options.sku !== undefined ? { KIWI_CLOUD_READINESS_SKU: options.sku } : {}),
   };

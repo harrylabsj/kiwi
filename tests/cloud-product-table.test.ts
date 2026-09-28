@@ -11,12 +11,12 @@
  * 本文件是本地验证；平台侧仍需在真实制品上复验。
  */
 import { createServer, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { bootstrapCloudRuntime } from "../src/cloud/bootstrap.js";
-import { createFileProductSource, parseProductTable, ProductTableError } from "../src/cloud/product-source.js";
+import { bindProductTableToCatalog, commitProductTable, createFileProductSource, parseProductTable, ProductTableError } from "../src/cloud/product-source.js";
 import { finalizeEnvelope } from "../src/negotiation/domain/envelope.js";
 import { CAPABILITY } from "./negotiation-helpers.js";
 
@@ -144,6 +144,28 @@ describe("商品表解析与查询（fail-closed）", () => {
     expect(handle.describeSku("no-such-sku").code).toBe("PRODUCT_NOT_IN_TABLE");
   });
 
+  it("Catalog merchant_id 只在绑定确认后写入；绑定前有商品仍不可报价", () => {
+    const dir = tempDir("kiwi-table-catalog-bind-");
+    const file = path.join(dir, "products.json");
+    writeFileSync(file, JSON.stringify({
+      schema_version: "0.1.2", runtime_owner_id: MERCHANT, source: "merchant_upload",
+      generated_at: new Date().toISOString(), products: [],
+    }));
+    const row = JSON.parse(productTable()).products[0];
+    commitProductTable(file, MERCHANT, {
+      schema_version: "0.1.2", runtime_owner_id: MERCHANT, source: "merchant_upload",
+      generated_at: new Date().toISOString(), products: [row],
+    });
+    const unbound = createFileProductSource({ file, merchantId: MERCHANT });
+    expect(unbound.describeSku(SKU).code).toBe("CATALOG_BINDING_REQUIRED");
+    bindProductTableToCatalog(file, MERCHANT, "catalog-confirmed-merchant");
+    const bound = createFileProductSource({ file, merchantId: MERCHANT });
+    expect(bound.describeSku(SKU)).toEqual({ available: true });
+    const stored = JSON.parse(readFileSync(file, "utf8"));
+    expect(stored.merchant_id).toBe("catalog-confirmed-merchant");
+    expect(stored.runtime_owner_id).toBe(MERCHANT);
+  });
+
   it("表不可读 → 明确错误码（不是空结果）", async () => {
     const dir = tempDir("kiwi-table-missing-");
     const handle = createFileProductSource({
@@ -222,7 +244,7 @@ function writePilotFiles(dataDir: string, options: { validUntil?: string } = {})
 
 function writeConfigFile(artifactDir: string, values: Record<string, unknown>): string {
   const file = path.join(artifactDir, "cloud.config.json");
-  writeFileSync(file, `${JSON.stringify(values, null, 2)}\n`);
+  writeFileSync(file, `${JSON.stringify({ catalog_url: "https://catalog.test", ...values }, null, 2)}\n`);
   return file;
 }
 
@@ -275,6 +297,43 @@ async function sendRfq(base: string, messageId: string) {
 }
 
 describe("集成：配置文件 + 商品表驱动的云端实例", () => {
+  it("空商品部署保持未就绪且明确拒绝报价，不猜 Catalog merchant_id", async () => {
+    const artifactDir = tempDir("kiwi-pilot-empty-artifact-");
+    const dataDir = tempDir("kiwi-pilot-empty-data-");
+    const { profilePath, productsFile } = writePilotFiles(dataDir);
+    writeFileSync(productsFile, `${JSON.stringify({
+      schema_version: "0.1.2",
+      runtime_owner_id: MERCHANT,
+      source: "merchant_upload",
+      generated_at: new Date().toISOString(),
+      products: [],
+    })}\n`);
+    const port = await freePort();
+    writeConfigFile(artifactDir, {
+      public_origin: "https://pilot-runtime.example.app.workbuddy.host",
+      data_dir: dataDir,
+      profile: profilePath,
+      products_file: productsFile,
+      a2a_auth: { mode: "signature" },
+    });
+    const instance = await bootstrapCloudRuntime({ env: { PORT: String(port) }, artifactRoot: artifactDir, log: () => {} });
+    instances.push(instance);
+    const base = `http://127.0.0.1:${port}`;
+    const ready = await fetch(`${base}/readyz`);
+    expect(ready.status).toBe(503);
+    const readyBody = await ready.json() as { checks: Record<string, { code?: string }> };
+    expect(readyBody.checks.products?.code).toBe("PRODUCTS_NOT_CONFIGURED");
+    const { body } = await sendRfq(base, "msg_table_empty");
+    const serialized = JSON.stringify(body);
+    expect(serialized).toContain("暂无可报价商品");
+    expect(serialized).toContain("temporarily_unavailable");
+    expect(serialized).not.toMatch(/amount_minor/);
+    const stored = JSON.parse(readFileSync(productsFile, "utf8"));
+    expect(stored.merchant_id).toBeUndefined();
+    expect(stored.runtime_owner_id).toBe(MERCHANT);
+    expect(existsSync(path.join(dataDir, "merchant-identity.json"))).toBe(true);
+  });
+
   it("配置全部来自 cloud.config.json（仅 PORT 来自环境）：ready 且报价取表内价格", async () => {
     const artifactDir = tempDir("kiwi-pilot-artifact-");
     const dataDir = tempDir("kiwi-pilot-data-");

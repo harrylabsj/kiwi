@@ -11,6 +11,7 @@
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CloudConfigError,
@@ -22,6 +23,7 @@ import { createCloudRouter } from "../src/cloud/http-router.js";
 import { runReadiness } from "../src/cloud/readiness.js";
 
 const servers: Server[] = [];
+const configDirs: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
@@ -33,7 +35,16 @@ afterEach(async () => {
         }),
     ),
   );
+  for (const dir of configDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
+
+function writeConfigForCatalogFlags(flags: { sample?: boolean; allow_insecure_catalog?: boolean }): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "kiwi-cloud-config-test-"));
+  configDirs.push(dir);
+  const file = path.join(dir, "cloud.config.json");
+  writeFileSync(file, JSON.stringify(flags));
+  return file;
+}
 
 function baseEnv(overrides: Record<string, string | undefined> = {}): Record<string, string | undefined> {
   return {
@@ -42,6 +53,7 @@ function baseEnv(overrides: Record<string, string | undefined> = {}): Record<str
     KIWI_CLOUD_DATA_DIR: "/workspace/.kiwi-runtime",
     KIWI_CLOUD_PROFILE: "/workspace/.kiwi-runtime/merchant.yaml",
     KIWI_CLOUD_A2A_AUTH: "signature",
+    KIWI_CATALOG_URL: "https://catalog.test",
     ...overrides,
   };
 }
@@ -120,6 +132,23 @@ describe("云端配置强校验（T013/T014/T015）", () => {
     const missing = baseEnv();
     delete missing.KIWI_CLOUD_A2A_AUTH;
     expect(configError(missing).code).toBe("A2A_AUTH_REQUIRED");
+  });
+
+  it("Catalog 地址必填且 HTTPS；loopback HTTP 仅允许显式测试开关，sample 禁止生产地址", () => {
+    const missing = baseEnv();
+    delete missing.KIWI_CATALOG_URL;
+    expect(configError(missing).code).toBe("CATALOG_URL_REQUIRED");
+    expect(configError(baseEnv({ KIWI_CATALOG_URL: "http://catalog.example" })).code).toBe("CATALOG_URL_INSECURE");
+    expect(configError(baseEnv({ KIWI_CATALOG_URL: "http://127.0.0.1:8123" })).code).toBe("CATALOG_URL_INSECURE");
+    const local = loadCloudConfig(baseEnv({ KIWI_CATALOG_URL: "http://127.0.0.1:8123" }), {
+      artifactRoot: "/workspace",
+      configFile: writeConfigForCatalogFlags({ allow_insecure_catalog: true }),
+    });
+    expect(local.catalogUrl).toBe("http://127.0.0.1:8123");
+    expect(() => loadCloudConfig(baseEnv(), {
+      artifactRoot: "/workspace",
+      configFile: writeConfigForCatalogFlags({ sample: true }),
+    })).toThrow(expect.objectContaining({ code: "SAMPLE_CATALOG_FORBIDDEN" }));
   });
 
   it("bearer 模式要求令牌环境变量存在，signature 模式直接接受", () => {

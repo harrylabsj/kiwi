@@ -154,6 +154,7 @@ async function startInstance(priceMajor: number, floorMajor = 80.0, available = 
           KIWI_CLOUD_PUBLIC_ORIGIN: "https://t018-runtime.example.app.workbuddy.host",
           KIWI_CLOUD_DATA_DIR: dataDir,
           KIWI_CLOUD_PROFILE: profilePath,
+          KIWI_CATALOG_URL: "https://catalog.test",
           KIWI_CLOUD_A2A_AUTH: `bearer:KIWI_T018_TOKEN`,
           KIWI_T018_TOKEN: BEARER,
           KIWI_CLOUD_READINESS_SKU: SKU,

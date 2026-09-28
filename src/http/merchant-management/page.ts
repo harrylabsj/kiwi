@@ -154,6 +154,7 @@ var views = {
     return call("GET", "/runtime/status").then(function (s) {
       var failed = s.readiness && s.readiness.failed_checks || [];
       var html = '<div class="card"><h2>运行状态</h2><table>' +
+        "<tr><th>商家显示名</th><td>" + esc(s.merchant_name || "-") + "</td></tr>" +
         "<tr><th>服务状态</th><td>" + statePill(s.service_state) + "</td></tr>" +
         "<tr><th>部署代次</th><td>" + esc(s.generation) + "</td></tr>" +
         "<tr><th>Runtime</th><td>" + esc(s.runtime_version) + "（管理 API v" + esc(s.api_version) + "）</td></tr>" +
@@ -163,6 +164,12 @@ var views = {
         "<tr><th>能力</th><td>管理页 " + (s.capabilities.management_page ? "✓" : "✗") +
         "；对话工具 " + (s.capabilities.dialog_tools ? "✓" : "未启用") + "</td></tr>" +
         '</table><p class="muted">更新于 ' + esc(s.observed_at) + "</p>";
+      if (s.merchant_name_needs_update) {
+        html += '<p class="muted">请设置商家显示名；该名称会用于 Catalog 公开资料。</p>';
+      }
+      if (failed.indexOf("PRODUCTS_NOT_CONFIGURED") >= 0) {
+        html += '<p class="muted">请先导入商品。商品导入后会自动继续服务检查；当前不会报价或发布名片。</p>';
+      }
       if (s.service_state === "OPERATING") {
         html += '<div class="row"><button class="act danger" onclick="pauseService()">暂停接待</button>' +
           '<span class="muted">暂停后拒新询价；既有会话不受影响。</span></div>';
@@ -188,7 +195,7 @@ var views = {
       }).join("");
       return '<div class="card"><h2>当前商品（' + (p.items || []).length + "）</h2>" +
         (rows ? "<table><tr><th>SKU</th><th>名称</th><th>价格（最小币单位）</th><th>库存</th><th>版本</th></tr>" + rows + "</table>"
-              : '<p class="muted">暂无商品。</p>') + "</div>" +
+              : '<p class="muted">暂无商品，请先导入商品。没有商品时服务不会报价或发布名片。</p>') + "</div>" +
         '<div class="card"><h2>导入商品表（整表替换）</h2>' +
         '<p class="muted">选择商品表 JSON 文件：先校验预览，确认后整批生效（不成功的批次不改动现有商品）。</p>' +
         '<div class="row"><input type="file" id="pfile" accept=".json,application/json">' +

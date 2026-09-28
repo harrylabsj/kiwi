@@ -19,7 +19,7 @@
  * 云端制品冷启动冒烟（M1 A4）：按平台形态启动制品并验证单端口面。
  *
  *   node scripts/smoke-cloud-artifact.mjs [--artifact <dir>] [--json]
- *   node scripts/smoke-cloud-artifact.mjs --deploy-dir <dir>   # 按平台方式预检部署包
+ *   node scripts/smoke-cloud-artifact.mjs --deploy-dir <dir> --sample [--json]
  *
  * `--deploy-dir` 模式最贴近平台：cwd = 部署目录、**除 PORT 外不注入任何环境
  * 变量**（其余配置全部来自部署包内的 cloud.config.json），并额外做一次真实
@@ -50,11 +50,13 @@ function parseArgs(argv) {
   const options = {
     artifact: path.join(REPO_ROOT, "build", "cloud-artifact"),
     deployDir: undefined,
+    sample: false,
     json: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--artifact") options.artifact = path.resolve(argv[++i]);
     else if (argv[i] === "--deploy-dir") options.deployDir = path.resolve(argv[++i]);
+    else if (argv[i] === "--sample") options.sample = true;
     else if (argv[i] === "--json") options.json = true;
     else throw new Error(`未知参数 ${argv[i]}`);
   }
@@ -169,6 +171,7 @@ function readDeployDirFacts(deployDir) {
       : undefined;
   return {
     readinessSku: typeof config.readiness_sku === "string" ? config.readiness_sku : undefined,
+    sample: config.sample === true,
     expectedAmountMinor:
       products?.products?.[0]?.price !== undefined ? Math.round(products.products[0].price * 100) : undefined,
   };
@@ -180,6 +183,9 @@ async function main() {
   const entry = path.join(options.artifact, "app", "cloud", "main.js");
   if (!existsSync(entry)) throw new Error(`制品入口不存在：${entry}`);
   const deployFacts = deployMode ? readDeployDirFacts(options.artifact) : undefined;
+  if (deployMode && deployFacts?.sample !== options.sample) {
+    throw new Error("sample 部署必须显式传 --sample；普通部署不得使用 sample 夹具");
+  }
   const packageManifestPath = path.join(options.artifact, "build-manifest.json");
   const buildManifestPath = existsSync(packageManifestPath)
     ? packageManifestPath
@@ -206,6 +212,7 @@ async function main() {
         KIWI_CLOUD_DATA_DIR: dataDir,
         KIWI_CLOUD_PROFILE: profilePath,
         KIWI_CLOUD_A2A_AUTH: "bearer:SMOKE_A2A_TOKEN",
+        KIWI_CATALOG_URL: "https://catalog.smoke.invalid",
         SMOKE_A2A_TOKEN: "smoke-token-not-a-secret",
         KIWI_CLOUD_READINESS_SKU: TEST_SKU,
         KIWI_COMMERCE_URL: commerce.url,
@@ -348,6 +355,7 @@ async function main() {
   const failed = checks.filter((c) => !c.ok);
   const result = {
     smoke: "cloud-artifact",
+    sample: deployFacts?.sample ?? false,
     artifact: options.artifact,
     artifact_sha256: buildManifest?.artifact_sha256 ?? null,
     source_commit: buildManifest?.source_commit ?? null,
