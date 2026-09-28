@@ -123,3 +123,41 @@ describe("fetchStats", () => {
     expect(capture).toHaveLength(0);
   });
 });
+
+describe("fetchServiceStatus", () => {
+  it("读取服务状态并把请求绑定到当前商家凭据", async () => {
+    const capture: Call[] = [];
+    const expected = {
+      account: { merchant_id: "mkt_1", email_verified: true },
+      onboarding: {
+        status: "awaiting_merchant_confirmation",
+        authorization_url: `${BASE}/portal/connect/enr_1`,
+        expires_at: "2026-09-17T10:10:00.000Z",
+      },
+      card: { published: false, origin: "", verification_level: "discovered" },
+      presence: { state: "unknown", last_seen_at: "" },
+      listings: { used: 0, total: 20, plan: "free" },
+    };
+    const result = await client(stubFetch({ capture, body: { ok: true, ...expected } })).fetchServiceStatus("cmt_merchant_token");
+    expect(capture).toEqual([{
+      url: `${BASE}/v1/accounts/me/service-status`,
+      method: "GET",
+      redirect: "manual",
+      authorization: "Bearer cmt_merchant_token",
+    }]);
+    expect(result).toEqual(expected);
+  });
+
+  it("拒绝非 Catalog 授权 URL 和无效新鲜度状态", async () => {
+    const expected = {
+      account: { merchant_id: "mkt_1", email_verified: true },
+      onboarding: { status: "awaiting_merchant_confirmation", authorization_url: "https://evil.example/x", expires_at: "" },
+      card: { published: false, origin: "", verification_level: "unknown" },
+      presence: { state: "unknown", last_seen_at: "" },
+      listings: { used: 0, total: 20, plan: "free" },
+    };
+    await expect(client(stubFetch({ body: { ok: true, ...expected } })).fetchServiceStatus("cmt_t")).rejects.toThrow(/Catalog page URL/);
+    await expect(client(stubFetch({ body: { ok: true, ...expected, onboarding: { ...expected.onboarding, authorization_url: "", status: "mystery" } } })).fetchServiceStatus("cmt_t"))
+      .rejects.toThrow(/violates its schema/);
+  });
+});

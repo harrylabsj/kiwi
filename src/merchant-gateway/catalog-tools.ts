@@ -36,6 +36,7 @@ const READ_TOOLS: ReadonlySet<string> = new Set([
   "kiwi_catalog_get_merchant_profile",
   "kiwi_catalog_get_merchant_stats",
   "kiwi_catalog_get_publication",
+  "kiwi_catalog_get_service_status",
 ]);
 const WRITE_TOOLS: ReadonlySet<string> = new Set([
   "kiwi_catalog_save_publication_draft",
@@ -186,6 +187,22 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
     string,
     (args: Record<string, unknown>) => Promise<MerchantMcpCallResult>
   > = {
+    kiwi_catalog_get_service_status: async () => {
+      const status = await deps.client.fetchServiceStatus(credential());
+      return ok(
+        {
+          account: status.account,
+          onboarding: status.onboarding,
+          card: status.card,
+          presence: status.presence,
+          listings: status.listings,
+          note:
+            "只有 card.published=true 且 presence.state=fresh 时，才可回答商家「已上线」。" +
+            "授权中的配对码、设备码和 grant 不会由此工具返回。",
+        },
+        maxChars,
+      );
+    },
     kiwi_catalog_get_merchant_profile: async () => {
       const stored = deps.credentials.get(merchantId);
       return ok(
@@ -309,6 +326,14 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
   };
 
   const tools: MerchantMcpToolDefinition[] = [
+    {
+      name: "kiwi_catalog_get_service_status",
+      description:
+        "读取当前商家的开通进度、名片发布、心跳新鲜度和商品名额（只读）。" +
+        "只有 card.published=true 且 presence.state=fresh 时，才可告诉商家「已上线」。" +
+        "待商家确认时只返回 Catalog 授权页 URL 与过期时间，不返回配对码、device_code、grant 或 owner token。",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
     {
       name: "kiwi_catalog_get_merchant_profile",
       description:
