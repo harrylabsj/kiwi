@@ -11,12 +11,12 @@
  * 本文件是**本机故障注入验证**，不代替真实平台/真实制品的实机证据。
  */
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { bootstrapCloudRuntime, CloudStartupError } from "../src/cloud/bootstrap.js";
-import { writeAdminCredentials } from "../src/auth/merchant-sessions.js";
+import { writeAdminCredentials, verifyAdminPassword } from "../src/auth/merchant-sessions.js";
 import { CloudConfigError } from "../src/cloud/config.js";
 
 const dirs: string[] = [];
@@ -170,6 +170,59 @@ function cloudEnv(options: {
 }
 
 describe("云端单实例启动（T013/T014/T015/T016）", () => {
+  it("首次导入 admin-bootstrap.json 并确保该文件不可经 HTTP 读取", async () => {
+    const commerce = await startFakeCommerce(TEST_SKU);
+    const dataDir = tempDir("kiwi-cloud-admin-bootstrap-");
+    const profilePath = writeCloudProfile(dataDir, commerce, { name: "Harbor Tools" });
+    trackEnv("KIWI_COMMERCE_URL", commerce);
+    const artifactRoot = path.join(dataDir, "artifact");
+    mkdirSync(artifactRoot, { recursive: true });
+    const staged = path.join(artifactRoot, "admin-bootstrap.json");
+    const stagedDir = path.join(dataDir, "staged");
+    const importedPassword = "bootstrap-password-for-test";
+    const credentials = writeAdminCredentials(stagedDir, {
+      principalId: "merchant-agent:merchant-001", merchantId: MERCHANT_ID, password: importedPassword,
+    });
+    writeFileSync(staged, `${JSON.stringify(credentials)}\n`, { mode: 0o600 });
+    chmodSync(staged, 0o600);
+    const logLines: string[] = [];
+    const port = await freePort();
+    const instance = await bootstrapCloudRuntime({
+      env: cloudEnv({ port, dataDir, profilePath, sku: TEST_SKU }), artifactRoot,
+      log: (line) => logLines.push(line),
+    });
+    try {
+      const imported = JSON.parse(readFileSync(path.join(dataDir, "admin-credentials.json"), "utf8"));
+      expect(verifyAdminPassword(importedPassword, imported.password_hash)).toBe(true);
+      expect(existsSync(staged)).toBe(false);
+      const bootstrapFetch = await fetch(`http://127.0.0.1:${port}/admin-bootstrap.json`);
+      expect(bootstrapFetch.status).toBe(404);
+      const login = await fetch(`http://127.0.0.1:${port}/admin/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ password: importedPassword }).toString(), redirect: "manual" });
+      expect(login.status).toBe(303);
+      expect(logLines.join(" ")).toContain("已导入一次性管理员引导凭据");
+    } finally { await instance.close(); }
+  });
+
+  it("状态目录已有 admin-credentials.json 时忽略并删除引导文件", async () => {
+    const commerce = await startFakeCommerce(TEST_SKU);
+    const dataDir = tempDir("kiwi-cloud-admin-existing-");
+    const profilePath = writeCloudProfile(dataDir, commerce, { name: "Harbor Tools" });
+    trackEnv("KIWI_COMMERCE_URL", commerce);
+    const original = writeAdminCredentials(dataDir, { principalId: "merchant-agent:merchant-001", merchantId: MERCHANT_ID, password: "existing-password-for-test" });
+    const artifactRoot = path.join(dataDir, "artifact");
+    mkdirSync(artifactRoot, { recursive: true });
+    writeFileSync(path.join(artifactRoot, "admin-bootstrap.json"), JSON.stringify({ ...original, password_hash: "scrypt$16384$ignored$ignored" }), { mode: 0o600 });
+    const logLines: string[] = [];
+    const port = await freePort();
+    const instance = await bootstrapCloudRuntime({ env: cloudEnv({ port, dataDir, profilePath, sku: TEST_SKU }), artifactRoot, log: (line) => logLines.push(line) });
+    try {
+      const saved = JSON.parse(readFileSync(path.join(dataDir, "admin-credentials.json"), "utf8"));
+      expect(saved.password_hash).toBe(original.password_hash);
+      expect(existsSync(path.join(artifactRoot, "admin-bootstrap.json"))).toBe(false);
+      expect(logLines.join(" ")).toContain("已忽略管理员引导文件：状态目录已有凭据");
+    } finally { await instance.close(); }
+  });
+
   it("单端口同时提供 Card / 商家面 / 探针，平台保留路径不被接管", async () => {
     const commerce = await startFakeCommerce(TEST_SKU);
     const dataDir = tempDir("kiwi-cloud-ok-");

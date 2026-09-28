@@ -188,8 +188,11 @@ describe("权限：开通是 owner 专属", () => {
 
     const got = await call(base, "GET", "/merchant/api/onboarding", { cookie: auth.cookie });
     expect(got.status).toBe(200);
-    const plan = got.json["plan"] as { currentStep: string };
+    const plan = got.json["plan"] as { currentStep: string; steps: Array<{ id: string; ask: string }> };
     expect(plan.currentStep).toBe("login-binding");
+    expect(plan.steps.some((step) => step.id === "catalog-confirm")).toBe(true);
+    expect(plan.steps.find((step) => step.id === "service-check")?.ask).toContain("配对码");
+    expect(plan.steps.find((step) => step.id === "service-check")?.ask).toContain("Catalog 授权页");
   });
 });
 

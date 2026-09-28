@@ -180,7 +180,10 @@ async function main() {
   const entry = path.join(options.artifact, "app", "cloud", "main.js");
   if (!existsSync(entry)) throw new Error(`制品入口不存在：${entry}`);
   const deployFacts = deployMode ? readDeployDirFacts(options.artifact) : undefined;
-  const buildManifestPath = path.join(options.artifact, "artifact-manifest.json");
+  const packageManifestPath = path.join(options.artifact, "build-manifest.json");
+  const buildManifestPath = existsSync(packageManifestPath)
+    ? packageManifestPath
+    : path.join(options.artifact, "artifact-manifest.json");
   const buildManifest = existsSync(buildManifestPath)
     ? JSON.parse(readFileSync(buildManifestPath, "utf8"))
     : undefined;

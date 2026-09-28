@@ -4,6 +4,17 @@
   "version_policy": "Versions remain independent by product. The portfolio release bundle binds each available source commit, package version, candidate artifact hash, and external approval state.",
   "products": [
     {
+      "id": "kiwi-merchant-cloud",
+      "name": "Kiwi Merchant Cloud",
+      "version": "0.11.0",
+      "version_source": { "type": "json", "scope": "central", "path": "packages/merchant-cloud/package.json", "field": "version" },
+      "channel": "npm",
+      "release_controller": "portfolio-release",
+      "artifact": "release/npm/kiwi-merchant-cloud/*.tgz",
+      "state": "candidate",
+      "gates": ["cloud artifact smoke", "local npm pack integrity", "protected kiwi-release environment", "npm trusted publishing"]
+    },
+    {
       "id": "kiwi",
       "name": "Kiwi runtime",
       "version": "0.11.0",

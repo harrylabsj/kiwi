@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const EXPECTED_IDS = [
-  "kiwi", "kiwi-catalog", "shopping-cli", "kiwi-dsh-plugin", "hermes-plugin-kiwi",
+  "kiwi-merchant-cloud", "kiwi", "kiwi-catalog", "shopping-cli", "kiwi-dsh-plugin", "hermes-plugin-kiwi",
   "kiwi-catalog-admin", "workbuddy-procurement-expert", "workbuddy-merchant-app",
   "workbuddy-merchant-connector", "workbuddy-kiwi-sourcing-connector",
 ];
@@ -46,7 +46,7 @@ function sourceRepository(product) {
  */
 export async function buildPortfolioReleaseIndex({ catalog, releaseDir }) {
   assert.equal(catalog.schema, "kiwi.portfolio.products.v1", "unsupported product catalog schema");
-  assert.equal(catalog.products.length, EXPECTED_IDS.length, "portfolio must enumerate all ten products");
+  assert.equal(catalog.products.length, EXPECTED_IDS.length, "portfolio must enumerate all eleven products");
   assert.deepEqual(catalog.products.map((product) => product.id).sort(), [...EXPECTED_IDS].sort());
   const allFiles = await listFiles(releaseDir);
   const products = [];

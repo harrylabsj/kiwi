@@ -32,7 +32,7 @@
 
 import { createServer, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -171,6 +171,48 @@ function assertDataDirNotClobbered(dataDir: string): void {
   }
 }
 
+/** 首次部署时把随部署目录下发的一次性管理员凭据导入权威状态目录。 */
+function importAdminBootstrap(artifactRoot: string, dataDir: string, log: (line: string) => void): void {
+  const source = path.join(artifactRoot, "admin-bootstrap.json");
+  if (!existsSync(source)) return;
+  const target = path.join(dataDir, "admin-credentials.json");
+  if (existsSync(target)) {
+    log("[kiwi-cloud] 已忽略管理员引导文件：状态目录已有凭据\n");
+    rmSync(source, { force: true });
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(source, "utf8"));
+  } catch {
+    throw new CloudStartupError("ADMIN_BOOTSTRAP_INVALID", "管理员引导文件不是合法 JSON");
+  }
+  if (
+    parsed === null || typeof parsed !== "object" || Array.isArray(parsed) ||
+    typeof (parsed as Record<string, unknown>).principal_id !== "string" ||
+    typeof (parsed as Record<string, unknown>).merchant_id !== "string" ||
+    typeof (parsed as Record<string, unknown>).password_hash !== "string" ||
+    !/^scrypt\$16384\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$/.test(String((parsed as Record<string, unknown>).password_hash)) ||
+    typeof (parsed as Record<string, unknown>).created_at !== "string"
+  ) {
+    throw new CloudStartupError("ADMIN_BOOTSTRAP_INVALID", "管理员引导文件格式无效");
+  }
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  try {
+    writeFileSync(target, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+    chmodSync(target, 0o600);
+  } catch (error) {
+    if ((error as { code?: string }).code === "EEXIST") {
+      log("[kiwi-cloud] 已忽略管理员引导文件：状态目录已有凭据\n");
+      rmSync(source, { force: true });
+      return;
+    }
+    throw new CloudStartupError("ADMIN_BOOTSTRAP_IMPORT_FAILED", "无法导入管理员引导凭据");
+  }
+  rmSync(source, { force: true });
+  log("[kiwi-cloud] 已导入一次性管理员引导凭据\n");
+}
+
 function loadOrCreateFeedCursorKey(dataDir: string): Buffer {
   const file = path.join(dataDir, "feed-cursor.key");
   const read = (): Buffer => {
@@ -260,6 +302,7 @@ export async function bootstrapCloudRuntime(
   // 生产禁演示价回退（设计 §10.2）：演示价会让"商品源失联"看起来像有报价。
   assertNoDemoPriceFallback(profile);
   assertDataDirNotClobbered(config.dataDir);
+  importAdminBootstrap(config.artifactRoot, config.dataDir, log);
   const serviceState = MutableServiceState.fromDeclared(options.env?.KIWI_CLOUD_SERVICE_STATE);
 
   // 2) 商家面装配（审批/策略/商品/RFQ/工具面）；认证走 OAuth（issuer = 公网 origin）。
