@@ -198,8 +198,9 @@ var views = {
         (rows ? "<table><tr><th>SKU</th><th>名称</th><th>价格（最小币单位）</th><th>库存</th><th>版本</th></tr>" + rows + "</table>"
               : '<p class="muted">暂无商品。</p>') + "</div>" +
         '<div class="card"><h2>导入商品表（整表替换）</h2>' +
-        '<p class="muted">选择商品表 JSON 文件：先校验预览，确认后整批生效（不成功的批次不改动现有商品）。</p>' +
-        '<div class="row"><input type="file" id="pfile" accept=".json,application/json">' +
+        '<p class="muted">支持 CSV、Excel（.xlsx）与商品表 JSON：先转换校验、预览增/改/留/删，确认后整批生效（不成功的批次不改动现有商品）。</p>' +
+        '<p class="muted">模板：<a href="/merchant/api/v1/products/import-template?format=csv" download="kiwi-product-import-template.csv">下载 CSV 模板</a> · <a href="/merchant/api/v1/products/import-template?format=xlsx" download="kiwi-product-import-template.xlsx">下载 Excel 模板</a>（中文表头与示例行；中英文常见列名会自动识别）。</p>' +
+        '<div class="row"><input type="file" id="pfile" accept=".json,.csv,.xlsx">' +
         '<button class="act" onclick="previewImport()">校验预览</button></div><div id="presult"></div></div>';
     });
   },
@@ -436,8 +437,9 @@ function draftPolicyForm() {
       $("polformresult").innerHTML = '<div class="card" style="margin-top:10px;background:#fbfcfd">' +
         "本次涉及字段：<b>" + esc((draft.applied_keys || []).join("、")) + "</b>；草稿 <b>" + esc(draft.draft_id) + "</b>" +
         '<pre class="digest">' + esc(draft.digest) + "</pre>" +
-        '<button class="act primary" onclick="commitPolicy(\\'' + esc(draft.draft_id) + '\\',\\'' + esc(draft.digest) + '\\')">确认提交生效</button>' +
+        '<button class="act primary" id="pfd-commit" data-draft-id="' + esc(draft.draft_id) + '" data-digest="' + esc(draft.digest) + '">确认提交生效</button>' +
         '<p class="muted">提交后由服务端按策略 schema 校验并原子生效（与高级模式同一确认流程）。</p></div>';
+      bindPolicyCommit("pfd-commit");
     })
     .catch(function (e) { bar("表单草稿未保存：" + e.message, true); });
 }
@@ -474,28 +476,97 @@ function decide(candidateId, approve) {
     .catch(function (e) { bar("操作失败：" + e.message, true); });
 }
 var pendingImport = null;
+var parsedTable = null;
 function previewImport() {
   var f = $("pfile").files[0];
-  if (!f) { bar("请先选择商品表 JSON 文件", true); return; }
+  if (!f) { bar("请先选择 CSV / Excel / JSON 商品表文件", true); return; }
+  var name = String(f.name || "").toLowerCase();
+  if (name.endsWith(".csv") || f.type === "text/csv") { parseTabularFile(f, "csv"); return; }
+  if (name.endsWith(".xlsx")) { parseTabularFile(f, "xlsx"); return; }
   var reader = new FileReader();
   reader.onload = function () {
     var table;
     try { table = JSON.parse(reader.result); }
     catch (e) { bar("文件不是合法 JSON", true); return; }
-    call("POST", "/products/import-drafts", { table: table })
-      .then(function (draft) {
-        pendingImport = draft;
-        var pv = draft.preview;
-        $("presult").innerHTML = '<div class="card" style="margin-top:10px;background:#fbfcfd">' +
-          "<div>草稿 <b>" + esc(draft.draft_id) + "</b>：新增 " + pv.added + "，更新 " + pv.updated +
-          "，不变 " + pv.unchanged + "，<b style=\\"color:#b3261e\\">移除 " + pv.removed + "</b>（共 " + pv.rows_total + " 行）</div>" +
-          '<pre class="digest">' + esc(draft.digest) + "</pre>" +
-          (pv.removed > 0 ? '<p class="muted" style="color:#b3261e">注意：整表替换会移除上表未包含的 SKU。</p>' : "") +
-          '<button class="act primary" onclick="commitImport()">确认导入（整批生效）</button></div>';
-      })
-      .catch(function (e) { bar("校验未通过：" + e.message, true); });
+    submitImportTable(table);
   };
   reader.readAsText(f);
+}
+function parseTabularFile(f, format) {
+  var done = function (content) {
+    fetch(API + "/products/import-parse?format=" + format, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "content-type": format === "csv" ? "text/csv" : "application/octet-stream",
+        "x-csrf-token": CSRF,
+      },
+      body: content,
+    }).then(function (res) {
+      if (res.status === 401) { showLogin(); throw new Error("需要登录"); }
+      if (!res.ok) return apiError(res).then(function (error) { throw error; });
+      return res.json();
+    }).then(function (r) {
+      if (!r.ok) { renderParseErrors(r); return; }
+      renderParseReport(r);
+    }).catch(function (e) { bar("表格解析未通过：" + e.message, true); });
+  };
+  if (format === "csv") {
+    var tr = new FileReader();
+    tr.onload = function () { done(tr.result); };
+    tr.readAsText(f);
+  } else {
+    var ar = new FileReader();
+    ar.onload = function () { done(ar.result); };
+    ar.readAsArrayBuffer(f);
+  }
+}
+function renderParseErrors(r) {
+  var errors = r.errors || [];
+  var rows = errors.slice(0, 50).map(function (e) {
+    return "<tr><td>" + esc(e.row == null ? "-" : e.row) + "</td><td>" +
+      esc(e.column || e.field || "-") + "</td><td>" + esc(e.message) + "</td></tr>";
+  }).join("");
+  var more = errors.length > 50 ? '<p class="muted">仅显示前 50 条，共 ' + errors.length + " 条。</p>" : "";
+  $("presult").innerHTML = '<div class="card" style="margin-top:10px;background:#fbfcfd">' +
+    '<h2 style="color:#b3261e">表格未通过检查，未导入任何数据</h2>' +
+    (rows ? "<table><tr><th>行</th><th>列/字段</th><th>问题</th></tr>" + rows + "</table>" : "") + more +
+    '<p class="muted">请修正后重新上传；可先下载模板核对列名与格式。疑似底价/成本/进价列请整列删除——它们属于报价私密策略，不能进入公开商品表。</p></div>';
+}
+function renderParseReport(r) {
+  var rep = r.report || {};
+  parsedTable = r.table;
+  var unrec = (rep.unrecognized_columns || []).map(esc).join("、");
+  var defaulted = (rep.defaulted_fields || []).join("、");
+  $("presult").innerHTML = '<div class="card" style="margin-top:10px;background:#fbfcfd">' +
+    "<div>表格读取成功：识别 " + esc(rep.rows || 0) + " 行商品（" +
+    esc(rep.format === "xlsx" ? "Excel" : "CSV") + "）。</div>" +
+    (unrec ? '<p class="muted" style="color:#9a6b0f">未识别的列（内容不会导入）：' + unrec +
+      "。若其中有需要导入的信息，请改用模板列名后重新上传。</p>" : "") +
+    (defaulted ? '<p class="muted">未提供、按默认值处理的列：' + esc(defaulted) +
+      "（状态默认「在售」；更新时间默认取导入时刻）。</p>" : "") +
+    '<p class="muted">确认列映射无误后继续；下一步做整表严格校验与替换预览。' +
+    '<b style="color:#b3261e">整表替换：表里没有的 SKU 提交后会被移除下架。</b></p>' +
+    '<button class="act primary" id="pcontinue">已确认列映射，继续校验预览</button></div>';
+  var btn = $("pcontinue");
+  if (btn) btn.addEventListener("click", function () {
+    if (!parsedTable) { bar("请先上传表格", true); return; }
+    submitImportTable(parsedTable);
+  });
+}
+function submitImportTable(table) {
+  call("POST", "/products/import-drafts", { table: table })
+    .then(function (draft) {
+      pendingImport = draft;
+      var pv = draft.preview;
+      $("presult").innerHTML = '<div class="card" style="margin-top:10px;background:#fbfcfd">' +
+        "<div>草稿 <b>" + esc(draft.draft_id) + "</b>：新增 " + pv.added + "，更新 " + pv.updated +
+        "，不变 " + pv.unchanged + "，<b style=\\"color:#b3261e\\">移除 " + pv.removed + "</b>（共 " + pv.rows_total + " 行）</div>" +
+        '<pre class="digest">' + esc(draft.digest) + "</pre>" +
+        (pv.removed > 0 ? '<p class="muted" style="color:#b3261e">注意：整表替换会移除上表未包含的 SKU。</p>' : "") +
+        '<button class="act primary" onclick="commitImport()">确认导入（整批生效）</button></div>';
+    })
+    .catch(function (e) { bar("校验未通过：" + e.message, true); });
 }
 function commitImport() {
   if (!pendingImport) { bar("请先校验预览", true); return; }
@@ -516,9 +587,17 @@ function draftPolicy() {
     .then(function (draft) {
       $("polresult").innerHTML = '<div class="card" style="margin-top:10px;background:#fbfcfd">' +
         "草稿 <b>" + esc(draft.draft_id) + "</b>（摘要 <pre class=\\"digest\\">" + esc(draft.digest) + "</pre>）" +
-        '<button class="act primary" onclick="commitPolicy(\\'' + esc(draft.draft_id) + '\\',\\'' + esc(draft.digest) + '\\')">提交生效</button></div>';
+        '<button class="act primary" id="pd-commit" data-draft-id="' + esc(draft.draft_id) + '" data-digest="' + esc(draft.digest) + '">提交生效</button></div>';
+      bindPolicyCommit("pd-commit");
     })
     .catch(function (e) { bar("草稿未保存：" + e.message, true); });
+}
+function bindPolicyCommit(btnId) {
+  var btn = $(btnId);
+  if (!btn) return;
+  btn.addEventListener("click", function () {
+    commitPolicy(btn.getAttribute("data-draft-id"), btn.getAttribute("data-digest"));
+  });
 }
 function commitPolicy(draftId, digest) {
   call("POST", "/policy/drafts/" + encodeURIComponent(draftId) + "/commit", {
