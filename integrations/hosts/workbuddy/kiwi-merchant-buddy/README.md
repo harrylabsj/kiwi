@@ -38,6 +38,22 @@
 
 提交审核前用预览链接在 WorkBuddy 客户端打开预览态，逐项过一遍各模式与全部胶囊；另外手动验证市场中的三个技能。`kiwi-cloud-deploy` 的预览要点：①确认会话里是否存在发布工具 `workbuddy_sites_deploy`（V1 实测该工具存在、无 inspect/activate/deploy）——不存在时应按方案 B 原样输出 `references/fallback-prompt.md` 提示词（占位已发布后可用 release.json 回填值替换）；②核对 `references/release.json` 三个值与技能正文一致（0.12.0 / sha256 / sha512）；③一次性口令只展示一次；④真实发布实测未做，预览里不得宣称一键上云已验证。`kiwi-product-import` 的预览要点：①贴一段含底价列的商品表格，应先确认列映射并剔除底价列、不编造缺失价格；②生成的 CSV 列名应与工作台「商品与导入」页模板一致（`references/columns.md`）；③应提醒整表替换语义并引导商家本人在工作台上传确认。
 
+## 平台导入步骤（WP18：1.7.0 草稿 → 平台格式配置包）
+
+`platform/build-platform-pack.mjs` 以 `buddy-app.config.json`（1.7.0）为唯一内容源，生成平台「导入配置」用的 `platform/out/industry-config.json` 与 `platform/out/icons/*.svg`（模式 4 + 胶囊 20，共 24 个）。生成器内置全部平台规则校验（模式 3–5、每模式 ≥5 胶囊、名称 ≤5 汉字/英文 ≤30、每胶囊 4–10 条模板、无 bindTools/bindSkills、禁词等），不通过即失败；改动配置后必须重新生成（`tests/workbuddy-platform-pack.test.ts` 会校验落盘产物与构建结果一致）。
+
+```sh
+node integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/build-platform-pack.mjs
+```
+
+导入与核对步骤：
+
+1. **导入配置**：平台配置页「导入配置」→ 选 `platform/out/industry-config.json`。`templateId` 留空（导入时平台按应用 ID `cb_jU2kgRjXVRjE2gmSjgyH` 校验，不一致会报 idMismatch）；`version` 先按 `1.0.0`，导入失败按报错调整。
+2. **逐个上传图标**：`mode-*.svg` 4 个 + `cap-*.svg` 20 个。文件名需与配置内 `iconFileName` 一致；若平台支持 zip 导入（内含 `icons/`），可改为打包导入，以平台实际行为为准。
+3. **选择内置连接器**：Kiwi 商家运营连接器 `oc_0053ad85c92a6587`（已写入 `jointAuth.connectorName`，界面核对即可）；不得引用已撤回的 `oc_c86216e2a36110bf`。
+4. **核对**：4 模式 × 5 胶囊 × 4 模板；`header.title` 留空的在界面填品牌名/标语「Kiwi商家 / 让采购专家找到你」（两字段的分隔方式平台未公开）；技能 `kiwi-cloud-deploy`、`kiwi-product-import` 尚无平台资产 ID，导入包中模式 skills 为空，审核通过后回填脚本 `SKILL_ASSET_IDS` 并重新生成导入。
+5. **生成预览**：预览并逐项检查（要点见「模块 5：预览调试」）。
+
 ## 发布流程
 
 创建应用 → 填写基础信息 → 创建审核通过 → 分模块配置 → 预览调试 → 提交审核 → 发布上线。首次基础信息需通过创建审核进入草稿态；已发布应用的任何配置变更需重新提交审核。本仓库不自动提交平台。
