@@ -59,7 +59,7 @@
     "@simplewebauthn/server": "14.0.2",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
-    "yaml": "2.9.0"
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@a2a-js/sdk": "^1.0.1",
