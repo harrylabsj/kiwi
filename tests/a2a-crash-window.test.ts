@@ -46,10 +46,15 @@ interface Stack {
   calls: () => number;
 }
 
-async function startStack(): Promise<Stack> {
+async function startStack(options: { now?: () => string } = {}): Promise<Stack> {
   const dir = mkdtempSync(path.join(tmpdir(), "kiwi-crash-"));
   const { handler, calls } = countingHandler();
-  const idempotency = new IdempotencyStore({ dir: path.join(dir, "idem"), now: () => new Date().toISOString() });
+  // 可注入时钟（store 原生支持）：时间敏感用例用可控时钟消除真实时钟的
+  // 毫秒级竞态（同一毫秒内两次采样 diff=0），缺省仍用真实时钟。
+  const idempotency = new IdempotencyStore({
+    dir: path.join(dir, "idem"),
+    now: options.now ?? (() => new Date().toISOString()),
+  });
   const server = new A2AServer({
     card: () => ({
       name: "Crash window merchant",
@@ -129,9 +134,14 @@ describe("T022：写入途中崩溃的恢复语义", () => {
   });
 
   it("陈旧标记（超过窗口）不再阻断，按新消息处理", async () => {
-    const stack = await startStack();
+    // 注入可控时钟：markInFlight 与 readInFlight 在同一毫秒内采样时
+    // diff=0，"staleAfterMs: 0 立即陈旧"的断言在真实时钟下是毫秒级竞态。
+    // 用注入时钟确定性推进 1ms，与机器速度无关。
+    let nowMs = Date.parse("2026-09-29T00:00:00.000Z");
+    const stack = await startStack({ now: () => new Date(nowMs).toISOString() });
     const env = finalizeEnvelope({ ...validEnvelopeFields(), message_id: MSG });
     stack.idempotency.markInFlight({ sender_identity: SENDER, message_id: MSG, digest: env.digest });
+    nowMs += 1; // 确定性推进 1ms → Date.parse(now) - Date.parse(started_at) = 1 > 0
     // 陈旧窗口设为 0 → 标记立即视为陈旧（模拟很久以前的残留）。
     expect(stack.idempotency.readInFlight(SENDER, MSG, { staleAfterMs: 0 })).toBeNull();
     expect(stack.idempotency.readInFlight(SENDER, MSG)).not.toBeNull();
