@@ -289,7 +289,15 @@ describe("WeixinChannel 集成", () => {
         timings: { schedulerTickMs: 0, negotiateTickMs: 0 },
       });
       const exitPromise = channel.run();
-      await waitFor(() => mock.sentMessages.length > 0);
+      // 等待顺序保证的事件：第二次 getupdates 携带新游标发出，说明主循环
+      // 已完成「处理消息 → 写穿游标 → syncBuf 推进」。若只等 sentMessages>0
+      // （发送发生在写游标之前），测试线程可能在 channel 完成本轮前调 stop()，
+      // 主循环因 stopped 提前 return 跳过写游标，stop 冲掉的是旧游标（''）。
+      await waitFor(() =>
+        mock.requests.some(
+          (r) => r.url.includes("getupdates") && JSON.parse(r.body).get_updates_buf === "cursor-123",
+        ),
+      );
       await channel.stop();
       await exitPromise;
       const state = JSON.parse(readFileSync(files.sync, "utf-8")) as { get_updates_buf: string };
