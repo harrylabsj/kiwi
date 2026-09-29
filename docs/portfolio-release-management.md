@@ -6,19 +6,21 @@
 
 | 产品 ID | 当前版本来源 | 发布渠道 | 当前交付状态 | 主要门槛 |
 | --- | --- | --- | --- | --- |
-| `kiwi-merchant-cloud` | `packages/merchant-cloud/package.json` | npm，由受保护的 Portfolio workflow 发布 | 首发候选 0.12.0；首次发布需维护者手动创建 npm package，再配置 Trusted Publisher | cloud artifact/package 校验、签名、首发与 OIDC 配置 |
-| `kiwi` | `package.json` | npm，由受保护的 Portfolio workflow 发布 | 候选 0.12.0；registry 最新为 0.11.0 | `npm run verify`、签名与 `kiwi-release` 环境审批 |
-| `kiwi-catalog` | `kiwi-catalog/pyproject.toml` | PyPI，由 Portfolio workflow 发布 | 候选 0.5.2；registry 最新为 0.5.1 | 锁定测试、契约锁、签名与环境审批 |
-| `shopping-cli` | `shopping-cli/pyproject.toml` | PyPI，由 Portfolio workflow 发布 | 源码 3.2.5；发布状态由每次 registry 验证确定 | 锁定测试、契约锁、签名与环境审批 |
-| `kiwi-dsh-plugin` | `integrations/plugins/kiwi-dsh-plugin/package.json` | npm，由 Portfolio workflow 发布 | 0.1.0，central npm 发布通道 | 插件校验、签名与环境审批 |
+| `kiwi-merchant-cloud` | `packages/merchant-cloud/package.json` | npm，由受保护的 Portfolio workflow 发布 | 0.12.0 已由维护者手动首发（2026-09-29）；后续 OIDC 发布路径尚待实际验证 | cloud artifact/package 校验、签名、首发与 OIDC 配置 |
+| `kiwi` | `package.json` | npm，由受保护的 Portfolio workflow 发布 | 0.12.0 已发布（2026-09-29）；registry 最新为 0.12.0 | `npm run verify`、签名与 `kiwi-release` 环境审批 |
+| `kiwi-catalog` | `kiwi-catalog/pyproject.toml` | PyPI，由 Portfolio workflow 发布 | 0.5.2 已发布（2026-09-29）；registry 最新为 0.5.2 | 锁定测试、契约锁、签名与环境审批 |
+| `shopping-cli` | `shopping-cli/pyproject.toml` | PyPI，由 Portfolio workflow 发布 | 源码 3.2.6；已发布（2026-09-29），registry 最新为 3.2.6 | 锁定测试、契约锁、签名与环境审批 |
+| `kiwi-dsh-plugin` | `integrations/plugins/kiwi-dsh-plugin/package.json` | npm，由 Portfolio workflow 发布 | 0.1.2，已走 OIDC 发布（2026-09-29） | 插件校验、签名与环境审批 |
 | `hermes-plugin-kiwi` | Hermes 仓库 `plugin.json` | GitHub 插件仓库 + Hermes 上游目录 | 仓库 tag v1.2.1；目录 pin 单独核对 | 固定仓库 SHA、插件校验、新会话冒烟、上游目录 PR |
 | `kiwi-catalog-admin` | 私有仓库 `pyproject.toml` | 私有 Git tag，不发 PyPI | v0.2.0 已打 tag；生产部署待完成 | Catalog 0.5.x 兼容、Ruff/mypy/pytest、私有仓库 CI |
 | `workbuddy-procurement-expert` | 专家包 `.codebuddy-plugin/plugin.json` | WorkBuddy 专家审核 | 本地候选 1.1.0；平台最近记录 v1.0.0 | 打包校验、WorkBuddy 预览和平台审核 |
-| `workbuddy-merchant-app` | `buddy-app.config.json` | WorkBuddy App Builder | 本地草稿 1.5.0；没有平台应用 ID | 应用级授权/回调、预览和平台审核 |
+| `workbuddy-merchant-app` | `buddy-app.config.json` | WorkBuddy App Builder | 本地草稿 1.8.0；没有平台应用 ID | 应用级授权/回调、预览和平台审核 |
 | `workbuddy-merchant-connector` | `connector-meta.json` | WorkBuddy 连接器审核 | v1.2.0 七工具送审候选包，尚未上传 | 专用测试账号、OAuth/MCP 预览和平台审核 |
 | `workbuddy-kiwi-sourcing-connector` | WorkBuddy 平台现有资产 | WorkBuddy 连接器更新 | v1.0.0，资产 `oc_bd73f860e3e2b5d3` 已发布；本地没有源包，runtime pin 仍记为 Kiwi 0.8.0 | 先恢复可维护源码，验证升级兼容后再申请平台更新 |
 
 WorkBuddy 的状态依据本地平台核验记录，构建候选不代表已上传、审核通过或发布。Buddy 配置 JSON 是人工配置草稿，不是 WorkBuddy 官方导出文件。`kiwi-rfq-workbench` 是另一个尚未列入这十种产品的测试/工作台连接器，不随这份基线自动发布。
+
+2026-09-29 组合发布落地：npm/PyPI 五个通道（Kiwi 0.12.0、merchant-cloud 0.12.0、DSH 插件 0.1.2、Catalog 0.5.2、shopping-cli 3.2.6）均已与各自 registry 对齐。其中 DSH 插件跳过 0.1.1 —— 该版本因 `package.json` 缺 `repository` 字段未通过 npm 的 sigstore provenance 校验（`422 Unprocessable Entity - Error verifying sigstore provenance bundle`），registry 未接受，故以 0.1.2 重新发布。新包走 OIDC 前，`package.json` 必须声明与 provenance 源仓库一致的 `repository.url`。
 
 ## 统一制品
 
