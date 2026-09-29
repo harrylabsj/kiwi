@@ -5,11 +5,13 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -174,13 +176,31 @@ function readRecord(file: string): ClaimRecord | undefined {
   }
 }
 
+/**
+ * 独占写：读者要么看不到文件，要么看到完整内容。
+ *
+ * 实现为「同目录临时文件写穿 + fsync + linkSync 原子发布」：
+ * link(2) 创建硬链接是原子操作，目标已存在时抛 EEXIST——等价于
+ * open(wx) 的「仅当不存在」语义，但发布时内容必然已完整落盘。
+ * 直接用 open(wx) 写最终名会留下「文件已创建、内容未写完」的撕裂窗口，
+ * 并发 acquire 的对方读到空文件后会把一条**仍在写入的** claim 误判为
+ * 可接管对象，发出第二个 fencing token（单 owner 语义被破坏）。
+ * 崩溃残留只会留下无人引用的 tmp 文件（只按 claim-N.json 名识别，
+ * 不参与判定），过期清理可安全忽略。
+ */
 function writeExclusive(file: string, content: string): void {
-  const fd = openSync(file, "wx", 0o600);
+  const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
+  const fd = openSync(tmp, "wx", 0o600);
   try {
     writeSync(fd, content);
     fsyncSync(fd);
   } finally {
     closeSync(fd);
+  }
+  try {
+    linkSync(tmp, file);
+  } finally {
+    rmSync(tmp, { force: true });
   }
 }
 
