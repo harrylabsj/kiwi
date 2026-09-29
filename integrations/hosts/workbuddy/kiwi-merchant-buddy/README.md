@@ -18,15 +18,15 @@
 ### 模块 2：首页配置
 
 - 首页标题（Slogan）、欢迎语：取 `home.slogan` / `home.welcome`。
-- 工作模式：按 `buddy-app.config.json` 配 4 个模式——①注册开通 ②日常运营 ③曝光优化 ④客服准备，各配 System Prompt 与 `kiwi_catalog_*` 工具；「注册开通」模式另挂技能 `kiwi-cloud-deploy`（1.7.0 起，云端接待一键部署），「日常运营」模式另挂技能 `kiwi-product-import`（1.7.0 内 WP12 新增，商品导入表整理）。
-  - **没有实例读写模式**（商品查看 / 询价处理 / 库存与变更草稿）：按[「网关不碰实例」](../../../../docs/merchant-buddy/merchant-connector-deployment.md)原则（部署说明 §0）刻意去掉——网关不持有实例地址与凭据、不代理实例工具；商家实例独立部署、直接与买家做 A2A。`kiwi-cloud-deploy` 不经网关：它在商家自己的 Buddy 会话里用平台发布工具（V1 实测：`workbuddy_sites_deploy`/`workbuddy_sites_unpublish`，无 inspect/activate/deploy）把接待运行时部署到**商家名下**的云端应用。
-- 场景胶囊：按配置文件中的胶囊逐项验证（注册开通 7 个、日常运营 6 个、曝光优化 6 个、客服准备 5 个）。注册开通模式的「一键开通云端接待」「升级接待服务」（1.7.0，替换了与「上线检查」重复的「开通进度」）依赖技能资产审核与真实发布实测，未就绪前预览会按方案 B 输出提示词。
+- 工作模式：按 `buddy-app.config.json` 配 4 个模式——①注册开通 ②商品报价 ③运营分析（含客服准备）④审批磋商（1.8.0，东哥四工作场景），各配 System Prompt 与 `kiwi_catalog_*` 工具；「注册开通」模式另挂技能 `kiwi-cloud-deploy`（云端接待一键部署），「商品报价」模式另挂技能 `kiwi-product-import`（商品导入表整理），「运营分析」模式另挂技能 `kiwi-merchant-cs-prep`。
+  - **首发不直连实例**（运营明细 / 洽谈过程 / 待审批项都在商家实例工作台）：按[「网关不碰实例」](../../../../docs/merchant-buddy/merchant-connector-deployment.md)原则（部署说明 §0）——网关不持有实例地址与凭据、不代理实例工具；「运营分析」「审批磋商」的系统提示词写明首发边界：引导商家打开自己实例的工作台（运营报告 / 旁观洽谈 / 审批与规则表单），帮解读与起草，不编造数据；Buddy 内直连实例为第二版（WP16）。`kiwi-cloud-deploy` 不经网关：它在商家自己的 Buddy 会话里用平台发布工具（V1 实测：`workbuddy_sites_deploy`/`workbuddy_sites_unpublish`，无 inspect/activate/deploy）把接待运行时部署到**商家名下**的云端应用。
+- 场景胶囊：按配置文件中的胶囊逐项验证（注册开通 6 个、商品报价 6 个、运营分析 8 个、审批磋商 6 个；1.7.0 的 24 个胶囊按 WP25 对照表复用/合并/新增为 26 个）。注册开通模式的「一键上云」「升级接待」（1.7.0 起为「一键开通云端接待」/「升级接待服务」，1.8.0 改短名）依赖技能资产审核与真实发布实测，未就绪前预览会按方案 B 输出提示词。
 - 内置连接器：使用 `kiwi-merchant-gateway-connector` 的 OAuth MCP，只提供目录工具。`kiwi_merchant_*` 实例工具**本就不该出现**，不要为此排障。
 
 ### 模块 3：市场配置
 
-- 连接器：待 v1.2.0 审核通过后，使用平台新生成的资产 ID 配置 Buddy 内置连接器，并核对其只暴露预期的 7 个目录工具。不得引用已撤回/删除的历史资产 ID。技能三个：`skills/kiwi-merchant-cs-prep/` 已作为 `os_dc3a52407574eb77` 提交审核，发布后再加入应用市场，它只准备客服 FAQ/回复草稿，不自动接待客户；`skills/kiwi-cloud-deploy/`（1.7.0 新增）云端接待一键部署，**需单独提交技能资产审核**；执行路径已按 V1 实测改用 `workbuddy_sites_deploy`（首次发布取地址 → prepare → 同一应用再发布 → 自检）、发布参数已回填（WP17，绑定 0.11.0 合并线产物），剩余前置为**真实发布实测**（费用/弹窗需东哥确认）与 npm 正式发布后复核 integrity，见配置 `$pending.skills`；`skills/kiwi-product-import/`（1.7.0 内 WP12 新增）商品导入表整理（列映射确认 → 生成模板一致 CSV + 问题清单 → 引导工作台上传），**需单独提交技能资产审核**（不依赖平台工具，审核前可退回普通任务执行），见配置 `$pending.skills`。「日常运营」模式「整理商品」胶囊以 `bindSkills` 表达技能绑定；平台若不支持胶囊级技能绑定，以模式 skills 为准。
-- 专家：不配置；专家页精选场景也不配置（需要关联专家/专家团）。
+- 连接器：待 v1.2.0 审核通过后，使用平台新生成的资产 ID 配置 Buddy 内置连接器，并核对其只暴露预期的 7 个目录工具。不得引用已撤回/删除的历史资产 ID。技能三个：`skills/kiwi-merchant-cs-prep/` 已作为 `os_dc3a52407574eb77` 提交审核，发布后再加入应用市场，它只准备客服 FAQ/回复草稿，不自动接待客户；`skills/kiwi-cloud-deploy/`（1.7.0 新增）云端接待一键部署，**需单独提交技能资产审核**；执行路径已按 V1 实测改用 `workbuddy_sites_deploy`（首次发布取地址 → prepare → 同一应用再发布 → 自检）、发布参数已回填（WP17，绑定 0.11.0 合并线产物），剩余前置为**真实发布实测**（费用/弹窗需东哥确认）与 npm 正式发布后复核 integrity，见配置 `$pending.skills`；`skills/kiwi-product-import/`（1.7.0 内 WP12 新增）商品导入表整理（列映射确认 → 生成模板一致 CSV + 问题清单 → 引导工作台上传），**需单独提交技能资产审核**（不依赖平台工具，审核前可退回普通任务执行），见配置 `$pending.skills`。「商品报价」模式「整理商品」胶囊以 `bindSkills` 表达技能绑定；平台若不支持胶囊级技能绑定，以模式 skills 为准。
+- 专家：应用后台不直接配置；市场侧 5 个专用专家 + 专家团 + 4 个精选场景按 `platform/market-draft/` 草稿与生成器常量统一维护（WP19/WP25）。
 
 ### 模块 4：其他配置
 
@@ -38,12 +38,12 @@
 
 提交审核前用预览链接在 WorkBuddy 客户端打开预览态，逐项过一遍各模式与全部胶囊；另外手动验证市场中的三个技能。`kiwi-cloud-deploy` 的预览要点：①确认会话里是否存在发布工具 `workbuddy_sites_deploy`（V1 实测该工具存在、无 inspect/activate/deploy）——不存在时应按方案 B 原样输出 `references/fallback-prompt.md` 提示词（占位已发布后可用 release.json 回填值替换）；②核对 `references/release.json` 三个值与技能正文一致（0.12.0 / sha256 / sha512）；③一次性口令只展示一次；④真实发布实测未做，预览里不得宣称一键上云已验证。`kiwi-product-import` 的预览要点：①贴一段含底价列的商品表格，应先确认列映射并剔除底价列、不编造缺失价格；②生成的 CSV 列名应与工作台「商品与导入」页模板一致（`references/columns.md`）；③应提醒整表替换语义并引导商家本人在工作台上传确认。
 
-## 平台导入步骤（WP18/WP19：1.7.0 草稿 → 平台格式配置包 + 市场配置）
+## 平台导入步骤（WP18/WP19/WP25：1.8.0 草稿 → 平台格式配置包 + 市场配置）
 
-`platform/build-platform-pack.mjs` 以 `buddy-app.config.json`（1.7.0）为唯一内容源，生成：
+`platform/build-platform-pack.mjs` 以 `buddy-app.config.json`（1.8.0）为唯一内容源，生成：
 
-- `platform/out/industry-config.json`：平台「导入配置」用（模式 4 + 胶囊 20 = 24 个图标引用）；
-- `platform/out/icons/*.svg`：24 个图标（`mode-*.svg` 4 + `cap-*.svg` 20）；
+- `platform/out/industry-config.json`：平台「导入配置」用（模式 4 + 胶囊 26 = 30 个图标引用）；
+- `platform/out/icons/*.svg`：30 个图标（`mode-*.svg` 4 + `cap-*.svg` 26）；
 - `platform/out/market.json` + `platform/out/platform-pack.zip`：市场配置（5 专用专家 + 1 专家团 + 4 精选场景）与 zip 导入验证包（`<应用ID>/industry-config.json` + `icons/` + `market.json`，验证 zip 导入是否随包带图标）；
 - `platform/market-draft/`：市场配置草稿（中英双语 + README，占位 id 与待回填清单）。
 
@@ -56,7 +56,7 @@ node integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/build-platform-pa
 导入与核对步骤：
 
 1. **导入配置**：平台配置页「导入配置」→ 选 `platform/out/industry-config.json`（或直接试 `platform/out/platform-pack.zip` 验证图标随包）。`templateId` 留空（导入时平台按应用 ID `cb_jU2kgRjXVRjE2gmSjgyH` 校验，不一致会报 idMismatch）；`version` 先按 `1.0.0`，导入失败按报错调整。
-2. **上传图标**：若 zip 导入未带图标，则逐个上传 `mode-*.svg` 4 个 + `cap-*.svg` 20 个，文件名需与配置内 `iconFileName` 一致。
+2. **上传图标**：若 zip 导入未带图标，则逐个上传 `mode-*.svg` 4 个 + `cap-*.svg` 26 个，文件名需与配置内 `iconFileName` 一致。
 3. **选择内置连接器**：Kiwi 商家运营连接器 `oc_0053ad85c92a6587`（已写入 `jointAuth.connectorName`，界面核对即可）；不得引用已撤回的 `oc_c86216e2a36110bf`。
 4. **核对首页标题**：`header.title` 已填「Kiwi商家·让采购专家找到你」（分隔格式集中在生成器 `HOME_TITLE_SEPARATOR` 一处；平台精确格式未确认，导入实测后只改这一常量）。
 5. **市场配置**：按 `platform/market-draft/` 草稿创建 5 个专用专家 → 专家团「Kiwi开店团队」→ 4 个精选场景 → 专家分类（详见 `platform/market-draft/README.md`）；专家/团队/场景 id 在平台创建后回填生成器（`MARKET_EXPERTS` 等）再重新生成导入。

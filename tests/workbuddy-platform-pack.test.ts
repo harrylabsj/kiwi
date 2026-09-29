@@ -1,8 +1,9 @@
 /**
- * WP18/WP19：平台格式配置包（industry-config.json + SVG 图标 + 市场配置 + zip）的生成与校验测试。
+ * WP18/WP19/WP25：平台格式配置包（industry-config.json + SVG 图标 + 市场配置 + zip）的生成与校验测试。
  * 生成器 integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/build-platform-pack.mjs
- * 内置全部平台规则校验（不通过即抛错）；本测试额外独立断言关键规则、与 1.7.0
- * 草稿的一致性、SVG 合法性、首页标题与市场配置草稿规则、sites_deploy 新口径，
+ * 内置全部平台规则校验（不通过即抛错）；本测试额外独立断言关键规则、与 1.8.0
+ * 草稿的一致性、SVG 合法性、首页标题与市场配置草稿规则、sites_deploy 新口径、
+ * 1.8.0 四场景重排（模式/胶囊结构、技能归属、③④首发边界口径），
  * 以及落盘产物与即时构建结果一致（防止改配置后忘重新生成）。
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -83,7 +84,7 @@ describe("WP18 平台配置包：平台规则", () => {
   it("工作模式 3–5 个，每个 ≥5 个胶囊，模式 systemPrompt 必填", () => {
     expect(modes.length).toBeGreaterThanOrEqual(3);
     expect(modes.length).toBeLessThanOrEqual(5);
-    expect(modes.map((m) => m.modeId)).toEqual(["onboarding", "operations", "visibility", "cs-prep"]);
+    expect(modes.map((m) => m.modeId)).toEqual(["onboarding", "catalog", "insights", "negotiation"]);
     for (const mode of modes) {
       expect(mode.scenes.length, `${mode.modeId} 胶囊数`).toBeGreaterThanOrEqual(5);
       expect(mode.systemPromptAppend.trim()).not.toBe("");
@@ -105,7 +106,7 @@ describe("WP18 平台配置包：平台规则", () => {
     }
     const templateIds = allScenes.flatMap((s) => s.templates.map((t) => t.id));
     expect(new Set(templateIds).size).toBe(templateIds.length);
-    expect(templateIds).toHaveLength(80); // 20 胶囊 × 4 条
+    expect(templateIds).toHaveLength(105); // 26 胶囊（25 × 4 + 今日概况 5 条，承接被合并的「冷热对比」）
   });
 
   it("模式与胶囊名称 ≤5 个汉字、英文名 ≤30；图标文件名都已备好", () => {
@@ -149,7 +150,7 @@ describe("WP18 平台配置包：平台规则", () => {
 });
 
 describe("WP19 首页标题", () => {
-  it("中文两字段合计 ≤15 字，英文合计 ≤8 词，值取自 1.7.0 home.title", () => {
+  it("中文两字段合计 ≤15 字，英文合计 ≤8 词，值取自源配置 home.title", () => {
     const { brandName, slogan } = config.home.title;
     const zhLength = [...`${brandName.zh}${slogan.zh}`].length;
     expect(zhLength, "中文两字段合计字数").toBeLessThanOrEqual(15);
@@ -170,7 +171,7 @@ describe("WP19 sites_deploy 新口径（WP17 后）", () => {
     expect(cloud.systemPromptAppend).toContain("方案 B");
   });
 
-  it("注册开通模式系统提示词仍为 WP17 后的 sites_deploy 流程（逐字沿用 1.7.0）", () => {
+  it("注册开通模式系统提示词仍为 WP17 后的 sites_deploy 流程（逐字沿用源配置）", () => {
     const onboarding = modes.find((m) => m.modeId === "onboarding")!;
     expect(onboarding.systemPromptAppend).toContain("workbuddy_sites_deploy");
     expect(onboarding.systemPromptAppend).toBe(
@@ -239,7 +240,9 @@ describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）",
     const byId = new Map(marketConfig.experts.map((e) => [e.id, e]));
     expect(byId.get("exp-cs-coach")!.skillIds).toEqual(["os_dc3a52407574eb77"]);
     expect(byId.get("exp-onboarding-advisor")!.skillIds).toEqual(["pending:kiwi-cloud-deploy"]);
-    expect(byId.get("exp-operations-assistant")!.skillIds).toEqual(["pending:kiwi-product-import"]);
+    expect(byId.get("exp-catalog-assistant")!.skillIds).toEqual(["pending:kiwi-product-import"]);
+    expect(byId.get("exp-insights-analyst")!.skillIds).toEqual([]);
+    expect(byId.get("exp-negotiation-officer")!.skillIds).toEqual([]);
     for (const assetId of marketConfig.experts.flatMap((e) => e.skillIds)) {
       expect(/^os_[0-9a-f]{8,}$/.test(assetId) || assetId.startsWith("pending:"), assetId).toBe(true);
     }
@@ -269,9 +272,9 @@ describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）",
     }
     expect(marketConfig.featuredScenarios.map((s) => s.name)).toEqual([
       "第一次开店",
-      "上传商品",
-      "看懂运营报告",
-      "准备接待采购",
+      "上架商品和报价",
+      "看懂运营数据",
+      "处理审批与洽谈",
     ]);
   });
 
@@ -295,10 +298,19 @@ describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）",
     for (const expert of marketConfig.experts) {
       expect(expert.sceneIds.sort()).toEqual(byExpert.get(expert.id)!.sort());
     }
-    // 纯数据胶囊归报表分析师，其余胶囊归模式主责专家。
+    // 数据类胶囊归运营分析师，其余胶囊归模式主责专家。
     const byId = new Map(marketConfig.experts.map((e) => [e.id, e]));
-    expect(byId.get("exp-reports-analyst")!.sceneIds.sort()).toEqual(["cap-followers", "cap-views"]);
-    expect(byId.get("exp-onboarding-advisor")!.sceneIds).toHaveLength(5);
+    expect(byId.get("exp-insights-analyst")!.sceneIds.sort()).toEqual([
+      "cap-followers",
+      "cap-hot-questions",
+      "cap-inquiries",
+      "cap-overview",
+      "cap-reports",
+    ]);
+    expect(byId.get("exp-onboarding-advisor")!.sceneIds).toHaveLength(6);
+    expect(byId.get("exp-catalog-assistant")!.sceneIds).toHaveLength(6);
+    expect(byId.get("exp-cs-coach")!.sceneIds).toHaveLength(3);
+    expect(byId.get("exp-negotiation-officer")!.sceneIds).toHaveLength(6);
   });
 
   it("所有专家/专家团/场景 id 均为显式占位（exp-/team-/scn- 前缀）", () => {
@@ -315,8 +327,70 @@ describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）",
   });
 });
 
-describe("WP18 平台配置包：与 1.7.0 草稿一致性", () => {
-  it("模式 systemPromptAppend 逐字沿用 1.7.0 系统提示词，模式名沿用原中文名", () => {
+describe("WP25 四场景重排（1.8.0）", () => {
+  it("四个模式与东哥场景一一对应，胶囊数 6/6/8/6，每模式 ≥5 且全局唯一归属", () => {
+    expect(modes.map((m) => [m.modeId, m.title])).toEqual([
+      ["onboarding", "注册开通"],
+      ["catalog", "商品报价"],
+      ["insights", "运营分析"],
+      ["negotiation", "审批磋商"],
+    ]);
+    expect(modes.map((m) => m.scenes.length)).toEqual([6, 6, 8, 6]);
+    const sceneIds = allScenes.map((s) => s.id);
+    expect(new Set(sceneIds).size).toBe(sceneIds.length);
+  });
+
+  it("三个技能的模式归属（平台包 skills 列表）：cloud-deploy→注册开通、product-import→商品报价、cs-prep→运营分析", () => {
+    const byKey = new Map(config.home.modes.map((m) => [m.key, m.skills ?? []]));
+    expect(byKey.get("onboarding")).toEqual(["kiwi-cloud-deploy"]);
+    expect(byKey.get("catalog")).toEqual(["kiwi-product-import"]);
+    expect(byKey.get("insights")).toEqual(["kiwi-merchant-cs-prep"]);
+    expect(byKey.get("negotiation")).toEqual([]);
+  });
+
+  it("③④（运营分析/审批磋商）模式系统提示词写明首发边界：工作台 + 网关不碰实例 + 不编造数据", () => {
+    for (const key of ["insights", "negotiation"]) {
+      const mode = modes.find((m) => m.modeId === key)!;
+      expect(mode.systemPromptAppend, `${key} 缺「首发边界」`).toContain("首发边界");
+      expect(mode.systemPromptAppend, `${key} 缺「工作台」引导`).toContain("工作台");
+      expect(mode.systemPromptAppend, `${key} 缺「网关不碰实例」`).toContain("网关不碰实例");
+      expect(mode.systemPromptAppend, `${key} 缺「不编造」口径`).toContain("不编造");
+      expect(mode.systemPromptAppend, `${key} 缺「不直接读取实例数据」`).toContain("不直接读取实例数据");
+    }
+  });
+
+  it("运营/洽谈数据类胶囊的 systemPromptAppend 均含工作台引导与不编造口径", () => {
+    const boundaryScenes = [
+      "cap-overview",
+      "cap-inquiries",
+      "cap-hot-questions",
+      "cap-reports",
+      "cap-approvals",
+      "cap-observe",
+      "cap-discount",
+      "cap-agreement",
+      "cap-rule-tuning",
+    ];
+    for (const id of boundaryScenes) {
+      const scene = allScenes.find((s) => s.id === id)!;
+      expect(scene.systemPromptAppend, `${id} 缺「工作台」引导`).toContain("工作台");
+      expect(scene.systemPromptAppend, `${id} 缺「不编造」口径`).toContain("不编造");
+    }
+  });
+
+  it("1.7.0 被合并/移除的胶囊能力不丢失（模板中仍可触达）", () => {
+    const allText = allScenes
+      .flatMap((s) => s.templates.map((t) => `${t.title}\n${t.prompt}`))
+      .join("\n");
+    expect(allText).toContain("已有账号"); // 已有账号 → 并入「注册账号」
+    expect(allText).toContain("腾出名额"); // 腾出名额 → 并入「商品名额」
+    expect(allText).toContain("哪条资料看的人最多"); // 冷热对比 → 并入「今日概况」
+    expect(allText).toContain("这条回复能直接对外用吗"); // 回复检查 → 并入「接待话术」
+  });
+});
+
+describe("WP18/WP25 平台配置包：与 1.8.0 草稿一致性", () => {
+  it("模式 systemPromptAppend 逐字沿用 1.8.0 系统提示词，模式名沿用原中文名", () => {
     for (const mode of modes) {
       const source = config.home.modes.find((m) => m.key === mode.modeId);
       expect(source).toBeTruthy();
@@ -325,7 +399,7 @@ describe("WP18 平台配置包：与 1.7.0 草稿一致性", () => {
     }
   });
 
-  it("1.7.0 的每个胶囊都被恰好一个平台胶囊覆盖（映射表 sourceCapsules 完备且不重复）", () => {
+  it("1.8.0 的每个胶囊都被恰好一个平台胶囊覆盖（映射表 sourceCapsules 完备且不重复）", () => {
     const sourceLabels = config.home.modes.flatMap((m) => m.capsules.map((c) => c.label));
     const covered: string[] = [];
     for (const pack of MODE_PACKS) {
@@ -342,7 +416,7 @@ describe("WP18 平台配置包：与 1.7.0 草稿一致性", () => {
     expect(covered.sort()).toEqual([...sourceLabels].sort()); // 一个不漏
   });
 
-  it("胶囊 systemPromptAppend 中的工具/技能指引不超出 1.7.0 该模式的 tools/skills", () => {
+  it("胶囊 systemPromptAppend 中的工具/技能指引不超出 1.8.0 该模式的 tools/skills", () => {
     const toolRe = /\b(kiwi_[a-z0-9_]+)\b/g;
     const skillRe = /\b(kiwi-(?:cloud-deploy|product-import|merchant-cs-prep))\b/g;
     for (const mode of modes) {
@@ -360,7 +434,7 @@ describe("WP18 平台配置包：与 1.7.0 草稿一致性", () => {
     }
   });
 
-  it("输入框占位符、授权文案、连接器与 1.7.0 一致；连接器为在用资产 ID", () => {
+  it("输入框占位符、授权文案、连接器与源配置一致；连接器为在用资产 ID", () => {
     expect(industryConfig.ui.chatInput.placeholder).toBe(config.misc.输入框占位符.zh);
     expect(industryConfig.authConfig).toEqual({
       mcpOnly: true,
@@ -374,28 +448,29 @@ describe("WP18 平台配置包：与 1.7.0 草稿一致性", () => {
 
   it("技能挂载：cs-prep 有平台资产 ID；其余两个技能缺 ID 时省略并给出警告", () => {
     const byMode = new Map(modes.map((m) => [m.modeId, m.skills]));
-    expect(byMode.get("cs-prep")).toEqual([{ id: "os_dc3a52407574eb77" }]);
+    expect(byMode.get("insights")).toEqual([{ id: "os_dc3a52407574eb77" }]);
     expect(byMode.get("onboarding")).toEqual([]);
-    expect(byMode.get("operations")).toEqual([]);
+    expect(byMode.get("catalog")).toEqual([]);
+    expect(byMode.get("negotiation")).toEqual([]);
     expect(warnings.join("\n")).toContain("kiwi-cloud-deploy");
     expect(warnings.join("\n")).toContain("kiwi-product-import");
   });
 
-  it("默认模式为注册开通（1.7.0 首个模式）", () => {
+  it("默认模式为注册开通（1.8.0 首个模式）", () => {
     expect(homeItem.config.modes.defaultSelected).toBe("onboarding");
     expect(modes[0]!.modeId).toBe("onboarding");
   });
 });
 
 describe("WP18 SVG 图标", () => {
-  it("图标字典与 JSON 引用一一对应（4 模式 + 20 胶囊 = 24 个，无多余）", () => {
+  it("图标字典与 JSON 引用一一对应（4 模式 + 26 胶囊 = 30 个，无多余）", () => {
     const referenced = new Set<string>([
       ...modes.map((m) => m.iconFileName),
       ...allScenes.map((s) => s.iconFileName),
     ]);
-    expect(referenced.size).toBe(24);
+    expect(referenced.size).toBe(30);
     expect(new Set(Object.keys(icons))).toEqual(referenced);
-    expect(Object.keys(ICONS)).toHaveLength(24);
+    expect(Object.keys(ICONS)).toHaveLength(30);
   });
 
   it("每个 SVG：48×48 viewBox、可解析、无文字/脚本/外部引用、<4KB", () => {
