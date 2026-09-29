@@ -1,6 +1,10 @@
 {
   "name": "@harrylabsj/kiwi-dsh-plugin",
-  "version": "0.1.1",
+  "version": "0.1.2",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harrylabsj/kiwi.git"
+  },
   "description": "Kiwi Buyer plugin for DeepSeek Harness — kiwi-buyer-mcp as an MCP plugin + kiwi-buyer skill. Install: dsh plugin --profile web add @harrylabsj/kiwi-dsh-plugin",
   "type": "module",
   "main": "lib/index.js",
