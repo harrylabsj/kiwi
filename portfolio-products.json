@@ -41,7 +41,7 @@
     {
       "id": "shopping-cli",
       "name": "Shopping CLI",
-      "version": "3.2.5",
+      "version": "3.2.6",
       "version_source": { "type": "toml", "scope": "consumer", "path": "shopping-cli/pyproject.toml", "field": "project.version" },
       "channel": "PyPI",
       "release_controller": "portfolio-release",
@@ -52,7 +52,7 @@
     {
       "id": "kiwi-dsh-plugin",
       "name": "DeepSeek Harness plugin",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "version_source": { "type": "json", "scope": "central", "path": "integrations/plugins/kiwi-dsh-plugin/package.json", "field": "version" },
       "channel": "npm",
       "release_controller": "portfolio-release",
