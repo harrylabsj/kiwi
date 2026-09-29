@@ -1642,7 +1642,9 @@ function validateSvg(name, svg) {
   // 标签配对粗检（全部子标签要求自闭合或与闭合标签匹配；属性区贪婪匹配会吞掉
   // 自闭合斜杠，故以属性区是否以 "/" 结尾判定自闭合）。
   const stack = [];
-  const tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:"[^"]*"|'[^']*'|[^>])*)>/g;
+  // 属性区三个分支互斥（引号分支吃掉引号，兜底不含引号），避免 CodeQL 报的
+  // 指数级回溯（ReDoS）；对合法 SVG 的匹配行为不变。
+  const tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:"[^"]*"|'[^']*'|[^"'>])*)>/g;
   for (const m of svg.matchAll(tagRe)) {
     const closing = m[1] === "/";
     const tag = m[2];
