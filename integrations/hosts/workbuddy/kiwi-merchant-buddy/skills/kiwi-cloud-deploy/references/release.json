@@ -1,7 +1,7 @@
 {
-  "$note": "现有参数是 0.11.0 本地候选快照，未在 npm registry 发布，不可用于正式部署。@harrylabsj/kiwi-merchant-cloud@0.12.0 发布并经 registry 校验后，运行 scripts/backfill-merchant-cloud-release.mjs：比对 registry dist.integrity 与下载包完整性，读取包内 build-manifest.json 的 artifact_sha256，再回填并提交本文件。",
+  "$note": "回填自 npm registry 的正式发布物：@harrylabsj/kiwi-merchant-cloud@0.12.0；运行本脚本时已逐项核对 registry dist.integrity 与下载 tarball integrity，并读取包内 build-manifest.json 的 artifact_sha256。",
   "npm_package": "@harrylabsj/kiwi-merchant-cloud",
-  "package_version": "0.11.0",
-  "aggregate_digest": "sha256:7dd1b825e3a71bf59a8171cefdb651009d16cf89d9bd3f290d4e5382d91f654d",
-  "npm_integrity": "sha512-L3RnP4/m0k5NjKvZvkYrqUxEHvP7tS1rDoZbIjR/HB5dJNAqW3jGyMUDstK+X0S6kHBojdbmSJ6XEG1XwfUQYg=="
+  "package_version": "0.12.0",
+  "aggregate_digest": "sha256:6d4371eab98399dcde7407c4982de3a54aa9854d3a189c02a246afb36e598dc1",
+  "npm_integrity": "sha512-g+yCQT/rbh59js65inz4O4rSMdK+KWmiwXYZez/YPTW4w+nICHHXHRXHML5lFX+/tdyax1kL/ZeThZUr1T4y7w=="
 }
