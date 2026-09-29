@@ -484,7 +484,7 @@ describe("WP18 SVG 图标", () => {
       }
       // 标签配对：非自闭合标签入栈，闭合标签必须匹配。
       const stack: string[] = [];
-      for (const m of svg.matchAll(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:"[^"]*"|'[^']*'|[^>])*)>/g)) {
+      for (const m of svg.matchAll(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:"[^"]*"|'[^']*'|[^"'>])*)>/g)) {
         if (m[1] === "/") {
           expect(stack.pop(), `${name} 多余的闭合标签 </${m[2]}>`).toBe(m[2]);
         } else if (!/\/\s*$/.test(m[3]!)) {
