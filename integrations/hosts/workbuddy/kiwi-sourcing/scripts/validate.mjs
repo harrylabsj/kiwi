@@ -76,11 +76,17 @@ const args = Array.isArray(server.args) ? server.args : [];
 const packageArg = args.find(
   (arg) => typeof arg === "string" && arg.startsWith("@harrylabsj/kiwi@"),
 );
+// 1.0.1（在审版）= 13 工具 + 跟随 npm latest：--prefer-online 让启动时检查包元数据
+// 新鲜度，避免每次新增工具都要重新送审。两种形态都接受，固定 pin 的变体留给后续版本：
+//   a) @harrylabsj/kiwi@latest + --prefer-online
+//   b) @harrylabsj/kiwi@<明确 semver>（不带 --prefer-online）
+const isLatest = packageArg === "@harrylabsj/kiwi@latest";
+const isPinned = /^@harrylabsj\/kiwi@\d+\.\d+\.\d+$/.test(packageArg ?? "");
+check(isLatest || isPinned, "Kiwi npm 包必须是 @latest 或明确 semver");
 check(
-  /^@harrylabsj\/kiwi@\d+\.\d+\.\d+$/.test(packageArg ?? ""),
-  "Kiwi npm 包必须固定到明确 semver",
+  !isLatest || args.includes("--prefer-online"),
+  "使用 @latest 时必须带 --prefer-online（强制检查 npm 元数据）",
 );
-check(!args.some((arg) => String(arg).includes("latest")), "MCP args 不得使用 latest");
 const sequence = args.join(" ");
 for (const expected of [
   "mcp serve",
@@ -117,10 +123,14 @@ const expectedTools = [
   "kiwi_handoff",
   "kiwi_approve",
   "kiwi_reject",
+  "kiwi_follow_merchant",
+  "kiwi_unfollow_merchant",
+  "kiwi_list_follows",
+  "kiwi_get_follow_updates",
 ];
 check(
   JSON.stringify(allowedTools) === JSON.stringify(expectedTools),
-  "allowed-tools 必须精确列出 9 个 Kiwi 工具",
+  "allowed-tools 必须精确列出 13 个 Kiwi 工具",
 );
 for (const tool of expectedTools)
   check(skill.includes(`\`${tool}\``), `SKILL.md 正文未说明 ${tool}`);

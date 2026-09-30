@@ -5,7 +5,7 @@ display_name_en: Kiwi Sourcing & Negotiation
 description: Source products, request quotes, compare offers, and negotiate non-binding terms with suppliers.
 description_zh: 查找供应商、跨商家询价、比价并协商非绑定采购条款。
 description_en: Source products, request quotes, compare offers, and negotiate non-binding supplier terms.
-allowed-tools: kiwi_search, kiwi_request_quotes, kiwi_get_task, kiwi_negotiate, kiwi_accept_agreement, kiwi_get_agreement, kiwi_handoff, kiwi_approve, kiwi_reject
+allowed-tools: kiwi_search, kiwi_request_quotes, kiwi_get_task, kiwi_negotiate, kiwi_accept_agreement, kiwi_get_agreement, kiwi_handoff, kiwi_approve, kiwi_reject, kiwi_follow_merchant, kiwi_unfollow_merchant, kiwi_list_follows, kiwi_get_follow_updates
 version: 1.0.1
 author: HarryLabs
 user-invocable: true
@@ -43,6 +43,10 @@ user-invocable: true
 | `kiwi_handoff`          | 生成 checkout、PO 或联系入口 | 不等于完成下单或支付                |
 | `kiwi_approve`          | 批准待审批 action            | 只有用户明确确认后调用              |
 | `kiwi_reject`           | 拒绝待审批 action            | 用户拒绝或条款不清时调用            |
+| `kiwi_follow_merchant`  | 按买家明确要求关注供应商      | 搜索、浏览或询价不代表同意关注       |
+| `kiwi_unfollow_merchant`| 取消关注供应商                | 仅在买家明确要求时调用               |
+| `kiwi_list_follows`     | 列出当前关注的供应商          | 只读；需要目录登录态                 |
+| `kiwi_get_follow_updates`| 查看关注商家的公开动态       | 只响应买家主动询问；拉取式，无推送   |
 
 ## 必须向用户呈现的信息
 
