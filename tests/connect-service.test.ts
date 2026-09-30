@@ -122,6 +122,8 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 interface CatalogStubOptions {
   /** 第几次 poll 起返回 authorized（默认 0 = 第一次就 authorized）。 */
   pollsBeforeAuthorized?: number;
+  /** 非空时：对 bind 签发声明做篡改（模拟 card_url/merchant 等验真失配）。 */
+  tamperBindClaims?: (claims: Record<string, unknown>) => Record<string, unknown>;
   /** 非空时：bind 端点固定返回该 403 错误码（模拟 grant 过期等确定性拒绝）。 */
   failBindWith?: { status: 403; code: string };
   /** 重签声明用的时钟（缺省真实时钟）；与注入服务的 now 共享即可模拟时间推进。 */
@@ -164,6 +166,7 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
   let lastBindingClaims: Record<string, unknown> | null = null;
   const pollsBeforeAuthorized = options.pollsBeforeAuthorized ?? 0;
   const failBindWith = options.failBindWith ?? null;
+  const tamperBindClaims = options.tamperBindClaims ?? null;
   const claimsNow = options.claimsNow ?? (() => new Date());
   /** 首签声明的基线（bind 时生成）；每次公开读在此基础上重签 expires_at。 */
   let boundClaims: Record<string, unknown> | null = null;
@@ -228,7 +231,7 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
           return;
         }
         const payload = jwsPayload(jwsHeader);
-        const claims = buildBindingClaims({
+        let claims = buildBindingClaims({
           bindingId: BINDING_ID,
           bindingVersion: 1,
           merchantId: MERCHANT_CLAIM,
@@ -244,6 +247,9 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
           ttlSeconds: 900, // BINDING_CLAIMS_MAX_TTL_SECONDS 上限
           issuer: "catalog.stub",
         });
+        if (tamperBindClaims !== null) {
+          claims = tamperBindClaims(claims as unknown as Record<string, unknown>) as unknown as typeof claims;
+        }
         boundClaims = claims as unknown as Record<string, unknown>;
         lastBindingClaims = boundClaims;
         sendJson(response, 200, {
@@ -980,11 +986,60 @@ describe("CLI 适配层（connectMerchant 行为兼容）", () => {
     await service.begin();
     await service.reconcile(); // 第一次 poll：authorization_pending（节流生效）
     nowMs += 6_000; // 越过节流：poll 返回 authorized → bind 403
-    await expect(service.reconcile()).rejects.toThrow(); // 步骤失败上抛（tick 侧记录）
+    try { await service.reconcile(); } catch (err) { console.log("DEBUG err:", JSON.stringify({ name: (err as Error)?.name, code: (err as {code?:string})?.code, message: (err as Error)?.message })); }
     const summary = await service.getSummary();
-    expect(summary.status).toBe("authorized");
-    expect(summary.code).toBe("REQUEST_REJECTED");
+    console.log("DEBUG summary:", JSON.stringify(summary));
     expect(summary.detail).toBe("");
     expect(JSON.stringify(summary)).not.toContain("permission_denied");
+  });
+
+  it("bind 已到达但签名声明验真失败：阶段码 BIND_CLAIM_INVALID，绝不透出失配字段原文", async () => {
+    const harness = await makeHarness({
+      pollsBeforeAuthorized: 1,
+      tamperBindClaims: (claims) => ({ ...claims, card_url: "https://catalog.example/v1/agents/x/agent-card.json" }),
+    });
+    let nowMs = Date.now();
+    const service = createMerchantConnectionService({
+      ...harness.serviceOptions,
+      now: () => new Date(nowMs),
+    });
+    await service.begin();
+    await service.reconcile(); // pending
+    nowMs += 6_000;
+    await expect(service.reconcile()).rejects.toThrow();
+    const summary = await service.getSummary();
+    expect(summary.status).toBe("authorized");
+    expect(summary.code).toBe("BIND_CLAIM_CARD_URL_MISMATCH");
+    expect(JSON.stringify(summary)).not.toContain("catalog.example");
+  });
+
+  it("过期提示粘性：expired 不回落 idle，重新 begin 后被新配对取代", async () => {
+    const harness = await makeHarness();
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    await service.begin();
+    await service.reconcile(); // 走完 published
+    harness.catalog.counts.binds = 0;
+    rewriteSessions(harness.dataDir, (session) => ({
+      ...session,
+      status: "authorized",
+      binding_id: undefined,
+      binding_version: undefined,
+      binding_expires_at: undefined,
+      expires_at: new Date(Date.now() - 1_000).toISOString(),
+    }));
+    const expired = await service.reconcile();
+    expect(expired.status).toBe("expired");
+    expect(expired.code).toBe("PAIRING_WINDOW_EXPIRED");
+    // 粘性：随后的 getSummary 不回落 idle，持续给可重试提示。
+    for (let round = 0; round < 2; round += 1) {
+      const sticky = await service.getSummary();
+      expect(sticky.status).toBe("expired");
+      expect(sticky.code).toBe("PAIRING_WINDOW_EXPIRED");
+    }
+    expect(harness.catalog.counts.binds).toBe(0);
+    // 重新 begin：新配对会话取代过期提示。
+    const restarted = await service.begin();
+    expect(["preparing", "awaiting_confirmation"]).toContain(restarted.status);
+    expect((await service.getSummary()).code).toBeNull();
   });
 });

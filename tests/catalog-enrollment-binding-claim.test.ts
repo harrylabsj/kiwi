@@ -77,12 +77,15 @@ describe("enrollment binding declaration trust", () => {
   });
 
   it.each([
-    ["expired declaration", { issuedAt: new Date(NOW.getTime() - 60_000).toISOString(), ttlSeconds: 30 }],
-    ["wrong agent", { agentId: "cagt_other" }],
-    ["wrong Runtime key id", { keyId: "other-runtime-key" }],
-    ["wrong service epoch", { serviceEpoch: 2 }],
-  ])("rejects a validly signed but mismatched %s", async (_label, overrides) => {
+    ["expired declaration", { issuedAt: new Date(NOW.getTime() - 60_000).toISOString(), ttlSeconds: 30 }, "expires_at"],
+    ["wrong agent", { agentId: "cagt_other" }, "agent_id"],
+    ["wrong Runtime key id", { keyId: "other-runtime-key" }, "key_id"],
+    ["wrong service epoch", { serviceEpoch: 2 }, "service_epoch"],
+  ])("rejects a validly signed but mismatched %s", async (_label, overrides, expectedField) => {
     const { client, runtime } = setup(overrides);
-    await expect(bind(client, runtime)).rejects.toMatchObject({ code: "RESPONSE_INVALID" });
+    // A15：失配走独立稳定码 CLAIM_MISMATCH，并携带自有字段名词表供阶段码归类。
+    const failure = (await bind(client, runtime).catch((err: unknown) => err as { code?: string; claimFields?: string[] })) as { code?: string; claimFields?: string[] };
+    expect(failure).toMatchObject({ code: "CLAIM_MISMATCH" });
+    expect(failure.claimFields).toContain(expectedField);
   });
 });

@@ -83,6 +83,25 @@ export class MerchantConnectError extends Error {
 }
 
 /**
+ * 配对诊断固定安全码（A15）：reconcile 各阶段失败只允许透出本集合内的自有
+ * 稳定码——绝不反射远端错误原文/grant/device_code/JWS/头/私钥。工作台 API
+ * 白名单（CATALOG_CONNECTION_SAFE_CODES）以此单源扩展。
+ */
+export const CONNECTION_PAIRING_SAFE_CODES = new Set([
+  "PAIRING_WINDOW_EXPIRED",       // 授权窗口（=Catalog grant 窗口）已过：需重新配对
+  "BIND_REJECTED",                // Catalog 拒绝 bind 请求（grant 过期/不匹配/版本冲突）
+  "BIND_CLAIM_INVALID",           // bind 已到达但签名声明未通过本地验真
+  "CARD_PUBLISH_REJECTED",        // 名片发布/激活被 Catalog 拒绝
+  "CARD_PUBLISH_INVALID",         // 发布/激活回执不完整或不合法
+  "PAIRING_COMMUNICATION_FAILED", // 与 Catalog 通信失败（网络/5xx，可重试）
+  "CONNECT_STEP_FAILED",          // 兜底：未归类步骤失败
+  "AUTHORIZED_MATERIAL_MISMATCH", "GRANT_SCOPE_INVALID", "STATE_INVALID",
+  "BINDING_KEY_MISMATCH", "BINDING_CLAIM_INVALID", "PREVIEW_CHANGED",
+  "PUBLICATION_RECEIPT_INVALID", "ACTIVATION_RECEIPT_INVALID",
+  "BIND_CLAIM_CARD_URL_MISMATCH", "BIND_CLAIM_FIELD_MISMATCH",
+]);
+
+/**
  * 公网入口 host 白名单口径（CLI parsePublicOrigin 与服务构造器共用，
  * 两边边界一致，谁也不放宽）：拒绝 localhost/私网 IP/链路本地域名/无点主机。
  * 只判 host；协议与路径形态由各自调用点另行校验。
@@ -187,8 +206,12 @@ export type ConnectionSummaryStatus =
   | "unknown"
   | "error";
 
+export type ConnectionStage = "prepare" | "authorize" | "publish";
+
 export interface ConnectionSummary {
   status: ConnectionSummaryStatus;
+  /** 自有固定阶段词（A15）：preparing→prepare，authorized→authorize，bound/published→publish。 */
+  stage: ConnectionStage;
   published: boolean;
   agentId: string | null;
   bindingId: string | null;
@@ -468,7 +491,14 @@ class ConnectionServiceImpl implements MerchantConnectionService {
           const expired = { ...stale, status: "expired" as const };
           this.persist((fresh) => fresh.sessions.map((item) =>
             item.enrollment_id === stale.enrollment_id ? expired : item));
+          // 授权窗口过期的显式可重试提示：粘性展示，直到下一次 begin() 取代。
+          this.availability = { code: "PAIRING_WINDOW_EXPIRED", detail: "" };
           return this.toSummary(expired);
+        }
+        const expiredSession = this.latestExpiredSession(store);
+        if (expiredSession !== undefined) {
+          this.availability = { code: "PAIRING_WINDOW_EXPIRED", detail: "" };
+          return this.toSummary(expiredSession);
         }
         return this.toSummary(null);
       }
@@ -479,17 +509,16 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       let current = session;
       this.availability = null;
       if (current.status !== "published") this.publicationVerified = false;
+      let stage = current.status;
       try {
-        if (current.status === "preparing") current = await this.stepPreparing(current);
-        if (current.status === "authorized") current = await this.stepAuthorized(current);
-        if (current.status === "bound") current = await this.stepBound(current);
+        // stage 跟随“即将执行的步骤”：失败码按真正抛错的阶段归类。
+        if (current.status === "preparing") { stage = "preparing"; current = await this.stepPreparing(current); stage = current.status; }
+        if (current.status === "authorized") { stage = "authorized"; current = await this.stepAuthorized(current); stage = current.status; }
+        if (current.status === "bound") { stage = "bound"; current = await this.stepBound(current); stage = current.status; }
       } catch (err) {
-        const code = err instanceof MerchantConnectError
-          ? err.code
-          : err instanceof CatalogClientError
-            ? err.code
-            : "CONNECT_STEP_FAILED";
-        this.availability = { code, detail: "" };
+        // 阶段感知稳定码：绑定被拒 vs 签名声明验真失败 vs 通信失败可被 owner
+        // API/UI 辨别；码值恒在本文件导出的固定集合内。
+        this.availability = { code: this.stepFailureCode(stage, err), detail: "" };
         throw err;
       }
       if (current.status === "published") {
@@ -516,7 +545,52 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     const session = this.selectSession(store);
     if (session !== undefined) return this.toSummary(session);
     const stale = this.findStaleSession(store);
-    return this.toSummary(stale === undefined ? null : { ...stale, status: "expired" });
+    if (stale !== undefined) {
+      // 授权窗口已过：报告 expired（粘性），不再无提示回落 idle。
+      this.availability = { code: "PAIRING_WINDOW_EXPIRED", detail: "" };
+      return this.toSummary({ ...stale, status: "expired" });
+    }
+    const expired = this.latestExpiredSession(store);
+    if (expired !== undefined) {
+      this.availability = { code: "PAIRING_WINDOW_EXPIRED", detail: "" };
+      return this.toSummary(expired);
+    }
+    return this.toSummary(null);
+  }
+
+  /** 最近一次同 origin/key/catalog/generation 的过期会话（粘性过期提示用）。 */
+  private latestExpiredSession(store: EnrollmentChallengeStore): ConnectionSession | undefined {
+    const candidates = store.sessions.filter((item) => {
+      const session = item as ConnectionSession;
+      return session.status === "expired" && session.runtime_origin === this.origin &&
+        session.key_thumbprint === this.keyThumbprint &&
+        session.catalog_origin === this.client.catalogOrigin &&
+        (session.generation ?? 1) === this.generation;
+    });
+    return candidates.at(-1) as ConnectionSession | undefined;
+  }
+
+  /** 失败码映射：自有稳定码原样透出；CatalogClientError 按阶段归类到固定安全码。 */
+  private stepFailureCode(stage: ConnectionSession["status"], err: unknown): string {
+    if (err instanceof MerchantConnectError) {
+      return CONNECTION_PAIRING_SAFE_CODES.has(err.code) ? err.code : "CONNECT_STEP_FAILED";
+    }
+    if (err instanceof CatalogClientError) {
+      if (err.code === "CATALOG_UNREACHABLE") return "PAIRING_COMMUNICATION_FAILED";
+      if (stage === "authorized") {
+        if (err.code === "REQUEST_REJECTED" || err.code === "CONFLICT") return "BIND_REJECTED";
+        if (err.code === "RESPONSE_INVALID") return "BIND_CLAIM_INVALID";
+        if (err.code === "CLAIM_MISMATCH") {
+          const fields = (err as CatalogClientError & { claimFields?: string[] }).claimFields ?? [];
+          return fields.includes("card_url") ? "BIND_CLAIM_CARD_URL_MISMATCH" : "BIND_CLAIM_FIELD_MISMATCH";
+        }
+      }
+      if (stage === "bound") {
+        if (err.code === "REQUEST_REJECTED" || err.code === "CONFLICT") return "CARD_PUBLISH_REJECTED";
+        if (err.code === "RESPONSE_INVALID") return "CARD_PUBLISH_INVALID";
+      }
+    }
+    return "CONNECT_STEP_FAILED";
   }
 
   getPairing(): ConnectionPairing | null {
@@ -887,18 +961,27 @@ class ConnectionServiceImpl implements MerchantConnectionService {
    * 核对出错（含网络不可达、长期绑定过期被 Catalog 拒签）→ error/published=false。
    * 绝不把读取本地历史记录当作当前发布回执，也绝不用首签声明的短期 TTL 在本地判死。
    */
+  /** 自有固定阶段词（白名单字面量，绝无动态内容）。 */
+  private stageOf(status: string): ConnectionStage {
+    if (status === "authorized") return "authorize";
+    if (status === "bound" || status === "published") return "publish";
+    return "prepare";
+  }
+
   private toSummary(session: ConnectionSession | null): ConnectionSummary {
     if (session === null) {
-      return { status: "idle", published: false, agentId: null, bindingId: null, bindingExpiresAt: null, cardRevision: null, code: null, detail: null };
+      return { status: "idle", stage: this.stageOf("idle"), published: false, agentId: null, bindingId: null, bindingExpiresAt: null, cardRevision: null, code: null, detail: null };
     }
     if (session.status !== "published") {
       // 非 published 阶段也透出最近一次步骤失败的自有稳定码（availability 仅由
       // reconcile 的失败路径写入；detail 恒为空串，绝不携带远端原文/凭据）。
-      const stepFailure = this.availability !== null && this.publicationVerified === false
+      // availability 只在失败/发布核对路径写入：非 published 时非空即最近一次失败。
+      const stepFailure = this.availability !== null
         ? { code: this.availability.code, detail: this.availability.detail }
         : { code: null, detail: null };
       return {
         status: session.status === "preparing" ? "awaiting_confirmation" : session.status,
+        stage: this.stageOf(session.status),
         published: false,
         agentId: session.catalog_agent_id ?? null,
         bindingId: session.binding_id ?? null,
@@ -915,6 +998,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       const paused = this.availability?.code === "PUBLICATION_NOT_ACTIVE";
       return {
         status: this.availability === null ? "unknown" : paused ? "paused" : "error",
+        stage: "publish" as const,
         published: false,
         agentId: session.catalog_agent_id ?? null,
         bindingId: session.binding_id ?? null,
@@ -925,7 +1009,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       };
     }
     return {
-      status: "published", published: true,
+      status: "published", stage: "publish", published: true,
       agentId: session.catalog_agent_id ?? null,
       bindingId: session.binding_id ?? null,
       bindingExpiresAt: session.binding_expires_at ?? null,

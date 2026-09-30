@@ -76,6 +76,8 @@ const DEFAULT_CONFIRM_POLL_MS = 5_000;
 export type CatalogClientErrorCode =
   /** 调用方输入非法（缺 runtime_origin、非 https、代次非法等）。 */
   | "INVALID_INPUT"
+  /** 已签名绑定声明与本次请求不一致（claimFields 携带失配字段名词表）。 */
+  | "CLAIM_MISMATCH"
   /** 本地产物不符合 0.1.2 契约 schema（发出前自检）。 */
   | "SCHEMA_VIOLATION"
   /** 名片的 url / supportedInterfaces 不在自身 runtime origin 内。 */
@@ -749,7 +751,14 @@ export class CatalogClient {
     if (!Number.isFinite(Date.parse(claims.issued_at)) || Date.parse(claims.issued_at) > currentTime + 60_000) mismatches.push("issued_at");
     if (!Number.isFinite(Date.parse(claims.expires_at)) || Date.parse(claims.expires_at) <= currentTime) mismatches.push("expires_at");
     if (mismatches.length > 0) {
-      throw new CatalogClientError("RESPONSE_INVALID", `Catalog 已签名绑定声明与本次 Runtime 请求不一致（${mismatches.join(", ")}）`);
+      // card_url 失配单列稳定码（A15）：字段名是自有固定词表，可安全透出；
+      // 其余失配仍归 RESPONSE_INVALID，由调用方按阶段归类。
+      const failure = new CatalogClientError(
+        "CLAIM_MISMATCH",
+        `Catalog 已签名绑定声明与本次 Runtime 请求不一致（${mismatches.join(", ")}）`,
+      );
+      (failure as CatalogClientError & { claimFields: string[] }).claimFields = mismatches;
+      throw failure;
     }
     return claims;
   }

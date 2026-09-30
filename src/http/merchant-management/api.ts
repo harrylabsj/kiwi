@@ -116,6 +116,7 @@ import {
   WORKBENCH_CURRENCY_TABLE_VERSION,
   type ExactMoney,
 } from "../../merchant/application/money.js";
+import { CONNECTION_PAIRING_SAFE_CODES } from "../../cloud/connect-service.js";
 import { EXACT_PRODUCT_TOOLS } from "../../merchant/exact-product-executors.js";
 import { SERVICE_CONTROL_TOOLS } from "../../merchant/service-control-executors.js";
 import type { WorkbenchQuoteResult } from "../../merchant/quote-calculator.js";
@@ -148,6 +149,8 @@ const CATALOG_CONNECTION_SAFE_CODES = new Set([
   "PUBLICATION_NOT_ACTIVE", "PUBLICATION_NOT_VERIFIED", "CATALOG_UNREACHABLE",
   "CATALOG_MISMATCH", "BINDING_MERCHANT_MISMATCH", "BINDING_CLAIM_EXPIRED",
   "BINDING_EXPIRED", "AUTHORIZATION_PENDING", "PREVIEW_CHANGED", "RUNTIME_CARD_CHANGED",
+  // 配对诊断阶段码（A15）：单源 = connect-service 导出的固定集合。
+  ...CONNECTION_PAIRING_SAFE_CODES,
 ]);
 const MAX_BODY_BYTES = 1_048_576;
 /** 非候选写命令确认引用的有效期（BD §7.3：短时、单次）。 */
@@ -231,6 +234,8 @@ export interface MerchantManagementApiOptions {
   catalogConnection?: {
     getSummary: () => Promise<{
       status: string;
+      /** 自有固定阶段词（prepare/authorize/publish）；响应侧再做白名单校验。 */
+      stage?: string;
       published: boolean;
       agentId?: string;
       bindingId?: string;
@@ -539,8 +544,10 @@ export function createMerchantManagementApiHandler(
       } else {
         const summary = await channel.getSummary();
         // 默认状态响应白名单：配对码与设备凭据不能混入助手可读取的摘要。
+        const SAFE_STAGES = new Set(["prepare", "authorize", "publish"]);
         writeJson(res, 200, {
           status: summary.status, published: summary.published,
+          stage: summary.stage != null && SAFE_STAGES.has(summary.stage) ? summary.stage : null,
           agentId: summary.agentId ?? null, bindingId: summary.bindingId ?? null,
           bindingExpiresAt: summary.bindingExpiresAt ?? null,
           errorCode: summary.errorCode == null ? null : CATALOG_CONNECTION_SAFE_CODES.has(summary.errorCode)

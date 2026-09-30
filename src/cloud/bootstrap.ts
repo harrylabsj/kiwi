@@ -1003,6 +1003,7 @@ export async function bootstrapCloudRuntime(
             const summary = await directConnection!.getSummary();
             return {
               status: summary.status, published: summary.published,
+              stage: summary.stage,
               ...(summary.agentId !== null ? { agentId: summary.agentId } : {}),
               ...(summary.bindingId !== null ? { bindingId: summary.bindingId } : {}),
               ...(summary.bindingExpiresAt !== null ? { bindingExpiresAt: summary.bindingExpiresAt } : {}),

@@ -30,6 +30,7 @@ let base: string;
 let beginCalls = 0;
 let failBegin = false;
 let summaryErrorCode: string | undefined;
+  let summaryStage: string | undefined = "authorize";
 let publicationCalls = 0;
 let publicationFail = false;
 const publicationDraft = {
@@ -57,7 +58,8 @@ beforeAll(async () => {
       },
     },
     catalogConnection: {
-      getSummary: async () => ({ status: "preparing", published: false, device_code: "MUST_NOT_LEAK", user_code: "SAMPLE-CODE",
+      getSummary: async () => ({ status: "preparing", published: false, stage: summaryStage,
+        device_code: "MUST_NOT_LEAK", user_code: "SAMPLE-CODE",
         ...(summaryErrorCode !== undefined ? { errorCode: summaryErrorCode } : {}),
       }),
       getPairing: async () => ({ user_code: "SAMPLE-CODE", verification_uri: "https://catalog.example/portal/connect/test", expires_at: "2030-01-01T00:00:00Z", grant: "MUST_NOT_LEAK" }),
@@ -163,7 +165,7 @@ describe("runtime Catalog connection API", () => {
   it("summary never exposes pairing or device credentials; pairing has an explicit whitelist", async () => {
     const owner = await login();
     const summary = await (await fetch(base + "/merchant/api/v1/catalog/connect", { headers: { cookie: owner.cookie } })).json();
-    expect(summary).toEqual({ status: "preparing", published: false, agentId: null, bindingId: null, bindingExpiresAt: null, errorCode: null });
+    expect(summary).toEqual({ status: "preparing", stage: "authorize", published: false, agentId: null, bindingId: null, bindingExpiresAt: null, errorCode: null });
     const pairing = await (await fetch(base + "/merchant/api/v1/catalog/connect/pairing", { headers: { cookie: owner.cookie } })).json();
     expect(pairing).toEqual({ pairing: { user_code: "SAMPLE-CODE", verification_uri: "https://catalog.example/portal/connect/test", expires_at: "2030-01-01T00:00:00Z" } });
     summaryErrorCode = "upstream body MUST_NOT_LEAK";
@@ -172,6 +174,22 @@ describe("runtime Catalog connection API", () => {
       expect(rejected.errorCode).toBe("CATALOG_CONNECTION_UNAVAILABLE");
       expect(JSON.stringify(rejected)).not.toContain("MUST_NOT_LEAK");
     } finally { summaryErrorCode = undefined; }
+    // A15：配对诊断阶段安全码按白名单透传（自有固定词汇，非远端原文）。
+    for (const safeCode of ["BIND_REJECTED", "BIND_CLAIM_CARD_URL_MISMATCH", "PAIRING_WINDOW_EXPIRED", "PAIRING_COMMUNICATION_FAILED"]) {
+      summaryErrorCode = safeCode;
+      try {
+        const visible = await (await fetch(base + "/merchant/api/v1/catalog/connect", { headers: { cookie: owner.cookie } })).json() as { errorCode: string };
+        expect(visible.errorCode).toBe(safeCode);
+      } finally { summaryErrorCode = undefined; }
+    }
+    // stage 只放行自有固定三值。
+    summaryStage = "authorize";
+    try {
+      const withStage = await (await fetch(base + "/merchant/api/v1/catalog/connect", { headers: { cookie: owner.cookie } })).json() as { stage: string };
+      expect(withStage.stage).toBe("authorize");
+    } finally { summaryStage = undefined; }
+    const stageFiltered = await (await fetch(base + "/merchant/api/v1/catalog/connect", { headers: { cookie: owner.cookie } })).json() as { stage: string | null };
+    expect(stageFiltered.stage).toBeNull();
   });
   it("begin requires CSRF and owner; replay never creates another enrollment", async () => {
     const owner = await login();
@@ -232,5 +250,29 @@ describe("runtime Catalog connection API", () => {
     await runInContext("showCatalogPairing()", context);
     expect(elements["catalog-pairing"]?.innerHTML).toContain("&lt;SAMPLE-CODE&gt;");
     expect(elements["catalog-pairing"]?.innerHTML).toContain('rel="noopener noreferrer"');
+  });
+
+  it("连接卡透出稳定错误码与固定可重试文案（A15 诊断呈现面）", async () => {
+    await login();
+    summaryErrorCode = "PAIRING_WINDOW_EXPIRED";
+    try {
+      const elements: Record<string, { innerHTML: string; textContent: string; className: string; style: { display: string } }> = {};
+      const context = createContext({
+        document: { querySelectorAll: () => [], getElementById: (id: string) => elements[id] ??= { innerHTML: "", textContent: "", className: "", style: { display: "" } } },
+        fetch: async (requestPath: string) => {
+          if (requestPath === "/merchant/api/session") return new Response("null");
+          if (requestPath.endsWith("/pairing")) return Response.json({ pairing: null });
+          return Response.json({ status: "expired", published: false, errorCode: "PAIRING_WINDOW_EXPIRED" });
+        },
+      });
+      const script = renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }).match(/<script>([\s\S]*?)<\/script>/)?.[1];
+      await runInContext(script!, context);
+      runInContext('ROLE = "owner"', context);
+      const panel = await runInContext('appendCatalogConnection("")', context) as string;
+      expect(panel).toContain("授权已过期，请重新发起");
+      expect(panel).toContain("[PAIRING_WINDOW_EXPIRED]");
+      expect(panel).toContain("上次授权已过期：请重新发起，并在 10 分钟内到目录完成确认");
+      expect(panel).not.toContain("MUST_NOT_LEAK");
+    } finally { summaryErrorCode = undefined; }
   });
 });
