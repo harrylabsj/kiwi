@@ -166,6 +166,17 @@ function statePill(state) {
   return '<span class="pill ' + it[0] + '">' + esc(it[1]) + "</span>";
 }
 
+var PAIRING_CODE_HINTS = {
+  PAIRING_WINDOW_EXPIRED: "上次授权已过期：请重新发起，并在 10 分钟内到目录完成确认",
+  BIND_REJECTED: "目录拒绝了本次绑定请求：请重新发起，反复出现请联系管理员",
+  BIND_CLAIM_CARD_URL_MISMATCH: "目录名片地址与已确认的公开预览不一致：请重新核对后再发起",
+  BIND_CLAIM_FIELD_MISMATCH: "目录绑定材料与预览不一致：请重新发起",
+  BIND_CLAIM_INVALID: "目录签名材料未通过本机校验：请重新发起",
+  CARD_PUBLISH_REJECTED: "名片发布被目录拒绝：请稍后重试或联系管理员",
+  CARD_PUBLISH_INVALID: "名片发布回执不完整：请刷新后重试",
+  PAIRING_COMMUNICATION_FAILED: "与目录通信暂时失败：请稍后刷新重试"
+};
+
 function catalogStatusText(s) {
   if (s.published) return "目录名片已发布";
   var labels = { idle: "尚未连接", preparing: "等待你确认授权", pending: "等待你确认授权",
@@ -177,7 +188,9 @@ function catalogStatusText(s) {
 function appendCatalogConnection(html) {
   if (!CATALOG_CONNECT || ROLE !== "owner") return html;
   return call("GET", "/catalog/connect").then(function (s) {
-    return html + '<div class="card"><h2>连接 Kiwi 目录</h2><p id="catalog-status">' + esc(catalogStatusText(s)) + '</p>' +
+    return html + '<div class="card"><h2>连接 Kiwi 目录</h2><p id="catalog-status">' + esc(catalogStatusText(s)) +
+      (s.errorCode ? ' <span class="muted">[' + esc(s.errorCode) + ']</span>' : '') + '</p>' +
+      (s.errorCode && PAIRING_CODE_HINTS[s.errorCode] ? '<p class="muted">' + esc(PAIRING_CODE_HINTS[s.errorCode]) + '</p>' : '') +
       '<p class="muted">连接后，采购方可在目录发现本店。请本人核对配对码与公开资料，并在目录授权页确认发布。</p>' +
       (s.published ? "" : '<button class="act primary" onclick="beginCatalogConnect()">发起或继续连接</button> ' +
         '<button class="act" onclick="showCatalogPairing()">本人查看配对信息</button>') +
