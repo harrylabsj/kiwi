@@ -3,7 +3,7 @@
 # All third-party actions are pinned to full commit SHAs (no tag/branch refs,
 # no network resolution at workflow runtime):
 #   - actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-#   - github/codeql-action/{init,autobuild,analyze}@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3.37.6
+#   - github/codeql-action/{init,autobuild,analyze}@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
 # The CodeQL action SHA has init/ and analyze/ action directories verified
 # before pinning. No secrets are used.
 name: CodeQL
@@ -33,12 +33,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           languages: ${{ matrix.language }}
       - name: Autobuild
-        uses: github/codeql-action/autobuild@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        uses: github/codeql-action/autobuild@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           category: "/language:${{ matrix.language }}"
