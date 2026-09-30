@@ -543,7 +543,13 @@ class ConnectionServiceImpl implements MerchantConnectionService {
   async getSummary(): Promise<ConnectionSummary> {
     const store = readEnrollmentStore(this.dataDir);
     const session = this.selectSession(store);
-    if (session !== undefined) return this.toSummary(session);
+    if (session !== undefined) {
+      // 跨进程（CLI begin + 服务 getSummary 共用 dataDir）：另一进程新建的
+      // 健康会话不应遗留上一进程的过期提示；只清 PAIRING_WINDOW_EXPIRED，
+      // 真正的绑定/发布失败码仍由 reconcile 结果决定。
+      if (this.availability?.code === "PAIRING_WINDOW_EXPIRED") this.availability = null;
+      return this.toSummary(session);
+    }
     const stale = this.findStaleSession(store);
     if (stale !== undefined) {
       // 授权窗口已过：报告 expired（粘性），不再无提示回落 idle。
@@ -743,8 +749,10 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     };
     this.persist((fresh) => fresh.sessions.map((item) =>
       item.enrollment_id === session.enrollment_id ? bound : item));
-    // 级联：同一趟继续走 bound 格（发名片前仍要复核公开卡 + beforePublish 钩子）。
-    return await this.stepBound(bound);
+    // 绑定已持久化：发布交给 reconcile 的 bound 分支——失败阶段归类
+    // （CARD_PUBLISH_* + stage=publish）由该分支的阶段标记正确给出，
+    // 首配级联路径不再把发布失败误报成 BIND_REJECTED。
+    return bound;
   }
 
   private async stepBound(session: ConnectionSession): Promise<ConnectionSession> {
