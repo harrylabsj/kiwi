@@ -148,7 +148,7 @@ describe("runtime Catalog connection API", () => {
         return Response.json({ items: [{ sku: "SKU1", title: "商品", status: "active" }] });
       },
     });
-    const script = [...renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }).matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)].map((m) => m[1]).join("\n");
+    const script = [...renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }).matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)].map((m) => m[1]).join("\n");
     await runInContext(script!, context);
     runInContext('ROLE = "owner"', context);
     expect(await runInContext('views.products()', context)).toContain("预览公开内容");
@@ -218,7 +218,7 @@ describe("runtime Catalog connection API", () => {
         return Response.json({ status: "awaiting_confirmation", published: false });
       },
     });
-    const script = renderMerchantManagementPage({ catalogConnection: true }).match(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/i)?.[1];
+    const script = renderMerchantManagementPage({ catalogConnection: true }).match(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/i)?.[1];
     await runInContext(script!, context);
     runInContext('ROLE = "owner"', context);
     const panel = await runInContext('appendCatalogConnection("")', context) as string;
