@@ -35,7 +35,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/kiwi-catalog/*",
       "state": "candidate",
-      "last_known_registry_version": "0.5.2",
+      "last_known_registry_version": "0.5.3",
       "gates": ["locked tests", "contract lock", "protected kiwi-release environment", "PyPI trusted publishing"]
     },
     {
@@ -84,7 +84,7 @@
       "release_controller": "private extension repository",
       "artifact": null,
       "bundle_reason": "The source repository is private; its package is tracked by immutable repository and commit references instead of being copied into the public portfolio artifact.",
-      "state": "release-tagged v0.2.3; deployment pending",
+      "state": "v0.2.3 deployed to production on 2026-09-30",
       "requires": ["kiwi-catalog >=0.5.1,<0.6,!=0.5.2"]
     },
     {
