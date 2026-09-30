@@ -234,7 +234,7 @@ describe("WP17 语义统一：绑定前导入 → 绑定 → 可报价", () => {
     const paths: string[] = [];
     async function renderProducts(productAuthority: "file" | "exact"): Promise<string> {
       const html = renderMerchantManagementPage({ productAuthority });
-      const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+      const script = html.match(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/i)?.[1];
       expect(script).toBeDefined();
       const context = createContext({
         document: { querySelectorAll: () => [] },
