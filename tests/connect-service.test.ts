@@ -126,6 +126,10 @@ interface CatalogStubOptions {
   tamperBindClaims?: (claims: Record<string, unknown>) => Record<string, unknown>;
   /** 非空时：bind 端点固定返回该 403 错误码（模拟 grant 过期等确定性拒绝）。 */
   failBindWith?: { status: 403; code: string };
+  /** 非空时：publish 端点固定返回该 HTTP 状态（模拟发布阶段拒绝）。 */
+  failPublishWith?: { status: 403; code: string };
+  /** publish 返回缺 revision 的回执（模拟回执不完整）。 */
+  publishReceiptInvalid?: boolean;
   /** 重签声明用的时钟（缺省真实时钟）；与注入服务的 now 共享即可模拟时间推进。 */
   claimsNow?: () => Date;
 }
@@ -166,6 +170,8 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
   let lastBindingClaims: Record<string, unknown> | null = null;
   const pollsBeforeAuthorized = options.pollsBeforeAuthorized ?? 0;
   const failBindWith = options.failBindWith ?? null;
+  const failPublishWith = options.failPublishWith ?? null;
+  const publishReceiptInvalid = options.publishReceiptInvalid ?? false;
   const tamperBindClaims = options.tamperBindClaims ?? null;
   const claimsNow = options.claimsNow ?? (() => new Date());
   /** 首签声明的基线（bind 时生成）；每次公开读在此基础上重签 expires_at。 */
@@ -277,7 +283,13 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
       }
       if (request.method === "POST" && url === `/v1/agents/${AGENT_ID}/publish`) {
         counts.activations += 1;
-        sendJson(response, 200, { active_revision: 1 });
+        if (failPublishWith !== null) {
+          sendJson(response, failPublishWith.status, { error: failPublishWith.code });
+          return;
+        }
+        // 缺 revision 的回执 → 客户端 PUBLICATION_RECEIPT_INVALID（阶段码
+        // CARD_PUBLISH_INVALID 归类路径）。
+        sendJson(response, 200, publishReceiptInvalid ? { active_revision: 1 } : { revision: 1 });
         return;
       }
       if (request.method === "GET" && url === `/v1/agents/${AGENT_ID}/runtime-binding`) {
@@ -986,11 +998,63 @@ describe("CLI 适配层（connectMerchant 行为兼容）", () => {
     await service.begin();
     await service.reconcile(); // 第一次 poll：authorization_pending（节流生效）
     nowMs += 6_000; // 越过节流：poll 返回 authorized → bind 403
-    try { await service.reconcile(); } catch (err) { console.log("DEBUG err:", JSON.stringify({ name: (err as Error)?.name, code: (err as {code?:string})?.code, message: (err as Error)?.message })); }
+    await expect(service.reconcile()).rejects.toThrow(); // 步骤失败上抛（tick 侧记录）
     const summary = await service.getSummary();
-    console.log("DEBUG summary:", JSON.stringify(summary));
+    // 真实 service 路径断言（A20/D2）：稳定码与阶段来自 connect-service 本体。
+    expect(summary.status).toBe("authorized");
+    expect(summary.stage).toBe("authorize");
+    expect(summary.code).toBe("BIND_REJECTED");
     expect(summary.detail).toBe("");
     expect(JSON.stringify(summary)).not.toContain("permission_denied");
+  });
+
+  it("首配级联：bind 成功后发布阶段 403 → CARD_PUBLISH_REJECTED + stage=publish（A20/D1）", async () => {
+    const harness = await makeHarness({
+      pollsBeforeAuthorized: 1,
+      failPublishWith: { status: 403, code: "permission_denied" },
+    });
+    let nowMs = Date.now();
+    const service = createMerchantConnectionService({
+      ...harness.serviceOptions,
+      now: () => new Date(nowMs),
+    });
+    await service.begin();
+    await service.reconcile(); // pending
+    nowMs += 6_000;
+    // 同一趟级联：preparing→authorized（bind 成功）→bound（publish 403）。
+    // 失败必须归类为发布阶段，而非级联起点的 authorized（D1 回归）。
+    await expect(service.reconcile()).rejects.toThrow();
+    const summary = await service.getSummary();
+    expect(summary.status).toBe("bound");
+    expect(summary.stage).toBe("publish");
+    expect(summary.code).toBe("CARD_PUBLISH_REJECTED");
+    expect(summary.bindingId).toBe(BINDING_ID);
+    expect(summary.detail).toBe("");
+    expect(JSON.stringify(summary)).not.toContain("permission_denied");
+    expect(harness.catalog.counts.binds).toBe(1);
+    // 会话已持久化为 bound：续办不再重新 bind。
+    const before = harness.catalog.counts.binds;
+    await expect(service.reconcile()).rejects.toThrow();
+    expect(harness.catalog.counts.binds).toBe(before);
+  });
+
+  it("发布声明不完整 → CARD_PUBLISH_INVALID；未知异常 → CONNECT_STEP_FAILED 且不反射（A20）", async () => {
+    const harness = await makeHarness({ pollsBeforeAuthorized: 1, publishReceiptInvalid: true });
+    let nowMs = Date.now();
+    const service = createMerchantConnectionService({
+      ...harness.serviceOptions,
+      beforePublish: async () => { throw new Error("A20_UNKNOWN_BOOM_MUST_NOT_LEAK"); },
+      now: () => new Date(nowMs),
+    });
+    await service.begin();
+    await service.reconcile();
+    nowMs += 6_000;
+    await expect(service.reconcile()).rejects.toThrow();
+    const summary = await service.getSummary();
+    expect(summary.status).toBe("bound");
+    expect(summary.stage).toBe("publish");
+    expect(summary.code).toBe("CONNECT_STEP_FAILED");
+    expect(JSON.stringify(summary)).not.toContain("A20_UNKNOWN_BOOM_MUST_NOT_LEAK");
   });
 
   it("bind 已到达但签名声明验真失败：阶段码 BIND_CLAIM_INVALID，绝不透出失配字段原文", async () => {
@@ -1041,5 +1105,30 @@ describe("CLI 适配层（connectMerchant 行为兼容）", () => {
     const restarted = await service.begin();
     expect(["preparing", "awaiting_confirmation"]).toContain(restarted.status);
     expect((await service.getSummary()).code).toBeNull();
+  });
+
+  it("跨进程：另一进程新建健康会话后，过期提示不再遗留（A20/D5）", async () => {
+    const harness = await makeHarness();
+    const first = createMerchantConnectionService(harness.serviceOptions);
+    await first.begin();
+    await first.reconcile(); // published
+    harness.catalog.counts.binds = 0;
+    rewriteSessions(harness.dataDir, (session) => ({
+      ...session,
+      status: "authorized",
+      binding_id: undefined,
+      binding_version: undefined,
+      binding_expires_at: undefined,
+      expires_at: new Date(Date.now() - 1_000).toISOString(),
+    }));
+    const expired = await first.getSummary();
+    expect(expired.code).toBe("PAIRING_WINDOW_EXPIRED");
+    // 模拟另一进程 begin 新建会话（写盘），随后原进程 getSummary 不得再贴过期码。
+    const second = createMerchantConnectionService(harness.serviceOptions);
+    await second.begin();
+    const stale = await first.getSummary();
+    // preparing 在摘要里投影为 awaiting_confirmation；关键是过期码已清。
+    expect(stale.status).toBe("awaiting_confirmation");
+    expect(stale.code).toBeNull();
   });
 });

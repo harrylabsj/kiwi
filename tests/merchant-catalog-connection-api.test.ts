@@ -188,8 +188,16 @@ describe("runtime Catalog connection API", () => {
       const withStage = await (await fetch(base + "/merchant/api/v1/catalog/connect", { headers: { cookie: owner.cookie } })).json() as { stage: string };
       expect(withStage.stage).toBe("authorize");
     } finally { summaryStage = undefined; }
+    summaryStage = "pwn";
     const stageFiltered = await (await fetch(base + "/merchant/api/v1/catalog/connect", { headers: { cookie: owner.cookie } })).json() as { stage: string | null };
     expect(stageFiltered.stage).toBeNull();
+    // 其余两个合法 stage 值同样放行（A20/D2：三值白名单完整锁定）。
+    for (const legalStage of ["prepare", "publish"]) {
+      summaryStage = legalStage;
+      const ok = await (await fetch(base + "/merchant/api/v1/catalog/connect", { headers: { cookie: owner.cookie } })).json() as { stage: string };
+      expect(ok.stage).toBe(legalStage);
+    }
+    summaryStage = undefined;
   });
   it("begin requires CSRF and owner; replay never creates another enrollment", async () => {
     const owner = await login();
