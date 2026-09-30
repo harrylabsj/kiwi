@@ -65,7 +65,8 @@
 | D4 发布物核验 | ✅ 独立复核 | npm `@harrylabsj/kiwi@0.11.0` 可见；下载 tarball 确认含 `dist/buyer-core/network-search.js`、`product-summary.js` 与含双来源段的 `skills/kiwi-buyer/SKILL.md` |
 | D5 插件（本地部分） | ✅ 已完成 | 插件仓 `main` 合并 `feat/dual-source-search`，`mcp.json` pin `0.8.0 → 0.11.0`（commit `6eb3d8f`，**未推送**）；本机安装副本同步升级，Hermes 会话实测已返回 `network_search` |
 | tag | ⏳ 本地已建 | `v0.11.0` → `3b56282`（**未推送**） |
-| D5 目录条目 / D6 专家包 / D7 连接器 | ⏳ 待办 | 见下 |
+| D5 目录条目 / D6 专家包 | ⏳ 待办 | 见下 |
+| D7 连接器 | ✅ 已送审 v1.0.1（审核中；源码已回仓并对齐） | 见下 |
 
 
 ### D1 合并与推送（外部可见，**需你授权**）
@@ -136,13 +137,19 @@ gh workflow run portfolio-release.yml -f publish=true -f ref=<D1 后的 40 位 S
 
 - **回滚**：审核通过前无影响；通过后若发现问题，重新提交修正版本（平台保留历史版本）。
 
-### D7 WorkBuddy 买方连接器 republish（**最高不确定度，建议单独一批**）
+### D7 WorkBuddy 买方连接器 republish（**已送审；源码已回仓**）
 
-现状：连接器**在本仓无源码**，本机只有已安装副本 `~/.workbuddy/connectors-marketplace/connectors/kiwi-sourcing/`（v1.0.0，pin 0.8.0）。本次只需要把 `mcp.json` 的 pin 改为 `0.11.0`，但打包形状/平台校验未经验证。
+**当前实况（2026-09-30 核对）**：
 
-建议顺序：local 复制安装副本 → 改 pin → 打成 ZIP（先不提交）→ 在平台「更新版本」页面**只做校验性试传**（不点最终提交）→ 确认通过后再正式提交审核。
+- 连接器源码已在**本仓**：`integrations/hosts/workbuddy/kiwi-sourcing/`（可 `npm run verify:workbuddy` 校验、`npm run package:workbuddy` 出包）。
+- 平台资产 `oc_bd73f860e3e2b5d3`（「Kiwi 采购询价」）**已送审 v1.0.1**（2026-09-29 21:10 平台实测为「审核中」）；已发布版本仍是 v1.0.0（pin `@harrylabsj/kiwi@0.8.0`）。
+- **在审 v1.0.1 的实际形态**：**13 个工具**（在 9 个买方工具外增加 `kiwi_follow_merchant`、`kiwi_unfollow_merchant`、`kiwi_list_follows`、`kiwi_get_follow_updates`）+ 运行时 pin **`@harrylabsj/kiwi@latest`**（配 `--prefer-online`，启动时检查 npm 元数据新鲜度）。**不是**本文早期设想的 0.11.0 固定 pin。
+- 仓库已与该在审版对齐：`mcp.json`、`SKILL.md`（13 工具）、`README.md`、`validate.mjs` 与测试同步；用仓库打包可与在审包逐文件一致（唯一差异是 README 里 zip 名的笔误修正 `1.0.0 → 1.0.1`）。
+- 审核期间平台锁定 capability 详情（API 403），无法在平台侧回读包内容。
 
-- **风险**：平台可能拒绝非官方工具链产出的包；连接器上线会改变**所有已装用户**的运行时（比专家包影响面大）。
+**后续（建议）**：过审后用仓库源码发 **1.0.2，改回固定 pin**（例如指向当时的稳定版本），避免长期跟随 `latest` 造成不可复现；版本号不得复用。
+
+- **风险**：连接器上线会改变**所有已装用户**的运行时（比专家包影响面大）；`latest` 形态下运行时随 npm 最新版本漂移。
 - **回滚**：未过审无影响；过审后若异常，按平台流程回退到上一版本（v1.0.0 保留）。
 
 ### D8 发布后复核与记录
@@ -166,7 +173,7 @@ gh workflow run portfolio-release.yml -f publish=true -f ref=<D1 后的 40 位 S
 ## 4. 主要风险
 
 1. **D4 不可逆**：npm 已发布版本不能删；版本号只能前进。
-2. **D7 不确定度最高**：连接器无源码、打包形状未验证、影响面覆盖全部已装用户 → 已建议单独一批。
+2. **D7 已推进**：连接器源码已回仓（`integrations/hosts/workbuddy/kiwi-sourcing/`），平台在审 v1.0.1（13 工具 + `@latest`）；影响面覆盖全部已装用户，后续 1.0.2 建议改回固定 pin。
 3. **上游目录 PR 的外部依赖**：审核时间不可控；未合入前线上用户仍用 0.8.0。
 4. **幂等跳过会掩盖版本复用**：本次只有 kiwi 变版本，catalog/shopping-cli 会跳过——如果 dry-run 日志里出现「跳过」的包**版本号却是新的**，那是异常信号，需停下排查。
 5. **验收侧遗留**：桌面端专家面板的新鲜会话未实操；面板级确认建议在 D6 之后补做。
