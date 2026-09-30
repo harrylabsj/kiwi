@@ -44,7 +44,7 @@ describe("WorkBuddy kiwi-sourcing connector", () => {
       runtime: { type: "node", version: "22" },
       timeout: 30_000,
     });
-    expect(server.args).toContain("@harrylabsj/kiwi@0.8.0");
+    expect(server.args).toContain("@harrylabsj/kiwi@0.12.0");
     expect(server.args.join(" ")).toContain("--a2a-timeout-ms 15000");
     expect(server.args.join(" ")).not.toContain("latest");
   });
@@ -57,7 +57,7 @@ describe("WorkBuddy kiwi-sourcing connector", () => {
     expect(meta).toMatchObject({
       source: "kiwi-sourcing",
       type: "mcp",
-      version: "1.0.0",
+      version: "1.0.1",
       minWorkbuddyVersion: "5.0.0",
     });
     for (const tool of [

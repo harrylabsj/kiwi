@@ -1,7 +1,7 @@
 # Kiwi 采购询价 WorkBuddy Connector
 
 该目录是提交到 WorkBuddy 连接器市场的完整源包。首版采用 WorkBuddy 托管 Node 22 运行时，
-通过 `npx` 启动固定版本 `@harrylabsj/kiwi@0.8.0` 的 stdio MCP Server。
+通过 `npx` 启动固定版本 `@harrylabsj/kiwi@0.12.0` 的 stdio MCP Server。
 
 ## 架构边界
 
@@ -21,7 +21,7 @@ Merchant HTTP/SSE 接口，只作为经营控制面，不把商家运行时迁�
 ## 配置与安全
 
 - 一个连接器只配置一个 stdio MCP Server；
-- npm 包固定为正式发布的 `0.8.0`，不使用 `latest`；
+- npm 包固定为正式发布的 `0.12.0`，不使用 `latest`；
 - 单次连接超时 30 秒，A2A 调用预算 15 秒；
 - 首版不配置 `auth_mode`，不在包内放 Token、API Key 或商家凭证；
 - `kiwi_accept_agreement` 和 `kiwi_handoff` 各自经过 Kiwi 持久审批门；
@@ -36,7 +36,7 @@ npm run verify:workbuddy
 npm run package:workbuddy
 ```
 
-打包结果位于 `release/workbuddy/kiwi-sourcing-1.0.0.zip`。脚本只收录市场所需的元信息、
+打包结果位于 `release/workbuddy/kiwi-sourcing-1.0.1.zip`。脚本只收录市场所需的元信息、
 MCP 配置、图标、README 和 Skill，并在打包前执行结构、版本、工具白名单与敏感信息检查。
 
 ## WorkBuddy 预览验收
