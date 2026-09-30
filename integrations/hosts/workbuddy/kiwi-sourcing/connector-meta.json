@@ -7,7 +7,7 @@
   "description_en": "Discover suppliers, request and compare quotes, and negotiate non-binding purchasing terms.",
   "source": "kiwi-sourcing",
   "type": "mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minWorkbuddyVersion": "5.0.0",
   "examples_zh": [
     "找三家能在一周内交付 200 个 USB-C 扩展坞的供应商",

@@ -6,7 +6,7 @@ description: Source products, request quotes, compare offers, and negotiate non-
 description_zh: 查找供应商、跨商家询价、比价并协商非绑定采购条款。
 description_en: Source products, request quotes, compare offers, and negotiate non-binding supplier terms.
 allowed-tools: kiwi_search, kiwi_request_quotes, kiwi_get_task, kiwi_negotiate, kiwi_accept_agreement, kiwi_get_agreement, kiwi_handoff, kiwi_approve, kiwi_reject
-version: 1.0.0
+version: 1.0.1
 author: HarryLabs
 user-invocable: true
 ---
