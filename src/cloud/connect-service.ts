@@ -61,6 +61,7 @@ import type { AgentCard } from "../discovery/agent-card/types.js";
 import { isRedirectResponse, readJsonBody } from "../net/safe-http.js";
 import {
   CatalogClient,
+  CatalogClientError,
   normalizeOrigin,
   runtimePublicKey,
   type DeviceEnrollmentPoll,
@@ -473,10 +474,24 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       }
       // 单趟级联：preparing →（poll）authorized →（bind）bound →（钩子+publish）
       // published，每格已就绪就顺势走完；poll 节流保证至多一次出站 poll。
+      // 步骤失败不得静默：错误码进摘要（code/detail 只含自有稳定码，绝无
+      // 远端原文/凭据），否则 authorized 会卡满 grant 窗口而工作台无从诊断。
       let current = session;
-      if (current.status === "preparing") current = await this.stepPreparing(current);
-      if (current.status === "authorized") current = await this.stepAuthorized(current);
-      if (current.status === "bound") current = await this.stepBound(current);
+      this.availability = null;
+      if (current.status !== "published") this.publicationVerified = false;
+      try {
+        if (current.status === "preparing") current = await this.stepPreparing(current);
+        if (current.status === "authorized") current = await this.stepAuthorized(current);
+        if (current.status === "bound") current = await this.stepBound(current);
+      } catch (err) {
+        const code = err instanceof MerchantConnectError
+          ? err.code
+          : err instanceof CatalogClientError
+            ? err.code
+            : "CONNECT_STEP_FAILED";
+        this.availability = { code, detail: "" };
+        throw err;
+      }
       if (current.status === "published") {
         try {
           await this.assertPublicationActive(current);
@@ -877,6 +892,11 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       return { status: "idle", published: false, agentId: null, bindingId: null, bindingExpiresAt: null, cardRevision: null, code: null, detail: null };
     }
     if (session.status !== "published") {
+      // 非 published 阶段也透出最近一次步骤失败的自有稳定码（availability 仅由
+      // reconcile 的失败路径写入；detail 恒为空串，绝不携带远端原文/凭据）。
+      const stepFailure = this.availability !== null && this.publicationVerified === false
+        ? { code: this.availability.code, detail: this.availability.detail }
+        : { code: null, detail: null };
       return {
         status: session.status === "preparing" ? "awaiting_confirmation" : session.status,
         published: false,
@@ -884,8 +904,8 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         bindingId: session.binding_id ?? null,
         bindingExpiresAt: session.binding_expires_at ?? null,
         cardRevision: session.card_revision ?? null,
-        code: null,
-        detail: null,
+        code: stepFailure.code,
+        detail: stepFailure.detail,
       };
     }
     // published 绝不在本地按首签 claim 的 TTL 判死：binding_expires_at 只是

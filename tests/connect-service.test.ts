@@ -122,6 +122,8 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 interface CatalogStubOptions {
   /** 第几次 poll 起返回 authorized（默认 0 = 第一次就 authorized）。 */
   pollsBeforeAuthorized?: number;
+  /** 非空时：bind 端点固定返回该 403 错误码（模拟 grant 过期等确定性拒绝）。 */
+  failBindWith?: { status: 403; code: string };
   /** 重签声明用的时钟（缺省真实时钟）；与注入服务的 now 共享即可模拟时间推进。 */
   claimsNow?: () => Date;
 }
@@ -161,6 +163,7 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
   let withdrawn = false;
   let lastBindingClaims: Record<string, unknown> | null = null;
   const pollsBeforeAuthorized = options.pollsBeforeAuthorized ?? 0;
+  const failBindWith = options.failBindWith ?? null;
   const claimsNow = options.claimsNow ?? (() => new Date());
   /** 首签声明的基线（bind 时生成）；每次公开读在此基础上重签 expires_at。 */
   let boundClaims: Record<string, unknown> | null = null;
@@ -220,6 +223,10 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
       }
       if (request.method === "POST" && url === `/v1/agents/${AGENT_ID}/runtime-bindings`) {
         counts.binds += 1;
+        if (failBindWith !== null) {
+          sendJson(response, failBindWith.status, { error: failBindWith.code });
+          return;
+        }
         const payload = jwsPayload(jwsHeader);
         const claims = buildBindingClaims({
           bindingId: BINDING_ID,
@@ -937,5 +944,47 @@ describe("CLI 适配层（connectMerchant 行为兼容）", () => {
     })).rejects.toMatchObject({ code: "AUTHORIZATION_PENDING" });
     // 会话保留在 preparing，重跑命令可以继续等待同一授权。
     expect(sessionRecord(harness.dataDir)["status"]).toBe("preparing");
+  });
+
+  it("授权窗口（grant）过期：不再尝试 bind，会话显式转 expired（A13 生产停滞回归）", async () => {
+    const harness = await makeHarness();
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    await service.begin();
+    const done = await service.reconcile();
+    expect(done.status).toBe("published");
+    // 构造生产事故形态：会话停在 authorized 且授权窗口（=Catalog grant 窗口）已过。
+    harness.catalog.counts.binds = 0;
+    rewriteSessions(harness.dataDir, (session) => ({
+      ...session,
+      status: "authorized",
+      binding_id: undefined,
+      binding_version: undefined,
+      binding_expires_at: undefined,
+      expires_at: new Date(Date.now() - 1_000).toISOString(),
+    }));
+    const summary = await service.reconcile();
+    expect(summary.status).toBe("expired");
+    expect(harness.catalog.counts.binds).toBe(0); // 绝不拿过期 grant 出站 bind
+  });
+
+  it("bind 阶段失败：自有稳定码进摘要 code/detail，状态保持 authorized 可重试；远端原文不反射", async () => {
+    const harness = await makeHarness({
+      pollsBeforeAuthorized: 1,
+      failBindWith: { status: 403, code: "permission_denied" },
+    });
+    let nowMs = Date.now();
+    const service = createMerchantConnectionService({
+      ...harness.serviceOptions,
+      now: () => new Date(nowMs),
+    });
+    await service.begin();
+    await service.reconcile(); // 第一次 poll：authorization_pending（节流生效）
+    nowMs += 6_000; // 越过节流：poll 返回 authorized → bind 403
+    await expect(service.reconcile()).rejects.toThrow(); // 步骤失败上抛（tick 侧记录）
+    const summary = await service.getSummary();
+    expect(summary.status).toBe("authorized");
+    expect(summary.code).toBe("REQUEST_REJECTED");
+    expect(summary.detail).toBe("");
+    expect(JSON.stringify(summary)).not.toContain("permission_denied");
   });
 });
