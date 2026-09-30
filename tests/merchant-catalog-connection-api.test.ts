@@ -273,7 +273,7 @@ describe("runtime Catalog connection API", () => {
           return Response.json({ status: "expired", published: false, errorCode: "PAIRING_WINDOW_EXPIRED" });
         },
       });
-      const script = renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }).match(/<script>([\s\S]*?)<\/script>/)?.[1];
+      const script = renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }).match(/<script>([\s\S]*?)<\/script>/i)?.[1];
       await runInContext(script!, context);
       runInContext('ROLE = "owner"', context);
       const panel = await runInContext('appendCatalogConnection("")', context) as string;
