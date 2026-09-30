@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.12.2 — 2026-09-30
+
+- 配对诊断：绑定步骤失败与签名声明验真失败现在以稳定安全码（BIND_REJECTED / BIND_CLAIM_INVALID / BIND_CLAIM_CARD_URL_MISMATCH / BIND_CLAIM_FIELD_MISMATCH / CARD_PUBLISH_* / PAIRING_COMMUNICATION_FAILED / PAIRING_WINDOW_EXPIRED）出现在目录连接摘要与工作台连接卡；授权过期显示粘性可重试提示，不再无提示回到未连接。
+- 不改变认证、安全门、重试语义与既有协议；不反射任何远端错误原文或凭据。
+
+
 ## v0.12.0 — 2026-09-29
 
 - Add read-only `kiwi_catalog_get_service_status` to the WorkBuddy merchant gateway connector tool contract.
