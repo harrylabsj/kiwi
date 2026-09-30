@@ -90,6 +90,15 @@ async function begin(auth: Awaited<ReturnType<typeof login>>, key: string, guard
   });
 }
 
+/**
+ * 提取页面内联脚本正文。结束标签必须**完整匹配**（允许 `</script >`、大小写变体），
+ * 不使用只认小写精确 `</script>` 的正则——后者会被 CodeQL `js/bad-tag-filter`
+ * 判为不完整标签过滤（main 上 alert #32）。本文件所有脚本提取统一走这里。
+ */
+function inlineScriptBodies(html: string): string[] {
+  return [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)].map((match) => match[1] ?? "");
+}
+
 describe("runtime Catalog connection API", () => {
   it("product publication requires owner, CSRF and explicit confirmation; reads and preview cannot publish", async () => {
     const owner = await login();
@@ -150,7 +159,7 @@ describe("runtime Catalog connection API", () => {
         return Response.json({ items: [{ sku: "SKU1", title: "商品", status: "active" }] });
       },
     });
-    const script = [...renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }).matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)].map((m) => m[1]).join("\n");
+    const script = inlineScriptBodies(renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true })).join("\n");
     await runInContext(script!, context);
     runInContext('ROLE = "owner"', context);
     expect(await runInContext('views.products()', context)).toContain("预览公开内容");
@@ -244,7 +253,7 @@ describe("runtime Catalog connection API", () => {
         return Response.json({ status: "awaiting_confirmation", published: false });
       },
     });
-    const script = renderMerchantManagementPage({ catalogConnection: true }).match(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/i)?.[1];
+    const script = inlineScriptBodies(renderMerchantManagementPage({ catalogConnection: true }))[0];
     await runInContext(script!, context);
     runInContext('ROLE = "owner"', context);
     const panel = await runInContext('appendCatalogConnection("")', context) as string;
@@ -273,7 +282,7 @@ describe("runtime Catalog connection API", () => {
           return Response.json({ status: "expired", published: false, errorCode: "PAIRING_WINDOW_EXPIRED" });
         },
       });
-      const script = renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }).match(/<script>([\s\S]*?)<\/script>/)?.[1];
+      const script = inlineScriptBodies(renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }))[0];
       await runInContext(script!, context);
       runInContext('ROLE = "owner"', context);
       const panel = await runInContext('appendCatalogConnection("")', context) as string;
@@ -282,5 +291,15 @@ describe("runtime Catalog connection API", () => {
       expect(panel).toContain("上次授权已过期：请重新发起，并在 10 分钟内到目录完成确认");
       expect(panel).not.toContain("MUST_NOT_LEAK");
     } finally { summaryErrorCode = undefined; }
+  });
+  it("inline script extraction matches complete end tags case-insensitively (CodeQL js/bad-tag-filter regression)", () => {
+    // 大小写变体 + 带属性的完整结束标签（`</SCRIPT >`）都必须完整提取正文，
+    // 断言提取结果可用（而非仅仅"能编译"）。
+    const html = '<SCRIPT type="text/javascript" data-x="1">var marker = "<script>kept";</SCRIPT >'
+      + "<script>second()</script>";
+    expect(inlineScriptBodies(html)).toEqual(['var marker = "<script>kept";', "second()"]);
+    expect(inlineScriptBodies("<p>no script here</p>")).toEqual([]);
+    const rendered = inlineScriptBodies(renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }));
+    expect(rendered.join("\n")).toContain("appendCatalogConnection");
   });
 });
