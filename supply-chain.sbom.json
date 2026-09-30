@@ -24,8 +24,8 @@
     {
       "name": "@modelcontextprotocol/sdk",
       "spec": "^1.30.0",
-      "resolved": "1.30.0",
-      "integrity": "sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA=="
+      "resolved": "1.30.1",
+      "integrity": "sha512-H2HxLvC3HDNybePJaLdSrU1hhUK5iQw+WvV1b01myFyI7sdVGe1u/IPTE5D9fGCiJDVtgMV/lmFkQXLmQyIFYA=="
     },
     {
       "name": "@simplewebauthn/server",
@@ -47,20 +47,20 @@
     },
     {
       "name": "yaml",
-      "spec": "2.9.0",
-      "resolved": "2.9.0",
-      "integrity": "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA=="
+      "spec": "2.9.1",
+      "resolved": "2.9.1",
+      "integrity": "sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw=="
     }
   ],
   "artifact": {
     "name": "harrylabsj-kiwi-0.12.1.tgz",
-    "sha256": "6c1c6e3dd5445959815f626088737588dae6ffccdf3be960c3e4653ceff98fc7",
-    "bytes": 2094152
+    "sha256": "05a185353bcfaf6bfa056b5a794116a02b875cdcb73f8c5f4319d02ffb96c8ad",
+    "bytes": 2094451
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-09-30T02:11:09.372Z"
+  "generated_at": "2026-09-30T04:25:17.878Z"
 }
