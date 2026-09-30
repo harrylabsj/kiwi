@@ -28,7 +28,10 @@
  */
 
 /** 页面按 owner 视角展示管理动作；角色由服务端权限逐次裁决，前端只是提示。 */
-export function renderMerchantManagementPage(): string {
+export function renderMerchantManagementPage(options: {
+  productAuthority?: "file" | "exact";
+  catalogConnection?: boolean;
+} = {}): string {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -86,6 +89,12 @@ export function renderMerchantManagementPage(): string {
 var CSRF = "";
 var ROLE = "";
 var API = "/merchant/api/v1";
+var FILE_PRODUCTS = ${options.productAuthority === "file"};
+var CATALOG_CONNECT = ${options.catalogConnection === true};
+var catalogBeginKey = "";
+var catalogBeginPending = false;
+var publicationDraft = null;
+var publicationBusy = false;
 var $ = function (id) { return document.getElementById(id); };
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -126,13 +135,13 @@ async function apiError(res) {
   var fallback = await res.json().catch(function () { return {}; });
   return new Error((fallback.message || fallback.detail || fallback.code || ("HTTP " + res.status)) + "。请勿自动重复提交。");
 }
-function call(method, path, body) {
+function call(method, path, body, apiBase) {
   var headers = {};
   if (body !== undefined) {
     headers["content-type"] = "application/json";
     if (CSRF) headers["x-csrf-token"] = CSRF;
   }
-  return fetch(API + path, {
+  return fetch((apiBase || API) + path, {
     method: method,
     credentials: "same-origin",
     headers: headers,
@@ -155,6 +164,51 @@ function statePill(state) {
   var map = { OPERATING: ["ok", "营业中"], PAUSED: ["warn", "已暂停"], WITHDRAWN: ["bad", "已撤回"], DEGRADED: ["warn", "降级"] };
   var it = map[state] || ["warn", state];
   return '<span class="pill ' + it[0] + '">' + esc(it[1]) + "</span>";
+}
+
+function catalogStatusText(s) {
+  if (s.published) return "目录名片已发布";
+  var labels = { idle: "尚未连接", preparing: "等待你确认授权", pending: "等待你确认授权",
+    awaiting_confirmation: "等待你确认授权", authorized: "授权已收到，正在连接",
+    bound: "已连接，正在检查接待能力", expired: "授权已过期，请重新发起",
+    blocked: "连接未完成，请核对状态", paused: "目录服务已暂停", revoked: "授权已撤销" };
+  return labels[s.status] || "连接尚未完成";
+}
+function appendCatalogConnection(html) {
+  if (!CATALOG_CONNECT || ROLE !== "owner") return html;
+  return call("GET", "/catalog/connect").then(function (s) {
+    return html + '<div class="card"><h2>连接 Kiwi 目录</h2><p id="catalog-status">' + esc(catalogStatusText(s)) + '</p>' +
+      '<p class="muted">连接后，采购方可在目录发现本店。请本人核对配对码与公开资料，并在目录授权页确认发布。</p>' +
+      (s.published ? "" : '<button class="act primary" onclick="beginCatalogConnect()">发起或继续连接</button> ' +
+        '<button class="act" onclick="showCatalogPairing()">本人查看配对信息</button>') +
+      ' <button class="act" onclick="refresh()">刷新连接状态</button><div id="catalog-pairing"></div></div>';
+  }).catch(function () {
+    return html + '<div class="card"><h2>连接 Kiwi 目录</h2><p>暂时无法读取连接状态，请稍后刷新。</p></div>';
+  });
+}
+function beginCatalogConnect() {
+  if (catalogBeginPending) return;
+  catalogBeginPending = true;
+  if (!catalogBeginKey) catalogBeginKey = key("catalog-connect");
+  return call("POST", "/catalog/connect/begin", { idempotency_key: catalogBeginKey }).then(function (receipt) {
+    if (receipt.status === "succeeded") catalogBeginKey = "";
+    bar(receipt.status === "succeeded" ? "连接申请已准备，请本人查看配对信息并确认公开资料。" : "连接结果尚未确认，请先查看状态，不要重复提交。");
+    refresh();
+  }).catch(function () { bar("连接申请暂未完成，请先刷新状态后再试。", true); })
+    .finally(function () { catalogBeginPending = false; });
+}
+function showCatalogPairing() {
+  return call("GET", "/catalog/connect/pairing").then(function (result) {
+    var box = $("catalog-pairing");
+    if (!box) return;
+    var p = result.pairing;
+    if (!p) { box.textContent = "当前没有待确认的配对信息，请先发起连接或刷新状态。"; return; }
+    var url = new URL(p.verification_uri);
+    if (url.protocol !== "https:" || url.username || url.password) throw new Error("invalid link");
+    box.innerHTML = '<p>请在目录授权页核对相同配对码：<strong>' + esc(p.user_code) + '</strong></p>' +
+      '<p class="muted">有效期至 ' + esc(p.expires_at) + '。配对码请自行核对，不要发送给助手。</p>' +
+      '<a target="_blank" rel="noopener noreferrer" href="' + esc(url.href) + '">前往 Kiwi 目录核对并授权</a>';
+  }).catch(function () { bar("无法读取配对信息，请刷新连接状态。", true); });
 }
 
 var views = {
@@ -189,12 +243,19 @@ var views = {
           html += '<p class="muted">恢复接待需要 owner 角色。</p>';
         }
       }
-      return html + "</div>";
+      return appendCatalogConnection(html + "</div>");
     });
   },
   products: function () {
-    return call("GET", "/products?limit=100").then(function (p) {
+    // 云端导入表与 exact 商品库是不同权威源；按装配选择，不能把空 exact 库当作导入失败。
+    return call("GET", "/products?limit=100", undefined, FILE_PRODUCTS ? "/merchant/api" : API).then(function (p) {
       var rows = (p.items || []).map(function (it) {
+        if (FILE_PRODUCTS) {
+          return "<tr><td>" + esc(it.sku) + "</td><td>" + esc(it.title) + "</td><td>" +
+            esc(it.currency) + " " + esc(it.price) + " / " + esc(it.price_unit) + "</td><td>" +
+            esc(it.min_order_qty == null ? "-" : it.min_order_qty) + "</td><td>" +
+            esc(it.valid_until) + "</td><td>" + esc(it.status) + "</td></tr>";
+        }
         var money = it.money || {};
         return "<tr><td>" + esc(it.sku) + "</td><td>" + esc(it.title) + "</td><td>" +
           esc(money.currency || "-") + " " + esc(money.amount_minor == null ? "-" : money.amount_minor) +
@@ -202,13 +263,20 @@ var views = {
           esc(it.authority_version == null ? "-" : it.authority_version) + "</td></tr>";
       }).join("");
       return '<div class="card"><h2>当前商品（' + (p.items || []).length + "）</h2>" +
-        (rows ? "<table><tr><th>SKU</th><th>名称</th><th>价格（最小币单位）</th><th>库存</th><th>版本</th></tr>" + rows + "</table>"
+        (rows ? (FILE_PRODUCTS
+          ? "<table><tr><th>SKU</th><th>名称</th><th>单价</th><th>起订量</th><th>有效期至</th><th>状态</th></tr>"
+          : "<table><tr><th>SKU</th><th>名称</th><th>价格（最小币单位）</th><th>库存</th><th>版本</th></tr>") + rows + "</table>"
               : '<p class="muted">暂无商品，请先导入商品。没有商品时服务不会报价或发布名片。</p>') + "</div>" +
         '<div class="card"><h2>导入商品表（整表替换）</h2>' +
         '<p class="muted">支持 CSV、Excel（.xlsx）与商品表 JSON：先转换校验、预览增/改/留/删，确认后整批生效（不成功的批次不改动现有商品）。</p>' +
         '<p class="muted">模板：<a href="/merchant/api/v1/products/import-template?format=csv" download="kiwi-product-import-template.csv">下载 CSV 模板</a> · <a href="/merchant/api/v1/products/import-template?format=xlsx" download="kiwi-product-import-template.xlsx">下载 Excel 模板</a>（中文表头与示例行；中英文常见列名会自动识别）。</p>' +
         '<div class="row"><input type="file" id="pfile" accept=".json,.csv,.xlsx">' +
-        '<button class="act" onclick="previewImport()">校验预览</button></div><div id="presult"></div></div>';
+        '<button class="act" onclick="previewImport()">校验预览</button></div><div id="presult"></div></div>' +
+        (FILE_PRODUCTS && CATALOG_CONNECT && ROLE === "owner" ?
+          '<div class="card"><h2>发布商品到 Kiwi 目录</h2><p>先完成目录连接，再选择商品并填写分类。公开名称、SKU 和分类；价格、库存及私有规则不会发布。</p>' +
+          '<p>每行填写一个 SKU 和分类，用英文竖线分隔，例如：KIWI-ACCEPT-001 | 验收测试</p>' +
+          '<textarea id="publication-selection" rows="4" aria-label="选定商品与分类"></textarea>' +
+          '<button class="act" onclick="previewPublication()">预览公开内容</button><div id="publication-result"></div></div>' : '');
     });
   },
   approvals: function () {
@@ -484,6 +552,47 @@ function decide(candidateId, approve) {
 }
 var pendingImport = null;
 var parsedTable = null;
+function previewPublication() {
+  if (publicationBusy) return;
+  publicationDraft = null;
+  var selection = $("publication-selection");
+  var lines = selection.value.split(/\\r?\\n/).filter(function (line) { return line.trim(); });
+  var selections = [];
+  for (var i = 0; i < lines.length; i++) {
+    var parts = lines[i].split("|");
+    if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) { bar("每行需填写 SKU | 分类", true); return; }
+    selections.push({ sku: parts[0].trim(), category: parts[1].trim() });
+  }
+  publicationBusy = true;
+  return call("POST", "/products/publication-drafts", { selections: selections }).then(function (draft) {
+    publicationDraft = draft;
+    $("publication-result").innerHTML = '<h3>将公开以下内容</h3><pre>' +
+      esc(JSON.stringify(draft.items.map(function (it) { return it.listing; }), null, 2)) +
+      '</pre><p>预览有效期至 ' + esc(draft.expires_at) + '</p>' +
+      '<button class="act primary" onclick="commitPublication()">确认公开这些商品</button>';
+  }).catch(function (err) { bar(err.message, true); }).finally(function () { publicationBusy = false; });
+}
+function commitPublication() {
+  if (publicationBusy || !publicationDraft) return;
+  publicationBusy = true;
+  var draft = publicationDraft;
+  return call("POST", "/products/publication-drafts/" + encodeURIComponent(draft.draft_id) + "/commit", {
+    expected_digest: draft.digest, confirm_publication: true,
+  }).then(function (receipt) {
+    var text = "已确认 " + receipt.succeeded + "；失败 " + receipt.failed + "；待确认 " + receipt.pending;
+    $("publication-result").innerHTML = '<p>' + esc(text) + '</p>' +
+      '<pre>' + esc(JSON.stringify(receipt.results, null, 2)) + '</pre>' +
+      (receipt.status !== "succeeded" ? '<button class="act" onclick="checkPublication()">查看原草稿回执</button><button class="act" onclick="commitPublication()">按原草稿继续确认</button>' : '');
+    if (receipt.status === "succeeded") publicationDraft = null;
+  }).catch(function (err) { bar(err.message + " 请保留本页，查看原草稿回执。", true); })
+    .finally(function () { publicationBusy = false; });
+}
+function checkPublication() {
+  if (!publicationDraft) return;
+  return call("GET", "/products/publication-drafts/" + encodeURIComponent(publicationDraft.draft_id)).then(function (result) {
+    bar("原草稿回执：" + JSON.stringify(result.receipts));
+  }).catch(function (err) { bar(err.message, true); });
+}
 function previewImport() {
   var f = $("pfile").files[0];
   if (!f) { bar("请先选择 CSV / Excel / JSON 商品表文件", true); return; }
