@@ -29,7 +29,7 @@
     {
       "id": "kiwi-catalog",
       "name": "Kiwi Catalog",
-      "version": "0.5.3",
+      "version": "0.5.4",
       "version_source": { "type": "toml", "scope": "consumer", "path": "kiwi-catalog/pyproject.toml", "field": "project.version" },
       "channel": "PyPI",
       "release_controller": "portfolio-release",
