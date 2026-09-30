@@ -1,6 +1,6 @@
 {
   "name": "@harrylabsj/kiwi-merchant-cloud",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Kiwi merchant cloud runtime package",
   "license": "Apache-2.0",
   "type": "module",

@@ -923,7 +923,8 @@ describe("merchant management page — 同源工作台壳（BD-03）", () => {
       expect(html).toContain("/merchant/trusted/confirm?ref=");
       expect(html).not.toContain('call("GET", "/status")');
       expect(html).not.toContain('call("GET", "/products")');
-      expect(html).not.toMatch(/price_floors|min_unit_price_private|password/);
+      // URL.password 的链接校验不包含口令；禁止的是私有策略字段与口令输入框。
+      expect(html).not.toMatch(/price_floors|min_unit_price_private|(?:type|name)=["']password/);
       // 别名仍生效：/merchant/ 之外的商家面路径走 merchantHandler（测试桩 → 2xx），
       // 这里只验证路由不崩、不落入管理页。
       const aliased = await fetch(pageBase + "/merchant/onboarding", { redirect: "manual" });
