@@ -23,6 +23,11 @@ import { MerchantManagementOperationStore } from "../src/http/merchant-managemen
 import { MutableServiceState } from "../src/http/merchant-management/service-state.js";
 
 const ORIGIN = "https://merchant.example";
+// CodeQL js/incomplete-sanitization：提取（非净化）渲染页面内联脚本的统一入口——
+// 完整结束标签、大小写兼容；与下方 matchAll 提取保持同一模式口径。
+function extractInlineScript(html: string): string | undefined {
+  return html.match(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/i)?.[1];
+}
 const db = new DatabaseSync(":memory:");
 const sessions = new MerchantAdminSessions({ db });
 let server: Server;
@@ -273,7 +278,7 @@ describe("runtime Catalog connection API", () => {
           return Response.json({ status: "expired", published: false, errorCode: "PAIRING_WINDOW_EXPIRED" });
         },
       });
-      const script = renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }).match(/<script>([\s\S]*?)<\/script>/i)?.[1];
+      const script = extractInlineScript(renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }));
       await runInContext(script!, context);
       runInContext('ROLE = "owner"', context);
       const panel = await runInContext('appendCatalogConnection("")', context) as string;
@@ -282,5 +287,12 @@ describe("runtime Catalog connection API", () => {
       expect(panel).toContain("上次授权已过期：请重新发起，并在 10 分钟内到目录完成确认");
       expect(panel).not.toContain("MUST_NOT_LEAK");
     } finally { summaryErrorCode = undefined; }
+  });
+  it("extractInlineScript 兼容大小写与完整/带属性标签（CodeQL js/incomplete-sanitization 回归）", () => {
+    expect(extractInlineScript("<SCRIPT nonce=\"n\">CODE</SCRIPT>")).toBe("CODE");
+    expect(extractInlineScript("<ScRiPt>mixed</sCrIpT>")).toBe("mixed");
+    expect(extractInlineScript("<script type=\"module\">m</script>")).toBe("m");
+    expect(extractInlineScript("<script src=\"x.js\"></script>")).toBe("");
+    expect(extractInlineScript("<script>unterminated")).toBeUndefined();
   });
 });
