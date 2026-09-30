@@ -194,6 +194,17 @@ merchant_experience:
 可使用 createMerchantHttpServer() 接入独立 session、SSE 事件流和 candidate 审批。新
 能力的实现边界和工具清单见 [`docs/merchant-experience.md`](docs/merchant-experience.md)。
 
+## DeepSeek Harness 插件
+
+Kiwi 买家能力可以以 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）插件形式挂载：
+`kiwi-buyer-mcp` 作为 MCP 插件 + `kiwi-buyer` 技能，让 dsh 会话直接搜索商品、发起询价磋商并生成非绑定协议。
+
+```bash
+dsh plugin --profile web add @harrylabsj/kiwi-dsh-plugin
+```
+
+插件说明与配置见 [`integrations/plugins/kiwi-dsh-plugin/README.md`](integrations/plugins/kiwi-dsh-plugin/README.md)。
+
 ## 测试与质量
 
 ```bash
