@@ -106,13 +106,12 @@ function buildLedgerFixture(dir: string): void {
     wire_payload: {
       action: "inquiry",
       payload: {
-        inquiry: {
-          questions: [
-            { code: "<script>alert(1)</script>" },
-            { code: "delivery_before" },
-            { code: "delivery_before" },
-          ],
-        },
+        type: "inquiry",
+        questions: [
+          { code: "<script>alert(1)</script>" },
+          { code: "delivery_before" },
+          { code: "delivery_before" },
+        ],
       },
     },
     outcome: { kind: "ok" },
@@ -126,7 +125,7 @@ function buildLedgerFixture(dir: string): void {
     capability: CAPABILITY,
     wire_payload: {
       action: "offer",
-      payload: { offer: { offer_id: "ofr-a1", terms: { items: [item("sku-a", 10, 99_900)] } } },
+      payload: { type: "offer", offer_id: "ofr-a1", terms: { items: [item("sku-a", 10, 99_900)] } },
     },
     outcome: { kind: "ok" },
     occurred_at: "2026-09-28T09:01:00.000Z",
@@ -146,7 +145,7 @@ function buildLedgerFixture(dir: string): void {
     negotiation_id: "neg-wp11-a",
     identity: IDENTITY_IN,
     capability: CAPABILITY,
-    wire_payload: { action: "accept_nonbinding", payload: {} },
+    wire_payload: { action: "accept_nonbinding", payload: { type: "accept_nonbinding" } },
     outcome: { kind: "ok" },
     occurred_at: "2026-09-28T09:30:00.000Z",
   });
@@ -168,7 +167,7 @@ function buildLedgerFixture(dir: string): void {
     capability: CAPABILITY,
     wire_payload: {
       action: "clarification",
-      payload: { clarification: { questions: [{ code: "warranty_scope" }] } },
+      payload: { type: "clarification", questions: [{ field: "warranty_scope" }] },
     },
     outcome: { kind: "ok" },
     occurred_at: "2026-09-28T11:00:00.000Z",
@@ -189,7 +188,7 @@ function buildLedgerFixture(dir: string): void {
     negotiation_id: "neg-wp11-c",
     identity: IDENTITY_IN,
     capability: CAPABILITY,
-    wire_payload: { action: "inquiry", payload: { inquiry: { questions: [{ code: "moq" }] } } },
+    wire_payload: { action: "inquiry", payload: { type: "inquiry", questions: [{ code: "moq" }] } },
     outcome: { kind: "ok" },
     occurred_at: "2026-09-27T08:00:00.000Z",
   });
@@ -201,6 +200,54 @@ function buildLedgerFixture(dir: string): void {
     state_transition: { to_phase: "DECLINED" },
     outcome: { kind: "ok" },
     occurred_at: "2026-09-27T08:05:00.000Z",
+  });
+  // 磋商 D（更早，2026-09-26；列表排序落在最后）：买家 RFQ → 商家报价。
+  // A40-1 主用例：rfq 明细行无 unit_price（KNP 允许），旁观应从 RFQ 与
+  // offer 两侧都回填 SKU/数量，而金额（unit_price）不得出现在任何返回值。
+  at("2026-09-26T09:00:00.000Z");
+  ledger.append({
+    event_kind: "message_received",
+    negotiation_id: "neg-wp11-d",
+    identity: IDENTITY_IN,
+    capability: CAPABILITY,
+    wire_payload: {
+      action: "rfq",
+      payload: {
+        type: "rfq",
+        items: [{ sku: "sku-d", quantity: { value: 5, unit: "piece" } }],
+      },
+    },
+    outcome: { kind: "ok" },
+    occurred_at: "2026-09-26T09:00:00.000Z",
+  });
+  at("2026-09-26T09:01:00.000Z");
+  ledger.append({
+    event_kind: "message_sent",
+    negotiation_id: "neg-wp11-d",
+    identity: IDENTITY_OUT,
+    capability: CAPABILITY,
+    wire_payload: {
+      action: "offer",
+      payload: {
+        type: "offer",
+        offer_id: "ofr-d1",
+        terms: {
+          items: [item("sku-d", 5, 19_900)],
+          valid_until: "2026-09-27T09:01:00.000Z",
+        },
+      },
+    },
+    outcome: { kind: "ok" },
+    occurred_at: "2026-09-26T09:01:00.000Z",
+  });
+  ledger.append({
+    event_kind: "state_transition",
+    negotiation_id: "neg-wp11-d",
+    identity: IDENTITY_OUT,
+    capability: CAPABILITY,
+    state_transition: { to_phase: "OFFER_OPEN" },
+    outcome: { kind: "ok" },
+    occurred_at: "2026-09-26T09:01:00.000Z",
   });
 }
 
@@ -341,7 +388,7 @@ describe("WP11 会话旁观 API", () => {
         headers: { cookie: auth.cookie },
       })
     ).json()) as { total: number; items: Array<{ negotiation_id: string }>; next_cursor: string | null };
-    expect(page1.total).toBe(3);
+    expect(page1.total).toBe(4);
     expect(page1.items.map((item) => item.negotiation_id)).toEqual([
       "neg-wp11-b",
       "neg-wp11-a",
@@ -352,7 +399,10 @@ describe("WP11 会话旁观 API", () => {
         headers: { cookie: auth.cookie },
       })
     ).json()) as { items: Array<{ negotiation_id: string }>; next_cursor: string | null };
-    expect(page2.items.map((item) => item.negotiation_id)).toEqual(["neg-wp11-c"]);
+    expect(page2.items.map((item) => item.negotiation_id)).toEqual([
+      "neg-wp11-c",
+      "neg-wp11-d",
+    ]);
     expect(page2.next_cursor).toBeNull();
   });
 
@@ -371,7 +421,10 @@ describe("WP11 会话旁观 API", () => {
         headers: { cookie: auth.cookie },
       })
     ).json()) as { items: Array<{ negotiation_id: string; needs_attention: boolean }> };
-    expect(active.items.map((item) => item.negotiation_id)).toEqual(["neg-wp11-b"]);
+    expect(active.items.map((item) => item.negotiation_id)).toEqual([
+      "neg-wp11-b",
+      "neg-wp11-d",
+    ]);
     expect(active.items[0]?.needs_attention).toBe(true);
     const agreement = (await (
       await fetch(`${base}/merchant/api/v1/negotiations?status=agreement`, {
@@ -390,6 +443,9 @@ describe("WP11 会话旁观 API", () => {
       negotiation_id: string;
       phase: string;
       agreement: boolean;
+      sku: string;
+      quantity?: number;
+      price_minor?: number;
       buyer_ref: string;
       timeline: NegotiationTimelineEntry[];
     };
@@ -397,6 +453,10 @@ describe("WP11 会话旁观 API", () => {
     expect(detail.phase).toBe("AGREEMENT_REACHED");
     expect(detail.agreement).toBe(true);
     expect(detail.buyer_ref).toBe("buyer:buyer-001");
+    // A40-1：详情头回填真实 SKU/数量；金额不投影（隐私设计）。
+    expect(detail.sku).toBe("sku-a");
+    expect(detail.quantity).toBe(10);
+    expect(detail.price_minor).toBeUndefined();
     const messages = detail.timeline.filter((entry) => entry.kind === "message");
     expect(messages.map((entry) => entry.direction)).toEqual([
       "buyer",
@@ -407,7 +467,12 @@ describe("WP11 会话旁观 API", () => {
     const offer = messages[1];
     expect(offer?.rule_summary).toContain("自动生成");
     expect(offer?.sku).toBe("sku-a");
-    expect(offer?.unit_price_minor).toBe(99900);
+    expect(offer?.quantity).toBe(10);
+    // 金额不投影：offer 明明带 unit_price（fixture 99_900），旁观视图不得出现。
+    expect(offer?.unit_price_minor).toBeUndefined();
+    expect(offer?.summary).toContain("SKU sku-a");
+    expect(offer?.summary).toContain("数量 10");
+    expect(offer?.summary).not.toContain("单价");
     expect(messages[0]?.rule_summary).toBeNull();
     // 外部内容按数据返回：JSON 序列化本身不执行 HTML；转义责任在页面层。
     expect(messages[0]?.summary).toContain("<script>alert(1)</script>");
@@ -424,6 +489,55 @@ describe("WP11 会话旁观 API", () => {
     const trigger = detail.timeline.find((entry) => entry.kind === "message");
     expect(trigger?.action).toBe("clarification");
     expect(trigger?.manual_review).toBe(true);
+  });
+
+  it("A40-1 旁观回填：RFQ/offer 两侧补齐 SKU/数量，金额永不投影", async () => {
+    const list = (await (
+      await fetch(`${base}/merchant/api/v1/negotiations?limit=100`, {
+        headers: { cookie: auth.cookie },
+      })
+    ).json()) as {
+      items: Array<{
+        negotiation_id: string;
+        sku: string;
+        quantity?: number;
+        price_minor?: number;
+        phase: string;
+      }>;
+    };
+    const rowA = list.items.find((item) => item.negotiation_id === "neg-wp11-a");
+    expect(rowA).toMatchObject({ sku: "sku-a", quantity: 10 });
+    expect(rowA?.price_minor).toBeUndefined();
+    // rfq 明细行没有 unit_price：SKU/数量仍从 RFQ 回填（不伪造、不缺列）。
+    const rowD = list.items.find((item) => item.negotiation_id === "neg-wp11-d");
+    expect(rowD).toMatchObject({ sku: "sku-d", quantity: 5, phase: "OFFER_OPEN" });
+    expect(rowD?.price_minor).toBeUndefined();
+
+    const detail = (await (
+      await fetch(`${base}/merchant/api/v1/negotiations/neg-wp11-d`, {
+        headers: { cookie: auth.cookie },
+      })
+    ).json()) as {
+      sku: string;
+      quantity?: number;
+      price_minor?: number;
+      timeline: NegotiationTimelineEntry[];
+    };
+    expect(detail.sku).toBe("sku-d");
+    expect(detail.quantity).toBe(5);
+    expect(detail.price_minor).toBeUndefined();
+    const rfqEntry = detail.timeline.find(
+      (entry) => entry.kind === "message" && entry.action === "rfq",
+    );
+    expect(rfqEntry?.summary).toContain("SKU sku-d");
+    expect(rfqEntry?.summary).toContain("数量 5");
+    const offerEntry = detail.timeline.find(
+      (entry) => entry.kind === "message" && entry.action === "offer",
+    );
+    expect(offerEntry?.sku).toBe("sku-d");
+    expect(offerEntry?.quantity).toBe(5);
+    expect(offerEntry?.unit_price_minor).toBeUndefined();
+    expect(offerEntry?.summary).not.toContain("单价");
   });
 
   it("页面壳对新动态字段统一走 esc() 转义（XSS 静态防线）", () => {
