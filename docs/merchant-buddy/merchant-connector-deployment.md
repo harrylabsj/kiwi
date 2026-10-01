@@ -218,7 +218,21 @@ merchant_mcp:
 KIWI_CATALOG_CONNECTOR_TOKEN=<同一 connector token>
 KIWI_CATALOG_CONNECTOR_RETURN_URLS=https://merchant.kiwi.harrylabsj.com   # 只允许网关，不含 veyquo.com
 KIWI_CATALOG_PUBLIC_BASE_URL=https://catalog.kiwi.harrylabsj.com           # 连接确认页链接基准
+# 绑定签发必需（A40-3；与 PUBLIC_BASE_URL 是两个不可互替的变量——A37 事故根因）：
+KIWI_CATALOG_PUBLIC_ORIGIN=https://catalog.kiwi.harrylabsj.com             # 绑定 claims 的 card_url 只从这里派生；无路径、无尾斜杠
+KIWI_CATALOG_ISSUER_KEYS_FILE=/etc/kiwi-catalog/issuer-keys.json           # 或单密钥形态：KIWI_CATALOG_ISSUER_KEY_FILE + KIWI_CATALOG_ISSUER_KID
 # 可选：KIWI_CATALOG_CONNECTOR_MERCHANT_TOKEN_TTL_SECONDS（缺省 90 天）
+```
+
+**上线预检（A40-3，消除「配置缺失 → runtime-bindings 静默 403」）**：升级/改配置后
+重启前先跑一次，全部 `[OK]` 才继续；systemd 单位（deploy/systemd/kiwi-catalog.service）
+已带 `ExecStartPre=... --check-config`，配置缺失会**拒绝启动**而不是静默 403。
+
+```sh
+sudo -u kiwi-catalog /opt/kiwi-catalog/.venv/bin/kiwi-catalog-api --check-config
+# 期望输出：
+# [OK] issuer_key: ISSUER_KEY_OK kid=... thumbprint=sha256:...
+# [OK] public_origin: PUBLIC_ORIGIN_OK origin=https://catalog.kiwi.harrylabsj.com
 ```
 
 ## 6.1 目录的安装与升级：只用 PyPI 公开发布物
@@ -284,6 +298,7 @@ PY
 ### 验证清单（升级后）
 
 ```text
+[ ] sudo -u kiwi-catalog /opt/kiwi-catalog/.venv/bin/kiwi-catalog-api --check-config → 退出 0，issuer_key/public_origin 两项 [OK]（A40-3 上线预检）
 [ ] curl -s https://catalog.kiwi.harrylabsj.com/health                      → 200
 [ ] curl -s http://127.0.0.1:8600/v1/agent-catalog/agents                  → 200（既有读取路径正常）
 [ ] PRAGMA integrity_check → ok；user_version → 目标版本

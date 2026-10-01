@@ -29,6 +29,8 @@
  *   - 商家私有策略值（底价/折扣明细）不进入任何返回值；出站报价仅给出
  *     「由本节点规则引擎生成」的溯源说明，conditional_offer 事件自带的
  *     policy_digest（规则内容摘要，非数值）按账本事实透出；
+ *   - 金额/单价不进入任何返回值（规则数值属私有数据，A40-1 既有设计）；
+ *     投影只回填 SKU 与数量等非金额事实；
  *   - 外部内容（买家问题 code、SKU 等）只作为数据返回；HTML 转义在页面层
  *     （page.ts esc()）完成，本层不产生 HTML。
  *
@@ -59,6 +61,7 @@ export interface NegotiationListViewItem {
   last_action: string;
   sku: string;
   quantity?: number;
+  /** 隐私设计（A40-1）：金额不进旁观投影，本字段恒缺省，仅为 API 形状稳定保留。 */
   price_minor?: number;
   agreement: boolean;
   recorded_at: string;
@@ -82,6 +85,7 @@ export interface NegotiationTimelineEntry {
   summary: string;
   sku?: string;
   quantity?: number;
+  /** 隐私设计（A40-1）：金额/币种不进旁观投影，恒缺省，仅为 API 形状稳定保留。 */
   unit_price_minor?: number;
   currency?: string;
   valid_until?: string;
@@ -105,6 +109,7 @@ export interface NegotiationTimelineView {
   agreement: boolean;
   sku: string;
   quantity?: number;
+  /** 隐私设计（A40-1）：金额不进旁观投影，本字段恒缺省，仅为 API 形状稳定保留。 */
   price_minor?: number;
   /** 协议层买家身份（验签身份；匿名模式下可能是回退地址——与账本事实一致）。 */
   buyer_ref: string;
@@ -124,20 +129,32 @@ export interface NegotiationObserverOptions {
   now?: () => string;
 }
 
-/** KNP wire payload 的最小形状（摘要提取用；未知字段一律忽略）。 */
+/**
+ * KNP wire envelope 的最小形状（摘要提取用；未知字段一律忽略）。
+ *
+ * 账本里的 `wire_payload` 是 KNP/1.0 envelope（`finalizeEnvelope` 产物；入站
+ * 在 `validatePayloadForAction` 强制 `payload.type === action` 通过后才落账），
+ * 因此 payload 是**扁平判别联合**：rfq 的明细行在 `payload.items`，offer-like
+ * 的条款在 `payload.terms` / `payload.proposed_terms` / `payload.base_terms`。
+ * 本投影初版（WP11）误按「按动作名再嵌套一层」的形状读取（如
+ * `payload.offer.terms`），该形状会被入站校验拒绝、不可能出现在真实账本里，
+ * 导致旁观 SKU/数量恒为空（A40-1 根因）。
+ */
 type WirePayload = {
   action?: string;
   created_at?: string;
   payload?: {
-    inquiry?: { questions?: Array<{ code?: string }> };
-    rfq?: { items?: Array<{ sku?: string; quantity?: { value?: number } }> };
-    offer?: { terms?: TermsShape };
-    counter_offer?: { proposed_terms?: TermsShape };
-    conditional_offer?: {
-      base_terms?: TermsShape;
-      policy_digest?: string;
-    };
-    clarification?: { questions?: Array<{ code?: string }> };
+    type?: string;
+    /** rfq（§10）：RFQ 明细行。 */
+    items?: TermsItem[];
+    /** offer（§11）/counter_offer（§12）/conditional_offer（§13）的条款。 */
+    terms?: TermsShape;
+    proposed_terms?: TermsShape;
+    base_terms?: TermsShape;
+    /** inquiry（code）/clarification（field）的问题。 */
+    questions?: Array<{ code?: string; field?: string }>;
+    /** conditional_offer 的 Kiwi 扩展：规则内容摘要（非数值）。 */
+    policy_digest?: string;
   };
 };
 
@@ -175,15 +192,28 @@ function actionLabel(action: string): string {
 }
 
 function termsOf(wire: WirePayload | undefined): TermsShape | undefined {
-  return (
-    wire?.payload?.offer?.terms ??
-    wire?.payload?.counter_offer?.proposed_terms ??
-    wire?.payload?.conditional_offer?.base_terms
-  );
+  const payload = wire?.payload;
+  if (payload === undefined) return undefined;
+  switch (payload.type) {
+    case "offer":
+      return payload.terms;
+    case "counter_offer":
+      return payload.proposed_terms;
+    case "conditional_offer":
+      return payload.base_terms;
+    default:
+      return undefined;
+  }
 }
 
 function firstItem(terms: TermsShape | undefined): TermsItem | undefined {
   return terms?.items?.[0];
+}
+
+/** 首个明细行：rfq 直接给 items；offer-like 从 terms 取。 */
+function firstLineItem(wire: WirePayload | undefined): TermsItem | undefined {
+  if (wire?.payload?.type === "rfq") return wire.payload.items?.[0];
+  return firstItem(termsOf(wire));
 }
 
 /** 单条磋商的账本扫描结果（列表行与时间线共用一趟遍历）。 */
@@ -246,13 +276,12 @@ function scanNegotiation(
     const action = wire?.action ?? "";
     if (action !== "") row.last_action = action;
     const terms = termsOf(wire);
-    const item = firstItem(terms);
+    const item = firstLineItem(wire);
     if (item?.sku !== undefined && item.sku !== "") {
       row.sku = item.sku;
       if (item.quantity?.value !== undefined) row.quantity = item.quantity.value;
-      if (item.unit_price?.amount_minor !== undefined) {
-        row.price_minor = Number(item.unit_price.amount_minor);
-      }
+      // 单价/金额按既有隐私设计不进旁观投影（规则数值属私有数据，A40-1）：
+      // 只回填 SKU 与数量，绝不回填价格。
     }
     if (inbound) {
       lastInboundAt = event.recorded_at;
@@ -261,11 +290,14 @@ function scanNegotiation(
       lastOutboundAt = event.recorded_at;
     }
     const questionCodes: string[] = [];
-    const questions = wire?.payload?.inquiry?.questions ?? wire?.payload?.clarification?.questions;
+    const questions = wire?.payload?.questions;
     if (questions !== undefined) {
       for (const question of questions) {
-        if (typeof question?.code === "string" && question.code !== "") {
-          questionCodes.push(question.code);
+        // inquiry 的问题用 code，clarification 的问题用 field；两者都是
+        // 外部内容原文，按数据透出（页面层转义）。
+        const token = question?.code ?? question?.field;
+        if (typeof token === "string" && token !== "") {
+          questionCodes.push(token);
         }
       }
     }
@@ -273,9 +305,6 @@ function scanNegotiation(
     if (item?.sku !== undefined && item.sku !== "") {
       summaryParts.push(`SKU ${item.sku}`);
       if (item.quantity?.value !== undefined) summaryParts.push(`数量 ${item.quantity.value}`);
-      if (item.unit_price?.amount_minor !== undefined) {
-        summaryParts.push(`单价 ${item.unit_price.amount_minor}（最小币单位）`);
-      }
     }
     if (questionCodes.length > 0) {
       summaryParts.push(`问题 ${questionCodes.length} 条（${questionCodes.slice(0, 3).join("；")}）`);
@@ -289,17 +318,14 @@ function scanNegotiation(
       ...(questionCodes.length > 0 ? { questions: questionCodes } : {}),
       ...(item?.sku !== undefined && item.sku !== "" ? { sku: item.sku } : {}),
       ...(item?.quantity?.value !== undefined ? { quantity: item.quantity.value } : {}),
-      ...(item?.unit_price?.amount_minor !== undefined
-        ? { unit_price_minor: Number(item.unit_price.amount_minor) }
-        : {}),
-      ...(item?.unit_price?.currency !== undefined ? { currency: item.unit_price.currency } : {}),
+      // 单价/币种不投影（隐私设计，A40-1）；只保留非金额的条款事实。
       ...(terms?.valid_until !== undefined ? { valid_until: terms.valid_until } : {}),
       ...(terms?.fulfillment_terms?.delivery_before !== undefined
         ? { delivery_before: terms.fulfillment_terms.delivery_before }
         : {}),
       rule_summary: !inbound && ["offer", "counter_offer", "conditional_offer"].includes(action)
-        ? wire?.payload?.conditional_offer?.policy_digest !== undefined
-          ? `规则引擎自动生成（policy_digest ${wire.payload.conditional_offer.policy_digest}）`
+        ? wire?.payload?.policy_digest !== undefined
+          ? `规则引擎自动生成（policy_digest ${wire.payload.policy_digest}）`
           : AUTO_QUOTE_RULE_SUMMARY
         : null,
       manual_review: false,

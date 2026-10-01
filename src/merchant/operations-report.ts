@@ -182,21 +182,23 @@ function ledgerWindowCounts(ledgerDir: string, window: ReportWindow): LedgerWind
         escalations.add(negotiationId);
       }
       if (event.event_kind === "message_received") {
+        // 账本 wire_payload 是 KNP 扁平 payload（与 negotiation-observer 同形状，
+        // A40-1）：inquiry/clarification 的问题直接在 payload.questions。
         const wire = event.wire_payload as
           | {
               action?: string;
               payload?: {
-                inquiry?: { questions?: Array<{ code?: string }> };
-                clarification?: { questions?: Array<{ code?: string }> };
+                questions?: Array<{ code?: string; field?: string }>;
               };
             }
           | undefined;
-        const questions =
-          wire?.payload?.inquiry?.questions ?? wire?.payload?.clarification?.questions;
+        const questions = wire?.payload?.questions;
         if (questions !== undefined && (wire?.action === "inquiry" || wire?.action === "clarification")) {
           for (const question of questions) {
-            if (typeof question?.code === "string" && question.code !== "") {
-              inquiryTokens.set(question.code, (inquiryTokens.get(question.code) ?? 0) + 1);
+            // inquiry 用 code，clarification 用 field；均为外部内容原文。
+            const token = question?.code ?? question?.field;
+            if (typeof token === "string" && token !== "") {
+              inquiryTokens.set(token, (inquiryTokens.get(token) ?? 0) + 1);
             }
           }
         }
