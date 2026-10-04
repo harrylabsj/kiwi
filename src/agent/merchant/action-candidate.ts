@@ -101,6 +101,8 @@ export function contentHash(value: unknown): string {
 export interface WriteApprovalCandidateStoreOptions {
   db: DatabaseSync;
   principalId: string;
+  /** Local owner stores are additionally scoped by exact persisted merchant binding. */
+  ownerMerchantId?: string;
   now?: () => string;
 }
 
@@ -124,10 +126,22 @@ export class WriteApprovalCandidateStore {
   private readonly db: DatabaseSync;
   private readonly principalId: string;
   private readonly now: () => string;
+  readonly ownerStorageFile?: string;
+  readonly ownerBinding?: Readonly<{ merchantId: string; principal: string }>;
 
   constructor(options: WriteApprovalCandidateStoreOptions) {
     this.db = options.db;
     this.principalId = options.principalId;
+    if (options.ownerMerchantId !== undefined) {
+      this.ownerBinding = Object.freeze({
+        merchantId: options.ownerMerchantId,
+        principal: options.principalId,
+      });
+      const main = (
+        this.db.prepare("PRAGMA database_list").all() as { name: string; file: string }[]
+      ).find((row) => row.name === "main");
+      if (typeof main?.file === "string" && main.file.length > 0) this.ownerStorageFile = main.file;
+    }
     const clock = options.now ?? (() => new Date().toISOString());
     this.now = () => new Date(Date.parse(clock())).toISOString();
   }
@@ -140,6 +154,16 @@ export class WriteApprovalCandidateStore {
     task_id?: string;
     expires_at: string;
   }): WriteApprovalCandidate {
+    if (
+      this.ownerBinding !== undefined &&
+      (input.preconditions.merchant_id !== this.ownerBinding.merchantId ||
+        input.preconditions.principal !== this.principalId)
+    ) {
+      throw new WriteApprovalCandidateError(
+        "conflict",
+        "owner candidate identity binding required",
+      );
+    }
     const candidateId = `act_${uuidv7()}`;
     const now = this.now();
     this.db
@@ -170,7 +194,15 @@ export class WriteApprovalCandidateStore {
     const row = this.db
       .prepare("SELECT * FROM action_candidates WHERE candidate_id = ? AND principal_id = ?")
       .get(candidateId, this.principalId) as unknown as CandidateRow | undefined;
-    return row === undefined ? undefined : this.rowToCandidate(row);
+    if (row === undefined) return undefined;
+    const candidate = this.rowToCandidate(row);
+    if (
+      this.ownerBinding !== undefined &&
+      (candidate.preconditions.merchant_id !== this.ownerBinding.merchantId ||
+        candidate.preconditions.principal !== this.principalId)
+    )
+      return undefined;
+    return candidate;
   }
 
   listPending(): WriteApprovalCandidate[] {
@@ -180,7 +212,9 @@ export class WriteApprovalCandidateStore {
         "SELECT * FROM action_candidates WHERE principal_id = ? AND status = 'pending_approval' ORDER BY created_at, candidate_id",
       )
       .all(this.principalId) as unknown as CandidateRow[];
-    return rows.map((r) => this.rowToCandidate(r));
+    return rows
+      .map((r) => this.get(r.candidate_id))
+      .filter((r): r is WriteApprovalCandidate => r !== undefined);
   }
 
   /** Expire pending/approved candidates past their deadline. Returns count. */
@@ -195,14 +229,17 @@ export class WriteApprovalCandidateStore {
            WHERE principal_id = ? AND status IN ('pending_approval','approved') AND expires_at < ?`,
         )
         .all(this.principalId, now) as { candidate_id: string }[];
+      let count = 0;
       for (const { candidate_id } of due) {
+        if (this.get(candidate_id) === undefined) continue;
+        count++;
         this.db
           .prepare(
             "UPDATE action_candidates SET status = 'expired', updated_at = ? WHERE candidate_id = ?",
           )
           .run(now, candidate_id);
       }
-      return due.length;
+      return count;
     });
   }
 
@@ -224,7 +261,10 @@ export class WriteApprovalCandidateStore {
            WHERE principal_id = ? AND status IN ('pending_approval','approved')`,
         )
         .all(this.principalId) as { candidate_id: string }[];
+      let count = 0;
       for (const { candidate_id } of recoverable) {
+        if (this.get(candidate_id) === undefined) continue;
+        count++;
         this.db
           .prepare(
             `UPDATE action_candidates
@@ -234,7 +274,7 @@ export class WriteApprovalCandidateStore {
           )
           .run(now, candidate_id, this.principalId);
       }
-      return recoverable.length;
+      return count;
     });
   }
 
@@ -287,6 +327,7 @@ export class WriteApprovalCandidateStore {
    * supersedeExecuting 在重启恢复时清理。
    */
   claimForExecution(candidateId: string): WriteApprovalCandidate | undefined {
+    if (this.get(candidateId) === undefined) return undefined;
     const now = this.now();
     const claimed = this.db
       .prepare(
@@ -299,6 +340,7 @@ export class WriteApprovalCandidateStore {
   }
 
   executionWasClaimed(candidateId: string): boolean | undefined {
+    if (this.get(candidateId) === undefined) return undefined;
     const row = this.db
       .prepare(
         `SELECT executing_at FROM action_candidates
@@ -318,13 +360,20 @@ export class WriteApprovalCandidateStore {
    * 仅启动恢复路径调用（进程内不存在并发执行中候选）。返回处理数量。
    */
   supersedeExecuting(): number {
-    const r = this.db
-      .prepare(
-        "UPDATE action_candidates SET status = 'superseded', updated_at = ? " +
-          "WHERE status = 'approved' AND executing_at IS NOT NULL",
-      )
-      .run(this.now());
-    return Number(r.changes);
+    return inImmediateTransaction(this.db, () => {
+      const rows = this.db
+        .prepare(
+          "SELECT candidate_id FROM action_candidates WHERE principal_id=? AND status='approved' AND executing_at IS NOT NULL",
+        )
+        .all(this.principalId) as { candidate_id: string }[];
+      let count = 0;
+      for (const row of rows) {
+        if (this.get(row.candidate_id) === undefined) continue;
+        this.supersede(row.candidate_id);
+        count++;
+      }
+      return count;
+    });
   }
 
   /** 拒绝候选（审查 P2 状态守卫）：仅 pending_approval/approved 可拒绝——

@@ -1240,6 +1240,184 @@ async function cmdBuyerTasks(args: ParsedArgs): Promise<number> {
  * - start = agent serve 别名（Merchant A2A server + 注册 Kiwi Network）；
  * - init/publish/listings/status/doctor = 骨架（对应 D1/D2/D3）。
  */
+/**
+ * A199：本地 owner 会话 CLI（用户批准件范围）——仅本地受信进程内调用。
+ * 双开关（KIWI_OWNER_SESSION_ENABLED && KIWI_AI_RUNTIME_ENABLED）缺省 off：
+ * 任一关闭时本命令不做任何文件创建/SDK 加载，直接退出并如实说明。
+ */
+async function cmdMerchantOwner(ownerArgv: string[]): Promise<number> {
+  const {
+    readOwnerSessionSwitches,
+    ownerSessionFullyEnabled,
+    LocalMerchantOwnerSession,
+    OwnerSessionError,
+  } = await import("./merchant/ai-runtime/owner-session.js");
+  const switches = readOwnerSessionSwitches(process.env);
+  const rest = ownerArgv; // ["owner", <sub>, ...flags]
+  const sub2 = rest[0];
+  const opt = (name: string): string | undefined => {
+    const idx = rest.indexOf(name);
+    return idx !== -1 ? rest[idx + 1] : undefined;
+  };
+  if (!ownerSessionFullyEnabled(switches)) {
+    process.stdout.write(
+      "owner session disabled（KIWI_OWNER_SESSION_ENABLED / KIWI_AI_RUNTIME_ENABLED 任一未显式开启）——" +
+        "零副作用退出：无文件创建、无 SDK 加载、无存储写入。\n",
+    );
+    return EXIT.OK;
+  }
+  const storageRoot = opt("--storage-root");
+  const grantFile = opt("--grant-file");
+  const merchantId = opt("--merchant-id");
+  const principal = opt("--principal") ?? "cli:local";
+  if (storageRoot === undefined || grantFile === undefined || merchantId === undefined) {
+    process.stderr.write(
+      "用法：kiwi merchant owner submit --storage-root <dir> --grant-file <file> --merchant-id <opaque> --principal <id> --text <text>\n       kiwi merchant owner reconcile --storage-root <dir> --grant-file <file> --merchant-id <opaque> --operation-id <id> --decision settled_no_new_effect [--evidence <text>]\n       kiwi merchant owner expire-for-recovery --storage-root <dir> --merchant-id <opaque>\n",
+    );
+    return EXIT.CONFIG;
+  }
+  // Trusted execution authority is never created from CLI flags or configuration JSON.
+  if (sub2 === "factory-check") {
+    const file = opt("--factory-config");
+    if (file === undefined) {
+      process.stdout.write(JSON.stringify({ ok: false, code: "factory_config_required" }) + "\n");
+      return EXIT.CONFIG;
+    }
+    try {
+      const { readOwnerFactoryConfig } =
+        await import("./merchant/ai-runtime/owner-factory-config.js");
+      readOwnerFactoryConfig(file, { merchantId, principal });
+      process.stdout.write(
+        JSON.stringify({
+          ok: false,
+          state: "factory_references_validated_only",
+          code: "factory_authority_required",
+          credentialValuesResolved: false,
+          modelActivated: false,
+          businessTransportActivated: false,
+        }) + "\n",
+      );
+    } catch (error) {
+      const { OwnerFactoryError } = await import("./merchant/ai-runtime/owner-factory-config.js");
+      process.stdout.write(
+        JSON.stringify({
+          ok: false,
+          code: error instanceof OwnerFactoryError ? error.code : "factory_config_invalid",
+        }) + "\n",
+      );
+    }
+    return EXIT.CONFIG;
+  }
+  // A221 validates only named configuration refs; no token/model/transport resolution.
+  if (sub2 === "config" || sub2 === "facts") {
+    const file = opt("--owner-config");
+    if (file === undefined) {
+      process.stdout.write(JSON.stringify({ ok: false, code: "owner_config_required" }) + "\n");
+      return EXIT.CONFIG;
+    }
+    try {
+      const { readOwnerBusinessConfig } =
+        await import("./merchant/ai-runtime/owner-business-config.js");
+      const config = readOwnerBusinessConfig(file, { merchantId, principal });
+      if (sub2 === "facts") {
+        process.stdout.write(
+          JSON.stringify({ ok: false, code: "owner_readonly_transport_required" }) + "\n",
+        );
+        return EXIT.CONFIG;
+      }
+      process.stdout.write(
+        JSON.stringify({
+          ok: true,
+          state: "references_validated_only",
+          sourceKind: config.source.kind,
+          modelProvider: config.model.provider,
+          credentialValuesResolved: false,
+          modelActivated: false,
+          businessTransportActivated: false,
+        }) + "\n",
+      );
+      return EXIT.OK;
+    } catch (error) {
+      const { OwnerBusinessConfigError } =
+        await import("./merchant/ai-runtime/owner-business-config.js");
+      process.stdout.write(
+        JSON.stringify({
+          ok: false,
+          code: error instanceof OwnerBusinessConfigError ? error.code : "owner_config_invalid",
+        }) + "\n",
+      );
+      return EXIT.CONFIG;
+    }
+  }
+  // CLI has no authenticated business connector/facts/provider assembly.
+  // Do not turn local implementation approval into a default business approval.
+  if (sub2 === "submit" || sub2 === "reconcile") {
+    process.stdout.write(
+      JSON.stringify({
+        ok: false,
+        code:
+          sub2 === "submit"
+            ? "owner_host_configuration_required"
+            : "authoritative_verifier_configuration_required",
+        message:
+          "请通过受信本地进程装配业务事实读取、工具执行、正常审批、持久预算和 SDK runtime；CLI 不生成默认批准或权威对账。",
+      }) + "\n",
+    );
+    return EXIT.CONFIG;
+  }
+  let session:
+    import("./merchant/ai-runtime/owner-session.js").LocalMerchantOwnerSession | undefined;
+  let db: import("node:sqlite").DatabaseSync | undefined;
+  try {
+    const { merchantStorageDir } = await import("./merchant/ai-runtime/owner-session.js");
+    const { createFileGrantResolver } = await import("./merchant/ai-runtime/owner-file-grant.js");
+    const grant = createFileGrantResolver({ merchantId, principal }).readStrong(grantFile);
+    if (!grant.ok) throw new OwnerSessionError(grant.code, grant.message);
+    const directory = merchantStorageDir(storageRoot, merchantId);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    chmodSync(directory, 0o700);
+    const metaFile = path.join(directory, "owner-approvals.sqlite");
+    if (!existsSync(metaFile)) writeFileSync(metaFile, "", { flag: "wx", mode: 0o600 });
+    chmodSync(metaFile, 0o600);
+    const { migrateMemorySchema } = await import("./agent/memory/schema.js");
+    const { WriteApprovalCandidateStore } = await import("./agent/merchant/action-candidate.js");
+    db = new DatabaseSync(metaFile);
+    migrateMemorySchema(db); // Only new independent owner storage, never legacy CLI meta.
+    db.prepare(
+      "INSERT OR IGNORE INTO principals (principal_id, owner_id, role, display_name, created_at, updated_at) VALUES (?, ?, 'merchant', ?, datetime('now'), datetime('now'))",
+    ).run(principal, principal, principal);
+    const approvals = new WriteApprovalCandidateStore({
+      db,
+      principalId: principal,
+      ownerMerchantId: merchantId,
+    });
+    session = new LocalMerchantOwnerSession({
+      storageRoot,
+      merchantId,
+      grantFile,
+      principal,
+      approvals,
+    });
+    if (sub2 === "history") {
+      process.stdout.write(JSON.stringify(await session.history()) + "\n");
+      return EXIT.OK;
+    }
+    if (sub2 === "expire-for-recovery") {
+      process.stdout.write(`expired=${session.recoveredApprovalCount}\n`);
+      return EXIT.OK;
+    }
+    process.stderr.write(`unknown owner subcommand: ${sub2 ?? ""}\n`);
+    return EXIT.CONFIG;
+  } catch (err) {
+    const code = err instanceof OwnerSessionError ? err.code : "owner_error";
+    process.stderr.write(`${code}: ${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.CONFIG;
+  } finally {
+    session?.release();
+    db?.close();
+  }
+}
+
 async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise<number> {
   if (sub === undefined) {
     process.stdout.write(productHelp("merchant"));
@@ -2244,6 +2422,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // （--public-url / --catalog-url / --source / --tls-* 等，见 merchant-gateway/cli.ts）。
   if (argv[0] === "merchant" && argv[1] === "gateway") {
     return await runGatewayServe(argv.slice(2));
+  }
+  // `kiwi merchant owner <sub>`：A199 本地 owner 会话，独立 flag 集（不经全局 parseArgs）。
+  if (argv[0] === "merchant" && argv[1] === "owner") {
+    return await cmdMerchantOwner(argv.slice(2));
   }
   let args: ParsedArgs;
   try {

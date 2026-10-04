@@ -15,22 +15,21 @@
  */
 
 /**
- * Shared tool typing for kiwi's agent tools (pi-agent-core 0.87).
+ * Shared tool typing for kiwi's agent tools (pi-agent-core 1.0).
  *
- * `AgentHarnessTool` (the harness-native shape) requires all six `execute`
- * parameters at call sites, but every kiwi tool only implements
- * `(toolCallId, params)`. `KiwiTool` keeps the harness identity fields and
- * narrows `execute` to the two parameters kiwi actually uses (plus the
- * optional streaming callback), so tools and tests can use the short form
- * while the adapter in `kernel.ts` still forwards the harness-shaped call.
+ * pi 1.0 removed the harness-native `AgentHarnessTool` shape (A94); the runtime
+ * `AgentTool` is now the only tool type. `KiwiTool` keeps the identity fields
+ * and narrows `execute` to the parameters kiwi actually uses
+ * `(toolCallId, params)` plus the optional streaming callback, so tools and
+ * tests can use the short form while the adapter in `kernel.ts` forwards the
+ * runtime-shaped call.
  */
-import type { AgentHarnessTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 
-type HarnessExecute = AgentHarnessTool<undefined>["execute"];
-type HarnessParams = Parameters<HarnessExecute>[1];
-type HarnessUpdate = Parameters<HarnessExecute>[2];
+type HarnessParams = Parameters<AgentTool["execute"]>[1];
+type HarnessUpdate = AgentToolUpdateCallback<unknown>;
 
-export type KiwiTool = Omit<AgentHarnessTool<undefined>, "execute"> & {
+export type KiwiTool = Omit<AgentTool, "execute"> & {
   execute(
     toolCallId: string,
     params: HarnessParams,

@@ -28,7 +28,8 @@
  *   MemoryStore) and deterministic slash commands to the operator.
  */
 
-import type { AgentHarnessTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { KiwiTool } from "../agent/kiwi-tool.js";
 import {
   createAgentSession,
   createExtensionRuntime,
@@ -746,7 +747,7 @@ export class AgentKernel {
       options.modelRuntime ?? (await buildModelRuntime(options)),
       options.profile.merchant_experience?.prompt_cache_retention,
     );
-    const kiwiTools: AgentHarnessTool<undefined>[] = [
+    const kiwiTools: KiwiTool[] = [
       ...buildMemoryTools(store, { turnId: () => turnId.current }),
       ...buyerTools,
       ...merchantTools,
@@ -764,7 +765,7 @@ export class AgentKernel {
         (tool.execute as (
           id: string,
           callParams: typeof params,
-        ) => ReturnType<AgentHarnessTool<undefined>["execute"]>)(toolCallId, params),
+        ) => Promise<AgentToolResult<unknown>>)(toolCallId, params),
     }));
     const { session: agentSession } = await createAgentSession({
       cwd: paths.dir,
