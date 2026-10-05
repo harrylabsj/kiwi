@@ -54,7 +54,7 @@
     "verify:delivery-manifest": "node scripts/verify-delivery-manifest.mjs"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.87.1",
+    "@earendil-works/pi-agent-core": "1.0.0",
     "@earendil-works/pi-ai": "0.87.1",
     "@earendil-works/pi-coding-agent": "0.87.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
