@@ -49,6 +49,10 @@ import {
   WriteApprovalCandidateStore,
 } from "../../agent/merchant/action-candidate.js";
 
+import { OwnerBusinessHost } from "./owner-business-host.js";
+import type { OwnerBusinessBinding, OwnerCommittedPermit } from "./owner-committed-proof.js";
+import type { OwnerBusinessReceipt } from "./owner-operation-reader.js";
+
 // ── 双开关（缺省 off）───────────────────────────────────────────────────────
 
 export interface OwnerSessionSwitches {
@@ -167,6 +171,8 @@ export type OperationState = "reserved" | "pending" | "settled" | "reconciliatio
 
 export interface OperationRecord {
   operation_id: string;
+  /** Private new-store binding; absent on legacy converse operations. */
+  business_binding?: OwnerBusinessBinding;
   merchant_id: string;
   principal_id?: string;
   candidate_id?: string;
@@ -430,6 +436,7 @@ export interface OwnerSessionInput {
   grantFile: string;
   principal: string;
   now?: () => string;
+  businessHost?: OwnerBusinessHost;
   reconciliationVerifier?: ReconciliationVerifier;
   budgetGate?: OwnerBudgetGate;
   approvals?: ApprovalStoreLike;
@@ -618,6 +625,295 @@ export class LocalMerchantOwnerSession {
     );
     return queued;
   }
+  /** Deterministic committed dispatch, same queue as SDK turns; no second agent loop. */
+  submitCommittedOperation(permit: OwnerCommittedPermit): Promise<OwnerSubmitOutcome> {
+    const run = async () => {
+      this.activeTurn = true;
+      try {
+        return await this.doCommittedOperation(permit);
+      } finally {
+        this.activeTurn = false;
+      }
+    };
+    const queued = this.queue.then(run, run);
+    this.queue = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  }
+  private businessAuthority(binding: OwnerBusinessBinding): OwnerBusinessHost {
+    this.assertGrant();
+    const host = this.input.businessHost;
+    if (
+      !(host instanceof OwnerBusinessHost) ||
+      binding.merchantId !== this.input.merchantId ||
+      binding.principal !== this.input.principal
+    )
+      throw new OwnerSessionError("business_binding_mismatch", "business authority required");
+    host.verify(binding);
+    return host;
+  }
+  private businessGrantDigest(): string {
+    this.assertGrant();
+    const grant = this.grant.readStrong(this.input.grantFile);
+    if (!grant.ok) throw new OwnerSessionError(grant.code, grant.message);
+    return grant.grant.digest;
+  }
+  private assertBusinessRecord(rec: OperationRecord, binding: OwnerBusinessBinding): void {
+    if (
+      rec.operation_id !== binding.operationId ||
+      rec.merchant_id !== binding.merchantId ||
+      rec.principal_id !== binding.principal ||
+      rec.candidate_id !== binding.candidateId ||
+      rec.kind !== binding.kind ||
+      rec.args_hash !== contentDigest(binding.arguments) ||
+      rec.business_key !== businessKey(binding.kind, binding.arguments) ||
+      contentDigest(rec.business_binding) !== contentDigest(binding)
+    )
+      throw new OwnerSessionError("operation_binding_unknown", "complete journal binding required");
+  }
+  private applyBusinessReceipt(
+    operationId: string,
+    before: OperationRecord,
+    receipt: OwnerBusinessReceipt,
+    grantDigest: string,
+  ): OperationRecord {
+    const binding = before.business_binding!;
+    this.assertBusinessRecord(before, binding);
+    this.businessAuthority(binding); // strong grant/subject after await, even for unknown
+    if (this.businessGrantDigest() !== grantDigest)
+      throw new OwnerSessionError(
+        "grant_changed_during_read",
+        "grant changed during receipt await",
+      );
+    const journal = this.readOperations();
+    const fresh = journal.operations[operationId];
+    if (
+      fresh === undefined ||
+      contentDigest(fresh) !== contentDigest(before) ||
+      !["pending", "reconciliation"].includes(fresh.state)
+    )
+      throw new OwnerSessionError(
+        "operation_changed_during_read",
+        "journal changed during receipt await",
+      );
+    if (
+      receipt.status === "applied" &&
+      contentDigest(receipt.binding) === contentDigest(binding) &&
+      receipt.source === binding.authoritySource &&
+      receipt.resultingMoneyAuthorityVersion === binding.expectedMoneyAuthorityVersion + 1 &&
+      receipt.receiptRef
+    ) {
+      fresh.state = "settled";
+      fresh.reconciliation = {
+        decided_at: this.nowFn(),
+        outcome: "settled_with_evidence",
+        evidence: receipt.receiptRef,
+      };
+      fresh.updated_at = this.nowFn();
+      this.writeOperations(journal);
+    }
+    return structuredClone(fresh);
+  }
+  reconcileCommittedOperation(operationId: string): Promise<OperationRecord> {
+    const run = async () => {
+      this.activeTurn = true;
+      try {
+        this.assertGrant();
+        const rec = this.readOperations().operations[operationId];
+        if (
+          !rec?.business_binding ||
+          rec.operation_id !== operationId ||
+          rec.state !== "reconciliation"
+        )
+          throw new OwnerSessionError(
+            "operation_binding_unknown",
+            "no reconcilable committed binding",
+          );
+        const before = structuredClone(rec);
+        this.assertBusinessRecord(before, before.business_binding!);
+        const host = this.businessAuthority(before.business_binding!);
+        const grantDigest = this.businessGrantDigest();
+        const receipt = await host.read(before.business_binding!);
+        return this.applyBusinessReceipt(operationId, before, receipt, grantDigest);
+      } finally {
+        this.activeTurn = false;
+      }
+    };
+    const queued = this.queue.then(run, run);
+    this.queue = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  }
+  private async doCommittedOperation(permit: OwnerCommittedPermit): Promise<OwnerSubmitOutcome> {
+    const reject = (code: string): OwnerSubmitOutcome => ({ ok: false, code, message: code });
+    let binding: OwnerBusinessBinding;
+    let host: OwnerBusinessHost;
+    let store: WriteApprovalCandidateStore;
+    try {
+      this.assertGrant();
+      if (!(this.input.businessHost instanceof OwnerBusinessHost))
+        return reject("business_authority_missing");
+      host = this.input.businessHost;
+      binding = host.inspect(permit);
+      this.businessAuthority(binding);
+      store = this.store();
+    } catch {
+      return reject("committed_proof_invalid");
+    }
+    const operationId = binding.operationId;
+    const key = businessKey(binding.kind, binding.arguments);
+    if (binding.preconditions.business_key !== key) return reject("candidate_binding_mismatch");
+    const records = this.readOperations().operations;
+    const old = records[operationId];
+    if (old) {
+      try {
+        this.assertBusinessRecord(old, binding);
+      } catch {
+        return reject("operation_binding_mismatch");
+      }
+      if (contentDigest(old.business_binding) !== contentDigest(binding))
+        return reject("operation_binding_mismatch");
+      return old.state === "settled"
+        ? { ok: true, operationId, state: "settled", turnSummary: "previous_authoritative_receipt" }
+        : { ok: false, operationId, state: "reconciliation", reason: "unknown_result_no_redrive" };
+    }
+    // Unknown history cannot be bypassed by a changed target/args/candidate/op.
+    if (
+      Object.values(records).some(
+        (r) =>
+          r.state !== "settled" &&
+          (r.business_key === key ||
+            (r.business_binding?.kind === binding.kind && r.business_binding.sku === binding.sku)),
+      )
+    )
+      return reject("operation_reconciliation");
+    store.expireDue();
+    if (store.get(binding.candidateId)?.status !== "approved") return reject("needs_approval");
+    const budget = this.input.budgetGate;
+    if (!budget) return reject("budget_gate_missing");
+    const lease = await budget.acquire({
+      merchantId: this.input.merchantId,
+      estimatedTokens: host.reservationTokens,
+    });
+    if (!lease.allowed) return reject("budget_denied");
+    let effectEntered = false;
+    try {
+      this.businessAuthority(binding);
+      const journal = this.readOperations();
+      if (journal.operations[operationId]) throw new Error("operation_already_reserved");
+      journal.operations[operationId] = {
+        operation_id: operationId,
+        merchant_id: binding.merchantId,
+        principal_id: binding.principal,
+        candidate_id: binding.candidateId,
+        business_binding: structuredClone(binding),
+        business_key: key,
+        kind: binding.kind,
+        args_hash: contentDigest(binding.arguments),
+        ...{ budget_lease_id: lease.leaseId, budget_reservation_tokens: host.reservationTokens },
+        state: "reserved",
+        created_at: this.nowFn(),
+        updated_at: this.nowFn(),
+      };
+      this.writeOperations(journal);
+      const outcome = await executeApprovedCandidate(store, binding.candidateId, {
+        readPreconditions: async () => {
+          this.businessAuthority(binding);
+          const fresh = await host.fresh(binding);
+          this.businessAuthority(binding);
+          return fresh;
+        },
+        execute: async (approvedArgs) => {
+          this.businessAuthority(binding);
+          if (contentDigest(approvedArgs) !== contentDigest(binding.arguments))
+            throw new Error("stored_arguments_changed");
+          const ops = this.readOperations();
+          const rec = ops.operations[operationId];
+          if (
+            !rec ||
+            rec.state !== "reserved" ||
+            contentDigest(rec.business_binding) !== contentDigest(binding)
+          )
+            throw new Error("operation_binding_changed");
+          rec.state = "pending";
+          rec.updated_at = this.nowFn();
+          this.writeOperations(ops);
+          effectEntered = true;
+          await host.execute(binding, permit); // PATCH/readback alone is not a historical receipt.
+          this.businessAuthority(binding);
+          const before = structuredClone(this.readOperations().operations[operationId]!);
+          if (contentDigest(before) !== contentDigest(rec))
+            throw new Error("operation_changed_during_write");
+          const grantDigest = this.businessGrantDigest();
+          const receipt = await host.read(binding);
+          const applied = this.applyBusinessReceipt(operationId, before, receipt, grantDigest);
+          return applied.state === "settled"
+            ? { applied: true }
+            : { ok: false, error: "operation_reconciliation" };
+        },
+      });
+      const ops = this.readOperations();
+      const rec = ops.operations[operationId]!;
+      if (outcome.kind !== "executed" || rec.state !== "settled") {
+        rec.state = "reconciliation";
+        rec.updated_at = this.nowFn();
+        this.writeOperations(ops);
+        return {
+          ok: false,
+          operationId,
+          state: "reconciliation",
+          reason: "unknown_result_no_redrive",
+        };
+      }
+      return {
+        ok: true,
+        operationId,
+        state: "settled",
+        turnSummary: "authoritative_exact_money_receipt",
+      };
+    } catch {
+      try {
+        const ops = this.readOperations();
+        const rec = ops.operations[operationId];
+        if (rec && rec.state !== "settled") {
+          rec.state = "reconciliation";
+          rec.updated_at = this.nowFn();
+          this.writeOperations(ops);
+        }
+      } catch {
+        /* preserve unreadable journal, never replace */
+      }
+      return {
+        ok: false,
+        operationId,
+        state: "reconciliation",
+        reason: "unknown_result_no_redrive",
+      };
+    } finally {
+      // An uncertain business window never discounts its conservative reservation to zero.
+      try {
+        const ops = this.readOperations();
+        const rec = ops.operations[operationId];
+        if (rec) {
+          Object.assign(rec, {
+            budget_charged_tokens: effectEntered ? host.reservationTokens : 0,
+            budget_usage_known: !effectEntered,
+          });
+          this.writeOperations(ops);
+        }
+      } catch {
+        /* settlement still runs */
+      }
+      await budget.settle({
+        leaseId: lease.leaseId,
+        usedTokens: effectEntered ? host.reservationTokens : 0,
+      });
+    }
+  }
   private async doSubmitTurn(input: SubmitInput): Promise<OwnerSubmitOutcome> {
     const reject = (code: string): OwnerSubmitOutcome => ({ ok: false, code, message: code });
     try {
@@ -625,6 +921,8 @@ export class LocalMerchantOwnerSession {
     } catch (e) {
       return reject(e instanceof OwnerSessionError ? e.code : "grant_unknown");
     }
+    // Business writes only enter through a committed capability, never model input.
+    if (String(input.mode) === "operation") return reject("committed_dispatch_required");
     if (this.input.budgetGate === undefined) return reject("budget_gate_missing");
     const runtime = this.input.sdkRuntime;
     if (runtime === undefined || this.input.effectRunner !== undefined)
@@ -945,6 +1243,11 @@ export class LocalMerchantOwnerSession {
       throw new OwnerSessionError(
         "operation_binding_unknown",
         "operation principal binding missing or different",
+      );
+    if (rec?.business_binding !== undefined)
+      throw new OwnerSessionError(
+        "async_business_receipt_required",
+        "committed business uses only async authoritative receipt",
       );
     if (rec === undefined || rec.state !== "reconciliation")
       throw new OwnerSessionError("not_in_reconciliation", "operation not reconcilable");

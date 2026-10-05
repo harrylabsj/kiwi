@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { gzipSync, gunzipSync } from "node:zlib";
+import { gzipSync, gunzipSync, brotliCompressSync, brotliDecompressSync, constants } from "node:zlib";
 
 const MAGIC = Buffer.from("KIWISTG1");
 const MAX_PLAIN = 256 * 1048576;
@@ -59,7 +59,13 @@ function validateEntries(entries) {
     }
   }
 }
-export function createStageArchive(stage) {
+export function encodeStagePlain(plain, { codec = "gzip-v1", quality = 9 } = {}) {
+  if (!["gzip-v1", "brotli-v1"].includes(codec)) throw new Error("A244_ARCHIVE_CODEC_UNKNOWN");
+  if (plain.length > MAX_PLAIN) throw new Error("A236_ARCHIVE_EXPANSION_LIMIT");
+  if (codec === "brotli-v1" && ![5, 9].includes(quality)) throw new Error("A244_QUALITY_OUTSIDE_BOUNDED_CHOICES");
+  return codec === "gzip-v1" ? gzipSync(plain, { level: 9 }) : brotliCompressSync(plain, { params: { [constants.BROTLI_PARAM_QUALITY]: quality } });
+}
+export function createStageArchive(stage, options = {}) {
   const entries = inventory(stage);
   validateEntries(entries);
   const header = Buffer.from(JSON.stringify({ format: "kiwi-stage-v1", entries }));
@@ -71,12 +77,15 @@ export function createStageArchive(stage) {
   });
   const plain = Buffer.concat([MAGIC, length, header, ...body]);
   if (plain.length > MAX_PLAIN) throw new Error("A236_ARCHIVE_EXPANSION_LIMIT");
-  const archive = gzipSync(plain, { level: 9 });
-  return { archive, entries, plain_bytes: plain.length, sha256: sha256(archive), bytes: archive.length };
+  const archive = encodeStagePlain(plain, options);
+  return { archive, entries, plain_bytes: plain.length, plain_sha256: sha256(plain), sha256: sha256(archive), bytes: archive.length, ...(options.codec === "brotli-v1" ? { codec: "brotli-v1", quality: options.quality } : {}) };
 }
 export function decodeStageArchive(bytes, expected) {
   if (!expected || expected.bytes !== bytes.length || expected.sha256 !== sha256(bytes) || !Number.isSafeInteger(expected.plain_bytes) || expected.plain_bytes <= 12 || expected.plain_bytes > MAX_PLAIN) throw new Error("A236_ARCHIVE_HASH_OR_SIZE_MISMATCH");
-  const plain = gunzipSync(bytes, { maxOutputLength: expected.plain_bytes });
+  const codec = expected.codec ?? "gzip-v1";
+  if (!["gzip-v1", "brotli-v1"].includes(codec)) throw new Error("A244_ARCHIVE_CODEC_UNKNOWN");
+  const plain = codec === "gzip-v1" ? gunzipSync(bytes, { maxOutputLength: expected.plain_bytes }) : brotliDecompressSync(bytes, { maxOutputLength: expected.plain_bytes });
+  if (codec === "brotli-v1" && expected.plain_sha256 !== sha256(plain)) throw new Error("A244_PLAIN_HASH_MISMATCH");
   if (plain.length !== expected.plain_bytes || !plain.subarray(0, 8).equals(MAGIC)) throw new Error("A236_ARCHIVE_FORMAT_INVALID");
   const headerLength = plain.readUInt32BE(8);
   if (headerLength > 16 * 1048576 || headerLength <= 0 || 12 + headerLength > plain.length) throw new Error("A236_ARCHIVE_HEADER_INVALID");
@@ -91,7 +100,7 @@ export function decodeStageArchive(bytes, expected) {
     return { row, data };
   });
   if (offset !== plain.length) throw new Error("A236_ARCHIVE_TRAILING_BYTES");
-  return { entries: header.entries, records };
+  return { entries: header.entries, records, plain, plain_sha256: sha256(plain) };
 }
 export function assertSourceStage(entries, sourceFiles) {
   const actual = entries.filter((row) => row.kind !== "directory").map((row) => ({ path: row.path, size: row.size, sha256: row.sha256, ...(row.kind === "symlink" ? { symlink_target: row.symlink_target } : {}) })).sort(compare);
@@ -132,7 +141,11 @@ export function verifyPackedCandidate(root) {
   const manifestFile = path.join(root, "a236-packed-manifest.json");
   const manifestBytes = readFileSync(manifestFile);
   const manifest = JSON.parse(manifestBytes);
-  if (manifest.package_format !== "kiwi-packed-merchant-v1" || !/^[a-f0-9]{40}$/.test(manifest.source_commit ?? "") || manifest.stage_archive?.file !== "payloads/merchant-stage.a236.gz" || manifest.source_manifest?.file !== "source/a232-candidate-manifest.json") throw new Error("A236_PACKED_MANIFEST_INVALID");
+  const modern = manifest.package_format === "kiwi-packed-main-merchant-v1";
+  const codec = manifest.stage_archive?.codec ?? "gzip-v1";
+  if (!["gzip-v1", "brotli-v1"].includes(codec) || (!modern && codec !== "gzip-v1")) throw new Error("A244_ARCHIVE_CODEC_NAMESPACE_INVALID");
+  const archiveName = codec === "brotli-v1" ? "payloads/merchant-stage.a244.br" : "payloads/merchant-stage.a236.gz";
+  if ((!modern && manifest.package_format !== "kiwi-packed-merchant-v1") || !/^[a-f0-9]{40}$/.test(manifest.source_commit ?? "") || manifest.stage_archive?.file !== archiveName || manifest.source_manifest?.file !== (modern ? "source/a243-source-manifest.json" : "source/a232-candidate-manifest.json")) throw new Error("A236_PACKED_MANIFEST_INVALID");
   const actual = inventory(root).filter((row) => row.kind !== "directory");
   if (actual.some((row) => row.kind !== "file")) throw new Error("A236_DISTRIBUTION_LINK_REFUSED");
   const expectedFiles = manifest.distribution_files;
@@ -144,10 +157,21 @@ export function verifyPackedCandidate(root) {
   if (sha256(sourceBytes) !== manifest.source_manifest.sha256) throw new Error("A236_SOURCE_MANIFEST_HASH_MISMATCH");
   const source = JSON.parse(sourceBytes);
   if (source.source_commit !== manifest.stage_source_commit || !Array.isArray(source.candidate_files) || source.reviewed_runtime?.platform !== "linux" || source.reviewed_runtime?.arch !== "x64" || source.reviewed_runtime?.node_version !== "22.19.0") throw new Error("A236_SOURCE_IDENTITY_MISMATCH");
+  if (source.source_commit !== (modern ? "45fbf55622b3bc3d3012d2b8a8a559f389153bfb" : "c8f8b18ede8833f1b96b3301718edbc8ee0a0fe2")) throw new Error("A243_SOURCE_CONTRACT_MISMATCH");
+  if (modern && (source.source_format !== "kiwi-main-cloud-source-v1" || source.internal_package_version !== "0.12.0" || source.pi_sdk_version !== "1.0.2" || manifest.internal_package_version !== "0.12.0" || manifest.pi_sdk_version !== "1.0.2" || source.owner_runtime_default !== "dual-off/private" || manifest.owner_runtime_default !== "dual-off/private")) throw new Error("A243_SOURCE_VERSION_CONTRACT_MISMATCH");
   const sourceFiles = source.candidate_files.filter((row) => row.path.startsWith("stage/")).map((row) => ({ ...row, path: row.path.slice(6) }));
   const archiveFile = path.join(root, manifest.stage_archive.file);
   const decoded = decodeStageArchive(readFileSync(archiveFile), manifest.stage_archive);
   assertSourceStage(decoded.entries, sourceFiles);
+  if (modern) {
+    const packageRecord = decoded.records.find(({ row }) => row.path === "package.json");
+    const stagePackage = JSON.parse(packageRecord?.data ?? "null");
+    if (stagePackage?.version !== "0.12.0" || stagePackage?.dependencies?.["@earendil-works/pi-coding-agent"] !== undefined) throw new Error("A243_STAGE_PACKAGE_CONTRACT_MISMATCH");
+    for (const name of ["pi-ai", "pi-agent-core", "pi-durable"]) {
+      const record = decoded.records.find(({ row }) => row.path === `node_modules/@earendil-works/${name}/package.json`);
+      if (JSON.parse(record?.data ?? "null")?.version !== "1.0.2") throw new Error("A243_PHYSICAL_PI_VERSION_MISMATCH");
+    }
+  }
   // Preserve every original non-stage file, including official runtime payloads and the old bridge.
   const sourceNonStage = source.candidate_files.filter((row) => !row.path.startsWith("stage/"));
   for (const row of sourceNonStage) {
