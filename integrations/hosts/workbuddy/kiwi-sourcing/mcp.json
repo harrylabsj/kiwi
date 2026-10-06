@@ -5,8 +5,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "--prefer-online",
-        "@harrylabsj/kiwi@latest",
+        "@harrylabsj/kiwi@0.12.3",
         "mcp",
         "serve",
         "--principal",

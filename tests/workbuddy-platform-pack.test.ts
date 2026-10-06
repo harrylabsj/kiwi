@@ -8,7 +8,7 @@
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildPlatformPack,
   CONFIG_PATH,
@@ -551,6 +551,26 @@ describe("WP18/WP19 落盘产物（platform/out、platform/market-draft）与构
       "market.json",
       "platform-pack.zip",
     ]);
+  });
+
+  it("ZIP icon entries use codepoint order and never depend on localeCompare", () => {
+    const comparator = vi.spyOn(String.prototype, "localeCompare").mockImplementation(() => {
+      throw new Error("locale-dependent ordering is forbidden for ZIP entries");
+    });
+    let rebuilt: Buffer;
+    try {
+      rebuilt = buildPlatformPack(config).zipBuffer;
+      expect(comparator).not.toHaveBeenCalled();
+    } finally {
+      comparator.mockRestore();
+    }
+    const expectedIcons = Object.keys(icons)
+      .map((name) => `${ZIP_TEMPLATE_DIR}/icons/${name}`)
+      .sort();
+    expect([...readZipEntries(rebuilt!).keys()]).toEqual([
+      `${ZIP_TEMPLATE_DIR}/industry-config.json`, ...expectedIcons, "market.json",
+    ]);
+    expect(rebuilt!.equals(zipBuffer)).toBe(true);
   });
 
   it("platform-pack.zip 条目集合与内容正确：<templateId>/ 配置 + 24 图标 + market.json", () => {

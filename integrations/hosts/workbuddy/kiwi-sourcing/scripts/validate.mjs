@@ -73,20 +73,16 @@ check(
 );
 check(Array.isArray(server.args), "MCP args 必须是数组");
 const args = Array.isArray(server.args) ? server.args : [];
-const packageArg = args.find(
+// A299: a new local 1.0.2 candidate; the submitted 1.0.1 asset is unchanged.
+// Only one exact stable semver is permitted; dist-tags and ranges float code.
+const packageArgs = args.filter(
   (arg) => typeof arg === "string" && arg.startsWith("@harrylabsj/kiwi@"),
 );
-// 1.0.1（在审版）= 13 工具 + 跟随 npm latest：--prefer-online 让启动时检查包元数据
-// 新鲜度，避免每次新增工具都要重新送审。两种形态都接受，固定 pin 的变体留给后续版本：
-//   a) @harrylabsj/kiwi@latest + --prefer-online
-//   b) @harrylabsj/kiwi@<明确 semver>（不带 --prefer-online）
-const isLatest = packageArg === "@harrylabsj/kiwi@latest";
-const isPinned = /^@harrylabsj\/kiwi@\d+\.\d+\.\d+$/.test(packageArg ?? "");
-check(isLatest || isPinned, "Kiwi npm 包必须是 @latest 或明确 semver");
 check(
-  !isLatest || args.includes("--prefer-online"),
-  "使用 @latest 时必须带 --prefer-online（强制检查 npm 元数据）",
+  packageArgs.length === 1 && /^@harrylabsj\/kiwi@(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(packageArgs[0] ?? ""),
+  "Kiwi npm 包必须且只能指定一个明确 stable semver（禁止 dist-tag 或范围）",
 );
+check(!args.includes("--prefer-online"), "固定版本无需 --prefer-online；不得沿用 latest 刷新策略");
 const sequence = args.join(" ");
 for (const expected of [
   "mcp serve",

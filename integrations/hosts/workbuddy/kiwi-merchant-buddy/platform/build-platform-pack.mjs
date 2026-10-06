@@ -1626,7 +1626,7 @@ function buildPlatformZip(industryConfig, icons, marketConfig) {
     },
     ...Object.entries(icons)
       .map(([name, svg]) => ({ name: `${ZIP_TEMPLATE_DIR}/icons/${name}`, data: Buffer.from(`${svg}\n`, "utf8") }))
-      .sort((a, b) => a.name.localeCompare(b.name)),
+      .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
     { name: "market.json", data: Buffer.from(`${JSON.stringify(marketConfig, null, 2)}\n`, "utf8") },
   ];
   return buildZip(entries);
