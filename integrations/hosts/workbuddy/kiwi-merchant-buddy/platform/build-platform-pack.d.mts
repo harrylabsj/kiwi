@@ -170,5 +170,5 @@ export declare const MARKET_EXPERTS: MarketExpertDef[];
 export declare const MARKET_EXPERT_TEAM: Omit<MarketTeam, "memberExpertIds">;
 export declare const MARKET_SCENARIOS: Array<MarketScenario & { memberIds: string[] }>;
 export declare const MARKET_EXPERT_CATEGORIES: MarketCategory[];
-/** 平台胶囊 id → 市场专家占位 id（双向校验与 MARKET_EXPERTS 一致）。 */
+/** 平台胶囊 id → 市场专家资产 id（oe_*，审核中；双向校验与 MARKET_EXPERTS 一致）。 */
 export declare const SCENE_EXPERT_IDS: Record<string, string>;

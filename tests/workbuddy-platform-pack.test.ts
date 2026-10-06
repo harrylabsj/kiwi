@@ -205,6 +205,14 @@ describe("WP19 sites_deploy 新口径（WP17 后）", () => {
 });
 
 describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）", () => {
+  const ASSET_IDS = {
+    开通顾问: "oe_ee5ab6349f00203",
+    报价助理: "oe_a2d0c6cc725719bd",
+    运营分析师: "oe_85c8bf08203ad422",
+    客服教练: "oe_ee7d761fbcdefee",
+    洽谈审批官: "oe_8033777b83a3de05",
+    Kiwi开店团队: "oe_a1da12ace3d9c62c",
+  } as const;
   const zhNameRe = /^[\u4e00-\u9fa5]{1,5}$/;
 
   it("专用专家 5 个、无公共专家，名称 ≤5 汉字、英文名 ≤30，字段完整", () => {
@@ -238,11 +246,11 @@ describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）",
 
   it("技能资产 ID：cs-prep 为真实资产，未知技能为 pending:<技能名> 占位（不编造）", () => {
     const byId = new Map(marketConfig.experts.map((e) => [e.id, e]));
-    expect(byId.get("exp-cs-coach")!.skillIds).toEqual(["os_dc3a52407574eb77"]);
-    expect(byId.get("exp-onboarding-advisor")!.skillIds).toEqual(["pending:kiwi-cloud-deploy"]);
-    expect(byId.get("exp-catalog-assistant")!.skillIds).toEqual(["pending:kiwi-product-import"]);
-    expect(byId.get("exp-insights-analyst")!.skillIds).toEqual([]);
-    expect(byId.get("exp-negotiation-officer")!.skillIds).toEqual([]);
+    expect(byId.get(ASSET_IDS.客服教练)!.skillIds).toEqual(["os_dc3a52407574eb77"]);
+    expect(byId.get(ASSET_IDS.开通顾问)!.skillIds).toEqual(["pending:kiwi-cloud-deploy"]);
+    expect(byId.get(ASSET_IDS.报价助理)!.skillIds).toEqual(["pending:kiwi-product-import"]);
+    expect(byId.get(ASSET_IDS.运营分析师)!.skillIds).toEqual([]);
+    expect(byId.get(ASSET_IDS.洽谈审批官)!.skillIds).toEqual([]);
     for (const assetId of marketConfig.experts.flatMap((e) => e.skillIds)) {
       expect(/^os_[0-9a-f]{8,}$/.test(assetId) || assetId.startsWith("pending:"), assetId).toBe(true);
     }
@@ -251,7 +259,7 @@ describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）",
   it("专家团 1 个：由全部 5 位专用专家组成", () => {
     expect(marketConfig.expertTeams).toHaveLength(1);
     const team = marketConfig.expertTeams[0]!;
-    expect(team.id).toBe("team-kiwi-launch");
+    expect(team.id).toBe(ASSET_IDS.Kiwi开店团队);
     expect(team.memberExpertIds).toHaveLength(5);
     expect(new Set(team.memberExpertIds).size).toBe(5);
     expect(team.systemPrompt).toContain("网关不碰实例");
@@ -288,10 +296,10 @@ describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）",
     expect(marketConfig.enableFeaturedScenarios).toBe(true);
   });
 
-  it("胶囊 expertId 与专家草稿用占位 id 对应（SCENE_EXPERT_IDS 完备且双向一致）", () => {
+  it("胶囊 expertId 与专家草稿用资产 id 对应（SCENE_EXPERT_IDS 完备且双向一致）", () => {
     for (const scene of allScenes) {
       expect(scene.expertId).toBe(SCENE_EXPERT_IDS[scene.id]!);
-      expect(scene.expertId).toMatch(/^exp-[a-z-]+$/);
+      expect(scene.expertId).toMatch(/^oe_[0-9a-f]{8,}$/);
     }
     const byExpert = new Map(marketConfig.experts.map((e) => [e.id, [] as string[]]));
     for (const scene of allScenes) byExpert.get(scene.expertId)!.push(scene.id);
@@ -300,30 +308,41 @@ describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）",
     }
     // 数据类胶囊归运营分析师，其余胶囊归模式主责专家。
     const byId = new Map(marketConfig.experts.map((e) => [e.id, e]));
-    expect(byId.get("exp-insights-analyst")!.sceneIds.sort()).toEqual([
+    expect(byId.get(ASSET_IDS.运营分析师)!.sceneIds.sort()).toEqual([
       "cap-followers",
       "cap-hot-questions",
       "cap-inquiries",
       "cap-overview",
       "cap-reports",
     ]);
-    expect(byId.get("exp-onboarding-advisor")!.sceneIds).toHaveLength(6);
-    expect(byId.get("exp-catalog-assistant")!.sceneIds).toHaveLength(6);
-    expect(byId.get("exp-cs-coach")!.sceneIds).toHaveLength(3);
-    expect(byId.get("exp-negotiation-officer")!.sceneIds).toHaveLength(6);
+    expect(byId.get(ASSET_IDS.开通顾问)!.sceneIds).toHaveLength(6);
+    expect(byId.get(ASSET_IDS.报价助理)!.sceneIds).toHaveLength(6);
+    expect(byId.get(ASSET_IDS.客服教练)!.sceneIds).toHaveLength(3);
+    expect(byId.get(ASSET_IDS.洽谈审批官)!.sceneIds).toHaveLength(6);
   });
 
-  it("所有专家/专家团/场景 id 均为显式占位（exp-/team-/scn- 前缀）", () => {
+  it("专家/专家团 id 为平台资产 ID（oe_*，审核中）；精选场景 id 仍为占位（scn-*）", () => {
+    expect(marketConfig.experts.map((e) => [e.name, e.id])).toEqual([
+      ["开通顾问", ASSET_IDS.开通顾问],
+      ["报价助理", ASSET_IDS.报价助理],
+      ["运营分析师", ASSET_IDS.运营分析师],
+      ["客服教练", ASSET_IDS.客服教练],
+      ["洽谈审批官", ASSET_IDS.洽谈审批官],
+    ]);
     for (const id of [
       ...marketConfig.experts.map((e) => e.id),
       ...marketConfig.expertTeams.map((t) => t.id),
-      ...marketConfig.featuredScenarios.map((s) => s.id),
     ]) {
-      expect(id).toMatch(/^(exp|team|scn)-[a-z-]+$/);
+      expect(id, "专家/专家团应使用平台真实资产 ID").toMatch(/^oe_[0-9a-f]{8,}$/);
     }
+    for (const scenario of marketConfig.featuredScenarios) {
+      expect(scenario.id).toMatch(/^scn-[a-z-]+$/);
+    }
+    const backfill = marketDraft.pendingBackfill.join("\n");
     expect(marketDraft.pendingBackfill.length).toBeGreaterThanOrEqual(4);
-    expect(marketDraft.pendingBackfill.join("\n")).toContain("占位");
-    expect(marketDraft.pendingBackfill.join("\n")).toContain("pending:kiwi-cloud-deploy".slice(0, 7));
+    expect(backfill).toContain("审核中");
+    expect(backfill).toContain("占位");
+    expect(backfill).toContain("pending:kiwi-cloud-deploy".slice(0, 7));
   });
 });
 
@@ -520,7 +539,8 @@ describe("WP18/WP19 落盘产物（platform/out、platform/market-draft）与构
     );
     expect(existsSync(path.join(platformDir, "market-draft", "README.md"))).toBe(true);
     const draftReadme = readFileSync(path.join(platformDir, "market-draft", "README.md"), "utf8");
-    expect(draftReadme).toContain("team-kiwi-launch");
+    expect(draftReadme).toContain("oe_a1da12ace3d9c62c");
+    expect(draftReadme).toContain("审核中");
     expect(draftReadme).toContain("占位");
   });
 

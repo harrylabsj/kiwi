@@ -31,7 +31,7 @@
                       "title": "注册账号",
                       "titleEn": "Sign up",
                       "iconFileName": "cap-register.svg",
-                      "expertId": "exp-onboarding-advisor",
+                      "expertId": "oe_ee5ab6349f00203",
                       "systemPromptAppend": "先判断商家处于开通哪一步：优先用 kiwi_catalog_get_service_status 读取开通状态；该工具不可用时改用 kiwi_catalog_get_merchant_profile 判断账号是否已连接。按阶段只讲下一步要做的一件事，不一次倒出全部流程。",
                       "templates": [
                         {
@@ -69,7 +69,7 @@
                       "title": "邮箱验证",
                       "titleEn": "Email Verification",
                       "iconFileName": "cap-email.svg",
-                      "expertId": "exp-onboarding-advisor",
+                      "expertId": "oe_ee5ab6349f00203",
                       "systemPromptAppend": "用 kiwi_catalog_get_merchant_profile 判断账号是否已连接；验证邮箱后连接失效属正常情况，引导重新发起连接即可。",
                       "templates": [
                         {
@@ -107,7 +107,7 @@
                       "title": "连接发布",
                       "titleEn": "Connect & Publish",
                       "iconFileName": "cap-connect.svg",
-                      "expertId": "exp-onboarding-advisor",
+                      "expertId": "oe_ee5ab6349f00203",
                       "systemPromptAppend": "配对码显示在本应用的商家工作台；用 kiwi_catalog_get_service_status 确认连接与发布状态后，再引导商家打开 Catalog 授权页，核对两处配对码一致、公开预览无误，由商家亲自点击「连接此服务并发布」。配对码和链接都不是授权凭证，提醒商家不要外发；你不读取、不转述配对码。",
                       "templates": [
                         {
@@ -145,7 +145,7 @@
                       "title": "一键上云",
                       "titleEn": "One-click Cloud",
                       "iconFileName": "cap-cloud.svg",
-                      "expertId": "exp-onboarding-advisor",
+                      "expertId": "oe_ee5ab6349f00203",
                       "systemPromptAppend": "云端接待的开通与升级都按 kiwi-cloud-deploy 技能执行：开通前先确认商家已连接 Kiwi 账号（kiwi_catalog_get_merchant_profile）；严格按 取包校验→首次发布取地址→prepare --origin→同一应用再发布→自检→上线核对 的顺序，不跳步（一律用平台的站点发布/下线工具，工具名与参数以平台实际提供为准）；上线判断只认 kiwi_catalog_get_service_status；不伪造回执、不代商家点击费用或授权弹窗；部署失败时把平台报错原样贴给商家，不修改部署包重试；会话缺少发布工具时改输出技能内置的方案 B 提示词并说明。",
                       "templates": [
                         {
@@ -183,7 +183,7 @@
                       "title": "上线检查",
                       "titleEn": "Go-live Check",
                       "iconFileName": "cap-golive.svg",
-                      "expertId": "exp-onboarding-advisor",
+                      "expertId": "oe_ee5ab6349f00203",
                       "systemPromptAppend": "只有 kiwi_catalog_get_service_status 显示名片已发布且在线状态正常时，才能说「已上线，采购方可以发现你并发来询价」；否则如实说明卡在哪一步和下一步动作，不确定就说不确定。",
                       "templates": [
                         {
@@ -221,7 +221,7 @@
                       "title": "升级接待",
                       "titleEn": "Service Upgrade",
                       "iconFileName": "cap-upgrade.svg",
-                      "expertId": "exp-onboarding-advisor",
+                      "expertId": "oe_ee5ab6349f00203",
                       "systemPromptAppend": "升级也按 kiwi-cloud-deploy 技能执行：先确认商家已连接 Kiwi 账号（kiwi_catalog_get_merchant_profile），严格按 取包校验→同一应用再发布→自检 的顺序核对版本与回执，不跳步、不伪造回执；若平台弹出云资源或费用授权，以弹窗显示为准，不承诺免费；升级失败时把平台报错原样贴给商家，不修改部署包重试。",
                       "templates": [
                         {
@@ -269,7 +269,7 @@
                       "title": "整理商品",
                       "titleEn": "Product Prep",
                       "iconFileName": "cap-products.svg",
-                      "expertId": "exp-catalog-assistant",
+                      "expertId": "oe_a2d0c6cc725719bd",
                       "systemPromptAppend": "按 kiwi-product-import 技能执行：先与商家逐列确认映射，生成与工作台「商品与导入」页可下载的 CSV/Excel 模板完全一致的文件，并附问题清单；列名不确定时请商家下载模板或提供列名，不要自创。绝不编造价格/库存/规格/有效期，缺失标「需商家补充」；疑似底价/成本/进价列一律剔除；每次提醒整表替换语义——表里没有的 SKU 提交后会被下架，首次导入建议小批量试；上传与确认导入由商家本人在工作台完成。",
                       "templates": [
                         {
@@ -307,7 +307,7 @@
                       "title": "导入商品",
                       "titleEn": "Import to Workbench",
                       "iconFileName": "cap-import.svg",
-                      "expertId": "exp-catalog-assistant",
+                      "expertId": "oe_a2d0c6cc725719bd",
                       "systemPromptAppend": "上传与确认导入由商家本人在工作台「商品与导入」页完成；你没有商家服务的读写工具，不代商家上传。导入前提醒整表替换语义——表里没有的 SKU 提交后会被下架，首次导入建议小批量试；导入后建议商家核对在架状态，再用「商品名额」胶囊查看名额变化；导入报错时请商家把工作台提示原样贴过来并逐条解释。",
                       "templates": [
                         {
@@ -345,7 +345,7 @@
                       "title": "报价规则",
                       "titleEn": "Quote Rules",
                       "iconFileName": "cap-rules.svg",
-                      "expertId": "exp-catalog-assistant",
+                      "expertId": "oe_a2d0c6cc725719bd",
                       "templates": [
                         {
                           "id": "t33",
@@ -382,7 +382,7 @@
                       "title": "商品名额",
                       "titleEn": "Listing Slots",
                       "iconFileName": "cap-slots.svg",
-                      "expertId": "exp-catalog-assistant",
+                      "expertId": "oe_a2d0c6cc725719bd",
                       "systemPromptAppend": "用 kiwi_catalog_get_service_status 读取商品名额（已用/总数）与服务在线状态；名额满时说明需先下架商品释放名额，或联系 Kiwi 调整额度，不承诺付费扩容。",
                       "templates": [
                         {
@@ -420,7 +420,7 @@
                       "title": "优化文案",
                       "titleEn": "Copywriting",
                       "iconFileName": "cap-copy.svg",
-                      "expertId": "exp-catalog-assistant",
+                      "expertId": "oe_a2d0c6cc725719bd",
                       "systemPromptAppend": "改文案前先用 kiwi_catalog_get_publication 逐条读取当前内容，不凭记忆重写；改好后用 kiwi_catalog_save_publication_draft 存草稿；需要生效时用 kiwi_catalog_request_publish，并明确告诉商家「尚未发布，需要你到门户核对预览并确认」，撤回用 kiwi_catalog_withdraw_publication。",
                       "templates": [
                         {
@@ -458,7 +458,7 @@
                       "title": "搜索词",
                       "titleEn": "Search Terms",
                       "iconFileName": "cap-search.svg",
-                      "expertId": "exp-catalog-assistant",
+                      "expertId": "oe_a2d0c6cc725719bd",
                       "systemPromptAppend": "用 kiwi_catalog_get_publication 逐条读取当前标题与类目再检查，不凭记忆重写。",
                       "templates": [
                         {
@@ -510,7 +510,7 @@
                       "title": "今日概况",
                       "titleEn": "Today at a Glance",
                       "iconFileName": "cap-overview.svg",
-                      "expertId": "exp-insights-analyst",
+                      "expertId": "oe_85c8bf08203ad422",
                       "systemPromptAppend": "用 kiwi_catalog_get_merchant_stats 读匿名聚合经营汇总（关注人数、浏览量），用 kiwi_catalog_get_service_status 读在线状态与商品名额（已用/总数）；更细的运营数据（询价数、洽谈数、接待效果）在商家实例工作台的运营报告里，首发阶段你拿不到——请商家打开工作台查看或把数字贴过来，不编造任何数据。",
                       "templates": [
                         {
@@ -555,7 +555,7 @@
                       "title": "访客询价",
                       "titleEn": "Visitor Inquiries",
                       "iconFileName": "cap-inquiries.svg",
-                      "expertId": "exp-insights-analyst",
+                      "expertId": "oe_85c8bf08203ad422",
                       "systemPromptAppend": "访客与询价明细在商家实例工作台（运营报告/旁观洽谈页），首发阶段你拿不到这些数据；商家把工作台内容贴过来时帮其解读与建议，没有数据就请商家打开工作台查看，不编造访客数或询价数。",
                       "templates": [
                         {
@@ -593,7 +593,7 @@
                       "title": "热门问题",
                       "titleEn": "Hot Questions",
                       "iconFileName": "cap-hot-questions.svg",
-                      "expertId": "exp-insights-analyst",
+                      "expertId": "oe_85c8bf08203ad422",
                       "systemPromptAppend": "热门问题来自商家实例工作台的接待数据，首发阶段你拿不到；请商家从工作台运营报告或常见问题页把内容贴过来，再帮其整理成问答与话术，不编造热门问题。",
                       "templates": [
                         {
@@ -631,7 +631,7 @@
                       "title": "关注人数",
                       "titleEn": "Followers",
                       "iconFileName": "cap-followers.svg",
-                      "expertId": "exp-insights-analyst",
+                      "expertId": "oe_85c8bf08203ad422",
                       "systemPromptAppend": "用 kiwi_catalog_get_merchant_stats 读关注人数；汇总是匿名聚合，没有关注者名单或联系方式，也没有群发通道——如实说明，不承诺触达或导出。",
                       "templates": [
                         {
@@ -669,7 +669,7 @@
                       "title": "周报月报",
                       "titleEn": "Weekly & Monthly",
                       "iconFileName": "cap-reports.svg",
-                      "expertId": "exp-insights-analyst",
+                      "expertId": "oe_85c8bf08203ad422",
                       "systemPromptAppend": "周报月报在商家实例工作台的运营报告页，首发阶段你生成不了实例报表；商家贴来报告内容或数字时，帮其总结趋势、对比目标、给出下一步动作清单；没有数据就请商家打开工作台查看，不编造数字。",
                       "templates": [
                         {
@@ -707,7 +707,7 @@
                       "title": "常见问答",
                       "titleEn": "FAQ Prep",
                       "iconFileName": "cap-faq.svg",
-                      "expertId": "exp-cs-coach",
+                      "expertId": "oe_ee7d761fbcdefee",
                       "systemPromptAppend": "按 kiwi-merchant-cs-prep 技能的规则工作：只根据商家本次提供或指定的材料整理问答，没有来源的价格、库存、交期、折扣、退款、发票、合同、售后承诺一律不下确定结论，标为缺口或给出转人工草稿。",
                       "templates": [
                         {
@@ -745,7 +745,7 @@
                       "title": "接待话术",
                       "titleEn": "Reception Scripts",
                       "iconFileName": "cap-scripts.svg",
-                      "expertId": "exp-cs-coach",
+                      "expertId": "oe_ee7d761fbcdefee",
                       "systemPromptAppend": "按 kiwi-merchant-cs-prep 技能的规则工作：只根据商家本次提供或指定的材料起草，没有来源的价格、库存、交期、折扣、退款、发票、合同、售后承诺一律不下确定结论，标为缺口或给出转人工草稿。",
                       "templates": [
                         {
@@ -783,7 +783,7 @@
                       "title": "模拟接待",
                       "titleEn": "Mock Reception",
                       "iconFileName": "cap-mock.svg",
-                      "expertId": "exp-cs-coach",
+                      "expertId": "oe_ee7d761fbcdefee",
                       "systemPromptAppend": "按 kiwi-merchant-cs-prep 技能的规则工作：模拟采购方提问并逐条标注处理方式（有据可答/澄清/超范围引导/转人工）；没有来源的价格、库存、交期、折扣、退款、发票、合同、售后承诺一律不下确定结论。",
                       "templates": [
                         {
@@ -831,7 +831,7 @@
                       "title": "待审批",
                       "titleEn": "Approvals",
                       "iconFileName": "cap-approvals.svg",
-                      "expertId": "exp-negotiation-officer",
+                      "expertId": "oe_8033777b83a3de05",
                       "systemPromptAppend": "待审批项在商家实例工作台的审批页，首发阶段你看不到审批队列；商家贴来待审批内容时帮其分析并起草批复意见，对话里的「同意」不构成批准，批准只在工作台完成，不编造审批结果。",
                       "templates": [
                         {
@@ -869,7 +869,7 @@
                       "title": "旁观洽谈",
                       "titleEn": "Observe Chats",
                       "iconFileName": "cap-observe.svg",
-                      "expertId": "exp-negotiation-officer",
+                      "expertId": "oe_8033777b83a3de05",
                       "systemPromptAppend": "洽谈过程在商家实例工作台的旁观洽谈页，首发阶段你看不到实时洽谈；商家贴来洽谈记录时帮其分析采购方意图、起草回复与跟进建议；没有记录就请商家打开工作台查看，不编造洽谈内容。",
                       "templates": [
                         {
@@ -907,7 +907,7 @@
                       "title": "让价审批",
                       "titleEn": "Discount Approval",
                       "iconFileName": "cap-discount.svg",
-                      "expertId": "exp-negotiation-officer",
+                      "expertId": "oe_8033777b83a3de05",
                       "systemPromptAppend": "让价底线与成本口径必须来自商家本人；帮商家起草让价方案（幅度、条件、可换取的条款）与审批意见，最终让价由商家在工作台审批确认，不编造价格、成本或审批结果。",
                       "templates": [
                         {
@@ -945,7 +945,7 @@
                       "title": "协议确认",
                       "titleEn": "Agreement Check",
                       "iconFileName": "cap-agreement.svg",
-                      "expertId": "exp-negotiation-officer",
+                      "expertId": "oe_8033777b83a3de05",
                       "systemPromptAppend": "磋商结果是非约束性共识：不下单、不收款、不锁库存；帮商家逐条核对共识要点（商品、数量、价格、交期、付款与售后口径）与商家输入一致，缺失或含糊的列出来让商家补充；共识记录建议让商家保存到实例工作台，不编造任何条款。",
                       "templates": [
                         {
@@ -983,7 +983,7 @@
                       "title": "转人工",
                       "titleEn": "Escalation",
                       "iconFileName": "cap-escalate.svg",
-                      "expertId": "exp-negotiation-officer",
+                      "expertId": "oe_8033777b83a3de05",
                       "systemPromptAppend": "帮商家划定转人工边界并起草转接话术：涉及价格让步、合同条款、售后争议的问题建议转人工；转接不是拒绝，话术要让采购方知道下一步由谁跟进。",
                       "templates": [
                         {
@@ -1021,7 +1021,7 @@
                       "title": "规则调整",
                       "titleEn": "Rule Tuning",
                       "iconFileName": "cap-rule-tuning.svg",
-                      "expertId": "exp-negotiation-officer",
+                      "expertId": "oe_8033777b83a3de05",
                       "systemPromptAppend": "帮商家根据洽谈与审批情况起草规则调整建议（可自动报价范围、底价口径、必须人工审批的情形、转人工触发条件），依据必须是商家提供或确认的信息，不编造洽谈数据；最终在工作台的审批与规则表单里由商家本人修改保存。",
                       "templates": [
                         {

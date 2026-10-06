@@ -45,7 +45,7 @@
 - `platform/out/industry-config.json`：平台「导入配置」用（模式 4 + 胶囊 26 = 30 个图标引用）；
 - `platform/out/icons/*.svg`：30 个图标（`mode-*.svg` 4 + `cap-*.svg` 26）；
 - `platform/out/market.json` + `platform/out/platform-pack.zip`：市场配置（5 专用专家 + 1 专家团 + 4 精选场景）与 zip 导入验证包（`<应用ID>/industry-config.json` + `icons/` + `market.json`，验证 zip 导入是否随包带图标）；
-- `platform/market-draft/`：市场配置草稿（中英双语 + README，占位 id 与待回填清单）。
+- `platform/market-draft/`：市场配置草稿（中英双语 + README，已回填的专家资产 ID、审核状态与剩余待回填清单）。
 
 生成器内置全部平台规则校验（模式 3–5、每模式 ≥5 胶囊、名称 ≤5 汉字/英文 ≤30、每胶囊 4–10 条模板、无 bindTools/bindSkills、禁词、首页标题中文两字段合计 ≤15 字/英文 ≤8 词、市场配置专家/场景规则、生成物不得出现 inspect/activate/deploy 旧口径步骤词等），不通过即失败；改动配置后必须重新生成（`tests/workbuddy-platform-pack.test.ts` 会校验落盘产物与构建结果一致）。
 
@@ -59,7 +59,7 @@ node integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/build-platform-pa
 2. **上传图标**：若 zip 导入未带图标，则逐个上传 `mode-*.svg` 4 个 + `cap-*.svg` 26 个，文件名需与配置内 `iconFileName` 一致。
 3. **选择内置连接器**：Kiwi 商家运营连接器 `oc_0053ad85c92a6587`（已写入 `jointAuth.connectorName`，界面核对即可）；不得引用已撤回的 `oc_c86216e2a36110bf`。
 4. **核对首页标题**：`header.title` 已填「Kiwi商家·让采购专家找到你」（分隔格式集中在生成器 `HOME_TITLE_SEPARATOR` 一处；平台精确格式未确认，导入实测后只改这一常量）。
-5. **市场配置**：按 `platform/market-draft/` 草稿创建 5 个专用专家 → 专家团「Kiwi开店团队」→ 4 个精选场景 → 专家分类（详见 `platform/market-draft/README.md`）；专家/团队/场景 id 在平台创建后回填生成器（`MARKET_EXPERTS` 等）再重新生成导入。
+5. **市场配置**：5 个专用专家与专家团「Kiwi开店团队」已创建并送审，真实资产 ID 已回填，当前全部审核中；不得重复创建或宣称已过审。按 `platform/market-draft/` 核对绑定，剩余精选场景与分类按平台实际配置处理（详见 `platform/market-draft/README.md`）；精选场景 id 仍待回填，平台导入和资产可用性仍需实测。
 6. **技能资产**：`kiwi-cloud-deploy`、`kiwi-product-import` 尚无平台资产 ID，导入包中模式 skills 为空，审核通过后回填脚本 `SKILL_ASSET_IDS` 并重新生成导入。
 7. **生成预览**：预览并逐项检查（要点见「模块 5：预览调试」）。
 

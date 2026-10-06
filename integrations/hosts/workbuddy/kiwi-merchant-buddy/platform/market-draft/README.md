@@ -31,9 +31,24 @@
 
 生成器校验强制：专家提示词只允许引用 `kiwi_catalog_*` 只读网关工具与三个已知技能（`kiwi-cloud-deploy` / `kiwi-product-import` / `kiwi-merchant-cs-prep`）。
 
+## 资产 ID 与审核状态（2026-09-30 回填）
+
+专家/专家团使用平台已创建的市场资产 ID，六个资产**全部处于「审核中」状态**——不得在对外材料或对商家的表述中写成已过审、已发布或平台可用：
+
+| 资产 | ID | 状态 |
+|---|---|---|
+| 开通顾问 | `oe_ee5ab6349f00203` | 审核中 |
+| 报价助理 | `oe_a2d0c6cc725719bd` | 审核中 |
+| 运营分析师 | `oe_85c8bf08203ad422` | 审核中 |
+| 客服教练 | `oe_ee7d761fbcdefee` | 审核中 |
+| 洽谈审批官 | `oe_8033777b83a3de05` | 审核中 |
+| Kiwi开店团队（专家团） | `oe_a1da12ace3d9c62c` | 审核中 |
+
+回填位置：生成器 `MARKET_EXPERTS`（5 位专家）/ `MARKET_EXPERT_TEAM`（团队）与 `SCENE_EXPERT_IDS`（26 个胶囊的 `expertId`，行业配置包同源）；审核状态文字集中在生成器 `MARKET_ASSET_REVIEW_STATUS` 一处，状态变化改这一处并重新生成。
+
 ## 占位 id 与待回填（勿当成真实 id 提交平台）
 
-- 专家 `exp-*`、专家团 `team-kiwi-launch`、精选场景 `scn-*` 均为**占位 id**；平台创建真实记录后，回填生成器 `MARKET_EXPERTS` / `MARKET_EXPERT_TEAM` / `MARKET_SCENARIOS` 与 `SCENE_EXPERT_IDS`（行业配置包胶囊 `expertId` 随之一处更新），再重新生成。
+- 精选场景 `scn-*` 仍为**占位 id**（专家/专家团 id 已按上节回填）：平台创建真实记录后，回填生成器 `MARKET_SCENARIOS` 后重新生成。
 - 技能资产 ID：`kiwi-cloud-deploy`、`kiwi-product-import` 审核通过前显示为 `pending:<技能名>`；回填生成器 `SKILL_ASSET_IDS`。`kiwi-merchant-cs-prep` 已有先例 ID（`os_dc3a52407574eb77`）。
 - `header.title` 分隔格式（当前 `HOME_TITLE_SEPARATOR = "·"`）与 `titleEn` 字段名待导入实测确认（`docs/.../platform-ref/` 为空，无已存资料）。
 - `market.json` 字段名为按平台表单反推的近似格式（`experts` / `expertTeams` / `featuredScenarios` / `expertCategories` / `enableExpertTeams` / `enableFeaturedScenarios`），以 zip 导入实测为准，不符则改生成器 `buildMarketPack()`。
@@ -43,5 +58,5 @@
 
 1. 先导入 `platform/out/industry-config.json`（或直接试 zip 导入 `platform/out/platform-pack.zip`，验证图标是否随包）。
 2. 在市场配置页按本草稿创建 5 个专用专家 → 专家团 → 4 个精选场景 → 专家分类；分类名与专家名称以草稿中英文字段为准。
-3. 创建完成后把真实 id 回填生成器并重新生成，再导入一次使胶囊 `expertId` 指向真实专家。
+3. 专家/专家团真实 id 已回填（见「资产 ID 与审核状态」）；精选场景创建完成后把真实 id 回填生成器并重新生成，再导入一次使胶囊 `expertId` 指向真实专家。
 4. 预览逐项核对（胶囊归属专家、场景关联、启用开关）。

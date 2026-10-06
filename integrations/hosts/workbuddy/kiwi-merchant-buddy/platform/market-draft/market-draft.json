@@ -1,8 +1,8 @@
 {
-  "$note": "WP19 市场配置草稿（中英双语）：平台「市场配置」页的填写底稿，也是 zip 导入包 market.json 的内容源（由 platform/build-platform-pack.mjs 生成，勿手改；改内容请改生成器常量后重新生成）。所有专家/专家团/精选场景 id 均为占位 id，待平台创建后回填。",
+  "$note": "WP19 市场配置草稿（中英双语）：平台「市场配置」页的填写底稿，也是 zip 导入包 market.json 的内容源（由 platform/build-platform-pack.mjs 生成，勿手改；改内容请改生成器常量后重新生成）。专家/专家团 id 为平台已创建的市场资产 ID（oe_*），当前状态：审核中——审核通过前不代表平台已可用；精选场景 id 仍为占位（scn-*），待平台创建后回填。",
   "experts": [
     {
-      "id": "exp-onboarding-advisor",
+      "id": "oe_ee5ab6349f00203",
       "name": "开通顾问",
       "nameEn": "Onboarding Advisor",
       "kind": "dedicated",
@@ -55,7 +55,7 @@
       ]
     },
     {
-      "id": "exp-catalog-assistant",
+      "id": "oe_a2d0c6cc725719bd",
       "name": "报价助理",
       "nameEn": "Quote Assistant",
       "kind": "dedicated",
@@ -108,7 +108,7 @@
       ]
     },
     {
-      "id": "exp-insights-analyst",
+      "id": "oe_85c8bf08203ad422",
       "name": "运营分析师",
       "nameEn": "Insights Analyst",
       "kind": "dedicated",
@@ -149,7 +149,7 @@
       ]
     },
     {
-      "id": "exp-cs-coach",
+      "id": "oe_ee7d761fbcdefee",
       "name": "客服教练",
       "nameEn": "CS Coach",
       "kind": "dedicated",
@@ -187,7 +187,7 @@
       ]
     },
     {
-      "id": "exp-negotiation-officer",
+      "id": "oe_8033777b83a3de05",
       "name": "洽谈审批官",
       "nameEn": "Negotiation Officer",
       "kind": "dedicated",
@@ -234,38 +234,38 @@
     }
   ],
   "expertTeam": {
-    "id": "team-kiwi-launch",
+    "id": "oe_a1da12ace3d9c62c",
     "name": "Kiwi开店团队",
     "nameEn": "Kiwi Launch Team",
     "description": "五位专用专家一起接手：开通、报价、数据、客服与审批磋商，按任务自动分工。",
     "descriptionEn": "Five dedicated experts hand in hand: onboarding, quotes, insights, service and negotiation.",
     "systemPrompt": "你是 Kiwi 开店团队的协调者，团队有开通顾问、报价助理、运营分析师、客服教练、洽谈审批官五位专用专家。接到任务先判断属于谁的职责，把对话交给对应专家；跨领域任务拆解后分别交给对应专家，不重复向商家提问；不越权代答其他专家职责内的问题。通用边界：网关不碰实例——不经网关读写商家实例的运营数据（询价明细、商品表、审批记录等）；上线判断只认 kiwi_catalog_get_service_status；不代商家点击任何费用或授权弹窗，不伪造任何回执；不在对话里收集密码、邮箱验证码、配对码、密钥或 token。",
     "memberExpertIds": [
-      "exp-onboarding-advisor",
-      "exp-catalog-assistant",
-      "exp-insights-analyst",
-      "exp-cs-coach",
-      "exp-negotiation-officer"
+      "oe_ee5ab6349f00203",
+      "oe_a2d0c6cc725719bd",
+      "oe_85c8bf08203ad422",
+      "oe_ee7d761fbcdefee",
+      "oe_8033777b83a3de05"
     ],
     "members": [
       {
-        "id": "exp-onboarding-advisor",
+        "id": "oe_ee5ab6349f00203",
         "name": "开通顾问"
       },
       {
-        "id": "exp-catalog-assistant",
+        "id": "oe_a2d0c6cc725719bd",
         "name": "报价助理"
       },
       {
-        "id": "exp-insights-analyst",
+        "id": "oe_85c8bf08203ad422",
         "name": "运营分析师"
       },
       {
-        "id": "exp-cs-coach",
+        "id": "oe_ee7d761fbcdefee",
         "name": "客服教练"
       },
       {
-        "id": "exp-negotiation-officer",
+        "id": "oe_8033777b83a3de05",
         "name": "洽谈审批官"
       }
     ]
@@ -278,17 +278,17 @@
       "description": "从注册到一键上云，一步一步陪你把店开起来。",
       "descriptionEn": "From sign-up to go-live, one step at a time.",
       "expertIds": [
-        "exp-onboarding-advisor",
-        "team-kiwi-launch"
+        "oe_ee5ab6349f00203",
+        "oe_a1da12ace3d9c62c"
       ],
       "experts": [
         {
-          "id": "exp-onboarding-advisor",
+          "id": "oe_ee5ab6349f00203",
           "name": "开通顾问"
         },
         {
-          "id": "team-kiwi-launch",
-          "name": "team-kiwi-launch"
+          "id": "oe_a1da12ace3d9c62c",
+          "name": "oe_a1da12ace3d9c62c"
         }
       ]
     },
@@ -299,17 +299,17 @@
       "description": "整理商品表、定报价规则，在工作台完成导入与保存。",
       "descriptionEn": "Build your import sheet, set quote rules, and save at the workbench.",
       "expertIds": [
-        "exp-catalog-assistant",
-        "team-kiwi-launch"
+        "oe_a2d0c6cc725719bd",
+        "oe_a1da12ace3d9c62c"
       ],
       "experts": [
         {
-          "id": "exp-catalog-assistant",
+          "id": "oe_a2d0c6cc725719bd",
           "name": "报价助理"
         },
         {
-          "id": "team-kiwi-launch",
-          "name": "team-kiwi-launch"
+          "id": "oe_a1da12ace3d9c62c",
+          "name": "oe_a1da12ace3d9c62c"
         }
       ]
     },
@@ -320,16 +320,16 @@
       "description": "匿名汇总与工作台报告怎么读，下一步该改什么。",
       "descriptionEn": "Read aggregated stats and workbench reports, and decide what to improve.",
       "expertIds": [
-        "exp-insights-analyst",
-        "exp-cs-coach"
+        "oe_85c8bf08203ad422",
+        "oe_ee7d761fbcdefee"
       ],
       "experts": [
         {
-          "id": "exp-insights-analyst",
+          "id": "oe_85c8bf08203ad422",
           "name": "运营分析师"
         },
         {
-          "id": "exp-cs-coach",
+          "id": "oe_ee7d761fbcdefee",
           "name": "客服教练"
         }
       ]
@@ -341,17 +341,17 @@
       "description": "审批不漏项、洽谈有章法、共识要点核得清。",
       "descriptionEn": "Stay on top of approvals, follow negotiations, and confirm consensus.",
       "expertIds": [
-        "exp-negotiation-officer",
-        "team-kiwi-launch"
+        "oe_8033777b83a3de05",
+        "oe_a1da12ace3d9c62c"
       ],
       "experts": [
         {
-          "id": "exp-negotiation-officer",
+          "id": "oe_8033777b83a3de05",
           "name": "洽谈审批官"
         },
         {
-          "id": "team-kiwi-launch",
-          "name": "team-kiwi-launch"
+          "id": "oe_a1da12ace3d9c62c",
+          "name": "oe_a1da12ace3d9c62c"
         }
       ]
     }
@@ -387,7 +387,8 @@
   "enableExpertTeams": true,
   "enableFeaturedScenarios": true,
   "pendingBackfill": [
-    "专家/专家团/精选场景 id（exp-* / team-* / scn-*）均为占位：平台创建真实记录后，把真实 id 回填到生成器 MARKET_EXPERTS / MARKET_EXPERT_TEAM / MARKET_SCENARIOS 与 SCENE_EXPERT_IDS（胶囊 expertId 同步），再重新生成。",
+    "专家（5 个）与专家团（1 个）id 已回填为平台资产 ID（oe_*，2026-09-30），六个资产当前全部「审核中」：审核通过前不得对外表述为已过审或平台已可用；若平台重新分配 ID，改生成器 MARKET_EXPERTS / MARKET_EXPERT_TEAM 与 SCENE_EXPERT_IDS（胶囊 expertId 同步）后重新生成。",
+    "精选场景 id（scn-*）仍为占位：平台创建真实记录后，把真实 id 回填生成器 MARKET_SCENARIOS，再重新生成。",
     "技能资产 ID：kiwi-cloud-deploy、kiwi-product-import 审核通过后回填生成器 SKILL_ASSET_IDS（草稿中显示为 pending:<技能名>）；kiwi-merchant-cs-prep 已有先例 ID。",
     "header.title 的分隔格式（当前 HOME_TITLE_SEPARATOR = \"·\"）与 titleEn 字段名待导入实测确认。",
     "market.json 字段名为按平台「市场配置」表单反推的近似格式（experts/expertTeams/featuredScenarios/…），以 zip 导入实测为准。",
