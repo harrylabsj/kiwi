@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.12.3 — 2026-10-01
+
+- 会话旁观（只读）投影修正：SKU 与数量现在从真实 KNP 扁平账本载荷回填（rfq 明细行 `items`、offer `terms`、counter_offer `proposed_terms`、conditional_offer `base_terms`；WP11 初版误读的嵌套形状会被入站校验拒绝、从不出现在真实账本，导致旁观 SKU/数量恒为空）。询价/澄清问题原文与运营报告「最近询价关键词」按同一扁平口径修复（clarification 问题取 `field`）。历史账本无需迁移，扫描时即正确投影。
+- 隐私边界不变：单价/金额按既有设计不进旁观视图（规则数值属私有数据，A41 核验确认），底价/折扣等策略字段仍不外露；API/页面形状不变（`price_minor`/`unit_price_minor` 字段保留、恒缺省）。不改变鉴权、账本写入与磋商协议语义。
+
+## v0.12.2 — 2026-09-30
+
+- 配对诊断：绑定步骤失败与签名声明验真失败现在以稳定安全码（BIND_REJECTED / BIND_CLAIM_INVALID / BIND_CLAIM_CARD_URL_MISMATCH / BIND_CLAIM_FIELD_MISMATCH / CARD_PUBLISH_* / PAIRING_COMMUNICATION_FAILED / PAIRING_WINDOW_EXPIRED）出现在目录连接摘要与工作台连接卡；授权过期显示粘性可重试提示，不再无提示回到未连接。
+- 不改变认证、安全门、重试语义与既有协议；不反射任何远端错误原文或凭据。
+
+
 ## v0.12.0 — 2026-09-29
 
 - Add read-only `kiwi_catalog_get_service_status` to the WorkBuddy merchant gateway connector tool contract.

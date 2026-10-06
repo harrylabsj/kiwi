@@ -200,6 +200,13 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
       expect(bootstrapFetch.status).toBe(404);
       const login = await fetch(`http://127.0.0.1:${port}/admin/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ password: importedPassword }).toString(), redirect: "manual" });
       expect(login.status).toBe(303);
+      const cookie = login.headers.get("set-cookie")?.split(";")[0];
+      expect(cookie).toBeDefined();
+      const connection = await fetch(`http://127.0.0.1:${port}/merchant/api/v1/catalog/connect`, { headers: { cookie: cookie! } });
+      expect(connection.status).toBe(200);
+      expect(await connection.json()).toMatchObject({ status: "idle", published: false });
+      const pairing = await fetch(`http://127.0.0.1:${port}/merchant/api/v1/catalog/connect/pairing`, { headers: { cookie: cookie! } });
+      expect(await pairing.json()).toEqual({ pairing: null });
       expect(logLines.join(" ")).toContain("已导入一次性管理员引导凭据");
     } finally { await instance.close(); }
   });

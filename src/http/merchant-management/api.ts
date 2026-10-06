@@ -47,6 +47,10 @@ import { contentHash } from "../../agent/merchant/action-candidate.js";
 import type { AdminSession, MerchantAdminSessions } from "../../auth/merchant-sessions.js";
 import { ADMIN_SESSION_COOKIE } from "../../auth/merchant-sessions.js";
 import {
+  FileListingPublicationError,
+  type createFileListingPublicationService,
+} from "../../cloud/file-listing-publication.js";
+import {
   parseProductTable,
   ProductTableError,
   productTableDigest,
@@ -112,6 +116,7 @@ import {
   WORKBENCH_CURRENCY_TABLE_VERSION,
   type ExactMoney,
 } from "../../merchant/application/money.js";
+import { CONNECTION_PAIRING_SAFE_CODES } from "../../cloud/connect-service.js";
 import { EXACT_PRODUCT_TOOLS } from "../../merchant/exact-product-executors.js";
 import { SERVICE_CONTROL_TOOLS } from "../../merchant/service-control-executors.js";
 import type { WorkbenchQuoteResult } from "../../merchant/quote-calculator.js";
@@ -140,6 +145,13 @@ import {
 
 const API_PREFIX = "/merchant/api";
 const WORKBENCH_API_PREFIX = "/merchant/api/v1";
+const CATALOG_CONNECTION_SAFE_CODES = new Set([
+  "PUBLICATION_NOT_ACTIVE", "PUBLICATION_NOT_VERIFIED", "CATALOG_UNREACHABLE",
+  "CATALOG_MISMATCH", "BINDING_MERCHANT_MISMATCH", "BINDING_CLAIM_EXPIRED",
+  "BINDING_EXPIRED", "AUTHORIZATION_PENDING", "PREVIEW_CHANGED", "RUNTIME_CARD_CHANGED",
+  // 配对诊断阶段码（A15）：单源 = connect-service 导出的固定集合。
+  ...CONNECTION_PAIRING_SAFE_CODES,
+]);
 const MAX_BODY_BYTES = 1_048_576;
 /** 非候选写命令确认引用的有效期（BD §7.3：短时、单次）。 */
 const CONFIRMATION_TTL_MS = 5 * 60 * 1000;
@@ -187,9 +199,11 @@ export interface MerchantManagementApiOptions {
   productsImport?: {
     currentTable: () => { digest: string; records: CloudProductRecord[] };
     /** Attach local runtime ownership and the Catalog-confirmed merchant id. */
-    prepareTable?: (table: CloudProductTable) => CloudProductTable;
+    prepareTable?: (table: CloudProductTable) => CloudProductTable | Promise<CloudProductTable>;
     commit: (table: CloudProductTable) => { digest: string };
   };
+  /** Explicit owner preview/confirmation for public Catalog product metadata. */
+  fileListingPublication?: ReturnType<typeof createFileListingPublicationService>;
   /** 策略草稿提交（MerchantPolicyRuntime.apply；缺省 → 503）。回执只含版本与摘要。 */
   policyApply?: (patch: Record<string, unknown>) => Promise<{ version: number; digest: string }>;
   /** 管理草稿存储（权威存储；**策略草稿原文不出现在任何 API 响应**，红线 6）。 */
@@ -215,6 +229,25 @@ export interface MerchantManagementApiOptions {
       recordId: string;
       /** 平台报告的 applicationId（适配器从真实回执里取，不来自请求）。 */
     }) => Promise<PlatformEvidenceResult>;
+  };
+  /** 已部署实例的目录连接；独立于需要平台回执的部署向导。 */
+  catalogConnection?: {
+    getSummary: () => Promise<{
+      status: string;
+      /** 自有固定阶段词（prepare/authorize/publish）；响应侧再做白名单校验。 */
+      stage?: string;
+      published: boolean;
+      agentId?: string;
+      bindingId?: string;
+      bindingExpiresAt?: string;
+      errorCode?: string;
+    }>;
+    getPairing: () => Promise<{
+      user_code: string;
+      verification_uri: string;
+      expires_at: string;
+    } | null>;
+    begin: () => Promise<unknown>;
   };
   /** Workbench v1 trusted confirmation authority; absent means strong-confirmation routes fail closed. */
   workbenchConfirmations?: WorkbenchConfirmationStore;
@@ -483,6 +516,46 @@ export function createMerchantManagementApiHandler(
     rest: string,
     requestId: string,
   ): Promise<void> {
+    const listingDraftMatch = /^\/products\/publication-drafts\/(flp_[a-z0-9]+_[0-9a-f]{12})$/.exec(rest);
+    if (listingDraftMatch !== null) {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "products:import");
+      if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "only owner can publish products");
+      const channel = options.fileListingPublication;
+      if (channel === undefined) throw new ManagementError("unavailable", "product publication is unavailable");
+      const result = await channel.getDraft(listingDraftMatch[1]!);
+      if (!result.found) throw new ManagementError("not_found", "publication draft does not exist");
+      writeJson(res, 200, result, { "x-request-id": requestId });
+      return;
+    }
+    if (rest === "/catalog/connect" || rest === "/catalog/connect/pairing") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "onboarding:manage");
+      if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "only owner can manage Catalog connection");
+      const channel = options.catalogConnection;
+      if (channel === undefined) throw new ManagementError("unavailable", "Catalog connection is not configured");
+      if (rest.endsWith("/pairing")) {
+        const pairing = await channel.getPairing();
+        writeJson(res, 200, { pairing: pairing === null ? null : {
+          user_code: pairing.user_code,
+          verification_uri: pairing.verification_uri,
+          expires_at: pairing.expires_at,
+        } }, { "x-request-id": requestId });
+      } else {
+        const summary = await channel.getSummary();
+        // 默认状态响应白名单：配对码与设备凭据不能混入助手可读取的摘要。
+        const SAFE_STAGES = new Set(["prepare", "authorize", "publish"]);
+        writeJson(res, 200, {
+          status: summary.status, published: summary.published,
+          stage: summary.stage != null && SAFE_STAGES.has(summary.stage) ? summary.stage : null,
+          agentId: summary.agentId ?? null, bindingId: summary.bindingId ?? null,
+          bindingExpiresAt: summary.bindingExpiresAt ?? null,
+          errorCode: summary.errorCode == null ? null : CATALOG_CONNECTION_SAFE_CODES.has(summary.errorCode)
+            ? summary.errorCode : "CATALOG_CONNECTION_UNAVAILABLE",
+        }, { "x-request-id": requestId });
+      }
+      return;
+    }
     if (rest === "/overview") {
       const auth = requireActor(req);
       const runtime = await readService.getStatus(auth.ctx);
@@ -902,6 +975,77 @@ export function createMerchantManagementApiHandler(
     requestId: string,
     url: URL,
   ): Promise<void> {
+    const publicationCommitMatch = /^\/products\/publication-drafts\/(flp_[a-z0-9]+_[0-9a-f]{12})\/commit$/.exec(rest);
+    if (rest === "/products/publication-drafts" || publicationCommitMatch !== null) {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "products:import");
+      if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "only owner can publish products");
+      const channel = options.fileListingPublication;
+      if (channel === undefined) throw new ManagementError("unavailable", "product publication is unavailable");
+      try {
+        if (publicationCommitMatch !== null) {
+          const fields = objectFields(await readJsonBody(req), ["expected_digest", "confirm_publication"]);
+          if (fields["confirm_publication"] !== true) throw new ManagementError("invalid_input", "explicit publication confirmation is required");
+          const result = await channel.commit(publicationCommitMatch[1]!, requireString(fields["expected_digest"], "expected_digest"));
+          writeJson(res, result.status === "pending" ? 202 : 200, result, { "x-request-id": requestId });
+        } else {
+          const fields = objectFields(await readJsonBody(req), ["selections"]);
+          const selections = fields["selections"];
+          if (!Array.isArray(selections) || selections.length === 0 || selections.length > 100) {
+            throw new ManagementError("invalid_input", "select between 1 and 100 products");
+          }
+          const selected = selections.map((item: unknown) => {
+            const entry = objectFields(item, ["sku", "category"]);
+            return { sku: requireString(entry["sku"], "sku"), category: requireString(entry["category"], "category") };
+          });
+          writeJson(res, 200, await channel.preview(selected), { "x-request-id": requestId });
+        }
+      } catch (err) {
+        if (err instanceof FileListingPublicationError) {
+          // Never reflect remote errors or credential-bearing URLs to the page.
+          throw new ManagementError("precondition_changed", "商品发布条件已变化或目录暂不可用，请检查连接状态并重新预览。");
+        }
+        if (err instanceof ManagementError) throw err;
+        throw new ManagementError("unavailable", "商品发布结果暂无法确认，请查看原草稿回执后决定是否续办。");
+      }
+      return;
+    }
+    if (rest === "/catalog/connect/begin") {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "onboarding:manage");
+      if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "only owner can begin Catalog connection");
+      const channel = options.catalogConnection;
+      if (channel === undefined) throw new ManagementError("unavailable", "Catalog connection is not configured");
+      const fields = objectFields(await readJsonBody(req), ["idempotency_key"]);
+      const begun = operations.begin({
+        merchantId: auth.ctx.merchantId, actorId: auth.ctx.actorId,
+        commandType: "catalog.connection.begin",
+        idempotencyKey: requireString(fields["idempotency_key"], "idempotency_key"),
+        requestDigest: managementRequestDigest({ generation: options.generation() }),
+      });
+      if (begun.kind === "conflict") throw new ManagementError("conflict", "idempotency key was reused with another request");
+      if (begun.kind === "replay") {
+        writeJson(res, 200, begun.receipt, { "x-request-id": requestId });
+        return;
+      }
+      let status: "succeeded" | "unknown" = "succeeded";
+      try {
+        await channel.begin();
+      } catch {
+        // 远端创建可能已发生：保留幂等回执，先查连接状态，不盲目重复创建。
+        status = "unknown";
+        console.warn("[merchant-management] catalog.connection.begin result unknown; query connection status before retry");
+      }
+      const receipt: OperationReceipt = {
+        ...staticReceipt(begun.operationId, "catalog.connection.begin", status),
+        resource_ref: "catalog:connection", completed_at: now().toISOString(),
+      };
+      operations.complete(begun.operationId, status, receipt);
+      writeJson(res, status === "unknown" ? 202 : 200, receipt, { "x-request-id": requestId });
+      return;
+    }
     if (rest === "/runtime/safety-stops") {
       const auth = requireActor(req);
       assertWriteGuards(req, auth.sessionId);
@@ -2144,6 +2288,10 @@ export function createMerchantManagementApiHandler(
   async function postOnboardingIntent(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const auth = requireActor(req);
     assertWriteGuards(req, auth.sessionId);
+    authorizeOrThrow(auth.ctx, "onboarding:manage");
+    if (options.catalogConnection !== undefined) {
+      throw new ManagementError("conflict", "本实例已启用目录直连，请在连接 Kiwi 目录入口继续，不能同时启动旧部署向导。");
+    }
     const body = await readJsonBody(req);
     const fields = objectFields(body, [
       "intent_id",
@@ -2860,7 +3008,7 @@ export function createMerchantManagementApiHandler(
     let table: CloudProductTable;
     try {
       table = parseProductTable(fields["table"], "request body");
-      table = importChannel.prepareTable?.(table) ?? table;
+      table = await importChannel.prepareTable?.(table) ?? table;
     } catch (err) {
       if (err instanceof ProductTableError) {
         throw new ManagementError("invalid_input", err.message);

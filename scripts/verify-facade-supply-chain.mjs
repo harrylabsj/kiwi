@@ -112,6 +112,35 @@ const sbomArtifact = {
   mcp_protocol_versions: MCP_VERSIONS,
   generated_at: new Date().toISOString(),
 };
-writeFileSync(path.join(root, "supply-chain.sbom.json"), JSON.stringify(sbomArtifact, null, 2) + "\n");
+
+// 4) 依赖面漂移 fail-closed：本文件是提交进仓的审计产物，此前只生成不比对，
+//    依赖版本会静默落后于 package-lock（2026-09-30 实际发生：SBOM 记 sdk
+//    1.30.0 / yaml 2.9.0，而 lock 已是 1.30.1 / 2.9.1）。
+//    比对范围只含确定性字段：generated_at 每次生成都变；artifact.sha256/bytes
+//    取决于构建环境（dist 产物跨环境不可比），故只提示、不判失败。
+const sbomPath = path.join(root, "supply-chain.sbom.json");
+const previousSbom = existsSync(sbomPath)
+  ? JSON.parse(readFileSync(sbomPath, "utf8"))
+  : undefined;
+const dependencyPlane = (doc) =>
+  JSON.stringify({
+    runtime_dependencies: doc?.runtime_dependencies ?? null,
+    mcp_protocol_versions: doc?.mcp_protocol_versions ?? null,
+  });
+
+writeFileSync(sbomPath, JSON.stringify(sbomArtifact, null, 2) + "\n");
+
+if (previousSbom !== undefined && dependencyPlane(previousSbom) !== dependencyPlane(sbomArtifact)) {
+  fail(
+    "SBOM 依赖面与已提交版本不一致：新的 supply-chain.sbom.json 已写入，请审阅并提交它",
+  );
+} else if (previousSbom?.artifact?.sha256 !== sbomArtifact.artifact.sha256) {
+  console.warn(
+    `note: artifact sha256 与已提交值不同（构建环境相关，不判失败）：` +
+      `${String(previousSbom?.artifact?.sha256 ?? "无").slice(0, 12)} → ${artifactSha256.slice(0, 12)}`,
+  );
+}
+
+if (process.exitCode) process.exit(process.exitCode);
 
 console.log(`supply-chain OK: ${sbom.length} runtime deps locked + integrity, artifact sha256=${artifactSha256.slice(0, 12)}…`);

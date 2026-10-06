@@ -126,6 +126,8 @@ import {
 } from "./product-source.js";
 import { runReadiness, type ReadinessCheckResult, type ReadinessReport } from "./readiness.js";
 import { loadOrCreateMerchantIdentity } from "./merchant-identity.js";
+import { createMerchantConnectionService, type MerchantConnectionService } from "./connect-service.js";
+import { createFileListingPublicationService } from "./file-listing-publication.js";
 
 /** 云端 A2A 端点路径（设计 §8.2；与自托管根路径不同，便于同端口分发）。 */
 export const CLOUD_A2A_PATH = "/a2a";
@@ -136,6 +138,8 @@ export interface CloudBootstrapOptions {
   log?: (line: string) => void;
   /** 一次性挑战存储（缺省进程内；多实例/重启场景由调用方注入）。 */
   challengeStore?: BindingChallengeStore;
+  /** 目录连接传输注入；生产默认 fetch，本地集成测试使用签名 Catalog 桩。 */
+  catalogFetchImpl?: typeof fetch;
 }
 
 export interface CloudInstance {
@@ -564,6 +568,10 @@ export async function bootstrapCloudRuntime(
   let reconciliationTimer: ReturnType<typeof setInterval> | undefined;
   let clockTimer: ReturnType<typeof setInterval> | undefined;
   let bindingReconcileTimer: ReturnType<typeof setInterval> | undefined;
+  let directConnectionTimer: ReturnType<typeof setInterval> | undefined;
+  let directConnectionWork: Promise<void> | undefined;
+  let bindingReconcileWork: Promise<void> | undefined;
+  let directConnection: MerchantConnectionService | undefined;
   let enrollmentHeartbeat: EnrollmentHeartbeat | undefined;
   let catalogMerchantIdForProducts: () => string | undefined = () => undefined;
   if (adminOptions !== undefined) {
@@ -573,13 +581,39 @@ export async function bootstrapCloudRuntime(
     // 开通向导通道（M4 §5.4 + P3 §4.6）：store 与 /admin 同库；配了 catalog_url 时
     // 接上 Catalog 串联（绑定/发布的权威证据适配器 + DEPLOYED_UNBOUND 后台对账）。
     const onboardingStore = new OnboardingStore(managementDb);
+    // 已部署实例自行连接目录，无需伪造平台授权或改写旧部署向导的状态。
+    // 活跃旧向导仍由原通道处理，避免两条编排同时改同一份 enrollment。
+    if (config.catalogUrl !== undefined && onboardingStore.activeRecord(profile.owner_id) === undefined) {
+      directConnection = createMerchantConnectionService({
+        dataDir: config.dataDir, catalogUrl: config.catalogUrl, publicOrigin: config.publicOrigin,
+        ...(options.catalogFetchImpl !== undefined ? { fetchImpl: options.catalogFetchImpl } : {}),
+        beforePublish: async (binding) => {
+          if (productsFilePath !== undefined && !config.sample) {
+            bindProductTableToCatalog(productsFilePath, profile.owner_id, binding.merchantId);
+          }
+          if (!(await readiness()).ready) throw new Error("CATALOG_RUNTIME_NOT_READY");
+        },
+      });
+      const connection = directConnection;
+      let directRunning = false;
+      const tickConnection = (): void => {
+        if (directRunning) return;
+        directRunning = true;
+        directConnectionWork = connection.reconcile().then(() => undefined)
+          .catch(() => log("[kiwi-cloud] 目录连接暂未完成，请在工作台查看状态。\n"))
+          .finally(() => { directRunning = false; });
+      };
+      directConnectionTimer = setInterval(tickConnection, 5_000);
+      directConnectionTimer.unref();
+      tickConnection();
+    }
     catalogMerchantIdForProducts = () => {
       const active = onboardingStore.activeRecord(profile.owner_id);
       if (active === undefined) return undefined;
       const state = readEnrollmentStore(config.dataDir).sessions
         .map((session) => session as typeof session & { owner_ref?: string; merchant_id?: string })
         .find((session) => session.owner_ref === active.recordId &&
-          ["authorized", "bound", "published"].includes(session.status));
+          ["bound", "published"].includes(session.status));
       return typeof state?.merchant_id === "string" && state.merchant_id.trim() !== ""
         ? state.merchant_id
         : undefined;
@@ -648,11 +682,11 @@ export async function bootstrapCloudRuntime(
         const active = onboardingStore.activeRecord(profile.owner_id);
         if (active === undefined || !["DEPLOYED_UNBOUND", "BOUND", "VERIFYING", "READY_TO_PUBLISH"].includes(active.status)) return;
         reconcileRunning = true;
-        void reconcileBinding(active, catalogPipeline)
+        bindingReconcileWork = reconcileBinding(active, catalogPipeline)
           .then((outcome) => {
             if (outcome.kind === "awaiting_portal_confirmation") {
               if (!awaitingHintLogged) {
-                log(`[kiwi-cloud] ${outcome.hint}\n`);
+                log("[kiwi-cloud] 等待商家本人在工作台核对目录授权。\n");
                 awaitingHintLogged = true;
               }
             } else {
@@ -663,11 +697,9 @@ export async function bootstrapCloudRuntime(
               );
             }
           })
-          .catch((err: unknown) => {
+          .catch(() => {
             awaitingHintLogged = false;
-            log(
-              `[kiwi-cloud] 绑定对账失败：${err instanceof Error ? err.message : String(err)}\n`,
-            );
+            log("[kiwi-cloud] 绑定对账暂未完成，请在工作台查看状态。\n");
           })
           .finally(() => {
             reconcileRunning = false;
@@ -861,6 +893,13 @@ export async function bootstrapCloudRuntime(
           ? undefined
           : { version: current.version, digest: current.digest };
       },
+      ...(productsFilePath !== undefined && config.catalogUrl !== undefined && !config.sample
+        ? { fileListingPublication: createFileListingPublicationService({
+            dataDir: config.dataDir, productsFile: productsFilePath, profile,
+            catalogUrl: config.catalogUrl, publicOrigin: config.publicOrigin,
+            ...(options.catalogFetchImpl !== undefined ? { fetchImpl: options.catalogFetchImpl } : {}),
+          }) }
+        : {}),
       // 商品投影/导入：仅在配置了商品表文件时可用；ProductTableError → 503
       //（不让「表不可读」伪装成「无商品」）。价格即商品表的 major units（元），
       // 与 MerchantProductSource 契约同单位，不经换算（金额单位红线）。
@@ -911,8 +950,18 @@ export async function bootstrapCloudRuntime(
                 const snapshot = loadProductTableSnapshot(productsFilePath, profile.owner_id);
                 return { digest: snapshot.digest, records: snapshot.records };
               },
-              prepareTable: (table) => {
-                const catalogMerchantId = catalogMerchantIdForProducts();
+              prepareTable: async (table) => {
+                let catalogMerchantId: string | undefined;
+                if (directConnection !== undefined) {
+                  const verified = await directConnection.getVerifiedBinding();
+                  const summary = await directConnection.getSummary();
+                  if (verified === null && summary.bindingId !== null) {
+                    throw new ProductTableError("CATALOG_BINDING_UNAVAILABLE", "目录绑定暂无法核验，商品表保持不变，请稍后重试。");
+                  }
+                  catalogMerchantId = verified?.merchantId;
+                } else {
+                  catalogMerchantId = catalogMerchantIdForProducts();
+                }
                 const { merchant_id: _untrustedMerchantId, ...unboundTable } = table;
                 return {
                   ...unboundTable,
@@ -948,6 +997,28 @@ export async function bootstrapCloudRuntime(
       //       绝不用请求体自报的证据顶上，T029）；
       //   - 未配 catalog_url：适配器整体不配置，需要权威证据的步骤明确 503。
       onboarding: onboardingChannel,
+      ...(directConnection !== undefined ? {
+        catalogConnection: {
+          getSummary: async () => {
+            const summary = await directConnection!.getSummary();
+            return {
+              status: summary.status, published: summary.published,
+              stage: summary.stage,
+              ...(summary.agentId !== null ? { agentId: summary.agentId } : {}),
+              ...(summary.bindingId !== null ? { bindingId: summary.bindingId } : {}),
+              ...(summary.bindingExpiresAt !== null ? { bindingExpiresAt: summary.bindingExpiresAt } : {}),
+              ...(summary.code !== null ? { errorCode: summary.code } : {}),
+            };
+          },
+          getPairing: async () => {
+            const pairing = directConnection!.getPairing();
+            return pairing === null ? null : {
+              user_code: pairing.userCode, verification_uri: pairing.verificationUri, expires_at: pairing.expiresAt,
+            };
+          },
+          begin: () => directConnection!.begin(),
+        },
+      } : {}),
       workbenchConfirmations,
       workbenchReconciliation: reconciliationStore,
       workbenchEvents: eventProjectionStore,
@@ -1160,7 +1231,10 @@ export async function bootstrapCloudRuntime(
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
     });
-    res.end(renderMerchantManagementPage());
+    res.end(renderMerchantManagementPage({
+      productAuthority: fileProductSource !== undefined ? "file" : "exact",
+      catalogConnection: directConnection !== undefined,
+    }));
   };
 
   if (signingIdentity !== undefined) {
@@ -1225,7 +1299,9 @@ export async function bootstrapCloudRuntime(
     if (reconciliationTimer !== undefined) clearInterval(reconciliationTimer);
     if (clockTimer !== undefined) clearInterval(clockTimer);
     if (bindingReconcileTimer !== undefined) clearInterval(bindingReconcileTimer);
+    if (directConnectionTimer !== undefined) clearInterval(directConnectionTimer);
     enrollmentHeartbeat?.stop();
+    await Promise.allSettled([directConnectionWork, bindingReconcileWork]);
     managementDb?.close();
     core.close();
     await assembly.close().catch(() => undefined);
@@ -1256,6 +1332,8 @@ export async function bootstrapCloudRuntime(
     server,
     readiness,
     close: async () => {
+      if (bindingReconcileTimer !== undefined) clearInterval(bindingReconcileTimer);
+      if (directConnectionTimer !== undefined) clearInterval(directConnectionTimer);
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
         server.closeAllConnections();
@@ -1263,8 +1341,8 @@ export async function bootstrapCloudRuntime(
       await merchantHandler.close().catch(() => undefined);
       if (reconciliationTimer !== undefined) clearInterval(reconciliationTimer);
       if (clockTimer !== undefined) clearInterval(clockTimer);
-      if (bindingReconcileTimer !== undefined) clearInterval(bindingReconcileTimer);
       enrollmentHeartbeat?.stop();
+      await Promise.allSettled([directConnectionWork, bindingReconcileWork]);
       core.close();
       await assembly.close().catch(() => undefined);
       managementDb?.close();

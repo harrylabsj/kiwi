@@ -125,4 +125,34 @@ describe("verify-facade-supply-chain 完整性守卫", () => {
     expect(sbom.artifact.bytes).toBeGreaterThan(0);
     expect(sbom.artifact.sha256).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  it("已提交 SBOM 与当前依赖一致 → 连跑两次都通过", () => {
+    const dir = makeFixture(["dist/index.js"]);
+    expect(runScript(dir).status).toBe(0);
+    const second = runScript(dir);
+    expect(second.status).toBe(0);
+    expect(second.stdout).toContain("supply-chain OK");
+  });
+
+  it("依赖漂移（已提交 SBOM 落后于 lock）→ fail-closed，并把新 SBOM 写回", () => {
+    const dir = makeFixture(["dist/index.js"]);
+    expect(runScript(dir).status).toBe(0);
+
+    // 模拟 dependabot 合并后 lock 前进、SBOM 没跟上（2026-09-30 实际发生）。
+    const sbomPath = join(dir, "supply-chain.sbom.json");
+    const stale = JSON.parse(readFileSync(sbomPath, "utf8")) as {
+      runtime_dependencies: { resolved: string }[];
+    };
+    stale.runtime_dependencies[0]!.resolved = "0.0.0-stale";
+    writeFileSync(sbomPath, `${JSON.stringify(stale, null, 2)}\n`);
+
+    const result = runScript(dir);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("SBOM 依赖面与已提交版本不一致");
+    const rewritten = JSON.parse(readFileSync(sbomPath, "utf8")) as {
+      runtime_dependencies: { resolved: string }[];
+    };
+    expect(rewritten.runtime_dependencies[0]!.resolved).toBe(fixtureDep.meta.version);
+    expect(runScript(dir).status).toBe(0);
+  });
 });

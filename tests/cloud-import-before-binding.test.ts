@@ -16,6 +16,8 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createContext, runInContext } from "node:vm";
+import { renderMerchantManagementPage } from "../src/http/merchant-management/page.js";
 
 import { ADMIN_SESSION_COOKIE, MerchantAdminSessions } from "../src/auth/merchant-sessions.js";
 import {
@@ -68,6 +70,18 @@ const options: MerchantManagementApiOptions = {
   listPending: () => [],
   mintCandidateConfirmation: () => "tok_unused",
   executeDecision: async () => {},
+  products: async () => ({
+    items: createFileProductSource({ file: productsFile, merchantId: OWNER }).list().map((record) => ({
+      sku: record.sku, title: record.title, currency: record.currency, price: record.price,
+      price_unit: record.unit, min_order_qty: record.moq ?? null,
+      valid_until: record.valid_until, updated_at: record.updated_at, status: record.status,
+    })),
+    next_cursor: null,
+  }),
+  exactProducts: {
+    list: async () => [],
+    get: async () => { throw new Error("No exact product in this file-import fixture"); },
+  },
   productsImport: {
     currentTable: () => {
       const snapshot = loadProductTableSnapshot(productsFile, OWNER);
@@ -213,6 +227,39 @@ describe("WP17 语义统一：绑定前导入 → 绑定 → 可报价", () => {
       code: "CATALOG_BINDING_REQUIRED",
     });
     await expect(unbound.source.getProduct("BIND-001")).rejects.toThrow();
+  });
+
+  it("导入后工作台显示文件商品，exact 库为空不会隐藏已保存的数据；未绑定仍不可报价", async () => {
+    const auth = await login();
+    const paths: string[] = [];
+    async function renderProducts(productAuthority: "file" | "exact"): Promise<string> {
+      const html = renderMerchantManagementPage({ productAuthority });
+      const script = html.match(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/i)?.[1];
+      expect(script).toBeDefined();
+      const context = createContext({
+        document: { querySelectorAll: () => [] },
+        fetch: async (requestPath: string) => {
+          if (requestPath === "/merchant/api/session") return new Response("null");
+          paths.push(requestPath);
+          return fetch(base + requestPath, { headers: { cookie: auth.cookie } });
+        },
+      });
+      await runInContext(script!, context);
+      return await runInContext("views.products()", context) as string;
+    }
+    const imported = await renderProducts("file");
+    expect(imported).toContain("当前商品（2）");
+    expect(imported).toContain("BIND-001");
+    expect(imported).toContain("BIND-002");
+    expect(imported).toContain("CNY 29.9 / piece");
+    expect(paths).toContain("/merchant/api/products?limit=100");
+    const exact = await renderProducts("exact");
+    expect(exact).toContain("当前商品（0）");
+    expect(exact).not.toContain("BIND-001");
+    expect(paths).toContain("/merchant/api/v1/products?limit=100");
+    expect(createFileProductSource({ file: productsFile, merchantId: OWNER }).describeSku("BIND-001"))
+      .toEqual({ available: false, code: "CATALOG_BINDING_REQUIRED" });
+    expect((await fetch(base + "/merchant/api/products")).status).toBe(401);
   });
 
   it("绑定：Catalog 确认后商品表盖确认 merchant_id，即刻可报价", async () => {

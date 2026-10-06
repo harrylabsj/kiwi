@@ -1,31 +1,37 @@
 {
   "sbom_version": 1,
   "package": "@harrylabsj/kiwi",
-  "package_version": "0.12.0",
+  "package_version": "0.12.3",
   "runtime_dependencies": [
     {
       "name": "@earendil-works/pi-agent-core",
-      "spec": "0.87.1",
-      "resolved": "0.87.1",
-      "integrity": "sha512-Zev3B0HK7YS5A4EZQ2XnEqiJuirx6QBiltJ+LpmjV5a/+2IU0cfKtIfnkNkORK707XOvKBY2WRtk7cAwHpbh2Q=="
+      "spec": "1.0.2",
+      "resolved": "1.0.2",
+      "integrity": "sha512-VRfewY1R5mbedJzlm01PxdCmqU8QrSXjXXhV50bp6rvVuT8YYQv1inTXRY4YzssmGAYpkC2rXipJKP5BpBFXew=="
     },
     {
       "name": "@earendil-works/pi-ai",
-      "spec": "0.87.1",
-      "resolved": "0.87.1",
-      "integrity": "sha512-X/3PfQBnnoeVdO9Cv8zHghUMglzlgNZYGNzoPnbRoGnHl3Rw3TlA2UKSUB7BRHUOxMryHXYa8dnjWZlbRheDZA=="
+      "spec": "1.0.2",
+      "resolved": "1.0.2",
+      "integrity": "sha512-JP59xGlSAQ/HhQ6EHN5qmneBlWfDyu6FPPryAvAaSo8A38ubAsEpS9YisCM5Jbbns0srrDffLZonE0OXorHI5A=="
     },
     {
       "name": "@earendil-works/pi-coding-agent",
-      "spec": "0.87.1",
-      "resolved": "0.87.1",
-      "integrity": "sha512-m8ArJUtVcQMSe1lLE/Ei7vX/JV7O39sWmWBsXV2NOU70F0qCp8GubA24pT3LnwTmM6LL2xV80/h6sQg85n69ew=="
+      "spec": "1.0.2",
+      "resolved": "1.0.2",
+      "integrity": "sha512-3ZdIghMSELMGV3sKi5iASOb1Jwb696fLjmNu0aezaqDxTLLWWoRpqBYkGxJ1CgAMCbtfqXWEF0lcRrlVXmiEGQ=="
+    },
+    {
+      "name": "@earendil-works/pi-durable",
+      "spec": "1.0.2",
+      "resolved": "1.0.2",
+      "integrity": "sha512-pDh8eMSSFIVOTh0H53KhtjaS/XFrulEVREN8wnY8vtbYY0srioZ2impajvkXwoZcG6pRgbPz/WVatZLyk5TIbg=="
     },
     {
       "name": "@modelcontextprotocol/sdk",
       "spec": "^1.30.0",
-      "resolved": "1.30.0",
-      "integrity": "sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA=="
+      "resolved": "1.30.1",
+      "integrity": "sha512-H2HxLvC3HDNybePJaLdSrU1hhUK5iQw+WvV1b01myFyI7sdVGe1u/IPTE5D9fGCiJDVtgMV/lmFkQXLmQyIFYA=="
     },
     {
       "name": "@simplewebauthn/server",
@@ -46,21 +52,27 @@
       "integrity": "sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ=="
     },
     {
+      "name": "typebox",
+      "spec": "1.3.27",
+      "resolved": "1.3.27",
+      "integrity": "sha512-zu+jc1pcy4UiNThxikUr36f0Rybk9PEeCg/NE6adeWr/SKsdNO4EzZHYRDlv2YCVAfj3Odq3dESSo/jNyoBXzA=="
+    },
+    {
       "name": "yaml",
-      "spec": "2.9.0",
-      "resolved": "2.9.0",
-      "integrity": "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA=="
+      "spec": "2.9.1",
+      "resolved": "2.9.1",
+      "integrity": "sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw=="
     }
   ],
   "artifact": {
-    "name": "harrylabsj-kiwi-0.12.0.tgz",
-    "sha256": "8d4f57dcb634a6cebaae13433b6633e1a65c2f26f732da4ff2062a79c78b7533",
-    "bytes": 2062265
+    "name": "harrylabsj-kiwi-0.12.3.tgz",
+    "sha256": "e2313b93264fcabbcf8abbe8356894c3a8685277e03cef7a75d559690d126de3",
+    "bytes": 2180827
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-09-28T23:31:55.280Z"
+  "generated_at": "2026-10-06T11:28:39.290Z"
 }

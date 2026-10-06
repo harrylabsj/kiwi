@@ -17,7 +17,7 @@ describe("WorkBuddy kiwi-sourcing connector", () => {
       encoding: "utf8",
     });
 
-    expect(output).toContain("validation OK (9 tools)");
+    expect(output).toContain("validation OK (13 tools)");
   });
 
   it("uses one local stdio server with bounded timeouts and a pinned Kiwi release", () => {
@@ -44,12 +44,12 @@ describe("WorkBuddy kiwi-sourcing connector", () => {
       runtime: { type: "node", version: "22" },
       timeout: 30_000,
     });
-    expect(server.args).toContain("@harrylabsj/kiwi@0.8.0");
+    expect(server.args).toContain("@harrylabsj/kiwi@latest");
     expect(server.args.join(" ")).toContain("--a2a-timeout-ms 15000");
-    expect(server.args.join(" ")).not.toContain("latest");
+    expect(server.args).toContain("--prefer-online");
   });
 
-  it("keeps public v1 credential-free and documents all nine tools", () => {
+  it("keeps public v1 credential-free and documents all thirteen tools", () => {
     const meta = readJson("connector-meta.json");
     const skill = readFileSync(path.join(CONNECTOR, "skills/kiwi-sourcing/SKILL.md"), "utf8");
 
@@ -57,7 +57,7 @@ describe("WorkBuddy kiwi-sourcing connector", () => {
     expect(meta).toMatchObject({
       source: "kiwi-sourcing",
       type: "mcp",
-      version: "1.0.0",
+      version: "1.0.1",
       minWorkbuddyVersion: "5.0.0",
     });
     for (const tool of [
@@ -70,6 +70,10 @@ describe("WorkBuddy kiwi-sourcing connector", () => {
       "kiwi_handoff",
       "kiwi_approve",
       "kiwi_reject",
+      "kiwi_follow_merchant",
+      "kiwi_unfollow_merchant",
+      "kiwi_list_follows",
+      "kiwi_get_follow_updates",
     ]) {
       expect(skill).toContain(tool);
     }
