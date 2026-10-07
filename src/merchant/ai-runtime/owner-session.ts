@@ -130,7 +130,7 @@ function readPrivateJson<T>(file: string): T | undefined {
 export interface FileGrant {
   merchantId: string;
   principal: string;
-  granted_at: string;
+  granted_at?: string;
 }
 
 export type GrantCheck =
@@ -143,26 +143,25 @@ export function checkFileGrant(
   principal: string,
 ): GrantCheck {
   assertOpaqueMerchantId(merchantId);
-  let raw: string;
+  let result: ReturnType<ReturnType<typeof createFileGrantResolver>["readStrong"]>;
   try {
-    raw = readFileSync(grantFile, "utf8");
+    result = createFileGrantResolver({ merchantId, principal }).readStrong(grantFile);
   } catch {
     return { ok: false, code: "grant_unknown" };
   }
-  let grant: FileGrant;
-  try {
-    grant = JSON.parse(raw) as FileGrant;
-  } catch {
-    return { ok: false, code: "grant_unknown" };
-  }
-  if (typeof grant !== "object" || grant === null || typeof grant.merchantId !== "string") {
-    return { ok: false, code: "grant_unknown" };
-  }
-  if (grant.merchantId !== merchantId) return { ok: false, code: "grant_merchant_mismatch" };
-  if (typeof grant.principal !== "string" || grant.principal !== principal) {
-    return { ok: false, code: "grant_merchant_mismatch" };
-  }
-  return { ok: true, grant };
+  if (!result.ok)
+    return {
+      ok: false,
+      code: result.code === "grant_principal_mismatch" ? "grant_merchant_mismatch" : result.code,
+    };
+  return {
+    ok: true,
+    grant: {
+      merchantId: result.grant.merchantId,
+      principal: result.grant.principal,
+      ...(result.grant.grantedAt === null ? {} : { granted_at: result.grant.grantedAt }),
+    },
+  };
 }
 
 // ── operation 状态机（业务 key 绑定，C3）────────────────────────────────────
@@ -183,6 +182,9 @@ export interface OperationRecord {
   state: OperationState;
   created_at: string;
   updated_at: string;
+  /** Accounting is independent of the authoritative business state. Pending blocks redrive. */
+  budget_accounting_state?: "pending" | "settled";
+  budget_lease_id?: string;
   reconciliation?: {
     decided_at: string;
     outcome: "settled_no_new_effect" | "settled_with_evidence" | "requires_manual_review";
@@ -458,6 +460,48 @@ export interface OwnerSubmitReconciliation {
 }
 export type OwnerSubmitOutcome =
   OwnerSubmitResult | OwnerSubmitReconciliation | { ok: false; code: string; message: string };
+
+/** Local diagnostic, not a business retry signal. Only retryAccounting may consume it. */
+export class OwnerAccountingFailure extends OwnerSessionError {
+  readonly businessOutcome: OwnerSubmitOutcome;
+  override readonly cause: AggregateError;
+  constructor(
+    readonly operationId: string,
+    readonly leaseId: string,
+    readonly usedTokens: number,
+    businessOutcome: OwnerSubmitOutcome,
+    readonly budgetError: unknown,
+    readonly businessError: unknown,
+    readonly journalErrors: readonly unknown[],
+    readonly budgetSettled: boolean,
+  ) {
+    super(
+      "owner_accounting_failed",
+      "owner accounting incomplete; retry accounting only, never redrive business",
+    );
+    this.name = "OwnerAccountingFailure";
+    this.businessOutcome = Object.freeze(structuredClone(businessOutcome));
+    this.journalErrors = Object.freeze([...journalErrors]);
+    this.cause = new AggregateError(
+      [businessError, ...journalErrors, budgetError].filter((error) => error !== undefined),
+      "owner business and accounting diagnostics",
+    );
+  }
+}
+interface AccountingContext {
+  budget: OwnerBudgetGate;
+  operationId: string;
+  leaseId: string;
+  usedTokens: number;
+  businessOutcome: OwnerSubmitOutcome;
+  businessError?: unknown;
+  journalErrors: unknown[];
+  grantDigest: string;
+  expectedRecord?: string;
+  completed?: boolean;
+  /** Monotonic local fact: a journal retry must never settle an already charged lease again. */
+  budgetSettled?: boolean;
+}
 type SubmitInput = {
   text: string;
   mode?: "converse" | "operation";
@@ -479,6 +523,7 @@ export class LocalMerchantOwnerSession {
   private released = false;
   private activeTurn = false;
   private journalInitialized = false;
+  private readonly accountingFailures = new WeakMap<OwnerAccountingFailure, AccountingContext>();
   constructor(input: OwnerSessionInput) {
     if (!ownerSessionFullyEnabled(input.switches ?? readOwnerSessionSwitches(process.env)))
       throw new OwnerSessionError(
@@ -660,6 +705,119 @@ export class LocalMerchantOwnerSession {
     if (!grant.ok) throw new OwnerSessionError(grant.code, grant.message);
     return grant.grant.digest;
   }
+  /** Trusted local recovery only: no business execution, provider call, new lease or JSON permit. */
+  retryAccounting(failure: OwnerAccountingFailure): Promise<OwnerSubmitOutcome> {
+    const run = async (): Promise<OwnerSubmitOutcome> => {
+      this.activeTurn = true;
+      try {
+        const context = this.accountingFailures.get(failure);
+        if (context === undefined)
+          throw new OwnerSessionError(
+            "accounting_recovery_unknown",
+            "accounting recovery requires this live session's failure",
+          );
+        this.assertGrant();
+        const journal = this.readOperations();
+        const record = journal.operations[context.operationId];
+        if (
+          this.businessGrantDigest() !== context.grantDigest ||
+          record === undefined ||
+          record.operation_id !== context.operationId ||
+          record.merchant_id !== this.input.merchantId ||
+          record.principal_id !== this.input.principal ||
+          record.budget_lease_id !== context.leaseId ||
+          (record as OperationRecord & { budget_charged_tokens?: number }).budget_charged_tokens !==
+            context.usedTokens ||
+          context.expectedRecord === undefined ||
+          contentDigest(record) !== context.expectedRecord
+        )
+          throw new OwnerSessionError(
+            "accounting_recovery_unknown",
+            "accounting recovery binding is unknown; manual reconciliation required",
+          );
+        if (record.business_binding !== undefined) this.businessAuthority(record.business_binding);
+        if (context.completed) return context.businessOutcome;
+        if (record.budget_accounting_state !== "pending")
+          throw new OwnerSessionError(
+            "accounting_recovery_unknown",
+            "accounting recovery state is unknown",
+          );
+        return await this.completeAccounting(context, true);
+      } finally {
+        this.activeTurn = false;
+      }
+    };
+    const queued = this.queue.then(run, run);
+    this.queue = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  }
+  private async completeAccounting(
+    context: AccountingContext,
+    recovering = false,
+  ): Promise<OwnerSubmitOutcome> {
+    context.businessOutcome = Object.freeze(structuredClone(context.businessOutcome));
+    let budgetError: unknown;
+    let budgetSettled = context.budgetSettled === true;
+    if (!budgetSettled) {
+      try {
+        await context.budget.settle({ leaseId: context.leaseId, usedTokens: context.usedTokens });
+        context.budgetSettled = true;
+        budgetSettled = true;
+      } catch (error) {
+        budgetError = error;
+      }
+    }
+    if (budgetSettled) {
+      try {
+        const journal = this.readOperations();
+        const record = journal.operations[context.operationId];
+        if (
+          record === undefined ||
+          record.operation_id !== context.operationId ||
+          record.merchant_id !== this.input.merchantId ||
+          record.principal_id !== this.input.principal ||
+          record.budget_lease_id !== context.leaseId ||
+          context.expectedRecord === undefined ||
+          contentDigest(record) !== context.expectedRecord
+        )
+          throw new OwnerSessionError(
+            "accounting_journal_unknown",
+            "accounting journal binding is unknown",
+          );
+        if (recovering) {
+          if (this.businessGrantDigest() !== context.grantDigest)
+            throw new OwnerSessionError(
+              "accounting_recovery_unknown",
+              "accounting recovery grant changed",
+            );
+          if (record.business_binding !== undefined)
+            this.businessAuthority(record.business_binding);
+        }
+        record.budget_accounting_state = "settled";
+        this.writeOperations(journal);
+        context.expectedRecord = contentDigest(record);
+        context.completed = true;
+        return context.businessOutcome;
+      } catch (error) {
+        context.journalErrors.push(error);
+      }
+    }
+    const failure = new OwnerAccountingFailure(
+      context.operationId,
+      context.leaseId,
+      context.usedTokens,
+      context.businessOutcome,
+      budgetError,
+      context.businessError,
+      context.journalErrors,
+      budgetSettled,
+    );
+    this.accountingFailures.set(failure, context);
+    throw failure;
+  }
   private assertBusinessRecord(rec: OperationRecord, binding: OwnerBusinessBinding): void {
     if (
       rec.operation_id !== binding.operationId ||
@@ -769,6 +927,8 @@ export class LocalMerchantOwnerSession {
     if (binding.preconditions.business_key !== key) return reject("candidate_binding_mismatch");
     const records = this.readOperations().operations;
     const old = records[operationId];
+    if (old?.budget_accounting_state === "pending")
+      return reject("owner_accounting_reconciliation");
     if (old) {
       try {
         this.assertBusinessRecord(old, binding);
@@ -785,7 +945,7 @@ export class LocalMerchantOwnerSession {
     if (
       Object.values(records).some(
         (r) =>
-          r.state !== "settled" &&
+          (r.state !== "settled" || r.budget_accounting_state === "pending") &&
           (r.business_key === key ||
             (r.business_binding?.kind === binding.kind && r.business_binding.sku === binding.sku)),
       )
@@ -795,12 +955,17 @@ export class LocalMerchantOwnerSession {
     if (store.get(binding.candidateId)?.status !== "approved") return reject("needs_approval");
     const budget = this.input.budgetGate;
     if (!budget) return reject("budget_gate_missing");
+    const grantDigest = this.businessGrantDigest();
     const lease = await budget.acquire({
       merchantId: this.input.merchantId,
       estimatedTokens: host.reservationTokens,
     });
     if (!lease.allowed) return reject("budget_denied");
     let effectEntered = false;
+    let businessError: unknown;
+    const journalErrors: unknown[] = [];
+    let expectedRecord: string | undefined;
+    let businessOutcome: OwnerSubmitOutcome;
     try {
       this.businessAuthority(binding);
       const journal = this.readOperations();
@@ -816,6 +981,7 @@ export class LocalMerchantOwnerSession {
         args_hash: contentDigest(binding.arguments),
         ...{ budget_lease_id: lease.leaseId, budget_reservation_tokens: host.reservationTokens },
         state: "reserved",
+        budget_accounting_state: "pending",
         created_at: this.nowFn(),
         updated_at: this.nowFn(),
       };
@@ -862,20 +1028,22 @@ export class LocalMerchantOwnerSession {
         rec.state = "reconciliation";
         rec.updated_at = this.nowFn();
         this.writeOperations(ops);
-        return {
+        businessOutcome = {
           ok: false,
           operationId,
           state: "reconciliation",
           reason: "unknown_result_no_redrive",
         };
+      } else {
+        businessOutcome = {
+          ok: true,
+          operationId,
+          state: "settled",
+          turnSummary: "authoritative_exact_money_receipt",
+        };
       }
-      return {
-        ok: true,
-        operationId,
-        state: "settled",
-        turnSummary: "authoritative_exact_money_receipt",
-      };
-    } catch {
+    } catch (error) {
+      businessError = error;
       try {
         const ops = this.readOperations();
         const rec = ops.operations[operationId];
@@ -884,10 +1052,11 @@ export class LocalMerchantOwnerSession {
           rec.updated_at = this.nowFn();
           this.writeOperations(ops);
         }
-      } catch {
+      } catch (error) {
+        journalErrors.push(error);
         /* preserve unreadable journal, never replace */
       }
-      return {
+      businessOutcome = {
         ok: false,
         operationId,
         state: "reconciliation",
@@ -904,15 +1073,25 @@ export class LocalMerchantOwnerSession {
             budget_usage_known: !effectEntered,
           });
           this.writeOperations(ops);
+          expectedRecord = contentDigest(rec);
         }
-      } catch {
+      } catch (error) {
+        journalErrors.push(error);
         /* settlement still runs */
       }
-      await budget.settle({
-        leaseId: lease.leaseId,
-        usedTokens: effectEntered ? host.reservationTokens : 0,
-      });
     }
+
+    return await this.completeAccounting({
+      budget,
+      operationId,
+      leaseId: lease.leaseId,
+      usedTokens: effectEntered ? host.reservationTokens : 0,
+      businessOutcome,
+      businessError,
+      journalErrors,
+      grantDigest,
+      expectedRecord,
+    });
   }
   private async doSubmitTurn(input: SubmitInput): Promise<OwnerSubmitOutcome> {
     const reject = (code: string): OwnerSubmitOutcome => ({ ok: false, code, message: code });
@@ -983,6 +1162,8 @@ export class LocalMerchantOwnerSession {
     const existing = Object.values(this.readOperations().operations).filter(
       (r) => r.business_key === key,
     );
+    if (existing.some((r) => r.budget_accounting_state === "pending"))
+      return reject("owner_accounting_reconciliation");
     if (existing.some((r) => r.state !== "settled")) return reject("operation_reconciliation");
     if (
       mode === "operation" &&
@@ -993,6 +1174,7 @@ export class LocalMerchantOwnerSession {
       )
     )
       return reject("operation_already_applied_or_new_approval_required");
+    const grantDigest = this.businessGrantDigest();
     const decision = await this.input.budgetGate.acquire({
       merchantId: this.input.merchantId,
       estimatedTokens: runtime.reservationTokens,
@@ -1006,6 +1188,10 @@ export class LocalMerchantOwnerSession {
     let toolSucceeded = false;
     let toolRefused = false;
     let effectUnknown = false;
+    let businessError: unknown;
+    const journalErrors: unknown[] = [];
+    let expectedRecord: string | undefined;
+    let businessOutcome: OwnerSubmitOutcome;
     try {
       const ops = this.readOperations();
       ops.operations[operationId] = {
@@ -1020,6 +1206,7 @@ export class LocalMerchantOwnerSession {
         kind,
         args_hash: contentDigest(args),
         state: "reserved",
+        budget_accounting_state: "pending",
         created_at: this.nowFn(),
         updated_at: this.nowFn(),
         ...(candidateId === undefined ? {} : { candidate_id: candidateId }),
@@ -1149,12 +1336,19 @@ export class LocalMerchantOwnerSession {
           outcome: "settled_no_new_effect",
         };
         this.writeOperations(journal);
-        return reject("tool_not_executed");
+        businessOutcome = reject("tool_not_executed");
+      } else {
+        businessOutcome = known
+          ? { ok: true, operationId, state: "settled", turnSummary: outcome.summary }
+          : {
+              ok: false,
+              operationId,
+              state: "reconciliation",
+              reason: "unknown_result_no_redrive",
+            };
       }
-      return known
-        ? { ok: true, operationId, state: "settled", turnSummary: outcome.summary }
-        : { ok: false, operationId, state: "reconciliation", reason: "unknown_result_no_redrive" };
-    } catch {
+    } catch (error) {
+      businessError = error;
       // Journal IO failure is unknown and must never create an empty replacement.
       try {
         const ops = this.readOperations();
@@ -1164,10 +1358,11 @@ export class LocalMerchantOwnerSession {
           rec.updated_at = this.nowFn();
           this.writeOperations(ops);
         }
-      } catch {
+      } catch (error) {
+        journalErrors.push(error);
         /* preserve existing evidence */
       }
-      return {
+      businessOutcome = {
         ok: false,
         operationId,
         state: "reconciliation",
@@ -1183,15 +1378,25 @@ export class LocalMerchantOwnerSession {
             budget_charged_tokens: enteredSdk ? usedTokens : 0,
           });
           this.writeOperations(journal);
+          expectedRecord = contentDigest(record);
         }
-      } catch {
+      } catch (error) {
+        journalErrors.push(error);
         /* settlement must still run exactly once even with journal IO failure */
       }
-      await this.input.budgetGate.settle({
-        leaseId: decision.leaseId,
-        usedTokens: enteredSdk ? usedTokens : 0,
-      });
     }
+
+    return await this.completeAccounting({
+      budget: this.input.budgetGate,
+      operationId,
+      leaseId: decision.leaseId,
+      usedTokens: enteredSdk ? usedTokens : 0,
+      businessOutcome,
+      businessError,
+      journalErrors,
+      grantDigest,
+      expectedRecord,
+    });
   }
   checkExecutionValid(operationId: string, expectedState: OperationState): boolean {
     this.assertGrant();
