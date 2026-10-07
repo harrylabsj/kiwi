@@ -32,3 +32,7 @@ challenge responder重新读当前authorized/bound/session/key/origin/expiry，c
 唯一产品5原文件+新store-lock，bootstrap仅typedreadiness import/throw。部分老长行经同项目现有Prettier规范，完整diff包含format-only；旁置semantic.diff提供忽略空白视图，不剪原raw。57例只是Connect相关，不是whole repo/完整生产流程/恶意同UID/网络exactly-once保证。未知claim人工处理/旧孤立锁恢复需权威事实，不提供假reset。物理复用依赖仍原node_modules，不新install，新的pkglock版本完整物理安装不在本单。
 
 交root审候选+旁置报告后原非作者只增量2–4承重组，不自动再大矩阵、不push。
+
+## A301后test-only类型修正
+
+原352冻结保留，生产src字节不变。新增测试Response.json原unknown在57例Vitest运行不报但full tsconfig检查5项报错；原tsc.build只查src，不得冒fullTSC。只增加fixture对象/claims/signature类型运行时守卫，仍翻转原签名位、相同强assert；未asany/生产宽松。本作者树full `tsc -p tsconfig.json --noEmit` 实际exit0，旁置full-typecheck.raw.txt；受影响单一签名用例定向通过，其余57旧绿不重复。新commit仅test+本说明，root联合tree随后取此小差异。

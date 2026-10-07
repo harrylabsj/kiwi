@@ -508,14 +508,24 @@ it("actual public JWS bad signature/plaintext mismatch cannot backfill a legacy 
     const fetchImpl = (async (input, init) => {
       const response = await base(input, init);
       if (String(input).endsWith("/runtime-binding")) {
-        const json = await response.json();
+        const parsed: unknown = await response.json();
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
+          throw new Error("fixture envelope is not an object");
+        const json = parsed as Record<string, unknown>;
+        if (typeof json["claims_jws"] !== "string") throw new Error("fixture signature missing");
+        const signature = json["claims_jws"];
+        const plain = json["claims"];
+        if (plain === null || typeof plain !== "object" || Array.isArray(plain))
+          throw new Error("fixture plaintext claims missing");
+        const claims = plain as Record<string, unknown>;
         if (mode === "signature") {
-          const pieces = json.claims_jws.split(".");
+          const pieces = signature.split(".");
+          if (pieces[2] === undefined) throw new Error("fixture compact signature invalid");
           pieces[2] =
             pieces[2].slice(0, 10) + (pieces[2][10] === "A" ? "B" : "A") + pieces[2].slice(11);
           json.claims_jws = pieces.join(".");
         }
-        if (mode === "plaintext") json.claims.merchant_id = "merchant-forged";
+        if (mode === "plaintext") claims["merchant_id"] = "merchant-forged";
         if (mode === "kid") json.issuer_kid = "unknown";
         if (mode === "thumbprint") json.issuer_thumbprint = "sha256:" + "0".repeat(64);
         return new Response(JSON.stringify(json));
