@@ -19,17 +19,28 @@ import { createHash, createPublicKey, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { withEnrollmentStoreLock } from "./store-lock.js";
 import { writeFileAtomic } from "../../fs/atomic-write.js";
 import type { JwsSigningIdentity } from "../../trust/identity/jws.js";
 import { signCompactJws } from "../../trust/identity/jws.js";
 import { publicKeyThumbprint } from "../../trust/binding/thumbprint.js";
 
 export interface AuthorizedEnrollment {
+  store_revision?: number;
   enrollment_id: string;
   runtime_origin: string;
   key_thumbprint: string;
   expires_at: string;
-  status: "preparing" | "authorized" | "bound" | "published" | "replaced" | "revoked" | "paused" | "expired" | "canceled";
+  status:
+    | "preparing"
+    | "authorized"
+    | "bound"
+    | "published"
+    | "replaced"
+    | "revoked"
+    | "paused"
+    | "expired"
+    | "canceled";
 }
 
 export interface EnrollmentChallengeStore {
@@ -58,7 +69,10 @@ export function readEnrollmentStore(dataDir: string): EnrollmentChallengeStore {
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+  });
   res.end(JSON.stringify(body));
 }
 
@@ -71,14 +85,19 @@ export function createEnrollmentChallengeResponder(input: {
   const now = input.now ?? (() => new Date());
   const requestTimes: number[] = [];
   const ownThumbprint = publicKeyThumbprint(
-    createPublicKey(input.signingIdentity.privateKey).export({ type: "spki", format: "pem" }) as string,
+    createPublicKey(input.signingIdentity.privateKey).export({
+      type: "spki",
+      format: "pem",
+    }) as string,
   );
   return (req, res) => {
     void (async () => {
       if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
-      if (req.url?.split("?", 1)[0] !== "/.well-known/kiwi-binding-challenge") return json(res, 404, { error: "not_found" });
+      if (req.url?.split("?", 1)[0] !== "/.well-known/kiwi-binding-challenge")
+        return json(res, 404, { error: "not_found" });
       const currentTime = now().getTime();
-      while (requestTimes.length > 0 && currentTime - (requestTimes[0] ?? currentTime) > 60_000) requestTimes.shift();
+      while (requestTimes.length > 0 && currentTime - (requestTimes[0] ?? currentTime) > 60_000)
+        requestTimes.shift();
       if (requestTimes.length >= MAX_PER_MINUTE) return json(res, 429, { error: "rate_limited" });
       requestTimes.push(currentTime);
       const chunks: Buffer[] = [];
@@ -92,23 +111,50 @@ export function createEnrollmentChallengeResponder(input: {
       let request: Record<string, unknown>;
       try {
         const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("shape");
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
+          throw new Error("shape");
         request = parsed as Record<string, unknown>;
-      } catch { return json(res, 400, { error: "invalid_request" }); }
-      const expectedKeys = ["audience", "challenge", "enrollment_id", "expires_at", "issued_at", "key_thumbprint", "origin"];
-      if (Object.keys(request).sort().join(",") !== expectedKeys.sort().join(",")) return json(res, 400, { error: "invalid_challenge_fields" });
+      } catch {
+        return json(res, 400, { error: "invalid_request" });
+      }
+      const expectedKeys = [
+        "audience",
+        "challenge",
+        "enrollment_id",
+        "expires_at",
+        "issued_at",
+        "key_thumbprint",
+        "origin",
+      ];
+      if (Object.keys(request).sort().join(",") !== expectedKeys.sort().join(","))
+        return json(res, 400, { error: "invalid_challenge_fields" });
       const enrollmentId = request["enrollment_id"];
-      if (typeof enrollmentId !== "string" || enrollmentId.length < 1 || enrollmentId.length > 64 ||
-          request["audience"] !== "kiwi-catalog" || typeof request["challenge"] !== "string" || !/^[A-Za-z0-9_-]{40,64}$/.test(request["challenge"]) ||
-          typeof request["origin"] !== "string" || request["origin"].length > 2048 ||
-          typeof request["key_thumbprint"] !== "string" || request["key_thumbprint"].length > 80 ||
-          typeof request["issued_at"] !== "string" || typeof request["expires_at"] !== "string") {
+      if (
+        typeof enrollmentId !== "string" ||
+        enrollmentId.length < 1 ||
+        enrollmentId.length > 64 ||
+        request["audience"] !== "kiwi-catalog" ||
+        typeof request["challenge"] !== "string" ||
+        !/^[A-Za-z0-9_-]{40,64}$/.test(request["challenge"]) ||
+        typeof request["origin"] !== "string" ||
+        request["origin"].length > 2048 ||
+        typeof request["key_thumbprint"] !== "string" ||
+        request["key_thumbprint"].length > 80 ||
+        typeof request["issued_at"] !== "string" ||
+        typeof request["expires_at"] !== "string"
+      ) {
         return json(res, 400, { error: "invalid_challenge_shape" });
       }
       const issuedMs = Date.parse(request["issued_at"]);
       const expiresMs = Date.parse(request["expires_at"]);
-      if (!Number.isFinite(issuedMs) || !Number.isFinite(expiresMs) || expiresMs - issuedMs !== 60_000 ||
-          issuedMs > now().getTime() + 30_000 || expiresMs <= now().getTime()) return json(res, 400, { error: "invalid_challenge_time" });
+      if (
+        !Number.isFinite(issuedMs) ||
+        !Number.isFinite(expiresMs) ||
+        expiresMs - issuedMs !== 60_000 ||
+        issuedMs > now().getTime() + 30_000 ||
+        expiresMs <= now().getTime()
+      )
+        return json(res, 400, { error: "invalid_challenge_time" });
       const store = readEnrollmentStore(input.dataDir);
       const liveConsumed = store.consumed.filter((item) => {
         const separator = item.lastIndexOf(":");
@@ -120,15 +166,21 @@ export function createEnrollmentChallengeResponder(input: {
       if (session === undefined || !["authorized", "bound"].includes(session.status)) {
         return json(res, 403, { error: "enrollment_not_authorized" });
       }
-      if (session.key_thumbprint !== ownThumbprint || request["key_thumbprint"] !== ownThumbprint ||
-          request["origin"] !== session.runtime_origin || !Number.isFinite(Date.parse(session.expires_at)) ||
-          Date.parse(session.expires_at) <= now().getTime()) {
+      if (
+        session.key_thumbprint !== ownThumbprint ||
+        request["key_thumbprint"] !== ownThumbprint ||
+        request["origin"] !== session.runtime_origin ||
+        !Number.isFinite(Date.parse(session.expires_at)) ||
+        Date.parse(session.expires_at) <= now().getTime()
+      ) {
         return json(res, 403, { error: "challenge_mismatch" });
       }
       const challenge = request["challenge"] as string;
       const digest = createHash("sha256").update(`${enrollmentId}:${challenge}`).digest("hex");
-      if (liveConsumed.some((item) => item.startsWith(`${digest}:`) || item === digest)) return json(res, 409, { error: "challenge_replayed" });
-      if (liveConsumed.length >= MAX_CONSUMED) return json(res, 503, { error: "challenge_store_full" });
+      if (liveConsumed.some((item) => item.startsWith(`${digest}:`) || item === digest))
+        return json(res, 409, { error: "challenge_replayed" });
+      if (liveConsumed.length >= MAX_CONSUMED)
+        return json(res, 503, { error: "challenge_store_full" });
       const unsigned = {
         enrollment_id: enrollmentId,
         challenge,
@@ -140,22 +192,51 @@ export function createEnrollmentChallengeResponder(input: {
       };
       const keyId = input.signingIdentity.keyid;
       const nonce = randomBytes(24).toString("base64url");
-      const proofJws = signCompactJws({ ...unsigned, key_id: keyId, nonce, purpose: "kiwi-binding-challenge" }, input.signingIdentity, {
-        extraHeader: { typ: "kiwi-enrollment-challenge" },
-      });
+      const proofJws = signCompactJws(
+        { ...unsigned, key_id: keyId, nonce, purpose: "kiwi-binding-challenge" },
+        input.signingIdentity,
+        {
+          extraHeader: { typ: "kiwi-enrollment-challenge" },
+        },
+      );
       // Recheck and consume atomically in the state file before returning a signature.
-      const fresh = readEnrollmentStore(input.dataDir);
-      const freshConsumed = fresh.consumed.filter((item) => {
-        const separator = item.lastIndexOf(":");
-        if (separator < 0) return true;
-        const expires = Number(item.slice(separator + 1));
-        return !Number.isFinite(expires) || expires > currentTime;
-      });
-      if (freshConsumed.some((item) => item.startsWith(`${digest}:`) || item === digest)) return json(res, 409, { error: "challenge_replayed" });
-      if (freshConsumed.length >= MAX_CONSUMED) return json(res, 503, { error: "challenge_store_full" });
-      const updated = { ...fresh, consumed: [...freshConsumed, `${digest}:${expiresMs}`] };
-      writeFileAtomic(enrollmentStorePath(input.dataDir), `${JSON.stringify(updated)}\n`, { mode: 0o600 });
+      try {
+        withEnrollmentStoreLock(input.dataDir, () => {
+          const fresh = readEnrollmentStore(input.dataDir);
+          const current = fresh.sessions.find((s) => s.enrollment_id === enrollmentId);
+          if (
+            !current ||
+            !["authorized", "bound"].includes(current.status) ||
+            current.key_thumbprint !== ownThumbprint ||
+            current.runtime_origin !== request["origin"] ||
+            Date.parse(current.expires_at) <= now().getTime()
+          )
+            throw new Error("challenge_mismatch");
+          const freshConsumed = fresh.consumed.filter((item) => {
+            const separator = item.lastIndexOf(":");
+            if (separator < 0) return true;
+            const expires = Number(item.slice(separator + 1));
+            return !Number.isFinite(expires) || expires > currentTime;
+          });
+          if (freshConsumed.some((item) => item.startsWith(`${digest}:`) || item === digest))
+            throw new Error("challenge_replayed");
+          if (freshConsumed.length >= MAX_CONSUMED) throw new Error("challenge_store_full");
+          const updated = { ...fresh, consumed: [...freshConsumed, `${digest}:${expiresMs}`] };
+          writeFileAtomic(enrollmentStorePath(input.dataDir), `${JSON.stringify(updated)}\n`, {
+            mode: 0o600,
+          });
+        });
+      } catch (error) {
+        const code = error instanceof Error ? error.message : "internal_error";
+        return json(res, code === "challenge_replayed" ? 409 : 503, {
+          error: ["challenge_replayed", "challenge_store_full", "challenge_mismatch"].includes(code)
+            ? code
+            : "challenge_store_busy",
+        });
+      }
       return json(res, 200, { ...unsigned, key_id: keyId, signature: proofJws });
-    })().catch(() => { if (!res.headersSent) json(res, 500, { error: "internal_error" }); });
+    })().catch(() => {
+      if (!res.headersSent) json(res, 500, { error: "internal_error" });
+    });
   };
 }

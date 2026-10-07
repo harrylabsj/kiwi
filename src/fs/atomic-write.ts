@@ -14,21 +14,86 @@
  * limitations under the License.
  */
 
-/**
- * 原子文件写入（tmp + rename）：读者要么看到旧内容要么看到新内容，绝不读到
- * 半截 JSON（审查 P2：capability-probe.json / health.json 非原子写在并发读下
- * 产生撕裂读 → 假 critical 告警；与 policy-runtime 的原子写同一范式）。
- */
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+/** Atomic replacement: file fsync before rename, directory fsync after rename.
+ * Directory sync failure reports committed=true; never roll back a renamed file.
+ * No power-loss guarantee is inferred from fault injection. */
+import * as fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
-
+export type AtomicWriteIo = Pick<
+  typeof fs,
+  | "mkdirSync"
+  | "lstatSync"
+  | "openSync"
+  | "writeFileSync"
+  | "fchmodSync"
+  | "fsyncSync"
+  | "closeSync"
+  | "renameSync"
+  | "unlinkSync"
+>;
+export class AtomicWriteError extends Error {
+  constructor(
+    readonly code: string,
+    readonly committed: boolean,
+    options: ErrorOptions,
+  ) {
+    super(code, options);
+  }
+}
 export function writeFileAtomic(
   file: string,
   data: string,
-  options: { mode?: number } = {},
+  options: { mode?: number; io?: AtomicWriteIo } = {},
 ): void {
-  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, data, { mode: options.mode ?? 0o600 });
-  renameSync(tmp, file);
+  const io = options.io ?? fs,
+    dir = path.dirname(file);
+  io.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  let oldMode: number | undefined;
+  try {
+    const s = io.lstatSync(file);
+    if (!s.isFile() || s.isSymbolicLink()) throw new Error("ATOMIC_TARGET_NOT_REGULAR");
+    oldMode = s.mode & 0o777;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
+  let fd: number | undefined,
+    dirFd: number | undefined,
+    committed = false;
+  try {
+    fd = io.openSync(tmp, "wx", options.mode ?? 0o600);
+    io.writeFileSync(fd, data);
+    io.fsyncSync(fd);
+    io.closeSync(fd);
+    fd = undefined;
+    io.renameSync(tmp, file);
+    committed = true;
+    dirFd = io.openSync(dir, "r");
+    io.fsyncSync(dirFd);
+  } catch (e) {
+    throw new AtomicWriteError(
+      committed ? "ATOMIC_DIRECTORY_SYNC_FAILED" : "ATOMIC_REPLACE_FAILED",
+      committed,
+      { cause: e },
+    );
+  } finally {
+    if (fd !== undefined) {
+      try {
+        io.closeSync(fd);
+      } catch {}
+    }
+    if (dirFd !== undefined) {
+      try {
+        io.closeSync(dirFd);
+      } catch {}
+    }
+    if (!committed) {
+      try {
+        io.unlinkSync(tmp);
+      } catch (e) {
+        /* A cleanup fault leaves owned temp evidence; it must not mask the primary failure. */
+      }
+    }
+  }
 }

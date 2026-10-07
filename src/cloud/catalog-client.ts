@@ -226,6 +226,7 @@ export interface RequestBindingResult {
 
 /** 公开读到的绑定文档中，与 Runtime 自身核对所需的字段。 */
 export interface PublicBinding {
+  serviceEpoch?: number;
   bindingId: string;
   bindingVersion: number;
   merchantId: string;
@@ -298,7 +299,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function recordOrEmpty(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) throw new CatalogClientError("RESPONSE_INVALID", "catalog 响应必须是 JSON 对象");
+  if (!isRecord(value))
+    throw new CatalogClientError("RESPONSE_INVALID", "catalog 响应必须是 JSON 对象");
   return value;
 }
 
@@ -319,12 +321,22 @@ function sha256Json(value: Record<string, unknown>): string {
 
 function requireCatalogVerificationUri(baseUrl: string, raw: string): string {
   let parsed: URL;
-  try { parsed = new URL(raw, baseUrl); } catch {
+  try {
+    parsed = new URL(raw, baseUrl);
+  } catch {
     throw new CatalogClientError("RESPONSE_INVALID", "verification_uri 不是合法 URL");
   }
   const base = new URL(baseUrl);
-  if (parsed.origin !== base.origin || parsed.protocol !== base.protocol || parsed.username !== "" || parsed.password !== "") {
-    throw new CatalogClientError("RESPONSE_INVALID", "verification_uri 必须属于配置的 Catalog origin");
+  if (
+    parsed.origin !== base.origin ||
+    parsed.protocol !== base.protocol ||
+    parsed.username !== "" ||
+    parsed.password !== ""
+  ) {
+    throw new CatalogClientError(
+      "RESPONSE_INVALID",
+      "verification_uri 必须属于配置的 Catalog origin",
+    );
   }
   return parsed.toString();
 }
@@ -363,8 +375,14 @@ export class CatalogClient {
   private readonly now: () => Date;
 
   constructor(options: CatalogClientOptions) {
-    const trimmed = String(options.baseUrl ?? "").trim().replace(/\/+$/, "");
-    if (!trimmed.startsWith("https://") && !trimmed.startsWith("http://127.0.0.1") && !trimmed.startsWith("http://localhost")) {
+    const trimmed = String(options.baseUrl ?? "")
+      .trim()
+      .replace(/\/+$/, "");
+    if (
+      !trimmed.startsWith("https://") &&
+      !trimmed.startsWith("http://127.0.0.1") &&
+      !trimmed.startsWith("http://localhost")
+    ) {
       throw new CatalogClientError(
         "INVALID_INPUT",
         `catalog baseUrl 必须是 https（本地联调仅放行 loopback）：${trimmed}`,
@@ -422,14 +440,19 @@ export class CatalogClient {
     };
     const { json } = await this.request("POST", "/v1/enrollments/device", {
       body,
-      jws: signCompactJws(signed, identity.signingIdentity, { extraHeader: { typ: "kiwi-runtime-request" } }),
+      jws: signCompactJws(signed, identity.signingIdentity, {
+        extraHeader: { typ: "kiwi-runtime-request" },
+      }),
     });
     const result = recordOrEmpty(json);
     const session: DeviceEnrollmentSession = {
       enrollmentId: requiredString(result["enrollment_id"], "enrollment_id"),
       deviceCode: requiredString(result["device_code"], "device_code"),
       userCode: requiredString(result["user_code"], "user_code"),
-      verificationUri: requireCatalogVerificationUri(this.baseUrl, requiredString(result["verification_uri"], "verification_uri")),
+      verificationUri: requireCatalogVerificationUri(
+        this.baseUrl,
+        requiredString(result["verification_uri"], "verification_uri"),
+      ),
       expiresAt: requiredString(result["expires_at"], "expires_at"),
       intervalSeconds: positiveInteger(result["interval"], 5),
       keyThumbprint,
@@ -442,7 +465,8 @@ export class CatalogClient {
     deviceCode: string,
     identity: RuntimeSigningIdentity,
   ): Promise<DeviceEnrollmentPoll> {
-    if (deviceCode.length < 32) throw new CatalogClientError("INVALID_INPUT", "device_code 形状非法");
+    if (deviceCode.length < 32)
+      throw new CatalogClientError("INVALID_INPUT", "device_code 形状非法");
     const { keyThumbprint } = runtimePublicKey(identity);
     const nonce = this.nonceFactory();
     const issuedAt = this.now();
@@ -459,12 +483,17 @@ export class CatalogClient {
     };
     const { json } = await this.request("POST", "/v1/enrollments/device/token", {
       body: { device_code: deviceCode },
-      jws: signCompactJws(signed, identity.signingIdentity, { extraHeader: { typ: "kiwi-runtime-request" } }),
+      jws: signCompactJws(signed, identity.signingIdentity, {
+        extraHeader: { typ: "kiwi-runtime-request" },
+      }),
     });
     const result = recordOrEmpty(json);
     const state = result["status"] ?? result["error"];
     if (state === "authorization_pending" || state === "pending") {
-      return { status: "authorization_pending", intervalSeconds: positiveInteger(result["interval"], 5) };
+      return {
+        status: "authorization_pending",
+        intervalSeconds: positiveInteger(result["interval"], 5),
+      };
     }
     if (state === "slow_down") {
       return { status: "slow_down", intervalSeconds: positiveInteger(result["interval"], 10) };
@@ -478,27 +507,40 @@ export class CatalogClient {
       grant: requiredString(result["grant"], "grant"),
       catalogAgentId: requiredString(result["catalog_agent_id"], "catalog_agent_id"),
       merchantId: requiredString(result["merchant_id"], "merchant_id"),
-      runtimeOrigin: normalizeOrigin(requireHttpsUrl(requiredString(result["runtime_origin"], "runtime_origin"), "runtime_origin")),
-      a2aEndpoint: requireHttpsUrl(requiredString(result["a2a_endpoint"], "a2a_endpoint"), "a2a_endpoint"),
+      runtimeOrigin: normalizeOrigin(
+        requireHttpsUrl(
+          requiredString(result["runtime_origin"], "runtime_origin"),
+          "runtime_origin",
+        ),
+      ),
+      a2aEndpoint: requireHttpsUrl(
+        requiredString(result["a2a_endpoint"], "a2a_endpoint"),
+        "a2a_endpoint",
+      ),
       expiresAt: requiredString(result["expires_at"], "expires_at"),
       authorizationEpoch: positiveInteger(result["authorization_epoch"], 0),
       approvedCardDigest: requiredString(result["approved_card_digest"], "approved_card_digest"),
-      scopes: Array.isArray(result["scopes"]) ? result["scopes"].filter((v): v is string => typeof v === "string") : [],
+      scopes: Array.isArray(result["scopes"])
+        ? result["scopes"].filter((v): v is string => typeof v === "string")
+        : [],
     };
   }
 
   /** 一次性许可换取活动绑定；Catalog 的挑战和签发结果是绑定权威。 */
-  async bindEnrollment(input: {
-    enrollmentId: string;
-    grant: string;
-    catalogAgentId: string;
-    runtimeOrigin: string;
-    a2aEndpoint: string;
-    generation: number;
-    serviceEpoch: number;
-    authorizationEpoch: number;
-    merchantId: string;
-  }, identity: RuntimeSigningIdentity): Promise<GrantBindingResult> {
+  async bindEnrollment(
+    input: {
+      enrollmentId: string;
+      grant: string;
+      catalogAgentId: string;
+      runtimeOrigin: string;
+      a2aEndpoint: string;
+      generation: number;
+      serviceEpoch: number;
+      authorizationEpoch: number;
+      merchantId: string;
+    },
+    identity: RuntimeSigningIdentity,
+  ): Promise<GrantBindingResult> {
     const origin = normalizeOrigin(requireHttpsUrl(input.runtimeOrigin, "runtime_origin"));
     const endpoint = requireHttpsUrl(input.a2aEndpoint, "a2a_endpoint");
     const { keyJwk, keyThumbprint } = runtimePublicKey(identity);
@@ -535,10 +577,16 @@ export class CatalogClient {
       exp: new Date(issuedAt.getTime() + 30_000).toISOString(),
       nonce,
     };
-    const { json } = await this.request("POST", `/v1/agents/${encodeURIComponent(input.catalogAgentId)}/runtime-bindings`, {
-      body,
-      jws: signCompactJws(signed, identity.signingIdentity, { extraHeader: { typ: "kiwi-runtime-request" } }),
-    });
+    const { json } = await this.request(
+      "POST",
+      `/v1/agents/${encodeURIComponent(input.catalogAgentId)}/runtime-bindings`,
+      {
+        body,
+        jws: signCompactJws(signed, identity.signingIdentity, {
+          extraHeader: { typ: "kiwi-runtime-request" },
+        }),
+      },
+    );
     const result = recordOrEmpty(json);
     const claim = result["binding_claim"];
     if (claim === null || typeof claim !== "object" || Array.isArray(claim)) {
@@ -559,11 +607,12 @@ export class CatalogClient {
       bindingId: checkedClaim.binding_id,
       bindingVersion: checkedClaim.binding_version,
       keyThumbprint: requiredString(result["key_thumbprint"], "key_thumbprint"),
-      activeCardRevision: typeof (claim as Record<string, unknown>)["card_revision"] === "number"
-        && Number.isInteger((claim as Record<string, unknown>)["card_revision"])
-        ? (claim as Record<string, unknown>)["card_revision"] as number
-        : null,
-      bindingClaim: claim as Record<string, unknown>,
+      activeCardRevision:
+        typeof (claim as Record<string, unknown>)["card_revision"] === "number" &&
+        Number.isInteger((claim as Record<string, unknown>)["card_revision"])
+          ? ((claim as Record<string, unknown>)["card_revision"] as number)
+          : null,
+      bindingClaim: { ...(claim as Record<string, unknown>), claims: checkedClaim },
     };
   }
 
@@ -574,33 +623,49 @@ export class CatalogClient {
     identity: RuntimeSigningIdentity,
   ): Promise<SignedListingPublicationResult> {
     const agentId = this.requireAgentId(input.catalogAgentId);
-    if (input.listing["owner_agent_id"] !== agentId || input.listing["merchant_id"] !== input.merchantId) {
-      throw new CatalogClientError("INVALID_INPUT", "signed listing body identity does not match its route/claims");
+    if (
+      input.listing["owner_agent_id"] !== agentId ||
+      input.listing["merchant_id"] !== input.merchantId
+    ) {
+      throw new CatalogClientError(
+        "INVALID_INPUT",
+        "signed listing body identity does not match its route/claims",
+      );
     }
     if (typeof input.bindingId !== "string" || input.bindingId.trim() === "") {
       throw new CatalogClientError("INVALID_INPUT", "binding_id must be non-empty");
     }
     if (!/^sha256:[a-f0-9]{64}$/.test(input.listingDigest)) {
-      throw new CatalogClientError("INVALID_INPUT", "listing_digest must be sha256:<64 lowercase hex>");
+      throw new CatalogClientError(
+        "INVALID_INPUT",
+        "listing_digest must be sha256:<64 lowercase hex>",
+      );
     }
     if (input.idempotencyKey.trim() === "" || input.idempotencyKey.length > 160) {
-      throw new CatalogClientError("INVALID_INPUT", "Idempotency-Key must contain 1 to 160 characters");
+      throw new CatalogClientError(
+        "INVALID_INPUT",
+        "Idempotency-Key must contain 1 to 160 characters",
+      );
     }
     const issuedAt = this.now();
-    const jws = signCompactJws({
-      method: "POST",
-      path: "/v1/listings/publish",
-      audience: "kiwi-catalog",
-      agent_id: agentId,
-      merchant_id: input.merchantId,
-      binding_id: input.bindingId,
-      key_id: identity.keyId,
-      listing_digest: input.listingDigest,
-      idempotency_key: input.idempotencyKey,
-      issued_at: issuedAt.toISOString(),
-      exp: new Date(issuedAt.getTime() + 90_000).toISOString(),
-      nonce: this.nonceFactory(),
-    }, identity.signingIdentity, { extraHeader: { typ: "kiwi-runtime-request" } });
+    const jws = signCompactJws(
+      {
+        method: "POST",
+        path: "/v1/listings/publish",
+        audience: "kiwi-catalog",
+        agent_id: agentId,
+        merchant_id: input.merchantId,
+        binding_id: input.bindingId,
+        key_id: identity.keyId,
+        listing_digest: input.listingDigest,
+        idempotency_key: input.idempotencyKey,
+        issued_at: issuedAt.toISOString(),
+        exp: new Date(issuedAt.getTime() + 90_000).toISOString(),
+        nonce: this.nonceFactory(),
+      },
+      identity.signingIdentity,
+      { extraHeader: { typ: "kiwi-runtime-request" } },
+    );
     const { json } = await this.request("POST", "/v1/listings/publish", {
       body: input.listing,
       jws,
@@ -608,8 +673,15 @@ export class CatalogClient {
     });
     const receipt = recordOrEmpty(json);
     const listing = recordOrEmpty(receipt["listing"]);
-    if (receipt["ok"] !== true || typeof listing["listing_id"] !== "string" || listing["listing_id"] === "") {
-      throw new CatalogClientError("RESPONSE_INVALID", "Catalog signed listing publish response lacks a listing receipt");
+    if (
+      receipt["ok"] !== true ||
+      typeof listing["listing_id"] !== "string" ||
+      listing["listing_id"] === ""
+    ) {
+      throw new CatalogClientError(
+        "RESPONSE_INVALID",
+        "Catalog signed listing publish response lacks a listing receipt",
+      );
     }
     return { listingId: listing["listing_id"], idempotent: receipt["idempotent"] === true };
   }
@@ -621,7 +693,8 @@ export class CatalogClient {
     input: { limit: number; cursor?: string; freshnessState?: string },
   ): Promise<SignedListingPage> {
     const agentId = this.requireAgentId(context.catalogAgentId);
-    const limit = Number.isInteger(input.limit) && input.limit > 0 ? Math.min(input.limit, 100) : 20;
+    const limit =
+      Number.isInteger(input.limit) && input.limit > 0 ? Math.min(input.limit, 100) : 20;
     const cursor = input.cursor?.trim() ?? "";
     const freshnessState = input.freshnessState?.trim() ?? "";
     const queryDigest = sha256Json({ limit, cursor, freshness_state: freshnessState });
@@ -630,31 +703,47 @@ export class CatalogClient {
     if (cursor !== "") query.set("cursor", cursor);
     if (freshnessState !== "") query.set("freshness_state", freshnessState);
     const issuedAt = this.now();
-    const jws = signCompactJws({
-      method: "GET",
-      path,
-      audience: "kiwi-catalog",
-      agent_id: agentId,
-      merchant_id: context.merchantId,
-      binding_id: context.bindingId,
-      key_id: context.keyId,
-      query_digest: queryDigest,
-      issued_at: issuedAt.toISOString(),
-      exp: new Date(issuedAt.getTime() + 90_000).toISOString(),
-      nonce: this.nonceFactory(),
-    }, identity.signingIdentity, { extraHeader: { typ: "kiwi-runtime-request" } });
+    const jws = signCompactJws(
+      {
+        method: "GET",
+        path,
+        audience: "kiwi-catalog",
+        agent_id: agentId,
+        merchant_id: context.merchantId,
+        binding_id: context.bindingId,
+        key_id: context.keyId,
+        query_digest: queryDigest,
+        issued_at: issuedAt.toISOString(),
+        exp: new Date(issuedAt.getTime() + 90_000).toISOString(),
+        nonce: this.nonceFactory(),
+      },
+      identity.signingIdentity,
+      { extraHeader: { typ: "kiwi-runtime-request" } },
+    );
     const { json } = await this.request("GET", `${path}?${query.toString()}`, { jws });
     const response = recordOrEmpty(json);
     if (response["ok"] !== true || !Array.isArray(response["results"])) {
-      throw new CatalogClientError("RESPONSE_INVALID", "Catalog signed self-list response lacks results");
+      throw new CatalogClientError(
+        "RESPONSE_INVALID",
+        "Catalog signed self-list response lacks results",
+      );
     }
     const results = response["results"].filter(isRecord);
-    if (results.some((item) => item["owner_agent_id"] !== agentId || item["merchant_id"] !== context.merchantId)) {
-      throw new CatalogClientError("RESPONSE_INVALID", "Catalog signed self-list returned a listing outside the current enrollment identity");
+    if (
+      results.some(
+        (item) => item["owner_agent_id"] !== agentId || item["merchant_id"] !== context.merchantId,
+      )
+    ) {
+      throw new CatalogClientError(
+        "RESPONSE_INVALID",
+        "Catalog signed self-list returned a listing outside the current enrollment identity",
+      );
     }
     return {
       results,
-      ...(typeof response["next_cursor"] === "string" && response["next_cursor"] !== "" ? { nextCursor: response["next_cursor"] } : {}),
+      ...(typeof response["next_cursor"] === "string" && response["next_cursor"] !== ""
+        ? { nextCursor: response["next_cursor"] }
+        : {}),
     };
   }
 
@@ -669,33 +758,126 @@ export class CatalogClient {
       throw new CatalogClientError("INVALID_INPUT", "listing_id is invalid");
     }
     if (input.idempotencyKey.trim() === "" || input.idempotencyKey.length > 160) {
-      throw new CatalogClientError("INVALID_INPUT", "Idempotency-Key must contain 1 to 160 characters");
+      throw new CatalogClientError(
+        "INVALID_INPUT",
+        "Idempotency-Key must contain 1 to 160 characters",
+      );
     }
     const path = `/v1/listings/${encodeURIComponent(listingId)}/withdraw`;
     const body = {};
     const issuedAt = this.now();
-    const jws = signCompactJws({
-      method: "POST",
-      path,
-      audience: "kiwi-catalog",
-      agent_id: context.catalogAgentId,
-      merchant_id: context.merchantId,
-      binding_id: context.bindingId,
-      key_id: context.keyId,
-      listing_id: listingId,
-      idempotency_key: input.idempotencyKey,
-      body_digest: sha256Json(body),
-      issued_at: issuedAt.toISOString(),
-      exp: new Date(issuedAt.getTime() + 90_000).toISOString(),
-      nonce: this.nonceFactory(),
-    }, identity.signingIdentity, { extraHeader: { typ: "kiwi-runtime-request" } });
+    const jws = signCompactJws(
+      {
+        method: "POST",
+        path,
+        audience: "kiwi-catalog",
+        agent_id: context.catalogAgentId,
+        merchant_id: context.merchantId,
+        binding_id: context.bindingId,
+        key_id: context.keyId,
+        listing_id: listingId,
+        idempotency_key: input.idempotencyKey,
+        body_digest: sha256Json(body),
+        issued_at: issuedAt.toISOString(),
+        exp: new Date(issuedAt.getTime() + 90_000).toISOString(),
+        nonce: this.nonceFactory(),
+      },
+      identity.signingIdentity,
+      { extraHeader: { typ: "kiwi-runtime-request" } },
+    );
     const { json } = await this.request("POST", path, {
       body,
       jws,
       headers: { "Idempotency-Key": input.idempotencyKey },
     });
     const response = recordOrEmpty(json);
-    if (response["ok"] !== true) throw new CatalogClientError("RESPONSE_INVALID", "Catalog signed withdraw response is not ok");
+    if (response["ok"] !== true)
+      throw new CatalogClientError(
+        "RESPONSE_INVALID",
+        "Catalog signed withdraw response is not ok",
+      );
+  }
+
+  private async verifyCatalogEnvelope(envelope: Record<string, unknown>): Promise<BindingClaims> {
+    const claimsJws = requiredString(envelope["claims_jws"], "binding_claim.claims_jws");
+    const issuerKid = requiredString(envelope["issuer_kid"], "binding_claim.issuer_kid");
+    const issuerThumbprint = requiredString(
+      envelope["issuer_thumbprint"],
+      "binding_claim.issuer_thumbprint",
+    );
+    const keysResponse = recordOrEmpty((await this.request("GET", "/v1/issuer-keys", {})).json);
+    if (!Array.isArray(keysResponse["keys"]))
+      throw new CatalogClientError("RESPONSE_INVALID", "Catalog issuer-keys 响应缺 keys 数组");
+    const key = keysResponse["keys"].find(
+      (candidate) => isRecord(candidate) && candidate["kid"] === issuerKid,
+    );
+    if (
+      !isRecord(key) ||
+      (key["state"] !== "ACTIVE" && key["state"] !== "VERIFY_ONLY") ||
+      !isRecord(key["jwk"])
+    ) {
+      throw new CatalogClientError(
+        "RESPONSE_INVALID",
+        `Catalog issuer-keys 未提供可信的活动发行密钥 ${issuerKid}`,
+      );
+    }
+    if (
+      typeof key["thumbprint"] !== "string" ||
+      key["thumbprint"] !== issuerThumbprint ||
+      jwkThumbprint(key["jwk"] as JsonWebKey) !== key["thumbprint"]
+    ) {
+      throw new CatalogClientError("RESPONSE_INVALID", "Catalog issuer JWK thumbprint 不匹配");
+    }
+    let verified: ReturnType<typeof verifyCompactJws>;
+    try {
+      verified = verifyCompactJws(claimsJws, key["jwk"] as JsonWebKey);
+    } catch (err) {
+      throw new CatalogClientError(
+        "RESPONSE_INVALID",
+        `Catalog binding 声明验签失败：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (verified.keyid !== issuerKid)
+      throw new CatalogClientError(
+        "RESPONSE_INVALID",
+        "Catalog binding JWS protected kid 与 issuer-keys 不一致",
+      );
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(verified.payload.toString("utf8"));
+    } catch {
+      throw new CatalogClientError("RESPONSE_INVALID", "Catalog binding claims 不是合法 JSON");
+    }
+    const validated = validateBindingClaims(parsed);
+    if (!validated.ok)
+      throw new CatalogClientError(
+        "RESPONSE_INVALID",
+        `Catalog binding claims 非法：${validated.errors.join("；")}`,
+      );
+    const claims = validated.claims;
+    if (
+      !isRecord(envelope["claims"]) ||
+      Object.entries(envelope["claims"]).some(
+        ([key, value]) =>
+          !Object.hasOwn(claims, key) ||
+          canonicalize(value) !== canonicalize((claims as unknown as Record<string, unknown>)[key]),
+      )
+    )
+      throw new CatalogClientError(
+        "RESPONSE_INVALID",
+        "Catalog plaintext claims differ from signed payload",
+      );
+    const now = this.now().getTime();
+    if (
+      keysResponse["issuer"] !== claims.issuer ||
+      claims.status !== "active" ||
+      !Number.isFinite(Date.parse(claims.issued_at)) ||
+      Date.parse(claims.issued_at) > now + 60000 ||
+      !Number.isFinite(Date.parse(claims.expires_at)) ||
+      Date.parse(claims.expires_at) <= now
+    )
+      throw new CatalogClientError("RESPONSE_INVALID", "Catalog signed binding is not current");
+    return claims;
   }
 
   private async verifyCatalogBindingClaim(
@@ -712,44 +894,36 @@ export class CatalogClient {
       serviceEpoch: number;
     },
   ): Promise<BindingClaims> {
-    const claimsJws = requiredString(envelope["claims_jws"], "binding_claim.claims_jws");
-    const issuerKid = requiredString(envelope["issuer_kid"], "binding_claim.issuer_kid");
-    const issuerThumbprint = requiredString(envelope["issuer_thumbprint"], "binding_claim.issuer_thumbprint");
-    const keysResponse = recordOrEmpty((await this.request("GET", "/v1/issuer-keys", {})).json);
-    if (!Array.isArray(keysResponse["keys"])) throw new CatalogClientError("RESPONSE_INVALID", "Catalog issuer-keys 响应缺 keys 数组");
-    const key = keysResponse["keys"].find((candidate) => isRecord(candidate) && candidate["kid"] === issuerKid);
-    if (!isRecord(key) || (key["state"] !== "ACTIVE" && key["state"] !== "VERIFY_ONLY") || !isRecord(key["jwk"])) {
-      throw new CatalogClientError("RESPONSE_INVALID", `Catalog issuer-keys 未提供可信的活动发行密钥 ${issuerKid}`);
-    }
-    if (typeof key["thumbprint"] !== "string" || key["thumbprint"] !== issuerThumbprint || jwkThumbprint(key["jwk"] as JsonWebKey) !== key["thumbprint"]) {
-      throw new CatalogClientError("RESPONSE_INVALID", "Catalog issuer JWK thumbprint 不匹配");
-    }
-    let verified: ReturnType<typeof verifyCompactJws>;
-    try { verified = verifyCompactJws(claimsJws, key["jwk"] as JsonWebKey); }
-    catch (err) { throw new CatalogClientError("RESPONSE_INVALID", `Catalog binding 声明验签失败：${err instanceof Error ? err.message : String(err)}`); }
-    if (verified.keyid !== issuerKid) throw new CatalogClientError("RESPONSE_INVALID", "Catalog binding JWS protected kid 与 issuer-keys 不一致");
-    let parsed: unknown;
-    try { parsed = JSON.parse(verified.payload.toString("utf8")); }
-    catch { throw new CatalogClientError("RESPONSE_INVALID", "Catalog binding claims 不是合法 JSON"); }
-    const validated = validateBindingClaims(parsed);
-    if (!validated.ok) throw new CatalogClientError("RESPONSE_INVALID", `Catalog binding claims 非法：${validated.errors.join("；")}`);
-    const claims = validated.claims;
+    const claims = await this.verifyCatalogEnvelope(envelope);
     const currentTime = this.now().getTime();
     const mismatches: string[] = [];
-    if (keysResponse["issuer"] !== claims.issuer) mismatches.push("issuer");
+
     if (claims.merchant_id !== expected.merchantId) mismatches.push("merchant_id");
     if (claims.binding_id !== expected.bindingId) mismatches.push("binding_id");
     if (claims.binding_version !== expected.bindingVersion) mismatches.push("binding_version");
     if (claims.key_thumbprint !== expected.keyThumbprint) mismatches.push("key_thumbprint");
-    if (normalizeOrigin(claims.runtime_origin) !== expected.runtimeOrigin) mismatches.push("runtime_origin");
+    if (normalizeOrigin(claims.runtime_origin) !== expected.runtimeOrigin)
+      mismatches.push("runtime_origin");
     if (claims.a2a_endpoint !== expected.a2aEndpoint) mismatches.push("a2a_endpoint");
     if (claims.agent_id !== expected.catalogAgentId) mismatches.push("agent_id");
     if (claims.key_id !== expected.keyId) mismatches.push("key_id");
     if (claims.service_epoch !== expected.serviceEpoch) mismatches.push("service_epoch");
     if (claims.status !== "active") mismatches.push("status");
-    if (claims.card_url !== `${this.baseUrl}/v1/agents/${encodeURIComponent(expected.catalogAgentId)}/agent-card.json`) mismatches.push("card_url");
-    if (!Number.isFinite(Date.parse(claims.issued_at)) || Date.parse(claims.issued_at) > currentTime + 60_000) mismatches.push("issued_at");
-    if (!Number.isFinite(Date.parse(claims.expires_at)) || Date.parse(claims.expires_at) <= currentTime) mismatches.push("expires_at");
+    if (
+      claims.card_url !==
+      `${this.baseUrl}/v1/agents/${encodeURIComponent(expected.catalogAgentId)}/agent-card.json`
+    )
+      mismatches.push("card_url");
+    if (
+      !Number.isFinite(Date.parse(claims.issued_at)) ||
+      Date.parse(claims.issued_at) > currentTime + 60_000
+    )
+      mismatches.push("issued_at");
+    if (
+      !Number.isFinite(Date.parse(claims.expires_at)) ||
+      Date.parse(claims.expires_at) <= currentTime
+    )
+      mismatches.push("expires_at");
     if (mismatches.length > 0) {
       // card_url 失配单列稳定码（A15）：字段名是自有固定词表，可安全透出；
       // 其余失配仍归 RESPONSE_INVALID，由调用方按阶段归类。
@@ -779,11 +953,32 @@ export class CatalogClient {
   async fetchPublicBinding(agentId: string): Promise<PublicBinding | null> {
     const id = this.requireAgentId(agentId);
     try {
-      const { status, json } = await this.request("GET", `/v1/agents/${encodeURIComponent(id)}/runtime-binding`, {});
+      const { status, json } = await this.request(
+        "GET",
+        `/v1/agents/${encodeURIComponent(id)}/runtime-binding`,
+        {},
+      );
       if (status === 404) return null;
-      return parsePublicBinding(json);
+      if (!isRecord(json))
+        throw new CatalogClientError("RESPONSE_INVALID", "binding envelope missing");
+      if (!validateBindingClaims(json["claims"]).ok)
+        throw new CatalogClientError("RESPONSE_INVALID", "Public binding plaintext schema invalid");
+      const claims = await this.verifyCatalogEnvelope(json);
+      if (
+        claims.agent_id !== id ||
+        claims.card_url !== `${this.baseUrl}/v1/agents/${encodeURIComponent(id)}/agent-card.json`
+      )
+        throw new CatalogClientError(
+          "CLAIM_MISMATCH",
+          "Public binding route differs from signed claim",
+        );
+      return parsePublicBinding({ ...json, claims });
     } catch (err) {
-      if (err instanceof CatalogClientError && err.code === "REQUEST_REJECTED" && err.status === 403) {
+      if (
+        err instanceof CatalogClientError &&
+        err.code === "REQUEST_REJECTED" &&
+        err.status === 403
+      ) {
         throw new CatalogClientError(
           "BINDING_UNREADABLE",
           `绑定文档暂不可读（403）：Catalog 可能处于未发布、暂停、过期或撤回状态（agent=${id}）`,
@@ -810,10 +1005,16 @@ export class CatalogClient {
       );
     }
     if (!Number.isInteger(input.generation) || input.generation < 0) {
-      throw new CatalogClientError("INVALID_INPUT", `generation 必须是非负整数：${input.generation}`);
+      throw new CatalogClientError(
+        "INVALID_INPUT",
+        `generation 必须是非负整数：${input.generation}`,
+      );
     }
     if (!Number.isInteger(input.serviceEpoch) || input.serviceEpoch < 1) {
-      throw new CatalogClientError("INVALID_INPUT", `service_epoch 必须是正整数：${input.serviceEpoch}`);
+      throw new CatalogClientError(
+        "INVALID_INPUT",
+        `service_epoch 必须是正整数：${input.serviceEpoch}`,
+      );
     }
     const { keyJwk, keyThumbprint } = runtimePublicKey(identity);
     const nonce = this.nonceFactory();
@@ -856,7 +1057,8 @@ export class CatalogClient {
       { body, jws },
     );
     const receipt = isRecord(json) ? json : {};
-    const requestId = receipt["binding_request_id"] ?? receipt["request_id"] ?? receipt["binding_id"];
+    const requestId =
+      receipt["binding_request_id"] ?? receipt["request_id"] ?? receipt["binding_id"];
     return {
       bindingRequestId: typeof requestId === "string" && requestId !== "" ? requestId : null,
       keyThumbprint,
@@ -885,7 +1087,8 @@ export class CatalogClient {
       throw new CatalogClientError("INVALID_INPUT", `pollIntervalMs 必须是正数：${pollMs}`);
     }
     const now = input.now ?? (() => new Date());
-    const sleep = input.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    const sleep =
+      input.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     const deadline = now().getTime() + timeoutMs;
 
     let observed: string | null = null;
@@ -935,7 +1138,10 @@ export class CatalogClient {
     const runtimeOrigin = normalizeOrigin(requireHttpsUrl(input.runtimeOrigin, "runtime_origin"));
     const a2aEndpoint = requireHttpsUrl(input.a2aEndpoint, "a2a_endpoint");
     if (typeof input.bindingId !== "string" || input.bindingId.trim() === "") {
-      throw new CatalogClientError("INVALID_INPUT", "binding_id 必须是非空字符串（发布由活动绑定背书）");
+      throw new CatalogClientError(
+        "INVALID_INPUT",
+        "binding_id 必须是非空字符串（发布由活动绑定背书）",
+      );
     }
     if (!Number.isInteger(input.expectedRevision) || input.expectedRevision < 0) {
       throw new CatalogClientError(
@@ -995,7 +1201,12 @@ export class CatalogClient {
       return { json, nonce };
     };
 
-    const outcome = await this.withCasRetry(agentId, input.expectedRevision, attempt, input.casRetry);
+    const outcome = await this.withCasRetry(
+      agentId,
+      input.expectedRevision,
+      attempt,
+      input.casRetry,
+    );
     const receipt = isRecord(outcome.json) ? outcome.json : {};
     const revision = receipt["revision"] ?? receipt["card_revision"];
     return {
@@ -1019,7 +1230,10 @@ export class CatalogClient {
   ): Promise<ActivateCardResult> {
     const agentId = this.requireAgentId(input.agentId);
     if (typeof input.bindingId !== "string" || input.bindingId.trim() === "") {
-      throw new CatalogClientError("INVALID_INPUT", "binding_id 必须是非空字符串（激活由活动绑定背书）");
+      throw new CatalogClientError(
+        "INVALID_INPUT",
+        "binding_id 必须是非空字符串（激活由活动绑定背书）",
+      );
     }
     if (!Number.isInteger(input.cardRevision) || input.cardRevision < 1) {
       throw new CatalogClientError(
@@ -1048,19 +1262,28 @@ export class CatalogClient {
         identity.signingIdentity,
         { extraHeader: { typ: "kiwi-runtime-request" } },
       );
-      const { json } = await this.request("POST", `/v1/agents/${encodeURIComponent(agentId)}/publish`, {
-        body: {
-          agent_id: agentId,
-          binding_id: input.bindingId,
-          card_revision: input.cardRevision,
-          expected_revision: expectedRevision,
+      const { json } = await this.request(
+        "POST",
+        `/v1/agents/${encodeURIComponent(agentId)}/publish`,
+        {
+          body: {
+            agent_id: agentId,
+            binding_id: input.bindingId,
+            card_revision: input.cardRevision,
+            expected_revision: expectedRevision,
+          },
+          jws,
         },
-        jws,
-      });
+      );
       return { json, nonce };
     };
 
-    const outcome = await this.withCasRetry(agentId, input.expectedRevision, attempt, input.casRetry);
+    const outcome = await this.withCasRetry(
+      agentId,
+      input.expectedRevision,
+      attempt,
+      input.casRetry,
+    );
     const receipt = isRecord(outcome.json) ? outcome.json : {};
     // catalog `activate_card` 回执是 {active_revision, etag}；兼容 revision/card_revision 命名。
     const revision = receipt["active_revision"] ?? receipt["revision"] ?? receipt["card_revision"];
@@ -1203,7 +1426,10 @@ export class CatalogClient {
       if (!response.ok) {
         let remoteCode: string | undefined;
         try {
-          const errorPayload = await readJsonBody(response, { signal: controller.signal, maxBytes: 16 * 1024 });
+          const errorPayload = await readJsonBody(response, {
+            signal: controller.signal,
+            maxBytes: 16 * 1024,
+          });
           if (isRecord(errorPayload)) {
             const rawCode = errorPayload["error"] ?? errorPayload["code"];
             if (typeof rawCode === "string") {
@@ -1264,7 +1490,10 @@ export function assertCardWithinOrigin(
 ): void {
   const origin = originOf(normalizeOrigin(runtimeOrigin));
   if (typeof card.url !== "string" || card.url === "") {
-    throw new CatalogClientError("CARD_ORIGIN_VIOLATION", "agent_card.url 缺失（必须等于运行时 origin）");
+    throw new CatalogClientError(
+      "CARD_ORIGIN_VIOLATION",
+      "agent_card.url 缺失（必须等于运行时 origin）",
+    );
   }
   if (originOf(card.url) !== origin) {
     throw new CatalogClientError(
@@ -1300,7 +1529,10 @@ export function assertCardWithinOrigin(
 }
 
 /** 本地产物结构自检：发出前用仓内 0.1.2 契约 schema 校验。 */
-function assertContract(name: "runtime-binding-request" | "card-publication-request", body: unknown): void {
+function assertContract(
+  name: "runtime-binding-request" | "card-publication-request",
+  body: unknown,
+): void {
   const errors = validateCloudContract(name, body);
   if (errors.length > 0) {
     throw new CatalogClientError(
@@ -1333,6 +1565,7 @@ function parsePublicBinding(raw: unknown): PublicBinding {
     runtimeOrigin: claims.runtime_origin,
     a2aEndpoint: claims.a2a_endpoint,
     keyId: claims.key_id,
+    serviceEpoch: claims.service_epoch,
     keyThumbprint: claims.key_thumbprint,
     expiresAt: claims.expires_at,
     cardRevision: typeof revision === "number" && Number.isInteger(revision) ? revision : null,

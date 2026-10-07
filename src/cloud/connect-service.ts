@@ -50,10 +50,11 @@
  * 目标会话的格，不删除其他会话。
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 
 import { loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/signing-key.js";
+import { withEnrollmentStoreLock, reserveEnrollmentCreation } from "./binding/store-lock.js";
 import { writeFileAtomic } from "../fs/atomic-write.js";
 import { canonicalize } from "../negotiation/jcs.js";
 import { validateAgentCard } from "../discovery/agent-card/validate.js";
@@ -70,13 +71,32 @@ import {
 } from "./catalog-client.js";
 import {
   enrollmentStorePath,
-  readEnrollmentStore,
+  readEnrollmentStore as readEnrollmentStoreRaw,
   type AuthorizedEnrollment,
   type EnrollmentChallengeStore,
 } from "./binding/enrollment-challenge.js";
 
+const observedSession = Symbol("connect-observed-session");
+const sessionDigest = (item: AuthorizedEnrollment) =>
+  createHash("sha256")
+    .update(canonicalize(JSON.parse(JSON.stringify(item))))
+    .digest("hex");
+function readEnrollmentStore(dataDir: string): EnrollmentChallengeStore {
+  const store = readEnrollmentStoreRaw(dataDir);
+  for (const item of store.sessions)
+    Object.defineProperty(item, observedSession, {
+      value: sessionDigest(item),
+      enumerable: true,
+      writable: true,
+    });
+  return store;
+}
+
 export class MerchantConnectError extends Error {
-  constructor(readonly code: string, message: string) {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
     super(message);
     this.name = "MerchantConnectError";
   }
@@ -88,17 +108,30 @@ export class MerchantConnectError extends Error {
  * 白名单（CATALOG_CONNECTION_SAFE_CODES）以此单源扩展。
  */
 export const CONNECTION_PAIRING_SAFE_CODES = new Set([
-  "PAIRING_WINDOW_EXPIRED",       // 授权窗口（=Catalog grant 窗口）已过：需重新配对
-  "BIND_REJECTED",                // Catalog 拒绝 bind 请求（grant 过期/不匹配/版本冲突）
-  "BIND_CLAIM_INVALID",           // bind 已到达但签名声明未通过本地验真
-  "CARD_PUBLISH_REJECTED",        // 名片发布/激活被 Catalog 拒绝
-  "CARD_PUBLISH_INVALID",         // 发布/激活回执不完整或不合法
+  "PAIRING_WINDOW_EXPIRED", // 授权窗口（=Catalog grant 窗口）已过：需重新配对
+  "BIND_REJECTED", // Catalog 拒绝 bind 请求（grant 过期/不匹配/版本冲突）
+  "BIND_CLAIM_INVALID", // bind 已到达但签名声明未通过本地验真
+  "CARD_PUBLISH_REJECTED", // 名片发布/激活被 Catalog 拒绝
+  "CARD_PUBLISH_INVALID", // 发布/激活回执不完整或不合法
   "PAIRING_COMMUNICATION_FAILED", // 与 Catalog 通信失败（网络/5xx，可重试）
-  "CONNECT_STEP_FAILED",          // 兜底：未归类步骤失败
-  "AUTHORIZED_MATERIAL_MISMATCH", "GRANT_SCOPE_INVALID", "STATE_INVALID",
-  "BINDING_KEY_MISMATCH", "BINDING_CLAIM_INVALID", "PREVIEW_CHANGED",
-  "PUBLICATION_RECEIPT_INVALID", "ACTIVATION_RECEIPT_INVALID",
-  "BIND_CLAIM_CARD_URL_MISMATCH", "BIND_CLAIM_FIELD_MISMATCH",
+  "RUNTIME_UNREACHABLE",
+  "RUNTIME_NOT_READY",
+  "RUNTIME_IDENTITY_MISMATCH",
+  "CATALOG_RUNTIME_NOT_READY",
+  "STATE_CAS_CONFLICT",
+  "CONNECTION_OPERATION_PENDING",
+  "CONNECTION_OPERATION_UNKNOWN",
+  "CONNECT_STEP_FAILED", // 兜底：未归类步骤失败
+  "AUTHORIZED_MATERIAL_MISMATCH",
+  "GRANT_SCOPE_INVALID",
+  "STATE_INVALID",
+  "BINDING_KEY_MISMATCH",
+  "BINDING_CLAIM_INVALID",
+  "PREVIEW_CHANGED",
+  "PUBLICATION_RECEIPT_INVALID",
+  "ACTIVATION_RECEIPT_INVALID",
+  "BIND_CLAIM_CARD_URL_MISMATCH",
+  "BIND_CLAIM_FIELD_MISMATCH",
 ]);
 
 /**
@@ -110,22 +143,45 @@ export function isPublicHostAllowed(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   const ip = isIP(host);
   const octets = ip === 4 ? host.split(".").map(Number) : [];
-  const privateIpv4 = ip === 4 && (
-    octets[0] === 0 || octets[0] === 10 || octets[0] === 127 || octets[0] === 169 && octets[1] === 254 ||
-    octets[0] === 192 && octets[1] === 168 || octets[0] === 172 && (octets[1] ?? 0) >= 16 && (octets[1] ?? 0) <= 31 ||
-    octets[0] === 100 && (octets[1] ?? 0) >= 64 && (octets[1] ?? 0) <= 127 || (octets[0] ?? 0) >= 224
+  const privateIpv4 =
+    ip === 4 &&
+    (octets[0] === 0 ||
+      octets[0] === 10 ||
+      octets[0] === 127 ||
+      (octets[0] === 169 && octets[1] === 254) ||
+      (octets[0] === 192 && octets[1] === 168) ||
+      (octets[0] === 172 && (octets[1] ?? 0) >= 16 && (octets[1] ?? 0) <= 31) ||
+      (octets[0] === 100 && (octets[1] ?? 0) >= 64 && (octets[1] ?? 0) <= 127) ||
+      (octets[0] ?? 0) >= 224);
+  const privateIpv6 =
+    ip === 6 &&
+    (host === "::" ||
+      host === "::1" ||
+      host.startsWith("fc") ||
+      host.startsWith("fd") ||
+      host.startsWith("fe80:") ||
+      host.startsWith("::ffff:"));
+  return (
+    host !== "localhost" &&
+    !host.endsWith(".localhost") &&
+    !host.endsWith(".local") &&
+    !host.endsWith(".internal") &&
+    !host.endsWith(".lan") &&
+    !host.endsWith(".home") &&
+    host.includes(".") &&
+    !privateIpv4 &&
+    !privateIpv6
   );
-  const privateIpv6 = ip === 6 && (
-    host === "::" || host === "::1" || host.startsWith("fc") ||
-    host.startsWith("fd") || host.startsWith("fe80:") || host.startsWith("::ffff:")
-  );
-  return host !== "localhost" && !host.endsWith(".localhost") &&
-    !host.endsWith(".local") && !host.endsWith(".internal") && !host.endsWith(".lan") && !host.endsWith(".home") &&
-    host.includes(".") && !privateIpv4 && !privateIpv6;
 }
 
 /** 连接会话（merchant-enrollments.json 中单条 session 的完整形状）。 */
 export interface ConnectionSession extends AuthorizedEnrollment {
+  operation_claim?: {
+    token: string;
+    stage: string;
+    state: "active" | "unknown";
+    expires_at: string;
+  };
   catalog_origin: string;
   preview_digest: string;
   frozen_card: AgentCard;
@@ -171,7 +227,11 @@ export function selectReusableEnrollment(
 ): AuthorizedEnrollment | undefined {
   return sessions.find((session) => {
     const state = session as ConnectionSession;
-    if (state.runtime_origin !== input.runtimeOrigin || state.key_thumbprint !== input.keyThumbprint) return false;
+    if (
+      state.runtime_origin !== input.runtimeOrigin ||
+      state.key_thumbprint !== input.keyThumbprint
+    )
+      return false;
     if (!["preparing", "authorized", "bound", "published"].includes(state.status)) return false;
     if (state.status === "published") return true;
     const expiry = state.status === "bound" ? state.binding_expires_at : state.expires_at;
@@ -180,12 +240,22 @@ export function selectReusableEnrollment(
 }
 
 /** Keep the Catalog account's single-agent identity through key loss and address migration. */
-export function priorPublishedCatalogAgentId(sessions: readonly AuthorizedEnrollment[]): string | undefined {
-  const ids = new Set(sessions
-    .map((session) => session as ConnectionSession)
-    .filter((session) => session.status === "published" && typeof session.catalog_agent_id === "string")
-    .map((session) => session.catalog_agent_id!));
-  if (ids.size > 1) throw new MerchantConnectError("AMBIGUOUS_MIGRATION", "本Runtime已有多个Catalog Agent历史绑定；请在Catalog先确认要迁移的商家身份。");
+export function priorPublishedCatalogAgentId(
+  sessions: readonly AuthorizedEnrollment[],
+): string | undefined {
+  const ids = new Set(
+    sessions
+      .map((session) => session as ConnectionSession)
+      .filter(
+        (session) => session.status === "published" && typeof session.catalog_agent_id === "string",
+      )
+      .map((session) => session.catalog_agent_id!),
+  );
+  if (ids.size > 1)
+    throw new MerchantConnectError(
+      "AMBIGUOUS_MIGRATION",
+      "本Runtime已有多个Catalog Agent历史绑定；请在Catalog先确认要迁移的商家身份。",
+    );
   return ids.values().next().value as string | undefined;
 }
 
@@ -282,7 +352,9 @@ export interface MerchantConnectionService {
 }
 
 function cardDigest(card: AgentCard): string {
-  return `sha256:${createHash("sha256").update(canonicalize(card as unknown as Record<string, unknown>), "utf8").digest("hex")}`;
+  return `sha256:${createHash("sha256")
+    .update(canonicalize(card as unknown as Record<string, unknown>), "utf8")
+    .digest("hex")}`;
 }
 
 /** 缺省公开卡加载：与 CLI verifyPublicRuntimeReady 同口径（匿名读 + 签名声明核对）。 */
@@ -296,28 +368,50 @@ async function fetchPublicCard(
   const timer = setTimeout(() => controller.abort(), 8_000);
   const url = `${origin}/.well-known/agent-card.json`;
   try {
-    const response = await fetchImpl(url, { method: "GET", redirect: "manual", signal: controller.signal, headers: { accept: "application/json" } });
+    const response = await fetchImpl(url, {
+      method: "GET",
+      redirect: "manual",
+      signal: controller.signal,
+      headers: { accept: "application/json" },
+    });
     if (isRedirectResponse(response) || !response.ok) {
-      throw new MerchantConnectError("RUNTIME_UNREACHABLE", `暂时无法从外部读取商家服务的 Agent Card（HTTP ${response.status}）。请确认服务已启动且公网入口可访问，然后重新运行 kiwi merchant connect。`);
+      throw new MerchantConnectError(
+        "RUNTIME_UNREACHABLE",
+        `暂时无法从外部读取商家服务的 Agent Card（HTTP ${response.status}）。请确认服务已启动且公网入口可访问，然后重新运行 kiwi merchant connect。`,
+      );
     }
     const card = validateAgentCard(await readJsonBody(response, { signal: controller.signal }));
     const urls = card.supportedInterfaces.map((entry) => entry.url);
-    if (typeof card.url !== "string" || new URL(card.url).origin !== origin || !urls.includes(expectedEndpoint)) {
-      throw new MerchantConnectError("RUNTIME_NOT_READY", "公网入口返回的 Agent Card 与当前 Runtime 地址不一致；未发布名片。请检查反向代理与服务配置后重试。");
+    if (
+      typeof card.url !== "string" ||
+      new URL(card.url).origin !== origin ||
+      !urls.includes(expectedEndpoint)
+    ) {
+      throw new MerchantConnectError(
+        "RUNTIME_NOT_READY",
+        "公网入口返回的 Agent Card 与当前 Runtime 地址不一致；未发布名片。请检查反向代理与服务配置后重试。",
+      );
     }
     const signatureScheme = card.securitySchemes?.["kiwi-signature"];
-    if (signatureScheme !== undefined && (
-      signatureScheme.type !== "kiwi-http-message-signature" ||
-      signatureScheme.keyid !== identity.keyid ||
-      signatureScheme.publicKeyPem !== identity.publicKeyPem ||
-      signatureScheme.algorithm !== "ed25519"
-    )) {
-      throw new MerchantConnectError("RUNTIME_IDENTITY_MISMATCH", "公网服务的 A2A 签名声明与当前 Runtime 持久密钥不一致；未发布名片。请在实际承接请求的 Runtime 主机上运行连接命令。");
+    if (
+      signatureScheme !== undefined &&
+      (signatureScheme.type !== "kiwi-http-message-signature" ||
+        signatureScheme.keyid !== identity.keyid ||
+        signatureScheme.publicKeyPem !== identity.publicKeyPem ||
+        signatureScheme.algorithm !== "ed25519")
+    ) {
+      throw new MerchantConnectError(
+        "RUNTIME_IDENTITY_MISMATCH",
+        "公网服务的 A2A 签名声明与当前 Runtime 持久密钥不一致；未发布名片。请在实际承接请求的 Runtime 主机上运行连接命令。",
+      );
     }
     return card;
   } catch (err) {
     if (err instanceof MerchantConnectError) throw err;
-    throw new MerchantConnectError("RUNTIME_UNREACHABLE", `暂时无法从外部连接你的商家服务（${err instanceof Error ? err.message : String(err)}）。请确认服务已启动、TLS 证书有效且允许公网访问，然后重试。`);
+    throw new MerchantConnectError(
+      "RUNTIME_UNREACHABLE",
+      `暂时无法从外部连接你的商家服务（${err instanceof Error ? err.message : String(err)}）。请确认服务已启动、TLS 证书有效且允许公网访问，然后重试。`,
+    );
   } finally {
     clearTimeout(timer);
   }
@@ -353,35 +447,66 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     this.dataDir = options.dataDir;
     this.generation = options.generation ?? 1;
     this.serviceEpoch = options.serviceEpoch ?? 1;
-    const trimmed = String(options.publicOrigin ?? "").trim().replace(/\/+$/, "");
+    const trimmed = String(options.publicOrigin ?? "")
+      .trim()
+      .replace(/\/+$/, "");
     let parsed: URL;
     try {
       parsed = new URL(trimmed);
     } catch {
-      throw new MerchantConnectError("PUBLIC_ORIGIN_INVALID", "公网入口不是合法 URL；请设置 KIWI_A2A_PUBLIC_URL=https://你的域名");
+      throw new MerchantConnectError(
+        "PUBLIC_ORIGIN_INVALID",
+        "公网入口不是合法 URL；请设置 KIWI_A2A_PUBLIC_URL=https://你的域名",
+      );
     }
-    if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" ||
-        parsed.search !== "" || parsed.hash !== "" || (parsed.pathname !== "/" && parsed.pathname !== "")) {
-      throw new MerchantConnectError("PUBLIC_ORIGIN_INVALID", "公网入口不是合法 URL；请设置 KIWI_A2A_PUBLIC_URL=https://你的域名");
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.search !== "" ||
+      parsed.hash !== "" ||
+      (parsed.pathname !== "/" && parsed.pathname !== "")
+    ) {
+      throw new MerchantConnectError(
+        "PUBLIC_ORIGIN_INVALID",
+        "公网入口不是合法 URL；请设置 KIWI_A2A_PUBLIC_URL=https://你的域名",
+      );
     }
     // 与 CLI parsePublicOrigin 同一白名单口径：生产构造必须提供公网可达 host；
     // 只有显式 allowPrivateOrigin（测试/本地回环）才放宽。
     if (options.allowPrivateOrigin !== true && !isPublicHostAllowed(parsed.hostname)) {
-      throw new MerchantConnectError("PUBLIC_ORIGIN_INVALID", "商家服务尚未配置可用的公网 HTTPS origin。请运行 `kiwi merchant setup-public` 查看入口配置指引；资料已保留，配置后重新运行连接命令。");
+      throw new MerchantConnectError(
+        "PUBLIC_ORIGIN_INVALID",
+        "商家服务尚未配置可用的公网 HTTPS origin。请运行 `kiwi merchant setup-public` 查看入口配置指引；资料已保留，配置后重新运行连接命令。",
+      );
     }
     this.origin = normalizeOrigin(trimmed);
     this.a2aEndpoint = `${this.origin}/a2a`;
-    this.client = new CatalogClient({ baseUrl: options.catalogUrl, ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}) });
+    this.client = new CatalogClient({
+      baseUrl: options.catalogUrl,
+      ...(options.now !== undefined ? { now: options.now } : {}),
+      ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
+    });
     this.identityRaw = loadOrCreateA2aSigningIdentity(this.dataDir, this.origin);
-    this.identity = { signingIdentity: toJwsSigningIdentity(this.identityRaw), keyId: this.identityRaw.keyid };
+    this.identity = {
+      signingIdentity: toJwsSigningIdentity(this.identityRaw),
+      keyId: this.identityRaw.keyid,
+    };
     this.keyThumbprint = runtimePublicKey(this.identity).keyThumbprint;
     this.now = options.now ?? (() => new Date());
     const fetchImpl = options.fetchImpl ?? globalThis.fetch;
-    this.loadPublicCard = options.loadPublicCard ??
-      (async () => await fetchPublicCard(this.origin, this.a2aEndpoint, {
-        keyid: this.identityRaw.keyid,
-        publicKeyPem: this.identityRaw.publicKeyPem,
-      }, fetchImpl));
+    this.loadPublicCard =
+      options.loadPublicCard ??
+      (async () =>
+        await fetchPublicCard(
+          this.origin,
+          this.a2aEndpoint,
+          {
+            keyid: this.identityRaw.keyid,
+            publicKeyPem: this.identityRaw.publicKeyPem,
+          },
+          fetchImpl,
+        ));
     this.beforePublish = options.beforePublish;
   }
 
@@ -396,11 +521,17 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       const catalogOrigin = this.client.catalogOrigin;
       if (session !== undefined) {
         if (session.catalog_origin !== catalogOrigin) {
-          throw new MerchantConnectError("CATALOG_MISMATCH", "待续办的接入任务属于另一个 Catalog；为防止许可串用，已停止。");
+          throw new MerchantConnectError(
+            "CATALOG_MISMATCH",
+            "待续办的接入任务属于另一个 Catalog；为防止许可串用，已停止。",
+          );
         }
         const frozenDigest = cardDigest(session.frozen_card);
         if (typeof session.preview_digest !== "string" || frozenDigest !== session.preview_digest) {
-          throw new MerchantConnectError("STATE_INVALID", "持久接入任务缺少冻结的公开名片，已停止。");
+          throw new MerchantConnectError(
+            "STATE_INVALID",
+            "持久接入任务缺少冻结的公开名片，已停止。",
+          );
         }
         if (currentDigest !== session.preview_digest) {
           throw new MerchantConnectError(
@@ -415,9 +546,10 @@ class ConnectionServiceImpl implements MerchantConnectionService {
             // 撤回/暂停如实留痕（summary fail-closed 为未发布）并继续向上抛；
             // begin 是显式动作，保持与旧 CLI 一致的抛错语义。
             this.publicationVerified = false;
-            this.availability = err instanceof MerchantConnectError
-              ? { code: err.code, detail: err.message }
-              : { code: "PUBLICATION_CHECK_FAILED", detail: String(err) };
+            this.availability =
+              err instanceof MerchantConnectError
+                ? { code: err.code, detail: err.message }
+                : { code: "PUBLICATION_CHECK_FAILED", detail: String(err) };
             throw err;
           }
           this.publicationVerified = true;
@@ -433,50 +565,99 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       // 在新 Catalog 重建（防止许可串用/悄悄迁移）。
       const foreign = this.findForeignCatalogSession(store);
       if (foreign !== undefined) {
-        throw new MerchantConnectError("CATALOG_MISMATCH", "待续办的接入任务属于另一个 Catalog；为防止许可串用，已停止。");
+        throw new MerchantConnectError(
+          "CATALOG_MISMATCH",
+          "待续办的接入任务属于另一个 Catalog；为防止许可串用，已停止。",
+        );
       }
+      if (
+        store.sessions.some((item) => {
+          const s = item as ConnectionSession;
+          return (
+            s.runtime_origin === this.origin &&
+            s.key_thumbprint === this.keyThumbprint &&
+            s.operation_claim &&
+            s.operation_claim.stage !== "poll"
+          );
+        })
+      )
+        throw new MerchantConnectError(
+          "CONNECTION_OPERATION_UNKNOWN",
+          "Unresolved enrollment effect must be reconciled",
+        );
       const expectedCatalogAgentId = priorPublishedCatalogAgentId(store.sessions);
-      const enrollment = await this.client.createDeviceEnrollment({
-        runtimeOrigin: this.origin,
-        a2aEndpoint: this.a2aEndpoint,
-        generation: this.generation,
-        serviceEpoch: this.serviceEpoch,
-        publicPreview: card as unknown as Record<string, unknown>,
-        publicProfileRevision: 1,
-      }, this.identity);
-      const next: ConnectionSession = {
-        enrollment_id: enrollment.enrollmentId,
-        runtime_origin: this.origin,
-        key_thumbprint: this.keyThumbprint,
-        catalog_origin: catalogOrigin,
-        preview_digest: currentDigest,
-        frozen_card: card,
-        generation: this.generation,
-        ...(expectedCatalogAgentId !== undefined ? { expected_catalog_agent_id: expectedCatalogAgentId } : {}),
-        expires_at: enrollment.expiresAt,
-        status: "preparing",
-        device_code: enrollment.deviceCode,
-        user_code: enrollment.userCode,
-        verification_uri: enrollment.verificationUri,
-        interval: enrollment.intervalSeconds,
-      };
-      // 同 origin+key 的旧 preparing 会话被本任务取代（标 canceled 留痕），
-      // 其余会话（含其他 origin/key、bound/published 历史）一律保留。
-      this.persist((fresh) => [
-        ...fresh.sessions.map((item) => {
-          const old = item as ConnectionSession;
-          return old.enrollment_id !== next.enrollment_id &&
-            old.runtime_origin === this.origin && old.key_thumbprint === this.keyThumbprint &&
-            old.status === "preparing"
-            ? { ...old, status: "canceled" as const }
-            : item;
-        }),
-        next,
-      ]);
-      this.nextPollAtMs = 0;
-      this.publicationVerified = false;
-      this.availability = null;
-      return this.toSummary(next);
+      let creation: ReturnType<typeof reserveEnrollmentCreation>;
+      try {
+        creation = reserveEnrollmentCreation(
+          this.dataDir,
+          `${this.origin}|${this.client.catalogOrigin}|${this.keyThumbprint}|${this.generation}`,
+        );
+      } catch {
+        throw new MerchantConnectError(
+          "CONNECTION_OPERATION_UNKNOWN",
+          "Enrollment creation is claimed; reconcile before retrying",
+        );
+      }
+      let creationSettled = false;
+      try {
+        if (this.selectSession(readEnrollmentStore(this.dataDir)) !== undefined) {
+          creationSettled = true;
+          throw new MerchantConnectError(
+            "STATE_CAS_CONFLICT",
+            "Enrollment was created by another instance",
+          );
+        }
+        const enrollment = await this.client.createDeviceEnrollment(
+          {
+            runtimeOrigin: this.origin,
+            a2aEndpoint: this.a2aEndpoint,
+            generation: this.generation,
+            serviceEpoch: this.serviceEpoch,
+            publicPreview: card as unknown as Record<string, unknown>,
+            publicProfileRevision: 1,
+          },
+          this.identity,
+        );
+        const next: ConnectionSession = {
+          enrollment_id: enrollment.enrollmentId,
+          runtime_origin: this.origin,
+          key_thumbprint: this.keyThumbprint,
+          catalog_origin: catalogOrigin,
+          preview_digest: currentDigest,
+          frozen_card: card,
+          generation: this.generation,
+          ...(expectedCatalogAgentId !== undefined
+            ? { expected_catalog_agent_id: expectedCatalogAgentId }
+            : {}),
+          expires_at: enrollment.expiresAt,
+          status: "preparing",
+          device_code: enrollment.deviceCode,
+          user_code: enrollment.userCode,
+          verification_uri: enrollment.verificationUri,
+          interval: enrollment.intervalSeconds,
+        };
+        // 同 origin+key 的旧 preparing 会话被本任务取代（标 canceled 留痕），
+        // 其余会话（含其他 origin/key、bound/published 历史）一律保留。
+        this.persist((fresh) => [
+          ...fresh.sessions.map((item) => {
+            const old = item as ConnectionSession;
+            return old.enrollment_id !== next.enrollment_id &&
+              old.runtime_origin === this.origin &&
+              old.key_thumbprint === this.keyThumbprint &&
+              old.status === "preparing"
+              ? { ...old, status: "canceled" as const }
+              : item;
+          }),
+          next,
+        ]);
+        this.nextPollAtMs = 0;
+        this.publicationVerified = false;
+        this.availability = null;
+        creationSettled = true;
+        return this.toSummary(next);
+      } finally {
+        if (creationSettled) creation.complete();
+      }
     });
   }
 
@@ -489,8 +670,11 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         const stale = this.findStaleSession(store);
         if (stale !== undefined) {
           const expired = { ...stale, status: "expired" as const };
-          this.persist((fresh) => fresh.sessions.map((item) =>
-            item.enrollment_id === stale.enrollment_id ? expired : item));
+          this.persist((fresh) =>
+            fresh.sessions.map((item) =>
+              item.enrollment_id === stale.enrollment_id ? expired : item,
+            ),
+          );
           // 授权窗口过期的显式可重试提示：粘性展示，直到下一次 begin() 取代。
           this.availability = { code: "PAIRING_WINDOW_EXPIRED", detail: "" };
           return this.toSummary(expired);
@@ -512,9 +696,36 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       let stage = current.status;
       try {
         // stage 跟随“即将执行的步骤”：失败码按真正抛错的阶段归类。
-        if (current.status === "preparing") { stage = "preparing"; current = await this.stepPreparing(current); stage = current.status; }
-        if (current.status === "authorized") { stage = "authorized"; current = await this.stepAuthorized(current); stage = current.status; }
-        if (current.status === "bound") { stage = "bound"; current = await this.stepBound(current); stage = current.status; }
+        if (current.status === "preparing") {
+          stage = "preparing";
+          current = await this.claimedStep(
+            current,
+            "poll",
+            () => this.stepPreparing(current),
+            true,
+          );
+          stage = current.status;
+        }
+        if (current.status === "authorized") {
+          stage = "authorized";
+          current = await this.claimedStep(
+            current,
+            "bind",
+            () => this.stepAuthorized(current),
+            false,
+          );
+          stage = current.status;
+        }
+        if (current.status === "bound") {
+          stage = "bound";
+          current = await this.claimedStep(
+            current,
+            "publish",
+            () => this.stepBound(current),
+            false,
+          );
+          stage = current.status;
+        }
       } catch (err) {
         // 阶段感知稳定码：绑定被拒 vs 签名声明验真失败 vs 通信失败可被 owner
         // API/UI 辨别；码值恒在本文件导出的固定集合内。
@@ -528,9 +739,10 @@ class ConnectionServiceImpl implements MerchantConnectionService {
           // 撤回/暂停/网络不可达一律 fail-closed：summary 报未发布（paused/error），
           // 绝不自动恢复营业、不发任何写请求；下趟 reconcile 会重新核对。
           this.publicationVerified = false;
-          this.availability = err instanceof MerchantConnectError
-            ? { code: err.code, detail: err.message }
-            : { code: "PUBLICATION_CHECK_FAILED", detail: String(err) };
+          this.availability =
+            err instanceof MerchantConnectError
+              ? { code: err.code, detail: err.message }
+              : { code: "PUBLICATION_CHECK_FAILED", detail: String(err) };
           return this.toSummary(current);
         }
         this.publicationVerified = true;
@@ -568,10 +780,13 @@ class ConnectionServiceImpl implements MerchantConnectionService {
   private latestExpiredSession(store: EnrollmentChallengeStore): ConnectionSession | undefined {
     const candidates = store.sessions.filter((item) => {
       const session = item as ConnectionSession;
-      return session.status === "expired" && session.runtime_origin === this.origin &&
+      return (
+        session.status === "expired" &&
+        session.runtime_origin === this.origin &&
         session.key_thumbprint === this.keyThumbprint &&
         session.catalog_origin === this.client.catalogOrigin &&
-        (session.generation ?? 1) === this.generation;
+        (session.generation ?? 1) === this.generation
+      );
     });
     return candidates.at(-1) as ConnectionSession | undefined;
   }
@@ -588,11 +803,14 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         if (err.code === "RESPONSE_INVALID") return "BIND_CLAIM_INVALID";
         if (err.code === "CLAIM_MISMATCH") {
           const fields = (err as CatalogClientError & { claimFields?: string[] }).claimFields ?? [];
-          return fields.includes("card_url") ? "BIND_CLAIM_CARD_URL_MISMATCH" : "BIND_CLAIM_FIELD_MISMATCH";
+          return fields.includes("card_url")
+            ? "BIND_CLAIM_CARD_URL_MISMATCH"
+            : "BIND_CLAIM_FIELD_MISMATCH";
         }
       }
       if (stage === "bound") {
-        if (err.code === "REQUEST_REJECTED" || err.code === "CONFLICT") return "CARD_PUBLISH_REJECTED";
+        if (err.code === "REQUEST_REJECTED" || err.code === "CONFLICT")
+          return "CARD_PUBLISH_REJECTED";
         if (err.code === "RESPONSE_INVALID") return "CARD_PUBLISH_INVALID";
       }
     }
@@ -636,9 +854,13 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       return this.verifiedFromPublication(session, active);
     } catch (err) {
       this.publicationVerified = false;
-      this.availability = err instanceof MerchantConnectError
-        ? { code: err.code, detail: err.message }
-        : { code: "PUBLICATION_CHECK_FAILED", detail: "Catalog publication could not be verified" };
+      this.availability =
+        err instanceof MerchantConnectError
+          ? { code: err.code, detail: err.message }
+          : {
+              code: "PUBLICATION_CHECK_FAILED",
+              detail: "Catalog publication could not be verified",
+            };
       return null;
     }
   }
@@ -653,23 +875,33 @@ class ConnectionServiceImpl implements MerchantConnectionService {
 
   private async stepPreparing(session: ConnectionSession): Promise<ConnectionSession> {
     const nowMs = this.now().getTime();
-    if (!Number.isFinite(Date.parse(session.expires_at)) || Date.parse(session.expires_at) <= nowMs) {
+    if (
+      !Number.isFinite(Date.parse(session.expires_at)) ||
+      Date.parse(session.expires_at) <= nowMs
+    ) {
       // 授权已过期：不再轮询，显式标记；下一次 begin() 会为同 origin+key 新建。
       const expired = { ...session, status: "expired" as const };
-      this.persist((fresh) => fresh.sessions.map((item) =>
-        item.enrollment_id === session.enrollment_id ? expired : item));
+      this.persist((fresh) =>
+        fresh.sessions.map((item) =>
+          item.enrollment_id === session.enrollment_id ? expired : item,
+        ),
+      );
       return expired;
     }
     if (nowMs < this.nextPollAtMs) return session;
     const poll = await this.client.pollDeviceEnrollment(session.device_code, this.identity);
     if (poll.status !== "authorized") {
-      const intervalMs = poll.status === "slow_down"
-        ? Math.max(session.interval * 1000 + 5_000, poll.intervalSeconds * 1000)
-        : Math.max(session.interval, poll.intervalSeconds) * 1000;
+      const intervalMs =
+        poll.status === "slow_down"
+          ? Math.max(session.interval * 1000 + 5_000, poll.intervalSeconds * 1000)
+          : Math.max(session.interval, poll.intervalSeconds) * 1000;
       this.nextPollAtMs = nowMs + intervalMs;
       const updated = { ...session, interval: Math.round(intervalMs / 1000) };
-      this.persist((fresh) => fresh.sessions.map((item) =>
-        item.enrollment_id === session.enrollment_id ? updated : item));
+      this.persist((fresh) =>
+        fresh.sessions.map((item) =>
+          item.enrollment_id === session.enrollment_id ? updated : item,
+        ),
+      );
       return updated;
     }
     this.verifyAuthorizedPoll(session, poll);
@@ -685,21 +917,42 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       // 权威的 merchant_id 只在 bind 阶段由 Catalog 签名 claim 写入。
       offered_merchant_id: poll.merchantId,
     };
-    this.persist((fresh) => fresh.sessions.map((item) =>
-      item.enrollment_id === session.enrollment_id ? authorized : item));
+    this.persist((fresh) =>
+      fresh.sessions.map((item) =>
+        item.enrollment_id === session.enrollment_id ? authorized : item,
+      ),
+    );
     return authorized;
   }
 
-  private verifyAuthorizedPoll(session: ConnectionSession, poll: Extract<DeviceEnrollmentPoll, { status: "authorized" }>): void {
-    if (poll.enrollmentId !== session.enrollment_id || poll.runtimeOrigin !== this.origin || poll.a2aEndpoint !== this.a2aEndpoint ||
-        poll.merchantId.trim() === "" ||
-        session.expected_catalog_agent_id !== undefined && poll.catalogAgentId !== session.expected_catalog_agent_id) {
-      throw new MerchantConnectError("AUTHORIZED_MATERIAL_MISMATCH", "Catalog 授权材料与当前 Runtime 不一致，已停止连接。");
+  private verifyAuthorizedPoll(
+    session: ConnectionSession,
+    poll: Extract<DeviceEnrollmentPoll, { status: "authorized" }>,
+  ): void {
+    if (
+      poll.enrollmentId !== session.enrollment_id ||
+      poll.runtimeOrigin !== this.origin ||
+      poll.a2aEndpoint !== this.a2aEndpoint ||
+      poll.merchantId.trim() === "" ||
+      (session.expected_catalog_agent_id !== undefined &&
+        poll.catalogAgentId !== session.expected_catalog_agent_id)
+    ) {
+      throw new MerchantConnectError(
+        "AUTHORIZED_MATERIAL_MISMATCH",
+        "Catalog 授权材料与当前 Runtime 不一致，已停止连接。",
+      );
     }
-    if (poll.authorizationEpoch < 1 || poll.approvedCardDigest !== session.preview_digest ||
-        !poll.scopes.includes("runtime:bind") || !poll.scopes.includes("card:publish") ||
-        !poll.scopes.includes("heartbeat")) {
-      throw new MerchantConnectError("GRANT_SCOPE_INVALID", "Catalog 接入许可缺少有效授权代次或必要范围，已停止。");
+    if (
+      poll.authorizationEpoch < 1 ||
+      poll.approvedCardDigest !== session.preview_digest ||
+      !poll.scopes.includes("runtime:bind") ||
+      !poll.scopes.includes("card:publish") ||
+      !poll.scopes.includes("heartbeat")
+    ) {
+      throw new MerchantConnectError(
+        "GRANT_SCOPE_INVALID",
+        "Catalog 接入许可缺少有效授权代次或必要范围，已停止。",
+      );
     }
   }
 
@@ -707,36 +960,58 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     // 兼容旧 CLI 写入的会话（当时 merchant_id 存的是 poll 断言）：优先
     // offered_merchant_id，缺失时回落旧字段，语义相同（都只是 bind 入参）。
     const offeredMerchantId = session.offered_merchant_id ?? session.merchant_id;
-    if (session.catalog_agent_id === undefined || session.grant === undefined ||
-        session.authorization_epoch === undefined || offeredMerchantId === undefined) {
-      throw new MerchantConnectError("STATE_INVALID", "本地授权状态缺少许可、授权代次、merchant_id或 catalog_agent_id");
+    if (
+      session.catalog_agent_id === undefined ||
+      session.grant === undefined ||
+      session.authorization_epoch === undefined ||
+      offeredMerchantId === undefined
+    ) {
+      throw new MerchantConnectError(
+        "STATE_INVALID",
+        "本地授权状态缺少许可、授权代次、merchant_id或 catalog_agent_id",
+      );
     }
-    const binding = await this.client.bindEnrollment({
-      enrollmentId: session.enrollment_id,
-      grant: session.grant,
-      catalogAgentId: session.catalog_agent_id,
-      merchantId: offeredMerchantId,
-      runtimeOrigin: this.origin,
-      a2aEndpoint: this.a2aEndpoint,
-      generation: session.generation ?? this.generation,
-      serviceEpoch: this.serviceEpoch,
-      authorizationEpoch: session.authorization_epoch,
-    }, this.identity);
+    this.effectStarted = true;
+    const binding = await this.client.bindEnrollment(
+      {
+        enrollmentId: session.enrollment_id,
+        grant: session.grant,
+        catalogAgentId: session.catalog_agent_id,
+        merchantId: offeredMerchantId,
+        runtimeOrigin: this.origin,
+        a2aEndpoint: this.a2aEndpoint,
+        generation: session.generation ?? this.generation,
+        serviceEpoch: this.serviceEpoch,
+        authorizationEpoch: session.authorization_epoch,
+      },
+      this.identity,
+    );
     if (binding.keyThumbprint !== this.keyThumbprint) {
-      throw new MerchantConnectError("BINDING_KEY_MISMATCH", "Catalog 绑定回执的密钥与本 Runtime 不一致");
+      throw new MerchantConnectError(
+        "BINDING_KEY_MISMATCH",
+        "Catalog 绑定回执的密钥与本 Runtime 不一致",
+      );
     }
     const rawClaims = binding.bindingClaim["claims"];
-    const claimMerchantId = rawClaims !== null && typeof rawClaims === "object" && !Array.isArray(rawClaims)
-      ? (rawClaims as Record<string, unknown>)["merchant_id"]
-      : undefined;
-    const claimExpiry = rawClaims !== null && typeof rawClaims === "object" && !Array.isArray(rawClaims)
-      ? (rawClaims as Record<string, unknown>)["expires_at"]
-      : undefined;
+    const claimMerchantId =
+      rawClaims !== null && typeof rawClaims === "object" && !Array.isArray(rawClaims)
+        ? (rawClaims as Record<string, unknown>)["merchant_id"]
+        : undefined;
+    const claimExpiry =
+      rawClaims !== null && typeof rawClaims === "object" && !Array.isArray(rawClaims)
+        ? (rawClaims as Record<string, unknown>)["expires_at"]
+        : undefined;
     if (typeof claimMerchantId !== "string" || claimMerchantId.trim() === "") {
-      throw new MerchantConnectError("BINDING_CLAIM_INVALID", "Catalog已签名绑定声明缺少merchant_id；名片保持未发布。");
+      throw new MerchantConnectError(
+        "BINDING_CLAIM_INVALID",
+        "Catalog已签名绑定声明缺少merchant_id；名片保持未发布。",
+      );
     }
     if (typeof claimExpiry !== "string" || !Number.isFinite(Date.parse(claimExpiry))) {
-      throw new MerchantConnectError("BINDING_CLAIM_INVALID", "Catalog已签名绑定声明缺少有效expires_at；名片保持未发布。");
+      throw new MerchantConnectError(
+        "BINDING_CLAIM_INVALID",
+        "Catalog已签名绑定声明缺少有效expires_at；名片保持未发布。",
+      );
     }
     const bound = {
       ...session,
@@ -747,8 +1022,9 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       binding_expires_at: claimExpiry,
       expected_card_revision: binding.activeCardRevision ?? 0,
     };
-    this.persist((fresh) => fresh.sessions.map((item) =>
-      item.enrollment_id === session.enrollment_id ? bound : item));
+    this.persist((fresh) =>
+      fresh.sessions.map((item) => (item.enrollment_id === session.enrollment_id ? bound : item)),
+    );
     // 绑定已持久化：发布交给 reconcile 的 bound 分支——失败阶段归类
     // （CARD_PUBLISH_* + stage=publish）由该分支的阶段标记正确给出，
     // 首配级联路径不再把发布失败误报成 BIND_REJECTED。
@@ -756,23 +1032,36 @@ class ConnectionServiceImpl implements MerchantConnectionService {
   }
 
   private async stepBound(session: ConnectionSession): Promise<ConnectionSession> {
-    if (session.catalog_agent_id === undefined || session.binding_id === undefined ||
-        session.binding_version === undefined || session.merchant_id === undefined ||
-        session.binding_expires_at === undefined) {
+    if (
+      session.catalog_agent_id === undefined ||
+      session.binding_id === undefined ||
+      session.binding_version === undefined ||
+      session.merchant_id === undefined ||
+      session.binding_expires_at === undefined
+    ) {
       throw new MerchantConnectError("STATE_INVALID", "绑定状态缺少回执字段");
     }
     // 重启续办/长等待后重新验证：绑定授权已过期的绝不允许带过期绑定调
     // beforePublish 钩子或发布名片；显式标记 expired，下一次 begin() 重开。
-    if (!Number.isFinite(Date.parse(session.binding_expires_at)) || Date.parse(session.binding_expires_at) <= this.now().getTime()) {
+    if (
+      !Number.isFinite(Date.parse(session.binding_expires_at)) ||
+      Date.parse(session.binding_expires_at) <= this.now().getTime()
+    ) {
       const expired = { ...session, status: "expired" as const };
-      this.persist((fresh) => fresh.sessions.map((item) =>
-        item.enrollment_id === session.enrollment_id ? expired : item));
+      this.persist((fresh) =>
+        fresh.sessions.map((item) =>
+          item.enrollment_id === session.enrollment_id ? expired : item,
+        ),
+      );
       return expired;
     }
     // 重启续办/长等待后重新验证：公开卡必须与冻结预览一致才允许发布。
     const currentCard = await this.loadPublicCard();
     if (canonicalize(currentCard) !== canonicalize(session.frozen_card)) {
-      throw new MerchantConnectError("PREVIEW_CHANGED", "公网服务的公开 Agent Card 已不同于商家批准的预览；未发布名片。请重新检查并授权新的公开信息。");
+      throw new MerchantConnectError(
+        "PREVIEW_CHANGED",
+        "公网服务的公开 Agent Card 已不同于商家批准的预览；未发布名片。请重新检查并授权新的公开信息。",
+      );
     }
     const catalogAgentId = session.catalog_agent_id;
     const bindingId = session.binding_id;
@@ -787,47 +1076,79 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       expiresAt: session.binding_expires_at,
       cardRevision: session.card_revision ?? null,
     };
-    if (this.beforePublish !== undefined) await this.beforePublish(verified);
+    if (this.beforePublish !== undefined) {
+      try {
+        await this.beforePublish(verified);
+      } catch (error) {
+        if (error instanceof MerchantConnectError && error.code === "CATALOG_RUNTIME_NOT_READY")
+          this.preEffectReadinessFailure = true;
+        throw error;
+      }
+    }
     const expectedRevision = session.expected_card_revision ?? 0;
     let cardRevision = session.card_revision;
     if (cardRevision === undefined) {
-      const publication = await this.client.publishCard({
-        agentId: catalogAgentId,
-        bindingId,
-        generation: session.generation ?? this.generation,
-        expectedRevision,
-        agentCard: session.frozen_card,
-        a2aEndpoint: this.a2aEndpoint,
-        runtimeOrigin: this.origin,
-      }, this.identity);
+      this.effectStarted = true;
+      const publication = await this.client.publishCard(
+        {
+          agentId: catalogAgentId,
+          bindingId,
+          generation: session.generation ?? this.generation,
+          expectedRevision,
+          agentCard: session.frozen_card,
+          a2aEndpoint: this.a2aEndpoint,
+          runtimeOrigin: this.origin,
+        },
+        this.identity,
+      );
       if (publication.revision === null) {
-        throw new MerchantConnectError("PUBLICATION_RECEIPT_INVALID", "Catalog 未返回名片 revision；绑定已保留，重试可续办");
+        throw new MerchantConnectError(
+          "PUBLICATION_RECEIPT_INVALID",
+          "Catalog 未返回名片 revision；绑定已保留，重试可续办",
+        );
       }
       cardRevision = publication.revision;
       const publishedCard = { ...session, card_revision: cardRevision };
-      this.persist((fresh) => fresh.sessions.map((item) =>
-        item.enrollment_id === session.enrollment_id ? publishedCard : item));
+      this.persist((fresh) =>
+        fresh.sessions.map((item) =>
+          item.enrollment_id === session.enrollment_id ? publishedCard : item,
+        ),
+      );
       session = publishedCard;
     }
-    const activated = await this.client.activateCard({
-      agentId: catalogAgentId,
-      bindingId,
-      cardRevision,
-      expectedRevision,
-    }, this.identity);
+    this.effectStarted = true;
+    const activated = await this.client.activateCard(
+      {
+        agentId: catalogAgentId,
+        bindingId,
+        cardRevision,
+        expectedRevision,
+      },
+      this.identity,
+    );
     if (activated.revision === null) {
-      throw new MerchantConnectError("ACTIVATION_RECEIPT_INVALID", "Catalog 未确认名片激活；绑定已保留，重试可续办");
+      throw new MerchantConnectError(
+        "ACTIVATION_RECEIPT_INVALID",
+        "Catalog 未确认名片激活；绑定已保留，重试可续办",
+      );
     }
-    const published = { ...session, status: "published" as const, card_revision: activated.revision };
+    const published = {
+      ...session,
+      status: "published" as const,
+      card_revision: activated.revision,
+    };
     // 同 catalog agent 的旧 published 会话由新绑定取代（标 replaced）；其余一律保留。
-    this.persist((fresh) => fresh.sessions.map((item) => {
-      if (item.enrollment_id === session.enrollment_id) return published;
-      const old = item as ConnectionSession;
-      return old.status === "published" && old.catalog_agent_id === published.catalog_agent_id &&
-        old.binding_id !== published.binding_id
-        ? { ...old, status: "replaced" as const }
-        : item;
-    }));
+    this.persist((fresh) =>
+      fresh.sessions.map((item) => {
+        if (item.enrollment_id === session.enrollment_id) return published;
+        const old = item as ConnectionSession;
+        return old.status === "published" &&
+          old.catalog_agent_id === published.catalog_agent_id &&
+          old.binding_id !== published.binding_id
+          ? { ...old, status: "replaced" as const }
+          : item;
+      }),
+    );
     this.markPublishedVerified();
     return published;
   }
@@ -844,7 +1165,8 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     const nowMs = this.now().getTime();
     for (const item of store.sessions) {
       const session = item as ConnectionSession;
-      if (session.runtime_origin !== this.origin || session.key_thumbprint !== this.keyThumbprint) continue;
+      if (session.runtime_origin !== this.origin || session.key_thumbprint !== this.keyThumbprint)
+        continue;
       if (!["preparing", "authorized", "bound", "published"].includes(session.status)) continue;
       if (session.status !== "published") {
         // published 永不在本地按首签 claim 的 TTL 判死（Catalog 每次公开读都会
@@ -852,7 +1174,8 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         // 过期口径：bound 看验真绑定 binding_expires_at，preparing/authorized
         // 看授权窗口 expires_at。
         const expiry = session.status === "bound" ? session.binding_expires_at : session.expires_at;
-        if (!(Number.isFinite(Date.parse(expiry ?? "")) && Date.parse(expiry ?? "") > nowMs)) continue;
+        if (!(Number.isFinite(Date.parse(expiry ?? "")) && Date.parse(expiry ?? "") > nowMs))
+          continue;
       }
       if (session.catalog_origin !== this.client.catalogOrigin) continue;
       if (session.generation !== undefined && session.generation !== this.generation) continue;
@@ -865,11 +1188,15 @@ class ConnectionServiceImpl implements MerchantConnectionService {
   private findStaleSession(store: EnrollmentChallengeStore): ConnectionSession | undefined {
     const candidate = store.sessions.find((item) => {
       const session = item as ConnectionSession;
-      return session.runtime_origin === this.origin && session.key_thumbprint === this.keyThumbprint &&
+      return (
+        session.runtime_origin === this.origin &&
+        session.key_thumbprint === this.keyThumbprint &&
         (session.generation ?? 1) === this.generation &&
         session.catalog_origin === this.client.catalogOrigin &&
         ["preparing", "authorized"].includes(session.status) &&
-        (!Number.isFinite(Date.parse(session.expires_at)) || Date.parse(session.expires_at) <= this.now().getTime());
+        (!Number.isFinite(Date.parse(session.expires_at)) ||
+          Date.parse(session.expires_at) <= this.now().getTime())
+      );
     });
     return candidate as ConnectionSession | undefined;
   }
@@ -878,15 +1205,19 @@ class ConnectionServiceImpl implements MerchantConnectionService {
    * 同 origin+key 可续、但属于**其他 Catalog** 的会话（begin 创建新 enrollment
    * 前的显式守卫；selection 本身已按 catalog 过滤，这里只是给出明确拒绝）。
    */
-  private findForeignCatalogSession(store: EnrollmentChallengeStore): ConnectionSession | undefined {
+  private findForeignCatalogSession(
+    store: EnrollmentChallengeStore,
+  ): ConnectionSession | undefined {
     const nowMs = this.now().getTime();
     for (const item of store.sessions) {
       const session = item as ConnectionSession;
-      if (session.runtime_origin !== this.origin || session.key_thumbprint !== this.keyThumbprint) continue;
+      if (session.runtime_origin !== this.origin || session.key_thumbprint !== this.keyThumbprint)
+        continue;
       if (!["preparing", "authorized", "bound", "published"].includes(session.status)) continue;
       if (session.status !== "published") {
         const expiry = session.status === "bound" ? session.binding_expires_at : session.expires_at;
-        if (!(Number.isFinite(Date.parse(expiry ?? "")) && Date.parse(expiry ?? "") > nowMs)) continue;
+        if (!(Number.isFinite(Date.parse(expiry ?? "")) && Date.parse(expiry ?? "") > nowMs))
+          continue;
       }
       if (session.catalog_origin === this.client.catalogOrigin) continue;
       if (session.generation !== undefined && session.generation !== this.generation) continue;
@@ -907,29 +1238,49 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       throw new MerchantConnectError("STATE_INVALID", "已发布接入缺少 Catalog/绑定信息。");
     }
     const active = await this.client.fetchPublicBinding(session.catalog_agent_id);
-    if (active === null || active.bindingId !== session.binding_id ||
-        (session.binding_version !== undefined && active.bindingVersion !== session.binding_version) ||
-        active.keyThumbprint !== this.keyThumbprint ||
-        active.runtimeOrigin.replace(/\/+$/, "") !== this.origin || active.a2aEndpoint !== this.a2aEndpoint ||
-        active.cardRevision !== session.card_revision ||
-        !Number.isFinite(Date.parse(active.expiresAt)) || Date.parse(active.expiresAt) <= this.now().getTime() ||
-        !["ACTIVE", "active"].includes(active.publicationState)) {
-      throw new MerchantConnectError("PUBLICATION_NOT_ACTIVE", "Catalog 当前没有返回这条绑定和已激活名片；服务可能已暂停或撤回。请到Catalog恢复服务后再检查，Runtime不会自动恢复营业。");
+    if (
+      active === null ||
+      active.bindingId !== session.binding_id ||
+      session.binding_version === undefined ||
+      active.bindingVersion !== session.binding_version ||
+      active.keyThumbprint !== this.keyThumbprint ||
+      active.keyId !== this.identity.keyId ||
+      active.serviceEpoch !== this.serviceEpoch ||
+      active.runtimeOrigin.replace(/\/+$/, "") !== this.origin ||
+      active.a2aEndpoint !== this.a2aEndpoint ||
+      active.cardRevision !== session.card_revision ||
+      !Number.isFinite(Date.parse(active.expiresAt)) ||
+      Date.parse(active.expiresAt) <= this.now().getTime() ||
+      !["ACTIVE", "active"].includes(active.publicationState)
+    ) {
+      throw new MerchantConnectError(
+        "PUBLICATION_NOT_ACTIVE",
+        "Catalog 当前没有返回这条绑定和已激活名片；服务可能已暂停或撤回。请到Catalog恢复服务后再检查，Runtime不会自动恢复营业。",
+      );
     }
     if (session.merchant_id === undefined) {
       const backfilled = { ...session, merchant_id: active.merchantId };
-      this.persist((fresh) => fresh.sessions.map((item) =>
-        item.enrollment_id === session.enrollment_id ? backfilled : item));
+      this.persist((fresh) =>
+        fresh.sessions.map((item) =>
+          item.enrollment_id === session.enrollment_id ? backfilled : item,
+        ),
+      );
       return active;
     }
     if (session.merchant_id !== active.merchantId) {
-      throw new MerchantConnectError("BINDING_MERCHANT_MISMATCH", "Catalog binding的merchant_id与本地Enrollment不一致，已停止。");
+      throw new MerchantConnectError(
+        "BINDING_MERCHANT_MISMATCH",
+        "Catalog binding的merchant_id与本地Enrollment不一致，已停止。",
+      );
     }
     return active;
   }
 
   /** 用当次重签的公开声明构造已验证绑定投影（期限取新鲜声明）。 */
-  private verifiedFromPublication(session: ConnectionSession, active: PublicBinding): VerifiedBinding {
+  private verifiedFromPublication(
+    session: ConnectionSession,
+    active: PublicBinding,
+  ): VerifiedBinding {
     return {
       agentId: session.catalog_agent_id as string,
       bindingId: active.bindingId,
@@ -944,10 +1295,18 @@ class ConnectionServiceImpl implements MerchantConnectionService {
   }
 
   private verifiedFromSession(session: ConnectionSession): VerifiedBinding | null {
-    if (session.catalog_agent_id === undefined || session.binding_id === undefined ||
-        session.binding_version === undefined || session.merchant_id === undefined ||
-        session.binding_expires_at === undefined) return null;
-    if (!Number.isFinite(Date.parse(session.binding_expires_at)) || Date.parse(session.binding_expires_at) <= this.now().getTime()) {
+    if (
+      session.catalog_agent_id === undefined ||
+      session.binding_id === undefined ||
+      session.binding_version === undefined ||
+      session.merchant_id === undefined ||
+      session.binding_expires_at === undefined
+    )
+      return null;
+    if (
+      !Number.isFinite(Date.parse(session.binding_expires_at)) ||
+      Date.parse(session.binding_expires_at) <= this.now().getTime()
+    ) {
       return null;
     }
     return {
@@ -978,15 +1337,26 @@ class ConnectionServiceImpl implements MerchantConnectionService {
 
   private toSummary(session: ConnectionSession | null): ConnectionSummary {
     if (session === null) {
-      return { status: "idle", stage: this.stageOf("idle"), published: false, agentId: null, bindingId: null, bindingExpiresAt: null, cardRevision: null, code: null, detail: null };
+      return {
+        status: "idle",
+        stage: this.stageOf("idle"),
+        published: false,
+        agentId: null,
+        bindingId: null,
+        bindingExpiresAt: null,
+        cardRevision: null,
+        code: null,
+        detail: null,
+      };
     }
     if (session.status !== "published") {
       // 非 published 阶段也透出最近一次步骤失败的自有稳定码（availability 仅由
       // reconcile 的失败路径写入；detail 恒为空串，绝不携带远端原文/凭据）。
       // availability 只在失败/发布核对路径写入：非 published 时非空即最近一次失败。
-      const stepFailure = this.availability !== null
-        ? { code: this.availability.code, detail: this.availability.detail }
-        : { code: null, detail: null };
+      const stepFailure =
+        this.availability !== null
+          ? { code: this.availability.code, detail: this.availability.detail }
+          : { code: null, detail: null };
       return {
         status: session.status === "preparing" ? "awaiting_confirmation" : session.status,
         stage: this.stageOf(session.status),
@@ -1013,11 +1383,14 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         bindingExpiresAt: session.binding_expires_at ?? null,
         cardRevision: session.card_revision ?? null,
         code: this.availability?.code ?? null,
-        detail: this.availability?.detail ?? "本实例尚未完成 Catalog 发布核对；published 暂报未确认。",
+        detail:
+          this.availability?.detail ?? "本实例尚未完成 Catalog 发布核对；published 暂报未确认。",
       };
     }
     return {
-      status: "published", stage: "publish", published: true,
+      status: "published",
+      stage: "publish",
+      published: true,
       agentId: session.catalog_agent_id ?? null,
       bindingId: session.binding_id ?? null,
       bindingExpiresAt: session.binding_expires_at ?? null,
@@ -1027,16 +1400,106 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     };
   }
 
-
-
-  /** 0600 原子写；mutator 在**新鲜重读**的 store 上操作，保留 consumed 与其他会话。 */
   private persist(
     mutate: (fresh: EnrollmentChallengeStore) => EnrollmentChallengeStore["sessions"],
   ): void {
-    const fresh = readEnrollmentStore(this.dataDir);
-    const sessions = mutate(fresh);
-    writeFileAtomic(enrollmentStorePath(this.dataDir), `${JSON.stringify({ ...fresh, sessions })}\n`, { mode: 0o600 });
+    withEnrollmentStoreLock(this.dataDir, () => {
+      const fresh = readEnrollmentStore(this.dataDir),
+        sessions = mutate(fresh),
+        byId = new Map(fresh.sessions.map((s) => [s.enrollment_id, s]));
+      for (const item of sessions) {
+        const before = byId.get(item.enrollment_id);
+        if (item === before) continue;
+        const expected = item.store_revision ?? 0,
+          current = before?.store_revision ?? 0;
+        const observed = (item as AuthorizedEnrollment & { [observedSession]?: string })[
+          observedSession
+        ];
+        if (
+          (before && observed !== sessionDigest(before)) ||
+          expected !== current ||
+          !Number.isSafeInteger(current)
+        )
+          throw new MerchantConnectError(
+            "STATE_CAS_CONFLICT",
+            "Enrollment changed; reread before continuing",
+          );
+        item.store_revision = current + 1;
+        Object.defineProperty(item, observedSession, {
+          value: sessionDigest(item),
+          enumerable: true,
+          writable: true,
+        });
+      }
+      writeFileAtomic(
+        enrollmentStorePath(this.dataDir),
+        JSON.stringify({ ...fresh, sessions }) + "\n",
+        { mode: 0o600 },
+      );
+    });
   }
+  private async claimedStep(
+    session: ConnectionSession,
+    stage: string,
+    step: () => Promise<ConnectionSession>,
+    readOnly: boolean,
+  ): Promise<ConnectionSession> {
+    const token = randomUUID();
+    this.persist((fresh) =>
+      fresh.sessions.map((item) => {
+        if (item.enrollment_id !== session.enrollment_id) return item;
+        const live = item as ConnectionSession;
+        if (live.operation_claim)
+          throw new MerchantConnectError(
+            live.operation_claim.state === "unknown" ||
+              Date.parse(live.operation_claim.expires_at) <= this.now().getTime()
+              ? "CONNECTION_OPERATION_UNKNOWN"
+              : "CONNECTION_OPERATION_PENDING",
+            "Enrollment operation is already claimed",
+          );
+        if (
+          live.status !== session.status ||
+          (live.store_revision ?? 0) !== (session.store_revision ?? 0)
+        )
+          throw new MerchantConnectError("STATE_CAS_CONFLICT", "Enrollment changed");
+        session.operation_claim = {
+          token,
+          stage,
+          state: "active",
+          expires_at: new Date(this.now().getTime() + 60000).toISOString(),
+        };
+        return session;
+      }),
+    );
+    let result: ConnectionSession | undefined;
+    this.effectStarted = false;
+    try {
+      result = await step();
+      return result;
+    } finally {
+      // Effect uncertainty is durable. Only read-only calls or known pre-effect
+      // readiness failures release a claim automatically; no stale lease stealing.
+      const safe = result !== undefined || readOnly || !this.effectStarted;
+      this.preEffectReadinessFailure = false;
+      this.persist((fresh) =>
+        fresh.sessions.map((item) => {
+          const live = item as ConnectionSession;
+          if (live.enrollment_id !== session.enrollment_id || live.operation_claim?.token !== token)
+            return item;
+          const updated = { ...live };
+          if (safe) delete updated.operation_claim;
+          else updated.operation_claim = { ...live.operation_claim, state: "unknown" };
+          if (result) {
+            if (safe) delete result.operation_claim;
+            Object.assign(result, updated);
+          }
+          return result ?? updated;
+        }),
+      );
+    }
+  }
+  private preEffectReadinessFailure = false;
+  private effectStarted = false;
 
   private async withLock<T>(fn: () => Promise<T>): Promise<T> {
     const result = this.mutex.then(fn);

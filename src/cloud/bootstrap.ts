@@ -126,7 +126,7 @@ import {
 } from "./product-source.js";
 import { runReadiness, type ReadinessCheckResult, type ReadinessReport } from "./readiness.js";
 import { loadOrCreateMerchantIdentity } from "./merchant-identity.js";
-import { createMerchantConnectionService, type MerchantConnectionService } from "./connect-service.js";
+import { createMerchantConnectionService, MerchantConnectError, type MerchantConnectionService } from "./connect-service.js";
 import { createFileListingPublicationService } from "./file-listing-publication.js";
 
 /** 云端 A2A 端点路径（设计 §8.2；与自托管根路径不同，便于同端口分发）。 */
@@ -591,7 +591,7 @@ export async function bootstrapCloudRuntime(
           if (productsFilePath !== undefined && !config.sample) {
             bindProductTableToCatalog(productsFilePath, profile.owner_id, binding.merchantId);
           }
-          if (!(await readiness()).ready) throw new Error("CATALOG_RUNTIME_NOT_READY");
+          if (!(await readiness()).ready) throw new MerchantConnectError("CATALOG_RUNTIME_NOT_READY","Runtime readiness is not satisfied");
         },
       });
       const connection = directConnection;

@@ -12,7 +12,7 @@
  *   - CAS 409 → 匿名重读 + 重试一次；仍 409 → CONFLICT 报人工；
  *   - card_digest = 发布方计算的 JCS sha256。
  */
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import { generateA2aSigningIdentity, toJwsSigningIdentity } from "../src/a2a/signing-key.js";
@@ -26,13 +26,24 @@ import {
 import { validateCloudContract } from "../src/contracts/cloud-contracts.js";
 import { canonicalize } from "../src/negotiation/jcs.js";
 import { buildBindingClaims, type BindingClaims } from "../src/trust/binding/claims.js";
-import { verifyCompactJws } from "../src/trust/identity/jws.js";
+import { verifyCompactJws, signCompactJws } from "../src/trust/identity/jws.js";
+import { jwkThumbprint } from "../src/trust/binding/thumbprint.js";
+import type { JsonWebKey } from "../src/trust/identity/jwk.js";
 import type { AgentCard } from "../src/discovery/agent-card/types.js";
 
 const ORIGIN = "https://merchant-demo.example";
 const A2A = `${ORIGIN}/a2a`;
 const CATALOG = "https://catalog.example";
 const AGENT = "cagt_demo";
+
+const issuerPair = generateKeyPairSync("ed25519");
+const issuerJwk = issuerPair.publicKey.export({ format: "jwk" }) as JsonWebKey;
+const issuerThumb = jwkThumbprint(issuerJwk);
+const issuerIdentity = {
+  keyid: "catalog_demo",
+  algorithm: "ed25519" as const,
+  privateKey: issuerPair.privateKey,
+};
 
 function identity(): RuntimeSigningIdentity {
   const a2a = generateA2aSigningIdentity(ORIGIN);
@@ -46,9 +57,10 @@ interface FetchCall {
   body?: unknown;
 }
 
-function mockFetch(
-  handler: (call: FetchCall) => { status: number; json?: unknown },
-): { fetchImpl: typeof fetch; calls: FetchCall[] } {
+function mockFetch(handler: (call: FetchCall) => { status: number; json?: unknown }): {
+  fetchImpl: typeof fetch;
+  calls: FetchCall[];
+} {
   const calls: FetchCall[] = [];
   const fetchImpl = (async (
     url: string | URL,
@@ -67,7 +79,17 @@ function mockFetch(
       ...(init?.body !== undefined ? { body: JSON.parse(String(init.body)) as unknown } : {}),
     };
     calls.push(call);
-    const result = handler(call);
+    const result = call.url.endsWith("/v1/issuer-keys")
+      ? {
+          status: 200,
+          json: {
+            issuer: "catalog_demo",
+            keys: [
+              { kid: "catalog_demo", state: "ACTIVE", jwk: issuerJwk, thumbprint: issuerThumb },
+            ],
+          },
+        }
+      : handler(call);
     return new Response(result.json === undefined ? "" : JSON.stringify(result.json), {
       status: result.status,
       headers: { "content-type": "application/json" },
@@ -90,16 +112,16 @@ function bindingDocument(id: RuntimeSigningIdentity, overrides: Partial<BindingC
     keyId: id.keyId,
     keyThumbprint,
     serviceEpoch: 1,
-    issuedAt: "2026-09-26T07:00:00Z",
+    issuedAt: new Date().toISOString(),
     ttlSeconds: 900,
     issuer: "catalog_demo",
     ...overrides,
   });
   return {
     claims,
-    claims_jws: "header.payload.sig",
+    claims_jws: signCompactJws(claims as unknown as Record<string, unknown>, issuerIdentity),
     issuer_kid: "catalog_demo",
-    issuer_thumbprint: `sha256:${"a".repeat(64)}`,
+    issuer_thumbprint: issuerThumb,
     governance: { publication_state: "ACTIVE" },
     card_revision: 3,
     card_etag: '"etag-3"',
@@ -130,7 +152,10 @@ function decodeJwsPayload(jws: string): Record<string, unknown> {
 describe("requestBinding", () => {
   it("body 符合 0.1.2 契约；JWS 覆盖七个字段 + nonce，签名可验", async () => {
     const id = identity();
-    const { fetchImpl, calls } = mockFetch(() => ({ status: 200, json: { binding_request_id: "breq_1" } }));
+    const { fetchImpl, calls } = mockFetch(() => ({
+      status: 200,
+      json: { binding_request_id: "breq_1" },
+    }));
     const client = new CatalogClient({ baseUrl: CATALOG, fetchImpl });
     const result = await client.requestBinding(
       { agentId: AGENT, runtimeOrigin: ORIGIN, a2aEndpoint: A2A, generation: 1, serviceEpoch: 7 },
@@ -194,7 +219,9 @@ describe("requestBinding", () => {
         id,
       );
     }
-    const nonces = calls.map((call) => decodeJwsPayload(call.headers["x-kiwi-binding-jws"]!)["nonce"]);
+    const nonces = calls.map(
+      (call) => decodeJwsPayload(call.headers["x-kiwi-binding-jws"]!)["nonce"],
+    );
     expect(new Set(nonces).size).toBe(3);
   });
 
@@ -204,13 +231,25 @@ describe("requestBinding", () => {
     const client = new CatalogClient({ baseUrl: CATALOG, fetchImpl });
     await expect(
       client.requestBinding(
-        { agentId: AGENT, runtimeOrigin: "http://merchant.example", a2aEndpoint: A2A, generation: 1, serviceEpoch: 1 },
+        {
+          agentId: AGENT,
+          runtimeOrigin: "http://merchant.example",
+          a2aEndpoint: A2A,
+          generation: 1,
+          serviceEpoch: 1,
+        },
         id,
       ),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     await expect(
       client.requestBinding(
-        { agentId: AGENT, runtimeOrigin: ORIGIN, a2aEndpoint: "https://other.example/a2a", generation: 1, serviceEpoch: 1 },
+        {
+          agentId: AGENT,
+          runtimeOrigin: ORIGIN,
+          a2aEndpoint: "https://other.example/a2a",
+          generation: 1,
+          serviceEpoch: 1,
+        },
         id,
       ),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
@@ -452,7 +491,9 @@ describe("publishCard", () => {
     // 重试用了重读到的 revision 与新的 nonce。
     const second = (posts2[1]!.body as { publication: Record<string, unknown> }).publication;
     expect(second["expected_revision"]).toBe(3);
-    const nonces = posts2.map((call) => decodeJwsPayload(call.headers["x-kiwi-binding-jws"]!)["nonce"]);
+    const nonces = posts2.map(
+      (call) => decodeJwsPayload(call.headers["x-kiwi-binding-jws"]!)["nonce"],
+    );
     expect(new Set(nonces).size).toBe(2);
   });
 
@@ -483,7 +524,10 @@ describe("publishCard", () => {
 describe("activateCard（kiwi-catalog activate_card_publication 实际契约）", () => {
   it("body 平铺（card_revision/expected_revision/binding_id 顶层），JWS 覆盖四字段 + issued_at + nonce", async () => {
     const id = identity();
-    const { fetchImpl, calls } = mockFetch(() => ({ status: 200, json: { active_revision: 4, etag: '"e4"' } }));
+    const { fetchImpl, calls } = mockFetch(() => ({
+      status: 200,
+      json: { active_revision: 4, etag: '"e4"' },
+    }));
     const client = new CatalogClient({ baseUrl: CATALOG, fetchImpl });
     const result = await client.activateCard(
       { agentId: AGENT, bindingId: "binding_demo", cardRevision: 4, expectedRevision: 3 },
@@ -550,14 +594,18 @@ describe("activateCard（kiwi-catalog activate_card_publication 实际契约）"
     expect((postCalls[1]!.body as Record<string, unknown>)["card_revision"]).toBe(4);
     const payload = decodeJwsPayload(postCalls[1]!.headers["x-kiwi-binding-jws"]!);
     expect(payload["expected_revision"]).toBe(3);
-    const nonces = postCalls.map((call) => decodeJwsPayload(call.headers["x-kiwi-binding-jws"]!)["nonce"]);
+    const nonces = postCalls.map(
+      (call) => decodeJwsPayload(call.headers["x-kiwi-binding-jws"]!)["nonce"],
+    );
     expect(new Set(nonces).size).toBe(2);
   });
 
   it("409 且公开文档不可读（403 窗口）→ 直接 CONFLICT 报人工（无从重读）", async () => {
     const id = identity();
     const { fetchImpl, calls } = mockFetch((call) =>
-      call.method === "GET" ? { status: 403, json: { ok: false, error: "agent is not publishable" } } : { status: 409 },
+      call.method === "GET"
+        ? { status: 403, json: { ok: false, error: "agent is not publishable" } }
+        : { status: 409 },
     );
     const client = new CatalogClient({ baseUrl: CATALOG, fetchImpl });
     await expect(
@@ -579,5 +627,16 @@ describe("activateCard（kiwi-catalog activate_card_publication 实际契约）"
         id,
       ),
     ).rejects.toMatchObject({ code: "REQUEST_REJECTED" });
+  });
+});
+
+it("public legacy dummy JWS is rejected, never accepted as a verified binding", async () => {
+  const id = identity(),
+    doc = bindingDocument(id);
+  doc.claims_jws = "header.payload.sig";
+  const { fetchImpl } = mockFetch(() => ({ status: 200, json: doc }));
+  const client = new CatalogClient({ baseUrl: CATALOG, fetchImpl });
+  await expect(client.fetchPublicBinding(AGENT)).rejects.toMatchObject({
+    code: "RESPONSE_INVALID",
   });
 });
