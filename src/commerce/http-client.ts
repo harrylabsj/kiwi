@@ -43,6 +43,7 @@
  * type is classified as a `validation` CommerceError and never trusted.
  */
 
+import { createRequestBudget, finishRequestResponse, type ReadRequestOptions } from "../net/request-budget.js";
 import { validateAgainst } from "../contracts/schemas.js";
 import { readJsonBody, SafeHttpError } from "../net/safe-http.js";
 import type {
@@ -94,13 +95,14 @@ export class HttpCommerceClient implements CommerceClient {
     this.timeoutMs = options.timeoutMs ?? 15_000;
   }
 
-  private async request(method: string, path: string, body?: JsonObject): Promise<JsonObject> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response: Response;
+  private async request(method: string, path: string, body?: JsonObject, options?: ReadRequestOptions): Promise<JsonObject> {
+    const budget = createRequestBudget(this.timeoutMs, options);
+    const { controller } = budget;
+    let response: Response | undefined;
     let payload: JsonObject = {};
     try {
       try {
+        controller.signal.throwIfAborted();
         response = await this.fetchImpl(`${this.baseUrl}${path}`, {
           method,
           // 出站加固：绝不跟随重定向（3xx 目标不经过校验，且会携带 Bearer 头）。
@@ -131,11 +133,12 @@ export class HttpCommerceClient implements CommerceClient {
       try {
         // 响应体读取在超时覆盖内 + 大小上限（出站加固）。
         payload = (await readJsonBody(response, { signal: controller.signal })) as JsonObject;
+        controller.signal.throwIfAborted();
       } catch (err) {
         if (controller.signal.aborted) {
           throw new CommerceError(
             "transient",
-            `Commerce API request timed out after ${this.timeoutMs}ms while reading response`,
+            `Commerce API request timed out after ${budget.timeoutMs}ms while reading response`,
           );
         }
         if (err instanceof SafeHttpError && err.code === "response_too_large") {
@@ -146,7 +149,8 @@ export class HttpCommerceClient implements CommerceClient {
     } finally {
       // 审查 P2-02：所有路径（fetch 拒绝 / redirect / 非 2xx / body 读失败）
       // 都清理超时 timer——此前只有 body 读的 finally 清理。
-      clearTimeout(timer);
+      finishRequestResponse(response, controller);
+      budget.dispose();
     }
 
     if (!response.ok || payload.ok === false) {
@@ -262,11 +266,11 @@ export class HttpCommerceClient implements CommerceClient {
   async getNegotiationSnapshot(input: {
     conversation_id: string;
     message_id: number;
-  }): Promise<NegotiationSnapshot> {
+  }, options?: ReadRequestOptions): Promise<NegotiationSnapshot> {
     const query =
       `conversation_id=${encodeURIComponent(input.conversation_id)}` +
       `&message_id=${encodeURIComponent(String(input.message_id))}`;
-    const payload = await this.request("GET", `/negotiation/snapshot?${query}`);
+    const payload = await this.request("GET", `/negotiation/snapshot?${query}`, undefined, options);
     const inner = HttpCommerceClient.requireObject(payload.snapshot, "snapshot");
     const errors = validateAgainst("snapshot", inner);
     if (errors.length > 0) {

@@ -153,6 +153,7 @@ describe("挑战应答（/control/challenge）", () => {
 
     const expired = challengeFor(thumbprint, {
       challenge_id: randomUUID(),
+      issued_at: new Date(NOW.getTime() - 2000).toISOString(),
       expires_at: new Date(NOW.getTime() - 1000).toISOString(),
     });
     expect((await postChallenge(base, expired)).status).toBe(403);
@@ -212,6 +213,7 @@ describe("持钥证明的验收方语义（verifyBindingChallengeProof）", () =
     // 过期
     const stale = challengeFor(thumbprint, {
       challenge_id: randomUUID(),
+      issued_at: new Date(NOW.getTime() - 2000).toISOString(),
       expires_at: new Date(NOW.getTime() - 1).toISOString(),
     });
     expect(() =>

@@ -186,11 +186,14 @@ function quoteRef(value: unknown, name: string): { quote_id: string; revision: n
   return { quote_id: str(ref.quote_id, `${name}.quote_id`), revision: int(ref.revision, `${name}.revision`) };
 }
 
+import type { RfqPendingCandidates } from "../merchant-core/rfq/pending-candidates.js";
+
 export interface MerchantRfqMcpSurface {
   rfq: MerchantRfqService;
   /** 候选登记接缝（经 MerchantCommandLog；release_quote 风险语义）。 */
-  prepareReleaseCandidate(args: { releaseId: string }): Promise<string>;
-  prepareHandoffCandidate(args: { handoffId: string; packetJson: string; packetDigest: string }): Promise<string>;
+  prepareReleaseCandidate?: (args: { releaseId: string }) => Promise<string>;
+  pendingCandidates?: RfqPendingCandidates;
+  prepareHandoffCandidate?: (args: { handoffId: string; packetJson: string; packetDigest: string }) => Promise<string>;
   /**
    * AuthContext 工厂（§11.1）：由服务端用已认证主体构造——绝不接受模型
    * 参数里的身份字段。单商家单主体实例的调用主体在装配点固定。
@@ -331,6 +334,7 @@ export function buildRfqMcpTools(
         ...(typeof args.recipient_ref === "string" ? { recipientRef: args.recipient_ref } : {}),
         idempotencyKey: str(args.idempotency_key, "idempotency_key"),
         prepareCandidate: s.prepareReleaseCandidate,
+        pendingCandidates: s.pendingCandidates,
       }) as unknown as Record<string, unknown>;
     },
     kiwi_merchant_rfq_get_release: async (args) => {
@@ -359,6 +363,7 @@ export function buildRfqMcpTools(
         intentEvidenceRef: str(args.intent_evidence_ref, "intent_evidence_ref"),
         idempotencyKey: str(args.idempotency_key, "idempotency_key"),
         prepareCandidate: s.prepareHandoffCandidate,
+        pendingCandidates: s.pendingCandidates,
       }) as unknown as Record<string, unknown>;
     },
     kiwi_merchant_rfq_get_job: async (args) => {

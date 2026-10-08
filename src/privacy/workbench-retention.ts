@@ -304,21 +304,36 @@ export class WorkbenchRetentionStore {
     next: PrivacyRequestStatus,
     limitationReason?: string,
   ): PrivacyRequestRecord {
-    const current = this.requireRequest(requestId);
-    if (!TRANSITIONS[current.status].includes(next)) {
-      throw new WorkbenchRetentionError(
-        "ILLEGAL_TRANSITION",
-        `privacy request ${current.status} cannot transition to ${next}`,
-      );
+    // A nested call owns only its savepoint, never the caller's transaction.
+    const savepoint = `privacy_transition_${randomBytes(12).toString("hex")}`;
+    const nested = this.db.isTransaction;
+    this.db.exec(nested ? `SAVEPOINT ${savepoint}` : "BEGIN IMMEDIATE");
+    try {
+      const current = this.requireRequest(requestId);
+      if (!TRANSITIONS[current.status].includes(next)) {
+        throw new WorkbenchRetentionError("ILLEGAL_TRANSITION",
+          `privacy request ${current.status} cannot transition to ${next}`);
+      }
+      if (next === "COMPLETED") this.assertDeletionComplete(requestId);
+      const result = this.db.prepare(
+        "UPDATE workbench_privacy_requests SET status=?, limitation_reason=?, updated_at=? WHERE request_id=? AND status=? AND updated_at=? AND consent_generation=?",
+      ).run(next, limitationReason === undefined ? null : clean(limitationReason), this.now(),
+        requestId, current.status, current.updatedAt, current.consentGeneration);
+      if (result.changes !== 1) {
+        throw new WorkbenchRetentionError("ILLEGAL_TRANSITION", "privacy request changed during transition");
+      }
+      const updated = this.requireRequest(requestId);
+      this.db.exec(nested ? `RELEASE ${savepoint}` : "COMMIT");
+      return updated;
+    } catch (error) {
+      if (nested) {
+        this.db.exec(`ROLLBACK TO ${savepoint}`);
+        this.db.exec(`RELEASE ${savepoint}`);
+      } else {
+        this.db.exec("ROLLBACK");
+      }
+      throw error;
     }
-    if (next === "COMPLETED") this.assertDeletionComplete(requestId);
-    const stamp = this.now();
-    this.db
-      .prepare(
-        "UPDATE workbench_privacy_requests SET status=?, limitation_reason=?, updated_at=? WHERE request_id=?",
-      )
-      .run(next, limitationReason === undefined ? null : clean(limitationReason), stamp, requestId);
-    return this.requireRequest(requestId);
   }
 
   recordDeletionTask(input: {

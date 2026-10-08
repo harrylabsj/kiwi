@@ -42,10 +42,11 @@ import { lookup } from "node:dns/promises";
 
 import { isIP } from "node:net";
 
-import { assertResolvableTargetUrl, isLoopbackHost } from "../a2a/client/url-policy.js";
+import { awaitWithAbort, createRequestBudget } from "../net/request-budget.js";
+import { assertResolvableTargetUrl, assertSafeTargetUrl, isLoopbackHost } from "../a2a/client/url-policy.js";
 
 export class PinnedFetchError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly unsafeTarget = false) {
     super(message);
     this.name = "PinnedFetchError";
   }
@@ -60,6 +61,9 @@ interface FetchInit {
 }
 
 export interface PinnedFetchOptions {
+  /** Explicit caller development policy; defaults remain fail-closed. */
+  allowPrivateRanges?: boolean;
+  skipDnsCheck?: boolean;
   /** 自定义解析（测试用）；返回该主机名的全部 A/AAAA 记录。 */
   resolveIp?: (hostname: string) => Promise<string[]>;
   /** 请求超时（毫秒）；缺省由调用方通过 AbortSignal 控制。 */
@@ -124,30 +128,36 @@ function nodeHeadersToPairs(
 export async function resolvePinnedAddress(
   hostname: string,
   resolve: (hostname: string) => Promise<string[]>,
+  policy: { allowPrivateRanges?: boolean; skipDnsCheck?: boolean } = {},
 ): Promise<string> {
   let addresses: string[];
   try {
     addresses = await resolve(hostname);
   } catch {
-    throw new PinnedFetchError(`无法解析实例主机名：${hostname}`);
+    throw new PinnedFetchError(`无法解析实例主机名：${hostname}`, true);
   }
   if (addresses.length === 0) {
-    throw new PinnedFetchError(`实例主机名未解析出任何地址：${hostname}`);
+    throw new PinnedFetchError(`实例主机名未解析出任何地址：${hostname}`, true);
+  }
+  if (addresses.some(address => isIP(address) === 0)) {
+    throw new PinnedFetchError(`实例主机名解析结果不是 IP 地址：${hostname}`, true);
   }
   // 复用 A2A 守卫的判定（含"公网域名解析到 loopback 一律拒绝"），
   // 并固定用同一批解析结果做校验与建连。拒绝原因统一包装成 PinnedFetchError。
   try {
     await assertResolvableTargetUrl(new URL(`https://${hostname}/`), {
+      ...policy,
       resolveIp: async () => addresses,
     });
   } catch (err) {
     throw new PinnedFetchError(
       `实例主机名被出站策略拒绝：${err instanceof Error ? err.message : String(err)}`,
+      true,
     );
   }
   const [first] = addresses;
   if (first === undefined) {
-    throw new PinnedFetchError(`实例主机名未解析出任何地址：${hostname}`);
+    throw new PinnedFetchError(`实例主机名未解析出任何地址：${hostname}`, true);
   }
   return first;
 }
@@ -163,6 +173,11 @@ export async function requestViaAddress(
   init: FetchInit = {},
   maxResponseBytes = 1_048_576,
 ): Promise<Response> {
+  // Refuse unsupported body types before opening a socket. The adapter promises
+  // text uploads only; no fetch-like silent conversion or dropped Request body.
+  if (init.body !== undefined && init.body !== null && typeof init.body !== "string") {
+    throw new PinnedFetchError("unsupported request body: pinned transport accepts strings only");
+  }
   const method = init.method ?? "GET";
   const headers = headersToObject(init.headers);
   const body = init.body;
@@ -184,7 +199,7 @@ export async function requestViaAddress(
           ...definedHeaders(headers),
           host: hostHeader,
         },
-        ...(secure ? { servername: url.hostname } : {}),
+        ...(secure && !isIpLiteral(url.hostname) ? { servername: url.hostname } : {}),
         ...(init.signal !== undefined && init.signal !== null
           ? { signal: init.signal as AbortSignal }
           : {}),
@@ -209,14 +224,18 @@ export async function requestViaAddress(
         });
         res.on("end", () => {
           if (settled) return;
-          settled = true;
-          resolvePromise(
-            new Response(Buffer.concat(chunks), {
-              status: res.statusCode ?? 0,
+          try {
+            const status = res.statusCode ?? 0;
+            const response = new Response([204, 205, 304].includes(status) ? null : Buffer.concat(chunks), {
+              status,
               statusText: res.statusMessage ?? "",
               headers: nodeHeadersToPairs(res.headers),
-            }),
-          );
+            });
+            settled = true;
+            resolvePromise(response);
+          } catch (error) {
+            rejectOnce(error instanceof Error ? error : new PinnedFetchError("invalid HTTP response"));
+          }
         });
         res.on("error", rejectOnce);
       },
@@ -255,6 +274,18 @@ export function createPinnedFetch(options: PinnedFetchOptions = {}): typeof fetc
       ...headersToObject(requestInit.headers),
     };
     const body = requestInit.body;
+    if (body !== undefined && body !== null && typeof body !== "string") {
+      throw new PinnedFetchError("unsupported request body: pinned transport accepts strings only");
+    }
+    if (input instanceof Request && input.body !== null && (body === undefined || body === null)) {
+      throw new PinnedFetchError("unsupported Request body: supply an explicit string body");
+    }
+    assertSafeTargetUrl(url.href, { allowPrivateRanges: options.allowPrivateRanges });
+    const parentSignal = (requestInit.signal ?? (input instanceof Request ? input.signal : undefined)) as AbortSignal | undefined;
+    const budget = options.timeoutMs === undefined ? undefined : createRequestBudget(options.timeoutMs, { ...(parentSignal ? { signal: parentSignal } : {}) });
+    const signal = budget?.controller.signal ?? parentSignal;
+    try {
+    signal?.throwIfAborted();
 
     // loopback / 字面 IP：无解析步骤可被劫持，直接按该主机建连（仍走同一适配层）
     // ——统一路径的另一个好处：不经过全局 fetch 的连接池，实例重启后不会因为
@@ -264,17 +295,19 @@ export function createPinnedFetch(options: PinnedFetchOptions = {}): typeof fetc
         method,
         headers,
         ...(body !== undefined && body !== null ? { body } : {}),
-        ...(requestInit.signal !== undefined ? { signal: requestInit.signal } : {}),
+        ...(signal !== undefined ? { signal } : {}),
       }, options.maxResponseBytes);
     }
 
-    const pinnedIp = await resolvePinnedAddress(url.hostname, resolve);
+    const pinnedIp = await awaitWithAbort(resolvePinnedAddress(url.hostname, resolve, options), signal);
+    signal?.throwIfAborted();
     return await requestViaAddress(url, pinnedIp, {
       method,
       headers,
       ...(body !== undefined && body !== null ? { body } : {}),
-      ...(requestInit.signal !== undefined ? { signal: requestInit.signal } : {}),
+      ...(signal !== undefined ? { signal } : {}),
     }, options.maxResponseBytes);
+    } finally { budget?.dispose(); }
   };
   return pinnedFetch as typeof fetch;
 }

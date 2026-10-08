@@ -141,6 +141,11 @@ function truncate(text: string, max = 60): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
+/** Percentages have no explicit base/rounding contract; do not treat them as money. */
+export function isPercentageAmount(text: string): boolean {
+  return /[%％]|百分之|(?<![a-z])per(?:[\s-]+)?cent(?:age)?s?\b/i.test(text);
+}
+
 export class StrategyEngine {
   /** Compile one operator message into a typed patch. Pure and deterministic. */
   compile(text: string, context: StrategyContext): StrategyPatch {
@@ -183,6 +188,14 @@ export class StrategyEngine {
         directive: text,
         requires_confirmation: false,
         matched_rules: ["out_of_scope_task"],
+      };
+    }
+
+    if ((BUDGET_WORD.test(text) || FLOOR_WORD.test(text)) && isPercentageAmount(text)) {
+      return {
+        kind: "forbidden", scope, directive: text, requires_confirmation: false,
+        summary: "百分比金额缺少明确基准；请提供明确金额，此指令未应用",
+        matched_rules: ["ambiguous_percentage_amount"],
       };
     }
 

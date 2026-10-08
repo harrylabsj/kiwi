@@ -35,6 +35,8 @@
  * 零新增依赖：Node 22 原生 fetch + AbortController。
  */
 
+import { finishRequestResponse } from "../../net/request-budget.js";
+import { createPinnedFetch, PinnedFetchError } from "../../merchant-gateway/pinned-fetch.js";
 import { assertResolvableTargetUrl, assertSafeTargetUrl } from "../../a2a/client/url-policy.js";
 import { isRedirectResponse, readJsonBody, SafeHttpError } from "../../net/safe-http.js";
 import { serializeUcpAgentHeader, UCP_AGENT_HEADER } from "../../a2a/ucp-agent.js";
@@ -106,6 +108,7 @@ export class UcpCheckoutHttpClient {
   private readonly url: URL;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly customTransport: boolean;
   private readonly allowPrivateRanges: boolean;
   private readonly skipDnsCheck: boolean;
   private readonly resolveIp?: (hostname: string) => Promise<string[]>;
@@ -118,7 +121,8 @@ export class UcpCheckoutHttpClient {
     this.url = url;
     this.endpoint = url.href.replace(/\/+$/, "");
     this.timeoutMs = options.timeoutMs ?? 10_000;
-    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.customTransport = options.fetchImpl !== undefined;
+    this.fetchImpl = options.fetchImpl ?? createPinnedFetch({ resolveIp: options.resolveIp, allowPrivateRanges: options.allowPrivateRanges, skipDnsCheck: options.skipDnsCheck });
     this.allowPrivateRanges = options.allowPrivateRanges ?? false;
     this.skipDnsCheck = options.skipDnsCheck ?? false;
     this.resolveIp = options.resolveIp;
@@ -197,7 +201,7 @@ export class UcpCheckoutHttpClient {
   ): Promise<{ kind: "ok"; status: number; raw: unknown } | UcpCheckoutHttpError> {
     // 请求前 DNS 复查：主机名解析出的每个 IP 都不得落在私网/保留段（DNS rebinding 缓解）。
     try {
-      await assertResolvableTargetUrl(this.url, {
+      if (this.customTransport) await assertResolvableTargetUrl(this.url, {
         allowPrivateRanges: this.allowPrivateRanges,
         skipDnsCheck: this.skipDnsCheck,
         resolveIp: this.resolveIp,
@@ -213,7 +217,8 @@ export class UcpCheckoutHttpClient {
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     const url = `${this.endpoint}${path}`;
 
-    let response: Response;
+    let response: Response | undefined;
+    try {
     try {
       response = await this.fetchImpl(url, {
         method,
@@ -229,6 +234,7 @@ export class UcpCheckoutHttpClient {
       if (controller.signal.aborted) {
         return httpError("timeout", `UCP request timed out after ${this.timeoutMs}ms`);
       }
+      if (err instanceof PinnedFetchError && err.unsafeTarget) return httpError("unsafe_target", err.message);
       return httpError(
         "network",
         `UCP request failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -246,6 +252,7 @@ export class UcpCheckoutHttpClient {
     try {
       // 响应体读取在超时覆盖内 + 大小上限（对端停滞 body 不再永久挂起）。
       raw = await readJsonBody(response, { signal: controller.signal });
+      controller.signal.throwIfAborted();
     } catch (err) {
       if (controller.signal.aborted) {
         return httpError("timeout", `UCP request timed out after ${this.timeoutMs}ms`);
@@ -257,10 +264,9 @@ export class UcpCheckoutHttpClient {
           : `UCP response is not JSON${response.ok ? "" : ` (http ${response.status})`}`,
         response.status,
       );
-    } finally {
-      clearTimeout(timer);
     }
     return { kind: "ok", status: response.status, raw };
+    } finally { finishRequestResponse(response, controller); clearTimeout(timer); }
   }
 
   private async request(

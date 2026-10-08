@@ -33,6 +33,7 @@
  *   - 未知状态 / 校验失败一律抛 ChannelError（fail-closed），不静默容错。
  */
 
+import type { ReadRequestOptions } from "../net/request-budget.js";
 import type { A2ATask, A2ATaskState } from "../a2a/client/index.js";
 import type { NegotiationEnvelope } from "../negotiation/domain/envelope.js";
 import type { PolicyResult } from "../negotiation/types.js";
@@ -148,7 +149,7 @@ export interface ChannelHandle {
   /** 对端身份（open 时绑定）。 */
   readonly identity: string;
   send(input: ChannelSendInput): Promise<ChannelSendResult>;
-  getState(ref: RemoteRef): Promise<RemoteState>;
+  getState(ref: RemoteRef, options?: ReadRequestOptions): Promise<RemoteState>;
   /** 无 subscribe 的通道通过 getState 轮询（§33）。 */
   subscribe?(ref: RemoteRef, handler: ChannelEventHandler): Promise<Unsubscribe>;
   close(): Promise<void>;

@@ -75,6 +75,15 @@ function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+/** @internal Validate the existing challenge time fields, not a new nonce protocol. */
+export function bindingChallengeWindow(challenge: Pick<BindingChallenge, "issued_at" | "expires_at">):
+  { issuedAt: number; expiresAt: number } | undefined {
+  const issuedAt = Date.parse(challenge.issued_at);
+  const expiresAt = Date.parse(challenge.expires_at);
+  return Number.isFinite(issuedAt) && Number.isFinite(expiresAt) && issuedAt < expiresAt
+    ? { issuedAt, expiresAt } : undefined;
+}
+
 /** 挑战主体（受限结构）：被签名的**完整**内容，成员名字典序固定。 */
 export function challengeSubject(challenge: BindingChallenge): string {
   return JSON.stringify({
@@ -146,6 +155,9 @@ export function signBindingChallenge(
   challenge: BindingChallenge,
   identity: JwsSigningIdentity,
 ): string {
+  if (bindingChallengeWindow(challenge) === undefined) {
+    throw new BindingProofError("INVALID_CHALLENGE_TIME", "挑战时间格式或有效窗口非法");
+  }
   return signCompactJws(challengeSubject(challenge), identity, { extraHeader: { typ: "kiwi-binding-proof" } });
 }
 
@@ -228,7 +240,9 @@ export function verifyBindingChallengeProof(input: {
   }
 
   // 2) 过期即拒绝（先判时间，避免对过期挑战做无谓验签）。
-  if (Date.parse(challenge.expires_at) <= now.getTime()) {
+  const window = bindingChallengeWindow(challenge);
+  if (window === undefined) throw new BindingProofError("INVALID_CHALLENGE_TIME", "挑战时间格式或有效窗口非法");
+  if (window.expiresAt <= now.getTime()) {
     throw new BindingProofError("CHALLENGE_EXPIRED", `挑战已过期：${challenge.challenge_id}`);
   }
 

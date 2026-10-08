@@ -88,6 +88,8 @@ export type CatalogClientErrorCode =
   | "CATALOG_UNREACHABLE"
   /** 4xx（非 409/404）：请求被拒绝，重试不会变好。 */
   | "REQUEST_REJECTED"
+  /** 商家明确拒绝设备授权；不同于暂时等待或通信故障。 */
+  | "AUTHORIZATION_DENIED"
   /** CAS 冲突（重读 + 重试一次后仍 409）——停下来报人工。 */
   | "CONFLICT"
   /** 响应体非法（非 JSON / 结构不符 / 重定向）。 */
@@ -481,14 +483,26 @@ export class CatalogClient {
       exp: new Date(issuedAt.getTime() + 30_000).toISOString(),
       nonce,
     };
-    const { json } = await this.request("POST", "/v1/enrollments/device/token", {
-      body: { device_code: deviceCode },
-      jws: signCompactJws(signed, identity.signingIdentity, {
-        extraHeader: { typ: "kiwi-runtime-request" },
-      }),
-    });
+    let json: unknown;
+    try {
+      ({ json } = await this.request("POST", "/v1/enrollments/device/token", {
+        body: { device_code: deviceCode },
+        jws: signCompactJws(signed, identity.signingIdentity, {
+          extraHeader: { typ: "kiwi-runtime-request" },
+        }),
+      }));
+    } catch (error) {
+      if (error instanceof CatalogClientError && error.code === "REQUEST_REJECTED" &&
+          error.remoteCode === "ACCESS_DENIED") {
+        throw new CatalogClientError("AUTHORIZATION_DENIED", "设备授权已被商家拒绝");
+      }
+      throw error;
+    }
     const result = recordOrEmpty(json);
     const state = result["status"] ?? result["error"];
+    if (state === "access_denied" || state === "ACCESS_DENIED") {
+      throw new CatalogClientError("AUTHORIZATION_DENIED", "设备授权已被商家拒绝");
+    }
     if (state === "authorization_pending" || state === "pending") {
       return {
         status: "authorization_pending",
@@ -1434,7 +1448,8 @@ export class CatalogClient {
             const rawCode = errorPayload["error"] ?? errorPayload["code"];
             if (typeof rawCode === "string") {
               const match = /^([A-Z][A-Z0-9_]{1,79})(?::|$)/.exec(rawCode);
-              if (match) remoteCode = match[1];
+              if (rawCode === "access_denied") remoteCode = "ACCESS_DENIED";
+              else if (match) remoteCode = match[1];
             }
           }
         } catch {

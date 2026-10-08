@@ -59,6 +59,7 @@ import { writeFileAtomic } from "../fs/atomic-write.js";
 import { submitIdempotencyKey } from "../runtime/tools.js";
 import type { CandidateBinding, StrategyDirective } from "./types.js";
 import type { DecisionHints } from "../runtime/fake-model.js";
+import { isPercentageAmount } from "./strategy.js";
 
 /** A claimed turn with a generated, not-yet-submitted candidate decision. */
 export interface PreparedCandidate {
@@ -125,6 +126,7 @@ export function compileDirectiveHints(directives: readonly StrategyDirective[]):
     // directives — a soft_preference mentioning 预算/底价 must not override.
     if (
       (directive.kind === "tighten" || directive.kind === "relax") &&
+      !isPercentageAmount(directive.directive) &&
       /预算|budget/i.test(directive.directive)
     ) {
       const amount = /\d+(?:\.\d+)?/.exec(directive.directive);
@@ -132,6 +134,7 @@ export function compileDirectiveHints(directives: readonly StrategyDirective[]):
     }
     if (
       (directive.kind === "tighten" || directive.kind === "relax") &&
+      !isPercentageAmount(directive.directive) &&
       /底价|最低价|floor/i.test(directive.directive)
     ) {
       const amount = /\d+(?:\.\d+)?/.exec(directive.directive);

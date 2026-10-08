@@ -22,6 +22,7 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
+import { contentDigest } from "../../negotiation/jcs.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import type { PrivateVault } from "../memory/vault.js";
 import type { VaultKind } from "../memory/types.js";
@@ -444,6 +445,8 @@ export class BuyerTaskStore {
     origin: TaskEvent["origin"],
     idempotencyKey: string,
   ): boolean {
+    if (type.startsWith("buyer_tool_call_v1_") || type === "buyer_rule_v1_added")
+      throw new BuyerTaskError("validation", "reserved internal task event type");
     const res = this.db
       .prepare(
         `INSERT OR IGNORE INTO task_events
@@ -463,7 +466,7 @@ export class BuyerTaskStore {
 
   taskEvents(taskId: string): TaskEvent[] {
     const rows = this.db
-      .prepare("SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at, event_id")
+      .prepare("SELECT * FROM task_events WHERE task_id = ? AND type NOT IN ('buyer_tool_call_v1_started','buyer_tool_call_v1_completed','buyer_rule_v1_added') ORDER BY created_at, event_id")
       .all(taskId) as Record<string, unknown>[];
     return rows.map((r) => this.rowToEvent(r));
   }
@@ -473,6 +476,7 @@ export class BuyerTaskStore {
    * 的冷却窗口判断：同一 merchant 的提示可能在不同任务上产生（§13 M0）。
    */
   eventsOfType(type: string, since: string): TaskEvent[] {
+    if (["buyer_tool_call_v1_started", "buyer_tool_call_v1_completed", "buyer_rule_v1_added"].includes(type)) return [];
     const rows = this.db
       .prepare(
         `SELECT e.* FROM task_events e
@@ -672,6 +676,36 @@ export class BuyerTaskStore {
 
   // ---- tracking rules ---------------------------------------------------------
 
+  /** A logical model call has one task/action/input and one durable result.
+   * An interrupted call stays unresolved: replay must not start it again. */
+  beginToolCall(taskId: string, callId: string, action: string, params: unknown):
+    { kind: "new"; key: string } | { kind: "replay"; result: unknown } {
+    if (!callId.trim()) throw new BuyerTaskError("validation", "tool_call_id is required");
+    if (this.getTask(taskId) === undefined) throw new BuyerTaskError("not_found", `no task ${taskId}`);
+    const key = `buyer-tool:${this.principalId}:${callId}`;
+    const binding = contentDigest({ taskId, action, params });
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const started = this.eventByIdempotencyKey(key);
+      if (started !== undefined) {
+        if (started.type !== "buyer_tool_call_v1_started" || started.payload.version !== 1 || started.task_id !== taskId || started.payload.binding !== binding)
+          throw new BuyerTaskError("conflict", "tool_call_id is bound to different task/action/input");
+        const completed = this.eventByIdempotencyKey(`${key}:result`);
+        if (completed === undefined || completed.type !== "buyer_tool_call_v1_completed" || completed.payload.version !== 1)
+          throw new BuyerTaskError("conflict", "tool call is unresolved; reconciliation required, not replayed");
+        this.db.exec("COMMIT");
+        return { kind: "replay", result: completed.payload.result };
+      }
+      this.appendEventTx(taskId, "buyer_tool_call_v1_started", { version: 1, binding, action }, "model", key, this.now());
+      this.db.exec("COMMIT");
+      return { kind: "new", key };
+    } catch (err) { this.db.exec("ROLLBACK"); throw err; }
+  }
+
+  finishToolCall(taskId: string, key: string, result: unknown): void {
+    this.appendEventTx(taskId, "buyer_tool_call_v1_completed", { version: 1, result }, "model", `${key}:result`, this.now());
+  }
+
   addTrackingRule(input: {
     task_id: string;
     candidate_id?: string;
@@ -684,7 +718,22 @@ export class BuyerTaskStore {
     if (!Number.isInteger(input.interval_seconds) || input.interval_seconds <= 0) {
       throw new BuyerTaskError("validation", "interval_seconds must be a positive integer");
     }
-    const now = this.now();
+    const binding = contentDigest({ task_id: input.task_id, candidate_id: input.candidate_id ?? null,
+      rule_type: input.rule_type, condition: input.condition, interval_seconds: input.interval_seconds,
+      cooldown_seconds: input.cooldown_seconds ?? 0 });
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const previous = this.eventByIdempotencyKey(input.idempotency_key);
+      if (previous !== undefined) {
+        if (previous.type !== "buyer_rule_v1_added" || previous.payload.version !== 1 || previous.task_id !== input.task_id || previous.payload.binding !== binding)
+          throw new BuyerTaskError("conflict", "tracking rule idempotency key content conflict");
+        const rule = this.getRule(String(previous.payload.rule_id));
+        if (rule === undefined) throw new BuyerTaskError("conflict", "tracking rule replay record is incomplete");
+        this.db.exec("COMMIT");
+        return rule;
+      }
+      if (this.getTask(input.task_id) === undefined) throw new BuyerTaskError("not_found", `no task ${input.task_id}`);
+      const now = this.now();
     const ruleId = `rule_${uuidv7()}`;
     const next = new Date(Date.parse(now) + input.interval_seconds * 1000).toISOString();
     this.db
@@ -704,7 +753,10 @@ export class BuyerTaskStore {
         next,
         input.cooldown_seconds ?? 0,
       );
+    this.appendEventTx(input.task_id, "buyer_rule_v1_added", { version: 1, binding, rule_id: ruleId }, "model", input.idempotency_key, now);
+    this.db.exec("COMMIT");
     return this.getRule(ruleId) as TrackingRule;
+    } catch (err) { this.db.exec("ROLLBACK"); throw err; }
   }
 
   getRule(ruleId: string): TrackingRule | undefined {

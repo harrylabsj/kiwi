@@ -33,8 +33,9 @@
 
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { writeFileAtomic } from "./fs/atomic-write.js";
 import path from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { agentDataDir, ensurePathsForDir } from "./agent/agent-db.js";
@@ -334,9 +335,7 @@ export async function merchantInit(
   if (options.merchantToken !== undefined && options.merchantToken.trim() !== "") {
     const credentialsPath = options.credentialsPath ?? DEFAULT_CREDENTIALS_ENV_PATH;
     try {
-      mkdirSync(path.dirname(credentialsPath), { recursive: true, mode: 0o700 });
-      writeFileSync(credentialsPath, `KIWI_MERCHANT_TOKEN=${options.merchantToken.trim()}\n`, { mode: 0o600 });
-      chmodSync(credentialsPath, 0o600);
+      mergeMerchantCredentials(credentialsPath, options.merchantToken.trim());
       credentialsWritten = { ok: true, detail: credentialsPath };
     } catch (err) {
       credentialsWritten = {
@@ -378,4 +377,23 @@ export async function merchantInit(
     },
     warnings,
   };
+}
+
+/** Preserve unrelated env records; the credential itself is never logged. */
+function mergeMerchantCredentials(file: string, token: string): void {
+  if (/[\r\n\0]/.test(token)) throw new Error("merchant token must be a single-line value");
+  let previous = "";
+  try {
+    const stat = lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("credentials target must be a regular file");
+    previous = readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const record = `KIWI_MERCHANT_TOKEN=${token}`;
+  const target = /^[ \t]*(?:export[ \t]+)?KIWI_MERCHANT_TOKEN[ \t]*=[^\r\n]*/gm;
+  const content = target.test(previous)
+    ? previous.replace(target, record)
+    : `${previous}${previous !== "" && !previous.endsWith("\n") ? "\n" : ""}${record}\n`;
+  writeFileAtomic(file, content, { mode: 0o600 });
 }

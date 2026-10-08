@@ -1,5 +1,6 @@
 /** Buyer-side client for merchant-follow/1 + merchant-feed/1 with local preference/cursor authority. */
 
+import { createRequestBudget } from "../net/request-budget.js";
 import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
@@ -22,6 +23,10 @@ export interface MerchantSubscriptionEndpoint {
 export interface MerchantSubscriptionResolver {
   resolve(merchantId: string): Promise<MerchantSubscriptionEndpoint>;
 }
+
+const MAX_RESPONSE_BYTES = 1_048_576;
+const MAX_SNAPSHOT_PAGES = 200;
+const MAX_SNAPSHOT_ITEMS = 10_000;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS buyer_merchant_subscriptions (
@@ -50,12 +55,16 @@ export class MerchantSubscriptionClient implements BuyerFollowsClient {
   private readonly resolver: MerchantSubscriptionResolver;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => string;
+  private readonly timeoutMs: number;
+  private readonly maxResponseBytes: number;
 
   constructor(options: {
     dbPath: string;
     resolver: MerchantSubscriptionResolver;
     fetchImpl?: typeof fetch;
     now?: () => string;
+    timeoutMs?: number;
+    maxResponseBytes?: number;
   }) {
     this.db = new DatabaseSync(options.dbPath);
     this.db.exec("pragma busy_timeout=5000");
@@ -63,6 +72,9 @@ export class MerchantSubscriptionClient implements BuyerFollowsClient {
     this.resolver = options.resolver;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.timeoutMs = options.timeoutMs ?? 15_000;
+    this.maxResponseBytes = options.maxResponseBytes ?? MAX_RESPONSE_BYTES;
+    if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0 || !Number.isSafeInteger(this.maxResponseBytes) || this.maxResponseBytes <= 0) throw new RangeError("invalid merchant feed request limits");
   }
 
   async follow(
@@ -205,9 +217,11 @@ export class MerchantSubscriptionClient implements BuyerFollowsClient {
   }
 
   private async applySnapshot(endpoint: MerchantSubscriptionEndpoint, merchantId: string): Promise<void> {
+    const deadlineMs = Date.now() + this.timeoutMs;
     const created = await this.request(endpoint, "/public/v1/updates/snapshot", {
       method: "GET",
       authenticated: false,
+      deadlineMs,
     });
     const descriptor = requireObject(created.body, "snapshot descriptor");
     if (typeof descriptor["snapshot_id"] !== "string" || typeof descriptor["high_water_cursor"] !== "string") {
@@ -217,17 +231,20 @@ export class MerchantSubscriptionClient implements BuyerFollowsClient {
     const highWaterCursor: string = descriptor["high_water_cursor"];
     let offset = 0;
     const active: Array<Record<string, unknown>> = [];
+    let pages = 0;
     while (true) {
+      if (++pages > MAX_SNAPSHOT_PAGES) throw new Error("snapshot page limit exceeded");
       const page = await this.request(
         endpoint,
         `/public/v1/updates/snapshots/${encodeURIComponent(descriptor["snapshot_id"])}?offset=${offset}&limit=50`,
-        { method: "GET", authenticated: false },
+        { method: "GET", authenticated: false, deadlineMs },
       );
       const body = requireObject(page.body, "snapshot page");
       if (!Array.isArray(body["items"])) throw new Error("snapshot page items are invalid");
+      if (active.length + body["items"].length > MAX_SNAPSHOT_ITEMS) throw new Error("snapshot item limit exceeded");
       active.push(...body["items"].map((item) => requireObject(item, "snapshot item")));
       if (body["next_offset"] === null) break;
-      if (typeof body["next_offset"] !== "number") throw new Error("snapshot next_offset is invalid");
+      if (typeof body["next_offset"] !== "number" || !Number.isSafeInteger(body["next_offset"]) || body["next_offset"] <= offset) throw new Error("snapshot next_offset must be a safe forward integer");
       offset = body["next_offset"];
     }
     inImmediateTransaction(this.db, () => {
@@ -321,27 +338,49 @@ export class MerchantSubscriptionClient implements BuyerFollowsClient {
       headers?: Record<string, string>;
       body?: string;
       allowProblem?: boolean;
+      deadlineMs?: number;
     },
   ): Promise<{ status: number; headers: Headers; body: unknown }> {
-    const response = await this.fetchImpl(`${endpoint.origin}${path}`, {
-      method: options.method,
-      redirect: "manual",
-      headers: {
-        accept: "application/json",
-        ...(options.authenticated ? { authorization: `Bearer ${endpoint.bearerToken}` } : {}),
-        ...options.headers,
-      },
-      ...(options.body === undefined ? {} : { body: options.body }),
-    });
-    if (response.status >= 300 && response.status < 400) throw new Error("merchant endpoint redirect refused");
-    const text = await response.text();
-    let body: unknown = {};
-    if (text !== "") body = JSON.parse(text) as unknown;
-    if (!response.ok && options.allowProblem !== true) {
-      const problem = requireObject(body, "merchant problem");
-      throw new Error(`merchant request failed (${response.status} ${String(problem["code"] ?? "")})`);
+    const remaining = options.deadlineMs === undefined ? this.timeoutMs : options.deadlineMs - Date.now();
+    const budget = createRequestBudget(this.timeoutMs, { timeoutMs: remaining });
+    const signal = budget.controller.signal;
+    let response: Response | undefined;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const abortRead = () => { void reader?.cancel().catch(() => {}); };
+    try {
+      signal.throwIfAborted();
+      response = await this.fetchImpl(`${endpoint.origin}${path}`, {
+        method: options.method, redirect: "manual", signal,
+        headers: { accept: "application/json", ...(options.authenticated ? { authorization: `Bearer ${endpoint.bearerToken}` } : {}), ...options.headers },
+        ...(options.body === undefined ? {} : { body: options.body }),
+      });
+      if (response.status >= 300 && response.status < 400) throw new Error("merchant endpoint redirect refused");
+      const declared = Number(response.headers.get("content-length"));
+      if (Number.isFinite(declared) && declared > this.maxResponseBytes) throw new Error("merchant response exceeds byte limit");
+      const chunks: Uint8Array[] = []; let size = 0;
+      reader = response.body?.getReader();
+      signal.addEventListener("abort", abortRead, { once: true });
+      signal.throwIfAborted();
+      if (reader) for (;;) {
+        const chunk = await reader.read(); signal.throwIfAborted();
+        if (chunk.done) break;
+        size += chunk.value.byteLength;
+        if (size > this.maxResponseBytes) throw new Error("merchant response exceeds byte limit");
+        chunks.push(chunk.value);
+      }
+      const text = Buffer.concat(chunks).toString("utf8");
+      const body: unknown = text === "" ? {} : JSON.parse(text);
+      if (!response.ok && options.allowProblem !== true) {
+        const problem = requireObject(body, "merchant problem");
+        throw new Error(`merchant request failed (${response.status} ${String(problem["code"] ?? "")})`);
+      }
+      return { status: response.status, headers: response.headers, body };
+    } finally {
+      signal.removeEventListener("abort", abortRead);
+      if (reader) { void reader.cancel().catch(() => {}); reader.releaseLock(); }
+      else { void response?.body?.cancel().catch(() => {}); }
+      budget.dispose();
     }
-    return { status: response.status, headers: response.headers, body };
   }
 }
 

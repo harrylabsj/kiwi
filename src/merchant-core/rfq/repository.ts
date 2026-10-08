@@ -224,26 +224,17 @@ export class RfqRepository {
     }
   }
 
-  /**
-   * 跨仓库单元事务（§10.2 UnitOfWork port）：生产装配中审批候选 store 与本
-   * 仓库共用同一 SQLite 连接，work 内的候选登记与本仓库写在同一
-   * BEGIN/COMMIT 内全部提交或全部回滚。work 只做本地同步 DB 写（await 仅
-   * 微任务桥接，无外部 I/O），事务不跨外部调用。
-   */
-  async runInTransactionAsync<T>(work: () => Promise<T> | T): Promise<T> {
-    if (this.inTx) return await work();
-    this.inTx = true;
-    this.db.exec("BEGIN");
-    try {
-      const result = await work();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    } finally {
-      this.inTx = false;
-    }
+  /** Local synchronous unit of work; no Promise work may be started here. */
+  runInTransaction<T>(work: () => T): T {
+    return this.tx(work);
+  }
+
+  /** Legacy async work is refused before BEGIN and is never invoked. */
+  async runInTransactionAsync<T>(_work: () => Promise<T> | T): Promise<T> {
+    throw new RfqError(
+      "unavailable",
+      "async transaction work is unsupported; use the local synchronous RFQ port",
+    );
   }
 
   private id(prefix: string): string {

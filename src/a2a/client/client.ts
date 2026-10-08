@@ -28,6 +28,8 @@
  * 零新增依赖：Node 22 原生 fetch + AbortController + node:crypto randomUUID。
  */
 
+import { createPinnedFetch, PinnedFetchError } from "../../merchant-gateway/pinned-fetch.js";
+import { awaitWithAbort, createRequestBudget, finishRequestResponse, type ReadRequestOptions } from "../../net/request-budget.js";
 import { randomUUID } from "node:crypto";
 import { A2AClientError, invalidResponse } from "./error.js";
 import { buildJsonRpcRequest, parseJsonRpcResponse, tryParseJsonRpcError } from "./jsonrpc.js";
@@ -50,6 +52,7 @@ export class A2AClient {
   private readonly url: URL;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly customTransport: boolean;
   private readonly allowPrivateRanges: boolean;
   private readonly skipDnsCheck: boolean;
   private readonly resolveIp?: (hostname: string) => Promise<string[]>;
@@ -62,7 +65,8 @@ export class A2AClient {
   constructor(options: A2AClientOptions) {
     this.url = assertSafeTargetUrl(options.url, { allowPrivateRanges: options.allowPrivateRanges });
     this.timeoutMs = options.timeoutMs ?? 15_000;
-    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.customTransport = options.fetchImpl !== undefined;
+    this.fetchImpl = options.fetchImpl ?? createPinnedFetch({ resolveIp: options.resolveIp, allowPrivateRanges: options.allowPrivateRanges, skipDnsCheck: options.skipDnsCheck });
     this.allowPrivateRanges = options.allowPrivateRanges ?? false;
     this.skipDnsCheck = options.skipDnsCheck ?? false;
     this.resolveIp = options.resolveIp;
@@ -95,22 +99,14 @@ export class A2AClient {
   }
 
   /** 按 taskId 拉取 Task 状态与 artifacts。1.0 模式方法名 `GetTask`。 */
-  async getTask(taskId: string): Promise<A2ATask> {
+  async getTask(taskId: string, options?: ReadRequestOptions): Promise<A2ATask> {
     const wireMethod = this.version === "1.0" ? METHOD_GET_TASK : "tasks/get";
-    return this.rpc(wireMethod, { id: taskId });
+    return this.rpc(wireMethod, { id: taskId }, options);
   }
 
-  private async rpc(method: string, params: unknown): Promise<A2ATask> {
-    await assertResolvableTargetUrl(this.url, {
-      allowPrivateRanges: this.allowPrivateRanges,
-      skipDnsCheck: this.skipDnsCheck,
-      resolveIp: this.resolveIp,
-    });
-
+  private async rpc(method: string, params: unknown, options?: ReadRequestOptions): Promise<A2ATask> {
     const id = randomUUID();
     const body = JSON.stringify(buildJsonRpcRequest(method, params, id));
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     const baseHeaders: Record<string, string> = {
       "content-type": "application/json",
@@ -137,10 +133,17 @@ export class A2AClient {
         ? baseHeaders
         : { ...baseHeaders, ...this.signer.sign({ method: "POST", url: this.url.href, body: Buffer.from(body, "utf8"), headers: baseHeaders }) };
 
-    let response: Response;
+    const budget = createRequestBudget(this.timeoutMs, options);
+    const { controller } = budget;
+
+    let response: Response | undefined;
     let raw: unknown;
     try {
       try {
+        if (this.customTransport) {
+          await awaitWithAbort(assertResolvableTargetUrl(this.url, { allowPrivateRanges: this.allowPrivateRanges, skipDnsCheck: this.skipDnsCheck, resolveIp: this.resolveIp }), controller.signal);
+        }
+        controller.signal.throwIfAborted();
         response = await this.fetchImpl(this.url.href, {
           method: "POST",
           headers,
@@ -151,8 +154,10 @@ export class A2AClient {
           signal: controller.signal,
         });
       } catch (err) {
+        if (err instanceof A2AClientError) throw err;
+        if (err instanceof PinnedFetchError && err.unsafeTarget) throw new A2AClientError("unsafe_target", err.message);
         if (controller.signal.aborted) {
-          throw new A2AClientError("timeout", `A2A request timed out after ${this.timeoutMs}ms`);
+          throw new A2AClientError("timeout", `A2A request timed out after ${budget.timeoutMs}ms`);
         }
         throw new A2AClientError(
           "network",
@@ -172,9 +177,10 @@ export class A2AClient {
         // 响应体读取在超时覆盖内（timer 活到 body 读完；对端停滞 body 也会
         // 被 abort 中断），且有大小上限（防恶意对端回传 GB 级 body 打爆内存）。
         raw = await readJsonBody(response, { signal: controller.signal });
+        controller.signal.throwIfAborted();
       } catch (err) {
         if (controller.signal.aborted) {
-          throw new A2AClientError("timeout", `A2A request timed out after ${this.timeoutMs}ms`);
+          throw new A2AClientError("timeout", `A2A request timed out after ${budget.timeoutMs}ms`);
         }
         if (err instanceof SafeHttpError && err.code === "response_too_large") {
           throw invalidResponse(err.message);
@@ -190,7 +196,8 @@ export class A2AClient {
       // 审查 P2-02：所有路径（fetch 拒绝 / redirect / 非 2xx / body 读失败）
       // 都必须清理超时 timer——此前只有 body 读的 finally 清理，fetch 抛错与
       // redirect/非 2xx 的提前 throw 会泄漏存活 timer 与 AbortController。
-      clearTimeout(timer);
+      finishRequestResponse(response, controller);
+      budget.dispose();
     }
 
     if (!response.ok) {

@@ -289,55 +289,97 @@ export interface UpOptions {
  */
 function acquireUpLock(runDir: string): () => void {
   const lockPath = path.join(runDir, "up.lock");
-  const stealIfStale = (): void => {
-    if (!existsSync(lockPath)) return;
-    const pidText = readFileSync(lockPath, "utf-8").trim();
-    const pid = Number(pidText);
-    if (Number.isInteger(pid) && pid > 0) {
+  const guardPath = `${lockPath}.guard`;
+  // All new-protocol lock mutations share this short O_EXCL guard. Never
+  // guess a leftover guard dead: partial metadata/crashes remain fail-closed.
+  // The business runUp operation does not hold this guard.
+  const guard = (): (() => void) => {
+    const nonce = randomBytes(16).toString("hex");
+    let fd: number;
+    try {
+      fd = openSync(guardPath, "wx", 0o600);
+    } catch (err) {
+      if ((err as { code?: string }).code === "EEXIST") {
+        throw new SupervisorError(`up lock mutation busy or unresolved (${guardPath})`);
+      }
+      throw err;
+    }
+    try {
+      writeSync(fd, nonce);
+    } catch (err) {
+      try { closeSync(fd); } catch { /* preserve the write error */ }
+      throw err; // Keep unknown/partial guard metadata; do not reopen the gate.
+    }
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      try { closeSync(fd); } catch { /* already closed */ }
       try {
-        process.kill(pid, 0);
-        // 存活 → 不接管
-        throw new SupervisorError(
-          `另一个 \`kiwi up\` 正在运行（pid ${pid}，锁 ${lockPath}）——并发 up 被实例锁拒绝`,
-        );
-      } catch (err) {
-        if (err instanceof SupervisorError) throw err;
-        // ESRCH：持有进程已死，残留锁可接管
+        if (readFileSync(guardPath, "utf8") === nonce) unlinkSync(guardPath);
+      } catch { /* cleanup cannot replace the original result/error */ }
+    };
+  };
+  const readOwner = (): { pid: number; nonce?: string } | undefined => {
+    let raw: string;
+    try { raw = readFileSync(lockPath, "utf8").trim(); }
+    catch (err) {
+      if ((err as { code?: string }).code === "ENOENT") return undefined;
+      throw err;
+    }
+    let owner: { pid?: unknown; nonce?: unknown };
+    if (/^[1-9]\d*$/.test(raw)) owner = { pid: Number(raw) };
+    else {
+      try { owner = JSON.parse(raw) as { pid?: unknown; nonce?: unknown }; }
+      catch { throw new SupervisorError(`unknown up lock metadata retained (${lockPath})`); }
+      if (owner === null || typeof owner !== "object" ||
+          typeof owner.nonce !== "string" || !/^[a-f0-9]{32}$/.test(owner.nonce)) {
+        throw new SupervisorError(`unknown up lock owner retained (${lockPath})`);
       }
     }
-    unlinkSync(lockPath);
-  };
-  stealIfStale();
-  let fd: number;
-  try {
-    fd = openSync(lockPath, "wx");
-  } catch (err) {
-    const code = (err as { code?: string } | null)?.code;
-    if (code === "EEXIST") {
-      throw new SupervisorError(`另一个 \`kiwi up\` 正在运行（${lockPath}）`);
+    if (typeof owner.pid !== "number" || !Number.isSafeInteger(owner.pid) ||
+        owner.pid <= 0 || owner.pid > 0x7fffffff) {
+      throw new SupervisorError(`invalid up lock PID retained (${lockPath})`);
     }
-    throw err;
-  }
+    return { pid: owner.pid, ...(typeof owner.nonce === "string" ? { nonce: owner.nonce } : {}) };
+  };
+  const nonce = randomBytes(16).toString("hex");
+  let fd: number;
+  const leaveGuard = guard();
   try {
-    writeSync(fd, String(process.pid));
-  } catch (err) {
-    closeSync(fd);
-    throw err;
+    const owner = readOwner();
+    if (owner !== undefined) {
+      let dead = false;
+      try { process.kill(owner.pid, 0); }
+      catch (err) { dead = (err as { code?: string }).code === "ESRCH"; }
+      if (!dead) {
+        throw new SupervisorError(`另一个 kiwi up 正在运行或 PID 不可核证；锁保留 (pid ${owner.pid}, ${lockPath})`);
+      }
+      // ESRCH evidence and the replacement are in the same mutation guard.
+      unlinkSync(lockPath);
+    }
+    fd = openSync(lockPath, "wx", 0o600);
+    try { writeSync(fd, JSON.stringify({ pid: process.pid, nonce })); }
+    catch (err) {
+      try { closeSync(fd); } catch { /* preserve the write error */ }
+      throw err; // Partial main lock stays unknown.
+    }
+  } finally {
+    leaveGuard();
   }
   let released = false;
   const release = (): void => {
     if (released) return;
     released = true;
+    process.removeListener("exit", release);
+    try { closeSync(fd); } catch { /* already closed */ }
     try {
-      closeSync(fd);
-    } catch {
-      // ignore
-    }
-    try {
-      unlinkSync(lockPath);
-    } catch {
-      // ignore
-    }
+      const leave = guard();
+      try {
+        const owner = readOwner();
+        if (owner?.pid === process.pid && owner.nonce === nonce) unlinkSync(lockPath);
+      } finally { leave(); }
+    } catch { /* Keep the barrier; never mask business success or its original error. */ }
   };
   process.once("exit", release);
   return release;

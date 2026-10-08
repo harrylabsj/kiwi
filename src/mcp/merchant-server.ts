@@ -618,7 +618,13 @@ export function createMerchantHttpHandler(
             const nowMs = Date.now();
             pruneRateLimits(nowMs);
             const ip = clientKey(req);
-            const failure = loginFailures.get(ip);
+            let failure = loginFailures.get(ip);
+            // A completed block is a finished failure window. A fresh bad
+            // password starts at one; unblocked count-only windows stay intact.
+            if (failure !== undefined && failure.blockedUntil > 0 && nowMs >= failure.blockedUntil) {
+              loginFailures.delete(ip);
+              failure = undefined;
+            }
             if (failure !== undefined && nowMs < failure.blockedUntil) {
               res.writeHead(429, {
                 "content-type": "text/html; charset=utf-8",

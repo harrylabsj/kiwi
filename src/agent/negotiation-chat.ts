@@ -101,8 +101,26 @@ async function findPending(
 export function redactPrivateFloor(text: string, profile: AgentProfile): string {
   const floor = profile.merchant_policy?.min_unit_price_private;
   if (floor === undefined || text === "") return text;
-  const needle = String(floor);
-  return text.replace(new RegExp(`(?<![0-9.,])${needle}(?![0-9.,])`, "g"), "[私密阈值]");
+  if (!Number.isFinite(floor)) return text;
+  const needle = canonicalDecimal(String(floor));
+  return text.replace(
+    /(?<![0-9.,])[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?![0-9]|[.,][0-9])/g,
+    (token) => canonicalDecimal(token) === needle ? "[私密阈值]" : token,
+  );
+}
+
+/** Compare exact decimal tokens without rounding distinct values through Number. */
+function canonicalDecimal(value: string): string | undefined {
+  const match = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(value);
+  if (match === null) return undefined;
+  let digits = `${match[2] ?? ""}${match[3] ?? ""}`.replace(/^0+/, "");
+  if (digits === "") return "0";
+  let exponent = Number(match[4] ?? 0) - (match[3]?.length ?? 0);
+  if (!Number.isSafeInteger(exponent)) return undefined;
+  const significant = digits.replace(/0+$/, "");
+  exponent += digits.length - significant.length;
+  digits = significant;
+  return `${match[1] === "-" ? "-" : ""}${digits}e${exponent}`;
 }
 
 function buildDecision(target: PendingTarget, args: Record<string, unknown>): NegotiationDecision {

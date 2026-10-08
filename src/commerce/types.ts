@@ -25,6 +25,7 @@
  *   LocalMarketplace semantics for tests and offline development
  */
 
+import type { ReadRequestOptions } from "../net/request-budget.js";
 import type {
   CommerceCapabilities,
   NegotiationDecision,
@@ -101,7 +102,7 @@ export interface CommerceClient {
   getNegotiationSnapshot(input: {
     conversation_id: string;
     message_id: number;
-  }): Promise<NegotiationSnapshot>;
+  }, options?: ReadRequestOptions): Promise<NegotiationSnapshot>;
 
   /**
    * The single write intent. The server-side policy gate is authoritative:

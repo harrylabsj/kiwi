@@ -98,6 +98,16 @@ export function verifyEnvelopeDigest(envelope: NegotiationEnvelope): boolean {
   return computeEnvelopeDigest(rest) === digest;
 }
 
+/** Validate the received object and its digest without dropping legal extensions. */
+export function validateWireEnvelope(value: unknown): NegotiationEnvelope {
+  validateEnvelope(value);
+  const wire = value as NegotiationEnvelope;
+  if (!verifyEnvelopeDigest(wire)) {
+    throw schemaError("/digest", "envelope digest does not match the received content");
+  }
+  return wire;
+}
+
 /**
  * Envelope schema 校验。未知 protocol_version / actor 非 buyer|merchant /
  * action-payload 类型不匹配 / digest 格式错误均 fail-closed。

@@ -37,6 +37,7 @@
  * 任何失败抛 ChannelError，绝不自动降级到其他通道（不变量 21）。
  */
 
+import type { ReadRequestOptions } from "../../net/request-budget.js";
 import { CommerceError, idempotencyKey } from "../../commerce/types.js";
 import type { ClaimResult, CommerceClient, ProcessResult } from "../../commerce/types.js";
 import type { PolicyResult } from "../../negotiation/types.js";
@@ -332,7 +333,7 @@ class ShoppingCliHostedHandle implements ChannelHandle {
     return { channel: "shopping-cli-hosted", ref, policy };
   }
 
-  async getState(ref: RemoteRef): Promise<RemoteState> {
+  async getState(ref: RemoteRef, options?: ReadRequestOptions): Promise<RemoteState> {
     this.assertOpen();
     const { conversation_id, message_id } = this.refOf(ref);
     let snapshot: NegotiationSnapshot;
@@ -340,7 +341,7 @@ class ShoppingCliHostedHandle implements ChannelHandle {
       snapshot = await this.deps.client.getNegotiationSnapshot({
         conversation_id,
         message_id,
-      });
+      }, options);
     } catch (err) {
       throw this.toChannelError(err);
     }

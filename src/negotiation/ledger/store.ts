@@ -362,6 +362,64 @@ export class LedgerStore {
     return mark;
   }
 
+  /** @internal Server-owned identity binding, serialized with the Ledger writer.
+   * Remote envelopes cannot supply this record: their content lives only in
+   * wire_payload on message_received, never in this local outcome marker. */
+  ensureCounterpartyBinding(input: {
+    negotiationId: string;
+    localIdentity: string;
+    senderIdentity: string;
+    actor: "buyer" | "merchant";
+  }): "bound" | "mismatch" | "unresolved" {
+    if (input.actor !== "buyer") return "mismatch";
+    const peer = requireNonEmptyText(input.senderIdentity, "sender_identity");
+    const local = requireNonEmptyText(input.localIdentity, "local_identity");
+    return this.withChainLock(input.negotiationId, () => {
+      const events = this.load(input.negotiationId);
+      if (!this.verifyEvents(events).valid) {
+        throw new LedgerError("ledger_append_only_violation", "identity binding requires a valid Ledger chain");
+      }
+      const bindings = events.filter((e) => e.event_kind === "reconciliation" &&
+        e.identity.sender_identity === local && e.identity.actor === "merchant" &&
+        e.wire_payload === undefined && e.message_id === undefined && e.outcome.kind === "ok")
+        .map((e) => (e.outcome as { result?: Record<string, unknown> }).result?.peer_binding)
+        .filter((b) => b !== undefined);
+      if (bindings.length > 0) {
+        return bindings.every((b) => b !== null && typeof b === "object" &&
+          (b as Record<string, unknown>).type === "merchant-peer-binding" &&
+          (b as Record<string, unknown>).version === 1 &&
+          (b as Record<string, unknown>).sender_identity === peer &&
+          (b as Record<string, unknown>).actor === "buyer") ? "bound" : "mismatch";
+      }
+      // Legacy ownership is recoverable only from the server pipeline's local
+      // authenticated identity snapshot plus its corresponding task receipt.
+      // Never infer it from wire.actor, options.counterparty or remote payload.
+      const receipts = events.filter((e) => {
+        const result = e.outcome.kind === "ok" ? e.outcome.result as Record<string, unknown> : undefined;
+        return e.event_kind === "message_received" && e.identity.actor === "buyer" &&
+          typeof e.wire_digest === "string" && typeof e.remote_task_id === "string" && result?.task_id === e.remote_task_id;
+      });
+      if (receipts.length > 0) {
+        if (!receipts.every((e) => e.identity.sender_identity === peer)) return "mismatch";
+      } else if (events.length > 0) {
+        // An old crash may have produced an offer without an inbound receipt.
+        // Its owner is not proven; do not let the next caller adopt it.
+        return "unresolved";
+      }
+      this.appendUnlocked({
+        event_kind: "reconciliation",
+        negotiation_id: input.negotiationId,
+        identity: { sender_identity: local, counterparty_identity: peer, actor: "merchant" },
+        capability: { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" },
+        outcome: { kind: "ok", result: { peer_binding: {
+          type: "merchant-peer-binding", version: 1, sender_identity: peer, actor: "buyer",
+        } } },
+        occurred_at: this.now(),
+      });
+      return "bound";
+    });
+  }
+
   /**
    * Append 一条事件。链接由当前链尾计算；重复内容（同 event_digest）拒绝。
    * 返回完整事件（含 event_id / digests / recorded_at）。

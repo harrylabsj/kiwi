@@ -714,14 +714,18 @@ describe("A319 追加：P1-2 实际外发 counter 提案限额门", () => {
     expect(wireCalls).toBe(0);
     expect(r1.summary).toContain("counter 被委托约束阻断");
 
+    const protocolDir=mkdtempSync(path.join(tmpdir(),"a373-gate-reg-"));
+    cleanups.push(()=>rmSync(protocolDir,{recursive:true,force:true}));
     const passing = new A2ANegotiator({
+      protocolStateDir:protocolDir,localBuyerAgentId:"a319-test",
       timeoutMs: 50,
       fetchImpl,
       allowPrivateRanges: true,
       skipDnsCheck: true,
       counterProposalGate: () => undefined,
     });
-    await passing.negotiate("t1", intent, step, [candidate]);
+    // The controlled response is not a valid A2A receipt: wire happened, result is unknown.
+    await expect(passing.negotiate("t1", intent, step, [candidate],{taskId:"t1",createdAt:NOW(),intentBindingDigest:contentDigest(intent)})).rejects.toMatchObject({code:"internal_error"});
     expect(wireCalls).toBe(1);
   });
 });

@@ -427,11 +427,15 @@ export class FanoutOrchestrator {
     const deadline = this.clock() + timeoutMs;
     const pollInterval = this.deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     const extract = this.deps.extractEnvelope ?? extractKnpEnvelopeFromState;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
     for (;;) {
       if (this.clock() >= deadline) {
         return { kind: "timeout" };
       }
-      const state = await handle.getState(ref);
+      const state = await handle.getState(ref, { signal: controller.signal, timeoutMs: Math.max(1, deadline - this.clock()) });
+      if (controller.signal.aborted || this.clock() >= deadline) return { kind: "timeout" };
       if (state.state === "failed") {
         return { kind: "task_failed", state: state.state };
       }
@@ -453,8 +457,12 @@ export class FanoutOrchestrator {
       if (state.stable) {
         return { kind: "terminal_no_offer", reason: "stable_without_envelope" };
       }
-      await sleep(pollInterval);
+      await sleep(Math.min(pollInterval, Math.max(0, deadline - this.clock())));
     }
+    } catch (error) {
+      if (controller.signal.aborted || this.clock() >= deadline) return { kind: "timeout" };
+      throw error;
+    } finally { clearTimeout(timer); }
   }
 
   /** 把 wait 结果解析为 leg outcome，并落账该腿结果（fail-closed）。 */

@@ -111,42 +111,56 @@ export interface WriteCandidateInput {
   force_pending?: boolean;
 }
 
+/** Local pending registration: synchronous, including manual-mode advice semantics. */
+export function registerPendingWriteCandidate(
+  deps: WriteGateDeps,
+  input: WriteCandidateInput,
+  mode: AgentMode = deps.mode(),
+): Extract<WriteGateResult, { kind: "pending_approval" | "advice_only" }> {
+  return registerCreatedPending(deps, input, createWriteCandidate(deps, input), mode);
+}
+
+function registerCreatedPending(
+  deps: WriteGateDeps,
+  input: WriteCandidateInput,
+  candidate: WriteApprovalCandidate,
+  mode: AgentMode,
+): Extract<WriteGateResult, { kind: "pending_approval" | "advice_only" }> {
+  deps.registerPending?.(candidate.candidate_id, {
+    readPreconditions: input.readPreconditions,
+    execute: input.execute,
+  });
+  return { kind: mode === "manual" ? "advice_only" : "pending_approval", candidate };
+}
+
+function createWriteCandidate(
+  deps: WriteGateDeps,
+  input: WriteCandidateInput,
+): WriteApprovalCandidate {
+  return deps.approvals.create({
+    tool: input.tool,
+    arguments: input.arguments,
+    preconditions: input.preconditions,
+    risk: input.risk,
+    ...(input.task_id !== undefined ? { task_id: input.task_id } : {}),
+    expires_at: new Date(Date.parse(deps.now()) + (input.ttl_ms ?? APPROVAL_TTL_MS)).toISOString(),
+  });
+}
+
 /** Create + route one write candidate. Returns the gate outcome. */
 export async function routeWriteCandidate(
   deps: WriteGateDeps,
   input: WriteCandidateInput,
 ): Promise<WriteGateResult> {
   const mode = deps.mode();
-  const candidate = deps.approvals.create({
-    tool: input.tool,
-    arguments: input.arguments,
-    preconditions: input.preconditions,
-    risk: input.risk,
-    ...(input.task_id !== undefined ? { task_id: input.task_id } : {}),
-    expires_at: new Date(
-      Date.parse(deps.now()) + (input.ttl_ms ?? APPROVAL_TTL_MS),
-    ).toISOString(),
-  });
-
-  const pendingHooks = { readPreconditions: input.readPreconditions, execute: input.execute };
-  if (mode === "manual") {
-    deps.registerPending?.(candidate.candidate_id, pendingHooks);
-    return { kind: "advice_only", candidate };
+  if (mode === "manual" || mode === "supervised") {
+    return registerPendingWriteCandidate(deps, input, mode);
   }
-  if (mode === "supervised") {
-    deps.registerPending?.(candidate.candidate_id, pendingHooks);
-    return { kind: "pending_approval", candidate };
-  }
+  const candidate = createWriteCandidate(deps, input);
   // autopilot: escalate on risk, otherwise execute within HardPolicy.
   const escalate = input.autopilotEscalation?.(input.arguments);
-  if (escalate !== undefined) {
-    deps.registerPending?.(candidate.candidate_id, pendingHooks);
-    return { kind: "pending_approval", candidate };
-  }
-  // Draft semantics: always pending, never auto-execute.
-  if (input.force_pending === true) {
-    deps.registerPending?.(candidate.candidate_id, pendingHooks);
-    return { kind: "pending_approval", candidate };
+  if (escalate !== undefined || input.force_pending === true) {
+    return registerCreatedPending(deps, input, candidate, mode);
   }
   deps.approvals.markApproved(candidate.candidate_id);
   const outcome = await executeApprovedCandidate(

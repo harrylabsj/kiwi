@@ -348,6 +348,19 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
   // conditionalByNegotiation 隐式表达，规范转换表不是接收消息的权威门）。
   const phaseStateByNegotiation = new Map<string, NegotiationPhaseState>();
   // 产生商业承诺的动作：终态后一律拒绝；text-only（clarification）放行。
+  const activeObjectByNegotiation = new Map<string, { offerId: string; messageId: string; actor: string }>();
+  const boundPeers = new Map<string, string>();
+  const requestTails = new Map<string, Promise<void>>();
+  const serialize = async <T>(key: string, fn: () => Promise<T>): Promise<T> => {
+    const before = requestTails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const turn = new Promise<void>((resolve) => { release = resolve; });
+    const tail = before.then(() => turn);
+    requestTails.set(key, tail);
+    await before;
+    try { return await fn(); }
+    finally { release(); if (requestTails.get(key) === tail) requestTails.delete(key); }
+  };
   const COMMERCIAL_ACTIONS = new Set([
     "inquiry",
     "rfq",
@@ -447,7 +460,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
       state_transition: { from_phase: effectiveFrom, to_phase: toPhase },
       identity: {
         sender_identity: sender,
-        counterparty_identity: counterparty,
+        counterparty_identity: boundPeers.get(negotiationId) ?? counterparty,
         actor: "merchant",
       },
       capability: { capability: MERCHANT_CAPABILITY, protocol_version: "1.0" },
@@ -634,7 +647,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
       in_reply_to: reply.in_reply_to,
       identity: {
         sender_identity: sender,
-        counterparty_identity: counterparty,
+        counterparty_identity: boundPeers.get(reply.negotiation_id) ?? counterparty,
         actor: reply.actor,
       },
       capability: {
@@ -646,6 +659,12 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
       outcome: { kind: "ok" },
       occurred_at: reply.created_at,
     });
+    if (["offer", "counter_offer", "conditional_offer"].includes(reply.action)) {
+      activeObjectByNegotiation.set(reply.negotiation_id, {
+        offerId: String((reply.payload as { offer_id?: unknown }).offer_id),
+        messageId: reply.message_id, actor: reply.actor,
+      });
+    }
   };
 
   // 审查 BUG-03：从持久 Ledger 恢复状态（必须在 return 之前执行）——重启后
@@ -681,7 +700,12 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         envelope?.action === "conditional_offer"
       ) {
         const offerId = (envelope.payload as { offer_id?: string } | undefined)?.offer_id;
-        if (typeof offerId === "string" && offerId !== "") activeOfferId = offerId;
+        if (typeof offerId === "string" && offerId !== "") {
+          activeOfferId = offerId;
+          if (event.message_id !== undefined) activeObjectByNegotiation.set(negotiationId, {
+            offerId, messageId: event.message_id, actor: "merchant",
+          });
+        }
       }
       // review 2-3（A316 校准）：重启恢复同样登记普通 offer/counter_offer——
       // 归一为 {type:"conditional_offer", offer_id, base_terms}（与在途登记
@@ -744,9 +768,32 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
   return {
     name: "kiwi-agent-serve-merchant",
     async handle(ctx: InboundNegotiationContext): Promise<NegotiationHandlerResult> {
+      return serialize(ctx.envelope.negotiation_id, async () => {
       const envelope = ctx.envelope;
       const negotiationId = envelope.negotiation_id;
       const inReplyTo = envelope.message_id;
+
+      const binding = ledger.ensureCounterpartyBinding({
+        negotiationId, localIdentity: sender, senderIdentity: ctx.senderIdentity, actor: envelope.actor,
+      });
+      if (binding === "mismatch") return { kind: "declined", reasonCode: "authorization_failed" };
+      if (binding === "unresolved") return {
+        kind: "error", protocolCode: "reconciliation_required", message: "legacy negotiation owner is not proven",
+      };
+      boundPeers.set(negotiationId, ctx.senderIdentity);
+      if ((envelope.action === "withdraw" || envelope.action === "decline") &&
+          (envelope.payload as { scope?: string }).scope === "offer") {
+        const target = envelope.payload as { target_message_id: string; target_offer_id?: string };
+        const activeId = phaseStateByNegotiation.get(negotiationId)?.active_offer_id;
+        const object = activeObjectByNegotiation.get(negotiationId);
+        if (object === undefined || object.offerId !== activeId ||
+            target.target_message_id !== object.messageId ||
+            (target.target_offer_id !== undefined && target.target_offer_id !== activeId)) {
+          return { kind: "declined", reasonCode: "offer_unknown" };
+        }
+        const expectedAuthor = envelope.action === "withdraw" ? "buyer" : "merchant";
+        if (object.actor !== expectedAuthor) return { kind: "declined", reasonCode: "authorization_failed" };
+      }
 
       // 审查 P2-D：终态不得以同一 negotiation_id 重开（§17.4/§21.2）。
       if (closedNegotiations.has(negotiationId) && COMMERCIAL_ACTIONS.has(envelope.action)) {
@@ -762,6 +809,12 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         const advanced = await advancePhase(negotiationId, phaseEvent);
         if (!advanced) {
           return declineReply("state_conflict");
+        }
+        if (["offer", "counter_offer", "conditional_offer"].includes(envelope.action)) {
+          activeObjectByNegotiation.set(negotiationId, {
+            offerId: String((envelope.payload as { offer_id?: unknown }).offer_id),
+            messageId: envelope.message_id, actor: envelope.actor,
+          });
         }
       }
 
@@ -1319,6 +1372,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         default:
           return { kind: "declined", reasonCode: "unsupported_action" };
       }
+      });
     },
   };
 }

@@ -33,6 +33,7 @@
  * 权限更宽的通道（不变量 21）。
  */
 
+import type { ReadRequestOptions } from "../../net/request-budget.js";
 import { A2AClient, A2AClientError } from "../../a2a/client/index.js";
 import type { A2AMessage, A2AOutboundSigner, A2ATask } from "../../a2a/client/index.js";
 import { resolveOutboundSigner } from "../../a2a/signing-key.js";
@@ -365,7 +366,7 @@ class A2ADirectHandle implements ChannelHandle {
     return t as unknown as A2ATask;
   }
 
-  async getState(ref: RemoteRef): Promise<RemoteState> {
+  async getState(ref: RemoteRef, options?: ReadRequestOptions): Promise<RemoteState> {
     this.assertOpen();
     const taskId = ref.task_id;
     if (taskId === undefined) {
@@ -373,7 +374,7 @@ class A2ADirectHandle implements ChannelHandle {
     }
     let task: A2ATask;
     try {
-      task = await this.deps.client.getTask(taskId);
+      task = await this.deps.client.getTask(taskId, options);
     } catch (err) {
       throw this.toChannelError(err);
     }

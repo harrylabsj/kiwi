@@ -8,9 +8,18 @@
  *    offer（startTestA2aStack + capture 断言入站 action）；
  *  - A2ANegotiator 读 candidate provenance → counter_offer → 拿商家真实回复。
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { startTestA2aStack } from "./helpers.js";
+
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { contentDigest } from "../src/negotiation/jcs.js";
+const recoveryDirs:string[]=[];
+function protocolOptions(){const dir=mkdtempSync(path.join(tmpdir(),"a373-a2a-reg-"));recoveryDirs.push(dir);return {protocolStateDir:dir,localBuyerAgentId:"buyer-a2a-test"};}
+afterEach(()=>{for(const dir of recoveryDirs.splice(0))rmSync(dir,{recursive:true,force:true});});
+function protocolContext(){return {taskId:"task-a2a-001",createdAt:new Date().toISOString(),intentBindingDigest:contentDigest(INTENT)};}
 
 const INTENT = {
   intent_id: "intent-a2a-0001",
@@ -65,12 +74,13 @@ describe("A2AQuoteFetcher（catalog 发现 → A2A 直连 merchant RFQ）", () =
       const index = new KiwiCatalogMerchantIndex({ baseUrl: stack.catalogUrl });
       const merchants = await index.search("Test Product");
       const fetcher = new A2AQuoteFetcher({
+        ...protocolOptions(),
         allowPrivateRanges: true,
         skipDnsCheck: true,
         pollIntervalMs: 50,
         timeoutMs: 3000,
       });
-      const results = await fetcher.requestQuotes(INTENT, merchants);
+      const results = await fetcher.requestQuotes(INTENT, merchants, protocolContext());
       expect(results).toHaveLength(1);
       const result = results[0]!;
       expect(result.status).toBe("succeeded");
@@ -114,6 +124,7 @@ describe("A2AQuoteFetcher（catalog 发现 → A2A 直连 merchant RFQ）", () =
     try {
       const service = buildBuyerService({
         dbPath: ":memory:",
+        protocolStateDir:protocolOptions().protocolStateDir,
         principal: "hermes:probe",
         buyerAgentId: "buyer-agent:hermes",
         sessionId: "repro-no-card",
@@ -175,15 +186,17 @@ describe("A2ANegotiator（A2A 直连 merchant CounterOffer）", () => {
       const index = new KiwiCatalogMerchantIndex({ baseUrl: stack.catalogUrl });
       const merchants = await index.search("Test Product");
       const fetcher = new A2AQuoteFetcher({
+        ...protocolOptions(),
         allowPrivateRanges: true,
         skipDnsCheck: true,
         pollIntervalMs: 50,
         timeoutMs: 3000,
       });
-      const fetched = await fetcher.requestQuotes(INTENT, merchants);
+      const fetched = await fetcher.requestQuotes(INTENT, merchants, protocolContext());
       expect(fetched[0]?.status).toBe("succeeded");
 
       const negotiator = new A2ANegotiator({
+        ...protocolOptions(),
         allowPrivateRanges: true,
         skipDnsCheck: true,
         defaultDiscountRate: 0.1,
@@ -193,6 +206,7 @@ describe("A2ANegotiator（A2A 直连 merchant CounterOffer）", () => {
         INTENT,
         { round: 1, action: "counter_offer", summary: "还价 10%" },
         [fetched[0]!] as unknown as Array<Record<string, unknown>>,
+        protocolContext(),
       );
       // 商家对 counter 有真实回复（step.reply），且不是"无上下文"失败。
       expect(step.reply).toBeDefined();

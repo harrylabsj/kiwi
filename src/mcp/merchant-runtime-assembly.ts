@@ -493,24 +493,7 @@ export async function assembleMerchantRuntime(
               {
                 rfq: rfqStack.service,
                 // 发布候选登记接缝：经 MerchantCommandLog（release_quote 风险语义）。
-                prepareReleaseCandidate: async (args) => {
-                  const prepared = await service.commands.prepare({
-                    tool: "kiwi_merchant_prepare_quote_release",
-                    arguments: { release_id: args.releaseId },
-                  });
-                  return prepared.candidate.candidate_id;
-                },
-                prepareHandoffCandidate: async (args) => {
-                  const prepared = await service.commands.prepare({
-                    tool: "kiwi_merchant_prepare_quote_handoff",
-                    arguments: {
-                      handoff_id: args.handoffId,
-                      packet_json: args.packetJson,
-                      packet_digest: args.packetDigest,
-                    },
-                  });
-                  return prepared.candidate.candidate_id;
-                },
+                pendingCandidates: service.commands.localRfqPendingCandidates(),
                 // AuthContext 服务端工厂：单商家单主体实例的调用主体固定
                 // （与命令记录主体一致；不取模型参数，§11.1/§9.3）。
                 callContext: () => ({

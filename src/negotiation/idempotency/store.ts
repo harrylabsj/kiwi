@@ -46,6 +46,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   unlinkSync,
@@ -87,6 +88,11 @@ export class IdempotencyStore {
     mkdirSync(this.indexDir, { recursive: true, mode: 0o700 });
     chmodSync(this.indexDir, 0o700);
     return this.indexDir;
+  }
+
+  /** @internal Canonical physical store scope for in-process coordination. */
+  coordinationScope(): string {
+    return realpathSync(this.ensureIndexDir());
   }
 
   /** 记录文件名：`idem-<sha256(key)>.json`。key 内容在文件内自描述。 */

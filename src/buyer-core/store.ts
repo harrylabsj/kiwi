@@ -30,6 +30,7 @@ import { mkdirSync, chmodSync, existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { contentDigest } from "../negotiation/jcs.js";
 import { McpError } from "./errors.js";
 
 export interface TaskApprovalStoreOptions {
@@ -153,20 +154,13 @@ export class TaskApprovalStore {
 
   /** 幂等创建任务：相同 idempotency_key 返回已有任务（不抛错、不重复写入）。 */
   createTask(task: StoredTask): { task: StoredTask; created: boolean } {
-    const existing = this.db
-      .prepare("SELECT task_id FROM mcp_tasks WHERE idempotency_key = ?")
-      .get(task.idempotency_key) as { task_id: string } | undefined;
-    if (existing !== undefined) {
-      const row = this.getTask(existing.task_id);
-      if (row !== undefined) return { task: row, created: false };
-      return { task, created: false };
-    }
-    this.db
+    const result = this.db
       .prepare(
         `INSERT INTO mcp_tasks
            (task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id,
             created_at, updated_at, expires_at, resumable, payload)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(idempotency_key) DO NOTHING`,
       )
       .run(
         task.task_id,
@@ -181,6 +175,13 @@ export class TaskApprovalStore {
         task.resumable ? 1 : 0,
         task.payload,
       );
+    if (result.changes === 0) {
+      const existing = this.db.prepare("SELECT task_id FROM mcp_tasks WHERE idempotency_key = ?")
+        .get(task.idempotency_key) as { task_id: string } | undefined;
+      const canonical = existing === undefined ? undefined : this.getTask(existing.task_id);
+      if (canonical === undefined) throw new McpError("invalid_params", "idempotent task disappeared");
+      return { task: canonical, created: false };
+    }
     return { task, created: true };
   }
 
@@ -220,16 +221,23 @@ export class TaskApprovalStore {
     };
   }
 
-  /** 按 task_id 更新任务（乐观并发：payload 整体覆盖）。 */
-  updateTask(taskId: string, patch: Partial<StoredTask>): StoredTask {
+  /** Whole-payload writes must carry the snapshot from which they were derived. */
+  updateTask(taskId: string, patch: Partial<StoredTask>, expectedSnapshot?: StoredTask): StoredTask {
+    if (Object.hasOwn(patch, "payload") && expectedSnapshot === undefined) {
+      throw new McpError("invalid_params", "payload update requires its original task snapshot");
+    }
+    if (expectedSnapshot !== undefined && expectedSnapshot.task_id !== taskId) {
+      throw new McpError("invalid_params", "task snapshot belongs to another task");
+    }
     const current = this.getTask(taskId);
     if (current === undefined) {
       throw new McpError("task_not_found", `task ${taskId} not found`);
     }
+    const expected = expectedSnapshot ?? current;
     const next = { ...current, ...patch, task_id: taskId, updated_at: this.now() };
-    this.db
+    const result = this.db
       .prepare(
-        "UPDATE mcp_tasks SET status = ?, updated_at = ?, expires_at = ?, resumable = ?, payload = ? WHERE task_id = ?",
+        "UPDATE mcp_tasks SET status = ?, updated_at = ?, expires_at = ?, resumable = ?, payload = ? WHERE task_id = ? AND status = ? AND updated_at = ? AND expires_at IS ? AND resumable = ? AND payload = ?",
       )
       .run(
         next.status,
@@ -238,7 +246,15 @@ export class TaskApprovalStore {
         next.resumable ? 1 : 0,
         next.payload,
         taskId,
+        expected.status,
+        expected.updated_at,
+        expected.expires_at ?? null,
+        expected.resumable ? 1 : 0,
+        expected.payload,
       );
+    if (result.changes !== 1) {
+      throw new McpError("invalid_params", "task changed since the supplied snapshot; do not replay external effects");
+    }
     return next;
   }
 
@@ -278,6 +294,25 @@ export class TaskApprovalStore {
         candidate.expires_at ?? null,
         candidate.retryable ? 1 : 0,
       );
+  }
+
+  hasAgreementForTask(taskId:string):boolean {
+    return this.db.prepare("SELECT 1 FROM mcp_agreements WHERE task_id=? LIMIT 1").get(taskId)!==undefined;
+  }
+
+  /** Only a bound protocol recovery result may replace an unfinished original merchant slot. */
+  replaceRecoveredCandidate(taskId: string, candidate: {merchant_id:string;status:string;provenance?:Record<string,unknown>;terms?:unknown}): void {
+    const slots=this.listCandidates(taskId).filter(c=>c.merchant_id===candidate.merchant_id);
+    if(slots.length>1)throw new McpError("idempotency_conflict","ambiguous original merchant candidate slots");
+    const current=slots[0];
+    if(current===undefined){
+      this.addCandidate(taskId,{candidate_id:`cand-${contentDigest([taskId,candidate.merchant_id])}`,merchant_id:candidate.merchant_id,status:candidate.status,provenance:candidate.provenance,terms:candidate.terms,retryable:false});return;
+    }
+    if(current.status==="succeeded")return;
+    const provenance=candidate.terms===undefined?candidate.provenance:{...candidate.provenance,_quote_terms:candidate.terms};
+    const result=this.db.prepare("UPDATE mcp_candidates SET status=?,provenance_json=?,failure_json=NULL,retryable=0 WHERE candidate_id=? AND task_id=? AND merchant_id=? AND status=?")
+      .run(candidate.status,JSON.stringify(provenance??{}),String(current.candidate_id),taskId,candidate.merchant_id,String(current.status));
+    if(result.changes!==1)throw new McpError("idempotency_conflict","candidate changed during protocol recovery");
   }
 
   listCandidates(taskId: string): Array<Record<string, unknown>> {

@@ -251,10 +251,11 @@ export class NegotiationRecovery {
     hwm: LedgerHighWaterMark,
     phase?: NegotiationPhase,
     remoteState?: A2ATaskState,
+    profile: CounterpartyProfile | null = null,
   ): Promise<RecoveryResult> {
     try {
       this.deps.ledger.append(
-        this.reconciliationContent(negotiationId, null, {
+        this.reconciliationContent(negotiationId, profile, {
           outcome: { kind: "error", code: "reconciliation_required", message: reason },
           occurred_at: this.nowIso(),
         }),
@@ -347,6 +348,11 @@ export class NegotiationRecovery {
       return this.resumed(negotiationId, hwm, phase, undefined, [], 0, [], map?.task_ids ?? []);
     }
 
+    // Per-recovery closure: never put a concurrent negotiation's profile in
+    // shared state, and do not invent an identity before resolution succeeds.
+    const requiredWithProfile = (...args: Parameters<typeof this.required>) =>
+      this.required(args[0], args[1], args[2], args[3], args[4], profile);
+
     const contextId = map?.remote_context_id;
     const taskIds = map?.task_ids ?? [];
     const activeTaskId = taskIds.at(-1);
@@ -355,7 +361,7 @@ export class NegotiationRecovery {
     // 先按确定性选择判定，不打开非 direct 通道（避免 hosted claim 副作用）。
     const selected = selectChannelCandidate(profile);
     if (selected === null || selected.kind !== "a2a-direct") {
-      return this.required(
+      return requiredWithProfile(
         negotiationId,
         `recovery requires an a2a-direct channel (selected ${selected?.kind ?? "none"})`,
         hwm,
@@ -372,11 +378,11 @@ export class NegotiationRecovery {
         remote: { context_id: contextId, task_id: activeTaskId },
       });
     } catch (err) {
-      return this.required(negotiationId, `channel open failed: ${errMsg(err)}`, hwm, phase);
+      return requiredWithProfile(negotiationId, `channel open failed: ${errMsg(err)}`, hwm, phase);
     }
     // 防御性兜底：注入的 openChannel 若返回非 direct handle 仍 fail-closed。
     if (handle.kind !== "a2a-direct") {
-      return this.required(
+      return requiredWithProfile(
         negotiationId,
         `recovery requires an a2a-direct channel (opened ${handle.kind})`,
         hwm,
@@ -397,17 +403,17 @@ export class NegotiationRecovery {
         });
       } catch (err) {
         this.deps.log?.(`recovery getState(${activeTaskId}) failed`, err);
-        return this.required(negotiationId, `remote task unreachable: ${errMsg(err)}`, hwm, phase);
+        return requiredWithProfile(negotiationId, `remote task unreachable: ${errMsg(err)}`, hwm, phase);
       }
       const task = state.task;
       if (task !== undefined && task.status.state === "unknown") {
-        return this.required(negotiationId, "remote task state is unknown (fail-closed)", hwm, phase);
+        return requiredWithProfile(negotiationId, "remote task state is unknown (fail-closed)", hwm, phase);
       }
       if (task !== undefined) {
         try {
           validatedEnvelopes = extractValidatedEnvelopes(task);
         } catch (err) {
-          return this.required(
+          return requiredWithProfile(
             negotiationId,
             `remote task content failed validation: ${errMsg(err)}`,
             hwm,
@@ -456,7 +462,7 @@ export class NegotiationRecovery {
         );
         appended += 1;
       } catch (err) {
-        return this.required(
+        return requiredWithProfile(
           negotiationId,
           `failed to append remote-ahead reconciliation: ${errMsg(err)}`,
           hwm,
@@ -468,7 +474,7 @@ export class NegotiationRecovery {
 
     // 6b. local pending：同 message_id + 同 digest → 安全幂等重放；否则转人工。
     if (pending.length > 0 && contextId === undefined && activeTaskId === undefined) {
-      return this.required(
+      return requiredWithProfile(
         negotiationId,
         "local pending messages but no remote context/task anchor to continue",
         hwm,
@@ -485,7 +491,7 @@ export class NegotiationRecovery {
       }
       const remoteState = view.task?.status.state;
       if (remoteState !== undefined && isTerminalTaskStateValue(remoteState)) {
-        return this.required(
+        return requiredWithProfile(
           negotiationId,
           `local message ${entry.message_id} pending but remote task is terminal (${remoteState})`,
           hwm,
@@ -500,7 +506,7 @@ export class NegotiationRecovery {
         (entry.wire_payload as Record<string, unknown>)["message_id"] === entry.message_id &&
         computeEnvelopeDigest(entry.wire_payload) === entry.wire_digest;
       if (!digestOk) {
-        return this.required(
+        return requiredWithProfile(
           negotiationId,
           `local message ${entry.message_id} cannot be verified for safe replay (missing/conflicting digest)`,
           hwm,
@@ -558,7 +564,7 @@ export class NegotiationRecovery {
           }
         }
       } catch (err) {
-        return this.required(
+        return requiredWithProfile(
           negotiationId,
           `safe replay of ${entry.message_id} failed: ${errMsg(err)}`,
           hwm,
@@ -570,7 +576,7 @@ export class NegotiationRecovery {
     // 本地终态 vs 远端活跃：矛盾，不可调和。
     const remoteState = view.task?.status.state;
     if (isTerminalPhase(phase) && remoteState !== undefined && !isTerminalTaskStateValue(remoteState)) {
-      return this.required(
+      return requiredWithProfile(
         negotiationId,
         `local phase ${phase} is terminal but remote task is still ${remoteState}`,
         hwm,
@@ -590,7 +596,7 @@ export class NegotiationRecovery {
       try {
         await this.deps.expireStale(negotiationId, stale);
       } catch (err) {
-        return this.required(
+        return requiredWithProfile(
           negotiationId,
           `expireStale failed: ${errMsg(err)}`,
           hwm,

@@ -100,6 +100,8 @@ export const IDEMPOTENCY_PRESERVE_OPERATIONS: ReadonlySet<string> = new Set([
 ]);
 
 /** 调用上下文（传输层验证后注入；未经验证的模型字段不能构造）。 */
+import type { RfqPendingCandidates } from "./pending-candidates.js";
+
 export interface RfqCallContext {
   /** 已认证主体（OAuth subject / 管理页会话主体）。 */
   principalId: string;
@@ -988,16 +990,28 @@ export class MerchantRfqService {
 
   // ---- 发布（三阶段）与导出 --------------------------------------------------
 
-  async prepareRelease(ctx: RfqCallContext, cmd: {
-    caseId: string;
-    quoteId: string;
-    revision: number;
-    recipientRef?: string;
-    idempotencyKey: string;
-    prepareCandidate: (args: { releaseId: string }) => Promise<string>;
-  }): Promise<{ release_id: string; candidate_id: string; artifact_id: string; artifact_sha256: string; public_projection_digest: string; warnings: string[]; replayed: boolean }> {
+  async prepareRelease(
+    ctx: RfqCallContext,
+    cmd: {
+      caseId: string;
+      quoteId: string;
+      revision: number;
+      recipientRef?: string;
+      idempotencyKey: string;
+      prepareCandidate?: (args: { releaseId: string }) => Promise<string>;
+      pendingCandidates?: RfqPendingCandidates;
+    },
+  ): Promise<{
+    release_id: string;
+    candidate_id: string;
+    artifact_id: string;
+    artifact_sha256: string;
+    public_projection_digest: string;
+    warnings: string[];
+    replayed: boolean;
+  }> {
     this.assertActor(ctx);
-    // async：prepareRelease 含命令日志登记（异步）。
+    this.deps.coordinator.assertLocalPending(cmd);
 
     const { result, replayed } = await this.repo().withIdempotencyAsync({
       principalId: ctx.principalId,
@@ -1011,7 +1025,7 @@ export class MerchantRfqService {
           revision: cmd.revision,
           ...(cmd.recipientRef !== undefined ? { recipientRef: cmd.recipientRef } : {}),
           actor: ctx.actor,
-          prepareCandidate: cmd.prepareCandidate,
+          pendingCandidates: cmd.pendingCandidates,
         });
         return {
           release_id: prepared.release_id,
@@ -1136,15 +1150,29 @@ export class MerchantRfqService {
     return { ...result, replayed };
   }
 
-  async prepareHandoff(ctx: RfqCallContext, cmd: {
-    quoteId: string;
-    revision: number;
-    targetRef: string;
-    intentEvidenceRef: string;
-    idempotencyKey: string;
-    prepareCandidate: (args: { handoffId: string; packetJson: string; packetDigest: string }) => Promise<string>;
-  }): Promise<{ handoff_id: string; candidate_id: string; packet_digest: string; replayed: boolean }> {
+  async prepareHandoff(
+    ctx: RfqCallContext,
+    cmd: {
+      quoteId: string;
+      revision: number;
+      targetRef: string;
+      intentEvidenceRef: string;
+      idempotencyKey: string;
+      prepareCandidate?: (args: {
+        handoffId: string;
+        packetJson: string;
+        packetDigest: string;
+      }) => Promise<string>;
+      pendingCandidates?: RfqPendingCandidates;
+    },
+  ): Promise<{
+    handoff_id: string;
+    candidate_id: string;
+    packet_digest: string;
+    replayed: boolean;
+  }> {
     this.assertActor(ctx);
+    this.deps.coordinator.assertLocalPending(cmd);
     const { result, replayed } = await this.repo().withIdempotencyAsync({
       principalId: ctx.principalId,
       operation: "rfq.prepare_handoff",
@@ -1157,7 +1185,7 @@ export class MerchantRfqService {
           targetRef: cmd.targetRef,
           intentEvidenceRef: cmd.intentEvidenceRef,
           actor: ctx.actor,
-          prepareCandidate: cmd.prepareCandidate,
+          pendingCandidates: cmd.pendingCandidates,
         });
         return {
           handoff_id: prepared.handoff_id,

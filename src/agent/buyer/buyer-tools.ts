@@ -1700,7 +1700,27 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
     ...(catalogFirst ? [searchListings, shortlistListing] : []),
     ...(deps.handoff !== undefined ? [handoffAgreement] : []),
     ...(catalogFirst ? [] : negotiationTools),
-  ];
+  ].map((tool): Tool => {
+    if (!["update_buyer_task_constraints", "add_tracking_rule", "shortlist_listing"].includes(tool.name)) return tool;
+    const execute = tool.execute.bind(tool);
+    return { ...tool, execute: async (callId, params, onUpdate) => {
+      const guard = manualAdvice(deps.mode);
+      if (!guard.ok) return textResult(guard.reason);
+      try {
+        const taskId = String((params as Record<string, unknown>).task_id ?? "");
+        const call = store.beginToolCall(taskId, callId, tool.name, params);
+        if (call.kind === "replay") return call.result as AgentToolResult<unknown>;
+        const output = await execute(callId, params, onUpdate);
+        // Error messages may embed caller/private values. Persist only a fixed
+        // diagnostic, and return exactly that same safe result on first/replay.
+        const failed = output.content.some((part) => part.type === "text" &&
+          (part.text.startsWith("任务操作被拒绝") || part.text.startsWith("任务操作失败")));
+        const result = failed ? textResult("任务操作被拒绝，请核对参数后使用新的工具调用重试。") : output;
+        store.finishToolCall(taskId, call.key, result);
+        return result;
+      } catch (err) { return textResult(errorText(err)); }
+    } };
+  });
 }
 
 // ── v0.7.0 KTH：handoff_agreement ───────────────────────────────────────────

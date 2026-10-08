@@ -190,8 +190,11 @@ export interface QuoteCandidateInput {
   failure?: { classification: string; retryable: boolean; detail?: string };
 }
 
+import type { ProtocolTaskContext } from "./protocol-recovery.js";
+
 export interface QuoteFetcher {
-  requestQuotes(intent: Record<string, unknown>, merchants: MerchantRecord[]): Promise<QuoteCandidateInput[]>;
+  requestQuotes(intent: Record<string, unknown>, merchants: MerchantRecord[], context?: ProtocolTaskContext): Promise<QuoteCandidateInput[]>;
+  recoverQuotes?: (context: ProtocolTaskContext) => Promise<QuoteCandidateInput[]>;
 }
 
 /**
@@ -226,6 +229,7 @@ export interface Negotiator {
     intent: Record<string, unknown>,
     current: NegotiationStep,
     candidates: Array<Record<string, unknown>>,
+    context?: ProtocolTaskContext,
   ): Promise<NegotiationStep>;
 }
 
@@ -519,7 +523,28 @@ export class KiwiBuyerService {
 
     const { task: persisted, created: isCreated } = this.store.createTask(task);
     if (!isCreated) {
-      // 幂等命中：相同 idempotency_key 的重复提交返回原任务，不产生重复写入（§6.2）。
+      if(this.quoteFetcher?.recoverQuotes!==undefined){
+        const original=this.decodeTask(persisted).intent;
+        if(original!==undefined && contentDigest(original)!==contentDigest(input.intent))throw new McpError("idempotency_conflict","same task key has different intent");
+        if(persisted.status!=="in_progress"){
+          const selected=[...new Set(this.store.listCandidates(persisted.task_id).map(c=>String(c.merchant_id)))].sort();
+          const requested=[...new Set(input.merchant_ids??[])].sort();
+          if(contentDigest(selected)!==contentDigest(requested))throw new McpError("idempotency_conflict","same task key has different selected merchants");
+        }
+      }
+      // Recovery can only read previously persisted protocol receipts/results, never send.
+      if(this.quoteFetcher?.recoverQuotes !== undefined && ["in_progress","partial_success"].includes(persisted.status) && !this.store.hasAgreementForTask(persisted.task_id)) {
+        const originalCandidates=this.store.listCandidates(persisted.task_id);
+        const results=await this.quoteFetcher.recoverQuotes(this.protocolContext(persisted,input.merchant_ids??[]));
+        if(results.length>0)return this.store.transaction(()=>{
+          if(this.store.hasAgreementForTask(persisted.task_id) || contentDigest(this.store.listCandidates(persisted.task_id))!==contentDigest(originalCandidates))throw new McpError("idempotency_conflict","task candidates or accepted agreement changed during recovery");
+          for(const result of results)this.store.replaceRecoveredCandidate(persisted.task_id,result);
+          const candidates=this.northboundCandidates(persisted.task_id);
+          const status=candidates.length>0 && candidates.every(c=>c.status==="succeeded")?"succeeded":"partial_success";
+          const updated=this.store.updateTask(persisted.task_id,{status,payload:JSON.stringify({...this.decodeTask(persisted),status,updated_at:this.now(),candidates})},persisted);
+          const decoded=this.decodeTask(updated);assertNorthboundContractValid("persistent-task",decoded,"recovered quotes result");return {task:decoded,created:false};
+        });
+      }
       return { task: this.decodeTask(persisted), created: false };
     }
     for (const candidate of preCandidates) {
@@ -529,6 +554,7 @@ export class KiwiBuyerService {
     // 真实 fan-out 交给注入的 QuoteFetcher（Phase 2 接线 A2A/UCP）。v0.1 无 fetcher
     // 时任务保持 in_progress + resumable，可恢复；有 fetcher 时按部分失败语义回写。
     let status = "in_progress";
+    let quotedResults:QuoteCandidateInput[]=[];
     if (this.quoteFetcher !== undefined) {
       const merchants = input.merchant_ids ?? [];
       const index = this.merchantIndex;
@@ -549,24 +575,16 @@ export class KiwiBuyerService {
           return { merchant_id: m, name: m, verified: false, capabilities: [] };
         }),
       );
-      const results = await this.quoteFetcher.requestQuotes(input.intent, merchantRecords);
+      const results = await this.quoteFetcher.requestQuotes(input.intent, merchantRecords, this.protocolContext(persisted,input.merchant_ids??[]));
       const successes = results.filter((r) => r.status === "succeeded").length;
       if (results.length > 0) {
-        for (const r of results) {
-          this.store.addCandidate(taskId, {
-            candidate_id: `cand-${uuidv7()}`,
-            merchant_id: r.merchant_id,
-            status: r.status,
-            provenance: r.provenance,
-            ...(r.terms !== undefined ? { terms: r.terms } : {}),
-            failure: r.failure,
-            retryable: r.status === "failed" ? (r.failure?.retryable ?? false) : false,
-          });
-        }
+        quotedResults=results;
         status = successes === results.length ? "succeeded" : "partial_success";
       }
     }
 
+    return this.store.transaction(()=>{
+    for(const r of quotedResults)this.store.addCandidate(taskId,{candidate_id:`cand-${uuidv7()}`,merchant_id:r.merchant_id,status:r.status,provenance:r.provenance,terms:r.terms,failure:r.failure,retryable:r.status==="failed"?(r.failure?.retryable??false):false});
     const updated = this.store.updateTask(taskId, {
       status,
       resumable: true,
@@ -576,11 +594,17 @@ export class KiwiBuyerService {
         updated_at: this.now(),
         candidates: this.northboundCandidates(taskId),
       }),
-    });
+    }, persisted);
     const decoded = this.decodeTask(updated);
     // 冻结契约强制：持久任务记录必须满足 persistent-task/1.0 schema（§6.2）。
     assertNorthboundContractValid("persistent-task", decoded, "requestQuotes result");
     return { task: decoded, created: true };
+    });
+  }
+
+  private protocolContext(task:StoredTask,requestedMerchants?:string[]):ProtocolTaskContext {
+    const intent=this.decodeTask(task).intent;
+    return {taskId:task.task_id,createdAt:task.created_at,intentBindingDigest:contentDigest({task_id:task.task_id,created_at:task.created_at,intent:intent??null,requested_merchants:requestedMerchants??null,policy:this.policy,principal:this.principal,buyer:this.buyerAgentId})};
   }
 
   // ---- Northbound：kiwi_get_task --------------------------------------------
@@ -657,6 +681,7 @@ export class KiwiBuyerService {
         (decodedForIntent.intent ?? {}) as Record<string, unknown>,
         step,
         gated,
+        this.protocolContext(task),
       );
     }
 
@@ -669,7 +694,7 @@ export class KiwiBuyerService {
     const updated = this.store.updateTask(input.task_id, {
       status: currentStatus === "pending" ? "in_progress" : currentStatus,
       payload: JSON.stringify({ ...decoded, steps, updated_at: this.now() }),
-    });
+    }, task);
     return { task: this.decodeTask(updated), step };
   }
 
@@ -893,7 +918,7 @@ export class KiwiBuyerService {
           status: "succeeded",
           updated_at: now,
         }),
-      });
+      }, freshTask);
       if (input.approval_id !== undefined) {
         const approval = this.store.getApproval(input.approval_id);
         if (approval !== undefined) {

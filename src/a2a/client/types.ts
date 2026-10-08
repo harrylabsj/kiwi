@@ -105,7 +105,7 @@ export interface A2AClientOptions {
   knpExtensionUri?: string;
   /** 每请求超时 ms。默认 15000。 */
   timeoutMs?: number;
-  /** 注入 fetch（测试用）。默认 globalThis.fetch。 */
+  /** 注入 fetch（测试/自定义传输）。默认使用验证 IP 后直接连接的 pinned transport。 */
   fetchImpl?: typeof fetch;
   /** 允许打到私网/保留网段（SSRF 逃生门，默认 false）。 */
   allowPrivateRanges?: boolean;

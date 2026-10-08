@@ -62,11 +62,11 @@ describe("weixinUsage", () => {
 });
 
 describe("cmdWeixin 接线（全离线）", () => {
-  it("无效 base_url（不可达端口）→ 登录失败 → EXIT.CONFIG(2)", async () => {
+  it("不可达端口 → 网络登录失败 → EXIT.TRANSIENT(10)", async () => {
     const dir = tempDir();
     const profileFile = path.join(dir, "profile.yaml");
     writeFileSync(profileFile, FAKE_PROFILE);
-    // 无凭证 + base_url 指向不可达端口 → getBotQrcode network 失败 → CONFIG
+    // 无凭证 + base_url 指向不可达端口 → getBotQrcode network 失败 → TRANSIENT
     process.env.KIWI_WEIXIN_BASE_URL = "http://127.0.0.1:1";
     const code = await cmdWeixin({
       profile: profileFile,
@@ -79,7 +79,7 @@ describe("cmdWeixin 接线（全离线）", () => {
       noQr: true,
       catalog: undefined,
     });
-    expect(code).toBe(2); // EXIT.CONFIG
+    expect(code).toBe(10); // EXIT.TRANSIENT
   }, 20000);
 
   it("环境变量白名单解析（KIWI_WEIXIN_ALLOW_USERS）", async () => {
@@ -99,6 +99,6 @@ describe("cmdWeixin 接线（全离线）", () => {
       noQr: true,
       catalog: undefined,
     });
-    expect(code).toBe(2); // 白名单解析不阻断，登录仍失败 → CONFIG
+    expect(code).toBe(10); // 白名单解析不阻断，网络登录失败 → TRANSIENT
   }, 20000);
 });

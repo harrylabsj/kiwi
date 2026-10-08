@@ -40,6 +40,8 @@ import { buildHandoffPacket, type HandoffPacket } from "./handoff.js";
 import { evaluateFreshness } from "./fact-resolver.js";
 import { validateQuotePolicy, type RfqPolicyConfig, type RfqPolicyContext } from "./policy.js";
 
+import { isLocalRfqPendingCandidates, type RfqPendingCandidates } from "./pending-candidates.js";
+
 export const RELEASE_TOOL = "kiwi_merchant_prepare_quote_release";
 export const HANDOFF_TOOL = "kiwi_merchant_prepare_quote_handoff";
 /** 报价发布类写操作的风险语义（v0.1.1 §9.1；不冒充 write_catalog）。 */
@@ -72,6 +74,21 @@ export class RfqReleaseCoordinator {
     this.deps = deps;
   }
 
+  assertLocalPending(input: {
+    prepareCandidate?: unknown;
+    pendingCandidates?: RfqPendingCandidates;
+  }): void {
+    if (
+      input.prepareCandidate !== undefined ||
+      !isLocalRfqPendingCandidates(input.pendingCandidates)
+    ) {
+      throw new RfqError(
+        "unavailable",
+        "RFQ requires the trusted local synchronous pending port; legacy callbacks are not invoked",
+      );
+    }
+  }
+
   private assertActiveCase(caseId: string): { caseVersion: number; recipientRef: string } {
     const kase = this.deps.repo.getCase(caseId);
     if (kase === undefined) throw new RfqError("not_found", `未知询盘 ${caseId}`);
@@ -99,8 +116,10 @@ export class RfqReleaseCoordinator {
     recipientRef?: string;
     actor: string;
     /** prepare 候选登记接缝（service 注入命令日志；未注入 fail-closed）。 */
-    prepareCandidate: (args: { releaseId: string }) => Promise<string>;
+    prepareCandidate?: (args: { releaseId: string }) => Promise<string>;
+    pendingCandidates?: RfqPendingCandidates;
   }): Promise<PreparedRelease> {
+    this.assertLocalPending(input);
     const kase = this.assertActiveCase(input.caseId);
     const quote = this.deps.repo.getQuote(input.quoteId, input.revision);
     if (quote === undefined) {
@@ -151,7 +170,7 @@ export class RfqReleaseCoordinator {
     // 顺序约束：prepareCandidate 的 readPreconditions 要读 release 行绑定
     // 摘要/收件人/策略版本，必须先 createRelease（candidate_id 先空、登记后
     // 回填），否则前置读取 not_found。
-    const candidateId = await this.deps.repo.runInTransactionAsync(async () => {
+    const candidateId = this.deps.repo.runInTransaction(() => {
       this.deps.repo.saveArtifact({
         artifact_id: artifactId,
         merchant_id: this.deps.repo.merchantId,
@@ -180,7 +199,7 @@ export class RfqReleaseCoordinator {
         created_at: now,
         updated_at: now,
       });
-      const cid = await input.prepareCandidate({ releaseId });
+      const cid = input.pendingCandidates!.release({ releaseId });
       this.deps.repo.updateReleaseCandidate(releaseId, cid);
       // VALIDATED → PENDING_APPROVAL（§8.1：正式产物已渲染、摘要固定、审批候选落盘）。
       this.deps.repo.transitionQuote({
@@ -287,8 +306,14 @@ export class RfqReleaseCoordinator {
     targetRef: string;
     intentEvidenceRef: string;
     actor: string;
-    prepareCandidate: (args: { handoffId: string; packetJson: string; packetDigest: string }) => Promise<string>;
+    prepareCandidate?: (args: {
+      handoffId: string;
+      packetJson: string;
+      packetDigest: string;
+    }) => Promise<string>;
+    pendingCandidates?: RfqPendingCandidates;
   }): Promise<{ handoff_id: string; candidate_id: string; packet_digest: string }> {
+    this.assertLocalPending(input);
     const quote = this.deps.repo.getQuote(input.quoteId, input.revision);
     if (quote === undefined) {
       throw new RfqError("not_found", `未知报价 ${input.quoteId}@${input.revision}`);
@@ -323,19 +348,21 @@ export class RfqReleaseCoordinator {
       nowIso: this.deps.now(),
     });
     const packetJson = JSON.stringify(packet);
-    const candidateId = await input.prepareCandidate({
-      handoffId: packet.handoff_id,
-      packetJson,
-      packetDigest: digest,
+    return this.deps.repo.runInTransaction(() => {
+      const candidateId = input.pendingCandidates!.handoff({
+        handoffId: packet.handoff_id,
+        packetJson,
+        packetDigest: digest,
+      });
+      this.deps.repo.appendAudit({
+        actor: input.actor,
+        operation: "rfq.prepare_handoff",
+        objectDigest: `handoff:${packet.handoff_id}`,
+        result: "PENDING_APPROVAL",
+        traceId: randomUUID(),
+      });
+      return { handoff_id: packet.handoff_id, candidate_id: candidateId, packet_digest: digest };
     });
-    this.deps.repo.appendAudit({
-      actor: input.actor,
-      operation: "rfq.prepare_handoff",
-      objectDigest: `handoff:${packet.handoff_id}`,
-      result: "PENDING_APPROVAL",
-      traceId: randomUUID(),
-    });
-    return { handoff_id: packet.handoff_id, candidate_id: candidateId, packet_digest: digest };
   }
 
   /**
@@ -347,7 +374,10 @@ export class RfqReleaseCoordinator {
       {
         tool: RELEASE_TOOL,
         risk: RELEASE_RISK,
-        readPreconditions: async (args) => this.readReleasePreconditions(String(args.release_id ?? "")),
+        readLocalRfqPreconditions: (args) =>
+          this.readReleasePreconditions(String(args.release_id ?? "")),
+        readPreconditions: async (args) =>
+          this.readReleasePreconditions(String(args.release_id ?? "")),
         execute: async (args, ctx) => {
           return this.activateRelease({
             releaseId: String(args.release_id ?? ""),
@@ -358,6 +388,14 @@ export class RfqReleaseCoordinator {
       {
         tool: HANDOFF_TOOL,
         risk: RELEASE_RISK,
+        readLocalRfqPreconditions: (args) => ({
+          handoff_id: String(args.handoff_id ?? ""),
+          packet_digest: String(
+            args.packet_digest ??
+              this.deps.repo.getHandoff(String(args.handoff_id ?? ""))?.packet_digest ??
+              "",
+          ),
+        }),
         readPreconditions: async (args) => {
           const handoffId = String(args.handoff_id ?? "");
           const existing = this.deps.repo.getHandoff(handoffId);

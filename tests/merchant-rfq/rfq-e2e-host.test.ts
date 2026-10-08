@@ -126,14 +126,7 @@ async function bootStack(db: DatabaseSync, oauthDb: DatabaseSync, artifactRoot: 
       tools: buildRfqMcpTools(
         {
           rfq: rfqService,
-          prepareReleaseCandidate: async (args) => {
-            const prepared = await core.commands.prepare({
-              tool: "kiwi_merchant_prepare_quote_release",
-              arguments: { release_id: args.releaseId },
-            });
-            return prepared.candidate.candidate_id;
-          },
-          prepareHandoffCandidate: async () => "cand-e2e",
+          pendingCandidates: core.commands.localRfqPendingCandidates(),
           callContext,
         },
         { releaseEnabled: true },

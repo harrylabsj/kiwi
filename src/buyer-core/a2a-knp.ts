@@ -22,6 +22,8 @@
  * JSONRPC 端点解析。词表单一来源：capability/action 走 KNP 域，不发明平行常量。
  */
 
+import { validateWireEnvelope } from "../negotiation/domain/envelope.js";
+import { schemaError } from "../negotiation/domain/common.js";
 import { A2AClient } from "../a2a/client/client.js";
 import type { A2AMessage, A2ATask } from "../a2a/client/types.js";
 import { NEGOTIATE_CAPABILITY } from "../a2a/negotiate.js";
@@ -119,14 +121,26 @@ export function envelopeToMessage(envelope: NegotiationEnvelope): A2AMessage {
 }
 
 /** 从 A2A task 提取最新 KNP envelope（只认 data part 的 knp_envelope，fail-closed）。 */
-export function extractKnpEnvelope(task: A2ATask | null | undefined): NegotiationEnvelope | null {
+export function extractKnpEnvelope(
+  task: A2ATask | null | undefined,
+  request?: NegotiationEnvelope,
+): NegotiationEnvelope | null {
   const message = task?.status?.message;
   if (message === undefined) return null;
   for (const part of message.parts) {
     if (part.kind === "data") {
       const data = part.data;
       if (data !== null && typeof data === "object" && data["knp_envelope"] !== undefined) {
-        return data["knp_envelope"] as NegotiationEnvelope;
+        const wire = validateWireEnvelope(data["knp_envelope"]);
+        if (request !== undefined) {
+          if (wire.message_id === request.message_id) {
+            if (wire.digest !== request.digest) throw schemaError("/message_id", "outbound echo changed content");
+          } else if (wire.actor !== "merchant" || wire.negotiation_id !== request.negotiation_id ||
+                     wire.capability !== request.capability || wire.in_reply_to !== request.message_id) {
+            throw schemaError("/in_reply_to", "merchant reply is not bound to the outgoing request");
+          }
+        }
+        return wire;
       }
     }
   }

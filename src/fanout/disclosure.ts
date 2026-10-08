@@ -119,7 +119,7 @@ export const ALWAYS_PRIVATE_ATTRIBUTES: readonly DisclosureAttribute[] = [
   "organization_identity",
 ];
 
-/** 子串级兜底（双保险）：这些私钥名一旦出现在序列化 payload 里即拒绝。 */
+/** Private object-key prefixes. Public string values such as SKU names are not keys. */
 const ALWAYS_PRIVATE_KEYS = ["budget", "urgency", "contact", "email", "phone", "organization"];
 
 /**
@@ -179,18 +179,29 @@ export function validateNetworkDisclosure(
   allowed: readonly DisclosureAttribute[],
 ): DisclosureValidationResult {
   const errors: string[] = [];
-  const serialized = JSON.stringify(payload);
-
-  for (const attr of ALWAYS_PRIVATE_ATTRIBUTES) {
-    if (serialized.includes(`"${attr}"`)) {
-      errors.push(`payload MUST NOT contain always-private attribute "${attr}"`);
+  const seen = new WeakSet<object>();
+  const privateErrors = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (value === null || typeof value !== "object") return;
+    if (seen.has(value)) throw new TypeError("disclosure payload contains a cycle");
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+    } else {
+      for (const [key, child] of Object.entries(value)) {
+        if ((ALWAYS_PRIVATE_ATTRIBUTES as readonly string[]).includes(key)) {
+          privateErrors.add(`payload MUST NOT contain always-private attribute "${key}"`);
+        }
+        for (const needle of ALWAYS_PRIVATE_KEYS) {
+          if (key.startsWith(needle)) privateErrors.add(`payload MUST NOT contain private field "${needle}"`);
+        }
+        visit(child);
+      }
     }
-  }
-  for (const needle of ALWAYS_PRIVATE_KEYS) {
-    if (serialized.includes(`"${needle}`)) {
-      errors.push(`payload MUST NOT contain private field "${needle}"`);
-    }
-  }
+    seen.delete(value);
+  };
+  visit(payload);
+  errors.push(...privateErrors);
 
   if (payload.tier === "anonymous") {
     const terms = payload.rfq.requested_terms;

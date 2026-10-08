@@ -121,14 +121,8 @@ function setup(
     rfq: { service, executors: coordinator.buildExecutors() },
   });
   const ctx: RfqCallContext = { principalId: PRINCIPAL, actor: PRINCIPAL, traceId: "t0" };
-  const prepareCandidate = async (args: { releaseId: string }) => {
-    const prepared = await core.commands.prepare({
-      tool: "kiwi_merchant_prepare_quote_release",
-      arguments: { release_id: args.releaseId },
-    });
-    return prepared.candidate.candidate_id;
-  };
-  return { clock, db, approvals, confirmations, client, service, core, ctx, prepareCandidate, repo };
+  const pendingCandidates = core.commands.localRfqPendingCandidates();
+  return { clock, db, approvals, confirmations, client, service, core, ctx, pendingCandidates, repo };
 }
 
 /** 标准流程：导入 → 修订条款 → 具名确认 → 刷新事实 → 计价。 */
@@ -458,7 +452,7 @@ describe("RFQ 审批与发布", () => {
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-1",
-      prepareCandidate: s.prepareCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     // 无确认凭证 → 拒绝执行
     await expect(s.core.executeApproved(release.candidate_id)).rejects.toThrow(/确认凭证/u);
@@ -475,7 +469,7 @@ describe("RFQ 审批与发布", () => {
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-1",
-      prepareCandidate: s.prepareCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     const detail = s.service.getRelease(s.ctx, release.release_id);
     expect(detail.status).toBe("PENDING_APPROVAL");
@@ -517,7 +511,7 @@ describe("RFQ 审批与发布", () => {
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-fa05",
-      prepareCandidate: s.prepareCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     // 时钟推过库存新鲜期（60s；价格 300s 内仍新鲜）——不能带着过期事实激活
     clock.value = "2026-09-15T10:01:01.000Z";
@@ -542,7 +536,7 @@ describe("RFQ 审批与发布", () => {
       quoteId: quote2.quote_id,
       revision: quote2.revision,
       idempotencyKey: "rel-fa05-2",
-      prepareCandidate: s.prepareCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     expect((await approveAndExecute(s, release2)).kind).toBe("executed");
     s.db.close();
@@ -557,7 +551,7 @@ describe("RFQ 审批与发布", () => {
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-fa06",
-      prepareCandidate: s.prepareCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     clock.value = "2026-09-15T10:05:01.000Z";
     const outcome = await approveAndExecute(s, release);
@@ -581,7 +575,7 @@ describe("RFQ 审批与发布", () => {
       quoteId: quote2.quote_id,
       revision: quote2.revision,
       idempotencyKey: "rel-fa06-2",
-      prepareCandidate: s.prepareCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     expect((await approveAndExecute(s, release2)).kind).toBe("executed");
     s.db.close();
@@ -658,7 +652,7 @@ describe("RFQ 审批与发布", () => {
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-1",
-      prepareCandidate: s.prepareCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     // 客户改数量 → 新 revision
     const revised = await s.service.revise(s.ctx, {
@@ -693,7 +687,7 @@ describe("RFQ 审批与发布", () => {
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-1",
-      prepareCandidate: s.prepareCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     s.approvals.expireCandidate(release.candidate_id);
     expect(s.service.recoverReleases()).toBe(1);
@@ -765,8 +759,7 @@ describe("RFQ MCP 工具面", () => {
     const s = setup({ priceUnit: "yuan" });
     const surface = {
       rfq: s.service,
-      prepareReleaseCandidate: s.prepareCandidate,
-      prepareHandoffCandidate: async () => "cand-x",
+      pendingCandidates: s.pendingCandidates,
       callContext: () => ({ principalId: PRINCIPAL, actor: PRINCIPAL, traceId: "t" }),
     };
     // 发布开关关闭（v0.1.1 §17.2 缺省）：release/handoff/get_release 不在列表。
@@ -802,8 +795,7 @@ describe("RFQ MCP 工具面", () => {
   it("响应超限：有界投影 complete=false 显式省略；结构超界显式失败不返回部分数据（HO-07）", async () => {
     const mkSurface = (s: ReturnType<typeof setup>) => ({
       rfq: s.service,
-      prepareReleaseCandidate: s.prepareCandidate,
-      prepareHandoffCandidate: async () => "cand-x",
+      pendingCandidates: s.pendingCandidates,
       callContext: () => ({ principalId: PRINCIPAL, actor: PRINCIPAL, traceId: "t" }),
     });
     // 1) 超长字符串字段 → 有界预览 + complete=false + elided_fields（始终合法 JSON）

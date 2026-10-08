@@ -162,7 +162,22 @@ const locks = new Map<string, Promise<void>>();
 // （readdir 扫描全部 idem-*.json 并逐一读取），忙时开销随规模线性放大。
 // 改每 IDEMPOTENCY_SWEEP_INTERVAL_MS 至多一次；首次调用必执行（0 起点）。
 const IDEMPOTENCY_SWEEP_INTERVAL_MS = 5 * 60_000;
-let lastIdempotencySweepAt = 0;
+const lastIdempotencySweepAt = new Map<string, number>();
+const MAX_IDEMPOTENCY_SWEEP_SCOPES = 4096;
+
+function rememberSuccessfulSweep(scope: string, nowMs: number): void {
+  // Only sweep timestamps are evicted. Eviction may cause an extra sweep, never
+  // releases an active request lock or an unknown idempotency claim.
+  if (
+    !lastIdempotencySweepAt.has(scope) &&
+    lastIdempotencySweepAt.size >= MAX_IDEMPOTENCY_SWEEP_SCOPES
+  ) {
+    const oldest = lastIdempotencySweepAt.keys().next();
+    if (!oldest.done) lastIdempotencySweepAt.delete(oldest.value);
+  }
+  lastIdempotencySweepAt.set(scope, nowMs);
+}
+
 
 async function withKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const tail = locks.get(key) ?? Promise.resolve();
@@ -257,6 +272,7 @@ function outcomeToTask(outcome: IdempotencyRecord["outcome"]): A2ATask {
 export class InboundPipeline {
   private readonly handler: NegotiationHandler;
   private readonly idempotency: IdempotencyStore;
+  private readonly coordinationScope: string;
   private readonly ledger: LedgerStore;
   private readonly segmentPayloads: boolean;
   private readonly tasks: TaskRegistry;
@@ -269,6 +285,7 @@ export class InboundPipeline {
   constructor(options: InboundPipelineOptions) {
     this.handler = options.handler;
     this.idempotency = options.idempotency;
+    this.coordinationScope = options.idempotency.coordinationScope();
     this.ledger = options.ledger;
     this.segmentPayloads = options.segmentPayloads === true;
     this.tasks = options.tasks;
@@ -364,10 +381,12 @@ export class InboundPipeline {
     // 无调用方，过期行永久保留、磁盘无界增长。入站消息处理是低频操作，但每条
     // 都全量扫文件仍随规模线性放大——节流为每 IDEMPOTENCY_SWEEP_INTERVAL_MS 一次。
     try {
-      const nowMs = Date.now();
-      if (nowMs - lastIdempotencySweepAt >= IDEMPOTENCY_SWEEP_INTERVAL_MS) {
-        lastIdempotencySweepAt = nowMs;
-        this.idempotency.sweep();
+      const nowIso = this.now();
+      const nowMs = Date.parse(nowIso);
+      const lastSweep = lastIdempotencySweepAt.get(this.coordinationScope);
+      if (Number.isFinite(nowMs) && (lastSweep === undefined || nowMs - lastSweep >= IDEMPOTENCY_SWEEP_INTERVAL_MS)) {
+        this.idempotency.sweep(nowIso);
+        rememberSuccessfulSweep(this.coordinationScope, nowMs);
       }
     } catch {
       // 清理失败不影响消息处理（fail-safe 方向；下次再试）。
@@ -412,7 +431,7 @@ export class InboundPipeline {
       const senderIdentity = caller.senderIdentity;
       const key = idempotencyKey(senderIdentity, envelope.message_id);
 
-      return await withKeyLock(key, async () => {
+      return await withKeyLock(`${this.coordinationScope}\0${key}`, async () => {
         // 5. 幂等三态判定（锁内重新判定，防 check/commit 并发窗口）。
         const decision = this.idempotency.check({
           sender_identity: senderIdentity,

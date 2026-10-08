@@ -103,6 +103,20 @@ export function verifyCompactJws(
   if (typeof headerRecord.alg !== "string" || headerRecord.alg.length === 0) {
     throw malformed("header has no alg");
   }
+  // This compact profile implements no critical extensions. Ordinary unknown
+  // noncritical headers remain allowed (RFC 7515 §4/§4.1.11).
+  if (headerRecord.crit !== undefined) {
+    const crit = headerRecord.crit;
+    if (!Array.isArray(crit) || crit.length === 0 ||
+        crit.some((name) => typeof name !== "string" || name.length === 0) ||
+        new Set(crit).size !== crit.length) {
+      throw malformed("crit must be a non-empty unique string array");
+    }
+    throw malformed("unsupported critical header extension");
+  }
+  if (headerRecord.b64 !== undefined && headerRecord.b64 !== true) {
+    throw malformed("this compact profile does not support unencoded payloads");
+  }
   const alg = headerRecord.alg;
   const keyid = typeof headerRecord.kid === "string" ? headerRecord.kid : undefined;
 

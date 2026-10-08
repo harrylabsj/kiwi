@@ -31,6 +31,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { JwsSigningIdentity } from "../../trust/identity/jws.js";
 import {
   BindingChallengeStore,
+  bindingChallengeWindow,
   BindingProofError,
   challengeSubject,
   signBindingChallenge,
@@ -106,7 +107,7 @@ function parseChallenge(value: unknown): BindingChallenge | undefined {
     thumbprint === undefined ||
     !isThumbprint(thumbprint) ||
     issuedAt === undefined ||
-    expiresAt === undefined
+    expiresAt === undefined || bindingChallengeWindow({ issued_at: issuedAt, expires_at: expiresAt }) === undefined
   ) {
     return undefined;
   }

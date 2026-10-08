@@ -68,6 +68,8 @@ export interface CommandExecutor {
   readonly requiresCommittedDecision?: boolean;
   /** 重读目标对象前置状态（版本/digest 比对用）。 */
   readPreconditions(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  /** RFQ-only local registration. Never invokes a generic asynchronous reader. */
+  readLocalRfqPreconditions?: (args: Record<string, unknown>) => Record<string, unknown>;
   /** 执行已批准参数。 */
   execute(
     args: Record<string, unknown>,

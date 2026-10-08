@@ -37,7 +37,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentProfile } from "../config/profile.js";
 import type { NegotiationDecision } from "../negotiation/types.js";
 import type { NegotiationRunner, PreparedCandidate, SubmitOutcome } from "./runner.js";
-import type { StrategyContext, StrategyEngine } from "./strategy.js";
+import { isPercentageAmount, type StrategyContext, type StrategyEngine } from "./strategy.js";
 import type { OperatorEventStore } from "./store.js";
 import {
   OPERATOR_MODES,
@@ -387,6 +387,7 @@ export class OperatorController {
         // soft_preference mentioning 预算 must not override it.
         if (
           (d.kind === "tighten" || d.kind === "relax") &&
+          !isPercentageAmount(d.directive) &&
           /预算|budget/i.test(d.directive)
         ) {
           const n = /\d+(?:\.\d+)?/.exec(d.directive);
@@ -406,6 +407,7 @@ export class OperatorController {
       for (const d of this.state.strategy.directives) {
         if (
           (d.kind === "tighten" || d.kind === "relax") &&
+          !isPercentageAmount(d.directive) &&
           /底价|最低价|floor/i.test(d.directive)
         ) {
           const n = /\d+(?:\.\d+)?/.exec(d.directive);

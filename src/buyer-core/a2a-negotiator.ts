@@ -23,15 +23,14 @@
  * 诚实失败：上下文缺失/商家不可达 → 追加可解释 summary，绝不编造还价结果。
  */
 
-import type { A2ATask } from "../a2a/client/types.js";
-import type { NegotiationEnvelope } from "../negotiation/domain/envelope.js";
 import {
   buildA2AClient,
   buildCounterEnvelope,
   envelopeToMessage,
-  extractKnpEnvelope,
 } from "./a2a-knp.js";
 import type { NegotiationStep, Negotiator } from "./service.js";
+
+import { BuyerProtocolRecovery, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext } from "./protocol-recovery.js";
 
 export interface A2ANegotiatorOptions {
   allowPrivateRanges?: boolean;
@@ -39,6 +38,8 @@ export interface A2ANegotiatorOptions {
   timeoutMs?: number;
   bearerToken?: string;
   fetchImpl?: typeof fetch;
+  protocolStateDir?: string;
+  localBuyerAgentId?: string;
   /** 缺省还价折扣（现价×(1-discount)，无 intent 目标价时用）。 */
   defaultDiscountRate?: number;
   /** review P1-2（A319）：实际外发 counter 提案前的委托约束门。 */
@@ -147,8 +148,9 @@ export class A2ANegotiator implements Negotiator {
   private readonly timeoutMs: number;
   private readonly bearerToken?: string;
   private readonly defaultDiscountRate: number;
-  private readonly fetchImpl: typeof fetch;
+  private readonly fetchImpl?: typeof fetch;
 
+  private readonly recovery?: BuyerProtocolRecovery;
   private readonly counterProposalGate: CounterProposalGate | undefined;
 
   constructor(options: A2ANegotiatorOptions = {}) {
@@ -157,20 +159,24 @@ export class A2ANegotiator implements Negotiator {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.bearerToken = options.bearerToken;
     this.defaultDiscountRate = options.defaultDiscountRate ?? DEFAULT_DISCOUNT_RATE;
-    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.fetchImpl = options.fetchImpl;
     this.counterProposalGate = options.counterProposalGate;
+    if(options.protocolStateDir && options.localBuyerAgentId)this.recovery=new BuyerProtocolRecovery(options.protocolStateDir,options.localBuyerAgentId);
   }
 
   async negotiate(
-    _taskId: string,
+    taskId: string,
     intent: Record<string, unknown>,
     current: NegotiationStep,
     candidates: Array<Record<string, unknown>>,
+    context?: ProtocolTaskContext,
   ): Promise<NegotiationStep> {
+    const hasClaim=this.recovery?.hasCounterClaim(taskId,current.round) ?? false;
     const candidate = candidates.find(
       (c) => (c as CandidateLike).provenance?.a2a_endpoint !== undefined,
     ) as CandidateLike | undefined;
     if (candidate === undefined) {
+      if(hasClaim)throw new ProtocolOperationUnknown();
       return { ...current, summary: `${current.summary}（无 A2A 会话上下文，无法真实还价）` };
     }
     const { negotiation_id, offer_id, merchant_reply_id, reply_text, sku, a2a_endpoint } =
@@ -181,6 +187,7 @@ export class A2ANegotiator implements Negotiator {
       offer_id === undefined ||
       merchant_reply_id === undefined
     ) {
+      if(hasClaim)throw new ProtocolOperationUnknown();
       return { ...current, summary: `${current.summary}（A2A 会话上下文不完整，无法真实还价）` };
     }
     const endpoint = String(a2a_endpoint);
@@ -193,6 +200,7 @@ export class A2ANegotiator implements Negotiator {
       const currentPrice = parseOfferPriceMinor(reply_text);
       const target = targetPriceMinor(intent, currentPrice, this.defaultDiscountRate);
       if (target === undefined) {
+        if(hasClaim)throw new ProtocolOperationUnknown();
         return { ...current, summary: `${current.summary}（无目标价可还：意图无 target_unit_price 且商家回复无单价）` };
       }
       const envelope = buildCounterEnvelope({
@@ -248,6 +256,7 @@ export class A2ANegotiator implements Negotiator {
           total_price_minor: unitMinor * quantityValue,
         });
         if (gateVerdict !== undefined) {
+          if(hasClaim)throw new ProtocolOperationUnknown();
           return { ...current, summary: `${current.summary}（counter 被委托约束阻断：${gateVerdict}）` };
         }
       }
@@ -256,15 +265,18 @@ export class A2ANegotiator implements Negotiator {
         allowPrivateRanges: this.allowPrivateRanges,
         skipDnsCheck: this.skipDnsCheck,
         timeoutMs: this.timeoutMs,
-        fetchImpl: this.fetchImpl,
+        ...(this.fetchImpl !== undefined ? { fetchImpl: this.fetchImpl } : {}),
       });
-      const task = await client.sendMessage(envelopeToMessage(envelope));
-      const reply = await this.waitForMerchantReply(client, task, envelope.message_id);
-      if (reply === null) {
-        return { ...current, summary: `${current.summary}（商家处理中，未回还价）` };
-      }
-      return { ...current, reply: JSON.stringify(reply) };
+      if(!this.recovery || !context || context.taskId!==taskId)throw new ProtocolOperationUnknown();
+      const result=await this.recovery.exchange({
+        context,stage:"counter",round:current.round,merchantId:String(candidate.merchant_id??""),endpoint,negotiationId,
+        binding:{intent,candidate,proposal:(envelope.payload as {proposed_terms?:unknown}).proposed_terms,respondingToOfferId:offerId,action:current.action,summary:current.summary},
+        build:()=>envelope,send:wire=>client.sendMessage(envelopeToMessage(wire)),get:id=>client.getTask(id),timeoutMs:this.timeoutMs,pollIntervalMs:1000,
+      });
+      return {...current,reply:JSON.stringify(result.reply)};
     } catch (error) {
+      if(error instanceof ProtocolOperationUnknown || error instanceof ProtocolOperationConflict)throw error;
+      if(hasClaim)throw new ProtocolOperationUnknown();
       return {
         ...current,
         summary: `${current.summary}（还价失败：${error instanceof Error ? error.message : String(error)}）`,
@@ -272,20 +284,4 @@ export class A2ANegotiator implements Negotiator {
     }
   }
 
-  /** 轮询直到 merchant 回复 envelope 出现（排除自家 outbound 回声）或超时。 */
-  private async waitForMerchantReply(
-    client: ReturnType<typeof buildA2AClient>,
-    initial: A2ATask,
-    outboundMessageId: string,
-  ): Promise<NegotiationEnvelope | null> {
-    const deadline = Date.now() + this.timeoutMs;
-    let task = initial;
-    for (;;) {
-      const envelope = extractKnpEnvelope(task);
-      if (envelope !== null && envelope.message_id !== outboundMessageId) return envelope;
-      if (Date.now() >= deadline) return null;
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      task = await client.getTask(task.id);
-    }
-  }
 }

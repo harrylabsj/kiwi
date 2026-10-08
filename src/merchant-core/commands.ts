@@ -46,10 +46,19 @@ import {
   type WriteApprovalCandidate,
   type WriteApprovalCandidateStore,
 } from "../agent/merchant/action-candidate.js";
-import { routeWriteCandidate, type WriteGateResult } from "../agent/write-gate.js";
+import {
+  routeWriteCandidate,
+  registerPendingWriteCandidate,
+  type WriteGateResult,
+} from "../agent/write-gate.js";
 import { MerchantWorkbenchError } from "../merchant/workbench-service.js";
 import type { MerchantOAuthStore } from "../auth/merchant-oauth.js";
 import type { ExecutorContext, MerchantExecutorRegistry } from "./executor.js";
+
+import {
+  createLocalRfqPendingCandidates,
+  type RfqPendingCandidates,
+} from "./rfq/pending-candidates.js";
 
 export interface MerchantCommandLogDeps {
   store: WriteApprovalCandidateStore;
@@ -146,6 +155,48 @@ export class MerchantCommandLog {
       },
       outcome,
     };
+  }
+
+  /** Trusted local RFQ port: fixed tools, synchronous preconditions and store only. */
+  localRfqPendingCandidates(): RfqPendingCandidates {
+    const prepare = (tool: string, args: Record<string, unknown>): string => {
+      const executor = this.deps.executors.get(tool);
+      if (executor?.risk !== "release_quote" || executor.readLocalRfqPreconditions === undefined) {
+        throw new MerchantWorkbenchError(
+          "unavailable",
+          "RFQ local pending executor is unavailable",
+        );
+      }
+      const preconditions = executor.readLocalRfqPreconditions(args);
+      const outcome = registerPendingWriteCandidate(
+        {
+          mode: this.deps.mode,
+          approvals: this.deps.store,
+          profile: this.deps.profile,
+          now: this.deps.now,
+        },
+        {
+          tool,
+          arguments: { ...args, reason: "" },
+          preconditions,
+          risk: executor.risk,
+          force_pending: true,
+          execute: (approvedArgs) => executor.execute(approvedArgs, this.deps.executorContext),
+          readPreconditions: () => executor.readPreconditions(args),
+        },
+      );
+      return outcome.candidate.candidate_id;
+    };
+    return createLocalRfqPendingCandidates({
+      release: ({ releaseId }) =>
+        prepare("kiwi_merchant_prepare_quote_release", { release_id: releaseId }),
+      handoff: ({ handoffId, packetJson, packetDigest }) =>
+        prepare("kiwi_merchant_prepare_quote_handoff", {
+          handoff_id: handoffId,
+          packet_json: packetJson,
+          packet_digest: packetDigest,
+        }),
+    });
   }
 
   /**
@@ -296,7 +347,10 @@ export class MerchantCommandLog {
       return { status: "failed", error: "committed candidate is unavailable" };
     }
     if (candidate.status === "executed" || candidate.status === "rejected") {
-      return { status: "succeeded" };
+      const expected = input.decision === "approve" ? "executed" : "rejected";
+      return candidate.status === expected
+        ? { status: "succeeded" }
+        : { status: "failed", error: `committed ${input.decision} conflicts with candidate ${candidate.status}` };
     }
     const claimed = this.deps.store.executionWasClaimed(input.candidateId);
     if (

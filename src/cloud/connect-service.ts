@@ -56,6 +56,7 @@ import { isIP } from "node:net";
 import { loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/signing-key.js";
 import { withEnrollmentStoreLock, reserveEnrollmentCreation } from "./binding/store-lock.js";
 import { writeFileAtomic } from "../fs/atomic-write.js";
+import { ProductTableError } from "./product-source.js";
 import { canonicalize } from "../negotiation/jcs.js";
 import { validateAgentCard } from "../discovery/agent-card/validate.js";
 import type { AgentCard } from "../discovery/agent-card/types.js";
@@ -108,6 +109,9 @@ export class MerchantConnectError extends Error {
  * 白名单（CATALOG_CONNECTION_SAFE_CODES）以此单源扩展。
  */
 export const CONNECTION_PAIRING_SAFE_CODES = new Set([
+  "PAIRING_DENIED",
+  "PUBLICATION_CHECK_FAILED",
+  "PRODUCT_TABLE_INVALID",
   "PAIRING_WINDOW_EXPIRED", // 授权窗口（=Catalog grant 窗口）已过：需重新配对
   "BIND_REJECTED", // Catalog 拒绝 bind 请求（grant 过期/不匹配/版本冲突）
   "BIND_CLAIM_INVALID", // bind 已到达但签名声明未通过本地验真
@@ -729,7 +733,10 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       } catch (err) {
         // 阶段感知稳定码：绑定被拒 vs 签名声明验真失败 vs 通信失败可被 owner
         // API/UI 辨别；码值恒在本文件导出的固定集合内。
-        this.availability = { code: this.stepFailureCode(stage, err), detail: "" };
+        this.availability = {
+          code: this.stepFailureCode(stage, err),
+          detail: err instanceof ProductTableError ? "商品表绑定或校验失败，请检查商品表归属与格式。" : "",
+        };
         throw err;
       }
       if (current.status === "published") {
@@ -796,7 +803,9 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     if (err instanceof MerchantConnectError) {
       return CONNECTION_PAIRING_SAFE_CODES.has(err.code) ? err.code : "CONNECT_STEP_FAILED";
     }
+    if (err instanceof ProductTableError) return "PRODUCT_TABLE_INVALID";
     if (err instanceof CatalogClientError) {
+      if (err.code === "AUTHORIZATION_DENIED") return "PAIRING_DENIED";
       if (err.code === "CATALOG_UNREACHABLE") return "PAIRING_COMMUNICATION_FAILED";
       if (stage === "authorized") {
         if (err.code === "REQUEST_REJECTED" || err.code === "CONFLICT") return "BIND_REJECTED";
@@ -1351,7 +1360,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     }
     if (session.status !== "published") {
       // 非 published 阶段也透出最近一次步骤失败的自有稳定码（availability 仅由
-      // reconcile 的失败路径写入；detail 恒为空串，绝不携带远端原文/凭据）。
+      // reconcile 的失败路径写入；已知本地类型可给固定说明，其余为空，绝不携带远端原文/凭据）。
       // availability 只在失败/发布核对路径写入：非 published 时非空即最近一次失败。
       const stepFailure =
         this.availability !== null

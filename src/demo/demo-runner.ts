@@ -398,10 +398,11 @@ export interface DemoResult {
 }
 
 /** fan-out RFQ：发现 → 三家询价 → 收集 Offer → 选最优 → 议价 → Agreement → Handoff。 */
-export async function runFanoutBuyer(scenario: DemoScenario, catalogUrl: string): Promise<DemoResult> {
-  const log = (phase: string, detail: string): void => {
-    console.log(`  [${phase}] ${detail}`);
-  };
+export async function runFanoutBuyer(
+  scenario: DemoScenario,
+  catalogUrl: string,
+  log: (phase: string, detail: string) => void = (phase, detail) => console.error(`  [${phase}] ${detail}`),
+): Promise<DemoResult> {
 
   log("发现", `catalog ${catalogUrl}/v1/agents → ${scenario.merchants.length} 商家`);
   const catRes = await fetch(`${catalogUrl}/v1/agents`);
@@ -544,7 +545,7 @@ export async function runDemo(
   opts: { onLog?: (phase: string, detail: string) => void } = {},
 ): Promise<DemoSummary> {
   const log: (phase: string, detail: string) => void =
-    opts.onLog ?? ((phase: string, detail: string) => console.log(`  [${phase}] ${detail}`));
+    opts.onLog ?? ((phase: string, detail: string) => console.error(`  [${phase}] ${detail}`));
   const scenario = DEMO_SCENARIOS[scenarioKey];
   if (scenario === undefined) throw new Error(`unknown demo scenario: ${scenarioKey}`);
   log("demo", scenario.name);
@@ -566,7 +567,7 @@ export async function runDemo(
   try {
     catalog = await startDemoCatalog(records);
     // 3. 买家 fan-out。
-    result = await runFanoutBuyer(scenario, catalog.url);
+    result = await runFanoutBuyer(scenario, catalog.url, log);
   } finally {
     // 4. 清理（隔离目录 + 关闭 server）。
     if (catalog !== undefined) await catalog.stop();

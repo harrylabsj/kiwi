@@ -132,20 +132,7 @@ function setup(options: { clock?: { value: string }; dbPath?: string } = {}) {
     rfq: { service, executors: coordinator.buildExecutors() },
   });
   const ctx: RfqCallContext = { principalId: PRINCIPAL, actor: PRINCIPAL, traceId: "t0" };
-  const prepareReleaseCandidate = async (args: { releaseId: string }) => {
-    const prepared = await core.commands.prepare({
-      tool: "kiwi_merchant_prepare_quote_release",
-      arguments: { release_id: args.releaseId },
-    });
-    return prepared.candidate.candidate_id;
-  };
-  const prepareHandoffCandidate = async (args: { handoffId: string; packetJson: string; packetDigest: string }) => {
-    const prepared = await core.commands.prepare({
-      tool: "kiwi_merchant_prepare_quote_handoff",
-      arguments: { handoff_id: args.handoffId, packet_json: args.packetJson, packet_digest: args.packetDigest },
-    });
-    return prepared.candidate.candidate_id;
-  };
+  const pendingCandidates = core.commands.localRfqPendingCandidates();
   return {
     clock,
     policyVersion,
@@ -159,8 +146,7 @@ function setup(options: { clock?: { value: string }; dbPath?: string } = {}) {
     service,
     core,
     ctx,
-    prepareReleaseCandidate,
-    prepareHandoffCandidate,
+    pendingCandidates,
   };
 }
 
@@ -237,7 +223,7 @@ async function approvedRelease(s: ReturnType<typeof setup>, key: string) {
     quoteId: quote.quote_id,
     revision: quote.revision,
     idempotencyKey: key,
-    prepareCandidate: s.prepareReleaseCandidate,
+    pendingCandidates: s.pendingCandidates,
   });
   const outcome = await approveAndExecute(s, release.candidate_id);
   expect(outcome.kind).toBe("executed");
@@ -253,7 +239,7 @@ async function handoffReady(s: ReturnType<typeof setup>, key: string) {
     targetRef: "handoff_inbox:crm-001",
     intentEvidenceRef: "email-msg-42",
     idempotencyKey: `hnd-${key}`,
-    prepareCandidate: s.prepareHandoffCandidate,
+    pendingCandidates: s.pendingCandidates,
   });
   const outcome = await approveAndExecute(s, prepared.candidate_id);
   expect(outcome.kind).toBe("executed");
@@ -276,7 +262,7 @@ describe("RFQ 审批绑定与并发", () => {
         revision: quote.revision,
         recipientRef: "李四",
         idempotencyKey: "rel-ap06",
-        prepareCandidate: s.prepareReleaseCandidate,
+        pendingCandidates: s.pendingCandidates,
       }),
     ).rejects.toThrow(/收件对象与报价投影不一致/u);
     // 收件人修订 → 新 revision → 旧候选批准执行失效（旧批准不跨收件人复用）
@@ -285,7 +271,7 @@ describe("RFQ 审批绑定与并发", () => {
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-ap06-2",
-      prepareCandidate: s.prepareReleaseCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     await s.service.revise(s.ctx, {
       caseId,
@@ -307,7 +293,7 @@ describe("RFQ 审批绑定与并发", () => {
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-ap07",
-      prepareCandidate: s.prepareReleaseCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     // 批准前策略热更新 → 激活时以当前策略重验（与 prepare 同源）
     s.policyVersion.value = "policy-1-changed";
@@ -325,7 +311,7 @@ describe("RFQ 审批绑定与并发", () => {
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-ap09",
-      prepareCandidate: s.prepareReleaseCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     const candidate = s.core.listPendingCommands().find((c) => c.candidate_id === release.candidate_id);
     expect(candidate).toBeDefined();
@@ -366,12 +352,9 @@ describe("RFQ 事务与恢复", () => {
     const pendingBefore = s.core.listPendingCommands().length;
     const releasesBefore = s.repo.listReleasesForQuote(quote.quote_id, quote.revision).length;
     // 候选真实插入后模拟数据库故障：整事务回滚（§10.2 不能两次独立提交假装原子）
-    const failingCandidate = async (args: { releaseId: string }) => {
-      const prepared = await s.core.commands.prepare({
-        tool: "kiwi_merchant_prepare_quote_release",
-        arguments: { release_id: args.releaseId },
-      });
-      void prepared;
+    const updateCandidate = s.repo.updateReleaseCandidate.bind(s.repo);
+    s.repo.updateReleaseCandidate = (releaseId, candidateId) => {
+      updateCandidate(releaseId, candidateId);
       throw new Error("模拟候选插入后的数据库故障");
     };
     await expect(
@@ -380,20 +363,21 @@ describe("RFQ 事务与恢复", () => {
         quoteId: quote.quote_id,
         revision: quote.revision,
         idempotencyKey: "rel-st02",
-        prepareCandidate: failingCandidate,
+        pendingCandidates: s.pendingCandidates,
       }),
     ).rejects.toThrow(/模拟候选插入后的数据库故障/u);
     // 全部回滚：无新候选、无 release、报价仍 VALIDATED、幂等键可重试
     expect(s.core.listPendingCommands().length).toBe(pendingBefore);
     expect(s.repo.listReleasesForQuote(quote.quote_id, quote.revision).length).toBe(releasesBefore);
     expect(s.service.getCase(s.ctx, caseId).quotes.find((q) => q.quote_id === quote.quote_id)?.status).toBe("VALIDATED");
+    s.repo.updateReleaseCandidate = updateCandidate;
     // 同幂等键重试（干净重跑，不产生重复 release）
     const retry = await s.service.prepareRelease(s.ctx, {
       caseId,
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-st02",
-      prepareCandidate: s.prepareReleaseCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     expect(retry.replayed).toBe(false);
     expect(s.repo.listReleasesForQuote(quote.quote_id, quote.revision).length).toBe(1);
@@ -408,7 +392,7 @@ describe("RFQ 事务与恢复", () => {
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-st03",
-      prepareCandidate: s.prepareReleaseCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     const v1 = s.repo.getQuote(quote.quote_id, 1);
     const v1Artifact = s.repo.getArtifact(release.artifact_id);
@@ -462,7 +446,7 @@ describe("RFQ 事务与恢复", () => {
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-st04",
-      prepareCandidate: s.prepareReleaseCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     // 相同 key 的第二个请求：先查询原作业，不盲重放生成重复候选
     await expect(
@@ -471,7 +455,7 @@ describe("RFQ 事务与恢复", () => {
         quoteId: quote.quote_id,
         revision: quote.revision,
         idempotencyKey: "rel-st04",
-        prepareCandidate: s.prepareReleaseCandidate,
+        pendingCandidates: s.pendingCandidates,
       }),
     ).rejects.toThrow(/查询原作业.*禁止盲重放/u);
     const done = await pending;
@@ -481,7 +465,7 @@ describe("RFQ 事务与恢复", () => {
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-st04",
-      prepareCandidate: s.prepareReleaseCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     expect(replay.replayed).toBe(true);
     expect(replay.release_id).toBe(done.release_id);
@@ -499,18 +483,18 @@ describe("RFQ 事务与恢复", () => {
     const validPath = (validArtifact as NonNullable<typeof validArtifact>).relative_path;
     // 第二个询价：文件已渲染但事务回滚 → 孤儿文件（无产物行）
     const { caseId: case2, quote: quote2 } = await pricedCase(s, "st07b");
-    const failingCandidate = async () => {
-      throw new Error("渲染后故障");
-    };
+    const saveArtifact = s.repo.saveArtifact.bind(s.repo);
+    s.repo.saveArtifact = () => { throw new Error("渲染后故障"); };
     await expect(
       s.service.prepareRelease(s.ctx, {
         caseId: case2,
         quoteId: quote2.quote_id,
         revision: quote2.revision,
         idempotencyKey: "rel-st07-orphan",
-        prepareCandidate: failingCandidate,
+        pendingCandidates: s.pendingCandidates,
       }),
     ).rejects.toThrow(/渲染后故障/u);
+    s.repo.saveArtifact = saveArtifact;
     // 孤儿文件 = quote2 目录下未被引用的产物文件
     const orphanRelative = (() => {
       const dir = path.join(s.root, "rfq-artifacts", quote2.quote_id);
@@ -676,7 +660,7 @@ describe("RFQ 导出边界", () => {
       quoteId: quote.quote_id,
       revision: quote.revision,
       idempotencyKey: "rel-ex09",
-      prepareCandidate: s.prepareReleaseCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     expect((await approveAndExecute(s, release.candidate_id)).kind).toBe("executed");
     const file = s.service.downloadArtifact(s.ctx, release.artifact_id);
@@ -708,7 +692,7 @@ describe("RFQ 导出边界", () => {
       quoteId: quote2.quote_id,
       revision: quote2.revision,
       idempotencyKey: "rel-ex10b",
-      prepareCandidate: s.prepareReleaseCandidate,
+      pendingCandidates: s.pendingCandidates,
     });
     s.approvals.expireCandidate(release2.candidate_id);
     expect(s.service.recoverReleases()).toBe(1);
@@ -795,8 +779,8 @@ describe("RFQ 移交语义", () => {
       intentEvidenceRef: "email-msg-42",
       idempotencyKey: "hnd-kn10",
     };
-    const first = await s.service.prepareHandoff(s.ctx, { ...args, prepareCandidate: s.prepareHandoffCandidate });
-    const second = await s.service.prepareHandoff(s.ctx, { ...args, prepareCandidate: s.prepareHandoffCandidate });
+    const first = await s.service.prepareHandoff(s.ctx, { ...args, pendingCandidates: s.pendingCandidates });
+    const second = await s.service.prepareHandoff(s.ctx, { ...args, pendingCandidates: s.pendingCandidates });
     expect(second.replayed).toBe(true);
     expect(second.handoff_id).toBe(first.handoff_id);
     expect(second.packet_digest).toBe(first.packet_digest);

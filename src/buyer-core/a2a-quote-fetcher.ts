@@ -26,17 +26,16 @@
  * 可解释 failure classification。
  */
 
-import type { A2ATask } from "../a2a/client/types.js";
 import { newNegotiationId } from "../negotiation/domain/identifiers.js";
-import type { NegotiationEnvelope } from "../negotiation/domain/envelope.js";
 import {
   buildA2AClient,
   buildRfqEnvelope,
   envelopeToMessage,
-  extractKnpEnvelope,
   resolveA2aEndpoint,
 } from "./a2a-knp.js";
 import type { QuoteCandidateInput, QuoteFetcher, MerchantRecord } from "./service.js";
+
+import { BuyerProtocolRecovery, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext, type ProtocolReply } from "./protocol-recovery.js";
 
 export interface A2AQuoteFetcherOptions {
   /** 允许打到私网/保留网段（SSRF 逃生门；本地试点直连时开）。 */
@@ -48,6 +47,8 @@ export interface A2AQuoteFetcherOptions {
   /** 出站 bearer（A2A 认证；服务器为 signature 时匿名放行可省）。 */
   bearerToken?: string;
   fetchImpl?: typeof fetch;
+  protocolStateDir?: string;
+  localBuyerAgentId?: string;
 }
 
 const DEFAULT_POLL_MS = 2000;
@@ -55,10 +56,6 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 
 function utcNow(): string {
   return new Date().toISOString();
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function firstItem(intent: Record<string, unknown>): Record<string, unknown> {
@@ -126,12 +123,14 @@ export function projectOfferTerms(
   // 各 item 币种与 total_price.currency，全部一致才接受；混币种（USD/CNY）
   // 整体返回 undefined（下游 fail-closed），绝不按首行币种授权。
   const lineCurrencies: string[] = [];
-  const totalCurrency =
-    typeof terms.total_price === "object" &&
-    terms.total_price !== null &&
-    typeof (terms.total_price as { currency?: unknown }).currency === "string"
-      ? (terms.total_price as { currency: string }).currency
-      : undefined;
+  const validCurrency = (value: unknown): value is string =>
+    typeof value === "string" && /^[A-Z]{3}$/.test(value);
+  let totalCurrency: string | undefined;
+  if (terms.total_price !== undefined) {
+    if (typeof terms.total_price !== "object" || terms.total_price === null ||
+        !validCurrency(terms.total_price.currency)) return undefined;
+    totalCurrency = terms.total_price.currency;
+  }
   const items: import("./service.js").CandidateQuoteItem[] = [];
   for (const item of terms.items) {
     if (typeof item !== "object" || item === null) return undefined;
@@ -142,7 +141,7 @@ export function projectOfferTerms(
     if (typeof qty !== "number" || !Number.isFinite(qty) || qty <= 0) return undefined;
     if (typeof minor !== "number" || !Number.isSafeInteger(minor) || minor < 0) return undefined;
     const lineCurrency = item.unit_price?.currency;
-    if (typeof lineCurrency !== "string" || lineCurrency === "") return undefined;
+    if (!validCurrency(lineCurrency)) return undefined;
     lineCurrencies.push(lineCurrency);
     items.push({
       sku,
@@ -153,11 +152,13 @@ export function projectOfferTerms(
       unit_price_minor: minor,
     });
   }
-  const declaredCurrency =
-    typeof terms.currency === "string" && terms.currency !== "" ? terms.currency : undefined;
   const uniform = lineCurrencies.every((c) => c === lineCurrencies[0]);
-  if (!uniform || declaredCurrency === undefined) return undefined;
-  const currency: string = declaredCurrency;
+  if (!uniform) return undefined;
+  // TermSet need not duplicate the currency already carried by every Money.
+  // Infer only after all lines have been checked, never from the first alone.
+  const hasDeclaredCurrency = Object.hasOwn(terms, "currency");
+  if (hasDeclaredCurrency && !validCurrency(terms.currency)) return undefined;
+  const currency = hasDeclaredCurrency ? terms.currency as string : lineCurrencies[0]!;
   if (currency !== lineCurrencies[0]) return undefined;
   if (totalCurrency !== undefined && totalCurrency !== currency) return undefined;
   let total: number;
@@ -183,6 +184,8 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   private readonly pollIntervalMs: number;
   private readonly bearerToken?: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly rpcFetchImpl?: typeof fetch;
+  private readonly recovery?: BuyerProtocolRecovery;
   private readonly endpointCache = new Map<string, string>();
 
   constructor(options: A2AQuoteFetcherOptions = {}) {
@@ -191,17 +194,22 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_MS;
     this.bearerToken = options.bearerToken;
+    // Card reads retain their existing fetch seam. Only an explicit custom
+    // transport may replace the A2A client's pinned RPC default.
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.rpcFetchImpl = options.fetchImpl;
+    if (options.protocolStateDir && options.localBuyerAgentId) this.recovery = new BuyerProtocolRecovery(options.protocolStateDir, options.localBuyerAgentId);
   }
 
   /** 对每个 Merchant 独立发起真实 RFQ 并收集回复（部分失败语义）。 */
-  async requestQuotes(intent: Record<string, unknown>, merchants: MerchantRecord[]): Promise<QuoteCandidateInput[]> {
-    return Promise.all(merchants.map((merchant) => this.requestQuote(intent, merchant)));
+  async requestQuotes(intent: Record<string, unknown>, merchants: MerchantRecord[], context?: ProtocolTaskContext): Promise<QuoteCandidateInput[]> {
+    return Promise.all(merchants.map((merchant) => this.requestQuote(intent, merchant, context)));
   }
 
   private async requestQuote(
     intent: Record<string, unknown>,
     merchant: MerchantRecord,
+    context?: ProtocolTaskContext,
   ): Promise<QuoteCandidateInput> {
     const { merchant_id: merchantId, agent_card_url: agentCardUrl } = merchant;
     if (agentCardUrl === undefined || agentCardUrl === "") {
@@ -231,54 +239,43 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         allowPrivateRanges: this.allowPrivateRanges,
         skipDnsCheck: this.skipDnsCheck,
         timeoutMs: this.timeoutMs,
-        fetchImpl: this.fetchImpl,
+        ...(this.rpcFetchImpl !== undefined ? { fetchImpl: this.rpcFetchImpl } : {}),
       });
-      const task = await client.sendMessage(envelopeToMessage(envelope));
-      const reply = await this.waitForMerchantReply(client, task);
-      if (reply === null) {
-        return {
-          merchant_id: merchantId,
-          status: "failed",
-          failure: {
-            classification: "timeout",
-            retryable: true,
-            detail: `no merchant reply within ${this.timeoutMs}ms`,
-          },
-        };
-      }
-      const offerId =
-        typeof reply.payload === "object" && reply.payload !== null
-          ? (reply.payload as { offer_id?: unknown }).offer_id
-          : undefined;
-      // review P1-2（返修）：把 KNP offer 的结构化 terms 投影进候选——委托
-      // 约束核验以此为唯一权威事实；投影失败（缺字段/非整数 minor/非法数量）
-      // 则不携带 terms，下游带约束 accept 走 fail-closed。
-      const terms = projectOfferTerms(reply.payload);
-      return {
-        merchant_id: merchantId,
-        status: "succeeded",
-        ...(terms !== undefined ? { terms } : {}),
-        provenance: {
-          ...(typeof offerId === "string" && offerId !== "" ? { offer_id: offerId } : {}),
-          negotiation_id: negotiationId,
-          merchant_reply_id: reply.message_id,
-          source: "a2a",
-          reply_text: JSON.stringify(reply),
-          sku,
-          a2a_endpoint: endpoint,
-        },
-      };
+      if (!this.recovery || !context) throw new ProtocolOperationUnknown();
+      const exchange = await this.recovery.exchange({
+        context, stage: "rfq", round: 0, merchantId, endpoint,
+        binding: { intent, merchant, payload: envelope.payload },
+        build: (id) => buildRfqEnvelope({ negotiationId:id, sku, quantity:firstQuantity(intent), deliveryBefore:constraintsDeadline(intent), now:()=>context.createdAt }),
+        send: (wire) => client.sendMessage(envelopeToMessage(wire)),
+        get: (id) => client.getTask(id), timeoutMs:this.timeoutMs, pollIntervalMs:this.pollIntervalMs,
+      });
+      return this.project(exchange);
     } catch (error) {
       return {
         merchant_id: merchantId,
         status: "failed",
         failure: {
           classification: "protocol_error",
-          retryable: true,
+          retryable: !(error instanceof ProtocolOperationUnknown || error instanceof ProtocolOperationConflict),
           detail: error instanceof Error ? error.message : String(error),
         },
       };
     }
+  }
+
+  private project({reply,wire,endpoint,merchantId}:ProtocolReply):QuoteCandidateInput {
+    if (!["offer", "counter_offer"].includes(reply.action)) throw new Error("merchant did not return a priced offer");
+    const offerId=(reply.payload as {offer_id?:unknown}).offer_id;
+    const sku=(wire.payload as {items?:Array<{sku?:string}>}).items?.[0]?.sku;
+    const terms=projectOfferTerms(reply.payload);
+    return {merchant_id:merchantId,status:"succeeded",...(terms?{terms}:{}),provenance:{...(typeof offerId==="string"?{offer_id:offerId}:{}),negotiation_id:wire.negotiation_id,merchant_reply_id:reply.message_id,source:"a2a",reply_text:JSON.stringify(reply),sku,a2a_endpoint:endpoint}};
+  }
+  async recoverQuotes(context:ProtocolTaskContext):Promise<QuoteCandidateInput[]> {
+    if(!this.recovery)throw new ProtocolOperationUnknown();
+    const results=await this.recovery.recover(context,(endpoint,id)=>buildA2AClient(endpoint,{
+      bearerToken:this.bearerToken,allowPrivateRanges:this.allowPrivateRanges,skipDnsCheck:this.skipDnsCheck,timeoutMs:this.timeoutMs,...(this.rpcFetchImpl!==undefined?{fetchImpl:this.rpcFetchImpl}:{}),
+    }).getTask(id),this.timeoutMs,this.pollIntervalMs);
+    return results.map(result=>this.project(result));
   }
 
   /** 解析 agent card JSONRPC 端点（按 card URL 缓存；拒绝非 http(s)）。 */
@@ -290,21 +287,4 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     return endpoint;
   }
 
-  /** 发送 RFQ 后轮询直到 merchant 回复 envelope（非 rfq action）或超时。 */
-  private async waitForMerchantReply(
-    client: ReturnType<typeof buildA2AClient>,
-    initial: A2ATask,
-  ): Promise<NegotiationEnvelope | null> {
-    const direct = extractKnpEnvelope(initial);
-    if (direct !== null && direct.action !== "rfq") return direct;
-    const deadline = Date.now() + this.timeoutMs;
-    let task = initial;
-    for (;;) {
-      await sleep(this.pollIntervalMs);
-      task = await client.getTask(task.id);
-      const envelope = extractKnpEnvelope(task);
-      if (envelope !== null && envelope.action !== "rfq") return envelope;
-      if (Date.now() >= deadline) return null;
-    }
-  }
 }

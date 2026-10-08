@@ -699,7 +699,12 @@ async function cmdTui(args: ParsedArgs): Promise<number> {
     return EXIT.CONFIG;
   }
 
-  const dataDir = args.dataDir ?? path.resolve(".kiwi", "agents", profile.agent_id);
+  const dataDir = resolveServeDataDir(args.dataDir, profile.agent_id, profile.merchant_runtime?.data_dir);
+  const legacyDir = path.resolve(".kiwi", "agents", profile.agent_id);
+  if (args.dataDir === undefined && profile.merchant_runtime?.data_dir === undefined &&
+      dataDir !== legacyDir && existsSync(legacyDir)) {
+    process.stderr.write(`[tui] 发现旧状态目录 ${legacyDir}；未自动迁移，需恢复旧状态时显式 --data-dir 指向该目录。\n`);
+  }
   const controller = new OperatorController({
     profile,
     store: new FileOperatorEventStore(dataDir),
@@ -2096,9 +2101,10 @@ async function cmdDemo(args: ParsedArgs): Promise<number> {
     return EXIT.CONFIG;
   }
   try {
-    await runDemo(scenarioKey, {
+    const summary = await runDemo(scenarioKey, {
       onLog: (phase: string, detail: string) => process.stderr.write(`  [${phase}] ${detail}\n`),
     });
+    process.stdout.write(`${JSON.stringify(summary)}\n`);
     return EXIT.OK;
   } catch (err) {
     process.stderr.write(`demo failed: ${err instanceof Error ? err.message : String(err)}\n`);
@@ -2211,13 +2217,21 @@ async function cmdMerchantUp(args: ParsedArgs): Promise<number> {
   const caddyfilePath = args.caddyfile ?? "Caddyfile.kiwi";
 
   // ── setup-public：检测 IP / DNS 检查 / 生成 Caddyfile（幂等）──
-  await runMerchantSetupPublic({
-    domain,
-    port,
-    caddyfilePath,
-    merchantAgentId: profile.agent_id,
-    profilePath: args.profile,
-  });
+  try {
+    await runMerchantSetupPublic({
+      domain,
+      port,
+      caddyfilePath,
+      merchantAgentId: profile.agent_id,
+      profilePath: args.profile,
+    });
+  } catch (err) {
+    if (err instanceof SetupPublicError) {
+      process.stderr.write(`${err.message}\n`);
+      return EXIT.CONFIG;
+    }
+    throw err;
+  }
   process.stdout.write(
     `[merchant up] 域名 ${domain} · 端口 ${port} · Caddyfile ${caddyfilePath}\n`,
   );

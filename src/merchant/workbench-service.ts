@@ -270,14 +270,19 @@ export class MerchantWorkbenchService {
       if (this.dataSource !== undefined) {
         const facts = await this.dataSource.getProducts({ limit: 100 });
         return {
-          items: facts.map((p) => ({
+          items: facts.map((p) => {
+            if (p.price_minor === undefined) {
+              throw new MerchantWorkbenchError("unavailable", `商品 ${p.sku} 的公开价格不可用`);
+            }
+            return {
             sku: p.sku,
             merchant_id: this.ownerId,
             title: p.title ?? "",
-            price: p.price_minor ?? 0,
+            price: p.price_minor,
             stock: p.stock ?? null,
             paused: false,
-          })),
+            };
+          }),
           source: "data_source",
         };
       }
@@ -493,6 +498,7 @@ export class MerchantWorkbenchService {
       if (candidate === undefined) {
         throw new MerchantWorkbenchError("not_found", `未知审批候选 ${candidateId}`);
       }
+      this.releaseSettledDraftHook(candidateId);
       // manual 模式语义（对齐 kernel 评审项 P3-3）：manual = advice only。
       if (this.mode() === "manual") {
         return {
@@ -516,12 +522,23 @@ export class MerchantWorkbenchService {
       }
       this.approvals.markApproved(candidateId);
       const outcome = await executeApprovedCandidate(this.approvals, candidateId, hooks);
-      // 候选生命周期终结（executed / stale / expired）后释放钩子闭包（评审项 P3-5）。
-      if (outcome.kind !== "not_approvable") this.pendingHooks.delete(candidateId);
+      this.releaseSettledDraftHook(candidateId);
       return outcome;
     } catch (err) {
+      this.releaseSettledDraftHook(candidateId);
       throw toWorkbenchError(err);
     }
+  }
+
+  private releaseSettledDraftHook(candidateId: string): void {
+    const candidate = this.approvals.get(candidateId);
+    if (candidate === undefined) return;
+    const knownTerminal = candidate.status === "executed" || candidate.status === "rejected" ||
+      ((candidate.status === "expired" || candidate.status === "superseded") &&
+        this.approvals.executionWasClaimed(candidateId) === false);
+    // executing_at is durable uncertainty evidence, including historical
+    // superseded/expired records. Keep their hook for reconciliation.
+    if (knownTerminal) this.pendingHooks.delete(candidateId);
   }
 
   /** 租户校验：入参 merchant_id 提供时必须等于本商家 owner_id。 */

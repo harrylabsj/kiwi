@@ -31,7 +31,7 @@ import { DEFAULT_CATALOG_URL } from "../product-cli.js";
 import { agentDataDir, ensurePathsForDir } from "../agent/agent-db.js";
 import { WeixinChannel } from "./channel.js";
 import { credentialsPathFor, syncStatePathFor } from "./credentials.js";
-import { ILINK_DEFAULT_BASE_URL } from "./types.js";
+import { ILINK_DEFAULT_BASE_URL, WeixinError } from "./types.js";
 
 export function weixinUsage(): string {
   return `kiwi weixin — 微信远程控制通道（iLink Bot）
@@ -131,7 +131,11 @@ export async function cmdWeixin(args: WeixinCliArgs): Promise<number> {
     process.stderr.write(
       `[weixin] ${err instanceof Error ? err.message : String(err)}\n`,
     );
-    return EXIT.CONFIG;
+    if (err instanceof WeixinError) {
+      if (err.code === "auth") return EXIT.AUTH;
+      if (err.code === "not_configured" || err.code === "validation") return EXIT.CONFIG;
+    }
+    return EXIT.TRANSIENT;
   } finally {
     process.removeListener("SIGINT", shutdown);
     process.removeListener("SIGTERM", shutdown);

@@ -22,6 +22,9 @@
  * 包装层只负责 manifest/tool description/路由，业务判断全部回到 buyer-core。
  */
 
+import path from "node:path";
+import { McpError } from "./errors.js";
+
 import { assertNorthboundContractValid } from "../contracts/northbound-schema.js";
 import { BuyerFollowsSource } from "../discovery/catalog-source/buyer-follows.js";
 import { A2ANegotiator } from "./a2a-negotiator.js";
@@ -56,6 +59,8 @@ export interface BuyerServiceConfig {
   a2aSkipDnsCheck?: boolean;
   /** A2A 单请求超时 ms。 */
   a2aTimeoutMs?: number;
+  /** Explicit recovery directory required for memory/URI database configurations. */
+  protocolStateDir?: string;
 }
 
 /**
@@ -69,6 +74,13 @@ export interface BuyerServiceConfig {
  */
 export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService {
   assertNorthboundContractValid("delegation-policy", config.policy, "delegation policy");
+  if(config.catalogUrl!==undefined && config.marketplaceUrl===undefined && (!config.dbPath.trim() || /^file:/i.test(config.dbPath)))throw new McpError("invalid_params","empty/URI buyer database is unsupported; use a real path or :memory: with explicit protocolStateDir");
+  let protocolStateDir=config.protocolStateDir;
+  if(config.catalogUrl!==undefined && config.marketplaceUrl===undefined && protocolStateDir===undefined){
+    if(!config.dbPath.trim() || config.dbPath===":memory:" || /^file:/i.test(config.dbPath))throw new McpError("invalid_params","memory/URI buyer database requires explicit protocolStateDir");
+    protocolStateDir=path.join(path.dirname(path.resolve(config.dbPath)),"buyer-knp");
+  }
+  if(protocolStateDir!==undefined && !path.isAbsolute(protocolStateDir))throw new McpError("invalid_params","protocolStateDir must be an explicit absolute directory");
   const store = new TaskApprovalStore({ dbPath: config.dbPath });
   let merchantIndex;
   let quoteFetcher;
@@ -100,6 +112,8 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
       });
     }
     const a2a = {
+      protocolStateDir,
+      localBuyerAgentId:config.buyerAgentId,
       bearerToken: config.a2aBearerToken,
       allowPrivateRanges: config.a2aAllowPrivateRanges,
       skipDnsCheck: config.a2aSkipDnsCheck,

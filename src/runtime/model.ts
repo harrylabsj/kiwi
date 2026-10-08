@@ -83,6 +83,10 @@ export function resolveThinkingLevel(profile: AgentProfile): ThinkingLevel | und
 
 export function buildModel(profile: AgentProfile): Model<Api> {
   const provider = profile.model.provider;
+  if (provider !== "fake" && PROVIDER_API[provider] === undefined &&
+      (!profile.model.api?.trim() || !profile.model.base_url?.trim())) {
+    throw new Error(`Unknown model provider ${provider}: explicit api and base_url are required`);
+  }
   const api = (profile.model.api ?? PROVIDER_API[provider] ?? "openai-completions") as Api;
   const baseUrl = profile.model.base_url ?? PROVIDER_BASE_URL[provider] ?? "";
   return {
