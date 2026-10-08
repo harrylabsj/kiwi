@@ -25,6 +25,7 @@
  */
 
 import { createServer, type Server } from "node:http";
+import { timingSafeEqual as timingSafeEqualBuffer } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { KiwiBuyerService, type AuthorizationRecord } from "../buyer-core/service.js";
 import { McpError } from "../buyer-core/errors.js";
@@ -37,6 +38,21 @@ export interface HttpAdapterOptions {
   merchantUcp?: Record<string, { domain: string; catalogEndpoint: string }>;
   /** Merchant Ops（§7.6）：merchantId → MerchantOpsService（merchant token 作用域）。 */
   merchantOps?: Record<string, MerchantOpsService>;
+  /**
+   * review P1-1（返修）：Bearer 认证令牌——**必选**。除 /health 外所有端点
+   * 要求 `Authorization: Bearer <authToken>`；未配置时 createBuyerHttpServer
+   * 直接抛错（原返修未配置 token 时 loopback 来源全路由放行 = 以 localhost
+   * 充当身份认证，A316 验收不通过）。loopback 来源不豁免鉴权。
+   */
+  authToken: string;
+  /**
+   * review P1-1（返修）：商家裁决作用域独立令牌——`/merchant/:id/*`（人工
+   * 审核/RFQ/分析等商家裁决面）要求 `Bearer <merchantAuthToken>`，与买家
+   * 操作作用域分离；注入 merchantOps 而未配置该令牌时构造即抛错（fail-closed）。
+   */
+  merchantAuthToken?: string;
+  /** review P1-1：允许的 Host 头裸名（防 DNS rebinding）；缺省仅 loopback。 */
+  allowedHosts?: string[];
 }
 
 type Params = Record<string, string>;
@@ -45,17 +61,72 @@ interface RouteHandler {
   (body: Record<string, unknown>, params: Params, res: ServerResponse): Promise<void>;
 }
 
+/** review P1-1：请求体超限的类型化错误（与 invalid JSON 区分，映射 413）。 */
+class BodyTooLargeError extends Error {}
+
+/** review P1-1（返修）：恒时字符串比较（防令牌逐字节侧信道）。 */
+function timingSafeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf-8");
+  const bb = Buffer.from(b, "utf-8");
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqualBuffer(ab, bb);
+}
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+
 export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
-  const { service, merchantUcp, merchantOps } = options;
+  const { service, merchantUcp, merchantOps, authToken, merchantAuthToken } = options;
+  // review P1-1（返修）：鉴权必选、作用域分离——token 缺失即拒绝构建，
+  // 不再有任何「未配置=放行」路径；merchant 裁决面必须有自己的令牌。
+  if (authToken === undefined || authToken === "" || authToken.trim() === "") {
+    throw new Error(
+      "createBuyerHttpServer requires an explicit authToken — localhost origin is not an identity",
+    );
+  }
+  // review P1-1（A316 补充校准）：商家裁决令牌必须显式、非空、且与买家令牌
+  // 不同——同值等于没有 scope 分离；空白串在构造期即拒（不依赖 HTTP 头
+  // 空白规范化行为）。
+  if (merchantOps !== undefined) {
+    if (merchantAuthToken === undefined || merchantAuthToken === "" || merchantAuthToken.trim() === "") {
+      throw new Error(
+        "createBuyerHttpServer requires a non-empty merchantAuthToken when merchantOps is configured",
+      );
+    }
+    if (merchantAuthToken === authToken) {
+      throw new Error(
+        "createBuyerHttpServer: merchantAuthToken must differ from authToken — same token is not scope separation",
+      );
+    }
+  }
+  // review P1-1：Host allowlist —— 缺省含 loopback 名称，阻断 DNS rebinding
+  // （攻击页把自身域名解析到 127.0.0.1 时 Host 头是其自有域名，不在表内即拒）。
+  const allowedHosts = new Set(options.allowedHosts ?? []);
+  for (const h of LOOPBACK_HOSTS) allowedHosts.add(h);
+  const hostAllowed = (hostHeader: string): boolean => {
+    const bare = hostHeader.replace(/:\d+$/, "");
+    return allowedHosts.has(bare) || allowedHosts.has(hostHeader);
+  };
 
   const readJson = (req: IncomingMessage): Promise<Record<string, unknown>> =>
     new Promise((resolve, reject) => {
       let data = "";
+      let settled = false;
+      let bodyBytes = 0;
       req.on("data", (chunk: Buffer) => {
+        if (settled) return;
+        bodyBytes += chunk.length; // review P1-1（返修）：按字节计量（UTF-8 中文体字符数≠字节数）
         data += chunk.toString();
-        if (data.length > 256 * 1024) reject(new Error("request body too large"));
+        if (bodyBytes > 256 * 1024) {
+          // review P1-1：超限即暂停读取并摘除监听，阻止内存持续累积；
+          // socket 在 413 响应发出后销毁（见下方 catch 分支）。
+          settled = true;
+          req.pause();
+          req.removeAllListeners("data");
+          reject(new BodyTooLargeError("request body too large"));
+        }
       });
       req.on("end", () => {
+        if (settled) return;
         if (data.trim() === "") return resolve({});
         try {
           resolve(JSON.parse(data) as Record<string, unknown>);
@@ -242,8 +313,41 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
   ];
 
   return createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-    const segments = url.pathname.split("/").filter(Boolean);
+    // review P1-1：中间件 1 —— Host allowlist（防 DNS rebinding）。
+    if (!hostAllowed(req.headers.host ?? "")) {
+      return send(res, 403, { ok: false, error: { code: "host_not_allowed", message: "host 不在允许列表" } });
+    }
+    // review P1-1（A319 校准）：**认证与路由共用同一个安全解析的路径视图**——
+    // 先经 URL 规范化（解析点段）再按段去空切片；scope 判定与路由匹配基于
+    // 同一份 segments。此前认证读 raw req.url、路由用规范化路径，/x/../merchant/
+    // 与 //merchant// 等变形即可携买家令牌越过商家裁决 scope（A317 raw 实证）。
+    // %2e%2e 等编码形状不被解码等价——路由不匹配 → 404（fail-closed）。
+    // review P1-1（A319 校准补充）：单参构造（双参 base 形式会把 //merchant
+    // 误判为 protocol-relative host）+ 折叠重复 slash——认证与路由消费同一
+    // segments 视图；点段由 URL 规范化解析，%2e 编码形状不解码（不匹配 → 404）。
+    const rawUrl = req.url ?? "/";
+    const safeUrl = rawUrl.startsWith("/") ? `http://localhost${rawUrl}` : "http://localhost/";
+    const url = new URL(safeUrl);
+    const segments = url.pathname.replace(/\/{2,}/g, "/").split("/").filter(Boolean);
+    const canonicalPath = `/${segments.join("/")}`;
+    // review P1-1（返修）：中间件 2 —— 作用域 Bearer 鉴权（必选）。/health
+    // 是唯一例外；/merchant/* 商家裁决面要求独立 merchantAuthToken；其余
+    // 端点要求 authToken。loopback 来源不构成身份，一律照样验签。
+    if (canonicalPath !== "/health") {
+      const header = req.headers.authorization ?? "";
+      const isMerchantScope = segments[0] === "merchant";
+      const expected = isMerchantScope ? `Bearer ${merchantAuthToken}` : `Bearer ${authToken}`;
+      if (
+        expected === "Bearer undefined" ||
+        header.length !== expected.length ||
+        !timingSafeEqual(header, expected)
+      ) {
+        return send(res, 401, {
+          ok: false,
+          error: { code: "unauthorized", message: "缺少或错误的 Bearer 令牌" },
+        });
+      }
+    }
     const method = req.method ?? "GET";
 
     for (const route of routes) {
@@ -258,12 +362,36 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
         else if (rs !== ss) { match = false; break; }
       }
       if (!match) continue;
-      const body = await readJson(req).catch(() => ({}));
+      // review P1-1：body 解析失败不再吞成空对象——超限 413、坏 JSON 400。
+      let body: Record<string, unknown>;
+      try {
+        body = await readJson(req);
+      } catch (e) {
+        if (e instanceof BodyTooLargeError) {
+          // 请求体未消费完，响应后必须关闭连接（避免 keep-alive 流失步）。
+          res.writeHead(413, { "content-type": "application/json", connection: "close" });
+          res.end(
+            JSON.stringify({ ok: false, error: { code: "body_too_large", message: "request body too large" } }),
+            () => req.destroy(),
+          );
+          return;
+        }
+        return send(res, 400, { ok: false, error: { code: "invalid_body", message: "invalid JSON body" } });
+      }
       await route.handler(body, params, res);
       return;
     }
-    send(res, 404, { ok: false, error: { code: "not_found", message: `${method} ${url.pathname}` } });
+    // review 3-43：404 不回显请求 path。
+    send(res, 404, { ok: false, error: { code: "not_found", message: "no such route" } });
   });
+}
+
+/** review P1-1：认证检查用 path（不构造 URL 对象，避免对畸形请求行抛异常）。 */
+function url_pathname_only(req: IncomingMessage): string {
+  const raw = req.url ?? "/";
+  const q = raw.indexOf("?");
+  const p = q === -1 ? raw : raw.slice(0, q);
+  return p.startsWith("/") ? p : `/${p}`;
 }
 
 export type { Server };

@@ -20,6 +20,8 @@ import {
   DeterministicNegotiationRunner,
   type SubmitOutcome,
 } from "../src/operator/runner.js";
+import { idempotencyKey } from "../src/commerce/types.js";
+import { PROTOCOL_VERSION } from "../src/negotiation/types.js";
 import { CommerceError } from "../src/commerce/data-source.js";
 import { InMemoryOperatorEventStore } from "../src/operator/store.js";
 import { createStrategyEngine } from "../src/operator/strategy.js";
@@ -611,11 +613,22 @@ describe("submit 异常兜底（评审项 M7）", () => {
   /** submit 网络层抛错的 runner（网关瞬时故障场景）。 */
   class SubmitFailingRunner extends DeterministicNegotiationRunner {
     override async submit(): Promise<SubmitOutcome> {
+      // 复刻真 runner 的 P1-4 路径：先 failClaim 持久 unknown 标记，再抛。
+      await (this as unknown as { client: { failClaim: (x: unknown) => Promise<void> } }).client.failClaim({
+        message_id: 1,
+        idempotency_key: idempotencyKey(
+          (this as unknown as { profile: { agent_id: string } }).profile.agent_id,
+          1,
+          PROTOCOL_VERSION,
+        ),
+        error:
+          "submit result unknown: request may have landed (effects possible); reconcile with original idempotency key before any retry — gateway unreachable",
+      });
       throw new CommerceError("request_failed", "gateway unreachable");
     }
   }
 
-  it("submit 抛错 → 停心跳 + abandon claim + 落 failed 事件（会话不楔死）", async () => {
+  it("submit 抛错 → 停心跳 + unknown 屏障（claim 置 failed 不 abandon）+ 落 failed 事件", async () => {
     const { merchant } = testMarketplace();
     const store = new InMemoryOperatorEventStore();
     const controller = new OperatorController({
@@ -630,13 +643,14 @@ describe("submit 异常兜底（评审项 M7）", () => {
     expect(prepared.kind).toBe("awaiting_approval");
     expect(merchant.claimStatus(1)).toBe("processing");
 
-    // 修复前：submit 抛错冒泡到 TUI，心跳继续每 60s 续命 claim——消息永远
-    // 不被 stale recovery 回收、也不回到 pending，会话永久楔死。
+    // review P1-4（A316 校准）：submit 抛错 = 结果未知（效果可能已落地）。
+    // runner 已 failClaim 持久 unknown 屏障——controller **不再 abandon**
+    //（abandon 会让消息重新可领取 → 新操作双效果）；心跳已停，不续命。
     const approved = await controller.approve();
     expect(approved.kind).toBe("invalid");
     if (approved.kind === "invalid") expect(approved.reason).toContain("提交失败");
-    // claim 已 abandon：消息回到可领取状态（心跳已停，不再续命）
-    expect(merchant.claimStatus(1)).toBe("abandoned");
+    // claim 已被 runner failClaim 置 failed（unknown marker）——不可重领
+    expect(merchant.claimStatus(1)).toBe("failed");
     // failed 事件已落账（审计可查）
     const settled = (await store.readAll())
       .filter((e) => e.type === "turn.settled")

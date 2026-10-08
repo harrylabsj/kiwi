@@ -249,11 +249,19 @@ export class TaskApprovalStore {
       merchant_id: string;
       status: string;
       provenance?: Record<string, unknown>;
+      /** review P1-2（返修）：结构化报价事实。不新增列（无 DB 迁移）——以
+       *  provenance_json 保留键 `_quote_terms` 持久化；写入侧唯一来源是
+       *  fetcher 的 KNP offer 投影（已做形状完整性校验）。 */
+      terms?: unknown;
       failure?: Record<string, unknown>;
       expires_at?: string;
       retryable: boolean;
     },
   ): void {
+    const provenance =
+      candidate.terms !== undefined
+        ? { ...(candidate.provenance ?? {}), _quote_terms: candidate.terms }
+        : candidate.provenance;
     this.db
       .prepare(
         `INSERT INTO mcp_candidates
@@ -265,7 +273,7 @@ export class TaskApprovalStore {
         taskId,
         candidate.merchant_id,
         candidate.status,
-        candidate.provenance !== undefined ? JSON.stringify(candidate.provenance) : null,
+        provenance !== undefined ? JSON.stringify(provenance) : null,
         candidate.failure !== undefined ? JSON.stringify(candidate.failure) : null,
         candidate.expires_at ?? null,
         candidate.retryable ? 1 : 0,
@@ -278,15 +286,26 @@ export class TaskApprovalStore {
         "SELECT candidate_id, merchant_id, status, provenance_json, failure_json, expires_at, retryable FROM mcp_candidates WHERE task_id = ?",
       )
       .all(taskId) as Array<Record<string, unknown>>;
-    return rows.map((r) => ({
-      candidate_id: r.candidate_id,
-      merchant_id: r.merchant_id,
-      status: r.status,
-      ...(r.provenance_json !== null ? { provenance: this.parse(r.provenance_json as string) } : {}),
-      ...(r.failure_json !== null ? { failure: this.parse(r.failure_json as string) } : {}),
-      ...(r.expires_at !== null ? { expires_at: r.expires_at } : {}),
-      retryable: r.retryable === 1,
-    }));
+    return rows.map((r) => {
+      const provenance =
+        r.provenance_json !== null
+          ? (this.parse(r.provenance_json as string) as Record<string, unknown>)
+          : undefined;
+      const terms =
+        provenance !== undefined && "_quote_terms" in provenance
+          ? (provenance as { _quote_terms?: unknown })._quote_terms
+          : undefined;
+      return {
+        candidate_id: r.candidate_id,
+        merchant_id: r.merchant_id,
+        status: r.status,
+        ...(provenance !== undefined ? { provenance } : {}),
+        ...(terms !== undefined ? { terms } : {}),
+        ...(r.failure_json !== null ? { failure: this.parse(r.failure_json as string) } : {}),
+        ...(r.expires_at !== null ? { expires_at: r.expires_at } : {}),
+        retryable: r.retryable === 1,
+      };
+    });
   }
 
   setApproval(taskId: string, approval: StoredApproval): void {
@@ -310,6 +329,27 @@ export class TaskApprovalStore {
         approval.decided_at ?? null,
         approval.authorization_json ?? null,
       );
+  }
+
+  /**
+   * review P1-2（A316 校准）：短事务原语——BEGIN IMMEDIATE…COMMIT 包住同步
+   * fn；任何异常 ROLLBACK 后原样上抛（无事后补偿）。node:sqlite 同步执行，
+   * 事务内读写对同进程其他调用天然互斥（写锁 + 串行）。
+   */
+  transaction<T>(fn: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // 事务已不存在（如嵌套/已回滚）——不掩盖原始错误
+      }
+      throw err;
+    }
   }
 
   getApproval(approvalId: string): StoredApproval | undefined {
@@ -365,6 +405,31 @@ export class TaskApprovalStore {
         agreement.expires_at ?? null,
         agreement.payload,
       );
+  }
+
+  /** review P1-2：按 (task_id, terms_digest) 找既有 agreement——崩溃窗口
+   *  （agreement 已落、approval 未消费）重放时复用同一 agreement，效果恰一次。 */
+  findAgreementByTerms(taskId: string, termsDigest: string): StoredAgreement | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM mcp_agreements WHERE task_id = ? AND terms_digest = ? ORDER BY created_at DESC LIMIT 1",
+      )
+      .get(taskId, termsDigest) as Record<string, unknown> | undefined;
+    if (row === undefined) return undefined;
+    return {
+      agreement_id: String(row.agreement_id),
+      task_id: String(row.task_id),
+      negotiation_id: row.negotiation_id === null ? undefined : String(row.negotiation_id),
+      terms_digest: row.terms_digest === null ? undefined : String(row.terms_digest),
+      created_at: String(row.created_at),
+      expires_at: row.expires_at === null ? undefined : String(row.expires_at),
+      payload: String(row.payload),
+    };
+  }
+
+  /** review P1-2：补偿删除（agreement 落库后、消费标记前的本地写失败回滚）。 */
+  deleteAgreement(agreementId: string): void {
+    this.db.prepare("DELETE FROM mcp_agreements WHERE agreement_id = ?").run(agreementId);
   }
 
   getAgreement(agreementId: string): StoredAgreement | undefined {

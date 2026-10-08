@@ -41,12 +41,18 @@ export interface A2ANegotiatorOptions {
   fetchImpl?: typeof fetch;
   /** 缺省还价折扣（现价×(1-discount)，无 intent 目标价时用）。 */
   defaultDiscountRate?: number;
+  /** review P1-2（A319）：实际外发 counter 提案前的委托约束门。 */
+  counterProposalGate?: CounterProposalGate;
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_DISCOUNT_RATE = 0.1;
 
 interface CandidateLike {
+  /** review P1-2（A325）：结构化商家身份（服务端写入，非 provenance 投影）。 */
+  merchant_id?: unknown;
+  status?: unknown;
+  terms?: unknown;
   provenance?: {
     negotiation_id?: unknown;
     offer_id?: unknown;
@@ -71,6 +77,16 @@ function parseOfferPriceMinor(replyText: string | undefined): number | undefined
   } catch {
     return undefined;
   }
+}
+
+function intentQuantityUnit(intent: Record<string, unknown>): string | undefined {
+  const items = Array.isArray(intent.items) ? (intent.items as Array<Record<string, unknown>>) : [];
+  const qty = items[0]?.quantity;
+  if (typeof qty === "object" && qty !== null) {
+    const unit = (qty as Record<string, unknown>).unit;
+    if (typeof unit === "string" && unit !== "") return unit;
+  }
+  return undefined;
 }
 
 function intentQuantity(intent: Record<string, unknown>): number {
@@ -107,6 +123,24 @@ function targetPriceMinor(
   return undefined;
 }
 
+/**
+ * review P1-2（A319 校准）：**实际外发 counter 提案**的门——在 sendMessage
+ * 之前对最终结构化提案（币种/单位/数量/单价/合计）执行委托约束核验；
+ * 返回非 undefined 即拒绝外发（附原因）。拒绝原因由调用方转为 delegation_denied。
+ */
+export interface CounterProposalForGate {
+  merchant_id: string;
+  sku: string;
+  currency: string;
+  quantity_value: number;
+  quantity_unit?: string;
+  unit_price_minor: number;
+  total_price_minor: number;
+}
+export type CounterProposalGate = (
+  proposal: CounterProposalForGate,
+) => string | undefined;
+
 export class A2ANegotiator implements Negotiator {
   private readonly allowPrivateRanges: boolean;
   private readonly skipDnsCheck: boolean;
@@ -115,6 +149,8 @@ export class A2ANegotiator implements Negotiator {
   private readonly defaultDiscountRate: number;
   private readonly fetchImpl: typeof fetch;
 
+  private readonly counterProposalGate: CounterProposalGate | undefined;
+
   constructor(options: A2ANegotiatorOptions = {}) {
     this.allowPrivateRanges = options.allowPrivateRanges ?? false;
     this.skipDnsCheck = options.skipDnsCheck ?? false;
@@ -122,6 +158,7 @@ export class A2ANegotiator implements Negotiator {
     this.bearerToken = options.bearerToken;
     this.defaultDiscountRate = options.defaultDiscountRate ?? DEFAULT_DISCOUNT_RATE;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.counterProposalGate = options.counterProposalGate;
   }
 
   async negotiate(
@@ -167,6 +204,53 @@ export class A2ANegotiator implements Negotiator {
         counterPriceMinor: target,
         now: utcNow,
       });
+      // review P1-2（A319 校准）：对**实际外发提案**执行委托约束门——不是只
+      // 筛旧候选。拒绝即零 wire（不 sendMessage），原因透出给上层转
+      // delegation_denied。安全 minor 由门内核验（非整数/负数拒绝）。
+      if (this.counterProposalGate !== undefined) {
+        // review P1-2（A327 校准）：quantity/unit 从**真实外发 wire**
+        // （buildCounterEnvelope 产物，unit 硬编码 "piece"）读取——intent 的
+        // unit 只是来源，wire 不一致时门按实际外发事实判定（声明限额单位
+        // 与 wire unit 不一致 → 拒绝），不按 intent 假设放行。
+        const counterPayload = envelope.payload as {
+          proposed_terms?: {
+            currency?: unknown;
+            items?: Array<{
+              unit_price?: { amount_minor?: unknown; currency?: unknown };
+              quantity?: { value?: unknown; unit?: unknown };
+            }>;
+          };
+        };
+        const wireItem = counterPayload.proposed_terms?.items?.[0];
+        const counterMinor = wireItem?.unit_price?.amount_minor;
+        const counterCurrency =
+          typeof counterPayload.proposed_terms?.currency === "string"
+            ? (counterPayload.proposed_terms.currency as string)
+            : typeof wireItem?.unit_price?.currency === "string"
+              ? (wireItem.unit_price as { currency: string }).currency
+              : "CNY";
+        const wireQty = wireItem?.quantity?.value;
+        const wireUnit = wireItem?.quantity?.unit;
+        const quantityValue = typeof wireQty === "number" && wireQty > 0 ? wireQty : intentQuantity(intent);
+        const unitMinor = typeof counterMinor === "number" ? counterMinor : target;
+        const gateVerdict = this.counterProposalGate({
+          // review P1-2（A325 收口）：商家身份用**结构化候选字段**
+          // candidate.merchant_id——provenance 是不可信回复投影，不得替代
+          // 已选商家身份。
+          merchant_id: String(candidate.merchant_id ?? ""),
+          sku: itemSku,
+          currency: counterCurrency,
+          quantity_value: quantityValue,
+          // review P1-2（A327）：unit 取**实际外发 wire 值**——声明限额单位
+          // 与 wire 不一致时门拒绝（不削守卫；相容界内才放行）。
+          quantity_unit: typeof wireUnit === "string" && wireUnit !== "" ? wireUnit : intentQuantityUnit(intent),
+          unit_price_minor: unitMinor,
+          total_price_minor: unitMinor * quantityValue,
+        });
+        if (gateVerdict !== undefined) {
+          return { ...current, summary: `${current.summary}（counter 被委托约束阻断：${gateVerdict}）` };
+        }
+      }
       const client = buildA2AClient(endpoint, {
         bearerToken: this.bearerToken,
         allowPrivateRanges: this.allowPrivateRanges,

@@ -121,12 +121,16 @@ function installDefaultRules(deps: SearchCycleDeps, task: BuyerTask): TrackingRu
   const installed: TrackingRule[] = [];
   const interval = task.tracking_policy.default_interval_seconds;
   const cooldown = task.tracking_policy.default_cooldown_seconds;
-  if (task.constraints.max_total_price !== undefined) {
+  // review 2-21（返修）：默认规则的条件只存**私有 marker**，绝不把（可能是
+  // resolveBudget 解密出的）预算明文写进 tracking_rules.condition_json。
+  // 运行时（scheduler.evaluateRule）见到 marker 后经 resolveBudget 从 Vault
+  // 在内存取值。历史规则（已带明文 threshold）不受影响、不迁移不删除。
+  if (task.constraints.max_total_price !== undefined || task.constraints.max_total_price_vault_ref !== undefined) {
     installed.push(
       store.addTrackingRule({
         task_id: task.task_id,
         rule_type: "price_below",
-        condition: { threshold: task.constraints.max_total_price },
+        condition: { budget_sealed: "max_total_price" },
         interval_seconds: interval,
         cooldown_seconds: cooldown,
         idempotency_key: `${task.task_id}:default:price_below`,

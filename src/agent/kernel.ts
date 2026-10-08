@@ -81,7 +81,7 @@ import { groundingReads, type GroundingRead } from "./context/grounding.js";
 import { MERCHANT_GROUNDING_RULES, merchantGroundingContext } from "./merchant/merchant-grounding.js";
 import { SkillRegistry } from "./skills/registry.js";
 import { buildSkillTools } from "./skills/tools.js";
-import { DeterministicNegotiationRunner } from "../operator/runner.js";
+import { DeterministicNegotiationRunner, UnknownFencePersistenceError, type SubmitOutcome } from "../operator/runner.js";
 import type { DecisionHints } from "../runtime/fake-model.js";
 import type { BuyerTask } from "./buyer/types.js";
 import { MemoryStore } from "./memory/store.js";
@@ -459,6 +459,18 @@ export class AgentKernel {
   // claim→fail 并饿死队尾 live 消息。连续失败达上限后进入冷却窗口，
   // 窗口内跳过，窗口后允许一次重试；成功/共识时清除。
   private readonly stalledNegotiations = new Map<string, { since: string; attempts: number }>();
+
+  /**
+   * review P1-4 R1（A342）：本地 unknown 围栏**持久化失败**（存储故障）后的
+   * 同 host 明确停机集合（fail-closed）。kernel 每 tick 新建 runner——
+   * runner 的进程内 Map 跨 tick 即失，持久化又失败时没有任何屏障能挡住
+   * 「failed claim 重领 → 再次 submit」。本集合挂在 kernel 生命周期上（跨
+   * tick 有效）：停机消息在 pending 过滤与 prepare skipKeys 中跳过，修复
+   * 存储并人工对账前不再自动重驱。边界如实声明：kernel 进程重启且存储仍
+   * 不可写时无持久屏障（物理存储全坏/重启不可声称已保证）；不造跨网
+   * exactly-once，不改协议/远程 API。
+   */
+  private readonly haltedNegotiations = new Set<string>();
 
   private constructor(options: {
     profile: AgentProfile;
@@ -1196,6 +1208,9 @@ export class AgentKernel {
       `${message.conversation_id}:${message.message_id}`;
     // 审查 P2-I：冷却窗口内的消息跳过（连续失败达上限后暂停自动处理）。
     const stalled = this.stalledNegotiations;
+    // review P1-4 R1（A342）：本地围栏持久化失败后的同 host 停机集合
+    //（fail-closed）——见下 submit 错误分支与字段声明处注释。
+    const halted = this.haltedNegotiations;
     const isStalled = (message: { conversation_id: string; message_id: number }): boolean => {
       const entry = stalled.get(settledKey(message));
       // 达到连续失败上限才进入冷却（上限前的失败继续重试计数）
@@ -1205,7 +1220,12 @@ export class AgentKernel {
       if (!Number.isFinite(sinceMs) || !Number.isFinite(nowMs)) return false;
       return nowMs - sinceMs < AUTOPILOT_STALL_COOLDOWN_MS;
     };
-    if (pending.every((m) => this.settledNegotiations.has(settledKey(m)) || isStalled(m))) {
+    if (
+      pending.every(
+        (m) =>
+          this.settledNegotiations.has(settledKey(m)) || isStalled(m) || halted.has(settledKey(m)),
+      )
+    ) {
       return undefined;
     }
 
@@ -1234,28 +1254,31 @@ export class AgentKernel {
 
     // Buyer: negotiate toward the linked task's goal (quantity / target unit
     // price / budget) instead of the profile defaults.
-    let hints: DecisionHints | undefined;
-    const firstPending = pending.find(
-      (m) => !settledKeys.has(settledKey(m)) && !stalledKeys.has(settledKey(m)),
-    );
-    if (
-      firstPending !== undefined &&
-      this.profile.role === "buyer" &&
-      this.taskStore !== undefined
-    ) {
-      const link = this.taskStore.linkByConversation(firstPending.conversation_id);
-      if (link !== undefined) {
-        const task = this.taskStore.getTask(link.task_id);
-        if (task !== undefined) hints = taskNegotiationHints(this.taskStore, task);
-      }
-    }
+    // review P1-4（A336 返修）：hints 由 prepare **实际选中的目标**经
+    // hintsFor 回调现产——kernel 第一次 list 与 prepare 第二次 list 之间
+    // pending 可重排/变更，静态预取 hints 会把 B 的会话/任务 hints 串用到
+    // C（A334 实证缺口）。回调绑定实际 (conversation, message, task)。
 
-    const runner = new DeterministicNegotiationRunner(this.profile, this.commerceClient);
+    // review P1-4（A327 补充）：持久 unknown 围栏挂在 agent 数据目录——
+    // submit 网络异常（结果未知）的消息在本进程与重启后均被 prepare 跳过，
+    // 授权对账（clearUnknown）为唯一解除路径。
+    const runner = new DeterministicNegotiationRunner(this.profile, this.commerceClient, {
+      unknownFenceDir: path.join(this.paths.dir, "submit-unknown"),
+    });
+    const hintsFor = (target: { conversation_id: string; message_id: number }): DecisionHints | undefined => {
+      if (this.profile.role !== "buyer" || this.taskStore === undefined) return undefined;
+      const link = this.taskStore.linkByConversation(target.conversation_id);
+      if (link === undefined) return undefined;
+      const task = this.taskStore.getTask(link.task_id);
+      return task === undefined ? undefined : taskNegotiationHints(this.taskStore, task);
+    };
     const prepared = await runner
       .prepare({
-        ...(hints !== undefined ? { hints } : {}),
-        ...(settledKeys.size > 0 || stalledKeys.size > 0
-          ? { skipKeys: new Set([...settledKeys, ...stalledKeys]) }
+        hintsFor,
+        // review P1-4 R1（A342）：停机集合同样进 skipKeys——下一 tick 新
+        // runner 空 Map 时 prepare 不再重领已停机消息（重驱缝收口）。
+        ...(settledKeys.size > 0 || stalledKeys.size > 0 || halted.size > 0
+          ? { skipKeys: new Set([...settledKeys, ...stalledKeys, ...halted]) }
           : {}),
       })
       .catch(() => undefined);
@@ -1277,8 +1300,28 @@ export class AgentKernel {
       return undefined;
     }
 
-    const outcome = await runner.submit(prepared).catch(() => undefined);
-    if (outcome === undefined) return "磋商处理失败（网关异常），下一轮自动重试。";
+    const submitted: SubmitOutcome | Error = await runner
+      .submit(prepared)
+      .catch((err: unknown) => err as Error);
+    // review P1-4 R1（A342 返修）：本地围栏持久化失败（存储故障）必须与普通
+    // 网关 unknown 分层——吞成同一文案时，下一 tick 新 runner 空 Map + 旧
+    // 文件无此条目 + failClaim 后 failed 可重领 = 再次 submit（A341 实证）。
+    // 登记同 host 明确停机状态（fail-closed，跨 tick 有效；kernel 重启且
+    // 存储仍不可写的物理边界如实声明，不声称全网恰一次），不再自动重驱。
+    if (submitted instanceof UnknownFencePersistenceError) {
+      this.haltedNegotiations.add(settledKey(prepared.binding));
+      return (
+        `磋商提交结果未知且本地围栏持久化失败（存储故障）：已 fail-closed 停止 ` +
+        `${convId} 的自动处理——修复存储并人工对账前不再重驱，不产生重复操作。`
+      );
+    }
+    // review P1-4（返修）：submit 抛错 = 结果未知（效果可能已发生）——claim
+    // 不释放，等待网关 stale TTL 重新置 pending 后按原 idempotency key 对账；
+    // 文案不再承诺「下一轮自动重试」（消息在 TTL 前不会重新出现在待处理列表）。
+    if (submitted instanceof Error) {
+      return "磋商提交结果未知（网关异常）：已保留处理中的声明，待其恢复后按原键对账，不重复生成操作。";
+    }
+    const outcome = submitted;
     const bindingKey = settledKey(prepared.binding);
     // 审查 P2-I：权威门确定性拒绝（settlement failed）→ 连续失败计数；
     // 达上限进入冷却窗口（窗口内跳过、窗口后重试一次），并清空"已结算"

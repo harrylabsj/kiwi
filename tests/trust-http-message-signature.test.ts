@@ -393,6 +393,48 @@ describe("时间窗口 / 重放 / keyid", () => {
     expect(result).toMatchObject({ ok: false, code: "authorization_failed" });
   });
 
+  it("review 2-14 返修：expires 窗口超 15 分钟（秒制）→ 拒绝（1 天窗口不能放行）", () => {
+    const signer = new HttpMessageSigner({
+      keyid: "alice",
+      algorithm: "ed25519",
+      privateKey: ED25519_SEED,
+      created: 1723000000,
+      expires: 1723000000 + 86400, // 1 天窗口（秒）——原返修按毫秒比较放行 ~10.4 天
+    });
+    const headers = signer.sign({ method: "POST", url: "http://a.test/", body: Buffer.from("x"), headers: {} });
+    const result = verifyHttpMessageSignature({
+      method: "POST",
+      targetUri: "http://a.test/",
+      authority: "a.test",
+      headers,
+      body: Buffer.from("x"),
+      resolver: resolveFromSigningKeys([aliceKey()]),
+      now: () => 1723000060, // 窗口内、未过期
+    });
+    expect(result).toMatchObject({ ok: false, code: "authorization_failed" });
+  });
+
+  it("review 2-14 返修：合法短窗（10 分钟）在窗口内 → 通过", () => {
+    const signer = new HttpMessageSigner({
+      keyid: "alice",
+      algorithm: "ed25519",
+      privateKey: ED25519_SEED,
+      created: 1723000000,
+      expires: 1723000000 + 600, // 10 分钟 < 15 分钟上限
+    });
+    const headers = signer.sign({ method: "POST", url: "http://a.test/", body: Buffer.from("x"), headers: {} });
+    const result = verifyHttpMessageSignature({
+      method: "POST",
+      targetUri: "http://a.test/",
+      authority: "a.test",
+      headers,
+      body: Buffer.from("x"),
+      resolver: resolveFromSigningKeys([aliceKey()]),
+      now: () => 1723000060,
+    });
+    expect(result).toMatchObject({ ok: true });
+  });
+
   it("rejects a created-in-the-future signature", () => {
     const signer = new HttpMessageSigner({
       keyid: "alice",

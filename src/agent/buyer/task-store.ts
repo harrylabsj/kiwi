@@ -804,7 +804,13 @@ export class BuyerTaskStore {
   }): ConsultationLink {
     const now = this.now();
     this.db.exec("BEGIN");
+    let replayCommitted = false;
     try {
+      // review 2-12（A321 返修）：幂等命中分支在 COMMIT 后**立即终止**——
+      // 命中且 link 存在 → 返回同 link（同键同 ID/内容重放保）；事件存在而
+      // link 缺失 → 立即 typed conflict（零新 link/零新 event）。A317 p212-v6
+      // 实证：此前落穿 INSERT 再由 finally 抛 conflict，typed 错误伴随新
+      // link 0→1 自提交（已持久效果 + 错误并发）。
       if (this.eventByIdempotencyKey(input.idempotency_key) !== undefined) {
         const existing = this.db
           .prepare(
@@ -812,7 +818,12 @@ export class BuyerTaskStore {
           )
           .get(input.task_id, input.conversation_id) as Record<string, unknown> | undefined;
         this.db.exec("COMMIT");
+        replayCommitted = true;
         if (existing !== undefined) return this.rowToLink(existing);
+        throw new BuyerTaskError(
+          "conflict",
+          `idempotency event ${input.idempotency_key} exists but consultation link row is missing`,
+        );
       }
       const task = this.getTask(input.task_id);
       if (task === undefined) throw new BuyerTaskError("not_found", `no task ${input.task_id}`);
@@ -849,7 +860,16 @@ export class BuyerTaskStore {
       this.db.exec("COMMIT");
       return this.getConsultationLink(linkId) as ConsultationLink;
     } catch (err) {
-      this.db.exec("ROLLBACK");
+      // review 2-12（A321）：replay 分支已 COMMIT 时无活动事务，ROLLBACK
+      // 失败被吞、原 typed conflict 原样上抛（零新 link/零新 event，无遮蔽）；
+      // 新建分支失败则真正回滚未提交写入。
+      if (!replayCommitted) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {
+          // 无活动事务——不掩盖原始错误
+        }
+      }
       throw err;
     }
   }

@@ -194,7 +194,14 @@ export function validateMoney(value: unknown, path: string): Money {
   if (amountMinor < 0) {
     throw schemaError(`${path}/amount_minor`, "amount_minor must be a non-negative integer");
   }
-  return { currency, amount_minor: amountMinor };
+  const money: Money = { currency, amount_minor: amountMinor };
+  // review 3-9（A316 收窄）：冻结 schema 允许扩展——校验器透传未知键（原文
+  // 参与 digest），严拒仅限 schema false 节点。
+  for (const key of Object.keys(obj)) {
+    if (key in money) continue;
+    (money as unknown as Record<string, unknown>)[key] = obj[key];
+  }
+  return money;
 }
 
 export interface Quantity {
@@ -205,10 +212,16 @@ export interface Quantity {
 
 export function validateQuantity(value: unknown, path: string): Quantity {
   const obj = requireObject(value, path);
-  return {
+  const quantity: Quantity = {
     value: requirePositiveNumber(obj.value, `${path}/value`),
     unit: requireNonEmptyString(obj.unit, `${path}/unit`),
   };
+  // review 3-9：schema 允许的扩展键透传（同 validateMoney）。
+  for (const key of Object.keys(obj)) {
+    if (key in quantity) continue;
+    (quantity as unknown as Record<string, unknown>)[key] = obj[key];
+  }
+  return quantity;
 }
 
 export interface LineItem {
@@ -232,6 +245,15 @@ export function validateLineItem(
     item.unit_price = validateMoney(obj.unit_price, `${path}/unit_price`);
   } else if (opts.requireUnitPrice === true) {
     throw schemaError(`${path}/unit_price`, "unit_price is required on offer-like items");
+  }
+  // review 3-9/2-6：schema 允许的扩展字段原样透传——冻结 schema
+  // （additionalProperties: true）允许行项扩展；运行时校验器此前只重建已知
+  // 字段，携带扩展（如 handoff_destination）的 terms 在「发方原文求值 vs
+  // 收方重建求值」间 digest 分裂（terms_digest_mismatch 假拒）。透传值两侧
+  // 来自同一 wire 字节，digest 一致；业务内容寻址不受影响。
+  for (const key of Object.keys(obj)) {
+    if (key in item) continue;
+    (item as unknown as Record<string, unknown>)[key] = obj[key];
   }
   return item;
 }
@@ -280,6 +302,11 @@ export function validateTermSet(
   }
   if (obj.valid_until !== undefined) {
     terms.valid_until = requireIsoTimestamp(obj.valid_until, `${path}/valid_until`);
+  }
+  // review 3-9/2-6：顶层扩展字段同样透传（见 validateLineItem 注）。
+  for (const key of Object.keys(obj)) {
+    if (key in terms) continue;
+    (terms as unknown as Record<string, unknown>)[key] = obj[key];
   }
   return terms;
 }

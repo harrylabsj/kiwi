@@ -94,6 +94,88 @@ function constraintsDeadline(intent: Record<string, unknown>): string | undefine
   return undefined;
 }
 
+/**
+ * review P1-2（返修）：KNP offer/counter_offer payload → 结构化报价事实。
+ * 只接受完全合规的形状（money 安全整数 minor、quantity number>0、items 非空、
+ * 币种存在）；任何字段不合规整体返回 undefined（调用方 fail-closed），绝不
+ * 部分投影。
+ */
+export function projectOfferTerms(
+  payload: unknown,
+): import("./service.js").CandidateQuoteTerms | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const p = payload as {
+    terms?: unknown;
+    proposed_terms?: unknown;
+  };
+  const terms = (p.terms ?? p.proposed_terms) as
+    | {
+        items?: Array<{
+          sku?: unknown;
+          quantity?: { value?: unknown; unit?: unknown };
+          unit_price?: { amount_minor?: unknown; currency?: unknown };
+        }>;
+        total_price?: { amount_minor?: unknown; currency?: unknown };
+        currency?: unknown;
+      }
+    | undefined;
+  if (terms === undefined || typeof terms !== "object" || !Array.isArray(terms.items) || terms.items.length === 0) {
+    return undefined;
+  }
+  // review P1-2（A316 补充校准）：币种不得投影为首行/top 单值——逐行收集
+  // 各 item 币种与 total_price.currency，全部一致才接受；混币种（USD/CNY）
+  // 整体返回 undefined（下游 fail-closed），绝不按首行币种授权。
+  const lineCurrencies: string[] = [];
+  const totalCurrency =
+    typeof terms.total_price === "object" &&
+    terms.total_price !== null &&
+    typeof (terms.total_price as { currency?: unknown }).currency === "string"
+      ? (terms.total_price as { currency: string }).currency
+      : undefined;
+  const items: import("./service.js").CandidateQuoteItem[] = [];
+  for (const item of terms.items) {
+    if (typeof item !== "object" || item === null) return undefined;
+    const sku = item.sku;
+    const qty = item.quantity?.value;
+    const minor = item.unit_price?.amount_minor;
+    if (typeof sku !== "string" || sku === "") return undefined;
+    if (typeof qty !== "number" || !Number.isFinite(qty) || qty <= 0) return undefined;
+    if (typeof minor !== "number" || !Number.isSafeInteger(minor) || minor < 0) return undefined;
+    const lineCurrency = item.unit_price?.currency;
+    if (typeof lineCurrency !== "string" || lineCurrency === "") return undefined;
+    lineCurrencies.push(lineCurrency);
+    items.push({
+      sku,
+      quantity_value: qty,
+      ...(typeof item.quantity?.unit === "string" && item.quantity.unit !== ""
+        ? { quantity_unit: item.quantity.unit }
+        : {}),
+      unit_price_minor: minor,
+    });
+  }
+  const declaredCurrency =
+    typeof terms.currency === "string" && terms.currency !== "" ? terms.currency : undefined;
+  const uniform = lineCurrencies.every((c) => c === lineCurrencies[0]);
+  if (!uniform || declaredCurrency === undefined) return undefined;
+  const currency: string = declaredCurrency;
+  if (currency !== lineCurrencies[0]) return undefined;
+  if (totalCurrency !== undefined && totalCurrency !== currency) return undefined;
+  let total: number;
+  if (
+    terms.total_price !== undefined &&
+    typeof terms.total_price === "object" &&
+    terms.total_price !== null &&
+    typeof (terms.total_price as { amount_minor?: unknown }).amount_minor === "number" &&
+    Number.isSafeInteger((terms.total_price as { amount_minor: number }).amount_minor)
+  ) {
+    total = (terms.total_price as { amount_minor: number }).amount_minor;
+  } else {
+    total = items.reduce((sum, it) => sum + it.unit_price_minor * it.quantity_value, 0);
+  }
+  if (!Number.isSafeInteger(total)) return undefined;
+  return { currency, items, total_price_minor: total };
+}
+
 export class A2AQuoteFetcher implements QuoteFetcher {
   private readonly allowPrivateRanges: boolean;
   private readonly skipDnsCheck: boolean;
@@ -168,9 +250,14 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         typeof reply.payload === "object" && reply.payload !== null
           ? (reply.payload as { offer_id?: unknown }).offer_id
           : undefined;
+      // review P1-2（返修）：把 KNP offer 的结构化 terms 投影进候选——委托
+      // 约束核验以此为唯一权威事实；投影失败（缺字段/非整数 minor/非法数量）
+      // 则不携带 terms，下游带约束 accept 走 fail-closed。
+      const terms = projectOfferTerms(reply.payload);
       return {
         merchant_id: merchantId,
         status: "succeeded",
+        ...(terms !== undefined ? { terms } : {}),
         provenance: {
           ...(typeof offerId === "string" && offerId !== "" ? { offer_id: offerId } : {}),
           negotiation_id: negotiationId,

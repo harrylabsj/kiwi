@@ -49,7 +49,7 @@ import {
   type NegotiationPhaseEvent,
   type NegotiationPhaseState,
 } from "../../negotiation/state/phase.js";
-import type { ProtocolErrorCode } from "../../negotiation/domain/common.js";
+import { NegotiationValidationError, type ProtocolErrorCode } from "../../negotiation/domain/common.js";
 import type { A2AMessage, A2APart } from "../client/types.js";
 import type {
   InboundNegotiationContext,
@@ -69,6 +69,30 @@ export const MERCHANT_QUANTITY = 200;
  * 省略 delivery_before——明确未知，绝不报静态/过期日期）。固定日期常量已从
  * 生产 terms 路径移除。
  */
+/**
+ * review 2-3（A319 返修）：把商家自产的无条件 offer/counter_offer 归一为
+ * evaluateConditionalOffer 的**合法形状**——`conditions` 必须存在（数组，
+ * 无条件即空数组）。此前归一对象缺 conditions，accept 路径 evaluator 的
+ * conditions.forEach 直接 TypeError（RPC -32603），阻断直报价/还价接受、
+ * 错 digest 拒绝与 Ledger 重启恢复（A317 独验 4 红同根因）。
+ * 真实 conditional_offer（自带 conditions）**不经此归一**，原样登记。
+ */
+function normalizeDirectOfferAsConditional(
+  offerId: string,
+  rawTerms: Record<string, unknown>,
+  quantity: number,
+): { conditional: Record<string, unknown>; quantity: number } {
+  return {
+    conditional: {
+      type: "conditional_offer",
+      offer_id: offerId,
+      base_terms: rawTerms,
+      conditions: [],
+    },
+    quantity,
+  };
+}
+
 export function resolveDeliveryBefore(
   merchantPolicy: MerchantPolicy | undefined,
   now: string,
@@ -659,6 +683,10 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         const offerId = (envelope.payload as { offer_id?: string } | undefined)?.offer_id;
         if (typeof offerId === "string" && offerId !== "") activeOfferId = offerId;
       }
+      // review 2-3（A316 校准）：重启恢复同样登记普通 offer/counter_offer——
+      // 归一为 {type:"conditional_offer", offer_id, base_terms}（与在途登记
+      // 同形），accept 按 offer_id 强匹配；只恢复 conditional 的旧行为使
+      // 重启后直报价/还价接受仍 offer_unknown。
       if (envelope?.action === "conditional_offer") {
         const payload = envelope.payload as
           | { offer_id?: string; base_terms?: { items?: Array<{ quantity?: { value?: number } }> } }
@@ -668,6 +696,22 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             conditional: envelope.payload as Record<string, unknown>,
             quantity: payload.base_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY,
           };
+        }
+      } else if (envelope?.action === "offer" || envelope?.action === "counter_offer") {
+        const payload = envelope.payload as
+          | { offer_id?: string; terms?: Record<string, unknown>; proposed_terms?: Record<string, unknown> }
+          | undefined;
+        const rawTerms =
+          envelope.action === "offer" ? payload?.terms : payload?.proposed_terms;
+        if (payload?.offer_id !== undefined && payload.offer_id !== "" && rawTerms !== undefined) {
+          // review 2-3（A319 返修）：Ledger 恢复归一与在途登记同形（含
+          // conditions: []）——重启后直报价/还价接受不再 TypeError。
+          lastConditional = normalizeDirectOfferAsConditional(
+            payload.offer_id,
+            rawTerms,
+            (rawTerms as { items?: Array<{ quantity?: { value?: number } }> }).items?.[0]
+              ?.quantity?.value ?? MERCHANT_QUANTITY,
+          );
         }
       }
     }
@@ -866,6 +910,21 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             offer_id: String((reply.payload as { offer_id?: unknown }).offer_id ?? ""),
           });
           if (!advanced) return declineReply("state_conflict");
+          // review 2-3：直报价登记为可接受对象——此前只有 counter_offer 分支
+          // 登记，买家 accept 直报价必得 offer_unknown（§15/§21.2 主路径在
+          // 对外合规实现上互操作断裂）。以 base_terms 规约形状存储，accept
+          // 路径的 evaluateConditionalOffer 对无条件条件即返回 base terms。
+          // review 2-3（返修）：登记对象必须带 offer_id——accept 路径读
+          // stored.conditional.offer_id 与 accept 的 offer_id 强匹配（A314
+          // 源码核：原返修缺 offer_id，直报价接受仍 offer_unknown）。
+          conditionalByNegotiation.set(
+            negotiationId,
+            normalizeDirectOfferAsConditional(
+              String((reply.payload as { offer_id?: unknown }).offer_id ?? ""),
+              (reply.payload as { terms?: Record<string, unknown> }).terms ?? {},
+              quantity,
+            ),
+          );
           await appendSent(reply);
           return envelopeReply(reply);
         }
@@ -925,6 +984,15 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             offer_id: String((reply.payload as { offer_id?: unknown }).offer_id ?? ""),
           });
           if (!advanced) return declineReply("state_conflict");
+          // review 2-3：还价（counter_offer）同样登记——买家接受直还价走通主路径。
+          conditionalByNegotiation.set(
+            negotiationId,
+            normalizeDirectOfferAsConditional(
+              String((reply.payload as { offer_id?: unknown }).offer_id ?? ""),
+              (reply.payload as { proposed_terms?: Record<string, unknown> }).proposed_terms ?? {},
+              quantity,
+            ),
+          );
           await appendSent(reply);
           return envelopeReply(reply);
         }
@@ -1129,9 +1197,24 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           // KNP §15（审查 P2-C，实验复现）：terms_digest 必须是 agreed terms
           // 的 canonical digest——错误 digest 此前也产出 agreement。任一检查
           // 失败都不得创建 agreement。
-          const agreedTerms = evaluateConditionalOffer(acceptedConditional.conditional as never, {
-            "aggregate.total_quantity": acceptedConditional.quantity,
-          });
+          // review 3-15（返修，实际实施）：evaluator 对冲突规则抛
+          // NegotiationValidationError("condition_conflict")——不捕获会被管线
+          // 收敛成 -32603 internal error。已知协议校验错误映射为对应协议码
+          // decline；**未知错误原样上抛**（claim 不清、结果按 unknown 对账，
+          // 绝不假纯失败）。
+          let agreedTerms: Record<string, unknown>;
+          try {
+            agreedTerms = evaluateConditionalOffer(acceptedConditional.conditional as never, {
+              "aggregate.total_quantity": acceptedConditional.quantity,
+            }) as Record<string, unknown>;
+          } catch (err) {
+            if (err instanceof NegotiationValidationError) {
+              return declineReply(
+                err.code === "condition_conflict" ? "condition_conflict" : "schema_invalid",
+              );
+            }
+            throw err;
+          }
           // 审查 P3：§11 offer 过期校验——valid_until 已过 → 拒绝（此前
           // valid_until 硬编码 2099 永不生效，陈旧报价可被无限期接受）。
           const validUntil = (agreedTerms as { valid_until?: string } | undefined)?.valid_until;
@@ -1214,25 +1297,19 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             message,
           };
         }
-        case "withdraw": {
-          const scope = (envelope.payload as { scope?: string }).scope ?? "offer";
-          conditionalByNegotiation.delete(negotiationId);
-          // scope=offer 只关 offer 不终局（相位机 OFFER_OPEN→OPEN）；scope=
-          // negotiation 才进入 WITHDRAWN 终态。
-          if (scope !== "offer") {
-            closedNegotiations.add(negotiationId);
-            await advancePhase(negotiationId, { type: "withdraw", scope: "negotiation" });
-          }
-          return textReply(`Withdrawn (scope=${scope}).`);
-        }
+        case "withdraw":
         case "decline": {
+          // review 2-2（A316 校准撤回）：handle 顶部已按 scope 统一推进相位
+          //（actionToPhaseEvent → OFFER_OPEN→OPEN / 终态边），原发现「相位
+          // 不推进」不成立；本分支**不再二次推进**（二次推进反而让合法
+          // decline 在 OPEN 下得到 state_conflict）。scope=offer 只清
+          // conditional；scope=negotiation 进终态集合。
           const scope = (envelope.payload as { scope?: string }).scope ?? "offer";
           conditionalByNegotiation.delete(negotiationId);
           if (scope !== "offer") {
             closedNegotiations.add(negotiationId);
-            await advancePhase(negotiationId, { type: "decline", scope: "negotiation" });
           }
-          return textReply(`Declined (scope=${scope}).`);
+          return textReply(`${envelope.action === "withdraw" ? "Withdrawn" : "Declined"} (scope=${scope}).`);
         }
         case "cancel":
           conditionalByNegotiation.delete(negotiationId);

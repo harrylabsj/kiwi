@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 
 import { generateA2aSigningIdentity, toJwsSigningIdentity } from "../src/a2a/signing-key.js";
 import {
@@ -43,6 +43,7 @@ import type { OnboardingRecord } from "../src/cloud/onboarding/types.js";
 import { buildBindingClaims } from "../src/trust/binding/claims.js";
 import { canonicalize } from "../src/negotiation/jcs.js";
 import type { AgentCard } from "../src/discovery/agent-card/types.js";
+import { signCompactJws } from "../src/trust/identity/jws.js";
 
 const ORIGIN = "https://merchant-demo.example";
 const CATALOG = "https://catalog.example";
@@ -85,28 +86,45 @@ function mockFetch(handler: (call: FetchCall) => { status: number; json?: unknow
   return { fetchImpl, calls };
 }
 
+// f0c917e 起 fetchPublicBinding 走 JWS 验签（/v1/issuer-keys 钉死信任根），
+// 测试 envelope 必须是可验证的真签名（review 复核：旧 fake 在 HEAD 上已失败）。
+const issuerPair = generateKeyPairSync("ed25519");
+const ISSUER_JWK = issuerPair.publicKey.export({ format: "jwk" }) as Record<string, unknown> & { crv?: string; kty?: string; x?: string };
+const ISSUER_THUMBPRINT = `sha256:${createHash("sha256")
+  .update(JSON.stringify({ crv: ISSUER_JWK.crv, kty: ISSUER_JWK.kty, x: ISSUER_JWK.x }))
+  .digest("hex")}`;
+const ISSUER_KEYS = {
+  issuer: "catalog_demo",
+  keys: [{ kid: "catalog_demo", state: "ACTIVE", jwk: ISSUER_JWK, thumbprint: ISSUER_THUMBPRINT }],
+};
+
 function bindingDocument(id: RuntimeSigningIdentity, cardRevision: number | null = null) {
   const { keyThumbprint } = runtimePublicKey(id);
+  const claims = buildBindingClaims({
+    bindingId: "binding_demo",
+    bindingVersion: 1,
+    merchantId: "merchant_demo",
+    agentId: AGENT,
+    workloadRef: "workload_demo",
+    runtimeOrigin: ORIGIN,
+    a2aEndpoint: `${ORIGIN}/a2a`,
+    cardUrl: `${CATALOG}/v1/agents/${AGENT}/agent-card.json`,
+    keyId: id.keyId,
+    keyThumbprint,
+    serviceEpoch: 1,
+    issuedAt: new Date().toISOString(),
+    ttlSeconds: 900,
+    issuer: "catalog_demo",
+  });
   return {
-    claims: buildBindingClaims({
-      bindingId: "binding_demo",
-      bindingVersion: 1,
-      merchantId: "merchant_demo",
-      agentId: AGENT,
-      workloadRef: "workload_demo",
-      runtimeOrigin: ORIGIN,
-      a2aEndpoint: `${ORIGIN}/a2a`,
-      cardUrl: `${CATALOG}/v1/agents/${AGENT}/agent-card.json`,
-      keyId: id.keyId,
-      keyThumbprint,
-      serviceEpoch: 1,
-      issuedAt: "2026-09-26T07:00:00Z",
-      ttlSeconds: 900,
-      issuer: "catalog_demo",
+    claims,
+    claims_jws: signCompactJws(claims as unknown as Record<string, unknown>, {
+      keyid: "catalog_demo",
+      algorithm: "ed25519",
+      privateKey: issuerPair.privateKey,
     }),
-    claims_jws: "header.payload.sig",
     issuer_kid: "catalog_demo",
-    issuer_thumbprint: `sha256:${"a".repeat(64)}`,
+    issuer_thumbprint: ISSUER_THUMBPRINT,
     governance: { publication_state: "ACTIVE" },
     card_revision: cardRevision,
     card_etag: null,
@@ -330,6 +348,7 @@ describe("S4：publishCardForRecord（确认公开信息串联）", () => {
     const id = identity();
     const { store, record } = storeWithRecord("READY_TO_PUBLISH");
     const { fetchImpl, calls } = mockFetch((call) => {
+      if (call.url.endsWith("/v1/issuer-keys")) return { status: 200, json: ISSUER_KEYS };
       if (call.method === "GET") return { status: 200, json: bindingDocument(id, null) };
       // catalog 真实回执形状：card-publications → {card_revision, digest, etag}；
       // publish（激活）→ {active_revision, etag}。
@@ -346,11 +365,12 @@ describe("S4：publishCardForRecord（确认公开信息串联）", () => {
     // 端点序列：匿名读绑定 → card-publications → publish（CAS）。
     expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
       `GET ${CATALOG}/v1/agents/${AGENT}/runtime-binding`,
+      `GET ${CATALOG}/v1/issuer-keys`,
       `POST ${CATALOG}/v1/agents/${AGENT}/card-publications`,
       `POST ${CATALOG}/v1/agents/${AGENT}/publish`,
     ]);
     // 激活调用体：平铺，带刚发布的 card_revision 与绑定 binding_id（catalog 实际契约）。
-    expect(calls[2]!.body).toEqual({
+    expect(calls[3]!.body).toEqual({
       agent_id: AGENT,
       binding_id: "binding_demo",
       card_revision: 1,
@@ -386,6 +406,7 @@ describe("S4：publishCardForRecord（确认公开信息串联）", () => {
     const id = identity();
     const { store, record } = storeWithRecord("READY_TO_PUBLISH");
     const { fetchImpl } = mockFetch((call) => {
+      if (call.url.endsWith("/v1/issuer-keys")) return { status: 200, json: ISSUER_KEYS };
       if (call.method === "GET") return { status: 200, json: bindingDocument(id, null) };
       throw new TypeError("fetch failed: ECONNREFUSED");
     });
@@ -401,9 +422,12 @@ describe("S4：publishCardForRecord（确认公开信息串联）", () => {
   it("发布回执缺 card_revision → PUBLISH_RECEIPT_INVALID，记录 BLOCKED 报人工（不猜版本号）", async () => {
     const id = identity();
     const { store, record } = storeWithRecord("READY_TO_PUBLISH");
-    const { fetchImpl, calls } = mockFetch((call) =>
-      call.method === "GET" ? { status: 200, json: bindingDocument(id, null) } : { status: 200, json: {} },
-    );
+    const { fetchImpl, calls } = mockFetch((call) => {
+      if (call.url.endsWith("/v1/issuer-keys")) return { status: 200, json: ISSUER_KEYS };
+      return call.method === "GET"
+        ? { status: 200, json: bindingDocument(id, null) }
+        : { status: 200, json: {} };
+    });
     await expect(
       publishCardForRecord(record, pipelineDeps(store, id, fetchImpl)),
     ).rejects.toMatchObject({ code: "PUBLISH_RECEIPT_INVALID" });
@@ -415,9 +439,12 @@ describe("S4：publishCardForRecord（确认公开信息串联）", () => {
   it("CAS 冲突 → BLOCKED 报人工", async () => {
     const id = identity();
     const { store, record } = storeWithRecord("READY_TO_PUBLISH");
-    const { fetchImpl } = mockFetch((call) =>
-      call.method === "GET" ? { status: 200, json: bindingDocument(id, 3) } : { status: 409 },
-    );
+    const { fetchImpl } = mockFetch((call) => {
+      if (call.url.endsWith("/v1/issuer-keys")) return { status: 200, json: ISSUER_KEYS };
+      return call.method === "GET"
+        ? { status: 200, json: bindingDocument(id, 3) }
+        : { status: 409 };
+    });
     await expect(
       publishCardForRecord(record, pipelineDeps(store, id, fetchImpl)),
     ).rejects.toMatchObject({ code: "CONFLICT" });
@@ -431,9 +458,12 @@ describe("advance 通道适配器（catalogPlatformEvidenceAdapter）", () => {
   it("public-profile：发布成功后供出权威证据；不可达 → platform_failure（不推进）", async () => {
     const id = identity();
     const { store, record } = storeWithRecord("READY_TO_PUBLISH");
-    const { fetchImpl } = mockFetch((call) =>
-      call.method === "GET" ? { status: 200, json: bindingDocument(id, null) } : { status: 200, json: { revision: 1 } },
-    );
+    const { fetchImpl } = mockFetch((call) => {
+      if (call.url.endsWith("/v1/issuer-keys")) return { status: 200, json: ISSUER_KEYS };
+      return call.method === "GET"
+        ? { status: 200, json: bindingDocument(id, null) }
+        : { status: 200, json: { revision: 1 } };
+    });
     const adapter = catalogPlatformEvidenceAdapter(pipelineDeps(store, id, fetchImpl));
     const result = await adapter({ stepId: "public-profile", recordId: record.recordId });
     expect(result).toMatchObject({ kind: "platform_query", source: "catalog:card-publication" });

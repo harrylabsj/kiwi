@@ -26,6 +26,7 @@ import {
 import { McpServer } from "../src/mcp/server.js";
 import { TaskApprovalStore } from "../src/buyer-core/store.js";
 import { buildKiwiTools } from "../src/mcp/tools.js";
+import { contentDigest } from "../src/negotiation/jcs.js";
 import { KIWI_SOURCING_TOOLS, MCP_PROTOCOL_VERSIONS } from "../src/mcp/types.js";
 
 const TS = "2026-08-15T10:00:00+08:00";
@@ -88,6 +89,14 @@ function fakeQuoteFetcher(): QuoteFetcher {
           ? {
               merchant_id: m.merchant_id,
               status: "succeeded" as const,
+              // P1-2 返修：结构化报价事实（allowed_currencies 核验的唯一来源）
+              terms: {
+                currency: "CNY",
+                items: [
+                  { sku: "dock-1", quantity_value: 2, quantity_unit: "台", unit_price_minor: 12_900 },
+                ],
+                total_price_minor: 25_800,
+              },
               provenance: {
                 merchant_reply_id: `reply-${m.merchant_id}`,
                 negotiation_id: `neg-${m.merchant_id}`,
@@ -126,6 +135,17 @@ function makeHarness(store: TaskApprovalStore, policy: Record<string, unknown> =
 
 function makeInMemoryStore(): TaskApprovalStore {
   return new TaskApprovalStore({ dbPath: ":memory:" });
+}
+
+// review P1-2：审批必须绑定真实候选的 contentDigest——此前测试用任意
+// digest 建审批再 accept 任意候选，正是本次修掉的「审批不绑定候选」洞。
+function candidateDigestOf(service: KiwiBuyerService, taskId: string, candidateId: string): string {
+  const store = (service as unknown as { store: TaskApprovalStore }).store;
+  const candidate = store
+    .listCandidates(taskId)
+    .find((c) => c.candidate_id === candidateId);
+  if (candidate === undefined) throw new Error(`no candidate ${candidateId}`);
+  return contentDigest(candidate);
 }
 
 function grantedAuthorization(approvalId: string): AuthorizationRecord {
@@ -248,7 +268,7 @@ describe("KiwiBuyerService：AcceptNonbinding → Agreement → Handoff（五层
     const approval = service.requestApproval({
       task_id: taskId,
       action: "accept_nonbinding",
-      candidate_digest: `sha256:${"b".repeat(64)}`,
+      candidate_digest: candidateDigestOf(service, taskId, String(winner.candidate_id)),
     });
     service.approveApproval({
       approval_id: approval.approval_id,
@@ -306,7 +326,11 @@ describe("KiwiBuyerService：AcceptNonbinding → Agreement → Handoff（五层
     const winner = (created.task.candidates as Array<Record<string, unknown>>).find(
       (c) => c.status === "succeeded",
     )!;
-    const approval = service.requestApproval({ task_id: taskId, action: "accept_nonbinding" });
+    const approval = service.requestApproval({
+      task_id: taskId,
+      action: "accept_nonbinding",
+      candidate_digest: candidateDigestOf(service, taskId, String(winner.candidate_id)),
+    });
     service.approveApproval({
       approval_id: approval.approval_id,
       authorization: grantedAuthorization(approval.approval_id),
@@ -340,6 +364,7 @@ describe("KiwiBuyerService：AcceptNonbinding → Agreement → Handoff（五层
     const acceptApproval = service.requestApproval({
       task_id: taskId,
       action: "accept_nonbinding",
+      candidate_digest: candidateDigestOf(service, taskId, String(winner.candidate_id)),
     });
     service.approveApproval({
       approval_id: acceptApproval.approval_id,
@@ -508,7 +533,7 @@ describe("kiwi_approve / kiwi_reject（ASK 门宿主审批面）", () => {
   }
 
   it("accept_agreement 返回结构化 approval_required，宿主 kiwi_approve 后重试成功", async () => {
-    const { call, taskId, winner } = await runAcceptApprovalFlow(makeInMemoryStore());
+    const { call, taskId, winner, service } = await runAcceptApprovalFlow(makeInMemoryStore());
     const acc1 = await call("kiwi_accept_agreement", {
       task_id: taskId,
       candidate_id: String(winner.candidate_id),

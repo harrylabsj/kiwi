@@ -33,26 +33,22 @@
 import { createHash } from "node:crypto";
 
 /**
- * RFC 8785 §3.2.2.2 number serialization: shortest round-trip form with a
- * normalized exponent (lowercase 'e', no leading '+' or exponent zeros), `-0`
- * preserved, NaN/Infinity rejected.
+ * RFC 8785 §3.2.2.2 number serialization: exactly ECMAScript
+ * `Number::toString`（RFC 8785 明文以它为权威）——shortest round-trip、小写 e、
+ * 正指数保留 '+'（1e21 → "1e+21"）、负指数 "1e-7"、`-0` 归一为 "0"（ES 语义
+ * String(-0) === "0"，RFC 8785 Appendix B 同款向量）。
+ *
+ * 审查 2-4（2026-10-07）：此前实现自作主张把 `-0` 序列化为 "-0"、剥掉正指数
+ * 的 '+'（1e21 → "1e21"）——与 RFC 8785 / 标准 JCS 库产生不同 digest，跨实现
+ * 互操作（contentDigest / envelope digest / terms_digest）全部断裂。修复后
+ * 不再对 Number::toString 输出做任何本地改写。**Breaking**：与旧实现的
+ * digest 不兼容，旧持久化数据需按 CHANGELOG 说明重建。
  */
 function canonicalNumber(value: number): string {
   if (!Number.isFinite(value)) {
     throw new TypeError(`JCS: cannot canonicalize non-finite number ${value}`);
   }
-  if (Object.is(value, -0)) return "-0";
-  // Number#toString produces the shortest round-trip representation, which
-  // RFC 8785 requires. Only the exponent needs normalization.
-  let serialized = String(value);
-  const exponent = /^(.+?)[eE]([+-]?)(\d+)$/.exec(serialized);
-  if (exponent !== null) {
-    const mantissa = exponent[1] ?? serialized;
-    const sign = exponent[2] === "-" ? "-" : "";
-    const digits = (exponent[3] ?? "").replace(/^0+/, "");
-    serialized = `${mantissa}e${sign}${digits === "" ? "0" : digits}`;
-  }
-  return serialized;
+  return String(value);
 }
 
 /**

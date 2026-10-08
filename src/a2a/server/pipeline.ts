@@ -402,8 +402,10 @@ export class InboundPipeline {
         throw err;
       }
 
-      // 4. wire digest 一致性（完整性，§19.2）。
-      if (!verifyEnvelopeDigest(envelope)) {
+      // 4. wire digest 一致性（完整性，§19.2）——对 **raw wire 形状**复核
+      //（review 2-5/3-9：重建对象会丢 schema 允许的嵌套扩展；顶层未知键已在
+      // validateEnvelope 显式拒绝，raw 复核不引入未契约字段）。
+      if (!verifyEnvelopeDigest(envelopeRaw as unknown as NegotiationEnvelope)) {
         throw schemaInvalid("envelope digest mismatch (wire digest does not match content)");
       }
 
@@ -424,6 +426,14 @@ export class InboundPipeline {
           throw protocolError(
             "idempotency_conflict",
             `message_id ${envelope.message_id} already processed with a different digest (replay conflict, §20.3)`,
+          );
+        }
+        if (decision.status === "unknown") {
+          // review 3-4：幂等记录损坏 = 结果未知——与 in-flight 崩溃窗口同语义，
+          // 要求对账；绝不按 new 重跑 handler。
+          throw protocolError(
+            "reconciliation_required",
+            `message_id ${envelope.message_id} has an unreadable idempotency record; result unknown — reconcile before retrying`,
           );
         }
 
@@ -476,6 +486,10 @@ export class InboundPipeline {
         }
 
         if (handlerResult.kind === "error") {
+          // review 3-10（A316 校准撤回）：error/throw **不假定无效果**——
+          // handler 可能已产生外部效果后才报 error，清 in-flight 会让同 ID
+          // 重执行（A314 实证 effects=2）。declined 的正常 commit/clear 在
+          // 下方既有路径；error 保持 unknown 屏障，要求对账。
           throw protocolError(handlerResult.protocolCode, handlerResult.message);
         }
 

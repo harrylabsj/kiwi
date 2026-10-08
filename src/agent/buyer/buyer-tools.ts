@@ -1619,6 +1619,10 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       additionalProperties: false,
     },
     execute: async (_id, params) => {
+      // review 2-22：manual 模式下 shortlist（写入候选 + 改状态 + 落事件）
+      // 与其他写工具同受「manual 只建议」守卫——此前是唯一绕过 §16 的写路径。
+      const guard = manualAdvice(deps.mode);
+      if (!guard.ok) return textResult(guard.reason);
       try {
         const p = params as {
           task_id: string;

@@ -151,9 +151,28 @@ export interface MerchantIndex {
   lastSearchNotes?(): string[];
 }
 
+/**
+ * review P1-2（返修）：结构化权威报价事实——委托约束核验的唯一来源。
+ * reply_text 正则/parseFloat 不是权威报价（格式可变、无单位/币种约束）。
+ * money 一律安全整数 minor；quantity_value 为 KNP number>0（允许小数数量）。
+ */
+export interface CandidateQuoteItem {
+  sku: string;
+  quantity_value: number;
+  quantity_unit?: string;
+  unit_price_minor: number;
+}
+export interface CandidateQuoteTerms {
+  currency: string;
+  items: CandidateQuoteItem[];
+  total_price_minor: number;
+}
+
 export interface QuoteCandidateInput {
   merchant_id: string;
   status: "succeeded" | "failed";
+  /** 结构化报价（KNP offer terms 投影）；缺失时带约束的 accept fail-closed。 */
+  terms?: CandidateQuoteTerms;
   provenance?: {
     merchant_reply_id?: string;
     negotiation_id?: string;
@@ -262,6 +281,17 @@ function utcNow(): string {
 
 function policyActionMode(policy: DelegationPolicyLike, action: string): "auto" | "ask" | "never" {
   return policy.actions[action]?.mode ?? "never";
+}
+
+/** review P1-2：宽容 JSON 解析（非 JSON 返回 undefined，不抛）。 */
+function safeParseJson(text: string | undefined): Record<string, unknown> {
+  if (text === undefined || text === "") return {};
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
 }
 
 export class KiwiBuyerService {
@@ -528,6 +558,7 @@ export class KiwiBuyerService {
             merchant_id: r.merchant_id,
             status: r.status,
             provenance: r.provenance,
+            ...(r.terms !== undefined ? { terms: r.terms } : {}),
             failure: r.failure,
             retryable: r.status === "failed" ? (r.failure?.retryable ?? false) : false,
           });
@@ -543,7 +574,7 @@ export class KiwiBuyerService {
         ...this.decodeTask(task),
         status,
         updated_at: this.now(),
-        candidates: this.store.listCandidates(taskId),
+        candidates: this.northboundCandidates(taskId),
       }),
     });
     const decoded = this.decodeTask(updated);
@@ -594,7 +625,39 @@ export class KiwiBuyerService {
       summary: input.summary,
     };
     if (this.negotiator !== undefined) {
-      step = await this.negotiator.negotiate(input.task_id, {}, step, this.store.listCandidates(input.task_id));
+      // review P1-2（A316 补充校准）：counter 外发前的限额闸口——succeeded
+      // 候选逐一过 limitViolation（结构化事实），仅放行未被约束阻断的候选；
+      // 全部被阻断时显式拒绝（不存在合法还价对象）。clarification 无商业
+      // 承诺，不过商业闸。
+      let gated = this.store.listCandidates(input.task_id);
+      if (input.action === "counter_offer") {
+        const succeeded = gated.filter((c) => c.status === "succeeded");
+        const passable = succeeded.filter(
+          (c) =>
+            this.limitViolation("counter_offer", {
+              taskId: input.task_id,
+              candidateId: String(c.candidate_id),
+            }) === undefined,
+        );
+        if (succeeded.length > 0 && passable.length === 0) {
+          throw new McpError(
+            "delegation_denied",
+            "counter_offer 被委托约束阻断：全部报价候选超出 limits（fail-closed）",
+          );
+        }
+        const passableIds = new Set(passable.map((c) => String(c.candidate_id)));
+        gated = gated.filter((c) => c.status !== "succeeded" || passableIds.has(String(c.candidate_id)));
+      }
+      // review P1-2（A327 校准）：negotiator 需要任务**真实意图**（quantity
+      // 与 unit 从 intent 透传到外发 wire）——此前传空 intent {}，gate 拿到
+      // quantity=1/unit=undefined，max_quantity.unit 可能误拒或漏配。
+      const decodedForIntent = this.decodeTask(task) as { intent?: Record<string, unknown> };
+      step = await this.negotiator.negotiate(
+        input.task_id,
+        (decodedForIntent.intent ?? {}) as Record<string, unknown>,
+        step,
+        gated,
+      );
     }
 
     const decoded = this.decodeTask(task);
@@ -633,53 +696,219 @@ export class KiwiBuyerService {
       throw new McpError("invalid_params", `candidate ${input.candidate_id} not found on task`);
     }
     const termsDigest = contentDigest(candidate);
+    // review P1-2（A316 校准）：消费绑定 = 结构化 canonical digest（无分隔符
+    // 歧义）；同逻辑重放的唯一判据，换候选/摘要/任务都是不同绑定。
+    const consumedBinding = this.consumeBinding({
+      task_id: input.task_id,
+      candidate_id: input.candidate_id,
+      terms_digest: termsDigest,
+    });
     const authorization = await this.evaluateAuthorization("accept_nonbinding", {
       taskId: input.task_id,
       candidateId: input.candidate_id,
       candidateDigest: termsDigest,
       approvalId: input.approval_id,
+      approvalConsumedBinding: consumedBinding,
     });
     if (authorization.effective_decision !== "granted") {
       throw new McpError("authorization_denied", "AcceptNonbinding 未获五层授权", {
         authorization,
       });
     }
-    const agreementId = `agreement-${uuidv7()}`;
     const now = this.now();
-    const agreement = {
-      agreement_id: agreementId,
-      task_id: input.task_id,
-      negotiation_id: (candidate.provenance as { negotiation_id?: string } | undefined)
-        ?.negotiation_id,
-      terms_digest: termsDigest,
-      created_at: now,
-      binding_effect: "nonbinding",
-      creates_order: false,
-      reserves_inventory: false,
-      authorizes_payment: false,
-      accepted_candidate_id: input.candidate_id,
-      authorization_id: authorization.authorization_id,
-    };
-    this.store.createAgreement({
-      agreement_id: agreementId,
-      task_id: input.task_id,
-      negotiation_id: agreement.negotiation_id,
-      terms_digest: termsDigest,
-      created_at: now,
-      expires_at: undefined,
-      payload: JSON.stringify(agreement),
-    });
-    const updated = this.store.updateTask(input.task_id, {
-      status: "succeeded",
-      payload: JSON.stringify({
-        ...this.decodeTask(task),
+    // review P1-2（A316 校准）：短事务原子消费——事务内重读授权、写
+    // agreement/task/used 及可重放结果；任何失败 ROLLBACK（无部分提交、
+    // 无事后补偿、不烧毁有效批准——同绑定重试重新进入本事务）。node:sqlite
+    // 同步执行 + BEGIN IMMEDIATE 写锁，进程内/跨连接均互斥。
+    return this.store.transaction(() => {
+      const freshTask = this.store.getTask(input.task_id);
+      if (freshTask === undefined) {
+        throw new McpError("task_not_found", `task ${input.task_id} not found`);
+      }
+      if (input.approval_id !== undefined) {
+        const fresh = this.store.getApproval(input.approval_id);
+        if (fresh === undefined) {
+          throw new McpError("approval_required", `approval ${input.approval_id} 不存在`, {
+            approval_id: input.approval_id,
+          });
+        }
+        // review P1-2（A325 收口）：事务内 **fresh 授权强核**——同短事务
+        // （无外部 await）重核 approved 状态/task/action/digest/有效期与
+        // 候选最新状态；跨连接 await 窗口的撤销/改绑在此收口（源审纵深：
+        // 不宣称 BEGIN 本身等于权限重核，这里是显式逐项复核）。
+        if (fresh.task_id !== input.task_id) {
+          throw new McpError(
+            "approval_denied",
+            `approval ${input.approval_id} 属于任务 ${fresh.task_id}，与请求任务 ${input.task_id} 不一致`,
+          );
+        }
+        if (fresh.action !== "accept_nonbinding") {
+          throw new McpError(
+            "approval_denied",
+            `approval ${input.approval_id} 动作=${fresh.action} 与 accept 不一致`,
+          );
+        }
+        // review P1-2（A327 校准）：审批未绑定候选摘要（undefined）不得跳过
+        // 校验放行——fail-closed。
+        if (fresh.candidate_digest === undefined) {
+          throw new McpError(
+            "approval_denied",
+            `approval ${input.approval_id} 未绑定候选摘要（digest 缺失，fail-closed）`,
+          );
+        }
+        if (fresh.candidate_digest !== termsDigest) {
+          throw new McpError(
+            "approval_denied",
+            `approval ${input.approval_id} 绑定候选摘要与当前候选不一致`,
+          );
+        }
+        if (
+          fresh.expires_at !== undefined &&
+          Date.parse(fresh.expires_at) < Date.parse(this.now())
+        ) {
+          throw new McpError("approval_denied", `approval ${input.approval_id} 已过期`);
+        }
+        // review P1-2（A327 校准）：候选**内容与状态**重核——some(ID) 只证
+        // 明 ID 存在，不证明内容/状态未变；事务内重取候选、重算摘要并核对
+        // 仍为 succeeded（锁外 termsDigest 不能默认仍是最新）。
+        const freshCandidates = this.store.listCandidates(input.task_id);
+        const freshCandidate = freshCandidates.find(
+          (c) => c.candidate_id === input.candidate_id,
+        );
+        if (freshCandidate === undefined) {
+          throw new McpError(
+            "invalid_params",
+            `candidate ${input.candidate_id} 已不存在于任务（候选状态已推进）`,
+          );
+        }
+        if (freshCandidate.status !== "succeeded") {
+          throw new McpError(
+            "authorization_denied",
+            `候选状态已推进为 ${freshCandidate.status}，不再可接受`,
+          );
+        }
+        if (contentDigest(freshCandidate) !== termsDigest) {
+          throw new McpError(
+            "approval_denied",
+            "候选内容已变化（fresh 摘要与审批绑定不一致），需重新审批",
+          );
+        }
+        if (fresh.status === "used") {
+          const consumed = this.approvalConsumed(fresh);
+          if (
+            consumed !== undefined &&
+            consumed.binding === consumedBinding
+          ) {
+            // 同逻辑重放：返回库里既有的同一 agreement（非虚构结果）。
+            const existing =
+              consumed.ref.startsWith("agreement-")
+                ? this.store.getAgreement(consumed.ref)
+                : undefined;
+            if (existing === undefined) {
+              throw new McpError(
+                "approval_denied",
+                `approval ${input.approval_id} 已消费但绑定效果不可读；需要人工对账`,
+              );
+            }
+            return {
+              task: this.decodeTask(this.store.getTask(input.task_id)!),
+              agreement: JSON.parse(existing.payload) as Record<string, unknown>,
+              authorization,
+            };
+          }
+          throw new McpError(
+            "approval_denied",
+            `approval ${input.approval_id} 已被消费（一次性），且请求内容不同`,
+          );
+        }
+        if (fresh.status !== "approved") {
+          // review P1-2（A325 收口）：消费时点必须仍是 approved——跨连接
+          // await 窗口内被 deny/回退到 pending 的审批不得消费。
+          throw new McpError(
+            "approval_denied",
+            `approval ${input.approval_id} 状态=${fresh.status}，消费时点必须为 approved`,
+          );
+        }
+      }
+      // review P1-2（A331 校准）：候选 fresh 强核对**所有真实消费分支**生效
+      //——此前仅 approval 分支覆盖，合法 auto（无审批）路径仍旧 snapshot。
+      // 同短事务内重取候选：ID 仍在、状态仍 succeeded、**重算 contentDigest
+      // 与本次绑定 termsDigest 一致**（锁外旧 snapshot 不能默认最新）。
+      // 任务/候选 expiry 按既有合同（上方 task.expires_at 检查）核，不新加 TTL。
+      const freshCandidate = this.store
+        .listCandidates(input.task_id)
+        .find((c) => c.candidate_id === input.candidate_id);
+      if (freshCandidate === undefined) {
+        throw new McpError(
+          "invalid_params",
+          `candidate ${input.candidate_id} 已不存在于任务（候选状态已推进）`,
+        );
+      }
+      if (freshCandidate.status !== "succeeded") {
+        throw new McpError(
+          "authorization_denied",
+          `候选状态已推进为 ${freshCandidate.status}，不再可接受`,
+        );
+      }
+      if (contentDigest(freshCandidate) !== termsDigest) {
+        throw new McpError(
+          "approval_denied",
+          "候选内容已变化（fresh 摘要与本次绑定不一致），需重新获取报价",
+        );
+      }
+      // 崩溃孤儿复用：事务内查同 (task, terms_digest) 既有 agreement（此前
+      // 崩溃留下的已提交行）——复用同一 ID，效果恰一次。
+      const orphan = this.store.findAgreementByTerms(input.task_id, termsDigest);
+      const agreementId = orphan !== undefined ? orphan.agreement_id : `agreement-${uuidv7()}`;
+      const agreement = {
         agreement_id: agreementId,
+        task_id: input.task_id,
+        negotiation_id: (candidate.provenance as { negotiation_id?: string } | undefined)
+          ?.negotiation_id,
+        terms_digest: termsDigest,
+        created_at: now,
+        binding_effect: "nonbinding",
+        creates_order: false,
+        reserves_inventory: false,
+        authorizes_payment: false,
+        accepted_candidate_id: input.candidate_id,
+        authorization_id: authorization.authorization_id,
+      };
+      if (orphan === undefined) {
+        this.store.createAgreement({
+          agreement_id: agreementId,
+          task_id: input.task_id,
+          negotiation_id: agreement.negotiation_id,
+          terms_digest: termsDigest,
+          created_at: now,
+          expires_at: undefined,
+          payload: JSON.stringify(agreement),
+        });
+      }
+      const updated = this.store.updateTask(input.task_id, {
         status: "succeeded",
-        updated_at: now,
-      }),
-    });
-    return { task: this.decodeTask(updated), agreement, authorization };
-  }
+        payload: JSON.stringify({
+          ...this.decodeTask(freshTask),
+          agreement_id: agreementId,
+          status: "succeeded",
+          updated_at: now,
+        }),
+      });
+      if (input.approval_id !== undefined) {
+        const approval = this.store.getApproval(input.approval_id);
+        if (approval !== undefined) {
+          this.store.setApproval(approval.task_id, {
+            ...approval,
+            status: "used",
+            authorization_json: JSON.stringify({
+              ...safeParseJson(approval.authorization_json),
+              consumed: { ref: agreementId, binding: consumedBinding, kind: "agreement" },
+            }),
+          });
+        }
+      }
+      return { task: this.decodeTask(updated), agreement, authorization };
+    });  }
 
   // ---- Northbound：kiwi_get_agreement ---------------------------------------
 
@@ -707,19 +936,69 @@ export class KiwiBuyerService {
     if (stored === undefined) {
       throw new McpError("agreement_not_found", `agreement ${input.agreement_id} not found`);
     }
+    // review P1-2（A316 校准）：handoff 消费绑定 = 结构化 canonical digest
+    //（agreement/destination/url），无分隔符歧义。
+    const consumedBinding = this.consumeBinding({
+      agreement_id: input.agreement_id,
+      destination_type: input.destination_type,
+      url: input.url ?? null,
+    });
     const authorization = await this.evaluateAuthorization("handoff", {
       taskId: stored.task_id,
       approvalId: input.approval_id,
+      approvalConsumedBinding: consumedBinding,
     });
     if (authorization.effective_decision !== "granted") {
       throw new McpError("authorization_denied", "Handoff 未获五层授权", { authorization });
     }
-    const handoffRef = {
-      handoff_id: `handoff-${uuidv7()}`,
-      destination_type: input.destination_type,
-      ...(input.url !== undefined ? { url: input.url } : {}),
-    };
-    return { handoff_ref: handoffRef, authorization };
+    if (input.approval_id === undefined) {
+      const handoffRef = {
+        handoff_id: `handoff-${uuidv7()}`,
+        destination_type: input.destination_type,
+        ...(input.url !== undefined ? { url: input.url } : {}),
+      };
+      return { handoff_ref: handoffRef, authorization };
+    }
+    // review P1-2（A316 校准）：短事务原子消费——事务内重读审批、生成 ref、
+    // 消费；同绑定重放返回**库里记录的同一 ref**（非虚构）；失败 ROLLBACK
+    // 不烧毁审批。
+    return this.store.transaction(() => {
+      const approval = this.store.getApproval(input.approval_id as string);
+      if (approval === undefined) {
+        throw new McpError("invalid_params", `approval ${input.approval_id} 不存在`);
+      }
+      if (approval.status === "used") {
+        const consumed = this.approvalConsumed(approval);
+        if (consumed !== undefined && consumed.binding === consumedBinding) {
+          return {
+            handoff_ref: {
+              handoff_id: consumed.ref,
+              destination_type: input.destination_type,
+              ...(input.url !== undefined ? { url: input.url } : {}),
+            },
+            authorization,
+          };
+        }
+        throw new McpError(
+          "approval_denied",
+          `approval ${input.approval_id} 已被消费（一次性），且请求内容不同`,
+        );
+      }
+      const handoffRef = {
+        handoff_id: `handoff-${uuidv7()}`,
+        destination_type: input.destination_type,
+        ...(input.url !== undefined ? { url: input.url } : {}),
+      };
+      this.store.setApproval(approval.task_id, {
+        ...approval,
+        status: "used",
+        authorization_json: JSON.stringify({
+          ...safeParseJson(approval.authorization_json),
+          consumed: { ref: handoffRef.handoff_id, binding: consumedBinding, kind: "handoff" },
+        }),
+      });
+      return { handoff_ref: handoffRef, authorization };
+    });
   }
 
   // ---- 持久审批（宿主适配面；kiwi_approve / kiwi_reject 为 MCP 工具）----------
@@ -841,7 +1120,15 @@ export class KiwiBuyerService {
 
   async evaluateAuthorization(
     action: BuyerAction,
-    opts: { taskId: string; candidateId?: string; candidateDigest?: string; approvalId?: string },
+    opts: {
+      taskId: string;
+      candidateId?: string;
+      candidateDigest?: string;
+      approvalId?: string;
+      /** review P1-2（返修）：已消费审批的安全重放绑定——匹配时放行（返回
+       *  同一效果），不匹配照旧拒绝。 */
+      approvalConsumedBinding?: string;
+    },
   ): Promise<AuthorizationRecord> {
     const layers: Record<string, { status: "allowed" | "denied"; reason?: string }> = {
       package_trust: { status: "allowed", reason: "signed kiwi-buyer-mcp package, version pinned" },
@@ -879,6 +1166,43 @@ export class KiwiBuyerService {
           status: "denied",
           reason: `approval ${approval.approval_id} 动作=${approval.action} 与请求 ${action} 不一致`,
         };
+      } else if (approval.task_id !== opts.taskId) {
+        // review P1-2：审批必须属于当前任务——跨任务重放他任务的批准即拒。
+        layers.runtime_approval = {
+          status: "denied",
+          reason: `approval ${approval.approval_id} 属于任务 ${approval.task_id}，与请求任务 ${opts.taskId} 不一致`,
+        };
+      } else if (
+        // review P1-2：候选绑定——批准时的 digest 与当前候选不一致（含批准时
+        // 未绑定候选）即拒；对照 auth/merchant-oauth.ts 的既有比对纪律。
+        (opts.candidateDigest !== undefined &&
+          (approval.candidate_digest === undefined ||
+            approval.candidate_digest !== opts.candidateDigest))
+      ) {
+        layers.runtime_approval = {
+          status: "denied",
+          reason: `approval ${approval.approval_id} 未绑定当前候选（digest 不一致）`,
+        };
+      } else if (approval.status === "used") {
+        // review P1-2（A316 校准）：一次性消费——已消费审批只在「同逻辑重放」
+        //（canonical digest 绑定完全一致）时放行，调用方返回**库里既有**的
+        // 同一效果；换 candidate/digest/action/target 一律拒绝。
+        const consumed = this.approvalConsumed(approval);
+        if (
+          opts.approvalConsumedBinding !== undefined &&
+          consumed !== undefined &&
+          consumed.binding === opts.approvalConsumedBinding
+        ) {
+          layers.runtime_approval = {
+            status: "allowed",
+            reason: `idempotent replay of consumed approval ${approval.approval_id} (same binding)`,
+          };
+        } else {
+          layers.runtime_approval = {
+            status: "denied",
+            reason: `approval ${approval.approval_id} 已被消费（一次性），且请求内容不同`,
+          };
+        }
       } else if (approval.status === "pending") {
         throw new McpError("approval_required", `approval ${approval.approval_id} 待审批`, {
           approval_id: approval.approval_id,
@@ -901,8 +1225,11 @@ export class KiwiBuyerService {
     }
     // AUTO：delegation 层默认 allowed。
 
-    // 硬约束（limits）：只对已解析的约束做 deny。
-    const denyReason = this.limitViolation(action, opts);
+    // 硬约束（limits）：review P1-2 起对 accept 类动作核验候选价格/商家/币种/数量。
+    const denyReason = this.limitViolation(action, {
+      taskId: opts.taskId,
+      candidateId: opts.candidateId,
+    });
     if (denyReason !== undefined) {
       layers.merchant_hard_policy = { status: "denied", reason: denyReason };
     }
@@ -935,7 +1262,138 @@ export class KiwiBuyerService {
     return authorization;
   }
 
-  private limitViolation(action: BuyerAction, _opts: unknown): string | undefined {
+  /**
+   * review P1-2（A319 校准）：**实际外发 counter 提案**的限额门——对最终
+   * 结构化提案（而非旧候选）核验币种/单位/数量总量/单价/合计/安全 minor/
+   * 商家白名单/deadline。由 negotiator 在 sendMessage 前调用；返回 undefined
+   * = 放行。
+   */
+  checkCounterProposalLimits(proposal: {
+    merchant_id: string;
+    sku: string;
+    currency: string;
+    quantity_value: number;
+    quantity_unit?: string;
+    unit_price_minor: number;
+    total_price_minor: number;
+  }): string | undefined {
+    const limits = this.policy.limits;
+    if (limits === undefined) return undefined;
+    if (
+      limits.deadline !== undefined &&
+      Date.parse(limits.deadline) < Date.parse(this.now())
+    ) {
+      return `delegation deadline ${limits.deadline} 已过期`;
+    }
+    if (
+      limits.allowed_merchants !== undefined &&
+      !limits.allowed_merchants.includes(proposal.merchant_id)
+    ) {
+      return `merchant ${proposal.merchant_id} 不在 allowed_merchants`;
+    }
+    const terms: CandidateQuoteTerms = {
+      currency: proposal.currency,
+      items: [
+        {
+          sku: proposal.sku,
+          quantity_value: proposal.quantity_value,
+          ...(proposal.quantity_unit !== undefined ? { quantity_unit: proposal.quantity_unit } : {}),
+          unit_price_minor: proposal.unit_price_minor,
+        },
+      ],
+      total_price_minor: proposal.total_price_minor,
+    };
+    return this.termsFactsViolation(terms);
+  }
+
+  /** 结构化报价事实的约束核验（accept/counter 共用；缺事实 fail-closed）。 */
+  private termsFactsViolation(terms: CandidateQuoteTerms): string | undefined {
+    const limits = this.policy.limits;
+    if (limits === undefined) return undefined;
+    if (typeof terms.currency !== "string" || terms.currency === "") {
+      return "结构化报价缺币种，无法核验委托约束（fail-closed）";
+    }
+    if (
+      limits.allowed_currencies !== undefined &&
+      !limits.allowed_currencies.includes(terms.currency)
+    ) {
+      return `币种 ${terms.currency} 不在 allowed_currencies`;
+    }
+    if (!Array.isArray(terms.items) || terms.items.length === 0) {
+      return "结构化报价无明细行，无法核验委托约束（fail-closed）";
+    }
+    for (const item of terms.items) {
+      if (!Number.isSafeInteger(item.unit_price_minor) || item.unit_price_minor < 0) {
+        return "明细单价不是安全整数 minor（拒绝非整数货币）";
+      }
+      if (
+        typeof item.quantity_value !== "number" ||
+        !Number.isFinite(item.quantity_value) ||
+        item.quantity_value <= 0
+      ) {
+        return "明细数量必须为正数（KNP number>0）";
+      }
+    }
+    if (!Number.isSafeInteger(terms.total_price_minor) || terms.total_price_minor < 0) {
+      return "总价不是安全整数 minor（拒绝非整数货币）";
+    }
+    if (
+      limits.max_quantity !== undefined &&
+      typeof limits.max_quantity.unit === "string" &&
+      limits.max_quantity.unit !== ""
+    ) {
+      const bad = terms.items.find(
+        (it) =>
+          typeof it.quantity_unit !== "string" ||
+          it.quantity_unit === "" ||
+          it.quantity_unit !== limits.max_quantity!.unit,
+      );
+      if (bad !== undefined) {
+        return `明细数量单位缺失或与 max_quantity.unit(${limits.max_quantity.unit}) 不一致`;
+      }
+    }
+    if (limits.max_unit_price !== undefined) {
+      if (limits.max_unit_price.currency !== terms.currency) {
+        return `max_unit_price 币种(${limits.max_unit_price.currency})与报价币种(${terms.currency})不绑定`;
+      }
+      const over = terms.items.find(
+        (it) => it.unit_price_minor > limits.max_unit_price!.amount_minor,
+      );
+      if (over !== undefined) {
+        return `单价 ${over.unit_price_minor} minor 超过 max_unit_price ${limits.max_unit_price.amount_minor}`;
+      }
+    }
+    if (limits.max_total_price !== undefined) {
+      if (limits.max_total_price.currency !== terms.currency) {
+        return `max_total_price 币种(${limits.max_total_price.currency})与报价币种(${terms.currency})不绑定`;
+      }
+      const computed = terms.items.reduce(
+        (sum, it) => sum + it.unit_price_minor * it.quantity_value,
+        0,
+      );
+      if (!Number.isSafeInteger(computed)) {
+        return "总价明细合计不是安全整数 minor（拒绝非整数货币）";
+      }
+      if (computed !== terms.total_price_minor) {
+        return "结构化报价总价与明细合计不一致（不可信报价）";
+      }
+      if (terms.total_price_minor > limits.max_total_price.amount_minor) {
+        return `总价 ${terms.total_price_minor} minor 超过 max_total_price ${limits.max_total_price.amount_minor}`;
+      }
+    }
+    if (limits.max_quantity !== undefined) {
+      const totalQty = terms.items.reduce((sum, it) => sum + it.quantity_value, 0);
+      if (!Number.isFinite(totalQty) || totalQty > limits.max_quantity.value) {
+        return `数量总量 ${totalQty} 超过 max_quantity ${limits.max_quantity.value}`;
+      }
+    }
+    return undefined;
+  }
+
+  private limitViolation(
+    action: BuyerAction,
+    opts: { taskId?: string; candidateId?: string } = {},
+  ): string | undefined {
     const limits = this.policy.limits;
     if (limits === undefined) return undefined;
     if (
@@ -945,7 +1403,168 @@ export class KiwiBuyerService {
       return `delegation deadline ${limits.deadline} 已过期`;
     }
     if (action === "payment") return "payment 恒为 never";
+
+    // review P1-2（返修）：accept 类动作的约束核验**只信结构化报价事实**
+    // （候选.terms，KNP offer 投影）。reply_text 正则/parseFloat 不是权威
+    // 报价——格式可变、无币种/单位约束；缺事实即 fail-closed 拒绝。
+    if (action === "accept_nonbinding" || action === "counter_offer") {
+      // review P1-2（A316 补充校准）：counter_offer 外发与 accept 同一限额
+      // 闸口——还价同样不得越委托约束。
+      const { taskId, candidateId } = opts;
+      if (taskId === undefined || candidateId === undefined) {
+        return "accept 缺少任务/候选上下文，无法核验 limits";
+      }
+      const candidate = this.store
+        .listCandidates(taskId)
+        .find((c) => c.candidate_id === candidateId);
+      if (candidate === undefined) return `候选 ${candidateId} 不存在于任务 ${taskId}`;
+      const merchantId =
+        typeof candidate.merchant_id === "string" ? candidate.merchant_id : undefined;
+      if (
+        limits.allowed_merchants !== undefined &&
+        !limits.allowed_merchants.includes(merchantId ?? "")
+      ) {
+        return `merchant ${merchantId ?? "unknown"} 不在 allowed_merchants`;
+      }
+
+      const needsFacts =
+        limits.max_unit_price !== undefined ||
+        limits.max_total_price !== undefined ||
+        limits.allowed_currencies !== undefined ||
+        limits.max_quantity !== undefined;
+      if (!needsFacts) return undefined;
+
+      const terms = candidate.terms as CandidateQuoteTerms | undefined;
+      if (terms === undefined) {
+        return "候选无结构化报价事实（terms 缺失），无法核验委托约束（fail-closed）";
+      }
+      if (typeof terms.currency !== "string" || terms.currency === "") {
+        return "结构化报价缺币种，无法核验委托约束（fail-closed）";
+      }
+      if (
+        limits.allowed_currencies !== undefined &&
+        !limits.allowed_currencies.includes(terms.currency)
+      ) {
+        return `币种 ${terms.currency} 不在 allowed_currencies`;
+      }
+      if (!Array.isArray(terms.items) || terms.items.length === 0) {
+        return "结构化报价无明细行，无法核验委托约束（fail-closed）";
+      }
+      // money 必须安全整数 minor；quantity 为 KNP number>0（允许小数数量）
+      for (const item of terms.items) {
+        if (
+          !Number.isSafeInteger(item.unit_price_minor) ||
+          item.unit_price_minor < 0
+        ) {
+          return "明细单价不是安全整数 minor（拒绝非整数货币）";
+        }
+        if (typeof item.quantity_value !== "number" || !Number.isFinite(item.quantity_value) || item.quantity_value <= 0) {
+          return "明细数量必须为正数（KNP number>0）";
+        }
+      }
+      if (
+        !Number.isSafeInteger(terms.total_price_minor) ||
+        terms.total_price_minor < 0
+      ) {
+        return "总价不是安全整数 minor（拒绝非整数货币）";
+      }
+      // 单位绑定：声明了 limit 单位时，明细**缺失 unit 也拒**（缺失不能视
+      // 为匹配——否则无单位行绕过声明单位约束）；不一致同样拒。
+      if (
+        limits.max_quantity !== undefined &&
+        typeof limits.max_quantity.unit === "string" &&
+        limits.max_quantity.unit !== ""
+      ) {
+        const bad = terms.items.find(
+          (it) =>
+            typeof it.quantity_unit !== "string" ||
+            it.quantity_unit === "" ||
+            it.quantity_unit !== limits.max_quantity!.unit,
+        );
+        if (bad !== undefined) {
+          return `明细数量单位缺失或与 max_quantity.unit(${limits.max_quantity.unit}) 不一致`;
+        }
+      }
+      if (limits.max_unit_price !== undefined) {
+        if (limits.max_unit_price.currency !== terms.currency) {
+          return `max_unit_price 币种(${limits.max_unit_price.currency})与报价币种(${terms.currency})不绑定`;
+        }
+        const over = terms.items.find(
+          (it) => it.unit_price_minor > limits.max_unit_price!.amount_minor,
+        );
+        if (over !== undefined) {
+          return `单价 ${over.unit_price_minor} minor 超过 max_unit_price ${limits.max_unit_price.amount_minor}`;
+        }
+      }
+      if (limits.max_total_price !== undefined) {
+        if (limits.max_total_price.currency !== terms.currency) {
+          return `max_total_price 币种(${limits.max_total_price.currency})与报价币种(${terms.currency})不绑定`;
+        }
+        const computed = terms.items.reduce(
+          (sum, it) => sum + it.unit_price_minor * it.quantity_value,
+          0,
+        );
+        if (!Number.isSafeInteger(computed)) {
+          return "总价明细合计不是安全整数 minor（拒绝非整数货币）";
+        }
+        if (computed !== terms.total_price_minor) {
+          return "结构化报价总价与明细合计不一致（不可信报价）";
+        }
+        if (terms.total_price_minor > limits.max_total_price.amount_minor) {
+          return `总价 ${terms.total_price_minor} minor 超过 max_total_price ${limits.max_total_price.amount_minor}`;
+        }
+      }
+      if (limits.max_quantity !== undefined) {
+        // review P1-2（A316 补充校准）：max_quantity 按**总量**聚合（多明细
+        // 行合计），不是逐行放行。
+        const totalQty = terms.items.reduce((sum, it) => sum + it.quantity_value, 0);
+        if (!Number.isFinite(totalQty) || totalQty > limits.max_quantity.value) {
+          return `数量总量 ${totalQty} 超过 max_quantity ${limits.max_quantity.value}`;
+        }
+      }
+    }
     return undefined;
+  }
+
+  /**
+   * review P1-2（A316 校准）：消费记录复用既有 authorization_json 私有字段
+   *（不新增列/不迁移）。binding 是结构化 canonical digest（无分隔符歧义）。
+   */
+  private approvalConsumed(stored: { authorization_json?: string } | undefined):
+    | { ref: string; binding: string }
+    | undefined {
+    if (stored?.authorization_json === undefined) return undefined;
+    try {
+      const parsed = JSON.parse(stored.authorization_json) as {
+        consumed?: { ref?: unknown; binding?: unknown };
+      };
+      const consumed = parsed.consumed;
+      if (
+        consumed !== undefined &&
+        typeof consumed === "object" &&
+        consumed !== null &&
+        typeof consumed.ref === "string" &&
+        consumed.ref !== "" &&
+        typeof consumed.binding === "string" &&
+        consumed.binding !== ""
+      ) {
+        return { ref: consumed.ref, binding: consumed.binding };
+      }
+    } catch {
+      // authorization_json 非 JSON（如宿主写入的其他形状）→ 视为无消费记录
+    }
+    return undefined;
+  }
+
+  /** 消费绑定：结构化 canonical digest（contentDigest，无分隔符歧义）。 */
+  private consumeBinding(parts: Record<string, unknown>): string {
+    return contentDigest(parts);
+  }
+
+  /** 北向候选投影：剥离内部结构化报价事实（persistent-task 冻结契约
+   *  additionalProperties:false；terms 只在授权层内部使用，不出 wire）。 */
+  private northboundCandidates(taskId: string): Array<Record<string, unknown>> {
+    return this.store.listCandidates(taskId).map(({ terms: _terms, ...rest }) => rest);
   }
 
   private firstQuery(intent: Record<string, unknown>): string {
@@ -973,7 +1592,7 @@ export class KiwiBuyerService {
       updated_at: task.updated_at,
       expires_at: task.expires_at,
       resumable: task.resumable,
-      candidates: this.store.listCandidates(task.task_id),
+      candidates: this.northboundCandidates(task.task_id),
       approval: this.store.listApprovalsByTask(task.task_id)[0],
     };
   }

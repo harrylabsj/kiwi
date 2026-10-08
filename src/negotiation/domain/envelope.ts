@@ -39,13 +39,11 @@ import { validateIdentifier } from "./identifiers.js";
 import { KNP_ACTIONS, validatePayloadForAction } from "./objects.js";
 import type { NegotiationAction, NegotiationActor, NegotiationPayload } from "./objects.js";
 
-/** KNP 未定义的 transport signature 字段名：digest 计算时排除（§19.2）。 */
-const TRANSPORT_SIGNATURE_FIELDS = new Set([
-  "signature",
-  "transport_signature",
-  "http_message_signature",
-  "x_message_signature",
-]);
+// review 2-5：移除本地 transport-signature 字段剔除表——KNP §19.2 第 7 条
+// 明文「MUST NOT invent a local signature-field stripping list inside the KNP
+// envelope」：传输签名活在 envelope 之外。此前这四个名字若作为业务内容出现
+// 会被静默排除在 digest 之外；合法 envelope 本就不携带它们（validateEnvelope
+// 重建时丢弃未知字段），digest 不受影响，携带方现在 fail-closed 被拒。
 
 export type EnvelopeContent = Omit<NegotiationEnvelope, "digest">;
 
@@ -73,7 +71,6 @@ export function computeEnvelopeDigest(input: object): string {
   const clean: Record<string, unknown> = {};
   for (const key of Object.keys(input)) {
     if (key === "digest") continue;
-    if (TRANSPORT_SIGNATURE_FIELDS.has(key)) continue;
     clean[key] = (input as Record<string, unknown>)[key];
   }
   return contentDigest(clean);
@@ -94,6 +91,10 @@ export function finalizeEnvelope(fields: EnvelopeContent): NegotiationEnvelope {
 /** 重算 digest 并与 wire digest 比较；false 表示被篡改或过期。 */
 export function verifyEnvelopeDigest(envelope: NegotiationEnvelope): boolean {
   const { digest, ...rest } = envelope;
+  // review 2-5/3-9（A316 校准）：digest 对 **raw wire 字节形状** 复核——重建
+  // 会丢 schema 允许的嵌套扩展字段（如 Money/Quantity 的合法扩展），用重建
+  // 对象复核会让合法扩展 envelope 被误判 digest 不符。顶层未知键已被
+  // validateEnvelope 显式拒绝，raw 复核不含未契约字段。
   return computeEnvelopeDigest(rest) === digest;
 }
 
@@ -102,8 +103,35 @@ export function verifyEnvelopeDigest(envelope: NegotiationEnvelope): boolean {
  * action-payload 类型不匹配 / digest 格式错误均 fail-closed。
  * digest 内容一致性由 verifyEnvelopeDigest 单独校验。
  */
+const ENVELOPE_TOP_LEVEL_FIELDS = new Set([
+  "capability",
+  "protocol_version",
+  "negotiation_id",
+  "exchange_id",
+  "message_id",
+  "in_reply_to",
+  "actor",
+  "action",
+  "created_at",
+  "payload",
+  "public_message",
+  "digest",
+]);
+
 export function validateEnvelope(value: unknown): NegotiationEnvelope {
   const obj = requireObject(value, "/");
+  // review 2-5（A316 校准）：顶层契约 additionalProperties=false **显式执行**——
+  // 未知顶层键直接 schema_invalid 拒绝，不靠重建静默丢字段（否则携 signature
+  // 等业务同名字段的 envelope 沿用旧无该字段 digest 仍可通过管线）。合法
+  // envelope 的 digest 校验因此与原文一致；携带方不再被静默豁免。
+  for (const key of Object.keys(obj)) {
+    if (!ENVELOPE_TOP_LEVEL_FIELDS.has(key)) {
+      throw schemaError(
+        `/${key}`,
+        `unknown top-level envelope field "${key}" is not allowed (KNP §19.2: transport signatures live outside the envelope)`,
+      );
+    }
+  }
   const capability = requireNonEmptyString(obj.capability, "/capability");
   const protocolVersion = requireNonEmptyString(obj.protocol_version, "/protocol_version");
   if (protocolVersion !== KNP_PROTOCOL_VERSION) {

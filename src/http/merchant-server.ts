@@ -333,7 +333,8 @@ export function createMerchantHttpServer(options: MerchantHttpAdapterOptions): S
       const method = request.method ?? "GET";
 
       if (method === "GET" && url.pathname === "/health") {
-        sendJson(response, 200, { ok: true, service: "kiwi-merchant-http", sessions: sessions.size });
+        // review 3-43：/health 只回固定形状——会话数是内部状态，不对外。
+        sendJson(response, 200, { ok: true, service: "kiwi-merchant-http" });
         return;
       }
 

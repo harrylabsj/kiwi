@@ -262,6 +262,10 @@ function validateConditionValue(
 }
 
 function validateConditionLeaf(obj: Record<string, unknown>, path: string): ConditionLeaf {
+  // review 3-9（A319 独验）：条件节点 schema additionalProperties=false——
+  // 未知键显式拒绝（此前静默丢键：额外 key + 原文正确 digest 的 envelope
+  // 被重建放行，键内容实际不参与任何语义/摘要）。
+  rejectUnknownKeys(obj, ["field", "op", "value"], path);
   const field = requireNonEmptyString(obj.field, `${path}/field`);
   if (!(CONDITION_FIELDS as readonly string[]).includes(field)) {
     throw new NegotiationValidationError(
@@ -278,6 +282,19 @@ function validateConditionLeaf(obj: Record<string, unknown>, path: string): Cond
   };
 }
 
+/** schema=false 对象的未知键显式拒绝（review 3-9）。 */
+function rejectUnknownKeys(
+  obj: Record<string, unknown>,
+  known: readonly string[],
+  path: string,
+): void {
+  for (const key of Object.keys(obj)) {
+    if (!known.includes(key)) {
+      throw schemaError(`${path}/${key}`, `unknown key "${key}" is not allowed here (additionalProperties: false)`);
+    }
+  }
+}
+
 function validateConditionNode(value: unknown, path: string, depth: number): ConditionNode {
   if (depth > 2) {
     throw schemaError(path, "condition nesting must not exceed 2 levels below the root");
@@ -291,6 +308,7 @@ function validateConditionNode(value: unknown, path: string, depth: number): Con
     throw schemaError(path, "condition node must have exactly one of all/any/leaf");
   }
   if (hasAll) {
+    rejectUnknownKeys(obj, ["all"], path);
     const children = requireArray(obj.all, `${path}/all`);
     if (children.length === 0) {
       throw schemaError(`${path}/all`, "all must be a non-empty array");
@@ -298,6 +316,7 @@ function validateConditionNode(value: unknown, path: string, depth: number): Con
     return { all: children.map((c, i) => validateConditionNode(c, `${path}/all/${i}`, depth + 1)) };
   }
   if (hasAny) {
+    rejectUnknownKeys(obj, ["any"], path);
     const children = requireArray(obj.any, `${path}/any`);
     if (children.length === 0) {
       throw schemaError(`${path}/any`, "any must be a non-empty array");

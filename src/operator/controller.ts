@@ -551,11 +551,21 @@ export class OperatorController {
     // Keep the claim alive while the operator deliberates (design §10): a
     // >300s decision must not let stale recovery steal the claim.
     this.runner.startHeartbeat(prepared);
-    await this.record({
-      ...this.nextBase("public_draft"),
-      type: "candidate.generated",
-      payload: { candidate },
-    });
+    try {
+      await this.record({
+        ...this.nextBase("public_draft"),
+        type: "candidate.generated",
+        payload: { candidate },
+      });
+    } catch (err) {
+      // review 2-13：record 失败 = 候选未入账，claim 不能无 heartbeat 续命地
+      // 悬挂（消息被永久占住）——停心跳并释放 claim 后再抛。
+      await this.runner.stopHeartbeat();
+      await this.runner.abandon(prepared, "candidate record failed; claim released").catch(
+        () => undefined,
+      );
+      throw err;
+    }
 
     if (route === "await_approval") return { kind: "awaiting_approval", candidate };
     if (route === "advice_only") return { kind: "advice_ready", candidate };
@@ -596,14 +606,13 @@ export class OperatorController {
     try {
       outcome = await this.runner.submit(prepared);
     } catch (err) {
-      // 提交异常兜底（评审项 M7）：网关瞬时故障时 submit 抛错——此前
-      // finally 只清 submitting，心跳继续每 60s 续命 claim：消息永远不被
-      // stale recovery 回收、也不回到 pending，会话永久楔死（对照 headless
-      // turn 路径有完整 abandon 兜底，本路径缺失）。此处停心跳 + abandon
-      // claim（消息重新可领取）+ 落 failed 事件 + 返回可读错误；prepared
-      // 保留——重试 /approve 走 submit 的幂等键，不重复提交。
+      // 提交异常兜底（评审项 M7 + review P1-4 A316 收窄修订）：submit 抛错 =
+      // 结果未知（效果可能已落地，runner 已 failClaim 持久 unknown 屏障）。
+      // 此处**只停心跳、不再 abandon**——abandon 会解除 unknown 屏障让消息
+      // 重新可领取（新操作双效果）。落 failed 事件 + 返回可读错误；恢复须
+      // 按原 idempotency key 对账。prepared 保留——重试 /approve 走 submit
+      // 的幂等键，不重复提交。
       await this.runner.stopHeartbeat().catch(() => undefined);
-      await this.runner.abandon(prepared, "submit error").catch(() => undefined);
       await this.record({
         ...this.nextBase("private"),
         type: "turn.settled",

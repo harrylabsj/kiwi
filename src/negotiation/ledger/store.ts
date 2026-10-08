@@ -36,22 +36,24 @@
  *   verifyChain()             链完整性
  */
 
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
   existsSync,
-  fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
-  renameSync,
   statSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "../jcs.js";
+// 评审 3-5：原子写复用 fs/atomic-write（文件 + 目录 fsync、失败清理临时文件），
+// 与 supervisor/manifest、connect-service 等全仓口径一致，不再维护本地第二实现。
+import { writeFileAtomic } from "../../fs/atomic-write.js";
 import { LedgerError, computeEventDigest, eventContentAddressable } from "./event.js";
 import { assertNoForbiddenContent, isLedgerEvent, newLedgerEventId } from "./event.js";
 import type { LedgerEvent, LedgerEventContent, LedgerVerifyResult } from "./event.js";
@@ -97,11 +99,49 @@ export interface LedgerStoreOptions {
   payloadSegments?: LedgerPayloadSegmentStore;
 }
 
-/** append 锁轮询间隔（ms）与陈旧阈值（持锁超此即视为崩溃残留，可自愈）。 */
+/** Main-lock polling interval and minimum age before ESRCH-confirmed recovery. */
 const LOCK_POLL_MS = 20;
 const LOCK_STALE_MS = 30_000;
 
-let tmpSeq = 0;
+/** 锁文件内容：pid 供陈旧判定查活，token 供 finally 只删自己的锁（评审 2-8）。 */
+interface ChainLockFile {
+  pid: number;
+  token: string;
+}
+
+/** 进程存活探测（信号 0）；EPERM=存在但无权，视为存活（评审 2-8）。 */
+function isProcessAlive(pid: number): boolean {
+  // review 2-8（A325 收口）：**只有 ESRCH 确认「合法 PID 持有者不存在」**才
+  // 返回 false（可回收）；EPERM=存在无权（活）、EINVAL/越界等错误=身份未知
+  // ——一律视为存活，不得当死回收（A322 源审：其余任意错误曾被当 dead）。
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as { code?: string }).code !== "ESRCH";
+  }
+}
+
+/** 读锁文件里的持有者 pid；仅接受**正整数**——负数/浮点/不可解析一律
+ * undefined（身份未知 → 陈旧接管逻辑不得删除锁，A317 独验 2-8）。
+ * 旧版纯 pid 数字串（正整数）仍兼容。 */
+function readLockPid(lockPath: string): number | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(lockPath, "utf-8"));
+    const candidate =
+      typeof parsed === "number"
+        ? parsed
+        : parsed !== null && typeof parsed === "object"
+          ? (parsed as { pid?: unknown }).pid
+          : undefined;
+    if (typeof candidate === "number" && Number.isInteger(candidate) && candidate > 0) {
+      return candidate;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * 将 opaque negotiation_id 映射为安全文件名：合法字符保留，其余归一为 `_`，
@@ -130,52 +170,116 @@ export class LedgerStore {
     });
   }
 
-  /**
-   * 跨进程 append 互斥（评审项 B1）：append = load → verify → 整文件重写，
-   * 单进程内同步无交错，但**跨进程共享 dir**（handoff 幂等锁文档声称支持
-   * 的场景）两个进程同时 append 会各自读到同一链尾、互相覆盖——一条事件
-   * 静默丢失（无报错）。锁文件用 `openSync("wx")` 原子创建；持锁崩溃残留
-   * 由 mtime 陈旧检测自愈（append 是亚秒级操作，30s 阈值安全）；等待超时
-   * fail-closed（ledger_append_locked）——绝不静默丢事件。
-   */
+  /** Main-lock mutations share a short guard. The append itself holds only the
+   * main lock. Guard owners are never reclaimed automatically: an unknown or
+   * crashed guard blocks this chain until the existing timeout expires.
+   * All writers sharing a directory must use this protocol; older writers that
+   * bypass the guard are not safe to mix with it. */
   private withChainLock<T>(negotiationId: string, fn: () => T): T {
     const lockPath = path.join(this.ensureLedgerDir(), `${ledgerFileName(negotiationId)}.lock`);
+    const guardPath = `${lockPath}.guard`;
+    const token = randomUUID();
     const deadline = Date.now() + this.lockTimeoutMs;
-    for (;;) {
-      try {
-        const fd = openSync(lockPath, "wx");
-        writeSync(fd, String(process.pid));
-        closeSync(fd);
-        break;
-      } catch (err) {
-        if ((err as { code?: string }).code !== "EEXIST") throw err;
+    const wait = (until: number): void => {
+      const remaining = until - Date.now();
+      if (remaining <= 0) {
+        throw new LedgerError(
+          "ledger_append_locked",
+          `negotiation ${negotiationId} is locked by another process (waited ${this.lockTimeoutMs}ms)`,
+        );
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(LOCK_POLL_MS, remaining));
+    };
+    const guarded = <R>(until: number, mutate: () => R): R => {
+      const guardToken = randomUUID();
+      for (;;) {
+        let fd: number;
         try {
-          const st = statSync(lockPath);
-          if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
-            unlinkSync(lockPath);
-            continue;
-          }
-        } catch {
-          // 锁文件刚被持有方释放 → 重试
+          fd = openSync(guardPath, "wx", 0o600);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+          // No PID/age-based deletion of the guard: that would recreate the
+          // same compare-unlink race at another level.
+          wait(until);
           continue;
         }
-        if (Date.now() >= deadline) {
-          throw new LedgerError(
-            "ledger_append_locked",
-            `negotiation ${negotiationId} is locked by another process (waited ${this.lockTimeoutMs}ms)`,
-          );
+        try {
+          writeSync(fd, JSON.stringify({ pid: process.pid, token: guardToken }));
+        } finally {
+          closeSync(fd);
         }
-        // 同步轮询（append 是同步 API；Atomics.wait 不占用 CPU 轮询）
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_POLL_MS);
+        break;
       }
+      try {
+        return mutate();
+      } finally {
+        try {
+          const owner: unknown = JSON.parse(readFileSync(guardPath, "utf8"));
+          if (owner !== null && typeof owner === "object" &&
+              (owner as { token?: unknown }).token === guardToken) {
+            unlinkSync(guardPath);
+          }
+        } catch {
+          // Preserve an unknown guard. Cleanup must not replace an append
+          // result/error or pretend that a committed mutation rolled back.
+        }
+      }
+    };
+    const createMainLock = (): void => {
+      const fd = openSync(lockPath, "wx", 0o600);
+      try {
+        const lockFile: ChainLockFile = { pid: process.pid, token };
+        writeSync(fd, JSON.stringify(lockFile));
+      } finally {
+        closeSync(fd);
+      }
+    };
+    for (;;) {
+      const acquired = guarded(deadline, () => {
+        try {
+          createMainLock();
+          return true;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+        }
+        try {
+          const st = statSync(lockPath);
+          const pid = readLockPid(lockPath);
+          if (Date.now() - st.mtimeMs <= LOCK_STALE_MS || pid === undefined || isProcessAlive(pid)) {
+            return false;
+          }
+          // Acquisition, ESRCH-confirmed recovery and release all require this
+          // same guard. No compliant acquirer can replace the path between
+          // this observation and unlink, or between unlink and our wx.
+          unlinkSync(lockPath);
+          createMainLock();
+          return true;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+          throw err;
+        }
+      });
+      if (acquired) break;
+      // Release the guard before waiting for an active main-lock holder, so
+      // its normal release can acquire the guard and make progress.
+      wait(deadline);
     }
     try {
       return fn();
     } finally {
       try {
-        unlinkSync(lockPath);
+        // A completed append keeps its real result if safe release cannot be
+        // obtained. Its main lock remains, blocking subsequent attempts.
+        guarded(Date.now() + this.lockTimeoutMs, () => {
+          const owner: unknown = JSON.parse(readFileSync(lockPath, "utf8"));
+          if (owner !== null && typeof owner === "object" &&
+              (owner as { token?: unknown }).token === token) {
+            unlinkSync(lockPath);
+          }
+        });
       } catch {
-        // 锁文件已不存在（异常清理）则忽略。
+        // Keep the original fn result/error; do not turn cleanup failure into
+        // an apparent pre-effect failure that invites re-execution.
       }
     }
   }
@@ -197,18 +301,9 @@ export class LedgerStore {
     return resolved;
   }
 
-  /** 原子写（对齐 supervisor/manifest.ts：同目录临时文件 + fsync + rename，0600）。 */
+  /** 原子写（评审 3-5：复用 fs/atomic-write——文件+目录 fsync、失败清理临时文件）。 */
   private writeFileAtomic(filePath: string, content: string): void {
-    const tmp = `${filePath}.tmp-${process.pid}-${++tmpSeq}`;
-    const fd = openSync(tmp, "wx", 0o600);
-    try {
-      writeSync(fd, content);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    renameSync(tmp, filePath);
-    chmodSync(filePath, 0o600);
+    writeFileAtomic(filePath, content, { mode: 0o600 });
   }
 
   /** 解析一个 JSONL 行；非对象/非事件形状抛 ledger_chain_corrupt。 */

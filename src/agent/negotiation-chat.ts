@@ -305,19 +305,28 @@ export function buildNegotiationChatTools(deps: NegotiationChatDeps): Tool[] {
           idempotency_key: idem,
         });
         if (!claim.claimed) return textResult("该消息已被其他 worker 处理，暂时无法读取快照。");
+        let snapshotText: string;
         try {
           const snapshot: NegotiationSnapshot = await commerceClient.getNegotiationSnapshot({
             conversation_id: target.conversation_id,
             message_id: target.message_id,
           });
-          return textResult(JSON.stringify(snapshot));
+          snapshotText = JSON.stringify(snapshot);
         } finally {
-          await commerceClient.abandonClaim({
-            message_id: target.message_id,
-            idempotency_key: idem,
-            error: "read-only snapshot view",
-          });
+          // review 2-23：abandon 独立 try/catch——此前 finally 里的 abandon
+          // 抛错会覆盖已成功的 snapshot 结果（工具误报失败），且 claim 滞留
+          // 与 P1-4 同族。read-only 视图的释放失败由 stale TTL 兜底。
+          try {
+            await commerceClient.abandonClaim({
+              message_id: target.message_id,
+              idempotency_key: idem,
+              error: "read-only snapshot view",
+            });
+          } catch {
+            // 释放失败不吞快照结果。
+          }
         }
+        return textResult(snapshotText);
       } catch (err) {
         return textResult(errorText(err));
       }

@@ -704,7 +704,10 @@ async function cmdTui(args: ParsedArgs): Promise<number> {
     profile,
     store: new FileOperatorEventStore(dataDir),
     engine: createStrategyEngine(),
-    runner: new DeterministicNegotiationRunner(profile, client),
+    runner: new DeterministicNegotiationRunner(profile, client, {
+      // review P1-4（A327 补充）：supervised 模式同样挂持久 unknown 围栏
+      unknownFenceDir: path.join(dataDir, "submit-unknown"),
+    }),
   });
   try {
     await controller.start();
@@ -1178,8 +1181,10 @@ async function cmdBuyerInit(args: ParsedArgs): Promise<number> {
   });
   printJson(report);
   if (report.ok) {
+    // review 3-45：buyer 形态的成功文案（此前 copy-paste 自 merchant init，
+    // 引导到 `kiwi merchant up` 造成形态串味）。
     process.stdout.write(
-      "✓ 商家配置完成。下一步：`kiwi merchant up` 上线（需先装 Caddy、DNS 指向服务器）；或 `kiwi merchant setup-public` 查看公网配置。\n",
+      "✓ Buyer 配置完成。下一步：`kiwi buyer search …` 开始询价，或 `kiwi buyer mcp serve` 把 Buyer Core 接入宿主。\n",
     );
   }
   return report.ok ? EXIT.OK : EXIT.CONFIG;
@@ -2237,15 +2242,23 @@ async function cmdMerchantUp(args: ParsedArgs): Promise<number> {
     DEFAULT_CATALOG_URL;
   const merchantToken = process.env.KIWI_MERCHANT_TOKEN || "";
   const serveDataDir = resolveServeDataDir(args.dataDir, profile.agent_id, profile.merchant_runtime?.data_dir);
-  let node: A2aNodeHandle | null = await startA2aNode({
-    profile,
-    catalog,
-    preferredPort: port,
-    dataDir: serveDataDir,
-    ...(domain ? { publicBaseUrl: `https://${domain}` } : {}),
-    ...(merchantToken ? { ownerToken: merchantToken } : {}),
-    ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
-  });
+  let node: A2aNodeHandle | null = null;
+  try {
+    node = await startA2aNode({
+      profile,
+      catalog,
+      preferredPort: port,
+      dataDir: serveDataDir,
+      ...(domain ? { publicBaseUrl: `https://${domain}` } : {}),
+      ...(merchantToken ? { ownerToken: merchantToken } : {}),
+      ownerTokenSecret: process.env.KIWI_CATALOG_OWNER_TOKEN_SECRET,
+    });
+  } catch (err) {
+    // review 2-26：节点启动失败不能孤儿化已 spawn 的 Caddy（继续持有
+    // 80/443 与 TLS）——先杀 Caddy 再抛。
+    caddy.kill("SIGTERM");
+    throw err;
+  }
   process.stdout.write(
     `[merchant up] A2A server: ${node.agentCardUrl}（local ${node.url}）· catalog: ${node.catalogAgentId ?? "?"}\n`,
   );
@@ -2506,7 +2519,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       // `kiwi buyer-api serve` —— Buyer Core 的 HTTP 包装（§6.3 单核心多包装）。
       if (sub === "serve") return await runHttpServe(args.command.slice(2));
       process.stderr.write(
-        "usage: kiwi buyer-api serve [--db <file>] [--port <port>] [--host <host>] [--marketplace-url <url>] [--buyer-bootstrap-token <token>]\n",
+        "usage: kiwi buyer-api serve [--db <file>] [--port <port>] [--host <host>] [--auth-token <token>] [--merchant-auth-token <token>] [--marketplace-url <url>] [--buyer-bootstrap-token <token>]\n",
       );
       return EXIT.CONFIG;
     }

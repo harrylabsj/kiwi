@@ -40,6 +40,7 @@ import {
   newOfferId,
 } from "../negotiation/domain/identifiers.js";
 import { finalizeEnvelope } from "../negotiation/domain/envelope.js";
+import { validateConditionalOffer } from "../negotiation/domain/objects.js";
 import { contentDigest } from "../negotiation/jcs.js";
 import { evaluateConditionalOffer } from "../negotiation/condition/evaluator.js";
 import { detectLocale, type KiwiLocale } from "../i18n.js";
@@ -376,21 +377,54 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     if (conditional === null || conditional.action !== "conditional_offer") {
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 conditional_offer 回复" };
     }
-    const conditionalPayload = conditional.payload as {
-      offer_id?: string;
-      conditions?: Array<{ then_terms?: { items?: Array<{ unit_price?: { amount_minor?: number } }> } }>;
-    };
+    // review 2-6：先过冻结校验器再求值——此前未校验的 then_terms（float
+    // amount_minor、缺 unit_price 等）直接进入 evaluateConditionalOffer，
+    // 成交价取自未校验数据。校验失败按协议错误拒绝成交（报文带 schema 错误
+    // 便于对端定位）。
+    let conditionalPayload: ReturnType<typeof validateConditionalOffer>;
+    try {
+      conditionalPayload = validateConditionalOffer(conditional.payload, "/payload");
+    } catch (err) {
+      return {
+        ok: false,
+        negotiationId,
+        catalogAgentId,
+        agentCardUrl,
+        steps,
+        error: `商家 conditional_offer 未通过冻结校验：${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
     steps.push(`conditional_offer ${conditionalPayload.offer_id ?? ""}`);
 
     // 5. 确定性求值：真实成交价来自**求值后**的 terms——条件未命中时是
     //    base_terms，不是条件价。历史 bug：无条件读 conditions[0].then_terms，
     //    导致 1 件套用 ≥100 件的条件价（如 VQ-003 ¥8999 被报成 ¥8549.05）。
-    const agreedTerms = evaluateConditionalOffer(conditionalPayload as never, {
+    const agreedTerms = evaluateConditionalOffer(conditionalPayload, {
       "aggregate.total_quantity": quantity,
     });
     const dealPriceMinor = (agreedTerms as {
       items?: Array<{ unit_price?: { amount_minor?: number } }>;
     })?.items?.[0]?.unit_price?.amount_minor;
+
+    // review 2-6（A316 校准）：求值后条款必须有**定价证据**——item 缺
+    // unit_price（undefined）不得跳过预算核验照发 accept（A314 实证缺价
+    // 仍 ok:true）。所有 item 都带安全整数 minor 才允许进入预算判定。
+    const agreedItems =
+      (agreedTerms as { items?: Array<{ unit_price?: { amount_minor?: unknown } }> }).items ?? [];
+    const allItemsPriced = agreedItems.every((it) => {
+      const minor = it.unit_price?.amount_minor;
+      return typeof minor === "number" && Number.isSafeInteger(minor);
+    });
+    if (!allItemsPriced) {
+      return {
+        ok: false,
+        negotiationId,
+        catalogAgentId,
+        agentCardUrl,
+        steps,
+        error: "商家成交条款缺定价证据（item 无整数 unit_price），拒绝 accept",
+      };
+    }
 
     // 预算硬约束：成交价超过买方最高可接受单价 → 拒绝 accept，绝不成交超预算
     // 协议（历史 bug：买方预算 8900、商家 8999 仍 accept）。缺省用还价目标兜底。
@@ -414,7 +448,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
       now,
       (conditional.message_id as string) ?? "",
       conditionalPayload.offer_id ?? "",
-      contentDigest(agreedTerms as never),
+      contentDigest(agreedTerms),
     );
     steps.push(`accept_nonbinding`);
     const acceptRes = await send(accept);

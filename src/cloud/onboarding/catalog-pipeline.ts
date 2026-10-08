@@ -41,6 +41,7 @@ import { createHash } from "node:crypto";
 import { canonicalize } from "../../negotiation/jcs.js";
 import { writeFileAtomic } from "../../fs/atomic-write.js";
 import { readEnrollmentStore, enrollmentStorePath, type AuthorizedEnrollment } from "../binding/enrollment-challenge.js";
+import { withEnrollmentStoreLock } from "../binding/store-lock.js";
 import type { AgentCard } from "../../discovery/agent-card/types.js";
 import { platformEvidence, type OnboardingStore } from "./store.js";
 import type { AuthoritativeEvidence, OnboardingRecord } from "./types.js";
@@ -70,7 +71,10 @@ export type CatalogPipelineErrorCode =
   /** 发布回执缺 card_revision（契约违例）——无法激活，需人工核对。 */
   | "PUBLISH_RECEIPT_INVALID"
   /** 服务检查能力未配置——禁止成功空实现。 */
-  | "SERVICE_CHECK_UNAVAILABLE";
+  | "SERVICE_CHECK_UNAVAILABLE"
+  /** review P1-3（返修）：enrollment 会话 CAS 冲突——其他持锁写者已推进，
+   *  调用方必须重读快照后再试；绝不自动覆盖未知推进。 */
+  | "STATE_CAS_CONFLICT";
 
 export class CatalogPipelineError extends Error {
   readonly code: CatalogPipelineErrorCode;
@@ -171,29 +175,100 @@ interface WorkbuddyEnrollment extends AuthorizedEnrollment {
   card_revision?: number;
 }
 
-function workbuddyEnrollment(dataDir: string, ownerRef: string): WorkbuddyEnrollment | undefined {
-  return readEnrollmentStore(dataDir).sessions
+// Symbol 键：Object spread 会携带（调用方 {...state, status} 不丢戳），
+// JSON.stringify 忽略 symbol —— 落盘文件不含该戳。
+const SNAPSHOT_DIGEST: unique symbol = Symbol("enrollment.snapshotDigest");
+
+function enrollmentSnapshotDigest(session: WorkbuddyEnrollment): string {
+  return createHash("sha256").update(JSON.stringify(session)).digest("hex");
+}
+
+export function workbuddyEnrollment(dataDir: string, ownerRef: string): WorkbuddyEnrollment | undefined {
+  const found = readEnrollmentStore(dataDir).sessions
     .map((session) => session as WorkbuddyEnrollment)
     .filter((session) => session.owner_ref === ownerRef)
     .at(-1);
+  if (found === undefined) return undefined;
+  // review P1-3（A319 校准）：读取时打**pristine 快照摘要**（非枚举属性，
+  // 不入 JSON）——legacy 会话（无 store_revision）的调用方据此在 save 时
+  // 证明「我读的就是这份」，首轮推进 revision；不能仅 undefined==undefined
+  // 放行陈旧写者（会重开 legacy 丢 operation_claim 窗口）。
+  Object.defineProperty(found, SNAPSHOT_DIGEST, {
+    value: enrollmentSnapshotDigest(found),
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+  return found;
 }
 
-function saveWorkbuddyEnrollment(dataDir: string, state: WorkbuddyEnrollment): void {
-  const current = readEnrollmentStore(dataDir);
-  const filtered = current.sessions
-    .filter((session) => session.enrollment_id !== state.enrollment_id)
-    .map((session) => {
-      const old = session as WorkbuddyEnrollment;
-      return state.status === "published" && old.status === "published" &&
-        old.catalog_agent_id === state.catalog_agent_id && old.binding_id !== state.binding_id
-        ? { ...old, status: "replaced" as const }
-        : session;
+export function saveWorkbuddyEnrollment(
+  dataDir: string,
+  state: WorkbuddyEnrollment,
+  /** review P1-3（返修）：调用方快照的 store_revision——锁内强比较的真 CAS
+   *  期望值。缺省（undefined）视为「期望不存在」。 */
+  expectedPriorRevision?: number,
+): void {
+  // review P1-3：与 connect-service persist / challenge responder 同锁。原返修
+  // 的「同锁 + prior+1」不是 CAS——state 是锁外旧快照，锁内读到的 fresh 若
+  // 已被其他持锁写者推进（新 operation_claim / consumed 推进 / 会话字段更新），
+  // 旧 state 整体覆盖仍会回滚他人效果（Kimi C2 网络窗口实证）。现在锁内对
+  // prior.store_revision 与调用方期望做强比较：不一致即抛 CAS 冲突，绝不
+  // 覆盖未知推进；fresh 里他人新增/推进的其余会话原样保留。
+  withEnrollmentStoreLock(dataDir, () => {
+    const current = readEnrollmentStore(dataDir);
+    const prior = current.sessions.find((s) => s.enrollment_id === state.enrollment_id) as
+      | WorkbuddyEnrollment
+      | undefined;
+    const priorRevision = prior?.store_revision;
+    const expected = expectedPriorRevision ?? (priorRevision === undefined ? undefined : priorRevision);
+    // review P1-3（A319 校准）：legacy 快照可信匹配——expected 未声明但
+    // state 带 pristine 快照摘要且与锁内 prior **逐字节一致** → 证明调用方
+    // 读到的就是当前这份，允许首轮推进 revision（legacy 恢复不再永远
+    // CAS 拒）；摘要不一致（await 窗口内他人已推进/换会话）→ 冲突不写。
+    const legacyDigest = (state as unknown as { [SNAPSHOT_DIGEST]?: unknown })[SNAPSHOT_DIGEST];
+    const matches =
+      prior === undefined
+        ? expectedPriorRevision === undefined || expectedPriorRevision === 0
+        : expectedPriorRevision === undefined
+          ? typeof legacyDigest === "string" &&
+            legacyDigest === enrollmentSnapshotDigest(prior)
+          : priorRevision === expectedPriorRevision;
+    if (!matches) {
+      throw new CatalogPipelineError(
+        "STATE_CAS_CONFLICT",
+        "enrollment 会话已被其他写入方推进；请重读后重试（review P1-3 真 CAS）",
+      );
+    }
+    const filtered = current.sessions
+      .filter((session) => session.enrollment_id !== state.enrollment_id)
+      .map((session) => {
+        const old = session as WorkbuddyEnrollment;
+        return state.status === "published" && old.status === "published" &&
+          old.catalog_agent_id === state.catalog_agent_id && old.binding_id !== state.binding_id
+          ? { ...old, status: "replaced" as const, store_revision: (old.store_revision ?? 0) + 1 }
+          : session;
+      });
+    const saved: WorkbuddyEnrollment = {
+      ...state,
+      store_revision: (priorRevision ?? 0) + 1,
+    };
+    writeFileAtomic(
+      enrollmentStorePath(dataDir),
+      `${JSON.stringify({ ...current, sessions: [...filtered, saved] })}\n`,
+      { mode: 0o600 },
+    );
+    // 同一调用方顺序多次保存：把新 revision 反映回调用方持有的 state，
+    // 下一次保存的期望值即为本轮刚落盘值（同写者连续推进不误报 CAS）；
+    // pristine 摘要同步刷新为落盘后的内容（下一轮 legacy 分支也成立）。
+    state.store_revision = saved.store_revision;
+    Object.defineProperty(state, SNAPSHOT_DIGEST, {
+      value: enrollmentSnapshotDigest(saved),
+      enumerable: true,
+      writable: true,
+      configurable: true,
     });
-  writeFileAtomic(
-    enrollmentStorePath(dataDir),
-    `${JSON.stringify({ ...current, sessions: [...filtered, state] })}\n`,
-    { mode: 0o600 },
-  );
+  });
 }
 
 function frozenCard(deps: CatalogPipelineDeps, origin: string): AgentCard {
@@ -289,7 +364,7 @@ export async function reconcileBinding(
       frozen_card: card,
       ...(expectedAgentId !== undefined ? { expected_catalog_agent_id: expectedAgentId } : {}),
     };
-    saveWorkbuddyEnrollment(deps.dataDir, state);
+    saveWorkbuddyEnrollment(deps.dataDir, state, state.store_revision);
     deps.store.recordPendingEvidence(record.recordId, {
       kind: "text_claim",
       summary: `catalog:device-authorization ${session.verificationUri} 配对码=${session.userCode}`,
@@ -301,7 +376,7 @@ export async function reconcileBinding(
     const poll = await deps.client.pollDeviceEnrollment(state.device_code, deps.identity);
     if (poll.status !== "authorized") {
       state = { ...state, interval: poll.intervalSeconds };
-      saveWorkbuddyEnrollment(deps.dataDir, state);
+      saveWorkbuddyEnrollment(deps.dataDir, state, state.store_revision);
       return {
         kind: "awaiting_portal_confirmation",
         record: deps.store.getRecord(record.recordId) ?? record,
@@ -317,7 +392,7 @@ export async function reconcileBinding(
     }
     state = { ...state, status: "authorized", catalog_agent_id: poll.catalogAgentId, grant: poll.grant,
       merchant_id: poll.merchantId, authorization_epoch: poll.authorizationEpoch, expires_at: poll.expiresAt } as WorkbuddyEnrollment;
-    saveWorkbuddyEnrollment(deps.dataDir, state);
+    saveWorkbuddyEnrollment(deps.dataDir, state, state.store_revision);
   }
 
   if (state.status === "authorized") {
@@ -348,7 +423,7 @@ export async function reconcileBinding(
     }
     state = { ...state, status: "bound", binding_id: binding.bindingId, binding_version: binding.bindingVersion,
       merchant_id: claimMerchantId, binding_expires_at: claimExpiry, expected_card_revision: binding.activeCardRevision ?? 0 };
-    saveWorkbuddyEnrollment(deps.dataDir, state);
+    saveWorkbuddyEnrollment(deps.dataDir, state, state.store_revision);
   }
 
   let current = deps.store.getRecord(record.recordId) ?? record;
@@ -387,13 +462,13 @@ export async function reconcileBinding(
       if (publication.revision === null) throw new CatalogPipelineError("PUBLISH_RECEIPT_INVALID", "名片发布回执缺少 revision");
       revision = publication.revision;
       state = { ...state, card_revision: revision };
-      saveWorkbuddyEnrollment(deps.dataDir, state);
+      saveWorkbuddyEnrollment(deps.dataDir, state, state.store_revision);
     }
     if (revision === undefined) throw new CatalogPipelineError("PUBLISH_RECEIPT_INVALID", "持久名片状态缺 revision");
     const activated = await deps.client.activateCard({ agentId, bindingId, cardRevision: revision, expectedRevision }, deps.identity);
     if (activated.revision === null) throw new CatalogPipelineError("PUBLISH_RECEIPT_INVALID", "名片激活回执缺少 revision");
     state = { ...state, status: "published", card_revision: activated.revision };
-    saveWorkbuddyEnrollment(deps.dataDir, state);
+    saveWorkbuddyEnrollment(deps.dataDir, state, state.store_revision);
   }
 
   current = deps.store.getRecord(record.recordId) ?? current;

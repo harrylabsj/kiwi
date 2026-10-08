@@ -196,7 +196,9 @@ export class TaskScheduler {
           rule.cooldown_seconds > 0 &&
           rule.last_triggered_at !== undefined &&
           Date.parse(rule.last_triggered_at) + rule.cooldown_seconds * 1000 > Date.parse(now);
-        const reason = inCooldown ? undefined : evaluateRule(rule, observation, previous, now);
+        const reason = inCooldown
+          ? undefined
+          : evaluateRule(rule, observation, previous, now, this.resolveTaskBudget(rules[0]?.task_id ?? ""));
         if (reason !== undefined) {
           triggered.push({ rule, reason });
           this.store.markRuleChecked(rule.rule_id, true, now);
@@ -345,7 +347,9 @@ export class TaskScheduler {
           rule.cooldown_seconds > 0 &&
           rule.last_triggered_at !== undefined &&
           Date.parse(rule.last_triggered_at) + rule.cooldown_seconds * 1000 > Date.parse(now);
-        const reason = inCooldown ? undefined : evaluateRule(rule, observation, previous, now);
+        const reason = inCooldown
+          ? undefined
+          : evaluateRule(rule, observation, previous, now, this.resolveTaskBudget(rule.task_id));
         if (reason !== undefined) {
           triggeredReason = reason;
           triggerObservationId = observation.observation_id;
@@ -378,6 +382,17 @@ export class TaskScheduler {
 
     return result;
   }
+
+  /** review 2-21（返修）：sealed 预算的运行时解值（内存，绝不落事件/通知）；
+   *  无 vault/无预算/解密失败 → undefined（marker 规则本轮跳过，不误触发）。 */
+  private resolveTaskBudget(taskId: string): number | undefined {
+    try {
+      const t = this.store.getTask(taskId);
+      return t === undefined ? undefined : this.store.resolveBudget(t.constraints);
+    } catch {
+      return undefined;
+    }
+  }
 }
 
 /** Evaluate one rule against the latest facts. Returns a reason when triggered. */
@@ -386,14 +401,21 @@ function evaluateRule(
   latest: ProductObservation,
   previous: ProductObservation | undefined,
   now: string,
+  taskBudget: number | undefined,
 ): string | undefined {
   switch (rule.rule_type) {
     case "price_below": {
-      const threshold = Number(rule.condition.threshold);
+      // review 2-21（返修）：默认规则的条件存**私有 marker**（不入明文数值）；
+      // 运行时阈值从 Vault 经 resolveBudget 在内存解出（taskBudget）。历史
+      // 规则若已带明文 threshold 仍按原值工作（不迁移/不删除未知来源规则）。
+      const thresholdRaw =
+        rule.condition.budget_sealed === "max_total_price" ? taskBudget : rule.condition.threshold;
+      const threshold = Number(thresholdRaw);
       if (!Number.isFinite(threshold)) return undefined;
       const total = latest.price.list + latest.price.delivery_fee;
+      // 通知不回显预算数值（create_buyer_task 契约：绝不在任务输出/事件回显）。
       return total <= threshold
-        ? `到手价 ${total} ${latest.price.currency} 已低于 ${threshold}`
+        ? `到手价 ${total} ${latest.price.currency} 已低于你的预算阈值`
         : undefined;
     }
     case "stock_available":

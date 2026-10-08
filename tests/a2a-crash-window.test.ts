@@ -133,18 +133,18 @@ describe("T022：写入途中崩溃的恢复语义", () => {
     expect(stack.calls()).toBe(0); // **绝不重跑 handler**
   });
 
-  it("陈旧标记（超过窗口）不再阻断，按新消息处理", async () => {
-    // 注入可控时钟：markInFlight 与 readInFlight 在同一毫秒内采样时
-    // diff=0，"staleAfterMs: 0 立即陈旧"的断言在真实时钟下是毫秒级竞态。
-    // 用注入时钟确定性推进 1ms，与机器速度无关。
+  it("陈旧标记（超过窗口）仍表示结果未知——时间不授权接管（review 2-9 A316 校准）", async () => {
+    // A316 校准撤回旧行为「陈旧标记不再阻断」：过期 marker 一律视为未知，
+    // readInFlight 返回 marker（走对账），绝不视为无 claim 放行重执行；
+    // 时间不授权换 opID/接管。
     let nowMs = Date.parse("2026-09-29T00:00:00.000Z");
     const stack = await startStack({ now: () => new Date(nowMs).toISOString() });
     const env = finalizeEnvelope({ ...validEnvelopeFields(), message_id: MSG });
     stack.idempotency.markInFlight({ sender_identity: SENDER, message_id: MSG, digest: env.digest });
-    nowMs += 1; // 确定性推进 1ms → Date.parse(now) - Date.parse(started_at) = 1 > 0
-    // 陈旧窗口设为 0 → 标记立即视为陈旧（模拟很久以前的残留）。
-    expect(stack.idempotency.readInFlight(SENDER, MSG, { staleAfterMs: 0 })).toBeNull();
-    expect(stack.idempotency.readInFlight(SENDER, MSG)).not.toBeNull();
+    nowMs += 86_400_000; // 推进一天：远超任何 stale 窗口
+    const marker = stack.idempotency.readInFlight(SENDER, MSG);
+    expect(marker).not.toBeNull();
+    expect(marker?.started_at).toBe("2026-09-29T00:00:00.000Z");
   });
 
   it("同 key 不同 digest 的 in-flight 标记 → 冲突拒绝（不静默换内容重跑）", async () => {

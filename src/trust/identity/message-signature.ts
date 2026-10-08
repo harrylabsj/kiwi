@@ -346,8 +346,21 @@ function verifyEntry(
   if (entry.params.expires === undefined && now - entry.params.created > maxAge) {
     return { ok: false, code: "authorization_failed", reason: "signature is too old" };
   }
-  if (entry.params.expires !== undefined && entry.params.expires < now - skew) {
-    return { ok: false, code: "authorization_failed", reason: "signature has expired" };
+  if (entry.params.expires !== undefined) {
+    // review 2-14（返修）：created/expires/now 全部是 **epoch 秒**（RFC 9421
+    // @created/@expires 语义）——原返修误用毫秒常量参与秒差比较，窗口上限
+    // 实为 ~10.4 天（A314 源码核）。15 分钟上限按秒执行，超窗即拒。
+    const MAX_EXPIRY_WINDOW_SECONDS = 15 * 60;
+    if (entry.params.expires - entry.params.created > MAX_EXPIRY_WINDOW_SECONDS) {
+      return {
+        ok: false,
+        code: "authorization_failed",
+        reason: "signature validity window exceeds the 15 minute maximum",
+      };
+    }
+    if (entry.params.expires < now - skew) {
+      return { ok: false, code: "authorization_failed", reason: "signature has expired" };
+    }
   }
 
   // 审查 BUG-06：最小组件集合强制——此前 content-digest 校验由签名者自选

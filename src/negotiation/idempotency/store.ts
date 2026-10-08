@@ -48,9 +48,11 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  unlinkSync,
   writeSync,
 } from "node:fs";
 import path from "node:path";
+import { writeFileAtomic } from "../../fs/atomic-write.js";
 import { sha256Hex } from "../jcs.js";
 import { IdempotencyConflictError, computeRetentionDeadline, idempotencyKey, DEFAULT_INFLIGHT_STALE_MS } from "./types.js";
 import type { IdempotencyInFlightMarker } from "./types.js";
@@ -95,23 +97,21 @@ export class IdempotencyStore {
   }
 
   private writeFileAtomic(filePath: string, record: IdempotencyRecord | IdempotencyInFlightMarker): void {
-    const tmp = `${filePath}.tmp-${process.pid}-${++tmpSeq}`;
-    const fd = openSync(tmp, "wx", 0o600);
-    try {
-      writeSync(fd, `${JSON.stringify(record)}\n`);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    renameSync(tmp, filePath);
-    chmodSync(filePath, 0o600);
+    // review 3-5（A316 收窄）：复用 fs/atomic-write（文件+目录 fsync、失败
+    // 清理临时文件）——原手写 helper 无目录 fsync，掉电时 rename 可能丢失。
+    writeFileAtomic(filePath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
   }
 
-  private readRecord(key: string): IdempotencyRecord | null {
+  private readRecord(key: string): IdempotencyRecord | null | "corrupt" {
     const filePath = this.filePathFor(key);
     if (!existsSync(filePath)) return null;
-    const parsed: unknown = JSON.parse(readFileSync(filePath, "utf-8"));
-    if (parsed === null || typeof parsed !== "object") return null;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(filePath, "utf-8"));
+    } catch {
+      return "corrupt"; // review 3-4：损坏记录不再吞成 null（→ new → 重跑 handler）
+    }
+    if (parsed === null || typeof parsed !== "object") return "corrupt";
     const record = parsed as Partial<IdempotencyRecord>;
     if (
       typeof record.sender_identity !== "string" ||
@@ -123,7 +123,7 @@ export class IdempotencyStore {
       record.outcome === undefined ||
       typeof record.outcome !== "object"
     ) {
-      return null;
+      return "corrupt";
     }
     return record as IdempotencyRecord;
   }
@@ -146,33 +146,46 @@ export class IdempotencyStore {
   markInFlight(input: { sender_identity: string; message_id: string; digest: string }): IdempotencyInFlightMarker {
     const key = idempotencyKey(input.sender_identity, input.message_id);
     const file = this.inFlightPath(key);
-    const existing = this.readInFlight(input.sender_identity, input.message_id);
-    if (existing !== null) {
-      // 同一 digest 重复标记：保留**最早**的开始时间（更保守，不会把窗口缩短）。
-      if (existing.digest === input.digest) return existing;
-      // 不同 digest：说明同一 (sender, message_id) 被换了内容重放——直接冲突。
-      throw new IdempotencyConflictError(
-        {
-          sender_identity: input.sender_identity,
-          message_id: input.message_id,
-          digest: existing.digest,
-          negotiation_id: "",
-          outcome: { kind: "error", code: "idempotency_conflict", message: "in-flight digest mismatch" },
-          recorded_at: existing.started_at,
-          expires_at: existing.started_at,
-        },
-        input.digest,
-      );
-    }
     const marker: IdempotencyInFlightMarker = {
       sender_identity: input.sender_identity,
       message_id: input.message_id,
       digest: input.digest,
       started_at: this.now(),
     };
-    this.writeFileAtomic(file, marker);
+    // review 2-9（A316 校准）：openSync("wx") 原子 claim；EEXIST 一律视为
+    // 「结果未知」——同 digest 也不返回第二所有权（先到者唯一持有），异
+    // digest/过期/损坏更不接管（时间不授权换 opID）。上层据此走对账。
+    let fd: number;
+    try {
+      fd = openSync(file, "wx", 0o600);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      throw new IdempotencyConflictError(
+        {
+          sender_identity: input.sender_identity,
+          message_id: input.message_id,
+          digest: "",
+          negotiation_id: "",
+          outcome: {
+            kind: "error",
+            code: "reconciliation_required",
+            message: "in-flight claim already held; result unknown — reconcile",
+          },
+          recorded_at: this.now(),
+          expires_at: this.now(),
+        },
+        input.digest,
+      );
+    }
+    try {
+      writeSync(fd, `${JSON.stringify(marker)}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     return marker;
   }
+
 
   /** 读取 in-flight 标记；超过 staleAfterMs 视为陈旧（不再阻断，交给对账与 Ledger 证据）。 */
   readInFlight(
@@ -195,8 +208,10 @@ export class IdempotencyStore {
         started_at: new Date(0).toISOString(),
       };
     }
-    const staleAfterMs = options.staleAfterMs ?? DEFAULT_INFLIGHT_STALE_MS;
-    if (Date.parse(this.now()) - Date.parse(marker.started_at) > staleAfterMs) return null;
+    // review 2-9（A316 校准）：过期 marker 仍是「结果未知」——时间不授权
+    // 换 opID/接管；返回 marker 让上层走对账（reconciliation_required），
+    // 绝不视为无 claim 放行重执行。只有 commit 的权威结果清除它。
+    void (options.staleAfterMs ?? DEFAULT_INFLIGHT_STALE_MS);
     return marker;
   }
 
@@ -218,6 +233,11 @@ export class IdempotencyStore {
   check(input: IdempotencyCheckInput): IdempotencyDecision {
     const key = idempotencyKey(input.sender_identity, input.message_id);
     const existing = this.readRecord(key);
+    // review 3-4：损坏记录 = 结果未知（fail-closed）——与 readInFlight 的
+    // 损坏口径一致，交给 reconciliation，绝不按 new 重跑 handler。
+    if (existing === "corrupt") {
+      return { status: "unknown", key };
+    }
     if (existing === null || this.isExpired(existing, this.now())) {
       return { status: "new", key };
     }
@@ -234,7 +254,9 @@ export class IdempotencyStore {
   commit(input: IdempotencyCommitInput): IdempotencyRecord {
     const key = idempotencyKey(input.sender_identity, input.message_id);
     const existing = this.readRecord(key);
-    if (existing !== null && !this.isExpired(existing, this.now())) {
+    // review 3-4：损坏记录 = 结果未知——commit 以新记录覆盖（本次调用方刚
+    // 完成真实执行并落账，覆盖是恢复动作；与 check 的 fail-closed 不冲突）。
+    if (existing !== null && existing !== "corrupt" && !this.isExpired(existing, this.now())) {
       if (existing.digest === input.digest) return existing;
       throw new IdempotencyConflictError(existing, input.digest);
     }
@@ -261,7 +283,7 @@ export class IdempotencyStore {
   get(senderIdentity: string, messageId: string): IdempotencyRecord | null {
     const key = idempotencyKey(senderIdentity, messageId);
     const record = this.readRecord(key);
-    if (record === null) return null;
+    if (record === null || record === "corrupt") return null;
     return this.isExpired(record, this.now()) ? null : record;
   }
 
@@ -270,6 +292,9 @@ export class IdempotencyStore {
     const dir = this.ensureIndexDir();
     const now = nowIso ?? this.now();
     let removed = 0;
+    // review 3-3（A316 校准撤回）：in-flight 标记**不参与 sweep**——按 age/
+    // 形状删除会把 unknown 当死数据清掉，解除同键重执行屏障。in-flight 只
+    // 由 commit 的权威结果清除（clearInFlight）；残留 = 持续对账信号。
     for (const name of readdirSync(dir)) {
       if (!name.startsWith("idem-") || !name.endsWith(".json")) continue;
       const filePath = path.join(dir, name);

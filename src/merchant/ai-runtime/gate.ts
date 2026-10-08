@@ -191,6 +191,9 @@ function isValidUsedTokens(v: number): boolean {
   return Number.isSafeInteger(v) && v >= 0;
 }
 
+/** review 2-11：租约表上限——超过即裁剪最老终态记录（active 永不裁）。 */
+const AI_RUNTIME_LEASE_TABLE_LIMIT = 512;
+
 export class AiRuntimeGate {
   private readonly config: AiRuntimeConfig;
   private readonly budgetStore: DailyBudgetStore | null;
@@ -299,6 +302,17 @@ export class AiRuntimeGate {
       acquiredAtMs: input.nowMs ?? this.now(),
       deadlineMs: cfg.turn.deadline_ms,
     };
+    // review 2-11：租约表有界——超限时裁剪最老的终态（非 active）记录。
+    // 此前只增不删，长驻 runtime 内存无界增长；stats() 只数 active，终态
+    // 留存仅为 settle/release 幂等重试语义服务，保留最近一窗即足。
+    if (this.leases.size >= AI_RUNTIME_LEASE_TABLE_LIMIT) {
+      for (const [id, r] of this.leases) {
+        if (this.leases.size < AI_RUNTIME_LEASE_TABLE_LIMIT) break;
+        // review 2-11（A316 校准）：只裁「终态且并发已确认结束」的记录——
+        // inFlight 未 confirmCallEnded 的 rec 被裁会永久卡 inflightGlobal。
+        if (r.state !== "active" && !r.inFlight) this.leases.delete(id);
+      }
+    }
     this.leases.set(leaseId, {
       lease,
       state: "active",

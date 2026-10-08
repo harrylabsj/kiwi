@@ -53,8 +53,8 @@ describe("RFC 8785 JCS canonicalization", () => {
   it("normalizes number serialization per RFC 8785", () => {
     expect(canonicalize(1)).toBe("1");
     expect(canonicalize(1.5)).toBe("1.5");
-    expect(canonicalize(-0)).toBe("-0");
-    expect(canonicalize(1e21)).toBe("1e21"); // no '+' in exponent
+    expect(canonicalize(-0)).toBe("0"); // review 2-4：RFC 8785 = ES Number::toString
+    expect(canonicalize(1e21)).toBe("1e+21"); // review 2-4：正指数保留 '+'（ES 语义）
     expect(canonicalize(5e-7)).toBe("5e-7"); // no leading exponent zeros
     expect(canonicalize(1e-7)).toBe("1e-7");
   });

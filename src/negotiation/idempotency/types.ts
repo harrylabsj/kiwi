@@ -52,7 +52,10 @@ export interface IdempotencyRecord {
 export type IdempotencyDecision =
   | { status: "new"; key: string }
   | { status: "replayed"; key: string; record: IdempotencyRecord }
-  | { status: "conflict"; key: string; record: IdempotencyRecord };
+  | { status: "conflict"; key: string; record: IdempotencyRecord }
+  /** review 3-4：记录存在但损坏——结果未知，与 in-flight 崩溃窗口同语义
+   *  （reconciliation_required），绝不按 new 重跑 handler（fail-open）。 */
+  | { status: "unknown"; key: string };
 
 export interface IdempotencyCheckInput {
   sender_identity: string;

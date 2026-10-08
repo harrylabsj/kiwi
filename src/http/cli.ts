@@ -35,7 +35,12 @@ interface UcpMerchantConfig {
 }
 
 export async function runHttpServe(args: string[]): Promise<number> {
-  const opts: McpServeOptions & { port?: number; host?: string } = {};
+  const opts: McpServeOptions & {
+    port?: number;
+    host?: string;
+    authToken?: string;
+    merchantAuthToken?: string;
+  } = {};
   let ucpConfigPath: string | undefined;
   let merchantTokensPath: string | undefined;
   for (let i = 0; i < args.length; i += 1) {
@@ -55,6 +60,8 @@ export async function runHttpServe(args: string[]): Promise<number> {
     else if (flag === "--a2a-timeout-ms") opts.a2aTimeoutMs = Number(value);
     else if (flag === "--port") opts.port = Number(value);
     else if (flag === "--host") opts.host = value;
+    else if (flag === "--auth-token") opts.authToken = value;
+    else if (flag === "--merchant-auth-token") opts.merchantAuthToken = value;
     else if (flag === "--ucp-config") ucpConfigPath = value;
     else if (flag === "--merchant-tokens") merchantTokensPath = value;
     else if (flag === "--policy") {
@@ -85,6 +92,29 @@ export async function runHttpServe(args: string[]): Promise<number> {
   });
   const port = opts.port ?? 8787;
   const host = opts.host ?? "127.0.0.1";
+  // review P1-1（返修）：认证令牌必选（--auth-token 或 KIWI_BUYER_HTTP_TOKEN）；
+  // loopback 监听不再是免鉴权身份（localhost 不是身份）。未配置一律拒绝启动。
+  const authToken = opts.authToken ?? process.env.KIWI_BUYER_HTTP_TOKEN;
+  if (authToken === undefined || authToken === "") {
+    process.stderr.write(
+      "refusing to start without --auth-token <token>（或 KIWI_BUYER_HTTP_TOKEN）——review P1-1 返修：鉴权必选，loopback 不构成身份\n",
+    );
+    return 2;
+  }
+  // 商家裁决作用域令牌：注入 merchant-tokens 时必选（与买家操作分离）。
+  const merchantAuthToken = opts.merchantAuthToken ?? process.env.KIWI_BUYER_MERCHANT_AUTH_TOKEN;
+  if (merchantTokensPath !== undefined && (merchantAuthToken === undefined || merchantAuthToken.trim() === "")) {
+    process.stderr.write(
+      "refusing to start: --merchant-tokens 需要 --merchant-auth-token <token>（或 KIWI_BUYER_MERCHANT_AUTH_TOKEN）——商家裁决作用域独立鉴权\n",
+    );
+    return 2;
+  }
+  if (merchantAuthToken !== undefined && merchantAuthToken === authToken) {
+    process.stderr.write(
+      "refusing to start: --merchant-auth-token 不得与 --auth-token 相同（同值无作用域分离）——review P1-1\n",
+    );
+    return 2;
+  }
   const merchantUcp =
     ucpConfigPath !== undefined
       ? (JSON.parse(readFileSync(ucpConfigPath, "utf-8")) as Record<string, UcpMerchantConfig>)
@@ -104,8 +134,10 @@ export async function runHttpServe(args: string[]): Promise<number> {
   }
   const server = createBuyerHttpServer({
     service,
+    authToken,
     ...(merchantUcp !== undefined ? { merchantUcp } : {}),
     ...(Object.keys(merchantOps).length > 0 ? { merchantOps } : {}),
+    ...(merchantAuthToken !== undefined ? { merchantAuthToken } : {}),
   });
   await new Promise<void>((resolve) => server.listen(port, host, resolve));
   process.stderr.write(`kiwi-buyer-http listening on http://${host}:${port}\n`);

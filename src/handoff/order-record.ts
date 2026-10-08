@@ -298,6 +298,29 @@ export class OrderRecordStore {
 
   // 内部写入：只允许本模块的 ingestOrderRecord 调用（symbol 未导出）。
   [INGEST](source: OrderRecordSource, recordedAt: string): OrderRecord {
+    // review 3-11（A316 收窄）：同 order_id 的来源/身份绑定冲突**显式拒绝**
+    //（agreement 不可重绑；已有 negotiation 不可改绑；NULL negotiation 允许
+    // 首次补全）。同来源合法 status/事实更新照常放行（只读是消费者权限，
+    // 订单业务事实可更新）。
+    const existing = this.db
+      .prepare(
+        "SELECT agreement_id, negotiation_id FROM order_records WHERE order_id = ?",
+      )
+      .get(source.order_id) as { agreement_id: string; negotiation_id: string | null } | undefined;
+    if (existing !== undefined) {
+      const rebindingAgreement = existing.agreement_id !== source.agreement_id;
+      const rebindingNegotiation =
+        existing.negotiation_id !== null &&
+        source.negotiation_id !== undefined &&
+        existing.negotiation_id !== source.negotiation_id;
+      if (rebindingAgreement || rebindingNegotiation) {
+        throw new Error(
+          `order ${source.order_id} source rebinding rejected: agreement ` +
+            `${existing.agreement_id}→${source.agreement_id}, negotiation ` +
+            `${existing.negotiation_id ?? "null"}→${source.negotiation_id ?? "null"}`,
+        );
+      }
+    }
     const record: OrderRecord = {
       order_id: source.order_id,
       permalink_url: source.permalink_url,
@@ -324,10 +347,14 @@ export class OrderRecordStore {
            terms_digest=excluded.terms_digest,
            currency=excluded.currency,
            total_minor=excluded.total_minor,
-           agreement_id=excluded.agreement_id,
-           negotiation_id=excluded.negotiation_id,
            session_ref=excluded.session_ref,
-           recorded_at=excluded.recorded_at`,
+           recorded_at=excluded.recorded_at
+         -- review 3-11（A316 收窄）：同 order_id 的**来源/身份绑定**（agreement/
+         -- negotiation）不可被重绑；同来源合法 status/事实更新照常放行。
+         WHERE
+           agreement_id = excluded.agreement_id
+           AND (negotiation_id = excluded.negotiation_id
+                OR (negotiation_id IS NULL AND excluded.negotiation_id IS NOT NULL))`,
       )
       .run(
         record.order_id,

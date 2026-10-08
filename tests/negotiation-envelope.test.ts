@@ -79,7 +79,11 @@ describe("Envelope digest（§19.2）", () => {
     expect(computeEnvelopeDigest(fields)).toBe(computeEnvelopeDigest(scrambled));
   });
 
-  it("excludes digest itself and transport signature fields", () => {
+  it("digest excludes only itself; transport-signature-named fields are business content (review 2-5)", () => {
+    // review 2-5：KNP §19.2 第 7 条禁止本地 signature-field 剔除表——传输签名
+    // 活在 envelope 之外。携带这些名字的字段现在进入 digest（不再被静默豁免）；
+    // 篡改注入即 digest 校验失败（fail-closed），合法 envelope 不携带它们、
+    // digest 与旧行为一致。
     const fields = validEnvelopeFields();
     const base = computeEnvelopeDigest(fields);
     const withSignature = computeEnvelopeDigest({
@@ -87,7 +91,7 @@ describe("Envelope digest（§19.2）", () => {
       signature: { alg: "hmac-sha256", value: "0000" },
       http_message_signature: "sig1",
     });
-    expect(withSignature).toBe(base);
+    expect(withSignature).not.toBe(base);
 
     const envelope = finalizeEnvelope(fields);
     expect(
@@ -95,7 +99,7 @@ describe("Envelope digest（§19.2）", () => {
         ...envelope,
         signature: { alg: "hmac-sha256", value: "0000" },
       } as unknown as NegotiationEnvelope),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("changes when any bound field changes", () => {

@@ -106,9 +106,19 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
       timeoutMs: config.a2aTimeoutMs,
     };
     quoteFetcher = new A2AQuoteFetcher(a2a);
-    negotiator = new A2ANegotiator(a2a);
+    negotiator = new A2ANegotiator({
+      ...a2a,
+      // review P1-2（A325 收口）：生产工厂必须把**实际外发 counter 提案**
+      // 接上委托约束门（A322 源审：此前行 109 未接线、serviceRef 未消费，
+      // 手动注入 gate 的测试不能证明真实生产限额门）。service 后构造，
+      // 经 late-bound 引用闭环；接线缺失时 negotiator 侧 fail-closed
+      //（无 gate 不外发 counter——见 a2a-negotiator 强制）。
+      counterProposalGate: (proposal) => serviceRef?.checkCounterProposalLimits(proposal) ??
+        (serviceRef === undefined ? "counter proposal gate unavailable (fail-closed)" : undefined),
+    });
   }
-  return new KiwiBuyerService({
+  let serviceRef: KiwiBuyerService | undefined;
+  const serviceInstance = new KiwiBuyerService({
     store,
     principal: config.principal,
     buyerAgentId: config.buyerAgentId,
@@ -119,4 +129,6 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
     ...(negotiator !== undefined ? { negotiator } : {}),
     ...(followsClient !== undefined ? { followsClient } : {}),
   });
+  serviceRef = serviceInstance;
+  return serviceInstance;
 }

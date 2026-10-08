@@ -41,7 +41,7 @@ beforeAll(async () => {
     sessionId: "http-session",
     policy: POLICY,
   });
-  server = createBuyerHttpServer({ service });
+  server = createBuyerHttpServer({ service, authToken: "adapter-token" });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const addr = server.address();
   base = `http://127.0.0.1:${typeof addr === "object" && addr !== null ? addr.port : 0}`;
@@ -54,7 +54,7 @@ afterAll(async () => {
 async function call(method: string, path: string, body?: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
   const res = await fetch(`${base}${path}`, {
     method,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", authorization: "Bearer adapter-token" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: res.status, json: (await res.json()) as Record<string, unknown> };
@@ -131,14 +131,14 @@ describe("kiwi-buyer-http（单核心多包装）", () => {
         now: () => "2026-09-25T10:00:00Z",
       }),
     });
-    const searchServer = createBuyerHttpServer({ service });
+    const searchServer = createBuyerHttpServer({ service, authToken: "adapter-token" });
     await new Promise<void>((resolve) => searchServer.listen(0, "127.0.0.1", resolve));
     try {
       const addr = searchServer.address();
       const port = typeof addr === "object" && addr !== null ? addr.port : 0;
       const res = await fetch(`http://127.0.0.1:${port}/search`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", authorization: "Bearer adapter-token" },
         body: JSON.stringify({ query: "扩展坞" }),
       });
       const json = (await res.json()) as {

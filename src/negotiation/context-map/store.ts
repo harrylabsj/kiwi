@@ -39,6 +39,7 @@ import {
   writeSync,
 } from "node:fs";
 import path from "node:path";
+import { writeFileAtomic } from "../../fs/atomic-write.js";
 import { sha256Hex } from "../jcs.js";
 import { validateContextId, validateIdentifier, validateTaskId } from "../domain/identifiers.js";
 import { parseContextMapping, type ContextMapping, type ContextMappingPatch } from "./types.js";
@@ -96,16 +97,8 @@ export class ContextMapStore {
   }
 
   private writeFileAtomic(filePath: string, mapping: ContextMapping): void {
-    const tmp = `${filePath}.tmp-${process.pid}-${++tmpSeq}`;
-    const fd = openSync(tmp, "wx", 0o600);
-    try {
-      writeSync(fd, `${JSON.stringify(mapping)}\n`);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    renameSync(tmp, filePath);
-    chmodSync(filePath, 0o600);
+    // review 3-5（A316 收窄）：复用 fs/atomic-write（文件+目录 fsync）。
+    writeFileAtomic(filePath, `${JSON.stringify(mapping)}\n`, { mode: 0o600 });
   }
 
   private readMapping(negotiationId: string): ContextMapping | null {
