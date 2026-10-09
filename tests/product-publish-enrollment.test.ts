@@ -2,12 +2,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createPublicKey } from "node:crypto";
+import { createPublicKey, generateKeyPairSync, createHash } from "node:crypto";
 import { loadOrCreateA2aSigningIdentity } from "../src/a2a/signing-key.js";
 import { merchantPublish } from "../src/product-publish.js";
 import { buildBindingClaims } from "../src/trust/binding/claims.js";
 import { publicKeyThumbprint } from "../src/trust/binding/thumbprint.js";
-import { verifyCompactJws } from "../src/trust/identity/jws.js";
+import { verifyCompactJws, signCompactJws } from "../src/trust/identity/jws.js";
 import type { AgentProfile } from "../src/config/profile.js";
 import { testProfile } from "./helpers.js";
 
@@ -43,11 +43,15 @@ describe("merchant publish using a connected Runtime binding", () => {
       ttlSeconds: 600,
       issuer: CATALOG,
     });
+    // Synthetic issuer fixture exercises the real current binding verifier.
+    const issuer = generateKeyPairSync("ed25519");
+    const jwk = issuer.publicKey.export({ format: "jwk" });
+    const issuerThumbprint = `sha256:${createHash("sha256").update(JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x })).digest("hex")}`;
     const bindingDocument = {
       claims,
-      claims_jws: "locally-verified-on-enrollment",
+      claims_jws: signCompactJws({ ...claims }, { keyid: "catalog-issuer", algorithm: "ed25519", privateKey: issuer.privateKey }),
       issuer_kid: "catalog-issuer",
-      issuer_thumbprint: `sha256:${"a".repeat(64)}`,
+      issuer_thumbprint: issuerThumbprint,
       governance: { publication_state: "ACTIVE" },
       card_revision: 1,
       card_etag: '"card-v1"',
@@ -78,6 +82,9 @@ describe("merchant publish using a connected Runtime binding", () => {
       const rawBody = typeof init?.body === "string" ? init.body : undefined;
       const body = rawBody === undefined || rawBody === "" ? undefined : JSON.parse(rawBody) as Record<string, unknown>;
       calls.push({ url: parsed.toString(), method, headers, ...(body !== undefined ? { body } : {}) });
+      if (parsed.pathname === "/v1/issuer-keys") {
+        return new Response(JSON.stringify({issuer: CATALOG, keys: [{kid:"catalog-issuer", state:"ACTIVE", jwk, thumbprint:issuerThumbprint}]}), {status:200,headers:{"content-type":"application/json"}});
+      }
       if (parsed.pathname === `/v1/agents/${CATALOG_AGENT}/runtime-binding`) {
         return new Response(JSON.stringify(bindingDocument), { status: 200, headers: { "content-type": "application/json" } });
       }

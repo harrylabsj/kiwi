@@ -1,0 +1,6 @@
+import { expect,it } from 'vitest';import {Readable} from 'node:stream';
+import {createMerchantHttpHandler} from '../src/mcp/merchant-server.js';
+import {isLoopbackHost} from '../src/a2a/client/url-policy.js';
+async function invoke(localAddress:string){const h=createMerchantHttpHandler({service:{} as never});const req=Readable.from([]);Object.assign(req,{method:'PATCH',url:'/mcp',headers:{host:'localhost','x-forwarded-for':'127.0.0.1'},socket:{localAddress,remoteAddress:'192.0.2.1'}});try{return await new Promise<number>((resolve,reject)=>{let status=0;const t=setTimeout(()=>reject(new Error('own fixture response timeout')),1000);h.handler(req as never,{writeHead:(n:number)=>{status=n;},end:()=>{clearTimeout(t);resolve(status);},headersSent:false} as never);});}finally{await h.close();}}
+it.each(['127.0.0.2','127.255.255.254','::ffff:127.0.0.2','::ffff:7fff:fffe','0:0:0:0:0:0:0:1'])('3-40 existing IP loopback policy %s remains accepted by trusted socket',async address=>{expect(isLoopbackHost(address)).toBe(true);expect(await invoke(address)).toBe(405);});
+it.each(['126.255.255.254','128.0.0.1','::ffff:128.0.0.1'])('3-40 adjacent nonloopback IP %s stays rejected despite forged Host',async address=>{expect(isLoopbackHost(address)).toBe(false);expect(await invoke(address)).toBe(403);});

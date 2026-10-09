@@ -27,7 +27,7 @@
  *   - 会话与 /admin 同源（`MerchantAdminSessions`，kiwi_admin cookie，12h）；
  *     A2A Bearer/签名与 Catalog OAuth **不是**管理凭据（UC11）；
  *   - 写请求必须携带会话绑定的 CSRF 头（HMAC(sessionId, 进程密钥)，恒定时间
- *     比较）；请求带 Origin 时必须命中允许 origin 列表（精确匹配，BD §7.2；
+ *     比较）；请求带 Origin 且装配了列表时必须精确命中允许 Origin（精确匹配，BD §7.2；
  *     CORS 不是认证）；
  *   - 主体只从会话派生：正文/路径/头里的 merchant_id/actor_id 一律不认（UC10）；
  *     跨商家对象统一 404，不透露对方存在（UC09）。
@@ -1099,6 +1099,7 @@ export function createMerchantManagementApiHandler(
 
     if (rest === "/pricing/previews") {
       const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
       authorizeOrThrow(auth.ctx, "products:read");
       const fields = objectFields(await readJsonBody(req), ["sku", "quantity"]);
       const channel = options.quotePreview;
@@ -1819,7 +1820,21 @@ export function createMerchantManagementApiHandler(
     );
   }
 
+  function assertTrustedConfirmationOrigin(): void {
+    const configured = options.webauthnRegistration?.origin ??
+      (options.allowedOrigins?.length === 1 ? options.allowedOrigins[0] : undefined);
+    if (configured === undefined) return;
+    let origin: URL;
+    try { origin = new URL(configured); } catch {
+      throw new WorkbenchConfirmationError("credential_unavailable", "可信确认 origin 配置无效；必须配置精确 HTTPS origin 与 RP");
+    }
+    if (origin.protocol === "http:") {
+      throw new WorkbenchConfirmationError("credential_unavailable", "本地 HTTP 不支持 WebAuthn 可信确认；请配置 HTTPS origin 与匹配的 RP。HTTP 自检和普通管理读取仍可用。");
+    }
+  }
+
   function requireWorkbenchConfirmations(): WorkbenchConfirmationStore {
+    assertTrustedConfirmationOrigin();
     if (options.workbenchConfirmations === undefined) {
       throw new WorkbenchConfirmationError(
         "credential_unavailable",
@@ -2084,6 +2099,7 @@ export function createMerchantManagementApiHandler(
     req: IncomingMessage,
     actor: VerifiedActorContext,
   ): Promise<NonNullable<MerchantManagementApiOptions["webauthnRegistration"]>> {
+    assertTrustedConfirmationOrigin();
     const registration = options.webauthnRegistration;
     if (registration === undefined || !(await registration.authorize(req, actor))) {
       throw new WorkbenchConfirmationError(

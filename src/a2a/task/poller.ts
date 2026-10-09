@@ -179,6 +179,9 @@ export class A2ATaskPoller {
   }
 
   /**
+   * 单次独立观察回合：每次 poll 新建 tracker，只核该调用内的状态转换。
+   * 同对象跨 poll 不缓存历史；跨回合 revision/批准有效性由业务会话负责。
+   * 不承诺跨 poll 拒绝 terminal→working，也不创建无界 task 缓存。
    * 轮询到稳定观察点。返回：
    *   completed/canceled/failed    远端终态；
    *   input-required               远端等待输入（稳定点，轮询不再推进）；

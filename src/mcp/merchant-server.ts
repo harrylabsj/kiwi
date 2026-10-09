@@ -31,6 +31,9 @@
  *     Ledger/Store。
  */
 
+import { assertMerchantMcpAuthPolicy } from "./merchant-auth.js";
+import { isIP } from "node:net";
+import { isLoopbackHost } from "../a2a/client/url-policy.js";
 import {
   createServer,
   type IncomingMessage,
@@ -324,6 +327,12 @@ export function createProtocolServer(
  * 云端单端口部署需要把这些路由与 A2A 路由挂到同一监听上（设计 §8.2），因此把
  * 路由闭包从 `startMerchantMcpServer` 抽出共享；CLI 路径行为不变。
  */
+function trustedLoopbackSocketAddress(address: string | undefined): boolean {
+  // Socket addresses must be IP literals; hostnames and user headers are not
+  // listener evidence. Preserve the existing full 127/8 and mapped policy.
+  return address !== undefined && isIP(address) !== 0 && isLoopbackHost(address);
+}
+
 export function createMerchantHttpHandler(
   options: MerchantMcpServerOptions,
 ): MerchantHttpHandlerHandle {
@@ -937,6 +946,14 @@ export function createMerchantHttpHandler(
         writeJson(res, 404, { error: "not_found" });
         return;
       }
+      // Bare composed handlers have no trustworthy configured listener. Check
+      // the actual local socket address, never Host/X-Forwarded-* input.
+      if (url.pathname === mcpPath && options.auth === undefined) {
+        if (!trustedLoopbackSocketAddress(req.socket?.localAddress)) {
+          writeJson(res, 403, { error: "unauthenticated_listener", message: "MCP without auth requires a known loopback local socket" });
+          return;
+        }
+      }
       if (url.pathname !== mcpPath) {
         writeJson(res, 404, { error: "not_found", message: `unknown path ${url.pathname}` });
         return;
@@ -1053,6 +1070,7 @@ export async function startMerchantMcpServer(
   const host = options.host ?? DEFAULT_MERCHANT_MCP_HOST;
   const port = options.port ?? DEFAULT_MERCHANT_MCP_PORT;
   const mcpPath = options.path ?? DEFAULT_MERCHANT_MCP_PATH;
+  assertMerchantMcpAuthPolicy(trustedLoopbackSocketAddress(host) ? "127.0.0.1" : host, options.auth);
   const { handler, close: closeHandler } = createMerchantHttpHandler(options);
   const httpServer: HttpServer = createServer(handler);
 
@@ -1067,7 +1085,7 @@ export async function startMerchantMcpServer(
     host,
     port: boundPort,
     path: mcpPath,
-    url: `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${boundPort}${mcpPath}`,
+    url: `http://${host === "0.0.0.0" ? "127.0.0.1" : isIP(host) === 6 ? `[${host}]` : host}:${boundPort}${mcpPath}`,
     close: async () => {
       await closeHandler();
       await new Promise<void>((resolve) => {

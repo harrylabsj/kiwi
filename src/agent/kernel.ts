@@ -519,6 +519,16 @@ export class AgentKernel {
   }
 
   static async open(options: AgentKernelOptions): Promise<AgentKernel> {
+    const clock = () => {
+      let value: string;
+      try { value = (options.now ?? (() => new Date().toISOString()))(); }
+      catch { throw new AgentSessionError("invalid clock configuration: callback failed"); }
+      const timestamp = typeof value === "string" ? Date.parse(value) : Number.NaN;
+      if (!Number.isFinite(timestamp)) throw new AgentSessionError("invalid clock configuration: expected a valid timestamp");
+      return new Date(timestamp).toISOString();
+    };
+    // Reject invalid trusted configuration before files, database handles or timers exist.
+    clock();
     const paths = options.paths ?? ensureAgentPaths(options.profile.agent_id);
     // 会话来自不同模型（如 fake→deepseek）时重置：旧模型的消息会让新模型首轮
     // 产生空响应（模型没有返回任何文本）。模型变更 = 新的对话历史。
@@ -543,31 +553,24 @@ export class AgentKernel {
       }
     }
     const db = openAgentDatabase(paths.db);
+    try {
     const vault = options.vault ?? new PrivateVault();
-    const store = new MemoryStore({ db, vault, ...(options.now ? { now: options.now } : {}) });
+    const store = new MemoryStore({ db, vault, now: clock });
     const principal = store.ensurePrincipal({
       principal_id: options.profile.agent_id,
       owner_id: options.profile.owner_id,
       role: options.profile.role,
     });
     store.bindPrincipal(principal.principal_id);
-    let mainSessionManager: MainSessionManager;
-    try {
-      mainSessionManager = openMainSessionManager(
-        paths,
-        paths.dir,
-        options.eventSessionId ?? MAIN_SESSION_ID,
-      );
-    } catch (err) {
-      db.close(); // never leak the SQLite handle on a fail-closed open
-      throw err;
-    }
+    const mainSessionManager: MainSessionManager = openMainSessionManager(
+      paths,
+      paths.dir,
+      options.eventSessionId ?? MAIN_SESSION_ID,
+    );
 
     // Buyer capability pack (v0.3.0-B): task store + scheduler + tools.
     // All clocks are normalized to UTC ISO (SQLite compares timestamps
     // lexicographically; mixed offsets would silently break due checks).
-    const clock = () =>
-      new Date(Date.parse((options.now ?? (() => new Date().toISOString()))())).toISOString();
     const modeRef = { value: options.mode ?? DEFAULT_AGENT_MODE };
     const pendingHooks = new Map<string, PendingActionHooks>();
     const turnId = { current: MAIN_SESSION_ID };
@@ -834,6 +837,10 @@ export class AgentKernel {
       briefing = value;
     };
     return kernel;
+    } catch (error) {
+      db.close();
+      throw error;
+    }
   }
 
   private briefingSetter: (value: string | undefined) => void = () => undefined;
@@ -868,6 +875,22 @@ export class AgentKernel {
     const handoffs: Array<{ handoff_id: string; delivery: string }> = [];
     for (const negotiationId of this.handoffRuntime.ledger.listNegotiations()) {
       const events = this.handoffRuntime.ledger.events(negotiationId).map((event) => this.handoffRuntime!.ledger.resolvePayload(event));
+      // Local groups preserve event order and first-appearance output order.
+      // No cache survives this negotiation or this getter invocation.
+      const candidateGroups = new Map<string, typeof events>();
+      const handoffGroups = new Map<string, typeof events>();
+      for (const event of events) {
+        if (event.handoff_candidate_id !== undefined) {
+          const group = candidateGroups.get(event.handoff_candidate_id);
+          if (group === undefined) candidateGroups.set(event.handoff_candidate_id, [event]);
+          else group.push(event);
+        }
+        if (event.handoff_id !== undefined) {
+          const group = handoffGroups.get(event.handoff_id);
+          if (group === undefined) handoffGroups.set(event.handoff_id, [event]);
+          else group.push(event);
+        }
+      }
       const seenCandidates = new Set<string>();
       const seenHandoffs = new Set<string>();
       for (const event of events) {
@@ -876,12 +899,8 @@ export class AgentKernel {
           !seenCandidates.has(event.handoff_candidate_id)
         ) {
           seenCandidates.add(event.handoff_candidate_id);
-          const lifecycle = foldCandidateLifecycle(
-            events.filter((e) => e.handoff_candidate_id === event.handoff_candidate_id),
-          );
-          const candidateEvents = events.filter(
-            (e) => e.handoff_candidate_id === event.handoff_candidate_id,
-          );
+          const candidateEvents = candidateGroups.get(event.handoff_candidate_id)!;
+          const lifecycle = foldCandidateLifecycle(candidateEvents);
           const created = candidateEvents.find((e) => e.event_kind === "handoff_candidate_created");
           const embedded =
             created?.outcome.kind === "ok"
@@ -908,7 +927,7 @@ export class AgentKernel {
           seenHandoffs.add(event.handoff_id);
           handoffs.push({
             handoff_id: event.handoff_id,
-            delivery: deliveryState(events.filter((e) => e.handoff_id === event.handoff_id)) ?? "?",
+            delivery: deliveryState(handoffGroups.get(event.handoff_id)!) ?? "?",
           });
         }
       }

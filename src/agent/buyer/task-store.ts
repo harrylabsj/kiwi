@@ -48,7 +48,15 @@ import {
   DEFAULT_SEARCH_BUDGET,
   DEFAULT_TRACKING_POLICY,
   TASK_TRANSITIONS,
+  TRACKING_RULE_TYPES,
 } from "./types.js";
+
+/** Shared runtime guard for tool execution and direct store calls. */
+export function assertTrackingRuleType(value: unknown): asserts value is TrackingRuleType {
+  if (!(TRACKING_RULE_TYPES as readonly unknown[]).includes(value)) {
+    throw new BuyerTaskError("validation", "unknown tracking rule type");
+  }
+}
 
 export interface BuyerTaskStoreOptions {
   db: DatabaseSync;
@@ -715,6 +723,7 @@ export class BuyerTaskStore {
     cooldown_seconds?: number;
     idempotency_key: string;
   }): TrackingRule {
+    assertTrackingRuleType(input.rule_type);
     if (!Number.isInteger(input.interval_seconds) || input.interval_seconds <= 0) {
       throw new BuyerTaskError("validation", "interval_seconds must be a positive integer");
     }

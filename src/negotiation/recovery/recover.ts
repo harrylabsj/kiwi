@@ -28,7 +28,7 @@
  * 6. Reconcile remote state × Ledger  ← remote ahead: fetch→validate→append；
  *                                         local pending: 同 id+同 digest 安全重放
  *                                         （ChannelHandle.send）；不可调和 → 转人工
- * 7. Expire stale candidates/approvals ← 远端 revision 变化 → 本地出站消息置 stale
+ * 7. Report unknown staleness ← task state 不是可验证的远端 revision
  * 8. Resume scheduler/subscription    ← 返回 resume_task_ids，由调用方恢复轮询
  * ```
  *
@@ -585,38 +585,20 @@ export class NegotiationRecovery {
       );
     }
 
-    // 7. Expire stale candidates/approvals：远端 revision 变化 → 本地出站消息置 stale。
+    // 7. State is not a revision. No peer revision/evidence contract exists
+    // here, so neither a state transition nor missing history proves stale
+    // candidates. Confirmed and safely replayed messages must not expire.
     const stale: string[] = [];
-    const revisionChanged =
-      localTaskState !== undefined && remoteState !== undefined && localTaskState !== remoteState;
-    if (revisionChanged) {
-      for (const entry of localSent) stale.push(entry.message_id);
-    }
-    if (this.deps.expireStale !== undefined && stale.length > 0) {
-      try {
-        await this.deps.expireStale(negotiationId, stale);
-      } catch (err) {
-        return requiredWithProfile(
-          negotiationId,
-          `expireStale failed: ${errMsg(err)}`,
-          hwm,
-          phase,
-          remoteState,
-        );
-      }
-    }
+    const stateChanged = localTaskState !== undefined && remoteState !== undefined && localTaskState !== remoteState;
+    const stalenessReason = stateChanged
+      ? "remote task state changed; peer revision unavailable; staleness unknown, no approvals expired"
+      : "peer revision unavailable; staleness unknown, no approvals expired";
 
     // 8. Resume。
-    return this.resumed(
-      negotiationId,
-      hwm,
-      phase,
-      remoteState,
-      replayed,
-      appended,
-      stale,
-      taskIds,
-    );
+    return {
+      ...this.resumed(negotiationId, hwm, phase, remoteState, replayed, appended, stale, taskIds),
+      reason: stalenessReason,
+    };
   }
 
   private resumed(
@@ -632,6 +614,7 @@ export class NegotiationRecovery {
     return {
       status: "resumed",
       negotiation_id: negotiationId,
+      reason: "peer revision unavailable; staleness unknown, no approvals expired",
       replayed_message_ids: replayed,
       remote_ahead_appended: appended,
       stale_message_ids: stale,

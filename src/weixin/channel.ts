@@ -92,6 +92,9 @@ export class WeixinChannel {
   /** Latest server cursor, retained so stop() can flush it after abort. */
   private syncBuf = "";
   private syncStateReady = false;
+  private seenRevision = 0;
+  private savedSeenRevision = 0;
+  private savedSyncBuf = "";
   private timers: ReturnType<typeof setInterval>[] = [];
   private noticeFn: (line: string) => void;
 
@@ -178,7 +181,7 @@ export class WeixinChannel {
     }
     if (this.syncStateReady) {
       try {
-        saveSyncState(this.syncBufPath, { get_updates_buf: this.syncBuf, seen: [...this.seen] });
+        this.saveSyncStateIfChanged(this.syncBuf);
       } catch (err) {
         this.log(`[weixin] 同步游标写入失败：${err instanceof Error ? err.message : String(err)}`);
       }
@@ -203,6 +206,8 @@ export class WeixinChannel {
       this.syncBuf = syncBuf;
       this.syncStateReady = true;
       for (const fp of state.seen) this.seen.add(fp);
+      this.savedSyncBuf = syncBuf;
+      this.savedSeenRevision = this.seenRevision;
     } catch (err) {
       // 审查 P3：损坏的同步状态必须 fail-closed——此前打日志后从头轮询，
       // seen 指纹随同一文件丢失，旧消息（含 /slash 命令）整批重放（命令
@@ -233,8 +238,8 @@ export class WeixinChannel {
           await this.processMessage(msg);
           if (this.stopped) return 0;
         }
-        // 每轮写穿游标 + 去重（重启零丢失）
-        saveSyncState(this.syncBufPath, { get_updates_buf: result.next_sync_buf, seen: [...this.seen] });
+        // Persist either cursor or dedup changes; empty unchanged polls do no I/O.
+        this.saveSyncStateIfChanged(result.next_sync_buf);
         syncBuf = result.next_sync_buf;
         committedSyncBuf = syncBuf;
         this.syncBuf = committedSyncBuf;
@@ -297,6 +302,14 @@ export class WeixinChannel {
     return 0;
   }
 
+  private saveSyncStateIfChanged(cursor: string): void {
+    if (cursor === this.savedSyncBuf && this.seenRevision === this.savedSeenRevision) return;
+    saveSyncState(this.syncBufPath, { get_updates_buf: cursor, seen: [...this.seen] });
+    // Failed writes never acknowledge changes; stop or the next poll retries them.
+    this.savedSyncBuf = cursor;
+    this.savedSeenRevision = this.seenRevision;
+  }
+
   // ── 消息处理 ────────────────────────────────────────────────────────
 
   private async processMessage(msg: InboundMessage): Promise<void> {
@@ -311,6 +324,7 @@ export class WeixinChannel {
       return;
     }
     this.seen.add(fingerprint);
+    this.seenRevision += 1;
     this.trimSeen();
 
     // 白名单：配对扫描者自动授权 + 配置 allowUsers；未授权不回复（不确认 bot 存在）

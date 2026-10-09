@@ -1,21 +1,24 @@
 # 全库代码审查：114项当前裁定与验收状态
 
-更新日期：2026-10-09。主库提交基底仍为Kiwi `a7c34b1`、kiwi-catalog `429f547`；本批33项修复已采用到工作区，**未暂存、提交、推送或部署**。当前状态以上半部分为准，历史原始审查不代表现有待修问题。
+更新日期：2026-10-09。当前提交：Kiwi `3f2aa60`、kiwi-catalog `2f1ea11`（包含已收尾33项）。本批22项建议落实的40路径已采用到工作区，未暂存/提交/推送/部署。
 
 ## 当前结论
 
-**已收尾81项（原48＋本批33，均限定接受）；本次裁定范围内没有仍待修的已确认bug。** 另保留22项设计/加固建议、3项待补证、8项非bug。它不是“全库无bug”或生产上线通过的声明。
+81项原问题限定收尾，22项建议已按批准范围交付；3项仍待证据，8项非bug。当前确认待修bug为0，不表示全库无bug或生产上线通过。
 
 | 当前状态 | 数量 | 含义 |
 |---|---:|---|
-| 已收尾（限定接受） | 81 | 原48已有本地提交；本批33通过分组与最终联合验收、已采用工作区但未提交 |
-| 待完成bug | 0 | 原明确33项已闭环，不重派已绿项 |
-| 待设计决策/加固建议 | 22 | 已补经理建议：9小加固、7策略、4测量、2专项评估；本轮未实施 |
-| 证据不足待核 | 3 | 尚需真实可达链或合同证据，不预设漏洞成立 |
-| 不成立/不按bug | 8 | 保留明确裁定，不为统计改动 |
-| 合计 | 114 | 编号唯一；原始严重级别与当前待办是不同维度 |
+| 原问题已收尾（限定接受） | 81 | 原48与后33均已本地提交，风险与适用范围继续保留 |
+| 建议已落实（限定交付） | 22 | 9小加固、7策略、4测量、2专项；代码/文档已采用，密钥拆分仅方案和离线证明 |
+| 证据不足待核 | 3 | 先补真实可达链/合同，不假定漏洞成立 |
+| 不成立/不按bug | 8 | 保留原裁定，不为统计改动 |
+| 合计 | 114 | 不将22建议冒成22已证漏洞修复 |
 
-原历史裁定62成立/42部分成立/4不成立/5设计现状/1证据不足不变。当前33项修复保持各项收窄边界，没有扩为22项架构调整或真实经营授权。
+[22项建议落实验收报告](/Users/jianghaidong/Documents/Codex/2026-09-29/new-chat-2/outputs/Kiwi-22项建议落实验收报告-20261009.md) · [33项逐项报告](/Users/jianghaidong/Documents/Codex/2026-09-29/new-chat-2/outputs/Kiwi-33项修复最终验收报告-20261009.md)。
+
+最后联合INPUT `9c008e51df648d6a26783a0528feed3c5fecd8cd24e2270aaec74d3f5f112e27`，1439源，40差分（Kiwi33/Catalog7）。分组非作者验收、最终联合与必要构建完成，经理只读核证及主库逐路径读回。原3-40兼容真红已另冻R1修后复验，失败证据保留。
+
+未来容量分段/lease checkpoint、生产分用途密钥轮换/DB迁移不在本轮实施；测量值非生产SLO，文档/离线证明不冒真实业务测试。Buddy与旧定时仍暂停，不提交/推送。
 
 ## 本批33项验收闭环
 
@@ -26,6 +29,37 @@
 最后两HOLD：2-7稳定协议恢复、3-13生产默认Nodepin装配，已由A377-R1复验及A383-R1联合验证关闭。A383-R1 5新增控制、type/build通过；A384 5联合控制（含3既有代表）及3卡片选控通过。原红证据和测试夹具修正记录保留，不简单累加各轮计数为覆盖率。
 
 局限：自有loopback/TLS合成CA/临时SQLite与合成业务，不代表生产认证部署、真实交易、断电或跨机exactly-once；unknown保守阻断不按TTL重驱。原48限定风险继续有效；未迁移真实DB、安装依赖或启动平台。Buddy与定时任务仍暂停。
+
+## 22项建议落实结果
+
+| ID | 原分类 | 完成交付与边界 | 非作者证据 |
+|---|---|---|---|
+| 2-17 | 明确策略 | CSRF为主门、云Origin显式配置和无Origin客户端合同明确；与定价预览共享既有保护，不把Origin当认证。 | [A391](/private/tmp/kiwi-a391-protocol-hardening-independent/REPORT.md) |
+| 2-18 | 明确策略 | 人工对账runbook交付，绑定原enrollment/operation、身份权限与权威效果回执；unknown保留，无清锁或重驱命令。 | [A391](/private/tmp/kiwi-a391-protocol-hardening-independent/REPORT.md) |
+| 2-25 | 先测量 | 真实operations JSON 1k/10k/50k测量及容量方案完成；50k约23.1MB、读中位92.27ms、写73.09ms，阈值只是设计建议，无GC/迁库。 | [A389](/private/tmp/kiwi-a389-catalog-hardening-independent/REPORT.md) |
+| 3-1 | 明确策略 | state与revision区分；无revision证据返回staleness unknown/stale空，不调用expireStale，确认及成功重放不销毁批准。 | [A391](/private/tmp/kiwi-a391-protocol-hardening-independent/REPORT.md) |
+| 3-6 | 先测量 | 真实FileLeaseStore 100/1k/10k token测量；10k约3万文件p95约40.47ms，每次1scan/2read；fencing单调，未压缩。 | [A391](/private/tmp/kiwi-a391-protocol-hardening-independent/REPORT.md) |
+| 3-12 | 明确策略 | 每poll局部tracker合同与跨轮业务责任明确，无新无界缓存；预算与正常转换保持。 | [A391](/private/tmp/kiwi-a391-protocol-hardening-independent/REPORT.md) |
+| 3-25 | 小幅加固 | 共同typed规则校验；非法直调不写规则/事件且不消耗工具幂等键，schema与DB CHECK保留。 | [A390](/private/tmp/kiwi-a390-app-hardening-independent/REPORT.md) |
+| 3-26 | 先测量 | 真实SQLite检索规模/排序/隔离核验完成；10k约35–39ms，保持原实现，记录>=10k或实际p95>=50ms复测建议。 | [A390](/private/tmp/kiwi-a390-app-hardening-independent/REPORT.md) |
+| 3-27 | 小幅加固 | 上游完整方法形状检查，不兼容明确failclosed；真实session文件0600与thinking不落盘/reopen保持。 | [A390](/private/tmp/kiwi-a390-app-hardening-independent/REPORT.md) |
+| 3-28 | 先测量 | 实测二次扫描后改每getter/neg局部Map；独立3600event中位195.151→1.643ms，保key/order/first/last/多neg及二次读取等价，无跨轮缓存。 | [A390](/private/tmp/kiwi-a390-app-hardening-independent/REPORT.md) |
+| 3-29 | 小幅加固 | 非法注入时钟明确配置错误；开资源前校验及初始化中失败关闭DB/清timer，完整运行后的close责任仍在caller。 | [A390](/private/tmp/kiwi-a390-app-hardening-independent/REPORT.md) |
+| 3-30 | 专项评估 | 临时WAL评估发现metadata缺口后补已存在WAL/SHM regular/no-symlink/同UID/0600检查；缺失和正常checkpoint/recreate可用，不删/chmod/绑定inode。 | [A389](/private/tmp/kiwi-a389-catalog-hardening-independent/REPORT.md) |
+| 3-35 | 小幅加固 | 内存与SQLite预算adapter共同未知/重复lease、金额绑定、结算和释放契约一致；生产SQLite不改，内存仍不持久。 | [A390](/private/tmp/kiwi-a390-app-hardening-independent/REPORT.md) |
+| 3-37 | 小幅加固 | pricing preview POST复用CSRF/Origin门，保session/products:read，合法无Origin可用；不是订单支付漏洞修复。 | [A391](/private/tmp/kiwi-a391-protocol-hardening-independent/REPORT.md) |
+| 3-38 | 明确策略 | 管理Origin、WebAuthn exactHTTPS/RP及enrollment签名URL各合同明确，各自正负控制通过，不统一放宽。 | [A391](/private/tmp/kiwi-a391-protocol-hardening-independent/REPORT.md) |
+| 3-39 | 明确策略 | 仅WebAuthn注册/确认配置提前提示HTTP不支持，保严格HTTPS和普通HTTP session/read/OAuth；无真实浏览器注册声明。 | [A391](/private/tmp/kiwi-a391-protocol-hardening-independent/REPORT.md) |
+| 3-40 | 小幅加固 | start监听前认证策略及裸MCP可信socket纵深；isIP后复用全127/8与mapped loopback，unknown/伪头/非loopback拒；IPv6返回URL可直接用。 | [A391](/private/tmp/kiwi-a391-protocol-hardening-independent/REPORT.md) |
+| 3-52 | 小幅加固 | 删除signedEnrollment早退后的不可达owner分支，签名发布正负仍相同，不恢复unsigned fallback。 | [A390](/private/tmp/kiwi-a390-app-hardening-independent/REPORT.md) |
+| 3-53 | 小幅加固 | cursor或seen变化才保存、成功后确认；实际文件空轮/stop无重复写，重启去重保持，未调用真实微信。 | [A390](/private/tmp/kiwi-a390-app-hardening-independent/REPORT.md) |
+| 3-60 | 明确策略 | legacy HMAC仍body-only、body非空优先、随机active Bearer与legacy-off合同明确；revoked/rotated不降级，auth语义AST不变。 | [A389](/private/tmp/kiwi-a389-catalog-hardening-independent/REPORT.md) |
+| 3-62 | 小幅加固 | 新issue/rotate审计使用domain-separated sha256:v1完整指纹；无raw/24前缀，历史审计原bytes和合法token返回接口保留。 | [A389](/private/tmp/kiwi-a389-catalog-hardening-independent/REPORT.md) |
+| 3-63 | 专项评估 | 分用途版本化密钥方案及离线兼容证明完成；v1/v2、新旧reader/writer、pending grant与回退边界覆盖；生产key/env/schema及v3读取未实施。 | [A389](/private/tmp/kiwi-a389-catalog-hardening-independent/REPORT.md) |
+
+
+<details>
+<summary>22项原建议、原范围与验收要求（历史）</summary>
 
 ## 待设计决策或加固（22项）
 
@@ -83,6 +117,9 @@
 | 3-60 | 明确策略 | require_merchant_token先从body owner_token或transport _auth_token选择presented，用于merchant_tokens active随机token；无token行且legacy启用时最终仍调用只读body的require_owner_token。仅Bearer携带legacy HMAC不能通过该fallback；该body-only约定已写在require_owner_token文档，不能把它当已承诺的header支持普遍坏掉。 仅无merchant_tokens行/本地conn=None的HMAC legacy fallback；随机active token的Bearer路径不受此问题影响。 management-descriptor/merchants self读面走随机token解析，不是该legacy fallback，不得将P1-6既有结论重列为新bug。 实际写caller有agent_catalog鉴权和listings owner helper；Header由transport注入_auth_token，body不会因此自动获得legacy兼容。 | 保legacy HMAC body-only并写清双路径合同；新调用用随机token Bearer，不扩legacy入口，不许revoked/rotated降级复活。 |
 | 3-62 | 小幅加固 | issue/rotate将token[:24]写入audit_events.details_json。当前token为mkt_加32随机字节urlsafe，24字符含4字面前缀和20个随机base64字符（约120随机bit），并非全token，理论剩余约136bit；不能沿用“前缀就是可用凭据”说法。 只讨论catalog商户随机owner token的签发/轮换审计细节，不是平台merchant_id随机后缀。 源码中审计展示hint明确，但本轮没有证明未授权人能读取该审计面；账号合法返回自己完整token也不是该审计披露证据。 SECURITY.md目前未专门说明此24字符指纹取舍；文档缺项不等同已证泄漏事故。 | 新审计建议不可逆指纹替代较长raw token前缀；定义展示格式和历史兼容，不自动轮换token或回写旧审计。 |
 | 3-63 | 专项评估 | API owner HMAC、accounts商户token Fernet派生和enrollment稳定grant都使用KIWI_CATALOG_OWNER_TOKEN_SECRET。owner/enrollment消息前缀与Fernet盐/旧派生前缀各自区分用途，未发现仅拿一种合法输出即可直接伪造另一类的证据；但根secret实际失陷会影响三用途。 源代码的根密钥复用及恢复/轮换耦合，不是声称已读取到弱secret或生产泄露。 48中的授权/发grant字段清理没有拆分这三处密钥来源。 不因记录架构取舍直接换env名：存量Fernet密文、legacy HMAC和未完成enrollment都需兼容/迁移方案。 | 长期建议分用途密钥及轮换周期；先版本化/new-old解密/legacy凭据/pending grant兼容设计；不得只换env或轮换生产secret。 |
+
+
+</details>
 
 ## 待补证（3项）
 

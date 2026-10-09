@@ -176,6 +176,13 @@ export function openMainSessionManager(
       } (failing closed)`,
     );
   }
+  // Check the complete upstream contract before installing any wrapper or writing.
+  if (manager === null || typeof manager !== "object") throw new AgentSessionError("incompatible SessionManager instance (failing closed)");
+  for (const method of ["appendMessage", "_persist", "_rewriteFile", "getSessionFile"] as const) {
+    if (typeof (manager as unknown as Record<string, unknown>)[method] !== "function") {
+      throw new AgentSessionError(`incompatible SessionManager: missing ${method} (failing closed)`);
+    }
+  }
   installOwnerOnlyWrites(manager);
   installNoThinkingWrapper(manager);
   if (!existed) {

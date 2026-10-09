@@ -93,24 +93,44 @@ export function createInMemoryDailyBudgetStore(): DailyBudgetStore {
   const used = new Map<string, number>();
   const reserved = new Map<string, { dayKey: string; amount: number }>();
   const settledLeases = new Set<string>();
-  const key = (dayKey: string, leaseId: string) => `${dayKey}/${leaseId}`;
+  const key = (dayKey: string, leaseId: string) => {
+    if (typeof dayKey !== "string" || dayKey.trim() === "" || typeof leaseId !== "string" || leaseId.trim() === "") {
+      throw Object.assign(new Error("dayKey and leaseId must be non-empty strings"), { code: "invalid_argument" });
+    }
+    return JSON.stringify([dayKey, leaseId]);
+  };
+  const assertAmount = (amount: number, positive = false) => {
+    if (!Number.isSafeInteger(amount) || amount < 0 || (positive && amount === 0)) {
+      throw Object.assign(new Error("invalid token amount"), { code: "invalid_argument" });
+    }
+  };
 
   return {
     persistent: false,
     tryReserveTokens: (dayKey, leaseId, amount, limit) => {
       const k = key(dayKey, leaseId);
-      if (reserved.has(k)) return { ok: true, usedAfter: used.get(dayKey) ?? 0 };
+      assertAmount(amount);
+      assertAmount(limit, true);
+      if (settledLeases.has(k)) throw Object.assign(new Error("lease is already settled"), { code: "replay_conflict" });
+      const previous = reserved.get(k);
+      if (previous !== undefined) {
+        if (previous.amount !== amount) throw Object.assign(new Error("active lease amount conflict"), { code: "replay_conflict" });
+        return { ok: true, usedAfter: used.get(dayKey) ?? 0 };
+      }
       const cur = used.get(dayKey) ?? 0;
       if (cur + amount > limit) return { ok: false, usedAfter: cur };
       used.set(dayKey, cur + amount);
       reserved.set(k, { dayKey, amount });
       return { ok: true, usedAfter: cur + amount };
     },
-    settleTokens: (dayKey, leaseId, reservedAmount, actualAmount) => {
+    settleTokens: (dayKey, leaseId, _reservedAmount, actualAmount) => {
       const k = key(dayKey, leaseId);
+      assertAmount(_reservedAmount);
+      assertAmount(actualAmount);
       if (settledLeases.has(k)) return;
       const rec = reserved.get(k);
-      const reservedForLease = rec?.amount ?? reservedAmount;
+      if (rec === undefined) throw Object.assign(new Error("no reservation for lease"), { code: "unknown_lease" });
+      const reservedForLease = rec.amount;
       const cur = used.get(dayKey) ?? 0;
       used.set(dayKey, cur - reservedForLease + actualAmount);
       reserved.delete(k);

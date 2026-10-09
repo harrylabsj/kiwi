@@ -53,7 +53,7 @@ import {
 import { buildNegotiationChatTools, writeGateText } from "../negotiation-chat.js";
 import { routeWriteCandidate, type WriteGateDeps } from "../write-gate.js";
 import { runSearchCycle } from "./search-loop.js";
-import type { BuyerTaskStore } from "./task-store.js";
+import { assertTrackingRuleType, type BuyerTaskStore } from "./task-store.js";
 import type { SupplierRelationshipStore } from "../supplier/store.js";
 import type { ConsultationLink, BuyerTaskStatus } from "./types.js";
 import type { TaskConstraints, TaskEvent, TaskIntent } from "./types.js";
@@ -1063,10 +1063,11 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       if (!guard.ok) return textResult(guard.reason);
       try {
         const p = params as Record<string, unknown>;
+        assertTrackingRuleType(p.rule_type);
         const rule = store.addTrackingRule({
           task_id: String(p.task_id),
           ...(typeof p.candidate_id === "string" ? { candidate_id: p.candidate_id } : {}),
-          rule_type: p.rule_type as never,
+          rule_type: p.rule_type,
           condition: (p.condition ?? {}) as Record<string, unknown>,
           interval_seconds: Number(p.interval_seconds),
           ...(typeof p.cooldown_seconds === "number"
@@ -1707,6 +1708,8 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       const guard = manualAdvice(deps.mode);
       if (!guard.ok) return textResult(guard.reason);
       try {
+        // Invalid rule types are rejected before claiming an operation or writing events.
+        if (tool.name === "add_tracking_rule") assertTrackingRuleType((params as Record<string, unknown>).rule_type);
         const taskId = String((params as Record<string, unknown>).task_id ?? "");
         const call = store.beginToolCall(taskId, callId, tool.name, params);
         if (call.kind === "replay") return call.result as AgentToolResult<unknown>;

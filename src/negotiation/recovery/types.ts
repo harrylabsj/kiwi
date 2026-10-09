@@ -56,13 +56,13 @@ export type RecoveryStatus = "resumed" | "reconciliation_required";
 export interface RecoveryResult {
   status: RecoveryStatus;
   negotiation_id: string;
-  /** reconciliation_required 时的原因（转人工）。 */
+  /** reconciliation_required 的原因；resumed 也可解释未知 staleness，不改变恢复状态。 */
   reason?: string;
   /** 安全重放成功的本地 pending messageId 列表（同 message_id + 同 digest）。 */
   replayed_message_ids: string[];
   /** remote-ahead 分支落账的 reconciliation 事件数。 */
   remote_ahead_appended: number;
-  /** 标记为 stale（需失效）的本地 messageId。 */
+  /** 有独立旧候选证据才可列 stale；当前无 peer revision 合同，返回空，不等于已证新鲜。 */
   stale_message_ids: string[];
   /** 恢复后应继续轮询的 taskId 列表。 */
   resume_task_ids: string[];
@@ -90,7 +90,7 @@ export interface RecoveryDeps {
   openChannel?: ChannelOpener;
   /** 从 RemoteState 提取远端已确认 messageId；缺省取 task.status.message.messageId。 */
   viewMessageIds?: RemoteViewMessageIds;
-  /** 第 7 步失效接缝：把 stale 的候选/批准标记为过期（WP 接线方实现）。 */
+  /** @deprecated 保留类型兼容。当前无 peer revision/旧候选证明，不调用此 hook；不得仅按 state 变化作废批准。 */
   expireStale?: (negotiationId: string, staleMessageIds: string[]) => void | Promise<void>;
   /** 可注入时钟（RFC 3339）。 */
   now?: () => string;

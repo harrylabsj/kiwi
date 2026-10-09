@@ -664,10 +664,10 @@ describe("Recovery: 八步流程边界", () => {
     }
   });
 
-  it("expires stale outbound messages when the remote revision changed", async () => {
+  it("state changes without revision evidence do not expire confirmed outbound messages", async () => {
     const s = setup();
     try {
-      // 本地观察到任务状态 working，远端已推进到 completed（revision 变化）。
+      // 本地观察到 working，远端为 completed：只是 state 变化，没有 revision 证据。
       s.ledger.append({
         event_kind: "system",
         negotiation_id: NEGOTIATION_ID,
@@ -682,7 +682,7 @@ describe("Recovery: 八步流程边界", () => {
       s.contextMap.set(NEGOTIATION_ID, { remote_context_id: "ctx_remote" });
       s.contextMap.addTask(NEGOTIATION_ID, "task_active");
       // 远端确认了我们的消息（status.message = 我们的 messageId）且已完成 → 无 pending，
-      // 但 revision 从 working 变到 completed → 本地出站消息置 stale。
+      // state 变化不能证明旧批准失效，已确认消息不得置 stale。
       const ourMid = validEnvelopeFields().message_id;
       const handle = new FakeHandle({
         id: "task_active",
@@ -697,8 +697,9 @@ describe("Recovery: 八步流程边界", () => {
       });
       const r = await result;
       expect(r.status).toBe("resumed");
-      expect(r.stale_message_ids).toContain(ourMid);
-      expect(stale).toContain(ourMid);
+      expect(r.stale_message_ids).toEqual([]);
+      expect(r.reason).toMatch(/revision unavailable.*unknown/);
+      expect(stale).toEqual([]);
     } finally {
       teardown(s.dir);
     }

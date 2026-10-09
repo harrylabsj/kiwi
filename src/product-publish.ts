@@ -31,9 +31,7 @@
 
 import { createHash, createHmac } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { isLoopbackHost } from "./a2a/client/url-policy.js";
 import type { AgentProfile } from "./config/profile.js";
-import { registerCatalogAgent } from "./discovery/catalog-source/register.js";
 import { isRedirectResponse } from "./net/safe-http.js";
 import { trimTrailingSlashes } from "./net/url.js";
 import { SHOPPING_CLI_COMPAT, compatRangeText, versionInRange } from "./product-compat.js";
@@ -114,56 +112,6 @@ export interface MerchantPublishReport {
   };
 }
 
-function safeAgentId(agentId: string): string {
-  return agentId.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
-}
-
-/**
- * 审查 P1-10：构造注册用的 agent_card_url —— **绝对且经过校验**。
- *
- * `domain` 可能是裸 hostname（`merchant-x.local`，本地占位）或已含 scheme 的
- * URL；统一规范化为 `<scheme>://<host>/.well-known/agent-card.json`。此前直接
- * 拼接 `${domain}/.well-known/agent-card.json`——裸 hostname 时产物是相对 URL
- * （catalog 无法按 well-known 验证），且若 domain 携带 userinfo/路径会污染注册
- * 身份。
- *
- * 校验（fail-closed，任何一项不过 → 抛错短路，不发布）：
- *   - 绝对 URL 且 http(s)；
- *   - 远程 host 必须 https（loopback 本地形态允许 http）；
- *   - 无 userinfo / query / fragment；
- *   - path 只允许空或 "/"（agent_card_url 的 well-known 路径由本函数追加）。
- */
-function buildAgentCardUrl(domain: string): string {
-  const base = /^[a-z][a-z0-9+.-]*:\/\//i.test(domain) ? domain : `https://${domain}`;
-  let parsed: URL;
-  try {
-    parsed = new URL(base);
-  } catch {
-    throw new Error(`catalog domain 不是合法 URL/域名: "${domain}"（应为 https://<host> 形式）`);
-  }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    throw new Error(`catalog domain 必须使用 http(s)（got ${parsed.protocol}）: ${domain}`);
-  }
-  if (parsed.username !== "" || parsed.password !== "") {
-    throw new Error(`catalog domain 不得内嵌凭据（userinfo）: ${domain}`);
-  }
-  if (parsed.search !== "" || parsed.hash !== "") {
-    throw new Error(`catalog domain 不得包含 query/fragment: ${domain}`);
-  }
-  if (parsed.pathname !== "" && parsed.pathname !== "/") {
-    throw new Error(`catalog domain 不得包含路径（agent_card_url 由本函数构造）: ${domain}`);
-  }
-  const host = parsed.hostname;
-  // 复用仓内统一 loopback 判定（P3-13）：Node URL.hostname 对 IPv6 带方括号
-  // （http://[::1] → "[::1]"），此前裸比 "::1" 把 IPv6 loopback 误判为远程。
-  const isLoopback = isLoopbackHost(host);
-  if (parsed.protocol !== "https:" && !isLoopback) {
-    throw new Error(`catalog domain 远程 host 必须使用 https（本地 loopback 才允许 http）: ${domain}`);
-  }
-  const port = parsed.port !== "" ? `:${parsed.port}` : "";
-  return `${parsed.protocol}//${host}${port}/.well-known/agent-card.json`;
-}
-
 /**
  * 审查 P1-11：catalog 出站调用（可能携带 owner_token 凭据）——**绝不跟随
  * 重定向**。manual redirect 下任何 3xx / opaqueredirect 立即抛错，不解析
@@ -205,10 +153,6 @@ export async function merchantPublish(
   //   （KIWI_MERCHANT_TOKEN）下 publish 身份错乱。
   const catalogMerchantId = profile.agent_id;
   const shoppingMerchant = options.shoppingCliMerchant ?? profile.agent_id;
-  const domain =
-    options.catalogDomain ??
-    process.env.KIWI_CATALOG_DOMAIN ??
-    `merchant-${safeAgentId(catalogMerchantId)}.local`;
 
   // ── Step 0: shopping-cli 版本兼容检查（D3 矩阵共同消费，fail-closed）──
   // 矩阵单一来源 = product-compat.ts；与 `kiwi doctor` 共同消费。
@@ -291,52 +235,9 @@ export async function merchantPublish(
     };
   }
 
-  // ── Step 1: 确认/注册 owner Agent（幂等：先查复用，没有再注册）──────────
-  // 重复 publish 必须是安全操作（rev1.1 §4.5）：kiwi-catalog 一商家一 agent
-  // 约束下二次 register 会 409——先按 merchant 查询已有 agent，有则复用。
-  let catalogAgentId: string | undefined = signedEnrollment?.agentId;
-  let agentError: string | undefined;
-  try {
-    if (signedEnrollment !== null) {
-      // Enrollment 已在 Catalog 认证并绑定；signed mode 不读 owner-token lookup/register APIs。
-    } else {
-    const lookupUrl = `${baseUrl}/v1/agent-catalog/merchants/${encodeURIComponent(catalogMerchantId)}/agents`;
-    const lookup = await catalogFetch(fetchImpl, lookupUrl, { signal: AbortSignal.timeout(15_000) });
-    if (lookup.ok) {
-      const body = (await lookup.json()) as { results?: Array<{ catalog_agent_id?: string }> };
-      const existing = body.results?.[0]?.catalog_agent_id;
-      if (typeof existing === "string" && existing !== "") {
-        catalogAgentId = existing;
-      }
-    }
-    // 查询失败（网络/非 2xx）不短路——继续尝试注册；注册失败才报错。
-    if (catalogAgentId === undefined) {
-      const reg = await registerCatalogAgent({
-        catalogBaseUrl: options.catalogBaseUrl,
-        domain,
-        merchantId: catalogMerchantId,
-        ownerToken: options.ownerToken,
-        ownerTokenSecret: options.ownerTokenSecret,
-        agentCardUrl: buildAgentCardUrl(domain),
-        fetchImpl: options.fetchImpl,
-        timeoutMs: 15_000,
-      });
-      catalogAgentId = reg.catalogAgentId;
-    }
-    }
-  } catch (err) {
-    agentError = err instanceof Error ? err.message : String(err);
-  }
-  if (agentError !== undefined || catalogAgentId === undefined) {
-    return {
-      ok: false,
-      steps: {
-        shopping_cli_compat: compatStep,
-        agent: { ok: false, error: agentError ?? "catalog register returned no agent id" },
-        listings: { ok: false, skipped_reason: "agent 注册失败（listings 依赖 owner agent）" },
-      },
-    };
-  }
+  // Enrollment has already authenticated and bound this owner agent. There is
+  // deliberately no unsigned owner-token lookup/register fallback.
+  const catalogAgentId = signedEnrollment.agentId;
 
   // ── Step 2: 读 shopping-cli 投影 → 直连 catalog 发布 listings ──────────
   // shopping-cli v3.0 剥离 publish-listings 后，发布面归 kiwi-catalog：

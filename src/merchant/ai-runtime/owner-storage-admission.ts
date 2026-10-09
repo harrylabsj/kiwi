@@ -105,6 +105,17 @@ function checkFile(s: State) {
   privateDir(s.dir);
   const f = privateFile(s.file);
   if (f.dev !== s.dev || f.ino !== s.ino) deny("storage_file_replaced");
+  // SQLite owns sidecar lifecycle. Validate current metadata only: never
+  // remove, chmod, or pin sidecar inodes across normal checkpoint/reopen.
+  for (const suffix of ["-wal", "-shm"]) {
+    try {
+      privateFile(s.file + suffix);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") continue;
+      if (error instanceof OwnerStorageAdmissionError) deny("storage_sidecar_permissions");
+      throw error;
+    }
+  }
 }
 function key(s: State) {
   privateDir(resolve(s.keyFile, ".."));
