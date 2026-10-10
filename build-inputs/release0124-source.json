@@ -3375,9 +3375,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:165a6055468351a98389af396063f8efe3411c82f17dd60d8ff2f446279158b2",
+      "sha256": "sha256:49bf42e07fba9d30e9e9b3d46c5d7696fd887ac4710c52c7e8d469bb9b6574a0",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:67961c1756ed78a921da5b4fd1ad97cae1e480c43372dab8ccb5a1b72e89d3d5"
+      "raw_sha256": "sha256:ddfb379054bad464042fa3a93a14c580ffc0e7c52a4c62a30663d98b79a401df"
     },
     {
       "path": "tests/a297-atomic.test.ts",
