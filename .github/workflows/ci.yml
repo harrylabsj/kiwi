@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
       # Supervisor tests exercise the managed local gateway against the public
       # shopping-cli consumer. Resolve only the allowlisted, full-SHA lock entry
       # so ordinary Kiwi CI remains reproducible without a private token.
@@ -38,8 +40,12 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
           cache: npm
+      - name: Setup npm 12 and verify the install toolchain
+        run: |
+          npm install --global npm@12.0.2
+          node scripts/check-install-toolchain.mjs "$(npm --version)"
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck

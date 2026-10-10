@@ -121,6 +121,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref }}
+          fetch-depth: 0
 
       - name: Validate central ref (publish=true requires a full 40-char commit SHA)
         env:
@@ -221,11 +222,16 @@ jobs:
           path: hermes-plugin-kiwi
           persist-credentials: false
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
           cache: npm
+
+      - name: Setup npm 12 and verify the install toolchain
+        run: |
+          npm install --global npm@12.0.2
+          node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Setup Python 3.13
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -238,7 +244,7 @@ jobs:
       - name: Kiwi full verify (lint, typecheck, build, test, contracts, vectors, package smoke)
         run: |
           npm ci
-          npm run verify
+          node scripts/verify-npm-shipping-source.mjs
 
       - name: Kiwi-catalog locked install, contract lock, and deterministic tests
         working-directory: kiwi-catalog
@@ -290,11 +296,12 @@ jobs:
           node scripts/verify-portfolio-products.mjs --require-external --hermes-root hermes-plugin-kiwi
 
           npm pack --pack-destination release/npm
-          node scripts/build-cloud-artifact.mjs --skip-build
-          node scripts/smoke-cloud-artifact.mjs --artifact build/cloud-artifact
+          node scripts/build-npm-shipping.mjs
+          node scripts/smoke-cloud-artifact.mjs --json
           node scripts/build-cloud-package.mjs
           npm pack ./build/cloud-package --pack-destination release/npm/kiwi-merchant-cloud
           npm run verify:cloud-release-candidate
+          node scripts/verify-npm-shipping-installed.mjs
           (cd integrations/plugins/kiwi-dsh-plugin && npm pack --pack-destination "$GITHUB_WORKSPACE/release/dsh-plugin")
 
           WB_EXPERT_VERSION="$(node -p "require('./integrations/hosts/workbuddy/kiwi-procurement-expert/.codebuddy-plugin/plugin.json').version")"
@@ -427,15 +434,17 @@ jobs:
           name: portfolio-release
           path: dist-artifact
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
 
-      # npm trusted publishing（OIDC）需要 npm >= 11.5.1；Node 22 自带 10.x，
-      # 不升级则 npm publish --provenance 无凭据可用（ENEEDAUTH）。
-      - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@11.19.0
+      # npm 12 preserves the A106 installation contract and supports OIDC.
+      # Use the real CLI version; never bypass lifecycle hooks or fake its UA.
+      - name: Setup npm 12 and verify the install toolchain
+        run: |
+          npm install --global npm@12.0.2
+          node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Verify downloaded release manifest before publishing
         run: |
@@ -480,14 +489,16 @@ jobs:
           name: portfolio-release
           path: dist-artifact
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
 
       # npm trusted publishing（OIDC）需要 npm >= 11.5.1；Node 22 自带 10.x。
-      - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@11.19.0
+      - name: Setup npm 12 and verify the install toolchain
+        run: |
+          npm install --global npm@12.0.2
+          node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Verify downloaded release manifest before publishing
         run: |
@@ -537,13 +548,15 @@ jobs:
           name: portfolio-release
           path: dist-artifact
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
 
-      - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@11.19.0
+      - name: Setup npm 12 and verify the install toolchain
+        run: |
+          npm install --global npm@12.0.2
+          node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Verify downloaded release manifest before publishing
         run: node scripts/verify-release-manifest.mjs "$GITHUB_WORKSPACE/dist-artifact/release"
@@ -591,10 +604,10 @@ jobs:
           name: portfolio-release
           path: dist-artifact
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
 
       - name: Setup Python 3.13
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -655,10 +668,10 @@ jobs:
           name: portfolio-release
           path: dist-artifact
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
 
       - name: Setup Python 3.13
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -715,10 +728,15 @@ jobs:
           name: portfolio-release
           path: dist-artifact
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
+
+      - name: Setup npm 12 and verify the install toolchain
+        run: |
+          npm install --global npm@12.0.2
+          node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Verify registry downloads against built manifest (fail closed)
         env:
@@ -746,10 +764,15 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
+
+      - name: Setup npm 12 and verify the install toolchain
+        run: |
+          npm install --global npm@12.0.2
+          node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - id: previous
         name: Resolve previous release manifest reference

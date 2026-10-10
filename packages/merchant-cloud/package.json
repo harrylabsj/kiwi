@@ -1,14 +1,33 @@
 {
   "name": "@harrylabsj/kiwi-merchant-cloud",
-  "version": "0.12.3",
+  "version": "0.12.4",
   "description": "Kiwi merchant cloud runtime package",
   "license": "Apache-2.0",
   "type": "module",
   "main": "index.js",
-  "files": ["app", "contracts", "node_modules", "index.js", "runtime-package.json", "prepare.mjs", "build-manifest.json"],
+  "files": [
+    "app",
+    "contracts",
+    "node_modules",
+    "index.js",
+    "runtime-package.json",
+    "prepare.mjs",
+    "build-manifest.json",
+    "scripts",
+    "shipping-source.json",
+    "shipping-sbom.cdx.json"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/harrylabsj/kiwi.git"
   },
-  "scripts": { "prepare-cloud": "node prepare.mjs" }
+  "scripts": {
+    "prepare-cloud": "node prepare.mjs",
+    "preinstall": "node scripts/check-install-toolchain.mjs"
+  },
+  "engines": {
+    "node": ">=22.19.0",
+    "npm": ">=12.0.2 <13"
+  },
+  "packageManager": "npm@12.0.2"
 }
