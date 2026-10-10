@@ -29,6 +29,9 @@ export function assertOfficialNpmPayload(
 export function assertNoState(
   rows: Array<{ path: string; size: number; sha256: string }>,
   options?: {
+    artifactRoot?: string;
+    compiledApp?: CompiledAppProof;
+    vendorCode?: VendorCodeProof;
     stageNpmrc?: { size: number; sha256: string };
     generatedLock?: { path: string; size: number; sha256: string };
   },
@@ -47,3 +50,9 @@ export function controlledHiddenNpmLock(stage: string): {
 };
 
 export function assertForeignCheckouts(root: string): string[];
+
+declare const compiledProofBrand: unique symbol, vendorProofBrand: unique symbol;
+export type CompiledAppProof = { readonly [compiledProofBrand]: true };
+export type VendorCodeProof = { readonly [vendorProofBrand]: true };
+export function createCompiledAppProof(root: string, stage: string): CompiledAppProof;
+export function createVendorCodeProof(root: string, stage: string, officialTarball: string): VendorCodeProof;

@@ -1191,7 +1191,7 @@
     },
     {
       "path": "scripts/build-npm-shipping.mjs",
-      "sha256": "sha256:e29a95f3cd9e576f5dabe066174a0c1a70af053b53e9418563b3aa233bc67254"
+      "sha256": "sha256:2cb72fd4ccfa368d57063e84ecdd9d3b7b9e7ebf43e45761fef9773051e5d94e"
     },
     {
       "path": "scripts/build-portfolio-release-index.mjs",
@@ -1271,11 +1271,11 @@
     },
     {
       "path": "scripts/lib/npm-shipping.d.mts",
-      "sha256": "sha256:ee9ff6a73b17b8fd5cd0c27477aa1881bc1ea6b5f8f84a7a2c2de9acaddc2827"
+      "sha256": "sha256:67d1c39d100120bf691d92644d340c7142e71479fc96a3a602dbf526cff4a611"
     },
     {
       "path": "scripts/lib/npm-shipping.mjs",
-      "sha256": "sha256:b381d3d2df72e2d340c61ac075e8f5a613cc87d01b4595ac6fb7fcc3ec673720"
+      "sha256": "sha256:18d5050b816747eab1f347d5d48b65969ad79ad319bdb9c3c847a67ed1db4bad"
     },
     {
       "path": "scripts/lib/portfolio-lock-verify.d.mts",
@@ -4582,6 +4582,10 @@
     {
       "path": "tests/northbound-schema.test.ts",
       "sha256": "sha256:ac37350585d55881d9e4d5cc3299f0e6303ab9243ae4227098aa23b6b89a2821"
+    },
+    {
+      "path": "tests/npm-shipping-code-proofs.test.ts",
+      "sha256": "sha256:98b2769a82487f8c635d72502ee82a62e6c32092517577124c27996da17a31ad"
     },
     {
       "path": "tests/npm-shipping-consumers.test.ts",

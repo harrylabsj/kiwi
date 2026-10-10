@@ -420,7 +420,7 @@ export function distInventory(root) {
     JSON.stringify(rows.map((r) => r.path).sort()) !== JSON.stringify(expected)
   )
     throw new Error("SHIPPING_UNKNOWN_OR_MISSING_DIST");
-  return rows;
+  return rows.map((row) => ({ ...row, mode: lstatSync(path.join(root, "dist", row.path)).mode & 0o7777 }));
 }
 export function publishBuildReceipt(file, value, { beforeRename } = {}) {
   if (existsSync(file)) throw new Error("SHIPPING_NEW_BUILD_RECEIPT_REQUIRED");
@@ -588,7 +588,101 @@ export function controlledHiddenNpmLock(stage) {
   const bytes = readFileSync(file);
   return { path: "node_modules/.package-lock.json", size: bytes.length, sha256: sha256(bytes) };
 }
-export function assertNoState(rows, { stageNpmrc, generatedLock } = {}) {
+const compiledAppProofs = new WeakMap(), vendorCodeProofs = new WeakMap();
+const statePath = /(^|\/)(?:\.env(?:\..*)?|\.package-lock\.json|\.npmrc|\.cache|\.git|\.kiwi-runtime|\.owner-host|state|credentials)(?:\/|$)|\.(?:sqlite(?:-wal|-shm)?|db|pem|key)$/i;
+const hardStatePath = /(^|\/)(?:\.env(?:\..*)?|\.package-lock\.json|\.npmrc|\.cache|\.git|\.kiwi-runtime|\.owner-host)(?:\/|$)|\.(?:sqlite(?:-wal|-shm)?|db|pem|key)$/i;
+const codePath = /\.(?:[cm]?js|ts|d\.[cm]?ts)(?:\.map)?$/;
+function codeDirectoryPath(file) {
+  return !hardStatePath.test(file) && codePath.test(file) && /(^|\/)(state|credentials)\//.test(file);
+}
+function regularDirectory(dir) {
+  const absolute = path.resolve(dir);
+  if (!lstatSync(absolute).isDirectory() || lstatSync(absolute).isSymbolicLink() || realpathSync(absolute) !== absolute)
+    throw new Error("SHIPPING_CODE_ROOT_INVALID");
+  return absolute;
+}
+function codeProofContext(root, stage) {
+  return { root: regularDirectory(root), stage: regularDirectory(stage), source: assertSource(root) };
+}
+function exactCodeFile(stage, row, expected) {
+  if (!expected || row.path !== expected.path || row.size !== expected.size || row.sha256 !== expected.sha256)
+    return false;
+  let parent = stage;
+  for (const part of row.path.split("/").slice(0, -1)) {
+    parent = path.join(parent, part);
+    if (!lstatSync(parent).isDirectory() || lstatSync(parent).isSymbolicLink()) return false;
+  }
+  const file = path.join(stage, row.path), stat = lstatSync(file);
+  return stat.isFile() && !stat.isSymbolicLink() && stat.size === expected.size &&
+    (stat.mode & 0o7777) === expected.mode && sha256(readFileSync(file)) === expected.sha256;
+}
+export function createCompiledAppProof(root, stage) {
+  const context = codeProofContext(root, stage), receipt = assertRootReceipt(root, context.source);
+  const rows = new Map(receipt.dist.filter((row) => codeDirectoryPath(`app/${row.path}`)).map((row) => {
+    if (!Number.isInteger(row.mode) || row.mode < 0 || row.mode > 0o7777) throw new Error("SHIPPING_COMPILED_MODE_REQUIRED");
+    return [`app/${row.path}`, { ...row, path: `app/${row.path}` }];
+  }));
+  for (const row of rows.values()) if (!exactCodeFile(context.stage, row, row)) throw new Error("SHIPPING_COMPILED_CODE_CHANGED");
+  const proof = Object.freeze({});
+  compiledAppProofs.set(proof, { ...context, rows, receipt_sha256: sha256(readFileSync(path.join(root, "build/npm-shipping-build-receipt.json"))) });
+  return proof;
+}
+export function createVendorCodeProof(root, stage, officialTarball) {
+  const context = codeProofContext(root, stage);
+  const locked = json(path.join(root, "build-inputs/release0124-stage/package-lock.json"));
+  if (sha256(readFileSync(path.join(stage, "package-lock.json"))) !== context.source.stage.lock_sha256)
+    throw new Error("SHIPPING_VENDOR_STAGE_LOCK_CHANGED");
+  const key = "node_modules/@anthropic-ai/sdk", record = locked.packages[key];
+  if (!record || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(record.integrity) ||
+      new URL(record.resolved).origin !== "https://registry.npmjs.org") throw new Error("SHIPPING_VENDOR_LOCK_INVALID");
+  const file = path.resolve(officialTarball), stat = lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("SHIPPING_VENDOR_TAR_NOT_REGULAR");
+  if (stat.size >= MAX_TGZ) throw new Error("SHIPPING_TGZ_BUDGET");
+  const bytes = readFileSync(file);
+  if (`sha512-${createHash("sha512").update(bytes).digest("base64")}` !== record.integrity)
+    throw new Error("SHIPPING_VENDOR_SRI_MISMATCH");
+  const parsed = tarInventory(bytes), metadata = parsed.rows.find((row) => row.path === "package.json");
+  const pkg = metadata ? JSON.parse(metadata.body.toString("utf8")) : null;
+  const installed = json(path.join(stage, key, "package.json"));
+  if (pkg?.name !== "@anthropic-ai/sdk" || pkg.version !== record.version ||
+      installed.name !== pkg.name || installed.version !== pkg.version) throw new Error("SHIPPING_VENDOR_VERSION_CHANGED");
+  const installedMetadata = { ...metadata, path: `${key}/package.json` };
+  if (!exactCodeFile(context.stage, installedMetadata, installedMetadata)) throw new Error("SHIPPING_VENDOR_METADATA_CHANGED");
+  const rows = new Map(parsed.rows.filter((row) => codeDirectoryPath(row.path)).map((row) => {
+    const full = { path: `${key}/${row.path}`, size: row.size, sha256: row.sha256, mode: row.mode };return [full.path, full];
+  }));
+  for (const row of rows.values()) if (!exactCodeFile(context.stage, row, row)) throw new Error("SHIPPING_VENDOR_CODE_CHANGED");
+  const proof = Object.freeze({});
+  vendorCodeProofs.set(proof, { ...context, rows, officialTarball: file, integrity: record.integrity, version: record.version, metadata: installedMetadata });
+  return proof;
+}
+function checkedCodeProof(proof, store, artifactRoot) {
+  if (proof === undefined) return null;
+  const data = store.get(proof);
+  if (!data || artifactRoot === undefined || regularDirectory(artifactRoot) !== data.stage)
+    throw new Error("SHIPPING_CODE_PROOF_INVALID");
+  const current = assertSource(data.root);
+  if (current.source_commit !== data.source.source_commit || current.contract_sha256 !== data.source.contract_sha256)
+    throw new Error("SHIPPING_CODE_SOURCE_CHANGED");
+  if (store === compiledAppProofs) {
+    assertRootReceipt(data.root, current);
+    if (sha256(readFileSync(path.join(data.root, "build/npm-shipping-build-receipt.json"))) !== data.receipt_sha256)
+      throw new Error("SHIPPING_CODE_RECEIPT_CHANGED");
+  } else {
+    const record = json(path.join(data.root, "build-inputs/release0124-stage/package-lock.json")).packages["node_modules/@anthropic-ai/sdk"];
+    if (!lstatSync(data.officialTarball).isFile() || lstatSync(data.officialTarball).isSymbolicLink() ||
+        !exactCodeFile(data.stage, data.metadata, data.metadata) ||
+        record.version !== data.version || record.integrity !== data.integrity ||
+        sha256(readFileSync(path.join(data.stage, "package-lock.json"))) !== current.stage.lock_sha256 ||
+        `sha512-${createHash("sha512").update(readFileSync(data.officialTarball)).digest("base64")}` !== data.integrity ||
+        json(path.join(data.stage, "node_modules/@anthropic-ai/sdk/package.json")).version !== data.version)
+      throw new Error("SHIPPING_VENDOR_PROOF_CHANGED");
+  }
+  return data;
+}
+export function assertNoState(rows, { stageNpmrc, generatedLock, compiledApp, vendorCode, artifactRoot } = {}) {
+  const app = checkedCodeProof(compiledApp, compiledAppProofs, artifactRoot);
+  const vendor = checkedCodeProof(vendorCode, vendorCodeProofs, artifactRoot);
   for (const row of rows)
     if (
       !(
@@ -606,9 +700,10 @@ export function assertNoState(rows, { stageNpmrc, generatedLock } = {}) {
         row.size === stageNpmrc.size &&
         row.sha256 === stageNpmrc.sha256
       ) &&
-      /(^|\/)(?:\.env(?:\..*)?|\.package-lock\.json|\.npmrc|\.cache|\.git|\.kiwi-runtime|\.owner-host|state|credentials)(?:\/|$)|\.(?:sqlite(?:-wal|-shm)?|db|pem|key)$/i.test(
-        row.path,
-      )
+      statePath.test(row.path) &&
+      !(codeDirectoryPath(row.path) &&
+        ((app && exactCodeFile(app.stage, row, app.rows.get(row.path))) ||
+         (vendor && exactCodeFile(vendor.stage, row, vendor.rows.get(row.path)))))
     )
       throw new Error(`SHIPPING_STATE_OR_CREDENTIAL_FILE ${row.path}`);
 }
@@ -623,7 +718,7 @@ export function npm(root, args, timeout = MAX_MS) {
 }
 
 /** Decode normal npm tar headers/PAX and compare the actual tgz, not merely the staging plan. */
-export function verifyTarball(bytes, expectedFiles) {
+function tarInventory(bytes) {
   if (bytes.length >= MAX_TGZ) throw new Error("SHIPPING_TGZ_BUDGET");
   const plain = gunzipSync(bytes, { maxOutputLength: MAX_PLAIN });
   const files = new Map();
@@ -752,21 +847,29 @@ export function verifyTarball(bytes, expectedFiles) {
     if (type !== "0" && type !== "") throw new Error("SHIPPING_TAR_NONREGULAR_PAYLOAD");
     const relative = name.slice(8);
     if (files.has(relative)) throw new Error("SHIPPING_TAR_DUPLICATE");
-    files.set(relative, { path: relative, size: body.length, sha256: sha256(body) });
+    const modeText = text(header.subarray(100, 108)).trim();
+    if (modeText && !/^[0-7]+$/.test(modeText)) throw new Error("SHIPPING_TAR_MODE_INVALID");
+    const mode = modeText ? parseInt(modeText, 8) : 0;
+    if (mode > 0o7777) throw new Error("SHIPPING_TAR_MODE_INVALID");
+    files.set(relative, { path: relative, size: body.length, sha256: sha256(body), mode, body });
   }
   if (!ended || Object.keys(pax).length || longPath !== undefined)
     throw new Error("SHIPPING_TAR_END_BLOCKS_INVALID");
   const rows = [...files.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  const expected = [...expectedFiles].sort((a, b) =>
-    a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
-  );
-  if (JSON.stringify(rows) !== JSON.stringify(expected))
-    throw new Error("SHIPPING_PACK_BYTES_MISMATCH");
   return {
+    rows,
     compressed_bytes: bytes.length,
     plain_tar_bytes: plain.length,
     file_count: rows.length,
     sha256: sha256(bytes),
     integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
   };
+}
+
+export function verifyTarball(bytes, expectedFiles) {
+  const { rows, ...result } = tarInventory(bytes);
+  const actual = rows.map(({ path, size, sha256 }) => ({ path, size, sha256 }));
+  const expected = [...expectedFiles].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("SHIPPING_PACK_BYTES_MISMATCH");
+  return result;
 }

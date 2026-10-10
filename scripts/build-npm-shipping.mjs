@@ -13,6 +13,8 @@ import {
   verifyTarball,
   assertNoState,
   controlledHiddenNpmLock,
+  createCompiledAppProof,
+  createVendorCodeProof,
   assertSource,
   assertRootReceipt,
   inventory,
@@ -140,7 +142,14 @@ export function buildShipping({
   assertSource(root);
   const files = inventory(out);
   const npmrc = readFileSync(path.join(root, ".npmrc"));
+  const vendor = json(path.join(root, "build-inputs/release0124-stage/package-lock.json")).packages["node_modules/@anthropic-ai/sdk"];
+  const digest = Buffer.from(vendor.integrity.slice("sha512-".length), "base64").toString("hex");
+  const cache = npm(out, ["config", "get", "cache"], remaining()).trim();
+  const officialTarball = path.join(cache, "_cacache/content-v2/sha512", digest.slice(0, 2), digest.slice(2, 4), digest.slice(4));
   assertNoState(files, {
+    artifactRoot: out,
+    compiledApp: createCompiledAppProof(root, out),
+    vendorCode: createVendorCodeProof(root, out, officialTarball),
     stageNpmrc: { size: npmrc.length, sha256: sha256(npmrc) },
     generatedLock: controlledHiddenNpmLock(out),
   });
