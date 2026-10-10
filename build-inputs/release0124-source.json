@@ -1283,7 +1283,7 @@
     },
     {
       "path": "scripts/lib/npm-shipping.mjs",
-      "sha256": "sha256:18d5050b816747eab1f347d5d48b65969ad79ad319bdb9c3c847a67ed1db4bad"
+      "sha256": "sha256:47f68daf4b7e868d328c1677a4040bce49d3103e606628d3dd648499d2b511f8"
     },
     {
       "path": "scripts/lib/portfolio-lock-verify.d.mts",

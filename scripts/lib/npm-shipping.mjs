@@ -42,7 +42,9 @@ export function inventory(dir, prefix = "") {
     const relative = prefix ? `${prefix}/${name}` : name;
     const file = path.join(dir, relative),
       s = lstatSync(file);
-    if (s.isDirectory()) rows.push(...inventory(dir, relative));
+    if (s.isDirectory()) {
+      for (const row of inventory(dir, relative)) rows.push(row);
+    }
     else if (s.isFile())
       rows.push({ path: relative, size: s.size, sha256: sha256(readFileSync(file)) });
     else if (s.isSymbolicLink()) {
