@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** Validate all current npm shipping bytes and the actual tarball plan, not metadata equality alone. */
+import { assertBundledEdges } from "./lib/npm-bundled-edges.mjs";
 import { packRecord } from "./lib/npm-pack-record.mjs";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -29,6 +30,7 @@ assert.equal(manifest.source_commit, source.source_commit);
 assert.equal(manifest.source_contract_sha256, source.contract_sha256);
 assert.deepEqual(pkg.dependencies, json(path.join(root, "package.json")).dependencies);
 assert.deepEqual(pkg.bundleDependencies, Object.keys(pkg.dependencies).sort());
+const edges = await assertBundledEdges(root, dir);
 const plan = packRecord(JSON.parse(npm(dir, ["pack", "--dry-run", "--json"])), {
   name: pkg.name,
   version: pkg.version,
@@ -78,5 +80,6 @@ console.log(
     tgz_bytes: statSync(tgz).size,
     tgz_sha256: sha256(readFileSync(tgz)),
     actual_pack: packed,
+    bundled_edges: edges,
   }),
 );

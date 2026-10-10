@@ -50,7 +50,6 @@ for (const key of [
   "packageManager",
   "devEngines",
   "allowScripts",
-  "overrides",
 ])
   pkg[key] = runtime[key];
 pkg.bundleDependencies = Object.keys(pkg.dependencies).sort();

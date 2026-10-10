@@ -1183,7 +1183,7 @@
     },
     {
       "path": "scripts/build-cloud-package.mjs",
-      "sha256": "sha256:f20449ce0efe1010df12a8b857a03dc4fdf627888ba1a5e74968b26488f92b71"
+      "sha256": "sha256:90b3f8dad4ac6a3dab46714527c6280d1728c9dafde3312566840e0e74f2c074"
     },
     {
       "path": "scripts/build-delivery-manifest.mjs",
@@ -1260,6 +1260,14 @@
     {
       "path": "scripts/lib/merchant-instance-stub.mjs",
       "sha256": "sha256:33da4ed3d7e249cee06469d7d3b614a509658c4032b2f1a047c311bd29cc19d1"
+    },
+    {
+      "path": "scripts/lib/npm-bundled-edges.d.mts",
+      "sha256": "sha256:1934157836f5007c9215ae303e13f62b469295de72e10577ed254acecfc36667"
+    },
+    {
+      "path": "scripts/lib/npm-bundled-edges.mjs",
+      "sha256": "sha256:e256454dc82cd9d6c5bfebf124ed2e93cd28ef4a84fddb12611ba85bca54474e"
     },
     {
       "path": "scripts/lib/npm-pack-record.d.mts",
@@ -1419,7 +1427,7 @@
     },
     {
       "path": "scripts/verify-cloud-package-candidate.mjs",
-      "sha256": "sha256:604596dac068b7e8265b78edb3bed4329280105fde3033510ba85dae71faaa1e"
+      "sha256": "sha256:9e4620b718eb4250b17c79f0a06fa9a85c638c36836caf9ee9808a48ab474405"
     },
     {
       "path": "scripts/verify-contract-vectors.mjs",
@@ -1443,7 +1451,7 @@
     },
     {
       "path": "scripts/verify-npm-shipping-installed.mjs",
-      "sha256": "sha256:ddfdef65ea0f5a1e9eddd362c7c3a4525132c8b9b8123e063ea2aea6ebb89d6f"
+      "sha256": "sha256:d75e8ba285d599e53acf010664cfbad57c3812665349e45b7628a4b4d61fa0f6"
     },
     {
       "path": "scripts/verify-npm-shipping-runtime.mjs",
@@ -4582,6 +4590,10 @@
     {
       "path": "tests/northbound-schema.test.ts",
       "sha256": "sha256:ac37350585d55881d9e4d5cc3299f0e6303ab9243ae4227098aa23b6b89a2821"
+    },
+    {
+      "path": "tests/npm-cloud-leaf-metadata.test.ts",
+      "sha256": "sha256:638f9fdc397f5075fa6bea8baba50a83c67ef7bd6b8c9901476cce4230933034"
     },
     {
       "path": "tests/npm-shipping-code-proofs.test.ts",

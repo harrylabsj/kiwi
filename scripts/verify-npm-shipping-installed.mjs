@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** Cold normal npm12 production installs of the two exact local tarballs. No registry publication/provider/model operation. */
+import { assertBundledEdges, assertInstalledLockedVersions } from "./lib/npm-bundled-edges.mjs";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -49,7 +50,7 @@ for (const [name, relative, subdir, app] of [
         version: "1.0.0",
         private: true,
         type: "module",
-        overrides: json(path.join(root, "package.json")).overrides,
+        ...(subdir === "root" ? { overrides: json(path.join(root, "package.json")).overrides } : {}),
       },
       null,
       2,
@@ -63,6 +64,12 @@ for (const [name, relative, subdir, app] of [
   const installed = path.join(consumer, "node_modules", name);
   if (json(path.join(installed, "package.json")).version !== "0.12.4")
     throw new Error("SHIPPING_COLD_VERSION_MISMATCH");
+  let cloudClosure;
+  if (subdir === "cloud") {
+    if (Object.hasOwn(json(path.join(consumer, "package.json")), "overrides"))
+      throw new Error("SHIPPING_CLOUD_CALLER_OVERRIDE_FORBIDDEN");
+    cloudClosure = { edges: await assertBundledEdges(root, installed), versions: assertInstalledLockedVersions(root, installed) };
+  }
   const probe = execFileSync(
     process.execPath,
     [
@@ -104,7 +111,8 @@ for (const [name, relative, subdir, app] of [
     tgz_sha256: sha256(readFileSync(tgz)),
     runtime_log_sha256: sha256(Buffer.from(probe)),
     normal_npm12_install: true,
-    conservative_consumer_override_applied: true,
+    conservative_consumer_override_applied: subdir === "root",
+    ...(cloudClosure ? { cloudClosure } : {}),
   });
 }
 writeFileSync(
