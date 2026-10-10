@@ -17,6 +17,7 @@
  * 不会报错、只会静默打出缺 dist 的小 tarball。因此打包前要求各白名单目录存在，
  * 打包后要求它们真的进入 tarball，否则 fail-closed。
  */
+import { packRecord } from "./lib/npm-pack-record.mjs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -76,7 +77,7 @@ const packOutput = execFileSync("npm", ["pack", "--json", "--silent", "--pack-de
   cwd: root,
   encoding: "utf8",
 }).trim();
-const packInfo = JSON.parse(packOutput)[0];
+const packInfo = packRecord(JSON.parse(packOutput), { name: packageJson.name, version: packageJson.version });
 const packed = packInfo.filename;
 if (plainFileEntries.length > 0 && !Array.isArray(packInfo.files)) {
   fail("npm pack 未返回文件清单（npm 过旧？），无法核验发布物完整性");

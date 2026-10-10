@@ -319,7 +319,6 @@ describe("ASK 审批绑定与一次性消费（review P1-2）", () => {
     // 注入 store 故障：updateTask 抛错（agreement 已落、消费未完成）
     const store = storeOf(service) as unknown as { updateTask: () => never; };
     const real = store.updateTask;
-    (service as unknown as { store: { updateTask: () => never } }).store;
     const svcStore = (service as unknown as { store: Record<string, unknown> }).store;
     const realUpdate = svcStore.updateTask as (...a: unknown[]) => unknown;
     svcStore.updateTask = () => {

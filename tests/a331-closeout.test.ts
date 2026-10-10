@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 /**
  * A331 收口自有控制。模式复刻 buyer-authorization-limits.test.ts（已验证通过）。
  */
@@ -126,7 +127,7 @@ function makeRunner(opts: { fenceDir: string; failClaimNever?: boolean }) {
     async submitNegotiationDecision() {
       throw new Error("gateway unreachable after write");
     },
-    async failClaim(input: { error: string }) {
+    async failClaim(_input: { error: string }) {
       failClaimCalls += 1;
       if (opts.failClaimNever) await new Promise<void>((r) => { releaseFailClaim = r; });
     },
@@ -166,7 +167,6 @@ describe("A331 P1-4：围栏持久语义收口", () => {
   it("坏行 fence 文件 → 构造 fail-closed", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "a331-corrupt-"));
     const fenceDir = path.join(dir, "submit-unknown");
-    const { mkdirSync } = require("node:fs") as typeof import("node:fs");
     mkdirSync(fenceDir, { recursive: true, mode: 0o700 });
     writeFileSync(path.join(fenceDir, "submit-unknown.jsonl"), "broken json line\n", { mode: 0o600 });
     expect(() =>

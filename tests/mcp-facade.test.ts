@@ -533,7 +533,7 @@ describe("kiwi_approve / kiwi_reject（ASK 门宿主审批面）", () => {
   }
 
   it("accept_agreement 返回结构化 approval_required，宿主 kiwi_approve 后重试成功", async () => {
-    const { call, taskId, winner, service } = await runAcceptApprovalFlow(makeInMemoryStore());
+    const { call, taskId, winner, service: _service } = await runAcceptApprovalFlow(makeInMemoryStore());
     const acc1 = await call("kiwi_accept_agreement", {
       task_id: taskId,
       candidate_id: String(winner.candidate_id),

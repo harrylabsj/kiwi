@@ -121,6 +121,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref }}
+          fetch-depth: 0
 
       - name: Validate central ref (publish=true requires a full 40-char commit SHA)
         env:
@@ -221,11 +222,16 @@ jobs:
           path: hermes-plugin-kiwi
           persist-credentials: false
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
           cache: npm
+
+      - name: Setup npm 12 and verify the install toolchain
+        run: |
+          npm install --global npm@12.0.2
+          node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Setup Python 3.13
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -238,7 +244,56 @@ jobs:
       - name: Kiwi full verify (lint, typecheck, build, test, contracts, vectors, package smoke)
         run: |
           npm ci
-          npm run verify
+          node scripts/verify-npm-shipping-source.mjs
+
+      # Finish root-source npm validation before consumer installs create local files.
+      # Portfolio metadata is copied only later, after the last source guard.
+      - name: Build and verify npm candidates before consumer installs
+        run: |
+          set -euo pipefail
+          rm -rf release
+          mkdir -p release/npm/kiwi-merchant-cloud release/kiwi-catalog release/shopping-cli release/contracts release/sbom release/dsh-plugin release/hermes release/workbuddy
+          npm pack --pack-destination release/npm
+          node scripts/build-npm-shipping.mjs
+          node scripts/smoke-cloud-artifact.mjs --json
+          node scripts/build-cloud-package.mjs
+          npm pack ./build/cloud-package --pack-destination release/npm/kiwi-merchant-cloud
+          npm run verify:cloud-release-candidate
+          node scripts/verify-npm-shipping-installed.mjs
+          # Same-run process evidence after the strict/cold gates, not a new publisher.
+          node <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const path = require('node:path');
+          for (const declared of [process.cwd(), 'release', 'release/npm', 'release/npm/kiwi-merchant-cloud']) {
+            const anchor = fs.lstatSync(declared);
+            if (!anchor.isDirectory() || anchor.isSymbolicLink()) throw new Error('npm checkpoint declared directory is not regular');
+          }
+          const specs = [
+            { metadata: 'package.json', name: '@harrylabsj/kiwi', dir: 'npm' },
+            { metadata: 'packages/merchant-cloud/package.json', name: '@harrylabsj/kiwi-merchant-cloud', dir: 'npm/kiwi-merchant-cloud' },
+          ];
+          const records = specs.map(spec => {
+            const pkg = JSON.parse(fs.readFileSync(spec.metadata, 'utf8'));
+            if (pkg.name !== spec.name || typeof pkg.version !== 'string') throw new Error('npm checkpoint metadata mismatch');
+            const filename = `${pkg.name.replace(/^@/, '').replace('/', '-')}-${pkg.version}.tgz`;
+            if (!/^[a-z0-9][a-z0-9._-]*\.tgz$/.test(filename)) throw new Error('unsafe npm checkpoint basename');
+            const dir = path.join('release', spec.dir);
+            const dirStat = fs.lstatSync(dir);
+            if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) throw new Error('npm checkpoint directory is not regular');
+            const names = fs.readdirSync(dir).sort();
+            const expected = spec.dir === 'npm' ? [filename, 'kiwi-merchant-cloud'].sort() : [filename];
+            if (JSON.stringify(names) !== JSON.stringify(expected)) throw new Error('npm checkpoint package set mismatch');
+            const relative = `${spec.dir}/${filename}`;
+            const file = path.join('release', relative);
+            const stat = fs.lstatSync(file);
+            if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('npm checkpoint tarball is not regular');
+            if (!Number.isSafeInteger(stat.size) || stat.size <= 0 || stat.size >= 100000000) throw new Error('npm checkpoint project size bound');
+            const bytes = fs.readFileSync(file);
+            return { path: relative, size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), integrity: `sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}` };
+          });
+          fs.writeFileSync('build/npm-shipping-artifact-checkpoint.json', JSON.stringify({ format: 'kiwi-npm-artifact-checkpoint/1', files: records }, null, 2) + '\n', { flag: 'wx' });
+          NODE
 
       - name: Kiwi-catalog locked install, contract lock, and deterministic tests
         working-directory: kiwi-catalog
@@ -273,28 +328,19 @@ jobs:
             "$GITHUB_WORKSPACE/contracts/conformance/python-service/run.py" \
             kiwi_catalog_conformance:apps shopping_cli_conformance:apps
 
-      # Build the release artifacts exactly once. The npm pack below uses the
-      # dist/ produced by the kiwi full verify step; the publish job downloads
-      # this immutable bundle and NEVER rebuilds.
+      # npm artifacts were validated once above. Preserve them while assembling
+      # the remaining portfolio after all consumer verification gates. Publishers
+      # download this same immutable run artifact and NEVER rebuild.
       - name: Build release candidates and evidence once
         env:
           CONTRACT_SOURCE_COMMIT: ${{ steps.lock.outputs.contract_source_commit }}
           HERMES_PLUGIN_SHA: ${{ steps.products.outputs.hermes_plugin_sha }}
         run: |
           set -euo pipefail
-          rm -rf release
-          mkdir -p release/npm/kiwi-merchant-cloud release/kiwi-catalog release/shopping-cli release/contracts release/sbom release/dsh-plugin release/hermes release/workbuddy
-
           cp portfolio.lock.json release/portfolio.lock.json
           cp portfolio-products.json release/portfolio-products.json
           node scripts/verify-portfolio-products.mjs --require-external --hermes-root hermes-plugin-kiwi
 
-          npm pack --pack-destination release/npm
-          node scripts/build-cloud-artifact.mjs --skip-build
-          node scripts/smoke-cloud-artifact.mjs --artifact build/cloud-artifact
-          node scripts/build-cloud-package.mjs
-          npm pack ./build/cloud-package --pack-destination release/npm/kiwi-merchant-cloud
-          npm run verify:cloud-release-candidate
           (cd integrations/plugins/kiwi-dsh-plugin && npm pack --pack-destination "$GITHUB_WORKSPACE/release/dsh-plugin")
 
           WB_EXPERT_VERSION="$(node -p "require('./integrations/hosts/workbuddy/kiwi-procurement-expert/.codebuddy-plugin/plugin.json').version")"
@@ -310,6 +356,43 @@ jobs:
 
           (cd kiwi-catalog && uv sync --locked --extra api --extra dev && python -m build --sdist --wheel --outdir ../release/kiwi-catalog)
           (cd shopping-cli && uv sync --locked --extra api --extra dev && python -m build --sdist --wheel --outdir ../release/shopping-cli)
+
+          # Recheck the early exact npm bytes after all consumer/package work.
+          # No rebuild/source waiver; same-UID malicious replacement is not claimed.
+          node <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const path = require('node:path');
+          for (const declared of [process.cwd(), 'release', 'release/npm', 'release/npm/kiwi-merchant-cloud']) {
+            const anchor = fs.lstatSync(declared);
+            if (!anchor.isDirectory() || anchor.isSymbolicLink()) throw new Error('npm checkpoint declared directory is not regular');
+          }
+          const specs = [
+            { metadata: 'package.json', name: '@harrylabsj/kiwi', dir: 'npm' },
+            { metadata: 'packages/merchant-cloud/package.json', name: '@harrylabsj/kiwi-merchant-cloud', dir: 'npm/kiwi-merchant-cloud' },
+          ];
+          const records = specs.map(spec => {
+            const pkg = JSON.parse(fs.readFileSync(spec.metadata, 'utf8'));
+            if (pkg.name !== spec.name || typeof pkg.version !== 'string') throw new Error('npm checkpoint metadata mismatch');
+            const filename = `${pkg.name.replace(/^@/, '').replace('/', '-')}-${pkg.version}.tgz`;
+            if (!/^[a-z0-9][a-z0-9._-]*\.tgz$/.test(filename)) throw new Error('unsafe npm checkpoint basename');
+            const dir = path.join('release', spec.dir);
+            const dirStat = fs.lstatSync(dir);
+            if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) throw new Error('npm checkpoint directory is not regular');
+            const names = fs.readdirSync(dir).sort();
+            const expected = spec.dir === 'npm' ? [filename, 'kiwi-merchant-cloud'].sort() : [filename];
+            if (JSON.stringify(names) !== JSON.stringify(expected)) throw new Error('npm checkpoint package set mismatch');
+            const relative = `${spec.dir}/${filename}`;
+            const file = path.join('release', relative);
+            const stat = fs.lstatSync(file);
+            if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('npm checkpoint tarball is not regular');
+            if (!Number.isSafeInteger(stat.size) || stat.size <= 0 || stat.size >= 100000000) throw new Error('npm checkpoint project size bound');
+            const bytes = fs.readFileSync(file);
+            return { path: relative, size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), integrity: `sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}` };
+          });
+          const checkpoint = JSON.parse(fs.readFileSync('build/npm-shipping-artifact-checkpoint.json', 'utf8'));
+          if (checkpoint.format !== 'kiwi-npm-artifact-checkpoint/1' || JSON.stringify(checkpoint.files) !== JSON.stringify(records)) throw new Error('npm checkpoint changed before signing');
+          NODE
 
           # Build a signed inventory covering all eleven product forms. The two
           # external/private products are recorded with their immutable source
@@ -427,15 +510,17 @@ jobs:
           name: portfolio-release
           path: dist-artifact
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
 
-      # npm trusted publishing（OIDC）需要 npm >= 11.5.1；Node 22 自带 10.x，
-      # 不升级则 npm publish --provenance 无凭据可用（ENEEDAUTH）。
-      - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@11.19.0
+      # npm 12 preserves the A106 installation contract and supports OIDC.
+      # Use the real CLI version; never bypass lifecycle hooks or fake its UA.
+      - name: Setup npm 12 and verify the install toolchain
+        run: |
+          npm install --global npm@12.0.2
+          node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Verify downloaded release manifest before publishing
         run: |
@@ -480,14 +565,16 @@ jobs:
           name: portfolio-release
           path: dist-artifact
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
 
       # npm trusted publishing（OIDC）需要 npm >= 11.5.1；Node 22 自带 10.x。
-      - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@11.19.0
+      - name: Setup npm 12 and verify the install toolchain
+        run: |
+          npm install --global npm@12.0.2
+          node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Verify downloaded release manifest before publishing
         run: |
@@ -537,13 +624,15 @@ jobs:
           name: portfolio-release
           path: dist-artifact
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
 
-      - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@11.19.0
+      - name: Setup npm 12 and verify the install toolchain
+        run: |
+          npm install --global npm@12.0.2
+          node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Verify downloaded release manifest before publishing
         run: node scripts/verify-release-manifest.mjs "$GITHUB_WORKSPACE/dist-artifact/release"
@@ -591,10 +680,10 @@ jobs:
           name: portfolio-release
           path: dist-artifact
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
 
       - name: Setup Python 3.13
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -655,10 +744,10 @@ jobs:
           name: portfolio-release
           path: dist-artifact
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
 
       - name: Setup Python 3.13
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -715,10 +804,15 @@ jobs:
           name: portfolio-release
           path: dist-artifact
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
+
+      - name: Setup npm 12 and verify the install toolchain
+        run: |
+          npm install --global npm@12.0.2
+          node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Verify registry downloads against built manifest (fail closed)
         env:
@@ -746,10 +840,15 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
-      - name: Setup Node 22
+      - name: Setup Node 22.22.3
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "22.22.3"
+
+      - name: Setup npm 12 and verify the install toolchain
+        run: |
+          npm install --global npm@12.0.2
+          node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - id: previous
         name: Resolve previous release manifest reference

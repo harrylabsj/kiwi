@@ -12,7 +12,7 @@
  *   UC21 同键不同内容        —— 409，不能覆盖已执行命令；
  *   UC23 提交结果未知        —— operation_id 查询路径保留（unknown）。
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,14 +22,14 @@ import { DatabaseSync } from "node:sqlite";
 import { ADMIN_SESSION_COOKIE, MerchantAdminSessions } from "../src/auth/merchant-sessions.js";
 import type { MerchantRole } from "../src/merchant/application/actor.js";
 import type { WriteApprovalCandidate } from "../src/agent/merchant/action-candidate.js";
-import { createCloudRouter } from "../src/cloud/http-router.js";
+
 import { commitProductTable, loadProductTableSnapshot } from "../src/cloud/product-source.js";
 import {
   createMerchantManagementApiHandler,
   type MerchantManagementApiOptions,
 } from "../src/http/merchant-management/api.js";
 import { MerchantImportDraftStore } from "../src/http/merchant-management/draft-store.js";
-import { renderMerchantManagementPage } from "../src/http/merchant-management/page.js";
+
 import { MerchantManagementOperationStore } from "../src/http/merchant-management/operation-store.js";
 import { MutableServiceState } from "../src/http/merchant-management/service-state.js";
 
@@ -181,7 +181,7 @@ async function call(
   };
 }
 
-async function mintApprovalConfirmation(
+async function _mintApprovalConfirmation(
   auth: { cookie: string; csrf: string },
   overrides: Record<string, unknown> = {},
 ): Promise<{ status: number; json: Record<string, unknown> }> {

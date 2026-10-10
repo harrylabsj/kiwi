@@ -386,12 +386,5 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
   });
 }
 
-/** review P1-1：认证检查用 path（不构造 URL 对象，避免对畸形请求行抛异常）。 */
-function url_pathname_only(req: IncomingMessage): string {
-  const raw = req.url ?? "/";
-  const q = raw.indexOf("?");
-  const p = q === -1 ? raw : raw.slice(0, q);
-  return p.startsWith("/") ? p : `/${p}`;
-}
 
 export type { Server };

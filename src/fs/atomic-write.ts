@@ -49,13 +49,11 @@ export function writeFileAtomic(
   const io = options.io ?? fs,
     dir = path.dirname(file);
   io.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  let oldMode: number | undefined;
   try {
     const s = io.lstatSync(file);
     if (!s.isFile() || s.isSymbolicLink()) throw new Error("ATOMIC_TARGET_NOT_REGULAR");
-    oldMode = s.mode & 0o777;
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    if ((e as { code?: string }).code !== "ENOENT") throw e;
   }
   const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
   let fd: number | undefined,
@@ -81,17 +79,21 @@ export function writeFileAtomic(
     if (fd !== undefined) {
       try {
         io.closeSync(fd);
-      } catch {}
+      } catch {
+        /* Best-effort owned descriptor cleanup; do not mask the primary write outcome. */
+      }
     }
     if (dirFd !== undefined) {
       try {
         io.closeSync(dirFd);
-      } catch {}
+      } catch {
+        /* Best-effort owned descriptor cleanup; do not mask the primary write outcome. */
+      }
     }
     if (!committed) {
       try {
         io.unlinkSync(tmp);
-      } catch (e) {
+      } catch {
         /* A cleanup fault leaves owned temp evidence; it must not mask the primary failure. */
       }
     }

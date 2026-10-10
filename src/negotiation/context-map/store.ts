@@ -28,15 +28,10 @@
 
 import {
   chmodSync,
-  closeSync,
   existsSync,
-  fsyncSync,
   mkdirSync,
-  openSync,
   readFileSync,
   readdirSync,
-  renameSync,
-  writeSync,
 } from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "../../fs/atomic-write.js";
@@ -61,8 +56,6 @@ export interface ContextMapStoreOptions {
   /** 可注入时钟（RFC 3339）；缺省用 new Date().toISOString()。 */
   now?: () => string;
 }
-
-let tmpSeq = 0;
 
 /** opaque negotiation_id → 安全文件名（同 ledgerFileName：归一化 + sha256 前缀）。 */
 export function contextMapFileName(negotiationId: string): string {

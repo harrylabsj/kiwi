@@ -1,3 +1,6 @@
+import { generateKeyPairSync } from "node:crypto";
+import { signCompactJws } from "../src/trust/identity/jws.js";
+import { jwkThumbprint } from "../src/trust/binding/thumbprint.js";
 import { mkdtempSync, rmSync, writeFileSync, unlinkSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -57,15 +60,24 @@ function fixture() {
     consumed: [],
   };
   writeFileSync(enrollmentStorePath(dataDir), JSON.stringify(store), { mode: 0o600 });
-  const fetchBinding = (publicationState = "ACTIVE") => (async () => new Response(JSON.stringify({
-    claims,
-    claims_jws: "tls-trusted-public-document",
-    issuer_kid: "catalog-kid",
-    issuer_thumbprint: `sha256:${"a".repeat(64)}`,
-    governance: { publication_state: publicationState },
-    card_revision: 1,
-    card_etag: "etag-v1",
-  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  const issuerPair = generateKeyPairSync("ed25519");
+  const issuer = { keyid: "catalog-kid", algorithm: "ed25519" as const, privateKey: issuerPair.privateKey };
+  const jwk = issuerPair.publicKey.export({ format: "jwk" });
+  const issuerThumbprint = jwkThumbprint(jwk);
+  const fetchBinding = (publicationState = "ACTIVE") => (async (input: Parameters<typeof fetch>[0]) => {
+    const value = String(input).endsWith("/v1/issuer-keys")
+      ? { issuer: CATALOG, keys: [{ kid: issuer.keyid, state: "ACTIVE", jwk, thumbprint: issuerThumbprint }] }
+      : {
+          claims,
+          claims_jws: signCompactJws(claims as unknown as Record<string, unknown>, issuer),
+          issuer_kid: issuer.keyid,
+          issuer_thumbprint: issuerThumbprint,
+          governance: { publication_state: publicationState },
+          card_revision: 1,
+          card_etag: "etag-v1",
+        };
+    return new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
   return { dataDir, identity, thumbprint, profile, store, fetchBinding };
 }
 

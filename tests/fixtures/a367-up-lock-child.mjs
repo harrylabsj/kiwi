@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import process from 'node:process';
 import {syncBuiltinESMExports} from 'node:module';
 const o=JSON.parse(process.argv[2]);
 const original=fs.unlinkSync.bind(fs);
@@ -11,5 +12,5 @@ process.kill=(_pid,signal)=>{if(signal!==0)throw Error('non-probe signal forbidd
 syncBuiltinESMExports();
 const mod=await import(o.bundle);let release;
 try{release=mod.__a367Acquire(o.dir);log('owned');if(o.mode==='release')release();else wait(o.finish);log('done');}
-catch(e){log('blocked');}
+catch{log('blocked');}
 finally{if(release)release();}

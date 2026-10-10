@@ -5,18 +5,25 @@ import os from "node:os";
 import http from "node:http";
 import https from "node:https";
 import { execFileSync } from "node:child_process";
-const pinProbe = vi.hoisted(() => ({ ca: undefined as string | undefined, seen: [] as any[] }));
+const pinProbe = vi.hoisted(() => ({ ca: undefined as string | undefined, seen: [] as (https.RequestOptions & { headers: http.OutgoingHttpHeaders })[] }));
 vi.mock("node:https", async (importOriginal) => {
   const real = await importOriginal<typeof import("node:https")>();
   return {
     ...real,
-    request: (options: any, callback: any) => {
-      pinProbe.seen.push({ ...options });
+    request: (options: https.RequestOptions, callback: (response: http.IncomingMessage) => void) => {
+      pinProbe.seen.push({ ...options } as https.RequestOptions & { headers: http.OutgoingHttpHeaders });
       return real.request({ ...options, host: "127.0.0.1", ca: pinProbe.ca }, callback);
     },
   };
 });
-let m: any;
+let m: typeof import("../src/merchant-gateway/pinned-fetch.js") &
+  typeof import("../src/a2a/client/client.js") &
+  typeof import("../src/handoff/ucp-checkout/client.js") &
+  typeof import("../src/commerce/http-client.js") &
+  typeof import("../src/counterparty/a2a-direct/index.js") &
+  typeof import("../src/counterparty/shopping-cli-hosted/index.js") &
+  typeof import("../src/fanout/orchestrator.js") &
+  typeof import("../src/discovery/merchant-subscriptions.js");
 const dirs: string[] = [];
 const cleanups: (() => Promise<void> | void)[] = [];
 function dir() {
@@ -49,7 +56,7 @@ afterAll(() => {
 });
 async function server(
   handler: (req: http.IncomingMessage, res: http.ServerResponse) => void,
-  tls?: any,
+  tls?: https.ServerOptions,
 ) {
   const s = tls ? https.createServer(tls, handler) : http.createServer(handler);
   s.on("tlsClientError", () => {});
@@ -64,7 +71,7 @@ async function server(
         s.close(() => r());
       }),
   );
-  return { port: (s.address() as any).port, url: `http://127.0.0.1:${(s.address() as any).port}` };
+  return { port: (s.address() as import("node:net").AddressInfo).port, url: `http://127.0.0.1:${(s.address() as import("node:net").AddressInfo).port}` };
 }
 async function waitFor(f: () => boolean) {
   const end = Date.now() + 1200;
@@ -145,13 +152,13 @@ describe("A360 transport 3-13 default clients pinned TLS", () => {
       );
       const cert = fs.readFileSync(path.join(d, "cert.pem"), "utf8");
       pinProbe.ca = cert;
-      const observed: any[] = [];
+      const observed: { host?: string; sni?: string | false | null }[] = [];
       const s = await server(
         (req, res) => {
           let raw = "";
           req.on("data", (c) => (raw += c));
           req.on("end", () => {
-            observed.push({ host: req.headers.host, sni: (req.socket as any).servername });
+            observed.push({ host: req.headers.host, sni: (req.socket as import("node:tls").TLSSocket).servername });
             res.setHeader("content-type", "application/json");
             if (req.url?.includes("checkout-sessions"))
               res.end(
@@ -232,11 +239,11 @@ describe("A360 transport 3-13 default clients pinned TLS", () => {
     const client = new m.A2AClient({
       url: "https://merchant.fixture.test",
       skipDnsCheck: true,
-      fetchImpl: async (_u: any, init: any) => {
+      fetchImpl: async (_u: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
         calls++;
         return Response.json({
           jsonrpc: "2.0",
-          id: JSON.parse(init.body).id,
+          id: JSON.parse(init!.body as string).id,
           result: { task: { id: "task", status: { state: "completed" } } },
         });
       },
@@ -261,7 +268,7 @@ describe("A360 transport 3-22 actual read deadline cancellation", () => {
           clearInterval(drip);
         });
       });
-      let h: any;
+      let h: import("../src/counterparty/channel.js").ChannelHandle;
       if (kind === "a2a") h = await direct(s.url);
       else {
         const c = new m.HttpCommerceClient({ baseUrl: s.url, token: "synthetic", timeoutMs: 800 });
@@ -271,7 +278,7 @@ describe("A360 transport 3-22 actual read deadline cancellation", () => {
           attempts: 1,
           idempotency_key: "fixture",
         });
-        c.abandonClaim = async () => ({ status: "abandoned" });
+        c.abandonClaim = async () => ({ status: "abandoned" } as Awaited<ReturnType<typeof c.abandonClaim>>);
         h = await new m.ShoppingCliHostedChannel({ client: c }).open({
           negotiation_id: "neg_transport",
           sender_identity: "buyer",
@@ -285,7 +292,7 @@ describe("A360 transport 3-22 actual read deadline cancellation", () => {
         conversation_id: "conv",
         message_id: 1,
       };
-      const fan = new m.FanoutOrchestrator({ pollIntervalMs: 5 });
+      const fan = new m.FanoutOrchestrator({ pollIntervalMs: 5 } as unknown as ConstructorParameters<typeof m.FanoutOrchestrator>[0]) as unknown as { waitForOffer(handle: import("../src/counterparty/channel.js").ChannelHandle, ref: object, timeoutMs: number, messageId: string, negotiationId: string): Promise<{ kind: string }> };
       const start = Date.now();
       try {
         expect(await fan.waitForOffer(h, ref, 70, "msg", "neg_transport")).toEqual({
@@ -301,11 +308,11 @@ describe("A360 transport 3-22 actual read deadline cancellation", () => {
   );
   it("deadline during resolver wait prevents any later socket despite a late DNS result", async () => {
     let nativeCalls = 0;
-    vi.stubGlobal("fetch", async (_url: any, init: any) => {
+    vi.stubGlobal("fetch", async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
       nativeCalls++;
       return Response.json({
         jsonrpc: "2.0",
-        id: JSON.parse(init.body).id,
+        id: JSON.parse(init!.body as string).id,
         result: { task: { id: "task", status: { state: "completed" } } },
       });
     });
@@ -362,7 +369,7 @@ describe("A360 transport 3-22 actual read deadline cancellation", () => {
     const start = Date.now();
     const cancelled = c
       .getTask("cancel", { signal: p.signal, timeoutMs: 300 })
-      .catch((e: any) => e);
+      .catch((e: unknown) => e);
     const normal = c.getTask("normal");
     setTimeout(() => p.abort(), 25);
     expect(await cancelled).toBeInstanceOf(Error);
@@ -406,7 +413,7 @@ describe("A360 transport completed JSON with unfinished body", () => {
     "%s refuses a valid JSON prefix whose body only ends through cancellation",
     async (kind) => {
       let cancelled = false;
-      const fetchImpl = async (_u: any, init: any) =>
+      const fetchImpl = async (_u: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
         new Response(
           new ReadableStream({
             start(x) {
@@ -414,7 +421,7 @@ describe("A360 transport completed JSON with unfinished body", () => {
                 kind === "a2a"
                   ? {
                       jsonrpc: "2.0",
-                      id: JSON.parse(init.body).id,
+                      id: JSON.parse(init!.body as string).id,
                       result: { task: { id: "task", status: { state: "completed" } } },
                     }
                   : { ok: true };
@@ -442,15 +449,15 @@ describe("A360 transport completed JSON with unfinished body", () => {
             });
       const result =
         kind === "a2a"
-          ? client.getTask("task", { timeoutMs: 35 })
-          : client.request("GET", "/fixture", undefined, { timeoutMs: 35 });
+          ? (client as import("../src/a2a/client/client.js").A2AClient).getTask("task", { timeoutMs: 35 })
+          : (client as unknown as { request(method: string, path: string, body: undefined, controls: { timeoutMs: number }): Promise<unknown> }).request("GET", "/fixture", undefined, { timeoutMs: 35 });
       await expect(result).rejects.toThrow(/timed out/);
       expect(cancelled).toBe(true);
     },
   );
 });
 describe("A360 transport 2-19 feed bounds", () => {
-  function client(fetchImpl: any, options: any = {}) {
+  function client(fetchImpl: typeof fetch, options: Partial<ConstructorParameters<typeof m.MerchantSubscriptionClient>[0]> & { origin?: string } = {}) {
     const d = dir();
     const c = new m.MerchantSubscriptionClient({
       dbPath: path.join(d, "feed.sqlite"),
@@ -462,7 +469,7 @@ describe("A360 transport 2-19 feed bounds", () => {
       },
       fetchImpl,
       ...options,
-    });
+    }) as unknown as Omit<import("../src/discovery/merchant-subscriptions.js").MerchantSubscriptionClient, never> & { db: import("node:sqlite").DatabaseSync; applySnapshot(endpoint: import("../src/discovery/merchant-subscriptions.js").MerchantSubscriptionEndpoint, merchantId: string): Promise<void> };
     cleanups.push(() => c.close());
     return c;
   }
@@ -473,7 +480,7 @@ describe("A360 transport 2-19 feed bounds", () => {
         closed = 0;
       const s = await server((_req, res) => {
         opened++;
-        let timer: any;
+        let timer: ReturnType<typeof setInterval> | undefined;
         if (mode === "drip") {
           res.writeHead(200, { "content-type": "application/json" });
           res.write("{");
@@ -487,7 +494,7 @@ describe("A360 transport 2-19 feed bounds", () => {
         });
       });
       const c = client(
-        (url: any, init: any) =>
+        (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
           fetch(String(url).replace("https://merchant.fixture.test", s.url), init),
         { timeoutMs: 55 },
       );
@@ -509,7 +516,7 @@ describe("A360 transport 2-19 feed bounds", () => {
               setTimeout(() => {
                 try {
                   x.close();
-                } catch {}
+                } catch { /* Expected fixture cleanup failure retains the original assertions. */ }
               }, 600);
             },
             cancel() {
@@ -535,7 +542,7 @@ describe("A360 transport 2-19 feed bounds", () => {
               setTimeout(() => {
                 try {
                   x.close();
-                } catch {}
+                } catch { /* Expected fixture cleanup failure retains the original assertions. */ }
               }, 600);
             },
             cancel() {
@@ -552,7 +559,7 @@ describe("A360 transport 2-19 feed bounds", () => {
     "snapshot classifies next_offset %s and commits only a complete valid snapshot",
     async (next) => {
       let pages = 0;
-      const c = client(async (input: any) => {
+      const c = client(async (input: Parameters<typeof fetch>[0]) => {
         const url = String(input);
         if (url.endsWith("/snapshot"))
           return Response.json({ snapshot_id: "s", high_water_cursor: "new" });
@@ -572,14 +579,14 @@ describe("A360 transport 2-19 feed bounds", () => {
         c.applySnapshot({ origin: "https://merchant.fixture.test", bearerToken: "synthetic" }, "m"),
       ).rejects.toThrow();
       expect(pages).toBe(1);
-      expect(c.db.prepare("SELECT count(*) n FROM buyer_merchant_feed_events").get().n).toBe(0);
+      expect(c.db.prepare("SELECT count(*) n FROM buyer_merchant_feed_events").get()!.n).toBe(0);
     },
   );
   it("public getUpdates performs full snapshot and cursor update atomically; invalid snapshot leaves previous data", async () => {
     for (const duplicate of [false, true]) {
       let reset = false,
         pages = 0;
-      const c = client(async (input: any) => {
+      const c = client(async (input: Parameters<typeof fetch>[0]) => {
         const url = String(input);
         if (url.endsWith("/snapshot"))
           return Response.json({ snapshot_id: "s", high_water_cursor: "water" });
@@ -610,13 +617,13 @@ describe("A360 transport 2-19 feed bounds", () => {
           { event_id: "old" },
         ]);
         expect(
-          c.db.prepare("SELECT feed_cursor FROM buyer_merchant_subscriptions").get().feed_cursor,
+          c.db.prepare("SELECT feed_cursor FROM buyer_merchant_subscriptions").get()!.feed_cursor,
         ).toBe("prior");
       } else {
         expect(await c.getUpdates()).toHaveLength(1);
-        expect(c.db.prepare("SELECT count(*) n FROM buyer_merchant_feed_events").get().n).toBe(2);
+        expect(c.db.prepare("SELECT count(*) n FROM buyer_merchant_feed_events").get()!.n).toBe(2);
         expect(
-          c.db.prepare("SELECT feed_cursor FROM buyer_merchant_subscriptions").get().feed_cursor,
+          c.db.prepare("SELECT feed_cursor FROM buyer_merchant_subscriptions").get()!.feed_cursor,
         ).toBe("after");
       }
     }
@@ -624,7 +631,7 @@ describe("A360 transport 2-19 feed bounds", () => {
   it("snapshot infinite forward pages and excessive item totals are bounded, normal multi-page commit remains", async () => {
     for (const huge of [false, true]) {
       let pages = 0;
-      const c = client(async (input: any) =>
+      const c = client(async (input: Parameters<typeof fetch>[0]) =>
         String(input).endsWith("/snapshot")
           ? Response.json({ snapshot_id: "s", high_water_cursor: "new" })
           : Response.json({
@@ -638,10 +645,10 @@ describe("A360 transport 2-19 feed bounds", () => {
         c.applySnapshot({ origin: "https://merchant.fixture.test", bearerToken: "synthetic" }, "m"),
       ).rejects.toThrow(/page limit|item limit/);
       expect(pages).toBeLessThanOrEqual(200);
-      expect(c.db.prepare("SELECT count(*) n FROM buyer_merchant_feed_events").get().n).toBe(0);
+      expect(c.db.prepare("SELECT count(*) n FROM buyer_merchant_feed_events").get()!.n).toBe(0);
     }
     let page = 0;
-    const c = client(async (input: any) =>
+    const c = client(async (input: Parameters<typeof fetch>[0]) =>
       String(input).endsWith("/snapshot")
         ? Response.json({ snapshot_id: "s", high_water_cursor: "new" })
         : Response.json({
@@ -653,6 +660,6 @@ describe("A360 transport 2-19 feed bounds", () => {
       { origin: "https://merchant.fixture.test", bearerToken: "synthetic" },
       "m",
     );
-    expect(c.db.prepare("SELECT count(*) n FROM buyer_merchant_feed_events").get().n).toBe(2);
+    expect(c.db.prepare("SELECT count(*) n FROM buyer_merchant_feed_events").get()!.n).toBe(2);
   });
 });

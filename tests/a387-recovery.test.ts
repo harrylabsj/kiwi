@@ -15,25 +15,23 @@
  *  - 重启后 Ledger 链仍 valid；
  *  - 正常 counter 流（远端已回应）→ 重放幂等 + 补记远端消息，不转人工。
  */
-import { describe, expect, it } from "vitest";
-import type { AddressInfo } from "node:net";
+import { expect, it } from "vitest";
+
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { finalizeEnvelope } from "../src/negotiation/domain/envelope.js";
 import type { NegotiationEnvelope } from "../src/negotiation/domain/envelope.js";
-import { LedgerStore, ledgerFileName } from "../src/negotiation/ledger/index.js";
-import { IdempotencyStore } from "../src/negotiation/idempotency/index.js";
+import { LedgerStore } from "../src/negotiation/ledger/index.js";
+
 import { ContextMapStore } from "../src/negotiation/context-map/index.js";
 import {
-  deriveSessionIdentity,
   NegotiationRecovery,
-  RECOVERY_SENDER_IDENTITY,
   recordOutboundMessage,
   type RecoveryResult,
 } from "../src/negotiation/recovery/index.js";
-import { A2AServer } from "../src/a2a/server/index.js";
-import { A2ADirectChannel } from "../src/counterparty/index.js";
+
+
 import type {
   ChannelHandle,
   ChannelSendInput,

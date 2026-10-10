@@ -2,6 +2,8 @@
 
 // Run only after @harrylabsj/kiwi-merchant-cloud has been published.
 // Verify the exact registry artifact before updating the deploy skill's pin.
+import { createHash } from "node:crypto";
+import { packRecord } from "./lib/npm-pack-record.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,16 +25,15 @@ try {
     throw new Error(`npm registry returned invalid dist.integrity for ${pkg}@${version}`);
   }
 
-  const packed = JSON.parse(execFileSync("npm", ["pack", `${pkg}@${version}`, "--json", `--pack-destination=${temp}`], {
+  const packed = packRecord(JSON.parse(execFileSync("npm", ["pack", `${pkg}@${version}`, "--json", `--pack-destination=${temp}`], {
     cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"],
-  }));
-  if (!Array.isArray(packed) || packed.length !== 1 || packed[0].name !== pkg || packed[0].version !== version) {
-    throw new Error(`npm pack did not resolve the expected published package ${pkg}@${version}`);
+  })), { name: pkg, version });
+  if (packed.integrity !== registryIntegrity) {
+    throw new Error(`npm pack integrity ${packed.integrity} does not match registry dist.integrity ${registryIntegrity}`);
   }
-  if (packed[0].integrity !== registryIntegrity) {
-    throw new Error(`npm pack integrity ${packed[0].integrity} does not match registry dist.integrity ${registryIntegrity}`);
-  }
-  const manifest = JSON.parse(execFileSync("tar", ["-xOzf", path.join(temp, packed[0].filename), "package/build-manifest.json"], {
+  const tarball = readFileSync(path.join(temp,packed.filename));
+  if (`sha512-${createHash("sha512").update(tarball).digest("base64")}` !== registryIntegrity) throw new Error("published tarball bytes do not match registry integrity");
+  const manifest = JSON.parse(execFileSync("tar", ["-xOzf", path.join(temp, packed.filename), "package/build-manifest.json"], {
     encoding: "utf8", stdio: ["ignore", "pipe", "inherit"],
   }));
   if (manifest.runtime_version !== version || !/^sha256:[a-f0-9]{64}$/.test(manifest.artifact_sha256)) {

@@ -31,7 +31,7 @@ vi.mock("node:fs", async (importOriginal) => {
     fsyncSync: (fd: number) => {
       if (h.failFsyncOnce) {
         h.failFsyncOnce = false;
-        const err = new Error("EIO: i/o error") as NodeJS.ErrnoException;
+        const err = new Error("EIO: i/o error") as Error & { code?: string };
         err.code = "EIO";
         throw err;
       }

@@ -47,9 +47,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
-  renameSync,
   rmSync,
-  unlinkSync,
   writeSync,
 } from "node:fs";
 import path from "node:path";
@@ -70,8 +68,6 @@ export interface IdempotencyStoreOptions {
   /** 可注入时钟（RFC 3339）；缺省用 new Date().toISOString()。 */
   now?: () => string;
 }
-
-let tmpSeq = 0;
 
 export class IdempotencyStore {
   private readonly baseDir: string;
@@ -165,7 +161,7 @@ export class IdempotencyStore {
     try {
       fd = openSync(file, "wx", 0o600);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      if ((err as { code?: string }).code !== "EEXIST") throw err;
       throw new IdempotencyConflictError(
         {
           sender_identity: input.sender_identity,

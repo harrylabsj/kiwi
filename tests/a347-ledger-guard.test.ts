@@ -50,7 +50,7 @@ function setup() {
     events: path.join(dir, "events.jsonl"),
   };
 }
-function logs(s: ReturnType<typeof setup>): any[] {
+function logs(s: ReturnType<typeof setup>): { actor: string; event: string; guardPresent?: boolean; code?: string; message?: string }[] {
   return fs.existsSync(s.events)
     ? fs
         .readFileSync(s.events, "utf8")
@@ -104,7 +104,7 @@ async function deadPid() {
   await new Promise((r) => c.once("exit", r));
   return pid;
 }
-function stale(s: ReturnType<typeof setup>, owner: any) {
+function stale(s: ReturnType<typeof setup>, owner: string | { pid: number; token?: string }) {
   fs.writeFileSync(s.lock, typeof owner === "string" ? owner : JSON.stringify(owner));
   const old = new Date(Date.now() - 120000);
   fs.utimesSync(s.lock, old, old);
@@ -127,7 +127,7 @@ describe("A347 shared main-lock mutation guard (real child processes)", () => {
     // On the old implementation A can reclaim and enter fn while R is paused
     // before unlink; on the fixed implementation A must stop at the guard.
     const end = Date.now() + 5000;
-    let observation: any;
+    let observation: { actor: string; event: string; guardPresent?: boolean; code?: string; message?: string } | undefined;
     while (
       !(observation = logs(s).find(
         (x) => x.actor === "A" && (x.event === "guard-blocked" || x.event === "fn-enter"),

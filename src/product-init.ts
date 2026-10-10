@@ -388,7 +388,7 @@ function mergeMerchantCredentials(file: string, token: string): void {
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("credentials target must be a regular file");
     previous = readFileSync(file, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((error as { code?: string }).code !== "ENOENT") throw error;
   }
   const record = `KIWI_MERCHANT_TOKEN=${token}`;
   const target = /^[ \t]*(?:export[ \t]+)?KIWI_MERCHANT_TOKEN[ \t]*=[^\r\n]*/gm;
