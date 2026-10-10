@@ -1275,7 +1275,7 @@
     },
     {
       "path": "scripts/lib/npm-shipping.mjs",
-      "sha256": "sha256:1bf0713a2be6a16114c8fb286f4230082d6291263e38279c444e33e36601a52c"
+      "sha256": "sha256:970a09ec0f0a03140b463b5f07c612fb5af1b1b0ae69d9e473bc7647e6231ad9"
     },
     {
       "path": "scripts/lib/portfolio-lock-verify.d.mts",
@@ -4585,7 +4585,7 @@
     },
     {
       "path": "tests/npm-shipping-contract.test.ts",
-      "sha256": "sha256:0f88e61e77ad94e42f0f1dc7968f36e3e52b6ec0d80223bbcc7b6c06a486a274"
+      "sha256": "sha256:cfda94f618eb0c61ba7426150d955459d198cc1d12eef3d44bf3c3fad20c0a4b"
     },
     {
       "path": "tests/onboarding-local-fallback.test.ts",

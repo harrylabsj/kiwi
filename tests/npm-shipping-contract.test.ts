@@ -426,4 +426,59 @@ describe("current 0.12.4 full shipping contract", () => {
         ),
       ).toThrow();
   });
+  it("large generated root listings are excluded before buffering while root and nested unknown state still refuse", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "shipping-large-ignored-"));
+    const helper = new URL("../scripts/lib/npm-shipping.mjs", import.meta.url).href;
+    const check = () =>
+      execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import {assertNoUnexpectedState} from ${JSON.stringify(helper)}; assertNoUnexpectedState(process.cwd());`,
+        ],
+        { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      );
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      writeFileSync(path.join(dir, ".gitignore"), "node_modules/\nbuild/\ndist/\n.env\n*.sqlite\n");
+      for (const name of ["node_modules", "build", "dist"]) {
+        mkdirSync(path.join(dir, name));
+        for (let i = 0; i < 2500; i++)
+          writeFileSync(path.join(dir, name, `${i}-` + "x".repeat(145)), "");
+      }
+      let oldCode = "";
+      try {
+        execFileSync("git", ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], {
+          cwd: dir,
+          encoding: "utf8",
+        });
+      } catch (error) {
+        oldCode = (error as { code?: string }).code ?? "";
+      }
+      expect(oldCode).toBe("ENOBUFS");
+      expect(check).not.toThrow();
+      for (const relative of [
+        ".env",
+        ".kiwi-runtime/private.sqlite",
+        "nested/node_modules/.env",
+        "dist-other/state/private.sqlite",
+      ]) {
+        const file = path.join(dir, relative);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, "synthetic not secret");
+        expect(check).toThrow();
+        rmSync(file);
+      }
+      for (const relative of [
+        "node_modules/unknown/.env",
+        "node_modules/unknown/state/private.sqlite",
+      ])
+        expect(() =>
+          assertNoState([{ path: relative, size: 1, sha256: "sha256:" + "a".repeat(64) }]),
+        ).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20000);
 });

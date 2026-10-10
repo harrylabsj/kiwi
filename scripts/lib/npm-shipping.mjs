@@ -353,6 +353,11 @@ export function assertNoUnexpectedState(root) {
     "--ignored",
     "--exclude-standard",
     "-z",
+    "--",
+    ".",
+    ":(top,glob,exclude)node_modules/**",
+    ":(top,glob,exclude)build/**",
+    ":(top,glob,exclude)dist/**",
   ]).split("\0");
   if (
     ignored.some(
