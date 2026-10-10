@@ -88,6 +88,54 @@ export function assertFiles(dir, manifest, { excluded = ["build-manifest.json"] 
     throw new Error("SHIPPING_FILES_CHANGED");
   return current;
 }
+// Normal Unix npm global install creates these nine links from official bundled package bin declarations.
+const officialNpmBinManifests = new Map([
+  ["arborist", "node_modules/@npmcli/arborist/package.json"],
+  ["cssesc", "node_modules/cssesc/package.json"],
+  ["installed-package-contents", "node_modules/@npmcli/installed-package-contents/package.json"],
+  ["node-gyp", "node_modules/node-gyp/package.json"],
+  ["node-which", "node_modules/which/package.json"],
+  ["nopt", "node_modules/nopt/package.json"],
+  ["pacote", "node_modules/pacote/package.json"],
+  ["qrcode-terminal", "node_modules/qrcode-terminal/package.json"],
+  ["semver", "node_modules/semver/package.json"],
+]);
+function officialNpmBinLinks(npmRoot, rows, official) {
+  if (!rows.length) return []; // Canonical tar/Corepack layouts need no generated internal links.
+  if (rows.length !== officialNpmBinManifests.size) throw new Error("SHIPPING_NPM_BIN_LINK_INVALID");
+  const rootStat = lstatSync(npmRoot), root = realpathSync(npmRoot);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("SHIPPING_NPM_BIN_LINK_INVALID");
+  const payloadRows = new Map(official.map((row) => [row.path, row]));
+  const regularParents = (relative) => {
+    let dir = root;
+    for (const part of relative.split("/").slice(0, -1)) {
+      dir = path.join(dir, part);
+      const stat = lstatSync(dir);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("SHIPPING_NPM_BIN_LINK_INVALID");
+    }
+  };
+  return rows.map((row) => {
+    const name = row.path.slice("node_modules/.bin/".length), manifest = officialNpmBinManifests.get(name);
+    const pkg = json(path.join(root, manifest)); // All official metadata bytes were checked before deriving mappings.
+    const declared = typeof pkg.bin === "string" ? { [pkg.name.split("/").at(-1)]: pkg.bin } : pkg.bin;
+    const bin = declared?.[name];
+    if (typeof bin !== "string" || bin.includes("\\") || path.posix.isAbsolute(bin))
+      throw new Error("SHIPPING_NPM_BIN_LINK_INVALID");
+    const targetPath = path.posix.normalize(path.posix.join(path.posix.dirname(manifest), bin));
+    const expected = payloadRows.get(targetPath);
+    const target = path.join(root, targetPath), link = path.join(root, row.path);
+    if (!expected || expected.symlink_target || !row.symlink_target ||
+        row.symlink_target !== path.posix.relative("node_modules/.bin", targetPath) ||
+        path.resolve(path.dirname(link), row.symlink_target) !== target ||
+        !target.startsWith(root + path.sep)) throw new Error("SHIPPING_NPM_BIN_LINK_INVALID");
+    regularParents(row.path);
+    regularParents(targetPath);
+    const stat = lstatSync(target);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== expected.size ||
+        sha256(readFileSync(target)) !== expected.sha256) throw new Error("SHIPPING_NPM_BIN_LINK_INVALID");
+    return { ...row, classification: "normal-npm-bin-link", declared_by: manifest, target_payload_path: targetPath };
+  });
+}
 export function assertOfficialNpmPayload(npmRoot, payload) {
   const integrity =
     "sha512-uIXokLlBj6FpNUTQX1PmT5pz7BlIN9QlixX+zdaSNHsd0qUXsbDLr50xzY6Sw7cJVr0uzHKDOle0swmPW/p5Qw==";
@@ -106,9 +154,12 @@ export function assertOfficialNpmPayload(npmRoot, payload) {
       a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
     ),
     locator = current.find((r) => r.path === ".corepack");
-  const official = current.filter((r) => r.path !== ".corepack");
+  const binPaths = new Set([...officialNpmBinManifests.keys()].map((name) => `node_modules/.bin/${name}`));
+  const binRows = current.filter((row) => binPaths.has(row.path));
+  const official = current.filter((r) => r.path !== ".corepack" && !binPaths.has(r.path));
   if (JSON.stringify(official) !== JSON.stringify(payload.files))
     throw new Error("SHIPPING_OFFICIAL_NPM_PAYLOAD_CHANGED");
+  const binLinks = officialNpmBinLinks(npmRoot, binRows, official);
   if (locator) {
     const data = json(path.join(npmRoot, ".corepack"));
     const keys = (object) => Object.keys(object).sort().join(",");
@@ -129,7 +180,7 @@ export function assertOfficialNpmPayload(npmRoot, payload) {
     npm_code_sha256: aggregate(official),
     official_tarball_integrity: integrity,
     canonical_file_count: official.length,
-    nonpayload: locator ? [{ ...locator, classification: "matching-corepack-locator" }] : [],
+    nonpayload: [...(locator ? [{ ...locator, classification: "matching-corepack-locator" }] : []), ...binLinks],
   };
 }
 export function toolchain(root) {

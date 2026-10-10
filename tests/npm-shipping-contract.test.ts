@@ -244,9 +244,9 @@ describe("current 0.12.4 full shipping contract", () => {
       const tool = path.join(temp, "npm");
       const launcher = execFileSync("which", ["npm"], { encoding: "utf8" }).trim();
       const actualRoot = path.resolve(path.dirname(realpathSync(launcher)), "..");
-      cpSync(actualRoot, tool, { recursive: true });
+      cpSync(actualRoot, tool, { recursive: true, verbatimSymlinks: true });
       expect(() => assertOfficialNpmPayload(tool, payload)).not.toThrow();
-      rmSync(path.join(tool, ".corepack"));
+      rmSync(path.join(tool, ".corepack"), { force: true });
       expect(() => assertOfficialNpmPayload(tool, payload)).not.toThrow();
       const file = path.join(tool, "lib/cli.js"),
         original = readFileSync(file);

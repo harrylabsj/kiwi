@@ -25,7 +25,15 @@ export function verifyTarball(
 export function assertOfficialNpmPayload(
   root: string,
   payload: unknown,
-): { npm_code_sha256: string; nonpayload: unknown[] };
+): {
+  npm_code_sha256: string;
+  official_tarball_integrity: string;
+  canonical_file_count: number;
+  nonpayload: Array<{
+    path: string; size: number; sha256: string; classification: string;
+    symlink_target?: string; declared_by?: string; target_payload_path?: string;
+  }>;
+};
 export function assertNoState(
   rows: Array<{ path: string; size: number; sha256: string }>,
   options?: {

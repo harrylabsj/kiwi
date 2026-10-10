@@ -1279,11 +1279,11 @@
     },
     {
       "path": "scripts/lib/npm-shipping.d.mts",
-      "sha256": "sha256:67d1c39d100120bf691d92644d340c7142e71479fc96a3a602dbf526cff4a611"
+      "sha256": "sha256:804cdc89e6029dcd8f36ffdac4b24677b5bf53639b2311ae1739bdbb75653f13"
     },
     {
       "path": "scripts/lib/npm-shipping.mjs",
-      "sha256": "sha256:47f68daf4b7e868d328c1677a4040bce49d3103e606628d3dd648499d2b511f8"
+      "sha256": "sha256:39f6335164f789758f77d769f50ce44739898d9c9c64d7db774a24b9bd6290bb"
     },
     {
       "path": "scripts/lib/portfolio-lock-verify.d.mts",
@@ -3581,7 +3581,7 @@
     },
     {
       "path": "tests/a373-r1-native-contract.test.ts",
-      "sha256": "sha256:2015f1d1c796aecdc82f515a77fda435a5cb1e0ab9f1e3902894b4583a9c4dff"
+      "sha256": "sha256:826b76c5ce4e22b84a19c4fe915af031e2a7a24547474a31d7a6d91075c5fbcb"
     },
     {
       "path": "tests/a374-state3.test.ts",
@@ -4596,6 +4596,10 @@
       "sha256": "sha256:638f9fdc397f5075fa6bea8baba50a83c67ef7bd6b8c9901476cce4230933034"
     },
     {
+      "path": "tests/npm-official-binlinks.test.ts",
+      "sha256": "sha256:14f8ecdfc2a2d67ef21793fc5eb49740aab6835409a9c14576abe7f29e513671"
+    },
+    {
       "path": "tests/npm-shipping-code-proofs.test.ts",
       "sha256": "sha256:98b2769a82487f8c635d72502ee82a62e6c32092517577124c27996da17a31ad"
     },
@@ -4605,7 +4609,7 @@
     },
     {
       "path": "tests/npm-shipping-contract.test.ts",
-      "sha256": "sha256:cfda94f618eb0c61ba7426150d955459d198cc1d12eef3d44bf3c3fad20c0a4b"
+      "sha256": "sha256:c9a0c292fadcfc40f05631643b6a25413dc2a53207c477b9c19fab1cec2adfe1"
     },
     {
       "path": "tests/onboarding-local-fallback.test.ts",

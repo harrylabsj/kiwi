@@ -320,7 +320,8 @@ it("native factory receipt recovery uses pinned GetTask rather than an implicit 
       }
       return native(...args);
     });
-    const service = buildBuyerService({ ...config(dir, endpoint), a2aTimeoutMs: 8 });
+    // Exercise receipt recovery after a working SendMessage, not an 8ms discovery race.
+    const service = buildBuyerService({ ...config(dir, endpoint), a2aTimeoutMs: 500 });
     const inner = service as unknown as { store: TaskApprovalStore; merchantIndex: unknown };
     store = inner.store;
     const merchant = {
@@ -338,9 +339,11 @@ it("native factory receipt recovery uses pinned GetTask rather than an implicit 
     };
     const first = await service.requestQuotes(input);
     expect(first.task.status).toBe("partial_success");
+    expect(methods.filter((m) => m === "SendMessage")).toHaveLength(1);
     offer = true;
     const next = await service.requestQuotes(input);
     expect(next.created).toBe(false);
+    expect(next.task.task_id).toBe(first.task.task_id);
     expect(next.task.status).toBe("succeeded");
     expect(methods.filter((m) => m === "SendMessage")).toHaveLength(1);
     expect(methods.filter((m) => m === "GetTask").length).toBeGreaterThan(0);
