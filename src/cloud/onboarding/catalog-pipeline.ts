@@ -221,7 +221,6 @@ export function saveWorkbuddyEnrollment(
       | WorkbuddyEnrollment
       | undefined;
     const priorRevision = prior?.store_revision;
-    const expected = expectedPriorRevision ?? (priorRevision === undefined ? undefined : priorRevision);
     // review P1-3（A319 校准）：legacy 快照可信匹配——expected 未声明但
     // state 带 pristine 快照摘要且与锁内 prior **逐字节一致** → 证明调用方
     // 读到的就是当前这份，允许首轮推进 revision（legacy 恢复不再永远

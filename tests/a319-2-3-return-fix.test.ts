@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
 /**
  * A319 2-3 返修自有控制（在 A317 探针设计基础上修正解析路径）。
  *
@@ -367,7 +368,7 @@ describe("A319 追加：2-8 陈旧锁回收的身份边界", () => {
   it("负数/浮点/不可解析 PID 的陈旧锁不被回收（unknown 不删）", async () => {
     const { LedgerStore } = await import("../src/negotiation/ledger/index.js");
     const { ledgerFileName } = await import("../src/negotiation/ledger/store.js");
-    const { createHash } = await import("node:crypto");
+    await import("node:crypto");
     const dir = mkdtempSync(path.join(tmpdir(), "a319-lock-"));
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
     const store = new LedgerStore({ dir, now: NOW });
@@ -387,7 +388,6 @@ describe("A319 追加：2-8 陈旧锁回收的身份边界", () => {
     // 造陈旧锁：负数 PID
     const lockPath = path.join(dir, "ledger", `${ledgerFileName(negId)}.lock`);
     const writeStale = (content: string) => {
-      const { writeFileSync, utimesSync } = require("node:fs") as typeof import("node:fs");
       writeFileSync(lockPath, content, { mode: 0o600 });
       const old = new Date(Date.now() - 60_000);
       utimesSync(lockPath, old, old);
@@ -396,7 +396,6 @@ describe("A319 追加：2-8 陈旧锁回收的身份边界", () => {
     // 陈旧 + 负 PID：接管逻辑不得删除 unknown 身份锁 → append 超时 fail-closed
     //（lockTimeoutMs 缺省较短；这里只断言锁文件仍在——unknown 不删）
     const stillThere = () => {
-      const { existsSync } = require("node:fs") as typeof import("node:fs");
       return existsSync(lockPath);
     };
     try {
@@ -430,7 +429,7 @@ describe("A319 追加：2-8 陈旧锁回收的身份边界", () => {
         outcome: { kind: "ok" },
         occurred_at: NOW(),
       });
-    } catch {}
+    } catch { /* Expected synthetic failure; assertions below retain the safety contract. */ }
     expect(stillThere()).toBe(true);
   });
 
@@ -454,7 +453,6 @@ describe("A319 追加：2-8 陈旧锁回收的身份边界", () => {
       occurred_at: NOW(),
     });
     // 正整数但不可能存在的 PID（ESRCH）→ 确认死亡 → 可回收
-    const { writeFileSync, utimesSync, existsSync } = require("node:fs") as typeof import("node:fs");
     const lockPath = path.join(dir, "ledger", `${ledgerFileName(negId)}.lock`);
     writeFileSync(lockPath, JSON.stringify({ pid: 2_147_000_000, token: "dead" }), { mode: 0o600 });
     const old = new Date(Date.now() - 60_000);
@@ -732,7 +730,6 @@ describe("A319 追加：P1-2 实际外发 counter 提案限额门", () => {
 
 describe("A319 追加：P1-3 legacy 快照可信 CAS 恢复", () => {
   function seedLegacyStore(dir: string, sessions: Array<Record<string, unknown>>): void {
-    const { mkdirSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     // enrollment store 文件名/路径与 enrollment-challenge 的 readEnrollmentStore 一致
     writeFileSync(

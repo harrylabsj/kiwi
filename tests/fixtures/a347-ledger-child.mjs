@@ -1,3 +1,4 @@
+import process from "node:process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 const opts = JSON.parse(process.argv[2]);

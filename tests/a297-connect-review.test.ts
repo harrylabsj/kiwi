@@ -35,7 +35,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 
 import { canonicalize } from "../src/negotiation/jcs.js";
 import { validateAgentCard } from "../src/discovery/agent-card/validate.js";
@@ -44,9 +44,7 @@ import { signCompactJws, type JwsSigningIdentity } from "../src/trust/identity/j
 import { readEnrollmentStore } from "../src/cloud/binding/enrollment-challenge.js";
 import {
   createMerchantConnectionService,
-  type VerifiedBinding,
 } from "../src/cloud/connect-service.js";
-import { connectMerchant } from "../src/cloud/merchant-connect.js";
 import type { AgentProfile } from "../src/config/profile.js";
 
 const RUNTIME_ORIGIN = "https://runtime.test";
@@ -448,7 +446,7 @@ function sessionRecord(dataDir: string): Record<string, unknown> {
   return selected;
 }
 
-function rewriteSessions(
+function _rewriteSessions(
   dataDir: string,
   mutate: (session: Record<string, unknown>) => Record<string, unknown>,
 ): void {
@@ -463,7 +461,7 @@ function rewriteSessions(
   writeFileSync(path.join(dataDir, "merchant-enrollments.json"), `${JSON.stringify(store)}\n`);
 }
 
-const PROFILE = {
+const _PROFILE = {
   role: "merchant",
   agent_id: "agent_stub",
   owner_id: "owner_stub",
@@ -480,7 +478,7 @@ const CREDENTIAL_MARKERS = [
   "grant-stub",
 ];
 
-function expectNoCredentials(serialized: string): void {
+function _expectNoCredentials(serialized: string): void {
   for (const marker of CREDENTIAL_MARKERS) {
     expect(serialized).not.toContain(marker);
   }

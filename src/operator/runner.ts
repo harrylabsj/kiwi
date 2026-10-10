@@ -294,6 +294,7 @@ export class DeterministicNegotiationRunner implements NegotiationRunner {
     } catch (err) {
       throw new Error(
         `unknown fence file unreadable (fail-closed): ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
       );
     }
     for (const line of lines) {
@@ -304,6 +305,7 @@ export class DeterministicNegotiationRunner implements NegotiationRunner {
       } catch (err) {
         throw new Error(
           `unknown fence file has a corrupted line (fail-closed; reconcile the fence file): ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
         );
       }
       if (

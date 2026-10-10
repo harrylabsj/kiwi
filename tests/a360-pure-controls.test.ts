@@ -7,7 +7,22 @@ import { generateKeyPairSync } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { intent, profile } from "./fanout-helpers.js";
-let m: any;
+let m: typeof import("../src/fanout/disclosure.js") &
+  typeof import("../src/negotiation/recovery/recover.js") &
+  typeof import("../src/negotiation/context-map/store.js") &
+  typeof import("../src/negotiation/ledger/store.js") &
+  typeof import("../src/negotiation/idempotency/store.js") &
+  typeof import("../src/a2a/server/pipeline.js") &
+  typeof import("../src/a2a/server/task-registry.js") &
+  typeof import("../src/a2a/server/handler.js") &
+  typeof import("../src/negotiation/domain/envelope.js") &
+  typeof import("../src/cloud/catalog-client.js") &
+  typeof import("../src/cloud/connect-service.js") &
+  typeof import("../src/cloud/product-source.js") &
+  typeof import("../src/cloud/binding/proofs.js") &
+  typeof import("../src/cloud/binding/runtime-challenge.js") &
+  typeof import("../src/trust/identity/jws.js") &
+  typeof import("../src/trust/binding/thumbprint.js");
 const dirs: string[] = [];
 const servers: Server[] = [];
 const now = () => "2026-10-08T00:00:00.000Z";
@@ -77,7 +92,7 @@ function envelope() {
     payload: { type: "rfq", items: [{ sku: "SKU-001", quantity: { value: 1, unit: "piece" } }] },
   });
 }
-function pipeline(d: string, handler: any, clock: () => string = now) {
+function pipeline(d: string, handler: import("../src/a2a/server/types.js").NegotiationHandler, clock: () => string = now) {
   const ledger = new m.LedgerStore({ dir: d, now: clock });
   const idem = new m.IdempotencyStore({ dir: d, now: clock });
   return {
@@ -93,7 +108,7 @@ function pipeline(d: string, handler: any, clock: () => string = now) {
     }),
   };
 }
-function send(p: any) {
+function send(p: import("../src/a2a/server/pipeline.js").InboundPipeline) {
   const e = envelope();
   return p.sendMessage(
     {
@@ -125,12 +140,12 @@ describe("A360 pure 2-20 object-key privacy", () => {
         tier: "anonymous",
         allowed_attributes: [],
       });
-      expect(p.rfq.items[0].sku).toBe(sku);
+      expect(p.rfq.items[0]!.sku).toBe(sku);
     },
   );
   it("nested actual private keys remain rejected", () => {
     const p = m.buildDisclosedRfq({ intent: intent(), tier: "anonymous", allowed_attributes: [] });
-    p.rfq.requested_terms.extra = { phone_secret: "fixture-only" };
+    (p.rfq.requested_terms! as Record<string, unknown>).extra = { phone_secret: "fixture-only" };
     expect(m.validateNetworkDisclosure(p, []).ok).toBe(false);
   });
 });
@@ -149,11 +164,11 @@ describe("A360 pure 3-8 recovery evidence", () => {
         getState: async () => {
           throw new Error("unreachable");
         },
-      }),
+      } as unknown as import("../src/counterparty/channel.js").ChannelHandle),
       now,
     });
     expect((await rec.recover("neg_pure")).status).toBe("reconciliation_required");
-    expect(ledger.events("neg_pure").at(-1).identity.counterparty_identity).toBe("merchant-known");
+    expect(ledger.events("neg_pure").at(-1)!.identity.counterparty_identity).toBe("merchant-known");
   });
   it("failure before resolution remains honestly unresolved", async () => {
     const d = dir();
@@ -167,7 +182,7 @@ describe("A360 pure 3-8 recovery evidence", () => {
       now,
     });
     expect((await rec.recover("neg_pure")).status).toBe("reconciliation_required");
-    expect(ledger.events("neg_pure").at(-1).identity.counterparty_identity).toBe("unresolved");
+    expect(ledger.events("neg_pure").at(-1)!.identity.counterparty_identity).toBe("unresolved");
   });
 });
 describe("A360 pure 3-14 physical store coordination", () => {
@@ -181,7 +196,7 @@ describe("A360 pure 3-14 physical store coordination", () => {
       dir(),
       {
         name: "A",
-        handle: async (ctx: any) => {
+        handle: async (ctx: import("../src/a2a/server/types.js").InboundNegotiationContext) => {
           enterA = true;
           await gate;
           return echo.handle(ctx);
@@ -193,7 +208,7 @@ describe("A360 pure 3-14 physical store coordination", () => {
       dir(),
       {
         name: "B",
-        handle: async (ctx: any) => {
+        handle: async (ctx: import("../src/a2a/server/types.js").InboundNegotiationContext) => {
           enterB = true;
           return echo.handle(ctx);
         },
@@ -225,7 +240,7 @@ describe("A360 pure 3-14 physical store coordination", () => {
     let calls = 0;
     const h = {
       name: "shared",
-      handle: async (ctx: any) => {
+      handle: async (ctx: import("../src/a2a/server/types.js").InboundNegotiationContext) => {
         calls++;
         entered = true;
         await gate;
@@ -250,8 +265,8 @@ describe("A360 pure 3-14 physical store coordination", () => {
 const pair = generateKeyPairSync("ed25519");
 const signing = {
   keyid: "fixture",
-  algorithm: "ed25519",
-  privateKey: pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+  algorithm: "ed25519" as const,
+  privateKey: pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString() as unknown as import("node:crypto").KeyObject,
 };
 function runtimeIdentity() {
   return { keyId: "fixture", signingIdentity: signing };
@@ -272,14 +287,14 @@ const card = {
 async function connection(hook?: () => Promise<void>) {
   const d = dir();
   let t = Date.parse(now());
-  const s: any = m.createMerchantConnectionService({
+  const s = m.createMerchantConnectionService({
     dataDir: d,
     catalogUrl: "https://catalog.fixture.invalid",
     publicOrigin: "https://runtime.fixture.invalid",
     loadPublicCard: async () => card,
     now: () => new Date(t),
     beforePublish: hook,
-  });
+  }) as unknown as Omit<import("../src/cloud/connect-service.js").MerchantConnectionService, never> & { client: import("../src/cloud/catalog-client.js").CatalogClient; keyThumbprint: string };
   s.client.createDeviceEnrollment = async () => ({
     enrollmentId: "enroll_fixture",
     deviceCode: "d".repeat(40),
@@ -374,7 +389,7 @@ function challenge() {
     ttlSeconds: 30,
   });
 }
-async function responderCall(ch: any) {
+async function responderCall(ch: object) {
   const responder = m.createChallengeResponder({
     signingIdentity: signing,
     expectedAgentId: "agent",
@@ -388,7 +403,7 @@ async function responderCall(ch: any) {
     s.once("error", reject);
     s.listen(0, "127.0.0.1", resolve);
   });
-  const port = (s.address() as any).port;
+  const port = (s.address() as import("node:net").AddressInfo).port;
   return fetch(`http://127.0.0.1:${port}/control/challenge`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -423,7 +438,7 @@ describe("A360 pure 3-21 existing challenge time fields", () => {
     const c = challenge();
     const response = await responderCall(c);
     expect(response.status).toBe(200);
-    const body: any = await response.json();
+    const body = await response.json() as { proof_jws: string };
     expect(
       m.verifyBindingChallengeProof({
         challenge: c,

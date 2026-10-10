@@ -111,7 +111,7 @@ function checkFile(s: State) {
     try {
       privateFile(s.file + suffix);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") continue;
+      if ((error as { code?: string })?.code === "ENOENT") continue;
       if (error instanceof OwnerStorageAdmissionError) deny("storage_sidecar_permissions");
       throw error;
     }

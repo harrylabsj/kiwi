@@ -1,3 +1,4 @@
+import process from "node:process";
 import fs from "node:fs";
 const o = JSON.parse(process.argv[2]);
 const m = await import(o.bundle);

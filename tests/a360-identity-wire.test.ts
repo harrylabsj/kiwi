@@ -1,3 +1,10 @@
+
+type HandlerObservation = import("../src/a2a/server/types.js").NegotiationHandlerResult & {
+  reasonCode?: string;
+  protocolCode?: string;
+  artifactParts?: import("../src/a2a/client/types.js").A2APart[];
+};
+type OfferFields = { offer_id: string; terms: import("../src/negotiation/domain/common.js").TermSet };
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
@@ -60,11 +67,11 @@ function setup() {
 }
 function env(
   action = "rfq",
-  payload: any = {
+  payload: Record<string, unknown> = {
     type: "rfq",
     items: [{ sku: "SKU-001", quantity: { value: 1, unit: "piece" } }],
   },
-  extra: any = {},
+  extra: Record<string, unknown> = {},
 ): NegotiationEnvelope {
   return finalizeEnvelope({
     capability: "com.harrylabsj.kiwi.shopping.negotiation",
@@ -77,20 +84,20 @@ function env(
     created_at: now(),
     payload,
     ...extra,
-  } as any);
+  } as unknown as Parameters<typeof finalizeEnvelope>[0]);
 }
-function handle(h: any, e: NegotiationEnvelope, peer = "peer-a") {
+function handle(h: import("../src/a2a/server/types.js").NegotiationHandler, e: NegotiationEnvelope, peer = "peer-a") {
   return h.handle({
     envelope: e,
     message: { role: "user", messageId: e.message_id, parts: [] },
     taskId: "task_" + e.message_id,
     senderIdentity: peer,
-  });
+  }) as Promise<HandlerObservation>;
 }
-function reply(r: any): NegotiationEnvelope {
-  return r.message.parts.find((p: any) => p.kind === "data").data.knp_envelope;
+function reply(r: HandlerObservation): NegotiationEnvelope {
+  return ((r.message as import("../src/a2a/client/types.js").A2AMessage).parts.find((p) => p.kind === "data") as Extract<import("../src/a2a/client/types.js").A2APart, { kind: "data" }>).data.knp_envelope as NegotiationEnvelope;
 }
-function task(e: any): any {
+function task(e: NegotiationEnvelope): import("../src/a2a/client/types.js").A2ATask {
   return {
     id: "task_reply",
     status: {
@@ -115,7 +122,7 @@ describe("A360 2-1 trusted negotiation binding", () => {
   it("foreign sender cannot accept a known merchant offer; real owner still accepts", async () => {
     const { handler } = setup();
     const offer = reply(await handle(handler, env()));
-    const payload: any = offer.payload;
+    const payload = offer.payload as unknown as OfferFields;
     const accepted = env(
       "accept_nonbinding",
       {
@@ -125,19 +132,19 @@ describe("A360 2-1 trusted negotiation binding", () => {
       },
       { in_reply_to: offer.message_id },
     );
-    const foreign: any = await handle(handler, accepted, "peer-b");
+    const foreign: HandlerObservation = await handle(handler, accepted, "peer-b");
     expect(foreign.kind).toBe("declined");
     expect(foreign.reasonCode).toBe("authorization_failed");
-    const owner: any = await handle(handler, { ...accepted, message_id: "msg_real_owner" });
+    const owner: HandlerObservation = await handle(handler, { ...accepted, message_id: "msg_real_owner" });
     expect(owner.kind).toBe("accepted");
-    expect(owner.artifactParts?.some((p: any) => p.data?.agreement)).toBe(true);
+    expect(owner.artifactParts?.some((p) => (p as Extract<import("../src/a2a/client/types.js").A2APart, { kind: "data" }>).data?.agreement)).toBe(true);
   });
   it("wrong actor cannot claim or change a negotiation", async () => {
     const s = setup();
-    const r: any = await handle(s.handler, env("rfq", undefined, { actor: "merchant" }));
+    const r: HandlerObservation = await handle(s.handler, env("rfq", undefined, { actor: "merchant" }));
     expect(r.kind).toBe("declined");
     expect(s.ledger.events("neg_test")).toHaveLength(0);
-    expect(((await handle(s.handler, env())) as any).kind).toBe("accepted");
+    expect(((await handle(s.handler, env())) as HandlerObservation).kind).toBe("accepted");
   });
   it("same owner restart accepts; foreign restart does not adopt owner", async () => {
     const s = setup();
@@ -149,52 +156,52 @@ describe("A360 2-1 trusted negotiation binding", () => {
       counterparty: "placeholder",
       allowDemoPriceFallback: true,
     });
-    const p: any = offer.payload;
+    const p = offer.payload as unknown as OfferFields;
     const a = env(
       "accept_nonbinding",
       { type: "accept_nonbinding", offer_id: p.offer_id, terms_digest: contentDigest(p.terms) },
       { in_reply_to: offer.message_id },
     );
-    expect(((await handle(h, a, "peer-b")) as any).kind).toBe("declined");
-    expect(((await handle(h, { ...a, message_id: "msg_restart_owner" })) as any).kind).toBe(
+    expect(((await handle(h, a, "peer-b")) as HandlerObservation).kind).toBe("declined");
+    expect(((await handle(h, { ...a, message_id: "msg_restart_owner" })) as HandlerObservation).kind).toBe(
       "accepted",
     );
   });
   it("buyer cannot withdraw merchant-authored offer; legal decline remains one transition", async () => {
     const s = setup();
     const offer = reply(await handle(s.handler, env()));
-    const p: any = offer.payload;
+    const p = offer.payload as unknown as OfferFields;
     const target = {
       scope: "offer",
       target_message_id: offer.message_id,
       target_offer_id: p.offer_id,
     };
     expect(
-      ((await handle(s.handler, env("withdraw", { type: "withdraw", ...target }))) as any)
+      ((await handle(s.handler, env("withdraw", { type: "withdraw", ...target }))) as HandlerObservation)
         .reasonCode,
     ).toBe("authorization_failed");
     expect(
-      ((await handle(s.handler, env("decline", { type: "decline", ...target }))) as any).kind,
+      ((await handle(s.handler, env("decline", { type: "decline", ...target }))) as HandlerObservation).kind,
     ).toBe("accepted");
     expect(
-      s.ledger.events("neg_test").filter((e: any) => e.state_transition?.to_phase === "OPEN"),
+      s.ledger.events("neg_test").filter((e) => e.state_transition?.to_phase === "OPEN"),
     ).toHaveLength(1);
   });
   it("rejected same-ID buyer proposal cannot impersonate the merchant active offer author", async () => {
     const s = setup();
     const offer = reply(await handle(s.handler, env()));
-    const p: any = offer.payload;
+    const p = offer.payload as unknown as OfferFields;
     const fake = env("offer", { type: "offer", offer_id: p.offer_id, terms: p.terms });
-    expect(((await handle(s.handler, fake)) as any).kind).toBe("declined");
+    expect(((await handle(s.handler, fake)) as HandlerObservation).kind).toBe("declined");
     const withdrawal = env("withdraw", {
       type: "withdraw",
       scope: "offer",
       target_message_id: fake.message_id,
       target_offer_id: p.offer_id,
     });
-    expect(((await handle(s.handler, withdrawal)) as any).reasonCode).toBe("offer_unknown");
+    expect(((await handle(s.handler, withdrawal)) as HandlerObservation).reasonCode).toBe("offer_unknown");
     expect(
-      s.ledger.events("neg_test").filter((e: any) => e.state_transition?.to_phase === "OPEN"),
+      s.ledger.events("neg_test").filter((e) => e.state_transition?.to_phase === "OPEN"),
     ).toHaveLength(0);
   });
   it("bound buyer can withdraw its own active offer after a pre-effect quote failure", async () => {
@@ -208,7 +215,7 @@ describe("A360 2-1 trusted negotiation binding", () => {
         getProduct: async () => {
           throw new Error("product unavailable");
         },
-      } as any,
+      } as unknown as NonNullable<Parameters<typeof m.createMerchantHandler>[0]["productSource"]>,
     });
     const own = env("offer", {
       type: "offer",
@@ -223,16 +230,16 @@ describe("A360 2-1 trusted negotiation binding", () => {
         ],
       },
     });
-    expect(((await handle(h, own)) as any).kind).toBe("declined");
+    expect(((await handle(h, own)) as HandlerObservation).kind).toBe("declined");
     const withdraw = env("withdraw", {
       type: "withdraw",
       scope: "offer",
       target_message_id: own.message_id,
       target_offer_id: "offer_own",
     });
-    expect(((await handle(h, withdraw)) as any).kind).toBe("accepted");
+    expect(((await handle(h, withdraw)) as HandlerObservation).kind).toBe("accepted");
     expect(
-      s.ledger.events("neg_test").filter((e: any) => e.state_transition?.to_phase === "OPEN"),
+      s.ledger.events("neg_test").filter((e) => e.state_transition?.to_phase === "OPEN"),
     ).toHaveLength(1);
   });
   it("legacy commercial history without trusted inbound receipt cannot be adopted", async () => {
@@ -254,7 +261,7 @@ describe("A360 2-1 trusted negotiation binding", () => {
           ],
         },
       },
-    } as any);
+    } as unknown as Parameters<typeof finalizeEnvelope>[0]);
     s.ledger.append({
       event_kind: "message_sent",
       negotiation_id: "neg_test",
@@ -265,7 +272,7 @@ describe("A360 2-1 trusted negotiation binding", () => {
         actor: "merchant",
       },
       capability: { capability: offer.capability, protocol_version: "1.0" },
-      wire_payload: offer as any,
+      wire_payload: offer as unknown as Record<string, unknown>,
       wire_digest: offer.digest,
       outcome: { kind: "ok" },
       occurred_at: now(),
@@ -277,7 +284,7 @@ describe("A360 2-1 trusted negotiation binding", () => {
       counterparty: "placeholder",
       allowDemoPriceFallback: true,
     });
-    const r: any = await handle(h, env());
+    const r: HandlerObservation = await handle(h, env());
     expect(r.kind).toBe("error");
     expect(r.protocolCode).toBe("reconciliation_required");
   });
@@ -285,7 +292,7 @@ describe("A360 2-1 trusted negotiation binding", () => {
     const s = setup();
     const pipeline = new InboundPipeline({
       handler: echoHandler(),
-      ledger: s.ledger as any,
+      ledger: s.ledger,
       idempotency: new IdempotencyStore({ dir: s.dir, now }),
       tasks: new TaskRegistry(),
       now,
@@ -306,7 +313,7 @@ describe("A360 2-1 trusted negotiation binding", () => {
         message: {
           role: "user",
           messageId: e.message_id,
-          parts: [{ kind: "data", data: { knp_envelope: e as any } }],
+          parts: [{ kind: "data", data: { knp_envelope: e } }],
         },
       },
       { senderIdentity: "peer-a", identityVerified: true },
@@ -318,8 +325,8 @@ describe("A360 2-1 trusted negotiation binding", () => {
       counterparty: "placeholder",
       allowDemoPriceFallback: true,
     });
-    expect(((await handle(h, env(), "peer-b")) as any).kind).toBe("declined");
-    expect(((await handle(h, env(), "peer-a")) as any).kind).toBe("accepted");
+    expect(((await handle(h, env(), "peer-b")) as HandlerObservation).kind).toBe("declined");
+    expect(((await handle(h, env(), "peer-a")) as HandlerObservation).kind).toBe("accepted");
   });
   it("two real processes racing same negotiation bind exactly one sender", async () => {
     const s = setup();
@@ -370,7 +377,7 @@ describe("A360 2-1 trusted negotiation binding", () => {
 });
 
 describe("A360 2-7 raw merchant reply authority (partial ID)", () => {
-  function pair(extra: any = {}) {
+  function pair(extra: Record<string, unknown> = {}) {
     const request = env();
     const response = finalizeEnvelope({
       ...request,
@@ -393,7 +400,7 @@ describe("A360 2-7 raw merchant reply authority (partial ID)", () => {
         signature: "business",
       },
       ...extra,
-    } as any);
+    } as unknown as Parameters<typeof finalizeEnvelope>[0]);
     return { request, response };
   }
   it("valid raw reply and legal extensions survive extraction", () => {

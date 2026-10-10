@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
-let m: any;
+let m: typeof import("../src/a2a/server/pipeline.js") &
+  typeof import("../src/a2a/server/task-registry.js") &
+  typeof import("../src/negotiation/ledger/store.js") &
+  typeof import("../src/negotiation/idempotency/store.js");
 const dirs: string[] = [];
 function dir() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "a360-clock-r1-"));
@@ -39,9 +42,9 @@ beforeAll(async () => {
 afterAll(() => {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
 });
-function pipe(d: string, idem: any, now: () => string) {
+function pipe(d: string, idem: { coordinationScope(): string; sweep(nowIso?: string): number | void }, now: () => string) {
   return new m.InboundPipeline({
-    idempotency: idem,
+    idempotency: idem as import("../src/negotiation/idempotency/store.js").IdempotencyStore,
     ledger: new m.LedgerStore({ dir: d, now }),
     tasks: new m.TaskRegistry(),
     now,
@@ -49,11 +52,11 @@ function pipe(d: string, idem: any, now: () => string) {
       handle: () => {
         throw Error("unexpected handler");
       },
-    },
+    } as unknown as import("../src/a2a/server/types.js").NegotiationHandler,
     logError: () => {},
   });
 }
-async function tick(p: any) {
+async function tick(p: import("../src/a2a/server/pipeline.js").InboundPipeline) {
   // Invalid input deliberately stops after lazy cleanup: no handler or commit
   // can mask whether the existing on-disk record was removed.
   await expect(p.sendMessage({ message: null }, { senderIdentity: "peer" })).rejects.toBeDefined();
@@ -66,7 +69,7 @@ function seed(d: string) {
     message_id: "old",
     digest: "d",
     negotiation_id: "neg",
-    outcome: { result: { id: "task" } },
+    outcome: { result: { id: "task" } } as unknown as Parameters<import("../src/negotiation/idempotency/store.js").IdempotencyStore["commit"]>[0]["outcome"],
     retention: {},
   });
   const file = path.join(
@@ -105,7 +108,7 @@ describe("A360 3-14 R1 actual expiry and successful sweep timestamps", () => {
       message_id: "unknown",
       digest: "unknown-d",
       negotiation_id: "neg",
-    });
+    } as Parameters<import("../src/negotiation/idempotency/store.js").IdempotencyStore["markInFlight"]>[0]);
     const claim = s.idem.readInFlight("peer", "unknown");
     await tick(pipe(d, s.idem, () => new Date(s.expiry + 60_000).toISOString()));
     expect(fs.existsSync(s.file)).toBe(false);

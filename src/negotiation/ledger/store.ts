@@ -197,7 +197,7 @@ export class LedgerStore {
         try {
           fd = openSync(guardPath, "wx", 0o600);
         } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+          if ((err as { code?: string }).code !== "EEXIST") throw err;
           // No PID/age-based deletion of the guard: that would recreate the
           // same compare-unlink race at another level.
           wait(until);
@@ -240,7 +240,7 @@ export class LedgerStore {
           createMainLock();
           return true;
         } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+          if ((err as { code?: string }).code !== "EEXIST") throw err;
         }
         try {
           const st = statSync(lockPath);
@@ -255,7 +255,7 @@ export class LedgerStore {
           createMainLock();
           return true;
         } catch (err) {
-          if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+          if ((err as { code?: string }).code === "ENOENT") return false;
           throw err;
         }
       });

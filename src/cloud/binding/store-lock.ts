@@ -29,7 +29,7 @@ export function withEnrollmentStoreLock<T>(
       fd = openSync(file, "wx", 0o600);
       break;
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      if ((e as { code?: string }).code !== "EEXIST") throw e;
       if (process.hrtime.bigint() >= until)
         throw new EnrollmentStoreBusy("Enrollment state is locked");
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
@@ -44,7 +44,9 @@ export function withEnrollmentStoreLock<T>(
     if (fd !== undefined) {
       try {
         closeSync(fd);
-      } catch {}
+      } catch {
+        /* Best-effort owned descriptor cleanup; retain the original lock/write failure. */
+      }
     }
     try {
       const owner = JSON.parse(readFileSync(file, "utf8")) as { token?: string };
@@ -68,7 +70,7 @@ export function reserveEnrollmentCreation(
   try {
     fd = nativeFs.openSync(file, "wx", 0o600);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST")
+    if ((error as { code?: string }).code === "EEXIST")
       throw new EnrollmentStoreBusy("Unresolved enrollment creation");
     throw error;
   }

@@ -1,9 +1,9 @@
+import { mkdirSync, readFileSync } from "node:fs";
 /**
  * A325 七项候选源码收口自有控制：
  * - P1-2 生产 gate 接线（build-service 真实工厂）+ 事务内 fresh 授权故障注入
  * - 2-8 只 ESRCH 确认死回收 / EPERM·EINVAL·新 owner 锁不删
  */
-import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync, writeFileSync, utimesSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,13 +12,11 @@ import { createHash } from "node:crypto";
 
 import { buildBuyerService } from "../src/buyer-core/build-service.js";
 import type { KiwiBuyerService } from "../src/buyer-core/service.js";
-import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
 import { LedgerStore } from "../src/negotiation/ledger/index.js";
 import { ledgerFileName } from "../src/negotiation/ledger/store.js";
-import { migrateMemorySchema } from "../src/agent/memory/schema.js";
 
-const T0 = "2026-08-05T12:00:00+08:00";
-const PRINCIPAL = "buyer-agent:buyer-001";
+const _T0 = "2026-08-05T12:00:00+08:00";
+const _PRINCIPAL = "buyer-agent:buyer-001";
 const cleanups: Array<() => Promise<void> | void> = [];
 afterAll(async () => {
   for (const fn of cleanups.splice(0)) await fn();
@@ -32,7 +30,9 @@ const LIMITS = {
 };
 
 function makeServiceWithA2A() {
-  return buildBuyerService({
+  const protocolStateDir = mkdtempSync(path.join(tmpdir(), "a325-protocol-state-"));
+  const svc = buildBuyerService({
+    protocolStateDir,
     dbPath: ":memory:",
     principal: "c:a325",
     buyerAgentId: "buyer-agent:a325",
@@ -55,6 +55,11 @@ function makeServiceWithA2A() {
       limits: LIMITS,
     } as never,
   } as never);
+  cleanups.push(async () => {
+    try { (svc as unknown as { store: import("../src/buyer-core/store.js").TaskApprovalStore }).store.close(); }
+    finally { rmSync(protocolStateDir, { recursive: true, force: true }); }
+  });
+  return svc;
 }
 
 describe("A325 P1-2：生产工厂 gate 接线与限额语义", () => {
@@ -97,7 +102,7 @@ describe("A325 P1-2：生产工厂 gate 接线与限额语义", () => {
 });
 
 describe("A325 P1-2：事务内 fresh 授权（跨连接窗口故障注入）", () => {
-  function seedApprovedApproval(
+  function _seedApprovedApproval(
     svc: KiwiBuyerService,
     taskId: string,
     digest: string,
@@ -216,7 +221,6 @@ describe("A325 2-8：锁回收身份边界（EPERM/EINVAL 保留、死 PID 回�
     return { store, dir, lockPath: path.join(dir, "ledger", `${ledgerFileName(negId)}.lock`), negId };
   }
   function seedStaleLock(lockPath: string, content: unknown): void {
-    const { mkdirSync } = require("node:fs") as typeof import("node:fs");
     mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
     writeFileSync(lockPath, JSON.stringify(content), { mode: 0o600 });
     const old = new Date(Date.now() - 60_000);
@@ -238,7 +242,7 @@ describe("A325 2-8：锁回收身份边界（EPERM/EINVAL 保留、死 PID 回�
   }
 
   it("EPERM（pid 1 非特权进程）→ 视为存活：fail-closed 超时，锁保留", async () => {
-    const { store, dir, lockPath, negId } = mk();
+    const { store, dir: _dir, lockPath, negId } = mk();
     seedStaleLock(lockPath, { pid: 1, token: "eperm-holder" });
     let threw: unknown;
     try {
@@ -248,11 +252,11 @@ describe("A325 2-8：锁回收身份边界（EPERM/EINVAL 保留、死 PID 回�
     }
     expect(threw).toBeDefined();
     expect(existsSync(lockPath)).toBe(true);
-    void dir;
+    void _dir;
   });
 
   it("越界 PID（kill 抛 EINVAL，非 ESRCH）→ 身份未知：锁保留", async () => {
-    const { store, dir, lockPath, negId } = mk();
+    const { store, dir: _dir, lockPath, negId } = mk();
     seedStaleLock(lockPath, { pid: 2 ** 31, token: "einval-holder" });
     let threw2: unknown;
     try {
@@ -265,7 +269,7 @@ describe("A325 2-8：锁回收身份边界（EPERM/EINVAL 保留、死 PID 回�
   });
 
   it("死 PID（ESRCH）→ 回收接管成功：事件落账、锁清除", async () => {
-    const { store, dir, lockPath, negId } = mk();
+    const { store, dir: _dir, lockPath, negId } = mk();
     seedStaleLock(lockPath, { pid: 2_147_000_000, token: "dead" });
     const ev = await store.append(appendArgs(negId));
     expect(ev.event_id).toBeTruthy();
@@ -273,7 +277,7 @@ describe("A325 2-8：锁回收身份边界（EPERM/EINVAL 保留、死 PID 回�
   });
 
   it("双 reclaimer/新 owner 归属：陈旧锁被换成新 owner（活 PID）→ 不删新锁，fail-closed", async () => {
-    const { store, dir, lockPath, negId } = mk();
+    const { store, dir: _dir, lockPath, negId } = mk();
     seedStaleLock(lockPath, { pid: 2_147_000_000, token: "stale" });
     // 竞争窗口模拟：回收判定后、unlink 前锁已被换成新 owner（活 PID=自身）
     writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: "new-owner" }), { mode: 0o600 });
@@ -285,7 +289,6 @@ describe("A325 2-8：锁回收身份边界（EPERM/EINVAL 保留、死 PID 回�
     }
     expect(threw3).toBeDefined();
     // 新 owner 锁文件未被删除（内容仍是 new-owner）
-    const { readFileSync } = require("node:fs") as typeof import("node:fs");
     expect(JSON.parse(readFileSync(lockPath, "utf-8")).token).toBe("new-owner");
     void createHash; void dirs;
   });
