@@ -1,6 +1,7 @@
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, symlinkSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import YAML from "yaml";
 
@@ -298,6 +299,84 @@ it("release receipt wrapper and ancestry guard are reached through the default b
   const source = readFileSync(join(process.cwd(), "scripts/verify-npm-shipping-source.mjs"), "utf8");
   expect(source).toContain('npm(root, ["run", "verify"], MAX_MS)');
   expect(source).toContain("throw error");
-  expect(source.indexOf("writeFileSync(file,")).toBeGreaterThan(source.indexOf("throw error"));
+  expect(source.indexOf("publishBuildReceipt(file, receipt)")).toBeGreaterThan(source.indexOf("throw error"));
   // This checks wiring/control structure; it does not claim fullverify ran.
+});
+
+
+it("finishes npm validation before consumer installs and preserves every later portfolio gate", () => {
+  const doc = YAML.parse(readFileSync(join(WORKFLOWS_DIR, "portfolio-release.yml"), "utf8"));
+  const steps = doc.jobs["build-once"].steps;
+  const names = steps.map((s: { name?: string }) => s.name ?? "");
+  const full = names.indexOf("Kiwi full verify (lint, typecheck, build, test, contracts, vectors, package smoke)");
+  const early = names.indexOf("Build and verify npm candidates before consumer installs");
+  const catalog = names.indexOf("Kiwi-catalog locked install, contract lock, and deterministic tests");
+  const shopping = names.indexOf("Shopping-cli locked install, contract lock, and deterministic tests");
+  const conformance = names.indexOf("Run shared Python service conformance");
+  const late = names.indexOf("Build release candidates and evidence once");
+  expect(early).toBeGreaterThan(full);
+  expect(catalog).toBeGreaterThan(early);
+  expect(shopping).toBeGreaterThan(catalog);
+  expect(conformance).toBeGreaterThan(shopping);
+  expect(late).toBeGreaterThan(conformance);
+  const earlyRun = steps[early].run;
+  const lateRun = steps[late].run;
+  expect(earlyRun).toContain("rm -rf release");
+  expect(earlyRun).not.toMatch(/cp portfolio|uv sync|python -m build/);
+  expect(lateRun).not.toMatch(/rm -rf release|build-npm-shipping|build-cloud-package|verify-npm-shipping-installed|pack --pack-destination release\/npm/);
+  for (const text of ["cp portfolio.lock.json", "cp portfolio-products.json", "kiwi-dsh-plugin", "uv sync --locked", "build-portfolio-release-index", "SHA256SUMS"]) expect(lateRun).toContain(text);
+  expect(steps[catalog].run).toContain("pytest -q");
+  expect(steps[shopping].run).toContain("pytest -q");
+  expect(steps[shopping].run).toContain("node --test tests/shopping_plugin.test.mjs");
+});
+
+describe("default release same-run npm checkpoint", () => {
+  const workflow = YAML.parse(readFileSync(join(WORKFLOWS_DIR, "portfolio-release.yml"), "utf8"));
+  const steps = workflow.jobs["build-once"].steps;
+  const early = steps.find((s: { name?: string }) => s.name === "Build and verify npm candidates before consumer installs").run;
+  const late = steps.find((s: { name?: string }) => s.name === "Build release candidates and evidence once").run;
+  const block = (run: string) => run.match(/node <<'NODE'\n([\s\S]*?)\nNODE/)![1]!;
+  const run = (code: string, cwd: string) => execFileSync(process.execPath, [...process.execArgv], { cwd, input: code, env: { ...process.env }, stdio: ["pipe", "pipe", "pipe"] });
+  const rootFile = "harrylabsj-kiwi-0.12.4.tgz";
+  const cloudFile = "harrylabsj-kiwi-merchant-cloud-0.12.4.tgz";
+  function fixture() {
+    const dir = mkdtempSync(join(tmpdir(), "workflow-npm-checkpoint-"));
+    mkdirSync(join(dir, "packages/merchant-cloud"), { recursive: true });
+    mkdirSync(join(dir, "release/npm/kiwi-merchant-cloud"), { recursive: true });
+    mkdirSync(join(dir, "build"));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "@harrylabsj/kiwi", version: "0.12.4" }));
+    writeFileSync(join(dir, "packages/merchant-cloud/package.json"), JSON.stringify({ name: "@harrylabsj/kiwi-merchant-cloud", version: "0.12.4" }));
+    // Opaque fixture bytes: tests snapshot integrity, not npm archive validity.
+    writeFileSync(join(dir, "release/npm", rootFile), "synthetic-root-tgz");
+    writeFileSync(join(dir, "release/npm/kiwi-merchant-cloud", cloudFile), "synthetic-cloud-tgz");
+    return dir;
+  }
+  it("records once after cold validation and verifies unchanged exact bytes before signing", () => {
+    const dir = fixture();
+    try {
+      expect(early.indexOf("npm-shipping-artifact-checkpoint.json")).toBeGreaterThan(early.indexOf("verify-npm-shipping-installed.mjs"));
+      expect(late.indexOf("npm checkpoint changed before signing")).toBeLessThan(late.indexOf("build-portfolio-release-index.mjs"));
+      run(block(early), dir);
+      const before = readFileSync(join(dir, "build/npm-shipping-artifact-checkpoint.json"));
+      expect(JSON.parse(before.toString()).files).toHaveLength(2);
+      expect(() => run(block(early), dir)).toThrow();
+      run(block(late), dir);
+      expect(readFileSync(join(dir, "build/npm-shipping-artifact-checkpoint.json"))).toEqual(before);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  it.each(["changed", "extra", "missing", "symlink", "directory", "release-parent", "unsafe-metadata"])("refuses %s at the late checkpoint instead of rebuilding", mode => {
+    const dir = fixture();
+    try {
+      run(block(early), dir);
+      const file = join(dir, "release/npm", rootFile);
+      if (mode === "changed") appendFileSync(file, "changed");
+      if (mode === "extra") writeFileSync(join(dir, "release/npm/extra.tgz"), "extra");
+      if (mode === "missing") rmSync(file);
+      if (mode === "symlink") { renameSync(file, join(dir, "outside-fixture")); symlinkSync(join(dir, "outside-fixture"), file); }
+      if (mode === "directory") { renameSync(join(dir, "release/npm/kiwi-merchant-cloud"), join(dir, "outside-cloud")); symlinkSync(join(dir, "outside-cloud"), join(dir, "release/npm/kiwi-merchant-cloud")); }
+      if (mode === "release-parent") { renameSync(join(dir, "release"), join(dir, "outside-release")); symlinkSync(join(dir, "outside-release"), join(dir, "release")); }
+      if (mode === "unsafe-metadata") writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "@harrylabsj/kiwi", version: "../escape" }));
+      expect(() => run(block(late), dir)).toThrow();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 });

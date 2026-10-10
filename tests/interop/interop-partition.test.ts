@@ -67,8 +67,9 @@ describe("§41 #24 network partition：分区失败不降级、恢复后收敛�
     });
 
     // 0. discovery + 1. RFQ → Offer（分区前的正常推进）。
-    const card = await fetch(`${merchant.url}/.well-known/agent-card.json`);
+    const card = await fetch(`${merchant.url}/.well-known/agent-card.json`, { headers: { connection: "close" } });
     expect(card.status).toBe(200);
+    await card.arrayBuffer();
     const rfq = rfqEnvelope(buyer.negotiationId, () => clock.now());
     const offerReply = await buyer.sendAndAdvance(rfq, merchant.a2aUrl);
     expect(offerReply).not.toBeNull();

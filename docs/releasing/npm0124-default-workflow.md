@@ -17,3 +17,9 @@ R1：build-once中央checkout与quality中央checkout保留完整history，满�
 
 
 R1第三门：真实cloudpack与严格candidate verifier后、签名前调用verify-npm-shipping-installed.mjs。该脚本以同源receipt限定两个确切localtgz，正常npm12 --omit=dev cold安装到自有build路径，再实际CLI/import/合成签名permit+权威receipt正负/guardedSDK root，不提交模型；失败原throw停止，未ignore-scripts。provider fetch在合成runtime探针禁止，state只内存SQLite/自有临时目录，真实安装/包校验须独立验收，本workflow小控不代运行。
+
+
+A410默认顺序：root fullverify receipt成功→独立early npm全部pack/strict/smoke/cold门→同run exact2 regular tgz path/size/SHA256/SRI checkpoint（build中wx）→所有consumer uv/Python/conformance→其他包/index/签名。late不rm已建release、不重npm pack/build；portfolio metadata在最后sourceassert之后才复制。Python/其他包结束后、index/SHA/sign前重核精确两包集合和digest，额外/缺失/软链/改bytes拒；不重新assertSource去豁免consumer已生成状态，不借跨run产物。checkpoint是同UID正常过程证据，不抗同UID恶意，同时保原release全manifest/cosign/五publisher的allchecks与真人门。
+
+
+A410-R1 checkpoint显式检查cwd锚及固定release→npm→cloud每级lstat目录/nonlink。不得仅检查末级regular文件而跟随release父根symlink；原同run/SRI/五publisher/Python门不变。

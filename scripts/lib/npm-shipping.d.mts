@@ -45,3 +45,5 @@ export function controlledHiddenNpmLock(stage: string): {
   size: number;
   sha256: string;
 };
+
+export function assertForeignCheckouts(root: string): string[];

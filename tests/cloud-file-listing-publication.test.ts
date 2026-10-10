@@ -20,7 +20,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadOrCreateA2aSigningIdentity } from "../src/a2a/signing-key.js";
 import { buildBindingClaims } from "../src/trust/binding/claims.js";
-import { publicKeyThumbprint } from "../src/trust/binding/thumbprint.js";
+import { generateKeyPairSync } from "node:crypto";
+import { signCompactJws } from "../src/trust/identity/jws.js";
+import { publicKeyThumbprint, jwkThumbprint } from "../src/trust/binding/thumbprint.js";
 import {
   createFileListingPublicationService,
 } from "../src/cloud/file-listing-publication.js";
@@ -131,6 +133,10 @@ function createFixture(options: { ownerId?: string; enrollmentStatus?: string } 
 
   const identity = loadOrCreateA2aSigningIdentity(dataDir, ORIGIN);
   const thumbprint = publicKeyThumbprint(identity.publicKeyPem);
+  const issuer = generateKeyPairSync("ed25519");
+  const issuerJwk = issuer.publicKey.export({ format: "jwk" });
+  const issuerThumbprint = jwkThumbprint(issuerJwk);
+  const issuerIdentity = { keyid: "catalog-issuer", algorithm: "ed25519" as const, privateKey: issuer.privateKey };
   const stub: StubState = {
     publishCalls: [],
     failSku: {},
@@ -178,9 +184,9 @@ function createFixture(options: { ownerId?: string; enrollmentStatus?: string } 
     });
     return {
       claims,
-      claims_jws: "locally-verified-on-enrollment",
+      claims_jws: signCompactJws(claims as unknown as Record<string, unknown>, issuerIdentity),
       issuer_kid: "catalog-issuer",
-      issuer_thumbprint: `sha256:${"a".repeat(64)}`,
+      issuer_thumbprint: issuerThumbprint,
       governance: { publication_state: "ACTIVE" },
       card_revision: 1,
       card_etag: '"card-v1"',
@@ -192,6 +198,17 @@ function createFixture(options: { ownerId?: string; enrollmentStatus?: string } 
     const parsed = new URL(String(url));
     const method = String(init?.method ?? "GET");
     fetchCalls.push({ method, path: parsed.pathname });
+    if (method === "GET") {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBeNull();
+      expect(headers.get("x-kiwi-binding-jws")).toBeNull();
+      expect(headers.get("x-owner-token")).toBeNull();
+      expect(JSON.stringify([...headers])).not.toContain(GRANT_MARKER);
+      expect(init?.body).toBeUndefined();
+    }
+    if (parsed.pathname === "/v1/issuer-keys" && method === "GET") {
+      return Response.json({ issuer: CATALOG, keys: [{ kid: issuerIdentity.keyid, state: "ACTIVE", jwk: issuerJwk, thumbprint: issuerThumbprint }] });
+    }
     if (parsed.pathname === `/v1/agents/${CATALOG_AGENT}/runtime-binding` && method === "GET") {
       return new Response(JSON.stringify(bindingDocument(stub.bindingId)), { status: 200, headers: { "content-type": "application/json" } });
     }
@@ -281,7 +298,10 @@ describe("file listing publication core", () => {
     const service = newService(fixture);
     const preview = await service.preview([SEL("SKU-A"), SEL("SKU-B", "tools")]);
     expect(fixture.stub.publishCalls).toHaveLength(0);
-    expect(fixture.fetchCalls).toEqual([{ method: "GET", path: `/v1/agents/${CATALOG_AGENT}/runtime-binding` }]);
+    expect(fixture.fetchCalls).toEqual([
+      { method: "GET", path: `/v1/agents/${CATALOG_AGENT}/runtime-binding` },
+      { method: "GET", path: "/v1/issuer-keys" },
+    ]);
     expect(readFileSync(fixture.productsFile, "utf8")).toBe(fixture.productsBytes);
     expect(preview.items).toHaveLength(2);
     for (const item of preview.items) {
@@ -634,5 +654,37 @@ describe("file listing publication core", () => {
     await okService.commit(preview.draft_id, preview.digest);
     const receiptsFile = path.join(ok.dataDir, "listing-publication", "receipts", `${preview.draft_id}.receipts.json`);
     expect(statSync(receiptsFile).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe("A409 fixture trust boundary", () => {
+  it.each(["missing", "bad_thumbprint", "bad_signature"] as const)("issuer %s refuses before publication without credential fallback", async (fault) => {
+    const fixture = createFixture();
+    const original = fixture.fetchImpl;
+    fixture.fetchImpl = (async (...args: Parameters<typeof fetch>) => {
+      const response = await original(...args);
+      const pathname = new URL(String(args[0])).pathname;
+      const document = await response.json() as Record<string, unknown>;
+      if (pathname === "/v1/issuer-keys") {
+        if (fault === "missing") document["keys"] = [];
+        else if (fault === "bad_thumbprint") {
+          const keys = document["keys"] as Record<string, unknown>[];
+          keys[0]!["thumbprint"] = `sha256:${"c".repeat(64)}`;
+        }
+      } else if (fault === "bad_signature" && pathname.endsWith("/runtime-binding")) {
+        const parts = String(document["claims_jws"]).split(".");
+        const signature = parts[2]!;
+        parts[2] = (signature[0] === "A" ? "B" : "A") + signature.slice(1);
+        document["claims_jws"] = parts.join(".");
+      }
+      return Response.json(document, { status: response.status, headers: response.headers });
+    }) as typeof fetch;
+    await expect(newService(fixture).preview([SEL("SKU-A")])).rejects.toMatchObject({ code: "RESPONSE_INVALID" });
+    expect(fixture.stub.publishCalls).toHaveLength(0);
+    expect(fixture.fetchCalls).toEqual([
+      { method: "GET", path: `/v1/agents/${CATALOG_AGENT}/runtime-binding` },
+      { method: "GET", path: "/v1/issuer-keys" },
+    ]);
+    expect(readFileSync(fixture.productsFile, "utf8")).toBe(fixture.productsBytes);
   });
 });

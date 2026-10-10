@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { performance } from 'node:perf_hooks';
-import { mkdtempSync,rmSync,writeFileSync } from 'node:fs';
+import { mkdtempSync,rmSync,writeFileSync,mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { expect,it,vi } from 'vitest';
@@ -49,6 +49,8 @@ it('3-28 real kernel summary projection scale and filter visits; ledger I/O excl
  observations.push({uninstrumentedMs,id:'3-28',events:events.length,candidates:count,handoffs:count,ms:elapsed,filterPredicateVisits:visits,scope:'real getter + real resolved event format; synthetic expanded events via read seam; no disk I/O benchmark'});
  }
  }finally{vi.restoreAllMocks();await k?.close();rmSync(d,{recursive:true,force:true});}
- writeFileSync(path.resolve(process.env.A386_SCALE_OUTPUT ?? '../raw/scale-measurement.json'),JSON.stringify(observations,null,2)+'\n');
+ const output=path.resolve(process.env.A386_SCALE_OUTPUT ?? '../raw/scale-measurement.json');
+ mkdirSync(path.dirname(output),{recursive:true});
+ writeFileSync(output,JSON.stringify(observations,null,2)+'\n');
  for(const o of observations as Array<{id:string;events?:number;filterPredicateVisits?:number}>)if(o.id==='3-28')expect(o.filterPredicateVisits).toBeLessThanOrEqual(o.events! * 3);
 });

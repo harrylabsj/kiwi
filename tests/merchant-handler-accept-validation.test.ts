@@ -18,7 +18,7 @@ import {
 import { contentDigest } from "../src/negotiation/jcs.js";
 import { LedgerStore } from "../src/negotiation/ledger/index.js";
 import type { NegotiationEnvelope } from "../src/negotiation/domain/envelope.js";
-import { finalizeEnvelope } from "../src/negotiation/domain/envelope.js";
+import { finalizeEnvelope, validateWireEnvelope } from "../src/negotiation/domain/envelope.js";
 
 const NOW = "2026-08-09T10:00:00Z";
 const NEGOTIATION_ID = "neg_p2c_001";
@@ -91,7 +91,7 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
   };
 
   /** 走 inquiry → counter_offer → conditional_offer 拿到活跃 conditional。 */
-  const reachConditional = async (): Promise<{ offerId: string; agreedTerms: unknown }> => {
+  const reachConditional = async (): Promise<{ offerId: string; offerMessageId: string; agreedTerms: unknown }> => {
     await run(envelopeFor("inquiry", {}));
     await run(envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
     await run(envelopeFor("offer", { offer_id: "off_buyer", terms: {} }));
@@ -99,6 +99,11 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
       envelopeFor("counter_offer", { offer_id: "off_counter", proposed_terms: {} }),
     );
     const offerId = extractOfferId(cond);
+    const reply = cond.kind === "accepted" && cond.message
+      ? (cond.message.parts[0] as { kind: "data"; data: Record<string, unknown> }).data.knp_envelope as NegotiationEnvelope
+      : undefined;
+    if (reply === undefined) throw new Error("conditional envelope missing");
+    const offerMessageId = reply.message_id;
     // 与 negotiate.ts 相同的确定性求值：quantity=200 命中 conditions
     const conditional = (cond.kind === "accepted" && cond.message
       ? (
@@ -112,7 +117,7 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
       conditional as never,
       { "aggregate.total_quantity": 200 },
     );
-    return { offerId, agreedTerms };
+    return { offerId, offerMessageId, agreedTerms };
   };
 
   it("accept with unknown offer_id is declined, no agreement (P2-C)", async () => {
@@ -188,8 +193,8 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
   });
 
   // ── 审查 P1-07：终态后 withdraw/decline/cancel 必须被拒（不只 accept）─────
-  it("AGREEMENT_REACHED 后 withdraw/decline/cancel（含 offer 级）→ state_conflict（P1-07）", async () => {
-    const { offerId, agreedTerms } = await reachConditional();
+  it("AGREEMENT_REACHED 后合法 negotiation withdraw/decline/cancel 与 offer decline→ state_conflict（P1-07）", async () => {
+    const { offerId, offerMessageId, agreedTerms } = await reachConditional();
     const digest = contentDigest(agreedTerms as never);
     const acc = await run(
       envelopeFor("accept_nonbinding", { type: "accept_nonbinding", offer_id: offerId, terms_digest: digest }),
@@ -197,17 +202,18 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
     expect(acc.kind).toBe("accepted");
 
     const terminalActions: Array<[string, Record<string, unknown>]> = [
-      ["withdraw", { scope: "negotiation" }],
-      ["withdraw", { scope: "offer" }],
-      ["decline", { scope: "negotiation" }],
-      ["decline", { scope: "offer" }],
-      ["cancel", {}],
+      ["withdraw", { type: "withdraw", scope: "negotiation", target_message_id: offerMessageId }],
+      ["decline", { type: "decline", scope: "negotiation", target_message_id: offerMessageId }],
+      ["decline", { type: "decline", scope: "offer", target_message_id: offerMessageId, target_offer_id: offerId }],
+      ["cancel", { type: "cancel" }],
     ];
+    const before = ledger.events(NEGOTIATION_ID).filter(e => e.event_kind === "state_transition");
     for (const [action, payload] of terminalActions) {
-      const result = await run(envelopeFor(action, payload));
+      const result = await run(validateWireEnvelope(envelopeFor(action, payload)));
       expect(result.kind).toBe("declined");
       expect(result.kind === "declined" && result.reasonCode).toBe("state_conflict");
     }
+    expect(ledger.events(NEGOTIATION_ID).filter(e => e.event_kind === "state_transition")).toEqual(before);
     // 链上无任何后置终局事件（withdraw/decline/cancel 的 state_transition 未落账）
     const transitions = ledger
       .events(NEGOTIATION_ID)
@@ -217,6 +223,22 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
     expect(
       transitions.some((t) => ["WITHDRAWN", "DECLINED", "CANCELLED"].includes(t?.to_phase ?? "")),
     ).toBe(false);
+  });
+
+  it("terminal buyer cannot withdraw the merchant-authored offer: exact authorization_failed and no transition", async () => {
+    const { offerId, offerMessageId, agreedTerms } = await reachConditional();
+    const accepted = await run(validateWireEnvelope(envelopeFor("accept_nonbinding", {
+      type: "accept_nonbinding", offer_id: offerId, terms_digest: contentDigest(agreedTerms as never),
+    })));
+    expect(accepted.kind).toBe("accepted");
+    const before = ledger.events(NEGOTIATION_ID).filter(e => e.event_kind === "state_transition");
+    const result = await run(validateWireEnvelope(envelopeFor("withdraw", {
+      type: "withdraw", scope: "offer", target_message_id: offerMessageId, target_offer_id: offerId,
+    })));
+    expect(result.kind).toBe("declined");
+    expect(result.kind === "declined" && result.reasonCode).toBe("authorization_failed");
+    expect(ledger.events(NEGOTIATION_ID).filter(e => e.event_kind === "state_transition")).toEqual(before);
+    expect(before.filter(e => e.state_transition?.to_phase === "AGREEMENT_REACHED")).toHaveLength(1);
   });
 
   it("WITHDRAWN 后再 withdraw/cancel → state_conflict；DECLINED 后再 cancel → state_conflict（P1-07）", async () => {

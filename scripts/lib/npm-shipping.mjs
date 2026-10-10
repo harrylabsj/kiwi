@@ -26,7 +26,15 @@ export const MAX_PLAIN = 256 * 1048576,
 export const sha256 = (bytes) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 export const json = (file) => JSON.parse(readFileSync(file, "utf8"));
 export function git(root, args) {
-  return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trimEnd();
+  const common = execFileSync("git", ["--no-replace-objects", "rev-parse", "--git-common-dir"], { cwd: root, encoding: "utf8" }).trimEnd();
+  const grafts = path.resolve(root, common, "info/grafts");
+  try {
+    lstatSync(grafts);
+    throw new Error("SHIPPING_GIT_GRAFTS_NOT_ALLOWED");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  return execFileSync("git", ["--no-replace-objects", ...args], { cwd: root, encoding: "utf8" }).trimEnd();
 }
 export function inventory(dir, prefix = "") {
   const rows = [];
@@ -260,14 +268,119 @@ export function sourceHash(root, p) {
   }
   return sha256(readFileSync(path.join(root, p)));
 }
+/** Clean, pinned foreign checkouts are inputs to Portfolio, never root npm payload. */
+export function assertForeignCheckouts(root) {
+  if (!lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink())
+    throw new Error("SHIPPING_FOREIGN_ROOT_INVALID");
+  const names = ["shopping-cli", "kiwi-catalog", "hermes-plugin-kiwi"];
+  const present = names.filter((name) => existsSync(path.join(root, name)) || (() => {
+    try { lstatSync(path.join(root, name)); return true; } catch (error) {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    }
+  })());
+  if (!present.length) return [];
+  // Authority metadata must itself be the reviewed, committed root source.
+  const contract = json(path.join(root, CONTRACT));
+  if (contract.format !== "kiwi-npm-shipping-source/1" || contract.source_base !== BASE || contract.reviewed_release !== VERSION)
+    throw new Error("SHIPPING_SOURCE_CONTRACT_CHANGED");
+  if (git(root, ["show", `HEAD:${CONTRACT}`]) !== readFileSync(path.join(root, CONTRACT), "utf8").trim())
+    throw new Error("SHIPPING_UNCOMMITTED_CONTRACT");
+  for (const file of ["portfolio.lock.json", "portfolio-products.json"]) {
+    if (!lstatSync(path.join(root, file)).isFile() || lstatSync(path.join(root, file)).isSymbolicLink())
+      throw new Error("SHIPPING_FOREIGN_AUTHORITY_CHANGED");
+    const bytes = readFileSync(path.join(root, file));
+    if (contract.files.filter((row) => row.path === file && row.sha256 === sha256(bytes)).length !== 1 ||
+        git(root, ["show", `HEAD:${file}`]) !== bytes.toString("utf8").trimEnd())
+      throw new Error("SHIPPING_FOREIGN_AUTHORITY_CHANGED");
+  }
+  const lock = json(path.join(root, "portfolio.lock.json"));
+  const products = json(path.join(root, "portfolio-products.json"));
+  const hermes = products.products.filter((item) => item.id === "hermes-plugin-kiwi");
+  if (hermes.length !== 1) throw new Error("SHIPPING_FOREIGN_PIN_INVALID");
+  const pins = {
+    "shopping-cli": { repository: "harrylabsj/shopping-cli", pin: lock.repositories["shopping-cli"], contract: "shopping_cli/contracts/kiwi-contracts.lock.json" },
+    "kiwi-catalog": { repository: "harrylabsj/kiwi-catalog", pin: lock.repositories["kiwi-catalog"], contract: "kiwi_catalog/contracts/kiwi-contracts.lock.json" },
+    "hermes-plugin-kiwi": { repository: "harrylabsj/hermes-plugin-kiwi", pin: { repository: hermes[0].repository, commit: hermes[0].source_commit } },
+  };
+  for (const name of present) {
+    const dir = path.join(root, name), entry = pins[name];
+    if (!entry.pin || entry.pin.repository !== entry.repository || !/^[0-9a-f]{40}$/.test(entry.pin.commit))
+      throw new Error("SHIPPING_FOREIGN_PIN_INVALID");
+    if (!lstatSync(dir).isDirectory() || lstatSync(dir).isSymbolicLink() || realpathSync(dir) !== path.join(realpathSync(root), name) ||
+        !lstatSync(path.join(dir, ".git")).isDirectory() || lstatSync(path.join(dir, ".git")).isSymbolicLink() ||
+        realpathSync(git(dir, ["rev-parse", "--show-toplevel"])) !== realpathSync(dir) ||
+        realpathSync(git(dir, ["rev-parse", "--absolute-git-dir"])) !== path.join(realpathSync(dir), ".git"))
+      throw new Error("SHIPPING_FOREIGN_ROOT_INVALID");
+    if (git(root, ["ls-files", "-z", "--", name])) throw new Error("SHIPPING_FOREIGN_ROOT_TRACKED");
+    if (git(dir, ["rev-parse", "HEAD"]) !== entry.pin.commit) throw new Error("SHIPPING_FOREIGN_HEAD_CHANGED");
+    // Direct blob/mode checks also detect assume-unchanged and skip-worktree edits.
+    const entries = git(dir, ["ls-tree", "-r", "-z", "HEAD"]).split("\0").filter(Boolean);
+    const allowed = new Set([".git"]);
+    for (const row of entries) {
+      const split = row.indexOf("\t"), [mode, type, oid] = row.slice(0, split).split(" "), relative = row.slice(split + 1);
+      if (split < 0 || type !== "blob" || !["100644", "100755", "120000"].includes(mode) || relative.split("/").some((part) => !part || part === "." || part === ".."))
+        throw new Error("SHIPPING_FOREIGN_TREE_INVALID");
+      allowed.add(relative);
+      let parent = dir;
+      for (const part of relative.split("/").slice(0, -1)) {
+        parent = path.join(parent, part);
+        allowed.add(path.relative(dir, parent));
+        if (!lstatSync(parent).isDirectory() || lstatSync(parent).isSymbolicLink())
+          throw new Error("SHIPPING_FOREIGN_TRACKED_CHANGED");
+      }
+      const file = path.join(dir, relative), stat = lstatSync(file);
+      let bytes;
+      if (mode === "120000") {
+        if (!stat.isSymbolicLink() || !realpathSync(file).startsWith(realpathSync(dir) + path.sep))
+          throw new Error("SHIPPING_FOREIGN_TRACKED_CHANGED");
+        bytes = Buffer.from(readlinkSync(file));
+      } else {
+        if (!stat.isFile() || stat.isSymbolicLink() || ((stat.mode & 0o111) !== 0) !== (mode === "100755") ||
+            !realpathSync(file).startsWith(realpathSync(dir) + path.sep))
+          throw new Error("SHIPPING_FOREIGN_TRACKED_CHANGED");
+        bytes = readFileSync(file);
+      }
+      const digest = createHash("sha1").update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest("hex");
+      if (digest !== oid) throw new Error("SHIPPING_FOREIGN_TRACKED_CHANGED");
+    }
+    // Git does not enumerate empty directories: reject those as well.
+    const scan = (prefix) => {
+      for (const name of readdirSync(path.join(dir, prefix))) {
+        const relative = prefix ? `${prefix}/${name}` : name;
+        if (!allowed.has(relative)) throw new Error("SHIPPING_FOREIGN_DIRTY");
+        if (relative !== ".git" && lstatSync(path.join(dir, relative)).isDirectory()) scan(relative);
+      }
+    };
+    scan("");
+    if (git(dir, ["status", "--porcelain", "--untracked-files=all"]) ||
+        git(dir, ["ls-files", "--others", "--exclude-standard", "-z"]) ||
+        git(dir, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]))
+      throw new Error("SHIPPING_FOREIGN_DIRTY");
+    if (entry.contract) {
+      const declared = json(path.join(dir, entry.contract));
+      if (declared.source_commit !== lock.contract_source_commit || declared.bundle_sha256 !== lock.contract_bundle_sha256)
+        throw new Error("SHIPPING_FOREIGN_CONTRACT_CHANGED");
+    } else if (json(path.join(dir, "plugin.json")).version !== hermes[0].version) {
+      throw new Error("SHIPPING_FOREIGN_VERSION_CHANGED");
+    }
+  }
+  return present;
+}
+function isForeignPath(file, roots) {
+  return roots.some((root) => file === root || file.startsWith(root + "/"));
+}
 export function sourceContract(root) {
+  return sourceContractWithForeign(root, assertForeignCheckouts(root));
+}
+function sourceContractWithForeign(root, foreign) {
   const sourcePaths = [
     ...new Set([
       ...git(root, ["ls-files", "-z"]).split("\0"),
       ...git(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
     ]),
   ]
-    .filter((p) => p && p !== CONTRACT)
+    .filter((p) => p && p !== CONTRACT && !isForeignPath(p, foreign))
     .sort();
   return {
     format: "kiwi-npm-shipping-source/1",
@@ -347,6 +460,9 @@ export function assertRootReceipt(root, source = assertSource(root)) {
   return receipt;
 }
 export function assertNoUnexpectedState(root) {
+  return assertNoUnexpectedStateWithForeign(root, assertForeignCheckouts(root));
+}
+function assertNoUnexpectedStateWithForeign(root, foreign) {
   const ignored = git(root, [
     "ls-files",
     "--others",
@@ -363,6 +479,7 @@ export function assertNoUnexpectedState(root) {
     ignored.some(
       (p) =>
         p &&
+        !isForeignPath(p, foreign) &&
         !p.startsWith("node_modules/") &&
         !p.startsWith("build/") &&
         !p.startsWith("dist/") &&
@@ -374,7 +491,8 @@ export function assertNoUnexpectedState(root) {
     throw new Error("SHIPPING_UNTRACKED_STATE");
 }
 export function assertSource(root) {
-  assertNoUnexpectedState(root);
+  const foreign = assertForeignCheckouts(root);
+  assertNoUnexpectedStateWithForeign(root, foreign);
   const contract = json(path.join(root, CONTRACT));
   if (
     contract.format !== "kiwi-npm-shipping-source/1" ||
@@ -392,10 +510,10 @@ export function assertSource(root) {
     git(root, ["status", "--porcelain", "--untracked-files=normal"])
       .split("\n")
       .filter(Boolean)
-      .some((row) => row.slice(3) !== "supply-chain.sbom.json")
+      .some((row) => row.slice(3) !== "supply-chain.sbom.json" && !isForeignPath(row.slice(3), foreign))
   )
     throw new Error("SHIPPING_SOURCE_DIRTY");
-  const current = sourceContract(root);
+  const current = sourceContractWithForeign(root, foreign);
   // Node binaries differ by platform; npm code and every tracked source remain exact.
   for (const k of ["node", "npm", "npm_cli_sha256", "npm_code_sha256"])
     if (current.tool[k] !== contract.tool[k]) throw new Error(`SHIPPING_TOOL_CHANGED ${k}`);

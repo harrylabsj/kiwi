@@ -246,6 +246,55 @@ jobs:
           npm ci
           node scripts/verify-npm-shipping-source.mjs
 
+      # Finish root-source npm validation before consumer installs create local files.
+      # Portfolio metadata is copied only later, after the last source guard.
+      - name: Build and verify npm candidates before consumer installs
+        run: |
+          set -euo pipefail
+          rm -rf release
+          mkdir -p release/npm/kiwi-merchant-cloud release/kiwi-catalog release/shopping-cli release/contracts release/sbom release/dsh-plugin release/hermes release/workbuddy
+          npm pack --pack-destination release/npm
+          node scripts/build-npm-shipping.mjs
+          node scripts/smoke-cloud-artifact.mjs --json
+          node scripts/build-cloud-package.mjs
+          npm pack ./build/cloud-package --pack-destination release/npm/kiwi-merchant-cloud
+          npm run verify:cloud-release-candidate
+          node scripts/verify-npm-shipping-installed.mjs
+          # Same-run process evidence after the strict/cold gates, not a new publisher.
+          node <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const path = require('node:path');
+          for (const declared of [process.cwd(), 'release', 'release/npm', 'release/npm/kiwi-merchant-cloud']) {
+            const anchor = fs.lstatSync(declared);
+            if (!anchor.isDirectory() || anchor.isSymbolicLink()) throw new Error('npm checkpoint declared directory is not regular');
+          }
+          const specs = [
+            { metadata: 'package.json', name: '@harrylabsj/kiwi', dir: 'npm' },
+            { metadata: 'packages/merchant-cloud/package.json', name: '@harrylabsj/kiwi-merchant-cloud', dir: 'npm/kiwi-merchant-cloud' },
+          ];
+          const records = specs.map(spec => {
+            const pkg = JSON.parse(fs.readFileSync(spec.metadata, 'utf8'));
+            if (pkg.name !== spec.name || typeof pkg.version !== 'string') throw new Error('npm checkpoint metadata mismatch');
+            const filename = `${pkg.name.replace(/^@/, '').replace('/', '-')}-${pkg.version}.tgz`;
+            if (!/^[a-z0-9][a-z0-9._-]*\.tgz$/.test(filename)) throw new Error('unsafe npm checkpoint basename');
+            const dir = path.join('release', spec.dir);
+            const dirStat = fs.lstatSync(dir);
+            if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) throw new Error('npm checkpoint directory is not regular');
+            const names = fs.readdirSync(dir).sort();
+            const expected = spec.dir === 'npm' ? [filename, 'kiwi-merchant-cloud'].sort() : [filename];
+            if (JSON.stringify(names) !== JSON.stringify(expected)) throw new Error('npm checkpoint package set mismatch');
+            const relative = `${spec.dir}/${filename}`;
+            const file = path.join('release', relative);
+            const stat = fs.lstatSync(file);
+            if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('npm checkpoint tarball is not regular');
+            if (!Number.isSafeInteger(stat.size) || stat.size <= 0 || stat.size >= 100000000) throw new Error('npm checkpoint project size bound');
+            const bytes = fs.readFileSync(file);
+            return { path: relative, size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), integrity: `sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}` };
+          });
+          fs.writeFileSync('build/npm-shipping-artifact-checkpoint.json', JSON.stringify({ format: 'kiwi-npm-artifact-checkpoint/1', files: records }, null, 2) + '\n', { flag: 'wx' });
+          NODE
+
       - name: Kiwi-catalog locked install, contract lock, and deterministic tests
         working-directory: kiwi-catalog
         run: |
@@ -279,29 +328,19 @@ jobs:
             "$GITHUB_WORKSPACE/contracts/conformance/python-service/run.py" \
             kiwi_catalog_conformance:apps shopping_cli_conformance:apps
 
-      # Build the release artifacts exactly once. The npm pack below uses the
-      # dist/ produced by the kiwi full verify step; the publish job downloads
-      # this immutable bundle and NEVER rebuilds.
+      # npm artifacts were validated once above. Preserve them while assembling
+      # the remaining portfolio after all consumer verification gates. Publishers
+      # download this same immutable run artifact and NEVER rebuild.
       - name: Build release candidates and evidence once
         env:
           CONTRACT_SOURCE_COMMIT: ${{ steps.lock.outputs.contract_source_commit }}
           HERMES_PLUGIN_SHA: ${{ steps.products.outputs.hermes_plugin_sha }}
         run: |
           set -euo pipefail
-          rm -rf release
-          mkdir -p release/npm/kiwi-merchant-cloud release/kiwi-catalog release/shopping-cli release/contracts release/sbom release/dsh-plugin release/hermes release/workbuddy
-
           cp portfolio.lock.json release/portfolio.lock.json
           cp portfolio-products.json release/portfolio-products.json
           node scripts/verify-portfolio-products.mjs --require-external --hermes-root hermes-plugin-kiwi
 
-          npm pack --pack-destination release/npm
-          node scripts/build-npm-shipping.mjs
-          node scripts/smoke-cloud-artifact.mjs --json
-          node scripts/build-cloud-package.mjs
-          npm pack ./build/cloud-package --pack-destination release/npm/kiwi-merchant-cloud
-          npm run verify:cloud-release-candidate
-          node scripts/verify-npm-shipping-installed.mjs
           (cd integrations/plugins/kiwi-dsh-plugin && npm pack --pack-destination "$GITHUB_WORKSPACE/release/dsh-plugin")
 
           WB_EXPERT_VERSION="$(node -p "require('./integrations/hosts/workbuddy/kiwi-procurement-expert/.codebuddy-plugin/plugin.json').version")"
@@ -317,6 +356,43 @@ jobs:
 
           (cd kiwi-catalog && uv sync --locked --extra api --extra dev && python -m build --sdist --wheel --outdir ../release/kiwi-catalog)
           (cd shopping-cli && uv sync --locked --extra api --extra dev && python -m build --sdist --wheel --outdir ../release/shopping-cli)
+
+          # Recheck the early exact npm bytes after all consumer/package work.
+          # No rebuild/source waiver; same-UID malicious replacement is not claimed.
+          node <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const path = require('node:path');
+          for (const declared of [process.cwd(), 'release', 'release/npm', 'release/npm/kiwi-merchant-cloud']) {
+            const anchor = fs.lstatSync(declared);
+            if (!anchor.isDirectory() || anchor.isSymbolicLink()) throw new Error('npm checkpoint declared directory is not regular');
+          }
+          const specs = [
+            { metadata: 'package.json', name: '@harrylabsj/kiwi', dir: 'npm' },
+            { metadata: 'packages/merchant-cloud/package.json', name: '@harrylabsj/kiwi-merchant-cloud', dir: 'npm/kiwi-merchant-cloud' },
+          ];
+          const records = specs.map(spec => {
+            const pkg = JSON.parse(fs.readFileSync(spec.metadata, 'utf8'));
+            if (pkg.name !== spec.name || typeof pkg.version !== 'string') throw new Error('npm checkpoint metadata mismatch');
+            const filename = `${pkg.name.replace(/^@/, '').replace('/', '-')}-${pkg.version}.tgz`;
+            if (!/^[a-z0-9][a-z0-9._-]*\.tgz$/.test(filename)) throw new Error('unsafe npm checkpoint basename');
+            const dir = path.join('release', spec.dir);
+            const dirStat = fs.lstatSync(dir);
+            if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) throw new Error('npm checkpoint directory is not regular');
+            const names = fs.readdirSync(dir).sort();
+            const expected = spec.dir === 'npm' ? [filename, 'kiwi-merchant-cloud'].sort() : [filename];
+            if (JSON.stringify(names) !== JSON.stringify(expected)) throw new Error('npm checkpoint package set mismatch');
+            const relative = `${spec.dir}/${filename}`;
+            const file = path.join('release', relative);
+            const stat = fs.lstatSync(file);
+            if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('npm checkpoint tarball is not regular');
+            if (!Number.isSafeInteger(stat.size) || stat.size <= 0 || stat.size >= 100000000) throw new Error('npm checkpoint project size bound');
+            const bytes = fs.readFileSync(file);
+            return { path: relative, size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), integrity: `sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}` };
+          });
+          const checkpoint = JSON.parse(fs.readFileSync('build/npm-shipping-artifact-checkpoint.json', 'utf8'));
+          if (checkpoint.format !== 'kiwi-npm-artifact-checkpoint/1' || JSON.stringify(checkpoint.files) !== JSON.stringify(records)) throw new Error('npm checkpoint changed before signing');
+          NODE
 
           # Build a signed inventory covering all eleven product forms. The two
           # external/private products are recorded with their immutable source

@@ -4,7 +4,7 @@ import { generateA2aSigningIdentity, toJwsSigningIdentity } from "../src/a2a/sig
 import { CatalogClient, runtimePublicKey } from "../src/cloud/catalog-client.js";
 import { buildBindingClaims, type BuildBindingClaimsInput } from "../src/trust/binding/claims.js";
 import { jwkThumbprint } from "../src/trust/binding/thumbprint.js";
-import { signCompactJws } from "../src/trust/identity/jws.js";
+import { signCompactJws, verifyCompactJws } from "../src/trust/identity/jws.js";
 
 const CATALOG = "https://catalog.example";
 const ORIGIN = "https://shop.example";
@@ -45,14 +45,16 @@ function setup(overrides: Partial<BuildBindingClaimsInput> = {}) {
     card_revision: null,
     card_etag: null,
   };
-  const fetchImpl = (async (url: string | URL) => {
+  const requests: { url: string; method: string }[] = [];
+  const fetchImpl = (async (url: string | URL, init?: Parameters<typeof fetch>[1]) => {
+    requests.push({ url: String(url), method: init?.method ?? "GET" });
     const value = String(url).endsWith("/issuer-keys")
       ? { issuer: CATALOG, keys: [{ kid: issuer.keyid, state: "ACTIVE", jwk, thumbprint: issuerThumbprint }] }
       : { binding_id: claims.binding_id, binding_version: claims.binding_version, key_thumbprint: keyThumbprint, binding_claim: bindingClaim };
     return new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const client = new CatalogClient({ baseUrl: CATALOG, fetchImpl, now: () => NOW });
-  return { client, runtime, keyThumbprint };
+  return { client, runtime, keyThumbprint, claims, bindingClaim, issuerPublicKey: issuerPair.publicKey, requests };
 }
 
 async function bind(client: CatalogClient, runtime: ReturnType<typeof setup>["runtime"]) {
@@ -76,8 +78,27 @@ describe("enrollment binding declaration trust", () => {
     expect(result).toMatchObject({ bindingId: "binding_demo", bindingVersion: 1, keyThumbprint });
   });
 
+  it("rejects a cryptographically valid but expired declaration before returning or using binding authority", async () => {
+    const fixture = setup({ issuedAt: new Date(NOW.getTime() - 60_000).toISOString(), ttlSeconds: 30 });
+    // Independent signature proof: expiry is the only failing authority condition.
+    const verified = verifyCompactJws(fixture.bindingClaim.claims_jws, fixture.issuerPublicKey);
+    expect(JSON.parse(verified.payload.toString("utf8"))).toEqual(fixture.claims);
+    expect(Date.parse(fixture.claims.expires_at)).toBeLessThan(NOW.getTime());
+    const before = JSON.stringify(fixture.bindingClaim);
+    let returnedBinding: unknown;
+    await expect(bind(fixture.client, fixture.runtime).then(value => { returnedBinding = value; }))
+      .rejects.toMatchObject({ code: "RESPONSE_INVALID", message: "Catalog signed binding is not current" });
+    expect(returnedBinding).toBeUndefined();
+    expect(JSON.stringify(fixture.bindingClaim)).toBe(before);
+    // Only the requested bind and authenticated-key read occurred: no publication,
+    // activation, retry, owner-token fallback or follow-up mutation was attempted.
+    expect(fixture.requests).toEqual([
+      { url: `${CATALOG}/v1/agents/${AGENT}/runtime-bindings`, method: "POST" },
+      { url: `${CATALOG}/v1/issuer-keys`, method: "GET" },
+    ]);
+  });
+
   it.each([
-    ["expired declaration", { issuedAt: new Date(NOW.getTime() - 60_000).toISOString(), ttlSeconds: 30 }, "expires_at"],
     ["wrong agent", { agentId: "cagt_other" }, "agent_id"],
     ["wrong Runtime key id", { keyId: "other-runtime-key" }, "key_id"],
     ["wrong service epoch", { serviceEpoch: 2 }, "service_epoch"],
