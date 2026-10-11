@@ -1,9 +1,11 @@
+import {tmpdir} from "node:os";
+import path from "node:path";
 import {it,expect} from 'vitest';
 import {DatabaseSync} from 'node:sqlite';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {TaskApprovalStore} from '../src/buyer-core/store.js';
 import {KiwiBuyerService} from '../src/buyer-core/service.js';
-function fixture(expiry:string){const dir=mkdtempSync('/private/tmp/a422-approval-dates-');const dbPath=dir+'/approval.sqlite';
+function fixture(expiry:string){const dir=mkdtempSync(path.join(tmpdir(),"a422-approval-dates-"));const dbPath=dir+'/approval.sqlite';
  const store=new TaskApprovalStore({dbPath});const db=new DatabaseSync(dbPath);store.createTask({task_id:'task-date',task_kind:'request_quotes',status:'succeeded',idempotency_key:'date',created_at:'2026-11-01T00:00:00Z',updated_at:'2026-11-01T00:00:00Z',expires_at:expiry,resumable:true,payload:'{}'});store.setApproval('task-date',{approval_id:'approval-date',task_id:'task-date',action:'handoff',status:'pending',candidate_digest:'exact-candidate',expires_at:expiry});const service=new KiwiBuyerService({store,principal:'company:date',buyerAgentId:'buyer:date',sessionId:'session:date',now:()=> '2026-11-01T00:00:00Z',delegationPolicy:{policy_id:'date-policy',version:'1.0',principal:'company:date',expires_at:'2099-01-01T00:00:00Z',actions:{handoff:{mode:'ask'}},limits:{}}});return{store,service,db,close:()=>{db.close();store.close();rmSync(dir,{recursive:true,force:true});}};}
 it.each(['2026-11-01T20:00:00+15:00','November 1, 2026 05:00:00 GMT'])('H1R2 admitted finite legacy %s keeps server authorization and captured decision instant',expiry=>{const x=fixture(expiry);try{x.service.approve({approval_id:'approval-date'});const saved=x.store.getApproval('approval-date')!;expect(saved.status).toBe('approved');expect(saved.decided_at).toBe('2026-11-01T00:00:00.000Z');expect(saved.expires_at).toBe(expiry);expect(JSON.parse(saved.authorization_json!).subject.buyer_agent_id).toBe('buyer:date');}finally{x.close();}});
 it('H1R2 original equality boundary is allowed at captured decision time',()=>{const x=fixture('2026-11-01T00:00:00Z');try{x.service.approve({approval_id:'approval-date'});expect(x.store.getApproval('approval-date')?.status).toBe('approved');}finally{x.close();}});
