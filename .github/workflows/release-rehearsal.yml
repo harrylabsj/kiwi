@@ -12,7 +12,7 @@ jobs:
   build-once:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: lock
         name: Read portfolio lock
         run: |
@@ -30,13 +30,13 @@ jobs:
           }
           console.log(`contract_source_commit=${lock.contract_source_commit}`);
           NODE
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: harrylabsj/kiwi-catalog
           ref: ${{ steps.lock.outputs.kiwi_catalog_sha }}
           path: kiwi-catalog
           persist-credentials: false
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: harrylabsj/shopping-cli
           ref: ${{ steps.lock.outputs.shopping_cli_sha }}
