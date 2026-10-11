@@ -247,8 +247,10 @@ export async function requestViaAddress(
           : new PinnedFetchError(`实例请求失败（${url.hostname}）：${err.message}`),
       );
     });
-    if (typeof body === "string") req.write(body);
-    req.end();
+    // A finite final body lets Node compute Content-Length in UTF-8 bytes.
+    // Writing first would select chunked framing, which strict JSON peers reject.
+    if (typeof body === "string") req.end(body);
+    else req.end();
   });
 }
 
