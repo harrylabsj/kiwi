@@ -62,7 +62,10 @@ export function parsePyPiFilename(filename) {
     const parts = base.split("-");
     // Wheel filename layout: {distribution}-{version}(-{build})?-{python}-{abi}-{platform}.whl
     if (parts.length < 5) throw new Error(`unrecognized wheel filename: ${filename}`);
-    const name = parts.slice(0, parts.length - 4).join("-").replace(/_/g, "-");
+    const name = parts
+      .slice(0, parts.length - 4)
+      .join("-")
+      .replace(/_/g, "-");
     const version = parts[parts.length - 4];
     if (!PEP440_VERSION.test(version)) throw new Error(`unrecognized wheel version in ${filename}`);
     return { name, version, kind: "wheel" };
@@ -96,9 +99,7 @@ export function parseNpmTarballFilename(filename) {
     throw new Error(`unrecognized npm tarball version in ${filename}`);
   }
   const namePart = base.slice(0, idx);
-  const name = namePart.includes("-")
-    ? `@${namePart.replace("-", "/")}`
-    : namePart;
+  const name = namePart.includes("-") ? `@${namePart.replace("-", "/")}` : namePart;
   return { name, version };
 }
 
@@ -176,7 +177,11 @@ export async function withPropagationRetry(
 /** npm publish 后版本尚未传播（E404）→ 可重试；其余错误 fail-closed。 */
 function isNpmNotYetPublishedError(error) {
   const text = String(error?.stderr ?? "") + String(error?.message ?? "");
-  return text.includes("E404") || text.includes("No match found") || text.includes("is not in this registry");
+  return (
+    text.includes("E404") ||
+    text.includes("No match found") ||
+    text.includes("is not in this registry")
+  );
 }
 
 /** PyPI release JSON 在 publish 后短暂 404 → 可重试；其余错误 fail-closed。 */
@@ -241,9 +246,26 @@ export async function npmRegistryMetadata(name, version) {
         { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
       );
       const data = JSON.parse(stdout);
-      const tarball = data["dist.tarball"] ?? data.dist?.tarball;
-      const integrity = data["dist.integrity"] ?? data.dist?.integrity;
-      const resolvedVersion = data.version;
+      // 官方 npm 对多字段精确版本查询可能返回【单元素数组】，字段为
+      // 扁平点键；旧形状为【对象】（扁平点键或嵌套 dist）。规范化只接受：
+      // 对象，或恰好一个对象元素的数组；空/多元素/标量/嵌套数组一律拒绝；
+      // 缺失必需字段维持原 fail-closed 报文与立即失败语义（不含 E404，
+      // 不进入传播重试）。
+      let record = data;
+      if (Array.isArray(data)) {
+        if (data.length !== 1) {
+          throw new Error(
+            `npm view returned ${data.length} metadata records for ${name}@${version}; expected exactly one`,
+          );
+        }
+        record = data[0];
+      }
+      if (record === null || typeof record !== "object" || Array.isArray(record)) {
+        throw new Error(`npm view returned malformed metadata record for ${name}@${version}`);
+      }
+      const tarball = record["dist.tarball"] ?? record.dist?.tarball;
+      const integrity = record["dist.integrity"] ?? record.dist?.integrity;
+      const resolvedVersion = record.version;
       if (!tarball || !integrity || !resolvedVersion) {
         throw new Error(`npm view returned incomplete metadata for ${name}@${version}`);
       }
@@ -271,11 +293,10 @@ export async function pypiMetadata(name, version) {
 
 /** Read the package/package.json inside an npm tarball. */
 export function npmTarballPackageJson(tarballPath) {
-  const stdout = execFileSync(
-    "tar",
-    ["-xOf", tarballPath, "package/package.json"],
-    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-  );
+  const stdout = execFileSync("tar", ["-xOf", tarballPath, "package/package.json"], {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
   const pkg = JSON.parse(stdout);
   if (!pkg.name || !pkg.version) {
     throw new Error(`invalid package.json in ${basename(tarballPath)}`);
