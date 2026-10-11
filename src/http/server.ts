@@ -27,7 +27,7 @@
 import { createServer, type Server } from "node:http";
 import { timingSafeEqual as timingSafeEqualBuffer } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { KiwiBuyerService, type AuthorizationRecord } from "../buyer-core/service.js";
+import { KiwiBuyerService } from "../buyer-core/service.js";
 import { McpError } from "../buyer-core/errors.js";
 import { buildMerchantUcpProfile } from "../merchant/ucp-profile.js";
 import type { MerchantOpsService } from "../merchant/ops.js";
@@ -192,6 +192,7 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
     {
       method: "POST", path: "/tasks/:id/negotiate", handler: async (b, p, res) => {
         try {
+          if (b.action !== undefined && b.action !== "counter_offer" && b.action !== "clarification") throw new McpError("invalid_params", "invalid negotiation action");
           const result = await service.negotiate({
             task_id: p.id ?? "",
             action: b.action === "clarification" ? "clarification" : "counter_offer",
@@ -302,9 +303,9 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
     {
       method: "POST", path: "/approvals/:id/approve", handler: async (b, p, res) => {
         try {
-          service.approveApproval({
+          service.approve({
             approval_id: p.id ?? "",
-            authorization: (b.authorization ?? {}) as AuthorizationRecord,
+            ...(typeof b.note === "string" ? { note: b.note } : {}),
           });
           send(res, 200, { ok: true });
         } catch (e) { sendError(res, e); }

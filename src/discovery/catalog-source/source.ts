@@ -1,3 +1,4 @@
+import { createRequestBudget, finishRequestResponse, type ReadRequestOptions } from "../../net/request-budget.js";
 /**
  * Copyright 2026 harrylabsj
  *
@@ -142,15 +143,16 @@ export class ShoppingCliCatalogSource {
   }
 
   /** 核心请求：超时 / HTTP / 网络失败统一映射为 CatalogSourceError。 */
-  private async getJson(requestPath: string): Promise<unknown> {
+  private async getJson(requestPath: string, options: ReadRequestOptions = {}): Promise<unknown> {
     const fetchImpl = this.deps.fetchImpl ?? globalThis.fetch;
     const timeoutMs = this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const url = `${this.baseUrl}${requestPath}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let response: Response;
+    const budget = createRequestBudget(timeoutMs, options);
+    const controller = budget.controller;
+    let response: Response | undefined;
     let raw: unknown;
     try {
+      controller.signal.throwIfAborted();
       try {
         response = await fetchImpl(url, {
           // 出站加固：绝不跟随重定向（3xx 目标不经过校验，且可能转发 Bearer 头）。
@@ -205,7 +207,8 @@ export class ShoppingCliCatalogSource {
     } finally {
       // 审查 P2-02：所有路径（fetch 拒绝 / redirect / 非 2xx / body 读失败）
       // 都清理超时 timer——此前只有 body 读的 finally 清理。
-      clearTimeout(timer);
+      finishRequestResponse(response, controller);
+      budget.dispose();
     }
     return raw;
   }
@@ -214,10 +217,10 @@ export class ShoppingCliCatalogSource {
    * 搜索候选（设计 §10.1）。响应信封 `{results: […]}`，逐个元素按 schema 校验；
    * 任何元素违规 → contract_violation。
    */
-  async searchCandidates(query: CatalogSearchQuery = {}): Promise<CandidateAgent[]> {
+  async searchCandidates(query: CatalogSearchQuery = {}, options: ReadRequestOptions = {}): Promise<CandidateAgent[]> {
     const qs = buildSearchQuery(query);
     const raw = await this.getJson(
-      `/v1/agent-catalog/agents/search${qs.length > 0 ? `?${qs}` : ""}`,
+      `/v1/agent-catalog/agents/search${qs.length > 0 ? `?${qs}` : ""}`, options,
     );
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
       throw new CatalogSourceError(
@@ -238,12 +241,12 @@ export class ShoppingCliCatalogSource {
   /**
    * 按 catalog_agent_id 取单个候选。响应信封 `{catalog_agent: …}`（契约 §5）。
    */
-  async getCandidate(catalogAgentId: string): Promise<CandidateAgent> {
+  async getCandidate(catalogAgentId: string, options: ReadRequestOptions = {}): Promise<CandidateAgent> {
     if (typeof catalogAgentId !== "string" || catalogAgentId.length === 0) {
       throw new CatalogSourceError("invalid_input", "catalogAgentId must be a non-empty string");
     }
     const raw = await this.getJson(
-      `/v1/agent-catalog/agents/${encodeURIComponent(catalogAgentId)}`,
+      `/v1/agent-catalog/agents/${encodeURIComponent(catalogAgentId)}`, options,
     );
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
       throw new CatalogSourceError(

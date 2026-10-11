@@ -493,7 +493,7 @@ describe("A2A client URL 安全（SSRF 防护）", () => {
           throw new Error("ENOTFOUND");
         },
       }),
-    ).rejects.toMatchObject({ kind: "unsafe_target" });
+    ).rejects.toMatchObject({ kind: "network" });
   });
 
   it("classifies IPv4/IPv6 reserved ranges", () => {

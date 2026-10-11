@@ -224,7 +224,7 @@ export class BuyerTaskStore {
     }
     const now = this.now();
     const taskId = `task_${uuidv7()}`;
-    this.db.exec("BEGIN");
+    this.db.exec("BEGIN IMMEDIATE");
     try {
       // Content-addressed idempotency: a retried create with the same key is a
       // replay — return the existing task instead of duplicating it.
@@ -314,7 +314,7 @@ export class BuyerTaskStore {
     selected_candidate_id?: string;
   }): BuyerTask {
     const now = this.now();
-    this.db.exec("BEGIN");
+    this.db.exec("BEGIN IMMEDIATE");
     try {
       const existing = this.eventByIdempotencyKey(input.idempotency_key);
       if (existing !== undefined) {
@@ -384,7 +384,7 @@ export class BuyerTaskStore {
     idempotencyKey: string,
   ): BuyerTask {
     const now = this.now();
-    this.db.exec("BEGIN");
+    this.db.exec("BEGIN IMMEDIATE");
     try {
       if (this.eventByIdempotencyKey(idempotencyKey) === undefined) {
         const task = this.getTask(taskId);
@@ -864,7 +864,7 @@ export class BuyerTaskStore {
     idempotency_key: string;
   }): ConsultationLink {
     const now = this.now();
-    this.db.exec("BEGIN");
+    this.db.exec("BEGIN IMMEDIATE");
     let replayCommitted = false;
     try {
       // review 2-12（A321 返修）：幂等命中分支在 COMMIT 后**立即终止**——

@@ -39,8 +39,8 @@ import {
   newNegotiationId,
   newOfferId,
 } from "../negotiation/domain/identifiers.js";
-import { finalizeEnvelope } from "../negotiation/domain/envelope.js";
-import { validateConditionalOffer } from "../negotiation/domain/objects.js";
+import { finalizeEnvelope, validateWireEnvelope, type NegotiationEnvelope } from "../negotiation/domain/envelope.js";
+import { validateConditionalOffer, validateAcceptedNonbindingAgreement } from "../negotiation/domain/objects.js";
 import { contentDigest } from "../negotiation/jcs.js";
 import { evaluateConditionalOffer } from "../negotiation/condition/evaluator.js";
 import { detectLocale, type KiwiLocale } from "../i18n.js";
@@ -249,13 +249,19 @@ function acceptEnvelope(negotiationId: string, now: () => string, inReplyTo: str
   });
 }
 
-function extractKnpEnvelope(task: { status?: { message?: { parts?: Array<{ kind: string; data?: Record<string, unknown> }> } } } | undefined) {
-  const message = task?.status?.message;
-  if (message === undefined) return null;
-  for (const part of message.parts ?? []) {
-    if (part.kind === "data" && part.data?.["knp_envelope"]) return part.data["knp_envelope"] as Record<string, unknown>;
+function extractKnpEnvelope(task: { status?: { message?: { parts?: Array<{ kind: string; data?: Record<string, unknown> }> } } } | undefined, request: NegotiationEnvelope): NegotiationEnvelope | null {
+  let found: NegotiationEnvelope | null = null;
+  for (const part of task?.status?.message?.parts ?? []) {
+    if (part.kind !== "data" || !part.data || !Object.hasOwn(part.data, "knp_envelope")) continue;
+    if (found !== null) throw new Error("ambiguous merchant KNP reply");
+    const wire = validateWireEnvelope(part.data.knp_envelope);
+    if (wire.actor !== "merchant" || wire.negotiation_id !== request.negotiation_id ||
+        wire.capability !== request.capability || wire.in_reply_to !== request.message_id) {
+      throw new Error("merchant reply is not bound to this request");
+    }
+    found = wire;
   }
-  return null;
+  return found;
 }
 
 function extractAgreement(task: { artifacts?: Array<{ parts?: Array<{ kind: string; data?: Record<string, unknown> }> }> } | undefined) {
@@ -299,7 +305,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
       // 商家要求 bearer 时，Agent Card 抓取也必须带 Authorization 头。
       ...(bearer !== undefined ? { headers: { Authorization: `Bearer ${bearer}` } } : {}),
     });
-    const resolved = await discovery.resolveViaCatalog();
+    const resolved = await discovery.resolveViaCatalog({}, { catalogAgentId: options.catalogAgentId, limit: 1 });
     if (resolved.length === 0) {
       return { ok: false, negotiationId, catalogAgentId: "", agentCardUrl: "", steps, error: "catalog 里没有可发现的 agent" };
     }
@@ -350,7 +356,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     const rfq = rfqEnvelope(negotiationId, now, quantity, sku, deliveryBefore);
     steps.push(`rfq`);
     const offerRes = await send(rfq);
-    const offer = extractKnpEnvelope(offerRes.task);
+    const offer = extractKnpEnvelope(offerRes.task, rfq);
     if (offer === null || offer.action !== "offer") {
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 offer 回复" };
     }
@@ -373,7 +379,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     );
     steps.push(`counter_offer`);
     const condRes = await send(counter);
-    const conditional = extractKnpEnvelope(condRes.task);
+    const conditional = extractKnpEnvelope(condRes.task, counter);
     if (conditional === null || conditional.action !== "conditional_offer") {
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 conditional_offer 回复" };
     }
@@ -394,6 +400,10 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
         error: `商家 conditional_offer 未通过冻结校验：${err instanceof Error ? err.message : String(err)}`,
       };
     }
+    if (conditionalPayload.responding_to_offer_id !== undefined &&
+        conditionalPayload.responding_to_offer_id !== (counter.payload as { offer_id: string }).offer_id) {
+      throw new Error("conditional offer is not bound to the buyer proposal");
+    }
     steps.push(`conditional_offer ${conditionalPayload.offer_id ?? ""}`);
 
     // 5. 确定性求值：真实成交价来自**求值后**的 terms——条件未命中时是
@@ -402,44 +412,24 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     const agreedTerms = evaluateConditionalOffer(conditionalPayload, {
       "aggregate.total_quantity": quantity,
     });
-    const dealPriceMinor = (agreedTerms as {
-      items?: Array<{ unit_price?: { amount_minor?: number } }>;
-    })?.items?.[0]?.unit_price?.amount_minor;
-
-    // review 2-6（A316 校准）：求值后条款必须有**定价证据**——item 缺
-    // unit_price（undefined）不得跳过预算核验照发 accept（A314 实证缺价
-    // 仍 ok:true）。所有 item 都带安全整数 minor 才允许进入预算判定。
-    const agreedItems =
-      (agreedTerms as { items?: Array<{ unit_price?: { amount_minor?: unknown } }> }).items ?? [];
-    const allItemsPriced = agreedItems.every((it) => {
-      const minor = it.unit_price?.amount_minor;
-      return typeof minor === "number" && Number.isSafeInteger(minor);
-    });
-    if (!allItemsPriced) {
-      return {
-        ok: false,
-        negotiationId,
-        catalogAgentId,
-        agentCardUrl,
-        steps,
-        error: "商家成交条款缺定价证据（item 无整数 unit_price），拒绝 accept",
-      };
-    }
-
-    // 预算硬约束：成交价超过买方最高可接受单价 → 拒绝 accept，绝不成交超预算
-    // 协议（历史 bug：买方预算 8900、商家 8999 仍 accept）。缺省用还价目标兜底。
+    // This API quotes one SKU/quantity and maxPriceMinor is a unit-price ceiling, not a total budget.
+    // Do not invent multi-item purchasing semantics or let an empty/partial term set imply a deal.
+    const agreedItems = agreedTerms.items ?? [];
+    const item = agreedItems[0];
     const priceCeiling = options.maxPriceMinor ?? counterPriceMinor;
-    if (dealPriceMinor !== undefined && dealPriceMinor > priceCeiling) {
-      return {
-        ok: false,
-        negotiationId,
-        catalogAgentId,
-        agentCardUrl,
-        steps,
-        error:
-          `商家成交价 ${(dealPriceMinor / 100).toFixed(2)} 元/件 超过买方预算上限 ` +
-          `${(priceCeiling / 100).toFixed(2)} 元/件，已拒绝成交`,
-      };
+    if (agreedItems.length !== 1 || item === undefined || item.sku !== sku ||
+        item.quantity?.value !== quantity || item.quantity?.unit !== "piece" ||
+        item.unit_price?.currency !== NEGOTIATE_CURRENCY ||
+        !Number.isSafeInteger(item.unit_price?.amount_minor) ||
+        (item.unit_price?.amount_minor ?? -1) < 0 || !Number.isSafeInteger(priceCeiling) || priceCeiling < 0) {
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps,
+        error: "商家成交条款缺定价证据或不匹配当前单SKU/quantity/unit/currency询价（不支持多item），拒绝 accept" };
+    }
+    const dealPriceMinor = item.unit_price!.amount_minor;
+    if (dealPriceMinor > priceCeiling) {
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps,
+        error: `商家成交价 ${(dealPriceMinor / 100).toFixed(2)} 元/件 超过买方预算上限 ` +
+          `${(priceCeiling / 100).toFixed(2)} 元/件，已拒绝成交` };
     }
 
     // 6. AcceptNonbinding → Agreement。
@@ -452,10 +442,19 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     );
     steps.push(`accept_nonbinding`);
     const acceptRes = await send(accept);
-    const agreement = extractAgreement(acceptRes.task);
-    if (agreement === null) {
+    const agreementRaw = extractAgreement(acceptRes.task);
+    if (agreementRaw === null) {
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 agreement artifact" };
     }
+    const checkedAgreement = validateAcceptedNonbindingAgreement(agreementRaw);
+    if (checkedAgreement.negotiation_id !== negotiationId ||
+        checkedAgreement.accepted_offer_id !== conditionalPayload.offer_id ||
+        checkedAgreement.terms_digest !== contentDigest(agreedTerms) ||
+        contentDigest(checkedAgreement.agreed_terms) !== checkedAgreement.terms_digest ||
+        !checkedAgreement.accepted_by.includes("buyer") || !checkedAgreement.accepted_by.includes("merchant")) {
+      throw new Error("agreement artifact is not bound to the accepted nonbinding terms");
+    }
+    const agreement = checkedAgreement as unknown as Record<string, unknown>;
     steps.push(`agreement ${String(agreement.agreement_id ?? "")}`);
     return {
       ok: true,

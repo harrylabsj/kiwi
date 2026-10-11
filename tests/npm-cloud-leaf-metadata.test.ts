@@ -1,5 +1,5 @@
 import {execFileSync} from "node:child_process";
-import {cpSync,mkdirSync,mkdtempSync,readFileSync,writeFileSync,rmSync} from "node:fs";
+import {cpSync,mkdirSync,mkdtempSync,readFileSync,writeFileSync,rmSync,symlinkSync} from "node:fs";
 import path from "node:path";
 import {tmpdir} from "node:os";
 import {beforeAll,afterAll,it,expect} from "vitest";
@@ -23,4 +23,14 @@ it("physical alias version drift fails normal semver rather than a caller-provid
 it("publisher and cold consumer preserve root/stage protections while leaf/cloud caller lack unusable override",()=>{
  const builder=readFileSync("scripts/build-cloud-package.mjs","utf8"),cold=readFileSync("scripts/verify-npm-shipping-installed.mjs","utf8"),strict=readFileSync("scripts/verify-cloud-package-candidate.mjs","utf8");
  expect(builder).not.toContain('  "overrides",');expect(builder).toContain('pkg.bundledDependencies = pkg.bundleDependencies');expect(cold).toContain('subdir === "root" ? { overrides:');expect(cold).toContain('SHIPPING_CLOUD_CALLER_OVERRIDE_FORBIDDEN');expect(cold).toContain('assertInstalledLockedVersions(root, installed)');expect(strict).toContain('await assertBundledEdges(root, dir)');
+});
+
+it("explicit filesystem alias root preserves normal valid alias edges",async()=>{
+ const alias=path.join(home,"valid-root-alias");symlinkSync(leaf,alias,"dir");
+ expect((await assertBundledEdges(authority,alias)).bundled_nodes).toBe(1);
+});
+it("explicit filesystem alias root rejects actual physical version drift",async()=>{
+ const alias=path.join(home,"invalid-root-alias");symlinkSync(leaf,alias,"dir");
+ const file=path.join(leaf,"node_modules/alias-yaml/package.json"),original=readFileSync(file),pkg=JSON.parse(original.toString());
+ try{pkg.version="0.0.0";writeFileSync(file,JSON.stringify(pkg));await expect(assertBundledEdges(authority,alias)).rejects.toMatchObject({message:"SHIPPING_BUNDLED_EDGE_INVALID",invalid:expect.arrayContaining([expect.objectContaining({name:"alias-yaml",spec:"npm:yaml@2.9.1",error:"INVALID"})])});}finally{writeFileSync(file,original);}
 });

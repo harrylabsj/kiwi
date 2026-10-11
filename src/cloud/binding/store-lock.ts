@@ -23,17 +23,12 @@ export function withEnrollmentStoreLock<T>(
   const file = path.join(dataDir, "merchant-enrollments.lock"),
     token = randomUUID();
   let fd: number | undefined;
-  const until = process.hrtime.bigint() + 1_000_000_000n;
-  for (;;) {
-    try {
-      fd = openSync(file, "wx", 0o600);
-      break;
-    } catch (e) {
-      if ((e as { code?: string }).code !== "EEXIST") throw e;
-      if (process.hrtime.bigint() >= until)
-        throw new EnrollmentStoreBusy("Enrollment state is locked");
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-    }
+  try {
+    fd = openSync(file, "wx", 0o600);
+  } catch (error) {
+    if ((error as { code?: string }).code === "EEXIST")
+      throw new EnrollmentStoreBusy("Enrollment state is locked");
+    throw error;
   }
   try {
     writeFileSync(fd, JSON.stringify({ pid: process.pid, token }));

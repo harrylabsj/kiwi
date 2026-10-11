@@ -121,10 +121,12 @@ describe("enrollment signed heartbeat", () => {
   });
   it("suppresses the previous binding while a rotated-key enrollment for the same Catalog agent awaits consent", async () => {
     const f = fixture();
+    const current = new Date();
     const pending = {
       ...f.session,
       enrollment_id: "enr_rotation",
       status: "preparing",
+      expires_at: new Date(current.getTime() + 60_000).toISOString(),
       key_thumbprint: "sha256:new-key-thumbprint",
       expected_catalog_agent_id: f.session.catalog_agent_id,
     };
@@ -134,7 +136,7 @@ describe("enrollment signed heartbeat", () => {
       { mode: 0o600 },
     );
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ ok: true, catalog_agent_id: "cagt_test" })));
-    const heartbeat = startEnrollmentHeartbeat({ dataDir: f.dir, signingIdentity: f.identity, fetchImpl, onError: () => {} });
+    const heartbeat = startEnrollmentHeartbeat({ dataDir: f.dir, signingIdentity: f.identity, now: () => new Date(current), fetchImpl, onError: () => {} });
     handles.push(heartbeat);
     await heartbeat.tick();
     expect(fetchImpl).not.toHaveBeenCalled();

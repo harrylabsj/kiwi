@@ -28,6 +28,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { BoundedIpLimiter } from "../../http/bounded-ip-rate-limit.js";
 import type { JwsSigningIdentity } from "../../trust/identity/jws.js";
 import {
   BindingChallengeStore,
@@ -47,6 +48,8 @@ export interface ChallengeResponderOptions {
   expectedMerchantId: string | (() => string | undefined);
   expectedAgentId: string;
   currentGeneration: number;
+  expectedOrigin: string;
+  expectedPath: string;
   /** 应答过的一次性记录（默认进程内）。 */
   store?: BindingChallengeStore;
   /** 每分钟最多应答次数（缺省 30；防刷）。 */
@@ -136,7 +139,8 @@ export function createChallengeResponder(
   const store = options.store ?? new BindingChallengeStore();
   const now = options.now ?? (() => new Date());
   const maxPerMinute = options.maxPerMinute ?? 30;
-  const hits: number[] = [];
+  const resourceLimit = new BoundedIpLimiter(Math.min(1000, Math.max(120, maxPerMinute * 4)));
+  const signatureLimit = new BoundedIpLimiter(maxPerMinute);
   // 本实例公钥指纹：由自持私钥导出公钥计算（私钥不出进程）。
   const ownThumbprint = publicKeyThumbprint(
     createPublicKey(options.signingIdentity.privateKey).export({ type: "spki", format: "pem" }) as string,
@@ -149,12 +153,10 @@ export function createChallengeResponder(
         return;
       }
       const nowMs = now().getTime();
-      while (hits.length > 0 && nowMs - (hits[0] ?? 0) > 60_000) hits.shift();
-      if (hits.length >= maxPerMinute) {
-        writeJson(res, 429, { error: "rate_limited", message: "挑战应答过于频繁" });
+      if (!resourceLimit.take(req.socket?.remoteAddress, nowMs)) {
+        writeJson(res, 429, { error: "rate_limited", message: "挑战请求过于频繁" });
         return;
       }
-      hits.push(nowMs);
 
       let body: unknown;
       try {
@@ -177,6 +179,15 @@ export function createChallengeResponder(
         return;
       }
       // 挑战必须发给**本实例**：指纹不符即拒绝（不替他人签名）。
+      const issuedMs = Date.parse(challenge.issued_at), expiresMs = Date.parse(challenge.expires_at);
+      if (challenge.origin !== options.expectedOrigin || challenge.path !== options.expectedPath) {
+        writeJson(res, 403, { error: "origin_path_mismatch" });
+        return;
+      }
+      if (!Number.isFinite(issuedMs) || !Number.isFinite(expiresMs) || issuedMs > nowMs || expiresMs - issuedMs > 300_000) {
+        writeJson(res, 403, { error: "challenge_window_invalid" });
+        return;
+      }
       if (challenge.key_thumbprint !== ownThumbprint) {
         writeJson(res, 403, {
           error: "thumbprint_mismatch",
@@ -198,6 +209,10 @@ export function createChallengeResponder(
       }
       if (store.isConsumed(challenge.challenge_id)) {
         writeJson(res, 409, { error: "challenge_replayed", message: "该挑战已应答过" });
+        return;
+      }
+      if (!signatureLimit.take(req.socket?.remoteAddress, nowMs)) {
+        writeJson(res, 429, { error: "rate_limited", message: "挑战应答过于频繁" });
         return;
       }
       let proof: string;

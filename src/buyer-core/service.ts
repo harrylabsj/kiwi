@@ -625,6 +625,8 @@ export class KiwiBuyerService {
     action: "counter_offer" | "clarification";
     summary: string;
   }): Promise<{ task: Record<string, unknown>; step: NegotiationStep }> {
+    if (input.action !== "counter_offer" && input.action !== "clarification") throw new McpError("invalid_params", "invalid negotiation action");
+    if (input.action === "clarification") throw new McpError("invalid_params", "clarification is not supported by the current negotiator");
     const task = this.store.getTask(input.task_id);
     if (task === undefined) throw new McpError("task_not_found", `task ${input.task_id} not found`);
     if (task.expires_at !== undefined && Date.parse(task.expires_at) < Date.parse(this.now())) {
@@ -1053,15 +1055,16 @@ export class KiwiBuyerService {
   approveApproval(input: { approval_id: string; authorization: AuthorizationRecord }): void {
     const stored = this.store.getApproval(input.approval_id);
     if (stored === undefined) throw new McpError("invalid_params", `approval ${input.approval_id} not found`);
-    if (stored.expires_at !== undefined && Date.parse(stored.expires_at) < Date.parse(this.now())) {
+    if (stored.status !== "pending" || this.approvalConsumed(stored) !== undefined) {
+      throw new McpError("approval_denied", `approval ${input.approval_id} 状态=${stored.status}，只能批准未消费的 pending 审批`);
+    }
+    const decidedAt = this.now();
+    if (stored.expires_at !== undefined && (!Number.isFinite(Date.parse(stored.expires_at)) || Date.parse(stored.expires_at) < Date.parse(decidedAt))) {
       throw new McpError("approval_denied", `approval ${input.approval_id} 已过期`);
     }
-    this.store.setApproval(stored.task_id, {
-      ...stored,
-      status: "approved",
-      decided_at: this.now(),
-      authorization_json: JSON.stringify(input.authorization),
-    });
+    if (!this.store.approvePending(stored, JSON.stringify(input.authorization), decidedAt)) {
+      throw new McpError("approval_denied", `approval ${input.approval_id} 已改变或过期，不能覆盖既有决定`);
+    }
   }
 
   /** 拒绝一个 pending 审批（deny 路径；deny 优先，§5.5）。 */

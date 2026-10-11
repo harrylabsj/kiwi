@@ -267,7 +267,7 @@ export class MerchantExecutorRegistry {
             kind: "products_withdraw",
             idempotencyKey: String(args.idempotency_key ?? ""),
           });
-          if (!op.created) return op.operation; // 幂等：不重复撤回
+          if (!op.created) return (op.operation.status === "succeeded" || op.operation.status === "partially_failed") ? op.operation : { ok: false, operation: op.operation }; // 幂等：不重复撤回
           c.operations.markRunning(op.operation.operation_id);
           const receipts = [];
           for (const sku of skus) {

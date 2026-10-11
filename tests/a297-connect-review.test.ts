@@ -40,7 +40,7 @@ import { afterEach, expect, it } from "vitest";
 import { canonicalize } from "../src/negotiation/jcs.js";
 import { validateAgentCard } from "../src/discovery/agent-card/validate.js";
 import { buildBindingClaims } from "../src/trust/binding/claims.js";
-import { signCompactJws, type JwsSigningIdentity } from "../src/trust/identity/jws.js";
+import { signCompactJws, verifyCompactJws, type JwsSigningIdentity } from "../src/trust/identity/jws.js";
 import { readEnrollmentStore } from "../src/cloud/binding/enrollment-challenge.js";
 import {
   createMerchantConnectionService,
@@ -683,6 +683,7 @@ it("two real processes consume one challenge and publish once; callback RMW does
         key_thumbprint: publicKeyThumbprint(createPublicKey(raw.publicKeyPem)),
         origin: RUNTIME_ORIGIN,
       };
+    const effectsBeforeChallenge = { ...h.catalog.counts };
     const results = await Promise.all(
       ready.map((r) =>
         fetch(`http://127.0.0.1:${r.port}/.well-known/kiwi-binding-challenge`, {
@@ -692,8 +693,24 @@ it("two real processes consume one challenge and publish once; callback RMW does
         }),
       ),
     );
-    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    const winnerIndex = results.findIndex((response) => response.status === 200);
+    expect(winnerIndex).toBeGreaterThanOrEqual(0);
+    const loserIndex = 1 - winnerIndex;
+    const winnerProof = await results[winnerIndex]!.json() as { signature: string };
+    verifyCompactJws(winnerProof.signature, createPublicKey(raw.publicKeyPem));
+    const loser = results[loserIndex]!;
+    const rejected = await loser.json() as { error?: string; signature?: string };
+    if (loser.status === 503) expect(rejected.error).toBe("challenge_store_busy");
+    else { expect(loser.status).toBe(409); expect(rejected.error).toBe("challenge_replayed"); }
+    expect(rejected.signature).toBeUndefined();
     expect(readEnrollmentStore(h.dataDir).consumed.length).toBe(1);
+    const replay = await fetch(`http://127.0.0.1:${ready[loserIndex]!.port}/.well-known/kiwi-binding-challenge`, {
+      method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" },
+    });
+    expect(replay.status).toBe(409);
+    expect(await replay.json()).toMatchObject({ error: "challenge_replayed" });
+    expect(readEnrollmentStore(h.dataDir).consumed.length).toBe(1);
+    expect(h.catalog.counts).toEqual(effectsBeforeChallenge); // Neither nonce response initiates a bind/publish.
     await Promise.all(responders.map(stopChild));
     children.splice(0);
     const workers = [0, 1].map(() => {
@@ -711,13 +728,29 @@ it("two real processes consume one challenge and publish once; callback RMW does
     );
     workers.forEach((c) => c.send("go"));
     const done = await Promise.all(outcomes);
-    expect(done.filter((m) => m.error === "CONNECTION_OPERATION_PENDING").length).toBe(1);
+    const completedIndex = done.findIndex((m) => m.result !== undefined);
+    expect(completedIndex).toBeGreaterThanOrEqual(0);
+    const refusedIndex = 1 - completedIndex;
+    expect(done[refusedIndex]!.result).toBeUndefined();
+    if (done[refusedIndex]!.error === "ENROLLMENT_STORE_BUSY") {
+      expect(done[refusedIndex]!.error).toBe("ENROLLMENT_STORE_BUSY");
+    } else expect(done[refusedIndex]!.error).toBe("CONNECTION_OPERATION_PENDING");
+    expect(done[completedIndex]!.error).toBeUndefined();
+    expect(done[completedIndex]!.result).toMatchObject({ status: "published", published: true });
     expect(done.filter((m) => m.result !== undefined).length).toBe(1);
     expect(h.catalog.counts.binds).toBe(1);
     expect(h.catalog.counts.publications).toBe(1);
     expect(h.catalog.counts.activations).toBe(1);
     expect(sessionRecord(h.dataDir).status).toBe("published");
     expect(readEnrollmentStore(h.dataDir).consumed.length).toBe(2);
+    const effectsAfterWinner = { ...h.catalog.counts };
+    const receiptReplay = message(workers[refusedIndex]!, (m) => m.result !== undefined || m.error !== undefined);
+    workers[refusedIndex]!.send("go");
+    const resumed = await receiptReplay;
+    expect(resumed.error).toBeUndefined();
+    expect(resumed.result).toEqual(done[completedIndex]!.result); // Same completed operation's authoritative summary.
+    expect(h.catalog.counts).toEqual(effectsAfterWinner);
+    expect(readEnrollmentStore(h.dataDir).consumed.length).toBe(2); // No second beforePublish callback.
   } finally {
     await Promise.all(children.map(stopChild));
   }

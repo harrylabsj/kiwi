@@ -73,7 +73,7 @@ export interface ForegroundOptions {
 
 export interface ForegroundResult {
   turns: number;
-  stopped_by: "signal" | "max_turns";
+  stopped_by: "signal" | "max_turns" | "fatal";
 }
 
 function isTransientCommerceError(err: unknown): boolean {
@@ -132,6 +132,9 @@ export async function runForeground(options: ForegroundOptions): Promise<Foregro
       consecutiveTransient = 0;
       await sleep(pollMs, signal);
       continue;
+    }
+    if (report.outcome.kind === "failed" && !report.outcome.retriable) {
+      return { turns, stopped_by: "fatal" };
     }
     if (needsBackoff(report)) {
       consecutiveTransient += 1;

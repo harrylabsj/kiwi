@@ -453,11 +453,26 @@ describe("A301 independent Connect critical acceptance", () => {
         }),
       ),
     );
-    expect(requests.map((response) => response.status).sort()).toEqual([200, 409]);
-    const proofResponse = requests.find((response) => response.status === 200)!;
+    const winnerIndex = requests.findIndex((response) => response.status === 200);
+    expect(winnerIndex).toBeGreaterThanOrEqual(0);
+    const loserIndex = 1 - winnerIndex;
+    const loser = requests[loserIndex]!;
+    const rejected = await loser.json() as { error?: string; signature?: string };
+    if (loser.status === 503) expect(rejected.error).toBe("challenge_store_busy");
+    else { expect(loser.status).toBe(409); expect(rejected.error).toBe("challenge_replayed"); }
+    expect(rejected.signature).toBeUndefined();
+    const proofResponse = requests[winnerIndex]!;
     const proof = (await proofResponse.json()) as { signature: string };
     verifyCompactJws(proof.signature, createPublicKey(h.issuer.raw.publicKeyPem));
     expect(readEnrollmentStore(dir).consumed).toHaveLength(2); // Historical marker + one nonce.
+    const loserPort = loserIndex === 0 ? readyA.port : readyB.port;
+    const replay = await fetch(`http://127.0.0.1:${loserPort}/.well-known/kiwi-binding-challenge`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(nonce),
+    });
+    expect(replay.status).toBe(409);
+    expect(await replay.json()).toMatchObject({ error: "challenge_replayed" });
+    expect(readEnrollmentStore(dir).consumed).toHaveLength(2);
+    expect(h.counts).toMatchObject({ binds: 0, publish: 0, activate: 0, callback: 0 });
     h.setCallback(Number(readyA.port));
     h.holdBind();
     a.process.send("go");

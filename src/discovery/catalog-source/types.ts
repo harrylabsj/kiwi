@@ -1,3 +1,4 @@
+import type { ReadRequestOptions } from "../../net/request-budget.js";
 /**
  * Copyright 2026 harrylabsj
  *
@@ -132,8 +133,8 @@ export function normalizeHostingMode(mode: RawHostingMode): HostingMode {
  * CandidateAgent（DTO 1.0 形状）。
  */
 export interface CatalogSource {
-  searchCandidates(query: CatalogSearchQuery): Promise<CandidateAgent[]>;
-  getCandidate(catalogAgentId: string): Promise<CandidateAgent>;
+  searchCandidates(query: CatalogSearchQuery, options?: ReadRequestOptions): Promise<CandidateAgent[]>;
+  getCandidate(catalogAgentId: string, options?: ReadRequestOptions): Promise<CandidateAgent>;
 }
 
 /**

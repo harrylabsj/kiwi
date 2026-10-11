@@ -366,6 +366,23 @@ export class TaskApprovalStore {
       );
   }
 
+  /** Approve only the same pending row read by the service; never overwrite a decision/consumption. */
+  approvePending(expected: StoredApproval, authorizationJson: string, decidedAt: string): boolean {
+    const decidedMs = Date.parse(decidedAt);
+    if (!Number.isFinite(decidedMs)) return false;
+    if (expected.expires_at !== undefined) {
+      const expiresMs = Date.parse(expected.expires_at);
+      if (!Number.isFinite(expiresMs) || expiresMs < decidedMs) return false;
+    }
+    const changed = this.db.prepare(`UPDATE mcp_approvals
+      SET status = 'approved', decided_at = ?, authorization_json = ?
+      WHERE approval_id = ? AND status = 'pending' AND task_id = ? AND action = ?
+        AND candidate_digest IS ? AND expires_at IS ? AND authorization_json IS ?`)
+      .run(decidedAt, authorizationJson, expected.approval_id, expected.task_id, expected.action,
+        expected.candidate_digest ?? null, expected.expires_at ?? null, expected.authorization_json ?? null);
+    return changed.changes === 1;
+  }
+
   /**
    * review P1-2（A316 校准）：短事务原语——BEGIN IMMEDIATE…COMMIT 包住同步
    * fn；任何异常 ROLLBACK 后原样上抛（无事后补偿）。node:sqlite 同步执行，

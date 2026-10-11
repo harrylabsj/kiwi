@@ -1,3 +1,4 @@
+import { AgentDiscovery, ShoppingCliCatalogSource } from "../src/discovery/index.js";
 /**
  * negotiateWithAgent 参数化测试（买家侧本地 A2A 磋商）：
  * sku / quantity / dealPriceMinor（买方还价）/ deliveryBefore / senderIdentity
@@ -176,15 +177,20 @@ describe("negotiateWithAgent parameterization", () => {
     expect(NEGOTIATE_DEAL_PRICE_MINOR).toBe(83_500);
   });
 
-  it("specifying an unknown catalogAgentId returns ok:false without throwing", async () => {
-    const s = await stack();
+  it("exact target lookup returning a different agent fails typed mismatch without any RFQ", async () => {
+    const capture: CapturedInbound[] = [];
+    const s = await stack(capture);
+    const source = new ShoppingCliCatalogSource({ baseUrl: s.catalogUrl });
+    const discovery = new AgentDiscovery({ allowLoopback: true, catalog: { source } });
+    await expect(discovery.resolveViaCatalog({}, { catalogAgentId: "cagt_missing", limit: 1 })).rejects.toMatchObject({ code: "card_invalid", message: "catalog exact agent id mismatch" });
     const result = await negotiateWithAgent({
       catalog: s.catalogUrl,
       allowLoopback: true, // 本地 127.0.0.1 测试栈
       catalogAgentId: "cagt_missing",
     });
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("找不到");
+    expect(result.error).toBe("catalog exact agent id mismatch");
+    expect(capture).toHaveLength(0);
   });
 
   it("outbound bearer auth: 商家要求 bearer 时匿名 401，带 outboundAuth 成交", async () => {

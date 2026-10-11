@@ -124,21 +124,38 @@ export function verifyCompactJws(
   const signature = base64urlToBuffer(signatureSegment, "signature");
   const signingInput = Buffer.from(`${headerSegment}.${payloadSegment}`, "utf8");
 
-  const key = resolveJwsKey(publicKey, alg);
-  if (!verifyJwsSignature(alg, signingInput, signature, key)) {
+  let valid: boolean;
+  try {
+    const key = resolveJwsKey(publicKey, alg);
+    valid = verifyJwsSignature(alg, signingInput, signature, key);
+  } catch (err) {
+    if (err instanceof JwsError) throw err;
+    const code = (err as { code?: unknown })?.code;
+    // Normalize only node:crypto failures at this boundary; programming/internal errors still surface.
+    if (typeof code === "string" && /^ERR_(?:OSSL_|CRYPTO_|INVALID_ARG_TYPE|INVALID_ARG_VALUE)/.test(code)) {
+      throw new JwsError("invalid_signature", "JWS cryptographic verification failed");
+    }
+    throw err;
+  }
+  if (!valid) {
     throw new JwsError("invalid_signature", "JWS signature verification failed");
   }
   return { header: headerRecord, payload, alg, keyid };
 }
 
 function resolveJwsKey(publicKey: SigningKey | JsonWebKey | KeyObject, alg: string): KeyObject {
-  if (publicKey instanceof KeyObject) return publicKey;
+  if (publicKey instanceof KeyObject) {
+    assertKeyAlgorithm(publicKey, alg);
+    return publicKey;
+  }
   if (typeof publicKey === "object" && "keyid" in publicKey && "algorithm" in publicKey) {
     const key = publicKey as SigningKey;
     if (key.algorithm !== jwsAlgToSignatureAlgorithm(alg)) {
       throw new JwsError("unsupported_algorithm", `JWS alg ${alg} does not match key algorithm ${key.algorithm}`);
     }
-    return publicKeyObject(key);
+    const resolved = publicKeyObject(key);
+    assertKeyAlgorithm(resolved, alg);
+    return resolved;
   }
   const jwk = publicKey as JsonWebKey;
   if (jwk.kty === "OKP" && jwk.crv === "Ed25519" && alg !== "EdDSA") {
@@ -147,7 +164,16 @@ function resolveJwsKey(publicKey: SigningKey | JsonWebKey | KeyObject, alg: stri
   if (jwk.kty === "EC" && jwk.crv === "P-256" && alg !== "ES256") {
     throw new JwsError("unsupported_algorithm", `key is P-256 but JWS alg is ${alg}`);
   }
-  return createPublicKey({ key: jwk, format: "jwk" });
+  const resolved = createPublicKey({ key: jwk, format: "jwk" });
+  assertKeyAlgorithm(resolved, alg);
+  return resolved;
+}
+
+function assertKeyAlgorithm(key: KeyObject, alg: string): void {
+  const matches = (alg === "EdDSA" && key.asymmetricKeyType === "ed25519") ||
+    (alg === "ES256" && key.asymmetricKeyType === "ec" &&
+      ["prime256v1", "P-256"].includes(key.asymmetricKeyDetails?.namedCurve ?? ""));
+  if (!matches) throw new JwsError("unsupported_algorithm", "JWS algorithm does not match the supported key type/curve");
 }
 
 function jwsAlgToSignatureAlgorithm(alg: string): "ed25519" | "es256" | undefined {

@@ -130,6 +130,11 @@ export class MerchantStatsStore {
 
   constructor(db: DatabaseSync) {
     this.db = db;
+    db.function("_kiwi_stats_utc_day", { deterministic: true }, (value) => {
+      if (typeof value !== "string") return null;
+      const instant = Date.parse(value);
+      return Number.isFinite(instant) ? new Date(instant).toISOString().slice(0, 10) : null;
+    });
   }
 
   /**
@@ -169,7 +174,7 @@ export class MerchantStatsStore {
                 COUNT(*) AS contact_events,
                 COUNT(DISTINCT negotiation_id) AS negotiations
          FROM buyer_contact_events
-         WHERE substr(occurred_at, 1, 10) >= ?`,
+         WHERE _kiwi_stats_utc_day(occurred_at) >= ?`,
       )
       .get(sinceDay) as unknown as TotalsRow;
     return {
@@ -190,7 +195,7 @@ export class MerchantStatsStore {
                 COUNT(*) AS contact_events,
                 COUNT(DISTINCT negotiation_id) AS negotiations
          FROM buyer_contact_events
-         WHERE substr(occurred_at, 1, 10) >= ? AND substr(occurred_at, 1, 10) < ?`,
+         WHERE _kiwi_stats_utc_day(occurred_at) >= ? AND _kiwi_stats_utc_day(occurred_at) < ?`,
       )
       .get(sinceDay, untilDayExclusive) as unknown as TotalsRow;
     return {
@@ -204,12 +209,12 @@ export class MerchantStatsStore {
   dailySince(sinceDay: string): DailyBucket[] {
     const rows = this.db
       .prepare(
-        `SELECT substr(occurred_at, 1, 10) AS day,
+        `SELECT _kiwi_stats_utc_day(occurred_at) AS day,
                 COUNT(DISTINCT buyer_identity) AS distinct_buyers,
                 COUNT(*) AS contact_events,
                 COUNT(DISTINCT negotiation_id) AS negotiations
          FROM buyer_contact_events
-         WHERE substr(occurred_at, 1, 10) >= ?
+         WHERE _kiwi_stats_utc_day(occurred_at) >= ?
          GROUP BY day
          ORDER BY day`,
       )
@@ -226,9 +231,9 @@ export class MerchantStatsStore {
   dailyBuyerIdentitiesSince(sinceDay: string): DailyBuyerIdentity[] {
     const rows = this.db
       .prepare(
-        `SELECT substr(occurred_at, 1, 10) AS day, buyer_identity
+        `SELECT _kiwi_stats_utc_day(occurred_at) AS day, buyer_identity
          FROM buyer_contact_events
-         WHERE substr(occurred_at, 1, 10) >= ?
+         WHERE _kiwi_stats_utc_day(occurred_at) >= ?
          GROUP BY day, buyer_identity
          ORDER BY day, buyer_identity`,
       )
@@ -246,7 +251,7 @@ export class MerchantStatsStore {
                 COUNT(DISTINCT negotiation_id) AS negotiations
          FROM buyer_contact_events,
               json_each(buyer_contact_events.skus_json) AS je
-         WHERE substr(occurred_at, 1, 10) >= ?
+         WHERE _kiwi_stats_utc_day(occurred_at) >= ?
          GROUP BY je.value
          ORDER BY contact_events DESC, sku ASC
          LIMIT ?`,

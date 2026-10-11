@@ -1,0 +1,1 @@
+import fs from 'node:fs';import process from 'node:process';import {setTimeout as delay} from 'node:timers/promises';const until=Date.now()+2500;while(!fs.existsSync(process.argv[2])){if(Date.now()>until)throw Error('owned barrier timeout');await delay(5);}

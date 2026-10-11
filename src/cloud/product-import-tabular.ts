@@ -364,6 +364,7 @@ export function parseCsv(text: string): string[][] {
   let row: string[] = [];
   let cell = "";
   let inQuotes = false;
+  let closedQuote = false;
   for (let i = 0; i < stripped.length; i += 1) {
     const ch = stripped[i];
     if (inQuotes) {
@@ -373,32 +374,41 @@ export function parseCsv(text: string): string[][] {
           i += 1;
         } else {
           inQuotes = false;
+          closedQuote = true;
         }
       } else {
         cell += ch;
       }
       continue;
     }
+    if (closedQuote && ch !== "," && ch !== "\n" && ch !== "\r") {
+      throw new TabularImportError("INVALID_CSV", "引号字段结束后必须为分隔符或换行");
+    }
     if (ch === '"') {
+      if (cell !== "") throw new TabularImportError("INVALID_CSV", "裸字段中不能出现双引号");
       inQuotes = true;
     } else if (ch === ",") {
       row.push(cell);
       cell = "";
+      closedQuote = false;
     } else if (ch === "\n") {
       row.push(cell);
       rows.push(row);
       row = [];
       cell = "";
+      closedQuote = false;
     } else if (ch === "\r") {
       if (stripped[i + 1] === "\n") i += 1;
       row.push(cell);
       rows.push(row);
       row = [];
       cell = "";
+      closedQuote = false;
     } else {
       cell += ch;
     }
   }
+  if (inQuotes) throw new TabularImportError("INVALID_CSV", "引号字段未闭合");
   if (cell !== "" || row.length > 0) {
     row.push(cell);
     rows.push(row);

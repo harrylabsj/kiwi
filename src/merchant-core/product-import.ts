@@ -156,7 +156,7 @@ export async function executeProductsImport(input: {
   if (!existing.created) {
     // 幂等：相同幂等键返回同一 operation（已终态的不重复执行；queued/running
     // 的先对账——本轮返回现状不盲目重发）。
-    return existing.operation;
+    return (existing.operation.status === "succeeded" || existing.operation.status === "partially_failed") ? existing.operation : { ok: false, operation: existing.operation };
   }
   const operation = input.operations.markRunning(existing.operation.operation_id);
   try {

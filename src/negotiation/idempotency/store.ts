@@ -53,7 +53,7 @@ import {
 import path from "node:path";
 import { writeFileAtomic } from "../../fs/atomic-write.js";
 import { sha256Hex } from "../jcs.js";
-import { IdempotencyConflictError, computeRetentionDeadline, idempotencyKey, DEFAULT_INFLIGHT_STALE_MS } from "./types.js";
+import { IdempotencyConflictError, computeRetentionDeadline, idempotencyKey } from "./types.js";
 import type { IdempotencyInFlightMarker } from "./types.js";
 import type {
   IdempotencyCheckInput,
@@ -107,27 +107,11 @@ export class IdempotencyStore {
   private readRecord(key: string): IdempotencyRecord | null | "corrupt" {
     const filePath = this.filePathFor(key);
     if (!existsSync(filePath)) return null;
-    let parsed: unknown;
     try {
-      parsed = JSON.parse(readFileSync(filePath, "utf-8"));
+      return this.readRecordFromPath(filePath) ?? "corrupt";
     } catch {
-      return "corrupt"; // review 3-4：损坏记录不再吞成 null（→ new → 重跑 handler）
-    }
-    if (parsed === null || typeof parsed !== "object") return "corrupt";
-    const record = parsed as Partial<IdempotencyRecord>;
-    if (
-      typeof record.sender_identity !== "string" ||
-      typeof record.message_id !== "string" ||
-      typeof record.digest !== "string" ||
-      typeof record.negotiation_id !== "string" ||
-      typeof record.recorded_at !== "string" ||
-      typeof record.expires_at !== "string" ||
-      record.outcome === undefined ||
-      typeof record.outcome !== "object"
-    ) {
       return "corrupt";
     }
-    return record as IdempotencyRecord;
   }
 
   private inFlightPath(key: string): string {
@@ -189,7 +173,8 @@ export class IdempotencyStore {
   }
 
 
-  /** 读取 in-flight 标记；超过 staleAfterMs 视为陈旧（不再阻断，交给对账与 Ledger 证据）。 */
+  /** Read unfinished attempts at every age. staleAfterMs is deprecated and ignored:
+   * time never proves no effect; only authoritative commit/reconciliation may release the marker. */
   readInFlight(
     senderIdentity: string,
     messageId: string,
@@ -213,7 +198,7 @@ export class IdempotencyStore {
     // review 2-9（A316 校准）：过期 marker 仍是「结果未知」——时间不授权
     // 换 opID/接管；返回 marker 让上层走对账（reconciliation_required），
     // 绝不视为无 claim 放行重执行。只有 commit 的权威结果清除它。
-    void (options.staleAfterMs ?? DEFAULT_INFLIGHT_STALE_MS);
+    void options; // Compatibility only; no age-based retry authorization.
     return marker;
   }
 
@@ -322,7 +307,24 @@ export class IdempotencyStore {
 
   private readRecordFromPath(filePath: string): IdempotencyRecord | null {
     const parsed: unknown = JSON.parse(readFileSync(filePath, "utf-8"));
+    // Sweep uses exactly the receipt reader's trusted shape/date contract.
+    // A corrupt unknown receipt must remain a retry barrier, even if expiry parses.
     if (parsed === null || typeof parsed !== "object") return null;
-    return parsed as IdempotencyRecord;
+    const record = parsed as Partial<IdempotencyRecord>;
+    if (
+      typeof record.sender_identity !== "string" ||
+      typeof record.message_id !== "string" ||
+      typeof record.digest !== "string" ||
+      typeof record.negotiation_id !== "string" ||
+      typeof record.recorded_at !== "string" ||
+      typeof record.expires_at !== "string" ||
+      !Number.isFinite(Date.parse(record.recorded_at)) ||
+      !Number.isFinite(Date.parse(record.expires_at)) ||
+      record.outcome === undefined ||
+      typeof record.outcome !== "object"
+    ) {
+      return null;
+    }
+    return record as IdempotencyRecord;
   }
 }

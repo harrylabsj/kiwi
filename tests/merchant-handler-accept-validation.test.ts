@@ -225,7 +225,30 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
     ).toBe(false);
   });
 
-  it("terminal buyer cannot withdraw the merchant-authored offer: exact authorization_failed and no transition", async () => {
+  it.each(["withdraw", "decline"] as const)("K1a terminal %s rejects both known/unknown offer targets before object lookup", async (action) => {
+    const { offerId, offerMessageId, agreedTerms } = await reachConditional();
+    await run(validateWireEnvelope(envelopeFor("accept_nonbinding", { type: "accept_nonbinding", offer_id: offerId, terms_digest: contentDigest(agreedTerms as never) })));
+    const before = ledger.events(NEGOTIATION_ID);
+    for (const [message, offer] of [[offerMessageId, offerId], ["msg_unknown", "off_unknown"]]) {
+      const result = await run(validateWireEnvelope(envelopeFor(action, { type: action, scope: "offer", target_message_id: message, target_offer_id: offer })));
+      expect(result.kind === "declined" && result.reasonCode).toBe("state_conflict");
+    }
+    expect(ledger.events(NEGOTIATION_ID)).toEqual(before);
+  });
+  it("K1a terminal guard cannot bypass bound sender or actor authentication", async () => {
+    const { offerId, offerMessageId, agreedTerms } = await reachConditional();
+    await run(validateWireEnvelope(envelopeFor("accept_nonbinding", { type: "accept_nonbinding", offer_id: offerId, terms_digest: contentDigest(agreedTerms as never) })));
+    const before = ledger.events(NEGOTIATION_ID);
+    const base = envelopeFor("decline", { type: "decline", scope: "offer", target_message_id: offerMessageId, target_offer_id: offerId });
+    const badActor = validateWireEnvelope(finalizeEnvelope({ ...base, actor: "merchant" }));
+    const actorResult = await run(badActor);
+    expect(actorResult.kind === "declined" && actorResult.reasonCode).toBe("authorization_failed");
+    const result = await handler.handle({ envelope: base, message: { role: "user", parts: [], messageId: base.message_id }, taskId: "task_intruder", senderIdentity: "buyer:other" });
+    expect(result.kind === "declined" && result.reasonCode).toBe("authorization_failed");
+    expect(ledger.events(NEGOTIATION_ID)).toEqual(before);
+  });
+
+  it("terminal authenticated buyer offer withdrawal: state_conflict precedes object ownership and no transition", async () => {
     const { offerId, offerMessageId, agreedTerms } = await reachConditional();
     const accepted = await run(validateWireEnvelope(envelopeFor("accept_nonbinding", {
       type: "accept_nonbinding", offer_id: offerId, terms_digest: contentDigest(agreedTerms as never),
@@ -236,7 +259,7 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
       type: "withdraw", scope: "offer", target_message_id: offerMessageId, target_offer_id: offerId,
     })));
     expect(result.kind).toBe("declined");
-    expect(result.kind === "declined" && result.reasonCode).toBe("authorization_failed");
+    expect(result.kind === "declined" && result.reasonCode).toBe("state_conflict");
     expect(ledger.events(NEGOTIATION_ID).filter(e => e.event_kind === "state_transition")).toEqual(before);
     expect(before.filter(e => e.state_transition?.to_phase === "AGREEMENT_REACHED")).toHaveLength(1);
   });

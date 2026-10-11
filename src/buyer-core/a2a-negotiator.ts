@@ -1,3 +1,4 @@
+import { McpError } from "./errors.js";
 /**
  * Copyright 2026 harrylabsj
  *
@@ -171,6 +172,7 @@ export class A2ANegotiator implements Negotiator {
     candidates: Array<Record<string, unknown>>,
     context?: ProtocolTaskContext,
   ): Promise<NegotiationStep> {
+    if (current.action !== "counter_offer") throw new McpError("invalid_params", current.action === "clarification" ? "clarification is not supported by this negotiator" : "invalid negotiation action");
     const hasClaim=this.recovery?.hasCounterClaim(taskId,current.round) ?? false;
     const candidate = candidates.find(
       (c) => (c as CandidateLike).provenance?.a2a_endpoint !== undefined,

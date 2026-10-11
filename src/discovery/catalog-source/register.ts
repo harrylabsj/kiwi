@@ -25,6 +25,7 @@
  */
 
 import { createHmac } from "node:crypto";
+import { readJsonBody } from "../../net/safe-http.js";
 import { CatalogSourceError } from "./errors.js";
 import { validateBaseUrl } from "./source.js";
 
@@ -105,6 +106,7 @@ export async function registerCatalogAgent(
     }
   }
 
+  const signal = AbortSignal.timeout(input.timeoutMs ?? REGISTER_TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetchImpl(`${base}/v1/agent-catalog/agents/register`, {
@@ -118,7 +120,7 @@ export async function registerCatalogAgent(
       // 审查 K-M2：缺省超时（原先 undefined 无 signal，挂死 catalog 永久卡住）；
       // 同一 signal 覆盖 fetch 头阶段与响应体读取（AbortSignal.timeout 触发
       // abort 时取消未完成的 body 读）。
-      signal: AbortSignal.timeout(input.timeoutMs ?? REGISTER_TIMEOUT_MS),
+      signal,
     });
   } catch (err) {
     throw new CatalogSourceError(
@@ -130,15 +132,9 @@ export async function registerCatalogAgent(
   // 3xx 在 manual 模式下不进 res.ok → 下方按失败处理（fail-closed）。
   let payload: Record<string, unknown>;
   try {
-    // 响应体大小上限（与 safe-http 纪律一致；此前 res.json() 无上限）。
-    const raw = await res.arrayBuffer();
-    if (raw.byteLength > 2 * 1024 * 1024) {
-      throw new Error("response exceeds 2MB");
-    }
-    const text = new TextDecoder("utf-8").decode(raw);
-    payload = text === "" ? {} : (JSON.parse(text) as Record<string, unknown>);
-  } catch {
-    payload = {};
+    payload = await boundedPayload(res, signal);
+  } catch (error) {
+    throw new CatalogSourceError("request_failed", `catalog register response invalid: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!res.ok || payload.ok === false) {
     const detail =
@@ -206,8 +202,7 @@ export async function sendCatalogAgentHeartbeat(
         signal: controller.signal,
       },
     );
-    const text = await res.text();
-    const payload = text === "" ? {} : (JSON.parse(text) as Record<string, unknown>);
+    const payload = await boundedPayload(res, controller.signal);
     if (!res.ok || payload.ok === false) {
       const detail = typeof payload.error === "string" ? payload.error : `HTTP ${res.status}`;
       throw new CatalogSourceError("request_failed", `catalog heartbeat failed: ${detail}`);
@@ -220,5 +215,17 @@ export async function sendCatalogAgentHeartbeat(
     };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function boundedPayload(response: Response, signal: AbortSignal): Promise<Record<string, unknown>> {
+  try {
+    const payload = await readJsonBody(response, { signal, maxBytes: 2 * 1024 * 1024 });
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new Error("response must be a JSON object");
+    return payload as Record<string, unknown>;
+  } finally {
+    // Includes Content-Length precheck rejection before a reader is acquired.
+    try { void response.body?.cancel().catch(() => {}); }
+    catch { /* Locked/already closed bodies cannot replace the original result. */ }
   }
 }

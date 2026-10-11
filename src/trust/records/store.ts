@@ -47,6 +47,7 @@ import {
   writeSync,
 } from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { sha256Hex } from "../../negotiation/jcs.js";
 import { isTrustLevel } from "../identity/trust-policy.js";
 import { evaluateTrustRecord } from "./evaluator.js";
@@ -146,6 +147,7 @@ export class TrustRecordStore {
   private readonly baseDir: string;
   private readonly trustDir: string;
   private readonly now: () => string;
+  private readonly ownedMutations = new Set<string>();
   private readonly evaluator: EvaluateOptions;
 
   constructor(options: TrustRecordStoreOptions) {
@@ -165,6 +167,40 @@ export class TrustRecordStore {
   private filePathFor(identity: string): string {
     const dir = this.ensureTrustDir();
     return path.resolve(dir, `trust-${sha256Hex(identity)}.json`);
+  }
+
+  private unavailable(code: "trust_record_locked" | "trust_record_corrupt"): Error & { code: string } {
+    return Object.assign(new Error(code === "trust_record_locked"
+      ? "Trust record is locked; observation was not applied, retry explicitly"
+      : "Trust record metadata is invalid; preserved for reconciliation"), { code });
+  }
+
+  /** Short synchronous mutation, no waiting/age/PID takeover of unknown owners. */
+  private mutate<T>(identity: string, fn: () => T): T {
+    const file = this.filePathFor(identity), lock = `${file}.mutation.lock`, token = randomUUID();
+    let fd: number;
+    try { fd = openSync(lock, "wx", 0o600); }
+    catch (err) {
+      if ((err as { code?: string }).code === "EEXIST") throw this.unavailable("trust_record_locked");
+      throw err;
+    }
+    try { writeSync(fd, JSON.stringify({ pid: process.pid, token })); fsyncSync(fd); }
+    finally { closeSync(fd); }
+    this.ownedMutations.add(file);
+    try { return fn(); }
+    finally {
+      this.ownedMutations.delete(file);
+      try {
+        const owner = JSON.parse(readFileSync(lock, "utf8")) as { token?: unknown };
+        if (owner?.token === token) rmSync(lock);
+      } catch { /* Preserve unknown ownership; cleanup cannot replace the true result/error. */ }
+    }
+  }
+
+  private assertReadable(file: string): void {
+    if (!this.ownedMutations.has(file) && existsSync(`${file}.mutation.lock`)) {
+      throw this.unavailable("trust_record_locked");
+    }
   }
 
   /** 原子写（对齐 supervisor/manifest.ts：同目录临时文件 + fsync + rename，0600）。 */
@@ -187,11 +223,13 @@ export class TrustRecordStore {
    */
   private readRecord(identity: string): CounterpartyTrustRecord | null {
     const filePath = this.filePathFor(identity);
+    this.assertReadable(filePath);
     if (!existsSync(filePath)) return null;
     return this.parseRecord(filePath);
   }
 
   private parseRecord(filePath: string): CounterpartyTrustRecord | null {
+    this.assertReadable(filePath);
     let raw: string;
     try {
       raw = readFileSync(filePath, "utf-8");
@@ -227,6 +265,11 @@ export class TrustRecordStore {
     ) {
       return null;
     }
+    if (![r.first_seen, r.last_seen, r.evaluated_at].every((value) => Number.isFinite(Date.parse(value as string))) ||
+        (r.last_fingerprint_change_at !== undefined &&
+          (typeof r.last_fingerprint_change_at !== "string" || !Number.isFinite(Date.parse(r.last_fingerprint_change_at))))) {
+      throw this.unavailable("trust_record_corrupt"); // Do not reset known failure counters/identity facts.
+    }
     return {
       counterparty_identity: r.counterparty_identity,
       domain: optionalString(r.domain),
@@ -252,7 +295,7 @@ export class TrustRecordStore {
     };
   }
 
-  /** 读取记录；未知/损坏返回 null。 */
+  /** Unknown/malformed shape returns null; invalid dates or mutation contention throw structured errors without discarding facts. */
   get(identity: string): CounterpartyTrustRecord | null {
     return this.readRecord(identity);
   }
@@ -276,10 +319,12 @@ export class TrustRecordStore {
 
   /** 删除记录；不存在返回 false。 */
   remove(identity: string): boolean {
-    const filePath = this.filePathFor(identity);
-    if (!existsSync(filePath)) return false;
-    rmSync(filePath);
-    return true;
+    return this.mutate(identity, () => {
+      const filePath = this.filePathFor(identity);
+      if (!existsSync(filePath)) return false;
+      rmSync(filePath);
+      return true;
+    });
   }
 
   /**
@@ -287,11 +332,16 @@ export class TrustRecordStore {
    * 指纹与已存不同 → 返回 fingerprintChanged 告警，并持久化计数。
    */
   observe(input: TrustObservation): ObservationResult {
+    return this.mutate(input.counterparty_identity, () => this.observeUnlocked(input));
+  }
+
+  private observeUnlocked(input: TrustObservation): ObservationResult {
     const identity = input.counterparty_identity;
     if (identity.length === 0) {
       throw new TypeError("TrustRecordStore.observe: counterparty_identity must be non-empty");
     }
     const observedAt = input.observed_at ?? this.now();
+    if (!Number.isFinite(Date.parse(observedAt))) throw this.unavailable("trust_record_corrupt");
     const existing = this.readRecord(identity);
 
     const record: CounterpartyTrustRecord = existing ?? {
@@ -395,6 +445,10 @@ export class TrustRecordStore {
    * 重新评估）。只改结论，不改事实。无记录返回 null。
    */
   evaluate(identity: string): EvaluateResult | null {
+    return this.mutate(identity, () => this.evaluateUnlocked(identity));
+  }
+
+  private evaluateUnlocked(identity: string): EvaluateResult | null {
     const record = this.readRecord(identity);
     if (record === null) return null;
     const evaluation = evaluateTrustRecord(record, this.evaluator);

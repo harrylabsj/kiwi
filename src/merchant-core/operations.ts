@@ -27,7 +27,7 @@ import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 /** running 状态的陈旧阈值（审查 P2）：超过该时长无更新视为进程中断残留，
- *  同幂等键重入时标记 failed 并放行新任务。30 分钟 > 单行 HTTP 超时（10s）
+ *  同幂等键重入时保留原操作并标记 outcome unknown，不重执行业务。30 分钟 > 单行 HTTP 超时（10s）
  *  × 批量行数的合理上限。 */
 export const RUNNING_STALE_MS = 30 * 60 * 1000;
 
@@ -78,7 +78,7 @@ export class MerchantOperationStore {
 
   /** 幂等创建：同 (kind, idempotency_key) 返回既有 operation（created=false）。
    *  审查 P2：命中 running 且长时间无更新（超过 RUNNING_STALE_MS，疑似进程
-   *  中断）→ 标 failed 后新建，避免同幂等键被永久卡死的 operation 吞掉。 */
+   *  中断）→ 保留同一 operation 与已有回执，不能按年龄推断效果未发生。 */
   createOrGet(input: { kind: string; idempotencyKey: string }): {
     operation: MerchantOperation;
     created: boolean;
@@ -91,18 +91,15 @@ export class MerchantOperationStore {
         existing.status === "running" &&
         Date.parse(this.now()) - Date.parse(existing.updated_at) > RUNNING_STALE_MS
       ) {
-        this.set(
-          existing.operation_id,
-          "failed",
-          [
-            {
-              item: "(operation)",
-              ok: false,
-              detail: `任务在 running 状态停留超过 ${Math.round(RUNNING_STALE_MS / 60000)} 分钟（疑似进程中断），已标记失败`,
-            },
-          ],
-          "stale_running",
-        );
+        // A stale timestamp is not proof of no effect. CAS avoids overwriting a worker that finished meanwhile.
+        const receipts = [...rowToOperation(existing).receipts, {
+          item: "(operation)", ok: false,
+          detail: "running 状态陈旧，远端效果未知；保留原操作与回执，需要对账，不重发",
+        }];
+        this.db.prepare(`UPDATE merchant_operations SET status='failed', receipts_json=?, error='stale_running', updated_at=?
+          WHERE operation_id=? AND status='running' AND updated_at=?`)
+          .run(JSON.stringify(receipts), this.now(), existing.operation_id, existing.updated_at);
+        return { operation: this.get(existing.operation_id)!, created: false };
       } else {
         return { operation: rowToOperation(existing), created: false };
       }

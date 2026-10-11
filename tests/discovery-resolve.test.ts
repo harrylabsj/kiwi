@@ -318,8 +318,11 @@ describe("AgentDiscovery fetchCard 超时 timer 清理（审查 P2-02）", () =>
       await expect(
         discovery.resolve({ agentCardUrl: "http://127.0.0.1:1/card.json" }),
       ).rejects.toMatchObject({ code: "card_fetch_failed" });
+      expect(aborted).toEqual(["abort"]);
+      expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(aborted).toEqual([]);
+      expect(aborted).toEqual(["abort"]);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -342,8 +345,11 @@ describe("AgentDiscovery fetchCard 超时 timer 清理（审查 P2-02）", () =>
       await expect(
         discovery.resolve({ agentCardUrl: "http://127.0.0.1:1/card.json" }),
       ).rejects.toMatchObject({ code: "card_fetch_failed" });
+      expect(aborted).toEqual(["abort"]);
+      expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(aborted).toEqual([]);
+      expect(aborted).toEqual(["abort"]);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }

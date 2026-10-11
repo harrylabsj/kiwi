@@ -37,6 +37,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { A2AClientError } from "./error.js";
+import { awaitWithAbort } from "../../net/request-budget.js";
 
 export interface SafeTargetUrlOptions {
   /** 允许私网/保留网段（默认 false）。 */
@@ -321,7 +322,8 @@ export function assertSafeTargetUrl(value: string, options: SafeTargetUrlOptions
 
 export interface ResolvableTargetUrlOptions extends SafeTargetUrlOptions {
   skipDnsCheck?: boolean;
-  resolveIp?: (hostname: string) => Promise<string[]>;
+  resolveIp?: (hostname: string, signal?: AbortSignal) => Promise<string[]>;
+  signal?: AbortSignal;
 }
 
 /**
@@ -343,9 +345,11 @@ export async function assertResolvableTargetUrl(
 
   let ips: string[];
   try {
-    ips = await resolve(hostname);
+    options.signal?.throwIfAborted();
+    ips = await awaitWithAbort(resolve(hostname, options.signal), options.signal);
+    options.signal?.throwIfAborted();
   } catch {
-    throw unsafeTarget(`cannot resolve A2A endpoint host ${hostname}`);
+    throw new A2AClientError("network", `cannot resolve A2A endpoint host ${hostname}`);
   }
   for (const ip of ips) {
     const version = isIP(ip);

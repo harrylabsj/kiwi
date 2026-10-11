@@ -181,7 +181,7 @@ export class MerchantGrantStore {
           input.action,
           input.resourceType,
           JSON.stringify(selector),
-          input.expiresAt,
+          new Date(Date.parse(input.expiresAt)).toISOString(),
           version,
           actor.actorId,
           stamp,
@@ -343,19 +343,24 @@ export class MerchantGrantStore {
     const generation = this.authorizationGeneration(merchantId, subjectId);
     const rows = this.db
       .prepare(
-        `SELECT grant_id, resource_selector_json FROM merchant_operator_grants
+        `SELECT grant_id, resource_selector_json, expires_at FROM merchant_operator_grants
          WHERE merchant_id=? AND subject_id=? AND action=? AND resource_type=?
-           AND revoked_at IS NULL AND expires_at>?`,
+           AND revoked_at IS NULL`,
       )
-      .all(merchantId, subjectId, input.action, input.resourceType, this.now()) as Array<{
+      .all(merchantId, subjectId, input.action, input.resourceType) as Array<{
       grant_id: string;
       resource_selector_json: string;
+      expires_at: string;
     }>;
+    const nowMs = Date.parse(this.now());
     const resources = [...new Set(input.resourceIds ?? [])];
     const matched: string[] = [];
     const covered = new Set<string>();
     let all = false;
     for (const row of rows) {
+      // Use the same parser as grant admission, including historical offsets SQLite cannot parse.
+      const expiresMs = typeof row.expires_at === "string" ? Date.parse(row.expires_at) : Number.NaN;
+      if (!Number.isFinite(expiresMs) || !Number.isFinite(nowMs) || expiresMs <= nowMs) continue;
       const selector = JSON.parse(row.resource_selector_json) as {
         kind: string;
         sku_ids?: string[];

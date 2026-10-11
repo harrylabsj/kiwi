@@ -1,5 +1,7 @@
 /** Persistent Workbench outbox execution and UNKNOWN reconciliation (design v0.1.1 §22). */
 
+import { ManagementError } from "../../merchant/application/service.js";
+
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -201,8 +203,9 @@ export class WorkbenchReconciliationStore {
     }>;
     next_cursor: string | null;
   } {
-    const offset = options.cursor === undefined ? 0 : Number.parseInt(options.cursor, 10);
-    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("alert cursor is invalid");
+    if (options.cursor !== undefined && !/^\d+$/.test(options.cursor)) throw new ManagementError("invalid_input", "alert cursor is invalid");
+    const offset = options.cursor === undefined ? 0 : Number(options.cursor);
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new ManagementError("invalid_input", "alert cursor is invalid");
     const limit = Math.min(Math.max(options.limit ?? 50, 1), 100);
     const rows = this.db
       .prepare(

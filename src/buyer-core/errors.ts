@@ -44,7 +44,7 @@ const CODE_TO_JSON_RPC: Record<McpErrorCode, number> = {
   invalid_params: -32602,
   method_not_found: -32601,
   not_initialized: -32002,
-  tool_not_found: -32002,
+  tool_not_found: -32602,
   contract_violation: -32602,
   idempotency_conflict: -32602,
   delegation_denied: -32000,

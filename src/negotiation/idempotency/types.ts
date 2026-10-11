@@ -130,5 +130,5 @@ export interface IdempotencyInFlightMarker {
   started_at: string;
 }
 
-/** in-flight 标记的陈旧窗口（超过即视为陈旧，不再阻断重试；缺省 24h）。 */
+/** @deprecated Legacy age hint (24h). Unfinished effects block at every age; this value does not authorize retry. */
 export const DEFAULT_INFLIGHT_STALE_MS = 24 * 60 * 60 * 1000;

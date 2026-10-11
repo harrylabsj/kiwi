@@ -76,12 +76,15 @@ export function createMerchantFeedApiHandler(options: {
       if (snapshot !== null) {
         const offset = parseNonNegativeInteger(url.searchParams.get("offset"), 0);
         const limit = parseNonNegativeInteger(url.searchParams.get("limit"), 50);
+        let snapshotId: string;
+        try { snapshotId = decodeURIComponent(snapshot[1] ?? ""); }
+        catch { throw new MerchantFeedError("validation_error", "snapshot path encoding is invalid"); }
         writeJson(
           res,
           200,
           options.store.readSnapshotPage(
             options.merchantId,
-            decodeURIComponent(snapshot[1] ?? ""),
+            snapshotId,
             offset,
             limit,
           ),

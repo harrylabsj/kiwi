@@ -908,6 +908,8 @@ describe("MCP server 协议面（§6.1/§6.10 fail-closed）", () => {
 
   it("未知工具返回 tool_not_found", async () => {
     const server = makeServer();
+    const beforeInit = await server.handleMessage(JSON.stringify({ jsonrpc: "2.0", id: 0, method: "tools/call", params: { name: "kiwi_nope", arguments: {} } }));
+    expect(beforeInit?.error?.code).toBe(-32002);
     await server.handleMessage(
       JSON.stringify({
         jsonrpc: "2.0",
@@ -920,7 +922,7 @@ describe("MCP server 协议面（§6.1/§6.10 fail-closed）", () => {
     const res = await server.handleMessage(
       JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "kiwi_nope", arguments: {} } }),
     );
-    expect(res?.error?.code).toBe(-32002);
+    expect(res?.error?.code).toBe(-32602);
   });
 
   it("非法 JSON 返回 parse error", async () => {

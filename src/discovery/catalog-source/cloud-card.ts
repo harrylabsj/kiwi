@@ -1,3 +1,4 @@
+import { createRequestBudget, finishRequestResponse, type ReadRequestOptions } from "../../net/request-budget.js";
 /**
  * Copyright 2026 harrylabsj
  *
@@ -270,14 +271,16 @@ export class CloudCardSource {
   private async getPublic(
     requestPath: string,
     extraHeaders: Array<[string, string]> = [],
+    options: ReadRequestOptions = {},
   ): Promise<{ status: number; etag: string; json: unknown }> {
     const fetchImpl = this.deps.fetchImpl ?? globalThis.fetch;
     const timeoutMs = this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const url = `${this.baseUrl}${requestPath}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const budget = createRequestBudget(timeoutMs, options);
+    const controller = budget.controller;
+    let response: Response | undefined;
     try {
-      let response: Response;
+      controller.signal.throwIfAborted();
       try {
         response = await fetchImpl(url, {
           redirect: "manual",
@@ -333,7 +336,8 @@ export class CloudCardSource {
       }
       return { status: response.status, etag, json };
     } finally {
-      clearTimeout(timer);
+      finishRequestResponse(response, controller);
+      budget.dispose();
     }
   }
 
@@ -345,11 +349,11 @@ export class CloudCardSource {
    */
   async fetchPublishedCard(
     agentId: string,
-    options: { ifNoneMatch?: string } = {},
+    options: { ifNoneMatch?: string } & ReadRequestOptions = {},
   ): Promise<PublishedCardRead> {
     const extra: Array<[string, string]> =
       options.ifNoneMatch !== undefined ? [["if-none-match", options.ifNoneMatch]] : [];
-    const { status, etag, json } = await this.getPublic(this.cardPath(agentId), extra);
+    const { status, etag, json } = await this.getPublic(this.cardPath(agentId), extra, options);
     if (status === 304) {
       if (etag === "") {
         throw new CatalogSourceError(
@@ -363,9 +367,9 @@ export class CloudCardSource {
   }
 
   /** 读取 Catalog 签发的绑定声明（公开读，无凭据）。 */
-  async fetchRuntimeBinding(agentId: string): Promise<CloudBindingDocument> {
+  async fetchRuntimeBinding(agentId: string, options: ReadRequestOptions = {}): Promise<CloudBindingDocument> {
     const path = `/v1/agents/${encodeURIComponent(this.requireAgentId(agentId))}/runtime-binding`;
-    const { json } = await this.getPublic(path);
+    const { json } = await this.getPublic(path, [], options);
     return parseCloudBindingDocument(json);
   }
 
@@ -378,7 +382,7 @@ export class CloudCardSource {
    */
   async resolveCloudAgent(
     agentId: string,
-    options: { cachedCardEtag?: string; cachedCard?: AgentCard } = {},
+    options: { cachedCardEtag?: string; cachedCard?: AgentCard } & ReadRequestOptions = {},
   ): Promise<CloudAgentResolution> {
     const id = this.requireAgentId(agentId);
     const cardUrl = this.cardUrl(id);
@@ -387,8 +391,8 @@ export class CloudCardSource {
     // 内容没变，不说明"上次验过的声明现在仍然有效"。
     const conditional = options.cachedCardEtag !== undefined && options.cachedCard !== undefined;
     const [card, binding] = await Promise.all([
-      this.fetchPublishedCard(id, conditional ? { ifNoneMatch: options.cachedCardEtag } : {}),
-      this.fetchRuntimeBinding(id),
+      this.fetchPublishedCard(id, { ...options, ...(conditional ? { ifNoneMatch: options.cachedCardEtag } : {}) }),
+      this.fetchRuntimeBinding(id, options),
     ]);
     let resolvedCard: AgentCard;
     if (card.notModified) {
@@ -539,6 +543,16 @@ export class CloudBindingTrustCache {
   private readonly latestByAgent = new Map<string, string>();
 
   set(resolution: CloudAgentResolution): void {
+    const stamp = this.clock();
+    for (const [key, entry] of this.entries) if (entry.expiresAtMs <= stamp.getTime()) this.get(key, stamp);
+    if (this.entries.has(resolution.trustKey)) this.entries.delete(resolution.trustKey);
+    while (this.entries.size >= 512) {
+      const key = this.entries.keys().next().value;
+      if (key === undefined) break;
+      const entry = this.entries.get(key)!;
+      this.entries.delete(key);
+      if (this.latestByAgent.get(entry.resolution.agentId) === key) this.latestByAgent.delete(entry.resolution.agentId);
+    }
     const expiresAtMs = Date.parse(resolution.claims.expires_at);
     this.entries.set(resolution.trustKey, {
       resolution,

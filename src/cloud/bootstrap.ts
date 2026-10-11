@@ -1240,6 +1240,7 @@ export async function bootstrapCloudRuntime(
   if (signingIdentity !== undefined) {
     enrollmentHeartbeat = startEnrollmentHeartbeat({
       dataDir: config.dataDir,
+      runtimeOrigin: config.publicOrigin,
       signingIdentity: toJwsSigningIdentity(signingIdentity),
       isReady: async () => (await readiness()).ready,
       onError: (err) => log(`[kiwi-cloud] ${err.message}\n`),
@@ -1264,6 +1265,8 @@ export async function bootstrapCloudRuntime(
       expectedMerchantId: catalogMerchantIdForProducts,
       expectedAgentId: profile.agent_id,
       currentGeneration: 1,
+      expectedOrigin: config.publicOrigin,
+      expectedPath: CLOUD_A2A_PATH,
       ...(options.challengeStore !== undefined ? { store: options.challengeStore } : {}),
     }),
     enrollmentChallengeHandler: createEnrollmentChallengeResponder({

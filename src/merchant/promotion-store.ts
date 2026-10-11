@@ -302,6 +302,7 @@ export class MerchantPromotionStore {
           item.sku_refs.includes(sku) &&
           promotionIsActive(item.starts_at, item.ends_at, now),
       )
+      .filter((item) => item.rule.kind !== "quantity_tiers" || item.rule.tiers.some((tier) => tier.min_quantity <= quantity))
       .map((item) => ({
         promotion_id: item.promotion_id,
         revision: item.revision,

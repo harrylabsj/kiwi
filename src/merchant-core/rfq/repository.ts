@@ -922,9 +922,10 @@ export class RfqRepository {
       if (!from.includes(current.status)) {
         throw new RfqError("approval_stale", `发布 ${releaseId} 状态为 ${current.status}，不能转移到 ${to}`);
       }
-      this.db
+      const changed = this.db
         .prepare("UPDATE rfq_release_requests SET status = ?, updated_at = ? WHERE release_id = ? AND merchant_id = ? AND status = ?")
         .run(to, this.now(), releaseId, this.merchantId, current.status);
+      if (changed.changes !== 1) throw new RfqError("approval_stale", `发布 ${releaseId} 状态已改变`);
       return this.getRelease(releaseId) as RfqReleaseRow;
     });
   }

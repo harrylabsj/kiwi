@@ -368,6 +368,9 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
     "counter_offer",
     "conditional_offer",
     "accept_nonbinding",
+    "withdraw",
+    "decline",
+    "cancel",
   ]);
 
   /** 审查 BUG-10：把入站 action 映射到相位机事件并推进；非法转换（不在
@@ -741,7 +744,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
     }
     // 审查 P1-07（跨重启残留，独立验收发现）：终态相位同样必须恢复——相位
     // 取自链上 state_transition 事实（非臆造）。否则 cancel/withdraw/decline
-    // 不在 COMMERCIAL_ACTIONS、重启后 advancePhase 从全新 OPEN 状态推进：
+    // 重启后若不恢复终态会让 advancePhase 从全新 OPEN 状态推进：
     // 重放的 cancel 被当作新动作接受，并落 from_phase 伪造为 OPEN 的幻影
     // 终态转换。恢复后由相位机 fail-closed（state_conflict），与进程内一致。
     phaseStateByNegotiation.set(negotiationId, {
@@ -781,6 +784,12 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         kind: "error", protocolCode: "reconciliation_required", message: "legacy negotiation owner is not proven",
       };
       boundPeers.set(negotiationId, ctx.senderIdentity);
+      // 审查 P2-D：终态不得以同一 negotiation_id 重开（§17.4/§21.2）。
+      if (closedNegotiations.has(negotiationId) && COMMERCIAL_ACTIONS.has(envelope.action)) {
+        return declineReply("state_conflict");
+      }
+
+
       if ((envelope.action === "withdraw" || envelope.action === "decline") &&
           (envelope.payload as { scope?: string }).scope === "offer") {
         const target = envelope.payload as { target_message_id: string; target_offer_id?: string };
@@ -793,11 +802,6 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         }
         const expectedAuthor = envelope.action === "withdraw" ? "buyer" : "merchant";
         if (object.actor !== expectedAuthor) return { kind: "declined", reasonCode: "authorization_failed" };
-      }
-
-      // 审查 P2-D：终态不得以同一 negotiation_id 重开（§17.4/§21.2）。
-      if (closedNegotiations.has(negotiationId) && COMMERCIAL_ACTIONS.has(envelope.action)) {
-        return declineReply("state_conflict");
       }
 
       // 审查 BUG-10：每个入站 action 经规范转换表推进相位——非法转换

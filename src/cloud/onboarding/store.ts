@@ -348,7 +348,7 @@ export class OnboardingStore {
       if (evidence !== undefined) {
         this.recordEvidence(record.recordId, evidence);
       }
-      this.db
+      const changed = this.db
         .prepare(
           "update onboarding_records set status = ?, revision = ?, application_id = ?,"
             + " runtime_origin_host = coalesce(?, runtime_origin_host),"
@@ -365,6 +365,7 @@ export class OnboardingStore {
           record.recordId,
           input.expectedRevision,
         );
+      if (changed.changes !== 1) throw new OnboardingError("stale_revision", "record changed before update");
     });
     return this.requireRecord(record.recordId);
   }
@@ -393,12 +394,13 @@ export class OnboardingStore {
       assertRevision(record, expectedRevision);
       const next: OnboardingStatus = input.retryable ? "FAILED_RETRYABLE" : "BLOCKED";
       assertTransition(record.status, next);
-      this.db
+      const changed = this.db
         .prepare(
           "update onboarding_records set status = ?, revision = ?, last_error = ?, updated_at = ?"
             + " where record_id = ? and revision = ?",
         )
         .run(next, record.revision + 1, sanitizeError(input.reason), this.now(), recordId, expectedRevision);
+      if (changed.changes !== 1) throw new OnboardingError("stale_revision", "record changed before update");
       return this.requireRecord(recordId);
     });
   }
@@ -433,7 +435,7 @@ export class OnboardingStore {
         summary: `consent refused: ${input.note ?? "merchant declined in the platform dialog"}`,
         observedAt: this.now(),
       });
-      this.db
+      const changed = this.db
         .prepare(
           "update onboarding_records set revision = ?, last_error = ?, updated_at = ?"
             + " where record_id = ? and revision = ?",
@@ -445,6 +447,7 @@ export class OnboardingStore {
           recordId,
           expectedRevision,
         );
+      if (changed.changes !== 1) throw new OnboardingError("stale_revision", "record changed before update");
     });
     return this.requireRecord(recordId);
   }
@@ -490,9 +493,10 @@ export class OnboardingStore {
   private markBlocked(record: OnboardingRecord, reason: string): void {
     if (record.status === "BLOCKED" || record.status === "CANCELLED") return;
     if (!ONBOARDING_TRANSITIONS[record.status].includes("BLOCKED")) return;
-    this.db
+    const changed = this.db
       .prepare("update onboarding_records set status = 'BLOCKED', revision = ?, last_error = ?, updated_at = ? where record_id = ? and revision = ?")
       .run(record.revision + 1, sanitizeError(reason), this.now(), record.recordId, record.revision);
+      if (changed.changes !== 1) throw new OnboardingError("stale_revision", "record changed before update");
   }
 
   private rememberIdempotency(

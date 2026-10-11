@@ -56,6 +56,7 @@ import { createServer as createSecureServer } from "node:https";
 
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
+import { BoundedIpLimiter } from "../http/bounded-ip-rate-limit.js";
 import type { MerchantAuthorization } from "../auth/merchant-authorization.js";
 import {
   formatAppOAuthCallbackLog,
@@ -250,7 +251,10 @@ async function readForm(req: IncomingMessage): Promise<Record<string, string | u
   const text = Buffer.concat(chunks).toString("utf8");
   if (text.trim() === "") return {};
   if ((req.headers["content-type"] ?? "").includes("application/json")) {
-    return JSON.parse(text) as Record<string, string | undefined>;
+    const parsed: unknown = JSON.parse(text);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)
+      || Object.values(parsed).some((value) => typeof value !== "string")) throw new Error("form must contain string fields");
+    return parsed as Record<string, string | undefined>;
   }
   return Object.fromEntries(new URLSearchParams(text).entries());
 }
@@ -273,6 +277,8 @@ export async function startGatewayEntryServer(
   const publicBaseUrl = options.publicBaseUrl.replace(/\/+$/, "");
   const clientLabel = options.clientLabel ?? "Kiwi 商家运营";
   let closing = false;
+  const publicRequests = new BoundedIpLimiter(30);
+  let pendingConnectRequests = 0;
   const pendingConnections = new Map<
     string,
     { requestId: string; resume: string; expiresAt: number }
@@ -305,6 +311,13 @@ export async function startGatewayEntryServer(
    * resume 是入口自己的 authorize 相对路径，连接完成后原样回到该授权请求。
    */
   const startConnect = async (res: ServerResponse, resume: string): Promise<void> => {
+    const stamp = Date.now();
+    for (const [key, pending] of pendingConnections) if (pending.expiresAt <= stamp) pendingConnections.delete(key);
+    if (pendingConnections.size + pendingConnectRequests >= 512) {
+      writeJson(res, 429, { error: "rate_limited", error_description: "connection capacity reached" });
+      return;
+    }
+    pendingConnectRequests++;
     const returnUrl = withQueryParam(`${publicBaseUrl}/connect/callback`, "resume", resume);
     let request: { requestId: string; loginUrl: string; expiresAt: string };
     try {
@@ -325,6 +338,8 @@ export async function startGatewayEntryServer(
 </body></html>`,
       );
       return;
+    } finally {
+      pendingConnectRequests--;
     }
     const state = randomBytes(32).toString("base64url");
     pendingConnections.set(state, {
@@ -915,6 +930,11 @@ ${current}
       const url = new URL(req.url ?? "/", publicBaseUrl);
       if (req.method === "GET" && url.pathname === "/health") {
         writeJson(res, 200, { ok: true, service: "kiwi-merchant-entry" });
+        return;
+      }
+      if (["/connect", "/oauth/register", "/instance/pair"].includes(url.pathname)
+        && !publicRequests.take(req.socket?.remoteAddress)) {
+        writeJson(res, 429, { error: "rate_limited" });
         return;
       }
       if (await routeOAuth(req, res, url)) return;

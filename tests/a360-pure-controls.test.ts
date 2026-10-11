@@ -395,6 +395,8 @@ async function responderCall(ch: object) {
     expectedAgentId: "agent",
     expectedMerchantId: "merchant",
     currentGeneration: 1,
+    expectedOrigin: "https://runtime.fixture.invalid",
+    expectedPath: "/a2a",
     now: () => new Date(now()),
   });
   const s = createServer(responder);

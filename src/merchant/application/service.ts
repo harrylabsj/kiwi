@@ -253,10 +253,10 @@ export class MerchantApplicationService {
   async listApprovals(ctx: VerifiedActorContext, query: PageQuery = {}): Promise<ApprovalPage> {
     this.authorize(ctx, "approvals:read");
     const limit = clampLimit(query.limit);
-    // 归属过滤在**服务层**做：适配层拿到的列表不得自行裁剪（BD §8.1）。
+    // 单商家实例中的候选结构过滤；该检查本身不证明多租户归属。
     const candidates = this.deps
       .listCandidates()
-      .filter((candidate) => this.belongsToMerchant(candidate));
+      .filter((candidate) => this.hasCandidatePrincipal(candidate));
     const start = decodeCursor(query.cursor);
     const page = candidates.slice(start, start + limit);
     const next = start + limit < candidates.length ? String(start + limit) : null;
@@ -392,18 +392,15 @@ export class MerchantApplicationService {
     return actor;
   }
 
-  private belongsToMerchant(candidate: WriteApprovalCandidate): boolean {
-    // 候选目前以 principal_id 记录操作者；商家归属由本实例身份决定（单商家实例）。
-    // 显式写出这一层，是为了将来引入多商家主体时**必须先改这里**，而不是靠隐式假设。
-    return (
-      candidate.principal_id.startsWith("merchant-agent:") ||
-      candidate.principal_id.length > 0
-    );
+  private hasCandidatePrincipal(candidate: WriteApprovalCandidate): boolean {
+    // This is a shape check, not tenant proof. Actor merchant identity is checked by requireActor;
+    // candidate storage is scoped to this single-merchant instance. Multi-tenant storage needs an explicit merchant binding.
+    return typeof candidate.principal_id === "string" && candidate.principal_id.length > 0;
   }
 
   private requireOwnedCandidate(candidateId: string): WriteApprovalCandidate {
     const candidate = this.deps.getCandidate(String(candidateId ?? "").trim());
-    if (candidate === undefined || !this.belongsToMerchant(candidate)) {
+    if (candidate === undefined || !this.hasCandidatePrincipal(candidate)) {
       throw new ManagementError("not_found", `unknown candidate: ${candidateId}`);
     }
     return candidate;

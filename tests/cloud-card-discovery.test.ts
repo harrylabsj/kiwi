@@ -601,3 +601,5 @@ describe("CloudAgentResolution 类型面", () => {
     );
   });
 });
+
+it('A422 H9 verified-resolution cache bounds versions/agents and prunes expired unread entries',async()=>{const {source:cloud}=source();const resolved=await cloud.resolveCloudAgent(AGENT_ID);let stamp=NOW;const cache=new CloudBindingTrustCache(()=>stamp);for(let i=0;i<513;i++)cache.set({...resolved,agentId:`agent-${i}`,trustKey:`key-${i}`});expect(cache.size).toBe(512);expect(cache.latestFor('agent-0')).toBeUndefined();expect(cache.get('key-1')).toBeDefined();expect(cache.latestFor('agent-512')?.trustKey).toBe('key-512');stamp=new Date(Date.parse(resolved.claims.expires_at)+1);cache.set({...resolved,agentId:'fresh',trustKey:'fresh',claims:{...resolved.claims,expires_at:new Date(stamp.getTime()+10000).toISOString()}});expect(cache.size).toBe(1);expect(cache.latestFor('agent-512')).toBeUndefined();expect(cache.latestFor('fresh')?.trustKey).toBe('fresh');});

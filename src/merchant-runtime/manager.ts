@@ -27,8 +27,10 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { writeFileAtomic } from "../fs/atomic-write.js";
 
 export interface ManagedServiceSpec {
   /** 服务名（a2a / mcp 等，作为文件名须安全）。 */
@@ -53,7 +55,7 @@ export interface ManagedServiceState {
 export class MerchantRuntimeError extends Error {
   constructor(
     message: string,
-    readonly code: "unknown_service" | "already_running" | "not_running" | "spawn_failed",
+    readonly code: "unknown_service" | "already_running" | "not_running" | "spawn_failed" | "stop_unconfirmed",
   ) {
     super(message);
     this.name = "MerchantRuntimeError";
@@ -64,8 +66,9 @@ function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // Only ESRCH proves absence. Permission/observation failure cannot prove a stopped service.
+    return (error as { code?: string }).code !== "ESRCH";
   }
 }
 
@@ -78,6 +81,7 @@ interface RunningChild {
   pid: number;
   restarts: number;
   stopped: boolean;
+  stopToken?: string;
 }
 
 interface PidRecord {
@@ -117,6 +121,20 @@ export class MerchantRuntimeManager {
   private pidFile(name: string): string {
     return path.join(this.runDir, `${name}.pid`);
   }
+
+  private stoppedFile(name: string): string { return path.join(this.runDir, `${name}.stopped`); }
+  private stopIntent(name: string): { stopped: boolean; token?: string } {
+    const file = this.stoppedFile(name);
+    if (!existsSync(file)) return { stopped: false };
+    try {
+      const value: unknown = JSON.parse(readFileSync(file, "utf8"));
+      if (typeof value === "object" && value !== null && "stopped" in value && "token" in value
+        && typeof value.stopped === "boolean" && typeof value.token === "string" && value.token !== "")
+        return { stopped: value.stopped, token: value.token };
+    } catch { /* Unknown intent remains stopped; it cannot trigger an automatic launch. */ }
+    return { stopped: true, token: "unknown-stop-intent" };
+  }
+
 
   private logFile(name: string): string {
     return path.join(this.runDir, `${name}.log`);
@@ -176,15 +194,15 @@ export class MerchantRuntimeManager {
   private scheduleRestart(name: string, previous: RunningChild): void {
     const delay = backoffMs(previous.restarts);
     setTimeout(() => {
-      if (!this.supervising || previous.stopped) return;
-      void this.start(name)
+      if (!this.supervising || previous.stopped || this.stopIntent(name).stopped || this.stopIntent(name).token !== previous.stopToken) return;
+      void this.launch(name, false, { token: previous.stopToken })
         .then(() => {
           const next = this.children.get(name);
           if (next !== undefined) next.restarts = previous.restarts;
         })
         .catch(() => {
           // 配置/权限/工作目录错误也按退避持续重试，保持 7×24 manager 存活。
-          if (this.supervising && !previous.stopped) {
+          if (this.supervising && !previous.stopped && !this.stopIntent(name).stopped && this.stopIntent(name).token === previous.stopToken) {
             previous.restarts = Math.min(previous.restarts + 1, 32);
             this.scheduleRestart(name, previous);
           }
@@ -193,12 +211,18 @@ export class MerchantRuntimeManager {
   }
 
   /** 启动服务（已在运行 → already_running 拒绝重复启动）。 */
-  async start(name: string): Promise<ManagedServiceState> {
+  async start(name: string): Promise<ManagedServiceState> { return this.launch(name, true); }
+
+  private async launch(name: string, explicit: boolean, expectedIntent?: { token?: string }): Promise<ManagedServiceState> {
     const spec = this.spec(name);
+    const observedIntent = this.stopIntent(name);
+    if (!explicit && (observedIntent.stopped || (expectedIntent !== undefined && observedIntent.token !== expectedIntent.token))) return this.stateOf(name);
     const existing = this.livePid(name);
     if (existing !== undefined) {
       throw new MerchantRuntimeError(`服务 ${name} 已在运行（pid ${existing}）`, "already_running");
     }
+    const intent = this.stopIntent(name);
+    if (explicit && intent.stopped) writeFileAtomic(this.stoppedFile(name), JSON.stringify({ stopped: false, token: intent.token ?? randomUUID() }) + "\n", { mode: 0o600 });
     const child = this.spawnImpl(spec.command[0] ?? "", spec.command.slice(1), {
       detached: true,
       stdio: ["ignore", "ignore", "ignore"],
@@ -212,7 +236,7 @@ export class MerchantRuntimeManager {
     if (child.pid === undefined) {
       throw new MerchantRuntimeError(`服务 ${name} 启动失败（无 pid）`, "spawn_failed");
     }
-    const state: RunningChild = { pid: child.pid, restarts: 0, stopped: false };
+    const state: RunningChild = { pid: child.pid, restarts: 0, stopped: false, stopToken: this.stopIntent(name).token };
     this.children.set(name, state);
     try {
       writeFileSync(
@@ -263,6 +287,7 @@ export class MerchantRuntimeManager {
   /** 停止服务（SIGTERM；显式停止后不自动重启）。 */
   async stop(name: string): Promise<ManagedServiceState> {
     this.spec(name);
+    writeFileAtomic(this.stoppedFile(name), JSON.stringify({ stopped: true, token: randomUUID() }) + "\n", { mode: 0o600 });
     const current = this.children.get(name);
     if (current !== undefined) current.stopped = true;
     let pid = current?.pid ?? this.livePid(name);
@@ -308,6 +333,10 @@ export class MerchantRuntimeManager {
         // 已退出
       }
     }
+    if (pidAlive(pid)) {
+      // The stop intent blocks future supervisor launches; liveness is still unconfirmed, keep its pid evidence.
+      throw new MerchantRuntimeError(`服务 ${name} 停止意图已记录，但 pid ${pid} 仍未确认退出`, "stop_unconfirmed");
+    }
     this.children.delete(name);
     rmSync(this.pidFile(name), { force: true });
     return this.stateOf(name);
@@ -335,7 +364,7 @@ export class MerchantRuntimeManager {
       running: pid !== undefined,
       ...(pid !== undefined ? { pid } : {}),
       restarts: current?.restarts ?? 0,
-      stopped: current?.stopped ?? pid === undefined,
+      stopped: this.stopIntent(name).stopped || (current?.stopped ?? pid === undefined),
       ...(lastExit !== undefined && lastExit !== null ? { last_exit: lastExit } : {}),
     };
   }
@@ -352,7 +381,7 @@ export class MerchantRuntimeManager {
     this.supervising = true;
     for (const name of this.services.keys()) {
       const pid = this.livePid(name);
-      if (pid === undefined) await this.start(name);
+      if (pid === undefined && !this.stopIntent(name).stopped) await this.launch(name, false);
     }
   }
 

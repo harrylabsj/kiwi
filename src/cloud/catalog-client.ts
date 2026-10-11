@@ -61,6 +61,7 @@ import { validateCloudContract } from "../contracts/cloud-contracts.js";
 import { validateAgentCard } from "../discovery/agent-card/validate.js";
 import type { AgentCard } from "../discovery/agent-card/types.js";
 import { isRedirectResponse, readJsonBody, SafeHttpError } from "../net/safe-http.js";
+import { finishRequestResponse } from "../net/request-budget.js";
 import { canonicalize } from "../negotiation/jcs.js";
 import { PRODUCT_VERSION } from "../product-cli.js";
 import { validateBindingClaims, type BindingClaims } from "../trust/binding/claims.js";
@@ -1416,6 +1417,9 @@ export class CatalogClient {
             ? `catalog 请求超时（${this.timeoutMs}ms）：${url}`
             : `catalog 不可达：${url}（${detail}）`,
         );
+      }
+      if (isRedirectResponse(response) || response.status === 404 || response.status === 409 || response.status === 429 || response.status >= 500) {
+        finishRequestResponse(response, controller);
       }
       if (isRedirectResponse(response)) {
         throw new CatalogClientError(

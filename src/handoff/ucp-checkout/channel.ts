@@ -754,7 +754,8 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
 
   private withEffectiveExpiry(checkout: UcpCheckoutSession, nowIso: string): UcpCheckoutSession {
     if (checkout.expires_at !== undefined) return checkout;
-    const expires = new Date(Date.parse(nowIso) + DEFAULT_EXPIRY_MS).toISOString();
+    const createdAt = this.sessions.get(checkout.session_id)?.created_at ?? nowIso;
+    const expires = new Date(Date.parse(createdAt) + DEFAULT_EXPIRY_MS).toISOString();
     return { ...checkout, expires_at: expires };
   }
 

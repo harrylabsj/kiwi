@@ -87,6 +87,8 @@ async function startChallengeServer(options: {
     expectedMerchantId: MERCHANT,
     expectedAgentId: AGENT,
     currentGeneration: GENERATION,
+    expectedOrigin: ORIGIN,
+    expectedPath: A2A_PATH,
     store,
     ...(options.maxPerMinute !== undefined ? { maxPerMinute: options.maxPerMinute } : {}),
     now: () => NOW,

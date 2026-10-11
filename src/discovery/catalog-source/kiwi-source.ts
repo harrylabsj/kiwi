@@ -1,3 +1,4 @@
+import { createRequestBudget, finishRequestResponse, type ReadRequestOptions } from "../../net/request-budget.js";
 /**
  * Copyright 2026 harrylabsj
  *
@@ -137,15 +138,16 @@ export class KiwiCatalogSource {
   }
 
   /** 核心请求：超时 / HTTP / 网络失败统一映射为 CatalogSourceError。 */
-  private async getJson(requestPath: string): Promise<unknown> {
+  private async getJson(requestPath: string, options: ReadRequestOptions = {}): Promise<unknown> {
     const fetchImpl = this.deps.fetchImpl ?? globalThis.fetch;
     const timeoutMs = this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const url = `${this.baseUrl}${requestPath}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let response: Response;
+    const budget = createRequestBudget(timeoutMs, options);
+    const controller = budget.controller;
+    let response: Response | undefined;
     let raw: unknown;
     try {
+      controller.signal.throwIfAborted();
       try {
         response = await fetchImpl(url, {
           // 出站加固：绝不跟随重定向（3xx 目标不经过校验，且可能转发 Bearer 头）。
@@ -204,13 +206,14 @@ export class KiwiCatalogSource {
     } finally {
       // 审查 P2-02：所有路径（fetch 拒绝 / redirect / 非 2xx / body 读失败）
       // 都清理超时 timer——此前只有 body 读的 finally 清理。
-      clearTimeout(timer);
+      finishRequestResponse(response, controller);
+      budget.dispose();
     }
     return raw;
   }
 
   /** 搜索 record（新 API，支持三态域 + handoff 词表过滤）。 */
-  async searchRecords(query: KiwiCatalogSearchQuery = {}): Promise<CatalogAgentRecord[]> {
+  async searchRecords(query: KiwiCatalogSearchQuery = {}, options: ReadRequestOptions = {}): Promise<CatalogAgentRecord[]> {
     // 分页完整拉取：服务端响应带 next_cursor 时翻页直到无游标或达到 limit
     // 总量（limit 是总返回上限而非页大小——历史教训：只当页大小用会让
     // --limit 5 返回全目录）；跨页 catalog_agent_id 去重。
@@ -223,7 +226,7 @@ export class KiwiCatalogSource {
       // 再判总量封顶——提前 break 会绕过校验（limit=0 必须 reject）。
       const qs = buildSearchQuery({ ...query, ...(cursor !== undefined ? { cursor } : {}) });
       if (limit !== undefined && records.length >= limit) break;
-      const raw = await this.getJson(`/v1/agents/search${qs.length > 0 ? `?${qs}` : ""}`);
+      const raw = await this.getJson(`/v1/agents/search${qs.length > 0 ? `?${qs}` : ""}`, options);
       if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
         throw new CatalogSourceError(
           "response_invalid",
@@ -252,11 +255,11 @@ export class KiwiCatalogSource {
   }
 
   /** 按 catalog_agent_id 取单个 record。 */
-  async getRecord(catalogAgentId: string): Promise<CatalogAgentRecord> {
+  async getRecord(catalogAgentId: string, options: ReadRequestOptions = {}): Promise<CatalogAgentRecord> {
     if (typeof catalogAgentId !== "string" || catalogAgentId.length === 0) {
       throw new CatalogSourceError("invalid_input", "catalogAgentId must be a non-empty string");
     }
-    const raw = await this.getJson(`/v1/agents/${encodeURIComponent(catalogAgentId)}`);
+    const raw = await this.getJson(`/v1/agents/${encodeURIComponent(catalogAgentId)}`, options);
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
       throw new CatalogSourceError("response_invalid", "kiwi-catalog get response must be a JSON object");
     }
@@ -268,14 +271,14 @@ export class KiwiCatalogSource {
   }
 
   /** 搜索候选（CatalogSource 接口面：三态域折叠为 CandidateAgent 共享形状）。 */
-  async searchCandidates(query: KiwiCatalogSearchQuery = {}): Promise<CandidateAgent[]> {
-    const records = await this.searchRecords(query);
+  async searchCandidates(query: KiwiCatalogSearchQuery = {}, options: ReadRequestOptions = {}): Promise<CandidateAgent[]> {
+    const records = await this.searchRecords(query, options);
     return records.map((record) => normalizeCatalogAgent(record));
   }
 
   /** 取单个候选（CatalogSource 接口面）。 */
-  async getCandidate(catalogAgentId: string): Promise<CandidateAgent> {
-    const record = await this.getRecord(catalogAgentId);
+  async getCandidate(catalogAgentId: string, options: ReadRequestOptions = {}): Promise<CandidateAgent> {
+    const record = await this.getRecord(catalogAgentId, options);
     return normalizeCatalogAgent(record);
   }
 

@@ -1,3 +1,4 @@
+import { McpError } from "./errors.js";
 /**
  * Copyright 2026 harrylabsj
  *
@@ -75,6 +76,7 @@ export class MarketplaceNegotiator implements Negotiator {
     current: NegotiationStep,
     candidates: Array<Record<string, unknown>>,
   ): Promise<NegotiationStep> {
+    if (current.action !== "counter_offer") throw new McpError("invalid_params", current.action === "clarification" ? "clarification is not supported by this negotiator" : "invalid negotiation action");
     const candidate = candidates.find(
       (c) => (c as CandidateLike).provenance?.negotiation_id !== undefined,
     ) as CandidateLike | undefined;

@@ -20,6 +20,8 @@ import { readEnrollmentStore } from "./enrollment-challenge.js";
 export interface EnrollmentHeartbeatOptions {
   dataDir: string;
   signingIdentity: JwsSigningIdentity;
+  runtimeOrigin?: string;
+  now?: () => Date;
   intervalMs?: number;
   fetchImpl?: typeof fetch;
   onError?: (error: Error) => void;
@@ -51,7 +53,11 @@ export function startEnrollmentHeartbeat(options: EnrollmentHeartbeatOptions): E
     }
     // 地址迁移/密钥恢复中的新授权优先于旧发布态：用户同意并完成新绑定前
     // 不替旧origin/key续freshness，避免将待迁移实例继续显示为可询价。
-    const pendingSessions = state.sessions.filter((session) => ["preparing", "authorized", "bound"].includes(session.status));
+    const origins = options.runtimeOrigin !== undefined ? new Set([options.runtimeOrigin])
+      : new Set(state.sessions.filter((session) => session.status === "published" && session.key_thumbprint === thumbprint).map((session) => session.runtime_origin));
+    const nowMs = (options.now?.() ?? new Date()).getTime();
+    const pendingSessions = state.sessions.filter((session) => ["preparing", "authorized", "bound"].includes(session.status)
+      && origins.has(session.runtime_origin) && Number.isFinite(Date.parse(session.expires_at)) && Date.parse(session.expires_at) > nowMs);
     const pendingAgentIds = new Set(pendingSessions
       .map((session) => {
         const item = session as unknown as Record<string, unknown>;
@@ -62,7 +68,7 @@ export function startEnrollmentHeartbeat(options: EnrollmentHeartbeatOptions): E
     const seen = new Set<string>();
     for (const session of state.sessions) {
       if (stopped) return;
-      if (session.status !== "published" || session.key_thumbprint !== thumbprint) continue;
+      if (session.status !== "published" || session.key_thumbprint !== thumbprint || !origins.has(session.runtime_origin)) continue;
       const item = session as unknown as Record<string, unknown>;
       const catalogOrigin = item["catalog_origin"];
       const agentId = item["catalog_agent_id"];

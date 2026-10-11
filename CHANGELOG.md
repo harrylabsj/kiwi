@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **buyer HTTP 面（review P1-1）**：`kiwi buyer-api serve` 新增 `--auth-token`（或 `KIWI_BUYER_HTTP_TOKEN`）Bearer 认证；令牌为必选，未配置时拒绝启动（fail-closed）；除 `/health` 外全部端点要求令牌，loopback 来源也不豁免认证。新增 Host 头 allowlist（防 DNS rebinding）、请求体超限 413（此前继续累积可内存 DoS）、坏 JSON 400（此前被吞成空对象）。404 不再回显请求 path。
+
 ## v0.12.3 — 2026-10-01
 
 - 会话旁观（只读）投影修正：SKU 与数量现在从真实 KNP 扁平账本载荷回填（rfq 明细行 `items`、offer `terms`、counter_offer `proposed_terms`、conditional_offer `base_terms`；WP11 初版误读的嵌套形状会被入站校验拒绝、从不出现在真实账本，导致旁观 SKU/数量恒为空）。询价/澄清问题原文与运营报告「最近询价关键词」按同一扁平口径修复（clarification 问题取 `field`）。历史账本无需迁移，扫描时即正确投影。

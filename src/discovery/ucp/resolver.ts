@@ -1,3 +1,4 @@
+import { createRequestBudget, finishRequestResponse, type ReadRequestOptions } from "../../net/request-budget.js";
 /**
  * Copyright 2026 harrylabsj
  *
@@ -42,7 +43,7 @@ import type { UcpProfile } from "./types.js";
 export const WELL_KNOWN_UCP_PATH = "/.well-known/ucp";
 const MIN_CACHE_TTL_MS = 60_000;
 
-export interface UcpResolverOptions {
+export interface UcpResolverOptions extends ReadRequestOptions {
   fetchImpl?: typeof fetch;
   /** 抓取超时 ms（默认 10000）。 */
   timeoutMs?: number;
@@ -52,7 +53,7 @@ export interface UcpResolverOptions {
   allowPrivateRanges?: boolean;
   /** 跳过请求前 DNS 复查（测试用；生产应保持 false）。 */
   skipDnsCheck?: boolean;
-  resolveIp?: (hostname: string) => Promise<string[]>;
+  resolveIp?: (hostname: string, signal?: AbortSignal) => Promise<string[]>;
   /** 注入时钟（测试用）。缺省 Date.now。 */
   now?: () => number;
 }
@@ -193,22 +194,26 @@ export class UcpResolver {
     } catch (err) {
       throw mapUnsafe(err);
     }
+    const budget = createRequestBudget(this.deps.timeoutMs ?? 10_000, { signal: this.deps.signal });
+    const controller = budget.controller;
     try {
+      controller.signal.throwIfAborted();
       await assertResolvableTargetUrl(safeUrl, {
         allowPrivateRanges: this.deps.allowPrivateRanges,
         skipDnsCheck: this.deps.skipDnsCheck,
         resolveIp: this.deps.resolveIp,
+        signal: controller.signal,
       });
     } catch (err) {
+      budget.dispose();
       throw mapUnsafe(err);
     }
 
     const fetchImpl = this.deps.fetchImpl ?? globalThis.fetch;
     const timeoutMs = this.deps.timeoutMs ?? 10_000;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    controller.signal.throwIfAborted();
 
-    let response: Response;
+    let response: Response | undefined;
     let cacheControl: CacheControlParse;
     let raw: unknown;
     try {
@@ -266,7 +271,8 @@ export class UcpResolver {
     } finally {
       // 审查 P2-02：所有路径（fetch 拒绝 / redirect / 非 2xx / Cache-Control
       // 非法 / body 读失败）都清理超时 timer——此前只有 body 读的 finally 清理。
-      clearTimeout(timer);
+      finishRequestResponse(response, controller);
+      budget.dispose();
     }
 
     let validation: UcpValidationResult;

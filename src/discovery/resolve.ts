@@ -1,3 +1,4 @@
+import { createRequestBudget, finishRequestResponse, awaitWithAbort, type ReadRequestOptions } from "../net/request-budget.js";
 /**
  * Copyright 2026 harrylabsj
  *
@@ -135,7 +136,7 @@ export interface CatalogDiscoveryDeps {
   cloudTrustCache?: CloudBindingTrustCache;
 }
 
-export interface DiscoveryDeps {
+export interface DiscoveryDeps extends ReadRequestOptions {
   /** 拉取 card 的 fetch；缺省 globalThis.fetch。 */
   fetchImpl?: typeof fetch;
   /** 附加请求头（出站认证：向要求 bearer 的商家 A2A 节点抓取 Agent Card）。 */
@@ -149,7 +150,7 @@ export interface DiscoveryDeps {
   /** 拉取超时 ms（默认 15000）。 */
   timeoutMs?: number;
   /** SSRF DNS 复查的解析函数（缺省 node:dns lookup；受控/测试环境注入用）。 */
-  resolveIp?: (hostname: string) => Promise<string[]>;
+  resolveIp?: (hostname: string, signal?: AbortSignal) => Promise<string[]>;
   /** 跳过 SSRF DNS 复查（仅测试/受控环境；生产缺省 false）。 */
   skipDnsCheck?: boolean;
   /**
@@ -310,6 +311,7 @@ export class AgentDiscovery {
       // 审查 K-M4：UCP 优先路径透传 Authorization 等 headers（与 agent-card 路径
       // 一致），否则要求 bearer 的商家节点 UCP 发现 401 后被迫回退 agent-card。
       headers: deps.headers,
+      signal: deps.signal,
     });
   }
 
@@ -344,14 +346,19 @@ export class AgentDiscovery {
     //      公共主机名解析到 loopback 始终拒绝——allowLoopback 只作用于上述静态
     //      字面判定，不放宽 DNS rebinding，也不放宽私网/保留网段）；
     //   3. 不跟随重定向（redirect:"manual"，3xx → 拒绝）。
+    const budget = createRequestBudget(this.deps.timeoutMs ?? 15_000, { signal: this.deps.signal });
+    const controller = budget.controller;
     let safeUrl: URL;
     try {
+      controller.signal.throwIfAborted();
       safeUrl = assertSafeTargetUrl(url, { allowLoopback: this.deps.allowLoopback === true });
       await assertResolvableTargetUrl(safeUrl, {
         skipDnsCheck: this.deps.skipDnsCheck,
         resolveIp: this.deps.resolveIp,
+        signal: controller.signal,
       });
     } catch (err) {
+      budget.dispose();
       throw new DiscoveryError(
         "card_fetch_failed",
         `Agent Card URL rejected by safety policy: ${err instanceof Error ? err.message : String(err)}`,
@@ -359,9 +366,8 @@ export class AgentDiscovery {
     }
     const fetchImpl = this.deps.fetchImpl ?? globalThis.fetch;
     const timeoutMs = this.deps.timeoutMs ?? 15_000;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let response: Response;
+
+    let response: Response | undefined;
     let raw: unknown;
     try {
       try {
@@ -420,7 +426,8 @@ export class AgentDiscovery {
     } finally {
       // 审查 P2-02：所有路径（fetch 拒绝 / redirect / 非 2xx / body 读失败）
       // 都清理超时 timer——此前只有 body 读的 finally 清理。
-      clearTimeout(timer);
+      finishRequestResponse(response, controller);
+      budget.dispose();
     }
     return raw;
   }
@@ -581,38 +588,51 @@ export class AgentDiscovery {
    *
    * @param query 覆盖 DiscoveryDeps.catalog.query 的搜索查询。
    */
-  async resolveViaCatalog(query?: CatalogSearchQuery): Promise<ResolvedCatalogCandidate[]> {
-    const catalogDeps = this.deps.catalog;
-    if (catalogDeps === undefined) {
-      throw new DiscoveryError(
-        "invalid_input",
-        "resolveViaCatalog requires a catalog source in DiscoveryDeps.catalog",
-      );
-    }
-    const candidates = await catalogDeps.source.searchCandidates(query ?? catalogDeps.query ?? {});
-    const results: ResolvedCatalogCandidate[] = [];
-    for (const candidate of candidates) {
-      if (!this.isCatalogCandidateAllowed(candidate)) continue;
-      const input = this.resolveInputForCandidate(candidate);
-      if (input === undefined) continue;
-      if (input.agentCardUrl !== undefined && isCatalogHostedCardUrl(input.agentCardUrl)) {
-        // 云端托管名片：必须经绑定验签（§11.4/§12.1），不走通用 fetch 路径。
-        // 未配置 cloud 来源 → 跳过该候选（fail-closed，绝不把目录读到的东西当已验证）。
-        const cloud = catalogDeps.cloud;
-        if (cloud === undefined) continue;
-        results.push(await this.resolveCloudCandidate(candidate, input.agentCardUrl, cloud));
-        continue;
+  async resolveViaCatalog(query?: CatalogSearchQuery, options: ReadRequestOptions & { catalogAgentId?: string; limit?: number } = {}): Promise<ResolvedCatalogCandidate[]> {
+    const catalog = this.deps.catalog;
+    if (catalog === undefined) throw new DiscoveryError("invalid_input", "resolveViaCatalog requires a catalog source in DiscoveryDeps.catalog");
+    const selectedQuery = query ?? catalog.query ?? {};
+    const limit = options.limit ?? selectedQuery.limit ?? 16;
+    if (!Number.isInteger(limit) || limit < 1 || (selectedQuery.limit !== undefined && (!Number.isInteger(selectedQuery.limit) || selectedQuery.limit < 1)))
+      throw new DiscoveryError("invalid_input", "catalog candidate limit must be a positive integer");
+    const parentSignal = this.deps.signal === undefined ? options.signal : options.signal === undefined ? this.deps.signal : AbortSignal.any([this.deps.signal, options.signal]);
+    const budget = createRequestBudget(60_000, { ...options, signal: parentSignal }), signal = budget.controller.signal;
+    const scoped = new AgentDiscovery({ ...this.deps, signal, catalog: { ...catalog, cloudTrustCache: this.cloudTrust } });
+    try {
+      signal.throwIfAborted();
+      let candidates: CandidateAgent[];
+      if (options.catalogAgentId !== undefined) {
+        if (options.catalogAgentId === "") throw new DiscoveryError("invalid_input", "catalogAgentId must not be empty");
+        const candidate = await awaitWithAbort(catalog.source.getCandidate(options.catalogAgentId, { signal }), signal);
+        if (candidate.catalog_agent_id !== options.catalogAgentId) throw new DiscoveryError("card_invalid", "catalog exact agent id mismatch");
+        candidates = [candidate];
+      } else {
+        candidates = await awaitWithAbort(catalog.source.searchCandidates({ ...selectedQuery, limit: Math.min(selectedQuery.limit ?? 16, 16) }, { signal }), signal);
       }
-      // 现有 resolve() 实时拉取校验（fresh verification）。失败 propagate。
-      const profile = await this.resolve(input);
-      const channelCandidates = applyHostingMode(
-        profile.channel_candidates,
-        normalizeHostingMode(candidate.hosting.mode),
-      );
-      if (channelCandidates.length === 0) continue;
-      results.push({ candidate, profile: { ...profile, channel_candidates: channelCandidates } });
+      const results: ResolvedCatalogCandidate[] = [];
+      for (const candidate of candidates.slice(0, 16)) {
+        signal.throwIfAborted();
+        if (results.length >= Math.min(limit, 16)) break;
+        if (!this.isCatalogCandidateAllowed(candidate)) continue;
+        const input = this.resolveInputForCandidate(candidate);
+        if (input === undefined) continue;
+        if (input.agentCardUrl !== undefined && isCatalogHostedCardUrl(input.agentCardUrl)) {
+          if (catalog.cloud === undefined) continue;
+          results.push(await scoped.resolveCloudCandidate(candidate, input.agentCardUrl, catalog.cloud));
+        } else {
+          const profile = await scoped.resolve(input);
+          const channels = applyHostingMode(profile.channel_candidates, normalizeHostingMode(candidate.hosting.mode));
+          if (channels.length === 0) continue;
+          results.push({ candidate, profile: { ...profile, channel_candidates: channels } });
+        }
+        signal.throwIfAborted();
+      }
+      signal.throwIfAborted();
+      return results;
+    } finally {
+      budget.controller.abort();
+      budget.dispose();
     }
-    return results;
   }
 
   /** blocked verification.status 过滤；includeBlocked 显式放宽（文档注明）。 */
@@ -652,7 +672,7 @@ export class AgentDiscovery {
     const cached = cache.latestFor(agentId);
     const resolved = await cloud.resolveCloudAgent(
       agentId,
-      cached?.cardEtag != null ? { cachedCardEtag: cached.cardEtag, cachedCard: cached.card } : {},
+      { ...(cached?.cardEtag != null ? { cachedCardEtag: cached.cardEtag, cachedCard: cached.card } : {}), signal: this.deps.signal },
     );
     cache.set(resolved);
     const profile = this.profileFromCard(resolved.card, {

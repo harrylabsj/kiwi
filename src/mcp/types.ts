@@ -38,7 +38,7 @@ export const MCP_ERROR = {
   INVALID_PARAMS: -32602,
   INTERNAL_ERROR: -32603,
   SERVER_NOT_INITIALIZED: -32002,
-  TOOL_NOT_FOUND: -32002,
+  TOOL_NOT_FOUND: -32602,
 } as const;
 
 export type McpJsonRpcVersion = "2.0";

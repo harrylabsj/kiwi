@@ -29,6 +29,7 @@
  */
 
 import { assertResolvableTargetUrl, assertSafeTargetUrl } from "../a2a/client/url-policy.js";
+import { A2AClientError } from "../a2a/client/error.js";
 import { CommerceError } from "../commerce/data-source.js";
 
 export interface UrlSafetyOptions {
@@ -115,6 +116,7 @@ export async function validateExternalDestinationUrl(
         resolveIp: options.resolveIp,
       });
     } catch (err) {
+      if (err instanceof A2AClientError && err.kind === "network") throw new CommerceError("request_failed", "destination DNS resolution temporarily unavailable");
       throw new CommerceError(
         "invalid_input",
         `destination DNS rejected by safety policy: ${err instanceof Error ? err.message : String(err)}`,

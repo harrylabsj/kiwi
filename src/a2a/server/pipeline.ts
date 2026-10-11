@@ -39,7 +39,7 @@ import { validateEnvelope, verifyEnvelopeDigest } from "../../negotiation/domain
 import type { NegotiationEnvelope } from "../../negotiation/domain/envelope.js";
 import { IdempotencyConflictError, idempotencyKey } from "../../negotiation/idempotency/index.js";
 import type { IdempotencyRecord, IdempotencyStore } from "../../negotiation/idempotency/index.js";
-import { LedgerError, LedgerStore } from "../../negotiation/ledger/index.js";
+import { assertNoForbiddenContent, LedgerError, LedgerStore } from "../../negotiation/ledger/index.js";
 import type { LedgerEvent, LedgerEventContent } from "../../negotiation/ledger/index.js";
 import type { A2AMessage, A2ATask, A2ATaskState } from "../client/index.js";
 import { extractKnpEnvelope, parseInboundMessage } from "./inbound-message.js";
@@ -469,7 +469,7 @@ export class InboundPipeline {
         // 5.5 崩溃窗口守卫（T022）：若上一次处理"开始了但没留下提交记录"
         // （in-flight 标记仍在），说明业务结果未知——**不重跑 handler**（handler
         // 可能在落账/提交之前就已对外产生副作用，例如已发出报价），改为明确要求
-        // 对账（协议词表 reconciliation_required）。陈旧标记不阻断（见 store）。
+        // 对账（协议词表 reconciliation_required）。任何年龄的未知标记都阻断（见 store）。
         const inFlight = this.idempotency.readInFlight(senderIdentity, envelope.message_id);
         if (inFlight !== null) {
           throw protocolError(
@@ -477,6 +477,15 @@ export class InboundPipeline {
             `message_id ${envelope.message_id} has an unfinished attempt (started at ${inFlight.started_at}); ` +
               "result unknown — reconcile before retrying",
           );
+        }
+        // Deterministic local recording policy must refuse before acquiring a new claim/handler effects.
+        // Existing unknown attempts above remain unknown; never clear them merely because input is now refused.
+        try { assertNoForbiddenContent(envelope); }
+        catch (err) {
+          if (err instanceof LedgerError && err.code === "ledger_forbidden_content") {
+            throw schemaInvalid("envelope contains reserved content that must not be recorded");
+          }
+          throw err;
         }
         // 处理开始前落标记：标记随提交清除；进程若在此之前崩溃，标记会留下。
         this.idempotency.markInFlight({

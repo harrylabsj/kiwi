@@ -15,7 +15,7 @@ export async function assertBundledEdges(sourceRoot, bundleRoot) {
   if (JSON.stringify(pkg.bundleDependencies) !== JSON.stringify(Object.keys(pkg.dependencies).sort()) ||
       JSON.stringify(pkg.bundledDependencies) !== JSON.stringify(pkg.bundleDependencies))
     throw new Error("SHIPPING_COMPLETE_BUNDLE_REQUIRED");
-  const tree = await new Arborist({ path: bundleRoot }).loadActual({ forceActual: true }); // inspect physical metadata, not hidden-lock cache.
+  const tree = await new Arborist({ path: realpathSync(bundleRoot) }).loadActual({ forceActual: true }); // inspect physical metadata, not hidden-lock cache.
   const invalid = [], checked = [];
   for (const node of tree.inventory.values()) {
     if (node.isRoot || !node.inBundle) continue;
