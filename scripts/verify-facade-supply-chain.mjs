@@ -113,6 +113,9 @@ const facadeVersion = packageJson.version;
 if (!/^\d+\.\d+\.\d+$/.test(facadeVersion)) {
   fail(`facade version ${facadeVersion} is not semver`);
 }
+// 版本策略（纯3段）拒绝时立即短路：任何派生/源候选写入都不得发生（A432-R1：
+// owner 更新入口曾把被拒版本写入源审计快照后才退出）。
+if (process.exitCode) process.exit(process.exitCode);
 
 const sbomArtifact = {
   sbom_version: 1,
