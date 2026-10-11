@@ -1447,7 +1447,7 @@
     },
     {
       "path": "scripts/verify-facade-supply-chain.mjs",
-      "sha256": "sha256:8280e95cb816f0d4af201be737cefe91b3409d8f18fea204a99027d70dfd64aa"
+      "sha256": "sha256:a2d071b74df85d648bbe76fc02b32ea7390558bde6d5ee78f6866158aeacbe42"
     },
     {
       "path": "scripts/verify-npm-shipping-installed.mjs",
@@ -4845,7 +4845,7 @@
     },
     {
       "path": "tests/supply-chain-sbom.test.ts",
-      "sha256": "sha256:7700ec8adeb9a13ba92aa82fc26cf45c3303f6defc2741277c793a73b5a92584"
+      "sha256": "sha256:72d0c28c571237df63e3b35ef3d82cd0e424e57dd0e8bc183ff82a388bc310e0"
     },
     {
       "path": "tests/throttle-sweep.test.ts",

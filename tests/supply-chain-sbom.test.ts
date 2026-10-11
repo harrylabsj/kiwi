@@ -55,17 +55,20 @@ interface FixtureOptions {
   seedSbom?: "fresh" | "stale";
   /** 变体：lock 条目缺 integrity，或 lock 为空（依赖未锁定）。 */
   lockMode?: "no-integrity" | "empty";
+  /** 覆写产品版本（如 npm 允许打包、产品策略拒绝的 prerelease）。 */
+  version?: string;
 }
 
 /** 建 fixture：files 只声明 dist；distEntries 为 dist 下的相对路径列表（空数组 = 不建 dist）。 */
 function makeFixture(distEntries: string[], options: FixtureOptions = {}): string {
   const dir = makeTempDir();
+  const version = options.version ?? "0.0.1";
   writeFileSync(
     join(dir, "package.json"),
     `${JSON.stringify(
       {
         name: "kiwi-sbom-fixture",
-        version: "0.0.1",
+        version,
         files: ["dist"],
         dependencies: { [fixtureDep.name]: fixtureDep.meta.version },
       },
@@ -82,7 +85,7 @@ function makeFixture(distEntries: string[], options: FixtureOptions = {}): strin
     `${JSON.stringify(
       {
         name: "kiwi-sbom-fixture",
-        version: "0.0.1",
+        version,
         lockfileVersion: 3,
         packages:
           options.lockMode === "empty" ? {} : { [`node_modules/${fixtureDep.name}`]: lockedRow },
@@ -103,7 +106,7 @@ function makeFixture(distEntries: string[], options: FixtureOptions = {}): strin
         {
           sbom_version: 1,
           package: "kiwi-sbom-fixture",
-          package_version: "0.0.1",
+          package_version: version,
           runtime_dependencies: [
             {
               name: fixtureDep.name,
@@ -246,5 +249,17 @@ describe("verify-facade-supply-chain 完整性守卫", () => {
     ) as { artifact: { sha256: string } };
     expect(derived.artifact.sha256).not.toBe(first.artifact.sha256);
     expect(readFileSync(join(dir, "supply-chain.sbom.json"), "utf8")).toBe(sourceBefore);
+  });
+
+  it("A432-R1：owner --update-sbom 遇策略拒绝的 prerelease 版本 → exit 1，源快照与派生零写入", () => {
+    // npm 允许打包 prerelease，但产品版本策略（纯3段）必须拒绝；关键回归点：
+    // 拒绝后不得把被拒版本写入源审计快照（独验实际红：写入后才 exit 1）。
+    const dir = makeFixture(["dist/index.js"], { seedSbom: "fresh", version: "0.0.1-beta" });
+    const before = readFileSync(join(dir, "supply-chain.sbom.json"), "utf8");
+    const result = runScript(dir, ["--update-sbom"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("facade version 0.0.1-beta is not semver");
+    expect(readFileSync(join(dir, "supply-chain.sbom.json"), "utf8")).toBe(before);
+    expect(existsSync(join(dir, "build/supply-chain.sbom.derived.json"))).toBe(false);
   });
 });
