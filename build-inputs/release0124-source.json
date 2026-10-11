@@ -555,7 +555,7 @@
     },
     {
       "path": "docs/releasing/npm0124-shipping-contract.md",
-      "sha256": "sha256:d2b3aa074689607c9f5ff6f1354a12da59b4e50b5f1466723c958c6675993ab4"
+      "sha256": "sha256:c9b942810a1827aab57d8a61284f4b53d0ff5f99e2ac7691bbc24caaa62764f6"
     },
     {
       "path": "docs/reports/a297-connect-review-fix.md",
@@ -1447,7 +1447,7 @@
     },
     {
       "path": "scripts/verify-facade-supply-chain.mjs",
-      "sha256": "sha256:1d3ec21bf8446946a6351c74c75e815271f8548e9f336570d40b7d3c163acfb4"
+      "sha256": "sha256:8280e95cb816f0d4af201be737cefe91b3409d8f18fea204a99027d70dfd64aa"
     },
     {
       "path": "scripts/verify-npm-shipping-installed.mjs",
@@ -4845,7 +4845,7 @@
     },
     {
       "path": "tests/supply-chain-sbom.test.ts",
-      "sha256": "sha256:d2fa723eb20b313cbf030901c96bda63caeb12e9f3297af806a5168288dd6763"
+      "sha256": "sha256:7700ec8adeb9a13ba92aa82fc26cf45c3303f6defc2741277c793a73b5a92584"
     },
     {
       "path": "tests/throttle-sweep.test.ts",
