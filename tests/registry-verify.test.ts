@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MANIFEST_SCHEMA,
   isFreshPublish,
   loadManifest,
+  npmRegistryMetadata,
   parseNpmTarballFilename,
   parsePyPiFilename,
   sha256Hex,
@@ -11,6 +12,11 @@ import {
   verifyPyPiFile,
   withPropagationRetry,
 } from "../scripts/lib/registry-verify.mjs";
+
+// npmRegistryMetadata 通过 execFileSync("npm", …) 查询 registry；本文件
+// 用可控行为替换 child_process，走真实解析/规范化/重试包装代码路径，不触网。
+const execFileSyncMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", () => ({ execFileSync: execFileSyncMock }));
 
 describe("registry-verify pure helpers", () => {
   it("computes sha256 and sha512 digests", () => {
@@ -106,7 +112,11 @@ describe("registry-verify pure helpers", () => {
     const buffer = Buffer.from("bytes");
     expect(() =>
       verifyPyPiFile(buffer, {
-        identity: { name: "kiwi-catalog", version: "0.1.0", filename: "kiwi_catalog-0.1.0-py3-none-any.whl" },
+        identity: {
+          name: "kiwi-catalog",
+          version: "0.1.0",
+          filename: "kiwi_catalog-0.1.0-py3-none-any.whl",
+        },
         pypiSha256: "0".repeat(64),
         manifestSha256: sha256Hex(buffer),
       }),
@@ -117,7 +127,11 @@ describe("registry-verify pure helpers", () => {
     const buffer = Buffer.from("bytes");
     expect(() =>
       verifyPyPiFile(buffer, {
-        identity: { name: "kiwi-catalog", version: "0.1.0", filename: "kiwi_catalog-0.1.0-py3-none-any.whl" },
+        identity: {
+          name: "kiwi-catalog",
+          version: "0.1.0",
+          filename: "kiwi_catalog-0.1.0-py3-none-any.whl",
+        },
         pypiSha256: sha256Hex(buffer),
         manifestSha256: "0".repeat(64),
       }),
@@ -128,7 +142,11 @@ describe("registry-verify pure helpers", () => {
     const buffer = Buffer.from("bytes");
     expect(() =>
       verifyPyPiFile(buffer, {
-        identity: { name: "kiwi-catalog", version: "0.1.0", filename: "kiwi_catalog-0.1.0-py3-none-any.whl" },
+        identity: {
+          name: "kiwi-catalog",
+          version: "0.1.0",
+          filename: "kiwi_catalog-0.1.0-py3-none-any.whl",
+        },
         pypiSha256: sha256Hex(buffer),
         manifestSha256: sha256Hex(buffer),
       }),
@@ -142,11 +160,18 @@ describe("registry-verify pure helpers", () => {
     const dir = await mkdtemp(join(tmpdir(), "kiwi-registry-test-"));
     await writeFile(
       join(dir, "release-manifest.json"),
-      JSON.stringify({ schema: MANIFEST_SCHEMA, contract_source_commit: "0".repeat(40), files: [] }),
+      JSON.stringify({
+        schema: MANIFEST_SCHEMA,
+        contract_source_commit: "0".repeat(40),
+        files: [],
+      }),
     );
     await expect(loadManifest(dir)).resolves.toMatchObject({ schema: MANIFEST_SCHEMA, files: [] });
 
-    await writeFile(join(dir, "release-manifest.json"), JSON.stringify({ schema: "other", files: [] }));
+    await writeFile(
+      join(dir, "release-manifest.json"),
+      JSON.stringify({ schema: "other", files: [] }),
+    );
     await expect(loadManifest(dir)).rejects.toThrow(/unsupported release manifest/);
   });
 });
@@ -210,7 +235,11 @@ describe("isFreshPublish（幂等跳过版本的 manifest 对比豁免）", () =
     // registry digest 匹配 + manifest 不检查 → 通过
     expect(() =>
       verifyPyPiFile(buffer, {
-        identity: { name: "kiwi-catalog", version: "0.2.0", filename: "kiwi_catalog-0.2.0-py3-none-any.whl" },
+        identity: {
+          name: "kiwi-catalog",
+          version: "0.2.0",
+          filename: "kiwi_catalog-0.2.0-py3-none-any.whl",
+        },
         pypiSha256: sha256Hex(buffer),
         manifestSha256: undefined,
       }),
@@ -218,10 +247,117 @@ describe("isFreshPublish（幂等跳过版本的 manifest 对比豁免）", () =
     // registry digest 不匹配（防替换边界）→ 仍 fail-closed
     expect(() =>
       verifyPyPiFile(buffer, {
-        identity: { name: "kiwi-catalog", version: "0.2.0", filename: "kiwi_catalog-0.2.0-py3-none-any.whl" },
+        identity: {
+          name: "kiwi-catalog",
+          version: "0.2.0",
+          filename: "kiwi_catalog-0.2.0-py3-none-any.whl",
+        },
         pypiSha256: "0".repeat(64),
         manifestSha256: undefined,
       }),
     ).toThrow(/sha256 mismatch vs PyPI JSON/);
+  });
+});
+
+describe("npmRegistryMetadata（npm 12 元数据响应规范化）", () => {
+  // 官方 npm12 对多字段精确版本查询可能返回的单元素数组原样 stdout
+  // （单元素、扁平点键）；规范化必须接受它并精确保留 version/SRI/tarball。
+  const NPM12_ARRAY_STDOUT = `[
+  {
+    "dist.tarball": "https://registry.npmjs.org/@harrylabsj/kiwi/-/kiwi-0.12.4.tgz",
+    "dist.integrity": "sha512-6hC0chyepcTOdHM740UBXOa+wCGWmXV/c0NvFphl5Pu2MvjkqVV8Jbxhb/GXE/suVJEKlTcc65ErL8cB2ZRHkA==",
+    "version": "0.12.4"
+  }
+]`;
+  const EXPECTED = {
+    tarball: "https://registry.npmjs.org/@harrylabsj/kiwi/-/kiwi-0.12.4.tgz",
+    integrity:
+      "sha512-6hC0chyepcTOdHM740UBXOa+wCGWmXV/c0NvFphl5Pu2MvjkqVV8Jbxhb/GXE/suVJEKlTcc65ErL8cB2ZRHkA==",
+    version: "0.12.4",
+  };
+
+  // 显式隔离：每个用例后重置 mock 调用记录与返回值，不依赖任何全局
+  // clearMocks/restoreMocks 配置（vitest.config.ts 未设置）。
+  afterEach(() => {
+    execFileSyncMock.mockReset();
+  });
+
+  it("npm12 单元素数组（扁平点键）→ 精确保留 version/SRI/tarball 身份", async () => {
+    execFileSyncMock.mockReturnValue(NPM12_ARRAY_STDOUT);
+    await expect(npmRegistryMetadata("@harrylabsj/kiwi", "0.12.4")).resolves.toEqual(EXPECTED);
+  });
+
+  it("兼容旧对象形状：扁平点键与嵌套 dist 等价", async () => {
+    execFileSyncMock.mockReturnValue(
+      JSON.stringify({
+        "dist.tarball": EXPECTED.tarball,
+        "dist.integrity": EXPECTED.integrity,
+        version: "0.12.4",
+      }),
+    );
+    await expect(npmRegistryMetadata("@harrylabsj/kiwi", "0.12.4")).resolves.toEqual(EXPECTED);
+    execFileSyncMock.mockReturnValue(
+      JSON.stringify({
+        dist: { tarball: EXPECTED.tarball, integrity: EXPECTED.integrity },
+        version: "0.12.4",
+      }),
+    );
+    await expect(npmRegistryMetadata("@harrylabsj/kiwi", "0.12.4")).resolves.toEqual(EXPECTED);
+  });
+
+  it("空数组 / 多元素数组 → 拒绝（expected exactly one）", async () => {
+    execFileSyncMock.mockReturnValue("[]");
+    await expect(npmRegistryMetadata("@harrylabsj/kiwi", "0.12.4")).rejects.toThrow(
+      /expected exactly one/,
+    );
+    execFileSyncMock.mockReturnValue(
+      JSON.stringify([
+        {
+          "dist.tarball": EXPECTED.tarball,
+          "dist.integrity": EXPECTED.integrity,
+          version: "0.12.4",
+        },
+        {
+          "dist.tarball": EXPECTED.tarball,
+          "dist.integrity": EXPECTED.integrity,
+          version: "0.12.4",
+        },
+      ]),
+    );
+    await expect(npmRegistryMetadata("@harrylabsj/kiwi", "0.12.4")).rejects.toThrow(
+      /2 metadata records/,
+    );
+  });
+
+  it("标量 / null / 嵌套数组 → 拒绝（malformed）", async () => {
+    for (const payload of ['"scalar"', "42", "null", '[[{"version": "0.12.4"}]]']) {
+      execFileSyncMock.mockReturnValue(payload);
+      await expect(npmRegistryMetadata("@harrylabsj/kiwi", "0.12.4")).rejects.toThrow(
+        /malformed metadata record/,
+      );
+    }
+  });
+
+  it("缺任一必需字段（tarball/integrity/version）→ 原 incomplete metadata fail-closed", async () => {
+    for (const drop of ["dist.tarball", "dist.integrity", "version"]) {
+      const record: Record<string, string> = {
+        "dist.tarball": EXPECTED.tarball,
+        "dist.integrity": EXPECTED.integrity,
+        version: "0.12.4",
+      };
+      delete record[drop];
+      execFileSyncMock.mockReturnValue(JSON.stringify([record]));
+      await expect(npmRegistryMetadata("@harrylabsj/kiwi", "0.12.4")).rejects.toThrow(
+        /incomplete metadata for @harrylabsj\/kiwi@0\.12\.4/,
+      );
+    }
+  });
+
+  it("元数据不完整不进入传播重试（立即 fail-closed，单次查询）", async () => {
+    execFileSyncMock.mockReturnValue(JSON.stringify([{ version: "0.12.4" }]));
+    await expect(npmRegistryMetadata("@harrylabsj/kiwi", "0.12.4")).rejects.toThrow(
+      /incomplete metadata/,
+    );
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
   });
 });
