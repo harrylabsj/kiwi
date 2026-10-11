@@ -1,8 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { buildSync } from "esbuild";
 import { afterEach, expect, it } from "vitest";
 import type { StoredTask } from "../src/buyer-core/store.js";
@@ -31,17 +31,61 @@ it("3-7 scalar compatibility uses SQL CAS even when a writer changes state after
  expect(()=>a.updateTask("t1",{resumable:false})).toThrow(/changed/);expect(b.getTask("t1")?.status).toBe("succeeded");expect(b.getTask("t1")?.resumable).toBe(true);
  } finally {a.close();b.close();}
 });
-it("3-7 two child processes racing the actual insert return the same authoritative task",async()=> {
- const dir=temp(); const dbPath=path.join(dir,"tasks.sqlite");new TaskApprovalStore({dbPath}).close();
+type ChildResult = { code: number | null; signal: string | null; out: string; err: string };
+type RunningChild = { actor: string; child: ChildProcess; done: Promise<ChildResult>; result?: ChildResult };
+async function bounded<T>(promise: Promise<T>, message: string, ms = 10000): Promise<T> {
+ let timer: ReturnType<typeof setTimeout> | undefined;
+ try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer=setTimeout(()=>reject(new Error(message)),ms); })]); }
+ finally { if(timer!==undefined)clearTimeout(timer); }
+}
+async function waitForStage(children: RunningChild[], dir: string, stage: string): Promise<void> {
+ const deadline=Date.now()+10000;
+ while(true){
+  for(const c of children)if(c.result)throw new Error(`child ${c.actor} exited before ${stage}: code=${c.result.code} signal=${c.result.signal} stderr=${c.result.err}`);
+  if(children.every(c=>existsSync(path.join(dir,`${c.actor}.${stage}`))))return;
+  if(Date.now()>=deadline)throw new Error(`child stage ${stage} timed out: ${children.map(c=>`${c.actor}:pid=${c.child.pid}:stderr=${c.result?.err??"not closed"}`).join("; ")}`);
+  await new Promise(r=>setTimeout(r,10));
+ }
+}
+async function stopChildren(children: RunningChild[]): Promise<void> {
+ for(const c of children)if(!c.result)c.child.kill("SIGTERM");
+ try{await bounded(Promise.all(children.map(c=>c.done)),"child TERM cleanup timeout",1000);}
+ catch{for(const c of children)if(!c.result)c.child.kill("SIGKILL");await bounded(Promise.all(children.map(c=>c.done)),"child KILL cleanup timeout",1000);}
+}
+async function raceTasks(options: { delaySecond?: number; missingSecondBundle?: boolean } = {}) {
+ const dir=temp(),dbPath=path.join(dir,"tasks.sqlite");new TaskApprovalStore({dbPath}).close();
  const bundle=path.join(dir,"store.mjs");buildSync({entryPoints:[path.join(sourceRoot,"buyer-core/store.ts")],outfile:bundle,bundle:true,platform:"node",format:"esm"});
  const fixture=path.resolve("tests/fixtures/a359-task-create-child.mjs");
- const children=["a","b"].map(actor=> {const child=spawn(process.execPath,[fixture,JSON.stringify({dir,dbPath,bundle,actor,task:task(actor,"shared")})],{stdio:["ignore","pipe","pipe"]});let out="",err="";child.stdout.on("data",d=>out+=d);child.stderr.on("data",d=>err+=d);return {child,done:new Promise<{code:number|null,out:string,err:string}>(resolve=>child.on("close",code=>resolve({code,out,err})))};});
- try {const deadline=Date.now()+10000;while(!["a","b"].every(a=>existsSync(path.join(dir,a+".ready")))){if(Date.now()>deadline)throw new Error("insert barrier timeout");await new Promise(r=>setTimeout(r,10));}
- writeFileSync(path.join(dir,"go"),"");const results=await Promise.all(children.map(c=>c.done));for(const r of results)expect(r.code,r.err).toBe(0);
- const values=results.map(r=>JSON.parse(r.out));expect(values.filter(r=>r.created)).toHaveLength(1);expect(new Set(values.map(r=>r.task.task_id)).size).toBe(1);
- const verify=new DatabaseSync(dbPath);expect(verify.prepare("SELECT COUNT(*) n FROM mcp_tasks").get()?.n).toBe(1);verify.close();
- }finally {for(const c of children)if(c.child.exitCode===null)c.child.kill("SIGTERM");}
+ const children: RunningChild[]=["a","b"].map(actor=>{
+  const child=spawn(process.execPath,[fixture,JSON.stringify({dir,dbPath,bundle:actor==="b"&&options.missingSecondBundle?path.join(dir,"missing.mjs"):bundle,actor,startDelayMs:actor==="b"?options.delaySecond:0,task:task(actor,"shared")})],{stdio:["ignore","pipe","pipe"]});
+  let out="",err="";const state: RunningChild={actor,child,done:Promise.resolve({code:null,signal:null,out:"",err:""})};
+  child.stdout!.on("data",d=>out+=d);child.stderr!.on("data",d=>err+=d);child.on("error",e=>err+=String(e));
+  state.done=new Promise(resolve=>child.on("close",(code,signal)=>{state.result={code,signal,out,err};resolve(state.result);}));return state;
+ });
+ let failure: unknown, failed=false;
+ try{
+  await waitForStage(children,dir,"loaded");
+  // Serialize only connection/schema initialization; the two INSERTs remain concurrently armed.
+  for(const c of children){writeFileSync(path.join(dir,`${c.actor}.initialize`),"");await waitForStage([c],dir,"initialized");}
+  writeFileSync(path.join(dir,"arm"),"");await waitForStage(children,dir,"ready");
+  const ready=children.map(c=>JSON.parse(readFileSync(path.join(dir,`${c.actor}.ready`),"utf8")) as {pid:number;stage:string});
+  expect(new Set(ready.map(r=>r.pid)).size).toBe(2);ready.forEach((r,i)=>{expect(r.pid).toBe(children[i]?.child.pid);expect(r.stage).toBe("ready");});
+  const before=new DatabaseSync(dbPath);try{expect(before.prepare("SELECT COUNT(*) n FROM mcp_tasks").get()?.n).toBe(0);}finally{before.close();}
+  writeFileSync(path.join(dir,"go"),"");
+  const results=await bounded(Promise.all(children.map(c=>c.done)),"insert completion timeout");for(const r of results)expect(r.code,r.err).toBe(0);
+  const values=results.map(r=>JSON.parse(r.out));expect(values.filter(r=>r.created)).toHaveLength(1);expect(new Set(values.map(r=>r.task.task_id)).size).toBe(1);
+  const verify=new DatabaseSync(dbPath);try{expect(verify.prepare("SELECT COUNT(*) n FROM mcp_tasks").get()?.n).toBe(1);}finally{verify.close();}
+ }catch(error){failure=error;failed=true;}
+ finally{try{await stopChildren(children);}catch(cleanup){if(failure instanceof Error)failure.message+=`; cleanup: ${String(cleanup)}`;else if(!failed){failure=cleanup;failed=true;}}}
+ process.stdout.write("task insert fixture child exits "+JSON.stringify(children.map(c=>({actor:c.actor,pid:c.child.pid,result:c.result})))+"\n");
+ if(failed)throw failure;
+}
+it("3-7 two child processes racing the actual insert return the same authoritative task",async()=>{await raceTasks();});
+it("insert handshake tolerates controlled late child initialization without serializing inserts",async()=>{await raceTasks({delaySecond:200});});
+it("insert handshake reports real early child stderr and awaits sibling cleanup",async()=>{
+ const started=Date.now();await expect(raceTasks({missingSecondBundle:true})).rejects.toThrow(/child b exited before loaded:.*ERR_MODULE_NOT_FOUND/s);expect(Date.now()-started).toBeLessThan(5000);
 });
+
 function privacy(db: DatabaseSync, now:()=>string=()=>T) { const s=new WorkbenchRetentionStore({db,now});s.configurePolicy(recommendedRetentionPolicy({processor:"test",basis:"test",reviewAt:"2027-01-01T00:00:00Z"}));return s; }
 function processing(s:RetentionStore){const r=s.receiveBuyerDeletionRequest({merchantId:"m",buyerPrincipalId:"b"});s.transition(r.requestId,"IDENTITY_CHECK");s.transition(r.requestId,"SCOPED");s.transition(r.requestId,"PROCESSING");for(const nodeId of ["runtime-primary","negotiation-ledger","buyer-preferences","runtime-cache","controlled-backup"])s.recordDeletionTask({requestId:r.requestId,nodeId,status:"completed",receiptRef:nodeId});return r.requestId;}
 it("3-44 competing connection cannot finish between original state read and transition write",()=> {
