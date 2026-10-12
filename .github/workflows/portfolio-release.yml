@@ -505,7 +505,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Download immutable build artifact
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: portfolio-release
           path: dist-artifact
@@ -560,7 +560,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Download immutable build artifact
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: portfolio-release
           path: dist-artifact
@@ -619,7 +619,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Download immutable build artifact
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: portfolio-release
           path: dist-artifact
@@ -675,7 +675,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Download immutable build artifact
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: portfolio-release
           path: dist-artifact
@@ -739,7 +739,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Download immutable build artifact
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: portfolio-release
           path: dist-artifact
@@ -799,7 +799,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Download immutable build artifact
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: portfolio-release
           path: dist-artifact
