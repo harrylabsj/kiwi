@@ -15,7 +15,7 @@
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildKiwiTools } from "../src/mcp/tools.js";
 
@@ -39,14 +39,39 @@ function toolsByName(): Map<string, { name: string; inputSchema: unknown }> {
   );
 }
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("买方已发布工具契约（冻结）", () => {
   it("九个已发布工具仍存在，且 inputSchema 与基线逐字一致", () => {
+    vi.stubEnv("KIWI_LANG", "en");
     expect(PUBLISHED_TOOLS).toHaveLength(9);
     const current = toolsByName();
     for (const frozen of fixture.tools) {
       const tool = current.get(frozen.name);
       expect(tool, `已发布工具缺失：${frozen.name}`).toBeDefined();
       expect(tool?.inputSchema, `工具入参契约被改动：${frozen.name}`).toEqual(frozen.inputSchema);
+    }
+  });
+
+  it.each([
+    ["en", "Short product word (e.g. thermos cup); matches catalog title/category via LIKE; long spec phrases may not match"],
+    ["zh", "商品短词（如 保温杯），命中 catalog 标题/分类 LIKE；长规格词可能匹配不到"],
+  ])("%s query 说明保留短词/LIKE/长规格警示，翻译不改机器契约", (locale, description) => {
+    vi.stubEnv("KIWI_LANG", locale);
+    const current = toolsByName();
+    for (const frozen of fixture.tools) {
+      const schema = structuredClone(current.get(frozen.name)?.inputSchema);
+      if (frozen.name === "kiwi_request_quotes") {
+        const request = schema as {
+          properties: { intent: { properties: { items: { items: { properties: { query: { description: string } } } } } } };
+        };
+        const query = request.properties.intent.properties.items.items.properties.query;
+        expect(query.description).toBe(description);
+        // Only this reviewed natural-language leaf is localized; all other
+        // keys, types, required fields, enums and numeric limits remain exact.
+        query.description = "Short product word (e.g. thermos cup); matches catalog title/category via LIKE; long spec phrases may not match";
+      }
+      expect(schema, `翻译改变机器契约：${frozen.name}`).toEqual(frozen.inputSchema);
     }
   });
 

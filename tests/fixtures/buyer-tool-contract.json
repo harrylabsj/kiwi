@@ -74,7 +74,7 @@
                     "query": {
                       "type": "string",
                       "minLength": 1,
-                      "description": "商品短词（如 保温杯），命中 catalog 标题/分类 LIKE；长规格词可能匹配不到"
+                      "description": "Short product word (e.g. thermos cup); matches catalog title/category via LIKE; long spec phrases may not match"
                     },
                     "sku": {
                       "type": "string",
