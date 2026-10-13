@@ -143,13 +143,18 @@ pass "kiwi-catalog 起在 ${catalog_url}（临时库，仅 loopback）"
 
 # ── 2. 注册商家（A 稍后配对实例；B 不配对，用于隔离断言）──────────────────
 register_merchant() { # <email> <name> <label>
-  local email="$1" name="$2" label="$3" status cookie merchant_id code
-  status=$(http POST "${catalog_url}/v1/accounts/register" \
-    "{\"merchant_name\":\"${name}\",\"email\":\"${email}\",\"password\":\"${password}\",\"phone\":\"+86 138 0000 0000\"}")
-  [[ "${status}" == "200" ]] || fail "register ${email}: HTTP ${status} $(body)"
+  local email="$1" name="$2" label="$3" status cookie merchant_id code ticket
+  # 邮箱先行（0.5.6 起）：发码 → 验码换一次性 ticket → 凭 ticket 建号。
+  status=$(http POST "${catalog_url}/v1/accounts/register/code" "{\"email\":\"${email}\"}")
+  [[ "${status}" == "200" ]] || fail "register/code ${email}: HTTP ${status} $(body)"
   code=$(jq -r '.verification_code' "${case_dir}/body")
-  status=$(http POST "${catalog_url}/v1/accounts/verify-email" "{\"email\":\"${email}\",\"code\":\"${code}\"}")
-  [[ "${status}" == "200" ]] || fail "verify ${email}: HTTP ${status} $(body)"
+  status=$(http POST "${catalog_url}/v1/accounts/register/verify" "{\"email\":\"${email}\",\"code\":\"${code}\"}")
+  [[ "${status}" == "200" ]] || fail "register/verify ${email}: HTTP ${status} $(body)"
+  ticket=$(jq -r '.verification_ticket' "${case_dir}/body")
+  status=$(http POST "${catalog_url}/v1/accounts/register" \
+    "{\"merchant_name\":\"${name}\",\"email\":\"${email}\",\"password\":\"${password}\",\"phone\":\"+86 138 0000 0000\",\"verification_ticket\":\"${ticket}\"}")
+  [[ "${status}" == "200" ]] || fail "register ${email}: HTTP ${status} $(body)"
+  # 注册本身已自动登录；这里仍单独走一次口令登录——本脚本要验的正是登录链路。
   status=$(http POST "${catalog_url}/v1/accounts/login" "{\"email\":\"${email}\",\"password\":\"${password}\"}")
   [[ "${status}" == "200" ]] || fail "login ${email}: HTTP ${status} $(body)"
   cookie="$(header_cookie)"

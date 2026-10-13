@@ -87,15 +87,22 @@ shop_name="M0 验收商家 $case_tag"
 product_name="M0 验收保温杯 $case_tag"
 
 register_account() {
-  local email="$1" name="$2" payload code cookie
-  payload="$(jq -cn --arg name "$name" --arg email "$email" --arg password "$password" '{merchant_name:$name,email:$email,password:$password,phone:"+86 138 0000 0000"}')"
-  request POST /v1/accounts/register 200 "$payload"
+  local email="$1" name="$2" payload code ticket cookie
+  # 邮箱先行（0.5.6 起）：先证明邮箱归属，再建号。发码 → 验码换一次性
+  # ticket → 凭 ticket 建号；建号即 email_verified=1 并自动登录。
+  payload="$(jq -cn --arg email "$email" '{email:$email}')"
+  request POST /v1/accounts/register/code 200 "$payload"
   code="$(jq -r '.verification_code // empty' "$case_dir/response.json")"
   [[ -n "$code" ]] || fail 'test catalog must use console email verification mode'
   payload="$(jq -cn --arg email "$email" --arg code "$code" '{email:$email,code:$code}')"
-  request POST /v1/accounts/verify-email 200 "$payload"
+  request POST /v1/accounts/register/verify 200 "$payload"
+  ticket="$(jq -r '.verification_ticket // empty' "$case_dir/response.json")"
+  [[ -n "$ticket" ]] || fail 'register/verify did not return a verification ticket'
+  payload="$(jq -cn --arg name "$name" --arg email "$email" --arg password "$password" --arg ticket "$ticket" \
+    '{merchant_name:$name,email:$email,password:$password,phone:"+86 138 0000 0000",verification_ticket:$ticket}')"
+  request POST /v1/accounts/register 200 "$payload"
   cookie="$(session_cookie)"
-  [[ "$cookie" == kiwi_session=* ]] || fail 'verification did not set kiwi_session cookie'
+  [[ "$cookie" == kiwi_session=* ]] || fail 'registration did not set kiwi_session cookie'
   printf '%s\n' "$cookie"
 }
 
@@ -106,8 +113,11 @@ merchant_id="$(jq -r '.merchant_id // empty' "$case_dir/response.json")"
 [[ -n "$merchant_id" ]] || fail 'merchant_id missing after registration'
 if [[ -n "$catalog_pid" ]]; then
   schema_version="$(sqlite3 "$case_dir/catalog.sqlite" "select value from meta where key='schema_version';" 2>/dev/null || true)"
-  [[ "$schema_version" == 30 ]] || fail "catalog schema is $schema_version, expected 30"
-  pass 'temporary catalog database uses schema v30'
+  # 与 catalog 包自己声明的当前版本比对，而不是写死某个数字：写死 30 在
+  # catalog 升到 v31 之后就一直是红的（本脚本要验的是"临时库已完整迁移"）。
+  expected_schema="$("$catalog_repo/.venv/bin/python" -c 'from kiwi_catalog.db.migrations import CURRENT_SCHEMA_VERSION; print(CURRENT_SCHEMA_VERSION)')"
+  [[ "$schema_version" == "$expected_schema" ]] || fail "catalog schema is $schema_version, expected $expected_schema"
+  pass "temporary catalog database uses schema v$schema_version"
 fi
 pass 'merchant registered and verified with stable merchant_id'
 

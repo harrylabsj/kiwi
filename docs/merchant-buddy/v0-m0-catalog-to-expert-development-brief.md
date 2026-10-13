@@ -12,7 +12,7 @@ M0 只解决“注册、公开发布、发现”。买家订阅、公开动态�
 
 | 仓库 | 已有 | M0 缺口 |
 | --- | --- | --- |
-| `~/coding/kiwi-catalog` | `/portal/register`、`/v1/accounts/register` 与邮箱验证；注册产生稳定 `merchant_id`；已有 Agent/Listing 搜索 | 没有“无需 Merchant Agent 的商家公开资料/商品名”发布与搜索；现有 Listing 需要 publisher Agent 和 owner token，不能把注册账户直接当作可搜索的 Agent |
+| `~/coding/kiwi-catalog` | `/portal/register` 邮箱先行注册（`/v1/accounts/register/code` → `/register/verify` → `/register`）；注册产生稳定 `merchant_id`；已有 Agent/Listing 搜索 | 没有“无需 Merchant Agent 的商家公开资料/商品名”发布与搜索；现有 Listing 需要 publisher Agent 和 owner token，不能把注册账户直接当作可搜索的 Agent |
 | `~/coding/kiwi` | `KiwiCatalogMerchantIndex`、买方 `kiwi_search` 与 WorkBuddy 采购专家 | `kiwi_search` 只聚合现有 Agent/Listing；结果没有区分“资料可查”和“可实时询价”的类型；必须防止第 0 版商家被送进 RFQ 流程 |
 | WorkBuddy 商家 Buddy | 首页配置草稿和第 0 版 AI 客服准备 Skill 草稿 | 需要一个清楚的注册/发布入口与成功/失败状态；无需先绑定商家专属 MCP |
 

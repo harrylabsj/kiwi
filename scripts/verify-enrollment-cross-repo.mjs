@@ -121,17 +121,24 @@ const session = await client.createDeviceEnrollment(
   identity,
 );
 console.log("PASS TS signed device creation -> Python API");
-let r = dispatch("POST", "/v1/accounts/register", {
+// 邮箱先行（0.5.6 起）：发码 → 验码换一次性 ticket → 凭 ticket 建号。
+let r = dispatch("POST", "/v1/accounts/register/code", {
+  email: "cross-test@example.com",
+});
+assert.equal(r.status, 200, r.text);
+const issued = JSON.parse(r.text);
+r = dispatch("POST", "/v1/accounts/register/verify", {
+  email: "cross-test@example.com",
+  code: issued.verification_code,
+});
+assert.equal(r.status, 200, r.text);
+const ticket = JSON.parse(r.text).verification_ticket;
+r = dispatch("POST", "/v1/accounts/register", {
   merchant_name: "跨语言测试商家",
   password: "cross-test-strong-password",
   phone: "+86 138 0000 0000",
   email: "cross-test@example.com",
-});
-assert.equal(r.status, 200, r.text);
-const registered = JSON.parse(r.text);
-r = dispatch("POST", "/v1/accounts/verify-email", {
-  email: "cross-test@example.com",
-  code: registered.verification_code,
+  verification_ticket: ticket,
 });
 assert.equal(r.status, 200, r.text);
 const cookie = r.headers["set-cookie"].split(";")[0];

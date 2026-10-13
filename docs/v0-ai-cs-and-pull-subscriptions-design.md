@@ -78,7 +78,7 @@ DELETE /v1/me/follows/{merchant_id}        买家认证；取消关注
 
 | 步骤 | 执行者与输入 | 系统结果 |
 | --- | --- | --- |
-| 1. 注册 | 商家经现有 `/portal/register` 或 `/v1/accounts/register` 注册、验证邮箱并登录 | `kiwi-catalog` 分配稳定 `merchant_id`；仅成为已注册商家，尚不进入专家搜索 |
+| 1. 注册 | 商家经现有 `/portal/register` 完成邮箱先行注册（先验证邮箱归属，再填商家信息；建号即自动登录）。API 侧：`/v1/accounts/register/code` → `/register/verify` → `/register` | `kiwi-catalog` 分配稳定 `merchant_id`；仅成为已注册商家，尚不进入专家搜索 |
 | 2. 录入 | 商家在 Buddy 引导的目录发布页面填写公开商家名、至少一个商品名；类目、简介、已核验的淘宝/京东店铺链接可选 | 形成私有草稿；注册账户中的电话、邮箱和任何内部运营资料不自动复制到公开字段 |
 | 3. 确认发布 | 商家在登录态查看公开预览并明确点击发布 | `kiwi-catalog` 校验 `merchant_id` 归属、字段与内容后写入 `MerchantPublication(status=published)`；返回 `publication_id`、版本和发布时间 |
 | 4. 公开搜索 | 买家在采购专家中输入商品词，现有 `kiwi_search` 增加第 0 版公开资料查询 | 返回该商家 `merchant_id`、商家名、命中的商品名、资料来源与更新时间，并标记 `inquiry_available=false` / `资料可查` |
