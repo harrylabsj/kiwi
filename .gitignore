@@ -21,6 +21,9 @@ wrangler.harrylabs.jsonc
 # runtime agent data (ledger/memory) created by agent run/serve/chat
 .kiwi/
 
+# 本地并行开发用的嵌套 git worktree（git worktree add wt/<name>）
+wt/
+
 # 云端制品构建产物（scripts/build-cloud-artifact.mjs）
 build/
 delivery/
