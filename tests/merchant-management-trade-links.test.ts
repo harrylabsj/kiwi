@@ -9,7 +9,7 @@ import { renderMerchantManagementPage } from "../src/http/merchant-management/pa
 
 async function productView(items: Record<string, unknown>[]) {
   const page = renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true });
-  const script = /<script>([\s\S]*?)<\/script>/.exec(page)?.[1];
+  const script = /<script>([\s\S]*?)<\/script>/i.exec(page)?.[1];
   if (script === undefined) throw new Error("management script missing");
   const context = vm.createContext({ URL, document: { querySelectorAll: () => [] }, fetch: () => new Promise(() => {}) });
   vm.runInContext(script, context);
