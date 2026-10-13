@@ -57,8 +57,8 @@ it("a symlinked bin parent directory cannot authenticate generated links",()=>{
 });
 it("the original strict Corepack locator remains independent of generated links",()=>{
  const file=path.join(tool,".corepack"),hex=Buffer.from(payload.integrity.slice(7),"base64").toString("hex");
- const good={locator:{name:"npm",reference:payload.version},bin:{npm:"./bin/npm-cli.js",npx:"./bin/npx-cli.js"},hash:"sha512."+hex};
+ const good={locator:{name:"npm",reference:"12.0.2"},bin:{npm:"./bin/npm-cli.js",npx:"./bin/npx-cli.js"},hash:"sha512."+hex};
  writeFileSync(file,JSON.stringify(good));restore.push(()=>rmSync(file,{force:true}));
  expect(assertOfficialNpmPayload(tool,payload).nonpayload.filter(r=>r.classification==="matching-corepack-locator")).toHaveLength(1);
- writeFileSync(file,JSON.stringify({...good,locator:{name:"npm",reference:"0.0.1"}}));expect(()=>assertOfficialNpmPayload(tool,payload)).toThrow("LOCATOR_INVALID");
+ writeFileSync(file,JSON.stringify({...good,locator:{name:"npm",reference:"12.0.1"}}));expect(()=>assertOfficialNpmPayload(tool,payload)).toThrow("LOCATOR_INVALID");
 });

@@ -44,7 +44,7 @@ jobs:
           cache: npm
       - name: Setup npm 12 and verify the install toolchain
         run: |
-          npm install --global npm@12.2.0
+          npm install --global npm@12.0.2
           node scripts/check-install-toolchain.mjs "$(npm --version)"
       - run: npm ci
       - run: npm run lint

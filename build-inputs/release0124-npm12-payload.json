@@ -1,11 +1,11 @@
 {
   "format": "kiwi-official-npm-payload/1",
   "name": "npm",
-  "version": "12.2.0",
-  "registry_url": "https://registry.npmjs.org/npm/12.2.0",
-  "tarball_url": "https://registry.npmjs.org/npm/-/npm-12.2.0.tgz",
-  "integrity": "sha512-ZsJjKpTnlmSXOLLXiU1xDCzC4Wlok4IwZmh/aw2KUuXytU7q6qMv/cUT7MoeSf95Slwuw/lRXYefGzGCspHPNQ==",
-  "tarball_sha256": "sha256:6666b48816b39b86c3febac7b51a4ee4de6c5ca589c382ad8004b6b113f86677",
+  "version": "12.0.2",
+  "registry_url": "https://registry.npmjs.org/npm/12.0.2",
+  "tarball_url": "https://registry.npmjs.org/npm/-/npm-12.0.2.tgz",
+  "integrity": "sha512-uIXokLlBj6FpNUTQX1PmT5pz7BlIN9QlixX+zdaSNHsd0qUXsbDLr50xzY6Sw7cJVr0uzHKDOle0swmPW/p5Qw==",
+  "tarball_sha256": "sha256:5dbb86c71d07a1957f2e90734092dd6a58bdcd9ebc2d8d41ca1c6e6a21d364e1",
   "regular_file_count": 1942,
   "files": [
     {
@@ -100,8 +100,8 @@
     },
     {
       "path": "docs/content/commands/npm-ci.md",
-      "size": 15140,
-      "sha256": "sha256:2f34b6327e8fa41a333b5413bf74965c758819a0e4887b525c3797785172b347"
+      "size": 15074,
+      "sha256": "sha256:72b717aac0f9cf37bb15dcad798122cef82d7ce7d29bc83a5b7a46e8ffe60110"
     },
     {
       "path": "docs/content/commands/npm-completion.md",
@@ -155,8 +155,8 @@
     },
     {
       "path": "docs/content/commands/npm-exec.md",
-      "size": 13405,
-      "sha256": "sha256:7b272260066365802eac8f0e659e97b5715babfa55c3b2fa2d1d09efd1dca8d2"
+      "size": 13339,
+      "sha256": "sha256:eff83f1fe449c901244f99e30931cce88acafd492d193e34b43f7930461d6500"
     },
     {
       "path": "docs/content/commands/npm-explain.md",
@@ -200,8 +200,8 @@
     },
     {
       "path": "docs/content/commands/npm-install-ci-test.md",
-      "size": 13485,
-      "sha256": "sha256:59c69b07b3039d0e1d2399278c031c0978e2cba542866ce45d2d767f668a459b"
+      "size": 13419,
+      "sha256": "sha256:1eded3c46bed158738b1bbf7a43243b085b5646135eef569be3f76568918ff3c"
     },
     {
       "path": "docs/content/commands/npm-install-scripts.md",
@@ -210,13 +210,13 @@
     },
     {
       "path": "docs/content/commands/npm-install-test.md",
-      "size": 19170,
-      "sha256": "sha256:4afa1a846cab0018e96a66d2bd8b4583133ef3694dce7d3e76b7e9fe68c6880d"
+      "size": 19104,
+      "sha256": "sha256:09cef3c8951a372074ff0c4aa6931a00874f1e6431fc585742c09d84abef9714"
     },
     {
       "path": "docs/content/commands/npm-install.md",
-      "size": 36731,
-      "sha256": "sha256:d9b3e6a79cf5234d469176a8f7bd1c9d789a48895df188718e480d9e83299753"
+      "size": 36665,
+      "sha256": "sha256:4d1c635b61776173e110be34bf58e895c7b6f09964616b297cb19b11696b7bd0"
     },
     {
       "path": "docs/content/commands/npm-link.md",
@@ -241,7 +241,7 @@
     {
       "path": "docs/content/commands/npm-ls.md",
       "size": 7213,
-      "sha256": "sha256:ce5b25605a36b033a7d56fd03e5d19bdf2103a8364af9bd75672ae5e38da638f"
+      "sha256": "sha256:de6fba48c8d468c0f8ff11f64917276206b80dbe52b04ec7457d8b5b6fb45ebf"
     },
     {
       "path": "docs/content/commands/npm-org.md",
@@ -295,8 +295,8 @@
     },
     {
       "path": "docs/content/commands/npm-publish.md",
-      "size": 8427,
-      "sha256": "sha256:2b03bf44a57aad7527e3f31bbff1c453820617c78aac83b6464abdef767e89d0"
+      "size": 8187,
+      "sha256": "sha256:7dbae0da8bf27e27097793ac3a633f6468103487a7f6141befd5bdd938012354"
     },
     {
       "path": "docs/content/commands/npm-query.md",
@@ -305,8 +305,8 @@
     },
     {
       "path": "docs/content/commands/npm-rebuild.md",
-      "size": 7145,
-      "sha256": "sha256:58daab806ec373664ac03d7816828275abd4ff39b23aaf2da04c7c14bfa5d3e6"
+      "size": 7079,
+      "sha256": "sha256:09d4baf5607779b88380d985f4d418c351254e520283dcadef34aff24758dd9e"
     },
     {
       "path": "docs/content/commands/npm-repo.md",
@@ -345,8 +345,8 @@
     },
     {
       "path": "docs/content/commands/npm-stage.md",
-      "size": 13331,
-      "sha256": "sha256:97dcee2fafae193625e3c1f9e2aeef30d49a6ca2ef80b3315dc89f1f2352e9f3"
+      "size": 13180,
+      "sha256": "sha256:936ed91b961b85089087cfecae7416d838043fc3f90bd5c35da39566f4f65e45"
     },
     {
       "path": "docs/content/commands/npm-start.md",
@@ -370,8 +370,8 @@
     },
     {
       "path": "docs/content/commands/npm-token.md",
-      "size": 5057,
-      "sha256": "sha256:19a22c738666227873d6f03e37cb9fd72a35158f693ccda7e7f6ae39f488e487"
+      "size": 4901,
+      "sha256": "sha256:72e09a7e2c4a6047741969a8997ee6d998bd0e361d429355d4243b3142e9ef52"
     },
     {
       "path": "docs/content/commands/npm-trust.md",
@@ -395,8 +395,8 @@
     },
     {
       "path": "docs/content/commands/npm-update.md",
-      "size": 17630,
-      "sha256": "sha256:942c8aebc45d195a8f7b7e3e106bd61fc5e44855335d768458e6d0ee1dea02cb"
+      "size": 17564,
+      "sha256": "sha256:e1e4ef1d8d35211cfedd5404ce62bbf238ffc7fe64fa031e5a923435bc9a9115"
     },
     {
       "path": "docs/content/commands/npm-version.md",
@@ -416,7 +416,7 @@
     {
       "path": "docs/content/commands/npm.md",
       "size": 5652,
-      "sha256": "sha256:b9b0cedeb57a6cb49be07e109dde3173dc516fc6055900727a89dcb9a7b069b0"
+      "sha256": "sha256:52e3f69f417fab3d405603be2eee8cbe3425ccc46acee98ba86dfddd7adaea2a"
     },
     {
       "path": "docs/content/commands/npx.md",
@@ -455,8 +455,8 @@
     },
     {
       "path": "docs/content/using-npm/config.md",
-      "size": 64128,
-      "sha256": "sha256:25017688758b0905c4ca7c6b77c5d2eab17e4d1a6c856c3cdf8e6d539d894177"
+      "size": 63666,
+      "sha256": "sha256:25c90eb408e253328714cc5e1baaccff6eb794847b93b055dc0a256b75d6f0c9"
     },
     {
       "path": "docs/content/using-npm/dependency-selectors.md",
@@ -511,447 +511,447 @@
     {
       "path": "docs/output/commands/npm-access.html",
       "size": 8401,
-      "sha256": "sha256:7b217014993796d99639817e27d91b630cc1057924daeb8d2b8c58382bc3e8f2"
+      "sha256": "sha256:ade1bb0a4653589dd0e04c06aa013fa74c1401f932beb8a9ee1c2777e3e326c3"
     },
     {
       "path": "docs/output/commands/npm-approve-scripts.html",
       "size": 10671,
-      "sha256": "sha256:395c689a6dd27cd4abb2836fbc05bd876adb9094a4f96c9c99ac742833ab41e1"
+      "sha256": "sha256:77c2219e9c7431cf59cf3a2db8eabe2170e33b6f7e4fe869e5928103fa143469"
     },
     {
       "path": "docs/output/commands/npm-audit.html",
       "size": 26258,
-      "sha256": "sha256:2020f5df923dfcbcd3f833eccd83ab0e8b008b01395f787a952bbab824c90d7b"
+      "sha256": "sha256:18c8be0c09766bf38d5cb1cefc09f3bb5cd5d3598d32e53e2e31488613e223d4"
     },
     {
       "path": "docs/output/commands/npm-bugs.html",
       "size": 8780,
-      "sha256": "sha256:02e726f42607ecbb43d8cb65928f8516a75260eba56323c211c14d2d42976ec8"
+      "sha256": "sha256:242480edfa8a631c172fee5ad289c9434e2c9e76777af15d3af97018f3cd808e"
     },
     {
       "path": "docs/output/commands/npm-cache.html",
       "size": 9298,
-      "sha256": "sha256:f9b12726d3f71e5b79d3a6d78f34b2c89bd59304984dd0e80261a304887035d4"
+      "sha256": "sha256:dc8d0fad5027b2ce0fd992d44120db13e54382586236c494432508e6257539a9"
     },
     {
       "path": "docs/output/commands/npm-ci.html",
-      "size": 24731,
-      "sha256": "sha256:c89bf01bdbfae0019be2af2b4f625138d6e72fa85c3e82fe8718b77da9ed711c"
+      "size": 24657,
+      "sha256": "sha256:02f842b820c4505d9c2f3534025f8a9c1a79f27cfbbed07909b730079350ad06"
     },
     {
       "path": "docs/output/commands/npm-completion.html",
       "size": 5663,
-      "sha256": "sha256:63e0ffb3703e6c92d915c5a49417118631a12872d710ab80c3294139d1edf23a"
+      "sha256": "sha256:a032506f7e6f24fe17dc1a459d53d94463cb6331c544d42c9c11910fdb17b5d6"
     },
     {
       "path": "docs/output/commands/npm-config.html",
       "size": 10559,
-      "sha256": "sha256:e1af2a62ecb0e1903aad1b7f7a43260b891add626321a972533651ee34c4e406"
+      "sha256": "sha256:e972f998c48fc422c07d384ea5af9212ef4299b8c03c3d59ad2fb73b8922453a"
     },
     {
       "path": "docs/output/commands/npm-dedupe.html",
       "size": 21518,
-      "sha256": "sha256:2a8fa275a96fcd66519c506ae06022bd01f702d6bb4f7ef247881710c202139c"
+      "sha256": "sha256:6fc747a7738ef258b05b946337d79f8505845d83cf60771ba2dcbbb4f8c848ed"
     },
     {
       "path": "docs/output/commands/npm-deny-scripts.html",
       "size": 8589,
-      "sha256": "sha256:d7612e59fe65521f1009d692dc9752c6a4d904e302afd175b72088f47bc96b44"
+      "sha256": "sha256:0b6b78719c8d2a522d8df6a11a400a2bd4384000a49a5e1248bfdc138f8e48f7"
     },
     {
       "path": "docs/output/commands/npm-deprecate.html",
       "size": 7572,
-      "sha256": "sha256:2745dc26e4e2f9611aaddf06b84bae933438e88ceaf7e76134251c6f7e76e107"
+      "sha256": "sha256:01ccc6e91bb979271feb48efb5c1dae438f123c9a5be046b2a8b2c4fc394fd86"
     },
     {
       "path": "docs/output/commands/npm-diff.html",
       "size": 15549,
-      "sha256": "sha256:0edf358a86dc2591d11b3607096d4453e0c989ce85bc096d96fd18ea2e3fc350"
+      "sha256": "sha256:356ac3b84258592d965821fa72f748260654ecf110af3e19d21f125add012ebf"
     },
     {
       "path": "docs/output/commands/npm-dist-tag.html",
       "size": 11437,
-      "sha256": "sha256:17da7881c9382f9e1b107cc86bc1cc6a51a01f9dc69b1cbac179b210f18f464f"
+      "sha256": "sha256:a35f2ee8f9ec2fb6887a794a25fe68fbc1853f7763a049ed4bc6070601563b61"
     },
     {
       "path": "docs/output/commands/npm-docs.html",
       "size": 8722,
-      "sha256": "sha256:eb09a84f869a320177a32efd4c7ef44e71e6e61ae228151b8029f1f2c210b23e"
+      "sha256": "sha256:0ea2a8ae987102dfe192eecefa4874730b8937cebedf474106291b7d841d3dda"
     },
     {
       "path": "docs/output/commands/npm-doctor.html",
       "size": 11214,
-      "sha256": "sha256:99be7aec61466e7bad2c903e8f6f26094958203cb41c4e8b2eac4b693e527fa3"
+      "sha256": "sha256:156df86402e97a1918bb84a3c46009885c86763ae4f952b6f6c7e1b372530d2f"
     },
     {
       "path": "docs/output/commands/npm-edit.html",
       "size": 6050,
-      "sha256": "sha256:0a52e9baf07e0c951ba62f1217091e88bd0eb550c4be8cc3e4a657c0e11f4ec9"
+      "sha256": "sha256:e3dbeffb6260ec887bc8d5273beebb651365e89b622628e33c9c10ec33051d03"
     },
     {
       "path": "docs/output/commands/npm-exec.html",
-      "size": 22443,
-      "sha256": "sha256:cea43338491038a29787156d3b9a0d2f864aa7cb98cb539a876140778b86d577"
+      "size": 22369,
+      "sha256": "sha256:8071f3dbf2a11a2414493c8143d7302a21a66714d3a16d31246f2eb58509109c"
     },
     {
       "path": "docs/output/commands/npm-explain.html",
       "size": 8124,
-      "sha256": "sha256:a6f78069007e1c4ee41bd2fef9dcd6df262866af421ed74d4743af8a840508be"
+      "sha256": "sha256:86cf86dd0027451c1cd244f7cdab634aa1570d711828394072e3424d1b6ffbd5"
     },
     {
       "path": "docs/output/commands/npm-explore.html",
       "size": 5955,
-      "sha256": "sha256:4aefc717a299e0ad9fe19cec26e6fb5098d8cb83aec8249d1e1ff7e91654c2f7"
+      "sha256": "sha256:48c2926717f26142f113abf3d296b130dc96774c47ac90ce53a09fec2b7a7fc0"
     },
     {
       "path": "docs/output/commands/npm-find-dupes.html",
       "size": 14680,
-      "sha256": "sha256:c8810abb7169664c493d7fe9bf208ae94cd3ed42dcbd56509d9eaa17afba6c47"
+      "sha256": "sha256:c7f39999ef94d3f3e361ebf48fef4ce9286121582a164dd7f1de6956f561e43f"
     },
     {
       "path": "docs/output/commands/npm-fund.html",
       "size": 9058,
-      "sha256": "sha256:1a0d3f929979ef4f97c1e641fad0f5b2ca355389954125c4c7f1489a4e6fdda5"
+      "sha256": "sha256:8418fcf569585cdc42f5a1f85fffa79c52b3888668da4b23c3176364e6fb79da"
     },
     {
       "path": "docs/output/commands/npm-get.html",
       "size": 5235,
-      "sha256": "sha256:f22c2517e5bc0c55a23da663b0511bb3b246fa5e2520dc39609708a760f13f29"
+      "sha256": "sha256:7ea795fee1e807dcc6865d3a14b550b0113d3f9ea35c9cd72d41f7834802433c"
     },
     {
       "path": "docs/output/commands/npm-help-search.html",
       "size": 5628,
-      "sha256": "sha256:8b1970717b0fa6c1650d088225e3c5b51551cc96e2d591413591c9738539f565"
+      "sha256": "sha256:f2910d10410145c93b184d2b4199f017f705fa58e9d36238e6b2ab68bcd9f1be"
     },
     {
       "path": "docs/output/commands/npm-help.html",
       "size": 5956,
-      "sha256": "sha256:a3924e9d29fab8a8fae9666eea375ff78167ce6fde549646fa82b16d97d1f6d3"
+      "sha256": "sha256:060a713f6d119079dd9730ceefd7e33e6ba6cb0185501300b1304f47088701b4"
     },
     {
       "path": "docs/output/commands/npm-init.html",
       "size": 18813,
-      "sha256": "sha256:87efc253234b92afa6e391a8942a21b62d5902fdd456fad2e7531a2a2b5e30bf"
+      "sha256": "sha256:a59236dc13451c2a8097f87657d8ba6a7c2f6787cde35f7da4519c99891caa9e"
     },
     {
       "path": "docs/output/commands/npm-install-ci-test.html",
-      "size": 22664,
-      "sha256": "sha256:4aa6cc92b125a3a37eb8c4c62afd9367daf766a4dc2ae8beb1a81c5ddccb7efb"
+      "size": 22590,
+      "sha256": "sha256:7faf717d97e6cc335f4913327f53091b730b7a2cfaa67cd623779eb04129050a"
     },
     {
       "path": "docs/output/commands/npm-install-scripts.html",
       "size": 11913,
-      "sha256": "sha256:2f0293f8d6a75c3c4c1671c8c7213db0f46881f9c94729b091654f805ee7a637"
+      "sha256": "sha256:79470f1e99d7f22610995ba3c941ca45878ad0ba037312cf84d374c71f683c14"
     },
     {
       "path": "docs/output/commands/npm-install-test.html",
-      "size": 30567,
-      "sha256": "sha256:5d0c4ee0d5909cef9910fe6c933d99e1026fa87c3d72e9292302c35fa8f11897"
+      "size": 30493,
+      "sha256": "sha256:5908aa4675b611f5a7ae05125640de4ee4e92646434ef86f7a2d3789377b063a"
     },
     {
       "path": "docs/output/commands/npm-install.html",
-      "size": 52531,
-      "sha256": "sha256:b32abe22455b082ef915ad4500d3ad1f2f5a93d71a3362fb8bd63f4a4c6e1029"
+      "size": 52457,
+      "sha256": "sha256:9f640680372f7719f3dd1f75c12422302f021b81485f45f44126a5c9e8d6538f"
     },
     {
       "path": "docs/output/commands/npm-link.html",
       "size": 25454,
-      "sha256": "sha256:c5cc939e05aef49928c112b87627791abdd69f7feb57cae38d871534779d878e"
+      "sha256": "sha256:07edb189cc8422e94509abb8ab1f14cfc8a9e4ef609a52a4832b4e771b51146f"
     },
     {
       "path": "docs/output/commands/npm-ll.html",
       "size": 12848,
-      "sha256": "sha256:f1fb2cf9932b8e36d20e34a99df024decc1a12423d6b973c53e801c0f1761ce7"
+      "sha256": "sha256:9c323930cb3d340854ef3083ee4b439168543015cdb7bffe87c6a01bc06b043f"
     },
     {
       "path": "docs/output/commands/npm-login.html",
       "size": 7863,
-      "sha256": "sha256:8ec6f7cedb627f604aa92569fc9f963a29484e04c7ab8ff9e213fab123efc533"
+      "sha256": "sha256:0f45b24d605e2510206c4d4686c19ebe48cabd5fca06d6d89d663533cf766b3d"
     },
     {
       "path": "docs/output/commands/npm-logout.html",
       "size": 6848,
-      "sha256": "sha256:55b601f2c22a0a1db35b8d9e98e0d5eaa79cabfdfad4e0af1a7030e097064032"
+      "sha256": "sha256:52a09edd77cc540e55926d0e1184eb80bf72e7b0bb1837226a5bd2f766971372"
     },
     {
       "path": "docs/output/commands/npm-ls.html",
       "size": 14736,
-      "sha256": "sha256:b2d61b01fc9a94cd41a1ef91e541bdbbaed71a41997593169471d7de33ff99c4"
+      "sha256": "sha256:a2e193aff67bf5783e97670691f43da7a4535f621e1eacea29aace7bfde5d6d2"
     },
     {
       "path": "docs/output/commands/npm-org.html",
       "size": 7487,
-      "sha256": "sha256:a625e008311d2a6876072ba1bc14e79b74225eb7cb6140098af83a9d590dee80"
+      "sha256": "sha256:62ec5430d9669402420d697f8f5a04c3d09b7055fda62a7b99781ceb87b40e88"
     },
     {
       "path": "docs/output/commands/npm-outdated.html",
       "size": 16527,
-      "sha256": "sha256:eeda9158679ebcd63b9b4fc6585e8cbd2b6b649c939f7bfa9df803239aae45f9"
+      "sha256": "sha256:63db5c6936375bf41a7cd9822277ad35538ef3f045f5b550bfdcc18582b28ccb"
     },
     {
       "path": "docs/output/commands/npm-owner.html",
       "size": 8614,
-      "sha256": "sha256:3e05230a1876072520a8630d0097695dd3db5bbea32465b834555f7bf9203f1d"
+      "sha256": "sha256:7d931b482a27ef5f31d7e195e88553e75f01b45348a31409c15c54eda289a69a"
     },
     {
       "path": "docs/output/commands/npm-pack.html",
       "size": 10060,
-      "sha256": "sha256:45703a20fb6edc75682fba2c43f3e195268e2f0503ca7116c1d98146a6a06bb0"
+      "sha256": "sha256:433bf8e5de1b14d760309d562cfcff9cca0c8a489ba275df94dd8bc7f947c89c"
     },
     {
       "path": "docs/output/commands/npm-patch.html",
       "size": 10190,
-      "sha256": "sha256:edf5323220865988281d00349ae81d840e1cf56e9700ab699672ad4ab86a6934"
+      "sha256": "sha256:6f43e8bcba12dcd46c5dfd3076682a852274672e179fceaa6351b4cd6a5d0269"
     },
     {
       "path": "docs/output/commands/npm-ping.html",
       "size": 5703,
-      "sha256": "sha256:3da4c29649c88912bb7465de21ddaa15a3a2f05ce3dcd7be877582dfffa1151f"
+      "sha256": "sha256:b4f7ac474753f40fe88039861ad7b73381d9fa603c6292c56aea70b1e4626b79"
     },
     {
       "path": "docs/output/commands/npm-pkg.html",
       "size": 14278,
-      "sha256": "sha256:83ec36fe1e03a024f0d108a053f6c9b4e5d389bb33c8204efcd29641a35b247c"
+      "sha256": "sha256:0b3a2dc8dd46c64a42ba01409c3f683a1540a17d98b10284d26664977648202f"
     },
     {
       "path": "docs/output/commands/npm-prefix.html",
       "size": 6341,
-      "sha256": "sha256:50d3468561cc4bbba5d65622da4cf90cfb9d075a8fd67b2814ad6b5e3dbdc3dd"
+      "sha256": "sha256:1ee0d5a17db72c3a3feabb052d1b7827d3b4b0802292d2822824699f7900c457"
     },
     {
       "path": "docs/output/commands/npm-profile.html",
       "size": 8724,
-      "sha256": "sha256:1ac91d4332d48b89a05d20f3793f29554328524737ce0dc927c059f8d9023cf7"
+      "sha256": "sha256:2aff81fef5a3b26ec02ea57c28484ddd40346f0102da949018111a60a15bb153"
     },
     {
       "path": "docs/output/commands/npm-prune.html",
       "size": 12532,
-      "sha256": "sha256:77d4e6468a53d9b1bb9696642493efab357b2c49299c03f09e833ffb140bb0ca"
+      "sha256": "sha256:73e8cf7fb762f325b3e2900d879f9eaee60ec2924d2bdaced9dda88dda79c8c0"
     },
     {
       "path": "docs/output/commands/npm-publish.html",
-      "size": 16007,
-      "sha256": "sha256:806c19668b8920f6424f2bae9634a7037c2bb2a603a9e4750c7aeb66d2b42d6f"
+      "size": 15744,
+      "sha256": "sha256:2757ddcef9a4a6dc7fae748d7d763d0e9845e36cbd75e349dfcacde3f0dfdf85"
     },
     {
       "path": "docs/output/commands/npm-query.html",
       "size": 16743,
-      "sha256": "sha256:66460be1b5cb6bf2db3f093e7c437081c0d7df870570e790c53197d3b6123191"
+      "sha256": "sha256:cc1f10c36152a6be061524416fa299a93aaed0f698483420ae414a4a12476627"
     },
     {
       "path": "docs/output/commands/npm-rebuild.html",
-      "size": 14398,
-      "sha256": "sha256:cccd6792c96fcf118b0b653b7973b972675ed7076a37b750443ba6058b3dd0c7"
+      "size": 14324,
+      "sha256": "sha256:2c4e4873422cecae6e2b67c7f0573ca0967c8f2f4db65abb3861cda388ac342b"
     },
     {
       "path": "docs/output/commands/npm-repo.html",
       "size": 8402,
-      "sha256": "sha256:f57e7de56a79b568ccf5fe320ff6a5f9e59037ee6a50b6fa66b64e9b42e2b8cb"
+      "sha256": "sha256:fc7fe3b897660c3f47904e5bdc75119ba8617cf06651e337a4dbb401952fe1ea"
     },
     {
       "path": "docs/output/commands/npm-restart.html",
       "size": 6915,
-      "sha256": "sha256:6e81424396cb948b7ca75b69cc22126944dbe5e7be3448fae0d31e29ff6e8dcc"
+      "sha256": "sha256:c824d3ac07102ec3c20180f6d433969c8a667b859d159745b94fdded10fabba0"
     },
     {
       "path": "docs/output/commands/npm-root.html",
       "size": 6084,
-      "sha256": "sha256:d2b944cb466a668162a7607a24c8188b4ae07e8a003893d792342d95e726a718"
+      "sha256": "sha256:1bd2e5da33eb4ee3dd1142d3693251ea5390e9592bf2d55c9d300bc629b5f3d5"
     },
     {
       "path": "docs/output/commands/npm-run.html",
       "size": 14845,
-      "sha256": "sha256:de6bda580ab103c0672775f7e9c8d8f7a7c553c9ef35bc99964ff66cfade1761"
+      "sha256": "sha256:15c425bd8a348d1915ee78e9c8e1f6d36c49a0b19162432a6ab7708e55525a2b"
     },
     {
       "path": "docs/output/commands/npm-sbom.html",
       "size": 13809,
-      "sha256": "sha256:5e30ac930f757bf3395f5e2ac7b5761f707bbda8c1a0395fe4cbdf3cccae9b79"
+      "sha256": "sha256:5494b41c2a9841bfc02832331be30c2161dd1a1401d442e797741309122bd277"
     },
     {
       "path": "docs/output/commands/npm-search.html",
       "size": 9801,
-      "sha256": "sha256:cfe884a0ea29be28e2c0d2b19308259591fd02455e31e91092f253fe9ceade9c"
+      "sha256": "sha256:4fe8095bd0e57c7643b975044ea22f6748c0f7ce1a63625acc6fa2065ca09425"
     },
     {
       "path": "docs/output/commands/npm-set.html",
       "size": 6532,
-      "sha256": "sha256:b1c8159f149abaf06f318b33753bc2cc474c25b3a03e9744a2a367f8d47a4d0f"
+      "sha256": "sha256:193b9181ac9c6fd4a91eb0069de6ad3aa051274282573bd40cf57eade0d7a56d"
     },
     {
       "path": "docs/output/commands/npm-stage.html",
-      "size": 23295,
-      "sha256": "sha256:3d217506510c5859fdeb080ca096394ebfaa7e3271f9cb81f6d5c17b932184de"
+      "size": 23144,
+      "sha256": "sha256:2fa47b20076b6751f0e7a1f810dec7dbfdcdc60dd31079cc849693f33fe50bab"
     },
     {
       "path": "docs/output/commands/npm-start.html",
       "size": 7177,
-      "sha256": "sha256:7d85495be356ad2741e2b4d6d5ad15902d8cb2e81a09362d80ac73eadc6c48a4"
+      "sha256": "sha256:70ada7b293010169c68a5de840b9209699e5e99c48379e0b54ec00d3cae42f90"
     },
     {
       "path": "docs/output/commands/npm-stop.html",
       "size": 6751,
-      "sha256": "sha256:c8fb94255bdf4833947d4e37c9fc3fa46e680a5f636735f22631c8f365bc4ef7"
+      "sha256": "sha256:40e097a031b8fadc480c0b3c0445b58959a0704064e704a9b17cdd7996bcc317"
     },
     {
       "path": "docs/output/commands/npm-team.html",
       "size": 10024,
-      "sha256": "sha256:17d2fe0ec73d0c7dade5baf4b236c8464ca2ee004182769d94f72915ba0106a7"
+      "sha256": "sha256:bb6367a5624ec3ac406d3ade5340bbadc48a53da09872535ef2f11b29a9ea5f5"
     },
     {
       "path": "docs/output/commands/npm-test.html",
       "size": 6631,
-      "sha256": "sha256:fcd27fb89c6167abb7aefb1abc3ba4ee9d25df12030c6e0b62fc9bdd82112345"
+      "sha256": "sha256:d5600b19fd83112b63808c306e058bf5daf7b71a938fc622ae30061916e45326"
     },
     {
       "path": "docs/output/commands/npm-token.html",
-      "size": 12153,
-      "sha256": "sha256:c713a97f1baa8c67d13019005bf1e3b7a2727bf3cd0c952e0a17250fc2df3591"
+      "size": 11999,
+      "sha256": "sha256:4b5e70a13c7256d90368f44a2b05a21a6a2601daa01262b01e680434d54aa603"
     },
     {
       "path": "docs/output/commands/npm-trust.html",
       "size": 20996,
-      "sha256": "sha256:98f3df15cb2fa4cf12d3475852748b1936a88889b0c8406b3256eacc093d4627"
+      "sha256": "sha256:d1668d0de9f4126bf46c208da2633c3c4d3c797d2f7ae0a65e7d8c3615b00e1f"
     },
     {
       "path": "docs/output/commands/npm-undeprecate.html",
       "size": 6579,
-      "sha256": "sha256:82a521c0b319e4a00b52dcf80a7e6b25db0b7dfbecc72a17f4e18ab5baa9c269"
+      "sha256": "sha256:7da35e5610e8c826fa80808b9de87f93eff7a8f91117f85d9187a7db871577e4"
     },
     {
       "path": "docs/output/commands/npm-uninstall.html",
       "size": 10669,
-      "sha256": "sha256:fb5d115765d6ec92a12aaa29a5d8ca7f03871e2f87f9d8347104e5c7fa85e77d"
+      "sha256": "sha256:e5241eddc4a338ad1817baf303c4ade8aa5fed23a436d9510c16df1f03a05992"
     },
     {
       "path": "docs/output/commands/npm-unpublish.html",
       "size": 10288,
-      "sha256": "sha256:450058101204e5d9738fe51cd559ef9c57d0f1b1cc5f6721a079abcd1101b8d8"
+      "sha256": "sha256:0cee7d22014b305ffea61f72ed0caf1fc91eecc6633a4aba810c12e156eceb27"
     },
     {
       "path": "docs/output/commands/npm-update.html",
-      "size": 29028,
-      "sha256": "sha256:b936cccf7392a4d3a5cb1d376e7a62c9cb9f0c7c511953a481eb262b450aa981"
+      "size": 28954,
+      "sha256": "sha256:7e784cab40220c6b614b93047d9bc9c10eb2bf8bb2bbf4c33a71a77f39cbe062"
     },
     {
       "path": "docs/output/commands/npm-version.html",
       "size": 15926,
-      "sha256": "sha256:3829fc696c14cc51ab95ce637aaa0074affc5840214f43d6193c262fb4ea9ab0"
+      "sha256": "sha256:3c015ed2662ddcbce136a3da9523b727e00847d1bd501354649f868e98b74d34"
     },
     {
       "path": "docs/output/commands/npm-view.html",
       "size": 14787,
-      "sha256": "sha256:f1a5edb3d796bbe2be56cae4fd45ff0993b4b098edf8a0d21a66ca173d50ad34"
+      "sha256": "sha256:8f8e5c0d37248633998abb14893235af965764ce9efdcd56e89fea088ba273b6"
     },
     {
       "path": "docs/output/commands/npm-whoami.html",
       "size": 5694,
-      "sha256": "sha256:a8d98b5fb1896aaaed00e24058be325221420fbb83e238849bcec7648dcc8422"
+      "sha256": "sha256:a5dafdc28277e3c5a13a6c2c424e9f865f006ae459e327d0d80056f2c1accb33"
     },
     {
       "path": "docs/output/commands/npm.html",
       "size": 12082,
-      "sha256": "sha256:466ce5cbcffbf9e97d42979b1931a48c8025dc913fbe6f85c9930ff72b7d8417"
+      "sha256": "sha256:65b6d3cb0a08b720ca3379d397fe17bb0ace30ab2e8c834743a004472b64f3b5"
     },
     {
       "path": "docs/output/commands/npx.html",
       "size": 12423,
-      "sha256": "sha256:813218bcb4e08063f111b211d4ccbc4e16cea05e58fa7a71bd40fe7a77e193e3"
+      "sha256": "sha256:7288407e882ab8fa225c58667d2def56db089489818aab665991ac5c67446fd0"
     },
     {
       "path": "docs/output/configuring-npm/folders.html",
       "size": 14445,
-      "sha256": "sha256:e05000a96bff964b4cc3183b798b5166916f3e6338aacacbe3f183eb761e4d4d"
+      "sha256": "sha256:041a72628d4cdb63b74fdc7dcf32676c9dd87ec98dd76f0a3bad08b165d8e319"
     },
     {
       "path": "docs/output/configuring-npm/install.html",
       "size": 8164,
-      "sha256": "sha256:01856d334ae60679be2868f2284de0db35e4f3722ba7970f67e371283f92e1cb"
+      "sha256": "sha256:6234e822c3dae723fd09a593b783ac973e9277d54a1f87be62f09e63c98f2c18"
     },
     {
       "path": "docs/output/configuring-npm/npm-extension.html",
       "size": 12135,
-      "sha256": "sha256:12ca86787a52c55c6bce1922c15bd0b7d7ab222be2fafcd73e1d7c54e5a42e75"
+      "sha256": "sha256:276b91a9f8714273c1f8e94345ccf8a436ddb7ed4f55c1a278c78fed6e6e6118"
     },
     {
       "path": "docs/output/configuring-npm/npm-global.html",
       "size": 14445,
-      "sha256": "sha256:e05000a96bff964b4cc3183b798b5166916f3e6338aacacbe3f183eb761e4d4d"
+      "sha256": "sha256:041a72628d4cdb63b74fdc7dcf32676c9dd87ec98dd76f0a3bad08b165d8e319"
     },
     {
       "path": "docs/output/configuring-npm/npm-json.html",
       "size": 57501,
-      "sha256": "sha256:0c4f5fd6e800faada6d6d71a79332625365a4ee860bfe905e1585a17b2dddca1"
+      "sha256": "sha256:82f7ae2d5c3e97b2a11cd1c1c1f1fdb02072108279a2f61704821086d548385d"
     },
     {
       "path": "docs/output/configuring-npm/npmrc.html",
       "size": 13006,
-      "sha256": "sha256:8437cac83a45b42402c863f6abd9bb11185afa544e2cc7dce891d2bfcf243f90"
+      "sha256": "sha256:3aa1684f65adbf15aa71de2503b1e59c419ad28394a3c26b106e1dfecc7c93e4"
     },
     {
       "path": "docs/output/configuring-npm/package-json.html",
       "size": 57501,
-      "sha256": "sha256:0c4f5fd6e800faada6d6d71a79332625365a4ee860bfe905e1585a17b2dddca1"
+      "sha256": "sha256:82f7ae2d5c3e97b2a11cd1c1c1f1fdb02072108279a2f61704821086d548385d"
     },
     {
       "path": "docs/output/configuring-npm/package-lock-json.html",
       "size": 17249,
-      "sha256": "sha256:99ff70f59d6efd0a5c9496d4a057e92e0dcbb851142e643ce497cac4973a4814"
+      "sha256": "sha256:332b2e928985a30c0c3016dbef3f476e376e3214b0e157900ce14273e690bd8e"
     },
     {
       "path": "docs/output/using-npm/config.html",
-      "size": 100829,
-      "sha256": "sha256:0135501265f1a52a02ae13c3570f6e058814cf4fcbf8c96efd2bde179c10ec5c"
+      "size": 100338,
+      "sha256": "sha256:a22ecb0b9923cc59fe43b36e36179621f389e924d626675b0c64168e0aee0d16"
     },
     {
       "path": "docs/output/using-npm/dependency-selectors.html",
       "size": 20820,
-      "sha256": "sha256:979320d497c62aaa192197530feade94be30c5b9e6ede69f948f993e7273a3b5"
+      "sha256": "sha256:c1dbecc959dd11f01dff260edac7ae733327c950c5a14728556c29123d65c774"
     },
     {
       "path": "docs/output/using-npm/developers.html",
       "size": 16786,
-      "sha256": "sha256:2de370ba860780243fa55191909a781934e995df4ad5a86f0c85e7d031178c76"
+      "sha256": "sha256:46d4256e33ea3206f8bea1eab4c42f804958a5c2cf2e76ca08246e6b3fbf5cb5"
     },
     {
       "path": "docs/output/using-npm/logging.html",
       "size": 10122,
-      "sha256": "sha256:5cb79f73792229da88815b2d0bd190941d64ff97c8121b4f65725e85df2a5915"
+      "sha256": "sha256:c3adaac61d45c8fad1d2c0fe8339a50bde35e249da763412e53f9ce0e07a3ce9"
     },
     {
       "path": "docs/output/using-npm/orgs.html",
       "size": 7939,
-      "sha256": "sha256:c170a0f7c6fd276943d31fb555606ab3aea499cc923221770f4bd435f98c915f"
+      "sha256": "sha256:8f238aea4d7db7ed2d96ef54717dac3337b1893335b4cb1d958b289f02702f6c"
     },
     {
       "path": "docs/output/using-npm/package-spec.html",
       "size": 8688,
-      "sha256": "sha256:ac163ee616fd837761ecd1283d0c4fbf7d3fc1abb93146394d418149d2f6cbf2"
+      "sha256": "sha256:03e3a788198590d898181e0fd250eb74d3080f0b0b1215ac92e0732fbba52057"
     },
     {
       "path": "docs/output/using-npm/registry.html",
       "size": 9202,
-      "sha256": "sha256:d32e38c69ff18895be2bdbdb0f2f4f4df96dd19fa1a5a14f777151b1c07a2b61"
+      "sha256": "sha256:fbdc8d18b936e978c12a7b6248f059b59dee204f84b74ee50fae7a36f4ebdd99"
     },
     {
       "path": "docs/output/using-npm/removal.html",
       "size": 6464,
-      "sha256": "sha256:f086d5059e7174edced73d6abc45963bbd7860af5a5ab6a422ac6de44183eea9"
+      "sha256": "sha256:fcc04739b4f8c99bb4e3fef98f116b968e30e9c3a3f16838c20916bfa5e65936"
     },
     {
       "path": "docs/output/using-npm/scope.html",
       "size": 11325,
-      "sha256": "sha256:e279e080eed4773dd2f8f7d01b454b8759ac1aa899be8c01f960d2044eaba382"
+      "sha256": "sha256:c66b7e9dbcb6d69de4497eb1aaa609b1ce57907cf6511c82f44c7a56f334037d"
     },
     {
       "path": "docs/output/using-npm/scripts.html",
       "size": 28554,
-      "sha256": "sha256:ee58e147fabdffbe0571095cb42522eec032d51dd07b57d596097d1d3f12db35"
+      "sha256": "sha256:7c95b7585146489aee8ccc210b6fd88e3cb6ad9604bc8aedde7aeb06b496a229"
     },
     {
       "path": "docs/output/using-npm/workspaces.html",
       "size": 13164,
-      "sha256": "sha256:22cd1b33cdd79ee3767263956580d9e76f651a11e49dedba112870c0d59549fa"
+      "sha256": "sha256:62fd82c56b32dfa8757e70249d042b6016ce90c201a68f8ea58da35ff4f53d88"
     },
     {
       "path": "index.js",
@@ -1055,8 +1055,8 @@
     },
     {
       "path": "lib/commands/dist-tag.js",
-      "size": 5977,
-      "sha256": "sha256:982d0b80c55cd91219069b9f186e0ed494524d494d6fb43cc88e82816266f933"
+      "size": 5629,
+      "sha256": "sha256:95e0035b87a574e0e9fd6a2a9993cf89fc979f27c31c14ebe801a89ac7b66181"
     },
     {
       "path": "lib/commands/docs.js",
@@ -1180,8 +1180,8 @@
     },
     {
       "path": "lib/commands/pack.js",
-      "size": 3035,
-      "sha256": "sha256:01483e35200380c9ac3604cb83102009361c75722369a332b4acb204245ad8ab"
+      "size": 2966,
+      "sha256": "sha256:f552ef645b6719adec605e4a93da717fc0a8493512ed12789dd4fd4a18aea230"
     },
     {
       "path": "lib/commands/patch.js",
@@ -1215,8 +1215,8 @@
     },
     {
       "path": "lib/commands/publish.js",
-      "size": 11682,
-      "sha256": "sha256:546d15c33d302b996451cb243921c770252cc82e160a2269b2061451b2801fbd"
+      "size": 11606,
+      "sha256": "sha256:a1b91f9172fd17527865a16381bebddf0aa8b9a61feb545f951118a8a69bd138"
     },
     {
       "path": "lib/commands/query.js",
@@ -1320,8 +1320,8 @@
     },
     {
       "path": "lib/commands/token.js",
-      "size": 9366,
-      "sha256": "sha256:f9ca9b7f425dcb39d4b8cd883aaab866e0fb05b60354a534604830531d94d7ba"
+      "size": 8249,
+      "sha256": "sha256:03363ca40e6b0ec7997686187f94b3b7260e0d00f205e3f7296b3974bc4cb643"
     },
     {
       "path": "lib/commands/trust/circleci.js",
@@ -1425,8 +1425,8 @@
     },
     {
       "path": "lib/utils/allow-scripts-writer.js",
-      "size": 12216,
-      "sha256": "sha256:26489d84171505b0d2f30113f20760f3945c8aca7c160883fc5ab16100c1f764"
+      "size": 12138,
+      "sha256": "sha256:f2e2e58326d45c02cb77dfc81e8fbfddec853433f8ff235107d0c5396f5ed39b"
     },
     {
       "path": "lib/utils/audit-error.js",
@@ -1530,8 +1530,8 @@
     },
     {
       "path": "lib/utils/key-values.js",
-      "size": 1182,
-      "sha256": "sha256:65d31df1b9ba0242d871885878594bbe6a47b7b853b2f8d3da069417d60b5dc3"
+      "size": 1120,
+      "sha256": "sha256:f78e283cc9d48f32334eb891cc3cf06156b338368488c73b94840fbdbe21feaf"
     },
     {
       "path": "lib/utils/log-file.js",
@@ -1545,8 +1545,8 @@
     },
     {
       "path": "lib/utils/oidc.js",
-      "size": 10043,
-      "sha256": "sha256:9903d2d222077d776220cb7ccfa58b28dfee8224fccc9f7974a9d85edf936398"
+      "size": 7368,
+      "sha256": "sha256:2ece1890fe0b89a21f0024a29cc7630d4fa5faa27ca8625f682dc85aa5df2daa"
     },
     {
       "path": "lib/utils/open-url.js",
@@ -1585,8 +1585,8 @@
     },
     {
       "path": "lib/utils/reify-output.js",
-      "size": 9135,
-      "sha256": "sha256:e30ad90be17734d630abafa8359e7577ab35239d093033fa4ab415ce9f86c5b5"
+      "size": 9088,
+      "sha256": "sha256:ab6526fd14e3fc5fde68fe1783daa26b50b14bb03a89d72b4562ae4e93496908"
     },
     {
       "path": "lib/utils/resolve-allow-scripts.js",
@@ -1645,448 +1645,448 @@
     },
     {
       "path": "man/man1/npm-access.1",
-      "size": 3273,
-      "sha256": "sha256:f773ff79d3b271aae3c61d6e2f95291abcfd8f8c07b537230d69d6f0c4474d53"
+      "size": 3268,
+      "sha256": "sha256:70eb5dde41b8defbeffc96452027b970357fa98c95befc88be59a971aadf08f5"
     },
     {
       "path": "man/man1/npm-approve-scripts.1",
-      "size": 5123,
-      "sha256": "sha256:44d71de6f80ce48e7cbddbddf4de29e6921fa73820036dfbbe114015f7e3b465"
+      "size": 5118,
+      "sha256": "sha256:9b25c437e27bcd145d2e70dc3ecb331011a6f7480ccaf63bad5242e678604759"
     },
     {
       "path": "man/man1/npm-audit.1",
-      "size": 18143,
-      "sha256": "sha256:62a703067ea8eafd835eb7b0113da55be4aff15fb1ba5976b7d262d9d84027ab"
+      "size": 18138,
+      "sha256": "sha256:c2402bcefd4ab2f59785467beb0f794bb67bd37010c67522fe25fe31f78ac430"
     },
     {
       "path": "man/man1/npm-bugs.1",
-      "size": 3393,
-      "sha256": "sha256:ab775c1877571dd639c059f85fe2218ec6dcd7687947fb563593766a912faa7e"
+      "size": 3388,
+      "sha256": "sha256:149feb493052f7d8703feebc3ac65e6dbbc1d893952855f54b6510817a65acc1"
     },
     {
       "path": "man/man1/npm-cache.1",
-      "size": 3698,
-      "sha256": "sha256:ea5355df9fe55850b8f0a796f283a4db2b4fc094d0448bb839ffc1ff0d0984fc"
+      "size": 3693,
+      "sha256": "sha256:8693cba6749cb6e8e983a4c430bbdbb568a05e14be4f301f4af3863ad7ab0066"
     },
     {
       "path": "man/man1/npm-ci.1",
-      "size": 16718,
-      "sha256": "sha256:7e060b68730194fbeaf662262dfd35234bb357457b4a4bcc73507bcfa69bfc49"
+      "size": 16643,
+      "sha256": "sha256:f3e942e6fa61d39efc74fb7961e71c9d8abcea20f050e980251ab2c0a4a5d0d9"
     },
     {
       "path": "man/man1/npm-completion.1",
-      "size": 1002,
-      "sha256": "sha256:d5886225d50e3a43d3f07879aaca52b5fe7bbbac413583ead99266552f6b86cf"
+      "size": 997,
+      "sha256": "sha256:e843e8d8173c488a63956496fda091309155c8d23bcb108c1543b375cc90b294"
     },
     {
       "path": "man/man1/npm-config.1",
-      "size": 4649,
-      "sha256": "sha256:2d83159ac71246961c33d107f73e6bc2d5aec15d20e5691c84df4296b4d2c0d6"
+      "size": 4644,
+      "sha256": "sha256:5d1e727d9ad741f8f014faa026e76642bd8e05e3e4290c38d9024260bb0d727b"
     },
     {
       "path": "man/man1/npm-dedupe.1",
-      "size": 14147,
-      "sha256": "sha256:3a4f63cd603c8ece26fffd854aa12e460969b3aabef4d9ea7067331d556ddddd"
+      "size": 14142,
+      "sha256": "sha256:826e4660fafa8d7c29d63bc01870a342f16499aa61709f346ec2a2f1e888a615"
     },
     {
       "path": "man/man1/npm-deny-scripts.1",
-      "size": 3212,
-      "sha256": "sha256:964ba31d8c94ce7eca601fee0076cdcad799767197e766779c5ee7c1de8db7d0"
+      "size": 3207,
+      "sha256": "sha256:bd297602bd252b794b85b76d7ab479c362b5b8745022443a2cc2ffb1051aaf85"
     },
     {
       "path": "man/man1/npm-deprecate.1",
-      "size": 2378,
-      "sha256": "sha256:1b4851e6f9bc034c3d773f0809218ab9c3043965915a6a935cbe9646b3d40815"
+      "size": 2373,
+      "sha256": "sha256:de86cb204a5a4cc009158521eecf23aaf1d34fa1d6b4d4a91d5abb8b9cc55198"
     },
     {
       "path": "man/man1/npm-diff.1",
-      "size": 9784,
-      "sha256": "sha256:43c80e596c02fc9377faed50386507adb8287b87824cec3fcb58c3b0c0396588"
+      "size": 9779,
+      "sha256": "sha256:d19892130346027a8e0dcf45643f2b9ec02c14ae603b845e016d709cfe04293a"
     },
     {
       "path": "man/man1/npm-dist-tag.1",
-      "size": 5649,
-      "sha256": "sha256:18911abda5119a6bb987d9d59f8202ff562a17f2ced4504303582da5d8640d29"
+      "size": 5644,
+      "sha256": "sha256:c758c0cf2dd1897f67472639f627b84ad1a51f079a909b3d9e7bfb49a8413932"
     },
     {
       "path": "man/man1/npm-docs.1",
-      "size": 3375,
-      "sha256": "sha256:cf50bbf8574d7ad1de31943806c4998842b20e85e1fe10fda933eb16af10c2b6"
+      "size": 3370,
+      "sha256": "sha256:f5f4da923f139d52f0980407a351ab54ab7da27e63043f29301791ac57afa458"
     },
     {
       "path": "man/man1/npm-doctor.1",
-      "size": 5377,
-      "sha256": "sha256:1d406277d0bab551ebe6ac0a4523e45e159dcb999583c9f972656bf5fd5887f4"
+      "size": 5372,
+      "sha256": "sha256:9abd82511f17f336cb9ddd079905fd374fab9e41bc23d305cc3bff6c99768ad1"
     },
     {
       "path": "man/man1/npm-edit.1",
-      "size": 1193,
-      "sha256": "sha256:91f020aa013418dd4586f3cc4a836f44be85664d68bca8ad91f7391225a0c492"
+      "size": 1188,
+      "sha256": "sha256:cabbc15bf9a4f936466ab6c45e88bd04cd23d14eee53428956341443822d3369"
     },
     {
       "path": "man/man1/npm-exec.1",
-      "size": 14795,
-      "sha256": "sha256:9f8353942938b3df901c1402d95993cd16da103876f1747988279f5435b2af6f"
+      "size": 14720,
+      "sha256": "sha256:045329a33a6f0def1182ef1f0cde354377b713f1a87bcb38e70a83800675d32d"
     },
     {
       "path": "man/man1/npm-explain.1",
-      "size": 2942,
-      "sha256": "sha256:63d44eb9e44f0b6d18fc5c221c826084351b78ceb204bb9c95f1f0992ad00219"
+      "size": 2937,
+      "sha256": "sha256:396c9291cb8d054d8adcee9b92471a19ab673d91883b638e6e9912db5e7ade85"
     },
     {
       "path": "man/man1/npm-explore.1",
-      "size": 1094,
-      "sha256": "sha256:cf3dca712e1a6b28100b0b30a227c107003c26a15877c6908819e461b5b0279e"
+      "size": 1089,
+      "sha256": "sha256:3277e422909aee6aac00cd58f33215c6c71e6bca1d399cc9259872e6612dde4e"
     },
     {
       "path": "man/man1/npm-find-dupes.1",
-      "size": 8157,
-      "sha256": "sha256:310cffcb2fc10ac45e391fa447561ce12d81b647dc664e1a8973d2b6b8f9cd15"
+      "size": 8152,
+      "sha256": "sha256:529d4706a8ddd1174540b29c66a4320bff282f70eaf5ed0ea29917926f861d74"
     },
     {
       "path": "man/man1/npm-fund.1",
-      "size": 4076,
-      "sha256": "sha256:1728126b25f3a7647b97eef802e00d547be97a3d75cd836d5d4e85d382a4085a"
+      "size": 4071,
+      "sha256": "sha256:9fc59005db40425e6f52278cc785a2579a47e6d49662e1e99f3fa15c20ccd003"
     },
     {
       "path": "man/man1/npm-get.1",
-      "size": 549,
-      "sha256": "sha256:9b3591b03687c0013607420413e4ecf2fcf393d2ccc90df49cb268a72c60b152"
+      "size": 544,
+      "sha256": "sha256:f58c002d9ddd854505d64b6655c89eab0a07c6ea47d5ac842719bc4715a19b8a"
     },
     {
       "path": "man/man1/npm-help-search.1",
-      "size": 872,
-      "sha256": "sha256:c0bbf75fc0445ab972f6a84b3cf223cf9eec451db063da46ed15f63e8d3118ed"
+      "size": 867,
+      "sha256": "sha256:016222b02a01df442ee9ddec0bb8bbcb8799fd507bc0bd13a758d73358bf633a"
     },
     {
       "path": "man/man1/npm-help.1",
-      "size": 1104,
-      "sha256": "sha256:e2d25e59ffb6b6de2e811f8aa7335474f8bd74c0ac8f5e09b8b1263758bc7ba5"
+      "size": 1099,
+      "sha256": "sha256:aac96346884ce6208a2ec36b92a94b2da905a5a2d94ccf87ed541220de3329b6"
     },
     {
       "path": "man/man1/npm-init.1",
-      "size": 11655,
-      "sha256": "sha256:39845ba0977c3df3143aa3ca776501a61acff7523bbd82b663a74bcfa1b5e292"
+      "size": 11650,
+      "sha256": "sha256:229aef0589eb4fc34b9403778a64bb5b20883492ff739e1d48e7091db7a16245"
     },
     {
       "path": "man/man1/npm-install-ci-test.1",
-      "size": 14887,
-      "sha256": "sha256:f1e11746181b60595c5e111d080052415bdd6ec7ba6073cdc479a1f5d826971c"
+      "size": 14812,
+      "sha256": "sha256:de392016297e2d884469acf18ceb6233f50d8ba3c329fb25c81d963c03ea9473"
     },
     {
       "path": "man/man1/npm-install-scripts.1",
-      "size": 6134,
-      "sha256": "sha256:582d3c9e70c597594d90f96976bbb65ae4505040e77da9489f25120f63c1f5a9"
+      "size": 6129,
+      "sha256": "sha256:5b48830be1fdb32449171e97608c7a5bcf334331a928b9d1f7b20434fc8a3c51"
     },
     {
       "path": "man/man1/npm-install-test.1",
-      "size": 21301,
-      "sha256": "sha256:0f30e781929a2e058ad1cc1e80973c6b82e31a9d47873d22df15bc3653147d4a"
+      "size": 21226,
+      "sha256": "sha256:186c39993d604db4094aa8385ddd7837df0414a060a359bc60896757c465154b"
     },
     {
       "path": "man/man1/npm-install.1",
-      "size": 39783,
-      "sha256": "sha256:97a5e64d48680869b867d302abb8d75705466d04d83c8ba8594be215dcc5a9d2"
+      "size": 39708,
+      "sha256": "sha256:fb081658b51191464e03c19fed90cb2b29ea112d5bfe05cc3dc7ac4a5cd1761f"
     },
     {
       "path": "man/man1/npm-link.1",
-      "size": 17235,
-      "sha256": "sha256:39495092ab7fb8fc5596cb70524e6d25a4f072ac103f06243d0a0542a56ed688"
+      "size": 17230,
+      "sha256": "sha256:6a911773cbb62965de90cb3d0230fcf812cf903008b6d6dcd30e85e0238faea3"
     },
     {
       "path": "man/man1/npm-ll.1",
-      "size": 6660,
-      "sha256": "sha256:179c8f36e1387fb718b1202aa0bd44df1687bbf301a99c04e8e79ddfbca2464c"
+      "size": 6655,
+      "sha256": "sha256:44000cbf31ccfca39d5ea602d9329d3b8200f6032a385ac2d977410bf75cd77c"
     },
     {
       "path": "man/man1/npm-login.1",
-      "size": 2561,
-      "sha256": "sha256:15d8e6bdf1595182e8d786923efb0a5b7f5e11fb0be62380473052008c9b9041"
+      "size": 2556,
+      "sha256": "sha256:548f57b11371e7a7895457e8aba0131b9c6f8b3158a69a3754c577bc54557358"
     },
     {
       "path": "man/man1/npm-logout.1",
-      "size": 1890,
-      "sha256": "sha256:7e31cc6f4d66c6e6463367b31e76f5f890fd3c6bf552f02d2789d9ab8c098b4d"
+      "size": 1885,
+      "sha256": "sha256:16b946391a0795035c14bfbcf30dd33254f3dca6fb38415af31a9eebd7fce20f"
     },
     {
       "path": "man/man1/npm-ls.1",
-      "size": 8032,
-      "sha256": "sha256:346f246943f0b8ba136d18650a1279d90690e3889bda083e776b9505722b0faf"
+      "size": 8027,
+      "sha256": "sha256:9ba8dfaa9abaf3eb0e236595b47ce16b713a664409389404e9c97ffc0e60c1fd"
     },
     {
       "path": "man/man1/npm-org.1",
-      "size": 2315,
-      "sha256": "sha256:4f973f0a2a1a3373e7776b235c55b713075118eb9b736f958ad32a29d78fa21f"
+      "size": 2310,
+      "sha256": "sha256:29885e16d67bdb9e94d3b538aa8ee29be599b4293d070255c07e6e223f64479e"
     },
     {
       "path": "man/man1/npm-outdated.1",
-      "size": 10195,
-      "sha256": "sha256:ed96ddb6b29d930562b11bfef0fb57d5141077b4ea5f790276be8746bd38cc7a"
+      "size": 10190,
+      "sha256": "sha256:591d17af7fc75d8d20cab41f482f79a4f5e012e9e1ec8903e5e558c4d4df74d2"
     },
     {
       "path": "man/man1/npm-owner.1",
-      "size": 3366,
-      "sha256": "sha256:d35cb866b07ce877c9164d249a310d1d5d561ae506930af7e94cb7867da1e4aa"
+      "size": 3361,
+      "sha256": "sha256:a875fc01c147955411a9c2c49f48393aa4040c3aeeb844ae69e53bbcf3c72318"
     },
     {
       "path": "man/man1/npm-pack.1",
-      "size": 4446,
-      "sha256": "sha256:8e0a170afd7fafa4161a03d9f0d4d8e58e319cd022efd81af9e3c770a1ee0aac"
+      "size": 4441,
+      "sha256": "sha256:09abd396b05036fa260b96dc39ec916f90fd23ff8509b277ff3442655f4ea5c3"
     },
     {
       "path": "man/man1/npm-patch.1",
-      "size": 4981,
-      "sha256": "sha256:347d4dcf2a625eac400ba22e740e4d250222202a5022e1a7686c998cd60f7a97"
+      "size": 4976,
+      "sha256": "sha256:dc965efa8f7e5b414ec3a2fdb3918223f6f7ea4591978df2e13140eaa632ec1b"
     },
     {
       "path": "man/man1/npm-ping.1",
-      "size": 854,
-      "sha256": "sha256:97b48fd69657608897df8865111e07131ccaa16da6143fc32f61bed5745d2e0b"
+      "size": 849,
+      "sha256": "sha256:139878bccb0a501a75403a156067c3f1af68ab0f08763129a62319cb012bc8c4"
     },
     {
       "path": "man/man1/npm-pkg.1",
-      "size": 8725,
-      "sha256": "sha256:59358d910dddc69e4f581f18008d1e9dc5019214c8246f3940e3c1abd4ed4ae2"
+      "size": 8720,
+      "sha256": "sha256:12cc420c6faeedaabf4ad502f756b463aeab287b63b8df4f73a2e9482f313913"
     },
     {
       "path": "man/man1/npm-prefix.1",
-      "size": 1309,
-      "sha256": "sha256:4a7f4bcd46b9209631ce46c73a6bccd7f96300f788a769380a3816a7c5cd7e00"
+      "size": 1304,
+      "sha256": "sha256:87b1b633d9ea91e6274e0294dd077fa6dc1bf4938fa2b8ab92d8752ae06d1403"
     },
     {
       "path": "man/man1/npm-profile.1",
-      "size": 3386,
-      "sha256": "sha256:1ef908c654df0c8f4535daff559d01a331ce96ff35ec7b77609c0a6381e140a8"
+      "size": 3381,
+      "sha256": "sha256:c9bceb52ed70c01c8557a34694ecf49ba77bf3088b3f143c769d79a6d936f594"
     },
     {
       "path": "man/man1/npm-prune.1",
-      "size": 6544,
-      "sha256": "sha256:3b2d8b95b4757274f3b284a1a93da669a08f12672661fa2cb5d4ddd7597407b5"
+      "size": 6539,
+      "sha256": "sha256:1c8a6364b77ecda8f42f8af4320dc3f11524d3e4bb8b4bfc55d1ca03c8773410"
     },
     {
       "path": "man/man1/npm-publish.1",
-      "size": 9270,
-      "sha256": "sha256:256181851aa48c0ff5c89be94cadc3c174560bc40b00874e7d064a492b75cbd0"
+      "size": 9017,
+      "sha256": "sha256:1775b289e7f388c77c53b5085d519c8e8a681bd18e6990178ec234884dea9b97"
     },
     {
       "path": "man/man1/npm-query.1",
-      "size": 11260,
-      "sha256": "sha256:efcf2022beac6238bf81364dadd3b058a83ccbcf0d07d3b4a34190d01f47f9e2"
+      "size": 11255,
+      "sha256": "sha256:9f8bfe34bbd09e32e061d91b5533e69ac77e035e99cdd642e3407426af19ae64"
     },
     {
       "path": "man/man1/npm-rebuild.1",
-      "size": 8061,
-      "sha256": "sha256:b15a5c502ada6d9f67be2577bebd86b58f2300cff25dc4e4ebf91fde4e885163"
+      "size": 7986,
+      "sha256": "sha256:00bee7b4f6e338da66667a0e4229285a1323d5424c242fdc715387500a32e0b6"
     },
     {
       "path": "man/man1/npm-repo.1",
-      "size": 3157,
-      "sha256": "sha256:2031a4b91390828ad0e974a18a27a326b26a36f830f55e8632300294d342f0e8"
+      "size": 3152,
+      "sha256": "sha256:a1fa951a972aa559d1a80ac4af2d9cb1f057e92b605c98b9514de314bd60ee13"
     },
     {
       "path": "man/man1/npm-restart.1",
-      "size": 1810,
-      "sha256": "sha256:55abe1670ed6dbd1326912ef5ecbab5ec129b4e45a337706d3e6c96f35c8cba7"
+      "size": 1805,
+      "sha256": "sha256:db59aad648c01cd35b131b01dae00656353988d98fb6f9840402b2ca03528d78"
     },
     {
       "path": "man/man1/npm-root.1",
-      "size": 1199,
-      "sha256": "sha256:ccceb73f85b9fda8638413217803a8d13ac27c68f42b428a3145e9167eba3cba"
+      "size": 1194,
+      "sha256": "sha256:2e7bfce5dd87026d9bbd131d12377f45d6c7fd305978518d21a2d3cea81ba323"
     },
     {
       "path": "man/man1/npm-run.1",
-      "size": 8503,
-      "sha256": "sha256:ce0c45fe5f575bb6df867837d199f4b6dbafa56671da68eb48ef38fdad932c8f"
+      "size": 8498,
+      "sha256": "sha256:4af614dafbee78bec696fa9b7057e0469de28eeddce11c3068c18db94eccb813"
     },
     {
       "path": "man/man1/npm-sbom.1",
-      "size": 8957,
-      "sha256": "sha256:b53b7a15c59595d163e332046d986cb2fa8225341a1f92c6bf10fe8a3eb5547d"
+      "size": 8952,
+      "sha256": "sha256:93732c5cc7f1b0b9e9538f589057d8d5de273f9612fd6bd9d8c037b638cbbc65"
     },
     {
       "path": "man/man1/npm-search.1",
-      "size": 3957,
-      "sha256": "sha256:d6c419567a0323e097c226983267f9c17357bcac30e635398a3f912898768dc1"
+      "size": 3952,
+      "sha256": "sha256:7f32fe02a3784b49a8fe1abd629707e35b3d6bee1f85e5fcd5fe308e758bece0"
     },
     {
       "path": "man/man1/npm-set.1",
-      "size": 1635,
-      "sha256": "sha256:6b3a47f23f2a646fe7d1d7f05d281774f3c7f8f9ba0528aa342c26f4295fe7d3"
+      "size": 1630,
+      "sha256": "sha256:5be283d277325495815adb18cda601772d4d5cc1aafc959abf9aca90a4cb3736"
     },
     {
       "path": "man/man1/npm-stage.1",
-      "size": 13637,
-      "sha256": "sha256:91cd6667c734b035a88c211b3718e406a3a3bdb4a3e1ee19bb89fe8ed1da398e"
+      "size": 13496,
+      "sha256": "sha256:e895ab8575f560450fd8a614fceba9f7312241068f4297071815a270a67766c4"
     },
     {
       "path": "man/man1/npm-start.1",
-      "size": 1944,
-      "sha256": "sha256:4e8237cd3e765dcde9b1e4a83e0e6f9ade0447014f8a1df1252e8c70d6ad1ab0"
+      "size": 1939,
+      "sha256": "sha256:0b3604724be1e1aba9f640fa68170f78f64602f05bc5d9a99ee2360005348aca"
     },
     {
       "path": "man/man1/npm-stop.1",
-      "size": 1574,
-      "sha256": "sha256:bf65316e5ada4be10ef1b1e5e8dc5ff88c49ed827957ba9ec7151c1d3d7ef089"
+      "size": 1569,
+      "sha256": "sha256:2dc74e0e64118a5156d521c3a066490aa06e122c41ef1ccfa1267838822ea4a5"
     },
     {
       "path": "man/man1/npm-team.1",
-      "size": 4508,
-      "sha256": "sha256:97db5281a78073c0601d34b5124d1412a4034ede64c89270d6db603d464100a9"
+      "size": 4503,
+      "sha256": "sha256:895fd19a2b7dded9752461c84b98ad3364dd01bfa1d7b4395df45da8431da77f"
     },
     {
       "path": "man/man1/npm-test.1",
-      "size": 1487,
-      "sha256": "sha256:053263eb8ec36f68d20534cb6a5db90aa192da28308f1754b9fbaac4a31acef1"
+      "size": 1482,
+      "sha256": "sha256:699daa693b8b3af9fd3b635686b3ca65bc709cc6faa529acd23005a7c4800880"
     },
     {
       "path": "man/man1/npm-token.1",
-      "size": 5677,
-      "sha256": "sha256:cebad3e6e55ce7b2cbb6ce175a1c25b0f34cb25456c92e7cf1b84e366a0085a9"
+      "size": 5518,
+      "sha256": "sha256:52ec338fbed3fe8964bd50ba6e816192b754aaf3b2d8c465afedbcf8140db304"
     },
     {
       "path": "man/man1/npm-trust.1",
-      "size": 12077,
-      "sha256": "sha256:86737e2e51d392534f8e26277bdb114c635886b7f6d95134df5eaaace5a885eb"
+      "size": 12072,
+      "sha256": "sha256:c939dcc899e943b889ab22ae7375e91bfd2b4e179676b0edd91b3a2e9c986660"
     },
     {
       "path": "man/man1/npm-undeprecate.1",
-      "size": 1582,
-      "sha256": "sha256:63eb9459cd6680f07b9e8e9bf1c7157dbabdc7c5ffba1bcef6d00d47ba8844eb"
+      "size": 1577,
+      "sha256": "sha256:30052e1ad68a474f04c9dd5d82bbf5498199f5570e4a1e050d9839091d6833f6"
     },
     {
       "path": "man/man1/npm-uninstall.1",
-      "size": 4847,
-      "sha256": "sha256:8b9a570b560ecd71397ce67eb9e26ad5f46291a046eb74463002f758d207d7f8"
+      "size": 4842,
+      "sha256": "sha256:0303628568e92c71b44555fa63d78078247d963476ef331800941e579aaf6f7d"
     },
     {
       "path": "man/man1/npm-unpublish.1",
-      "size": 4877,
-      "sha256": "sha256:25edb071aa6d2bf53da0f5ec434f3a435bb1e133a73fabce6495a85d0a1763fb"
+      "size": 4872,
+      "sha256": "sha256:c5996e333412c7690c715a79aa2efa36be32fdf7db0ba4bbb69bfda1e45279d3"
     },
     {
       "path": "man/man1/npm-update.1",
-      "size": 19563,
-      "sha256": "sha256:e4ecfa242a3ecec974e058144f0aa8a5860ec4c9cf553d76ed88148a72d8b2c2"
+      "size": 19488,
+      "sha256": "sha256:d4c9269f29984438c1ba3d9573de3abf8b64013cfd6db2e081cc44fb5e4aa874"
     },
     {
       "path": "man/man1/npm-version.1",
-      "size": 9357,
-      "sha256": "sha256:8e0f9c6d7af57853b7e4a1ed9eac6c83f0405c12f59b8085a533f55bbdf5258b"
+      "size": 9352,
+      "sha256": "sha256:cd109d2b34b711906f72ab8349d9734a2fabb2b87447e032fbfec775b2654abe"
     },
     {
       "path": "man/man1/npm-view.1",
-      "size": 8370,
-      "sha256": "sha256:dabd5b3183f65f25675406140848aa91eb361e0aeec61cc34e57c255b3f9669c"
+      "size": 8365,
+      "sha256": "sha256:90b178ad579d4e44feb9f72528a38764c9352cc4a31a32b92fc2596376d70ab4"
     },
     {
       "path": "man/man1/npm-whoami.1",
-      "size": 876,
-      "sha256": "sha256:6d0a37a43c31cb8a0752d0fb1b8587fe8273d9b04776255824cf3b699ce1c197"
+      "size": 871,
+      "sha256": "sha256:151b6930396113b8ed01a53303af5a0aa07f2d3abfe94c75c04f2d6a8f490b68"
     },
     {
       "path": "man/man1/npm.1",
-      "size": 5985,
-      "sha256": "sha256:5673d99f44a4b01fc64f385243f66cee1e6c40a4bbafbffc939ce689abfcb43f"
+      "size": 5980,
+      "sha256": "sha256:0aefdb664cd04e3b1e3eec76a52722259fc10285a6862717b765d92f6ccf0e79"
     },
     {
       "path": "man/man1/npx.1",
-      "size": 6868,
-      "sha256": "sha256:d039f87ebc16fca1c0d7bfcf10f9e297945124138587a3030be8079534f18c27"
+      "size": 6863,
+      "sha256": "sha256:abc4f56bd0abfe7b526c1d353524a311c218737eb70b37b2ac9627124cb3556d"
     },
     {
       "path": "man/man5/folders.5",
-      "size": 8341,
-      "sha256": "sha256:cd65db7ff9c05616f3d97d479801a95d5f356ed833a5cc2f7e626a0a6f512379"
+      "size": 8336,
+      "sha256": "sha256:d51f0063821ddaca566dba2d75c79c8e9109c961ca957ce4db49d4f1a021ed73"
     },
     {
       "path": "man/man5/install.5",
-      "size": 2750,
-      "sha256": "sha256:ffa2fc5280acb89a186a320addddd6dfbcc54c3f2353aff755ade8f4f7c8d0e6"
+      "size": 2745,
+      "sha256": "sha256:a34c6d524fc2f385c3932c348c2351961051f06cd4b1975a2236908695655fff"
     },
     {
       "path": "man/man5/npm-extension.5",
-      "size": 6282,
-      "sha256": "sha256:d211adba513d9840630a25dbafc6c4248e5e10d61b477d98cc83e5589e1c6343"
+      "size": 6277,
+      "sha256": "sha256:e0afa71ae1fd042dec069179a25b4a561c70ee81435eac706a49875b135411ab"
     },
     {
       "path": "man/man5/npm-global.5",
-      "size": 8341,
-      "sha256": "sha256:cd65db7ff9c05616f3d97d479801a95d5f356ed833a5cc2f7e626a0a6f512379"
+      "size": 8336,
+      "sha256": "sha256:d51f0063821ddaca566dba2d75c79c8e9109c961ca957ce4db49d4f1a021ed73"
     },
     {
       "path": "man/man5/npm-json.5",
-      "size": 44791,
-      "sha256": "sha256:7acc77e052665272cc34873f868cacd78e1db2f4ceda4f8144021e95f7089c13"
+      "size": 44786,
+      "sha256": "sha256:6722503141f011caaaf79797b8c0490dba91183dff193f5e985b5552b1094a08"
     },
     {
       "path": "man/man5/npmrc.5",
-      "size": 6941,
-      "sha256": "sha256:f70dcb015315c49a8a31c7e3c102e31edffb21a173eba5d42c7ee12d472211d8"
+      "size": 6936,
+      "sha256": "sha256:906051a7280fabd7c9babe50c5684b52a39e1bf7b170b41b8e977e1bdebed805"
     },
     {
       "path": "man/man5/package-json.5",
-      "size": 44791,
-      "sha256": "sha256:7acc77e052665272cc34873f868cacd78e1db2f4ceda4f8144021e95f7089c13"
+      "size": 44786,
+      "sha256": "sha256:6722503141f011caaaf79797b8c0490dba91183dff193f5e985b5552b1094a08"
     },
     {
       "path": "man/man5/package-lock-json.5",
-      "size": 11312,
-      "sha256": "sha256:1ad5f559ec265b8a08e9b181a351f5a0cf37294b915ba9a12c4b574616cadd7e"
+      "size": 11307,
+      "sha256": "sha256:523ca17b17ae17bce3b6e2db62f81277b60bc3408f8def144614c9287bc3cfda"
     },
     {
       "path": "man/man7/config.7",
-      "size": 74308,
-      "sha256": "sha256:9f4cce2ad84605295036a8b077e2f99a5964c563aad9cbfe7f59b13f322b21f8"
+      "size": 73831,
+      "sha256": "sha256:ad42d7435f3f957d7362016f2604357a1f52c65777a3b6603114d8a8b8d9daa9"
     },
     {
       "path": "man/man7/dependency-selectors.7",
-      "size": 14638,
-      "sha256": "sha256:9d33ef5f4dc70076096b24b41a5a1f6fba44a9a6ba3f4b1a6383531cd7a5ca77"
+      "size": 14633,
+      "sha256": "sha256:818eb38162cf85c9ad416d60c300011b229e331193493f4b3ab4e81b675264a7"
     },
     {
       "path": "man/man7/developers.7",
-      "size": 9838,
-      "sha256": "sha256:6b1fa6e41191bcf77316578b418ae5b77340f386cd55cc25d0b323d7eb472223"
+      "size": 9833,
+      "sha256": "sha256:0beea7cb6d1b12d1ac7302a2dea8c160051845ae9eef1fd0ea381b692de7e958"
     },
     {
       "path": "man/man7/logging.7",
-      "size": 4440,
-      "sha256": "sha256:a90cb42956f92e7e18de8dec11539f6e3b05d0c24cdfe59a5e38be69cef63d3b"
+      "size": 4435,
+      "sha256": "sha256:f04080796c91df8f1d1f673575d3e40418bef9568bf12e840b576325e4f444f1"
     },
     {
       "path": "man/man7/orgs.7",
-      "size": 2633,
-      "sha256": "sha256:50540732379a3d62db957fb0d5489006e2e936cda8a431a2353151ceaa454172"
+      "size": 2628,
+      "sha256": "sha256:22e768b7362ab893e4953866d5a1d7caa3097a0f1013ec60998b0d34cab82735"
     },
     {
       "path": "man/man7/package-spec.7",
-      "size": 3555,
-      "sha256": "sha256:4e665a3bcf8f9469ca8e2ebfcac5dbed44cc65bff13e5576990601ace3c595a8"
+      "size": 3550,
+      "sha256": "sha256:2b2ea7a4212f616c007bfc08c48a0805f340aae694e9291124fc8d6cdf88bcb2"
     },
     {
       "path": "man/man7/registry.7",
-      "size": 3639,
-      "sha256": "sha256:cae2aa9f93dbc0bf59404a34d9a7a234d2b3c7690f2831417c9b6b966c2e168a"
+      "size": 3634,
+      "sha256": "sha256:6648dcb4f233fe58ad9e30042e0ec55e5745a9c6542424004099b6212b37ffda"
     },
     {
       "path": "man/man7/removal.7",
-      "size": 1746,
-      "sha256": "sha256:2fe3e9f80b8d8e01cfe71b66a6983543623d64e87de690a9e5112448ed552a7f"
+      "size": 1741,
+      "sha256": "sha256:bff764f2a5253884e10a280b215f7fed898eff6fe757a699b783ed498bd3bc72"
     },
     {
       "path": "man/man7/scope.7",
-      "size": 5415,
-      "sha256": "sha256:85c8d5ccd668c91ff77466f3ec18698f2f333cef5d5ff5c990aa4aa3b4fdc452"
+      "size": 5410,
+      "sha256": "sha256:a914d79c95031bb965c00e4aeb05d830b7f384c1118e032faf8102865937991b"
     },
     {
       "path": "man/man7/scripts.7",
-      "size": 18432,
-      "sha256": "sha256:d7040ff9cf848d73dbc398e9b64adeaa88fb08fad41bae8e7096d37d9f4a0e5d"
+      "size": 18427,
+      "sha256": "sha256:31d602168afed1c0320b0bb90901e7af7c2a1097cdd5f0827c63379575e8e924"
     },
     {
       "path": "man/man7/workspaces.7",
-      "size": 7195,
-      "sha256": "sha256:ace3c95680623817e60fe00c0a6e44e4a9ed4737805f781cfb2ce1dea72b8215"
+      "size": 7190,
+      "sha256": "sha256:4e05979e0f73376864132fedefa956d721ac359794bd8e12223b93ab38edd827"
     },
     {
       "path": "node_modules/@gar/promise-retry/LICENSE",
@@ -2325,8 +2325,8 @@
     },
     {
       "path": "node_modules/@npmcli/arborist/lib/arborist/build-ideal-tree.js",
-      "size": 72759,
-      "sha256": "sha256:93d13be8d7740decf7e1daf136f2bdc5c0f621dfe85f818d9e551c6a35571ea8"
+      "size": 71692,
+      "sha256": "sha256:1b1d2df18f87bbc7c0cd4fd68d89524f95c87033c046f3b5c9fab99362039d49"
     },
     {
       "path": "node_modules/@npmcli/arborist/lib/arborist/index.js",
@@ -2535,8 +2535,8 @@
     },
     {
       "path": "node_modules/@npmcli/arborist/lib/script-allowed.js",
-      "size": 14333,
-      "sha256": "sha256:5599797fec477ba1d0c3138f3b4dc56920c4e9c756ba9ed125606d922567ec40"
+      "size": 14030,
+      "sha256": "sha256:5386533cf2021d957200e399d9e976224f1eae015317ff48b66ad8279cb521c1"
     },
     {
       "path": "node_modules/@npmcli/arborist/lib/shrinkwrap.js",
@@ -2591,7 +2591,7 @@
     {
       "path": "node_modules/@npmcli/arborist/package.json",
       "size": 2962,
-      "sha256": "sha256:b1b3e006e70eb4420f0ef6185c61ea0d1fd3c327c6ea03b150376578b9b65cc5"
+      "sha256": "sha256:f0ef7d2f36d4c54feecb0b9749280bc4932fe71d49088f09caa8c23254efcdcc"
     },
     {
       "path": "node_modules/@npmcli/config/LICENSE",
@@ -2600,8 +2600,8 @@
     },
     {
       "path": "node_modules/@npmcli/config/README.md",
-      "size": 9830,
-      "sha256": "sha256:12160d7776219e1f1f629beb463eba666221986d45e4136c1b988a52454b57a4"
+      "size": 9700,
+      "sha256": "sha256:f5968b5712993e9754b7a6b2f4a5229326d123c24ae69e8de10f35ecefa169ac"
     },
     {
       "path": "node_modules/@npmcli/config/lib/definitions/definition.js",
@@ -2610,8 +2610,8 @@
     },
     {
       "path": "node_modules/@npmcli/config/lib/definitions/definitions.js",
-      "size": 97683,
-      "sha256": "sha256:b352635a4b9ac0575a76e66dae679b16c67762030b1847564ea4b59e572f8372"
+      "size": 97223,
+      "sha256": "sha256:cf8f31b79a4428b25e2dac5b080c3b9e0fc03dd8dea54124a0c6cf05e1526630"
     },
     {
       "path": "node_modules/@npmcli/config/lib/definitions/index.js",
@@ -2630,8 +2630,8 @@
     },
     {
       "path": "node_modules/@npmcli/config/lib/index.js",
-      "size": 36371,
-      "sha256": "sha256:14e19ddd8378da6554aa6c84e420e14547db217f4d9759b4149b77f5dafa778a"
+      "size": 36302,
+      "sha256": "sha256:b8e89c4676517854440d623687b45de68fa8901080e619a7ac8477de754836c1"
     },
     {
       "path": "node_modules/@npmcli/config/lib/nerf-dart.js",
@@ -2671,7 +2671,7 @@
     {
       "path": "node_modules/@npmcli/config/package.json",
       "size": 1449,
-      "sha256": "sha256:0054d7e79a28bb6b377a4fb729f5af2d8480c80302cc6f79d8ef9bbfc22b2a5f"
+      "sha256": "sha256:9fe61b856a2d4070a48fa903b74af9c1854f03214edd1a6f50537cbb070c922d"
     },
     {
       "path": "node_modules/@npmcli/fs/LICENSE.md",
@@ -4095,8 +4095,8 @@
     },
     {
       "path": "node_modules/brace-expansion/dist/commonjs/index.js",
-      "size": 11238,
-      "sha256": "sha256:8d1ea713e1dd03f52783bbceea9d85815a3587134d1936ea16257dea83884f15"
+      "size": 7583,
+      "sha256": "sha256:2a8ecf6cc8bb8c93cdfd11e9a29b3e1413684e2f1a8af82454f59b2f1c95f527"
     },
     {
       "path": "node_modules/brace-expansion/dist/commonjs/package.json",
@@ -4105,8 +4105,8 @@
     },
     {
       "path": "node_modules/brace-expansion/dist/esm/index.js",
-      "size": 11021,
-      "sha256": "sha256:af0e6438163b5ef866c52680ec58756bcf00cff330729c0d6a3a44ee57bde9d1"
+      "size": 7400,
+      "sha256": "sha256:c6ddd49dd56b0fee854bb06495d4fa11d81dda170b05360d022e2ac76d67a706"
     },
     {
       "path": "node_modules/brace-expansion/dist/esm/package.json",
@@ -4115,8 +4115,8 @@
     },
     {
       "path": "node_modules/brace-expansion/package.json",
-      "size": 1551,
-      "sha256": "sha256:f8a0e0d0a6cbb58106ce6832205e0939a00b9583637011bf8ef4167f4a52fbda"
+      "size": 1557,
+      "sha256": "sha256:f792e76015d954c06e8ac42cfa5664820126b2ecce01c987fe59de65bea57ab4"
     },
     {
       "path": "node_modules/cacache/LICENSE.md",
@@ -5110,8 +5110,8 @@
     },
     {
       "path": "node_modules/ip-address/dist/common.js",
-      "size": 4110,
-      "sha256": "sha256:58a09ce1369f3199e69dc22435f138c4a783808f9a4e36fb583bec497d1e8a25"
+      "size": 2206,
+      "sha256": "sha256:5339ca7ec4283cb1a56e3cc3cea6c289e269912ba74b9458fb891522991651bf"
     },
     {
       "path": "node_modules/ip-address/dist/ip-address.js",
@@ -5120,23 +5120,23 @@
     },
     {
       "path": "node_modules/ip-address/dist/ipv4.js",
-      "size": 19751,
-      "sha256": "sha256:9871be333f89c77fd25c7d84cc50fda9df3589593bb23513ec009a07d672e647"
+      "size": 18447,
+      "sha256": "sha256:1812fa4768e431c77425d90c5d3cd29581a6643636001be22141d86b173299c1"
     },
     {
       "path": "node_modules/ip-address/dist/ipv6.js",
-      "size": 53734,
-      "sha256": "sha256:948b8896f8a12604b9d2e3d64a6551bf76b397d4af1de6a17c1d7cc40cd6f656"
+      "size": 47069,
+      "sha256": "sha256:e11657022ac5347ef5e6044a4b6d4bf22d1b8b792fda1c75a75d297df54af116"
     },
     {
       "path": "node_modules/ip-address/dist/v4/constants.js",
-      "size": 788,
-      "sha256": "sha256:1b1b9c5faf45d551c82e5321bbe06fc5eba2d89bcf0f95bbe7e5ff7937af1d48"
+      "size": 468,
+      "sha256": "sha256:db6c8d9507342ed5a3ac4ef1ee228388624e341750e4a9091e538d474871c8a1"
     },
     {
       "path": "node_modules/ip-address/dist/v6/constants.js",
-      "size": 2853,
-      "sha256": "sha256:0e65bc3554afc387d509f4ad7157fd765deaaf25e96ef9257fe01f67702a6738"
+      "size": 2778,
+      "sha256": "sha256:3457615e0d9eba7735133c438cc89f6c97730960ff5f1b3a5b0ccd9b1486ce51"
     },
     {
       "path": "node_modules/ip-address/dist/v6/helpers.js",
@@ -5150,8 +5150,8 @@
     },
     {
       "path": "node_modules/ip-address/package.json",
-      "size": 2304,
-      "sha256": "sha256:91166ee6e473fe20ec6029e6cdda2635b1e0c9bd6ec78da40a4671bf0c1eaa58"
+      "size": 2116,
+      "sha256": "sha256:efb3d32c0c7996237f78af8fd820e3d58e66fa76593fb329fab6b3ccb260afd6"
     },
     {
       "path": "node_modules/is-cidr/LICENSE",
@@ -5446,7 +5446,7 @@
     {
       "path": "node_modules/libnpmdiff/package.json",
       "size": 1626,
-      "sha256": "sha256:c6cecdd02eaff48841fe5cc78d30e12b11bbe7f1ef36127e934fc95378f47631"
+      "sha256": "sha256:23b1f590b31f2805a2d5e298f09d8cc1fbf99b12cbd1d48d63da06a375532ff9"
     },
     {
       "path": "node_modules/libnpmexec/LICENSE",
@@ -5501,7 +5501,7 @@
     {
       "path": "node_modules/libnpmexec/package.json",
       "size": 2042,
-      "sha256": "sha256:fef4d1ab87c747be51aa1b078ff96654802988988efb1b9674563b244a542022"
+      "sha256": "sha256:4015406907bc7dcde89b6b7510738dd1acff9a599b9f64886c793e7711a259ef"
     },
     {
       "path": "node_modules/libnpmfund/LICENSE",
@@ -5521,7 +5521,7 @@
     {
       "path": "node_modules/libnpmfund/package.json",
       "size": 1447,
-      "sha256": "sha256:f30970899260f01317a4aab7acd2dab46049d9c501b90a2f86cca8dd574b8371"
+      "sha256": "sha256:4e45330cb6383bd830d8c16decf9e5ddceb4d6a11492a1d99a7565fec1251127"
     },
     {
       "path": "node_modules/libnpmorg/LICENSE",
@@ -5555,13 +5555,13 @@
     },
     {
       "path": "node_modules/libnpmpack/lib/index.js",
-      "size": 4061,
-      "sha256": "sha256:a66a8c8c67cd3375e1a66fc79bcbdaa561faa234c4ed0f16686a07648bf9dab7"
+      "size": 3895,
+      "sha256": "sha256:ae6d983bb4626860eb0af8047a69bc95bfaca89e44b87ed26d43b21f8102af73"
     },
     {
       "path": "node_modules/libnpmpack/package.json",
       "size": 1637,
-      "sha256": "sha256:e8fe2a37306bc63dc3f823433657ec84d223a2f187895eb9de45d2cb45a3c1bb"
+      "sha256": "sha256:734e9a5b5940c17e677763d6d285ab3a6733a52a6465c435015bfef2a017868a"
     },
     {
       "path": "node_modules/libnpmpublish/LICENSE",
@@ -5570,8 +5570,8 @@
     },
     {
       "path": "node_modules/libnpmpublish/README.md",
-      "size": 5442,
-      "sha256": "sha256:42fe5f176e14fc0bc1ee6d1d90a7038c5b410fd2f334e0624d8c8f2d0170b94d"
+      "size": 5223,
+      "sha256": "sha256:01967d8210c945422899f35b29f2456334ef85bd053d73537ebde41b9fe4f78b"
     },
     {
       "path": "node_modules/libnpmpublish/lib/index.js",
@@ -5585,8 +5585,8 @@
     },
     {
       "path": "node_modules/libnpmpublish/lib/publish.js",
-      "size": 8078,
-      "sha256": "sha256:983ffdce34bcc3aec273d65b262d86fbb314f6c7bb9ce23ff6335be8c474b21c"
+      "size": 7897,
+      "sha256": "sha256:d051395d98b4142a17e6705878bac25535f1072221257cd9c6e3b3bbc085e22d"
     },
     {
       "path": "node_modules/libnpmpublish/lib/unpublish.js",
@@ -5596,7 +5596,7 @@
     {
       "path": "node_modules/libnpmpublish/package.json",
       "size": 1825,
-      "sha256": "sha256:b3c11b3f08adb1a2ebb0dc443a1ed17d8838398405598bd9fcd8f1451e9902cb"
+      "sha256": "sha256:03b2af068ea72fe1b65df8247e6ce43e94f6a020e5a78e941f670fbf8acdd8e3"
     },
     {
       "path": "node_modules/libnpmsearch/LICENSE",
@@ -8285,8 +8285,8 @@
     },
     {
       "path": "node_modules/tar/dist/commonjs/index.min.js",
-      "size": 102753,
-      "sha256": "sha256:b9464172723801f6ad013a1a819b5f31838753559d56c879202d7fb3c1326167"
+      "size": 102625,
+      "sha256": "sha256:a683d71878842f94426739c79dbdfbeb63b67de3a87183237bccd11505f6d3ff"
     },
     {
       "path": "node_modules/tar/dist/commonjs/large-numbers.js",
@@ -8295,8 +8295,8 @@
     },
     {
       "path": "node_modules/tar/dist/commonjs/list.js",
-      "size": 5599,
-      "sha256": "sha256:9e8c59276c643ceeba7ecf786045dc611150aa440fa98b16f457b9c5aa211093"
+      "size": 5342,
+      "sha256": "sha256:0bd50fcdbe43d28c6cb65bc76a77bbd3edc5c9fd8840d04e611eb2aac9ea2817"
     },
     {
       "path": "node_modules/tar/dist/commonjs/make-command.js",
@@ -8340,8 +8340,8 @@
     },
     {
       "path": "node_modules/tar/dist/commonjs/parse.js",
-      "size": 24607,
-      "sha256": "sha256:c90f3771fa6c839b81c1d24961786463a195dfb8a59a8f190da30d33e7e1f769"
+      "size": 24268,
+      "sha256": "sha256:57eb2f213fa97b45946ccd7b8712a59f58c0a30227d48d13179dbb42d15eda8c"
     },
     {
       "path": "node_modules/tar/dist/commonjs/path-reservations.js",
@@ -8445,8 +8445,8 @@
     },
     {
       "path": "node_modules/tar/dist/esm/index.min.js",
-      "size": 84473,
-      "sha256": "sha256:1902a2a0b8cc2771f7e2aa0a855e9215a2d1023b1345fd504d28eb9c420c958c"
+      "size": 84345,
+      "sha256": "sha256:2275308e7646028230dd8c433d00f0cdee44f4ec9a7bf1af431e97535bd96562"
     },
     {
       "path": "node_modules/tar/dist/esm/large-numbers.js",
@@ -8455,8 +8455,8 @@
     },
     {
       "path": "node_modules/tar/dist/esm/list.js",
-      "size": 3607,
-      "sha256": "sha256:386be389ed1d1765c37252013cfcaf8f1c06d2af5b9e9960492d555e8310382e"
+      "size": 3350,
+      "sha256": "sha256:1626d7e136abc653cf3a07fb6d3de245c76ca881a92d011929b6ce8dfa28e813"
     },
     {
       "path": "node_modules/tar/dist/esm/make-command.js",
@@ -8500,8 +8500,8 @@
     },
     {
       "path": "node_modules/tar/dist/esm/parse.js",
-      "size": 24366,
-      "sha256": "sha256:6528a15bef7787adca4920eacc3131263c3d4114448a60522923fdfe37a584f6"
+      "size": 24027,
+      "sha256": "sha256:8c504cbf6868b07df75f867fee856811f73fceee98ff750ff9a87f5ed55fe6cc"
     },
     {
       "path": "node_modules/tar/dist/esm/path-reservations.js",
@@ -8576,7 +8576,7 @@
     {
       "path": "node_modules/tar/package.json",
       "size": 7839,
-      "sha256": "sha256:31b18f4fb83ba7183f54fa9e2cdca610897108c37ba80570c2c6fa7ccf112d97"
+      "sha256": "sha256:fcf76ebf77de20fe58d1359debefc072577d0321f530f91100399609568b75de"
     },
     {
       "path": "node_modules/text-table/LICENSE",
@@ -9140,8 +9140,8 @@
     },
     {
       "path": "node_modules/undici/lib/core/request.js",
-      "size": 11222,
-      "sha256": "sha256:dd77a5199e35cdd6fc2f1962e6b18f00b11c24db43ac8025d45b2ff0113ab106"
+      "size": 10722,
+      "sha256": "sha256:25a08f869a8cd4ee4e7d5fd88c9bfa7cbaec24cdf9cf55db264f11a14060e2b1"
     },
     {
       "path": "node_modules/undici/lib/core/symbols.js",
@@ -9170,8 +9170,8 @@
     },
     {
       "path": "node_modules/undici/lib/dispatcher/client-h1.js",
-      "size": 40409,
-      "sha256": "sha256:41f689e08a3b3c9ece2b181cd77d5a4919c6db2c930dc3f8432028b500dbe6ec"
+      "size": 40093,
+      "sha256": "sha256:19a0e97ac96760008f16524b257f85233fd601567a97b21316d9f091481a3823"
     },
     {
       "path": "node_modules/undici/lib/dispatcher/client-h2.js",
@@ -9245,8 +9245,8 @@
     },
     {
       "path": "node_modules/undici/lib/handler/retry-handler.js",
-      "size": 10860,
-      "sha256": "sha256:7efa2ca22dc394d7b9383d600e7cc01e403e0dfb7192ba04100299cf7423b544"
+      "size": 9806,
+      "sha256": "sha256:ce789d24ed96799fcb21618356516c3471db3dcad6aeb3ab35b644b370e45e3e"
     },
     {
       "path": "node_modules/undici/lib/interceptor/dns.js",
@@ -9385,8 +9385,8 @@
     },
     {
       "path": "node_modules/undici/lib/web/cookies/util.js",
-      "size": 9261,
-      "sha256": "sha256:51941b2fb0a6f29e389b91236050b1fc4bdaf57051ae53145767219a9d3c5f09"
+      "size": 7377,
+      "sha256": "sha256:9d9b90bbee9f62485c72a414ab0fc93f6a2106a5f9ca791ceef8bc548f379845"
     },
     {
       "path": "node_modules/undici/lib/web/eventsource/eventsource-stream.js",
@@ -9561,7 +9561,7 @@
     {
       "path": "node_modules/undici/package.json",
       "size": 6290,
-      "sha256": "sha256:f529aa8b145f6e270a72700ceb6c8dd3b87f742313078ea9f774a9d2ce8c865d"
+      "sha256": "sha256:de85904fa299714ba7ea033d82056c890820e68a39d7212b875b8c35aac13037"
     },
     {
       "path": "node_modules/undici/scripts/strip-comments.js",
@@ -9716,7 +9716,7 @@
     {
       "path": "package.json",
       "size": 6860,
-      "sha256": "sha256:e802b643a547826bcc250cf5c19b0ae448b4dbca8bec53938916a2f803ba521f"
+      "sha256": "sha256:f9759fe0a10ad3c8388ff19fade9d87ffdf0b16466a84d16cf2add09e69bbcd1"
     }
   ]
 }
