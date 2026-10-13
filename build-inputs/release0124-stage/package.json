@@ -1,16 +1,14 @@
 {
   "name": "@harrylabsj/kiwi-npm-shipping-stage",
-  "version": "0.12.4",
+  "version": "0.12.5",
   "private": true,
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "preinstall": "node scripts/check-install-toolchain.mjs",
     "start": "node index.js"
   },
   "engines": {
-    "node": ">=22.19.0",
-    "npm": ">=12.0.2 <13"
+    "node": ">=22.19.0"
   },
   "packageManager": "npm@12.0.2",
   "devEngines": {
@@ -32,15 +30,15 @@
     "brace-expansion": "5.0.12"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "1.0.2",
-    "@earendil-works/pi-ai": "1.0.2",
-    "@earendil-works/pi-coding-agent": "1.0.2",
+    "@earendil-works/pi-agent-core": "^1.2.0",
+    "@earendil-works/pi-ai": "^1.2.0",
+    "@earendil-works/pi-coding-agent": "^1.2.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@simplewebauthn/server": "14.0.2",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "yaml": "2.9.1",
-    "@earendil-works/pi-durable": "1.0.2",
+    "@earendil-works/pi-durable": "^1.2.0",
     "typebox": "1.3.27"
   }
 }

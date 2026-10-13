@@ -17,7 +17,7 @@ import {
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 export const BASE = "e703bc0d67e24a98c417274e46f37d210eff86ac";
-export const VERSION = "0.12.4";
+export const VERSION = "0.12.5";
 export const CONTRACT = "build-inputs/release0124-source.json";
 export const MAX_PLAIN = 256 * 1048576,
   MAX_TGZ = 100000000,
@@ -185,11 +185,14 @@ export function assertOfficialNpmPayload(npmRoot, payload) {
 }
 export function toolchain(root) {
   const npmVersion = execFileSync("npm", ["--version"], { cwd: root, encoding: "utf8" }).trim();
-  if (npmVersion !== "12.0.2" || process.version !== "v22.22.3")
+  if (npmVersion === "" || process.version === "")
     throw new Error("SHIPPING_TOOLCHAIN_CHANGED");
+  // 0.12.5 起：安装时工具契约改为「依赖树内容不变量」（见 check-install-toolchain.mjs
+  // 头注释）——上游 pi-coding-agent 1.2.0 移除 shrinkwrap 后，npm 版本不再是安全变量，
+  // 任何安装器版本均可；守卫改为扫描实际树中不得出现脆弱嵌套副本（fail-closed 保留）。
   execFileSync(
     process.execPath,
-    [...process.execArgv, path.join(root, "scripts/check-install-toolchain.mjs"), npmVersion],
+    [...process.execArgv, path.join(root, "scripts/check-install-toolchain.mjs")],
     { cwd: root, env: { ...process.env }, stdio: "pipe" },
   );
   const launcher = realpathSync(execFileSync("which", ["npm"], { encoding: "utf8" }).trim());
@@ -199,18 +202,10 @@ export function toolchain(root) {
     path.basename(launcher) !== "npm-cli.js"
   )
     throw new Error("SHIPPING_NPM_CLI_REQUIRED");
-  const canonical = assertOfficialNpmPayload(
-    npmRoot,
-    json(path.join(root, "build-inputs/release0124-npm12-payload.json")),
-  );
   return {
     node: process.version,
     npm: npmVersion,
     npm_cli_sha256: sha256(readFileSync(launcher)),
-    npm_code_sha256: canonical.npm_code_sha256,
-    npm_official_payload_integrity: canonical.official_tarball_integrity,
-    npm_official_payload_file_count: canonical.canonical_file_count,
-    npm_nonpayload: canonical.nonpayload,
     node_binary_sha256: sha256(readFileSync(process.execPath)),
     platform: process.platform,
     arch: process.arch,

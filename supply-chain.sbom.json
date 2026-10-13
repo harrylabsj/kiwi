@@ -1,31 +1,31 @@
 {
   "sbom_version": 1,
   "package": "@harrylabsj/kiwi",
-  "package_version": "0.12.4",
+  "package_version": "0.12.5",
   "runtime_dependencies": [
     {
       "name": "@earendil-works/pi-agent-core",
-      "spec": "1.0.2",
-      "resolved": "1.0.2",
-      "integrity": "sha512-VRfewY1R5mbedJzlm01PxdCmqU8QrSXjXXhV50bp6rvVuT8YYQv1inTXRY4YzssmGAYpkC2rXipJKP5BpBFXew=="
+      "spec": "^1.2.0",
+      "resolved": "1.2.0",
+      "integrity": "sha512-pUR0vYmGhHkBQGeCeWjwVIA+l1+MrDu6m6VGuysjh6KBzBpovTV/MlcVrEIOaM8jv/slpAyUmuCEQl1jOBqHJQ=="
     },
     {
       "name": "@earendil-works/pi-ai",
-      "spec": "1.0.2",
-      "resolved": "1.0.2",
-      "integrity": "sha512-JP59xGlSAQ/HhQ6EHN5qmneBlWfDyu6FPPryAvAaSo8A38ubAsEpS9YisCM5Jbbns0srrDffLZonE0OXorHI5A=="
+      "spec": "^1.2.0",
+      "resolved": "1.2.0",
+      "integrity": "sha512-U5/1zXqfV1on7/9sbez03tT4Ru49Lvfb4+zXSDK3DBKF5cRk6KxvAOTOY3HJ4jimlZth+rs7vbJqN6iBQAoNuQ=="
     },
     {
       "name": "@earendil-works/pi-coding-agent",
-      "spec": "1.0.2",
-      "resolved": "1.0.2",
-      "integrity": "sha512-3ZdIghMSELMGV3sKi5iASOb1Jwb696fLjmNu0aezaqDxTLLWWoRpqBYkGxJ1CgAMCbtfqXWEF0lcRrlVXmiEGQ=="
+      "spec": "^1.2.0",
+      "resolved": "1.2.0",
+      "integrity": "sha512-h/4WaVWv1VlCaY8x8qEN5U+7jbF/e7+Ck6moPeEOFn5juMTWwNAXjwgYM7gRgbBYh8Zppwt6qWvJDzNTf4GNEQ=="
     },
     {
       "name": "@earendil-works/pi-durable",
-      "spec": "1.0.2",
-      "resolved": "1.0.2",
-      "integrity": "sha512-pDh8eMSSFIVOTh0H53KhtjaS/XFrulEVREN8wnY8vtbYY0srioZ2impajvkXwoZcG6pRgbPz/WVatZLyk5TIbg=="
+      "spec": "^1.2.0",
+      "resolved": "1.2.0",
+      "integrity": "sha512-2kDyK7HVCTcxf3CTHkDR0rRGCUfIpoZr76fC6n/KZDu7hkDWR62anEujIkJ+8sKjtNpEM+zyKW3bi2NIEUyiCw=="
     },
     {
       "name": "@modelcontextprotocol/sdk",
@@ -65,14 +65,14 @@
     }
   ],
   "artifact": {
-    "name": "harrylabsj-kiwi-0.12.4.tgz",
-    "sha256": "9977af76037f1daf8cdc2fd17afd9ecc5421ea71cc8a2946ae80e00347ac6ae2",
-    "bytes": 2257738
+    "name": "harrylabsj-kiwi-0.12.5.tgz",
+    "sha256": "0c2c77f5517c151606152d34fc93a1de9784961c1fb5298d1ab4e63a14539fd2",
+    "bytes": 2270273
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-10-10T11:06:55.890Z"
+  "generated_at": "2026-10-13T00:28:21.246Z"
 }

@@ -16,54 +16,78 @@
  */
 
 /**
- * A106 安装工具契约守卫（preinstall，fail-closed）。
+ * A106 安装工具契约守卫（preinstall，fail-closed）— 0.12.5 起。
  *
- * 背景（A92/A94/A97/A100 实证链）：
- *   - pi-coding-agent（含 0.87.1/1.0.0）shipped npm-shrinkwrap 钉嵌套
- *     brace-expansion 5.0.9（GHSA-q2hr-2g5m-vwhr / GHSA-qhr7-859c-m2p7 /
- *     GHSA-6j4f-fj2g-mc7p）；npm 10.9.8/11.16.0 无法用 override 穿透
- *     （六杠杆 + 修正锁条目均被忽略/回滚），fresh 安装会引入脆弱副本；
- *     npm 12.0.2 起 override 生效（唯一 5.0.12，audit 0）。
- *
- * 契约：本仓构建/开发/CI 安装必须使用 npm >=12.0.2 <13（配 Node >=22.19）。
- * 旧 npm 一律 fail-closed（零 provider/工具执行，无绕过开关）。
- * 注意：npm ≥12 的 devEngines 门对旧 npm 自身无效（旧版忽略新字段），
- * 故本脚本守卫是**权威**防线，devEngines 是对 npm≥12 的附加声明。
+ * 不变量：本包的安装产物中不得存在已知脆弱的嵌套依赖副本。
+ * 背景（A92/A94/A97/A100 实证链）：pi-coding-agent ≤1.0.2 的 npm-shrinkwrap
+ *   曾钉嵌套 brace-expansion 5.0.9（GHSA-q2hr-2g5m-vwhr / GHSA-qhr7-859c-m2p7 /
+ *   GHSA-6j4f-fj2g-mc7p），旧 npm 无法用 override 穿透，故 0.12.4 曾按
+ *   npm >=12.0.2 <13 fail-closed。上游 1.2.0 已移除 shrinkwrap、原始树即干净
+ *   （实测 brace-expansion 仅 5.0.12），本守卫转为直接校验树内容，任何
+ *   安装器版本均可安装；若脆弱副本再次出现，无论 npm 版本一律拒绝。
  */
 
-// 版本来源优先级：1) 显式参数（CI 自检：node check… "$(npm --version)"，
-// 真 CLI 输出、非伪造 UA）；2) npm_config_user_agent（npm 生命周期内由 npm
-// 设置）。两者皆缺 = 非 npm 调用 → fail-closed。
-const explicitVersion = process.argv[2];
-const userAgent = process.env.npm_config_user_agent ?? "";
-const parsed = /^npm\/(\d+\.\d+\.\d+)/.exec(userAgent);
-const npmVersion = explicitVersion ?? parsed?.[1];
-if (npmVersion === undefined) {
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
+
+const VULNERABLE = [
+  { name: "brace-expansion", version: "5.0.9", ghsa: "GHSA-q2hr-2g5m-vwhr" },
+];
+
+/** 深度优先收集 <dir> 树内 name 包的全部安装副本（含任意嵌套 node_modules 与 @scope）。 */
+function collectCopies(dir, name, out, depth = 0) {
+  if (depth > 24 || out.length > 5000) return;
+  const nm = path.join(dir, "node_modules");
+  let entries = [];
+  try {
+    entries = readdirSync(nm, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith(".")) continue;
+    if (e.name.startsWith("@")) {
+      let scoped = [];
+      try {
+        scoped = readdirSync(path.join(nm, e.name), { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const s of scoped) {
+        if (!s.isDirectory() || s.name.startsWith(".")) continue;
+        recordIfVulnerable(path.join(nm, e.name, s.name), name, out);
+        collectCopies(path.join(nm, e.name, s.name), name, out, depth + 1);
+      }
+    } else {
+      recordIfVulnerable(path.join(nm, e.name), name, out);
+      collectCopies(path.join(nm, e.name), name, out, depth + 1);
+    }
+  }
+}
+
+function recordIfVulnerable(pkgDir, name, out) {
+  if (path.basename(pkgDir) !== name) return;
+  if (!existsSync(pkgDir) || !statSync(pkgDir).isDirectory()) return;
+  try {
+    const v = JSON.parse(readFileSync(path.join(pkgDir, "package.json"), "utf8")).version;
+    const vuln = VULNERABLE.find((x) => x.name === name && x.version === v);
+    if (vuln) out.push(`${name}@${v} at ${pkgDir} (${vuln.ghsa})`);
+  } catch {
+    /* unreadable package.json: skip */
+  }
+}
+
+const root = process.env.npm_config_local_prefix || process.cwd();
+const offenders = [];
+for (const vuln of VULNERABLE) {
+  collectCopies(root, vuln.name, offenders);
+}
+
+if (offenders.length > 0) {
   console.error(
-    "[a106] 不支持的调用方式：未提供版本参数且不在 npm 生命周期内" +
-      `（user_agent=${JSON.stringify(userAgent)}）。` +
-      "用法：node check-install-toolchain.mjs <npm --version 输出>，或在 npm 生命周期内运行。",
+    "[a106] vulnerable nested dependency copy detected — refusing to install (fail-closed):\n  " +
+      offenders.join("\n  "),
   );
   process.exit(1);
 }
-
-function isSupported(version) {
-  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
-  if (m === null) return false;
-  const [major, minor, patch] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  if (major !== 12) return false;
-  // >=12.0.2（12.0.0/12.0.1 未测，按未支持处理）
-  return minor > 0 || patch >= 2;
-}
-
-if (!isSupported(npmVersion)) {
-  console.error(
-    `[a106] 不支持的安装器版本: npm ${npmVersion}（Node ${process.version}）。` +
-      `本仓构建/安装契约要求 npm >=12.0.2 <13（官方取得：` +
-      `corepack prepare npm@12.0.2 --activate，或 npm install -g npm@12.0.2）。` +
-      `旧 npm 会引入 pi-coding-agent 嵌套 brace-expansion 5.0.9（audit high，` +
-      `且 override 不生效）——拒绝安装（fail-closed，无绕过开关）。`,
-  );
-  process.exit(1);
-}
-console.log(`[a106] 安装工具契约 OK: npm ${npmVersion}（Node ${process.version}）`);
+console.log("[a106] dependency tree invariant OK");

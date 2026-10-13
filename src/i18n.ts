@@ -35,3 +35,7 @@ export function detectLocale(): KiwiLocale {
   const lang = (process.env.LANG ?? process.env.LC_ALL ?? "").toLowerCase();
   return lang.startsWith("zh") ? "zh" : "en";
 }
+
+export function tr(en: string, zh: string): string {
+  return detectLocale() === "zh" ? zh : en;
+}
