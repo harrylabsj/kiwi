@@ -1,30 +1,19 @@
 {
   "format": "kiwi-npm-shipping-source/1",
   "source_base": "e703bc0d67e24a98c417274e46f37d210eff86ac",
-  "reviewed_release": "0.12.4",
+  "reviewed_release": "0.12.5",
   "owner_runtime_default": "dual-off/private",
   "tool": {
     "node": "v22.22.3",
-    "npm": "12.0.2",
+    "npm": "12.2.0",
     "npm_cli_sha256": "sha256:8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7",
-    "npm_code_sha256": "sha256:6a7b477420bda6fb973ae237d611789e84600b0bf4125ff7f36e9ccec21fe8af",
-    "npm_official_payload_integrity": "sha512-uIXokLlBj6FpNUTQX1PmT5pz7BlIN9QlixX+zdaSNHsd0qUXsbDLr50xzY6Sw7cJVr0uzHKDOle0swmPW/p5Qw==",
-    "npm_official_payload_file_count": 1942,
-    "npm_nonpayload": [
-      {
-        "path": ".corepack",
-        "size": 250,
-        "sha256": "sha256:d4810e4990d50a0907bc27c104a6a63e5969fec2aa7b29d3841e6e4df40b159c",
-        "classification": "matching-corepack-locator"
-      }
-    ],
     "node_binary_sha256": "sha256:5d9d3872911e2340a43b707962e68143de8a4e8d54628845c0c4f2de1fb7cd5c",
     "platform": "darwin",
     "arch": "arm64"
   },
   "stage": {
-    "package_sha256": "sha256:8a1f37c29b3fe340ec0397a1463ec4b7d6c7ea15d0efd99d1c7bf829077e8e1e",
-    "lock_sha256": "sha256:13336f01d01b309c16187357d7d3dc1cc4fcb99be6c74929fbeb3626cc3de094"
+    "package_sha256": "sha256:66995f27a000405f3ec144004abf4dbe41f7d8bc2fd3f59a7ecf5782f39ffb00",
+    "lock_sha256": "sha256:aff2a2e9ead33b630aaf0c7017dab88ee7e703e94099782d943fce77bba2ee82"
   },
   "budgets": {
     "plain_bytes": 268435456,
@@ -75,11 +64,11 @@
     },
     {
       "path": ".github/workflows/portfolio-contracts.yml",
-      "sha256": "sha256:013e042f93283ce64db3ea8b0d89a9aa70af7c6a5185e7614e68eb243a82f8a2"
+      "sha256": "sha256:9b30b7bd654fa08680a11c9fab743568098eecbceda2726e0298116d64d02467"
     },
     {
       "path": ".github/workflows/portfolio-integration.yml",
-      "sha256": "sha256:6ab9596ccd31b9eccffaa5e9a4e3a3f37b23fc0f15b6095b64cc31885fb17e66"
+      "sha256": "sha256:2a57bbf45c13e4e7b3bd5db39c34b68b6896f16b41f59d0fc60e755a72f4ff34"
     },
     {
       "path": ".github/workflows/portfolio-release.yml",
@@ -87,11 +76,11 @@
     },
     {
       "path": ".github/workflows/release-rehearsal.yml",
-      "sha256": "sha256:26ab958f449a33a5eeb4ce7c3308ff6cbed431b40d4dae1c6568144eb39653c7"
+      "sha256": "sha256:52e50ae343ce107232cd5fe7ae3adcd0eafa00f500df45c856a395115f0e2f07"
     },
     {
       "path": ".github/workflows/supply-chain-rehearsal.yml",
-      "sha256": "sha256:02c7b4d6d069747414223900fcb86522ca56271114b5519fbde8a90f735a5987"
+      "sha256": "sha256:e66c495baffa72c1118fa9aaa370710812b338c16afabf9b8ce7de84202abb57"
     },
     {
       "path": ".gitignore",
@@ -143,11 +132,11 @@
     },
     {
       "path": "build-inputs/release0124-stage/package-lock.json",
-      "sha256": "sha256:13336f01d01b309c16187357d7d3dc1cc4fcb99be6c74929fbeb3626cc3de094"
+      "sha256": "sha256:aff2a2e9ead33b630aaf0c7017dab88ee7e703e94099782d943fce77bba2ee82"
     },
     {
       "path": "build-inputs/release0124-stage/package.json",
-      "sha256": "sha256:8a1f37c29b3fe340ec0397a1463ec4b7d6c7ea15d0efd99d1c7bf829077e8e1e"
+      "sha256": "sha256:66995f27a000405f3ec144004abf4dbe41f7d8bc2fd3f59a7ecf5782f39ffb00"
     },
     {
       "path": "contracts/candidate-agent-dto-1.0.schema.json",
@@ -1127,15 +1116,15 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "sha256:0284bdc280ed5bc84624382240e1306d13fe5d02239209aacb7d49cf57c57320"
+      "sha256": "sha256:fa5471cb19bf1ba1a6aa3554c1a3e23c9d74ef47600236d883b2860bfafac732"
     },
     {
       "path": "package.json",
-      "sha256": "sha256:9d9f83c9fbff61a4a8dadf9cd6398849aea0c3c277bfbfa12be0da123977d88d"
+      "sha256": "sha256:6271052388af2d57134f3d5960d85358ea71da3dd3a0efb0b724047f5b923710"
     },
     {
       "path": "packages/merchant-cloud/package.json",
-      "sha256": "sha256:a8bf75dafe90bf3d653c67cd441bc807bd15df22d84a1b698e56a6a462adc74f"
+      "sha256": "sha256:8605f6a53c0086c2c27c8d4811c339e6d5f77165f775d033182b3b55057e8090"
     },
     {
       "path": "packages/merchant-cloud/prepare.mjs",
@@ -1199,7 +1188,7 @@
     },
     {
       "path": "scripts/check-install-toolchain.mjs",
-      "sha256": "sha256:9d3708cea56d4b83b718930a0b6769b17561a73779855a02559090eaa8eb1419"
+      "sha256": "sha256:fdbe3919a9a32f80d2ddcbe7699af4e1674c8c80323b64b7b6ab32f2848e9e32"
     },
     {
       "path": "scripts/conformance/a2a-sdk-roundtrip.mjs",
@@ -1283,7 +1272,7 @@
     },
     {
       "path": "scripts/lib/npm-shipping.mjs",
-      "sha256": "sha256:39f6335164f789758f77d769f50ce44739898d9c9c64d7db774a24b9bd6290bb"
+      "sha256": "sha256:1c5c096cbfa347e8d454c36413796e2b667d15bd34e361f46d6204ff8a1e089e"
     },
     {
       "path": "scripts/lib/portfolio-lock-verify.d.mts",
@@ -1299,7 +1288,7 @@
     },
     {
       "path": "scripts/lib/registry-verify.mjs",
-      "sha256": "sha256:4f73d4bcc092824a15f5cd1507c29b0e535632c4d408bdb3e2251b23d95f5b62"
+      "sha256": "sha256:44fc48be3e884d54ac49c27726b75eef525c8a11f26fc471f6637624e7db1f78"
     },
     {
       "path": "scripts/m0-workbuddy-acceptance.sh",
@@ -1427,7 +1416,7 @@
     },
     {
       "path": "scripts/verify-cloud-package-candidate.mjs",
-      "sha256": "sha256:9e4620b718eb4250b17c79f0a06fa9a85c638c36836caf9ee9808a48ab474405"
+      "sha256": "sha256:9ad724967cf7a98912771c337dd2e1329a958d76c5115bb396ae45d3497f4ea7"
     },
     {
       "path": "scripts/verify-contract-vectors.mjs",
@@ -1451,7 +1440,7 @@
     },
     {
       "path": "scripts/verify-npm-shipping-installed.mjs",
-      "sha256": "sha256:d75e8ba285d599e53acf010664cfbad57c3812665349e45b7628a4b4d61fa0f6"
+      "sha256": "sha256:d4036f7095f2d4babcac599b2f2e881774ef1d30c9fac3c1b5dde6a5ed9ba9b7"
     },
     {
       "path": "scripts/verify-npm-shipping-runtime.mjs",
@@ -2587,7 +2576,7 @@
     },
     {
       "path": "src/i18n.ts",
-      "sha256": "sha256:2da9b747c4334cef6b1b2aee70816b11f697cb5c13405c0052e05e00166bce7d"
+      "sha256": "sha256:31eb30e63c61d982e9b3118fce5441da39671353e86ede06372e91fbfeed67eb"
     },
     {
       "path": "src/mcp/cli.ts",
@@ -2631,7 +2620,7 @@
     },
     {
       "path": "src/mcp/tools.ts",
-      "sha256": "sha256:a77e27893ec9f1765a597bf80b1761ee0f506be877f8130c01522712fecd20af"
+      "sha256": "sha256:cce0c4ab380e5bf6a2e0ecbd168513e4697ce3841ee5df695a8b7d14cb3c46ab"
     },
     {
       "path": "src/mcp/types.ts",
@@ -2795,7 +2784,7 @@
     },
     {
       "path": "src/merchant-gateway/pinned-fetch.ts",
-      "sha256": "sha256:0268b52a315c6f0e7e6af78f1ef1c2de6fc5105a2291077f76e2f7e79bfcb588"
+      "sha256": "sha256:e8ee86f00977c5aa08f84780bf05785e157f64638e75b9c3553534d8b48eaa37"
     },
     {
       "path": "src/merchant-gateway/tenant-registry.ts",
@@ -3387,9 +3376,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:49bf42e07fba9d30e9e9b3d46c5d7696fd887ac4710c52c7e8d469bb9b6574a0",
+      "sha256": "sha256:094364c453182f13027f331fe2499f2ba20ca5f234dd388bc163c67eb96f96fb",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:ddfb379054bad464042fa3a93a14c580ffc0e7c52a4c62a30663d98b79a401df"
+      "raw_sha256": "sha256:6040647c67f0e5b73bee31aea3eb59965513ace1121467a4b566331d071cd113"
     },
     {
       "path": "tests/a297-atomic.test.ts",
@@ -3553,7 +3542,7 @@
     },
     {
       "path": "tests/a359-task-privacy-cas.test.ts",
-      "sha256": "sha256:03cad74908cd3561eb7b204b7c245bab307524189b635d1a5f727d37a8be0f99"
+      "sha256": "sha256:152ff37ea7b3cf4d6483c9946e99d5fde8719eafe4754747b21229e2b8137db3"
     },
     {
       "path": "tests/a360-clock-r1.test.ts",
@@ -4021,7 +4010,7 @@
     },
     {
       "path": "tests/fixtures/a359-task-create-child.mjs",
-      "sha256": "sha256:dfbed8ec975280012c83e695e8bbfd5a71cff450c76b04bf84da2b54f4f855c1"
+      "sha256": "sha256:1c665fefec886d3053740bf101e8dff4f0711c695002ef1fde5df6d6b569c18d"
     },
     {
       "path": "tests/fixtures/a360-binding-child.mjs",
@@ -4697,7 +4686,7 @@
     },
     {
       "path": "tests/npm-shipping-contract.test.ts",
-      "sha256": "sha256:c9a0c292fadcfc40f05631643b6a25413dc2a53207c477b9c19fab1cec2adfe1"
+      "sha256": "sha256:f37804a1b1bf969d955d14ea4a68cd3f7b93e8b1c19163c8a232a6f670ff767f"
     },
     {
       "path": "tests/onboarding-local-fallback.test.ts",
@@ -4754,6 +4743,10 @@
     {
       "path": "tests/pairing-binding.test.ts",
       "sha256": "sha256:0ef8304c7e1cc8f641e8a209538df71d38cf040beac1c0be34ef280a469f029f"
+    },
+    {
+      "path": "tests/pinned-fetch-framing.test.ts",
+      "sha256": "sha256:5cc3248f4c15aafa50e990716c34833ea059a3fb72fe63ee7e8c84c557d6cf31"
     },
     {
       "path": "tests/portfolio-lock-verify.test.ts",
@@ -4817,7 +4810,7 @@
     },
     {
       "path": "tests/registry-verify.test.ts",
-      "sha256": "sha256:b0d5ea001e9b64730481e9555aee508a8f0ddad04f5dff23cf566d0a9f5780e6"
+      "sha256": "sha256:8059534893e9c77bfd37c1667acbb7cff4bf64fdc8c732fb0397efc17c17ca75"
     },
     {
       "path": "tests/release-manifest-rollback.test.ts",
