@@ -136,18 +136,45 @@ function officialNpmBinLinks(npmRoot, rows, official) {
     return { ...row, classification: "normal-npm-bin-link", declared_by: manifest, target_payload_path: targetPath };
   });
 }
+/** 期望的 Node 运行时。
+ *
+ * npm 的期望版本由 payload 清单（`build-inputs/release0124-npm12-payload.json`）
+ * 声明；Node 没有对应的逐文件清单，所以仍以常量固定——升级 Node 需要改这一处并
+ * 重新冻结源契约。 */
+export const EXPECTED_NODE_VERSION = "v22.22.3";
+
+/** 校验 npm payload 清单的形状/自洽性，再逐文件比对磁盘上的 npm 安装。
+ *
+ * 信任锚点：清单文件本身受"已提交的干净源契约"约束——源契约的 `files` 列表记着
+ * 它的 sha256，而 `assertForeignCheckouts` 要求契约与 HEAD 逐字一致，所以换用一份
+ * 不同的清单必然强制一次可见的契约 diff（与改代码同样显眼）。
+ *
+ * 早期版本把 version / integrity / tarball_sha256 / 文件数在代码里再写死一遍，
+ * 结果是"每换一个小版本都要改代码"，而这几项清单里本来就写着。现在改为校验清单的
+ * 内部一致性（版本号与 registry/tarball URL 必须自洽、文件数必须等于清单长度），
+ * 真正防篡改的那一步——磁盘 npm 与 `payload.files` 逐文件相等——保持不变。
+ *
+ * 各字段的实际校验强度（不要误读）：
+ * - `version` / `regular_file_count` / `files`：**强校验**。版本要与 URL 自洽，文件数
+ *   要与清单长度相等，且磁盘上的 npm 必须与 `files` 逐字节相等。
+ * - `integrity`：形状校验 + 若存在 `.corepack` locator 则与其 `hash` 字段交叉校验
+ *   （见下），即被独立锚定。
+ * - `tarball_sha256`：**仅形状校验**。它是"清单由哪个 tarball 生成"的溯源信息，
+ *   离线无法从文件清单推导（压缩产物哈希不可反推），因此不作为防篡改依据。
+ */
 export function assertOfficialNpmPayload(npmRoot, payload) {
-  const integrity =
-    "sha512-uIXokLlBj6FpNUTQX1PmT5pz7BlIN9QlixX+zdaSNHsd0qUXsbDLr50xzY6Sw7cJVr0uzHKDOle0swmPW/p5Qw==";
+  const version = String(payload.version ?? "");
+  const integrity = String(payload.integrity ?? "");
   if (
     payload.format !== "kiwi-official-npm-payload/1" ||
     payload.name !== "npm" ||
-    payload.version !== "12.0.2" ||
-    payload.integrity !== integrity ||
-    payload.tarball_sha256 !==
-      "sha256:5dbb86c71d07a1957f2e90734092dd6a58bdcd9ebc2d8d41ca1c6e6a21d364e1" ||
-    payload.regular_file_count !== 1942 ||
-    payload.files.length !== 1942
+    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version) ||
+    !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity) ||
+    !/^sha256:[0-9a-f]{64}$/.test(String(payload.tarball_sha256 ?? "")) ||
+    payload.registry_url !== `https://registry.npmjs.org/npm/${version}` ||
+    payload.tarball_url !== `https://registry.npmjs.org/npm/-/npm-${version}.tgz` ||
+    !Number.isSafeInteger(payload.regular_file_count) ||
+    payload.regular_file_count !== payload.files.length
   )
     throw new Error("SHIPPING_OFFICIAL_NPM_CONTRACT_INVALID");
   const current = inventory(npmRoot).sort((a, b) =>
@@ -169,7 +196,7 @@ export function assertOfficialNpmPayload(npmRoot, payload) {
       keys(data.locator) !== "name,reference" ||
       keys(data.bin) !== "npm,npx" ||
       data.locator.name !== "npm" ||
-      data.locator.reference !== "12.0.2" ||
+      data.locator.reference !== version ||
       data.bin.npm !== "./bin/npm-cli.js" ||
       data.bin.npx !== "./bin/npx-cli.js" ||
       data.hash !== "sha512." + Buffer.from(integrity.slice(7), "base64").toString("hex")
@@ -184,9 +211,18 @@ export function assertOfficialNpmPayload(npmRoot, payload) {
   };
 }
 export function toolchain(root) {
+  // 期望的 npm 版本由 payload 清单声明，不在代码里另写一份字面量：换版本 = 换清单
+  // （+ 重新冻结源契约），而不是改代码。
+  const payload = json(path.join(root, "build-inputs/release0124-npm12-payload.json"));
+  const expectedNpm = String(payload.version ?? "");
   const npmVersion = execFileSync("npm", ["--version"], { cwd: root, encoding: "utf8" }).trim();
-  if (npmVersion !== "12.0.2" || process.version !== "v22.22.3")
-    throw new Error("SHIPPING_TOOLCHAIN_CHANGED");
+  if (npmVersion !== expectedNpm || process.version !== EXPECTED_NODE_VERSION)
+    throw new Error(
+      `SHIPPING_TOOLCHAIN_CHANGED: expected npm ${expectedNpm} / node ${EXPECTED_NODE_VERSION}, ` +
+        `found npm ${npmVersion} / node ${process.version}. To move the pin, replace ` +
+        `build-inputs/release0124-npm12-payload.json and re-freeze the source contract ` +
+        `(node scripts/build-npm-shipping.mjs --freeze-source).`,
+    );
   execFileSync(
     process.execPath,
     [...process.execArgv, path.join(root, "scripts/check-install-toolchain.mjs")],
@@ -199,10 +235,7 @@ export function toolchain(root) {
     path.basename(launcher) !== "npm-cli.js"
   )
     throw new Error("SHIPPING_NPM_CLI_REQUIRED");
-  const canonical = assertOfficialNpmPayload(
-    npmRoot,
-    json(path.join(root, "build-inputs/release0124-npm12-payload.json")),
-  );
+  const canonical = assertOfficialNpmPayload(npmRoot, payload);
   return {
     node: process.version,
     npm: npmVersion,
