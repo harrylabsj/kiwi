@@ -188,12 +188,16 @@ wait_stub() { # <port>
   fail "stub 未就绪（http://127.0.0.1:${port}）"
 }
 
-# 启动一个桩实例（可多个）：<label> <port> <pairing_dir>；暴露 stub_pid_<label>。
+# 启动一个桩实例（可多个）：<label> <port> <pairing_dir> <owner_merchant_id>；
+# 暴露 stub_pid_<label>。owner_id 必须传该商家的真实 merchant_id——真实自托管
+# 实例的 owner_id 就是它，网关的配对兑换要求 owner_id == 当前商家（不匹配即拒绝
+# 落库，避免把别人的实例挂到当前账号下）。
 start_stub() {
-  local label="$1" port="$2" pairing_dir="$3"
+  local label="$1" port="$2" pairing_dir="$3" owner_id="$4"
+  [[ "${owner_id}" == mkt_* ]] || fail "stub ${label} 需要真实 merchant_id，得到：${owner_id}"
   KIWI_INSTANCE_STUB_TOKEN="${instance_token}" node "${kiwi_repo}/scripts/lib/merchant-instance-stub.mjs" \
     --port "${port}" --merchant-label "${label}" \
-    --pairing-dir "${pairing_dir}" >>"${case_dir}/stub.log" 2>&1 &
+    --pairing-dir "${pairing_dir}" --owner-id "${owner_id}" >>"${case_dir}/stub.log" 2>&1 &
   local pid=$!
   pids+=("${pid}")
   # 注意：macOS 自带 bash 3.2 没有 `declare -g`，用显式赋值（仅需 A/B 两个）。
@@ -203,11 +207,11 @@ start_stub() {
     *) fail "未知 stub 标签：${label}" ;;
   esac
 }
-start_stub A "${instance_port}" "${case_dir}/instance-pairing"
+start_stub A "${instance_port}" "${case_dir}/instance-pairing" "${merchant_a}"
 wait_stub "${instance_port}"
 # 第二个独立实例（B 用；A/B 隔离验收）
 instance_port_b="${V1_INSTANCE_PORT_B:-18623}"
-start_stub B "${instance_port_b}" "${case_dir}/instance-pairing-b"
+start_stub B "${instance_port_b}" "${case_dir}/instance-pairing-b" "${merchant_b}"
 wait_stub "${instance_port_b}"
 
 start_gateway() {
@@ -248,7 +252,7 @@ mcp_call() { # <token> <method> [params]
 # ── 4. 商家身份闭环（WorkBuddy 客户端 + 商家浏览器）────────────────────────
 bind_connector() { # <merchant cookie> <label>
   local cookie="$1" label="$2" status challenge client_id query connect_location login_url
-  local request_id redirect_url gw_cookie csrf code
+  local request_id redirect_url connect_cookie gw_cookie csrf code
   challenge=$(printf '%s' "${verifier}" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
 
   status=$(http POST "${gateway_url}/oauth/register" \
@@ -264,6 +268,9 @@ bind_connector() { # <merchant cookie> <label>
 
   status=$(http GET "${gateway_url}${connect_location}")
   [[ "${status}" == "303" ]] || fail "connect: HTTP ${status} $(body)"
+  # 网关在此下发 kiwi_connect_state cookie——它是回跳时在内存里认领这次 pending
+  # 连接的唯一凭据（entry-server 用它查 pendingConnections），必须带回。
+  connect_cookie=$(header_cookie)
   login_url=$(header_location)
   [[ "${login_url}" == "${catalog_url}/portal/connect?request_id="* ]] || fail "未跳到目录连接页：${login_url}"
   request_id="${login_url##*request_id=}"
@@ -277,7 +284,7 @@ bind_connector() { # <merchant cookie> <label>
   [[ "${status}" == "200" ]] || fail "授权确认: HTTP ${status} $(body)"
   redirect_url=$(jq -r '.redirect_url' "${case_dir}/body")
 
-  status=$(http GET "${redirect_url}")
+  status=$(http GET "${redirect_url}" "" "${connect_cookie}")
   [[ "${status}" == "303" ]] || fail "回跳网关: HTTP ${status} $(body)"
   gw_cookie=$(header_cookie)
   [[ "${gw_cookie}" == kiwi_admin=* ]] || fail "回跳未建立入口会话"
@@ -330,8 +337,12 @@ status=$(mcp_call "${token_a}" tools/list)
 [[ "${status}" == "200" ]] || fail "tools/list: HTTP ${status} $(body)"
 tools=$(jq -r '.result.tools[].name' "${case_dir}/body" | sort | tr '\n' ' ')
 note "A 可见工具：${tools}"
-for expected in kiwi_catalog_get_merchant_profile kiwi_catalog_save_publication_draft \
-                kiwi_catalog_request_publish kiwi_catalog_get_publication_status \
+# 工具名以网关实现为准（src/merchant-gateway/catalog-tools.ts）。原清单里的
+# kiwi_catalog_get_publication_status 已在 6be8707 改名为 kiwi_catalog_get_publication
+# （同一个工具现在会带回 content 块），旧名不再存在。
+for expected in kiwi_catalog_get_merchant_profile kiwi_catalog_get_merchant_stats \
+                kiwi_catalog_get_publication kiwi_catalog_get_service_status \
+                kiwi_catalog_save_publication_draft kiwi_catalog_request_publish \
                 kiwi_catalog_withdraw_publication kiwi_merchant_list_products \
                 kiwi_merchant_prepare_product_change; do
   grep -q "${expected}" <<<"${tools}" || fail "A 的工具清单缺 ${expected}"
@@ -375,8 +386,13 @@ requests_after_a=$(grep -c "stub_request" "${case_dir}/stub.log" || true)
 status=$(http POST "${catalog_url}/v1/merchant-publications" \
   "{\"action\":\"publish\",\"merchant_display_name\":\"Acme 商贸\",\"title\":\"V1 验收明前龙井\",\"summary\":\"验收用公开简介\"}" "${cookie_a}")
 [[ "${status}" == "200" ]] || fail "门户确认发布: HTTP ${status} $(body)"
+jq -e '.publication.status=="published"' "${case_dir}/body" >/dev/null || fail "确认发布后状态不是 published：$(body)"
 published_id=$(jq -r '.publication.publication_id' "${case_dir}/body")
-[[ "${published_id}" == "${publication_id}" ]] || fail "确认发布未落到同一 publication（${published_id} vs ${publication_id}）"
+[[ "${published_id}" == mpub_* ]] || fail "确认发布未返回 publication_id: $(body)"
+# 草稿与公开快照是**两行**（upsert_publication 的文档语义，2026-09-27 74fea28
+# 起）：确认发布写入独立的 published 行，不提升草稿行，避免未确认内容污染当前
+# 公开快照。所以这里断言两行确实分开，而不是假设 id 不变。
+[[ "${published_id}" != "${publication_id}" ]] || fail "确认发布复用了草稿行；草稿必须保持独立（${published_id}）"
 pass "商家在门户确认后发布（${published_id}，version=$(jq -r '.publication.version' "${case_dir}/body")）"
 
 status=$(http GET "${catalog_url}/v1/merchant-publications/search?q=${q}")
@@ -453,7 +469,7 @@ pass "配对码单次有效：同一码再次兑换被拒绝"
 kill "${stub_pid_A}" 2>/dev/null || true
 wait "${stub_pid_A}" 2>/dev/null || true
 sleep 1
-start_stub A "${instance_port}" "${case_dir}/instance-pairing"
+start_stub A "${instance_port}" "${case_dir}/instance-pairing" "${merchant_a}"
 wait_stub "${instance_port}"
 status=$(mcp_call "${token_a}" tools/call '{"name":"kiwi_merchant_list_products","arguments":{}}')
 [[ "${status}" == "200" ]] || fail "实例重启后调用: HTTP ${status} $(body)"

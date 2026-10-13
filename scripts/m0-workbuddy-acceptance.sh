@@ -124,19 +124,27 @@ pass 'merchant registered and verified with stable merchant_id'
 encoded_product="$(jq -nr --arg text "$product_name" '$text|@uri')"
 payload="$(jq -cn --arg name "$shop_name" --arg title "$product_name" '{action:"draft",merchant_display_name:$name,title:$title,category:"日用品",summary:"M0 测试资料"}')"
 request POST /v1/merchant-publications 200 "$payload" "$merchant_cookie"
-publication_id="$(jq -r '.publication.publication_id // empty' "$case_dir/response.json")"
-[[ -n "$publication_id" ]] || fail 'draft response lacks publication_id'
+draft_id="$(jq -r '.publication.publication_id // empty' "$case_dir/response.json")"
+[[ -n "$draft_id" ]] || fail 'draft response lacks publication_id'
 request GET "/v1/merchant-publications/search?q=$encoded_product" 200
-jq -e --arg id "$publication_id" '[.results[] | select(.publication_id==$id)] | length == 0' "$case_dir/response.json" >/dev/null || fail 'draft leaked into public search'
+jq -e --arg id "$draft_id" '[.results[] | select(.publication_id==$id)] | length == 0' "$case_dir/response.json" >/dev/null || fail 'draft leaked into public search'
 pass 'draft is not searchable'
 
 payload="$(jq -cn --arg name "$shop_name" --arg title "$product_name" '{action:"publish",merchant_display_name:$name,title:$title,category:"日用品",summary:"M0 测试资料"}')"
 request POST /v1/merchant-publications 200 "$payload" "$merchant_cookie"
-jq -e --arg id "$publication_id" '.publication.publication_id==$id and .publication.status=="published"' "$case_dir/response.json" >/dev/null || fail 'publication receipt invalid'
+jq -e '.publication.status=="published"' "$case_dir/response.json" >/dev/null || fail 'publication receipt invalid'
+published_id="$(jq -r '.publication.publication_id // empty' "$case_dir/response.json")"
+[[ -n "$published_id" ]] || fail 'published response lacks publication_id'
+# 草稿与公开快照是**两行**（upsert_publication 的文档语义，2026-09-27 74fea28
+# 起）：publish 不提升草稿行，而是写入独立的 published 行，避免未确认内容污染
+# 当前公开快照。这里把这条语义锁住，同时确认草稿行仍留在草稿态。
+[[ "$published_id" != "$draft_id" ]] || fail 'publish reused the draft row; drafts must stay isolated'
+request GET "/v1/merchant-publications/$draft_id" 200 '' "$merchant_cookie"
+jq -e '.publication.status=="draft"' "$case_dir/response.json" >/dev/null || fail 'draft row changed state on publish'
 pass 'merchant explicitly published product basics and got publication_id receipt'
 
 request GET "/v1/merchant-publications/search?q=$encoded_product" 200
-jq -e --arg id "$publication_id" --arg mid "$merchant_id" '.results[] | select(.publication_id==$id and .merchant_id==$mid and .inquiry_available==false and .source_kind=="merchant_declared" and .updated_at!="")' "$case_dir/response.json" >/dev/null || fail 'catalog public search did not return M0 merchant'
+jq -e --arg id "$published_id" --arg mid "$merchant_id" '.results[] | select(.publication_id==$id and .merchant_id==$mid and .inquiry_available==false and .source_kind=="merchant_declared" and .updated_at!="")' "$case_dir/response.json" >/dev/null || fail 'catalog public search did not return M0 merchant'
 search_result="$(mcp_call kiwi_search "$(jq -cn --arg query "$product_name" '{query:$query}')")"
 search_text="$(jq -r '.result.content[0].text' <<<"$search_result")"
 jq -e --arg mid "$merchant_id" '.merchants[] | select(.merchant_id==$mid and .inquiry_available==false)' <<<"$search_text" >/dev/null || fail 'kiwi_search did not discover M0 merchant'
@@ -179,5 +187,5 @@ updates_result="$(mcp_call kiwi_get_follow_updates '{}')"
 jq -e '.result.isError!=true and (.result.content[0].text|fromjson|.updates|length)==0' <<<"$updates_result" >/dev/null || fail 'updates still visible after unfollow'
 pass 'unfollow removed merchant from subsequent pulled updates'
 
-printf 'PASS: local M0 API + buyer MCP checks completed; publication_id=%s\n' "$publication_id"
+printf 'PASS: local M0 API + buyer MCP checks completed; publication_id=%s\n' "$published_id"
 printf 'MANUAL: WorkBuddy preview must verify /portal/register → /portal/publications, expert kiwi_search and first-bind behavior.\n'

@@ -8,6 +8,7 @@
  *
  *   node scripts/lib/merchant-instance-stub.mjs --port 18622 [--merchant-label A]
  *     [--pairing-dir <dir> --pairing-credential <token>]
+ *     [--owner-id <merchant_id> --principal-id <id>]
  *
  * 输出的每一行是 `stub_request <json>`，供验收脚本统计调用次数（隔离判定）。
  *
@@ -17,6 +18,10 @@
  * **新签发**一份配对凭据返回给网关；`/mcp` 同时接受静态令牌与该配对凭据，
  * 每次调用打印用的是哪一种（`stub_credential`），供验收断言「绑定后网关用的是
  * 配对凭据而不是静态令牌」。
+ *
+ * `--owner-id`：自托管实例的 owner_id 在真实部署里就是该商家的 `merchant_id`
+ * （网关的配对兑换要求 owner_id == 当前商家，见 merchant-gateway 的
+ * instance-registration）。桩默认给占位值以保持既有行为，联调时传真实 id。
  */
 
 import { createServer } from "node:http";
@@ -26,11 +31,18 @@ const args = process.argv.slice(2);
 let port = 18622;
 let label = "A";
 let pairingDir = "";
+let ownerId = "";
+let principalId = "";
 for (let i = 0; i < args.length; i += 1) {
   if (args[i] === "--port") port = Number(args[++i]);
   else if (args[i] === "--merchant-label") label = String(args[++i]);
   else if (args[i] === "--pairing-dir") pairingDir = String(args[++i]);
+  else if (args[i] === "--owner-id") ownerId = String(args[++i]);
+  else if (args[i] === "--principal-id") principalId = String(args[++i]);
 }
+// 不传时与桩的既有行为逐字一致。
+const instanceOwnerId = ownerId === "" ? `stub-owner-${label}` : ownerId;
+const instancePrincipalId = principalId === "" ? `stub-instance-${label}` : principalId;
 
 const pairingModule =
   pairingDir === "" ? undefined : await import("../../dist/auth/merchant-pairing.js");
@@ -133,7 +145,7 @@ const server = createServer((req, res) => {
       process.stderr.write(`stub_issued_paired_credential ${JSON.stringify({ label })}\n`);
       reply(res, 200, {
         ok: true,
-        instance: { owner_id: `stub-owner-${label}`, principal_id: `stub-instance-${label}` },
+        instance: { owner_id: instanceOwnerId, principal_id: instancePrincipalId },
         server_info: { name: `merchant-instance-stub-${label}`, version: "0.0.0-stub" },
         credential: issued.credential,
       });
