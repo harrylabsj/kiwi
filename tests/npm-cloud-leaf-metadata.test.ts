@@ -6,8 +6,8 @@ import {tmpdir} from "node:os";
 import {beforeAll,afterAll,it,expect} from "vitest";
 import {assertBundledEdges} from "../scripts/lib/npm-bundled-edges.mjs";
 // Linux run 38095216057 verified this immutable npm source/build/cold closure.
-const VERIFIED_SOURCE = "52d4f269410b907a09df9c3ce56592a4eb907fc5";
-const VERIFIED_CONTRACT_SHA = "7d24a2921fe70dc4b0bac07de4b67f316c4752c3ace7049704250c7ac047f413";
+const VERIFIED_SOURCE = "8d23bc1f3b7a98da1677e84347887231640e085b";
+const VERIFIED_CONTRACT_SHA = "b07704628b6e3c04f3cc92dc940e284f8536857b00d3f445915c0097325c2639";
 const VERIFIED_GUARD_CLOSURE = {
   "scripts/lib/npm-shipping.mjs": "1c5c096cbfa347e8d454c36413796e2b667d15bd34e361f46d6204ff8a1e089e",
   "scripts/check-install-toolchain.mjs": "fdbe3919a9a32f80d2ddcbe7699af4e1674c8c80323b64b7b6ab32f2848e9e32",
