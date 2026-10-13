@@ -3,6 +3,13 @@
 ## Unreleased
 
 - **buyer HTTP 面（review P1-1）**：`kiwi buyer-api serve` 新增 `--auth-token`（或 `KIWI_BUYER_HTTP_TOKEN`）Bearer 认证；令牌为必选，未配置时拒绝启动（fail-closed）；除 `/health` 外全部端点要求令牌，loopback 来源也不豁免认证。新增 Host 头 allowlist（防 DNS rebinding）、请求体超限 413（此前继续累积可内存 DoS）、坏 JSON 400（此前被吞成空对象）。404 不再回显请求 path。
+- **buyer 授权层（review P1-2）**：DelegationPolicy.limits（max_total_price/max_unit_price/max_quantity/allowed_merchants/allowed_currencies）此前在 accept 路径完全不执行，现在对候选真实核验（价格文本解析，解析不出 fail-closed 拒绝）；ASK 审批绑定 task_id 与 candidate digest；审批一次性消费（accept/handoff 落地后即 used）。
+- **enrollment store 并发（review P1-3）**：`catalog-pipeline` 的 `saveWorkbuddyEnrollment` 并入 `withEnrollmentStoreLock` + store_revision CAS——此前 30s reconcile tick 的裸回写可覆盖持锁写入方（回滚 challenge consumed 记录制造重放窗口）。
+- **claim 泄漏（review P1-4）**：autopilot submit 异常路径与 controller record 失败路径现在释放 claim/心跳，不再滞留到网关 300s stale TTL。
+- 协议组：merchant handler 的 withdraw/decline scope=offer 补相位推进（§21.2）；accept_nonbinding 接受全部自产 offer-like 对象（互操作）；商家 conditional_offer 先过冻结校验器（含扩展字段透传，3-9）；幂等 in-flight 改 `wx` 原子 claim（2-9）、损坏记录 fail-closed（3-4）、sweep 清理 inflight 残留（3-3）、确定性 decline 清除标记（3-10）；digest 剔除表移除（2-5）；TermSet/LineItem 透传 schema 允许的扩展字段。
+- 依赖：`npm audit fix`（proxy-addr critical、MCP SDK high → 1.32.1）。
+- 其他：AiRuntimeGate 租约表有界（2-11）；带 expires 的签名窗口 15 分钟上限（2-14）；预算阈值不再出现在跟踪通知（2-21）；shortlist_listing 补 manual 守卫（2-22）；快照 abandon 不再吞成功结果（2-23）；merchant up 节点失败不再孤儿化 Caddy（2-26）；README 版本号同步。
+- **BREAKING（协议 digest 算法对齐 RFC 8785，审查 2-4）**：JCS 数值序列化此前把 `-0` 输出为 `"-0"`、并剥掉正指数的 `+`（`1e21` → `"1e21"`），与 RFC 8785 §3.2.2.2（以 ECMAScript `Number::toString` 为权威：`-0` → `"0"`、`1e21` → `"1e+21"`）不符。修复后凡涉及 `-0` 或 ≥1e21 数值的 content digest / envelope digest / terms_digest / policy_digest 与旧实现**不兼容**；当前业务值均为整数 minor units（<1e21），仅当历史持久化数据曾含此类数值时才需按对账流程重建旧 envelope/ledger digest。同批（审查 2-5）：digest 计算移除本地 transport-signature 字段剔除表（KNP §19.2 第 7 条「MUST NOT invent a local signature-field stripping list」）；合法 envelope 从不携带这些字段，既有 digest 不变，携带方不再被静默豁免而是 fail-closed。
 
 ## v0.12.3 — 2026-10-01
 
