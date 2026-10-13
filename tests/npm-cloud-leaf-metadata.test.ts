@@ -9,8 +9,8 @@ import {assertBundledEdges} from "../scripts/lib/npm-bundled-edges.mjs";
 const VERIFIED_SOURCE = "52d4f269410b907a09df9c3ce56592a4eb907fc5";
 const VERIFIED_CONTRACT_SHA = "7d24a2921fe70dc4b0bac07de4b67f316c4752c3ace7049704250c7ac047f413";
 const VERIFIED_GUARD_CLOSURE = {
-  "scripts/lib/npm-shipping.mjs": "39f6335164f789758f77d769f50ce44739898d9c9c64d7db774a24b9bd6290bb",
-  "scripts/check-install-toolchain.mjs": "9d3708cea56d4b83b718930a0b6769b17561a73779855a02559090eaa8eb1419",
+  "scripts/lib/npm-shipping.mjs": "1c5c096cbfa347e8d454c36413796e2b667d15bd34e361f46d6204ff8a1e089e",
+  "scripts/check-install-toolchain.mjs": "fdbe3919a9a32f80d2ddcbe7699af4e1674c8c80323b64b7b6ab32f2848e9e32",
   "build-inputs/release0124-npm12-payload.json": "d05e06706d48b2a8407dd6401b264fb70e2261cf229325ad2f895595a474a6a6"
 };
 const digest = (file:string) => createHash("sha256").update(readFileSync(file)).digest("hex");
