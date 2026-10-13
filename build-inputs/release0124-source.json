@@ -16,6 +16,87 @@
         "size": 250,
         "sha256": "sha256:d4810e4990d50a0907bc27c104a6a63e5969fec2aa7b29d3841e6e4df40b159c",
         "classification": "matching-corepack-locator"
+      },
+      {
+        "path": "node_modules/.bin/arborist",
+        "size": 32,
+        "sha256": "sha256:470debeb95584790e6eae15da86dd5efb818c46cbc0c4931eba30ed9dabbb2f4",
+        "symlink_target": "../@npmcli/arborist/bin/index.js",
+        "classification": "normal-npm-bin-link",
+        "declared_by": "node_modules/@npmcli/arborist/package.json",
+        "target_payload_path": "node_modules/@npmcli/arborist/bin/index.js"
+      },
+      {
+        "path": "node_modules/.bin/cssesc",
+        "size": 20,
+        "sha256": "sha256:f2e9437cffdae6eb43e23de2724b89cc58bdc2f3bacc04abf7dac7ab56295468",
+        "symlink_target": "../cssesc/bin/cssesc",
+        "classification": "normal-npm-bin-link",
+        "declared_by": "node_modules/cssesc/package.json",
+        "target_payload_path": "node_modules/cssesc/bin/cssesc"
+      },
+      {
+        "path": "node_modules/.bin/installed-package-contents",
+        "size": 50,
+        "sha256": "sha256:13460be313b10783dd631da9dbc2a8bddb14d6874d9a7e60dc144e691ef5bd80",
+        "symlink_target": "../@npmcli/installed-package-contents/bin/index.js",
+        "classification": "normal-npm-bin-link",
+        "declared_by": "node_modules/@npmcli/installed-package-contents/package.json",
+        "target_payload_path": "node_modules/@npmcli/installed-package-contents/bin/index.js"
+      },
+      {
+        "path": "node_modules/.bin/node-gyp",
+        "size": 27,
+        "sha256": "sha256:f4ea9d7f727e40bb2fcb8a9c7cb092319b04935cea46a5e191129e87923953cd",
+        "symlink_target": "../node-gyp/bin/node-gyp.js",
+        "classification": "normal-npm-bin-link",
+        "declared_by": "node_modules/node-gyp/package.json",
+        "target_payload_path": "node_modules/node-gyp/bin/node-gyp.js"
+      },
+      {
+        "path": "node_modules/.bin/node-which",
+        "size": 21,
+        "sha256": "sha256:baeadaf636520cea655d6ddcb1ae866a0345e26e116e4e521979034dcd181d2a",
+        "symlink_target": "../which/bin/which.js",
+        "classification": "normal-npm-bin-link",
+        "declared_by": "node_modules/which/package.json",
+        "target_payload_path": "node_modules/which/bin/which.js"
+      },
+      {
+        "path": "node_modules/.bin/nopt",
+        "size": 19,
+        "sha256": "sha256:a469ebd7d2c235927d169be7df02be0a2f46f965ed58883922776c485075fe49",
+        "symlink_target": "../nopt/bin/nopt.js",
+        "classification": "normal-npm-bin-link",
+        "declared_by": "node_modules/nopt/package.json",
+        "target_payload_path": "node_modules/nopt/bin/nopt.js"
+      },
+      {
+        "path": "node_modules/.bin/pacote",
+        "size": 22,
+        "sha256": "sha256:92954a534858b9956f7d8507e9cb13b926d335861a231d97b077ce5b9845d507",
+        "symlink_target": "../pacote/bin/index.js",
+        "classification": "normal-npm-bin-link",
+        "declared_by": "node_modules/pacote/package.json",
+        "target_payload_path": "node_modules/pacote/bin/index.js"
+      },
+      {
+        "path": "node_modules/.bin/qrcode-terminal",
+        "size": 41,
+        "sha256": "sha256:144501d52934183df2e936fe3b0e4c45694866a02cc26328fc743ce302a3adde",
+        "symlink_target": "../qrcode-terminal/bin/qrcode-terminal.js",
+        "classification": "normal-npm-bin-link",
+        "declared_by": "node_modules/qrcode-terminal/package.json",
+        "target_payload_path": "node_modules/qrcode-terminal/bin/qrcode-terminal.js"
+      },
+      {
+        "path": "node_modules/.bin/semver",
+        "size": 23,
+        "sha256": "sha256:67548aec621ae3611116b30d9dd8b16a2768a72eb9dc5404f6f55e791906b795",
+        "symlink_target": "../semver/bin/semver.js",
+        "classification": "normal-npm-bin-link",
+        "declared_by": "node_modules/semver/package.json",
+        "target_payload_path": "node_modules/semver/bin/semver.js"
       }
     ],
     "node_binary_sha256": "sha256:5d9d3872911e2340a43b707962e68143de8a4e8d54628845c0c4f2de1fb7cd5c",
