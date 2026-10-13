@@ -186,11 +186,22 @@ describe("验收组 4：询价闭环", () => {
       now: () => T0,
       sender: "merchant:merchant-001",
       counterparty: "buyer:*",
+      productSource: {
+        getProduct: async (sku) => ({
+          sku,
+          price: 100,
+          currency: "CNY",
+          unit: "piece",
+          stock: 10,
+          valid_until: "2099-12-31T23:59:59Z",
+          source_evidence: { system: "acceptance-group-fixture", source_version: "fixture-v1" },
+        }),
+      },
     });
     const result = await handler.handle({
       envelope: envelope(
         "rfq",
-        { items: [{ sku: "SKU-001", quantity: { value: 1 } }] },
+        { items: [{ sku: "SKU-001", quantity: { value: 1, unit: "piece" } }] },
         1,
       ) as never,
       message: { role: "user", parts: [], messageId: "msg_1" },
@@ -215,7 +226,7 @@ describe("验收组 4：询价闭环", () => {
     const declined = await failing.handle({
       envelope: envelope(
         "rfq",
-        { items: [{ sku: "SKU-001", quantity: { value: 1 } }] },
+        { items: [{ sku: "SKU-001", quantity: { value: 1, unit: "piece" } }] },
         1,
       ) as never,
       message: { role: "user", parts: [], messageId: "msg_1" },

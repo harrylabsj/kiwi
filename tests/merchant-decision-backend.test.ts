@@ -69,9 +69,13 @@ async function setupHandler(options: {
     counterparty: "buyer:*",
     productSource: {
       getProduct: async () => ({
+        sku: "SKU-001",
         price: options.productPrice ?? 850, // major：850 元 → 85000 minor
         currency: "CNY",
         stock: 200,
+        // 所有定价请求按 piece 询价；显式 fixture 事实，不推断单位。
+        unit: "piece",
+        source_evidence: { system: "merchant-decision-fixture", source_version: "fixture-v1" },
       }),
     },
     ...(options.merchantPolicy !== undefined ? { merchantPolicy: options.merchantPolicy } : {}),
@@ -285,14 +289,17 @@ describe("createMerchantHandler 确定性定价（无 LLM）+ 可配置促销", 
     envelopeFor("counter_offer", {
       offer_id: "off_b",
       proposed_terms: {
-        items: [{ sku: "SKU-001", quantity: { value: qty }, unit_price: { amount_minor: priceMinor } }],
+        items: [{ sku: "SKU-001", quantity: { value: qty, unit: "piece" }, unit_price: { currency: "CNY", amount_minor: priceMinor } }],
       },
     });
+
+  const rfqFor = (quantity: number) =>
+    envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: quantity, unit: "piece" } }] });
 
   it("rfq→offer：offer = max(list, floor)，floor 内不抬价", async () => {
     const { handler, stop } = await setupHandler({ merchantPolicy: { min_unit_price_private: 80 } });
     try {
-      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
+      const res = await run(handler, rfqFor(1));
       expect(offerPriceMinor(res)).toBe(85000);
     } finally {
       stop();
@@ -305,7 +312,7 @@ describe("createMerchantHandler 确定性定价（无 LLM）+ 可配置促销", 
       merchantPolicy: { price_floors: { "SKU-001": 80 } },
     });
     try {
-      const res = await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
+      const res = await run(handler, rfqFor(1));
       // 旧行为把 floor(80) 当报价回给买家——一次询价即拿到私有底价。
       // 现行为：公开价低于私有底价属配置矛盾，拒绝自动报价（协议词表 approval_required），
       // 响应里不出现任何金额。
@@ -320,7 +327,7 @@ describe("createMerchantHandler 确定性定价（无 LLM）+ 可配置促销", 
   it("counter_offer：未公布折扣边界（无 max_auto_discount/促销）→ 还价压回 list，不自动折扣", async () => {
     const { handler, stop } = await setupHandler({ merchantPolicy: { price_floors: { "SKU-001": 80 } } });
     try {
-      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
+      await run(handler, rfqFor(1));
       const res = await run(handler, counterFor(84000)); // 840 元：高于 floor，但商家未公布折扣
       // 自动折扣必须有**明确公布的边界**（max_auto_discount_percent / 促销），
       // 不能因为"高于底价"就自动让价；否则底价区间可通过二分探测反推。
@@ -335,7 +342,7 @@ describe("createMerchantHandler 确定性定价（无 LLM）+ 可配置促销", 
       merchantPolicy: { price_floors: { "SKU-001": 800 }, max_auto_discount_percent: 10 },
     });
     try {
-      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
+      await run(handler, rfqFor(1));
       const res = await run(handler, counterFor(50000)); // 公开边界 765 元 < 底价 800 元
       expect(res.kind).toBe("declined");
       expect((res as { reasonCode?: string }).reasonCode).toBe("approval_required");
@@ -350,7 +357,7 @@ describe("createMerchantHandler 确定性定价（无 LLM）+ 可配置促销", 
       merchantPolicy: { price_floors: { "SKU-001": 600 }, max_auto_discount_percent: 10 },
     });
     try {
-      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
+      await run(handler, rfqFor(1));
       const res = await run(handler, counterFor(50000)); // 500 元 < 公开边界 765 元
       // 响应 = 公开边界 76500（所有人都知道"最多 10% 折扣"），绝不回落到 60000。
       expect(conditionalBaseMinor(res)).toBe(76500);
@@ -362,7 +369,7 @@ describe("createMerchantHandler 确定性定价（无 LLM）+ 可配置促销", 
   it("counter_offer：买家还价高于 list → base = list（压回 list）", async () => {
     const { handler, stop } = await setupHandler({ merchantPolicy: { price_floors: { "SKU-001": 80 } } });
     try {
-      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
+      await run(handler, rfqFor(1));
       const res = await run(handler, counterFor(90000)); // 900 元 > list 850 元
       expect(conditionalBaseMinor(res)).toBe(85000);
     } finally {
@@ -375,7 +382,7 @@ describe("createMerchantHandler 确定性定价（无 LLM）+ 可配置促销", 
       merchantPolicy: { promos: { "SKU-001": { bulk_threshold: 10, bulk_discount_percent: 3 } } },
     });
     try {
-      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 50 } }] }));
+      await run(handler, rfqFor(50));
       const res = await run(handler, counterFor(85000, 50));
       // 批量价 = max(floor 0, min(85000, applyDiscount(85000,3)=82450)) = 82450
       expect(offerPriceMinor(res)).toBe(82450);
@@ -390,7 +397,7 @@ describe("createMerchantHandler 确定性定价（无 LLM）+ 可配置促销", 
       merchantPolicy: { price_floors: { "SKU-001": 85 }, promos: { "SKU-001": { bulk_threshold: 10, bulk_discount_percent: 20 } } },
     });
     try {
-      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 50 } }] }));
+      await run(handler, rfqFor(50));
       const res = await run(handler, counterFor(8900, 50));
       // 旧行为把 then_terms 压到 floor(8500)，等于向买家公布底价。
       // 现行为：促销价无法兑现时不下发该条件，报价停在公开价 8900。
@@ -406,7 +413,7 @@ describe("createMerchantHandler 确定性定价（无 LLM）+ 可配置促销", 
   it("无 policy → 不自动折扣（base = list）；不存在任何会被暴露的底价", async () => {
     const { handler, stop } = await setupHandler({});
     try {
-      await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }));
+      await run(handler, rfqFor(1));
       const res = await run(handler, counterFor(5000));
       expect(conditionalBaseMinor(res)).toBe(85000);
       // 只对**价格字段**断言（整串比对会被 digest 里的十六进制数字误伤）。

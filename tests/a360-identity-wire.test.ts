@@ -61,9 +61,23 @@ function setup() {
     now,
     sender: "merchant-local",
     counterparty: "placeholder",
-    allowDemoPriceFallback: true,
+    productSource: sourceBackedProduct(),
   });
   return { dir, ledger, handler };
+}
+function sourceBackedProduct() {
+  return {
+    getProduct: async (sku: string) => {
+      if (sku !== "SKU-001") throw new Error(`no product ${sku}`);
+      return {
+        price: 850,
+        currency: "CNY",
+        stock: 10,
+        unit: "piece",
+        source_evidence: { system: "a360-owned-fixture" },
+      };
+    },
+  };
 }
 function env(
   action = "rfq",
@@ -154,7 +168,7 @@ describe("A360 2-1 trusted negotiation binding", () => {
       now,
       sender: "merchant-local",
       counterparty: "placeholder",
-      allowDemoPriceFallback: true,
+      productSource: sourceBackedProduct(),
     });
     const p = offer.payload as unknown as OfferFields;
     const a = env(

@@ -32,7 +32,8 @@ const productSource = {
     };
     const p = prices[sku];
     if (p === undefined) throw new Error(`no product ${sku}`);
-    return p;
+    // Fixture 是已知的本地商品库，显式提供报价所需来源事实；目录价格仍非报价权威。
+    return { ...p, unit: "piece", stock: 1_000, source_evidence: { system: "product-first-e2e-fixture" } };
   },
 };
 

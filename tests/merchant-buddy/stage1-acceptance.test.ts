@@ -207,7 +207,21 @@ describe("阶段一验收 2：关 WorkBuddy（无 MCP）后 A2A 持续服务", (
     // 只起 A2A 测试栈，不起任何 MCP 服务——模拟 WorkBuddy/Buddy 不在场。
     // 商家公布 5% 自动折扣边界：还价在边界内即被确定性接受（T045 修复后，自动
     // 折扣必须来自**公开策略**，不再依据私有底价自动让价——未公布折扣时报价停在 list）。
-    const stack = await startTestA2aStack({ merchantPolicy: { max_auto_discount_percent: 5 } });
+    const stack = await startTestA2aStack({
+      merchantPolicy: { max_auto_discount_percent: 5 },
+      // negotiateWithAgent 的 KNP 请求声明 piece；提供匹配的有版本商品源事实。
+      productSource: {
+        getProduct: async (sku) => ({
+          sku,
+          price: 99,
+          currency: "CNY",
+          unit: "piece",
+          stock: 250, // negotiateWithAgent 默认询价 200 件；源库存须真实覆盖请求量。
+          valid_until: "2099-12-31T23:59:59Z",
+          source_evidence: { system: "stage1-a2a-fixture", source_version: "fixture-v1" },
+        }),
+      },
+    });
     try {
       const result = await negotiateWithAgent({
         catalog: stack.catalogUrl,

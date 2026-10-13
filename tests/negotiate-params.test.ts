@@ -36,7 +36,8 @@ const productSource = {
     };
     const p = prices[sku];
     if (p === undefined) throw new Error(`no product ${sku}`);
-    return p;
+    // Fixture 是已知的本地商品库，显式提供 quote gate 要求的来源事实。
+    return { ...p, unit: "piece", stock: 1_000, source_evidence: { system: "negotiate-params-fixture" } };
   },
 };
 
@@ -63,6 +64,9 @@ describe("negotiateWithAgent parameterization", () => {
               price: 8999,
               currency: "CNY",
               handoff_destination: "https://item.jd.com/100244909689.html",
+              unit: "piece",
+              stock: 1_000,
+              source_evidence: { system: "negotiate-params-vq-fixture" },
             };
           }
           throw new Error(`no product ${sku}`);
@@ -87,7 +91,15 @@ describe("negotiateWithAgent parameterization", () => {
     const s = await startTestA2aStack({
       productSource: {
         async getProduct(sku: string) {
-          if (sku === "VQ-003") return { price: 8999, currency: "CNY" };
+          if (sku === "VQ-003") {
+            return {
+              price: 8999,
+              currency: "CNY",
+              unit: "piece",
+              stock: 1_000,
+              source_evidence: { system: "negotiate-params-budget-fixture" },
+            };
+          }
           throw new Error(`no product ${sku}`);
         },
       },

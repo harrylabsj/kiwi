@@ -122,7 +122,13 @@ async function startStack(
       counterparty: "buyer:*",
       productSource: {
         async getProduct(sku: string) {
-          if (sku === "VQ-003") return { price: 8999, currency: "CNY" };
+          if (sku === "VQ-003") return {
+            price: 8999,
+            currency: "CNY",
+            stock: 20,
+            unit: "piece",
+            source_evidence: { system: "a319-owned-fixture" },
+          };
           throw new Error(`no product ${sku}`);
         },
       },
@@ -252,7 +258,13 @@ describe("A319 2-3 返修自有控制（解析路径校准后）", () => {
         counterparty: "buyer:*",
         productSource: {
           async getProduct(sku: string) {
-            if (sku === "VQ-003") return { price: 8999, currency: "CNY" };
+            if (sku === "VQ-003") return {
+              price: 8999,
+              currency: "CNY",
+              stock: 20,
+              unit: "piece",
+              source_evidence: { system: "a319-owned-fixture" },
+            };
             throw new Error(`no product ${sku}`);
           },
         },
