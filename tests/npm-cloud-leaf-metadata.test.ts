@@ -5,12 +5,13 @@ import path from "node:path";
 import {tmpdir} from "node:os";
 import {beforeAll,afterAll,it,expect} from "vitest";
 import {assertBundledEdges} from "../scripts/lib/npm-bundled-edges.mjs";
-// Linux run 38095216057 verified this immutable npm source/build/cold closure.
-const VERIFIED_SOURCE = "65c3e8a0885f94baa1f6f40ae3f4f5e5b975a59c";
-const VERIFIED_CONTRACT_SHA = "90641e610c93313803c2b35e44a9a75330d4cb05bb7d492ff608ec586871dcb7";
+// Fixed local 0.12.5 merged-source authority checkpoint; normal publisher source
+// admission is independently testable. This is not a claimed Linux release proof.
+const VERIFIED_SOURCE = "233eebf7eb5ca4dddeb227389650f09044625fa2";
+const VERIFIED_CONTRACT_SHA = "8c8cd51150a83d1cd17093cd0f7c0cb3e4c35651d8b173958c82323645d0012a";
 const VERIFIED_GUARD_CLOSURE = {
-  "scripts/lib/npm-shipping.mjs": "39f6335164f789758f77d769f50ce44739898d9c9c64d7db774a24b9bd6290bb",
-  "scripts/check-install-toolchain.mjs": "9d3708cea56d4b83b718930a0b6769b17561a73779855a02559090eaa8eb1419",
+  "scripts/lib/npm-shipping.mjs": "515764ad1686d36ec22570b1fa47ee71135f194b2e43c42e840ecf588c1ff55b",
+  "scripts/check-install-toolchain.mjs": "fdbe3919a9a32f80d2ddcbe7699af4e1674c8c80323b64b7b6ab32f2848e9e32",
   "build-inputs/release0124-npm12-payload.json": "d05e06706d48b2a8407dd6401b264fb70e2261cf229325ad2f895595a474a6a6"
 };
 const digest = (file:string) => createHash("sha256").update(readFileSync(file)).digest("hex");
