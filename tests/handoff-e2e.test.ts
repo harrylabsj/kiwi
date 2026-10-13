@@ -15,7 +15,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { migrateMemorySchema } from "../src/agent/memory/schema.js";
@@ -38,6 +38,7 @@ import {
 } from "../src/handoff/index.js";
 import { testBuyerProfile, startTestA2aStack, type CapturedInbound } from "./helpers.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
+import { createFileProductSource, bindProductTableToCatalog } from "../src/cloud/product-source.js";
 
 const T0 = "2026-08-05T12:00:00+08:00";
 const PRINCIPAL = "buyer-agent:buyer-001";
@@ -592,4 +593,46 @@ afterEach(() => {
   for (const dir of tmpDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+describe("generated marketplace link remains behind KTH approval", () => {
+  it.each([
+    ["jd", "100301440825", "https://item.jd.com/100301440825.html"],
+    ["taobao", "900719925474099312345", "https://item.taobao.com/item.htm?id=900719925474099312345"],
+    ["tmall", "123456789", "https://detail.tmall.com/item.htm?id=123456789"],
+  ])("%s actual file product → merchant protocol → nonbinding agreement → pending handoff", async (platform, id, url) => {
+    const dir = trackedMkdtemp("kiwi-marketplace-handoff-");
+    const file = path.join(dir, "products.json");
+    writeFileSync(file, JSON.stringify({schema_version:"0.1.2",runtime_owner_id:"file-merchant",source:"merchant_upload",generated_at:T0,products:[{
+      sku:"sku-001",title:"Marketplace fixture",currency:"CNY",unit:"piece",price:99,stock:4,updated_at:T0,valid_until:"2099-12-31T23:59:59+08:00",status:"active",trade_platform:platform,platform_product_id:id,
+    }]}),{mode:0o600});
+    // Use the normal binding operation on this test-owned fixture, rather than
+    // bypassing the product authority guard or inventing a live Catalog binding.
+    bindProductTableToCatalog(file, "file-merchant", "fixture-catalog-merchant");
+    const source = createFileProductSource({file,merchantId:"file-merchant",now:()=>Date.parse(T0)});
+    expect((await source.source.getProduct("sku-001")).handoff_destination).toBe(url);
+    const stack = await startTestA2aStack({productSource:source.source});
+    stacks.push(stack);
+    const h = setupBuyer(stack.catalogUrl, {mode:"supervised"});
+    const taskId = await createReadyTask(h.store);
+    expect(toolText(await h.getTool("negotiate_buyer_task").execute("generated-negotiate",{task_id:taskId}))).toContain("等待批准");
+    const negotiation = h.approvals.listPending()[0]!;
+    h.approvals.markApproved(negotiation.candidate_id);
+    const result = await executeApprovedCandidate(h.approvals,negotiation.candidate_id,h.pendingHooks.get(negotiation.candidate_id)!);
+    expect(result.kind).toBe("executed");
+    expect(h.store.getTask(taskId)?.status).toBe("selected_nonbinding");
+    expect(JSON.stringify(h.store.taskEvents(taskId))).toContain(url);
+    const handoff = await h.getTool("handoff_agreement").execute("generated-handoff",{task_id:taskId,display_summary_merchant:"Fixture"});
+    expect(toolText(handoff)).toContain("等待批准");
+    const pending = h.approvals.listPending();
+    expect(pending).toHaveLength(1);
+    const candidate = pending[0]?.arguments["candidate"] as Record<string,unknown>;
+    expect(candidate.destination_ref).toBe(url);
+    expect(candidate.destination_type).toBe("external_checkout_url");
+    expect(candidate.requires_user_action).toBe(true);
+    expect(h.ledger.listNegotiations()).toHaveLength(0);
+    // The public marketplace product page is carried through, but no URL HEAD,
+    // browser launch, purchase, payment or inventory reservation is approved here.
+  });
 });

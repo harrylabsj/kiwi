@@ -27,7 +27,17 @@ import {
   createFileListingPublicationService,
 } from "../src/cloud/file-listing-publication.js";
 import type { AgentProfile } from "../src/config/profile.js";
-import { testProfile } from "./helpers.js";
+import { testProfile, testBuyerProfile } from "./helpers.js";
+import { DatabaseSync } from "node:sqlite";
+import { migrateMemorySchema } from "../src/agent/memory/schema.js";
+import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
+import { buildBuyerTools } from "../src/agent/buyer/buyer-tools.js";
+import { FakeCommerceConnector } from "../src/agent/connector/fake-connector.js";
+import type { KiwiCatalogSource } from "../src/discovery/index.js";
+import { KiwiCatalogMerchantIndex } from "../src/buyer-core/merchant-index.js";
+import { KiwiBuyerService } from "../src/buyer-core/service.js";
+import { TaskApprovalStore } from "../src/buyer-core/store.js";
+import { buildKiwiTools } from "../src/mcp/tools.js";
 
 const CATALOG = "https://catalog.example";
 const ORIGIN = "https://shop.example";
@@ -686,5 +696,115 @@ describe("A409 fixture trust boundary", () => {
       { method: "GET", path: "/v1/issuer-keys" },
     ]);
     expect(readFileSync(fixture.productsFile, "utf8")).toBe(fixture.productsBytes);
+  });
+});
+
+
+describe("marketplace product table → public listing → buyer candidate", () => {
+  it.each([
+    ["jd", "100301440825", "https://item.jd.com/100301440825.html"],
+    ["taobao", "900719925474099312345", "https://item.taobao.com/item.htm?id=900719925474099312345"],
+    ["tmall", "123456789", "https://detail.tmall.com/item.htm?id=123456789"],
+  ])("%s public product URL survives actual publication and buyer shortlist", async (platform, id, url) => {
+    const fixture = createFixture();
+    const table = JSON.parse(fixture.productsBytes);
+    table.products[0].trade_platform = platform;
+    table.products[0].platform_product_id = id;
+    writeFileSync(fixture.productsFile, JSON.stringify(table), { mode: 0o600 });
+    const service = newService(fixture);
+    const preview = await service.preview([SEL("SKU-A")]);
+    expect(preview.items[0]?.listing).toMatchObject({
+      handoff_destination_types: ["external_checkout_url"], handoff_destination_ref: url,
+    });
+    const receipt = await service.commit(preview.draft_id, preview.digest);
+    expect(receipt.status).toBe("succeeded");
+    const published = fixture.stub.publishCalls[0]?.body;
+    expect(published?.handoff_destination_ref).toBe(url);
+    expect(published).not.toHaveProperty("price");
+    expect(JSON.stringify(published)).not.toContain(NOTE_MARKER);
+
+    const db = new DatabaseSync(":memory:");
+    try {
+      migrateMemorySchema(db);
+      const now = preview.created_at;
+      const principal = "buyer-agent:marketplace-link-test";
+      db.prepare("INSERT INTO principals (principal_id,owner_id,role,locale,timezone,memory_schema_version,created_at,updated_at) VALUES (?, 'buyer-link-test', 'buyer', 'zh-CN', 'Asia/Shanghai', 2, ?, ?)").run(principal, now, now);
+      const store = new BuyerTaskStore({ db, principalId: principal, now: () => now });
+      const catalogSource = { searchListings: async () => [{
+        listing: { ...published, listing_id: receipt.results[0]?.listing_id, listing_digest: preview.items[0]?.listing_digest,
+          publication_state: "ACTIVE", listing_freshness_state: "FRESH", published_at: now, updated_at: now },
+        merchant: { merchant_id: MERCHANT, display_name: "Fixture merchant" },
+        agent: { catalog_agent_id: CATALOG_AGENT, verification_level: "commerce_verified", freshness_state: "fresh", administrative_state: "active" },
+        listing_freshness_state: "FRESH", authority: "discovery_projection", requires_direct_confirmation: true,
+      }] } as unknown as KiwiCatalogSource;
+      const tools = buildBuyerTools({store, connector: new FakeCommerceConnector([]), profile: testBuyerProfile(), catalogSource, now: () => now});
+      const search = tools.find((tool) => tool.name === "search_listings")!;
+      const result = await search.execute("marketplace-search", {need_description: "Widget Alpha"});
+      const rows = JSON.parse(result.content.map((c) => "text" in c ? c.text : "").join("\n"));
+      expect(rows[0]?.handoff_destination_ref).toBe(url);
+      expect(rows[0]?.handoff_destination_types).toEqual(["external_checkout_url"]);
+      const task = store.createTask({goal_text: "Find a Widget", intent:{category:"widgets"}, constraints:{}, idempotency_key:"marketplace-task"});
+      const ready = store.transitionTask({task_id:task.task_id,to:"ready",expected_version:task.version,event_type:"status_changed",origin:"user",idempotency_key:"marketplace-ready"});
+      await tools.find((tool) => tool.name === "shortlist_listing")!.execute("marketplace-shortlist", {task_id:ready.task_id,listing_id:rows[0].listing_id,owner_agent_id:rows[0].owner_agent_id,handoff_destination_types:rows[0].handoff_destination_types,handoff_destination_ref:rows[0].handoff_destination_ref});
+      expect(store.taskEvents(ready.task_id).find((event) => event.type === "candidate_shortlisted")?.payload.handoff_destination_ref).toBe(url);
+      expect(store.taskEvents(ready.task_id).some((event) => /order|payment|handoff_delivered/.test(event.type))).toBe(false);
+    } finally { db.close(); }
+  });
+});
+
+
+describe("actual Hermes kiwi_search preserves published marketplace URLs", () => {
+  it.each([
+    ["jd", "100301440825", "https://item.jd.com/100301440825.html"],
+    ["taobao", "900719925474099312345", "https://item.taobao.com/item.htm?id=900719925474099312345"],
+    ["tmall", "123456789", "https://detail.tmall.com/item.htm?id=123456789"],
+  ])("%s file publication → schema-validated Catalog HTTP → MerchantIndex → BuyerService → MCP", async (platform, id, url) => {
+    const fixture = createFixture();
+    const table = JSON.parse(fixture.productsBytes);
+    table.products[0].trade_platform = platform;
+    table.products[0].platform_product_id = id;
+    writeFileSync(fixture.productsFile, JSON.stringify(table), {mode:0o600});
+    const publication = newService(fixture);
+    const preview = await publication.preview([SEL("SKU-A")]);
+    const receipt = await publication.commit(preview.draft_id, preview.digest);
+    expect(receipt.status).toBe("succeeded");
+    const published = fixture.stub.publishCalls[0]!.body;
+    const now = preview.created_at;
+    const requested: string[] = [];
+    // Only transport is mocked: the original KiwiCatalogSource validates each
+    // real generated/published listing DTO; no source, index or service callback is replaced.
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const pathname = new URL(String(input)).pathname;
+      requested.push(pathname);
+      if (pathname === "/v1/listings/search") return Response.json({results:[{
+        listing:{...published,listing_id:receipt.results[0]!.listing_id,listing_digest:preview.items[0]!.listing_digest,publication_state:"ACTIVE",listing_freshness_state:"FRESH",published_at:now,updated_at:now},
+        merchant:{merchant_id:MERCHANT,display_name:"Fixture merchant"},
+        agent:{catalog_agent_id:CATALOG_AGENT,verification_level:"commerce_verified",freshness_state:"fresh",administrative_state:"active"},
+        listing_freshness_state:"FRESH",authority:"discovery_projection",requires_direct_confirmation:true,
+      }],next_cursor:null});
+      if (pathname === "/v1/agents/search") return Response.json({results:[{
+        catalog_agent_id:CATALOG_AGENT,principal_type:"merchant",merchant_id:MERCHANT,display_name:"Fixture merchant",canonical_domain:"shop.example",agent_card_url:ORIGIN+"/.well-known/agent-card.json",capabilities:["com.harrylabsj.kiwi.shopping.negotiation"],hosting_mode:"direct_only",verification_level:"commerce_verified",freshness_state:"fresh",administrative_state:"active",created_at:now,updated_at:now,
+      }],next_cursor:null});
+      if (pathname === "/v1/merchant-publications/search") return Response.json({results:[],next_cursor:null});
+      throw new Error("unexpected fixture route "+pathname);
+    }) as typeof fetch;
+    const index = new KiwiCatalogMerchantIndex({baseUrl:CATALOG,fetchImpl,now:()=>now});
+    const store = new TaskApprovalStore({dbPath:":memory:"});
+    try {
+      const service = new KiwiBuyerService({store,principal:"fixture-buyer",buyerAgentId:"fixture-agent",sessionId:"fixture-session",now:()=>now,merchantIndex:index,delegationPolicy:{policy_id:"fixture-policy",expires_at:"2099-01-01T00:00:00Z",actions:{discover:{mode:"auto"},accept_nonbinding:{mode:"ask"},handoff:{mode:"ask"},payment:{mode:"never"}}}});
+      const output = await buildKiwiTools(service).find((tool)=>tool.name==="kiwi_search")!.handle({query:"Widget Alpha"});
+      expect(output.isError).not.toBe(true);
+      const result = JSON.parse(output.content.map((item)=>item.type==="text"?item.text:"").join("\n"));
+      expect(result.network_search.status).toBe("completed");
+      expect(result.merchants).toHaveLength(1);
+      const product = result.merchants[0].products[0];
+      expect(product.handoff_destination_ref).toBe(url);
+      expect(product.handoff_destination_types).toEqual(["external_checkout_url"]);
+      expect(product.basis).toBe("merchant_listed");
+      expect(product.authority).toBe("discovery_projection");
+      expect(product.price).toEqual({kind:"to_be_quoted"});
+      expect(product).not.toHaveProperty("paid");
+      expect(requested.sort()).toEqual(["/v1/agents/search","/v1/listings/search","/v1/merchant-publications/search"]);
+    } finally { store.close(); }
   });
 });

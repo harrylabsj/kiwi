@@ -43,7 +43,7 @@ author: harrylabsj
 | 单价/price | 单价、价格、售价（**公开售价**，不是底价） |
 | 有效期至/valid_until | 有效期、有效期至、截止日期 |
 
-可选列：起订量/moq、库存/stock、供货说明/supply_note、更新时间/updated_at（留空自动取导入时刻）、状态/status（留空=在售）。
+可选列：起订量/moq、库存/stock、供货说明/supply_note、更新时间/updated_at（留空自动取导入时刻）、状态/status（留空=在售）、交易平台/trade_platform 与平台商品ID/platform_product_id（两者成对填写，仅京东/淘宝/天猫；填了由 Kiwi 按平台固定路由生成商品页链接，**不要自己拼 URL**）。
 
 ### 第 2 步：与商家确认映射（必须，不可跳过）
 

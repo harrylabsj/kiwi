@@ -11,12 +11,27 @@
  * 本文件是本地验证；平台侧仍需在真实制品上复验。
  */
 import { createServer, type Server } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { bootstrapCloudRuntime } from "../src/cloud/bootstrap.js";
-import { bindProductTableToCatalog, commitProductTable, createFileProductSource, ensureInitialEmptyProductTable, parseProductTable, ProductTableError } from "../src/cloud/product-source.js";
+import {
+  bindProductTableToCatalog,
+  commitProductTable,
+  createFileProductSource,
+  ensureInitialEmptyProductTable,
+  parseProductTable,
+  ProductTableError,
+} from "../src/cloud/product-source.js";
 import { finalizeEnvelope } from "../src/negotiation/domain/envelope.js";
 import { CAPABILITY } from "./negotiation-helpers.js";
 
@@ -42,6 +57,12 @@ function tempDir(prefix: string): string {
   const root = path.join(homedir(), ".kiwi-cloud-test");
   mkdirSync(root, { recursive: true });
   const dir = mkdtempSync(path.join(root, `${prefix}${process.pid}-`));
+  dirs.push(dir);
+  return dir;
+}
+
+function productTradeTempDir(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "kiwi-product-trade-"));
   dirs.push(dir);
   return dir;
 }
@@ -77,6 +98,49 @@ function productTable(overrides: Partial<Record<string, unknown>> = {}): string 
 }
 
 describe("商品表解析与查询（fail-closed）", () => {
+  it("保存每行平台和完整文本ID，文件源透传既有 handoff destination", async () => {
+    const table = parseProductTable(
+      JSON.parse(
+        productTable({ trade_platform: "天猫", platform_product_id: "90071992547409931234567890" }),
+      ),
+      "test",
+    );
+    expect(table.products[0]).toMatchObject({
+      trade_platform: "tmall",
+      platform_product_id: "90071992547409931234567890",
+    });
+    const file = path.join(productTradeTempDir(), "products.json");
+    commitProductTable(file, MERCHANT, table);
+    const source = createFileProductSource({ file, merchantId: MERCHANT });
+    expect(await source.source.getProduct(SKU)).toMatchObject({
+      handoff_destination: "https://detail.tmall.com/item.htm?id=90071992547409931234567890",
+    });
+  });
+
+  it("任一行非法交易入口拒绝整表，已提交表保持不变", () => {
+    const valid = JSON.parse(productTable());
+    const file = path.join(productTradeTempDir(), "products.json");
+    commitProductTable(file, MERCHANT, valid);
+    const before = readFileSync(file, "utf8");
+    const invalid = {
+      ...valid,
+      products: [
+        ...valid.products,
+        { ...valid.products[0], sku: "other", trade_platform: "jd", platform_product_id: "1e20" },
+      ],
+    };
+    expect(() => commitProductTable(file, MERCHANT, invalid)).toThrow(ProductTableError);
+    expect(readFileSync(file, "utf8")).toBe(before);
+    for (const fields of [
+      { trade_platform: "jd" },
+      { platform_product_id: "123" },
+      { trade_platform: "jd", platform_product_id: 123 },
+    ]) {
+      expect(() => parseProductTable(JSON.parse(productTable(fields)), "test")).toThrow(
+        ProductTableError,
+      );
+    }
+  });
   it("合法商品表可解析，且保留测试商品标记", () => {
     const table = parseProductTable(JSON.parse(productTable()), "inline");
     expect(table.merchant_id).toBe(MERCHANT);
@@ -147,14 +211,23 @@ describe("商品表解析与查询（fail-closed）", () => {
   it("Catalog merchant_id 只在绑定确认后写入；绑定前有商品仍不可报价", () => {
     const dir = tempDir("kiwi-table-catalog-bind-");
     const file = path.join(dir, "products.json");
-    writeFileSync(file, JSON.stringify({
-      schema_version: "0.1.2", runtime_owner_id: MERCHANT, source: "merchant_upload",
-      generated_at: new Date().toISOString(), products: [],
-    }));
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schema_version: "0.1.2",
+        runtime_owner_id: MERCHANT,
+        source: "merchant_upload",
+        generated_at: new Date().toISOString(),
+        products: [],
+      }),
+    );
     const row = JSON.parse(productTable()).products[0];
     commitProductTable(file, MERCHANT, {
-      schema_version: "0.1.2", runtime_owner_id: MERCHANT, source: "merchant_upload",
-      generated_at: new Date().toISOString(), products: [row],
+      schema_version: "0.1.2",
+      runtime_owner_id: MERCHANT,
+      source: "merchant_upload",
+      generated_at: new Date().toISOString(),
+      products: [row],
     });
     const unbound = createFileProductSource({ file, merchantId: MERCHANT });
     expect(unbound.describeSku(SKU).code).toBe("CATALOG_BINDING_REQUIRED");
@@ -333,12 +406,16 @@ describe("集成：配置文件 + 商品表驱动的云端实例", () => {
       products_file: productsFile,
       a2a_auth: { mode: "signature" },
     });
-    const instance = await bootstrapCloudRuntime({ env: { PORT: String(port) }, artifactRoot: artifactDir, log: () => {} });
+    const instance = await bootstrapCloudRuntime({
+      env: { PORT: String(port) }, // 平台只注入 PORT
+      artifactRoot: artifactDir,
+      log: () => {},
+    });
     instances.push(instance);
     const base = `http://127.0.0.1:${port}`;
     const ready = await fetch(`${base}/readyz`);
     expect(ready.status).toBe(503);
-    const readyBody = await ready.json() as { checks: Record<string, { code?: string }> };
+    const readyBody = (await ready.json()) as { checks: Record<string, { code?: string }> };
     expect(readyBody.checks.products?.code).toBe("PRODUCTS_NOT_CONFIGURED");
     const { body } = await sendRfq(base, "msg_table_empty");
     const serialized = JSON.stringify(body);
@@ -432,7 +509,11 @@ describe("集成：配置文件 + 商品表驱动的云端实例", () => {
       a2a_auth: { mode: "bearer" },
     });
     await expect(
-      bootstrapCloudRuntime({ env: { PORT: String(port) }, artifactRoot: artifactDir, log: () => {} }),
+      bootstrapCloudRuntime({
+        env: { PORT: String(port) },
+        artifactRoot: artifactDir,
+        log: () => {},
+      }),
     ).rejects.toMatchObject({ code: "CONFIG_FILE_AUTH_UNSUPPORTED" });
   });
 });

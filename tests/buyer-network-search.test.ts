@@ -417,6 +417,8 @@ describe("MerchantRecord.products：只透出商家声明的真实字段", () =>
     expect(product?.moq).toBeUndefined();
     expect(product?.availability_hint).toBeUndefined();
     expect(product?.brand).toBeUndefined();
+    expect(product).not.toHaveProperty("handoff_destination_types");
+    expect(product).not.toHaveProperty("handoff_destination_ref");
     // 商家级 delivery 也来自 listing，未知时保持缺省。
     expect(merchants[0]?.delivery).toBeUndefined();
   });

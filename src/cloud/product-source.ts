@@ -33,6 +33,12 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { MerchantProductSource } from "../a2a/server/merchant-handler.js";
+import {
+  buildMarketplaceProductLink,
+  MarketplaceProductLinkError,
+  parseMarketplaceProductFields,
+  type MarketplaceTradePlatform,
+} from "../handoff/marketplace-product-link.js";
 
 /** 商品表 schema 版本（与交接包控制面同版）。 */
 export const PRODUCT_TABLE_SCHEMA_VERSION = "0.1.2";
@@ -59,6 +65,10 @@ export interface CloudProductRecord {
   stock?: number;
   /** 测试商品显式标记（设计 §5.1：测试商品必须明确标记）。 */
   test?: boolean;
+  /** Optional public product trade entry; both fields must be provided together. */
+  trade_platform?: MarketplaceTradePlatform;
+  /** Decimal ID stays a string, including values beyond Number.MAX_SAFE_INTEGER. */
+  platform_product_id?: string;
 }
 
 export interface CloudProductTable {
@@ -150,11 +160,29 @@ export function parseProductTable(value: unknown, source: string): CloudProductT
       throw new ProductTableError("PRODUCT_TABLE_INVALID", `products[${index}].moq 必须是正整数`);
     }
     const stock = record["stock"];
-    if (stock !== undefined && (typeof stock !== "number" || !Number.isInteger(stock) || stock < 0)) {
+    if (
+      stock !== undefined &&
+      (typeof stock !== "number" || !Number.isInteger(stock) || stock < 0)
+    ) {
       throw new ProductTableError(
         "PRODUCT_TABLE_INVALID",
         `products[${index}].stock 必须是非负整数`,
       );
+    }
+    let tradeFields;
+    try {
+      tradeFields = parseMarketplaceProductFields({
+        trade_platform: record["trade_platform"],
+        platform_product_id: record["platform_product_id"],
+      });
+    } catch (error) {
+      if (error instanceof MarketplaceProductLinkError) {
+        throw new ProductTableError(
+          "PRODUCT_TABLE_INVALID",
+          `products[${index}].${error.field}：${error.message}`,
+        );
+      }
+      throw error;
     }
     return {
       sku: requireString(record["sku"], `products[${index}].sku`),
@@ -169,6 +197,7 @@ export function parseProductTable(value: unknown, source: string): CloudProductT
       status,
       ...(stock !== undefined ? { stock } : {}),
       ...(record["test"] === true ? { test: true } : {}),
+      ...tradeFields,
     };
   });
   const merchantId = table["merchant_id"];
@@ -176,7 +205,10 @@ export function parseProductTable(value: unknown, source: string): CloudProductT
   if (merchantId !== undefined && (typeof merchantId !== "string" || merchantId.trim() === "")) {
     throw new ProductTableError("PRODUCT_TABLE_INVALID", "商品表 merchant_id 必须是非空字符串");
   }
-  if (runtimeOwnerId !== undefined && (typeof runtimeOwnerId !== "string" || runtimeOwnerId.trim() === "")) {
+  if (
+    runtimeOwnerId !== undefined &&
+    (typeof runtimeOwnerId !== "string" || runtimeOwnerId.trim() === "")
+  ) {
     throw new ProductTableError("PRODUCT_TABLE_INVALID", "商品表 runtime_owner_id 必须是非空字符串");
   }
   return {
@@ -210,7 +242,9 @@ export interface CloudProductSourceHandle {
  *   - 查询路径上的所有失败都抛错（handler 据此 decline），不返回"看起来正常"的价；
  *   - 只在内存保留解析结果，不写任何状态。
  */
-export function createFileProductSource(options: FileProductSourceOptions): CloudProductSourceHandle {
+export function createFileProductSource(
+  options: FileProductSourceOptions,
+): CloudProductSourceHandle {
   const now = options.now ?? (() => Date.now());
   let cached: { mtimeMs: number; table: CloudProductTable } | undefined;
 
@@ -256,7 +290,10 @@ export function createFileProductSource(options: FileProductSourceOptions): Clou
     try {
       table = load();
     } catch (err) {
-      return { available: false, code: err instanceof ProductTableError ? err.code : "PRODUCT_TABLE_ERROR" };
+      return {
+        available: false,
+        code: err instanceof ProductTableError ? err.code : "PRODUCT_TABLE_ERROR",
+      };
     }
     if (table.products.length > 0 && table.merchant_id === undefined) {
       return { available: false, code: "CATALOG_BINDING_REQUIRED" };
@@ -285,11 +322,16 @@ export function createFileProductSource(options: FileProductSourceOptions): Clou
         if (record === undefined) {
           throw new ProductTableError("PRODUCT_NOT_IN_TABLE", `SKU ${sku} 不在商品表中`);
         }
+        const handoffDestination = buildMarketplaceProductLink(
+          record.trade_platform,
+          record.platform_product_id,
+        );
         return {
           price: record.price,
           currency: record.currency,
           title: record.title,
           ...(record.stock !== undefined ? { stock: record.stock } : {}),
+          ...(handoffDestination !== undefined ? { handoff_destination: handoffDestination } : {}),
           // 把有效期一并交给 handler（纵深防御：source 已按有效期拒绝，handler
           // 再按同一条款判定，避免"另一个商品源忘了判"的缺口）。
           valid_until: record.valid_until,
@@ -358,7 +400,11 @@ export function commitProductTable(
 }
 
 /** Stamp the Catalog-confirmed merchant id after device enrollment; never infer it from local owner_id. */
-export function bindProductTableToCatalog(file: string, runtimeOwnerId: string, catalogMerchantId: string): void {
+export function bindProductTableToCatalog(
+  file: string,
+  runtimeOwnerId: string,
+  catalogMerchantId: string,
+): void {
   const snapshot = loadProductTableSnapshot(file, runtimeOwnerId);
   const current = snapshot.table;
   if (current === undefined) throw new ProductTableError("PRODUCTS_NOT_CONFIGURED", "商品表尚未初始化");
@@ -366,5 +412,9 @@ export function bindProductTableToCatalog(file: string, runtimeOwnerId: string, 
     throw new ProductTableError("CATALOG_MERCHANT_MISMATCH", "Catalog 确认的商家身份与商品表绑定不一致");
   }
   if (current.merchant_id === catalogMerchantId) return;
-  commitProductTable(file, runtimeOwnerId, { ...current, merchant_id: catalogMerchantId, runtime_owner_id: runtimeOwnerId });
+  commitProductTable(file, runtimeOwnerId, {
+    ...current,
+    merchant_id: catalogMerchantId,
+    runtime_owner_id: runtimeOwnerId,
+  });
 }

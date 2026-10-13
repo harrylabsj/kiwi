@@ -15,6 +15,9 @@
  * unit 与 valid_until 在 shopping-cli 中不存在——unit 用 --unit（默认 piece），
  * valid_until 用导出时刻 + --valid-days（默认 365 天）生成的日期；两个默认值
  * 都会在 stderr 说明，商家导入前可在表格里改。
+ * trade_platform/platform_product_id（平台商品页）同样留空：shopping-cli 没有
+ * 平台商品页字段，它的 handoff_destination 是商家自有成交入口，不等于京东/
+ * 淘宝/天猫商品页 URL，不能互相顶替；需要时由商家在导入前按平台商品ID填写。
  *
  * 用法：
  *   node scripts/export-shopping-cli-products.mjs \
@@ -38,6 +41,8 @@ export const TEMPLATE_HEADER = [
   "更新时间/updated_at",
   "有效期至/valid_until",
   "状态/status",
+  "交易平台/trade_platform",
+  "平台商品ID/platform_product_id",
 ];
 
 export const MAX_EXPORT_ROWS = 5000;
@@ -81,6 +86,8 @@ export function buildShoppingCliExportCsv(
       String(row.updated_at ?? ""),
       isoDatePlusDays(now(), validDays),
       row.active === 1 ? "在售" : "暂停",
+      "",
+      "",
     ]);
   }
   const lines = [TEMPLATE_HEADER, ...exported].map((cells) => cells.map(csvEscape).join(","));

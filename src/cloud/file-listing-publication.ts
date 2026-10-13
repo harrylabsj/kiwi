@@ -42,6 +42,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AgentProfile } from "../config/profile.js";
+import { buildMarketplaceProductLink } from "../handoff/marketplace-product-link.js";
 import { canonicalize } from "../negotiation/jcs.js";
 import { CatalogClient, type CatalogClientError } from "./catalog-client.js";
 import {
@@ -345,6 +346,7 @@ export function createFileListingPublicationService(options: FileListingPublicat
       if (Date.parse(record.valid_until) <= nowMs) {
         throw new FileListingPublicationError("PRODUCT_EXPIRED", `SKU 有效期已过，不可发布：${sku}`);
       }
+      const productLink = buildMarketplaceProductLink(record.trade_platform, record.platform_product_id);
       const listing = canonicalizeCatalogListing(
         {
           listing_type: "product",
@@ -352,6 +354,10 @@ export function createFileListingPublicationService(options: FileListingPublicat
           title: record.title,
           category,
           source_revision: `file:${record.updated_at}`,
+          ...(productLink === undefined ? {} : {
+            handoff_destination_types: ["external_checkout_url"],
+            handoff_destination_ref: productLink,
+          }),
           fresh_until: computeFreshUntil(nowMs, record.valid_until, freshDays),
         },
         binding.agentId,
