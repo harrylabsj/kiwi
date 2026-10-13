@@ -151,6 +151,12 @@ async function startDemoMerchant(spec: DemoMerchantSpec, sku: string): Promise<R
           price: spec.price, // 元 major，handler lossless 转 minor
           currency: "CNY",
           stock: 1000,
+          // handler 要求商品事实的 unit 与 RFQ 的 quantity.unit 逐字一致，不一致即
+          // decline field_unsupported；本 demo 的 RFQ 请求 "piece"。
+          unit: "piece",
+          // handler 仅在 stock 与 source_evidence 都在时才透出 handoff_destination
+          // （成交入口依赖来源证据）；缺它则场景 A 的 HandoffCandidate 拿不到目的地。
+          source_evidence: { system: "kiwi-demo-fixture" },
           handoff_destination: `https://${spec.id}.example/checkout/{ref}`,
         };
       },

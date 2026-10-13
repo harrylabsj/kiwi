@@ -2802,7 +2802,7 @@
     },
     {
       "path": "src/demo/demo-runner.ts",
-      "sha256": "sha256:4b1d53e127703cff81c4e1196d8b4715fcb656a3811434bf1f426c095a0b07a8"
+      "sha256": "sha256:d1f00a3d898aa40c253385c9f359823edf2f4d89e70a191346d7803c749b3df1"
     },
     {
       "path": "src/discovery/agent-card/error.ts",
