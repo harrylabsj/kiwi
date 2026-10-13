@@ -39,51 +39,126 @@ export function renderMerchantManagementPage(options: {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>商家工作台 — Kiwi</title>
 <style>
-  :root { font-family: system-ui, -apple-system, "PingFang SC", sans-serif; }
-  body { margin: 0; background: #f6f7f9; color: #1c2330; }
-  header { background: #16324f; color: #fff; padding: 12px 20px; display: flex; gap: 16px; align-items: baseline; }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-  header .who { font-size: 12px; opacity: .8; }
-  nav { display: flex; gap: 4px; padding: 8px 20px 0; background: #16324f; }
-  nav button { border: 0; padding: 8px 14px; border-radius: 6px 6px 0 0; background: #1e4066; color: #cdd8e4; cursor: pointer; font-size: 13px; }
-  nav button.on { background: #f6f7f9; color: #16324f; font-weight: 600; }
-  main { padding: 16px 20px 40px; max-width: 980px; margin: 0 auto; }
-  .card { background: #fff; border: 1px solid #e3e7ec; border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
-  .card h2 { font-size: 14px; margin: 0 0 10px; color: #3a4a5e; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eef1f4; vertical-align: top; }
-  th { color: #6b7a8c; font-weight: 500; white-space: nowrap; }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; }
-  .ok { background: #e5f5ea; color: #1d7a3d; } .warn { background: #fdf1dc; color: #9a6b0f; } .bad { background: #fde8e8; color: #b3261e; }
-  button.act { border: 1px solid #c9d3dd; background: #fff; border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
-  button.act.primary { background: #16324f; color: #fff; border-color: #16324f; }
-  button.act.danger { color: #b3261e; border-color: #e5b4b1; }
-  #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 8px 20px; font-size: 13px; background: #101826; color: #dfe6ee; display: none; }
-  #bar.err { background: #5c1a16; }
-  textarea, input[type=text] { width: 100%; box-sizing: border-box; border: 1px solid #c9d3dd; border-radius: 6px; padding: 8px; font: 12px ui-monospace, monospace; }
-  .muted { color: #6b7a8c; font-size: 12px; }
-  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  pre.digest { font: 11px ui-monospace, monospace; color: #6b7a8c; word-break: break-all; margin: 4px 0; }
-  label { font-weight: 400; font-size: 12px; }
-  select { border: 1px solid #c9d3dd; border-radius: 6px; padding: 4px 6px; font-size: 12px; background: #fff; }
-  .trendrow { display: flex; align-items: center; gap: 8px; margin: 3px 0; font-size: 12px; }
-  .trendrow > span:first-child { width: 44px; color: #6b7a8c; }
-  .trendbar { flex: 1; height: 10px; background: #eef1f4; border-radius: 5px; overflow: hidden; }
-  .trendfill { height: 100%; background: #1e4066; }
+  :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: #23342d; background: #f5f7f4; font-size: 14px; line-height: 1.6; --kiwi: #205c43; --border: #dce4de; --muted: #5e7066; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; grid-template-columns: 216px minmax(0, 1fr); grid-template-rows: 76px 1fr; }
+  button, input, select, textarea { font: inherit; }
+  button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+  a { color: var(--kiwi); text-underline-offset: 3px; }
+  button { cursor: pointer; }
+  button:disabled { cursor: not-allowed; opacity: .55; }
+  :focus-visible { outline: 3px solid #9b7214; outline-offset: 3px; }
+  .skip-link { position: fixed; left: 16px; top: -80px; z-index: 20; padding: 10px 16px; background: #fff; border: 2px solid var(--kiwi); border-radius: 8px; }
+  .skip-link:focus { top: 12px; }
+  header { grid-column: 1 / -1; background: #fff; border-bottom: 1px solid var(--border); padding: 0 32px; display: flex; justify-content: space-between; align-items: center; gap: 24px; }
+  .brand { display: flex; align-items: center; gap: 16px; }
+  .brand-name { color: var(--kiwi); font-size: 30px; font-weight: 750; letter-spacing: -1.6px; line-height: 1; }
+  .brand-title { font-size: 14px; font-weight: 600; padding-left: 16px; border-left: 1px solid var(--border); }
+  header .who { font-size: 12px; color: var(--muted); padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px; max-width: 50%; overflow-wrap: anywhere; }
+  header .who:empty { display: none; }
+  nav { padding: 28px 16px; background: #fff; border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; align-self: stretch; }
+  .nav-label { margin: 0 12px 12px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 1.4px; }
+  nav button { border: 1px solid transparent; padding: 12px 16px; border-radius: 8px; background: transparent; color: #53665b; text-align: left; font-weight: 500; line-height: 1.4; }
+  nav button:hover { background: #f3f7f3; color: var(--kiwi); }
+  nav button.on { background: #eaf2ec; color: #174c35; border-color: #d9e8dd; font-weight: 650; box-shadow: inset 3px 0 #2e7050; }
+  .nav-foot { margin: auto 12px 0; padding-top: 40px; color: var(--muted); font-size: 11px; }
+  .workspace { min-width: 0; padding: 32px clamp(20px, 3vw, 48px) 72px; width: 100%; max-width: 1400px; margin: 0 auto; }
+  .page-head { margin-bottom: 24px; }
+  .eyebrow { margin: 0 0 6px; color: var(--kiwi); font-size: 11px; letter-spacing: 1.8px; font-weight: 650; }
+  .page-head h1 { margin: 0 0 6px; font-size: 26px; line-height: 1.35; letter-spacing: -.6px; font-weight: 650; }
+  .page-head p:last-child { margin: 0; color: var(--muted); font-size: 13px; }
+  main { min-width: 0; }
+  .card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 3px 12px #243b2b04; min-width: 0; }
+  .card h2 { font-size: 16px; line-height: 1.5; margin: 0 0 18px; color: #233b2d; font-weight: 650; }
+  .card p { margin: 12px 0; overflow-wrap: anywhere; }
+  .card > :last-child { margin-bottom: 0; }
+  .table-scroll { width: 100%; overflow-x: auto; border: 1px solid #e4eae5; border-radius: 8px; margin: 12px 0 18px; }
+  table { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid #e9eee9; vertical-align: middle; }
+  th { color: #53665b; font-weight: 600; white-space: nowrap; background: #f7f9f6; }
+  tr:last-child > th, tr:last-child > td { border-bottom: 0; }
+  tr:hover > td { background: #fafcf9; }
+  .detail-table { min-width: 0; }
+  .detail-table th { width: 190px; }
+  td { overflow-wrap: anywhere; }
+  .pill { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 5px; font-size: 12px; line-height: 1.7; font-weight: 550; background: #edf1ed; color: #53665b; white-space: nowrap; }
+  .ok { background: #e9f4ec; color: #24623b; } .warn { background: #fcf2de; color: #795309; } .bad { background: #fcebea; color: #a03933; }
+  .act { display: inline-flex; align-items: center; justify-content: center; border: 1px solid #c8d5cc; background: #fff; color: #344c3d; border-radius: 7px; padding: 8px 14px; min-height: 38px; text-decoration: none; font-size: 13px; font-weight: 550; line-height: 1.5; }
+  .act:hover { background: #f4f8f3; border-color: #8ba695; }
+  .act.primary { background: var(--kiwi); color: #fff; border-color: var(--kiwi); }
+  .act.primary:hover { background: #164a34; }
+  .act.danger { color: #a03933; border-color: #e5c2bd; }
+  .act.danger:hover { background: #fff4f2; }
+  #bar { position: fixed; left: 240px; right: 24px; bottom: 20px; max-width: 760px; margin: auto; padding: 14px 20px; font-size: 13px; background: #244b36; color: #fff; border-radius: 9px; box-shadow: 0 6px 24px #233b2d26; display: none; z-index: 10; overflow-wrap: anywhere; }
+  #bar.err { background: #89372f; }
+  textarea, input[type=text] { width: 100%; max-width: 100%; border: 1px solid #c8d5cc; border-radius: 7px; padding: 10px 12px; color: #23342d; background: #fcfdfb; font: 13px ui-monospace, SFMono-Regular, monospace; line-height: 1.6; }
+  textarea { resize: vertical; }
+  input::placeholder, textarea::placeholder { color: #69796e; }
+  input[type=file] { min-width: 0; max-width: 100%; border: 1px dashed #b4c9b9; border-radius: 8px; padding: 10px; background: #f7faf5; font-size: 13px; }
+  input[type=file]::file-selector-button { border: 1px solid #c8d5cc; border-radius: 5px; background: #fff; color: #344c3d; padding: 6px 10px; margin-right: 10px; cursor: pointer; }
+  input[type=checkbox] { accent-color: var(--kiwi); width: 16px; height: 16px; vertical-align: middle; }
+  .muted { color: var(--muted); font-size: 12px; line-height: 1.8; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .row > .muted { flex: 1 1 180px; }
+  pre.digest { font: 11px ui-monospace, monospace; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0; max-width: 320px; }
+  label { font-size: 13px; }
+  select { border: 1px solid #c8d5cc; border-radius: 7px; padding: 8px 12px; font-size: 13px; color: #23342d; background: #fff; max-width: 100%; }
+  .trendrow { display: flex; align-items: center; gap: 12px; margin: 10px 0; font-size: 12px; }
+  .trendrow > span:first-child { width: 44px; color: var(--muted); }
+  .trendbar { flex: 1; height: 8px; background: #edf2eb; border-radius: 4px; overflow: hidden; }
+  .trendfill { height: 100%; background: #4b815c; }
+  .login-card { max-width: 600px; padding: 32px; }
+  .empty-state { padding: 24px 16px; background: #f8faf6; border: 1px dashed #d5e1d5; border-radius: 8px; }
+  @media (max-width: 900px) {
+    body { grid-template-columns: 176px minmax(0, 1fr); }
+    header { padding: 0 24px; }
+    nav { padding: 24px 10px; }
+    nav button { padding: 12px; }
+    .workspace { padding: 26px 24px 64px; }
+    .card { padding: 20px; }
+    #bar { left: 196px; }
+  }
+  @media (max-width: 640px) {
+    body { display: block; }
+    header { min-height: 72px; padding: 16px; gap: 12px; flex-wrap: wrap; }
+    .brand-name { font-size: 27px; }
+    header .who { max-width: 100%; padding: 0; border: 0; font-size: 11px; }
+    nav { padding: 12px 16px; border-right: 0; border-bottom: 1px solid var(--border); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+    .nav-label, .nav-foot { display: none; }
+    nav button { padding: 10px 4px; font-size: 12px; text-align: center; min-height: 40px; }
+    nav button.on { box-shadow: none; }
+    .workspace { padding: 24px 16px 64px; }
+    .page-head { margin-bottom: 20px; }
+    .page-head h1 { font-size: 23px; }
+    .card, .login-card { padding: 20px 16px; border-radius: 10px; margin-bottom: 16px; }
+    .card h2 { font-size: 15px; margin-bottom: 14px; }
+    .detail-table th { width: 110px; white-space: normal; }
+    th, td { padding: 10px 12px; }
+    .detail-table td { word-break: break-word; }
+    #bar { left: 16px; right: 16px; bottom: 16px; }
+    .row { gap: 10px; }
+  }
+  @media (prefers-reduced-motion: no-preference) { .act, nav button { transition: background-color .15s, border-color .15s; } }
 </style>
 </head>
 <body>
-<header><h1>商家工作台</h1><span class="who" id="who"></span></header>
-<nav id="tabs">
-  <button data-v="status" class="on">服务状态</button>
+<a href="#view" class="skip-link">跳至工作区</a>
+<header><div class="brand"><span class="brand-name" aria-label="Kiwi">kiwi</span><span class="brand-title">商家工作台</span></div><span class="who" id="who"></span></header>
+<nav id="tabs" aria-label="工作台导航">
+  <p class="nav-label">工作空间</p>
+  <button data-v="status" class="on" aria-current="page">服务状态</button>
   <button data-v="products">商品与导入</button>
   <button data-v="approvals">待审批</button>
   <button data-v="negotiations">会话旁观</button>
   <button data-v="reports">运营报告</button>
   <button data-v="policy">报价规则</button>
+  <p class="nav-foot">日常经营，井然有序。<br>Kiwi Merchant</p>
 </nav>
-<main id="view"><div class="card">加载中…</div></main>
-<div id="bar"></div>
+<div class="workspace">
+  <section class="page-head" aria-labelledby="page-title"><p class="eyebrow">MERCHANT WORKSPACE</p><h1 id="page-title">服务状态</h1><p id="page-description">掌握接待状态，管理店铺与目录连接。</p></section>
+  <main id="view" tabindex="-1" aria-label="商家工作区"><div class="card">加载中…</div></main>
+</div>
+<div id="bar" role="status" aria-live="polite" aria-atomic="true"></div>
 <script>
 "use strict";
 var CSRF = "";
@@ -100,6 +175,16 @@ function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
   });
+}
+function marketplaceLink(it) {
+  var value = it.platform_product_url;
+  if (typeof value !== "string") return "-";
+  try {
+    var url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password ||
+        ["item.jd.com", "item.taobao.com", "detail.tmall.com"].indexOf(url.hostname) < 0) return "-";
+    return '<a href="' + esc(value) + '" target="_blank" rel="noopener noreferrer">' + esc(value) + '</a>';
+  } catch (_) { return "-"; }
 }
 function bar(msg, isErr) {
   var b = $("bar");
@@ -155,9 +240,9 @@ function call(method, path, body, apiBase) {
   });
 }
 function showLogin() {
-  $("view").innerHTML = '<div class="card"><h2>需要登录</h2>' +
+  $("view").innerHTML = '<div class="card login-card"><h2>登录你的商家工作台</h2>' +
     '<p class="muted">请使用商家管理员口令登录后回到本页。</p>' +
-    '<p><a class="act" href="/admin/login?next=%2Fmerchant%2F"><button class="act primary">去登录</button></a></p></div>';
+    '<p><a class="act primary" href="/admin/login?next=%2Fmerchant%2F">去登录</a></p></div>';
 }
 function key(p) { return p + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8); }
 function statePill(state) {
@@ -267,7 +352,9 @@ var views = {
           return "<tr><td>" + esc(it.sku) + "</td><td>" + esc(it.title) + "</td><td>" +
             esc(it.currency) + " " + esc(it.price) + " / " + esc(it.price_unit) + "</td><td>" +
             esc(it.min_order_qty == null ? "-" : it.min_order_qty) + "</td><td>" +
-            esc(it.valid_until) + "</td><td>" + esc(it.status) + "</td></tr>";
+            esc(it.valid_until) + "</td><td>" + esc(it.status) + "</td><td>" +
+            esc(({jd:"京东",taobao:"淘宝",tmall:"天猫"})[it.trade_platform] || "-") + "</td><td>" +
+            esc(it.platform_product_id || "-") + "</td><td>" + marketplaceLink(it) + "</td></tr>";
         }
         var money = it.money || {};
         return "<tr><td>" + esc(it.sku) + "</td><td>" + esc(it.title) + "</td><td>" +
@@ -277,16 +364,17 @@ var views = {
       }).join("");
       return '<div class="card"><h2>当前商品（' + (p.items || []).length + "）</h2>" +
         (rows ? (FILE_PRODUCTS
-          ? "<table><tr><th>SKU</th><th>名称</th><th>单价</th><th>起订量</th><th>有效期至</th><th>状态</th></tr>"
+          ? "<table><tr><th>SKU</th><th>名称</th><th>单价</th><th>起订量</th><th>有效期至</th><th>状态</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
           : "<table><tr><th>SKU</th><th>名称</th><th>价格（最小币单位）</th><th>库存</th><th>版本</th></tr>") + rows + "</table>"
               : '<p class="muted">暂无商品，请先导入商品。没有商品时服务不会报价或发布名片。</p>') + "</div>" +
         '<div class="card"><h2>导入商品表（整表替换）</h2>' +
+        '<p class="muted">交易链接仅为平台商品页；是否成交、实际价格与付款结果由交易平台确认。</p>' +
         '<p class="muted">支持 CSV、Excel（.xlsx）与商品表 JSON：先转换校验、预览增/改/留/删，确认后整批生效（不成功的批次不改动现有商品）。</p>' +
         '<p class="muted">模板：<a href="/merchant/api/v1/products/import-template?format=csv" download="kiwi-product-import-template.csv">下载 CSV 模板</a> · <a href="/merchant/api/v1/products/import-template?format=xlsx" download="kiwi-product-import-template.xlsx">下载 Excel 模板</a>（中文表头与示例行；中英文常见列名会自动识别）。</p>' +
-        '<div class="row"><input type="file" id="pfile" accept=".json,.csv,.xlsx">' +
+        '<div class="row"><input type="file" id="pfile" aria-label="选择商品导入文件" accept=".json,.csv,.xlsx">' +
         '<button class="act" onclick="previewImport()">校验预览</button></div><div id="presult"></div></div>' +
         (FILE_PRODUCTS && CATALOG_CONNECT && ROLE === "owner" ?
-          '<div class="card"><h2>发布商品到 Kiwi 目录</h2><p>先完成目录连接，再选择商品并填写分类。公开名称、SKU 和分类；价格、库存及私有规则不会发布。</p>' +
+          '<div class="card"><h2>发布商品到 Kiwi 目录</h2><p>先完成目录连接，再选择商品并填写分类。公开名称、SKU、分类及填写的平台商品页链接；价格、库存及私有规则不会发布。</p>' +
           '<p>每行填写一个 SKU 和分类，用英文竖线分隔，例如：KIWI-ACCEPT-001 | 验收测试</p>' +
           '<textarea id="publication-selection" rows="4" aria-label="选定商品与分类"></textarea>' +
           '<button class="act" onclick="previewPublication()">预览公开内容</button><div id="publication-result"></div></div>' : '');
@@ -415,7 +503,7 @@ var views = {
             '<span class="muted">per-SKU 底价/折扣、促销与库存来源请用下方高级模式。</span></div><div id="polformresult"></div></div>' +
             '<div class="card"><h2>高级：JSON patch 模式</h2>' +
             '<p class="muted">适合 per-SKU 底价/折扣映射、促销与库存来源等完整 patch；字段名以策略 schema 文档为准，不在页面枚举。</p>' +
-            '<textarea id="patch" rows="8"></textarea>' +
+            '<textarea id="patch" rows="8" aria-label="高级规则 JSON patch"></textarea>' +
             '<div class="row" style="margin-top:8px"><button class="act" onclick="draftPolicy()">保存草稿</button>' +
             '<span class="muted">保存后生成草稿摘要，再点提交才生效。</span></div><div id="polresult"></div></div>'
           : '<div class="card"><p class="muted">规则调整需要 operator/owner 角色。</p></div>');
@@ -738,12 +826,55 @@ function commitPolicy(draftId, digest) {
   }).catch(function (e) { bar("提交失败：" + e.message, true); });
 }
 var current = "status";
-function refresh() { views[current]().then(function (html) { $("view").innerHTML = html; })
+var VIEW_COPY = {
+  status: ["服务状态", "掌握接待状态，管理店铺与目录连接。"],
+  products: ["商品与导入", "维护商品资料，先预览，再确认变更。"],
+  approvals: ["待审批", "核对每一项变更，重要决定由你确认。"],
+  negotiations: ["会话旁观", "查看询价与磋商进展，掌握需要关注的会话。"],
+  reports: ["运营报告", "了解买家触达与接待表现。"],
+  policy: ["报价规则", "管理自动报价边界，规则确认后生效。"]
+};
+function decorateView() {
+  var view = $("view");
+  Array.prototype.forEach.call(view.querySelectorAll("table"), function (table) {
+    if (table.parentElement.classList.contains("table-scroll")) return;
+    if (table.rows.length && table.rows[0].cells.length <= 2) table.classList.add("detail-table");
+    var wrap = document.createElement("div");
+    wrap.className = "table-scroll";
+    wrap.tabIndex = 0;
+    wrap.setAttribute("role", "region");
+    var card = table.closest(".card");
+    var heading = card && card.querySelector("h2");
+    wrap.setAttribute("aria-label", (heading ? heading.textContent : "工作台") + "表格，可横向滚动");
+    table.parentNode.insertBefore(wrap, table);
+    wrap.appendChild(table);
+  });
+  Array.prototype.forEach.call(view.querySelectorAll("input[type=text], select"), function (control) {
+    if (control.getAttribute("aria-label")) return;
+    var row = control.closest("tr");
+    var heading = row && row.querySelector("th");
+    if (heading) control.setAttribute("aria-label", heading.textContent);
+  });
+  Array.prototype.forEach.call(view.querySelectorAll(".card > p.muted"), function (p) {
+    if (/^(暂无|当前过滤条件下没有)/.test(p.textContent)) p.classList.add("empty-state");
+  });
+}
+// 导入预览与可信确认内容动态插入后同样获得局部表格滚动。
+if (typeof MutationObserver !== "undefined") {
+  new MutationObserver(decorateView).observe($("view"), { childList: true, subtree: true });
+}
+function refresh() {
+  var copy = VIEW_COPY[current];
+  $("page-title").textContent = copy[0];
+  $("page-description").textContent = copy[1];
+  $("view").setAttribute("data-view", current);
+  views[current]().then(function (html) { $("view").innerHTML = html; decorateView(); })
   .catch(function (e) { if (e.message !== "需要登录") bar(e.message, true); }); }
 Array.prototype.forEach.call(document.querySelectorAll("#tabs button"), function (btn) {
   btn.addEventListener("click", function () {
-    Array.prototype.forEach.call(document.querySelectorAll("#tabs button"), function (b) { b.className = ""; });
+    Array.prototype.forEach.call(document.querySelectorAll("#tabs button"), function (b) { b.className = ""; b.removeAttribute("aria-current"); });
     btn.className = "on";
+    btn.setAttribute("aria-current", "page");
     current = btn.getAttribute("data-v");
     refresh();
   });

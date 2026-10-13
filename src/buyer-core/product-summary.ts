@@ -28,6 +28,7 @@
  * 平行词表，也不得把资料价呈现为商家报价。
  */
 
+import type { DestinationType } from "../handoff/destination.js";
 import type { ListingSearchResult } from "../discovery/catalog-source/kiwi-record.js";
 
 /** 价格类型（设计 §3.3）。 */
@@ -63,6 +64,9 @@ export interface MerchantProductSummary {
   /** 商家声明的结构化属性（规格/型号/材质等原文），不做换算与补全。 */
   attributes?: Record<string, string | number | boolean>;
   price: ProductPrice;
+  /** Merchant-declared destination metadata, not payment or negotiated-price proof. */
+  handoff_destination_types?: readonly DestinationType[];
+  handoff_destination_ref?: string;
   /** 起订量（商家声明）；未知时不设置——不得默认支持用户采购数量。 */
   moq?: number;
   /** 可供货状态声明（原文）；未知时不设置。 */
@@ -112,6 +116,12 @@ export function summarizeListing(result: ListingSearchResult): MerchantProductSu
       : {}),
     ...(hints?.lead_time_hint !== undefined && hints.lead_time_hint !== ""
       ? { lead_time_hint: hints.lead_time_hint }
+      : {}),
+    ...(listing.handoff_destination_types !== undefined
+      ? { handoff_destination_types: [...listing.handoff_destination_types] }
+      : {}),
+    ...(listing.handoff_destination_ref !== undefined
+      ? { handoff_destination_ref: listing.handoff_destination_ref }
       : {}),
     updated_at: listing.updated_at,
     basis: "merchant_listed",

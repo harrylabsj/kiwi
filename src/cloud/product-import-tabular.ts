@@ -34,6 +34,11 @@
  */
 
 import { inflateRawSync } from "node:zlib";
+import {
+  MarketplaceProductLinkError,
+  parseMarketplaceProductFields,
+  type MarketplaceProductFields,
+} from "../handoff/marketplace-product-link.js";
 
 import {
   parseProductTable,
@@ -74,7 +79,9 @@ export type TabularField =
   | "supply_note"
   | "updated_at"
   | "valid_until"
-  | "status";
+  | "status"
+  | "trade_platform"
+  | "platform_product_id";
 
 export interface TabularFieldSpec {
   field: TabularField;
@@ -96,7 +103,17 @@ export const TABULAR_FIELDS: readonly TabularFieldSpec[] = [
     field: "title",
     zh: "名称",
     required: true,
-    aliases: ["title", "name", "productname", "producttitle", "商品名称", "产品名称", "品名", "名称", "商品标题"],
+    aliases: [
+      "title",
+      "name",
+      "productname",
+      "producttitle",
+      "商品名称",
+      "产品名称",
+      "品名",
+      "名称",
+      "商品标题",
+    ],
   },
   {
     field: "currency",
@@ -108,7 +125,17 @@ export const TABULAR_FIELDS: readonly TabularFieldSpec[] = [
     field: "unit",
     zh: "计价单位",
     required: true,
-    aliases: ["unit", "units", "pricingunit", "unitofmeasure", "uom", "计价单位", "单位", "计量单位", "价格单位"],
+    aliases: [
+      "unit",
+      "units",
+      "pricingunit",
+      "unitofmeasure",
+      "uom",
+      "计价单位",
+      "单位",
+      "计量单位",
+      "价格单位",
+    ],
   },
   {
     field: "price",
@@ -138,19 +165,50 @@ export const TABULAR_FIELDS: readonly TabularFieldSpec[] = [
     field: "stock",
     zh: "库存",
     required: false,
-    aliases: ["stock", "stockqty", "inventory", "qty", "quantity", "库存", "库存数量", "可用库存", "剩余库存"],
+    aliases: [
+      "stock",
+      "stockqty",
+      "inventory",
+      "qty",
+      "quantity",
+      "库存",
+      "库存数量",
+      "可用库存",
+      "剩余库存",
+    ],
   },
   {
     field: "supply_note",
     zh: "供货说明",
     required: false,
-    aliases: ["supplynote", "note", "notes", "remark", "remarks", "供货说明", "供货备注", "备注", "说明", "商品说明", "描述", "description"],
+    aliases: [
+      "supplynote",
+      "note",
+      "notes",
+      "remark",
+      "remarks",
+      "供货说明",
+      "供货备注",
+      "备注",
+      "说明",
+      "商品说明",
+      "描述",
+      "description",
+    ],
   },
   {
     field: "updated_at",
     zh: "更新时间",
     required: false,
-    aliases: ["updatedat", "updatetime", "lastupdated", "更新时间", "数据时间", "修改时间", "最近更新"],
+    aliases: [
+      "updatedat",
+      "updatetime",
+      "lastupdated",
+      "更新时间",
+      "数据时间",
+      "修改时间",
+      "最近更新",
+    ],
   },
   {
     field: "valid_until",
@@ -177,6 +235,18 @@ export const TABULAR_FIELDS: readonly TabularFieldSpec[] = [
     zh: "状态",
     required: false,
     aliases: ["status", "listingstatus", "active", "状态", "商品状态", "销售状态", "上架状态"],
+  },
+  {
+    field: "trade_platform",
+    zh: "交易平台",
+    required: false,
+    aliases: ["tradeplatform", "交易平台", "商品交易平台"],
+  },
+  {
+    field: "platform_product_id",
+    zh: "平台商品ID",
+    required: false,
+    aliases: ["platformproductid", "平台商品id", "交易平台商品id"],
   },
 ];
 
@@ -580,6 +650,10 @@ function columnToIndex(ref: string): number {
 
 /** 解析第一张工作表为字符串矩阵；数值保持原文，日期样式数值转 ISO。 */
 export function parseXlsx(bytes: Uint8Array): string[][] {
+  return parseXlsxGrid(bytes).rows;
+}
+
+function parseXlsxGrid(bytes: Uint8Array): { rows: string[][]; nonTextCells: ReadonlySet<string> } {
   if (bytes.length > TABULAR_IMPORT_MAX_BYTES) {
     throw new TabularImportError("LIMIT_BYTES", `文件超过上限 ${TABULAR_IMPORT_MAX_BYTES} 字节`);
   }
@@ -594,6 +668,7 @@ export function parseXlsx(bytes: Uint8Array): string[][] {
   const xml = new TextDecoder().decode(sheetXml);
 
   const rows: string[][] = [];
+  const nonTextCells = new Set<string>();
   const rowRe = /<row[^>]*\br="(\d+)"[^>]*>([\s\S]*?)<\/row>|<row[^>]*\/>/g;
   let rowMatch: RegExpExecArray | null;
   while ((rowMatch = rowRe.exec(xml)) !== null) {
@@ -601,6 +676,7 @@ export function parseXlsx(bytes: Uint8Array): string[][] {
       throw new TabularImportError("LIMIT_ROWS", `数据行超过上限 ${TABULAR_IMPORT_MAX_ROWS} 行`);
     }
     const cells: string[] = [];
+    const rowNonText: number[] = [];
     const body = rowMatch[2] ?? "";
     const cellRe = /<c([^>]*)(?:\/>|>([\s\S]*?)<\/c>)/g;
     let cellMatch: RegExpExecArray | null;
@@ -621,13 +697,20 @@ export function parseXlsx(bytes: Uint8Array): string[][] {
       }
       const value = readCellValue(inner, type, style, shared, dateStyles);
       cells[column] = value;
+      const sharedIndex = /<v>([\s\S]*?)<\/v>/.exec(inner)?.[1] ?? "";
+      const textCell =
+        type === "inlineStr" || type === "str" || (type === "s" && /^[0-9]+$/.test(sharedIndex));
+      if (value !== "" && (!textCell || /<f[\s/>]/.test(inner))) rowNonText.push(column);
     }
     // cells 是稀疏数组（按列号落位）；map/forEach 会跳过空洞导致错位，
     // 必须先稠密化。
     const normalized = Array.from({ length: cells.length }, (_, index) => cells[index] ?? "");
-    rows.push(normalized.slice(0, TABULAR_IMPORT_MAX_COLUMNS));
+    if (!normalized.every((cell) => cell === "")) {
+      for (const column of rowNonText) nonTextCells.add(`${rows.length}:${column}`);
+      rows.push(normalized.slice(0, TABULAR_IMPORT_MAX_COLUMNS));
+    }
   }
-  return rows.filter((line) => !line.every((cell) => cell === ""));
+  return { rows, nonTextCells };
 }
 
 function resolveFirstSheetPath(reader: ZipReader): string {
@@ -718,7 +801,8 @@ function readDateStyles(xml: Uint8Array | undefined): Set<number> {
     if (
       (numFmtId >= 14 && numFmtId <= 22) ||
       (numFmtId >= 45 && numFmtId <= 47) ||
-      (customFormats.get(numFmtId) ?? "").replace(/\[[^\]]*\]|"[^"]*"/g, "").match(/[ymdhs]/i) !== null
+      (customFormats.get(numFmtId) ?? "").replace(/\[[^\]]*\]|"[^"]*"/g, "").match(/[ymdhs]/i) !==
+        null
     ) {
       styles.add(styleIndex);
     }
@@ -742,34 +826,40 @@ export const TABULAR_TEMPLATE_HEADER: readonly string[] = [
   "更新时间/updated_at",
   "有效期至/valid_until",
   "状态/status",
+  "交易平台/trade_platform",
+  "平台商品ID/platform_product_id",
 ];
 
 export const TABULAR_TEMPLATE_EXAMPLE_ROWS: readonly string[][] = [
   [
     "DEMO-001",
-    "不锈钢保温杯 500ml",
+    "示例保温杯（请替换为实际商品）",
     "CNY",
     "piece",
     "29.90",
     "50",
     "2000",
-    "现货，下单后 3 个工作日发货",
+    "仅格式示例；平台商品ID不代表已核实商品，请替换",
     "",
     "2027-12-31",
     "在售",
+    "京东",
+    "12345678901234567890",
   ],
   [
     "DEMO-002",
-    "瓦楞纸箱 五层加强",
+    "示例纸箱（请替换为实际商品）",
     "CNY",
     "box",
     "3.50",
     "100",
     "8000",
-    "按订单生产，约 7 天交期",
+    "仅格式示例；平台商品ID不代表已核实商品，请替换",
     "2026-09-01",
     "2028-06-30",
     "在售",
+    "淘宝",
+    "98765432101234567890",
   ],
 ];
 
@@ -878,7 +968,7 @@ function sheetXmlFromGrid(rows: readonly (readonly string[])[]): string {
         .map((cell, columnIndex) =>
           cell === ""
             ? ""
-            : `<c r="${columnName(columnIndex)}${rowIndex + 1}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(cell)}</t></is></c>`,
+            : `<c r="${columnName(columnIndex)}${rowIndex + 1}"${columnIndex === 12 ? ' s="1"' : ""} t="inlineStr"><is><t xml:space="preserve">${xmlEscape(cell)}</t></is></c>`,
         )
         .join("");
       return `<row r="${rowIndex + 1}">${cells}</row>`;
@@ -886,12 +976,13 @@ function sheetXmlFromGrid(rows: readonly (readonly string[])[]): string {
     .join("");
   const cols = Array.from({ length: columnCount }, (_, index) => {
     const width = index === 0 || index === 7 ? 260 : 110;
-    return `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`;
+    return `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"${index === 12 ? ' style="1"' : ""}/>`;
   }).join("");
   return (
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
-    `<cols>${cols}</cols><sheetData>${body}</sheetData></worksheet>`
+    `<cols>${cols}</cols><sheetData>${body}</sheetData>` +
+    `<dataValidations count="1"><dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="L2:L5001"><formula1>"京东,淘宝,天猫"</formula1></dataValidation></dataValidations></worksheet>`
   );
 }
 
@@ -918,6 +1009,7 @@ export function renderImportTemplateXlsx(): Uint8Array {
         `<Default Extension="xml" ContentType="application/xml"/>` +
         `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
         `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+        `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>` +
         `</Types>`,
     },
     {
@@ -942,9 +1034,21 @@ export function renderImportTemplateXlsx(): Uint8Array {
         `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
         `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
         `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>` +
+        `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
         `</Relationships>`,
     },
     { name: "xl/worksheets/sheet1.xml", content: sheetXmlFromGrid(grid) },
+    {
+      name: "xl/styles.xml",
+      content:
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+        `<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>` +
+        `<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>` +
+        `<borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0"/></cellStyleXfs>` +
+        `<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>` +
+        `<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
+    },
   ]);
 }
 
@@ -1002,13 +1106,26 @@ export function convertTabularImport(
   const now = options.now ?? (() => new Date());
   const errors: TabularImportIssue[] = [];
   let grid: string[][];
+  let nonTextCells: ReadonlySet<string> = new Set();
   try {
-    grid = input.kind === "csv" ? parseCsv(input.text) : parseXlsx(input.bytes);
+    if (input.kind === "csv") grid = parseCsv(input.text);
+    else {
+      const parsed = parseXlsxGrid(input.bytes);
+      grid = parsed.rows;
+      nonTextCells = parsed.nonTextCells;
+    }
   } catch (err) {
     if (err instanceof TabularImportError) {
       return {
         ok: false,
-        report: { format: input.kind, rows: 0, header_mapping: [], unrecognized_columns: [], defaulted_fields: [], skipped_empty_rows: 0 },
+        report: {
+          format: input.kind,
+          rows: 0,
+          header_mapping: [],
+          unrecognized_columns: [],
+          defaulted_fields: [],
+          skipped_empty_rows: 0,
+        },
         errors: [{ code: err.code, message: err.message }],
       };
     }
@@ -1025,10 +1142,18 @@ export function convertTabularImport(
 
   const headerRow = grid[0];
   if (headerRow === undefined || headerRow.every((cell) => cell.trim() === "")) {
-    return { ok: false, report, errors: [{ code: "EMPTY_TABLE", message: "表格是空的：第一行应为表头" }] };
+    return {
+      ok: false,
+      report,
+      errors: [{ code: "EMPTY_TABLE", message: "表格是空的：第一行应为表头" }],
+    };
   }
   if (grid.length - 1 <= 0) {
-    return { ok: false, report, errors: [{ code: "EMPTY_TABLE", message: "表格只有表头，没有商品行" }] };
+    return {
+      ok: false,
+      report,
+      errors: [{ code: "EMPTY_TABLE", message: "表格只有表头，没有商品行" }],
+    };
   }
   if (headerRow.length > TABULAR_IMPORT_MAX_COLUMNS) {
     return {
@@ -1135,52 +1260,107 @@ export function convertTabularImport(
 
     const sku = cellOf(row, "sku");
     if (sku === "") {
-      errors.push({ row: rowNumber, field: "sku", code: "EMPTY_REQUIRED", message: `第 ${rowNumber} 行商品编号（sku）为空` });
+      errors.push({
+        row: rowNumber,
+        field: "sku",
+        code: "EMPTY_REQUIRED",
+        message: `第 ${rowNumber} 行商品编号（sku）为空`,
+      });
     }
     const title = cellOf(row, "title");
     if (title === "") {
-      errors.push({ row: rowNumber, field: "title", code: "EMPTY_REQUIRED", message: `第 ${rowNumber} 行名称（title）为空` });
+      errors.push({
+        row: rowNumber,
+        field: "title",
+        code: "EMPTY_REQUIRED",
+        message: `第 ${rowNumber} 行名称（title）为空`,
+      });
     }
     const unit = cellOf(row, "unit");
     if (unit === "") {
-      errors.push({ row: rowNumber, field: "unit", code: "EMPTY_REQUIRED", message: `第 ${rowNumber} 行计价单位（unit）为空` });
+      errors.push({
+        row: rowNumber,
+        field: "unit",
+        code: "EMPTY_REQUIRED",
+        message: `第 ${rowNumber} 行计价单位（unit）为空`,
+      });
     }
 
     const priceRaw = cellOf(row, "price");
     const price = parseCellNumber(priceRaw);
     if (priceRaw === "") {
-      errors.push({ row: rowNumber, field: "price", code: "EMPTY_REQUIRED", message: `第 ${rowNumber} 行单价（price）为空：价格必须由商家提供，不能缺省` });
+      errors.push({
+        row: rowNumber,
+        field: "price",
+        code: "EMPTY_REQUIRED",
+        message: `第 ${rowNumber} 行单价（price）为空：价格必须由商家提供，不能缺省`,
+      });
     } else if (Number.isNaN(price) || price <= 0) {
-      errors.push({ row: rowNumber, field: "price", code: "BAD_NUMBER", message: `第 ${rowNumber} 行单价不是正数（收到「${priceRaw}」）` });
+      errors.push({
+        row: rowNumber,
+        field: "price",
+        code: "BAD_NUMBER",
+        message: `第 ${rowNumber} 行单价不是正数（收到「${priceRaw}」）`,
+      });
     }
 
     const currencyRaw = cellOf(row, "currency");
     const currency = parseCellCurrency(currencyRaw);
     if (currencyRaw === "") {
-      errors.push({ row: rowNumber, field: "currency", code: "EMPTY_REQUIRED", message: `第 ${rowNumber} 行币种为空` });
+      errors.push({
+        row: rowNumber,
+        field: "currency",
+        code: "EMPTY_REQUIRED",
+        message: `第 ${rowNumber} 行币种为空`,
+      });
     } else if (currency === "") {
-      errors.push({ row: rowNumber, field: "currency", code: "BAD_CURRENCY", message: `第 ${rowNumber} 行币种无法识别（收到「${currencyRaw}」）：请填三字母代码（如 CNY/USD）或常见中文名（人民币/美元/欧元/港币/日元/英镑）` });
+      errors.push({
+        row: rowNumber,
+        field: "currency",
+        code: "BAD_CURRENCY",
+        message: `第 ${rowNumber} 行币种无法识别（收到「${currencyRaw}」）：请填三字母代码（如 CNY/USD）或常见中文名（人民币/美元/欧元/港币/日元/英镑）`,
+      });
     }
 
     const validRaw = cellOf(row, "valid_until");
     const validUntil = parseCellDate(validRaw, { endOfDay: true });
     if (validRaw === "") {
-      errors.push({ row: rowNumber, field: "valid_until", code: "EMPTY_REQUIRED", message: `第 ${rowNumber} 行有效期至为空：请填商品可报价的截止日期（如 2027-12-31）` });
+      errors.push({
+        row: rowNumber,
+        field: "valid_until",
+        code: "EMPTY_REQUIRED",
+        message: `第 ${rowNumber} 行有效期至为空：请填商品可报价的截止日期（如 2027-12-31）`,
+      });
     } else if (validUntil === "") {
-      errors.push({ row: rowNumber, field: "valid_until", code: "BAD_DATE", message: `第 ${rowNumber} 行有效期不是合法日期（收到「${validRaw}」）：请用 2027-12-31、2027/12/31 或 2027年12月31日 格式` });
+      errors.push({
+        row: rowNumber,
+        field: "valid_until",
+        code: "BAD_DATE",
+        message: `第 ${rowNumber} 行有效期不是合法日期（收到「${validRaw}」）：请用 2027-12-31、2027/12/31 或 2027年12月31日 格式`,
+      });
     }
 
     const updatedRaw = cellOf(row, "updated_at");
     const updatedAt =
       updatedRaw === "" ? now().toISOString() : parseCellDate(updatedRaw, { endOfDay: false });
     if (updatedRaw !== "" && updatedAt === "") {
-      errors.push({ row: rowNumber, field: "updated_at", code: "BAD_DATE", message: `第 ${rowNumber} 行更新时间不是合法日期（收到「${updatedRaw}」）：留空将自动使用导入时间` });
+      errors.push({
+        row: rowNumber,
+        field: "updated_at",
+        code: "BAD_DATE",
+        message: `第 ${rowNumber} 行更新时间不是合法日期（收到「${updatedRaw}」）：留空将自动使用导入时间`,
+      });
     }
 
     const statusRaw = cellOf(row, "status");
     const status = statusRaw === "" ? "active" : parseCellStatus(statusRaw);
     if (statusRaw !== "" && status === "") {
-      errors.push({ row: rowNumber, field: "status", code: "BAD_STATUS", message: `第 ${rowNumber} 行状态无法识别（收到「${statusRaw}」）：留空=在售；或填 在售/暂停` });
+      errors.push({
+        row: rowNumber,
+        field: "status",
+        code: "BAD_STATUS",
+        message: `第 ${rowNumber} 行状态无法识别（收到「${statusRaw}」）：留空=在售；或填 在售/暂停`,
+      });
     }
 
     const moqRaw = cellOf(row, "moq");
@@ -1188,7 +1368,12 @@ export function convertTabularImport(
     if (moqRaw !== "") {
       const parsed = parseCellNumber(moqRaw);
       if (Number.isNaN(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
-        errors.push({ row: rowNumber, field: "moq", code: "BAD_NUMBER", message: `第 ${rowNumber} 行起订量必须是正整数（收到「${moqRaw}」）` });
+        errors.push({
+          row: rowNumber,
+          field: "moq",
+          code: "BAD_NUMBER",
+          message: `第 ${rowNumber} 行起订量必须是正整数（收到「${moqRaw}」）`,
+        });
       } else {
         moq = parsed;
       }
@@ -1199,16 +1384,57 @@ export function convertTabularImport(
     if (stockRaw !== "") {
       const parsed = parseCellNumber(stockRaw);
       if (Number.isNaN(parsed) || !Number.isInteger(parsed) || parsed < 0) {
-        errors.push({ row: rowNumber, field: "stock", code: "BAD_NUMBER", message: `第 ${rowNumber} 行库存必须是非负整数（收到「${stockRaw}」）；不确定就留空，不要填 0 冒充` });
+        errors.push({
+          row: rowNumber,
+          field: "stock",
+          code: "BAD_NUMBER",
+          message: `第 ${rowNumber} 行库存必须是非负整数（收到「${stockRaw}」）；不确定就留空，不要填 0 冒充`,
+        });
       } else {
         stock = parsed;
+      }
+    }
+    let tradeFields: MarketplaceProductFields = {};
+    const platformRaw = cellOf(row, "trade_platform");
+    const productIdRaw = cellOf(row, "platform_product_id");
+    const productIdColumn = columnIndex.get("platform_product_id");
+    if (
+      productIdRaw !== "" &&
+      productIdColumn !== undefined &&
+      nonTextCells.has(`${index}:${productIdColumn}`)
+    ) {
+      errors.push({
+        row: rowNumber,
+        field: "platform_product_id",
+        code: "BAD_PLATFORM_PRODUCT_ID_TYPE",
+        message: `第 ${rowNumber} 行平台商品ID必须是文本单元格，不能用数字或公式；请从平台重新复制准确ID到文本列`,
+      });
+    } else {
+      try {
+        tradeFields = parseMarketplaceProductFields({
+          trade_platform: platformRaw,
+          platform_product_id: productIdRaw,
+        });
+      } catch (error) {
+        if (!(error instanceof MarketplaceProductLinkError)) throw error;
+        errors.push({
+          row: rowNumber,
+          field: error.field,
+          code: "BAD_PRODUCT_TRADE_ENTRY",
+          message: `第 ${rowNumber} 行：${error.message}`,
+        });
       }
     }
 
     if (sku !== "") {
       const firstRow = skuRows.get(sku);
       if (firstRow !== undefined) {
-        errors.push({ row: rowNumber, field: "sku", code: "DUPLICATE_SKU", message: `第 ${rowNumber} 行商品编号「${sku}」与第 ${firstRow} 行重复：同一 SKU 只能出现一次` });
+        errors.push({
+          row: rowNumber,
+          field: "sku",
+          code: "DUPLICATE_SKU",
+          message: `第 ${rowNumber} 行商品编号「${sku}」与第 ${firstRow} 行重复：同一 SKU 只能出现一次`,
+        });
       } else {
         skuRows.set(sku, rowNumber);
       }
@@ -1226,6 +1452,7 @@ export function convertTabularImport(
       updated_at: updatedAt === "" ? now().toISOString() : updatedAt,
       valid_until: validUntil === "" ? validRaw : validUntil,
       status: status === "" ? "active" : status,
+      ...tradeFields,
     });
   }
 
@@ -1248,7 +1475,11 @@ export function convertTabularImport(
     parseProductTable(table, "tabular import");
   } catch (err) {
     const message = err instanceof ProductTableError ? err.message : String(err);
-    return { ok: false, report, errors: [{ code: "TABLE_INVALID", message: `转换结果未通过商品表校验：${message}` }] };
+    return {
+      ok: false,
+      report,
+      errors: [{ code: "TABLE_INVALID", message: `转换结果未通过商品表校验：${message}` }],
+    };
   }
   return { ok: true, table, report, errors: [] };
 }

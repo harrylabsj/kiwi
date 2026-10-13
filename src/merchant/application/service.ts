@@ -75,6 +75,10 @@ export interface ApprovalPage {
 
 /** BD §13.2 的最小公开商品投影（成本/底价在私有策略区，绝不经此通道）。 */
 export interface MerchantProductProjection {
+  /** Public marketplace product page; never evidence of payment or negotiated price. */
+  trade_platform?: "jd" | "taobao" | "tmall";
+  platform_product_id?: string;
+  platform_product_url?: string;
   sku: string;
   title: string | null;
   currency: string;

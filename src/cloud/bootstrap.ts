@@ -83,6 +83,7 @@ import { calculateWorkbenchQuote } from "../merchant/quote-calculator.js";
 import { WORKBENCH_CURRENCY_TABLE_VERSION } from "../merchant/application/money.js";
 import { OnboardingStore } from "./onboarding/store.js";
 import { CatalogClient } from "./catalog-client.js";
+import { buildMarketplaceProductLink } from "../handoff/marketplace-product-link.js";
 import { createEnrollmentChallengeResponder, readEnrollmentStore } from "./binding/enrollment-challenge.js";
 import { startEnrollmentHeartbeat, type EnrollmentHeartbeat } from "./binding/enrollment-heartbeat.js";
 import {
@@ -93,6 +94,7 @@ import {
 import {
   ManagementError,
   type MerchantProductPage,
+  type MerchantProductProjection,
   type PageQuery,
 } from "../merchant/application/service.js";
 import {
@@ -123,6 +125,7 @@ import {
   loadProductTableSnapshot,
   ProductTableError,
   type CloudProductSourceHandle,
+  type CloudProductRecord,
 } from "./product-source.js";
 import { runReadiness, type ReadinessCheckResult, type ReadinessReport } from "./readiness.js";
 import { loadOrCreateMerchantIdentity } from "./merchant-identity.js";
@@ -131,6 +134,31 @@ import { createFileListingPublicationService } from "./file-listing-publication.
 
 /** 云端 A2A 端点路径（设计 §8.2；与自托管根路径不同，便于同端口分发）。 */
 export const CLOUD_A2A_PATH = "/a2a";
+
+/** Public management projection of an already validated file-product record. */
+export function projectFileProductRecord(record: CloudProductRecord, nowMs: number): MerchantProductProjection {
+  return {
+    sku: record.sku,
+    title: record.title,
+    currency: record.currency,
+    price: record.price,
+    price_unit: record.unit,
+    ...(record.trade_platform === undefined ? {} : { trade_platform: record.trade_platform }),
+    ...(record.platform_product_id === undefined ? {} : { platform_product_id: record.platform_product_id }),
+    ...(record.trade_platform === undefined ? {} : {
+      platform_product_url: buildMarketplaceProductLink(record.trade_platform, record.platform_product_id),
+    }),
+    min_order_qty: record.moq ?? null,
+    valid_until: record.valid_until,
+    updated_at: record.updated_at,
+    status:
+      record.status === "paused"
+        ? "paused"
+        : Date.parse(record.valid_until) < nowMs
+          ? "expired"
+          : "active",
+  };
+}
 
 export interface CloudBootstrapOptions {
   env?: Record<string, string | undefined>;
@@ -924,22 +952,7 @@ export async function bootstrapCloudRuntime(
                   : 0;
               const limit = Math.min(Math.max(query.limit ?? 50, 1), 100);
               const nowMs = Date.now();
-              const items = records.slice(offset, offset + limit).map((record) => ({
-                sku: record.sku,
-                title: record.title,
-                currency: record.currency,
-                price: record.price,
-                price_unit: record.unit,
-                min_order_qty: record.moq ?? null,
-                valid_until: record.valid_until,
-                updated_at: record.updated_at,
-                status:
-                  record.status === "paused"
-                    ? "paused"
-                    : Date.parse(record.valid_until) < nowMs
-                      ? "expired"
-                      : "active",
-              }));
+              const items = records.slice(offset, offset + limit).map((record) => projectFileProductRecord(record, nowMs));
               return {
                 items,
                 next_cursor: offset + limit < records.length ? String(offset + limit) : null,

@@ -40,6 +40,42 @@ const MINIMAL_ZH_ALIASES = [
 ].join("\n");
 
 describe("convertTabularImport — 表头识别", () => {
+  it("交易平台中文列映射并保留超安全整数范围的ID原文", () => {
+    const result = convertCsv(
+      "sku,title,currency,unit,price,valid_until,交易平台,平台商品ID\nA-1,合成测试,CNY,piece,1,2027-12-31,天猫,90071992547409931234567890",
+    );
+    expect(result.ok).toBe(true);
+    expect(result.table?.products[0]).toMatchObject({
+      trade_platform: "tmall",
+      platform_product_id: "90071992547409931234567890",
+    });
+  });
+
+  it("旧列和新两列都空保持兼容", () => {
+    const result = convertCsv(MINIMAL_EN + "\nB-1,Other,CNY,piece,1,2027-12-31");
+    expect(result.ok).toBe(true);
+    expect(result.table?.products[0]?.trade_platform).toBeUndefined();
+    const empty = convertCsv(
+      "sku,title,currency,unit,price,valid_until,trade_platform,platform_product_id\nA-1,Test,CNY,piece,1,2027-12-31,,",
+    );
+    expect(empty.ok).toBe(true);
+    expect(empty.table?.products[0]?.platform_product_id).toBeUndefined();
+  });
+
+  it.each(["jd,", ",123", "jd,1e20", "jd,１２３", "jd,123?id=456", "constructor,123"])(
+    "一行交易入口非法拒绝整个导入：%s",
+    (trade) => {
+      const result = convertCsv(
+        `sku,title,currency,unit,price,valid_until,trade_platform,platform_product_id\nA-1,Good,CNY,piece,1,2027-12-31,jd,123\nB-1,Bad,CNY,piece,1,2027-12-31,${trade}`,
+      );
+      expect(result.ok).toBe(false);
+      expect(result.table).toBeUndefined();
+      expect(result.errors.some((e) => e.code === "BAD_PRODUCT_TRADE_ENTRY" && e.row === 3)).toBe(
+        true,
+      );
+    },
+  );
+
   it("英文表头（shopping-cli 独立形态同名列）可导入", () => {
     const result = convertCsv(MINIMAL_EN);
     expect(result.ok).toBe(true);
@@ -76,10 +112,9 @@ describe("convertTabularImport — 表头识别", () => {
   });
 
   it("表头归一化容忍大小写/空格/全半角标点（如「单价(元)」「Unit Price」）", () => {
-    const csv = [
-      "SKU,名称,币种,Unit Price,单位,有效期(至)",
-      "A-1,杯子,CNY,9.9,个,2027-12-31",
-    ].join("\n");
+    const csv = ["SKU,名称,币种,Unit Price,单位,有效期(至)", "A-1,杯子,CNY,9.9,个,2027-12-31"].join(
+      "\n",
+    );
     const result = convertCsv(csv);
     expect(result.ok).toBe(true);
     expect(result.table?.products[0]?.price).toBe(9.9);
@@ -163,7 +198,9 @@ describe("convertTabularImport — 值校验", () => {
   });
 
   it("单价容忍千分位与货币符号前缀", () => {
-    const csv = [HEADER.replace("price", "单价"), "A-1,杯子,CNY,个,\"1,299.00\",2027-12-31"].join("\n");
+    const csv = [HEADER.replace("price", "单价"), 'A-1,杯子,CNY,个,"1,299.00",2027-12-31'].join(
+      "\n",
+    );
     const result = convertCsv(csv);
     expect(result.ok).toBe(true);
     expect(result.table?.products[0]?.price).toBe(1299);
@@ -177,7 +214,10 @@ describe("convertTabularImport — 值校验", () => {
       expect(result.errors.some((e) => e.code === "BAD_DATE" && e.field === "valid_until"), bad).toBe(true);
     }
     const updated = convertCsv(
-      ["sku,title,currency,unit,price,valid_until,updated_at", "A-1,杯子,CNY,个,9.9,2027-12-31,上周"].join("\n"),
+      [
+        "sku,title,currency,unit,price,valid_until,updated_at",
+        "A-1,杯子,CNY,个,9.9,2027-12-31,上周",
+      ].join("\n"),
     );
     expect(updated.ok).toBe(false);
     expect(updated.errors.some((e) => e.code === "BAD_DATE" && e.field === "updated_at")).toBe(true);
@@ -257,7 +297,7 @@ describe("convertTabularImport — 成本列拒绝与空表/上限", () => {
 
 describe("parseCsv — RFC 4180 风格", () => {
   it("引号内逗号、双引号转义、CRLF、BOM", () => {
-    const text = "\ufeffa,b\r\n\"x,\"\"y\"\"\",z\r\n";
+    const text = '\ufeffa,b\r\n"x,""y""",z\r\n';
     expect(parseCsv(text)).toEqual([
       ["a", "b"],
       ['x,"y"', "z"],
@@ -266,6 +306,69 @@ describe("parseCsv — RFC 4180 风格", () => {
 });
 
 describe("xlsx 模板 roundtrip 与日期序列", () => {
+  function tradeXlsx(cell: string): Uint8Array {
+    const header = [
+      "sku",
+      "title",
+      "currency",
+      "unit",
+      "price",
+      "valid_until",
+      "trade_platform",
+      "platform_product_id",
+    ];
+    const values = ["A-1", "Synthetic", "CNY", "piece", "1", "2027-12-31", "tmall"];
+    const textCells = (cells: string[], row: number): string =>
+      cells
+        .map(
+          (v, i) =>
+            `<c r="${String.fromCharCode(65 + i)}${row}" t="inlineStr"><is><t>${v}</t></is></c>`,
+        )
+        .join("");
+    const sheet = `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1">${textCells(header, 1)}</row><row r="2">${textCells(values, 2)}${cell}</row></sheetData></worksheet>`;
+    return buildTestXlsx([
+      { name: "[Content_Types].xml", content: contentTypes() },
+      { name: "_rels/.rels", content: rels() },
+      { name: "xl/workbook.xml", content: workbook() },
+      { name: "xl/_rels/workbook.xml.rels", content: workbookRels() },
+      { name: "xl/worksheets/sheet1.xml", content: sheet },
+    ]);
+  }
+
+  it("xlsx文本ID不丢长整数；数字或公式单元格拒绝而不是恢复猜测ID", () => {
+    const text = convertTabularImport(
+      {
+        kind: "xlsx",
+        bytes: tradeXlsx('<c r="H2" t="inlineStr"><is><t>90071992547409931234567890</t></is></c>'),
+      },
+      OPTIONS,
+    );
+    expect(text.ok).toBe(true);
+    expect(text.table?.products[0]?.platform_product_id).toBe("90071992547409931234567890");
+    for (const cell of [
+      '<c r="H2"><v>9007199254740992</v></c>',
+      '<c r="H2"><v>1.2345E+20</v></c>',
+      '<c r="H2" t="str"><f>123</f><v>123</v></c>',
+      '<c r="H2" t="str"><f/><v>123</v></c>',
+    ]) {
+      const invalid = convertTabularImport({ kind: "xlsx", bytes: tradeXlsx(cell) }, OPTIONS);
+      expect(invalid.ok).toBe(false);
+      expect(invalid.table).toBeUndefined();
+      expect(invalid.errors[0]?.code).toBe("BAD_PLATFORM_PRODUCT_ID_TYPE");
+    }
+  });
+
+  it("xlsx模板ID列为文本样式且平台提供三项下拉", () => {
+    const bytes = Buffer.from(renderImportTemplateXlsx());
+    // Stored XML is deliberately readable in the existing minimal ZIP generator.
+    const xml = bytes.toString("utf8");
+    expect(xml).toContain('<col min="13" max="13"');
+    expect(xml).toContain('style="1"');
+    expect(xml).toContain('numFmtId="49"');
+    expect(xml).toContain('sqref="L2:L5001"');
+    expect(xml).toContain('"京东,淘宝,天猫"');
+  });
+
   it("生成的 xlsx 模板能被解析并成功转换", () => {
     const bytes = renderImportTemplateXlsx();
     const grid = parseXlsx(bytes);
@@ -274,7 +377,9 @@ describe("xlsx 模板 roundtrip 与日期序列", () => {
     expect(result.ok).toBe(true);
     expect(result.report.format).toBe("xlsx");
     expect(result.table?.products).toHaveLength(2);
-    expect(result.table?.products[0]?.supply_note).toBe("现货，下单后 3 个工作日发货");
+    expect(result.table?.products[0]?.supply_note).toContain("仅格式示例");
+    expect(grid[0]).toHaveLength(13);
+    expect(result.table?.products[0]?.platform_product_id).toBe("12345678901234567890");
     expect(result.table?.products[1]?.updated_at).toBe("2026-09-01T00:00:00.000Z");
   });
 
@@ -299,7 +404,10 @@ describe("xlsx 模板 roundtrip 与日期序列", () => {
       { name: "_rels/.rels", content: rels() },
       { name: "xl/workbook.xml", content: workbook() },
       { name: "xl/_rels/workbook.xml.rels", content: workbookRels() },
-      { name: "xl/sharedStrings.xml", content: `<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="0" uniqueCount="0"></sst>` },
+      {
+        name: "xl/sharedStrings.xml",
+        content: `<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="0" uniqueCount="0"></sst>`,
+      },
       { name: "xl/styles.xml", content: styles },
       { name: "xl/worksheets/sheet1.xml", content: sheet },
     ]);
@@ -338,7 +446,6 @@ describe("xlsx 模板 roundtrip 与日期序列", () => {
     expect(result.errors[0]?.code).toBe("PARSE_ERROR");
   });
 });
-
 
 describe("xlsx zip 炸弹防护（验收修复）", () => {
   const SHEET_MINIMAL =
@@ -385,7 +492,11 @@ describe("xlsx zip 炸弹防护（验收修复）", () => {
 
   it("声明大小与实际解压不符 → ZIP_BOMB 拒绝", () => {
     const bytes = buildTestXlsx(
-      baseEntries({ deflate: true, content: "x".repeat(1024 * 1024), declaredUncompressedSize: 100 }),
+      baseEntries({
+        deflate: true,
+        content: "x".repeat(1024 * 1024),
+        declaredUncompressedSize: 100,
+      }),
     );
     const result = convertTabularImport({ kind: "xlsx", bytes }, OPTIONS);
     expect(result.ok).toBe(false);
@@ -419,8 +530,16 @@ describe("xlsx zip 炸弹防护（验收修复）", () => {
       { name: "_rels/.rels", content: rels() },
       { name: "xl/workbook.xml", content: workbook() },
       { name: "xl/_rels/workbook.xml.rels", content: workbookRels() },
-      { name: "xl/sharedStrings.xml", content: `<sst>${"<si><t>x</t></si>".repeat(1024)}${"x".repeat(half - 20480)}</sst>`, deflate: true },
-      { name: "xl/worksheets/sheet1.xml", content: SHEET_MINIMAL + `<!--${"y".repeat(half)}-->`, deflate: true },
+      {
+        name: "xl/sharedStrings.xml",
+        content: `<sst>${"<si><t>x</t></si>".repeat(1024)}${"x".repeat(half - 20480)}</sst>`,
+        deflate: true,
+      },
+      {
+        name: "xl/worksheets/sheet1.xml",
+        content: SHEET_MINIMAL + `<!--${"y".repeat(half)}-->`,
+        deflate: true,
+      },
     ]);
     const result = convertTabularImport({ kind: "xlsx", bytes }, OPTIONS);
     expect(result.ok).toBe(false);

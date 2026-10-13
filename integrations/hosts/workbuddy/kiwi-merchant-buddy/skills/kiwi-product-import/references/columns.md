@@ -3,7 +3,7 @@
 本文件与 Kiwi 工作台「商品与导入」页的下载模板、以及 Kiwi 仓 `src/cloud/product-import-tabular.ts` 的列定义保持一致；不一致时以后者与工作台模板为准。生成 CSV 时**列名用「中文/字段」双写**（与模板逐字一致），顺序如下：
 
 ```csv
-商品编号/sku,名称/title,币种/currency,计价单位/unit,单价/price,起订量/moq,库存/stock,供货说明/supply_note,更新时间/updated_at,有效期至/valid_until,状态/status
+商品编号/sku,名称/title,币种/currency,计价单位/unit,单价/price,起订量/moq,库存/stock,供货说明/supply_note,更新时间/updated_at,有效期至/valid_until,状态/status,交易平台/trade_platform,平台商品ID/platform_product_id
 ```
 
 ## 列说明
@@ -21,6 +21,8 @@
 | 更新时间/updated_at | 否 | `YYYY-MM-DD` 或 ISO 时间；**留空自动取导入时刻** | 更新时间、数据时间、修改时间、最近更新、updated at |
 | 有效期至/valid_until | 是 | `YYYY-MM-DD`（也接受 `2027/12/31`、`2027年12月31日`；Excel 日期单元格可识别）；到期后停止自动报价 | 有效期、有效期至、有效期限、截止日期、到期日、valid until |
 | 状态/status | 否 | 在售 / 暂停（也接受 active/paused、1/0）；**留空=在售** | 状态、商品状态、销售状态、上架状态、active |
+| 交易平台/trade_platform | 否 | 京东 / 淘宝 / 天猫（也接受 jd/taobao/tmall）；**必须与平台商品ID 成对填写** | 交易平台、商品交易平台、trade platform |
+| 平台商品ID/platform_product_id | 否 | ASCII 正整数字符串（如 `100301440825`）；**必须是文本单元格，不要填成数字或公式**（超长 ID 转换会丢精度），也不要填 URL | 平台商品ID、交易平台商品ID、platform product id |
 
 ## 会被整表拒绝的情况（服务端规则，生成文件时就应避免）
 
@@ -29,6 +31,7 @@
 - 单价为空、非数字或 ≤ 0；起订量非正整数；库存非非负整数。
 - 日期无法解析（如 `2027-02-30`、`明年春天`）。
 - 币种无法识别（如 `火星币`）。
+- 交易平台或平台商品ID **只填了其中一个**（两者必须成对）；平台不在京东/淘宝/天猫；平台商品ID不是纯数字（含 `1e20`、URL、公式、前后空格、全角数字等）。
 - 同一 SKU 出现多次（错误信息会给出两处行号）。
 
 ## 上限
