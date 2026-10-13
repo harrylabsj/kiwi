@@ -28,6 +28,62 @@ function awaitConfig(root) {
   return git(root, ["show", "e703bc0d67e24a98c417274e46f37d210eff86ac:.npmrc"]) + "\n";
 }
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const CONCRETE_SEMVER =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+export function assertLockedPiPackages(root, installedRoot) {
+  const rootLock = json(path.join(root, "package-lock.json")).packages,
+    stageLock = json(path.join(root, "build-inputs/release0124-stage/package-lock.json")).packages;
+  const rows = inventory(installedRoot).filter((r) =>
+    /(?:^|\/)@earendil-works\/pi-[^/]+\/package\.json$/.test(r.path),
+  );
+  const installedByLockPath = new Map(
+    rows.map((row) => [`node_modules/${row.path.replace(/\/package\.json$/, "")}`, row]),
+  );
+  const stagePiPaths = Object.keys(stageLock).filter((p) =>
+    /^node_modules\/(?:.*\/)?@earendil-works\/pi-[^/]+$/.test(p),
+  );
+  const rootPiPaths = Object.keys(rootLock).filter((p) =>
+    /^node_modules\/(?:.*\/)?@earendil-works\/pi-[^/]+$/.test(p),
+  );
+  if (stagePiPaths.length === 0) throw new Error("SHIPPING_PI_PACKAGE_MISSING");
+  if (
+    rootPiPaths.length !== stagePiPaths.length ||
+    rootPiPaths.some((p) => !stagePiPaths.includes(p))
+  )
+    throw new Error("SHIPPING_PI_LOCK_MISMATCH package-set");
+  for (const lockPath of stagePiPaths) {
+    const rootEntry = rootLock[lockPath],
+      stageEntry = stageLock[lockPath];
+    if (!rootEntry || !stageEntry)
+      throw new Error(`SHIPPING_PI_LOCK_ENTRY_MISSING ${lockPath}`);
+    for (const field of ["version", "integrity", "resolved"])
+      if (
+        typeof rootEntry[field] !== "string" ||
+        rootEntry[field].length === 0 ||
+        typeof stageEntry[field] !== "string" ||
+        stageEntry[field].length === 0 ||
+        rootEntry[field] !== stageEntry[field]
+      )
+        throw new Error(`SHIPPING_PI_LOCK_MISMATCH ${lockPath} ${field}`);
+    const row = installedByLockPath.get(lockPath);
+    if (!row) throw new Error(`SHIPPING_PI_PACKAGE_MISSING ${lockPath}`);
+    const packagePath = lockPath.slice("node_modules/".length),
+      installed = json(path.join(installedRoot, row.path));
+    const packageName = packagePath.split("/").slice(-2).join("/");
+    if (
+      !CONCRETE_SEMVER.test(rootEntry.version) ||
+      !CONCRETE_SEMVER.test(stageEntry.version) ||
+      installed.name !== packageName ||
+      !CONCRETE_SEMVER.test(installed.version) ||
+      installed.version !== stageEntry.version
+    )
+      throw new Error(`SHIPPING_PI_VERSION_MISMATCH ${row.path}`);
+  }
+  for (const lockPath of installedByLockPath.keys())
+    if (!stageLock[lockPath]) throw new Error(`SHIPPING_PI_LOCK_ENTRY_MISSING ${lockPath}`);
+  return stagePiPaths.length;
+}
+
 export function buildShipping({
   root = ROOT,
   out = path.join(root, "build/cloud-artifact"),
@@ -94,11 +150,7 @@ export function buildShipping({
     )
       throw new Error(`SHIPPING_DIRECT_PACKAGE_MISMATCH ${name}`);
   }
-  for (const row of inventory(path.join(out, "node_modules")).filter((r) =>
-    /(?:^|\/)@earendil-works\/pi-[^/]+\/package.json$/.test(r.path),
-  ))
-    if (json(path.join(out, "node_modules", row.path)).version !== "1.0.2")
-      throw new Error(`SHIPPING_PI_VERSION_MISMATCH ${row.path}`);
+  assertLockedPiPackages(root, path.join(out, "node_modules"));
   if (
     inventory(path.join(out, "node_modules"))
       .filter((r) => /(?:^|\/)brace-expansion\/package.json$/.test(r.path))
