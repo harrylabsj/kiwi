@@ -24,13 +24,14 @@ function fixture(options: {
   const dir = mkdtempSync(join(tmpdir(), "kiwi-promotion-quote-"));
   dirs.push(dir);
   const handler = createMerchantHandler({
+
     ledger: new LedgerStore({ dir, now: () => NOW }),
     now: () => NOW,
     sender: "merchant:merchant-001",
     counterparty: "buyer:*",
     productSource: {
       async getProduct() {
-        return { price: 100, currency: "CNY", stock: 1000 };
+        return { price: 100, currency: "CNY", unit: "piece", stock: 1000, source_evidence: { system: "owned-test-fixture" } };
       },
     },
     ...(options.promotionPrice !== undefined ? { promotionPrice: options.promotionPrice } : {}),

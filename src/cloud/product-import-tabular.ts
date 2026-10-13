@@ -33,6 +33,7 @@
  *   - 上限：数据行 5000、列 64、单文件 4 MiB、单元格 2000 字符。
  */
 
+import { toMinorUnits as losslessToMinorUnits } from "../protocol/legacy-shopping-negotiation/money.js";
 import { inflateRawSync } from "node:zlib";
 import {
   MarketplaceProductLinkError,
@@ -1295,12 +1296,12 @@ export function convertTabularImport(
         code: "EMPTY_REQUIRED",
         message: `第 ${rowNumber} 行单价（price）为空：价格必须由商家提供，不能缺省`,
       });
-    } else if (Number.isNaN(price) || price <= 0) {
+    } else if (!Number.isFinite(price) || price < 0 || !losslessToMinorUnits(price, 2).lossless) {
       errors.push({
         row: rowNumber,
         field: "price",
         code: "BAD_NUMBER",
-        message: `第 ${rowNumber} 行单价不是正数（收到「${priceRaw}」）`,
+        message: `第 ${rowNumber} 行单价必须是非负且可无损表示为两位小数（收到「${priceRaw}」）`,
       });
     }
 
@@ -1445,7 +1446,7 @@ export function convertTabularImport(
       title,
       currency: currency === "" ? currencyRaw : currency,
       unit,
-      price: Number.isNaN(price) ? 0 : Math.round(price * 100) / 100,
+      price: Number.isNaN(price) ? 0 : price,
       ...(moq !== undefined ? { moq } : {}),
       ...(stock !== undefined ? { stock } : {}),
       ...(cellOf(row, "supply_note") !== "" ? { supply_note: cellOf(row, "supply_note") } : {}),

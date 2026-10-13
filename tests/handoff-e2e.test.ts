@@ -39,6 +39,9 @@ import {
 import { testBuyerProfile, startTestA2aStack, type CapturedInbound } from "./helpers.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { createFileProductSource, bindProductTableToCatalog } from "../src/cloud/product-source.js";
+import { ShoppingCliCatalogSource } from "../src/discovery/catalog-source/index.js";
+import type { CatalogSearchQuery } from "../src/discovery/catalog-source/types.js";
+import type { ReadRequestOptions } from "../src/net/request-budget.js";
 
 const T0 = "2026-08-05T12:00:00+08:00";
 const PRINCIPAL = "buyer-agent:buyer-001";
@@ -58,7 +61,11 @@ const productSource = {
     };
     const p = prices[sku];
     if (p === undefined) throw new Error(`no product ${sku}`);
-    return p;
+    // A659：补真实已知源事实（unit/stock/source_evidence）——联合 P2 merchant
+    // handler 按源事实严格单位门报价（缺 unit → field_unsupported decline →
+    // 上游无 offer，e2e-* raw 实证）。不默认未知 piece；缺字段负控在
+    // merchant-source 套件保持。
+    return { ...p, unit: "piece", stock: 1000, source_evidence: { system: "owned-test-fixture" } };
   },
 };
 
@@ -72,7 +79,15 @@ async function checkoutStack(
     productSource: {
       async getProduct(sku: string) {
         if (sku === "sku-001") {
-          return { price: 99, currency: "CNY", handoff_destination: checkoutUrl };
+          // A659：真实已知源事实（同上；缺 unit 会被源事实单位门 decline）。
+          return {
+            price: 99,
+            currency: "CNY",
+            handoff_destination: checkoutUrl,
+            unit: "piece",
+            stock: 1000,
+            source_evidence: { system: "owned-test-fixture" },
+          };
         }
         throw new Error(`no product ${sku}`);
       },
@@ -126,7 +141,19 @@ interface E2eHarness {
 
 function setupBuyer(
   catalog: string,
-  options: { mode?: "autopilot" | "supervised" } = {},
+  options: {
+    mode?: "autopilot" | "supervised";
+    /**
+     * A659：受控 CatalogSource fixture——只覆盖交易来源面（origin/getListing）；
+     * discovery 面（searchCandidates/getCandidate）委托既有 ShoppingCliCatalog
+     * 测试栈，避免结构 fixture 劫持磋商发现（A659 e2e-t7 raw 实证：
+     * searchCandidates is not a function）。
+     */
+    catalogSourceOverride?: {
+      origin: string;
+      getListing: (listingId: string) => Promise<unknown>;
+    };
+  } = {},
 ): E2eHarness {
   const dir = trackedMkdtemp("kiwi-e2e-");
   const db = new DatabaseSync(":memory:");
@@ -145,6 +172,19 @@ function setupBuyer(
     string,
     { readPreconditions: () => Promise<Record<string, unknown>> | Record<string, unknown>; execute: (args: Record<string, unknown>) => Promise<unknown> }
   >();
+  let catalogSource: BuyerToolDeps["catalogSource"];
+  if (options.catalogSourceOverride !== undefined) {
+    // discovery 面委托真实 ShoppingCliCatalogSource（与未注入时 negotiate
+    // 的缺省路径同实现），交易来源面用受控 fixture——两条路径都不被削弱。
+    const discovery = new ShoppingCliCatalogSource({ baseUrl: catalog });
+    catalogSource = {
+      searchCandidates: (q: CatalogSearchQuery, o?: ReadRequestOptions) => discovery.searchCandidates(q, o),
+      getCandidate: (id: string, o?: ReadRequestOptions) => discovery.getCandidate(id, o),
+      searchListings: async () => [],
+      getListing: (id: string) => options.catalogSourceOverride!.getListing(id),
+      origin: options.catalogSourceOverride.origin,
+    } as unknown as BuyerToolDeps["catalogSource"];
+  }
   const deps: BuyerToolDeps = {
     store,
     connector,
@@ -156,6 +196,7 @@ function setupBuyer(
     catalog,
     allowLoopback: true, // 本地 127.0.0.1 测试栈
     handoff: { ledger, idempotency },
+    ...(catalogSource !== undefined ? { catalogSource } : {}),
   };
   const tools = buildBuyerTools(deps);
   return {
@@ -375,7 +416,15 @@ describe("KTH 端到端（#20、#21）", () => {
       productSource: {
         async getProduct(sku: string) {
           if (sku === "VQ-003") {
-            return { price: 8999, currency: "CNY", handoff_destination: merchantDeclared };
+            // A659：真实已知源事实（同上；缺 unit 会被源事实单位门 decline）。
+            return {
+              price: 8999,
+              currency: "CNY",
+              handoff_destination: merchantDeclared,
+              unit: "piece",
+              stock: 1000,
+              source_evidence: { system: "owned-test-fixture" },
+            };
           }
           throw new Error(`no product ${sku}`);
         },
@@ -614,8 +663,36 @@ describe("generated marketplace link remains behind KTH approval", () => {
     expect((await source.source.getProduct("sku-001")).handoff_destination).toBe(url);
     const stack = await startTestA2aStack({productSource:source.source});
     stacks.push(stack);
-    const h = setupBuyer(stack.catalogUrl, {mode:"supervised"});
+    // A651 包四：市场形态 URL 目的地在候选创建前要求可信交易来源事实——注入
+    // 受控 CatalogSource fixture（listing 声明的成交入口与商家协议直传逐字
+    // 一致、SKU/owner 与 agreement 对齐），不走旁门（原 pending 断言保留）。
+    const trustedListing = {
+      listing_id: "lst_fixture_1",
+      listing_type: "product" as const,
+      owner_agent_id: "cagt_test_merchant_001",
+      merchant_id: "fixture-catalog-merchant",
+      source_product_ref: "sku-001",
+      handoff_destination_ref: url,
+      listing_digest: "digest-fixture",
+      publication_state: "ACTIVE" as const,
+      listing_freshness_state: "FRESH" as const,
+      fresh_until: "2099-12-31T23:59:59+08:00",
+      updated_at: T0,
+    };
+    const h = setupBuyer(stack.catalogUrl, {mode:"supervised", catalogSourceOverride: {
+      origin: "https://catalog.test",
+      getListing: async () => trustedListing,
+    }});
     const taskId = await createReadyTask(h.store);
+    // listing_id 只是选择线索：shortlist 候选行提供定位，权威以重读为准。
+    h.store.upsertCandidate({
+      task_id: taskId,
+      connector_id: "kiwi-catalog",
+      platform: "kiwi-catalog",
+      external_product_id: "lst_fixture_1",
+      sku: "sku-001",
+      owner_agent_id: "cagt_test_merchant_001",
+    });
     expect(toolText(await h.getTool("negotiate_buyer_task").execute("generated-negotiate",{task_id:taskId}))).toContain("等待批准");
     const negotiation = h.approvals.listPending()[0]!;
     h.approvals.markApproved(negotiation.candidate_id);
@@ -631,6 +708,11 @@ describe("generated marketplace link remains behind KTH approval", () => {
     expect(candidate.destination_ref).toBe(url);
     expect(candidate.destination_type).toBe("external_checkout_url");
     expect(candidate.requires_user_action).toBe(true);
+    // A651 包四：可信来源 sidecar 随批准链持久化（执行期强制重核的输入）。
+    const launchBinding = pending[0]?.arguments["launch_source_binding"] as Record<string,unknown> | undefined;
+    expect(launchBinding?.binding_version).toBe("marketplace_source_binding/1");
+    expect(launchBinding?.platform_product_id).toBe(id);
+    expect(launchBinding?.candidate_digest).toBe(candidate.candidate_digest);
     expect(h.ledger.listNegotiations()).toHaveLength(0);
     // The public marketplace product page is carried through, but no URL HEAD,
     // browser launch, purchase, payment or inventory reservation is approved here.

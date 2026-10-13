@@ -78,6 +78,7 @@ export interface CounterInput {
   respondingToOfferId: string;
   sku: string;
   quantity: number;
+  quantityUnit?: string;
   counterPriceMinor: number;
   now: () => string;
 }
@@ -102,7 +103,7 @@ export function buildCounterEnvelope(input: CounterInput): NegotiationEnvelope {
         items: [
           {
             sku: input.sku,
-            quantity: { value: input.quantity, unit: "piece" },
+            quantity: { value: input.quantity, unit: input.quantityUnit ?? "piece" },
             unit_price: { currency: "CNY", amount_minor: input.counterPriceMinor },
           },
         ],

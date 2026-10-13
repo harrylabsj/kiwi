@@ -64,8 +64,24 @@ it.each([
     }> = [];
     const stack = await startTestA2aStack({
       capture,
+      // A659：merchant 栈真实时钟，与 buyer 服务默认真实时钟端到端一致
+      //（原固定 August × 真实 October 混用 → 合法 offer 被如实判
+      // offer_expired，a373-allowed-candidate.json 实证）；不延长有效期、
+      // 不去 expiry 检查。
+      now: () => new Date().toISOString(),
       productSource: {
-        getProduct: async () => ({ price: 189, currency: "CNY", title: "Test Product", stock: 10 }),
+        // A651 接缝修正（claude-ds 待运行复验）：联合 P2 merchant handler 按
+        // 源事实严格单位门报价（product.unit 缺省 → field_unsupported decline），
+        // intent 请求单位为 "piece"；补真实源字段与 P2 SHARED-FIXTURE-ONLY
+        // 同一模式，不改请求单位、不放松源门。
+        getProduct: async () => ({
+          price: 189,
+          currency: "CNY",
+          title: "Test Product",
+          stock: 10,
+          unit: "piece",
+          source_evidence: { system: "owned-test-fixture" },
+        }),
       },
     });
     let store: TaskApprovalStore | undefined;
@@ -104,6 +120,9 @@ it.each([
           }),
         ).rejects.toMatchObject({ code: "delegation_denied" });
       else {
+        // A651 校准（经理 2026-10-13）：保持原正向验收目标——不因接收门对本
+        // 发行版不支持 conditional_offer 而改写期望凑绿；真实回复语义归
+        // claude-ds 实际运行定位（A651 报告 conditional 范围条目）。
         const result = await service.negotiate({
           task_id: String(created.task.task_id),
           action: "counter_offer",
@@ -123,8 +142,13 @@ it.each([
     }
   },
 );
+// A651 接缝修正（claude-ds 待运行复验）：商家回复的 SKU 必须等于实际外发
+// outbound RFQ 的 SKU（merchant 无 matching_skus → firstSku(intent) =
+// "sku-001"）；A647 receive gate 按实际 persisted outbound 绑定，原 fixture
+// 回 "s" 被如实拒为 sku_mismatch（A647 raw 实证）。此处只改 fixture 对齐
+// 真实外发，不改请求单位、不放松接收门。
 const line = (currency: unknown) => ({
-  sku: "s",
+  sku: "sku-001",
   quantity: { value: 1, unit: "piece" },
   unit_price: { currency, amount_minor: 100 },
 });
@@ -227,14 +251,26 @@ it("explicit custom fetch remains honored and mixed-currency raw reply cannot pr
       merchant_ids: ["merchant-001"],
       idempotency_key: "mixed",
     });
-    expect(inner.store.listCandidates(String(created.task.task_id))[0]!.terms).toBeUndefined();
-    await expect(
-      service.negotiate({
-        task_id: String(created.task.task_id),
-        action: "counter_offer",
-        summary: "mixed",
-      }),
-    ).rejects.toMatchObject({ code: "delegation_denied" });
+    // A659（独验 raw a373-custom-negotiate.json 校准）：混币 raw reply 现在
+    // 在**接收门**被如实拒（两行 items → unsupported_offer_shape，候选
+    // failed），比基线「succeeded-无terms」更早 fail-closed。安全断言保持：
+    // 无 terms 投影、counter wire 不外发（effects 只有一次 RFQ 发送）、
+    // 全局 transport 未被使用。delegation_denied 语义由 overcap/wrongunit
+    // （真实 succeeded 候选）覆盖——此处不再伪造该层。
+    const candidates = inner.store.listCandidates(String(created.task.task_id));
+    expect(candidates[0]!.terms).toBeUndefined();
+    expect(candidates[0]!.status).toBe("failed");
+    expect(candidates[0]!.failure).toMatchObject({
+      classification: "protocol_error",
+      retryable: false,
+      detail: "unsupported_offer_shape",
+    });
+    const negotiated = await service.negotiate({
+      task_id: String(created.task.task_id),
+      action: "counter_offer",
+      summary: "mixed",
+    });
+    expect(negotiated.step.reply).toBeUndefined();
     expect(effects).toBe(1);
     expect(global).not.toHaveBeenCalled();
   } finally {

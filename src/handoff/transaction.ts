@@ -47,6 +47,11 @@ import type { HandoffEventStore } from "./ledger.js";
 import type { HandoffIdempotencyStore } from "./idempotency.js";
 import { validateExternalDestinationUrl, type SafeDestinationUrl } from "./url-safety.js";
 import { isUrlDestinationType, type DestinationType } from "./destination.js";
+import {
+  parseMarketplaceTradeUrl,
+  verifyMarketplaceLaunch,
+  type MarketplaceListingSnapshot,
+} from "./launch-marketplace-policy.js";
 
 // 审查 K-M16：handoff 幂等 prune 节流——此前每次 executeHandoff 都读+重写整个
 // JSONL（原子 rename），忙时开销随规模线性放大。改每 HANDOFF_PRUNE_INTERVAL_MS
@@ -83,12 +88,37 @@ export type ExecuteHandoffResult =
   /** 目的地探测瞬时失败（超时/网络/HEAD 405）：候选保持 READY，可重试。 */
   | { kind: "probe_failed"; reason: string }
   | { kind: "rejected"; reason: string }
-  | { kind: "expired"; reason: string };
+  | { kind: "expired"; reason: string }
+  /** URL 承载类目的地缺可信交易来源上下文（A651 包四强制门）：固定拒绝、
+   *  不交付；候选生命周期不动（配置来源后可重试）。 */
+  | { kind: "needs_configuration"; reason: string };
 
 export interface AgreementReadResult {
   agreement_id: string;
   negotiation_id: string;
   agreed_terms: unknown;
+}
+
+/**
+ * A651 包四：三平台市场形态 URL 目的地的可信交易来源上下文（generic
+ * executeHandoff 强制门输入）。source reader 是 normal host 依赖（不暴露给
+ * 模型参数）；市场形态 URL 目的地缺本上下文固定 needs_configuration、不
+ * 交付——可选 approval callback / urlSafety 都不能替代或跳过本门
+ * （PACK4-READONLY-PLAN §5）。非市场形态 URL 与 opaque 类型不走本门。
+ */
+export interface HandoffLaunchContext {
+  /** 审批时由可信读取形成、随批准链持久化的 sidecar 证据（恢复/重试原样带回）。 */
+  readonly binding: unknown;
+  /** 执行期对同一 listing 的新鲜重读（已配置 CatalogSource.getListing）。 */
+  readonly readSource: () => Promise<MarketplaceListingSnapshot | undefined>;
+  /** 配置态 catalog 来源标识（与 binding.configured_catalog_origin 同源）。 */
+  readonly catalogOrigin: string;
+  /** 绑定所属 buyer 任务 id（sidecar task_id 绑定重核）。 */
+  readonly taskId: string;
+  /** 当前协议实际接受商品 SKU（agreement 重读产物，非模型输入）。 */
+  readonly agreedSku: string;
+  /** 协议商家归属（catalog owner agent id）。 */
+  readonly ownerAgentId: string;
 }
 
 export interface ExecuteHandoffInput {
@@ -103,6 +133,8 @@ export interface ExecuteHandoffInput {
   agreementReader: (agreementId: string) => Promise<AgreementReadResult | undefined>;
   /** 目的地 URL 安全策略（缺省 HTTPS-only + expectedHost 校验）。 */
   urlSafety?: (url: string) => Promise<SafeDestinationUrl>;
+  /** URL 承载类目的地的可信交易来源上下文（强制门；缺失 → needs_configuration）。 */
+  launchContext?: HandoffLaunchContext;
   now?: () => string;
 }
 
@@ -285,6 +317,60 @@ async function executeHandoffUnlocked(input: ExecuteHandoffInput): Promise<Execu
     return { kind: "expired", reason: "candidate expired before execution" };
   }
   let finalUrl: string | undefined;
+  // ── 2.5 A651 包四：三平台市场形态 URL 目的地的可信交易来源强制门 ──────
+  // 顺序遵守 PACK4-READONLY-PLAN §6：先判原 expired/terminal/已交付幂等
+  // （上方 0.5/0.6/1），再新读取——已 delivered 不重复探测。市场形态 URL
+  // 交易没有正常来源上下文时固定 needs_configuration、不交付（旧 READY 无
+  // 证据不能迁移旧授权）；证据与当前事实不一致（来源/绑定变更）→ stale，
+  // 需原审批流程新确认。政策只覆盖三平台（PACK4 §1）：非市场形态 URL 保持
+  // 原防钓鱼路径（host 门），opaque（quote/contact/session 等）不受本门影响。
+  if (isUrlDestinationType(candidate.destination_type)) {
+    const marketplaceTrade =
+      parseMarketplaceTradeUrlSafe(candidate.destination_ref) !== undefined;
+    if (marketplaceTrade) {
+      const launch = input.launchContext;
+      if (launch === undefined) {
+        return {
+          kind: "needs_configuration",
+          reason: "marketplace trade destination requires a verified trade source context (unverified origin; not delivered)",
+        };
+      }
+      let fresh: MarketplaceListingSnapshot | undefined;
+      try {
+        fresh = await launch.readSource();
+      } catch (err) {
+        if (err instanceof CommerceError && err.code === "request_failed") {
+          // 瞬时不可读（超时/网络）：候选保持 READY 可重试；不冒交付。
+          return { kind: "probe_failed", reason: "trade source re-read temporarily unavailable" };
+        }
+        return {
+          kind: "needs_configuration",
+          reason: "trade source re-read failed; source context is unusable (not delivered)",
+        };
+      }
+      const verdict = verifyMarketplaceLaunch({
+        binding: launch.binding,
+        fresh,
+        catalogOrigin: launch.catalogOrigin,
+        taskId: launch.taskId,
+        negotiationId: candidate.negotiation_id,
+        agreementId: candidate.agreement_id,
+        termsDigest: candidate.terms_digest,
+        candidateDigest: candidate.candidate_digest,
+        destinationType: candidate.destination_type,
+        destinationRef: candidate.destination_ref,
+        agreedSku: launch.agreedSku,
+        ownerAgentId: launch.ownerAgentId,
+        nowMs: nowMs,
+      });
+      if (!verdict.ok) {
+        if (verdict.disposition === "needs_configuration") {
+          return { kind: "needs_configuration", reason: verdict.reason };
+        }
+        return stale(input, candidate, now, verdict.reason);
+      }
+    }
+  }
   // URL 安全只适用于 URL 承载类目的地（quote/PO/contact 等 opaque ref
   // 不做 URL 探测——它们不是可点击链接，KTH §7 类型语义）。
   if (input.urlSafety !== undefined && isUrlDestinationType(candidate.destination_type)) {
@@ -397,6 +483,15 @@ function stale(
     occurred_at: now(),
   });
   return { kind: "stale", reason };
+}
+
+/** 三平台市场形态判定（吞掉分类错误；非市场形态 → undefined，走原路径）。 */
+function parseMarketplaceTradeUrlSafe(ref: string): ReturnType<typeof parseMarketplaceTradeUrl> | undefined {
+  try {
+    return parseMarketplaceTradeUrl(ref);
+  } catch {
+    return undefined;
+  }
 }
 
 /** 供调用方构造缺省 URL 安全策略（HTTPS-only + merchant 域绑定；allowlist 可

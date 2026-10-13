@@ -24,7 +24,10 @@ import {
   foldCandidateLifecycle,
   type AgreementReadResult,
   type HandoffCandidate,
+  type HandoffLaunchContext,
+  type MarketplaceListingSnapshot,
 } from "../src/handoff/index.js";
+import { buildMarketplaceSourceBinding } from "../src/handoff/launch-marketplace-policy.js";
 import { contentDigest } from "../src/negotiation/jcs.js";
 import { computeCandidateDigest } from "../src/handoff/candidate.js";
 import { CommerceError } from "../src/commerce/data-source.js";
@@ -33,18 +36,62 @@ const IDENTITY = { sender_identity: "principal:buyer-1", counterparty_identity: 
 const CAPABILITY = { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" };
 const AGREED_TERMS = { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" } }] };
 const NOW = "2026-08-07T09:00:00Z";
+// A651 包四：URL 目的地走三平台确切形态（opaque 平台 ID ≠ 协议 SKU）；
+// generic executeHandoff 强制门要求可信来源上下文（launchContext）。
+const DEST_REF = "https://item.taobao.com/item.htm?id=100301440825";
+const CATALOG_ORIGIN = "https://catalog.test";
+// 正常 host reader（configured CatalogSource.getListing）的可信 fixture：
+// listing 声明的成交入口与协议目的地逐字一致，SKU/owner 与 agreement 对齐。
+const TRUSTED_LISTING: MarketplaceListingSnapshot = {
+  listing_id: "list-001",
+  listing_type: "product",
+  owner_agent_id: "acme-owner",
+  merchant_id: "merchant-acme",
+  source_product_ref: "SKU-001",
+  source_revision: "rev-1",
+  handoff_destination_ref: DEST_REF,
+  listing_digest: "digest-001",
+  publication_state: "ACTIVE",
+  listing_freshness_state: "FRESH",
+  fresh_until: "2026-08-08T00:00:00Z",
+  updated_at: "2026-08-01T00:00:00Z",
+};
 
 function candidate(overrides: Record<string, unknown> = {}): HandoffCandidate {
   return createHandoffCandidate({
     agreement_id: "agr_01JABC",
     negotiation_id: "neg_01JABC",
     agreed_terms: AGREED_TERMS,
-    destination: { type: "external_checkout_url", ref: "https://acme.example/checkout/abc" },
+    destination: { type: "external_checkout_url", ref: DEST_REF },
     display_summary: { merchant: "Acme", summary: "200 units" },
     policy_version: "handoff-policy/1",
     expires_at: "2026-08-08T12:00:00Z",
     ...overrides,
   });
+}
+
+/** A651 包四：可信交易来源上下文（binding 与新鲜重读**同源** fixture）。
+ *  A659 修正（stale-t2.json 实证 "listing_id changed"）：binding 必须从与
+ *  readSource 相同的快照构造——原实现固定绑默认 listing，传入不同目的地的
+ *  合法 listing 时被如实判来源变更。 */
+function launchContext(c: HandoffCandidate, fresh: MarketplaceListingSnapshot = TRUSTED_LISTING): HandoffLaunchContext {
+  return {
+    binding: buildMarketplaceSourceBinding({
+      catalogOrigin: CATALOG_ORIGIN,
+      listing: fresh,
+      taskId: "task-1",
+      negotiationId: c.negotiation_id,
+      agreementId: c.agreement_id,
+      termsDigest: c.terms_digest,
+      candidateDigest: c.candidate_digest,
+      observedAt: NOW,
+    }),
+    readSource: async () => fresh,
+    catalogOrigin: CATALOG_ORIGIN,
+    taskId: "task-1",
+    agreedSku: "SKU-001",
+    ownerAgentId: "acme-owner",
+  };
 }
 
 function agreementReader(overrides: Partial<AgreementReadResult> = {}): (id: string) => Promise<AgreementReadResult | undefined> {
@@ -73,6 +120,9 @@ function env(c: HandoffCandidate, reader = agreementReader()) {
     now: () => NOW,
     approval: approval(true),
     agreementReader: reader,
+    // A651 包四强制门：URL 目的地必须携带可信来源上下文（原 delivered 断言
+    // 全部保留；缺上下文的固定 needs_configuration 行为在新测试文件覆盖）。
+    launchContext: launchContext(c),
   };
 }
 
@@ -269,7 +319,7 @@ describe("executeHandoff", () => {
     const second = await executeHandoff({
       ...e,
       candidate: c,
-      urlSafety: async () => ({ finalUrl: "https://acme.example/checkout/abc", redirects: [] }),
+      urlSafety: async () => ({ finalUrl: DEST_REF, redirects: [] }),
     });
     expect(second.kind).toBe("delivered");
   });
@@ -312,15 +362,24 @@ describe("executeHandoff", () => {
   });
 
   it("不同目的地不误伤：同协议不同 destination_ref 仍可交付", async () => {
+    // A651 包四：不同目的地同样是三平台形态，各自的可信 listing/上下文独立
+    // 绑定（不同 listing/平台 ID/digest）。
+    const destB = "https://item.taobao.com/item.htm?id=100301440826";
+    const listingB: MarketplaceListingSnapshot = {
+      ...TRUSTED_LISTING,
+      listing_id: "list-002",
+      handoff_destination_ref: destB,
+      listing_digest: "digest-002",
+    };
     const cA = candidate();
-    const cB = candidate({ destination: { type: "external_checkout_url", ref: "https://acme.example/checkout/other" } });
+    const cB = candidate({ destination: { type: "external_checkout_url", ref: destB } });
     const e = env(cA);
     e.ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: cA, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
     e.ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: cB, identity: IDENTITY, capability: CAPABILITY, occurred_at: NOW });
 
     const first = await executeHandoff({ ...e, candidate: cA });
     expect(first.kind).toBe("delivered");
-    const second = await executeHandoff({ ...e, candidate: cB });
+    const second = await executeHandoff({ ...e, candidate: cB, launchContext: launchContext(cB, listingB) });
     expect(second.kind).toBe("delivered");
     const delivered = e.ledger.events(cA.negotiation_id).filter((ev) => ev.event_kind === "handoff_delivered");
     expect(delivered).toHaveLength(2);
@@ -357,6 +416,9 @@ describe("executeHandoff 双投递锁作用域按 destination（P1-06）", () =>
       now: () => NOW,
       approval: approval(true),
       agreementReader: agreementReader(),
+      // A651 包四：A 的执行走强制门；B 命中 0.6 协议级去重（在门之前），
+      // 不需要自己的上下文。
+      launchContext: launchContext(cA),
     };
     ledger.appendCandidateEvent({
       kind: "handoff_candidate_created",
@@ -428,6 +490,8 @@ describe("executeHandoff 双投递锁作用域按 destination（P1-06）", () =>
       now: () => NOW,
       approval: barrierApproval,
       agreementReader: agreementReader(),
+      // A651 包四：A 的执行走强制门；B 在 0.6 协议级去重被短接（门之前）。
+      launchContext: launchContext(cA),
     };
 
     const pA = executeHandoff({ ...shared, candidate: cA });

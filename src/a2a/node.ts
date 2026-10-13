@@ -33,12 +33,15 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  fstatSync,
+  lstatSync,
   rmSync,
   unlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
 import { createMonotonicClock } from "./clock.js";
+import { closeHttpServer, createCleanup, createSyncCleanup } from "../lifecycle/close.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AgentProfile, MerchantPolicy } from "../config/profile.js";
@@ -194,7 +197,13 @@ function buildProductSource(profile: AgentProfile): MerchantProductSource {
     getProduct: async (sku) => {
       const product = await client.getProduct(sku);
       return {
+        sku: product.sku,
         price: product.price,
+        ...(product.unit !== undefined ? { unit: product.unit } : {}),
+        ...(product.stock !== undefined ? { stock: product.stock } : {}),
+        ...(product.title !== undefined ? { title: product.title } : {}),
+        ...(product.valid_until !== undefined ? { valid_until: product.valid_until } : {}),
+        ...(product.source_evidence !== undefined ? { source_evidence: product.source_evidence } : {}),
         currency: product.currency,
         ...(product.handoff_destination !== undefined
           ? { handoff_destination: product.handoff_destination }
@@ -428,7 +437,9 @@ export interface A2aNodeCore {
   /** 真实商品源（merchant 角色）：就绪检查与报价共用同一实例。 */
   productSource?: MerchantProductSource;
   /** 释放核心资源：统计库、owner 锁、临时目录（不涉及 http server）。 */
-  close: () => void;
+  close: (options?: { preserveOwnership?: boolean }) => void;
+  /** Host releases ownership only after its own ingress/work/assembly also stopped. */
+  releaseOwnership: () => void;
 }
 
 /** 只有真实入站HTTP Message Signature模式才把Runtime公钥声明为A2A认证能力。 */
@@ -463,6 +474,7 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
   // 单 owner 协调（审查 BUG-03）：同一状态目录只允许一个节点实例——exclusive
   // lock 文件 + PID；崩溃残留（PID 已死）自动接管，存活实例则启动失败。
   let releaseOwnerLock: (() => void) | undefined;
+  let releaseOnExit: (() => void) | undefined;
   if (!isEphemeral) {
     const lockPath = path.join(dir, "owner.lock");
     const rotationLockPath = path.join(dir, "key-rotation.lock");
@@ -475,7 +487,7 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
       if (!existsSync(lockPath)) return;
       const pidText = readFileSync(lockPath, "utf-8").trim();
       const pid = Number(pidText);
-      if (Number.isInteger(pid) && pid > 0) {
+      if (/^[1-9]\d{0,9}$/.test(pidText) && Number.isSafeInteger(pid) && pid > 0) {
         try {
           process.kill(pid, 0); // 存活 → 不接管
           throw new Error(
@@ -483,8 +495,10 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           );
         } catch (err) {
           if (err instanceof Error && err.message.startsWith("A2A 状态目录")) throw err;
-          // ESRCH：进程已死，残留锁可接管
+          if ((err as { code?: unknown }).code !== "ESRCH") throw new Error("OWNER_LOCK_STATE_UNKNOWN_HOLD", { cause: err });
         }
+      } else {
+        throw new Error("OWNER_LOCK_STATE_UNKNOWN_HOLD");
       }
       unlinkSync(lockPath);
     };
@@ -493,20 +507,28 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     assertNoKeyRotation();
     const fd = openSync(lockPath, "wx");
     writeSync(fd, String(process.pid));
+    const ownedLock = fstatSync(fd);
     closeSync(fd);
     releaseOwnerLock = (): void => {
-      try {
-        unlinkSync(lockPath);
-      } catch {
-        // 已不存在/无权限：忽略
+      let current;
+      try { current = lstatSync(lockPath); }
+      catch (error) { if ((error as { code?: unknown }).code === "ENOENT") return; throw error; }
+      if (!current.isFile() || current.isSymbolicLink() || current.dev !== ownedLock.dev || current.ino !== ownedLock.ino ||
+          readFileSync(lockPath, "utf8").trim() !== String(process.pid)) {
+        throw new Error("OWNER_LOCK_REPLACED_HOLD");
       }
+      unlinkSync(lockPath);
     };
-    process.once("exit", releaseOwnerLock);
+    releaseOnExit = (): void => {
+      try { releaseOwnerLock?.(); }
+      catch { process.stderr.write("[kiwi] OWNER_LOCK_RELEASE_FAILED\n"); }
+    };
+    process.once("exit", releaseOnExit);
     try {
       // Close the race where rotation begins immediately after owner.lock creation.
       assertNoKeyRotation();
     } catch (err) {
-      process.removeListener("exit", releaseOwnerLock);
+      if (releaseOnExit) process.removeListener("exit", releaseOnExit);
       releaseOwnerLock();
       releaseOwnerLock = undefined;
       throw err;
@@ -586,18 +608,22 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     ...(options.throttle !== undefined ? { throttle: options.throttle } : {}),
     ...(statsStore !== undefined ? { stats: statsStore } : {}),
   });
-  return {
-    server,
-    ledger,
-    idempotency,
-    dir,
-    ephemeral: isEphemeral,
-    ...(productSource !== undefined ? { productSource } : {}),
-    close: () => {
-      statsStore?.close();
+  const closeStats = createSyncCleanup([{ id: "statistics", run: () => statsStore?.close() }]);
+  const releaseOwnership = createSyncCleanup([
+    { id: "statistics", run: closeStats },
+    { id: "owner_lock", after: ["statistics"], run: () => {
       releaseOwnerLock?.();
+      if (releaseOnExit) process.removeListener("exit", releaseOnExit);
+    } },
+    { id: "ephemeral_data", after: ["owner_lock"], run: () => {
       if (isEphemeral) rmSync(dir, { recursive: true, force: true });
-    },
+    } },
+  ]);
+  return {
+    server, ledger, idempotency, dir, ephemeral: isEphemeral,
+    ...(productSource !== undefined ? { productSource } : {}),
+    close: (closeOptions) => { if (closeOptions?.preserveOwnership) closeStats(); else releaseOwnership(); },
+    releaseOwnership,
   };
 }
 
@@ -830,17 +856,16 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     agentCardUrl,
     catalogAgentId,
     ...(a2aSigningIdentity !== undefined ? { signingIdentity: a2aSigningIdentity } : {}),
-    async stop(): Promise<void> {
-      if (heartbeatTimer !== undefined) {
-        clearInterval(heartbeatTimer);
+    stop: createCleanup([
+      { id: "heartbeat_timer", run: () => {
+        if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
         heartbeatTimer = undefined;
-      }
-      enrollmentHeartbeat?.stop();
-      httpServer.closeAllConnections?.();
-      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-      // 审查 BUG-03：持久形态不删除状态目录（重启恢复依赖它）；临时形态
-      // （demo/测试）维持删除。owner 锁总是释放。
-      core.close();
-    },
+      } },
+      { id: "enrollment_heartbeat", run: () => enrollmentHeartbeat?.stop() },
+      { id: "http_server", run: () => closeHttpServer(httpServer) },
+      { id: "statistics", after: ["http_server"], run: () => core.close({ preserveOwnership: true }) },
+      { id: "ownership", after: ["heartbeat_timer", "enrollment_heartbeat", "http_server", "statistics"],
+        run: () => core.releaseOwnership() },
+    ]),
   };
 }

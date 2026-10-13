@@ -26,6 +26,7 @@
  * 的确定性 merchant 行为；未来可替换为 LLM 驱动的 Negotiation Engine（同一 handler 接缝）。
  */
 
+import { checkedProductStock, checkedSourceEvidence, quoteFactsStillValid, recoverQuoteSourceSnapshot, type ProductSourceEvidence, type QuoteSourceSnapshot, type ResolvedProductFacts } from "./merchant-product-facts.js";
 import type { CommerceDataSource } from "../../commerce/data-source.js";
 import { LedgerStore } from "../../negotiation/ledger/index.js";
 import {
@@ -152,6 +153,7 @@ export interface MerchantHandlerOptions {
  */
 export interface MerchantProductSource {
   getProduct(sku: string): Promise<{
+    sku?: string;
     price: number;
     currency: string;
     title?: string;
@@ -159,6 +161,8 @@ export interface MerchantProductSource {
     handoff_destination?: string;
     /** 数据有效期（ISO）：过期即不得自动报价（设计 §10.1「数据到期后停止自动报价」）。 */
     valid_until?: string;
+    unit?: string;
+    source_evidence?: ProductSourceEvidence;
   }>;
 }
 
@@ -175,8 +179,13 @@ export function dataSourceProductSource(dataSource: CommerceDataSource): Merchan
       if (fact === undefined || fact.price_minor === undefined || fact.currency === undefined) {
         throw new Error(`product source has no price for SKU ${sku}`);
       }
+      const extended = fact;
       return {
+        sku: fact.sku,
         price: fact.price_minor / 100,
+        ...(extended.unit !== undefined ? { unit: extended.unit } : {}),
+        ...(extended.valid_until !== undefined ? { valid_until: extended.valid_until } : {}),
+        ...(extended.source_evidence !== undefined ? { source_evidence: extended.source_evidence } : {}),
         currency: fact.currency,
         ...(fact.title !== undefined ? { title: fact.title } : {}),
         ...(fact.stock !== undefined ? { stock: fact.stock } : {}),
@@ -213,10 +222,11 @@ export const OFFER_VALIDITY_MS = 24 * 60 * 60 * 1000;
 
 function offerTerms(
   opts: {
-    sku?: string;
+    sku: string;
+    unit: string;
     priceMinor: number;
     quantity: number;
-    currency?: string;
+    currency: string;
     handoff_destination?: string;
     deliveryBefore?: string;
     validUntilCap?: string;
@@ -232,9 +242,9 @@ function offerTerms(
   return {
     items: [
       {
-        sku: opts.sku ?? MERCHANT_SKU,
-        quantity: { value: opts.quantity, unit: "piece" },
-        unit_price: { currency: opts.currency ?? MERCHANT_CURRENCY, amount_minor: opts.priceMinor },
+        sku: opts.sku,
+        quantity: { value: opts.quantity, unit: opts.unit },
+        unit_price: { currency: opts.currency, amount_minor: opts.priceMinor },
       },
     ],
     // V2 §8.5 P0-1：只报权威交期（delivery_lead_days 动态计算）；未配置则省略。
@@ -335,6 +345,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
     typeof options.merchantPolicy === "function"
       ? options.merchantPolicy()
       : options.merchantPolicy;
+  const quoteSources = new Map<string, { offer_id: string; snapshot: QuoteSourceSnapshot }>();
   const conditionalByNegotiation = new Map<
     string,
     { conditional: Record<string, unknown>; quantity: number }
@@ -475,32 +486,12 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
   // TTL（评审项 L3：此前永久累积、价格永不刷新——长驻 merchant 节点内存
   // 单调增长且价目陈旧）。
   const PRICE_CACHE_TTL_MS = 10 * 60 * 1000;
-  const priceBySku = new Map<
-    string,
-    {
-      priceMinor: number;
-      currency: string;
-      at: number;
-      handoff_destination?: string;
-      stock?: number;
-      title?: string;
-      valid_until?: string;
-    }
-  >();
+  const priceBySku = new Map<string, ResolvedProductFacts & { at: number }>();
 
-  /** 从真实商品源解析 SKU 价目；源不可用/查不到时回退演示价并返回注记。 */
   const resolveProduct = async (
     sku: string,
     resolveOptions: { force?: boolean } = {},
-  ): Promise<{
-    priceMinor: number;
-    currency: string;
-    note?: string;
-    handoff_destination?: string;
-    stock?: number;
-    title?: string;
-    valid_until?: string;
-  }> => {
+  ): Promise<ResolvedProductFacts> => {
     const cached = priceBySku.get(sku);
     // force=true（成交前重验，T047）绕过缓存：许可有效性必须按**当前**商品事实
     // 判定，而不是十分钟内的历史快照。
@@ -515,12 +506,17 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         // 静默改写为 1999/2000 进入报价（P2-P 已修数据源路径，此处是生产
         // merchant handler 的剩余舍入点）。无法精确表达 → fail-closed
         // （抛错 → resolveProduct 回退演示价并注记）。
+        if (product.sku !== undefined && product.sku !== sku) throw new TypeError("Source SKU mismatch");
         const converted = losslessToMinorUnits(product.price, 2);
         if (!converted.lossless) {
           throw new Error(
             `商品源价格 ${product.price} 超出 ${MERCHANT_CURRENCY} 两位小数精度（lossy）`,
           );
         }
+        const stock = checkedProductStock(product.stock);
+        const evidence = checkedSourceEvidence(product.source_evidence);
+        if (converted.amount_minor < 0 || typeof product.currency !== "string" || product.currency.trim() === "") throw new TypeError("Invalid source price/currency");
+        if (product.unit !== undefined && (typeof product.unit !== "string" || product.unit.trim() === "")) throw new TypeError("Invalid source unit");
         const resolved = {
           priceMinor: converted.amount_minor,
           currency: product.currency,
@@ -528,7 +524,9 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           ...(product.handoff_destination !== undefined
             ? { handoff_destination: product.handoff_destination }
             : {}),
-          ...(product.stock !== undefined ? { stock: product.stock } : {}),
+          ...(stock !== undefined ? { stock } : {}),
+          ...(product.unit !== undefined ? { unit: product.unit } : {}),
+          ...(evidence !== undefined ? { source_evidence: evidence } : {}),
           ...(product.title !== undefined ? { title: product.title } : {}),
           ...(product.valid_until !== undefined ? { valid_until: product.valid_until } : {}),
         };
@@ -546,11 +544,13 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         return {
           priceMinor: offerPriceMinor,
           currency: MERCHANT_CURRENCY,
-          note: `商品源不可用（${sku}），本回合使用演示价`,
+          unit: "piece",
+          note: `商品源不可用（${sku}），本回合使用 synthetic 演示价；库存待确认`,
         };
       }
     }
-    return { priceMinor: offerPriceMinor, currency: MERCHANT_CURRENCY };
+    if (!allowDemoPriceFallback) throw new ProductSourceUnavailableError(sku, new Error("No product source"));
+    return { priceMinor: offerPriceMinor, currency: MERCHANT_CURRENCY, unit: "piece", note: "synthetic demo; needs_confirmation" };
   };
 
   /** resolveProduct 的 fail-closed 包装：商品源不可用且未开 demo 回退时返回
@@ -558,14 +558,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
   const resolveProductOrDecline = async (
     sku: string,
     options: { force?: boolean } = {},
-  ): Promise<{ product: {
-    priceMinor: number;
-    currency: string;
-    note?: string;
-    handoff_destination?: string;
-    stock?: number;
-    title?: string;
-  } } | { declined: NegotiationHandlerResult }> => {
+  ): Promise<{ product: ResolvedProductFacts } | { declined: NegotiationHandlerResult }> => {
     try {
       return { product: await resolveProduct(sku, options) };
     } catch (err) {
@@ -641,7 +634,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
     };
   };
 
-  const appendSent = async (reply: ReturnType<typeof finalizeEnvelope>): Promise<void> => {
+  const appendSent = async (reply: ReturnType<typeof finalizeEnvelope>, snapshot?: QuoteSourceSnapshot): Promise<void> => {
     await ledger.append({
       event_kind: "message_sent",
       negotiation_id: reply.negotiation_id,
@@ -659,9 +652,10 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
       },
       wire_digest: reply.digest,
       wire_payload: reply as unknown as Record<string, unknown>,
-      outcome: { kind: "ok" },
+      outcome: { kind: "ok", ...(snapshot !== undefined ? { result: { merchant_quote_source: { offer_id: String((reply.payload as { offer_id?: unknown }).offer_id), snapshot } } } : {}) },
       occurred_at: reply.created_at,
     });
+    if (snapshot !== undefined) quoteSources.set(reply.negotiation_id, { offer_id: String((reply.payload as { offer_id?: unknown }).offer_id), snapshot });
     if (["offer", "counter_offer", "conditional_offer"].includes(reply.action)) {
       activeObjectByNegotiation.set(reply.negotiation_id, {
         offerId: String((reply.payload as { offer_id?: unknown }).offer_id),
@@ -695,6 +689,11 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         phase = event.state_transition.to_phase;
       }
       if (event.event_kind !== "message_sent") continue;
+      if (event.identity.sender_identity === sender && event.outcome.kind === "ok") {
+        const saved = event.outcome.result?.merchant_quote_source as { offer_id?: unknown; snapshot?: unknown } | undefined;
+        const snapshot = recoverQuoteSourceSnapshot(saved?.snapshot);
+        if (snapshot !== undefined && typeof saved?.offer_id === "string") quoteSources.set(negotiationId, { offer_id: saved.offer_id, snapshot });
+      }
       const envelope = event.wire_payload as
         { action?: string; payload?: Record<string, unknown> } | undefined;
       if (
@@ -716,12 +715,12 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
       // 重启后直报价/还价接受仍 offer_unknown。
       if (envelope?.action === "conditional_offer") {
         const payload = envelope.payload as
-          | { offer_id?: string; base_terms?: { items?: Array<{ quantity?: { value?: number } }> } }
+          | { offer_id?: string; base_terms?: { items?: Array<{ quantity?: { value?: number; unit?: string } }> } }
           | undefined;
         if (payload?.offer_id !== undefined) {
           lastConditional = {
             conditional: envelope.payload as Record<string, unknown>,
-            quantity: payload.base_terms?.items?.[0]?.quantity?.value ?? MERCHANT_QUANTITY,
+            quantity: payload.base_terms?.items?.[0]?.quantity?.value ?? Number.NaN,
           };
         }
       } else if (envelope?.action === "offer" || envelope?.action === "counter_offer") {
@@ -736,8 +735,8 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           lastConditional = normalizeDirectOfferAsConditional(
             payload.offer_id,
             rawTerms,
-            (rawTerms as { items?: Array<{ quantity?: { value?: number } }> }).items?.[0]
-              ?.quantity?.value ?? MERCHANT_QUANTITY,
+            (rawTerms as { items?: Array<{ quantity?: { value?: number; unit?: string } }> }).items?.[0]
+              ?.quantity?.value ?? Number.NaN,
           );
         }
       }
@@ -762,6 +761,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
     });
     if (isTerminalPhase(phase)) {
       closedNegotiations.add(negotiationId);
+      quoteSources.delete(negotiationId);
       continue; // 终态后 conditional 已删除，不恢复
     }
     if (lastConditional !== undefined) {
@@ -831,7 +831,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
        *  无效拒绝，不进 offer terms（否则批量价/条件成交按无意义数量求值）；
        *  未报数量沿用 MERCHANT_QUANTITY 缺省口径（不变）。 */
       const invalidQuantity = (raw: unknown): boolean =>
-        raw !== undefined && (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0);
+        (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw <= 0);
       const floorMinorForSku = (sku: string): number | null => {
         const mp = policyOf();
         const floorValue = mp?.price_floors?.[sku] ?? mp?.min_unit_price_private;
@@ -895,37 +895,42 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
       ): boolean => {
         if (facts.valid_until !== undefined) {
           const until = Date.parse(facts.valid_until);
-          if (!Number.isFinite(until) || until < Date.parse(now())) return true;
+          if (!Number.isFinite(until) || until <= Date.parse(now())) return true;
         }
         if (facts.stock !== undefined && quantity > facts.stock) return true;
         return false;
       };
 
+      const snapshotFor = (sku: string, quantity: number, product: ResolvedProductFacts, promotion: Record<string, unknown>): QuoteSourceSnapshot => ({ ...product, sku, quantity, policy_digest: policyDigest(), promotion });
+      const quoteValidity = (product: ResolvedProductFacts, promotionEnd?: string): { validUntilCap?: string } => {
+        const ends = [product.valid_until, promotionEnd].filter((v): v is string => v !== undefined);
+        return ends.length === 0 ? {} : { validUntilCap: ends.reduce((a,b) => Date.parse(a) <= Date.parse(b) ? a : b) };
+      };
+      const quoteMessage = (product: ResolvedProductFacts): { public_message?: string } => product.stock === undefined || product.source_evidence === undefined
+        ? { public_message: "needs_confirmation：库存或来源证据待确认；仅非承诺价格提案，须重新报价/确认后接受。" }
+        : product.note === undefined ? {} : { public_message: product.note };
+
       switch (envelope.action) {
         case "inquiry": {
-          // 入站消息由 A2A pipeline 统一落 message_received（§22）；这里不再
-          // 重复落账——此前 appendSent(envelope) 把买家的 inquiry 记为 merchant
-          // 自己"发送"（sender=merchant），审计语义错位且重复。
-          const resolved = await resolveProductOrDecline(MERCHANT_SKU);
-          if ("declined" in resolved) return resolved.declined;
-          return textReply(
-            `We carry ${resolved.product.title ?? MERCHANT_SKU} at ${(resolved.product.priceMinor / 100).toFixed(2)} ${resolved.product.currency}/piece; ask for delivery details.`,
-          );
+          return textReply("Please provide a product SKU, quantity and declared unit for a source-backed quote.");
         }
         case "rfq": {
           const payload = envelope.payload as {
-            items?: { sku?: string; quantity?: { value?: number } }[];
+            items?: { sku?: string; quantity?: { value?: number; unit?: string } }[];
           };
-          const sku = payload.items?.[0]?.sku ?? MERCHANT_SKU;
+          const sku = payload.items?.[0]?.sku;
+          const requestedUnit = payload.items?.[0]?.quantity?.unit;
           const quantityRaw = payload.items?.[0]?.quantity?.value;
-          if (invalidQuantity(quantityRaw)) return declineReply("schema_invalid");
-          const quantity = quantityRaw ?? MERCHANT_QUANTITY;
+          if (typeof sku !== "string" || sku.trim() === "" || typeof requestedUnit !== "string" || requestedUnit.trim() === "" || invalidQuantity(quantityRaw)) return declineReply("schema_invalid");
+          const quantity = quantityRaw as number;
           const floorMinor = floorMinorForSku(sku);
           if (floorMinor === null) return declineReply("temporarily_unavailable");
           const resolved = await resolveProductOrDecline(sku);
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
-          const { priceMinor, currency, note, handoff_destination } = product;
+          const { priceMinor, currency } = product;
+          if (product.unit === undefined || product.unit !== requestedUnit) return declineReply("field_unsupported");
+          const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
           if (promotion.kind === "unavailable") return declineReply("temporarily_unavailable");
@@ -947,17 +952,18 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               terms: offerTerms(
                 {
                   sku,
+                  unit: product.unit,
                   priceMinor: effectivePriceMinor,
                   quantity,
                   currency,
                   handoff_destination,
                   deliveryBefore: deliveryBefore(),
-                  ...(promotion.kind === "applied" ? { validUntilCap: promotion.endsAt } : {}),
+                  ...quoteValidity(product, promotion.kind === "applied" ? promotion.endsAt : undefined),
                 },
                 now(),
               ),
             },
-            ...(note !== undefined ? { public_message: note } : {}),
+            ...quoteMessage(product),
           });
           // 审查 BUG-10：merchant 侧相位由自己的出站动作推进——rfq 的 offer
           // 回复是 OPEN→OFFER_OPEN 的边（入站侧 rfq 是起始动作无事件）。
@@ -982,25 +988,28 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               quantity,
             ),
           );
-          await appendSent(reply);
+          await appendSent(reply, snapshotFor(sku, quantity, product, promotion));
           return envelopeReply(reply);
         }
         case "offer": {
           // 商家还价：对 buyer 的 offer 回 counter_offer（真实商品价）。
           const buyerOffer = envelope.payload as {
             offer_id?: string;
-            terms?: { items?: { sku?: string; quantity?: { value?: number } }[] };
+            terms?: { items?: { sku?: string; quantity?: { value?: number; unit?: string } }[] };
           };
-          const sku = buyerOffer.terms?.items?.[0]?.sku ?? MERCHANT_SKU;
+          const sku = buyerOffer.terms?.items?.[0]?.sku;
+          const requestedUnit = buyerOffer.terms?.items?.[0]?.quantity?.unit;
           const quantityRaw = buyerOffer.terms?.items?.[0]?.quantity?.value;
-          if (invalidQuantity(quantityRaw)) return declineReply("schema_invalid");
-          const quantity = quantityRaw ?? MERCHANT_QUANTITY;
+          if (typeof sku !== "string" || sku.trim() === "" || typeof requestedUnit !== "string" || requestedUnit.trim() === "" || invalidQuantity(quantityRaw)) return declineReply("schema_invalid");
+          const quantity = quantityRaw as number;
           const floorMinor = floorMinorForSku(sku);
           if (floorMinor === null) return declineReply("temporarily_unavailable");
           const resolved = await resolveProductOrDecline(sku);
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
-          const { priceMinor, currency, note, handoff_destination } = product;
+          const { priceMinor, currency } = product;
+          if (product.unit === undefined || product.unit !== requestedUnit) return declineReply("field_unsupported");
+          const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
           if (promotion.kind === "unavailable") return declineReply("temporarily_unavailable");
@@ -1023,17 +1032,18 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               proposed_terms: offerTerms(
                 {
                   sku,
+                  unit: product.unit,
                   priceMinor: effectivePriceMinor,
                   quantity,
                   currency,
                   handoff_destination,
                   deliveryBefore: deliveryBefore(),
-                  ...(promotion.kind === "applied" ? { validUntilCap: promotion.endsAt } : {}),
+                  ...quoteValidity(product, promotion.kind === "applied" ? promotion.endsAt : undefined),
                 },
                 now(),
               ),
             },
-            ...(note !== undefined ? { public_message: note } : {}),
+            ...quoteMessage(product),
           });
           // 审查 P2：推进被拒 → 不落账不发出（防 OFFER_OPEN 下重复还价分裂）。
           const advanced = await advancePhase(negotiationId, {
@@ -1050,7 +1060,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               quantity,
             ),
           );
-          await appendSent(reply);
+          await appendSent(reply, snapshotFor(sku, quantity, product, promotion));
           return envelopeReply(reply);
         }
         case "counter_offer": {
@@ -1058,23 +1068,26 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             proposed_terms?: {
               items?: {
                 sku?: string;
-                quantity?: { value?: number };
+                quantity?: { value?: number; unit?: string };
                 unit_price?: { amount_minor?: number };
               }[];
             };
             offer_id?: string;
           };
-          const sku = counter.proposed_terms?.items?.[0]?.sku ?? MERCHANT_SKU;
+          const sku = counter.proposed_terms?.items?.[0]?.sku;
+          const requestedUnit = counter.proposed_terms?.items?.[0]?.quantity?.unit;
           const quantityRaw = counter.proposed_terms?.items?.[0]?.quantity?.value;
-          if (invalidQuantity(quantityRaw)) return declineReply("schema_invalid");
-          const quantity = quantityRaw ?? MERCHANT_QUANTITY;
+          if (typeof sku !== "string" || sku.trim() === "" || typeof requestedUnit !== "string" || requestedUnit.trim() === "" || invalidQuantity(quantityRaw)) return declineReply("schema_invalid");
+          const quantity = quantityRaw as number;
           const buyerCounterMinor = counter.proposed_terms?.items?.[0]?.unit_price?.amount_minor;
           const floorMinor = floorMinorForSku(sku);
           if (floorMinor === null) return declineReply("temporarily_unavailable");
           const resolved = await resolveProductOrDecline(sku);
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
-          const { priceMinor, currency, note, handoff_destination } = product;
+          const { priceMinor, currency } = product;
+          if (product.unit === undefined || product.unit !== requestedUnit) return declineReply("field_unsupported");
+          const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const authorityPromotion = resolvePromotionQuote(
             sku,
@@ -1142,14 +1155,13 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               base_terms: offerTerms(
                 {
                   sku,
+                  unit: product.unit,
                   priceMinor: responsiveMinor,
                   quantity,
                   currency,
                   handoff_destination,
                   deliveryBefore: deliveryBefore(),
-                  ...(authorityPromotion.kind === "applied"
-                    ? { validUntilCap: authorityPromotion.endsAt }
-                    : {}),
+                  ...quoteValidity(product, authorityPromotion.kind === "applied" ? authorityPromotion.endsAt : undefined),
                 },
                 now(),
               ),
@@ -1167,11 +1179,13 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                         then_terms: offerTerms(
                           {
                             sku,
+                            unit: product.unit,
                             priceMinor: promotionalMinor,
                             quantity,
                             currency,
                             handoff_destination,
                             deliveryBefore: deliveryBefore(),
+                            ...quoteValidity(product, authorityPromotion.kind === "applied" ? authorityPromotion.endsAt : undefined),
                           },
                           now(),
                         ),
@@ -1179,7 +1193,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                     ]
                   : [],
             },
-            ...(note !== undefined ? { public_message: note } : {}),
+            ...quoteMessage(product),
           });
           conditionalByNegotiation.set(negotiationId, {
             conditional: reply.payload as unknown as Record<string, unknown>,
@@ -1191,7 +1205,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             offer_id: String((reply.payload as { offer_id?: unknown }).offer_id ?? ""),
           });
           if (!advanced) return declineReply("state_conflict");
-          await appendSent(reply);
+          await appendSent(reply, snapshotFor(sku, quantity, product, authorityPromotion));
           return envelopeReply(reply);
         }
         case "clarification": {
@@ -1278,7 +1292,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if (validUntil !== undefined) {
             const validUntilMs = Date.parse(validUntil);
             const nowMs = Date.parse(now());
-            if (!Number.isFinite(validUntilMs) || !Number.isFinite(nowMs) || validUntilMs < nowMs) {
+            if (!Number.isFinite(validUntilMs) || !Number.isFinite(nowMs) || validUntilMs <= nowMs) {
               return declineReply("offer_expired");
             }
           }
@@ -1293,6 +1307,18 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             product_fingerprint?: string;
             base_terms?: { items?: { sku?: string }[] };
           };
+          const saved = quoteSources.get(negotiationId);
+          if (saved === undefined || saved.offer_id !== acceptedOfferId) return declineReply("offer_unknown");
+          const agreedItem = (agreedTerms as { items?: Array<{ sku?: unknown; quantity?: { value?: unknown; unit?: unknown } }> }).items?.[0];
+          if (agreedItem?.sku !== saved.snapshot.sku || agreedItem.quantity?.value !== saved.snapshot.quantity || agreedItem.quantity?.unit !== saved.snapshot.unit) return declineReply("approval_required");
+          const refreshedFacts = await resolveProductOrDecline(saved.snapshot.sku, { force: true });
+          if ("declined" in refreshedFacts) return declineReply("approval_required");
+          if (!quoteFactsStillValid(saved.snapshot, refreshedFacts.product, Date.parse(now()))) return declineReply("approval_required");
+          if (saved.snapshot.policy_digest !== policyDigest()) return declineReply("approval_required");
+          const currentFloor = floorMinorForSku(saved.snapshot.sku);
+          if (currentFloor === null) return declineReply("approval_required");
+          const currentPromotion = resolvePromotionQuote(saved.snapshot.sku, saved.snapshot.quantity, refreshedFacts.product.priceMinor, refreshedFacts.product.currency, currentFloor);
+          if (contentDigest(currentPromotion as never) !== contentDigest(saved.snapshot.promotion as never)) return declineReply("approval_required");
           const currentPolicyDigest = policyDigest();
           if (
             acceptedConditionalPayload.policy_digest !== undefined &&
@@ -1305,7 +1331,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             acceptedConditionalPayload.product_fingerprint !== undefined &&
             acceptedSku !== undefined
           ) {
-            const refreshed = await resolveProductOrDecline(acceptedSku, { force: true });
+            const refreshed = refreshedFacts;
             if (
               "declined" in refreshed ||
               productFingerprint({
@@ -1346,6 +1372,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           };
           // 协商终态：conditional 不再需要（评审项 L3：此前永久累积）。
           conditionalByNegotiation.delete(negotiationId);
+          quoteSources.delete(negotiationId);
           closedNegotiations.add(negotiationId);
           return {
             kind: "accepted",
@@ -1363,6 +1390,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           // conditional；scope=negotiation 进终态集合。
           const scope = (envelope.payload as { scope?: string }).scope ?? "offer";
           conditionalByNegotiation.delete(negotiationId);
+          quoteSources.delete(negotiationId);
           if (scope !== "offer") {
             closedNegotiations.add(negotiationId);
           }
@@ -1370,6 +1398,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         }
         case "cancel":
           conditionalByNegotiation.delete(negotiationId);
+          quoteSources.delete(negotiationId);
           closedNegotiations.add(negotiationId);
           await advancePhase(negotiationId, { type: "cancel" });
           return textReply("Negotiation cancelled.");

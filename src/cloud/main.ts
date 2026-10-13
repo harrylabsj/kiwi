@@ -26,23 +26,54 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { bootstrapCloudRuntime, renderStartupFailure } from "./bootstrap.js";
+import { withCloseDeadline } from "../lifecycle/close.js";
+
+/** Current package engines floor; evaluated before importing the sqlite/bootstrap chain. */
+export function isNodeBelowSupportLine(version: string): boolean {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  if (!match) return true;
+  const major = Number(match[1]), minor = Number(match[2]), patch = Number(match[3]);
+  return !Number.isSafeInteger(major) || !Number.isSafeInteger(minor) || !Number.isSafeInteger(patch) || major < 22 || (major === 22 && minor < 19);
+}
+
+export function createCloudShutdown(
+  close: () => Promise<void>,
+  exit: (code: number) => void = (code) => process.exit(code),
+  write: (text: string) => void = (text) => { process.stderr.write(text); },
+  timeoutMs = 60_000,
+): () => Promise<void> {
+  let inFlight: Promise<void> | undefined;
+  return () => {
+    if (!inFlight) inFlight = (async () => {
+      let code = 0;
+      try { await withCloseDeadline(Promise.resolve().then(close), timeoutMs); }
+      catch {
+        code = 1;
+        try { write("[kiwi-cloud] 关闭失败（RESOURCE_CLOSE_FAILED），资源释放未确认。\n"); } catch { /* Still exit nonzero if the log sink failed. */ }
+      }
+      exit(code);
+    })();
+    return inFlight;
+  };
+}
 
 export async function runCloudMain(): Promise<number> {
-  let instance;
-  try {
-    instance = await bootstrapCloudRuntime();
-  } catch (err) {
-    process.stderr.write(renderStartupFailure(err));
+  if (isNodeBelowSupportLine(process.versions.node)) {
+    process.stderr.write("[kiwi-cloud] 启动失败（NODE_UNSUPPORTED）：需要Node.js >=22.19.0。\n");
     return 1;
   }
-  const shutdown = async (): Promise<void> => {
-    await instance.close().catch(() => undefined);
-    process.exit(0);
-  };
+  let instance;
+  try {
+    const { bootstrapCloudRuntime, renderStartupFailure } = await import("./bootstrap.js");
+    try { instance = await bootstrapCloudRuntime(); }
+    catch (err) { process.stderr.write(renderStartupFailure(err)); return 1; }
+  } catch {
+    process.stderr.write("[kiwi-cloud] 启动失败（BOOTSTRAP_LOAD_FAILED）。\n");
+    return 1;
+  }
+  const shutdown = createCloudShutdown(instance.close);
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
-  // 常驻：请求由 http server 驱动，这里只保持事件循环。
   await new Promise<never>(() => {});
   return 0;
 }
@@ -59,8 +90,8 @@ if (isDirectRun()) {
     .then((code) => {
       if (code !== 0) process.exit(code);
     })
-    .catch((err: unknown) => {
-      process.stderr.write(renderStartupFailure(err));
+    .catch(() => {
+      process.stderr.write("[kiwi-cloud] 启动失败（RUNTIME_STARTUP_FAILED）。\n");
       process.exit(1);
     });
 }

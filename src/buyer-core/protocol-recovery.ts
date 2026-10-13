@@ -11,6 +11,7 @@ import {
 import { A2A_TASK_STATES, type A2ATask } from "../a2a/client/types.js";
 import { extractKnpEnvelope } from "./a2a-knp.js";
 import { McpError } from "./errors.js";
+import { assertBuyerReplySemantics, BuyerReplyRejected } from "./receive-gate.js";
 
 export interface ProtocolTaskContext {
   taskId: string;
@@ -74,6 +75,7 @@ export class BuyerProtocolRecovery {
   constructor(
     readonly dir: string,
     readonly buyerId: string,
+    private readonly now: () => string = () => new Date().toISOString(),
   ) {
     if (!dir || !buyerId.trim())
       throw new McpError("invalid_params", "protocol persistence and buyer identity are required");
@@ -114,6 +116,49 @@ export class BuyerProtocolRecovery {
     if (!this.ledger.verifyChain(id).valid) throw new ProtocolOperationUnknown();
     return this.ledger.events(id);
   }
+  /** Read price only from a journaled reply and its original outbound request. */
+  validatedQuote(input: {
+    context: ProtocolTaskContext;
+    negotiationId: string;
+    merchantId: string;
+    endpoint: string;
+    replyId: string;
+    offerId: string;
+  }): ProtocolReply | undefined {
+    const events = this.events(input.negotiationId);
+    const complete = events.find((event) => event.event_kind === "message_received" && event.message_id === input.replyId);
+    if (!complete) return undefined; // Legacy prose is not authoritative price evidence.
+    const op = metadata(complete);
+    if (!op || op.task_id !== input.context.taskId || op.task_created_at !== input.context.createdAt ||
+        op.merchant_id !== input.merchantId || op.endpoint !== input.endpoint)
+      throw new ProtocolOperationConflict();
+    const sent = events.find((event) => event.event_kind === "message_sent" && metadata(event)?.operation_id === op.operation_id);
+    if (!sent || sent.identity.sender_identity !== this.buyerId) throw new ProtocolOperationUnknown();
+    const wire = validateWireEnvelope(sent.wire_payload);
+    const receipt = events.find((event) => event.event_kind === "system" &&
+      metadata(event)?.operation_id === op.operation_id &&
+      (metadata(event) as unknown as { kind: string }).kind === "receipt");
+    if (!receipt?.remote_task_id) throw new ProtocolOperationUnknown();
+    const reply = this.completedReply(complete, receipt, wire);
+    const payload = reply.payload;
+    if ((payload.type !== "offer" && payload.type !== "counter_offer") || payload.offer_id !== input.offerId)
+      throw new ProtocolOperationConflict();
+    return { reply, wire, endpoint: op.endpoint, merchantId: op.merchant_id };
+  }
+  private completedReply(complete: LedgerEvent, receipt: LedgerEvent, wire: NegotiationEnvelope): NegotiationEnvelope {
+    let reply: NegotiationEnvelope;
+    try {
+      reply = validateWireEnvelope(complete.wire_payload);
+      extractKnpEnvelope({ id: receipt.remote_task_id!, contextId: receipt.remote_context_id,
+        status: { state: "completed", message: { role: "agent", messageId: reply.message_id,
+          parts: [{ kind: "data", data: { knp_envelope: reply } }] } } }, wire);
+    } catch {
+      throw new BuyerReplyRejected("wire_invalid");
+    }
+    if (reply.message_id === wire.message_id) throw new BuyerReplyRejected("wire_invalid");
+    assertBuyerReplySemantics(reply, wire, this.now);
+    return reply;
+  }
   async exchange(input: ProtocolExchange): Promise<ProtocolReply> {
     this.requireContext(input.context);
     const slot = this.slot(input.context, input.stage, input.round, input.merchantId);
@@ -138,7 +183,8 @@ export class BuyerProtocolRecovery {
         throw new ProtocolOperationConflict();
       try {
         return await this.resume(prior, input.get, input.timeoutMs, input.pollIntervalMs);
-      } catch {
+      } catch (error) {
+        if (error instanceof BuyerReplyRejected) throw error;
         throw new ProtocolOperationUnknown();
       }
     }
@@ -196,7 +242,7 @@ export class BuyerProtocolRecovery {
       });
       return await this.resume(sent, input.get, input.timeoutMs, input.pollIntervalMs, task);
     } catch (error) {
-      if (error instanceof ProtocolOperationConflict) throw error;
+      if (error instanceof ProtocolOperationConflict || error instanceof BuyerReplyRejected) throw error;
       throw new ProtocolOperationUnknown();
     }
   }
@@ -317,23 +363,7 @@ export class BuyerProtocolRecovery {
       return { reply, wire, endpoint: op.endpoint, merchantId: op.merchant_id };
     };
     if (complete) {
-      const reply = validateWireEnvelope(complete.wire_payload);
-      extractKnpEnvelope(
-        {
-          id: receipt.remote_task_id,
-          contextId: receipt.remote_context_id,
-          status: {
-            state: "completed",
-            message: {
-              role: "agent",
-              messageId: reply.message_id,
-              parts: [{ kind: "data", data: { knp_envelope: reply } }],
-            },
-          },
-        },
-        wire,
-      );
-      return finish(reply, complete);
+      return finish(this.completedReply(complete, receipt, wire), complete);
     }
     const deadline = Date.now() + timeout;
     let task = initial;
@@ -347,10 +377,16 @@ export class BuyerProtocolRecovery {
       );
       const knownContext = receipt.remote_context_id ?? bound?.remote_context_id;
       this.validateTask(task, receipt, knownContext);
-      const reply = extractKnpEnvelope(task, wire);
+      let reply: NegotiationEnvelope | null;
+      try {
+        reply = extractKnpEnvelope(task, wire);
+      } catch {
+        throw new BuyerReplyRejected("wire_invalid");
+      }
       if (knownContext === undefined && typeof task.contextId === "string")
         this.bindContext(sent, receipt, task.contextId);
       if (reply && reply.message_id !== wire.message_id) {
+        assertBuyerReplySemantics(reply, wire, this.now);
         let event: LedgerEvent;
         try {
           event = this.ledger.append({
@@ -408,7 +444,7 @@ export class BuyerProtocolRecovery {
             await this.resume(sent, (taskId) => get(op.endpoint, taskId), timeout, interval),
           );
         } catch (error) {
-          if (error instanceof ProtocolOperationConflict)
+          if (error instanceof ProtocolOperationConflict || error instanceof BuyerReplyRejected)
             throw error; /* unknown remains in ledger; no resend */
         }
       }

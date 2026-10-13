@@ -38,7 +38,9 @@ const INTENT = {
 describe("KiwiCatalogMerchantIndex（listings 感知发现）", () => {
   it("商品查询经 /v1/listings/search 返回商家 + matching_skus + agent_card_url", async () => {
     const { KiwiCatalogMerchantIndex } = await import("../src/buyer-core/merchant-index.js");
-    const stack = await startTestA2aStack({});
+    // A659：merchant 栈与 buyer 侧默认真实时钟端到端一致（原固定 August ×
+    // 真实 October 混用被 receive gate 如实判 offer_expired，probe-1 实证）。
+    const stack = await startTestA2aStack({ now: () => new Date().toISOString() });
     try {
       const index = new KiwiCatalogMerchantIndex({ baseUrl: stack.catalogUrl });
       const merchants = await index.search("Test Product");
@@ -65,8 +67,10 @@ describe("A2AQuoteFetcher（catalog 发现 → A2A 直连 merchant RFQ）", () =
     const { KiwiCatalogMerchantIndex } = await import("../src/buyer-core/merchant-index.js");
     const capture: Array<{ action: string; senderIdentity: string; envelope: Record<string, unknown> }> = [];
     const stack = await startTestA2aStack({
+      // A659：merchant 栈真实时钟，与 buyer 侧端到端一致（见上）。
+      now: () => new Date().toISOString(),
       productSource: {
-        getProduct: async () => ({ price: 189, currency: "CNY", title: "Test Product", stock: 120 }),
+        getProduct: async () => ({ price: 189, currency: "CNY", title: "Test Product", stock: 120, unit: "台", source_evidence: { system: "owned-test-fixture" } }),
       },
       capture,
     });
@@ -117,8 +121,10 @@ describe("A2AQuoteFetcher（catalog 发现 → A2A 直连 merchant RFQ）", () =
     const { buildKiwiTools } = await import("../src/mcp/tools.js");
     const { DEFAULT_DELEGATION_POLICY } = await import("../src/mcp/cli.js");
     const stack = await startTestA2aStack({
+      // A659：merchant 栈真实时钟，与 buyer 侧端到端一致（见上）。
+      now: () => new Date().toISOString(),
       productSource: {
-        getProduct: async () => ({ price: 189, currency: "CNY", title: "Test Product", stock: 120 }),
+        getProduct: async () => ({ price: 189, currency: "CNY", title: "Test Product", stock: 120, unit: "个", source_evidence: { system: "owned-test-fixture" } }),
       },
     });
     try {
@@ -178,25 +184,34 @@ describe("A2ANegotiator（A2A 直连 merchant CounterOffer）", () => {
     const { A2ANegotiator } = await import("../src/buyer-core/a2a-negotiator.js");
     const { KiwiCatalogMerchantIndex } = await import("../src/buyer-core/merchant-index.js");
     const stack = await startTestA2aStack({
+      // A659：merchant 栈真实时钟，与 buyer 侧端到端一致（见上）。
+      now: () => new Date().toISOString(),
       productSource: {
-        getProduct: async () => ({ price: 189, currency: "CNY", title: "Test Product", stock: 120 }),
+        getProduct: async () => ({ price: 189, currency: "CNY", title: "Test Product", stock: 120, unit: "台", source_evidence: { system: "owned-test-fixture" } }),
       },
     });
     try {
       const index = new KiwiCatalogMerchantIndex({ baseUrl: stack.catalogUrl });
       const merchants = await index.search("Test Product");
+      // A651 接缝修正（claude-ds 待运行复验）：A647 起 negotiator 只从与
+      // fetcher 同一 protocol directory 的持久 journal 读真实报价定价（裸
+      // provenance 不再当价格权威），且 validatedQuote 强校验 task_created_at
+      // ——两个 adapter 必须共享同一 protocolStateDir 与同一 context 对象，
+      // 各建新目录/新 context 会使 journal 查不到而无法真实还价。
+      const protocolOpts = protocolOptions();
+      const context = protocolContext();
       const fetcher = new A2AQuoteFetcher({
-        ...protocolOptions(),
+        ...protocolOpts,
         allowPrivateRanges: true,
         skipDnsCheck: true,
         pollIntervalMs: 50,
         timeoutMs: 3000,
       });
-      const fetched = await fetcher.requestQuotes(INTENT, merchants, protocolContext());
+      const fetched = await fetcher.requestQuotes(INTENT, merchants, context);
       expect(fetched[0]?.status).toBe("succeeded");
 
       const negotiator = new A2ANegotiator({
-        ...protocolOptions(),
+        ...protocolOpts,
         allowPrivateRanges: true,
         skipDnsCheck: true,
         defaultDiscountRate: 0.1,
@@ -206,7 +221,7 @@ describe("A2ANegotiator（A2A 直连 merchant CounterOffer）", () => {
         INTENT,
         { round: 1, action: "counter_offer", summary: "还价 10%" },
         [fetched[0]!] as unknown as Array<Record<string, unknown>>,
-        protocolContext(),
+        context,
       );
       // 商家对 counter 有真实回复（step.reply），且不是"无上下文"失败。
       expect(step.reply).toBeDefined();

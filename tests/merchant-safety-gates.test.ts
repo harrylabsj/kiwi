@@ -64,6 +64,7 @@ function setup(options: {
   const dir = mkdtempSync(join(tmpdir(), "kiwi-gate-"));
   dirs.push(dir);
   return createMerchantHandler({
+
     ledger: new LedgerStore({ dir: join(dir, "ledger"), now: () => NOW }),
     now: () => NOW,
     sender: "merchant:merchant-001",
@@ -71,7 +72,7 @@ function setup(options: {
     productSource: {
       getProduct: async () => {
         if (options.fail === true) throw new Error("商品源失联（测试注入）");
-        return options.facts ?? { price: 850, currency: "CNY" };
+        return { unit: "piece", source_evidence: { system: "owned-test-fixture" }, ...(options.facts ?? { price: 850, currency: "CNY", stock: 1000 }) };
       },
     },
     merchantPolicy: options.policy ?? { max_auto_discount_percent: 10 },
@@ -79,7 +80,7 @@ function setup(options: {
   });
 }
 
-const rfq = (quantity = 10) => envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: quantity } }] });
+const rfq = (quantity = 10) => envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: quantity, unit: "piece" } }] });
 
 describe("T046：商品数据过期 / 商品源失联 / 库存不足", () => {
   it("数据已过期 → 明确不可报价（temporarily_unavailable），响应里没有任何金额", async () => {
@@ -147,7 +148,7 @@ describe("T048：超范围交易（下单/付款/锁库存）不执行", () => {
       handler,
       envelopeFor("counter_offer", {
         offer_id: "off_buyer",
-        proposed_terms: { items: [{ sku: "SKU-001", quantity: { value: 200 }, unit_price: { amount_minor: 84000 } }] },
+        proposed_terms: { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" }, unit_price: { amount_minor: 84000 } }] },
       }),
     );
     expect(counter.kind).toBe("accepted");

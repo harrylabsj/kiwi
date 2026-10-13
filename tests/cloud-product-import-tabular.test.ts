@@ -697,3 +697,27 @@ function workbookRels(): string {
     `</Relationships>`
   );
 }
+
+
+describe("source price: zero and exact minor precision", () => {
+  it("imports an explicitly supplied zero price without changing it", () => {
+    const result = convertCsv("sku,title,currency,unit,price,valid_until\nZERO,Free fixture,CNY,box,0,2027-12-31");
+    expect(result.ok).toBe(true); expect(result.table?.products[0]?.price).toBe(0);
+  });
+  it("uses the same explicit zero-price rule for an actual xlsx workbook", () => {
+    const headers = ["sku", "title", "currency", "unit", "price", "valid_until"];
+    const values = ["ZERO-XLSX", "Owned fixture", "CNY", "box", "0", "2027-12-31"];
+    const row = (cells: string[], r: number) => `<row r="${r}">${cells.map((value, i) => `<c r="${String.fromCharCode(65+i)}${r}" t="inlineStr"><is><t>${value}</t></is></c>`).join("")}</row>`;
+    const bytes = buildTestXlsx([
+      { name: "[Content_Types].xml", content: contentTypes() }, { name: "_rels/.rels", content: rels() },
+      { name: "xl/workbook.xml", content: workbook() }, { name: "xl/_rels/workbook.xml.rels", content: workbookRels() },
+      { name: "xl/worksheets/sheet1.xml", content: `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${row(headers,1)}${row(values,2)}</sheetData></worksheet>` },
+    ]);
+    const result = convertTabularImport({ kind: "xlsx", bytes }, OPTIONS);
+    expect(result.ok).toBe(true); expect(result.table?.products[0]?.price).toBe(0);
+  });
+  it.each(["-1", "abc", "Infinity", "85.005"])("rejects invalid/lossy price %s without rounding", value => {
+    const result = convertCsv(`sku,title,currency,unit,price,valid_until\nBAD,Fixture,CNY,box,${value},2027-12-31`);
+    expect(result.ok).toBe(false); expect(result.table).toBeUndefined(); expect(result.errors).toContainEqual(expect.objectContaining({ field: "price", code: "BAD_NUMBER" }));
+  });
+});

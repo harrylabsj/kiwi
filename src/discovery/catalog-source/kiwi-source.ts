@@ -137,6 +137,11 @@ export class KiwiCatalogSource {
     this.deps = deps;
   }
 
+  /** 配置态来源标识（A651 包四 sidecar configured_catalog_origin；非模型可填参数）。 */
+  get origin(): string {
+    return this.baseUrl;
+  }
+
   /** 核心请求：超时 / HTTP / 网络失败统一映射为 CatalogSourceError。 */
   private async getJson(requestPath: string, options: ReadRequestOptions = {}): Promise<unknown> {
     const fetchImpl = this.deps.fetchImpl ?? globalThis.fetch;

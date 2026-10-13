@@ -54,6 +54,10 @@ export interface CommerceField<T> {
 /** 商品事实（public-only；成本/底价等私有数据绝不进入本边界）。 */
 export interface ProductFact {
   readonly sku: string;
+  /** Declared source unit/validity only; no title/price-based inference. */
+  readonly unit?: string;
+  readonly valid_until?: string;
+  readonly source_evidence?: import("../a2a/server/merchant-product-facts.js").ProductSourceEvidence;
   readonly title?: string;
   /** 公开价（minor units；与 KNP Money 一致，禁 float）。 */
   readonly price_minor?: number;

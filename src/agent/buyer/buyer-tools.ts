@@ -27,11 +27,23 @@ import {
   HandoffIdempotencyStore,
   HandoffEventStore,
   createHandoffCandidate,
-  defaultUrlSafety,
   executeHandoff,
   validateDestination,
+  validateExternalDestinationUrl,
   type HandoffCandidate,
+  type HandoffLaunchContext,
+  type MarketplaceSourceBinding,
 } from "../../handoff/index.js";
+import {
+  buildMarketplaceSourceBinding,
+  MarketplaceLaunchPolicyError,
+  parseMarketplaceTradeUrl,
+  sameMarketplaceTarget,
+  type MarketplaceListingSnapshot,
+} from "../../handoff/launch-marketplace-policy.js";
+import { isUrlDestinationType } from "../../handoff/destination.js";
+import { CatalogSourceError } from "../../discovery/catalog-source/errors.js";
+import { CommerceError } from "../../commerce/data-source.js";
 import type { ExecuteHandoffResult } from "../../handoff/index.js";
 import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
 import { contentDigest } from "../../negotiation/jcs.js";
@@ -1451,6 +1463,20 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         if (!Number.isFinite(expiresInHours) || expiresInHours <= 0) {
           return textResult("expires_in_hours 必须是正数（小时）。");
         }
+        // ── A651 包四：三平台市场形态 URL 目的地的可信交易来源门（创建期）──
+        // 缺正常来源事实 → 固定 refusal，**不创建可交付候选**（fail-closed）。
+        // listing_id 只取任务 shortlist 线索；权威以 configured CatalogSource
+        // 新鲜重读为准，模型/搜索结果的 source 标签不自证。政策只覆盖三平台
+        //（PACK4 §1）：非市场形态 URL 保持原防钓鱼路径，不在此门内。
+        if (isUrlDestinationType(destination.type) && marketplaceTradeRef(destination.ref) !== undefined) {
+          const refusal = await resolveTradeSourceRefusal(deps, {
+            taskId: p.task_id,
+            agreement,
+            destinationRef: destination.ref,
+            nowMs: Date.parse(deps.now()),
+          });
+          if (refusal !== undefined) return textResult(refusal, { status: "needs_configuration" });
+        }
         // 审计链：stale 候选之后的新候选链接到被它取代的候选
         //（supersedes_candidate_id；此前从不写入，stale 后的新候选是审计孤儿）。
         const lastStale = [...handoff.ledger.events(agreement.negotiation_id).map((event) => handoff.ledger.resolvePayload(event))]
@@ -1477,6 +1503,44 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             : {}),
           requires_user_action: true,
         });
+        // ── A651 包四：可信来源 sidecar（批准证据与执行门输入）──────────
+        // 在候选 digest 定型后构造，绑定 task/negotiation/agreement/terms/
+        // candidate 与本次可信读取快照；随批准链持久化，执行期强制重核。
+        // 仅三平台市场形态目的地需要 binding（政策范围）。
+        let launchSourceBinding: MarketplaceSourceBinding | undefined;
+        if (
+          isUrlDestinationType(destination.type) &&
+          marketplaceTradeRef(destination.ref) !== undefined &&
+          deps.catalogSource !== undefined
+        ) {
+          const hintListingId = launchListingHint(
+            deps,
+            p.task_id,
+            agreedTermsSku(agreement.agreed_terms),
+            ownerAgentIdFromIdentity(agreement.merchant_identity_ref),
+          );
+          if (hintListingId !== undefined) {
+            try {
+              launchSourceBinding = buildMarketplaceSourceBinding({
+                catalogOrigin: deps.catalogSource.origin,
+                listing: await readTrustedListing(deps, hintListingId),
+                taskId: p.task_id,
+                negotiationId: agreement.negotiation_id,
+                agreementId: agreement.agreement_id,
+                termsDigest: candidate.terms_digest,
+                candidateDigest: candidate.candidate_digest,
+                observedAt: deps.now(),
+              });
+            } catch {
+              // 第二次读取失败 = 创建与绑定之间来源已不可稳定重读：不进入
+              // 审批链（fail-closed； refusal 语义与创建期门一致）。
+              return textResult(
+                "可信交易来源在候选创建后无法稳定重读；未创建可交付候选，可稍后重试。",
+                { status: "needs_configuration" },
+              );
+            }
+          }
+        }
         const outcome = await routeWriteCandidate(
           {
             mode: deps.mode,
@@ -1488,7 +1552,11 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           {
             tool: "handoff_agreement",
             task_id: p.task_id,
-            arguments: { task_id: p.task_id, candidate },
+            arguments: {
+              task_id: p.task_id,
+              candidate,
+              ...(launchSourceBinding !== undefined ? { launch_source_binding: launchSourceBinding } : {}),
+            },
             preconditions: { agreement_bound: true },
             risk: "handoff_delivery",
             execute: (approvedArgs) => executeHandoffForCandidate(deps, approvedArgs),
@@ -1765,6 +1833,200 @@ function declaredHandoffHost(
   }
 }
 
+/**
+ * A651 包四：可信交易来源接线（launch-marketplace-policy 的 buyer 侧宿主依赖）。
+ *
+ * 职责边界（PACK4-READONLY-PLAN §2/§3/§5）：
+ *   - listing_id 只作选择线索（任务 shortlist 候选行）；权威事实以 configured
+ *     CatalogSource.getListing **新鲜重读**为准；模型 shortlist 的 source 标签、
+ *     URL、verified:true 一律不自证。
+ *   - sidecar（MarketplaceSourceBinding）由可信读取形成，绑定任务/磋商/协议/
+ *     条款/候选 digest，随批准链持久化；执行期 executeHandoff 强制门以新鲜
+ *     重读逐项重核——来源变更 → stale（原审批流程新确认），无证据 →
+ *     needs_configuration（不交付）。
+ *   - 证明边界：仅证明「本次正常 Catalog 声明的 SKU 对应协议交付一致的目的地
+ *     URI/平台ID」，不是平台商品真值/价格/库存/下单/支付/预留。
+ */
+
+/** agreement 首行 SKU（当前协议实际接受商品；无单一行 → undefined）。 */
+function agreedTermsSku(agreed_terms: unknown): string | undefined {
+  const items = (agreed_terms as { items?: unknown } | null | undefined)?.items;
+  if (!Array.isArray(items) || items.length !== 1) return undefined;
+  const sku = (items[0] as { sku?: unknown } | null | undefined)?.sku;
+  return typeof sku === "string" && sku !== "" ? sku : undefined;
+}
+
+/** merchant:{catalogAgentId} 形态的协议归属 → catalog owner agent id。 */
+function ownerAgentIdFromIdentity(identityRef: string): string | undefined {
+  const prefix = "merchant:";
+  return identityRef.startsWith(prefix) && identityRef.length > prefix.length
+    ? identityRef.slice(prefix.length)
+    : undefined;
+}
+
+/** ListingRecord → 受控快照投影（结构满足 MarketplaceListingSnapshot；不携带
+ *  cost/floor/私有库存等未列字段）。 */
+function listingSnapshot(listing: {
+  listing_id: string;
+  listing_type: string;
+  owner_agent_id: string;
+  merchant_id: string;
+  source_product_ref?: string;
+  source_revision?: string;
+  handoff_destination_ref?: string;
+  listing_digest: string;
+  publication_state: string;
+  listing_freshness_state: string;
+  fresh_until: string;
+  updated_at: string;
+}): MarketplaceListingSnapshot {
+  return {
+    listing_id: listing.listing_id,
+    listing_type: listing.listing_type,
+    owner_agent_id: listing.owner_agent_id,
+    merchant_id: listing.merchant_id,
+    ...(listing.source_product_ref !== undefined ? { source_product_ref: listing.source_product_ref } : {}),
+    ...(listing.source_revision !== undefined ? { source_revision: listing.source_revision } : {}),
+    ...(listing.handoff_destination_ref !== undefined ? { handoff_destination_ref: listing.handoff_destination_ref } : {}),
+    listing_digest: listing.listing_digest,
+    publication_state: listing.publication_state,
+    listing_freshness_state: listing.listing_freshness_state,
+    fresh_until: listing.fresh_until,
+    updated_at: listing.updated_at,
+  };
+}
+
+/** 批准链上带回的 sidecar 形状检查（不合法 = 无证据 → needs_configuration）。 */
+function extractSourceBinding(value: unknown): MarketplaceSourceBinding | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const b = value as Partial<MarketplaceSourceBinding>;
+  if (b.binding_version !== "marketplace_source_binding/1") return undefined;
+  if (typeof b.listing_id !== "string" || b.listing_id === "") return undefined;
+  return value as MarketplaceSourceBinding;
+}
+
+/** 三平台市场形态判定（吞掉分类错误；非市场形态 → undefined，保持原路径）。 */
+function marketplaceTradeRef(ref: string): ReturnType<typeof parseMarketplaceTradeUrl> | undefined {
+  try {
+    return parseMarketplaceTradeUrl(ref);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * listing_id 选择线索（PACK4 §2：只作线索，权威以重读为准）：优先与协议
+ * SKU/商家归属一致的 shortlist 候选行，避免误拿无关连接器候选。
+ */
+function launchListingHint(
+  deps: BuyerToolDeps,
+  taskId: string,
+  agreedSku: string | undefined,
+  ownerAgentId: string | undefined,
+): string | undefined {
+  const rows = deps.store
+    .listCandidates(taskId)
+    .filter((c) => c.external_product_id !== "");
+  const matched =
+    (agreedSku !== undefined ? rows.find((c) => c.sku === agreedSku) : undefined) ??
+    (ownerAgentId !== undefined ? rows.find((c) => c.owner_agent_id === ownerAgentId) : undefined) ??
+    rows[0];
+  const hint = matched?.external_product_id;
+  return hint !== undefined && hint !== "" ? hint : undefined;
+}
+
+/**
+ * CatalogSource 读取的瞬时/硬失败翻译：request_failed/request_timeout →
+ * CommerceError("request_failed")（执行门按 probe_failed 可重试）；其余原样
+ * 传播（执行门按 needs_configuration 固定拒绝）。
+ */
+async function readTrustedListing(
+  deps: BuyerToolDeps,
+  listingId: string,
+): Promise<MarketplaceListingSnapshot> {
+  const catalogSource = deps.catalogSource;
+  if (catalogSource === undefined) {
+    throw new CommerceError("invalid_input", "kiwi-catalog listing source is not configured");
+  }
+  try {
+    return listingSnapshot(await catalogSource.getListing(listingId));
+  } catch (err) {
+    if (err instanceof CatalogSourceError && (err.code === "request_failed" || err.code === "request_timeout")) {
+      throw new CommerceError("request_failed", "trade source re-read temporarily unavailable");
+    }
+    throw err;
+  }
+}
+
+/**
+ * 创建期可信来源解析与协议一致性核验。返回固定 refusal 文案（undefined =
+ * 来源事实成立）；调用方据此**不创建**可交付候选（经理裁定 2026-10-13）。
+ */
+async function resolveTradeSourceRefusal(
+  deps: BuyerToolDeps,
+  input: {
+    taskId: string;
+    agreement: { agreed_terms: unknown; merchant_identity_ref: string };
+    destinationRef: string;
+    nowMs: number;
+  },
+): Promise<string | undefined> {
+  const catalogSource = deps.catalogSource;
+  if (catalogSource === undefined) {
+    return "URL 交易目的地需要可信 catalog 来源验证（needs_configuration/unverified）：当前环境未配置 kiwi-catalog listing 源，不创建交接候选。";
+  }
+  const sku = agreedTermsSku(input.agreement.agreed_terms);
+  if (sku === undefined) {
+    return "协议条款缺少单一商品 SKU，无法绑定可信交易来源（needs_configuration）；不创建交接候选。";
+  }
+  const ownerAgentId = ownerAgentIdFromIdentity(input.agreement.merchant_identity_ref);
+  if (ownerAgentId === undefined) {
+    return "协议商家归属无法映射到 catalog owner（needs_configuration）；不创建交接候选。";
+  }
+  // listing_id 只是选择线索；权威以重读为准。
+  const hint = launchListingHint(deps, input.taskId, sku, ownerAgentId);
+  if (hint === undefined) {
+    return "任务没有 shortlist listing 线索，无法定位可信交易来源（needs_configuration）；不创建交接候选。";
+  }
+  let listing: MarketplaceListingSnapshot;
+  try {
+    listing = await readTrustedListing(deps, hint);
+  } catch (err) {
+    if (err instanceof CommerceError && err.code === "request_failed") {
+      return "可信交易来源暂时不可读（catalog 暂不可达）；未创建交接候选，可稍后重试。";
+    }
+    return "可信交易来源读取失败（listing 不存在或响应不合法）；不创建交接候选。";
+  }
+  // 权威事实 vs 协议声明——逐项精确匹配；模型线索不一致即拒。
+  if (listing.listing_type !== "product" || listing.publication_state !== "ACTIVE" || listing.listing_freshness_state !== "FRESH") {
+    return "可信交易来源不是 ACTIVE/FRESH 的 product listing；不创建交接候选。";
+  }
+  const freshUntilMs = Date.parse(listing.fresh_until);
+  if (!Number.isFinite(freshUntilMs) || freshUntilMs <= input.nowMs) {
+    return "可信交易来源新鲜度已过（fresh_until）；不创建交接候选。";
+  }
+  if (listing.source_product_ref !== sku) {
+    return "可信交易来源 SKU 与协议接受商品不一致；不创建交接候选。";
+  }
+  if (listing.owner_agent_id !== ownerAgentId) {
+    return "可信交易来源 owner 与协议商家归属不一致；不创建交接候选。";
+  }
+  if (listing.handoff_destination_ref !== input.destinationRef) {
+    return "可信交易来源声明的成交入口与协议目的地不一致；不创建交接候选。";
+  }
+  // URL 交易目的地必须是三平台确切形态（P4 校准：不做自有域 fallback）——
+  // binding 只为可平台绑定的市场入口形成；错误 ID/额外 query/混淆形态在此拒。
+  try {
+    parseMarketplaceTradeUrl(input.destinationRef);
+  } catch (err) {
+    if (err instanceof MarketplaceLaunchPolicyError) {
+      return "协议目的地不是受支持平台的确切交易形态（jd/taobao/tmall）；不创建交接候选。";
+    }
+    return "协议目的地不是合法 https URL；不创建交接候选。";
+  }
+  return undefined;
+}
+
 function agreementFromTask(events: readonly TaskEvent[]):
   | {
       agreement_id: string;
@@ -1849,6 +2111,10 @@ function handoffResultText(result: ExecuteHandoffResult): AgentToolResult<unknow
       return textResult(`交接未执行：${result.reason}。`, { status: "rejected" });
     case "expired":
       return textResult(`交接未执行：候选已过期。`, { status: "expired" });
+    case "needs_configuration":
+      // A651 包四强制门：市场形态 URL 目的地缺可信交易来源上下文——固定
+      // 拒绝、不交付；候选生命周期未动，补齐来源后可重试。
+      return textResult(`交接未执行：${result.reason}。`, { status: "needs_configuration" });
   }
 }
 
@@ -1857,7 +2123,7 @@ async function executeHandoffForCandidate(
   deps: BuyerToolDeps,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const a = args as { task_id: string; candidate: HandoffCandidate };
+  const a = args as { task_id: string; candidate: HandoffCandidate; launch_source_binding?: unknown };
   const handoff = deps.handoff;
   if (handoff === undefined) {
     return { ok: false, status: "unavailable", error: "Handoff 存储未配置，无法执行交接。" };
@@ -1868,6 +2134,32 @@ async function executeHandoffForCandidate(
       ok: false,
       status: "stale",
       error: "任务记录缺少 agreement 快照，交接中止（fail-closed）",
+    };
+  }
+  // ── A651 包四：三平台市场形态 URL 目的地的强制交易门输入 ─────────────
+  // 审批链带回的 sidecar + 执行期 configured CatalogSource 新鲜重读；市场
+  // 形态目的地无 sidecar（或不配置来源）→ executeHandoff 固定
+  // needs_configuration，旧授权不迁移。readSource 是 normal host 依赖，不
+  // 暴露给模型参数。非市场形态 URL 保持原防钓鱼路径（不走本门）。
+  let launchContext: HandoffLaunchContext | undefined;
+  if (isUrlDestinationType(a.candidate.destination_type) && marketplaceTradeRef(a.candidate.destination_ref) !== undefined) {
+    const binding = extractSourceBinding(a.launch_source_binding);
+    if (binding === undefined || deps.catalogSource === undefined) {
+      return {
+        ok: false,
+        status: "needs_configuration",
+        error: "URL 交易目的地缺可信交易来源上下文（needs_configuration/unverified）：不交付。",
+      };
+    }
+    const catalogSource = deps.catalogSource;
+    const bindingListingId = binding.listing_id;
+    launchContext = {
+      binding,
+      catalogOrigin: catalogSource.origin,
+      taskId: a.task_id,
+      agreedSku: agreedTermsSku(agreement.agreed_terms) ?? "",
+      ownerAgentId: ownerAgentIdFromIdentity(agreement.merchant_identity_ref) ?? "",
+      readSource: () => readTrustedListing(deps, bindingListingId),
     };
   }
   // created 事件在审批通过后才落链：被 /reject 的候选不在 Ledger 留下悬空的
@@ -1888,6 +2180,20 @@ async function executeHandoffForCandidate(
   // 放行该外部主机（如 item.jd.com）；LLM 现编的 destination_ref 仍限制在
   // merchant 声明域（anti-phishing）。
   const declaredHost = declaredHandoffHost(agreement, a.candidate);
+  // A651 包四：三平台绑定时**每一跳**（首跳 + 全部重定向）强制「同平台同
+  // opaque 商品 ID」——declaredHost OR 白名单只能证 host，不能证商品身份；
+  // onHop 在既有 scheme/host/SSRF 守卫之后调用，只能抛错收紧，不能放行。
+  const launchBinding = launchContext !== undefined ? extractSourceBinding(launchContext.binding) : undefined;
+  const launchTarget = (() => {
+    if (launchBinding === undefined) return undefined;
+    try {
+      return parseMarketplaceTradeUrl(a.candidate.destination_ref);
+    } catch {
+      // 正常接线不可达（binding 恒为三平台形态，verify 门先拒 ref 不等）；
+      // 防御：手造状态只落到 host 门，不放松 verify 强制门。
+      return undefined;
+    }
+  })();
   const result = await executeHandoff({
     candidate: a.candidate,
     ledger: handoff.ledger,
@@ -1907,10 +2213,34 @@ async function executeHandoffForCandidate(
       negotiation_id: agreement.negotiation_id,
       agreed_terms: agreement.agreed_terms,
     }),
-    urlSafety: defaultUrlSafety(
-      agreement.merchant_domain,
-      declaredHost !== undefined ? [declaredHost] : undefined,
-    ),
+    urlSafety: (url: string) =>
+      validateExternalDestinationUrl(url, {
+        ...(agreement.merchant_domain !== undefined ? { expectedHost: agreement.merchant_domain } : {}),
+        ...(declaredHost !== undefined ? { allowlist: [declaredHost] } : {}),
+        allowHttp: false,
+        ...(launchTarget !== undefined
+          ? {
+              onHop: (hopUrl: string): void => {
+                let parsed: ReturnType<typeof parseMarketplaceTradeUrl>;
+                try {
+                  parsed = parseMarketplaceTradeUrl(hopUrl);
+                } catch {
+                  throw new CommerceError(
+                    "invalid_input",
+                    "destination hop left the marketplace trade form (same platform, same product id required)",
+                  );
+                }
+                if (!sameMarketplaceTarget(parsed, launchTarget)) {
+                  throw new CommerceError(
+                    "invalid_input",
+                    "destination redirect changed platform product identity",
+                  );
+                }
+              },
+            }
+          : {}),
+      }),
+    ...(launchContext !== undefined ? { launchContext } : {}),
     now: deps.now,
   });
   const rendered = handoffResultText(result);

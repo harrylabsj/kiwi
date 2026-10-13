@@ -303,3 +303,16 @@ describe("dataSourceProductSource", () => {
     await expect(adapter.getProduct("NOPE")).rejects.toThrow(/no price/);
   });
 });
+
+
+describe("optional declared source facts projection", () => {
+  it("preserves real optional unit/validity/evidence without inventing absent values", async () => {
+    let fields: Record<string, unknown> = { unit: "kg", valid_until: "2026-10-14T00:00:00Z", source_evidence: { system: "owned-wire", source_version: "rev-3" } };
+    const source = new ShoppingCliCommerceDataSource({ baseUrl: "https://fixture.example", fetchImpl: (async () => jsonResponse({ product: { sku: "SKU", price: 0, currency: "CNY", stock: 20, ...fields } })) as typeof fetch });
+    const bridge = dataSourceProductSource(source);
+    expect(await bridge.getProduct("SKU")).toMatchObject({ sku: "SKU", price: 0, unit: "kg", valid_until: "2026-10-14T00:00:00Z", source_evidence: { system: "owned-wire", source_version: "rev-3" } });
+    fields = {};
+    const absent = await bridge.getProduct("SKU");
+    expect(absent).not.toHaveProperty("unit"); expect(absent).not.toHaveProperty("valid_until"); expect(absent).not.toHaveProperty("source_evidence");
+  });
+});

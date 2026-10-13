@@ -253,7 +253,7 @@ export async function startTestA2aStack(
     productSource?: {
       getProduct(
         sku: string,
-      ): Promise<{ price: number; currency: string; title?: string; stock?: number }>;
+      ): Promise<{ price: number; currency: string; title?: string; stock?: number; unit?: string; valid_until?: string; source_evidence?: import("../src/a2a/server/merchant-product-facts.js").ProductSourceEvidence }>;
     };
     catalogAgentId?: string;
     /** 传入数组后，每次入站信封（action/senderIdentity/envelope）被 push 进来。 */
@@ -263,6 +263,13 @@ export async function startTestA2aStack(
     /** DeepSeek Harness 运行时插件测试：注入推理后端（价格建议）+ merchant policy。 */
     decisionBackend?: MerchantDecisionBackend;
     merchantPolicy?: MerchantPolicy;
+    /**
+     * A659：merchant 栈时钟注入。缺省保持固定 NOW（既有套件零影响）；
+     * 需要与 buyer 侧默认真实时钟端到端一致的套件（a2a-buyer-core/a373）
+     * 显式传真实时钟，避免「merchant 固定 August × buyer 真实 October」
+     * 混用导致合法 offer 被如实判 offer_expired（probe-1 实证）。
+     */
+    now?: () => string;
   } = {},
 ): Promise<{
   catalogUrl: string;
@@ -280,12 +287,13 @@ export async function startTestA2aStack(
   const { IdempotencyStore } = await import("../src/negotiation/idempotency/index.js");
 
   const merchantDir = mkdtempSync(path.join(tmpdir(), "kiwi-a2a-stack-"));
-  const ledger = new LedgerStore({ dir: merchantDir, now: () => NOW });
-  const idempotency = new IdempotencyStore({ dir: merchantDir, now: () => NOW });
+  const stackNow = options.now ?? (() => NOW);
+  const ledger = new LedgerStore({ dir: merchantDir, now: stackNow });
+  const idempotency = new IdempotencyStore({ dir: merchantDir, now: stackNow });
   const holder = { baseUrl: "http://127.0.0.1:0" };
   const inner = createMerchantHandler({
     ledger,
-    now: () => NOW,
+    now: stackNow,
     sender: "merchant:merchant-001",
     counterparty: "buyer:*",
     ...(options.productSource !== undefined ? { productSource: options.productSource } : {}),
@@ -319,7 +327,7 @@ export async function startTestA2aStack(
     ledger,
     idempotency,
     handler,
-    now: () => NOW,
+    now: stackNow,
     ...(options.authVerifier !== undefined
       ? { authVerifier: options.authVerifier as never }
       : {}),

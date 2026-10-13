@@ -24,6 +24,8 @@
  * in the Vault and are only ever served to the model as metadata_only.
  */
 
+import { checkedSourceEvidence } from "../../a2a/server/merchant-product-facts.js";
+
 /** A merchant's own catalog product (shopping-cli catalog shape). */
 export interface MerchantCatalogProduct {
   sku: string;
@@ -37,6 +39,9 @@ export interface MerchantCatalogProduct {
   /** 精确库存仅在持有商户凭据时返回（design v0.3 §7 private inventory，
    *  审查 P2-1）；匿名读降级为 availability_hint，此处为 undefined。 */
   stock?: number;
+  unit?: string;
+  valid_until?: string;
+  source_evidence?: import("../../a2a/server/merchant-product-facts.js").ProductSourceEvidence;
   delivery_attributes: string[];
   /** Listing active flag. When true the product is paused/hidden from search. */
   paused: boolean;
@@ -159,6 +164,7 @@ export interface HumanReviewItem {
 }
 
 export interface InventorySnapshot {
+  unit?: string;
   sku: string;
   /** 无商户凭据时（匿名读）为空——精确库存是私密 inventory（审查 P2-1）。 */
   stock?: number;
@@ -343,7 +349,10 @@ export function parseMerchantCatalogProduct(value: unknown): MerchantCatalogProd
     description: typeof v.description === "string" ? v.description : "",
     category: typeof v.category === "string" ? v.category : "",
     tags: Array.isArray(v.tags) ? stringArray(v.tags, "product.tags") : [],
+    source_evidence: checkedSourceEvidence(v.source_evidence),
     price: reqNumber(v.price, "product.price"),
+    ...(typeof v.unit === "string" && v.unit.trim() !== "" ? { unit: v.unit } : {}),
+    ...(typeof v.valid_until === "string" ? { valid_until: v.valid_until } : {}),
     currency: typeof v.currency === "string" ? v.currency : "CNY",
     stock: typeof v.stock === "number" ? v.stock : undefined,
     delivery_attributes: Array.isArray(v.delivery_attributes)
@@ -409,6 +418,7 @@ export function parseInventorySnapshot(value: unknown, sku: string): InventorySn
         : typeof v.quantity === "number"
           ? v.quantity
           : undefined,
+    ...(typeof v.unit === "string" && v.unit.trim() !== "" ? { unit: v.unit } : {}),
     observed_at: typeof v.observed_at === "string" ? v.observed_at : new Date().toISOString(),
   };
 }

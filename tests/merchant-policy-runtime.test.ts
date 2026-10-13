@@ -204,12 +204,13 @@ describe("A2A 报价使用运行中策略（BUG-07 端到端）", () => {
     });
     const ledgerDir = path.join(dir, "ledger");
     const handler = createMerchantHandler({
+
       ledger: new LedgerStore({ dir: ledgerDir, now: () => NOW }),
       now: () => NOW,
       sender: "merchant:merchant-001",
       counterparty: "buyer:*",
       productSource: {
-        getProduct: async () => ({ price: 850, currency: "CNY", stock: 200 }),
+        getProduct: async () => ({ price: 850, currency: "CNY", stock: 200, unit: "piece", source_evidence: { system: "owned-test-fixture" } }),
       },
       merchantPolicy: () => policyRuntime.current().policy,
     });
@@ -220,14 +221,14 @@ describe("A2A 报价使用运行中策略（BUG-07 端到端）", () => {
           offer_id: "off_b",
           proposed_terms: {
             items: [
-              { sku: "SKU-001", quantity: { value: 1 }, unit_price: { amount_minor: 7000 } },
+              { sku: "SKU-001", quantity: { value: 1, unit: "piece" }, unit_price: { amount_minor: 7000 } },
             ],
           },
         },
         negotiationId,
       );
     const rfq = (negotiationId: string) =>
-      envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1 } }] }, negotiationId);
+      envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 1, unit: "piece" } }] }, negotiationId);
     // 变更前：list 85000 minor，公开折扣 5% → 公开边界 80750；还价 7000 低于边界 → 压回 80750。
     // （注意：这里观察的是**公开策略**而不是私有底价——底价不再直接决定回价，
     //  这正是 T045「不泄露底价」修复后的语义。）

@@ -37,6 +37,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { a2aCardSigningIdentity, createA2aNodeCore, createA2aAuthVerifier } from "../a2a/node.js";
+import { closeDatabase, closeHttpServer, createCleanup, CleanupError } from "../lifecycle/close.js";
 import { A2A_SIGNING_KEY_FILE, loadA2aSigningIdentityFromFile, loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/signing-key.js";
 import { publicKeyThumbprint } from "../trust/binding/thumbprint.js";
 import { loadProfile, ProfileError } from "../config/profile.js";
@@ -528,7 +529,11 @@ export async function bootstrapCloudRuntime(
   });
   const persistedIdentity = loadA2aSigningIdentityFromFile(path.join(signingKeyDir, A2A_SIGNING_KEY_FILE));
   if (publicKeyThumbprint(persistedIdentity.publicKeyPem) !== publicKeyThumbprint(signingIdentity.publicKeyPem)) {
-    core.close();
+    await createCleanup([
+      { id: "statistics", run: () => core.close({ preserveOwnership: true }) },
+      { id: "assembly", run: () => assembly.close() },
+      { id: "ownership", after: ["statistics", "assembly"], run: () => core.releaseOwnership() },
+    ])();
     throw new CloudStartupError("SIGNING_KEY_CHANGED_DURING_STARTUP", "Runtime key rotated during startup; retry after the rotation completes.");
   }
 
@@ -1293,6 +1298,28 @@ export async function bootstrapCloudRuntime(
     // 畸形客户端流量（中止的 socket 等）不得让服务崩溃。
   });
 
+  const close = createCleanup([
+    { id: "timers", run: () => {
+      if (reconciliationTimer !== undefined) clearInterval(reconciliationTimer);
+      if (clockTimer !== undefined) clearInterval(clockTimer);
+      if (bindingReconcileTimer !== undefined) clearInterval(bindingReconcileTimer);
+      if (directConnectionTimer !== undefined) clearInterval(directConnectionTimer);
+      reconciliationTimer = clockTimer = bindingReconcileTimer = directConnectionTimer = undefined;
+    } },
+    { id: "heartbeat", run: () => enrollmentHeartbeat?.stop() },
+    { id: "http_server", run: () => closeHttpServer(server) },
+    { id: "background_work", after: ["timers"], run: async () => {
+      await Promise.allSettled([directConnectionWork, bindingReconcileWork]);
+    } },
+    { id: "merchant_handler", after: ["http_server", "background_work"], run: () => merchantHandler.close() },
+    { id: "statistics", after: ["http_server", "background_work", "heartbeat", "merchant_handler"],
+      run: () => core.close({ preserveOwnership: true }) },
+    { id: "assembly", after: ["http_server", "background_work", "merchant_handler"], run: () => assembly.close() },
+    { id: "management_database", after: ["http_server", "background_work", "merchant_handler"],
+      run: () => { if (managementDb) closeDatabase(managementDb); } },
+    { id: "ownership", after: ["timers", "heartbeat", "http_server", "background_work", "merchant_handler", "statistics", "assembly", "management_database"],
+      run: () => core.releaseOwnership() },
+  ]);
   // 6) 严格监听：端口被占用即失败，绝不换端口（T013）。
   try {
     await new Promise<void>((resolve, reject) => {
@@ -1312,15 +1339,8 @@ export async function bootstrapCloudRuntime(
       });
     });
   } catch (err) {
-    if (reconciliationTimer !== undefined) clearInterval(reconciliationTimer);
-    if (clockTimer !== undefined) clearInterval(clockTimer);
-    if (bindingReconcileTimer !== undefined) clearInterval(bindingReconcileTimer);
-    if (directConnectionTimer !== undefined) clearInterval(directConnectionTimer);
-    enrollmentHeartbeat?.stop();
-    await Promise.allSettled([directConnectionWork, bindingReconcileWork]);
-    managementDb?.close();
-    core.close();
-    await assembly.close().catch(() => undefined);
+    try { await close(); }
+    catch (cleanupError) { throw new CleanupError(["startup", "cleanup"], [err, cleanupError]); }
     throw err;
   }
 
@@ -1347,32 +1367,16 @@ export async function bootstrapCloudRuntime(
     config,
     server,
     readiness,
-    close: async () => {
-      if (bindingReconcileTimer !== undefined) clearInterval(bindingReconcileTimer);
-      if (directConnectionTimer !== undefined) clearInterval(directConnectionTimer);
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-        server.closeAllConnections();
-      });
-      await merchantHandler.close().catch(() => undefined);
-      if (reconciliationTimer !== undefined) clearInterval(reconciliationTimer);
-      if (clockTimer !== undefined) clearInterval(clockTimer);
-      enrollmentHeartbeat?.stop();
-      await Promise.allSettled([directConnectionWork, bindingReconcileWork]);
-      core.close();
-      await assembly.close().catch(() => undefined);
-      managementDb?.close();
-    },
+    close,
   };
 }
 
 /** 供入口脚本复用的错误渲染：稳定码 + 可读消息，不含凭据。 */
 export function renderStartupFailure(err: unknown): string {
-  if (err instanceof CloudConfigError || err instanceof CloudStartupError) {
-    return `[kiwi-cloud] 启动失败（${err.code}）：${err.message}\n`;
-  }
-  if (err instanceof Error) return `[kiwi-cloud] 启动失败：${err.message}\n`;
-  return `[kiwi-cloud] 启动失败：${String(err)}\n`;
+  const candidate = err instanceof CloudConfigError || err instanceof CloudStartupError || err instanceof CleanupError
+    ? err.code : "RUNTIME_STARTUP_FAILED";
+  const code = /^[A-Z][A-Z0-9_]{0,79}$/.test(candidate) ? candidate : "RUNTIME_STARTUP_FAILED";
+  return `[kiwi-cloud] 启动失败（${code}）：Runtime启动失败，请检查配置与运行环境。\n`;
 }
 
 function recordValue(value: unknown): Record<string, unknown> {

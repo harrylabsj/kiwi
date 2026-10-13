@@ -33,6 +33,7 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { closeDatabase } from "../lifecycle/close.js";
 import { requireIsoTimestamp, requireNonEmptyString } from "../negotiation/domain/common.js";
 
 // ---------------------------------------------------------------------------
@@ -265,8 +266,21 @@ export class MerchantStatsStore {
     }));
   }
 
+  private closed = false;
+  lastCloseError: Error | null = null;
+
+  isClosed(): boolean { return this.closed; }
+
   close(): void {
-    this.db.close();
+    if (this.closed) return;
+    try {
+      closeDatabase(this.db);
+      this.closed = true;
+      this.lastCloseError = null;
+    } catch (cause) {
+      this.lastCloseError = new Error("STATS_STORE_CLOSE_RETRYABLE", { cause });
+      throw this.lastCloseError;
+    }
   }
 }
 

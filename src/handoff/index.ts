@@ -150,6 +150,7 @@ export {
   type AgreementReadResult,
   type ExecuteHandoffInput,
   type ExecuteHandoffResult,
+  type HandoffLaunchContext,
   type TransactionHandoff,
 } from "./transaction.js";
 
@@ -160,5 +161,21 @@ export {
   type SafeDestinationUrl,
   type UrlSafetyOptions,
 } from "./url-safety.js";
+
+export {
+  MARKETPLACE_SOURCE_BINDING_VERSION,
+  MarketplaceLaunchPolicyError,
+  buildMarketplaceSourceBinding,
+  parseMarketplaceTradeUrl,
+  sameMarketplaceTarget,
+  verifyMarketplaceLaunch,
+  type LaunchTradePlatform,
+  type MarketplaceLaunchPolicyCode,
+  type MarketplaceLaunchVerdict,
+  type MarketplaceListingSnapshot,
+  type MarketplaceSourceBinding,
+  type MarketplaceSourceBindingInput,
+  type ParsedMarketplaceTradeUrl,
+} from "./launch-marketplace-policy.js";
 
 export { computeHandoffMetrics, type HandoffMetrics } from "./metrics.js";

@@ -34,6 +34,7 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
     dir = mkdtempSync(join(tmpdir(), "kiwi-p2c-"));
     ledger = new LedgerStore({ dir, now: () => NOW });
     handler = createMerchantHandler({
+      productSource: { async getProduct() { return { price: 850, currency: "CNY", unit: "piece", stock: 1000, source_evidence: { system: "owned-test-fixture" } }; } },
       ledger,
       now: () => NOW,
       sender: "merchant:merchant-001",
@@ -93,10 +94,10 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
   /** 走 inquiry → counter_offer → conditional_offer 拿到活跃 conditional。 */
   const reachConditional = async (): Promise<{ offerId: string; offerMessageId: string; agreedTerms: unknown }> => {
     await run(envelopeFor("inquiry", {}));
-    await run(envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
-    await run(envelopeFor("offer", { offer_id: "off_buyer", terms: {} }));
+    await run(envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" } }] }));
+    await run(envelopeFor("offer", { offer_id: "off_buyer", terms: { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" }, unit_price: { currency: "CNY", amount_minor: 85000 } }] } }));
     const cond = await run(
-      envelopeFor("counter_offer", { offer_id: "off_counter", proposed_terms: {} }),
+      envelopeFor("counter_offer", { offer_id: "off_counter", proposed_terms: { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" }, unit_price: { currency: "CNY", amount_minor: 85000 } }] } }),
     );
     const offerId = extractOfferId(cond);
     const reply = cond.kind === "accepted" && cond.message
@@ -386,6 +387,7 @@ describe("merchant handler 重启恢复（BUG-03）", () => {
 
   const makeHandler = (): NegotiationHandler =>
     createMerchantHandler({
+      productSource: { async getProduct() { return { price: 850, currency: "CNY", unit: "piece", stock: 1000, source_evidence: { system: "owned-test-fixture" } }; } },
       ledger,
       now: () => NOW,
       sender: "merchant:merchant-001",
@@ -429,9 +431,9 @@ describe("merchant handler 重启恢复（BUG-03）", () => {
     agreedTerms: unknown;
   }> => {
     await runWith(h, env("inquiry", {}));
-    await runWith(h, env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
-    await runWith(h, env("offer", { offer_id: "off_buyer", terms: {} }));
-    const cond = await runWith(h, env("counter_offer", { offer_id: "off_counter", proposed_terms: {} }));
+    await runWith(h, env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" } }] }));
+    await runWith(h, env("offer", { offer_id: "off_buyer", terms: { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" }, unit_price: { currency: "CNY", amount_minor: 85000 } }] } }));
+    const cond = await runWith(h, env("counter_offer", { offer_id: "off_counter", proposed_terms: { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" }, unit_price: { currency: "CNY", amount_minor: 85000 } }] } }));
     const offerId = (() => {
       const reply = cond.kind === "accepted" && cond.message
         ? (
@@ -555,7 +557,7 @@ describe("merchant handler 重启恢复（BUG-03）", () => {
     // 磋商到 OFFER_OPEN（商家已发出 offer）。
     const first = makeHandler();
     await runWith(first, env("inquiry", {}));
-    await runWith(first, env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
+    await runWith(first, env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" } }] }));
     // 模拟崩溃 partial 进度：top-level advance 把相位挂到 AWAITING_CLARIFICATION
     // 后、商家应答前进程崩溃。此前恢复只重建 phase，resume_phase 全丢。
     ledger.append({
@@ -602,6 +604,7 @@ describe("merchant handler 相位机接线（BUG-10）", () => {
     dir = mkdtempSync(join(tmpdir(), "kiwi-bug10-"));
     ledger = new LedgerStore({ dir, now: () => NOW });
     handler = createMerchantHandler({
+      productSource: { async getProduct() { return { price: 850, currency: "CNY", unit: "piece", stock: 1000, source_evidence: { system: "owned-test-fixture" } }; } },
       ledger,
       now: () => NOW,
       sender: "merchant:merchant-001",
@@ -640,7 +643,7 @@ describe("merchant handler 相位机接线（BUG-10）", () => {
 
   it("无前置 offer 的 counter_offer → state_conflict 拒绝（非法转换 fail-closed）", async () => {
     const result = await run(
-      env("counter_offer", { offer_id: "off_illegal", proposed_terms: {} }),
+      env("counter_offer", { offer_id: "off_illegal", proposed_terms: { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" }, unit_price: { currency: "CNY", amount_minor: 85000 } }] } }),
     );
     expect(result.kind).toBe("declined");
     expect(result.kind === "declined" && result.reasonCode).toBe("state_conflict");
@@ -648,11 +651,11 @@ describe("merchant handler 相位机接线（BUG-10）", () => {
 
   it("正常磋商序列（rfq→counter→conditional）相位逐级推进并落账", async () => {
     await run(env("inquiry", {}));
-    await run(env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
+    await run(env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" } }] }));
     // 真实 buyer 流程：merchant 的 offer 回复推进相位到 OFFER_OPEN 后，
     // buyer 的下一个商业动作是 counter_offer（OFFER_OPEN 替换边）
     const cond = await run(
-      env("counter_offer", { offer_id: "off_counter", proposed_terms: {} }),
+      env("counter_offer", { offer_id: "off_counter", proposed_terms: { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" }, unit_price: { currency: "CNY", amount_minor: 85000 } }] } }),
     );
     expect(cond.kind).toBe("accepted");
 
@@ -699,6 +702,7 @@ describe("merchant accept 相位机权威守卫（P1-C）", () => {
 
   const makeHandler = (): NegotiationHandler =>
     createMerchantHandler({
+      productSource: { async getProduct() { return { price: 850, currency: "CNY", unit: "piece", stock: 1000, source_evidence: { system: "owned-test-fixture" } }; } },
       ledger,
       now: () => NOW,
       sender: "merchant:merchant-001",
@@ -738,9 +742,9 @@ describe("merchant accept 相位机权威守卫（P1-C）", () => {
     h: NegotiationHandler,
   ): Promise<{ offerId: string; agreedTerms: unknown }> => {
     await runWith(h, env("inquiry", {}));
-    await runWith(h, env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
-    await runWith(h, env("offer", { offer_id: "off_buyer", terms: {} }));
-    const cond = await runWith(h, env("counter_offer", { offer_id: "off_counter", proposed_terms: {} }));
+    await runWith(h, env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" } }] }));
+    await runWith(h, env("offer", { offer_id: "off_buyer", terms: { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" }, unit_price: { currency: "CNY", amount_minor: 85000 } }] } }));
+    const cond = await runWith(h, env("counter_offer", { offer_id: "off_counter", proposed_terms: { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" }, unit_price: { currency: "CNY", amount_minor: 85000 } }] } }));
     const offerId = (() => {
       const reply = cond.kind === "accepted" && cond.message
         ? (
@@ -864,6 +868,7 @@ describe("product-source failure (K-H3 demo fallback)", () => {
 
   const makeHandler = (allowDemoPriceFallback?: boolean): NegotiationHandler =>
     createMerchantHandler({
+
       ledger: new LedgerStore({ dir, now: () => NOW }),
       now: () => NOW,
       sender: "merchant:merchant-001",
@@ -895,7 +900,7 @@ describe("product-source failure (K-H3 demo fallback)", () => {
       actor: "buyer",
       action: "rfq",
       created_at: NOW,
-      payload: { items: [{ sku: "SKU-001", quantity: { value: 200 } }] } as never,
+      payload: { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" } }] } as never,
     });
 
   it("default (no allow_demo_price_fallback): source failure declines temporarily_unavailable", async () => {

@@ -23,14 +23,14 @@
  * 硬规则（与设计 §10.1 一致）：
  *   - 只读公开字段（SKU/名称/币种/计价单位/单价/起订量/供货说明/时间戳/有效期/状态）；
  *     **底价、成本、自动折扣边界不在商品表里**——它们属于商家私密策略（profile）；
- *   - 商品表按 mtime 热加载：商家更新即生效，无需重启；
+ *   - 商品表按实际内容热加载：商家更新即生效，无需重启；
  *   - 过期（valid_until 已过）、暂停（paused）、查无此 SKU、表不可读 → 一律抛错，
  *     由 merchant handler 走 fail-closed decline；**绝不回退演示价**；
  *   - merchant_id 是租户边界：表内商家与运行实例不一致即拒绝加载。
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { MerchantProductSource } from "../a2a/server/merchant-handler.js";
 import {
@@ -149,10 +149,10 @@ export function parseProductTable(value: unknown, source: string): CloudProductT
       );
     }
     const price = record["price"];
-    if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) {
+    if (typeof price !== "number" || !Number.isFinite(price) || price < 0) {
       throw new ProductTableError(
         "PRODUCT_TABLE_INVALID",
-        `products[${index}].price 必须是正数（收到 ${String(price)}）`,
+        `products[${index}].price 必须是非负数（收到 ${String(price)}）`,
       );
     }
     const moq = record["moq"];
@@ -238,7 +238,7 @@ export interface CloudProductSourceHandle {
 
 /**
  * 构造文件式商品源。实现要点：
- *   - 按 mtime 热加载（表更新即生效）；
+ *   - 按实际内容热加载（表更新即生效）；
  *   - 查询路径上的所有失败都抛错（handler 据此 decline），不返回"看起来正常"的价；
  *   - 只在内存保留解析结果，不写任何状态。
  */
@@ -246,14 +246,11 @@ export function createFileProductSource(
   options: FileProductSourceOptions,
 ): CloudProductSourceHandle {
   const now = options.now ?? (() => Date.now());
-  let cached: { mtimeMs: number; table: CloudProductTable } | undefined;
+  let cached: { raw: string; table: CloudProductTable } | undefined;
 
   const load = (): CloudProductTable => {
-    let mtimeMs: number;
     let raw: string;
     try {
-      const stat = statSync(options.file);
-      mtimeMs = stat.mtimeMs;
       raw = readFileSync(options.file, "utf8");
     } catch (err) {
       throw new ProductTableError(
@@ -261,7 +258,7 @@ export function createFileProductSource(
         `商品表不可读：${options.file}（${err instanceof Error ? err.message : String(err)}）`,
       );
     }
-    if (cached !== undefined && cached.mtimeMs === mtimeMs) return cached.table;
+    if (cached !== undefined && cached.raw === raw) return cached.table;
     let table: CloudProductTable;
     try {
       table = parseProductTable(JSON.parse(raw) as unknown, options.file);
@@ -278,7 +275,7 @@ export function createFileProductSource(
         `商品表 runtime owner 与运行实例 ${options.merchantId} 不一致：拒绝加载`,
       );
     }
-    cached = { mtimeMs, table };
+    cached = { raw, table };
     return table;
   };
 
@@ -304,7 +301,7 @@ export function createFileProductSource(
       return { available: false, code: "PRODUCT_NOT_IN_TABLE" };
     }
     if (record.status !== "active") return { available: false, code: "PRODUCT_PAUSED" };
-    if (Date.parse(record.valid_until) < now()) return { available: false, code: "PRODUCT_EXPIRED" };
+    if (Date.parse(record.valid_until) <= now()) return { available: false, code: "PRODUCT_EXPIRED" };
     return { available: true };
   };
 
@@ -327,6 +324,15 @@ export function createFileProductSource(
           record.platform_product_id,
         );
         return {
+          sku: record.sku,
+          unit: record.unit,
+          source_evidence: {
+            system: "file-product-table",
+            table_digest: productTableDigest(load()),
+            updated_at: record.updated_at,
+            // Explicit content version of quote values, not a fabricated upstream revision.
+            source_version: `sha256:${createHash("sha256").update(JSON.stringify({ table_source: load().source, merchant_id: load().merchant_id, runtime_owner_id: load().runtime_owner_id ?? null, sku: record.sku, title: record.title, trade_platform: record.trade_platform ?? null, platform_product_id: record.platform_product_id ?? null, price: record.price, currency: record.currency, unit: record.unit, valid_until: record.valid_until, status: record.status, handoff_destination: handoffDestination ?? null })).digest("hex")}`,
+          },
           price: record.price,
           currency: record.currency,
           title: record.title,

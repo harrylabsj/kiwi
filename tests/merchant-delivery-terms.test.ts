@@ -43,6 +43,7 @@ afterEach(() => {
 
 function makeHandler(deliveryLeadDays?: number): NegotiationHandler {
   return createMerchantHandler({
+    productSource: { async getProduct() { return { price: 850, currency: "CNY", unit: "piece", stock: 1000, source_evidence: { system: "owned-test-fixture" } }; } },
     ledger,
     now: () => NOW,
     sender: "merchant:merchant-001",
@@ -99,7 +100,7 @@ function knpEnvelopeOf(result: NegotiationHandlerResult): Record<string, unknown
 async function offerTermsOf(h: NegotiationHandler): Promise<Record<string, unknown>> {
   const result = await runWith(
     h,
-    env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }),
+    env("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" } }] }),
   );
   const reply = knpEnvelopeOf(result);
   expect(reply.action).toBe("offer");

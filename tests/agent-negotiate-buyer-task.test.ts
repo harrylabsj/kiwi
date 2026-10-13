@@ -54,7 +54,7 @@ const productSource = {
     };
     const p = prices[sku];
     if (p === undefined) throw new Error(`no product ${sku}`);
-    return p;
+    return { ...p, unit: "piece", stock: 1000, source_evidence: { system: "owned-test-fixture" } };
   },
 };
 
@@ -246,7 +246,7 @@ describe("negotiate_buyer_task", () => {
       capture,
       productSource: {
         async getProduct(sku: string) {
-          if (sku === "VQ-003") return { price: 99, currency: "CNY" };
+          if (sku === "VQ-003") return { price: 99, currency: "CNY", unit: "piece", stock: 1000, source_evidence: { system: "owned-test-fixture" } };
           throw new Error(`no product ${sku}`);
         },
       },
@@ -433,7 +433,7 @@ describe("negotiate_buyer_task", () => {
     const dataSource = {
       async getProduct(sku: string) {
         if (sku === "sku-001") {
-          return { sku, title: "Real Beans", price_minor: 83500, currency: "CNY", stock: 200 };
+          return { sku, title: "Real Beans", price_minor: 83500, currency: "CNY", stock: 200, unit: "piece", source_evidence: { system: "owned-test-fixture" } };
         }
         return undefined;
       },

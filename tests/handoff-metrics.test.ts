@@ -17,12 +17,30 @@ import {
   computeHandoffMetrics,
   createHandoffCandidate,
   executeHandoff,
+  type MarketplaceListingSnapshot,
 } from "../src/handoff/index.js";
+import { buildMarketplaceSourceBinding } from "../src/handoff/launch-marketplace-policy.js";
 
 const IDENTITY = { sender_identity: "principal:buyer-1", counterparty_identity: "merchant:acme", actor: "buyer" as const };
 const CAPABILITY = { capability: "com.harrylabsj.kiwi.shopping.negotiation", protocol_version: "1.0" };
 const NOW = "2026-08-07T09:00:00Z";
-const AGREED = { items: [] };
+const AGREED = { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" } }] };
+// A651 包四强制门：URL 目的地用三平台形态 + 可信 listing/context fixture
+// （原交付断言保留；opaque 平台 ID ≠ 协议 SKU）。
+const DEST_REF = "https://item.taobao.com/item.htm?id=100301440825";
+const TRUSTED_LISTING: MarketplaceListingSnapshot = {
+  listing_id: "list-001",
+  listing_type: "product",
+  owner_agent_id: "acme-owner",
+  merchant_id: "merchant-acme",
+  source_product_ref: "SKU-001",
+  handoff_destination_ref: DEST_REF,
+  listing_digest: "digest-001",
+  publication_state: "ACTIVE",
+  listing_freshness_state: "FRESH",
+  fresh_until: "2026-08-08T00:00:00Z",
+  updated_at: "2026-08-01T00:00:00Z",
+};
 
 function env(dir: string) {
   return {
@@ -36,7 +54,7 @@ function candidate(negotiationId: string) {
     agreement_id: `agr_${negotiationId}`,
     negotiation_id: negotiationId,
     agreed_terms: AGREED,
-    destination: { type: "external_checkout_url", ref: "https://acme.example/checkout/1" },
+    destination: { type: "external_checkout_url", ref: DEST_REF },
     display_summary: { merchant: "Acme", summary: "200 units" },
     policy_version: "handoff-policy/1",
     expires_at: "2026-08-08T12:00:00Z",
@@ -56,6 +74,23 @@ async function deliver(dir: string, negotiationId: string): Promise<void> {
     capability: CAPABILITY,
     approval: async () => ({ approved: true }),
     agreementReader: async () => ({ agreement_id: c.agreement_id, negotiation_id: c.negotiation_id, agreed_terms: AGREED }),
+    launchContext: {
+      binding: buildMarketplaceSourceBinding({
+        catalogOrigin: "https://catalog.test",
+        listing: TRUSTED_LISTING,
+        taskId: `task-${negotiationId}`,
+        negotiationId: c.negotiation_id,
+        agreementId: c.agreement_id,
+        termsDigest: c.terms_digest,
+        candidateDigest: c.candidate_digest,
+        observedAt: NOW,
+      }),
+      readSource: async () => TRUSTED_LISTING,
+      catalogOrigin: "https://catalog.test",
+      taskId: `task-${negotiationId}`,
+      agreedSku: "SKU-001",
+      ownerAgentId: "acme-owner",
+    },
     now: () => NOW,
   });
 }

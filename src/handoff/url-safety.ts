@@ -49,6 +49,9 @@ export interface UrlSafetyOptions {
   resolveIp?: (hostname: string) => Promise<string[]>;
   /** 跳过 SSRF DNS 复查（仅测试/受控环境；生产缺省 false）。 */
   skipDnsCheck?: boolean;
+  /** A651 包四：每一跳（含首跳与每个重定向）的附加收紧校验——只能抛错
+   *  收紧，返回值不被采纳，不能替代或放宽既有 scheme/host/SSRF 守卫。 */
+  onHop?: (url: string) => void;
 }
 
 export interface SafeDestinationUrl {
@@ -107,6 +110,9 @@ export async function validateExternalDestinationUrl(
         `destination host "${parsed.hostname}" is not allowed (expected ${options.expectedHost ?? "allowlist"})`,
       );
     }
+    // A651 包四：附加收紧（同平台同 opaque 商品 ID）；在既有守卫之后调用，
+    // 只能抛错、不能放行。
+    if (options.onHop !== undefined) options.onHop(current);
     // 请求前 DNS 复查：主机名解析的每个 IP 过保留网段判定（防 rebinding）。
     // 此前只对字面 IP 生效——expectedHost 命中但解析到 169.254.169.254 等
     // 内网地址的主机名会真实发出探测。

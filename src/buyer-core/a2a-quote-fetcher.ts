@@ -36,6 +36,7 @@ import {
 import type { QuoteCandidateInput, QuoteFetcher, MerchantRecord } from "./service.js";
 
 import { BuyerProtocolRecovery, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext, type ProtocolReply } from "./protocol-recovery.js";
+import { BuyerReplyRejected } from "./receive-gate.js";
 
 export interface A2AQuoteFetcherOptions {
   /** 允许打到私网/保留网段（SSRF 逃生门；本地试点直连时开）。 */
@@ -49,6 +50,7 @@ export interface A2AQuoteFetcherOptions {
   fetchImpl?: typeof fetch;
   protocolStateDir?: string;
   localBuyerAgentId?: string;
+  now?: () => string;
 }
 
 const DEFAULT_POLL_MS = 2000;
@@ -187,6 +189,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   private readonly rpcFetchImpl?: typeof fetch;
   private readonly recovery?: BuyerProtocolRecovery;
   private readonly endpointCache = new Map<string, string>();
+  private readonly now: () => string;
 
   constructor(options: A2AQuoteFetcherOptions = {}) {
     this.allowPrivateRanges = options.allowPrivateRanges ?? false;
@@ -194,11 +197,12 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_MS;
     this.bearerToken = options.bearerToken;
+    this.now = options.now ?? utcNow;
     // Card reads retain their existing fetch seam. Only an explicit custom
     // transport may replace the A2A client's pinned RPC default.
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.rpcFetchImpl = options.fetchImpl;
-    if (options.protocolStateDir && options.localBuyerAgentId) this.recovery = new BuyerProtocolRecovery(options.protocolStateDir, options.localBuyerAgentId);
+    if (options.protocolStateDir && options.localBuyerAgentId) this.recovery = new BuyerProtocolRecovery(options.protocolStateDir, options.localBuyerAgentId, options.now);
   }
 
   /** 对每个 Merchant 独立发起真实 RFQ 并收集回复（部分失败语义）。 */
@@ -232,7 +236,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         sku,
         quantity: firstQuantity(intent),
         deliveryBefore: constraintsDeadline(intent),
-        now: utcNow,
+        now: this.now,
       });
       const client = buildA2AClient(endpoint, {
         bearerToken: this.bearerToken,
@@ -256,15 +260,20 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         status: "failed",
         failure: {
           classification: "protocol_error",
-          retryable: !(error instanceof ProtocolOperationUnknown || error instanceof ProtocolOperationConflict),
-          detail: error instanceof Error ? error.message : String(error),
+          retryable: !(error instanceof ProtocolOperationUnknown || error instanceof ProtocolOperationConflict || error instanceof BuyerReplyRejected),
+          detail: error instanceof BuyerReplyRejected ? error.reason : error instanceof Error ? error.message : String(error),
         },
       };
     }
   }
 
   private project({reply,wire,endpoint,merchantId}:ProtocolReply):QuoteCandidateInput {
-    if (!["offer", "counter_offer"].includes(reply.action)) throw new Error("merchant did not return a priced offer");
+    if (!["offer", "counter_offer"].includes(reply.action)) return {
+      merchant_id: merchantId, status: "failed", failure: {
+        classification: "protocol_error",
+        retryable: false, detail: `unsupported_quote_reply:${reply.action}`,
+      },
+    };
     const offerId=(reply.payload as {offer_id?:unknown}).offer_id;
     const sku=(wire.payload as {items?:Array<{sku?:string}>}).items?.[0]?.sku;
     const terms=projectOfferTerms(reply.payload);

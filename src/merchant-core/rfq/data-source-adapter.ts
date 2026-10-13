@@ -25,6 +25,8 @@
  * 待确认项，由商家在部署配置中明确授权。
  */
 
+import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
+import { contentDigest } from "../../negotiation/jcs.js";
 import type { MerchantClient } from "../../agent/merchant/types.js";
 import {
   CommerceError,
@@ -43,14 +45,8 @@ export interface MerchantClientCommerceDataSourceDeps {
   now?: () => string;
 }
 
-/**
- * 自权威数据的稳定源版本标记：商家 facade 是数据权威本体，无外部版本号
- * 可言——版本基准 = 权威自身，业务值变化经 value 进入事实指纹即失效
- * （§6.3）。绝不以读取时间充当版本（FA-07：不用读取时间伪造验证）；
- * verified_at 仅作新鲜度锚点（观察时点）。
- */
-const LOCAL_AUTHORITY_VERSION = "local-authoritative";
-
+/** Content-derived adapter versions describe only the observed values, not an upstream revision.
+ * Read/observed times are deliberately excluded so unchanged facts remain stable. */
 export class MerchantClientCommerceDataSource implements CommerceDataSource {
   private readonly deps: MerchantClientCommerceDataSourceDeps;
 
@@ -69,6 +65,9 @@ export class MerchantClientCommerceDataSource implements CommerceDataSource {
         sku: product.sku,
         title: product.title,
         currency: product.currency,
+        ...(product.unit !== undefined ? { unit: product.unit } : {}),
+        ...(product.valid_until !== undefined ? { valid_until: product.valid_until } : {}),
+        ...(product.source_evidence !== undefined ? { source_evidence: product.source_evidence } : {}),
         ...(product.stock !== undefined ? { stock: product.stock } : {}),
         availability_hint:
           product.paused === true
@@ -121,7 +120,7 @@ export class MerchantClientCommerceDataSource implements CommerceDataSource {
         authority: "LOCAL_AUTHORITATIVE",
         source: "merchant-client",
         verified_at: snapshot.observed_at,
-        source_version: LOCAL_AUTHORITY_VERSION,
+        source_version: `inventory-content-v1:${contentDigest({ sku: snapshot.sku, stock: snapshot.stock, ...(snapshot.unit !== undefined ? { unit: snapshot.unit } : {}) } as never)}`,
       };
     } catch (err) {
       if (err instanceof CommerceError && err.code === "not_found") return undefined;
@@ -136,8 +135,9 @@ export class MerchantClientCommerceDataSource implements CommerceDataSource {
     if (product.currency !== "CNY") {
       throw new CommerceError("invalid_input", `SKU ${sku} 币种为 ${product.currency}（首版仅 CNY）`);
     }
+    if (this.deps.priceUnit === "yuan" && !losslessToMinorUnits(product.price, 2).lossless) throw new CommerceError("invalid_input", `SKU ${sku} price precision is lossy`);
     const amount =
-      this.deps.priceUnit === "minor" ? product.price : Math.round(product.price * 100);
+      this.deps.priceUnit === "minor" ? product.price : losslessToMinorUnits(product.price, 2).amount_minor;
     if (!Number.isSafeInteger(amount) || amount < 0) {
       throw new CommerceError("invalid_input", `SKU ${sku} 价格非法（按 ${this.deps.priceUnit} 口径）`);
     }
@@ -146,7 +146,7 @@ export class MerchantClientCommerceDataSource implements CommerceDataSource {
       authority: "LOCAL_AUTHORITATIVE",
       source: "merchant-client",
       verified_at: this.nowIso(),
-      source_version: LOCAL_AUTHORITY_VERSION,
+      source_version: `adapter-content-v1:${contentDigest({ sku: product.sku, currency: product.currency, amount_minor: amount, price_unit: this.deps.priceUnit, ...(product.unit !== undefined ? { unit: product.unit } : {}) } as never)}`,
     };
   }
 

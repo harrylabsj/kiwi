@@ -76,12 +76,13 @@ function setup(): Harness {
   let policy: MerchantPolicy = { max_auto_discount_percent: 10 };
   let price = 850; // major：850.00 → 85000 minor
   const handler = createMerchantHandler({
+
     ledger: new LedgerStore({ dir: join(dir, "ledger"), now: () => NOW }),
     now: () => NOW,
     sender: "merchant:merchant-001",
     counterparty: "buyer:*",
     productSource: {
-      getProduct: async () => ({ price, currency: "CNY", stock: 200 }),
+      getProduct: async () => ({ price, currency: "CNY", stock: 200, unit: "piece", source_evidence: { system: "owned-test-fixture" } }),
     },
     merchantPolicy: () => policy,
   });
@@ -102,12 +103,12 @@ async function reachConditional(handler: NegotiationHandler): Promise<{
   offerId: string;
   termsDigest: string;
 }> {
-  await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200 } }] }));
+  await run(handler, envelopeFor("rfq", { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" } }] }));
   const conditional = await run(
     handler,
     envelopeFor("counter_offer", {
       offer_id: "off_buyer",
-      proposed_terms: { items: [{ sku: "SKU-001", quantity: { value: 200 }, unit_price: { amount_minor: 80000 } }] },
+      proposed_terms: { items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" }, unit_price: { amount_minor: 80000 } }] },
     }),
   );
   const payload = payloadOf(conditional);

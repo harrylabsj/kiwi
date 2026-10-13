@@ -76,6 +76,11 @@ async function startFakeCommerce(priceMajor: number, available = true): Promise<
             tags: [],
             price: priceMajor,
             currency: "CNY",
+            // A659：补真实已知源事实 unit——联合 P2 源事实严格单位门：缺 unit
+            // 会 field_unsupported decline（先于正常报价/approval_required，
+            // g6 两红实证）。这是**来源声明已知单位**，非未知默认 piece；
+            // 缺字段负控在 merchant-source 套件保持。
+            unit: "piece",
             stock: 10,
             delivery_attributes: [],
             paused: false,

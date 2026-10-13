@@ -32,6 +32,7 @@ import {
 import type { NegotiationStep, Negotiator } from "./service.js";
 
 import { BuyerProtocolRecovery, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext } from "./protocol-recovery.js";
+import { BuyerReplyRejected } from "./receive-gate.js";
 
 export interface A2ANegotiatorOptions {
   allowPrivateRanges?: boolean;
@@ -45,6 +46,7 @@ export interface A2ANegotiatorOptions {
   defaultDiscountRate?: number;
   /** review P1-2（A319）：实际外发 counter 提案前的委托约束门。 */
   counterProposalGate?: CounterProposalGate;
+  now?: () => string;
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -67,18 +69,6 @@ interface CandidateLike {
 
 function utcNow(): string {
   return new Date().toISOString();
-}
-
-/** 从 offer envelope JSON（provenance.reply_text）解析商家单价（minor/元）。 */
-function parseOfferPriceMinor(replyText: string | undefined): number | undefined {
-  if (replyText === undefined || replyText === "") return undefined;
-  try {
-    const envelope = JSON.parse(replyText) as { payload?: { terms?: { items?: Array<{ unit_price?: { amount_minor?: unknown } }> } } };
-    const minor = envelope.payload?.terms?.items?.[0]?.unit_price?.amount_minor;
-    return typeof minor === "number" && Number.isFinite(minor) ? minor : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function intentQuantityUnit(intent: Record<string, unknown>): string | undefined {
@@ -153,6 +143,7 @@ export class A2ANegotiator implements Negotiator {
 
   private readonly recovery?: BuyerProtocolRecovery;
   private readonly counterProposalGate: CounterProposalGate | undefined;
+  private readonly now: () => string;
 
   constructor(options: A2ANegotiatorOptions = {}) {
     this.allowPrivateRanges = options.allowPrivateRanges ?? false;
@@ -162,7 +153,8 @@ export class A2ANegotiator implements Negotiator {
     this.defaultDiscountRate = options.defaultDiscountRate ?? DEFAULT_DISCOUNT_RATE;
     this.fetchImpl = options.fetchImpl;
     this.counterProposalGate = options.counterProposalGate;
-    if(options.protocolStateDir && options.localBuyerAgentId)this.recovery=new BuyerProtocolRecovery(options.protocolStateDir,options.localBuyerAgentId);
+    this.now = options.now ?? utcNow;
+    if(options.protocolStateDir && options.localBuyerAgentId)this.recovery=new BuyerProtocolRecovery(options.protocolStateDir,options.localBuyerAgentId,options.now);
   }
 
   async negotiate(
@@ -181,7 +173,7 @@ export class A2ANegotiator implements Negotiator {
       if(hasClaim)throw new ProtocolOperationUnknown();
       return { ...current, summary: `${current.summary}（无 A2A 会话上下文，无法真实还价）` };
     }
-    const { negotiation_id, offer_id, merchant_reply_id, reply_text, sku, a2a_endpoint } =
+    const { negotiation_id, offer_id, merchant_reply_id, sku, a2a_endpoint } =
       candidate.provenance ?? {};
     if (
       a2a_endpoint === undefined ||
@@ -199,7 +191,16 @@ export class A2ANegotiator implements Negotiator {
     const itemSku = typeof sku === "string" && sku !== "" ? sku : "item-1";
 
     try {
-      const currentPrice = parseOfferPriceMinor(reply_text);
+      const verifiedQuote = this.recovery && context ? this.recovery.validatedQuote({
+        context, negotiationId, merchantId: String(candidate.merchant_id ?? ""),
+        endpoint, replyId: inReplyTo, offerId,
+      }) : undefined;
+      const verifiedPayload = verifiedQuote?.reply.payload;
+      const verifiedItem = verifiedPayload?.type === "offer" ? verifiedPayload.terms.items?.[0]
+        : verifiedPayload?.type === "counter_offer" ? verifiedPayload.proposed_terms.items?.[0] : undefined;
+      if (verifiedItem && (verifiedItem.sku !== itemSku || verifiedItem.quantity.value !== intentQuantity(intent) ||
+          verifiedItem.quantity.unit !== (intentQuantityUnit(intent) ?? "piece"))) throw new ProtocolOperationConflict();
+      const currentPrice = verifiedItem?.unit_price?.amount_minor;
       const target = targetPriceMinor(intent, currentPrice, this.defaultDiscountRate);
       if (target === undefined) {
         if(hasClaim)throw new ProtocolOperationUnknown();
@@ -211,15 +212,16 @@ export class A2ANegotiator implements Negotiator {
         respondingToOfferId: offerId,
         sku: itemSku,
         quantity: intentQuantity(intent),
+        quantityUnit: intentQuantityUnit(intent),
         counterPriceMinor: target,
-        now: utcNow,
+        now: this.now,
       });
       // review P1-2（A319 校准）：对**实际外发提案**执行委托约束门——不是只
       // 筛旧候选。拒绝即零 wire（不 sendMessage），原因透出给上层转
       // delegation_denied。安全 minor 由门内核验（非整数/负数拒绝）。
       if (this.counterProposalGate !== undefined) {
         // review P1-2（A327 校准）：quantity/unit 从**真实外发 wire**
-        // （buildCounterEnvelope 产物，unit 硬编码 "piece"）读取——intent 的
+        // （buildCounterEnvelope 产物）读取——intent 的
         // unit 只是来源，wire 不一致时门按实际外发事实判定（声明限额单位
         // 与 wire unit 不一致 → 拒绝），不按 intent 假设放行。
         const counterPayload = envelope.payload as {
@@ -277,7 +279,7 @@ export class A2ANegotiator implements Negotiator {
       });
       return {...current,reply:JSON.stringify(result.reply)};
     } catch (error) {
-      if(error instanceof ProtocolOperationUnknown || error instanceof ProtocolOperationConflict)throw error;
+      if(error instanceof ProtocolOperationUnknown || error instanceof ProtocolOperationConflict || error instanceof BuyerReplyRejected)throw error;
       if(hasClaim)throw new ProtocolOperationUnknown();
       return {
         ...current,

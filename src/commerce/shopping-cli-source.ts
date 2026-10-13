@@ -69,8 +69,13 @@ function validateBaseUrl(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
+import { checkedSourceEvidence } from "../a2a/server/merchant-product-facts.js";
+
 interface ShoppingCliProductWire {
   sku?: unknown;
+  unit?: unknown;
+  valid_until?: unknown;
+  source_evidence?: unknown;
   merchant_id?: unknown;
   title?: unknown;
   price?: unknown;
@@ -105,6 +110,9 @@ function parseProduct(raw: unknown, path: string): ProductFact {
   const priceMinor = toMinorUnits(obj.price);
   return {
     sku,
+    ...(typeof obj.unit === "string" && obj.unit.trim() !== "" ? { unit: obj.unit } : {}),
+    ...(typeof obj.valid_until === "string" ? { valid_until: obj.valid_until } : {}),
+    ...(obj.source_evidence !== undefined ? { source_evidence: checkedSourceEvidence(obj.source_evidence) } : {}),
     ...(typeof obj.title === "string" && obj.title !== "" ? { title: obj.title } : {}),
     ...(priceMinor !== undefined ? { price_minor: priceMinor } : {}),
     ...(typeof obj.currency === "string" && obj.currency !== "" ? { currency: obj.currency } : {}),

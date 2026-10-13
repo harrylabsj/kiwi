@@ -27,6 +27,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { closeDatabase, createCleanup } from "../lifecycle/close.js";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -537,9 +538,9 @@ export async function assembleMerchantRuntime(
       if (floor === undefined) return undefined;
       return decimalMajorToMinor(currency, String(floor)).amount_minor;
     },
-    close: async () => {
-      oauthDb?.close();
-      db.close();
-    },
+    close: createCleanup([
+      { id: "oauth_database", run: () => { if (oauthDb) closeDatabase(oauthDb); } },
+      { id: "merchant_database", run: () => closeDatabase(db) },
+    ]),
   };
 }
