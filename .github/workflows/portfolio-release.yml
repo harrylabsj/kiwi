@@ -230,7 +230,7 @@ jobs:
 
       - name: Setup npm 12 and verify the install toolchain
         run: |
-          npm install --global npm@12.0.2
+          npm install --global npm@12.2.0
           node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Setup Python 3.13
@@ -519,7 +519,7 @@ jobs:
       # Use the real CLI version; never bypass lifecycle hooks or fake its UA.
       - name: Setup npm 12 and verify the install toolchain
         run: |
-          npm install --global npm@12.0.2
+          npm install --global npm@12.2.0
           node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Verify downloaded release manifest before publishing
@@ -573,7 +573,7 @@ jobs:
       # npm trusted publishing（OIDC）需要 npm >= 11.5.1；Node 22 自带 10.x。
       - name: Setup npm 12 and verify the install toolchain
         run: |
-          npm install --global npm@12.0.2
+          npm install --global npm@12.2.0
           node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Verify downloaded release manifest before publishing
@@ -631,7 +631,7 @@ jobs:
 
       - name: Setup npm 12 and verify the install toolchain
         run: |
-          npm install --global npm@12.0.2
+          npm install --global npm@12.2.0
           node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Verify downloaded release manifest before publishing
@@ -811,7 +811,7 @@ jobs:
 
       - name: Setup npm 12 and verify the install toolchain
         run: |
-          npm install --global npm@12.0.2
+          npm install --global npm@12.2.0
           node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - name: Verify registry downloads against built manifest (fail closed)
@@ -847,7 +847,7 @@ jobs:
 
       - name: Setup npm 12 and verify the install toolchain
         run: |
-          npm install --global npm@12.0.2
+          npm install --global npm@12.2.0
           node scripts/check-install-toolchain.mjs "$(npm --version)"
 
       - id: previous
