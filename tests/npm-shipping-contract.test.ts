@@ -259,7 +259,9 @@ describe("current 0.12.5 full shipping contract", () => {
       writeFileSync(
         path.join(tool, ".corepack"),
         JSON.stringify({
-          locator: { name: "npm", reference: "12.0.2" },
+          // 版本取清单声明值：这条负向测试要验的是**哈希**不符会被拒，
+          // 不该因为版本号写死而在换 pin 时顺带命中另一条分支。
+          locator: { name: "npm", reference: payload.version },
           bin: { npm: "./bin/npm-cli.js", npx: "./bin/npx-cli.js" },
           hash: "sha512." + "0".repeat(128),
         }),

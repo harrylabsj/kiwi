@@ -2,7 +2,7 @@
 
 保持现portfolio-release.yml：manual dry-run（publish=false）→同immutable候选SHA的protected kiwi-release→原registry verify。仍为五个publisher，不新增scopefilter/channel；只有Kiwi与merchant-cloud升0.12.4，其他版本不升。已发布的DSH0.1.2/Catalog0.5.5/shopping-cli3.2.6按原流程幂等skip，历史registry字节不代表本轮新源；实际运行前应重核版本事实。
 
-构建host固定Node22.22.3，以满足npm12.0.2自己的engine；运行target原>=22.19保持。normal官方npm12安装后用真实`npm --version`调用A106检查；build-once和quality在npmci之前，npm publisher及registry/rollback核验使用同工具版本。不关生命周期脚本、hooks或伪造UA，不跳过fullverify。CI quality名称、checks、权限和action fullSHA保持。
+构建host固定Node22.22.3，以满足npm12.2.0自己的engine；运行target原>=22.19保持。normal官方npm12安装后用真实`npm --version`调用A106检查；build-once和quality在npmci之前，npm publisher及registry/rollback核验使用同工具版本。不关生命周期脚本、hooks或伪造UA，不跳过fullverify。CI quality名称、checks、权限和action fullSHA保持。
 
 新cloud输入为`node scripts/build-npm-shipping.mjs`，不调用旧thin artifact的skip-build；随后`node scripts/smoke-cloud-artifact.mjs --json`、build-cloud-package、pack dedicated merchant-cloud路径及原candidate verifier。完整Pi/依赖/源hash/budget/文件守卫由新shippingbuilder及其验收负责；workflow契约测试不能代替完整包候选验收、真实CI或平台冷启动。
 

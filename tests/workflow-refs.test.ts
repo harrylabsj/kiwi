@@ -8,6 +8,11 @@ import YAML from "yaml";
 const WORKFLOWS_DIR = join(process.cwd(), ".github", "workflows");
 const USES_RE = /^\s*(?:-\s+)?uses:\s*([^\s]+)/gm;
 const FULL_SHA = /^[0-9a-f]{40}$/;
+// 取 payload 清单声明的版本，而不是把版本号在断言里再写死一遍：这样"workflow 装的
+// 就是清单声明的那一个"仍然被钉住，但换 pin 不必连带改这条断言。
+const PINNED_NPM = JSON.parse(
+  readFileSync(join(process.cwd(), "build-inputs", "release0124-npm12-payload.json"), "utf8"),
+).version as string;
 
 describe("GitHub workflow action refs", () => {
   const files = readdirSync(WORKFLOWS_DIR).filter((f) => f.endsWith(".yml"));
@@ -242,7 +247,7 @@ describe("default release npm 12 toolchain contract", () => {
       expect(node.with["node-version"]).toBe("22.22.3");
       const setupIndex = steps.findIndex((s: { name?: string }) => s.name === "Setup npm 12 and verify the install toolchain");
       expect(setupIndex).toBeGreaterThan(-1);
-      expect(steps[setupIndex].run).toBe('npm install --global npm@12.0.2\nnode scripts/check-install-toolchain.mjs "$(npm --version)"\n');
+      expect(steps[setupIndex].run).toBe(`npm install --global npm@${PINNED_NPM}\nnode scripts/check-install-toolchain.mjs "$(npm --version)"\n`);
       const later = steps.slice(setupIndex + 1).map((s: { run?: string }) => s.run ?? "").join("\n");
       const expectedCommand = name === "build-once" ? "npm ci"
         : name === "verify-registry" ? "node scripts/verify-registry-downloads.mjs"
