@@ -111,7 +111,7 @@
     {
       "id": "hermes-plugin-kiwi",
       "name": "Hermes plugin",
-      "version": "1.2.1",
+      "version": "1.2.2",
       "version_source": {
         "type": "external-json",
         "scope": "hermes",
@@ -119,10 +119,11 @@
         "field": "version"
       },
       "repository": "harrylabsj/hermes-plugin-kiwi",
-      "source_commit": "ac5a2dca84f2d647493109de459494dae1e29996",
+      "source_commit": "5d23517308bf9e5d75b62dcda63a19dd03ab0491",
       "channel": "GitHub repository + Hermes plugin catalog",
       "release_controller": "Hermes plugin repository and upstream catalog PR",
-      "artifact": "release/hermes/hermes-plugin-kiwi-1.2.1.tar.gz",
+      "artifact": "release/hermes/hermes-plugin-kiwi-1.2.2.tar.gz",
+      "pinned_runtime_version": "0.12.5",
       "state": "repository-tagged; catalog pin is a separate gate",
       "gates": [
         "plugin validation",

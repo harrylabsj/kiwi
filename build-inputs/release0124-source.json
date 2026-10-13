@@ -666,7 +666,7 @@
     },
     {
       "path": "eslint.config.js",
-      "sha256": "sha256:502ebb005aa46e97549e9615db8810b36412ab11f4ff625ce806d4a5ed3f6283"
+      "sha256": "sha256:cda5d21577d51526ef510a77143f29f151c99d3c4d20668f7fff2c47c2185b0b"
     },
     {
       "path": "examples/profiles/buyer.deepseek.yaml",
@@ -1702,11 +1702,11 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:3024464ca39d6431263b6b0569dec0df2ccfd2f86bb7616ace770ea44c7e5c59"
+      "sha256": "sha256:6db8d4d944ab86d4bd5d79556ceb55f652dd9fd6bd75e6245cc307cc5b0faf7b"
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:937632f9906268e366c0f986fc59d7a2721d51ab046af98a0105717e1db46053"
+      "sha256": "sha256:d481c4562b18beafeaf6d6c2a2b503350d8d7805d8eddae31a6868e2bc99afd7"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
@@ -1750,7 +1750,7 @@
     },
     {
       "path": "scripts/build-npm-shipping.mjs",
-      "sha256": "sha256:2cb72fd4ccfa368d57063e84ecdd9d3b7b9e7ebf43e45761fef9773051e5d94e"
+      "sha256": "sha256:5fd8c45f323dec24b5cbe99e69f6233a93ff1b48caf7f4522f367fe2260e7f35"
     },
     {
       "path": "scripts/build-portfolio-release-index.mjs",

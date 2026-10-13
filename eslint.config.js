@@ -17,6 +17,10 @@ export default [
       // 云端制品构建产物（scripts/build-cloud-artifact.mjs）：内含第三方包，
       // 不是本仓源码，不参与 lint。
       "build/**",
+      // 本地暂存/issue 目录（工作区约定，已在 .gitignore 中）：里面可能有别的
+      // 会话/任务保留的脚本产物，不是本仓源码。不忽略会让 `npm run lint` ——
+      // 进而 `npm run verify` —— 在任何存有 scratch 产物的工作副本上必然失败。
+      ".scratch/**",
     ],
   },
   js.configs.recommended,
