@@ -207,14 +207,15 @@
       "channel": "WorkBuddy connector review",
       "release_controller": "WorkBuddy platform submission",
       "artifact": "release/workbuddy/kiwi-merchant-gateway-connector-1.2.0.zip",
-      "platform_asset_id": null,
-      "state": "candidate; not submitted",
+      "platform_asset_id": "oc_0053ad85c92a6587",
+      "state": "review pending; observed 2026-10-13 (snapshot only; not live)",
       "gates": [
         "package validation",
         "dedicated test account",
         "OAuth/MCP preview",
         "platform review"
-      ]
+      ],
+      "submission_archive": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/kiwi-merchant-gateway-1.2.0.zip"
     },
     {
       "id": "workbuddy-kiwi-sourcing-connector",

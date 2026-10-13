@@ -6,7 +6,7 @@ description: Help merchants prepare sourced customer-service FAQs, draft replies
 description_zh: 根据商家资料整理客服知识、起草有依据的回复，并识别需要人工处理的问题。
 description_en: Prepare sourced support FAQs and reply drafts with clear human-handoff decisions.
 category: writing
-version: 0.1.0
+version: 0.1.1
 author: harrylabsj
 ---
 

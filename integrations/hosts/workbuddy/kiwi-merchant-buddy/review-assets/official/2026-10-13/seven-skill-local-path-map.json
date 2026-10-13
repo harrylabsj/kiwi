@@ -1,0 +1,158 @@
+{
+  "format": "kiwi-buddy-seven-skill-local-path-map/1",
+  "sourceLedger": {
+    "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/seven-new-skill-submission-ledger.json",
+    "sha256": "54a5e90cdefdc707ce5f59cbb49b0d03e91de03507ab7ef47247f1f50d947044",
+    "note": "Raw official ledger retained byte-exact; its historical path strings may point into /private/tmp or be relative to an unavailable working directory."
+  },
+  "rows": [
+    {
+      "slug": "merchant-source-evidence-audit",
+      "reviewAssetId": "os_6aedc97ac49e2d5b",
+      "version": "0.1.0",
+      "rawLedgerReceiptField": "source-submitted.txt",
+      "rawLedgerAvatarField": null,
+      "rawPathsAreHistoricalSourceStrings": true,
+      "receipt": {
+        "status": "historical receipt capture archived; content does not identify this asset, so item-specific linkage is unverified",
+        "qualification": "The raw ledger uses relative source-submitted.txt. The capture exists at the recorded producer-root resolution but contains no asset ID or version.",
+        "sourcePath": "/private/tmp/kiwi-a676-buddy-review-return/source-submitted.txt",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-source-evidence-audit-attempt2-receipt.txt",
+        "sha256": "83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7",
+        "bytes": 3877
+      },
+      "avatar": {
+        "status": "canonical_submitted_avatar_bytes",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/avatars/skills/merchant-source-evidence-audit.png",
+        "sha256": "15b8efabd0f01e24b5c56b4e073bfdec55559b462e4d16b70fd980deef61e2c6"
+      }
+    },
+    {
+      "slug": "merchant-approval-brief",
+      "reviewAssetId": "os_03cf120a20b00aae",
+      "version": "0.1.0",
+      "rawLedgerReceiptField": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-approval-brief/attempt2/receipt.txt",
+      "rawLedgerAvatarField": "/private/tmp/kiwi-a676-buddy-review-return/seven-skill-avatars/approval-summary.png",
+      "rawPathsAreHistoricalSourceStrings": true,
+      "receipt": {
+        "status": "archived_exact_source_receipt",
+        "qualification": null,
+        "sourcePath": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-approval-brief/attempt2/receipt.txt",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-approval-brief-attempt2-receipt.txt",
+        "sha256": "83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7",
+        "bytes": 3877
+      },
+      "avatar": {
+        "status": "canonical_submitted_avatar_bytes",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/avatars/skills/merchant-approval-brief.png",
+        "sha256": "9c7ba2ef71ab5ca2516f10622d624d8393a3ce65e74c1aec2d53523782dca516"
+      }
+    },
+    {
+      "slug": "merchant-catalog-preflight",
+      "reviewAssetId": "os_50c0414417e25586",
+      "version": "0.1.0",
+      "rawLedgerReceiptField": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-catalog-preflight/attempt2/receipt.txt",
+      "rawLedgerAvatarField": "/private/tmp/kiwi-a676-buddy-review-return/seven-skill-avatars/listing-preflight.png",
+      "rawPathsAreHistoricalSourceStrings": true,
+      "receipt": {
+        "status": "archived_exact_source_receipt",
+        "qualification": null,
+        "sourcePath": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-catalog-preflight/attempt2/receipt.txt",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-catalog-preflight-attempt2-receipt.txt",
+        "sha256": "83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7",
+        "bytes": 3877
+      },
+      "avatar": {
+        "status": "canonical_submitted_avatar_bytes",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/avatars/skills/merchant-catalog-preflight.png",
+        "sha256": "1e7b4af5b9ec58b616a03c420ed3c8e2f6b705dd6bae39aa115913304c095e47"
+      }
+    },
+    {
+      "slug": "merchant-inquiry-structuring",
+      "reviewAssetId": "os_fe982aad31a98bfb",
+      "version": "0.1.0",
+      "rawLedgerReceiptField": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-inquiry-structuring/attempt2/receipt.txt",
+      "rawLedgerAvatarField": "/private/tmp/kiwi-a676-buddy-review-return/seven-skill-avatars/rfq-intake.png",
+      "rawPathsAreHistoricalSourceStrings": true,
+      "receipt": {
+        "status": "archived_exact_source_receipt",
+        "qualification": null,
+        "sourcePath": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-inquiry-structuring/attempt2/receipt.txt",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-inquiry-structuring-attempt2-receipt.txt",
+        "sha256": "83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7",
+        "bytes": 3877
+      },
+      "avatar": {
+        "status": "canonical_submitted_avatar_bytes",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/avatars/skills/merchant-inquiry-structuring.png",
+        "sha256": "36fb14d0b56c782f5ba2bea65fabdc602ff1971b626675a0b903a94f791fa599"
+      }
+    },
+    {
+      "slug": "merchant-operations-insights",
+      "reviewAssetId": "os_e64be8878bbb4349",
+      "version": "0.1.0",
+      "rawLedgerReceiptField": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-operations-insights/attempt2/receipt.txt",
+      "rawLedgerAvatarField": "/private/tmp/kiwi-a676-buddy-review-return/seven-skill-avatars/insights.png",
+      "rawPathsAreHistoricalSourceStrings": true,
+      "receipt": {
+        "status": "archived_exact_source_receipt",
+        "qualification": null,
+        "sourcePath": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-operations-insights/attempt2/receipt.txt",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-operations-insights-attempt2-receipt.txt",
+        "sha256": "83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7",
+        "bytes": 3877
+      },
+      "avatar": {
+        "status": "canonical_submitted_avatar_bytes",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/avatars/skills/merchant-operations-insights.png",
+        "sha256": "bab300e0d8cdb1599d3e67f8647d1959fd39eae491e1145441ba40d38cd66ec9"
+      }
+    },
+    {
+      "slug": "merchant-quote-draft",
+      "reviewAssetId": "os_053e9e8722df80e6",
+      "version": "0.1.0",
+      "rawLedgerReceiptField": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-quote-draft/attempt2/receipt.txt",
+      "rawLedgerAvatarField": "/private/tmp/kiwi-a676-buddy-review-return/seven-skill-avatars/quote-prep.png",
+      "rawPathsAreHistoricalSourceStrings": true,
+      "receipt": {
+        "status": "archived_exact_source_receipt",
+        "qualification": null,
+        "sourcePath": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-quote-draft/attempt2/receipt.txt",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-quote-draft-attempt2-receipt.txt",
+        "sha256": "83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7",
+        "bytes": 3877
+      },
+      "avatar": {
+        "status": "canonical_submitted_avatar_bytes",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/avatars/skills/merchant-quote-draft.png",
+        "sha256": "932122545e80eb1b38298c195837b17ec1a8846b0645afdc90938d4deb217962"
+      }
+    },
+    {
+      "slug": "merchant-trade-link-check",
+      "reviewAssetId": "os_9bc616f4fb80a452",
+      "version": "0.1.0",
+      "rawLedgerReceiptField": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-trade-link-check/attempt2/receipt.txt",
+      "rawLedgerAvatarField": "/private/tmp/kiwi-a676-buddy-review-return/seven-skill-avatars/trade-link.png",
+      "rawPathsAreHistoricalSourceStrings": true,
+      "receipt": {
+        "status": "archived_exact_source_receipt",
+        "qualification": null,
+        "sourcePath": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-trade-link-check/attempt2/receipt.txt",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-trade-link-check-attempt2-receipt.txt",
+        "sha256": "83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7",
+        "bytes": 3877
+      },
+      "avatar": {
+        "status": "canonical_submitted_avatar_bytes",
+        "repositoryPath": "integrations/hosts/workbuddy/kiwi-merchant-buddy/avatars/skills/merchant-trade-link-check.png",
+        "sha256": "baedff4010f42679f1f30e677b295d2378a9206316fb6b23d7c4e07e29bbb3a7"
+      }
+    }
+  ],
+  "entries": []
+}

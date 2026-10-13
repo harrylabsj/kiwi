@@ -1,0 +1,77 @@
+[
+  {
+    "slug": "merchant-source-evidence-audit",
+    "name": "Kiwi 商品源事实核验",
+    "assetId": "os_6aedc97ac49e2d5b",
+    "version": "0.1.0",
+    "status": "审核中",
+    "receipt": "source-submitted.txt",
+    "submittedAtObserved": "2026-10-13T08:59:20.899257+00:00"
+  },
+  {
+    "slug": "merchant-approval-brief",
+    "name": "Kiwi 商家人工审批摘要",
+    "assetId": "os_03cf120a20b00aae",
+    "version": "0.1.0",
+    "status": "审核中",
+    "zipSha256": "311ebf58e43ac577048b5115d7a15eaac1bddbeeb8944ffbb87762c324d4d10d",
+    "avatar": "/private/tmp/kiwi-a676-buddy-review-return/seven-skill-avatars/approval-summary.png",
+    "receipt": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-approval-brief/attempt2/receipt.txt",
+    "submittedAtObserved": "2026-10-13T09:00:47.815235+00:00"
+  },
+  {
+    "slug": "merchant-catalog-preflight",
+    "name": "Kiwi 商品目录发布预检",
+    "assetId": "os_50c0414417e25586",
+    "version": "0.1.0",
+    "status": "审核中",
+    "zipSha256": "2c4629a760d6de3092a9367d433cb24d6851e491b4be33e7bd89bc7f2ef68e94",
+    "avatar": "/private/tmp/kiwi-a676-buddy-review-return/seven-skill-avatars/listing-preflight.png",
+    "receipt": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-catalog-preflight/attempt2/receipt.txt",
+    "submittedAtObserved": "2026-10-13T09:01:03.963661+00:00"
+  },
+  {
+    "slug": "merchant-inquiry-structuring",
+    "name": "Kiwi 商家询价单整理",
+    "assetId": "os_fe982aad31a98bfb",
+    "version": "0.1.0",
+    "status": "审核中",
+    "zipSha256": "0817a3b77ebe8fe29713cd6611c613018177274c3f9b1ee1078df55f6a0f6a35",
+    "avatar": "/private/tmp/kiwi-a676-buddy-review-return/seven-skill-avatars/rfq-intake.png",
+    "receipt": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-inquiry-structuring/attempt2/receipt.txt",
+    "submittedAtObserved": "2026-10-13T09:01:34.949222+00:00"
+  },
+  {
+    "slug": "merchant-operations-insights",
+    "name": "Kiwi 商家运营数据解读",
+    "assetId": "os_e64be8878bbb4349",
+    "version": "0.1.0",
+    "status": "审核中",
+    "zipSha256": "ef61627e48ab1d6aba72d44e10ef93a6eb6e976cf7ac396b56c6b53c626941bf",
+    "avatar": "/private/tmp/kiwi-a676-buddy-review-return/seven-skill-avatars/insights.png",
+    "receipt": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-operations-insights/attempt2/receipt.txt",
+    "submittedAtObserved": "2026-10-13T09:01:59.896629+00:00"
+  },
+  {
+    "slug": "merchant-quote-draft",
+    "name": "Kiwi 商家报价方案准备",
+    "assetId": "os_053e9e8722df80e6",
+    "version": "0.1.0",
+    "status": "审核中",
+    "zipSha256": "5d7fef82f9ace868bbe42651f1ac1c96e75dbef41e9f655a73b40e4c0bbda3d2",
+    "avatar": "/private/tmp/kiwi-a676-buddy-review-return/seven-skill-avatars/quote-prep.png",
+    "receipt": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-quote-draft/attempt2/receipt.txt",
+    "submittedAtObserved": "2026-10-13T09:02:17.178931+00:00"
+  },
+  {
+    "slug": "merchant-trade-link-check",
+    "name": "Kiwi 三平台交易入口校验",
+    "assetId": "os_9bc616f4fb80a452",
+    "version": "0.1.0",
+    "status": "审核中",
+    "zipSha256": "8dcaec7ab7df2c2aed17519aff3d932991c0e79f588fb3af30af7b888fdc5736",
+    "avatar": "/private/tmp/kiwi-a676-buddy-review-return/seven-skill-avatars/trade-link.png",
+    "receipt": "/private/tmp/kiwi-a676-buddy-review-return/submissions/merchant-trade-link-check/attempt2/receipt.txt",
+    "submittedAtObserved": "2026-10-13T09:02:33.430583+00:00"
+  }
+]

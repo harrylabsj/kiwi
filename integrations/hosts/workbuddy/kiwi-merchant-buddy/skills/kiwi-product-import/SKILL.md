@@ -6,7 +6,7 @@ description: Convert merchant-provided product spreadsheets (Excel/CSV/pasted ta
 description_zh: 把商家提供的商品表格整理成工作台可导入的 CSV：先确认列映射，再生成文件并列出问题清单。
 description_en: Turn merchant spreadsheets into workbench import-ready CSV with confirmed column mapping and an issue list.
 category: writing
-version: 0.1.0
+version: 0.1.3
 author: harrylabsj
 ---
 
@@ -43,7 +43,7 @@ author: harrylabsj
 | 单价/price | 单价、价格、售价（**公开售价**，不是底价） |
 | 有效期至/valid_until | 有效期、有效期至、截止日期 |
 
-可选列：起订量/moq、库存/stock、供货说明/supply_note、更新时间/updated_at（留空自动取导入时刻）、状态/status（留空=在售）、交易平台/trade_platform 与平台商品ID/platform_product_id（两者成对填写，仅京东/淘宝/天猫；填了由 Kiwi 按平台固定路由生成商品页链接，**不要自己拼 URL**）。
+可选列：起订量/moq、库存/stock、供货说明/supply_note、更新时间/updated_at（留空由导入器写入导入时刻；它不是原商品更新时间或来源观察时间）、状态/status（留空=在售）、交易平台/trade_platform 与平台商品ID/platform_product_id（必须成对填写；只支持京东/淘宝/天猫及对应平台ID；ID按原始文本提供）。有平台字段时由 Kiwi 根据固定平台和 ID 生成商品页链接，不要手拼 URL。
 
 ### 第 2 步：与商家确认映射（必须，不可跳过）
 
@@ -51,6 +51,7 @@ author: harrylabsj
 
 - 无法识别的列：列出列名，问商家是否对应某个标准列（确认后按标准列名生成）；都不对应的列会被忽略。
 - **疑似底价/成本/进价列：说明「底价与成本属于报价私密策略，不能进入公开商品表」，整列剔除**，请商家确认。
+- 交易平台与平台商品ID 必须同时填写或同时留空；平台限定京东/淘宝/天猫。平台商品ID 必须以文本单元格提供为 ASCII 正整数字符串，不能填 URL、公式、数字单元格或科学计数写法；不自行补零、舍入或手拼链接。
 - 缺失的必填列：请商家补充（尤其**单价**与**有效期至**——两者缺一不可，商家不提供就不生成该行，更不能用「默认一年」「参考同类商品」顶替）。
 
 ### 第 3 步：生成 CSV + 问题清单
@@ -62,6 +63,8 @@ author: harrylabsj
 - **重复 SKU**：列出重复的商品编号与行号，请商家指定保留哪一行。
 - **疑似底价/成本/进价列**：记录已剔除的列名与原因。
 - **日期/数字格式异常**：按模板格式改写时逐一列出（如「2027.3.5 → 2027-03-05」）。
+- **平台入口异常**：列出平台/ID 缺一项、平台不支持、ID 非文本 ASCII 正整数字符串等行；商家补正后才导出，不将 SKU 当作平台ID。
+- **价格精度异常**：保留原值并请商家提供可无损表示到两位小数的价格；不自行四舍五入。零价是服务端接受的非负值，不因值为 0 本身拒绝，但可请商家确认商业意图。
 
 CSV 内容规则：日期用 `YYYY-MM-DD`；币种用三字母代码（CNY/USD/EUR/HKD/JPY/GBP）；状态只写「在售」或「暂停」；可选列没有值就留空（尤其库存——不确定就留空，不要填 0）。
 

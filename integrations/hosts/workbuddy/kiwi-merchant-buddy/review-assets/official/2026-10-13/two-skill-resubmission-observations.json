@@ -1,0 +1,26 @@
+{
+  "sourceEvidence": {
+    "label": "A680 retry outcome summary",
+    "sourcePathExternal": "/Users/jianghaidong/Documents/Codex/2026-09-29/new-chat-2/outputs/Buddy配置/cb_jU2kgRjXVRjE2gmSjgyH/v3-整改20261013/两技能机审整改/重新提审记录.json",
+    "sourceSha256": "be0095903958f9d3113a84249e98e461c7721dc23b3a92c6719c2d7d01e0bfe6"
+  },
+  "note": "The recorded timestamps are source-provided receipt observation times; status remains a time-bounded snapshot.",
+  "assets": [
+    {
+      "id": "os_1ea25f81ce98fea3",
+      "name": "Kiwi 云端接待部署",
+      "version": "0.2.3",
+      "status": "审核中",
+      "sha256": "5e3515d29659813102a235f53ea5ce41b343924d791302f6d8eb0c9c5d55cb19",
+      "observedAtUtc": "2026-10-13T09:39:08.179137+00:00"
+    },
+    {
+      "id": "os_32c612d72d2c3bcd",
+      "name": "Kiwi 商品导入表整理",
+      "version": "0.1.3",
+      "status": "审核中",
+      "sha256": "f5782a2cb028705e7c1b47274359f8ee5fa5f620877e4a4ad444a4fa94b6c994",
+      "observedAtUtc": "2026-10-13T09:41:14.207100+00:00"
+    }
+  ]
+}

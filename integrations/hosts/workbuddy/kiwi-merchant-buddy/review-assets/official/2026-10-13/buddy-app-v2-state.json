@@ -1,0 +1,55 @@
+{
+  "outcome": "submitted_for_review",
+  "official_entry": "https://open.workbuddy.cn/buddy-app/all?targetPartyId=ent_w7mlh87r",
+  "application": {
+    "name": "Kiwi商家",
+    "id": "cb_jU2kgRjXVRjE2gmSjgyH",
+    "before_version": "v1",
+    "before_status": "已驳回",
+    "after_version": "v2",
+    "after_status": "配置审核中"
+  },
+  "receipt": "已提交审核，预计 7 个工作日内出结果",
+  "submission_observed_at_utc": "2026-10-13T06:15:49Z",
+  "submission_observed_at_asia_shanghai": "2026-10-13 14:15:49 +08:00",
+  "time_source": "local observation immediately after platform receipt; UI exposes no server submission timestamp",
+  "title": {
+    "brand_en": "Kiwi",
+    "slogan_en": "Let buyers find you",
+    "slogan_chars": 19,
+    "full_en": "Kiwi · Let buyers find you",
+    "full_chars": 26,
+    "exact_full_title_blocked_by_ui": true
+  },
+  "avatar": {
+    "uploaded_file": "merchant-app.png",
+    "dimensions": "256x256",
+    "bytes": 5074,
+    "official_logo": "https://codebuddy-platform-1258344699.cos.accelerate.myqcloud.com/public/common/buddy_app_icon/de0538ac-0f4f-464f-8a29-f3bacd9f297c/81953eb3-7539-49e3-a8cb-eaa7f03a0068.png"
+  },
+  "actual_official_export_changes": [
+    "industry-config.json: brand.logo",
+    "industry-config.json: i18n.source.en.home.header.title"
+  ],
+  "market_json_unchanged": true,
+  "application_npm_package_pin_fields": false,
+  "application_execution_script_fields": false,
+  "export_versions": {
+    "industry-config.json": 1,
+    "market.json": "0.0.1"
+  },
+  "linked_skill_runtime_pin": "not verified from published skill archive; application exports contain no npm/package pins or scripts; local source pin is a separate layer",
+  "released_experts_changed": false,
+  "other_review_assets_changed": false,
+  "runtime_deployed": false,
+  "npm_published": false,
+  "product_code_changed": false,
+  "browser_session": "meqj",
+  "browser_session_stopped": true,
+  "limitations": [
+    "UI requires both English brand and slogan; exact entire title was rejected by normal form validation.",
+    "Six existing published Kiwi role/team avatars visually repeat; those assets were preserved.",
+    "Desktop preview requires WorkBuddy 5.5.0 and was not launched; official form/export and submission receipt verified.",
+    "Platform UI shows combined status 配置审核中, not a separate post-submission basic-information status."
+  ]
+}

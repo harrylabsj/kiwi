@@ -2,19 +2,21 @@
 name: kiwi-cloud-deploy
 display_name: Kiwi 云端接待部署
 display_name_en: Kiwi Cloud Reception Deploy
-description: Deploy the Kiwi merchant reception runtime to the merchant's own WorkBuddy cloud app in a strict order (pack verify → first sites_deploy to obtain the public URL → prepare → redeploy the same app → self-check → Catalog publish) with no-forgery rules. Use for 一键开通云端接待、升级云端接待服务、云端接待部署排障；不用于自有服务器部署。
-description_zh: 按固定顺序把 Kiwi 商家接待运行时部署到商家自己的云端应用，自检并引导上线确认。
+description: Deploy the Kiwi merchant reception runtime to the merchant's own WorkBuddy cloud app in a strict order (verify the pinned package → prepare → publish through capabilities explicitly present in the current WorkBuddy session → self-check → guide owner confirmation) with no-forgery rules. Use for 一键开通云端接待、升级云端接待服务、云端接待部署排障；不用于自有服务器部署。
+description_zh: 按当前会话实际提供的 WorkBuddy 云端应用工具部署 Kiwi 商家接待运行时，自检并引导商家本人确认上线；缺少必要工具时停止并说明。
 description_en: Deploy the merchant reception runtime to the merchant's own cloud app step by step, self-check, and guide the go-live confirmation.
 category: devops
-version: 0.2.0
+version: 0.2.3
 author: harrylabsj
 ---
 
 # Kiwi 云端接待部署
 
-本技能把 Kiwi 商家接待运行时部署到**商家自己账号名下**的云端应用，并引导商家完成上线确认。部署归属商家（平台只有会话内发布工具，没有远程代部署 API），全程以平台真实回执为准。
+本技能把 Kiwi 商家接待运行时部署到**商家自己账号名下**的云端应用，并引导商家完成上线确认。部署由商家本人控制；每一步仅依据当前会话实际提供的工具、权限和回执，不对平台的其他能力作概括判断。
 
-平台工具口径（V1 实测，2026-09-28）：Buddy 会话**没有** inspect/activate/deploy 与云端模块开通这组工具；可用的是延迟工具 **`workbuddy_sites_deploy`（发布上线）** 与 **`workbuddy_sites_unpublish`（下线）**，加上本地文件读写与 Bash。我们不使用任何云端模块（数据库/登录/存储/LLM 都不开），因此无需 activate。**工具名与参数以平台实际提供为准**：以下步骤按功能称呼工具，执行时用会话里真实存在的发布工具与参数名；对不上时如实报告，不要猜。
+工具边界：每次执行前检查当前会话实际列出的 WorkBuddy 应用发布、查看和下线能力及参数。不得假设工具名、可用性、参数、应用复用语义或回执字段；仅在真实工具清单明确提供相应能力时才调用。缺少发布、应用身份核验或状态检查所需能力时，停止对应步骤并说明限制，不借用其他平台的 Sites 工具，也不编造工具或回执。云端模块是否需要开通以当前产品包和平台真实要求为准，不作旧版本断言。
+
+实测边界（2026-09-30）：正式云包 0.12.0 已在普通 WorkBuddy 任务完成首次取址、同目录二次发布、公网存活检查和工作台首登。Catalog 绑定、名片发布、买家询价与带业务数据升级保留尚未完成端到端验收；不得把部署成功称为完整上线。
 
 固定参数：云端应用/站点名一律用「**Kiwi商家接待**」。已有就复用，**绝不新建第二个**；首次部署后的再次发布必须复用**同一个应用**（换应用会换公网域名，后续校验全部失效）。
 
@@ -25,16 +27,16 @@ author: harrylabsj
 3. **半公开凭据不输出**：平台回执里的 publishableKey、token 等凭据字段不贴出、不记录、不转述；只使用应用标识与公网链接这类公开字段。
 4. **配额不足立即停止**：回执出现配额/云服务不可用信号（如 `cloud_service_unavailable`、`useLocalImplementation: true`）时，如实说明并停止；**不做任何本地兜底实现**，不代商家清理或升级配额。
 5. **摘要不符停止**：npm integrity 或包内聚合摘要与 `references/release.json` 固定值不一致时，停止并如实报告两边的值；不换源、不换版本重试。
-6. **发布失败贴原文**：`workbuddy_sites_deploy` 失败原样上报，**不修改部署包内容重试**（尤其不许改 `cloud.config.json` 的 origin）；商家决定后续。
-7. **一次性口令只展示一次**：prepare `--admin-bootstrap` 打印的工作台首登口令，立即展示这一次并提醒商家保存；此后不复述、不写进任何文件或总结。口令遗失无法找回，重新部署不会重置（状态目录已有凭据时引导文件被忽略）。
-8. **不承诺免费或 7×24**：费用以平台弹窗为准；不说"永久在线"——空闲回收后首个请求可能有约 3 秒冷启动。
-9. **上线判断只认工具**：只有 `kiwi_catalog_get_service_status` 显示 `card.published` 且 `presence=fresh` 才能说"已上线，采购方可以发现你并发来询价"；工具不可用或结果不符时如实说明卡点。
+6. **发布失败贴原文**：当前会话明确提供的 WorkBuddy 发布工具 失败原样上报，**不修改部署包内容重试**（尤其不许改 `cloud.config.json` 的 origin）；商家决定后续。
+7. **秘密只由商家本人处理**：一次性管理员口令、配对码、token、密钥或验证码不得读入模型上下文、复制到对话、日志、文件或摘要。若命令会把秘密输出到模型可见的 stdout，或不能确认输出仅呈现给商家本人，停止该操作；引导商家在其本人可见的安全终端/工作台直接查看并录入，助手不读取、不转述。
+8. **不承诺免费或 7×24**：费用以平台弹窗为准；不说"永久在线"。约 3 秒冷启动仅为历史观察，不保证适用于当前版本或平台状态。
+9. **上线判断只认工具**：只有当前会话真实提供且调用成功的 Kiwi Catalog 状态查询显示 `card.published` 且 `presence=fresh` 才能说"已上线，采购方可以发现你并发来询价"；工具不可用或结果不符时如实说明卡点。
 10. **不读取、不转述配对码**：Catalog 配对码由商家本人在工作台与授权页两处核对；配对码和链接都不是授权凭证。
 
 ## 第 0 步：执行前检查
 
 1. **确认账号已连接**：先确认商家已连接 Kiwi 商家账号（有 `kiwi_catalog_get_merchant_profile` 时调用确认；没有则询问商家是否已连接，未连接先走注册开通，再回来部署）。
-2. **检查会话工具**：确认本会话是否具备平台发布工具 `workbuddy_sites_deploy`（及下线工具 `workbuddy_sites_unpublish`）。**缺失 → 转入「方案 B 兜底」**，不要尝试变通。工具存在但参数/回执与下述步骤对不上时，以平台实际为准并如实记录差异。
+2. **检查会话工具**：检查当前会话真实工具清单与参数；缺少必要能力就停止该步骤并说明，不猜工具、不改用其他平台的发布工具。工具存在但参数/回执与下述步骤对不上时，以平台实际为准并如实记录差异。
 3. **检查发布参数**：读取 @references/release.json。若 `package_version`、`aggregate_digest`、`npm_integrity` 仍为 `{{…}}` 占位，说明发布参数尚未回填：停止实际部署，向商家如实说明"云端接待的发布参数尚未就绪，暂时只能讲解流程"，并讲解下面各步骤。
 4. 读取回填后的 release.json 三个值备用；npm 不可用（`npm --version` 失败）也如实停止。
 
@@ -42,7 +44,7 @@ author: harrylabsj
 
 ### 1. 取包并校验摘要
 
-在会话工作目录执行（`<版本>` 取 release.json 的 `package_version`）：
+仅当商家本人操作环境提供 npm 且商家明确执行时，按会话可见说明校验固定版本（`<版本>` 取 release.json 的 `package_version`）：
 
 ```sh
 mkdir -p kiwi-cloud-deploy-work
@@ -57,7 +59,8 @@ tar -xzf harrylabsj-kiwi-merchant-cloud-<版本>.tgz
 
 ### 2. 首次发布：取得公网地址
 
-- 调用 `workbuddy_sites_deploy` 做**第一次发布**（发布内容就用第 1 步的工作目录即可；这一次发布只为取得公网地址——prepare 需要 `--origin`，而地址只有发布后才知道）。
+- 先固定一个专用于「Kiwi商家接待」的**发布目录**；第 1 步的 tarball、解包目录和随后生成的临时目录都放在它的外面。第一次发布可在这个发布目录放仅用于取址的最小启动文件（`index.js` 与 `package.json`，不含商家数据或凭据）。记下本次发布实际使用的目录绝对路径。
+- 调用 当前会话明确提供的 WorkBuddy 发布工具 做**第一次发布**，目的是取得公网地址——prepare 需要 `--origin`，而地址只有发布后才知道。
 - 从回执记录**公网地址**（形如 `https://xxx.app.workbuddy.host`）与**应用标识**（applicationId/siteId 等，以回执实际字段为准），并贴给商家。
 - 发布确认/费用弹窗由**商家本人**点击；配额/云服务不可用 → 按硬规则 4 停止。
 - **回执失联保护（T009）**：发布报错导致拿不到地址或应用标识时，先与商家核对账号里是否已出现「Kiwi商家接待」，确认不存在后才允许再次创建，防止重复建应用。
@@ -69,14 +72,14 @@ tar -xzf harrylabsj-kiwi-merchant-cloud-<版本>.tgz
 node package/prepare.mjs --origin <第 2 步公网地址> --out <部署目录绝对路径> --admin-bootstrap
 ```
 
-- `--origin` 必须逐字符等于第 2 步回执的公网地址（prepare 自身会拒绝非 https / 带路径的 origin）。
+- `--origin` 必须逐字符等于第 2 步回执的公网地址（prepare 自身会拒绝非 https / 带路径的 origin）。`--out` 要选发布目录之外的**新空目录**：`prepare.mjs` 会拒绝非空目录，不能直接写进已用于首次发布的目录。
 - 可选：`--merchant-name <商家显示名>`（缺省写入占位名，工作台会提示商家补设）；`--catalog-url` 缺省即生产 Catalog 地址，不要改。
 - 成功时 stdout 打印 JSON 回执（`deployment_dir`、`artifact_sha256`、`version` 等）；核对回执中的摘要与版本和 release.json 一致，不一致 → 停止。
-- `--admin-bootstrap` 额外打印**一次性工作台首登口令**：立即按硬规则 7 展示这一次并提醒保存。
+- 若 `--admin-bootstrap` 会将口令写入 stdout，助手不得运行或读取该命令输出；改由商家本人在安全终端/工作台直接完成，无法隔离时停止。
 
 ### 4. 同一应用再次发布
 
-- 用 prepare 回执里的部署目录**绝对路径**再次调用 `workbuddy_sites_deploy`；必须复用第 2 步的**同一应用**（新建应用会导致域名变化，后续校验全部失效）。
+- 核对 prepare 的回执与文件后，将部署目录中的内容（包括首登所需、仅含派生验证材料的 `admin-bootstrap.json`）复制进第 2 步**同一个发布目录**，覆盖取址用的 `index.js` 与 `package.json`；不要把 tarball、口令明文、私有状态目录或取包临时文件复制进去。第二次调用 当前会话明确提供的 WorkBuddy 发布工具 时使用第 2 步记下的**同一个目录绝对路径**与**同一应用**。历史实测发现换本地目录会新建另一应用，即使指定旧 `applicationId`；当前工具若无法明确保证复用，停在第二次发布前核对，不凭应用名称或参数猜测。
 - 失败 → 贴平台报错原文并停止（硬规则 6）。
 - 成功 → 贴回执关键字段；核对公网地址与第 2 步一致，不一致 → 停止并如实报告。
 
@@ -91,16 +94,16 @@ curl -sS <origin>/.well-known/agent-card.json
 - `/livez` → HTTP 200。
 - `/readyz` → HTTP 200 且 `ready:true`。注意：**尚未导入商品且未完成 Catalog 绑定时 products 检查不通过属预期**（D4：空商品起步、绑定前不报价）；此时服务已在运行，应引导商家先到工作台导入商品、再到 Catalog 授权，之后系统自动重试服务检查。其他检查（identity/storage/policy）失败 → 贴响应原文并停止。
 - `/.well-known/agent-card.json` → HTTP 200 且 `url` 字段严格等于公网地址。
-- 空闲回收后首个请求可能慢几秒，可稍候重试探测；仍失败 → 贴响应原文并停止，不谎报成功。
+- 历史上观察到空闲回收后首个请求可能变慢，但当前表现以实际探测为准；可稍候重试，仍失败 → 贴响应原文并停止，不谎报成功。
 
 ### 6. 引导商家完成两处本人确认
 
-1. **工作台**：商家用一次性口令登录云端工作台（先导入商品），查看配对码（device enrollment）。你不读取、不转述配对码。
+1. **工作台**：商家用一次性口令登录 `<origin>/admin/login`，登录后打开 `<origin>/merchant/`（工作台首页，商品与导入在此）。先导入商品，再查看配对入口；若无开通记录、配对码或 Catalog 授权入口，如实报告连接流程尚未启动并停止该步骤，不猜测授权链接、不把商品列表数量当作绑定结果。你不读取、不转述配对码。
 2. **Catalog**：商家打开 Catalog 授权页，核对两处配对码一致、公开预览无误，**亲自**点击「连接此服务并发布」。
 
 ### 7. 上线核对
 
-- 调用 `kiwi_catalog_get_service_status`：`card.published` 且 `presence=fresh` 才宣布已上线（硬规则 9）。
+- 调若当前会话实际提供经确认的 Kiwi Catalog 状态查询工具，则调用该工具：`card.published` 且 `presence=fresh` 才宣布已上线（硬规则 9）。
 - 工具不可用（连接器未提供）→ 如实说明无法自动核对，请商家在 Catalog 页面自查，不得宣称已上线。
 
 ## 升级流程（已有云端接待，换新固定版本）
@@ -108,23 +111,23 @@ curl -sS <origin>/.well-known/agent-card.json
 1. 第 0 步检查同上（工具、回填后的新版本参数）。
 2. 取新版本包并校验（同第 1 步）。
 3. prepare：`--origin` 用商家现有公网地址（从上次部署记录或商家处取得；不确定时先自检现有地址 `/livez` 核对，仍不确定则与商家一起确认后再继续）。**不加 `--admin-bootstrap`**——状态目录已有工作台凭据时引导文件会被忽略，新口令不会生效；商家改口令在已登录的工作台内完成。
-4. 用 prepare 的部署目录再次 `workbuddy_sites_deploy`，复用**同一应用** → 自检（同第 5 步）→ 用 `kiwi_catalog_get_service_status` 核对仍在线。
-5. 向商家说明：同一应用重发布域名不变、状态目录（身份、账本、配对）保留；升级期间短暂不可用属正常。
+4. prepare 输出到既有发布目录之外的新空目录；核对后把完整部署文件回填到该应用原来绑定的固定发布目录，再从**原目录**调用 当前会话明确提供的 WorkBuddy 发布工具。核对应用 ID 与域名一致 → 自检（同第 5 步）→ 若当前会话提供真实 Catalog 状态查询工具，再核对在线状态；否则说明无法核验。
+5. 重登工作台验证身份、商品、账本与配对状态仍保留；只有实际核对后才能报告状态保留。升级期间可能短暂不可用。
 
 ## 暂停与恢复
 
-- **暂停接待**（采购方搜不到名片）：优先在 Catalog/工作台暂停名片；实例保留，恢复时在 Catalog 重新发布名片。
-- **平台应用下线**：会话内可用 `workbuddy_sites_unpublish` 下线；也可由商家本人在平台面板操作。如实告知两条路径与后果（下线后公网地址不可达），由商家决定。
-- **恢复**：重新对同一应用调用 `workbuddy_sites_deploy`（部署目录不变时直接重发即可）。
+- **暂停名片/接待**：仅在当前产品界面实际提供该操作时引导商家本人确认；这只改变对应产品中的可发现/接待状态，不表示云端实例停止运行或费用停止。
+- **平台应用下线**：若当前会话真实提供经确认的 WorkBuddy 下线能力，或商家本人在平台控制台执行下线，按其实际回执说明结果。下线只表示平台应用访问状态改变；不得推断实例已停止、资源已释放或计费已停止。实例停止与费用状态须分别在平台的运行/账单界面核实。
+- **恢复**：仅在确认当前发布能力与应用身份后，按平台实际恢复流程操作；不得假设重发会复用应用或恢复原状态。
 
 ## 方案 B 兜底（会话没有发布工具时）
 
-第 0 步发现 `workbuddy_sites_deploy` 缺失时：
+第 0 步发现 当前会话明确提供的 WorkBuddy 发布工具 缺失时：
 
 1. 不尝试变通；向商家说明"本会话缺少平台发布工具，改用方案 B：我把一段提示词给你，你在**普通 WorkBuddy 任务**里粘贴运行"。
-2. 读取 @references/fallback-prompt.md，把整段提示词**原样**输出给商家；release.json 已回填时先将其中的 `{{PACKAGE_VERSION}}`、`{{AGGREGATE_DIGEST}}`、`{{NPM_INTEGRITY}}` 占位替换为回填值再输出。
-3. 商家执行完毕回到本应用后，用「上线检查」路径（`kiwi_catalog_get_service_status`）核对最终状态。
-4. 两条路的规则完全相同：不伪造、不代点、不输出凭据字段、口令只展示一次。
+2. 读取 @references/fallback-prompt.md，仅提供不含秘密、无需把秘密回传模型的操作说明；release.json 已回填时先将其中的 `{{PACKAGE_VERSION}}`、`{{AGGREGATE_DIGEST}}`、`{{NPM_INTEGRITY}}` 占位替换为回填值再输出。
+3. 商家执行完毕返回本技能会话后，只有当前会话真实列出并确认可用的 Catalog 状态查询工具时才调用核验；否则说明无法自动核验，请商家在 Catalog 界面自行检查，不得宣称已上线。
+4. 两条路的规则完全相同：不伪造、不代点、不输出凭据字段、秘密只由商家本人处理，助手不读取、不展示。
 
 ## 常见错误
 
@@ -134,5 +137,5 @@ curl -sS <origin>/.well-known/agent-card.json
 4. 发布失败后改 `cloud.config.json` 或删文件再试 → 禁止；原样上报。
 5. 一次性口令展示后再次复述或写进总结 → 违反一次性原则。
 6. 自检失败仍宣布上线 → 只有工具确认 `card.published && presence=fresh` 才能说已上线。
-7. 承诺免费或 7×24 → 费用以平台弹窗为准；空闲回收后首个请求可能慢几秒。
-8. 用 inspect/activate/deploy 的旧口径执行 → 该组工具在 Buddy 会话中**不存在**（V1 实测）；一律走 `workbuddy_sites_deploy`，工具对不上时如实报告并走方案 B。
+7. 承诺免费、7×24 或把应用下线等同于实例停止/停止计费 → 费用、实例和访问状态分别依据当前平台回执核实；约 3 秒冷启动是历史观察，不保证当前适用。
+8. 使用旧会话工具名称或能力假设 → 以当前真实工具清单为准，缺失即停止，不借用其他平台工具。

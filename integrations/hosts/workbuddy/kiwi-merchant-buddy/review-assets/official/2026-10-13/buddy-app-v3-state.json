@@ -1,0 +1,37 @@
+{
+  "status": "整改草稿已保存，7项在审技能目前不可引用，应用尚未重提",
+  "appId": "cb_jU2kgRjXVRjE2gmSjgyH",
+  "appBirdUploadedAndOfficialDraftExported": true,
+  "buyerConnectorRemovedFromDraft": true,
+  "officialChanges": [
+    "industry-config.brand.logo",
+    "market.connector-list 3 to 2"
+  ],
+  "oldApplicationsAndPendingAssetsPreserved": true,
+  "sevenSkillMaterials": "A679最终材料独验通过并已7项正常提审",
+  "newSkillPlatformIds": [
+    "os_6aedc97ac49e2d5b",
+    "os_03cf120a20b00aae",
+    "os_50c0414417e25586",
+    "os_fe982aad31a98bfb",
+    "os_e64be8878bbb4349",
+    "os_053e9e8722df80e6",
+    "os_9bc616f4fb80a452"
+  ],
+  "e2ePaused": true,
+  "localOfficialDraft": "app-final-bird-no-buyer.zip",
+  "draftNotSubmitted": true,
+  "sevenNewSkillsSubmitted": 7,
+  "newSkillPackagesManifestSHA": "82d6eced583d5354598e2c31b147111e617cc1afa92737559d0dc3f1c7df19b4",
+  "appResubmissionBlockedBy": "正常选择器仅3项已发布Kiwi技能，新增7项在审不可选；市场引用为skill_而非os_提审ID，无法完成10项整改",
+  "priority": "用户要求先两单机审失败整改撤回重提",
+  "twoAssets": [
+    "os_1ea25f81ce98fea3",
+    "os_32c612d72d2c3bcd"
+  ],
+  "priorityTwoSkills": "已完成撤回/修正/独验/同原ID重提，cloud0.2.3与import0.1.3均审核中；机审结果尚未证明",
+  "twoSkillResult": "/Users/jianghaidong/Documents/Codex/2026-09-29/new-chat-2/outputs/Buddy配置/cb_jU2kgRjXVRjE2gmSjgyH/v3-整改20261013/两技能机审整改/处理结果.md",
+  "latestPendingSkillsAdmissionCheck": "/Users/jianghaidong/Documents/Codex/2026-09-29/new-chat-2/outputs/Buddy配置/cb_jU2kgRjXVRjE2gmSjgyH/v3-整改20261013/在审技能应用引用核查-20261013/核查结果.md",
+  "latestBirdRestoredDraft": true,
+  "latestBirdOfficialURL": "https://codebuddy-platform-1258344699.cos.accelerate.myqcloud.com/public/common/buddy_app_icon/de0538ac-0f4f-464f-8a29-f3bacd9f297c/dd6d9e9b-9e1b-4cb5-aa40-c9578e15e78e.png"
+}

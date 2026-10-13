@@ -1,0 +1,71 @@
+{
+  "name": "kiwi-cs-coach",
+  "version": "0.1.2",
+  "description": "Turns product notes into FAQs and reply scripts, rehearses buyer questions, and sets escalation boundaries.",
+  "author": {
+    "name": "harrylabsj",
+    "email": "1711496337@qq.com"
+  },
+  "homepage": "https://github.com/harrylabsj/kiwi",
+  "license": "Apache-2.0",
+  "agents": [
+    "./agents/kiwi-cs-coach.md"
+  ],
+  "expertType": "agent",
+  "agentName": "kiwi-cs-coach",
+  "displayName": {
+    "zh": "Kiwi 客服教练",
+    "en": "Kiwi CS Coach"
+  },
+  "profession": {
+    "zh": "客服教练",
+    "en": "CS Coach"
+  },
+  "displayDescription": {
+    "zh": "把商品说明整理成问答与话术，模拟采购方提问，划清转人工边界。",
+    "en": "Turns product notes into FAQs and reply scripts, rehearses buyer questions, and sets escalation boundaries."
+  },
+  "avatar": "avatars/kiwi.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "帮我处理常见问答",
+    "en": "Help me with cs coach"
+  },
+  "plugin": "kiwi-cs-coach",
+  "dependencies": {
+    "connectors": [
+      "kiwi-merchant"
+    ]
+  },
+  "tags": [
+    {
+      "zh": "常见问答",
+      "en": "CS Coach"
+    },
+    {
+      "zh": "模拟接待",
+      "en": "CS Coach"
+    },
+    {
+      "zh": "接待话术",
+      "en": "CS Coach"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我处理常见问答",
+      "en": "Help me with cs coach"
+    },
+    {
+      "zh": "帮我处理模拟接待",
+      "en": "Help me with cs coach"
+    },
+    {
+      "zh": "帮我处理接待话术",
+      "en": "Help me with cs coach"
+    }
+  ],
+  "skills": [
+    "./skills/kiwi-merchant-cs-prep"
+  ]
+}

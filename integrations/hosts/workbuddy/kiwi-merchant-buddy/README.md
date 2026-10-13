@@ -1,32 +1,38 @@
-# Kiwi 商家运营工作台 Buddy 应用配置草稿
+# Kiwi 商家运营工作台 Buddy 配置与提审状态说明
 
 `buddy-app.config.json` 是 Buddy 后台配置的本地草稿：官方文档说明后台「支持导出配置 JSON 文件在本地环境测试验证」，但导出格式未公开。本文件为自定义清晰结构，供导出预览和人工照着配置；每次退出配置前后台导出文件，下次导入还原（官方最佳实践第 5 条）。
 
-对应连接器包见 `../kiwi-merchant-gateway-connector/`（远程 HTTPS MCP + OAuth，source=`kiwi-merchant`）。v1.1.0 的旧平台资产已撤回；WP22 正准备 v1.2.0 七工具候选送审包；尚未上传，需平台生成新 ID 并完成审核后配置到 Buddy 内置连接器。
+## 当前提审源入口（2026-10-13）
 
-## 五个后台模块怎么填
+- 当前技能与连接器资产快照、源文件清单及状态入口见 [review-assets/README.md](review-assets/README.md) 和 [review-assets/registry.json](review-assets/registry.json)。该记录是本地提审证据索引，平台状态如有变化须以平台当前页面为准。
+- 此日期的状态记录：应用 `cb_jU2kgRjXVRjE2gmSjgyH` 的 v2 配置审核被驳回；最新官方草稿为 `Kiwi Bird / Let buyers find you / 去buyer`，尚未重新提交。七项新增技能的选择器当前不可用，因此不假定已完成应用绑定。既有资产 ID 保持不变，不为同一项新造 ID。
+- 下方 WP18/WP22 与五模块内容是历史开发说明和旧流程记录，不代表当前官方提审包、当前审核状态或现时唯一配置来源。现行源文件、资产 ID 与状态以 `review-assets/` 中的记录为准。
+
+对应连接器包见 `../kiwi-merchant-gateway-connector/`（远程 HTTPS MCP + OAuth，source=`kiwi-merchant`）。连接器 v1.2.0 已有提审资产 ID `oc_0053ad85c92a6587`；审核状态与配置可用性见当前资产登记。WP22 的准备与创建阻碍描述属于历史开发记录。
+
+## 历史配置草稿说明（非当前提审步骤）
 
 ### 模块 1：创建应用
 
-- 应用名称/简介/头像：取 `identity` 段；头像上传 `avatars/kiwi-merchant-buddy.png`（256×256 PNG，小于 100KB）。2026-09-20 已在创建表单核对文件可接受；但平台尚未生成应用 ID。
-- 授权列表 / 授权回调 URL：商家连接器使用 OAuth；连接器回调由 `source=kiwi-merchant` 派生。应用级授权回调属于 Buddy 应用自身，当前无 Open API 权限时留空，不填占位地址。
-- 可信 Origin：填实际部署的 Buddy/网关域名；提交前替换文档中的占位值。
-- 创建后保存 Client ID 与 Client Secret（Secret 仅展示一次）。
+- 应用名称/简介/头像：旧流程曾使用 `identity` 段与 `avatars/kiwi-merchant-buddy.png`。2026-09-20 的尺寸验收和“尚无应用 ID”均为历史记录；当前应用及官方草稿状态见上方入口，不把旧头像或旧文案当作最新提审内容。
+- 授权列表 / 授权回调 URL：下方关于应用级回调留空和权限缺失的内容是历史排障记录，不构成当前填表指示；按当前平台官方草稿和页面要求核对，不填占位值。
+- 可信 Origin：旧草稿说明；当前值须来自实际部署信息与平台要求，不能把占位符提交。
+- 凭据由账号所有者在安全界面自行保存或录入；Client Secret、一次性口令等不得进入模型上下文、对话、日志或普通文件。
 
-> **创建审核阻碍（2026-09-20）**：上述头像、名称、简介和「商家自营 - B2b」类目均已填好；授权列表与应用级 OAuth 回调留空时「提交审核」仍禁用。权限菜单没有“无权限”选项，现有权限均非本版目录工具所需。不能申请无关权限或填写无效回调；需平台确认最小权限创建方式。
+> **历史创建审核阻碍（2026-09-20，仅作背景）**：旧草稿中头像、名称、简介和类目已填；当时回调留空后提交审核按钮仍禁用。该记录已被后续应用审核状态取代；不要当作当前平台页面状态或照此重复创建。
 
 ### 模块 2：首页配置
 
 - 首页标题（Slogan）、欢迎语：取 `home.slogan` / `home.welcome`。
 - 工作模式：按 `buddy-app.config.json` 配 4 个模式——①注册开通 ②商品报价 ③运营分析（含客服准备）④审批磋商（1.8.0，东哥四工作场景），各配 System Prompt 与 `kiwi_catalog_*` 工具；「注册开通」模式另挂技能 `kiwi-cloud-deploy`（云端接待一键部署），「商品报价」模式另挂技能 `kiwi-product-import`（商品导入表整理），「运营分析」模式另挂技能 `kiwi-merchant-cs-prep`。
-  - **首发不直连实例**（运营明细 / 洽谈过程 / 待审批项都在商家实例工作台）：按[「网关不碰实例」](../../../../docs/merchant-buddy/merchant-connector-deployment.md)原则（部署说明 §0）——网关不持有实例地址与凭据、不代理实例工具；「运营分析」「审批磋商」的系统提示词写明首发边界：引导商家打开自己实例的工作台（运营报告 / 旁观洽谈 / 审批与规则表单），帮解读与起草，不编造数据；Buddy 内直连实例为第二版（WP16）。`kiwi-cloud-deploy` 不经网关：它在商家自己的 Buddy 会话里用平台发布工具（V1 实测：`workbuddy_sites_deploy`/`workbuddy_sites_unpublish`，无 inspect/activate/deploy）把接待运行时部署到**商家名下**的云端应用。
+  - **首发不直连实例**（运营明细 / 洽谈过程 / 待审批项都在商家实例工作台）：按[「网关不碰实例」](../../../../docs/merchant-buddy/merchant-connector-deployment.md)原则（部署说明 §0）——网关不持有实例地址与凭据、不代理实例工具；「运营分析」「审批磋商」的系统提示词写明首发边界：引导商家打开自己实例的工作台（运营报告 / 旁观洽谈 / 审批与规则表单），帮解读与起草，不编造数据；Buddy 内直连实例为第二版（WP16）。`kiwi-cloud-deploy` 不经网关：只有在当前 Buddy 会话实际提供相应能力且商家授权时才执行平台操作；不假设固定工具名、参数或能力清单。
 - 场景胶囊：按配置文件中的胶囊逐项验证（注册开通 6 个、商品报价 6 个、运营分析 8 个、审批磋商 6 个；1.7.0 的 24 个胶囊按 WP25 对照表复用/合并/新增为 26 个）。注册开通模式的「一键上云」「升级接待」（1.7.0 起为「一键开通云端接待」/「升级接待服务」，1.8.0 改短名）依赖技能资产审核与真实发布实测，未就绪前预览会按方案 B 输出提示词。
 - 内置连接器：使用 `kiwi-merchant-gateway-connector` 的 OAuth MCP，只提供目录工具。`kiwi_merchant_*` 实例工具**本就不该出现**，不要为此排障。
 
 ### 模块 3：市场配置
 
-- 连接器：待 v1.2.0 审核通过后，使用平台新生成的资产 ID 配置 Buddy 内置连接器，并核对其只暴露预期的 7 个目录工具。不得引用已撤回/删除的历史资产 ID。技能三个：`skills/kiwi-merchant-cs-prep/` 已作为 `os_dc3a52407574eb77` 提交审核，发布后再加入应用市场，它只准备客服 FAQ/回复草稿，不自动接待客户；`skills/kiwi-cloud-deploy/`（1.7.0 新增）云端接待一键部署，**需单独提交技能资产审核**；执行路径已按 V1 实测改用 `workbuddy_sites_deploy`（首次发布取地址 → prepare → 同一应用再发布 → 自检）、发布参数已回填（WP17，绑定 0.11.0 合并线产物），剩余前置为**真实发布实测**（费用/弹窗需东哥确认）与 npm 正式发布后复核 integrity，见配置 `$pending.skills`；`skills/kiwi-product-import/`（1.7.0 内 WP12 新增）商品导入表整理（列映射确认 → 生成模板一致 CSV + 问题清单 → 引导工作台上传），**需单独提交技能资产审核**（不依赖平台工具，审核前可退回普通任务执行），见配置 `$pending.skills`。「商品报价」模式「整理商品」胶囊以 `bindSkills` 表达技能绑定；平台若不支持胶囊级技能绑定，以模式 skills 为准。
-- 专家：应用后台不直接配置；市场侧 5 个专用专家 + 专家团 + 4 个精选场景按 `platform/market-draft/` 草稿与生成器常量统一维护（WP19/WP25）。
+- 连接器：v1.2.0 已有提审 ID `oc_0053ad85c92a6587`；当前审核/可用状态见 registry。下方 WP22 的“等待生成 ID”仅为旧开发说明，不是当前状态。当前技能资产共 10 项，均有本地对应源文件及头像；已提交审核（状态需以平台为准）：`kiwi-cloud-deploy`（0.2.3，`os_1ea25f81ce98fea3`）、`kiwi-product-import`（0.1.3，`os_32c612d72d2c3bcd`）、`kiwi-merchant-cs-prep`（0.1.1，`os_dc3a52407574eb77`）、`merchant-source-evidence-audit`（0.1.0，`os_6aedc97ac49e2d5b`）、`merchant-trade-link-check`（0.1.0，`os_9bc616f4fb80a452`）、`merchant-inquiry-structuring`（0.1.0，`os_fe982aad31a98bfb`）、`merchant-quote-draft`（0.1.0，`os_053e9e8722df80e6`）、`merchant-approval-brief`（0.1.0，`os_03cf120a20b00aae`）、`merchant-operations-insights`（0.1.0，`os_e64be8878bbb4349`）、`merchant-catalog-preflight`（0.1.0，`os_50c0414417e25586`）。这些 ID 对应现有审核记录，不代表审核通过或已发布；上线前核对平台状态。「商品报价」模式「整理商品」胶囊以 `bindSkills` 表达技能绑定；平台若不支持胶囊级技能绑定，以模式 skills 为准。
+- 专家：以下 `platform/market-draft/` 和生成器维护说明是旧开发记录。专家状态并非全部审核中；洽谈审批官已发布，其他资产以 review-assets 状态快照/平台当前页面为准。
 
 ### 模块 4：其他配置
 
@@ -36,11 +42,11 @@
 
 ### 模块 5：预览调试
 
-提交审核前用预览链接在 WorkBuddy 客户端打开预览态，逐项过一遍各模式与全部胶囊；另外手动验证市场中的三个技能。`kiwi-cloud-deploy` 的预览要点：①确认会话里是否存在发布工具 `workbuddy_sites_deploy`（V1 实测该工具存在、无 inspect/activate/deploy）——不存在时应按方案 B 原样输出 `references/fallback-prompt.md` 提示词（占位已发布后可用 release.json 回填值替换）；②核对 `references/release.json` 三个值与技能正文一致（0.12.0 / sha256 / sha512）；③一次性口令只展示一次；④真实发布实测未做，预览里不得宣称一键上云已验证。`kiwi-product-import` 的预览要点：①贴一段含底价列的商品表格，应先确认列映射并剔除底价列、不编造缺失价格；②生成的 CSV 列名应与工作台「商品与导入」页模板一致（`references/columns.md`）；③应提醒整表替换语义并引导商家本人在工作台上传确认。
+提交审核前用预览链接在 WorkBuddy 客户端打开预览态，逐项检查各模式、胶囊及十项技能候选内容（平台实际支持范围内）。`kiwi-cloud-deploy` 预览时按当前会话真实工具清单与权限判断可做步骤；工具或能力不足就说明限制，不借用其他平台能力。release.json 的 0.12.0 是已核验的历史固定包版本，不代表最新版本；不要擅自更换 pin。一次性管理员口令不得进入模型上下文、对话、日志或文件；若命令会将秘密输出到模型可见 stdout，停止并由商家本人在安全界面处理。没有实际发布验收时，不宣称一键上云已验证。`kiwi-product-import` 预览应检查映射确认、私密底价剔除、缺失值不编造、模板列顺序及整表替换提醒。七项新增技能只基于商家主动提供的材料起草核查结果，不代替商家发布、订单、支付或审批。
 
-## 平台导入步骤（WP18/WP19/WP25：1.8.0 草稿 → 平台格式配置包 + 市场配置）
+## 历史平台导入开发记录（WP18/WP19/WP25；非当前官方提审源）
 
-`platform/build-platform-pack.mjs` 以 `buddy-app.config.json`（1.8.0）为唯一内容源，生成：
+历史实现中，`platform/build-platform-pack.mjs` 曾以 `buddy-app.config.json`（1.8.0）生成本地预览包；这不是当前官方草稿或提审源的唯一来源。当前状态和权威提审文件见本页顶部 `review-assets/` 入口。
 
 - `platform/out/industry-config.json`：平台「导入配置」用（模式 4 + 胶囊 26 = 30 个图标引用）；
 - `platform/out/icons/*.svg`：30 个图标（`mode-*.svg` 4 + `cap-*.svg` 26）；
@@ -59,8 +65,8 @@ node integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/build-platform-pa
 2. **上传图标**：若 zip 导入未带图标，则逐个上传 `mode-*.svg` 4 个 + `cap-*.svg` 26 个，文件名需与配置内 `iconFileName` 一致。
 3. **选择内置连接器**：Kiwi 商家运营连接器 `oc_0053ad85c92a6587`（已写入 `jointAuth.connectorName`，界面核对即可）；不得引用已撤回的 `oc_c86216e2a36110bf`。
 4. **核对首页标题**：`header.title` 已填「Kiwi商家·让采购专家找到你」（分隔格式集中在生成器 `HOME_TITLE_SEPARATOR` 一处；平台精确格式未确认，导入实测后只改这一常量）。
-5. **市场配置**：5 个专用专家与专家团「Kiwi开店团队」已创建并送审，真实资产 ID 已回填，当前全部审核中；不得重复创建或宣称已过审。按 `platform/market-draft/` 核对绑定，剩余精选场景与分类按平台实际配置处理（详见 `platform/market-draft/README.md`）；精选场景 id 仍待回填，平台导入和资产可用性仍需实测。
-6. **技能资产**：`kiwi-cloud-deploy`、`kiwi-product-import` 尚无平台资产 ID，导入包中模式 skills 为空，审核通过后回填脚本 `SKILL_ASSET_IDS` 并重新生成导入。
+5. **市场配置（历史操作记录）**：市场侧专用专家与专家团曾创建并送审；状态并非全部审核中，其中洽谈审批官已发布。平台导入和资产绑定的当前状态不由此历史段落推断，请查阅 `review-assets/registry.json` 与平台当前页面。
+6. **技能资产**：10 项独立技能的本地源文件与头像分别维护在 `skills/<slug>/` 和 `avatars/skills/<slug>.png`；真实审核 ID 与版本见上方技能资产清单；来源 ZIP 与哈希保存在此次同步交付记录中。只在平台审核通过且资产可用后，按平台实际要求配置引用；不得把“审核中”当作可用。
 7. **生成预览**：预览并逐项检查（要点见「模块 5：预览调试」）。
 
 ## 发布流程

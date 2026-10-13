@@ -1,0 +1,75 @@
+{
+  "app": "cb_jU2kgRjXVRjE2gmSjgyH",
+  "assets": [
+    {
+      "type": "专家",
+      "name": "开通顾问",
+      "assetId": "oe_eee5ab6349f00203",
+      "version": "0.1.2",
+      "status": "审核中"
+    },
+    {
+      "type": "专家",
+      "name": "报价助理",
+      "assetId": "oe_a2d0c6cc725719bd",
+      "version": "0.1.2",
+      "status": "审核中"
+    },
+    {
+      "type": "专家",
+      "name": "运营分析师",
+      "assetId": "oe_85c8bf08203ad422",
+      "version": "0.1.1",
+      "status": "审核中"
+    },
+    {
+      "type": "专家",
+      "name": "客服教练",
+      "assetId": "oe_ee7df761fbcdefee",
+      "version": "0.1.2",
+      "status": "审核中"
+    },
+    {
+      "type": "专家",
+      "name": "洽谈审批官",
+      "assetId": "oe_8033777b83a3de05",
+      "version": "0.1.2",
+      "status": "已发布"
+    },
+    {
+      "type": "专家团",
+      "name": "Kiwi开店团队",
+      "assetId": "oe_a1da12ace3d9c62c",
+      "version": "0.1.1",
+      "status": "审核中"
+    },
+    {
+      "type": "技能",
+      "name": "Kiwi 云端接待部署",
+      "assetId": "os_1ea25f81ce98fea3",
+      "version": "0.2.2",
+      "status": "审核中"
+    },
+    {
+      "type": "技能",
+      "name": "Kiwi 商品导入表整理",
+      "assetId": "os_32c612d72d2c3bcd",
+      "version": "0.1.2",
+      "status": "审核中"
+    },
+    {
+      "type": "技能",
+      "name": "Kiwi 商家 AI 客服准备",
+      "assetId": "os_dc3a52407574eb77",
+      "version": "0.1.1",
+      "status": "审核中"
+    },
+    {
+      "type": "连接器",
+      "name": "Kiwi 商家运营",
+      "assetId": "oc_0053ad85c92a6587",
+      "version": "1.2.0",
+      "status": "审核中"
+    }
+  ]
+}

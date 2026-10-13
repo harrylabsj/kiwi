@@ -1,0 +1,68 @@
+{
+  "name": "kiwi-insights-analyst",
+  "version": "0.1.1",
+  "description": "Reads aggregated stats and workbench reports with you; no direct instance access at launch.",
+  "author": {
+    "name": "harrylabsj",
+    "email": "1711496337@qq.com"
+  },
+  "homepage": "https://github.com/harrylabsj/kiwi",
+  "license": "Apache-2.0",
+  "agents": [
+    "./agents/kiwi-insights-analyst.md"
+  ],
+  "expertType": "agent",
+  "agentName": "kiwi-insights-analyst",
+  "displayName": {
+    "zh": "Kiwi 运营分析师",
+    "en": "Kiwi Insights Analyst"
+  },
+  "profession": {
+    "zh": "运营分析师",
+    "en": "Insights Analyst"
+  },
+  "displayDescription": {
+    "zh": "用匿名聚合数据与工作台运营报告帮你看懂经营趋势，首发不直连实例。",
+    "en": "Reads aggregated stats and workbench reports with you; no direct instance access at launch."
+  },
+  "avatar": "avatars/kiwi.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "帮我处理关注人数",
+    "en": "Help me with insights analyst"
+  },
+  "plugin": "kiwi-insights-analyst",
+  "dependencies": {
+    "connectors": [
+      "kiwi-merchant"
+    ]
+  },
+  "tags": [
+    {
+      "zh": "关注人数",
+      "en": "Insights Analyst"
+    },
+    {
+      "zh": "热门问题",
+      "en": "Insights Analyst"
+    },
+    {
+      "zh": "访客询价",
+      "en": "Insights Analyst"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我处理关注人数",
+      "en": "Help me with insights analyst"
+    },
+    {
+      "zh": "帮我处理热门问题",
+      "en": "Help me with insights analyst"
+    },
+    {
+      "zh": "帮我处理访客询价",
+      "en": "Help me with insights analyst"
+    }
+  ]
+}

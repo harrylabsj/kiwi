@@ -1,0 +1,68 @@
+{
+  "name": "kiwi-negotiation-officer",
+  "version": "0.1.2",
+  "description": "Analyzes negotiations, drafts concession plans and approval notes; you confirm in the workbench.",
+  "author": {
+    "name": "harrylabsj",
+    "email": "1711496337@qq.com"
+  },
+  "homepage": "https://github.com/harrylabsj/kiwi",
+  "license": "Apache-2.0",
+  "agents": [
+    "./agents/kiwi-negotiation-officer.md"
+  ],
+  "expertType": "agent",
+  "agentName": "kiwi-negotiation-officer",
+  "displayName": {
+    "zh": "Kiwi 洽谈审批官",
+    "en": "Kiwi Negotiation Officer"
+  },
+  "profession": {
+    "zh": "洽谈审批官",
+    "en": "Negotiation Officer"
+  },
+  "displayDescription": {
+    "zh": "帮你分析洽谈、起草让价方案与批复意见；审批和规则表单由你确认。",
+    "en": "Analyzes negotiations, drafts concession plans and approval notes; you confirm in the workbench."
+  },
+  "avatar": "avatars/kiwi.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "帮我处理协议确认",
+    "en": "Help me with negotiation officer"
+  },
+  "plugin": "kiwi-negotiation-officer",
+  "dependencies": {
+    "connectors": [
+      "kiwi-merchant"
+    ]
+  },
+  "tags": [
+    {
+      "zh": "协议确认",
+      "en": "Negotiation Officer"
+    },
+    {
+      "zh": "待审批",
+      "en": "Negotiation Officer"
+    },
+    {
+      "zh": "让价审批",
+      "en": "Negotiation Officer"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我处理协议确认",
+      "en": "Help me with negotiation officer"
+    },
+    {
+      "zh": "帮我处理待审批",
+      "en": "Help me with negotiation officer"
+    },
+    {
+      "zh": "帮我处理让价审批",
+      "en": "Help me with negotiation officer"
+    }
+  ]
+}

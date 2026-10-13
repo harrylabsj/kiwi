@@ -1,0 +1,71 @@
+{
+  "name": "kiwi-catalog-assistant",
+  "version": "0.1.2",
+  "description": "Turns product notes into import-ready sheets, drafts quote rules, and watches listing slots.",
+  "author": {
+    "name": "harrylabsj",
+    "email": "1711496337@qq.com"
+  },
+  "homepage": "https://github.com/harrylabsj/kiwi",
+  "license": "Apache-2.0",
+  "agents": [
+    "./agents/kiwi-catalog-assistant.md"
+  ],
+  "expertType": "agent",
+  "agentName": "kiwi-catalog-assistant",
+  "displayName": {
+    "zh": "Kiwi 报价助理",
+    "en": "Kiwi Quote Assistant"
+  },
+  "profession": {
+    "zh": "报价助理",
+    "en": "Quote Assistant"
+  },
+  "displayDescription": {
+    "zh": "帮你整理商品导入表、定报价规则、盯名额，把商品和价格准备到位。",
+    "en": "Turns product notes into import-ready sheets, drafts quote rules, and watches listing slots."
+  },
+  "avatar": "avatars/kiwi.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "帮我处理优化文案",
+    "en": "Help me with quote assistant"
+  },
+  "plugin": "kiwi-catalog-assistant",
+  "dependencies": {
+    "connectors": [
+      "kiwi-merchant"
+    ]
+  },
+  "tags": [
+    {
+      "zh": "优化文案",
+      "en": "Quote Assistant"
+    },
+    {
+      "zh": "导入商品",
+      "en": "Quote Assistant"
+    },
+    {
+      "zh": "整理商品",
+      "en": "Quote Assistant"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我处理优化文案",
+      "en": "Help me with quote assistant"
+    },
+    {
+      "zh": "帮我处理导入商品",
+      "en": "Help me with quote assistant"
+    },
+    {
+      "zh": "帮我处理整理商品",
+      "en": "Help me with quote assistant"
+    }
+  ],
+  "skills": [
+    "./skills/kiwi-product-import"
+  ]
+}

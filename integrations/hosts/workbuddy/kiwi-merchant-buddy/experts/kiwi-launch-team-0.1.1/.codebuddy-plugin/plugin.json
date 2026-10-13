@@ -1,0 +1,166 @@
+{
+  "name": "kiwi-launch-team",
+  "version": "0.1.1",
+  "description": "Five dedicated experts hand in hand: onboarding, quotes, insights, service and negotiation.",
+  "author": {
+    "name": "harrylabsj",
+    "email": "1711496337@qq.com"
+  },
+  "agents": [
+    "./agents/kiwi-launch-team-lead.md",
+    "./agents/kiwi-onboarding-advisor.md",
+    "./agents/kiwi-catalog-assistant.md",
+    "./agents/kiwi-insights-analyst.md",
+    "./agents/kiwi-cs-coach.md",
+    "./agents/kiwi-negotiation-officer.md"
+  ],
+  "expertType": "team",
+  "agentName": "kiwi-launch-team-lead",
+  "teamInfo": {
+    "leadAgent": "kiwi-launch-team-lead",
+    "memberAgents": [
+      "kiwi-onboarding-advisor",
+      "kiwi-catalog-assistant",
+      "kiwi-insights-analyst",
+      "kiwi-cs-coach",
+      "kiwi-negotiation-officer"
+    ]
+  },
+  "displayName": {
+    "zh": "Kiwi开店团队",
+    "en": "Kiwi Launch Team"
+  },
+  "profession": {
+    "zh": "Kiwi开店团队",
+    "en": "Kiwi Launch Team"
+  },
+  "displayDescription": {
+    "zh": "五位商家专家协作处理注册开通、商品报价、运营分析、客服准备与审批磋商，重要操作由商家确认。",
+    "en": "Five dedicated experts hand in hand: onboarding, quotes, insights, service and negotiation."
+  },
+  "avatar": "avatars/kiwi.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "帮我梳理开店上线的下一步",
+    "en": "Plan my next step to launch my shop"
+  },
+  "members": [
+    {
+      "id": "kiwi-launch-team-lead",
+      "name": {
+        "zh": "开店协调者",
+        "en": "Launch Coordinator"
+      },
+      "profession": {
+        "zh": "团队协调",
+        "en": "Team Coordinator"
+      },
+      "avatar": "avatars/store-team.png",
+      "role": "lead"
+    },
+    {
+      "id": "kiwi-onboarding-advisor",
+      "name": {
+        "zh": "开通顾问",
+        "en": "Onboarding Advisor"
+      },
+      "profession": {
+        "zh": "开通顾问",
+        "en": "Onboarding Advisor"
+      },
+      "avatar": "avatars/onboarding.png",
+      "role": "member"
+    },
+    {
+      "id": "kiwi-catalog-assistant",
+      "name": {
+        "zh": "报价助理",
+        "en": "Quote Assistant"
+      },
+      "profession": {
+        "zh": "报价助理",
+        "en": "Quote Assistant"
+      },
+      "avatar": "avatars/quotes.png",
+      "role": "member"
+    },
+    {
+      "id": "kiwi-insights-analyst",
+      "name": {
+        "zh": "运营分析师",
+        "en": "Insights Analyst"
+      },
+      "profession": {
+        "zh": "运营分析师",
+        "en": "Insights Analyst"
+      },
+      "avatar": "avatars/insights.png",
+      "role": "member"
+    },
+    {
+      "id": "kiwi-cs-coach",
+      "name": {
+        "zh": "客服教练",
+        "en": "CS Coach"
+      },
+      "profession": {
+        "zh": "客服教练",
+        "en": "CS Coach"
+      },
+      "avatar": "avatars/customer-coach.png",
+      "role": "member"
+    },
+    {
+      "id": "kiwi-negotiation-officer",
+      "name": {
+        "zh": "洽谈审批官",
+        "en": "Negotiation Officer"
+      },
+      "profession": {
+        "zh": "洽谈审批官",
+        "en": "Negotiation Officer"
+      },
+      "avatar": "avatars/approvals.png",
+      "role": "member"
+    }
+  ],
+  "plugin": "kiwi-launch-team",
+  "tags": [
+    {
+      "zh": "注册开通",
+      "en": "Onboarding"
+    },
+    {
+      "zh": "商品报价",
+      "en": "Product Quotes"
+    },
+    {
+      "zh": "运营审批",
+      "en": "Operations"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我梳理开店上线的下一步",
+      "en": "Plan my next step to launch my shop"
+    },
+    {
+      "zh": "帮我整理商品和报价规则",
+      "en": "Prepare my products and quote rules"
+    },
+    {
+      "zh": "帮我分析运营和待审批事项",
+      "en": "Review operations and pending approvals"
+    }
+  ],
+  "skills": [
+    "./skills/kiwi-cloud-deploy",
+    "./skills/kiwi-merchant-cs-prep",
+    "./skills/kiwi-product-import"
+  ],
+  "dependencies": {
+    "connectors": [
+      "kiwi-merchant"
+    ]
+  }
+}

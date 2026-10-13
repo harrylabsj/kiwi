@@ -1,0 +1,46 @@
+{
+  "schema": "kiwi.buddy.historical-snapshot/1",
+  "snapshotDate": "2026-10-13",
+  "sourceBaseHead": "3965343e3f727897174b11a49f678a5c5db056fd",
+  "sourceLabel": "A686 repository-before snapshot of the former three independent skills",
+  "sourceManifestSha256": "a9d570eaed5766c4d1bd3bb2e3cd94ec768f53aa66c9ee71858a02e589714b54",
+  "externalSourcePath": "/private/tmp/kiwi-a686-skills-source-sync/before-old-3",
+  "files": [
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-cloud-deploy/SKILL.md",
+      "sha256": "9127208684b218371d0824f3baaca8573556f20c17c17a5360eb6e6c119ddcae",
+      "bytes": 12829
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-cloud-deploy/references/fallback-prompt.md",
+      "sha256": "e3b8ec73e729534ef48b4de413248573a982a8398744db90df28899da9e16cd5",
+      "bytes": 4796
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-cloud-deploy/references/release.json",
+      "sha256": "6ad9d89e69577da977c2766844975ead748b2788220b6ead9f6586f7283eb3bb",
+      "bytes": 547
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-merchant-cs-prep/SKILL.md",
+      "sha256": "feb6aa102a4d6a10ec6852a19b57aac8b1f28c9274f77a45b110f85857e16afe",
+      "bytes": 13982
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-merchant-cs-prep/references/faq-template.md",
+      "sha256": "214a608ead4b01e4d2de188f784d9f2036d8681735c69d2b0277f0d6544c246e",
+      "bytes": 3011
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-product-import/SKILL.md",
+      "sha256": "40a107df3f8e1bac1a4ed5b0173302f526eee72205e559092080ccf4e52c51f3",
+      "bytes": 7020
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-product-import/references/columns.md",
+      "sha256": "66de457f968455efa3ea6abacd40d65aa58b2df163ac5bca676cb1cf8a31e6e5",
+      "bytes": 4672
+    }
+  ],
+  "note": "Frozen prior repository files, distinct from the latest submitted packages and canonical skills."
+}
