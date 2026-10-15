@@ -27,3 +27,8 @@ wt/
 # 云端制品构建产物（scripts/build-cloud-artifact.mjs）
 build/
 delivery/
+
+# Development and test documents are maintained outside this public repository.
+/docs/reviews/
+/docs/testing/
+*.bundle
