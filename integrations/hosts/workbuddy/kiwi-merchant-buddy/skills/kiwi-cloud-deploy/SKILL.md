@@ -5,8 +5,8 @@ display_name_en: Kiwi Cloud Reception Deploy
 description: Deploy the Kiwi merchant reception runtime to the merchant's own WorkBuddy cloud app in a strict order (verify the pinned package → prepare → publish through capabilities explicitly present in the current WorkBuddy session → self-check → guide owner confirmation) with no-forgery rules. Use for 一键开通云端接待、升级云端接待服务、云端接待部署排障；不用于自有服务器部署。
 description_zh: 按当前会话实际提供的 WorkBuddy 云端应用工具部署 Kiwi 商家接待运行时，自检并引导商家本人确认上线；缺少必要工具时停止并说明。
 description_en: Deploy the merchant reception runtime to the merchant's own cloud app step by step, self-check, and guide the go-live confirmation.
-category: devops
-version: 0.2.3
+category: 商业服务 > 软件/建站/技术开发
+version: 0.2.5
 author: harrylabsj
 ---
 
@@ -19,6 +19,10 @@ author: harrylabsj
 实测边界（2026-09-30）：正式云包 0.12.0 已在普通 WorkBuddy 任务完成首次取址、同目录二次发布、公网存活检查和工作台首登。Catalog 绑定、名片发布、买家询价与带业务数据升级保留尚未完成端到端验收；不得把部署成功称为完整上线。
 
 固定参数：云端应用/站点名一律用「**Kiwi商家接待**」。已有就复用，**绝不新建第二个**；首次部署后的再次发布必须复用**同一个应用**（换应用会换公网域名，后续校验全部失效）。
+
+## 随包资源与执行目录
+
+技能包附带 `package/build-manifest.json` 和 `package/prepare.mjs`，均为 `references/release.json` 固定版本 npm 正式包中的原始文件，用于审核、查阅和比对。这两个文件不是完整运行时，不得从技能安装目录直接执行 prepare。实际部署必须先按第 1 步下载并解压完整 npm 包，在独立取包目录中校验后执行；下文命令的 `package/` 均指该取包目录下解压得到的完整目录。不得把这两个审核副本当作完整部署包。
 
 ## 硬规则（先读，任何一步都不例外）
 
