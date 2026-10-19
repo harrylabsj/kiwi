@@ -4,9 +4,9 @@
 
 ## 当前提审源入口（2026-10-13）
 
-- 当前技能与连接器资产快照、源文件清单及状态入口见 [review-assets/README.md](review-assets/README.md) 和 [review-assets/registry.json](review-assets/registry.json)。该记录是本地提审证据索引，平台状态如有变化须以平台当前页面为准。
-- 此日期的状态记录：应用 `cb_jU2kgRjXVRjE2gmSjgyH` 的 v2 配置审核被驳回；最新官方草稿为 `Kiwi Bird / Let buyers find you / 去buyer`，尚未重新提交。七项新增技能的选择器当前不可用，因此不假定已完成应用绑定。既有资产 ID 保持不变，不为同一项新造 ID。
-- 下方 WP18/WP22 与五模块内容是历史开发说明和旧流程记录，不代表当前官方提审包、当前审核状态或现时唯一配置来源。现行源文件、资产 ID 与状态以 `review-assets/` 中的记录为准。
+- 产品源文件分别维护在 `skills/`、`experts/`、`avatars/` 和 `../kiwi-merchant-gateway-connector/`。本页中带日期的平台状态与提审记录仅作历史说明，不代表当前状态；需以 WorkBuddy 当前页面核验。
+- 本页保留的应用审核和技能资产 ID 记录观察日期为 2026-10-13。它们不证明当前草稿、审核或发布状态，也不应作为新的提交指令。
+- 下方 WP18/WP22 与五模块内容是历史开发说明和旧流程记录，不代表当前官方提审包或当前审核状态。源文件与发布配置以仓库内规范产品目录为准。
 
 对应连接器包见 `../kiwi-merchant-gateway-connector/`（远程 HTTPS MCP + OAuth，source=`kiwi-merchant`）。连接器 v1.2.0 已有提审资产 ID `oc_0053ad85c92a6587`；审核状态与配置可用性见当前资产登记。WP22 的准备与创建阻碍描述属于历史开发记录。
 
@@ -31,8 +31,8 @@
 
 ### 模块 3：市场配置
 
-- 连接器：v1.2.0 已有提审 ID `oc_0053ad85c92a6587`；当前审核/可用状态见 registry。下方 WP22 的“等待生成 ID”仅为旧开发说明，不是当前状态。当前技能资产共 10 项，均有本地对应源文件及头像；已提交审核（状态需以平台为准）：`kiwi-cloud-deploy`（0.2.3，`os_1ea25f81ce98fea3`）、`kiwi-product-import`（0.1.3，`os_32c612d72d2c3bcd`）、`kiwi-merchant-cs-prep`（0.1.1，`os_dc3a52407574eb77`）、`merchant-source-evidence-audit`（0.1.0，`os_6aedc97ac49e2d5b`）、`merchant-trade-link-check`（0.1.0，`os_9bc616f4fb80a452`）、`merchant-inquiry-structuring`（0.1.0，`os_fe982aad31a98bfb`）、`merchant-quote-draft`（0.1.0，`os_053e9e8722df80e6`）、`merchant-approval-brief`（0.1.0，`os_03cf120a20b00aae`）、`merchant-operations-insights`（0.1.0，`os_e64be8878bbb4349`）、`merchant-catalog-preflight`（0.1.0，`os_50c0414417e25586`）。这些 ID 对应现有审核记录，不代表审核通过或已发布；上线前核对平台状态。「商品报价」模式「整理商品」胶囊以 `bindSkills` 表达技能绑定；平台若不支持胶囊级技能绑定，以模式 skills 为准。
-- 专家：以下 `platform/market-draft/` 和生成器维护说明是旧开发记录。专家状态并非全部审核中；洽谈审批官已发布，其他资产以 review-assets 状态快照/平台当前页面为准。
+- 连接器：v1.2.0 的提审 ID 为 `oc_0053ad85c92a6587`（2026-10-13 历史记录）；当前审核/可用状态需以平台页面核实。下方 WP22 的“等待生成 ID”仅为旧开发说明。技能源文件和头像分别维护在 `skills/` 与 `avatars/skills/`；下列版本与提审 ID 也是 2026-10-13 的历史快照，不代表审核通过或当前可用：`kiwi-cloud-deploy`（0.2.3，`os_1ea25f81ce98fea3`）、`kiwi-product-import`（0.1.3，`os_32c612d72d2c3bcd`）、`kiwi-merchant-cs-prep`（0.1.1，`os_dc3a52407574eb77`）、`merchant-source-evidence-audit`（0.1.0，`os_6aedc97ac49e2d5b`）、`merchant-trade-link-check`（0.1.0，`os_9bc616f4fb80a452`）、`merchant-inquiry-structuring`（0.1.0，`os_fe982aad31a98bfb`）、`merchant-quote-draft`（0.1.0，`os_053e9e8722df80e6`）、`merchant-approval-brief`（0.1.0，`os_03cf120a20b00aae`）、`merchant-operations-insights`（0.1.0，`os_e64be8878bbb4349`）、`merchant-catalog-preflight`（0.1.0，`os_50c0414417e25586`）。「商品报价」模式「整理商品」胶囊以 `bindSkills` 表达技能绑定；平台若不支持胶囊级技能绑定，以模式 skills 为准。
+- 专家：以下 `platform/market-draft/` 和生成器维护说明是旧开发记录。专家审核与发布状态须以 WorkBuddy 当前页面核实；本页中的状态仅是有日期的历史背景。
 
 ### 模块 4：其他配置
 
@@ -46,7 +46,7 @@
 
 ## 历史平台导入开发记录（WP18/WP19/WP25；非当前官方提审源）
 
-历史实现中，`platform/build-platform-pack.mjs` 曾以 `buddy-app.config.json`（1.8.0）生成本地预览包；这不是当前官方草稿或提审源的唯一来源。当前状态和权威提审文件见本页顶部 `review-assets/` 入口。
+历史实现中，`platform/build-platform-pack.mjs` 曾以 `buddy-app.config.json`（1.8.0）生成本地预览包；本地生成物不是当前官方草稿或提审状态的证明。核对当前状态请访问 WorkBuddy 平台页面。
 
 - `platform/out/industry-config.json`：平台「导入配置」用（模式 4 + 胶囊 26 = 30 个图标引用）；
 - `platform/out/icons/*.svg`：30 个图标（`mode-*.svg` 4 + `cap-*.svg` 26）；
@@ -65,8 +65,8 @@ node integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/build-platform-pa
 2. **上传图标**：若 zip 导入未带图标，则逐个上传 `mode-*.svg` 4 个 + `cap-*.svg` 26 个，文件名需与配置内 `iconFileName` 一致。
 3. **选择内置连接器**：Kiwi 商家运营连接器 `oc_0053ad85c92a6587`（已写入 `jointAuth.connectorName`，界面核对即可）；不得引用已撤回的 `oc_c86216e2a36110bf`。
 4. **核对首页标题**：`header.title` 已填「Kiwi商家·让采购专家找到你」（分隔格式集中在生成器 `HOME_TITLE_SEPARATOR` 一处；平台精确格式未确认，导入实测后只改这一常量）。
-5. **市场配置（历史操作记录）**：市场侧专用专家与专家团曾创建并送审；状态并非全部审核中，其中洽谈审批官已发布。平台导入和资产绑定的当前状态不由此历史段落推断，请查阅 `review-assets/registry.json` 与平台当前页面。
-6. **技能资产**：10 项独立技能的本地源文件与头像分别维护在 `skills/<slug>/` 和 `avatars/skills/<slug>.png`；真实审核 ID 与版本见上方技能资产清单；来源 ZIP 与哈希保存在此次同步交付记录中。只在平台审核通过且资产可用后，按平台实际要求配置引用；不得把“审核中”当作可用。
+5. **市场配置（历史操作记录）**：市场侧专用专家与专家团曾创建并送审；该段落不代表当前审核状态。平台导入和资产绑定状态须以 WorkBuddy 当前页面为准。
+6. **技能资产**：10 项独立技能的本地源文件与头像分别维护在 `skills/<slug>/` 和 `avatars/skills/<slug>.png`。上方版本与审核 ID 是有日期的历史快照；只在平台核实审核通过且资产可用后，按平台实际要求配置引用。
 7. **生成预览**：预览并逐项检查（要点见「模块 5：预览调试」）。
 
 ## 发布流程

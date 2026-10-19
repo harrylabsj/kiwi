@@ -170,7 +170,7 @@
     },
     {
       "path": ".gitignore",
-      "sha256": "sha256:9c56b5d28a8887a1406f1e6fcf890a6cef0f64c3ced9ce51e950a41daf315ec0"
+      "sha256": "sha256:41b5218b97ffd7dc4831cf2d52aa44760099bea2c52c679109d54cdd3c7d64b9"
     },
     {
       "path": ".npmrc",
@@ -806,7 +806,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/README.md",
-      "sha256": "sha256:41f3aa30c3968a7d2da5ef186ffc0645a727dd059f307abe1e7f73879b5aa925"
+      "sha256": "sha256:908a50f5dd8e2fb5ba4324cbc6aa5fb7e4ea9ebb8997224f57cff053000a01f2"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/avatars/kiwi-merchant-buddy.png",
@@ -1213,220 +1213,16 @@
       "sha256": "sha256:754cbd8bf932afd845c00293e1594033b15233c60274a15b1a6e86b164d6051a"
     },
     {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/README.md",
-      "sha256": "sha256:e39f51928e5c4afc3b3f4e5f229938de83489b3e0504afc1850df3258be3c8ca"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/portfolio-products/workbuddy-merchant-connector-before-2026-10-13.json",
-      "sha256": "sha256:d11706aabe532c8643b5bd7e43e67e7fb710629f30f5e4844c47c445776e2b3b"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/BEFORE-MANIFEST.json",
-      "sha256": "sha256:a9d570eaed5766c4d1bd3bb2e3cd94ec768f53aa66c9ee71858a02e589714b54"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/SNAPSHOT-MANIFEST.json",
-      "sha256": "sha256:776c6f9a262a4cf892e2ae4212d9ac5f97cce757f885c1a921608100a67576db"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-cloud-deploy/SKILL.md",
-      "sha256": "sha256:9127208684b218371d0824f3baaca8573556f20c17c17a5360eb6e6c119ddcae"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-cloud-deploy/references/fallback-prompt.md",
-      "sha256": "sha256:e3b8ec73e729534ef48b4de413248573a982a8398744db90df28899da9e16cd5"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-cloud-deploy/references/release.json",
-      "sha256": "sha256:6ad9d89e69577da977c2766844975ead748b2788220b6ead9f6586f7283eb3bb"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-merchant-cs-prep/SKILL.md",
-      "sha256": "sha256:feb6aa102a4d6a10ec6852a19b57aac8b1f28c9274f77a45b110f85857e16afe"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-merchant-cs-prep/references/faq-template.md",
-      "sha256": "sha256:214a608ead4b01e4d2de188f784d9f2036d8681735c69d2b0277f0d6544c246e"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-product-import/SKILL.md",
-      "sha256": "sha256:40a107df3f8e1bac1a4ed5b0173302f526eee72205e559092080ccf4e52c51f3"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/history/repository-before-20261013/skills/kiwi-product-import/references/columns.md",
-      "sha256": "sha256:66de457f968455efa3ea6abacd40d65aa58b2df163ac5bca676cb1cf8a31e6e5"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/buddy-app-local-bird-source.png",
-      "sha256": "sha256:2d766c6873bce437875cc79bf957e5194682fe0b44ce60cf63e83c5fb569d557"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/buddy-app-pending-asset-id-snapshot.json",
-      "sha256": "sha256:234bd72063c5b06649e63368d2ad5fd1af21d34e39bd34ac5e5e658ab4c2c3c1"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/buddy-app-v2-rejected-official-export.zip",
-      "sha256": "sha256:cfce8ebdabf03978c154032277641648ac688f09b5601487fcf4e4be3e95fc8f"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/buddy-app-v2-state.json",
-      "sha256": "sha256:cffb558025c86a3fa1ec19b106e6592d0bd011dcec7fbc4f7bb3eb0de5b7eaef"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/buddy-app-v3-current-draft-unsent.zip",
-      "sha256": "sha256:6f7716d69bd0164c7d4f4464cb3739c4c397f7f9c5d66b893c4e9f156e15aa7f"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/buddy-app-v3-published-skill-reference-map.json",
-      "sha256": "sha256:c2e344e23b1a6a755f5213e48218a988fc85b3c470c40e230787975a05587b5b"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/buddy-app-v3-reference-audit-state.json",
-      "sha256": "sha256:5348b9fb76df84c1c0113500564f6ea2f3f967696b8691f9721da540285129a9"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/buddy-app-v3-state.json",
-      "sha256": "sha256:32d1acd9f3cb053d5c4d640a891b050bab73655d074e71fc4e718b6440aa9094"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/current-ten-skill-list-observation.txt",
-      "sha256": "sha256:5cb8472606d5acd7857305f42f790281622574ac10abfd7534507bddeabdcc2f"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/expert-submission-observations.json",
-      "sha256": "sha256:0ef16de7cd3a396a9dbb398f07ea67110ea569cc4991d33f1f0686203584c4d3"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-approval-brief-attempt2-receipt.txt",
-      "sha256": "sha256:83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-catalog-preflight-attempt2-receipt.txt",
-      "sha256": "sha256:83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-inquiry-structuring-attempt2-receipt.txt",
-      "sha256": "sha256:83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-operations-insights-attempt2-receipt.txt",
-      "sha256": "sha256:83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-quote-draft-attempt2-receipt.txt",
-      "sha256": "sha256:83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-source-evidence-audit-attempt2-receipt.txt",
-      "sha256": "sha256:83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/receipts/merchant-trade-link-check-attempt2-receipt.txt",
-      "sha256": "sha256:83658728d26c9434c30b77d9f5c31d796e1d62397a87853285402e493fd947a7"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/references/buddy-app-three-published-skills-market-reference-only.json",
-      "sha256": "sha256:0a2c1c1edd3a50b0929ea0f6bc9eb000cfc0a27a3710b105dfc517a9415c1cf2"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/references/buddy-app-three-published-skills-reference-only.zip",
-      "sha256": "sha256:166239cb95e12c709a4147481b0bcad3820a5c5500c923c123df75a30c56ef75"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/seven-new-skill-submission-ledger.json",
-      "sha256": "sha256:54a5e90cdefdc707ce5f59cbb49b0d03e91de03507ab7ef47247f1f50d947044"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/seven-skill-local-path-map.json",
-      "sha256": "sha256:5dd9a3dfd88a9bf3f11cc46de5b57941cd3bd199299656148157f47db524368a"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/official/2026-10-13/two-skill-resubmission-observations.json",
-      "sha256": "sha256:33197d969719fa6bc74a402f36f346b98d096e5380f068c2c20d7137ca9ac3a1"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/registry.json",
-      "sha256": "sha256:34d8e24a0cef1bdedf455b8db5275221fe7017be0579d865ed0f15012da42ecc"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/kiwi-catalog-assistant-0.1.2-avatar.zip",
-      "sha256": "sha256:d6e5ce71b6c1279ad4c9f7aaa7bfbc317d2f88982929aecfa377d9aec3dc9bd5"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/kiwi-cloud-deploy-0.2.3.zip",
-      "sha256": "sha256:5e3515d29659813102a235f53ea5ce41b343924d791302f6d8eb0c9c5d55cb19"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/kiwi-cs-coach-0.1.2-avatar.zip",
-      "sha256": "sha256:e4c2bc353c722e0a2d6c82e39b0863d84f6baf79f7a89be3d6e2d2a5426601d2"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/kiwi-insights-analyst-0.1.1-avatar.zip",
-      "sha256": "sha256:2b6e3fd020f08101d98c81db4b7093bef02ed12223f73b2745be94bb9a885cdc"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/kiwi-launch-team-0.1.1-avatar.zip",
-      "sha256": "sha256:52df5d18b15c778087de121e528471d43e18d3c4b37d29e967b09a5792e91208"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/kiwi-merchant-cs-prep-0.1.1-avatar.zip",
-      "sha256": "sha256:f3413e31768b4bc817f8599c510dd66fe6ac66ef26234cf06a8cabcd0383f767"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/kiwi-merchant-gateway-1.2.0.zip",
-      "sha256": "sha256:bd3bcd842f71e7c198a2d675f54f2645b363e52b81952321fda790166dbeb94b"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/kiwi-negotiation-officer-0.1.2-avatar.zip",
-      "sha256": "sha256:1c1e800b6333f27b20595fc4bc553b675827a2a36db941be6ad7c9fa698a6580"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/kiwi-onboarding-advisor-0.1.2-avatar.zip",
-      "sha256": "sha256:2725b8a73c428d2cd48fc996837cd96534233e8eb571bf747927a615dfa6d0ec"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/kiwi-product-import-0.1.3.zip",
-      "sha256": "sha256:f5782a2cb028705e7c1b47274359f8ee5fa5f620877e4a4ad444a4fa94b6c994"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/merchant-approval-brief.zip",
-      "sha256": "sha256:311ebf58e43ac577048b5115d7a15eaac1bddbeeb8944ffbb87762c324d4d10d"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/merchant-catalog-preflight.zip",
-      "sha256": "sha256:2c4629a760d6de3092a9367d433cb24d6851e491b4be33e7bd89bc7f2ef68e94"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/merchant-inquiry-structuring.zip",
-      "sha256": "sha256:0817a3b77ebe8fe29713cd6611c613018177274c3f9b1ee1078df55f6a0f6a35"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/merchant-operations-insights.zip",
-      "sha256": "sha256:ef61627e48ab1d6aba72d44e10ef93a6eb6e976cf7ac396b56c6b53c626941bf"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/merchant-quote-draft.zip",
-      "sha256": "sha256:5d7fef82f9ace868bbe42651f1ac1c96e75dbef41e9f655a73b40e4c0bbda3d2"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/merchant-source-evidence-audit.zip",
-      "sha256": "sha256:29a4f326b068682bba7211419864bc355693ecfa4e7ae32e47e867cbca6b6cd8"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/merchant-trade-link-check.zip",
-      "sha256": "sha256:8dcaec7ab7df2c2aed17519aff3d932991c0e79f588fb3af30af7b888fdc5736"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/tools/rebuild_submission_assets.py",
-      "sha256": "sha256:b597708aa7151fa76fcfd22d56941084b6024f093a4505e3d5ea17a4358f14ad"
-    },
-    {
-      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/tools/validate_review_assets.py",
-      "sha256": "sha256:7886a8d755777ca071f4f89b99f0ffdfacc85b7eef8c2dfea90e050762027d63"
-    },
-    {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/SKILL.md",
-      "sha256": "sha256:951449c2a9e555520c3a7f3d1f6b939a98a3aaa8ff20b079b7d17ace1958f5d2"
+      "sha256": "sha256:9406849f8fc0791acee58b2729f492ef2db190f69e4cdd2b9163feb193c06301"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/package/build-manifest.json",
+      "sha256": "sha256:8a5d9124ce3bdcc4973891ff2ca896ad0f1cffb21cf704d45b6686f8ce14706d"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/package/prepare.mjs",
+      "sha256": "sha256:fcba08d74bd569546e28594bc20470570022893ae0a2beefecc530550e5e87a8"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/references/fallback-prompt.md",
@@ -1702,7 +1498,7 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:b93328d6d330e5f1573800b6002a660d3fa6a4a5fe8b4f89842b59ccd7d16639"
+      "sha256": "sha256:f93b696d59bca8b2b0c1209af486eba8252131a82b86945fec706b83a2b7e691"
     },
     {
       "path": "portfolio.lock.json",

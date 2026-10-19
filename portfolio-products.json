@@ -215,8 +215,7 @@
         "dedicated test account",
         "OAuth/MCP preview",
         "platform review"
-      ],
-      "submission_archive": "integrations/hosts/workbuddy/kiwi-merchant-buddy/review-assets/submissions/2026-10-13/kiwi-merchant-gateway-1.2.0.zip"
+      ]
     },
     {
       "id": "workbuddy-kiwi-sourcing-connector",

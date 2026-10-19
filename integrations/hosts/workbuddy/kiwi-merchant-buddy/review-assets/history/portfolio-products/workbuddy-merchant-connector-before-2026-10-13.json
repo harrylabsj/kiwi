@@ -1,6 +1,0 @@
-{
-  "sourcePath": "portfolio-products.json",
-  "sourceFileSha256Before": "1661f400fdea7beaaf6ce3dbe7d4fefb364455c5cb8335a3c1e89d9a49e016e4",
-  "itemSha256Before": "183da8f5723434780d5e4980176fd19fbbe4510c86ac3115621a4919ecc86aa0",
-  "rawItemJson": "{\n      \"id\": \"workbuddy-merchant-connector\",\n      \"name\": \"WorkBuddy merchant connector\",\n      \"version\": \"1.2.0\",\n      \"version_source\": {\n        \"type\": \"json\",\n        \"scope\": \"central\",\n        \"path\": \"integrations/hosts/workbuddy/kiwi-merchant-gateway-connector/connector-meta.json\",\n        \"field\": \"version\"\n      },\n      \"channel\": \"WorkBuddy connector review\",\n      \"release_controller\": \"WorkBuddy platform submission\",\n      \"artifact\": \"release/workbuddy/kiwi-merchant-gateway-connector-1.2.0.zip\",\n      \"platform_asset_id\": null,\n      \"state\": \"candidate; not submitted\",\n      \"gates\": [\n        \"package validation\",\n        \"dedicated test account\",\n        \"OAuth/MCP preview\",\n        \"platform review\"\n      ]\n    }"
-}
