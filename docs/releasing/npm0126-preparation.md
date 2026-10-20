@@ -35,13 +35,15 @@ portfolio release workflow 仍有五个 publisher。本地合同只准备前两�
 
 ## 五通道与保护门
 
-本地候选通过不等于 registry 发布。正式 workflow 必须先以完整 `RELEASE_SHA` 执行 `publish=false` dry-run，确认五个 publisher 的实际范围：前两个生成 `0.12.6` 候选，其余三个只对当前精确版本幂等 skip。若无法证明该范围，停止并单独审核 workflow，不改 hooks 或临时删 job。
+本地候选通过不等于 registry 发布。正式 workflow 可先以完整 `RELEASE_SHA` 执行 `publish=false` dry-run，验证 build、bundle、release manifest、五通道候选输入和签名/制品门；该模式不执行五个 publisher jobs，因此不能产生实际 `published=false` skip 回执。当前 registry exact-version 只读事实和 workflow 静态逻辑可记录前三个未升级通道的已占版本与 skip 条件，但不能冒充实际 skip。
 
-只有取得明确的 push、protected `kiwi-release` 审批和 publish 授权后，才可运行 `publish=true`。本地不使用 npm token，不直接 `npm publish`，不触发平台部署。
+只有取得明确的 push、protected `kiwi-release` 审批和 `publish=true` 授权后，真实 publisher jobs 的 `published=false` 回执才证明 DSH/Catalog/Shopping CLI 实际 skip。若版本、registry 或 job 输出不符，停止并单独审核 workflow，不改 hooks 或临时删 job。本地 0.12.6 适配不要求为证明 actual skip 而执行 CI publisher 或 publish=true。
+
+本地不使用 npm token，不直接 `npm publish`，不触发平台部署。
 
 ## 一键上云与 WorkBuddy 对齐
 
-现有技能资源仍可能引用历史 `0.12.0`，不能把本地版本修改或旧 manifest 写成新 registry 已发布。正式新包发布并完成 registry 只读核验后，另起候选：从同一个已核 SRI 的新 cloud tgz 提取 `build-manifest.json`、`prepare.mjs` 和 artifact 摘要，更新同版 `references/release.json`，运行技能/专家一致性检查。
+当前本地技能资源已核仍引用历史 `0.12.0`，不能把本地版本修改或旧 manifest 写成新 registry 已发布，也不能据此声称平台已更新。正式新包发布并完成 registry 只读核验后，另起候选：从同一个已核 SRI 的新 cloud tgz 提取 `build-manifest.json`、`prepare.mjs` 和 artifact 摘要，更新同版 `references/release.json`，运行技能/专家一致性检查。
 
 资源回填与 npm 发布、WorkBuddy 更新、Hermes 更新、已有 app 部署分别交付；需要平台授权时使用既有 app/ origin/D 事实重新核验，不把历史 app 状态、私有 profile、真实账号或平台 pin 带入本地产品。未获平台授权不得上传、重送、撤回或覆盖在审资产。
 
