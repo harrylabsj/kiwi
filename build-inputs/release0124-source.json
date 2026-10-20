@@ -1,7 +1,7 @@
 {
   "format": "kiwi-npm-shipping-source/1",
   "source_base": "e703bc0d67e24a98c417274e46f37d210eff86ac",
-  "reviewed_release": "0.12.5",
+  "reviewed_release": "0.12.6",
   "owner_runtime_default": "dual-off/private",
   "tool": {
     "node": "v22.22.3",
@@ -98,8 +98,8 @@
     "arch": "arm64"
   },
   "stage": {
-    "package_sha256": "sha256:ca530bbb375f760a78a599c59bbb8dbe5a0e4b748cde9b3281b6e5da5bf82d08",
-    "lock_sha256": "sha256:70e6fffdbe6d01af95b634924e3356fbf37f0a9b01acc0d8ceeea28c87eb141d"
+    "package_sha256": "sha256:67a84d46c35c7fe370aafa113f3145826a32e685c42d96e9d2791847e151f329",
+    "lock_sha256": "sha256:bdf729761582f4fe880e31b6ec51eac1c175258e3103f6ff1d197b375dc4243f"
   },
   "budgets": {
     "plain_bytes": 268435456,
@@ -218,11 +218,11 @@
     },
     {
       "path": "build-inputs/release0124-stage/package-lock.json",
-      "sha256": "sha256:70e6fffdbe6d01af95b634924e3356fbf37f0a9b01acc0d8ceeea28c87eb141d"
+      "sha256": "sha256:bdf729761582f4fe880e31b6ec51eac1c175258e3103f6ff1d197b375dc4243f"
     },
     {
       "path": "build-inputs/release0124-stage/package.json",
-      "sha256": "sha256:ca530bbb375f760a78a599c59bbb8dbe5a0e4b748cde9b3281b6e5da5bf82d08"
+      "sha256": "sha256:67a84d46c35c7fe370aafa113f3145826a32e685c42d96e9d2791847e151f329"
     },
     {
       "path": "contracts/candidate-agent-dto-1.0.schema.json",
@@ -1482,15 +1482,15 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "sha256:1fc6fb3827c80bf84e547ec3fd89fc89e66cfed143d0bf59b4097f8d34436a3d"
+      "sha256": "sha256:c87c0fdcf0bae8fd0239fd484ac164b50dd06f02cc623f0b468cbb19e3bb4d6c"
     },
     {
       "path": "package.json",
-      "sha256": "sha256:e4153c4ae6c61d23249881ef065c8ded6d22ca73b54cc48ed3884708e48ab966"
+      "sha256": "sha256:7f53c991df7dad2b42706ca2aad2a961f59eaea2ff2809c343914eea809d510a"
     },
     {
       "path": "packages/merchant-cloud/package.json",
-      "sha256": "sha256:daef7a213b9a19127d0545f58b5ed1ad44779949fff860e91db484fefc00129a"
+      "sha256": "sha256:9e77ae003fb83b01757ab81c48ae5a9efc34eecd2c884021053902774c3928e0"
     },
     {
       "path": "packages/merchant-cloud/prepare.mjs",
@@ -1498,7 +1498,7 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:f93b696d59bca8b2b0c1209af486eba8252131a82b86945fec706b83a2b7e691"
+      "sha256": "sha256:0c909170aef6ef761553fd3edaadb5bc1863147c972fe273c983d25c22d45817"
     },
     {
       "path": "portfolio.lock.json",
@@ -1638,7 +1638,7 @@
     },
     {
       "path": "scripts/lib/npm-shipping.mjs",
-      "sha256": "sha256:67b17b4f2cb592965fb4cd15ec30db81e171d95233711a55b2e0ae113e4c56a7"
+      "sha256": "sha256:1ce746ee4563c23835a81b17c550bed29e5eccb083dda19c807bbc7d121eef0c"
     },
     {
       "path": "scripts/lib/portfolio-lock-verify.d.mts",
@@ -1782,7 +1782,7 @@
     },
     {
       "path": "scripts/verify-cloud-package-candidate.mjs",
-      "sha256": "sha256:9ad724967cf7a98912771c337dd2e1329a958d76c5115bb396ae45d3497f4ea7"
+      "sha256": "sha256:fac798e7a1f0bc4ec481f1c9200c1abb7f34959b0694db72c89365a907b37025"
     },
     {
       "path": "scripts/verify-contract-vectors.mjs",
@@ -1806,7 +1806,7 @@
     },
     {
       "path": "scripts/verify-npm-shipping-installed.mjs",
-      "sha256": "sha256:d4036f7095f2d4babcac599b2f2e881774ef1d30c9fac3c1b5dde6a5ed9ba9b7"
+      "sha256": "sha256:b1c7dd84761b82067628371942bffdb8eb02fb3bb1cb2e27fe4d174558565da1"
     },
     {
       "path": "scripts/verify-npm-shipping-runtime.mjs",
@@ -3770,9 +3770,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:094364c453182f13027f331fe2499f2ba20ca5f234dd388bc163c67eb96f96fb",
+      "sha256": "sha256:002bacf0730b001e80120b842af327ac7eb254c36360a5b9ec97efc56934928c",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:6040647c67f0e5b73bee31aea3eb59965513ace1121467a4b566331d071cd113"
+      "raw_sha256": "sha256:e887f0c0275f80fa66ea9a4e2754373569bb310fe9237e13471930360c38e324"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -5120,7 +5120,7 @@
     },
     {
       "path": "tests/npm-cloud-leaf-metadata.test.ts",
-      "sha256": "sha256:3da7c27cb5244b658e0b08d8d1a094a913a3f6c94e9178c9adc6c7823ee2bfe2"
+      "sha256": "sha256:ba602b10676151adef0a0b4d56afeca8f730268dc34795ba93c61ac958e52ab3"
     },
     {
       "path": "tests/npm-official-binlinks.test.ts",
@@ -5136,7 +5136,7 @@
     },
     {
       "path": "tests/npm-shipping-contract.test.ts",
-      "sha256": "sha256:00979d0a7a1b3f84c846c5233df737826336c23fd4ee0a762e8bd74b29731bf1"
+      "sha256": "sha256:0eaaccf320d9fe3b08c09a936181f8f99f3e12f8cbf72139e06b13f3f73c1958"
     },
     {
       "path": "tests/onboarding-local-fallback.test.ts",
