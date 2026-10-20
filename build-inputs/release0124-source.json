@@ -633,6 +633,10 @@
       "sha256": "sha256:55e0b9bd64410b2a83fe61ecd71f0fa6117c406a727fb90c14165467896b68cb"
     },
     {
+      "path": "docs/releasing/npm0126-preparation.md",
+      "sha256": "sha256:a48224aa57e1ded823b305a919985825d49177112f852908ee2d7a17e3b8dc46"
+    },
+    {
       "path": "docs/reports/a297-connect-review-fix.md",
       "sha256": "sha256:0564f42138e78b93474d2710d5dd0db1e9e6c4ece120d96c1a28a7a5b66cfa03"
     },
