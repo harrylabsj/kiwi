@@ -26,7 +26,8 @@
  * CloudConfigError（带稳定 reason code），调用方据此非零退出并打印，不静默降级。
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import * as ownedRuntimeModule from "./owned-runtime.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -75,6 +76,10 @@ export interface CloudRuntimeConfig {
   sample: boolean;
   /** 显式允许 loopback HTTP Catalog，仅用于本地验证。 */
   allowInsecureCatalog: boolean;
+  /** owned 运行模式：off 保持既有行为；require 启用持久 owner/计数/期限。 */
+  ownedRuntime: "off" | "require";
+  /** require 时经严格校验的策略。 */
+  ownedPolicy?: import("./owned-runtime.js").OwnedPolicy;
   /** 准备部署时未提供商家显示名，工作台需提示设置。 */
   merchantNameNeedsUpdate: boolean;
 }
@@ -180,6 +185,45 @@ function parseA2aAuth(env: Record<string, string | undefined>, raw: string | und
   );
 }
 
+/**
+ * 规范化目标路径但不创建任何目录：从最近存在祖先取真实路径，再把不存在的后缀接回去。
+ *
+ * 语义约束（见 CLOUD-CONFIG-TMPDIR-CANONICALITY 工单）：
+ *   - 只容忍 `ENOENT`/`ENOTDIR`（路径尚未创建）——其它错误一律上抛，由调用方转成稳定错误码；
+ *   - 绝不回退到纯词面比较，避免 macOS `/var` ↔ `/private/var` 这类别名绕过临时目录拒绝。
+ *
+ * @internal 仅导出给单元测试使用，不属于公开 API。
+ */
+export function __canonicalizePathWithoutCreate(target: string): string {
+  let current = path.resolve(target);
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync.native(current);
+      return missing.length === 0 ? real : path.join(real, ...missing.reverse());
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      const parent = path.dirname(current);
+      if (parent === current) throw error;
+      missing.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * 按路径分量判断包含关系（`child` 等于或位于 `parent` 之下）。
+ *
+ * 与字符串前缀不同，`/a/bc` 不会被判定为在 `/a/b` 内。
+ *
+ * @internal 仅导出给单元测试使用，不属于公开 API。
+ */
+export function __isPathInsideOrEqual(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith(".." + path.sep) && rel !== ".." && !path.isAbsolute(rel));
+}
+
 /** 权威状态目录落位校验：绝对路径、非临时目录、不落在制品随包目录内。 */
 function assertDataDirPlacement(dataDir: string, artifactRoot: string): void {
   if (!path.isAbsolute(dataDir)) {
@@ -187,8 +231,21 @@ function assertDataDirPlacement(dataDir: string, artifactRoot: string): void {
   }
   const resolved = path.resolve(dataDir);
   const root = path.resolve(artifactRoot);
-  const tmp = path.resolve(tmpdir());
-  if (resolved === tmp || resolved.startsWith(tmp + path.sep)) {
+  // 临时目录判定走规范化真实路径：词面比较会被 symlink/别名（macOS /var → /private/var）绕过。
+  // 规范化失败必须 fail-closed，不得退回词面比较。
+  let canonicalData: string;
+  let canonicalTmp: string;
+  try {
+    canonicalTmp = realpathSync.native(path.resolve(tmpdir()));
+    canonicalData = __canonicalizePathWithoutCreate(resolved);
+  } catch (error) {
+    const code = (error as { code?: string }).code ?? "UNKNOWN";
+    throw new CloudConfigError(
+      "DATA_DIR_CANONICALIZATION_FAILED",
+      `状态目录无法规范化为真实路径（${code}），拒绝在无法判定是否临时目录时启动：${dataDir}`,
+    );
+  }
+  if (__isPathInsideOrEqual(canonicalData, canonicalTmp)) {
     throw new CloudConfigError(
       "DATA_DIR_EPHEMERAL",
       `状态目录不得位于临时目录（重启即丢）：${resolved}`,
@@ -231,6 +288,10 @@ export interface CloudConfigFile {
   allow_insecure_catalog?: boolean;
   merchant_name_needs_update?: boolean;
   bind_host?: string;
+  /** 可选 owned 运行模式（MANAGER-APPROVAL-SCOPE-v2 §B）；缺省/缺字段=off。 */
+  owned_runtime?: string;
+  /** require 时的最小策略（全部字段必填，严格校验）。 */
+  owned_policy?: unknown;
   readyz_timeout_ms?: number;
   a2a_auth?: { mode?: string } | string;
 }
@@ -341,9 +402,29 @@ export function loadCloudConfig(
     allowInsecureCatalog,
   });
 
+  const ownedRaw = file.owned_runtime ?? "off";
+  if (ownedRaw !== "off" && ownedRaw !== "require") {
+    throw new CloudConfigError("OWNED_RUNTIME_INVALID", `OWNED_RUNTIME_INVALID: owned_runtime 只能是 off|require（${String(ownedRaw)}）`);
+  }
+  let ownedPolicy: import("./owned-runtime.js").OwnedPolicy | undefined;
+  if (ownedRaw === "require") {
+    if (file.owned_policy === undefined) {
+      throw new CloudConfigError("OWNED_POLICY_REQUIRED", "OWNED_POLICY_REQUIRED: owned_runtime=require 必须提供 owned_policy");
+    }
+    const { validateOwnedPolicy } = ownedRuntimeModule;
+    try {
+      ownedPolicy = validateOwnedPolicy(file.owned_policy, Date.now());
+    } catch (error) {
+      const code = (error as { code?: string }).code ?? "OWNED_POLICY_INVALID";
+      throw new CloudConfigError(code, `${code}: owned_policy 校验失败（${(error as Error).message}）`);
+    }
+  }
+
   return {
     port,
     bindHost,
+    ownedRuntime: ownedRaw,
+    ...(ownedPolicy !== undefined ? { ownedPolicy } : {}),
     publicOrigin,
     dataDir: path.resolve(dataDir),
     profilePath: path.resolve(profilePath),

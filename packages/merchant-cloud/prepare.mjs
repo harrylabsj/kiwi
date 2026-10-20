@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash, randomBytes, scryptSync } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,7 +21,7 @@ function defaultDataDir(outDir) {
 }
 
 function parseArgs(argv) {
-  const options = { origin: undefined, out: undefined, dataDir: undefined, catalogUrl: DEFAULT_CATALOG_URL, allowInsecureCatalog: false, sample: false, merchantName: undefined, adminBootstrap: false };
+  const options = { origin: undefined, out: undefined, dataDir: undefined, catalogUrl: DEFAULT_CATALOG_URL, allowInsecureCatalog: false, sample: false, merchantName: undefined, adminBootstrap: false, ownedMode: "off", ownedPolicyPath: undefined };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--origin") options.origin = argv[++i];
@@ -32,12 +32,66 @@ function parseArgs(argv) {
     else if (arg === "--sample") options.sample = true;
     else if (arg === "--merchant-name") options.merchantName = argv[++i];
     else if (arg === "--admin-bootstrap") options.adminBootstrap = true;
+    else if (arg === "--owned-mode") options.ownedMode = argv[++i];
+    else if (arg === "--owned-policy") options.ownedPolicyPath = argv[++i];
     else throw new Error(`未知参数 ${arg}`);
   }
+  if (options.ownedMode !== "off" && options.ownedMode !== "require") {
+    throw new Error("--owned-mode 只能是 off 或 require");
+  }
+  if (options.ownedMode === "require" && options.ownedPolicyPath === undefined) {
+    throw new Error("--owned-mode require 必须同时提供 --owned-policy <json文件>");
+  }
+  if (options.ownedMode === "off" && options.ownedPolicyPath !== undefined) {
+    throw new Error("--owned-mode off 不接受 --owned-policy（不默默启用）");
+  }
   if (options.origin === undefined || options.out === undefined) {
-    throw new Error("用法：node prepare.mjs --origin https://<host> --out <部署目录> [--catalog-url <https-url>] [--merchant-name <名称>] [--sample] [--allow-insecure-catalog] [--data-dir <绝对路径>] [--admin-bootstrap]");
+    throw new Error("用法：node prepare.mjs --origin https://<host> --out <部署目录> [--catalog-url <https-url>] [--merchant-name <名称>] [--sample] [--allow-insecure-catalog] [--data-dir <绝对路径>] [--admin-bootstrap] [--owned-mode off|require] [--owned-policy <json文件>]");
   }
   return options;
+}
+
+
+function validateOwnedPolicyFile(file) {
+  let policy;
+  try {
+    policy = JSON.parse(readFileSync(file, "utf8"));
+  } catch (error) {
+    throw new Error(`--owned-policy 不是合法 JSON：${error.message}`, { cause: error });
+  }
+  if (policy === null || typeof policy !== "object" || Array.isArray(policy)) {
+    throw new Error("--owned-policy 必须是对象");
+  }
+  const allowed = ["version", "policy_id", "window_id", "window_start_utc", "window_end_utc", "caps"];
+  for (const key of Object.keys(policy)) {
+    if (!allowed.includes(key)) throw new Error(`--owned-policy 含未知字段：${key}`);
+  }
+  for (const key of ["version", "policy_id", "window_id"]) {
+    if (typeof policy[key] !== "string" || policy[key].trim() === "") {
+      throw new Error(`--owned-policy.${key} 必须是非空字符串`);
+    }
+  }
+  const start = Date.parse(policy.window_start_utc);
+  const end = Date.parse(policy.window_end_utc);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    throw new Error("--owned-policy 窗口起止必须是可解析时间");
+  }
+  if (end <= start) throw new Error("--owned-policy window_end_utc 必须晚于 window_start_utc");
+  if (end <= Date.now()) throw new Error("--owned-policy 窗口已过期，不能用于新部署");
+  const caps = policy.caps;
+  if (caps === null || typeof caps !== "object" || Array.isArray(caps)) {
+    throw new Error("--owned-policy.caps 必须是对象");
+  }
+  const capKeys = ["business_requests", "mcp_calls", "core_starts"];
+  for (const key of Object.keys(caps)) {
+    if (!capKeys.includes(key)) throw new Error(`--owned-policy.caps 含未知字段：${key}`);
+  }
+  for (const key of capKeys) {
+    if (!Number.isSafeInteger(caps[key]) || caps[key] <= 0) {
+      throw new Error(`--owned-policy.caps.${key} 必须是正整数`);
+    }
+  }
+  return policy;
 }
 
 function validateCatalogUrl(raw, options) {
@@ -118,12 +172,60 @@ function sha256(file) {
   return `sha256:${createHash("sha256").update(readFileSync(file)).digest("hex")}`;
 }
 
+function isWithin(root, file) {
+  const relative = path.relative(root, file);
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function isValidNpmBinLink(file, binDir) {
+  let stat;
+  try { stat = lstatSync(file); } catch { return false; }
+  if (!stat.isSymbolicLink()) return false;
+  const linkName = path.basename(file);
+  let target;
+  try { target = readlinkSync(file); } catch { return false; }
+  if (path.isAbsolute(target) || target.includes("\\")) return false;
+  const nodeModules = path.dirname(binDir);
+  const targetFile = path.resolve(binDir, target);
+  if (!isWithin(nodeModules, targetFile) || !existsSync(targetFile)) return false;
+  let targetStat;
+  try { targetStat = lstatSync(targetFile); } catch { return false; }
+  const mode = targetStat.mode & 0o777;
+  if (!targetStat.isFile() || (mode & 0o400) === 0 || (mode & 0o100) === 0 || (mode & 0o022) !== 0) return false;
+  let packageDir = path.dirname(targetFile);
+  while (isWithin(nodeModules, packageDir)) {
+    const packageFile = path.join(packageDir, "package.json");
+    if (existsSync(packageFile)) {
+      let pkg;
+      try { pkg = JSON.parse(readFileSync(packageFile, "utf8")); } catch { return false; }
+      const declared = pkg.bin;
+      const packageName = typeof pkg.name === "string" ? pkg.name.split("/").at(-1) : "";
+      const binPath = typeof declared === "string"
+        ? (linkName === packageName ? declared : undefined)
+        : declared !== null && typeof declared === "object" && typeof declared[linkName] === "string"
+          ? declared[linkName]
+          : undefined;
+      if (typeof binPath !== "string" || binPath.includes("\\") || path.isAbsolute(binPath)) return false;
+      return path.resolve(packageDir, binPath) === targetFile;
+    }
+    packageDir = path.dirname(packageDir);
+  }
+  return false;
+}
+
 function listPackageFiles(dir, prefix = "") {
   const paths = [];
   for (const name of readdirSync(dir)) {
     const relative = prefix ? `${prefix}/${name}` : name;
-    if (relative === "build-manifest.json" || relative === "admin-bootstrap.json" || relative.endsWith(".tgz") || relative === "node_modules/.bin" || relative === "node_modules/.package-lock.json") continue;
+    if (relative === "build-manifest.json" || relative === "admin-bootstrap.json" || relative.endsWith(".tgz") || relative === "node_modules/.package-lock.json" || relative.endsWith("/node_modules/.package-lock.json")) continue;
     const file = path.join(dir, name);
+    if (relative === "node_modules/.bin" || relative.endsWith("/node_modules/.bin")) {
+      for (const binName of readdirSync(file)) {
+        const binFile = path.join(file, binName);
+        if (!isValidNpmBinLink(binFile, file)) paths.push(`${relative}/${binName}`);
+      }
+      continue;
+    }
     if (statSync(file).isDirectory()) paths.push(...listPackageFiles(file, relative));
     else paths.push(relative);
   }
@@ -202,6 +304,9 @@ function main() {
     merchant_name_needs_update: !options.merchantName?.trim(),
     ...(options.allowInsecureCatalog ? { allow_insecure_catalog: true } : {}),
     a2a_auth: "signature",
+    ...(options.ownedMode === "require"
+      ? { owned_runtime: "require", owned_policy: validateOwnedPolicyFile(options.ownedPolicyPath) }
+      : {}),
   };
   writeFileSync(path.join(out, "cloud.config.json"), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o644 });
   let password;

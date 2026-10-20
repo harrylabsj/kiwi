@@ -169,6 +169,16 @@ export interface CloudBootstrapOptions {
   challengeStore?: BindingChallengeStore;
   /** 目录连接传输注入；生产默认 fetch，本地集成测试使用签名 Catalog 桩。 */
   catalogFetchImpl?: typeof fetch;
+  /**
+   * 已校验的不可变配置（owned 路径专用）：提供时**不再读盘**，避免同一启动流程里
+   * 多次 loadCloudConfig 造成 dataDir/policy/profile 不一致（TOCTOU）。
+   */
+  config?: import("./config.js").CloudRuntimeConfig;
+  /**
+   * owned 模式下的真实请求预留（业务转发 / MCP 调用）。
+   * 失败必须抛出带 code 的错误：请求在进入路由前被拒绝，不产生业务副作用。
+   */
+  reserve?: { business: () => void; mcp: () => void };
 }
 
 export interface CloudInstance {
@@ -330,9 +340,11 @@ export async function bootstrapCloudRuntime(
     ((line: string): void => {
       process.stdout.write(line);
     });
-  const config = loadCloudConfig(options.env ?? process.env, {
-    ...(options.artifactRoot !== undefined ? { artifactRoot: options.artifactRoot } : {}),
-  });
+  const config =
+    options.config ??
+    loadCloudConfig(options.env ?? process.env, {
+      ...(options.artifactRoot !== undefined ? { artifactRoot: options.artifactRoot } : {}),
+    });
 
   // 1) 商家 profile：云端只接受 merchant 角色（buyer 侧由 Catalog/Buyer 通道承载）。
   let profile;
@@ -1293,7 +1305,27 @@ export async function bootstrapCloudRuntime(
     }),
     version: PRODUCT_VERSION,
   });
-  const server = createServer(router);
+  const server = createServer((req, res) => {
+    if (options.reserve !== undefined) {
+      const pathname = (req.url ?? "/").split("?")[0] ?? "/";
+      try {
+        if (pathname === CLOUD_A2A_PATH || pathname.startsWith(`${CLOUD_A2A_PATH}/`)) {
+          options.reserve.business();
+        } else if (pathname === "/mcp" || pathname.startsWith("/mcp/")) {
+          options.reserve.mcp();
+        }
+      } catch (error) {
+        const code = (error as { code?: string }).code ?? "OWNED_RESERVATION_REFUSED";
+        const body = JSON.stringify({ error: "reservation_refused", code });
+        res.statusCode = 429;
+        res.setHeader("content-type", "application/json; charset=utf-8");
+        res.setHeader("content-length", Buffer.byteLength(body));
+        res.end(body);
+        return;
+      }
+    }
+    router(req, res);
+  });
   server.on("clientError", () => {
     // 畸形客户端流量（中止的 socket 等）不得让服务崩溃。
   });

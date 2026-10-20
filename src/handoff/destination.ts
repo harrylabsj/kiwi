@@ -96,6 +96,11 @@ export function isUrlDestinationType(type: DestinationType): boolean {
   return URL_DESTINATION_TYPES.has(type);
 }
 
+/** 会话类目的地（opaque session/order id）——不得携带 URL（防绕过 URL 安全策略）。 */
+export function isSessionDestinationType(type: DestinationType): boolean {
+  return SESSION_DESTINATION_TYPES.has(type);
+}
+
 /** 校验是否为目标类型已知值。 */
 export function isDestinationType(value: unknown): value is DestinationType {
   return typeof value === "string" && (DESTINATION_TYPES as readonly string[]).includes(value);

@@ -346,6 +346,7 @@ describe("KiwiBuyerService：AcceptNonbinding → Agreement → Handoff（五层
         agreement_id: String(accepted.agreement.agreement_id),
         approval_id: approval.approval_id,
         destination_type: "external_checkout_url",
+        url: "https://merchant-001.example/checkout/xyz",
       }),
     ).rejects.toMatchObject({ code: "authorization_denied" });
   });
@@ -375,17 +376,19 @@ describe("KiwiBuyerService：AcceptNonbinding → Agreement → Handoff（五层
       candidate_id: String(winner.candidate_id),
       approval_id: acceptApproval.approval_id,
     });
-    const handoffApproval = service.requestApproval({ task_id: taskId, action: "handoff" });
+    // A 卡：handoff 审批必须由 ASK 分支创建（intent 绑定），不能再手工 requestApproval。
+    const askId = await service
+      .handoff({ agreement_id: String(accepted.agreement.agreement_id), destination_type: "external_checkout_url", url: "https://merchant-001.example/checkout/xyz" })
+      .then(() => undefined)
+      .catch((err: { detail?: { approval_id?: string } }) => err.detail?.approval_id);
+    expect(typeof askId).toBe("string");
     service.approveApproval({
-      approval_id: handoffApproval.approval_id,
-      authorization: {
-        ...grantedAuthorization(handoffApproval.approval_id),
-        action: "handoff",
-      },
+      approval_id: askId as string,
+      authorization: { ...grantedAuthorization(askId as string), action: "handoff" },
     });
     const handoff = await service.handoff({
       agreement_id: String(accepted.agreement.agreement_id),
-      approval_id: handoffApproval.approval_id,
+      approval_id: askId as string,
       destination_type: "external_checkout_url",
       url: "https://merchant-001.example/checkout/xyz",
     });
@@ -613,6 +616,7 @@ describe("kiwi_approve / kiwi_reject（ASK 门宿主审批面）", () => {
     const hf1 = await call("kiwi_handoff", {
       agreement_id: agreementId,
       destination_type: "external_checkout_url",
+      url: "https://merchant-001.example/checkout/xyz",
     });
     expect(hf1.isError).toBeUndefined();
     const hf1Body = JSON.parse(hf1.content?.[0]?.text ?? "{}") as { approval_required?: { approval_id?: string } };

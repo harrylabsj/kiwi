@@ -1,5 +1,5 @@
 import { createHash, scryptSync, timingSafeEqual } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -20,16 +20,22 @@ function fixture(): { root: string; out: string } {
   const prepare = path.join(pkg, "prepare.mjs");
   const files = [cloudSample, app, contracts, nodeModules];
   for (const dir of files) mkdirSync(dir, { recursive: true });
+  mkdirSync(path.join(nodeModules, ".bin"), { recursive: true });
   cpSync(prepareSource, prepare);
   writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "fixture", version: "0.11.0", type: "module" }));
   writeFileSync(path.join(app, "main.js"), "fixture\n");
+  mkdirSync(path.join(nodeModules, "yaml"), { recursive: true });
+  writeFileSync(path.join(nodeModules, "yaml", "package.json"), JSON.stringify({ name: "yaml", version: "1.0.0", bin: { yaml: "bin.mjs" } }));
+  writeFileSync(path.join(nodeModules, "yaml", "bin.mjs"), "#!/usr/bin/env node\n");
+  chmodSync(path.join(nodeModules, "yaml", "bin.mjs"), 0o755);
+  symlinkSync("../yaml/bin.mjs", path.join(nodeModules, ".bin", "yaml"));
   writeFileSync(path.join(cloudSample, "merchant.yaml"), "agent_id: merchant-agent:test\nowner_id: merchant-test\n");
   writeFileSync(path.join(cloudSample, "products.json"), JSON.stringify({
     schema_version: "0.1.2", merchant_id: "merchant-test", source: "test_fixture", generated_at: new Date().toISOString(),
     products: [{ sku: "smoke-sku-1", title: "Smoke", currency: "CNY", unit: "piece", price: 10,
       updated_at: new Date().toISOString(), valid_until: new Date(Date.now() + 60_000).toISOString(), status: "active", test: true }],
   }));
-  const tracked = [path.join(pkg, "package.json"), prepare, path.join(app, "main.js"), path.join(cloudSample, "merchant.yaml"), path.join(cloudSample, "products.json")];
+  const tracked = [path.join(pkg, "package.json"), prepare, path.join(app, "main.js"), path.join(cloudSample, "merchant.yaml"), path.join(cloudSample, "products.json"), path.join(nodeModules, "yaml", "package.json"), path.join(nodeModules, "yaml", "bin.mjs")];
   const manifestFiles = tracked.map((file) => ({
     path: path.relative(pkg, file).split(path.sep).join("/"),
     size: readFileSync(file).length,
@@ -57,6 +63,63 @@ afterEach(() => {
 });
 
 describe("merchant cloud package prepare", () => {
+  it("accepts only manifest-bound npm bin symlinks and rejects unknown or escaping entries", () => {
+    const first = fixture();
+    writeFileSync(path.join(first.root, "node_modules", ".bin", "unknown"), "#!/bin/sh\n");
+    const unknown = run(first.root, first.out);
+    expect(unknown.status).not.toBe(0);
+    expect(unknown.stderr).toContain("包内文件集合与 build-manifest.json 不一致");
+
+    const second = fixture();
+    rmSync(path.join(second.root, "node_modules", ".bin", "yaml"));
+    symlinkSync("../../outside/bin.mjs", path.join(second.root, "node_modules", ".bin", "yaml"));
+    const escaping = run(second.root, second.out);
+    expect(escaping.status).not.toBe(0);
+    expect(escaping.stderr).toContain("包内文件集合与 build-manifest.json 不一致");
+
+    const third = fixture();
+    rmSync(path.join(third.root, "node_modules", ".bin", "yaml"));
+    symlinkSync("../yaml/package.json", path.join(third.root, "node_modules", ".bin", "yaml"));
+    const wrongDeclaredTarget = run(third.root, third.out);
+    expect(wrongDeclaredTarget.status).not.toBe(0);
+    expect(wrongDeclaredTarget.stderr).toContain("包内文件集合与 build-manifest.json 不一致");
+
+    const fourth = fixture();
+    chmodSync(path.join(fourth.root, "node_modules", "yaml", "bin.mjs"), 0o644);
+    const nonExecutable = run(fourth.root, fourth.out);
+    expect(nonExecutable.status).not.toBe(0);
+    expect(nonExecutable.stderr).toContain("包内文件集合与 build-manifest.json 不一致");
+
+    const fifth = fixture();
+    chmodSync(path.join(fifth.root, "node_modules", "yaml", "bin.mjs"), 0o775);
+    const groupWritable = run(fifth.root, fifth.out);
+    expect(groupWritable.status).not.toBe(0);
+    expect(groupWritable.stderr).toContain("包内文件集合与 build-manifest.json 不一致");
+  });
+
+  it("enforces owned policy mode and writes the validated policy only for require", () => {
+    const { root, out } = fixture();
+    const policyFile = path.join(path.dirname(out), "owned-policy.json");
+    const valid = {
+      version: "1", policy_id: "policy-test", window_id: "window-test",
+      window_start_utc: new Date(Date.now() - 60_000).toISOString(),
+      window_end_utc: new Date(Date.now() + 3_600_000).toISOString(),
+      caps: { business_requests: 2, mcp_calls: 2, core_starts: 1 },
+    };
+    writeFileSync(policyFile, JSON.stringify(valid));
+    const nextOut = () => path.join(path.dirname(out), `deploy-${Math.random().toString(16).slice(2)}`);
+    expect(run(root, nextOut(), "--owned-mode", "off", "--owned-policy", policyFile).status).not.toBe(0);
+    expect(run(root, nextOut(), "--owned-mode", "require").status).not.toBe(0);
+    writeFileSync(policyFile, JSON.stringify({ ...valid, extra: true }));
+    expect(run(root, nextOut(), "--owned-mode", "require", "--owned-policy", policyFile).status).not.toBe(0);
+    writeFileSync(policyFile, JSON.stringify({ ...valid, window_end_utc: new Date(Date.now() - 1).toISOString() }));
+    expect(run(root, nextOut(), "--owned-mode", "require", "--owned-policy", policyFile).status).not.toBe(0);
+    writeFileSync(policyFile, JSON.stringify(valid));
+    const result = run(root, out, "--owned-mode", "require", "--owned-policy", policyFile);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(path.join(out, "cloud.config.json"), "utf8"))).toMatchObject({ owned_runtime: "require", owned_policy: valid });
+  });
+
   it.each(["http://merchant.example", "https://merchant.example/path", "https://merchant.example?x=1", "https://merchant.example?", "https://merchant.example#", "https://user:pass@merchant.example"]) (
     "rejects unsafe origin %s", (origin) => {
       const { root, out } = fixture();

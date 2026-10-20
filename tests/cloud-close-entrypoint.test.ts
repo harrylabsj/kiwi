@@ -1,9 +1,10 @@
 import { describe, expect, it, afterEach } from "vitest";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import type { Server } from "node:http";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createCloudShutdown, isNodeBelowSupportLine } from "../src/cloud/main.js";
+import { createCloudShutdown, createOwnedCloudLifetime, isNodeBelowSupportLine, type OwnedCloudDeadlineEndContext } from "../src/cloud/main.js";
 import { renderStartupFailure, CloudStartupError } from "../src/cloud/bootstrap.js";
 
 const dirs: string[] = [];
@@ -69,5 +70,185 @@ describe("Cloud shutdown completion and exit status", () => {
     writeFileSync(path.join(root, "cloud/bootstrap.js"), `import fs from 'node:fs';export function renderStartupFailure(){return 'FIXED';}export async function bootstrapCloudRuntime(){return {close:async()=>{fs.appendFileSync(${JSON.stringify(marker)},'x');await new Promise(r=>setTimeout(r,25));}};}`);
     const result = run(root, "const {runCloudMain}=await import('./cloud/main.js');void runCloudMain();setTimeout(()=>process.kill(process.pid,'SIGTERM'),20);setTimeout(()=>process.kill(process.pid,'SIGINT'),25);");
     expect(result.error).toBeUndefined(); expect(result.status).toBe(0); expect(readFileSync(marker, "utf8")).toBe("x");
+  });
+});
+
+describe("owned cloud lifetime deadline and terminalization callback contract", () => {
+  function harness(onDeadlineEnd?: (context: OwnedCloudDeadlineEndContext) => void | Promise<void>, deadlineEndTimeoutMs = 5_000) {
+    let wallMs = 1_000, monotonicMs = 100, tick: (() => void) | undefined;
+    const events: string[] = [], exits: number[] = [];
+    const server: Pick<Server, "close" | "closeAllConnections"> = {
+      close() { events.push("ingress-stopped"); return this as Server; },
+      closeAllConnections: () => { events.push("connections-closed"); },
+    };
+    const instance = { server, close: async () => { events.push("instance-closed"); } };
+    const lifetime = createOwnedCloudLifetime(instance, 2_000, {
+      now: () => wallMs,
+      monotonicNow: () => monotonicMs,
+      setTimer: (callback) => { tick = callback; return 1; },
+      clearTimer: () => { events.push("timer-cleared"); },
+      onDeadlineEnd,
+      deadlineEndTimeoutMs,
+      exit: (code) => { exits.push(code); },
+      write: (line) => { events.push(line); },
+    });
+    return {
+      events, exits, instance, lifetime,
+      setWall: (value: number) => { wallMs = value; },
+      setMonotonic: (value: number) => { monotonicMs = value; },
+      fire: () => { if (!tick) throw new Error("missing fake timer"); tick(); },
+    };
+  }
+
+  it("reports wall deadline and awaits the durable consumer before closing the SDK", async () => {
+    let context: OwnedCloudDeadlineEndContext | undefined;
+    const h = harness(async (value) => { context = value; h.events.push("deadline-callback"); });
+    h.setWall(2_000); h.setMonotonic(1_100); h.fire();
+    await h.lifetime.shutdown();
+    expect(context?.reason).toBe("WALL_DEADLINE");
+    expect(context).toMatchObject({ deadlineMs: 2_000, initialWallMs: 1_000, initialMonotonicMs: 100, observedWallMs: 2_000, observedMonotonicMs: 1_100 });
+    expect(h.events.indexOf("ingress-stopped")).toBeLessThan(h.events.indexOf("deadline-callback"));
+    expect(h.events.indexOf("deadline-callback")).toBeLessThan(h.events.indexOf("connections-closed"));
+    expect(h.events.indexOf("connections-closed")).toBeLessThan(h.events.indexOf("instance-closed"));
+    expect(h.exits).toEqual([0]);
+  });
+
+  it("reports a monotonic-only budget expiry even while wall time is frozen", async () => {
+    let reason: OwnedCloudDeadlineEndContext["reason"] | undefined;
+    const h = harness((context) => { reason = context.reason; });
+    h.setWall(1_000); h.setMonotonic(1_100); h.fire();
+    await h.lifetime.shutdown();
+    expect(reason).toBe("MONOTONIC_BUDGET_EXHAUSTED");
+    expect(h.events).toContain("instance-closed");
+  });
+
+  it("rechecks both clocks when shutdown races ahead of its queued deadline timer", async () => {
+    let reason: OwnedCloudDeadlineEndContext["reason"] | undefined;
+    const h = harness((context) => { reason = context.reason; });
+    h.setWall(1_000); h.setMonotonic(1_100);
+    await h.lifetime.shutdown();
+    expect(reason).toBe("MONOTONIC_BUDGET_EXHAUSTED");
+    expect(h.exits).toEqual([0]);
+  });
+
+  it("reports clock regression to the consumer instead of silently performing ordinary shutdown", async () => {
+    let reason: OwnedCloudDeadlineEndContext["reason"] | undefined;
+    const h = harness((context) => { reason = context.reason; });
+    h.setWall(999); h.setMonotonic(101); h.fire();
+    await h.lifetime.shutdown();
+    expect(reason).toBe("CLOCK_INVALID_OR_REGRESSED");
+    expect(h.exits).toEqual([0]);
+  });
+
+  it.each(["wall", "monotonic"] as const)("closes through the deadline callback when initial %s sampling throws", async (failedClock) => {
+    const events: string[] = [], exits: number[] = [];
+    let context: OwnedCloudDeadlineEndContext | undefined;
+    let timerScheduled = false;
+    const server: Pick<Server, "close" | "closeAllConnections"> = {
+      close() { events.push("ingress-stopped"); return this as Server; },
+      closeAllConnections: () => { events.push("connections-closed"); },
+    };
+    const instance = { server, close: async () => { events.push("instance-closed"); } };
+    const lifetime = createOwnedCloudLifetime(instance, 2_000, {
+      now: () => { if (failedClock === "wall") throw new Error("SECRET wall sample"); return 1_000; },
+      monotonicNow: () => { if (failedClock === "monotonic") throw new Error("SECRET monotonic sample"); return 100; },
+      setTimer: () => { timerScheduled = true; return 1; },
+      clearTimer: () => { events.push("timer-cleared"); },
+      onDeadlineEnd: (value) => { context = value; events.push("deadline-callback"); },
+      exit: (code) => { exits.push(code); },
+      write: (line) => { events.push(line); },
+    });
+
+    expect(lifetime.isStopping()).toBe(true);
+    await lifetime.shutdown();
+    expect(context?.reason).toBe("CLOCK_INVALID_OR_REGRESSED");
+    expect(context?.signal).toBeInstanceOf(AbortSignal);
+    expect(timerScheduled).toBe(false);
+    expect(events.indexOf("ingress-stopped")).toBeLessThan(events.indexOf("deadline-callback"));
+    expect(events.indexOf("deadline-callback")).toBeLessThan(events.indexOf("connections-closed"));
+    expect(events.indexOf("connections-closed")).toBeLessThan(events.indexOf("instance-closed"));
+    expect(exits).toEqual([0]);
+    expect(events.join(" ")).not.toContain("SECRET");
+  });
+
+  it.each(["wall", "monotonic"] as const)("compiled main handles initial %s sampling failure through owned shutdown", (failedClock) => {
+    const root = fixture();
+    const eventsPath = path.join(root, "events.json");
+    const contextPath = path.join(root, "context.txt");
+    const exitPath = path.join(root, "exit.txt");
+    const source = `
+      import fs from 'node:fs';
+      const { createOwnedCloudLifetime } = await import('./cloud/main.js');
+      const events = [];
+      const instance = {
+        server: {
+          close() { events.push('ingress-stopped'); return this; },
+          closeAllConnections() { events.push('connections-closed'); },
+        },
+        async close() { events.push('instance-closed'); fs.writeFileSync(${JSON.stringify(eventsPath)}, JSON.stringify(events)); },
+      };
+      const failWall = ${JSON.stringify(failedClock === "wall")};
+      const failMonotonic = ${JSON.stringify(failedClock === "monotonic")};
+      const lifetime = createOwnedCloudLifetime(instance, 2000, {
+        now() { if (failWall) throw new Error('SECRET wall'); return 1000; },
+        monotonicNow() { if (failMonotonic) throw new Error('SECRET monotonic'); return 100; },
+        onDeadlineEnd({ reason }) { events.push('callback:' + reason); fs.writeFileSync(${JSON.stringify(contextPath)}, reason); },
+        exit(code) { fs.writeFileSync(${JSON.stringify(exitPath)}, String(code)); process.exit(code); },
+        write() {},
+      });
+      if (!lifetime.isStopping()) process.exit(87);
+    `;
+    const result = run(root, source);
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("SECRET");
+    expect(readFileSync(contextPath, "utf8")).toBe("CLOCK_INVALID_OR_REGRESSED");
+    expect(readFileSync(exitPath, "utf8")).toBe("0");
+    expect(JSON.parse(readFileSync(eventsPath, "utf8"))).toEqual([
+      "ingress-stopped", "callback:CLOCK_INVALID_OR_REGRESSED", "connections-closed", "instance-closed",
+    ]);
+  });
+
+  it("keeps a normal pre-deadline shutdown resumable and does not invoke the deadline callback", async () => {
+    let callbacks = 0;
+    const h = harness(() => { callbacks++; });
+    await h.lifetime.shutdown();
+    expect(callbacks).toBe(0);
+    expect(h.events).toContain("instance-closed");
+    expect(h.exits).toEqual([0]);
+  });
+
+  it("still closes the SDK and exits nonzero when the terminal callback fails", async () => {
+    const h = harness(async () => { throw new Error("SECRET terminal fixture"); });
+    h.setWall(2_000); h.setMonotonic(1_100); h.fire();
+    await h.lifetime.shutdown();
+    expect(h.events).toContain("instance-closed");
+    expect(h.exits).toEqual([1]);
+    expect(h.events.join(" ")).toContain("OWNED_DEADLINE_END_FAILED");
+    expect(h.events.join(" ")).not.toContain("SECRET");
+  });
+
+  it("aborts a deadline callback after the small bound, closes, and does not equate exit with terminal proof", async () => {
+    let aborted = false;
+    const h = harness(({ signal }) => new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => { aborted = true; resolve(); }, { once: true });
+    }), 10);
+    h.setWall(2_000); h.setMonotonic(1_100); h.fire();
+    await h.lifetime.shutdown();
+    expect(aborted).toBe(true);
+    expect(h.events).toContain("instance-closed");
+    expect(h.exits).toEqual([1]);
+  });
+
+  it("shares one deadline terminalization and cleanup across concurrent shutdown calls", async () => {
+    let callbacks = 0, release: (() => void) | undefined;
+    const h = harness(() => { callbacks++; return new Promise<void>((resolve) => { release = resolve; }); });
+    h.setWall(2_000); h.setMonotonic(1_100); h.fire();
+    const first = h.lifetime.shutdown(), second = h.lifetime.shutdown();
+    expect(second).toBe(first);
+    release?.();
+    await first;
+    expect(callbacks).toBe(1);
+    expect(h.events.filter((item) => item === "instance-closed")).toHaveLength(1);
   });
 });

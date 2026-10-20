@@ -60,9 +60,28 @@ export interface StoredApproval {
   action: string;
   status: string;
   candidate_digest?: string;
+  /** handoff 意图绑定（A 卡）：仅 action=handoff 且有 intent 时存在。 */
+  intent_digest?: string;
   expires_at?: string;
   decided_at?: string;
   authorization_json?: string;
+}
+
+/** handoff 意图（A 卡，版本化；摘要不含自身）。 */
+export interface StoredHandoffIntent {
+  intent_id: string;
+  intent_digest: string;
+  intent_version: string;
+  task_id: string;
+  agreement_id: string;
+  destination_type: string;
+  url: string | null;
+  agreement_sha256: string;
+  terms_digest: string | null;
+  policy_id: string;
+  policy_digest: string;
+  issued_at: string;
+  expires_at: string;
 }
 
 export interface StoredAgreement {
@@ -148,8 +167,79 @@ export class TaskApprovalStore {
       CREATE INDEX IF NOT EXISTS idx_mcp_tasks_idem ON mcp_tasks(idempotency_key);
       CREATE INDEX IF NOT EXISTS idx_mcp_candidates_task ON mcp_candidates(task_id);
       CREATE INDEX IF NOT EXISTS idx_mcp_approvals_task ON mcp_approvals(task_id);
+      CREATE TABLE IF NOT EXISTS mcp_handoff_intents (
+        intent_digest   TEXT PRIMARY KEY,
+        intent_id       TEXT NOT NULL,
+        intent_version  TEXT NOT NULL,
+        task_id         TEXT NOT NULL REFERENCES mcp_tasks(task_id) ON DELETE CASCADE,
+        agreement_id    TEXT NOT NULL,
+        destination_type TEXT NOT NULL,
+        url             TEXT,
+        agreement_sha256 TEXT NOT NULL,
+        terms_digest    TEXT,
+        policy_id       TEXT NOT NULL,
+        policy_digest   TEXT NOT NULL,
+        issued_at       TEXT NOT NULL,
+        expires_at      TEXT NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS idx_mcp_agreements_task ON mcp_agreements(task_id);
+      CREATE INDEX IF NOT EXISTS idx_mcp_handoff_intents_task ON mcp_handoff_intents(task_id);
     `);
+    // 既有库的列补齐（幂等 schema bootstrap，不搬移任何既有数据）。
+    const cols = this.db.prepare("PRAGMA table_info(mcp_approvals)").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "intent_digest")) {
+      this.db.exec("ALTER TABLE mcp_approvals ADD COLUMN intent_digest TEXT");
+    }
+  }
+
+  /** 写入 handoff 意图（同摘要不可重复；重复写视为调用方错误）。 */
+  setHandoffIntent(intent: StoredHandoffIntent): void {
+    this.db
+      .prepare(
+        `INSERT INTO mcp_handoff_intents
+           (intent_digest, intent_id, intent_version, task_id, agreement_id, destination_type, url,
+            agreement_sha256, terms_digest, policy_id, policy_digest, issued_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        intent.intent_digest, intent.intent_id, intent.intent_version, intent.task_id, intent.agreement_id,
+        intent.destination_type, intent.url, intent.agreement_sha256, intent.terms_digest,
+        intent.policy_id, intent.policy_digest, intent.issued_at, intent.expires_at,
+      );
+  }
+
+  getHandoffIntent(intentDigest: string): StoredHandoffIntent | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT intent_digest, intent_id, intent_version, task_id, agreement_id, destination_type, url,
+                agreement_sha256, terms_digest, policy_id, policy_digest, issued_at, expires_at
+           FROM mcp_handoff_intents WHERE intent_digest = ?`,
+      )
+      .get(intentDigest) as Record<string, unknown> | undefined;
+    if (row === undefined) return undefined;
+    return {
+      intent_id: row.intent_id as string,
+      intent_digest: row.intent_digest as string,
+      intent_version: row.intent_version as string,
+      task_id: row.task_id as string,
+      agreement_id: row.agreement_id as string,
+      destination_type: row.destination_type as string,
+      url: (row.url as string | null) ?? null,
+      agreement_sha256: row.agreement_sha256 as string,
+      terms_digest: (row.terms_digest as string | null) ?? null,
+      policy_id: row.policy_id as string,
+      policy_digest: row.policy_digest as string,
+      issued_at: row.issued_at as string,
+      expires_at: row.expires_at as string,
+    };
+  }
+
+  /** 给 approval 绑定 intent 摘要（仅 pending 行；不覆盖已决定记录）。 */
+  bindApprovalIntent(approvalId: string, intentDigest: string): boolean {
+    const info = this.db
+      .prepare("UPDATE mcp_approvals SET intent_digest = ? WHERE approval_id = ? AND status = 'pending'")
+      .run(intentDigest, approvalId);
+    return Number(info.changes) === 1;
   }
 
   /** 幂等创建任务：相同 idempotency_key 返回已有任务（不抛错、不重复写入）。 */
@@ -347,8 +437,8 @@ export class TaskApprovalStore {
     this.db
       .prepare(
         `INSERT INTO mcp_approvals
-           (approval_id, task_id, action, status, candidate_digest, expires_at, decided_at, authorization_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           (approval_id, task_id, action, status, candidate_digest, expires_at, decided_at, authorization_json, intent_digest)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(approval_id) DO UPDATE SET
            status = excluded.status,
            decided_at = excluded.decided_at,
@@ -363,6 +453,7 @@ export class TaskApprovalStore {
         approval.expires_at ?? null,
         approval.decided_at ?? null,
         approval.authorization_json ?? null,
+        approval.intent_digest ?? null,
       );
   }
 
@@ -407,7 +498,7 @@ export class TaskApprovalStore {
   getApproval(approvalId: string): StoredApproval | undefined {
     const row = this.db
       .prepare(
-        "SELECT approval_id, task_id, action, status, candidate_digest, expires_at, decided_at, authorization_json FROM mcp_approvals WHERE approval_id = ?",
+        "SELECT approval_id, task_id, action, status, candidate_digest, expires_at, decided_at, authorization_json, intent_digest FROM mcp_approvals WHERE approval_id = ?",
       )
       .get(approvalId) as Record<string, unknown> | undefined;
     if (row === undefined) return undefined;
@@ -417,6 +508,7 @@ export class TaskApprovalStore {
       action: row.action as string,
       status: row.status as string,
       candidate_digest: row.candidate_digest as string | undefined,
+      intent_digest: (row.intent_digest as string | undefined) ?? undefined,
       expires_at: row.expires_at as string | undefined,
       decided_at: row.decided_at as string | undefined,
       authorization_json: row.authorization_json as string | undefined,
@@ -426,7 +518,7 @@ export class TaskApprovalStore {
   listApprovalsByTask(taskId: string): StoredApproval[] {
     const rows = this.db
       .prepare(
-        "SELECT approval_id, task_id, action, status, candidate_digest, expires_at, decided_at, authorization_json FROM mcp_approvals WHERE task_id = ?",
+        "SELECT approval_id, task_id, action, status, candidate_digest, expires_at, decided_at, authorization_json, intent_digest FROM mcp_approvals WHERE task_id = ?",
       )
       .all(taskId) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
@@ -435,6 +527,7 @@ export class TaskApprovalStore {
       action: row.action as string,
       status: row.status as string,
       candidate_digest: row.candidate_digest as string | undefined,
+      intent_digest: (row.intent_digest as string | undefined) ?? undefined,
       expires_at: row.expires_at as string | undefined,
       decided_at: row.decided_at as string | undefined,
       authorization_json: row.authorization_json as string | undefined,
@@ -494,10 +587,10 @@ export class TaskApprovalStore {
     return {
       agreement_id: row.agreement_id as string,
       task_id: row.task_id as string,
-      negotiation_id: row.negotiation_id as string | undefined,
-      terms_digest: row.terms_digest as string | undefined,
+      negotiation_id: row.negotiation_id === null ? undefined : String(row.negotiation_id),
+      terms_digest: row.terms_digest === null ? undefined : String(row.terms_digest),
       created_at: row.created_at as string,
-      expires_at: row.expires_at as string | undefined,
+      expires_at: row.expires_at === null ? undefined : String(row.expires_at),
       payload: row.payload as string,
     };
   }

@@ -262,7 +262,7 @@ describe("ASK 审批绑定与一次性消费（review P1-2）", () => {
     // 一次性：同一审批再 handoff → denied（used）。
     const agreementId = (done.agreement as { agreement_id: string }).agreement_id;
     await expect(
-      service.handoff({ agreement_id: agreementId, approval_id: approvalId as string, destination_type: "cart" }),
+      service.handoff({ agreement_id: agreementId, approval_id: approvalId as string, destination_type: "external_checkout_url", url: "https://merchant-001.example/checkout/xyz" }),
     ).rejects.toMatchObject({ code: "authorization_denied" });
   });
 

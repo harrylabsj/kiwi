@@ -30,7 +30,8 @@
  * Negotiator 为可注入接口。v0.1 默认使用 Static 实现或由宿主注入。
  */
 
-import { contentDigest } from "../negotiation/jcs.js";
+import { contentDigest, sha256Hex } from "../negotiation/jcs.js";
+import { isDestinationType, isSessionDestinationType, isUrlDestinationType, type DestinationType } from "../handoff/destination.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
 
 import {
@@ -51,7 +52,7 @@ import {
   type NetworkSearchDiagnostics,
 } from "./network-search.js";
 import type { MerchantProductSummary } from "./product-summary.js";
-import { TaskApprovalStore, type StoredApproval, type StoredTask } from "./store.js";
+import { TaskApprovalStore, type StoredAgreement, type StoredApproval, type StoredHandoffIntent, type StoredTask } from "./store.js";
 
 export type BuyerAction =
   | "discover"
@@ -279,6 +280,19 @@ interface DelegationPolicyLike {
   };
 }
 
+const HANDOFF_INTENT_VERSION = "1";
+
+/** 深冻结（plain JSON）：保证授权与摘要使用同一不可变快照。 */
+function deepFreezePlain<T>(value: T): T {
+  if (value !== null && typeof value === "object") {
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      deepFreezePlain((value as Record<string, unknown>)[key]);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
+
 function utcNow(): string {
   return new Date().toISOString();
 }
@@ -303,7 +317,12 @@ export class KiwiBuyerService {
   private readonly principal: string;
   private readonly buyerAgentId: string;
   private readonly sessionId: string;
-  private readonly policy: DelegationPolicyLike;
+  private readonly policySnapshot: DelegationPolicyLike;
+  private readonly policyDigest: string;
+  /** 兼容既有内部读取点：一律指向已冻结快照，不再暴露可变原对象。 */
+  private get policy(): DelegationPolicyLike {
+    return this.policySnapshot;
+  }
   private readonly merchantIndex?: MerchantIndex;
   private readonly quoteFetcher?: QuoteFetcher;
   private readonly negotiator?: Negotiator;
@@ -317,7 +336,12 @@ export class KiwiBuyerService {
     this.sessionId = options.sessionId;
     const clock = options.now ?? utcNow;
     this.now = () => new Date(Date.parse(clock())).toISOString();
-    this.policy = options.delegationPolicy as unknown as DelegationPolicyLike;
+    // A 卡：授权与摘要必须使用同一份 deep-clone/deep-freeze 的 plain-JSON 快照，
+    // 避免"原对象被就地改写、摘要仍是旧值"的漂移。
+    this.policySnapshot = deepFreezePlain(
+      JSON.parse(JSON.stringify((options.delegationPolicy ?? {}) as Record<string, unknown>)),
+    ) as unknown as DelegationPolicyLike;
+    this.policyDigest = contentDigest(this.policySnapshot);
     this.merchantIndex = options.merchantIndex;
     this.quoteFetcher = options.quoteFetcher;
     this.negotiator = options.negotiator;
@@ -554,32 +578,105 @@ export class KiwiBuyerService {
     // 真实 fan-out 交给注入的 QuoteFetcher（Phase 2 接线 A2A/UCP）。v0.1 无 fetcher
     // 时任务保持 in_progress + resumable，可恢复；有 fetcher 时按部分失败语义回写。
     let status = "in_progress";
-    let quotedResults:QuoteCandidateInput[]=[];
+    let quotedResults: QuoteCandidateInput[] = [];
     if (this.quoteFetcher !== undefined) {
       const merchants = input.merchant_ids ?? [];
       const index = this.merchantIndex;
-      // 用意图的商品查询解析商家（拿到各自 matching_skus，供 RFQ 用商家自有 SKU）。
-      const resolved =
-        index !== undefined ? await index.search(this.firstQuery(input.intent)) : [];
-      const merchantRecords = await Promise.all(
-        merchants.map(async (m) => {
-          const found = resolved.find((r) => r.merchant_id === m);
-          if (found !== undefined) return found;
-          // intent query 文本未命中 catalog LIKE 时按 merchant_id 直接解析
-          // （保 agent_card_url，A2A 才能磋商；host 的 merchant_ids 来自一次
-          // 成功的 kiwi_search，不该因意图措辞丢失完整记录）。
-          if (index !== undefined) {
-            const byId = await index.resolveById(m);
-            if (byId !== undefined) return byId;
-          }
-          return { merchant_id: m, name: m, verified: false, capabilities: [] };
-        }),
-      );
-      const results = await this.quoteFetcher.requestQuotes(input.intent, merchantRecords, this.protocolContext(persisted,input.merchant_ids??[]));
-      const successes = results.filter((r) => r.status === "succeeded").length;
-      if (results.length > 0) {
-        quotedResults=results;
-        status = successes === results.length ? "succeeded" : "partial_success";
+      let dispatchStarted = false;
+      let dispatchOutcomeUnknown = false;
+      let catalogLookupCompleted = false;
+      try {
+        // 用意图的商品查询解析商家（拿到各自 matching_skus，供 RFQ 用商家自有 SKU）。
+        const resolved =
+          index !== undefined ? await index.search(this.firstQuery(input.intent)) : [];
+        const merchantRecords = await Promise.all(
+          merchants.map(async (m) => {
+            const found = resolved.find((r) => r.merchant_id === m);
+            if (found !== undefined) return found;
+            // intent query 文本未命中 catalog LIKE 时按 merchant_id 直接解析
+            // （保 agent_card_url，A2A 才能磋商；host 的 merchant_ids 来自一次
+            // 成功的 kiwi_search，不该因意图措辞丢失完整记录）。
+            if (index !== undefined) {
+              const byId = await index.resolveById(m);
+              if (byId !== undefined) return byId;
+            }
+            return { merchant_id: m, name: m, verified: false, capabilities: [] };
+          }),
+        );
+
+        catalogLookupCompleted = true;
+        const protocolContext = this.protocolContext(persisted, merchants);
+        // 一旦调用 quoteFetcher，就不能把抛错解释成“没发送”：adapter 可能已
+        // 写入/发送部分 RFQ。没有 receipt 时保守落为 non-retryable unknown。
+        dispatchStarted = true;
+        quotedResults = await this.quoteFetcher.requestQuotes(
+          input.intent,
+          merchantRecords,
+          protocolContext,
+        );
+        dispatchOutcomeUnknown = quotedResults.some(
+          (result) =>
+            result.status === "failed" &&
+            result.failure?.classification === "protocol_error" &&
+            result.failure.retryable === false,
+        );
+        const returnedMerchants = new Set(quotedResults.map((result) => result.merchant_id));
+        const missingResults = merchants.filter((merchantId) => !returnedMerchants.has(merchantId));
+        if (missingResults.length > 0) dispatchOutcomeUnknown = true;
+        quotedResults = [
+          ...quotedResults,
+          ...missingResults.map((merchantId) => ({
+            merchant_id: merchantId,
+            status: "failed" as const,
+            failure: {
+              classification: "protocol_error",
+              retryable: false,
+              detail: "RFQ dispatch returned no per-merchant result; remote outcome is unknown",
+            },
+          })),
+        ];
+      } catch {
+        // Catalog lookup resolves before quoteFetcher: this branch is known not sent.
+        // Once quoteFetcher was entered, an exception can follow a remote side effect,
+        // so record UNKNOWN and block automatic resend by the same task key.
+        const failure = dispatchStarted
+          ? {
+              classification: "protocol_error",
+              retryable: false,
+              detail:
+                "RFQ dispatch outcome is unknown; a remote side effect may have occurred. Reconcile before retrying",
+            }
+          : catalogLookupCompleted
+            ? {
+                classification: "other",
+                retryable: true,
+                detail: "Local RFQ preparation failed before dispatch; no RFQ was sent",
+              }
+            : {
+                classification: "unreachable",
+                retryable: true,
+                detail: "Catalog lookup failed before RFQ dispatch; no RFQ was sent",
+              };
+        dispatchOutcomeUnknown = dispatchStarted;
+        quotedResults = merchants.map((merchantId) => ({
+          merchant_id: merchantId,
+          status: "failed",
+          failure,
+        }));
+      }
+
+      if (merchants.length === 0) {
+        status = "failed";
+      } else if (quotedResults.length > 0) {
+        const successes = quotedResults.filter((r) => r.status === "succeeded").length;
+        status =
+          successes === quotedResults.length
+            ? "succeeded"
+            : successes === 0
+              ? dispatchOutcomeUnknown
+                ? "in_progress"
+                : "failed"
+              : "partial_success";
       }
     }
 
@@ -587,7 +684,10 @@ export class KiwiBuyerService {
     for(const r of quotedResults)this.store.addCandidate(taskId,{candidate_id:`cand-${uuidv7()}`,merchant_id:r.merchant_id,status:r.status,provenance:r.provenance,terms:r.terms,failure:r.failure,retryable:r.status==="failed"?(r.failure?.retryable??false):false});
     const updated = this.store.updateTask(taskId, {
       status,
-      resumable: true,
+      // A terminal failure is not silently resumed under this idempotency key.
+      // A known pre-send failure may be submitted as a new task; an unknown A2A
+      // outcome remains non-retryable on its candidate and needs reconciliation.
+      resumable: status !== "failed",
       payload: JSON.stringify({
         ...this.decodeTask(task),
         status,
@@ -963,12 +1063,20 @@ export class KiwiBuyerService {
     if (stored === undefined) {
       throw new McpError("agreement_not_found", `agreement ${input.agreement_id} not found`);
     }
+    // A 卡：目的地先归一；非法即拒绝，且不落任何意图/审批行。
+    const destination = this.normalizeHandoffDestination(input);
+    // A 卡：ask 且无 approval_id 时，必须在泛型 evaluateAuthorization 之前
+    // 走意图感知的 ASK——否则 evaluateAuthorization 会先写一条无目的地审批。
+    if (input.approval_id === undefined && policyActionMode(this.policySnapshot, "handoff") === "ask") {
+      const approval_id = this.requestHandoffApproval({ agreement: stored, destination });
+      throw new McpError("approval_required", "action=handoff 需要持久审批", { approval_id });
+    }
     // review P1-2（A316 校准）：handoff 消费绑定 = 结构化 canonical digest
     //（agreement/destination/url），无分隔符歧义。
     const consumedBinding = this.consumeBinding({
       agreement_id: input.agreement_id,
-      destination_type: input.destination_type,
-      url: input.url ?? null,
+      destination_type: destination.destination_type,
+      url: destination.url,
     });
     const authorization = await this.evaluateAuthorization("handoff", {
       taskId: stored.task_id,
@@ -981,8 +1089,8 @@ export class KiwiBuyerService {
     if (input.approval_id === undefined) {
       const handoffRef = {
         handoff_id: `handoff-${uuidv7()}`,
-        destination_type: input.destination_type,
-        ...(input.url !== undefined ? { url: input.url } : {}),
+        destination_type: destination.destination_type,
+        ...(destination.url !== null ? { url: destination.url } : {}),
       };
       return { handoff_ref: handoffRef, authorization };
     }
@@ -994,14 +1102,30 @@ export class KiwiBuyerService {
       if (approval === undefined) {
         throw new McpError("invalid_params", `approval ${input.approval_id} 不存在`);
       }
+      // A 卡：同事务重读 task/agreement，核验意图（含 agreement 摘要、terms 现值、
+      // policy 摘要与全部有效期限）；旧审批（无 intent）在此拒绝。
+      const freshTask = this.store.getTask(approval.task_id);
+      if (freshTask === undefined) {
+        throw new McpError("task_not_found", `task ${approval.task_id} not found`);
+      }
+      const freshAgreement = this.store.getAgreement(input.agreement_id);
+      if (freshAgreement === undefined) {
+        throw new McpError("agreement_not_found", `agreement ${input.agreement_id} not found`);
+      }
+      this.assertHandoffIntentMatches({
+        approval,
+        task: freshTask,
+        agreement: freshAgreement,
+        destination,
+      });
       if (approval.status === "used") {
         const consumed = this.approvalConsumed(approval);
         if (consumed !== undefined && consumed.binding === consumedBinding) {
           return {
             handoff_ref: {
               handoff_id: consumed.ref,
-              destination_type: input.destination_type,
-              ...(input.url !== undefined ? { url: input.url } : {}),
+              destination_type: destination.destination_type,
+              ...(destination.url !== null ? { url: destination.url } : {}),
             },
             authorization,
           };
@@ -1013,8 +1137,8 @@ export class KiwiBuyerService {
       }
       const handoffRef = {
         handoff_id: `handoff-${uuidv7()}`,
-        destination_type: input.destination_type,
-        ...(input.url !== undefined ? { url: input.url } : {}),
+        destination_type: destination.destination_type,
+        ...(destination.url !== null ? { url: destination.url } : {}),
       };
       this.store.setApproval(approval.task_id, {
         ...approval,
@@ -1029,6 +1153,199 @@ export class KiwiBuyerService {
   }
 
   // ---- 持久审批（宿主适配面；kiwi_approve / kiwi_reject 为 MCP 工具）----------
+
+  // ---- A 卡：handoff 意图（版本化、摘要不含自身、与 approval 同事务）----------
+
+  /** 目的地归一：类型词表校验 + URL 归一（http/https、无凭据、无 fragment）。 */
+  private normalizeHandoffDestination(input: {
+    destination_type: string;
+    url?: string;
+  }): { destination_type: DestinationType; url: string | null } {
+    if (!isDestinationType(input.destination_type)) {
+      throw new McpError("invalid_params", `未知 destination_type：${String(input.destination_type)}`);
+    }
+    const type = input.destination_type;
+    let url: string | null = null;
+    if (input.url !== undefined) {
+      let parsed: URL;
+      try {
+        parsed = new URL(input.url);
+      } catch {
+        throw new McpError("invalid_params", `destination url 不是合法绝对 URL：${input.url}`);
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new McpError("invalid_params", `destination url 必须是 http(s)：${input.url}`);
+      }
+      if (parsed.username !== "" || parsed.password !== "") {
+        throw new McpError("invalid_params", "destination url 不得内嵌凭据");
+      }
+      if (parsed.hash !== "") {
+        throw new McpError("invalid_params", "destination url 不得携带 fragment");
+      }
+      url = parsed.href;
+    }
+    if (isUrlDestinationType(type) && url === null) {
+      throw new McpError("invalid_params", `destination_type=${type} 必须提供 url`);
+    }
+    if (isSessionDestinationType(type) && url !== null) {
+      throw new McpError("invalid_params", `destination_type=${type} 不得携带 url（会话类为 opaque ref）`);
+    }
+    return { destination_type: type, url };
+  }
+
+  /** 意图对象（不含 intent_digest）；字段集固定，缺失一律 null。 */
+  private buildHandoffIntent(args: {
+    task: StoredTask;
+    agreement: StoredAgreement;
+    destination: { destination_type: DestinationType; url: string | null };
+    issuedAt: string;
+    expiresAt: string;
+  }): StoredHandoffIntent {
+    const body = {
+      intent_version: HANDOFF_INTENT_VERSION,
+      action: "handoff" as const,
+      task_id: args.task.task_id,
+      agreement_id: args.agreement.agreement_id,
+      destination_type: args.destination.destination_type,
+      url: args.destination.url,
+      agreement_sha256: `sha256:${sha256Hex(args.agreement.payload)}`,
+      terms_digest: args.agreement.terms_digest ?? null,
+      policy_id: this.policySnapshot.policy_id,
+      policy_digest: this.policyDigest,
+      issued_at: args.issuedAt,
+      expires_at: args.expiresAt,
+    };
+    return { intent_id: `intent-${uuidv7()}`, intent_digest: contentDigest(body), ...body };
+  }
+
+  /**
+   * 意图感知的 ASK：在泛型 evaluateAuthorization 之前由 handoff 调用，
+   * 同事务写 intent 与 approval，杜绝"先产生无目的地审批再补绑定"。
+   */
+  private requestHandoffApproval(args: {
+    agreement: StoredAgreement;
+    destination: { destination_type: DestinationType; url: string | null };
+  }): string {
+    const nowIso = this.now();
+    const nowMs = Date.parse(nowIso);
+    const task = this.store.getTask(args.agreement.task_id);
+    if (task === undefined) throw new McpError("task_not_found", `task ${args.agreement.task_id} not found`);
+    // policy 自身期限在 ASK 侧同样独立校验（同一 now 样本）。
+    this.assertPolicyActive(nowMs);
+    const taskExpiry = task.expires_at === undefined ? Number.NaN : Date.parse(task.expires_at);
+    if (!Number.isFinite(taskExpiry) || taskExpiry <= nowMs) {
+      throw new McpError("invalid_params", `task ${task.task_id} 已过期或缺少有效期限`);
+    }
+    if (args.agreement.expires_at != null) {
+      const agreementExpiry = Date.parse(args.agreement.expires_at);
+      if (!Number.isFinite(agreementExpiry) || agreementExpiry <= nowMs) {
+        throw new McpError("invalid_params", `agreement ${args.agreement.agreement_id} 已过期或期限非法`);
+      }
+    }
+    const intent = this.buildHandoffIntent({
+      task,
+      agreement: args.agreement,
+      destination: args.destination,
+      issuedAt: nowIso,
+      expiresAt: task.expires_at as string,
+    });
+    return this.store.transaction(() => {
+      this.store.setHandoffIntent(intent);
+      const created = this.requestApproval({
+        task_id: task.task_id,
+        action: "handoff",
+        candidate_digest: undefined,
+      });
+      if (!this.store.bindApprovalIntent(created.approval_id, intent.intent_digest)) {
+        throw new McpError("approval_denied", `approval ${created.approval_id} 无法绑定意图`);
+      }
+      return created.approval_id;
+    });
+  }
+
+  /**
+   * 由存储的 intent 重建 canonical body（字段集与 `buildHandoffIntent` 完全一致，
+   * 排除 `intent_digest` 自身）。任何字段被改都会改变重算摘要。
+   */
+  private handoffIntentBody(intent: StoredHandoffIntent): Record<string, unknown> {
+    return {
+      intent_version: intent.intent_version,
+      action: "handoff",
+      task_id: intent.task_id,
+      agreement_id: intent.agreement_id,
+      destination_type: intent.destination_type,
+      url: intent.url ?? null,
+      agreement_sha256: intent.agreement_sha256,
+      terms_digest: intent.terms_digest ?? null,
+      policy_id: intent.policy_id,
+      policy_digest: intent.policy_digest,
+      issued_at: intent.issued_at,
+      expires_at: intent.expires_at,
+    };
+  }
+
+  /** policy 自身期限必须独立有效（不能只靠 DB 其它期限间接代表）。 */
+  private assertPolicyActive(nowMs: number): void {
+    const raw = (this.policySnapshot as { expires_at?: unknown }).expires_at;
+    const ms = typeof raw === "string" ? Date.parse(raw) : Number.NaN;
+    if (!Number.isFinite(ms) || ms <= nowMs) {
+      throw new McpError("approval_denied", "委托策略已过期或缺少有效期限");
+    }
+  }
+
+  /** 消费前的意图核验：重算摘要 + 逐字段 + 重算 agreement 摘要 + 现值 terms + policy 期限/摘要 + 全部期限。 */
+  private assertHandoffIntentMatches(args: {
+    approval: StoredApproval;
+    task: StoredTask;
+    agreement: StoredAgreement;
+    destination: { destination_type: DestinationType; url: string | null };
+  }): StoredHandoffIntent {
+    if (args.approval.action !== "handoff") {
+      throw new McpError("approval_denied", `approval ${args.approval.approval_id} 动作不是 handoff`);
+    }
+    if (args.approval.intent_digest === undefined) {
+      throw new McpError(
+        "approval_denied",
+        `approval ${args.approval.approval_id} 缺少 handoff 意图（旧审批），请重新 ASK`,
+      );
+    }
+    const intent = this.store.getHandoffIntent(args.approval.intent_digest);
+    if (intent === undefined) {
+      throw new McpError("approval_denied", `approval ${args.approval.approval_id} 的意图不存在`);
+    }
+    const nowMs = Date.parse(this.now());
+    // (1) policy 自身期限独立校验（同一 now 样本）。
+    this.assertPolicyActive(nowMs);
+    // (2) 重建 canonical body 并重算摘要：必须同时等于存储摘要与 approval 绑定，
+    //     防止"只改持久字段、摘要与绑定不动"的漂移。
+    const rebuiltDigest = contentDigest(this.handoffIntentBody(intent));
+    if (rebuiltDigest !== intent.intent_digest || rebuiltDigest !== args.approval.intent_digest) {
+      throw new McpError("approval_denied", "handoff 意图摘要与存储不一致（内容被改动）");
+    }
+    const expiries = [intent.expires_at, args.approval.expires_at, args.task.expires_at];
+    if (args.agreement.expires_at != null) expiries.push(args.agreement.expires_at);
+    for (const value of expiries) {
+      if (value === undefined) continue;
+      const ms = Date.parse(value);
+      if (!Number.isFinite(ms) || ms <= nowMs) {
+        throw new McpError("approval_denied", `handoff 期限已过或非法：${String(value)}`);
+      }
+    }
+    const mismatch: string[] = [];
+    if (intent.intent_version !== HANDOFF_INTENT_VERSION) mismatch.push("intent_version");
+    if (intent.task_id !== args.task.task_id) mismatch.push("task_id");
+    if (intent.agreement_id !== args.agreement.agreement_id) mismatch.push("agreement_id");
+    if (intent.destination_type !== args.destination.destination_type) mismatch.push("destination_type");
+    if (intent.url !== args.destination.url) mismatch.push("url");
+    if (intent.agreement_sha256 !== `sha256:${sha256Hex(args.agreement.payload)}`) mismatch.push("agreement_sha256");
+    if (intent.terms_digest !== (args.agreement.terms_digest ?? null)) mismatch.push("terms_digest");
+    if (intent.policy_digest !== this.policyDigest) mismatch.push("policy_digest");
+    if (intent.policy_id !== this.policySnapshot.policy_id) mismatch.push("policy_id");
+    if (mismatch.length > 0) {
+      throw new McpError("approval_denied", `handoff 意图与当前请求不一致：${mismatch.join(",")}`);
+    }
+    return intent;
+  }
 
   /** 创建 pending 审批记录（ASK 动作触发）。返回持久 approval_id。 */
   requestApproval(input: {

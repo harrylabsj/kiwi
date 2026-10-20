@@ -374,7 +374,9 @@ it("native factory receipt recovery uses pinned GetTask rather than an implicit 
       idempotency_key: "native-recovery",
     };
     const first = await service.requestQuotes(input);
-    expect(first.task.status).toBe("partial_success");
+    // A dispatch entered the remote adapter but returned no confirmed offer yet:
+    // the durable status is deliberately in_progress until GetTask reconciles it.
+    expect(first.task.status).toBe("in_progress");
     expect(methods.filter((m) => m === "SendMessage")).toHaveLength(1);
     offer = true;
     const next = await service.requestQuotes(input);

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync, symlinkSync, chmodSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync, symlinkSync, chmodSync, statSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeAll, afterAll, afterEach, expect, it } from "vitest";
@@ -11,7 +12,8 @@ function commit(files:string[]) {git(root,"add","--",...files);git(root,"-c","us
 function change(file:string,bytes:Buffer|string){const old=readFileSync(file);writeFileSync(file,bytes);undo.push(()=>writeFileSync(file,old));}
 function rows(){return inventory(stage).filter(r=>r.path.startsWith("app/negotiation/state/")||r.path.includes("/credentials/"));}
 beforeAll(()=>{
- home=mkdtempSync(path.join(tmpdir(),"a413-code-proof-"));root=path.join(home,"root");stage=path.join(root,"build/cloud-artifact");
+ const canonicalTmp=realpathSync(tmpdir());
+ home=mkdtempSync(path.join(canonicalTmp,"a413-code-proof-"));root=path.join(home,"root");stage=path.join(root,"build/cloud-artifact");
  git(candidate,"clone","--no-hardlinks",candidate,root);
  for(const name of ["scripts/lib/npm-shipping.mjs","scripts/lib/npm-shipping.d.mts","scripts/build-npm-shipping.mjs"])cpSync(path.join(candidate,name),path.join(root,name));
  const dependencies=path.join(candidate,"node_modules");mkdirSync(path.join(root,"node_modules"));
@@ -24,7 +26,14 @@ beforeAll(()=>{
  mkdirSync(stage,{recursive:true});cpSync(path.join(root,"dist"),path.join(stage,"app"),{recursive:true});cpSync(path.join(root,"build-inputs/release0124-stage/package-lock.json"),path.join(stage,"package-lock.json"));
  mkdirSync(path.join(stage,"node_modules/@anthropic-ai"),{recursive:true});cpSync(path.join(dependencies,"@anthropic-ai/sdk"),path.join(stage,"node_modules/@anthropic-ai/sdk"),{recursive:true});
  const locked=JSON.parse(readFileSync(path.join(root,"build-inputs/release0124-stage/package-lock.json"),"utf8")).packages["node_modules/@anthropic-ai/sdk"];
- const digest=Buffer.from(locked.integrity.slice(7),"base64").toString("hex");const cache=execFileSync("npm",["config","get","cache"],{cwd:root,encoding:"utf8"}).trim();tar=path.join(cache,"_cacache/content-v2/sha512",digest.slice(0,2),digest.slice(2,4),digest.slice(4));
+ const sdkPkg=JSON.parse(readFileSync(path.join(root,"node_modules/@anthropic-ai/sdk/package.json"),"utf8"));
+ if(!locked || !/^https:\/\/registry\.npmjs\.org\//.test(locked.resolved) || locked.version!==sdkPkg.version) throw new Error("SHIPPING_VENDOR_FIXTURE_LOCK_INVALID");
+ const packedOutput=JSON.parse(execFileSync("npm",["pack","--silent","--json","--pack-destination",home,`@anthropic-ai/sdk@${locked.version}`],{cwd:root,encoding:"utf8"}));
+ const packed=packedOutput["@anthropic-ai/sdk"] ?? Object.values(packedOutput)[0];
+ if(packed?.name!=="@anthropic-ai/sdk" || packed.version!==locked.version || typeof packed.filename!=="string") throw new Error("SHIPPING_VENDOR_FIXTURE_IDENTITY_INVALID");
+ tar=path.join(home,packed.filename);
+ const actualIntegrity=`sha512-${createHash("sha512").update(readFileSync(tar)).digest("base64")}`;
+ if(actualIntegrity!==locked.integrity) throw new Error("SHIPPING_VENDOR_FIXTURE_SRI_MISMATCH");
  if(process.env.A413_EVIDENCE_DIR){mkdirSync(process.env.A413_EVIDENCE_DIR,{recursive:true});writeFileSync(path.join(process.env.A413_EVIDENCE_DIR,"finite-producer.json"),JSON.stringify({fixtureRoot:root,commit:git(root,"rev-parse","HEAD"),command:["node","scripts/verify-npm-shipping-source.mjs"],scope:"actual tsc + finite real module/file assertions, not production fullverify",actualExit:0,stdout:producer},null,2));cpSync(path.join(root,"build/npm-shipping-build-receipt.json"),path.join(process.env.A413_EVIDENCE_DIR,"finite-mode-receipt.json"));cpSync(path.join(root,"scripts/a413-fixture-check.mjs"),path.join(process.env.A413_EVIDENCE_DIR,"finite-verify.mjs"));}
 },120000);
 afterEach(()=>{for(const fn of undo.splice(0).reverse())fn();});afterAll(()=>rmSync(home,{recursive:true,force:true}));
