@@ -62,3 +62,15 @@ it("actual file authority → bootstrap management API projection → working pa
     expect(html).toContain("京东");
   } finally { fs.rmSync(dir, {recursive:true,force:true}); }
 });
+
+describe("workbuddy access card", () => {
+  it("inlines the custody terms version that the runtime sends", async () => {
+    const { WORKBUDDY_CUSTODY_TERMS_VERSION } = await import(
+      "../src/cloud/access/workbuddy-share-link.js"
+    );
+    const page = renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true });
+    expect(page).toContain(`var ACCESS_CONSENT_TERMS = "${WORKBUDDY_CUSTODY_TERMS_VERSION}"`);
+    // 浏览器产物必须自包含：页面脚本里不得出现模块导入。
+    expect(/\bimport\s/.test(page)).toBe(false);
+  });
+});

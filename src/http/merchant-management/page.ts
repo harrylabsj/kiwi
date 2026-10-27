@@ -28,8 +28,6 @@
  */
 
 /** 页面按 owner 视角展示管理动作；角色由服务端权限逐次裁决，前端只是提示。 */
-import { WORKBUDDY_CUSTODY_TERMS_VERSION } from "../../cloud/access/workbuddy-share-link.js";
-
 export function renderMerchantManagementPage(options: {
   productAuthority?: "file" | "exact";
   catalogConnection?: boolean;
@@ -168,7 +166,10 @@ var ROLE = "";
 var API = "/merchant/api/v1";
 var FILE_PRODUCTS = ${options.productAuthority === "file"};
 var CATALOG_CONNECT = ${options.catalogConnection === true};
-var ACCESS_CONSENT_TERMS = ${JSON.stringify(WORKBUDDY_CUSTODY_TERMS_VERSION)};
+// 与 cloud/access/workbuddy-share-link 的 WORKBUDDY_CUSTODY_TERMS_VERSION 同值；
+// 浏览器产物必须自包含（verify:browser-artifact 禁止模块导入），所以这里是字面量，
+// 由 tests/merchant-management-api 断言两者一致。
+var ACCESS_CONSENT_TERMS = "workbuddy-share-v1-2026-10-27";
 var catalogBeginKey = "";
 var catalogBeginPending = false;
 var publicationDraft = null;
