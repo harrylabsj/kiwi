@@ -58,6 +58,10 @@
 import { createHash, createPublicKey, randomBytes } from "node:crypto";
 
 import { validateCloudContract } from "../contracts/cloud-contracts.js";
+import type {
+  WorkbuddyAccessConfig,
+  WorkbuddyAccessRevocation,
+} from "./access/workbuddy-share-link.js";
 import { validateAgentCard } from "../discovery/agent-card/validate.js";
 import type { AgentCard } from "../discovery/agent-card/types.js";
 import { isRedirectResponse, readJsonBody, SafeHttpError } from "../net/safe-http.js";
@@ -89,6 +93,8 @@ export type CatalogClientErrorCode =
   | "CATALOG_UNREACHABLE"
   /** 4xx（非 409/404）：请求被拒绝，重试不会变好。 */
   | "REQUEST_REJECTED"
+  /** 目标资源不存在（404）：agent 或活动绑定不在 Catalog 上，重试不会变好。 */
+  | "NOT_FOUND"
   /** 商家明确拒绝设备授权；不同于暂时等待或通信故障。 */
   | "AUTHORIZATION_DENIED"
   /** CAS 冲突（重读 + 重试一次后仍 409）——停下来报人工。 */
@@ -217,6 +223,34 @@ export interface RequestBindingInput {
   adminToken?: string;
   /** 可选：绑定到期时间（ISO 8601）。 */
   expiresAt?: string;
+  /**
+   * 可选：首绑同时提交 WorkBuddy 访问配置（G1 §2.3.1）。Catalog 随绑定暂存
+   * 并在确认/enrollment 提交时同事务激活；失败不影响绑定本身（M-02）。
+   */
+  accessConfig?: Record<string, unknown>;
+}
+
+/** 已激活绑定上执行访问配置写操作所需的上下文（全部来自已验真的会话）。 */
+export interface RuntimeAccessContext {
+  agentId: string;
+  bindingId: string;
+  keyId: string;
+  runtimeOrigin: string;
+  serviceEpoch: number;
+}
+
+/** Catalog 返回的脱敏访问配置投影（永不包含分享码）。 */
+export interface RuntimeAccessProjection {
+  provider: string;
+  accessMode: string;
+  parameterName: string;
+  configVersion: number;
+  adapterVersion: string;
+  authMode: string;
+  /** `pending` / `active` / `invalid` / `revoked`。 */
+  status: string;
+  validatedAt: string;
+  updatedAt: string;
 }
 
 export interface RequestBindingResult {
@@ -312,6 +346,31 @@ function requiredString(value: unknown, field: string): string {
     throw new CatalogClientError("RESPONSE_INVALID", `catalog 响应缺少 ${field}`);
   }
   return value;
+}
+
+/**
+ * 校验 Catalog 的脱敏访问配置投影。白名单读取：任何未知字段（尤其是
+ * `secret_value` 之类）都不会被带进运行时，也不会进入日志。
+ */
+function projectRuntimeAccess(value: unknown): RuntimeAccessProjection {
+  if (!isRecord(value)) {
+    throw new CatalogClientError("RESPONSE_INVALID", "catalog 响应缺少 runtime_access 对象");
+  }
+  const configVersion = value["config_version"];
+  if (typeof configVersion !== "number" || !Number.isInteger(configVersion) || configVersion < 1) {
+    throw new CatalogClientError("RESPONSE_INVALID", "runtime_access.config_version 非法");
+  }
+  return {
+    provider: requiredString(value["provider"], "runtime_access.provider"),
+    accessMode: requiredString(value["access_mode"], "runtime_access.access_mode"),
+    parameterName: requiredString(value["parameter_name"], "runtime_access.parameter_name"),
+    configVersion,
+    adapterVersion: requiredString(value["adapter_version"], "runtime_access.adapter_version"),
+    authMode: requiredString(value["auth_mode"], "runtime_access.auth_mode"),
+    status: requiredString(value["status"], "runtime_access.status"),
+    validatedAt: typeof value["validated_at"] === "string" ? value["validated_at"] : "",
+    updatedAt: typeof value["updated_at"] === "string" ? value["updated_at"] : "",
+  };
 }
 
 function positiveInteger(value: unknown, fallback: number): number {
@@ -553,13 +612,15 @@ export class CatalogClient {
       serviceEpoch: number;
       authorizationEpoch: number;
       merchantId: string;
+      /** 可选：首绑同时提交 WorkBuddy 访问配置（G1 §2.3.1）。 */
+      accessConfig?: WorkbuddyAccessConfig;
     },
     identity: RuntimeSigningIdentity,
   ): Promise<GrantBindingResult> {
     const origin = normalizeOrigin(requireHttpsUrl(input.runtimeOrigin, "runtime_origin"));
     const endpoint = requireHttpsUrl(input.a2aEndpoint, "a2a_endpoint");
     const { keyJwk, keyThumbprint } = runtimePublicKey(identity);
-    const body = {
+    const body: Record<string, unknown> = {
       enrollment_id: input.enrollmentId,
       grant: input.grant,
       binding: {
@@ -571,6 +632,10 @@ export class CatalogClient {
         service_epoch: input.serviceEpoch,
       },
     };
+    if (input.accessConfig !== undefined) {
+      // 分享码随 body 摘要被签名覆盖；Catalog 在挑战/提交时使用它。
+      body["access_config"] = input.accessConfig;
+    }
     const nonce = this.nonceFactory();
     const issuedAt = this.now();
     const signed = {
@@ -811,6 +876,124 @@ export class CatalogClient {
         "RESPONSE_INVALID",
         "Catalog signed withdraw response is not ok",
       );
+  }
+
+  /**
+   * GET /v1/agents/{id}/runtime-access —— 商家侧权威读（M-03/M-04）。
+   *
+   * 与 PUT 同一授权模型（活动绑定私钥签名、空 body 摘要、exp、一次性 nonce）。
+   * 本地状态丢失时用它恢复 head 版本；工作台用它显示 pending/invalid/revoked。
+   */
+  async readRuntimeAccess(
+    context: RuntimeAccessContext,
+    identity: RuntimeSigningIdentity,
+  ): Promise<{ configVersion: number; runtimeAccess: RuntimeAccessProjection | null }> {
+    const agentId = this.requireAgentId(context.agentId);
+    const bindingId = String(context.bindingId ?? "").trim();
+    if (bindingId === "") {
+      throw new CatalogClientError("INVALID_INPUT", "binding_id 不能为空");
+    }
+    if (String(context.keyId ?? "") !== identity.keyId) {
+      throw new CatalogClientError("INVALID_INPUT", "key_id 与当前签名身份不一致");
+    }
+    const runtimeOrigin = normalizeOrigin(requireHttpsUrl(context.runtimeOrigin, "runtime_origin"));
+    const path = `/v1/agents/${encodeURIComponent(agentId)}/runtime-access`;
+    const issuedAt = this.now();
+    const jws = signCompactJws(
+      {
+        method: "GET",
+        path,
+        audience: "kiwi-catalog",
+        body_digest: sha256Json({}),
+        catalog_agent_id: agentId,
+        binding_id: bindingId,
+        key_id: identity.keyId,
+        runtime_origin: runtimeOrigin,
+        service_epoch: context.serviceEpoch,
+        issued_at: issuedAt.toISOString(),
+        exp: new Date(issuedAt.getTime() + 90_000).toISOString(),
+        nonce: this.nonceFactory(),
+      },
+      identity.signingIdentity,
+      { extraHeader: { typ: "kiwi-runtime-request" } },
+    );
+    const { status, json } = await this.request("GET", path, { jws });
+    if (status === 404) {
+      throw new CatalogClientError("NOT_FOUND", "catalog 上没有该 agent 的活动绑定", 404);
+    }
+    const response = recordOrEmpty(json);
+    if (response["ok"] !== true) {
+      throw new CatalogClientError("RESPONSE_INVALID", "Catalog runtime-access 响应不是 ok");
+    }
+    const version = response["config_version"];
+    if (typeof version !== "number" || !Number.isInteger(version) || version < 0) {
+      throw new CatalogClientError("RESPONSE_INVALID", "runtime-access.config_version 非法");
+    }
+    const projection =
+      response["runtime_access"] === null || response["runtime_access"] === undefined
+        ? null
+        : projectRuntimeAccess(response["runtime_access"]);
+    return { configVersion: version, runtimeAccess: projection };
+  }
+
+  /**
+   * PUT /v1/agents/{id}/runtime-access —— 更新或撤销 WorkBuddy 访问配置（M-02/M-03）。
+   *
+   * 授权模型（G1 §2.3.2）：签名覆盖 method、path、body_digest、agent、binding、
+   * key、origin、service_epoch，外加 exp（≤2min，这里 90s）与一次性 nonce。
+   * 分享码只出现在请求体里（由 body_digest 覆盖），绝不进 URL、日志或错误文本；
+   * 响应也只回脱敏投影。
+   */
+  async updateRuntimeAccess(
+    context: RuntimeAccessContext,
+    identity: RuntimeSigningIdentity,
+    accessConfig: WorkbuddyAccessConfig | WorkbuddyAccessRevocation,
+  ): Promise<RuntimeAccessProjection> {
+    const agentId = this.requireAgentId(context.agentId);
+    const bindingId = String(context.bindingId ?? "").trim();
+    if (bindingId === "") {
+      throw new CatalogClientError("INVALID_INPUT", "binding_id 不能为空");
+    }
+    if (!Number.isInteger(context.serviceEpoch) || context.serviceEpoch < 1) {
+      throw new CatalogClientError(
+        "INVALID_INPUT",
+        `service_epoch 必须是正整数：${context.serviceEpoch}`,
+      );
+    }
+    if (String(context.keyId ?? "") !== identity.keyId) {
+      throw new CatalogClientError("INVALID_INPUT", "key_id 与当前签名身份不一致");
+    }
+    const runtimeOrigin = normalizeOrigin(requireHttpsUrl(context.runtimeOrigin, "runtime_origin"));
+    if (!isRecord(accessConfig)) {
+      throw new CatalogClientError("INVALID_INPUT", "access_config 必须是对象");
+    }
+    const path = `/v1/agents/${encodeURIComponent(agentId)}/runtime-access`;
+    const body = { binding: { binding_id: bindingId }, access_config: accessConfig };
+    const issuedAt = this.now();
+    const jws = signCompactJws(
+      {
+        method: "PUT",
+        path,
+        audience: "kiwi-catalog",
+        body_digest: sha256Json(body),
+        catalog_agent_id: agentId,
+        binding_id: bindingId,
+        key_id: identity.keyId,
+        runtime_origin: runtimeOrigin,
+        service_epoch: context.serviceEpoch,
+        issued_at: issuedAt.toISOString(),
+        exp: new Date(issuedAt.getTime() + 90_000).toISOString(),
+        nonce: this.nonceFactory(),
+      },
+      identity.signingIdentity,
+      { extraHeader: { typ: "kiwi-runtime-request" } },
+    );
+    const { json } = await this.request("PUT", path, { body, jws });
+    const response = recordOrEmpty(json);
+    if (response["ok"] !== true) {
+      throw new CatalogClientError("RESPONSE_INVALID", "Catalog runtime-access 响应不是 ok");
+    }
+    return projectRuntimeAccess(response["runtime_access"]);
   }
 
   private async verifyCatalogEnvelope(envelope: Record<string, unknown>): Promise<BindingClaims> {
@@ -1063,6 +1246,9 @@ export class CatalogClient {
     const body: Record<string, unknown> = { binding };
     if (input.adminToken !== undefined && input.adminToken !== "") {
       body["admin_token"] = input.adminToken;
+    }
+    if (input.accessConfig !== undefined) {
+      body["access_config"] = input.accessConfig;
     }
     assertContract("runtime-binding-request", body);
 
@@ -1383,7 +1569,7 @@ export class CatalogClient {
    * 409 → CONFLICT；404 原样上报（匿名读用）；其余 4xx → REQUEST_REJECTED。
    */
   private async request(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PUT",
     requestPath: string,
     options: { body?: Record<string, unknown>; jws?: string; headers?: Record<string, string> },
   ): Promise<{ status: number; json: unknown }> {

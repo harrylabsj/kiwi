@@ -74,6 +74,12 @@ export interface CloudRuntimeConfig {
   catalogUrl: string;
   /** 本地样例部署标记；不得连接生产 Catalog。 */
   sample: boolean;
+  /**
+   * 可选：WorkBuddy 分享链接（`KIWI_CLOUD_ACCESS_SHARE_LINK`）。设置后首绑会
+   * 随绑定提交访问配置；链接必须指向本实例 publicOrigin，否则构造时即失败。
+   * 分享码只进请求体，不进日志。
+   */
+  accessShareLink?: string;
   /** 显式允许 loopback HTTP Catalog，仅用于本地验证。 */
   allowInsecureCatalog: boolean;
   /** owned 运行模式：off 保持既有行为；require 启用持久 owner/计数/期限。 */
@@ -397,6 +403,9 @@ export function loadCloudConfig(
   }
   const sample = file.sample === true;
   const allowInsecureCatalog = file.allow_insecure_catalog === true;
+  // 只做"字符串存在"判断；链接本身的形状与 origin 归属由连接服务在构造时
+  // fail-closed 校验（它才知道本实例的 publicOrigin）。
+  const rawAccessLink = (readEnv(env, "KIWI_CLOUD_ACCESS_SHARE_LINK") ?? "").trim();
   const catalogUrl = parseCatalogUrl(readEnv(env, "KIWI_CATALOG_URL") ?? fromFile(file.catalog_url), {
     sample,
     allowInsecureCatalog,
@@ -435,6 +444,7 @@ export function loadCloudConfig(
     catalogUrl,
     sample,
     allowInsecureCatalog,
+    ...(rawAccessLink !== "" ? { accessShareLink: rawAccessLink } : {}),
     merchantNameNeedsUpdate: file.merchant_name_needs_update === true,
     a2aAuth,
     readinessTimeoutMs: Math.floor(readinessTimeoutMs),

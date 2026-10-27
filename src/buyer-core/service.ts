@@ -111,6 +111,20 @@ export interface MerchantRecord {
   publications?: MerchantPublicationSummary[];
   /** 该商家匹配查询的商品 SKU（marketplace 商品 FTS 路由），供 RFQ 用商家自有 SKU。 */
   matching_skus?: string[];
+  /** Catalog agent 记录 id（受控获取 WorkBuddy 访问配置时使用）。 */
+  catalog_agent_id?: string;
+  /**
+   * Catalog 公开的访问能力投影（G1 §2.2）：存在即表示该商家经 WorkBuddy 网关
+   * 暴露，出站请求必须带分享参数。**不含分享码本身**。
+   */
+  runtime_access?: {
+    provider: "workbuddy";
+    access_mode: "share_parameter";
+    parameter_name: "sharecode";
+    config_version: number;
+    adapter_version: "workbuddy-share-v1";
+    auth_mode: "signature";
+  };
   /**
    * 配送时效摘要（商家按区域维护，如 `东北 3-4天；华北 1-2天`）。来自 listing
    * 的 commercial_hints.lead_time_hint；买家发现/选择时的重要指标。

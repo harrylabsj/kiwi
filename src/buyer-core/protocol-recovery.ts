@@ -1,4 +1,5 @@
 /** Private buyer recovery using existing Ledger and idempotency formats. */
+import { A2AClientError } from "../a2a/client/error.js";
 import { contentDigest } from "../negotiation/jcs.js";
 import { LedgerStore } from "../negotiation/ledger/store.js";
 import type { LedgerEvent, LedgerEventContent } from "../negotiation/ledger/event.js";
@@ -243,6 +244,14 @@ export class BuyerProtocolRecovery {
       return await this.resume(sent, input.get, input.timeoutMs, input.pollIntervalMs, task);
     } catch (error) {
       if (error instanceof ProtocolOperationConflict || error instanceof BuyerReplyRejected) throw error;
+      // 401/403 是**发送前**的拒绝（平台门禁/认证），消息没有到达商家；把它
+      // 归为"结果未知"会让上层误判并隐去过期/错码的真实原因（B-07）。
+      if (
+        error instanceof A2AClientError &&
+        (error.httpStatus === 401 || error.httpStatus === 403)
+      ) {
+        throw error;
+      }
       throw new ProtocolOperationUnknown();
     }
   }

@@ -68,8 +68,18 @@ import {
   runtimePublicKey,
   type DeviceEnrollmentPoll,
   type PublicBinding,
+  type RuntimeAccessContext,
+  type RuntimeAccessProjection,
   type RuntimeSigningIdentity,
 } from "./catalog-client.js";
+import {
+  assertShareLinkMatchesRuntimeOrigin,
+  buildWorkbuddyAccessConfig,
+  buildWorkbuddyAccessRevocation,
+  parseWorkbuddyShareLink,
+  WorkbuddyShareLinkError,
+  type WorkbuddyAccessConfig,
+} from "./access/workbuddy-share-link.js";
 import {
   enrollmentStorePath,
   readEnrollmentStore as readEnrollmentStoreRaw,
@@ -215,6 +225,11 @@ export interface ConnectionSession extends AuthorizedEnrollment {
   active_card_revision?: number;
   expected_card_revision?: number;
   card_revision?: number;
+  /**
+   * WorkBuddy 访问配置的最近一次已知状态（M-03）。只保存脱敏投影：分享码
+   * 由 Catalog 受控保存，运行时这一侧从不落盘、从不回显。
+   */
+  runtime_access?: RuntimeAccessRecord;
 }
 
 /**
@@ -338,6 +353,12 @@ export interface MerchantConnectionServiceOptions {
   loadPublicCard?: () => Promise<AgentCard>;
   /** 绑定验真后、发名片前调用；失败保留 bound、不发布。 */
   beforePublish?: (binding: VerifiedBinding) => Promise<void>;
+  /**
+   * 可选：WorkBuddy 分享链接（`KIWI_CLOUD_ACCESS_SHARE_LINK`）。设置后首绑会
+   * 随绑定提交访问配置（Catalog 暂存并在绑定提交时激活）。后续更新/撤销走
+   * 工作台 `PUT runtime-access`。
+   */
+  accessShareLink?: string;
   /** 仅测试/本地回环：放宽公网 host 白名单（默认绝不放宽 CLI 的私网边界）。 */
   allowPrivateOrigin?: boolean;
 }
@@ -353,6 +374,88 @@ export interface MerchantConnectionService {
   getPairing(): ConnectionPairing | null;
   /** 已验证绑定（bound/published 且未过期；published 另经 Catalog 复核）；无则 null。 */
   getVerifiedBinding(): Promise<VerifiedBinding | null>;
+  /** WorkBuddy 访问配置的本地已知状态（M-04：平台门禁是独立于绑定的信号）。 */
+  getAccessSummary(): RuntimeAccessSummary;
+  /** 向 Catalog 拉取权威状态（签名 GET）；本地状态丢失时用它恢复版本。 */
+  refreshAccess(): Promise<RuntimeAccessSummary>;
+  /** 商家粘贴分享链接 → 提交/更新访问配置（M-02/M-03）；分享码永不回显。 */
+  submitAccessShareLink(rawLink: string): Promise<RuntimeAccessSummary>;
+  /** 撤销访问配置（M-03）；停止向 Buyer 发放分享码。 */
+  revokeAccess(): Promise<RuntimeAccessSummary>;
+}
+
+/** WorkBuddy 访问配置对工作台可见的状态（`none` = Catalog 上没有配置）。 */
+export type RuntimeAccessStatus = "none" | "pending" | "active" | "invalid" | "revoked";
+
+export interface RuntimeAccessSummary {
+  /** 平台门禁是否已配置为 active（不等于运行时健康，也不等于绑定有效）。 */
+  configured: boolean;
+  status: RuntimeAccessStatus;
+  configVersion: number;
+  provider: string | null;
+  adapterVersion: string | null;
+  authMode: string | null;
+  updatedAt: string | null;
+}
+
+/** 会话内持久化的访问配置投影（只有脱敏元数据，没有分享码）。 */
+export interface RuntimeAccessRecord {
+  config_version: number;
+  status: RuntimeAccessStatus;
+  provider: string | null;
+  access_mode: string | null;
+  parameter_name: string | null;
+  adapter_version: string | null;
+  auth_mode: string | null;
+  updated_at: string;
+}
+
+/** 会话里的脱敏投影 → 工作台视图；没有记录即"未配置"。 */
+function accessSummaryOf(session: ConnectionSession | undefined): RuntimeAccessSummary {
+  const record = session?.runtime_access;
+  return {
+    configured: record?.status === "active",
+    status: record?.status ?? "none",
+    configVersion: record?.config_version ?? 0,
+    provider: record?.provider ?? null,
+    adapterVersion: record?.adapter_version ?? null,
+    authMode: record?.auth_mode ?? null,
+    updatedAt: record?.updated_at ?? null,
+  };
+}
+
+/**
+ * 访问配置写失败 → 工作台安全码。绝不携带分享码、完整带码 URL 或远端原文：
+ * 只保留自有码与一句可展示的说明。
+ */
+function accessError(error: unknown): MerchantConnectError {
+  if (error instanceof WorkbuddyShareLinkError) {
+    return new MerchantConnectError(error.code, error.message);
+  }
+  if (error instanceof CatalogClientError) {
+    switch (error.code) {
+      case "CONFLICT":
+        return new MerchantConnectError(
+          "ACCESS_VERSION_CONFLICT",
+          "访问配置版本冲突，请刷新状态后重试",
+        );
+      case "REQUEST_REJECTED":
+        return new MerchantConnectError(
+          "ACCESS_REJECTED",
+          "Catalog 拒绝了访问配置，请确认绑定仍有效后重试",
+        );
+      case "NOT_FOUND":
+        return new MerchantConnectError(
+          "ACCESS_NOT_FOUND",
+          "Catalog 上没有该 Agent 的活动绑定",
+        );
+      case "CATALOG_UNREACHABLE":
+        return new MerchantConnectError("ACCESS_UNAVAILABLE", "Catalog 暂不可达，请稍后重试");
+      default:
+        return new MerchantConnectError("ACCESS_REJECTED", "访问配置提交失败");
+    }
+  }
+  return new MerchantConnectError("ACCESS_UNAVAILABLE", "访问配置提交失败");
 }
 
 function cardDigest(card: AgentCard): string {
@@ -434,6 +537,12 @@ class ConnectionServiceImpl implements MerchantConnectionService {
   private readonly now: () => Date;
   private readonly loadPublicCard: () => Promise<AgentCard>;
   private readonly beforePublish: ((binding: VerifiedBinding) => Promise<void>) | undefined;
+  /**
+   * 首绑时随绑定提交的 WorkBuddy 访问配置（可选，一鍵上云用）。
+   * 只在 `stepAuthorized` 的 enrollment 绑定里使用；后续更新/撤销一律走
+   * 工作台的 PUT runtime-access（版本可读、可撤销）。
+   */
+  private readonly firstBindAccessConfig: WorkbuddyAccessConfig | undefined;
   /** begin/reconcile 串行（排队不交错）。 */
   private mutex: Promise<unknown> = Promise.resolve();
   /** poll 节流（内存态；重启后首趟允许立即 poll）。 */
@@ -451,6 +560,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     this.dataDir = options.dataDir;
     this.generation = options.generation ?? 1;
     this.serviceEpoch = options.serviceEpoch ?? 1;
+    const shareLink = String(options.accessShareLink ?? "").trim();
     const trimmed = String(options.publicOrigin ?? "")
       .trim()
       .replace(/\/+$/, "");
@@ -486,6 +596,14 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     }
     this.origin = normalizeOrigin(trimmed);
     this.a2aEndpoint = `${this.origin}/a2a`;
+    if (shareLink === "") {
+      this.firstBindAccessConfig = undefined;
+    } else {
+      // 配置错误必须显式失败（不静默跳过）：链接不属于本实例就说明商家配错了。
+      const link = parseWorkbuddyShareLink(shareLink);
+      assertShareLinkMatchesRuntimeOrigin(link, this.origin);
+      this.firstBindAccessConfig = buildWorkbuddyAccessConfig(link, 0);
+    }
     this.client = new CatalogClient({
       baseUrl: options.catalogUrl,
       ...(options.now !== undefined ? { now: options.now } : {}),
@@ -874,6 +992,133 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     }
   }
 
+  // ── WorkBuddy 访问配置（M-02/M-03/M-04）────────────────────────────
+
+  getAccessSummary(): RuntimeAccessSummary {
+    const session = this.selectSession(readEnrollmentStore(this.dataDir));
+    return accessSummaryOf(session as ConnectionSession | undefined);
+  }
+
+  async refreshAccess(): Promise<RuntimeAccessSummary> {
+    const { session, context } = this.requireAccessTarget();
+    const { configVersion, runtimeAccess } = await this.client.readRuntimeAccess(
+      context,
+      this.identity,
+    );
+    this.recordAccess(session.enrollment_id, configVersion, runtimeAccess);
+    return this.getAccessSummary();
+  }
+
+  async submitAccessShareLink(rawLink: string): Promise<RuntimeAccessSummary> {
+    // 解析先于任何网络动作：非法链接不会产生请求，也不会把链接内容带进日志。
+    const link = parseWorkbuddyShareLink(rawLink);
+    assertShareLinkMatchesRuntimeOrigin(link, this.origin);
+    const { session, context } = this.requireAccessTarget();
+    const expectedVersion = session.runtime_access?.config_version ?? 0;
+    let projection: RuntimeAccessProjection;
+    try {
+      projection = await this.client.updateRuntimeAccess(
+        context,
+        this.identity,
+        buildWorkbuddyAccessConfig(link, expectedVersion),
+      );
+    } catch (error) {
+      if (!(error instanceof CatalogClientError) || error.code !== "CONFLICT") {
+        throw accessError(error);
+      }
+      // 本地版本落后（重装/恢复/并发）：以 Catalog 权威读校正后**只重试一次**。
+      const authoritative = await this.client.readRuntimeAccess(context, this.identity);
+      try {
+        projection = await this.client.updateRuntimeAccess(
+          context,
+          this.identity,
+          buildWorkbuddyAccessConfig(link, authoritative.configVersion),
+        );
+      } catch (retryError) {
+        throw accessError(retryError);
+      }
+    }
+    this.recordAccess(session.enrollment_id, projection.configVersion, projection);
+    return this.getAccessSummary();
+  }
+
+  async revokeAccess(): Promise<RuntimeAccessSummary> {
+    const { session, context } = this.requireAccessTarget();
+    let version = session.runtime_access?.config_version ?? 0;
+    if (version < 1) {
+      // 本地没有版本：读 Catalog 权威值，避免"明明已配置却撤不掉"。
+      version = (await this.client.readRuntimeAccess(context, this.identity)).configVersion;
+    }
+    if (version < 1) {
+      throw new MerchantConnectError("ACCESS_NOT_CONFIGURED", "当前没有可撤销的访问配置");
+    }
+    let projection: RuntimeAccessProjection;
+    try {
+      projection = await this.client.updateRuntimeAccess(
+        context,
+        this.identity,
+        buildWorkbuddyAccessRevocation(version),
+      );
+    } catch (error) {
+      throw accessError(error);
+    }
+    this.recordAccess(session.enrollment_id, projection.configVersion, projection);
+    return this.getAccessSummary();
+  }
+
+  /** 访问配置只对已建立绑定的会话有意义；拿到 (session, 签名上下文) 或明确失败。 */
+  private requireAccessTarget(): {
+    session: ConnectionSession;
+    context: RuntimeAccessContext;
+  } {
+    const session = this.selectSession(readEnrollmentStore(this.dataDir)) as
+      | ConnectionSession
+      | undefined;
+    if (session === undefined) {
+      throw new MerchantConnectError("STATE_INVALID", "尚未建立 Catalog 连接");
+    }
+    const agentId = session.catalog_agent_id;
+    const bindingId = session.binding_id;
+    if (agentId === undefined || bindingId === undefined) {
+      throw new MerchantConnectError("STATE_INVALID", "尚未完成 Catalog 绑定，暂不能配置访问凭据");
+    }
+    return {
+      session,
+      context: {
+        agentId,
+        bindingId,
+        keyId: this.identity.keyId,
+        runtimeOrigin: this.origin,
+        serviceEpoch: this.serviceEpoch,
+      },
+    };
+  }
+
+  /** 持久化脱敏投影；`projection === null` 表示 Catalog 上没有配置（记 none）。 */
+  private recordAccess(
+    enrollmentId: string,
+    configVersion: number,
+    projection: RuntimeAccessProjection | null,
+  ): void {
+    const record: RuntimeAccessRecord = {
+      config_version: configVersion,
+      status: (projection?.status ?? "none") as RuntimeAccessStatus,
+      provider: projection?.provider ?? null,
+      access_mode: projection?.accessMode ?? null,
+      parameter_name: projection?.parameterName ?? null,
+      adapter_version: projection?.adapterVersion ?? null,
+      auth_mode: projection?.authMode ?? null,
+      updated_at: projection?.updatedAt ?? this.now().toISOString(),
+    };
+    this.persist((fresh) =>
+      fresh.sessions.map((item) =>
+        item.enrollment_id === enrollmentId
+          ? { ...(item as ConnectionSession), runtime_access: record }
+          : item,
+      ),
+    );
+  }
+
   // ── 协议单步（自 CLI 状态机原样搬移，顺序与校验一致）──────────────────
 
   /** begin/reconcile 后本趟已确认 published 健康（发布成功即视为已验证）。 */
@@ -992,6 +1237,9 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         generation: session.generation ?? this.generation,
         serviceEpoch: this.serviceEpoch,
         authorizationEpoch: session.authorization_epoch,
+        ...(this.firstBindAccessConfig !== undefined
+          ? { accessConfig: this.firstBindAccessConfig }
+          : {}),
       },
       this.identity,
     );

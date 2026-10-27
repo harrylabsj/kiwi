@@ -93,6 +93,11 @@ export interface A2AClientOptions {
   /** 选定 binding 的端点 URL（来自 capability intersection 的 remote interface url）。 */
   url: string;
   /**
+   * 可选：实际发送地址。只在 WorkBuddy 适配下与 `url` 不同（`url` 追加一个
+   * `sharecode`）；签名仍覆盖 `url`。必须同源，且只允许该单一差异。
+   */
+  sendUrl?: string;
+  /**
    * 线协议版本（issue 06/09）：缺省 `"1.0"`（Card 声明 1.0 ↔ 默认 client 讲 1.0）
    * ——发 `A2A-Version` + `A2A-Extensions` + 1.0 方法名（SendMessage/GetTask）
    * + 1.0 Part 编码。`"0.3"` 走 legacy 帧（message/send/tasks/get + kind Part）。

@@ -28,6 +28,7 @@
 
 import { newNegotiationId } from "../negotiation/domain/identifiers.js";
 import {
+  A2AEndpointResolutionError,
   buildA2AClient,
   buildRfqEnvelope,
   envelopeToMessage,
@@ -37,6 +38,37 @@ import type { QuoteCandidateInput, QuoteFetcher, MerchantRecord } from "./servic
 
 import { BuyerProtocolRecovery, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext, type ProtocolReply } from "./protocol-recovery.js";
 import { BuyerReplyRejected } from "./receive-gate.js";
+
+/**
+ * WorkBuddy 访问配置在出站请求里的唯一用途：把签名地址映射成发送地址
+ * （追加平台门禁参数）。实现方必须保证两者同源（B-08）。
+ */
+export interface MerchantAccessTransport {
+  sendUrlFor(signUrl: string): string;
+}
+
+/**
+ * 平台门禁不可用（配置缺失/会话被拒/目录不可达）。与"商家拒绝报价"是两件事：
+ * 上层必须能分开归类，不能把它误报成商家业务拒绝（B-07）。
+ */
+export class MerchantAccessUnavailable extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+
+  constructor(code: string, message: string, retryable = false) {
+    super(message);
+    this.name = "MerchantAccessUnavailable";
+    this.code = code;
+    this.retryable = retryable;
+  }
+}
+
+export interface MerchantAccessResolver {
+  /** 按发现到的商家解析（主路径）。`null` 表示该商家不需要平台门禁参数。 */
+  forMerchant(merchant: MerchantRecord): Promise<MerchantAccessTransport | null>;
+  /** 按端点回源（协议恢复路径只知道端点）。 */
+  forEndpoint(endpointUrl: string): Promise<MerchantAccessTransport | null>;
+}
 
 export interface A2AQuoteFetcherOptions {
   /** 允许打到私网/保留网段（SSRF 逃生门；本地试点直连时开）。 */
@@ -51,6 +83,19 @@ export interface A2AQuoteFetcherOptions {
   protocolStateDir?: string;
   localBuyerAgentId?: string;
   now?: () => string;
+  /**
+   * 可选：WorkBuddy 平台门禁解析器。商家记录声明 `runtime_access` 时必须提供，
+   * 且解析失败/为空一律 fail-closed（不静默降级为无码直连）。
+   */
+  merchantAccess?: MerchantAccessResolver;
+}
+
+/**
+ * 从任意错误文本里抹掉分享参数（B-08）：即使某层错误带上了完整发送地址，
+ * 落日志/回执的文本也不含分享码。与具体值无关，按参数名替换。
+ */
+function redactShareParameter(text: string): string {
+  return text.replace(/([?&])sharecode=[^&\s"'#]*/gi, "$1sharecode=<redacted>");
 }
 
 const DEFAULT_POLL_MS = 2000;
@@ -188,6 +233,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   private readonly fetchImpl: typeof fetch;
   private readonly rpcFetchImpl?: typeof fetch;
   private readonly recovery?: BuyerProtocolRecovery;
+  private readonly merchantAccess?: MerchantAccessResolver;
   private readonly endpointCache = new Map<string, string>();
   private readonly now: () => string;
 
@@ -202,6 +248,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     // transport may replace the A2A client's pinned RPC default.
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.rpcFetchImpl = options.fetchImpl;
+    this.merchantAccess = options.merchantAccess;
     if (options.protocolStateDir && options.localBuyerAgentId) this.recovery = new BuyerProtocolRecovery(options.protocolStateDir, options.localBuyerAgentId, options.now);
   }
 
@@ -228,7 +275,8 @@ export class A2AQuoteFetcher implements QuoteFetcher {
       };
     }
     try {
-      const endpoint = await this.resolveEndpoint(agentCardUrl);
+      const access = await this.accessForMerchant(merchant);
+      const endpoint = await this.resolveEndpoint(agentCardUrl, access);
       const sku = merchant.matching_skus?.[0] ?? firstSku(intent);
       const negotiationId = newNegotiationId();
       const envelope = buildRfqEnvelope({
@@ -239,10 +287,13 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         now: this.now,
       });
       const client = buildA2AClient(endpoint, {
-        bearerToken: this.bearerToken,
+        // WorkBuddy 路径不发送标准 Bearer：平台会改写 Authorization（G0 §1.1.3），
+        // 继续附带只会让上层误以为认证已生效。业务认证走签名（B-05/B-06）。
+        bearerToken: access === null ? this.bearerToken : undefined,
         allowPrivateRanges: this.allowPrivateRanges,
         skipDnsCheck: this.skipDnsCheck,
         timeoutMs: this.timeoutMs,
+        ...(access !== null ? { sendUrl: access.sendUrlFor(endpoint) } : {}),
         ...(this.rpcFetchImpl !== undefined ? { fetchImpl: this.rpcFetchImpl } : {}),
       });
       if (!this.recovery || !context) throw new ProtocolOperationUnknown();
@@ -255,13 +306,40 @@ export class A2AQuoteFetcher implements QuoteFetcher {
       });
       return this.project(exchange);
     } catch (error) {
+      if (error instanceof A2AEndpointResolutionError) {
+        const denied = error.httpStatus === 401 || error.httpStatus === 403;
+        return {
+          merchant_id: merchantId,
+          status: "failed",
+          failure: {
+            // 平台门禁/认证拒绝（401/403）与"商家不可达"必须分开：前者换码
+            // 或补认证后重试，后者是网络/服务问题（B-07）。
+            classification: denied ? "access_denied" : "unreachable",
+            retryable: !denied,
+            detail: redactShareParameter(error.message),
+          },
+        };
+      }
+      if (error instanceof MerchantAccessUnavailable) {
+        return {
+          merchant_id: merchantId,
+          status: "failed",
+          failure: {
+            classification: "access_unavailable",
+            retryable: error.retryable,
+            detail: redactShareParameter(`${error.code}: ${error.message}`),
+          },
+        };
+      }
       return {
         merchant_id: merchantId,
         status: "failed",
         failure: {
           classification: "protocol_error",
           retryable: !(error instanceof ProtocolOperationUnknown || error instanceof ProtocolOperationConflict || error instanceof BuyerReplyRejected),
-          detail: error instanceof BuyerReplyRejected ? error.reason : error instanceof Error ? error.message : String(error),
+          detail: redactShareParameter(
+            error instanceof BuyerReplyRejected ? error.reason : error instanceof Error ? error.message : String(error),
+          ),
         },
       };
     }
@@ -281,18 +359,68 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   }
   async recoverQuotes(context:ProtocolTaskContext):Promise<QuoteCandidateInput[]> {
     if(!this.recovery)throw new ProtocolOperationUnknown();
-    const results=await this.recovery.recover(context,(endpoint,id)=>buildA2AClient(endpoint,{
-      bearerToken:this.bearerToken,allowPrivateRanges:this.allowPrivateRanges,skipDnsCheck:this.skipDnsCheck,timeoutMs:this.timeoutMs,...(this.rpcFetchImpl!==undefined?{fetchImpl:this.rpcFetchImpl}:{}),
-    }).getTask(id),this.timeoutMs,this.pollIntervalMs);
+    const results=await this.recovery.recover(context,async (endpoint,id)=>{
+      // 恢复路径只知道端点：用按 origin 的映射继续带码（B-04：不是只对首次请求有效）。
+      const access=this.merchantAccess===undefined?null:await this.merchantAccess.forEndpoint(endpoint);
+      return buildA2AClient(endpoint,{
+        bearerToken:this.bearerToken,allowPrivateRanges:this.allowPrivateRanges,skipDnsCheck:this.skipDnsCheck,timeoutMs:this.timeoutMs,
+        ...(access!==null?{sendUrl:access.sendUrlFor(endpoint)}:{}),
+        ...(this.rpcFetchImpl!==undefined?{fetchImpl:this.rpcFetchImpl}:{}),
+      }).getTask(id);
+    },this.timeoutMs,this.pollIntervalMs);
     return results.map(result=>this.project(result));
   }
 
+  /**
+   * 平台门禁解析：声明了 `runtime_access` 的商家必须有可用的发送地址，
+   * 否则 fail-closed（抛出被 requestQuote 归类为 access_unavailable）。
+   */
+  private async accessForMerchant(
+    merchant: MerchantRecord,
+  ): Promise<MerchantAccessTransport | null> {
+    if (merchant.runtime_access === undefined) return null;
+    if (this.merchantAccess === undefined) {
+      throw new MerchantAccessUnavailable(
+        "ACCESS_RESOLVER_MISSING",
+        "merchant requires a platform access configuration but no resolver is configured",
+      );
+    }
+    let transport: MerchantAccessTransport | null;
+    try {
+      transport = await this.merchantAccess.forMerchant(merchant);
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      const transient = code === "request_failed" || code === "request_timeout";
+      throw new MerchantAccessUnavailable(
+        typeof code === "string" ? code.toUpperCase() : "ACCESS_UNAVAILABLE",
+        error instanceof Error ? error.message : "merchant platform access lookup failed",
+        transient,
+      );
+    }
+    if (transport === null) {
+      throw new MerchantAccessUnavailable(
+        "ACCESS_NOT_CONFIGURED",
+        "merchant platform access configuration is unavailable",
+      );
+    }
+    return transport;
+  }
+
   /** 解析 agent card JSONRPC 端点（按 card URL 缓存；拒绝非 http(s)）。 */
-  private async resolveEndpoint(agentCardUrl: string): Promise<string> {
-    const cached = this.endpointCache.get(agentCardUrl);
+  private async resolveEndpoint(
+    agentCardUrl: string,
+    access: MerchantAccessTransport | null = null,
+  ): Promise<string> {
+    const cacheKey = `${access === null ? "" : "access:"}${agentCardUrl}`;
+    const cached = this.endpointCache.get(cacheKey);
     if (cached !== undefined) return cached;
-    const endpoint = await resolveA2aEndpoint(this.fetchImpl, agentCardUrl, this.timeoutMs);
-    this.endpointCache.set(agentCardUrl, endpoint);
+    const endpoint = await resolveA2aEndpoint(
+      this.fetchImpl,
+      agentCardUrl,
+      this.timeoutMs,
+      access === null ? undefined : (url) => access.sendUrlFor(url),
+    );
+    this.endpointCache.set(cacheKey, endpoint);
     return endpoint;
   }
 

@@ -452,6 +452,9 @@ function mapRecord(record: CatalogAgentRecord): MerchantRecord {
     capabilities: record.capabilities ? [...record.capabilities] : [],
     // 新鲜度透传（WP6）：catalog 读时按 last_seen_at + TTL 派生。
     freshness_state: record.freshness_state,
+    catalog_agent_id: record.catalog_agent_id,
+    // 平台门禁投影（G1 §2.2）：只含能力元数据，分享码另行受控获取。
+    ...(record.runtime_access !== undefined ? { runtime_access: record.runtime_access } : {}),
   };
 }
 

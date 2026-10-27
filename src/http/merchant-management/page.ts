@@ -284,6 +284,57 @@ function appendCatalogConnection(html) {
     return html + '<div class="card"><h2>连接 Kiwi 目录</h2><p>暂时无法读取连接状态，请稍后刷新。</p></div>';
   });
 }
+function accessStatusText(a) {
+  if (!a) return "暂时无法读取访问配置状态";
+  if (a.status === "active") return "已生效（配置版本 " + a.configVersion + "）";
+  if (a.status === "pending") return "已提交，等待平台校验";
+  if (a.status === "invalid") return "校验未通过，请重新提交分享链接";
+  if (a.status === "revoked") return "已撤销，采购方当前无法经平台网关访问";
+  return "未配置：WorkBuddy 上的采购方无法访问本店";
+}
+function appendCatalogAccess(html) {
+  if (!CATALOG_CONNECT || ROLE !== "owner") return html;
+  return call("GET", "/catalog/access").then(function (result) {
+    var a = result.access || {};
+    return html + '<div class="card"><h2>WorkBuddy 分享码（平台门禁）</h2>' +
+      '<p id="access-status">' + esc(accessStatusText(a)) + '</p>' +
+      '<p class="muted">分享码只用于通过 WorkBuddy 网关，不是商家身份或业务授权。本页不会显示分享码；请从平台复制分享链接后粘贴在此。</p>' +
+      '<div class="row"><input id="access-link" type="text" autocomplete="off" spellcheck="false" aria-label="WorkBuddy 分享链接" placeholder="粘贴 WorkBuddy 分享链接">' +
+      '<button class="act primary" onclick="submitAccessLink()">提交或更新</button>' +
+      '<button class="act" onclick="refreshAccess()">刷新状态</button>' +
+      (a.status === "active" ? '<button class="act danger" onclick="revokeAccess()">撤销</button>' : '') + '</div>' +
+      (a.authMode ? '<p class="muted">业务认证：' + esc(a.authMode) + ' · 适配版本：' + esc(a.adapterVersion || "-") + '</p>' : '') +
+      '</div>';
+  }).catch(function () {
+    return html + '<div class="card"><h2>WorkBuddy 分享码（平台门禁）</h2><p>暂时无法读取访问配置状态，请稍后刷新。</p></div>';
+  });
+}
+function accessSummaryBar(a, verb) {
+  bar(verb + "：" + accessStatusText(a), a && a.status === "invalid");
+}
+function submitAccessLink() {
+  var input = $("access-link");
+  var link = input ? String(input.value || "").trim() : "";
+  if (!link) { bar("请先粘贴 WorkBuddy 分享链接。", true); return; }
+  call("POST", "/catalog/access/share-link", { link: link }).then(function (result) {
+    if (input) input.value = "";
+    accessSummaryBar(result.access, "已提交");
+  }).catch(function (e) {
+    // 错误文本由服务端给自有码说明；不把链接回显到页面。
+    bar(e && e.message ? e.message : "提交未完成，请稍后重试。", true);
+  });
+}
+function refreshAccess() {
+  call("POST", "/catalog/access/refresh", {}).then(function (result) {
+    accessSummaryBar(result.access, "已刷新");
+  }).catch(function () { bar("刷新访问配置状态失败。", true); });
+}
+function revokeAccess() {
+  if (!window.confirm("撤销后采购方将无法经 WorkBuddy 访问本店，确定撤销？")) return;
+  call("POST", "/catalog/access/revoke", {}).then(function (result) {
+    accessSummaryBar(result.access, "已撤销");
+  }).catch(function () { bar("撤销未完成，请稍后重试。", true); });
+}
 function beginCatalogConnect() {
   if (catalogBeginPending) return;
   catalogBeginPending = true;
@@ -341,7 +392,7 @@ var views = {
           html += '<p class="muted">恢复接待需要 owner 角色。</p>';
         }
       }
-      return appendCatalogConnection(html + "</div>");
+      return appendCatalogConnection(html + "</div>").then(appendCatalogAccess);
     });
   },
   products: function () {

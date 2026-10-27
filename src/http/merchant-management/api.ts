@@ -156,6 +156,20 @@ const MAX_BODY_BYTES = 1_048_576;
 /** 非候选写命令确认引用的有效期（BD §7.3：短时、单次）。 */
 const CONFIRMATION_TTL_MS = 5 * 60 * 1000;
 
+/**
+ * WorkBuddy 访问配置对工作台可见的脱敏视图（M-04）：平台门禁是独立于
+ * 运行时健康与 Catalog 绑定的第三个信号，工作台必须分开显示。
+ */
+export interface CatalogAccessSummary {
+  configured: boolean;
+  status: string;
+  configVersion: number;
+  provider: string | null;
+  adapterVersion: string | null;
+  authMode: string | null;
+  updatedAt: string | null;
+}
+
 export interface MerchantManagementApiOptions {
   /** 本实例商家（服务端绑定；不来自请求）。 */
   merchantId: string;
@@ -248,6 +262,14 @@ export interface MerchantManagementApiOptions {
       expires_at: string;
     } | null>;
     begin: () => Promise<unknown>;
+    /**
+     * WorkBuddy 访问配置（M-03/M-04）。全部只返回脱敏投影：分享码由 Catalog
+     * 受控保存，运行时与工作台都从不回显。缺省（undefined）时对应路由 503。
+     */
+    getAccess?: () => Promise<CatalogAccessSummary>;
+    refreshAccess?: () => Promise<CatalogAccessSummary>;
+    submitAccessShareLink?: (link: string) => Promise<CatalogAccessSummary>;
+    revokeAccess?: () => Promise<CatalogAccessSummary>;
   };
   /** Workbench v1 trusted confirmation authority; absent means strong-confirmation routes fail closed. */
   workbenchConfirmations?: WorkbenchConfirmationStore;
@@ -526,6 +548,17 @@ export function createMerchantManagementApiHandler(
       const result = await channel.getDraft(listingDraftMatch[1]!);
       if (!result.found) throw new ManagementError("not_found", "publication draft does not exist");
       writeJson(res, 200, result, { "x-request-id": requestId });
+      return;
+    }
+    if (rest === "/catalog/access") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "onboarding:manage");
+      if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "only owner can manage Catalog access");
+      const channel = options.catalogConnection;
+      if (channel?.getAccess === undefined) {
+        throw new ManagementError("unavailable", "Catalog access configuration is not configured");
+      }
+      await runAccessRoute(res, requestId, () => channel.getAccess!());
       return;
     }
     if (rest === "/catalog/connect" || rest === "/catalog/connect/pairing") {
@@ -1009,6 +1042,39 @@ export function createMerchantManagementApiHandler(
         if (err instanceof ManagementError) throw err;
         throw new ManagementError("unavailable", "商品发布结果暂无法确认，请查看原草稿回执后决定是否续办。");
       }
+      return;
+    }
+    if (
+      rest === "/catalog/access/refresh" ||
+      rest === "/catalog/access/share-link" ||
+      rest === "/catalog/access/revoke"
+    ) {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "onboarding:manage");
+      if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "only owner can manage Catalog access");
+      const channel = options.catalogConnection;
+      if (rest === "/catalog/access/refresh") {
+        if (channel?.refreshAccess === undefined) {
+          throw new ManagementError("unavailable", "Catalog access configuration is not configured");
+        }
+        await runAccessRoute(res, requestId, () => channel.refreshAccess!());
+        return;
+      }
+      if (rest === "/catalog/access/revoke") {
+        if (channel?.revokeAccess === undefined) {
+          throw new ManagementError("unavailable", "Catalog access configuration is not configured");
+        }
+        await runAccessRoute(res, requestId, () => channel.revokeAccess!());
+        return;
+      }
+      if (channel?.submitAccessShareLink === undefined) {
+        throw new ManagementError("unavailable", "Catalog access configuration is not configured");
+      }
+      // 分享链接只作为输入被解析；任何回执都不回显链接或其中的分享码。
+      const fields = objectFields(await readJsonBody(req), ["link"]);
+      const link = requireString(fields["link"], "link");
+      await runAccessRoute(res, requestId, () => channel.submitAccessShareLink!(link));
       return;
     }
     if (rest === "/catalog/connect/begin") {
@@ -3877,6 +3943,49 @@ function writeWorkbenchProblem(
     "x-request-id": requestId,
   });
   res.end(JSON.stringify(body));
+}
+
+/**
+ * WorkBuddy 访问配置路由的统一出口：成功只回脱敏摘要，失败按自有码翻译成
+ * Workbench problem（不反射远端原文、不含分享码或带码 URL）。
+ */
+async function runAccessRoute(
+  res: ServerResponse,
+  requestId: string,
+  run: () => Promise<CatalogAccessSummary>,
+): Promise<void> {
+  try {
+    const access = await run();
+    writeJson(res, 200, { access }, { "x-request-id": requestId });
+  } catch (error) {
+    const rawCode = (error as { code?: unknown } | null)?.code;
+    const code = typeof rawCode === "string" ? rawCode : "";
+    const mapping: Record<string, WorkbenchProblemCode> = {
+      ACCESS_VERSION_CONFLICT: "VERSION_CONFLICT",
+      ACCESS_REJECTED: "VALIDATION_ERROR",
+      ACCESS_NOT_CONFIGURED: "VALIDATION_ERROR",
+      ACCESS_NOT_FOUND: "RESOURCE_NOT_FOUND",
+      ACCESS_UNAVAILABLE: "DEPENDENCY_UNAVAILABLE",
+      STATE_INVALID: "VALIDATION_ERROR",
+      MALFORMED_URL: "VALIDATION_ERROR",
+      NOT_HTTPS: "VALIDATION_ERROR",
+      USERINFO: "VALIDATION_ERROR",
+      FRAGMENT: "VALIDATION_ERROR",
+      INVALID_PORT: "VALIDATION_ERROR",
+      MISSING_SHARECODE: "VALIDATION_ERROR",
+      DUPLICATE_SHARECODE: "VALIDATION_ERROR",
+      EMPTY_SHARECODE: "VALIDATION_ERROR",
+      SHARECODE_TOO_LONG: "VALIDATION_ERROR",
+      ORIGIN_MISMATCH: "VALIDATION_ERROR",
+    };
+    writeWorkbenchProblem(
+      res,
+      mapping[code] ?? "DEPENDENCY_UNAVAILABLE",
+      requestId,
+      "访问配置未完成",
+      error instanceof Error && error.message.trim() !== "" ? error.message : "访问配置未完成",
+    );
+  }
 }
 
 function respondWorkbenchError(res: ServerResponse, error: unknown, requestId: string): void {

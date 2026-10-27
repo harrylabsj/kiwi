@@ -48,8 +48,24 @@ import {
 import { METHOD_GET_TASK, METHOD_SEND_MESSAGE } from "../v1/methods.js";
 import { encodeV1Part } from "../v1/part.js";
 
+/**
+ * 去掉发送地址上唯一的 `sharecode` 参数，供"签名地址 == 发送地址去码"的
+ * 同源约束校验使用。仅用于比较，不做任何业务用途。
+ */
+function stripSharecode(url: URL): string {
+  const clone = new URL(url.href);
+  clone.searchParams.delete("sharecode");
+  return clone.href;
+}
+
 export class A2AClient {
+  /** 签名地址：签名覆盖的就是它（WorkBuddy 适配下不带分享参数）。 */
   private readonly url: URL;
+  /**
+   * 实际发送地址。与签名地址只在 WorkBuddy 适配下不同（末尾多一个分享参数，
+   * 平台网关校验后剥除）；其它情况恒等于签名地址。两者必须同源。
+   */
+  private readonly sendUrl: URL;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly customTransport: boolean;
@@ -64,6 +80,16 @@ export class A2AClient {
 
   constructor(options: A2AClientOptions) {
     this.url = assertSafeTargetUrl(options.url, { allowPrivateRanges: options.allowPrivateRanges });
+    const wire = options.sendUrl === undefined ? this.url : assertSafeTargetUrl(options.sendUrl, { allowPrivateRanges: options.allowPrivateRanges });
+    if (wire.origin !== this.url.origin) {
+      // 发送地址与签名地址必须同源：否则等于把凭据发给了另一个域。
+      throw new A2AClientError("unsafe_target", "sendUrl must share the signing URL origin");
+    }
+    if (wire.href !== this.url.href && !(wire.searchParams.getAll("sharecode").length === 1 && stripSharecode(wire) === this.url.href)) {
+      // 只允许"签名地址 + 一个分享参数"的差异；其它改写一律拒绝（不猜）。
+      throw new A2AClientError("unsafe_target", "sendUrl may only add a single sharecode parameter");
+    }
+    this.sendUrl = wire;
     this.timeoutMs = options.timeoutMs ?? 15_000;
     this.customTransport = options.fetchImpl !== undefined;
     this.fetchImpl = options.fetchImpl ?? createPinnedFetch({ resolveIp: options.resolveIp, allowPrivateRanges: options.allowPrivateRanges, skipDnsCheck: options.skipDnsCheck });
@@ -141,10 +167,10 @@ export class A2AClient {
     try {
       try {
         if (this.customTransport) {
-          await awaitWithAbort(assertResolvableTargetUrl(this.url, { allowPrivateRanges: this.allowPrivateRanges, skipDnsCheck: this.skipDnsCheck, resolveIp: this.resolveIp }), controller.signal);
+          await awaitWithAbort(assertResolvableTargetUrl(this.sendUrl, { allowPrivateRanges: this.allowPrivateRanges, skipDnsCheck: this.skipDnsCheck, resolveIp: this.resolveIp }), controller.signal);
         }
         controller.signal.throwIfAborted();
-        response = await this.fetchImpl(this.url.href, {
+        response = await this.fetchImpl(this.sendUrl.href, {
           method: "POST",
           headers,
           body,

@@ -150,6 +150,10 @@ export function extractKnpEnvelope(
 
 export interface A2AClientBuildOptions {
   bearerToken?: string;
+  /** 出站 HTTP Message Signature（RFC 9421）签名器；WorkBuddy 路径的业务认证。 */
+  signer?: import("../a2a/client/types.js").A2AOutboundSigner;
+  /** WorkBuddy 适配：实际发送地址（签名仍覆盖 endpoint）。 */
+  sendUrl?: string;
   allowPrivateRanges?: boolean;
   skipDnsCheck?: boolean;
   timeoutMs?: number;
@@ -160,6 +164,8 @@ export interface A2AClientBuildOptions {
 export function buildA2AClient(endpoint: string, opts: A2AClientBuildOptions): A2AClient {
   return new A2AClient({
     url: endpoint,
+    ...(opts.signer !== undefined ? { signer: opts.signer } : {}),
+    ...(opts.sendUrl !== undefined ? { sendUrl: opts.sendUrl } : {}),
     timeoutMs: opts.timeoutMs,
     allowPrivateRanges: opts.allowPrivateRanges,
     skipDnsCheck: opts.skipDnsCheck,
@@ -177,22 +183,46 @@ export function buildA2AClient(endpoint: string, opts: A2AClientBuildOptions): A
  * （server 对 card 路径的 POST 返回 404）。取 supportedInterfaces 中
  * protocolBinding=JSONRPC 的 url，回退 card.url；拒绝非 http(s)。
  */
+/**
+ * agent card 解析失败：携带远端 HTTP 状态（若有），供上层区分"平台门禁拒绝"
+ * 与"商家不可达"。`httpStatus` 是诊断分类用，不反射响应体。
+ */
+export class A2AEndpointResolutionError extends Error {
+  readonly httpStatus?: number;
+
+  constructor(message: string, httpStatus?: number) {
+    super(message);
+    this.name = "A2AEndpointResolutionError";
+    this.httpStatus = httpStatus;
+  }
+}
+
 export async function resolveA2aEndpoint(
   fetchImpl: typeof fetch,
   agentCardUrl: string,
   timeoutMs: number,
+  /**
+   * 可选：把 card URL 映射成实际发送地址（WorkBuddy 网关要求带分享参数）。
+   * 只影响 GET card 的发送地址；返回的端点仍是**不带码**的签名地址。
+   */
+  decorateUrl?: (url: string) => string,
 ): Promise<string> {
-  const res = await fetchImpl(agentCardUrl, { signal: AbortSignal.timeout(timeoutMs) });
-  if (!res.ok) throw new Error(`agent card HTTP ${res.status}`);
+  const wireUrl = decorateUrl === undefined ? agentCardUrl : decorateUrl(agentCardUrl);
+  const res = await fetchImpl(wireUrl, {
+    signal: AbortSignal.timeout(timeoutMs),
+    // 与其它出站一致：绝不跟随重定向（3xx 可能把分享参数转发给第三方）。
+    redirect: "manual",
+  });
+  if (!res.ok) throw new A2AEndpointResolutionError(`agent card HTTP ${res.status}`, res.status);
   const card = (await res.json()) as Partial<AgentCard>;
   const jsonrpc =
     card.supportedInterfaces?.find((si) => si.protocolBinding === "JSONRPC")?.url ?? card.url;
   if (typeof jsonrpc !== "string" || jsonrpc === "") {
-    throw new Error("agent card has no JSONRPC endpoint");
+    throw new A2AEndpointResolutionError("agent card has no JSONRPC endpoint");
   }
   const parsed = new URL(jsonrpc);
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    throw new Error(`unsupported endpoint scheme ${parsed.protocol}`);
+    throw new A2AEndpointResolutionError(`unsupported endpoint scheme ${parsed.protocol}`);
   }
   return jsonrpc;
 }

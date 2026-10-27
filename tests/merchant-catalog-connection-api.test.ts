@@ -33,6 +33,16 @@ let summaryErrorCode: string | undefined;
   let summaryStage: string | undefined = "authorize";
 let publicationCalls = 0;
 let publicationFail = false;
+const accessState = {
+  configured: false,
+  status: "none",
+  configVersion: 0,
+  provider: null as string | null,
+  adapterVersion: null as string | null,
+  authMode: null as string | null,
+  updatedAt: null as string | null,
+};
+let submittedLink = "";
 const publicationDraft = {
   schema_version: "0.1", draft_id: "flp_test_123456789abc", digest: "sha256:test",
   created_at: "2026-09-30T00:00:00Z", expires_at: "2026-09-30T00:15:00Z", products_digest: "sha256:products",
@@ -64,6 +74,19 @@ beforeAll(async () => {
       }),
       getPairing: async () => ({ user_code: "SAMPLE-CODE", verification_uri: "https://catalog.example/portal/connect/test", expires_at: "2030-01-01T00:00:00Z", grant: "MUST_NOT_LEAK" }),
       begin: async () => { beginCalls += 1; if (failBegin) throw new Error("MUST_NOT_LEAK"); },
+      getAccess: async () => accessState,
+      refreshAccess: async () => accessState,
+      submitAccessShareLink: async (link: string) => {
+        submittedLink = link;
+        if (link.includes("evil")) {
+          throw Object.assign(new Error("分享链接指向的不是本实例的公网入口"), { code: "ORIGIN_MISMATCH" });
+        }
+        if (link.includes("denied")) {
+          throw Object.assign(new Error("Catalog 拒绝了访问配置，请确认绑定仍有效后重试"), { code: "ACCESS_REJECTED" });
+        }
+        return accessState;
+      },
+      revokeAccess: async () => accessState,
     },
   }));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -301,5 +324,85 @@ describe("runtime Catalog connection API", () => {
     expect(inlineScriptBodies("<p>no script here</p>")).toEqual([]);
     const rendered = inlineScriptBodies(renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }));
     expect(rendered.join("\n")).toContain("appendCatalogConnection");
+  });
+});
+
+/**
+ * WorkBuddy 访问配置（M-03/M-04）：只回脱敏摘要，分享码与链接永不回显。
+ */
+describe("catalog access configuration API", () => {
+  it("GET /merchant/api/v1/catalog/access returns the redacted summary", async () => {
+    const auth = await login();
+    const response = await fetch(base + "/merchant/api/v1/catalog/access", {
+      headers: { cookie: auth.cookie },
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { access: typeof accessState };
+    expect(body.access).toMatchObject({ status: "none", configVersion: 0 });
+    expect(JSON.stringify(body)).not.toContain("sharecode");
+  });
+
+  it("POST share-link forwards the pasted link but never echoes it", async () => {
+    const auth = await login();
+    submittedLink = "";
+    const link = "https://pilot.example.app.workbuddy.host/a2a?sharecode=SECRET-CODE";
+    const response = await fetch(base + "/merchant/api/v1/catalog/access/share-link", {
+      method: "POST",
+      headers: {
+        cookie: auth.cookie,
+        "content-type": "application/json",
+        origin: ORIGIN,
+        "x-csrf-token": auth.csrf,
+      },
+      body: JSON.stringify({ link }),
+    });
+    expect(response.status).toBe(200);
+    expect(submittedLink).toBe(link);
+    const text = await response.text();
+    expect(text).not.toContain("SECRET-CODE");
+    expect(text).not.toContain(link);
+  });
+
+  it("maps a share-link origin mismatch to a validation problem without leaking the link", async () => {
+    const auth = await login();
+    const response = await fetch(base + "/merchant/api/v1/catalog/access/share-link", {
+      method: "POST",
+      headers: {
+        cookie: auth.cookie,
+        "content-type": "application/json",
+        origin: ORIGIN,
+        "x-csrf-token": auth.csrf,
+      },
+      body: JSON.stringify({ link: "https://evil.example/a2a?sharecode=SECRET-CODE" }),
+    });
+    expect(response.status).toBe(422);
+    const text = await response.text();
+    expect(text).not.toContain("SECRET-CODE");
+  });
+
+  it("rejects unknown fields instead of guessing", async () => {
+    const auth = await login();
+    const response = await fetch(base + "/merchant/api/v1/catalog/access/share-link", {
+      method: "POST",
+      headers: {
+        cookie: auth.cookie,
+        "content-type": "application/json",
+        origin: ORIGIN,
+        "x-csrf-token": auth.csrf,
+      },
+      body: JSON.stringify({ link: "https://x.example/a2a?sharecode=a", sharecode: "a" }),
+    });
+    expect(response.status).toBe(422);
+  });
+
+  it("requires the write guards (csrf + origin)", async () => {
+    const auth = await login();
+    const response = await fetch(base + "/merchant/api/v1/catalog/access/revoke", {
+      method: "POST",
+      headers: { cookie: auth.cookie, "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBeLessThan(500);
   });
 });

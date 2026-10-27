@@ -631,6 +631,7 @@ export async function bootstrapCloudRuntime(
     if (config.catalogUrl !== undefined && onboardingStore.activeRecord(profile.owner_id) === undefined) {
       directConnection = createMerchantConnectionService({
         dataDir: config.dataDir, catalogUrl: config.catalogUrl, publicOrigin: config.publicOrigin,
+        ...(config.accessShareLink !== undefined ? { accessShareLink: config.accessShareLink } : {}),
         ...(options.catalogFetchImpl !== undefined ? { fetchImpl: options.catalogFetchImpl } : {}),
         beforePublish: async (binding) => {
           if (productsFilePath !== undefined && !config.sample) {
@@ -1047,6 +1048,10 @@ export async function bootstrapCloudRuntime(
             };
           },
           begin: () => directConnection!.begin(),
+          getAccess: async () => directConnection!.getAccessSummary(),
+          refreshAccess: () => directConnection!.refreshAccess(),
+          submitAccessShareLink: (link: string) => directConnection!.submitAccessShareLink(link),
+          revokeAccess: () => directConnection!.revokeAccess(),
         },
       } : {}),
       workbenchConfirmations,

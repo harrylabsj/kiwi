@@ -27,6 +27,9 @@ import { McpError } from "./errors.js";
 
 import { assertNorthboundContractValid } from "../contracts/northbound-schema.js";
 import { BuyerFollowsSource } from "../discovery/catalog-source/buyer-follows.js";
+import { MerchantAccessSource } from "../discovery/catalog-source/merchant-access.js";
+import { buildWorkbuddyDualAddress } from "../a2a/access/workbuddy-address.js";
+import type { MerchantAccessResolver, MerchantAccessTransport } from "./a2a-quote-fetcher.js";
 import { A2ANegotiator } from "./a2a-negotiator.js";
 import { A2AQuoteFetcher } from "./a2a-quote-fetcher.js";
 import { KiwiCatalogMerchantIndex, MarketplaceMerchantIndex } from "./merchant-index.js";
@@ -111,7 +114,46 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
         buyerId: config.buyerAgentId,
       });
     }
+    // WorkBuddy 平台门禁（B-01/B-02）：只有显式配置了目录会话时才可能取到
+    // 分享码；没有会话时解析器返回 null，声明了 runtime_access 的商家会
+    // fail-closed 为 access_unavailable（不静默降级为无码直连）。
+    const accessSource =
+      config.catalogSessionToken !== undefined && config.catalogSessionToken !== ""
+        ? new MerchantAccessSource({
+            baseUrl: config.catalogUrl,
+            sessionToken: config.catalogSessionToken,
+            buyerId: config.buyerAgentId,
+          })
+        : undefined;
+    const accessByOrigin = new Map<string, MerchantAccessTransport>();
+    const transportFor = (secret: string): MerchantAccessTransport => ({
+      sendUrlFor: (signUrl: string) => buildWorkbuddyDualAddress(signUrl, secret).sendUrl,
+    });
+    const merchantAccess: MerchantAccessResolver = {
+      forMerchant: async (merchant) => {
+        if (merchant.catalog_agent_id === undefined) return null;
+        const cardUrl = merchant.agent_card_url;
+        const expectedOrigin =
+          cardUrl === undefined || cardUrl === "" ? undefined : new URL(cardUrl).origin;
+        const access = await accessSource?.get(merchant.catalog_agent_id, {
+          ...(expectedOrigin !== undefined ? { runtimeOrigin: expectedOrigin } : {}),
+        });
+        if (access === undefined || access === null) return null;
+        if (expectedOrigin === undefined) return null;
+        const transport = transportFor(access.secret_value);
+        accessByOrigin.set(expectedOrigin, transport);
+        return transport;
+      },
+      forEndpoint: async (endpointUrl: string) => {
+        try {
+          return accessByOrigin.get(new URL(endpointUrl).origin) ?? null;
+        } catch {
+          return null;
+        }
+      },
+    };
     const a2a = {
+      merchantAccess,
       protocolStateDir,
       localBuyerAgentId:config.buyerAgentId,
       bearerToken: config.a2aBearerToken,
