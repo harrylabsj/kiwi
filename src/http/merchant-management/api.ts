@@ -268,7 +268,7 @@ export interface MerchantManagementApiOptions {
      */
     getAccess?: () => Promise<CatalogAccessSummary>;
     refreshAccess?: () => Promise<CatalogAccessSummary>;
-    submitAccessShareLink?: (link: string) => Promise<CatalogAccessSummary>;
+    submitAccessShareLink?: (link: string, consentTermsVersion: string) => Promise<CatalogAccessSummary>;
     revokeAccess?: () => Promise<CatalogAccessSummary>;
   };
   /** Workbench v1 trusted confirmation authority; absent means strong-confirmation routes fail closed. */
@@ -1072,9 +1072,16 @@ export function createMerchantManagementApiHandler(
         throw new ManagementError("unavailable", "Catalog access configuration is not configured");
       }
       // 分享链接只作为输入被解析；任何回执都不回显链接或其中的分享码。
-      const fields = objectFields(await readJsonBody(req), ["link"]);
+      // 代管授权是必填项：没有它，服务层会直接拒绝（fail-closed）。
+      const fields = objectFields(await readJsonBody(req), ["link", "consent_terms_version"]);
       const link = requireString(fields["link"], "link");
-      await runAccessRoute(res, requestId, () => channel.submitAccessShareLink!(link));
+      const consentTermsVersion = requireString(
+        fields["consent_terms_version"],
+        "consent_terms_version",
+      );
+      await runAccessRoute(res, requestId, () =>
+        channel.submitAccessShareLink!(link, consentTermsVersion),
+      );
       return;
     }
     if (rest === "/catalog/connect/begin") {

@@ -37,6 +37,7 @@ import {
   MerchantConnectError,
   type ConnectionSession,
 } from "../src/cloud/connect-service.js";
+import { WORKBUDDY_CUSTODY_TERMS_VERSION } from "../src/cloud/access/workbuddy-share-link.js";
 import { canonicalize } from "../src/negotiation/jcs.js";
 
 const RUNTIME_ORIGIN = "https://runtime.test";
@@ -159,7 +160,10 @@ describe("submitAccessShareLink", () => {
     const h = harnessWithResponses([
       { status: 200, body: { ok: true, runtime_access: projection(1) } },
     ]);
-    const summary = await h.service.submitAccessShareLink(`${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`);
+    const summary = await h.service.submitAccessShareLink(
+        `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
+        WORKBUDDY_CUSTODY_TERMS_VERSION,
+      );
 
     expect(summary).toMatchObject({
       configured: true,
@@ -182,6 +186,7 @@ describe("submitAccessShareLink", () => {
         adapter_version: "workbuddy-share-v1",
         auth_mode: "signature",
         expected_version: 0,
+        consent: { terms_version: WORKBUDDY_CUSTODY_TERMS_VERSION, granted: true },
       },
     });
     // 分享码不出现在 URL 里；签名覆盖 body 摘要。
@@ -204,8 +209,9 @@ describe("submitAccessShareLink", () => {
       { status: 200, body: { ok: true, runtime_access: projection(1) } },
     ]);
     const summary = await h.service.submitAccessShareLink(
-      `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
-    );
+        `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
+        WORKBUDDY_CUSTODY_TERMS_VERSION,
+      );
     expect(JSON.stringify(summary)).not.toContain(SHARE_SECRET);
     const persisted = readFileSync(h.storeFile, "utf8");
     expect(persisted).not.toContain(SHARE_SECRET);
@@ -219,14 +225,20 @@ describe("submitAccessShareLink", () => {
   it("refuses a link for another deployment without any network call", async () => {
     const h = harnessWithResponses([]);
     await expect(
-      h.service.submitAccessShareLink("https://evil.example/a2a?sharecode=abc"),
+      h.service.submitAccessShareLink(
+        "https://evil.example/a2a?sharecode=abc",
+        WORKBUDDY_CUSTODY_TERMS_VERSION,
+      ),
     ).rejects.toMatchObject({ code: "ORIGIN_MISMATCH" });
     expect(h.calls).toHaveLength(0);
   });
 
   it("refuses a malformed link without any network call", async () => {
     const h = harnessWithResponses([]);
-    await expect(h.service.submitAccessShareLink(`${RUNTIME_ORIGIN}/a2a`)).rejects.toMatchObject({
+    await expect(h.service.submitAccessShareLink(
+        `${RUNTIME_ORIGIN}/a2a`,
+        WORKBUDDY_CUSTODY_TERMS_VERSION,
+      )).rejects.toMatchObject({
       code: "MISSING_SHARECODE",
     });
     expect(h.calls).toHaveLength(0);
@@ -239,18 +251,43 @@ describe("submitAccessShareLink", () => {
       { status: 200, body: { ok: true, runtime_access: projection(6) } },
     ]);
     const summary = await h.service.submitAccessShareLink(
-      `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
-    );
+        `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
+        WORKBUDDY_CUSTODY_TERMS_VERSION,
+      );
     expect(summary.configVersion).toBe(6);
     expect(h.calls.map((call) => call.method)).toEqual(["PUT", "GET", "PUT"]);
     const retryBody = h.calls[2]!.body as { access_config: { expected_version: number } };
     expect(retryBody.access_config.expected_version).toBe(5);
   });
 
+  it("refuses to submit without the merchant's custody consent", async () => {
+    const h = harnessWithResponses([]);
+    const error = await h.service
+      .submitAccessShareLink(`${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(MerchantConnectError);
+    expect((error as MerchantConnectError).code).toBe("ACCESS_CONSENT_REQUIRED");
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it("refuses an outdated custody terms version", async () => {
+    const h = harnessWithResponses([]);
+    await expect(
+      h.service.submitAccessShareLink(
+        `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
+        "workbuddy-share-v0-outdated",
+      ),
+    ).rejects.toMatchObject({ code: "ACCESS_CONSENT_REQUIRED" });
+    expect(h.calls).toHaveLength(0);
+  });
+
   it("requires a bound session", async () => {
     const h = harnessWithResponses([], { status: "preparing" });
     await expect(
-      h.service.submitAccessShareLink(`${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`),
+      h.service.submitAccessShareLink(
+        `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
+        WORKBUDDY_CUSTODY_TERMS_VERSION,
+      ),
     ).rejects.toMatchObject({ code: "STATE_INVALID" });
     expect(h.calls).toHaveLength(0);
   });
@@ -282,7 +319,10 @@ describe("refreshAccess / revokeAccess", () => {
       { status: 200, body: { ok: true, runtime_access: projection(1) } },
       { status: 200, body: { ok: true, runtime_access: projection(1, "revoked") } },
     ]);
-    await h.service.submitAccessShareLink(`${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`);
+    await h.service.submitAccessShareLink(
+        `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
+        WORKBUDDY_CUSTODY_TERMS_VERSION,
+      );
     const summary = await h.service.revokeAccess();
     expect(summary).toMatchObject({ configured: false, status: "revoked", configVersion: 1 });
     expect(h.calls[1]!.body).toEqual({
@@ -303,7 +343,10 @@ describe("refreshAccess / revokeAccess", () => {
   it("maps catalog failures to safe codes without leaking the request", async () => {
     const h = harnessWithResponses([{ status: 403, body: { ok: false, error: "denied" } }]);
     const error = await h.service
-      .submitAccessShareLink(`${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`)
+      .submitAccessShareLink(
+        `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
+        WORKBUDDY_CUSTODY_TERMS_VERSION,
+      )
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(MerchantConnectError);
     expect((error as MerchantConnectError).code).toBe("ACCESS_REJECTED");
@@ -338,7 +381,10 @@ describe("auth mode conflict (M-06)", () => {
       fetchImpl: (async () => new Response("{}")) as typeof fetch,
     });
     const error = await service
-      .submitAccessShareLink(`${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`)
+      .submitAccessShareLink(
+        `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
+        WORKBUDDY_CUSTODY_TERMS_VERSION,
+      )
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(MerchantConnectError);
     expect((error as MerchantConnectError).code).toBe("ACCESS_AUTH_MODE_CONFLICT");

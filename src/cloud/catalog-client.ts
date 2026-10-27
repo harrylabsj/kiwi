@@ -239,6 +239,14 @@ export interface RuntimeAccessContext {
   serviceEpoch: number;
 }
 
+/** 商家对"目录代管分享码"的授权状态（不含任何凭据）。 */
+export interface RuntimeAccessConsent {
+  granted: boolean;
+  scope?: string;
+  termsVersion?: string;
+  grantedAt?: string;
+}
+
 /** Catalog 返回的脱敏访问配置投影（永不包含分享码）。 */
 export interface RuntimeAccessProjection {
   provider: string;
@@ -352,6 +360,16 @@ function requiredString(value: unknown, field: string): string {
  * 校验 Catalog 的脱敏访问配置投影。白名单读取：任何未知字段（尤其是
  * `secret_value` 之类）都不会被带进运行时，也不会进入日志。
  */
+function projectRuntimeAccessConsent(value: unknown): RuntimeAccessConsent {
+  if (!isRecord(value) || value["granted"] !== true) return { granted: false };
+  return {
+    granted: true,
+    ...(typeof value["scope"] === "string" ? { scope: value["scope"] } : {}),
+    ...(typeof value["terms_version"] === "string" ? { termsVersion: value["terms_version"] } : {}),
+    ...(typeof value["granted_at"] === "string" ? { grantedAt: value["granted_at"] } : {}),
+  };
+}
+
 function projectRuntimeAccess(value: unknown): RuntimeAccessProjection {
   if (!isRecord(value)) {
     throw new CatalogClientError("RESPONSE_INVALID", "catalog 响应缺少 runtime_access 对象");
@@ -887,7 +905,12 @@ export class CatalogClient {
   async readRuntimeAccess(
     context: RuntimeAccessContext,
     identity: RuntimeSigningIdentity,
-  ): Promise<{ configVersion: number; runtimeAccess: RuntimeAccessProjection | null }> {
+  ): Promise<{
+    configVersion: number;
+    runtimeAccess: RuntimeAccessProjection | null;
+    custodyEnabled: boolean;
+    consent: RuntimeAccessConsent;
+  }> {
     const agentId = this.requireAgentId(context.agentId);
     const bindingId = String(context.bindingId ?? "").trim();
     if (bindingId === "") {
@@ -933,7 +956,12 @@ export class CatalogClient {
       response["runtime_access"] === null || response["runtime_access"] === undefined
         ? null
         : projectRuntimeAccess(response["runtime_access"]);
-    return { configVersion: version, runtimeAccess: projection };
+    return {
+      configVersion: version,
+      runtimeAccess: projection,
+      custodyEnabled: response["custody_enabled"] === true,
+      consent: projectRuntimeAccessConsent(response["consent"]),
+    };
   }
 
   /**

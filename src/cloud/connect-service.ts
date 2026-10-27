@@ -68,6 +68,7 @@ import {
   runtimePublicKey,
   type DeviceEnrollmentPoll,
   type PublicBinding,
+  type RuntimeAccessConsent,
   type RuntimeAccessContext,
   type RuntimeAccessProjection,
   type RuntimeSigningIdentity,
@@ -77,6 +78,7 @@ import {
   buildWorkbuddyAccessConfig,
   buildWorkbuddyAccessRevocation,
   parseWorkbuddyShareLink,
+  WORKBUDDY_CUSTODY_TERMS_VERSION,
   WorkbuddyShareLinkError,
   type WorkbuddyAccessConfig,
 } from "./access/workbuddy-share-link.js";
@@ -384,8 +386,11 @@ export interface MerchantConnectionService {
   getAccessSummary(): RuntimeAccessSummary;
   /** 向 Catalog 拉取权威状态（签名 GET）；本地状态丢失时用它恢复版本。 */
   refreshAccess(): Promise<RuntimeAccessSummary>;
-  /** 商家粘贴分享链接 → 提交/更新访问配置（M-02/M-03）；分享码永不回显。 */
-  submitAccessShareLink(rawLink: string): Promise<RuntimeAccessSummary>;
+  /**
+   * 商家粘贴分享链接 → 提交/更新访问配置（M-02/M-03）；分享码永不回显。
+   * `consentTermsVersion` 必须等于现行代管条款版本，否则拒绝（授权是前置条件）。
+   */
+  submitAccessShareLink(rawLink: string, consentTermsVersion?: string): Promise<RuntimeAccessSummary>;
   /** 撤销访问配置（M-03）；停止向 Buyer 发放分享码。 */
   revokeAccess(): Promise<RuntimeAccessSummary>;
 }
@@ -402,12 +407,21 @@ export interface RuntimeAccessSummary {
   adapterVersion: string | null;
   authMode: string | null;
   updatedAt: string | null;
+  /** 目录代管总开关（运营侧止血用，本地只是镜像）。 */
+  custodyEnabled: boolean;
+  /** 商家对"目录代管并只向已接受的采购方出示"的授权是否有效。 */
+  consentGranted: boolean;
+  consentTermsVersion: string | null;
 }
 
 /** 会话内持久化的访问配置投影（只有脱敏元数据，没有分享码）。 */
 export interface RuntimeAccessRecord {
   config_version: number;
   status: RuntimeAccessStatus;
+  custody_enabled?: boolean;
+  consent_granted?: boolean;
+  consent_terms_version?: string | null;
+  consent_granted_at?: string | null;
   provider: string | null;
   access_mode: string | null;
   parameter_name: string | null;
@@ -427,6 +441,9 @@ function accessSummaryOf(session: ConnectionSession | undefined): RuntimeAccessS
     adapterVersion: record?.adapter_version ?? null,
     authMode: record?.auth_mode ?? null,
     updatedAt: record?.updated_at ?? null,
+    custodyEnabled: record?.custody_enabled ?? true,
+    consentGranted: record?.consent_granted ?? false,
+    consentTermsVersion: record?.consent_terms_version ?? null,
   };
 }
 
@@ -1011,16 +1028,27 @@ class ConnectionServiceImpl implements MerchantConnectionService {
 
   async refreshAccess(): Promise<RuntimeAccessSummary> {
     const { session, context } = this.requireAccessTarget();
-    const { configVersion, runtimeAccess } = await this.client.readRuntimeAccess(
-      context,
-      this.identity,
-    );
-    this.recordAccess(session.enrollment_id, configVersion, runtimeAccess);
+    const { configVersion, runtimeAccess, custodyEnabled, consent } =
+      await this.client.readRuntimeAccess(context, this.identity);
+    this.recordAccess(session.enrollment_id, configVersion, runtimeAccess, {
+      custodyEnabled,
+      consent,
+    });
     return this.getAccessSummary();
   }
 
-  async submitAccessShareLink(rawLink: string): Promise<RuntimeAccessSummary> {
+  async submitAccessShareLink(
+    rawLink: string,
+    consentTermsVersion?: string,
+  ): Promise<RuntimeAccessSummary> {
     this.assertSignatureAuthMode();
+    // 代管授权是必填的前置条件：没有商家明确同意，不向目录提交任何凭据。
+    if (consentTermsVersion !== WORKBUDDY_CUSTODY_TERMS_VERSION) {
+      throw new MerchantConnectError(
+        "ACCESS_CONSENT_REQUIRED",
+        "需要先勾选并同意《分享码代管授权》后才能提交分享链接",
+      );
+    }
     // 解析先于任何网络动作：非法链接不会产生请求，也不会把链接内容带进日志。
     const link = parseWorkbuddyShareLink(rawLink);
     assertShareLinkMatchesRuntimeOrigin(link, this.origin);
@@ -1031,7 +1059,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       projection = await this.client.updateRuntimeAccess(
         context,
         this.identity,
-        buildWorkbuddyAccessConfig(link, expectedVersion),
+        buildWorkbuddyAccessConfig(link, expectedVersion, consentTermsVersion),
       );
     } catch (error) {
       if (!(error instanceof CatalogClientError) || error.code !== "CONFLICT") {
@@ -1043,13 +1071,16 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         projection = await this.client.updateRuntimeAccess(
           context,
           this.identity,
-          buildWorkbuddyAccessConfig(link, authoritative.configVersion),
+          buildWorkbuddyAccessConfig(link, authoritative.configVersion, consentTermsVersion),
         );
       } catch (retryError) {
         throw accessError(retryError);
       }
     }
-    this.recordAccess(session.enrollment_id, projection.configVersion, projection);
+    this.recordAccess(session.enrollment_id, projection.configVersion, projection, {
+      custodyEnabled: true,
+      consent: { granted: true, termsVersion: consentTermsVersion },
+    });
     return this.getAccessSummary();
   }
 
@@ -1073,7 +1104,11 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     } catch (error) {
       throw accessError(error);
     }
-    this.recordAccess(session.enrollment_id, projection.configVersion, projection);
+    // 撤销 = 撤回代管授权：目录会同时清空密文。
+    this.recordAccess(session.enrollment_id, projection.configVersion, projection, {
+      custodyEnabled: true,
+      consent: { granted: false },
+    });
     return this.getAccessSummary();
   }
 
@@ -1123,10 +1158,19 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     enrollmentId: string,
     configVersion: number,
     projection: RuntimeAccessProjection | null,
+    consent?: { custodyEnabled: boolean; consent: RuntimeAccessConsent },
   ): void {
     const record: RuntimeAccessRecord = {
       config_version: configVersion,
       status: (projection?.status ?? "none") as RuntimeAccessStatus,
+      ...(consent !== undefined
+        ? {
+            custody_enabled: consent.custodyEnabled,
+            consent_granted: consent.consent.granted,
+            consent_terms_version: consent.consent.termsVersion ?? null,
+            consent_granted_at: consent.consent.grantedAt ?? null,
+          }
+        : {}),
       provider: projection?.provider ?? null,
       access_mode: projection?.accessMode ?? null,
       parameter_name: projection?.parameterName ?? null,

@@ -28,6 +28,8 @@
  */
 
 /** 页面按 owner 视角展示管理动作；角色由服务端权限逐次裁决，前端只是提示。 */
+import { WORKBUDDY_CUSTODY_TERMS_VERSION } from "../../cloud/access/workbuddy-share-link.js";
+
 export function renderMerchantManagementPage(options: {
   productAuthority?: "file" | "exact";
   catalogConnection?: boolean;
@@ -166,6 +168,7 @@ var ROLE = "";
 var API = "/merchant/api/v1";
 var FILE_PRODUCTS = ${options.productAuthority === "file"};
 var CATALOG_CONNECT = ${options.catalogConnection === true};
+var ACCESS_CONSENT_TERMS = ${JSON.stringify(WORKBUDDY_CUSTODY_TERMS_VERSION)};
 var catalogBeginKey = "";
 var catalogBeginPending = false;
 var publicationDraft = null;
@@ -299,10 +302,16 @@ function appendCatalogAccess(html) {
     return html + '<div class="card"><h2>WorkBuddy 分享码（平台门禁）</h2>' +
       '<p id="access-status">' + esc(accessStatusText(a)) + '</p>' +
       '<p class="muted">分享码只用于通过 WorkBuddy 网关，不是商家身份或业务授权。本页不会显示分享码；请从平台复制分享链接后粘贴在此。</p>' +
+      (a.custodyEnabled === false
+        ? '<p class="warn">目录代管当前已被运营关闭，无法新建或更新；你仍可撤回授权。</p>'
+        : '') +
       '<div class="row"><input id="access-link" type="text" autocomplete="off" spellcheck="false" aria-label="WorkBuddy 分享链接" placeholder="粘贴 WorkBuddy 分享链接">' +
       '<button class="act primary" onclick="submitAccessLink()">提交或更新</button>' +
       '<button class="act" onclick="refreshAccess()">刷新状态</button>' +
-      (a.status === "active" ? '<button class="act danger" onclick="revokeAccess()">撤销</button>' : '') + '</div>' +
+      (a.consentGranted ? '<button class="act danger" onclick="revokeAccess()">撤回授权并撤销</button>' : '') + '</div>' +
+      '<label class="row"><input id="access-consent" type="checkbox" aria-label="同意分享码代管授权">' +
+      ' 我确认：允许 Kiwi 目录<b>代为保管</b>此分享码，并仅在我已接受的采购方关注我时自动出示；我可随时撤回，撤回后目录会清空已保存的分享码。</label>' +
+      (a.consentGranted ? '<p class="muted">授权已生效' + (a.consentTermsVersion ? '（条款 ' + esc(a.consentTermsVersion) + '）' : '') + '</p>' : '') +
       (a.authMode ? '<p class="muted">业务认证：' + esc(a.authMode) + ' · 适配版本：' + esc(a.adapterVersion || "-") + '</p>' : '') +
       '</div>';
   }).catch(function () {
@@ -314,10 +323,19 @@ function accessSummaryBar(a, verb) {
 }
 function submitAccessLink() {
   var input = $("access-link");
+  var consent = $("access-consent");
   var link = input ? String(input.value || "").trim() : "";
   if (!link) { bar("请先粘贴 WorkBuddy 分享链接。", true); return; }
-  call("POST", "/catalog/access/share-link", { link: link }).then(function (result) {
+  if (!consent || !consent.checked) {
+    bar("请先勾选并同意《分享码代管授权》。", true);
+    return;
+  }
+  call("POST", "/catalog/access/share-link", {
+    link: link,
+    consent_terms_version: ACCESS_CONSENT_TERMS
+  }).then(function (result) {
     if (input) input.value = "";
+    if (consent) consent.checked = false;
     accessSummaryBar(result.access, "已提交");
   }).catch(function (e) {
     // 错误文本由服务端给自有码说明；不把链接回显到页面。
@@ -330,7 +348,7 @@ function refreshAccess() {
   }).catch(function () { bar("刷新访问配置状态失败。", true); });
 }
 function revokeAccess() {
-  if (!window.confirm("撤销后采购方将无法经 WorkBuddy 访问本店，确定撤销？")) return;
+  if (!window.confirm("撤回授权后：采购方将无法经 WorkBuddy 访问本店，目录会清空已保存的分享码。确定撤回？")) return;
   call("POST", "/catalog/access/revoke", {}).then(function (result) {
     accessSummaryBar(result.access, "已撤销");
   }).catch(function () { bar("撤销未完成，请稍后重试。", true); });

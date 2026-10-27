@@ -43,6 +43,7 @@ const accessState = {
   updatedAt: null as string | null,
 };
 let submittedLink = "";
+let submittedConsent = "";
 const publicationDraft = {
   schema_version: "0.1", draft_id: "flp_test_123456789abc", digest: "sha256:test",
   created_at: "2026-09-30T00:00:00Z", expires_at: "2026-09-30T00:15:00Z", products_digest: "sha256:products",
@@ -76,8 +77,9 @@ beforeAll(async () => {
       begin: async () => { beginCalls += 1; if (failBegin) throw new Error("MUST_NOT_LEAK"); },
       getAccess: async () => accessState,
       refreshAccess: async () => accessState,
-      submitAccessShareLink: async (link: string) => {
+      submitAccessShareLink: async (link: string, consentTermsVersion: string) => {
         submittedLink = link;
+        submittedConsent = consentTermsVersion;
         if (link.includes("evil")) {
           throw Object.assign(new Error("分享链接指向的不是本实例的公网入口"), { code: "ORIGIN_MISMATCH" });
         }
@@ -354,10 +356,11 @@ describe("catalog access configuration API", () => {
         origin: ORIGIN,
         "x-csrf-token": auth.csrf,
       },
-      body: JSON.stringify({ link }),
+      body: JSON.stringify({ link, consent_terms_version: "workbuddy-share-v1-2026-10-27" }),
     });
     expect(response.status).toBe(200);
     expect(submittedLink).toBe(link);
+    expect(submittedConsent).toBe("workbuddy-share-v1-2026-10-27");
     const text = await response.text();
     expect(text).not.toContain("SECRET-CODE");
     expect(text).not.toContain(link);
@@ -373,7 +376,10 @@ describe("catalog access configuration API", () => {
         origin: ORIGIN,
         "x-csrf-token": auth.csrf,
       },
-      body: JSON.stringify({ link: "https://evil.example/a2a?sharecode=SECRET-CODE" }),
+      body: JSON.stringify({
+        link: "https://evil.example/a2a?sharecode=SECRET-CODE",
+        consent_terms_version: "workbuddy-share-v1-2026-10-27",
+      }),
     });
     expect(response.status).toBe(422);
     const text = await response.text();
@@ -390,7 +396,26 @@ describe("catalog access configuration API", () => {
         origin: ORIGIN,
         "x-csrf-token": auth.csrf,
       },
-      body: JSON.stringify({ link: "https://x.example/a2a?sharecode=a", sharecode: "a" }),
+      body: JSON.stringify({
+        link: "https://x.example/a2a?sharecode=a",
+        sharecode: "a",
+        consent_terms_version: "workbuddy-share-v1-2026-10-27",
+      }),
+    });
+    expect(response.status).toBe(422);
+  });
+
+  it("rejects a submission without the custody consent field", async () => {
+    const auth = await login();
+    const response = await fetch(base + "/merchant/api/v1/catalog/access/share-link", {
+      method: "POST",
+      headers: {
+        cookie: auth.cookie,
+        "content-type": "application/json",
+        origin: ORIGIN,
+        "x-csrf-token": auth.csrf,
+      },
+      body: JSON.stringify({ link: "https://x.example/a2a?sharecode=a" }),
     });
     expect(response.status).toBe(422);
   });

@@ -33,6 +33,11 @@ export const WORKBUDDY_ADAPTER_VERSION = "workbuddy-share-v1";
 export const WORKBUDDY_AUTH_MODE = "signature";
 /** 与 Catalog 侧 `SECRET_MAX_LENGTH` 一致。 */
 export const WORKBUDDY_SECRET_MAX_LENGTH = 4096;
+/**
+ * 商家授权目录代管分享码的**条款版本**（与 Catalog 侧 `CONSENT_TERMS_VERSION` 一致）。
+ * 文案变化时必须两边同时换版本，旧版本授权会被目录拒绝。
+ */
+export const WORKBUDDY_CUSTODY_TERMS_VERSION = "workbuddy-share-v1-2026-10-27";
 
 export type WorkbuddyShareLinkErrorCode =
   | "MALFORMED_URL"
@@ -156,6 +161,11 @@ export interface WorkbuddyAccessConfig {
   readonly adapter_version: typeof WORKBUDDY_ADAPTER_VERSION;
   readonly auth_mode: typeof WORKBUDDY_AUTH_MODE;
   readonly expected_version: number;
+  /** 商家对"目录代管并只向其已接受的采购方出示"的显式授权（必填）。 */
+  readonly consent: {
+    readonly terms_version: string;
+    readonly granted: true;
+  };
 }
 
 /** 撤销形状：只带模式与当前版本。 */
@@ -171,9 +181,17 @@ export interface WorkbuddyAccessRevocation {
 export function buildWorkbuddyAccessConfig(
   link: WorkbuddyShareLink,
   expectedVersion: number,
+  consentTermsVersion: string = WORKBUDDY_CUSTODY_TERMS_VERSION,
 ): WorkbuddyAccessConfig {
   if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
     throw new WorkbuddyShareLinkError("MALFORMED_URL", "expected_version 必须是非负整数");
+  }
+  if (consentTermsVersion !== WORKBUDDY_CUSTODY_TERMS_VERSION) {
+    // 只接受现行条款：旧版本授权在目录侧也会被拒，这里先挡住。
+    throw new WorkbuddyShareLinkError(
+      "MALFORMED_URL",
+      `代管授权条款版本不是现行版本（期望 ${WORKBUDDY_CUSTODY_TERMS_VERSION}）`,
+    );
   }
   return {
     provider: WORKBUDDY_PROVIDER,
@@ -183,6 +201,7 @@ export function buildWorkbuddyAccessConfig(
     adapter_version: WORKBUDDY_ADAPTER_VERSION,
     auth_mode: WORKBUDDY_AUTH_MODE,
     expected_version: expectedVersion,
+    consent: { terms_version: consentTermsVersion, granted: true },
   };
 }
 

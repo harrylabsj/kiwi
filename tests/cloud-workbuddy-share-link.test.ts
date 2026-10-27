@@ -20,6 +20,7 @@ import {
   buildWorkbuddyAccessConfig,
   buildWorkbuddyAccessRevocation,
   parseWorkbuddyShareLink,
+  WORKBUDDY_CUSTODY_TERMS_VERSION,
   WorkbuddyShareLinkError,
 } from "../src/cloud/access/workbuddy-share-link.js";
 
@@ -120,7 +121,19 @@ describe("access config shapes", () => {
       adapter_version: "workbuddy-share-v1",
       auth_mode: "signature",
       expected_version: 0,
+      consent: { terms_version: WORKBUDDY_CUSTODY_TERMS_VERSION, granted: true },
     });
+  });
+
+  it("carries the merchant's custody consent and refuses a stale terms version", () => {
+    const link = parseWorkbuddyShareLink(`${ORIGIN}/a2a?sharecode=abc`);
+    expect(buildWorkbuddyAccessConfig(link, 0).consent).toEqual({
+      terms_version: WORKBUDDY_CUSTODY_TERMS_VERSION,
+      granted: true,
+    });
+    expect(() => buildWorkbuddyAccessConfig(link, 0, "workbuddy-share-v0-outdated")).toThrow(
+      WorkbuddyShareLinkError,
+    );
   });
 
   it("rejects an impossible CAS head", () => {
