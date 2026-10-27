@@ -131,7 +131,36 @@ import {
 import { runReadiness, type ReadinessCheckResult, type ReadinessReport } from "./readiness.js";
 import { loadOrCreateMerchantIdentity } from "./merchant-identity.js";
 import { createMerchantConnectionService, MerchantConnectError, type MerchantConnectionService } from "./connect-service.js";
+import { createProbeHandler } from "../tools/workbuddy-echo.js";
 import { createFileListingPublicationService } from "./file-listing-publication.js";
+
+/** 回显探针开关（I-01）：只在测试部署上打开，生产默认关闭。 */
+function probeEchoEnabled(): boolean {
+  return ["1", "true", "on", "yes"].includes(
+    String(process.env["KIWI_CLOUD_PROBE_ECHO"] ?? "").trim().toLowerCase(),
+  );
+}
+
+/** 把 tools 的纯处理器接成 node 的 (req,res) 监听器。 */
+function createProbeRequestListener() {
+  const handler = createProbeHandler();
+  return (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): void => {
+    void handler(req)
+      .then(({ status, body }) => {
+        const payload = JSON.stringify(body);
+        res.writeHead(status, {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": String(Buffer.byteLength(payload)),
+          "cache-control": "no-store",
+        });
+        res.end(payload);
+      })
+      .catch(() => {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end('{"error":"internal"}');
+      });
+  };
+}
 
 /** 云端 A2A 端点路径（设计 §8.2；与自托管根路径不同，便于同端口分发）。 */
 export const CLOUD_A2A_PATH = "/a2a";
@@ -1296,6 +1325,8 @@ export async function bootstrapCloudRuntime(
     merchantHomePage,
     readiness,
     a2aPaths: [CLOUD_A2A_PATH],
+    // I-01 回显探针：默认关闭；只有显式 KIWI_CLOUD_PROBE_ECHO=1 才挂载。
+    ...(probeEchoEnabled() ? { probeEcho: createProbeRequestListener() } : {}),
     // 绑定挑战应答（M2 §6.3）：只签发给本实例的受限结构挑战，一次性、有速率上限。
     challengeHandler: createChallengeResponder({
       signingIdentity: toJwsSigningIdentity(signingIdentity),

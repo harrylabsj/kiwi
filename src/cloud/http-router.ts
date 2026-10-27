@@ -27,6 +27,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { ECHO_PATH } from "../tools/workbuddy-echo.js";
 import type { ReadinessReport } from "./readiness.js";
 
 export type CloudRequestListener = (req: IncomingMessage, res: ServerResponse) => void;
@@ -59,6 +60,11 @@ export interface CloudRouterOptions {
   a2aPaths?: readonly string[];
   /** 绑定挑战（M2）；缺省时 /control/challenge 明确返回 501，不空实现。 */
   challengeHandler?: CloudRequestListener;
+  /**
+   * 平台行为回显探针（I-01）；只在 `KIWI_CLOUD_PROBE_ECHO=1` 时注入。
+   * 缺省时该路径不存在（404），生产默认不暴露。
+   */
+  probeEcho?: CloudRequestListener;
   /** Catalog enrollment 挑战（独立 Runtime 与 WorkBuddy 共用；不得要求浏览器会话）。 */
   enrollmentChallengeHandler?: CloudRequestListener;
   /** 供 /livez 回显的版本号（非敏感）。 */
@@ -123,6 +129,12 @@ export function createCloudRouter(options: CloudRouterOptions): CloudRequestList
       if (options.enrollmentChallengeHandler === undefined) {
         writeJson(res, 503, { error: "enrollment_challenge_unavailable" }, NO_STORE);
       } else options.enrollmentChallengeHandler(req, res);
+      return;
+    }
+    // 平台行为回显探针（I-01）：默认关闭，只在显式 `KIWI_CLOUD_PROBE_ECHO=1`
+    // 的部署上存在。它不返回任何请求头的值，只返回名称与摘要，见 tools 模块。
+    if (options.probeEcho !== undefined && pathname === ECHO_PATH) {
+      options.probeEcho(req, res);
       return;
     }
     if (pathname === "/readyz") {
