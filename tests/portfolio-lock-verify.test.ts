@@ -34,11 +34,12 @@ const SCRIPT = fileURLToPath(
 
 // 真实 kiwi contracts/manifest.json 的固定 bundle digest 与 contract source
 // commit（CLI 级合法用例用它，因为 CLI 从自身位置读取真实 kiwi 根）。
-// 与 contracts/manifest.json 的 bundle_sha256 保持一致（新增 Workbench Problem/Money 契约后更新）；
-// source_commit 指向真实承载该 bundle 字节的提交（e703 为现行组合锁与两消费
-// 仓锁共同 pin 的契约来源；af21 至 e703 间 manifest/runtime-binding 已实变）。
-const REAL_BUNDLE_SHA = "a867a10774c7990f585e57ea186262a46a2eeb62e75d81f0e8606940dc30a4bb";
-const REAL_SOURCE_COMMIT = "e703bc0d67e24a98c417274e46f37d210eff86ac";
+// 与 contracts/manifest.json 的 bundle_sha256 保持一致（新增 Workbench Problem/Money 契约、
+// 再新增 kiwi-catalog agent-record 的 runtime_access 投影后更新）；
+// source_commit 指向真实承载该 bundle 字节的提交（82c1 为现行组合锁与两消费
+// 仓锁共同 pin 的契约来源）。
+const REAL_BUNDLE_SHA = "5be0f0e86fa0f66c2ca150770c3ffb20f41c3417c13a2e5e05565a55e92be9cc";
+const REAL_SOURCE_COMMIT = "82c1cfcb5f323e000e1ae3f6fbe1e1e9ab9f272a";
 
 const tempDirs: string[] = [];
 function makeTempDir(): string {
