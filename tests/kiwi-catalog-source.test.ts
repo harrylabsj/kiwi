@@ -270,6 +270,51 @@ describe("KiwiCatalogSource", () => {
     expect(candidate.verification.status).toBe("commerce_verified");
   });
 
+  it("runtime_access 仅接受 active WorkBuddy 公开能力元数据，且不进入 CandidateAgent", async () => {
+    const runtimeAccess = {
+      provider: "workbuddy",
+      access_mode: "share_parameter",
+      parameter_name: "sharecode",
+      config_version: 3,
+      adapter_version: "workbuddy-share-v1",
+      auth_mode: "signature",
+    };
+    const { fetchImpl } = kiwiFetch({
+      search: () => jsonResponse({ results: [recordFixture({ runtime_access: runtimeAccess })] }),
+    });
+    const source = new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl });
+
+    const records = await source.searchRecords();
+    expect(records[0]?.runtime_access).toEqual(runtimeAccess);
+    const candidates = await source.searchCandidates();
+    expect(candidates[0]).not.toHaveProperty("runtime_access");
+  });
+
+  it.each([
+    ["秘密字段", { secret_value: "must-not-be-public" }],
+    ["密文字段", { ciphertext: "must-not-be-public" }],
+    ["未知适配", { adapter_version: "unknown-v2" }],
+    ["非签名认证", { auth_mode: "bearer" }],
+    ["非法版本", { config_version: 0 }],
+    ["缺少参数名", { parameter_name: undefined }],
+  ])("contract_violation：runtime_access %s被拒绝", async (_name, override) => {
+    const runtimeAccess = {
+      provider: "workbuddy",
+      access_mode: "share_parameter",
+      parameter_name: "sharecode",
+      config_version: 1,
+      adapter_version: "workbuddy-share-v1",
+      auth_mode: "signature",
+      ...override,
+    };
+    const { fetchImpl } = kiwiFetch({
+      search: () => jsonResponse({ results: [recordFixture({ runtime_access: runtimeAccess })] }),
+    });
+    const source = new KiwiCatalogSource({ baseUrl: "https://catalog.example", fetchImpl });
+
+    await expect(source.searchRecords()).rejects.toMatchObject({ code: "contract_violation" });
+  });
+
   it("contract_violation：未知/私有字段（additionalProperties）在 schema 层拒绝（#8）", async () => {
     const { fetchImpl } = kiwiFetch({
       search: () =>

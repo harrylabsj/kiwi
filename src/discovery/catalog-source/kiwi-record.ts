@@ -48,6 +48,16 @@ export type FreshnessState = "fresh" | "stale" | "unreachable";
 /** 行政处置（v0.3 §7.3）。 */
 export type AdministrativeState = "active" | "suspended" | "rejected";
 
+/** active WorkBuddy 访问能力公开投影；绝不包含秘密或密文。 */
+export interface CatalogRuntimeAccess {
+  readonly provider: "workbuddy";
+  readonly access_mode: "share_parameter";
+  readonly parameter_name: "sharecode";
+  readonly config_version: number;
+  readonly adapter_version: "workbuddy-share-v1";
+  readonly auth_mode: "signature";
+}
+
 /** kiwi-catalog agent 公开记录（public-only，完成定义 #8）。 */
 export interface CatalogAgentRecord {
   readonly catalog_agent_id: string;
@@ -62,6 +72,7 @@ export interface CatalogAgentRecord {
   readonly skills?: readonly CatalogSkill[];
   readonly hosting_mode: HostingMode;
   readonly handoff_destination_types?: readonly DestinationType[];
+  readonly runtime_access?: CatalogRuntimeAccess;
   readonly verification_level: VerificationLevel;
   readonly freshness_state: FreshnessState;
   readonly administrative_state: AdministrativeState;

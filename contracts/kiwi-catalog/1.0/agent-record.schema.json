@@ -65,6 +65,27 @@
         ]
       }
     },
+    "runtime_access": {
+      "description": "当前 active WorkBuddy 访问能力公开投影；秘密、密文和非 active 配置禁止进入此字段。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "access_mode",
+        "parameter_name",
+        "config_version",
+        "adapter_version",
+        "auth_mode"
+      ],
+      "properties": {
+        "provider": { "const": "workbuddy" },
+        "access_mode": { "const": "share_parameter" },
+        "parameter_name": { "const": "sharecode" },
+        "config_version": { "type": "integer", "minimum": 1 },
+        "adapter_version": { "const": "workbuddy-share-v1" },
+        "auth_mode": { "const": "signature" }
+      }
+    },
     "verification_level": {
       "enum": ["discovered", "profile_valid", "domain_verified", "agent_verified", "commerce_verified"]
     },
