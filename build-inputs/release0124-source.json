@@ -3812,7 +3812,7 @@
       "path": "supply-chain.sbom.json",
       "sha256": "sha256:729b3c810022bac1f46ab7ffca0f91b92f1da62b2098efca4fafbd05f3b7d0db",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:b03b8b65d5cd6e0211901ec4e0061b902b1790f5ee869272a1bc3784430a2ea6"
+      "raw_sha256": "sha256:78950218ad89a5513d12ce52a417f2c35ea9bc64b3bf237d051bc68cae53c701"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -5180,7 +5180,7 @@
     },
     {
       "path": "tests/npm-cloud-leaf-metadata.test.ts",
-      "sha256": "sha256:ea5b9c4ee7cc76ae5d4bd46338ea61c762cb062780b88101f052c9316e8226a5"
+      "sha256": "sha256:088fb25ea34f13d418cb3d5fe91b56fb25bdeb44fe107ce10944e110102f328a"
     },
     {
       "path": "tests/npm-official-binlinks.test.ts",
