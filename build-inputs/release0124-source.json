@@ -1494,7 +1494,7 @@
     },
     {
       "path": "packages/merchant-cloud/package.json",
-      "sha256": "sha256:9e77ae003fb83b01757ab81c48ae5a9efc34eecd2c884021053902774c3928e0"
+      "sha256": "sha256:097493dcc788c785b22071d0559f6e9b0260532eee59e11ae6ee6dee0ac728a7"
     },
     {
       "path": "packages/merchant-cloud/prepare.mjs",
@@ -1502,7 +1502,7 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:0c909170aef6ef761553fd3edaadb5bc1863147c972fe273c983d25c22d45817"
+      "sha256": "sha256:c451925e3100222b4119ef65c0e8a417693f258e44fb691c689a8fac1d7a8ac5"
     },
     {
       "path": "portfolio.lock.json",
@@ -3812,7 +3812,7 @@
       "path": "supply-chain.sbom.json",
       "sha256": "sha256:729b3c810022bac1f46ab7ffca0f91b92f1da62b2098efca4fafbd05f3b7d0db",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:f32e829c86a7f9e035e30b54f66f84bdf8f6a26ffab9e24454e1573843df033c"
+      "raw_sha256": "sha256:b03b8b65d5cd6e0211901ec4e0061b902b1790f5ee869272a1bc3784430a2ea6"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
