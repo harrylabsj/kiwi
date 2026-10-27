@@ -2958,7 +2958,7 @@
     },
     {
       "path": "src/http/merchant-management/page.ts",
-      "sha256": "sha256:15f5067a87e1fac0870fa98cabedba3c9de53ac43fbe40af06eaadbce4bea0f7"
+      "sha256": "sha256:988521253c37da1e5c32872aea57b1c51abbd90c960f9e8272554162d41052db"
     },
     {
       "path": "src/http/merchant-management/problem-client.ts",
@@ -3810,9 +3810,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:dfe5029cd6e576893e63baee996adf6a425aecde1ba6bd886459075baf658979",
+      "sha256": "sha256:729b3c810022bac1f46ab7ffca0f91b92f1da62b2098efca4fafbd05f3b7d0db",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:a539d803a1e0717878b89f6dba974c3e7becec41634e76c047a14dc5d2d0d7d6"
+      "raw_sha256": "sha256:f32e829c86a7f9e035e30b54f66f84bdf8f6a26ffab9e24454e1573843df033c"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -4916,7 +4916,7 @@
     },
     {
       "path": "tests/merchant-management-trade-links.test.ts",
-      "sha256": "sha256:d2ccff31fccb358fa3ff08fccc32e011647d071e38c7e0b48f658e2ffc0f44b4"
+      "sha256": "sha256:33bc7475da31339091cfb8839809462f22b5f43324223bf9e4b0c42d09a3c5be"
     },
     {
       "path": "tests/merchant-mcp.test.ts",
