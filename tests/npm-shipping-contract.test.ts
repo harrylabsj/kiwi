@@ -36,7 +36,7 @@ import {
   stagePackage,
 } from "../scripts/lib/npm-shipping.mjs";
 const root = process.cwd();
-describe("current 0.12.6 full shipping contract", () => {
+describe("current 0.12.7 full shipping contract", () => {
   it("keeps complete production declarations and unchanged locked versions/SRI", () => {
     const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
     const staged = stagePackage(root);
@@ -50,7 +50,7 @@ describe("current 0.12.6 full shipping contract", () => {
   });
   it("states new source and conservative gzip/plain budgets without relaxing old A243", () => {
     expect(BASE).toBe("e703bc0d67e24a98c417274e46f37d210eff86ac");
-    expect(VERSION).toBe("0.12.6");
+    expect(VERSION).toBe("0.12.7");
     expect(MAX_PLAIN).toBe(268435456);
     expect(MAX_TGZ).toBe(100000000);
     expect(() => assertBudget([{ size: MAX_PLAIN + 1 }])).toThrow("SHIPPING_PLAIN_BUDGET");
@@ -84,7 +84,7 @@ describe("current 0.12.6 full shipping contract", () => {
       const sbom = {
         sbom_version: 1,
         package: "@harrylabsj/kiwi",
-        package_version: "0.12.6",
+        package_version: "0.12.7",
         runtime_dependencies: [],
         mcp_protocol_versions: [],
         generated_at: "2026-10-10T00:00:00.000Z",
@@ -129,7 +129,7 @@ describe("current 0.12.6 full shipping contract", () => {
       );
       const sbomFile = path.join(repo, "supply-chain.sbom.json"),
         sbom = JSON.parse(readFileSync(sbomFile, "utf8"));
-      sbom.package_version = "0.12.6";
+      sbom.package_version = "0.12.7";
       sbom.generated_at = "2026-10-10T00:00:00.000Z";
       writeFileSync(sbomFile, JSON.stringify(sbom, null, 2) + "\n");
       const contract = sourceContract(repo);
