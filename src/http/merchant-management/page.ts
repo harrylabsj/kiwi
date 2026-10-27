@@ -306,6 +306,7 @@ function appendCatalogAccess(html) {
     return html + '<div class="card"><h2>WorkBuddy 分享码（平台门禁）</h2>' +
       '<p id="access-status">' + esc(accessStatusText(a)) + '</p>' +
       '<p class="muted">分享码只用于通过 WorkBuddy 网关，不是商家身份或业务授权。本页不会显示分享码；请从平台复制分享链接后粘贴在此。</p>' +
+      '<p class="muted">平台口径：关闭「发布为网站」后链接立即失效；<b>删除源任务或源文件不会</b>让已分享链接失效，需要主动下线；平台不承诺分享码有固定有效期或自动轮换。若平台侧换了码，请重新粘贴新的分享链接。</p>' +
       (a.custodyEnabled === false
         ? '<p class="warn">目录代管当前已被运营关闭，无法新建或更新；你仍可撤回授权。</p>'
         : '') +
