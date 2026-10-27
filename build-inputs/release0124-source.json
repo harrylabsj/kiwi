@@ -1506,7 +1506,7 @@
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:dc6569be051475959fbc5e9aab45ffd45e38853466e258100f8e039f2a7d790b"
+      "sha256": "sha256:3eabaaf73f5238cb29b2af5684daff7a7a4aaa06dba5bb5c7a94258e52684f9f"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
@@ -3812,7 +3812,7 @@
       "path": "supply-chain.sbom.json",
       "sha256": "sha256:729b3c810022bac1f46ab7ffca0f91b92f1da62b2098efca4fafbd05f3b7d0db",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:78950218ad89a5513d12ce52a417f2c35ea9bc64b3bf237d051bc68cae53c701"
+      "raw_sha256": "sha256:c971b9ac8cf9da387d83bd04f5980072d833061dd4609e808785c47f40017b5f"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
