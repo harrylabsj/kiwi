@@ -292,7 +292,11 @@ function accessStatusText(a) {
   if (a.status === "active") return "已生效（配置版本 " + a.configVersion + "）";
   if (a.status === "pending") return "已提交，等待平台校验";
   if (a.status === "invalid") return "校验未通过，请重新提交分享链接";
-  if (a.status === "revoked") return "已撤销，采购方当前无法经平台网关访问";
+  if (a.status === "revoked") {
+    return a.statusReason === "superseded"
+      ? "已被新版本替换（旧码不再发放）"
+      : "已撤回，采购方当前无法经平台网关访问";
+  }
   return "未配置：WorkBuddy 上的采购方无法访问本店";
 }
 function appendCatalogAccess(html) {
@@ -311,6 +315,11 @@ function appendCatalogAccess(html) {
       (a.consentGranted ? '<button class="act danger" onclick="revokeAccess()">撤回授权并撤销</button>' : '') + '</div>' +
       '<label class="row"><input id="access-consent" type="checkbox" aria-label="同意分享码代管授权">' +
       ' 我确认：允许 Kiwi 目录<b>代为保管</b>此分享码，并仅在我已接受的采购方关注我时自动出示；我可随时撤回，撤回后目录会清空已保存的分享码。</label>' +
+      (a.recentFaults > 0
+        ? '<p class="warn">最近 24 小时有 ' + a.recentFaults +
+          ' 次采购方报告门禁失败' + (a.recentFaultsLastAt ? '（最后一次 ' + esc(a.recentFaultsLastAt) + '）' : '') +
+          '。请核对分享码是否已在平台侧更换或失效，必要时重新粘贴分享链接。</p>'
+        : '') +
       (a.consentGranted ? '<p class="muted">授权已生效' + (a.consentTermsVersion ? '（条款 ' + esc(a.consentTermsVersion) + '）' : '') + '</p>' : '') +
       (a.authMode ? '<p class="muted">业务认证：' + esc(a.authMode) + ' · 适配版本：' + esc(a.adapterVersion || "-") + '</p>' : '') +
       '</div>';

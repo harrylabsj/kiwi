@@ -233,6 +233,39 @@ export class MerchantAccessSource {
     return await this.get(catalogAgentId, options);
   }
 
+  /**
+   * 上报一次门禁失败（C-06，尽力而为）：目录只记账，不改配置状态；商家在工作台
+   * 看到计数后自行决定是否换码。任何失败都吞掉——上报不能影响采购方的主流程。
+   */
+  async reportFault(
+    catalogAgentId: string,
+    code: "gate_rejected" | "config_missing",
+  ): Promise<void> {
+    const sessionToken = this.deps.sessionToken;
+    if (sessionToken === undefined || sessionToken === "") return;
+    if (typeof catalogAgentId !== "string" || catalogAgentId === "") return;
+    const fetchImpl = this.deps.fetchImpl ?? globalThis.fetch;
+    const timeoutMs = this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const url = `${this.baseUrl}/v1/me/merchant-access/${encodeURIComponent(catalogAgentId)}/fault`;
+    try {
+      await fetchImpl(url, {
+        method: "POST",
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "user-agent": `kiwi-buyer/${PRODUCT_VERSION}`,
+          cookie: `kiwi_session=${sessionToken}`,
+          ...(this.deps.buyerId !== undefined ? { "x-buyer-id": this.deps.buyerId } : {}),
+        },
+        body: JSON.stringify({ code }),
+      });
+    } catch {
+      // 上报是旁路：超时/不可达都不影响采购流程。
+    }
+  }
+
   private async fetchAccess(
     catalogAgentId: string,
     runtimeOrigin: string | undefined,

@@ -412,13 +412,21 @@ export interface RuntimeAccessSummary {
   /** 商家对"目录代管并只向已接受的采购方出示"的授权是否有效。 */
   consentGranted: boolean;
   consentTermsVersion: string | null;
+  /** 废弃原因：`superseded` / `merchant_revoked` / 空。 */
+  statusReason: string;
+  /** 近 24h 采购方报告的门禁失败数（0 = 正常）。 */
+  recentFaults: number;
+  recentFaultsLastAt: string;
 }
 
 /** 会话内持久化的访问配置投影（只有脱敏元数据，没有分享码）。 */
 export interface RuntimeAccessRecord {
   config_version: number;
   status: RuntimeAccessStatus;
+  status_reason?: string;
   custody_enabled?: boolean;
+  recent_faults?: number;
+  recent_faults_last_at?: string;
   consent_granted?: boolean;
   consent_terms_version?: string | null;
   consent_granted_at?: string | null;
@@ -444,6 +452,9 @@ function accessSummaryOf(session: ConnectionSession | undefined): RuntimeAccessS
     custodyEnabled: record?.custody_enabled ?? true,
     consentGranted: record?.consent_granted ?? false,
     consentTermsVersion: record?.consent_terms_version ?? null,
+    statusReason: record?.status_reason ?? "",
+    recentFaults: record?.recent_faults ?? 0,
+    recentFaultsLastAt: record?.recent_faults_last_at ?? "",
   };
 }
 
@@ -1028,11 +1039,12 @@ class ConnectionServiceImpl implements MerchantConnectionService {
 
   async refreshAccess(): Promise<RuntimeAccessSummary> {
     const { session, context } = this.requireAccessTarget();
-    const { configVersion, runtimeAccess, custodyEnabled, consent } =
+    const { configVersion, runtimeAccess, custodyEnabled, consent, recentFaults } =
       await this.client.readRuntimeAccess(context, this.identity);
     this.recordAccess(session.enrollment_id, configVersion, runtimeAccess, {
       custodyEnabled,
       consent,
+      recentFaults,
     });
     return this.getAccessSummary();
   }
@@ -1158,17 +1170,24 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     enrollmentId: string,
     configVersion: number,
     projection: RuntimeAccessProjection | null,
-    consent?: { custodyEnabled: boolean; consent: RuntimeAccessConsent },
+    consent?: {
+      custodyEnabled: boolean;
+      consent: RuntimeAccessConsent;
+      recentFaults?: { count: number; lastAt: string };
+    },
   ): void {
     const record: RuntimeAccessRecord = {
       config_version: configVersion,
       status: (projection?.status ?? "none") as RuntimeAccessStatus,
+      ...(projection !== null ? { status_reason: projection.statusReason } : {}),
       ...(consent !== undefined
         ? {
             custody_enabled: consent.custodyEnabled,
             consent_granted: consent.consent.granted,
             consent_terms_version: consent.consent.termsVersion ?? null,
             consent_granted_at: consent.consent.grantedAt ?? null,
+            recent_faults: consent.recentFaults?.count ?? 0,
+            recent_faults_last_at: consent.recentFaults?.lastAt ?? "",
           }
         : {}),
       provider: projection?.provider ?? null,

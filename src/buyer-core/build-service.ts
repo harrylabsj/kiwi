@@ -174,6 +174,15 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
     })();
     const a2a = {
       merchantAccess,
+      ...(accessSource !== undefined
+        ? {
+            onAccessDenied: async (merchant: { catalog_agent_id?: string }) => {
+              if (merchant.catalog_agent_id !== undefined) {
+                await accessSource.reportFault(merchant.catalog_agent_id, "gate_rejected");
+              }
+            },
+          }
+        : {}),
       ...(signer !== undefined ? { signer } : {}),
       protocolStateDir,
       localBuyerAgentId:config.buyerAgentId,

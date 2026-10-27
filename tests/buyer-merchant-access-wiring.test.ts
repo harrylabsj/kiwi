@@ -80,6 +80,7 @@ function fetcher(
     hasResolver?: boolean;
     bearerToken?: string;
     signer?: import("../src/a2a/client/types.js").A2AOutboundSigner;
+    onAccessDenied?: (merchant: MerchantRecord) => void | Promise<void>;
     capture?: Array<Record<string, string>>;
   } = {},
 ): A2AQuoteFetcher {
@@ -107,6 +108,7 @@ function fetcher(
     }) as typeof fetch,
     ...(options.bearerToken !== undefined ? { bearerToken: options.bearerToken } : {}),
     ...(options.signer !== undefined ? { signer: options.signer } : {}),
+    ...(options.onAccessDenied !== undefined ? { onAccessDenied: options.onAccessDenied } : {}),
     skipDnsCheck: true,
     allowPrivateRanges: true,
     protocolStateDir: dir,
@@ -248,5 +250,35 @@ describe("A2AQuoteFetcher × WorkBuddy access", () => {
     const results = await leaking.requestQuotes(INTENT, [merchant(true)], CONTEXT);
     expect(results[0]?.failure?.detail ?? "").not.toContain("SECRET-42");
     expect(results[0]?.failure?.detail ?? "").toContain("sharecode=<redacted>");
+  });
+
+  it("reports a gate rejection to the merchant side once", async () => {
+    const denied: MerchantRecord[] = [];
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-buyer-access-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const gated = new A2AQuoteFetcher({
+      fetchImpl: ((input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes("agent-card.json")) {
+          return Promise.resolve(new Response('{"error":"share code required"}', { status: 403 }));
+        }
+        return Promise.resolve(new Response("{}", { status: 500 }));
+      }) as typeof fetch,
+      skipDnsCheck: true,
+      allowPrivateRanges: true,
+      protocolStateDir: dir,
+      localBuyerAgentId: "buyer-access-test",
+      merchantAccess: {
+        forMerchant: async () => ({ sendUrlFor: (url) => `${url}?sharecode=abc` }),
+        forEndpoint: async () => null,
+      },
+      onAccessDenied: async (merchant) => {
+        denied.push(merchant);
+      },
+    });
+    const results = await gated.requestQuotes(INTENT, [merchant(true)], CONTEXT);
+    expect(results[0]?.failure?.classification).toBe("access_denied");
+    expect(denied).toHaveLength(1);
+    expect(denied[0]?.catalog_agent_id).toBe("cagt_1");
   });
 });

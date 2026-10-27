@@ -132,6 +132,39 @@ describe("MerchantAccessSource", () => {
     expect(refreshed?.secret_value).toBe("share-code-2");
   });
 
+  it("reports a gate fault best-effort without throwing", async () => {
+    const seen: Array<{ url: string; method: string; body: unknown; cookie: string | null }> = [];
+    const client = new MerchantAccessSource({
+      baseUrl: BASE,
+      sessionToken: "session-token",
+      fetchImpl: ((input: string | URL | Request, init?: Parameters<typeof fetch>[1]) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        seen.push({
+          url,
+          method: String(init?.method ?? "GET"),
+          body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+          cookie: new Headers(init?.headers ?? {}).get("cookie"),
+        });
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }) as typeof fetch,
+    });
+    await client.reportFault(AGENT, "gate_rejected");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.method).toBe("POST");
+    expect(seen[0]?.url).toBe(`${BASE}/v1/me/merchant-access/${AGENT}/fault`);
+    expect(seen[0]?.body).toEqual({ code: "gate_rejected" });
+    expect(seen[0]?.cookie).toBe("kiwi_session=session-token");
+  });
+
+  it("swallows fault-report failures", async () => {
+    const client = new MerchantAccessSource({
+      baseUrl: BASE,
+      sessionToken: "session-token",
+      fetchImpl: ((() => Promise.reject(new Error("offline"))) as unknown) as typeof fetch,
+    });
+    await expect(client.reportFault(AGENT, "config_missing")).resolves.toBeUndefined();
+  });
+
   it("refuses to run without a session token", async () => {
     const client = new MerchantAccessSource({ baseUrl: BASE, fetchImpl: globalThis.fetch });
     await expect(client.get(AGENT, { runtimeOrigin: ORIGIN })).rejects.toMatchObject({

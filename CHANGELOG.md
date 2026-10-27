@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **门禁失败可见与公钥登记**：买家遇平台门禁拒绝时，客户端旁路上报 `gate_rejected`（失败不影响报价流程）；工作台在签名读里看到近 24h 计数并提示核对分享码。另外新增 `scripts/trust-buyer-key.mjs`（`src/tools/trusted-buyer-keys.ts`）：把买家的 Ed25519 公钥登记进运行时数据目录的 `a2a-trusted-keys.json`（0600、原子写、重复 keyid 拒绝、必须 Ed25519），受保护操作从此认可该买家身份。工作台的"已撤销"现在区分"被新版本替换"与"撤回"。
 - **分享码代管授权（政策风险控制）**：工作台在提交分享链接前必须勾选并同意《分享码代管授权》——「允许 Kiwi 目录代为保管此分享码，并仅在我已接受的采购方关注我时自动出示；可随时撤回，撤回后目录会清空已保存的分享码」。授权条款版本随请求提交（`workbuddy-share-v1-2026-10-27`），过期版本会被目录拒绝；「撤回授权并撤销」同时停止发放并清空密文。工作台还会显示目录代管总开关被运营关闭的状态（此时无法新建/更新，但可撤回）。
 - **平台行为回显探针（I-01 服务端）**：新增 `src/tools/workbuddy-echo.ts` 与 `scripts/workbuddy-echo.mjs`——把它发布成 WorkBuddy 网站应用后，可直接量出网关是否剥除/重排查询参数、是否改写或注入 `Authorization`、签名头是否原样透传，不必等平台答复。摘要只含参数名、头名与值摘要：分享码只报"存在 + 长度"，`authorization` 只报方案名与哈希，请求体只报长度与哈希；请求体上限 64 KiB，非 GET/POST/HEAD 返回 405。
 - **受保护操作与签名身份（M-05/M-06/B-05）**：`GetExtendedAgentCard` 现在要求已验证身份（匿名返回 `authentication_required`；此前对任何人返回扩展名片），与 `GetTask`/`ListTasks`/`CancelTask` 的匿名拒绝保持一致——`message/send` 的匿名 T0 询价不变。签名模式下 `Authorization` 永不被当作业务身份（平台注入同理）；`KIWI_CLOUD_A2A_AUTH=bearer` 时提交 WorkBuddy 分享配置 fail-closed（`ACCESS_AUTH_MODE_CONFLICT`）。Buyer 侧新增 `a2aSigningKeyDir`：配置后以持久化 Ed25519 身份对每个出站 A2A 请求签名（RFC 9421，覆盖 method/去码 target-uri/content-digest），商家把公钥加入 `a2a-trusted-keys.json` 即可识别该买家；未配置时仍按匿名 T0 处理。

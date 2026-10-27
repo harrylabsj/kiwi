@@ -95,6 +95,11 @@ export interface A2AQuoteFetcherOptions {
    * Authorization 不影响它。
    */
   signer?: A2AOutboundSigner;
+  /**
+   * 平台门禁拒绝时的旁路回调（C-06）：目录据此记一次失败，商家在工作台能看到
+   * "最近有采购方报告门禁失败"。回调失败不影响主流程。
+   */
+  onAccessDenied?: (merchant: MerchantRecord) => void | Promise<void>;
 }
 
 /**
@@ -242,6 +247,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   private readonly recovery?: BuyerProtocolRecovery;
   private readonly merchantAccess?: MerchantAccessResolver;
   private readonly signer?: A2AOutboundSigner;
+  private readonly onAccessDenied?: (merchant: MerchantRecord) => void | Promise<void>;
   private readonly endpointCache = new Map<string, string>();
   private readonly now: () => string;
 
@@ -258,6 +264,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     this.rpcFetchImpl = options.fetchImpl;
     this.merchantAccess = options.merchantAccess;
     this.signer = options.signer;
+    this.onAccessDenied = options.onAccessDenied;
     if (options.protocolStateDir && options.localBuyerAgentId) this.recovery = new BuyerProtocolRecovery(options.protocolStateDir, options.localBuyerAgentId, options.now);
   }
 
@@ -318,6 +325,14 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     } catch (error) {
       if (error instanceof A2AEndpointResolutionError) {
         const denied = error.httpStatus === 401 || error.httpStatus === 403;
+        if (denied && this.onAccessDenied !== undefined) {
+          // 旁路：上报失败绝不影响本次失败的分类与返回。
+          try {
+            await this.onAccessDenied(merchant);
+          } catch {
+            // ignore
+          }
+        }
         return {
           merchant_id: merchantId,
           status: "failed",

@@ -257,6 +257,8 @@ export interface RuntimeAccessProjection {
   authMode: string;
   /** `pending` / `active` / `invalid` / `revoked`。 */
   status: string;
+  /** 废弃原因：`superseded`（被新版本替换）/ `merchant_revoked`（商家撤销）/ 空。 */
+  statusReason: string;
   validatedAt: string;
   updatedAt: string;
 }
@@ -360,6 +362,16 @@ function requiredString(value: unknown, field: string): string {
  * 校验 Catalog 的脱敏访问配置投影。白名单读取：任何未知字段（尤其是
  * `secret_value` 之类）都不会被带进运行时，也不会进入日志。
  */
+function projectRecentFaults(value: unknown): { count: number; lastAt: string; windowHours: number } {
+  if (!isRecord(value)) return { count: 0, lastAt: "", windowHours: 24 };
+  const count = typeof value["count"] === "number" && Number.isInteger(value["count"]) ? value["count"] : 0;
+  return {
+    count: Math.max(0, count),
+    lastAt: typeof value["last_at"] === "string" ? value["last_at"] : "",
+    windowHours: typeof value["window_hours"] === "number" ? value["window_hours"] : 24,
+  };
+}
+
 function projectRuntimeAccessConsent(value: unknown): RuntimeAccessConsent {
   if (!isRecord(value) || value["granted"] !== true) return { granted: false };
   return {
@@ -386,6 +398,7 @@ function projectRuntimeAccess(value: unknown): RuntimeAccessProjection {
     adapterVersion: requiredString(value["adapter_version"], "runtime_access.adapter_version"),
     authMode: requiredString(value["auth_mode"], "runtime_access.auth_mode"),
     status: requiredString(value["status"], "runtime_access.status"),
+    statusReason: typeof value["status_reason"] === "string" ? value["status_reason"] : "",
     validatedAt: typeof value["validated_at"] === "string" ? value["validated_at"] : "",
     updatedAt: typeof value["updated_at"] === "string" ? value["updated_at"] : "",
   };
@@ -910,6 +923,7 @@ export class CatalogClient {
     runtimeAccess: RuntimeAccessProjection | null;
     custodyEnabled: boolean;
     consent: RuntimeAccessConsent;
+    recentFaults: { count: number; lastAt: string; windowHours: number };
   }> {
     const agentId = this.requireAgentId(context.agentId);
     const bindingId = String(context.bindingId ?? "").trim();
@@ -961,6 +975,7 @@ export class CatalogClient {
       runtimeAccess: projection,
       custodyEnabled: response["custody_enabled"] === true,
       consent: projectRuntimeAccessConsent(response["consent"]),
+      recentFaults: projectRecentFaults(response["recent_faults"]),
     };
   }
 
