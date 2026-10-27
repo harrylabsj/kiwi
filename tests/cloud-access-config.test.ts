@@ -311,6 +311,41 @@ describe("refreshAccess / revokeAccess", () => {
   });
 });
 
+describe("auth mode conflict (M-06)", () => {
+  it("refuses to accept a share link when the runtime uses bearer auth", () => {
+    expect(() =>
+      createMerchantConnectionService({
+        dataDir: mkdtempSync(path.join(tmpdir(), "kiwi-access-bearer-")),
+        catalogUrl: CATALOG_ORIGIN,
+        publicOrigin: RUNTIME_ORIGIN,
+        allowPrivateOrigin: true,
+        a2aAuthMode: "bearer",
+        accessShareLink: `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
+        fetchImpl: (async () => new Response("{}")) as typeof fetch,
+      }),
+    ).toThrow(expect.objectContaining({ code: "ACCESS_AUTH_MODE_CONFLICT" }));
+  });
+
+  it("blocks workbench submission under bearer auth with an actionable message", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "kiwi-access-bearer-"));
+    cleanups.push(() => rmSync(dataDir, { recursive: true, force: true }));
+    const service = createMerchantConnectionService({
+      dataDir,
+      catalogUrl: CATALOG_ORIGIN,
+      publicOrigin: RUNTIME_ORIGIN,
+      allowPrivateOrigin: true,
+      a2aAuthMode: "bearer",
+      fetchImpl: (async () => new Response("{}")) as typeof fetch,
+    });
+    const error = await service
+      .submitAccessShareLink(`${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(MerchantConnectError);
+    expect((error as MerchantConnectError).code).toBe("ACCESS_AUTH_MODE_CONFLICT");
+    expect((error as MerchantConnectError).message).toContain("signature");
+  });
+});
+
 describe("first-bind access config option", () => {
   it("rejects a configured share link that points at another deployment", () => {
     expect(() =>

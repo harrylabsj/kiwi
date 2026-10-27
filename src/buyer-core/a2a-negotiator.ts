@@ -30,11 +30,14 @@ import {
   envelopeToMessage,
 } from "./a2a-knp.js";
 import type { NegotiationStep, Negotiator } from "./service.js";
+import type { A2AOutboundSigner } from "../a2a/client/types.js";
 
 import { BuyerProtocolRecovery, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext } from "./protocol-recovery.js";
 import { BuyerReplyRejected } from "./receive-gate.js";
 
 export interface A2ANegotiatorOptions {
+  /** 出站 HTTP Message Signature 签名器（B-05）：WorkBuddy 商家的业务身份。 */
+  signer?: A2AOutboundSigner;
   allowPrivateRanges?: boolean;
   skipDnsCheck?: boolean;
   timeoutMs?: number;
@@ -138,6 +141,7 @@ export class A2ANegotiator implements Negotiator {
   private readonly skipDnsCheck: boolean;
   private readonly timeoutMs: number;
   private readonly bearerToken?: string;
+  private readonly signer?: A2AOutboundSigner;
   private readonly defaultDiscountRate: number;
   private readonly fetchImpl?: typeof fetch;
 
@@ -150,6 +154,7 @@ export class A2ANegotiator implements Negotiator {
     this.skipDnsCheck = options.skipDnsCheck ?? false;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.bearerToken = options.bearerToken;
+    this.signer = options.signer;
     this.defaultDiscountRate = options.defaultDiscountRate ?? DEFAULT_DISCOUNT_RATE;
     this.fetchImpl = options.fetchImpl;
     this.counterProposalGate = options.counterProposalGate;
@@ -266,6 +271,7 @@ export class A2ANegotiator implements Negotiator {
       }
       const client = buildA2AClient(endpoint, {
         bearerToken: this.bearerToken,
+        ...(this.signer !== undefined ? { signer: this.signer } : {}),
         allowPrivateRanges: this.allowPrivateRanges,
         skipDnsCheck: this.skipDnsCheck,
         timeoutMs: this.timeoutMs,

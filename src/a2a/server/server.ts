@@ -560,7 +560,7 @@ export class A2AServer {
         case METHOD_CANCEL_TASK:
           return this.upperTaskState(await this.handleCancelTask(params, caller));
         case METHOD_GET_EXTENDED_AGENT_CARD:
-          return this.handleGetExtendedAgentCard();
+          return this.handleGetExtendedAgentCard(caller);
         // issue 10 / TCK JSONRPC-SSE-002：不支持的操作返回标准错误码而非
         // MethodNotFound——流式未声明支持 → -32004 UnsupportedOperationError；
         // push 通知未声明支持 → -32003 PushNotificationNotSupportedError。
@@ -895,7 +895,18 @@ export class A2AServer {
   }
 
   /** GetExtendedAgentCard（issue 10 / TCK CARD-EXT-001）：返回 snake_case 扩展 card 本体。 */
-  private handleGetExtendedAgentCard(): unknown {
+  /**
+   * `agent/getAuthenticatedExtendedCard`（G0 §1.3 受保护操作策略）：
+   * 要求**已验证业务身份**；匿名调用明确返回 `authentication_required`，
+   * 不把扩展名片（可能含更详细信息）降级成公开读。
+   */
+  private handleGetExtendedAgentCard(caller: Caller): unknown {
+    if (anonymousCaller(caller) || caller.identityVerified !== true) {
+      throw protocolError(
+        "authentication_required",
+        "extended agent card requires a verified identity",
+      );
+    }
     return buildExtendedAgentCard(resolveCardConfig(this.cardConfig));
   }
 }

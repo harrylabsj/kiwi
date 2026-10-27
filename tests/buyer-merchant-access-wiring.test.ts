@@ -79,6 +79,7 @@ function fetcher(
     access?: { sendUrlFor: (url: string) => string } | null;
     hasResolver?: boolean;
     bearerToken?: string;
+    signer?: import("../src/a2a/client/types.js").A2AOutboundSigner;
     capture?: Array<Record<string, string>>;
   } = {},
 ): A2AQuoteFetcher {
@@ -105,6 +106,7 @@ function fetcher(
       return Promise.resolve(new Response("{}", { status: 500 }));
     }) as typeof fetch,
     ...(options.bearerToken !== undefined ? { bearerToken: options.bearerToken } : {}),
+    ...(options.signer !== undefined ? { signer: options.signer } : {}),
     skipDnsCheck: true,
     allowPrivateRanges: true,
     protocolStateDir: dir,
@@ -203,6 +205,28 @@ describe("A2AQuoteFetcher × WorkBuddy access", () => {
     expect(captured.some((headers) => headers["authorization"] === "Bearer bearer-ordinary")).toBe(
       true,
     );
+  });
+
+  it("signs outbound requests when a buyer signing identity is configured", async () => {
+    const calls: string[] = [];
+    const captured: Array<Record<string, string>> = [];
+    const { generateA2aSigningIdentity } = await import("../src/a2a/signing-key.js");
+    const { HttpMessageSigner } = await import("../src/trust/identity/index.js");
+    const identity = generateA2aSigningIdentity("buyer.example");
+    const signer = new HttpMessageSigner({
+      keyid: identity.keyid,
+      algorithm: identity.algorithm,
+      privateKey: identity.privateKeyPem,
+    });
+    await fetcher(calls, {
+      access: { sendUrlFor: (url) => `${url}?sharecode=abc` },
+      signer,
+      capture: captured,
+    }).requestQuotes(INTENT, [merchant(true)], CONTEXT);
+    // RPC 那条请求必须带 Signature（签名覆盖的是去码地址）。
+    const signed = captured.find((headers) => headers["signature"] !== undefined);
+    expect(signed).toBeDefined();
+    expect(signed?.["signature-input"]).toContain("content-digest");
   });
 
   it("redacts a share parameter that a resolver error happened to carry", async () => {

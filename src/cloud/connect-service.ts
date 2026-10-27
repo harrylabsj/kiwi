@@ -359,6 +359,12 @@ export interface MerchantConnectionServiceOptions {
    * 工作台 `PUT runtime-access`。
    */
   accessShareLink?: string;
+  /**
+   * 入站 A2A 认证模式（G0 §1.1.3）：WorkBuddy 路径只支持 `signature`。
+   * `bearer` 下提交访问配置会 fail-closed（平台会改写 Authorization，bearer
+   * 身份不可用于业务授权；不静默降级）。
+   */
+  a2aAuthMode?: "signature" | "bearer";
   /** 仅测试/本地回环：放宽公网 host 白名单（默认绝不放宽 CLI 的私网边界）。 */
   allowPrivateOrigin?: boolean;
 }
@@ -543,6 +549,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
    * 工作台的 PUT runtime-access（版本可读、可撤销）。
    */
   private readonly firstBindAccessConfig: WorkbuddyAccessConfig | undefined;
+  private readonly a2aAuthMode: "signature" | "bearer";
   /** begin/reconcile 串行（排队不交错）。 */
   private mutex: Promise<unknown> = Promise.resolve();
   /** poll 节流（内存态；重启后首趟允许立即 poll）。 */
@@ -560,6 +567,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     this.dataDir = options.dataDir;
     this.generation = options.generation ?? 1;
     this.serviceEpoch = options.serviceEpoch ?? 1;
+    this.a2aAuthMode = options.a2aAuthMode ?? "signature";
     const shareLink = String(options.accessShareLink ?? "").trim();
     const trimmed = String(options.publicOrigin ?? "")
       .trim()
@@ -599,6 +607,8 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     if (shareLink === "") {
       this.firstBindAccessConfig = undefined;
     } else {
+      // 认证模式冲突必须显式失败：bearer 模式下分享码登记没有意义。
+      this.assertSignatureAuthMode();
       // 配置错误必须显式失败（不静默跳过）：链接不属于本实例就说明商家配错了。
       const link = parseWorkbuddyShareLink(shareLink);
       assertShareLinkMatchesRuntimeOrigin(link, this.origin);
@@ -1010,6 +1020,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
   }
 
   async submitAccessShareLink(rawLink: string): Promise<RuntimeAccessSummary> {
+    this.assertSignatureAuthMode();
     // 解析先于任何网络动作：非法链接不会产生请求，也不会把链接内容带进日志。
     const link = parseWorkbuddyShareLink(rawLink);
     assertShareLinkMatchesRuntimeOrigin(link, this.origin);
@@ -1064,6 +1075,19 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     }
     this.recordAccess(session.enrollment_id, projection.configVersion, projection);
     return this.getAccessSummary();
+  }
+
+  /**
+   * WorkBuddy 访问配置要求签名认证（G0 §1.1.3）：平台会改写 Authorization，
+   * bearer 身份不能当业务凭据。不静默降级，直接给出可执行的修复提示。
+   */
+  private assertSignatureAuthMode(): void {
+    if (this.a2aAuthMode !== "signature") {
+      throw new MerchantConnectError(
+        "ACCESS_AUTH_MODE_CONFLICT",
+        "WorkBuddy 分享码要求 A2A 入站使用签名认证；当前是 bearer 模式，请改为 KIWI_CLOUD_A2A_AUTH=signature",
+      );
+    }
   }
 
   /** 访问配置只对已建立绑定的会话有意义；拿到 (session, 签名上下文) 或明确失败。 */

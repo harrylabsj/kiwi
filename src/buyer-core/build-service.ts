@@ -29,6 +29,8 @@ import { assertNorthboundContractValid } from "../contracts/northbound-schema.js
 import { BuyerFollowsSource } from "../discovery/catalog-source/buyer-follows.js";
 import { MerchantAccessSource } from "../discovery/catalog-source/merchant-access.js";
 import { buildWorkbuddyDualAddress } from "../a2a/access/workbuddy-address.js";
+import { loadOrCreateA2aSigningIdentity } from "../a2a/signing-key.js";
+import { HttpMessageSigner } from "../trust/identity/index.js";
 import type { MerchantAccessResolver, MerchantAccessTransport } from "./a2a-quote-fetcher.js";
 import { A2ANegotiator } from "./a2a-negotiator.js";
 import { A2AQuoteFetcher } from "./a2a-quote-fetcher.js";
@@ -64,6 +66,13 @@ export interface BuyerServiceConfig {
   a2aTimeoutMs?: number;
   /** Explicit recovery directory required for memory/URI database configurations. */
   protocolStateDir?: string;
+  /**
+   * 可选：Buyer 的 A2A 签名身份目录（B-05）。设置后每个出站 A2A 请求带
+   * HTTP Message Signature（RFC 9421），WorkBuddy 商家的业务身份即来自它；
+   * 商家需把该公钥加入自己的 `a2a-trusted-keys.json`。目录首次使用时生成密钥
+   * 并持久化（0600），重启不换钥。
+   */
+  a2aSigningKeyDir?: string;
 }
 
 /**
@@ -152,8 +161,20 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
         }
       },
     };
+    // B-05：可选的出站签名身份。没有它时 WorkBuddy 商家只能走到匿名 T0，
+    // 受保护操作（任务回读等）会被商家按策略拒绝——这是刻意的 fail-closed。
+    const signer = (() => {
+      if (config.a2aSigningKeyDir === undefined || config.a2aSigningKeyDir === "") return undefined;
+      const identity = loadOrCreateA2aSigningIdentity(config.a2aSigningKeyDir, config.buyerAgentId);
+      return new HttpMessageSigner({
+        keyid: identity.keyid,
+        algorithm: identity.algorithm,
+        privateKey: identity.privateKeyPem,
+      });
+    })();
     const a2a = {
       merchantAccess,
+      ...(signer !== undefined ? { signer } : {}),
       protocolStateDir,
       localBuyerAgentId:config.buyerAgentId,
       bearerToken: config.a2aBearerToken,

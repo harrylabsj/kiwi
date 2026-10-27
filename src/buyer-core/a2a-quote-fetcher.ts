@@ -27,6 +27,7 @@
  */
 
 import { newNegotiationId } from "../negotiation/domain/identifiers.js";
+import type { A2AOutboundSigner } from "../a2a/client/types.js";
 import {
   A2AEndpointResolutionError,
   buildA2AClient,
@@ -88,6 +89,12 @@ export interface A2AQuoteFetcherOptions {
    * 且解析失败/为空一律 fail-closed（不静默降级为无码直连）。
    */
   merchantAccess?: MerchantAccessResolver;
+  /**
+   * 可选：出站 HTTP Message Signature 签名器（B-05）。WorkBuddy 商家的业务
+   * 身份只来自签名；签名覆盖 method/去码 target-uri/body，平台改写
+   * Authorization 不影响它。
+   */
+  signer?: A2AOutboundSigner;
 }
 
 /**
@@ -234,6 +241,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   private readonly rpcFetchImpl?: typeof fetch;
   private readonly recovery?: BuyerProtocolRecovery;
   private readonly merchantAccess?: MerchantAccessResolver;
+  private readonly signer?: A2AOutboundSigner;
   private readonly endpointCache = new Map<string, string>();
   private readonly now: () => string;
 
@@ -249,6 +257,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.rpcFetchImpl = options.fetchImpl;
     this.merchantAccess = options.merchantAccess;
+    this.signer = options.signer;
     if (options.protocolStateDir && options.localBuyerAgentId) this.recovery = new BuyerProtocolRecovery(options.protocolStateDir, options.localBuyerAgentId, options.now);
   }
 
@@ -290,6 +299,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         // WorkBuddy 路径不发送标准 Bearer：平台会改写 Authorization（G0 §1.1.3），
         // 继续附带只会让上层误以为认证已生效。业务认证走签名（B-05/B-06）。
         bearerToken: access === null ? this.bearerToken : undefined,
+        ...(this.signer !== undefined ? { signer: this.signer } : {}),
         allowPrivateRanges: this.allowPrivateRanges,
         skipDnsCheck: this.skipDnsCheck,
         timeoutMs: this.timeoutMs,
@@ -364,6 +374,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
       const access=this.merchantAccess===undefined?null:await this.merchantAccess.forEndpoint(endpoint);
       return buildA2AClient(endpoint,{
         bearerToken:this.bearerToken,allowPrivateRanges:this.allowPrivateRanges,skipDnsCheck:this.skipDnsCheck,timeoutMs:this.timeoutMs,
+        ...(this.signer!==undefined?{signer:this.signer}:{}),
         ...(access!==null?{sendUrl:access.sendUrlFor(endpoint)}:{}),
         ...(this.rpcFetchImpl!==undefined?{fetchImpl:this.rpcFetchImpl}:{}),
       }).getTask(id);

@@ -632,6 +632,7 @@ export async function bootstrapCloudRuntime(
       directConnection = createMerchantConnectionService({
         dataDir: config.dataDir, catalogUrl: config.catalogUrl, publicOrigin: config.publicOrigin,
         ...(config.accessShareLink !== undefined ? { accessShareLink: config.accessShareLink } : {}),
+        a2aAuthMode: config.a2aAuth.mode,
         ...(options.catalogFetchImpl !== undefined ? { fetchImpl: options.catalogFetchImpl } : {}),
         beforePublish: async (binding) => {
           if (productsFilePath !== undefined && !config.sample) {
