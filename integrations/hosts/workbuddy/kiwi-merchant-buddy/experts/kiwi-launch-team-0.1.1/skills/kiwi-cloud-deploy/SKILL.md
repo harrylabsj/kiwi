@@ -2,8 +2,8 @@
 name: kiwi-cloud-deploy
 display_name: Kiwi 云端接待部署
 display_name_en: Kiwi Cloud Reception Deploy
-description: Deploy the Kiwi merchant reception runtime to the merchant's own WorkBuddy cloud app in a strict order (pack verify → first sites_deploy to obtain the public URL → prepare → redeploy the same app → self-check → Catalog publish) with no-forgery rules; also covers the own-domain path (route B) that runs in parallel with it. Route A requires the merchant's WorkBuddy account to be the enterprise edition. Use for 一键开通云端接待、升级云端接待服务、云端接待部署排障、自有域名部署。
-description_zh: 按固定顺序把 Kiwi 商家接待运行时部署到商家自己的云端应用，自检并引导上线确认。
+description: Deploy the Kiwi merchant reception runtime to the merchant's own WorkBuddy cloud app in a strict order (pack verify → first sites_deploy to obtain the public URL → prepare → redeploy the same app → self-check → Catalog publish) with no-forgery rules; Route A requires the merchant's WorkBuddy account to be the enterprise edition. Use for 一键开通云端接待、升级云端接待服务、云端接待部署排障。
+description_zh: 按固定顺序把 Kiwi 商家接待运行时部署到商家自己的云端应用（要求企业版账号），自检并引导上线确认。
 description_en: Deploy the merchant reception runtime to the merchant's own cloud app step by step, self-check, and guide the go-live confirmation.
 category: devops
 version: 0.3.1
@@ -16,17 +16,13 @@ author: harrylabsj
 
 平台工具口径（V1 实测，2026-09-28）：Buddy 会话**没有** inspect/activate/deploy 与云端模块开通这组工具；可用的是延迟工具 **`workbuddy_sites_deploy`（发布上线）** 与 **`workbuddy_sites_unpublish`（下线）**，加上本地文件读写与 Bash。我们不使用任何云端模块（数据库/登录/存储/LLM 都不开），因此无需 activate。**工具名与参数以平台实际提供为准**：以下步骤按功能称呼工具，执行时用会话里真实存在的发布工具与参数名；对不上时如实报告，不要猜。
 
-## 选型：路线 A 与路线 B
+## 适用前提：商家账号必须是企业版
 
-| | 路线 A（WorkBuddy 托管） | 路线 B（商家自有域名） |
-|---|---|---|
-| 账号要求 | **必须是企业版**。平台已书面说明：个人（体验版）不属于可确认支持 A2A / 企业开放接入的版本 | 无平台账号要求 |
-| 入口 | 平台应用域名，请求需带 `sharecode` | 商家自己的域名，**无分享码** |
-| 谁持分享码 | 可选：由 Kiwi 目录代管（需商家逐户授权，默认关闭） | 不需要 |
-| 运维 | 零运维（平台托管，有空闲回收） | 商家自己的主机（常驻，无冷启动） |
-| 何时选 | 商家已有/愿意开通企业版，且希望零运维 | 商家用个人版、不想开企业版，或需要固定入口与常驻进程 |
+平台已书面说明：**个人（体验版）不属于可确认支持 A2A / 企业开放接入的版本**。因此本技能只面向**企业版**商家：
 
-两条路线**并行可选**，不存在"一条不行才用另一条"。制品、prepare、自检、绑定流程完全相同，只有"公网入口"这一项不同。**先用第 0 步确认账号档位，再决定走哪条。**
+- 档位无法从工具侧确认时，**如实询问商家**，不要假设。
+- 不是企业版 → 停止部署，如实说明"个人版不支持 A2A/企业开放接入，需要企业版"，不要承诺替代方案、不要改配置凑一个能跑的形态。
+- 其它部署形态不在本技能范围，官网有详细说明；本技能不引导。
 
 固定参数：云端应用/站点名一律用「**Kiwi商家接待**」。已有就复用，**绝不新建第二个**；首次部署后的再次发布必须复用**同一个应用**（换应用会换公网域名，后续校验全部失效）。
 
@@ -45,9 +41,7 @@ author: harrylabsj
 
 ## 第 0 步：执行前检查
 
-0. **确认账号档位（决定路线）**：路线 A 要求商家 WorkBuddy 账号为**企业版**——平台已明确个人（体验版）不属于可确认支持 A2A / 企业开放接入的版本。档位无法从工具侧确认时，**如实询问商家**，不要假设：
-   - 企业版 → 走路线 A 的流程；
-   - 个人版/不愿开通企业版 → 转「路线 B：部署到商家自有域名」，不要承诺"个人版也能跑 A2A"。
+0. **确认账号档位**：商家 WorkBuddy 账号必须是**企业版**——平台已明确个人（体验版）不属于可确认支持 A2A / 企业开放接入的版本。档位无法从工具侧确认时，**如实询问商家**：不是企业版就停止部署并如实说明，不承诺替代形态。
 1. **确认账号已连接**：先确认商家已连接 Kiwi 商家账号（有 `kiwi_catalog_get_merchant_profile` 时调用确认；没有则询问商家是否已连接，未连接先走注册开通，再回来部署）。
 2. **检查会话工具**：确认本会话是否具备平台发布工具 `workbuddy_sites_deploy`（及下线工具 `workbuddy_sites_unpublish`）。**缺失 → 转入「方案 B 兜底」**，不要尝试变通。工具存在但参数/回执与下述步骤对不上时，以平台实际为准并如实记录差异。
 3. **检查发布参数**：读取 @references/release.json。若 `package_version`、`aggregate_digest`、`npm_integrity` 仍为 `{{…}}` 占位，说明发布参数尚未回填：停止实际部署，向商家如实说明"云端接待的发布参数尚未就绪，暂时只能讲解流程"，并讲解下面各步骤。
@@ -148,96 +142,6 @@ WorkBuddy 上的应用入口要求请求携带分享码；Kiwi 商家由目录�
 - **暂停接待**（采购方搜不到名片）：优先在 Catalog/工作台暂停名片；实例保留，恢复时在 Catalog 重新发布名片。
 - **平台应用下线**：会话内可用 `workbuddy_sites_unpublish` 下线；也可由商家本人在平台面板操作。如实告知两条路径与后果（下线后公网地址不可达），由商家决定。
 - **恢复**：重新对同一应用调用 `workbuddy_sites_deploy`（部署目录不变时直接重发即可）。
-
-## 路线 B：部署到商家自有域名（与路线 A 并行）
-
-**什么时候选这条**：商家用的是个人版（平台确认不支持 A2A/企业开放接入）、不想开通企业版、不想被平台门禁约束，或需要固定入口与常驻进程（无空闲回收）。**与路线 A 的唯一区别是"谁的公网入口"**：路线 A 用 WorkBuddy 的应用域名（带 `sharecode`），路线 B 用商家自己的域名（**没有分享码**，`runtime_origin` 就是商家域名）。制品、prepare、自检、绑定流程完全相同。
-
-### B1. 前置
-
-- 一台有公网 IP 的云主机，能运行 Node >= 22.19（与包 `engines` 一致）。
-- 商家自己的域名，例如 `kiwi.example.com`，A 记录指向该主机公网 IP。
-- 反向代理负责 TLS（下文用 Caddy 自动签发证书）。**Runtime 自己只监听明文单端口，绝不能把该端口直接暴露到公网。**
-
-### B2. 取包与校验
-
-与路线 A 第 1 步完全相同（`npm pack` + 比对 `npm_integrity` 与 `aggregate_digest`，不一致即停止）。
-
-### B3. prepare（在服务器上执行）
-
-```sh
-node prepare.mjs \
-  --origin https://kiwi.example.com \
-  --out /srv/kiwi-merchant \
-  --data-dir /var/lib/kiwi-merchant \
-  --admin-bootstrap
-```
-
-- `--origin` 必须**逐字符**等于最终公网地址（https、不带路径/查询/凭据）；改了域名就要重跑 prepare（origin 是身份，不是参数）。
-- `--data-dir` 必须**在部署目录之外**且是持久盘：商家身份、协商账本、Catalog 绑定都在这里；丢了这个目录等于换了一个商家身份。
-- `--admin-bootstrap` 只在本机第一次部署时用；口令只展示一次（硬规则 7）。
-
-### B4. 反向代理（Caddy 最小配置）
-
-```caddyfile
-kiwi.example.com {
-    reverse_proxy 127.0.0.1:8787
-}
-```
-
-### B5. 常驻进程（systemd 最小单元）
-
-```ini
-[Unit]
-Description=Kiwi merchant runtime
-After=network-online.target
-
-[Service]
-WorkingDirectory=/srv/kiwi-merchant
-# prepare 已把 public_origin / data_dir / profile / catalog_url / a2a_auth(signature)
-# 写进 cloud.config.json；下面只覆盖需要在本机调整的两项。
-Environment=KIWI_CLOUD_BIND_HOST=127.0.0.1
-Environment=KIWI_CLOUD_PORT=8787
-ExecStart=/usr/bin/node app/cloud/main.js
-Restart=on-failure
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-```
-
-- 入站认证由 prepare 写进 `cloud.config.json` 的 `a2a_auth: "signature"` 提供；要换成 bearer 时用 `KIWI_CLOUD_A2A_AUTH=bearer:<ENV>` 覆盖（缺认证配置会拒绝启动）。
-- `KIWI_CLOUD_BIND_HOST=127.0.0.1` 让 Runtime 只被本机反代访问；平台托管形态才是 `0.0.0.0`。
-- `WorkingDirectory` 必须是制品根（含 `app/`、`cloud.config.json`）；换目录时也可用 `KIWI_CLOUD_ARTIFACT_ROOT` 显式指定。
-- 可选：在拿到商家分享链接时用 `KIWI_CLOUD_ACCESS_SHARE_LINK` 随首绑提交（**仅当仍想走平台门禁**时；路线 B 不需要它）。
-
-### B6. 自检
-
-```sh
-curl -sS -o /dev/null -w '%{http_code}\n' https://kiwi.example.com/livez
-curl -sS https://kiwi.example.com/readyz
-curl -sS https://kiwi.example.com/.well-known/agent-card.json
-```
-
-判定口径与路线 A 第 5 步相同（`readyz.ready=true`；名片 `url` 逐字等于 `https://kiwi.example.com`；未导入商品/未绑定时的 products 检查不通过属预期）。
-
-### B7. 绑定与上线
-
-1. 商家在自己的工作台发起 Catalog 连接（设备授权/配对码），**本人**核对配对码。
-2. 在 Kiwi 目录授权页核对公开预览并**本人**确认。
-3. `kiwi_catalog_get_service_status` 显示 `card.published` 且 `presence=fresh` 才算上线（硬规则 9）。
-4. 这条路径**不需要**配置 WorkBuddy 分享码；工作台里那张「WorkBuddy 分享码」卡片保持未配置即可。
-
-### B8. 与路线 A 的差异
-
-| | 路线 A（WorkBuddy 托管） | 路线 B（商家自有域名） |
-|---|---|---|
-| 公网入口 | 平台域名，请求需带 `sharecode` | 商家域名，**无分享码** |
-| 目录代管凭据 | 可选（需商家授权） | 不需要 |
-| 空闲回收 | 有，首个请求可能慢约 3 秒 | 无，常驻进程 |
-| 费用 | 平台弹窗计费 | 商家自己的主机与带宽 |
-| 升级 | 复用同一应用重新发布 | 换制品目录后重启（`systemctl restart`） |
-| 域名为身份 | 平台域名 | **商家域名**：换域名 = 重新绑定，不是改参数 |
 
 ## 方案 B 兜底（会话没有发布工具时）
 
