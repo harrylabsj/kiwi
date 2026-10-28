@@ -11,7 +11,7 @@
 | `kiwi-catalog` | `kiwi-catalog/pyproject.toml` | PyPI，由 Portfolio workflow 发布 | 0.5.2 已发布（2026-09-29）；registry 最新为 0.5.2 | 锁定测试、契约锁、签名与环境审批 |
 | `shopping-cli` | `shopping-cli/pyproject.toml` | PyPI，由 Portfolio workflow 发布 | 源码 3.2.6；已发布（2026-09-29），registry 最新为 3.2.6 | 锁定测试、契约锁、签名与环境审批 |
 | `kiwi-dsh-plugin` | `integrations/plugins/kiwi-dsh-plugin/package.json` | npm，由 Portfolio workflow 发布 | 0.1.2，已走 OIDC 发布（2026-09-29） | 插件校验、签名与环境审批 |
-| `hermes-plugin-kiwi` | Hermes 仓库 `plugin.json` | GitHub 插件仓库 + Hermes 上游目录 | 仓库 tag v1.2.1；目录 pin 单独核对 | 固定仓库 SHA、插件校验、新会话冒烟、上游目录 PR |
+| `hermes-plugin-kiwi` | Hermes 仓库 `plugin.json` | GitHub 插件仓库 + Hermes 上游目录 | 仓库 tag v1.2.3（pin `@harrylabsj/kiwi@0.12.7`）；目录 pin 走单独 SHA-bump PR | 固定仓库 SHA、插件校验、新会话冒烟、上游目录 PR |
 | `kiwi-catalog-admin` | 私有仓库 `pyproject.toml` | 私有 Git tag，不发 PyPI | v0.2.0 已打 tag；生产部署待完成 | Catalog 0.5.x 兼容、Ruff/mypy/pytest、私有仓库 CI |
 | `workbuddy-procurement-expert` | 专家包 `.codebuddy-plugin/plugin.json` | WorkBuddy 专家审核 | 本地候选 1.1.0；平台最近记录 v1.0.0 | 打包校验、WorkBuddy 预览和平台审核 |
 | `workbuddy-merchant-app` | `buddy-app.config.json` | WorkBuddy App Builder | 本地草稿 1.8.0；没有平台应用 ID | 应用级授权/回调、预览和平台审核 |
