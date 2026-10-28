@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Cold normal npm12 production installs of the two exact local tarballs. No registry publication/provider/model operation. */
 import { assertBundledEdges, assertInstalledLockedVersions } from "./lib/npm-bundled-edges.mjs";
-import { classifyAudit } from "./lib/shipping-audit.mjs";
+import { assertAuditReport, classifyAudit } from "./lib/shipping-audit.mjs";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -113,7 +113,7 @@ for (const [name, relative, subdir, app] of [
   }
   writeFileSync(path.join(consumer, "audit.json"), audit);
   const auditDecision = classifyAudit(
-    JSON.parse(audit),
+    assertAuditReport(JSON.parse(audit)),
     json(path.join(root, "build-inputs/shipping-audit-allow.json")),
     new Date(),
   );

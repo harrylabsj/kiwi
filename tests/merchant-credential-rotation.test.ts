@@ -23,6 +23,103 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+describe("credential rotation edge cases", () => {
+  it("keeps a gateway sub-path prefix on every rotation endpoint", async () => {
+    const f = fixture();
+    const urls: string[] = [];
+    const fetchImpl = vi.fn(async (input: URL | string | Request) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith("/prepare")) return response({ status: "pending" });
+      if (url.endsWith("/private-config")) return response({ merchant_id: "seller-a" });
+      return response({ status: "confirmed" });
+    });
+    await rotateMerchantCredential({
+      baseUrl: "https://shopping.example/gateway", merchantId: "seller-a", tokenEnv: "SHOPPING_MERCHANT_TOKEN",
+      credentialsPath: f.credentialsPath, pendingPath: f.pendingPath, fetchImpl,
+      randomToken: () => "shopping_merchant_replacement-secret-012345678901",
+      randomRotationId: () => "rotation-id-1234567890-abcdefgh",
+      runningServices: () => [],
+      startRuntime: async () => undefined,
+    });
+    expect(urls).toEqual([
+      "https://shopping.example/gateway/merchants/seller-a/token/rotate/prepare",
+      "https://shopping.example/gateway/merchants/seller-a/private-config",
+      "https://shopping.example/gateway/merchants/seller-a/token/rotate/confirm",
+    ]);
+  });
+
+  it("accepts IPv6 loopback over HTTP and normalises it when matching the sidecar", async () => {
+    const f = fixture();
+    const fetchImpl = vi.fn(async (input: URL | string | Request) => {
+      const url = String(input);
+      if (url.endsWith("/prepare")) return response({ status: "pending" });
+      if (url.endsWith("/private-config")) return response({ merchant_id: "seller-a" });
+      return response({ status: "confirmed" });
+    });
+    const first = await rotateMerchantCredential({
+      baseUrl: "http://[::1]:8765", merchantId: "seller-a", tokenEnv: "SHOPPING_MERCHANT_TOKEN",
+      credentialsPath: f.credentialsPath, pendingPath: f.pendingPath, fetchImpl,
+      randomToken: () => "shopping_merchant_replacement-secret-012345678901",
+      randomRotationId: () => "rotation-id-1234567890-abcdefgh",
+      runningServices: () => [],
+      startRuntime: async () => undefined,
+    });
+    expect(first.rotated).toBe(true);
+  });
+
+  it("does not wait for an A2A proof when only mcp was restarted, and always clears the switch marker", async () => {
+    const f = fixture();
+    const events: string[] = [];
+    const fetchImpl = vi.fn(async (input: URL | string | Request) => {
+      const url = String(input);
+      if (url.endsWith("/prepare")) return response({ status: "pending" });
+      if (url.endsWith("/private-config")) return response({ merchant_id: "seller-a" });
+      return response({ status: "confirmed" });
+    });
+    const result = await rotateMerchantCredential({
+      baseUrl: "https://shopping.example", merchantId: "seller-a", tokenEnv: "SHOPPING_MERCHANT_TOKEN",
+      credentialsPath: f.credentialsPath, pendingPath: f.pendingPath, fetchImpl,
+      randomToken: () => "shopping_merchant_replacement-secret-012345678901",
+      randomRotationId: () => "rotation-id-1234567890-abcdefgh",
+      runningServices: () => ["mcp"],
+      beginRuntimeSwitch: () => events.push("marker-set"),
+      endRuntimeSwitch: () => events.push("marker-cleared"),
+      stopServices: async () => undefined,
+      startRuntime: async () => undefined,
+      waitForRuntimeCredential: async () => { throw new Error("must not be called when a2a is not restarted"); },
+    });
+    expect(result.rotated).toBe(true);
+    expect(events[0]).toBe("marker-set");
+    expect(events.at(-1)).toBe("marker-cleared");
+  });
+
+  it("releases the switch marker even when confirmation fails", async () => {
+    const f = fixture();
+    const events: string[] = [];
+    const fetchImpl = vi.fn(async (input: URL | string | Request) => {
+      const url = String(input);
+      if (url.endsWith("/prepare")) return response({ status: "pending" });
+      if (url.endsWith("/private-config")) return response({ merchant_id: "seller-a" });
+      return response({ status: "rejected" });
+    });
+    await expect(
+      rotateMerchantCredential({
+        baseUrl: "https://shopping.example", merchantId: "seller-a", tokenEnv: "SHOPPING_MERCHANT_TOKEN",
+        credentialsPath: f.credentialsPath, pendingPath: f.pendingPath, fetchImpl,
+        randomToken: () => "shopping_merchant_replacement-secret-012345678901",
+        randomRotationId: () => "rotation-id-1234567890-abcdefgh",
+        runningServices: () => ["mcp"],
+        beginRuntimeSwitch: () => events.push("marker-set"),
+        endRuntimeSwitch: () => events.push("marker-cleared"),
+        stopServices: async () => undefined,
+        startRuntime: async () => undefined,
+      }),
+    ).rejects.toThrow(/did not confirm/);
+    expect(events).toContain("marker-cleared");
+  });
+});
+
 describe("managed merchant credential rotation", () => {
   it("persists the candidate before prepare, verifies it, then switches and restarts managed services", async () => {
     const f = fixture();
@@ -89,7 +186,9 @@ describe("managed merchant credential rotation", () => {
     expect(readFileSync(f.credentialsPath, "utf8")).toContain("replacement-secret");
     expect(existsSync(f.pendingPath)).toBe(true);
     expect(startRuntime).toHaveBeenCalledTimes(1);
-    expect(switchMarker).toBe(true);
+    // 切换标记只覆盖 stop→start 窗口：失败后必须清掉，否则 supervisor 的
+    // reconcile 会永远拒绝拉起子服务（实例被卡死，只能手工删文件）。
+    expect(switchMarker).toBe(false);
 
     const recovered = await rotateMerchantCredential({
       ...base,
@@ -196,6 +295,7 @@ describe("managed merchant credential rotation", () => {
     })).rejects.toThrow("neither pending nor previous credential is accepted");
     expect(readFileSync(f.credentialsPath, "utf8")).toBe(before);
     expect(existsSync(f.pendingPath)).toBe(true);
-    expect(switchMarker).toBe(true);
+    // sidecar 保留用于恢复，但切换标记必须释放（同上）。
+    expect(switchMarker).toBe(false);
   });
 });

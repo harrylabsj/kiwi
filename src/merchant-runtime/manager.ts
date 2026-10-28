@@ -76,7 +76,13 @@ export interface ManagedServiceState {
 export class MerchantRuntimeError extends Error {
   constructor(
     message: string,
-    readonly code: "unknown_service" | "already_running" | "not_running" | "spawn_failed" | "stop_unconfirmed",
+    readonly code:
+      | "unknown_service"
+      | "already_running"
+      | "not_running"
+      | "spawn_failed"
+      | "stop_unconfirmed"
+      | "read_only",
   ) {
     super(message);
     this.name = "MerchantRuntimeError";
@@ -119,6 +125,7 @@ export class MerchantRuntimeManager {
   private readonly now: () => string;
   private readonly spawnImpl: typeof spawn;
   private readonly readOnly: boolean;
+  private readonly reconcileIntervalMs: number;
 
   constructor(options: {
     dir: string;
@@ -127,12 +134,15 @@ export class MerchantRuntimeManager {
     /** 测试注入。 */
     spawnImpl?: typeof spawn;
     readOnly?: boolean;
+    /** 跨进程 reconcile 周期（缺省 10s；测试注入短周期）。 */
+    reconcileIntervalMs?: number;
   }) {
     this.dir = options.dir;
     this.runDir = path.join(options.dir, "runtime");
     this.now = options.now ?? (() => new Date().toISOString());
     this.spawnImpl = options.spawnImpl ?? spawn;
     this.readOnly = options.readOnly ?? false;
+    this.reconcileIntervalMs = options.reconcileIntervalMs ?? 10_000;
     for (const spec of options.services) {
       if (!/^[a-z0-9-]+$/.test(spec.name)) {
         throw new MerchantRuntimeError(`非法服务名 ${spec.name}`, "unknown_service");
@@ -180,7 +190,7 @@ export class MerchantRuntimeManager {
   }
 
   private assertMutable(): void {
-    if (this.readOnly) throw new MerchantRuntimeError("只读 runtime manager 不允许启动、停止或监督服务", "unknown_service");
+    if (this.readOnly) throw new MerchantRuntimeError("只读 runtime manager 不允许启动、停止或监督服务", "read_only");
   }
 
   /** 读取 pidfile 里的存活状态（管理入口重启后据此恢复视图）。 */
@@ -221,7 +231,8 @@ export class MerchantRuntimeManager {
 
   private scheduleRestart(name: string, previous: RunningChild): void {
     const delay = backoffMs(previous.restarts);
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      this.restartTimers.delete(name);
       if (!this.supervising || previous.stopped || this.stopIntent(name).stopped || this.stopIntent(name).token !== previous.stopToken) return;
       void this.launch(name, false, { token: previous.stopToken })
         .then(() => {
@@ -235,7 +246,9 @@ export class MerchantRuntimeManager {
             this.scheduleRestart(name, previous);
           }
         });
-    }, delay).unref();
+    }, delay);
+    this.restartTimers.set(name, timer);
+    timer.unref();
   }
 
   /** 启动服务（已在运行 → already_running 拒绝重复启动）。 */
@@ -425,6 +438,8 @@ export class MerchantRuntimeManager {
   private supervising = false;
   private reconcileTimer: ReturnType<typeof setInterval> | undefined;
   private reconciling = false;
+  /** 已排期但尚未执行的退避重启（按服务名）；reconcile 必须让位给它们。 */
+  private readonly restartTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   async supervise(): Promise<void> {
     this.assertMutable();
@@ -435,6 +450,9 @@ export class MerchantRuntimeManager {
       try {
         for (const name of this.services.keys()) {
           if (!this.supervising) break;
+          // 崩溃重启归 scheduleRestart 的退避链所有：它持有 restarts 计数与
+          // 退避定时器，reconcile 若插队重拉会把计数清零并退化成每秒重启。
+          if (this.restartTimers.has(name)) continue;
           if (this.livePid(name) === undefined && !this.stopIntent(name).stopped) {
             await this.launch(name, false);
           }
@@ -447,9 +465,11 @@ export class MerchantRuntimeManager {
     // Another CLI invocation can stop/start a service while this foreground
     // manager remains alive. Reattach by pidfile and resume supervision so a
     // credential switch cannot leave untracked detached children behind.
+    // 10s 足够（跨进程操作本身会立即拉起服务），1s 会让每个受管服务每秒一次
+    // `ps` 探测。
     this.reconcileTimer = setInterval(() => {
       void reconcile().catch(() => undefined);
-    }, 1_000);
+    }, this.reconcileIntervalMs);
     this.reconcileTimer.unref();
   }
 

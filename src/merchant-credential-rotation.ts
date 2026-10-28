@@ -3,6 +3,8 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "./fs/atomic-write.js";
+import { readJsonBody } from "./net/safe-http.js";
+import { isLoopbackHost } from "./a2a/client/url-policy.js";
 
 export interface MerchantCredentialRotationOptions {
   baseUrl: string;
@@ -47,8 +49,7 @@ export async function inspectMerchantCredentialExpiry(
 ): Promise<MerchantCredentialExpiry> {
   const base = validateBaseUrl(options.baseUrl);
   const token = readToken(options.credentialsPath, options.tokenEnv);
-  const url = new URL(base.href);
-  url.pathname = `/merchants/${encodeURIComponent(options.merchantId)}/token/status`;
+  const url = endpointUrl(base, `/merchants/${encodeURIComponent(options.merchantId)}/token/status`);
   let status: Record<string, unknown>;
   try {
     status = await requestJson(options.fetchImpl ?? fetch, url, token);
@@ -148,7 +149,8 @@ function readToken(file: string, tokenEnv: string): string {
   if (!existsSync(file)) throw new Error(`${tokenEnv} is missing from the protected credentials file`);
   const stat = lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("credentials target must be a regular file");
-  chmodSync(file, 0o600);
+  // 只读路径绝不改权限：`kiwi merchant doctor` 与 5 分钟一次的状态检查都会走
+  // 这里，改 0400 → 0600 属于未声明的副作用（文档承诺只读命令不改文件）。
   const text = readFileSync(file, "utf8");
   const key = tokenEnv.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const matches = [...text.matchAll(new RegExp(`^[ \\t]*(?:export[ \\t]+)?${key}[ \\t]*=([^\\r\\n]*)`, "gm"))];
@@ -191,11 +193,29 @@ function readPending(file: string): PendingRotation | undefined {
 
 function validateBaseUrl(raw: string): URL {
   const url = new URL(raw);
+  // `isLoopbackHost` 会去掉 IPv6 字面量的方括号（Node 里 `new URL("http://[::1]")`
+  // 的 hostname 是 `[::1]`），否则 IPv6 回环会被误判成非回环而拒绝。
   if (url.username || url.password || url.search || url.hash ||
-      (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)))) {
+      (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHost(url.hostname)))) {
     throw new Error("shopping-cli rotation requires HTTPS (HTTP is allowed only for loopback)");
   }
   return url;
+}
+
+/**
+ * 拼接端点时必须保留 `base_url` 里的路径前缀：网关可以挂在 `/shopping`
+ * 之类的子路径下，`HttpMerchantClient` 也是 `${baseUrl}${pathname}` 的口径。
+ */
+function endpointUrl(base: URL, pathname: string): URL {
+  return new URL(`${base.href.replace(/\/+$/, "")}${pathname}`);
+}
+
+/** 用于 sidecar 归属判断的规范化 API 身份（忽略结尾斜杠与回环写法差异）。 */
+function canonicalApiIdentity(raw: string): string {
+  const url = new URL(raw);
+  const port = url.port === "" ? (url.protocol === "https:" ? "443" : "80") : url.port;
+  const host = isLoopbackHost(url.hostname) ? "loopback" : url.hostname.toLowerCase();
+  return `${url.protocol}//${host}:${port}${url.pathname.replace(/\/+$/, "")}`;
 }
 
 async function requestJson(fetchImpl: typeof fetch, url: URL, token: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -213,7 +233,13 @@ async function requestJson(fetchImpl: typeof fetch, url: URL, token: string, bod
       await response.body?.cancel();
       throw new Error("shopping-cli refused a redirect during credential rotation");
     }
-    const payload: unknown = await response.json().catch(() => ({}));
+    let payload: unknown = {};
+    try {
+      // 与其它出站调用同口径：响应体有上限，避免故障/恶意网关把常驻 supervisor 撑爆。
+      payload = await readJsonBody(response, { signal: controller.signal, maxBytes: 64 * 1024 });
+    } catch {
+      payload = {};
+    }
     if (!response.ok) throw Object.assign(new Error(`shopping-cli credential rotation request failed (HTTP ${response.status})`), { status: response.status });
     if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new Error("shopping-cli returned an invalid credential rotation response");
     return payload as Record<string, unknown>;
@@ -243,7 +269,14 @@ async function performMerchantCredentialRotation(options: MerchantCredentialRota
   const onDisk = readToken(options.credentialsPath, options.tokenEnv);
   let pending = readPending(options.pendingPath);
   let recovered = pending !== undefined;
-  if (pending !== undefined && (pending.merchant_id !== options.merchantId || pending.token_env !== options.tokenEnv || pending.base_url !== options.baseUrl)) {
+  const sameApi = (a: string, b: string): boolean => {
+    try {
+      return canonicalApiIdentity(a) === canonicalApiIdentity(b);
+    } catch {
+      return a === b;
+    }
+  };
+  if (pending !== undefined && (pending.merchant_id !== options.merchantId || pending.token_env !== options.tokenEnv || !sameApi(pending.base_url, options.baseUrl))) {
     throw new Error("pending rotation belongs to another merchant or API; use that profile to recover it");
   }
   if (pending === undefined) {
@@ -254,12 +287,9 @@ async function performMerchantCredentialRotation(options: MerchantCredentialRota
     throw new Error("credentials changed during a pending rotation; refusing to overwrite them");
   }
 
-  const root = new URL(base.href);
-  root.pathname = `/merchants/${encodeURIComponent(options.merchantId)}/token/rotate/prepare`;
-  const confirmUrl = new URL(root.href);
-  confirmUrl.pathname = `/merchants/${encodeURIComponent(options.merchantId)}/token/rotate/confirm`;
-  const privateUrl = new URL(root.href);
-  privateUrl.pathname = `/merchants/${encodeURIComponent(options.merchantId)}/private-config`;
+  const root = endpointUrl(base, `/merchants/${encodeURIComponent(options.merchantId)}/token/rotate/prepare`);
+  const confirmUrl = endpointUrl(base, `/merchants/${encodeURIComponent(options.merchantId)}/token/rotate/confirm`);
+  const privateUrl = endpointUrl(base, `/merchants/${encodeURIComponent(options.merchantId)}/private-config`);
 
   const finishConfirmed = async (state: PendingRotation) => {
     const restarted = state.restart_services ?? [];
@@ -303,7 +333,8 @@ async function performMerchantCredentialRotation(options: MerchantCredentialRota
       options.beginRuntimeSwitch?.();
       await options.stopServices?.(running);
       await options.startRuntime?.(pending.restart_services ?? []);
-      if ((pending.restart_services ?? []).length > 0) {
+      // 只有 A2A 子进程会写自证；只重启了 mcp 时强制等待它等于必然超时。
+      if ((pending.restart_services ?? []).includes("a2a")) {
         if (options.waitForRuntimeCredential === undefined) throw new Error("managed runtime credential probe is required before confirmation");
         await options.waitForRuntimeCredential(pending.replacement_token);
       }
@@ -339,7 +370,7 @@ async function performMerchantCredentialRotation(options: MerchantCredentialRota
   await options.stopServices?.(running);
   writeToken(options.credentialsPath, options.tokenEnv, pending.replacement_token);
   await options.startRuntime?.(pending.restart_services ?? []);
-  if ((pending.restart_services ?? []).length > 0) {
+  if ((pending.restart_services ?? []).includes("a2a")) {
     if (options.waitForRuntimeCredential === undefined) throw new Error("managed runtime credential probe is required before confirmation");
     await options.waitForRuntimeCredential(pending.replacement_token);
   }
@@ -353,6 +384,10 @@ export async function rotateMerchantCredential(options: MerchantCredentialRotati
   try {
     return await performMerchantCredentialRotation(options);
   } finally {
+    // 切换标记只用于覆盖 stop→start 这段窗口。任何失败路径都必须清掉它，
+    // 否则 supervisor 的 reconcile 会永远拒绝拉起子服务，实例被卡死（只能
+    // 手工删文件），而宁可让子进程带着磁盘上现有的 token 先跑起来。
+    options.endRuntimeSwitch?.();
     release();
   }
 }

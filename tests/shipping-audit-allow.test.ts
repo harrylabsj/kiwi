@@ -19,7 +19,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { advisoryIdOf, assertAllowList, classifyAudit } from "../scripts/lib/shipping-audit.mjs";
+import { advisoryIdOf, assertAllowList, assertAuditReport, classifyAudit } from "../scripts/lib/shipping-audit.mjs";
 
 const NOW = new Date("2026-10-28T00:00:00Z");
 
@@ -61,6 +61,24 @@ describe("advisory id extraction", () => {
     );
     expect(advisoryIdOf("undici")).toBeNull();
     expect(advisoryIdOf({ url: "https://example.com/x" })).toBeNull();
+  });
+});
+
+describe("assertAuditReport", () => {
+  it("accepts a real audit report shape", () => {
+    expect(() => assertAuditReport({ auditReportVersion: 2, vulnerabilities: {}, metadata: {} })).not.toThrow();
+    expect(() => assertAuditReport(undiciAudit)).not.toThrow();
+  });
+
+  it("refuses an npm error object instead of treating it as a clean audit", () => {
+    // `npm audit` 连不上 registry 时退出码非零、stdout 却是 {"error":{...}}；
+    // 调用方为拿公告 JSON 会吞掉退出码，这里必须拒绝，否则门禁静默放行。
+    expect(() => assertAuditReport({ error: { code: "ENETUNREACH", summary: "network" } })).toThrow(
+      /SHIPPING_AUDIT_UNREADABLE/,
+    );
+    expect(() => assertAuditReport({})).toThrow(/SHIPPING_AUDIT_UNREADABLE/);
+    expect(() => assertAuditReport(null)).toThrow(/SHIPPING_AUDIT_UNREADABLE/);
+    expect(() => assertAuditReport([])).toThrow(/SHIPPING_AUDIT_UNREADABLE/);
   });
 });
 

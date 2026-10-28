@@ -79,6 +79,28 @@ export function assertAllowList(allow, now) {
 }
 
 /**
+ * 校验这确实是一份 `npm audit --json` 报告。
+ *
+ * `npm audit` 在**无法运行**时也会以非零码退出并把 `{"error":{...}}` 打到
+ * stdout（典型：CI 连不上 registry，ENETUNREACH/EAI_AGAIN）。调用方为了拿到
+ * 号令公告的完整 JSON 会吞掉非零退出码；若不在这里区分，错误对象会被当成
+ * "没有任何漏洞"的报告，门禁静默放行。
+ */
+export function assertAuditReport(audit) {
+  const looksLikeReport =
+    audit !== null &&
+    typeof audit === "object" &&
+    !Array.isArray(audit) &&
+    audit.error === undefined &&
+    typeof audit.vulnerabilities === "object" &&
+    audit.vulnerabilities !== null &&
+    !Array.isArray(audit.vulnerabilities) &&
+    (typeof audit.auditReportVersion === "number" || typeof audit.metadata === "object");
+  if (!looksLikeReport) fail("SHIPPING_AUDIT_UNREADABLE");
+  return audit;
+}
+
+/**
  * 把 `npm audit --json` 的结果分成"已复核放行"与"必须拦截"两堆。
  *
  * @param audit  npm audit --json 的解析结果（可能含 exitCode 语义的包装）

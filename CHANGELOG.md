@@ -2,6 +2,9 @@
 
 ## v0.12.9 — 2026-10-28
 
+- **代码审查修复（商家凭据生命周期）**：`commerce.token_env` 与 Kiwi Catalog owner token 的语义拆分现在集中到 `src/config/credentials.ts`——自动轮换只在两者**不同**时开启（此前判断条件看的是 `credentials.catalog`，导致生产 profile 里把 catalog token 当成 shopping-cli 凭据去轮换），子进程自证也直接拒绝未拆分的 profile；`merchant init` 不再把 `KIWI_MERCHANT_TOKEN` 复制进 `SHOPPING_MERCHANT_TOKEN`。另修：`runtime start` 的跨进程 reconcile 从 1s 改 10s 且不再抢在退避重启前面（否则崩溃循环会退化成每秒重拉、并清零重启计数）、`/token/*` 与 `private-config` 保留 `base_url` 的子路径前缀、`[::1]` 回环可用、响应体改为有界读取、只读命令不再 `chmod` 凭据文件、sidecar 归属按规范化 API 身份比较、切换标记在任何失败路径都会释放（否则 supervisor 永久拒绝拉起子服务）、只重启 mcp 时不再空等 A2A 自证。
+- **发布门禁**：`npm audit` 无法运行（网络失败等）时 stdout 里的 `{"error": …}` 不再被当成"零漏洞报告"放行，改为 `SHIPPING_AUDIT_UNREADABLE` fail-closed。
+
 - **修复：自托管 Runtime 无法完成 Catalog 绑定**。Catalog 的设备接入契约要求 `a2a_endpoint == runtime_origin + "/a2a"`，公开预览的 `supportedInterfaces` 必须含这条 URL；而 `kiwi merchant start` 的 A2A 端点缺省在 origin 根（`a2aPath ?? "/"`），`kiwi merchant connect` 因此在本地就以「公网入口返回的 Agent Card 与当前 Runtime 地址不一致」拒绝（`RUNTIME_NOT_READY`），请求到不了 Catalog，商家永远绑不上、商品发布只能走已废弃的 owner token。现在自托管节点的缺省端点改为 `/a2a`（名片同步通告），**根路径 `/` 保留为兼容别名**继续服务旧名片/旧买家；只在主端点为 `/a2a` 时生效。
 - **商家凭据生命周期自动化**（随本版发布）：`kiwi merchant credentials rotate|recover` 用 prepare/confirm 协议轮换 shopping-cli 商户 token——先验证新 token 可用、停受管进程、原子更新 `credentials.env`、再等 A2A 子进程用新 token 自证，旧 token 到达成共识前一直有效；`runtime start` 每 5 分钟查一次到期状态，在到期前最多 7 天自动发起轮换。细节见 `docs/merchant-credential-rotation.md`。
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Approved current-source whole-package npm shipping; not the historical packed Linux runtime. */
-import { classifyAudit } from "./lib/shipping-audit.mjs";
+import { assertAuditReport, classifyAudit } from "./lib/shipping-audit.mjs";
 import { packRecord } from "./lib/npm-pack-record.mjs";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -169,7 +169,7 @@ export function buildShipping({
   }
   writeFileSync(path.join(out, "shipping-audit.json"), audit);
   const auditDecision = classifyAudit(
-    JSON.parse(audit),
+    assertAuditReport(JSON.parse(audit)),
     json(path.join(root, "build-inputs/shipping-audit-allow.json")),
     new Date(),
   );

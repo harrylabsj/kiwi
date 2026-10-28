@@ -54,6 +54,12 @@ import { buildChatKernel, buildClient, defaultChatProfile } from "./agent/kernel
 
 import { AgentKernel } from "./agent/kernel.js";
 import { loadProfile, ProfileError, type AgentProfile } from "./config/profile.js";
+import {
+  catalogOwnerTokenEnv,
+  DEFAULT_CATALOG_OWNER_TOKEN_ENV,
+  shoppingCredentialIsSeparate,
+  shoppingTokenEnv,
+} from "./config/credentials.js";
 
 import type { CommerceClient } from "./commerce/types.js";
 import { CommerceError } from "./commerce/types.js";
@@ -1520,16 +1526,22 @@ function merchantCredentialRotationOptions(
     waitForRuntimeCredential: async (token) => {
       const expected = credentialFingerprint(token);
       const deadline = Date.now() + 95_000;
+      let sawA2a = false;
       while (Date.now() < deadline) {
         try {
           const a2a = manager.status().find((entry) => entry.name === "a2a" && entry.running);
+          if (a2a?.pid !== undefined) sawA2a = true;
           const observed = JSON.parse(readFileSync(proofPath, "utf8")) as { merchant_id?: string; token_env?: string; credential_fingerprint?: string; pid?: number };
           if (a2a?.pid !== undefined && observed.merchant_id === profile.agent_id && observed.token_env === profile.commerce.token_env &&
               observed.credential_fingerprint === expected && observed.pid === a2a.pid) return;
         } catch { /* wait for the A2A child to record its protected API proof */ }
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
-      throw new Error("A2A child did not prove the new credential against the protected merchant endpoint; confirmation is withheld and recovery state is retained");
+      throw new Error(
+        sawA2a
+          ? "A2A child did not prove the new credential against the protected merchant endpoint; confirmation is withheld and recovery state is retained"
+          : "managed A2A service is not running, so no process can attest the new credential; start it and re-run `kiwi merchant credentials recover`",
+      );
     },
     stopServices: async (services) => {
       for (const name of [...services].reverse()) await manager.stop(name);
@@ -1766,7 +1778,7 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
   const rotationSettings = merchantCredentialRotationSettings();
   const rotationStatusPath = path.join(dirs.merchantDataDir, "runtime", "credential-rotation-schedule.json");
   const credentialStorage = inspectMerchantCredentialStorage(profile.commerce.token_env);
-  const credentialScopeSeparate = profile.commerce.credentials?.catalog?.token_env !== profile.commerce.token_env;
+  const credentialScopeSeparate = shoppingCredentialIsSeparate(profile);
   let rotationScheduleStatus: CredentialRotationScheduleStatus = {
     version: 1,
     merchant_id: profile.agent_id,
@@ -2079,9 +2091,11 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
   let merchantId = args.merchantId ?? process.env.KIWI_MERCHANT_ID ?? "";
   let name = args.merchantName ?? process.env.KIWI_MERCHANT_NAME ?? "";
   const outputPath = args.output ?? args.profile ?? process.env.KIWI_DEFAULT_PROFILE ?? DEFAULT_PROFILE_PATH;
+  let existingProfile: AgentProfile | undefined;
   if (existsSync(outputPath) && !args.force && merchantId === "" && name === "") {
     try {
       const existing = loadProfile(outputPath);
+      existingProfile = existing;
       if (existing.role === "merchant") {
         merchantId = existing.agent_id;
         name = existing.name ?? existing.owner_id;
@@ -2119,7 +2133,12 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
     }
     if (merchantToken === "") {
       loadMerchantCredentials();
-      merchantToken = process.env.KIWI_MERCHANT_TOKEN ?? "";
+      // 这里要的是 **shopping-cli** 令牌；`KIWI_MERCHANT_TOKEN` 是 Kiwi Catalog 的
+      // owner token，把它填进 SHOPPING_MERCHANT_TOKEN 会让数据引擎全部 401，还把
+      // catalog 凭据复制到另一个槽位。
+      const shoppingEnv = existingProfile !== undefined ? shoppingTokenEnv(existingProfile) : "SHOPPING_MERCHANT_TOKEN";
+      const catalogEnv = existingProfile !== undefined ? catalogOwnerTokenEnv(existingProfile) : DEFAULT_CATALOG_OWNER_TOKEN_ENV;
+      merchantToken = shoppingEnv === catalogEnv ? "" : (process.env[shoppingEnv] ?? "");
       if (merchantToken === "") merchantToken = await promptSecret("shopping-cli 商品服务令牌（回车稍后配置；输入不回显）: ");
     }
     // TTY 下可全回车：merchant_id 自动生成（避免固定名碰撞）。

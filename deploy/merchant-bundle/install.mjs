@@ -194,18 +194,37 @@ export function checkProfile(profilePath) {
 }
 
 /**
- * BUG-09：实例凭据引用检查。凭据值永不读取/记录——只确认
- * KIWI_MERCHANT_TOKEN 引用存在（cli 侧 loadMerchantCredentials 消费）。
+ * BUG-09：实例凭据引用检查。凭据值永不读取/记录。
+ *
+ * 只要求文件存在且至少有一条 `NAME=` 记录——具体哪些凭据是必需的由 profile
+ * 决定（见调用点的 token_env 扫描）。此前硬性要求 `KIWI_MERCHANT_TOKEN`，
+ * 而 `kiwi merchant init` 现在写的是 `SHOPPING_MERCHANT_TOKEN`，新装商家会在
+ * 这一步被误拦。
  */
 export function checkCredentialsEnv(credentialsPath) {
   if (!existsSync(credentialsPath)) {
     return { ok: false, error: `凭据引用不存在：${credentialsPath}（--credentials-env 放置或 --skip-credentials-check 跳过）` };
   }
   const text = readFileSync(credentialsPath, "utf8");
-  if (!/^KIWI_MERCHANT_TOKEN=/m.test(text)) {
-    return { ok: false, error: `${credentialsPath} 缺 KIWI_MERCHANT_TOKEN 引用` };
+  if (!/^[ \t]*(?:export[ \t]+)?[A-Z][A-Z0-9_]*=/m.test(text)) {
+    return { ok: false, error: `${credentialsPath} 里没有任何凭据记录` };
   }
   return { ok: true };
+}
+
+/** 取 profile 里 `commerce.token_env`（数据引擎凭据的 env 名）。 */
+export function commerceTokenEnv(profileText) {
+  let section = "";
+  for (const line of profileText.split(/\r?\n/)) {
+    const top = /^([a-z_]+):\s*$/.exec(line);
+    if (top !== null) {
+      section = top[1];
+      continue;
+    }
+    const ref = /^\s+token_env:\s*([A-Z_][A-Z0-9_]*)\s*$/.exec(line);
+    if (ref !== null && section === "commerce") return ref[1];
+  }
+  return undefined;
 }
 
 function renderTemplate(name, vars) {
@@ -254,16 +273,20 @@ export function main(argv = process.argv.slice(2)) {
     const c = checkCredentialsEnv(credentials.source);
     credentialsOk = c.ok;
     if (!c.ok) fail(c.error);
-    // 审查 P2：入站 token 之外，profile 的 commerce.token_env（数据引擎凭据）
-    // 缺失时装得上、起不来（所有 shopping-cli 调用 fail-closed）——违背
-    // BUG-09 目标。同样只查存在性，不读不记值。
+    // 审查 P2：profile 的 commerce.token_env（数据引擎凭据）缺失时装得上、
+    // 起不来（所有 shopping-cli 调用 fail-closed）——必须拦。其余 token_env
+    // 引用（如 catalog owner token）缺失只降级不阻塞：没有它注册会退化成
+    // 公开自助注册，但实例仍可运行。
     const profileText = readFileSync(profileSrc, "utf8");
     const envText = readFileSync(credentials.source, "utf8");
+    const required = commerceTokenEnv(profileText);
     for (const m of profileText.matchAll(/^\s*token_env:\s*([A-Z_][A-Z0-9_]*)\s*$/gm)) {
       const name = m[1];
-      if (!new RegExp(`^${name}=`, "m").test(envText)) {
+      if (new RegExp(`^[ \\t]*(?:export[ \\t]+)?${name}=`, "m").test(envText)) continue;
+      if (name === required) {
         fail(`${credentials.source} 缺 ${name} 引用（profile commerce.token_env 指向的数据引擎凭据）`);
       }
+      process.stderr.write(`⚠️ ${credentials.source} 缺 ${name} 引用：实例仍可运行，但 Catalog 侧身份会退化为公开自助注册\n`);
     }
   }
 

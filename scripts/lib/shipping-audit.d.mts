@@ -39,4 +39,6 @@ export function advisoryIdOf(via: unknown): string | null;
 
 export function assertAllowList(allow: unknown, now: Date): Map<string, ActiveAllowEntry>;
 
+export function assertAuditReport(audit: unknown): Record<string, unknown>;
+
 export function classifyAudit(audit: unknown, allow: unknown, now?: Date): AuditDecision;

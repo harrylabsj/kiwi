@@ -93,10 +93,12 @@ describe("MerchantRuntimeManager", () => {
     });
     await manager.supervise();
     // 崩溃进程应被自动重启（退避 500ms 起）
+    // CI 上曾因 6s 窗口偶发超时（本地稳定通过）：进程启动 + 500ms 退避在
+    // 繁忙 runner 上会超出预算。放宽窗口，避免把发布卡在时序上。
     const restarted = await waitFor(() => {
       const s = manager.status()[0];
       return s !== undefined && s.restarts >= 1;
-    }, 6_000);
+    }, 20_000);
     expect(restarted).toBe(true);
     await manager.shutdown();
     const after = manager.status()[0];

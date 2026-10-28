@@ -33,8 +33,8 @@ describe("runtime credential handoff", () => {
       credentialSwitchMarker: marker,
       cwd: dir,
     };
-    const supervisor = new MerchantRuntimeManager({ dir, services: [spec] });
-    const switcher = new MerchantRuntimeManager({ dir, services: [spec] });
+    const supervisor = new MerchantRuntimeManager({ dir, services: [spec], reconcileIntervalMs: 100 });
+    const switcher = new MerchantRuntimeManager({ dir, services: [spec], reconcileIntervalMs: 100 });
     await supervisor.supervise();
     await waitFor(() => existsSync(observedFile));
     expect(readFileSync(observedFile, "utf8")).toBe("old-token");

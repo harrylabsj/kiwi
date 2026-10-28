@@ -24,6 +24,44 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+describe("consumer proof guards", () => {
+  it("refuses when commerce.token_env is still the Catalog owner token", async () => {
+    // profile 没拆分时（commerce.token_env == catalog owner token），拿它去调
+    // shopping-cli 只会 403；必须直接返回 false，而不是反复请求。
+    process.env.KIWI_MERCHANT_TOKEN = "catalog-secret";
+    const fetchImpl = async (): Promise<Response> => {
+      throw new Error("must not call shopping-cli");
+    };
+    const result = await proveMerchantCredentialConsumer({
+      profile: {
+        agent_id: "seller-a",
+        commerce: { base_url: "https://shopping.example", token_env: "KIWI_MERCHANT_TOKEN", backend: "local_marketplace" },
+        merchant_public: { merchant_token_env: "KIWI_MERCHANT_TOKEN" },
+      } as never,
+      dataDir: fixture(),
+      fetchImpl: fetchImpl as never,
+    });
+    expect(result.ok).toBe(false);
+    delete process.env.KIWI_MERCHANT_TOKEN;
+  });
+
+  it("keeps a gateway sub-path prefix on the private-config request", async () => {
+    process.env.SHOPPING_MERCHANT_TOKEN = "shopping_merchant_proof-secret-0123456789";
+    process.env.KIWI_COMMERCE_URL = "http://[::1]:8765/gateway";
+    const seen: string[] = [];
+    const result = await proveMerchantCredentialConsumer({
+      profile: profile as never,
+      dataDir: fixture(),
+      fetchImpl: (async (input: URL | string | Request) => {
+        seen.push(String(input));
+        return new Response(JSON.stringify({ merchant_id: "seller-a" }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as never,
+    });
+    expect(result.ok).toBe(true);
+    expect(seen).toEqual(["http://[::1]:8765/gateway/merchants/seller-a/private-config"]);
+  });
+});
+
 describe("merchant credential consumer proof", () => {
   it("attests only after the child token is accepted by the protected endpoint for its merchant", async () => {
     const dir = fixture();
