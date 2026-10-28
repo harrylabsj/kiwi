@@ -1,7 +1,7 @@
 {
   "format": "kiwi-npm-shipping-source/1",
   "source_base": "e703bc0d67e24a98c417274e46f37d210eff86ac",
-  "reviewed_release": "0.12.8",
+  "reviewed_release": "0.12.9",
   "owner_runtime_default": "dual-off/private",
   "tool": {
     "node": "v22.22.3",
@@ -98,8 +98,8 @@
     "arch": "arm64"
   },
   "stage": {
-    "package_sha256": "sha256:4bb61236d136c85fdc1e563d146e01e8a4505e65014aab675ba7d258114a7508",
-    "lock_sha256": "sha256:fe121f15f22c9c3cc0bdb8ad1d61e7ee5f0ca6fb571729982e9f0564fef0dc6a"
+    "package_sha256": "sha256:5465676d87067684109e2f45ff26cd4272a217a1ca1ab3d10be1401791eb0a52",
+    "lock_sha256": "sha256:5dcf01c822e2b066db24df30c61ce48e4931bde29c73ef0dbdaae227f27b8d13"
   },
   "budgets": {
     "plain_bytes": 268435456,
@@ -182,7 +182,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "sha256:92ab56a957e24eb0e0accbfa8587dde45dbaa7cb4c61886406d90caaff7b7827"
+      "sha256": "sha256:336c807999edfbc2380bb16817541aa09eedb5baecf5b7964ca363f2d49ea7ec"
     },
     {
       "path": "CODE_OF_CONDUCT.md",
@@ -218,11 +218,11 @@
     },
     {
       "path": "build-inputs/release0124-stage/package-lock.json",
-      "sha256": "sha256:fe121f15f22c9c3cc0bdb8ad1d61e7ee5f0ca6fb571729982e9f0564fef0dc6a"
+      "sha256": "sha256:5dcf01c822e2b066db24df30c61ce48e4931bde29c73ef0dbdaae227f27b8d13"
     },
     {
       "path": "build-inputs/release0124-stage/package.json",
-      "sha256": "sha256:4bb61236d136c85fdc1e563d146e01e8a4505e65014aab675ba7d258114a7508"
+      "sha256": "sha256:5465676d87067684109e2f45ff26cd4272a217a1ca1ab3d10be1401791eb0a52"
     },
     {
       "path": "build-inputs/shipping-audit-allow.json",
@@ -559,6 +559,10 @@
     {
       "path": "docs/merchant-buddy/workbuddy-e2e-checklist.md",
       "sha256": "sha256:331a3c8c2fd8783cf2c4b54d2e20d755410c471a1552d5d1d55caed03531777f"
+    },
+    {
+      "path": "docs/merchant-credential-rotation.md",
+      "sha256": "sha256:bb20f1bd1d3585ac63547448d4b5ac19788adbf6c5aa9b4bb7715dc6435f8dc4"
     },
     {
       "path": "docs/merchant-experience.md",
@@ -1494,15 +1498,15 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "sha256:b2d61a459aab8ea4be80a5f72a08facf21bc3d6fd7a1704f43b49616fd94721e"
+      "sha256": "sha256:d593d8999e097832013ea91821108605e23ea1f9862434358c79bdce1524c82c"
     },
     {
       "path": "package.json",
-      "sha256": "sha256:ec8fc884438fd3b7220e64c2baa6e9657bc07d19852e3675eda0c928760ae250"
+      "sha256": "sha256:e2f310d8d4c058161d760012844e693b46dcf1dd20d584522f97d970f9e206a2"
     },
     {
       "path": "packages/merchant-cloud/package.json",
-      "sha256": "sha256:f29365ed5e2fe754f20454e5972aa8fae1d4598b262f815f283375cb2be5420f"
+      "sha256": "sha256:f351fa62dddf045e696c3825115b9209e4ff0fbfd4e825b15d505b30c28a2bb6"
     },
     {
       "path": "packages/merchant-cloud/prepare.mjs",
@@ -1510,7 +1514,7 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:2ae8da17d760de91e2d3a2a9897255d63b7fd76f9632f710da8dee7dabad32fe"
+      "sha256": "sha256:0479775e0fd8bf9a56aef88c00a28aa3d10fa2352ae1431c9decd861cd4857d9"
     },
     {
       "path": "portfolio.lock.json",
@@ -1650,7 +1654,7 @@
     },
     {
       "path": "scripts/lib/npm-shipping.mjs",
-      "sha256": "sha256:8dd95903c7a35a406227e055a9a2cd95a5695d85155b28e5ec6f76a4a1191eb9"
+      "sha256": "sha256:613c394a6f1aaac5d094da082d7e732301884bde0479bd119589423da8e26344"
     },
     {
       "path": "scripts/lib/portfolio-lock-verify.d.mts",
@@ -1814,7 +1818,7 @@
     },
     {
       "path": "scripts/verify-cloud-package-candidate.mjs",
-      "sha256": "sha256:9ed0392f62a0cdf1b2203f03011483a6a80bd4d0fbe19a388d3a41a51520a707"
+      "sha256": "sha256:b5fcb89583441588cefe27149facaccf56b48d15775b4157dea1706ca0387b04"
     },
     {
       "path": "scripts/verify-contract-vectors.mjs",
@@ -1838,7 +1842,7 @@
     },
     {
       "path": "scripts/verify-npm-shipping-installed.mjs",
-      "sha256": "sha256:423b8801a8d5fc386d64d6054ee56f285e724f3dd2be73485803a10b4d102a4c"
+      "sha256": "sha256:62b6bff2174d9bfc49a7fae7cf25d0e3dd172a641d31d653300f978bd6986f1c"
     },
     {
       "path": "scripts/verify-npm-shipping-runtime.mjs",
@@ -2066,7 +2070,7 @@
     },
     {
       "path": "src/a2a/node.ts",
-      "sha256": "sha256:5713bf2060ee717b085c4a1d8424a815050cdbf207d26e650a4a266ce6ac91fd"
+      "sha256": "sha256:945e630b0b393ba71a38113f6a0aca0788c8c661e3f457edae536f159fab5d22"
     },
     {
       "path": "src/a2a/server/auth.ts",
@@ -2110,7 +2114,7 @@
     },
     {
       "path": "src/a2a/server/server.ts",
-      "sha256": "sha256:fe9b62b60a9d88dac541560acbe2d1d3a8f1f079335136e9780ec967bdf5a6c0"
+      "sha256": "sha256:5c30618f0e86504e027a9e34a4597ba64aab1bb6bfbee8df1051a6d957812fd5"
     },
     {
       "path": "src/a2a/server/task-registry.ts",
@@ -2462,7 +2466,7 @@
     },
     {
       "path": "src/cli.ts",
-      "sha256": "sha256:367d7cd3ec28e43d3851b5b06a65b1156139b58bf50185dd6a45aeb9ed4f9efa"
+      "sha256": "sha256:57a4d591040f6489aca46d51f4afeb2e069bbacce91ea0c1b1eae5a498932a5f"
     },
     {
       "path": "src/cloud/access/workbuddy-share-link.ts",
@@ -2478,7 +2482,7 @@
     },
     {
       "path": "src/cloud/binding/enrollment-heartbeat.ts",
-      "sha256": "sha256:5a3da113f295d81df1121eed3e91c25efd568ef1b917178ddff0bc68f79d0bd5"
+      "sha256": "sha256:006339a231c47852a8ba60af4ccf1468e032f475685ccf3d5ef1e966014bf1f3"
     },
     {
       "path": "src/cloud/binding/enrollment-key-recovery.ts",
@@ -3193,6 +3197,10 @@
       "sha256": "sha256:60967df6cc734684a2fd18e36a7b83334b89289b2fbdec37a2036aef6464711d"
     },
     {
+      "path": "src/merchant-credential-rotation.ts",
+      "sha256": "sha256:5947137a5ff1af01b4ca8fbd6f3388894ce0c16f6adb4c272c5b222f6d88264c"
+    },
+    {
       "path": "src/merchant-gateway/catalog-publications.ts",
       "sha256": "sha256:f6e85174b374ae85ad801825248aab082abe578116c7849c6bc93f35e4256fce"
     },
@@ -3241,6 +3249,18 @@
       "sha256": "sha256:b53b4b9775cfe695312d2d914bd08cfd919f8cc4d2c4f90013411db0eb8bffc4"
     },
     {
+      "path": "src/merchant-runtime/credential-consumer-proof.ts",
+      "sha256": "sha256:445559603af8ae15322142cd50e5a72448753128bd4fcb1640b738361c410f27"
+    },
+    {
+      "path": "src/merchant-runtime/credential-doctor.ts",
+      "sha256": "sha256:d8719ceb94d624e5a61d155aba97ebbade20b29c9894396d2b564dae40bb0914"
+    },
+    {
+      "path": "src/merchant-runtime/credential-rotation-scheduler.ts",
+      "sha256": "sha256:42c8a4d4304c5da3761ddd312fdb3ce96854f31141ce85c467d1f9fd59ca8b06"
+    },
+    {
       "path": "src/merchant-runtime/health.ts",
       "sha256": "sha256:fe2638fdb236f9f2c8a877289f36b1b4b944d70d8c352d0091d121f5b5fdf61d"
     },
@@ -3250,11 +3270,11 @@
     },
     {
       "path": "src/merchant-runtime/manager.ts",
-      "sha256": "sha256:80440ac3e7c995855171b74136ec75c348905856266088b4afb589d733537f17"
+      "sha256": "sha256:a21af0dd551b6f5aa74dfb86fa95618721232cead280cc25eb5fb2154a2f0cf6"
     },
     {
       "path": "src/merchant-runtime/services.ts",
-      "sha256": "sha256:0ddfb57c59cc7bb2adf06d45e3d2488f01f4d608cd8dd7d5f71525106336b5fa"
+      "sha256": "sha256:739416e04200e2272d9515baa8f6b66942b95685d0dbe3c73c58911234da747b"
     },
     {
       "path": "src/merchant/ai-runtime/config.ts",
@@ -3606,7 +3626,7 @@
     },
     {
       "path": "src/product-cli.ts",
-      "sha256": "sha256:1cca0d99da0bc2f19e5e256e278a3402dc4edbb2cbbdc182c15b080ae15f59b3"
+      "sha256": "sha256:c4d424c020600200e4ddfba0cd184b4eea3c06c3fd19876f79f2c563b9971208"
     },
     {
       "path": "src/product-compat.ts",
@@ -3614,7 +3634,7 @@
     },
     {
       "path": "src/product-init.ts",
-      "sha256": "sha256:79e0a8840eb0f5aadda35530d0682e44b899d81f229ee7dfa521c1540e6957bc"
+      "sha256": "sha256:3f5fabd06909dfe26bc67455d9de1433511e28820290ea08a52925cc0a295718"
     },
     {
       "path": "src/product-merchant.ts",
@@ -3826,9 +3846,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:3641cfd9a4baecacb3dbf47b30a6877f4285662a6e027734dd6c2d71d8ea55a1",
+      "sha256": "sha256:4dab70eb1186591f4a4ff5368779bd4625ec831ce39146f263d56894775c53b4",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:2a16b3b825c04505c4d05dd106fe80fa23d032148981fcc3bf63b9c1c2a5d89a"
+      "raw_sha256": "sha256:b23e92db7bd1eab249cc51ab79d4facce51355fab20a494d8e3e7ced413681de"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -3876,7 +3896,7 @@
     },
     {
       "path": "tests/a2a-server.test.ts",
-      "sha256": "sha256:77f1312a3b5f875816e60263b733cf366954d4c0ed0a4e62a5b979c57015f93f"
+      "sha256": "sha256:a10da986d56e0a743830570011843dedd8ea8698fc43db56ee061cc2caa43f12"
     },
     {
       "path": "tests/a2a-service-availability.test.ts",
@@ -3980,7 +4000,7 @@
     },
     {
       "path": "tests/a359-credentials-group2.test.ts",
-      "sha256": "sha256:45c16e2fc0a51c912fffe382acafad0e45ba671c31abab94231b5f7f751de5e9"
+      "sha256": "sha256:5e1653a46bd43d0b2ab20baca27bdde1ff115bdd00f4038b393e20888c05ec77"
     },
     {
       "path": "tests/a359-demo-cli.test.ts",
@@ -4472,7 +4492,7 @@
     },
     {
       "path": "tests/enrollment-heartbeat.test.ts",
-      "sha256": "sha256:dc6e009861848934ecba927ee0c9b88f068ffb3389f1c69a812573eb0c8b201a"
+      "sha256": "sha256:8b8392da5baab41acd581fa6cfdf9094fa282cc95a244cfb460182af0df38189"
     },
     {
       "path": "tests/enrollment-key-recovery.test.ts",
@@ -4752,7 +4772,7 @@
     },
     {
       "path": "tests/merchant-buddy/acceptance-matrix.ts",
-      "sha256": "sha256:66446c4adecaa471bcbb01dcf91772f02d322684a822dd02efae37fbb58b53fc"
+      "sha256": "sha256:e2525cd4c2712b0e4fb1dc1522cacdd72c56068b6c6772e87451f3aad055122b"
     },
     {
       "path": "tests/merchant-buddy/oauth-e2e.test.ts",
@@ -4805,6 +4825,22 @@
     {
       "path": "tests/merchant-core.test.ts",
       "sha256": "sha256:0c7a440ed9714f93b787fa3fbd9f0b3512bc5d261dd69fc1dfa715a31320b627"
+    },
+    {
+      "path": "tests/merchant-credential-consumer-proof.test.ts",
+      "sha256": "sha256:827ad57999af5c083fa0ce1d00018468432d093d06cc40fa070793397196d02d"
+    },
+    {
+      "path": "tests/merchant-credential-doctor.test.ts",
+      "sha256": "sha256:93e230bbc33f283fc8f5b640139920948e83af440b9e8e83ba6834d55ef227cc"
+    },
+    {
+      "path": "tests/merchant-credential-rotation-scheduler.test.ts",
+      "sha256": "sha256:ab9c77abeaf03aa064a8073790c5d1697afaad9e606ac18601f28319de32b154"
+    },
+    {
+      "path": "tests/merchant-credential-rotation.test.ts",
+      "sha256": "sha256:7c973c9d3139de5ee7c80e18fd23165e2c41c436ae528abbcf73f8657896a33d"
     },
     {
       "path": "tests/merchant-decision-backend.test.ts",
@@ -4912,7 +4948,7 @@
     },
     {
       "path": "tests/merchant-init-token-flag.test.ts",
-      "sha256": "sha256:3feadacee8ad5df3b06dec4f109151ae2680e30449e271029eff4a2e7e274896"
+      "sha256": "sha256:ff64ad2eceb62d0659e37f81cd4aee6d57cedb140334cce8be3ec4f11750e636"
     },
     {
       "path": "tests/merchant-intelligence.test.ts",
@@ -5049,6 +5085,10 @@
     {
       "path": "tests/merchant-runtime-backup.test.ts",
       "sha256": "sha256:abf4d77de0ab6bd57071a74f3e1705f6aabacc165621a547ed2732cc6b730079"
+    },
+    {
+      "path": "tests/merchant-runtime-credential-rotation.test.ts",
+      "sha256": "sha256:7e52137e318fabe8a71c3ea85445ee9a29a562b4dedaa5ac407a4f1fe8a65429"
     },
     {
       "path": "tests/merchant-runtime-rotate-key.test.ts",
@@ -5212,7 +5252,7 @@
     },
     {
       "path": "tests/npm-shipping-contract.test.ts",
-      "sha256": "sha256:cbebaeceaa5ef34336b2f9bd9cc37a549c55c42a0e406100012b602e0cfef699"
+      "sha256": "sha256:3dfed7331d839b105c0429f989fa1d530ebdd4381163886a71d192924871a23c"
     },
     {
       "path": "tests/onboarding-local-fallback.test.ts",
@@ -5292,7 +5332,7 @@
     },
     {
       "path": "tests/product-cli.test.ts",
-      "sha256": "sha256:6019db79f2de2155fcf9a9cccf7af618c0fdc48e648ceb33ac57ca31f554947b"
+      "sha256": "sha256:387867c29ca4b2144e3105ea711860dbb20c3a052de6e31d740d62dc90b89b74"
     },
     {
       "path": "tests/product-compat.test.ts",
@@ -5304,7 +5344,7 @@
     },
     {
       "path": "tests/product-init.test.ts",
-      "sha256": "sha256:a6c7dfa604f67d82462a2925ef0f712ee4b817d6f93d38a7ea9e49f7dca701f3"
+      "sha256": "sha256:e658b325bf23a7d29910934d8ea129cbeb0baea7b5a03b5a7d46c1b8681a1a76"
     },
     {
       "path": "tests/product-merchant.test.ts",
