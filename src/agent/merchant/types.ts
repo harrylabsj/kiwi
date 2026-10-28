@@ -316,6 +316,31 @@ export function parseExactMerchantProduct(value: unknown): ExactMerchantProduct 
     ...(typeof v.platform_product_id === "string" && v.platform_product_id.trim() !== ""
       ? { platform_product_id: v.platform_product_id.trim() }
       : {}),
+    ...(parseSourceEvidence(v.source_evidence) !== undefined
+      ? { source_evidence: parseSourceEvidence(v.source_evidence) }
+      : {}),
+  };
+}
+
+/** 商品来源凭据（shopping-cli 的 source_revision/observed_at）；缺字段就整体省略。 */
+function parseSourceEvidence(value: unknown):
+  | { system: string; source_version?: string; updated_at?: string; retrieved_at?: string }
+  | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  const system = typeof v.system === "string" ? v.system.trim() : "";
+  if (system === "") return undefined;
+  return {
+    system,
+    ...(typeof v.source_version === "string" && v.source_version.trim() !== ""
+      ? { source_version: v.source_version.trim() }
+      : {}),
+    ...(typeof v.updated_at === "string" && v.updated_at.trim() !== ""
+      ? { updated_at: v.updated_at.trim() }
+      : {}),
+    ...(typeof v.retrieved_at === "string" && v.retrieved_at.trim() !== ""
+      ? { retrieved_at: v.retrieved_at.trim() }
+      : {}),
   };
 }
 
