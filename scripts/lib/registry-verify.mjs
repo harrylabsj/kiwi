@@ -147,7 +147,11 @@ const DEFAULT_TIMEOUT_MS = 30000;
 // （2026-08-12 v0.7.0 发布实测：verify-registry 在 npm publish 后数秒查询
 // 踩 E404 假失败）。仅对「版本尚未出现」类错误做长退避重试；摘要/内容
 // 不匹配是真实校验失败，必须立即 fail-closed，绝不靠重试等待。
-const PROPAGATION_DELAYS_MS = [10_000, 20_000, 30_000, 60_000, 60_000, 60_000];
+// npm 发布后可能进入「Your package is being processed」窗口（自动化扫描/隔离），
+// 期间版本查询返回 E404，实测 merchant-cloud 0.12.10 用了约 25 分钟才可见。
+// 原先只等 4 分钟，导致发布后的 fail-closed 校验误报红。这里给到 ~20 分钟；
+// 真正的摘要不匹配仍然立即失败（isRetryable 只认 E404 类错误）。
+const PROPAGATION_DELAYS_MS = [30_000, 60_000, 60_000, 120_000, 120_000, 180_000, 300_000, 300_000];
 
 /**
  * 对「尚未传播可见」类错误做长退避重试。isRetryable 返回 false 的错误

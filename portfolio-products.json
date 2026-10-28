@@ -6,7 +6,7 @@
     {
       "id": "kiwi-merchant-cloud",
       "name": "Kiwi Merchant Cloud",
-      "version": "0.12.10",
+      "version": "0.12.11",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -27,7 +27,7 @@
     {
       "id": "kiwi",
       "name": "Kiwi runtime",
-      "version": "0.12.10",
+      "version": "0.12.11",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -70,7 +70,7 @@
     {
       "id": "shopping-cli",
       "name": "Shopping CLI",
-      "version": "3.2.8",
+      "version": "3.2.9",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
@@ -87,7 +87,7 @@
         "protected kiwi-release environment",
         "PyPI trusted publishing"
       ],
-      "last_known_registry_version": "3.2.7"
+      "last_known_registry_version": "3.2.8"
     },
     {
       "id": "kiwi-dsh-plugin",
@@ -124,7 +124,7 @@
       "channel": "GitHub repository + Hermes plugin catalog",
       "release_controller": "Hermes plugin repository and upstream catalog PR",
       "artifact": "release/hermes/hermes-plugin-kiwi-1.2.3.tar.gz",
-      "pinned_runtime_version": "0.12.10",
+      "pinned_runtime_version": "0.12.11",
       "state": "repository-tagged; catalog pin is a separate gate",
       "gates": [
         "plugin validation",

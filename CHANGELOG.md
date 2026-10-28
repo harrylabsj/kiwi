@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.12.11 — 2026-10-28
+
+- **成交入口永远不下发**（端到端验证到交接才发现）：商家只在 `product.stock` 与 `product.source_evidence` 同时存在时才把 `handoff_destination` 放进报价；而 shopping-cli 的商品读接口从不投影 `source_revision`/`observed_at`，于是每个 shopping-cli 商家的报价都被标成 `needs_confirmation`，买家走到 `kiwi_handoff` 只会得到 `必须提供 url`。shopping-cli 3.2.9 的商家读现在返回 `source_evidence`（公开投射仍剥离），kiwi 解析后交给 handler——守卫本身没有放宽。
+- **发布后的 registry 校验误报红**：npm 对刚发布的包会显示「being processed and may take a few minutes」，期间按版本查询返回 E404（实测 merchant-cloud 0.12.10 用了约 25 分钟）。原来只做 4 分钟的传播重试，导致 `Verify npm and PyPI downloads` 长期假红。重试预算抬到约 20 分钟；摘要不匹配仍然立即失败。
+
 ## v0.12.10 — 2026-10-28
 
 - **商家对每一笔询价都回 `field_unsupported`**（端到端测试发现）：报价 handler 对单位做严格比较（不映射同义词），而 shopping-cli 的 `products` 表没有单位列，`GET /products/{sku}` 也不返回单位——于是所有 shopping-cli 商家对任何 RFQ 都在 0.0 秒内拒绝，商家侧 `conversations`/`messages` 一直是空的。新增 `commerce.default_unit`（可选，短单位 token）：商品源没声明单位时用它，未配置则保持 fail-closed。严格比较本身不变。
