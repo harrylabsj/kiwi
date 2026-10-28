@@ -17,8 +17,12 @@ import {
   verifyTarball,
 } from "./lib/npm-shipping.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// 分阶段标记：CI 上这一步曾出现"启动后静默结束"，没有标记就无法定位死在哪一段。
+const stage = (name) => process.stderr.write(`[cloud-candidate] ${name}\n`);
+stage("start");
 const dir = path.join(root, "build/cloud-package"),
   source = assertSource(root);
+stage("source-verified");
 const pkg = json(path.join(dir, "package.json")),
   manifest = json(path.join(dir, "build-manifest.json")),
   runtime = json(path.join(dir, "runtime-package.json"));
@@ -30,7 +34,10 @@ assert.equal(manifest.source_commit, source.source_commit);
 assert.equal(manifest.source_contract_sha256, source.contract_sha256);
 assert.deepEqual(pkg.dependencies, json(path.join(root, "package.json")).dependencies);
 assert.deepEqual(pkg.bundleDependencies, Object.keys(pkg.dependencies).sort());
+stage("metadata-verified");
 const edges = await assertBundledEdges(root, dir);
+stage("bundled-edges-verified");
+stage("pack-plan-start");
 const plan = packRecord(JSON.parse(npm(dir, ["pack", "--dry-run", "--json"])), {
   name: pkg.name,
   version: pkg.version,
@@ -39,6 +46,7 @@ const planned = plan.files
   .map((r) => r.path)
   .filter((p) => p !== "build-manifest.json")
   .sort();
+stage("pack-plan-verified");
 assert.deepEqual(planned, manifest.files.map((r) => r.path).sort(), "shipping file set mismatch");
 for (const row of manifest.files) {
   const file = path.resolve(dir, row.path);
@@ -58,6 +66,7 @@ const tgzDir = path.join(root, "release/npm/kiwi-merchant-cloud");
 if (!existsSync(tgzDir)) throw new Error("SHIPPING_ACTUAL_PACK_REQUIRED");
 const tgzs = readdirSync(tgzDir).filter((p) => p.endsWith(".tgz"));
 assert.equal(tgzs.length, 1);
+stage("manifest-files-verified");
 const tgz = path.join(tgzDir, tgzs[0]);
 assert(statSync(tgz).size < MAX_TGZ, "project compressed tgz budget exceeded");
 const packed = verifyTarball(readFileSync(tgz), [
@@ -70,6 +79,7 @@ const packed = verifyTarball(readFileSync(tgz), [
 ]);
 if (packed.integrity !== plan.integrity || packed.compressed_bytes !== plan.size)
   throw new Error("SHIPPING_CLOUD_PACK_SRI_MISMATCH");
+stage("tarball-verified");
 console.log(
   JSON.stringify({
     name: pkg.name,
