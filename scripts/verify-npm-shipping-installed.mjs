@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Cold normal npm12 production installs of the two exact local tarballs. No registry publication/provider/model operation. */
 import { assertBundledEdges, assertInstalledLockedVersions } from "./lib/npm-bundled-edges.mjs";
+import { classifyAudit } from "./lib/shipping-audit.mjs";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -101,8 +102,30 @@ for (const [name, relative, subdir, app] of [
     if (!help.includes("kiwi")) throw new Error("SHIPPING_CLI_HELP_MISSING");
     writeFileSync(path.join(consumer, "cli-help.log"), help);
   }
-  const audit = npm(consumer, ["audit", "--omit=dev", "--json"], remaining());
+  // 与构建门禁同一套判定：`npm audit` 有公告时退出码为 1，先拿完整 JSON 再过
+  // **已复核豁免清单**，只对未获豁免的公告失败。
+  let audit;
+  try {
+    audit = npm(consumer, ["audit", "--omit=dev", "--json"], remaining());
+  } catch (error) {
+    if (typeof error?.stdout !== "string" || error.stdout.trim() === "") throw error;
+    audit = error.stdout;
+  }
   writeFileSync(path.join(consumer, "audit.json"), audit);
+  const auditDecision = classifyAudit(
+    JSON.parse(audit),
+    json(path.join(root, "build-inputs/shipping-audit-allow.json")),
+    new Date(),
+  );
+  writeFileSync(
+    path.join(consumer, "audit-disposition.json"),
+    JSON.stringify(auditDecision, null, 2) + "\n",
+  );
+  if (auditDecision.blocked.length > 0) {
+    const blocked = new Error("SHIPPING_AUDIT_BLOCKED");
+    blocked.blocked = auditDecision.blocked;
+    throw blocked;
+  }
   budget();
   results.push({
     name,

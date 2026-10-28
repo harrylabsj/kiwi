@@ -1834,7 +1834,7 @@
     },
     {
       "path": "scripts/verify-npm-shipping-installed.mjs",
-      "sha256": "sha256:aa0dd623856d343ee8c6999dac087cc44fb93ead4089213fa55343b8a46a7b43"
+      "sha256": "sha256:c93b186e3f79de3e6526a14661014b63cb512779d422df8ef15af2c765a6fad1"
     },
     {
       "path": "scripts/verify-npm-shipping-runtime.mjs",
