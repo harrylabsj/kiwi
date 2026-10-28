@@ -610,7 +610,7 @@
     },
     {
       "path": "docs/portfolio-release-management.md",
-      "sha256": "sha256:8c40457e15f021e9087a7611b496e14d496ad1635e109134f25505559c1e4803"
+      "sha256": "sha256:49f0b4b965cdb39f3fe1e461134d4bb015f8cd16966bc72c34db032676482c80"
     },
     {
       "path": "docs/protocol/kiwi-negotiation-protocol-1.0-rev1.4.md",
@@ -1506,11 +1506,11 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:c451925e3100222b4119ef65c0e8a417693f258e44fb691c689a8fac1d7a8ac5"
+      "sha256": "sha256:2a6cefec0bc1bdc09375bfb58a536085453b8135229d357ea1331a088099e364"
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:3d9068d1d296253a43bf528b450deb5b9a02753e1f6e1da8d6e9f47deeb03b8d"
+      "sha256": "sha256:cd2281d3080bec4881d5c334add1ba7ccba687b0d92cd5bb0c412406df23f299"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
