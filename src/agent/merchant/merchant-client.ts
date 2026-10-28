@@ -156,7 +156,8 @@ export class HttpMerchantClient implements MerchantClient {
     if (token === undefined) {
       throw new MerchantClientError(
         "auth",
-        "没有 catalog 作用域凭据（commerce.credentials.catalog.token_env 未配置）",
+        "没有 catalog 作用域凭据（profile 的 commerce.credentials.catalog.token_env " +
+          "未配置，或其指向的环境变量在当前进程里未设置/为空）",
       );
     }
     return token;

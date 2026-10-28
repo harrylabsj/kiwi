@@ -286,8 +286,24 @@ export class MerchantRuntimeManager {
 
   /** 停止服务（SIGTERM；显式停止后不自动重启）。 */
   async stop(name: string): Promise<ManagedServiceState> {
+    return await this.terminate(name, { persistIntent: true });
+  }
+
+  /**
+   * 停止服务本体。`persistIntent=false` 用于**优雅关闭**（supervisor 收到
+   * SIGTERM 后停全部子进程）：此时不写 `<name>.stopped`，否则下一次
+   * `runtime start` 的 supervise() 会把它们当成操作员显式停止而不拉起——
+   * systemd `Restart=always` 重启一次就把 A2A/MCP 永久停掉（生产事故：
+   * 2026-10-28 重启 kiwi-merchant-v2 后 A2A 502）。
+   */
+  private async terminate(
+    name: string,
+    options: { persistIntent: boolean },
+  ): Promise<ManagedServiceState> {
     this.spec(name);
-    writeFileAtomic(this.stoppedFile(name), JSON.stringify({ stopped: true, token: randomUUID() }) + "\n", { mode: 0o600 });
+    if (options.persistIntent) {
+      writeFileAtomic(this.stoppedFile(name), JSON.stringify({ stopped: true, token: randomUUID() }) + "\n", { mode: 0o600 });
+    }
     const current = this.children.get(name);
     if (current !== undefined) current.stopped = true;
     let pid = current?.pid ?? this.livePid(name);
@@ -385,11 +401,15 @@ export class MerchantRuntimeManager {
     }
   }
 
-  /** 停止监控并停掉全部服务（优雅关闭）。 */
+  /**
+   * 停止监控并停掉全部服务（优雅关闭）。**不写显式停止意图**：进程退出后
+   * 由 systemd 重新拉起本进程，supervise() 必须能把子服务重新启动；显式
+   * `runtime stop` 的意图仍由 stop() 保留（见 terminate 注释）。
+   */
   async shutdown(): Promise<void> {
     this.supervising = false;
     for (const name of [...this.services.keys()].reverse()) {
-      await this.stop(name);
+      await this.terminate(name, { persistIntent: false });
     }
   }
 }

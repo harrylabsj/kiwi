@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.12.8 — 2026-10-28
+
+- **修复：systemd 重启后 A2A/MCP 永久停机**。商家 runtime 的优雅关闭（SIGTERM/`restart`）此前对每个受管子服务调用 `stop()`，而 `stop()` 会落盘 `<name>.stopped` 显式停止意图；新进程 `supervise()` 看到该意图就不再拉起子进程——`Restart=always` 每重启一次，A2A 接待服务和 MCP 管理服务就永久停一次（生产现象：重启商家实例后公网 A2A 502）。现在停止逻辑拆成 `terminate(name,{persistIntent})`：`shutdown()` 只终止进程、不写意图，操作员显式 `runtime stop` 的意图照旧保留并阻止自动拉起。新增两条回归测试（关闭后可被重新拉起 / 显式停止的意图跨关闭保留）。
+- **诊断：catalog 作用域凭据缺失的报错不再误导**。此前 profile 已配置 `commerce.credentials.catalog.token_env`、但该环境变量在当前进程里未设置或为空时，报错仍写「未配置」，把「配置缺失」和「部署没把凭据注入进程」混为一谈。现在文本区分为 profile 未配置 / 环境变量未设置或为空两种情况。
+
 ## v0.12.7 — 2026-10-28
 
 - **门禁失败可见与公钥登记**：买家遇平台门禁拒绝时，客户端旁路上报 `gate_rejected`（失败不影响报价流程）；工作台在签名读里看到近 24h 计数并提示核对分享码。另外新增 `scripts/trust-buyer-key.mjs`（`src/tools/trusted-buyer-keys.ts`）：把买家的 Ed25519 公钥登记进运行时数据目录的 `a2a-trusted-keys.json`（0600、原子写、重复 keyid 拒绝、必须 Ed25519），受保护操作从此认可该买家身份。工作台的"已撤销"现在区分"被新版本替换"与"撤回"。

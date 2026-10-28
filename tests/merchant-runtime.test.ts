@@ -103,6 +103,36 @@ describe("MerchantRuntimeManager", () => {
     expect(after?.running).toBe(false);
   });
 
+  it("优雅关闭不写显式停止意图：管理进程重启后 supervise 重新拉起全部服务", async () => {
+    const dir = tmp();
+    const m1 = makeManager(dir);
+    await m1.supervise();
+    expect(m1.status().every((s) => s.running)).toBe(true);
+    // systemd SIGTERM：停子进程后退出
+    await m1.shutdown();
+    expect(m1.status().every((s) => !s.running)).toBe(true);
+    expect(existsSync(path.join(dir, "runtime", "a2a.stopped"))).toBe(false);
+    // systemd Restart=always 起新进程：supervise 必须重新拉起子服务
+    const m2 = makeManager(dir);
+    await m2.supervise();
+    expect(m2.status().every((s) => s.running)).toBe(true);
+    await m2.shutdown();
+  });
+
+  it("显式 stop 的意图跨优雅关闭保留，supervise 不自行拉起该服务", async () => {
+    const dir = tmp();
+    const m1 = makeManager(dir);
+    await m1.supervise();
+    await m1.stop("a2a");
+    await m1.shutdown();
+    const m2 = makeManager(dir);
+    await m2.supervise();
+    const states = m2.status();
+    expect(states.find((s) => s.name === "a2a")?.running).toBe(false);
+    expect(states.find((s) => s.name === "mcp")?.running).toBe(true);
+    await m2.shutdown();
+  });
+
   it("重启管理进程后从 pidfile 恢复状态视图", async () => {
     const dir = tmp();
     const m1 = makeManager(dir);
