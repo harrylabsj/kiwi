@@ -98,8 +98,8 @@
     "arch": "arm64"
   },
   "stage": {
-    "package_sha256": "sha256:ef56ef8fea5bc974419e338a6c302a071e00d714a63529b720ad9e4b86bd0c5b",
-    "lock_sha256": "sha256:506d7a388fd846bf6d91c2211337c404d85d44f5ffd750661ad5592637394247"
+    "package_sha256": "sha256:2b26d33da8e12e9fda4b21d942e77988c19582fbe55208413ac8cdc5320650b4",
+    "lock_sha256": "sha256:d249609f8114d24f438c60d7073c30de7a39c355bf44ffb023ce7fed51a95685"
   },
   "budgets": {
     "plain_bytes": 268435456,
@@ -218,11 +218,11 @@
     },
     {
       "path": "build-inputs/release0124-stage/package-lock.json",
-      "sha256": "sha256:506d7a388fd846bf6d91c2211337c404d85d44f5ffd750661ad5592637394247"
+      "sha256": "sha256:d249609f8114d24f438c60d7073c30de7a39c355bf44ffb023ce7fed51a95685"
     },
     {
       "path": "build-inputs/release0124-stage/package.json",
-      "sha256": "sha256:ef56ef8fea5bc974419e338a6c302a071e00d714a63529b720ad9e4b86bd0c5b"
+      "sha256": "sha256:2b26d33da8e12e9fda4b21d942e77988c19582fbe55208413ac8cdc5320650b4"
     },
     {
       "path": "contracts/candidate-agent-dto-1.0.schema.json",
@@ -1486,11 +1486,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "sha256:8d0930f438c6ad0102b83c54b221e02d2a1fb9e0f2046300cce99f0e91e2982c"
+      "sha256": "sha256:b2b29dd52ff7fbaea36984d9eb37f6a521e689071cbd3b4d14b19433e9f01556"
     },
     {
       "path": "package.json",
-      "sha256": "sha256:91b4ea2be409571a3b413ef2b54f7c2efc05e59431a2d30f39edfcc61e877999"
+      "sha256": "sha256:ef1dac75f850647849009337a6e962aa77204ccb9dee270eb18a809a02b1bffa"
     },
     {
       "path": "packages/merchant-cloud/package.json",
@@ -3810,9 +3810,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:d8e62c416208eac6a733fec1b524dd47aba07566444b91d2067206dfd2f497e6",
+      "sha256": "sha256:6ef7006c260b1ac6f62ad055042838b346d398fbf65a8f3c4b02f93746b62fce",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:dec7de60a0791254db953998b773b2a327885e254178deab774a2e7107baea06"
+      "raw_sha256": "sha256:c3c2bf1fffa175a5f103c8e8cfa6dd3c2e9cc5719672c44c8da6f25418a6141d"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",

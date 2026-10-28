@@ -90,8 +90,7 @@
     "url": "git+https://github.com/harrylabsj/kiwi.git"
   },
   "overrides": {
-    "brace-expansion": "5.0.12",
-    "undici": "8.12.3"
+    "brace-expansion": "5.0.12"
   },
   "allowScripts": {
     "@google/genai@2.21.0": true,
