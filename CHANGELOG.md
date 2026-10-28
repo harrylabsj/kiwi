@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.12.12 — 2026-10-29
+
+- 随发 **shopping-cli 3.2.10**：商品的 `source_evidence.source_version` 不再可能是空串（本地维护的商品回退 `local:<updated_at>`，与 listing 投影同口径）。商家运行时对来源证据是严格校验——字段存在就必须非空，空串会整条报价变成 `temporarily_unavailable`；上一版只能靠数据回填绕过，现在由商品读接口直接给出。
+- 本版不含 kiwi 侧行为变更，仅随带依赖版本与发布元数据。
+
 ## v0.12.11 — 2026-10-28
 
 - **成交入口永远不下发**（端到端验证到交接才发现）：商家只在 `product.stock` 与 `product.source_evidence` 同时存在时才把 `handoff_destination` 放进报价；而 shopping-cli 的商品读接口从不投影 `source_revision`/`observed_at`，于是每个 shopping-cli 商家的报价都被标成 `needs_confirmation`，买家走到 `kiwi_handoff` 只会得到 `必须提供 url`。shopping-cli 3.2.9 的商家读现在返回 `source_evidence`（公开投射仍剥离），kiwi 解析后交给 handler——守卫本身没有放宽。
