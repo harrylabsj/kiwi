@@ -48,7 +48,7 @@
     {
       "id": "kiwi-catalog",
       "name": "Kiwi Catalog",
-      "version": "0.5.7",
+      "version": "0.5.8",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
