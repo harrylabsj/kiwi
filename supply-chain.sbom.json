@@ -5,25 +5,25 @@
   "runtime_dependencies": [
     {
       "name": "@earendil-works/pi-agent-core",
-      "spec": "^1.2.0",
-      "resolved": "1.4.0",
-      "integrity": "sha512-PoKY84SKUwnt7S5QBZaGUqfNO1kjP3KHpHUA9QpFTj4cOjaVWMYIcBPJ6FDRCdE8Zen9OSECQUd0uUfVgtSmgA=="
+      "spec": "1.2.0",
+      "resolved": "1.2.0",
+      "integrity": "sha512-pUR0vYmGhHkBQGeCeWjwVIA+l1+MrDu6m6VGuysjh6KBzBpovTV/MlcVrEIOaM8jv/slpAyUmuCEQl1jOBqHJQ=="
     },
     {
       "name": "@earendil-works/pi-ai",
-      "spec": "^1.2.0",
-      "resolved": "1.4.0",
-      "integrity": "sha512-hQM/C4+1w8rHYACzDDf+0vQMnEnpzIop1tptIERVgR3ZeT/hHSzBNG8PaWPgxWQjqSeKCyBZSyp8uTT6eKK1pQ=="
+      "spec": "1.2.0",
+      "resolved": "1.2.0",
+      "integrity": "sha512-U5/1zXqfV1on7/9sbez03tT4Ru49Lvfb4+zXSDK3DBKF5cRk6KxvAOTOY3HJ4jimlZth+rs7vbJqN6iBQAoNuQ=="
     },
     {
       "name": "@earendil-works/pi-coding-agent",
-      "spec": "^1.2.0",
-      "resolved": "1.4.0",
-      "integrity": "sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg=="
+      "spec": "1.2.0",
+      "resolved": "1.2.0",
+      "integrity": "sha512-h/4WaVWv1VlCaY8x8qEN5U+7jbF/e7+Ck6moPeEOFn5juMTWwNAXjwgYM7gRgbBYh8Zppwt6qWvJDzNTf4GNEQ=="
     },
     {
       "name": "@earendil-works/pi-durable",
-      "spec": "^1.2.0",
+      "spec": "1.2.0",
       "resolved": "1.2.0",
       "integrity": "sha512-2kDyK7HVCTcxf3CTHkDR0rRGCUfIpoZr76fC6n/KZDu7hkDWR62anEujIkJ+8sKjtNpEM+zyKW3bi2NIEUyiCw=="
     },
@@ -66,13 +66,13 @@
   ],
   "artifact": {
     "name": "harrylabsj-kiwi-0.12.7.tgz",
-    "sha256": "7bfac645b72160a9da8f1ee0d78fcf286a3a986cd818a65e91bf8a1f35bc9aff",
-    "bytes": 2387648
+    "sha256": "18228657dfe6b1e81c3271b8abe7a916bc0eedcb53c74d71e767dc84aa352095",
+    "bytes": 2387684
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-10-28T00:37:56.023Z"
+  "generated_at": "2026-10-28T02:50:53.340Z"
 }
