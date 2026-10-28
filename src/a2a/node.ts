@@ -76,6 +76,10 @@ import {
 } from "../discovery/catalog-source/register.js";
 import { HttpMerchantClient } from "../agent/merchant/merchant-client.js";
 import { ProfileCredentialBroker } from "../agent/merchant/credential-broker.js";
+import {
+  buildMarketplaceProductLink,
+  normalizeMarketplaceTradePlatform,
+} from "../handoff/marketplace-product-link.js";
 import type { MerchantHandlerOptions, MerchantProductSource } from "./server/merchant-handler.js";
 import { createEnrollmentChallengeResponder, readEnrollmentStore } from "../cloud/binding/enrollment-challenge.js";
 import { startEnrollmentHeartbeat, type EnrollmentHeartbeat } from "../cloud/binding/enrollment-heartbeat.js";
@@ -180,6 +184,30 @@ async function listenPort(preferred: number): Promise<{ port: number; url: strin
  * `KIWI_COMMERCE_URL` 覆盖或 profile.commerce.base_url；/products/{sku} 是
  * 公开只读端点（无需 token），shopping-cli 自身可接 ERP/本地商品表。
  */
+/**
+ * 商品成交入口：商家填的 `handoff_destination` 优先；否则用「平台 + 平台商品ID」
+ * 按平台固定路由生成（京东/淘宝/天猫，见 src/handoff/marketplace-product-link.ts）。
+ * 两者都没有就是不提供成交入口（KTH 交接时会如实说没有）。
+ */
+function resolveHandoffDestination(product: {
+  handoff_destination?: string;
+  trade_platform?: string;
+  platform_product_id?: string;
+}): string | undefined {
+  const explicit = (product.handoff_destination ?? "").trim();
+  if (explicit !== "") return explicit;
+  if (product.trade_platform === undefined || product.platform_product_id === undefined) return undefined;
+  try {
+    return buildMarketplaceProductLink(
+      normalizeMarketplaceTradePlatform(product.trade_platform),
+      product.platform_product_id,
+    );
+  } catch {
+    // 平台/ID 非法时不要编造链接：按没有成交入口处理。
+    return undefined;
+  }
+}
+
 function buildProductSource(profile: AgentProfile): MerchantProductSource {
   const commerceUrl = process.env.KIWI_COMMERCE_URL ?? profile.commerce.base_url;
   const broker = new ProfileCredentialBroker(profile);
@@ -209,8 +237,10 @@ function buildProductSource(profile: AgentProfile): MerchantProductSource {
         ...(product.valid_until !== undefined ? { valid_until: product.valid_until } : {}),
         ...(product.source_evidence !== undefined ? { source_evidence: product.source_evidence } : {}),
         currency: product.currency,
-        ...(product.handoff_destination !== undefined
-          ? { handoff_destination: product.handoff_destination }
+        // 成交入口两种写法：商家直接给 URL（handoff_destination），或给
+        // 「平台 + 平台商品ID」由我们按平台固定路由生成（库里不存任意 URL）。
+        ...(resolveHandoffDestination(product) !== undefined
+          ? { handoff_destination: resolveHandoffDestination(product) }
           : {}),
       };
     },

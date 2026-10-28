@@ -48,6 +48,10 @@ export interface MerchantCatalogProduct {
   /** 商家声明的每商品成交入口（shopping-cli products.handoff_destination；KTH
    *  handoff 用，商家协商 agreement 直传 buyer）。 */
   handoff_destination?: string;
+  /** 交易入口的平台（jd/taobao/tmall）与平台商品ID；成对出现，URL 由平台固定
+   *  路由生成（见 src/handoff/marketplace-product-link.ts）。 */
+  trade_platform?: string;
+  platform_product_id?: string;
 }
 
 export interface MerchantProductInput {
@@ -306,6 +310,12 @@ export function parseExactMerchantProduct(value: unknown): ExactMerchantProduct 
       ? stringArray(v.delivery_attributes, "product.delivery_attributes")
       : [],
     handoff_destination: typeof v.handoff_destination === "string" ? v.handoff_destination : "",
+    ...(typeof v.trade_platform === "string" && v.trade_platform.trim() !== ""
+      ? { trade_platform: v.trade_platform.trim() }
+      : {}),
+    ...(typeof v.platform_product_id === "string" && v.platform_product_id.trim() !== ""
+      ? { platform_product_id: v.platform_product_id.trim() }
+      : {}),
   };
 }
 
