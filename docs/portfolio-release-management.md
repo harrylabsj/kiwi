@@ -1,5 +1,7 @@
 # Kiwi Portfolio Release Management
 
+> **最新平台版本快照：**请先查看 [平台发布版本台账](platform-release-ledger.md)。下方表格与历史发布段落保留当时基线，不能当作当前 registry 或 WorkBuddy 实时状态。
+
 本文件定义 Kiwi 十一种产品形态的统一发布台账、制品来源、质量门与平台审批边界。版本号继续由各产品维护；`portfolio-products.json` 是产品清单，`portfolio.lock.json` 是三仓契约组合锁，`portfolio-release.yml` 是 npm/PyPI 与候选制品的中心构建入口。
 
 ## 产品台账
