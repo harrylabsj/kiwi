@@ -11,8 +11,8 @@ import {assertBundledEdges} from "../scripts/lib/npm-bundled-edges.mjs";
 // runs assertBundledEdges against the checkpoint, which reads that commit's npm
 // payload manifest and runs toolchain() on it, so the checkpoint can only stay
 // valid while its manifest matches the npm CI installs.
-const VERIFIED_SOURCE = "3fe70b49fa0511a4f6bfb6e3505ad452aac58197";
-const VERIFIED_CONTRACT_SHA = "714dffd9d927b2d2b26a61750dba997f71702a185055358fdf6a733d7e0570cd";
+const VERIFIED_SOURCE = "7aaf592468f105e8a9663adc9ed60cc2a775fb90";
+const VERIFIED_CONTRACT_SHA = "0ac88ef8537de140341bc41b4cad59cb36af9a98e8d91a6d6a0ebf0cac990318";
 const VERIFIED_GUARD_CLOSURE = {
   "scripts/lib/npm-shipping.mjs": "613c394a6f1aaac5d094da082d7e732301884bde0479bd119589423da8e26344",
   "scripts/check-install-toolchain.mjs": "fdbe3919a9a32f80d2ddcbe7699af4e1674c8c80323b64b7b6ab32f2848e9e32",
