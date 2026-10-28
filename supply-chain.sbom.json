@@ -6,20 +6,20 @@
     {
       "name": "@earendil-works/pi-agent-core",
       "spec": "^1.2.0",
-      "resolved": "1.2.0",
-      "integrity": "sha512-pUR0vYmGhHkBQGeCeWjwVIA+l1+MrDu6m6VGuysjh6KBzBpovTV/MlcVrEIOaM8jv/slpAyUmuCEQl1jOBqHJQ=="
+      "resolved": "1.4.0",
+      "integrity": "sha512-PoKY84SKUwnt7S5QBZaGUqfNO1kjP3KHpHUA9QpFTj4cOjaVWMYIcBPJ6FDRCdE8Zen9OSECQUd0uUfVgtSmgA=="
     },
     {
       "name": "@earendil-works/pi-ai",
       "spec": "^1.2.0",
-      "resolved": "1.2.0",
-      "integrity": "sha512-U5/1zXqfV1on7/9sbez03tT4Ru49Lvfb4+zXSDK3DBKF5cRk6KxvAOTOY3HJ4jimlZth+rs7vbJqN6iBQAoNuQ=="
+      "resolved": "1.4.0",
+      "integrity": "sha512-hQM/C4+1w8rHYACzDDf+0vQMnEnpzIop1tptIERVgR3ZeT/hHSzBNG8PaWPgxWQjqSeKCyBZSyp8uTT6eKK1pQ=="
     },
     {
       "name": "@earendil-works/pi-coding-agent",
       "spec": "^1.2.0",
-      "resolved": "1.2.0",
-      "integrity": "sha512-h/4WaVWv1VlCaY8x8qEN5U+7jbF/e7+Ck6moPeEOFn5juMTWwNAXjwgYM7gRgbBYh8Zppwt6qWvJDzNTf4GNEQ=="
+      "resolved": "1.4.0",
+      "integrity": "sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg=="
     },
     {
       "name": "@earendil-works/pi-durable",
@@ -66,13 +66,13 @@
   ],
   "artifact": {
     "name": "harrylabsj-kiwi-0.12.7.tgz",
-    "sha256": "7bfac645b72160a9da8f1ee0d78fcf286a3a986cd818a65e91bf8a1f35bc9aff",
-    "bytes": 2387648
+    "sha256": "cc3b83bef96d9c024ded84a6c3d3df63a4eb9f7681186e74f92002b89993f02f",
+    "bytes": 2387662
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-10-27T23:53:11.784Z"
+  "generated_at": "2026-10-28T00:10:04.952Z"
 }

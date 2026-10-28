@@ -27,7 +27,8 @@
     "protobufjs@7.6.6": true
   },
   "overrides": {
-    "brace-expansion": "5.0.12"
+    "brace-expansion": "5.0.12",
+    "undici": "8.12.3"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "^1.2.0",
