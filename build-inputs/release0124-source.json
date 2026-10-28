@@ -1510,7 +1510,7 @@
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:8aab0226d80d0d364222b8f3c79f5217bad48a9f2db82721ece76ee2faa7d221"
+      "sha256": "sha256:d4b9fb8c46f2f6221cf43df2967cb369f2f80a2cc7d233b83b3e2218b148589b"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
