@@ -614,7 +614,7 @@
     },
     {
       "path": "docs/platform-release-ledger.md",
-      "sha256": "sha256:e2349e78ef49b054620f428f855c21594a81b9ec2017acdaa43b6861d4f4c002"
+      "sha256": "sha256:563237c1ef09e6dbd44cc3554b0f63c81334d032f6abd1d10576dc9e87479c68"
     },
     {
       "path": "docs/portfolio-release-management.md",
@@ -1518,7 +1518,7 @@
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:67ee4dc35668a89711734dac63b594299b1fbe901c3965c9ee18140d8de6b9e7"
+      "sha256": "sha256:2f3f4cb93bfbf0bc0407c53913b14b668cc57e0ff84092c53b10827f653c0bdd"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
@@ -5240,7 +5240,7 @@
     },
     {
       "path": "tests/npm-cloud-leaf-metadata.test.ts",
-      "sha256": "sha256:8209ad692523da9c206bd8a56b2863cefb24a74321e2e61c0a5dd0703dc63de9"
+      "sha256": "sha256:8c0dfd00d70da08417b8538f324dd15cef779978ec00db7930d46fd1a3f0509c"
     },
     {
       "path": "tests/npm-official-binlinks.test.ts",
