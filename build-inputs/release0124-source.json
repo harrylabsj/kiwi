@@ -1665,6 +1665,10 @@
       "sha256": "sha256:44fc48be3e884d54ac49c27726b75eef525c8a11f26fc471f6637624e7db1f78"
     },
     {
+      "path": "scripts/lib/shipping-audit.d.mts",
+      "sha256": "sha256:b966e7097c2d585d3574e436d11a2d21ad02b4f5f4440736a9badb4ae47c2afc"
+    },
+    {
       "path": "scripts/lib/shipping-audit.mjs",
       "sha256": "sha256:b336158ac80e68a1840c1ffe5c042b51c13589f5d62c03a5f22a0125f0a62f44"
     },
