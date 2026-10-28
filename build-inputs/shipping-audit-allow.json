@@ -1,0 +1,70 @@
+{
+  "schema": "kiwi.shipping-audit-allow/1",
+  "note": "发布门禁的已复核豁免。只豁免明确列出的 advisory；同一包的新公告仍然拦截；过期即失效。",
+  "entries": [
+    {
+      "id": "GHSA-4QV8-2P9J-2685",
+      "package": "undici",
+      "reason": "@earendil-works/pi-coding-agent 精确依赖 undici 8.10.2；替换版本会破坏打包依赖边校验（SHIPPING_BUNDLED_EDGE_INVALID），上游尚无声明修复版。受影响面是出站 HTTP 客户端，本产品只用 node 内置 fetch 与既有出站加固（禁重定向、超时、体积上限）。",
+      "approved_by": "harrylabsj",
+      "approved_at": "2026-10-28",
+      "expires_at": "2026-11-27"
+    },
+    {
+      "id": "GHSA-F72V-6W45-Q472",
+      "package": "undici",
+      "reason": "@earendil-works/pi-coding-agent 精确依赖 undici 8.10.2；替换版本会破坏打包依赖边校验（SHIPPING_BUNDLED_EDGE_INVALID），上游尚无声明修复版。受影响面是出站 HTTP 客户端，本产品只用 node 内置 fetch 与既有出站加固（禁重定向、超时、体积上限）。",
+      "approved_by": "harrylabsj",
+      "approved_at": "2026-10-28",
+      "expires_at": "2026-11-27"
+    },
+    {
+      "id": "GHSA-XJJ6-F33Q-929C",
+      "package": "undici",
+      "reason": "@earendil-works/pi-coding-agent 精确依赖 undici 8.10.2；替换版本会破坏打包依赖边校验（SHIPPING_BUNDLED_EDGE_INVALID），上游尚无声明修复版。受影响面是出站 HTTP 客户端，本产品只用 node 内置 fetch 与既有出站加固（禁重定向、超时、体积上限）。",
+      "approved_by": "harrylabsj",
+      "approved_at": "2026-10-28",
+      "expires_at": "2026-11-27"
+    },
+    {
+      "id": "GHSA-4W7W-5XRC-9H26",
+      "package": "undici",
+      "reason": "@earendil-works/pi-coding-agent 精确依赖 undici 8.10.2；替换版本会破坏打包依赖边校验（SHIPPING_BUNDLED_EDGE_INVALID），上游尚无声明修复版。受影响面是出站 HTTP 客户端，本产品只用 node 内置 fetch 与既有出站加固（禁重定向、超时、体积上限）。",
+      "approved_by": "harrylabsj",
+      "approved_at": "2026-10-28",
+      "expires_at": "2026-11-27"
+    },
+    {
+      "id": "GHSA-2M5V-PCH6-74HX",
+      "package": "undici",
+      "reason": "@earendil-works/pi-coding-agent 精确依赖 undici 8.10.2；替换版本会破坏打包依赖边校验（SHIPPING_BUNDLED_EDGE_INVALID），上游尚无声明修复版。受影响面是出站 HTTP 客户端，本产品只用 node 内置 fetch 与既有出站加固（禁重定向、超时、体积上限）。",
+      "approved_by": "harrylabsj",
+      "approved_at": "2026-10-28",
+      "expires_at": "2026-11-27"
+    },
+    {
+      "id": "GHSA-QRXM-FQHP-JWVM",
+      "package": "undici",
+      "reason": "@earendil-works/pi-coding-agent 精确依赖 undici 8.10.2；替换版本会破坏打包依赖边校验（SHIPPING_BUNDLED_EDGE_INVALID），上游尚无声明修复版。受影响面是出站 HTTP 客户端，本产品只用 node 内置 fetch 与既有出站加固（禁重定向、超时、体积上限）。",
+      "approved_by": "harrylabsj",
+      "approved_at": "2026-10-28",
+      "expires_at": "2026-11-27"
+    },
+    {
+      "id": "GHSA-9FM3-97PX-RJF6",
+      "package": "undici",
+      "reason": "@earendil-works/pi-coding-agent 精确依赖 undici 8.10.2；替换版本会破坏打包依赖边校验（SHIPPING_BUNDLED_EDGE_INVALID），上游尚无声明修复版。受影响面是出站 HTTP 客户端，本产品只用 node 内置 fetch 与既有出站加固（禁重定向、超时、体积上限）。",
+      "approved_by": "harrylabsj",
+      "approved_at": "2026-10-28",
+      "expires_at": "2026-11-27"
+    },
+    {
+      "id": "GHSA-55WC-3PG8-JFW6",
+      "package": "undici",
+      "reason": "@earendil-works/pi-coding-agent 精确依赖 undici 8.10.2；替换版本会破坏打包依赖边校验（SHIPPING_BUNDLED_EDGE_INVALID），上游尚无声明修复版。受影响面是出站 HTTP 客户端，本产品只用 node 内置 fetch 与既有出站加固（禁重定向、超时、体积上限）。",
+      "approved_by": "harrylabsj",
+      "approved_at": "2026-10-28",
+      "expires_at": "2026-11-27"
+    }
+  ]
+}

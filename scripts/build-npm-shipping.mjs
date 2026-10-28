@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** Approved current-source whole-package npm shipping; not the historical packed Linux runtime. */
+import { classifyAudit } from "./lib/shipping-audit.mjs";
 import { packRecord } from "./lib/npm-pack-record.mjs";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -157,8 +158,30 @@ export function buildShipping({
       .some((r) => json(path.join(out, "node_modules", r.path)).version !== "5.0.12")
   )
     throw new Error("SHIPPING_OVERRIDE_FAILED");
-  const audit = npm(out, ["audit", "--omit=dev", "--json"], remaining());
+  // `npm audit` 在有公告时退出码为 1；这里要拿到完整 JSON 再做**已复核豁免**判定，
+  // 不能让它直接把构建打红（否则一条上游 pin 公告会挡死全部产品）。
+  let audit;
+  try {
+    audit = npm(out, ["audit", "--omit=dev", "--json"], remaining());
+  } catch (error) {
+    if (typeof error?.stdout !== "string" || error.stdout.trim() === "") throw error;
+    audit = error.stdout;
+  }
   writeFileSync(path.join(out, "shipping-audit.json"), audit);
+  const auditDecision = classifyAudit(
+    JSON.parse(audit),
+    json(path.join(root, "build-inputs/shipping-audit-allow.json")),
+    new Date(),
+  );
+  writeFileSync(
+    path.join(out, "shipping-audit-disposition.json"),
+    JSON.stringify(auditDecision, null, 2) + "\n",
+  );
+  if (auditDecision.blocked.length > 0) {
+    const error = new Error("SHIPPING_AUDIT_BLOCKED");
+    error.blocked = auditDecision.blocked;
+    throw error;
+  }
   cpSync(path.join(root, "dist"), path.join(out, "app"), { recursive: true });
   cpSync(path.join(root, "contracts"), path.join(out, "contracts"), { recursive: true });
   writeFileSync(

@@ -225,6 +225,10 @@
       "sha256": "sha256:2b26d33da8e12e9fda4b21d942e77988c19582fbe55208413ac8cdc5320650b4"
     },
     {
+      "path": "build-inputs/shipping-audit-allow.json",
+      "sha256": "sha256:7084754abf5ff1056d34c2927cf925bed7c4c795b025d4e268ac9094ac961c52"
+    },
+    {
       "path": "contracts/candidate-agent-dto-1.0.schema.json",
       "sha256": "sha256:9c820cff1f998662dee6fe85f7a6a8bbc3d1a8bce8b8802b6483612ae06dec03"
     },
@@ -1550,7 +1554,7 @@
     },
     {
       "path": "scripts/build-npm-shipping.mjs",
-      "sha256": "sha256:5fd8c45f323dec24b5cbe99e69f6233a93ff1b48caf7f4522f367fe2260e7f35"
+      "sha256": "sha256:56b2cd42b6548a9c1681fd49cf6582b68ec48b7115a31516a10441ce1d1ae1cf"
     },
     {
       "path": "scripts/build-portfolio-release-index.mjs",
@@ -1659,6 +1663,10 @@
     {
       "path": "scripts/lib/registry-verify.mjs",
       "sha256": "sha256:44fc48be3e884d54ac49c27726b75eef525c8a11f26fc471f6637624e7db1f78"
+    },
+    {
+      "path": "scripts/lib/shipping-audit.mjs",
+      "sha256": "sha256:b336158ac80e68a1840c1ffe5c042b51c13589f5d62c03a5f22a0125f0a62f44"
     },
     {
       "path": "scripts/m0-workbuddy-acceptance.sh",
@@ -5337,6 +5345,10 @@
     {
       "path": "tests/safe-http.test.ts",
       "sha256": "sha256:b0e895ceed0dfc81479bd0cf8430d97eb017f2c8b78dcf98c10bfcad193167de"
+    },
+    {
+      "path": "tests/shipping-audit-allow.test.ts",
+      "sha256": "sha256:a8461c6dea87412f3abf1284da893701e4da14acc4c28b4e63c25807830930c2"
     },
     {
       "path": "tests/shopping-cli-export.test.ts",
