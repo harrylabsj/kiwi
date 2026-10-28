@@ -12,6 +12,9 @@
 
 /** 已发布接入的签名心跳：从持久状态续办，不保留/使用 owner token 或短期 grant。 */
 import { createPublicKey, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { writeFileAtomic } from "../../fs/atomic-write.js";
 import { isRedirectResponse, readJsonBody } from "../../net/safe-http.js";
 import { publicKeyThumbprint } from "../../trust/binding/thumbprint.js";
 import { signCompactJws, type JwsSigningIdentity } from "../../trust/identity/jws.js";
@@ -33,6 +36,15 @@ export interface EnrollmentHeartbeat {
   stop: () => void;
 }
 
+interface EnrollmentHeartbeatDiagnostics {
+  version: 1;
+  outcome: "success" | "idle" | "failed";
+  last_attempt_at: string;
+  last_success_at?: string;
+  accepted_sessions: number;
+  error_code?: "heartbeat_failed";
+}
+
 /** 无接入记录时不发请求；每次重新读取，因此 CLI 完成发布后无需重启服务。 */
 export function startEnrollmentHeartbeat(options: EnrollmentHeartbeatOptions): EnrollmentHeartbeat {
   const intervalMs = options.intervalMs ?? 300_000;
@@ -42,9 +54,22 @@ export function startEnrollmentHeartbeat(options: EnrollmentHeartbeatOptions): E
   let stopped = false;
   let inFlight: Promise<void> | undefined;
   let controller: AbortController | undefined;
+  const diagnosticsPath = path.join(options.dataDir, "merchant-enrollment-heartbeat.json");
+  let diagnostics: EnrollmentHeartbeatDiagnostics | undefined;
+  try {
+    const saved = JSON.parse(readFileSync(diagnosticsPath, "utf8")) as Partial<EnrollmentHeartbeatDiagnostics>;
+    if (saved.version === 1 && ["success", "idle", "failed"].includes(String(saved.outcome)) && typeof saved.last_attempt_at === "string") {
+      diagnostics = saved as EnrollmentHeartbeatDiagnostics;
+    }
+  } catch { /* absent/unreadable diagnostics do not alter heartbeat behavior */ }
 
-  async function perform(): Promise<void> {
-    if (options.isReady !== undefined && !(await options.isReady())) return;
+  function saveDiagnostics(next: EnrollmentHeartbeatDiagnostics): void {
+    diagnostics = next;
+    try { writeFileAtomic(diagnosticsPath, `${JSON.stringify(next)}\n`, { mode: 0o600 }); } catch { /* diagnostics never block renewal */ }
+  }
+
+  async function perform(): Promise<number> {
+    if (options.isReady !== undefined && !(await options.isReady())) return 0;
     let state: ReturnType<typeof readEnrollmentStore>;
     try {
       state = readEnrollmentStore(options.dataDir);
@@ -64,10 +89,11 @@ export function startEnrollmentHeartbeat(options: EnrollmentHeartbeatOptions): E
         return item["expected_catalog_agent_id"] ?? item["catalog_agent_id"];
       })
       .filter((agentId): agentId is string => typeof agentId === "string" && agentId !== ""));
-    if (pendingSessions.some((session) => session.key_thumbprint === thumbprint)) return;
+    if (pendingSessions.some((session) => session.key_thumbprint === thumbprint)) return 0;
     const seen = new Set<string>();
+    let acceptedSessions = 0;
     for (const session of state.sessions) {
-      if (stopped) return;
+      if (stopped) return 0;
       if (session.status !== "published" || session.key_thumbprint !== thumbprint || !origins.has(session.runtime_origin)) continue;
       const item = session as unknown as Record<string, unknown>;
       const catalogOrigin = item["catalog_origin"];
@@ -129,17 +155,39 @@ export function startEnrollmentHeartbeat(options: EnrollmentHeartbeatOptions): E
         ) {
           throw new Error("Catalog 心跳回执与当前接入不一致");
         }
+        acceptedSessions += 1;
       } finally {
         clearTimeout(timeout);
         controller = undefined;
       }
     }
+    return acceptedSessions;
   }
 
   function tick(): Promise<void> {
     if (stopped) return Promise.resolve();
     if (inFlight !== undefined) return inFlight;
-    inFlight = perform().finally(() => {
+    const attemptedAt = (options.now?.() ?? new Date()).toISOString();
+    inFlight = perform().then((acceptedSessions) => {
+      const lastSuccess = acceptedSessions > 0 ? attemptedAt : diagnostics?.last_success_at;
+      saveDiagnostics({
+        version: 1,
+        outcome: acceptedSessions > 0 ? "success" : "idle",
+        last_attempt_at: attemptedAt,
+        ...(lastSuccess !== undefined ? { last_success_at: lastSuccess } : {}),
+        accepted_sessions: acceptedSessions,
+      });
+    }, (error: unknown) => {
+      saveDiagnostics({
+        version: 1,
+        outcome: "failed",
+        last_attempt_at: attemptedAt,
+        ...(diagnostics?.last_success_at !== undefined ? { last_success_at: diagnostics.last_success_at } : {}),
+        accepted_sessions: 0,
+        error_code: "heartbeat_failed",
+      });
+      throw error;
+    }).finally(() => {
       inFlight = undefined;
     });
     return inFlight;

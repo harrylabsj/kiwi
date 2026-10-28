@@ -80,6 +80,7 @@ import type { MerchantHandlerOptions, MerchantProductSource } from "./server/mer
 import { createEnrollmentChallengeResponder, readEnrollmentStore } from "../cloud/binding/enrollment-challenge.js";
 import { startEnrollmentHeartbeat, type EnrollmentHeartbeat } from "../cloud/binding/enrollment-heartbeat.js";
 import { publicKeyThumbprint } from "../trust/binding/thumbprint.js";
+import { proveMerchantCredentialConsumer } from "../merchant-runtime/credential-consumer-proof.js";
 
 export interface A2aNodeOptions {
   profile: AgentProfile;
@@ -742,6 +743,15 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     // 畸形请求不得使公开 Runtime 崩溃。
   });
   await new Promise<void>((resolve) => httpServer.listen(port, "127.0.0.1", () => resolve()));
+  const credentialSwitchMarker = options.dataDir !== undefined
+    ? path.join(options.dataDir, "runtime", "credential-rotation.lock")
+    : undefined;
+  if (role === "merchant" && credentialSwitchMarker !== undefined && existsSync(credentialSwitchMarker)) {
+    // Runtime-owned child proves its own shopping-cli token against the
+    // protected merchant endpoint. Credential rotation waits for this exact
+    // process attestation before revoking the previous token.
+    await proveMerchantCredentialConsumer({ profile, dataDir: options.dataDir ?? core.dir }).catch(() => ({ ok: false as const }));
+  }
   const agentCardUrl = `${advertisedBase}/.well-known/agent-card.json`;
 
   // merchant 角色：自动注册进 catalog（buyer 据此发现）。

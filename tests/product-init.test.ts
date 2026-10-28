@@ -102,7 +102,7 @@ describe("merchant init (D1)", () => {
 
       // secret 不入 profile：token_env 只写环境变量名
       const raw = readFileSync(outputPath, "utf-8");
-      expect(raw).toContain("token_env: KIWI_MERCHANT_TOKEN");
+    expect(raw).toContain("token_env: SHOPPING_MERCHANT_TOKEN");
       expect(raw).toContain("catalog_url: https://catalog.kiwi.harrylabsj.com");
       expect(profile.merchant_runtime?.data_dir).toContain("seller-b");
       expect(raw).not.toMatch(/api_key:\s*\S+/);

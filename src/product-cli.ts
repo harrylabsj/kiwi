@@ -103,6 +103,10 @@ Usage:
                                           （agent serve 别名）
   kiwi merchant connect [--profile <merchant.yaml>] [--catalog <url>] [--data-dir <dir>]
                                           登录授权当前 Runtime，自动绑定并发布名片
+  kiwi merchant credentials <rotate|recover> [--profile <merchant.yaml>]
+                                          安全轮换 shopping-cli 商家 token；失败后可恢复
+  kiwi merchant doctor [--profile <merchant.yaml>] [--data-dir <dir>]
+                                          检查凭据、enrollment/key/heartbeat 本地状态、到期与调度
   kiwi merchant mcp serve [--profile <merchant.yaml>] [--host <host>] [--port N] [--data-dir <dir>]
                                           Merchant Workbench 远程 MCP server（WorkBuddy
                                           Buddy 应用；缺省 0.0.0.0:9100/mcp；Bearer token

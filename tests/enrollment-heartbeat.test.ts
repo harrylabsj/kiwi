@@ -9,7 +9,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -93,6 +93,9 @@ describe("enrollment signed heartbeat", () => {
       return payload;
     });
     expect(payloads[0]?.["nonce"]).not.toBe(payloads[1]?.["nonce"]);
+    const diagnostics = JSON.parse(readFileSync(path.join(f.dir, "merchant-enrollment-heartbeat.json"), "utf8")) as Record<string, unknown>;
+    expect(diagnostics).toMatchObject({ outcome: "success", accepted_sessions: 1 });
+    expect(statSync(path.join(f.dir, "merchant-enrollment-heartbeat.json")).mode & 0o777).toBe(0o600);
   });
   it("does not heartbeat an unready runtime or another key and stops with the server", async () => {
     const f = fixture();

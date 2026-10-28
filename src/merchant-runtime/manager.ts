@@ -28,7 +28,7 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "../fs/atomic-write.js";
 
@@ -40,6 +40,27 @@ export interface ManagedServiceSpec {
   env?: Record<string, string>;
   /** 确定的工作目录（BUG-04：缺省 = 数据根目录语义由调用方保证）。 */
   cwd?: string;
+  /** Credential refs reread on every process launch, including external CLI restarts. */
+  credentialEnvFile?: { path: string; names: string[] };
+  /** Blocks supervisor relaunch during an atomic credential handoff. */
+  credentialSwitchMarker?: string;
+}
+
+function credentialFileEnv(spec: ManagedServiceSpec): Record<string, string> {
+  if (spec.credentialEnvFile === undefined || !existsSync(spec.credentialEnvFile.path)) return {};
+  try {
+    const stat = lstatSync(spec.credentialEnvFile.path);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("invalid file");
+    const allow = new Set(spec.credentialEnvFile.names);
+    const values: Record<string, string> = {};
+    for (const line of readFileSync(spec.credentialEnvFile.path, "utf8").split(/\r?\n/)) {
+      const match = line.match(/^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (match && allow.has(match[1] ?? "") && match[2] !== "") values[match[1] ?? ""] = match[2] ?? "";
+    }
+    return values;
+  } catch {
+    throw new MerchantRuntimeError("受管服务无法安全读取凭据文件，拒绝启动", "spawn_failed");
+  }
 }
 
 export interface ManagedServiceState {
@@ -97,6 +118,7 @@ export class MerchantRuntimeManager {
   private readonly children = new Map<string, RunningChild>();
   private readonly now: () => string;
   private readonly spawnImpl: typeof spawn;
+  private readonly readOnly: boolean;
 
   constructor(options: {
     dir: string;
@@ -104,18 +126,20 @@ export class MerchantRuntimeManager {
     now?: () => string;
     /** 测试注入。 */
     spawnImpl?: typeof spawn;
+    readOnly?: boolean;
   }) {
     this.dir = options.dir;
     this.runDir = path.join(options.dir, "runtime");
     this.now = options.now ?? (() => new Date().toISOString());
     this.spawnImpl = options.spawnImpl ?? spawn;
+    this.readOnly = options.readOnly ?? false;
     for (const spec of options.services) {
       if (!/^[a-z0-9-]+$/.test(spec.name)) {
         throw new MerchantRuntimeError(`非法服务名 ${spec.name}`, "unknown_service");
       }
       this.services.set(spec.name, spec);
     }
-    mkdirSync(this.runDir, { recursive: true, mode: 0o700 });
+    if (!this.readOnly) mkdirSync(this.runDir, { recursive: true, mode: 0o700 });
   }
 
   private pidFile(name: string): string {
@@ -153,6 +177,10 @@ export class MerchantRuntimeManager {
       );
     }
     return spec;
+  }
+
+  private assertMutable(): void {
+    if (this.readOnly) throw new MerchantRuntimeError("只读 runtime manager 不允许启动、停止或监督服务", "unknown_service");
   }
 
   /** 读取 pidfile 里的存活状态（管理入口重启后据此恢复视图）。 */
@@ -211,10 +239,11 @@ export class MerchantRuntimeManager {
   }
 
   /** 启动服务（已在运行 → already_running 拒绝重复启动）。 */
-  async start(name: string): Promise<ManagedServiceState> { return this.launch(name, true); }
+  async start(name: string): Promise<ManagedServiceState> { this.assertMutable(); return this.launch(name, true); }
 
   private async launch(name: string, explicit: boolean, expectedIntent?: { token?: string }): Promise<ManagedServiceState> {
     const spec = this.spec(name);
+    if (!explicit && spec.credentialSwitchMarker !== undefined && existsSync(spec.credentialSwitchMarker)) return this.stateOf(name);
     const observedIntent = this.stopIntent(name);
     if (!explicit && (observedIntent.stopped || (expectedIntent !== undefined && observedIntent.token !== expectedIntent.token))) return this.stateOf(name);
     const existing = this.livePid(name);
@@ -226,7 +255,7 @@ export class MerchantRuntimeManager {
     const child = this.spawnImpl(spec.command[0] ?? "", spec.command.slice(1), {
       detached: true,
       stdio: ["ignore", "ignore", "ignore"],
-      env: { ...process.env, ...spec.env },
+      env: { ...process.env, ...credentialFileEnv(spec), ...spec.env },
       ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}),
     });
     // An invalid executable emits `error` asynchronously; attach a listener
@@ -286,6 +315,7 @@ export class MerchantRuntimeManager {
 
   /** 停止服务（SIGTERM；显式停止后不自动重启）。 */
   async stop(name: string): Promise<ManagedServiceState> {
+    this.assertMutable();
     return await this.terminate(name, { persistIntent: true });
   }
 
@@ -360,6 +390,7 @@ export class MerchantRuntimeManager {
 
   /** 重启（停止 → 启动）；停止 A2A 后管理入口可重启它（阶段一验收项）。 */
   async restart(name: string): Promise<ManagedServiceState> {
+    this.assertMutable();
     await this.stop(name);
     return await this.start(name);
   }
@@ -392,13 +423,34 @@ export class MerchantRuntimeManager {
 
   /** 监控模式（runtime start 前台运行）：启动全部服务并保持，异常退出自动重启。 */
   private supervising = false;
+  private reconcileTimer: ReturnType<typeof setInterval> | undefined;
+  private reconciling = false;
 
   async supervise(): Promise<void> {
+    this.assertMutable();
     this.supervising = true;
-    for (const name of this.services.keys()) {
-      const pid = this.livePid(name);
-      if (pid === undefined && !this.stopIntent(name).stopped) await this.launch(name, false);
-    }
+    const reconcile = async (): Promise<void> => {
+      if (!this.supervising || this.reconciling) return;
+      this.reconciling = true;
+      try {
+        for (const name of this.services.keys()) {
+          if (!this.supervising) break;
+          if (this.livePid(name) === undefined && !this.stopIntent(name).stopped) {
+            await this.launch(name, false);
+          }
+        }
+      } finally {
+        this.reconciling = false;
+      }
+    };
+    await reconcile();
+    // Another CLI invocation can stop/start a service while this foreground
+    // manager remains alive. Reattach by pidfile and resume supervision so a
+    // credential switch cannot leave untracked detached children behind.
+    this.reconcileTimer = setInterval(() => {
+      void reconcile().catch(() => undefined);
+    }, 1_000);
+    this.reconcileTimer.unref();
   }
 
   /**
@@ -407,7 +459,10 @@ export class MerchantRuntimeManager {
    * `runtime stop` 的意图仍由 stop() 保留（见 terminate 注释）。
    */
   async shutdown(): Promise<void> {
+    this.assertMutable();
     this.supervising = false;
+    if (this.reconcileTimer !== undefined) clearInterval(this.reconcileTimer);
+    this.reconcileTimer = undefined;
     for (const name of [...this.services.keys()].reverse()) {
       await this.terminate(name, { persistIntent: false });
     }

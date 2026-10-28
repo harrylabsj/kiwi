@@ -30,6 +30,8 @@ export function buildRuntimeServiceSpecs(options: {
   dirs: MerchantMcpRuntimeDirs;
   cliEntry: string;
   profileArgs: string[];
+  credentialEnvFile?: { path: string; names: string[] };
+  credentialSwitchMarker?: string;
 }): ManagedServiceSpec[] {
   const dataDirArgs = ["--data-dir", options.dirs.merchantDataDir];
   // 确定的工作目录：数据根目录（子进程内相对路径解析一致）。
@@ -47,6 +49,8 @@ export function buildRuntimeServiceSpecs(options: {
         ...dataDirArgs,
       ],
       env,
+      ...(options.credentialEnvFile !== undefined ? { credentialEnvFile: options.credentialEnvFile } : {}),
+      ...(options.credentialSwitchMarker !== undefined ? { credentialSwitchMarker: options.credentialSwitchMarker } : {}),
       cwd: options.dirs.merchantDataDir,
     },
     {
@@ -61,6 +65,8 @@ export function buildRuntimeServiceSpecs(options: {
         ...dataDirArgs,
       ],
       env,
+      ...(options.credentialEnvFile !== undefined ? { credentialEnvFile: options.credentialEnvFile } : {}),
+      ...(options.credentialSwitchMarker !== undefined ? { credentialSwitchMarker: options.credentialSwitchMarker } : {}),
       cwd: options.dirs.merchantDataDir,
     },
   ];

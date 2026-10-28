@@ -39,6 +39,7 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, userInfo } from "node:os";
@@ -92,6 +93,9 @@ import { MerchantJobs, standardMerchantJobs } from "./merchant-runtime/jobs.js";
 import { runBackup } from "./merchant-runtime/backup.js";
 import { connectMerchant } from "./cloud/merchant-connect.js";
 import { rotateEnrollmentSigningKey } from "./cloud/binding/enrollment-key-recovery.js";
+import { credentialFingerprint, rotateMerchantCredential, type MerchantCredentialRotationOptions } from "./merchant-credential-rotation.js";
+import { runMerchantCredentialDoctor } from "./merchant-runtime/credential-doctor.js";
+import { runCredentialRotationSchedule, type CredentialRotationScheduleStatus, writeCredentialRotationScheduleStatus } from "./merchant-runtime/credential-rotation-scheduler.js";
 
 function readRegistrationStatus(dataDir: string): { ok: boolean; error?: string } | undefined {
   try {
@@ -123,6 +127,21 @@ function countPendingMerchantCommands(dataDir: string): number | undefined {
     return undefined;
   }
 }
+
+function merchantCredentialRotationSettings(env: Record<string, string | undefined> = process.env):
+  | { pollIntervalSeconds: number; rotateBeforeSeconds: number }
+  | { error: string } {
+  const parse = (name: string, fallback: number, minimum: number, maximum: number): number | undefined => {
+    const raw = env[name]?.trim();
+    if (!raw) return fallback;
+    const value = Number(raw);
+    return Number.isSafeInteger(value) && value >= minimum && value <= maximum ? value : undefined;
+  };
+  const pollIntervalSeconds = parse("KIWI_MERCHANT_TOKEN_ROTATION_POLL_SECONDS", 300, 60, 300);
+  const rotateBeforeSeconds = parse("KIWI_MERCHANT_TOKEN_ROTATE_BEFORE_SECONDS", 7 * 86400, 3600, 30 * 86400);
+  if (pollIntervalSeconds === undefined || rotateBeforeSeconds === undefined) return { error: "invalid_rotation_schedule_env" };
+  return { pollIntervalSeconds, rotateBeforeSeconds };
+}
 import { agentDirName, DEFAULT_AGENTS_ROOT } from "./agent/agent-db.js";
 import { writeFileAtomic } from "./fs/atomic-write.js";
 import { ProfileCredentialBroker } from "./agent/merchant/credential-broker.js";
@@ -140,7 +159,10 @@ import {
 import { cmdWeixin, weixinUsage } from "./weixin/cli-weixin.js";
 import {
   DEFAULT_SHOPPING_DB_PATH,
+  DEFAULT_CREDENTIALS_ENV_PATH,
   loadMerchantCredentials,
+  reloadMerchantCredential,
+  inspectMerchantCredentialStorage,
   merchantInit,
   slugifyMerchantId,
 } from "./product-init.js";
@@ -1248,7 +1270,7 @@ async function cmdBuyerTasks(args: ParsedArgs): Promise<number> {
 /**
  * 产品层 merchant 命令树（rev1.1 §2.3/§19 D1-D3）。
  * - start = agent serve 别名（Merchant A2A server + 注册 Kiwi Network）；
- * - init/publish/listings/status/doctor = 骨架（对应 D1/D2/D3）。
+ * - init/publish/listings/status = 骨架；merchant doctor 与凭据恢复已实现。
  */
 /**
  * A199：本地 owner 会话 CLI（用户批准件范围）——仅本地受信进程内调用。
@@ -1437,6 +1459,7 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   if (sub === "mcp") return await cmdMerchantMcp(args);
   if (sub === "runtime") return await cmdMerchantRuntime(args);
   if (sub === "connect") return await cmdMerchantConnect(args);
+  if (sub === "credentials") return await cmdMerchantCredentials(args);
   if (sub === "init") return await cmdMerchantInit(args);
   if (sub === "publish") return await cmdMerchantPublish(args);
   if (sub === "setup-public") return await cmdMerchantSetupPublic(args);
@@ -1444,9 +1467,129 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   if (sub === "stats") return await cmdMerchantStats(args);
   if (sub === "listings") return notImplementedProduct("kiwi merchant listings", "D2");
   if (sub === "status") return notImplementedProduct("kiwi merchant status", "D1");
-  if (sub === "doctor") return notImplementedProduct("kiwi merchant doctor", "D3");
+  if (sub === "doctor") return await cmdMerchantDoctor(args);
   process.stderr.write(`unknown merchant command: ${sub}\n`);
   return EXIT.CONFIG;
+}
+
+async function cmdMerchantDoctor(args: ParsedArgs): Promise<number> {
+  try {
+    const profile = requireProfileOrDefault(args);
+    if (profile.role !== "merchant") throw new Error("kiwi merchant doctor requires a merchant profile");
+    const dirs = resolveMerchantMcpDirs({
+      ...(configuredDataDir(args, profile) !== undefined ? { dataDir: configuredDataDir(args, profile) } : {}),
+      agentId: profile.agent_id,
+    });
+    const cliEntry = fileURLToPath(import.meta.url);
+    const profileArgs = args.profile !== undefined ? ["--profile", args.profile] : [];
+    const manager = new MerchantRuntimeManager({
+      dir: dirs.merchantDataDir,
+      readOnly: true,
+      services: buildRuntimeServiceSpecs({
+        dirs, cliEntry, profileArgs,
+        credentialEnvFile: { path: DEFAULT_CREDENTIALS_ENV_PATH, names: [profile.commerce.token_env] },
+        credentialSwitchMarker: path.join(dirs.merchantDataDir, "runtime", "credential-rotation.lock"),
+      }),
+    });
+    const report = await runMerchantCredentialDoctor({ profile, dataDir: dirs.merchantDataDir, services: manager.status() });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return report.status === "ok" ? EXIT.OK : report.status === "unknown" ? EXIT.TRANSIENT : EXIT.CONFIG;
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.CONFIG;
+  }
+}
+
+function merchantCredentialRotationOptions(
+  profile: AgentProfile,
+  dirs: ReturnType<typeof resolveMerchantMcpDirs>,
+  manager: MerchantRuntimeManager,
+): MerchantCredentialRotationOptions {
+  const markerPath = path.join(dirs.merchantDataDir, "runtime", "credential-rotation.lock");
+  const proofPath = path.join(dirs.merchantDataDir, "runtime", "merchant-credential-consumer.json");
+  return {
+    baseUrl: process.env.KIWI_COMMERCE_URL ?? profile.commerce.base_url,
+    merchantId: profile.agent_id,
+    tokenEnv: profile.commerce.token_env,
+    credentialsPath: DEFAULT_CREDENTIALS_ENV_PATH,
+    pendingPath: path.join(homedir(), ".kiwi", "credential-rotation.json"),
+    operationLockPath: path.join(homedir(), ".kiwi", "credential-rotation-operation.lock"),
+    runningServices: () => manager.status().filter((entry) => entry.running).map((entry) => entry.name),
+    beginRuntimeSwitch: () => writeFileAtomic(markerPath, `${JSON.stringify({ merchant_id: profile.agent_id, started_at: new Date().toISOString() })}\n`, { mode: 0o600 }),
+    endRuntimeSwitch: () => { rmSync(markerPath, { force: true }); },
+    waitForRuntimeCredential: async (token) => {
+      const expected = credentialFingerprint(token);
+      const deadline = Date.now() + 95_000;
+      while (Date.now() < deadline) {
+        try {
+          const a2a = manager.status().find((entry) => entry.name === "a2a" && entry.running);
+          const observed = JSON.parse(readFileSync(proofPath, "utf8")) as { merchant_id?: string; token_env?: string; credential_fingerprint?: string; pid?: number };
+          if (a2a?.pid !== undefined && observed.merchant_id === profile.agent_id && observed.token_env === profile.commerce.token_env &&
+              observed.credential_fingerprint === expected && observed.pid === a2a.pid) return;
+        } catch { /* wait for the A2A child to record its protected API proof */ }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      throw new Error("A2A child did not prove the new credential against the protected merchant endpoint; confirmation is withheld and recovery state is retained");
+    },
+    stopServices: async (services) => {
+      for (const name of [...services].reverse()) await manager.stop(name);
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline && manager.status().some((entry) => services.includes(entry.name) && entry.running)) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      if (manager.status().some((entry) => services.includes(entry.name) && entry.running)) {
+        throw new Error("managed services have not stopped; rotation remains pending and recoverable");
+      }
+      if (services.length > 0) await new Promise((resolve) => setTimeout(resolve, 250));
+    },
+    startRuntime: async (services) => {
+      for (const name of services) await manager.start(name);
+      if (services.length > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const status = new Map(manager.status().map((entry) => [entry.name, entry.running]));
+        if (services.some((name) => status.get(name) !== true)) {
+          throw new Error("managed service did not remain running with the new credential; rotation remains recoverable");
+        }
+      }
+    },
+  };
+}
+
+async function cmdMerchantCredentials(args: ParsedArgs): Promise<number> {
+  const action = args.command[2];
+  if (action !== "rotate" && action !== "recover") {
+    process.stderr.write("usage: kiwi merchant credentials <rotate|recover> [--profile <file>]\n");
+    return EXIT.CONFIG;
+  }
+  try {
+    const profile = requireProfileOrDefault(args);
+    if (profile.role !== "merchant") throw new Error("kiwi merchant credentials requires a merchant profile");
+    if (profile.commerce.credentials?.catalog?.token_env === profile.commerce.token_env) {
+      throw new Error(`shopping-cli token env (${profile.commerce.token_env}) is also configured as the Catalog credential; separate commerce.token_env to SHOPPING_MERCHANT_TOKEN before rotation`);
+    }
+    const pendingPath = path.join(homedir(), ".kiwi", "credential-rotation.json");
+    if (action === "recover" && !existsSync(pendingPath)) throw new Error("there is no pending merchant credential rotation to recover");
+    const dirs = resolveMerchantMcpDirs({
+      ...(configuredDataDir(args, profile) !== undefined ? { dataDir: configuredDataDir(args, profile) } : {}),
+      agentId: profile.agent_id,
+    });
+    const cliEntry = fileURLToPath(import.meta.url);
+    const profileArgs = args.profile !== undefined ? ["--profile", args.profile] : [];
+    const manager = new MerchantRuntimeManager({
+      dir: dirs.merchantDataDir,
+      services: buildRuntimeServiceSpecs({
+        dirs, cliEntry, profileArgs,
+        credentialEnvFile: { path: DEFAULT_CREDENTIALS_ENV_PATH, names: [profile.commerce.token_env] },
+        credentialSwitchMarker: path.join(dirs.merchantDataDir, "runtime", "credential-rotation.lock"),
+      }),
+    });
+    const result = await rotateMerchantCredential(merchantCredentialRotationOptions(profile, dirs, manager));
+    process.stdout.write(`${result.recovered ? "待完成的" : "新的"}商家凭据轮换已确认。受管服务已切换并重启：${result.restarted.join(", ") || "当前无运行中的服务"}。\n`);
+    return EXIT.OK;
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.CONFIG;
+  }
 }
 
 /** 本机执行设备授权；实际 Runtime 持钥留在本机文件，远端控制器不伪造其身份。 */
@@ -1542,7 +1685,11 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
   const manager = new MerchantRuntimeManager({
     dir: dirs.merchantDataDir,
     // BUG-04：子进程显式携带统一 --data-dir 与确定 cwd（三槽位解析结果）。
-    services: buildRuntimeServiceSpecs({ dirs, cliEntry, profileArgs }),
+    services: buildRuntimeServiceSpecs({
+      dirs, cliEntry, profileArgs,
+      credentialEnvFile: { path: DEFAULT_CREDENTIALS_ENV_PATH, names: [profile.commerce.token_env] },
+      credentialSwitchMarker: path.join(dirs.merchantDataDir, "runtime", "credential-rotation.lock"),
+    }),
   });
 
   if (action === "status") {
@@ -1580,6 +1727,8 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
   for (const job of standardMerchantJobs({
     healthPoll: async () => {
       if (probeClient !== undefined) {
+        const shoppingToken = reloadMerchantCredential(profile.commerce.token_env) ?? process.env[profile.commerce.token_env] ?? "";
+        if (shoppingToken === "") throw new Error(`${profile.commerce.token_env} is not configured`);
         await probeClient.probeCapabilities({ persistPath: probePath });
       } else {
         writeFileAtomic(
@@ -1614,7 +1763,53 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
   })) {
     jobs.register(job);
   }
+  const rotationSettings = merchantCredentialRotationSettings();
+  const rotationStatusPath = path.join(dirs.merchantDataDir, "runtime", "credential-rotation-schedule.json");
+  const credentialStorage = inspectMerchantCredentialStorage(profile.commerce.token_env);
+  const credentialScopeSeparate = profile.commerce.credentials?.catalog?.token_env !== profile.commerce.token_env;
+  let rotationScheduleStatus: CredentialRotationScheduleStatus = {
+    version: 1,
+    merchant_id: profile.agent_id,
+    enabled: rotationSettings !== undefined && "pollIntervalSeconds" in rotationSettings && credentialScopeSeparate && credentialStorage.status === "ready",
+    poll_interval_seconds: rotationSettings !== undefined && "pollIntervalSeconds" in rotationSettings ? rotationSettings.pollIntervalSeconds : 300,
+    rotate_before_seconds: rotationSettings !== undefined && "rotateBeforeSeconds" in rotationSettings ? rotationSettings.rotateBeforeSeconds : 7 * 86400,
+    supervisor_pid: process.pid,
+    started_at: new Date().toISOString(),
+    ...("error" in rotationSettings ? { disabled_reason: "invalid_schedule_config" as const } : {}),
+    ...(!credentialScopeSeparate ? { disabled_reason: "catalog_token_ref_conflict" as const } : {}),
+    ...(credentialStorage.status !== "ready" ? { disabled_reason: "credential_file_unavailable" as const } : {}),
+  };
+  writeCredentialRotationScheduleStatus(rotationStatusPath, rotationScheduleStatus);
+  let firstRotationCheck: ReturnType<typeof setTimeout> | undefined;
+  if (rotationScheduleStatus.enabled && rotationSettings !== undefined && "pollIntervalSeconds" in rotationSettings) {
+    jobs.register({
+      name: "merchant-credential-rotation",
+      intervalMs: rotationSettings.pollIntervalSeconds * 1000,
+      run: async () => {
+        rotationScheduleStatus = await runCredentialRotationSchedule({
+          statusPath: rotationStatusPath,
+          status: rotationScheduleStatus,
+          rotation: {
+            ...merchantCredentialRotationOptions(profile, dirs, manager),
+            rotateBeforeSeconds: rotationSettings.rotateBeforeSeconds,
+            beforeRotation: () => {
+              if (!manager.status().some((service) => service.name === "a2a" && service.running)) {
+                throw new Error("managed A2A service is not running; automatic token rotation is deferred until its protected credential proof can be checked");
+              }
+            },
+          },
+        }).catch((error: unknown) => {
+          process.stderr.write("[kiwi] automatic merchant token rotation failed; inspect `kiwi merchant doctor` and recover before expiry if needed.\n");
+          throw error;
+        });
+      },
+    });
+  }
   jobs.start();
+  if (rotationScheduleStatus.enabled) {
+    firstRotationCheck = setTimeout(() => { void jobs.runOnce("merchant-credential-rotation"); }, 120_000);
+    firstRotationCheck.unref();
+  }
   // Node.js 在没有活动 I/O 句柄时会退出；runtime manager 的受管子进程
   // 使用 detached + unref，单靠下面的 never-resolving Promise 不能维持
   // systemd 主进程。显式保活，确保 7×24 监控/备份/自动重启持续运行。
@@ -1625,6 +1820,7 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
   await manager.supervise();
   const shutdown = async (): Promise<void> => {
     clearInterval(keepAlive);
+    if (firstRotationCheck !== undefined) clearTimeout(firstRotationCheck);
     jobs.stop();
     await manager.shutdown();
     process.exit(0);
@@ -1952,7 +2148,7 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
     // 数据引擎默认自动安装（合一体验）；--no-install 显式禁用（受限/CI）
     autoInstallShoppingCli: !args.noInstall,
   });
-  if (merchantToken !== "") process.env.KIWI_MERCHANT_TOKEN = merchantToken;
+  if (merchantToken !== "") process.env.SHOPPING_MERCHANT_TOKEN = merchantToken;
   else loadMerchantCredentials();
   let sourceCapabilities = report.steps.product_source_capabilities;
   if (report.steps.shopping_cli_reachable.ok) {
@@ -2006,7 +2202,7 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
     process.stderr.write("尚未提供公网 Runtime 地址；Catalog 账号授权和绑定未完成。先让 Agent Card 可经 HTTPS 公网访问，再设置 --public-url 重跑 init 继续。\n");
   }
   if (args.merchantToken !== undefined && report.ok) {
-    process.stderr.write("shopping-cli 商品服务令牌已写入 ~/.kiwi/credentials.env（0600）；它不用于 Kiwi Catalog Runtime 绑定。\n");
+    process.stderr.write("shopping-cli 商家令牌已写入 ~/.kiwi/credentials.env（0600）；Kiwi Catalog 凭据保持独立。\n");
   }
   return report.ok ? EXIT.OK : EXIT.CONFIG;
 }

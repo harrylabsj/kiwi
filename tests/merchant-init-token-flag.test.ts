@@ -92,7 +92,7 @@ describe("--merchant-token（路线 A 过渡入口）", () => {
 
       // 0600 + 商品服务凭据独立保存。
       expect(statSync(credentialsPath).mode & 0o777).toBe(0o600);
-      expect(readFileSync(credentialsPath, "utf-8")).toBe("KIWI_MERCHANT_TOKEN=tok_cloud_secret\n");
+      expect(readFileSync(credentialsPath, "utf-8")).toBe("SHOPPING_MERCHANT_TOKEN=tok_cloud_secret\n");
 
       // secret 不进 profile（loadProfile 可读，且 yaml 文本不含令牌）。
       expect(existsSync(outputPath)).toBe(true);

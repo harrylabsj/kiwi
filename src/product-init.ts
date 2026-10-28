@@ -56,12 +56,12 @@ export const DEFAULT_SHOPPING_DB_PATH = path.join(
   "shopping-cli.sqlite",
 );
 
-/** 商家令牌 credentials 文件（0600；secret 不入 profile，命令启动时自动加载）。 */
+/** shopping-cli 商家令牌 credentials 文件（0600；secret 不入 profile，命令启动时自动加载）。 */
 export const DEFAULT_CREDENTIALS_ENV_PATH = path.join(homedir(), ".kiwi", "credentials.env");
 
 /**
  * 读取商家 credentials 文件（KEY=VALUE，0600）并填充 process.env（已存在不覆盖）。
- * 让 `kiwi merchant init` 引导写入的 `KIWI_MERCHANT_TOKEN` 对 publish / start 生效。
+ * shopping-cli 凭据与 Kiwi Catalog 凭据分别使用 SHOPPING_MERCHANT_TOKEN 与 KIWI_MERCHANT_TOKEN。
  */
 export function loadMerchantCredentials(credentialsPath: string = DEFAULT_CREDENTIALS_ENV_PATH): void {
   if (!existsSync(credentialsPath)) return;
@@ -75,6 +75,52 @@ export function loadMerchantCredentials(credentialsPath: string = DEFAULT_CREDEN
       process.env[key] = value;
     }
   }
+}
+
+/** Reload one authoritative credential-file ref, used by the long-lived runtime supervisor. */
+export function reloadMerchantCredential(tokenEnv: string, credentialsPath: string = DEFAULT_CREDENTIALS_ENV_PATH): string | undefined {
+  if (!existsSync(credentialsPath)) return undefined;
+  const stat = lstatSync(credentialsPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("credentials target must be a regular file");
+  const matches = [...readFileSync(credentialsPath, "utf8").matchAll(new RegExp(`^[ \\t]*(?:export[ \\t]+)?${tokenEnv.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}[ \\t]*=([^\\r\\n]*)`, "gm"))];
+  if (matches.length > 1) throw new Error(`${tokenEnv} is duplicated in the protected credentials file`);
+  if (matches.length === 0 || !matches[0]?.[1]?.trim()) return undefined;
+  const token = matches[0][1].trim();
+  process.env[tokenEnv] = token;
+  return token;
+}
+
+export type MerchantCredentialStorageCheck =
+  | { status: "ready"; mode: number }
+  | { status: "missing_file" }
+  | { status: "unsafe_file"; mode?: number }
+  | { status: "missing_token" }
+  | { status: "duplicate_token" };
+
+/** Read-only check used by doctor and the automatic rotation gate; never returns the secret. */
+export function inspectMerchantCredentialStorage(tokenEnv: string, credentialsPath: string = DEFAULT_CREDENTIALS_ENV_PATH): MerchantCredentialStorageCheck {
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(credentialsPath);
+  } catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") return { status: "missing_file" };
+    return { status: "unsafe_file" };
+  }
+  const mode = stat.mode & 0o777;
+  if (!stat.isFile() || stat.isSymbolicLink() || (mode & 0o077) !== 0) return { status: "unsafe_file", mode };
+  let records: string[];
+  try {
+    records = readFileSync(credentialsPath, "utf8").split(/\r?\n/).flatMap((line) => {
+      const trimmed = line.trim().replace(/^export\s+/, "");
+      const separator = trimmed.indexOf("=");
+      return separator > 0 && trimmed.slice(0, separator).trim() === tokenEnv ? [trimmed.slice(separator + 1).trim()] : [];
+    });
+  } catch {
+    return { status: "unsafe_file", mode };
+  }
+  if (records.length === 0 || records[0] === "") return { status: "missing_token" };
+  if (records.length !== 1) return { status: "duplicate_token" };
+  return { status: "ready", mode };
 }
 
 /** \u53bb\u6389\u9996\u5c3e\u8fde\u7eed\u7684\u77ed\u6a2a\u7ebf\uff08\u7ebf\u6027\u626b\u63cf\uff1b`/^-+|-+$/g` \u4f1a\u5728\u6bcf\u4e2a\u8d77\u59cb\u4f4d\u7f6e\u91cd\u8bd5\uff0c\u9000\u5316\u6210 O(N\u00b2)\uff09\u3002 */
@@ -263,8 +309,9 @@ export async function merchantInit(
     owner_id: merchantId,
     commerce: {
       base_url: shoppingCliUrl,
-      token_env: "KIWI_MERCHANT_TOKEN",
+      token_env: "SHOPPING_MERCHANT_TOKEN",
       backend: "local_marketplace",
+      // Catalog Runtime 凭据由操作者单独配置，不与 shopping-cli token 共用或覆盖。
       credentials: { catalog: { token_env: "KIWI_MERCHANT_TOKEN" } },
     },
     merchant_public: {
@@ -390,8 +437,8 @@ function mergeMerchantCredentials(file: string, token: string): void {
   } catch (error) {
     if ((error as { code?: string }).code !== "ENOENT") throw error;
   }
-  const record = `KIWI_MERCHANT_TOKEN=${token}`;
-  const target = /^[ \t]*(?:export[ \t]+)?KIWI_MERCHANT_TOKEN[ \t]*=[^\r\n]*/gm;
+  const record = `SHOPPING_MERCHANT_TOKEN=${token}`;
+  const target = /^[ \t]*(?:export[ \t]+)?SHOPPING_MERCHANT_TOKEN[ \t]*=[^\r\n]*/gm;
   const content = target.test(previous)
     ? previous.replace(target, record)
     : `${previous}${previous !== "" && !previous.endsWith("\n") ? "\n" : ""}${record}\n`;

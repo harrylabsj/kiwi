@@ -3,7 +3,7 @@
  *
  * 覆盖：
  * - `kiwi buyer / merchant / network --help` 全部可用（命令树帮助）；
- * - 骨架命令（buyer init、merchant init/publish/listings/status/doctor、
+ * - 骨架命令（buyer init、merchant init/publish/listings/status、
  *   network *）输出"尚未实现（D-x）"并 fail-closed（EXIT.CONFIG）；
  * - 别名兼容：`kiwi buyer start` → chat、`kiwi merchant start` → agent
  *   serve（dispatch 层验证，不实际启动服务）；
@@ -114,7 +114,6 @@ describe("product CLI command tree (D0)", () => {
     for (const argv of [
       ["merchant", "listings"],
       ["merchant", "status"],
-      ["merchant", "doctor"],
       ["network", "status"],
     ]) {
       const { code, stderr } = await run(argv);

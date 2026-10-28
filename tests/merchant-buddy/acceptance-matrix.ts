@@ -383,7 +383,7 @@ export const ACCEPTANCE_MATRIX: MatrixEntry[] = [
     buddy: "pending",
     v2Scope: "deferred",
     evidence: ["tests/merchant-runtime.test.ts"],
-    note: "实例 status/health 已由 merchant runtime 落地；listings 与 merchant doctor 结构化服务仍缺（不假称已有）",
+    note: "实例 status/health 由 merchant runtime 提供；merchant doctor 现检查凭据隔离、到期状态、恢复标记与自动轮换调度；listings 结构化服务仍缺",
   },
   {
     id: "F29",
