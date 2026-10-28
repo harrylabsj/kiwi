@@ -70,7 +70,7 @@
     {
       "id": "shopping-cli",
       "name": "Shopping CLI",
-      "version": "3.2.7",
+      "version": "3.2.8",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
@@ -86,7 +86,8 @@
         "contract lock",
         "protected kiwi-release environment",
         "PyPI trusted publishing"
-      ]
+      ],
+      "last_known_registry_version": "3.2.7"
     },
     {
       "id": "kiwi-dsh-plugin",

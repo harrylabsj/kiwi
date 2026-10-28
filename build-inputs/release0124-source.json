@@ -1514,11 +1514,11 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:5b3527313c31d52214e011375088d1d763cdff3b96514a1b27ab369b062f318f"
+      "sha256": "sha256:de4014d243e465406fb3a72a5b8f3e28ffbe36d455fa09348ba84623bd56f456"
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:f8ddfcbe3ded3d4dc7d234a766db1a0e1d4b4405943955b65e67d9ae016f90a8"
+      "sha256": "sha256:934db91b7f221e194077fbdd6b8f15b5546b76c7e79a0e33043c4578494fc506"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
@@ -2070,7 +2070,7 @@
     },
     {
       "path": "src/a2a/node.ts",
-      "sha256": "sha256:da283381240f58867ff3d5e85ef3bcef2ba3a98a1797fc5106921e161ae14cf0"
+      "sha256": "sha256:bf41ffbe60fcef8acd6cdf435c7fc31dea4273b31d0be268a909da3460da2acb"
     },
     {
       "path": "src/a2a/server/auth.ts",
@@ -2322,7 +2322,7 @@
     },
     {
       "path": "src/agent/merchant/types.ts",
-      "sha256": "sha256:513672ba5f8ba555c5eba6cb8d853d47ff66ae11e159add3c0fec6f48cfe4d73"
+      "sha256": "sha256:77d5938b37da774fa6e653b145c753bd8aaf307c440e9e2ce480fbfa67b55fb1"
     },
     {
       "path": "src/agent/mode.ts",
