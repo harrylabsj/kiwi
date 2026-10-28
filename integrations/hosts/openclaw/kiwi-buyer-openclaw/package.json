@@ -5,20 +5,39 @@
   "type": "module",
   "main": "index.js",
   "openclaw": {
-    "extensions": ["./index.js"],
-    "compat": { "pluginApi": ">=2026.7.1" },
-    "build": { "openclawVersion": "2026.7.1" }
+    "extensions": [
+      "./index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.7.1"
+    },
+    "build": {
+      "openclawVersion": "2026.7.1"
+    }
   },
   "dependencies": {
-    "@harrylabsj/kiwi": "^0.7.15"
+    "@harrylabsj/kiwi": "^0.7.15",
+    "fast-uri": "^3.1.9",
+    "zod": "^4.6.7"
   },
   "peerDependencies": {
     "openclaw": ">=2026.7.1"
   },
   "peerDependenciesMeta": {
-    "openclaw": { "optional": true }
+    "openclaw": {
+      "optional": true
+    }
   },
-  "keywords": ["openclaw", "plugin", "kiwi", "buyer", "sourcing", "negotiation", "rfq", "commerce"],
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "kiwi",
+    "buyer",
+    "sourcing",
+    "negotiation",
+    "rfq",
+    "commerce"
+  ],
   "author": "harrylabsj",
   "license": "Apache-2.0"
 }

@@ -99,7 +99,7 @@
   },
   "stage": {
     "package_sha256": "sha256:824713bb92fee3cbb50bda999a40e0d718a9f796b8025566bdac668a05f6b2a1",
-    "lock_sha256": "sha256:45d341dcc7825ba0475ff1c5e6cc374baa79383201f77ea858595a1bf96740c8"
+    "lock_sha256": "sha256:b6ffb90e556c43a86bcf7a5e638110b9421416cb07aca6e195f91d0878167838"
   },
   "budgets": {
     "plain_bytes": 268435456,
@@ -142,7 +142,7 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "sha256": "sha256:d7c5a47d2f381c4eae353cd7a1fd980ea4af2ae561e591737f8ec787d5a7f591"
+      "sha256": "sha256:ef98cd96c2c7e7b187959deb726c8cd07bdc024f997470e3bbb78b0d1a85ed7e"
     },
     {
       "path": ".github/workflows/codeql.yml",
@@ -150,23 +150,23 @@
     },
     {
       "path": ".github/workflows/portfolio-contracts.yml",
-      "sha256": "sha256:858790f4aef4469760791f612bcc660fee084b48accd1519b6be27aa384dabf9"
+      "sha256": "sha256:5b0284f1b6037436ab21b3946f056e964efc064511b862c58e2f94f552b1b1aa"
     },
     {
       "path": ".github/workflows/portfolio-integration.yml",
-      "sha256": "sha256:377fc95ef5fe24329df3c5fc67fade90e80683506cdf83bc6fef181bbc02e2c3"
+      "sha256": "sha256:649bcd8a7a1a15c4e573534a30268ff64fa3b62357f5b02891c69ee1100bb2e7"
     },
     {
       "path": ".github/workflows/portfolio-release.yml",
-      "sha256": "sha256:1cd887cd5fefe9d2d0ed8fe798ee07ff3ac8375105edaec8b66835b11449060b"
+      "sha256": "sha256:d6bbec18f5c0f9d0e201efdad914ce639ec66152b833e4ba0eb3bd882fc7c6ba"
     },
     {
       "path": ".github/workflows/release-rehearsal.yml",
-      "sha256": "sha256:bd88a3ff05e7fda081af97030114e39d417a3af4eef7577b5c5de52a33b0f0a4"
+      "sha256": "sha256:cb0943edac5bc56d5bcac333d488ad88cf519a617227ab132511c998d63cb273"
     },
     {
       "path": ".github/workflows/supply-chain-rehearsal.yml",
-      "sha256": "sha256:309109aa21f97a2c0164a3dab91bcc187d94cb0ea4e601bb9bdfaffb7db1a955"
+      "sha256": "sha256:5237be9a9ab208700dd8383672058159e03d89700ece1561b09fa7df6d04300d"
     },
     {
       "path": ".gitignore",
@@ -218,7 +218,7 @@
     },
     {
       "path": "build-inputs/release0124-stage/package-lock.json",
-      "sha256": "sha256:45d341dcc7825ba0475ff1c5e6cc374baa79383201f77ea858595a1bf96740c8"
+      "sha256": "sha256:b6ffb90e556c43a86bcf7a5e638110b9421416cb07aca6e195f91d0878167838"
     },
     {
       "path": "build-inputs/release0124-stage/package.json",
@@ -806,11 +806,11 @@
     },
     {
       "path": "integrations/hosts/openclaw/kiwi-buyer-openclaw/package-lock.json",
-      "sha256": "sha256:345962504392a64d9175876404985d0dab1cdf09e1859d803b12694551a7d0f7"
+      "sha256": "sha256:a6ae237ff80018cd286b3d2092745a092eefb53d4d76cd79c1713e3fd97be517"
     },
     {
       "path": "integrations/hosts/openclaw/kiwi-buyer-openclaw/package.json",
-      "sha256": "sha256:bb38b25e905b1440a769fdc634fea34c354edbdd441e2474409c9f8456b582f9"
+      "sha256": "sha256:bebe653fac5a6252d15caa949e8ed5daf753e3b05b18f892b1c9cf66dc7adc99"
     },
     {
       "path": "integrations/hosts/openclaw/kiwi-buyer-openclaw/skills/kiwi-buyer/SKILL.md",
@@ -1498,11 +1498,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "sha256:85beea913af219494130151d9bb070d120bfc89a8110d3d1fdf39af37d34c2a8"
+      "sha256": "sha256:07985638a8da89e465f8deab7e55810c80047057bbb484eddfd7545328f16ff3"
     },
     {
       "path": "package.json",
-      "sha256": "sha256:757b7215534f43692c853e3c7b2f5f78ae89c21f7678c5a13aee3c73f63166d4"
+      "sha256": "sha256:bdc7fcd74f80b688f9d6fd7eb6ccd4fb57096c5af356e3572d28c25a15790ce4"
     },
     {
       "path": "packages/merchant-cloud/package.json",
@@ -3850,9 +3850,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:2f2ff661ff189070f5014126bc94cd6db0e9e1aa6a80a519e82d2eb550a51939",
+      "sha256": "sha256:5afe069f56bcfdeafafb747794cbfa3ea369eeb60b434e8d3b93b53848420680",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:c58bd54302dc8ccc1ba2886c05491b441d6d624ec48abb41f2f4dd013dfff4ca"
+      "raw_sha256": "sha256:65f6abfc7ff42d21104119625bc565f082fe8c99745f601ef8db01db72783d3f"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
