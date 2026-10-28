@@ -324,7 +324,10 @@ export class A2AServer {
         await this.handleUcp(req, res);
         return;
       }
-      if (pathname === a2aPath) {
+      // `/` 作为 `/a2a` 的兼容别名：自托管节点在 0.12.9 之前把端点通告在
+      // origin 根，已缓存的旧名片/旧买家仍会 POST 到 `/`。别名只在本实例
+      // 的主端点是 `/a2a` 时生效，不额外扩大攻击面。
+      if (pathname === a2aPath || (a2aPath === "/a2a" && pathname === "/")) {
         await this.handleA2a(req, res);
         return;
       }

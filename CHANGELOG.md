@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.12.9 — 2026-10-28
+
+- **修复：自托管 Runtime 无法完成 Catalog 绑定**。Catalog 的设备接入契约要求 `a2a_endpoint == runtime_origin + "/a2a"`，公开预览的 `supportedInterfaces` 必须含这条 URL；而 `kiwi merchant start` 的 A2A 端点缺省在 origin 根（`a2aPath ?? "/"`），`kiwi merchant connect` 因此在本地就以「公网入口返回的 Agent Card 与当前 Runtime 地址不一致」拒绝（`RUNTIME_NOT_READY`），请求到不了 Catalog，商家永远绑不上、商品发布只能走已废弃的 owner token。现在自托管节点的缺省端点改为 `/a2a`（名片同步通告），**根路径 `/` 保留为兼容别名**继续服务旧名片/旧买家；只在主端点为 `/a2a` 时生效。
+- **商家凭据生命周期自动化**（随本版发布）：`kiwi merchant credentials rotate|recover` 用 prepare/confirm 协议轮换 shopping-cli 商户 token——先验证新 token 可用、停受管进程、原子更新 `credentials.env`、再等 A2A 子进程用新 token 自证，旧 token 到达成共识前一直有效；`runtime start` 每 5 分钟查一次到期状态，在到期前最多 7 天自动发起轮换。细节见 `docs/merchant-credential-rotation.md`。
+
 ## v0.12.8 — 2026-10-28
 
 - **修复：systemd 重启后 A2A/MCP 永久停机**。商家 runtime 的优雅关闭（SIGTERM/`restart`）此前对每个受管子服务调用 `stop()`，而 `stop()` 会落盘 `<name>.stopped` 显式停止意图；新进程 `supervise()` 看到该意图就不再拉起子进程——`Restart=always` 每重启一次，A2A 接待服务和 MCP 管理服务就永久停一次（生产现象：重启商家实例后公网 A2A 502）。现在停止逻辑拆成 `terminate(name,{persistIntent})`：`shutdown()` 只终止进程、不写意图，操作员显式 `runtime stop` 的意图照旧保留并阻止自动拉起。新增两条回归测试（关闭后可被重新拉起 / 显式停止的意图跨关闭保留）。

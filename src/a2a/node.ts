@@ -461,7 +461,13 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
   const profile = options.profile;
   const role = profile.role;
   const advertisedBase = options.advertisedBase;
-  const a2aPath = options.a2aPath ?? "/";
+  // 端点缺省 `/a2a`：Catalog 的设备接入契约要求
+  // `a2a_endpoint == runtime_origin + "/a2a"`（kiwi-catalog
+  // services/enrollments.py），公开预览的 supportedInterfaces 也必须含这条
+  // URL。此前自托管节点缺省在 origin 根，`kiwi merchant connect` 因此在本地
+  // 就拒绝（RUNTIME_NOT_READY），商家永远无法完成 Runtime 绑定。根路径仍由
+  // A2aServer 作为兼容别名继续服务，老买家/缓存的旧名片不受影响。
+  const a2aPath = options.a2aPath ?? "/a2a";
   // 审查 BUG-03：持久形态（dataDir）——Ledger/幂等落 <dataDir>/a2a/，
   // stop 不删除；临时形态（demo/测试）维持 mkdtemp + stop 删除。
   const isEphemeral = options.dataDir === undefined;

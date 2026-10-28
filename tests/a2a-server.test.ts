@@ -209,6 +209,20 @@ describe("A2A Server: Agent Card（well-known）", () => {
     expect(extensions[0]?.uri).toBe("https://kiwi.test/a2a/extensions/negotiation/1.0");
   });
 
+  it("主端点是 /a2a 时，根路径 `/` 仍作为兼容别名服务（旧名片/旧买家）", async () => {
+    const { url } = await startServer({ a2aPath: "/a2a" });
+    const card = await fetch(`${url}/.well-known/agent-card.json`);
+    expect(card.status).toBe(200);
+    const body = (await card.json()) as { supportedInterfaces: { url: string }[] };
+    // 名片通告 /a2a（Catalog 设备接入契约要求 origin + /a2a）
+    expect(body.supportedInterfaces[0]?.url).toBe(`${url}/a2a`);
+    // 两个路径都进 A2A 处理器：非法方法与 404 语义一致（未被路由层拒绝）
+    for (const path of ["/a2a", "/"]) {
+      const res = await fetch(`${url}${path}`, { method: "GET" });
+      expect(res.status).not.toBe(404);
+    }
+  });
+
   it("rejects non-GET and unknown paths", async () => {
     const { url } = await startServer();
     const post = await fetch(`${url}/.well-known/agent-card.json`, { method: "POST" });

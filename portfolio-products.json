@@ -6,7 +6,7 @@
     {
       "id": "kiwi-merchant-cloud",
       "name": "Kiwi Merchant Cloud",
-      "version": "0.12.8",
+      "version": "0.12.9",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -27,7 +27,7 @@
     {
       "id": "kiwi",
       "name": "Kiwi runtime",
-      "version": "0.12.8",
+      "version": "0.12.9",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -123,7 +123,7 @@
       "channel": "GitHub repository + Hermes plugin catalog",
       "release_controller": "Hermes plugin repository and upstream catalog PR",
       "artifact": "release/hermes/hermes-plugin-kiwi-1.2.3.tar.gz",
-      "pinned_runtime_version": "0.12.8",
+      "pinned_runtime_version": "0.12.9",
       "state": "repository-tagged; catalog pin is a separate gate",
       "gates": [
         "plugin validation",
