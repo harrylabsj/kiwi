@@ -150,6 +150,14 @@ export interface AgentProfile {
     credentials?: Partial<Record<CommerceCredentialScope, { token_env: string }>>;
     /** 商品源故障时是否回退内置演示价（fail-open）；缺省 false = fail-closed。 */
     allow_demo_price_fallback?: boolean;
+    /**
+     * 商品源未声明单位时，商家的**默认售卖单位**（如 `piece`）。
+     *
+     * shopping-cli 的 products 表没有单位列，报价 handler 对单位是严格比较（不做
+     * 同义词映射）：没有单位就一律 `field_unsupported`，这也是本字段存在的原因。
+     * 不填 = 保持 fail-closed（拒绝一切询价），填了才参与报价。
+     */
+    default_unit?: string;
   };
   model: {
     provider: string;
@@ -259,7 +267,7 @@ const TOP_LEVEL_KEYS = [
 ] as const;
 /** weixin 段白名单（微信远程控制通道配置；无 *_env 密钥字段——iLink 凭证运行时获取）。 */
 const WEIXIN_KEYS = ["allow_users", "base_url"] as const;
-const COMMERCE_KEYS = ["base_url", "token_env", "backend", "credentials", "allow_demo_price_fallback"] as const;
+const COMMERCE_KEYS = ["base_url", "token_env", "backend", "credentials", "allow_demo_price_fallback", "default_unit"] as const;
 const MODEL_KEYS = [
   "provider",
   "model",
@@ -586,6 +594,14 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     req(
       typeof allowDemoPriceFallback === "boolean",
       `${source}: commerce.allow_demo_price_fallback must be a boolean`,
+    );
+  }
+  // 商品源默认售卖单位（可选）；填了才让没有单位字段的商品源参与报价。
+  const defaultUnit = commerce.default_unit;
+  if (defaultUnit !== undefined) {
+    req(
+      typeof defaultUnit === "string" && /^[a-z][a-z0-9_-]{0,31}$/i.test(defaultUnit.trim()),
+      `${source}: commerce.default_unit must be a short unit token (e.g. piece, box, kg)`,
     );
   }
   rejectUnknownKeys(commerce, COMMERCE_KEYS, "commerce", source);
@@ -958,6 +974,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
       backend: commerce.backend,
       ...(credentials !== undefined ? { credentials } : {}),
       ...(allowDemoPriceFallback === true ? { allow_demo_price_fallback: true } : {}),
+      ...(defaultUnit !== undefined ? { default_unit: String(defaultUnit).trim() } : {}),
     },
     model: {
       provider: model.provider,

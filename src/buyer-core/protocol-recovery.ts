@@ -28,6 +28,17 @@ export class ProtocolOperationUnknown extends McpError {
     );
   }
 }
+/**
+ * 商家在任务终态里明确拒绝（`data: {decline:true, reason_code}`）。这是终态，
+ * 不是"结果未知"：不能再轮询、也不能自动重试。
+ */
+export class MerchantDeclined extends McpError {
+  constructor(readonly reasonCode: string) {
+    super("merchant_declined", `merchant declined the request: ${reasonCode}`, {
+      decline_reason: reasonCode,
+    });
+  }
+}
 export class ProtocolOperationConflict extends McpError {
   constructor() {
     super("idempotency_conflict", "protocol operation is bound to different request content");
@@ -59,6 +70,22 @@ export interface ProtocolExchange {
   timeoutMs: number;
   pollIntervalMs: number;
 }
+/** 从任务终态消息里取商家结构化拒绝的 reason_code（无则 null）。 */
+function structuredDecline(task: A2ATask): string | null {
+  const parts = task?.status?.message?.parts;
+  if (!Array.isArray(parts)) return null;
+  for (const part of parts) {
+    if (part === null || typeof part !== "object" || part.kind !== "data") continue;
+    const data = part.data;
+    if (data === null || typeof data !== "object") continue;
+    const record = data as Record<string, unknown>;
+    if (record["decline"] !== true) continue;
+    const reason = typeof record["reason_code"] === "string" ? record["reason_code"].trim() : "";
+    return reason === "" ? "unspecified" : reason;
+  }
+  return null;
+}
+
 export interface ProtocolReply {
   reply: NegotiationEnvelope;
   wire: NegotiationEnvelope;
@@ -185,7 +212,7 @@ export class BuyerProtocolRecovery {
       try {
         return await this.resume(prior, input.get, input.timeoutMs, input.pollIntervalMs);
       } catch (error) {
-        if (error instanceof BuyerReplyRejected) throw error;
+        if (error instanceof BuyerReplyRejected || error instanceof MerchantDeclined) throw error;
         throw new ProtocolOperationUnknown();
       }
     }
@@ -243,7 +270,12 @@ export class BuyerProtocolRecovery {
       });
       return await this.resume(sent, input.get, input.timeoutMs, input.pollIntervalMs, task);
     } catch (error) {
-      if (error instanceof ProtocolOperationConflict || error instanceof BuyerReplyRejected) throw error;
+      if (
+        error instanceof ProtocolOperationConflict ||
+        error instanceof BuyerReplyRejected ||
+        error instanceof MerchantDeclined
+      )
+        throw error;
       // 401/403 是**发送前**的拒绝（平台门禁/认证），消息没有到达商家；把它
       // 归为"结果未知"会让上层误判并隐去过期/错码的真实原因（B-07）。
       if (
@@ -386,6 +418,12 @@ export class BuyerProtocolRecovery {
       );
       const knownContext = receipt.remote_context_id ?? bound?.remote_context_id;
       this.validateTask(task, receipt, knownContext);
+      // 商家的结构化拒绝（`data: {decline: true, reason_code}`）不是 KNP 信封：
+      // 此前 extractKnpEnvelope 返回 null，恢复/发送路径会一直轮询到超时，最后
+      // 报"结果未知"——商家明明已经明确拒绝了。这里先认出来，交给上层投影成
+      // `rejected` 候选（带 reason_code），别再等 20 秒。
+      const decline = structuredDecline(task);
+      if (decline !== null) throw new MerchantDeclined(decline);
       let reply: NegotiationEnvelope | null;
       try {
         reply = extractKnpEnvelope(task, wire);
@@ -453,7 +491,11 @@ export class BuyerProtocolRecovery {
             await this.resume(sent, (taskId) => get(op.endpoint, taskId), timeout, interval),
           );
         } catch (error) {
-          if (error instanceof ProtocolOperationConflict || error instanceof BuyerReplyRejected)
+          if (
+            error instanceof ProtocolOperationConflict ||
+            error instanceof BuyerReplyRejected ||
+            error instanceof MerchantDeclined
+          )
             throw error; /* unknown remains in ledger; no resend */
         }
       }

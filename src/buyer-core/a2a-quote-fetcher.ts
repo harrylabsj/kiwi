@@ -37,7 +37,7 @@ import {
 } from "./a2a-knp.js";
 import type { QuoteCandidateInput, QuoteFetcher, MerchantRecord } from "./service.js";
 
-import { BuyerProtocolRecovery, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext, type ProtocolReply } from "./protocol-recovery.js";
+import { BuyerProtocolRecovery, MerchantDeclined, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext, type ProtocolReply } from "./protocol-recovery.js";
 import { BuyerReplyRejected } from "./receive-gate.js";
 
 /**
@@ -353,6 +353,18 @@ export class A2AQuoteFetcher implements QuoteFetcher {
             classification: "access_unavailable",
             retryable: error.retryable,
             detail: redactShareParameter(`${error.code}: ${error.message}`),
+          },
+        };
+      }
+      // 商家明确拒绝（结构化 decline）：这是终态，不能归成"结果未知/可重试"。
+      if (error instanceof MerchantDeclined) {
+        return {
+          merchant_id: merchantId,
+          status: "failed",
+          failure: {
+            classification: "rejected",
+            retryable: false,
+            detail: `merchant_declined:${error.reasonCode}`,
           },
         };
       }

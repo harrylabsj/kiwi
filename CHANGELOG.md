@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.12.10 — 2026-10-28
+
+- **商家对每一笔询价都回 `field_unsupported`**（端到端测试发现）：报价 handler 对单位做严格比较（不映射同义词），而 shopping-cli 的 `products` 表没有单位列，`GET /products/{sku}` 也不返回单位——于是所有 shopping-cli 商家对任何 RFQ 都在 0.0 秒内拒绝，商家侧 `conversations`/`messages` 一直是空的。新增 `commerce.default_unit`（可选，短单位 token）：商品源没声明单位时用它，未配置则保持 fail-closed。严格比较本身不变。
+- **买家把商家的明确拒绝当成"结果未知"**：商家的结构化拒绝（`data: {decline:true, reason_code}`）没有 KNP 信封，恢复路径会轮询到超时再报「可能已执行」，既不准确也诱导重试。现在识别为 `MerchantDeclined`，候选投影成 `classification: "rejected"` / `retryable: false` / `detail: merchant_declined:<reason>`，并立刻返回（不再等满超时预算）。
+- **买家无法配置签名身份**：`a2aSigningKeyDir` 在 `buildBuyerService` 里存在，但 `mcp serve` 没有任何开关，MCP 买家永远是匿名——商家对 `GetTask` 这类受保护操作要求已验证身份，所以报价永远读不回来。新增 `--a2a-signing-key-dir` / `KIWI_A2A_SIGNING_KEY_DIR`（**保持 opt-in**，默认仍匿名，避免把普通询价变成未验证身份）。
+
 ## v0.12.9 — 2026-10-28
 
 - **代码审查修复（商家凭据生命周期）**：`commerce.token_env` 与 Kiwi Catalog owner token 的语义拆分现在集中到 `src/config/credentials.ts`——自动轮换只在两者**不同**时开启（此前判断条件看的是 `credentials.catalog`，导致生产 profile 里把 catalog token 当成 shopping-cli 凭据去轮换），子进程自证也直接拒绝未拆分的 profile；`merchant init` 不再把 `KIWI_MERCHANT_TOKEN` 复制进 `SHOPPING_MERCHANT_TOKEN`。另修：`runtime start` 的跨进程 reconcile 从 1s 改 10s 且不再抢在退避重启前面（否则崩溃循环会退化成每秒重拉、并清零重启计数）、`/token/*` 与 `private-config` 保留 `base_url` 的子路径前缀、`[::1]` 回环可用、响应体改为有界读取、只读命令不再 `chmod` 凭据文件、sidecar 归属按规范化 API 身份比较、切换标记在任何失败路径都会释放（否则 supervisor 永久拒绝拉起子服务）、只重启 mcp 时不再空等 A2A 自证。

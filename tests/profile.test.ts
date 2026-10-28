@@ -59,6 +59,18 @@ describe("profile loading", () => {
     expect(profile.merchant_policy?.min_unit_price_private).toBe(80);
   });
 
+  it("reads commerce.default_unit and rejects a bad unit token", () => {
+    const withUnit = `${VALID_YAML.replace(
+      "  backend: local_marketplace",
+      "  backend: local_marketplace\n  default_unit: piece",
+    )}`;
+    const profile = loadProfile(writeTemp(withUnit));
+    expect(profile.commerce.default_unit).toBe("piece");
+    expect(() =>
+      loadProfile(writeTemp(withUnit.replace("default_unit: piece", "default_unit: \"per piece\""))),
+    ).toThrow(/default_unit/);
+  });
+
   it("loads explicit prompt cache retention and rejects unsupported values", () => {
     const withCache = `${VALID_YAML}\nmerchant_experience:\n  enabled: true\n  prompt_cache_retention: long\n`;
     const profile = loadProfile(writeTemp(withCache));

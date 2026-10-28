@@ -200,7 +200,10 @@ function buildProductSource(profile: AgentProfile): MerchantProductSource {
       return {
         sku: product.sku,
         price: product.price,
-        ...(product.unit !== undefined ? { unit: product.unit } : {}),
+        // shopping-cli 的 products 没有单位列；商家可以用 profile 的
+        // commerce.default_unit 声明默认售卖单位，否则报价 handler 会按
+        // fail-closed 拒绝所有询价（严格单位比较，不做同义词映射）。
+        unit: product.unit ?? profile.commerce.default_unit,
         ...(product.stock !== undefined ? { stock: product.stock } : {}),
         ...(product.title !== undefined ? { title: product.title } : {}),
         ...(product.valid_until !== undefined ? { valid_until: product.valid_until } : {}),

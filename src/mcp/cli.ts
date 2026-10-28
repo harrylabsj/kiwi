@@ -86,6 +86,12 @@ export interface McpServeOptions {
   a2aAllowPrivateRanges?: boolean;
   a2aSkipDnsCheck?: boolean;
   a2aTimeoutMs?: number;
+  /**
+   * Buyer 自己的持久 Ed25519 身份目录。给定时每个出站 A2A 请求都签名，商家把
+   * 公钥登记进 `a2a-trusted-keys.json` 后，受保护操作（GetTask/回执轮询）才会
+   * 认这个买家；不给则维持匿名（只能发 T0 询价，读不回报价）。
+   */
+  a2aSigningKeyDir?: string;
 }
 
 function readPolicy(options: McpServeOptions, principal: string): Record<string, unknown> {
@@ -121,6 +127,7 @@ export async function runMcpServe(args: string[]): Promise<number> {
     else if (flag === "--a2a-allow-private-ranges") opts.a2aAllowPrivateRanges = value === "true";
     else if (flag === "--a2a-skip-dns-check") opts.a2aSkipDnsCheck = value === "true";
     else if (flag === "--a2a-timeout-ms") opts.a2aTimeoutMs = Number(value);
+    else if (flag === "--a2a-signing-key-dir") opts.a2aSigningKeyDir = value;
     else if (flag === "--policy") {
       try {
         opts.policy = JSON.parse(readFileSync(value, "utf-8")) as Record<string, unknown>;
@@ -153,6 +160,9 @@ export async function runMcpServe(args: string[]): Promise<number> {
     a2aAllowPrivateRanges: opts.a2aAllowPrivateRanges,
     a2aSkipDnsCheck: opts.a2aSkipDnsCheck,
     a2aTimeoutMs: opts.a2aTimeoutMs,
+    // 保持 opt-in：默认仍匿名，只有显式给了目录才签名出站请求（避免对不认识
+    // 该公钥的商家把普通询价也变成未验证身份）。
+    a2aSigningKeyDir: opts.a2aSigningKeyDir ?? process.env.KIWI_A2A_SIGNING_KEY_DIR,
   });
   const tools = buildKiwiTools(service);
   const server = new McpServer({
