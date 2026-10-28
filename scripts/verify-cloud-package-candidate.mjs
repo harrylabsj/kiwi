@@ -90,6 +90,11 @@ console.log(
     tgz_bytes: statSync(tgz).size,
     tgz_sha256: sha256(readFileSync(tgz)),
     actual_pack: packed,
-    bundled_edges: edges,
+    // 只报计数：完整 edges 数组在 CI 里是一条数 MB 的单行，写进日志管道会
+    // 触发 EPIPE/SIGPIPE，进程静默退出（2026-10-28 发布两次实证）。
+    bundled_edges: {
+      bundled_nodes: edges.bundled_nodes,
+      checked_runtime_edges: edges.checked_runtime_edges,
+    },
   }),
 );

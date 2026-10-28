@@ -1810,7 +1810,7 @@
     },
     {
       "path": "scripts/verify-cloud-package-candidate.mjs",
-      "sha256": "sha256:5bd02b6ef052b37e6d07e8c3e1d5f40bd7ec763c805954b059181040c17fbfec"
+      "sha256": "sha256:9b3b105344dcc2dea1e4ea9f9b14dfbb4776a439147976366f5e605fc2c30ef3"
     },
     {
       "path": "scripts/verify-contract-vectors.mjs",
