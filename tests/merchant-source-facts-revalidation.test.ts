@@ -62,12 +62,14 @@ describe("actual handler source facts and accept preconditions", () => {
   it.each([undefined, "piece"])("refuses source/request unit mismatch without synonyms (%s)", async unit => {
     const f = setup({ ...base(), unit }); const result = await f.quote(); expect(result.kind === "declined" && result.reasonCode).toBe("field_unsupported");
   });
-  it("accepts an explicitly declared unit alias and echoes the canonical unit", async () => {
+  it("accepts an explicitly declared unit alias and echoes the requested spelling", async () => {
     const f = setup({ ...base(), unit: "piece" }, undefined, undefined, { unitAliases: { "个": "piece" } });
     const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "个" } }] });
     const env = outgoing(r);
     const terms = (env.payload as { terms: { items: Array<{ quantity: { unit: string } }> } }).terms;
-    expect(terms.items[0]?.quantity.unit).toBe("piece");
+    // 回显买家写法：买家的回复校验要求"报价单位 == 请求单位"，回显规范单位会被判
+    // unit_unmapped；计价仍按商家规范单位。
+    expect(terms.items[0]?.quantity.unit).toBe("个");
   });
   it("still refuses an alias the merchant did not declare", async () => {
     const f = setup({ ...base(), unit: "piece" }, undefined, undefined, { unitAliases: { "件": "piece" } });

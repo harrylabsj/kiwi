@@ -323,6 +323,15 @@ class ProductSourceUnavailableError extends Error {
 
 /** 商业拒绝（offer 未知/已关闭/terms_digest 不匹配/终态重开）。
  * decline 消息由 pipeline 按 reason_code 自动构造。 */
+/**
+ * 报价里回显**买家请求的单位写法**，而不是商家的规范单位。
+ *
+ * 别名（`个` → `piece`）是商家同意的等价写法，价格按规范单位算；但买家的回复
+ * 校验要求"报价单位与自己请求的一致"（`unit_unmapped` 是防单位混淆的硬检查）。
+ * 若回显 `piece`，买家会判 `unit_unmapped` —— 商家的别名等于白配。回显买家写法
+ * 既保住这条检查，也不改变计价。
+ */
+
 /** 单位归一：NFKC + 去空白 + 小写（`Piece` / `piece` / `ＰＣＥ` 视为同一写法）。 */
 function normalizeUnit(unit: string): string {
   return unit.trim().normalize("NFKC").toLowerCase();
@@ -986,7 +995,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               terms: offerTerms(
                 {
                   sku,
-                  unit: product.unit ?? requestedUnit,
+                  unit: requestedUnit,
                   priceMinor: effectivePriceMinor,
                   quantity,
                   currency,
@@ -1066,7 +1075,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               proposed_terms: offerTerms(
                 {
                   sku,
-                  unit: product.unit ?? requestedUnit,
+                  unit: requestedUnit,
                   priceMinor: effectivePriceMinor,
                   quantity,
                   currency,
@@ -1189,7 +1198,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               base_terms: offerTerms(
                 {
                   sku,
-                  unit: product.unit ?? requestedUnit,
+                  unit: requestedUnit,
                   priceMinor: responsiveMinor,
                   quantity,
                   currency,
@@ -1213,7 +1222,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                         then_terms: offerTerms(
                           {
                             sku,
-                            unit: product.unit ?? requestedUnit,
+                            unit: requestedUnit,
                             priceMinor: promotionalMinor,
                             quantity,
                             currency,
