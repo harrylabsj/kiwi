@@ -346,6 +346,10 @@ export class MerchantOperationsFacade {
     });
   }
 
+  recordCsvOrderReport(input: { csv: string; reportedBy: string; observedAtFallback: string }): OrderRecordV2[] {
+    return this.orders.recordCsvReport({ merchantId: this.merchantId, ...input });
+  }
+
   verifyOrder(recordId: string, input: { verified: boolean; source_version: string; verified_at: string }): OrderRecordV2 {
     return this.orders.verifyWithSourceFact({
       merchantId: this.merchantId,
