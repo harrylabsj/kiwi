@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.12.13 — 2026-10-29
+
+- **中文买家的询价被整条拒绝**：商家对单位是严格比较（不做同义词映射），而 WorkBuddy 上的买家发的是 `unit: "个"`、商家声明的是 `piece`，于是每笔询价都在 0.0 秒内回 `decline: field_unsupported`（线上复现：`{"sku":"VQ-101","quantity":{"value":1,"unit":"个"}}`）。新增 `commerce.unit_aliases`：商家显式声明自己接受哪些写法并映射到 `default_unit`，表里没有的照旧拒绝——不做隐式同义词映射。同时放宽 `default_unit` 的校验以允许中文单位（`个`/`件`）。
+- `commerce.unit_aliases` 必须与 `commerce.default_unit` 同时配置；别名条目 1–16 字符、无空白/控制字符。
+
 ## v0.12.12 — 2026-10-29
 
 - 随发 **shopping-cli 3.2.10**：商品的 `source_evidence.source_version` 不再可能是空串（本地维护的商品回退 `local:<updated_at>`，与 listing 投影同口径）。商家运行时对来源证据是严格校验——字段存在就必须非空，空串会整条报价变成 `temporarily_unavailable`；上一版只能靠数据回填绕过，现在由商品读接口直接给出。

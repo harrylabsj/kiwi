@@ -15,13 +15,13 @@ const dirs: string[] = [];
 afterEach(() => dirs.splice(0).forEach(dir => rmSync(dir, { recursive: true, force: true })));
 type Facts = Awaited<ReturnType<MerchantProductSource["getProduct"]>>;
 const base = (): Facts => ({ price: 100, currency: "CNY", unit: "box", stock: 20, valid_until: "2026-10-14T00:00:00.000Z", handoff_destination: "https://example.com/item/1", source_evidence: { system: "owned-fixture", source_version: "revision-1" } });
-function setup(facts = base(), source?: MerchantProductSource, promotionPrice?: Parameters<typeof createMerchantHandler>[0]["promotionPrice"]) {
+function setup(facts = base(), source?: MerchantProductSource, promotionPrice?: Parameters<typeof createMerchantHandler>[0]["promotionPrice"], extra: Partial<Parameters<typeof createMerchantHandler>[0]> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "kiwi-source-facts-")); dirs.push(dir);
   let current = facts;
   let time = NOW;
   let reads = 0;
   const ledger = new LedgerStore({ dir, now: () => time });
-  const options = { ...(promotionPrice !== undefined ? { promotionPrice } : {}), ledger, now: () => time, sender: "merchant:merchant-001", counterparty: "buyer:*", productSource: source ?? { getProduct: async () => { reads++; return current; } } };
+  const options = { ...extra, ...(promotionPrice !== undefined ? { promotionPrice } : {}), ledger, now: () => time, sender: "merchant:merchant-001", counterparty: "buyer:*", productSource: source ?? { getProduct: async () => { reads++; return current; } } };
   let handler = createMerchantHandler(options);
   let seq = 0;
   const send = async (action: string, payload: Record<string, unknown>, in_reply_to = "msg_previous") => {
@@ -61,6 +61,18 @@ describe("actual handler source facts and accept preconditions", () => {
   });
   it.each([undefined, "piece"])("refuses source/request unit mismatch without synonyms (%s)", async unit => {
     const f = setup({ ...base(), unit }); const result = await f.quote(); expect(result.kind === "declined" && result.reasonCode).toBe("field_unsupported");
+  });
+  it("accepts an explicitly declared unit alias and echoes the canonical unit", async () => {
+    const f = setup({ ...base(), unit: "piece" }, undefined, undefined, { unitAliases: { "个": "piece" } });
+    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "个" } }] });
+    const env = outgoing(r);
+    const terms = (env.payload as { terms: { items: Array<{ quantity: { unit: string } }> } }).terms;
+    expect(terms.items[0]?.quantity.unit).toBe("piece");
+  });
+  it("still refuses an alias the merchant did not declare", async () => {
+    const f = setup({ ...base(), unit: "piece" }, undefined, undefined, { unitAliases: { "件": "piece" } });
+    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "个" } }] });
+    expect(r.kind === "declined" && r.reasonCode).toBe("field_unsupported");
   });
   it.each([{}, { sku: "SKU" }, { sku: "SKU", quantity: { value: 5 } }])("does not fabricate required request fields %j", async item => {
     const f = setup(); const r = await f.send("rfq", { type: "rfq", items: [item] }); expect(r.kind === "declined" && r.reasonCode).toBe("schema_invalid");

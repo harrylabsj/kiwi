@@ -158,6 +158,11 @@ export interface AgentProfile {
      * 不填 = 保持 fail-closed（拒绝一切询价），填了才参与报价。
      */
     default_unit?: string;
+    /**
+     * 商家额外接受的单位写法（如 `个`、`件`），一律映射到 `default_unit`。
+     * 显式配置才生效，避免隐式同义词把价格算错。
+     */
+    unit_aliases?: string[];
   };
   model: {
     provider: string;
@@ -267,7 +272,14 @@ const TOP_LEVEL_KEYS = [
 ] as const;
 /** weixin 段白名单（微信远程控制通道配置；无 *_env 密钥字段——iLink 凭证运行时获取）。 */
 const WEIXIN_KEYS = ["allow_users", "base_url"] as const;
-const COMMERCE_KEYS = ["base_url", "token_env", "backend", "credentials", "allow_demo_price_fallback", "default_unit"] as const;
+/** 单位 token：1–16 个字符、无空白/控制字符（允许中文，如「个」「件」）。 */
+function isUnitToken(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim().normalize("NFKC");
+  return trimmed !== "" && trimmed.length <= 16 && !/[\s\u0000-\u001f]/.test(trimmed);
+}
+
+const COMMERCE_KEYS = ["base_url", "token_env", "backend", "credentials", "allow_demo_price_fallback", "default_unit", "unit_aliases"] as const;
 const MODEL_KEYS = [
   "provider",
   "model",
@@ -599,10 +611,25 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
   // 商品源默认售卖单位（可选）；填了才让没有单位字段的商品源参与报价。
   const defaultUnit = commerce.default_unit;
   if (defaultUnit !== undefined) {
+    // 单位允许非 ASCII（中文买家常用「个/件」），但不接受空白/控制字符和长串。
     req(
-      typeof defaultUnit === "string" && /^[a-z][a-z0-9_-]{0,31}$/i.test(defaultUnit.trim()),
-      `${source}: commerce.default_unit must be a short unit token (e.g. piece, box, kg)`,
+      isUnitToken(defaultUnit),
+      `${source}: commerce.default_unit must be a short unit token (e.g. piece, 个, 件)`,
     );
+  }
+  const rawUnitAliases = commerce.unit_aliases;
+  if (rawUnitAliases !== undefined) {
+    req(
+      Array.isArray(rawUnitAliases) && rawUnitAliases.length > 0 && rawUnitAliases.length <= 12,
+      `${source}: commerce.unit_aliases must be a non-empty array of at most 12 unit tokens`,
+    );
+    req(
+      defaultUnit !== undefined,
+      `${source}: commerce.unit_aliases requires commerce.default_unit`,
+    );
+    for (const alias of rawUnitAliases as unknown[]) {
+      req(isUnitToken(alias), `${source}: commerce.unit_aliases entries must be short unit tokens`);
+    }
   }
   rejectUnknownKeys(commerce, COMMERCE_KEYS, "commerce", source);
 
@@ -975,6 +1002,9 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
       ...(credentials !== undefined ? { credentials } : {}),
       ...(allowDemoPriceFallback === true ? { allow_demo_price_fallback: true } : {}),
       ...(defaultUnit !== undefined ? { default_unit: String(defaultUnit).trim() } : {}),
+      ...(rawUnitAliases !== undefined
+        ? { unit_aliases: (rawUnitAliases as unknown[]).map((alias) => String(alias).trim()) }
+        : {}),
     },
     model: {
       provider: model.provider,

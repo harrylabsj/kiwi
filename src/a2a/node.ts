@@ -598,6 +598,14 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           counterparty: "buyer:*",
           productSource: productSource as MerchantProductSource,
           allowDemoPriceFallback: profile.commerce.allow_demo_price_fallback ?? false,
+          // 商家显式声明的单位同义词（`个`/`件` → `piece`）；未配置就不接受别名。
+          ...(profile.commerce.unit_aliases !== undefined && profile.commerce.default_unit !== undefined
+            ? {
+                unitAliases: Object.fromEntries(
+                  profile.commerce.unit_aliases.map((alias) => [alias, profile.commerce.default_unit as string]),
+                ),
+              }
+            : {}),
           // BUG-07：显式传入 provider（或静态值）时每次报价取运行中生效策略；
           // 缺省仍是启动 profile 的静态策略。
           merchantPolicy: options.merchantPolicy ?? profile.merchant_policy,

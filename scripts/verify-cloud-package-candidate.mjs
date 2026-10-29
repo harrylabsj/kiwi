@@ -27,7 +27,7 @@ const pkg = json(path.join(dir, "package.json")),
   manifest = json(path.join(dir, "build-manifest.json")),
   runtime = json(path.join(dir, "runtime-package.json"));
 assert.equal(pkg.name, "@harrylabsj/kiwi-merchant-cloud");
-assert.equal(pkg.version, "0.12.12");
+assert.equal(pkg.version, "0.12.13");
 assert.equal(runtime.version, pkg.version);
 assert.equal(manifest.artifact_kind, "kiwi-merchant-cloud-package");
 assert.equal(manifest.source_commit, source.source_commit);

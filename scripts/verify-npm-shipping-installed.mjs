@@ -63,7 +63,7 @@ for (const [name, relative, subdir, app] of [
     npm(consumer, ["install", tgz, "--omit=dev"], remaining()),
   );
   const installed = path.join(consumer, "node_modules", name);
-  if (json(path.join(installed, "package.json")).version !== "0.12.12")
+  if (json(path.join(installed, "package.json")).version !== "0.12.13")
     throw new Error("SHIPPING_COLD_VERSION_MISMATCH");
   let cloudClosure;
   if (subdir === "cloud") {
@@ -129,7 +129,7 @@ for (const [name, relative, subdir, app] of [
   budget();
   results.push({
     name,
-    version: "0.12.12",
+    version: "0.12.13",
     source_commit: source.source_commit,
     tgz_sha256: sha256(readFileSync(tgz)),
     runtime_log_sha256: sha256(Buffer.from(probe)),

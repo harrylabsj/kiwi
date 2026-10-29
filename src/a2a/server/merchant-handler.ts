@@ -128,6 +128,14 @@ export interface MerchantHandlerOptions {
   /** 商品源故障时是否回退内置演示价（fail-open）；缺省 false = fail-closed
    *  （decline temporarily_unavailable）。仅本地 demo/测试形态显式开启。 */
   allowDemoPriceFallback?: boolean;
+  /**
+   * 请求单位 → 商家规范单位的**显式**同义词表（键按小写/NFKC 归一）。
+   *
+   * 商家在 profile 里声明自己接受哪些写法（如 `个`/`件` → `piece`）。不做隐式
+   * 映射：表里没有的一律按不匹配拒绝，避免单位混淆把价格算错。WorkBuddy 上的
+   * 中文买家发 `个`，商家没配这张表就会被 `field_unsupported` 拒掉。
+   */
+  unitAliases?: Record<string, string>;
   /** 条件成交折扣百分比（deal = base × (1 - pct/100)）；缺省 5。 */
   dealDiscountPercent?: number;
   /** merchant policy：确定性定价的 floor / 促销（per-SKU，可配置）。
@@ -315,6 +323,26 @@ class ProductSourceUnavailableError extends Error {
 
 /** 商业拒绝（offer 未知/已关闭/terms_digest 不匹配/终态重开）。
  * decline 消息由 pipeline 按 reason_code 自动构造。 */
+/** 单位归一：NFKC + 去空白 + 小写（`Piece` / `piece` / `ＰＣＥ` 视为同一写法）。 */
+function normalizeUnit(unit: string): string {
+  return unit.trim().normalize("NFKC").toLowerCase();
+}
+
+/**
+ * 单位校验：商品**没有单位就拒绝**（fail-closed，不知道按什么计量就不报价）；
+ * 有单位时严格比较，只额外接受商家显式声明的别名，绝不猜同义词。
+ */
+function unitMismatch(
+  productUnit: string | undefined,
+  requestedUnit: string,
+  aliases: Record<string, string>,
+): boolean {
+  const declared = (productUnit ?? "").trim();
+  if (declared === "") return true;
+  if (normalizeUnit(declared) === normalizeUnit(requestedUnit)) return false;
+  return aliases[normalizeUnit(requestedUnit)] !== normalizeUnit(declared);
+}
+
 const declineReply = (
   reasonCode: ProtocolErrorCode = "state_conflict",
   message?: string,
@@ -340,6 +368,12 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
   const { ledger, now, sender, counterparty } = options;
   const offerPriceMinor = options.offerPriceMinor ?? MERCHANT_OFFER_PRICE_MINOR;
   const allowDemoPriceFallback = options.allowDemoPriceFallback ?? false;
+  const unitAliases: Record<string, string> = Object.fromEntries(
+    Object.entries(options.unitAliases ?? {}).map(([alias, canonical]) => [
+      normalizeUnit(alias),
+      normalizeUnit(canonical),
+    ]),
+  );
   // BUG-07：merchantPolicy 支持静态值或 provider——每请求解析运行中策略。
   const policyOf = (): MerchantPolicy | undefined =>
     typeof options.merchantPolicy === "function"
@@ -929,7 +963,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
           const { priceMinor, currency } = product;
-          if (product.unit === undefined || product.unit !== requestedUnit) return declineReply("field_unsupported");
+          if (unitMismatch(product.unit, requestedUnit, unitAliases)) return declineReply("field_unsupported");
           const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
@@ -952,7 +986,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               terms: offerTerms(
                 {
                   sku,
-                  unit: product.unit,
+                  unit: product.unit ?? requestedUnit,
                   priceMinor: effectivePriceMinor,
                   quantity,
                   currency,
@@ -1008,7 +1042,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
           const { priceMinor, currency } = product;
-          if (product.unit === undefined || product.unit !== requestedUnit) return declineReply("field_unsupported");
+          if (unitMismatch(product.unit, requestedUnit, unitAliases)) return declineReply("field_unsupported");
           const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
@@ -1032,7 +1066,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               proposed_terms: offerTerms(
                 {
                   sku,
-                  unit: product.unit,
+                  unit: product.unit ?? requestedUnit,
                   priceMinor: effectivePriceMinor,
                   quantity,
                   currency,
@@ -1086,7 +1120,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
           const { priceMinor, currency } = product;
-          if (product.unit === undefined || product.unit !== requestedUnit) return declineReply("field_unsupported");
+          if (unitMismatch(product.unit, requestedUnit, unitAliases)) return declineReply("field_unsupported");
           const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const authorityPromotion = resolvePromotionQuote(
@@ -1155,7 +1189,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               base_terms: offerTerms(
                 {
                   sku,
-                  unit: product.unit,
+                  unit: product.unit ?? requestedUnit,
                   priceMinor: responsiveMinor,
                   quantity,
                   currency,
@@ -1179,7 +1213,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                         then_terms: offerTerms(
                           {
                             sku,
-                            unit: product.unit,
+                            unit: product.unit ?? requestedUnit,
                             priceMinor: promotionalMinor,
                             quantity,
                             currency,

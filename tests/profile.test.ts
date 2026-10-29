@@ -59,6 +59,23 @@ describe("profile loading", () => {
     expect(profile.merchant_policy?.min_unit_price_private).toBe(80);
   });
 
+  it("accepts an explicit unit_aliases list and requires default_unit with it", () => {
+    const withAliases = VALID_YAML.replace(
+      "  backend: local_marketplace",
+      "  backend: local_marketplace\n  default_unit: piece\n  unit_aliases:\n    - 个\n    - 件",
+    );
+    const profile = loadProfile(writeTemp(withAliases));
+    expect(profile.commerce.default_unit).toBe("piece");
+    expect(profile.commerce.unit_aliases).toEqual(["个", "件"]);
+
+    // 没有 default_unit 时别名无从映射——拒绝，而不是默默忽略。
+    const withoutDefault = VALID_YAML.replace(
+      "  backend: local_marketplace",
+      "  backend: local_marketplace\n  unit_aliases:\n    - 个",
+    );
+    expect(() => loadProfile(writeTemp(withoutDefault))).toThrow(/unit_aliases/);
+  });
+
   it("reads commerce.default_unit and rejects a bad unit token", () => {
     const withUnit = `${VALID_YAML.replace(
       "  backend: local_marketplace",
