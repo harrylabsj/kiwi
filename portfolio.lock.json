@@ -5,7 +5,7 @@
   "repositories": {
     "kiwi": {
       "repository": "harrylabsj/kiwi",
-      "commit": "6c859f58f72e0e476ad18443932c86fc8b1c8099"
+      "commit": "858271e1016c0953b7588a3a4c09fa633d32af80"
     },
     "kiwi-catalog": {
       "repository": "harrylabsj/kiwi-catalog",
