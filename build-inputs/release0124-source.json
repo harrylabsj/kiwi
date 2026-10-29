@@ -158,7 +158,7 @@
     },
     {
       "path": ".github/workflows/portfolio-release.yml",
-      "sha256": "sha256:7e9d43721539a501a1a34595435a4d87f270c2c759bd3e8ae8e225c027df784d"
+      "sha256": "sha256:ace81a625b573181856f5ae13b59324f8638bb80c5b19ea8128c264028668df5"
     },
     {
       "path": ".github/workflows/release-rehearsal.yml",
