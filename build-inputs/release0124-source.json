@@ -158,7 +158,7 @@
     },
     {
       "path": ".github/workflows/portfolio-release.yml",
-      "sha256": "sha256:d6bbec18f5c0f9d0e201efdad914ce639ec66152b833e4ba0eb3bd882fc7c6ba"
+      "sha256": "sha256:7e9d43721539a501a1a34595435a4d87f270c2c759bd3e8ae8e225c027df784d"
     },
     {
       "path": ".github/workflows/release-rehearsal.yml",
@@ -618,7 +618,7 @@
     },
     {
       "path": "docs/portfolio-release-management.md",
-      "sha256": "sha256:cb2903b0751f6f2f3f9e91ace93144197b3c01a86b9afd9860dad1d0843321be"
+      "sha256": "sha256:12fcb0e201bcf08518427a2b3ed1e2bf4301d8b9257695e1885303ab0b1f2db5"
     },
     {
       "path": "docs/protocol/kiwi-negotiation-protocol-1.0-rev1.4.md",
@@ -1793,6 +1793,10 @@
       "sha256": "sha256:988472c87b0c492767fa16b0741244c177cd1ac2f345debc980e6cd130ce38d8"
     },
     {
+      "path": "scripts/run-acceptance.mjs",
+      "sha256": "sha256:ea864d99998619b26327adde38edfebb72c04f62c45fe807e3632bc9d2fdb6fa"
+    },
+    {
       "path": "scripts/smoke-cloud-artifact.mjs",
       "sha256": "sha256:6b610f17af78f3f690d9f8d61b5a15eb1241150f8b451a8f7c8702671851a44c"
     },
@@ -1867,6 +1871,10 @@
     {
       "path": "scripts/verify-registry-downloads.mjs",
       "sha256": "sha256:d5bcf42766e204f162ae6572a58a46e9781bfda73b41267a59fa7a3b05235f51"
+    },
+    {
+      "path": "scripts/verify-release-acceptance.mjs",
+      "sha256": "sha256:5d1ff28a3a6cd3f8454963f79833d548fe04c37ec72ca3afa438633ace476e1c"
     },
     {
       "path": "scripts/verify-release-manifest.mjs",
@@ -5385,6 +5393,10 @@
     {
       "path": "tests/registry-verify.test.ts",
       "sha256": "sha256:8059534893e9c77bfd37c1667acbb7cff4bf64fdc8c732fb0397efc17c17ca75"
+    },
+    {
+      "path": "tests/release-acceptance-gate.test.ts",
+      "sha256": "sha256:f1ff4bf330d0c55497b13b384410a33ff78b8fde4ac7bf7f78dfe329f4fd803f"
     },
     {
       "path": "tests/release-manifest-rollback.test.ts",
