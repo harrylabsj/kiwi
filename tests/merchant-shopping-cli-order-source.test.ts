@@ -4,7 +4,7 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ShoppingCliOrderSource } from "../src/merchant-core/orders/shopping-cli-source.js";
+import { ShoppingCliOrderSource, ShoppingCliSourceError } from "../src/merchant-core/orders/shopping-cli-source.js";
 import { OrderFactError } from "../src/merchant-core/orders/model.js";
 
 interface Captured {
@@ -32,6 +32,11 @@ beforeEach(async () => {
         ...(body !== undefined ? { body } : {}),
       });
       res.setHeader("content-type", "application/json");
+      if (req.url?.includes("/unauthorized")) {
+        res.statusCode = 401;
+        res.end(JSON.stringify({ error: { code: "auth", message: "expired" } }));
+        return;
+      }
       if (req.url?.includes("/missing")) {
         res.statusCode = 404;
         res.end(JSON.stringify({ error: { code: "not_found", message: "order not found" } }));
@@ -71,16 +76,30 @@ describe("ShoppingCliOrderSource", () => {
     expect(captured[0]?.url).toContain("limit=10");
     expect(captured[0]?.url).toContain("offset=20");
 
-    await source().getOrder("order-1");
+    await source().getOrder("order-1", {
+      sourceNamespace: "jd",
+      sourceAccountId: "acc-1",
+    });
     expect(captured[1]?.url).toContain("/v1/merchant/orders/order-1");
     expect(captured[1]?.url).toContain("merchant_id=merchant-1");
+    expect(captured[1]?.url).toContain("source_namespace=jd");
+    expect(captured[1]?.url).toContain("source_account_id=acc-1");
   });
 
   it("退款/成本/来源契约写入时注入商家身份", async () => {
     const client = source();
-    await client.recordRefund("order-1", { external_refund_id: "r1", amount_minor: 200, version: 1 });
+    await client.recordRefund(
+      "order-1",
+      { external_refund_id: "r1", amount_minor: 200, version: 1 },
+      { sourceNamespace: "jd", sourceAccountId: "acc-1" },
+    );
     expect(captured[0]?.method).toBe("POST");
-    expect(captured[0]?.body).toMatchObject({ merchant_id: "merchant-1", external_refund_id: "r1" });
+    expect(captured[0]?.body).toMatchObject({
+      merchant_id: "merchant-1",
+      external_refund_id: "r1",
+      source_namespace: "jd",
+      source_account_id: "acc-1",
+    });
 
     await client.saveCostSnapshot({
       ref_kind: "order",
@@ -138,13 +157,25 @@ describe("ShoppingCliOrderSource", () => {
     ).rejects.toThrowError(OrderFactError);
   });
 
-  it("非 2xx 映射为带 code 的失败，不伪装成空结果", async () => {
+  it("非 2xx 保留 HTTP 语义，不伪装成空结果", async () => {
     await expect(source().getOrder("missing")).rejects.toMatchObject({
-      name: "OrderFactError",
-      code: "validation",
+      name: "ShoppingCliSourceError",
+      code: "not_found",
+      status: 404,
       message: expect.stringContaining("not_found"),
     });
     expect(base.startsWith("http://127.0.0.1:")).toBe(true);
+  });
+
+  it("401/403 与参数错误可区分", async () => {
+    await expect(
+      new ShoppingCliOrderSource({
+        baseUrl: base,
+        merchantId: "merchant-1",
+        token: "expired",
+      }).getOrder("unauthorized"),
+    ).rejects.toMatchObject({ code: "auth", status: 401 });
+    expect(ShoppingCliSourceError).toBeDefined();
   });
 
   it("配置校验：缺 token/非法 baseUrl 直接拒绝", () => {

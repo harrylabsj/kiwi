@@ -331,15 +331,6 @@ export class MerchantOperationsSurface {
     });
   }
 
-  verifyOrder(recordId: string, value: unknown): unknown {
-    const body = objectBody(value);
-    return this.facade.verifyOrder(recordId, {
-      verified: body.verified === true,
-      source_version: text(body, "source_version"),
-      verified_at: text(body, "verified_at"),
-    });
-  }
-
   attributeOrder(recordId: string, value: unknown): unknown {
     const body = objectBody(value);
     return this.facade.attributeOrder(

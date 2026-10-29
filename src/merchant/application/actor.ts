@@ -65,13 +65,13 @@ export const MERCHANT_PERMISSIONS = [
   "plans:manage",
   "costs:read_sensitive",
   "contribution:read",
+  "contribution:manage",
   "opportunities:read",
   "opportunities:manage",
   "followups:read",
   "followups:manage",
   "orders:read",
   "orders:report",
-  "orders:verify",
 ] as const;
 export type MerchantPermission = (typeof MERCHANT_PERMISSIONS)[number];
 
@@ -113,8 +113,7 @@ const ROLE_PERMISSIONS: Readonly<Record<MerchantRole, readonly MerchantPermissio
     "followups:manage",
     "orders:read",
     "orders:report",
-    "orders:verify",
-  ],
+    ],
   owner: [
     "status:read",
     "products:read",
@@ -139,14 +138,15 @@ const ROLE_PERMISSIONS: Readonly<Record<MerchantRole, readonly MerchantPermissio
     "plans:manage",
     "costs:read_sensitive",
     "contribution:read",
+    "contribution:manage",
+  "contribution:manage",
     "opportunities:read",
     "opportunities:manage",
     "followups:read",
     "followups:manage",
     "orders:read",
     "orders:report",
-    "orders:verify",
-  ],
+    ],
 };
 
 export function permissionsForRole(role: MerchantRole): ReadonlySet<MerchantPermission> {

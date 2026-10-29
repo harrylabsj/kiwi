@@ -8,8 +8,9 @@
  *  - 授权只消费一次，第二次重试回到审批流程；
  *  - 未批准时队列为空，行为与旧版一致（approval_required）。
  */
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import path from "node:path";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -189,6 +190,19 @@ describe("merchant negotiation approval (B2)", () => {
     expect(offerPrice(retried)).toBe(75_000);
   });
 
+  it("批准价低于买家重试出价时，报价不得低于买家出价", async () => {
+    await run(envelopeFor("rfq", { type: "rfq", items: [{ sku: SKU, quantity: { value: 10, unit: "piece" } }] }));
+    await run(counter(70_000));
+    const pending = approvals.list("pending")[0]!;
+    approvals.approve({ approval_id: pending.approval_id, approved_minor: 75_000, ttl_seconds: 600 });
+
+    // 800 元仍低于 floor 810，会消费授权；但买家已愿意出 800，不能回 750。
+    const retried = await run(counter(80_000));
+    expect(retried.kind).toBe("accepted");
+    expect(offerPrice(retried)).toBe(80_000);
+    expect(approvals.list("consumed")).toHaveLength(1);
+  });
+
   it("授权过期后不生效，回到审批流程", async () => {
     await run(envelopeFor("rfq", { type: "rfq", items: [{ sku: SKU, quantity: { value: 10, unit: "piece" } }] }));
     await run(counter(70_000));
@@ -222,6 +236,57 @@ describe("merchant negotiation approval (B2)", () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+
+  it("审批文件读改写持有跨进程锁，完成后释放", () => {
+    approvals.recordPending({
+      negotiation_id: NEGOTIATION_ID,
+      sku: SKU,
+      currency: "CNY",
+      quantity: 10,
+      buyer_offer_minor: 70_000,
+    });
+    expect(existsSync(`${path.join(dir, "negotiation-approvals.json")}.lock`)).toBe(false);
+  });
+
+  it("回收陈旧锁，避免崩溃进程永久阻塞审批", () => {
+    const stateDir = path.join(dir, "a2a");
+    mkdirSync(stateDir, { recursive: true });
+    const lock = path.join(stateDir, "negotiation-approvals.json.lock");
+    writeFileSync(lock, "stale");
+    utimesSync(lock, new Date(0), new Date(0));
+    const store = new NegotiationApprovalStore(stateDir, () => NOW);
+    store.recordPending({
+      negotiation_id: "neg_lock",
+      sku: SKU,
+      currency: "CNY",
+      quantity: 1,
+      buyer_offer_minor: 1,
+    });
+    expect(store.list("pending")).toHaveLength(1);
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it("终态记录超过保留期后在新写入时修剪，pending/有效授权保留", () => {
+    let clock = NOW;
+    const store = new NegotiationApprovalStore(dir, () => clock);
+    const old = store.recordPending({
+      negotiation_id: "neg_old",
+      sku: SKU,
+      currency: "CNY",
+      quantity: 1,
+      buyer_offer_minor: 1,
+    });
+    store.approve({ approval_id: old.approval_id, approved_minor: 1, ttl_seconds: 0 });
+    clock = "2026-12-01T10:00:00.000Z";
+    store.recordPending({
+      negotiation_id: "neg_new",
+      sku: SKU,
+      currency: "CNY",
+      quantity: 1,
+      buyer_offer_minor: 1,
+    });
+    expect(store.list().map((record) => record.negotiation_id)).toEqual(["neg_new"]);
   });
 
   it("未配置审批队列时保持原有硬拒行为", async () => {

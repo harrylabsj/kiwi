@@ -104,8 +104,8 @@ export type RefundMergeResult =
   | { status: "conflict"; refunds: RefundFact[]; reason: "same_version_different_amount" };
 
 export class OrderFactError extends Error {
-  readonly code: "validation" | "identity_conflict";
-  constructor(code: "validation" | "identity_conflict", message: string) {
+  readonly code: "validation" | "identity_conflict" | "not_found";
+  constructor(code: "validation" | "identity_conflict" | "not_found", message: string) {
     super(message);
     this.name = "OrderFactError";
     this.code = code;
@@ -124,6 +124,34 @@ function requireMinor(value: unknown, name: string): number {
     throw new OrderFactError("validation", `${name} 必须是非负安全整数`);
   }
   return value;
+}
+
+/** 校验订单行事实；人工/CSV/连接器入口共用同一不变量。 */
+export function validateOrderLineFacts(value: unknown): OrderLineFact[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new OrderFactError("validation", "订单行必须是非空数组");
+  }
+  const seen = new Set<string>();
+  return value.map((raw, index) => {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new OrderFactError("validation", `lines[${index}] 必须是对象`);
+    }
+    const line = raw as Record<string, unknown>;
+    const lineId = requireText(line["line_id"], `lines[${index}].line_id`, 128);
+    if (seen.has(lineId)) throw new OrderFactError("validation", `重复 line_id：${lineId}`);
+    seen.add(lineId);
+    const quantity = requireMinor(line["quantity"], `lines[${index}].quantity`);
+    if (quantity < 1) throw new OrderFactError("validation", `lines[${index}].quantity 必须 ≥ 1`);
+    return {
+      line_id: lineId,
+      sku: requireText(line["sku"], `lines[${index}].sku`, 128),
+      quantity,
+      amount_minor: requireMinor(line["amount_minor"], `lines[${index}].amount_minor`),
+      ...(line["unit_price_minor"] !== undefined
+        ? { unit_price_minor: requireMinor(line["unit_price_minor"], `lines[${index}].unit_price_minor`) }
+        : {}),
+    };
+  });
 }
 
 /** 复合外部订单身份（商家、来源命名空间、来源账户、外部订单 ID）。 */

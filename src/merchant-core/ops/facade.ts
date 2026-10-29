@@ -350,16 +350,8 @@ export class MerchantOperationsFacade {
     return this.orders.recordCsvReport({ merchantId: this.merchantId, ...input });
   }
 
-  verifyOrder(recordId: string, input: { verified: boolean; source_version: string; verified_at: string }): OrderRecordV2 {
-    return this.orders.verifyWithSourceFact({
-      merchantId: this.merchantId,
-      recordId,
-      ...input,
-    });
-  }
-
   attributeOrder(recordId: string, allocations: AttributionInput[]): ReturnType<MerchantOrderService["attribute"]> {
-    return this.orders.attribute(recordId, allocations);
+    return this.orders.attribute(this.merchantId, recordId, allocations);
   }
 
   recordOrderRefund(recordId: string, refund: RefundFact): { status: string; totalMinor: number } {

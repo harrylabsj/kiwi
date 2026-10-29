@@ -11,7 +11,16 @@
  * 与商家其余运行时状态同目录；只保存议价事实，不保存聊天历史或买家身份。
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -74,6 +83,10 @@ export interface ConsumeInput {
 }
 
 const DEFAULT_TTL_SECONDS = 3_600;
+/** 终态记录保留期：pending/approved 永不按时间修剪。 */
+const TERMINAL_RETENTION_MS = 30 * 86_400_000;
+const LOCK_STALE_MS = 10_000;
+const LOCK_WAIT_MS = 2_000;
 
 interface FileShape {
   version: 1;
@@ -120,6 +133,60 @@ export class NegotiationApprovalStore {
     renameSync(tmp, this.file);
   }
 
+  /**
+   * 跨进程读-改-写锁：A2A 节点与 `kiwi merchant approvals` CLI 共享同一
+   * 文件。`open(..., "wx")` 原子创建；持有者崩溃留下的旧锁按 mtime 回收。
+   */
+  private withLock<T>(work: () => T): T {
+    const lock = `${this.file}.lock`;
+    mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+    const deadline = Date.now() + LOCK_WAIT_MS;
+    let fd: number | undefined;
+    while (fd === undefined) {
+      try {
+        fd = openSync(lock, "wx", 0o600);
+      } catch (err) {
+        if ((err as { code?: string }).code !== "EEXIST") throw err;
+        try {
+          if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
+            unlinkSync(lock);
+            continue;
+          }
+        } catch {
+          continue;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error("negotiation approval store is locked by another process", { cause: err });
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      }
+    }
+    try {
+      return work();
+    } finally {
+      try {
+        closeSync(fd);
+      } finally {
+        try {
+          unlinkSync(lock);
+        } catch {
+          // 锁已被其他清理者移除；主操作已完成。
+        }
+      }
+    }
+  }
+
+  private pruneTerminal(records: NegotiationApprovalRecord[]): NegotiationApprovalRecord[] {
+    const nowMs = Date.parse(this.now());
+    const cutoff = nowMs - TERMINAL_RETENTION_MS;
+    return records.filter(
+      (record) =>
+        record.status === "pending" ||
+        (record.status === "approved" && !this.expired(record, nowMs)) ||
+        Date.parse(record.updated_at) >= cutoff,
+    );
+  }
+
   private expired(record: NegotiationApprovalRecord, nowMs: number): boolean {
     return (
       record.expires_at !== undefined &&
@@ -130,6 +197,10 @@ export class NegotiationApprovalStore {
 
   /** 记录一笔超额还价（同 negotiation+sku 的 pending 只保留最新一条）。 */
   recordPending(input: PendingApprovalInput): NegotiationApprovalRecord {
+    return this.withLock(() => this.recordPendingLocked(input));
+  }
+
+  private recordPendingLocked(input: PendingApprovalInput): NegotiationApprovalRecord {
     const now = this.now();
     const shape = this.read();
     const records = shape.records.filter(
@@ -156,7 +227,7 @@ export class NegotiationApprovalStore {
       updated_at: now,
     };
     records.push(record);
-    this.write(records);
+    this.write(this.pruneTerminal(records));
     return record;
   }
 
@@ -173,6 +244,10 @@ export class NegotiationApprovalStore {
 
   /** 人工批准：写入批准价与有效期；找不到 pending 记录即失败（不凭空造授权）。 */
   approve(input: ApproveInput): NegotiationApprovalRecord {
+    return this.withLock(() => this.approveLocked(input));
+  }
+
+  private approveLocked(input: ApproveInput): NegotiationApprovalRecord {
     if (input.approved_minor < 0 || !Number.isSafeInteger(input.approved_minor)) {
       throw new Error("approved_minor must be a non-negative integer");
     }
@@ -195,7 +270,7 @@ export class NegotiationApprovalStore {
     record.approved_by = input.approved_by ?? "merchant";
     record.expires_at = new Date(Date.parse(now) + ttl * 1_000).toISOString();
     record.updated_at = now;
-    this.write(shape.records);
+    this.write(this.pruneTerminal(shape.records));
     return record;
   }
 
@@ -205,6 +280,10 @@ export class NegotiationApprovalStore {
    * 可用授权，调用方继续走常规边界逻辑。
    */
   consume(input: ConsumeInput): NegotiationApprovalRecord | undefined {
+    return this.withLock(() => this.consumeLocked(input));
+  }
+
+  private consumeLocked(input: ConsumeInput): NegotiationApprovalRecord | undefined {
     const nowMs = Date.parse(this.now());
     const shape = this.read();
     const record = shape.records.find(
@@ -220,7 +299,7 @@ export class NegotiationApprovalStore {
     if (record === undefined) return undefined;
     record.status = "consumed";
     record.updated_at = this.now();
-    this.write(shape.records);
+    this.write(this.pruneTerminal(shape.records));
     return record;
   }
 }

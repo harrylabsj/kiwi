@@ -111,6 +111,11 @@ import {
 } from "../../merchant/operations-report.js";
 import type { ExactMerchantProduct } from "../../agent/merchant/types.js";
 import type { MerchantOperationsSurface } from "../../merchant-core/ops/surface.js";
+import { OrderFactError } from "../../merchant-core/orders/model.js";
+import { OperatingPlanError } from "../../merchant-core/operating/types.js";
+import { OpportunityError } from "../../merchant-core/opportunity/types.js";
+import { ProposalError } from "../../merchant-core/proposal/types.js";
+import { FollowUpError } from "../../merchant-core/followup/types.js";
 import {
   parseExactMoney,
   WorkbenchMoneyError,
@@ -1180,15 +1185,6 @@ export function createMerchantManagementApiHandler(
         writeJson(res, 201, { orders: ops.recordCsvOrderReport(body, auth.ctx.actorId) }, { "x-request-id": requestId });
         return;
       }
-      const orderVerifyMatch = /^\/orders\/([^/]+)\/verify$/.exec(rest);
-      if (orderVerifyMatch !== null) {
-        const auth = requireActor(req);
-        assertWriteGuards(req, auth.sessionId);
-        authorizeOrThrow(auth.ctx, "orders:verify");
-        const { body } = await readOpsBody();
-        writeJson(res, 200, ops.verifyOrder(pathSegment(orderVerifyMatch[1] ?? ""), body), { "x-request-id": requestId });
-        return;
-      }
       const orderAttributionMatch = /^\/orders\/([^/]+)\/attributions$/.exec(rest);
       if (orderAttributionMatch !== null) {
         const auth = requireActor(req);
@@ -1211,7 +1207,7 @@ export function createMerchantManagementApiHandler(
       if (orderContributionMatch !== null) {
         const auth = requireActor(req);
         assertWriteGuards(req, auth.sessionId);
-        authorizeOrThrow(auth.ctx, "contribution:read");
+        authorizeOrThrow(auth.ctx, "contribution:manage");
         const { body } = await readOpsBody();
         writeJson(res, 200, ops.assessOrderContribution(pathSegment(orderContributionMatch[1] ?? ""), body), { "x-request-id": requestId });
         return;
@@ -3281,7 +3277,12 @@ export function createMerchantManagementApiHandler(
       writeJson(res, 200, receipt);
       return;
     } catch (err) {
-      if (err instanceof ManagementError) {
+      const domain = domainErrorStatus(err);
+  if (domain !== undefined) {
+    writeJson(res, domain.status, errorBody(domain.code, err instanceof Error ? err.message : "domain error"));
+    return;
+  }
+  if (err instanceof ManagementError) {
         // 校验/授权/摘要/状态/过期类失败：未触达执行 → 释放占位，原键可重试。
         operations.release(begun.operationId);
         respondError(res, err);
@@ -3362,7 +3363,12 @@ export function createMerchantManagementApiHandler(
       writeJson(res, 200, receipt);
       return;
     } catch (err) {
-      if (err instanceof ManagementError) {
+      const domain = domainErrorStatus(err);
+  if (domain !== undefined) {
+    writeJson(res, domain.status, errorBody(domain.code, err instanceof Error ? err.message : "domain error"));
+    return;
+  }
+  if (err instanceof ManagementError) {
         operations.release(begun.operationId);
         respondError(res, err);
         return;
@@ -3453,7 +3459,12 @@ export function createMerchantManagementApiHandler(
       writeJson(res, 200, receipt);
       return;
     } catch (err) {
-      if (err instanceof ManagementError) {
+      const domain = domainErrorStatus(err);
+  if (domain !== undefined) {
+    writeJson(res, domain.status, errorBody(domain.code, err instanceof Error ? err.message : "domain error"));
+    return;
+  }
+  if (err instanceof ManagementError) {
         operations.release(begun.operationId);
         respondError(res, err);
         return;
@@ -4381,6 +4392,25 @@ async function runAccessRoute(
 }
 
 function respondWorkbenchError(res: ServerResponse, error: unknown, requestId: string): void {
+  const domain = domainErrorStatus(error);
+  if (domain !== undefined) {
+    const code: WorkbenchProblemCode =
+      domain.status === 404
+        ? "RESOURCE_NOT_FOUND"
+        : domain.status === 409
+          ? "VERSION_CONFLICT"
+          : domain.status === 403
+            ? "PERMISSION_REVOKED"
+            : "VALIDATION_ERROR";
+    writeWorkbenchProblem(
+      res,
+      code,
+      requestId,
+      "经营请求未完成",
+      error instanceof Error ? error.message : "经营请求未完成",
+    );
+    return;
+  }
   if (error instanceof WorkbenchEventProjectionError) {
     writeWorkbenchProblem(res, "VALIDATION_ERROR", requestId, "事件游标无效", error.message);
     return;
@@ -4509,6 +4539,37 @@ function respondWorkbenchError(res: ServerResponse, error: unknown, requestId: s
   );
 }
 
+function domainErrorStatus(err: unknown): { status: number; code: "invalid_input" | "not_found" | "conflict" | "forbidden" } | undefined {
+  if (err instanceof OrderFactError) {
+    if (err.code === "not_found") return { status: 404, code: "not_found" };
+    if (err.code === "identity_conflict") return { status: 409, code: "conflict" };
+    return { status: 400, code: "invalid_input" };
+  }
+  if (err instanceof OperatingPlanError) {
+    if (err.code === "not_found") return { status: 404, code: "not_found" };
+    if (err.code === "authorization_revoked") return { status: 403, code: "forbidden" };
+    if (err.code === "validation" || err.code === "invalid_interval") {
+      return { status: 400, code: "invalid_input" };
+    }
+    return { status: 409, code: "conflict" };
+  }
+  if (err instanceof OpportunityError) {
+    if (err.code === "not_found") return { status: 404, code: "not_found" };
+    if (err.code === "validation") return { status: 400, code: "invalid_input" };
+    return { status: 409, code: "conflict" };
+  }
+  if (err instanceof ProposalError) {
+    if (err.code === "not_found") return { status: 404, code: "not_found" };
+    if (err.code === "validation") return { status: 400, code: "invalid_input" };
+    return { status: 409, code: "conflict" };
+  }
+  if (err instanceof FollowUpError) {
+    if (err.code === "validation") return { status: 400, code: "invalid_input" };
+    return { status: 409, code: "conflict" };
+  }
+  return undefined;
+}
+
 function respondError(res: ServerResponse, err: unknown): void {
   if (res.headersSent) {
     res.end();
@@ -4521,6 +4582,11 @@ function respondError(res: ServerResponse, err: unknown): void {
     }
     process.stderr.write(`[merchant-management] 主体上下文完整性异常：${err.message}\n`);
     writeJson(res, 503, errorBody("unavailable", "actor context integrity failure"));
+    return;
+  }
+  const domain = domainErrorStatus(err);
+  if (domain !== undefined) {
+    writeJson(res, domain.status, errorBody(domain.code, err instanceof Error ? err.message : "domain error"));
     return;
   }
   if (err instanceof ManagementError) {

@@ -1362,14 +1362,24 @@ describe("Merchant operations API（v0.2 经营计划/跟进）", () => {
     const order = (await reported.json()) as { record_id: string; evidence_source: string };
     expect(order.evidence_source).toBe("manual_report");
 
-    const verified = await post(
+    const invalidLine = await postWithAuth(
+      "/merchant/api/v1/orders/reports",
+      {
+        source_namespace: "jd",
+        source_account_id: "account-1",
+        external_order_id: "order-http-invalid",
+        observed_at: "2026-09-21T12:00:00.000Z",
+        lines: [{ line_id: "line-1", sku: "", quantity: 0, amount_minor: -1 }],
+      },
+      operator,
+    );
+    expect(invalidLine.status).toBe(422);
+
+    const verifyDenied = await post(
       `/merchant/api/v1/orders/${order.record_id}/verify`,
       { verified: true, source_version: "jd:42", verified_at: "2026-09-21T12:05:00.000Z" },
     );
-    expect(verified.status).toBe(200);
-    expect(((await verified.json()) as { evidence_source: string }).evidence_source).toBe(
-      "external_verified",
-    );
+    expect(verifyDenied.status).toBe(404);
 
     const viewer = await createAuth("viewer:orders", "viewer");
     const list = await fetch(`${base}/merchant/api/v1/orders`, {
