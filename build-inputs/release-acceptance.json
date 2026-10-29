@@ -1,0 +1,41 @@
+{
+  "schema": "kiwi.release-acceptance/1",
+  "recorded_at": "2026-10-29T05:18:40.511Z",
+  "catalog_url": "https://catalog.kiwi.harrylabsj.com",
+  "merchant_id": "mkt_veyquo_A0UPvj7XuYk",
+  "sku": "VQ-101",
+  "quantity": 1,
+  "unit": "个",
+  "kiwi_version": "0.12.13",
+  "shopping_cli_commit": "0dd4c86d7367c82c2b3c85586428b3742b97ec8b",
+  "signed_buyer": true,
+  "chain": {
+    "search": {
+      "ok": true,
+      "detail": "命中 Veyquo，listing lst_456a2f87b7ce917857ac",
+      "merchant_id": "mkt_veyquo_A0UPvj7XuYk",
+      "merchant_name": "Veyquo",
+      "listing_id": "lst_456a2f87b7ce917857ac"
+    },
+    "quote": {
+      "ok": true,
+      "detail": "报价 15900 CNY × 1",
+      "offer_id": "off_01a18618-94f5-7000-af15-d523cec16290",
+      "unit_price_minor": "15900",
+      "currency": "CNY",
+      "trade_entry": "https://item.jd.com/100012043978.html"
+    },
+    "agreement": {
+      "ok": true,
+      "detail": "非约束性协议 agreement-01a18618-957b-77ca-b29b-fbe269acbf91（不下单/不锁库/不付款）",
+      "agreement_id": "agreement-01a18618-957b-77ca-b29b-fbe269acbf91",
+      "binding_effect": "nonbinding"
+    },
+    "handoff": {
+      "ok": true,
+      "detail": "成交入口 https://item.jd.com/100012043978.html",
+      "destination_type": "external_checkout_url",
+      "url": "https://item.jd.com/100012043978.html"
+    }
+  }
+}
