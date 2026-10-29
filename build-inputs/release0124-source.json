@@ -158,7 +158,7 @@
     },
     {
       "path": ".github/workflows/portfolio-release.yml",
-      "sha256": "sha256:ace81a625b573181856f5ae13b59324f8638bb80c5b19ea8128c264028668df5"
+      "sha256": "sha256:f0c8847b00a9de3a680c5b8804907dcc1e9c874e5a1387060e4dc2b206dcc24e"
     },
     {
       "path": ".github/workflows/release-rehearsal.yml",
@@ -2037,12 +2037,16 @@
       "sha256": "sha256:7a0da30fb8a6d91b653d9507beaa4615f263d4b26d7bc9c3e61f64853f3495c6"
     },
     {
+      "path": "src/a2a/access/gateway-cookie-jar.ts",
+      "sha256": "sha256:6cb6dacc2a7cd3fd765983ef34fa770860bdb92cab779781839e33597b98c188"
+    },
+    {
       "path": "src/a2a/access/workbuddy-address.ts",
       "sha256": "sha256:8b066b65f322e0ca1a2afe1ceee4f5714cb489c70dec75c84d1dec7a19c15098"
     },
     {
       "path": "src/a2a/client/client.ts",
-      "sha256": "sha256:51df297fb8b4efc10dff78e69f55711144488598b859a7329eafc94d237f730b"
+      "sha256": "sha256:dce461e966546d065fb0b21cca9f098640df4e430890a42ac5486f120e062a7c"
     },
     {
       "path": "src/a2a/client/error.ts",
@@ -2062,7 +2066,7 @@
     },
     {
       "path": "src/a2a/client/types.ts",
-      "sha256": "sha256:281c6d8e756b6d66943fd6db4247bf3c065ebc57dcf1bcfd1ec03441d2306b1d"
+      "sha256": "sha256:be2b244735fb96b181cc109ad759576ce9c201eb2c330e3ae8195ab5d9c6d248"
     },
     {
       "path": "src/a2a/client/url-policy.ts",
@@ -2418,7 +2422,7 @@
     },
     {
       "path": "src/buyer-core/a2a-knp.ts",
-      "sha256": "sha256:a45c32d939f5cc7f103b753faf7425ecfc9d63c91b5dc2a2d6786078c64d32f0"
+      "sha256": "sha256:c60c79b7f58db2ef16bb77374cc2e3f17ba408ae8451c8256a002afe2f50a10d"
     },
     {
       "path": "src/buyer-core/a2a-negotiator.ts",
@@ -2426,7 +2430,7 @@
     },
     {
       "path": "src/buyer-core/a2a-quote-fetcher.ts",
-      "sha256": "sha256:733040d587c4f10b48291c12fdc4ddfec9f5bcb18ed968168cde506d07078077"
+      "sha256": "sha256:2eee1ee958c095a1906de06cec41e33fac0148a8f92b995ef9427bce34b3e37b"
     },
     {
       "path": "src/buyer-core/build-service.ts",
@@ -2990,7 +2994,7 @@
     },
     {
       "path": "src/http/merchant-management/page.ts",
-      "sha256": "sha256:988521253c37da1e5c32872aea57b1c51abbd90c960f9e8272554162d41052db"
+      "sha256": "sha256:c26a6dc968480fb7c268c0624f46b5705697e2c32341a2ab9a7594f0f980ed8a"
     },
     {
       "path": "src/http/merchant-management/problem-client.ts",
@@ -4585,6 +4589,10 @@
     {
       "path": "tests/foreground.test.ts",
       "sha256": "sha256:39df058d3200beb6ed41a5f0fee9b3e4d96f7c817f6f000598731d174ccbc29e"
+    },
+    {
+      "path": "tests/gateway-cookie-jar.test.ts",
+      "sha256": "sha256:b69c74cb175bea18cde4a7441329ba2e3d625108753fe06ccc98044617950321"
     },
     {
       "path": "tests/handoff-candidate.test.ts",
