@@ -26,13 +26,14 @@ import { McpError } from "./errors.js";
 
 import {
   buildA2AClient,
+  buildClarificationEnvelope,
   buildCounterEnvelope,
   envelopeToMessage,
 } from "./a2a-knp.js";
 import type { NegotiationStep, Negotiator } from "./service.js";
 import type { A2AOutboundSigner } from "../a2a/client/types.js";
 
-import { BuyerProtocolRecovery, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext } from "./protocol-recovery.js";
+import { BuyerProtocolRecovery, MerchantDeclined, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext } from "./protocol-recovery.js";
 import { BuyerReplyRejected } from "./receive-gate.js";
 
 export interface A2ANegotiatorOptions {
@@ -169,33 +170,81 @@ export class A2ANegotiator implements Negotiator {
     candidates: Array<Record<string, unknown>>,
     context?: ProtocolTaskContext,
   ): Promise<NegotiationStep> {
-    if (current.action !== "counter_offer") throw new McpError("invalid_params", current.action === "clarification" ? "clarification is not supported by this negotiator" : "invalid negotiation action");
-    const hasClaim=this.recovery?.hasCounterClaim(taskId,current.round) ?? false;
+    if (current.action !== "counter_offer" && current.action !== "clarification") {
+      throw new McpError("invalid_params", "invalid negotiation action");
+    }
+    const isClarification = current.action === "clarification";
+    const hasClaim = isClarification ? false : (this.recovery?.hasCounterClaim(taskId, current.round) ?? false);
     const candidate = candidates.find(
       (c) => (c as CandidateLike).provenance?.a2a_endpoint !== undefined,
     ) as CandidateLike | undefined;
     if (candidate === undefined) {
       if(hasClaim)throw new ProtocolOperationUnknown();
-      return { ...current, summary: `${current.summary}（无 A2A 会话上下文，无法真实还价）` };
+      return { ...current, summary: `${current.summary}（无 A2A 会话上下文，无法${isClarification ? "澄清" : "真实还价"}）` };
     }
     const { negotiation_id, offer_id, merchant_reply_id, sku, a2a_endpoint } =
       candidate.provenance ?? {};
     if (
       a2a_endpoint === undefined ||
       negotiation_id === undefined ||
-      offer_id === undefined ||
-      merchant_reply_id === undefined
+      merchant_reply_id === undefined ||
+      (!isClarification && offer_id === undefined)
     ) {
       if(hasClaim)throw new ProtocolOperationUnknown();
-      return { ...current, summary: `${current.summary}（A2A 会话上下文不完整，无法真实还价）` };
+      return { ...current, summary: `${current.summary}（A2A 会话上下文不完整，无法${isClarification ? "澄清" : "真实还价"}）` };
     }
     const endpoint = String(a2a_endpoint);
     const negotiationId = String(negotiation_id);
-    const offerId = String(offer_id);
+    const offerId = offer_id === undefined ? "" : String(offer_id);
     const inReplyTo = String(merchant_reply_id);
     const itemSku = typeof sku === "string" && sku !== "" ? sku : "item-1";
 
     try {
+      if (isClarification) {
+        // 澄清不携带商业提案，不经过目标价/限额门；商家按问题作答后
+        // 恢复原磋商相位，买家可继续 counter_offer。
+        const questions =
+          Array.isArray(current.questions) && current.questions.length > 0
+            ? current.questions
+            : [{ field: "general", reason: current.summary }];
+        const client = buildA2AClient(endpoint, {
+          bearerToken: this.bearerToken,
+          ...(this.signer !== undefined ? { signer: this.signer } : {}),
+          allowPrivateRanges: this.allowPrivateRanges,
+          skipDnsCheck: this.skipDnsCheck,
+          timeoutMs: this.timeoutMs,
+          ...(this.fetchImpl !== undefined ? { fetchImpl: this.fetchImpl } : {}),
+        });
+        if (!this.recovery || !context || context.taskId !== taskId) throw new ProtocolOperationUnknown();
+        const result = await this.recovery.exchange({
+          context,
+          stage: "clarification",
+          round: current.round,
+          merchantId: String(candidate.merchant_id ?? ""),
+          endpoint,
+          negotiationId,
+          binding: {
+            intent,
+            candidate,
+            action: "clarification",
+            questions,
+            summary: current.summary,
+          },
+          build: (negId) =>
+            buildClarificationEnvelope({
+              negotiationId: negId,
+              inReplyTo,
+              questions,
+              summary: current.summary,
+              now: this.now,
+            }),
+          send: (wire) => client.sendMessage(envelopeToMessage(wire)),
+          get: (id) => client.getTask(id),
+          timeoutMs: this.timeoutMs,
+          pollIntervalMs: 1000,
+        });
+        return { ...current, reply: JSON.stringify(result.reply) };
+      }
       const verifiedQuote = this.recovery && context ? this.recovery.validatedQuote({
         context, negotiationId, merchantId: String(candidate.merchant_id ?? ""),
         endpoint, replyId: inReplyTo, offerId,
@@ -285,11 +334,20 @@ export class A2ANegotiator implements Negotiator {
       });
       return {...current,reply:JSON.stringify(result.reply)};
     } catch (error) {
+      // B2：approval_required 不是终态拒绝，而是"商家需人工审批"。把它
+      // 作为一次可解释的磋商结果记录（round 递增），买家稍后重试时用新的
+      // 恢复槽位真实重发，命中商家批准的一次性授权价。其余拒绝仍按终态抛错。
+      if (error instanceof MerchantDeclined && error.reasonCode === "approval_required") {
+        return {
+          ...current,
+          summary: `${current.summary}（商家需人工审批：还价已登记，等商家批准后再重试；不要连续提交，每次重试都会消耗一轮委托）`,
+        };
+      }
       if(error instanceof ProtocolOperationUnknown || error instanceof ProtocolOperationConflict || error instanceof BuyerReplyRejected)throw error;
       if(hasClaim)throw new ProtocolOperationUnknown();
       return {
         ...current,
-        summary: `${current.summary}（还价失败：${error instanceof Error ? error.message : String(error)}）`,
+        summary: `${current.summary}（${isClarification ? "澄清" : "还价"}失败：${error instanceof Error ? error.message : String(error)}）`,
       };
     }
   }

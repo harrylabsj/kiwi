@@ -44,6 +44,7 @@ import {
 } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import path from "node:path";
+import { NegotiationApprovalStore } from "./a2a/server/negotiation-approvals.js";
 import { fileURLToPath } from "node:url";
 import { Writable } from "node:stream";
 
@@ -1474,8 +1475,60 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   if (sub === "listings") return notImplementedProduct("kiwi merchant listings", "D2");
   if (sub === "status") return notImplementedProduct("kiwi merchant status", "D1");
   if (sub === "doctor") return await cmdMerchantDoctor(args);
+  if (sub === "approvals") return await cmdMerchantApprovals(args);
   process.stderr.write(`unknown merchant command: ${sub}\n`);
   return EXIT.CONFIG;
+}
+
+/**
+ * `kiwi merchant approvals`：查看/批准低于自动折扣边界的还价（B2）。
+ *
+ *   kiwi merchant approvals list
+ *   kiwi merchant approvals approve <approval_id> <price_cny>
+ *
+ * 批准价写进一次性授权，买家下一轮还价命中后即消费；文件与 A2A 节点同目录
+ * （`<dataDir>/a2a/negotiation-approvals.json`）。
+ */
+async function cmdMerchantApprovals(args: ParsedArgs): Promise<number> {
+  const profile = requireProfileOrDefault(args);
+  if (profile.role !== "merchant") {
+    process.stderr.write("kiwi merchant approvals 需要 merchant profile（role: merchant）\n");
+    return EXIT.CONFIG;
+  }
+  const action = args.command[2] ?? "list";
+  const dataDir = resolveServeDataDir(args.dataDir, profile.agent_id, profile.merchant_runtime?.data_dir);
+  const store = NegotiationApprovalStore.forDataDir(dataDir, () => new Date().toISOString());
+  try {
+    if (action === "list") {
+      printJson({ ok: true, approvals: store.list() });
+      return EXIT.OK;
+    }
+    if (action === "approve") {
+      const approvalId = args.command[3];
+      const priceText = args.command[4];
+      if (approvalId === undefined || priceText === undefined) {
+        process.stderr.write("用法：kiwi merchant approvals approve <approval_id> <price_cny>\n");
+        return EXIT.CONFIG;
+      }
+      const price = Number(priceText);
+      if (!Number.isFinite(price) || price < 0) {
+        process.stderr.write("price_cny 必须是非负数字\n");
+        return EXIT.CONFIG;
+      }
+      const record = store.approve({
+        approval_id: approvalId,
+        approved_minor: Math.round(price * 100),
+        approved_by: profile.agent_id,
+      });
+      printJson({ ok: true, approval: record });
+      return EXIT.OK;
+    }
+    process.stderr.write(`unknown approvals command: ${action}\n`);
+    return EXIT.CONFIG;
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.CONFIG;
+  }
 }
 
 async function cmdMerchantDoctor(args: ParsedArgs): Promise<number> {

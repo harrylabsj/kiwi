@@ -263,6 +263,8 @@ export async function startTestA2aStack(
     /** DeepSeek Harness 运行时插件测试：注入推理后端（价格建议）+ merchant policy。 */
     decisionBackend?: MerchantDecisionBackend;
     merchantPolicy?: MerchantPolicy;
+    /** B2：注入审批队列，端到端验证「越界 → 人工批准 → 买家重试命中」。 */
+    negotiationApprovals?: import("../src/a2a/server/negotiation-approvals.js").NegotiationApprovalStore;
     /**
      * A659：merchant 栈时钟注入。缺省保持固定 NOW（既有套件零影响）；
      * 需要与 buyer 侧默认真实时钟端到端一致的套件（a2a-buyer-core/a373）
@@ -299,6 +301,9 @@ export async function startTestA2aStack(
     ...(options.productSource !== undefined ? { productSource: options.productSource } : {}),
     ...(options.decisionBackend !== undefined ? { decisionBackend: options.decisionBackend } : {}),
     ...(options.merchantPolicy !== undefined ? { merchantPolicy: options.merchantPolicy } : {}),
+    ...(options.negotiationApprovals !== undefined
+      ? { negotiationApprovals: options.negotiationApprovals }
+      : {}),
   });
   const handler = options.capture !== undefined
     ? {

@@ -234,6 +234,8 @@ export interface NegotiationStep {
   round: number;
   action: "counter_offer" | "clarification";
   summary: string;
+  /** clarification 的结构化问题（field/reason）；商家按字段应答。 */
+  questions?: { field: string; reason?: string }[];
   /** 商家对本次还价的回复（真实文本），供 kiwi_get_task 展示。 */
   reply?: string;
 }
@@ -313,6 +315,42 @@ function utcNow(): string {
 
 function policyActionMode(policy: DelegationPolicyLike, action: string): "auto" | "ask" | "never" {
   return policy.actions[action]?.mode ?? "never";
+}
+
+/**
+ * 从自然语言 summary 推断澄清字段：MCP 契约已冻结（只传 summary），但商家
+ * 需要知道"问的是交期还是库存"才能按字段作答。只做保守关键词映射；识别
+ * 不到的落 general，由商家回通用说明。
+ */
+function inferClarificationFields(summary: string): { field: string; reason: string }[] {
+  const fields: string[] = [];
+  if (/交期|发货|多久|送达|到货|delivery|eta|ship|lead.?time/i.test(summary)) fields.push("delivery");
+  if (/库存|现货|有货|stock|inventory|availability/i.test(summary)) fields.push("stock");
+  if (/价格|优惠|便宜|折扣|降价|price|discount/i.test(summary)) fields.push("price");
+  if (/型号|规格|替代|其他款|alternatives?|model|spec|sku/i.test(summary)) fields.push("alternatives");
+  const unique = Array.from(new Set(fields));
+  return unique.length > 0
+    ? unique.map((field) => ({ field, reason: summary }))
+    : [{ field: "general", reason: summary }];
+}
+
+/**
+ * clarification 问题归一：调用方可传结构化 questions；未传时从 summary 推断
+ * 字段（协议要求至少一个问题）。field 去空白、空值拒绝，不全信调用方输入。
+ */
+function normalizeClarificationQuestions(
+  input: { field: string; reason?: string }[] | undefined,
+  summary: string,
+): { field: string; reason?: string }[] {
+  const raw = input !== undefined && input.length > 0 ? input : inferClarificationFields(summary);
+  return raw.map((question, index) => {
+    const field = typeof question.field === "string" ? question.field.trim() : "";
+    if (field === "") {
+      throw new McpError("invalid_params", `clarification questions[${index}].field must be non-empty`);
+    }
+    const reason = typeof question.reason === "string" ? question.reason.trim() : "";
+    return reason === "" ? { field } : { field, reason };
+  });
 }
 
 /** review P1-2：宽容 JSON 解析（非 JSON 返回 undefined，不抛）。 */
@@ -738,31 +776,51 @@ export class KiwiBuyerService {
     task_id: string;
     action: "counter_offer" | "clarification";
     summary: string;
+    /** clarification 的结构化问题；缺省时由 summary 生成一条 general 问题。 */
+    questions?: { field: string; reason?: string }[];
   }): Promise<{ task: Record<string, unknown>; step: NegotiationStep }> {
     if (input.action !== "counter_offer" && input.action !== "clarification") throw new McpError("invalid_params", "invalid negotiation action");
-    if (input.action === "clarification") throw new McpError("invalid_params", "clarification is not supported by the current negotiator");
     const task = this.store.getTask(input.task_id);
     if (task === undefined) throw new McpError("task_not_found", `task ${input.task_id} not found`);
     if (task.expires_at !== undefined && Date.parse(task.expires_at) < Date.parse(this.now())) {
       throw new McpError("task_expired", `task ${input.task_id} expired`);
     }
-    const mode = policyActionMode(this.policy, "counter_offer");
-    if (mode === "never") {
-      throw new McpError("delegation_denied", "counter_offer 未获委托（never）");
-    }
     const rounds = this.currentRounds(task);
     const maxRounds = this.policy.limits?.max_rounds ?? 3;
-    if (rounds >= maxRounds) {
-      throw new McpError(
-        "delegation_denied",
-        `counter_offer 超出委托轮次上限（max_rounds=${maxRounds}）`,
-      );
+    if (input.action === "counter_offer") {
+      const mode = policyActionMode(this.policy, "counter_offer");
+      if (mode === "never") {
+        throw new McpError("delegation_denied", "counter_offer 未获委托（never）");
+      }
+      if (rounds >= maxRounds) {
+        throw new McpError(
+          "delegation_denied",
+          `counter_offer 超出委托轮次上限（max_rounds=${maxRounds}）`,
+        );
+      }
+    } else {
+      // clarification 不产生商业承诺，默认放行；只有显式 never 才拒绝。
+      // 仍需上限，防止无界追问占满会话。
+      if (this.policy.actions["clarification"]?.mode === "never") {
+        throw new McpError("delegation_denied", "clarification 未获委托（never）");
+      }
+      const clarifications = this.currentClarifications(task);
+      if (clarifications >= maxRounds) {
+        throw new McpError(
+          "delegation_denied",
+          `clarification 超出上限（max_rounds=${maxRounds}）`,
+        );
+      }
     }
 
     let step: NegotiationStep = {
-      round: rounds + 1,
+      // clarification 用总步数保证每次独立（恢复槽位唯一）；counter 用磋商轮次。
+      round: input.action === "counter_offer" ? rounds + 1 : this.currentSteps(task) + 1,
       action: input.action,
       summary: input.summary,
+      ...(input.action === "clarification"
+        ? { questions: normalizeClarificationQuestions(input.questions, input.summary) }
+        : {}),
     };
     if (this.negotiator !== undefined) {
       // review P1-2（A316 补充校准）：counter 外发前的限额闸口——succeeded
@@ -1934,9 +1992,24 @@ export class KiwiBuyerService {
     return "";
   }
 
-  private currentRounds(task: StoredTask): number {
+  private currentSteps(task: StoredTask): number {
     const decoded = this.decodeTask(task) as { steps?: NegotiationStep[] };
     return Array.isArray(decoded.steps) ? decoded.steps.length : 0;
+  }
+
+  /** 磋商轮次只数 counter_offer；clarification 不消耗还价轮次。 */
+  private currentRounds(task: StoredTask): number {
+    const decoded = this.decodeTask(task) as { steps?: NegotiationStep[] };
+    return Array.isArray(decoded.steps)
+      ? decoded.steps.filter((step) => step.action === "counter_offer").length
+      : 0;
+  }
+
+  private currentClarifications(task: StoredTask): number {
+    const decoded = this.decodeTask(task) as { steps?: NegotiationStep[] };
+    return Array.isArray(decoded.steps)
+      ? decoded.steps.filter((step) => step.action === "clarification").length
+      : 0;
   }
 
   private decodeTask(task: StoredTask): Record<string, unknown> {

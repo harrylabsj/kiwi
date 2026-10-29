@@ -71,6 +71,12 @@ export function assertBuyerReplySemantics(
   const nowMs = Date.parse(now());
   if (!Number.isFinite(nowMs)) reject("clock_invalid");
   const outbound = wire.payload;
+  // clarification 不携带商业提案，商家只需结构化澄清应答（可含文字答案）。
+  // 不套用行项目/金额校验；回复类型与关联由 envelope 层保证。
+  if (outbound.type === "clarification") {
+    if (reply.payload.type !== "clarification_response") reject("unsupported_reply");
+    return;
+  }
   const requested = outbound.type === "rfq"
     ? (outbound.items.length === 1 ? outbound.items[0] : undefined)
     : outbound.type === "counter_offer" ? supportedItem(outbound.proposed_terms) : undefined;
