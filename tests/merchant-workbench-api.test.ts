@@ -13,6 +13,8 @@ import { WorkbenchConfirmationStore } from "../src/http/merchant-management/weba
 import { WorkbenchReconciliationStore } from "../src/http/merchant-management/reconciliation-worker.js";
 import { WorkbenchEventProjectionStore } from "../src/http/merchant-management/event-projection.js";
 import { createVerifiedActorContext } from "../src/merchant/application/actor.js";
+import { openMerchantOperationsFacade } from "../src/merchant-core/ops/facade.js";
+import { MerchantOperationsSurface } from "../src/merchant-core/ops/surface.js";
 import { MerchantFeedStore } from "../src/merchant/feed-store.js";
 import { BROADCAST_TOOLS } from "../src/merchant/feed-executors.js";
 import { GRANT_TOOLS } from "../src/merchant/grant-executors.js";
@@ -71,6 +73,14 @@ const promotionWorkflows = new PromotionBroadcastWorkflowStore({
   now: () => NOW.toISOString(),
 });
 const serviceState = new MutableServiceState("OPERATING");
+const operationsDb = new DatabaseSync(":memory:");
+const merchantOperations = new MerchantOperationsSurface({
+  facade: openMerchantOperationsFacade({
+    db: operationsDb,
+    merchantId: MERCHANT,
+    now: () => NOW.toISOString(),
+  }),
+});
 
 let server: Server;
 let base: string;
@@ -243,6 +253,7 @@ beforeAll(async () => {
       drafts: new MerchantImportDraftStore({ db, now: () => NOW.toISOString() }),
       operations,
       serviceState,
+      merchantOperations,
       readiness: async () => ({ ready: true, checks: {} }),
       workbenchConfirmations: confirmations,
       workbenchReconciliation: reconciliations,
@@ -1252,5 +1263,81 @@ describe("Workbench v1 trusted confirmation API", () => {
         )
       ).status,
     ).toBe(403);
+  });
+});
+
+describe("Merchant operations API（v0.2 经营计划/跟进）", () => {
+  const planBody = {
+    source: "shopping-cli",
+    source_account_id: "account-1",
+    sku: "SKU-OPS-1",
+    effective_from: "2026-11-01T00:00:00.000Z",
+    effective_to: "2026-12-01T00:00:00.000Z",
+    conditions: { quantity_range: { min: 1, max: 100 } },
+    actions: {},
+    authorization: { owner: "owner-ops", scopes: ["publish_quote"] },
+    idempotency_key: "plan-http-1",
+  };
+
+  it("owner 可创建/读取经营计划；幂等键重放不重复创建", async () => {
+    const created = await post("/merchant/api/v1/operating-plans", planBody);
+    expect(created.status).toBe(201);
+    const plan = (await created.json()) as { plan_id: string; merchant_id: string; status: string };
+    expect(plan.merchant_id).toBe(MERCHANT);
+    expect(plan.status).toBe("ACTIVE");
+
+    const replay = await post("/merchant/api/v1/operating-plans", planBody);
+    expect(((await replay.json()) as { plan_id: string }).plan_id).toBe(plan.plan_id);
+
+    const list = await fetch(`${base}/merchant/api/v1/operating-plans`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(list.status).toBe(200);
+    const body = (await list.json()) as { plans: Array<{ plan_id: string }> };
+    expect(body.plans.map((p) => p.plan_id)).toContain(plan.plan_id);
+
+    const detail = await fetch(`${base}/merchant/api/v1/operating-plans/${plan.plan_id}`, {
+      headers: { cookie: auth.cookie },
+    });
+    expect(detail.status).toBe(200);
+  });
+
+  it("viewer 只读；operator 不能管理计划，但可以排程跟进", async () => {
+    const viewer = await createAuth("viewer:ops", "viewer");
+    const read = await fetch(`${base}/merchant/api/v1/operating-plans`, {
+      headers: { cookie: viewer.cookie },
+    });
+    expect(read.status).toBe(200);
+    const write = await postWithAuth(
+      "/merchant/api/v1/operating-plans",
+      { ...planBody, sku: "SKU-OPS-VIEWER", idempotency_key: "plan-http-viewer" },
+      viewer,
+    );
+    expect(write.status).toBe(403);
+
+    const operator = await createAuth("operator:ops", "operator");
+    const planWrite = await postWithAuth(
+      "/merchant/api/v1/operating-plans",
+      { ...planBody, sku: "SKU-OPS-OPERATOR", idempotency_key: "plan-http-operator" },
+      operator,
+    );
+    expect(planWrite.status).toBe(403);
+
+    const followUp = await postWithAuth(
+      "/merchant/api/v1/followups",
+      {
+        trigger_event: "quote_not_answered",
+        action_type: "merchant_todo",
+        max_attempts: 3,
+        payload: {},
+      },
+      operator,
+    );
+    expect(followUp.status).toBe(201);
+    const followUps = await fetch(`${base}/merchant/api/v1/followups`, {
+      headers: { cookie: operator.cookie },
+    });
+    expect(followUps.status).toBe(200);
+    expect(((await followUps.json()) as { followups: unknown[] }).followups.length).toBeGreaterThan(0);
   });
 });

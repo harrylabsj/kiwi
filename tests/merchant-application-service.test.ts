@@ -153,6 +153,23 @@ describe("§7.2：角色与权限", () => {
   it("暂停是安全动作：operator 就能做（越晚停损失越大）", () => {
     expect(hasPermission(actor("operator"), "service:pause")).toBe(true);
   });
+
+  it("私有成本/贡献/计划管理只给 owner；机会/跟进/订单操作给 operator", () => {
+    for (const permission of ["costs:read_sensitive", "contribution:read", "plans:manage"] as const) {
+      expect(hasPermission(actor("owner"), permission)).toBe(true);
+      expect(hasPermission(actor("operator"), permission)).toBe(false);
+      expect(hasPermission(actor("viewer"), permission)).toBe(false);
+    }
+    for (const permission of [
+      "opportunities:manage",
+      "followups:manage",
+      "orders:report",
+      "orders:verify",
+    ] as const) {
+      expect(hasPermission(actor("operator"), permission)).toBe(true);
+      expect(hasPermission(actor("viewer"), permission)).toBe(false);
+    }
+  });
 });
 
 describe("UC12：viewer 只能读，写操作 403 且业务无变化", () => {

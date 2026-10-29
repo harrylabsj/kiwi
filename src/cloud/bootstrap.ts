@@ -81,6 +81,8 @@ import { PromotionBroadcastWorkflowStore } from "../merchant/promotion-broadcast
 import { recoverPromotionBroadcastWorkflows } from "../merchant/promotion-broadcast-recovery.js";
 import { createServiceControlExecutors } from "../merchant/service-control-executors.js";
 import { calculateWorkbenchQuote } from "../merchant/quote-calculator.js";
+import { openMerchantOperationsFacade } from "../merchant-core/ops/facade.js";
+import { MerchantOperationsSurface } from "../merchant-core/ops/surface.js";
 import { WORKBENCH_CURRENCY_TABLE_VERSION } from "../merchant/application/money.js";
 import { OnboardingStore } from "./onboarding/store.js";
 import { CatalogClient } from "./catalog-client.js";
@@ -651,6 +653,15 @@ export async function bootstrapCloudRuntime(
   if (adminOptions !== undefined) {
     managementDb = new DatabaseSync(path.join(config.dataDir, "state.sqlite"));
     serviceState.attachPersistence(managementDb, profile.owner_id);
+    // 商家持续经营（v0.2）：经营计划/机会/方案/跟进共用 state.sqlite；
+    // 商家身份由认证主体注入，路由层不再接受请求正文自报 merchant_id。
+    const merchantOperations = new MerchantOperationsSurface({
+      facade: openMerchantOperationsFacade({
+        db: managementDb,
+        merchantId: profile.owner_id,
+        now: () => new Date().toISOString(),
+      }),
+    });
 
     // 开通向导通道（M4 §5.4 + P3 §4.6）：store 与 /admin 同库；配了 catalog_url 时
     // 接上 Catalog 串联（绑定/发布的权威证据适配器 + DEPLOYED_UNBOUND 后台对账）。
@@ -969,6 +980,7 @@ export async function bootstrapCloudRuntime(
           ? undefined
           : { version: current.version, digest: current.digest };
       },
+      merchantOperations,
       ...(productsFilePath !== undefined && config.catalogUrl !== undefined && !config.sample
         ? { fileListingPublication: createFileListingPublicationService({
             dataDir: config.dataDir, productsFile: productsFilePath, profile,

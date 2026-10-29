@@ -110,6 +110,7 @@ import {
   type OperationsReportBuilder,
 } from "../../merchant/operations-report.js";
 import type { ExactMerchantProduct } from "../../agent/merchant/types.js";
+import type { MerchantOperationsSurface } from "../../merchant-core/ops/surface.js";
 import {
   parseExactMoney,
   WorkbenchMoneyError,
@@ -297,6 +298,8 @@ export interface MerchantManagementApiOptions {
     get: (sku: string) => Promise<ExactMerchantProduct>;
   };
   workbenchEvents?: WorkbenchEventProjectionStore;
+  /** 商家持续经营（v0.2）：经营计划/机会/方案/跟进；未配置时对应路由 404。 */
+  merchantOperations?: MerchantOperationsSurface;
   quotePreview?: (sku: string, quantity: number) => Promise<WorkbenchQuoteResult>;
   followerSummary?: () => number;
   engagementSummary?: () => { received: number; presented: number; clicked: number };
@@ -992,6 +995,48 @@ export function createMerchantManagementApiHandler(
       );
       return;
     }
+    if (options.merchantOperations !== undefined) {
+      const ops = options.merchantOperations;
+      if (rest === "/operating-plans") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "plans:read");
+        writeJson(res, 200, { plans: ops.listPlans() }, { "x-request-id": requestId });
+        return;
+      }
+      const planMatch = /^\/operating-plans\/([^/]+)$/.exec(rest);
+      if (planMatch !== null) {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "plans:read");
+        writeJson(res, 200, ops.getPlan(pathSegment(planMatch[1] ?? "")), { "x-request-id": requestId });
+        return;
+      }
+      if (rest === "/opportunities") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "opportunities:read");
+        writeJson(res, 200, { opportunities: ops.listOpportunities() }, { "x-request-id": requestId });
+        return;
+      }
+      const opportunityMatch = /^\/opportunities\/([^/]+)$/.exec(rest);
+      if (opportunityMatch !== null) {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "opportunities:read");
+        writeJson(res, 200, ops.getOpportunity(pathSegment(opportunityMatch[1] ?? "")), { "x-request-id": requestId });
+        return;
+      }
+      const proposalsMatch = /^\/opportunities\/([^/]+)\/proposals$/.exec(rest);
+      if (proposalsMatch !== null) {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "opportunities:read");
+        writeJson(res, 200, { proposals: ops.listProposals(pathSegment(proposalsMatch[1] ?? "")) }, { "x-request-id": requestId });
+        return;
+      }
+      if (rest === "/followups") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "followups:read");
+        writeJson(res, 200, { followups: ops.listFollowUps() }, { "x-request-id": requestId });
+        return;
+      }
+    }
     writeWorkbenchProblem(
       res,
       "RESOURCE_NOT_FOUND",
@@ -1008,6 +1053,112 @@ export function createMerchantManagementApiHandler(
     requestId: string,
     url: URL,
   ): Promise<void> {
+    if (options.merchantOperations !== undefined) {
+      const ops = options.merchantOperations;
+      const readOpsBody = async (): Promise<{ body: unknown; idempotencyKey?: string }> => {
+        const body = await readJsonBody(req);
+        if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+          const key = (body as Record<string, unknown>).idempotency_key;
+          if (typeof key === "string" && key !== "") return { body, idempotencyKey: key };
+        }
+        return { body };
+      };
+      if (rest === "/operating-plans") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "plans:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(res, 201, ops.createPlan(body, auth.ctx.actorId, idempotencyKey), { "x-request-id": requestId });
+        return;
+      }
+      const planActionMatch = /^\/operating-plans\/([^/]+)\/(pause|resume)$/.exec(rest);
+      if (planActionMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "plans:manage");
+        const planId = pathSegment(planActionMatch[1] ?? "");
+        const { body } = await readOpsBody();
+        writeJson(res, 200,
+          planActionMatch[2] === "pause"
+            ? ops.pausePlan(planId, body, auth.ctx.actorId)
+            : ops.resumePlan(planId, body, auth.ctx.actorId),
+          { "x-request-id": requestId });
+        return;
+      }
+      if (rest === "/opportunities") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "opportunities:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(res, 201, ops.createOpportunity(body, auth.ctx.actorId, idempotencyKey), { "x-request-id": requestId });
+        return;
+      }
+      const requirementMatch = /^\/opportunities\/([^/]+)\/requirements$/.exec(rest);
+      if (requirementMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "opportunities:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(res, 200, ops.recordRequirement(pathSegment(requirementMatch[1] ?? ""), body, auth.ctx.actorId, idempotencyKey), { "x-request-id": requestId });
+        return;
+      }
+      const advanceOpportunityMatch = /^\/opportunities\/([^/]+)\/advance$/.exec(rest);
+      if (advanceOpportunityMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "opportunities:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(res, 200, ops.advanceOpportunity(pathSegment(advanceOpportunityMatch[1] ?? ""), body, auth.ctx.actorId, idempotencyKey), { "x-request-id": requestId });
+        return;
+      }
+      if (rest === "/proposal-sets") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "opportunities:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(res, 201, ops.prepareProposal(body, idempotencyKey), { "x-request-id": requestId });
+        return;
+      }
+      if (rest === "/proposal-sets/select") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "opportunities:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(res, 201, ops.selectProposal(body, auth.ctx.actorId, idempotencyKey), { "x-request-id": requestId });
+        return;
+      }
+      if (rest === "/proposal-sets/approve") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "approvals:decide");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(res, 201, ops.approveProposal(body, idempotencyKey), { "x-request-id": requestId });
+        return;
+      }
+      if (rest === "/followups") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "followups:manage");
+        const { body } = await readOpsBody();
+        writeJson(res, 201, ops.scheduleFollowUp(body), { "x-request-id": requestId });
+        return;
+      }
+      const followUpActionMatch = /^\/followups\/([^/]+)\/(claim|finish|stop)$/.exec(rest);
+      if (followUpActionMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "followups:manage");
+        const taskId = pathSegment(followUpActionMatch[1] ?? "");
+        const { body } = await readOpsBody();
+        const action = followUpActionMatch[2];
+        writeJson(res, 200,
+          action === "claim" ? ops.claimFollowUp(taskId, body)
+            : action === "finish" ? ops.finishFollowUp(taskId, body)
+              : ops.stopFollowUp(taskId, body),
+          { "x-request-id": requestId });
+        return;
+      }
+    }
     const publicationCommitMatch = /^\/products\/publication-drafts\/(flp_[a-z0-9]+_[0-9a-f]{12})\/commit$/.exec(rest);
     if (rest === "/products/publication-drafts" || publicationCommitMatch !== null) {
       const auth = requireActor(req);
@@ -2272,6 +2423,50 @@ export function createMerchantManagementApiHandler(
       writeJson(res, 200, readService.getOperation(auth.ctx, pathSegment(operationMatch[1] ?? "")));
       return;
     }
+    if (options.merchantOperations !== undefined) {
+      const ops = options.merchantOperations;
+      if (rest === "/operating-plans") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "plans:read");
+        writeJson(res, 200, { plans: ops.listPlans() });
+        return;
+      }
+      const planMatch = /^\/operating-plans\/([^/]+)$/.exec(rest);
+      if (planMatch !== null) {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "plans:read");
+        writeJson(res, 200, ops.getPlan(pathSegment(planMatch[1] ?? "")));
+        return;
+      }
+      if (rest === "/opportunities") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "opportunities:read");
+        writeJson(res, 200, { opportunities: ops.listOpportunities() });
+        return;
+      }
+      const opportunityMatch = /^\/opportunities\/([^/]+)$/.exec(rest);
+      if (opportunityMatch !== null) {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "opportunities:read");
+        writeJson(res, 200, ops.getOpportunity(pathSegment(opportunityMatch[1] ?? "")));
+        return;
+      }
+      const proposalsMatch = /^\/opportunities\/([^/]+)\/proposals$/.exec(rest);
+      if (proposalsMatch !== null) {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "opportunities:read");
+        writeJson(res, 200, {
+          proposals: ops.listProposals(pathSegment(proposalsMatch[1] ?? "")),
+        });
+        return;
+      }
+      if (rest === "/followups") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "followups:read");
+        writeJson(res, 200, { followups: ops.listFollowUps() });
+        return;
+      }
+    }
     if (isKnownPath(rest)) {
       writeJson(res, 405, errorBody("invalid_input", "method not allowed"), { allow: "POST" });
       return;
@@ -2282,6 +2477,138 @@ export function createMerchantManagementApiHandler(
   // ── 写路由（BD §10.1；每条都过 CSRF/Origin + 幂等 + 服务层复检）──────────
 
   async function routePost(req: IncomingMessage, res: ServerResponse, rest: string): Promise<void> {
+    if (options.merchantOperations !== undefined) {
+      const ops = options.merchantOperations;
+
+      const readOpsBody = async (): Promise<{ body: unknown; idempotencyKey?: string }> => {
+        const body = await readJsonBody(req);
+        if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+          const key = (body as Record<string, unknown>).idempotency_key;
+          if (typeof key === "string" && key !== "") return { body, idempotencyKey: key };
+        }
+        return { body };
+      };
+
+      if (rest === "/operating-plans") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "plans:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(res, 201, ops.createPlan(body, auth.ctx.actorId, idempotencyKey));
+        return;
+      }
+      const planActionMatch = /^\/operating-plans\/([^/]+)\/(pause|resume)$/.exec(rest);
+      if (planActionMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "plans:manage");
+        const planId = pathSegment(planActionMatch[1] ?? "");
+        const { body } = await readOpsBody();
+        writeJson(
+          res,
+          200,
+          planActionMatch[2] === "pause"
+            ? ops.pausePlan(planId, body, auth.ctx.actorId)
+            : ops.resumePlan(planId, body, auth.ctx.actorId),
+        );
+        return;
+      }
+      if (rest === "/opportunities") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "opportunities:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(res, 201, ops.createOpportunity(body, auth.ctx.actorId, idempotencyKey));
+        return;
+      }
+      const requirementMatch = /^\/opportunities\/([^/]+)\/requirements$/.exec(rest);
+      if (requirementMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "opportunities:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(
+          res,
+          200,
+          ops.recordRequirement(
+            pathSegment(requirementMatch[1] ?? ""),
+            body,
+            auth.ctx.actorId,
+            idempotencyKey,
+          ),
+        );
+        return;
+      }
+      const advanceOpportunityMatch = /^\/opportunities\/([^/]+)\/advance$/.exec(rest);
+      if (advanceOpportunityMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "opportunities:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(
+          res,
+          200,
+          ops.advanceOpportunity(
+            pathSegment(advanceOpportunityMatch[1] ?? ""),
+            body,
+            auth.ctx.actorId,
+            idempotencyKey,
+          ),
+        );
+        return;
+      }
+      if (rest === "/proposal-sets") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "opportunities:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(res, 201, ops.prepareProposal(body, idempotencyKey));
+        return;
+      }
+      if (rest === "/proposal-sets/select") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "opportunities:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(res, 201, ops.selectProposal(body, auth.ctx.actorId, idempotencyKey));
+        return;
+      }
+      if (rest === "/proposal-sets/approve") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "approvals:decide");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(res, 201, ops.approveProposal(body, idempotencyKey));
+        return;
+      }
+      if (rest === "/followups") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "followups:manage");
+        const { body } = await readOpsBody();
+        writeJson(res, 201, ops.scheduleFollowUp(body));
+        return;
+      }
+      const followUpActionMatch = /^\/followups\/([^/]+)\/(claim|finish|stop)$/.exec(rest);
+      if (followUpActionMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "followups:manage");
+        const taskId = pathSegment(followUpActionMatch[1] ?? "");
+        const { body } = await readOpsBody();
+        const action = followUpActionMatch[2];
+        writeJson(
+          res,
+          200,
+          action === "claim"
+            ? ops.claimFollowUp(taskId, body)
+            : action === "finish"
+              ? ops.finishFollowUp(taskId, body)
+              : ops.stopFollowUp(taskId, body),
+        );
+        return;
+      }
+    }
     if (rest === "/confirmations") {
       await postConfirmation(req, res);
       return;
