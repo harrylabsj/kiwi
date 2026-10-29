@@ -542,11 +542,38 @@ jobs:
           if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
             echo "== ${NAME}@${VERSION} already published to npm; skipping"
             echo "published=false" >> "$GITHUB_OUTPUT"
-          else
-            npm publish dist-artifact/release/npm/*.tgz --provenance --access public
-            echo "== published ${NAME}@${VERSION} to npm"
-            echo "published=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          # npm 的 provenance 透明度日志偶发 (409) "an equivalent entry already exists"：
+          # 上一次尝试（或 npm 内部重试）已经写入 tlog，但 registry 没落地。这类错误
+          # 重试一次即可；真正的权限/校验错误（E401/E403/E404 之类）仍然立即失败。
+          attempt=1
+          while :; do
+            if out="$(npm publish dist-artifact/release/npm/*.tgz --provenance --access public 2>&1)"; then
+              echo "$out"
+              break
+            fi
+            echo "$out" >&2
+            # 幂等：上一次尝试可能已经落地（registry 元数据滞后时 npm view 也会短暂 404）。
+            if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
+              echo "== ${NAME}@${VERSION} is already on npm; treating the attempt as published"
+              break
+            fi
+            if [ "$attempt" -ge 3 ]; then
+              echo "== publish failed after ${attempt} attempts" >&2
+              exit 1
+            fi
+            if grep -q "TLOG_CREATE_ENTRY_ERROR" <<< "$out"; then
+              echo "== tlog dedupe on attempt ${attempt}; retrying in 30s" >&2
+              sleep 30
+              attempt=$((attempt + 1))
+              continue
+            fi
+            echo "== publish failed (not a tlog retry case)" >&2
+            exit 1
+          done
+          echo "== published ${NAME}@${VERSION} to npm"
+          echo "published=true" >> "$GITHUB_OUTPUT"
 
   publish-dsh-plugin:
     name: Publish @harrylabsj/kiwi-dsh-plugin to npm (protected kiwi-release)
