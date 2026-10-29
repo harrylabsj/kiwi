@@ -233,6 +233,141 @@ describe("A2ANegotiator（A2A 直连 merchant CounterOffer）", () => {
     }
   });
 
+  it("B2：越界还价登记审批，批准后买家重试命中一次性授权价", async () => {
+    const { A2AQuoteFetcher } = await import("../src/buyer-core/a2a-quote-fetcher.js");
+    const { A2ANegotiator } = await import("../src/buyer-core/a2a-negotiator.js");
+    const { KiwiCatalogMerchantIndex } = await import("../src/buyer-core/merchant-index.js");
+    const { NegotiationApprovalStore } = await import(
+      "../src/a2a/server/negotiation-approvals.js"
+    );
+    // 商家：189 元、5% 自动折扣（179.55）、私有底价 180 元——买家 10% 还价
+    // （170.10）落在自动边界外，只能转人工。
+    const approvalDir = mkdtempSync(path.join(tmpdir(), "a2a-b2-approvals-"));
+    recoveryDirs.push(approvalDir);
+    const approvals = new NegotiationApprovalStore(approvalDir, () => new Date().toISOString());
+    const stack = await startTestA2aStack({
+      now: () => new Date().toISOString(),
+      productSource: {
+        getProduct: async () => ({ price: 189, currency: "CNY", title: "Test Product", stock: 120, unit: "台", source_evidence: { system: "owned-test-fixture" } }),
+      },
+      // price_floors 以元写（major），180 元 > 自动边界 179.55 元。
+      merchantPolicy: { price_floors: { "sku-001": 180 }, max_auto_discount_percent: 5 },
+      negotiationApprovals: approvals,
+    });
+    try {
+      const index = new KiwiCatalogMerchantIndex({ baseUrl: stack.catalogUrl });
+      const merchants = await index.search("Test Product");
+      const protocolOpts = protocolOptions();
+      const context = protocolContext();
+      const fetcher = new A2AQuoteFetcher({
+        ...protocolOpts,
+        allowPrivateRanges: true,
+        skipDnsCheck: true,
+        pollIntervalMs: 50,
+        timeoutMs: 3000,
+      });
+      const fetched = await fetcher.requestQuotes(INTENT, merchants, context);
+      expect(fetched[0]?.status).toBe("succeeded");
+      const negotiator = new A2ANegotiator({
+        ...protocolOpts,
+        allowPrivateRanges: true,
+        skipDnsCheck: true,
+        defaultDiscountRate: 0.1,
+      });
+
+      const first = await negotiator.negotiate(
+        "task-a2a-001",
+        INTENT,
+        { round: 1, action: "counter_offer", summary: "还价 10%" },
+        [fetched[0]!] as unknown as Array<Record<string, unknown>>,
+        context,
+      );
+      expect(first.summary).toContain("人工审批");
+      const pending = approvals.list("pending");
+      expect(pending).toHaveLength(1);
+      approvals.approve({
+        approval_id: pending[0]!.approval_id,
+        approved_minor: 17_010,
+        ttl_seconds: 600,
+        approved_by: "merchant:operator",
+      });
+
+      // 买家换新恢复槽位重试（每次还价独立）：命中商家已批准的一次性价格。
+      const second = await negotiator.negotiate(
+        "task-a2a-001",
+        INTENT,
+        { round: 2, action: "counter_offer", summary: "还价 10%" },
+        [fetched[0]!] as unknown as Array<Record<string, unknown>>,
+        context,
+      );
+      const reply = JSON.parse(second.reply!) as {
+        action?: string;
+        payload?: { base_terms?: { items?: Array<{ unit_price?: { amount_minor?: number } }> } };
+      };
+      expect(reply.action).toBe("conditional_offer");
+      expect(reply.payload?.base_terms?.items?.[0]?.unit_price?.amount_minor).toBe(17_010);
+      expect(approvals.list("consumed")).toHaveLength(1);
+    } finally {
+      await stack.stop();
+    }
+  });
+
+  it("clarification → 商家按问题字段应答 clarification_response", async () => {
+    const { A2AQuoteFetcher } = await import("../src/buyer-core/a2a-quote-fetcher.js");
+    const { A2ANegotiator } = await import("../src/buyer-core/a2a-negotiator.js");
+    const { KiwiCatalogMerchantIndex } = await import("../src/buyer-core/merchant-index.js");
+    const stack = await startTestA2aStack({
+      now: () => new Date().toISOString(),
+      productSource: {
+        getProduct: async () => ({ price: 189, currency: "CNY", title: "Test Product", stock: 120, unit: "台", source_evidence: { system: "owned-test-fixture" } }),
+      },
+    });
+    try {
+      const index = new KiwiCatalogMerchantIndex({ baseUrl: stack.catalogUrl });
+      const merchants = await index.search("Test Product");
+      const protocolOpts = protocolOptions();
+      const context = protocolContext();
+      const fetcher = new A2AQuoteFetcher({
+        ...protocolOpts,
+        allowPrivateRanges: true,
+        skipDnsCheck: true,
+        pollIntervalMs: 50,
+        timeoutMs: 3000,
+      });
+      const fetched = await fetcher.requestQuotes(INTENT, merchants, context);
+      expect(fetched[0]?.status).toBe("succeeded");
+
+      const negotiator = new A2ANegotiator({
+        ...protocolOpts,
+        allowPrivateRanges: true,
+        skipDnsCheck: true,
+      });
+      const step = await negotiator.negotiate(
+        "task-a2a-001",
+        INTENT,
+        {
+          round: 2,
+          action: "clarification",
+          summary: "询问交期与库存",
+          questions: [{ field: "delivery" }, { field: "stock" }],
+        },
+        [fetched[0]!] as unknown as Array<Record<string, unknown>>,
+        context,
+      );
+      expect(step.reply).toBeDefined();
+      const reply = JSON.parse(step.reply!) as {
+        action?: string;
+        payload?: { answers?: Array<{ field: string; answer: string }> };
+      };
+      expect(reply.action).toBe("clarification_response");
+      expect(reply.payload?.answers?.map((a) => a.field)).toEqual(["delivery", "stock"]);
+      // 商家按字段回答，而不是同一句固定文本。
+      expect(reply.payload?.answers?.[0]?.answer).not.toBe(reply.payload?.answers?.[1]?.answer);
+    } finally {
+      await stack.stop();
+    }
+  });
+
   it("缺 A2A 会话上下文 → 追加可解释 summary，不编造还价", async () => {
     const { A2ANegotiator } = await import("../src/buyer-core/a2a-negotiator.js");
     const negotiator = new A2ANegotiator({ allowPrivateRanges: true, skipDnsCheck: true });

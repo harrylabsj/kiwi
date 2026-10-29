@@ -49,7 +49,7 @@ interface Operation {
   operation_id: string;
   task_id: string;
   task_created_at: string;
-  stage: "rfq" | "counter";
+  stage: "rfq" | "counter" | "clarification";
   round: number;
   merchant_id: string;
   endpoint: string;

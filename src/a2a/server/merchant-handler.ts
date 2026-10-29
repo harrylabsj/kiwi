@@ -41,6 +41,8 @@ import { evaluateConditionalOffer } from "../../negotiation/condition/evaluator.
 import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
 import type { MerchantPolicy } from "../../config/profile.js";
 import { WORKBENCH_CURRENCY_TABLE_VERSION } from "../../merchant/application/money.js";
+import type { NegotiationApprovalStore } from "./negotiation-approvals.js";
+import { safeAdvisorMessage, type NegotiationAdvisor } from "./negotiation-advisor.js";
 import { calculateWorkbenchQuote } from "../../merchant/quote-calculator.js";
 import {
   createNegotiationPhase,
@@ -142,6 +144,12 @@ export interface MerchantHandlerOptions {
    *  BUG-07：也接受 provider（每次报价时取运行中生效策略）——A2A 与 MCP
    *  是不同进程，策略经覆盖层文件跨进程生效，handler 每请求读取最新值。 */
   merchantPolicy?: MerchantPolicy | (() => MerchantPolicy | undefined);
+  /** 议价审批队列（B2）：低于自动折扣边界的还价转人工，批准后买家重试
+   *  命中一次性授权价。缺省时保持原有 approval_required 硬拒行为。 */
+  negotiationApprovals?: NegotiationApprovalStore;
+  /** 协商顾问（C）：只生成面向买家的措辞，价格仍由确定性引擎计算。
+   *  缺省关闭；输出经 safeAdvisorMessage 校验，越界即回退固定文案。 */
+  negotiationAdvisor?: NegotiationAdvisor;
   /** Workbench promotion authority used by the deterministic quote path. */
   promotionPrice?: (input: { sku: string; quantity: number }) =>
     | {
@@ -1153,18 +1161,56 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             typeof buyerCounterMinor === "number" && Number.isFinite(buyerCounterMinor)
               ? clampToBounds(buyerCounterMinor, publicBoundMinor, priceMinor)
               : priceMinor;
-          const responsiveMinor =
+          const policyResponsiveMinorFinal =
             authorityPromotion.kind === "applied"
               ? Math.min(policyResponsiveMinor, authorityPromotion.priceMinor)
               : policyResponsiveMinor;
-          if (responsiveMinor < floorMinor) {
-            // 公开边界低于私有底价：该区间不能自动报价，交人工/审批处理，且不返回价格。
-            return declineReply("approval_required");
+          // B2：人工批准的一次性授权优先于自动边界；命中即消费，只回答这一笔。
+          // 只在「本轮按自动边界会落到 floor 以下」时才消费：买家重试价已经
+          // 高于边界时按常规报价即可，不能白白烧掉授权、更不能让批准价低于
+          // 买家自己的出价。
+          const approved =
+            policyResponsiveMinorFinal < floorMinor
+              ? options.negotiationApprovals?.consume({
+                  negotiation_id: negotiationId,
+                  sku,
+                  currency,
+                  quantity,
+                  unit: requestedUnit,
+                })
+              : undefined;
+          const authorizedMinor = approved?.approved_minor;
+          const responsiveMinor =
+            authorizedMinor !== undefined ? authorizedMinor : policyResponsiveMinorFinal;
+          if (authorizedMinor === undefined && responsiveMinor < floorMinor) {
+            // 公开边界低于私有底价：该区间不能自动报价。登记到商家审批队列，
+            // 人工批准后买家下一轮还价可命中一次性授权价；本轮不返回价格。
+            options.negotiationApprovals?.recordPending({
+              negotiation_id: negotiationId,
+              sku,
+              currency,
+              quantity,
+              unit: requestedUnit,
+              buyer_offer_minor:
+                typeof buyerCounterMinor === "number" && Number.isFinite(buyerCounterMinor)
+                  ? buyerCounterMinor
+                  : priceMinor,
+              public_bound_minor: publicBoundMinor,
+              floor_minor: floorMinor,
+              ...(typeof envelope.message_id === "string"
+                ? { buyer_message_id: envelope.message_id }
+                : {}),
+            });
+            return declineReply(
+              "approval_required",
+              "offer is below the merchant's automatic discount boundary; a merchant approval request has been recorded — retry after approval",
+            );
           }
           // 可配置促销（merchant_policy.promos[sku]）：买满 bulk_threshold 台，
           // 批量价 = min(还价响应, list×(1-d%/100))，同样 clamp 到公开边界；
           // 若该价低于私有底价则**不挂这条条件**（不广告无法兑现的价）。
-          const promo = policyOf()?.promos?.[sku];
+          // 人工批准价是最终价，不再叠加促销条件（避免批准价被再降一次）。
+          const promo = authorizedMinor === undefined ? policyOf()?.promos?.[sku] : undefined;
           const bulkThreshold = promo?.bulk_threshold ?? DEFAULT_BULK_THRESHOLD;
           const bulkMinor =
             promo !== undefined
@@ -1181,6 +1227,30 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             bulkMinor !== undefined && bulkMinor < responsiveMinor && bulkMinor >= floorMinor
               ? bulkMinor
               : undefined;
+          // C：顾问只改措辞。任何异常/越界输出都回退到既有文案，价格不变。
+          let advisedMessage: string | undefined;
+          if (options.negotiationAdvisor !== undefined) {
+            try {
+              const raw = await options.negotiationAdvisor.message({
+                sku,
+                quantity,
+                currency,
+                list_price_minor: priceMinor,
+                ...(publicBoundMinor !== undefined ? { public_bound_minor: publicBoundMinor } : {}),
+                ...(typeof buyerCounterMinor === "number" ? { buyer_counter_minor: buyerCounterMinor } : {}),
+                response_price_minor: responsiveMinor,
+                ...(deliveryBefore() !== undefined ? { delivery_before: deliveryBefore() } : {}),
+              });
+              advisedMessage = safeAdvisorMessage(raw, {
+                priceMinorValues: [priceMinor, publicBoundMinor, responsiveMinor].filter(
+                  (value): value is number => typeof value === "number",
+                ),
+                quantities: [quantity, bulkThreshold],
+              });
+            } catch {
+              advisedMessage = undefined;
+            }
+          }
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -1236,7 +1306,9 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                     ]
                   : [],
             },
-            ...quoteMessage(product),
+            ...(advisedMessage !== undefined
+              ? { public_message: advisedMessage }
+              : quoteMessage(product)),
           });
           conditionalByNegotiation.set(negotiationId, {
             conditional: reply.payload as unknown as Record<string, unknown>,
@@ -1260,11 +1332,36 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           // 携带 answers 便于对端结构化消费；人类可读文本走 public_message。
           // 交期口径（V2 §8.5 P0-1）：配置了权威交期才报具体日期；未配置
           // 明确告知需与商家确认，绝不报静态/过期日期。
+          //
+          // 按问题字段作答（B1）：此前对所有问题回同一句固定文本，等于答非
+          // 所问。这里只回答**可公开且确定**的事实；价格边界、库存精确值
+          // 不在这里披露（价格仍走 counter_offer 的公开折扣边界）。
           const promised = deliveryBefore();
-          const answerText =
-            promised !== undefined
-              ? `delivery before ${promised}, payment terms negotiable (nonbinding)`
-              : "delivery timing to be confirmed with the merchant, payment terms negotiable (nonbinding)";
+          const answerFor = (field: string): string => {
+            const key = field.toLowerCase();
+            if (/delivery|eta|ship|lead.?time|交期|发货|送达/.test(key)) {
+              return promised !== undefined
+                ? `delivery before ${promised}; payment terms negotiable (nonbinding)`
+                : "delivery timing to be confirmed with the merchant; payment terms negotiable (nonbinding)";
+            }
+            if (/stock|inventory|availability|库存|现货/.test(key)) {
+              return "stock level to be confirmed with the merchant; the quoted price assumes currently available inventory";
+            }
+            if (/price|discount|价格|优惠|便宜/.test(key)) {
+              return "the price follows the published quote; volume pricing and other terms are negotiable within the merchant's configured limits (nonbinding)";
+            }
+            if (/alternative|model|sku|spec|型号|规格|替代/.test(key)) {
+              return "only listed models can be quoted automatically; other specifications require the merchant's confirmation";
+            }
+            return promised !== undefined
+              ? `delivery before ${promised}; payment terms negotiable (nonbinding)`
+              : "delivery timing and other terms to be confirmed with the merchant (nonbinding)";
+          };
+          const answers = questions.map((q) => ({
+            field: q.field ?? "…",
+            answer: answerFor(q.field ?? ""),
+          }));
+          const publicMessage = Array.from(new Set(answers.map((a) => a.answer))).join("; ");
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -1273,12 +1370,9 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             created_at: now(),
             payload: {
               type: "clarification_response",
-              answers: questions.map((q) => ({
-                field: q.field ?? "…",
-                answer: answerText,
-              })),
+              answers,
             },
-            public_message: `${answerText}.`,
+            public_message: `${publicMessage}.`,
           });
           // 出站应答即恢复（restore 边，§21.2）：顶层推进已把相位挂到
           // AWAITING_CLARIFICATION，clarification_response 同轮弹回

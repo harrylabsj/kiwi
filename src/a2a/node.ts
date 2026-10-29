@@ -65,6 +65,8 @@ import {
 } from "./signing-key.js";
 import { defaultHandler } from "./server/handler.js";
 import { createMerchantHandler } from "./server/merchant-handler.js";
+import { NegotiationApprovalStore } from "./server/negotiation-approvals.js";
+import { createDeepSeekNegotiationAdvisor } from "./server/negotiation-advisor.js";
 import { LedgerStore } from "../negotiation/ledger/index.js";
 import { IdempotencyStore } from "../negotiation/idempotency/index.js";
 import { openMerchantStatsStore } from "../merchant/stats-store.js";
@@ -189,13 +191,61 @@ async function listenPort(preferred: number): Promise<{ port: number; url: strin
  * 按平台固定路由生成（京东/淘宝/天猫，见 src/handoff/marketplace-product-link.ts）。
  * 两者都没有就是不提供成交入口（KTH 交接时会如实说没有）。
  */
-function resolveHandoffDestination(product: {
+/** 从三平台商品页 URL 提取 (platform, product_id)；宽松解析用于一致性核对。 */
+function marketplaceUrlIdentity(
+  raw: string,
+): { platform: "jd" | "taobao" | "tmall"; product_id: string } | undefined {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+  const host = url.hostname.toLowerCase();
+  if (host === "item.jd.com") {
+    let id = url.pathname.replace(/^\/+/, "");
+    if (id.endsWith(".html")) id = id.slice(0, -".html".length);
+    return /^[1-9][0-9]*$/.test(id) ? { platform: "jd", product_id: id } : undefined;
+  }
+  if (host === "item.taobao.com" || host === "detail.tmall.com") {
+    const id = url.searchParams.get("id") ?? "";
+    return /^[1-9][0-9]*$/.test(id)
+      ? { platform: host === "item.taobao.com" ? "taobao" : "tmall", product_id: id }
+      : undefined;
+  }
+  return undefined;
+}
+
+export function resolveHandoffDestination(product: {
   handoff_destination?: string;
   trade_platform?: string;
   platform_product_id?: string;
 }): string | undefined {
   const explicit = (product.handoff_destination ?? "").trim();
-  if (explicit !== "") return explicit;
+  if (explicit !== "") {
+    // D：显式链接与「平台+商品ID」必须指向同一商品。冲突时以结构化字段为准
+    // （库里不存任意 URL 的那一侧才是可核验事实），并显式告警，绝不把
+    // 买家导向另一件商品。
+    if (product.trade_platform !== undefined && product.platform_product_id !== undefined) {
+      try {
+        const declared = normalizeMarketplaceTradePlatform(product.trade_platform);
+        const identity = marketplaceUrlIdentity(explicit);
+        if (
+          identity !== undefined &&
+          (identity.platform !== declared || identity.product_id !== product.platform_product_id)
+        ) {
+          process.stderr.write(
+            `⚠️ [kiwi] handoff_destination 与交易平台/商品ID不一致（${declared}:${product.platform_product_id}）；已按结构化字段生成链接\n`,
+          );
+          return buildMarketplaceProductLink(declared, product.platform_product_id);
+        }
+      } catch {
+        // 平台字段非法：保留显式链接的旧行为，由下游格式校验处理。
+      }
+    }
+    return explicit;
+  }
   if (product.trade_platform === undefined || product.platform_product_id === undefined) return undefined;
   try {
     return buildMarketplaceProductLink(
@@ -609,6 +659,27 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           // BUG-07：显式传入 provider（或静态值）时每次报价取运行中生效策略；
           // 缺省仍是启动 profile 的静态策略。
           merchantPolicy: options.merchantPolicy ?? profile.merchant_policy,
+          // B2：低于自动边界的还价落本地审批队列，人工批准后买家重试命中。
+          // 持久形态必须与 `kiwi merchant approvals` 共用 forDataDir 的路径约定
+          // （`<dataDir>/a2a/negotiation-approvals.json`），否则运营看到的是空队列。
+          negotiationApprovals: isEphemeral
+            ? new NegotiationApprovalStore(dir, now)
+            : NegotiationApprovalStore.forDataDir(options.dataDir!, now),
+          // C：措辞顾问默认关闭；KIWI_MERCHANT_ADVISOR=deepseek 才启用，
+          // 且只生成 public_message，价格仍由确定性引擎计算。
+          ...(process.env.KIWI_MERCHANT_ADVISOR === "deepseek"
+            ? {
+                negotiationAdvisor: createDeepSeekNegotiationAdvisor({
+                  ...(profile.model?.api_key_env !== undefined
+                    ? { apiKeyEnv: profile.model.api_key_env }
+                    : {}),
+                  ...(profile.model?.base_url !== undefined
+                    ? { baseUrl: profile.model.base_url }
+                    : {}),
+                  ...(profile.model?.model !== undefined ? { model: profile.model.model } : {}),
+                }),
+              }
+            : {}),
           ...(options.promotionPrice !== undefined
             ? { promotionPrice: options.promotionPrice }
             : {}),

@@ -112,6 +112,41 @@ export function buildCounterEnvelope(input: CounterInput): NegotiationEnvelope {
   });
 }
 
+export interface ClarificationInput {
+  negotiationId: string;
+  /** 回应的商家消息 id（最新 offer/counter 回复的 message_id）。 */
+  inReplyTo: string;
+  questions: { field: string; reason?: string }[];
+  /** 人类可读摘要；写入 public_message，供商家/宿主展示。 */
+  summary?: string;
+  now: () => string;
+}
+
+/** 构造买家 clarification envelope（§14：至少一个问题，field 非空）。 */
+export function buildClarificationEnvelope(input: ClarificationInput): NegotiationEnvelope {
+  return finalizeEnvelope({
+    capability: NEGOTIATE_CAPABILITY,
+    protocol_version: KNP_PROTOCOL_VERSION,
+    negotiation_id: input.negotiationId,
+    exchange_id: newExchangeId(),
+    message_id: newMessageId(),
+    in_reply_to: input.inReplyTo,
+    actor: "buyer",
+    action: "clarification",
+    created_at: input.now(),
+    payload: {
+      type: "clarification",
+      questions: input.questions.map((question) => ({
+        field: question.field,
+        ...(question.reason !== undefined ? { reason: question.reason } : {}),
+      })),
+    },
+    ...(input.summary !== undefined && input.summary !== ""
+      ? { public_message: input.summary }
+      : {}),
+  });
+}
+
 /** KNP envelope → A2A message（data part 承载 knp_envelope；1.0 帧由 client 编码）。 */
 export function envelopeToMessage(envelope: NegotiationEnvelope): A2AMessage {
   return {
