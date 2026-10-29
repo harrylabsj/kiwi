@@ -276,7 +276,14 @@ const WEIXIN_KEYS = ["allow_users", "base_url"] as const;
 function isUnitToken(value: unknown): boolean {
   if (typeof value !== "string") return false;
   const trimmed = value.trim().normalize("NFKC");
-  return trimmed !== "" && trimmed.length <= 16 && !/[\s\u0000-\u001f]/.test(trimmed);
+  if (trimmed === "" || trimmed.length > 16) return false;
+  if (/\s/.test(trimmed)) return false;
+  // 控制字符按码点判断（正则里写 \x00-\x1f 会触发 no-control-regex）。
+  for (const char of trimmed) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) return false;
+  }
+  return true;
 }
 
 const COMMERCE_KEYS = ["base_url", "token_env", "backend", "credentials", "allow_demo_price_fallback", "default_unit", "unit_aliases"] as const;
