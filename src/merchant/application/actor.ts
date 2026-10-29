@@ -59,6 +59,19 @@ export const MERCHANT_PERMISSIONS = [
   "service:resume",
   "resources:delete",
   "grants:manage",
+  // 商家持续经营（v0.2 §5/§10/§15）：经营计划、私有成本/贡献、机会、
+  // 跟进与订单操作各自独立授权；成本查看不随通用状态接口返回。
+  "plans:read",
+  "plans:manage",
+  "costs:read_sensitive",
+  "contribution:read",
+  "opportunities:read",
+  "opportunities:manage",
+  "followups:read",
+  "followups:manage",
+  "orders:read",
+  "orders:report",
+  "orders:verify",
 ] as const;
 export type MerchantPermission = (typeof MERCHANT_PERMISSIONS)[number];
 
@@ -67,7 +80,17 @@ export type MerchantPermission = (typeof MERCHANT_PERMISSIONS)[number];
  * 暂停是安全动作，operator 即可（越晚停损失越大）。
  */
 const ROLE_PERMISSIONS: Readonly<Record<MerchantRole, readonly MerchantPermission[]>> = {
-  viewer: ["status:read", "products:read", "policy:read", "approvals:read", "operations:read"],
+  viewer: [
+    "status:read",
+    "products:read",
+    "policy:read",
+    "approvals:read",
+    "operations:read",
+    "plans:read",
+    "opportunities:read",
+    "followups:read",
+    "orders:read",
+  ],
   operator: [
     "status:read",
     "products:read",
@@ -83,6 +106,14 @@ const ROLE_PERMISSIONS: Readonly<Record<MerchantRole, readonly MerchantPermissio
     "broadcast:draft",
     "broadcast:decide",
     "service:pause",
+    "plans:read",
+    "opportunities:read",
+    "opportunities:manage",
+    "followups:read",
+    "followups:manage",
+    "orders:read",
+    "orders:report",
+    "orders:verify",
   ],
   owner: [
     "status:read",
@@ -104,6 +135,17 @@ const ROLE_PERMISSIONS: Readonly<Record<MerchantRole, readonly MerchantPermissio
     "service:resume",
     "resources:delete",
     "grants:manage",
+    "plans:read",
+    "plans:manage",
+    "costs:read_sensitive",
+    "contribution:read",
+    "opportunities:read",
+    "opportunities:manage",
+    "followups:read",
+    "followups:manage",
+    "orders:read",
+    "orders:report",
+    "orders:verify",
   ],
 };
 

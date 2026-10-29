@@ -152,6 +152,9 @@ export function renderMerchantManagementPage(options: {
   <button data-v="negotiations">会话旁观</button>
   <button data-v="reports">运营报告</button>
   <button data-v="policy">报价规则</button>
+  <button data-v="operating">商品经营</button>
+  <button data-v="sales">销售工作台</button>
+  <button data-v="outcomes">经营结果</button>
   <p class="nav-foot">日常经营，井然有序。<br>Kiwi Merchant</p>
 </nav>
 <div class="workspace">
@@ -590,6 +593,54 @@ var views = {
           : '<div class="card"><p class="muted">规则调整需要 operator/owner 角色。</p></div>');
     });
   },
+  operating: function () {
+    return call("GET", "/operating-plans").then(function (p) {
+      var plans = p.plans || [];
+      var rows = plans.map(function (plan) {
+        return "<tr><td>" + esc(plan.sku) + "</td><td>" + esc(plan.source) + " / " + esc(plan.source_account_id) + "</td><td>" +
+          '<span class="pill ' + (plan.status === "ACTIVE" ? "ok" : "warn") + '">' + esc(plan.status) + "</span></td><td>" +
+          esc(plan.effective_from) + " ~ " + esc(plan.effective_to || "长期") + "</td><td>" +
+          esc(plan.authorization && plan.authorization.owner || "-") + "</td><td>" + esc(plan.revision) + "</td></tr>";
+      }).join("");
+      return '<div class="card"><h2>商品经营（' + plans.length + '）</h2>' +
+        '<p class="muted">经营计划绑定商品、适用条件、授权与生效区间；暂停只撤销执行资格，不释放区间。</p>' +
+        (rows ? "<table><tr><th>SKU</th><th>来源 / 账户</th><th>状态</th><th>生效区间</th><th>负责人</th><th>版本</th></tr>" + rows + "</table>"
+          : '<p class="muted">暂无经营计划。先在 API 创建计划，再开始接收该商品的需求。</p>') + "</div>" +
+        (ROLE === "owner" ? '<div class="card"><h2>新建经营计划</h2>' +
+          '<p class="muted">首版表单只覆盖计划身份与生效区间；条件/动作/授权以 JSON 提交，字段在 M0 冻结。</p>' +
+          '<textarea id="plan-json" rows="6" aria-label="经营计划 JSON"></textarea>' +
+          '<div class="row" style="margin-top:8px"><button class="act primary" onclick="createPlan()">创建计划</button></div><div id="plan-result"></div></div>' : "");
+    });
+  },
+  sales: function () {
+    return Promise.all([call("GET", "/opportunities"), call("GET", "/followups")]).then(function (r) {
+      var opportunities = r[0].opportunities || [];
+      var followups = r[1].followups || [];
+      var oppRows = opportunities.map(function (o) {
+        return "<tr><td>" + esc(o.opportunity_id) + "</td><td>" + esc(o.status) + "</td><td>" +
+          esc(o.owner) + "</td><td>" + esc(o.next_action || "—") + "</td><td>" +
+          esc(o.next_action_due_at || "—") + "</td><td>" + esc(o.waiting_reason || "—") + "</td></tr>";
+      }).join("");
+      var fuRows = followups.map(function (f) {
+        return "<tr><td>" + esc(f.task_id) + "</td><td>" + esc(f.action_type) + "</td><td>" +
+          esc(f.status) + "</td><td>" + esc(f.due_at || "—") + "</td><td>" +
+          esc(f.attempts + " / " + f.max_attempts) + "</td></tr>";
+      }).join("");
+      return '<div class="card"><h2>待处理机会（' + opportunities.length + '）</h2>' +
+        (oppRows ? "<table><tr><th>机会</th><th>状态</th><th>负责人</th><th>下一动作</th><th>到期</th><th>等待原因</th></tr>" + oppRows + "</table>"
+          : '<p class="muted">暂无机会。人工录入或真实入口进入后会出现在这里。</p>') + "</div>" +
+        '<div class="card"><h2>跟进任务（' + followups.length + '）</h2>' +
+        '<p class="muted">P0 产物是商家待办与草稿；没有可靠客户通道时不会自动外发。</p>' +
+        (fuRows ? "<table><tr><th>任务</th><th>动作</th><th>状态</th><th>到期</th><th>尝试</th></tr>" + fuRows + "</table>"
+          : '<p class="muted">暂无跟进任务。</p>') + "</div>";
+    });
+  },
+  outcomes: function () {
+    return Promise.resolve('<div class="card"><h2>经营结果</h2>' +
+      '<p class="muted">订单阶段、证据来源、归因与贡献分开展示；未核实的申报不升级为成交。</p>' +
+      '<div class="empty-state"><p>尚未接通真实外部订单源。</p>' +
+      '<p class="muted">下一步：M0 冻结 SourceContract 后接入 shopping-cli 只读订单事实；在此之前不展示订单数或贡献金额，避免把模拟数据当成经营结果。</p></div></div>');
+  },
 };
 
 </script>
@@ -597,6 +648,19 @@ var views = {
 /* 暂停/恢复与规则/导入/审批的命令实现。 */
 function currentRevision(cb) {
   call("GET", "/runtime/status").then(cb).catch(function (e) { bar(e.message, true); });
+}
+/* 商品经营：首版只接受完整 JSON；字段枚举在 M0 冻结，页面不替商家猜。 */
+function createPlan() {
+  var raw = $("plan-json").value;
+  var body;
+  try { body = JSON.parse(raw); } catch (e) { bar("经营计划 JSON 无效", true); return; }
+  if (!body || typeof body !== "object" || Array.isArray(body)) { bar("经营计划必须是 JSON 对象", true); return; }
+  body.idempotency_key = key("plan");
+  call("POST", "/operating-plans", body).then(function (plan) {
+    $("plan-result").innerHTML = '<pre class="digest">' + esc(plan.plan_id) + "</pre>";
+    bar("经营计划已创建");
+    refresh();
+  }).catch(function (e) { bar(e.message, true); });
 }
 /* 会话旁观 / 运营报告的视图状态（只读；不能从这里发消息）。 */
 var NEG_STATUS = "all";
@@ -913,7 +977,10 @@ var VIEW_COPY = {
   approvals: ["待审批", "核对每一项变更，重要决定由你确认。"],
   negotiations: ["会话旁观", "查看询价与磋商进展，掌握需要关注的会话。"],
   reports: ["运营报告", "了解买家触达与接待表现。"],
-  policy: ["报价规则", "管理自动报价边界，规则确认后生效。"]
+  policy: ["报价规则", "管理自动报价边界，规则确认后生效。"],
+  operating: ["商品经营", "选择商品、设定条件与授权，控制生效区间。"],
+  sales: ["销售工作台", "处理待办、下一动作与持久跟进。"],
+  outcomes: ["经营结果", "分开查看订单证据、归因与贡献。"]
 };
 function decorateView() {
   var view = $("view");
