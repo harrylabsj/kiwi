@@ -2114,7 +2114,7 @@
     },
     {
       "path": "src/a2a/server/merchant-handler.ts",
-      "sha256": "sha256:5d7c319cde079efacf6042b7bdd94747b7eee3d55023a2e5deb29e591fe02129"
+      "sha256": "sha256:24cbbd875f4d9ace8bd9d8c4d91f343e69dfa268a25180cfd70b17841abd8cf4"
     },
     {
       "path": "src/a2a/server/merchant-product-facts.ts",
@@ -5148,7 +5148,7 @@
     },
     {
       "path": "tests/merchant-source-facts-revalidation.test.ts",
-      "sha256": "sha256:ce38ae145ce815307935d35047fba233abbd30fa07e927bb5b0da76a885942c4"
+      "sha256": "sha256:1ed946b1c3107e71d35d9ccd12ca9b4c11e9bd2ddb9fe362ec131540d8d96976"
     },
     {
       "path": "tests/merchant-stats.test.ts",
