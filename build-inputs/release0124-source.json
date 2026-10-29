@@ -1514,11 +1514,11 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:98b68eebb3d175049c9bf1e1ce5b71147aaab89b11c71c2d9f57f306a2d28233"
+      "sha256": "sha256:ab31e362e35e7965db49eee3e9e74b52c6d155a4fb415a5a10aca6f1d5e3e3fe"
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:6985be28fd33c3e47311ba3e2cf02a6cd204eb270232d201e29e4451627f8e97"
+      "sha256": "sha256:59ec6b20f0920eaa29c151671ded20e502a0a4c160068ec885c8f89b51c022c0"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
