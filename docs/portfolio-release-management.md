@@ -2,6 +2,25 @@
 
 > **最新平台版本快照：**请先查看 [平台发布版本台账](platform-release-ledger.md)。下方表格与历史发布段落保留当时基线，不能当作当前 registry 或 WorkBuddy 实时状态。
 
+## 发布前提：端到端验收回执
+
+上线发布（`publish=true`）前必须有**新鲜的端到端验收回执** `build-inputs/release-acceptance.json`，
+门禁是 `scripts/verify-release-acceptance.mjs`（在发布工作流里 fail-closed）。
+
+流程：
+
+1. 抬版本 → 构建候选 → 把候选部署到验收用商家实例（真实目录 + 真实商家，不是 mock）；
+2. 跑 `node scripts/run-acceptance.mjs`（需要 `KIWI_ACCEPTANCE_MERCHANT_ID` / `KIWI_ACCEPTANCE_SKU` /
+   `KIWI_ACCEPTANCE_UNIT`，签名买家再给 `KIWI_A2A_SIGNING_KEY_DIR`）：它走公开工具面
+   `kiwi_search → kiwi_request_quotes → kiwi_accept_agreement（含审批）→ kiwi_handoff（含审批）`，
+   任一步失败就不写回执；
+3. 审查并提交回执（受冻源契约覆盖），重新冻结；
+4. 再走发布工作流——回执缺失、超过 7 天（`--max-age-hours`）、任一段 `ok:false`、
+   或 `kiwi_version` / `shopping-cli` pin 与仓库不一致，都会拒绝发布。
+
+为什么要回执而不是在 CI 里现跑：链路要打到公网的真实目录与真实商家，CI 不能依赖外部生产环境
+的可用性；回执把"真的跑通过"固化成可审计的提交，门禁本身保持离线、确定、fail-closed。
+
 本文件定义 Kiwi 十一种产品形态的统一发布台账、制品来源、质量门与平台审批边界。版本号继续由各产品维护；`portfolio-products.json` 是产品清单，`portfolio.lock.json` 是三仓契约组合锁，`portfolio-release.yml` 是 npm/PyPI 与候选制品的中心构建入口。
 
 ## 产品台账

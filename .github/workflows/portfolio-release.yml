@@ -248,6 +248,12 @@ jobs:
 
       # Finish root-source npm validation before consumer installs create local files.
       # Portfolio metadata is copied only later, after the last source guard.
+      # 发布前提：端到端验收回执（build-inputs/release-acceptance.json）。
+      # 回执由 scripts/run-acceptance.mjs 在受控环境跑完真实链路后写入并随提交受冻源
+      # 契约覆盖；这里只做离线核验。缺失/过期/某段失败/版本漂移一律 fail-closed。
+      - name: Verify end-to-end acceptance receipt (fail closed)
+        run: node scripts/verify-release-acceptance.mjs
+
       - name: Build and verify npm candidates before consumer installs
         run: |
           set -euo pipefail
