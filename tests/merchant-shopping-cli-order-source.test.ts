@@ -104,6 +104,40 @@ describe("ShoppingCliOrderSource", () => {
     expect(captured[2]?.body?.["merchant_id"]).toBe("merchant-1");
   });
 
+  it("受信连接器写入使用独立凭据；未配置时 fail-closed", async () => {
+    const client = new ShoppingCliOrderSource({
+      baseUrl: base,
+      merchantId: "merchant-1",
+      token: "merchant-token",
+      connectorToken: "connector-token",
+      timeoutMs: 2_000,
+    });
+    await client.recordVerifiedOrder({
+      source_namespace: "jd",
+      source_account_id: "acc-1",
+      external_order_id: "order-1",
+      evidence_source: "external_verified",
+      source_version: "jd:42",
+      verified_at: "2026-10-29T10:05:00Z",
+      observed_at: "2026-10-29T10:00:00Z",
+      lines: [{ line_id: "l1", sku: "SKU-1", quantity: 1, amount_minor: 1000 }],
+    });
+    expect(captured[0]?.url).toBe("/v1/merchant/orders/verified");
+    expect(captured[0]?.authorization).toBe("Bearer connector-token");
+    expect(captured[0]?.body).toMatchObject({
+      merchant_id: "merchant-1",
+      evidence_source: "external_verified",
+    });
+
+    await expect(
+      new ShoppingCliOrderSource({
+        baseUrl: base,
+        merchantId: "merchant-1",
+        token: "merchant-token",
+      }).recordVerifiedOrder({}),
+    ).rejects.toThrowError(OrderFactError);
+  });
+
   it("非 2xx 映射为带 code 的失败，不伪装成空结果", async () => {
     await expect(source().getOrder("missing")).rejects.toMatchObject({
       name: "OrderFactError",

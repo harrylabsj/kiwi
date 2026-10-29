@@ -28,6 +28,8 @@ export interface ShoppingCliOrderSourceOptions {
   baseUrl: string;
   merchantId: string;
   token: string;
+  /** 受信订单连接器凭据；仅用于 `external_verified` 写入。 */
+  connectorToken?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }
@@ -40,6 +42,7 @@ export class ShoppingCliOrderSource {
   private readonly baseUrl: string;
   private readonly merchantId: string;
   private readonly token: string;
+  private readonly connectorToken: string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
 
@@ -53,6 +56,7 @@ export class ShoppingCliOrderSource {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.merchantId = options.merchantId;
     this.token = options.token;
+    this.connectorToken = options.connectorToken;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.timeoutMs = options.timeoutMs ?? 5_000;
   }
@@ -70,6 +74,19 @@ export class ShoppingCliOrderSource {
     return this.request(
       "GET",
       `/v1/merchant/orders/${encodeURIComponent(externalOrderId)}?merchant_id=${encodeURIComponent(this.merchantId)}`,
+    );
+  }
+
+  /** 受信连接器写入 external_verified；缺 connectorToken 时 fail-closed。 */
+  async recordVerifiedOrder(input: Record<string, unknown>): Promise<unknown> {
+    if (this.connectorToken === undefined || this.connectorToken.trim() === "") {
+      throw new OrderFactError("validation", "connectorToken 未配置，不能写入 external_verified");
+    }
+    return this.request(
+      "POST",
+      "/v1/merchant/orders/verified",
+      { ...input, merchant_id: this.merchantId },
+      this.connectorToken,
     );
   }
 
@@ -113,6 +130,7 @@ export class ShoppingCliOrderSource {
     method: "GET" | "POST",
     path: string,
     body?: Record<string, unknown>,
+    authToken: string = this.token,
   ): Promise<unknown> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -121,7 +139,7 @@ export class ShoppingCliOrderSource {
         method,
         redirect: "manual",
         headers: {
-          authorization: `Bearer ${this.token}`,
+          authorization: `Bearer ${authToken}`,
           ...(body !== undefined ? { "content-type": "application/json" } : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
