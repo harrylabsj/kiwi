@@ -155,7 +155,7 @@ describe("§7.2：角色与权限", () => {
   });
 
   it("私有成本/贡献/计划管理只给 owner；机会/跟进/订单操作给 operator", () => {
-    for (const permission of ["costs:read_sensitive", "contribution:read", "plans:manage"] as const) {
+    for (const permission of ["costs:read_sensitive", "contribution:read", "contribution:manage", "plans:manage"] as const) {
       expect(hasPermission(actor("owner"), permission)).toBe(true);
       expect(hasPermission(actor("operator"), permission)).toBe(false);
       expect(hasPermission(actor("viewer"), permission)).toBe(false);
@@ -164,7 +164,6 @@ describe("§7.2：角色与权限", () => {
       "opportunities:manage",
       "followups:manage",
       "orders:report",
-      "orders:verify",
     ] as const) {
       expect(hasPermission(actor("operator"), permission)).toBe(true);
       expect(hasPermission(actor("viewer"), permission)).toBe(false);

@@ -28,9 +28,9 @@ import {
   OrderFactError,
   type AttributionInput,
   type ExternalOrderIdentity,
-  type OrderLineFact,
   type OrderStreamContract,
   type RefundFact,
+  validateOrderLineFacts,
 } from "./model.js";
 import type { OrderRecordV2, OrderRepository } from "./repository.js";
 import { parseOrderCsv } from "./csv.js";
@@ -60,7 +60,7 @@ export function validateOrderSourceContract(contract: OrderSourceContract): void
 
 export interface ManualOrderReportInput {
   identity: ExternalOrderIdentity;
-  lines: OrderLineFact[];
+  lines: unknown;
   currency?: string;
   total_minor?: number;
   payment_status?: string;
@@ -86,6 +86,7 @@ export class MerchantOrderService {
 
   /** 人工/CSV 申报：只记申报事实，绝不升级为外部已核实。 */
   recordManualReport(input: ManualOrderReportInput): OrderRecordV2 {
+    const lines = validateOrderLineFacts(input.lines);
     if (input.reported_by.trim() === "") {
       throw new OrderFactError("validation", "reported_by 不能为空");
     }
@@ -102,7 +103,7 @@ export class MerchantOrderService {
       ...(input.currency !== undefined ? { currency: input.currency } : {}),
       ...(input.total_minor !== undefined ? { totalMinor: input.total_minor } : {}),
       observedAt: input.observed_at,
-      lines: input.lines,
+      lines,
     }).order;
   }
 
@@ -128,9 +129,10 @@ export class MerchantOrderService {
     if (!Number.isFinite(Date.parse(input.observedAtFallback))) {
       throw new OrderFactError("validation", "observedAtFallback 必须是可解析时间");
     }
-    return reports.map(
-      (report) =>
-        this.orders.createOrder({
+    return this.orders.transaction(() =>
+      reports.map(
+        (report) =>
+          this.orders.createOrder({
           identity: { ...report.identity, merchant_id: input.merchantId },
           evidenceSource: "csv_import",
           ...(report.payment_status !== undefined ? { paymentStatus: report.payment_status } : {}),
@@ -139,34 +141,11 @@ export class MerchantOrderService {
             : {}),
           ...(report.currency !== undefined ? { currency: report.currency } : {}),
           ...(report.total_minor !== undefined ? { totalMinor: report.total_minor } : {}),
-          observedAt: report.observed_at || input.observedAtFallback,
-          lines: report.lines,
-        }).order,
+            observedAt: report.observed_at || input.observedAtFallback,
+            lines: report.lines,
+          }).order,
+      ),
     );
-  }
-
-  /** 只有受信来源返回有效事实才升级；凭证缺省/无效时保持人工申报状态。 */
-  verifyWithSourceFact(input: {
-    merchantId: string;
-    recordId: string;
-    verified: boolean;
-    source_version: string;
-    verified_at: string;
-  }): OrderRecordV2 {
-    const order = this.orders.getOrder(input.merchantId, input.recordId);
-    if (order === undefined) throw new OrderFactError("validation", "order not found");
-    if (!input.verified) return order;
-    if (input.source_version.trim() === "") {
-      throw new OrderFactError("validation", "verified fact 必须带 source_version");
-    }
-    if (!Number.isFinite(Date.parse(input.verified_at))) {
-      throw new OrderFactError("validation", "verified_at 必须是可解析时间");
-    }
-    return this.orders.updateEvidence(input.merchantId, input.recordId, {
-      evidenceSource: "external_verified",
-      sourceVersion: input.source_version,
-      verifiedAt: input.verified_at,
-    });
   }
 
   appendSourceEvent(input: {
@@ -183,8 +162,8 @@ export class MerchantOrderService {
     });
   }
 
-  attribute(recordId: string, allocations: AttributionInput[]): ReturnType<OrderRepository["replaceAttributions"]> {
-    return this.orders.replaceAttributions(recordId, allocations);
+  attribute(merchantId: string, recordId: string, allocations: AttributionInput[]): ReturnType<OrderRepository["replaceAttributions"]> {
+    return this.orders.replaceAttributions(merchantId, recordId, allocations);
   }
 
   recordRefund(input: {

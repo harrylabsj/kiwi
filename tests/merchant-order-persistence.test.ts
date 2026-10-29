@@ -107,7 +107,7 @@ describe("订单事实持久化", () => {
 
   it("归因按行上限持久化，剩余显式未分配", () => {
     const { order } = createOrder();
-    const result = orders.replaceAttributions(order.record_id, [
+    const result = orders.replaceAttributions("merchant-1", order.record_id, [
       {
         order_line_id: "line-1",
         opportunity_id: "opp-1",
@@ -130,7 +130,7 @@ describe("订单事实持久化", () => {
       { line_id: "line-2", quantity: 5, amount_minor: 500 },
     ]);
     expect(() =>
-      orders.replaceAttributions(order.record_id, [
+      orders.replaceAttributions("merchant-1", order.record_id, [
         { order_line_id: "line-1", opportunity_id: "opp-1", quantity: 11, amount_minor: 1, method: "manual_confirmation" },
       ]),
     ).toThrowError();

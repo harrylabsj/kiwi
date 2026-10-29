@@ -46,35 +46,15 @@ function report() {
 }
 
 describe("MerchantOrderService", () => {
-  it("人工申报不升级为外部已核实；只有有效来源事实才升级", () => {
+  it("人工申报只写 manual_report，不提供工作台自证升级", () => {
     const order = report();
     expect(order.evidence_source).toBe("manual_report");
     expect(order.verified_at).toBeNull();
-
-    const unverified = service.verifyWithSourceFact({
-      merchantId: "merchant-1",
-      recordId: order.record_id,
-      verified: false,
-      source_version: "v1",
-      verified_at: NOW,
-    });
-    expect(unverified.evidence_source).toBe("manual_report");
-
-    const verified = service.verifyWithSourceFact({
-      merchantId: "merchant-1",
-      recordId: order.record_id,
-      verified: true,
-      source_version: "jd:42",
-      verified_at: NOW,
-    });
-    expect(verified.evidence_source).toBe("external_verified");
-    expect(verified.source_version).toBe("jd:42");
-    expect(verified.verified_at).toBe(NOW);
   });
 
   it("归因与退款沿用行级上限与更正语义", () => {
     const order = report();
-    const attributed = service.attribute(order.record_id, [
+    const attributed = service.attribute("merchant-1", order.record_id, [
       {
         order_line_id: "line-1",
         opportunity_id: "opp-1",
@@ -125,6 +105,37 @@ describe("MerchantOrderService", () => {
     });
     expect(saved.assessment.contribution_minor).toBe(120);
     expect(saved.assessment.gate.status).toBe("PASSED");
+  });
+
+  it("人工申报行明细逐字段校验，坏行整单拒绝", () => {
+    for (const lines of [
+      [{ line_id: "l1", sku: "", quantity: 1, amount_minor: 1 }],
+      [{ line_id: "l1", sku: "SKU", quantity: 0, amount_minor: 1 }],
+      [{ line_id: "l1", sku: "SKU", quantity: 1, amount_minor: -1 }],
+      [
+        { line_id: "l1", sku: "SKU", quantity: 1, amount_minor: 1 },
+        { line_id: "l1", sku: "SKU2", quantity: 1, amount_minor: 1 },
+      ],
+    ]) {
+      expect(() =>
+        service.recordManualReport({
+          identity,
+          lines,
+          observed_at: NOW,
+          reported_by: "operator-1",
+        }),
+      ).toThrowError(OrderFactError);
+    }
+  });
+
+  it("归因按商户收口，未知订单返回 not_found", () => {
+    const order = report();
+    expect(() => service.attribute("merchant-2", order.record_id, [])).toThrowError(
+      expect.objectContaining({ code: "not_found" }),
+    );
+    expect(() => service.attribute("merchant-1", "ord_missing", [])).toThrowError(
+      expect.objectContaining({ code: "not_found" }),
+    );
   });
 
   it("来源契约与申报字段校验", () => {

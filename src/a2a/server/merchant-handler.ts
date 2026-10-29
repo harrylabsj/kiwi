@@ -1180,8 +1180,19 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                 })
               : undefined;
           const authorizedMinor = approved?.approved_minor;
+          // 批准价是商家可接受的下限，但不能低于买家本轮已经愿意出的价。
+          // 注意 buyerCounter 已被 clamp 到公开边界，不能拿它做 max——否则
+          // 700 元的还价会被抬到公开边界 807.50，吞掉批准的 750。
+          const buyerOfferMinor =
+            typeof buyerCounterMinor === "number" && Number.isFinite(buyerCounterMinor)
+              ? buyerCounterMinor
+              : undefined;
           const responsiveMinor =
-            authorizedMinor !== undefined ? authorizedMinor : policyResponsiveMinorFinal;
+            authorizedMinor !== undefined
+              ? buyerOfferMinor !== undefined
+                ? Math.min(priceMinor, Math.max(authorizedMinor, buyerOfferMinor))
+                : authorizedMinor
+              : policyResponsiveMinorFinal;
           if (authorizedMinor === undefined && responsiveMinor < floorMinor) {
             // 公开边界低于私有底价：该区间不能自动报价。登记到商家审批队列，
             // 人工批准后买家下一轮还价可命中一次性授权价；本轮不返回价格。

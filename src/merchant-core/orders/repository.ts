@@ -37,6 +37,7 @@ import {
   type OrderLineFact,
   type OrderStreamContract,
   type RefundFact,
+  validateOrderLineFacts,
 } from "./model.js";
 
 export interface OrderRecordV2 {
@@ -102,10 +103,27 @@ export interface OrderRepositoryOptions {
 export class OrderRepository {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
+  private inTx = false;
 
   constructor(options: OrderRepositoryOptions) {
     this.db = options.db;
     this.now = options.now;
+  }
+
+  transaction<T>(work: () => T): T {
+    if (this.inTx) return work();
+    this.inTx = true;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = work();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    } finally {
+      this.inTx = false;
+    }
   }
 
   createOrder(input: {
@@ -122,12 +140,13 @@ export class OrderRepository {
     verifiedAt?: string;
     lines: OrderLineFact[];
   }): { order: OrderRecordV2; created: boolean } {
-    const existing = this.findByIdentity(input.identity);
-    if (existing !== undefined) return { order: existing, created: false };
-    const recordId = `ord_${randomUUID()}`;
-    const now = this.now();
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    const lines = validateOrderLineFacts(input.lines);
+    return this.transaction(() => {
+      const existing = this.findByIdentity(input.identity);
+      if (existing !== undefined) return { order: existing, created: false };
+      const recordId = `ord_${randomUUID()}`;
+      const now = this.now();
+      {
       this.db
         .prepare(
           `INSERT INTO order_records_v2
@@ -155,7 +174,7 @@ export class OrderRepository {
           now,
           now,
         );
-      for (const line of input.lines) {
+      for (const line of lines) {
         this.db
           .prepare(
             `INSERT INTO order_lines_v2
@@ -164,12 +183,9 @@ export class OrderRepository {
           )
           .run(recordId, line.line_id, line.sku, line.quantity, line.amount_minor, null);
       }
-      this.db.exec("COMMIT");
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
-    return { order: this.getOrder(input.identity.merchant_id, recordId)!, created: true };
+      }
+      return { order: this.getOrder(input.identity.merchant_id, recordId)!, created: true };
+    });
   }
 
   findByIdentity(identity: ExternalOrderIdentity): OrderRecordV2 | undefined {
@@ -206,7 +222,7 @@ export class OrderRepository {
     sourceVersion?: string;
   }): OrderRecordV2 {
     const order = this.getOrder(merchantId, recordId);
-    if (order === undefined) throw new OrderFactError("validation", "order not found");
+    if (order === undefined) throw new OrderFactError("not_found", "order not found");
     this.db
       .prepare(
         `UPDATE order_records_v2
@@ -304,14 +320,16 @@ export class OrderRepository {
     }));
   }
 
-  replaceAttributions(recordId: string, allocations: AttributionInput[]): {
+  replaceAttributions(merchantId: string, recordId: string, allocations: AttributionInput[]): {
     allocations: AttributionInput[];
     unassigned: Array<{ line_id: string; quantity: number; amount_minor: number }>;
   } {
+    if (this.getOrder(merchantId, recordId) === undefined) {
+      throw new OrderFactError("not_found", `order ${recordId} not found`);
+    }
     const lines = this.listLines(recordId);
     const result = allocateAttributions(lines, allocations);
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    return this.transaction(() => {
       this.db.prepare("DELETE FROM order_attributions_v2 WHERE record_id = ?").run(recordId);
       for (const allocation of result.allocations) {
         this.db
@@ -333,12 +351,8 @@ export class OrderRepository {
             this.now(),
           );
       }
-      this.db.exec("COMMIT");
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
-    return { allocations: result.allocations, unassigned: result.unassigned };
+      return { allocations: result.allocations, unassigned: result.unassigned };
+    });
   }
 
   listAttributions(recordId: string): AttributionInput[] {

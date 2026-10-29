@@ -38,6 +38,35 @@ interface ErrorBody {
   error?: { code?: string; message?: string };
 }
 
+export type ShoppingCliSourceErrorCode =
+  | "auth"
+  | "forbidden"
+  | "not_found"
+  | "conflict"
+  | "invalid"
+  | "unavailable"
+  | "timeout";
+
+export class ShoppingCliSourceError extends Error {
+  readonly code: ShoppingCliSourceErrorCode;
+  readonly status?: number;
+  constructor(code: ShoppingCliSourceErrorCode, message: string, status?: number) {
+    super(message);
+    this.name = "ShoppingCliSourceError";
+    this.code = code;
+    if (status !== undefined) this.status = status;
+  }
+}
+
+function statusToCode(status: number): ShoppingCliSourceErrorCode {
+  if (status === 401) return "auth";
+  if (status === 403) return "forbidden";
+  if (status === 404) return "not_found";
+  if (status === 409) return "conflict";
+  if (status === 408 || status >= 500) return "unavailable";
+  return "invalid";
+}
+
 export class ShoppingCliOrderSource {
   private readonly baseUrl: string;
   private readonly merchantId: string;
@@ -62,18 +91,26 @@ export class ShoppingCliOrderSource {
   }
 
   async listOrders(input: { limit?: number; offset?: number } = {}): Promise<unknown> {
+    const limit = Math.min(Math.max(input.limit ?? 50, 1), 100);
+    const offset = Math.max(input.offset ?? 0, 0);
     const query = new URLSearchParams({
       merchant_id: this.merchantId,
-      limit: String(input.limit ?? 50),
-      offset: String(input.offset ?? 0),
+      limit: String(limit),
+      offset: String(offset),
     });
     return this.request("GET", `/v1/merchant/orders?${query.toString()}`);
   }
 
-  async getOrder(externalOrderId: string): Promise<unknown> {
+  async getOrder(
+    externalOrderId: string,
+    scope: { sourceNamespace?: string; sourceAccountId?: string } = {},
+  ): Promise<unknown> {
+    const query = new URLSearchParams({ merchant_id: this.merchantId });
+    if (scope.sourceNamespace !== undefined) query.set("source_namespace", scope.sourceNamespace);
+    if (scope.sourceAccountId !== undefined) query.set("source_account_id", scope.sourceAccountId);
     return this.request(
       "GET",
-      `/v1/merchant/orders/${encodeURIComponent(externalOrderId)}?merchant_id=${encodeURIComponent(this.merchantId)}`,
+      `/v1/merchant/orders/${encodeURIComponent(externalOrderId)}?${query.toString()}`,
     );
   }
 
@@ -90,11 +127,20 @@ export class ShoppingCliOrderSource {
     );
   }
 
-  async recordRefund(externalOrderId: string, input: Record<string, unknown>): Promise<unknown> {
+  async recordRefund(
+    externalOrderId: string,
+    input: Record<string, unknown>,
+    scope: { sourceNamespace?: string; sourceAccountId?: string } = {},
+  ): Promise<unknown> {
     return this.request(
       "POST",
       `/v1/merchant/orders/${encodeURIComponent(externalOrderId)}/refunds`,
-      { ...input, merchant_id: this.merchantId },
+      {
+        ...input,
+        merchant_id: this.merchantId,
+        ...(scope.sourceNamespace !== undefined ? { source_namespace: scope.sourceNamespace } : {}),
+        ...(scope.sourceAccountId !== undefined ? { source_account_id: scope.sourceAccountId } : {}),
+      },
     );
   }
 
@@ -155,13 +201,16 @@ export class ShoppingCliOrderSource {
         } catch {
           // 非 JSON 错误体：保留状态码，不猜测内容。
         }
-        throw new OrderFactError("validation", `${code}: ${message}`);
+        throw new ShoppingCliSourceError(statusToCode(response.status), `${code}: ${message}`, response.status);
       }
       return await response.json();
     } catch (err) {
-      if (err instanceof OrderFactError) throw err;
-      throw new OrderFactError(
-        "validation",
+      if (err instanceof OrderFactError || err instanceof ShoppingCliSourceError) throw err;
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new ShoppingCliSourceError("timeout", "shopping-cli 请求超时");
+      }
+      throw new ShoppingCliSourceError(
+        "unavailable",
         `shopping-cli 请求失败：${err instanceof Error ? err.message : String(err)}`,
       );
     } finally {
