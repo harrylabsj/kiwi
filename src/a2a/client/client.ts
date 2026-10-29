@@ -75,6 +75,7 @@ export class A2AClient {
   private readonly headers: Record<string, string>;
   private readonly ucpAgentProfile?: string;
   private readonly signer?: A2AOutboundSigner;
+  private readonly cookieJar?: import("../access/gateway-cookie-jar.js").GatewayCookieJar;
   private readonly version: "1.0" | "0.3";
   private readonly knpExtensionUri?: string;
 
@@ -99,6 +100,7 @@ export class A2AClient {
     this.headers = options.headers ?? {};
     this.ucpAgentProfile = options.ucpAgentProfile;
     this.signer = options.signer;
+    this.cookieJar = options.cookieJar;
     // issue 09（方案 1）：默认 1.0——Card 声明 1.0 ↔ 默认 client 讲 1.0。
     // knpExtensionUri 缺省从端点 origin 派生（服务器默认 path），显式可覆盖。
     this.version = options.version ?? "1.0";
@@ -154,10 +156,15 @@ export class A2AClient {
     };
     // WP5：配置了出站签名器时，对每个请求计算 HTTP Message Signature 头。
     // 注意：覆盖组件含 @method，必须是真实 HTTP 方法（POST），不是 JSON-RPC 方法名。
+    // 网关 cookie 只发给同源（host-only 语义）；有 cookie 时发送地址就是签名地址
+    // ——调用方据此不再追加分享码。
+    const gatewayCookie = this.cookieJar?.get(this.sendUrl.origin);
+    const headersWithCookie =
+      gatewayCookie === undefined ? baseHeaders : { ...baseHeaders, cookie: gatewayCookie };
     const headers =
       this.signer === undefined
-        ? baseHeaders
-        : { ...baseHeaders, ...this.signer.sign({ method: "POST", url: this.url.href, body: Buffer.from(body, "utf8"), headers: baseHeaders }) };
+        ? headersWithCookie
+        : { ...headersWithCookie, ...this.signer.sign({ method: "POST", url: this.url.href, body: Buffer.from(body, "utf8"), headers: headersWithCookie }) };
 
     const budget = createRequestBudget(this.timeoutMs, options);
     const { controller } = budget;
@@ -190,6 +197,11 @@ export class A2AClient {
           `A2A request failed: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+
+      // 平台网关在首次带码访问时下发访问 cookie（30 天、host-only）；存下来供后续
+      // 请求免带分享码。
+      const setCookie = typeof response.headers.getSetCookie === "function" ? response.headers.getSetCookie() : [];
+      if (setCookie.length > 0) this.cookieJar?.capture(this.sendUrl.origin, setCookie);
 
       if (isRedirectResponse(response)) {
         throw new A2AClientError(

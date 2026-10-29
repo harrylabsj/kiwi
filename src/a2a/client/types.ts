@@ -128,4 +128,6 @@ export interface A2AClientOptions {
   ucpAgentProfile?: string;
   /** 出站 HTTP Message Signature 签名器（可选；配置后每个请求都被签名）。 */
   signer?: A2AOutboundSigner;
+  /** 网关访问 cookie 复用（WorkBuddy sharecode 通道）；只按同源取用。 */
+  cookieJar?: import("../access/gateway-cookie-jar.js").GatewayCookieJar;
 }

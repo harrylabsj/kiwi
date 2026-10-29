@@ -149,6 +149,8 @@ export function extractKnpEnvelope(
 }
 
 export interface A2AClientBuildOptions {
+  /** 网关访问 cookie 复用（WorkBuddy sharecode 通道）。 */
+  cookieJar?: import("../a2a/access/gateway-cookie-jar.js").GatewayCookieJar;
   bearerToken?: string;
   /** 出站 HTTP Message Signature（RFC 9421）签名器；WorkBuddy 路径的业务认证。 */
   signer?: import("../a2a/client/types.js").A2AOutboundSigner;
@@ -165,6 +167,7 @@ export function buildA2AClient(endpoint: string, opts: A2AClientBuildOptions): A
   return new A2AClient({
     url: endpoint,
     ...(opts.signer !== undefined ? { signer: opts.signer } : {}),
+    ...(opts.cookieJar !== undefined ? { cookieJar: opts.cookieJar } : {}),
     ...(opts.sendUrl !== undefined ? { sendUrl: opts.sendUrl } : {}),
     timeoutMs: opts.timeoutMs,
     allowPrivateRanges: opts.allowPrivateRanges,

@@ -37,6 +37,7 @@ import {
 } from "./a2a-knp.js";
 import type { QuoteCandidateInput, QuoteFetcher, MerchantRecord } from "./service.js";
 
+import { GatewayCookieJar } from "../a2a/access/gateway-cookie-jar.js";
 import { BuyerProtocolRecovery, MerchantDeclined, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext, type ProtocolReply } from "./protocol-recovery.js";
 import { BuyerReplyRejected } from "./receive-gate.js";
 
@@ -245,6 +246,11 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   private readonly fetchImpl: typeof fetch;
   private readonly rpcFetchImpl?: typeof fetch;
   private readonly recovery?: BuyerProtocolRecovery;
+  /**
+   * 平台网关访问 cookie（WorkBuddy sharecode 通道）：首次带码请求后网关下发
+   * 30 天 host-only cookie，之后同一 origin 的请求不再追加分享码。
+   */
+  private readonly gatewayCookies = new GatewayCookieJar();
   private readonly merchantAccess?: MerchantAccessResolver;
   private readonly signer?: A2AOutboundSigner;
   private readonly onAccessDenied?: (merchant: MerchantRecord) => void | Promise<void>;
@@ -310,7 +316,12 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         allowPrivateRanges: this.allowPrivateRanges,
         skipDnsCheck: this.skipDnsCheck,
         timeoutMs: this.timeoutMs,
-        ...(access !== null ? { sendUrl: access.sendUrlFor(endpoint) } : {}),
+        cookieJar: this.gatewayCookies,
+        // 已有网关 cookie 就不再追加分享码：把"每次请求带码"降到"每 30 天带一次"，
+        // 平台明确说分享码面向人工分享、不适合大规模机器分发。
+        ...(access !== null && !this.gatewayCookies.has(new URL(endpoint).origin)
+          ? { sendUrl: access.sendUrlFor(endpoint) }
+          : {}),
         ...(this.rpcFetchImpl !== undefined ? { fetchImpl: this.rpcFetchImpl } : {}),
       });
       if (!this.recovery || !context) throw new ProtocolOperationUnknown();
