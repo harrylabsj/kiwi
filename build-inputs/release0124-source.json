@@ -1518,7 +1518,7 @@
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:2cc253e2d6939ee7440562fc93afe36231b152e7725cbc6d274f56f9366e5c0b"
+      "sha256": "sha256:adb42f7ac7fad2199c12a57161dad958bbdf1db8227c4f4a187879d018ecc9fd"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
@@ -5252,7 +5252,7 @@
     },
     {
       "path": "tests/npm-cloud-leaf-metadata.test.ts",
-      "sha256": "sha256:8a2f2d9f1cec95f664b03e2cf189cc4204c68f2284c9b0f10d0f07621b1d797b"
+      "sha256": "sha256:43e4d3c677bfed640dee1c63e4d3e10140f3d963ff1dada5986beaaa7e0de543"
     },
     {
       "path": "tests/npm-official-binlinks.test.ts",
