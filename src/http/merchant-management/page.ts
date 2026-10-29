@@ -636,10 +636,26 @@ var views = {
     });
   },
   outcomes: function () {
-    return Promise.resolve('<div class="card"><h2>经营结果</h2>' +
-      '<p class="muted">订单阶段、证据来源、归因与贡献分开展示；未核实的申报不升级为成交。</p>' +
-      '<div class="empty-state"><p>尚未接通真实外部订单源。</p>' +
-      '<p class="muted">下一步：M0 冻结 SourceContract 后接入 shopping-cli 只读订单事实；在此之前不展示订单数或贡献金额，避免把模拟数据当成经营结果。</p></div></div>');
+    return call("GET", "/orders").then(function (p) {
+      var orders = p.orders || [];
+      var rows = orders.map(function (o) {
+        return "<tr><td>" + esc(o.record_id) + "</td><td>" + esc(o.source_namespace) + " / " + esc(o.external_order_id) + "</td><td>" +
+          '<span class="pill ' + (o.evidence_source === "external_verified" ? "ok" : "warn") + '">' + esc(o.evidence_source) + "</span></td><td>" +
+          esc(o.payment_status || "—") + "</td><td>" + esc(o.fulfillment_status || "—") + "</td><td>" +
+          esc(o.observed_at || "—") + "</td></tr>";
+      }).join("");
+      return '<div class="card"><h2>经营结果（' + orders.length + '）</h2>' +
+        '<p class="muted">订单存在、证据来源、归因与贡献分开呈现；人工申报不会自动升级为外部已核实。</p>' +
+        (rows ? "<table><tr><th>订单</th><th>来源 / 外部ID</th><th>证据</th><th>支付</th><th>履约</th><th>观察时间</th></tr>" + rows + "</table>"
+          : '<div class="empty-state"><p>尚未记录订单。</p><p class="muted">人工/CSV 申报可用；真实外部订单源需 M0 冻结 SourceContract 后接入。</p></div>') +
+        "</div>" +
+        (ROLE === "owner" || ROLE === "operator"
+          ? '<div class="card"><h2>记录人工订单申报</h2>' +
+            '<p class="muted">申报只写人工证据；外部核验需受信来源返回有效事实。</p>' +
+            '<textarea id="order-json" rows="6" aria-label="订单申报 JSON"></textarea>' +
+            '<div class="row" style="margin-top:8px"><button class="act primary" onclick="submitOrderReport()">记录申报</button></div><div id="order-result"></div></div>'
+          : "");
+    });
   },
 };
 
@@ -650,6 +666,17 @@ function currentRevision(cb) {
   call("GET", "/runtime/status").then(cb).catch(function (e) { bar(e.message, true); });
 }
 /* 商品经营：首版只接受完整 JSON；字段枚举在 M0 冻结，页面不替商家猜。 */
+function submitOrderReport() {
+  var raw = $("order-json").value;
+  var body;
+  try { body = JSON.parse(raw); } catch (e) { bar("订单申报 JSON 无效", true); return; }
+  if (!body || typeof body !== "object" || Array.isArray(body)) { bar("订单申报必须是 JSON 对象", true); return; }
+  call("POST", "/orders/reports", body).then(function (order) {
+    $("order-result").innerHTML = '<pre class="digest">' + esc(order.record_id) + " · " + esc(order.evidence_source) + "</pre>";
+    bar("订单申报已记录（人工证据）");
+    refresh();
+  }).catch(function (e) { bar(e.message, true); });
+}
 function createPlan() {
   var raw = $("plan-json").value;
   var body;

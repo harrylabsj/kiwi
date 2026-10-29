@@ -1036,6 +1036,12 @@ export function createMerchantManagementApiHandler(
         writeJson(res, 200, { followups: ops.listFollowUps() }, { "x-request-id": requestId });
         return;
       }
+      if (rest === "/orders") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "orders:read");
+        writeJson(res, 200, { orders: ops.listOrders() }, { "x-request-id": requestId });
+        return;
+      }
     }
     writeWorkbenchProblem(
       res,
@@ -1156,6 +1162,50 @@ export function createMerchantManagementApiHandler(
             : action === "finish" ? ops.finishFollowUp(taskId, body)
               : ops.stopFollowUp(taskId, body),
           { "x-request-id": requestId });
+        return;
+      }
+      if (rest === "/orders/reports") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "orders:report");
+        const { body } = await readOpsBody();
+        writeJson(res, 201, ops.recordOrderReport(body, auth.ctx.actorId), { "x-request-id": requestId });
+        return;
+      }
+      const orderVerifyMatch = /^\/orders\/([^/]+)\/verify$/.exec(rest);
+      if (orderVerifyMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "orders:verify");
+        const { body } = await readOpsBody();
+        writeJson(res, 200, ops.verifyOrder(pathSegment(orderVerifyMatch[1] ?? ""), body), { "x-request-id": requestId });
+        return;
+      }
+      const orderAttributionMatch = /^\/orders\/([^/]+)\/attributions$/.exec(rest);
+      if (orderAttributionMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "orders:report");
+        const { body } = await readOpsBody();
+        writeJson(res, 200, ops.attributeOrder(pathSegment(orderAttributionMatch[1] ?? ""), body), { "x-request-id": requestId });
+        return;
+      }
+      const orderRefundMatch = /^\/orders\/([^/]+)\/refunds$/.exec(rest);
+      if (orderRefundMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "orders:report");
+        const { body } = await readOpsBody();
+        writeJson(res, 200, ops.recordOrderRefund(pathSegment(orderRefundMatch[1] ?? ""), body), { "x-request-id": requestId });
+        return;
+      }
+      const orderContributionMatch = /^\/orders\/([^/]+)\/contribution$/.exec(rest);
+      if (orderContributionMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "contribution:read");
+        const { body } = await readOpsBody();
+        writeJson(res, 200, ops.assessOrderContribution(pathSegment(orderContributionMatch[1] ?? ""), body), { "x-request-id": requestId });
         return;
       }
     }

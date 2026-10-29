@@ -64,6 +64,12 @@ import type {
 import { FollowUpRepository, type FollowUpTask } from "../followup/repository.js";
 import { FollowUpService, type ScheduleFollowUpInput } from "../followup/service.js";
 import type { FollowUpStatus } from "../followup/types.js";
+import { MerchantOrderService, type ManualOrderReportInput } from "../orders/service.js";
+import type { OrderRecordV2 } from "../orders/repository.js";
+import { OrderRepository } from "../orders/repository.js";
+import type { AttributionInput, RefundFact } from "../orders/model.js";
+import { ContributionRepository } from "../contribution/repository.js";
+import type { ContributionInput } from "../contribution/types.js";
 
 export interface MerchantOperationsFacadeOptions {
   db: DatabaseSync;
@@ -76,6 +82,8 @@ export class MerchantOperationsFacade {
   readonly opportunities: OpportunityService;
   readonly proposals: ProposalService;
   readonly followups: FollowUpService;
+  readonly orders: MerchantOrderService;
+  readonly contributions: ContributionRepository;
   readonly merchantId: string;
 
   constructor(options: MerchantOperationsFacadeOptions) {
@@ -99,6 +107,11 @@ export class MerchantOperationsFacade {
     this.followups = new FollowUpService({
       repository: new FollowUpRepository({ db: options.db, now }),
       now,
+    });
+    this.contributions = new ContributionRepository({ db: options.db, now });
+    this.orders = new MerchantOrderService({
+      orders: new OrderRepository({ db: options.db, now }),
+      contributions: this.contributions,
     });
   }
 
@@ -307,6 +320,55 @@ export class MerchantOperationsFacade {
 
   recoverFollowUps(): FollowUpTask[] {
     return this.followups.recoverExpiredLeases(this.merchantId);
+  }
+
+  listOrders(): OrderRecordV2[] {
+    return this.orders.listOrders(this.merchantId);
+  }
+
+  getOrder(recordId: string): OrderRecordV2 | undefined {
+    return this.orders.getOrder(this.merchantId, recordId);
+  }
+
+  recordManualOrder(input: Omit<ManualOrderReportInput, "identity"> & {
+    source_namespace: string;
+    source_account_id: string;
+    external_order_id: string;
+  }): OrderRecordV2 {
+    return this.orders.recordManualReport({
+      ...input,
+      identity: {
+        merchant_id: this.merchantId,
+        source_namespace: input.source_namespace,
+        source_account_id: input.source_account_id,
+        external_order_id: input.external_order_id,
+      },
+    });
+  }
+
+  verifyOrder(recordId: string, input: { verified: boolean; source_version: string; verified_at: string }): OrderRecordV2 {
+    return this.orders.verifyWithSourceFact({
+      merchantId: this.merchantId,
+      recordId,
+      ...input,
+    });
+  }
+
+  attributeOrder(recordId: string, allocations: AttributionInput[]): ReturnType<MerchantOrderService["attribute"]> {
+    return this.orders.attribute(recordId, allocations);
+  }
+
+  recordOrderRefund(recordId: string, refund: RefundFact): { status: string; totalMinor: number } {
+    return this.orders.recordRefund({ merchantId: this.merchantId, recordId, refund });
+  }
+
+  assessOrderContribution(recordId: string, contribution: ContributionInput, costSnapshotId?: string): ReturnType<MerchantOrderService["assessContribution"]> {
+    return this.orders.assessContribution({
+      merchantId: this.merchantId,
+      recordId,
+      contribution,
+      ...(costSnapshotId !== undefined ? { costSnapshotId } : {}),
+    });
   }
 
   linkOpportunitySource(input: {
