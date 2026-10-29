@@ -38,6 +38,7 @@ import {
   type ConnectionSession,
 } from "../src/cloud/connect-service.js";
 import { WORKBUDDY_CUSTODY_TERMS_VERSION } from "../src/cloud/access/workbuddy-share-link.js";
+import { connectMerchant } from "../src/cloud/merchant-connect.js";
 import { canonicalize } from "../src/negotiation/jcs.js";
 
 const RUNTIME_ORIGIN = "https://runtime.test";
@@ -389,6 +390,25 @@ describe("auth mode conflict (M-06)", () => {
     expect(error).toBeInstanceOf(MerchantConnectError);
     expect((error as MerchantConnectError).code).toBe("ACCESS_AUTH_MODE_CONFLICT");
     expect((error as MerchantConnectError).message).toContain("signature");
+  });
+});
+
+describe("connectMerchant carries the configured share link", () => {
+  it("forwards KIWI_CLOUD_ACCESS_SHARE_LINK into the first bind and rejects a foreign link", async () => {
+    // 实施方用环境变量一次性提供链接：`merchant connect` 必须把它带进首绑。
+    // 用"链接指向别的部署"来证明它确实进了服务（构造函数即拒绝，不会发出请求）。
+    const dataDir = mkdtempSync(path.join(tmpdir(), "kiwi-connect-share-"));
+    cleanups.push(() => rmSync(dataDir, { recursive: true, force: true }));
+    const error = await connectMerchant({
+      profile: { role: "merchant", agent_id: "agent_share", owner_id: "owner_share" } as never,
+      dataDir,
+      catalogUrl: CATALOG_ORIGIN,
+      publicOrigin: RUNTIME_ORIGIN,
+      accessShareLink: "https://other.example/a2a?sharecode=abc",
+      fetchImpl: (async () => new Response("{}")) as typeof fetch,
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/不是本实例的公网入口/);
   });
 });
 

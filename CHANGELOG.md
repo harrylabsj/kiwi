@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.12.14 — 2026-10-29
+
+- **首绑随附分享链接**：`KIWI_CLOUD_ACCESS_SHARE_LINK` 此前只在托管云运行时（`bootstrap`）生效；自托管的 `kiwi merchant connect` 现在也读它，并在绑定请求里随附 `access_config`。分享码只存在于平台「发布为网站」的链接里、没有可取用的接口，所以由实施方一次性提供，商家不必再到工作台手工粘贴；换码仍走工作台的签名更新。
+
 ## v0.12.13 — 2026-10-29
 
 - **中文买家的询价被整条拒绝**：商家对单位是严格比较（不做同义词映射），而 WorkBuddy 上的买家发的是 `unit: "个"`、商家声明的是 `piece`，于是每笔询价都在 0.0 秒内回 `decline: field_unsupported`（线上复现：`{"sku":"VQ-101","quantity":{"value":1,"unit":"个"}}`）。新增 `commerce.unit_aliases`：商家显式声明自己接受哪些写法并映射到 `default_unit`，表里没有的照旧拒绝——不做隐式同义词映射。同时放宽 `default_unit` 的校验以允许中文单位（`个`/`件`）。

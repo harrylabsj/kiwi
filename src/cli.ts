@@ -1611,10 +1611,15 @@ async function cmdMerchantConnect(args: ParsedArgs): Promise<number> {
     const dataDir = resolveServeDataDir(args.dataDir, profile.agent_id, profile.merchant_runtime?.data_dir);
     const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? profile.merchant_public?.catalog_url ?? DEFAULT_CATALOG_URL;
     const publicOrigin = process.env.KIWI_CLOUD_PUBLIC_ORIGIN ?? process.env.KIWI_A2A_PUBLIC_URL ?? profile.merchant_public?.public_url;
+    // 分享码只存在于平台「发布为网站」的链接里，没有可自动获取的接口；实施方用
+    // `KIWI_CLOUD_ACCESS_SHARE_LINK` 一次性提供，首绑即随附提交，省掉商家到工作台
+    // 手工粘贴。后续换码仍走工作台的签名更新（不覆盖已有配置之外的语义）。
+    const accessShareLink = (process.env.KIWI_CLOUD_ACCESS_SHARE_LINK ?? "").trim();
     const result = await connectMerchant({
       profile,
       dataDir,
       catalogUrl: catalog,
+      ...(accessShareLink !== "" ? { accessShareLink } : {}),
       ...(publicOrigin !== undefined ? { publicOrigin } : {}),
       ...(process.platform !== "win32" ? { openBrowser: (url: string) => {
         const command = process.platform === "darwin" ? "open" : "xdg-open";

@@ -74,6 +74,14 @@ export interface MerchantConnectOptions {
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /**
+   * 首绑随附的 WorkBuddy 分享链接（`KIWI_CLOUD_ACCESS_SHARE_LINK`）。
+   *
+   * 分享码只存在于平台「发布为网站」的链接里，没有可自动获取的接口；把链接交给
+   * 实施方一次性提供（环境变量），商家就不用再到工作台手工粘贴。"首绑一次性"
+   * 的语义由目录侧保证：只在创建 enrollment 时随附，后续版本变更仍走签名更新。
+   */
+  accessShareLink?: string;
 }
 
 /** 失败时保留设备状态、许可与绑定回执；重跑命令按相同 enrollment 继续。 */
@@ -94,6 +102,9 @@ export async function connectMerchant(options: MerchantConnectOptions): Promise<
     serviceEpoch: 1,
     ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
     ...(options.now !== undefined ? { now: options.now } : {}),
+    ...(options.accessShareLink !== undefined && options.accessShareLink.trim() !== ""
+      ? { accessShareLink: options.accessShareLink.trim() }
+      : {}),
   });
 
   const completed = (summary: ConnectionSummary): { agentId: string; bindingId: string; cardRevision: number } => {
