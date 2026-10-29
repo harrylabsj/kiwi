@@ -2610,7 +2610,7 @@
     },
     {
       "path": "src/config/profile.ts",
-      "sha256": "sha256:0267fda4e2aa0bf395523c051fe06d4654fb1522915745b766dc74ccdfeb81fb"
+      "sha256": "sha256:f8575c8b09b63e0656ce82d2b91800263c67db2a71014c61333e940d0b62614d"
     },
     {
       "path": "src/config/provider-kind.ts",
