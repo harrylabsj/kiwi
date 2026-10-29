@@ -293,4 +293,77 @@ export class MerchantOperationsSurface {
     const body = objectBody(value);
     return this.facade.stopFollowUp(taskId, body.in_flight === true);
   }
+  // ── 订单与贡献 ────────────────────────────────────────────────────────
+
+  listOrders(): unknown[] {
+    return this.facade.listOrders();
+  }
+
+  recordOrderReport(value: unknown, actor: string): unknown {
+    const body = objectBody(value);
+    return this.facade.recordManualOrder({
+      source_namespace: text(body, "source_namespace"),
+      source_account_id: text(body, "source_account_id"),
+      external_order_id: text(body, "external_order_id"),
+      lines: (Array.isArray(body.lines) ? body.lines : []) as never,
+      ...(optionalText(body, "currency") !== undefined ? { currency: optionalText(body, "currency") } : {}),
+      ...(optionalInteger(body, "total_minor") !== undefined ? { total_minor: optionalInteger(body, "total_minor") } : {}),
+      ...(optionalText(body, "payment_status") !== undefined
+        ? { payment_status: optionalText(body, "payment_status") }
+        : {}),
+      ...(optionalText(body, "fulfillment_status") !== undefined
+        ? { fulfillment_status: optionalText(body, "fulfillment_status") }
+        : {}),
+      observed_at: text(body, "observed_at"),
+      reported_by: optionalText(body, "reported_by") ?? actor,
+      ...(optionalText(body, "evidence_ref") !== undefined
+        ? { evidence_ref: optionalText(body, "evidence_ref") }
+        : {}),
+    });
+  }
+
+  verifyOrder(recordId: string, value: unknown): unknown {
+    const body = objectBody(value);
+    return this.facade.verifyOrder(recordId, {
+      verified: body.verified === true,
+      source_version: text(body, "source_version"),
+      verified_at: text(body, "verified_at"),
+    });
+  }
+
+  attributeOrder(recordId: string, value: unknown): unknown {
+    const body = objectBody(value);
+    return this.facade.attributeOrder(
+      recordId,
+      (Array.isArray(body.allocations) ? body.allocations : []) as never,
+    );
+  }
+
+  recordOrderRefund(recordId: string, value: unknown): unknown {
+    const body = objectBody(value);
+    const order = this.facade.getOrder(recordId);
+    if (order === undefined) throw new ManagementError("not_found", `order ${recordId} not found`);
+    return this.facade.recordOrderRefund(recordId, {
+      identity: {
+        merchant_id: order.merchant_id,
+        source_namespace: order.source_namespace,
+        source_account_id: order.source_account_id,
+        external_order_id: order.external_order_id,
+        external_refund_id: text(body, "external_refund_id"),
+      },
+      amount_minor: integer(body, "amount_minor"),
+      version: integer(body, "version"),
+      status: body.status === "reversed" ? "reversed" : "active",
+    });
+  }
+
+  assessOrderContribution(recordId: string, value: unknown): unknown {
+    const body = objectBody(value);
+    return this.facade.assessOrderContribution(
+      recordId,
+      body as never,
+      optionalText(body, "cost_snapshot_id"),
+    );
+  }
+
 }

@@ -1340,4 +1340,53 @@ describe("Merchant operations API（v0.2 经营计划/跟进）", () => {
     expect(followUps.status).toBe(200);
     expect(((await followUps.json()) as { followups: unknown[] }).followups.length).toBeGreaterThan(0);
   });
+
+  it("人工订单申报不升级，owner 核验后才标外部已核实", async () => {
+    const operator = await createAuth("operator:orders", "operator");
+    const reported = await postWithAuth(
+      "/merchant/api/v1/orders/reports",
+      {
+        source_namespace: "jd",
+        source_account_id: "account-1",
+        external_order_id: "order-http-1",
+        observed_at: "2026-09-21T12:00:00.000Z",
+        reported_by: "operator:orders",
+        lines: [{ line_id: "line-1", sku: "SKU-1", quantity: 2, amount_minor: 1_000 }],
+        currency: "CNY",
+        total_minor: 1_000,
+        payment_status: "paid",
+      },
+      operator,
+    );
+    expect(reported.status).toBe(201);
+    const order = (await reported.json()) as { record_id: string; evidence_source: string };
+    expect(order.evidence_source).toBe("manual_report");
+
+    const verified = await post(
+      `/merchant/api/v1/orders/${order.record_id}/verify`,
+      { verified: true, source_version: "jd:42", verified_at: "2026-09-21T12:05:00.000Z" },
+    );
+    expect(verified.status).toBe(200);
+    expect(((await verified.json()) as { evidence_source: string }).evidence_source).toBe(
+      "external_verified",
+    );
+
+    const viewer = await createAuth("viewer:orders", "viewer");
+    const list = await fetch(`${base}/merchant/api/v1/orders`, {
+      headers: { cookie: viewer.cookie },
+    });
+    expect(list.status).toBe(200);
+    const denied = await postWithAuth(
+      "/merchant/api/v1/orders/reports",
+      {
+        source_namespace: "jd",
+        source_account_id: "account-1",
+        external_order_id: "order-http-2",
+        observed_at: "2026-09-21T12:00:00.000Z",
+        lines: [],
+      },
+      viewer,
+    );
+    expect(denied.status).toBe(403);
+  });
 });
