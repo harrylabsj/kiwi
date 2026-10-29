@@ -1172,6 +1172,14 @@ export function createMerchantManagementApiHandler(
         writeJson(res, 201, ops.recordOrderReport(body, auth.ctx.actorId), { "x-request-id": requestId });
         return;
       }
+      if (rest === "/orders/csv") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "orders:report");
+        const { body } = await readOpsBody();
+        writeJson(res, 201, { orders: ops.recordCsvOrderReport(body, auth.ctx.actorId) }, { "x-request-id": requestId });
+        return;
+      }
       const orderVerifyMatch = /^\/orders\/([^/]+)\/verify$/.exec(rest);
       if (orderVerifyMatch !== null) {
         const auth = requireActor(req);

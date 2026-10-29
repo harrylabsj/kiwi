@@ -33,6 +33,7 @@ import {
   type RefundFact,
 } from "./model.js";
 import type { OrderRecordV2, OrderRepository } from "./repository.js";
+import { parseOrderCsv } from "./csv.js";
 
 export interface OrderSourceContract {
   source_namespace: string;
@@ -111,6 +112,37 @@ export class MerchantOrderService {
 
   getOrder(merchantId: string, recordId: string): OrderRecordV2 | undefined {
     return this.orders.getOrder(merchantId, recordId);
+  }
+
+  /** CSV 申报：整批解析后逐单写入 csv_import 证据；坏行整批拒绝。 */
+  recordCsvReport(input: {
+    merchantId: string;
+    csv: string;
+    reportedBy: string;
+    observedAtFallback: string;
+  }): OrderRecordV2[] {
+    if (input.reportedBy.trim() === "") {
+      throw new OrderFactError("validation", "reportedBy 不能为空");
+    }
+    const reports = parseOrderCsv(input.csv);
+    if (!Number.isFinite(Date.parse(input.observedAtFallback))) {
+      throw new OrderFactError("validation", "observedAtFallback 必须是可解析时间");
+    }
+    return reports.map(
+      (report) =>
+        this.orders.createOrder({
+          identity: { ...report.identity, merchant_id: input.merchantId },
+          evidenceSource: "csv_import",
+          ...(report.payment_status !== undefined ? { paymentStatus: report.payment_status } : {}),
+          ...(report.fulfillment_status !== undefined
+            ? { fulfillmentStatus: report.fulfillment_status }
+            : {}),
+          ...(report.currency !== undefined ? { currency: report.currency } : {}),
+          ...(report.total_minor !== undefined ? { totalMinor: report.total_minor } : {}),
+          observedAt: report.observed_at || input.observedAtFallback,
+          lines: report.lines,
+        }).order,
+    );
   }
 
   /** 只有受信来源返回有效事实才升级；凭证缺省/无效时保持人工申报状态。 */

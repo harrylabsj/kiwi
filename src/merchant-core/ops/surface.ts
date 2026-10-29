@@ -322,6 +322,15 @@ export class MerchantOperationsSurface {
     });
   }
 
+  recordCsvOrderReport(value: unknown, actor: string): unknown {
+    const body = objectBody(value);
+    return this.facade.recordCsvOrderReport({
+      csv: text(body, "csv"),
+      reportedBy: optionalText(body, "reported_by") ?? actor,
+      observedAtFallback: text(body, "observed_at"),
+    });
+  }
+
   verifyOrder(recordId: string, value: unknown): unknown {
     const body = objectBody(value);
     return this.facade.verifyOrder(recordId, {
