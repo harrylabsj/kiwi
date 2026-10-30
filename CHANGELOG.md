@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.12.18 — 2026-10-30
+
+- **还价口径与预算一致**：`kiwi_negotiate` 的结构化目标价依次取意图 `target_unit_price`、`budget / 数量`、当前价×默认折扣；此前预算 150 元会发出 143.10（当前价×0.9），与用户口径不一致。
+- **协商结果回写候选**：商家最新 `offer`/`conditional_offer` 会刷新候选的 `offer_id`、`merchant_reply_id`、条款与可复算 digest；`kiwi_get_task` 不再显示初始报价，下一轮还价 reply 到最新消息。
+- **接受协议绑定真实条款**：`kiwi_accept_agreement` 以商家最新 agreed terms 生成 digest，并把 `agreed_terms` 写入协议；仅 `conditional_offer` 才向商家发送 `accept_nonbinding`。
+- **商家侧同步成交**：商家返回与本次接受一致的 agreement artifact 后，账本进入 `AGREEMENT_REACHED`，不再停在 `OFFER_OPEN` 被 24h 过期 job 终止。
+- **商家后台时间线按会话时间排序**：改用 `occurred_at`，修复买方还价被显示在其触发的商家回复之后（“最后一行 143.10”错觉）；`needs_attention` 同步按会话顺序判断。
+- **交接入口可核验**：tool 描述列出合法 `destination_type`；`external_checkout_url`/`platform_deep_link` 未传 URL 时回落到商家条款里的 `handoff_destination`。
+- **可信代理地址**：可选 `KIWI_A2A_TRUST_FORWARDED_FOR=1`，旁观/限流使用代理转发的客户端地址（不参与认证）。
+
 ## v0.12.17 — 2026-10-30
 
 - **过期报价自动终止**：runtime 每 5 分钟扫描 Ledger（启动时立即扫一次），把 `OFFER_OPEN` 且 active offer 的 `valid_until` 已过的磋商追加 `state_transition`（OFFER_OPEN → EXPIRED，终态）；缺失 `valid_until` 时按报价落账时间 + 24h 兜底。重复运行幂等。
