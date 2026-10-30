@@ -48,9 +48,9 @@ export async function startVerifiedBackend({nodeBinary,sessionDirectory,baseline
     });
   }
   async function notification(method,params){await writeLine(child.stdin,JSON.stringify({jsonrpc:'2.0',method,params}))}
-  function stop(_reason='BACKEND_STOPPED'){
-    if(stopped)return;stopped=true;rejectWaiters('BACKEND_STOPPED');try{child.kill('SIGTERM')}catch{}
-    const timer=setTimeout(()=>{if(child.exitCode===null&&child.signalCode===null)try{child.kill('SIGKILL')}catch{}},1500);timer.unref?.();
+  function stop(){
+    if(stopped)return;stopped=true;rejectWaiters('BACKEND_STOPPED');try{child.kill('SIGTERM')}catch{void 0;}
+    const timer=setTimeout(()=>{if(child.exitCode===null&&child.signalCode===null)try{child.kill('SIGKILL')}catch{void 0;}},1500);timer.unref?.();
   }
   const cancel=()=>stop('BACKEND_CANCELLED');signal?.addEventListener('abort',cancel,{once:true});
   done.finally(()=>signal?.removeEventListener('abort',cancel)).catch(()=>{});

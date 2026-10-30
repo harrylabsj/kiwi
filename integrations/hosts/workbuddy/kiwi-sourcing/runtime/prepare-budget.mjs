@@ -17,7 +17,7 @@ export function runPrepareCommand(command,args,{cwd,env,timeoutMs,maxBuffer=4*10
   let child,settled=false,timer,killTimer,forcedTimer,stdout=[],stderr=[],outBytes=0,errBytes=0,stopping;
   const onInterrupt=()=>stop('PREPARE_CANCELLED');
   const finish=(error,result)=>{if(settled)return;settled=true;clearTimeout(timer);clearTimeout(killTimer);clearTimeout(forcedTimer);process.off('SIGTERM',onInterrupt);process.off('SIGINT',onInterrupt);if(error)reject(error);else resolve(result)};
-  const stop=code=>{if(stopping||settled)return;stopping=code;try{process.kill(-child.pid,'SIGTERM')}catch{try{child.kill('SIGTERM')}catch{}}killTimer=setTimeout(()=>{try{process.kill(-child.pid,'SIGKILL')}catch{try{child.kill('SIGKILL')}catch{}}},750);forcedTimer=setTimeout(()=>finish(new Error('PREPARE_TERMINATION_UNCONFIRMED')),3000)};
+  const stop=code=>{if(stopping||settled)return;stopping=code;try{process.kill(-child.pid,'SIGTERM')}catch{try{child.kill('SIGTERM')}catch{void 0;}}killTimer=setTimeout(()=>{try{process.kill(-child.pid,'SIGKILL')}catch{try{child.kill('SIGKILL')}catch{void 0;}}},750);forcedTimer=setTimeout(()=>finish(new Error('PREPARE_TERMINATION_UNCONFIRMED')),3000)};
   try{child=spawn(command,args,{cwd,env,detached:true,stdio:['ignore','pipe','pipe']})}catch{return finish(new Error('PREPARE_COMMAND_START_FAILED'))}
   child.once('error',()=>finish(new Error('PREPARE_COMMAND_START_FAILED')));
   process.once('SIGTERM',onInterrupt);process.once('SIGINT',onInterrupt);

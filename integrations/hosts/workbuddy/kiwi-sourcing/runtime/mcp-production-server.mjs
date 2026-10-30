@@ -15,8 +15,8 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
   if(baselineByName.size!==13||[...baselineByName.keys()].some(name=>!KNOWN.has(name)))throw new Error('TOOL_BASELINE_INVALID');
   const abort=new AbortController(),reader=createInterface({input,crlfDelay:Infinity});
   let phase='preparing',hostInitialized=false,hostReady=false,hostCanElicit=false,clientProtocolVersionClass='NOT_OBSERVED',backend,stopped=false,stopping=false,preparedResult,runTask,finishTask;
-  const status=code=>{try{onStatus(code)}catch{}};
-  const protocolDiagnostic=state=>{try{onProtocolDiagnostic({clientProtocolVersionClass,negotiatedProtocolVersion:PROTOCOL,state})}catch{}};
+  const status=code=>{try{onStatus(code)}catch{void 0;}};
+  const protocolDiagnostic=state=>{try{onProtocolDiagnostic({clientProtocolVersionClass,negotiatedProtocolVersion:PROTOCOL,state})}catch{void 0;}};
   let resolveHostReady;const hostReadyPromise=new Promise(resolve=>{resolveHostReady=resolve});
   const backendRequests=new Map(),activeToolCalls=new Map(),expiredBackend=new Set(),timedOutClientIds=new Set();
   let resolveDone;const done=new Promise(resolve=>{resolveDone=resolve});
@@ -35,7 +35,7 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
   function settleExit(status,code){
     if(finishTask)return finishTask;
     finishTask=(async()=>{
-      abort.abort();try{backend?.stop()}catch{}try{reader.close()}catch{}output.off('error',outputError);
+      abort.abort();try{backend?.stop()}catch{void 0;}try{reader.close()}catch{void 0;}output.off('error',outputError);
       await Promise.all([runTask,backend?.done].filter(Boolean).map(p=>Promise.resolve(p).catch(()=>{})));
       resolveDone({status,...(code?{code}:{})});
     })();return finishTask;
@@ -131,13 +131,13 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
   async function run(){
     try{
       let prepared;
-      try{prepared=await prepare({signal:abort.signal})}catch(error){status(error?.message==='PREPARE_TIMEOUT'?'TIMEOUT_PREPARE':'FAILED_PREPARE');throw new Error('PREPARE_FAILED')}
+      try{prepared=await prepare({signal:abort.signal})}catch(error){status(error?.message==='PREPARE_TIMEOUT'?'TIMEOUT_PREPARE':'FAILED_PREPARE');throw new Error('PREPARE_FAILED',{cause:error})}
       if(stopped||abort.signal.aborted)return;
       preparedResult=prepared;
       const initialized=await Promise.race([hostReadyPromise,new Promise(resolve=>abort.signal.addEventListener('abort',()=>resolve(false),{once:true}))]);
       if(!initialized||stopped||abort.signal.aborted)return;
       let active;
-      try{active=await activate(prepared,{signal:abort.signal,clientCapabilities:{elicitation:hostCanElicit},onMessage:onBackendMessage})}catch(error){status(error?.message==='BACKEND_HANDSHAKE_TIMEOUT'?'TIMEOUT_BACKEND':'FAILED_BACKEND');throw new Error('BACKEND_VERIFY_FAILED')}
+      try{active=await activate(prepared,{signal:abort.signal,clientCapabilities:{elicitation:hostCanElicit},onMessage:onBackendMessage})}catch(error){status(error?.message==='BACKEND_HANDSHAKE_TIMEOUT'?'TIMEOUT_BACKEND':'FAILED_BACKEND');throw new Error('BACKEND_VERIFY_FAILED',{cause:error})}
       if(stopped||abort.signal.aborted){active?.stop?.();return}
       if(!active||typeof active.send!=='function'||!active.done||typeof active.stop!=='function'||active.toolCount!==13||active.protocolVersion!==PROTOCOL){status('FAILED_BACKEND');throw new Error('BACKEND_HANDLE_INVALID')}
       backend=active;phase='ready';status('READY');

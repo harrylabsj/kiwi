@@ -10,7 +10,7 @@ import {selectEnvironment} from './environment-policy.mjs';
 
 function findExecutable(name){
   const directories=[dirname(process.execPath),...(process.env.PATH??'').split(delimiter)];
-  for(const directory of directories){if(!isAbsolute(directory))continue;try{const file=realpathSync(join(directory,name));accessSync(file,constants.X_OK);if(lstatSync(file).isFile())return file}catch{}}
+  for(const directory of directories){if(!isAbsolute(directory))continue;try{const file=realpathSync(join(directory,name));accessSync(file,constants.X_OK);if(lstatSync(file).isFile())return file}catch{void 0;}}
   throw new Error('RUNTIME_DEPENDENCY_MISSING');
 }
 function assertPrivateDataDirectory(path){

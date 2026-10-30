@@ -10,7 +10,6 @@ const root=dirname(fileURLToPath(import.meta.url));
 const raw=JSON.parse(readFileSync(join(root,'..','runtime','mcp-tools-0.12.12.json'),'utf8'));
 const baseline=Array.isArray(raw)?raw:raw.tools;
 const prepared={name:'@harrylabsj/kiwi',latestChecked:true,authorizationProven:false,executionAuthorized:false,sessionDirectory:'/private/tmp/synthetic-prepared'};
-const response=(id,params)=>({jsonrpc:'2.0',id,result:params});
 function harness({prepare=async()=>prepared,activate,consentTimeoutMs=50}={}){
   const input=new PassThrough(),output=new PassThrough(),messages=[],statuses=[];let buffer='';
   output.on('data',chunk=>{buffer+=chunk.toString();let index;while((index=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,index);buffer=buffer.slice(index+1);if(line)messages.push(JSON.parse(line))}});
@@ -93,13 +92,13 @@ test('shutdown aborts preparation and waits for backend cleanup',async()=>{
   await initialize(h);
   h.input.end();await h.server.done;
   assert.equal(abortSeen,true);assert.equal(stopSeen,false);
-  let release,backendResolve;
+  let backendResolve;
   const running=harness({activate:async()=>({send:async()=>{},done:new Promise(resolve=>{backendResolve=resolve}),stop:()=>{stopSeen=true;backendResolve()},toolCount:13,protocolVersion:'2025-06-18'})});
   try{
     await initialize(running);
     await until(running.messages,()=>running.server.status==='ready');
     running.input.end();await running.server.done;assert.equal(stopSeen,true);
-  }finally{void release}
+  }finally{void 0;}
 });
 
 test('fixed READY status follows verified 13-tool activation; failures and shutdown are fixed and never enter MCP stdout',async()=>{

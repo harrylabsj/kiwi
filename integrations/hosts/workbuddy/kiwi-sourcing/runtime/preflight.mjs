@@ -41,10 +41,10 @@ export async function preflight({name, stagingParent, npmBinary, nodeBinary, pyt
     const r=await exec(pythonBinary,[script,archive,lock.version],{cwd:directory,env:environment,timeout:120_000,maxBuffer:1024*1024});
     const result=JSON.parse(r.stdout);
     if(result.version!==lock.version || (name==='@harrylabsj/kiwi' && result.name!==name) || (name==='@harrylabsj/kiwi-merchant-cloud' && result.sourceCommit!==published.sourceCommit)) throw new Error('ARCHIVE_IDENTITY_MISMATCH');
-  } catch {throw new Error('ARCHIVE_INSPECTION_FAILED')}
+  } catch(error) {throw new Error('ARCHIVE_INSPECTION_FAILED',{cause:error})}
   try {
     await runPrepareCommand(npmBinary,['install','--ignore-scripts','--no-audit','--no-fund'],{cwd:directory,env:environment,timeoutMs:remainingPrepareBudgetMs(environment),maxBuffer:4*1024*1024});
-  } catch(error) { if(error?.message==='PREPARE_TIMEOUT'||error?.message==='PREPARE_TERMINATION_UNCONFIRMED')throw error;throw new Error('ISOLATED_INSTALL_FAILED'); }
+  } catch(error) { if(error?.message==='PREPARE_TIMEOUT'||error?.message==='PREPARE_TERMINATION_UNCONFIRMED')throw error;throw new Error('ISOLATED_INSTALL_FAILED',{cause:error}); }
   const verified = await auditStagedPackage({directory,npmBinary,lock,tarball:bytes,env:environment});
   if(verified.sourceCommit!==published.sourceCommit) throw new Error('SOURCE_COMMIT_MISMATCH');
   let treeInspection = null;

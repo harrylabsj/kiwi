@@ -11,7 +11,7 @@ const ERRNOS=new Set([
 const SIGNALS=new Set(['SIGABRT','SIGALRM','SIGBUS','SIGFPE','SIGHUP','SIGILL','SIGINT','SIGKILL','SIGPIPE','SIGQUIT','SIGSEGV','SIGTERM','SIGTRAP','SIGUSR1','SIGUSR2']);
 
 function field(error,name){
-  try{return error?.[name]}catch{return undefined}
+  try{return error?.[name]}catch{void 0;return undefined}
 }
 
 export function classifyInstallFailure(error){
@@ -36,14 +36,14 @@ export function writeInstallFailureDiagnostic(directory,error){
     fsyncSync(fd);closeSync(fd);fd=undefined;
   }catch{
     // Preserve the original install failure even if safe diagnostic storage fails.
-  }finally{if(fd!==undefined)try{closeSync(fd)}catch{}}
+  }finally{if(fd!==undefined)try{closeSync(fd)}catch{void 0;}}
   return diagnostic;
 }
 
 export async function runIsolatedInstall({directory,install}){
   try{await install();return {status:'SUCCESS'}}
   catch(error){
-    try{writeInstallFailureDiagnostic(directory,error)}catch{}
-    throw new Error('ISOLATED_INSTALL_FAILED');
+    try{writeInstallFailureDiagnostic(directory,error)}catch{void 0;}
+    throw new Error('ISOLATED_INSTALL_FAILED',{cause:error});
   }
 }

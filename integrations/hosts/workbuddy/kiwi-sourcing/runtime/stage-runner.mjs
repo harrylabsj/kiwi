@@ -13,7 +13,7 @@ export function runPreparation({nodeBinary,cliPath,args,env,timeoutMs=600000,pro
  return new Promise((resolve,reject)=>{
   let child,done=false,stopping,timer,terminationTimer,progressTimer,size=0,chunks=[],stderrPending='',stderrBytes=0,prepareCategory;const stderrDecoder=new StringDecoder('utf8'),startedAt=Date.now();
   const settle=(error,result)=>{if(done)return;done=true;clearTimeout(timer);clearTimeout(terminationTimer);clearInterval(progressTimer);signal?.removeEventListener('abort',cancel);if(error)reject(new Error(error));else resolve(result)};
-  const terminate=()=>{if(child?.pid&&child.exitCode===null&&child.signalCode===null){try{process.kill(-child.pid,'SIGTERM')}catch{try{child.kill('SIGTERM')}catch{}}}};
+  const terminate=()=>{if(child?.pid&&child.exitCode===null&&child.signalCode===null){try{process.kill(-child.pid,'SIGTERM')}catch{try{child.kill('SIGTERM')}catch{void 0;}}}};
   const stop=code=>{if(done||stopping)return;stopping=code;chunks=[];clearTimeout(timer);terminate();terminationTimer=setTimeout(()=>settle('PREPARE_TERMINATION_UNCONFIRMED'),3000)};
   const cancel=()=>stop('PREPARE_CANCELLED');
   const cleanEnv=selectEnvironment(env,'prepare');cleanEnv.KIWI_PREPARE_DEADLINE_EPOCH_MS=String(Date.now()+timeoutMs);
@@ -27,7 +27,7 @@ export function runPreparation({nodeBinary,cliPath,args,env,timeoutMs=600000,pro
    settle(null,result);
   });
   timer=setTimeout(()=>stop('PREPARE_TIMEOUT'),timeoutMs);
-  progressTimer=setInterval(()=>{try{onProgress({stage:'PREPARE',elapsedMs:Date.now()-startedAt})}catch{}},progressIntervalMs);progressTimer.unref?.();
+  progressTimer=setInterval(()=>{try{onProgress({stage:'PREPARE',elapsedMs:Date.now()-startedAt})}catch{void 0;}},progressIntervalMs);progressTimer.unref?.();
   signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
  });
 }

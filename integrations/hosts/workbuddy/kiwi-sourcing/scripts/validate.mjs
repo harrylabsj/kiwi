@@ -1,5 +1,5 @@
 import {existsSync,lstatSync,readFileSync,readdirSync} from 'node:fs';
-import {dirname,join,resolve,relative,sep} from 'node:path';
+import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {runtimeFiles,rootFiles,skillFiles} from './package-manifest.mjs';
 
@@ -26,7 +26,7 @@ const runtimeSet=new Set(runtimeFiles);
 for(const file of runtimeFiles){
   const sourcePath=join(root,'runtime',file);if(!existsSync(sourcePath)||!file.endsWith('.mjs'))continue;
   const source=readFileSync(sourcePath,'utf8');
-  for(const match of source.matchAll(/from ['\"]\.\/([^'\"]+)['\"]/g))check(runtimeSet.has(match[1]),`runtime_import_missing:${file}:${match[1]}`);
+  for(const match of source.matchAll(/from ['"]\.\/([^'"]+)['"]/g))check(runtimeSet.has(match[1]),`runtime_import_missing:${file}:${match[1]}`);
 }
 const included=[...rootFiles,...skillFiles,...runtimeFiles.map(file=>`runtime/${file}`)];
 const content=included.map(read).join('\n');

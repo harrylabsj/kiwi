@@ -17,7 +17,7 @@ export async function startBackendWithPreparedLock({storeDirectory,prepared,veri
       if(!backend||typeof backend.send!=='function'||typeof backend.stop!=='function'||!backend.done)throw new Error('BACKEND_HANDLE_INVALID');
       resolveReady(backend);
       await backend.done;
-    }catch(error){try{backend?.stop()}catch{}rejectReady(error);throw error}
+    }catch(error){try{backend?.stop()}catch{void 0;}rejectReady(error);throw error}
   });
   lifetime.catch(rejectReady);
   const backend=await ready;
