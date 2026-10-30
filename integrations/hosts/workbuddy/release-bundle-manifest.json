@@ -1,0 +1,54 @@
+{
+  "schema": "kiwi.workbuddy.asset-bundle.v1",
+  "snapshot": {
+    "platform_inventory_date": "2026-10-27",
+    "platform_inventory_state": "historical snapshot; not live",
+    "current_observation_date": "2026-10-31",
+    "current_observation_source": "Root live read-only WorkBuddy platform inventory relayed in this task",
+    "current_observations": [
+      "kiwi网络空间 1.0.4 reviewing; source package for that version is not present in this worktree",
+      "Kiwi商家运营 connector 1.2.0 published",
+      "Kiwi开店团队 0.1.3 reviewing; 开通顾问 0.1.4 reviewing",
+      "Kiwi购物智能体 1.1.0 reviewing; 网购助手 1.2.0 reviewing; 网上购物助手 skill 1.2.0 reviewing",
+      "Kiwi云端接待部署 0.3.2 reviewing; other Kiwi merchant skills remain published"
+    ],
+    "ledger_path": "docs/platform-release-ledger.md",
+    "source_revision": "4c85566646eec54552d0351b3a93823eae16d366",
+    "note": "Contains source snapshots and separately built candidate packages. Inclusion never means currently published, approved, or platform-upload compatible."
+  },
+  "assets": [
+    {"kind":"expert","id":"oe_eee5ab6349f00203","name":"开通顾问","platform_version":"0.1.2","observed_state":"published in 2026-10-27 snapshot; 0.1.4 reviewing on 2026-10-31","source":"kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.1.2","source_version":"0.1.2","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"expert","id":"oe_a2d0c6cc725719bd","name":"报价助理","platform_version":"0.1.2","observed_state":"published in 2026-10-27 snapshot; current state not rechecked on 2026-10-31","source":"kiwi-merchant-buddy/experts/kiwi-catalog-assistant-0.1.2","source_version":"0.1.2","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"expert","id":"oe_85c8bf08203ad422","name":"运营分析师","platform_version":"0.1.1","observed_state":"published in 2026-10-27 snapshot; current state not rechecked on 2026-10-31","source":"kiwi-merchant-buddy/experts/kiwi-insights-analyst-0.1.1","source_version":"0.1.1","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"expert","id":"oe_ee7df761fbcdefee","name":"客服教练","platform_version":"0.1.2","observed_state":"published in 2026-10-27 snapshot; current state not rechecked on 2026-10-31","source":"kiwi-merchant-buddy/experts/kiwi-cs-coach-0.1.2","source_version":"0.1.2","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"expert","id":"oe_8033777b83a3de05","name":"洽谈审批官","platform_version":"0.1.2","observed_state":"published in 2026-10-27 snapshot; current state not rechecked on 2026-10-31","source":"kiwi-merchant-buddy/experts/kiwi-negotiation-officer-0.1.2","source_version":"0.1.2","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"expert-team","id":"oe_a1da12ace3d9c62c","name":"Kiwi开店团队","platform_version":"0.1.1","observed_state":"published in 2026-10-27 snapshot; 0.1.3 reviewing on 2026-10-31","source":"kiwi-merchant-buddy/experts/kiwi-launch-team-0.1.1","source_version":"0.1.1","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"expert","id":"oe_37aed7f0a679e6d4","name":"Kiwi采购询价","platform_version":"1.0.1","observed_state":"published in historical inventory; current source is newer local candidate","source":"kiwi-procurement-expert","source_version":"1.1.0","mapping":"newer-local-candidate; published-source-equivalence-unverified","bundle_mode":"candidate-package","builder":"package.mjs"},
+
+    {"kind":"skill","id":"os_1ea25f81ce98fea3","name":"Kiwi云端接待部署","platform_version":"0.2.5","observed_state":"published in 2026-10-27 snapshot; 0.3.2 reviewing on 2026-10-31","source":"kiwi-merchant-buddy/skills/kiwi-cloud-deploy","source_version":"0.2.5","mapping":"version-match-to-historical-published-baseline","bundle_mode":"source-snapshot"},
+    {"kind":"skill","id":"os_32c612d72d2c3bcd","name":"Kiwi商品导入表整理","platform_version":"0.1.3","observed_state":"published","source":"kiwi-merchant-buddy/skills/kiwi-product-import","source_version":"0.1.3","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"skill","id":"os_dc3a52407574eb77","name":"Kiwi商家AI客服准备","platform_version":"0.1.1","observed_state":"published","source":"kiwi-merchant-buddy/skills/kiwi-merchant-cs-prep","source_version":"0.1.1","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"skill","id":"os_fe982aad31a98bfb","name":"Kiwi商家询价单整理","platform_version":"0.1.0","observed_state":"published","source":"kiwi-merchant-buddy/skills/merchant-inquiry-structuring","source_version":"0.1.0","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"skill","id":"os_50c0414417e25586","name":"Kiwi商品目录发布预检","platform_version":"0.1.0","observed_state":"published","source":"kiwi-merchant-buddy/skills/merchant-catalog-preflight","source_version":"0.1.0","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"skill","id":"os_03cf120a20b00aae","name":"Kiwi商家人工审批摘要","platform_version":"0.1.0","observed_state":"published","source":"kiwi-merchant-buddy/skills/merchant-approval-brief","source_version":"0.1.0","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"skill","id":"os_9bc616f4fb80a452","name":"Kiwi三平台交易入口校验","platform_version":"0.1.0","observed_state":"published","source":"kiwi-merchant-buddy/skills/merchant-trade-link-check","source_version":"0.1.0","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"skill","id":"os_6aedc97ac49e2d5b","name":"Kiwi商品源事实核验","platform_version":"0.1.0","observed_state":"published","source":"kiwi-merchant-buddy/skills/merchant-source-evidence-audit","source_version":"0.1.0","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"skill","id":"os_053e9e8722df80e6","name":"Kiwi商家报价方案准备","platform_version":"0.1.0","observed_state":"published","source":"kiwi-merchant-buddy/skills/merchant-quote-draft","source_version":"0.1.0","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+    {"kind":"skill","id":"os_e64be8878bbb4349","name":"Kiwi商家运营数据解读","platform_version":"0.1.0","observed_state":"published","source":"kiwi-merchant-buddy/skills/merchant-operations-insights","source_version":"0.1.0","mapping":"version-and-name-match","bundle_mode":"source-snapshot"},
+
+    {"kind":"connector","id":"oc_bd73f860e3e2b5d3","name":"Kiwi采购询价","platform_version":"1.0.4","observed_state":"reviewing on 2026-10-31","source":"kiwi-sourcing","source_version":"read connector-meta.json dynamically","mapping":"build only when local metadata is exactly 1.0.4; 1.0.3 is stale and HOLD","bundle_mode":"candidate-connector","builder":"kiwi-sourcing/scripts/package-production.mjs"},
+    {"kind":"connector","id":"oc_0053ad85c92a6587","name":"Kiwi商家运营","platform_version":"1.2.0","observed_state":"published on 2026-10-31 live read-only check","source":"kiwi-merchant-gateway-connector","source_version":"1.2.0","mapping":"version-match; runtime/live behavior not verified","bundle_mode":"native-package","builder":"package-gateway-connector.mjs"},
+
+    {"kind":"expert-team","id":"oe_a1da12ace3d9c62c","name":"Kiwi开店团队","platform_version":"0.1.3","observed_state":"reviewing on 2026-10-31","source":"kiwi-merchant-buddy/experts/kiwi-launch-team-0.1.3","source_version":"0.1.3","mapping":"candidate-version-match; uploaded archive hash unknown","bundle_mode":"candidate-source"},
+    {"kind":"expert","id":"oe_eee5ab6349f00203","name":"开通顾问","platform_version":"0.1.4","observed_state":"reviewing on 2026-10-31","source":"kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.1.4","source_version":"0.1.4","mapping":"candidate-version-match; uploaded archive hash unknown","bundle_mode":"candidate-source"},
+    {"kind":"skill","id":"os_1ea25f81ce98fea3","name":"Kiwi云端接待部署","platform_version":"0.3.2","observed_state":"reviewing on 2026-10-31","source":"kiwi-merchant-buddy/skills/candidate-archives/kiwi-cloud-deploy/0.3.2","source_version":"0.3.2","mapping":"candidate-version-match; uploaded archive hash unknown","bundle_mode":"candidate-source"},
+    {"kind":"expert","id":"oe_6038d999d6308c6b","name":"网购助手","platform_version":"1.2.0","observed_state":"reviewing on 2026-10-31","source":"candidate-source-archives/source-candidate-negotiation-20261028/haina-ecommerce-expert","source_version":"1.2.0","mapping":"candidate-version-match; exact submitted payload unknown","bundle_mode":"candidate-source"},
+    {"kind":"skill","id":"os_b8010c654e343791","name":"网上购物助手","platform_version":"1.2.0","observed_state":"reviewing on 2026-10-31","source":"online-shopping-assistant","source_version":"1.2.0","mapping":"candidate-version-match; exact submitted payload unknown","bundle_mode":"candidate-source"},
+    {"kind":"expert","id":null,"name":"Kiwi购物智能体","platform_version":"1.1.0","observed_state":"reviewing on 2026-10-31","source":"haina-ecommerce-expert","source_version":"1.2.0","mapping":"local source version differs from reviewing platform version","bundle_mode":"hold","reason":"No matching 1.1.0 expert source found; local 1.2.0 source is a different version."}
+  ],
+  "held_items": [
+    {"kind":"expert","id":"oe_37aed7f0a679e6d4","name":"Kiwi采购询价","version":"1.0.1","state":"historically published","reason":"Exact published source package is not established. The local 1.1.0 package is a separate candidate and is not substituted for this version."},
+    {"kind":"expert","id":"oe_6038d999d6308c6b","name":"网购助手","version":"1.1.0","state":"historically published before 1.2.0 review","reason":"No exact 1.1.0 source was identified; the 1.2.0 candidate is packaged separately."},
+    {"kind":"skill","id":"os_b8010c654e343791","name":"网上购物助手","version":"1.1.0","state":"historically published before 1.2.0 review","reason":"No exact 1.1.0 source was identified; the 1.2.0 candidate is packaged separately."}
+  ]
+}
