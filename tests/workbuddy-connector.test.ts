@@ -18,7 +18,7 @@ describe("WorkBuddy kiwi-sourcing connector", () => {
       encoding: "utf8",
     });
 
-    expect(output).toContain("validation OK (13 tools)");
+    expect(output).toContain("VALIDATION_OK:39");
   });
 
   it("uses one local stdio server with bounded timeouts and a pinned Kiwi release", () => {
@@ -41,48 +41,44 @@ describe("WorkBuddy kiwi-sourcing connector", () => {
     expect(name).toBe("kiwi-sourcing");
     expect(server).toMatchObject({
       type: "stdio",
-      command: "npx",
+      command: "node",
       runtime: { type: "node", version: "22" },
       timeout: 30_000,
     });
-    expect(server.args).toContain("@harrylabsj/kiwi@0.12.3");
-    expect(server.args.join(" ")).toContain("--a2a-timeout-ms 15000");
-    expect(server.args).not.toContain("--prefer-online");
+    // 版本钉扎已移到 production-launcher 的 prepare-managed --floor；
+    // 连接器本身只启动固定入口，不再在 mcp.json 里声明浮动/固定 spec。
+    expect(server.args).toEqual(["${CODEBUDDY_PLUGIN_ROOT}/runtime/production-launcher.mjs"]);
+    expect(server.args.join(" ")).not.toContain("@harrylabsj/kiwi@");
   });
 
-  it.each(["latest", "^0.12.3", "~0.12.3", "0.12", "01.12.3", "0.12.3-beta.1", "duplicate"])(
-    "rejects floating or non-stable package spec %s in the release validator",
-    (version) => {
-      const directory = mkdtempSync(path.join(tmpdir(), "kiwi-connector-validator-"));
-      try {
-        const connector = path.join(directory, "integrations/hosts/workbuddy/kiwi-sourcing");
-        mkdirSync(path.dirname(connector), { recursive: true });
-        cpSync(CONNECTOR, connector, { recursive: true });
-        writeFileSync(path.join(directory, "package.json"), "{}\n");
-        const mcp = JSON.parse(readFileSync(path.join(connector, "mcp.json"), "utf8"));
-        const args: string[] = mcp.mcpServers["kiwi-sourcing"].args;
-        if (version === "duplicate") args.push("@harrylabsj/kiwi@0.12.3");
-        else args[args.indexOf("@harrylabsj/kiwi@0.12.3")] = `@harrylabsj/kiwi@${version}`;
-        writeFileSync(path.join(connector, "mcp.json"), JSON.stringify(mcp));
-        const result = spawnSync(process.execPath, [path.join(connector, "scripts/validate.mjs")], { encoding: "utf8" });
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain("明确 stable semver");
-      } finally {
-        rmSync(directory, { recursive: true, force: true });
-      }
-    },
-  );
+  it("rejects a tampered launch path in the release validator", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "kiwi-connector-validator-"));
+    try {
+      const connector = path.join(directory, "integrations/hosts/workbuddy/kiwi-sourcing");
+      mkdirSync(path.dirname(connector), { recursive: true });
+      cpSync(CONNECTOR, connector, { recursive: true });
+      writeFileSync(path.join(directory, "package.json"), "{}\n");
+      const mcp = JSON.parse(readFileSync(path.join(connector, "mcp.json"), "utf8"));
+      mcp.mcpServers["kiwi-sourcing"].args = ["${CODEBUDDY_PLUGIN_ROOT}/runtime/other.mjs"];
+      writeFileSync(path.join(connector, "mcp.json"), JSON.stringify(mcp));
+      const result = spawnSync(process.execPath, [path.join(connector, "scripts/validate.mjs")], { encoding: "utf8" });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("launch_path_invalid");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 
   it("keeps public v1 credential-free and documents all thirteen tools", () => {
     const meta = readJson("connector-meta.json");
     const skill = readFileSync(path.join(CONNECTOR, "skills/kiwi-sourcing/SKILL.md"), "utf8");
 
     expect(meta).not.toHaveProperty("auth_mode");
-    expect(skill).toMatch(/^version: 1\.0\.2$/m);
+    expect(skill).toMatch(/^version: 1\.0\.3$/m);
     expect(meta).toMatchObject({
       source: "kiwi-sourcing",
       type: "mcp",
-      version: "1.0.2",
+      version: "1.0.3",
       minWorkbuddyVersion: "5.0.0",
     });
     for (const tool of [
