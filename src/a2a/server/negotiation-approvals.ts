@@ -24,7 +24,12 @@ import {
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-export type NegotiationApprovalStatus = "pending" | "approved" | "consumed" | "expired";
+export type NegotiationApprovalStatus =
+  | "pending"
+  | "approved"
+  | "consumed"
+  | "expired"
+  | "rejected";
 
 export interface NegotiationApprovalRecord {
   approval_id: string;
@@ -48,6 +53,10 @@ export interface NegotiationApprovalRecord {
   approved_minor?: number;
   approved_by?: string;
   expires_at?: string;
+  /** 人工拒绝（pending → rejected）；rejected 后不再可批准。 */
+  rejected_by?: string;
+  rejected_reason?: string;
+  rejected_at?: string;
 }
 
 export interface PendingApprovalInput {
@@ -71,6 +80,13 @@ export interface ApproveInput {
   /** 授权有效期，秒；缺省 1 小时。 */
   ttl_seconds?: number;
   approved_by?: string;
+}
+
+export interface RejectInput {
+  approval_id: string;
+  /** 拒绝原因（自由文本）；落本地文件，进管理视图。 */
+  reason?: string;
+  rejected_by?: string;
 }
 
 export interface ConsumeInput {
@@ -269,6 +285,41 @@ export class NegotiationApprovalStore {
     record.approved_minor = input.approved_minor;
     record.approved_by = input.approved_by ?? "merchant";
     record.expires_at = new Date(Date.parse(now) + ttl * 1_000).toISOString();
+    record.updated_at = now;
+    this.write(this.pruneTerminal(shape.records));
+    return record;
+  }
+
+  /** 人工拒绝：只允许 pending → rejected；rejected 记录保留 30 天。 */
+  reject(input: RejectInput): NegotiationApprovalRecord {
+    return this.withLock(() => this.rejectLocked(input));
+  }
+
+  private rejectLocked(input: RejectInput): NegotiationApprovalRecord {
+    const reason = input.reason === undefined
+      ? undefined
+      : Array.from(input.reason)
+          .map((char) => {
+            const code = char.codePointAt(0) ?? 0;
+            return code < 0x20 || code === 0x7f ? " " : char;
+          })
+          .join("")
+          .trim();
+    if (reason !== undefined && reason.length > 500) {
+      throw new Error("reject reason must be at most 500 characters");
+    }
+    const shape = this.read();
+    const record = shape.records.find(
+      (candidate) => candidate.status === "pending" && candidate.approval_id === input.approval_id,
+    );
+    if (record === undefined) {
+      throw new Error("no pending negotiation approval matches the request");
+    }
+    const now = this.now();
+    record.status = "rejected";
+    record.rejected_by = input.rejected_by ?? "merchant";
+    if (reason !== undefined && reason !== "") record.rejected_reason = reason;
+    record.rejected_at = now;
     record.updated_at = now;
     this.write(this.pruneTerminal(shape.records));
     return record;

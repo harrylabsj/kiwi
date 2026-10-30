@@ -32,6 +32,8 @@
  */
 
 import { assertMerchantMcpAuthPolicy } from "./merchant-auth.js";
+import { startMerchantOpsServer } from "./merchant-ops-server.js";
+import type { NegotiationOps } from "../merchant/negotiation-ops.js";
 import { isIP } from "node:net";
 import { isLoopbackHost } from "../a2a/client/url-policy.js";
 import {
@@ -194,6 +196,16 @@ export interface MerchantMcpServerOptions {
     /** 实例身份（回给网关留痕；不含任何凭据）。 */
     instance: () => { ownerId: string; principalId: string };
   };
+  /**
+   * 店主经营 `/ops` 本机面（独立 loopback listener，缺省 127.0.0.1:9101）。
+   * 只有配置了 ops token 时才由 assembly 注入；未注入则不监听该端口。
+   */
+  ops?: {
+    service: NegotiationOps;
+    token: string;
+    previousToken?: string;
+    port?: number;
+  };
   serverInfo?: { name: string; version: string };
   /** 响应体大小上限（字符）。 */
   maxChars?: number;
@@ -206,6 +218,8 @@ export interface MerchantMcpServerHandle {
   port: number;
   path: string;
   url: string;
+  /** 配置了 ops token 时，独立 loopback `/ops` listener 的地址。 */
+  ops?: { host: string; port: number };
   close: () => Promise<void>;
 }
 
@@ -1081,13 +1095,35 @@ export async function startMerchantMcpServer(
   const address = httpServer.address();
   const boundPort = typeof address === "object" && address !== null ? address.port : port;
 
+  let opsHandle: Awaited<ReturnType<typeof startMerchantOpsServer>> | undefined;
+  if (options.ops !== undefined) {
+    try {
+      opsHandle = await startMerchantOpsServer({
+        service: options.ops.service,
+        token: options.ops.token,
+        ...(options.ops.previousToken !== undefined
+          ? { previousToken: options.ops.previousToken }
+          : {}),
+        ...(options.ops.port !== undefined ? { port: options.ops.port } : {}),
+      });
+    } catch (err) {
+      await new Promise<void>((resolve) => {
+        httpServer.close(() => resolve());
+        httpServer.closeAllConnections();
+      });
+      throw err;
+    }
+  }
+
   return {
     host,
     port: boundPort,
     path: mcpPath,
     url: `http://${host === "0.0.0.0" ? "127.0.0.1" : isIP(host) === 6 ? `[${host}]` : host}:${boundPort}${mcpPath}`,
+    ...(opsHandle !== undefined ? { ops: { host: opsHandle.host, port: opsHandle.port } } : {}),
     close: async () => {
       await closeHandler();
+      if (opsHandle !== undefined) await opsHandle.close();
       await new Promise<void>((resolve) => {
         httpServer.close(() => resolve());
         httpServer.closeAllConnections();

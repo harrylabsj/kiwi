@@ -23,6 +23,9 @@
  * 子进程读写同一真实业务状态。
  */
 
+import { existsSync } from "node:fs";
+import path from "node:path";
+
 import type { ManagedServiceSpec } from "./manager.js";
 import type { MerchantMcpRuntimeDirs } from "../mcp/merchant-dirs.js";
 
@@ -36,6 +39,11 @@ export function buildRuntimeServiceSpecs(options: {
   const dataDirArgs = ["--data-dir", options.dirs.merchantDataDir];
   // 确定的工作目录：数据根目录（子进程内相对路径解析一致）。
   const env = { KIWI_RUNTIME_CWD: options.dirs.merchantDataDir };
+  const watchEnabled = process.env.KIWI_MERCHANT_WATCH_ENABLED === "1";
+  const hasWecom = (process.env.KIWI_MERCHANT_WATCH_WECOM_WEBHOOK ?? "").trim() !== "";
+  const hasWeixinCreds = existsSync(
+    path.join(options.dirs.merchantDataDir, "weixin-ops-credentials.json"),
+  );
   return [
     {
       name: "a2a",
@@ -69,5 +77,30 @@ export function buildRuntimeServiceSpecs(options: {
       ...(options.credentialSwitchMarker !== undefined ? { credentialSwitchMarker: options.credentialSwitchMarker } : {}),
       cwd: options.dirs.merchantDataDir,
     },
+    // 通知守护：显式开启且至少一个渠道可用才生成 spec，避免空进程无限重启。
+    ...(watchEnabled && (hasWecom || hasWeixinCreds)
+      ? [
+          {
+            name: "watch",
+            command: [
+              process.execPath,
+              options.cliEntry,
+              "merchant",
+              "watch",
+              "serve",
+              ...options.profileArgs,
+              ...dataDirArgs,
+            ],
+            env,
+            ...(options.credentialEnvFile !== undefined
+              ? { credentialEnvFile: options.credentialEnvFile }
+              : {}),
+            ...(options.credentialSwitchMarker !== undefined
+              ? { credentialSwitchMarker: options.credentialSwitchMarker }
+              : {}),
+            cwd: options.dirs.merchantDataDir,
+          } satisfies ManagedServiceSpec,
+        ]
+      : []),
   ];
 }

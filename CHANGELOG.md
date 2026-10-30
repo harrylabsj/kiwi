@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.12.16 — 2026-10-30
+
+- **商家后台磋商旁观**：新增 owner 投影（`listOwner/timelineOwner`）与 loopback `/ops` API，商家可在 catalog 商家后台查看磋商列表与时间线（动作、SKU/数量、单价、`public_message`）；默认旁观投影仍保持零金额。
+- **及时参与**：`/ops` 支持查看待审批还价并批准/拒绝；低于私有底价的批准在 ops 层直接拒绝（CLI 保留既有能力）；审批新增 `rejected` 终态（pending → rejected，30 天保留）。
+- **本机隔离**：`/ops` 是同一 `mcp serve` 进程内的独立 listener，硬编码 `127.0.0.1:9101`，Bearer token + loopback + 反代头校验；未配置 token 时不监听。
+- **通知守护**：新增 `kiwi merchant watch`（serve/login/test/status），轮询 Ledger/审批并按 5s/30s/2m/10m 退避投递；企业微信群机器人为主通道（不含私有底价/公开话术），个人微信 iLink 为可选增强（独立 bot 凭证与游标）。
+- 随发 **kiwi-catalog-admin 0.2.7**：商家后台新增「磋商」页与同源 JSON 代理（会话 + 白名单 + Origin 校验 + 字段白名单）。
+
 ## v0.12.15 — 2026-10-30
 
 - **人工订单行校验**：`/orders/reports` 的行明细复用共享校验（非空 SKU、正整数数量、非负 minor 金额、唯一 line_id）；坏行返回 422，不再入库后毒化归因。

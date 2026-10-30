@@ -258,6 +258,39 @@ describe("BUG-04：runtime 子进程统一数据目录", () => {
     }
   });
 
+  it("watch 仅在显式开启且至少一个渠道可用时追加为第三个子服务", async () => {
+    const { buildRuntimeServiceSpecs } = await import("../src/merchant-runtime/services.js");
+    const dir = tmp();
+    const dirs = resolveMerchantMcpDirs({ dataDir: dir, agentId: "m-1" });
+    const previous = {
+      enabled: process.env.KIWI_MERCHANT_WATCH_ENABLED,
+      webhook: process.env.KIWI_MERCHANT_WATCH_WECOM_WEBHOOK,
+    };
+    try {
+      delete process.env.KIWI_MERCHANT_WATCH_ENABLED;
+      delete process.env.KIWI_MERCHANT_WATCH_WECOM_WEBHOOK;
+      expect(
+        buildRuntimeServiceSpecs({ dirs, cliEntry: "dist/cli.js", profileArgs: [] }).map((s) => s.name),
+      ).toEqual(["a2a", "mcp"]);
+
+      process.env.KIWI_MERCHANT_WATCH_ENABLED = "1";
+      expect(
+        buildRuntimeServiceSpecs({ dirs, cliEntry: "dist/cli.js", profileArgs: [] }).map((s) => s.name),
+      ).toEqual(["a2a", "mcp"]);
+
+      process.env.KIWI_MERCHANT_WATCH_WECOM_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x";
+      const specs = buildRuntimeServiceSpecs({ dirs, cliEntry: "dist/cli.js", profileArgs: [] });
+      expect(specs.map((s) => s.name)).toEqual(["a2a", "mcp", "watch"]);
+      expect(specs[2]!.command).toContain("watch");
+      expect(specs[2]!.cwd).toBe(dir);
+    } finally {
+      if (previous.enabled === undefined) delete process.env.KIWI_MERCHANT_WATCH_ENABLED;
+      else process.env.KIWI_MERCHANT_WATCH_ENABLED = previous.enabled;
+      if (previous.webhook === undefined) delete process.env.KIWI_MERCHANT_WATCH_WECOM_WEBHOOK;
+      else process.env.KIWI_MERCHANT_WATCH_WECOM_WEBHOOK = previous.webhook;
+    }
+  });
+
   it("集成：子进程在确定 cwd 下产生的文件落在同一数据根目录", async () => {
     const dir = tmp();
     // 桩子进程：接受 --data-dir，向 cwd 写标记文件后常驻

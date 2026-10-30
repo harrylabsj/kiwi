@@ -45,6 +45,11 @@ import {
 import { homedir, userInfo } from "node:os";
 import path from "node:path";
 import { NegotiationApprovalStore } from "./a2a/server/negotiation-approvals.js";
+import { createNegotiationOps } from "./merchant/negotiation-ops.js";
+import { MerchantWatchService } from "./merchant/watch/service.js";
+import { WecomWebhookChannel, type WatchChannel } from "./merchant/watch/notify.js";
+import { WeixinOpsBot } from "./merchant/watch/weixin.js";
+import { loadWatchState, watchStatePath } from "./merchant/watch/state.js";
 import { fileURLToPath } from "node:url";
 import { Writable } from "node:stream";
 
@@ -1476,6 +1481,7 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   if (sub === "status") return notImplementedProduct("kiwi merchant status", "D1");
   if (sub === "doctor") return await cmdMerchantDoctor(args);
   if (sub === "approvals") return await cmdMerchantApprovals(args);
+  if (sub === "watch") return await cmdMerchantWatch(args);
   process.stderr.write(`unknown merchant command: ${sub}\n`);
   return EXIT.CONFIG;
 }
@@ -1523,11 +1529,205 @@ async function cmdMerchantApprovals(args: ParsedArgs): Promise<number> {
       printJson({ ok: true, approval: record });
       return EXIT.OK;
     }
+    if (action === "reject") {
+      const approvalId = args.command[3];
+      if (approvalId === undefined) {
+        process.stderr.write("用法：kiwi merchant approvals reject <approval_id> [reason]\n");
+        return EXIT.CONFIG;
+      }
+      const reason = args.command.slice(4).join(" ").trim();
+      const record = store.reject({
+        approval_id: approvalId,
+        ...(reason !== "" ? { reason } : {}),
+        rejected_by: profile.agent_id,
+      });
+      printJson({ ok: true, approval: record });
+      return EXIT.OK;
+    }
     process.stderr.write(`unknown approvals command: ${action}\n`);
     return EXIT.CONFIG;
   } catch (err) {
     process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
     return EXIT.CONFIG;
+  }
+}
+
+/**
+ * `kiwi merchant watch`：磋商/审批通知守护（企业微信群机器人 + 可选个人微信）。
+ *
+ *   watch serve    前台守护（runtime 受管子进程用）
+ *   watch login    扫码绑定独立 ops bot 凭证
+ *   watch relogin  重新扫码
+ *   watch test     向已配置渠道发一条测试消息（不含业务数据）
+ *   watch status   渠道与去重状态摘要
+ */
+async function cmdMerchantWatch(args: ParsedArgs): Promise<number> {
+  const profile = requireProfileOrDefault(args);
+  if (profile.role !== "merchant") {
+    process.stderr.write("kiwi merchant watch 需要 merchant profile（role: merchant）\n");
+    return EXIT.CONFIG;
+  }
+  const action = args.command[2] ?? "status";
+  const dataDir = resolveServeDataDir(args.dataDir, profile.agent_id, profile.merchant_runtime?.data_dir);
+  const approvals = NegotiationApprovalStore.forDataDir(dataDir, () => new Date().toISOString());
+  const ops = createNegotiationOps({
+    ledgerDir: path.join(dataDir, "a2a"),
+    approvals,
+    merchantId: profile.owner_id,
+    version: PRODUCT_VERSION,
+  });
+
+  const webhook = (process.env.KIWI_MERCHANT_WATCH_WECOM_WEBHOOK ?? "").trim();
+  const weixinEnabled = process.env.KIWI_MERCHANT_WATCH_WEIXIN === "1";
+  const allowUsers = (process.env.KIWI_MERCHANT_WATCH_WEIXIN_ALLOW ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value !== "");
+  const allowed = [...new Set([...(profile.weixin?.allow_users ?? []), ...allowUsers])];
+
+  const openBot = async (relogin: boolean): Promise<WeixinOpsBot> =>
+    WeixinOpsBot.open({
+      dataDir,
+      allowUsers: allowed,
+      forceRelogin: relogin,
+      ...(process.env.KIWI_MERCHANT_WATCH_WEIXIN_BASE_URL !== undefined
+        ? { apiBaseUrl: process.env.KIWI_MERCHANT_WATCH_WEIXIN_BASE_URL }
+        : {}),
+    });
+
+  if (action === "login" || action === "relogin") {
+    try {
+      const bot = await openBot(action === "relogin");
+      process.stdout.write(`微信 ops bot 已绑定：${bot.credentialsRef().ilink_user_id}\n`);
+      bot.stop();
+      return EXIT.OK;
+    } catch (err) {
+      process.stderr.write(`微信扫码失败：${err instanceof Error ? err.message : String(err)}\n`);
+      return EXIT.AUTH;
+    }
+  }
+
+  const channels: WatchChannel[] = [];
+  if (webhook !== "") channels.push(new WecomWebhookChannel(webhook));
+
+  if (action === "status") {
+    let bot = "disabled";
+    if (weixinEnabled) {
+      try {
+        bot = existsSync(path.join(dataDir, "weixin-ops-credentials.json"))
+          ? `enabled (${allowed.length + 1} recipient(s))`
+          : "enabled 但未扫码";
+      } catch {
+        bot = "unknown";
+      }
+    }
+    let state: string | undefined;
+    try {
+      const loaded = loadWatchState(watchStatePath(dataDir), new Date().toISOString());
+      state = `${Object.keys(loaded.negotiations).length} negotiation(s), ${Object.keys(loaded.approvals).length} approval(s), queue ${loaded.queue.length}`;
+    } catch (err) {
+      state = err instanceof Error ? err.message : String(err);
+    }
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          ok: true,
+          data_dir: dataDir,
+          channels: { wecom: webhook !== "" ? "configured" : "off", weixin: bot },
+          state,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return EXIT.OK;
+  }
+
+  if (action === "test") {
+    if (channels.length === 0 && !weixinEnabled) {
+      process.stderr.write("没有配置通知渠道（KIWI_MERCHANT_WATCH_WECOM_WEBHOOK / KIWI_MERCHANT_WATCH_WEIXIN=1）\n");
+      return EXIT.CONFIG;
+    }
+    try {
+      let sent = 0;
+      for (const channel of channels) {
+        await channel.send("Kiwi 商家通知测试：通道已接通。");
+        sent += 1;
+      }
+      if (weixinEnabled) {
+        const bot = await openBot(false);
+        await bot.send("Kiwi 商家通知测试：个人微信通道已接通。");
+        bot.stop();
+        sent += 1;
+      }
+      process.stdout.write(`测试消息已发送（${sent} 个渠道）\n`);
+      return EXIT.OK;
+    } catch (err) {
+      process.stderr.write(`测试消息发送失败：${err instanceof Error ? err.message : String(err)}\n`);
+      return EXIT.TRANSIENT;
+    }
+  }
+
+  if (action !== "serve") {
+    process.stderr.write(`unknown watch command: ${action}\n`);
+    return EXIT.CONFIG;
+  }
+  if (channels.length === 0 && !weixinEnabled) {
+    process.stderr.write("没有配置通知渠道，拒绝启动 watch\n");
+    return EXIT.CONFIG;
+  }
+
+  let bot: WeixinOpsBot | undefined;
+  if (weixinEnabled) {
+    if (!existsSync(path.join(dataDir, "weixin-ops-credentials.json"))) {
+      process.stderr.write("个人微信已启用但未扫码：先运行 kiwi merchant watch login\n");
+      return EXIT.CONFIG;
+    }
+    try {
+      bot = await openBot(false);
+      channels.push(bot.channel());
+    } catch (err) {
+      process.stderr.write(`个人微信通道启动失败：${err instanceof Error ? err.message : String(err)}\n`);
+      return EXIT.AUTH;
+    }
+  }
+
+  const service = new MerchantWatchService({
+    dataDir,
+    ops,
+    channels,
+    intervalMs: Math.max(5_000, Number(process.env.KIWI_MERCHANT_WATCH_INTERVAL_SECONDS ?? "10") * 1_000),
+  });
+  let stopping = false;
+  const shutdown = (): void => {
+    if (stopping) return;
+    stopping = true;
+    service.stop();
+    bot?.stop();
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  try {
+    service.start();
+    if (bot !== undefined) {
+      void bot.run(ops).then((ok) => {
+        if (!ok) process.stderr.write("[watch] 个人微信通道已停止；企业微信通道继续\n");
+      });
+    }
+    process.stderr.write(`[watch] started: ${channels.map((channel) => channel.name).join(",")}\n`);
+    await new Promise<void>((resolve) => {
+      const timer = setInterval(() => {
+        if (stopping) {
+          clearInterval(timer);
+          resolve();
+        }
+      }, 500);
+    });
+    return EXIT.OK;
+  } finally {
+    process.removeListener("SIGINT", shutdown);
+    process.removeListener("SIGTERM", shutdown);
+    bot?.stop();
   }
 }
 

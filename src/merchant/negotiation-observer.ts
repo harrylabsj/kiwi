@@ -118,9 +118,48 @@ export interface NegotiationTimelineView {
   timeline: NegotiationTimelineEntry[];
 }
 
+/**
+ * 店主（owner）投影：在默认投影之上补金额与公开话术。
+ *
+ * 与 `list()/timeline()` 分开成独立方法与独立类型，而不是给默认方法加
+ * `owner?: boolean`：默认投影「金额恒缺省」是隐私不变量（A40-1），布尔开关
+ * 会让任何调用方误开金额。独立方法只给本机 owner 面（runtime `/ops`）使用。
+ */
+export interface NegotiationOwnerListViewItem extends NegotiationListViewItem {
+  /** 最近一条带价消息的单价（minor）；无价则缺省。 */
+  price_minor?: number;
+  currency?: string;
+  /** 最近一条消息的公开话术（截断 1000 字符）。 */
+  public_message?: string;
+  last_event_digest: string;
+  last_event_kind: string;
+  last_inbound_action?: string;
+}
+
+export interface NegotiationOwnerListResult {
+  total: number;
+  items: NegotiationOwnerListViewItem[];
+  next_cursor: string | null;
+}
+
+export interface NegotiationOwnerTimelineEntry extends NegotiationTimelineEntry {
+  /** 最近一条消息的公开话术（截断 1000 字符）。 */
+  public_message?: string;
+  total_minor?: number;
+}
+
+export interface NegotiationOwnerTimelineView extends NegotiationTimelineView {
+  /** 最近一条带价消息的币种。 */
+  currency?: string;
+  timeline: NegotiationOwnerTimelineEntry[];
+}
+
 export interface NegotiationObserver {
   list(query: NegotiationListQuery): NegotiationListResult;
   timeline(negotiationId: string): NegotiationTimelineView;
+  /** 店主投影（含金额/public_message）；仅供本机 owner 面调用。 */
+  listOwner(query: NegotiationListQuery): NegotiationOwnerListResult;
+  timelineOwner(negotiationId: string): NegotiationOwnerTimelineView;
 }
 
 export interface NegotiationObserverOptions {
@@ -143,6 +182,8 @@ export interface NegotiationObserverOptions {
 type WirePayload = {
   action?: string;
   created_at?: string;
+  /** 双方的人类可读话术（envelope 顶层；owner 投影才透出）。 */
+  public_message?: string;
   payload?: {
     type?: string;
     /** rfq（§10）：RFQ 明细行。 */
@@ -219,8 +260,48 @@ function firstLineItem(wire: WirePayload | undefined): TermsItem | undefined {
 /** 单条磋商的账本扫描结果（列表行与时间线共用一趟遍历）。 */
 interface NegotiationFacts {
   row: NegotiationListViewItem;
+  ownerRow: NegotiationOwnerListViewItem;
   buyerRef: string;
   timeline: NegotiationTimelineEntry[];
+  ownerTimeline: NegotiationOwnerTimelineEntry[];
+}
+
+/** owner 投影的金额只接受安全整数或纯十进制字符串；其余（float/负数/科学计数）忽略。 */
+function parseMinorAmount(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  }
+  if (typeof value === "string" && /^[0-9]+$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+/** public_message 来自外部，按纯文本截断；空串视为缺省。 */
+function clipPublicMessage(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  if (text === "") return undefined;
+  return text.length > 1000 ? `${text.slice(0, 1000)}…` : text;
+}
+
+/** 默认投影：绝不带出金额、币种与 public_message（A40-1）。 */
+function toPublicEntry(entry: NegotiationOwnerTimelineEntry): NegotiationTimelineEntry {
+  return {
+    at: entry.at,
+    kind: entry.kind,
+    direction: entry.direction,
+    action: entry.action,
+    summary: entry.summary,
+    ...(entry.sku !== undefined ? { sku: entry.sku } : {}),
+    ...(entry.quantity !== undefined ? { quantity: entry.quantity } : {}),
+    ...(entry.valid_until !== undefined ? { valid_until: entry.valid_until } : {}),
+    ...(entry.delivery_before !== undefined ? { delivery_before: entry.delivery_before } : {}),
+    ...(entry.questions !== undefined ? { questions: entry.questions } : {}),
+    rule_summary: entry.rule_summary,
+    manual_review: entry.manual_review,
+  };
 }
 
 function scanNegotiation(
@@ -242,7 +323,10 @@ function scanNegotiation(
   let lastInboundAt = "";
   let lastInboundAction = "";
   let lastOutboundAt = "";
-  const timeline: NegotiationTimelineEntry[] = [];
+  let lastPriceMinor: number | undefined;
+  let lastCurrency: string | undefined;
+  let lastPublicMessage: string | undefined;
+  const timeline: NegotiationOwnerTimelineEntry[] = [];
   for (const event of events) {
     if (event.recorded_at > row.recorded_at) row.recorded_at = event.recorded_at;
     if (event.identity.counterparty_identity !== "") buyerRef = event.identity.counterparty_identity;
@@ -277,6 +361,25 @@ function scanNegotiation(
     if (action !== "") row.last_action = action;
     const terms = termsOf(wire);
     const item = firstLineItem(wire);
+    // owner 投影：金额只从协议条款取，非法值忽略；默认投影在 toPublicEntry 中剥离。
+    const unitPriceMinor = parseMinorAmount(item?.unit_price?.amount_minor);
+    const currency =
+      typeof item?.unit_price?.currency === "string" && /^[A-Z]{3}$/.test(item.unit_price.currency)
+        ? item.unit_price.currency
+        : undefined;
+    const publicMessage = clipPublicMessage(wire?.public_message);
+    if (unitPriceMinor !== undefined) {
+      lastPriceMinor = unitPriceMinor;
+      if (currency !== undefined) lastCurrency = currency;
+    }
+    if (publicMessage !== undefined) lastPublicMessage = publicMessage;
+    const quantityValue = item?.quantity?.value;
+    const totalMinor =
+      unitPriceMinor !== undefined &&
+      quantityValue !== undefined &&
+      Number.isSafeInteger(unitPriceMinor * quantityValue)
+        ? unitPriceMinor * quantityValue
+        : undefined;
     if (item?.sku !== undefined && item.sku !== "") {
       row.sku = item.sku;
       if (item.quantity?.value !== undefined) row.quantity = item.quantity.value;
@@ -318,7 +421,11 @@ function scanNegotiation(
       ...(questionCodes.length > 0 ? { questions: questionCodes } : {}),
       ...(item?.sku !== undefined && item.sku !== "" ? { sku: item.sku } : {}),
       ...(item?.quantity?.value !== undefined ? { quantity: item.quantity.value } : {}),
-      // 单价/币种不投影（隐私设计，A40-1）；只保留非金额的条款事实。
+      // 金额只存在于 owner 投影；默认投影由 toPublicEntry 剥离（A40-1）。
+      ...(unitPriceMinor !== undefined ? { unit_price_minor: unitPriceMinor } : {}),
+      ...(currency !== undefined ? { currency } : {}),
+      ...(totalMinor !== undefined ? { total_minor: totalMinor } : {}),
+      ...(publicMessage !== undefined ? { public_message: publicMessage } : {}),
       ...(terms?.valid_until !== undefined ? { valid_until: terms.valid_until } : {}),
       ...(terms?.fulfillment_terms?.delivery_before !== undefined
         ? { delivery_before: terms.fulfillment_terms.delivery_before }
@@ -354,75 +461,128 @@ function scanNegotiation(
       pendingHuman = false;
     }
   }
-  return { row, buyerRef, timeline };
+  const lastEvent = events.at(-1);
+  const ownerRow: NegotiationOwnerListViewItem = {
+    ...row,
+    ...(lastPriceMinor !== undefined ? { price_minor: lastPriceMinor } : {}),
+    ...(lastCurrency !== undefined ? { currency: lastCurrency } : {}),
+    ...(lastPublicMessage !== undefined ? { public_message: lastPublicMessage } : {}),
+    last_event_digest: lastEvent?.event_digest ?? "",
+    last_event_kind: lastEvent?.event_kind ?? "",
+    ...(lastInboundAction !== "" ? { last_inbound_action: lastInboundAction } : {}),
+  };
+  return {
+    row,
+    ownerRow,
+    buyerRef,
+    timeline: timeline.map(toPublicEntry),
+    ownerTimeline: timeline,
+  };
 }
 
 export function createNegotiationObserver(options: NegotiationObserverOptions): NegotiationObserver {
   const ledgerDir = options.ledgerDir;
+
+  const loadLedger = (): LedgerStore => {
+    try {
+      return new LedgerStore({ dir: ledgerDir });
+    } catch (err) {
+      throw new MerchantWorkbenchError(
+        "unavailable",
+        `磋商账本不可读：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
+  const parseQuery = (
+    query: NegotiationListQuery,
+  ): { status: NegotiationStatusFilter; limit: number; offset: number } => {
+    const status = query.status ?? "all";
+    const limit = Math.min(Math.max(Math.trunc(query.limit ?? 20) || 20, 1), 100);
+    const offset = query.cursor !== undefined ? Number.parseInt(query.cursor, 10) : 0;
+    if (query.cursor !== undefined && (!Number.isSafeInteger(offset) || offset < 0)) {
+      throw new MerchantWorkbenchError("validation", "negotiation cursor 必须是非负整数");
+    }
+    return { status, limit, offset };
+  };
+
+  const collectFacts = (
+    ledger: LedgerStore,
+    status: NegotiationStatusFilter,
+  ): NegotiationFacts[] => {
+    const facts: NegotiationFacts[] = [];
+    for (const negotiationId of ledger.listNegotiations()) {
+      const scanned = scanNegotiation(ledger, negotiationId);
+      if (scanned === undefined) continue;
+      if (status === "active" && (TERMINAL_PHASES as readonly string[]).includes(scanned.row.phase)) {
+        continue;
+      }
+      if (status === "agreement" && !scanned.row.agreement) continue;
+      facts.push(scanned);
+    }
+    facts.sort((a, b) =>
+      a.row.recorded_at > b.row.recorded_at ? -1 : a.row.recorded_at < b.row.recorded_at ? 1 : 0,
+    );
+    return facts;
+  };
+
+  const loadOne = (negotiationId: string): NegotiationFacts => {
+    const id = String(negotiationId ?? "").trim();
+    if (id === "") throw new MerchantWorkbenchError("validation", "negotiation_id 不能为空");
+    const scanned = scanNegotiation(loadLedger(), id);
+    if (scanned === undefined) {
+      throw new MerchantWorkbenchError("not_found", `未找到磋商 ${id}`);
+    }
+    return scanned;
+  };
+
+  const baseTimeline = (id: string, scanned: NegotiationFacts): NegotiationTimelineView => ({
+    negotiation_id: id,
+    phase: scanned.row.phase,
+    agreement: scanned.row.agreement,
+    sku: scanned.row.sku,
+    ...(scanned.row.quantity !== undefined ? { quantity: scanned.row.quantity } : {}),
+    ...(scanned.row.price_minor !== undefined ? { price_minor: scanned.row.price_minor } : {}),
+    buyer_ref: scanned.buyerRef,
+    recorded_at: scanned.row.recorded_at,
+    needs_attention: scanned.row.needs_attention,
+    timeline: scanned.timeline,
+  });
+
   return {
     list(query: NegotiationListQuery): NegotiationListResult {
-      const status = query.status ?? "all";
-      const limit = Math.min(Math.max(Math.trunc(query.limit ?? 20) || 20, 1), 100);
-      const offset =
-        query.cursor !== undefined ? Number.parseInt(query.cursor, 10) : 0;
-      if (query.cursor !== undefined && (!Number.isSafeInteger(offset) || offset < 0)) {
-        throw new MerchantWorkbenchError("validation", "negotiation cursor 必须是非负整数");
-      }
-      let ledger: LedgerStore;
-      try {
-        ledger = new LedgerStore({ dir: ledgerDir });
-      } catch (err) {
-        throw new MerchantWorkbenchError(
-          "unavailable",
-          `磋商账本不可读：${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-      const facts: NegotiationFacts[] = [];
-      for (const negotiationId of ledger.listNegotiations()) {
-        const scanned = scanNegotiation(ledger, negotiationId);
-        if (scanned === undefined) continue;
-        if (status === "active" && (TERMINAL_PHASES as readonly string[]).includes(scanned.row.phase)) {
-          continue;
-        }
-        if (status === "agreement" && !scanned.row.agreement) continue;
-        facts.push(scanned);
-      }
-      facts.sort((a, b) =>
-        a.row.recorded_at > b.row.recorded_at ? -1 : a.row.recorded_at < b.row.recorded_at ? 1 : 0,
-      );
+      const { status, limit, offset } = parseQuery(query);
+      const facts = collectFacts(loadLedger(), status);
       return {
         total: facts.length,
         items: facts.slice(offset, offset + limit).map((fact) => fact.row),
         next_cursor: offset + limit < facts.length ? String(offset + limit) : null,
       };
     },
+    listOwner(query: NegotiationListQuery): NegotiationOwnerListResult {
+      const { status, limit, offset } = parseQuery(query);
+      const facts = collectFacts(loadLedger(), status);
+      return {
+        total: facts.length,
+        items: facts.slice(offset, offset + limit).map((fact) => fact.ownerRow),
+        next_cursor: offset + limit < facts.length ? String(offset + limit) : null,
+      };
+    },
     timeline(negotiationId: string): NegotiationTimelineView {
       const id = String(negotiationId ?? "").trim();
-      if (id === "") throw new MerchantWorkbenchError("validation", "negotiation_id 不能为空");
-      let ledger: LedgerStore;
-      try {
-        ledger = new LedgerStore({ dir: ledgerDir });
-      } catch (err) {
-        throw new MerchantWorkbenchError(
-          "unavailable",
-          `磋商账本不可读：${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-      const scanned = scanNegotiation(ledger, id);
-      if (scanned === undefined) {
-        throw new MerchantWorkbenchError("not_found", `未找到磋商 ${id}`);
-      }
+      return baseTimeline(id, loadOne(id));
+    },
+    timelineOwner(negotiationId: string): NegotiationOwnerTimelineView {
+      const id = String(negotiationId ?? "").trim();
+      const scanned = loadOne(id);
       return {
-        negotiation_id: id,
-        phase: scanned.row.phase,
-        agreement: scanned.row.agreement,
-        sku: scanned.row.sku,
-        ...(scanned.row.quantity !== undefined ? { quantity: scanned.row.quantity } : {}),
-        ...(scanned.row.price_minor !== undefined ? { price_minor: scanned.row.price_minor } : {}),
-        buyer_ref: scanned.buyerRef,
-        recorded_at: scanned.row.recorded_at,
-        needs_attention: scanned.row.needs_attention,
-        timeline: scanned.timeline,
+        ...baseTimeline(id, scanned),
+        ...(scanned.ownerRow.currency !== undefined ? { currency: scanned.ownerRow.currency } : {}),
+        ...(scanned.ownerRow.price_minor !== undefined
+          ? { price_minor: scanned.ownerRow.price_minor }
+          : {}),
+        // 单场时间线上限 500 条，避免异常长账本撑爆代理响应。
+        timeline: scanned.ownerTimeline.slice(-500),
       };
     },
   };

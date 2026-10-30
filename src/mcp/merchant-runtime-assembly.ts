@@ -49,6 +49,8 @@ import { OnboardingStore } from "../cloud/onboarding/store.js";
 import { rfqAdminSurface } from "../merchant-admin/rfq-page.js";
 import { merchantAdminSurface } from "../merchant-admin/pending-page.js";
 import { MerchantOperationStore } from "../merchant-core/operations.js";
+import { NegotiationApprovalStore } from "../a2a/server/negotiation-approvals.js";
+import { createNegotiationOps } from "../merchant/negotiation-ops.js";
 import { MerchantPolicyRuntime } from "../merchant-core/policy-runtime.js";
 import { RfqArtifactStore, ensureArtifactRoot } from "../merchant-core/rfq/artifacts.js";
 import { MerchantClientCommerceDataSource } from "../merchant-core/rfq/data-source-adapter.js";
@@ -238,6 +240,21 @@ export async function assembleMerchantRuntime(
   // 依赖装配与 chat kernel 同一套：agent data dir + state.sqlite + 审批候选 store。
   // 审批候选与对话内核共享同一 DB——MCP 生成的 draft 候选在内核侧 /pending 可见。
   const paths = ensurePathsForDir(options.dataDir);
+  // 店主经营 `/ops`（loopback-only）：token 未配置时完全不监听，避免 owner
+  // 数据面在无凭据时存在。端口非法时回退缺省（仍只绑 127.0.0.1）。
+  const opsToken = String(process.env.KIWI_MERCHANT_OPS_TOKEN ?? "").trim();
+  const opsPreviousToken = String(process.env.KIWI_MERCHANT_OPS_TOKEN_PREVIOUS ?? "").trim();
+  const opsPortRaw = String(process.env.KIWI_MERCHANT_OPS_PORT ?? "").trim();
+  const opsPort = /^[0-9]+$/.test(opsPortRaw) ? Number(opsPortRaw) : undefined;
+  const negotiationOps =
+    opsToken === ""
+      ? undefined
+      : createNegotiationOps({
+          ledgerDir: path.join(paths.dir, "a2a"),
+          approvals: NegotiationApprovalStore.forDataDir(options.dataDir),
+          merchantId: profile.owner_id,
+          version: PRODUCT_VERSION,
+        });
   const db = openAgentDatabase(paths.db);
   const now = () => new Date().toISOString();
   const store = new MemoryStore({ db, vault: new PrivateVault(), now });
@@ -515,6 +532,18 @@ export async function assembleMerchantRuntime(
                 traceId: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
               }),
             }),
+          },
+        }
+      : {}),
+    ...(negotiationOps !== undefined
+      ? {
+          ops: {
+            service: negotiationOps,
+            token: opsToken,
+            ...(opsPreviousToken !== "" ? { previousToken: opsPreviousToken } : {}),
+            ...(opsPort !== undefined && Number.isSafeInteger(opsPort) && opsPort > 0
+              ? { port: opsPort }
+              : {}),
           },
         }
       : {}),
