@@ -17,7 +17,7 @@ import {
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 export const BASE = "e703bc0d67e24a98c417274e46f37d210eff86ac";
-export const VERSION = "0.12.17";
+export const VERSION = "0.12.18";
 export const CONTRACT = "build-inputs/release0124-source.json";
 export const MAX_PLAIN = 256 * 1048576,
   MAX_TGZ = 100000000,
