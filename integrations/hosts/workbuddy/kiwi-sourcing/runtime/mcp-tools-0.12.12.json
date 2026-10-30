@@ -1,0 +1,343 @@
+[
+  {
+    "name": "kiwi_search",
+    "description": "Discover candidate suppliers and search products across merchants on demand. Read-only. Covers the Kiwi Network (in-network merchants) only: internet e-commerce listings are out of scope and must be retrieved with the host's own web tools; never present this result as external platform data. Internals: merchant routing + UCP Catalog orchestration + trust/freshness. The returned network_search reports the true state of this Network query (status: completed/partial/timeout/error/not_searched; result_state: has_candidates/no_match/undetermined) - only completed + no_match may be phrased as 'no match this time'; timeouts, failures, partial completion, or not-searched must never be reported as 'no suppliers available'. Merchants with inquiry_available=true support live quote requests (proceed to kiwi_request_quotes); merchants with inquiry_available=false and source_kind=merchant_declared only have their v0 public profile (browsable: product names, updated-at, storefront link) and cannot be queried for quotes. products is a projection of the merchant's existing profile (basis=merchant_listed; price.kind=merchant_listed_price means the merchant's listed price, absent means to_be_quoted) - never present it as a confirmed quote, stock, or lead-time commitment.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1
+        },
+        "category": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "kiwi_request_quotes",
+    "description": "Send an RFQ to one or more merchants. Write op; pass an idempotency_key (optional, auto-generated when omitted) and get back a stable task_id; KNP RFQ fan-out. CommerceIntent must satisfy the frozen contract: every intent.items entry needs query (short product word) and quantity ({value, unit} object, e.g. {\"value\":2,\"unit\":\"unit\"}). Example intent.items: [{\"query\":\"thermos cup\",\"quantity\":{\"value\":2,\"unit\":\"unit\"}}]. merchant_ids only accepts merchants with inquiry_available=true from kiwi_search; merchants with only a v0 public profile are rejected by the service layer (merchant_inquiry_unavailable), and merchants currently offline (heartbeat timeout, freshness_state=stale/unreachable) are rejected (merchant_offline) - neither produces a task.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intent"
+      ],
+      "properties": {
+        "intent": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "intent_id",
+            "intent_type",
+            "items"
+          ],
+          "properties": {
+            "intent_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "intent_type": {
+              "type": "string",
+              "enum": [
+                "purchase",
+                "procurement",
+                "inquiry"
+              ]
+            },
+            "items": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "query"
+                ],
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Short product word (e.g. thermos cup); matches catalog title/category via LIKE; long spec phrases may not match"
+                  },
+                  "sku": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "quantity": {
+                    "type": "object",
+                    "required": [
+                      "value",
+                      "unit"
+                    ],
+                    "properties": {
+                      "value": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "unit": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "merchant_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "kiwi_get_task",
+    "description": "Read task status, quotes, partial failures, pending approvals, and expiry info. Unified status/resume read surface; replaces keeping offer/pending state in plugin memory.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  {
+    "name": "kiwi_negotiate",
+    "description": "Advance negotiation within the delegation boundary. Updates the same task_id; CounterOffer / Clarification; may produce a candidate_id; hard-bounded by DelegationPolicy max_rounds etc.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "action",
+        "summary"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "counter_offer",
+            "clarification"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  {
+    "name": "kiwi_accept_agreement",
+    "description": "Confirm and accept a non-binding agreement. Requires a valid approval_id + candidate_id; outputs a stable agreement_id. When DelegationPolicy=ask and approval is missing, returns approval_required (with a persistent approval_id); retry with that approval_id once the host completes human approval.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "candidate_id"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "candidate_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  {
+    "name": "kiwi_get_agreement",
+    "description": "Read the final agreement, provenance, and audit summary. Read-only; agreement retrieval + digest + audit summary.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agreement_id"
+      ],
+      "properties": {
+        "agreement_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  {
+    "name": "kiwi_handoff",
+    "description": "Produce the transaction / PO / contact path. Agreement -> UCP Checkout / merchant transaction endpoint. When ASK and approval is missing, returns structured approval_required (with approval_id); host runs kiwi_approve then retries with the id.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agreement_id",
+        "destination_type"
+      ],
+      "properties": {
+        "agreement_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "destination_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "kiwi_approve",
+    "description": "Approve a persistent approval (ASK gate). Call after the host presents the non-binding agreement / handoff summary to the user and obtains consent; then retry kiwi_accept_agreement / kiwi_handoff with the approval_id. Write op, double-gated by the host's approval system.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_id"
+      ],
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "kiwi_reject",
+    "description": "Reject a persistent approval (deny is the preferred path). Once rejected, the same approval_id can no longer be approved or produce an agreement/handoff.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_id"
+      ],
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "kiwi_follow_merchant",
+    "description": "Explicitly follow a merchant (pull-based subscription). Buyer-initiated only: searching, browsing, viewing a profile, or requesting quotes never constitutes a subscription and must not replace the buyer's explicit follow. After following, the buyer can use kiwi_get_follow_updates to check the merchant's public updates on demand; merchants cannot push messages to followers. Requires Kiwi catalog sign-in (returns a sign-in guide when not configured).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "merchant_id"
+      ],
+      "properties": {
+        "merchant_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "category": {
+          "type": "string",
+          "description": "Optional: only care about public updates in this category"
+        },
+        "consent_version": {
+          "type": "string",
+          "description": "Optional: the version of the subscription terms the buyer consented to"
+        }
+      }
+    }
+  },
+  {
+    "name": "kiwi_unfollow_merchant",
+    "description": "Unfollow a merchant (idempotent). Buyer-initiated only; after unfollowing, the merchant leaves the follow list and its public updates are no longer shown.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "merchant_id"
+      ],
+      "properties": {
+        "merchant_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  {
+    "name": "kiwi_list_follows",
+    "description": "List the buyer's currently followed merchants (follow management surface). Read-only; requires Kiwi catalog sign-in (returns a sign-in guide when not configured).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    }
+  },
+  {
+    "name": "kiwi_get_follow_updates",
+    "description": "Check public updates from followed merchants. Call only in response to an explicit buyer ask (e.g. 'any new updates from merchants I follow?'): returns the merchants' public updates incrementally by watermark (product_added / product_updated / faq_updated / service_notice / publication_withdrawn, public fields only), advancing the watermark after each call without loss or duplication. Pull-based subscription: merchants cannot push messages to the buyer, and this tool never receives merchant DMs on the buyer's behalf.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    }
+  }
+]

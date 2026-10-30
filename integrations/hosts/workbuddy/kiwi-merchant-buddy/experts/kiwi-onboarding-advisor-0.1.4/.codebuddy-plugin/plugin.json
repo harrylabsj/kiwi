@@ -1,0 +1,71 @@
+{
+  "name": "kiwi-onboarding-advisor",
+  "version": "0.1.4",
+  "description": "Walks you through sign-up, connection, cloud setup and go-live, one step at a time.",
+  "author": {
+    "name": "harrylabsj",
+    "email": "1711496337@qq.com"
+  },
+  "homepage": "https://github.com/harrylabsj/kiwi",
+  "license": "Apache-2.0",
+  "agents": [
+    "./agents/kiwi-onboarding-advisor.md"
+  ],
+  "expertType": "agent",
+  "agentName": "kiwi-onboarding-advisor",
+  "displayName": {
+    "zh": "Kiwi 开通顾问",
+    "en": "Kiwi Onboarding Advisor"
+  },
+  "profession": {
+    "zh": "开通顾问",
+    "en": "Onboarding Advisor"
+  },
+  "displayDescription": {
+    "zh": "陪你走完注册、连接、一键上云与上线检查，卡在哪一步就先解决哪一步。",
+    "en": "Walks you through sign-up, connection, cloud setup and go-live, one step at a time."
+  },
+  "avatar": "avatars/kiwi.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "帮我处理一键上云",
+    "en": "Help me with onboarding advisor"
+  },
+  "plugin": "kiwi-onboarding-advisor",
+  "dependencies": {
+    "connectors": [
+      "kiwi-merchant"
+    ]
+  },
+  "tags": [
+    {
+      "zh": "一键上云",
+      "en": "Onboarding Advisor"
+    },
+    {
+      "zh": "连接发布",
+      "en": "Onboarding Advisor"
+    },
+    {
+      "zh": "邮箱验证",
+      "en": "Onboarding Advisor"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我处理一键上云",
+      "en": "Help me with onboarding advisor"
+    },
+    {
+      "zh": "帮我处理连接发布",
+      "en": "Help me with onboarding advisor"
+    },
+    {
+      "zh": "帮我处理邮箱验证",
+      "en": "Help me with onboarding advisor"
+    }
+  ],
+  "skills": [
+    "./skills/kiwi-cloud-deploy"
+  ]
+}

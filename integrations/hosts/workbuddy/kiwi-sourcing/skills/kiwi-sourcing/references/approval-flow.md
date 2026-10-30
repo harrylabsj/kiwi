@@ -1,14 +1,14 @@
-# 审批流程
+# 后端审批结果与上层处理
 
-`kiwi_accept_agreement` 和 `kiwi_handoff` 是两个不同的高风险 action，各自需要与当时条款绑定的
-持久审批。WorkBuddy 的界面确认不能替代 Kiwi 的 `approval_id`。
+连接器只透传工具与结果，不生成 `approval_id`、批准/拒绝 action，也不验证真人身份。Kiwi
+后端决定返回 `approval_required`、`authorization_denied`、`approval_denied` 或成功结果；应把
+后端返回原样交给上层专家处理。
 
-1. 首次调用目标 action，不携带 `approval_id`。
-2. 若返回 `approval_required`，读取 `approval_id` 和候选摘要。
-3. 向用户展示商家、商品/数量、总价/币种、交期、MOQ、售后、有效期、缺失信息和风险。
-4. 用户明确同意当前条款后，调用 `kiwi_approve`。
-5. 携批准后的 `approval_id` 重试同一 action。
-6. 用户拒绝、犹豫或要求修改时，调用 `kiwi_reject` 或回到磋商，不得批准。
+当上层专家依据当前任务授权决定调用 `kiwi_accept_agreement` 或 `kiwi_handoff`，如后端返回
+`approval_required`，读取并呈现其中的审批标识和条款摘要。上层专家依据用户决策决定下一步；
+若明确决定批准，再主动调用 `kiwi_approve` 并根据后端返回继续。连接器不会自动补调
+`kiwi_approve` 或重试原 action。
 
-如果条款、报价、商家或 action 改变，旧审批失效；重新生成候选并再次确认。遇到
-`authorization_denied` 或 `approval_denied` 时停止，不自动重试。
+条款、报价、商家或 action 改变时，应按 Kiwi 后端要求重新取得对应状态；不得把旧
+`approval_id` 擅自用于不同 action。对于拒绝、等待或修改决定，由上层专家选择 `kiwi_reject`
+或返回磋商；连接器不替其作决定。

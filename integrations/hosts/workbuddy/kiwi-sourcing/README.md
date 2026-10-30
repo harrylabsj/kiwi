@@ -1,46 +1,45 @@
 # Kiwi 采购询价 WorkBuddy Connector
 
-该目录是提交到 WorkBuddy 连接器市场的完整源包。采用 WorkBuddy 托管 Node 22 运行时（发布包要求 Node >=22.19.0），
-通过 `npx` 启动 `@harrylabsj/kiwi@0.12.3` 的 stdio MCP Server。
+## 当前状态：本地整合候选，HOLD
 
-本地下一版候选为 **1.0.2**，尚未提交审核。平台已送审的 1.0.1（13 工具 + latest）
-是独立的历史资产；本地修改不代表其已更新、撤回或审核通过。
+此副本将本地采购启动器接入正式 Kiwi 源树，仍未在 WorkBuddy 客户端验证、未提交审核、未发布或部署。Connector 版本暂定为 `1.0.3`（从历史在审 `1.0.2` 候选递增）；该版本尚未在线核验，提交前必须复核平台当前版本、审核状态及发布合同。
 
-固定版本依据：2026-10-07 读取官方 npm metadata
-`https://registry.npmjs.org/@harrylabsj%2fkiwi/0.12.3`，记录包名/版本、
-`engines.node=>=22.19.0`、`bin.kiwi=dist/cli.js` 与公开发布物：
+当前仅完成一项本机兼容检查：经 registry `dist.integrity` 核验的实际 `@harrylabsj/kiwi@0.12.16` tarball 在临时目录中通过 MCP `initialize` 和 `tools/list`，协商协议为 `2025-06-18`，13 项工具 schema 匹配，业务工具调用数为 0。验证使用本机 Kiwi checkout 的 `node_modules` 依赖链接，未做独立 npm install。该结果不代表完整 production launcher READY、WorkBuddy UI/发布合同验收或真实采购链路已通过，也未验证真人授权语义、预算或范围执行。
 
-- tarball：`https://registry.npmjs.org/@harrylabsj/kiwi/-/kiwi-0.12.3.tgz`
-- SRI：`sha512-anOf/ufyK1Q3RUIUCSkUAQDEE9KIqKkZ0VJ0eXTGUNZHVDmj2DMCeQyiMGqQSglZWIkQHmFxcMzu1zuiF12yMw==`
+## 启动路径
 
-同日下载上述官方 tarball，仅计算 SRI 并静态读取包内 `package.json` 与
-`dist/mcp/tools.js`：SRI 相符，声明的 13 个工具与本 connector 白名单一致（含 4 个关注工具）。
-未安装或执行该发布包；静态合同不是目标客户端 runtime 验收。上述 SRI 是审查出处记录，
-不是新增的启动校验机制；客户端 `initialize` / `tools/list` 仍需按下节实测。
+`mcp.json` 从历史固定 npm CLI 入口改为随包 `runtime/production-launcher.mjs`。启动器要求 Node 22.19+、系统 `npm` 和 Python 3，并要求宿主提供当前用户私有的 `CODEBUDDY_PLUGIN_DATA`。每次启动只解析 npm `latest` 一次，锁定本次包及来源证据，执行隔离安装、来源/完整性/安装树验证、英文和中文 MCP schema 探测，再启动本次确切版本的后端。未准备完成前，前端可返回静态 13 工具基线；该列表本身不是 READY。只有后端 initialize、实际 tools/list 与 13 工具契约都验证通过后，才发出固定 READY 状态。任何未知版本、验证失败、缓存漂移或超时都停止，不回退到旧缓存。
 
-## 架构边界
+MCP 前端只支持 `2025-06-18`：客户端请求该版本时原样回应；请求其他非空版本时回应此服务支持的 `2025-06-18` 作为 counteroffer，并等客户端发 `notifications/initialized` 后才激活后端。如果客户端不接受，会话不会进入 READY，也不会创建 backend。协议诊断仅向 stderr 写固定版本分类、服务协商版本和状态，不记录客户端发送的原始版本字符串或请求正文。该协议处理已在本地合成流测试；WorkBuddy 是否接受 counteroffer 仍未真人验证。
+
+历史正式入口固定为 `@harrylabsj/kiwi@0.12.3`；另一个未提交 staging 副本改为固定 `0.12.7`。本候选用按次 latest 替代这两种固定 pin，是有意的启动契约变化，不能默认为平台接受。
+
+## 架构与业务边界
 
 ```text
 WorkBuddy 对话
   └─ Kiwi 采购询价 Connector（本目录）
-       └─ kiwi mcp serve / Buyer Core
+       └─ Kiwi Buyer Core
             ├─ 本地 SQLite：task、approval、agreement
             ├─ kiwi-catalog：发现供应商
             └─ 独立 Kiwi Merchant Agent：商品、库存、报价、KNP/A2A
 ```
 
-连接器是买家入口，不是商家运行时。`kiwi merchant` 继续独立部署并保有商家私有数据、
-凭证、定价规则和审计 Ledger。未来可增加“Kiwi 商家经营助手”Buddy 应用，但它应调用既有
-Merchant HTTP/SSE 接口，只作为经营控制面，不把商家运行时迁入 WorkBuddy。
+连接器是买家入口，不是商家运行时。`kiwi merchant` 继续独立部署并保有商家私有数据、凭证、定价规则和审计 Ledger。商家经营助手可以作为独立控制面调用既有 Merchant HTTP/SSE 接口，不将商家运行时迁入 WorkBuddy。
 
-## 配置与安全
+保留随包 13 工具契约。连接器是 MCP 通道，不增加业务审批、授权、预算或范围逻辑：已列出的工具名、arguments 和后端结果按协议透传，`approval_required`、错误和拒绝结果也由 Kiwi 后端决定并返回。连接器不会生成确认、自动调用 `kiwi_approve`、替换审批结果或因宿主缺少 elicitation 能力而拦截业务工具。
 
-- 一个连接器只配置一个 stdio MCP Server；
-- npm 包固定为 `@harrylabsj/kiwi@0.12.3`；校验器拒绝 dist-tag、版本范围及重复包参数；
-- 启动时需能访问 npm registry（或配置的镜像），网络不可用时可能无法检查或下载包；
-- 单次连接超时 30 秒，A2A 调用预算 15 秒；
-- 首版不配置 `auth_mode`，不在包内放 Token、API Key 或商家凭证；
-- `kiwi_accept_agreement` 和 `kiwi_handoff` 各自经过 Kiwi 持久审批门；
+业务范围、预算及是否调用接受协议、handoff、approve 等动作由上层专家和 Kiwi 后端职责划分决定；连接器不证明真人身份或确认意图，也不保证后端实现特定预算策略。`kiwi_approve` 仅在上层专家主动调用时透传。13 个工具中没有支付工具；连接器不会新增支付能力。
+
+连接器仍保留 MCP 协议版本协商。对 host 或 backend 的 elicitation，仅作为协议能力/请求通道透明转送；其存在不构成 connector 的审批或真人授权证明。真实 WorkBuddy 真人确认语义尚未验证。
+
+## 配置与数据安全
+
+- 一个连接器只配置一个 stdio MCP Server。
+- 不在包内保存 Token、API Key、管理员密码或商家凭证；不把一次性秘密输出到模型可见的日志或回执。
+- 准备缓存必须位于宿主提供的私有数据目录；格式 3 指针绑定版本、integrity、lock 摘要和安装内容树。启动前持锁重新核对并重扫。
+- npm latest、registry、签名验证和安装需要外网；网络或能力不足时停止，不换源、不静默回退。
+- MCP timeout 当前为 30 秒；A2A 调用预算为 15 秒。
 - 非绑定协议不会创建订单、支付或锁定库存。
 
 ## 本地校验与打包
@@ -52,20 +51,19 @@ npm run verify:workbuddy
 npm run package:workbuddy
 ```
 
-打包结果位于 `release/workbuddy/kiwi-sourcing-1.0.2.zip`。脚本只收录市场所需的元信息、
-MCP 配置、图标、README 和 Skill，并在打包前执行结构、版本、工具白名单与敏感信息检查。
+打包默认输出 `release/workbuddy/kiwi-sourcing-1.0.3.zip`，也可通过 `scripts/package.sh <新ZIP路径>` 指定新目标。已存在目标会被拒绝，不覆盖旧包。显式 package manifest 当前包含 connector 元信息、MCP 配置、图标、README、Skill 与 allowlisted Runtime；`PACKAGE-SHA256.json` 固定包内 40 个 payload 文件的尺寸和摘要。测试与原始研究材料不打包。
 
-## WorkBuddy 预览验收
+副本离线验证包括 READY observer 对应的 13 工具契约、tree/pointer/lock 检查及格式 3 树摘要回归。离线测试不访问 npm，也不代替 WorkBuddy host 测试。
 
-提交审核前必须在目标 WorkBuddy 5.x 客户端完成：
+## WorkBuddy 预览验收仍需完成
 
-1. 安装 ZIP，确认 WorkBuddy 实际 Node 版本 >=22.19.0，且能够下载固定的 npm 0.12.3 包；
-2. 完成 MCP `initialize` 与 `tools/list`，确认 13 个工具全部出现；
-3. 真实执行 `kiwi_search → kiwi_request_quotes → kiwi_get_task`；
-4. 验证 `partial_success`、空结果、断网、超时和重启恢复；
-5. 验证接受协议与 handoff 分别要求明确用户确认，审批不能跨 action 复用；
-6. 记录 WorkBuddy 实际 MCP `protocolVersion`，确认属于 Kiwi 支持范围；
-7. 确认连接器更新、灰度、紧急下架和工具级强制确认能力。
+提交审核前需在目标 WorkBuddy 版本验证：
 
-WorkBuddy 官方要求单次调用建议在 30 秒内返回。首发一次最多询价 3 家商家；更大范围应拆成
-多批，并通过 `kiwi_get_task` 汇总部分结果。
+1. `${CODEBUDDY_PLUGIN_ROOT}` 路径展开、Node 22.19+、npm/Python 可用性，以及 `CODEBUDDY_PLUGIN_DATA` 的权限与持久性；
+2. 宿主 MCP `initialize`、实际 `tools/list` 和当前 protocolVersion；
+3. 后端 READY 状态、宿主 timeout、关闭/锁清理与升级数据保全；
+4. 只读搜索/询价/任务查询、空结果、部分成功、断网与超时；
+5. 13个工具及 arguments/结果透传、backend `approval_required`/拒绝结果完整返回；若宿主另有真人确认流程，应在上层单独验证，不能由 connector 透传测试替代；
+6. 更新、回滚、灰度和紧急下架流程。
+
+一次本地 READY 不能替代以上任何宿主或人工授权验收。任何平台版本、收费、审核或授权结论必须以届时真实工具/页面结果为准。

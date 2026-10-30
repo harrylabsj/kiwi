@@ -2,19 +2,8 @@
   "mcpServers": {
     "kiwi-sourcing": {
       "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@harrylabsj/kiwi@0.12.3",
-        "mcp",
-        "serve",
-        "--principal",
-        "workbuddy:local",
-        "--agent",
-        "buyer-agent:workbuddy",
-        "--a2a-timeout-ms",
-        "15000"
-      ],
+      "command": "node",
+      "args": ["${CODEBUDDY_PLUGIN_ROOT}/runtime/production-launcher.mjs"],
       "runtime": {
         "type": "node",
         "version": "22"

@@ -1,13 +1,13 @@
 {
-  "name": "Kiwi 采购询价",
-  "name_zh": "Kiwi 采购询价",
+  "name": "kiwi网络空间",
+  "name_zh": "kiwi网络空间",
   "name_en": "Kiwi Sourcing & Negotiation",
   "description": "发现供应商、跨商家询价、比较报价并协商非绑定采购条款。",
   "description_zh": "发现供应商、跨商家询价、比较报价并协商非绑定采购条款。",
   "description_en": "Discover suppliers, request and compare quotes, and negotiate non-binding purchasing terms.",
   "source": "kiwi-sourcing",
   "type": "mcp",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "minWorkbuddyVersion": "5.0.0",
   "examples_zh": [
     "找三家能在一周内交付 200 个 USB-C 扩展坞的供应商",

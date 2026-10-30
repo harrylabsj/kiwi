@@ -1,0 +1,77 @@
+{
+  "name": "haina-ecommerce-expert",
+  "version": "1.2.0",
+  "description": "Shopping decisions with Kiwi Network merchant discovery, authorized inquiries and non-binding negotiation, plus sourced comparison.",
+  "author": {
+    "name": "harrylabsj",
+    "email": "1711496337@qq.com"
+  },
+  "agents": [
+    "./agents/haina-ecommerce-expert.md"
+  ],
+  "expertType": "agent",
+  "agentName": "haina-ecommerce-expert",
+  "skills": [
+    "./skills/online-shopping-assistant"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "shopping",
+    "price-comparison",
+    "taobao",
+    "jd",
+    "vipshop"
+  ],
+  "displayName": {
+    "zh": "海纳·电商专家",
+    "en": "Haina · E-commerce Expert"
+  },
+  "profession": {
+    "zh": "网购助手",
+    "en": "Online Shopping Assistant"
+  },
+  "displayDescription": {
+    "zh": "优先发现 Kiwi 商家商品，按授权询价、澄清和磋商，并核对规格、价格与来源。",
+    "en": "Discover Kiwi merchants first, request quotes and negotiate within your mandate, and compare sourced offers."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "预算800元，主要通勤用，帮我选降噪耳机并比较可核实的价格。",
+    "en": "My budget is 800 RMB for commuting headphones. Select noise-cancelling options and compare verifiable prices."
+  },
+  "plugin": "haina-ecommerce-expert",
+  "tags": [
+    {
+      "zh": "跨平台比价",
+      "en": "Cross-platform Comparison"
+    },
+    {
+      "zh": "商品选购",
+      "en": "Product Selection"
+    },
+    {
+      "zh": "规格核对",
+      "en": "Specification Verification"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "预算800元，主要通勤用，帮我选降噪耳机并比较可核实的价格。",
+      "en": "My budget is 800 RMB for commuting headphones. Select noise-cancelling options and compare verifiable prices."
+    },
+    {
+      "zh": "我已经确定型号，帮我核对各平台同款规格、价格和优惠条件。",
+      "en": "I have chosen a model. Verify matching specifications, prices, and discount conditions across platforms."
+    },
+    {
+      "zh": "比较这两个商品链接或截图，先判断是不是同款，再告诉我哪个更值得买。",
+      "en": "Compare these two product links or screenshots. Verify whether they match before recommending the better buy."
+    }
+  ],
+  "dependencies": {
+    "connectors": [
+      "kiwi-sourcing"
+    ]
+  }
+}
