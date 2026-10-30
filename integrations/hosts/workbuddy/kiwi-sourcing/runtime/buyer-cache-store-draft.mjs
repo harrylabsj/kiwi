@@ -21,9 +21,25 @@ function readPrivate(p,max){let fd;try{fd=openSync(p,constants.O_RDONLY|constant
 function lockDigest(p){let fd;try{fd=openSync(p,constants.O_RDONLY|constants.O_NOFOLLOW);const s=fstatSync(fd);if(!s.isFile()||s.nlink!==1||(s.mode&0o022)||(typeof process.getuid==='function'&&s.uid!==process.getuid())||s.size>16*1024*1024)throw new Error();return createHash('sha256').update(readFileSync(fd)).digest('hex')}catch{throw new Error('CACHE_TREE_LOCK_INVALID')}finally{if(fd!==undefined)closeSync(fd)}}
 function validName(name){return typeof name==='string'&&/^kiwi-preflight-[A-Za-z0-9]{6}$/.test(name)}
 function sessionLock(root,name){if(!validName(name))throw new Error('CACHE_SESSION_INVALID');const dir=join(root,name);privateDirectory(dir);const bytes=readPrivate(join(dir,'verified-download.tgz'),128*1024*1024);const lock=resumeTransaction(join(dir,'transaction.json'),bytes);if(lock.name!=='@harrylabsj/kiwi')throw new Error('PACKAGE_INVALID');return {dir,lock,treeLockSha256:lockDigest(join(dir,'package-lock.json'))}}
-export async function withBuyerCacheStore(root,operation){
+async function acquireGuard(path,options){
+ const wait=options?.waitForLock===true,signal=options?.signal,deadline=options?.deadlineEpochMs;
+ if(options!==undefined&&(!options||typeof options!=='object'||(wait&&(!Number.isSafeInteger(deadline)||deadline<=Date.now()))))throw new Error('CACHE_ARGUMENT_INVALID');
+ for(;;){
+  if(signal?.aborted)throw new Error('PREPARE_CANCELLED');
+  if(wait&&Date.now()>=deadline)throw new Error('PREPARE_TIMEOUT');
+  try{mkdirSync(path,{mode:0o700});return}catch(e){if(e.code!=='EEXIST')throw e;if(!wait)throw new Error('CACHE_BUSY',{cause:e})}
+  const remaining=deadline-Date.now();if(remaining<=0)throw new Error('PREPARE_TIMEOUT');
+  await new Promise((resolve,reject)=>{
+   const timer=setTimeout(done,Math.min(50,remaining));
+   function done(){signal?.removeEventListener('abort',cancel);resolve()}
+   function cancel(){clearTimeout(timer);signal?.removeEventListener('abort',cancel);reject(new Error('PREPARE_CANCELLED'))}
+   signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
+  });
+ }
+}
+export async function withBuyerCacheStore(root,operation,options){
  if(typeof root!=='string'||!isAbsolute(root)||resolve(root)!==root||typeof operation!=='function')throw new Error('CACHE_ARGUMENT_INVALID');privateDirectory(root);
- const guard=join(root,'.update-lock');try{mkdirSync(guard,{mode:0o700})}catch(e){if(e.code==='EEXIST')throw new Error('CACHE_BUSY',{cause:e});throw e}const guardStat=lstatSync(guard);let live=true;
+ const guard=join(root,'.update-lock');await acquireGuard(guard,options);const guardStat=lstatSync(guard);let live=true;
  const pointer=join(root,'prepared.json');
  function rejectLegacy(){try{lstatSync(join(root,'active.json'));throw new Error('CACHE_LEGACY_STATE_REQUIRES_REVIEW')}catch(e){if(e.code!=='ENOENT')throw e}}
  function prepared(){if(!live)throw new Error('CACHE_SCOPE_CLOSED');let data;try{data=JSON.parse(readPrivate(pointer,4096).toString('utf8'))}catch(e){if(e.code==='ENOENT')return null;throw new Error('CACHE_POINTER_INVALID',{cause:e})}

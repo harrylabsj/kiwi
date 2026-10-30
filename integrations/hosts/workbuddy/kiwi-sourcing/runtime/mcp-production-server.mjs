@@ -3,14 +3,16 @@ import {randomUUID} from 'node:crypto';
 
 const KNOWN=new Set(['kiwi_search','kiwi_request_quotes','kiwi_get_task','kiwi_negotiate','kiwi_accept_agreement','kiwi_get_agreement','kiwi_handoff','kiwi_approve','kiwi_reject','kiwi_follow_merchant','kiwi_unfollow_merchant','kiwi_list_follows','kiwi_get_follow_updates']);
 const PROTOCOL='2025-06-18';
+const READ_ONLY_TOOLS=new Set(['kiwi_search','kiwi_get_task','kiwi_get_agreement','kiwi_list_follows','kiwi_get_follow_updates']);
 const out=(output,message)=>{const ok=output.write(JSON.stringify(message)+'\n');return ok};
 const unavailable=text=>({isError:true,content:[{type:'text',text}]});
+const preparationPending=text=>({isError:true,structuredContent:{status:'retryable',code:'PREPARATION_IN_PROGRESS',requestSent:false},content:[{type:'text',text}]});
 const responseError=(id,code,message)=>({jsonrpc:'2.0',id,error:{code,message}});
 // Transparent MCP transport only. Business policy, scope, approval, and action
 // outcomes belong to the verified Kiwi backend / calling expert. This adapter
 // must not invent approval, call kiwi_approve, or block a listed business tool.
-export function startProductionMcpServer({input,output,baseline,prepare,activate,onStatus=()=>{},onProtocolDiagnostic=()=>{},backendRequestTimeoutMs=30000,toolTimeoutMs=30000}){
-  if(!input||!output||!Array.isArray(baseline)||baseline.length!==13||typeof prepare!=='function'||typeof activate!=='function'||backendRequestTimeoutMs<1||toolTimeoutMs<1)throw new Error('SERVER_ARGUMENT_INVALID');
+export function startProductionMcpServer({input,output,baseline,prepare,activate,onStatus=()=>{},onProtocolDiagnostic=()=>{},backendRequestTimeoutMs=30000,toolTimeoutMs=30000,prepareWaitTimeoutMs=25000}){
+  if(!input||!output||!Array.isArray(baseline)||baseline.length!==13||typeof prepare!=='function'||typeof activate!=='function'||backendRequestTimeoutMs<1||toolTimeoutMs<1||prepareWaitTimeoutMs<0||prepareWaitTimeoutMs>=30000)throw new Error('SERVER_ARGUMENT_INVALID');
   const baselineByName=new Map(baseline.map(tool=>[tool?.name,tool]));
   if(baselineByName.size!==13||[...baselineByName.keys()].some(name=>!KNOWN.has(name)))throw new Error('TOOL_BASELINE_INVALID');
   const abort=new AbortController(),reader=createInterface({input,crlfDelay:Infinity});
@@ -18,17 +20,17 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
   const status=code=>{try{onStatus(code)}catch{void 0;}};
   const protocolDiagnostic=state=>{try{onProtocolDiagnostic({clientProtocolVersionClass,negotiatedProtocolVersion:PROTOCOL,state})}catch{void 0;}};
   let resolveHostReady;const hostReadyPromise=new Promise(resolve=>{resolveHostReady=resolve});
-  const backendRequests=new Map(),activeToolCalls=new Map(),expiredBackend=new Set(),timedOutClientIds=new Set();
+  const backendRequests=new Map(),activeToolCalls=new Map(),queuedToolCalls=new Map(),expiredBackend=new Set(),timedOutClientIds=new Set();
   let resolveDone;const done=new Promise(resolve=>{resolveDone=resolve});
   const emit=message=>{try{if(!out(output,message))fail('OUTPUT_BACKPRESSURE')}catch{fail('OUTPUT_WRITE_FAILED')}};
   const sendBackend=async message=>{
-    if(!backend||phase!=='ready')throw new Error('BACKEND_UNAVAILABLE');
+    if(!backend||phase!=='ready'||abort.signal.aborted)throw new Error('BACKEND_UNAVAILABLE');
     await backend.send(message);
   };
   const answerTool=(id,result)=>{const callKey=`${typeof id}:${String(id)}`,pending=activeToolCalls.get(callKey);if(pending)clearTimeout(pending.timer);activeToolCalls.delete(callKey);emit({jsonrpc:'2.0',id,result})};
   function fail(code){
     if(stopped)return;stopped=true;phase='failed';status(code==='BACKEND_EXITED'?'BACKEND_EXITED':code==='BACKEND_FAILED'?'BACKEND_FAILED':'FAILED_RUNTIME');abort.abort();resolveHostReady(false);
-    for(const pending of activeToolCalls.values()){clearTimeout(pending.timer);emit({jsonrpc:'2.0',id:pending.id,result:unavailable('Connector stopped; action was not completed.')})}activeToolCalls.clear();
+    for(const pending of activeToolCalls.values()){clearTimeout(pending.timer);emit({jsonrpc:'2.0',id:pending.id,result:unavailable('Connector stopped; action was not completed.')})}activeToolCalls.clear();queuedToolCalls.clear();
     for(const [hostId,pending] of backendRequests){clearTimeout(pending.timer);void pending.send(responseError(pending.backendId,-32603,'Host request ended.'));remember(expiredBackend,hostId)}
     backendRequests.clear();void settleExit('failed',code);
   }
@@ -85,7 +87,7 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
     if(message.method==='notifications/cancelled'){
       const id=message.params?.requestId;
       const callKey=`${typeof id}:${String(id)}`,pending=activeToolCalls.get(callKey);
-      if(pending){clearTimeout(pending.timer);activeToolCalls.delete(callKey);void sendBackend({jsonrpc:'2.0',method:'notifications/cancelled',params:{requestId:id}}).catch(()=>{});remember(timedOutClientIds,callKey);fail('TOOL_OUTCOME_UNCERTAIN')}
+      if(pending){clearTimeout(pending.timer);activeToolCalls.delete(callKey);queuedToolCalls.delete(callKey);remember(timedOutClientIds,callKey);if(pending.sent){void sendBackend({jsonrpc:'2.0',method:'notifications/cancelled',params:{requestId:id}}).catch(()=>{});fail('TOOL_OUTCOME_UNCERTAIN')}}
       return;
     }
     if(!hasId){if(message.method==='tools/call')return;return}
@@ -99,14 +101,26 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
       if(typeof name!=='string'||!KNOWN.has(name)||!args||typeof args!=='object'||Array.isArray(args)){emit(responseError(message.id,-32602,'Invalid tool request'));return}
       if(Buffer.byteLength(JSON.stringify(message))>256*1024){emit({jsonrpc:'2.0',id:message.id,result:unavailable('Tool request exceeds the supported size; action stopped.')});return}
       const callKey=`${typeof message.id}:${String(message.id)}`;if(activeToolCalls.has(callKey)){fail('DUPLICATE_REQUEST_ID');return}
-      const toolTimer=setTimeout(()=>{
+      const pending={id:message.id,message,timer:null,sent:false,deadline:Date.now()+toolTimeoutMs};
+      pending.timer=setTimeout(()=>{
+        if(!activeToolCalls.has(callKey))return;
         remember(timedOutClientIds,callKey);
+        if(!pending.sent){queuedToolCalls.delete(callKey);answerTool(message.id,preparationPending('PREPARATION_IN_PROGRESS: Verification is still running; this read-only request was not sent. Retry it once the connector is ready.'));return}
         answerTool(message.id,unavailable('Backend response timed out; outcome is unknown. Do not retry until task status is checked.'));
         fail('TOOL_OUTCOME_UNCERTAIN');
-      },toolTimeoutMs);toolTimer.unref?.();activeToolCalls.set(callKey,{id:message.id,timer:toolTimer});
-      if(phase==='preparing'){answerTool(message.id,unavailable('Latest verification is in progress; retry this tool shortly.'));return}
+      },toolTimeoutMs);pending.timer.unref?.();activeToolCalls.set(callKey,pending);
+      if(phase==='preparing'){
+        if(READ_ONLY_TOOLS.has(name)&&prepareWaitTimeoutMs>0&&queuedToolCalls.size<32){
+          clearTimeout(pending.timer);pending.timer=setTimeout(()=>{
+            if(!activeToolCalls.has(callKey)||pending.sent)return;
+            remember(timedOutClientIds,callKey);queuedToolCalls.delete(callKey);
+            answerTool(message.id,preparationPending('PREPARATION_IN_PROGRESS: Verification exceeded the bounded wait; this read-only request was not sent. Retry it once the connector is ready.'));
+          },Math.min(prepareWaitTimeoutMs,Math.max(1,pending.deadline-Date.now())));pending.timer.unref?.();queuedToolCalls.set(callKey,pending);
+        }else answerTool(message.id,preparationPending('PREPARATION_IN_PROGRESS: Verification is still running; this request was not sent. Retry once the connector is ready.'));
+        return;
+      }
       if(phase!=='ready'){answerTool(message.id,unavailable('Latest verification failed; connector is stopped.'));return}
-      try{await sendBackend(message)}catch{answerTool(message.id,unavailable('Verified backend unavailable; request stopped.'))}return;
+      pending.sent=true;try{await sendBackend(message)}catch{answerTool(message.id,unavailable('Verified backend unavailable; request stopped.'))}return;
     }
     if(message.method==='logging/setLevel'||message.method==='resources/list'||message.method==='prompts/list'){
       if(phase==='ready'){try{await sendBackend(message)}catch{emit(responseError(message.id,-32603,'Backend unavailable'))}return}
@@ -141,13 +155,20 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
       if(stopped||abort.signal.aborted){active?.stop?.();return}
       if(!active||typeof active.send!=='function'||!active.done||typeof active.stop!=='function'||active.toolCount!==13||active.protocolVersion!==PROTOCOL){status('FAILED_BACKEND');throw new Error('BACKEND_HANDLE_INVALID')}
       backend=active;phase='ready';status('READY');
+      for(const [key,pending] of queuedToolCalls){
+        queuedToolCalls.delete(key);if(!activeToolCalls.has(key))continue;
+        if(abort.signal.aborted||Date.now()>=pending.deadline){remember(timedOutClientIds,key);answerTool(pending.id,preparationPending('PREPARATION_IN_PROGRESS: Verification finished after the bounded request window; this read-only request was not sent. Retry it once the connector is ready.'));continue}
+        clearTimeout(pending.timer);pending.timer=setTimeout(()=>{if(!activeToolCalls.has(key))return;remember(timedOutClientIds,key);answerTool(pending.id,unavailable('Backend response timed out; outcome is unknown. Do not retry until task status is checked.'));fail('TOOL_OUTCOME_UNCERTAIN')},pending.deadline-Date.now());pending.timer.unref?.();
+        if(!activeToolCalls.has(key)||abort.signal.aborted||Date.now()>=pending.deadline){pending.sent=false;remember(timedOutClientIds,key);answerTool(pending.id,preparationPending('PREPARATION_IN_PROGRESS: Verification finished after the bounded request window; this read-only request was not sent. Retry it once the connector is ready.'));continue}
+        pending.sent=true;try{await sendBackend(pending.message)}catch{answerTool(pending.id,unavailable('Verified backend unavailable; request stopped.'))}
+      }
       active.done.then(()=>{if(!stopped)fail('BACKEND_EXITED')}).catch(()=>{if(!stopped)fail('BACKEND_FAILED')});
-    }catch{if(!stopped)phase='failed'}
+    }catch{if(!stopped){phase='failed';for(const pending of [...activeToolCalls.values()])answerTool(pending.id,unavailable('Latest verification failed; connector is stopped.'));queuedToolCalls.clear()}}
   }
   runTask=run();
   function shutdown(){
     if(stopping)return finishTask;stopping=true;stopped=true;phase='stopped';status('STOPPED');abort.abort();resolveHostReady(false);
-    for(const pending of activeToolCalls.values())clearTimeout(pending.timer);activeToolCalls.clear();
+    for(const pending of activeToolCalls.values())clearTimeout(pending.timer);activeToolCalls.clear();queuedToolCalls.clear();
     for(const [id,p] of backendRequests){clearTimeout(p.timer);void p.send(responseError(p.backendId,-32603,'Connector stopped.'));remember(expiredBackend,id)}backendRequests.clear();
     return settleExit('stopped');
   }
