@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.12.15 — 2026-10-30
+
+- **人工订单行校验**：`/orders/reports` 的行明细复用共享校验（非空 SKU、正整数数量、非负 minor 金额、唯一 line_id）；坏行返回 422，不再入库后毒化归因。
+- **域错误不再统一 503**：OrderFact/OperatingPlan/Opportunity/Proposal/FollowUp 错误按 400/404/409/403 映射到 v1 与 legacy 面。
+- **归因按商户收口**：未知或跨商户订单返回 not_found；不再对空结果静默成功。
+- **批准价与买家出价取 max**：批准价不能低于买家本轮已愿意出的价（仍受 list 上限约束）。
+- **订单写入事务**：身份检查移入写事务，CSV 整批一个事务；并发同身份申报幂等。
+- **shopping-cli 客户端**：保留 HTTP 语义（auth/forbidden/not_found/conflict/invalid/unavailable/timeout），订单句柄支持 namespace/account。
+- **审批文件跨进程锁**：A2A 节点与 CLI 共享的 `negotiation-approvals.json` 加文件锁（陈旧锁回收），终态记录 30 天后修剪。
+- **移除工作台自证升级**：`/orders/{id}/verify` 与 `orders:verify` 删除；`external_verified` 只能由受信连接器写入。
+
 ## v0.12.14 — 2026-10-29
 
 - **首绑随附分享链接**：`KIWI_CLOUD_ACCESS_SHARE_LINK` 此前只在托管云运行时（`bootstrap`）生效；自托管的 `kiwi merchant connect` 现在也读它，并在绑定请求里随附 `access_config`。分享码只存在于平台「发布为网站」的链接里、没有可取用的接口，所以由实施方一次性提供，商家不必再到工作台手工粘贴；换码仍走工作台的签名更新。

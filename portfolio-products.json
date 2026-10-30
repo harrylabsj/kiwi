@@ -1,12 +1,12 @@
 {
   "schema": "kiwi.portfolio.products.v1",
-  "snapshot_date": "2026-10-28",
+  "snapshot_date": "2026-10-30",
   "version_policy": "Versions remain independent by product. The portfolio release bundle binds each available source commit, package version, candidate artifact hash, and external approval state.",
   "products": [
     {
       "id": "kiwi-merchant-cloud",
       "name": "Kiwi Merchant Cloud",
-      "version": "0.12.14",
+      "version": "0.12.15",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -27,7 +27,7 @@
     {
       "id": "kiwi",
       "name": "Kiwi runtime",
-      "version": "0.12.14",
+      "version": "0.12.15",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -48,7 +48,7 @@
     {
       "id": "kiwi-catalog",
       "name": "Kiwi Catalog",
-      "version": "0.5.10",
+      "version": "0.5.11",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
@@ -59,7 +59,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/kiwi-catalog/*",
       "state": "candidate",
-      "last_known_registry_version": "0.5.9",
+      "last_known_registry_version": "0.5.10",
       "gates": [
         "locked tests",
         "contract lock",
@@ -70,7 +70,7 @@
     {
       "id": "shopping-cli",
       "name": "Shopping CLI",
-      "version": "3.2.10",
+      "version": "3.2.11",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
@@ -87,7 +87,7 @@
         "protected kiwi-release environment",
         "PyPI trusted publishing"
       ],
-      "last_known_registry_version": "3.2.9"
+      "last_known_registry_version": "3.2.10"
     },
     {
       "id": "kiwi-dsh-plugin",
@@ -124,7 +124,7 @@
       "channel": "GitHub repository + Hermes plugin catalog",
       "release_controller": "Hermes plugin repository and upstream catalog PR",
       "artifact": "release/hermes/hermes-plugin-kiwi-1.2.3.tar.gz",
-      "pinned_runtime_version": "0.12.14",
+      "pinned_runtime_version": "0.12.15",
       "state": "repository-tagged; catalog pin is a separate gate",
       "gates": [
         "plugin validation",

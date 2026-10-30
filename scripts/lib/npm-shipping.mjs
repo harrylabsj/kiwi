@@ -17,7 +17,7 @@ import {
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 export const BASE = "e703bc0d67e24a98c417274e46f37d210eff86ac";
-export const VERSION = "0.12.14";
+export const VERSION = "0.12.15";
 export const CONTRACT = "build-inputs/release0124-source.json";
 export const MAX_PLAIN = 256 * 1048576,
   MAX_TGZ = 100000000,
@@ -34,7 +34,13 @@ export function git(root, args) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  return execFileSync("git", ["--no-replace-objects", ...args], { cwd: root, encoding: "utf8" }).trimEnd();
+  return execFileSync("git", ["--no-replace-objects", ...args], {
+    cwd: root,
+    encoding: "utf8",
+    // 本地工作区可能包含大量被忽略的缓存/临时目录；默认 1 MiB 会让
+    // `ls-files --others --ignored` 直接 ENOBUFS。
+    maxBuffer: 64 * 1024 * 1024,
+  }).trimEnd();
 }
 export function inventory(dir, prefix = "") {
   const rows = [];
