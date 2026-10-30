@@ -508,6 +508,33 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
   /** 落 state_transition 事件并推进本机相位（recovery.deriveLocalPhase 消费）。
    *  fromPhase 必须显式传入——调用方若已把 next 写入 map 再读，from 会变成
    *  已推进的值（审查 BUG-10 实现注记）。 */
+  /**
+   * 从 Ledger 同步外部写入的相位（例如 runtime `offer-expiry` job 追加的
+   * EXPIRED）。A2A 进程的相位此前是纯内存，跨进程 job 终止报价后本进程
+   * 仍会按 OFFER_OPEN 处理下一轮入站——这里在每次请求开始时对齐链上事实。
+   */
+  const syncPhaseFromLedger = (negotiationId: string): void => {
+    try {
+      let phase: NegotiationPhase | undefined;
+      for (const event of ledger.events(negotiationId)) {
+        if (event.state_transition?.to_phase !== undefined) {
+          phase = event.state_transition.to_phase;
+        }
+      }
+      if (phase === undefined) return;
+      const current = phaseStateByNegotiation.get(negotiationId);
+      if (current?.phase !== phase) {
+        phaseStateByNegotiation.set(negotiationId, {
+          ...(current ?? createNegotiationPhase(negotiationId)),
+          phase,
+        });
+      }
+      if (isTerminalPhase(phase)) closedNegotiations.add(negotiationId);
+    } catch {
+      // 账本不可读时保持内存相位；后续正常路径会以各自错误码 fail-closed。
+    }
+  };
+
   const appendPhaseTransition = async (
     negotiationId: string,
     toPhase: NegotiationPhase,
@@ -835,6 +862,8 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         kind: "error", protocolCode: "reconciliation_required", message: "legacy negotiation owner is not proven",
       };
       boundPeers.set(negotiationId, ctx.senderIdentity);
+      // 跨进程相位对齐（例如 runtime 的过期报价 job 已写入 EXPIRED）。
+      syncPhaseFromLedger(negotiationId);
       // 审查 P2-D：终态不得以同一 negotiation_id 重开（§17.4/§21.2）。
       if (closedNegotiations.has(negotiationId) && COMMERCIAL_ACTIONS.has(envelope.action)) {
         return declineReply("state_conflict");

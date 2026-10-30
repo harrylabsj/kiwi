@@ -103,6 +103,7 @@ import { buildRuntimeServiceSpecs } from "./merchant-runtime/services.js";
 import { collectMerchantHealth } from "./merchant-runtime/health.js";
 import { MerchantJobs, standardMerchantJobs } from "./merchant-runtime/jobs.js";
 import { runBackup } from "./merchant-runtime/backup.js";
+import { expireOverdueOffers } from "./merchant-runtime/expire-offers.js";
 import { connectMerchant } from "./cloud/merchant-connect.js";
 import { rotateEnrollmentSigningKey } from "./cloud/binding/enrollment-key-recovery.js";
 import { credentialFingerprint, rotateMerchantCredential, type MerchantCredentialRotationOptions } from "./merchant-credential-rotation.js";
@@ -2028,8 +2029,15 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
         backupsDir: path.join(dirs.merchantDataDir, "backups"),
       });
     },
+    expireOffers: async () => {
+      const result = await expireOverdueOffers({ dataDir: dirs.merchantDataDir });
+      if (result.expired > 0) {
+        process.stderr.write(`[kiwi] expired ${result.expired} overdue offer(s)\n`);
+      }
+    },
     healthIntervalMs: 60_000,
     backupIntervalMs: 5 * 60_000,
+    offerExpiryIntervalMs: 5 * 60_000,
   })) {
     jobs.register(job);
   }
@@ -2076,6 +2084,8 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
     });
   }
   jobs.start();
+  // 启动即扫一次过期报价（不等首个 5 分钟间隔）。
+  void jobs.runOnce("offer-expiry");
   if (rotationScheduleStatus.enabled) {
     firstRotationCheck = setTimeout(() => { void jobs.runOnce("merchant-credential-rotation"); }, 120_000);
     firstRotationCheck.unref();

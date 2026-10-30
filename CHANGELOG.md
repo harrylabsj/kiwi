@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.12.17 — 2026-10-30
+
+- **过期报价自动终止**：runtime 每 5 分钟扫描 Ledger（启动时立即扫一次），把 `OFFER_OPEN` 且 active offer 的 `valid_until` 已过的磋商追加 `state_transition`（OFFER_OPEN → EXPIRED，终态）；缺失 `valid_until` 时按报价落账时间 + 24h 兜底。重复运行幂等。
+- **跨进程相位对齐**：A2A handler 在每个入站请求开始时从 Ledger 同步最新相位；过期 job 写入 EXPIRED 后，同一进程无需重启即可对后续商业动作返回 `state_conflict`，不会在终态上继续追加报价。
+
 ## v0.12.16 — 2026-10-30
 
 - **商家后台磋商旁观**：新增 owner 投影（`listOwner/timelineOwner`）与 loopback `/ops` API，商家可在 catalog 商家后台查看磋商列表与时间线（动作、SKU/数量、单价、`public_message`）；默认旁观投影仍保持零金额。

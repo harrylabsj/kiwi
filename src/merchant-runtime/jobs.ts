@@ -113,8 +113,11 @@ export class MerchantJobs {
 export function standardMerchantJobs(deps: {
   healthPoll: () => Promise<void>;
   backupHook?: () => Promise<void>;
+  /** 过期报价自动终止；提供时才注册对应 job（不影响既有任务集断言）。 */
+  expireOffers?: () => Promise<void>;
   healthIntervalMs?: number;
   backupIntervalMs?: number;
+  offerExpiryIntervalMs?: number;
 }): MerchantJob[] {
   return [
     {
@@ -131,5 +134,14 @@ export function standardMerchantJobs(deps: {
           throw new Error("持续备份未实现（阶段四）；本轮为显式接缝，不静默假装已备份");
         }),
     },
+    ...(deps.expireOffers !== undefined
+      ? [
+          {
+            name: "offer-expiry",
+            intervalMs: deps.offerExpiryIntervalMs ?? 5 * 60_000,
+            run: deps.expireOffers,
+          } satisfies MerchantJob,
+        ]
+      : []),
   ];
 }

@@ -6,7 +6,7 @@
     {
       "id": "kiwi-merchant-cloud",
       "name": "Kiwi Merchant Cloud",
-      "version": "0.12.16",
+      "version": "0.12.17",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -27,7 +27,7 @@
     {
       "id": "kiwi",
       "name": "Kiwi runtime",
-      "version": "0.12.16",
+      "version": "0.12.17",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -124,7 +124,7 @@
       "channel": "GitHub repository + Hermes plugin catalog",
       "release_controller": "Hermes plugin repository and upstream catalog PR",
       "artifact": "release/hermes/hermes-plugin-kiwi-1.2.3.tar.gz",
-      "pinned_runtime_version": "0.12.16",
+      "pinned_runtime_version": "0.12.17",
       "state": "repository-tagged; catalog pin is a separate gate",
       "gates": [
         "plugin validation",
@@ -135,7 +135,7 @@
     {
       "id": "kiwi-catalog-admin",
       "name": "Private Catalog merchant and operations extension",
-      "version": "0.2.7",
+      "version": "0.2.9",
       "version_source": {
         "type": "external-toml",
         "scope": "private",
@@ -143,7 +143,7 @@
         "field": "project.version"
       },
       "repository": "harrylabsj/kiwi-catalog-admin",
-      "source_commit": "8f0eabe74c3d2d485a55d718a30322fcb4bf26fc",
+      "source_commit": "d04f16ed9eb9d79b532b1f51274856455c403be4",
       "channel": "private Git tag",
       "release_controller": "private extension repository",
       "artifact": null,
@@ -229,7 +229,7 @@
       "artifact": null,
       "platform_asset_id": "oc_bd73f860e3e2b5d3",
       "source": "kiwi-sourcing",
-      "pinned_runtime_version": "0.8.0",
+      "pinned_runtime_version": "0.12.17",
       "bundle_reason": "The WorkBuddy asset is published, but its maintainable source package is unavailable in the local repositories.",
       "state": "published; runtime pin update requires source recovery and platform review",
       "gates": [
