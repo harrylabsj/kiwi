@@ -129,7 +129,8 @@ describe("wecom channel", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     await channel.send("hello");
-    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    const init = fetchImpl.mock.calls[0]?.[1] as { body?: string } | undefined;
+    const body = JSON.parse(String(init?.body));
     expect(body).toMatchObject({ msgtype: "text", text: { content: "hello" } });
   });
 });
