@@ -5420,7 +5420,7 @@
     },
     {
       "path": "tests/merchant-watch.test.ts",
-      "sha256": "sha256:18a95f103413fad6cbbd6a73b0360f7b92833fd0fde7e58bb620ce14d574a299"
+      "sha256": "sha256:bbaa6d9eefaac6ca1c6a35fcdea453bc66fcefee5ea6c63d39f8a566b326c190"
     },
     {
       "path": "tests/merchant-workbench-api.test.ts",
