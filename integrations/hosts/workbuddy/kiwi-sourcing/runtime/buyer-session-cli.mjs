@@ -20,7 +20,7 @@ function parse(argv){
 let interrupted=false;const cancelController=new AbortController();const onSignal=()=>{interrupted=true;cancelController.abort();setResolverAbortSignal(cancelController.signal)};setResolverAbortSignal(cancelController.signal);process.once('SIGTERM',onSignal);process.once('SIGINT',onSignal);
 try{
  if(interrupted)throw new Error('PREPARE_CANCELLED');
- const {action,values:v}=parse(process.argv.slice(2));const common={npmBinary:v['--npm'],nodeBinary:v['--node'],pythonBinary:v['--python'],baselineFile:v['--baseline-en'],baselineZhFile:v['--baseline-zh']};
+ const {action,values:v}=parse(process.argv.slice(2));const common={npmBinary:v['--npm'],nodeBinary:v['--node'],pythonBinary:v['--python'],baselineFile:v['--baseline-en'],baselineZhFile:v['--baseline-zh'],signal:cancelController.signal};
  const result=action==='prepare-managed'?await prepareManagedBuyer({...common,storeDirectory:v['--store'],floorVersion:v['--floor']}):action==='stage'?await stageBuyerCandidate({...common,stagingParent:v['--parent'],previousVersion:v['--previous']}):action==='prepare'?await prepareLatestBuyer({...common,stagingParent:v['--parent'],sessionDirectory:v['--session']}):await (action==='verify'?verifyLatestBuyerSession:action==='inspect-latest'?inspectLatestBuyerCache:inspectBuyerSession)({...common,sessionDirectory:v['--session']});
  if(interrupted)throw new Error('PREPARE_CANCELLED');
  if(result.executionAuthorized!==false||result.authorizationProven!==false)throw new Error('RESULT_INVALID');

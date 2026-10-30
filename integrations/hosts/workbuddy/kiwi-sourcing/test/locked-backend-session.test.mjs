@@ -15,17 +15,17 @@ function prepareStore(base){
   createTransaction(join(session,'transaction.json'),name,{name,version,dist:{integrity,tarball}},archive);
   const packageLock=Buffer.from('fixture-package-lock');writeFileSync(join(session,'package-lock.json'),packageLock,{mode:0o600});
   const treeDigest='b'.repeat(64);const record={version,integrity,treeLockSha256:createHash('sha256').update(packageLock).digest('hex'),contentTreeSha256:treeDigest};
-  return {store,session,record,prepared:{name,version,integrity,sessionDirectory:session,tree:{content_tree_sha256:treeDigest}}};
+  return {store,session,record,prepared:{name,version,integrity,sessionDirectory:session,tree:{content_tree_sha256:treeDigest,lock_sha256:createHash('sha256').update(packageLock).digest('hex')}}};
 }
 
-test('prepared pointer and tree are checked under a lock held until backend exit',async()=>{
+test('prepared pointer and tree are checked under startup lock which releases after backend readiness',async()=>{
   const root=mkdtempSync('/private/tmp/kiwi-production-lock-'),state=prepareStore(root);let resolveDone,verified=false,stopped=false;
   try{
     await withBuyerCacheStore(state.store,cache=>cache.recordPrepared(state.session,'0.12.9',state.record));
     const done=new Promise(resolve=>{resolveDone=resolve});
     const active=await startBackendWithPreparedLock({storeDirectory:state.store,prepared:state.prepared,verificationOptions:{},verifyTree:async(selected,result)=>{verified=selected.contentTreeSha256===result.tree.content_tree_sha256},backendFactory:async()=>({send:async()=>{},done,stop:()=>{stopped=true;resolveDone()}})});
-    assert.equal(verified,true);assert.equal(existsSync(join(state.store,'.update-lock')),true);
-    await assert.rejects(()=>withBuyerCacheStore(state.store,async()=>{}),/CACHE_BUSY/);
+    assert.equal(verified,true);assert.equal(existsSync(join(state.store,'.update-lock')),false);
+    await withBuyerCacheStore(state.store,async()=>true);
     active.stop();await active.done;assert.equal(stopped,true);assert.equal(existsSync(join(state.store,'.update-lock')),false);
   }finally{rmSync(root,{recursive:true,force:true})}
 });
@@ -34,7 +34,7 @@ test('tree-binding failure stops before backend creation and releases lock',asyn
   const root=mkdtempSync('/private/tmp/kiwi-production-lock-fail-'),state=prepareStore(root);let spawned=false;
   try{
     await withBuyerCacheStore(state.store,cache=>cache.recordPrepared(state.session,'0.12.9',state.record));
-    await assert.rejects(()=>startBackendWithPreparedLock({storeDirectory:state.store,prepared:{...state.prepared,tree:{content_tree_sha256:'c'.repeat(64)}},verificationOptions:{},verifyTree:async()=>{throw new Error('TREE_RECHECK_FAILED')},backendFactory:async()=>{spawned=true;return {done:Promise.resolve(),send:async()=>{},stop(){}}}}),/TREE_RECHECK_FAILED/);
+    await assert.rejects(()=>startBackendWithPreparedLock({storeDirectory:state.store,prepared:state.prepared,verificationOptions:{},verifyTree:async()=>{throw new Error('TREE_RECHECK_FAILED')},backendFactory:async()=>{spawned=true;return {done:Promise.resolve(),send:async()=>{},stop(){}}}}),/TREE_RECHECK_FAILED/);
     assert.equal(spawned,false);assert.equal(existsSync(join(state.store,'.update-lock')),false);
   }finally{rmSync(root,{recursive:true,force:true})}
 });

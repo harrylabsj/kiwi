@@ -40,14 +40,14 @@ async function main(){
   const baseline=Array.isArray(baselineRaw)?baselineRaw:baselineRaw.tools;
   if(!Array.isArray(baseline)||baseline.length!==13)throw new Error('TOOL_BASELINE_INVALID');
   const cliPath=join(packageRoot,'buyer-session-cli.mjs');
-  async function rejectUnanchoredCache(){
+  async function rejectUnanchoredCache(signal,deadlineEpochMs){
     ensureBuyerCacheDirectory(store);
     await withCacheLock(store,state=>{
       if(state.prepared())return;
       if(readdirSync(store).some(name=>name!=='.update-lock'))throw new Error('CACHE_STATE_INVALID');
-    });
+    },{waitForLock:true,signal,deadlineEpochMs});
   }
-  const controller=new AbortController();let server;
+  const controller=new AbortController();let server,startupDeadlineEpochMs;
   const shutdown=()=>{controller.abort();server?.shutdown()};
   process.once('SIGTERM',shutdown);process.once('SIGINT',shutdown);
   try{
@@ -63,17 +63,20 @@ async function main(){
       },
       prepare:async({signal})=>{
         process.stderr.write('KIWI_STATUS:PREPARING\n');
-        await rejectUnanchoredCache();
+        const deadlineEpochMs=Date.now()+600_000;startupDeadlineEpochMs=deadlineEpochMs;
+        await rejectUnanchoredCache(signal,deadlineEpochMs);
         const args=['prepare-managed','--store',store,'--floor','0.12.9','--node',nodeBinary,'--npm',npmBinary,'--python',pythonBinary,
           '--baseline-en',join(packageRoot,'mcp-tools-0.12.12.json'),'--baseline-zh',join(packageRoot,'mcp-tools-0.12.12-zh.json')];
-        const result=await runPreparation({nodeBinary,cliPath,args,env:selectEnvironment(process.env,'prepare'),signal:AbortSignal.any([signal,controller.signal]),onProgress:({elapsedMs})=>process.stderr.write(`KIWI_PROGRESS:PREPARE:${Math.floor(elapsedMs/1000)}\n`)});
-        const selected=await withCacheLock(store,state=>state.prepared());
+        const remainingMs=deadlineEpochMs-Date.now();if(remainingMs<1)throw new Error('PREPARE_TIMEOUT');
+        const result=await runPreparation({nodeBinary,cliPath,args,env:selectEnvironment(process.env,'prepare'),timeoutMs:remainingMs,signal:AbortSignal.any([signal,controller.signal]),onProgress:({elapsedMs})=>process.stderr.write(`KIWI_PROGRESS:PREPARE:${Math.floor(elapsedMs/1000)}\n`)});
+        const selected=await withCacheLock(store,state=>state.prepared(),{waitForLock:true,signal,deadlineEpochMs});
         if(!selected||selected.sessionDirectory!==result.sessionDirectory||selected.version!==result.version||selected.integrity!==result.integrity||selected.contentTreeSha256!==result.tree?.content_tree_sha256)throw new Error('PREPARED_STATE_MISMATCH');
         if(signal.aborted||controller.signal.aborted)throw new Error('PREPARE_CANCELLED');
         return result;
       },
       activate:async(prepared,{signal,clientCapabilities,onMessage})=>{
-        return startBackendWithPreparedLock({storeDirectory:store,prepared,verificationOptions:{nodeBinary,pythonBinary},signal:AbortSignal.any([signal,controller.signal]),backendFactory:()=>startVerifiedBackend({nodeBinary,sessionDirectory:prepared.sessionDirectory,baseline,clientCapabilities,onMessage,timeoutMs:15000,sourceRoot:packageRoot,environment:process.env,signal})});
+        const startupSignal=AbortSignal.any([signal,controller.signal]),deadlineEpochMs=startupDeadlineEpochMs??Date.now()+600_000;
+        return startBackendWithPreparedLock({storeDirectory:store,prepared,verificationOptions:{nodeBinary,pythonBinary},signal:startupSignal,deadlineEpochMs,backendFactory:selected=>startVerifiedBackend({nodeBinary,sessionDirectory:selected.sessionDirectory,baseline,clientCapabilities,onMessage,timeoutMs:Math.min(15000,Math.max(1,deadlineEpochMs-Date.now())),sourceRoot:packageRoot,environment:process.env,signal:startupSignal})});
       },
     });
     await server.done;
