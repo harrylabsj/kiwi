@@ -10,7 +10,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { startTestA2aStack } from "./helpers.js";
+import { startTestA2aStack, type CapturedInbound } from "./helpers.js";
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -178,6 +178,90 @@ describe("A2AQuoteFetcher（catalog 发现 → A2A 直连 merchant RFQ）", () =
   });
 });
 
+
+describe("Buyer MCP 端到端：预算还价 → 候选刷新 → 商家 accept", () => {
+  it("negotiate 后 get_task 显示商家最新条款，accept 向商家发送并写入 agreed_terms", async () => {
+    const { buildBuyerService } = await import("../src/buyer-core/build-service.js");
+    const { buildKiwiTools } = await import("../src/mcp/tools.js");
+    const { DEFAULT_DELEGATION_POLICY } = await import("../src/mcp/cli.js");
+    const capture: CapturedInbound[] = [];
+    const stack = await startTestA2aStack({
+      now: () => new Date().toISOString(),
+      productSource: {
+        getProduct: async () => ({ price: 189, currency: "CNY", title: "Test Product", stock: 120, unit: "台", source_evidence: { system: "owned-test-fixture" } }),
+      },
+      merchantPolicy: { price_floors: { "sku-001": 180 }, max_auto_discount_percent: 5 },
+      capture,
+    });
+    try {
+      const service = buildBuyerService({
+        dbPath: ":memory:",
+        protocolStateDir: protocolOptions().protocolStateDir,
+        principal: "hermes:probe",
+        buyerAgentId: "buyer-agent:hermes",
+        sessionId: "e2e-accept",
+        policy: {
+          ...DEFAULT_DELEGATION_POLICY,
+          principal: "hermes:probe",
+          actions: { ...DEFAULT_DELEGATION_POLICY.actions, accept_nonbinding: { mode: "auto" } },
+        },
+        catalogUrl: stack.catalogUrl,
+        a2aAllowPrivateRanges: true,
+        a2aSkipDnsCheck: true,
+        a2aTimeoutMs: 8000,
+      });
+      const tools = buildKiwiTools(service);
+      const call = (name: string, args: Record<string, unknown>) =>
+        tools.find((t) => t.name === name)!.handle(args);
+      const text = (r: { content?: Array<{ text?: string }> }) => r.content?.[0]?.text ?? "";
+      const search = JSON.parse(text(await call("kiwi_search", { query: "Test Product" }))) as {
+        merchants: Array<{ merchant_id: string }>;
+      };
+      const rq = await call("kiwi_request_quotes", {
+        intent: {
+          intent_id: "e2e-accept-1",
+          intent_type: "purchase",
+          items: [{ query: "Test Product", quantity: { value: 1, unit: "台" } }],
+          constraints: { currency: "CNY", budget: { currency: "CNY", amount_minor: 18000 } },
+          context_projection: { disclosure_boundary: "commerce_required", projected_fields: ["items", "constraints"] },
+        },
+        merchant_ids: [search.merchants[0]!.merchant_id],
+      });
+      expect(rq.isError).toBeUndefined();
+      const taskId = (JSON.parse(text(rq)) as { task_id: string }).task_id;
+      const negotiated = await call("kiwi_negotiate", {
+        task_id: taskId,
+        action: "counter_offer",
+        summary: "预算上限 180 元",
+      });
+      expect(negotiated.isError).toBeUndefined();
+      const counter = capture.find((c) => c.action === "counter_offer");
+      const proposed = (counter?.envelope.payload as { proposed_terms?: { items?: Array<{ unit_price?: { amount_minor?: number } }> } } | undefined)
+        ?.proposed_terms?.items?.[0]?.unit_price?.amount_minor;
+      expect(proposed).toBe(18000);
+
+      const taskAfter = JSON.parse(text(await call("kiwi_get_task", { task_id: taskId }))) as {
+        task: { candidates: Array<{ candidate_id: string; provenance?: { _quote_terms?: { total_price_minor?: number } } }> };
+      };
+      const candidate = taskAfter.task.candidates[0]!;
+      // 商家回复（含条件报价）已回写候选，不再停留在初始 18900。
+      expect(candidate.provenance?._quote_terms?.total_price_minor).toBeDefined();
+      expect(candidate.provenance?._quote_terms?.total_price_minor).not.toBe(18900);
+
+      const accepted = await call("kiwi_accept_agreement", { task_id: taskId, candidate_id: candidate.candidate_id });
+      expect(accepted.isError).toBeUndefined();
+      const result = JSON.parse(text(accepted)) as { agreement: { agreed_terms?: Record<string, unknown>; merchant_agreement?: Record<string, unknown> } };
+      const agreed = result.agreement.agreed_terms as { items: Array<{ unit_price: { amount_minor: number } }> };
+      expect(agreed.items[0]!.unit_price.amount_minor).toBeLessThan(18900);
+      expect(agreed.items[0]!.unit_price.amount_minor).toBeGreaterThan(0);
+      expect(result.agreement.merchant_agreement).toBeDefined();
+      expect(capture.some((c) => c.action === "accept_nonbinding")).toBe(true);
+    } finally {
+      await stack.stop();
+    }
+  });
+});
+
 describe("A2ANegotiator（A2A 直连 merchant CounterOffer）", () => {
   it("读 candidate provenance → counter_offer → 拿商家真实回复", async () => {
     const { A2AQuoteFetcher } = await import("../src/buyer-core/a2a-quote-fetcher.js");
@@ -228,6 +312,81 @@ describe("A2ANegotiator（A2A 直连 merchant CounterOffer）", () => {
       expect(step.summary).not.toContain("无 A2A 会话上下文");
       const reply = JSON.parse(step.reply!) as { action?: string };
       expect(reply.action).toBeDefined();
+    } finally {
+      await stack.stop();
+    }
+  });
+
+  it("预算驱动还价价与商家 accept：counter 用预算单价，accept 绑定商家最新条款", async () => {
+    const { A2AQuoteFetcher } = await import("../src/buyer-core/a2a-quote-fetcher.js");
+    const { A2ANegotiator } = await import("../src/buyer-core/a2a-negotiator.js");
+    const { KiwiCatalogMerchantIndex } = await import("../src/buyer-core/merchant-index.js");
+    const capture: CapturedInbound[] = [];
+    const stack = await startTestA2aStack({
+      now: () => new Date().toISOString(),
+      productSource: {
+        getProduct: async () => ({ price: 189, currency: "CNY", title: "Test Product", stock: 120, unit: "台", source_evidence: { system: "owned-test-fixture" } }),
+      },
+      merchantPolicy: { price_floors: { "sku-001": 180 }, max_auto_discount_percent: 5 },
+      capture,
+    });
+    try {
+      const index = new KiwiCatalogMerchantIndex({ baseUrl: stack.catalogUrl });
+      const merchants = await index.search("Test Product");
+      const protocolOpts = protocolOptions();
+      const context = protocolContext();
+      const fetcher = new A2AQuoteFetcher({
+        ...protocolOpts,
+        allowPrivateRanges: true,
+        skipDnsCheck: true,
+        pollIntervalMs: 50,
+        timeoutMs: 3000,
+      });
+      // 预算 180 元、数量 1：还价目标必须是 18000，而不是 18900×0.9=17010。
+      const intent = {
+        ...INTENT,
+        items: [{ query: "Test Product", sku: "sku-001", quantity: { value: 1, unit: "台" } }],
+        constraints: { currency: "CNY", budget: { currency: "CNY", amount_minor: 18000 } },
+      };
+      const fetched = await fetcher.requestQuotes(intent, merchants, context);
+      expect(fetched[0]?.status).toBe("succeeded");
+      const negotiator = new A2ANegotiator({
+        ...protocolOpts,
+        allowPrivateRanges: true,
+        skipDnsCheck: true,
+        defaultDiscountRate: 0.1,
+      });
+      const step = await negotiator.negotiate(
+        "task-a2a-001",
+        intent,
+        { round: 1, action: "counter_offer", summary: "预算上限 180 元" },
+        [fetched[0]!] as unknown as Array<Record<string, unknown>>,
+        context,
+      );
+      const counter = capture.find((c) => c.action === "counter_offer");
+      const proposed = (counter?.envelope.payload as { proposed_terms?: { items?: Array<{ unit_price?: { amount_minor?: number } }> } } | undefined)
+        ?.proposed_terms?.items?.[0]?.unit_price?.amount_minor;
+      expect(proposed).toBe(18000);
+      expect(step.merchant_offer).toBeDefined();
+      // 模拟 service 的候选回写，然后向商家发送 accept_nonbinding。
+      const candidate = {
+        ...fetched[0]!,
+        provenance: {
+          ...(fetched[0]!.provenance ?? {}),
+          offer_id: step.merchant_offer!.offer_id,
+          merchant_reply_id: step.merchant_offer!.reply_message_id,
+          latest_terms_digest: step.merchant_offer!.terms_digest,
+          latest_agreed_terms: step.merchant_offer!.agreed_terms,
+          latest_offer_type: step.merchant_offer!.offer_type,
+        },
+      };
+      const accepted = await negotiator.acceptNonbinding({
+        taskId: "task-a2a-001",
+        candidate: candidate as unknown as Record<string, unknown>,
+      });
+      expect(accepted.agreement.accepted_offer_id).toBe(step.merchant_offer!.offer_id);
+      expect(accepted.agreement.terms_digest).toBe(step.merchant_offer!.terms_digest);
+      expect(capture.some((c) => c.action === "accept_nonbinding")).toBe(true);
     } finally {
       await stack.stop();
     }

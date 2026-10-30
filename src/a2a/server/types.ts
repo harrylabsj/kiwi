@@ -196,6 +196,12 @@ export interface A2AServerOptions {
   authVerifier?: AuthVerifier;
   /** JSON-RPC body 大小上限（字节，默认 1 MiB）；超限 fail-closed。 */
   maxPayloadBytes?: number;
+  /**
+   * 是否信任反向代理写入的 `x-forwarded-for` 作为客户端地址（默认 false）。
+   * 只应在服务仅由可信代理（如本机 Caddy）暴露时开启；传输地址仍用于认证，
+   * 转发地址只用于旁观/限流的对端标识。
+   */
+  trustForwardedFor?: boolean;
   /** 可注入时钟（RFC 3339）；用于任务时间戳。 */
   now?: () => string;
   /** well-known Agent Card 路径（默认 "/.well-known/agent-card.json"）。 */

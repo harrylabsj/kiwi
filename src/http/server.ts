@@ -197,6 +197,14 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
             task_id: p.id ?? "",
             action: b.action === "clarification" ? "clarification" : "counter_offer",
             summary: String(b.summary ?? ""),
+            ...(b.target_unit_price !== undefined
+              ? {
+                  target_unit_price: b.target_unit_price as {
+                    currency?: string;
+                    amount_minor: number;
+                  },
+                }
+              : {}),
           });
           send(res, 200, { ok: true, result });
         } catch (e) { sendError(res, e); }

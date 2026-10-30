@@ -25,7 +25,7 @@
   },
   {
     "name": "kiwi_request_quotes",
-    "description": "Send an RFQ to one or more merchants. Write op; pass an idempotency_key (optional, auto-generated when omitted) and get back a stable task_id; KNP RFQ fan-out. CommerceIntent must satisfy the frozen contract: every intent.items entry needs query (short product word) and quantity ({value, unit} object, e.g. {\"value\":2,\"unit\":\"unit\"}). Example intent.items: [{\"query\":\"thermos cup\",\"quantity\":{\"value\":2,\"unit\":\"unit\"}}]. merchant_ids only accepts merchants with inquiry_available=true from kiwi_search; merchants with only a v0 public profile are rejected by the service layer (merchant_inquiry_unavailable), and merchants currently offline (heartbeat timeout, freshness_state=stale/unreachable) are rejected (merchant_offline) - neither produces a task.",
+    "description": "Send an RFQ to one or more merchants. Write op; pass an idempotency_key (optional, auto-generated when omitted) and get back a stable task_id; KNP RFQ fan-out. CommerceIntent must satisfy the frozen contract: every intent.items entry needs query (short product word) and quantity ({value, unit} object, e.g. {\"value\":2,\"unit\":\"unit\"}). Example intent.items: [{\"query\":\"thermos cup\",\"quantity\":{\"value\":2,\"unit\":\"unit\"}}]. merchant_ids only accepts merchants with inquiry_available=true from kiwi_search; merchants with only a v0 public profile are rejected by the service layer (merchant_inquiry_unavailable), and merchants currently offline (heartbeat timeout, freshness_state=stale/unreachable) are rejected (merchant_offline) - neither produces a task. constraints.budget MUST be a money object {currency, amount_minor} with integer minor units (150 yuan = 15000); a bare number is rejected. constraints.target_unit_price uses the same shape.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -130,7 +130,7 @@
   },
   {
     "name": "kiwi_negotiate",
-    "description": "Advance negotiation within the delegation boundary. Updates the same task_id; CounterOffer / Clarification; may produce a candidate_id; hard-bounded by DelegationPolicy max_rounds etc.",
+    "description": "Advance negotiation within the delegation boundary. Updates the same task_id; CounterOffer / Clarification; may produce a candidate_id; hard-bounded by DelegationPolicy max_rounds etc. Counter target comes from intent.constraints.target_unit_price, else budget/quantity, else current price minus default discount; keep summary consistent. The latest merchant reply updates the candidate terms.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -206,7 +206,7 @@
   },
   {
     "name": "kiwi_handoff",
-    "description": "Produce the transaction / PO / contact path. Agreement -> UCP Checkout / merchant transaction endpoint. When ASK and approval is missing, returns structured approval_required (with approval_id); host runs kiwi_approve then retries with the id.",
+    "description": "Produce the transaction / PO / contact path. Agreement -> UCP Checkout / merchant transaction endpoint. When ASK and approval is missing, returns structured approval_required (with approval_id); host runs kiwi_approve then retries with the id. destination_type must be one of: ucp_checkout | ucp_order | external_checkout_url | merchant_checkout_session | platform_deep_link | buyer_erp_request | procurement_request | purchase_order_draft | quote_document | merchant_contact | sales_handoff. external_checkout_url/platform_deep_link require url; session types must not carry url.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",

@@ -80,6 +80,8 @@ export interface CounterInput {
   quantity: number;
   quantityUnit?: string;
   counterPriceMinor: number;
+  /** 人类可读摘要；写入 public_message，供商家后台展示还价理由。 */
+  summary?: string;
   now: () => string;
 }
 
@@ -95,6 +97,9 @@ export function buildCounterEnvelope(input: CounterInput): NegotiationEnvelope {
     actor: "buyer",
     action: "counter_offer",
     created_at: input.now(),
+    ...(input.summary !== undefined && input.summary !== ""
+      ? { public_message: input.summary }
+      : {}),
     payload: {
       type: "counter_offer",
       offer_id: newOfferId(),
@@ -108,6 +113,40 @@ export function buildCounterEnvelope(input: CounterInput): NegotiationEnvelope {
           },
         ],
       },
+    },
+  });
+}
+
+export interface AcceptNonbindingInput {
+  negotiationId: string;
+  /** 回应的商家消息 id（conditional_offer/offer 的 message_id）。 */
+  inReplyTo: string;
+  offerId: string;
+  /** 商家可复算的 agreed terms canonical digest。 */
+  termsDigest: string;
+  summary?: string;
+  now: () => string;
+}
+
+/** 构造买家 accept_nonbinding envelope（§15）。 */
+export function buildAcceptEnvelope(input: AcceptNonbindingInput): NegotiationEnvelope {
+  return finalizeEnvelope({
+    capability: NEGOTIATE_CAPABILITY,
+    protocol_version: KNP_PROTOCOL_VERSION,
+    negotiation_id: input.negotiationId,
+    exchange_id: newExchangeId(),
+    message_id: newMessageId(),
+    in_reply_to: input.inReplyTo,
+    actor: "buyer",
+    action: "accept_nonbinding",
+    created_at: input.now(),
+    ...(input.summary !== undefined && input.summary !== ""
+      ? { public_message: input.summary }
+      : {}),
+    payload: {
+      type: "accept_nonbinding",
+      offer_id: input.offerId,
+      terms_digest: input.termsDigest,
     },
   });
 }

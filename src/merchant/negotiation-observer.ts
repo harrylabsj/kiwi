@@ -334,7 +334,10 @@ function scanNegotiation(
       row.phase = event.state_transition.to_phase;
       if (row.phase === "AGREEMENT_REACHED") row.agreement = true;
       timeline.push({
-        at: event.recorded_at,
+        // 用消息/事件的 occurred_at 排序：inbound 事件是在商家回复之后
+        // 才落账的，用 recorded_at 会把「买方还价」显示在它触发的
+        // 「商家条件报价」之后（2026-10-30 保温杯会话的 143.10 错觉）。
+        at: event.occurred_at,
         kind: "phase",
         direction: null,
         action: `phase→${event.state_transition.to_phase}`,
@@ -345,7 +348,7 @@ function scanNegotiation(
     }
     if (event.event_kind === "handoff_candidate_created") {
       timeline.push({
-        at: event.recorded_at,
+        at: event.occurred_at,
         kind: "handoff",
         direction: null,
         action: "handoff_candidate_created",
@@ -387,10 +390,10 @@ function scanNegotiation(
       // 只回填 SKU 与数量，绝不回填价格。
     }
     if (inbound) {
-      lastInboundAt = event.recorded_at;
+      lastInboundAt = event.occurred_at;
       lastInboundAction = action;
-    } else if (event.recorded_at >= lastOutboundAt) {
-      lastOutboundAt = event.recorded_at;
+    } else if (event.occurred_at >= lastOutboundAt) {
+      lastOutboundAt = event.occurred_at;
     }
     const questionCodes: string[] = [];
     const questions = wire?.payload?.questions;
@@ -413,7 +416,7 @@ function scanNegotiation(
       summaryParts.push(`问题 ${questionCodes.length} 条（${questionCodes.slice(0, 3).join("；")}）`);
     }
     timeline.push({
-      at: event.recorded_at,
+      at: event.occurred_at,
       kind: "message",
       direction: inbound ? "buyer" : "merchant",
       action,

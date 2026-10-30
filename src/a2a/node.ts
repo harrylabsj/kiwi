@@ -688,6 +688,8 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
 
   const holder = { baseUrl: advertisedBase };
   const server = new A2AServer({
+    // 仅在可信反向代理（如本机 Caddy）之后开启；传输地址仍用于认证。
+    trustForwardedFor: (process.env.KIWI_A2A_TRUST_FORWARDED_FOR ?? "").trim() === "1",
     // A2AServerOptions.card 是 AgentCardConfigProvider：返回 config，server 内部再 buildAgentCard。
     // 只使用商家明确配置的公开名称，不从 agent_id 或私密业务资料推导。
     card: () => ({

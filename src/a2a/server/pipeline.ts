@@ -126,6 +126,8 @@ export function extractEnvelopeSkus(envelope: NegotiationEnvelope): string[] {
 export interface SendMessageCaller {
   senderIdentity: string;
   remoteAddress?: string;
+  /** 可信代理转发的客户端地址；仅用于对端标识/限流，不参与认证。 */
+  clientAddress?: string;
   /** 对端 UCP-Agent 头声明的 platform profile URI（WP3 §25.1，可选）。 */
   ucpAgentProfile?: string;
   /** 对端 trust level（throttle 档位映射，缺省 T0）。 */
@@ -299,7 +301,7 @@ export class InboundPipeline {
   private toThrottleRequest(caller: SendMessageCaller): ThrottleRequest {
     return {
       identity: caller.senderIdentity,
-      remoteAddress: caller.remoteAddress,
+      remoteAddress: caller.clientAddress ?? caller.remoteAddress,
       domain: domainFromUcpProfile(caller.ucpAgentProfile),
       identityVerified: caller.identityVerified,
       trustLevel: caller.trustLevel,
@@ -502,7 +504,7 @@ export class InboundPipeline {
           taskId,
           contextId,
           senderIdentity,
-          remoteAddress: caller.remoteAddress,
+          remoteAddress: caller.clientAddress ?? caller.remoteAddress,
           ucpAgentProfile: caller.ucpAgentProfile,
         };
         let handlerResult: NegotiationHandlerResult;
@@ -545,7 +547,7 @@ export class InboundPipeline {
               counterparty_identity:
                 caller.identityVerified === true
                   ? senderIdentity
-                  : (caller.remoteAddress ?? senderIdentity),
+                  : (caller.clientAddress ?? caller.remoteAddress ?? senderIdentity),
               actor: envelope.actor,
             },
             capability: {

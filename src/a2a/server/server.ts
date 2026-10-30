@@ -33,6 +33,7 @@
  */
 
 import http from "node:http";
+import { isIP } from "node:net";
 import { isJsonRpcRequest } from "../client/index.js";
 import { NegotiationValidationError } from "../../negotiation/domain/common.js";
 import { parseUcpAgentHeader, UCP_AGENT_HEADER } from "../ucp-agent.js";
@@ -136,9 +137,21 @@ function requireParamsObject(params: unknown): Record<string, unknown> {
   return params as Record<string, unknown>;
 }
 
+
+/** 可信代理的 `x-forwarded-for` 首个合法 IP；未配置/非法返回 null。 */
+function forwardedClientAddress(req: http.IncomingMessage): string | null {
+  const header = req.headers["x-forwarded-for"];
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (typeof raw !== "string") return null;
+  const first = raw.split(",")[0]?.trim() ?? "";
+  return first !== "" && isIP(first) !== 0 ? first : null;
+}
+
 interface Caller {
   identity: string;
   remoteAddress: string | undefined;
+  /** 可信代理转发的客户端地址；仅用于对端标识/限流，不参与认证。 */
+  clientAddress?: string;
   trustLevel?: TrustLevel;
   identityVerified?: boolean;
   fingerprintChanged?: boolean;
@@ -229,6 +242,7 @@ export class A2AServer {
   private readonly cardConfig: AgentCardConfigProvider;
   private readonly authVerifier: AuthVerifier;
   private readonly maxPayloadBytes: number;
+  private readonly trustForwardedFor: boolean;
   private readonly now: () => string;
   private readonly wellKnownPath: string;
   private readonly ucpOptions: UcpPublishOptions | undefined;
@@ -241,6 +255,7 @@ export class A2AServer {
     this.cardConfig = options.card;
     this.authVerifier = options.authVerifier ?? defaultAuthVerifier();
     this.maxPayloadBytes = options.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
+    this.trustForwardedFor = options.trustForwardedFor ?? false;
     if (this.maxPayloadBytes <= 0) {
       throw new Error("A2AServer: maxPayloadBytes must be positive");
     }
@@ -366,6 +381,9 @@ export class A2AServer {
     return {
       identity: result.identity ?? "unknown",
       remoteAddress: req.socket.remoteAddress,
+      ...(this.trustForwardedFor
+        ? { clientAddress: forwardedClientAddress(req) ?? undefined }
+        : {}),
       trustLevel: result.trustLevel,
       identityVerified: result.identityVerified,
       fingerprintChanged: result.fingerprintChanged,
@@ -788,6 +806,7 @@ export class A2AServer {
       {
         senderIdentity: caller.identity,
         remoteAddress: caller.remoteAddress,
+        ...(caller.clientAddress !== undefined ? { clientAddress: caller.clientAddress } : {}),
         ucpAgentProfile,
         trustLevel: caller.trustLevel,
         identityVerified: caller.identityVerified,
@@ -817,7 +836,7 @@ export class A2AServer {
     if (this.throttle !== undefined) {
       const decision = this.throttle.check({
         identity: caller.identity,
-        remoteAddress: caller.remoteAddress,
+        remoteAddress: caller.clientAddress ?? caller.remoteAddress,
         domain: domainFromUcpProfile(ucpAgentProfile),
         identityVerified: caller.identityVerified,
         trustLevel: caller.trustLevel,

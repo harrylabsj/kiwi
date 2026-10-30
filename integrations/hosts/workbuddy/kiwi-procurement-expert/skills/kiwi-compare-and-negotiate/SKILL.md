@@ -23,7 +23,9 @@ description: Compare existing Kiwi quotes on consistent cost and delivery terms,
 
 ## 澄清与还价
 
-使用 `kiwi_negotiate(task_id, action, summary)`；`action` 仅为 `clarification` 或 `counter_offer`。`summary` 包含经授权的候选、具体问题或目标条款，不传完整内部讨论。此工具更新任务，schema 没有独立 merchant_id 参数，不臆造逐商家调用参数或承诺消息一定只发给某一家。
+使用 `kiwi_negotiate(task_id, action, summary)`；`action` 仅为 `clarification` 或 `counter_offer`。`summary` 包含经授权的候选、具体问题或目标条款，不传完整内部讨论。
+
+`counter_offer` 的结构化目标价由后端按「意图 `target_unit_price` → `budget`/数量 → 当前价×默认折扣」推导；`summary` 中的价格口径必须与预算一致（例如预算 150 元、数量 1 时，不要把还价说成 ≤150 而实际发送 143.10）。商家回复后会回写候选条款；下一次读取 `kiwi_get_task` 应看到最新价，而不是初始报价。此工具更新任务，schema 没有独立 merchant_id 参数，不臆造逐商家调用参数或承诺消息一定只发给某一家。
 
 用户要求“制定方案”时只输出方案；“向这些商家询问运费/还价到 X”是对应范围的发送授权，可直接推进。未给定可执行范围时先展示拟发送内容并询问。已有授权不逐轮重复确认，但新增商家、提高预算、放宽硬条件或接受条款需要新的授权。
 

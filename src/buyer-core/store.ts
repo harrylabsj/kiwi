@@ -386,6 +386,51 @@ export class TaskApprovalStore {
       );
   }
 
+  /**
+   * 把商家最新 offer-like 回复回写到候选 provenance（无 DB 迁移）。
+   *
+   * 关键事实：`offer_id` / `merchant_reply_id` 必须跟随最新一轮，否则第二次
+   * counter 会 reply 到旧消息；`latest_terms_digest` / `latest_agreed_terms`
+   * 是 accept_nonbinding 的绑定输入，必须与商家可复算的 agreed terms 一致。
+   */
+  updateCandidateOffer(
+    taskId: string,
+    candidateId: string,
+    offer: {
+      offer_id: string;
+      offer_type: "offer" | "conditional_offer";
+      merchant_reply_id: string;
+      reply_text: string;
+      terms: Record<string, unknown>;
+      agreed_terms: Record<string, unknown>;
+      terms_digest: string;
+    },
+  ): void {
+    const row = this.db
+      .prepare("SELECT provenance_json,status FROM mcp_candidates WHERE candidate_id=? AND task_id=?")
+      .get(candidateId, taskId) as { provenance_json: string | null; status: string } | undefined;
+    if (row === undefined) {
+      throw new McpError("invalid_params", `candidate ${candidateId} not found on task`);
+    }
+    if (row.status !== "succeeded") {
+      throw new McpError("idempotency_conflict", `candidate ${candidateId} is not a succeeded quote`);
+    }
+    const provenance = row.provenance_json === null ? {} : (this.parse(row.provenance_json) as Record<string, unknown>);
+    const updated = {
+      ...provenance,
+      offer_id: offer.offer_id,
+      merchant_reply_id: offer.merchant_reply_id,
+      reply_text: offer.reply_text,
+      _quote_terms: offer.terms,
+      latest_agreed_terms: offer.agreed_terms,
+      latest_terms_digest: offer.terms_digest,
+      latest_offer_type: offer.offer_type,
+    };
+    this.db
+      .prepare("UPDATE mcp_candidates SET provenance_json=? WHERE candidate_id=? AND task_id=?")
+      .run(JSON.stringify(updated), candidateId, taskId);
+  }
+
   hasAgreementForTask(taskId:string):boolean {
     return this.db.prepare("SELECT 1 FROM mcp_agreements WHERE task_id=? LIMIT 1").get(taskId)!==undefined;
   }

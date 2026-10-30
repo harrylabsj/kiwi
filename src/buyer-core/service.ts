@@ -230,14 +230,35 @@ export interface BuyerFollowsClient {
 }
 export type { BuyerFollowRecord, BuyerFollowUpdateGroup };
 
+export interface MerchantOffer {
+  /** 该报价所属的候选（用于回写候选条款）。 */
+  candidate_id: string;
+  /** 商家最近一条 offer-like 的 offer_id（accept 时原样回传）。 */
+  offer_id: string;
+  /** 商家回复类型；只有 conditional_offer 能被商家 accept。 */
+  offer_type: "offer" | "conditional_offer";
+  /** 商家最近一条回复的 message_id（accept 的 in_reply_to）。 */
+  reply_message_id: string;
+  /** 结构化显示条款（`_quote_terms` 形状，供 get_task / 界面展示）。 */
+  terms: Record<string, unknown>;
+  /** 商家可复算的 agreed terms 原文（accept 的 terms_digest 输入）。 */
+  agreed_terms: Record<string, unknown>;
+  terms_digest: string;
+  reply_text: string;
+}
+
 export interface NegotiationStep {
   round: number;
   action: "counter_offer" | "clarification";
   summary: string;
   /** clarification 的结构化问题（field/reason）；商家按字段应答。 */
   questions?: { field: string; reason?: string }[];
+  /** 本次还价的结构化目标单价（minor）；无目标价时缺省。 */
+  target_unit_price_minor?: number;
   /** 商家对本次还价的回复（真实文本），供 kiwi_get_task 展示。 */
   reply?: string;
+  /** 商家回复中的最新 offer-like 事实；用于刷新候选条款与 accept 绑定。 */
+  merchant_offer?: MerchantOffer;
 }
 
 export interface Negotiator {
@@ -248,6 +269,16 @@ export interface Negotiator {
     candidates: Array<Record<string, unknown>>,
     context?: ProtocolTaskContext,
   ): Promise<NegotiationStep>;
+  /**
+   * 向商家发送 accept_nonbinding，返回商家产出的 agreement artifact。
+   * 非 A2A 候选（无 merchant 端点/最新 offer）不实现此方法，accept 保持本地。
+   */
+  acceptNonbinding?(input: {
+    taskId: string;
+    candidate: Record<string, unknown>;
+    summary?: string;
+    context?: ProtocolTaskContext;
+  }): Promise<{ agreement: Record<string, unknown> }>;
 }
 
 export interface KiwiBuyerServiceOptions {
@@ -351,6 +382,14 @@ function normalizeClarificationQuestions(
     const reason = typeof question.reason === "string" ? question.reason.trim() : "";
     return reason === "" ? { field } : { field, reason };
   });
+}
+
+/** 候选当前可接受的条款摘要：优先商家最新 agreed terms，其次旧候选快照。 */
+function acceptedTermsDigest(candidate: Record<string, unknown>): string {
+  const provenance = (candidate.provenance as Record<string, unknown> | undefined) ?? {};
+  return typeof provenance.latest_terms_digest === "string"
+    ? provenance.latest_terms_digest
+    : contentDigest(candidate);
 }
 
 /** review P1-2：宽容 JSON 解析（非 JSON 返回 undefined，不抛）。 */
@@ -778,8 +817,27 @@ export class KiwiBuyerService {
     summary: string;
     /** clarification 的结构化问题；缺省时由 summary 生成一条 general 问题。 */
     questions?: { field: string; reason?: string }[];
+    /**
+     * counter_offer 的结构化目标单价（money 对象）。未提供时按意图
+     * target_unit_price → 预算/数量 → 商家当前价 ×(1-默认折扣) 推导。
+     * 宿主必须与 summary 中的还价口径保持一致，避免"说 ≤150、发 143.10"。
+     */
+    target_unit_price?: { currency?: string; amount_minor: number };
   }): Promise<{ task: Record<string, unknown>; step: NegotiationStep }> {
     if (input.action !== "counter_offer" && input.action !== "clarification") throw new McpError("invalid_params", "invalid negotiation action");
+    const explicitTarget =
+      input.target_unit_price === undefined
+        ? undefined
+        : {
+            currency: input.target_unit_price.currency ?? "CNY",
+            amount_minor: input.target_unit_price.amount_minor,
+          };
+    if (
+      explicitTarget !== undefined &&
+      (!Number.isSafeInteger(explicitTarget.amount_minor) || explicitTarget.amount_minor <= 0)
+    ) {
+      throw new McpError("invalid_params", "target_unit_price.amount_minor 必须是正整数（最小货币单位）");
+    }
     const task = this.store.getTask(input.task_id);
     if (task === undefined) throw new McpError("task_not_found", `task ${input.task_id} not found`);
     if (task.expires_at !== undefined && Date.parse(task.expires_at) < Date.parse(this.now())) {
@@ -818,6 +876,9 @@ export class KiwiBuyerService {
       round: input.action === "counter_offer" ? rounds + 1 : this.currentSteps(task) + 1,
       action: input.action,
       summary: input.summary,
+      ...(explicitTarget !== undefined && input.action === "counter_offer"
+        ? { target_unit_price_minor: explicitTarget.amount_minor }
+        : {}),
       ...(input.action === "clarification"
         ? { questions: normalizeClarificationQuestions(input.questions, input.summary) }
         : {}),
@@ -850,9 +911,20 @@ export class KiwiBuyerService {
       // 与 unit 从 intent 透传到外发 wire）——此前传空 intent {}，gate 拿到
       // quantity=1/unit=undefined，max_quantity.unit 可能误拒或漏配。
       const decodedForIntent = this.decodeTask(task) as { intent?: Record<string, unknown> };
+      const intent = (decodedForIntent.intent ?? {}) as Record<string, unknown>;
+      const intentForNegotiator =
+        explicitTarget === undefined
+          ? intent
+          : {
+              ...intent,
+              constraints: {
+                ...((intent.constraints as Record<string, unknown> | undefined) ?? {}),
+                target_unit_price: explicitTarget,
+              },
+            };
       step = await this.negotiator.negotiate(
         input.task_id,
-        (decodedForIntent.intent ?? {}) as Record<string, unknown>,
+        intentForNegotiator,
         step,
         gated,
         this.protocolContext(task),
@@ -865,11 +937,27 @@ export class KiwiBuyerService {
       : [];
     const steps = [...prior, step];
     const currentStatus = typeof decoded.status === "string" ? decoded.status : "in_progress";
-    const updated = this.store.updateTask(input.task_id, {
-      status: currentStatus === "pending" ? "in_progress" : currentStatus,
-      payload: JSON.stringify({ ...decoded, steps, updated_at: this.now() }),
-    }, task);
-    return { task: this.decodeTask(updated), step };
+    return this.store.transaction(() => {
+      // 商家最新 offer-like 回复必须回写候选：否则 get_task 仍显示上一轮价，
+      // accept 也会绑定旧候选（2026-10-30 保温杯会话：接受 ¥151.05，协议
+      // digest 却指向 ¥159 初始报价）。
+      if (step.merchant_offer !== undefined) {
+        this.store.updateCandidateOffer(input.task_id, step.merchant_offer.candidate_id, {
+          offer_id: step.merchant_offer.offer_id,
+          merchant_reply_id: step.merchant_offer.reply_message_id,
+          reply_text: step.merchant_offer.reply_text,
+          offer_type: step.merchant_offer.offer_type,
+          terms: step.merchant_offer.terms,
+          agreed_terms: step.merchant_offer.agreed_terms,
+          terms_digest: step.merchant_offer.terms_digest,
+        });
+      }
+      const updated = this.store.updateTask(input.task_id, {
+        status: currentStatus === "pending" ? "in_progress" : currentStatus,
+        payload: JSON.stringify({ ...decoded, steps, updated_at: this.now() }),
+      }, task);
+      return { task: this.decodeTask(updated), step };
+    });
   }
 
   // ---- Northbound：kiwi_accept_agreement ------------------------------------
@@ -894,7 +982,19 @@ export class KiwiBuyerService {
     if (candidate === undefined) {
       throw new McpError("invalid_params", `candidate ${input.candidate_id} not found on task`);
     }
-    const termsDigest = contentDigest(candidate);
+    const candidateProvenance = (candidate.provenance as Record<string, unknown> | undefined) ?? {};
+    const latestTermsDigest =
+      typeof candidateProvenance.latest_terms_digest === "string"
+        ? candidateProvenance.latest_terms_digest
+        : undefined;
+    const latestAgreedTerms =
+      typeof candidateProvenance.latest_agreed_terms === "object" &&
+      candidateProvenance.latest_agreed_terms !== null
+        ? (candidateProvenance.latest_agreed_terms as Record<string, unknown>)
+        : undefined;
+    // accept 绑定商家最新可复算条款，而不是协商前的候选快照：协商后候选
+    // `_quote_terms` 会刷新，digest 必须跟随；没有 A2A 最新条款时保持旧行为。
+    const termsDigest = latestTermsDigest ?? contentDigest(candidate);
     // review P1-2（A316 校准）：消费绑定 = 结构化 canonical digest（无分隔符
     // 歧义）；同逻辑重放的唯一判据，换候选/摘要/任务都是不同绑定。
     const consumedBinding = this.consumeBinding({
@@ -915,6 +1015,35 @@ export class KiwiBuyerService {
       });
     }
     const now = this.now();
+    // 先在锁外做一次只读核对 + 商家 accept，再进入短事务：网络调用绝不能
+    // 放进 SQLite 事务。事务内会再次强核，防跨连接竞态。
+    const preCandidate = this.store
+      .listCandidates(input.task_id)
+      .find((c) => c.candidate_id === input.candidate_id);
+    if (preCandidate === undefined || preCandidate.status !== "succeeded") {
+      throw new McpError("authorization_denied", "候选已不可接受（已推进或不存在）");
+    }
+    if (acceptedTermsDigest(preCandidate) !== termsDigest) {
+      throw new McpError("approval_denied", "候选条款已变化，需重新获取报价");
+    }
+    const existingAgreement = this.store.findAgreementByTerms(input.task_id, termsDigest);
+    let merchantAgreement: Record<string, unknown> | undefined;
+    if (existingAgreement === undefined && this.negotiator?.acceptNonbinding !== undefined) {
+      // 只有 A2A 候选才向商家发 accept；本地/演示候选保持本地协议语义。
+      const provenance = (preCandidate.provenance as Record<string, unknown> | undefined) ?? {};
+      if (
+        typeof provenance.a2a_endpoint === "string" &&
+        provenance.a2a_endpoint !== "" &&
+        provenance.latest_offer_type === "conditional_offer"
+      ) {
+        const accepted = await this.negotiator.acceptNonbinding({
+          taskId: input.task_id,
+          candidate: preCandidate,
+          context: this.protocolContext(task),
+        });
+        merchantAgreement = accepted.agreement;
+      }
+    }
     // review P1-2（A316 校准）：短事务原子消费——事务内重读授权、写
     // agreement/task/used 及可重放结果；任何失败 ROLLBACK（无部分提交、
     // 无事后补偿、不烧毁有效批准——同绑定重试重新进入本事务）。node:sqlite
@@ -986,7 +1115,7 @@ export class KiwiBuyerService {
             `候选状态已推进为 ${freshCandidate.status}，不再可接受`,
           );
         }
-        if (contentDigest(freshCandidate) !== termsDigest) {
+        if (acceptedTermsDigest(freshCandidate) !== termsDigest) {
           throw new McpError(
             "approval_denied",
             "候选内容已变化（fresh 摘要与审批绑定不一致），需重新审批",
@@ -1049,7 +1178,7 @@ export class KiwiBuyerService {
           `候选状态已推进为 ${freshCandidate.status}，不再可接受`,
         );
       }
-      if (contentDigest(freshCandidate) !== termsDigest) {
+      if (acceptedTermsDigest(freshCandidate) !== termsDigest) {
         throw new McpError(
           "approval_denied",
           "候选内容已变化（fresh 摘要与本次绑定不一致），需重新获取报价",
@@ -1065,6 +1194,9 @@ export class KiwiBuyerService {
         negotiation_id: (candidate.provenance as { negotiation_id?: string } | undefined)
           ?.negotiation_id,
         terms_digest: termsDigest,
+        // 成交条款快照：此前只存 digest，协议里没有金额，导致"接受 ¥151.05"
+        // 无法被任何下游复算/展示，digest 又指向旧候选 ¥159。
+        ...(latestAgreedTerms !== undefined ? { agreed_terms: latestAgreedTerms } : {}),
         created_at: now,
         binding_effect: "nonbinding",
         creates_order: false,
@@ -1072,6 +1204,7 @@ export class KiwiBuyerService {
         authorizes_payment: false,
         accepted_candidate_id: input.candidate_id,
         authorization_id: authorization.authorization_id,
+        ...(merchantAgreement !== undefined ? { merchant_agreement: merchantAgreement } : {}),
       };
       if (orphan === undefined) {
         this.store.createAgreement({
@@ -1135,8 +1268,20 @@ export class KiwiBuyerService {
     if (stored === undefined) {
       throw new McpError("agreement_not_found", `agreement ${input.agreement_id} not found`);
     }
+    // URL 类目的地未显式给 url 时，回落到商家报价里的 handoff_destination：
+    // 商家已经给出了真实购买入口，宿主无需（也常无法）猜一个 URL。
+    let resolvedUrl = input.url;
+    if (resolvedUrl === undefined && isUrlDestinationType(input.destination_type as DestinationType)) {
+      const payload = this.parsePayload(stored.payload) as Record<string, unknown>;
+      const agreed = payload.agreed_terms as Record<string, unknown> | undefined;
+      const direct = agreed?.handoff_destination;
+      const item = Array.isArray(agreed?.items) ? (agreed.items as Array<Record<string, unknown>>)[0] : undefined;
+      const fallback = item?.handoff_destination;
+      const candidate = typeof direct === "string" ? direct : typeof fallback === "string" ? fallback : undefined;
+      if (candidate !== undefined) resolvedUrl = candidate;
+    }
     // A 卡：目的地先归一；非法即拒绝，且不落任何意图/审批行。
-    const destination = this.normalizeHandoffDestination(input);
+    const destination = this.normalizeHandoffDestination({ ...input, url: resolvedUrl });
     // A 卡：ask 且无 approval_id 时，必须在泛型 evaluateAuthorization 之前
     // 走意图感知的 ASK——否则 evaluateAuthorization 会先写一条无目的地审批。
     if (input.approval_id === undefined && policyActionMode(this.policySnapshot, "handoff") === "ask") {

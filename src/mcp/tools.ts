@@ -29,6 +29,7 @@
 import type { McpCallToolResult, KiwiToolDefinition } from "./types.js";
 import { McpError } from "../buyer-core/errors.js";
 import { KiwiBuyerService } from "../buyer-core/service.js";
+import { DESTINATION_TYPES } from "../handoff/destination.js";
 import { tr } from "../i18n.js";
 
 function ok(text: string): McpCallToolResult {
@@ -113,8 +114,8 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
       name: "kiwi_request_quotes",
       description:
         tr(
-          "Send an RFQ to one or more merchants. Write op; pass an idempotency_key (optional, auto-generated when omitted) and get back a stable task_id; KNP RFQ fan-out. CommerceIntent must satisfy the frozen contract: every intent.items entry needs query (short product word) and quantity ({value, unit} object, e.g. {\"value\":2,\"unit\":\"unit\"}). Example intent.items: [{\"query\":\"thermos cup\",\"quantity\":{\"value\":2,\"unit\":\"unit\"}}]. merchant_ids only accepts merchants with inquiry_available=true from kiwi_search; merchants with only a v0 public profile are rejected by the service layer (merchant_inquiry_unavailable), and merchants currently offline (heartbeat timeout, freshness_state=stale/unreachable) are rejected (merchant_offline) - neither produces a task.",
-          '向一个或多个商家发起询价。写操作；必须携带 idempotency_key（可选，缺省自动生成），返回稳定 task_id；KNP RFQ fan-out。CommerceIntent 必须满足冻结契约：intent.items 每项必须有 query（商品短词）与 quantity（{value, unit} 对象，如 {"value":2,"unit":"台"}）。示例 intent.items: [{"query":"保温杯","quantity":{"value":2,"unit":"台"}}]。merchant_ids 仅接受 kiwi_search 中 inquiry_available=true 的商家；仅有第 0 版公开资料的商家会被服务层拒绝（merchant_inquiry_unavailable），服务当前不在线（心跳超时、freshness_state=stale/unreachable）的商家会被拒绝（merchant_offline），两者都不产生任务。',
+          "Send an RFQ to one or more merchants. Write op; pass an idempotency_key (optional, auto-generated when omitted) and get back a stable task_id; KNP RFQ fan-out. CommerceIntent must satisfy the frozen contract: every intent.items entry needs query (short product word) and quantity ({value, unit} object, e.g. {\"value\":2,\"unit\":\"unit\"}). Example intent.items: [{\"query\":\"thermos cup\",\"quantity\":{\"value\":2,\"unit\":\"unit\"}}]. merchant_ids only accepts merchants with inquiry_available=true from kiwi_search; merchants with only a v0 public profile are rejected by the service layer (merchant_inquiry_unavailable), and merchants currently offline (heartbeat timeout, freshness_state=stale/unreachable) are rejected (merchant_offline) - neither produces a task. constraints.budget MUST be a money object {currency, amount_minor} using integer minor units (e.g. 150 yuan = {\"currency\":\"CNY\",\"amount_minor\":15000}); a bare number is rejected by the frozen contract. constraints.target_unit_price uses the same shape.",
+          '向一个或多个商家发起询价。写操作；必须携带 idempotency_key（可选，缺省自动生成），返回稳定 task_id；KNP RFQ fan-out。CommerceIntent 必须满足冻结契约：intent.items 每项必须有 query（商品短词）与 quantity（{value, unit} 对象，如 {"value":2,"unit":"台"}）。示例 intent.items: [{"query":"保温杯","quantity":{"value":2,"unit":"台"}}]。merchant_ids 仅接受 kiwi_search 中 inquiry_available=true 的商家；仅有第 0 版公开资料的商家会被服务层拒绝（merchant_inquiry_unavailable），服务当前不在线（心跳超时、freshness_state=stale/unreachable）的商家会被拒绝（merchant_offline），两者都不产生任务。constraints.budget 必须是 money 对象 {currency, amount_minor}，金额用最小单位整数（如 150 元 = {"currency":"CNY","amount_minor":15000}）；裸数字会被冻结契约拒绝。constraints.target_unit_price 同形状。',
         ),
       inputSchema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -212,8 +213,8 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
       name: "kiwi_negotiate",
       description:
         tr(
-          "Advance negotiation within the delegation boundary. Updates the same task_id; CounterOffer / Clarification; may produce a candidate_id; hard-bounded by DelegationPolicy max_rounds etc.",
-          "在委托边界内推进磋商。更新同一 task_id；CounterOffer / Clarification；可产生 candidate_id；受 DelegationPolicy max_rounds 等硬约束。",
+          "Advance negotiation within the delegation boundary. Updates the same task_id; CounterOffer / Clarification; may produce a candidate_id; hard-bounded by DelegationPolicy max_rounds etc. Counter target is derived from intent.constraints.target_unit_price, else budget/quantity, else current price minus default discount; keep summary consistent with it. The latest merchant reply overwrites the candidate terms.",
+          "在委托边界内推进磋商。更新同一 task_id；CounterOffer / Clarification；可产生 candidate_id；受 DelegationPolicy max_rounds 等硬约束。counter_offer 的结构化目标价依次取 intent.constraints.target_unit_price、budget/数量、当前价×默认折扣——summary 必须与之一致；商家最新回复会回写候选条款。",
         ),
       inputSchema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -299,8 +300,8 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
       name: "kiwi_handoff",
       description:
         tr(
-          "Produce the transaction / PO / contact path. Agreement -> UCP Checkout / merchant transaction endpoint. When ASK and approval is missing, returns structured approval_required (with approval_id); host runs kiwi_approve then retries with the id.",
-          "生成交易/PO/联系路径。Agreement → UCP Checkout / merchant transaction endpoint。ASK 时缺审批返回结构化 approval_required（含 approval_id），宿主 kiwi_approve 后携 id 重试。",
+          `Produce the transaction / PO / contact path. Agreement -> UCP Checkout / merchant transaction endpoint. Valid destination_type values: ${DESTINATION_TYPES.join(" | ")}. external_checkout_url and platform_deep_link require a url (use external_checkout_url + the merchant's handoff URL for a storefront checkout page); ucp_checkout / ucp_order / merchant_checkout_session are opaque session refs and must not carry url. When ASK and approval is missing, returns structured approval_required (with approval_id); host runs kiwi_approve then retries with the id.`,
+          `生成交易/PO/联系路径。Agreement → UCP Checkout / merchant transaction endpoint。合法 destination_type：${DESTINATION_TYPES.join(" | ")}。external_checkout_url 与 platform_deep_link 必须带 url（商家店铺结算页用 external_checkout_url + 商家 handoff URL）；ucp_checkout / ucp_order / merchant_checkout_session 是 opaque 会话引用，不得带 url。ASK 时缺审批返回结构化 approval_required（含 approval_id），宿主 kiwi_approve 后携 id 重试。`,
         ),
       inputSchema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",

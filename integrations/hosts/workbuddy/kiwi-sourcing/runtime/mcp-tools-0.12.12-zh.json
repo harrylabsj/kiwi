@@ -25,7 +25,7 @@
   },
   {
     "name": "kiwi_request_quotes",
-    "description": "向一个或多个商家发起询价。写操作；必须携带 idempotency_key（可选，缺省自动生成），返回稳定 task_id；KNP RFQ fan-out。CommerceIntent 必须满足冻结契约：intent.items 每项必须有 query（商品短词）与 quantity（{value, unit} 对象，如 {\"value\":2,\"unit\":\"台\"}）。示例 intent.items: [{\"query\":\"保温杯\",\"quantity\":{\"value\":2,\"unit\":\"台\"}}]。merchant_ids 仅接受 kiwi_search 中 inquiry_available=true 的商家；仅有第 0 版公开资料的商家会被服务层拒绝（merchant_inquiry_unavailable），服务当前不在线（心跳超时、freshness_state=stale/unreachable）的商家会被拒绝（merchant_offline），两者都不产生任务。",
+    "description": "向一个或多个商家发起询价。写操作；必须携带 idempotency_key（可选，缺省自动生成），返回稳定 task_id；KNP RFQ fan-out。CommerceIntent 必须满足冻结契约：intent.items 每项必须有 query（商品短词）与 quantity（{value, unit} 对象，如 {\"value\":2,\"unit\":\"台\"}）。示例 intent.items: [{\"query\":\"保温杯\",\"quantity\":{\"value\":2,\"unit\":\"台\"}}]。merchant_ids 仅接受 kiwi_search 中 inquiry_available=true 的商家；仅有第 0 版公开资料的商家会被服务层拒绝（merchant_inquiry_unavailable），服务当前不在线（心跳超时、freshness_state=stale/unreachable）的商家会被拒绝（merchant_offline），两者都不产生任务。 constraints.budget 必须是 money 对象 {currency, amount_minor}，金额用最小单位整数（150 元 = 15000）；裸数字会被拒绝。constraints.target_unit_price 同形状。",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -130,7 +130,7 @@
   },
   {
     "name": "kiwi_negotiate",
-    "description": "在委托边界内推进磋商。更新同一 task_id；CounterOffer / Clarification；可产生 candidate_id；受 DelegationPolicy max_rounds 等硬约束。",
+    "description": "在委托边界内推进磋商。更新同一 task_id；CounterOffer / Clarification；可产生 candidate_id；受 DelegationPolicy max_rounds 等硬约束。 还价目标价依次取 intent.constraints.target_unit_price、budget/数量、当前价×默认折扣；summary 必须与之一致。商家最新回复会回写候选条款。",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -206,7 +206,7 @@
   },
   {
     "name": "kiwi_handoff",
-    "description": "生成交易/PO/联系路径。Agreement → UCP Checkout / merchant transaction endpoint。ASK 时缺审批返回结构化 approval_required（含 approval_id），宿主 kiwi_approve 后携 id 重试。",
+    "description": "生成交易/PO/联系路径。Agreement → UCP Checkout / merchant transaction endpoint。ASK 时缺审批返回结构化 approval_required（含 approval_id），宿主 kiwi_approve 后携 id 重试。 destination_type 只能是：ucp_checkout | ucp_order | external_checkout_url | merchant_checkout_session | platform_deep_link | buyer_erp_request | procurement_request | purchase_order_draft | quote_document | merchant_contact | sales_handoff。external_checkout_url/platform_deep_link 必须带 url；会话类不得带 url。",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
