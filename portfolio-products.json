@@ -92,7 +92,7 @@
     {
       "id": "kiwi-dsh-plugin",
       "name": "DeepSeek Harness plugin",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "version_source": {
         "type": "json",
         "scope": "central",
