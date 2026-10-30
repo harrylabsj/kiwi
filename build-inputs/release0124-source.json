@@ -6500,7 +6500,7 @@
     },
     {
       "path": "tests/workbuddy-connector.test.ts",
-      "sha256": "sha256:00c90b807558a6148815d2eb0124fcad353f446f809763bd66f36d0c60528839"
+      "sha256": "sha256:4e53a96ee76f5ab1b081e96b8cc2a1a5ad63bac0c582a3c60736214a6782f77b"
     },
     {
       "path": "tests/workbuddy-dual-address.test.ts",
