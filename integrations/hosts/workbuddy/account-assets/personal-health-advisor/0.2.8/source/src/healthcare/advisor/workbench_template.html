@@ -282,6 +282,12 @@ const UI_BOOTSTRAP=JSON.parse(document.getElementById('workbench-data').textCont
 let D=null,DAYS=[],TODAY='',BAND=null,UI_TOKEN=EMBEDDED?UI_BOOTSTRAP.ui_token:null;
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Model values are treated as untrusted at the rendering boundary. Use esc for
+// both text and quoted attributes; classes and numeric CSS values also need
+// semantic validation because escaping alone does not constrain their meaning.
+const enumValue=(value,allowed,fallback)=>allowed.includes(value)?value:fallback;
+const finiteNumber=(value,fallback=0)=>Number.isFinite(Number(value))?Number(value):fallback;
+const cssPercent=value=>Math.max(0,Math.min(100,finiteNumber(value)));
 const md=d=>parseInt(d.slice(5,7))+'/'+parseInt(d.slice(8,10));
 const tip=$('#tip');
 function showTip(text,x,y){tip.textContent=String(text).replace(/<\/?b>/gi,'').replace(/<br\s*\/?>(?:\n)?/gi,'\n');tip.style.opacity=1;const w=tip.offsetWidth,h=tip.offsetHeight;tip.style.left=Math.min(x+14,innerWidth-w-8)+'px';tip.style.top=(y-h-12<8?y+16:y-h-12)+'px';}
@@ -295,7 +301,7 @@ const nowHM=()=>{const n=new Date();return String(n.getHours()).padStart(2,'0')+
 // ---------- 页头 ----------
 function renderHeader(){
  $('#title').textContent=D.today_label;
- $('#sub').innerHTML=`<span class="chip ${D.mode}">${D.mode==='demo'?'示例数据':'个人数据'} · ${esc(D.person.display_name)}</span><span>${EMBEDDED?'实时读取于':'生成于'} ${esc(D.generated_at)}</span><span>范围：近 ${D.range.days} 天（${esc(D.range.start)} – ${esc(D.range.end)}）</span>`;
+ $('#sub').innerHTML=`<span class="chip ${enumValue(D.mode,['demo','live'],'live')}">${D.mode==='demo'?'示例数据':'个人数据'} · ${esc(D.person.display_name)}</span><span>${EMBEDDED?'实时读取于':'生成于'} ${esc(D.generated_at)}</span><span>范围：近 ${esc(D.range.days)} 天（${esc(D.range.start)} – ${esc(D.range.end)}）</span>`;
  $('#meta').innerHTML=`本机加密档案 ${esc(D.vault_label)}<br>${D.last_record?`最近一条记录 ${esc(D.last_record.at)} · ${esc(D.last_record.type)}`:'档案中还没有记录'}`;
  $('#nav-bp').textContent=D.range.days+' 天';
  $('#nav-meds').textContent=D.medications.length?D.medications.length+' 项':'';
@@ -307,14 +313,14 @@ function renderHeader(){
 
 // ---------- 今日守线 ----------
 function renderToday(){
- $('#tiles').innerHTML=D.today_block.tiles.map(t=>`<div class="tile"><div class="l">${esc(t.label)}</div><div class="v${t.empty?' empty':''}">${esc(t.value)}${t.unit?`<small>${esc(t.unit)}</small>`:''}</div><div class="s"><span class="pill ${t.status.cls}">${esc(t.status.text)}</span>${t.time?`<span class="t">${esc(t.time)}</span>`:''}</div></div>`).join('');
+ $('#tiles').innerHTML=D.today_block.tiles.map(t=>`<div class="tile"><div class="l">${esc(t.label)}</div><div class="v${t.empty?' empty':''}">${esc(t.value)}${t.unit?`<small>${esc(t.unit)}</small>`:''}</div><div class="s"><span class="pill ${enumValue(t.status.cls,['good','warn','none'],'none')}">${esc(t.status.text)}</span>${t.time?`<span class="t">${esc(t.time)}</span>`:''}</div></div>`).join('');
  $('#nextline').innerHTML=D.today_block.missing.length?'<b>今天还差</b>'+D.today_block.missing.map(esc).join('<span class="sep"></span>')+`<span class="faint" style="margin-left:6px">· ${EMBEDDED?'可在下方填写并交给顾问确认':'记录后重新生成工作台即可更新'}</span>`:`<b>今天的守线项目都已记录</b><span class="faint">· ${EMBEDDED?'点「刷新」可重新读取档案':'重新生成工作台可刷新数据'}</span>`;
 }
 
 // ---------- 血压 ----------
 function bpChart(field,band){
  const W=540,H=236,L=38,R=22,T=18,B=30,pw=W-L-R,ph=H-T-B;
- const pts=s=>DAYS.map((d,i)=>D.bp[s][d]?{i,d,v:D.bp[s][d][field],t:D.bp[s][d].time}:null);
+ const pts=s=>DAYS.map((d,i)=>D.bp[s][d]?{i,d,v:finiteNumber(D.bp[s][d][field]),t:D.bp[s][d].time}:null);
  const M=pts('morning'),E=pts('evening');
  const all=[...M,...E].filter(Boolean);
  if(!all.length)return '<div class="empty">这段时间没有血压记录</div>';
@@ -323,7 +329,7 @@ function bpChart(field,band){
  const x=i=>L+(DAYS.length===1?pw/2:pw*i/(DAYS.length-1)),y=v=>T+ph*(hi-v)/(hi-lo);
  const step=hi-lo>80?20:10;
  const grid=[];for(let v=lo;v<=hi;v+=step)grid.push(`<line x1="${L}" x2="${W-R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${L-8}" y="${(y(v)+4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--faint)">${v}</text>`);
- const bandRect=`<rect x="${L}" y="${y(band[1]).toFixed(1)}" width="${pw}" height="${(y(band[0])-y(band[1])).toFixed(1)}" fill="var(--accent)" opacity=".09"/><text x="${W-R}" y="${(y(band[1])-5).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--muted)">医嘱区间 ${band[0]}–${band[1]}</text>`;
+ const bandRect=`<rect x="${L}" y="${y(finiteNumber(band[1])).toFixed(1)}" width="${pw}" height="${(y(finiteNumber(band[0]))-y(finiteNumber(band[1]))).toFixed(1)}" fill="var(--accent)" opacity=".09"/><text x="${W-R}" y="${(y(finiteNumber(band[1]))-5).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--muted)">医嘱区间 ${esc(band[0])}–${esc(band[1])}</text>`;
  const seg=(arr,color)=>{let d='',prev=null;arr.forEach(p=>{if(!p){prev=null;return;}d+=(prev?'L':'M')+x(p.i).toFixed(1)+' '+y(p.v).toFixed(1)+' ';prev=p;});return `<path d="${d.trim()}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;};
  const dots=(arr,color)=>arr.filter(Boolean).map(p=>`<circle cx="${x(p.i).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="4" fill="${color}" stroke="var(--card)" stroke-width="2"/>`).join('');
  const labels=[];const last=arr=>[...arr].reverse().find(Boolean);
@@ -339,10 +345,10 @@ function bpChart(field,band){
 function renderBp(){
  const s=D.bp.stats;
  if(!s.total){$('#bpBody').innerHTML='<div class="card"><div class="empty">这段时间还没有血压记录。<br>把晨晚两次读数告诉顾问，就会出现在这里。</div></div>';return;}
- const fmt=p=>p?`${p[0]}/${p[1]}<small>mmHg</small>`:'<span class="faint">无</span>';
+ const fmt=p=>p?`${esc(p[0])}/${esc(p[1])}<small>mmHg</small>`:'<span class="faint">无</span>';
  const latest=(f)=>{const parts=[];const lastOf=(s)=>{const ks=DAYS.filter(d=>D.bp[s][d]);return ks.length?[ks[ks.length-1],D.bp[s][ks[ks.length-1]]]:null;};const m=lastOf('morning'),e=lastOf('evening');if(m)parts.push('晨 '+m[1][f]+(m[0]===TODAY?'':'（'+md(m[0])+'）'));if(e)parts.push('晚 '+e[1][f]+(e[0]===TODAY?'':'（'+md(e[0])+'）'));return '最新 '+parts.join(' · ');};
- $('#bpBody').innerHTML=`<div class="stats"><div><div class="l"><span class="k" style="background:var(--morning)"></span>晨间均值 · ${s.morning_count} 次</div><div class="v">${fmt(s.morning_mean)}</div></div><div><div class="l"><span class="k" style="background:var(--evening)"></span>晚间均值 · ${s.evening_count} 次</div><div class="v">${fmt(s.evening_mean)}</div></div><div><div class="l">两项均在区间内</div><div class="v">${Math.round(s.in_band/s.total*100)}%<small>${s.in_band} / ${s.total} 次</small></div></div><div><div class="l">最高读数</div><div class="v">${s.highest.sys}/${s.highest.dia}<small>${md(s.highest.date)} ${s.highest.slot}</small></div></div></div>
- <div class="toolrow" style="margin:14px 0 0"><span class="small muted">医嘱区间来自你在设置里录入的目标（${BAND.systolic[0]}–${BAND.systolic[1]} / ${BAND.diastolic[0]}–${BAND.diastolic[1]} mmHg），只用于画参考带，不做判断。</span></div>
+ $('#bpBody').innerHTML=`<div class="stats"><div><div class="l"><span class="k" style="background:var(--morning)"></span>晨间均值 · ${esc(s.morning_count)} 次</div><div class="v">${fmt(s.morning_mean)}</div></div><div><div class="l"><span class="k" style="background:var(--evening)"></span>晚间均值 · ${esc(s.evening_count)} 次</div><div class="v">${fmt(s.evening_mean)}</div></div><div><div class="l">两项均在区间内</div><div class="v">${esc(Math.round(s.in_band/s.total*100))}%<small>${esc(s.in_band)} / ${esc(s.total)} 次</small></div></div><div><div class="l">最高读数</div><div class="v">${esc(s.highest.sys)}/${esc(s.highest.dia)}<small>${esc(md(s.highest.date))} ${esc(s.highest.slot)}</small></div></div></div>
+ <div class="toolrow" style="margin:14px 0 0"><span class="small muted">医嘱区间来自你在设置里录入的目标（${esc(BAND.systolic[0])}–${esc(BAND.systolic[1])} / ${esc(BAND.diastolic[0])}–${esc(BAND.diastolic[1])} mmHg），只用于画参考带，不做判断。</span></div>
  <div class="charts"><div class="chart"><div class="chart-head"><h3>收缩压</h3><span>${esc(latest('sys'))}</span></div>${bpChart('sys',BAND.systolic)}</div><div class="chart"><div class="chart-head"><h3>舒张压</h3><span>${esc(latest('dia'))}</span></div>${bpChart('dia',BAND.diastolic)}</div></div>
  <div class="legend"><span><i style="background:var(--morning)"></i>晨间（中午前）</span><span><i style="background:var(--evening)"></i>晚间（中午后）</span><span><i class="band" style="background:var(--accent)"></i>医嘱区间</span><span class="faint">统计包含全部读数；同日同一时段的图线显示最后一次，悬停可查看次数。无记录的日期留白，不补 0。</span></div>`;
  document.querySelectorAll('.hit').forEach(g=>{g.addEventListener('mouseenter',()=>g.querySelector('.xh').setAttribute('opacity','1'));g.addEventListener('mouseleave',()=>g.querySelector('.xh').setAttribute('opacity','0'));});
@@ -351,8 +357,8 @@ function renderBp(){
 // ---------- 用药 ----------
 function renderMeds(){
  if(!D.medications.length){$('#medsCard').innerHTML='<div class="empty">还没有用药计划或服药记录。<br>把医嘱上的用药安排告诉顾问，确认后就会成为这里的计划行。</div>';return;}
- let h=`<div class="medgrid" style="--cols:${DAYS.length}"><div></div>`+DAYS.map(d=>`<div class="h${d===TODAY?' today':''}">${DAYS.length>16?md(d).split('/')[1]:md(d)}</div>`).join('');
- D.medications.forEach(m=>{h+=`<div class="m"><b>${esc(m.name)}</b><span>${esc(m.slot)}${m.dose?' · '+esc(m.dose):''}${m.source==='records'?' · 无计划':''}</span></div>`;DAYS.forEach(d=>{const c=m.cells[d];const txt={taken:'✓',skipped:'×',missing:'',pending:''}[c.state];h+=`<div class="cell ${c.state}" data-tip="<b>${d}</b><br>${esc(m.name)} ${esc(m.slot)}<br>${esc(c.detail)}" tabindex="0">${txt}</div>`;});});
+ let h=`<div class="medgrid" style="--cols:${esc(DAYS.length)}"><div></div>`+DAYS.map(d=>`<div class="h${d===TODAY?' today':''}">${esc(DAYS.length>16?md(d).split('/')[1]:md(d))}</div>`).join('');
+ D.medications.forEach(m=>{h+=`<div class="m"><b>${esc(m.name)}</b><span>${esc(m.slot)}${m.dose?' · '+esc(m.dose):''}${m.source==='records'?' · 无计划':''}</span></div>`;DAYS.forEach(d=>{const c=m.cells[d];const state=enumValue(c.state,['taken','skipped','missing','pending'],'missing');const txt={taken:'✓',skipped:'×',missing:'',pending:''}[state];h+=`<div class="cell ${state}" data-tip="<b>${esc(d)}</b><br>${esc(m.name)} ${esc(m.slot)}<br>${esc(c.detail)}" tabindex="0">${txt}</div>`;});});
  h+='</div><div class="keys"><span><span class="cell taken">✓</span>已记录服药</span><span><span class="cell"></span>未记录</span><span><span class="cell skipped">×</span>明确未服</span><span><span class="cell pending"></span>今日待记录</span></div><div class="note">「未记录」只表示档案里没有这一天的服药事件，不代表漏服；提醒完成也不等于实际服药。计划本身来自你已核对的医嘱，工作台不建议调整。</div>';
  $('#medsCard').innerHTML=h;
 }
@@ -362,7 +368,7 @@ function renderActivities(){
  const W=700,H=96,T=22,B=22,ph=H-T-B,slot=W/DAYS.length,bw=Math.min(22,slot*0.6);
  if(!D.activities.length){$('#acts').innerHTML='<div class="empty">这段时间没有运动或冥想记录。</div>';}
  else $('#acts').innerHTML=D.activities.map(a=>{
-  const vals=DAYS.map(d=>a.days[d]??null);const max=Math.max(...vals.filter(v=>v!==null),1);const maxI=vals.indexOf(max);
+  const vals=DAYS.map(d=>a.days[d]==null?null:finiteNumber(a.days[d]));const max=Math.max(...vals.filter(v=>v!==null),1);const maxI=vals.indexOf(max);
   const bars=DAYS.map((d,i)=>{const v=vals[i];const cx=slot*i+slot/2;const base=T+ph;
    if(v===null)return `<line x1="${(cx-Math.min(6,slot/4)).toFixed(1)}" x2="${(cx+Math.min(6,slot/4)).toFixed(1)}" y1="${base}" y2="${base}" stroke="var(--line-2)" stroke-width="2" stroke-linecap="round"/>`;
    const h=Math.max(4,ph*v/max),yv=base-h;
@@ -371,8 +377,8 @@ function renderActivities(){
   }).join('');
   const every=DAYS.length>40?7:(DAYS.length>16?2:1);
   const xl=DAYS.map((d,i)=>showLabel(d,i,every)?dayLabel(d,(slot*i+slot/2).toFixed(1)).replace('__Y__',H-6):'').join('');
-  const hit=DAYS.map((d,i)=>`<rect data-tip="<b>${d}</b><br>${esc(a.name)} ${vals[i]===null?'无记录':vals[i]+' '+esc(a.unit)}" tabindex="0" x="${(slot*i).toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${H}" fill="transparent"/>`).join('');
-  return `<div class="act"><div><div class="name">${esc(a.name)}</div><div class="meta">近 30 天 <b>${a.sessions30}</b> 次 · 最近 <span class="pill ${a.last_class}">${esc(a.last_label)}</span></div>${a.total?`<div class="total">${esc(a.total)}</div>`:''}</div><div><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(a.name)}每日记录"><line x1="0" x2="${W}" y1="${T+ph}" y2="${T+ph}" stroke="var(--line)"/>${bars}${xl}${hit}</svg></div></div>`;
+  const hit=DAYS.map((d,i)=>`<rect data-tip="<b>${esc(d)}</b><br>${esc(a.name)} ${vals[i]===null?'无记录':vals[i]+' '+esc(a.unit)}" tabindex="0" x="${(slot*i).toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${H}" fill="transparent"/>`).join('');
+  return `<div class="act"><div><div class="name">${esc(a.name)}</div><div class="meta">近 30 天 <b>${esc(a.sessions30)}</b> 次 · 最近 <span class="pill ${enumValue(a.last_class,['good','warn','none'],'none')}">${esc(a.last_label)}</span></div>${a.total?`<div class="total">${esc(a.total)}</div>`:''}</div><div><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(a.name)}每日记录"><line x1="0" x2="${W}" y1="${T+ph}" y2="${T+ph}" stroke="var(--line)"/>${bars}${xl}${hit}</svg></div></div>`;
  }).join('');
  const o=$('#others');
  if(D.other_activities.length){o.hidden=false;o.innerHTML=`<span>近 ${D.range.days} 天没有记录的其他项目：</span>`+D.other_activities.map(o=>`<span class="chip">${esc(o.name)} · 近 30 天 ${o.sessions30} 次 · 最近 ${esc(o.last_label)}</span>`).join('');}
@@ -383,19 +389,19 @@ function renderActivities(){
 function renderSleep(){
  const W=620,H=200,L=34,R=12,T=16,B=28,pw=W-L-R,ph=H-T-B,hi=10,lo=0,slot=pw/DAYS.length,bw=Math.min(22,slot*0.6);
  const y=v=>T+ph*(hi-v)/(hi-lo);
- const vals=DAYS.map(d=>D.sleep.days[d]||null);
+  const vals=DAYS.map(d=>D.sleep.days[d]||null);
  if(!vals.some(Boolean)){$('#sleepChart').innerHTML='<div class="empty">这段时间没有睡眠记录。</div>';$('#sleepStat').textContent='';}
  else{
   const grid=[3,9].map(v=>`<line x1="${L}" x2="${W-R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="var(--line)"/><text x="${L-8}" y="${(y(v)+4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--faint)">${v}h</text>`).join('');
   const ref=`<line x1="${L}" x2="${W-R}" y1="${y(7).toFixed(1)}" y2="${y(7).toFixed(1)}" stroke="var(--line-2)" stroke-width="1"/><text x="${L-8}" y="${(y(7)+4).toFixed(1)}" text-anchor="end" font-size="11" font-weight="600" fill="var(--muted)">7h</text>`;
   const bars=DAYS.map((d,i)=>{const cx=L+slot*i+slot/2,base=T+ph;const s=vals[i];
    if(!s)return `<line x1="${(cx-Math.min(6,slot/4)).toFixed(1)}" x2="${(cx+Math.min(6,slot/4)).toFixed(1)}" y1="${base}" y2="${base}" stroke="var(--line-2)" stroke-width="2" stroke-linecap="round"/>`;
-   const yv=y(Math.min(s.hours,hi));return `<path d="M${(cx-bw/2).toFixed(1)} ${base} V${(yv+4).toFixed(1)} a4 4 0 0 1 4 -4 h${(bw-8).toFixed(1)} a4 4 0 0 1 4 4 V${base} Z" fill="var(--accent)" opacity="${d===TODAY?1:.75}"/>`;}).join('');
+   const yv=y(Math.min(finiteNumber(s.hours),hi));return `<path d="M${(cx-bw/2).toFixed(1)} ${base} V${(yv+4).toFixed(1)} a4 4 0 0 1 4 -4 h${(bw-8).toFixed(1)} a4 4 0 0 1 4 4 V${base} Z" fill="var(--accent)" opacity="${d===TODAY?1:.75}"/>`;}).join('');
   const lastI=vals.reduce((a,s,i)=>s?i:a,-1),minI=vals.reduce((a,s,i)=>s&&(a<0||s.hours<vals[a].hours)?i:a,-1);
-  const lab=[lastI,minI].filter((v,i,arr)=>v>=0&&arr.indexOf(v)===i).map(i=>`<text x="${(L+slot*i+slot/2).toFixed(1)}" y="${(y(Math.min(vals[i].hours,hi))-7).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink-2)">${vals[i].hours}h</text>`).join('');
+  const lab=[lastI,minI].filter((v,i,arr)=>v>=0&&arr.indexOf(v)===i).map(i=>`<text x="${(L+slot*i+slot/2).toFixed(1)}" y="${(y(Math.min(finiteNumber(vals[i].hours),hi))-7).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink-2)">${esc(finiteNumber(vals[i].hours))}h</text>`).join('');
   const every=DAYS.length>40?7:(DAYS.length>16?2:1);
   const xl=DAYS.map((d,i)=>showLabel(d,i,every)?dayLabel(d,(L+slot*i+slot/2).toFixed(1)).replace('__Y__',H-8):'').join('');
-  const hit=DAYS.map((d,i)=>`<rect data-tip="<b>${d}</b> 起床日<br>${vals[i]?vals[i].hours+' 小时'+(vals[i].quality?' · 质量 '+vals[i].quality+'/5':'')+(vals[i].bedtime&&vals[i].wake_time?'<br>'+vals[i].bedtime+' – '+vals[i].wake_time:''):'未记录'}" tabindex="0" x="${(L+slot*i).toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${H}" fill="transparent"/>`).join('');
+  const hit=DAYS.map((d,i)=>`<rect data-tip="<b>${esc(d)}</b> 起床日<br>${vals[i]?esc(vals[i].hours)+' 小时'+(vals[i].quality?' · 质量 '+esc(vals[i].quality)+'/5':'')+(vals[i].bedtime&&vals[i].wake_time?'<br>'+esc(vals[i].bedtime)+' – '+esc(vals[i].wake_time):''):'未记录'}" tabindex="0" x="${(L+slot*i).toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${H}" fill="transparent"/>`).join('');
   $('#sleepChart').innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="睡眠时长">${grid}${ref}${bars}${lab}${xl}${hit}</svg>`;
   const st=D.sleep.stats;$('#sleepStat').textContent=`平均 ${st.average} 小时 · ≥7h ${st.seven_plus}/${st.recorded} 天 · 缺 ${st.missing} 天`;
  }
@@ -406,17 +412,17 @@ function renderSleep(){
 // ---------- 检验与就诊 ----------
 function renderLabs(){
  const p=D.pending;
- if(p.jobs.length){const rows=p.jobs.slice(0,5).map(j=>`<li>${esc(j.report_date||j.created_at)} · ${esc(j.filename||'未命名报告')} · ${j.candidates} 个字段${j.unmapped?` · 单位不一致 ${j.unmapped}`:''}${j.needs_identity?' · 尚未确认属于谁':''}</li>`).join('');
-  $('#pending').innerHTML=`<div class="pending-card"><div><b>${p.jobs.length} 份报告待核对</b> · 共 ${p.candidates} 个字段${p.unmapped?`（${p.unmapped} 项单位与档案不一致，需人工换算）`:''}${p.needs_identity?` · ${p.needs_identity} 份尚未确认属于谁`:''}<ul class="pending-list">${rows}${p.jobs.length>5?`<li class="faint">还有 ${p.jobs.length-5} 份，用「candidates」逐份查看</li>`:''}</ul></div><span class="small muted">候选在你逐字段确认前不会进入下面的时间线。</span></div>`;}
+ if(p.jobs.length){const rows=p.jobs.slice(0,5).map(j=>`<li>${esc(j.report_date||j.created_at)} · ${esc(j.filename||'未命名报告')} · ${esc(j.candidates)} 个字段${j.unmapped?` · 单位不一致 ${esc(j.unmapped)}`:''}${j.needs_identity?' · 尚未确认属于谁':''}</li>`).join('');
+  $('#pending').innerHTML=`<div class="pending-card"><div><b>${esc(p.jobs.length)} 份报告待核对</b> · 共 ${esc(p.candidates)} 个字段${p.unmapped?`（${esc(p.unmapped)} 项单位与档案不一致，需人工换算）`:''}${p.needs_identity?` · ${esc(p.needs_identity)} 份尚未确认属于谁`:''}<ul class="pending-list">${rows}${p.jobs.length>5?`<li class="faint">还有 ${esc(p.jobs.length-5)} 份，用「candidates」逐份查看</li>`:''}</ul></div><span class="small muted">候选在你逐字段确认前不会进入下面的时间线。</span></div>`;}
  else $('#pending').innerHTML='';
  if(!D.labs.length){$('#labsWrap').innerHTML='<div class="empty">还没有已确认的检验指标。<br>导入报告并逐字段核对后，最近值会出现在这里。</div>';}
- else $('#labsWrap').innerHTML=`<table id="labs-table"><thead><tr><th>指标（已确认）</th><th class="num">最近值</th><th>日期</th><th class="num">上次</th><th class="num">变化</th><th>来源</th></tr></thead><tbody>${D.labs.map(l=>`<tr><td><b>${esc(l.label)}</b> <span class="muted small">${esc(l.unit||l.raw_unit||'')}${l.mapping_status&&l.mapping_status!=='mapped'?' · 单位未映射':''}</span></td><td class="num"><b>${esc(l.value)}</b></td><td class="mono">${esc(l.date)}</td><td class="num muted">${l.previous!=null?esc(l.previous):'—'}</td><td class="num delta">${l.delta!=null?(l.delta>0?'+':'')+l.delta:'—'}</td><td><span class="evid" data-tip="共 ${l.count} 条已确认记录<br>观察 ${esc(l.observation_id)}<br>用「evidence」命令可回看原件" tabindex="0">${l.count} 条记录</span></td></tr>`).join('')}</tbody></table>`;
+ else $('#labsWrap').innerHTML=`<table id="labs-table"><thead><tr><th>指标（已确认）</th><th class="num">最近值</th><th>日期</th><th class="num">上次</th><th class="num">变化</th><th>来源</th></tr></thead><tbody>${D.labs.map(l=>`<tr><td><b>${esc(l.label)}</b> <span class="muted small">${esc(l.unit||l.raw_unit||'')}${l.mapping_status&&l.mapping_status!=='mapped'?' · 单位未映射':''}</span></td><td class="num"><b>${esc(l.value)}</b></td><td class="mono">${esc(l.date)}</td><td class="num muted">${l.previous!=null?esc(l.previous):'—'}</td><td class="num delta">${l.delta!=null?esc((l.delta>0?'+':'')+l.delta):'—'}</td><td><span class="evid" data-tip="共 ${esc(l.count)} 条已确认记录<br>观察 ${esc(l.observation_id)}<br>用「evidence」命令可回看原件" tabindex="0">${esc(l.count)} 条记录</span></td></tr>`).join('')}</tbody></table>`;
  $('#enc').innerHTML=D.encounters.length?D.encounters.map(e=>`<div class="enc"><div class="d">${esc(e.date)}</div><div><div>${esc(e.type)}${e.facility?' · '+esc(e.facility):''}${e.department?' '+esc(e.department):''}</div>${e.mentions.length?`<div class="muted small">诊断原文提及：${e.mentions.map(m=>'「'+esc(m.text)+'」'+(m.context?`<span class="ctx">${esc(m.context)}</span>`:'')).join(' ')}</div>`:''}${e.note?`<div class="muted small">${esc(e.note)}</div>`:''}</div></div>`).join(''):'<div class="empty">还没有就诊记录。</div>';
 }
 
 // ---------- 目标、页脚 ----------
 function renderGoals(){
- $('#goalsCard').innerHTML=D.goals.map(g=>`<div class="goal"><div class="t"><b>${esc(g.title)}</b><span>${esc(g.note)}</span></div><div class="meter"><i style="width:${g.percent??0}%"></i></div><div class="r">${g.achieved} / ${g.of} 天<small>${g.percent!=null?g.percent+'%':'无可计天数'}</small></div></div>`).join('');
+ $('#goalsCard').innerHTML=D.goals.map(g=>`<div class="goal"><div class="t"><b>${esc(g.title)}</b><span>${esc(g.note)}</span></div><div class="meter"><i style="width:${cssPercent(g.percent)}%"></i></div><div class="r">${esc(g.achieved)} / ${esc(g.of)} 天<small>${g.percent!=null?esc(cssPercent(g.percent))+'%':'无可计天数'}</small></div></div>`).join('');
  $('#foot').innerHTML=`<b>来源</b> 本机加密档案${D.mode==='demo'?'（示例）':''} · ${EMBEDDED?'由个人健康管理顾问的本地 MCP 实时读取':'由 health-advisor workbench 生成'}于 ${esc(D.generated_at)} · 本页不产生任何网络请求<br><b>说明</b> 本页仅作健康记录整理与监测参考，不构成医疗诊断或治疗建议；如对读数或报告有疑虑，请携带就医摘要咨询医生。`;
 }
 
