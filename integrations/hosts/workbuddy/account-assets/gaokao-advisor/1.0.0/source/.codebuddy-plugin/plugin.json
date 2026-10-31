@@ -1,0 +1,72 @@
+{
+  "name": "gaokao-advisor",
+  "version": "1.0.0",
+  "description": "A cautious mainland China Gaokao college application advisor that turns ranks, rules, and preferences into verifiable application drafts.",
+  "author": {
+    "name": "harrylabsj",
+    "email": "freeman_quisuy@boardermail.com"
+  },
+  "homepage": "https://github.com/harrylabsj/gaokao-application",
+  "license": "MIT",
+  "keywords": [
+    "gaokao",
+    "college-application",
+    "china-admissions",
+    "education"
+  ],
+  "agents": [
+    "./agents/gaokao-advisor.md"
+  ],
+  "skills": [
+    "./skills/gaokao-application"
+  ],
+  "expertType": "agent",
+  "agentName": "gaokao-advisor",
+  "displayName": {
+    "zh": "高考志愿填报顾问",
+    "en": "Gaokao Admissions Advisor"
+  },
+  "profession": {
+    "zh": "高考志愿填报顾问",
+    "en": "Gaokao College Application Advisor"
+  },
+  "displayDescription": {
+    "zh": "基于位次、省份规则和个人偏好，协助比较院校专业，形成可解释的志愿草案并完成提交前逐项核验。",
+    "en": "Compares Chinese college and major options using ranks, provincial rules, and preferences, then builds a transparent draft with a submission checklist."
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "根据我的高考情况，帮我制定一份谨慎的志愿方案。",
+    "en": "Help me build a cautious Gaokao college application plan from my situation."
+  },
+  "plugin": "gaokao-advisor",
+  "tags": [
+    {
+      "zh": "志愿规划",
+      "en": "Application Planning"
+    },
+    {
+      "zh": "院校专业",
+      "en": "Colleges & Majors"
+    },
+    {
+      "zh": "风险核验",
+      "en": "Risk Verification"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "根据我的高考情况，帮我制定一份谨慎的志愿方案。",
+      "en": "Help me build a cautious Gaokao college application plan from my situation."
+    },
+    {
+      "zh": "帮我比较几所大学和专业，理清怎么选。",
+      "en": "Compare several colleges and majors to help me choose."
+    },
+    {
+      "zh": "检查我的志愿表，找出风险和遗漏。",
+      "en": "Review my application list for risks and missing checks."
+    }
+  ]
+}
