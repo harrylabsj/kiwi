@@ -32,26 +32,6 @@ export default [
     },
   },
   {
-    // Preserve the published upstream file byte-for-byte. It treats absent
-    // optional state files as empty and imports one unused path delimiter.
-    files: [
-      "integrations/hosts/workbuddy/account-assets/personal-health-advisor/0.2.8/source/workbuddy/skill/personal-health-advisor/scripts/health-advisor-mcp.mjs",
-    ],
-    rules: {
-      "no-unused-vars": ["error", { varsIgnorePattern: "^delimiter$" }],
-      "no-empty": ["error", { allowEmptyCatch: true }],
-    },
-  },
-  {
-    // This archived OpenClaw compatibility file runs in a Node.js host.
-    files: [
-      "integrations/hosts/workbuddy/account-assets/wechat-social-assistant/1.1.0/source/agent/openclaw/wechat-social-assistant-plugin/openclaw_compat.js",
-    ],
-    languageOptions: {
-      globals: { ...globals.node },
-    },
-  },
-  {
     // Node tooling scripts (fixture generators) run under Node directly.
     files: ["scripts/**/*.mjs"],
     languageOptions: {
