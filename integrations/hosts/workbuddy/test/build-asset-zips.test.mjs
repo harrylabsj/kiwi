@@ -19,7 +19,15 @@ test('builds separate asset ZIPs and an inspectable status report',()=>{
     const report=JSON.parse(readFileSync(join(out,'BUILD-REPORT.json'),'utf8'));
     assert.ok(report.status_counts.built>0);
     assert.ok(report.status_counts.candidate>0);
-    assert.ok(report.status_counts.hold>0);
+    assert.ok(Array.isArray(report.held_items));
+    assert.ok(report.held_items.length>0);
+    assert.equal(report.status_counts.hold,report.assets.filter(asset=>asset.status==='HOLD').length);
+    const shopping=report.assets.find(asset=>asset.id==='oe_37aed7f0a679e6d4'&&asset.version==='1.1.0');
+    assert.equal(shopping?.name,'Kiwi购物智能体');
+    assert.equal(shopping?.status,'CANDIDATE_PACKAGE_BUILT');
+    assert.equal(report.assets.some(asset=>asset.name==='Kiwi购物智能体'&&asset.status==='HOLD'),false);
+    const sidecar=JSON.parse(readFileSync(join(out,'oe_37aed7f0a679e6d4-v1.1.0.zip.manifest.json'),'utf8'));
+    assert.match(sidecar.source.mapping,/uploaded ZIP hash unknown/);
     const names=readdirSync(out);
     const zips=names.filter(name=>name.endsWith('.zip'));
     assert.equal(zips.length,report.status_counts.built+report.status_counts.candidate);

@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.invalid/haina-travel/0.1.0/validation_report.schema.json",
+  "title": "validation_report",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "trip_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "plan_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "checked_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "scope": {
+      "enum": [
+        "OFFLINE_SYNTHETIC",
+        "SUPPLIED_DATA_ONLY"
+      ]
+    },
+    "decision": {
+      "enum": [
+        "BLOCKED",
+        "CONDITIONAL",
+        "CHECKED_PLANNING"
+      ]
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "enum": [
+              "BLOCK",
+              "NEEDS_CONFIRMATION",
+              "WARN"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "code",
+          "severity",
+          "path",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    },
+    "totals": {
+      "type": "object",
+      "properties": {
+        "computed_low_fen": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "computed_high_fen": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "computed_low_fen",
+        "computed_high_fen"
+      ],
+      "additionalProperties": false
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "schema_version",
+    "trip_id",
+    "plan_version",
+    "checked_at",
+    "scope",
+    "decision",
+    "issues",
+    "totals",
+    "limitations"
+  ],
+  "additionalProperties": false
+}

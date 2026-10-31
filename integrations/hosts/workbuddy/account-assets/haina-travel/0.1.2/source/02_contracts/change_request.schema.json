@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.invalid/haina-travel/0.1.0/change_request.schema.json",
+  "title": "change_request",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "trip_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expected_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope_slot_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "scope_lodging_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "allow_locked_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "user_approved": {
+      "type": "boolean"
+    },
+    "new_requirements": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 0
+    }
+  },
+  "required": [
+    "schema_version",
+    "trip_id",
+    "expected_version",
+    "request_id",
+    "reason",
+    "scope_slot_ids",
+    "scope_lodging_ids",
+    "allow_locked_ids",
+    "user_approved",
+    "new_requirements"
+  ],
+  "additionalProperties": false
+}

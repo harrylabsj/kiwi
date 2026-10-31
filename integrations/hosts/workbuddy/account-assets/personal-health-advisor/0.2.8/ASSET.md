@@ -12,3 +12,12 @@
 ## 2026-10-31 独立归档重建补充
 
 在网络可用环境中，使用本归档 `source/` 的 `python3 scripts/build_advisor_expert.py --zip` 已生成 0.2.8 ZIP 并通过构建自检。重建 ZIP 的 SHA-256 为 `db3895c6761ed70b3c757dfb4b201659127153d5bb2fe37769d07c17926b23ae`；与原始上传包的文件数均为 50，但部分第三方 wheel 版本/文件不同，故不是逐文件可复现的上传原件。原始 ZIP 已归档，精确重现依赖仍需把上游的构建依赖锁定至上传版本，不得声称当前重建包与线上完全一致。
+
+
+## Upstream validation and lint scope
+
+The upstream expert package validator passed on the archived package (50 files). The upstream test suite contains a version assertion for 0.2.7, so it was not used as a 0.2.8 test result. The archived `health-advisor-mcp.mjs` intentionally retains upstream text: its `delimiter` import is unused, and two empty catches handle absent optional `current` and `installed-wheel` marker files. Kiwi's ESLint config exempts only this exact archival file: `delimiter` remains the sole ignored binding, and `no-empty` still reports empty blocks outside catch clauses. The archived source and published ZIP are unchanged.
+
+## 安全扫描记录
+
+本仓 PR #121 的 CodeQL 扫描对归档中的 `workbench_template.html` 报告了10项高严重性“DOM text reinterpreted as HTML”。独立源码审阅确认相应 `innerHTML` 接收点存在，正常数据路径中的自由文本经过转义，未转义字段主要是枚举和数值；目前未证明普通用户输入可利用。客户端未对宿主返回模型做完整 schema 校验，异常本地状态或伪造宿主响应破坏类型假设时可能存在条件性 DOM XSS；应由来源项目进一步验证和修复。原 ZIP 内 wheel 的相应模板与此归档源一致。不能将扫描告警判作已修复或仅凭静态审阅判为误报。
