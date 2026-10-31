@@ -16,6 +16,6 @@
 - 合同把关助手1.0.0：本地确认的源码版本仅到0.2.0，未找到匹配ZIP。
 - 社交助手1.1.0：已归档指定主库对应版本的应用源码快照，但该版本未含WorkBuddy包；未找到对应WorkBuddy上传ZIP，仍为HOLD。
 - 平台上其余资产须逐项核准身份、来源、版本和可公开许可；同名或同版本不足以确认上传包一致。
-- 健康顾问0.2.8归档源码触发10项CodeQL high：DOM text reinterpreted as HTML；应核实输入可控性和上游修复，不因归档而屏蔽安全检查。这个PR当前不能宣称全量可复现或检查通过。
+- 健康顾问0.2.8归档源码曾触发10项CodeQL high：DOM text reinterpreted as HTML。经用户批准，重建源码已增加转义和类型约束；原始上传ZIP保持不变。代码级回归通过，远端CodeQL与真实UI验证仍待核实，不能将安全告警预先标为消除；修订源码重建包与原上传包不再完全相同。本PR仍不能宣称全部资产可精确复现。
 
 执行根目录 `node integrations/hosts/workbuddy/build-asset-zips.mjs --out-dir /absolute/new/path` 可构建 manifest 中可用的Kiwi资产。非Kiwi资产依各自版本目录的 `ASSET.md` 使用独立构建命令，不能合并成一个平台发布包。以上不是平台上线或业务验收结论。
