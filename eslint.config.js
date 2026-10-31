@@ -43,6 +43,15 @@ export default [
     },
   },
   {
+    // This archived OpenClaw compatibility file runs in a Node.js host.
+    files: [
+      "integrations/hosts/workbuddy/account-assets/wechat-social-assistant/1.1.0/source/agent/openclaw/wechat-social-assistant-plugin/openclaw_compat.js",
+    ],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
+  {
     // Node tooling scripts (fixture generators) run under Node directly.
     files: ["scripts/**/*.mjs"],
     languageOptions: {
