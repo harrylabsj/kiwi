@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+__CSP__
+<title>__TITLE__</title>
+<style>
+:root{
+  --paper:#f5f6f3;--card:#ffffff;--card-2:#eef2ee;--line:#e2e6e1;--line-2:#d3d9d4;
+  --ink:#22302b;--ink-2:#4b5853;--muted:#6b7772;--faint:#98a39e;
+  --accent:#1e6b5a;--accent-soft:#e4efe9;--accent-ink:#155246;
+  --morning:#d97a3d;--evening:#3a6ea5;
+  --good:#2e8b57;--good-soft:#e3f2e8;--warn:#b8860b;--warn-soft:#f8efd6;--bad:#c0392b;--bad-soft:#f8e3e0;
+  --serif:"Noto Serif SC","Songti SC",STSong,"Source Han Serif SC",serif;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --shadow:0 1px 2px rgba(34,48,43,.05),0 8px 24px -16px rgba(34,48,43,.18);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#15201c;--card:#1c2823;--card-2:#22302a;--line:#2c3a34;--line-2:#3a4a43;
+    --ink:#e6ece8;--ink-2:#c3cdc7;--muted:#93a39c;--faint:#6f7f78;
+    --accent:#5fb09a;--accent-soft:#213730;--accent-ink:#8fd0bd;
+    --morning:#d0723a;--evening:#4a82c4;
+    --good:#5fbf86;--good-soft:#1f3a2b;--warn:#d9a83a;--warn-soft:#3a3018;--bad:#e06a5c;--bad-soft:#3d2320;
+    --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#15201c;--card:#1c2823;--card-2:#22302a;--line:#2c3a34;--line-2:#3a4a43;
+  --ink:#e6ece8;--ink-2:#c3cdc7;--muted:#93a39c;--faint:#6f7f78;
+  --accent:#5fb09a;--accent-soft:#213730;--accent-ink:#8fd0bd;
+  --morning:#d0723a;--evening:#4a82c4;
+  --good:#5fbf86;--good-soft:#1f3a2b;--warn:#d9a83a;--warn-soft:#3a3018;--bad:#e06a5c;--bad-soft:#3d2320;
+  --shadow:none;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+h1,h2,h3,p{margin:0}
+button{font:inherit;cursor:pointer;border:0;background:none;color:inherit}
+button:focus-visible,a:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+a{color:var(--accent-ink)}
+svg text{font-family:var(--sans)}
+.layout{display:grid;grid-template-columns:220px minmax(0,1fr);min-height:100vh}
+.side{position:sticky;top:0;height:100vh;padding:32px 18px 24px;border-right:1px solid var(--line);background:var(--paper);display:flex;flex-direction:column}
+.brand{font-family:var(--serif);font-size:20px;font-weight:700;letter-spacing:.02em;color:var(--ink);line-height:1.4;white-space:nowrap}
+.brand small{display:block;font-family:var(--sans);font-size:11px;letter-spacing:.2em;color:var(--muted);font-weight:400;margin-top:8px}
+.side nav{display:flex;flex-direction:column;gap:4px;margin-top:36px}
+.side nav a{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:8px;color:var(--ink-2);text-decoration:none;font-size:14px}
+.side nav a:hover{background:var(--card-2)}
+.side nav a.active{background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+.side nav a .n{font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}
+.side .foot{margin-top:auto;font-size:11px;color:var(--faint);line-height:1.8}
+.side .foot b{display:block;color:var(--muted);font-weight:500}
+main{padding:36px 44px 64px;max-width:1160px;width:100%;min-width:0}
+.topbar{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;padding-bottom:22px;border-bottom:1px solid var(--line)}
+.topbar h1{font-family:var(--serif);font-size:30px;font-weight:600;letter-spacing:.02em;line-height:1.3;text-wrap:balance}
+.topbar .sub{margin-top:6px;color:var(--muted);font-size:13px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:500;border:1px solid var(--line-2);color:var(--ink-2);background:var(--card);white-space:nowrap}
+.chip.demo{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
+.chip.demo::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--warn)}
+.chip.live{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
+.topbar .meta{font-size:12px;color:var(--faint);text-align:right;line-height:1.7}
+section{margin-top:40px;scroll-margin-top:24px}
+.sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:16px}
+.sec-head h2{font-family:var(--serif);font-size:22px;font-weight:600;letter-spacing:.04em;display:flex;align-items:center;gap:12px}
+.sec-head h2::before{content:"";width:5px;height:20px;border-radius:3px;background:var(--accent)}
+.sec-head h2 .desc{font-family:var(--sans);font-size:13px;font-weight:400;color:var(--muted)}
+.handoff{display:inline-flex;align-items:center;gap:6px;color:var(--accent-ink);font-size:13px;padding:6px 10px;border-radius:6px;white-space:nowrap}
+.handoff:hover{background:var(--accent-soft)}
+.handoff svg{width:14px;height:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 24px;box-shadow:var(--shadow)}
+.card + .card{margin-top:16px}
+.card h3{font-size:15px;font-weight:600;margin-bottom:12px}
+.card h3 span{font-weight:400;color:var(--muted);font-size:12px;margin-left:6px}
+.muted{color:var(--muted)}.small{font-size:12px}.faint{color:var(--faint)}
+.empty{padding:26px 10px;text-align:center;color:var(--faint);font-size:13px;line-height:1.9}
+.tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 16px 14px;display:flex;flex-direction:column;gap:6px;min-height:118px;box-shadow:var(--shadow);min-width:0}
+.tile .l{font-size:12px;color:var(--muted);letter-spacing:.02em}
+.tile .v{font-size:26px;font-weight:600;line-height:1.15;letter-spacing:-.01em;overflow-wrap:anywhere}
+.tile .v small{font-size:13px;font-weight:400;color:var(--muted);margin-left:4px}
+.tile .v.empty{color:var(--faint);font-weight:500;font-size:21px;padding:0}
+.tile .s{margin-top:auto;display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;font-size:12px;color:var(--ink-2)}
+.tile .s .t{font-variant-numeric:tabular-nums;color:var(--faint)}
+.pill{display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;line-height:1.6;white-space:nowrap}
+.pill.good{background:var(--good-soft);color:var(--good)}.pill.warn{background:var(--warn-soft);color:var(--warn)}.pill.bad{background:var(--bad-soft);color:var(--bad)}.pill.none{background:var(--card-2);color:var(--muted)}
+.nextline{margin-top:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--ink-2)}
+.nextline b{font-weight:600;color:var(--ink)}
+.nextline .sep{width:1px;height:14px;background:var(--line-2)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--card-2)}
+.stats > div{padding:12px 16px;background:var(--card);min-width:0}
+.stats > div + div{border-left:1px solid var(--line)}
+.stats .l{font-size:12px;color:var(--muted)}
+.stats .v{font-size:20px;font-weight:600;margin-top:2px;letter-spacing:-.01em}
+.stats .v small{font-size:12px;font-weight:400;color:var(--muted);margin-left:4px}
+.stats .k{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+.charts{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+.chart{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 16px 12px;box-shadow:var(--shadow);min-width:0}
+.chart-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;gap:12px;flex-wrap:wrap}
+.chart-head h3{font-size:15px;font-weight:600;margin:0}
+.chart-head span{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.chart svg{width:100%;height:auto;display:block}
+.legend{display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:18px;height:2px;border-radius:2px;vertical-align:3px;margin-right:6px}
+.legend .band{width:18px;height:10px;border-radius:2px;opacity:.5;vertical-align:-1px}
+.toolrow{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.medgrid{display:grid;grid-template-columns:200px repeat(var(--cols,14),minmax(0,1fr));gap:6px 4px;align-items:center}
+.medgrid .h{font-size:11px;color:var(--faint);text-align:center;font-variant-numeric:tabular-nums}
+.medgrid .h.today{color:var(--accent-ink);font-weight:600}
+.medgrid .m{padding-right:12px;min-width:0}
+.medgrid .m b{display:block;font-weight:600;font-size:14px;overflow-wrap:anywhere}
+.medgrid .m span{font-size:12px;color:var(--muted)}
+.cell{height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;border:1px solid var(--line-2);color:var(--faint);background:var(--card)}
+.cell.taken{background:var(--accent);border-color:var(--accent);color:#fff}
+.cell.skipped{background:var(--bad-soft);border-color:var(--bad);color:var(--bad);font-weight:700}
+.cell.pending{border-style:dashed;border-color:var(--accent);color:var(--accent-ink)}
+.cell:hover{outline:2px solid var(--accent-soft)}
+.keys{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12px;color:var(--muted);align-items:center}
+.keys .cell{width:18px;height:18px;border-radius:4px;font-size:10px;display:inline-flex;margin-right:6px;vertical-align:middle}
+.note{margin-top:12px;font-size:12px;color:var(--muted);line-height:1.7}
+.act{display:grid;grid-template-columns:200px minmax(0,1fr);gap:20px;padding:18px 0;border-top:1px solid var(--line);align-items:start}
+.act:first-child{border-top:0;padding-top:0}
+.act .name{font-size:15px;font-weight:600}
+.act .meta{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.7}
+.act .meta b{color:var(--ink);font-weight:600}
+.act .total{font-size:12px;color:var(--muted);margin-top:8px}
+.act svg{width:100%;height:auto;display:block}
+.others{margin-top:18px;padding-top:14px;border-top:1px solid var(--line);font-size:13px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.others .chip{font-weight:400}
+.two{display:grid;grid-template-columns:3fr 2fr;gap:16px}
+.emo{display:flex;flex-direction:column}
+.emo-row{display:grid;grid-template-columns:64px 1fr;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+.emo-row:first-child{border-top:0;padding-top:0}
+.emo-row .d{font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums;padding-top:2px}
+.emo-row .n{font-weight:600}
+.emo-row .n small{font-weight:400;color:var(--muted);margin-left:8px;font-size:12px}
+.emo-row .f{font-size:13px;color:var(--ink-2);margin-top:2px;overflow-wrap:anywhere}
+.emo-row .r{font-size:12px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
+.emo-row .r::before{content:"感悟 · ";color:var(--faint)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--muted);font-size:12px;padding:8px 10px;border-bottom:1px solid var(--line)}
+td{padding:10px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;width:11%}
+#labs-table th:nth-child(3),#labs-table td:nth-child(3){width:16%}
+td b{font-weight:600}
+.delta{font-variant-numeric:tabular-nums;color:var(--muted)}
+.evid{color:var(--accent-ink);font-size:12px;text-decoration:none}
+.pending-card{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 18px;border-radius:10px;background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 40%,transparent);margin-bottom:16px;flex-wrap:wrap}
+.pending-card b{color:var(--warn)}
+.pending-list{margin:8px 0 0;padding-left:18px;font-size:12px;color:var(--ink-2);line-height:1.8}
+.enc{display:grid;grid-template-columns:110px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line);font-size:13px}
+.enc:first-child{border-top:0;padding-top:0}
+.enc .d{color:var(--faint);font-variant-numeric:tabular-nums}
+.enc .ctx{display:inline-block;padding:0 6px;border-radius:4px;background:var(--card-2);color:var(--muted);font-size:11px;margin-left:6px}
+.tablewrap{overflow-x:auto}
+.goal{display:grid;grid-template-columns:220px minmax(0,1fr) 90px;gap:16px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.goal:first-child{border-top:0;padding-top:0}
+.goal .t b{font-weight:600}
+.goal .t span{display:block;font-size:12px;color:var(--muted)}
+.meter{height:8px;border-radius:4px;background:var(--accent-soft);overflow:hidden}
+.meter > i{display:block;height:100%;background:var(--accent);border-radius:4px}
+.goal .r{text-align:right;font-variant-numeric:tabular-nums;font-size:13px}
+.goal .r small{color:var(--muted);display:block;font-size:11px}
+footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--faint);line-height:1.9}
+footer b{color:var(--muted);font-weight:500}
+#tip{position:fixed;z-index:10;pointer-events:none;background:var(--ink);color:var(--paper);padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.6;max-width:260px;white-space:pre-line;opacity:0;transition:opacity .12s}
+#tip b{font-weight:600}
+#toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:80vw}
+.livebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:var(--muted)}
+.livebar .seg{display:inline-flex;border:1px solid var(--line-2);border-radius:8px;overflow:hidden;background:var(--card)}
+.livebar .seg button{padding:4px 10px;font-size:12px;color:var(--muted)}
+.livebar .seg button + button{border-left:1px solid var(--line)}
+.livebar .seg button.active{background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:8px;border:1px solid var(--line-2);background:var(--card);color:var(--ink-2);font-size:12px}
+.btn:hover{border-color:var(--accent);color:var(--accent-ink)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn:disabled{opacity:.5;cursor:default}
+.quick{margin-top:16px;padding:14px 18px;border:1px dashed var(--line-2);border-radius:12px;background:var(--card);display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px 22px}
+.quick h4{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.04em}
+.quick .qform{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.quick input,.quick select{font:inherit;font-size:13px;padding:5px 6px;border:1px solid var(--line-2);border-radius:6px;background:var(--paper);color:var(--ink);width:58px;font-variant-numeric:tabular-nums}
+.quick input[type=time]{width:auto}
+.quick input:focus-visible,.quick select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.quick .medbtns{display:flex;gap:6px;flex-wrap:wrap}
+.busy main{opacity:.6;pointer-events:none}
+.onboarding main section{display:none}
+@media (max-width:1100px){.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}.charts{grid-template-columns:1fr}.two{grid-template-columns:1fr}}
+@media (max-width:820px){
+  .layout{grid-template-columns:1fr}
+  .side{position:static;height:auto;padding:16px 18px;border-right:0;border-bottom:1px solid var(--line)}
+  .side nav{flex-direction:row;flex-wrap:wrap;margin-top:12px;gap:2px}
+  .side nav a{padding:6px 10px;font-size:13px}.side nav a .n{display:none}.side .foot{display:none}
+  main{padding:22px 18px 48px}
+  .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stats > div:nth-child(3){border-left:0;border-top:1px solid var(--line)}.stats > div:nth-child(4){border-top:1px solid var(--line)}
+  .medgrid{grid-template-columns:120px repeat(var(--cols,14),minmax(0,1fr));gap:4px 2px}.medgrid .h{font-size:9px}.cell{height:22px;border-radius:4px;font-size:10px}
+  .act,.goal{grid-template-columns:1fr}.goal .r{text-align:left}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="side">
+    <div class="brand">个人健康管理顾问<small>个人健康管理工作台</small></div>
+    <nav id="nav">
+      <a href="#today" class="active">今日守线</a>
+      <a href="#bp">血压<span class="n" id="nav-bp"></span></a>
+      <a href="#meds">用药<span class="n" id="nav-meds"></span></a>
+      <a href="#activity">运动与冥想<span class="n" id="nav-act"></span></a>
+      <a href="#sleep">睡眠与情绪</a>
+      <a href="#labs">检验与就诊<span class="n" id="nav-labs"></span></a>
+      <a href="#goals">目标<span class="n" id="nav-goals"></span></a>
+    </nav>
+    <div class="foot" id="foot-note"><b>数据只在这台电脑上</b>由 health-advisor 从本机加密档案生成的只读快照。页内切换与悬停不会修改任何记录。</div>
+  </aside>
+  <main>
+    <div class="topbar">
+      <div>
+        <h1 id="title">正在读取本机档案…</h1>
+        <div class="sub" id="sub"></div>
+        <div class="livebar" id="livebar" hidden><span>范围</span><span class="seg" id="rangeSeg"><button data-days="14">14 天</button><button data-days="30">30 天</button><button data-days="90">90 天</button></span><button class="btn" id="refreshBtn">刷新</button><span id="liveStatus" class="faint"></span></div>
+      </div>
+      <div class="meta" id="meta"></div>
+    </div>
+
+    <section id="today">
+      <div class="sec-head"><h2>今日守线</h2><button class="handoff" data-prompt="帮我记录今天还没记的血压、用药、运动和冥想。">交给顾问 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></button></div>
+      <div class="tiles" id="tiles"></div>
+      <div class="nextline" id="nextline"></div>
+      <div class="quick" id="quick" hidden></div>
+    </section>
+
+    <section id="bp">
+      <div class="sec-head"><h2>血压</h2><button class="handoff" data-prompt="帮我看看这段时间的血压变化，说明数据覆盖和限制，并准备一份复诊时可带的摘要草稿。">交给顾问 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></button></div>
+      <div id="bpBody"></div>
+    </section>
+
+    <section id="meds">
+      <div class="sec-head"><h2>用药</h2><button class="handoff" data-prompt="我今天的药已经服了，帮我记一下，并核对这段时间有没有漏记。">交给顾问 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></button></div>
+      <div class="card" id="medsCard"></div>
+    </section>
+
+    <section id="activity">
+      <div class="sec-head"><h2>运动与冥想</h2><button class="handoff" data-prompt="帮我记录今天的运动，并看看近 30 天各项运动的频率。">交给顾问 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></button></div>
+      <div class="card"><div id="acts"></div><div class="others" id="others" hidden></div></div>
+    </section>
+
+    <section id="sleep">
+      <div class="sec-head"><h2>睡眠与情绪</h2><button class="handoff" data-prompt="帮我记录昨晚的睡眠和今天的情绪。">交给顾问 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></button></div>
+      <div class="two">
+        <div class="chart"><div class="chart-head"><h3>睡眠时长（按起床日）</h3><span id="sleepStat"></span></div><div id="sleepChart"></div><div class="legend"><span><i style="background:var(--accent)"></i>时长</span><span><i style="background:var(--line-2);height:1px"></i>7 小时参考线</span><span class="faint">质量 1–5 为自评，悬停查看。</span></div></div>
+        <div class="card"><h3>情绪记录<span id="emoCount"></span></h3><div class="emo" id="emo"></div></div>
+      </div>
+    </section>
+
+    <section id="labs">
+      <div class="sec-head"><h2>检验与就诊</h2><button class="handoff" data-prompt="帮我核对待核对的检验报告，逐个字段列出原值、单位和原文位置，我来确认。">交给顾问 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></button></div>
+      <div id="pending"></div>
+      <div class="card"><div class="tablewrap" id="labsWrap"></div></div>
+      <div class="card"><h3>就诊与诊断原文</h3><div id="enc"></div></div>
+    </section>
+
+    <section id="goals">
+      <div class="sec-head"><h2>目标 <span class="desc">近 30 天达成情况</span></h2><button class="handoff" data-prompt="帮我调整守线目标（比如把冥想改成每天 5 分钟）。">交给顾问 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></button></div>
+      <div class="card" id="goalsCard"></div>
+    </section>
+
+    <footer id="foot"></footer>
+  </main>
+</div>
+<div id="tip" role="tooltip"></div>
+<div id="toast" role="status"></div>
+<script id="workbench-data" type="application/json">__DATA__</script>
+<script>
+'use strict';
+const EMBEDDED=__EMBEDDED__;
+const UI_BOOTSTRAP=JSON.parse(document.getElementById('workbench-data').textContent);
+let D=null,DAYS=[],TODAY='',BAND=null,UI_TOKEN=EMBEDDED?UI_BOOTSTRAP.ui_token:null;
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const md=d=>parseInt(d.slice(5,7))+'/'+parseInt(d.slice(8,10));
+const tip=$('#tip');
+function showTip(text,x,y){tip.textContent=String(text).replace(/<\/?b>/gi,'').replace(/<br\s*\/?>(?:\n)?/gi,'\n');tip.style.opacity=1;const w=tip.offsetWidth,h=tip.offsetHeight;tip.style.left=Math.min(x+14,innerWidth-w-8)+'px';tip.style.top=(y-h-12<8?y+16:y-h-12)+'px';}
+function hideTip(){tip.style.opacity=0;}
+function bindTips(root){root.querySelectorAll('[data-tip]').forEach(el=>{if(el._tipBound)return;el._tipBound=true;el.addEventListener('mousemove',e=>showTip(el.dataset.tip,e.clientX,e.clientY));el.addEventListener('mouseleave',hideTip);el.addEventListener('focus',()=>{const r=el.getBoundingClientRect();showTip(el.dataset.tip,r.left+r.width/2,r.top);});el.addEventListener('blur',hideTip);});}
+function toast(t){const el=$('#toast');el.textContent=t;el.style.opacity=1;clearTimeout(el._t);el._t=setTimeout(()=>el.style.opacity=0,2400);}
+const dayLabel=(d,i)=>`<text x="${i}" y="__Y__" text-anchor="middle" font-size="11" fill="${d===TODAY?'var(--accent-ink)':'var(--faint)'}" font-weight="${d===TODAY?'600':'400'}">${md(d)}</text>`;
+const showLabel=(d,i,every)=>d===TODAY||(i%every===0&&(DAYS.length-1-i)>=every);
+const nowHM=()=>{const n=new Date();return String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');};
+
+// ---------- 页头 ----------
+function renderHeader(){
+ $('#title').textContent=D.today_label;
+ $('#sub').innerHTML=`<span class="chip ${D.mode}">${D.mode==='demo'?'示例数据':'个人数据'} · ${esc(D.person.display_name)}</span><span>${EMBEDDED?'实时读取于':'生成于'} ${esc(D.generated_at)}</span><span>范围：近 ${D.range.days} 天（${esc(D.range.start)} – ${esc(D.range.end)}）</span>`;
+ $('#meta').innerHTML=`本机加密档案 ${esc(D.vault_label)}<br>${D.last_record?`最近一条记录 ${esc(D.last_record.at)} · ${esc(D.last_record.type)}`:'档案中还没有记录'}`;
+ $('#nav-bp').textContent=D.range.days+' 天';
+ $('#nav-meds').textContent=D.medications.length?D.medications.length+' 项':'';
+ $('#nav-act').textContent=D.activities.length?D.activities.length+' 项':'';
+ $('#nav-labs').textContent=D.pending.jobs.length?D.pending.jobs.length+' 待核对':'';
+ $('#nav-goals').textContent=D.goals.length;
+ document.querySelectorAll('#rangeSeg button').forEach(b=>b.classList.toggle('active',Number(b.dataset.days)===D.range.days));
+}
+
+// ---------- 今日守线 ----------
+function renderToday(){
+ $('#tiles').innerHTML=D.today_block.tiles.map(t=>`<div class="tile"><div class="l">${esc(t.label)}</div><div class="v${t.empty?' empty':''}">${esc(t.value)}${t.unit?`<small>${esc(t.unit)}</small>`:''}</div><div class="s"><span class="pill ${t.status.cls}">${esc(t.status.text)}</span>${t.time?`<span class="t">${esc(t.time)}</span>`:''}</div></div>`).join('');
+ $('#nextline').innerHTML=D.today_block.missing.length?'<b>今天还差</b>'+D.today_block.missing.map(esc).join('<span class="sep"></span>')+`<span class="faint" style="margin-left:6px">· ${EMBEDDED?'可在下方填写并交给顾问确认':'记录后重新生成工作台即可更新'}</span>`:`<b>今天的守线项目都已记录</b><span class="faint">· ${EMBEDDED?'点「刷新」可重新读取档案':'重新生成工作台可刷新数据'}</span>`;
+}
+
+// ---------- 血压 ----------
+function bpChart(field,band){
+ const W=540,H=236,L=38,R=22,T=18,B=30,pw=W-L-R,ph=H-T-B;
+ const pts=s=>DAYS.map((d,i)=>D.bp[s][d]?{i,d,v:D.bp[s][d][field],t:D.bp[s][d].time}:null);
+ const M=pts('morning'),E=pts('evening');
+ const all=[...M,...E].filter(Boolean);
+ if(!all.length)return '<div class="empty">这段时间没有血压记录</div>';
+ const vals=all.map(p=>p.v).concat(band);
+ const lo=Math.floor((Math.min(...vals)-6)/10)*10,hi=Math.ceil((Math.max(...vals)+6)/10)*10;
+ const x=i=>L+(DAYS.length===1?pw/2:pw*i/(DAYS.length-1)),y=v=>T+ph*(hi-v)/(hi-lo);
+ const step=hi-lo>80?20:10;
+ const grid=[];for(let v=lo;v<=hi;v+=step)grid.push(`<line x1="${L}" x2="${W-R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${L-8}" y="${(y(v)+4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--faint)">${v}</text>`);
+ const bandRect=`<rect x="${L}" y="${y(band[1]).toFixed(1)}" width="${pw}" height="${(y(band[0])-y(band[1])).toFixed(1)}" fill="var(--accent)" opacity=".09"/><text x="${W-R}" y="${(y(band[1])-5).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--muted)">医嘱区间 ${band[0]}–${band[1]}</text>`;
+ const seg=(arr,color)=>{let d='',prev=null;arr.forEach(p=>{if(!p){prev=null;return;}d+=(prev?'L':'M')+x(p.i).toFixed(1)+' '+y(p.v).toFixed(1)+' ';prev=p;});return `<path d="${d.trim()}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;};
+ const dots=(arr,color)=>arr.filter(Boolean).map(p=>`<circle cx="${x(p.i).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="4" fill="${color}" stroke="var(--card)" stroke-width="2"/>`).join('');
+ const labels=[];const last=arr=>[...arr].reverse().find(Boolean);
+ const max=all.reduce((a,b)=>b.v>a.v?b:a,all[0]);
+ [[last(M),-9],[last(E),15]].forEach(([p,dy])=>{if(p&&p!==max)labels.push(`<text x="${x(p.i).toFixed(1)}" y="${(y(p.v)+dy).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink-2)">${p.v}</text>`);});
+ labels.push(`<text x="${x(max.i).toFixed(1)}" y="${(y(max.v)-9).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink-2)">最高 ${max.v}</text>`);
+ const every=DAYS.length>40?7:(DAYS.length>16?2:1);
+ const xl=DAYS.map((d,i)=>showLabel(d,i,every)?dayLabel(d,x(i).toFixed(1)).replace('__Y__',H-8):'').join('');
+ const cw=DAYS.length===1?pw:pw/(DAYS.length-1);
+ const hit=DAYS.map((d,i)=>{const m=D.bp.morning[d],e=D.bp.evening[d];const detail=r=>r?r.sys+'/'+r.dia+' · '+r.time+(r.sample_count>1?`（当天该时段 ${r.sample_count} 次，图中显示最后一次）`:''):'未记录';const t=`<b>${d}</b><br>晨间 ${detail(m)}<br>晚间 ${detail(e)}`;return `<g class="hit" data-tip="${esc(t)}" tabindex="0"><rect x="${(x(i)-cw/2).toFixed(1)}" y="${T}" width="${cw.toFixed(1)}" height="${ph}" fill="transparent"/><line class="xh" x1="${x(i).toFixed(1)}" x2="${x(i).toFixed(1)}" y1="${T}" y2="${T+ph}" stroke="var(--line-2)" stroke-width="1" opacity="0"/></g>`;}).join('');
+ return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${field==='sys'?'收缩压':'舒张压'}晨晚趋势">${grid.join('')}${bandRect}${seg(M,'var(--morning)')}${seg(E,'var(--evening)')}${dots(M,'var(--morning)')}${dots(E,'var(--evening)')}${labels.join('')}${xl}${hit}</svg>`;
+}
+function renderBp(){
+ const s=D.bp.stats;
+ if(!s.total){$('#bpBody').innerHTML='<div class="card"><div class="empty">这段时间还没有血压记录。<br>把晨晚两次读数告诉顾问，就会出现在这里。</div></div>';return;}
+ const fmt=p=>p?`${p[0]}/${p[1]}<small>mmHg</small>`:'<span class="faint">无</span>';
+ const latest=(f)=>{const parts=[];const lastOf=(s)=>{const ks=DAYS.filter(d=>D.bp[s][d]);return ks.length?[ks[ks.length-1],D.bp[s][ks[ks.length-1]]]:null;};const m=lastOf('morning'),e=lastOf('evening');if(m)parts.push('晨 '+m[1][f]+(m[0]===TODAY?'':'（'+md(m[0])+'）'));if(e)parts.push('晚 '+e[1][f]+(e[0]===TODAY?'':'（'+md(e[0])+'）'));return '最新 '+parts.join(' · ');};
+ $('#bpBody').innerHTML=`<div class="stats"><div><div class="l"><span class="k" style="background:var(--morning)"></span>晨间均值 · ${s.morning_count} 次</div><div class="v">${fmt(s.morning_mean)}</div></div><div><div class="l"><span class="k" style="background:var(--evening)"></span>晚间均值 · ${s.evening_count} 次</div><div class="v">${fmt(s.evening_mean)}</div></div><div><div class="l">两项均在区间内</div><div class="v">${Math.round(s.in_band/s.total*100)}%<small>${s.in_band} / ${s.total} 次</small></div></div><div><div class="l">最高读数</div><div class="v">${s.highest.sys}/${s.highest.dia}<small>${md(s.highest.date)} ${s.highest.slot}</small></div></div></div>
+ <div class="toolrow" style="margin:14px 0 0"><span class="small muted">医嘱区间来自你在设置里录入的目标（${BAND.systolic[0]}–${BAND.systolic[1]} / ${BAND.diastolic[0]}–${BAND.diastolic[1]} mmHg），只用于画参考带，不做判断。</span></div>
+ <div class="charts"><div class="chart"><div class="chart-head"><h3>收缩压</h3><span>${esc(latest('sys'))}</span></div>${bpChart('sys',BAND.systolic)}</div><div class="chart"><div class="chart-head"><h3>舒张压</h3><span>${esc(latest('dia'))}</span></div>${bpChart('dia',BAND.diastolic)}</div></div>
+ <div class="legend"><span><i style="background:var(--morning)"></i>晨间（中午前）</span><span><i style="background:var(--evening)"></i>晚间（中午后）</span><span><i class="band" style="background:var(--accent)"></i>医嘱区间</span><span class="faint">统计包含全部读数；同日同一时段的图线显示最后一次，悬停可查看次数。无记录的日期留白，不补 0。</span></div>`;
+ document.querySelectorAll('.hit').forEach(g=>{g.addEventListener('mouseenter',()=>g.querySelector('.xh').setAttribute('opacity','1'));g.addEventListener('mouseleave',()=>g.querySelector('.xh').setAttribute('opacity','0'));});
+}
+
+// ---------- 用药 ----------
+function renderMeds(){
+ if(!D.medications.length){$('#medsCard').innerHTML='<div class="empty">还没有用药计划或服药记录。<br>把医嘱上的用药安排告诉顾问，确认后就会成为这里的计划行。</div>';return;}
+ let h=`<div class="medgrid" style="--cols:${DAYS.length}"><div></div>`+DAYS.map(d=>`<div class="h${d===TODAY?' today':''}">${DAYS.length>16?md(d).split('/')[1]:md(d)}</div>`).join('');
+ D.medications.forEach(m=>{h+=`<div class="m"><b>${esc(m.name)}</b><span>${esc(m.slot)}${m.dose?' · '+esc(m.dose):''}${m.source==='records'?' · 无计划':''}</span></div>`;DAYS.forEach(d=>{const c=m.cells[d];const txt={taken:'✓',skipped:'×',missing:'',pending:''}[c.state];h+=`<div class="cell ${c.state}" data-tip="<b>${d}</b><br>${esc(m.name)} ${esc(m.slot)}<br>${esc(c.detail)}" tabindex="0">${txt}</div>`;});});
+ h+='</div><div class="keys"><span><span class="cell taken">✓</span>已记录服药</span><span><span class="cell"></span>未记录</span><span><span class="cell skipped">×</span>明确未服</span><span><span class="cell pending"></span>今日待记录</span></div><div class="note">「未记录」只表示档案里没有这一天的服药事件，不代表漏服；提醒完成也不等于实际服药。计划本身来自你已核对的医嘱，工作台不建议调整。</div>';
+ $('#medsCard').innerHTML=h;
+}
+
+// ---------- 运动 ----------
+function renderActivities(){
+ const W=700,H=96,T=22,B=22,ph=H-T-B,slot=W/DAYS.length,bw=Math.min(22,slot*0.6);
+ if(!D.activities.length){$('#acts').innerHTML='<div class="empty">这段时间没有运动或冥想记录。</div>';}
+ else $('#acts').innerHTML=D.activities.map(a=>{
+  const vals=DAYS.map(d=>a.days[d]??null);const max=Math.max(...vals.filter(v=>v!==null),1);const maxI=vals.indexOf(max);
+  const bars=DAYS.map((d,i)=>{const v=vals[i];const cx=slot*i+slot/2;const base=T+ph;
+   if(v===null)return `<line x1="${(cx-Math.min(6,slot/4)).toFixed(1)}" x2="${(cx+Math.min(6,slot/4)).toFixed(1)}" y1="${base}" y2="${base}" stroke="var(--line-2)" stroke-width="2" stroke-linecap="round"/>`;
+   const h=Math.max(4,ph*v/max),yv=base-h;
+   const lab=(i===maxI||d===TODAY)&&DAYS.length<=31?`<text x="${cx.toFixed(1)}" y="${(yv-6).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink-2)">${v}${esc(a.unit)}</text>`:'';
+   return `<path d="M${(cx-bw/2).toFixed(1)} ${base} V${(yv+4).toFixed(1)} a4 4 0 0 1 4 -4 h${(bw-8).toFixed(1)} a4 4 0 0 1 4 4 V${base} Z" fill="var(--accent)" opacity="${d===TODAY?1:.75}"/>${lab}`;
+  }).join('');
+  const every=DAYS.length>40?7:(DAYS.length>16?2:1);
+  const xl=DAYS.map((d,i)=>showLabel(d,i,every)?dayLabel(d,(slot*i+slot/2).toFixed(1)).replace('__Y__',H-6):'').join('');
+  const hit=DAYS.map((d,i)=>`<rect data-tip="<b>${d}</b><br>${esc(a.name)} ${vals[i]===null?'无记录':vals[i]+' '+esc(a.unit)}" tabindex="0" x="${(slot*i).toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${H}" fill="transparent"/>`).join('');
+  return `<div class="act"><div><div class="name">${esc(a.name)}</div><div class="meta">近 30 天 <b>${a.sessions30}</b> 次 · 最近 <span class="pill ${a.last_class}">${esc(a.last_label)}</span></div>${a.total?`<div class="total">${esc(a.total)}</div>`:''}</div><div><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(a.name)}每日记录"><line x1="0" x2="${W}" y1="${T+ph}" y2="${T+ph}" stroke="var(--line)"/>${bars}${xl}${hit}</svg></div></div>`;
+ }).join('');
+ const o=$('#others');
+ if(D.other_activities.length){o.hidden=false;o.innerHTML=`<span>近 ${D.range.days} 天没有记录的其他项目：</span>`+D.other_activities.map(o=>`<span class="chip">${esc(o.name)} · 近 30 天 ${o.sessions30} 次 · 最近 ${esc(o.last_label)}</span>`).join('');}
+ else{o.hidden=true;o.innerHTML='';}
+}
+
+// ---------- 睡眠与情绪 ----------
+function renderSleep(){
+ const W=620,H=200,L=34,R=12,T=16,B=28,pw=W-L-R,ph=H-T-B,hi=10,lo=0,slot=pw/DAYS.length,bw=Math.min(22,slot*0.6);
+ const y=v=>T+ph*(hi-v)/(hi-lo);
+ const vals=DAYS.map(d=>D.sleep.days[d]||null);
+ if(!vals.some(Boolean)){$('#sleepChart').innerHTML='<div class="empty">这段时间没有睡眠记录。</div>';$('#sleepStat').textContent='';}
+ else{
+  const grid=[3,9].map(v=>`<line x1="${L}" x2="${W-R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="var(--line)"/><text x="${L-8}" y="${(y(v)+4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--faint)">${v}h</text>`).join('');
+  const ref=`<line x1="${L}" x2="${W-R}" y1="${y(7).toFixed(1)}" y2="${y(7).toFixed(1)}" stroke="var(--line-2)" stroke-width="1"/><text x="${L-8}" y="${(y(7)+4).toFixed(1)}" text-anchor="end" font-size="11" font-weight="600" fill="var(--muted)">7h</text>`;
+  const bars=DAYS.map((d,i)=>{const cx=L+slot*i+slot/2,base=T+ph;const s=vals[i];
+   if(!s)return `<line x1="${(cx-Math.min(6,slot/4)).toFixed(1)}" x2="${(cx+Math.min(6,slot/4)).toFixed(1)}" y1="${base}" y2="${base}" stroke="var(--line-2)" stroke-width="2" stroke-linecap="round"/>`;
+   const yv=y(Math.min(s.hours,hi));return `<path d="M${(cx-bw/2).toFixed(1)} ${base} V${(yv+4).toFixed(1)} a4 4 0 0 1 4 -4 h${(bw-8).toFixed(1)} a4 4 0 0 1 4 4 V${base} Z" fill="var(--accent)" opacity="${d===TODAY?1:.75}"/>`;}).join('');
+  const lastI=vals.reduce((a,s,i)=>s?i:a,-1),minI=vals.reduce((a,s,i)=>s&&(a<0||s.hours<vals[a].hours)?i:a,-1);
+  const lab=[lastI,minI].filter((v,i,arr)=>v>=0&&arr.indexOf(v)===i).map(i=>`<text x="${(L+slot*i+slot/2).toFixed(1)}" y="${(y(Math.min(vals[i].hours,hi))-7).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink-2)">${vals[i].hours}h</text>`).join('');
+  const every=DAYS.length>40?7:(DAYS.length>16?2:1);
+  const xl=DAYS.map((d,i)=>showLabel(d,i,every)?dayLabel(d,(L+slot*i+slot/2).toFixed(1)).replace('__Y__',H-8):'').join('');
+  const hit=DAYS.map((d,i)=>`<rect data-tip="<b>${d}</b> 起床日<br>${vals[i]?vals[i].hours+' 小时'+(vals[i].quality?' · 质量 '+vals[i].quality+'/5':'')+(vals[i].bedtime&&vals[i].wake_time?'<br>'+vals[i].bedtime+' – '+vals[i].wake_time:''):'未记录'}" tabindex="0" x="${(L+slot*i).toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${H}" fill="transparent"/>`).join('');
+  $('#sleepChart').innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="睡眠时长">${grid}${ref}${bars}${lab}${xl}${hit}</svg>`;
+  const st=D.sleep.stats;$('#sleepStat').textContent=`平均 ${st.average} 小时 · ≥7h ${st.seven_plus}/${st.recorded} 天 · 缺 ${st.missing} 天`;
+ }
+ $('#emoCount').textContent=`近 ${D.range.days} 天 ${D.emotions.length} 条`;
+ $('#emo').innerHTML=D.emotions.length?D.emotions.map(e=>`<div class="emo-row"><div class="d">${md(e.date)}${e.time?'<br>'+esc(e.time):''}</div><div><div class="n">${esc(e.name)}${e.minutes?`<small>${e.minutes} 分钟</small>`:''}</div>${e.feelings?`<div class="f">${esc(e.feelings)}</div>`:''}${e.reflection?`<div class="r">${esc(e.reflection)}</div>`:''}</div></div>`).join(''):'<div class="empty">这段时间没有情绪记录。</div>';
+}
+
+// ---------- 检验与就诊 ----------
+function renderLabs(){
+ const p=D.pending;
+ if(p.jobs.length){const rows=p.jobs.slice(0,5).map(j=>`<li>${esc(j.report_date||j.created_at)} · ${esc(j.filename||'未命名报告')} · ${j.candidates} 个字段${j.unmapped?` · 单位不一致 ${j.unmapped}`:''}${j.needs_identity?' · 尚未确认属于谁':''}</li>`).join('');
+  $('#pending').innerHTML=`<div class="pending-card"><div><b>${p.jobs.length} 份报告待核对</b> · 共 ${p.candidates} 个字段${p.unmapped?`（${p.unmapped} 项单位与档案不一致，需人工换算）`:''}${p.needs_identity?` · ${p.needs_identity} 份尚未确认属于谁`:''}<ul class="pending-list">${rows}${p.jobs.length>5?`<li class="faint">还有 ${p.jobs.length-5} 份，用「candidates」逐份查看</li>`:''}</ul></div><span class="small muted">候选在你逐字段确认前不会进入下面的时间线。</span></div>`;}
+ else $('#pending').innerHTML='';
+ if(!D.labs.length){$('#labsWrap').innerHTML='<div class="empty">还没有已确认的检验指标。<br>导入报告并逐字段核对后，最近值会出现在这里。</div>';}
+ else $('#labsWrap').innerHTML=`<table id="labs-table"><thead><tr><th>指标（已确认）</th><th class="num">最近值</th><th>日期</th><th class="num">上次</th><th class="num">变化</th><th>来源</th></tr></thead><tbody>${D.labs.map(l=>`<tr><td><b>${esc(l.label)}</b> <span class="muted small">${esc(l.unit||l.raw_unit||'')}${l.mapping_status&&l.mapping_status!=='mapped'?' · 单位未映射':''}</span></td><td class="num"><b>${esc(l.value)}</b></td><td class="mono">${esc(l.date)}</td><td class="num muted">${l.previous!=null?esc(l.previous):'—'}</td><td class="num delta">${l.delta!=null?(l.delta>0?'+':'')+l.delta:'—'}</td><td><span class="evid" data-tip="共 ${l.count} 条已确认记录<br>观察 ${esc(l.observation_id)}<br>用「evidence」命令可回看原件" tabindex="0">${l.count} 条记录</span></td></tr>`).join('')}</tbody></table>`;
+ $('#enc').innerHTML=D.encounters.length?D.encounters.map(e=>`<div class="enc"><div class="d">${esc(e.date)}</div><div><div>${esc(e.type)}${e.facility?' · '+esc(e.facility):''}${e.department?' '+esc(e.department):''}</div>${e.mentions.length?`<div class="muted small">诊断原文提及：${e.mentions.map(m=>'「'+esc(m.text)+'」'+(m.context?`<span class="ctx">${esc(m.context)}</span>`:'')).join(' ')}</div>`:''}${e.note?`<div class="muted small">${esc(e.note)}</div>`:''}</div></div>`).join(''):'<div class="empty">还没有就诊记录。</div>';
+}
+
+// ---------- 目标、页脚 ----------
+function renderGoals(){
+ $('#goalsCard').innerHTML=D.goals.map(g=>`<div class="goal"><div class="t"><b>${esc(g.title)}</b><span>${esc(g.note)}</span></div><div class="meter"><i style="width:${g.percent??0}%"></i></div><div class="r">${g.achieved} / ${g.of} 天<small>${g.percent!=null?g.percent+'%':'无可计天数'}</small></div></div>`).join('');
+ $('#foot').innerHTML=`<b>来源</b> 本机加密档案${D.mode==='demo'?'（示例）':''} · ${EMBEDDED?'由个人健康管理顾问的本地 MCP 实时读取':'由 health-advisor workbench 生成'}于 ${esc(D.generated_at)} · 本页不产生任何网络请求<br><b>说明</b> 本页仅作健康记录整理与监测参考，不构成医疗诊断或治疗建议；如对读数或报告有疑虑，请携带就医摘要咨询医生。`;
+}
+
+// ---------- 内嵌模式：快速记录 ----------
+function renderQuick(){
+ const q=$('#quick');if(!EMBEDDED||D.mode==='demo'){q.hidden=true;return;}
+ const meds=D.medications.filter(m=>m.routine&&['pending','missing'].includes(m.cells[TODAY]?.state));
+ q.hidden=false;
+ // No form submission: MCP hosts sandbox the iframe without allow-forms, so a submit event would be blocked outright.
+ q.innerHTML=`<div><h4>血压 · 现在</h4><div class="qform" data-kind="vital"><input name="systolic" type="number" min="60" max="260" placeholder="收缩" required><span>/</span><input name="diastolic" type="number" min="30" max="160" placeholder="舒张" required><input name="time" type="time" value="${nowHM()}" required><button class="btn primary" type="button">记录</button></div></div>
+ <div><h4>用药 · 今天</h4><div class="medbtns">${meds.length?meds.map(m=>`<button class="btn" type="button" data-med='${esc(JSON.stringify({medication:m.name,dose:m.dose_value,unit:m.dose_unit,plan:m.plan_id}))}'>已服 ${esc(m.slot!=='—'?m.slot+'间 ':'')}${esc(m.name)}</button>`).join(''):'<span class="faint">今天的计划用药都已记录</span>'}</div></div>
+ <div><h4>冥想 · 今天</h4><div class="qform" data-kind="meditation"><input name="minutes" type="number" min="1" max="600" placeholder="分钟" required><button class="btn primary" type="button">记录</button></div></div>
+ <div><h4>睡眠 · 昨夜</h4><div class="qform" data-kind="sleep"><input name="bedtime" type="time" value="23:00" required><span>–</span><input name="wake_time" type="time" value="06:30" required><select name="quality"><option value="">质量</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select><button class="btn primary" type="button">记录</button></div></div>`;
+ const submit=async f=>{const v=n=>{const el=f.querySelector(`[name="${n}"]`);return el?el.value.trim():'';};
+  for(const el of f.querySelectorAll('[required]'))if(!el.value.trim()){toast('请先填写完整');el.focus();return;}
+  const kind=f.dataset.kind;
+  if(kind==='vital')await handoff(`我确认记录：${TODAY} ${v('time')} 血压 ${v('systolic')}/${v('diastolic')} mmHg。请写入后用近期记录核对。`);
+  else if(kind==='meditation')await handoff(`我确认记录：${TODAY} 冥想 ${v('minutes')} 分钟。请写入后用近期记录核对。`);
+  else if(kind==='sleep')await handoff(`我确认记录：${TODAY} 起床；昨夜 ${v('bedtime')} 至 ${v('wake_time')}${v('quality')?`，睡眠质量 ${v('quality')}/5`:''}。请写入后用近期记录核对。`);
+ };
+ q.querySelectorAll('.qform').forEach(f=>{f.querySelector('button').addEventListener('click',()=>submit(f));f.querySelectorAll('input').forEach(i=>i.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();submit(f);}}));});
+ q.querySelectorAll('[data-med]').forEach(b=>b.addEventListener('click',async()=>{const m=JSON.parse(b.dataset.med);await handoff(`我确认记录：${TODAY} ${nowHM()} 已服 ${m.medication}${m.dose?` ${m.dose}${m.unit||''}`:''}${m.plan?`（计划 ${m.plan}）`:''}。请写入后用近期记录核对。`);}));
+}
+
+function render(model){
+ document.body.classList.remove('onboarding');
+ D=model;DAYS=D.days;TODAY=D.today;BAND=D.bp_target;
+ renderHeader();renderToday();renderBp();renderMeds();renderActivities();renderSleep();renderLabs();renderGoals();renderQuick();
+ bindTips(document);
+}
+
+// ---------- MCP Apps 最小桥接（仅内嵌模式） ----------
+const Bridge=(()=>{
+ let seq=0,ready=false;const pending=new Map(),handlers={};
+ const post=m=>window.parent.postMessage(m,'*');
+ const request=(method,params)=>new Promise((res,rej)=>{const id=++seq;pending.set(id,{res,rej});post({jsonrpc:'2.0',id,method,params});});
+ const notify=(method,params)=>post({jsonrpc:'2.0',method,params});
+ window.addEventListener('message',e=>{if(e.source!==window.parent)return;const m=e.data;if(!m||m.jsonrpc!=='2.0')return;
+  if(m.id!==undefined&&m.method===undefined){const p=pending.get(m.id);if(!p)return;pending.delete(m.id);m.error?p.rej(new Error(m.error.message||'宿主返回错误')):p.res(m.result);return;}
+  if(m.method==='ping'||m.method==='ui/resource-teardown'){post({jsonrpc:'2.0',id:m.id,result:{}});return;}
+  const h=handlers[m.method];
+  if(h)h(m.params||{});else if(m.id!==undefined)post({jsonrpc:'2.0',id:m.id,error:{code:-32601,message:'Method not found'}});
+ });
+ async function connect(){const r=await request('ui/initialize',{appInfo:{name:'personal-health-advisor',version:'0.1.0'},appCapabilities:{},protocolVersion:'2026-01-26'});notify('ui/notifications/initialized',{});ready=true;return r||{};}
+ return {connect,request,notify,on:(m,f)=>{handlers[m]=f;},get ready(){return ready;}};
+})();
+let LIVE={mode:'live',days:14};
+function applyTheme(theme){if(theme==='dark'||theme==='light')document.documentElement.setAttribute('data-theme',theme);}
+async function callTool(name,args){const r=await Bridge.request('tools/call',{name,arguments:args});if(r&&r.isError)throw new Error((r.content||[]).find(c=>c.type==='text')?.text||'本地操作未完成');return r;}
+function showOnboarding(state){
+ document.body.classList.add('onboarding');D=null;$('#quick').hidden=true;
+ $('#title').textContent=state.status==='auth_failed'?'暂时无法解锁个人档案':'先建立你的个人健康档案';
+ $('#sub').textContent='当前没有可读取的个人健康记录。你可以先看虚构示例，或在本机配置自己的加密档案。';
+ $('#liveStatus').textContent='';
+ const actions=$('#meta');actions.replaceChildren();
+ const demo=document.createElement('button');demo.className='btn primary';demo.textContent='查看虚构示例';
+ demo.addEventListener('click',()=>{LIVE.mode='demo';liveLoad();});actions.append(demo);
+ const setup=document.createElement('button');setup.className='btn';setup.textContent='了解本机建档步骤';
+ setup.addEventListener('click',()=>handoff('请指导我在本机创建加密健康档案；不要让我把口令发送到对话中。'));actions.append(setup);
+}
+let loading=null;
+async function liveLoad(){if(loading)return loading;loading=(async()=>{document.body.classList.add('busy');$('#liveStatus').textContent='读取中…';
+ try{const r=await callTool('health_ui_model',{mode:LIVE.mode,days:LIVE.days,ui_token:UI_TOKEN});const state=r&&r.structuredContent;if(state&&['setup_required','auth_failed'].includes(state.status)){showOnboarding(state);return;}const model=r&&r._meta&&r._meta.healthData;if(!model)throw new Error('WorkBuddy 未转发界面数据，请检查客户端 MCP Apps 支持');render(model);$('#liveStatus').textContent='已同步 '+nowHM();}
+ catch(e){$('#liveStatus').textContent='';$('#title').textContent='暂时无法读取本机档案';$('#sub').innerHTML=`<span class="chip">${esc(e.message)}</span>`;toast(e.message);}
+ finally{document.body.classList.remove('busy');loading=null;}})();return loading;}
+async function handoff(text){
+ if(EMBEDDED){try{await Bridge.request('ui/message',{role:'user',content:[{type:'text',text}]});toast('已发给个人健康管理顾问');}catch{toast('WorkBuddy 未接收任务：'+text);}return;}
+ try{await navigator.clipboard.writeText(text);toast('已复制任务，回到 WorkBuddy 粘贴给个人健康管理顾问');}catch{toast('复制失败，可手动输入：'+text);}
+}
+async function bootEmbedded(){
+ $('#livebar').hidden=false;$('#foot-note').innerHTML='<b>数据只在这台电脑上</b>由个人健康管理顾问的本地 MCP 实时读取本机加密档案；页面填写内容会先回到对话，由顾问在你确认后写入并核对。';
+ Bridge.on('ui/notifications/tool-input',p=>{const a=p.arguments||{};if(a.mode)LIVE.mode=a.mode;if(a.days)LIVE.days=Number(a.days);});
+ Bridge.on('ui/notifications/tool-result',p=>{const s=p.structuredContent||{};const next={mode:s.mode||LIVE.mode,days:s.range&&s.range.days?Number(s.range.days):LIVE.days};const changed=next.mode!==LIVE.mode||next.days!==LIVE.days;LIVE=next;if(changed||!D)liveLoad();});
+ Bridge.on('ui/notifications/host-context-changed',p=>applyTheme(p.theme));
+ try{const init=await Bridge.connect();applyTheme(init.hostContext&&init.hostContext.theme);const ti=init.hostContext&&init.hostContext.toolInfo;if(ti&&ti.arguments){if(ti.arguments.mode)LIVE.mode=ti.arguments.mode;if(ti.arguments.days)LIVE.days=Number(ti.arguments.days);}}
+ catch(e){$('#title').textContent='此界面需要支持 MCP Apps 的 WorkBuddy 客户端';$('#sub').innerHTML='<span class="chip">可改用 health-advisor workbench 生成本地快照</span>';return;}
+ try{const ro=new ResizeObserver(()=>{Bridge.notify('ui/notifications/size-changed',{width:Math.ceil(document.documentElement.scrollWidth),height:Math.ceil(document.documentElement.scrollHeight)});});ro.observe(document.body);}catch{}
+ await liveLoad();
+}
+
+// ---------- 启动与一次性事件绑定 ----------
+document.querySelectorAll('.handoff').forEach(b=>b.addEventListener('click',()=>handoff(b.dataset.prompt)));
+$('#refreshBtn').addEventListener('click',()=>liveLoad());
+document.querySelectorAll('#rangeSeg button').forEach(b=>b.addEventListener('click',()=>{LIVE.days=Number(b.dataset.days);liveLoad();}));
+const links=[...document.querySelectorAll('#nav a')];
+const io=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){links.forEach(l=>l.classList.toggle('active',l.getAttribute('href')==='#'+e.target.id));}});},{rootMargin:'-20% 0px -70% 0px'});
+document.querySelectorAll('main section').forEach(s=>io.observe(s));
+if(EMBEDDED)bootEmbedded();else render(UI_BOOTSTRAP);
+</script>
+</body>
+</html>

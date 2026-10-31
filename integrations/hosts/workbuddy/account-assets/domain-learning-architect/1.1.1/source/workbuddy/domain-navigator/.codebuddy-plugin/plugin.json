@@ -1,0 +1,64 @@
+{
+  "name": "domain-navigator",
+  "version": "1.1.1",
+  "description": "Turns an unfamiliar field into one self-contained Markdown domain map over about two weeks — a map to read, a carrier for cross-session memory, and an interface for any other AI.",
+  "author": {
+    "name": "harrylabsj",
+    "email": "harrylabsj@users.noreply.github.com"
+  },
+  "agents": [
+    "./agents/domain-navigator.md"
+  ],
+  "skills": [
+    "./skills/domain-learning"
+  ],
+  "expertType": "agent",
+  "agentName": "domain-navigator",
+  "displayName": {
+    "zh": "领域领航员",
+    "en": "Domain Navigator"
+  },
+  "profession": {
+    "zh": "新领域学习架构师",
+    "en": "New-Field Learning Architect"
+  },
+  "displayDescription": {
+    "zh": "从一个真实问题出发，两周画出一份自包含的领域地图，交给任何 AI 都能继续追问，也能留档给下一次续接。",
+    "en": "Start from a real question and, in about two weeks, build a self-contained domain map you can hand to any AI and keep for yourself."
+  },
+  "avatar": "avatars/domain-navigator.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我想学经济学，主要想知道为什么降价了也卖不动。",
+    "en": "I want to learn economics — mainly why a price cut still fails to sell."
+  },
+  "plugin": "domain-navigator",
+  "tags": [
+    {
+      "zh": "领域地图",
+      "en": "Domain Maps"
+    },
+    {
+      "zh": "两周建图",
+      "en": "Two-Week Map"
+    },
+    {
+      "zh": "AI 接口",
+      "en": "AI Interface"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "我想学经济学，主要想知道为什么降价了也卖不动。",
+      "en": "I want to learn economics — mainly why a price cut still fails to sell."
+    },
+    {
+      "zh": "我遇到一个实际问题，请帮我定位到相关领域，并解释关键概念之间的关系。",
+      "en": "Help me locate a real problem in its field and explain the key concept relationships."
+    },
+    {
+      "zh": "请把这一轮的内容更新进我的领域地图，标出当前学习位置和待展开的段落。",
+      "en": "Fold this round into my domain map, marking the current position and the sections still to expand."
+    }
+  ]
+}

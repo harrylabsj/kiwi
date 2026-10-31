@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harrylabsj/healthcare/schemas/mcp-envelope.schema.json",
+  "title": "McpEnvelope",
+  "description": "Unified MCP tool response envelope (RFC 8.4). evidence_refs is present only when the response forms a health fact or analytic conclusion.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request_id", "data", "evidence_refs", "warnings", "scope_used"],
+  "properties": {
+    "request_id": { "type": "string", "minLength": 1 },
+    "data_revision": { "type": ["integer", "null"], "minimum": 0 },
+    "data": { "type": "object" },
+    "evidence_refs": { "type": "array", "items": { "type": "string" } },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "scope_used": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  }
+}

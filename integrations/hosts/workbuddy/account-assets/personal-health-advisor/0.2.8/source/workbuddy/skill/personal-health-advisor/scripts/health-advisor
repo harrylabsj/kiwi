@@ -1,0 +1,123 @@
+#!/bin/sh
+# 个人健康管理顾问 · Skill 入口。
+#
+# Picks a Python >= 3.11 (WorkBuddy's managed runtime first), creates a private
+# virtual environment in the user's data directory on first run, installs the
+# bundled, hash-locked wheels into it (offline; falls back to the same pinned
+# versions from PyPI only when a bundled wheel does not fit this platform),
+# then executes `python -m healthcare.advisor` with the caller's arguments.
+#
+# Never deletes or moves anything: WorkBuddy's Bash sandbox blocks bulk deletes
+# (verified 2026-09-15 — a recursive delete of a stale venv tripped the guard
+# and aborted the run). Each interpreter version gets its own venv directory; an
+# outdated one is reinstalled in place.
+#
+# Overrides: HEALTH_ADVISOR_PYTHON (interpreter), HEALTH_ADVISOR_DATA_DIR (data),
+# HEALTH_ADVISOR_RUNTIME_DIR (venvs), HEALTH_ADVISOR_OFFLINE=1 (never touch PyPI).
+set -eu
+
+SKILL_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+WHEELS="$SKILL_DIR/wheels"
+LOCK="$WHEELS/requirements.txt"
+# pip normalizes the project name in wheel filenames: healthcare-mcp is
+# packaged as healthcare_mcp-<version>-*.whl.
+WHEEL="$(ls "$WHEELS"/healthcare_mcp-*.whl 2>/dev/null | head -n 1 || true)"
+
+fail() {
+  code="$1"; shift
+  printf '{"error":"runtime","message":"%s","exit_code":%s}\n' "$*" "$code" >&2
+  exit "$code"
+}
+
+version_ok() {
+  "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1
+}
+
+find_python() {
+  # WorkBuddy ships a managed CPython (used by python connectors); prefer it so
+  # the bundled wheels match and users need no separate Python install.
+  # `versions/current` is a text file naming the active version (e.g. 3.13.12).
+  managed="$HOME/.workbuddy/binaries/python/versions"
+  current=""
+  if [ -f "$managed/current" ]; then current="$(tr -d '[:space:]' < "$managed/current")"; fi
+  for candidate in \
+    "$managed/${current:-none}/bin/python3" \
+    "$managed"/3.*/bin/python3 \
+    /opt/homebrew/bin/python3 /usr/local/bin/python3 python3.13 python3.12 python3.11 python3; do
+    case "$candidate" in
+      /*) path="$candidate" ;;
+      *) path="$(command -v "$candidate" 2>/dev/null || true)" ;;
+    esac
+    if [ -n "$path" ] && [ -x "$path" ] && version_ok "$path"; then echo "$path"; return 0; fi
+  done
+  return 1
+}
+
+# WorkBuddy's Bash sandbox denies delete/rename outside a short allowlist of
+# home directories; ~/.local and ~/.cache are on it, so data lives under
+# ~/.local/share and the rebuildable venvs under ~/.cache (both overridable).
+data_dir() {
+  if [ -n "${HEALTH_ADVISOR_DATA_DIR:-}" ]; then echo "$HEALTH_ADVISOR_DATA_DIR"; return; fi
+  echo "${XDG_DATA_HOME:-$HOME/.local/share}/PersonalHealthAdvisor"
+}
+runtime_dir() {
+  if [ -n "${HEALTH_ADVISOR_RUNTIME_DIR:-}" ]; then echo "$HEALTH_ADVISOR_RUNTIME_DIR"; return; fi
+  echo "${XDG_CACHE_HOME:-$HOME/.cache}/PersonalHealthAdvisor"
+}
+
+[ -n "$WHEEL" ] || fail 6 "Skill 包缺少 wheels/healthcare_mcp-*.whl，请重新安装本 Skill"
+[ -f "$LOCK" ] || fail 6 "Skill 包缺少 wheels/requirements.txt，请重新安装本 Skill"
+if [ -n "${HEALTH_ADVISOR_PYTHON:-}" ]; then
+  version_ok "$HEALTH_ADVISOR_PYTHON" || fail 6 "HEALTH_ADVISOR_PYTHON 指向的解释器不是 Python 3.11 或更新版本"
+  PYTHON="$HEALTH_ADVISOR_PYTHON"
+else
+  PYTHON="$(find_python)" || fail 6 "本机没有 Python 3.11 或更新版本：WorkBuddy 5.x 自带的托管 Python 未就绪时，可安装 python.org 或 Homebrew 的 Python，或设置 HEALTH_ADVISOR_PYTHON"
+fi
+
+py_tag() { "$1" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true; }
+DATA="$(data_dir)"
+RUNTIME="$(runtime_dir)"
+# One venv per interpreter version AND per dependency lock (venv-3.13-<cksum>):
+# a new release gets a fresh directory, so pip never uninstalls or overwrites
+# anything and this script never deletes or moves files. `python -m venv`
+# without --clear completes a half-created directory on the next run. Old
+# venvs under $RUNTIME can be removed by the user at any time.
+LOCK_SUM="$(cksum < "$LOCK" | cut -d' ' -f1)"
+VENV="$RUNTIME/venv-$(py_tag "$PYTHON")-$LOCK_SUM"
+MARKER="$VENV/installed-wheel"
+WANT="$(basename "$WHEEL") $LOCK_SUM"
+
+mkdir -p "$DATA" "$RUNTIME"
+chmod 700 "$DATA" "$RUNTIME" 2>/dev/null || true
+if [ ! -x "$VENV/bin/python" ]; then
+  "$PYTHON" -m venv "$VENV" >/dev/null 2>&1 || fail 6 "无法创建私有 Python 环境（python -m venv 失败）"
+fi
+
+if [ "$(cat "$MARKER" 2>/dev/null || true)" != "$WANT" ]; then
+  LOG="$VENV/install.log"
+  PIP="$VENV/bin/python -m pip install --disable-pip-version-check --no-input --no-cache-dir --quiet"
+  # 1) offline, hash-locked, from the bundled wheels (the normal path; the lock includes healthcare itself)
+  if $PIP --no-index --find-links "$WHEELS" --require-hashes -r "$LOCK" >"$LOG" 2>&1; then
+    :
+  elif [ -n "${HEALTH_ADVISOR_OFFLINE:-}" ]; then
+    fail 6 "随包 wheel 与本机 Python/平台不匹配，且已禁止联网安装（HEALTH_ADVISOR_OFFLINE）；详见 $LOG"
+  else
+    # 2) same pinned versions, bundled wheels first and PyPI for the platform wheels that did not fit
+    PINS="$VENV/requirements.pins"
+    sed 's/ --hash=.*$//' "$LOCK" > "$PINS"
+    $PIP --find-links "$WHEELS" -r "$PINS" >>"$LOG" 2>&1 \
+      || fail 6 "安装依赖失败：随包 wheel 不匹配本机平台，且无法从 PyPI 获取相同版本；详见 $LOG"
+  fi
+  printf '%s\n' "$WANT" > "$MARKER"
+fi
+
+# Stable entry point for the expert's MCP config (which cannot know where
+# WorkBuddy installed this package): overwrite a tiny shim on every run.
+mkdir -p "$DATA/bin"
+printf '#!/bin/sh\nexec "%s" "$@"\n' "$SKILL_DIR/scripts/health-advisor" > "$DATA/bin/health-advisor.new" 2>/dev/null \
+  && chmod 755 "$DATA/bin/health-advisor.new" 2>/dev/null \
+  && cat "$DATA/bin/health-advisor.new" > "$DATA/bin/health-advisor" 2>/dev/null \
+  && chmod 755 "$DATA/bin/health-advisor" 2>/dev/null || true
+
+export HEALTH_ADVISOR_DATA_DIR="$DATA"
+exec "$VENV/bin/python" -m healthcare.advisor "$@"

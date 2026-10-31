@@ -1,0 +1,24 @@
+{
+  "asset_type": "workbuddy_expert",
+  "platform_display_name": "领域领航员",
+  "platform_profession": "新领域学习架构师",
+  "platform_status": "published",
+  "version": "1.1.1",
+  "source_repository": "map-domain-experts",
+  "source_commit": "2a0bd69795e699bca06e209245ff49d8e03268b1",
+  "artifact": "domain-navigator-expert-1.1.1.zip",
+  "artifact_provenance": "rebuilt from exact-version tracked source; original platform-uploaded ZIP not found",
+  "artifact_bytes": 401930,
+  "artifact_sha256": "4e2ce36170651013b224116d11768670a7320e558aa78009c8b5b23c0dba9ed5",
+  "license": "MIT",
+  "build_command": "python3 scripts/verify_workbuddy_expert.py && python3 scripts/build_workbuddy_expert.py",
+  "verification": {
+    "source_validator": "passed",
+    "validator_unit_tests": 17,
+    "zip_integrity": "passed",
+    "unsafe_paths": 0,
+    "credential_shape_matches": 0,
+    "zip_entries": 7,
+    "real_user_data": "not detected"
+  }
+}
