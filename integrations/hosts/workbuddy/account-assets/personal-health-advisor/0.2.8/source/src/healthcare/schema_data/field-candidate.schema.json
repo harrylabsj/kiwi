@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harrylabsj/healthcare/schemas/field-candidate.schema.json",
+  "title": "FieldCandidate",
+  "description": "A proposed extraction field awaiting Control confirmation. A candidate is never a formal health fact until it becomes a confirmed Observation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "job_id", "field", "raw_value", "normalized_value", "confidence", "evidence_id", "mapping_status", "status", "verification_status", "created_at"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "job_id": { "type": "string", "minLength": 1 },
+    "person_id": { "type": ["string", "null"], "minLength": 1 },
+    "field": { "type": "string", "minLength": 1 },
+    "raw_value": { "type": "string" },
+    "normalized_value": { "type": "number" },
+    "unit": { "type": ["string", "null"], "minLength": 1 },
+    "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+    "evidence_id": { "type": "string", "minLength": 1 },
+    "raw_unit": { "type": ["string", "null"] },
+    "reference_range_original": { "type": ["string", "null"] },
+    "raw_comparator": { "type": ["string", "null"] },
+    "precision": { "type": ["integer", "null"], "minimum": 0 },
+    "mapping_status": { "type": "string", "enum": ["mapped", "unmapped", "ambiguous"] },
+    "status": { "type": "string", "minLength": 1 },
+    "observation_id": { "type": ["string", "null"], "minLength": 1 },
+    "verification_status": { "type": "string", "minLength": 1 },
+    "value_type": { "type": "string", "enum": ["numeric", "text", "code", "boolean", "ratio", "range"] },
+    "text_value": { "type": ["string", "null"] },
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}

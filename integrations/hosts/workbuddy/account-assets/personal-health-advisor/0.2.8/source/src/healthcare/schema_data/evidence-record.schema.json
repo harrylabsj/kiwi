@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harrylabsj/healthcare/schemas/evidence-record.schema.json",
+  "title": "EvidenceRecord",
+  "description": "Page-level source evidence binding a candidate or confirmed observation back to its original document line.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "document_id", "page_number", "source_text", "locator"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "document_id": { "type": "string", "minLength": 1 },
+    "page_number": { "type": "integer", "minimum": 1 },
+    "source_text": { "type": "string" },
+    "locator": { "type": "string", "minLength": 1 },
+    "page_id": { "type": ["string", "null"] },
+    "ocr_block_id": { "type": ["string", "null"] },
+    "coordinates": { "type": ["object", "null"] },
+    "coordinate_system": { "type": ["string", "null"] },
+    "source_span": { "type": ["array", "null"], "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 }
+  }
+}

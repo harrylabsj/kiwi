@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "personal-health-advisor": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "./skills/personal-health-advisor/scripts/health-advisor-mcp.mjs"
+      ],
+      "runtime": {"type": "node", "version": "20"},
+      "timeout": 60000,
+      "x-workbuddy": {
+        "displayName": {
+          "zh": "个人健康管理工作台",
+          "en": "Personal Health Management Workbench"
+        },
+        "description": {
+          "zh": "在 WorkBuddy 内展示本机健康档案或明确标记的虚构示例，并提供记录与趋势工具；不诊断。",
+          "en": "Renders a local health record or a clearly labeled fictional demo in WorkBuddy, with record and trend tools; non-diagnostic."
+        },
+        "icon": "./avatars/personal-health-advisor.png",
+        "auth": {
+          "type": "none"
+        }
+      }
+    }
+  }
+}
