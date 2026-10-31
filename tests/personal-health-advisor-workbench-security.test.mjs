@@ -11,8 +11,8 @@ const helperSource = template.slice(
   template.indexOf('const esc='),
   template.indexOf('const md='),
 );
-const { esc, enumValue, finiteNumber, cssPercent } = runInNewContext(
-  `(() => { ${helperSource}; return { esc, enumValue, finiteNumber, cssPercent }; })()`,
+const { esc, enumValue, finiteNumber, cssPercent, otherActivitiesMarkup } = runInNewContext(
+  `(() => { ${helperSource}; return { esc, enumValue, finiteNumber, cssPercent, otherActivitiesMarkup }; })()`,
 );
 
 test('archived health workbench rendering boundary', async (t) => {
@@ -24,6 +24,24 @@ test('archived health workbench rendering boundary', async (t) => {
   await t.test('keeps ordinary health text readable after encoding', () => {
     assert.equal(esc('血红蛋白 132 g/L · 晨间'), '血红蛋白 132 g/L · 晨间');
     assert.equal(esc('7.5'), '7.5');
+  });
+
+  await t.test('renders ordinary other-activity fields as readable markup', () => {
+    assert.equal(
+      otherActivitiesMarkup([{ name: '散步', sessions30: 4, last_label: '昨天' }], 14),
+      '<span>近 14 天没有记录的其他项目：</span><span class="chip">散步 · 近 30 天 4 次 · 最近 昨天</span>',
+    );
+  });
+
+  await t.test('encodes malicious other-activity text and attribute-like values', () => {
+    const attack = '"><img src=x onerror=alert(1)>';
+    const rendered = otherActivitiesMarkup(
+      [{ name: attack, sessions30: attack, last_label: attack }],
+      attack,
+    );
+    assert.equal((rendered.match(/<img\b/g) ?? []).length, 0);
+    assert.ok(rendered.includes('&quot;&gt;&lt;img src=x onerror=alert(1)&gt;'));
+    assert.equal((rendered.match(/<span class="chip">/g) ?? []).length, 1);
   });
 
   await t.test('rejects model-controlled CSS classes and clamps style percentages', () => {

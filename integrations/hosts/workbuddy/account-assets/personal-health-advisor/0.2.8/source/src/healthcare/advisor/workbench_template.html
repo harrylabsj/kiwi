@@ -288,6 +288,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const enumValue=(value,allowed,fallback)=>allowed.includes(value)?value:fallback;
 const finiteNumber=(value,fallback=0)=>Number.isFinite(Number(value))?Number(value):fallback;
 const cssPercent=value=>Math.max(0,Math.min(100,finiteNumber(value)));
+const otherActivitiesMarkup=(items,rangeDays)=>`<span>近 ${esc(rangeDays)} 天没有记录的其他项目：</span>`+items.map(item=>`<span class="chip">${esc(item.name)} · 近 30 天 ${esc(item.sessions30)} 次 · 最近 ${esc(item.last_label)}</span>`).join('');
 const md=d=>parseInt(d.slice(5,7))+'/'+parseInt(d.slice(8,10));
 const tip=$('#tip');
 function showTip(text,x,y){tip.textContent=String(text).replace(/<\/?b>/gi,'').replace(/<br\s*\/?>(?:\n)?/gi,'\n');tip.style.opacity=1;const w=tip.offsetWidth,h=tip.offsetHeight;tip.style.left=Math.min(x+14,innerWidth-w-8)+'px';tip.style.top=(y-h-12<8?y+16:y-h-12)+'px';}
@@ -381,7 +382,7 @@ function renderActivities(){
   return `<div class="act"><div><div class="name">${esc(a.name)}</div><div class="meta">近 30 天 <b>${esc(a.sessions30)}</b> 次 · 最近 <span class="pill ${enumValue(a.last_class,['good','warn','none'],'none')}">${esc(a.last_label)}</span></div>${a.total?`<div class="total">${esc(a.total)}</div>`:''}</div><div><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(a.name)}每日记录"><line x1="0" x2="${W}" y1="${T+ph}" y2="${T+ph}" stroke="var(--line)"/>${bars}${xl}${hit}</svg></div></div>`;
  }).join('');
  const o=$('#others');
- if(D.other_activities.length){o.hidden=false;o.innerHTML=`<span>近 ${D.range.days} 天没有记录的其他项目：</span>`+D.other_activities.map(o=>`<span class="chip">${esc(o.name)} · 近 30 天 ${o.sessions30} 次 · 最近 ${esc(o.last_label)}</span>`).join('');}
+ if(D.other_activities.length){o.hidden=false;o.innerHTML=otherActivitiesMarkup(D.other_activities,D.range.days);}
  else{o.hidden=true;o.innerHTML='';}
 }
 
