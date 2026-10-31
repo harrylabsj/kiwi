@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "freight-reconciliation"
+version = "0.3.0"
+description = "Payer-side deterministic freight reconciliation core: import, re-calculation, evidence-linked differences. Local-first, no auto-payment."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Haina", email = "1711496337@qq.com" }]
+keywords = ["freight", "reconciliation", "logistics", "mcp"]
+# 与 dist 宿主插件 requirements.txt 同一锁定口径（确定性构建）
+dependencies = [
+    "jsonschema==4.26.0",
+    "rfc3339-validator==0.1.4",
+    "openpyxl==3.1.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+freight-mcp = "adapters.mcp_server:main"
+freight-admin = "adapters.admin_server:main"
+
+[project.urls]
+Homepage = "https://github.com/harrylabsj/freight-reconciliation"
+Repository = "https://github.com/harrylabsj/freight-reconciliation"
+
+# 三个根各映射一个包：引擎(src/)、连接器(adapters/)、工具契约(02_contracts/)。
+# freight_contracts 让 uvx/pip 安装后仍能经 importlib.resources 读到契约 JSON。
+[tool.setuptools]
+packages = [
+    "freight_core",
+    "freight_core.export",
+    "freight_core.ingest",
+    "freight_core.mapping",
+    "freight_core.matching",
+    "freight_core.pricing",
+    "freight_core.reconcile",
+    "freight_core.review",
+    "freight_core.rules",
+    "freight_core.storage",
+    "adapters",
+    "freight_contracts",
+]
+package-dir = { freight_core = "src/freight_core", adapters = "adapters", freight_contracts = "02_contracts" }
+
+[tool.setuptools.package-data]
+freight_contracts = ["*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

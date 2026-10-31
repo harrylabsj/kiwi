@@ -1,0 +1,8 @@
+interface:
+  display_name: "WeChat Social Assistant"
+  short_description: "Local WeChat relationship memory"
+  brand_color: "#2563EB"
+  default_prompt: "Use $wechat-social-assistant to review my local WeChat relationship memory and draft the next follow-up."
+
+policy:
+  allow_implicit_invocation: true

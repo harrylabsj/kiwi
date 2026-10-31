@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:haina:freight:run-manifest:0.1.0",
+  "title": "run-manifest",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workspace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "case_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000000000
+    },
+    "rule_bundle_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "mapping_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "matching_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "input_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "engine_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "QUEUED",
+        "RUNNING",
+        "SUCCEEDED",
+        "PARTIAL",
+        "FAILED",
+        "CANCELLED"
+      ]
+    },
+    "bill_line_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "comparable_line_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "unresolved_line_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "out_of_scope_line_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "source_signed_total_minor": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -1000000000000,
+          "maximum": 1000000000000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "comparable_billed_minor": {
+      "type": "integer",
+      "minimum": -1000000000000,
+      "maximum": 1000000000000
+    },
+    "unresolved_billed_minor": {
+      "type": "integer",
+      "minimum": -1000000000000,
+      "maximum": 1000000000000
+    },
+    "out_of_scope_billed_minor": {
+      "type": "integer",
+      "minimum": -1000000000000,
+      "maximum": 1000000000000
+    },
+    "amount_complete": {
+      "type": "boolean"
+    },
+    "history_coverage_note": {
+      "type": "string",
+      "minLength": 1
+    },
+    "supersedes_run_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "case_id",
+    "workspace_id",
+    "case_revision",
+    "rule_bundle_digest",
+    "mapping_digest",
+    "matching_digest",
+    "input_digest",
+    "engine_version",
+    "source_ids",
+    "created_at",
+    "status",
+    "bill_line_count",
+    "comparable_line_count",
+    "unresolved_line_count",
+    "out_of_scope_line_count",
+    "source_signed_total_minor",
+    "comparable_billed_minor",
+    "unresolved_billed_minor",
+    "out_of_scope_billed_minor",
+    "amount_complete",
+    "history_coverage_note",
+    "supersedes_run_id"
+  ],
+  "additionalProperties": false
+}
