@@ -1,0 +1,292 @@
+{
+  "schema_version": "2026-08-23",
+  "id": "wechat-social-assistant",
+  "name": "WeChat Social Assistant",
+  "version": "1.1.0",
+  "description": "Local-first relationship memory and follow-up assistant for visible WeChat conversations.",
+  "ecosystems": [
+    "hermes",
+    "openclaw-plugin",
+    "openclaw-non-plugin",
+    "codex",
+    "claude-code"
+  ],
+  "cli": {
+    "entrypoint": "python3 -m wsa.cli",
+    "console_script": "wsa",
+    "doctor": "agent/hermes/wechat-social-assistant/scripts/doctor.py",
+    "runner": "agent/hermes/wechat-social-assistant/scripts/wsa_run.py"
+  },
+  "mcp": {
+    "command": "python3 -m wsa.mcp_server",
+    "console_script": "wsa-mcp",
+    "transport": "stdio",
+    "read_only": false,
+    "write_tools_require_confirmation": true,
+    "tools": [
+      "get_status",
+      "get_audit_report",
+      "search_contacts",
+      "get_contact_brief",
+      "get_next_followup",
+      "get_daily_report",
+      "get_weekly_report",
+      "get_relationship_quality",
+      "get_relationship_dashboard",
+      "list_relationship_sources",
+      "list_relationship_candidates",
+      "confirm_relationship_candidate",
+      "list_feedback",
+      "record_feedback",
+      "list_recent_captures",
+      "get_capture_observations",
+      "list_ocr_reviews",
+      "record_ocr_review"
+    ],
+    "resources": [
+      "wsa://status",
+      "wsa://audit",
+      "wsa://contacts",
+      "wsa://daily-report",
+      "wsa://weekly-report",
+      "wsa://relationship-quality",
+      "wsa://relationship-dashboard",
+      "wsa://relationship-sources",
+      "wsa://relationship-candidates"
+    ],
+    "prompts": [
+      "daily-relationship-review",
+      "weekly-relationship-review",
+      "contact-followup",
+      "relationship-candidate-review",
+      "safe-capture-review"
+    ],
+    "write_policy": "Mutating MCP tools require explicit confirmation: record_feedback needs confirmation_text='record local feedback'; confirm_relationship_candidate needs confirmation_text='confirm relationship candidate'; record_ocr_review needs confirmation_text='review OCR observation'. The MCP launcher restricts db_path, captures_dir, and log_file to WSA_ALLOWED_ROOT."
+  },
+  "openclaw_plugin": {
+    "manifest": "agent/openclaw/wechat-social-assistant-plugin/openclaw.plugin.json",
+    "package": "agent/openclaw/wechat-social-assistant-plugin/package.json",
+    "entrypoint": "agent/openclaw/wechat-social-assistant-plugin/index.js",
+    "install": "openclaw plugins install ./agent/openclaw/wechat-social-assistant-plugin",
+    "enable": "openclaw plugins enable wechat-social-assistant",
+    "default_mode": "read_only",
+    "write_policy": "The plugin exposes read tools by default. Set trustedWrites=true only for a verified local installation; write calls still require the MCP confirmation fields."
+  },
+  "capabilities": [
+    "local_status",
+    "local_audit",
+    "data_export_delete",
+    "contact_search",
+    "contact_brief",
+    "relationship_quality",
+    "relationship_candidate_discovery",
+    "feedback_loop",
+    "followup_suggestions",
+    "daily_analysis",
+    "weekly_analysis",
+    "relationship_dashboard",
+    "relationship_cockpit",
+    "multi_source_inputs",
+    "wechat_archive_manifest_import",
+    "mcp_read_only_interface",
+    "obsidian_export",
+    "obsidian_import",
+    "manual_enrichment",
+    "ocr_import",
+    "hotkey_shortcuts",
+    "watch_interval_settings",
+    "explicit_watch_mode",
+    "openclaw_native_plugin",
+    "ocr_review_queue",
+    "sqlite_backup_and_migrations",
+    "capture_connector_boundary"
+  ],
+  "commands": [
+    {
+      "name": "status",
+      "mode": "read",
+      "example": "python3 -m wsa.cli status"
+    },
+    {
+      "name": "connectors",
+      "mode": "read",
+      "example": "python3 -m wsa.cli connectors"
+    },
+    {
+      "name": "backup",
+      "mode": "write-files",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli backup --out ./data/backups/social.db --yes"
+    },
+    {
+      "name": "ocr-review",
+      "mode": "read-or-write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli ocr-review --observation-id 12 --action correct --corrected-text '修正后的文本' --yes"
+    },
+    {
+      "name": "audit",
+      "mode": "read",
+      "example": "python3 -m wsa.cli audit"
+    },
+    {
+      "name": "export-data",
+      "mode": "write-files",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli export-data --out ./wsa-export.json --yes"
+    },
+    {
+      "name": "delete-contact",
+      "mode": "delete-data",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli delete-contact NAME --dry-run"
+    },
+    {
+      "name": "contacts",
+      "mode": "read",
+      "example": "python3 -m wsa.cli contacts --query NAME"
+    },
+    {
+      "name": "brief",
+      "mode": "read",
+      "example": "python3 -m wsa.cli brief NAME"
+    },
+    {
+      "name": "quality",
+      "mode": "read",
+      "example": "python3 -m wsa.cli quality --contact NAME"
+    },
+    {
+      "name": "dashboard",
+      "mode": "read",
+      "example": "python3 -m wsa.cli dashboard"
+    },
+    {
+      "name": "cockpit",
+      "mode": "write-database-and-reports",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli cockpit --vault \"$HOME/Hbrain\" --yes --replace-wechat-archive"
+    },
+    {
+      "name": "candidates",
+      "mode": "read",
+      "example": "python3 -m wsa.cli candidates --min-confidence 45"
+    },
+    {
+      "name": "candidate-confirm",
+      "mode": "write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli candidate-confirm NAME --source-chat GROUP --yes"
+    },
+    {
+      "name": "weekly-report",
+      "mode": "read",
+      "example": "python3 -m wsa.cli weekly-report --date 2026-05-27"
+    },
+    {
+      "name": "feedback-list",
+      "mode": "read",
+      "example": "python3 -m wsa.cli feedback-list --contact NAME"
+    },
+    {
+      "name": "feedback",
+      "mode": "write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli feedback NAME too_pushy --note 'draft was too direct'"
+    },
+    {
+      "name": "next",
+      "mode": "read",
+      "example": "python3 -m wsa.cli next --contact NAME"
+    },
+    {
+      "name": "suggest",
+      "mode": "read",
+      "example": "python3 -m wsa.cli suggest --contact NAME"
+    },
+    {
+      "name": "analyze",
+      "mode": "write-reports",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli analyze"
+    },
+    {
+      "name": "export-obsidian",
+      "mode": "write-files",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli export-obsidian --vault \"$HOME/Documents/Obsidian Vault\""
+    },
+    {
+      "name": "import-obsidian",
+      "mode": "write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli import-obsidian --vault \"$HOME/Documents/Obsidian Vault\" --yes"
+    },
+    {
+      "name": "sources",
+      "mode": "read",
+      "example": "python3 -m wsa.cli sources --contact NAME"
+    },
+    {
+      "name": "import-source",
+      "mode": "write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli import-source ./contacts.vcf --yes"
+    },
+    {
+      "name": "import-wechat-archive",
+      "mode": "write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli import-wechat-archive --yes --replace"
+    },
+    {
+      "name": "import-image",
+      "mode": "write-database",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli import-image ./screenshot.png --contact NAME"
+    },
+    {
+      "name": "quick-capture",
+      "mode": "capture",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli quick-capture"
+    },
+    {
+      "name": "watch-interval",
+      "mode": "write-settings",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli watch-interval 10"
+    },
+    {
+      "name": "watch",
+      "mode": "capture",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli watch --interval 60"
+    },
+    {
+      "name": "stop-watch",
+      "mode": "process-control",
+      "requires_confirmation": true,
+      "example": "python3 -m wsa.cli stop-watch"
+    }
+  ],
+  "data_policy": {
+    "storage": "local-first",
+    "database": "data/social.db by default",
+    "manual_enrichment": "contact_enrichments rows inside data/social.db",
+    "relationship_sources": "relationship_sources rows inside data/social.db from user-provided local files and safe WeChat archive manifest metadata",
+    "screenshots": "data/captures by default",
+    "reads_wechat_database": false,
+    "sends_messages": false,
+    "requires_user_confirmation_for_writes": true,
+    "export_delete": "export-data writes a local JSON export; delete-contact removes one contact after --yes or previews with --dry-run.",
+    "auditability": "Commands print affected paths and process state; generated files stay local unless the user publishes them."
+  },
+  "install": {
+    "from_repo": "python3 -m pip install git+https://github.com/harrylabsj/wechat-social-assistant.git",
+    "from_checkout": "python3 -m pip install -e .",
+    "hermes_skill": "hermes skills install https://raw.githubusercontent.com/harrylabsj/wechat-social-assistant/main/agent/hermes/wechat-social-assistant/SKILL.md --yes",
+    "openclaw_plugin": "openclaw plugins install ./agent/openclaw/wechat-social-assistant-plugin",
+    "openclaw_skill_fallback": "Copy agent/openclaw/wechat-social-assistant.md into the host skill directory when native plugins are unavailable."
+  }
+}

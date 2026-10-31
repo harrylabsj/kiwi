@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:haina:freight:rate-rule:0.1.0",
+  "title": "rate-rule",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "rule_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "workspace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "carrier_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "route_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "vehicle_class": {
+      "type": "string",
+      "minLength": 1
+    },
+    "charge_code": {
+      "type": "string",
+      "enum": [
+        "BASE",
+        "WAIT",
+        "TOLL"
+      ]
+    },
+    "currency": {
+      "const": "CNY"
+    },
+    "amount_basis": {
+      "type": "string",
+      "enum": [
+        "GROSS",
+        "NET"
+      ]
+    },
+    "effective_from": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "effective_to": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "formula": {
+      "type": "string",
+      "enum": [
+        "PER_TRIP",
+        "WAIT_BLOCKS",
+        "ACTUAL_RECEIPT"
+      ]
+    },
+    "rate_minor": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000000000
+    },
+    "free_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 31536000
+    },
+    "block_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31536000
+    },
+    "cap_minor": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "confirmed": {
+      "type": "boolean"
+    },
+    "confirmation_ref": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "schema_version",
+    "rule_id",
+    "version",
+    "workspace_id",
+    "carrier_id",
+    "route_id",
+    "vehicle_class",
+    "charge_code",
+    "currency",
+    "amount_basis",
+    "effective_from",
+    "effective_to",
+    "formula",
+    "rate_minor",
+    "free_seconds",
+    "block_seconds",
+    "cap_minor",
+    "confirmed",
+    "confirmation_ref",
+    "source_refs"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "confirmed": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "confirmation_ref": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  ]
+}

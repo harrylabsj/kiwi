@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:haina:freight:mapping-profile:0.1.0",
+  "title": "mapping-profile",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "mapping_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000000000
+    },
+    "workspace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "carrier_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "structure_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source_column": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_field": {
+            "type": "string",
+            "minLength": 1
+          },
+          "data_type": {
+            "type": "string",
+            "enum": [
+              "STRING",
+              "INTEGER",
+              "MONEY_YUAN",
+              "MONEY_MINOR",
+              "DATETIME",
+              "ENUM"
+            ]
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "amount_basis": {
+            "type": "string",
+            "enum": [
+              "GROSS",
+              "NET",
+              "UNKNOWN",
+              "NOT_APPLICABLE"
+            ]
+          },
+          "source_timezone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "source_column",
+          "target_field",
+          "data_type",
+          "unit",
+          "amount_basis",
+          "source_timezone"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "confirmed": {
+      "type": "boolean"
+    },
+    "confirmation_ref": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "mapping_id",
+    "version",
+    "workspace_id",
+    "carrier_id",
+    "structure_digest",
+    "fields",
+    "confirmed",
+    "confirmation_ref"
+  ],
+  "additionalProperties": false
+}

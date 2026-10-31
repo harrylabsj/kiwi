@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:haina:freight:source-asset:0.1.0",
+  "title": "source-asset",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "asset_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workspace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "TRIPS",
+        "BILL",
+        "RATES",
+        "POD",
+        "ACCESSORIAL",
+        "HISTORY"
+      ]
+    },
+    "original_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "byte_size": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 26214400
+    },
+    "imported_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "parser_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope_note": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mime_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "selected_sheets": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 0
+    },
+    "detail_rows": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "parse_error_rows": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "declared_total_minor": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -1000000000000,
+          "maximum": 1000000000000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "parsed_total_minor": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -1000000000000,
+          "maximum": 1000000000000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "amount_complete": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "asset_id",
+    "workspace_id",
+    "case_id",
+    "kind",
+    "original_name",
+    "sha256",
+    "byte_size",
+    "imported_at",
+    "parser_version",
+    "scope_note",
+    "mime_type",
+    "selected_sheets",
+    "detail_rows",
+    "parse_error_rows",
+    "declared_total_minor",
+    "parsed_total_minor",
+    "amount_complete"
+  ],
+  "additionalProperties": false
+}

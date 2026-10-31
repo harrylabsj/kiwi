@@ -1,0 +1,20 @@
+[project]
+name = "wechat-social-assistant"
+version = "1.1.0"
+description = "Local-first WeChat relationship memory assistant."
+requires-python = ">=3.11"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["wsa"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+wsa = ["native/*.swift"]
+
+[project.scripts]
+wsa = "wsa.cli:main"
+wsa-mcp = "wsa.mcp_server:main"

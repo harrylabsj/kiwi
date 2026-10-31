@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:haina:freight:reconciliation-result:0.1.0",
+  "title": "reconciliation-result",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "group_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "comparison_status": {
+      "type": "string",
+      "enum": [
+        "COMPARABLE",
+        "NOT_COMPARABLE"
+      ]
+    },
+    "evidence_status": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "MISSING",
+        "CONFLICT"
+      ]
+    },
+    "billed_minor": {
+      "type": "integer",
+      "minimum": -1000000000000,
+      "maximum": 1000000000000
+    },
+    "expected_minor": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -1000000000000,
+          "maximum": 1000000000000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "delta_minor": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -1000000000000,
+          "maximum": 1000000000000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rule_ref": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 0
+    },
+    "trace": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 0
+    },
+    "source_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 0
+    },
+    "result_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "required": [
+    "schema_version",
+    "group_id",
+    "comparison_status",
+    "evidence_status",
+    "billed_minor",
+    "expected_minor",
+    "delta_minor",
+    "rule_ref",
+    "issues",
+    "trace",
+    "source_refs",
+    "result_digest"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "comparison_status": {
+            "const": "NOT_COMPARABLE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "expected_minor": {
+            "type": "null"
+          },
+          "delta_minor": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "comparison_status": {
+            "const": "COMPARABLE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "expected_minor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000000000
+          },
+          "delta_minor": {
+            "type": "integer",
+            "minimum": -1000000000000,
+            "maximum": 1000000000000
+          }
+        }
+      }
+    }
+  ]
+}

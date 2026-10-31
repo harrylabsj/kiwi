@@ -1,0 +1,773 @@
+{
+  "schema_version": "0.1.0",
+  "status": "DESIGN_ONLY_NOT_REGISTERED",
+  "notes": [
+    "No workspace_id/actor_id/confirmed supplied by the model. Service binds identity and verifies ownership.",
+    "Annotations are hints, not permissions.",
+    "No final approve/pay/send tool.",
+    "Case selection/restoration is provided by trusted local UI context, not guessed IDs."
+  ],
+  "tools": [
+    {
+      "name": "freight_create_case",
+      "description": "case_id / case_revision",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "organization_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "carrier_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "period_from": {
+            "type": "string",
+            "minLength": 1
+          },
+          "period_to": {
+            "type": "string",
+            "minLength": 1
+          },
+          "currency": {
+            "const": "CNY"
+          },
+          "amount_basis": {
+            "enum": [
+              "GROSS",
+              "NET"
+            ]
+          },
+          "scope_note": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "organization_ref",
+          "carrier_ref",
+          "period_from",
+          "period_to",
+          "currency",
+          "amount_basis",
+          "scope_note",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "case_id / case_revision"
+    },
+    {
+      "name": "freight_register_asset",
+      "description": "asset_id / import_job_id",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "upload_handle": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "TRIPS",
+              "BILL",
+              "RATES",
+              "POD",
+              "ACCESSORIAL",
+              "HISTORY"
+            ]
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "case_id",
+          "upload_handle",
+          "kind",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "asset_id / import_job_id"
+    },
+    {
+      "name": "freight_inspect_asset",
+      "description": "columns / redacted_samples / row_controls / next_cursor",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "asset_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "columns / redacted_samples / row_controls / next_cursor"
+    },
+    {
+      "name": "freight_prepare_mapping",
+      "description": "candidate_id / digest / confirmation_entry",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "asset_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source_column": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "target_field": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "data_type": {
+                  "type": "string",
+                  "enum": [
+                    "STRING",
+                    "INTEGER",
+                    "MONEY_YUAN",
+                    "MONEY_MINOR",
+                    "DATETIME",
+                    "ENUM"
+                  ]
+                },
+                "unit": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "amount_basis": {
+                  "type": "string",
+                  "enum": [
+                    "GROSS",
+                    "NET",
+                    "UNKNOWN",
+                    "NOT_APPLICABLE"
+                  ]
+                },
+                "source_timezone": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "source_column",
+                "target_field",
+                "data_type",
+                "unit",
+                "amount_basis",
+                "source_timezone"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "asset_id",
+          "fields",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "candidate_id / digest / confirmation_entry"
+    },
+    {
+      "name": "freight_prepare_rate_rules",
+      "description": "candidate_id / conflicts / confirmation_entry",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "rules": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "properties": {
+                "route_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "vehicle_class": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "charge_code": {
+                  "type": "string",
+                  "enum": [
+                    "BASE",
+                    "WAIT",
+                    "TOLL"
+                  ]
+                },
+                "currency": {
+                  "const": "CNY"
+                },
+                "amount_basis": {
+                  "type": "string",
+                  "enum": [
+                    "GROSS",
+                    "NET"
+                  ]
+                },
+                "effective_from": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$"
+                },
+                "effective_to": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$"
+                },
+                "formula": {
+                  "type": "string",
+                  "enum": [
+                    "PER_TRIP",
+                    "WAIT_BLOCKS",
+                    "ACTUAL_RECEIPT"
+                  ]
+                },
+                "rate_minor": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000000000
+                },
+                "free_seconds": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 31536000
+                },
+                "block_seconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 31536000
+                },
+                "cap_minor": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000000000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "source_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "route_id",
+                "vehicle_class",
+                "charge_code",
+                "currency",
+                "amount_basis",
+                "effective_from",
+                "effective_to",
+                "formula",
+                "rate_minor",
+                "free_seconds",
+                "block_seconds",
+                "cap_minor",
+                "source_refs"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "rules",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "candidate_id / conflicts / confirmation_entry"
+    },
+    {
+      "name": "freight_list_match_candidates",
+      "description": "source_line_id / candidates / reasons / next_cursor",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "case_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "source_line_id / candidates / reasons / next_cursor"
+    },
+    {
+      "name": "freight_prepare_match",
+      "description": "candidate_id / controls / confirmation_entry",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "bill_line_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "trip_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "service_leg_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "occurrence_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_refs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "bill_line_ids",
+          "trip_id",
+          "service_leg_id",
+          "occurrence_id",
+          "source_refs",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "candidate_id / controls / confirmation_entry"
+    },
+    {
+      "name": "freight_start_run",
+      "description": "run_id / job_id / frozen_input_digest",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "case_id",
+          "expected_revision",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "run_id / job_id / frozen_input_digest"
+    },
+    {
+      "name": "freight_get_job",
+      "description": "status / completed / failed / recovery_action",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "status / completed / failed / recovery_action"
+    },
+    {
+      "name": "freight_get_summary",
+      "description": "amounts / denominators / unresolved / completeness",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "amounts / denominators / unresolved / completeness"
+    },
+    {
+      "name": "freight_list_issues",
+      "description": "items / next_cursor / complete",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "issue_code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "review_status": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "items / next_cursor / complete"
+    },
+    {
+      "name": "freight_get_evidence",
+      "description": "redacted_excerpt / locator / source_digest",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "issue_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_ref": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "issue_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "redacted_excerpt / locator / source_digest"
+    },
+    {
+      "name": "freight_prepare_review",
+      "description": "candidate_id / current_digest / confirmation_entry",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "group_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected_result_digest": {
+            "type": "string",
+            "minLength": 1
+          },
+          "decision": {
+            "enum": [
+              "CONFIRMED_DIFFERENCE",
+              "ACCEPTED_AS_BILLED",
+              "NEEDS_EVIDENCE",
+              "DISPUTED",
+              "OUT_OF_SCOPE"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_refs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "run_id",
+          "group_id",
+          "expected_result_digest",
+          "decision",
+          "reason",
+          "source_refs",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "candidate_id / current_digest / confirmation_entry"
+    },
+    {
+      "name": "freight_prepare_export",
+      "description": "candidate_or_draft_id / unresolved / completeness / confirmation_entry",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "projection": {
+            "enum": [
+              "INTERNAL_FULL",
+              "CARRIER_REDACTED"
+            ]
+          },
+          "purpose": {
+            "enum": [
+              "INTERNAL_REVIEW",
+              "CARRIER_CHECK"
+            ]
+          },
+          "mode": {
+            "enum": [
+              "DRAFT",
+              "REQUEST_FREEZE"
+            ]
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "run_id",
+          "projection",
+          "purpose",
+          "mode",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "proposed_output": "candidate_or_draft_id / unresolved / completeness / confirmation_entry"
+    }
+  ]
+}
