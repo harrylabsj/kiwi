@@ -25,6 +25,45 @@ const listing = {
 };
 
 describe("Catalog binding-signed listing publish", () => {
+  it("单独签署开放询价授权，绑定当前商家实例与明确条款", async () => {
+    const { raw, runtime } = identity();
+    let body: Record<string, unknown> | undefined;
+    let claims: Record<string, unknown> | undefined;
+    const fetchImpl = (async (_url: string | URL, init?: Parameters<typeof fetch>[1]) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const headers = new Headers(init?.headers);
+      const signature = headers.get("x-kiwi-binding-jws");
+      if (!signature) throw new Error("missing binding signature");
+      expect(headers.has("authorization")).toBe(false);
+      claims = JSON.parse(verifyCompactJws(signature, createPublicKey(raw.publicKeyPem)).payload.toString("utf8")) as Record<string, unknown>;
+      return Response.json({ granted: true, terms_version: "open-inquiry-v1" });
+    }) as typeof fetch;
+    const client = new CatalogClient({ baseUrl: CATALOG, fetchImpl });
+    const result = await client.setPublicInquiryConsent({ agentId: AGENT, bindingId: BINDING,
+      keyId: runtime.keyId, runtimeOrigin: "https://shop.example", serviceEpoch: 1 }, runtime, true);
+    expect(result).toEqual({ granted: true, termsVersion: "open-inquiry-v1" });
+    expect(claims?.["path"]).toBe(`/v1/agents/${AGENT}/public-inquiry-consent`);
+    expect(claims?.["body_digest"]).toBe(`sha256:${createHash("sha256").update(canonicalize(body)).digest("hex")}`);
+    expect(body).toEqual({ binding: { binding_id: BINDING }, consent: { granted: true, terms_version: "open-inquiry-v1" } });
+  });
+
+  it("以签名只读接口对账开放询价授权，拒绝无效状态", async () => {
+    const { raw, runtime } = identity();
+    let claim: Record<string, unknown> | undefined;
+    const fetchImpl = (async (_url: string | URL, init?: Parameters<typeof fetch>[1]) => {
+      expect(init?.method).toBe("GET");
+      const signature = new Headers(init?.headers).get("x-kiwi-binding-jws");
+      if (!signature) throw new Error("missing binding signature");
+      claim = JSON.parse(verifyCompactJws(signature, createPublicKey(raw.publicKeyPem)).payload.toString("utf8")) as Record<string, unknown>;
+      return Response.json({ granted: true, policy_active: false, terms_version: "open-inquiry-v1" });
+    }) as typeof fetch;
+    const client = new CatalogClient({ baseUrl: CATALOG, fetchImpl });
+    const result = await client.readPublicInquiryConsent({ agentId: AGENT, bindingId: BINDING,
+      keyId: runtime.keyId, runtimeOrigin: "https://shop.example", serviceEpoch: 1 }, runtime);
+    expect(result).toEqual({ granted: true, policyActive: false, termsVersion: "open-inquiry-v1" });
+    expect(claim?.["path"]).toBe(`/v1/agents/${AGENT}/public-inquiry-consent`);
+    expect(claim?.["body_digest"]).toBe(`sha256:${createHash("sha256").update(canonicalize({})).digest("hex")}`);
+  });
   it("signs the canonical listing and sends no owner credential", async () => {
     const { raw, runtime } = identity();
     let requestHeaders: Headers | undefined;

@@ -43,6 +43,7 @@ import { buildBindingClaims } from "../src/trust/binding/claims.js";
 import { signCompactJws, type JwsSigningIdentity } from "../src/trust/identity/jws.js";
 import { readEnrollmentStore } from "../src/cloud/binding/enrollment-challenge.js";
 import { createMerchantConnectionService, type VerifiedBinding } from "../src/cloud/connect-service.js";
+import { OpenInquiryLocalPolicy } from "../src/cloud/access/open-inquiry-policy.js";
 import { connectMerchant } from "../src/cloud/merchant-connect.js";
 import type { AgentProfile } from "../src/config/profile.js";
 
@@ -120,6 +121,7 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 }
 
 interface CatalogStubOptions {
+  failConsentReadOnce?: boolean;
   /** 第几次 poll 起返回 authorized（默认 0 = 第一次就 authorized）。 */
   pollsBeforeAuthorized?: number;
   /** 非空时：对 bind 签发声明做篡改（模拟 card_url/merchant 等验真失配）。 */
@@ -132,6 +134,12 @@ interface CatalogStubOptions {
   publishReceiptInvalid?: boolean;
   /** 重签声明用的时钟（缺省真实时钟）；与注入服务的 now 共享即可模拟时间推进。 */
   claimsNow?: () => Date;
+  /** bind 回执附带的随绑访问配置处置结果（目录按版本冲突跳过凭据等）。 */
+  bindAccessOutcome?: unknown;
+  /** runtime-access PUT 固定 403（模拟目录拒绝，验摘要保持 invalid）。 */
+  failRuntimeAccessPut?: boolean;
+  /** 目录侧 runtime-access 权威版本（stub GET/PUT 语义；0 = 目录无配置）。 */
+  accessHeadVersion?: number;
 }
 
 interface CatalogStub {
@@ -167,6 +175,8 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
   const seenDeviceCodes: string[] = [];
   let enrollmentId = "enr_none";
   let withdrawn = false;
+  let openInquiryGranted = false;
+  let failConsentRead = options.failConsentReadOnce === true;
   let lastBindingClaims: Record<string, unknown> | null = null;
   const pollsBeforeAuthorized = options.pollsBeforeAuthorized ?? 0;
   const failBindWith = options.failBindWith ?? null;
@@ -174,6 +184,9 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
   const publishReceiptInvalid = options.publishReceiptInvalid ?? false;
   const tamperBindClaims = options.tamperBindClaims ?? null;
   const claimsNow = options.claimsNow ?? (() => new Date());
+  const bindAccessOutcome = options.bindAccessOutcome ?? null;
+  const accessHeadVersion = options.accessHeadVersion ?? 0;
+  const failRuntimeAccessPut = options.failRuntimeAccessPut === true;
   /** 首签声明的基线（bind 时生成）；每次公开读在此基础上重签 expires_at。 */
   let boundClaims: Record<string, unknown> | null = null;
   let corruptClaims: ((claims: Record<string, unknown>) => Record<string, unknown>) | null = null;
@@ -187,6 +200,20 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
       const rawBody = await readBody(request);
       const url = request.url ?? "";
       const jwsHeader = String(request.headers["x-kiwi-binding-jws"] ?? "");
+      if (url === `/v1/agents/${AGENT_ID}/public-inquiry-consent`) {
+        if (request.method === "PUT") {
+          const body = JSON.parse(rawBody) as { consent: { granted: boolean } };
+          openInquiryGranted = body.consent.granted;
+          sendJson(response, 200, { granted: openInquiryGranted, terms_version: "open-inquiry-v1" });
+          return;
+        }
+        if (request.method === "GET") {
+          if (failConsentRead) { failConsentRead = false; sendJson(response, 503, { error: "unavailable" }); return; }
+          sendJson(response, 200, { granted: openInquiryGranted, policy_active: openInquiryGranted,
+            terms_version: "open-inquiry-v1" });
+          return;
+        }
+      }
       if (request.method === "POST" && url === "/v1/enrollments/device") {
         counts.deviceCreates += 1;
         enrollmentId = `enr_${counts.deviceCreates}`;
@@ -273,6 +300,7 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
             issuer_thumbprint: issuerThumbprint,
             card_revision: null,
           },
+          ...(bindAccessOutcome !== null ? { access_config_outcome: bindAccessOutcome } : {}),
         });
         return;
       }
@@ -290,6 +318,31 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
         // 缺 revision 的回执 → 客户端 PUBLICATION_RECEIPT_INVALID（阶段码
         // CARD_PUBLISH_INVALID 归类路径）。
         sendJson(response, 200, publishReceiptInvalid ? { active_revision: 1 } : { revision: 1 });
+        return;
+      }
+      if (url === `/v1/agents/${AGENT_ID}/runtime-access` && accessHeadVersion > 0) {
+        // 目录侧 runtime-access 语义：PUT 带 expected_version 严格 CAS（落后 → 409）；
+        // GET 返回权威版本投影。projection 形状与 catalog-client 解析一致。
+        const headProjection = {
+          provider: "workbuddy", access_mode: "share_parameter", parameter_name: "sharecode",
+          config_version: accessHeadVersion, adapter_version: "workbuddy-share-v1",
+          auth_mode: "signature", status: "active",
+          validated_at: "2026-11-01T00:00:00+00:00", updated_at: "2026-11-01T00:00:00+00:00",
+        };
+        if (request.method === "GET") {
+          sendJson(response, 200, { ok: true, config_version: accessHeadVersion, runtime_access: headProjection });
+          return;
+        }
+        if (failRuntimeAccessPut) {
+          sendJson(response, 403, { ok: false, error: "runtime access rejected" });
+          return;
+        }
+        const body = JSON.parse(rawBody || "{}") as { access_config?: { expected_version?: number } };
+        if ((body.access_config?.expected_version ?? 0) < accessHeadVersion) {
+          sendJson(response, 409, { ok: false, error: "runtime access version conflict" });
+          return;
+        }
+        sendJson(response, 200, { ok: true, config_version: accessHeadVersion, runtime_access: headProjection });
         return;
       }
       if (request.method === "GET" && url === `/v1/agents/${AGENT_ID}/runtime-binding`) {
@@ -438,6 +491,204 @@ function expectNoCredentials(serialized: string): void {
 // ── 用例 ─────────────────────────────────────────────────────────────
 
 describe("connect-service 内核", () => {
+  it("开放询价授权回执不确定时本地关闭，权威状态确认后才恢复", async () => {
+    const harness = await makeHarness({ failConsentReadOnce: true });
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    await service.begin();
+    expect((await service.reconcile()).status).toBe("published");
+    await expect(service.setPublicInquiryConsent(true)).rejects.toThrow();
+    expect(new OpenInquiryLocalPolicy(harness.dataDir, RUNTIME_ORIGIN).isEnabled()).toBe(false);
+    const reconciled = await service.readPublicInquiryConsent();
+    expect(reconciled).toMatchObject({ granted: true, policyActive: true, localEnabled: true });
+  });
+  it("开放询价必须绑定后由商家单独启用，撤回立即关闭本地权限", async () => {
+    const harness = await makeHarness();
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    await expect(service.setPublicInquiryConsent(true)).rejects.toThrow("尚未建立有效的 Catalog 绑定");
+    await service.begin();
+    expect((await service.reconcile()).status).toBe("published");
+    expect(await service.setPublicInquiryConsent(true)).toMatchObject({ granted: true, policyActive: true, localEnabled: true });
+    expect(await service.readPublicInquiryConsent()).toMatchObject({ granted: true, localEnabled: true });
+    expect(await service.setPublicInquiryConsent(false)).toMatchObject({ granted: false, localEnabled: false });
+  });
+  it("非 WorkBuddy 实例无需分享链接即可发起连接（前置条件按 host 收敛的反面）", async () => {
+    const harness = await makeHarness();
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    // publicOrigin = runtime.test，非 *.app.workbuddy.host：begin() 不抛
+    // ACCESS_SHARE_LINK_REQUIRED，而是正常推进到配对等待。
+    const summary = await service.begin();
+    expect(summary.status).toBe("awaiting_confirmation");
+  });
+
+  it("随绑凭据被目录按版本冲突跳过：摘要给出唯一可恢复路径，重提交按权威版本完成更换", async () => {
+    // 首绑只能声明 expected_version=0；目录已有 v3 配置时保留既有配置并在回执
+    // 里说明。本地不得假装码已生效（不得显示 local_staged），摘要给出
+    // catalog_access_exists；商家重提交时 409 → 权威读 v3 → 以 v3 重试一次成功，
+    // 冲突提示随之清除。
+    const harness = await makeHarness({
+      bindAccessOutcome: { applied: false, reason: "runtime_access_version_conflict", head_version: 3 },
+      accessHeadVersion: 3,
+    });
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    // 冲突只发生在“bind 请求携带随绑凭据”时：商家先暂存链接，目录侧却已有
+    // 更高版本的配置（如本地状态丢失后的重新绑定）。
+    await service.submitAccessShareLink(`${RUNTIME_ORIGIN}/?sharecode=staged-secret`, "workbuddy-share-v1-2026-10-27");
+    await service.begin();
+    await service.reconcile();
+    expect(await service.getAccessSummary()).toMatchObject({
+      configured: false, status: "invalid", statusReason: "catalog_access_exists",
+    });
+    const updated = await service.submitAccessShareLink(
+      `${RUNTIME_ORIGIN}/?sharecode=recovered-secret`, "workbuddy-share-v1-2026-10-27");
+    expect(updated).toMatchObject({ configured: true, status: "active", configVersion: 3 });
+    const cleared = await service.getAccessSummary();
+    expect(cleared).toMatchObject({ configured: true, status: "active" });
+    expect(cleared.statusReason).not.toBe("catalog_access_exists");
+    // 会话里不再保留冲突信号；权威版本进入 runtime_access 记录。
+    expect(sessionRecord(harness.dataDir)["runtime_access_conflict"]).toBeUndefined();
+    expect((sessionRecord(harness.dataDir)["runtime_access"] as Record<string, unknown>).config_version).toBe(3);
+  });
+
+  it("bind 回执的 outcome 形状不符时按未携带处理（白名单解析，不破坏绑定）", async () => {
+    const harness = await makeHarness({
+      bindAccessOutcome: "not-an-object" as unknown as Record<string, unknown>,
+    });
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    await service.submitAccessShareLink(`${RUNTIME_ORIGIN}/?sharecode=staged-secret`, "workbuddy-share-v1-2026-10-27");
+    await service.begin();
+    await service.reconcile();
+    // 不抛错、不误报冲突；摘要按无 outcome 的历史语义回退。
+    const summary = await service.getAccessSummary();
+    expect(summary.statusReason).not.toBe("catalog_access_exists");
+  });
+
+  it("PUT 被目录拒绝后摘要仍保持 invalid/catalog_access_exists，成功后恢复", async () => {
+    const harness = await makeHarness({
+      bindAccessOutcome: { applied: false, reason: "runtime_access_version_conflict", head_version: 3 },
+      accessHeadVersion: 3,
+      failRuntimeAccessPut: true,
+    });
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    await service.submitAccessShareLink(`${RUNTIME_ORIGIN}/?sharecode=staged-secret`, "workbuddy-share-v1-2026-10-27");
+    await service.begin();
+    await service.reconcile();
+    await expect(service.submitAccessShareLink(
+      `${RUNTIME_ORIGIN}/?sharecode=retry-secret`, "workbuddy-share-v1-2026-10-27",
+    )).rejects.toMatchObject({ code: "ACCESS_REJECTED" });
+    // PUT 失败不改变目录事实：摘要仍指向唯一的显式更新路径。
+    expect(await service.getAccessSummary()).toMatchObject({
+      configured: false, status: "invalid", statusReason: "catalog_access_exists",
+    });
+  });
+
+  it("WorkBuddy 初次连接未配置分享链接时在任何网络动作前明确失败", async () => {
+    const harness = await makeHarness();
+    let networkCalls = 0;
+    const service = createMerchantConnectionService({
+      ...harness.serviceOptions,
+      publicOrigin: "https://pilot.example.app.workbuddy.host",
+      fetchImpl: async () => { networkCalls += 1; throw new Error("must not reach network"); },
+    });
+    await expect(service.begin()).rejects.toMatchObject({ code: "ACCESS_SHARE_LINK_REQUIRED" });
+    expect(networkCalls).toBe(0);
+    expect(harness.catalog.counts.deviceCreates).toBe(0);
+  });
+
+  it("首次连接前经同意加密暂存分享码，重启后续办且不冒充已配置", async () => {
+    const harness = await makeHarness();
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    const consent = "workbuddy-share-v1-2026-10-27";
+    await expect(service.submitAccessShareLink(`${RUNTIME_ORIGIN}/?sharecode=stage-secret`)).rejects.toThrow();
+    const staged = await service.submitAccessShareLink(`${RUNTIME_ORIGIN}/?sharecode=stage-secret`, consent);
+    expect(staged.status).toBe("pending");
+    expect(staged.configured).toBe(false);
+    expect(staged.statusReason).toBe("local_staged");
+    expect(JSON.stringify(staged)).not.toContain("stage-secret");
+    expect((await service.begin()).status).toBe("awaiting_confirmation");
+    expect(JSON.stringify(readEnrollmentStore(harness.dataDir))).not.toContain("stage-secret");
+    expect(readFileSync(path.join(harness.dataDir, "workbuddy-access-vault.json"), "utf8")).not.toContain("stage-secret");
+    const restarted = createMerchantConnectionService(harness.serviceOptions);
+    expect((await restarted.getAccessSummary()).configured).toBe(false);
+    expect((await restarted.getAccessSummary()).status).toBe("pending");
+    expect((await service.revokeAccess()).status).toBe("none");
+    const withStaleEnvironment = createMerchantConnectionService({
+      ...harness.serviceOptions, accessShareLink: `${RUNTIME_ORIGIN}/?sharecode=stage-secret`,
+    });
+    expect((await withStaleEnvironment.getAccessSummary()).status).toBe("none");
+    expect(readFileSync(path.join(harness.dataDir, "workbuddy-access-vault.json"), "utf8")).not.toContain("stage-secret");
+  });
+
+  it("重启后已同意的分享码贯穿门禁读取和授权后的首次绑定", async () => {
+    const harness = await makeHarness();
+    let sawBindConfig = false;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.origin === RUNTIME_ORIGIN && url.pathname === "/.well-known/agent-card.json" &&
+          url.searchParams.get("sharecode") !== "stage-secret") return new Response("forbidden", { status: 403 });
+      if (url.pathname.endsWith("/runtime-bindings") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { access_config?: { secret_value?: string } };
+        sawBindConfig = body.access_config?.secret_value === "stage-secret";
+      }
+      return harness.serviceOptions.fetchImpl(input, init);
+    };
+    const service = createMerchantConnectionService({ ...harness.serviceOptions, fetchImpl });
+    await service.submitAccessShareLink(`${RUNTIME_ORIGIN}/?sharecode=stage-secret`, "workbuddy-share-v1-2026-10-27");
+    const restarted = createMerchantConnectionService({ ...harness.serviceOptions, fetchImpl });
+    expect((await restarted.begin()).status).toBe("awaiting_confirmation");
+    expect((await restarted.reconcile()).status).toBe("published");
+    expect(sawBindConfig).toBe(true);
+    expect(JSON.stringify(readEnrollmentStore(harness.dataDir))).not.toContain("stage-secret");
+  });
+
+  it("损坏的分享码密文不阻止工作台启动，且可由商家重新配置", async () => {
+    const harness = await makeHarness();
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    const consent = "workbuddy-share-v1-2026-10-27";
+    await service.submitAccessShareLink(`${RUNTIME_ORIGIN}/?sharecode=old-secret`, consent);
+    writeFileSync(path.join(harness.dataDir, "workbuddy-access-vault.json"), "corrupt");
+    const restarted = createMerchantConnectionService(harness.serviceOptions);
+    expect((await restarted.getAccessSummary()).status).toBe("invalid");
+    expect((await restarted.getAccessSummary()).configured).toBe(false);
+    await restarted.submitAccessShareLink(`${RUNTIME_ORIGIN}/?sharecode=new-secret`, consent);
+    expect((await restarted.getAccessSummary()).status).toBe("pending");
+    expect(readFileSync(path.join(harness.dataDir, "workbuddy-access-vault.json"), "utf8")).not.toContain("new-secret");
+  });
+
+  it("已授权的首绑分享链接用于读取被 WorkBuddy 门禁保护的名片", async () => {
+    const harness = await makeHarness();
+    let sawCard = false;
+    const gatedFetch: typeof fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.origin === RUNTIME_ORIGIN && url.pathname === "/.well-known/agent-card.json") {
+        sawCard = true;
+        if (url.searchParams.get("sharecode") !== "test-only-gate") return new Response("forbidden", { status: 403 });
+      }
+      return harness.serviceOptions.fetchImpl(input, init);
+    };
+    const service = createMerchantConnectionService({
+      ...harness.serviceOptions,
+      accessShareLink: `${RUNTIME_ORIGIN}/?sharecode=test-only-gate`,
+      fetchImpl: gatedFetch,
+    });
+    expect((await service.begin()).status).toBe("awaiting_confirmation");
+    expect(sawCard).toBe(true);
+    expect(harness.catalog.counts.deviceCreates).toBe(1);
+  });
+
+  it("读取带分享码的名片失败时不泄露请求地址或分享码", async () => {
+    const harness = await makeHarness();
+    const service = createMerchantConnectionService({
+      ...harness.serviceOptions,
+      accessShareLink: `${RUNTIME_ORIGIN}/?sharecode=test-only-gate`,
+      fetchImpl: async (input) => { throw new Error(`network error ${String(input)}`); },
+    });
+    await expect(service.begin()).rejects.toThrow("暂时无法通过 WorkBuddy 分享链接读取商家名片");
+    await service.begin().catch((error: Error) => {
+      expect(error.message).not.toContain("test-only-gate");
+      expect(error.message).not.toContain("sharecode=");
+    });
+  });
+
   it("begin 幂等：同 origin/key/卡重复 begin 只创建一个 enrollment", async () => {
     const harness = await makeHarness();
     const service = createMerchantConnectionService(harness.serviceOptions);

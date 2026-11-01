@@ -31,6 +31,10 @@ import { MerchantAccessSource } from "../discovery/catalog-source/merchant-acces
 import { buildWorkbuddyDualAddress } from "../a2a/access/workbuddy-address.js";
 import { loadOrCreateA2aSigningIdentity } from "../a2a/signing-key.js";
 import { HttpMessageSigner } from "../trust/identity/index.js";
+import { loadOpenInquirySigner } from "./open-inquiry-signer.js";
+import { OpenInquirySource, type OpenInquiryRoute } from "../discovery/catalog-source/open-inquiry.js";
+import { officialCatalogTrust } from "../discovery/catalog-source/official-catalog-trust.js";
+import { OpenInquiryRouteStore } from "./open-inquiry-route-store.js";
 import type { MerchantAccessResolver, MerchantAccessTransport } from "./a2a-quote-fetcher.js";
 import { A2ANegotiator } from "./a2a-negotiator.js";
 import { A2AQuoteFetcher } from "./a2a-quote-fetcher.js";
@@ -135,12 +139,29 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
           })
         : undefined;
     const accessByOrigin = new Map<string, MerchantAccessTransport>();
+    const catalogOrigin = config.catalogUrl.replace(/\/+$/, "");
+    const officialTrust = officialCatalogTrust(catalogOrigin);
+    const openRouteStore = officialTrust && protocolStateDir ? new OpenInquiryRouteStore(protocolStateDir, catalogOrigin) : undefined;
+    // A protocol directory may be shared by several configured buyers. Their
+    // session keys must remain distinct because merchant task ownership is
+    // bound to the self-certifying public key, not the local task ID.
+    const openSource = officialTrust && protocolStateDir ? new OpenInquirySource({ catalogOrigin,
+      trust: officialTrust, signer: loadOpenInquirySigner(protocolStateDir, config.principal, config.buyerAgentId),
+      timeoutMs: config.a2aTimeoutMs }) : undefined;
+    const openTransport = (openInquiry: OpenInquiryRoute): MerchantAccessTransport => ({ sendUrlFor: (url) => url, openInquiry });
     const transportFor = (secret: string): MerchantAccessTransport => ({
       sendUrlFor: (signUrl: string) => buildWorkbuddyDualAddress(signUrl, secret).sendUrl,
     });
     const merchantAccess: MerchantAccessResolver = {
       forMerchant: async (merchant) => {
         if (merchant.catalog_agent_id === undefined) return null;
+        if (openSource !== undefined && openRouteStore !== undefined) {
+          const open = await openSource.get(merchant.catalog_agent_id, merchant.merchant_id);
+          if (open !== null) {
+            openRouteStore.remember({ agentId: merchant.catalog_agent_id, merchantId: merchant.merchant_id, endpoint: open.endpoint });
+            return openTransport(open);
+          }
+        }
         const cardUrl = merchant.agent_card_url;
         const expectedOrigin =
           cardUrl === undefined || cardUrl === "" ? undefined : new URL(cardUrl).origin;
@@ -154,11 +175,30 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
         return transport;
       },
       forEndpoint: async (endpointUrl: string) => {
-        try {
-          return accessByOrigin.get(new URL(endpointUrl).origin) ?? null;
-        } catch {
-          return null;
+        // 对外只给固定安全分类，绝不携带 URL、分享码或底层异常文本；
+        // 保留分类是为了让"路线失效 / 查询失败 / 非法端点"仍可区分。
+        const unavailable = (code: string): Error =>
+          new Error(`商家访问路线不可用，请重新发现商家后续办（${code}）`);
+        const hint = openRouteStore?.get(endpointUrl);
+        if (hint !== undefined && openSource !== undefined) {
+          const open = await openSource.get(hint.agentId, hint.merchantId).catch(() => {
+            throw unavailable("OPEN_INQUIRY_LOOKUP_FAILED");
+          });
+          if (open === null || open.endpoint !== endpointUrl)
+            throw unavailable("OPEN_INQUIRY_ROUTE_INVALID");
+          return openTransport(open);
         }
+        let origin: string;
+        try {
+          origin = new URL(endpointUrl).origin;
+        } catch {
+          throw unavailable("INVALID_ENDPOINT");
+        }
+        const legacy = accessByOrigin.get(origin);
+        if (legacy !== undefined) return legacy;
+        if (new URL(origin).hostname.endsWith(".app.workbuddy.host"))
+          throw unavailable("WORKBUDDY_ROUTE_UNAVAILABLE");
+        return null;
       },
     };
     // B-05：可选的出站签名身份。没有它时 WorkBuddy 商家只能走到匿名 T0，

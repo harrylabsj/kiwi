@@ -86,6 +86,7 @@ import { managementRequestDigest, MerchantManagementOperationStore } from "./ope
 import type { MutableServiceState } from "./service-state.js";
 import { OnboardingStore } from "../../cloud/onboarding/store.js";
 import { readEnrollmentStore } from "../../cloud/binding/enrollment-challenge.js";
+import { MerchantConnectError } from "../../cloud/connect-service.js";
 import { requestsDisabledLocalImplementation } from "../../cloud/onboarding/local-fallback.js";
 import { checkStepSubmission, planWizard, WIZARD_STEPS } from "../../cloud/onboarding/steps.js";
 import type { Evidence, PlatformEvidenceResult } from "../../cloud/onboarding/types.js";
@@ -157,6 +158,19 @@ const CATALOG_CONNECTION_SAFE_CODES = new Set([
   "BINDING_EXPIRED", "AUTHORIZATION_PENDING", "PREVIEW_CHANGED", "RUNTIME_CARD_CHANGED",
   // 配对诊断阶段码（A15）：单源 = connect-service 导出的固定集合。
   ...CONNECTION_PAIRING_SAFE_CODES,
+]);
+/**
+ * `begin` 的失败必须分两类：本地校验类错误在触达目录**之前**就已确定（没有
+ * 不确定的远端副作用）——释放幂等占位并明确报错，商家修正后可用原键重试
+ * （`release()` 只删 running 占位）。`ACCESS_SHARE_LINK_REQUIRED` 单独在下面
+ * 处理；这里列其余同族码。其它错误可能已在远端创建 enrollment，必须保留
+ * unknown 回执、先对账，不盲目重试（BD §11.1）。页面把 begin 的幂等键持久化
+ * 在 sessionStorage 里，所以这张表是"结果未知"与"确定没开始"的正确分界；
+ * 新增码前必须确认它一定发生在 `createDeviceEnrollment` 之前，否则会把
+ * "可能已执行"误报成"未执行"。
+ */
+const CONNECT_BEGIN_PRE_EFFECT_CODES = new Set([
+  "CATALOG_MISMATCH", "STATE_INVALID", "PREVIEW_CHANGED", "RUNTIME_CARD_CHANGED",
 ]);
 const MAX_BODY_BYTES = 1_048_576;
 /** 非候选写命令确认引用的有效期（BD §7.3：短时、单次）。 */
@@ -276,6 +290,8 @@ export interface MerchantManagementApiOptions {
     refreshAccess?: () => Promise<CatalogAccessSummary>;
     submitAccessShareLink?: (link: string, consentTermsVersion: string) => Promise<CatalogAccessSummary>;
     revokeAccess?: () => Promise<CatalogAccessSummary>;
+    readPublicInquiryConsent?: () => Promise<{ granted: boolean; policyActive: boolean; localEnabled: boolean; termsVersion: string }>;
+    setPublicInquiryConsent?: (granted: boolean) => Promise<{ granted: boolean; policyActive: boolean; localEnabled: boolean; termsVersion: string }>;
   };
   /** Workbench v1 trusted confirmation authority; absent means strong-confirmation routes fail closed. */
   workbenchConfirmations?: WorkbenchConfirmationStore;
@@ -1249,6 +1265,32 @@ export function createMerchantManagementApiHandler(
       }
       return;
     }
+    if (rest === "/catalog/public-inquiry/status" || rest === "/catalog/public-inquiry/consent") {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "onboarding:manage");
+      if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "only owner can manage open inquiry consent");
+      const channel = options.catalogConnection;
+      if (channel?.readPublicInquiryConsent === undefined || channel.setPublicInquiryConsent === undefined)
+        throw new ManagementError("unavailable", "开放询价配置暂不可用");
+      try {
+        let result;
+        if (rest === "/catalog/public-inquiry/status") {
+          objectFields(await readJsonBody(req), []);
+          result = await channel.readPublicInquiryConsent();
+        } else {
+          const fields = objectFields(await readJsonBody(req), ["granted", "terms_version"]);
+          if (typeof fields["granted"] !== "boolean" || fields["terms_version"] !== "open-inquiry-v1")
+            throw new ManagementError("invalid_input", "需要明确选择并确认当前开放询价授权条款");
+          result = await channel.setPublicInquiryConsent(fields["granted"]);
+        }
+        writeJson(res, 200, { consent: result }, { "x-request-id": requestId });
+      } catch (error) {
+        if (error instanceof ManagementError) throw error;
+        throw new ManagementError("unavailable", "开放询价状态尚未确认，请先查询状态后再决定是否重试。");
+      }
+      return;
+    }
     if (
       rest === "/catalog/access/refresh" ||
       rest === "/catalog/access/share-link" ||
@@ -1311,7 +1353,19 @@ export function createMerchantManagementApiHandler(
       let status: "succeeded" | "unknown" = "succeeded";
       try {
         await channel.begin();
-      } catch {
+      } catch (error) {
+        if (error instanceof MerchantConnectError && error.code === "ACCESS_SHARE_LINK_REQUIRED") {
+          // This condition is checked before the remote enrollment call, so the
+          // operation has no uncertain external effect and can safely be retried.
+          operations.release(begun.operationId);
+          throw new ManagementError("invalid_input", "请先提交并授权本实例的 WorkBuddy 分享链接，再发起目录连接。");
+        }
+        if (error instanceof MerchantConnectError && CONNECT_BEGIN_PRE_EFFECT_CODES.has(error.code)) {
+          // 其余本地校验类失败同样发生在触达目录之前（见常量处的约束）：释放占位
+          // 并明确报错，商家修正后可用原键重试。
+          operations.release(begun.operationId);
+          throw new ManagementError("invalid_input", error.message);
+        }
         // 远端创建可能已发生：保留幂等回执，先查连接状态，不盲目重复创建。
         status = "unknown";
         console.warn("[merchant-management] catalog.connection.begin result unknown; query connection status before retry");

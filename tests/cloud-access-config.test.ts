@@ -282,14 +282,40 @@ describe("submitAccessShareLink", () => {
     expect(h.calls).toHaveLength(0);
   });
 
-  it("requires a bound session", async () => {
+  // 首绑时目录还没有 binding id：提交的链接只做本地加密暂存（AES-GCM，密钥绑定
+  // 本实例 origin 与身份密钥），绑定完成后才由目录验证；未授权与撤销语义不变。
+  it("stages the first-bind link encrypted before a binding exists, without network", async () => {
     const h = harnessWithResponses([], { status: "preparing" });
+    const summary = await h.service.submitAccessShareLink(
+        `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
+        WORKBUDDY_CUSTODY_TERMS_VERSION,
+      );
+    expect(summary).toMatchObject({
+      configured: false,
+      status: "pending",
+      statusReason: "local_staged",
+      consentGranted: true,
+      consentTermsVersion: WORKBUDDY_CUSTODY_TERMS_VERSION,
+    });
+    expect(h.calls).toHaveLength(0);
+    expect(JSON.stringify(summary)).not.toContain(SHARE_SECRET);
+    expect(readFileSync(h.storeFile, "utf8")).not.toContain(SHARE_SECRET);
+    expect(readFileSync(path.join(h.dataDir, "workbuddy-access-vault.json"), "utf8")).not.toContain(SHARE_SECRET);
+  });
+
+  it("still requires custody consent when staging without a binding", async () => {
+    const h = harnessWithResponses([], { status: "preparing" });
+    const error = await h.service
+      .submitAccessShareLink(`${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(MerchantConnectError);
+    expect((error as MerchantConnectError).code).toBe("ACCESS_CONSENT_REQUIRED");
     await expect(
       h.service.submitAccessShareLink(
         `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
-        WORKBUDDY_CUSTODY_TERMS_VERSION,
+        "workbuddy-share-v0-outdated",
       ),
-    ).rejects.toMatchObject({ code: "STATE_INVALID" });
+    ).rejects.toMatchObject({ code: "ACCESS_CONSENT_REQUIRED" });
     expect(h.calls).toHaveLength(0);
   });
 });
@@ -339,6 +365,34 @@ describe("refreshAccess / revokeAccess", () => {
     await expect(h.service.revokeAccess()).rejects.toMatchObject({
       code: "ACCESS_NOT_CONFIGURED",
     });
+  });
+
+  it("revokes a staged first-bind link locally without any network call", async () => {
+    const h = harnessWithResponses([], { status: "preparing" });
+    await h.service.submitAccessShareLink(
+        `${RUNTIME_ORIGIN}/a2a?sharecode=${SHARE_SECRET}`,
+        WORKBUDDY_CUSTODY_TERMS_VERSION,
+      );
+    const summary = await h.service.revokeAccess();
+    expect(summary).toMatchObject({ configured: false, status: "none" });
+    expect(h.calls).toHaveLength(0);
+    // 撤销墓碑只以密文落盘（明文里既没有分享码也没有任何状态字段）。
+    const vaultFile = path.join(h.dataDir, "workbuddy-access-vault.json");
+    const persisted = readFileSync(vaultFile, "utf8");
+    expect(persisted).not.toContain(SHARE_SECRET);
+    expect(persisted).not.toContain("revoked");
+    // 重启后本地撤销压过过期的进程环境变量：不会从环境里复活凭据。
+    const restarted = createMerchantConnectionService({
+      dataDir: h.dataDir,
+      catalogUrl: CATALOG_ORIGIN,
+      publicOrigin: RUNTIME_ORIGIN,
+      allowPrivateOrigin: true,
+      accessShareLink: `${RUNTIME_ORIGIN}/a2a?sharecode=fresh-env-code`,
+      fetchImpl: (async () => {
+        throw new Error("must not reach network");
+      }) as typeof fetch,
+    });
+    expect((await restarted.getAccessSummary()).status).toBe("none");
   });
 
   it("maps catalog failures to safe codes without leaking the request", async () => {

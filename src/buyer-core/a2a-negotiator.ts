@@ -33,6 +33,7 @@ import {
 } from "./a2a-knp.js";
 import type { MerchantOffer, NegotiationStep, Negotiator } from "./service.js";
 import type { A2AOutboundSigner, A2ATask } from "../a2a/client/types.js";
+import type { MerchantAccessResolver } from "./a2a-quote-fetcher.js";
 import { validateConditionalOffer, validateOffer } from "../negotiation/domain/objects.js";
 import { evaluateConditionalOffer } from "../negotiation/condition/evaluator.js";
 import { contentDigest } from "../negotiation/jcs.js";
@@ -42,6 +43,7 @@ import { BuyerProtocolRecovery, MerchantDeclined, ProtocolOperationUnknown, Prot
 import { BuyerReplyRejected } from "./receive-gate.js";
 
 export interface A2ANegotiatorOptions {
+  merchantAccess?: MerchantAccessResolver;
   /** 出站 HTTP Message Signature 签名器（B-05）：WorkBuddy 商家的业务身份。 */
   signer?: A2AOutboundSigner;
   allowPrivateRanges?: boolean;
@@ -255,6 +257,7 @@ export class A2ANegotiator implements Negotiator {
   private readonly signer?: A2AOutboundSigner;
   private readonly defaultDiscountRate: number;
   private readonly fetchImpl?: typeof fetch;
+  private readonly merchantAccess?: MerchantAccessResolver;
 
   private readonly recovery?: BuyerProtocolRecovery;
   private readonly counterProposalGate: CounterProposalGate | undefined;
@@ -268,9 +271,22 @@ export class A2ANegotiator implements Negotiator {
     this.signer = options.signer;
     this.defaultDiscountRate = options.defaultDiscountRate ?? DEFAULT_DISCOUNT_RATE;
     this.fetchImpl = options.fetchImpl;
+    this.merchantAccess = options.merchantAccess;
     this.counterProposalGate = options.counterProposalGate;
     this.now = options.now ?? utcNow;
     if(options.protocolStateDir && options.localBuyerAgentId)this.recovery=new BuyerProtocolRecovery(options.protocolStateDir,options.localBuyerAgentId,options.now);
+  }
+
+  private async clientFor(endpoint: string) {
+    const access = await this.merchantAccess?.forEndpoint(endpoint) ?? null;
+    if (access?.openInquiry && access.openInquiry.endpoint !== endpoint) throw new Error("open inquiry endpoint mismatch");
+    return buildA2AClient(endpoint, {
+      ...(access === null ? { bearerToken: this.bearerToken } : {}),
+      ...(access?.openInquiry ? { signer: access.openInquiry.signer } : this.signer ? { signer: this.signer } : {}),
+      ...(access !== null && !access.openInquiry ? { sendUrl: access.sendUrlFor(endpoint) } : {}),
+      allowPrivateRanges: this.allowPrivateRanges, skipDnsCheck: this.skipDnsCheck, timeoutMs: this.timeoutMs,
+      ...(access?.openInquiry ? { fetchImpl: access.openInquiry.fetchImpl } : this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}),
+    });
   }
 
   async negotiate(
@@ -317,14 +333,7 @@ export class A2ANegotiator implements Negotiator {
           Array.isArray(current.questions) && current.questions.length > 0
             ? current.questions
             : [{ field: "general", reason: current.summary }];
-        const client = buildA2AClient(endpoint, {
-          bearerToken: this.bearerToken,
-          ...(this.signer !== undefined ? { signer: this.signer } : {}),
-          allowPrivateRanges: this.allowPrivateRanges,
-          skipDnsCheck: this.skipDnsCheck,
-          timeoutMs: this.timeoutMs,
-          ...(this.fetchImpl !== undefined ? { fetchImpl: this.fetchImpl } : {}),
-        });
+        const client = await this.clientFor(endpoint);
         if (!this.recovery || !context || context.taskId !== taskId) throw new ProtocolOperationUnknown();
         const result = await this.recovery.exchange({
           context,
@@ -429,14 +438,7 @@ export class A2ANegotiator implements Negotiator {
           return { ...current, summary: `${current.summary}（counter 被委托约束阻断：${gateVerdict}）` };
         }
       }
-      const client = buildA2AClient(endpoint, {
-        bearerToken: this.bearerToken,
-        ...(this.signer !== undefined ? { signer: this.signer } : {}),
-        allowPrivateRanges: this.allowPrivateRanges,
-        skipDnsCheck: this.skipDnsCheck,
-        timeoutMs: this.timeoutMs,
-        ...(this.fetchImpl !== undefined ? { fetchImpl: this.fetchImpl } : {}),
-      });
+      const client = await this.clientFor(endpoint);
       if(!this.recovery || !context || context.taskId!==taskId)throw new ProtocolOperationUnknown();
       const result=await this.recovery.exchange({
         context,stage:"counter",round:current.round,merchantId:String(candidate.merchant_id??""),endpoint,negotiationId,
@@ -521,14 +523,7 @@ export class A2ANegotiator implements Negotiator {
       ...(input.summary !== undefined ? { summary: input.summary } : {}),
       now: this.now,
     });
-    const client = buildA2AClient(endpoint, {
-      bearerToken: this.bearerToken,
-      ...(this.signer !== undefined ? { signer: this.signer } : {}),
-      allowPrivateRanges: this.allowPrivateRanges,
-      skipDnsCheck: this.skipDnsCheck,
-      timeoutMs: this.timeoutMs,
-      ...(this.fetchImpl !== undefined ? { fetchImpl: this.fetchImpl } : {}),
-    });
+    const client = await this.clientFor(endpoint);
     let task;
     try {
       task = await client.sendMessage(envelopeToMessage(envelope));

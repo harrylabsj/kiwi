@@ -47,6 +47,8 @@ export interface ChallengeResponderOptions {
   /** 本实例的商家/agent/代次：挑战必须与之一致。 */
   expectedMerchantId: string | (() => string | undefined);
   expectedAgentId: string;
+  /** Direct enrollment can use a distinct, verified Catalog identity. */
+  expectedBindingIdentity?: () => { merchantId: string; agentId: string } | undefined;
   currentGeneration: number;
   expectedOrigin: string;
   expectedPath: string;
@@ -171,10 +173,13 @@ export function createChallengeResponder(
         writeJson(res, 400, { error: "invalid_challenge", message: "挑战结构不完整或字段非法" });
         return;
       }
-      const expectedMerchantId = typeof options.expectedMerchantId === "function"
-        ? options.expectedMerchantId()
-        : options.expectedMerchantId;
-      if (expectedMerchantId === undefined) {
+      const expectedBinding = options.expectedBindingIdentity?.();
+      const expectedMerchantId = options.expectedBindingIdentity !== undefined
+        ? expectedBinding?.merchantId
+        : typeof options.expectedMerchantId === "function" ? options.expectedMerchantId() : options.expectedMerchantId;
+      const expectedAgentId = options.expectedBindingIdentity !== undefined
+        ? expectedBinding?.agentId : options.expectedAgentId;
+      if (expectedMerchantId === undefined || expectedAgentId === undefined) {
         writeJson(res, 503, { error: "catalog_binding_missing", message: "Catalog 尚未确认商家身份" });
         return;
       }
@@ -195,7 +200,7 @@ export function createChallengeResponder(
         });
         return;
       }
-      if (challenge.merchant_id !== expectedMerchantId || challenge.agent_id !== options.expectedAgentId) {
+      if (challenge.merchant_id !== expectedMerchantId || challenge.agent_id !== expectedAgentId) {
         writeJson(res, 403, { error: "identity_mismatch", message: "挑战的商家/agent 与本实例不一致" });
         return;
       }
