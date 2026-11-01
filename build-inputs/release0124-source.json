@@ -6240,7 +6240,7 @@
     },
     {
       "path": "tests/npm-cloud-leaf-metadata.test.ts",
-      "sha256": "sha256:ad97a384ae6b31fd87b15d43ec47ad50145b83fa892e1791eceeb4d3fd0c3534"
+      "sha256": "sha256:da5cbd51b7f2e25b9b746d26de4797799777e0e4d6e24b1def617c76a3b94cea"
     },
     {
       "path": "tests/npm-official-binlinks.test.ts",
@@ -6256,7 +6256,7 @@
     },
     {
       "path": "tests/npm-shipping-contract.test.ts",
-      "sha256": "sha256:f679c7d13e4a8d539e61c8162774dc61a79497c3fdb096c369b2e12aa6924f27"
+      "sha256": "sha256:13cca561725e5e0c1d0015a30e6c5857c20a85ed91f1657c842eda0ec3bb53df"
     },
     {
       "path": "tests/onboarding-local-fallback.test.ts",
