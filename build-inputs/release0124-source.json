@@ -701,6 +701,10 @@
       "sha256": "sha256:d44f9e03f34f5be3a9d5c14588f413a4ff0c82eae2dd46db9b3e14fb343bc1fd"
     },
     {
+      "path": "docs/workbuddy-sourcing-1.0.4-archive.md",
+      "sha256": "sha256:ebe8d84887fa1f56e258cc75918ed9aca16219f030f407021ad47c1bb32e0071"
+    },
+    {
       "path": "eslint.config.js",
       "sha256": "sha256:cda5d21577d51526ef510a77143f29f151c99d3c4d20668f7fff2c47c2185b0b"
     },
@@ -2235,10 +2239,6 @@
     {
       "path": "portfolio.lock.json",
       "sha256": "sha256:ae7cab8ccc0d56cd6c644c6093f03836db3839c897fa4751635155af2eab5e14"
-    },
-    {
-      "path": "release/workbuddy/kiwi-sourcing-1.0.4-archive.md",
-      "sha256": "sha256:ebe8d84887fa1f56e258cc75918ed9aca16219f030f407021ad47c1bb32e0071"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
