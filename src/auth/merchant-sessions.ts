@@ -35,6 +35,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 import { MERCHANT_ROLES, type MerchantRole } from "../merchant/application/actor.js";
+import { MERCHANT_THEME_CSS } from "../merchant-ui/theme.js";
 
 /** 管理会话有效期（12 小时）。 */
 export const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -230,15 +231,42 @@ export function renderAdminLoginPage(options: { error?: string; next?: string })
   const next = escapeHtml(options.next ?? "/admin/pending");
   return `<!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><title>商家管理员登录 — Kiwi</title></head>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理员登录 — Kiwi 商家工作台</title>
+<style>${MERCHANT_THEME_CSS}
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+  .login-shell { width: 100%; max-width: 430px; }
+  .login-brand { margin-bottom: 18px; }
+  .login-card h1 { margin: 0 0 6px; font-size: 21px; line-height: 1.4; font-weight: 650; }
+  .login-card .hint { margin: 0 0 20px; color: var(--muted); font-size: 12px; }
+  .login-field { display: block; margin-bottom: 18px; }
+  .login-field span { display: block; margin-bottom: 6px; color: #53665b; font-weight: 550; }
+  .login-field input { display: block; }
+  .login-actions { display: flex; align-items: center; gap: 16px; }
+  .login-actions .muted { margin: 0; }
+  .errbox { background: #fcebea; color: #a03933; border: 1px solid #e5c2bd; border-radius: 8px; padding: 10px 14px; font-size: 13px; margin: 0 0 18px; overflow-wrap: anywhere; }
+  @media (max-width: 640px) { body { padding: 16px; } }
+</style>
+</head>
 <body>
-  <h1>商家管理员登录</h1>
-  ${error !== undefined ? `<p style="color:red">${error}</p>` : ""}
-  <form method="post" action="/admin/login">
-    <input type="hidden" name="next" value="${next}">
-    <label>管理员口令：<input type="password" name="password" required></label>
-    <button type="submit">登录</button>
-  </form>
+<main class="login-shell">
+  <div class="brand login-brand"><span class="brand-name" aria-label="Kiwi">kiwi</span><span class="brand-title">商家工作台</span></div>
+  <section class="card login-card">
+    <h1>管理员登录</h1>
+    <p class="hint">使用商家管理员口令进入工作台；口令只在本表单中输入，不会出现在地址栏或日志里。</p>
+    ${error !== undefined ? `<p class="errbox" role="alert">${error}</p>` : ""}
+    <form method="post" action="/admin/login">
+      <input type="hidden" name="next" value="${next}">
+      <label class="login-field" for="admin-password"><span>管理员口令</span><input id="admin-password" type="password" name="password" required autocomplete="current-password"></label>
+      <div class="login-actions">
+        <button type="submit" class="act primary">登录</button>
+        <a class="muted" href="/merchant/">返回工作台</a>
+      </div>
+    </form>
+  </section>
+</main>
 </body>
 </html>`;
 }

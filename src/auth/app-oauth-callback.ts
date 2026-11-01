@@ -34,6 +34,35 @@
 /** 平台错误码的安全形状（只用于回显白名单，其余一律不回显）。 */
 const ERROR_CODE_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
 
+
+function renderCallbackPage(options: { title: string; heading: string; body: string }): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${options.title}</title>
+<style>${MERCHANT_THEME_CSS}
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+  .callback-shell { width: 100%; max-width: 460px; }
+  .callback-shell .brand { margin-bottom: 18px; }
+  .callback-card h1 { margin: 0 0 10px; font-size: 21px; line-height: 1.4; font-weight: 650; }
+  .callback-card p { margin: 10px 0; }
+  @media (max-width: 640px) { body { padding: 16px; } }
+</style>
+</head>
+<body>
+<main class="callback-shell">
+  <div class="brand"><span class="brand-name" aria-label="Kiwi">kiwi</span><span class="brand-title">商家工作台</span></div>
+  <section class="card callback-card">
+    <h1>${options.heading}</h1>
+    ${options.body}
+  </section>
+</main>
+</body>
+</html>`;
+}
+
 export interface AppOAuthCallbackLogEntry {
   event: "app_oauth_callback";
   /** 平台回跳是否携带授权码（只记有无，绝不记值）。 */
@@ -85,15 +114,11 @@ export function handleAppOAuthCallback(query: URLSearchParams): AppOAuthCallback
       : "<p>平台回跳携带错误。如非你主动取消授权，请回到开放平台重新发起。</p>";
     return {
       status: 200,
-      html: `<!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><title>授权未完成 — Kiwi 商家运营工作台</title></head>
-<body>
-  <h1>Kiwi 商家运营工作台</h1>
-  <p>授权<strong>未完成</strong>。</p>
-  ${detail}
-</body>
-</html>`,
+      html: renderCallbackPage({
+        title: "授权未完成 — Kiwi 商家工作台",
+        heading: "授权未完成",
+        body: `<p>授权<strong>未完成</strong>。</p>${detail}`,
+      }),
       log: safeError !== undefined ? { ...baseLog, error: safeError } : baseLog,
     };
   }
@@ -102,29 +127,22 @@ export function handleAppOAuthCallback(query: URLSearchParams): AppOAuthCallback
     // 授权码只确认"收到了"，不兑换（本应用不调用 Open API）、不回显、不入日志。
     return {
       status: 200,
-      html: `<!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><title>授权完成 — Kiwi 商家运营工作台</title></head>
-<body>
-  <h1>Kiwi 商家运营工作台</h1>
-  <p>授权完成。平台的授权回执已收到并记录。</p>
-  <p>本应用当前不调用平台 Open API，无需任何进一步操作，此页可以关闭。</p>
-</body>
-</html>`,
+      html: renderCallbackPage({
+        title: "授权完成 — Kiwi 商家工作台",
+        heading: "授权完成",
+        body: "<p>授权完成。平台的授权回执已收到并记录。</p><p>本应用当前不调用平台 Open API，无需任何进一步操作，此页可以关闭。</p>",
+      }),
       log: baseLog,
     };
   }
 
   return {
     status: 400,
-    html: `<!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><title>回调参数缺失 — Kiwi 商家运营工作台</title></head>
-<body>
-  <h1>Kiwi 商家运营工作台</h1>
-  <p>本地址是平台应用级 OAuth 的回调地址，只接受平台的授权回跳（需携带 <code>code</code> 或 <code>error</code> 参数），不提供其他功能。</p>
-</body>
-</html>`,
+    html: renderCallbackPage({
+      title: "回调参数缺失 — Kiwi 商家工作台",
+      heading: "回调参数缺失",
+      body: "<p>本地址是平台应用级 OAuth 的回调地址，只接受平台的授权回跳（需携带 <code>code</code> 或 <code>error</code> 参数），不提供其他功能。</p>",
+    }),
     log: baseLog,
   };
 }
@@ -138,4 +156,5 @@ export function formatAppOAuthCallbackLog(entry: AppOAuthCallbackLogEntry): stri
   ];
   if (entry.error !== undefined) parts.push(`error=${entry.error}`);
   return parts.join(" ");
-}
+}import { MERCHANT_THEME_CSS } from "../merchant-ui/theme.js";
+

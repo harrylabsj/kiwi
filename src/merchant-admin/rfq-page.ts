@@ -25,6 +25,7 @@
  *   - 具名 SKU 确认（独立表单写入）与 case 取消/关闭的管理页入口。
  */
 
+import { renderMerchantDocPage } from "../merchant-ui/page-shell.js";
 import type { MerchantCoreService } from "../merchant-core/service.js";
 import { RfqError } from "../merchant-core/rfq/types.js";
 import type { RfqCallContext, RfqCaseView } from "../merchant-core/rfq/service.js";
@@ -165,16 +166,16 @@ export function renderRfqDashboard(
         )
         .join("\n")
     : "<tr><td colspan=\"6\">当前没有询盘。</td></tr>";
-  return `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>询报价工作台 — ${escapeHtml(merchantName)}</title></head>
-<body>
-<h1>${escapeHtml(merchantName)}：询报价工作台</h1>
-<p>确认/批准只在可信管理页执行；导出状态 ≠ 发送状态。待批准命令见 <a href="/admin/pending">待批准列表</a>。</p>
-<table border="1" cellpadding="6">
+  return renderMerchantDocPage({
+    title: `询报价工作台 — ${escapeHtml(merchantName)}`,
+    heading: `${escapeHtml(merchantName)}：询报价工作台`,
+    description:
+      '确认/批准只在可信管理页执行；导出状态 ≠ 发送状态。待批准命令见 <a href="/admin/pending">待批准列表</a>。',
+    content: `<div class="table-scroll"><table>
 <tr><th>case_id</th><th>阶段</th><th>需求版本</th><th>阻断项</th><th>当前报价</th><th>操作</th></tr>
 ${rows}
-</table>
-</body></html>`;
+</table></div>`,
+  });
 }
 
 export function renderRfqCasePage(merchantName: string, view: RfqCaseView): string {
@@ -191,7 +192,7 @@ export function renderRfqCasePage(merchantName: string, view: RfqCaseView): stri
     <input type="hidden" name="line_id" value="${escapeHtml(l.line_id)}">
     <input type="hidden" name="sku" value="${escapeHtml(l.sku ?? "")}">
     <input type="hidden" name="expected_revision" value="${view.revision}">
-    <button type="submit">确认该行</button>
+    <button type="submit" class="act">确认该行</button>
   </form></td>
 </tr>`,
     )
@@ -202,27 +203,28 @@ export function renderRfqCasePage(merchantName: string, view: RfqCaseView): stri
         `<tr><td>${escapeHtml(q.quote_id)}</td><td>v${q.revision}</td><td>${escapeHtml(q.status)}</td><td>${escapeHtml(q.invalid_reason ?? "")}</td></tr>`,
     )
     .join("\n");
-  return `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>询盘 ${escapeHtml(view.case.case_id)} — ${escapeHtml(merchantName)}</title></head>
-<body>
-<h1>询盘 ${escapeHtml(view.case.case_id)}（阶段 ${escapeHtml(view.case.stage)}，需求 v${view.revision}）</h1>
-<p><a href="/admin/rfq">返回总览</a></p>
+  return renderMerchantDocPage({
+    title: `询盘 ${escapeHtml(view.case.case_id)} — ${escapeHtml(merchantName)}`,
+    heading: `询盘 ${escapeHtml(view.case.case_id)}（阶段 ${escapeHtml(view.case.stage)}，需求 v${view.revision}）`,
+    description: '<a href="/admin/rfq">返回总览</a>',
+    content: `
 <h2>需求行（确认 = 商家具名动作；模型自报确认不作数）</h2>
-<table border="1" cellpadding="6">
+<div class="table-scroll"><table>
 <tr><th>行</th><th>需求</th><th>SKU</th><th>数量</th><th>单位</th><th>确认状态</th><th>操作</th></tr>
 ${lines}
-</table>
+</table></div>
 <h2>阻断项（${view.blockers.length}）</h2>
 <ul>${view.blockers.map((b) => `<li>${escapeHtml(b.field)}：${escapeHtml(b.reason)}</li>`).join("")}</ul>
 <h2>报价版本</h2>
-<table border="1" cellpadding="6"><tr><th>quote</th><th>版本</th><th>状态</th><th>说明</th></tr>${quoteRows}</table>
+<div class="table-scroll"><table><tr><th>quote</th><th>版本</th><th>状态</th><th>说明</th></tr>${quoteRows}</table></div>
 <h2>关闭（操作者显式；终态后拒绝新计价与发布）</h2>
 <form method="post" action="/admin/rfq/cases/${encodeURIComponent(view.case.case_id)}/close">
   <input type="hidden" name="expected_revision" value="${view.case.version}">
-  <button type="submit" name="outcome" value="CANCELLED">取消询盘</button>
-  <button type="submit" name="outcome" value="CLOSED">正常关闭</button>
+  <button type="submit" class="act danger" name="outcome" value="CANCELLED">取消询盘</button>
+  <button type="submit" class="act" name="outcome" value="CLOSED">正常关闭</button>
 </form>
-</body></html>`;
+`,
+  });
 }
 
 export function renderRfqReleasePage(
@@ -239,26 +241,28 @@ export function renderRfqReleasePage(
       ? `<p>当前状态：${escapeHtml(detail.status)}（非待批准；不可重复批准）</p>`
       : `<form method="post" action="/admin/rfq/releases/${encodeURIComponent(detail.release_id)}/approve" style="display:inline">
     <input type="hidden" name="confirmation" value="${escapeHtml(tokenFor(detail.candidate_id, "approve"))}">
-    <button type="submit">批准并激活发布</button>
+    <button type="submit" class="act primary">批准并激活发布</button>
   </form>
   <form method="post" action="/admin/rfq/releases/${encodeURIComponent(detail.release_id)}/reject" style="display:inline">
     <input type="hidden" name="confirmation" value="${escapeHtml(tokenFor(detail.candidate_id, "reject"))}">
-    <button type="submit">拒绝</button>
+    <button type="submit" class="act danger">拒绝</button>
   </form>
   <p>批准 = 消费一次性确认凭证 + 前置重验（事实指纹/策略版本/需求 revision）+ 原子激活。</p>`;
   const download =
     detail.status === "APPROVED"
       ? `<p><a href="/admin/rfq/artifacts/${encodeURIComponent(detail.artifact_id)}">下载正式文件（成功取走即记 EXPORTED）</a></p>`
       : "";
-  return `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>发布 ${escapeHtml(detail.release_id)} — ${escapeHtml(merchantName)}</title></head>
-<body>
-<h1>发布 ${escapeHtml(detail.release_id)}（状态 ${escapeHtml(detail.status)}）</h1>
-<p><a href="/admin/pending">返回待批准列表</a> ｜ <a href="/admin/rfq">询报价总览</a></p>
+  return renderMerchantDocPage({
+    title: `发布 ${escapeHtml(detail.release_id)} — ${escapeHtml(merchantName)}`,
+    heading: `发布 ${escapeHtml(detail.release_id)}（状态 ${escapeHtml(detail.status)}）`,
+    description:
+      '<a href="/admin/pending">返回待批准列表</a> ｜ <a href="/admin/rfq">询报价总览</a>',
+    content: `
 <h2>即将导出的固定内容（客户投影）</h2>
 <pre>${escapeHtml(projectionText)}</pre>
 <p>产物摘要：${escapeHtml(detail.artifact_sha256)} ｜ 收件对象：${escapeHtml(detail.recipient_ref)}</p>
 ${buttons}
 ${download}
-</body></html>`;
+`,
+  });
 }

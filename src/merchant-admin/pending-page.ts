@@ -24,6 +24,7 @@
  */
 
 import type { WriteApprovalCandidate } from "../agent/merchant/action-candidate.js";
+import { MERCHANT_THEME_CSS } from "../merchant-ui/theme.js";
 import type { MerchantCoreService } from "../merchant-core/service.js";
 import type {
   CommittedDecisionProof,
@@ -207,12 +208,12 @@ export function renderPendingPage(
     <form method="post" action="/admin/decision" style="display:inline">
       <input type="hidden" name="command_id" value="${escapeHtml(c.candidate_id)}">
       <input type="hidden" name="confirmation" value="${escapeHtml(tokenFor?.(c.candidate_id, "approve") ?? "")}">
-      <button type="submit" name="decision" value="approve">批准并执行</button>
+      <button type="submit" class="act primary" name="decision" value="approve">批准并执行</button>
     </form>
     <form method="post" action="/admin/decision" style="display:inline">
       <input type="hidden" name="command_id" value="${escapeHtml(c.candidate_id)}">
       <input type="hidden" name="confirmation" value="${escapeHtml(tokenFor?.(c.candidate_id, "reject") ?? "")}">
-      <button type="submit" name="decision" value="reject">拒绝</button>
+      <button type="submit" class="act danger" name="decision" value="reject">拒绝</button>
     </form>
   </td>
 </tr>`,
@@ -220,18 +221,38 @@ export function renderPendingPage(
     .join("\n");
   return `<!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><title>待批准命令 — ${escapeHtml(merchantName)}</title></head>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>待批准命令 — Kiwi 商家工作台</title>
+<style>${MERCHANT_THEME_CSS}
+  body { margin: 0; padding: 0 0 64px; }
+  .pending-shell { width: 100%; max-width: 1200px; margin: 0 auto; padding: 28px clamp(16px, 3vw, 40px) 0; }
+  .pending-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  .pending-head h1 { margin: 0; font-size: 24px; line-height: 1.4; font-weight: 650; }
+  .pending-head .muted { margin: 0; }
+  td pre { margin: 0; font: 11px ui-monospace, SFMono-Regular, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 340px; }
+  td form { display: inline; }
+</style>
+</head>
 <body>
-  <h1>${escapeHtml(merchantName)}：待批准命令</h1>
-  <p>展示预览 ≠ 批准；批准 ≠ 执行成功（执行前重校验前置版本与硬策略）。</p>
+<main class="pending-shell">
+  <div class="pending-head">
+    <div class="brand"><span class="brand-name" aria-label="Kiwi">kiwi</span><span class="brand-title">商家工作台</span></div>
+    <h1>${escapeHtml(merchantName)}：待批准命令</h1>
+  </div>
+  <p class="muted">展示预览 ≠ 批准；批准 ≠ 执行成功（执行前重校验前置版本与硬策略）。</p>
+  <section class="card">
   ${
     commands.length === 0
-      ? "<p>当前没有待批准命令。</p>"
-      : `<table border="1" cellpadding="6">
+      ? '<p class="empty-state">当前没有待批准命令。</p>'
+      : `<div class="table-scroll"><table>
 <tr><th>command_id</th><th>工具</th><th>参数</th><th>前置版本</th><th>有效期至</th><th>操作</th></tr>
 ${rows}
-</table>`
+</table></div>`
   }
+  </section>
+</main>
 </body>
 </html>`;
 }

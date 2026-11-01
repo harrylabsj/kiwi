@@ -2,6 +2,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { MERCHANT_THEME_CSS } from "../../merchant-ui/theme.js";
 
 export function createTrustedWorkbenchPageHandler(): (
   req: IncomingMessage,
@@ -47,8 +48,18 @@ function writePage(res: ServerResponse, nonce: string, html: string): void {
 function shell(nonce: string, title: string, body: string, script: string): string {
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title>
-<style nonce="${nonce}">body{font:16px system-ui;max-width:760px;margin:40px auto;padding:0 20px;color:#17231c}button,input{font:inherit;padding:10px;margin:6px 0}button{background:#176b42;color:white;border:0;border-radius:8px}pre{white-space:pre-wrap;background:#f2f6f3;padding:16px;border-radius:8px}.warn{color:#8a3b12}</style></head>
-<body>${body}<pre id="status">等待操作</pre><script nonce="${nonce}">'use strict';
+<style nonce="${nonce}">${MERCHANT_THEME_CSS}
+  body { margin: 0; padding: 0 0 48px; }
+  .trusted-shell { max-width: 760px; margin: 0 auto; padding: 28px 20px 0; }
+  .trusted-shell h1 { margin: 0 0 12px; font-size: 24px; line-height: 1.4; font-weight: 650; }
+  .trusted-shell button { border: 1px solid var(--kiwi); background: var(--kiwi); color: #fff; border-radius: 7px; padding: 9px 16px; min-height: 38px; font-size: 13px; font-weight: 550; }
+  .trusted-shell button:hover { background: #164a34; }
+  .trusted-shell input { border: 1px solid #c8d5cc; border-radius: 7px; padding: 10px 12px; background: #fcfdfb; color: #23342d; max-width: 100%; }
+  .trusted-shell pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f8f3; border: 1px solid var(--border); padding: 14px 16px; border-radius: 8px; font: 12px ui-monospace, SFMono-Regular, monospace; }
+  .trusted-shell .warn { background: #fcf2de; color: #795309; border: 1px solid #e8d6ac; border-radius: 8px; padding: 10px 14px; }
+  .trusted-shell label { display: block; margin: 12px 0; color: #53665b; }
+</style></head>
+<body><main class="trusted-shell"><div class="brand" style="margin-bottom:16px"><span class="brand-name" aria-label="Kiwi">kiwi</span><span class="brand-title">商家工作台</span></div>${body}<pre id="status">等待操作</pre></main><script nonce="${nonce}">'use strict';
 if(window.top!==window.self){document.body.textContent='必须在顶层页面打开';throw new Error('embedded');}
 const status=document.getElementById('status');const show=(v)=>status.textContent=typeof v==='string'?v:JSON.stringify(v,null,2);
 const b64=(s)=>{const p=s.replace(/-/g,'+').replace(/_/g,'/');const raw=atob(p+'='.repeat((4-p.length%4)%4));return Uint8Array.from(raw,c=>c.charCodeAt(0));};

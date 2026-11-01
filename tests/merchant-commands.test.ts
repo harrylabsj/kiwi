@@ -302,6 +302,12 @@ describe("配套商家确认页面（src/merchant-admin/ 最小骨架）", () =>
     expect(html).toContain("批准并执行");
     expect(html).toContain("拒绝");
     expect(html).toContain("测试商家");
+    // 与工作台共用视觉主题：同一套令牌、卡片、表格与按钮。
+    expect(html).toContain("--kiwi: #205c43");
+    expect(html).toContain('class="card"');
+    expect(html).toContain('class="table-scroll"');
+    expect(html).toContain('class="act primary"');
+    expect(html).toContain('class="act danger"');
     db.close();
   });
 

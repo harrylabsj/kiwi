@@ -73,6 +73,12 @@ describe("BUG-01：OAuth 授权前的商家身份认证", () => {
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).not.toContain('<img src=x');
     expect(html).toContain("&quot;&gt;&lt;script&gt;");
+    // 登录页与商家工作台共用同一视觉主题（令牌/卡片/按钮），不是裸 HTML。
+    expect(html).toContain("--kiwi: #205c43");
+    expect(html).toContain('class="card login-card"');
+    expect(html).toContain('class="act primary"');
+    expect(html).toContain('class="brand-name"');
+    expect(html).toContain('autocomplete="current-password"');
   });
 
   function setup() {
