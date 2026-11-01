@@ -1738,7 +1738,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/references/release.json",
-      "sha256": "sha256:6ad9d89e69577da977c2766844975ead748b2788220b6ead9f6586f7283eb3bb"
+      "sha256": "sha256:95bba585eeaa6779d671625f75486792fcd1ee6c87a5b902b89c04051e5072da"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-merchant-cs-prep/SKILL.md",
@@ -2266,7 +2266,7 @@
     },
     {
       "path": "scripts/backfill-merchant-cloud-release.mjs",
-      "sha256": "sha256:4845588ca57011d0da369d4d1b7d6bacc19e24d064ecb08242078cdf4fc58d9f"
+      "sha256": "sha256:e277a8ec30ca8cb710328afec47671c7889c0c7f7dc903d4cab19f06c834d7c2"
     },
     {
       "path": "scripts/build-cloud-artifact.mjs",
