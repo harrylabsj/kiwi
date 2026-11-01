@@ -65,6 +65,14 @@
       "approved_by": "harrylabsj",
       "approved_at": "2026-10-28",
       "expires_at": "2026-11-27"
+    },
+    {
+      "id": "GHSA-G3HV-75WG-M249",
+      "package": "minimatch",
+      "reason": "@earendil-works/pi-coding-agent 精确依赖 minimatch 10.2.6；公告修复线为 11.0.1（主版本升级），替换会破坏打包依赖边校验（SHIPPING_BUNDLED_EDGE_INVALID），上游尚无同线修复。受影响面是 glob 复杂度放大的中等严重度拒绝服务；发布链路未见远端可控的 glob 输入，豁免至下次复核。",
+      "approved_by": "harrylabsj",
+      "approved_at": "2026-11-01",
+      "expires_at": "2026-11-27"
     }
   ]
 }
