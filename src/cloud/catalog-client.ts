@@ -176,12 +176,58 @@ export type DeviceEnrollmentPoll =
       scopes: string[];
     };
 
+/**
+ * 随 enrollment 首绑提交的访问配置在目录侧的处置结果（只含脱敏元数据）。
+ *
+ * 目录对 `runtime-access` 使用单调递增版本 + 严格 CAS，而 Runtime 在拿到绑定
+ * 之前读不到该版本（首绑只能声明 0）。因此"本地状态丢失后重新绑定"或"上次
+ * 挑战失败留下历史版本"时，目录会保留既有配置、跳过本次随绑凭据，并在绑定
+ * 回执里说明原因；Runtime 据此给出可恢复状态，而不是把绑定判失败或假装已生效。
+ */
+export interface RuntimeAccessBindingOutcome {
+  /** true = 本次凭据已写入目录（通常同事务激活，并发推进时可能保留 pending）。 */
+  applied: boolean;
+  /** applied=false 时的固定原因，例如 `runtime_access_version_conflict`。 */
+  reason?: string;
+  /** applied=true：本次写入的配置版本。 */
+  configVersion?: number;
+  /** applied=true：目录里该版本的实际状态（`active` / `pending`）。 */
+  status?: string;
+  /** applied=false：目录当前 head 版本（商家随后可用它做权威版本更新）。 */
+  headVersion?: number;
+  /** applied=false：head 版本的状态（`active` / `pending` / `invalid` / `revoked`）。 */
+  headStatus?: string;
+}
+
 export interface GrantBindingResult {
   bindingId: string;
   bindingVersion: number;
   keyThumbprint: string;
   activeCardRevision: number | null;
   bindingClaim: Record<string, unknown>;
+  /** 目录对随绑访问配置的处置结果；请求未携带配置时缺省。 */
+  runtimeAccess?: RuntimeAccessBindingOutcome;
+}
+
+/** 只信白名单字段：目录回执是外部输入，形状不符时按"未携带结果"处理。 */
+function parseRuntimeAccessBindingOutcome(value: unknown): RuntimeAccessBindingOutcome | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record["applied"] !== "boolean") return undefined;
+  const outcome: RuntimeAccessBindingOutcome = { applied: record["applied"] };
+  const reason = record["reason"];
+  if (typeof reason === "string" && reason !== "") outcome.reason = reason;
+  const status = record["status"];
+  if (typeof status === "string" && status !== "") outcome.status = status;
+  const headStatus = record["head_status"];
+  if (typeof headStatus === "string" && headStatus !== "") outcome.headStatus = headStatus;
+  const configVersion = record["config_version"];
+  if (typeof configVersion === "number" && Number.isInteger(configVersion) && configVersion >= 0)
+    outcome.configVersion = configVersion;
+  const headVersion = record["head_version"];
+  if (typeof headVersion === "number" && Number.isInteger(headVersion) && headVersion >= 0)
+    outcome.headVersion = headVersion;
+  return outcome;
 }
 
 export interface SignedListingPublicationInput {
@@ -714,6 +760,7 @@ export class CatalogClient {
       keyId: identity.keyId,
       serviceEpoch: input.serviceEpoch,
     });
+    const runtimeAccess = parseRuntimeAccessBindingOutcome(result["access_config_outcome"]);
     return {
       bindingId: checkedClaim.binding_id,
       bindingVersion: checkedClaim.binding_version,
@@ -724,6 +771,7 @@ export class CatalogClient {
           ? ((claim as Record<string, unknown>)["card_revision"] as number)
           : null,
       bindingClaim: { ...(claim as Record<string, unknown>), claims: checkedClaim },
+      ...(runtimeAccess !== undefined ? { runtimeAccess } : {}),
     };
   }
 
@@ -1037,6 +1085,54 @@ export class CatalogClient {
       throw new CatalogClientError("RESPONSE_INVALID", "Catalog runtime-access 响应不是 ok");
     }
     return projectRuntimeAccess(response["runtime_access"]);
+  }
+
+  /** Separate owner opt-in; existing share-code custody consent is not sufficient. */
+  async readPublicInquiryConsent(
+    context: RuntimeAccessContext,
+    identity: RuntimeSigningIdentity,
+  ): Promise<{ granted: boolean; policyActive: boolean; termsVersion: string }> {
+    const agentId = this.requireAgentId(context.agentId);
+    const bindingId = String(context.bindingId ?? "").trim();
+    if (!bindingId || context.keyId !== identity.keyId || !Number.isInteger(context.serviceEpoch) || context.serviceEpoch < 1)
+      throw new CatalogClientError("INVALID_INPUT", "活动绑定或签名身份无效");
+    const runtimeOrigin = normalizeOrigin(requireHttpsUrl(context.runtimeOrigin, "runtime_origin"));
+    const path = `/v1/agents/${encodeURIComponent(agentId)}/public-inquiry-consent`;
+    const issuedAt = this.now();
+    const jws = signCompactJws({ method: "GET", path, audience: "kiwi-catalog", body_digest: sha256Json({}),
+      catalog_agent_id: agentId, binding_id: bindingId, key_id: identity.keyId, runtime_origin: runtimeOrigin,
+      service_epoch: context.serviceEpoch, issued_at: issuedAt.toISOString(),
+      exp: new Date(issuedAt.getTime() + 90_000).toISOString(), nonce: this.nonceFactory() },
+    identity.signingIdentity, { extraHeader: { typ: "kiwi-runtime-request" } });
+    const response = recordOrEmpty((await this.request("GET", path, { jws })).json);
+    if (typeof response["granted"] !== "boolean" || typeof response["policy_active"] !== "boolean" ||
+        response["terms_version"] !== "open-inquiry-v1" || (response["policy_active"] && !response["granted"]))
+      throw new CatalogClientError("RESPONSE_INVALID", "开放询价授权状态无效");
+    return { granted: response["granted"], policyActive: response["policy_active"], termsVersion: "open-inquiry-v1" };
+  }
+
+  async setPublicInquiryConsent(
+    context: RuntimeAccessContext,
+    identity: RuntimeSigningIdentity,
+    granted: boolean,
+  ): Promise<{ granted: boolean; termsVersion: string }> {
+    const agentId = this.requireAgentId(context.agentId);
+    const bindingId = String(context.bindingId ?? "").trim();
+    if (!bindingId || context.keyId !== identity.keyId || !Number.isInteger(context.serviceEpoch) || context.serviceEpoch < 1)
+      throw new CatalogClientError("INVALID_INPUT", "活动绑定或签名身份无效");
+    const runtimeOrigin = normalizeOrigin(requireHttpsUrl(context.runtimeOrigin, "runtime_origin"));
+    const path = `/v1/agents/${encodeURIComponent(agentId)}/public-inquiry-consent`;
+    const body = { binding: { binding_id: bindingId }, consent: { granted, terms_version: "open-inquiry-v1" } };
+    const issuedAt = this.now();
+    const jws = signCompactJws({ method: "PUT", path, audience: "kiwi-catalog", body_digest: sha256Json(body),
+      catalog_agent_id: agentId, binding_id: bindingId, key_id: identity.keyId, runtime_origin: runtimeOrigin,
+      service_epoch: context.serviceEpoch, issued_at: issuedAt.toISOString(),
+      exp: new Date(issuedAt.getTime() + 90_000).toISOString(), nonce: this.nonceFactory() },
+    identity.signingIdentity, { extraHeader: { typ: "kiwi-runtime-request" } });
+    const response = recordOrEmpty((await this.request("PUT", path, { body, jws })).json);
+    if (response["granted"] !== granted || response["terms_version"] !== "open-inquiry-v1")
+      throw new CatalogClientError("RESPONSE_INVALID", "开放询价授权回执不匹配");
+    return { granted, termsVersion: "open-inquiry-v1" };
   }
 
   private async verifyCatalogEnvelope(envelope: Record<string, unknown>): Promise<BindingClaims> {

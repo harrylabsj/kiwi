@@ -37,6 +37,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { a2aCardSigningIdentity, createA2aNodeCore, createA2aAuthVerifier } from "../a2a/node.js";
+import { isOpenInquiryIdentity } from "../a2a/open-inquiry-identity.js";
+import { InquiryNonceStore } from "../a2a/inquiry-nonce-store.js";
+import { OpenInquiryLocalPolicy } from "./access/open-inquiry-policy.js";
 import { closeDatabase, closeHttpServer, createCleanup, CleanupError } from "../lifecycle/close.js";
 import { A2A_SIGNING_KEY_FILE, loadA2aSigningIdentityFromFile, loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/signing-key.js";
 import { publicKeyThumbprint } from "../trust/binding/thumbprint.js";
@@ -517,12 +520,21 @@ export async function bootstrapCloudRuntime(
     config.a2aAuth.mode === "bearer"
       ? (options.env ?? process.env)[config.a2aAuth.tokenEnv]
       : undefined;
+  const openInquiryPolicy = new OpenInquiryLocalPolicy(config.dataDir, config.publicOrigin);
+  let inquiryNonces: InquiryNonceStore | undefined;
   const authVerifier = createA2aAuthVerifier({
     mode: config.a2aAuth.mode,
     ...(bearerToken !== undefined ? { bearerToken } : {}),
     signingKeyDir,
     signingKeyId: signingIdentity?.keyid ?? config.publicOrigin,
     advertisedBase: config.publicOrigin,
+    ...(config.a2aAuth.mode === "signature" ? {
+      openInquiryEnabled: () => openInquiryPolicy.isEnabled(),
+      openInquiryNonceStore: { checkAndSet: (key: string) => {
+        try { inquiryNonces ??= new InquiryNonceStore(config.dataDir); return inquiryNonces.checkAndSet(key); }
+        catch { return false; }
+      } },
+    } : {}),
     // 云端必须按声明 origin 重建目标 URI：平台网关会改写入站 Host（M0 事实 #4）。
     authoritySource: "declared",
   });
@@ -914,7 +926,8 @@ export async function bootstrapCloudRuntime(
         !result.authenticated ||
         result.identityVerified !== true ||
         typeof result.identity !== "string" ||
-        result.identity.trim() === ""
+        result.identity.trim() === "" ||
+        isOpenInquiryIdentity(result.identity)
       ) {
         return undefined;
       }
@@ -1095,6 +1108,8 @@ export async function bootstrapCloudRuntime(
           submitAccessShareLink: (link: string, consentTermsVersion: string) =>
             directConnection!.submitAccessShareLink(link, consentTermsVersion),
           revokeAccess: () => directConnection!.revokeAccess(),
+          readPublicInquiryConsent: () => directConnection!.readPublicInquiryConsent(),
+          setPublicInquiryConsent: (granted: boolean) => directConnection!.setPublicInquiryConsent(granted),
         },
       } : {}),
       workbenchConfirmations,
@@ -1312,6 +1327,7 @@ export async function bootstrapCloudRuntime(
     res.end(renderMerchantManagementPage({
       productAuthority: fileProductSource !== undefined ? "file" : "exact",
       catalogConnection: directConnection !== undefined,
+      workbuddyAccess: new URL(config.publicOrigin).hostname.endsWith(".app.workbuddy.host"),
     }));
   };
 
@@ -1344,6 +1360,7 @@ export async function bootstrapCloudRuntime(
       signingIdentity: toJwsSigningIdentity(signingIdentity),
       expectedMerchantId: catalogMerchantIdForProducts,
       expectedAgentId: profile.agent_id,
+      ...(directConnection !== undefined ? { expectedBindingIdentity: () => directConnection?.getChallengeIdentity() } : {}),
       currentGeneration: 1,
       expectedOrigin: config.publicOrigin,
       expectedPath: CLOUD_A2A_PATH,
@@ -1399,7 +1416,8 @@ export async function bootstrapCloudRuntime(
     { id: "assembly", after: ["http_server", "background_work", "merchant_handler"], run: () => assembly.close() },
     { id: "management_database", after: ["http_server", "background_work", "merchant_handler"],
       run: () => { if (managementDb) closeDatabase(managementDb); } },
-    { id: "ownership", after: ["timers", "heartbeat", "http_server", "background_work", "merchant_handler", "statistics", "assembly", "management_database"],
+    { id: "inquiry_nonces", after: ["http_server", "background_work"], run: () => { inquiryNonces?.close(); } },
+    { id: "ownership", after: ["timers", "heartbeat", "http_server", "background_work", "merchant_handler", "statistics", "assembly", "management_database", "inquiry_nonces"],
       run: () => core.releaseOwnership() },
   ]);
   // 6) 严格监听：端口被占用即失败，绝不换端口（T013）。

@@ -54,6 +54,8 @@ import {
   type ThrottleOptions,
 } from "./server/index.js";
 import { HttpMessageSignatureVerifier, InMemoryNonceStore } from "../trust/identity/index.js";
+import type { NonceStore } from "../trust/identity/nonce.js";
+import { OpenInquiryVerifier } from "./open-inquiry-verifier.js";
 import {
   A2A_SIGNING_KEY_FILE,
   loadA2aTrustedKeys,
@@ -383,6 +385,8 @@ interface AuthFromEnvContext {
  *   获更高信任。
  */
 export function createA2aAuthVerifier(options: A2aAuthVerifierOptions): AuthVerifier {
+  if (options.openInquiryNonceStore !== undefined && options.mode !== "signature")
+    throw new Error("open inquiry sessions require signature mode");
   if (options.mode === "loopback") return new LoopbackOnlyAuthVerifier();
   if (options.mode === "none") return new NoneAuthVerifier();
   if (options.mode === "bearer") {
@@ -399,7 +403,7 @@ export function createA2aAuthVerifier(options: A2aAuthVerifierOptions): AuthVeri
     trustedKeys = loadA2aTrustedKeys(trustedFile);
   }
   const advertised = new URL(options.advertisedBase);
-  return new HttpMessageSignatureVerifier({
+  const verifier = new HttpMessageSignatureVerifier({
     resolver: resolveA2aSignatureResolver(identity, trustedKeys),
     scheme: advertised.protocol === "https:" ? "https" : "http",
     expectedAuthority: advertised.hostname,
@@ -411,6 +415,9 @@ export function createA2aAuthVerifier(options: A2aAuthVerifierOptions): AuthVeri
     // 失效（JWS/nonce 机制是死代码）。接入内存 nonce 存储后，T1+ 键可强制 nonce。
     nonceStore: new InMemoryNonceStore(),
   });
+  return options.openInquiryNonceStore === undefined ? verifier :
+    new OpenInquiryVerifier(verifier, new URL(options.advertisedBase).origin, options.openInquiryNonceStore,
+      options.openInquiryEnabled);
 }
 
 /** createA2aAuthVerifier 的显式入参（替代直接读环境变量的隐式形态）。 */
@@ -430,6 +437,10 @@ export interface A2aAuthVerifierOptions {
   /** 签名 keyid（公网用 advertised origin，否则 role:agent_id）。 */
   signingKeyId: string;
   advertisedBase: string;
+  /** Explicit opt-in only; callers own durable replay-store lifecycle. */
+  openInquiryNonceStore?: NonceStore;
+  /** Dynamic owner-consent gate; absent only for explicitly injected test/embedding use. */
+  openInquiryEnabled?: () => boolean;
 }
 
 function authVerifierFromEnv(ctx: AuthFromEnvContext): AuthVerifier | undefined {

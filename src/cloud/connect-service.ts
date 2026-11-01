@@ -57,6 +57,8 @@ import { loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/sig
 import { withEnrollmentStoreLock, reserveEnrollmentCreation } from "./binding/store-lock.js";
 import { writeFileAtomic } from "../fs/atomic-write.js";
 import { ProductTableError } from "./product-source.js";
+import { LocalShareVault } from "./access/local-share-vault.js";
+import { OpenInquiryLocalPolicy } from "./access/open-inquiry-policy.js";
 import { canonicalize } from "../negotiation/jcs.js";
 import { validateAgentCard } from "../discovery/agent-card/validate.js";
 import type { AgentCard } from "../discovery/agent-card/types.js";
@@ -232,6 +234,12 @@ export interface ConnectionSession extends AuthorizedEnrollment {
    * 由 Catalog 受控保存，运行时这一侧从不落盘、从不回显。
    */
   runtime_access?: RuntimeAccessRecord;
+  /**
+   * 随绑提交的分享码被目录按版本冲突跳过（目录保留既有配置，绝不覆盖）。只存
+   * 脱敏元数据：商家要用工作台「提交或更新」（签名 + 权威版本 CAS）显式更换，
+   * 不能靠重复绑定把旧码顶上去。
+   */
+  runtime_access_conflict?: { reason: string; head_version: number };
 }
 
 /**
@@ -382,6 +390,8 @@ export interface MerchantConnectionService {
   getPairing(): ConnectionPairing | null;
   /** 已验证绑定（bound/published 且未过期；published 另经 Catalog 复核）；无则 null。 */
   getVerifiedBinding(): Promise<VerifiedBinding | null>;
+  /** Locally verified binding identity for the synchronous endpoint challenge. */
+  getChallengeIdentity(): { merchantId: string; agentId: string } | undefined;
   /** WorkBuddy 访问配置的本地已知状态（M-04：平台门禁是独立于绑定的信号）。 */
   getAccessSummary(): RuntimeAccessSummary;
   /** 向 Catalog 拉取权威状态（签名 GET）；本地状态丢失时用它恢复版本。 */
@@ -393,6 +403,15 @@ export interface MerchantConnectionService {
   submitAccessShareLink(rawLink: string, consentTermsVersion?: string): Promise<RuntimeAccessSummary>;
   /** 撤销访问配置（M-03）；停止向 Buyer 发放分享码。 */
   revokeAccess(): Promise<RuntimeAccessSummary>;
+  readPublicInquiryConsent(): Promise<PublicInquiryConsentSummary>;
+  setPublicInquiryConsent(granted: boolean): Promise<PublicInquiryConsentSummary>;
+}
+
+export interface PublicInquiryConsentSummary {
+  granted: boolean;
+  policyActive: boolean;
+  localEnabled: boolean;
+  termsVersion: string;
 }
 
 /** WorkBuddy 访问配置对工作台可见的状态（`none` = Catalog 上没有配置）。 */
@@ -504,12 +523,14 @@ async function fetchPublicCard(
   expectedEndpoint: string,
   identity: { keyid: string; publicKeyPem: string },
   fetchImpl: typeof fetch,
+  shareSecret?: string,
 ): Promise<AgentCard> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8_000);
-  const url = `${origin}/.well-known/agent-card.json`;
+  const url = new URL(`${origin}/.well-known/agent-card.json`);
+  if (shareSecret !== undefined) url.searchParams.set("sharecode", shareSecret);
   try {
-    const response = await fetchImpl(url, {
+    const response = await fetchImpl(url.href, {
       method: "GET",
       redirect: "manual",
       signal: controller.signal,
@@ -551,7 +572,9 @@ async function fetchPublicCard(
     if (err instanceof MerchantConnectError) throw err;
     throw new MerchantConnectError(
       "RUNTIME_UNREACHABLE",
-      `暂时无法从外部连接你的商家服务（${err instanceof Error ? err.message : String(err)}）。请确认服务已启动、TLS 证书有效且允许公网访问，然后重试。`,
+      shareSecret === undefined
+        ? `暂时无法从外部连接你的商家服务（${err instanceof Error ? err.message : String(err)}）。请确认服务已启动、TLS 证书有效且允许公网访问，然后重试。`
+        : "暂时无法通过 WorkBuddy 分享链接读取商家名片。请核对分享链接与服务状态后重试。",
     );
   } finally {
     clearTimeout(timer);
@@ -576,7 +599,10 @@ class ConnectionServiceImpl implements MerchantConnectionService {
    * 只在 `stepAuthorized` 的 enrollment 绑定里使用；后续更新/撤销一律走
    * 工作台的 PUT runtime-access（版本可读、可撤销）。
    */
-  private readonly firstBindAccessConfig: WorkbuddyAccessConfig | undefined;
+  private firstBindAccessConfig: WorkbuddyAccessConfig | undefined;
+  private readonly shareVault: LocalShareVault;
+  private readonly inquiryPolicy: OpenInquiryLocalPolicy;
+  private localShareInvalid = false;
   private readonly a2aAuthMode: "signature" | "bearer";
   /** begin/reconcile 串行（排队不交错）。 */
   private mutex: Promise<unknown> = Promise.resolve();
@@ -648,6 +674,29 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
     });
     this.identityRaw = loadOrCreateA2aSigningIdentity(this.dataDir, this.origin);
+    this.shareVault = new LocalShareVault(this.dataDir, this.identityRaw.privateKeyPem, this.origin);
+    this.inquiryPolicy = new OpenInquiryLocalPolicy(this.dataDir, this.origin);
+    try {
+      const persisted = this.shareVault.get();
+      if (persisted !== undefined) {
+        const saved = JSON.parse(persisted) as { link?: unknown; consentTermsVersion?: unknown; revoked?: unknown };
+        if (saved.revoked === true) {
+          // A local revocation overrides any stale process environment on restart.
+          this.firstBindAccessConfig = undefined;
+        } else {
+          if (typeof saved.link !== "string" || saved.consentTermsVersion !== WORKBUDDY_CUSTODY_TERMS_VERSION)
+            throw new MerchantConnectError("STATE_INVALID", "分享链接暂存状态无效，请重新配置。");
+          const link = parseWorkbuddyShareLink(saved.link);
+          assertShareLinkMatchesRuntimeOrigin(link, this.origin);
+          this.firstBindAccessConfig = buildWorkbuddyAccessConfig(link, 0, saved.consentTermsVersion);
+        }
+      }
+    } catch {
+      // A damaged or wrong-key local vault cannot authorize use of an old environment value.
+      // Keep the management page available so the owner can replace or revoke the link.
+      this.firstBindAccessConfig = undefined;
+      this.localShareInvalid = true;
+    }
     this.identity = {
       signingIdentity: toJwsSigningIdentity(this.identityRaw),
       keyId: this.identityRaw.keyid,
@@ -666,6 +715,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
             publicKeyPem: this.identityRaw.publicKeyPem,
           },
           fetchImpl,
+          this.firstBindAccessConfig?.secret_value,
         ));
     this.beforePublish = options.beforePublish;
   }
@@ -674,6 +724,10 @@ class ConnectionServiceImpl implements MerchantConnectionService {
 
   async begin(): Promise<ConnectionSummary> {
     return await this.withLock(async () => {
+      if (new URL(this.origin).hostname.endsWith(".app.workbuddy.host") &&
+          this.firstBindAccessConfig === undefined) {
+        throw new MerchantConnectError("ACCESS_SHARE_LINK_REQUIRED", "请先提交并授权本实例的 WorkBuddy 分享链接，再发起目录连接。");
+      }
       const card = await this.loadPublicCard();
       const currentDigest = cardDigest(card);
       const store = readEnrollmentStore(this.dataDir);
@@ -1030,14 +1084,40 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     }
   }
 
+  getChallengeIdentity(): { merchantId: string; agentId: string } | undefined {
+    const session = this.selectSession(readEnrollmentStore(this.dataDir));
+    // These values are written only after the Catalog binding claim is verified.
+    // The Catalog rechecks its active binding before accepting the challenge proof.
+    if (session === undefined || !["bound", "published"].includes(session.status) ||
+        !session.binding_id || !session.binding_version || !session.merchant_id || !session.catalog_agent_id)
+      return undefined;
+    return { merchantId: session.merchant_id, agentId: session.catalog_agent_id };
+  }
+
   // ── WorkBuddy 访问配置（M-02/M-03/M-04）────────────────────────────
 
   getAccessSummary(): RuntimeAccessSummary {
     const session = this.selectSession(readEnrollmentStore(this.dataDir));
-    return accessSummaryOf(session as ConnectionSession | undefined);
+    const summary = accessSummaryOf(session as ConnectionSession | undefined);
+    if (this.localShareInvalid) return { ...summary, configured: false, status: "invalid", statusReason: "local_vault_invalid" };
+    // 目录已有分享码、随绑凭据被按版本冲突跳过：不能显示成"已加密暂存，继续
+    // 连接即可生效"（那会诱导重复绑定去顶掉目录里的码），要给出唯一的可恢复
+    // 路径——商家用工作台「提交或更新」按权威版本显式更换。
+    if ((session as ConnectionSession | undefined)?.runtime_access_conflict !== undefined &&
+        summary.status === "none") {
+      return { ...summary, configured: false, status: "invalid", statusReason: "catalog_access_exists" };
+    }
+    if (this.firstBindAccessConfig !== undefined && summary.status === "none") {
+      return { ...summary, status: "pending", statusReason: "local_staged", consentGranted: true,
+        consentTermsVersion: this.firstBindAccessConfig.consent.terms_version };
+    }
+    return summary;
   }
 
   async refreshAccess(): Promise<RuntimeAccessSummary> {
+    const current = this.selectSession(readEnrollmentStore(this.dataDir)) as ConnectionSession | undefined;
+    if (current === undefined || (current.binding_id === undefined &&
+        (current.status === "preparing" || current.status === "authorized"))) return this.getAccessSummary();
     const { session, context } = this.requireAccessTarget();
     const { configVersion, runtimeAccess, custodyEnabled, consent, recentFaults } =
       await this.client.readRuntimeAccess(context, this.identity);
@@ -1064,6 +1144,16 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     // 解析先于任何网络动作：非法链接不会产生请求，也不会把链接内容带进日志。
     const link = parseWorkbuddyShareLink(rawLink);
     assertShareLinkMatchesRuntimeOrigin(link, this.origin);
+    const current = this.selectSession(readEnrollmentStore(this.dataDir)) as ConnectionSession | undefined;
+    if (current === undefined || (current.binding_id === undefined &&
+        (current.status === "preparing" || current.status === "authorized"))) {
+      // First binding needs the credential before Catalog has issued a binding id.
+      // Persist it encrypted, bound to this origin and the runtime's existing identity key.
+      this.shareVault.put(JSON.stringify({ link: rawLink, consentTermsVersion }));
+      this.localShareInvalid = false;
+      this.firstBindAccessConfig = buildWorkbuddyAccessConfig(link, 0, consentTermsVersion);
+      return this.getAccessSummary();
+    }
     const { session, context } = this.requireAccessTarget();
     const expectedVersion = session.runtime_access?.config_version ?? 0;
     let projection: RuntimeAccessProjection;
@@ -1093,10 +1183,22 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       custodyEnabled: true,
       consent: { granted: true, termsVersion: consentTermsVersion },
     });
+    this.firstBindAccessConfig = undefined;
+    this.shareVault.put(JSON.stringify({ link: rawLink, consentTermsVersion }));
+    this.localShareInvalid = false;
+    this.firstBindAccessConfig = buildWorkbuddyAccessConfig(link, 0, consentTermsVersion);
     return this.getAccessSummary();
   }
 
   async revokeAccess(): Promise<RuntimeAccessSummary> {
+    const current = this.selectSession(readEnrollmentStore(this.dataDir)) as ConnectionSession | undefined;
+    if (current === undefined || (current.binding_id === undefined &&
+        (current.status === "preparing" || current.status === "authorized"))) {
+      this.firstBindAccessConfig = undefined;
+      this.shareVault.put(JSON.stringify({ revoked: true }));
+      this.localShareInvalid = false;
+      return this.getAccessSummary();
+    }
     const { session, context } = this.requireAccessTarget();
     let version = session.runtime_access?.config_version ?? 0;
     if (version < 1) {
@@ -1107,6 +1209,10 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       throw new MerchantConnectError("ACCESS_NOT_CONFIGURED", "当前没有可撤销的访问配置");
     }
     let projection: RuntimeAccessProjection;
+    // Record the local revocation before the remote call so a restart can never
+    // resurrect a credential from an older environment after a partial failure.
+    this.firstBindAccessConfig = undefined;
+    this.shareVault.put(JSON.stringify({ revoked: true }));
     try {
       projection = await this.client.updateRuntimeAccess(
         context,
@@ -1121,7 +1227,39 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       custodyEnabled: true,
       consent: { granted: false },
     });
+    this.firstBindAccessConfig = undefined;
+    this.localShareInvalid = false;
     return this.getAccessSummary();
+  }
+
+  async readPublicInquiryConsent(): Promise<PublicInquiryConsentSummary> {
+    return await this.withLock(async () => {
+      const binding = await this.getVerifiedBinding();
+      if (binding === null) throw new MerchantConnectError("STATE_INVALID", "尚未建立有效的 Catalog 绑定");
+      const context: RuntimeAccessContext = { agentId: binding.agentId, bindingId: binding.bindingId,
+        keyId: this.identity.keyId, runtimeOrigin: this.origin, serviceEpoch: this.serviceEpoch };
+      const remote = await this.client.readPublicInquiryConsent(context, this.identity);
+      const intent = this.inquiryPolicy.intent(binding);
+      if (intent === "grant") this.inquiryPolicy.set(binding, true, remote.granted && remote.policyActive);
+      else if (intent === "revoke" && !remote.granted) this.inquiryPolicy.set(binding, false, true);
+      return { ...remote, localEnabled: this.inquiryPolicy.isEnabled() };
+    });
+  }
+
+  async setPublicInquiryConsent(granted: boolean): Promise<PublicInquiryConsentSummary> {
+    return await this.withLock(async () => {
+      const binding = await this.getVerifiedBinding();
+      if (binding === null) throw new MerchantConnectError("STATE_INVALID", "尚未建立有效的 Catalog 绑定");
+      const context: RuntimeAccessContext = { agentId: binding.agentId, bindingId: binding.bindingId,
+        keyId: this.identity.keyId, runtimeOrigin: this.origin, serviceEpoch: this.serviceEpoch };
+      // An unconfirmed grant and every revoke immediately disable local access.
+      this.inquiryPolicy.set(binding, granted, false);
+      await this.client.setPublicInquiryConsent(context, this.identity, granted);
+      const remote = await this.client.readPublicInquiryConsent(context, this.identity);
+      if (remote.granted !== granted) throw new MerchantConnectError("STATE_INVALID", "目录授权状态尚未确认");
+      this.inquiryPolicy.set(binding, granted, granted ? remote.policyActive : true);
+      return { ...remote, localEnabled: this.inquiryPolicy.isEnabled() };
+    });
   }
 
   /**
@@ -1198,11 +1336,14 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       updated_at: projection?.updatedAt ?? this.now().toISOString(),
     };
     this.persist((fresh) =>
-      fresh.sessions.map((item) =>
-        item.enrollment_id === enrollmentId
-          ? { ...(item as ConnectionSession), runtime_access: record }
-          : item,
-      ),
+      fresh.sessions.map((item) => {
+        if (item.enrollment_id !== enrollmentId) return item;
+        const updated = { ...(item as ConnectionSession), runtime_access: record };
+        // 拿到目录权威状态后，"随绑凭据被按版本冲突跳过"的提示就过时了：改按
+        // record 里的真实状态展示（active/pending/invalid 都在 record 中）。
+        delete updated.runtime_access_conflict;
+        return updated;
+      }),
     );
   }
 
@@ -1297,6 +1438,29 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     }
   }
 
+  /**
+   * 首绑随附的访问配置是**一次性**的：目录侧 runtime-access 按 agent 单调递增并
+   * 严格 CAS（`stage_runtime_access` 要求 `expected_version == head`），而本地暂存
+   * 配置恒为 `expected_version: 0`。首次绑定成功时该配置已在同一事务里激活
+   * （head 变为 ≥1）；此后 `stepBound` 会把超过首签 TTL（15 分钟）的 bound 会话
+   * 显式置 expired（"下一次 begin() 重开"），重新绑定若继续随绑提交同一份配置，
+   * 目录按版本冲突 409 拒绝 → 整个重绑失败（BIND_REJECTED），而重新粘贴分享码
+   * 只会在本地重建同一份 `expected_version: 0` 的配置，商家无法自行恢复。
+   * 因此只有"本 origin/key/Catalog 从未成功绑定过"才随绑提交；已交付过的配置
+   * 更新一律走工作台的 PUT runtime-access（带权威版本、409 校正后只重试一次）。
+   */
+  private firstBindAccessForFreshBinding(): WorkbuddyAccessConfig | undefined {
+    if (this.firstBindAccessConfig === undefined) return undefined;
+    const boundBefore = readEnrollmentStore(this.dataDir).sessions.some((item) => {
+      const previous = item as ConnectionSession;
+      return typeof previous.binding_id === "string" && previous.binding_id !== "" &&
+        previous.runtime_origin === this.origin &&
+        previous.key_thumbprint === this.keyThumbprint &&
+        previous.catalog_origin === this.client.catalogOrigin;
+    });
+    return boundBefore ? undefined : this.firstBindAccessConfig;
+  }
+
   private async stepAuthorized(session: ConnectionSession): Promise<ConnectionSession> {
     // 兼容旧 CLI 写入的会话（当时 merchant_id 存的是 poll 断言）：优先
     // offered_merchant_id，缺失时回落旧字段，语义相同（都只是 bind 入参）。
@@ -1313,6 +1477,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       );
     }
     this.effectStarted = true;
+    const firstBindAccessConfig = this.firstBindAccessForFreshBinding();
     const binding = await this.client.bindEnrollment(
       {
         enrollmentId: session.enrollment_id,
@@ -1324,8 +1489,8 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         generation: session.generation ?? this.generation,
         serviceEpoch: this.serviceEpoch,
         authorizationEpoch: session.authorization_epoch,
-        ...(this.firstBindAccessConfig !== undefined
-          ? { accessConfig: this.firstBindAccessConfig }
+        ...(firstBindAccessConfig !== undefined
+          ? { accessConfig: firstBindAccessConfig }
           : {}),
       },
       this.identity,
@@ -1357,6 +1522,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         "Catalog已签名绑定声明缺少有效expires_at；名片保持未发布。",
       );
     }
+    const accessOutcome = binding.runtimeAccess;
     const bound = {
       ...session,
       status: "bound" as const,
@@ -1365,6 +1531,15 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       merchant_id: claimMerchantId,
       binding_expires_at: claimExpiry,
       expected_card_revision: binding.activeCardRevision ?? 0,
+      // 目录因版本冲突跳过随绑凭据：绑定本身成功，但本地不能假装码已生效。
+      // 记下可恢复信号，由工作台的访问摘要提示商家用权威版本显式更新。
+      ...(accessOutcome !== undefined && accessOutcome.applied === false
+          && accessOutcome.reason === "runtime_access_version_conflict"
+        ? { runtime_access_conflict: {
+            reason: "catalog_access_exists",
+            head_version: accessOutcome.headVersion ?? 0,
+          } }
+        : {}),
     };
     this.persist((fresh) =>
       fresh.sessions.map((item) => (item.enrollment_id === session.enrollment_id ? bound : item)),

@@ -34,6 +34,7 @@
 
 import http from "node:http";
 import { isIP } from "node:net";
+import { isOpenInquiryIdentity } from "../open-inquiry-identity.js";
 import { isJsonRpcRequest } from "../client/index.js";
 import { NegotiationValidationError } from "../../negotiation/domain/common.js";
 import { parseUcpAgentHeader, UCP_AGENT_HEADER } from "../ucp-agent.js";
@@ -923,7 +924,7 @@ export class A2AServer {
    * 不把扩展名片（可能含更详细信息）降级成公开读。
    */
   private handleGetExtendedAgentCard(caller: Caller): unknown {
-    if (anonymousCaller(caller) || caller.identityVerified !== true) {
+    if (anonymousCaller(caller) || caller.identityVerified !== true || isOpenInquiryIdentity(caller.identity)) {
       throw protocolError(
         "authentication_required",
         "extended agent card requires a verified identity",

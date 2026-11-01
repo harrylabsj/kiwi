@@ -47,6 +47,8 @@ import { BuyerReplyRejected } from "./receive-gate.js";
  */
 export interface MerchantAccessTransport {
   sendUrlFor(signUrl: string): string;
+  /** Account-free directory relay; never contains a WorkBuddy credential. */
+  openInquiry?: import("../discovery/catalog-source/open-inquiry.js").OpenInquiryRoute;
 }
 
 /**
@@ -298,7 +300,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     }
     try {
       const access = await this.accessForMerchant(merchant);
-      const endpoint = await this.resolveEndpoint(agentCardUrl, access);
+      const endpoint = access?.openInquiry?.endpoint ?? await this.resolveEndpoint(agentCardUrl, access);
       const sku = merchant.matching_skus?.[0] ?? firstSku(intent);
       const negotiationId = newNegotiationId();
       const envelope = buildRfqEnvelope({
@@ -312,17 +314,17 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         // WorkBuddy 路径不发送标准 Bearer：平台会改写 Authorization（G0 §1.1.3），
         // 继续附带只会让上层误以为认证已生效。业务认证走签名（B-05/B-06）。
         bearerToken: access === null ? this.bearerToken : undefined,
-        ...(this.signer !== undefined ? { signer: this.signer } : {}),
+        ...(access?.openInquiry ? { signer: access.openInquiry.signer } : this.signer !== undefined ? { signer: this.signer } : {}),
         allowPrivateRanges: this.allowPrivateRanges,
         skipDnsCheck: this.skipDnsCheck,
         timeoutMs: this.timeoutMs,
         cookieJar: this.gatewayCookies,
         // 已有网关 cookie 就不再追加分享码：把"每次请求带码"降到"每 30 天带一次"，
         // 平台明确说分享码面向人工分享、不适合大规模机器分发。
-        ...(access !== null && !this.gatewayCookies.has(new URL(endpoint).origin)
+        ...(access !== null && !access.openInquiry && !this.gatewayCookies.has(new URL(endpoint).origin)
           ? { sendUrl: access.sendUrlFor(endpoint) }
           : {}),
-        ...(this.rpcFetchImpl !== undefined ? { fetchImpl: this.rpcFetchImpl } : {}),
+        ...(access?.openInquiry ? { fetchImpl: access.openInquiry.fetchImpl } : this.rpcFetchImpl !== undefined ? { fetchImpl: this.rpcFetchImpl } : {}),
       });
       if (!this.recovery || !context) throw new ProtocolOperationUnknown();
       const exchange = await this.recovery.exchange({
@@ -411,10 +413,10 @@ export class A2AQuoteFetcher implements QuoteFetcher {
       // 恢复路径只知道端点：用按 origin 的映射继续带码（B-04：不是只对首次请求有效）。
       const access=this.merchantAccess===undefined?null:await this.merchantAccess.forEndpoint(endpoint);
       return buildA2AClient(endpoint,{
-        bearerToken:this.bearerToken,allowPrivateRanges:this.allowPrivateRanges,skipDnsCheck:this.skipDnsCheck,timeoutMs:this.timeoutMs,
-        ...(this.signer!==undefined?{signer:this.signer}:{}),
-        ...(access!==null?{sendUrl:access.sendUrlFor(endpoint)}:{}),
-        ...(this.rpcFetchImpl!==undefined?{fetchImpl:this.rpcFetchImpl}:{}),
+        bearerToken:access===null?this.bearerToken:undefined,allowPrivateRanges:this.allowPrivateRanges,skipDnsCheck:this.skipDnsCheck,timeoutMs:this.timeoutMs,
+        ...(access?.openInquiry?{signer:access.openInquiry.signer}:this.signer!==undefined?{signer:this.signer}:{}),
+        ...(access!==null&&!access.openInquiry?{sendUrl:access.sendUrlFor(endpoint)}:{}),
+        ...(access?.openInquiry?{fetchImpl:access.openInquiry.fetchImpl}:this.rpcFetchImpl!==undefined?{fetchImpl:this.rpcFetchImpl}:{}),
       }).getTask(id);
     },this.timeoutMs,this.pollIntervalMs);
     return results.map(result=>this.project(result));

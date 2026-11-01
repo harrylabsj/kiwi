@@ -21,6 +21,7 @@ import { createMerchantManagementApiHandler } from "../src/http/merchant-managem
 import { MerchantImportDraftStore } from "../src/http/merchant-management/draft-store.js";
 import { MerchantManagementOperationStore } from "../src/http/merchant-management/operation-store.js";
 import { MutableServiceState } from "../src/http/merchant-management/service-state.js";
+import { MerchantConnectError } from "../src/cloud/connect-service.js";
 
 const ORIGIN = "https://merchant.example";
 const db = new DatabaseSync(":memory:");
@@ -29,6 +30,8 @@ let server: Server;
 let base: string;
 let beginCalls = 0;
 let failBegin = false;
+let missingShareLink = false;
+let publicConsentCalls = 0;
 let summaryErrorCode: string | undefined;
   let summaryStage: string | undefined = "authorize";
 let publicationCalls = 0;
@@ -74,8 +77,13 @@ beforeAll(async () => {
         ...(summaryErrorCode !== undefined ? { errorCode: summaryErrorCode } : {}),
       }),
       getPairing: async () => ({ user_code: "SAMPLE-CODE", verification_uri: "https://catalog.example/portal/connect/test", expires_at: "2030-01-01T00:00:00Z", grant: "MUST_NOT_LEAK" }),
-      begin: async () => { beginCalls += 1; if (failBegin) throw new Error("MUST_NOT_LEAK"); },
+      begin: async () => { beginCalls += 1; if (missingShareLink) throw new MerchantConnectError("ACCESS_SHARE_LINK_REQUIRED", "safe"); if (failBegin) throw new Error("MUST_NOT_LEAK"); },
       getAccess: async () => accessState,
+      readPublicInquiryConsent: async () => ({ granted: false, policyActive: false, localEnabled: false, termsVersion: "open-inquiry-v1" }),
+      setPublicInquiryConsent: async (granted: boolean) => {
+        publicConsentCalls += 1;
+        return { granted, policyActive: granted, localEnabled: granted, termsVersion: "open-inquiry-v1" };
+      },
       refreshAccess: async () => accessState,
       submitAccessShareLink: async (link: string, consentTermsVersion: string) => {
         submittedLink = link;
@@ -245,6 +253,25 @@ describe("runtime Catalog connection API", () => {
     expect(await (await begin(owner, "same-begin")).json()).toEqual(receipt);
     expect(beginCalls - before).toBe(1);
   });
+  it("开放询价授权仅限 owner、要求 CSRF 与明确条款", async () => {
+    const owner = await login();
+    const operator = await login("operator");
+    const path = "/catalog/public-inquiry/consent";
+    const body = { granted: true, terms_version: "open-inquiry-v1" };
+    const call = (auth: typeof owner, value: unknown, guards = true) => fetch(base + "/merchant/api/v1" + path, {
+      method: "POST", headers: { cookie: auth.cookie, "content-type": "application/json",
+        ...(guards ? { origin: ORIGIN, "x-csrf-token": auth.csrf } : {}) }, body: JSON.stringify(value),
+    });
+    const before = publicConsentCalls;
+    expect((await call(owner, body, false)).status).toBe(403);
+    expect((await call(operator, body)).status).toBe(403);
+    expect((await call(owner, { granted: true })).status).toBe(422);
+    expect(publicConsentCalls).toBe(before);
+    const response = await call(owner, body);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ consent: { granted: true, localEnabled: true } });
+    expect(publicConsentCalls).toBe(before + 1);
+  });
   it("uncertain external outcome is retained, without leaking the error or blindly retrying", async () => {
     const owner = await login();
     failBegin = true;
@@ -258,6 +285,19 @@ describe("runtime Catalog connection API", () => {
       expect(await (await begin(owner, "uncertain-begin")).json()).toEqual(receipt);
       expect(beginCalls - before).toBe(1);
     } finally { failBegin = false; }
+  });
+  it("缺少分享链接是确定的前置失败，同一操作键可在补充后安全重试", async () => {
+    const owner = await login();
+    missingShareLink = true;
+    try {
+      const before = beginCalls;
+      const response = await begin(owner, "need-share-then-retry");
+      expect([400, 422]).toContain(response.status);
+      expect(await response.text()).toContain("请先提交并授权本实例的 WorkBuddy 分享链接");
+      missingShareLink = false;
+      expect((await begin(owner, "need-share-then-retry")).status).toBe(200);
+      expect(beginCalls - before).toBe(2);
+    } finally { missingShareLink = false; }
   });
   it("page loads only safe status until the owner requests pairing, and rejects credential-bearing links", async () => {
     let pairingReads = 0;

@@ -39,6 +39,7 @@
  * 对齐 UCP 429/503 的 backoff 语义。
  */
 
+import { isOpenInquiryIdentity } from "../open-inquiry-identity.js";
 import {
   conservativeLevel,
   isTrustLevel,
@@ -198,6 +199,8 @@ export class A2AServerThrottle {
 
   /** per-identity 主键（或未验签时的 remoteAddress 主键）→ 已放行时间戳。 */
   private readonly identityWindow = new Map<string, number[]>();
+  /** Aggregate budget for open sessions sharing a gateway address. */
+  private readonly openSourceWindow = new Map<string, number[]>();
   /** domain 主键 → 已放行时间戳。 */
   private readonly domainWindow = new Map<string, number[]>();
   /** 来源主键（identity/addr + domain）→ schema_invalid 时间戳（malformed budget）。 */
@@ -254,7 +257,7 @@ export class A2AServerThrottle {
       req.trustLevel !== undefined && isTrustLevel(req.trustLevel) ? req.trustLevel : "T0";
     const effective = req.fingerprintChanged === true ? conservativeLevel(level, "T1") : level;
     let tier = this.tiers[effective];
-    if (req.identityVerified !== true) {
+    if (req.identityVerified !== true || isOpenInquiryIdentity(req.identity)) {
       const scale = this.unverifiedScale;
       tier = {
         ...tier,
@@ -301,7 +304,7 @@ export class A2AServerThrottle {
    *  每 sweepIntervalMs 调一次，Map 有界于「最近活跃身份」。 */
   private sweep(now: number): void {
     const cutoff = now - this.windowMs;
-    for (const map of [this.identityWindow, this.domainWindow, this.malformedWindow]) {
+    for (const map of [this.identityWindow, this.openSourceWindow, this.domainWindow, this.malformedWindow]) {
       for (const [key, arr] of map) {
         let start = 0;
         while (start < arr.length && arr[start]! <= cutoff) start += 1;
@@ -331,6 +334,7 @@ export class A2AServerThrottle {
     this.sweepIfDue(now); // 审查 K-L3：限流 Map 有界
     const tier = this.resolveTier(req);
     const idKey = this.identityKeyOf(req);
+    const openSourceKey = isOpenInquiryIdentity(req.identity) ? `addr:${req.remoteAddress ?? "unknown"}` : undefined;
 
     if (this.isMalformedBlocked(idKey, tier.malformedBudget, now)) {
       return {
@@ -356,6 +360,11 @@ export class A2AServerThrottle {
         reason: "per-identity rate limit exceeded",
       };
     }
+    // Catalog already limits each buyer IP. A separate, larger merchant-side
+    // aggregate prevents key cycling without treating all gateway users as one buyer.
+    if (openSourceKey !== undefined && this.exceedsLimit(this.openSourceWindow, openSourceKey, 120, now)) {
+      return { allowed: false, retryAfterSeconds: tier.retryAfterSeconds, reason: "open inquiry source rate limit exceeded" };
+    }
     if (
       req.domain !== undefined &&
       this.exceedsLimit(
@@ -372,6 +381,7 @@ export class A2AServerThrottle {
       };
     }
     this.record(this.identityWindow, idKey, now);
+    if (openSourceKey !== undefined) this.record(this.openSourceWindow, openSourceKey, now);
     if (req.domain !== undefined) this.record(this.domainWindow, this.domainKeyOf(req.domain), now);
     return { allowed: true };
   }
