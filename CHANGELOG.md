@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.12.20 — 2026-11-01
+
+- **商家侧页面统一视觉主题**：登录页、待批准命令、询报价工作台、WebAuthn 绑定页、OAuth 回调页统一使用工作台同款品牌头、卡片、表格与按钮；新增共享 `src/merchant-ui/theme.ts`。
+- **OAuth 记住授权**：同一 client + 商家 + scope 在 30 天内（`KIWI_OAUTH_CONSENT_TTL_HOURS` 可调）不再重复展示第二个「同意授权」页；scope 变化、过期、拒绝或撤销 token 后重新确认。
+- **第二个同意页文案写准确**：逐条列出 `catalog:read/write`、`merchant:read/write` 的中文含义，标题改为“授权连接器访问你的商家”。
+
 ## v0.12.19 — 2026-11-01
 
 - **工作台写门令牌自愈**：页面写请求遇到 `missing or invalid CSRF token`（运行时重启或重新登录后页面仍持旧令牌）时，先重取 `/merchant/api/session` 再用新令牌重试一次；商户不再需要手动刷新页面才能导入商品。该 403 在业务逻辑之前抛出，重试不会产生第二次效果；其他 403 不重试。
