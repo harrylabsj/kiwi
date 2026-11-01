@@ -222,12 +222,33 @@ async function apiError(res) {
     var text = problem.detail;
     if (problem.operation_id) text += "（操作 " + problem.operation_id + "）";
     if (problem.request_id) text += "（请求 " + problem.request_id + "）";
-    return new Error(text + " " + recoveryHint(problem.recovery_action));
+    var error = new Error(text + " " + recoveryHint(problem.recovery_action));
+    // 写门令牌失效（运行时重启或重新登录后页面仍持旧令牌）。该 403 在业务逻辑
+    // 之前抛出，重试不会产生第二次效果；标记后由调用方刷新令牌重试一次。
+    error.csrf = problem.detail === "missing or invalid CSRF token";
+    return error;
   }
   var fallback = await res.json().catch(function () { return {}; });
   return new Error((fallback.message || fallback.detail || fallback.code || ("HTTP " + res.status)) + "。请勿自动重复提交。");
 }
+function refreshCsrf() {
+  return fetch("/merchant/api/session", { credentials: "same-origin" }).then(function (res) {
+    if (res.status === 401) { showLogin(); throw new Error("需要登录"); }
+    if (!res.ok) throw new Error("会话刷新失败，请重新登录后再试。");
+    return res.json();
+  }).then(function (session) {
+    CSRF = session && session.csrf_token ? session.csrf_token : "";
+    if (!CSRF) throw new Error("会话刷新失败，请重新登录后再试。");
+  });
+}
+function csrfRetry(error, retry, again) {
+  if (!again || !error.csrf) return Promise.reject(error);
+  return refreshCsrf().then(retry);
+}
 function call(method, path, body, apiBase) {
+  return send(method, path, body, apiBase, true);
+}
+function send(method, path, body, apiBase, again) {
   var headers = {};
   if (body !== undefined) {
     headers["content-type"] = "application/json";
@@ -241,7 +262,9 @@ function call(method, path, body, apiBase) {
   }).then(function (res) {
     if (!res.ok) {
       if (res.status === 401) { showLogin(); throw new Error("需要登录"); }
-      return apiError(res).then(function (error) { throw error; });
+      return apiError(res).then(function (error) {
+        return csrfRetry(error, function () { return send(method, path, body, apiBase, false); }, again);
+      });
     }
     return res.json();
   });
@@ -881,21 +904,28 @@ function previewImport() {
   };
   reader.readAsText(f);
 }
+function sendUpload(format, content, again) {
+  return fetch(API + "/products/import-parse?format=" + format, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "content-type": format === "csv" ? "text/csv" : "application/octet-stream",
+      "x-csrf-token": CSRF,
+    },
+    body: content,
+  }).then(function (res) {
+    if (!res.ok) {
+      if (res.status === 401) { showLogin(); throw new Error("需要登录"); }
+      return apiError(res).then(function (error) {
+        return csrfRetry(error, function () { return sendUpload(format, content, false); }, again);
+      });
+    }
+    return res.json();
+  });
+}
 function parseTabularFile(f, format) {
   var done = function (content) {
-    fetch(API + "/products/import-parse?format=" + format, {
-      method: "POST",
-      credentials: "same-origin",
-      headers: {
-        "content-type": format === "csv" ? "text/csv" : "application/octet-stream",
-        "x-csrf-token": CSRF,
-      },
-      body: content,
-    }).then(function (res) {
-      if (res.status === 401) { showLogin(); throw new Error("需要登录"); }
-      if (!res.ok) return apiError(res).then(function (error) { throw error; });
-      return res.json();
-    }).then(function (r) {
+    sendUpload(format, content, true).then(function (r) {
       if (!r.ok) { renderParseErrors(r); return; }
       renderParseReport(r);
     }).catch(function (e) { bar("表格解析未通过：" + e.message, true); });

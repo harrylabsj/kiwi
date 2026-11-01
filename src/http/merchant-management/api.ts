@@ -4517,6 +4517,10 @@ function respondWorkbenchError(res: ServerResponse, error: unknown, requestId: s
       tool_binding_unavailable: "DEPENDENCY_UNAVAILABLE",
       update_required: "VERSION_CONFLICT",
     };
+    // 写门令牌失效只回 403 不回日志时无法凭请求号排查；这里记一行，不含令牌/会话值。
+    if (error.code === "forbidden" && error.message === "missing or invalid CSRF token") {
+      process.stderr.write(`[merchant-management] CSRF 校验失败 request_id=${requestId}\n`);
+    }
     writeWorkbenchProblem(
       res,
       mapping[error.code] ?? "INTERNAL_ERROR",
