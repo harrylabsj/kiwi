@@ -327,14 +327,22 @@ describe("three-party open-inquiry cross-process E2E", () => {
     };
 
     // 4) 种子目录库(agent + authorized enrollment,测试身份直写 DB)。
+    // 本测试使用**专属 venv**(evidence 目录内,经 UV_PROJECT_ENVIRONMENT 外置):
+    // 与其他并发测试(demo-runner 等)的目录环境完全隔离,且 pristine sibling
+    // 内绝不产生 .venv/缓存(npm-shipping 守卫要求 sibling 连 ignored 文件都干净)。
+    const e2eVenv = path.join(EVIDENCE, "e2e-venv");
+    const e2eUvEnv = { ...process.env,
+      UV_PROJECT_ENVIRONMENT: e2eVenv, UV_CACHE_DIR: path.join(EVIDENCE, "uv-cache") };
     const seed = path.join(EVIDENCE, "seed.py");
     writeFileSync(seed, SEED_PY);
+    // 专属 venv 需含 API 栈(uvicorn/FastAPI):先按 locked 契约同步 --extra api。
+    await run("uv", ["sync", "--locked", "--extra", "api"], { cwd: CATALOG_REPO, env: e2eUvEnv });
     const { canonicalize } = await import("../src/negotiation/jcs.js");
     const approvedDigest = `sha256:${createHash("sha256").update(canonicalize(E2E_CARD as unknown as Record<string, unknown>), "utf8").digest("hex")}`;
     const seedOut = await run("uv", ["run", "--locked", "python", seed, EVIDENCE,
       JSON.stringify(runtimeJwk), approvedDigest], {
       cwd: CATALOG_REPO,
-      env: { ...process.env, KIWI_CATALOG_OWNER_TOKEN_SECRET: "e2e-owner-secret-not-real" },
+      env: { ...e2eUvEnv, KIWI_CATALOG_OWNER_TOKEN_SECRET: "e2e-owner-secret-not-real" },
     });
     const { grant } = JSON.parse(seedOut.trim()) as { grant: string };
 
@@ -376,13 +384,13 @@ describe("three-party open-inquiry cross-process E2E", () => {
     for (let attempt = 1; attempt <= CATALOG_ATTEMPTS && !catalogReady; attempt += 1) {
       completedSteps.push(`catalog start attempt ${attempt}/${CATALOG_ATTEMPTS}`);
       attemptLogs.push(`--- attempt ${attempt} ---`);
-      // 直接用 venv python:uv run 的孙进程在 SIGTERM 下可能存活并占用端口,
-      // 直启让 kill 精确命中 uvicorn 本体(仅本测试记录的子进程)。
-      catalogChild = spawn(path.join(CATALOG_REPO, ".venv", "bin", "python"), [driver,
+      // 直接用专属 venv python:uv run 的孙进程在 SIGTERM 下可能存活并占用
+      // 端口,直启让 kill 精确命中 uvicorn 本体(仅本测试记录的子进程)。
+      catalogChild = spawn(path.join(e2eVenv, "bin", "python"), [driver,
         path.join(EVIDENCE, "catalog.sqlite"), catalogCert, path.join(EVIDENCE, "catalog.key")], {
         cwd: CATALOG_REPO,
         env: {
-          ...process.env,
+          ...e2eUvEnv,
           KIWI_CATALOG_ISSUER_KEY_FILE: path.join(EVIDENCE, "issuer.pem"),
           KIWI_CATALOG_ISSUER_KID: "catalog-issuer-e2e",
           KIWI_CATALOG_ISSUER_NAME: "catalog.e2e.test",
