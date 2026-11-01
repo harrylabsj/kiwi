@@ -109,6 +109,9 @@ describe("current 0.12.21 full shipping contract", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  // 本用例在临时 clone 上连续做 ~10 次完整 assertSource：每次都重算工具链（npm 官方
+  // payload 哈希 + node 二进制）与全部源码哈希，单跑约 9s；全量 verify 并行执行时会超过
+  // 默认 20s。这里只放宽该用例自身的预算，断言与覆盖不变。
   it("immutable committed guard permits only valid top-level time drift and refuses SBOM/source/lock/helper/state drift", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "shipping-source-guard-"));
     try {
@@ -191,7 +194,7 @@ describe("current 0.12.21 full shipping contract", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 20000);
+  }, 60_000);
   it("actual normal gzip tar bytes must match all manifest files", () => {
     const body = Buffer.from("original"),
       header = Buffer.alloc(512);
