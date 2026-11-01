@@ -230,7 +230,7 @@
     },
     {
       "path": "build-inputs/shipping-audit-allow.json",
-      "sha256": "sha256:7084754abf5ff1056d34c2927cf925bed7c4c795b025d4e268ac9094ac961c52"
+      "sha256": "sha256:1dc8a3ca496d593be452b5b3322cd4e8118be4a65b5d6be756f4ab81c3d3132d"
     },
     {
       "path": "contracts/candidate-agent-dto-1.0.schema.json",
