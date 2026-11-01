@@ -1738,7 +1738,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/references/release.json",
-      "sha256": "sha256:95bba585eeaa6779d671625f75486792fcd1ee6c87a5b902b89c04051e5072da"
+      "sha256": "sha256:2143b42a36fa27c94b8a44a273bb88f7da0da1b8924885b16a85472cdbf7056f"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-merchant-cs-prep/SKILL.md",
