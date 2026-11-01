@@ -202,6 +202,8 @@ export async function assembleMerchantRuntime(
       connectorSource: "kiwi-merchant",
       merchantName: profile.name ?? profile.owner_id,
       merchantId: profile.owner_id,
+      // 与网关一致：同一连接器/商家/scope 在有效期内不再重复确认。
+      rememberConsent: true,
     });
     verifier = new MerchantOAuthVerifier({
       store: oauthStore,

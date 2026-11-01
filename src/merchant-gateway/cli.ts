@@ -56,6 +56,7 @@ import {
 } from "../auth/merchant-oauth.js";
 import { MerchantAdminSessions } from "../auth/merchant-sessions.js";
 import { MerchantOAuthVerifier } from "../auth/merchant-authorization.js";
+import { consentTtlMsFromHours } from "../auth/merchant-oauth.js";
 import type { ScopedMcpTools } from "../mcp/merchant-server.js";
 import { CatalogConnectorIdentityClient } from "../discovery/catalog-source/connector-identity.js";
 import { isLoopbackHost } from "../a2a/client/url-policy.js";
@@ -449,6 +450,10 @@ export async function runGatewayServe(
     multiMerchant: true,
     // 目录 scope（第 0 版工具）+ 实例 scope（第 1 版工具，经 mcp-proxy 逐次校验）。
     scopes: ["catalog:read", "catalog:write", "merchant:read", "merchant:write"],
+    // 同一连接器 + 商家 + scope 在 TTL 内不再重复确认（第二次「同意授权」页面
+    // 只在首次连接或 scope 变化时出现）。
+    rememberConsent: true,
+    consentTtlMs: consentTtlMsFromHours(env.KIWI_OAUTH_CONSENT_TTL_HOURS),
     loginPath: "/connect",
     callbackPolicy: {
       ...(opts.callbackUri !== undefined ? { expectedCallbackUri: opts.callbackUri } : {}),

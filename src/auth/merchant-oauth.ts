@@ -42,6 +42,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { isLoopbackHost } from "../a2a/client/url-policy.js";
 import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
+import { MERCHANT_THEME_CSS } from "../merchant-ui/theme.js";
 
 /** 授权码有效期（10 分钟，一次性使用）。 */
 export const OAUTH_CODE_TTL_MS = 10 * 60 * 1000;
@@ -165,6 +166,14 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
   expires_at TEXT NOT NULL,
   revoked_at TEXT,
   created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS oauth_consents (
+  client_id TEXT NOT NULL,
+  merchant_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  granted_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  PRIMARY KEY (client_id, merchant_id, scope)
 );
 `;
 
@@ -578,6 +587,65 @@ export class MerchantOAuthStore {
       .run(this.now(), digest, digest);
   }
 
+  /** 该 token 属于哪个 client/merchant（撤销时同步忘掉记住的授权）。 */
+  tokenOwner(token: string): { client_id: string; merchant_id: string } | undefined {
+    const digest = digestOf(token);
+    const row = this.db
+      .prepare(
+        "SELECT client_id, merchant_id FROM oauth_tokens WHERE access_digest = ? OR refresh_digest = ?",
+      )
+      .get(digest, digest) as { client_id?: string; merchant_id?: string } | undefined;
+    if (row?.client_id === undefined || row?.merchant_id === undefined) return undefined;
+    return { client_id: row.client_id, merchant_id: row.merchant_id };
+  }
+
+  // ---- 记住授权（同一 client+merchant+scope 在有效期内不再重复确认）---------
+
+  recordConsent(input: {
+    client_id: string;
+    merchant_id: string;
+    scope: string;
+    expires_at: string;
+  }): void {
+    this.db
+      .prepare(
+        "INSERT INTO oauth_consents (client_id, merchant_id, scope, granted_at, expires_at)" +
+          " VALUES (?, ?, ?, ?, ?)" +
+          " ON CONFLICT(client_id, merchant_id, scope)" +
+          " DO UPDATE SET granted_at = excluded.granted_at, expires_at = excluded.expires_at",
+      )
+      .run(
+        input.client_id,
+        input.merchant_id,
+        canonicalScope(input.scope),
+        this.now(),
+        input.expires_at,
+      );
+  }
+
+  hasConsent(input: {
+    client_id: string;
+    merchant_id: string;
+    scope: string;
+    now: string;
+  }): boolean {
+    const row = this.db
+      .prepare(
+        "SELECT expires_at FROM oauth_consents WHERE client_id = ? AND merchant_id = ? AND scope = ?",
+      )
+      .get(input.client_id, input.merchant_id, canonicalScope(input.scope)) as
+      | { expires_at?: string }
+      | undefined;
+    if (row?.expires_at === undefined) return false;
+    return String(row.expires_at) > input.now;
+  }
+
+  revokeConsent(input: { client_id: string; merchant_id: string }): void {
+    this.db
+      .prepare("DELETE FROM oauth_consents WHERE client_id = ? AND merchant_id = ?")
+      .run(input.client_id, input.merchant_id);
+  }
+
   // ---- 一次性确认凭证（BUG-02：批准/拒绝的唯一可信通道） --------------------
 
   /**
@@ -703,6 +771,14 @@ export interface MerchantOAuthServerOptions {
    */
   loginPath?: string;
   now?: () => string;
+  /**
+   * 记住授权：同一 client + merchant + scope 在 consentTtlMs 内不再重复展示
+   * 确认页，直接签发授权码（标准 OAuth 的 consent memory）。默认关闭，由
+   * 通用连接器网关显式开启；scope 集合变化或过期后重新要求确认。
+   */
+  rememberConsent?: boolean;
+  /** 记住授权的有效期（缺省 30 天）。 */
+  consentTtlMs?: number;
 }
 
 function escapeHtml(text: string): string {
@@ -721,6 +797,30 @@ function redirectTo(uri: string, params: Record<string, string>): OAuthHttpResul
   };
 }
 
+/** 记住授权（consent memory）有效期：30 天。 */
+const CONSENT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** 从环境变量小时数解析记住授权 TTL（缺省/非法 → 30 天；夹在 1 小时..1 年）。 */
+export function consentTtlMsFromHours(raw: string | undefined): number {
+  const text = String(raw ?? "").trim();
+  const hours = text === "" ? 720 : Number(text);
+  if (!Number.isFinite(hours) || hours <= 0) return CONSENT_TTL_MS;
+  return Math.min(Math.max(hours, 1), 8760) * 60 * 60 * 1000;
+}
+
+/** scope 集合的规范形式（排序去重），作为 consent 的键。 */
+function canonicalScope(scopes: string): string {
+  return scopes.split(" ").map((s) => s.trim()).filter((s) => s !== "").sort().join(" ");
+}
+
+/** OAuth scope 的中文说明（确认页逐条展示，避免只给技术代号）。 */
+const SCOPE_LABELS: Readonly<Record<string, string>> = {
+  "catalog:read": "读取目录里的公开资料",
+  "catalog:write": "写入目录草稿、发布状态与撤回",
+  "merchant:read": "读取商家实例的商品、报价规则与磋商",
+  "merchant:write": "执行商家操作（仍需在商家应用内逐次确认）",
+};
+
 export class MerchantOAuthServer {
   private readonly store: MerchantOAuthStore;
   private readonly issuer: string;
@@ -731,6 +831,9 @@ export class MerchantOAuthServer {
   private readonly scopes: string[];
   private readonly loginPath: string;
   private readonly callbackPolicy: OAuthCallbackPolicy;
+  private readonly rememberConsent: boolean;
+  private readonly consentTtlMs: number;
+  private readonly now: () => string;
 
   constructor(options: MerchantOAuthServerOptions) {
     const issuerUrl = new URL(options.issuer);
@@ -754,6 +857,9 @@ export class MerchantOAuthServer {
     this.scopes = options.scopes ?? ["merchant:read", "merchant:write"];
     this.loginPath = options.loginPath ?? "/admin/login";
     this.callbackPolicy = options.callbackPolicy ?? {};
+    this.rememberConsent = options.rememberConsent === true;
+    this.consentTtlMs = options.consentTtlMs ?? CONSENT_TTL_MS;
+    this.now = options.now ?? (() => new Date().toISOString());
   }
 
   /** RFC 9728 resource metadata URL（401 WWW-Authenticate 指引用）。 */
@@ -887,33 +993,75 @@ export class MerchantOAuthServer {
     if (unknownScope !== undefined) {
       return redirectFail("invalid_scope", `不支持的 scope：${unknownScope}`);
     }
-    const csrf = this.store.createAuthRequest({
-      client_id: query.client_id,
-      redirect_uri: redirectUri,
-      scope: requestedScopes.join(" "),
-      ...(query.state !== undefined ? { state: query.state } : {}),
-      code_challenge: query.code_challenge,
-      merchant_id: session.merchant_id,
-      principal_id: session.principal_id,
-    });
+    const clientId = query.client_id;
+    const challenge = query.code_challenge;
+    const createPending = (): string =>
+      this.store.createAuthRequest({
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        scope: requestedScopes.join(" "),
+        ...(query.state !== undefined ? { state: query.state } : {}),
+        code_challenge: challenge,
+        merchant_id: session.merchant_id,
+        principal_id: session.principal_id,
+      });
+    // 记住授权：同一 client+merchant+scope 在有效期内直接签发，不再重复确认。
+    if (
+      this.rememberConsent &&
+      this.store.hasConsent({
+        client_id: clientId,
+        merchant_id: session.merchant_id,
+        scope: requestedScopes.join(" "),
+        now: this.now(),
+      })
+    ) {
+      const rememberedCsrf = createPending();
+      return this.authorizeSubmit({ csrf: rememberedCsrf, decision: "approve" }, session);
+    }
+    const csrf = createPending();
     return {
       status: 200,
       headers: { "content-type": "text/html; charset=utf-8" },
       html: `<!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><title>授权确认 — Kiwi 商家工作台</title></head>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>授权确认 — Kiwi 商家工作台</title>
+<style>${MERCHANT_THEME_CSS}
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+  .auth-shell { width: 100%; max-width: 560px; }
+  .auth-brand { margin-bottom: 18px; }
+  .auth-card h1 { margin: 0 0 8px; font-size: 21px; line-height: 1.4; font-weight: 650; }
+  .auth-card .lead { color: #53665b; margin: 0 0 14px; }
+  .auth-scopes { margin: 0 0 18px; padding-left: 20px; }
+  .auth-scopes li { margin: 4px 0; }
+  .auth-actions { display: flex; align-items: center; gap: 12px; }
+  .warn { background: #fcf2de; color: #795309; border: 1px solid #e8d6ac; border-radius: 8px; padding: 10px 14px; font-size: 12px; margin: 0 0 18px; overflow-wrap: anywhere; }
+  .auth-card code { font: 12px ui-monospace, SFMono-Regular, monospace; background: #f4f8f3; border-radius: 4px; padding: 1px 6px; }
+  @media (max-width: 640px) { body { padding: 16px; } }
+</style>
+</head>
 <body>
-  <h1>Kiwi 商家运营工作台</h1>
-  <p>应用「${escapeHtml(client.client_name ?? query.client_id)}」（客户端自报名称）请求访问商家「${escapeHtml(this.merchantName ?? session.merchant_name ?? session.merchant_id)}」的：</p>
-  <p>客户端 ID：<code>${escapeHtml(client.client_id)}</code>（注册于 ${escapeHtml(client.created_at)}）。请核对该 ID 与连接器文档一致后再授权——client_name 为应用自报，不作为身份依据。</p>
-  <ul>
-    ${requestedScopes.map((s) => `<li>${escapeHtml(s)}</li>`).join("\n    ")}
-  </ul>
-  <form method="post" action="/oauth/authorize">
-    <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
-    <button type="submit" name="decision" value="approve">同意授权</button>
-    <button type="submit" name="decision" value="deny">拒绝</button>
-  </form>
+<main class="auth-shell">
+  <div class="brand auth-brand"><span class="brand-name" aria-label="Kiwi">kiwi</span><span class="brand-title">商家工作台</span></div>
+  <section class="card auth-card">
+    <h1>授权连接器访问你的商家</h1>
+    <p class="lead">应用「${escapeHtml(client.client_name ?? query.client_id)}」（客户端自报名称）请求以商家「${escapeHtml(this.merchantName ?? session.merchant_name ?? session.merchant_id)}」的身份访问：</p>
+    <p class="warn">客户端 ID：<code>${escapeHtml(client.client_id)}</code>（注册于 ${escapeHtml(client.created_at)}）。请核对该 ID 与连接器文档一致后再授权——client_name 为应用自报，不作为身份依据。</p>
+    <ul class="auth-scopes">
+      ${requestedScopes.map((s) => `<li><code>${escapeHtml(s)}</code>：${escapeHtml(SCOPE_LABELS[s] ?? "未识别的权限")}</li>`).join("\n      ")}
+    </ul>
+    <p class="muted">授权后可在目录门户拒绝或撤销；商家写操作仍需你在商家应用内逐次确认。</p>
+    <form method="post" action="/oauth/authorize">
+      <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+      <div class="auth-actions">
+        <button type="submit" class="act primary" name="decision" value="approve">同意授权</button>
+        <button type="submit" class="act" name="decision" value="deny">拒绝</button>
+      </div>
+    </form>
+  </section>
+</main>
 </body>
 </html>`,
     };
@@ -975,10 +1123,24 @@ export class MerchantOAuthServer {
       return oauthError(403, "access_denied", "当前登录会话与授权请求主体不匹配");
     }
     if (form.decision !== "approve") {
+      if (this.rememberConsent) {
+        this.store.revokeConsent({
+          client_id: pending.client_id,
+          merchant_id: pending.merchant_id,
+        });
+      }
       return redirectTo(pending.redirect_uri, {
         error: "access_denied",
         error_description: "用户拒绝授权",
         ...(pending.state !== undefined ? { state: pending.state } : {}),
+      });
+    }
+    if (this.rememberConsent) {
+      this.store.recordConsent({
+        client_id: pending.client_id,
+        merchant_id: pending.merchant_id,
+        scope: pending.scope,
+        expires_at: new Date(Date.parse(this.now()) + this.consentTtlMs).toISOString(),
       });
     }
     const code = this.store.createCode({
@@ -1066,7 +1228,12 @@ export class MerchantOAuthServer {
 
   /** POST /oauth/revoke（RFC 7009；幂等，未知 token 也返回 200）。 */
   revoke(form: Record<string, string | undefined>): OAuthHttpResult {
-    if (typeof form.token === "string" && form.token !== "") this.store.revokeToken(form.token);
+    if (typeof form.token === "string" && form.token !== "") {
+      const owner = this.store.tokenOwner(form.token);
+      this.store.revokeToken(form.token);
+      // 商家撤销访问 = 忘掉记住的授权；下次连接重新确认。
+      if (owner !== undefined) this.store.revokeConsent(owner);
+    }
     return { status: 200, body: {} };
   }
 }
