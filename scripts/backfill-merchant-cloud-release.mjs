@@ -18,23 +18,37 @@ const version = JSON.parse(readFileSync(path.join(root, "packages/merchant-cloud
 const temp = mkdtempSync(path.join(tmpdir(), "kiwi-cloud-release-"));
 
 try {
-  const registryIntegrity = execFileSync("npm", ["view", `${pkg}@${version}`, "dist.integrity", "--json"], {
+  // npm 12 的 `--json` 对单字段可能回数组（如 ["sha512-..."]），旧版回裸字符串；
+  // 两者都接受，仍要求恰好一个合法值。
+  const rawIntegrity = execFileSync("npm", ["view", `${pkg}@${version}`, "dist.integrity", "--json"], {
     cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"],
-  }).trim().replace(/^"|"$/g, "");
-  if (!/^sha512-[A-Za-z0-9+/]+=*$/.test(registryIntegrity)) {
+  }).trim();
+  let parsedIntegrity;
+  try {
+    parsedIntegrity = JSON.parse(rawIntegrity);
+  } catch {
+    parsedIntegrity = rawIntegrity;
+  }
+  const registryIntegrity = Array.isArray(parsedIntegrity) ? parsedIntegrity[0] : parsedIntegrity;
+  if (
+    typeof registryIntegrity !== "string" ||
+    !/^sha512-[A-Za-z0-9+/]+=*$/.test(registryIntegrity)
+  ) {
     throw new Error(`npm registry returned invalid dist.integrity for ${pkg}@${version}`);
   }
 
+  // merchant-cloud pack 的 --json 清单约 2 万文件（数 MB），默认 1 MiB maxBuffer 会 ENOBUFS。
   const packed = packRecord(JSON.parse(execFileSync("npm", ["pack", `${pkg}@${version}`, "--json", `--pack-destination=${temp}`], {
-    cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"],
+    cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], maxBuffer: 512 * 1024 * 1024,
   })), { name: pkg, version });
   if (packed.integrity !== registryIntegrity) {
     throw new Error(`npm pack integrity ${packed.integrity} does not match registry dist.integrity ${registryIntegrity}`);
   }
   const tarball = readFileSync(path.join(temp,packed.filename));
   if (`sha512-${createHash("sha512").update(tarball).digest("base64")}` !== registryIntegrity) throw new Error("published tarball bytes do not match registry integrity");
+  // build-manifest 列出全部约 2 万文件（约 1 MB），同样需要放大 maxBuffer。
   const manifest = JSON.parse(execFileSync("tar", ["-xOzf", path.join(temp, packed.filename), "package/build-manifest.json"], {
-    encoding: "utf8", stdio: ["ignore", "pipe", "inherit"],
+    encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], maxBuffer: 512 * 1024 * 1024,
   }));
   if (manifest.runtime_version !== version || !/^sha256:[a-f0-9]{64}$/.test(manifest.artifact_sha256)) {
     throw new Error("published build-manifest.json has an unexpected runtime_version or artifact_sha256");
