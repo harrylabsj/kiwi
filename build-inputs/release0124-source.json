@@ -6328,7 +6328,7 @@
     },
     {
       "path": "tests/npm-shipping-contract.test.ts",
-      "sha256": "sha256:9acb91de70eb0633cdc95d67a20f9067dba0353f25c66b01ba2c726a908fc80f"
+      "sha256": "sha256:af29ec36ae155d0eb3476f49c37d4f622e48c37a9b897f159beab9a9ff2d35dc"
     },
     {
       "path": "tests/onboarding-local-fallback.test.ts",
