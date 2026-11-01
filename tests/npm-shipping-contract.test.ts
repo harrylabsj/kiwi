@@ -93,7 +93,7 @@ describe("current 0.12.19 full shipping contract", () => {
       const sbom = {
         sbom_version: 1,
         package: "@harrylabsj/kiwi",
-        package_version: "0.12.18",
+        package_version: VERSION,
         runtime_dependencies: [],
         mcp_protocol_versions: [],
         generated_at: "2026-10-10T00:00:00.000Z",
@@ -138,7 +138,7 @@ describe("current 0.12.19 full shipping contract", () => {
       );
       const sbomFile = path.join(repo, "supply-chain.sbom.json"),
         sbom = JSON.parse(readFileSync(sbomFile, "utf8"));
-      sbom.package_version = "0.12.18";
+      sbom.package_version = VERSION;
       sbom.generated_at = "2026-10-10T00:00:00.000Z";
       writeFileSync(sbomFile, JSON.stringify(sbom, null, 2) + "\n");
       const contract = sourceContract(repo);
