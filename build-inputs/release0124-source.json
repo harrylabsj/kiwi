@@ -142,7 +142,7 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "sha256": "sha256:ef98cd96c2c7e7b187959deb726c8cd07bdc024f997470e3bbb78b0d1a85ed7e"
+      "sha256": "sha256:0aa37fc70ec8fdfe2acf1ba9cd4295236ec7b3fb4f0d4877f17878f4dc5bc51d"
     },
     {
       "path": ".github/workflows/codeql.yml",
@@ -158,7 +158,7 @@
     },
     {
       "path": ".github/workflows/portfolio-release.yml",
-      "sha256": "sha256:f0c8847b00a9de3a680c5b8804907dcc1e9c874e5a1387060e4dc2b206dcc24e"
+      "sha256": "sha256:ef60d6b3aa6c00f601212719a79b229eca74dd820edb94702cdb87183a1e68c6"
     },
     {
       "path": ".github/workflows/release-rehearsal.yml",
@@ -6528,7 +6528,7 @@
     },
     {
       "path": "tests/three-party-open-inquiry.e2e.test.ts",
-      "sha256": "sha256:1064e02f763fd5917974bb1387fa265a7a585008b77939c360535704ebafded5"
+      "sha256": "sha256:101c647cb0e23b4cbfa2d72c97adaca0fb371b8e295ba0552729c12d69ee0f79"
     },
     {
       "path": "tests/throttle-sweep.test.ts",
