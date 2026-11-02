@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.12.22
+
+- **WorkBuddy 云端部署安装修复**：prepare 的复制清单补齐 `scripts/`（部署产物的 `preinstall` 指向 `scripts/check-install-toolchain.mjs`，此前缺失导致平台安装失败），并对 npm 生命周期钩子做产物自洽校验，缺失时在 prepare 阶段 fail-closed。
+- **安装前 Node 版本守门**：`check-install-toolchain.mjs` 按被安装包的 `engines.node` 严格比较 major/minor/patch；`>=X.Y[.Z]` 之外的范围表达式显式拒绝（不再静默跳过），低版本运行时给出固定错误码。
+- prepare 失败回滚：只回收本次新建的临时输出（新建的 out 整体删除；用户既有空目录仅删除本次写入的条目；自动创建的临时 data dir 回收），显式 `--data-dir` 与平台 `/workspace` 不受影响。
+
 ## v0.12.21 — 2026-11-01
 
 - **WorkBuddy 分享码一键连接**：工作台「授权并发起或继续连接」在勾选代管授权后，先把分享链接加密暂存（AES-256-GCM、AAD 绑定 origin、0600），暂存成功才发起绑定；暂存失败停在原地，不会拿未确认的凭据去绑定。

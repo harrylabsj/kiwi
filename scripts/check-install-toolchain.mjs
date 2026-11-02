@@ -78,6 +78,46 @@ function recordIfVulnerable(pkgDir, name, out) {
 }
 
 const root = process.env.npm_config_local_prefix || process.cwd();
+
+// Node 下界守卫：随包依赖（undici 8.10.2、@earendil-works/pi-* 1.2.0）声明
+// engines.node >=22.19.0。低版本 npm 默认只报 EBADENGINE 警告后继续安装，故障
+// 会推迟到运行时（undici 8 需要 22.19+ 的运行时行为）。这里按**被安装包自己的**
+// engines 显式 fail-closed，并给出固定错误码，便于平台/排障直接定位。
+let enginesNode = "";
+try {
+  enginesNode = String(
+    JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).engines?.node ?? "",
+  ).trim();
+} catch {
+  /* 没有可读的 package.json 时不额外约束（保持原有行为）。 */
+}
+if (enginesNode !== "") {
+  // 只支持单一下界 ">=X.Y" / ">=X.Y.Z"（后者语义更严，必须逐位比较 patch）。
+  // 复合范围（">=22.19.0 <23"、向上/波浪号、|| 等）不做近似解释，直接 fail-closed：
+  // 静默跳过或只比 major/minor 都会错误放行更低 patch。
+  const nodeFloor = /^>=\s*(\d+)\.(\d+)(?:\.(\d+))?$/.exec(enginesNode);
+  if (nodeFloor === null) {
+    console.error(
+      `[a106] NODE_ENGINE_UNSUPPORTED: engines.node=${JSON.stringify(enginesNode)}; ` +
+        'only a single lower bound ">=X.Y[.Z]" is supported. Rewrite the package engines ' +
+        "to that form instead of skipping the Node check.",
+    );
+    process.exit(1);
+  }
+  const need = [Number(nodeFloor[1]), Number(nodeFloor[2]), Number(nodeFloor[3] ?? "0")];
+  const current = process.versions.node.split(".").map(Number);
+  const atLeast = (a, b) =>
+    a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] >= b[2];
+  if (!atLeast(current, need)) {
+    console.error(
+      `[a106] NODE_VERSION_UNSUPPORTED: package requires node ${enginesNode}, ` +
+        `current ${process.versions.node}; deploy on Node >=${need[0]}.${need[1]}.${need[2]} ` +
+        "(e.g. 22.19.0) instead of an older sandbox runtime.",
+    );
+    process.exit(1);
+  }
+}
+
 const offenders = [];
 for (const vuln of VULNERABLE) {
   collectCopies(root, vuln.name, offenders);
