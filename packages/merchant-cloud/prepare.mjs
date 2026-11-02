@@ -260,6 +260,9 @@ function makeAdminBootstrap(identity) {
   return password;
 }
 
+// 失败回滚钩子：只在本次运行创建了临时输出时才非空（见 main 内的 outExisted）。
+let rollbackOnFailure = null;
+
 function main() {
   const options = parseArgs(process.argv.slice(2));
   const publicOrigin = validateOrigin(options.origin);
@@ -269,20 +272,61 @@ function main() {
   const manifest = verifyManifest();
   const out = path.resolve(options.out);
   if (out === PACKAGE_ROOT || out.startsWith(`${PACKAGE_ROOT}${path.sep}`)) throw new Error("部署目录必须在包目录之外");
+  // 先校验 out（已存在且非空即拒绝），再创建任何临时目录：拒绝路径不得泄漏 mkdtemp。
+  if (existsSync(out) && readdirSync(out).length > 0) throw new Error("部署目录已存在且非空；请提供新的空目录");
+  // 只有"未显式 --data-dir 且平台 /workspace 不存在"时才会 mkdtemp 出临时目录，
+  // 失败回滚只回收这种本次新建的目录。
+  const autoDataDir = options.dataDir === undefined && !existsSync(PLATFORM_WORKSPACE_DIR);
   const dataDirRaw = options.dataDir ?? defaultDataDir(out);
   if (!path.isAbsolute(dataDirRaw)) throw new Error("--data-dir 必须是部署目录外的绝对路径");
   const dataDir = path.resolve(dataDirRaw);
-  if (dataDir === out || dataDir.startsWith(`${out}${path.sep}`)) throw new Error("--data-dir 必须是部署目录外的绝对路径");
-  if (existsSync(out) && readdirSync(out).length > 0) throw new Error("部署目录已存在且非空；请提供新的空目录");
+  if (dataDir === out || dataDir.startsWith(`${out}${path.sep}`)) {
+    // 临时目录此时已创建：立即回收（仅限自动 mkdtemp 的那个；显式 --data-dir 不动）。
+    if (autoDataDir) rmSync(dataDir, { recursive: true, force: true });
+    throw new Error("--data-dir 必须是部署目录外的绝对路径");
+  }
   rmSync(path.join(PACKAGE_ROOT, "admin-bootstrap.json"), { force: true });
+  // 安全清理：只回收本次新建的临时输出，不删除用户既有目录或数据。
+  // - out 在本次运行前不存在：删除整个 out（它是我们刚创建的）；
+  // - out 是用户既有的空目录：只删除本次写入的顶层条目，目录本身保留；
+  // - 仅自动 mkdtemp 出来的 data dir 会被回收；显式 --data-dir 与平台 /workspace 永不删除。
+  const outExisted = existsSync(out);
+  const createdNames = [];
+  rollbackOnFailure = () => {
+    rmSync(path.join(PACKAGE_ROOT, "admin-bootstrap.json"), { force: true });
+    if (!outExisted) rmSync(out, { recursive: true, force: true });
+    else for (const name of createdNames) rmSync(path.join(out, name), { recursive: true, force: true });
+    if (autoDataDir) rmSync(dataDir, { recursive: true, force: true });
+  };
   mkdirSync(out, { recursive: true });
-  for (const name of ["app", "contracts", "node_modules", "index.js", "package.json", "build-manifest.json"]) {
+  // scripts/ 必须一起复制：部署产物的 package.json 保留 preinstall
+  // （node scripts/check-install-toolchain.mjs，A106 依赖树守卫），漏复制会让
+  // 平台安装以 SITES_INSTALL_FAILED 失败（0.12.21 实测根因）。
+  for (const name of ["app", "contracts", "node_modules", "index.js", "package.json", "build-manifest.json", "scripts"]) {
     const source = path.join(PACKAGE_ROOT, name);
-    if (existsSync(source)) cpSync(source, path.join(out, name), { recursive: true });
+    if (!existsSync(source)) continue;
+    createdNames.push(name);
+    cpSync(source, path.join(out, name), { recursive: true });
+  }
+  // 产物自洽：npm 生命周期钩子（preinstall/install/postinstall/prepare）若以
+  // `node <相对文件>` 引用脚本，其目标必须已在部署目录内，否则在这里 fail-closed，
+  // 而不是把 MODULE_NOT_FOUND 留给平台安装阶段（0.12.21 的 SITES_INSTALL_FAILED）。
+  // 自定义脚本（如 prepare-cloud）只在开发时使用，不要求随部署产物分发。
+  const LIFECYCLE_HOOKS = new Set(["preinstall", "install", "postinstall", "prepare"]);
+  const deployedPkg = JSON.parse(readFileSync(path.join(out, "package.json"), "utf8"));
+  for (const [hook, command] of Object.entries(deployedPkg.scripts ?? {})) {
+    if (!LIFECYCLE_HOOKS.has(hook)) continue;
+    const target = /^node\s+(\S+)/.exec(String(command))?.[1];
+    if (target !== undefined && !target.startsWith("/") && !existsSync(path.join(out, target))) {
+      throw new Error(
+        `部署产物缺少 ${hook} 引用的文件 ${target}；prepare 的复制清单必须与 package.json 的生命周期脚本保持一致`,
+      );
+    }
   }
   const identity = { owner_id: `merchant-${randomBytes(16).toString("hex")}` };
   identity.agent_id = `merchant-agent:${identity.owner_id}`;
   const pilotDir = path.join(out, "pilot");
+  createdNames.push("pilot");
   mkdirSync(pilotDir, { recursive: true });
   if (options.sample) {
     const sampleSource = path.join(PACKAGE_ROOT, "app", "cloud-sample", "products.json");
@@ -308,18 +352,25 @@ function main() {
       ? { owned_runtime: "require", owned_policy: validateOwnedPolicyFile(options.ownedPolicyPath) }
       : {}),
   };
+  createdNames.push("cloud.config.json");
   writeFileSync(path.join(out, "cloud.config.json"), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o644 });
   let password;
   if (options.adminBootstrap) {
     password = makeAdminBootstrap(identity);
+    createdNames.push("admin-bootstrap.json");
     cpSync(path.join(PACKAGE_ROOT, "admin-bootstrap.json"), path.join(out, "admin-bootstrap.json"));
     rmSync(path.join(PACKAGE_ROOT, "admin-bootstrap.json"), { force: true });
   }
   process.stdout.write(`${JSON.stringify({ deployment_dir: out, artifact_sha256: manifest.artifact_sha256, version: manifest.runtime_version, agent_id: identity.agent_id, catalog_url: catalogUrl, sample: options.sample, allow_insecure_catalog: options.allowInsecureCatalog })}\n`);
   if (password !== undefined) process.stdout.write(`一次性管理员口令（请立即保存）：${password}\n`);
+  rollbackOnFailure = null;
 }
 
 try { main(); } catch (error) {
+  if (rollbackOnFailure !== null) {
+    try { rollbackOnFailure(); } catch { /* best-effort：清理失败不掩盖原始错误 */ }
+    rollbackOnFailure = null;
+  }
   process.stderr.write(`[prepare] ${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;
 }
