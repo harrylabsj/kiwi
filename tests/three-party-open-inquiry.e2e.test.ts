@@ -48,7 +48,13 @@ const AGENT_ID = "cagt_e2e_openinquiry";
 const MERCHANT_ID = "mkt_e2e_openinquiry";
 const TERMS = WORKBUDDY_CUSTODY_TERMS_VERSION;
 const SHARE_SECRET = `e2e-share-${createHash("sha256").update(String(process.pid)).digest("hex").slice(0, 16)}`;
-const CATALOG_REPO = path.resolve("../kiwi-catalog");
+// 目录 sibling 的位置随宿主而变：本地开发在仓库父目录（../kiwi-catalog），
+// portfolio-release / portfolio-integration / ci 把目录检出到工作区内
+// （./kiwi-catalog）。KIWI_CATALOG_DIR 可显式覆盖。此前硬编码 ../kiwi-catalog
+// 在 CI 中指向工作区外，execFile 会报出误导性的 "spawn uv ENOENT"。
+const CATALOG_REPO = path.resolve(
+  process.env.KIWI_CATALOG_DIR ?? (existsSync("kiwi-catalog") ? "kiwi-catalog" : "../kiwi-catalog"),
+);
 // 明确有界时限:每个等待都有上限,目录就绪最多 2 次尝试;失败即出结构化诊断,
 // 绝不无界重试。所有等待用 waitUntil(有界),子进程只按记录的句柄 kill。
 const MERCHANT_READY_TIMEOUT_MS = 15_000;
@@ -273,6 +279,12 @@ describe("three-party open-inquiry cross-process E2E", () => {
   let issuerJwk: { kty: string; crv: string; x: string };
 
   beforeAll(async () => {
+    if (!existsSync(path.join(CATALOG_REPO, "pyproject.toml"))) {
+      throw new Error(
+        `three-party E2E 需要 kiwi-catalog 检出（当前解析为 ${CATALOG_REPO}）；` +
+          "设置 KIWI_CATALOG_DIR，或把 kiwi-catalog sibling 放在仓库内/仓库父目录",
+      );
+    }
     EVIDENCE = mkdtempSync(path.join(tmpdir(), "kiwi-three-party-e2e-"));
     // 证据目录保留不删(排查与审计用);基线记录见测试输出。
 

@@ -38,6 +38,37 @@ jobs:
           ref: ${{ steps.portfolio_lock.outputs.shopping_cli_sha }}
           path: shopping-cli
           persist-credentials: false
+      # 三方联调（tests/three-party-open-inquiry.e2e.test.ts）需要工作区内的
+      # kiwi-catalog sibling 与固定版本 uv：检出同 lock 的目录 SHA，并在
+      # `npm run test` 之前装好 uv（仓库惯例 uv==0.10.6，见其它 workflow）。
+      - id: catalog_lock
+        name: Read locked kiwi-catalog source
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs = require('fs');
+          const lock = JSON.parse(fs.readFileSync('portfolio.lock.json', 'utf8'));
+          const entry = lock.repositories?.['kiwi-catalog'];
+          if (!entry || entry.repository !== 'harrylabsj/kiwi-catalog') {
+            throw new Error('portfolio lock must allowlist harrylabsj/kiwi-catalog');
+          }
+          if (!/^[0-9a-f]{40}$/.test(entry.commit)) {
+            throw new Error(`kiwi-catalog commit is not a full 40-char SHA: ${entry.commit}`);
+          }
+          console.log(`kiwi_catalog_sha=${entry.commit}`);
+          NODE
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: harrylabsj/kiwi-catalog
+          ref: ${{ steps.catalog_lock.outputs.kiwi_catalog_sha }}
+          path: kiwi-catalog
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install locked uv for the cross-process E2E
+        run: |
+          python -m pip install "uv==0.10.6"
+          uv --version
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22.22.3"
