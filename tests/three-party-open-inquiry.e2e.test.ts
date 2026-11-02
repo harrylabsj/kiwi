@@ -27,7 +27,7 @@
  */
 import { execFile, spawn } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -272,7 +272,7 @@ if os.environ.get("KIWI_E2E_DRILL_CATALOG_BIND_FAILURE") == "1":
 print("driver: starting uvicorn on 127.0.0.1:9443", flush=True)
 uvicorn.run(create_catalog_app(DB), host="127.0.0.1", port=9443,
             ssl_certfile=CERT, ssl_keyfile=KEY, log_level="info", access_log=False)
-`.replaceAll("<CATALOG_REPO>", CATALOG_REPO);
+`;
 
 describe("three-party open-inquiry cross-process E2E", () => {
   let buyerFetch: typeof fetch;
@@ -345,15 +345,27 @@ describe("three-party open-inquiry cross-process E2E", () => {
     const e2eVenv = path.join(EVIDENCE, "e2e-venv");
     const e2eUvEnv = { ...process.env,
       UV_PROJECT_ENVIRONMENT: e2eVenv, UV_CACHE_DIR: path.join(EVIDENCE, "uv-cache") };
+    // 目录检出必须保持字节级干净：npm-shipping 守卫要求 sibling 连 ignored 文件
+    // （__pycache__、editable 的 *.egg-info、.venv）都不出现。因此把检出复制成
+    // evidence 目录里的**临时工作副本**，uv sync / seed / driver 全部只在副本上
+    // 运行；真实 sibling 只被读取，不写入。
+    const CATALOG_WORK = path.join(EVIDENCE, "catalog-work");
+    mkdirSync(CATALOG_WORK, { recursive: true });
+    for (const name of ["pyproject.toml", "uv.lock", "README.md", "LICENSE"]) {
+      cpSync(path.join(CATALOG_REPO, name), path.join(CATALOG_WORK, name));
+    }
+    cpSync(path.join(CATALOG_REPO, "kiwi_catalog"), path.join(CATALOG_WORK, "kiwi_catalog"), {
+      recursive: true,
+    });
     const seed = path.join(EVIDENCE, "seed.py");
-    writeFileSync(seed, SEED_PY);
+    writeFileSync(seed, SEED_PY.replaceAll("<CATALOG_REPO>", CATALOG_WORK));
     // 专属 venv 需含 API 栈(uvicorn/FastAPI):先按 locked 契约同步 --extra api。
-    await run("uv", ["sync", "--locked", "--extra", "api"], { cwd: CATALOG_REPO, env: e2eUvEnv });
+    await run("uv", ["sync", "--locked", "--extra", "api"], { cwd: CATALOG_WORK, env: e2eUvEnv });
     const { canonicalize } = await import("../src/negotiation/jcs.js");
     const approvedDigest = `sha256:${createHash("sha256").update(canonicalize(E2E_CARD as unknown as Record<string, unknown>), "utf8").digest("hex")}`;
     const seedOut = await run("uv", ["run", "--locked", "python", seed, EVIDENCE,
       JSON.stringify(runtimeJwk), approvedDigest], {
-      cwd: CATALOG_REPO,
+      cwd: CATALOG_WORK,
       env: { ...e2eUvEnv, KIWI_CATALOG_OWNER_TOKEN_SECRET: "e2e-owner-secret-not-real" },
     });
     const { grant } = JSON.parse(seedOut.trim()) as { grant: string };
@@ -378,7 +390,7 @@ describe("three-party open-inquiry cross-process E2E", () => {
     // 6) 启动目录进程(uvicorn + TLS;env 含 issuer/代管加密/测试 CA)。
     const fernetKey = Buffer.from(createHash("sha256").update("e2e-fernet").digest()).toString("base64");
     const driver = path.join(EVIDENCE, "catalog-driver.py");
-    writeFileSync(driver, CATALOG_DRIVER_PY);
+    writeFileSync(driver, CATALOG_DRIVER_PY.replaceAll("<CATALOG_REPO>", CATALOG_WORK));
     // 买家侧 TLS fetch 先行就绪(目录/商家就绪探测都依赖它)。
     buyerFetch = makeHttpsFetch(caPem);
     // 目录就绪:最多 CATALOG_ATTEMPTS 次有界尝试;每次日志独立落盘;失败即报。
@@ -400,7 +412,7 @@ describe("three-party open-inquiry cross-process E2E", () => {
       // 端口,直启让 kill 精确命中 uvicorn 本体(仅本测试记录的子进程)。
       catalogChild = spawn(path.join(e2eVenv, "bin", "python"), [driver,
         path.join(EVIDENCE, "catalog.sqlite"), catalogCert, path.join(EVIDENCE, "catalog.key")], {
-        cwd: CATALOG_REPO,
+        cwd: CATALOG_WORK,
         env: {
           ...e2eUvEnv,
           KIWI_CATALOG_ISSUER_KEY_FILE: path.join(EVIDENCE, "issuer.pem"),
