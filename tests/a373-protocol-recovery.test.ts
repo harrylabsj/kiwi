@@ -230,6 +230,47 @@ it("same operation with different intent is a conflict and does not create a fre
   expect(h.effects()).toBe(1);
   expect(r[0]!.failure?.detail).toMatch(/different request/);
 });
+it("existing operation + explicit SKU not offered is a protocol conflict, not invalid_request", async () => {
+  const d = temp(),
+    h = server();
+  h.set("lost");
+  await new A2AQuoteFetcher(options(d, h)).requestQuotes(intent, [merchant], context);
+  const r = await new A2AQuoteFetcher(options(d, h)).requestQuotes(
+    {
+      ...intent,
+      items: [{ sku: "SKU-NOT-OFFERED", query: "other", quantity: { value: 2, unit: "piece" } }],
+    },
+    [merchant],
+    context,
+  );
+  expect(h.effects()).toBe(1);
+  expect(r[0]!.status).toBe("failed");
+  expect(r[0]!.failure?.classification).toBe("protocol_error");
+  expect(r[0]!.failure?.retryable).toBe(false);
+  expect(r[0]!.failure?.detail).toMatch(/different request/);
+});
+it("concurrent different intents for one task create one wire and one protocol failure", async () => {
+  const d = temp(),
+    h = server();
+  const [first, second] = await Promise.all([
+    new A2AQuoteFetcher(options(d, h)).requestQuotes(intent, [merchant], context),
+    new A2AQuoteFetcher(options(d, h)).requestQuotes(
+      {
+        ...intent,
+        items: [{ sku: "DIFFERENT", query: "other", quantity: { value: 2, unit: "piece" } }],
+      },
+      [merchant],
+      context,
+    ),
+  ]);
+  expect(h.effects()).toBe(1);
+  const failures = [first, second].filter((result) => result[0]?.status === "failed");
+  expect(failures).toHaveLength(1);
+  // A racing request may observe no prior operation and reject the mismatched
+  // SKU locally; if it observes the winner it must be a protocol conflict.
+  // Either way it must not create a second wire.
+  expect(["invalid_request", "protocol_error"]).toContain(failures[0]?.[0]?.failure?.classification);
+});
 function policy() {
   return {
     policy_id: "policy",

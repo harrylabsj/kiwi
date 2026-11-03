@@ -140,6 +140,31 @@ export class BuyerProtocolRecovery {
       ) !== null
     );
   }
+  /**
+   * Whether this task/merchant/stage already has a persisted operation or an
+   * in-flight marker. Used only to decide whether a conflicting intent must be
+   * handed to exchange() for its normal conflict/recovery semantics; a fresh
+   * request with no prior operation can be rejected locally.
+   */
+  hasOperation(
+    context: ProtocolTaskContext,
+    stage: Operation["stage"],
+    round: number,
+    merchantId: string,
+  ): boolean {
+    if (!context.taskId) return false;
+    const slot = this.slot(context, stage, round, merchantId);
+    const opId = `msg_${contentDigest([slot, merchantId])}`;
+    const negotiationId = `neg_${contentDigest([slot, merchantId])}`;
+    if (
+      this.events(negotiationId).some(
+        (event) => event.event_kind === "message_sent" && event.message_id === opId,
+      )
+    ) {
+      return true;
+    }
+    return this.idempotency.readInFlight(this.buyerId, slot) !== null;
+  }
   private events(id: string): LedgerEvent[] {
     if (!this.ledger.verifyChain(id).valid) throw new ProtocolOperationUnknown();
     return this.ledger.events(id);
