@@ -3234,7 +3234,7 @@
     },
     {
       "path": "src/buyer-core/a2a-quote-fetcher.ts",
-      "sha256": "sha256:49aed7fc39a2fbaf7acbd7b905f23acf3c746e3c7d235e246b4b277cb0a8cd37"
+      "sha256": "sha256:b53832d84ce8e5409bf49a1aeeec8816e2f022777983b108f6332611f0def067"
     },
     {
       "path": "src/buyer-core/build-service.ts",
@@ -3270,7 +3270,7 @@
     },
     {
       "path": "src/buyer-core/protocol-recovery.ts",
-      "sha256": "sha256:652d8050f48a5d4fa69828c720b8a76613f1af0db26a2aa862371ffa7da8753d"
+      "sha256": "sha256:66f325e852d38f84330289182056602db5e0e8d58abbe3428d511596d6fc832c"
     },
     {
       "path": "src/buyer-core/quote-fetcher.ts",
@@ -4858,9 +4858,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:e8521d274021482d9a5aed95b298c23de17347b6e37157891e7a557d97f734c4",
+      "sha256": "sha256:a4e98e795580dbf76752d8c69b7150ba958effbe736db662ed31fbb81b07795f",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:0b79c5dfbcc8efe188e78bfb9b2196b91304a13eae9c914651b6b1ee96642f58"
+      "raw_sha256": "sha256:f3849d8114034ca55cfc19ddf46597956350790e30cbfde96b678777fc8f2da1"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -4908,7 +4908,7 @@
     },
     {
       "path": "tests/a2a-quote-sku.test.ts",
-      "sha256": "sha256:341d67988ae0b531ecc682132eeeceb3ef380f19ff19027cc9d49d7eec4b1c0e"
+      "sha256": "sha256:4ac8e97721bd53c6bf03956550b9c6978147a00f2883b64295a0362a6ce2f3cd"
     },
     {
       "path": "tests/a2a-server-throttle.test.ts",
@@ -5068,7 +5068,7 @@
     },
     {
       "path": "tests/a373-protocol-recovery.test.ts",
-      "sha256": "sha256:d362c58a532f29076b9eef31e9d5eda919e7e770d48647e4f532478c748b127f"
+      "sha256": "sha256:ba28eb1913448bfd1dd1984d9db7cb59c5d7cf4451604b6d1003453d2114166c"
     },
     {
       "path": "tests/a373-r1-native-contract.test.ts",
@@ -5840,7 +5840,7 @@
     },
     {
       "path": "tests/merchant-catalog-connection-api.test.ts",
-      "sha256": "sha256:9fa96e6069bfb83800e0e529502b98517510ce8e8552d2bd14ef2df69abdb7a9"
+      "sha256": "sha256:3d0f459e4237f6aa93310d8fedcbd88e1f8d12ef4de0392edaf8ec2b82b59779"
     },
     {
       "path": "tests/merchant-client-inventory.test.ts",
