@@ -181,9 +181,19 @@ describe("runtime Catalog connection API", () => {
     const elements: Record<string, { value: string; innerHTML: string; textContent: string; className: string; style: { display: string } }> = {};
     const requests: Array<{ path: string; body: unknown }> = [];
     const draft = { ...publicationDraft, items: [{ listing: { title: "<验收商品>", category: "验收测试" } }] };
+    const picked = { checked: true, value: "", disabled: false };
+    const category = { checked: false, value: "验收测试", disabled: false };
+    const selectionRow = {
+      getAttribute: (name: string) => (name === "data-sku" ? "SKU1" : null),
+      querySelector: (selector: string) =>
+        selector.includes("pub-pick") ? picked : selector.includes("pub-category") ? category : null,
+    };
     const context = createContext({
       URL, Date, Math,
-      document: { querySelectorAll: () => [], getElementById: (id: string) => elements[id] ??= { value: "", innerHTML: "", textContent: "", className: "", style: { display: "" } } },
+      document: {
+        querySelectorAll: (selector: string) => (selector === "#pub-rows tr" ? [selectionRow] : []),
+        getElementById: (id: string) => elements[id] ??= { value: "", innerHTML: "", textContent: "", className: "", style: { display: "" } },
+      },
       fetch: async (path: string, init?: { body?: unknown }) => {
         if (path === "/merchant/api/session") return Response.json(null);
         requests.push({ path, body: init?.body ? JSON.parse(String(init.body)) : null });
@@ -197,7 +207,6 @@ describe("runtime Catalog connection API", () => {
     runInContext('ROLE = "owner"', context);
     expect(await runInContext('views.products()', context)).toContain("预览公开内容");
     expect(requests.filter((r) => r.path.includes("publication-drafts"))).toHaveLength(0);
-    runInContext('document.getElementById("publication-selection").value = "SKU1 | 验收测试"', context);
     await runInContext('previewPublication()', context);
     expect(elements["publication-result"]?.innerHTML).toContain("&lt;验收商品&gt;");
     expect(requests.some((r) => r.path.endsWith("/commit"))).toBe(false);

@@ -53,6 +53,28 @@ function firstRfqSku(capture: CapturedInbound[]): unknown {
 }
 
 describe("A2AQuoteFetcher：明确 SKU 不能被发现结果覆盖", () => {
+  it("有 task context 但没有既有操作时，明确 SKU 不匹配仍在发网络前拒绝", async () => {
+    let hits = 0;
+    const fetcher = new A2AQuoteFetcher({
+      ...protocolOptions(),
+      allowPrivateRanges: true,
+      skipDnsCheck: true,
+      fetchImpl: (async () => {
+        hits += 1;
+        return Response.json({});
+      }) as typeof fetch,
+    });
+    const results = await fetcher.requestQuotes(
+      INTENT,
+      [merchant(["SKU-OTHER"], "https://merchant.example/.well-known/agent-card.json")],
+      context(),
+    );
+    expect(hits).toBe(0);
+    expect(results[0]?.status).toBe("failed");
+    expect(results[0]?.failure?.classification).toBe("invalid_request");
+    expect(results[0]?.failure?.retryable).toBe(false);
+  });
+
   it("明确的 SKU 不在商家 matching_skus 中：安全拒绝且不发网络请求", async () => {
     let hits = 0;
     const fetcher = new A2AQuoteFetcher({
