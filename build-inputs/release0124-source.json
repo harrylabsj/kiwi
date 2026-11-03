@@ -1726,23 +1726,27 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/SKILL.md",
-      "sha256": "sha256:9406849f8fc0791acee58b2729f492ef2db190f69e4cdd2b9163feb193c06301"
+      "sha256": "sha256:6a1855faa00a8e50f70000f5c1799b316fcd38a302453e92591d7d9a3723cfca"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/package/build-manifest.json",
-      "sha256": "sha256:8a5d9124ce3bdcc4973891ff2ca896ad0f1cffb21cf704d45b6686f8ce14706d"
+      "sha256": "sha256:9b9b06d47eaed12cc956941e049c28445a979e13393994b1baaaf1dec2e43297"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/package/prepare.mjs",
-      "sha256": "sha256:b3d07156fc00ec036bbfd22371f6471afc394dff8e12c0e7408d618a70d1f32c"
+      "sha256": "sha256:df5066ba9da73d5b9ad4001ac2b7590ca9a62e8f3cbc4c20a2d2e1e61ae19202"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/references/fallback-prompt.md",
-      "sha256": "sha256:6fa34497bbce3b127ceaec751b9f40374103e1c335bae29686d05c36f8153520"
+      "sha256": "sha256:d03df3b13d4f18aa14a706b6bb4f236dd52be995fe797ceae5a54e4ed211aa5a"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/references/release.json",
-      "sha256": "sha256:2143b42a36fa27c94b8a44a273bb88f7da0da1b8924885b16a85472cdbf7056f"
+      "sha256": "sha256:5ca887a7243a91a4a14dfd723738291d9def7f51729f778d7a0ee3c2a7bf89c6"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/scripts/verify-target-node.mjs",
+      "sha256": "sha256:9c92cca80a1064aa69c52ceecac9c2fd0e11d9848ed0ee9d28179d38ca1e5cf5"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-merchant-cs-prep/SKILL.md",
@@ -6603,6 +6607,10 @@
       "sha256": "sha256:86650dc7fd151d6d28373d21ed45fff270df677ca3fdf2b32b2c95fbbffeae58"
     },
     {
+      "path": "tests/protocol-recovery-isolation.test.ts",
+      "sha256": "sha256:7cecf77e5b0ffb5df2c025a8e3b9856972f70d550306e84265f50f58f47aa40e"
+    },
+    {
       "path": "tests/reception-agent-real.test.ts",
       "sha256": "sha256:fa39db25a707097d47b1f8ab1923d9d289af667a7602f8f102738d9b60bb9cae"
     },
@@ -6797,6 +6805,10 @@
     {
       "path": "tests/workbuddy-buddy-app-config.test.ts",
       "sha256": "sha256:de0abe0827f6ea599d863c60cd0207a0030da6fc4bae2dac46fac1b56b1be06e"
+    },
+    {
+      "path": "tests/workbuddy-cloud-deploy-guide.test.ts",
+      "sha256": "sha256:553b618879663755a2a5c9a33a85dad8642ea6ecb6bd5990cc4bcf91c2b162b4"
     },
     {
       "path": "tests/workbuddy-connector.test.ts",
