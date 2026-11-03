@@ -515,6 +515,55 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
     }
   });
 
+  it("云工作台：裸登录进入 /merchant/，待批准页返回工作台，失败保留合法 next", async () => {
+    const commerce = await startFakeCommerce(TEST_SKU);
+    const dataDir = tempDir("kiwi-cloud-login-next-");
+    const profilePath = writeCloudProfile(dataDir, commerce);
+    trackEnv("KIWI_COMMERCE_URL", commerce);
+    const port = await freePort();
+    writeAdminCredentials(dataDir, {
+      principalId: `merchant-agent:${MERCHANT_ID}`,
+      merchantId: MERCHANT_ID,
+      password: ADMIN_PASSWORD,
+    });
+    const instance = await bootstrapCloudRuntime({
+      env: cloudEnv({ port, dataDir, profilePath, sku: TEST_SKU }),
+      artifactRoot: "/workspace",
+      log: () => {},
+    });
+    try {
+      const base = `http://127.0.0.1:${port}`;
+      const form = { "content-type": "application/x-www-form-urlencoded" } as const;
+      // 裸登录（无 next）→ 云工作台 /merchant/
+      const login = await fetch(`${base}/admin/login`, {
+        method: "POST",
+        redirect: "manual",
+        headers: form,
+        body: `password=${ADMIN_PASSWORD}`,
+      });
+      expect(login.status).toBe(303);
+      expect(login.headers.get("location")).toBe("/merchant/");
+      const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+      // 待批准页提供返回商家工作台入口
+      const pending = await fetch(`${base}/admin/pending`, { headers: { cookie } });
+      expect(pending.status).toBe(200);
+      const pendingHtml = await pending.text();
+      expect(pendingHtml).toContain('href="/merchant/"');
+      expect(pendingHtml).toContain("返回商家工作台");
+      // 口令失败时保留合法 next（重试不丢目标）
+      const failed = await fetch(`${base}/admin/login`, {
+        method: "POST",
+        redirect: "manual",
+        headers: form,
+        body: `password=wrong-password&next=${encodeURIComponent("/admin/onboarding")}`,
+      });
+      expect(failed.status).toBe(200);
+      expect(await failed.text()).toContain('name="next" value="/admin/onboarding"');
+    } finally {
+      await instance.close();
+    }
+  });
+
   it("T030：首访者不能自动成为管理员（未初始化口令时任何登录尝试都不发放会话）", async () => {
     const commerce = await startFakeCommerce(TEST_SKU);
     const dataDir = tempDir("kiwi-cloud-firstvisitor-");

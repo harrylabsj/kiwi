@@ -1,12 +1,12 @@
 {
   "schema": "kiwi.portfolio.products.v1",
-  "snapshot_date": "2026-10-30",
+  "snapshot_date": "2026-11-03",
   "version_policy": "Versions remain independent by product. The portfolio release bundle binds each available source commit, package version, candidate artifact hash, and external approval state.",
   "products": [
     {
       "id": "kiwi-merchant-cloud",
       "name": "Kiwi Merchant Cloud",
-      "version": "0.12.22",
+      "version": "0.12.23",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -27,7 +27,7 @@
     {
       "id": "kiwi",
       "name": "Kiwi runtime",
-      "version": "0.12.22",
+      "version": "0.12.23",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -38,7 +38,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/npm/*.tgz",
       "state": "candidate",
-      "last_known_registry_version": "0.12.2",
+      "last_known_registry_version": "0.12.22",
       "gates": [
         "full Kiwi verify",
         "protected kiwi-release environment",
@@ -48,7 +48,7 @@
     {
       "id": "kiwi-catalog",
       "name": "Kiwi Catalog",
-      "version": "0.5.13",
+      "version": "0.5.14",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
@@ -59,7 +59,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/kiwi-catalog/*",
       "state": "candidate",
-      "last_known_registry_version": "0.5.10",
+      "last_known_registry_version": "0.5.13",
       "gates": [
         "locked tests",
         "contract lock",
@@ -135,7 +135,7 @@
     {
       "id": "kiwi-catalog-admin",
       "name": "Private Catalog merchant and operations extension",
-      "version": "0.2.9",
+      "version": "0.2.12",
       "version_source": {
         "type": "external-toml",
         "scope": "private",
@@ -143,12 +143,11 @@
         "field": "project.version"
       },
       "repository": "harrylabsj/kiwi-catalog-admin",
-      "source_commit": "d04f16ed9eb9d79b532b1f51274856455c403be4",
       "channel": "private Git tag",
       "release_controller": "private extension repository",
       "artifact": null,
       "bundle_reason": "The source repository is private; its package is tracked by immutable repository and commit references instead of being copied into the public portfolio artifact.",
-      "state": "v0.2.3 deployed to production on 2026-09-30",
+      "state": "candidate; source commit/tag pending; not frozen or deployed",
       "requires": [
         "kiwi-catalog >=0.5.1,<0.6,!=0.5.2"
       ]

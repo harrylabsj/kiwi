@@ -194,9 +194,42 @@ export class KiwiCatalogMerchantIndex {
     const publications = publicationsRes.status === "fulfilled" ? publicationsRes.value : [];
 
     const byId = new Map<string, MerchantRecord>();
+    /**
+     * 同一 merchant_id 可能对应多个商家应用（catalog_agent_id）。只要出现两个
+     * 不同 agent，就不能把任一侧的 card/runtime_access/门禁投影挂到合并后的
+     * 商家上——商品可以并列，路由身份必须唯一。
+     */
+    const identities = new Map<string, { agentId: string; conflict: boolean }>();
+    const markIdentityConflict = (merchantId: string): void => {
+      const current = identities.get(merchantId);
+      if (current === undefined) identities.set(merchantId, { agentId: "", conflict: true });
+      else current.conflict = true;
+    };
+    const noteIdentity = (merchantId: string, agentId: string): boolean => {
+      if (agentId === "") {
+        markIdentityConflict(merchantId);
+        return false;
+      }
+      const current = identities.get(merchantId);
+      if (current === undefined) {
+        identities.set(merchantId, { agentId, conflict: false });
+        return true;
+      }
+      if (current.conflict) return false;
+      if (current.agentId === agentId) return true;
+      current.conflict = true;
+      return false;
+    };
     for (const r of listings) {
       const merchantId = r.merchant.merchant_id ?? r.listing.owner_agent_id;
       if (merchantId === undefined || merchantId === "") continue;
+      const ownerAgentId = r.listing.owner_agent_id;
+      const joinedAgentId = r.agent.catalog_agent_id;
+      // listing 自身的 owner Agent 与其 join 投影必须一致；不一致时不采用
+      // 任何一侧的路由/门禁身份（商品仍可并列，末尾统一清空路由字段）。
+      const listingIdentityConsistent = ownerAgentId !== "" && joinedAgentId === ownerAgentId;
+      if (!listingIdentityConsistent) markIdentityConflict(merchantId);
+      const identityOk = listingIdentityConsistent ? noteIdentity(merchantId, ownerAgentId) : false;
       const sku = r.listing.source_product_ref ?? r.listing.listing_id;
       const product = summarizeListing(r);
       const existing = byId.get(merchantId);
@@ -211,6 +244,10 @@ export class KiwiCatalogMerchantIndex {
           matching_skus: [sku],
           delivery: r.listing.commercial_hints?.lead_time_hint,
           products: [product],
+          // listing 命中也要带上 owner agent 的在线状态：否则后续只有 card
+          // 没有 freshness_state 时会被 isAgentFresh 当成 fresh（stale 误报在线）。
+          freshness_state: r.agent.freshness_state,
+          ...(identityOk ? { catalog_agent_id: ownerAgentId } : {}),
         });
       } else {
         existing.matching_skus = existing.matching_skus ? [...existing.matching_skus, sku] : [sku];
@@ -224,18 +261,26 @@ export class KiwiCatalogMerchantIndex {
       if (r.principal_type !== "merchant") continue;
       const merchantId = r.merchant_id ?? r.catalog_agent_id;
       if (merchantId === undefined || merchantId === "") continue;
+      const identityOk = noteIdentity(merchantId, r.catalog_agent_id);
       const existing = byId.get(merchantId);
       if (existing === undefined) {
         byId.set(merchantId, mapRecord(r));
-      } else {
-        if (r.verification_level !== undefined) {
-          existing.verified = VERIFIED_LEVELS.has(r.verification_level);
-        }
-        existing.ucp_profile_url = r.ucp_profile_url ?? existing.ucp_profile_url;
-        existing.agent_card_url = r.agent_card_url ?? existing.agent_card_url;
-        existing.freshness_state = r.freshness_state ?? existing.freshness_state;
-        if (r.capabilities !== undefined && r.capabilities.length > 0) {
-          existing.capabilities = [...r.capabilities];
+      } else if (identityOk) {
+        // 身份已由 identity map 判等；仍防御记录上残留的另一个 agent id。
+        if (existing.catalog_agent_id !== undefined && existing.catalog_agent_id !== r.catalog_agent_id) {
+          markIdentityConflict(merchantId);
+        } else {
+          if (r.verification_level !== undefined) {
+            existing.verified = VERIFIED_LEVELS.has(r.verification_level);
+          }
+          existing.ucp_profile_url = r.ucp_profile_url ?? existing.ucp_profile_url;
+          existing.agent_card_url = r.agent_card_url ?? existing.agent_card_url;
+          existing.catalog_agent_id = r.catalog_agent_id;
+          if (r.runtime_access !== undefined) existing.runtime_access = r.runtime_access;
+          existing.freshness_state = r.freshness_state ?? existing.freshness_state;
+          if (r.capabilities !== undefined && r.capabilities.length > 0) {
+            existing.capabilities = [...r.capabilities];
+          }
         }
       }
     }
@@ -267,11 +312,38 @@ export class KiwiCatalogMerchantIndex {
       listings.map(async (r) => {
         const merchantId = r.merchant.merchant_id ?? r.listing.owner_agent_id;
         const rec = byId.get(merchantId);
-        if (rec === undefined || rec.agent_card_url !== undefined) return;
+        if (rec === undefined) return;
+        const ownerAgentId = r.listing.owner_agent_id;
+        // 已判定身份冲突的商家不再补任何一侧的 card/门禁；已有记录若属于
+        // 另一个 agent，也不能被本次回查覆盖。
+        if (identities.get(merchantId)?.conflict === true) return;
+        if (rec.catalog_agent_id !== undefined && rec.catalog_agent_id !== ownerAgentId) {
+          markIdentityConflict(merchantId);
+          return;
+        }
+        if (rec.agent_card_url !== undefined && rec.catalog_agent_id !== undefined) return;
         try {
-          const owner = await this.source.getRecord(r.listing.owner_agent_id);
-          rec.agent_card_url = owner.agent_card_url;
+          const owner = await this.source.getRecord(ownerAgentId);
+          // 同一商家身份：owner 回查结果必须仍指向 listing 的 owner agent。
+          if (owner.catalog_agent_id !== ownerAgentId) {
+            markIdentityConflict(merchantId);
+            return;
+          }
+          if (r.merchant.merchant_id !== undefined && owner.merchant_id !== undefined &&
+              owner.merchant_id !== r.merchant.merchant_id) {
+            markIdentityConflict(merchantId);
+            return;
+          }
+          if (!noteIdentity(merchantId, ownerAgentId)) return;
+          if (rec.catalog_agent_id !== undefined && rec.catalog_agent_id !== ownerAgentId) {
+            markIdentityConflict(merchantId);
+            return;
+          }
+          rec.agent_card_url = owner.agent_card_url ?? rec.agent_card_url;
           rec.ucp_profile_url = owner.ucp_profile_url ?? rec.ucp_profile_url;
+          rec.catalog_agent_id = owner.catalog_agent_id;
+          rec.freshness_state = owner.freshness_state ?? rec.freshness_state;
+          if (owner.runtime_access !== undefined) rec.runtime_access = owner.runtime_access;
           if (owner.capabilities !== undefined && owner.capabilities.length > 0) {
             rec.capabilities = [...owner.capabilities];
           }
@@ -284,10 +356,31 @@ export class KiwiCatalogMerchantIndex {
     // 且 agent 必须**新鲜**：商家服务离线后不再标"可实时询价"，但公开资料仍可查
     // （WP6 / 发布计划 §3.6）。freshness_state 由 catalog 读时按 TTL 派生；缺字段
     // （旧 catalog / legacy 来源）视为 fresh，保持向后兼容。
-    const records = [...byId.values()].map((rec) => ({
-      ...rec,
-      inquiry_available: rec.agent_card_url !== undefined && isAgentFresh(rec),
-    }));
+    const records = [...byId.values()].map((rec) => {
+      if (identities.get(rec.merchant_id)?.conflict !== true) {
+        return {
+          ...rec,
+          inquiry_available: rec.agent_card_url !== undefined && isAgentFresh(rec),
+        };
+      }
+      // 身份冲突 fail-closed：商品/公开资料保留，但路由、门禁与能力投影全部
+      // 清空——绝不把某个商家应用的 card/runtime_access 冒充成另一个应用的。
+      return {
+        merchant_id: rec.merchant_id,
+        name: rec.name,
+        // 身份不唯一时不沿用任一应用的验证结论。
+        verified: false,
+        ...(rec.category !== undefined ? { category: rec.category } : {}),
+        ...(rec.region !== undefined ? { region: rec.region } : {}),
+        capabilities: [],
+        inquiry_available: false,
+        ...(rec.source_kind !== undefined ? { source_kind: rec.source_kind } : {}),
+        ...(rec.publications !== undefined ? { publications: rec.publications } : {}),
+        ...(rec.matching_skus !== undefined ? { matching_skus: rec.matching_skus } : {}),
+        ...(rec.delivery !== undefined ? { delivery: rec.delivery } : {}),
+        ...(rec.products !== undefined ? { products: rec.products } : {}),
+      };
+    });
     const staleCount = records.filter(
       (rec) => rec.agent_card_url !== undefined && !isAgentFresh(rec),
     ).length;
@@ -358,17 +451,37 @@ export class KiwiCatalogMerchantIndex {
     // 审查：host 传入的 merchant_ids 可能来自 catalog_agent_id（cagt_…）或
     // merchant_id（mkt_…）。不能用 `??` 短路（merchant_id 存在时忽略 agent id，
     // 导致 cagt_ 传入 → resolveById undefined → "merchant has no agent card URL"）。
-    const listing = listings.find(
-      (l) =>
-        l.merchant.merchant_id === merchantId ||
-        l.listing.owner_agent_id === merchantId,
-    );
-    const agent = agents.find(
+    const byAgent = listings.filter((l) => l.listing.owner_agent_id === merchantId);
+    const byMerchant = listings.filter((l) => l.merchant.merchant_id === merchantId);
+    let listing: (typeof listings)[number] | undefined;
+    if (byAgent.length > 0) {
+      listing = byAgent[0];
+    } else if (byMerchant.length > 0) {
+      // 同一 merchant_id 下出现多个 owner 应用：合并身份不唯一，fail-closed。
+      if (new Set(byMerchant.map((l) => l.listing.owner_agent_id)).size > 1) return undefined;
+      listing = byMerchant[0];
+    }
+    if (listing !== undefined && listing.listing.owner_agent_id !== listing.agent.catalog_agent_id) {
+      return undefined;
+    }
+    const matchingAgents = agents.filter(
       (a) => a.merchant_id === merchantId || a.catalog_agent_id === merchantId,
-    )
-      ?? (listing !== undefined
-        ? agents.find((a) => a.catalog_agent_id === listing.listing.owner_agent_id)
-        : undefined);
+    );
+    let agent: CatalogAgentRecord | undefined;
+    if (listing !== undefined) {
+      // 优先选 listing 的 owner；agents 面里另一个同 merchant 的应用不能顶替。
+      agent = agents.find((a) => a.catalog_agent_id === listing.listing.owner_agent_id);
+      if (agent !== undefined &&
+          listing.merchant.merchant_id !== undefined &&
+          agent.merchant_id !== undefined &&
+          agent.merchant_id !== listing.merchant.merchant_id) {
+        return undefined;
+      }
+    } else {
+      // 仅 agent 命中：同一 merchant 有多个不同应用时无法确定唯一身份。
+      if (new Set(matchingAgents.map((a) => a.catalog_agent_id)).size > 1) return undefined;
+      agent = matchingAgents[0];
+    }
     if (listing === undefined && agent === undefined) {
       // 仅 M0 公开资料命中：可解析但不可路由（inquiry_available=false）。
       const first = publications[0];
@@ -395,30 +508,46 @@ export class KiwiCatalogMerchantIndex {
         capabilities: [],
         matching_skus: [listing.listing.source_product_ref ?? listing.listing.listing_id],
         delivery: listing.listing.commercial_hints?.lead_time_hint,
+        // 即使没有 agent card/补查失败，也保留 listing join 的在线状态；缺失
+        // 才会落到 isAgentFresh 的 legacy 兼容分支。
+        freshness_state: listing.agent.freshness_state,
       };
       if (agent !== undefined) {
+        // 身份不一致 fail-closed：不把另一个主体的门禁/路由挂到本商家上。
+        if (listing.merchant.merchant_id !== undefined && agent.merchant_id !== undefined &&
+            agent.merchant_id !== listing.merchant.merchant_id) return undefined;
+        if (agent.catalog_agent_id !== listing.agent.catalog_agent_id) return undefined;
         record.agent_card_url = agent.agent_card_url;
         record.ucp_profile_url = agent.ucp_profile_url ?? record.ucp_profile_url;
         record.capabilities = agent.capabilities ? [...agent.capabilities] : record.capabilities;
+        record.catalog_agent_id = agent.catalog_agent_id;
+        record.freshness_state = agent.freshness_state ?? record.freshness_state;
+        if (agent.runtime_access !== undefined) record.runtime_access = agent.runtime_access;
       } else {
         try {
           const owner = await this.source.getRecord(listing.listing.owner_agent_id);
+          if (owner.catalog_agent_id !== listing.listing.owner_agent_id) return undefined;
+          if (listing.merchant.merchant_id !== undefined && owner.merchant_id !== undefined &&
+              owner.merchant_id !== listing.merchant.merchant_id) return undefined;
           record.agent_card_url = owner.agent_card_url;
           record.ucp_profile_url = owner.ucp_profile_url ?? record.ucp_profile_url;
           if (owner.capabilities !== undefined && owner.capabilities.length > 0) {
             record.capabilities = [...owner.capabilities];
           }
+          record.catalog_agent_id = owner.catalog_agent_id;
+          record.freshness_state = owner.freshness_state ?? record.freshness_state;
+          if (owner.runtime_access !== undefined) record.runtime_access = owner.runtime_access;
         } catch {
           // 商家不可达：保留已收集字段，不编造
         }
       }
       if (publicationSummaries.length > 0) record.publications = publicationSummaries;
-      record.inquiry_available = record.agent_card_url !== undefined;
+      record.inquiry_available = record.agent_card_url !== undefined && isAgentFresh(record);
       return record;
     }
     const mapped = mapRecord(agent as CatalogAgentRecord);
     if (publicationSummaries.length > 0) mapped.publications = publicationSummaries;
-    mapped.inquiry_available = mapped.agent_card_url !== undefined;
+    mapped.inquiry_available = mapped.agent_card_url !== undefined && isAgentFresh(mapped);
     return mapped;
   }
 }

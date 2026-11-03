@@ -242,6 +242,46 @@ describe("单端口路由分发（T016）", () => {
     return { base: `http://127.0.0.1:${port}`, a2aHits, merchantHits, challengeHits };
   }
 
+  /** 挂载 merchantHomePage 的变体：验证根路径引导页与工作台首页互不抢占。 */
+  async function startRouterWithHomePage(options: { ready?: boolean }): Promise<{
+    base: string;
+    merchantHomePageHits: number[];
+  }> {
+    const merchantHomePageHits: number[] = [];
+    const router = createCloudRouter({
+      a2aHandler: (_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ surface: "a2a" }));
+      },
+      merchantHandler: (_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ surface: "merchant" }));
+      },
+      merchantHomePage: (_req, res) => {
+        merchantHomePageHits.push(1);
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end("<!doctype html><html><body>workbench-home</body></html>");
+      },
+      readiness: async () => ({
+        ready: options.ready !== false,
+        checked_at: "2026-09-20T00:00:00.000Z",
+        checks: {
+          identity: { ok: options.ready !== false },
+          storage: { ok: true },
+          products: { ok: true },
+          policy: { ok: true },
+        },
+      }),
+      version: "0.0.0-test",
+    });
+    const server = createServer(router);
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const address = server.address();
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+    return { base: `http://127.0.0.1:${port}`, merchantHomePageHits };
+  }
+
   it("平台数据面路径不被业务接管", async () => {
     const { base, a2aHits, merchantHits } = await startRouter({});
     const res = await fetch(`${base}/.cloud/database/rest/items`);
@@ -327,6 +367,42 @@ describe("单端口路由分发（T016）", () => {
     expect(await res.json()).toMatchObject({ error: "not_found" });
     expect(a2aHits).toHaveLength(0);
     expect(merchantHits).toHaveLength(0);
+  });
+
+  it("根路径 `/` 是零数据引导页：指向 /merchant/，不回显请求、不跳转", async () => {
+    const { base, a2aHits, merchantHits } = await startRouter({});
+    // 带分享码形态访问（商家实测入口）：页面必须固定文案，绝不反射查询串。
+    const res = await fetch(`${base}/?sharecode=SENSITIVE-CODE-42&from=deliver`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    // 引导而非跳转：跳转会剥掉分享码再进网关（网关可能逐请求校验）。
+    expect(res.headers.get("location")).toBeNull();
+    const html = await res.text();
+    expect(html).toContain('href="/merchant/"');
+    expect(html).toContain('href="/admin/login"');
+    // 零数据边界：查询串（分享码/业务参数）不出现在任何响应里。
+    expect(html).not.toContain("SENSITIVE-CODE-42");
+    expect(html).not.toContain("from=deliver");
+    expect(a2aHits).toHaveLength(0);
+    expect(merchantHits).toHaveLength(0);
+  });
+
+  it("根路径非 GET/HEAD → 405；/merchant/ 仍由工作台首页 handler 提供", async () => {
+    const plain = await startRouter({});
+    const posted = await fetch(`${plain.base}/`, { method: "POST" });
+    expect(posted.status).toBe(405);
+    expect(await posted.json()).toMatchObject({ error: "method_not_allowed" });
+
+    const { base, merchantHomePageHits } = await startRouterWithHomePage({});
+    const home = await fetch(`${base}/merchant/`);
+    expect(home.status).toBe(200);
+    expect(await home.text()).toContain("workbench-home");
+    const root = await fetch(`${base}/`);
+    expect(root.status).toBe(200);
+    expect(merchantHomePageHits).toHaveLength(1);
   });
 });
 

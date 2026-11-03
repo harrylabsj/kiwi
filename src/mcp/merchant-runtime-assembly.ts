@@ -117,6 +117,10 @@ export interface MerchantRuntimeAssemblyOptions {
   extraExecutors?: CommandExecutor[];
   /** Require committed Workbench WebAuthn decisions for product writes. */
   requireCommittedProductDecisions?: boolean;
+  /** 裸登录成功后的落点（云工作台 /merchant/；缺省独立 MCP 的 /admin/pending）。 */
+  adminDefaultNext?: string;
+  /** 待批准页的返回入口（云工作台传；独立 MCP 不传）。 */
+  adminPendingBackLink?: { href: string; label: string };
 }
 
 export interface MerchantRuntimeAssembly {
@@ -490,6 +494,12 @@ export async function assembleMerchantRuntime(
             store: oauthStore,
             adminDir: options.dataDir,
             secureCookies: (options.issuer ?? "").startsWith("https://"),
+            ...(options.adminDefaultNext !== undefined
+              ? { defaultNext: options.adminDefaultNext }
+              : {}),
+            ...(options.adminPendingBackLink !== undefined
+              ? { pendingBackLink: options.adminPendingBackLink }
+              : {}),
             // M4 §5.4：管理入口如实展示开通状态与本地兜底视图（服务端权威，
             // 不在前端推断）。控制面可达性由本进程已知的配置决定，缺省按不可达
             // ——"不知道"不等于"正常"。
