@@ -44,6 +44,17 @@ import { MarketplaceQuoteFetcher } from "./quote-fetcher.js";
 import { KiwiBuyerService, type BuyerFollowsClient } from "./service.js";
 import { TaskApprovalStore } from "./store.js";
 
+/**
+ * Strip trailing ASCII slashes without a backtracking regular expression.
+ * The prior `/\/+$/` replacement was flagged by CodeQL as a polynomial
+ * regular expression on long slash runs. This scans backward once.
+ */
+export function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return value.slice(0, end);
+}
+
 export interface BuyerServiceConfig {
   dbPath: string;
   principal: string;
@@ -139,7 +150,7 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
           })
         : undefined;
     const accessByOrigin = new Map<string, MerchantAccessTransport>();
-    const catalogOrigin = config.catalogUrl.replace(/\/+$/, "");
+    const catalogOrigin = stripTrailingSlashes(config.catalogUrl);
     const officialTrust = officialCatalogTrust(catalogOrigin);
     const openRouteStore = officialTrust && protocolStateDir ? new OpenInquiryRouteStore(protocolStateDir, catalogOrigin) : undefined;
     // A protocol directory may be shared by several configured buyers. Their
