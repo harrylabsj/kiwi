@@ -278,6 +278,12 @@ const TOP_LEVEL_KEYS = [
 /** weixin 段白名单（微信远程控制通道配置；无 *_env 密钥字段——iLink 凭证运行时获取）。 */
 const WEIXIN_KEYS = ["allow_users", "base_url"] as const;
 /** 单位 token：1–16 个字符、无空白/控制字符（允许中文，如「个」「件」）。 */
+/** Canonical unit key for profile-level duplicate/conflict validation. */
+function canonicalUnitKey(unit: string): string {
+  const normalized = unit.trim().normalize("NFKC").toLowerCase();
+  return normalized === "盒" ? "box" : normalized;
+}
+
 function isUnitToken(value: unknown): boolean {
   if (typeof value !== "string") return false;
   const trimmed = value.trim().normalize("NFKC");
@@ -630,6 +636,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     );
   }
   const rawUnitAliases = commerce.unit_aliases;
+  const aliasKeys = new Set<string>();
   if (rawUnitAliases !== undefined) {
     req(
       Array.isArray(rawUnitAliases) && rawUnitAliases.length > 0 && rawUnitAliases.length <= 12,
@@ -641,6 +648,9 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     );
     for (const alias of rawUnitAliases as unknown[]) {
       req(isUnitToken(alias), `${source}: commerce.unit_aliases entries must be short unit tokens`);
+      // Profiles only carry alias spellings, all bound to default_unit; two
+      // spellings that normalize to the same unit are redundant, not a conflict.
+      aliasKeys.add(canonicalUnitKey(String(alias)));
     }
   }
   const rawPackageFactors = commerce.unit_package_factors;
@@ -657,11 +667,14 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
       `${source}: commerce.unit_package_factors requires commerce.default_unit`,
     );
     const entries: Record<string, number> = {};
+    const normalizedDefault = defaultUnit === undefined ? undefined : canonicalUnitKey(String(defaultUnit));
+    const seenFactors = new Map<string, { raw: string; factor: number }>();
     for (const [unit, factor] of Object.entries(rawPackageFactors as Record<string, unknown>)) {
       req(isUnitToken(unit), `${source}: commerce.unit_package_factors keys must be short unit tokens`);
+      const key = canonicalUnitKey(unit);
       req(
-        unit !== defaultUnit,
-        `${source}: commerce.unit_package_factors must not define the default unit itself`,
+        key !== normalizedDefault,
+        `${source}: commerce.unit_package_factors key "${unit}" denotes default_unit "${defaultUnit}" after unit normalization; remove this factor or use a distinct package unit`,
       );
       req(
         typeof factor === "number" &&
@@ -670,6 +683,16 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
           factor <= 10_000,
         `${source}: commerce.unit_package_factors values must be integers in 2..10000`,
       );
+      const prior = seenFactors.get(key);
+      req(
+        prior === undefined || prior.factor === factor,
+        `${source}: commerce.unit_package_factors raw keys "${prior?.raw}" and "${unit}" normalize to the same unit "${key}" with different factors (${prior?.factor} vs ${factor}); align them or remove one`,
+      );
+      req(
+        !aliasKeys.has(key),
+        `${source}: commerce.unit_aliases and commerce.unit_package_factors both define normalized unit "${key}" ("${unit}"); aliases are 1:1 and package factors are N:1; remove one`,
+      );
+      seenFactors.set(key, { raw: unit, factor: factor as number });
       entries[unit] = factor;
     }
     unitPackageFactors = entries;

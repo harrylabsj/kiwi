@@ -745,6 +745,9 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           ...(receptionUnitPackages !== undefined
             ? { unitPackageFactors: receptionUnitPackages }
             : {}),
+          ...(profile.commerce.default_unit !== undefined
+            ? { unitDefaultUnit: profile.commerce.default_unit }
+            : {}),
           policy: receptionPolicy,
           maxSteps: receptionConfig.maxModelTurns,
           maxToolAttempts: receptionConfig.maxToolAttempts,
@@ -805,6 +808,9 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
         ...(receptionUnitPackages !== undefined
           ? { unitPackageFactors: receptionUnitPackages }
           : {}),
+        ...(profile.commerce.default_unit !== undefined
+          ? { unitDefaultUnit: profile.commerce.default_unit }
+          : {}),
         approvals: negotiationApprovals,
         ...(receptionPi !== undefined ? { agent: receptionPi } : {}),
         approvalTtlSeconds: receptionConfig.approvalTtlSeconds,
@@ -835,6 +841,9 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
             : {}),
           ...(profile.commerce.unit_package_factors !== undefined
             ? { unitPackageFactors: profile.commerce.unit_package_factors }
+            : {}),
+          ...(profile.commerce.default_unit !== undefined
+            ? { unitDefaultUnit: profile.commerce.default_unit }
             : {}),
           // BUG-07：显式传入 provider（或静态值）时每次报价取运行中生效策略；
           // 缺省仍是启动 profile 的静态策略。

@@ -102,7 +102,8 @@ export type ReceptionBlock =
         | "product_candidates"
         | "facts_stale"
         | "unit_mismatch"
-        | "missing_quantity";
+        | "missing_quantity"
+        | "quantity_overflow";
       /** unit_mismatch：商品源支持的单位。 */
       supportedUnit?: string;
       /** multiple_skus：买家提到的 SKU 候选（请买家选择，不静默取第一项）。 */

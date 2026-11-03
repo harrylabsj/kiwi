@@ -70,10 +70,9 @@ import type {
   NegotiationHandlerResult,
 } from "./types.js";
 import {
-  canonicalUnitToken,
-  normalizeUnitAliasMap,
-  normalizeUnitFactorMap,
-  unitsAreCanonicalAliases,
+  resolveUnitConversion,
+  unitConversionPolicy,
+  type UnitConversionPolicy,
 } from "../unit-alias.js";
 
 export const MERCHANT_CAPABILITY = "com.harrylabsj.kiwi.shopping.negotiation";
@@ -171,8 +170,10 @@ export interface MerchantHandlerOptions {
    * 中文买家发 `个`，商家没配这张表就会被 `field_unsupported` 拒掉。
    */
   unitAliases?: Record<string, string>;
-  /** 包装单位 → 1 包装 = N 个商品源单位；KNP 只能安全处理 N=1。 */
+  /** 包装单位 → 1 包装 = N 个 default_unit；KNP 只能安全处理 N=1。 */
   unitPackageFactors?: Record<string, number>;
+  /** 商家的默认售卖单位；包装倍率只对以此为目标单位的商品源生效。 */
+  unitDefaultUnit?: string;
   /** 条件成交折扣百分比（deal = base × (1 - pct/100)）；缺省 5。 */
   dealDiscountPercent?: number;
   /** merchant policy：确定性定价的 floor / 促销（per-SKU，可配置）。
@@ -401,21 +402,12 @@ class ProductSourceUnavailableError extends Error {
 function unitMismatch(
   productUnit: string | undefined,
   requestedUnit: string,
-  aliases: Record<string, string>,
-  packageFactors: Record<string, number>,
+  policy: UnitConversionPolicy,
 ): boolean {
-  const declared = (productUnit ?? "").trim();
-  if (declared === "") return true;
-  const requested = canonicalUnitToken(requestedUnit);
-  const product = canonicalUnitToken(declared);
-  // 显式包装倍率先于内建 1:1，且即使规范化后单位相同也要检查：配置了
-  // BOX/盒 倍率时不能悄悄退回 1:1。KNP 的 offer/counter 不能安全改写
-  // 数量；只有 1:1 倍率可以按等价单位接受，其余必须拒绝。
-  if (Object.hasOwn(packageFactors, requested)) return packageFactors[requested] !== 1;
-  // 商家显式别名优先于内建别名（包括显式把「盒」指到其他单位的情况）。
-  if (Object.hasOwn(aliases, requested)) return aliases[requested] !== product;
-  if (product === requested) return false;
-  return !unitsAreCanonicalAliases(requested, product);
+  const resolution = resolveUnitConversion(policy, productUnit, requestedUnit);
+  // KNP 的 offer/counter/accept 不能安全改写数量；只有 identity/alias 或
+  // 1:1 包装倍率可以接受，>1 的换算必须拒绝，绝不退化为内建别名。
+  return resolution.kind === "mismatch" || (resolution.kind === "factor" && resolution.factor !== 1);
 }
 
 const declineReply = (
@@ -460,8 +452,11 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
   const { ledger, now, sender, counterparty } = options;
   const offerPriceMinor = options.offerPriceMinor ?? MERCHANT_OFFER_PRICE_MINOR;
   const allowDemoPriceFallback = options.allowDemoPriceFallback ?? false;
-  const unitAliases = normalizeUnitAliasMap(options.unitAliases);
-  const unitPackageFactors = normalizeUnitFactorMap(options.unitPackageFactors);
+  const unitPolicy = unitConversionPolicy({
+    aliases: options.unitAliases,
+    packageFactors: options.unitPackageFactors,
+    ...(options.unitDefaultUnit !== undefined ? { defaultUnit: options.unitDefaultUnit } : {}),
+  });
   // BUG-07：merchantPolicy 支持静态值或 provider——每请求解析运行中策略。
   const policyOf = (): MerchantPolicy | undefined =>
     typeof options.merchantPolicy === "function"
@@ -1259,7 +1254,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
           const { priceMinor, currency } = product;
-          if (unitMismatch(product.unit, requestedUnit, unitAliases, unitPackageFactors)) return declineReply("field_unsupported");
+          if (unitMismatch(product.unit, requestedUnit, unitPolicy)) return declineReply("field_unsupported");
           const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
@@ -1354,7 +1349,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
           const { priceMinor, currency } = product;
-          if (unitMismatch(product.unit, requestedUnit, unitAliases, unitPackageFactors)) return declineReply("field_unsupported");
+          if (unitMismatch(product.unit, requestedUnit, unitPolicy)) return declineReply("field_unsupported");
           const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
@@ -1446,7 +1441,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
           const { priceMinor, currency } = product;
-          if (unitMismatch(product.unit, requestedUnit, unitAliases, unitPackageFactors)) return declineReply("field_unsupported");
+          if (unitMismatch(product.unit, requestedUnit, unitPolicy)) return declineReply("field_unsupported");
           const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const authorityPromotion = resolvePromotionQuote(
@@ -1765,7 +1760,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             agreedItem?.sku !== saved.snapshot.sku ||
             agreedItem.quantity?.value !== saved.snapshot.quantity ||
             typeof agreedUnit !== "string" ||
-            unitMismatch(saved.snapshot.unit, agreedUnit, unitAliases, unitPackageFactors)
+            unitMismatch(saved.snapshot.unit, agreedUnit, unitPolicy)
           )
             return declineReply("approval_required");
           const refreshedFacts = await resolveProductOrDecline(saved.snapshot.sku, { force: true });

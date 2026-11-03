@@ -90,6 +90,52 @@ describe("profile loading", () => {
     );
     expect(() => loadProfile(writeTemp(invalidFactor))).toThrow(/unit_package_factors/);
 
+    // 1 不是合法包装倍率；public profile 不能产生 factor=1，只有直接
+    // MerchantHandlerOptions（测试/内部装配）可能传入，handlers 仍需 fail-closed。
+    const factorOne = VALID_YAML.replace(
+      "  backend: local_marketplace",
+      "  backend: local_marketplace\n  default_unit: piece\n  unit_package_factors:\n    箱: 1",
+    );
+    expect(() => loadProfile(writeTemp(factorOne))).toThrow(/unit_package_factors/);
+
+    // 原始键不同但归一后等于 default_unit：启动前给出可理解的拒绝提示，
+    // 而不是等到 handler 构造期才报内部错误。
+    const foldedDefault = VALID_YAML.replace(
+      "  backend: local_marketplace",
+      "  backend: local_marketplace\n  default_unit: 盒\n  unit_package_factors:\n    box: 12",
+    );
+    expect(() => loadProfile(writeTemp(foldedDefault))).toThrow(
+      /denotes default_unit "盒" after unit normalization/,
+    );
+
+    // 归一后同键、同倍率：允许（旧配置里常见的大小写/全角冗余写法）。
+    const redundantFactors = VALID_YAML.replace(
+      "  backend: local_marketplace",
+      "  backend: local_marketplace\n  default_unit: piece\n  unit_package_factors:\n    BOX: 12\n    盒: 12",
+    );
+    expect(loadProfile(writeTemp(redundantFactors)).commerce.unit_package_factors).toEqual({
+      BOX: 12,
+      盒: 12,
+    });
+
+    // 归一后同键、异倍率：启动前失败，提示具体 raw key 与倍率。
+    const conflictingFactors = VALID_YAML.replace(
+      "  backend: local_marketplace",
+      "  backend: local_marketplace\n  default_unit: piece\n  unit_package_factors:\n    BOX: 12\n    盒: 6",
+    );
+    expect(() => loadProfile(writeTemp(conflictingFactors))).toThrow(
+      /normalize to the same unit "box" with different factors/,
+    );
+
+    // alias 与 factor 指向同一归一单位：1:1 与 N:1 冲突，启动前拒绝。
+    const aliasFactorOverlap = VALID_YAML.replace(
+      "  backend: local_marketplace",
+      "  backend: local_marketplace\n  default_unit: piece\n  unit_aliases:\n    - 盒\n  unit_package_factors:\n    box: 12",
+    );
+    expect(() => loadProfile(writeTemp(aliasFactorOverlap))).toThrow(
+      /unit_aliases and commerce.unit_package_factors both define normalized unit "box"/,
+    );
+
     const withoutDefault = VALID_YAML.replace(
       "  backend: local_marketplace",
       "  backend: local_marketplace\n  unit_package_factors:\n    箱: 12",

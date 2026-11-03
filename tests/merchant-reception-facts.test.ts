@@ -72,6 +72,7 @@ describe("merchant reception facts/unit/tax (M3)", () => {
     unitAliases?: Record<string, string>,
     buyerUnit = "piece",
     unitPackageFactors?: Record<string, number>,
+    unitDefaultUnit = "piece",
   ) =>
     createMerchantReceptionEngine({
       store,
@@ -86,6 +87,7 @@ describe("merchant reception facts/unit/tax (M3)", () => {
       approvals,
       ...(unitAliases !== undefined ? { unitAliases } : {}),
       ...(unitPackageFactors !== undefined ? { unitPackageFactors } : {}),
+      unitDefaultUnit,
       now: () => NOW,
     });
 
@@ -173,22 +175,166 @@ describe("merchant reception facts/unit/tax (M3)", () => {
     expect(result.conversation.need.unit).toBeUndefined();
   });
 
-  it("商家显式别名优先，内建 box/盒 不覆盖既有配置", async () => {
+  it("原文精确 box→box 保持 1:1，别名绑定 default_unit 不覆盖", async () => {
+    const engine = engineFor({ unit: "box" }, { 盒: "piece" }, "box");
+    const result = await engine.respond(input("来两box"));
+    expect(result.text).toContain("已记录需求：SKU VQ-001，2 box");
+    expect(result.text).toContain("当前公开标价 110.00 CNY");
+    expect(result.conversation.need.quantity).toBe(2);
+    expect(result.conversation.need.unit).toBe("box");
+  });
+
+  it("box→盒 原文折叠相同但别名冲突时安全拒绝", async () => {
     const engine = engineFor({ unit: "box" }, { 盒: "piece" }, "盒");
     const result = await engine.respond(input("来两盒"));
     expect(result.text).toContain("该商品按 box 售卖");
+    expect(result.text).not.toContain("当前公开标价");
+  });
+
+  it.each([
+    { productUnit: "盒", requestUnit: "盒", accepted: true },
+    { productUnit: "box", requestUnit: "box", accepted: true },
+    { productUnit: "盒", requestUnit: "box", accepted: false },
+    { productUnit: "box", requestUnit: "盒", accepted: false },
+  ])(
+    "default_unit=盒 + factor box:12 区分精确/折叠写法 %j",
+    async ({ productUnit, requestUnit, accepted }) => {
+      const engine = engineFor({ unit: productUnit }, undefined, requestUnit, { box: 12 }, "盒");
+      const result = await engine.respond(input(requestUnit === "盒" ? "来两盒" : "来两box"));
+      if (!accepted) {
+        expect(result.text).toContain(`该商品按 ${productUnit} 售卖`);
+        expect(result.text).not.toContain("当前公开标价");
+        return;
+      }
+      expect(result.text).toContain(`已记录需求：SKU VQ-001，2 ${productUnit}`);
+      expect(result.text).toContain("当前公开标价 110.00 CNY");
+      expect(result.conversation.need.quantity).toBe(2);
+      expect(result.conversation.need.unit).toBe(productUnit);
+    },
+  );
+
+  it("全角/大小写包装倍率键先归一，源单位为 default_unit 时换算", async () => {
+    const engine = engineFor({ unit: "piece" }, undefined, "box", { "ＢＯＸ": 12 });
+    const result = await engine.respond(input("来两盒"));
+    expect(result.text).toContain("24 piece");
+    expect(result.text).toContain("原 2 box");
+    expect(result.text).toContain("1 box = 12 piece");
+    expect(result.conversation.need.quantity).toBe(24);
+    expect(result.conversation.need.unit).toBe("piece");
+    expect(result.text).toContain("当前公开标价 110.00 CNY");
+  });
+
+  it("源单位为 box、default_unit 为 piece 时，box/盒 保持 1:1 且不套用倍率/库存", async () => {
+    for (const unit of ["box", "盒"] as const) {
+      const engine = engineFor({ unit: "box", stock: 10 }, undefined, unit, { box: 12 }, "piece");
+      const result = await engine.respond(input(unit === "盒" ? "来两盒" : "来两box"));
+      expect(result.text).toContain("已记录需求：SKU VQ-001，2 box");
+      expect(result.text).toContain("当前公开标价 110.00 CNY");
+      expect(result.conversation.need.quantity).toBe(2);
+      expect(result.conversation.need.unit).toBe("box");
+    }
+  });
+
+  it("源单位为 default_unit 时按显式倍率换算并保留金额", async () => {
+    const engine = engineFor({ unit: "piece", stock: 30 }, undefined, "box", { box: 12 }, "piece");
+    const result = await engine.respond(input("来两box"));
+    expect(result.text).toContain("24 piece");
+    expect(result.text).toContain("原 2 box");
+    expect(result.text).toContain("1 box = 12 piece");
+    expect(result.text).toContain("当前公开标价 110.00 CNY");
+    expect(result.conversation.need.quantity).toBe(24);
+  });
+
+  it("旧公开构造器形式：有 factor、未传 unitDefaultUnit 时保留原换算行为", async () => {
+    const engine = createMerchantReceptionEngine({
+      store,
+      outbox,
+      interpreter: interpreter("box"),
+      productSource: {
+        async getProduct() {
+          return { price: 110, currency: "CNY", stock: 30, unit: "piece" };
+        },
+      },
+      policy: () => policy as never,
+      approvals,
+      unitPackageFactors: { box: 12 },
+      now: () => NOW,
+    });
+    const result = await engine.respond(input("来两box"));
+    expect(result.text).toContain("24 piece");
+    expect(result.conversation.need.quantity).toBe(24);
+    expect(result.text).toContain("当前公开标价 110.00 CNY");
+  });
+
+  it.each([0, -1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "直接传入非法 factor %s 时构造失败",
+    (factor) => {
+      expect(() => engineFor({ unit: "piece" }, undefined, "box", { box: factor }, "piece")).toThrow(
+        /positive safe integer/,
+      );
+    },
+  );
+
+  it("包装倍率换算溢出时安全拒绝，不报价、不丢精度", async () => {
+    const interpreter: InquiryInterpreter = {
+      async interpret() {
+        return {
+          intent: "quote_request",
+          topics: ["price"],
+          sku: SKU,
+          quantity: Number.MAX_SAFE_INTEGER,
+          unit: "box",
+          language: "zh",
+        };
+      },
+    };
+    const engine = createMerchantReceptionEngine({
+      store,
+      outbox,
+      interpreter,
+      productSource: {
+        async getProduct() {
+          return { price: 110, currency: "CNY", stock: 50, unit: "piece" };
+        },
+      },
+      policy: () => policy as never,
+      approvals,
+      unitPackageFactors: { box: 10000 },
+      unitDefaultUnit: "piece",
+      now: () => NOW,
+    });
+    const result = await engine.respond(input("来大量 box"));
+    expect(result.text).toContain("数量超出可安全处理范围");
+    expect(result.text).not.toContain("当前公开标价");
+    expect(result.plan.blocks.some((block) => block.kind === "ask_clarification")).toBe(true);
+  });
+
+  it("源单位既不是请求也不是 default_unit 时拒绝倍率歧义", async () => {
+    const engine = engineFor({ unit: "kg" }, undefined, "box", { box: 12 }, "piece");
+    const result = await engine.respond(input("来两box"));
+    expect(result.text).toContain("该商品按 kg 售卖");
+    expect(result.text).not.toContain("当前公开标价");
     expect(result.conversation.need.unit).toBeUndefined();
   });
 
-  it("全角/大小写包装倍率键先归一，显式倍率优先于 box/盒 1:1", async () => {
-    const engine = engineFor({ unit: "盒" }, undefined, "box", { "ＢＯＸ": 12 });
+  it("factor=1 但源单位不是 default_unit 时仍安全拒绝", async () => {
+    const engine = engineFor({ unit: "kg" }, undefined, "box", { box: 1 }, "piece");
+    const result = await engine.respond(input("来两box"));
+    expect(result.text).toContain("该商品按 kg 售卖");
+    expect(result.text).not.toContain("当前公开标价");
+  });
+
+  it("别名与倍率同时配置但目标冲突时安全拒绝", async () => {
+    const engine = engineFor(
+      { unit: "piece" },
+      { "盒": "piece" },
+      "盒",
+      { box: 12 },
+      "piece",
+    );
     const result = await engine.respond(input("来两盒"));
-    expect(result.text).toContain("24 盒");
-    expect(result.text).toContain("原 2 box");
-    expect(result.text).toContain("1 box = 12 盒");
-    expect(result.conversation.need.quantity).toBe(24);
-    expect(result.conversation.need.unit).toBe("盒");
-    expect(result.text).toContain("当前公开标价 110.00 CNY");
+    expect(result.text).toContain("该商品按 piece 售卖");
+    expect(result.text).not.toContain("当前公开标价");
   });
 
   it("全角/大小写别名键先归一，仍按原数量报价", async () => {
@@ -235,6 +381,7 @@ describe("merchant reception facts/unit/tax (M3)", () => {
       policy: () => policy as never,
       approvals,
       unitPackageFactors: { 箱: 12 },
+      unitDefaultUnit: "piece",
       now: () => NOW,
     });
     const result = await engine.respond(input("来箱"));

@@ -165,6 +165,9 @@ function renderBlock(block: ReceptionBlock, registry: CommercialFactRegistry): s
       if (block.reason === "missing_quantity") {
         return ["请补充购买数量（例如：2 件、1 箱）。"];
       }
+      if (block.reason === "quantity_overflow") {
+        return ["数量超出可安全处理范围，请减少数量后重试；本次未报价。"];
+      }
       if (block.reason === "facts_stale") {
         return ["商品数据已过期，暂时无法报价；请发送 RFQ 重新确认，或稍后重试。"];
       }
