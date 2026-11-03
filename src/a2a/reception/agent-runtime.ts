@@ -28,6 +28,7 @@ import type { Api, Message, Model, TSchema } from "@earendil-works/pi-ai";
 import type { MerchantPolicy } from "../../config/profile.js";
 import type { AttemptBudgetHooks } from "../server/inquiry-interpreter.js";
 import {
+  canonicalUnitToken,
   multiplyQuantitySafe,
   resolveUnitConversion,
   unitConversionPolicy,
@@ -82,7 +83,12 @@ export interface ReceptionAgentMetrics {
 
 export interface ReceptionAgentResult {
   plan: ReceptionResponsePlan;
-  need?: Partial<Pick<ReceptionNeed, "sku" | "quantity" | "unit" | "pendingSkus">>;
+  need?: Partial<
+    Pick<
+      ReceptionNeed,
+      "sku" | "quantity" | "unit" | "pendingSkus" | "inputQuantity" | "inputUnit"
+    >
+  >;
   metrics: ReceptionAgentMetrics;
 }
 
@@ -287,7 +293,21 @@ export function createPiReceptionRuntime(
     async run(input) {
       const policy = options.policy?.();
       let plan: ReceptionResponsePlan | undefined;
-      let needPatch: Partial<Pick<ReceptionNeed, "sku" | "quantity" | "unit" | "pendingSkus">> = {};
+      let needPatch: Partial<
+        Pick<
+          ReceptionNeed,
+          "sku" | "quantity" | "unit" | "pendingSkus" | "inputQuantity" | "inputUnit"
+        >
+      > = {};
+      interface FactUnitState {
+        inputQuantity?: number;
+        inputUnit?: string;
+        quantity?: number;
+        unit?: string;
+        factor?: number;
+      }
+      const factUnits = new Map<string, FactUnitState>();
+      const rejectedFactUnits = new Map<string, { inputQuantity?: number; inputUnit?: string }>();
       let steps = 0;
       let toolAttempts = 0;
       let timedOut = false;
@@ -477,21 +497,26 @@ export function createPiReceptionRuntime(
             // 目标生效，其他情况或别名冲突一律安全拒绝，不猜倍率。
             let unit = requestedUnit;
             let effectiveQuantity = quantity;
+            let factFactor: number | undefined;
             if (product.unit !== undefined && requestedUnit !== undefined) {
               const resolution = resolveUnitConversion(unitPolicy, product.unit, requestedUnit);
               if (resolution.kind === "factor") {
                 if (quantity === undefined) {
+                  rejectedFactUnits.set(sku, { inputUnit: requestedUnit });
                   return toolResult(JSON.stringify({ error: "missing_quantity" }));
                 }
                 const convertedQuantity = multiplyQuantitySafe(quantity, resolution.factor);
                 if (convertedQuantity === undefined) {
+                  rejectedFactUnits.set(sku, { inputQuantity: quantity, inputUnit: requestedUnit });
                   return toolResult(JSON.stringify({ error: "quantity_overflow" }));
                 }
                 effectiveQuantity = convertedQuantity;
                 unit = product.unit;
+                factFactor = resolution.factor;
               } else if (resolution.kind === "identity" || resolution.kind === "alias") {
                 unit = product.unit;
               } else {
+                rejectedFactUnits.set(sku, { inputQuantity: quantity, inputUnit: requestedUnit });
                 return toolResult(
                   JSON.stringify({
                     error: "unit_mismatch",
@@ -499,6 +524,23 @@ export function createPiReceptionRuntime(
                   }),
                 );
               }
+            }
+            if (factFactor !== undefined && effectiveQuantity !== undefined && unit !== undefined &&
+                quantity !== undefined && requestedUnit !== undefined) {
+              factUnits.set(sku, {
+                inputQuantity: quantity,
+                inputUnit: requestedUnit,
+                quantity: effectiveQuantity,
+                unit,
+                factor: factFactor,
+              });
+              rejectedFactUnits.delete(sku);
+            } else if (effectiveQuantity !== undefined || unit !== undefined) {
+              factUnits.set(sku, {
+                ...(effectiveQuantity !== undefined ? { quantity: effectiveQuantity } : {}),
+                ...(unit !== undefined ? { unit } : {}),
+              });
+              rejectedFactUnits.delete(sku);
             }
             const floorMinor = policyFloorMinor(policy, sku);
             const listPrice =
@@ -571,9 +613,48 @@ export function createPiReceptionRuntime(
                 ? args.quantity
                 : undefined;
             const unit = typeof args.unit === "string" && args.unit.trim() !== "" ? args.unit.trim() : undefined;
+            const effectiveSku = sku ?? needPatch.sku;
+            const rejected = effectiveSku !== undefined ? rejectedFactUnits.get(effectiveSku) : undefined;
+            if (rejected !== undefined) {
+              return toolResult(JSON.stringify({ error: "need_patch_conflict" }));
+            }
+            const conversion = effectiveSku !== undefined ? factUnits.get(effectiveSku) : undefined;
+            if (conversion?.factor !== undefined) {
+              const inputMatches =
+                quantity === conversion.inputQuantity &&
+                unit !== undefined &&
+                conversion.inputUnit !== undefined &&
+                canonicalUnitToken(unit) === canonicalUnitToken(conversion.inputUnit);
+              const effectiveMatches =
+                quantity === conversion.quantity &&
+                unit !== undefined &&
+                conversion.unit !== undefined &&
+                canonicalUnitToken(unit) === canonicalUnitToken(conversion.unit);
+              const omitted = quantity === undefined && unit === undefined;
+              if (!omitted && !inputMatches && !effectiveMatches) {
+                return toolResult(JSON.stringify({ error: "need_patch_conflict" }));
+              }
+              if (
+                conversion.quantity === undefined ||
+                conversion.unit === undefined ||
+                conversion.inputQuantity === undefined ||
+                conversion.inputUnit === undefined
+              ) {
+                return toolResult(JSON.stringify({ error: "need_patch_conflict" }));
+              }
+              needPatch = {
+                ...needPatch,
+                sku: effectiveSku,
+                quantity: conversion.quantity,
+                unit: conversion.unit,
+                inputQuantity: conversion.inputQuantity,
+                inputUnit: conversion.inputUnit,
+              };
+              return toolResult(JSON.stringify({ accepted: true }));
+            }
             needPatch = {
               ...needPatch,
-              ...(sku !== undefined ? { sku } : {}),
+              ...(effectiveSku !== undefined ? { sku: effectiveSku } : {}),
               ...(quantity !== undefined ? { quantity } : {}),
               ...(unit !== undefined ? { unit } : {}),
             };
@@ -599,7 +680,34 @@ export function createPiReceptionRuntime(
             if (blocks === undefined) {
               return toolResult(JSON.stringify({ accepted: false, error: "invalid_blocks" }));
             }
-            plan = { locale: "zh-CN", blocks };
+            const normalizedBlocks = blocks.map((block) => {
+              if (
+                block.kind !== "acknowledge_need" ||
+                needPatch.sku === undefined ||
+                (block.sku !== undefined && block.sku !== needPatch.sku)
+              ) {
+                return block;
+              }
+              const conversion = factUnits.get(needPatch.sku);
+              return {
+                ...block,
+                sku: needPatch.sku,
+                ...(needPatch.quantity !== undefined ? { quantity: needPatch.quantity } : {}),
+                ...(needPatch.unit !== undefined ? { unit: needPatch.unit } : {}),
+                ...(conversion?.factor !== undefined &&
+                needPatch.inputQuantity !== undefined &&
+                needPatch.inputUnit !== undefined
+                  ? {
+                      convertedFrom: {
+                        quantity: needPatch.inputQuantity,
+                        unit: needPatch.inputUnit,
+                        factor: conversion.factor,
+                      },
+                    }
+                  : {}),
+              };
+            });
+            plan = { locale: "zh-CN", blocks: normalizedBlocks };
             return toolResult(JSON.stringify({ accepted: true }));
           },
         } as AgentTool<TSchema, unknown>,
