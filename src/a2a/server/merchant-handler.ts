@@ -47,6 +47,11 @@ import {
   safeAdvisorMessage,
   type NegotiationAdvisor,
 } from "./negotiation-advisor.js";
+import type {
+  InquiryInterpretation,
+  InquiryInterpreter,
+  InquiryTopic,
+} from "./inquiry-interpreter.js";
 import { calculateWorkbenchQuote } from "../../merchant/quote-calculator.js";
 import {
   createNegotiationPhase,
@@ -171,6 +176,9 @@ export interface MerchantHandlerOptions {
   /** 协商顾问（C）：只生成面向买家的措辞，价格仍由确定性引擎计算。
    *  缺省关闭；输出经 safeAdvisorMessage 校验，越界即回退固定文案。 */
   negotiationAdvisor?: NegotiationAdvisor;
+  /** 询价意图解析（P2）：只产出候选，回复事实仍由本 handler 组装。
+   *  缺省关闭；解析失败回退到固定询问文案。 */
+  inquiryInterpreter?: InquiryInterpreter;
   /** Workbench promotion authority used by the deterministic quote path. */
   promotionPrice?: (input: { sku: string; quantity: number }) =>
     | {
@@ -1063,7 +1071,97 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
 
       switch (envelope.action) {
         case "inquiry": {
-          return textReply("Please provide a product SKU, quantity and declared unit for a source-backed quote.");
+          const inquiry = envelope.payload as {
+            subject?: { sku?: unknown };
+            questions?: { code?: unknown }[];
+          };
+          const structuredSku =
+            typeof inquiry.subject?.sku === "string" && inquiry.subject.sku.trim() !== ""
+              ? inquiry.subject.sku.trim()
+              : undefined;
+          const questionCodes = (Array.isArray(inquiry.questions) ? inquiry.questions : [])
+            .flatMap((question) => (typeof question.code === "string" ? [question.code] : []));
+          // P2：自由文本只用于理解问题；模型输出只是候选，事实仍由商品源决定。
+          let interpreted: InquiryInterpretation | undefined;
+          if (options.inquiryInterpreter !== undefined && buyerMessage !== undefined) {
+            try {
+              interpreted = await options.inquiryInterpreter.interpret({
+                buyer_message: buyerMessage,
+              });
+            } catch {
+              interpreted = undefined;
+            }
+          }
+          const sku = structuredSku ?? interpreted?.sku;
+          if (sku === undefined) {
+            return textReply(
+              "Please provide a product SKU, quantity and declared unit for a source-backed quote.",
+            );
+          }
+          const topics = new Set<InquiryTopic>(interpreted?.topics ?? []);
+          for (const code of questionCodes) {
+            const head = code.split(".")[0] ?? "";
+            if (head === "price") topics.add("price");
+            else if (head === "stock" || head === "availability") topics.add("stock");
+            else if (head === "delivery" || head === "fulfillment") topics.add("delivery");
+          }
+          const language = interpreted?.language ?? "en";
+          const resolved = await resolveProductOrDecline(sku);
+          if ("declined" in resolved) {
+            // 询价不是商业承诺：商品源确认不了就要求核对 SKU，不发 decline 信封。
+            return textReply(
+              language === "zh"
+                ? `暂时无法从商品源确认 SKU ${sku}；请核对 SKU 或稍后重试。`
+                : `I could not confirm SKU ${sku} from the product source; please check the SKU or retry later.`,
+            );
+          }
+          const product = resolved.product;
+          const floorMinor = floorMinorForSku(sku);
+          const quantity = interpreted?.quantity;
+          const stockAvailable =
+            product.stock !== undefined &&
+            (quantity !== undefined ? product.stock >= quantity : product.stock > 0);
+          const delivery = deliveryBefore();
+          const askAll = topics.size === 0;
+          const lines: string[] = [];
+          // list 价低于私有底价是配置矛盾：此时不报价格（否则等于泄露底价）。
+          if ((askAll || topics.has("price")) && floorMinor !== null && product.priceMinor >= floorMinor) {
+            const priceText = `${(product.priceMinor / 100).toFixed(2)} ${product.currency}`;
+            lines.push(
+              language === "zh"
+                ? `SKU ${sku} 的公开标价是 ${priceText}。`
+                : `SKU ${sku} list price is ${priceText}.`,
+            );
+          }
+          if ((askAll || topics.has("stock")) && product.stock !== undefined) {
+            const tail = quantity !== undefined ? (language === "zh" ? ` ${quantity} 件` : ` for ${quantity} units`) : "";
+            lines.push(
+              stockAvailable
+                ? language === "zh"
+                  ? `库存可以覆盖${tail}。`
+                  : `Stock is available${tail}.`
+                : language === "zh"
+                  ? `当前库存不足以覆盖${tail}。`
+                  : `Stock does not cover${tail}.`,
+            );
+          } else if (topics.has("stock")) {
+            lines.push(language === "zh" ? "库存状态待确认。" : "Stock status needs confirmation.");
+          }
+          if ((askAll || topics.has("delivery")) && delivery !== undefined) {
+            lines.push(
+              language === "zh"
+                ? `预计交期不晚于 ${delivery.slice(0, 10)}。`
+                : `Estimated delivery is by ${delivery.slice(0, 10)}.`,
+            );
+          } else if (topics.has("delivery")) {
+            lines.push(language === "zh" ? "交期待确认。" : "Delivery date needs confirmation.");
+          }
+          lines.push(
+            language === "zh"
+              ? "以上为非约束性信息；请发送 RFQ（SKU、数量、单位）获取正式报价。"
+              : "This is non-binding; send an RFQ with SKU, quantity and unit for a binding quote.",
+          );
+          return textReply(lines.join(" "));
         }
         case "rfq": {
           const payload = envelope.payload as {

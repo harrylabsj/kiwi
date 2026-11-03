@@ -69,6 +69,7 @@ import { defaultHandler } from "./server/handler.js";
 import { createMerchantHandler } from "./server/merchant-handler.js";
 import { NegotiationApprovalStore } from "./server/negotiation-approvals.js";
 import { createDeepSeekNegotiationAdvisor } from "./server/negotiation-advisor.js";
+import { createDeepSeekInquiryInterpreter } from "./server/inquiry-interpreter.js";
 import { LedgerStore } from "../negotiation/ledger/index.js";
 import { IdempotencyStore } from "../negotiation/idempotency/index.js";
 import { openMerchantStatsStore } from "../merchant/stats-store.js";
@@ -681,6 +682,21 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           ...(process.env.KIWI_MERCHANT_ADVISOR === "deepseek"
             ? {
                 negotiationAdvisor: createDeepSeekNegotiationAdvisor({
+                  ...(profile.model?.api_key_env !== undefined
+                    ? { apiKeyEnv: profile.model.api_key_env }
+                    : {}),
+                  ...(profile.model?.base_url !== undefined
+                    ? { baseUrl: profile.model.base_url }
+                    : {}),
+                  ...(profile.model?.model !== undefined ? { model: profile.model.model } : {}),
+                }),
+              }
+            : {}),
+          // P2：询价自由文本意图解析默认关闭；KIWI_MERCHANT_INQUIRY=deepseek
+          // 才启用。模型只产出候选，价格/库存/交期事实仍由 handler 组装。
+          ...(process.env.KIWI_MERCHANT_INQUIRY === "deepseek"
+            ? {
+                inquiryInterpreter: createDeepSeekInquiryInterpreter({
                   ...(profile.model?.api_key_env !== undefined
                     ? { apiKeyEnv: profile.model.api_key_env }
                     : {}),
