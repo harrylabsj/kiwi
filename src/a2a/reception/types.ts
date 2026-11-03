@@ -14,6 +14,8 @@ export interface ReceptionNeed {
   sku?: string;
   quantity?: number;
   unit?: string;
+  /** 多商品澄清时待选择的候选（AC09）；买家选择后清空。 */
+  pendingSkus?: string[];
   revision: number;
   updatedAt: string;
 }
@@ -26,6 +28,8 @@ export interface CommercialFacts {
   stockAvailable?: boolean;
   /** 权威交期（ISO）；未配置 delivery_lead_days 时 undefined。 */
   deliveryBefore?: string;
+  /** 商家一次性批准的单价（major）；仅本轮消费审批候选时出现。 */
+  approvedPrice?: number;
 }
 
 /** 服务端事实快照的引用（版本 = 快照内容 digest）。 */
@@ -77,6 +81,8 @@ export type ReceptionBlock =
       kind: "show_commercial_terms";
       /** 服务端事实引用；发布器校验存在性/版本/租户/可见性/有效期后渲染。 */
       ref: FactRef;
+      /** 结构化 inquiry 的主题；缺省渲染全部事实（普通文本行为不变）。 */
+      topics?: Array<"price" | "stock" | "delivery">;
     }
   | {
       kind: "request_human_help";

@@ -177,6 +177,32 @@ describe("reception 多商品请求（AC09/D03）", () => {
     expect(result.text).toContain("110.00");
   });
 
+  it("多商品澄清后可用“第一个”选择候选", async () => {
+    let interpretation: Awaited<ReturnType<InquiryInterpreter["interpret"]>> = {
+      intent: "quote_request",
+      topics: ["price"],
+      skus: ["VQ-001", "VQ-002"],
+      sku: "VQ-001",
+      language: "zh",
+    };
+    const engine = engineFor({
+      async interpret() {
+        return interpretation;
+      },
+    });
+    await engine.respond(input("VQ-001 和 VQ-002 各两盒"));
+    expect(store.get("merchant-1", "buyer:1", "ctx_1")?.need.pendingSkus).toEqual([
+      "VQ-001",
+      "VQ-002",
+    ]);
+
+    interpretation = { intent: "quote_request", topics: ["price"], language: "zh" };
+    const second = await engine.respond(input("第一个"));
+    expect(second.text).toContain("SKU VQ-001");
+    expect(second.text).toContain("当前公开标价 110.00 CNY");
+    expect(second.conversation.need.pendingSkus).toBeUndefined();
+  });
+
   it("结构化 SKU 是协议数据：不受模型多候选影响", async () => {
     const engine = engineFor(
       interpreterFor({
@@ -282,6 +308,34 @@ describe("KNP 多行商品（AC09：不静默只处理 items[0]）", () => {
       ),
     );
     expect(result.kind).toBe("accepted");
+  });
+
+  it("offer 携带两行商品：decline field_unsupported", async () => {
+    const handler = handlerFor();
+    const result = await call(
+      handler,
+      envelopeOf(
+        "offer",
+        { offer_id: "off_buyer", terms: { items: twoItems } },
+        "neg_multi_offer",
+      ),
+    );
+    expect(result.kind).toBe("declined");
+    if (result.kind === "declined") expect(result.reasonCode).toBe("field_unsupported");
+  });
+
+  it("无前置报价时多行 counter 也先校验：field_unsupported 而非 state_conflict", async () => {
+    const handler = handlerFor();
+    const result = await call(
+      handler,
+      envelopeOf(
+        "counter_offer",
+        { offer_id: "off_missing", proposed_terms: { items: twoItems } },
+        "neg_multi_no_phase",
+      ),
+    );
+    expect(result.kind).toBe("declined");
+    if (result.kind === "declined") expect(result.reasonCode).toBe("field_unsupported");
   });
 
   it("counter_offer 携带两行商品：decline field_unsupported", async () => {

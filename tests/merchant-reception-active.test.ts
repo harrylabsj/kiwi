@@ -155,6 +155,99 @@ describe("reception active 边界（公开折扣边界内自动，越界转审�
     expect(approvals.list("pending")).toHaveLength(0);
   });
 
+  it("商家批准后买家下一轮消费批准价，且只生效一次", async () => {
+    const engine = engineFor(
+      interpreterFor({
+        intent: "quote_request",
+        topics: ["price"],
+        sku: SKU,
+        quantity: 2,
+        target_price: 98,
+        language: "zh",
+      }),
+    );
+    await engine.respond(input("98 一件行不行"));
+    const pending = approvals.list("pending");
+    expect(pending).toHaveLength(1);
+    approvals.approve({ approval_id: pending[0]!.approval_id, approved_minor: 10_000 });
+
+    const second = await engine.respond(input("刚才的价格可以吗"));
+    expect(second.text).toContain("商家确认价 100.00 CNY（仅本次）");
+    expect(second.text).not.toContain("尚未批准");
+    expect(approvals.list("approved")).toHaveLength(0);
+    expect(approvals.list("consumed")).toHaveLength(1);
+
+    // 一次性授权：再问一次不会继续给批准价，而是重新进入待确认。
+    const third = await engine.respond(input("再确认一次"));
+    expect(third.text).toContain("尚未批准");
+    expect(third.text).not.toContain("商家确认价");
+  });
+
+  it("买家改数量后旧批准失效，不被消费", async () => {
+    let interpretation = {
+      intent: "quote_request" as const,
+      topics: ["price" as const],
+      sku: SKU,
+      quantity: 2,
+      target_price: 98,
+      language: "zh" as const,
+    };
+    const engine = engineFor({
+      async interpret() {
+        return interpretation;
+      },
+    });
+    await engine.respond(input("98 两件行不行"));
+    const pending = approvals.list("pending");
+    approvals.approve({ approval_id: pending[0]!.approval_id, approved_minor: 10_000 });
+    expect(approvals.list("approved")).toHaveLength(1);
+
+    interpretation = { ...interpretation, quantity: 5 };
+    const second = await engine.respond(input("改成五件"));
+    expect(second.text).not.toContain("商家确认价");
+    expect(approvals.list("approved")).toHaveLength(0);
+    const next = approvals.list("pending");
+    expect(next).toHaveLength(1);
+    expect(next[0]?.quantity).toBe(5);
+  });
+
+  it("批准后底价上调：旧批准不再消费", async () => {
+    let policyNow = {
+      price_floors: { [SKU]: 100 },
+      max_auto_discount_percent: 5,
+      delivery_lead_days: 7,
+    };
+    const engine = createMerchantReceptionEngine({
+      store,
+      outbox,
+      interpreter: interpreterFor({
+        intent: "quote_request",
+        topics: ["price"],
+        sku: SKU,
+        quantity: 2,
+        target_price: 98,
+        language: "zh",
+      }),
+      productSource: {
+        async getProduct() {
+          return { price: 110, currency: "CNY", stock: 50 };
+        },
+      },
+      policy: () => policyNow as never,
+      approvals,
+      now: () => NOW,
+    });
+    await engine.respond(input("98 两件行不行"));
+    const pending = approvals.list("pending");
+    approvals.approve({ approval_id: pending[0]!.approval_id, approved_minor: 10_000 });
+    expect(approvals.list("approved")).toHaveLength(1);
+
+    policyNow = { ...policyNow, price_floors: { [SKU]: 105 } };
+    const second = await engine.respond(input("还是要两件"));
+    expect(second.text).not.toContain("商家确认价");
+    expect(approvals.list("approved")).toHaveLength(0);
+  });
+
   it("审批 pending 到期后 approve 失败并置 expired（超时只失效）", async () => {
     let now = NOW;
     const expiring = new NegotiationApprovalStore(dir, () => now);

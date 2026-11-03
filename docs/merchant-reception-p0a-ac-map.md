@@ -41,8 +41,8 @@
 | AC06 | 部分就绪 | unit 仅作候选透传、由商品源口径渲染；无换算表，"两箱"歧义澄清依赖模型候选质量（待 M6 评分） |
 | AC07 | P0b 范围外 | 需求模型无时限槽位，相对日期解析未实现 |
 | AC08 | P0b 范围外 | 无搜索工具，同名 SKU 选择场景不出现 |
-| AC09 | 机制就绪 | 多商品请求明确提示并请买家选择（`skus` 候选 + `multiple_skus` 澄清）；KNP RFQ/offer/counter_offer 多行商品 decline `field_unsupported`，不静默只取 items[0]：`merchant-multi-item.test.ts` |
-| AC10 | 机制就绪 | 需求变更 revision 递增：`conversation-store.ts`、Q07；批准失效：`merchant-approval-invalidation.test.ts` |
+| AC09 | 机制就绪 | 多商品请求明确提示并请买家选择（`skus` 候选 + `multiple_skus` 澄清，候选持久化后可用“第一个”选择）；KNP RFQ/offer/counter_offer 多行商品在推进相位前 decline `field_unsupported`，不静默只取 items[0]：`merchant-multi-item.test.ts` |
+| AC10 | 机制就绪 | 需求变更 revision 递增：`conversation-store.ts`、Q07；接待侧改数量后旧批准失效（新 pending 取代 approved，数量不匹配不消费）：`merchant-reception-active.test.ts`；KNP 旧许可重验：`merchant-approval-invalidation.test.ts` |
 
 ### 事实与履约（AC11–AC15）
 
@@ -78,7 +78,7 @@
 
 | AC | 状态 | 证据 / 说明 |
 |----|------|-------------|
-| AC26 | 机制就绪 | 越界还价转审批、不泄露边界/底价：`merchant-reception-active.test.ts`、Q09/Q10 |
+| AC26 | 机制就绪 | 越界还价转审批、批准后买家下一轮一次性消费批准价、不泄露边界/底价：`merchant-reception-active.test.ts`、Q09/Q10 |
 | AC27 | 机制就绪 | 批准前重验既有覆盖：`merchant-approval-invalidation.test.ts`、`merchant-policy-runtime.test.ts`、`merchant-source-facts-revalidation.test.ts` |
 | AC28 | 机制就绪 | 单次执行/并发批准既有覆盖：`merchant-negotiation-approval.test.ts`；过期不可批准：Q11 |
 | AC29 | 机制就绪 | ConditionalOffer 冲突走既有确定性 evaluator（接待不生成条件报价） |
@@ -150,3 +150,17 @@
 - AC09 已补齐（`merchant-multi-item.test.ts`，2026-11-03）。
 - 不得宣称通过：AC23/AC45 的多实例隔离（D16 第二商家未建，B.8-5）；
   AC39/AC54 的质量分（真实 provider 评分未执行）。
+
+## 2026-11-03 评审修复记录
+
+- **审批回环（AC26/AC57/AC58）**：商家在 `/ops` 批准后，接待引擎在买家下一轮按
+  context + SKU + 数量/单位匹配并要求目标价不高于批准价，一次性消费批准候选，
+  以“商家确认价（仅本次）”渲染；重复询问不会继续给批准价。数量/单位变化不消费，
+  且新的待批请求会把同磋商同 SKU 的旧 approved 置 expired。
+- **多商品序号**：`multiple_skus` 澄清时持久化候选列表，买家可用“第一个/第二款/选2”
+  选择；选定后清空候选。KNP RFQ/offer/counter 的多行商品校验前移到相位推进之前，
+  被拒请求不再改写 active offer/相位。
+- **结构化主题**：KNP inquiry 的 `questions[].code` 映射为 price/stock/delivery，
+  接待只渲染被问到的主题；验签标记 `identityVerified` 已透传到接待引擎。
+- **测试**：新增审批消费/改数量失效/序号选择/结构化主题/验签透传/RFQ·offer·counter
+  多行商品顺序校验用例；reception + negotiation 相关 16 个文件 215 条全绿。

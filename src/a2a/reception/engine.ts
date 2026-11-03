@@ -13,7 +13,7 @@ import type { MerchantPolicy } from "../../config/profile.js";
 import { uuidv7 } from "../../negotiation/domain/identifiers.js";
 import { contentDigest } from "../../negotiation/jcs.js";
 import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
-import type { InquiryInterpreter } from "../server/inquiry-interpreter.js";
+import type { InquiryInterpreter, InquiryTopic } from "../server/inquiry-interpreter.js";
 import { applyDiscountPercentMinor } from "../server/merchant-handler.js";
 import { RECEPTION_CONFIG_DEFAULTS } from "./config.js";
 import type { ReceptionConversationStore } from "./conversation-store.js";
@@ -47,7 +47,7 @@ export interface ReceptionEngineInput {
   now: string;
   /** KNP inquiry 的结构化字段（协议数据，权威于模型候选）；有结构化 SKU 时
    *  空文本/非中文文本不再触发澄清，直接按事实回答。 */
-  structured?: { sku?: string };
+  structured?: { sku?: string; topics?: InquiryTopic[] };
 }
 
 export interface ReceptionEngineResult {
@@ -61,6 +61,24 @@ export interface ReceptionEngineResult {
 
 export interface ReceptionEngine {
   respond(input: ReceptionEngineInput): Promise<ReceptionEngineResult>;
+}
+
+export type ReceptionApprovalStatus =
+  | "pending"
+  | "approved"
+  | "consumed"
+  | "expired"
+  | "rejected";
+
+export interface ReceptionApprovalCandidate {
+  approval_id: string;
+  negotiation_id: string;
+  sku: string;
+  currency: string;
+  quantity: number;
+  unit?: string;
+  approved_minor?: number;
+  status: ReceptionApprovalStatus;
 }
 
 /** 审批候选落盘接缝（复用 NegotiationApprovalStore 的入参子集）。 */
@@ -78,6 +96,16 @@ export interface ReceptionApprovalSink {
   }): unknown;
   /** 读取/写入前固化到期状态（§17.1）；实现可缺省。 */
   sweepExpired?(): unknown;
+  /** 读取已批准候选（批准后买家下一轮消费；D15）。实现可缺省。 */
+  list?(status?: ReceptionApprovalStatus): ReceptionApprovalCandidate[];
+  /** 一次性消费批准价；被其他请求抢先消费/已过期时返回 undefined。 */
+  consume?(input: {
+    negotiation_id: string;
+    sku: string;
+    currency?: string;
+    quantity?: number;
+    unit?: string;
+  }): ReceptionApprovalCandidate | undefined;
 }
 
 export interface MerchantReceptionEngineDeps {
@@ -119,6 +147,38 @@ function privateFloorMajor(policy: MerchantPolicy | undefined, sku: string): num
   return typeof floor === "number" && Number.isFinite(floor) ? floor : undefined;
 }
 
+const CN_ORDINALS: Record<string, number> = {
+  一: 1,
+  二: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+  十: 10,
+};
+
+/**
+ * 多商品澄清后的序号指代（“第一个”“选2”“第二款”）。只在上轮持久化了
+ * 候选时生效；解析失败返回 undefined，让调用方继续追问。
+ */
+export function ordinalSkuOf(
+  text: string,
+  candidates: readonly string[] | undefined,
+): string | undefined {
+  if (candidates === undefined || candidates.length === 0) return undefined;
+  const match = text.match(
+    /(?:第|选)\s*(?:第)?\s*([1-9]\d?|[一二三四五六七八九十])\s*(?:个|款|项|号)?/,
+  );
+  if (match === null) return undefined;
+  const raw = match[1]!;
+  const index = /^\d+$/.test(raw) ? Number(raw) : CN_ORDINALS[raw];
+  if (index === undefined || index < 1 || index > candidates.length) return undefined;
+  return candidates[index - 1];
+}
+
 /** 发布结果为空（所有块被拒绝）时的固定兜底，不回显原文、不编造事实。 */
 const EMPTY_PUBLISH_FALLBACK =
   "抱歉，当前无法处理这条消息，请稍后重试，或直接发送 RFQ（SKU、数量、单位）。";
@@ -136,6 +196,7 @@ export function createMerchantReceptionEngine(
       }
       const text = input.text.trim().slice(0, BUYER_MESSAGE_MAX_CHARS);
       const structuredSku = input.structured?.sku;
+      const structuredTopics = input.structured?.topics ?? [];
       const previous = deps.store.get(input.merchantId, input.identity, input.contextId);
       // 每回合事实注册表：快照只在发布当回合有效（不持久化、不跨回合复用）。
       const registry = new InMemoryFactRegistry();
@@ -167,9 +228,12 @@ export function createMerchantReceptionEngine(
       // 结构化字段是协议数据（权威），模型候选其次，最后沿用会话已确认值。
       const candidateSkus =
         interpreted?.skus ?? (interpreted?.sku !== undefined ? [interpreted.sku] : []);
-      // AC09/D03：一条消息提到多个商品时明确提示并请买家选择，禁止静默只取
-      // 第一项；结构化 SKU 是协议数据（单值），不参与多候选判定。
-      if (structuredSku === undefined && candidateSkus.length > 1) {
+      // AC09/D03：多商品澄清后，买家可以用“第一个/第二款”指代候选；候选来自
+      // 上一轮持久化的 pendingSkus，序号解析不依赖模型。
+      const ordinalSku = ordinalSkuOf(text, previous?.need.pendingSkus);
+      // 一条消息提到多个商品时明确提示并请买家选择，禁止静默只取第一项；
+      // 结构化 SKU 是协议数据（单值），不参与多候选判定。
+      if (structuredSku === undefined && ordinalSku === undefined && candidateSkus.length > 1) {
         return finish(
           input,
           previous,
@@ -182,10 +246,11 @@ export function createMerchantReceptionEngine(
               candidates: candidateSkus,
             },
           ],
-          { quantity: interpreted?.quantity, unit: interpreted?.unit },
+          { quantity: interpreted?.quantity, unit: interpreted?.unit, pendingSkus: candidateSkus },
         );
       }
-      const sku = structuredSku ?? candidateSkus[0] ?? previous?.need.sku;
+      const sku =
+        structuredSku ?? ordinalSku ?? candidateSkus[0] ?? previous?.need.sku;
       const quantity = interpreted?.quantity ?? previous?.need.quantity;
       const unit = interpreted?.unit ?? previous?.need.unit;
 
@@ -231,6 +296,79 @@ export function createMerchantReceptionEngine(
 
       const policy = deps.policy?.();
       const floor = privateFloorMajor(policy, sku);
+      // D15 审批回环：商家在 /ops 批准的候选，买家下一轮命中即一次性消费，
+      // 用批准价渲染（不再重复登记 pending）。数量/单位变化时不消费。
+      const targetMinor = minorOf(interpreted?.target_price);
+      const currentFloorMinor = minorOf(floor);
+      const approvalTopicsOk =
+        structuredTopics.length === 0 || structuredTopics.includes("price");
+      const approved = approvalTopicsOk
+        ? deps.approvals?.list?.("approved")?.find(
+            (candidate) =>
+              candidate.negotiation_id === input.contextId &&
+              candidate.sku === sku &&
+              candidate.currency === product.currency &&
+              (quantity === undefined || candidate.quantity === quantity) &&
+              (unit === undefined || candidate.unit === undefined || candidate.unit === unit) &&
+              candidate.approved_minor !== undefined &&
+              // 批准后策略/底价可能已变化：当前底价高于批准价时不再消费（AC27）。
+              (currentFloorMinor === undefined || candidate.approved_minor >= currentFloorMinor) &&
+              (targetMinor === undefined || candidate.approved_minor >= targetMinor),
+          )
+        : undefined;
+      if (approved !== undefined && approved.approved_minor !== undefined) {
+        const consumed = deps.approvals?.consume?.({
+          negotiation_id: input.contextId,
+          sku,
+          currency: product.currency,
+          quantity: approved.quantity,
+          ...(approved.unit !== undefined ? { unit: approved.unit } : {}),
+        });
+        if (consumed !== undefined) {
+          const approvedFacts = {
+            ...factsForWithSku(
+              product,
+              quantity ?? approved.quantity,
+              policy,
+              floor,
+              input.now,
+            ),
+            approvedPrice: approved.approved_minor / 100,
+          };
+          const approvedSnapshot = {
+            merchantId: input.merchantId,
+            sku,
+            visibility: "public" as const,
+            issuedAt: input.now,
+            ...(product.valid_until !== undefined ? { expiresAt: product.valid_until } : {}),
+            facts: approvedFacts,
+          };
+          const approvedRef = registry.register({
+            ...approvedSnapshot,
+            revision: factRevision(approvedSnapshot),
+          });
+          return finish(
+            input,
+            previous,
+            registry,
+            [
+              {
+                kind: "acknowledge_need",
+                sku,
+                ...(quantity !== undefined ? { quantity } : {}),
+                ...(unit !== undefined ? { unit } : {}),
+              },
+              {
+                kind: "show_commercial_terms",
+                ref: approvedRef,
+                ...(structuredTopics.length > 0 ? { topics: structuredTopics } : {}),
+              },
+              { kind: "next_step", action: "send_rfq" },
+            ],
+            { sku, quantity, unit },
+          );
+        }
+      }
       const facts = factsForWithSku(product, quantity, policy, floor, input.now);
       // 事实快照注册后只以引用进入计划；发布器从同一快照渲染（§11）。
       const snapshotBase = {
@@ -269,7 +407,11 @@ export function createMerchantReceptionEngine(
         });
         return finish(input, previous, registry, [
           acknowledge,
-          { kind: "show_commercial_terms", ref },
+          {
+            kind: "show_commercial_terms",
+            ref,
+            ...(structuredTopics.length > 0 ? { topics: structuredTopics } : {}),
+          },
           {
             kind: "request_human_help",
             topic: "price_below_public_bound",
@@ -281,7 +423,11 @@ export function createMerchantReceptionEngine(
 
       const blocks: ReceptionBlock[] = [
         acknowledge,
-        { kind: "show_commercial_terms", ref },
+        {
+          kind: "show_commercial_terms",
+          ref,
+          ...(structuredTopics.length > 0 ? { topics: structuredTopics } : {}),
+        },
         { kind: "next_step", action: "send_rfq" },
       ];
       return finish(input, previous, registry, blocks, { sku, quantity, unit });
@@ -293,17 +439,23 @@ export function createMerchantReceptionEngine(
     previous: ReceptionConversation | undefined,
     registry: InMemoryFactRegistry,
     blocks: ReceptionBlock[],
-    need?: Partial<Pick<ReceptionNeed, "sku" | "quantity" | "unit">>,
+    need?: Partial<Pick<ReceptionNeed, "sku" | "quantity" | "unit" | "pendingSkus">>,
   ): ReceptionEngineResult {
     const merged = {
       sku: need?.sku ?? previous?.need.sku,
       quantity: need?.quantity ?? previous?.need.quantity,
       unit: need?.unit ?? previous?.need.unit,
     };
+    // 买家选定 SKU 后清空候选；仍在多商品澄清中则继续保留，供“第一个”指代。
+    const pendingSkus =
+      need?.sku !== undefined
+        ? undefined
+        : (need?.pendingSkus ?? previous?.need.pendingSkus);
     const conversation = deps.store.put(input.merchantId, input.identity, input.contextId, {
       ...(merged.sku !== undefined ? { sku: merged.sku } : {}),
       ...(merged.quantity !== undefined ? { quantity: merged.quantity } : {}),
       ...(merged.unit !== undefined ? { unit: merged.unit } : {}),
+      ...(pendingSkus !== undefined && pendingSkus.length > 0 ? { pendingSkus } : {}),
     });
     const plan: ReceptionResponsePlan = { locale: "zh-CN", blocks };
     // 发布前校验（引用存在性/版本/租户/可见性/有效期）后才渲染公开文本。

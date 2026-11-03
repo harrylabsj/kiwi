@@ -504,6 +504,7 @@ export class InboundPipeline {
           taskId,
           contextId,
           senderIdentity,
+          identityVerified: caller.identityVerified === true,
           remoteAddress: caller.clientAddress ?? caller.remoteAddress,
           ucpAgentProfile: caller.ucpAgentProfile,
         };
