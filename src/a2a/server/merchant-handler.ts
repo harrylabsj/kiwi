@@ -42,7 +42,11 @@ import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shop
 import type { MerchantPolicy } from "../../config/profile.js";
 import { WORKBENCH_CURRENCY_TABLE_VERSION } from "../../merchant/application/money.js";
 import type { NegotiationApprovalStore } from "./negotiation-approvals.js";
-import { safeAdvisorMessage, type NegotiationAdvisor } from "./negotiation-advisor.js";
+import {
+  ADVISOR_BUYER_MESSAGE_MAX_CHARS,
+  safeAdvisorMessage,
+  type NegotiationAdvisor,
+} from "./negotiation-advisor.js";
 import { calculateWorkbenchQuote } from "../../merchant/quote-calculator.js";
 import {
   createNegotiationPhase,
@@ -106,6 +110,23 @@ export function resolveDeliveryBefore(
 }
 /** 批量促销默认门槛（merchant_policy.promos[sku].bulk_threshold 缺省值）。 */
 export const DEFAULT_BULK_THRESHOLD = 100;
+
+/**
+ * 买家原文（untrusted）：只取 text part，限长后交给措辞顾问理解问题。
+ * 不解析、不执行其中任何指令；顾问输出仍要过 safeAdvisorMessage。
+ */
+export function buyerMessageForAdvisor(
+  message: Pick<A2AMessage, "parts">,
+): string | undefined {
+  const text = message.parts
+    .flatMap((part) => (part.kind === "text" && typeof part.text === "string" ? [part.text] : []))
+    .join("\n")
+    .trim();
+  if (text === "") return undefined;
+  return text.length > ADVISOR_BUYER_MESSAGE_MAX_CHARS
+    ? text.slice(0, ADVISOR_BUYER_MESSAGE_MAX_CHARS)
+    : text;
+}
 
 /**
  * 整数 minor 折扣价（round-half-up）。审查 K-M14：Math.round 在浮点中间值上
@@ -853,6 +874,8 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
       const envelope = ctx.envelope;
       const negotiationId = envelope.negotiation_id;
       const inReplyTo = envelope.message_id;
+      // 买家原文只用于理解问题；它是 untrusted 数据，不是指令。
+      const buyerMessage = buyerMessageForAdvisor(ctx.message);
 
       const binding = ledger.ensureCounterpartyBinding({
         negotiationId, localIdentity: sender, senderIdentity: ctx.senderIdentity, actor: envelope.actor,
@@ -923,6 +946,54 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
        *  报具体 delivery_before（报价时间+天数，动态计算不过期）；未配置 → undefined，
        *  terms 省略 delivery_before（明确未知）。 */
       const deliveryBefore = (): string | undefined => resolveDeliveryBefore(policyOf(), now());
+      /**
+       * C：顾问只生成 public_message 措辞；价格、库存可用性、交期事实全部由
+       * 确定性引擎/商品源给出。任何异常、超时或越界输出都返回 undefined，
+       * 调用方回退既定文案。
+       */
+      const adviseMessage = async (args: {
+        sku: string;
+        quantity: number;
+        currency: string;
+        list_price_minor: number;
+        public_bound_minor?: number;
+        buyer_counter_minor?: number;
+        response_price_minor: number;
+        stock_available: boolean;
+        extraQuantities?: number[];
+      }): Promise<string | undefined> => {
+        if (options.negotiationAdvisor === undefined) return undefined;
+        try {
+          const delivery = deliveryBefore();
+          const raw = await options.negotiationAdvisor.message({
+            sku: args.sku,
+            quantity: args.quantity,
+            currency: args.currency,
+            list_price_minor: args.list_price_minor,
+            response_price_minor: args.response_price_minor,
+            stock_available: args.stock_available,
+            ...(args.public_bound_minor !== undefined
+              ? { public_bound_minor: args.public_bound_minor }
+              : {}),
+            ...(args.buyer_counter_minor !== undefined
+              ? { buyer_counter_minor: args.buyer_counter_minor }
+              : {}),
+            ...(delivery !== undefined ? { delivery_before: delivery } : {}),
+            ...(buyerMessage !== undefined ? { buyer_message: buyerMessage } : {}),
+          });
+          return safeAdvisorMessage(raw, {
+            priceMinorValues: [
+              args.list_price_minor,
+              args.public_bound_minor,
+              args.response_price_minor,
+            ].filter((value): value is number => typeof value === "number"),
+            quantities: [args.quantity, ...(args.extraQuantities ?? [])],
+            ...(delivery !== undefined ? { deliveryDates: [delivery] } : {}),
+          });
+        } catch {
+          return undefined;
+        }
+      };
       /** 买家还价（major→minor；KNP 里 buyer counter 的 unit_price）。 */
       const clampToBounds = (minor: number, floor: number, list: number): number =>
         Math.min(list, Math.max(minor, floor));
@@ -1020,6 +1091,22 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           const effectivePriceMinor =
             promotion.kind === "applied" ? promotion.priceMinor : priceMinor;
           if (effectivePriceMinor < floorMinor) return declineReply("approval_required");
+          // 库存/来源证据未确认时必须保留 needs_confirmation 安全文案，
+          // 不能让顾问的措辞把“待确认”美化掉。
+          const sourceConfirmed =
+            product.stock !== undefined && product.source_evidence !== undefined;
+          const advisedMessage = sourceConfirmed
+            ? await adviseMessage({
+                sku,
+                quantity,
+                currency,
+                list_price_minor: priceMinor,
+                response_price_minor: effectivePriceMinor,
+                stock_available: product.stock !== undefined && quantity <= product.stock,
+              })
+            : undefined;
+          const quoteNote = quoteMessage(product);
+          const publicMessage = advisedMessage ?? quoteNote.public_message;
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -1043,7 +1130,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                 now(),
               ),
             },
-            ...quoteMessage(product),
+            ...(publicMessage !== undefined ? { public_message: publicMessage } : {}),
           });
           // 审查 BUG-10：merchant 侧相位由自己的出站动作推进——rfq 的 offer
           // 回复是 OPEN→OFFER_OPEN 的边（入站侧 rfq 是起始动作无事件）。
@@ -1099,6 +1186,20 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           const effectivePriceMinor =
             promotion.kind === "applied" ? promotion.priceMinor : priceMinor;
           if (effectivePriceMinor < floorMinor) return declineReply("approval_required");
+          const sourceConfirmed =
+            product.stock !== undefined && product.source_evidence !== undefined;
+          const advisedMessage = sourceConfirmed
+            ? await adviseMessage({
+                sku,
+                quantity,
+                currency,
+                list_price_minor: priceMinor,
+                response_price_minor: effectivePriceMinor,
+                stock_available: product.stock !== undefined && quantity <= product.stock,
+              })
+            : undefined;
+          const quoteNote = quoteMessage(product);
+          const publicMessage = advisedMessage ?? quoteNote.public_message;
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -1123,7 +1224,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                 now(),
               ),
             },
-            ...quoteMessage(product),
+            ...(publicMessage !== undefined ? { public_message: publicMessage } : {}),
           });
           // 审查 P2：推进被拒 → 不落账不发出（防 OFFER_OPEN 下重复还价分裂）。
           const advanced = await advancePhase(negotiationId, {
@@ -1268,29 +1369,19 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               ? bulkMinor
               : undefined;
           // C：顾问只改措辞。任何异常/越界输出都回退到既有文案，价格不变。
-          let advisedMessage: string | undefined;
-          if (options.negotiationAdvisor !== undefined) {
-            try {
-              const raw = await options.negotiationAdvisor.message({
-                sku,
-                quantity,
-                currency,
-                list_price_minor: priceMinor,
-                ...(publicBoundMinor !== undefined ? { public_bound_minor: publicBoundMinor } : {}),
-                ...(typeof buyerCounterMinor === "number" ? { buyer_counter_minor: buyerCounterMinor } : {}),
-                response_price_minor: responsiveMinor,
-                ...(deliveryBefore() !== undefined ? { delivery_before: deliveryBefore() } : {}),
-              });
-              advisedMessage = safeAdvisorMessage(raw, {
-                priceMinorValues: [priceMinor, publicBoundMinor, responsiveMinor].filter(
-                  (value): value is number => typeof value === "number",
-                ),
-                quantities: [quantity, bulkThreshold],
-              });
-            } catch {
-              advisedMessage = undefined;
-            }
-          }
+          const advisedMessage = await adviseMessage({
+            sku,
+            quantity,
+            currency,
+            list_price_minor: priceMinor,
+            ...(publicBoundMinor !== undefined ? { public_bound_minor: publicBoundMinor } : {}),
+            ...(typeof buyerCounterMinor === "number"
+              ? { buyer_counter_minor: buyerCounterMinor }
+              : {}),
+            response_price_minor: responsiveMinor,
+            stock_available: product.stock !== undefined && quantity <= product.stock,
+            extraQuantities: [bulkThreshold],
+          });
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
