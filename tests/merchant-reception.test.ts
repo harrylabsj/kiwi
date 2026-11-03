@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ReceptionConversationStore } from "../src/a2a/reception/conversation-store.js";
 import { createMerchantReceptionEngine } from "../src/a2a/reception/engine.js";
+import { ReceptionReplyOutbox } from "../src/a2a/reception/reply-outbox.js";
 import { createReceptionResponder, textPartsOf } from "../src/a2a/reception/responder.js";
 import { declineHandler } from "../src/a2a/server/handler.js";
 import type { InquiryInterpreter } from "../src/a2a/server/inquiry-interpreter.js";
@@ -31,6 +32,7 @@ const policy = {
 describe("merchant reception (P0a)", () => {
   let dir: string;
   let store: ReceptionConversationStore;
+  let outbox: ReceptionReplyOutbox;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "kiwi-reception-"));
@@ -38,6 +40,7 @@ describe("merchant reception (P0a)", () => {
       file: join(dir, "conversations.json"),
       now: () => NOW,
     });
+    outbox = new ReceptionReplyOutbox({ file: join(dir, "reply-outbox.json"), now: () => NOW });
   });
 
   afterEach(() => {
@@ -63,6 +66,7 @@ describe("merchant reception (P0a)", () => {
   ) =>
     createMerchantReceptionEngine({
       store,
+      outbox,
       ...(interpreter !== undefined ? { interpreter } : {}),
       productSource: {
         async getProduct(sku: string) {
@@ -253,6 +257,7 @@ describe("reception responder", () => {
               contextId: "ctx",
               need: { revision: 1, updatedAt: NOW },
             },
+            reply: { response_id: "resp_1", reply_seq: 1 },
           };
         },
       },

@@ -69,6 +69,9 @@ export interface PendingApprovalInput {
   public_bound_minor?: number;
   floor_minor?: number;
   buyer_message_id?: string;
+  /** 待批有效期（秒，创建时固化为 expires_at；§17.1 审批等待默认 15 分钟）。
+   *  缺省不带期限（既有 KNP counter 路径行为不变）。超时只失效，不自动拒绝。 */
+  ttl_seconds?: number;
 }
 
 export interface ApproveInput {
@@ -241,6 +244,9 @@ export class NegotiationApprovalStore {
       status: "pending",
       created_at: now,
       updated_at: now,
+      ...(input.ttl_seconds !== undefined
+        ? { expires_at: new Date(Date.parse(now) + input.ttl_seconds * 1_000).toISOString() }
+        : {}),
     };
     records.push(record);
     this.write(this.pruneTerminal(records));
@@ -280,6 +286,14 @@ export class NegotiationApprovalStore {
       throw new Error("no pending negotiation approval matches the request");
     }
     const now = this.now();
+    // §17.1/§17.2：待批已到期（创建时固化的 deadline）→ 置 expired 并拒绝批准；
+    // 超时只失效，不自动批准、不自动拒绝。等于 deadline 的时刻归过期侧。
+    if (this.expired(record, Date.parse(now))) {
+      record.status = "expired";
+      record.updated_at = now;
+      this.write(this.pruneTerminal(shape.records));
+      throw new Error("approval pending has expired");
+    }
     const ttl = input.ttl_seconds ?? DEFAULT_TTL_SECONDS;
     record.status = "approved";
     record.approved_minor = input.approved_minor;

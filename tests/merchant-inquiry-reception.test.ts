@@ -20,6 +20,7 @@ import {
   type ReceptionEngineInput,
   type ReceptionEngineResult,
 } from "../src/a2a/reception/engine.js";
+import { ReceptionReplyOutbox } from "../src/a2a/reception/reply-outbox.js";
 import type { ReceptionConversation } from "../src/a2a/reception/types.js";
 import { createMerchantHandler } from "../src/a2a/server/merchant-handler.js";
 import type { NegotiationHandler } from "../src/a2a/server/types.js";
@@ -127,6 +128,7 @@ describe("merchant inquiry via reception engine (P0a)", () => {
         file: join(dir, "conversations.json"),
         now: () => NOW,
       }),
+      outbox: new ReceptionReplyOutbox({ file: join(dir, "reply-outbox.json"), now: () => NOW }),
       ...(interpreter !== undefined ? { interpreter } : {}),
       productSource: {
         async getProduct(sku: string) {
@@ -180,6 +182,7 @@ describe("merchant inquiry via reception engine (P0a)", () => {
           plan: { locale: "zh-CN", blocks: [] },
           text: "接待回复",
           conversation: conversationStub,
+          reply: { response_id: "resp_1", reply_seq: 1 },
         };
       },
     };

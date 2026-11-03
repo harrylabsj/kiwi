@@ -72,10 +72,13 @@ import { createDeepSeekNegotiationAdvisor } from "./server/negotiation-advisor.j
 import { createDeepSeekInquiryInterpreter } from "./server/inquiry-interpreter.js";
 import { ReceptionConversationStore } from "./reception/conversation-store.js";
 import { createMerchantReceptionEngine } from "./reception/engine.js";
+import { ReceptionBudget } from "./reception/budget.js";
+import { ReceptionReplyOutbox } from "./reception/reply-outbox.js";
 import { createReceptionResponder } from "./reception/responder.js";
 import { LedgerStore } from "../negotiation/ledger/index.js";
 import { IdempotencyStore } from "../negotiation/idempotency/index.js";
 import { openMerchantStatsStore } from "../merchant/stats-store.js";
+import { SqliteDailyBudgetStore } from "../merchant/ai-runtime/sqlite-budget-store.js";
 import { createServer } from "node:http";
 import { pickFreePort } from "../supervisor/stack-config.js";
 import {
@@ -654,15 +657,38 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
   // 商品源构造一次、经 core 暴露给就绪检查（同一实例，避免第二份读取路径）。
   const productSource =
     role === "merchant" ? (options.productSource ?? buildProductSource(profile)) : undefined;
+  // B2/D15：议价审批队列——确定性报价路径（低于自动边界的还价）与接待引擎
+  // （越界目标价）共用同一候选入口，运营在 `kiwi merchant approvals` 看到
+  // 同一份待办。持久形态必须与 CLI 共用 forDataDir 的路径约定
+  // （`<dataDir>/a2a/negotiation-approvals.json`），否则运营看到的是空队列。
+  const negotiationApprovals = isEphemeral
+    ? new NegotiationApprovalStore(dir, now)
+    : NegotiationApprovalStore.forDataDir(options.dataDir!, now);
   // P0a：商家 AI 接待（普通 A2A 文本 + KNP inquiry 统一走同一引擎）。默认
   // 关闭；KIWI_MERCHANT_RECEPTION 显式设为 active/advisory 才启用。
   const receptionMode = (process.env.KIWI_MERCHANT_RECEPTION ?? "").trim();
   const receptionEnabled =
     role === "merchant" && (receptionMode === "active" || receptionMode === "advisory");
+  // D07/§18：接待日 token 预算（默认 200k output tokens/日/商家）。只在
+  // reception 启用时打开存储；close 时随核心资源释放。
+  const receptionBudgetStore = receptionEnabled
+    ? new SqliteDailyBudgetStore(path.join(dir, "reception-budget.sqlite"))
+    : undefined;
+  const receptionBudget = receptionBudgetStore !== undefined
+    ? new ReceptionBudget({
+        store: receptionBudgetStore,
+        now,
+        degradationFile: path.join(dir, "reception-degradations.json"),
+      })
+    : undefined;
   const receptionEngine = receptionEnabled
     ? createMerchantReceptionEngine({
         store: new ReceptionConversationStore({
           file: path.join(dir, "reception-conversations.json"),
+          now,
+        }),
+        outbox: new ReceptionReplyOutbox({
+          file: path.join(dir, "reception-reply-outbox.json"),
           now,
         }),
         ...(profile.model !== undefined
@@ -675,10 +701,14 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
                   ? { baseUrl: profile.model.base_url }
                   : {}),
                 ...(profile.model.model !== undefined ? { model: profile.model.model } : {}),
+                ...(receptionBudget !== undefined
+                  ? { budget: receptionBudget.createAttemptHooks(profile.owner_id) }
+                  : {}),
               }),
             }
           : {}),
         ...(productSource !== undefined ? { productSource } : {}),
+        approvals: negotiationApprovals,
         now,
         policy: () =>
           typeof options.merchantPolicy === "function"
@@ -707,11 +737,8 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           // 缺省仍是启动 profile 的静态策略。
           merchantPolicy: options.merchantPolicy ?? profile.merchant_policy,
           // B2：低于自动边界的还价落本地审批队列，人工批准后买家重试命中。
-          // 持久形态必须与 `kiwi merchant approvals` 共用 forDataDir 的路径约定
-          // （`<dataDir>/a2a/negotiation-approvals.json`），否则运营看到的是空队列。
-          negotiationApprovals: isEphemeral
-            ? new NegotiationApprovalStore(dir, now)
-            : NegotiationApprovalStore.forDataDir(options.dataDir!, now),
+          // 与接待引擎共用同一实例（上方创建）。
+          negotiationApprovals,
           // C：措辞顾问默认关闭；KIWI_MERCHANT_ADVISOR=deepseek 才启用，
           // 且只生成 public_message，价格仍由确定性引擎计算。
           ...(process.env.KIWI_MERCHANT_ADVISOR === "deepseek"
@@ -800,7 +827,10 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     ...(statsStore !== undefined ? { stats: statsStore } : {}),
     ...(genericResponder !== undefined ? { genericResponder } : {}),
   });
-  const closeStats = createSyncCleanup([{ id: "statistics", run: () => statsStore?.close() }]);
+  const closeStats = createSyncCleanup([
+    { id: "statistics", run: () => statsStore?.close() },
+    { id: "reception_budget", run: () => receptionBudgetStore?.close() },
+  ]);
   const releaseOwnership = createSyncCleanup([
     { id: "statistics", run: closeStats },
     { id: "owner_lock", after: ["statistics"], run: () => {

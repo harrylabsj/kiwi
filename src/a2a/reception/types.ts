@@ -63,12 +63,20 @@ export type ReceptionBlock =
   | {
       kind: "ask_clarification";
       missing: Array<"sku" | "quantity" | "unit">;
-      reason: "missing_sku" | "unknown_sku" | "non_chinese" | "empty_message";
+      reason: "missing_sku" | "unknown_sku" | "non_chinese" | "empty_message" | "service_busy";
     }
   | {
       kind: "show_commercial_terms";
       /** 服务端事实引用；发布器校验存在性/版本/租户/可见性/有效期后渲染。 */
       ref: FactRef;
+    }
+  | {
+      kind: "request_human_help";
+      /** 越界主题：买家目标价低于公开折扣边界（D15 越界转审批）。 */
+      topic: "price_below_public_bound";
+      /** 买家自己声明的目标价（major units）；回显买家输入，不含商家边界。 */
+      buyerTargetPrice?: number;
+      currency?: string;
     }
   | {
       kind: "next_step";

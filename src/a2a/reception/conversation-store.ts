@@ -17,6 +17,8 @@ interface StoredConversation {
   contextId: string;
   need: ReceptionNeed;
   updatedAt: string;
+  /** 下一条发布回复的序号（§16.1：发布事务内按会话严格递增分配）。 */
+  nextReplySeq?: number;
 }
 
 interface StoreFile {
@@ -77,6 +79,8 @@ export class ReceptionConversationStore {
         revision: (previous?.need.revision ?? 0) + 1,
         updatedAt,
       },
+      // 回复序号独立于需求版本：put 不得重置已分配的序号轨迹。
+      ...(previous?.nextReplySeq !== undefined ? { nextReplySeq: previous.nextReplySeq } : {}),
     };
     this.state.conversations[key] = stored;
     this.save();
@@ -90,6 +94,22 @@ export class ReceptionConversationStore {
       contextId: stored.contextId,
       need: stored.need,
     };
+  }
+
+  /**
+   * 分配本条发布回复的 reply_seq（§16.1）：按会话严格递增，原子读-改-写。
+   * 发布校验失败的草稿不调用本方法，不占序号。
+   */
+  allocateReplySeq(merchantId: string, identity: string, contextId: string): number {
+    this.prune();
+    const key = keyOf(merchantId, identity, contextId);
+    const stored = this.state.conversations[key];
+    const seq = stored?.nextReplySeq ?? 1;
+    if (stored !== undefined) {
+      stored.nextReplySeq = seq + 1;
+      this.save();
+    }
+    return seq;
   }
 
   private load(): StoreFile {

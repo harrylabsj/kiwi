@@ -119,6 +119,10 @@ function renderBlock(block: ReceptionBlock, registry: CommercialFactRegistry): s
       if (block.reason === "empty_message") {
         return ["请说明需要的商品、数量和单位。"];
       }
+      if (block.reason === "service_busy") {
+        // §18 故障降级：如实告知可恢复的下一步，不编造缺货或拒绝。
+        return ["当前查询较忙，请稍后重试；也可以直接发送 RFQ（SKU、数量、单位）获取正式报价。"];
+      }
       if (block.reason === "unknown_sku") {
         return ["暂时无法从商品源确认该 SKU，请核对后重试。"];
       }
@@ -127,6 +131,17 @@ function renderBlock(block: ReceptionBlock, registry: CommercialFactRegistry): s
     case "show_commercial_terms": {
       const snapshot = registry.resolve(block.ref);
       return snapshot === undefined ? [] : renderFacts(snapshot);
+    }
+    case "request_human_help": {
+      // 只显示真实审批状态（刚登记的 pending）：不说已批准、不泄露商家边界
+      // 与底价；买家目标价是其本人声明的数字，可以回显。
+      const target =
+        block.buyerTargetPrice !== undefined && block.currency !== undefined
+          ? `您的目标价 ${block.buyerTargetPrice.toFixed(2)} ${block.currency} `
+          : "这个价格 ";
+      return [
+        `${target}低于本店可自动确认的范围，这项条件需要商家确认，目前尚未批准。确认后我会继续处理；您也可以稍后用中文追问进度。`,
+      ];
     }
     case "next_step":
       return ["以上为非约束性信息；请发送 RFQ（SKU、数量、单位）获取正式报价。"];
