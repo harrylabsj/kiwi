@@ -208,6 +208,8 @@ export function createNegotiationOps(options: NegotiationOpsOptions): Negotiatio
 
     listApprovals(status) {
       const resolved = optionalStatus(status);
+      // §17.1：读取前先持久化到期状态，避免 ops 只看到“视图过期”而记录仍 pending。
+      options.approvals.sweepExpired();
       return options.approvals.list(resolved === "all" ? undefined : resolved);
     },
 
@@ -270,6 +272,9 @@ export function createNegotiationOps(options: NegotiationOpsOptions): Negotiatio
 
     snapshot() {
       try {
+        // watch 轮询也经这里：先固化过期，再投影通知，保证 pending→expired
+        // 的状态变化能被 detectNotifications 看到。
+        options.approvals.sweepExpired();
         const all = observer.listOwner({ status: "all", limit: 100 });
         return {
           negotiations: all.items,

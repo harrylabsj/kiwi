@@ -70,6 +70,7 @@ import { createMerchantHandler } from "./server/merchant-handler.js";
 import { NegotiationApprovalStore } from "./server/negotiation-approvals.js";
 import { createDeepSeekNegotiationAdvisor } from "./server/negotiation-advisor.js";
 import { createDeepSeekInquiryInterpreter } from "./server/inquiry-interpreter.js";
+import { loadReceptionConfig } from "./reception/config.js";
 import { ReceptionConversationStore } from "./reception/conversation-store.js";
 import { createMerchantReceptionEngine } from "./reception/engine.js";
 import { ReceptionBudget } from "./reception/budget.js";
@@ -666,9 +667,15 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     : NegotiationApprovalStore.forDataDir(options.dataDir!, now);
   // P0a：商家 AI 接待（普通 A2A 文本 + KNP inquiry 统一走同一引擎）。默认
   // 关闭；KIWI_MERCHANT_RECEPTION 显式设为 active/advisory 才启用。
-  const receptionMode = (process.env.KIWI_MERCHANT_RECEPTION ?? "").trim();
-  const receptionEnabled =
-    role === "merchant" && (receptionMode === "active" || receptionMode === "advisory");
+  const receptionConfig = loadReceptionConfig();
+  // P0a 只实现 active；advisory 需要“草稿交商家确认”的独立发布路径，未实现前
+  // 不得按 active 自动回买家（否则配置语义说谎）。
+  if (role === "merchant" && receptionConfig.mode === "advisory") {
+    process.stderr.write(
+      "⚠️ [kiwi] KIWI_MERCHANT_RECEPTION=advisory 在 P0a 尚未实现，接待保持关闭\n",
+    );
+  }
+  const receptionEnabled = role === "merchant" && receptionConfig.mode === "active";
   // D07/§18：接待日 token 预算（默认 200k output tokens/日/商家）。只在
   // reception 启用时打开存储；close 时随核心资源释放。
   const receptionBudgetStore = receptionEnabled
@@ -678,6 +685,7 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     ? new ReceptionBudget({
         store: receptionBudgetStore,
         now,
+        dailyOutputTokenLimit: receptionConfig.dailyOutputTokenLimit,
         degradationFile: path.join(dir, "reception-degradations.json"),
       })
     : undefined;
@@ -686,6 +694,7 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
         store: new ReceptionConversationStore({
           file: path.join(dir, "reception-conversations.json"),
           now,
+          retentionDays: receptionConfig.retentionDays,
         }),
         outbox: new ReceptionReplyOutbox({
           file: path.join(dir, "reception-reply-outbox.json"),
@@ -709,6 +718,8 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           : {}),
         ...(productSource !== undefined ? { productSource } : {}),
         approvals: negotiationApprovals,
+        approvalTtlSeconds: receptionConfig.approvalTtlSeconds,
+        deadlineMs: receptionConfig.runDeadlineMs,
         now,
         policy: () =>
           typeof options.merchantPolicy === "function"

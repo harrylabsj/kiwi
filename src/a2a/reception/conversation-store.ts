@@ -9,6 +9,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
+import { RECEPTION_CONFIG_DEFAULTS } from "./config.js";
 import type { ReceptionConversation, ReceptionNeed } from "./types.js";
 
 interface StoredConversation {
@@ -47,7 +48,7 @@ export class ReceptionConversationStore {
   constructor(options: ReceptionConversationStoreOptions) {
     this.file = options.file;
     this.now = options.now;
-    this.retentionDays = options.retentionDays ?? 30;
+    this.retentionDays = options.retentionDays ?? RECEPTION_CONFIG_DEFAULTS.retentionDays;
     this.state = this.load();
     this.prune();
   }

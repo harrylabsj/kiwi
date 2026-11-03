@@ -162,13 +162,16 @@ export function detectNotifications(
     const transitionKind =
       record.status === "pending"
         ? "pending"
-        : previous?.status === "approved" && record.status === "consumed"
-          ? "consumed"
-          : previous?.status === "approved" && record.status === "expired"
-            ? "expired"
-            : record.status === "rejected"
-              ? "rejected"
-              : undefined;
+        : previous?.status === "pending" && record.status === "approved"
+          ? "approved"
+          : previous?.status === "approved" && record.status === "consumed"
+            ? "consumed"
+            : (previous?.status === "pending" || previous?.status === "approved") &&
+                record.status === "expired"
+              ? "expired"
+              : record.status === "rejected"
+                ? "rejected"
+                : undefined;
 
     let notifiedAt = previous?.notified_at;
     if (transitionKind !== undefined) {
