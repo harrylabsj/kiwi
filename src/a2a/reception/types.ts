@@ -28,6 +28,31 @@ export interface CommercialFacts {
   deliveryBefore?: string;
 }
 
+/** 服务端事实快照的引用（版本 = 快照内容 digest）。 */
+export interface FactRef {
+  sku: string;
+  revision: string;
+}
+
+/**
+ * 服务端事实快照：发布校验的权威来源。商务数字只能经快照进入回复，
+ * 块本身不携带字面金额/库存/交期（设计 §11：模型规划表达、系统发布事实）。
+ */
+export interface CommercialFactSnapshot {
+  /** 租户归属；发布校验拒绝跨租户引用。 */
+  merchantId: string;
+  sku: string;
+  /** 快照版本（内容 digest）；引用版本不匹配即拒绝。 */
+  revision: string;
+  /** 可见性；非 public 的快照不得进入对买家的回复。 */
+  visibility: "public" | "private";
+  /** 取数时间（ISO）。 */
+  issuedAt: string;
+  /** 数据有效期（ISO）；过期即不可发布为当前有效事实。 */
+  expiresAt?: string;
+  facts: CommercialFacts;
+}
+
 export type ReceptionBlock =
   | {
       kind: "acknowledge_need";
@@ -42,7 +67,8 @@ export type ReceptionBlock =
     }
   | {
       kind: "show_commercial_terms";
-      facts: CommercialFacts;
+      /** 服务端事实引用；发布器校验存在性/版本/租户/可见性/有效期后渲染。 */
+      ref: FactRef;
     }
   | {
       kind: "next_step";
