@@ -67,7 +67,7 @@ function modeOf(raw: string | undefined): ReceptionMode {
 
 /** 读取 M0 配置；非法数值回退默认值并告警（不静默改变业务边界）。 */
 export function loadReceptionConfig(
-  env: NodeJS.ProcessEnv = process.env,
+  env: Record<string, string | undefined> = process.env,
 ): ReceptionConfig {
   const d = RECEPTION_CONFIG_DEFAULTS;
   return {

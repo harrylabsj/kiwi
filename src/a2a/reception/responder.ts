@@ -24,8 +24,9 @@ export function textPartsOf(message: Record<string, unknown>): string {
   for (const part of parts) {
     if (part === null || typeof part !== "object" || Array.isArray(part)) continue;
     const obj = part as Record<string, unknown>;
+    // 1.0 wire 的 `{text}` 与 `{kind:"text",text}` 都以 text 字段承载；
+    // 第一个分支已覆盖两种形状，保留单一判断避免不可达的重复分支。
     if (typeof obj.text === "string") texts.push(obj.text);
-    else if (obj.kind === "text" && typeof obj.text === "string") texts.push(obj.text);
   }
   return texts.join("\n").trim();
 }
