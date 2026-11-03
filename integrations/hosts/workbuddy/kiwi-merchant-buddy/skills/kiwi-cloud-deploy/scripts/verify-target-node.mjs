@@ -42,7 +42,6 @@
  * 退出码：0 通过；1 停止（错误码见 stderr 的 [deploy-target] 前缀）。
  */
 import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
 
 const fail = (code, message) => {
   console.error(`[deploy-target] ${code}: ${message}`);
