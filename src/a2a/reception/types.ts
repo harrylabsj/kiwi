@@ -16,8 +16,24 @@ export interface ReceptionNeed {
   unit?: string;
   /** 多商品澄清时待选择的候选（AC09）；买家选择后清空。 */
   pendingSkus?: string[];
+  /** 字段证据：由服务端在买家消息确认时签发，模型不能伪造。 */
+  evidence?: {
+    sku?: ReceptionFieldEvidence;
+    quantity?: ReceptionFieldEvidence;
+    unit?: ReceptionFieldEvidence;
+  };
   revision: number;
   updatedAt: string;
+}
+
+export interface ReceptionFieldEvidence {
+  source_message_id: string;
+  /** 原文片段（截断；只存最小必要内容）。 */
+  source_span?: string;
+  /** 取数时间（服务端时钟）。 */
+  observed_at: string;
+  /** structured = 协议字段；model = 模型候选。确认动作由服务端另行签发。 */
+  source: "structured" | "model";
 }
 
 export interface CommercialFacts {
@@ -73,7 +89,8 @@ export type ReceptionBlock =
         | "non_chinese"
         | "empty_message"
         | "service_busy"
-        | "multiple_skus";
+        | "multiple_skus"
+        | "product_candidates";
       /** multiple_skus：买家提到的 SKU 候选（请买家选择，不静默取第一项）。 */
       candidates?: string[];
     }

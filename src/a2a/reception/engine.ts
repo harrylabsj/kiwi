@@ -15,6 +15,7 @@ import { contentDigest } from "../../negotiation/jcs.js";
 import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
 import type { InquiryInterpreter, InquiryTopic } from "../server/inquiry-interpreter.js";
 import { applyDiscountPercentMinor } from "../server/merchant-handler.js";
+import type { ReceptionAgentRuntime } from "./agent-runtime.js";
 import { RECEPTION_CONFIG_DEFAULTS } from "./config.js";
 import type { ReceptionConversationStore } from "./conversation-store.js";
 import { factRevision, InMemoryFactRegistry, publishResponsePlan } from "./publish.js";
@@ -28,6 +29,10 @@ import type {
 } from "./types.js";
 
 export interface ReceptionProductSource {
+  /** M2：按买家文字返回本店候选；只做候选，不直接报价。 */
+  searchProducts?(query: string): Promise<
+    Array<{ sku: string; title?: string; price: number; currency: string; stock?: number }>
+  >;
   getProduct(sku: string): Promise<{
     price: number;
     currency: string;
@@ -45,6 +50,8 @@ export interface ReceptionEngineInput {
   contextId: string;
   text: string;
   now: string;
+  /** 入站消息 id（字段证据 source_message_id）；缺省时不签发证据。 */
+  messageId?: string;
   /** KNP inquiry 的结构化字段（协议数据，权威于模型候选）；有结构化 SKU 时
    *  空文本/非中文文本不再触发澄清，直接按事实回答。 */
   structured?: { sku?: string; topics?: InquiryTopic[] };
@@ -108,6 +115,10 @@ export interface ReceptionApprovalSink {
   }): ReceptionApprovalCandidate | undefined;
 }
 
+type StatedFields = Partial<
+  Record<"sku" | "quantity" | "unit", "structured" | "model">
+>;
+
 export interface MerchantReceptionEngineDeps {
   store: ReceptionConversationStore;
   outbox: ReceptionReplyOutbox;
@@ -118,6 +129,8 @@ export interface MerchantReceptionEngineDeps {
   approvals?: ReceptionApprovalSink;
   /** 审批等待期限（秒，D08 缺省 900）。 */
   approvalTtlSeconds?: number;
+  /** M2：Pi 工具循环运行时；缺省走确定性解释器路径。 */
+  agent?: ReceptionAgentRuntime;
   /** 单次 respond 的硬截止（毫秒，D07/§18 缺省 30 秒，从 admitted_at 起算）；
    *  超时后不再发起模型/事实工具调用，降级确定性回复。 */
   deadlineMs?: number;
@@ -216,6 +229,86 @@ export function createMerchantReceptionEngine(
         ]);
       }
 
+      // M2：Pi 工具循环（可选）。存在已批准候选时先走确定性消费路径，
+      // 避免模型绕过“批准价只生效一次”的回环。
+      const hasApprovedCandidate =
+        deps.approvals
+          ?.list?.("approved")
+          ?.some((candidate) => candidate.negotiation_id === input.contextId) === true;
+      if (deps.agent !== undefined && !hasApprovedCandidate && text !== "" && !deadlineExceeded()) {
+        try {
+          const agentResult = await deps.agent.run({
+            merchantId: input.merchantId,
+            identity: input.identity,
+            contextId: input.contextId,
+            text,
+            ...(previous !== undefined ? { previousNeed: previous.need } : {}),
+            registry,
+            now: input.now,
+          });
+          if (agentResult !== undefined) {
+            // 模型选择转人工时，仍由服务端登记审批候选（模型没有写能力）。
+            const human = agentResult.plan.blocks.find(
+              (block): block is Extract<ReceptionBlock, { kind: "request_human_help" }> =>
+                block.kind === "request_human_help",
+            );
+            const needSku = agentResult.need?.sku ?? previous?.need.sku;
+            const needQuantity = agentResult.need?.quantity ?? previous?.need.quantity;
+            if (
+              human?.buyerTargetPrice !== undefined &&
+              needSku !== undefined &&
+              deps.productSource !== undefined &&
+              deps.approvals !== undefined
+            ) {
+              try {
+                const product = await deps.productSource.getProduct(needSku);
+                const policyNow = deps.policy?.();
+                const boundary = belowPublicBound(
+                  human.buyerTargetPrice,
+                  product,
+                  needSku,
+                  policyNow,
+                );
+                if (boundary !== undefined) {
+                  const floorMinor = minorOf(privateFloorMajor(policyNow, needSku));
+                  deps.approvals.recordPending({
+                    negotiation_id: input.contextId,
+                    sku: needSku,
+                    currency: product.currency,
+                    quantity: needQuantity ?? 1,
+                    ...(agentResult.need?.unit !== undefined
+                      ? { unit: agentResult.need.unit }
+                      : {}),
+                    buyer_offer_minor: boundary.targetMinor,
+                    public_bound_minor: boundary.publicBoundMinor,
+                    ...(floorMinor !== undefined ? { floor_minor: floorMinor } : {}),
+                    ttl_seconds:
+                      deps.approvalTtlSeconds ?? RECEPTION_CONFIG_DEFAULTS.approvalTtlSeconds,
+                  });
+                }
+              } catch {
+                // 事实/审批存储不可用：保留模型计划（发布器仍会校验事实引用）。
+              }
+            }
+            const agentStated: StatedFields = {
+              ...(agentResult.need?.sku !== undefined ? { sku: "model" as const } : {}),
+              ...(agentResult.need?.quantity !== undefined ? { quantity: "model" as const } : {}),
+              ...(agentResult.need?.unit !== undefined ? { unit: "model" as const } : {}),
+            };
+            return finish(
+              input,
+              previous,
+              registry,
+              agentResult.plan.blocks,
+              agentResult.need,
+              agentStated,
+            );
+          }
+        } catch {
+          // 回退确定性路径。
+        }
+      }
+
       let interpreted;
       if (deps.interpreter !== undefined && text !== "" && !deadlineExceeded()) {
         try {
@@ -231,6 +324,15 @@ export function createMerchantReceptionEngine(
       // AC09/D03：多商品澄清后，买家可以用“第一个/第二款”指代候选；候选来自
       // 上一轮持久化的 pendingSkus，序号解析不依赖模型。
       const ordinalSku = ordinalSkuOf(text, previous?.need.pendingSkus);
+      // 字段证据来源：协议字段 > 模型/搜索候选；只有本轮明确给出的字段才更新。
+      const stated: StatedFields = {
+        ...(structuredSku !== undefined ? { sku: "structured" as const } : {}),
+        ...(interpreted?.quantity !== undefined ? { quantity: "model" as const } : {}),
+        ...(interpreted?.unit !== undefined ? { unit: "model" as const } : {}),
+      };
+      if (stated.sku === undefined && (ordinalSku !== undefined || candidateSkus.length === 1)) {
+        stated.sku = "model";
+      }
       // 一条消息提到多个商品时明确提示并请买家选择，禁止静默只取第一项；
       // 结构化 SKU 是协议数据（单值），不参与多候选判定。
       if (structuredSku === undefined && ordinalSku === undefined && candidateSkus.length > 1) {
@@ -247,12 +349,46 @@ export function createMerchantReceptionEngine(
             },
           ],
           { quantity: interpreted?.quantity, unit: interpreted?.unit, pendingSkus: candidateSkus },
+          stated,
         );
       }
-      const sku =
-        structuredSku ?? ordinalSku ?? candidateSkus[0] ?? previous?.need.sku;
+      let sku = structuredSku ?? ordinalSku ?? candidateSkus[0] ?? previous?.need.sku;
       const quantity = interpreted?.quantity ?? previous?.need.quantity;
       const unit = interpreted?.unit ?? previous?.need.unit;
+
+      // M2：买家没说 SKU 时按本店公开商品搜索；唯一命中直接进入事实回答，
+      // 多命中列出候选请买家选择，零命中才回固定追问。搜索失败不阻断接待。
+      if (sku === undefined && text !== "" && deps.productSource?.searchProducts !== undefined && !deadlineExceeded()) {
+        let searchResults: Awaited<
+          ReturnType<NonNullable<ReceptionProductSource["searchProducts"]>>
+        > = [];
+        try {
+          searchResults = await deps.productSource.searchProducts(text);
+        } catch {
+          searchResults = [];
+        }
+        if (searchResults.length === 1) {
+          sku = searchResults[0]!.sku;
+          if (stated.sku === undefined) stated.sku = "model";
+        } else if (searchResults.length > 1) {
+          const candidates = searchResults.map((result) => result.sku);
+          return finish(
+            input,
+            previous,
+            registry,
+            [
+              {
+                kind: "ask_clarification",
+                missing: ["sku"],
+                reason: "product_candidates",
+                candidates,
+              },
+            ],
+            { quantity, unit, pendingSkus: candidates },
+            stated,
+          );
+        }
+      }
 
       if (sku === undefined) {
         return finish(
@@ -261,6 +397,7 @@ export function createMerchantReceptionEngine(
           registry,
           [{ kind: "ask_clarification", missing: ["sku"], reason: "missing_sku" }],
           { quantity, unit },
+          stated,
         );
       }
 
@@ -280,6 +417,7 @@ export function createMerchantReceptionEngine(
           registry,
           [{ kind: "ask_clarification", missing: ["sku"], reason: "service_busy" }],
           { sku, quantity, unit },
+          stated,
         );
       }
       let product;
@@ -366,6 +504,7 @@ export function createMerchantReceptionEngine(
               { kind: "next_step", action: "send_rfq" },
             ],
             { sku, quantity, unit },
+            stated,
           );
         }
       }
@@ -418,7 +557,7 @@ export function createMerchantReceptionEngine(
             buyerTargetPrice: boundary.targetMajor,
             currency: product.currency,
           },
-        ], { sku, quantity, unit });
+        ], { sku, quantity, unit }, stated);
       }
 
       const blocks: ReceptionBlock[] = [
@@ -430,7 +569,7 @@ export function createMerchantReceptionEngine(
         },
         { kind: "next_step", action: "send_rfq" },
       ];
-      return finish(input, previous, registry, blocks, { sku, quantity, unit });
+      return finish(input, previous, registry, blocks, { sku, quantity, unit }, stated);
     },
   };
 
@@ -439,13 +578,34 @@ export function createMerchantReceptionEngine(
     previous: ReceptionConversation | undefined,
     registry: InMemoryFactRegistry,
     blocks: ReceptionBlock[],
-    need?: Partial<Pick<ReceptionNeed, "sku" | "quantity" | "unit" | "pendingSkus">>,
+    need?: Partial<
+      Pick<ReceptionNeed, "sku" | "quantity" | "unit" | "pendingSkus" | "evidence">
+    >,
+    stated?: StatedFields,
   ): ReceptionEngineResult {
     const merged = {
       sku: need?.sku ?? previous?.need.sku,
       quantity: need?.quantity ?? previous?.need.quantity,
       unit: need?.unit ?? previous?.need.unit,
     };
+    // 字段证据：只有本轮明确给出的字段才签发新的 source_message_id；
+    // 其余字段沿用上一轮证据。模型输出不能设置 confirmed。
+    const evidence = {
+      ...previous?.need.evidence,
+      ...(need?.evidence ?? {}),
+    };
+    if (input.messageId !== undefined && stated !== undefined) {
+      for (const field of ["sku", "quantity", "unit"] as const) {
+        const source = stated[field];
+        if (source !== undefined) {
+          evidence[field] = {
+            source_message_id: input.messageId,
+            observed_at: input.now,
+            source,
+          };
+        }
+      }
+    }
     // 买家选定 SKU 后清空候选；仍在多商品澄清中则继续保留，供“第一个”指代。
     const pendingSkus =
       need?.sku !== undefined
@@ -456,6 +616,7 @@ export function createMerchantReceptionEngine(
       ...(merged.quantity !== undefined ? { quantity: merged.quantity } : {}),
       ...(merged.unit !== undefined ? { unit: merged.unit } : {}),
       ...(pendingSkus !== undefined && pendingSkus.length > 0 ? { pendingSkus } : {}),
+      ...(Object.keys(evidence).length > 0 ? { evidence } : {}),
     });
     const plan: ReceptionResponsePlan = { locale: "zh-CN", blocks };
     // 发布前校验（引用存在性/版本/租户/可见性/有效期）后才渲染公开文本。

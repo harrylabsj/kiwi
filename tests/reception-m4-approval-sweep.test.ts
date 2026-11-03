@@ -134,6 +134,7 @@ describe("reception M0 config", () => {
     const config = loadReceptionConfig({});
     expect(config).toMatchObject({
       mode: "off",
+      runtime: "deterministic",
       locale: "zh-CN",
       currency: "CNY",
       dailyOutputTokenLimit: 200_000,
@@ -151,10 +152,12 @@ describe("reception M0 config", () => {
   it("合法环境变量覆盖数值，非法值回退默认", () => {
     const configured = loadReceptionConfig({
       KIWI_MERCHANT_RECEPTION: "active",
+      KIWI_RECEPTION_RUNTIME: "pi",
       KIWI_RECEPTION_DAILY_TOKEN_LIMIT: "50000",
       KIWI_RECEPTION_APPROVAL_TTL_SECONDS: "600",
     });
     expect(configured.mode).toBe("active");
+    expect(configured.runtime).toBe("pi");
     expect(configured.dailyOutputTokenLimit).toBe(50_000);
     expect(configured.approvalTtlSeconds).toBe(600);
 

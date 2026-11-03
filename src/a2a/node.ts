@@ -27,6 +27,7 @@
  */
 
 import {
+  appendFileSync,
   closeSync,
   existsSync,
   mkdirSync,
@@ -70,8 +71,11 @@ import { createMerchantHandler } from "./server/merchant-handler.js";
 import { NegotiationApprovalStore } from "./server/negotiation-approvals.js";
 import { createDeepSeekNegotiationAdvisor } from "./server/negotiation-advisor.js";
 import { createDeepSeekInquiryInterpreter } from "./server/inquiry-interpreter.js";
+import { buildModel, realStreamFn } from "../runtime/model.js";
+import { createPiReceptionRuntime } from "./reception/agent-runtime.js";
 import { loadReceptionConfig } from "./reception/config.js";
 import { ReceptionConversationStore } from "./reception/conversation-store.js";
+import { runReceptionRetention } from "./reception/retention.js";
 import { createMerchantReceptionEngine } from "./reception/engine.js";
 import { ReceptionBudget } from "./reception/budget.js";
 import { ReceptionReplyOutbox } from "./reception/reply-outbox.js";
@@ -283,6 +287,37 @@ function buildProductSource(profile: AgentProfile): MerchantProductSource {
   }
   const client = new HttpMerchantClient(commerceUrl, broker);
   return {
+    // M2：按买家文字做本店商品候选搜索。只做本地标题/SKU 匹配，不引入
+    // 向量检索或跨商家搜索；候选仍要经 getProduct 重新取事实后才能报价。
+    searchProducts: async (query) => {
+      const products = await client.listProducts(profile.owner_id);
+      const normalized = query.trim().toLowerCase();
+      if (normalized === "") return [];
+      const tokens = normalized
+        .split(/[\s,，。;；、]+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2);
+      return products
+        .filter((product) => product.paused !== true)
+        .filter((product) => {
+          const title = product.title.toLowerCase();
+          const sku = product.sku.toLowerCase();
+          return (
+            title.includes(normalized) ||
+            sku.includes(normalized) ||
+            tokens.some((token) => title.includes(token) || sku.includes(token))
+          );
+        })
+        .slice(0, 5)
+        .map((product) => ({
+          sku: product.sku,
+          ...(product.title !== undefined ? { title: product.title } : {}),
+          price: product.price,
+          currency: product.currency,
+          ...(product.stock !== undefined ? { stock: product.stock } : {}),
+          ...(product.unit !== undefined ? { unit: product.unit } : {}),
+        }));
+    },
     getProduct: async (sku) => {
       const product = await client.getProduct(sku);
       return {
@@ -689,6 +724,44 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
         degradationFile: path.join(dir, "reception-degradations.json"),
       })
     : undefined;
+  const receptionPolicy = (): MerchantPolicy | undefined =>
+    typeof options.merchantPolicy === "function"
+      ? options.merchantPolicy()
+      : (options.merchantPolicy ?? profile.merchant_policy);
+  const receptionPi =
+    receptionEnabled && receptionConfig.runtime === "pi" && profile.model?.provider !== "fake"
+      ? createPiReceptionRuntime({
+          streamFn: realStreamFn(),
+          model: buildModel(profile),
+          ...(productSource !== undefined ? { productSource } : {}),
+          policy: receptionPolicy,
+          maxSteps: receptionConfig.maxModelTurns,
+          maxToolAttempts: receptionConfig.maxToolAttempts,
+          timeoutMs: receptionConfig.runDeadlineMs,
+          ...(receptionBudget !== undefined
+            ? { budget: receptionBudget.createAttemptHooks(profile.owner_id) }
+            : {}),
+          onMetrics: (metrics) => {
+            try {
+              appendFileSync(
+                path.join(dir, "reception-agent-metrics.jsonl"),
+                `${JSON.stringify({ at: now(), ...metrics })}\n`,
+                { mode: 0o600 },
+              );
+            } catch {
+              // 指标失败不影响接待。
+            }
+          },
+          ...(profile.model?.api_key_env !== undefined
+            ? { getApiKey: () => process.env[profile.model.api_key_env as string] }
+            : {}),
+        })
+      : undefined;
+  if (receptionEnabled && receptionConfig.runtime === "pi" && receptionPi === undefined) {
+    process.stderr.write(
+      "⚠️ [kiwi] KIWI_RECEPTION_RUNTIME=pi 需要真实 provider；fake 下保持确定性接待\n",
+    );
+  }
   const receptionEngine = receptionEnabled
     ? createMerchantReceptionEngine({
         store: new ReceptionConversationStore({
@@ -718,6 +791,7 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           : {}),
         ...(productSource !== undefined ? { productSource } : {}),
         approvals: negotiationApprovals,
+        ...(receptionPi !== undefined ? { agent: receptionPi } : {}),
         approvalTtlSeconds: receptionConfig.approvalTtlSeconds,
         deadlineMs: receptionConfig.runDeadlineMs,
         now,
@@ -794,6 +868,36 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     ? createReceptionResponder(receptionEngine, profile.owner_id)
     : undefined;
 
+  // D10：启动时与每 6 小时清理一次会话/用量留存；临时目录不清理。
+  const retentionTimer =
+    receptionEnabled && !isEphemeral
+      ? setInterval(() => {
+          try {
+            runReceptionRetention({
+              dataDir: options.dataDir as string,
+              now,
+              conversationRetentionDays: receptionConfig.retentionDays,
+              usageRetentionDays: receptionConfig.usageRetentionDays,
+            });
+          } catch {
+            // 留存清理失败不阻断接待；下次重试。
+          }
+        }, 6 * 60 * 60_000)
+      : undefined;
+  retentionTimer?.unref();
+  if (receptionEnabled && !isEphemeral) {
+    try {
+      runReceptionRetention({
+        dataDir: options.dataDir as string,
+        now,
+        conversationRetentionDays: receptionConfig.retentionDays,
+        usageRetentionDays: receptionConfig.usageRetentionDays,
+      });
+    } catch {
+      // 启动清理失败不阻断启动。
+    }
+  }
+
   const holder = { baseUrl: advertisedBase };
   const server = new A2AServer({
     // 仅在可信反向代理（如本机 Caddy）之后开启；传输地址仍用于认证。
@@ -841,6 +945,7 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
   const closeStats = createSyncCleanup([
     { id: "statistics", run: () => statsStore?.close() },
     { id: "reception_budget", run: () => receptionBudgetStore?.close() },
+    { id: "reception_retention", run: () => { if (retentionTimer !== undefined) clearInterval(retentionTimer); } },
   ]);
   const releaseOwnership = createSyncCleanup([
     { id: "statistics", run: closeStats },

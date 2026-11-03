@@ -202,6 +202,17 @@ export interface MerchantHandlerOptions {
  * 约定一致，也符合 shopping-cli wire 值；测试桩 `{price: 99}` → 9900 minor 同此）。
  */
 export interface MerchantProductSource {
+  /** P0a/M2：按买家文字搜索本店公开商品（只返回公开字段与候选，不报价）。 */
+  searchProducts?(query: string): Promise<
+    Array<{
+      sku: string;
+      title?: string;
+      price: number;
+      currency: string;
+      stock?: number;
+      unit?: string;
+    }>
+  >;
   getProduct(sku: string): Promise<{
     sku?: string;
     price: number;
@@ -1130,6 +1141,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                 contextId: negotiationId,
                 text: buyerMessage ?? "",
                 now: now(),
+                messageId: envelope.message_id,
                 ...(structuredSku !== undefined || structuredTopics.size > 0
                   ? {
                       structured: {
