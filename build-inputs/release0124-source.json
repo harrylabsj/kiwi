@@ -1746,7 +1746,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/scripts/verify-target-node.mjs",
-      "sha256": "sha256:9c92cca80a1064aa69c52ceecac9c2fd0e11d9848ed0ee9d28179d38ca1e5cf5"
+      "sha256": "sha256:ee5136e8d5099585057b74c425fb8bb17c6889b7f9a7915e54d765a3f99a9c29"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-merchant-cs-prep/SKILL.md",
