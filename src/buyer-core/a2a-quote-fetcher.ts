@@ -320,7 +320,28 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     // 用户明确指定 SKU 时，发现结果必须与之精确一致；不能被 matching_skus[0]
     // 悄悄换成本商家的另一个商品。没有任何 matching_skus 时仍信任用户输入
     // （正常查询/多商品商家兼容）。
-    if (requestedSku !== undefined && offeredSkus.length > 0 && !offeredSkus.includes(requestedSku)) {
+    //
+    // 但如果这个 task/merchant 已经有一次持久化操作或 in-flight 标记，
+    // 就不能在本地用 SKU 错误截断：必须把不同的 intent 交给 recovery 的
+    // exchange()，由它按 binding digest 判定 idempotency_conflict（或恢复
+    // 原操作）。否则重试同一个 task 的不同请求会被误报成商品不匹配，丢失
+    // 协议冲突语义。没有既有操作时仍然在发网络前安全拒绝。
+    let hasPriorOperation = false;
+    if (this.recovery !== undefined && context !== undefined) {
+      try {
+        hasPriorOperation = this.recovery.hasOperation(context, "rfq", 0, merchantId);
+      } catch {
+        // 账本不可读时不要伪装成商品错误；交给 exchange() 走协议失败的
+        // fail-closed 分类。
+        hasPriorOperation = true;
+      }
+    }
+    if (
+      requestedSku !== undefined &&
+      offeredSkus.length > 0 &&
+      !offeredSkus.includes(requestedSku) &&
+      !hasPriorOperation
+    ) {
       return {
         merchant_id: merchantId,
         status: "failed",
