@@ -22,7 +22,8 @@
         "local npm pack integrity",
         "protected kiwi-release environment",
         "npm trusted publishing"
-      ]
+      ],
+      "source_commit": "06d4771ec5cd95f38e3c6372e0b04ccbce541fbe"
     },
     {
       "id": "kiwi",
@@ -43,7 +44,8 @@
         "full Kiwi verify",
         "protected kiwi-release environment",
         "npm trusted publishing"
-      ]
+      ],
+      "source_commit": "06d4771ec5cd95f38e3c6372e0b04ccbce541fbe"
     },
     {
       "id": "kiwi-catalog",
@@ -65,7 +67,8 @@
         "contract lock",
         "protected kiwi-release environment",
         "PyPI trusted publishing"
-      ]
+      ],
+      "source_commit": "617891c67733a586dcdfb12b17fac4b20b0e5e42"
     },
     {
       "id": "shopping-cli",
@@ -147,10 +150,11 @@
       "release_controller": "private extension repository",
       "artifact": null,
       "bundle_reason": "The source repository is private; its package is tracked by immutable repository and commit references instead of being copied into the public portfolio artifact.",
-      "state": "candidate; source commit/tag pending; not frozen or deployed",
+      "state": "candidate; source commit recorded; private tag pending",
       "requires": [
         "kiwi-catalog >=0.5.1,<0.6,!=0.5.2"
-      ]
+      ],
+      "source_commit": "e46c04ceb5d64fef2f472c45214bc2379f3fcfa8"
     },
     {
       "id": "workbuddy-procurement-expert",
