@@ -113,7 +113,7 @@ export type UnitResolution =
   | { kind: "factor"; unit: string; factor: number }
   | {
       kind: "mismatch";
-      reason: "missing_product_unit" | "ambiguous_factor" | "alias_conflict" | "no_match" | "folded_factor_conflict";
+      reason: "missing_product_unit" | "ambiguous_factor" | "alias_conflict" | "no_match";
     };
 
 /**
@@ -181,19 +181,23 @@ export function resolveUnitConversion(
   // Different original spellings that fold to the same canonical unit
   // (`box` vs `盒`). Explicit configuration may distinguish packaging meaning;
   // do not blindly overwrite it with the built-in 1:1 alias.
+  // Different original spellings that fold to the same canonical unit. A
+  // non-1 factor whose target is the source/default unit is an explicit
+  // package interpretation (e.g. default box + factor 盒:12), so apply it
+  // instead of silently choosing the built-in 1:1 alias.
   const factorTargetsSource = policy.defaultUnit !== undefined && product === policy.defaultUnit;
   if (factor !== undefined) {
-    // A non-1 factor on the source/default unit contradicts same-unit folding.
     const legacyFactor = policy.defaultUnit === undefined && policy.legacyFactorTarget === true;
-    if (factor !== 1 && !legacyFactor && (factorTargetsSource || policy.defaultUnit === undefined)) {
-      return { kind: "mismatch", reason: "folded_factor_conflict" };
+    if (factorTargetsSource || legacyFactor) {
+      if (hasAlias && aliasTarget !== product) {
+        return { kind: "mismatch", reason: "alias_conflict" };
+      }
+      return { kind: "factor", unit: product, factor };
     }
     if (hasAlias && aliasTarget !== product) {
       return { kind: "mismatch", reason: "alias_conflict" };
     }
-    return factor === 1 ? { kind: "identity", unit: product } : legacyFactor
-      ? { kind: "factor", unit: product, factor }
-      : { kind: "identity", unit: product };
+    return { kind: "identity", unit: product };
   }
 
   if (hasAlias) {
@@ -202,6 +206,7 @@ export function resolveUnitConversion(
   }
 
   return { kind: "identity", unit: product };
+
 }
 
 /**
