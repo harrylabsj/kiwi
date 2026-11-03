@@ -2970,7 +2970,7 @@
     },
     {
       "path": "src/a2a/unit-alias.ts",
-      "sha256": "sha256:3680b68012f0e6add6f220f95f15166f5d0daff8ba60ba60b35950d3589a1181"
+      "sha256": "sha256:dea86e377e535534e34cd85c94f78330cef0f964eb14a60f0dab17e0f98285e3"
     },
     {
       "path": "src/a2a/v1/headers.ts",
@@ -4858,9 +4858,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:ab12e9817a0041912f23c1846722265df9d0f5b9ae423a01a5bdd118e26b4906",
+      "sha256": "sha256:05bf8b93ca54236789ada0b821a988ddee8cec670ac5faa3b39883e30e12bdb4",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:47b38047232cf242353de5c37630134670539fc8a86ebff6669289684ed8b7f7"
+      "raw_sha256": "sha256:ae05033cbdf622b05d2b6d46530dd471e2aad6f85e63fc9a383e2577499adc76"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -6208,7 +6208,7 @@
     },
     {
       "path": "tests/merchant-reception-facts.test.ts",
-      "sha256": "sha256:6ead80dfb42e10e6f9cbe04e3531e67d782c96da2486603ddf6e2d8e8ffd1094"
+      "sha256": "sha256:571ac1ed2f63da2b307ad499a560f0e95711372a2de9977d7ffa0021ba6b1186"
     },
     {
       "path": "tests/merchant-reception-publish.test.ts",
@@ -6756,7 +6756,7 @@
     },
     {
       "path": "tests/unit-alias.test.ts",
-      "sha256": "sha256:8dec561c4989fd3878dce51941f6287dbc1ce3244e7e975c56cd40e439d4174d"
+      "sha256": "sha256:a9aa9d22aaed09c7088bb90df0b5713a1b2d029f953011dca3bc6059f278831f"
     },
     {
       "path": "tests/weixin-channel.test.ts",
