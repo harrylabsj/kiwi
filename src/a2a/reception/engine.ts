@@ -165,7 +165,27 @@ export function createMerchantReceptionEngine(
       }
 
       // 结构化字段是协议数据（权威），模型候选其次，最后沿用会话已确认值。
-      const sku = structuredSku ?? interpreted?.sku ?? previous?.need.sku;
+      const candidateSkus =
+        interpreted?.skus ?? (interpreted?.sku !== undefined ? [interpreted.sku] : []);
+      // AC09/D03：一条消息提到多个商品时明确提示并请买家选择，禁止静默只取
+      // 第一项；结构化 SKU 是协议数据（单值），不参与多候选判定。
+      if (structuredSku === undefined && candidateSkus.length > 1) {
+        return finish(
+          input,
+          previous,
+          registry,
+          [
+            {
+              kind: "ask_clarification",
+              missing: ["sku"],
+              reason: "multiple_skus",
+              candidates: candidateSkus,
+            },
+          ],
+          { quantity: interpreted?.quantity, unit: interpreted?.unit },
+        );
+      }
+      const sku = structuredSku ?? candidateSkus[0] ?? previous?.need.sku;
       const quantity = interpreted?.quantity ?? previous?.need.quantity;
       const unit = interpreted?.unit ?? previous?.need.unit;
 

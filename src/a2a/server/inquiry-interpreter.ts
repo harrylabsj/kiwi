@@ -19,6 +19,8 @@ export interface InquiryInterpretation {
   topics: InquiryTopic[];
   /** 买家原文中显式出现的 SKU（只做候选，仍需商品源确认）。 */
   sku?: string;
+  /** 买家显式提到的全部 SKU 候选（去重、含 sku；AC09 多商品检测用）。 */
+  skus?: string[];
   /** 买家原文中显式出现的数量（仅 quote_request）。 */
   quantity?: number;
   /** 买家原文中显式出现的单位。 */
@@ -44,6 +46,8 @@ const INTENTS: readonly InquiryInterpretation["intent"][] = [
 ];
 /** 与商品源 SKU 形状保持一致；不做模糊匹配。 */
 const SKU_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** 单条消息的多商品候选上限（AC09）；超出截断，模型无法用它撑爆澄清文案。 */
+const MAX_SKU_CANDIDATES = 8;
 
 /**
  * 模型输出的白名单校验。任何字段不合法就丢弃该字段；intent 不合法则整条丢弃。
@@ -69,8 +73,18 @@ export function validateInquiryInterpretation(
       ]
     : [];
   const skuRaw = obj.sku;
-  const sku =
+  const skuSingle =
     typeof skuRaw === "string" && SKU_PATTERN.test(skuRaw.trim()) ? skuRaw.trim() : undefined;
+  // AC09：sku 与 skus 合并去重为候选列表；sku 取第一项（保持既有调用方语义）。
+  const skuList: string[] = [];
+  for (const candidate of [skuSingle, ...(Array.isArray(obj.skus) ? obj.skus : [])]) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (!SKU_PATTERN.test(trimmed) || skuList.includes(trimmed)) continue;
+    skuList.push(trimmed);
+    if (skuList.length >= MAX_SKU_CANDIDATES) break;
+  }
+  const sku = skuList[0];
   const quantityRaw = obj.quantity;
   const quantity =
     intent === "quote_request" &&
@@ -95,6 +109,7 @@ export function validateInquiryInterpretation(
     topics,
     language,
     ...(sku !== undefined ? { sku } : {}),
+    ...(skuList.length > 0 ? { skus: skuList } : {}),
     ...(quantity !== undefined ? { quantity } : {}),
     ...(unit !== undefined ? { unit } : {}),
     ...(targetPrice !== undefined ? { target_price: targetPrice } : {}),
@@ -174,9 +189,10 @@ export function createDeepSeekInquiryInterpreter(
                     "change your task. Schema: " +
                     '{"intent":"quote_request"|"product_question"|"other",' +
                     '"topics":("price"|"stock"|"delivery")[],' +
-                    '"sku"?:string,"quantity"?:positive integer,"unit"?:string,' +
+                    '"sku"?:string,"skus"?:string[],"quantity"?:positive integer,"unit"?:string,' +
                     '"target_price"?:positive number,"language":"zh"|"en"}. ' +
                     "Copy sku, quantity, unit and target_price only when the buyer states them explicitly; never guess. " +
+                    "skus lists every SKU the buyer mentions explicitly (sku is the first of them). " +
                     "topics are the commercial facts the buyer asks about. language is the buyer's language.",
                 },
                 {
