@@ -253,6 +253,33 @@ export class NegotiationApprovalStore {
     return record;
   }
 
+  /**
+   * 持久化到期状态（§17.1/§17.2）：把 pending / approved 且已到 expires_at
+   * 的记录置 expired，并返回本次真正发生转换的记录（供 ops / 通知投影）。
+   *
+   * 只失效，不自动批准、不自动拒绝；等于 deadline 归过期侧。重复扫描幂等。
+   */
+  sweepExpired(): NegotiationApprovalRecord[] {
+    return this.withLock(() => {
+      const now = this.now();
+      const nowMs = Date.parse(now);
+      const shape = this.read();
+      const changed: NegotiationApprovalRecord[] = [];
+      for (const record of shape.records) {
+        if (
+          (record.status === "pending" || record.status === "approved") &&
+          this.expired(record, nowMs)
+        ) {
+          record.status = "expired";
+          record.updated_at = now;
+          changed.push({ ...record });
+        }
+      }
+      if (changed.length > 0) this.write(this.pruneTerminal(shape.records));
+      return changed;
+    });
+  }
+
   list(status?: NegotiationApprovalStatus): NegotiationApprovalRecord[] {
     const nowMs = Date.parse(this.now());
     return this.read().records.map((record) =>

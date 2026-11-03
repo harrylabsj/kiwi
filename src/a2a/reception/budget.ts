@@ -20,11 +20,13 @@ import { dirname } from "node:path";
 
 import type { AttemptBudgetHooks } from "../server/inquiry-interpreter.js";
 import type { SqliteDailyBudgetStore } from "../../merchant/ai-runtime/sqlite-budget-store.js";
+import { RECEPTION_CONFIG_DEFAULTS } from "./config.js";
 
 /** §18：每 attempt 输出上限（token），也是未知用量的保留额。 */
-export const RECEPTION_ATTEMPT_RESERVE_TOKENS = 2_048;
+export const RECEPTION_ATTEMPT_RESERVE_TOKENS = RECEPTION_CONFIG_DEFAULTS.attemptReserveTokens;
 /** D07：每商家每日 output token 上限（试点初值）。 */
-export const RECEPTION_DAILY_OUTPUT_TOKEN_LIMIT = 200_000;
+export const RECEPTION_DAILY_OUTPUT_TOKEN_LIMIT =
+  RECEPTION_CONFIG_DEFAULTS.dailyOutputTokenLimit;
 
 export interface ReceptionBudgetOptions {
   store: SqliteDailyBudgetStore;

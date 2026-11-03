@@ -15,6 +15,7 @@ import { contentDigest } from "../../negotiation/jcs.js";
 import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
 import type { InquiryInterpreter } from "../server/inquiry-interpreter.js";
 import { applyDiscountPercentMinor } from "../server/merchant-handler.js";
+import { RECEPTION_CONFIG_DEFAULTS } from "./config.js";
 import type { ReceptionConversationStore } from "./conversation-store.js";
 import { factRevision, InMemoryFactRegistry, publishResponsePlan } from "./publish.js";
 import type { ReceptionReplyOutbox } from "./reply-outbox.js";
@@ -75,6 +76,8 @@ export interface ReceptionApprovalSink {
     floor_minor?: number;
     ttl_seconds?: number;
   }): unknown;
+  /** 读取/写入前固化到期状态（§17.1）；实现可缺省。 */
+  sweepExpired?(): unknown;
 }
 
 export interface MerchantReceptionEngineDeps {
@@ -125,6 +128,12 @@ export function createMerchantReceptionEngine(
 ): ReceptionEngine {
   return {
     async respond(input) {
+      // §17.1：每次接待写入前先固化已到期的审批，避免新会话面对陈旧 pending。
+      try {
+        deps.approvals?.sweepExpired?.();
+      } catch {
+        // 审批存储故障不阻断接待；ops/CLI 读取时还会再扫一次。
+      }
       const text = input.text.trim().slice(0, BUYER_MESSAGE_MAX_CHARS);
       const structuredSku = input.structured?.sku;
       const previous = deps.store.get(input.merchantId, input.identity, input.contextId);
@@ -133,7 +142,7 @@ export function createMerchantReceptionEngine(
       // D07/§18：从 admitted_at 起 30 秒硬截止；超时不再发起新工具调用，
       // 降级确定性回复（不承诺跑满时限，也不把超时伪装成理解结果）。
       const admittedAt = Date.parse(input.now);
-      const deadlineMs = deps.deadlineMs ?? 30_000;
+      const deadlineMs = deps.deadlineMs ?? RECEPTION_CONFIG_DEFAULTS.runDeadlineMs;
       const deadlineExceeded = (): boolean =>
         Number.isFinite(admittedAt) && Date.parse(deps.now()) - admittedAt > deadlineMs;
 
@@ -236,7 +245,7 @@ export function createMerchantReceptionEngine(
           buyer_offer_minor: boundary.targetMinor,
           public_bound_minor: boundary.publicBoundMinor,
           ...(floorMinor !== undefined ? { floor_minor: floorMinor } : {}),
-          ttl_seconds: deps.approvalTtlSeconds ?? 900,
+          ttl_seconds: deps.approvalTtlSeconds ?? RECEPTION_CONFIG_DEFAULTS.approvalTtlSeconds,
         });
         return finish(input, previous, registry, [
           acknowledge,

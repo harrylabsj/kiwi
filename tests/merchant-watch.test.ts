@@ -99,6 +99,31 @@ describe("watch detect", () => {
     expect(fourth.notifications).toHaveLength(0);
   });
 
+  it("审批 pending → expired 会通知，且不泄露底价", () => {
+    const first = detectNotifications(
+      emptyWatchState(NOW.toISOString()),
+      { negotiations: [], total: 0, approvals: [approval()] },
+      { channels: ["wecom"], now: NOW },
+    );
+    expect(first.notifications).toHaveLength(1);
+    const later = new Date(NOW.getTime() + 15 * 60_000);
+    const second = detectNotifications(
+      first.next,
+      {
+        negotiations: [],
+        total: 0,
+        approvals: [
+          approval({ status: "expired", updated_at: later.toISOString() }),
+        ],
+      },
+      { channels: ["wecom"], now: later },
+    );
+    expect(second.notifications).toHaveLength(1);
+    expect(second.notifications[0]!.texts.wecom).toContain("审批已过期");
+    expect(second.notifications[0]!.texts.wecom).toContain("授权已过期");
+    expect(second.notifications[0]!.texts.wecom).not.toContain("私有底价");
+  });
+
   it("同一 (negotiation, sku) 的 pending 通知 10 分钟内冷却", () => {
     const first = detectNotifications(
       emptyWatchState(NOW.toISOString()),
