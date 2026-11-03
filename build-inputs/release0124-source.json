@@ -182,7 +182,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "sha256:724f198e12547149a5c30e88f69bd2c88e1f4bfa17be4e9c2cb1bbad2e196a7e"
+      "sha256": "sha256:fe53ddd34627c9ad2c5d964bb95cdd69765e98357183ced81cbddc3e6f6140fe"
     },
     {
       "path": "CODE_OF_CONDUCT.md",
@@ -2830,7 +2830,7 @@
     },
     {
       "path": "src/a2a/reception/agent-runtime.ts",
-      "sha256": "sha256:8def51737203afd24945949bbc4dfd7878a1e33e8fd92cc31f1ae758ce0cc3ff"
+      "sha256": "sha256:d13c4f27c230782bcd437b3202cdc9978afba222c68894601191119918f535a1"
     },
     {
       "path": "src/a2a/reception/budget.ts",
@@ -2970,7 +2970,7 @@
     },
     {
       "path": "src/a2a/unit-alias.ts",
-      "sha256": "sha256:12b53d4a2652469e2e59740ad22382124a026f4c955fc246b6ac267d2b73d829"
+      "sha256": "sha256:3680b68012f0e6add6f220f95f15166f5d0daff8ba60ba60b35950d3589a1181"
     },
     {
       "path": "src/a2a/v1/headers.ts",
@@ -4858,9 +4858,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:a4e98e795580dbf76752d8c69b7150ba958effbe736db662ed31fbb81b07795f",
+      "sha256": "sha256:ab12e9817a0041912f23c1846722265df9d0f5b9ae423a01a5bdd118e26b4906",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:f3849d8114034ca55cfc19ddf46597956350790e30cbfde96b678777fc8f2da1"
+      "raw_sha256": "sha256:47b38047232cf242353de5c37630134670539fc8a86ebff6669289684ed8b7f7"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -6208,7 +6208,7 @@
     },
     {
       "path": "tests/merchant-reception-facts.test.ts",
-      "sha256": "sha256:5f4ae75f93aa835be1e9e3694f9c1bb341ce88629a9519ded491733c836b2060"
+      "sha256": "sha256:6ead80dfb42e10e6f9cbe04e3531e67d782c96da2486603ddf6e2d8e8ffd1094"
     },
     {
       "path": "tests/merchant-reception-publish.test.ts",
@@ -6611,6 +6611,10 @@
       "sha256": "sha256:60fca2191f7ee86e690d53757f0995a9b49b379965ae8436c00b39e75c2bc225"
     },
     {
+      "path": "tests/reception-agent-unit-flow.test.ts",
+      "sha256": "sha256:c66e0a620a0886f6e57a2a26fb08e16a2925a8e7b29b9855f8184f0b80ce695f"
+    },
+    {
       "path": "tests/reception-m4-approval-sweep.test.ts",
       "sha256": "sha256:7bbeb10a567e17136536090a97a7429db1b9a5db94f8445a208715dd441ef1da"
     },
@@ -6752,7 +6756,7 @@
     },
     {
       "path": "tests/unit-alias.test.ts",
-      "sha256": "sha256:a9aa9d22aaed09c7088bb90df0b5713a1b2d029f953011dca3bc6059f278831f"
+      "sha256": "sha256:8dec561c4989fd3878dce51941f6287dbc1ce3244e7e975c56cd40e439d4174d"
     },
     {
       "path": "tests/weixin-channel.test.ts",
