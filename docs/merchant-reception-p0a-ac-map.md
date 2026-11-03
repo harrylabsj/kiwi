@@ -263,3 +263,36 @@
   search → facts → propose_reply 工具循环输出公开价 110.00 CNY，未泄露底价。
 - 命令：`KIWI_RECEPTION_REAL_E2E=1 npx vitest run tests/reception-agent-real.test.ts`。
 - 范围：仅 Veyquo 单商家；第二商家/多实例隔离不在本轮。
+
+## 2026-11-04 通知渠道偏差
+
+- 个人微信 ops bot 三次扫码后 `getupdates` 均返回 `session_stale(-14)`，无法建立
+  主动推送会话；watch 已停用，审批待办/到期以 `/ops` 9101 为唯一可见面。
+- 这与 D08 的“/ops + 推送”有偏差；企业微信 webhook 未配置。后续如需推送，
+  需换企业微信通道或修复 iLink bot 会话。
+
+## 2026-11-04 Veyquo 0.12.24 部署验收
+
+- 部署版本：kiwi 0.12.24（`releases/0.12.24`），systemd drop-in
+  `10-kiwi-runtime-0.12.24.conf`；0.12.20 已置 `.disabled` 可回滚。
+- 接待：`KIWI_MERCHANT_RECEPTION=active`、`KIWI_RECEPTION_RUNTIME=pi`；
+  `KIWI_MERCHANT_INQUIRY` 已退役；`KIWI_MERCHANT_ADVISOR` 保留。
+- 生产入口验证：A2A `SendMessage`（v1）普通文本
+  - “VQ-001 两盒” → 单位不符澄清（商品按 piece 售卖）；
+  - “VQ-001 2 piece 多少钱” → 返回 129.00 CNY、库存可覆盖、预计交期，
+    税费/运费明确待确认，未泄露底价。
+- `/ops/v1/reception/status`：mode=active、budget 200000/used 2224、
+  degradations 空、审批空；`/ops/v1/reception/probe` 前三层 ok。
+- 通知：watch 关闭（个人微信 iLink session_stale -14），审批待办以 `/ops`
+  9101 为唯一面。
+- 顾问：0.12.24 内置 1000/8s（实测足够）；0.12.20 的 2048 热修已被新版本覆盖。
+
+### 生产审批回环验收（2026-11-04）
+
+- A2A `SendMessage` 生产入口：`VQ-001 2 piece，115 一件行不行` →
+  创建 pending（buyer 11500、bound 12255、floor 11000）。
+- `/ops/v1/approvals/approve` 批准 12000；下一轮同 context 询问 →
+  回复“商家确认价 120.00 CNY（仅本次）”。
+- 审批记录状态：`consumed`；`/ops` 计数 pending 0 / consumed 1；
+  budget usedToday 3712，degradations 空。
+- 验收结论：P0a 的接待入口、事实回答、越界审批、批准价一次性消费在生产环境闭环。
