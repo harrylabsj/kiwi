@@ -52,6 +52,7 @@ import type {
   InquiryInterpreter,
   InquiryTopic,
 } from "./inquiry-interpreter.js";
+import type { ReceptionEngine } from "../reception/engine.js";
 import { calculateWorkbenchQuote } from "../../merchant/quote-calculator.js";
 import {
   createNegotiationPhase,
@@ -179,6 +180,10 @@ export interface MerchantHandlerOptions {
   /** 询价意图解析（P2）：只产出候选，回复事实仍由本 handler 组装。
    *  缺省关闭；解析失败回退到固定询问文案。 */
   inquiryInterpreter?: InquiryInterpreter;
+  /** KNP inquiry 接待引擎（P0a 统一）：配置后 inquiry 与普通 A2A 文本共用
+   *  同一接待引擎（zh-CN，事实由引擎取商品源与策略）；引擎异常回退到
+   *  确定性组装路径，询价不被阻断。 */
+  reception?: { engine: ReceptionEngine; merchantId: string };
   /** Workbench promotion authority used by the deterministic quote path. */
   promotionPrice?: (input: { sku: string; quantity: number }) =>
     | {
@@ -1081,6 +1086,25 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               : undefined;
           const questionCodes = (Array.isArray(inquiry.questions) ? inquiry.questions : [])
             .flatMap((question) => (typeof question.code === "string" ? [question.code] : []));
+          // P0a：inquiry 与普通 A2A 文本统一走接待引擎——结构化 SKU 是协议
+          // 数据（权威），自由文本只是补充；引擎故障回退既有确定性路径。
+          if (options.reception !== undefined) {
+            try {
+              const received = await options.reception.engine.respond({
+                merchantId: options.reception.merchantId,
+                identity: ctx.senderIdentity,
+                // inquiry 是问答（D13 匿名可用）；KNP ctx 未携带验签标记。
+                identityVerified: false,
+                contextId: negotiationId,
+                text: buyerMessage ?? "",
+                now: now(),
+                ...(structuredSku !== undefined ? { structured: { sku: structuredSku } } : {}),
+              });
+              return textReply(received.text);
+            } catch {
+              // 接待引擎不可用：回退确定性组装（下述既有路径）。
+            }
+          }
           // P2：自由文本只用于理解问题；模型输出只是候选，事实仍由商品源决定。
           let interpreted: InquiryInterpretation | undefined;
           if (options.inquiryInterpreter !== undefined && buyerMessage !== undefined) {

@@ -654,6 +654,38 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
   // 商品源构造一次、经 core 暴露给就绪检查（同一实例，避免第二份读取路径）。
   const productSource =
     role === "merchant" ? (options.productSource ?? buildProductSource(profile)) : undefined;
+  // P0a：商家 AI 接待（普通 A2A 文本 + KNP inquiry 统一走同一引擎）。默认
+  // 关闭；KIWI_MERCHANT_RECEPTION 显式设为 active/advisory 才启用。
+  const receptionMode = (process.env.KIWI_MERCHANT_RECEPTION ?? "").trim();
+  const receptionEnabled =
+    role === "merchant" && (receptionMode === "active" || receptionMode === "advisory");
+  const receptionEngine = receptionEnabled
+    ? createMerchantReceptionEngine({
+        store: new ReceptionConversationStore({
+          file: path.join(dir, "reception-conversations.json"),
+          now,
+        }),
+        ...(profile.model !== undefined
+          ? {
+              interpreter: createDeepSeekInquiryInterpreter({
+                ...(profile.model.api_key_env !== undefined
+                  ? { apiKeyEnv: profile.model.api_key_env }
+                  : {}),
+                ...(profile.model.base_url !== undefined
+                  ? { baseUrl: profile.model.base_url }
+                  : {}),
+                ...(profile.model.model !== undefined ? { model: profile.model.model } : {}),
+              }),
+            }
+          : {}),
+        ...(productSource !== undefined ? { productSource } : {}),
+        now,
+        policy: () =>
+          typeof options.merchantPolicy === "function"
+            ? options.merchantPolicy()
+            : (options.merchantPolicy ?? profile.merchant_policy),
+      })
+    : undefined;
   const handler =
     role === "merchant"
       ? createMerchantHandler({
@@ -713,43 +745,15 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           ...(options.promotionPrice !== undefined
             ? { promotionPrice: options.promotionPrice }
             : {}),
+          // P0a：reception 启用时，KNP inquiry 与普通 A2A 文本统一走接待引擎。
+          ...(receptionEngine !== undefined
+            ? { reception: { engine: receptionEngine, merchantId: profile.owner_id } }
+            : {}),
         })
       : defaultHandler();
 
-  // P0a：商家 AI 接待（普通 A2A 文本）。默认关闭；KIWI_MERCHANT_RECEPTION
-  // 显式设为 active/advisory 才接管 generic 文本，KNP 路径不受影响。
-  const receptionMode = (process.env.KIWI_MERCHANT_RECEPTION ?? "").trim();
-  const receptionEnabled =
-    role === "merchant" && (receptionMode === "active" || receptionMode === "advisory");
-  const genericResponder = receptionEnabled
-    ? createReceptionResponder(
-        createMerchantReceptionEngine({
-          store: new ReceptionConversationStore({
-            file: path.join(dir, "reception-conversations.json"),
-            now,
-          }),
-          ...(profile.model !== undefined
-            ? {
-                interpreter: createDeepSeekInquiryInterpreter({
-                  ...(profile.model.api_key_env !== undefined
-                    ? { apiKeyEnv: profile.model.api_key_env }
-                    : {}),
-                  ...(profile.model.base_url !== undefined
-                    ? { baseUrl: profile.model.base_url }
-                    : {}),
-                  ...(profile.model.model !== undefined ? { model: profile.model.model } : {}),
-                }),
-              }
-            : {}),
-          ...(productSource !== undefined ? { productSource } : {}),
-          now,
-          policy: () =>
-            typeof options.merchantPolicy === "function"
-              ? options.merchantPolicy()
-              : (options.merchantPolicy ?? profile.merchant_policy),
-        }),
-        profile.owner_id,
-      )
+  const genericResponder = receptionEngine !== undefined
+    ? createReceptionResponder(receptionEngine, profile.owner_id)
     : undefined;
 
   const holder = { baseUrl: advertisedBase };

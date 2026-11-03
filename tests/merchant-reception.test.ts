@@ -175,6 +175,33 @@ describe("merchant reception (P0a)", () => {
     expect(other.text).toContain("请提供商品 SKU");
     expect(other.conversation.need.sku).toBeUndefined();
   });
+
+  it("结构化 SKU（KNP inquiry）无需模型也按事实回答", async () => {
+    const engine = engineFor();
+    const result = await engine.respond({ ...input(""), structured: { sku: SKU } });
+    expect(result.text).toContain("SKU VQ-001");
+    expect(result.text).toContain("当前公开标价 110.00 CNY");
+    expect(result.text).toContain("预计交期不晚于 2026-11-10");
+    expect(result.conversation.need.sku).toBe(SKU);
+  });
+
+  it("结构化 SKU 优先于模型候选（协议数据权威）", async () => {
+    const engine = engineFor(
+      interpreterFor({ intent: "quote_request", topics: ["price"], sku: "NOPE-1", language: "zh" }),
+    );
+    const result = await engine.respond({ ...input("NOPE-1 多少钱"), structured: { sku: SKU } });
+    expect(result.text).toContain("当前公开标价 110.00 CNY");
+    expect(result.text).not.toContain("无法从商品源确认该 SKU");
+  });
+
+  it("结构化 SKU 存在时不触发空消息/非中文澄清", async () => {
+    const engine = engineFor();
+    const empty = await engine.respond({ ...input(""), structured: { sku: SKU } });
+    expect(empty.text).not.toContain("请说明需要的商品");
+    const nonChinese = await engine.respond({ ...input("price?", "buyer:1", "ctx_2"), structured: { sku: SKU } });
+    expect(nonChinese.text).not.toContain("目前仅支持中文接待");
+    expect(nonChinese.text).toContain("当前公开标价 110.00 CNY");
+  });
 });
 
 describe("pipeline generic responder", () => {

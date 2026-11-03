@@ -36,6 +36,9 @@ export interface ReceptionEngineInput {
   contextId: string;
   text: string;
   now: string;
+  /** KNP inquiry 的结构化字段（协议数据，权威于模型候选）；有结构化 SKU 时
+   *  空文本/非中文文本不再触发澄清，直接按事实回答。 */
+  structured?: { sku?: string };
 }
 
 export interface ReceptionEngineResult {
@@ -136,19 +139,20 @@ export function createMerchantReceptionEngine(
   return {
     async respond(input) {
       const text = input.text.trim().slice(0, BUYER_MESSAGE_MAX_CHARS);
+      const structuredSku = input.structured?.sku;
       const previous = deps.store.get(input.merchantId, input.identity, input.contextId);
 
-      if (text === "") {
+      if (text === "" && structuredSku === undefined) {
         return finish(input, previous, [{ kind: "ask_clarification", missing: ["sku"], reason: "empty_message" }]);
       }
-      if (looksNonChinese(text)) {
+      if (text !== "" && looksNonChinese(text) && structuredSku === undefined) {
         return finish(input, previous, [
           { kind: "ask_clarification", missing: ["sku"], reason: "non_chinese" },
         ]);
       }
 
       let interpreted;
-      if (deps.interpreter !== undefined) {
+      if (deps.interpreter !== undefined && text !== "") {
         try {
           interpreted = await deps.interpreter.interpret({ buyer_message: text });
         } catch {
@@ -156,7 +160,8 @@ export function createMerchantReceptionEngine(
         }
       }
 
-      const sku = interpreted?.sku ?? previous?.need.sku;
+      // 结构化字段是协议数据（权威），模型候选其次，最后沿用会话已确认值。
+      const sku = structuredSku ?? interpreted?.sku ?? previous?.need.sku;
       const quantity = interpreted?.quantity ?? previous?.need.quantity;
       const unit = interpreted?.unit ?? previous?.need.unit;
 
