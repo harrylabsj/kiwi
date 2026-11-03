@@ -6436,7 +6436,7 @@
     },
     {
       "path": "tests/npm-cloud-leaf-metadata.test.ts",
-      "sha256": "sha256:6022c7f75130b4de8bb3a31d3b9701b1f74ba0b819d5319ea2bbaca5ba0dcdfb"
+      "sha256": "sha256:b7ff10707c190ed8d6791a0f34ca52a33af02d2da1b9105580fc700a0faa7878"
     },
     {
       "path": "tests/npm-official-binlinks.test.ts",
