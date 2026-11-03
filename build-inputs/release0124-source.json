@@ -586,7 +586,7 @@
     },
     {
       "path": "docs/merchant-reception-p0a-ac-map.md",
-      "sha256": "sha256:bd3621db4920c151e32bc25c7f891d2560b40d4df2ba3de71b54a77474f1ced8"
+      "sha256": "sha256:cb0d772df1062b126accbf835e0aa98f343eda8bb0e4da7b101be5a88d6d5a07"
     },
     {
       "path": "docs/merchant-rfq-pilot/README.md",
@@ -2238,11 +2238,11 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:af81b0b84f2d84a8b7c68b7da4f0741404a53a6286f8b8175df428e25af3634d"
+      "sha256": "sha256:f52e8abf791872616cf7a4afffdcedfcbdd8a13e6387745c19ffd6b381882199"
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:5048f1b2cef4a1f8b836eba3940470b6195bc5d14f9c502e4c00df22f0750015"
+      "sha256": "sha256:c0fdd6c9c2dc1829ca8d5346e236e7277a3d3282120643c9b53180bc409ba8f5"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
