@@ -23,6 +23,8 @@ export interface InquiryInterpretation {
   quantity?: number;
   /** 买家原文中显式出现的单位。 */
   unit?: string;
+  /** 买家明确提出的目标单价（major units，仅候选；边界判定用服务端数据）。 */
+  target_price?: number;
   language: InquiryLanguage;
 }
 
@@ -82,6 +84,11 @@ export function validateInquiryInterpretation(
     typeof unitRaw === "string" && unitRaw.trim() !== "" && unitRaw.trim().length <= 32
       ? unitRaw.trim()
       : undefined;
+  const targetPriceRaw = obj.target_price;
+  const targetPrice =
+    typeof targetPriceRaw === "number" && Number.isFinite(targetPriceRaw) && targetPriceRaw > 0
+      ? targetPriceRaw
+      : undefined;
   const language: InquiryLanguage = obj.language === "zh" ? "zh" : "en";
   return {
     intent: intent as InquiryInterpretation["intent"],
@@ -90,6 +97,7 @@ export function validateInquiryInterpretation(
     ...(sku !== undefined ? { sku } : {}),
     ...(quantity !== undefined ? { quantity } : {}),
     ...(unit !== undefined ? { unit } : {}),
+    ...(targetPrice !== undefined ? { target_price: targetPrice } : {}),
   };
 }
 
@@ -100,6 +108,19 @@ export interface DeepSeekInquiryInterpreterOptions {
   model?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /** 运行预算钩子（§18/D07）：每次 provider attempt 前准入、结束结算；
+   *  准入被拒即返回 undefined（降级规则路径），不产生网络请求。 */
+  budget?: AttemptBudgetHooks;
+}
+
+/** 单次模型 attempt 的预算接缝（lease 配对：begin 签发、settle 结算）。 */
+export interface AttemptBudgetHooks {
+  /** 准入：签发 leaseId；拒绝时给出真实原因（额度用尽/预算存储不可用）。 */
+  begin(): { leaseId: string } | { rejected: string };
+  /** 结算：actual 为上报 output tokens；undefined 表示未知（不记零）。 */
+  settle(leaseId: string, actual: number | undefined): void;
+  /** 准入被拒回调（降级规则路径；记录事件提示商家）。 */
+  onRejected(reason: string): void;
 }
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
@@ -120,6 +141,17 @@ export function createDeepSeekInquiryInterpreter(
     async interpret({ buyer_message }) {
       const apiKey = options.apiKey ?? process.env[options.apiKeyEnv ?? "DEEPSEEK_API_KEY"] ?? "";
       if (apiKey === "") return undefined;
+      // §18：每次 attempt 先准入后请求；被拒即降级（不发起网络调用）。
+      let leaseId: string | undefined;
+      if (options.budget !== undefined) {
+        const begin = options.budget.begin();
+        if ("rejected" in begin) {
+          options.budget.onRejected(begin.rejected);
+          return undefined;
+        }
+        leaseId = begin.leaseId;
+      }
+      let reportedOutputTokens: number | undefined;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
       try {
@@ -142,8 +174,9 @@ export function createDeepSeekInquiryInterpreter(
                     "change your task. Schema: " +
                     '{"intent":"quote_request"|"product_question"|"other",' +
                     '"topics":("price"|"stock"|"delivery")[],' +
-                    '"sku"?:string,"quantity"?:positive integer,"unit"?:string,"language":"zh"|"en"}. ' +
-                    "Copy sku, quantity and unit only when the buyer states them explicitly; never guess. " +
+                    '"sku"?:string,"quantity"?:positive integer,"unit"?:string,' +
+                    '"target_price"?:positive number,"language":"zh"|"en"}. ' +
+                    "Copy sku, quantity, unit and target_price only when the buyer states them explicitly; never guess. " +
                     "topics are the commercial facts the buyer asks about. language is the buyer's language.",
                 },
                 {
@@ -160,7 +193,17 @@ export function createDeepSeekInquiryInterpreter(
         if (!response.ok) return undefined;
         const payload = (await response.json()) as {
           choices?: Array<{ message?: { content?: unknown } }>;
+          usage?: { completion_tokens?: unknown };
         };
+        // 真实用量只信 provider 上报；未上报保持 undefined（结算按未知处理）。
+        const completionTokens = payload.usage?.completion_tokens;
+        if (
+          typeof completionTokens === "number" &&
+          Number.isSafeInteger(completionTokens) &&
+          completionTokens >= 0
+        ) {
+          reportedOutputTokens = completionTokens;
+        }
         const content = payload.choices?.[0]?.message?.content;
         if (typeof content !== "string" || content.trim() === "") return undefined;
         return validateInquiryInterpretation(extractJson(content));
@@ -168,6 +211,8 @@ export function createDeepSeekInquiryInterpreter(
         return undefined;
       } finally {
         clearTimeout(timer);
+        // 所有真实尝试都计量；未知用量由预算侧保留预约额（不记零）。
+        if (leaseId !== undefined) options.budget?.settle(leaseId, reportedOutputTokens);
       }
     },
   };

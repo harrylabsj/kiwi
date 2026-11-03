@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ReceptionConversationStore } from "../src/a2a/reception/conversation-store.js";
 import { createMerchantReceptionEngine } from "../src/a2a/reception/engine.js";
+import { ReceptionReplyOutbox } from "../src/a2a/reception/reply-outbox.js";
 import {
   InMemoryFactRegistry,
   publishResponsePlan,
@@ -167,6 +168,7 @@ describe("engine 产出计划的发布约束", () => {
         file: join(dir, "conversations.json"),
         now: () => NOW,
       }),
+      outbox: new ReceptionReplyOutbox({ file: join(dir, "reply-outbox.json"), now: () => NOW }),
       interpreter,
       productSource: {
         async getProduct(sku: string) {
