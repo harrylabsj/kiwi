@@ -14,6 +14,9 @@ import {
   loadReceptionConfig,
 } from "../src/a2a/reception/config.js";
 import { NegotiationApprovalStore } from "../src/a2a/server/negotiation-approvals.js";
+import { createNegotiationOps } from "../src/merchant/negotiation-ops.js";
+import { detectNotifications } from "../src/merchant/watch/detect.js";
+import { emptyWatchState } from "../src/merchant/watch/state.js";
 
 describe("approval expiry sweep", () => {
   let dir: string;
@@ -79,6 +82,50 @@ describe("approval expiry sweep", () => {
     clock = "2026-12-31T00:00:00.000Z";
     expect(store.sweepExpired()).toHaveLength(0);
     expect(store.list("pending")).toHaveLength(1);
+  });
+});
+
+describe("ops snapshot -> watch notification chain", () => {
+  it("接待审批 pending 与到期都会进入 watch 通知", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kiwi-approval-chain-"));
+    let clock = "2026-11-03T04:00:00.000Z";
+    try {
+      const approvals = new NegotiationApprovalStore(dir, () => clock);
+      approvals.recordPending({
+        negotiation_id: "ctx_chain",
+        sku: "VQ-001",
+        currency: "CNY",
+        quantity: 1,
+        buyer_offer_minor: 10_000,
+        public_bound_minor: 11_400,
+        ttl_seconds: 900,
+      });
+      const ops = createNegotiationOps({
+        ledgerDir: join(dir, "a2a"),
+        approvals,
+        merchantId: "merchant-1",
+        version: "test",
+        now: () => clock,
+      });
+
+      const first = detectNotifications(emptyWatchState(clock), ops.snapshot(), {
+        channels: ["wecom"],
+        now: new Date(clock),
+      });
+      expect(first.notifications).toHaveLength(1);
+      expect(first.notifications[0]!.texts.wecom).toContain("待审批还价");
+
+      clock = "2026-11-03T04:15:00.000Z";
+      const second = detectNotifications(first.next, ops.snapshot(), {
+        channels: ["wecom"],
+        now: new Date(clock),
+      });
+      expect(second.notifications).toHaveLength(1);
+      expect(second.notifications[0]!.texts.wecom).toContain("审批已过期");
+      expect(second.notifications[0]!.texts.wecom).not.toContain("私有底价");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
