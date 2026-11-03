@@ -3242,7 +3242,7 @@
     },
     {
       "path": "src/buyer-core/build-service.ts",
-      "sha256": "sha256:0dc988f20b146c09fac6181ffc0a0227b8dd2b8e81e3647dd6743bbff88cba3b"
+      "sha256": "sha256:a9997fcb98b5dd80aebfd8ce808fd4dc34154862ead6e893d1c4550c10cb10c3"
     },
     {
       "path": "src/buyer-core/errors.ts",
@@ -4862,9 +4862,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:05bf8b93ca54236789ada0b821a988ddee8cec670ac5faa3b39883e30e12bdb4",
+      "sha256": "sha256:2582a61584f262fd4aebceddfbdfa72cb1ef66e5bb56c4c5b0709c488717cf12",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:ae05033cbdf622b05d2b6d46530dd471e2aad6f85e63fc9a383e2577499adc76"
+      "raw_sha256": "sha256:04e512e2ff203fe1419103d24caf929f06d7b03f2bbbfd85c33d620ec275e46e"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -5289,6 +5289,10 @@
     {
       "path": "tests/binding-verification.test.ts",
       "sha256": "sha256:3d469f366a12c43a387077bba5708e034fd0b99a83d37bb8b184e71910d9a5fd"
+    },
+    {
+      "path": "tests/build-service-catalog-origin.test.ts",
+      "sha256": "sha256:a2b842dadaf0d33428f6079e1914feb5c946baafe92e994fba90ca1c31458295"
     },
     {
       "path": "tests/buyer-authorization-limits.test.ts",
