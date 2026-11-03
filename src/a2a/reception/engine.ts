@@ -1,6 +1,6 @@
 /**
  * 商家 AI 接待引擎（P0a）：
- *   买家原文 → 意图候选（模型）→ 商品源事实 → 类型化 ResponsePlan → zh-CN 文本。
+ *   买家原文 → 意图候选（模型）→ 商品源事实 → 类型化 ResponsePlan → 发布校验 → zh-CN 文本。
  *
  * 红线：
  *  - 模型只负责理解（SKU/数量/单位/主题），不生成价格、库存或交期；
@@ -12,6 +12,7 @@
 import type { MerchantPolicy } from "../../config/profile.js";
 import type { InquiryInterpreter } from "../server/inquiry-interpreter.js";
 import type { ReceptionConversationStore } from "./conversation-store.js";
+import { factRevision, InMemoryFactRegistry, publishResponsePlan } from "./publish.js";
 import type {
   CommercialFacts,
   ReceptionBlock,
@@ -26,6 +27,8 @@ export interface ReceptionProductSource {
     currency: string;
     stock?: number;
     unit?: string;
+    /** 数据有效期（ISO）；过期数据不得包装成当前有效报价。 */
+    valid_until?: string;
   }>;
 }
 
@@ -83,55 +86,9 @@ function privateFloorMajor(policy: MerchantPolicy | undefined, sku: string): num
   return typeof floor === "number" && Number.isFinite(floor) ? floor : undefined;
 }
 
-function render(plan: ReceptionResponsePlan): string {
-  const lines: string[] = [];
-  for (const block of plan.blocks) {
-    switch (block.kind) {
-      case "acknowledge_need": {
-        const parts: string[] = [];
-        if (block.sku !== undefined) parts.push(`SKU ${block.sku}`);
-        if (block.quantity !== undefined) {
-          parts.push(
-            block.unit !== undefined ? `${block.quantity} ${block.unit}` : `${block.quantity}`,
-          );
-        }
-        if (parts.length > 0) lines.push(`已记录需求：${parts.join("，")}。`);
-        break;
-      }
-      case "ask_clarification": {
-        if (block.reason === "non_chinese") {
-          lines.push("目前仅支持中文接待。请用中文说明需要的商品、数量和单位，或发送结构化 RFQ。");
-        } else if (block.reason === "empty_message") {
-          lines.push("请说明需要的商品、数量和单位。");
-        } else if (block.reason === "unknown_sku") {
-          lines.push("暂时无法从商品源确认该 SKU，请核对后重试。");
-        } else {
-          lines.push("请提供商品 SKU；如已知数量与单位也请一并说明。");
-        }
-        break;
-      }
-      case "show_commercial_terms": {
-        const facts = block.facts;
-        if (facts.listPrice !== undefined && facts.currency !== undefined) {
-          lines.push(`当前公开标价 ${facts.listPrice.toFixed(2)} ${facts.currency}。`);
-        }
-        if (facts.stockAvailable === true) lines.push("库存可以覆盖本次数量。");
-        if (facts.stockAvailable === false) lines.push("当前库存不足以覆盖本次数量。");
-        if (facts.stockAvailable === undefined) lines.push("库存状态待确认。");
-        if (facts.deliveryBefore !== undefined) {
-          lines.push(`预计交期不晚于 ${facts.deliveryBefore.slice(0, 10)}。`);
-        } else {
-          lines.push("交期待确认。");
-        }
-        break;
-      }
-      case "next_step":
-        lines.push("以上为非约束性信息；请发送 RFQ（SKU、数量、单位）获取正式报价。");
-        break;
-    }
-  }
-  return lines.join(" ");
-}
+/** 发布结果为空（所有块被拒绝）时的固定兜底，不回显原文、不编造事实。 */
+const EMPTY_PUBLISH_FALLBACK =
+  "抱歉，当前无法处理这条消息，请稍后重试，或直接发送 RFQ（SKU、数量、单位）。";
 
 export function createMerchantReceptionEngine(
   deps: MerchantReceptionEngineDeps,
@@ -141,12 +98,14 @@ export function createMerchantReceptionEngine(
       const text = input.text.trim().slice(0, BUYER_MESSAGE_MAX_CHARS);
       const structuredSku = input.structured?.sku;
       const previous = deps.store.get(input.merchantId, input.identity, input.contextId);
+      // 每回合事实注册表：快照只在发布当回合有效（不持久化、不跨回合复用）。
+      const registry = new InMemoryFactRegistry();
 
       if (text === "" && structuredSku === undefined) {
-        return finish(input, previous, [{ kind: "ask_clarification", missing: ["sku"], reason: "empty_message" }]);
+        return finish(input, previous, registry, [{ kind: "ask_clarification", missing: ["sku"], reason: "empty_message" }]);
       }
       if (text !== "" && looksNonChinese(text) && structuredSku === undefined) {
-        return finish(input, previous, [
+        return finish(input, previous, registry, [
           { kind: "ask_clarification", missing: ["sku"], reason: "non_chinese" },
         ]);
       }
@@ -169,6 +128,7 @@ export function createMerchantReceptionEngine(
         return finish(
           input,
           previous,
+          registry,
           [{ kind: "ask_clarification", missing: ["sku"], reason: "missing_sku" }],
           { quantity, unit },
         );
@@ -178,6 +138,7 @@ export function createMerchantReceptionEngine(
         return finish(
           input,
           previous,
+          registry,
           [{ kind: "ask_clarification", missing: ["sku"], reason: "unknown_sku" }],
         );
       }
@@ -188,6 +149,7 @@ export function createMerchantReceptionEngine(
         return finish(
           input,
           previous,
+          registry,
           [{ kind: "ask_clarification", missing: ["sku"], reason: "unknown_sku" }],
         );
       }
@@ -195,6 +157,16 @@ export function createMerchantReceptionEngine(
       const policy = deps.policy?.();
       const floor = privateFloorMajor(policy, sku);
       const facts = factsForWithSku(product, quantity, policy, floor, input.now);
+      // 事实快照注册后只以引用进入计划；发布器从同一快照渲染（§11）。
+      const snapshotBase = {
+        merchantId: input.merchantId,
+        sku,
+        visibility: "public" as const,
+        issuedAt: input.now,
+        ...(product.valid_until !== undefined ? { expiresAt: product.valid_until } : {}),
+        facts,
+      };
+      const ref = registry.register({ ...snapshotBase, revision: factRevision(snapshotBase) });
       const blocks: ReceptionBlock[] = [
         {
           kind: "acknowledge_need",
@@ -202,16 +174,17 @@ export function createMerchantReceptionEngine(
           ...(quantity !== undefined ? { quantity } : {}),
           ...(unit !== undefined ? { unit } : {}),
         },
-        { kind: "show_commercial_terms", facts },
+        { kind: "show_commercial_terms", ref },
         { kind: "next_step", action: "send_rfq" },
       ];
-      return finish(input, previous, blocks, { sku, quantity, unit });
+      return finish(input, previous, registry, blocks, { sku, quantity, unit });
     },
   };
 
   function finish(
     input: ReceptionEngineInput,
     previous: ReceptionConversation | undefined,
+    registry: InMemoryFactRegistry,
     blocks: ReceptionBlock[],
     need?: Partial<Pick<ReceptionNeed, "sku" | "quantity" | "unit">>,
   ): ReceptionEngineResult {
@@ -226,7 +199,15 @@ export function createMerchantReceptionEngine(
       ...(merged.unit !== undefined ? { unit: merged.unit } : {}),
     });
     const plan: ReceptionResponsePlan = { locale: "zh-CN", blocks };
-    return { plan, text: render(plan), conversation };
+    // 发布前校验（引用存在性/版本/租户/可见性/有效期）后才渲染公开文本。
+    const published = publishResponsePlan({
+      plan,
+      registry,
+      merchantId: input.merchantId,
+      now: input.now,
+    });
+    const text = published.text === "" ? EMPTY_PUBLISH_FALLBACK : published.text;
+    return { plan, text, conversation };
   }
 }
 
