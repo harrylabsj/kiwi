@@ -95,11 +95,53 @@ describe("actual handler source facts and accept preconditions", () => {
     expect(r.kind === "declined" && r.reasonCode).toBe("field_unsupported");
   });
 
-  it("keeps a merchant explicit alias authoritative over the built-in box/盒 pair", async () => {
-    const f = setup(base(), undefined, undefined, { unitAliases: { "盒": "piece" } });
+  it("keeps exact box request 1:1 even when an explicit alias binds 盒 to default_unit", async () => {
+    const f = setup(base(), undefined, undefined, {
+      unitAliases: { "盒": "piece" },
+      unitDefaultUnit: "piece",
+    });
+    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "box" } }] });
+    const env = outgoing(r);
+    expect((env.payload as { terms: { items: Array<{ quantity: unknown; unit_price: unknown }> } }).terms.items).toEqual([
+      { sku: "SKU", quantity: { value: 5, unit: "box" }, unit_price: { currency: "CNY", amount_minor: 10000 } },
+    ]);
+  });
+
+  it("rejects folded box/盒 when alias binds 盒 to a different default_unit", async () => {
+    const f = setup(base(), undefined, undefined, {
+      unitAliases: { "盒": "piece" },
+      unitDefaultUnit: "piece",
+    });
     const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "盒" } }] });
     expect(r.kind === "declined" && r.reasonCode).toBe("field_unsupported");
   });
+
+  it.each([
+    { productUnit: "盒", requestUnit: "盒", accepted: true },
+    { productUnit: "box", requestUnit: "box", accepted: true },
+    { productUnit: "盒", requestUnit: "box", accepted: false },
+    { productUnit: "box", requestUnit: "盒", accepted: false },
+  ])(
+    "default_unit=盒 + factor box:12 distinguishes exact/folded spelling %j",
+    async ({ productUnit, requestUnit, accepted }) => {
+      const f = setup({ ...base(), unit: productUnit }, undefined, undefined, {
+        unitPackageFactors: { box: 12 },
+        unitDefaultUnit: "盒",
+      });
+      const r = await f.send("rfq", {
+        type: "rfq",
+        items: [{ sku: "SKU", quantity: { value: 2, unit: requestUnit } }],
+      });
+      if (!accepted) {
+        expect(r.kind === "declined" && r.reasonCode).toBe("field_unsupported");
+        return;
+      }
+      const env = outgoing(r);
+      expect((env.payload as { terms: { items: Array<{ quantity: unknown; unit_price: unknown }> } }).terms.items).toEqual([
+        { sku: "SKU", quantity: { value: 2, unit: requestUnit }, unit_price: { currency: "CNY", amount_minor: 10000 } },
+      ]);
+    },
+  );
 
   it("rejects conflicting normalized package-factor configuration at handler construction", () => {
     expect(() =>
@@ -118,9 +160,10 @@ describe("actual handler source facts and accept preconditions", () => {
     ]);
   });
 
-  it("rejects a KNP package-factor conflict instead of treating box/盒 as 1:1", async () => {
-    const f = setup({ ...base(), unit: "盒" }, undefined, undefined, {
+  it("rejects a KNP package-factor conversion when the source is the factor target", async () => {
+    const f = setup({ ...base(), unit: "piece" }, undefined, undefined, {
       unitPackageFactors: { "ＢＯＸ": 12 },
+      unitDefaultUnit: "piece",
     });
     for (const action of ["rfq", "offer", "counter_offer"] as const) {
       const payload =
@@ -134,8 +177,11 @@ describe("actual handler source facts and accept preconditions", () => {
     }
   });
 
-  it("keeps box/盒 1:1 quantity and amount across offer and accept", async () => {
-    const f = setup(base());
+  it("keeps box/盒 1:1 quantity and amount across offer and accept even with factor config", async () => {
+    const f = setup({ ...base(), stock: 10 }, undefined, undefined, {
+      unitPackageFactors: { box: 12 },
+      unitDefaultUnit: "piece",
+    });
     const q = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "盒" } }] });
     const quote = outgoing(q);
     expect((quote.payload as { terms: { items: Array<{ quantity: unknown; unit_price: unknown }> } }).terms.items).toEqual([
@@ -144,7 +190,10 @@ describe("actual handler source facts and accept preconditions", () => {
     const accepted = await f.accept(q);
     expect(accepted.kind).toBe("accepted");
 
-    const counterF = setup(base());
+    const counterF = setup({ ...base(), stock: 10 }, undefined, undefined, {
+      unitPackageFactors: { box: 12 },
+      unitDefaultUnit: "piece",
+    });
     const counter = await counterF.send("offer", {
       type: "offer",
       offer_id: "off_buyer",
@@ -153,6 +202,49 @@ describe("actual handler source facts and accept preconditions", () => {
     const proposed = (outgoing(counter).payload as { proposed_terms: { items: Array<{ quantity: unknown; unit_price: unknown }> } }).proposed_terms;
     expect(proposed.items[0]?.quantity).toEqual({ value: 5, unit: "盒" });
     expect(proposed.items[0]?.unit_price).toEqual({ currency: "CNY", amount_minor: 10000 });
+  });
+
+  it.each(["box", "盒"])("keeps source box/%s as 1:1 when default_unit is piece and factor box:12 is configured", async unit => {
+    const f = setup({ ...base(), unit: "box", stock: 10 }, undefined, undefined, {
+      unitPackageFactors: { box: 12 },
+      unitDefaultUnit: "piece",
+    });
+    const r = await f.send("rfq", {
+      type: "rfq",
+      items: [{ sku: "SKU", quantity: { value: 2, unit } }],
+    });
+    const env = outgoing(r);
+    expect((env.payload as { terms: { items: Array<{ quantity: unknown; unit_price: unknown }> } }).terms.items).toEqual([
+      { sku: "SKU", quantity: { value: 2, unit }, unit_price: { currency: "CNY", amount_minor: 10000 } },
+    ]);
+  });
+
+  it("rejects a factor when the source unit is neither the request nor default_unit", async () => {
+    const f = setup({ ...base(), unit: "kg" }, undefined, undefined, {
+      unitPackageFactors: { box: 12 },
+      unitDefaultUnit: "piece",
+    });
+    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 2, unit: "box" } }] });
+    expect(r.kind === "declined" && r.reasonCode).toBe("field_unsupported");
+  });
+
+  it("rejects alias/factor ambiguity for the same requested package unit", async () => {
+    const f = setup({ ...base(), unit: "piece" }, undefined, undefined, {
+      unitAliases: { "盒": "piece" },
+      unitPackageFactors: { box: 12 },
+      unitDefaultUnit: "piece",
+    });
+    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 2, unit: "盒" } }] });
+    expect(r.kind === "declined" && r.reasonCode).toBe("field_unsupported");
+  });
+
+  it("fails closed when MerchantHandlerOptions passes factor=1 but the source is not the target", async () => {
+    const f = setup({ ...base(), unit: "kg" }, undefined, undefined, {
+      unitPackageFactors: { box: 1 },
+      unitDefaultUnit: "piece",
+    });
+    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 2, unit: "box" } }] });
+    expect(r.kind === "declined" && r.reasonCode).toBe("field_unsupported");
   });
 
   it("still refuses an alias the merchant did not declare", async () => {

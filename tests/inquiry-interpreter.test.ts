@@ -25,6 +25,7 @@ describe("validateInquiryInterpretation", () => {
       intent: "quote_request",
       topics: ["price", "stock"],
       sku: "SKU-001",
+      skus: ["SKU-001"],
       quantity: 10,
       unit: "piece",
       language: "zh",
@@ -93,6 +94,7 @@ describe("createDeepSeekInquiryInterpreter", () => {
       intent: "quote_request",
       topics: ["stock"],
       sku: "SKU-001",
+      skus: ["SKU-001"],
       quantity: 3,
       language: "en",
     });

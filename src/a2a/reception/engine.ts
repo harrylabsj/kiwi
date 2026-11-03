@@ -16,10 +16,9 @@ import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shop
 import type { InquiryInterpreter, InquiryTopic } from "../server/inquiry-interpreter.js";
 import { applyDiscountPercentMinor } from "../server/merchant-handler.js";
 import {
-  canonicalUnitToken,
-  normalizeUnitAliasMap,
-  normalizeUnitFactorMap,
-  unitsAreCanonicalAliases,
+  multiplyQuantitySafe,
+  resolveUnitConversion,
+  unitConversionPolicy,
 } from "../unit-alias.js";
 import type { ReceptionAgentRuntime } from "./agent-runtime.js";
 import { RECEPTION_CONFIG_DEFAULTS } from "./config.js";
@@ -141,8 +140,15 @@ export interface MerchantReceptionEngineDeps {
   agent?: ReceptionAgentRuntime;
   /** 商家声明的单位别名（别名 → 商品源单位）；不配置就只接受完全一致。 */
   unitAliases?: Record<string, string>;
-  /** 商家声明的包装倍率（包装单位 → 1 包装 = N 个商品源单位）。 */
+  /** 商家声明的包装倍率（包装单位 → 1 包装 = N 个 default_unit）。 */
   unitPackageFactors?: Record<string, number>;
+  /**
+   * 商家的默认售卖单位；倍率只对以此为目标单位的商品源生效。
+   *
+   * 迁移：旧公开构造器只传 unitPackageFactors 时仍保留历史换算行为；
+   * 新调用方应同时传 unitDefaultUnit，才能得到 source-target-safe 语义。
+   */
+  unitDefaultUnit?: string;
   /** 单次 respond 的硬截止（毫秒，D07/§18 缺省 30 秒，从 admitted_at 起算）；
    *  超时后不再发起模型/事实工具调用，降级确定性回复。 */
   deadlineMs?: number;
@@ -274,8 +280,11 @@ const EMPTY_PUBLISH_FALLBACK =
 export function createMerchantReceptionEngine(
   deps: MerchantReceptionEngineDeps,
 ): ReceptionEngine {
-  const unitAliases = normalizeUnitAliasMap(deps.unitAliases);
-  const unitPackageFactors = normalizeUnitFactorMap(deps.unitPackageFactors);
+  const unitPolicy = unitConversionPolicy({
+    aliases: deps.unitAliases,
+    packageFactors: deps.unitPackageFactors,
+    ...(deps.unitDefaultUnit !== undefined ? { defaultUnit: deps.unitDefaultUnit } : {}),
+  });
   return {
     async respond(input) {
       // §17.1：每次接待写入前先固化已到期的审批，避免新会话面对陈旧 pending。
@@ -535,13 +544,11 @@ export function createMerchantReceptionEngine(
           );
         }
       }
-      // AC06：显式商家包装倍率/别名优先，且即使 box/盒 规范化后相同也必须
-      // 检查显式配置；未配置时才使用内建 1:1，不做个/件到盒的换算。
+      // AC06：商品源单位与请求同义时始终 1:1；包装倍率只对 default_unit
+      // 目标生效，其他情况或别名冲突一律安全拒绝，不猜倍率。
       if (product.unit !== undefined && unit !== undefined) {
-        const requestedKey = canonicalUnitToken(unit);
-        const productKey = canonicalUnitToken(product.unit);
-        const factor = unitPackageFactors[requestedKey];
-        if (factor !== undefined) {
+        const resolution = resolveUnitConversion(unitPolicy, product.unit, unit);
+        if (resolution.kind === "factor") {
           // AC06：使用商家声明的包装倍率；没有数量时先问数量，绝不猜 1 箱=1 件。
           if (quantity === undefined) {
             return finish(
@@ -553,22 +560,23 @@ export function createMerchantReceptionEngine(
               stated,
             );
           }
-          convertedFrom = { quantity, unit, factor };
-          quantity = quantity * factor;
-          unit = product.unit;
-        } else if (Object.hasOwn(unitAliases, requestedKey)) {
-          if (unitAliases[requestedKey] !== productKey) {
+          const convertedQuantity = multiplyQuantitySafe(quantity, resolution.factor);
+          if (convertedQuantity === undefined) {
             return finish(
               input,
               previous,
               registry,
-              [{ kind: "ask_clarification", missing: ["sku"], reason: "unit_mismatch", supportedUnit: product.unit }],
+              [{ kind: "ask_clarification", missing: ["quantity"], reason: "quantity_overflow" }],
               { sku, quantity },
               stated,
             );
           }
+          convertedFrom = { quantity, unit, factor: resolution.factor };
+          quantity = convertedQuantity;
           unit = product.unit;
-        } else if (requestedKey !== productKey && !unitsAreCanonicalAliases(requestedKey, productKey)) {
+        } else if (resolution.kind === "identity" || resolution.kind === "alias") {
+          unit = product.unit;
+        } else {
           return finish(
             input,
             previous,
@@ -584,8 +592,6 @@ export function createMerchantReceptionEngine(
             { sku, quantity },
             stated,
           );
-        } else {
-          unit = product.unit;
         }
       }
 

@@ -3,8 +3,11 @@
 ## v0.12.24 — 2026-11-04
 
 - **linkluck `box` / `盒` 单位修复**：商家商品单位为 `box`、买家使用 `盒` 时按明确 1:1 别名接受，反向 `盒` / `box` 同样匹配；不改变数量、单价或金额，也不把 `个` / `件` 自动换算成 `box`。
-- **显式商家配置优先**：`unit_aliases` / `unit_package_factors` 的键先做 NFKC、大小写及 `box`/`盒` 归一；同一归一键的不同值在构造期拒绝，不再静默覆盖。显式包装倍率优先于内建 1:1；KNP 对无法安全换算的倍率（非 1）在 RFQ/offer/counter/accept 拒绝，reception 路径按商家显式倍率换算。
+- **显式商家配置优先**：`unit_aliases` / `unit_package_factors` 的键先做 NFKC、大小写及 `box`/`盒` 归一；同一归一键的不同值在构造期拒绝，不再静默覆盖。包装倍率只在商品源单位为 `default_unit` 时生效；商品源单位与请求同义时保持 1:1，歧义/别名冲突安全拒绝；KNP 对无法安全换算的倍率（非 1）在 RFQ/offer/counter/accept 拒绝，reception 路径按商家显式倍率换算。
 - 回归覆盖大小写/全角冲突、双向 `box`/`盒`、offer/counter/accept 金额与单位，以及 `个`/`件` 不兼容单位。
+- **单位配置启动前校验**：profile 的 `unit_package_factors` 归一后重复键仅允许相同倍率；不同倍率、归一后等于 `default_unit` 的倍率、alias 与 factor 同键冲突均在加载时给出带原始键和归一单位的错误，保留同值冗余写法兼容并 fail-closed。
+- **包装倍率溢出保护**：reception 两条路径在 `quantity * factor` 后检查安全整数；溢出时拒绝并提示减少数量，不进入库存/报价/金额计算。
+- **单位配置迁移**：直接调用 reception 构造器且只传 `unitPackageFactors` 的旧形式保留历史换算；新调用方应传 `unitDefaultUnit`。旧 profile 的 `default_unit=盒` + `unit_package_factors: {box: 12}` 现在会在加载时 fail-closed 并给出清晰提示；不自动修改商家倍率，需人工确认包装语义后改配置。
 
 ## v0.12.23 — 2026-11-03
 

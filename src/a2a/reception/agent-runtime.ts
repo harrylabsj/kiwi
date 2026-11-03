@@ -28,10 +28,9 @@ import type { Api, Message, Model, TSchema } from "@earendil-works/pi-ai";
 import type { MerchantPolicy } from "../../config/profile.js";
 import type { AttemptBudgetHooks } from "../server/inquiry-interpreter.js";
 import {
-  canonicalUnitToken,
-  normalizeUnitAliasMap,
-  normalizeUnitFactorMap,
-  unitsAreCanonicalAliases,
+  multiplyQuantitySafe,
+  resolveUnitConversion,
+  unitConversionPolicy,
 } from "../unit-alias.js";
 import type { ReceptionProductSource } from "./engine.js";
 import { factRevision, type InMemoryFactRegistry } from "./publish.js";
@@ -98,6 +97,11 @@ export interface PiReceptionRuntimeOptions {
   policy?: () => MerchantPolicy | undefined;
   unitAliases?: Record<string, string>;
   unitPackageFactors?: Record<string, number>;
+  /**
+   * 商家的默认售卖单位；倍率只对以此为目标单位的商品源生效。
+   * 旧调用形式不传时保留历史 factor 换算；新调用方应显式传入。
+   */
+  unitDefaultUnit?: string;
   maxSteps?: number;
   maxToolAttempts?: number;
   timeoutMs?: number;
@@ -274,8 +278,11 @@ function deliveryBefore(policy: MerchantPolicy | undefined, now: string): string
 export function createPiReceptionRuntime(
   options: PiReceptionRuntimeOptions,
 ): ReceptionAgentRuntime {
-  const unitAliases = normalizeUnitAliasMap(options.unitAliases);
-  const unitPackageFactors = normalizeUnitFactorMap(options.unitPackageFactors);
+  const unitPolicy = unitConversionPolicy({
+    aliases: options.unitAliases,
+    packageFactors: options.unitPackageFactors,
+    ...(options.unitDefaultUnit !== undefined ? { defaultUnit: options.unitDefaultUnit } : {}),
+  });
   return {
     async run(input) {
       const policy = options.policy?.();
@@ -466,34 +473,31 @@ export function createPiReceptionRuntime(
                 return toolResult(JSON.stringify({ error: "facts_stale" }));
               }
             }
-            // AC06：显式商家包装倍率/别名优先，且即使 box/盒 规范化后相同也要
-            // 检查显式配置；未配置时才使用内建 1:1，不做个/件到盒的换算。
+            // AC06：商品源单位与请求同义时始终 1:1；包装倍率只对 default_unit
+            // 目标生效，其他情况或别名冲突一律安全拒绝，不猜倍率。
             let unit = requestedUnit;
             let effectiveQuantity = quantity;
             if (product.unit !== undefined && requestedUnit !== undefined) {
-              const requestedKey = canonicalUnitToken(requestedUnit);
-              const productKey = canonicalUnitToken(product.unit);
-              const factor = unitPackageFactors[requestedKey];
-              if (factor !== undefined) {
+              const resolution = resolveUnitConversion(unitPolicy, product.unit, requestedUnit);
+              if (resolution.kind === "factor") {
                 if (quantity === undefined) {
                   return toolResult(JSON.stringify({ error: "missing_quantity" }));
                 }
-                effectiveQuantity = quantity * factor;
-                unit = product.unit;
-              } else if (Object.hasOwn(unitAliases, requestedKey)) {
-                if (unitAliases[requestedKey] !== productKey) {
-                  return toolResult(JSON.stringify({ error: "unit_mismatch", supported_unit: product.unit }));
+                const convertedQuantity = multiplyQuantitySafe(quantity, resolution.factor);
+                if (convertedQuantity === undefined) {
+                  return toolResult(JSON.stringify({ error: "quantity_overflow" }));
                 }
+                effectiveQuantity = convertedQuantity;
                 unit = product.unit;
-              } else if (requestedKey !== productKey && !unitsAreCanonicalAliases(requestedKey, productKey)) {
+              } else if (resolution.kind === "identity" || resolution.kind === "alias") {
+                unit = product.unit;
+              } else {
                 return toolResult(
                   JSON.stringify({
                     error: "unit_mismatch",
                     supported_unit: product.unit,
                   }),
                 );
-              } else {
-                unit = product.unit;
               }
             }
             const floorMinor = policyFloorMinor(policy, sku);
