@@ -163,6 +163,11 @@ export interface AgentProfile {
      * 显式配置才生效，避免隐式同义词把价格算错。
      */
     unit_aliases?: string[];
+    /**
+     * 商家声明的包装换算：`{ "箱": 12 }` 表示 1 箱 = 12 个 default_unit。
+     * 只在显式配置时生效；未配置时不同单位一律澄清，不猜倍率。
+     */
+    unit_package_factors?: Record<string, number>;
   };
   model: {
     provider: string;
@@ -286,7 +291,7 @@ function isUnitToken(value: unknown): boolean {
   return true;
 }
 
-const COMMERCE_KEYS = ["base_url", "token_env", "backend", "credentials", "allow_demo_price_fallback", "default_unit", "unit_aliases"] as const;
+const COMMERCE_KEYS = ["base_url", "token_env", "backend", "credentials", "allow_demo_price_fallback", "default_unit", "unit_aliases", "unit_package_factors"] as const;
 const MODEL_KEYS = [
   "provider",
   "model",
@@ -637,6 +642,37 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     for (const alias of rawUnitAliases as unknown[]) {
       req(isUnitToken(alias), `${source}: commerce.unit_aliases entries must be short unit tokens`);
     }
+  }
+  const rawPackageFactors = commerce.unit_package_factors;
+  let unitPackageFactors: Record<string, number> | undefined;
+  if (rawPackageFactors !== undefined) {
+    req(
+      isObject(rawPackageFactors) &&
+        Object.keys(rawPackageFactors).length > 0 &&
+        Object.keys(rawPackageFactors).length <= 12,
+      `${source}: commerce.unit_package_factors must be a non-empty object of at most 12 entries`,
+    );
+    req(
+      defaultUnit !== undefined,
+      `${source}: commerce.unit_package_factors requires commerce.default_unit`,
+    );
+    const entries: Record<string, number> = {};
+    for (const [unit, factor] of Object.entries(rawPackageFactors as Record<string, unknown>)) {
+      req(isUnitToken(unit), `${source}: commerce.unit_package_factors keys must be short unit tokens`);
+      req(
+        unit !== defaultUnit,
+        `${source}: commerce.unit_package_factors must not define the default unit itself`,
+      );
+      req(
+        typeof factor === "number" &&
+          Number.isSafeInteger(factor) &&
+          factor >= 2 &&
+          factor <= 10_000,
+        `${source}: commerce.unit_package_factors values must be integers in 2..10000`,
+      );
+      entries[unit] = factor;
+    }
+    unitPackageFactors = entries;
   }
   rejectUnknownKeys(commerce, COMMERCE_KEYS, "commerce", source);
 
@@ -1012,6 +1048,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
       ...(rawUnitAliases !== undefined
         ? { unit_aliases: (rawUnitAliases as unknown[]).map((alias) => String(alias).trim()) }
         : {}),
+      ...(unitPackageFactors !== undefined ? { unit_package_factors: unitPackageFactors } : {}),
     },
     model: {
       provider: model.provider,

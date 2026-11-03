@@ -29,7 +29,7 @@
 | AC | 状态 | 证据 / 说明 |
 |----|------|-------------|
 | AC01 | 部分就绪 | 缺 SKU/空消息追问：`merchant-reception.test.ts`、Q04/Q05；真实 provider 回合 trace 待 M6 |
-| AC02 | 部分就绪 | 本店商品候选搜索（标题/SKU 本地匹配）已接入：唯一命中直接回答、多命中请买家选择：`merchant-reception-search.test.ts`；模型比较与推荐理由仍待 Pi 工具循环 |
+| AC02 | 部分就绪 | 本店商品候选搜索 + `compare_products` 只读比较；`recommend_option` 仅允许可验证理由（公开价最低/库存可覆盖）：`merchant-reception-search.test.ts`、`merchant-reception-recommend.test.ts`；用途匹配与商品知识解释仍待 M6/M3 后续 |
 | AC03 | 部分就绪 | 会话持久化 + revision 递增 + 重启恢复（重开文件）：`merchant-reception.test.ts`、Q07；指代消解质量待真实模型评分 |
 | AC04 | P0b 范围外 | "当前需求/未来意向"区分需要意向建模，P0a 只提取当前 quantity 与 target_price 候选 |
 | AC05 | P0b 范围外 | 知识库问答工具未在 P0a 范围 |
@@ -38,7 +38,7 @@
 
 | AC | 状态 | 证据 / 说明 |
 |----|------|-------------|
-| AC06 | 部分就绪 | unit 仅作候选透传、由商品源口径渲染；无换算表，"两箱"歧义澄清依赖模型候选质量（待 M6 评分） |
+| AC06 | 机制就绪 | 单位必须一致、命中 `commerce.unit_aliases`，或按 `commerce.unit_package_factors` 换算；换算保留原数量/单位（need.inputQuantity/inputUnit）并渲染依据；无规则时澄清：`merchant-reception-facts.test.ts`、`profile.test.ts` |
 | AC07 | P0b 范围外 | 需求模型无时限槽位，相对日期解析未实现 |
 | AC08 | 部分就绪 | 搜索多命中会列出候选并要求买家明确选择（不按价格/模型置信度自动选）：`merchant-reception-search.test.ts`；规格差异比较待商品知识工具 |
 | AC09 | 机制就绪 | 多商品请求明确提示并请买家选择（`skus` 候选 + `multiple_skus` 澄清，候选持久化后可用“第一个”选择）；KNP RFQ/offer/counter_offer 多行商品在推进相位前 decline `field_unsupported`，不静默只取 items[0]：`merchant-multi-item.test.ts` |
@@ -50,7 +50,7 @@
 |----|------|-------------|
 | AC11 | 机制就绪 | 事实快照 + 内容 digest 版本 + 有效期：`publish.ts`、`merchant-reception-publish.test.ts`、Q01 |
 | AC12 | 机制就绪 | 库存三态（足/不足/待确认）：`engine.ts` renderFacts、Q01/Q02；库存写接口不存在于接待路径 |
-| AC13 | 机制就绪 | 过期事实发布拒绝（expired）：Q08、`merchant-reception-publish.test.ts`；双权威源冲突 P0a 单源不出现 |
+| AC13 | 机制就绪 | 过期事实直接澄清、不报价、不创建审批；Pi facts 工具返回 `facts_stale`：Q08、`merchant-reception-facts.test.ts`；双权威源冲突 P0a 单源不出现 |
 | AC14 | 机制就绪 | 仅"预计交期"表述（D11）：Q03、`merchant-delivery-terms.test.ts` |
 | AC15 | P0b 范围外 | FulfillmentEvaluator 与替代方案推荐属 P0b（D11） |
 
@@ -58,7 +58,7 @@
 
 | AC | 状态 | 证据 / 说明 |
 |----|------|-------------|
-| AC16 | 机制就绪 | 确定性计价既有测试覆盖；接待只渲染商品源价格，不自行计价：Q01 |
+| AC16 | 机制就绪 | 确定性计价既有测试覆盖；接待只渲染商品源价格并按事实声明含税/含运费，未知时明确“待确认、标价不等于应付总额”：Q01、`merchant-reception-facts.test.ts` |
 | AC17 | 机制就绪 | 无 free_text 槽位，草稿数字无法进入回复：`publish.ts`、`merchant-reception-publish.test.ts` |
 | AC18 | 机制就绪 | 结构化字段权威于模型候选：`merchant-inquiry-reception.test.ts`、Q12/Q14 |
 | AC19 | 机制就绪 | CNY/数值边界校验走既有确定性路径：`merchant-handler-accept-validation.test.ts` |
@@ -70,7 +70,7 @@
 |----|------|-------------|
 | AC21 | 机制就绪 | 匿名可问答；接待不创建 KNP Offer/接受：`engine.ts`（next_step 仅提示发 RFQ） |
 | AC22 | 机制就绪 | 既有签名/角色校验：`a2a-signature-auth.test.ts` 等；接待无代理签名能力 |
-| AC23 | 部分就绪 | 会话/审批/outbox 按 merchant+主体+context 隔离、跨租户引用拒绝：`merchant-reception-active.test.ts`、`merchant-reception-publish.test.ts`；第二实例隔离待 D16（B.8-5：未部署前不得宣称通过） |
+| AC23 | 部分就绪 | 会话/审批/outbox 按 merchant+主体+context 隔离、跨租户引用拒绝：`merchant-reception-active.test.ts`、`merchant-reception-publish.test.ts`；本轮仅 Veyquo 单商家；多实例隔离不在范围（B.8-5） |
 | AC24 | 机制就绪 | 注入文本只作数据、接待无 shell/网络工具、守卫在模型外：Q15 |
 | AC25 | 机制就绪 | 既有管理面与凭据测试（`a359-credentials-*` 等）；接待不暴露配置写路径 |
 
@@ -101,7 +101,7 @@
 | AC36 | 机制就绪 | 健康探针（配置/连接/非空输出）已接入 `/ops/v1/reception/status|probe`：`probe.ts`、`reception-probe.test.ts`、`merchant-negotiation-ops.test.ts`；WorkBuddy 页面展示属宿主侧 |
 | AC37 | 机制就绪 | 随主包锁定依赖发布；接待无动态工具加载 |
 | AC38 | 机制就绪 | 接待默认关闭（`KIWI_MERCHANT_RECEPTION` 未设=off）；既有 A2A/KNP 回归全绿 |
-| AC39 | 部分就绪 | Q15 数据集 + 运行器已建（本文）；真实 provider 60 例×3 次评分待 M6 |
+| AC39 | 部分就绪 | Q15 数据集 + 脚本化运行器；真实 provider 已跑 13 场景×3=39 episodes 全过（`reception-q15-real.test.ts`）；完整 60 例×3 待 P0b |
 | AC40 | P0b 范围外 | /ops 会话级接管未在 P0a 实现（D09 的操作面待 WorkBuddy 侧落地） |
 
 ### 取消与运行边界（AC41–AC45）
@@ -112,7 +112,7 @@
 | AC42 | 机制就绪 | 无草稿旁路通道；计划先校验后渲染：`publish.ts` |
 | AC43 | 部分就绪 | 审批 pending 持久化重启恢复：`negotiation-approvals.ts`；分享撤权场景 P0b |
 | AC44 | 机制就绪 | 从 provider usage 采真实用量、未知不记零：`inquiry-interpreter.ts`、`merchant-reception-budget.test.ts` |
-| AC45 | 部分就绪 | 配置不经 process.env 切商家（接待 deps 注入）；第二商家并发验证待 D16 |
+| AC45 | 部分就绪 | 配置不经 process.env 切商家（接待 deps 注入）；本轮仅 Veyquo 单商家；多商家并发不在范围 |
 
 ### 统计、容量与删除（AC46–AC50）
 
@@ -131,7 +131,7 @@
 | AC51 | P0b 范围外 | 删除后重放/墓碑属 P0b（D10：P0a 不做加密擦除） |
 | AC52 | P0b 范围外 | 备份恢复删除登记属 P0b |
 | AC53 | 机制就绪 | 非中文→中文范围提示；结构化字段不受语言影响：Q14、`merchant-reception.test.ts` |
-| AC54 | 部分就绪 | Q15 运行器分母固定、硬门不平均；完整 180 试跑评分口径待 M6 |
+| AC54 | 部分就绪 | Q15 运行器分母固定、硬门不平均；真实 provider 39 试跑已报告；完整 180 试跑口径待 P0b |
 | AC55 | 机制就绪 | reply_seq 发布事务内严格递增：`merchant-reception-active.test.ts`、Q07；并发慢前序属 P0b |
 
 ### 投递、审批与删除竞态（AC56–AC60）
@@ -146,10 +146,10 @@
 
 ## 汇总
 
-- 机制就绪：26 条　部分就绪：15 条　P0b 范围外：19 条　已知缺口：0 条
+- 机制就绪：32 条　部分就绪：15 条　P0b 范围外：13 条　已知缺口：0 条
 - AC09 已补齐（`merchant-multi-item.test.ts`，2026-11-03）。
-- 不得宣称通过：AC23/AC45 的多实例隔离（D16 第二商家未建，B.8-5）；
-  AC39/AC54 的质量分（真实 provider 评分未执行）。
+- 不得宣称通过：AC23/AC45 的多实例隔离（本轮仅 Veyquo 单商家，B.8-5）；
+  AC39/AC54 的完整质量分（真实 provider Q15 子集 39/39 已执行；完整 60 例/180 试跑未执行）。
 
 ## 2026-11-03 评审修复记录
 
@@ -215,3 +215,51 @@
 - Pi 工具预算在 `beforeToolCall` 强制 `maxToolAttempts`（config 12）；指标
   记录各工具调用次数。
 - 配置新增 `KIWI_RECEPTION_RUNTIME=pi`（默认 deterministic），配置测试覆盖。
+
+## 2026-11-03 M3 第一片：事实时效、单位与税费
+
+- **事实时效（AC13）**：商品 `valid_until` 过期时接待直接澄清“商品数据已过期”，
+  不报价、不登记审批；Pi 的 `get_commercial_facts` 同样返回 `facts_stale`。
+- **单位/包装（AC06）**：买家单位必须与商品源单位一致，或命中商家声明的
+  `commerce.unit_aliases`；否则澄清“该商品按 X 售卖”，不做盒=件猜测。
+  包装倍率仍未建模（需要商家声明换算规则）。
+- **税费/运费（AC16）**：商品源未声明含税/含运费时，回复明确“税费信息待确认”
+  “运费信息待确认，标价不等于应付总额”；声明时按事实表达，不再把商品小计
+  说成应付总额。
+- 测试：`merchant-reception-facts.test.ts` 5 条；reception/negotiation 20 个
+  文件 236 条全绿；Q08 更新为“过期事实澄清”。
+- 仍未完成：包装倍率换算、`recommend_option` 推荐理由、真实 provider 评分、部署。
+
+## 2026-11-03 M3 收尾
+
+- **包装换算**：`commerce.unit_package_factors`（如 `{ 箱: 12 }`）显式声明后，
+  接待把 2 箱换算为 24 piece，并在回复中写明“原 2 箱，按 1 箱 = 12 piece 换算”，
+  同时持久化 `need.inputQuantity/inputUnit`；未声明倍率时仍澄清，不猜。
+- **推荐块**：`recommend_option` 只允许 `lowest_public_price` / `in_stock`，发布器
+  校验被推荐快照与比较快照；无法证明时整块拒绝（`unverified_claim`）。
+  `compare_products` 为每个候选注册 fact ref，模型可据此构造推荐。
+- 测试：`merchant-reception-facts.test.ts` 7 条、`merchant-reception-recommend.test.ts`
+  4 条、`profile.test.ts` 新增包装字段校验；reception/negotiation 22 个文件
+  288 条全绿。
+- M3 仍未完成：目的地级履约（D11 明确放 P0b）、商品用途/知识解释、真实 provider
+  评分与部署。
+
+## M6-A 真实 provider Q15 评分（2026-11-03）
+
+- 范围：仅 Veyquo 单商家；真实 DeepSeek interpreter + 确定性接待引擎。
+- 执行：13 个可执行场景 × 3 次 = 39 episodes；Q12/Q13 依赖故障注入，真实
+  provider 下跳过（脚本化 Q15 已覆盖）。
+- 结果：**39/39 通过**，六层全部达标：
+  - 理解/解释 9/9、澄清 9/9、多轮/时间 6/6、受控协商 6/6、故障/待批 3/3、
+    注入/越界 6/6。
+- 过程中发现并修复：模型偶发漏抽中文数量（“十盒”），已加确定性中文数量
+  兜底（不把“98 一件”误判为数量）。
+- 边界：这是 Q15 子集，不是文档 60 场景全量；Q12/Q13 的故障注入仍以脚本化
+  用例为准。多实例隔离（AC23/AC45）不在本轮 Veyquo 单商家范围。
+
+### M6 真实 Pi 路径冒烟
+
+- `KIWI_RECEPTION_RUNTIME=pi` 的真实 provider 冒烟通过：模型经
+  search → facts → propose_reply 工具循环输出公开价 110.00 CNY，未泄露底价。
+- 命令：`KIWI_RECEPTION_REAL_E2E=1 npx vitest run tests/reception-agent-real.test.ts`。
+- 范围：仅 Veyquo 单商家；第二商家/多实例隔离不在本轮。

@@ -53,6 +53,7 @@ const BLOCK_KINDS = new Set([
   "acknowledge_need",
   "ask_clarification",
   "show_commercial_terms",
+  "recommend_option",
   "request_human_help",
   "next_step",
 ]);
@@ -89,6 +90,8 @@ export interface PiReceptionRuntimeOptions {
   model: Model<Api>;
   productSource?: ReceptionProductSource;
   policy?: () => MerchantPolicy | undefined;
+  unitAliases?: Record<string, string>;
+  unitPackageFactors?: Record<string, number>;
   maxSteps?: number;
   maxToolAttempts?: number;
   timeoutMs?: number;
@@ -110,7 +113,9 @@ const DEFAULT_SYSTEM_PROMPT = [
   "When the request is ambiguous or a required field is missing, ask one short",
   "clarification question. When ready, call propose_reply with typed blocks:",
   "acknowledge_need, ask_clarification, show_commercial_terms (using the fact ref),",
-  "request_human_help or next_step. Never write free-form commercial text.",
+  "request_human_help or next_step. You may use recommend_option with a fact ref and",
+  "compared refs from compare_products; reasonCode must be lowest_public_price or in_stock.",
+  "Never write free-form commercial text.",
 ].join(" ");
 
 function toolResult(text: string, details: unknown = {}): AgentToolResult<unknown> {
@@ -188,6 +193,33 @@ export function sanitizeReceptionBlocks(value: unknown): ReceptionBlock[] | unde
           kind: "show_commercial_terms",
           ref: { sku: ref.sku, revision: ref.revision },
           ...(topics !== undefined && topics.length > 0 ? { topics } : {}),
+        });
+        break;
+      }
+      case "recommend_option": {
+        const ref = item.ref;
+        if (!isObject(ref) || typeof ref.sku !== "string" || typeof ref.revision !== "string") {
+          return undefined;
+        }
+        const comparedRefs = Array.isArray(item.comparedRefs)
+          ? item.comparedRefs
+              .filter(
+                (candidate): candidate is { sku: string; revision: string } =>
+                  isObject(candidate) &&
+                  typeof candidate.sku === "string" &&
+                  typeof candidate.revision === "string",
+              )
+              .slice(0, 3)
+          : undefined;
+        const reasonCode = item.reasonCode;
+        if (reasonCode !== "lowest_public_price" && reasonCode !== "in_stock") {
+          return undefined;
+        }
+        blocks.push({
+          kind: "recommend_option",
+          ref: { sku: ref.sku, revision: ref.revision },
+          ...(comparedRefs !== undefined && comparedRefs.length > 0 ? { comparedRefs } : {}),
+          reasonCode,
         });
         break;
       }
@@ -325,17 +357,54 @@ export function createPiReceptionRuntime(
             for (const sku of skus) {
               try {
                 const product = await options.productSource.getProduct(sku);
+                if (product.valid_until !== undefined) {
+                  const until = Date.parse(product.valid_until);
+                  if (!Number.isFinite(until) || until <= Date.parse(input.now)) {
+                    products.push({ sku, error: "facts_stale" });
+                    continue;
+                  }
+                }
                 const floorMinor = policyFloorMinor(policy, sku);
                 const listPrice =
                   floorMinor !== undefined && Math.round(product.price * 100) < floorMinor
                     ? undefined
                     : product.price;
+                const delivery = deliveryBefore(policy, input.now);
+                const facts = {
+                  ...(listPrice !== undefined
+                    ? { listPrice, currency: product.currency }
+                    : {}),
+                  ...(product.stock !== undefined
+                    ? { stockAvailable: product.stock > 0 }
+                    : {}),
+                  ...(delivery !== undefined ? { deliveryBefore: delivery } : {}),
+                  ...(product.tax_included !== undefined
+                    ? { taxIncluded: product.tax_included }
+                    : {}),
+                  ...(product.shipping_included !== undefined
+                    ? { shippingIncluded: product.shipping_included }
+                    : {}),
+                };
+                const base = {
+                  merchantId: input.merchantId,
+                  sku,
+                  visibility: "public" as const,
+                  issuedAt: input.now,
+                  ...(product.valid_until !== undefined ? { expiresAt: product.valid_until } : {}),
+                  facts,
+                };
+                const ref = input.registry.register({
+                  ...base,
+                  revision: factRevision(base),
+                });
                 products.push({
                   sku,
+                  ref,
                   ...(listPrice !== undefined
                     ? { listPrice, currency: product.currency }
                     : {}),
                   ...(product.stock !== undefined ? { stock: product.stock } : {}),
+                  ...(product.unit !== undefined ? { unit: product.unit } : {}),
                 });
               } catch {
                 products.push({ sku, error: "unknown_sku" });
@@ -355,6 +424,7 @@ export function createPiReceptionRuntime(
             properties: {
               sku: { type: "string" },
               quantity: { type: "integer", minimum: 1 },
+              unit: { type: "string" },
             },
             required: ["sku"],
           },
@@ -368,6 +438,10 @@ export function createPiReceptionRuntime(
               args.quantity > 0
                 ? args.quantity
                 : undefined;
+            const requestedUnit =
+              isObject(args) && typeof args.unit === "string" && args.unit.trim() !== ""
+                ? args.unit.trim()
+                : undefined;
             if (sku === "" || options.productSource === undefined) {
               return toolResult(JSON.stringify({ error: "unknown_sku" }));
             }
@@ -377,6 +451,36 @@ export function createPiReceptionRuntime(
             } catch {
               return toolResult(JSON.stringify({ error: "unknown_sku" }));
             }
+            // AC13：过期事实不得进入回复或审批。
+            if (product.valid_until !== undefined) {
+              const until = Date.parse(product.valid_until);
+              if (!Number.isFinite(until) || until <= Date.parse(input.now)) {
+                return toolResult(JSON.stringify({ error: "facts_stale" }));
+              }
+            }
+            // AC06：单位必须一致、命中别名，或按商家声明的包装倍率换算；
+            // 不做盒/件猜测。
+            let unit = requestedUnit;
+            let effectiveQuantity = quantity;
+            if (product.unit !== undefined && requestedUnit !== undefined && requestedUnit !== product.unit) {
+              const factor = options.unitPackageFactors?.[requestedUnit];
+              if (factor !== undefined) {
+                if (quantity === undefined) {
+                  return toolResult(JSON.stringify({ error: "missing_quantity" }));
+                }
+                effectiveQuantity = quantity * factor;
+                unit = product.unit;
+              } else if (options.unitAliases?.[requestedUnit] === product.unit) {
+                unit = product.unit;
+              } else {
+                return toolResult(
+                  JSON.stringify({
+                    error: "unit_mismatch",
+                    supported_unit: product.unit,
+                  }),
+                );
+              }
+            }
             const floorMinor = policyFloorMinor(policy, sku);
             const listPrice =
               floorMinor !== undefined && Math.round(product.price * 100) < floorMinor
@@ -385,8 +489,8 @@ export function createPiReceptionRuntime(
             const stockAvailable =
               product.stock === undefined
                 ? undefined
-                : quantity !== undefined
-                  ? product.stock >= quantity
+                : effectiveQuantity !== undefined
+                  ? product.stock >= effectiveQuantity
                   : product.stock > 0;
             const delivery = deliveryBefore(policy, input.now);
             const facts = {
@@ -395,6 +499,12 @@ export function createPiReceptionRuntime(
                 : {}),
               ...(stockAvailable !== undefined ? { stockAvailable } : {}),
               ...(delivery !== undefined ? { deliveryBefore: delivery } : {}),
+              ...(product.tax_included !== undefined
+                ? { taxIncluded: product.tax_included }
+                : {}),
+              ...(product.shipping_included !== undefined
+                ? { shippingIncluded: product.shipping_included }
+                : {}),
             };
             const base = {
               merchantId: input.merchantId,
@@ -411,6 +521,8 @@ export function createPiReceptionRuntime(
               JSON.stringify({
                 ref,
                 facts,
+                ...(unit !== undefined ? { unit } : product.unit !== undefined ? { unit: product.unit } : {}),
+                ...(effectiveQuantity !== undefined ? { quantity: effectiveQuantity } : {}),
                 note: "Only these facts may appear in show_commercial_terms.",
               }),
             );

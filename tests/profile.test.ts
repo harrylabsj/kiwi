@@ -76,6 +76,27 @@ describe("profile loading", () => {
     expect(() => loadProfile(writeTemp(withoutDefault))).toThrow(/unit_aliases/);
   });
 
+  it("accepts unit_package_factors and validates them", () => {
+    const withPackages = VALID_YAML.replace(
+      "  backend: local_marketplace",
+      "  backend: local_marketplace\n  default_unit: piece\n  unit_package_factors:\n    箱: 12",
+    );
+    const profile = loadProfile(writeTemp(withPackages));
+    expect(profile.commerce.unit_package_factors).toEqual({ 箱: 12 });
+
+    const invalidFactor = VALID_YAML.replace(
+      "  backend: local_marketplace",
+      "  backend: local_marketplace\n  default_unit: piece\n  unit_package_factors:\n    箱: 0",
+    );
+    expect(() => loadProfile(writeTemp(invalidFactor))).toThrow(/unit_package_factors/);
+
+    const withoutDefault = VALID_YAML.replace(
+      "  backend: local_marketplace",
+      "  backend: local_marketplace\n  unit_package_factors:\n    箱: 12",
+    );
+    expect(() => loadProfile(writeTemp(withoutDefault))).toThrow(/unit_package_factors/);
+  });
+
   it("reads commerce.default_unit and rejects a bad unit token", () => {
     const withUnit = `${VALID_YAML.replace(
       "  backend: local_marketplace",

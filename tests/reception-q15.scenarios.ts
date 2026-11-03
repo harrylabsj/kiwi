@@ -309,7 +309,7 @@ export const RECEPTION_Q15_SCENARIOS: QScenario[] = [
     title: "过期事实不得作为当前报价发布",
     goal: "商品源数据已过有效期：发布校验拒绝事实块，回复不含过期价格与交期",
     ac: ["AC13"],
-    maxClarifications: 0,
+    maxClarifications: 1,
     products: {
       "VQ-001": {
         price: 110,
@@ -324,8 +324,9 @@ export const RECEPTION_Q15_SCENARIOS: QScenario[] = [
         text: "VQ-001 现在什么价？",
         interpretation: quote({ sku: "VQ-001" }),
         expect: {
-          blockKinds: ["acknowledge_need", "show_commercial_terms", "next_step"],
-          contains: ["已记录需求"],
+          blockKinds: ["ask_clarification"],
+          clarificationReason: "facts_stale",
+          contains: ["商品数据已过期"],
           notContains: ["{price}", "预计交期"],
         },
       },

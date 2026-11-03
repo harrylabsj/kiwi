@@ -724,6 +724,13 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
         degradationFile: path.join(dir, "reception-degradations.json"),
       })
     : undefined;
+  const receptionUnitAliases =
+    profile.commerce.unit_aliases !== undefined && profile.commerce.default_unit !== undefined
+      ? Object.fromEntries(
+          profile.commerce.unit_aliases.map((alias) => [alias, profile.commerce.default_unit as string]),
+        )
+      : undefined;
+  const receptionUnitPackages = profile.commerce.unit_package_factors;
   const receptionPolicy = (): MerchantPolicy | undefined =>
     typeof options.merchantPolicy === "function"
       ? options.merchantPolicy()
@@ -734,6 +741,10 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           streamFn: realStreamFn(),
           model: buildModel(profile),
           ...(productSource !== undefined ? { productSource } : {}),
+          ...(receptionUnitAliases !== undefined ? { unitAliases: receptionUnitAliases } : {}),
+          ...(receptionUnitPackages !== undefined
+            ? { unitPackageFactors: receptionUnitPackages }
+            : {}),
           policy: receptionPolicy,
           maxSteps: receptionConfig.maxModelTurns,
           maxToolAttempts: receptionConfig.maxToolAttempts,
@@ -790,6 +801,10 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
             }
           : {}),
         ...(productSource !== undefined ? { productSource } : {}),
+        ...(receptionUnitAliases !== undefined ? { unitAliases: receptionUnitAliases } : {}),
+        ...(receptionUnitPackages !== undefined
+          ? { unitPackageFactors: receptionUnitPackages }
+          : {}),
         approvals: negotiationApprovals,
         ...(receptionPi !== undefined ? { agent: receptionPi } : {}),
         approvalTtlSeconds: receptionConfig.approvalTtlSeconds,
