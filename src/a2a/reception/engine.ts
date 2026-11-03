@@ -40,6 +40,8 @@ export interface ReceptionProductSource {
     unit?: string;
     /** 数据有效期（ISO）；过期数据不得包装成当前有效报价。 */
     valid_until?: string;
+    tax_included?: boolean;
+    shipping_included?: boolean;
   }>;
 }
 
@@ -131,6 +133,10 @@ export interface MerchantReceptionEngineDeps {
   approvalTtlSeconds?: number;
   /** M2：Pi 工具循环运行时；缺省走确定性解释器路径。 */
   agent?: ReceptionAgentRuntime;
+  /** 商家声明的单位别名（别名 → 商品源单位）；不配置就只接受完全一致。 */
+  unitAliases?: Record<string, string>;
+  /** 商家声明的包装倍率（包装单位 → 1 包装 = N 个商品源单位）。 */
+  unitPackageFactors?: Record<string, number>;
   /** 单次 respond 的硬截止（毫秒，D07/§18 缺省 30 秒，从 admitted_at 起算）；
    *  超时后不再发起模型/事实工具调用，降级确定性回复。 */
   deadlineMs?: number;
@@ -158,6 +164,69 @@ export function resolveDeliveryBefore(
 function privateFloorMajor(policy: MerchantPolicy | undefined, sku: string): number | undefined {
   const floor = policy?.price_floors?.[sku] ?? policy?.min_unit_price_private;
   return typeof floor === "number" && Number.isFinite(floor) ? floor : undefined;
+}
+
+const CN_QUANTITY_UNITS = [
+  "盒",
+  "件",
+  "个",
+  "只",
+  "箱",
+  "瓶",
+  "包",
+  "袋",
+  "台",
+  "套",
+  "双",
+  "张",
+  "份",
+] as const;
+
+const CN_DIGITS: Record<string, number> = {
+  一: 1,
+  二: 2,
+  两: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+};
+
+function chineseNumeralToInt(raw: string): number | undefined {
+  if (raw === "十") return 10;
+  const tenIndex = raw.indexOf("十");
+  if (tenIndex === -1) {
+    return raw.length === 1 ? CN_DIGITS[raw] : undefined;
+  }
+  if (raw.indexOf("十", tenIndex + 1) !== -1) return undefined;
+  const tens = tenIndex === 0 ? 1 : CN_DIGITS[raw.slice(0, tenIndex)];
+  const ones = tenIndex === raw.length - 1 ? 0 : CN_DIGITS[raw.slice(tenIndex + 1)];
+  if (tens === undefined || ones === undefined) return undefined;
+  return tens * 10 + ones;
+}
+
+/**
+ * 中文数量兜底（如“十盒”“两件”）。模型偶发漏抽中文数字时，避免多轮
+ * 变更静默沿用旧数量；数字前 4 字符内出现阿拉伯数字/货币符号时视为价格
+ * 语境（“98 一件”），不当作数量。
+ */
+export function parseChineseQuantity(
+  text: string,
+): { quantity: number; unit: string } | undefined {
+  const pattern = new RegExp(
+    `([一二两三四五六七八九十]+)\\s*(${CN_QUANTITY_UNITS.join("|")})`,
+    "u",
+  );
+  const match = pattern.exec(text);
+  if (match === null || match.index === undefined) return undefined;
+  const prefix = text.slice(Math.max(0, match.index - 4), match.index);
+  if (/[\d¥￥元块]/.test(prefix)) return undefined;
+  const quantity = chineseNumeralToInt(match[1]!);
+  if (quantity === undefined || quantity <= 0) return undefined;
+  return { quantity, unit: match[2]! };
 }
 
 const CN_ORDINALS: Record<string, number> = {
@@ -324,11 +393,21 @@ export function createMerchantReceptionEngine(
       // AC09/D03：多商品澄清后，买家可以用“第一个/第二款”指代候选；候选来自
       // 上一轮持久化的 pendingSkus，序号解析不依赖模型。
       const ordinalSku = ordinalSkuOf(text, previous?.need.pendingSkus);
+      // 中文数量兜底（模型偶发漏抽中文数字）。
+      const chineseQuantity = parseChineseQuantity(text);
       // 字段证据来源：协议字段 > 模型/搜索候选；只有本轮明确给出的字段才更新。
       const stated: StatedFields = {
         ...(structuredSku !== undefined ? { sku: "structured" as const } : {}),
-        ...(interpreted?.quantity !== undefined ? { quantity: "model" as const } : {}),
-        ...(interpreted?.unit !== undefined ? { unit: "model" as const } : {}),
+        ...(interpreted?.quantity !== undefined
+          ? { quantity: "model" as const }
+          : chineseQuantity !== undefined
+            ? { quantity: "model" as const }
+            : {}),
+        ...(interpreted?.unit !== undefined
+          ? { unit: "model" as const }
+          : chineseQuantity !== undefined
+            ? { unit: "model" as const }
+            : {}),
       };
       if (stated.sku === undefined && (ordinalSku !== undefined || candidateSkus.length === 1)) {
         stated.sku = "model";
@@ -353,8 +432,10 @@ export function createMerchantReceptionEngine(
         );
       }
       let sku = structuredSku ?? ordinalSku ?? candidateSkus[0] ?? previous?.need.sku;
-      const quantity = interpreted?.quantity ?? previous?.need.quantity;
-      const unit = interpreted?.unit ?? previous?.need.unit;
+      let quantity =
+        interpreted?.quantity ?? chineseQuantity?.quantity ?? previous?.need.quantity;
+      let unit = interpreted?.unit ?? chineseQuantity?.unit ?? previous?.need.unit;
+      let convertedFrom: { quantity: number; unit: string; factor: number } | undefined;
 
       // M2：买家没说 SKU 时按本店公开商品搜索；唯一命中直接进入事实回答，
       // 多命中列出候选请买家选择，零命中才回固定追问。搜索失败不阻断接待。
@@ -432,6 +513,59 @@ export function createMerchantReceptionEngine(
         );
       }
 
+      // AC13：过期事实不得报价/登记审批；先拒绝本轮，要求重新确认。
+      if (product.valid_until !== undefined) {
+        const until = Date.parse(product.valid_until);
+        if (!Number.isFinite(until) || until <= Date.parse(input.now)) {
+          return finish(
+            input,
+            previous,
+            registry,
+            [{ kind: "ask_clarification", missing: ["sku"], reason: "facts_stale" }],
+            { sku, quantity, unit },
+            stated,
+          );
+        }
+      }
+      // AC06：单位必须与商品源一致，或命中商家声明的别名；不做“盒=件”猜测。
+      if (product.unit !== undefined && unit !== undefined && unit !== product.unit) {
+        const factor = deps.unitPackageFactors?.[unit];
+        if (factor !== undefined) {
+          // AC06：使用商家声明的包装倍率；没有数量时先问数量，绝不猜 1 箱=1 件。
+          if (quantity === undefined) {
+            return finish(
+              input,
+              previous,
+              registry,
+              [{ kind: "ask_clarification", missing: ["quantity"], reason: "missing_quantity" }],
+              { sku },
+              stated,
+            );
+          }
+          convertedFrom = { quantity, unit, factor };
+          quantity = quantity * factor;
+          unit = product.unit;
+        } else if (deps.unitAliases?.[unit] === product.unit) {
+          unit = product.unit;
+        } else {
+          return finish(
+            input,
+            previous,
+            registry,
+            [
+              {
+                kind: "ask_clarification",
+                missing: ["sku"],
+                reason: "unit_mismatch",
+                supportedUnit: product.unit,
+              },
+            ],
+            { sku, quantity },
+            stated,
+          );
+        }
+      }
+
       const policy = deps.policy?.();
       const floor = privateFloorMajor(policy, sku);
       // D15 审批回环：商家在 /ops 批准的候选，买家下一轮命中即一次性消费，
@@ -503,7 +637,14 @@ export function createMerchantReceptionEngine(
               },
               { kind: "next_step", action: "send_rfq" },
             ],
-            { sku, quantity, unit },
+            {
+              sku,
+              quantity,
+              unit,
+              ...(convertedFrom !== undefined
+                ? { inputQuantity: convertedFrom.quantity, inputUnit: convertedFrom.unit }
+                : {}),
+            },
             stated,
           );
         }
@@ -524,6 +665,7 @@ export function createMerchantReceptionEngine(
         sku,
         ...(quantity !== undefined ? { quantity } : {}),
         ...(unit !== undefined ? { unit } : {}),
+        ...(convertedFrom !== undefined ? { convertedFrom } : {}),
       };
 
       // D15 自动发布边界：买家明确目标价低于公开折扣边界（list×(1-max(自动
@@ -557,7 +699,14 @@ export function createMerchantReceptionEngine(
             buyerTargetPrice: boundary.targetMajor,
             currency: product.currency,
           },
-        ], { sku, quantity, unit }, stated);
+        ], {
+          sku,
+          quantity,
+          unit,
+          ...(convertedFrom !== undefined
+            ? { inputQuantity: convertedFrom.quantity, inputUnit: convertedFrom.unit }
+            : {}),
+        }, stated);
       }
 
       const blocks: ReceptionBlock[] = [
@@ -569,7 +718,14 @@ export function createMerchantReceptionEngine(
         },
         { kind: "next_step", action: "send_rfq" },
       ];
-      return finish(input, previous, registry, blocks, { sku, quantity, unit }, stated);
+      return finish(input, previous, registry, blocks, {
+        sku,
+        quantity,
+        unit,
+        ...(convertedFrom !== undefined
+          ? { inputQuantity: convertedFrom.quantity, inputUnit: convertedFrom.unit }
+          : {}),
+      }, stated);
     },
   };
 
@@ -579,7 +735,10 @@ export function createMerchantReceptionEngine(
     registry: InMemoryFactRegistry,
     blocks: ReceptionBlock[],
     need?: Partial<
-      Pick<ReceptionNeed, "sku" | "quantity" | "unit" | "pendingSkus" | "evidence">
+      Pick<
+        ReceptionNeed,
+        "sku" | "quantity" | "unit" | "pendingSkus" | "evidence" | "inputQuantity" | "inputUnit"
+      >
     >,
     stated?: StatedFields,
   ): ReceptionEngineResult {
@@ -616,6 +775,8 @@ export function createMerchantReceptionEngine(
       ...(merged.quantity !== undefined ? { quantity: merged.quantity } : {}),
       ...(merged.unit !== undefined ? { unit: merged.unit } : {}),
       ...(pendingSkus !== undefined && pendingSkus.length > 0 ? { pendingSkus } : {}),
+      ...(need?.inputQuantity !== undefined ? { inputQuantity: need.inputQuantity } : {}),
+      ...(need?.inputUnit !== undefined ? { inputUnit: need.inputUnit } : {}),
       ...(Object.keys(evidence).length > 0 ? { evidence } : {}),
     });
     const plan: ReceptionResponsePlan = { locale: "zh-CN", blocks };
@@ -683,7 +844,13 @@ function belowPublicBound(
 }
 
 function factsForWithSku(
-  product: { price: number; currency: string; stock?: number },
+  product: {
+    price: number;
+    currency: string;
+    stock?: number;
+    tax_included?: boolean;
+    shipping_included?: boolean;
+  },
   quantity: number | undefined,
   policy: MerchantPolicy | undefined,
   floor: number | undefined,
@@ -701,5 +868,9 @@ function factsForWithSku(
     ...(listPrice !== undefined ? { listPrice, currency: product.currency } : {}),
     ...(stockAvailable !== undefined ? { stockAvailable } : {}),
     ...(delivery !== undefined ? { deliveryBefore: delivery } : {}),
+    ...(product.tax_included !== undefined ? { taxIncluded: product.tax_included } : {}),
+    ...(product.shipping_included !== undefined
+      ? { shippingIncluded: product.shipping_included }
+      : {}),
   };
 }

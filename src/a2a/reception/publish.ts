@@ -20,7 +20,8 @@ export type RejectReason =
   | "version_mismatch"
   | "cross_tenant"
   | "not_public"
-  | "expired";
+  | "expired"
+  | "unverified_claim";
 
 export interface RejectedBlock {
   block: ReceptionBlock;
@@ -97,6 +98,14 @@ function renderFacts(snapshot: CommercialFactSnapshot, topics?: string[]): strin
       lines.push(`当前公开标价 ${facts.listPrice.toFixed(2)} ${facts.currency}。`);
     }
   }
+  if (wants("price")) {
+    if (facts.taxIncluded === true) lines.push("标价已含税。");
+    else if (facts.taxIncluded === false) lines.push("标价未含税。");
+    else lines.push("税费信息待确认。");
+    if (facts.shippingIncluded === true) lines.push("标价已含运费。");
+    else if (facts.shippingIncluded === false) lines.push("标价未含运费，标价不等于应付总额。");
+    else lines.push("运费信息待确认，标价不等于应付总额。");
+  }
   if (wants("stock")) {
     if (facts.stockAvailable === true) lines.push("库存可以覆盖本次数量。");
     if (facts.stockAvailable === false) lines.push("当前库存不足以覆盖本次数量。");
@@ -122,7 +131,12 @@ function renderBlock(block: ReceptionBlock, registry: CommercialFactRegistry): s
           block.unit !== undefined ? `${block.quantity} ${block.unit}` : `${block.quantity}`,
         );
       }
-      return parts.length > 0 ? [`已记录需求：${parts.join("，")}。`] : [];
+      if (parts.length === 0) return [];
+      const converted =
+        block.convertedFrom !== undefined && block.unit !== undefined
+          ? `（原 ${block.convertedFrom.quantity} ${block.convertedFrom.unit}，按 1 ${block.convertedFrom.unit} = ${block.convertedFrom.factor} ${block.unit} 换算）`
+          : "";
+      return [`已记录需求：${parts.join("，")}${converted}。`];
     }
     case "ask_clarification": {
       if (block.reason === "non_chinese") {
@@ -148,6 +162,19 @@ function renderBlock(block: ReceptionBlock, registry: CommercialFactRegistry): s
           `一次只能咨询一个商品。${mentioned}请告诉我要先确认哪一个，其余商品可以分别咨询。`,
         ];
       }
+      if (block.reason === "missing_quantity") {
+        return ["请补充购买数量（例如：2 件、1 箱）。"];
+      }
+      if (block.reason === "facts_stale") {
+        return ["商品数据已过期，暂时无法报价；请发送 RFQ 重新确认，或稍后重试。"];
+      }
+      if (block.reason === "unit_mismatch") {
+        return [
+          block.supportedUnit !== undefined
+            ? `该商品按 ${block.supportedUnit} 售卖；请确认您要的单位。`
+            : "请确认商品单位（如件/盒/箱）。",
+        ];
+      }
       if (block.reason === "product_candidates") {
         const candidates =
           block.candidates !== undefined && block.candidates.length > 0
@@ -162,6 +189,15 @@ function renderBlock(block: ReceptionBlock, registry: CommercialFactRegistry): s
     case "show_commercial_terms": {
       const snapshot = registry.resolve(block.ref);
       return snapshot === undefined ? [] : renderFacts(snapshot, block.topics);
+    }
+    case "recommend_option": {
+      const snapshot = registry.resolve(block.ref);
+      if (snapshot === undefined) return [];
+      const reason =
+        block.reasonCode === "lowest_public_price"
+          ? "公开标价更低"
+          : "库存可以覆盖本次数量";
+      return [`建议先看 SKU ${snapshot.sku}（${reason}）。`];
     }
     case "request_human_help": {
       // 只显示真实审批状态（刚登记的 pending）：不说已批准、不泄露商家边界
@@ -192,6 +228,47 @@ export function publishResponsePlan(input: {
   const rejected: RejectedBlock[] = [];
   const lines: string[] = [];
   for (const block of input.plan.blocks) {
+    if (block.kind === "recommend_option") {
+      const mainReason = validateFactRef(block.ref, input.registry, input.merchantId, input.now);
+      if (mainReason !== undefined) {
+        rejected.push({ block, reason: mainReason });
+        continue;
+      }
+      let comparedOk = true;
+      const compared: CommercialFactSnapshot[] = [];
+      for (const comparedRef of block.comparedRefs ?? []) {
+        const reason = validateFactRef(comparedRef, input.registry, input.merchantId, input.now);
+        if (reason !== undefined) {
+          rejected.push({ block, reason });
+          comparedOk = false;
+          break;
+        }
+        const snapshot = input.registry.resolve(comparedRef);
+        if (snapshot !== undefined) compared.push(snapshot);
+      }
+      if (!comparedOk) continue;
+      const main = input.registry.resolve(block.ref);
+      if (main === undefined) {
+        rejected.push({ block, reason: "unverified_claim" });
+        continue;
+      }
+      const claimed =
+        block.reasonCode === "in_stock"
+          ? main.facts.stockAvailable === true
+          : main.facts.listPrice !== undefined &&
+            compared.length > 0 &&
+            compared.every(
+              (snapshot) =>
+                snapshot.facts.listPrice !== undefined &&
+                snapshot.facts.listPrice >= (main.facts.listPrice as number),
+            );
+      if (!claimed) {
+        rejected.push({ block, reason: "unverified_claim" });
+        continue;
+      }
+      lines.push(...renderBlock(block, input.registry));
+      continue;
+    }
     if (block.kind === "show_commercial_terms") {
       const reason = validateFactRef(block.ref, input.registry, input.merchantId, input.now);
       if (reason !== undefined) {

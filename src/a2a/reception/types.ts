@@ -16,6 +16,9 @@ export interface ReceptionNeed {
   unit?: string;
   /** 多商品澄清时待选择的候选（AC09）；买家选择后清空。 */
   pendingSkus?: string[];
+  /** 包装换算前的买家原始数量/单位（AC06 可追溯；无换算时不出现）。 */
+  inputQuantity?: number;
+  inputUnit?: string;
   /** 字段证据：由服务端在买家消息确认时签发，模型不能伪造。 */
   evidence?: {
     sku?: ReceptionFieldEvidence;
@@ -46,6 +49,10 @@ export interface CommercialFacts {
   deliveryBefore?: string;
   /** 商家一次性批准的单价（major）；仅本轮消费审批候选时出现。 */
   approvedPrice?: number;
+  /** 商品源是否声明标价含税；未知时 undefined（不得声称已含/未含）。 */
+  taxIncluded?: boolean;
+  /** 商品源是否声明标价含运费；未知时 undefined。 */
+  shippingIncluded?: boolean;
 }
 
 /** 服务端事实快照的引用（版本 = 快照内容 digest）。 */
@@ -79,6 +86,8 @@ export type ReceptionBlock =
       sku?: string;
       quantity?: number;
       unit?: string;
+      /** 包装换算来源：买家原始数量/单位与商家声明的倍率。 */
+      convertedFrom?: { quantity: number; unit: string; factor: number };
     }
   | {
       kind: "ask_clarification";
@@ -90,7 +99,12 @@ export type ReceptionBlock =
         | "empty_message"
         | "service_busy"
         | "multiple_skus"
-        | "product_candidates";
+        | "product_candidates"
+        | "facts_stale"
+        | "unit_mismatch"
+        | "missing_quantity";
+      /** unit_mismatch：商品源支持的单位。 */
+      supportedUnit?: string;
       /** multiple_skus：买家提到的 SKU 候选（请买家选择，不静默取第一项）。 */
       candidates?: string[];
     }
@@ -100,6 +114,14 @@ export type ReceptionBlock =
       ref: FactRef;
       /** 结构化 inquiry 的主题；缺省渲染全部事实（普通文本行为不变）。 */
       topics?: Array<"price" | "stock" | "delivery">;
+    }
+  | {
+      kind: "recommend_option";
+      /** 被推荐 SKU 的公开事实引用。 */
+      ref: FactRef;
+      /** 参与比较的其他 SKU 事实引用；发布器据此校验推荐理由。 */
+      comparedRefs?: FactRef[];
+      reasonCode: "lowest_public_price" | "in_stock";
     }
   | {
       kind: "request_human_help";
