@@ -1191,6 +1191,14 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           const payload = envelope.payload as {
             items?: { sku?: string; quantity?: { value?: number; unit?: string } }[];
           };
+          // AC09/D03：一次正式协商只支持一个 SKU；多行商品明确拒绝并请买家
+          // 分别发起，不静默只处理 items[0]。
+          if ((payload.items?.length ?? 0) > 1) {
+            return declineReply(
+              "field_unsupported",
+              "一次协商只支持一个 SKU；请为每个商品分别发起 RFQ。",
+            );
+          }
           const sku = payload.items?.[0]?.sku;
           const requestedUnit = payload.items?.[0]?.quantity?.unit;
           const quantityRaw = payload.items?.[0]?.quantity?.value;
@@ -1286,6 +1294,13 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             offer_id?: string;
             terms?: { items?: { sku?: string; quantity?: { value?: number; unit?: string } }[] };
           };
+          // AC09/D03：多行商品明确拒绝，不静默只处理 items[0]。
+          if ((buyerOffer.terms?.items?.length ?? 0) > 1) {
+            return declineReply(
+              "field_unsupported",
+              "一次协商只支持一个 SKU；请为每个商品分别发起。",
+            );
+          }
           const sku = buyerOffer.terms?.items?.[0]?.sku;
           const requestedUnit = buyerOffer.terms?.items?.[0]?.quantity?.unit;
           const quantityRaw = buyerOffer.terms?.items?.[0]?.quantity?.value;
@@ -1377,6 +1392,13 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             };
             offer_id?: string;
           };
+          // AC09/D03：多行商品明确拒绝，不静默只处理 items[0]。
+          if ((counter.proposed_terms?.items?.length ?? 0) > 1) {
+            return declineReply(
+              "field_unsupported",
+              "一次协商只支持一个 SKU；请为每个商品分别发起。",
+            );
+          }
           const sku = counter.proposed_terms?.items?.[0]?.sku;
           const requestedUnit = counter.proposed_terms?.items?.[0]?.quantity?.unit;
           const quantityRaw = counter.proposed_terms?.items?.[0]?.quantity?.value;

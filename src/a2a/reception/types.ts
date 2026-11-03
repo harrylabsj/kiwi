@@ -63,7 +63,15 @@ export type ReceptionBlock =
   | {
       kind: "ask_clarification";
       missing: Array<"sku" | "quantity" | "unit">;
-      reason: "missing_sku" | "unknown_sku" | "non_chinese" | "empty_message" | "service_busy";
+      reason:
+        | "missing_sku"
+        | "unknown_sku"
+        | "non_chinese"
+        | "empty_message"
+        | "service_busy"
+        | "multiple_skus";
+      /** multiple_skus：买家提到的 SKU 候选（请买家选择，不静默取第一项）。 */
+      candidates?: string[];
     }
   | {
       kind: "show_commercial_terms";

@@ -126,6 +126,16 @@ function renderBlock(block: ReceptionBlock, registry: CommercialFactRegistry): s
       if (block.reason === "unknown_sku") {
         return ["暂时无法从商品源确认该 SKU，请核对后重试。"];
       }
+      if (block.reason === "multiple_skus") {
+        // AC09/D03：一次会话只服务一个商品；列出候选请买家选择，不静默取第一项。
+        const mentioned =
+          block.candidates !== undefined && block.candidates.length > 0
+            ? `您提到了：${block.candidates.join("、")}。`
+            : "";
+        return [
+          `一次只能咨询一个商品。${mentioned}请告诉我要先确认哪一个，其余商品可以分别咨询。`,
+        ];
+      }
       return ["请提供商品 SKU；如已知数量与单位也请一并说明。"];
     }
     case "show_commercial_terms": {

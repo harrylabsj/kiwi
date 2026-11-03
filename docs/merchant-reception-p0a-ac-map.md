@@ -41,7 +41,7 @@
 | AC06 | 部分就绪 | unit 仅作候选透传、由商品源口径渲染；无换算表，"两箱"歧义澄清依赖模型候选质量（待 M6 评分） |
 | AC07 | P0b 范围外 | 需求模型无时限槽位，相对日期解析未实现 |
 | AC08 | P0b 范围外 | 无搜索工具，同名 SKU 选择场景不出现 |
-| AC09 | **已知缺口** | D03/B.8-2 要求"多商品请求明确提示并请买家选择，禁止只取第一项"；当前 interpreter 只有单 `sku` 候选字段，引擎无多商品检测，存在静默只取第一项的风险。需发布前补齐（如候选加 `skus[]` 或明确降级决议） |
+| AC09 | 机制就绪 | 多商品请求明确提示并请买家选择（`skus` 候选 + `multiple_skus` 澄清）；KNP RFQ/offer/counter_offer 多行商品 decline `field_unsupported`，不静默只取 items[0]：`merchant-multi-item.test.ts` |
 | AC10 | 机制就绪 | 需求变更 revision 递增：`conversation-store.ts`、Q07；批准失效：`merchant-approval-invalidation.test.ts` |
 
 ### 事实与履约（AC11–AC15）
@@ -146,7 +146,7 @@
 
 ## 汇总
 
-- 机制就绪：24 条　部分就绪：14 条　P0b 范围外：21 条　**已知缺口：1 条（AC09）**
-- 发布前必须处理：AC09 多商品提示（D03 是 P0a 决议，当前实现有静默只取第一项风险）。
+- 机制就绪：25 条　部分就绪：14 条　P0b 范围外：21 条　已知缺口：0 条
+- AC09 已补齐（`merchant-multi-item.test.ts`，2026-11-03）。
 - 不得宣称通过：AC23/AC45 的多实例隔离（D16 第二商家未建，B.8-5）；
   AC39/AC54 的质量分（真实 provider 评分未执行）。
