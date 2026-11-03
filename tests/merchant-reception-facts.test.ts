@@ -139,6 +139,66 @@ describe("merchant reception facts/unit/tax (M3)", () => {
     expect(result.text).not.toContain("已含税");
   });
 
+  it("rejects conflicting normalized alias/factor configuration at engine construction", () => {
+    expect(() => engineFor({}, { "BOX": "box", "盒": "piece" })).toThrow(
+      /conflicting normalized unit alias/,
+    );
+    expect(() =>
+      engineFor({}, undefined, "piece", { "BOX": 12, "盒": 6 }),
+    ).toThrow(/conflicting normalized unit package factor/);
+  });
+
+  it("box/盒 是明确 1:1 别名：不改变数量、单价或金额", async () => {
+    const engine = engineFor({ unit: "box" }, undefined, "盒");
+    const result = await engine.respond(input("来两盒"));
+    expect(result.text).toContain("已记录需求：SKU VQ-001，2 box");
+    expect(result.text).toContain("当前公开标价 110.00 CNY");
+    expect(result.conversation.need.quantity).toBe(2);
+    expect(result.conversation.need.unit).toBe("box");
+  });
+
+  it("box/盒 反向匹配：商品单位为盒、买家写 box", async () => {
+    const engine = engineFor({ unit: "盒" }, undefined, "box");
+    const result = await engine.respond(input("来两盒"));
+    expect(result.text).toContain("已记录需求：SKU VQ-001，2 盒");
+    expect(result.conversation.need.quantity).toBe(2);
+    expect(result.conversation.need.unit).toBe("盒");
+  });
+
+  it.each(["个", "件"])("不把 %s 自动换算成 box", async unit => {
+    const engine = engineFor({ unit: "box" }, undefined, unit);
+    const result = await engine.respond(input("来两件"));
+    expect(result.text).toContain("该商品按 box 售卖");
+    expect(result.text).not.toContain("当前公开标价");
+    expect(result.conversation.need.unit).toBeUndefined();
+  });
+
+  it("商家显式别名优先，内建 box/盒 不覆盖既有配置", async () => {
+    const engine = engineFor({ unit: "box" }, { 盒: "piece" }, "盒");
+    const result = await engine.respond(input("来两盒"));
+    expect(result.text).toContain("该商品按 box 售卖");
+    expect(result.conversation.need.unit).toBeUndefined();
+  });
+
+  it("全角/大小写包装倍率键先归一，显式倍率优先于 box/盒 1:1", async () => {
+    const engine = engineFor({ unit: "盒" }, undefined, "box", { "ＢＯＸ": 12 });
+    const result = await engine.respond(input("来两盒"));
+    expect(result.text).toContain("24 盒");
+    expect(result.text).toContain("原 2 box");
+    expect(result.text).toContain("1 box = 12 盒");
+    expect(result.conversation.need.quantity).toBe(24);
+    expect(result.conversation.need.unit).toBe("盒");
+    expect(result.text).toContain("当前公开标价 110.00 CNY");
+  });
+
+  it("全角/大小写别名键先归一，仍按原数量报价", async () => {
+    const engine = engineFor({ unit: "盒" }, { "ＢＯＸ": "盒" }, "box");
+    const result = await engine.respond(input("来两盒"));
+    expect(result.text).toContain("已记录需求：SKU VQ-001，2 盒");
+    expect(result.text).toContain("当前公开标价 110.00 CNY");
+    expect(result.conversation.need.quantity).toBe(2);
+  });
+
   it("包装单位按商家声明倍率换算并保留原数量", async () => {
     const engine = engineFor({}, undefined, "箱", { 箱: 12 });
     const result = await engine.respond(input("来两箱"));

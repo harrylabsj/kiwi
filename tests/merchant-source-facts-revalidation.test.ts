@@ -71,6 +71,90 @@ describe("actual handler source facts and accept preconditions", () => {
     // unit_unmapped；计价仍按商家规范单位。
     expect(terms.items[0]?.quantity.unit).toBe("个");
   });
+  it("accepts box/盒 as an explicit 1:1 alias without changing quantity or price", async () => {
+    const f = setup(base());
+    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "盒" } }] });
+    const env = outgoing(r);
+    expect((env.payload as { terms: { items: Array<{ quantity: { value: number; unit: string }; unit_price: unknown }> } }).terms.items).toEqual([
+      { sku: "SKU", quantity: { value: 5, unit: "盒" }, unit_price: { currency: "CNY", amount_minor: 10000 } },
+    ]);
+  });
+
+  it("accepts the reverse box/盒 spelling when the source unit is 盒", async () => {
+    const f = setup({ ...base(), unit: "盒" });
+    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "box" } }] });
+    const env = outgoing(r);
+    expect((env.payload as { terms: { items: Array<{ quantity: { value: number; unit: string }; unit_price: unknown }> } }).terms.items).toEqual([
+      { sku: "SKU", quantity: { value: 5, unit: "box" }, unit_price: { currency: "CNY", amount_minor: 10000 } },
+    ]);
+  });
+
+  it.each(["个", "件"])("does not auto-convert %s to box", async unit => {
+    const f = setup(base());
+    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit } }] });
+    expect(r.kind === "declined" && r.reasonCode).toBe("field_unsupported");
+  });
+
+  it("keeps a merchant explicit alias authoritative over the built-in box/盒 pair", async () => {
+    const f = setup(base(), undefined, undefined, { unitAliases: { "盒": "piece" } });
+    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "盒" } }] });
+    expect(r.kind === "declined" && r.reasonCode).toBe("field_unsupported");
+  });
+
+  it("rejects conflicting normalized package-factor configuration at handler construction", () => {
+    expect(() =>
+      setup(base(), undefined, undefined, {
+        unitPackageFactors: { "BOX": 12, "盒": 6 },
+      }),
+    ).toThrow(/conflicting normalized unit package factor/);
+  });
+
+  it("normalizes case/fullwidth explicit aliases before matching", async () => {
+    const f = setup({ ...base(), unit: "盒" }, undefined, undefined, { unitAliases: { "ＢＯＸ": "盒" } });
+    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "box" } }] });
+    const env = outgoing(r);
+    expect((env.payload as { terms: { items: Array<{ quantity: unknown; unit_price: unknown }> } }).terms.items).toEqual([
+      { sku: "SKU", quantity: { value: 5, unit: "box" }, unit_price: { currency: "CNY", amount_minor: 10000 } },
+    ]);
+  });
+
+  it("rejects a KNP package-factor conflict instead of treating box/盒 as 1:1", async () => {
+    const f = setup({ ...base(), unit: "盒" }, undefined, undefined, {
+      unitPackageFactors: { "ＢＯＸ": 12 },
+    });
+    for (const action of ["rfq", "offer", "counter_offer"] as const) {
+      const payload =
+        action === "rfq"
+          ? { type: "rfq", items: [{ sku: "SKU", quantity: { value: 2, unit: "box" } }] }
+          : action === "offer"
+            ? { type: "offer", offer_id: "off_buyer", terms: { items: [{ sku: "SKU", quantity: { value: 2, unit: "box" }, unit_price: { currency: "CNY", amount_minor: 8000 } }], valid_until: "2026-10-14T00:00:00Z" } }
+            : { type: "counter_offer", offer_id: "off_buyer2", responding_to_offer_id: "off_previous", proposed_terms: { items: [{ sku: "SKU", quantity: { value: 2, unit: "box" }, unit_price: { currency: "CNY", amount_minor: 8000 } }], valid_until: "2026-10-14T00:00:00Z" } };
+      const r = await f.send(action, payload as never);
+      expect(r.kind === "declined" && r.reasonCode).toBe("field_unsupported");
+    }
+  });
+
+  it("keeps box/盒 1:1 quantity and amount across offer and accept", async () => {
+    const f = setup(base());
+    const q = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "盒" } }] });
+    const quote = outgoing(q);
+    expect((quote.payload as { terms: { items: Array<{ quantity: unknown; unit_price: unknown }> } }).terms.items).toEqual([
+      { sku: "SKU", quantity: { value: 5, unit: "盒" }, unit_price: { currency: "CNY", amount_minor: 10000 } },
+    ]);
+    const accepted = await f.accept(q);
+    expect(accepted.kind).toBe("accepted");
+
+    const counterF = setup(base());
+    const counter = await counterF.send("offer", {
+      type: "offer",
+      offer_id: "off_buyer",
+      terms: { items: [{ sku: "SKU", quantity: { value: 5, unit: "盒" }, unit_price: { currency: "CNY", amount_minor: 8000 } }], valid_until: "2026-10-14T00:00:00Z" },
+    });
+    const proposed = (outgoing(counter).payload as { proposed_terms: { items: Array<{ quantity: unknown; unit_price: unknown }> } }).proposed_terms;
+    expect(proposed.items[0]?.quantity).toEqual({ value: 5, unit: "盒" });
+    expect(proposed.items[0]?.unit_price).toEqual({ currency: "CNY", amount_minor: 10000 });
+  });
+
   it("still refuses an alias the merchant did not declare", async () => {
     const f = setup({ ...base(), unit: "piece" }, undefined, undefined, { unitAliases: { "件": "piece" } });
     const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "个" } }] });
