@@ -681,13 +681,23 @@ export class InboundPipeline {
    * parts 为 artifact + 生成 contextId）。让 A2A 1.0 server 对任意消息合规
    * （KNP 是扩展，非 A2A 必载）。响应器可注入（TCK 参考场景）。
    */
-  sendGenericMessage(message: Record<string, unknown>, owner: TaskOwner): GenericSendResult {
+  async sendGenericMessage(
+    message: Record<string, unknown>,
+    owner: TaskOwner,
+  ): Promise<GenericSendResult> {
     const taskId = newTaskId();
     const contextId =
       typeof message.contextId === "string" && message.contextId.length > 0
         ? message.contextId
         : newGenericContextId();
-    const result = this.genericResponder({ message, taskId, contextId, now: this.now });
+    const result = await this.genericResponder({
+      message,
+      taskId,
+      contextId,
+      identity: owner.identity,
+      identityVerified: owner.identityVerified,
+      now: this.now,
+    });
     if (result.task !== undefined) {
       const t = result.task;
       // 1.0 通用路径是 raw 透传：task 的 message/artifacts 保持 1.0 wire 形状

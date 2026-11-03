@@ -703,7 +703,7 @@ export class A2AServer {
           });
         }
       }
-      const generic = this.pipeline.sendGenericMessage(rawMessage, {
+      const generic = await this.pipeline.sendGenericMessage(rawMessage, {
         identity: caller.identity,
         identityVerified: caller.identityVerified === true,
       });

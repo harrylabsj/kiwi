@@ -53,10 +53,16 @@ export interface GenericResponderInput {
   taskId: string;
   /** server 生成（或消息自带）的 contextId。 */
   contextId: string;
+  /** 服务端解析的可信主体（商家接待用于会话隔离；不回传给对端）。 */
+  identity?: string;
+  identityVerified?: boolean;
   now: () => string;
 }
 
-export type GenericMessageResponder = (input: GenericResponderInput) => GenericMessageResponse;
+/** 响应器可以是同步回显，也可以是异步接待（模型/工具/持久化）。 */
+export type GenericMessageResponder = (
+  input: GenericResponderInput,
+) => GenericMessageResponse | Promise<GenericMessageResponse>;
 
 /** 生成新的 contextId（A2A 不透明字符串，ctx_<uuidv7>）。 */
 export function newGenericContextId(): string {
