@@ -70,6 +70,9 @@ import { createMerchantHandler } from "./server/merchant-handler.js";
 import { NegotiationApprovalStore } from "./server/negotiation-approvals.js";
 import { createDeepSeekNegotiationAdvisor } from "./server/negotiation-advisor.js";
 import { createDeepSeekInquiryInterpreter } from "./server/inquiry-interpreter.js";
+import { ReceptionConversationStore } from "./reception/conversation-store.js";
+import { createMerchantReceptionEngine } from "./reception/engine.js";
+import { createReceptionResponder } from "./reception/responder.js";
 import { LedgerStore } from "../negotiation/ledger/index.js";
 import { IdempotencyStore } from "../negotiation/idempotency/index.js";
 import { openMerchantStatsStore } from "../merchant/stats-store.js";
@@ -713,6 +716,42 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
         })
       : defaultHandler();
 
+  // P0a：商家 AI 接待（普通 A2A 文本）。默认关闭；KIWI_MERCHANT_RECEPTION
+  // 显式设为 active/advisory 才接管 generic 文本，KNP 路径不受影响。
+  const receptionMode = (process.env.KIWI_MERCHANT_RECEPTION ?? "").trim();
+  const receptionEnabled =
+    role === "merchant" && (receptionMode === "active" || receptionMode === "advisory");
+  const genericResponder = receptionEnabled
+    ? createReceptionResponder(
+        createMerchantReceptionEngine({
+          store: new ReceptionConversationStore({
+            file: path.join(dir, "reception-conversations.json"),
+            now,
+          }),
+          ...(profile.model !== undefined
+            ? {
+                interpreter: createDeepSeekInquiryInterpreter({
+                  ...(profile.model.api_key_env !== undefined
+                    ? { apiKeyEnv: profile.model.api_key_env }
+                    : {}),
+                  ...(profile.model.base_url !== undefined
+                    ? { baseUrl: profile.model.base_url }
+                    : {}),
+                  ...(profile.model.model !== undefined ? { model: profile.model.model } : {}),
+                }),
+              }
+            : {}),
+          ...(productSource !== undefined ? { productSource } : {}),
+          now,
+          policy: () =>
+            typeof options.merchantPolicy === "function"
+              ? options.merchantPolicy()
+              : (options.merchantPolicy ?? profile.merchant_policy),
+        }),
+        profile.owner_id,
+      )
+    : undefined;
+
   const holder = { baseUrl: advertisedBase };
   const server = new A2AServer({
     // 仅在可信反向代理（如本机 Caddy）之后开启；传输地址仍用于认证。
@@ -755,6 +794,7 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     ...(options.authVerifier !== undefined ? { authVerifier: options.authVerifier } : {}),
     ...(options.throttle !== undefined ? { throttle: options.throttle } : {}),
     ...(statsStore !== undefined ? { stats: statsStore } : {}),
+    ...(genericResponder !== undefined ? { genericResponder } : {}),
   });
   const closeStats = createSyncCleanup([{ id: "statistics", run: () => statsStore?.close() }]);
   const releaseOwnership = createSyncCleanup([
