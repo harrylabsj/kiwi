@@ -27,6 +27,12 @@ import type { Api, Message, Model, TSchema } from "@earendil-works/pi-ai";
 
 import type { MerchantPolicy } from "../../config/profile.js";
 import type { AttemptBudgetHooks } from "../server/inquiry-interpreter.js";
+import {
+  canonicalUnitToken,
+  normalizeUnitAliasMap,
+  normalizeUnitFactorMap,
+  unitsAreCanonicalAliases,
+} from "../unit-alias.js";
 import type { ReceptionProductSource } from "./engine.js";
 import { factRevision, type InMemoryFactRegistry } from "./publish.js";
 import type {
@@ -268,6 +274,8 @@ function deliveryBefore(policy: MerchantPolicy | undefined, now: string): string
 export function createPiReceptionRuntime(
   options: PiReceptionRuntimeOptions,
 ): ReceptionAgentRuntime {
+  const unitAliases = normalizeUnitAliasMap(options.unitAliases);
+  const unitPackageFactors = normalizeUnitFactorMap(options.unitPackageFactors);
   return {
     async run(input) {
       const policy = options.policy?.();
@@ -458,27 +466,34 @@ export function createPiReceptionRuntime(
                 return toolResult(JSON.stringify({ error: "facts_stale" }));
               }
             }
-            // AC06：单位必须一致、命中别名，或按商家声明的包装倍率换算；
-            // 不做盒/件猜测。
+            // AC06：显式商家包装倍率/别名优先，且即使 box/盒 规范化后相同也要
+            // 检查显式配置；未配置时才使用内建 1:1，不做个/件到盒的换算。
             let unit = requestedUnit;
             let effectiveQuantity = quantity;
-            if (product.unit !== undefined && requestedUnit !== undefined && requestedUnit !== product.unit) {
-              const factor = options.unitPackageFactors?.[requestedUnit];
+            if (product.unit !== undefined && requestedUnit !== undefined) {
+              const requestedKey = canonicalUnitToken(requestedUnit);
+              const productKey = canonicalUnitToken(product.unit);
+              const factor = unitPackageFactors[requestedKey];
               if (factor !== undefined) {
                 if (quantity === undefined) {
                   return toolResult(JSON.stringify({ error: "missing_quantity" }));
                 }
                 effectiveQuantity = quantity * factor;
                 unit = product.unit;
-              } else if (options.unitAliases?.[requestedUnit] === product.unit) {
+              } else if (Object.hasOwn(unitAliases, requestedKey)) {
+                if (unitAliases[requestedKey] !== productKey) {
+                  return toolResult(JSON.stringify({ error: "unit_mismatch", supported_unit: product.unit }));
+                }
                 unit = product.unit;
-              } else {
+              } else if (requestedKey !== productKey && !unitsAreCanonicalAliases(requestedKey, productKey)) {
                 return toolResult(
                   JSON.stringify({
                     error: "unit_mismatch",
                     supported_unit: product.unit,
                   }),
                 );
+              } else {
+                unit = product.unit;
               }
             }
             const floorMinor = policyFloorMinor(policy, sku);

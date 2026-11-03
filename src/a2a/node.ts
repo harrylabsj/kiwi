@@ -833,6 +833,9 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
                 ),
               }
             : {}),
+          ...(profile.commerce.unit_package_factors !== undefined
+            ? { unitPackageFactors: profile.commerce.unit_package_factors }
+            : {}),
           // BUG-07：显式传入 provider（或静态值）时每次报价取运行中生效策略；
           // 缺省仍是启动 profile 的静态策略。
           merchantPolicy: options.merchantPolicy ?? profile.merchant_policy,

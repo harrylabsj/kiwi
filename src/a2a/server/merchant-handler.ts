@@ -69,6 +69,12 @@ import type {
   NegotiationHandler,
   NegotiationHandlerResult,
 } from "./types.js";
+import {
+  canonicalUnitToken,
+  normalizeUnitAliasMap,
+  normalizeUnitFactorMap,
+  unitsAreCanonicalAliases,
+} from "../unit-alias.js";
 
 export const MERCHANT_CAPABILITY = "com.harrylabsj.kiwi.shopping.negotiation";
 export const MERCHANT_SKU = "SKU-001";
@@ -165,6 +171,8 @@ export interface MerchantHandlerOptions {
    * 中文买家发 `个`，商家没配这张表就会被 `field_unsupported` 拒掉。
    */
   unitAliases?: Record<string, string>;
+  /** 包装单位 → 1 包装 = N 个商品源单位；KNP 只能安全处理 N=1。 */
+  unitPackageFactors?: Record<string, number>;
   /** 条件成交折扣百分比（deal = base × (1 - pct/100)）；缺省 5。 */
   dealDiscountPercent?: number;
   /** merchant policy：确定性定价的 floor / 促销（per-SKU，可配置）。
@@ -385,24 +393,29 @@ class ProductSourceUnavailableError extends Error {
  * 既保住这条检查，也不改变计价。
  */
 
-/** 单位归一：NFKC + 去空白 + 小写（`Piece` / `piece` / `ＰＣＥ` 视为同一写法）。 */
-function normalizeUnit(unit: string): string {
-  return unit.trim().normalize("NFKC").toLowerCase();
-}
-
 /**
  * 单位校验：商品**没有单位就拒绝**（fail-closed，不知道按什么计量就不报价）；
- * 有单位时严格比较，只额外接受商家显式声明的别名，绝不猜同义词。
+ * 有单位时严格比较，只额外接受商家显式声明的别名，或内建的 box/盒 1:1 写法。
+ * 不做“个/件 = 盒”的自动换算，也不改变数量/单价/金额。
  */
 function unitMismatch(
   productUnit: string | undefined,
   requestedUnit: string,
   aliases: Record<string, string>,
+  packageFactors: Record<string, number>,
 ): boolean {
   const declared = (productUnit ?? "").trim();
   if (declared === "") return true;
-  if (normalizeUnit(declared) === normalizeUnit(requestedUnit)) return false;
-  return aliases[normalizeUnit(requestedUnit)] !== normalizeUnit(declared);
+  const requested = canonicalUnitToken(requestedUnit);
+  const product = canonicalUnitToken(declared);
+  // 显式包装倍率先于内建 1:1，且即使规范化后单位相同也要检查：配置了
+  // BOX/盒 倍率时不能悄悄退回 1:1。KNP 的 offer/counter 不能安全改写
+  // 数量；只有 1:1 倍率可以按等价单位接受，其余必须拒绝。
+  if (Object.hasOwn(packageFactors, requested)) return packageFactors[requested] !== 1;
+  // 商家显式别名优先于内建别名（包括显式把「盒」指到其他单位的情况）。
+  if (Object.hasOwn(aliases, requested)) return aliases[requested] !== product;
+  if (product === requested) return false;
+  return !unitsAreCanonicalAliases(requested, product);
 }
 
 const declineReply = (
@@ -447,12 +460,8 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
   const { ledger, now, sender, counterparty } = options;
   const offerPriceMinor = options.offerPriceMinor ?? MERCHANT_OFFER_PRICE_MINOR;
   const allowDemoPriceFallback = options.allowDemoPriceFallback ?? false;
-  const unitAliases: Record<string, string> = Object.fromEntries(
-    Object.entries(options.unitAliases ?? {}).map(([alias, canonical]) => [
-      normalizeUnit(alias),
-      normalizeUnit(canonical),
-    ]),
-  );
+  const unitAliases = normalizeUnitAliasMap(options.unitAliases);
+  const unitPackageFactors = normalizeUnitFactorMap(options.unitPackageFactors);
   // BUG-07：merchantPolicy 支持静态值或 provider——每请求解析运行中策略。
   const policyOf = (): MerchantPolicy | undefined =>
     typeof options.merchantPolicy === "function"
@@ -1250,7 +1259,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
           const { priceMinor, currency } = product;
-          if (unitMismatch(product.unit, requestedUnit, unitAliases)) return declineReply("field_unsupported");
+          if (unitMismatch(product.unit, requestedUnit, unitAliases, unitPackageFactors)) return declineReply("field_unsupported");
           const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
@@ -1345,7 +1354,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
           const { priceMinor, currency } = product;
-          if (unitMismatch(product.unit, requestedUnit, unitAliases)) return declineReply("field_unsupported");
+          if (unitMismatch(product.unit, requestedUnit, unitAliases, unitPackageFactors)) return declineReply("field_unsupported");
           const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
@@ -1437,7 +1446,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
           const { priceMinor, currency } = product;
-          if (unitMismatch(product.unit, requestedUnit, unitAliases)) return declineReply("field_unsupported");
+          if (unitMismatch(product.unit, requestedUnit, unitAliases, unitPackageFactors)) return declineReply("field_unsupported");
           const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const authorityPromotion = resolvePromotionQuote(
@@ -1748,7 +1757,17 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           const saved = quoteSources.get(negotiationId);
           if (saved === undefined || saved.offer_id !== acceptedOfferId) return declineReply("offer_unknown");
           const agreedItem = (agreedTerms as { items?: Array<{ sku?: unknown; quantity?: { value?: unknown; unit?: unknown } }> }).items?.[0];
-          if (agreedItem?.sku !== saved.snapshot.sku || agreedItem.quantity?.value !== saved.snapshot.quantity || agreedItem.quantity?.unit !== saved.snapshot.unit) return declineReply("approval_required");
+          const agreedUnit = agreedItem?.quantity?.unit;
+          // 1:1 alias（box/盒）和商家显式别名可接受；显式包装倍率 >1 的
+          // 单位在 KNP accept 阶段不能安全换算，unitMismatch 会拒绝。数量/
+          // 单价/金额仍必须与保存的报价快照完全一致。
+          if (
+            agreedItem?.sku !== saved.snapshot.sku ||
+            agreedItem.quantity?.value !== saved.snapshot.quantity ||
+            typeof agreedUnit !== "string" ||
+            unitMismatch(saved.snapshot.unit, agreedUnit, unitAliases, unitPackageFactors)
+          )
+            return declineReply("approval_required");
           const refreshedFacts = await resolveProductOrDecline(saved.snapshot.sku, { force: true });
           if ("declined" in refreshedFacts) return declineReply("approval_required");
           if (!quoteFactsStillValid(saved.snapshot, refreshedFacts.product, Date.parse(now()))) return declineReply("approval_required");

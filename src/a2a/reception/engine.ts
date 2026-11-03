@@ -15,6 +15,12 @@ import { contentDigest } from "../../negotiation/jcs.js";
 import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
 import type { InquiryInterpreter, InquiryTopic } from "../server/inquiry-interpreter.js";
 import { applyDiscountPercentMinor } from "../server/merchant-handler.js";
+import {
+  canonicalUnitToken,
+  normalizeUnitAliasMap,
+  normalizeUnitFactorMap,
+  unitsAreCanonicalAliases,
+} from "../unit-alias.js";
 import type { ReceptionAgentRuntime } from "./agent-runtime.js";
 import { RECEPTION_CONFIG_DEFAULTS } from "./config.js";
 import type { ReceptionConversationStore } from "./conversation-store.js";
@@ -268,6 +274,8 @@ const EMPTY_PUBLISH_FALLBACK =
 export function createMerchantReceptionEngine(
   deps: MerchantReceptionEngineDeps,
 ): ReceptionEngine {
+  const unitAliases = normalizeUnitAliasMap(deps.unitAliases);
+  const unitPackageFactors = normalizeUnitFactorMap(deps.unitPackageFactors);
   return {
     async respond(input) {
       // §17.1：每次接待写入前先固化已到期的审批，避免新会话面对陈旧 pending。
@@ -527,9 +535,12 @@ export function createMerchantReceptionEngine(
           );
         }
       }
-      // AC06：单位必须与商品源一致，或命中商家声明的别名；不做“盒=件”猜测。
-      if (product.unit !== undefined && unit !== undefined && unit !== product.unit) {
-        const factor = deps.unitPackageFactors?.[unit];
+      // AC06：显式商家包装倍率/别名优先，且即使 box/盒 规范化后相同也必须
+      // 检查显式配置；未配置时才使用内建 1:1，不做个/件到盒的换算。
+      if (product.unit !== undefined && unit !== undefined) {
+        const requestedKey = canonicalUnitToken(unit);
+        const productKey = canonicalUnitToken(product.unit);
+        const factor = unitPackageFactors[requestedKey];
         if (factor !== undefined) {
           // AC06：使用商家声明的包装倍率；没有数量时先问数量，绝不猜 1 箱=1 件。
           if (quantity === undefined) {
@@ -545,9 +556,19 @@ export function createMerchantReceptionEngine(
           convertedFrom = { quantity, unit, factor };
           quantity = quantity * factor;
           unit = product.unit;
-        } else if (deps.unitAliases?.[unit] === product.unit) {
+        } else if (Object.hasOwn(unitAliases, requestedKey)) {
+          if (unitAliases[requestedKey] !== productKey) {
+            return finish(
+              input,
+              previous,
+              registry,
+              [{ kind: "ask_clarification", missing: ["sku"], reason: "unit_mismatch", supportedUnit: product.unit }],
+              { sku, quantity },
+              stated,
+            );
+          }
           unit = product.unit;
-        } else {
+        } else if (requestedKey !== productKey && !unitsAreCanonicalAliases(requestedKey, productKey)) {
           return finish(
             input,
             previous,
@@ -563,6 +584,8 @@ export function createMerchantReceptionEngine(
             { sku, quantity },
             stated,
           );
+        } else {
+          unit = product.unit;
         }
       }
 
