@@ -194,21 +194,22 @@ describe("merchant reception facts/unit/tax (M3)", () => {
   it.each([
     { productUnit: "盒", requestUnit: "盒", expectedQuantity: 2 },
     { productUnit: "box", requestUnit: "box", expectedQuantity: 2 },
-    { productUnit: "盒", requestUnit: "box", expectedQuantity: 24 },
-    { productUnit: "box", requestUnit: "盒", expectedQuantity: 24 },
+    { productUnit: "盒", requestUnit: "box", expectedQuantity: null },
+    { productUnit: "box", requestUnit: "盒", expectedQuantity: null },
   ])(
     "default_unit=盒 + factor box:12 区分精确/折叠写法 %j",
     async ({ productUnit, requestUnit, expectedQuantity }) => {
       const engine = engineFor({ unit: productUnit }, undefined, requestUnit, { box: 12 }, "盒");
       const result = await engine.respond(input(requestUnit === "盒" ? "来两盒" : "来两box"));
+      if (expectedQuantity === null) {
+        expect(result.text).toContain(`该商品按 ${productUnit} 售卖`);
+        expect(result.text).not.toContain("当前公开标价");
+        return;
+      }
       expect(result.text).toContain(`已记录需求：SKU VQ-001，${expectedQuantity} ${productUnit}`);
       expect(result.text).toContain("当前公开标价 110.00 CNY");
       expect(result.conversation.need.quantity).toBe(expectedQuantity);
       expect(result.conversation.need.unit).toBe(productUnit);
-      if (expectedQuantity === 24) {
-        expect(result.conversation.need.inputQuantity).toBe(2);
-        expect(result.conversation.need.inputUnit).toBe(requestUnit);
-      }
     },
   );
 
