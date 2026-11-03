@@ -180,6 +180,7 @@ var catalogBeginPending = false;
 var catalogConnectionState = null;
 var catalogAccessState = null;
 var publicationDraft = null;
+var publicationPicks = null;
 var publicationBusy = false;
 var $ = function (id) { return document.getElementById(id); };
 function esc(s) {
@@ -487,6 +488,168 @@ function showCatalogPairing() {
   }).catch(function () { bar("无法读取配对信息，请刷新连接状态。", true); });
 }
 
+/** 发布选择表：直接勾选已导入/已有商品并填分类，无需再手输 SKU。 */
+function publicationCard(items) {
+  var rows = (items || []).map(function (it) {
+    var sku = esc(it.sku);
+    return '<tr data-sku="' + sku + '">' +
+      '<td><input type="checkbox" class="pub-pick" aria-label="选择商品 ' + sku + '"></td>' +
+      '<td>' + sku + '</td><td>' + esc(it.title) + '</td><td>' + esc(it.status || "-") + '</td>' +
+      '<td><input type="text" class="pub-category" maxlength="120" placeholder="填写分类" aria-label="' + sku + ' 的分类"></td></tr>';
+  }).join("");
+  var body = rows
+    ? '<div class="row"><input type="text" id="pub-category-all" maxlength="120" placeholder="统一分类（可选）" aria-label="统一分类">' +
+      '<button class="act" id="pub-apply" onclick="applyPublicationCategory()">应用到已勾选</button>' +
+      '<button class="act" id="pub-clear" onclick="clearPublicationPicks()">清空选择</button></div>' +
+      '<div class="table-scroll"><table id="pub-table"><tr><th>选择</th><th>SKU</th><th>名称</th><th>状态</th><th>分类（必填）</th></tr>' +
+      '<tbody id="pub-rows">' + rows + '</tbody></table></div>' +
+      '<p class="muted">公开名称、SKU、分类、商品页链接与其余公开字段；价格、库存及私有规则不会发布。' +
+      '可发布已导入或已有商品，不涉及下架其他商品。预览后选择会锁定，修改需先「重新选择」。</p>' +
+      '<button class="act" id="pub-preview" onclick="previewPublication()">预览公开内容</button>'
+    : '<p class="muted">暂无商品，请先在上方导入商品后再选择发布。</p>';
+  return '<div class="card"><h2>发布商品到 Kiwi 目录</h2>' +
+    '<p class="muted">先完成目录连接，再勾选要公开的商品并填写分类；预览确认后才发布。</p>' + body +
+    '<div id="publication-result"></div></div>';
+}
+function applyPublicationCategory() {
+  if (publicationDraft !== null) { bar("预览已生成，选择已锁定；如需修改请先点「重新选择」", true); return; }
+  var all = $("pub-category-all");
+  var category = all ? String(all.value || "").trim() : "";
+  if (!category) { bar("请先填写统一分类", true); return; }
+  var rows = document.querySelectorAll("#pub-rows tr");
+  for (var i = 0; i < rows.length; i++) {
+    var box = rows[i].querySelector("input.pub-pick");
+    var input = rows[i].querySelector("input.pub-category");
+    if (box && box.checked && input) input.value = category;
+  }
+}
+function clearPublicationPicks() {
+  if (publicationDraft !== null) { bar("预览已生成，选择已锁定；如需修改请先点「重新选择」", true); return; }
+  var rows = document.querySelectorAll("#pub-rows tr");
+  for (var i = 0; i < rows.length; i++) {
+    var box = rows[i].querySelector("input.pub-pick");
+    var input = rows[i].querySelector("input.pub-category");
+    if (box) box.checked = false;
+    if (input) input.value = "";
+  }
+}
+function lockPublicationSelection(locked) {
+  var rows = document.querySelectorAll("#pub-rows tr");
+  for (var i = 0; i < rows.length; i++) {
+    var box = rows[i].querySelector("input.pub-pick");
+    var input = rows[i].querySelector("input.pub-category");
+    if (box) box.disabled = locked;
+    if (input) input.disabled = locked;
+  }
+  var all = $("pub-category-all");
+  if (all) all.disabled = locked;
+  var apply = $("pub-apply");
+  if (apply) apply.disabled = locked;
+  var clear = $("pub-clear");
+  if (clear) clear.disabled = locked;
+}
+function samePublicationPicks(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i].sku !== b[i].sku || a[i].category !== b[i].category) return false;
+  }
+  return true;
+}
+function resetPublication() {
+  publicationDraft = null;
+  publicationPicks = null;
+  lockPublicationSelection(false);
+  var result = $("publication-result");
+  if (result) result.innerHTML = "";
+  bar("已作废本次预览，可重新选择商品与分类");
+}
+/** 只接受 http(s)、无凭据的公开链接；文本与 href 都转义。 */
+function publicLink(value) {
+  if (typeof value !== "string" || value === "") return "-";
+  var url;
+  try { url = new URL(value); } catch (e) { return "-"; }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) return "-";
+  return '<a href="' + esc(url.href) + '" target="_blank" rel="noopener noreferrer">查看商品页</a>';
+}
+/** 其余公开字段白名单（不渲染 owner/merchant 等内部标识）。 */
+function publicFieldText(listing) {
+  var parts = [];
+  if (listing.summary) parts.push("摘要：" + listing.summary);
+  if (listing.brand) parts.push("品牌：" + listing.brand);
+  if (Array.isArray(listing.regions) && listing.regions.length) parts.push("区域：" + listing.regions.join("、"));
+  if (Array.isArray(listing.tags) && listing.tags.length) parts.push("标签：" + listing.tags.join("、"));
+  var hints = listing.commercial_hints;
+  if (hints && typeof hints === "object") {
+    if (hints.moq != null) parts.push("起订量：" + hints.moq);
+    if (hints.price_range_hint) parts.push("价格区间提示：" + hints.price_range_hint);
+    if (hints.availability_hint) parts.push("可供货提示：" + hints.availability_hint);
+    if (hints.lead_time_hint) parts.push("交期提示：" + hints.lead_time_hint);
+    if (hints.supports_bulk_quote === true) parts.push("支持批量报价");
+    if (hints.supports_customization === true) parts.push("支持定制");
+    if (Array.isArray(hints.fulfillment_regions) && hints.fulfillment_regions.length) parts.push("履约区域：" + hints.fulfillment_regions.join("、"));
+  }
+  if (Array.isArray(listing.handoff_destination_types) && listing.handoff_destination_types.length) {
+    parts.push("交易方式：" + listing.handoff_destination_types.join("、"));
+  }
+  if (!parts.length) return "-";
+  return parts.map(function (part) { return esc(part); }).join("<br>");
+}
+function publicationSelections() {
+  var rows = document.querySelectorAll("#pub-rows tr");
+  var selections = [];
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var box = row.querySelector("input.pub-pick");
+    if (!box || !box.checked) continue;
+    var sku = String(row.getAttribute("data-sku") || "").trim();
+    var input = row.querySelector("input.pub-category");
+    var category = input ? String(input.value || "").trim() : "";
+    if (!sku) { bar("商品行缺少 SKU，请刷新页面后重试", true); return null; }
+    if (!category) { bar("请为已勾选的商品填写分类：" + sku, true); return null; }
+    selections.push({ sku: sku, category: category });
+  }
+  if (!selections.length) { bar("请先勾选要公开的商品", true); return null; }
+  return selections;
+}
+function renderPublicationReceipts(receipts, heading, counts) {
+  var rows = (receipts || []).map(function (r) {
+    var label = r.status === "succeeded" ? "已确认" : r.status === "pending" ? "待确认" : "失败";
+    return "<tr><td>" + esc(r.sku) + "</td><td>" + esc(label) + "</td><td>" + esc(r.code || r.listing_id || "-") + "</td></tr>";
+  }).join("");
+  return "<h3>" + esc(heading) + "</h3>" + (counts ? "<p>" + esc(counts) + "</p>" : "") +
+    '<div class="table-scroll"><table><tr><th>SKU</th><th>结果</th><th>说明</th></tr>' + rows + "</table></div>";
+}
+/** 商品页统一渲染：全部已加载商品（含分页）与准确数量。 */
+function renderProducts(items) {
+  var list = items || [];
+  var rows = list.map(function (it) {
+    if (FILE_PRODUCTS) {
+      return "<tr><td>" + esc(it.sku) + "</td><td>" + esc(it.title) + "</td><td>" +
+        esc(it.currency) + " " + esc(it.price) + " / " + esc(it.price_unit) + "</td><td>" +
+        esc(it.min_order_qty == null ? "-" : it.min_order_qty) + "</td><td>" +
+        esc(it.valid_until) + "</td><td>" + esc(it.status) + "</td><td>" +
+        esc(({jd:"京东",taobao:"淘宝",tmall:"天猫"})[it.trade_platform] || "-") + "</td><td>" +
+        esc(it.platform_product_id || "-") + "</td><td>" + marketplaceLink(it) + "</td></tr>";
+    }
+    var money = it.money || {};
+    return "<tr><td>" + esc(it.sku) + "</td><td>" + esc(it.title) + "</td><td>" +
+      esc(money.currency || "-") + " " + esc(money.amount_minor == null ? "-" : money.amount_minor) +
+      "（最小币单位）</td><td>" + esc(it.stock == null ? "-" : it.stock) + "</td><td>" +
+      esc(it.authority_version == null ? "-" : it.authority_version) + "</td></tr>";
+  }).join("");
+  return '<div class="card"><h2>当前商品（' + list.length + "）</h2>" +
+    (rows ? (FILE_PRODUCTS
+      ? "<table><tr><th>SKU</th><th>名称</th><th>单价</th><th>起订量</th><th>有效期至</th><th>状态</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
+      : "<table><tr><th>SKU</th><th>名称</th><th>价格（最小币单位）</th><th>库存</th><th>版本</th></tr>") + rows + "</table>"
+          : '<p class="muted">暂无商品，请先导入商品。没有商品时服务不会报价或发布名片。</p>') + "</div>" +
+    '<div class="card"><h2>导入商品表（整表替换）</h2>' +
+    '<p class="muted">交易链接仅为平台商品页；是否成交、实际价格与付款结果由交易平台确认。</p>' +
+    '<p class="muted">支持 CSV、Excel（.xlsx）与商品表 JSON：先转换校验、预览增/改/留/删，确认后整批生效（不成功的批次不改动现有商品）。</p>' +
+    '<p class="muted">模板：<a href="/merchant/api/v1/products/import-template?format=csv" download="kiwi-product-import-template.csv">下载 CSV 模板</a> · <a href="/merchant/api/v1/products/import-template?format=xlsx" download="kiwi-product-import-template.xlsx">下载 Excel 模板</a>（中文表头与示例行；中英文常见列名会自动识别）。</p>' +
+    '<div class="row"><input type="file" id="pfile" aria-label="选择商品导入文件" accept=".json,.csv,.xlsx">' +
+    '<button class="act" onclick="previewImport()">校验预览</button></div><div id="presult"></div></div>' +
+    (FILE_PRODUCTS && CATALOG_CONNECT && ROLE === "owner" ? publicationCard(list) : '');
+}
 var views = {
   status: function () {
     return call("GET", "/runtime/status").then(function (s) {
@@ -524,39 +687,19 @@ var views = {
   },
   products: function () {
     // 云端导入表与 exact 商品库是不同权威源；按装配选择，不能把空 exact 库当作导入失败。
-    return call("GET", "/products?limit=100", undefined, FILE_PRODUCTS ? "/merchant/api" : API).then(function (p) {
-      var rows = (p.items || []).map(function (it) {
-        if (FILE_PRODUCTS) {
-          return "<tr><td>" + esc(it.sku) + "</td><td>" + esc(it.title) + "</td><td>" +
-            esc(it.currency) + " " + esc(it.price) + " / " + esc(it.price_unit) + "</td><td>" +
-            esc(it.min_order_qty == null ? "-" : it.min_order_qty) + "</td><td>" +
-            esc(it.valid_until) + "</td><td>" + esc(it.status) + "</td><td>" +
-            esc(({jd:"京东",taobao:"淘宝",tmall:"天猫"})[it.trade_platform] || "-") + "</td><td>" +
-            esc(it.platform_product_id || "-") + "</td><td>" + marketplaceLink(it) + "</td></tr>";
-        }
-        var money = it.money || {};
-        return "<tr><td>" + esc(it.sku) + "</td><td>" + esc(it.title) + "</td><td>" +
-          esc(money.currency || "-") + " " + esc(money.amount_minor == null ? "-" : money.amount_minor) +
-          "（最小币单位）</td><td>" + esc(it.stock == null ? "-" : it.stock) + "</td><td>" +
-          esc(it.authority_version == null ? "-" : it.authority_version) + "</td></tr>";
-      }).join("");
-      return '<div class="card"><h2>当前商品（' + (p.items || []).length + "）</h2>" +
-        (rows ? (FILE_PRODUCTS
-          ? "<table><tr><th>SKU</th><th>名称</th><th>单价</th><th>起订量</th><th>有效期至</th><th>状态</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
-          : "<table><tr><th>SKU</th><th>名称</th><th>价格（最小币单位）</th><th>库存</th><th>版本</th></tr>") + rows + "</table>"
-              : '<p class="muted">暂无商品，请先导入商品。没有商品时服务不会报价或发布名片。</p>') + "</div>" +
-        '<div class="card"><h2>导入商品表（整表替换）</h2>' +
-        '<p class="muted">交易链接仅为平台商品页；是否成交、实际价格与付款结果由交易平台确认。</p>' +
-        '<p class="muted">支持 CSV、Excel（.xlsx）与商品表 JSON：先转换校验、预览增/改/留/删，确认后整批生效（不成功的批次不改动现有商品）。</p>' +
-        '<p class="muted">模板：<a href="/merchant/api/v1/products/import-template?format=csv" download="kiwi-product-import-template.csv">下载 CSV 模板</a> · <a href="/merchant/api/v1/products/import-template?format=xlsx" download="kiwi-product-import-template.xlsx">下载 Excel 模板</a>（中文表头与示例行；中英文常见列名会自动识别）。</p>' +
-        '<div class="row"><input type="file" id="pfile" aria-label="选择商品导入文件" accept=".json,.csv,.xlsx">' +
-        '<button class="act" onclick="previewImport()">校验预览</button></div><div id="presult"></div></div>' +
-        (FILE_PRODUCTS && CATALOG_CONNECT && ROLE === "owner" ?
-          '<div class="card"><h2>发布商品到 Kiwi 目录</h2><p>先完成目录连接，再选择商品并填写分类。公开名称、SKU、分类及填写的平台商品页链接；价格、库存及私有规则不会发布。</p>' +
-          '<p>每行填写一个 SKU 和分类，用英文竖线分隔，例如：KIWI-ACCEPT-001 | 验收测试</p>' +
-          '<textarea id="publication-selection" rows="4" aria-label="选定商品与分类"></textarea>' +
-          '<button class="act" onclick="previewPublication()">预览公开内容</button><div id="publication-result"></div></div>' : '');
-    });
+    // 商品可能超过 100 件：跟随 next_cursor 拉全量，保证全部可选、计数准确。
+    var base = FILE_PRODUCTS ? "/merchant/api" : API;
+    var items = [];
+    function loadPage(cursor, page) {
+      var path = "/products?limit=100" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : "");
+      return call("GET", path, undefined, base).then(function (p) {
+        items = items.concat(p.items || []);
+        var next = p.next_cursor;
+        if (typeof next === "string" && next !== "" && page < 50) return loadPage(next, page + 1);
+        return renderProducts(items);
+      });
+    }
+    return loadPage("", 0);
   },
   approvals: function () {
     return call("GET", "/approvals").then(function (p) {
@@ -921,43 +1064,74 @@ var pendingImport = null;
 var parsedTable = null;
 function previewPublication() {
   if (publicationBusy) return;
-  publicationDraft = null;
-  var selection = $("publication-selection");
-  var lines = selection.value.split(/\\r?\\n/).filter(function (line) { return line.trim(); });
-  var selections = [];
-  for (var i = 0; i < lines.length; i++) {
-    var parts = lines[i].split("|");
-    if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) { bar("每行需填写 SKU | 分类", true); return; }
-    selections.push({ sku: parts[0].trim(), category: parts[1].trim() });
-  }
+  if (publicationDraft !== null) { bar("已生成预览；如需修改选择，请先点「重新选择」", true); return; }
+  var selections = publicationSelections();
+  if (selections === null) return;  // 输入校验失败：不触碰已有状态
+  var previousDraft = publicationDraft;
   publicationBusy = true;
   return call("POST", "/products/publication-drafts", { selections: selections }).then(function (draft) {
     publicationDraft = draft;
-    $("publication-result").innerHTML = '<h3>将公开以下内容</h3><pre>' +
-      esc(JSON.stringify(draft.items.map(function (it) { return it.listing; }), null, 2)) +
-      '</pre><p>预览有效期至 ' + esc(draft.expires_at) + '</p>' +
-      '<button class="act primary" onclick="commitPublication()">确认公开这些商品</button>';
-  }).catch(function (err) { bar(err.message, true); }).finally(function () { publicationBusy = false; });
+    publicationPicks = selections.slice();
+    var items = draft.items || [];
+    var rows = items.map(function (it) {
+      var listing = it.listing || {};
+      return "<tr><td>" + esc(listing.title || "-") + "</td><td>" +
+        esc(listing.source_product_ref || it.sku) + "</td><td>" +
+        esc(listing.category || it.category) + "</td><td>" +
+        publicLink(listing.handoff_destination_ref) + "</td><td>" +
+        esc(listing.fresh_until || "-") + "</td><td>" +
+        publicFieldText(listing) + "</td></tr>";
+    }).join("");
+    lockPublicationSelection(true);
+    $("publication-result").innerHTML = "<h3>将公开 " + esc(items.length) + " 件商品</h3>" +
+      '<p class="muted">「预览有效期至」是草稿到期时间，不是商品新鲜期；商品新鲜期以下方每行「新鲜期至」为准。</p>' +
+      '<div class="table-scroll"><table><tr><th>名称</th><th>SKU</th><th>分类</th><th>商品页链接</th><th>新鲜期至</th><th>其余公开字段</th></tr>' +
+      rows + "</table></div>" +
+      '<p class="muted">预览有效期至 ' + esc(draft.expires_at) +
+      '（草稿到期时间）；价格、库存与私有规则不在公开内容中。整表替换只影响商品导入，不会改动本次未勾选的其他公开商品。</p>' +
+      '<button class="act primary" onclick="commitPublication()">确认公开这 ' + esc(items.length) + ' 件商品</button> ' +
+      '<button class="act" onclick="resetPublication()">重新选择（作废本次预览）</button>';
+  }).catch(function (err) {
+    publicationDraft = previousDraft;  // 网络失败不丢旧草稿引用
+    bar(err.message, true);
+  }).finally(function () { publicationBusy = false; });
 }
 function commitPublication() {
   if (publicationBusy || !publicationDraft) return;
+  var current = publicationSelections();
+  if (current === null || !samePublicationPicks(current, publicationPicks)) {
+    publicationDraft = null;
+    publicationPicks = null;
+    lockPublicationSelection(false);
+    bar("预览后选择或分类已变化，本次预览已作废，请重新预览后再确认", true);
+    return;
+  }
   publicationBusy = true;
   var draft = publicationDraft;
   return call("POST", "/products/publication-drafts/" + encodeURIComponent(draft.draft_id) + "/commit", {
     expected_digest: draft.digest, confirm_publication: true,
   }).then(function (receipt) {
-    var text = "已确认 " + receipt.succeeded + "；失败 " + receipt.failed + "；待确认 " + receipt.pending;
-    $("publication-result").innerHTML = '<p>' + esc(text) + '</p>' +
-      '<pre>' + esc(JSON.stringify(receipt.results, null, 2)) + '</pre>' +
+    var total = receipt.succeeded + receipt.failed + receipt.pending;
+    var counts = "共 " + total + " 件：成功 " + receipt.succeeded + "，失败 " + receipt.failed + "，待确认 " + receipt.pending;
+    $("publication-result").innerHTML = renderPublicationReceipts(receipt.results, "发布结果", counts) +
       (receipt.status !== "succeeded" ? '<button class="act" onclick="checkPublication()">查看原草稿回执</button><button class="act" onclick="commitPublication()">按原草稿继续确认</button>' : '');
-    if (receipt.status === "succeeded") publicationDraft = null;
+    if (receipt.status === "succeeded") {
+      publicationDraft = null;
+      publicationPicks = null;
+      lockPublicationSelection(false);
+    }
   }).catch(function (err) { bar(err.message + " 请保留本页，查看原草稿回执。", true); })
     .finally(function () { publicationBusy = false; });
 }
 function checkPublication() {
   if (!publicationDraft) return;
   return call("GET", "/products/publication-drafts/" + encodeURIComponent(publicationDraft.draft_id)).then(function (result) {
-    bar("原草稿回执：" + JSON.stringify(result.receipts));
+    var receipts = result.receipts || [];
+    var pending = receipts.filter(function (r) { return r.status === "pending"; }).length;
+    $("publication-result").innerHTML = renderPublicationReceipts(receipts, "原草稿回执") +
+      (pending > 0 ? '<p class="muted">还有 ' + esc(pending) + ' 件结果待确认；可按原草稿继续确认（幂等，不会重复发布）。</p>' +
+        '<button class="act primary" onclick="commitPublication()">按原草稿继续确认</button> ' : "") +
+      '<button class="act" onclick="resetPublication()">重新选择（作废本次预览）</button>';
   }).catch(function (err) { bar(err.message, true); });
 }
 function previewImport() {

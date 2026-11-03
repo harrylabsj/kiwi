@@ -426,6 +426,10 @@ export async function bootstrapCloudRuntime(
       authMode: "oauth",
       issuer: config.publicOrigin,
       requireCommittedProductDecisions: true,
+      // 云工作台：裸登录后进入 /merchant/；待批准页提供返回工作台入口。
+      // 独立 MCP（cli）不传这两项，保持 /admin/pending 与无返回链接。
+      adminDefaultNext: "/merchant/",
+      adminPendingBackLink: { href: "/merchant/", label: "返回商家工作台" },
       extraExecutors: [
         ...createBroadcastExecutors({
           merchantId: profile.owner_id,

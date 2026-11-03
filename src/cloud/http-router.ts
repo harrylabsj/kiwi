@@ -23,6 +23,9 @@
  *   - `/.cloud/*` 归平台数据面，业务 router **显式跳过**，绝不接管（M0 事实）；
  *   - `/healthz` 在平台上被拦截（休眠中也返回 "Pod alive"），因此业务存活
  *     另有 `/livez`：平台应答不代表应用存活（M0 事实，T059 口径）；
+ *   - `/` 是零数据引导页：部署回执地址与平台分享链接都在根路径，而工作台在
+ *     `/merchant/`（根路径 404 会把商家挡在门外）。固定文案，不读请求 URL/头
+ *     （绝不回显分享码），也不做跳转——理由见 ROOT_GUIDANCE_HTML；
  *   - 未知路径返回最小 404，不回显请求内容与内部信息。
  */
 
@@ -92,6 +95,46 @@ function writeJson(
 function startsWithAny(pathname: string, prefixes: readonly string[]): boolean {
   return prefixes.some((p) => pathname === p.replace(/\/$/, "") || pathname.startsWith(p));
 }
+
+/**
+ * 根路径引导页（`/` 精确匹配）。零数据：内容与请求无关，不回显任何请求内容
+ * （分享码、路径、头），也不设任何跳转——工作台地址只能写相对路径：
+ *
+ *   - 网关可能剥除 sharecode 后才把请求转发到源站（G1 契约；实测根路径带码
+ *     404 即源站应答）。源站因此既拿不到码、也不能假定下一次请求仍带着码。
+ *     302 到 `/merchant/` 会剥掉码再进网关：若网关逐请求校验，商家只会看到
+ *     一条无解释的拒绝页，且重开分享链接会复现同样失败；引导页则两种网关
+ *     行为（会话放行 / 逐请求校验）下都给出可执行的下一步。
+ *   - 即使网关未剥码，把码回显进跳转目标或页面链接也违反"分享码不回显"
+ *     纪律（凭据不得进入日志外的引用链，如第三方 Referer）。
+ *
+ * 链接一律同源相对路径 + `rel="noreferrer"`，响应头 `referrer-policy:
+ * no-referrer`：从带码 URL 点击跳转时凭据不进 Referer。无脚本、无外部资源。
+ */
+const ROOT_GUIDANCE_HTML = [
+  "<!doctype html>",
+  '<html lang="zh-CN">',
+  "<head>",
+  '<meta charset="utf-8">',
+  '<meta name="viewport" content="width=device-width, initial-scale=1">',
+  "<title>Kiwi 商家云端接待</title>",
+  "<style>",
+  "body{font-family:system-ui,-apple-system,sans-serif;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f4f7f5;color:#1c2b22}",
+  "main{max-width:34rem;margin:1.5rem;padding:1.5rem 2rem;background:#fff;border-radius:8px;line-height:1.8}",
+  "h1{font-size:1.2rem;margin-top:.5rem}code{background:#eef3ef;border-radius:4px;padding:.1em .4em}",
+  "</style>",
+  "</head>",
+  "<body>",
+  "<main>",
+  "<h1>Kiwi 商家云端接待</h1>",
+  '<p>本实例的商家工作台在 <a href="/merchant/" rel="noreferrer"><code>/merchant/</code></a>，工作台登录页在 <a href="/admin/login" rel="noreferrer"><code>/admin/login</code></a>。</p>',
+  "<p>若打开工作台时平台要求提供分享码：请回到平台的分享链接（地址末尾带 <code>?sharecode=</code> 参数），把其中的路径部分改成 <code>/merchant/</code> 后重新打开。分享码等同访问凭据，请勿提供给其他人。</p>",
+  "<p>本页面不承载商家数据；采购方机器接入（Agent Card 与 A2A 端点）不经本页面提供。</p>",
+  "</main>",
+  "</body>",
+  "</html>",
+  "",
+].join("\n");
 
 export function createCloudRouter(options: CloudRouterOptions): CloudRequestListener {
   const a2aPaths = options.a2aPaths ?? DEFAULT_A2A_PATHS;
@@ -175,6 +218,23 @@ export function createCloudRouter(options: CloudRouterOptions): CloudRequestList
       (pathname === "/merchant/api" || pathname.startsWith("/merchant/api/"))
     ) {
       options.merchantApiHandler(req, res);
+      return;
+    }
+
+    // 4.6) 根路径引导页：分享链接/回执地址落在 `/`，这里给出工作台入口（`/merchant/`）。
+    //      精确匹配；不读请求 URL 与头部，不做跳转（理由见 ROOT_GUIDANCE_HTML）。
+    if (pathname === "/") {
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        writeJson(res, 405, { error: "method_not_allowed" }, NO_STORE);
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+      });
+      res.end(ROOT_GUIDANCE_HTML);
       return;
     }
 

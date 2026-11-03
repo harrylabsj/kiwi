@@ -195,6 +195,7 @@ export function renderPendingPage(
   merchantName: string,
   commands: WriteApprovalCandidate[],
   tokenFor?: (candidateId: string, action: "approve" | "reject") => string,
+  backLink?: { href: string; label: string },
 ): string {
   const rows = commands
     .map(
@@ -240,6 +241,7 @@ export function renderPendingPage(
   <div class="pending-head">
     <div class="brand"><span class="brand-name" aria-label="Kiwi">kiwi</span><span class="brand-title">商家工作台</span></div>
     <h1>${escapeHtml(merchantName)}：待批准命令</h1>
+    ${backLink === undefined ? "" : `<a class="muted" href="${escapeHtml(backLink.href)}">${escapeHtml(backLink.label)}</a>`}
   </div>
   <p class="muted">展示预览 ≠ 批准；批准 ≠ 执行成功（执行前重校验前置版本与硬策略）。</p>
   <section class="card">

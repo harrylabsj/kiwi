@@ -102,7 +102,7 @@ function cookieValue(req: IncomingMessage, name: string): string | undefined {
 }
 
 /** 只允许管理面内部相对路径，避免 XSS 和开放重定向。 */
-function safeAdminNext(value: string | undefined): string {
+function safeAdminNext(value: string | undefined, fallback = "/admin/pending"): string {
   if (
     value === undefined ||
     value === "" ||
@@ -110,7 +110,7 @@ function safeAdminNext(value: string | undefined): string {
     value.startsWith("//") ||
     value.includes("\\")
   ) {
-    return "/admin/pending";
+    return fallback;
   }
   return value;
 }
@@ -149,6 +149,10 @@ export interface MerchantMcpServerOptions {
     adminDir: string;
     /** https 部署置 true（cookie 加 Secure）。 */
     secureCookies?: boolean;
+    /** 裸登录（无合法 next）成功后的落点：云工作台 /merchant/，独立 MCP 缺省 /admin/pending。 */
+    defaultNext?: string;
+    /** 待批准页的返回入口（云工作台传「返回商家工作台」；独立 MCP 不传）。 */
+    pendingBackLink?: { href: string; label: string };
     /**
      * 开通记录（M4 §5.4）：配置后 /admin/onboarding 返回**服务端权威**的开通状态、
      * 向导计划与本地兜底视图——管理入口如实展示现状，不在前端推断。
@@ -632,7 +636,7 @@ export function createMerchantHttpHandler(
             });
             res.end(
               renderAdminLoginPage({
-                next: safeAdminNext(url.searchParams.get("next") ?? undefined),
+                next: safeAdminNext(url.searchParams.get("next") ?? undefined, admin.defaultNext),
               }),
             );
             return;
@@ -641,6 +645,17 @@ export function createMerchantHttpHandler(
             const nowMs = Date.now();
             pruneRateLimits(nowMs);
             const ip = clientKey(req);
+            // 先读表单：限流/口令失败时也要把合法 next 回填进隐藏域，
+            // 否则重试会丢失原目标（默认页由 admin.defaultNext 决定）。
+            let form: Record<string, string | undefined>;
+            try {
+              form = await readForm(req);
+            } catch {
+              res.writeHead(400, { "content-type": "text/html; charset=utf-8", ...NO_STORE_HEADERS });
+              res.end("请求体无法解析");
+              return;
+            }
+            const nextAfterFailure = safeAdminNext(form.next, admin.defaultNext);
             let failure = loginFailures.get(ip);
             // A completed block is a finished failure window. A fresh bad
             // password starts at one; unblocked count-only windows stay intact.
@@ -653,10 +668,14 @@ export function createMerchantHttpHandler(
                 "content-type": "text/html; charset=utf-8",
                 ...NO_STORE_HEADERS,
               });
-              res.end(renderAdminLoginPage({ error: "失败次数过多，请 5 分钟后再试" }));
+              res.end(
+                renderAdminLoginPage({
+                  error: "失败次数过多，请 5 分钟后再试",
+                  next: nextAfterFailure,
+                }),
+              );
               return;
             }
-            const form = await readForm(req);
             const creds = readAdminCredentials(admin.adminDir);
             const password = form.password ?? "";
             if (creds === undefined || !verifyAdminPassword(password, creds.password_hash)) {
@@ -670,7 +689,9 @@ export function createMerchantHttpHandler(
                 "content-type": "text/html; charset=utf-8",
                 ...NO_STORE_HEADERS,
               });
-              res.end(renderAdminLoginPage({ error: "口令错误或管理员未初始化" }));
+              res.end(
+                renderAdminLoginPage({ error: "口令错误或管理员未初始化", next: nextAfterFailure }),
+              );
               return;
             }
             loginFailures.delete(ip);
@@ -680,7 +701,7 @@ export function createMerchantHttpHandler(
             });
             const secure = admin.secureCookies === true ? "; Secure" : "";
             res.writeHead(303, {
-              location: safeAdminNext(form.next),
+              location: safeAdminNext(form.next, admin.defaultNext),
               "set-cookie": `${ADMIN_SESSION_COOKIE}=${session.sessionId}; HttpOnly; SameSite=Lax; Path=/${secure}`,
             });
             res.end();
@@ -717,7 +738,7 @@ export function createMerchantHttpHandler(
             // 页面内嵌一次性确认凭证（审查 P2）：绝不进缓存。
             ...NO_STORE_HEADERS,
           });
-          res.end(renderPendingPage(admin.merchantName, commands, tokenFor));
+          res.end(renderPendingPage(admin.merchantName, commands, tokenFor, admin.pendingBackLink));
           return;
         }
         if (req.method === "GET" && url.pathname === "/admin/onboarding") {

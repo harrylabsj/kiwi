@@ -21,6 +21,7 @@ import {
   pkceS256,
   workbuddyCallbackUri,
 } from "../src/auth/merchant-oauth.js";
+import { renderPendingPage } from "../src/merchant-admin/pending-page.js";
 import {
   MerchantAdminSessions,
   readAdminCredentials,
@@ -79,6 +80,15 @@ describe("BUG-01：OAuth 授权前的商家身份认证", () => {
     expect(html).toContain('class="act primary"');
     expect(html).toContain('class="brand-name"');
     expect(html).toContain('autocomplete="current-password"');
+  });
+
+  it("待批准页的返回入口按 HTML 转义渲染", () => {
+    const html = renderPendingPage("Veyquo", [], undefined, {
+      href: '/merchant/?x="><script>alert(1)</script>',
+      label: "<返回商家工作台>",
+    });
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;返回商家工作台&gt;");
   });
 
   function setup() {

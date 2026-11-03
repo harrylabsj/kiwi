@@ -116,6 +116,85 @@ describe("A2AQuoteFetcher（catalog 发现 → A2A 直连 merchant RFQ）", () =
     expect(results[0]!.failure?.classification).toBe("unreachable");
   });
 
+  it("免登录开放询价：无 agent card URL 也路由到目录中继端点（linkluck 回归）", async () => {
+    const { A2AQuoteFetcher } = await import("../src/buyer-core/a2a-quote-fetcher.js");
+    const { OpenInquirySessionSigner } = await import("../src/a2a/open-inquiry-session.js");
+    const requested: string[] = [];
+    const openEndpoint = "https://merchant.example/a2a";
+    const fetcher = new A2AQuoteFetcher({
+      allowPrivateRanges: true,
+      skipDnsCheck: true,
+      ...protocolOptions(),
+      merchantAccess: {
+        forEndpoint: async () => null,
+        forMerchant: async () => ({
+          sendUrlFor: (url: string) => url,
+          openInquiry: {
+            endpoint: openEndpoint,
+            signer: new OpenInquirySessionSigner(),
+            fetchImpl: (async (input: Parameters<typeof fetch>[0]) => {
+              requested.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+              return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "synthetic" } }), {
+                status: 502,
+                headers: { "content-type": "application/json" },
+              });
+            }) as typeof fetch,
+          },
+        }),
+      },
+    });
+    const results = await fetcher.requestQuotes(INTENT, [
+      {
+        merchant_id: "merchant-open-inquiry",
+        name: "免登录询价商家",
+        verified: true,
+        capabilities: [],
+        catalog_agent_id: "cagt_open_inquiry",
+        runtime_access: {
+          provider: "workbuddy",
+          access_mode: "share_parameter",
+          parameter_name: "sharecode",
+          config_version: 1,
+          adapter_version: "workbuddy-share-v1",
+          auth_mode: "signature",
+        },
+      },
+    ], protocolContext());
+    expect(results).toHaveLength(1);
+    // 关键回归：不能在没有 agent card URL 时提前失败。
+    expect(results[0]!.failure?.detail).not.toBe("merchant has no agent card URL");
+    // 并且请求确实打到了开放询价端点（目录中继的上游商家 /a2a）。
+    expect(requested).toContain(openEndpoint);
+  });
+
+  it("直连商家缺少 agent card URL 时仍 fail-closed（边界不变）", async () => {
+    const { A2AQuoteFetcher } = await import("../src/buyer-core/a2a-quote-fetcher.js");
+    const fetcher = new A2AQuoteFetcher({
+      allowPrivateRanges: true,
+      skipDnsCheck: true,
+      ...protocolOptions(),
+      merchantAccess: { forEndpoint: async () => null, forMerchant: async () => ({ sendUrlFor: (url: string) => url }) },
+    });
+    const results = await fetcher.requestQuotes(INTENT, [
+      {
+        merchant_id: "merchant-direct-no-card",
+        name: "直连无卡商家",
+        verified: true,
+        capabilities: [],
+        runtime_access: {
+          provider: "workbuddy",
+          access_mode: "share_parameter",
+          parameter_name: "sharecode",
+          config_version: 1,
+          adapter_version: "workbuddy-share-v1",
+          auth_mode: "signature",
+        },
+      },
+    ], protocolContext());
+    expect(results[0]!.status).toBe("failed");
+    expect(results[0]!.failure?.detail).toBe("merchant has no agent card URL");
+  });
+
   it("intent query 文本不匹配 catalog 时仍按 merchant_id 解析成功（回归：不丢 agent_card_url）", async () => {
     const { buildBuyerService } = await import("../src/buyer-core/build-service.js");
     const { buildKiwiTools } = await import("../src/mcp/tools.js");

@@ -113,6 +113,26 @@ function redactShareParameter(text: string): string {
   return text.replace(/([?&])sharecode=[^&\s"'#]*/gi, "$1sharecode=<redacted>");
 }
 
+/**
+ * card URL 是否落在 WorkBuddy 平台主机上。用于在记录缺少 runtime_access
+ * （目录数据缺口）时仍把它识别为门禁商家：resolver 异常/为空时不能静默
+ * 回退成无码直连。
+ */
+function isWorkBuddyCardHost(agentCardUrl: string | undefined): boolean {
+  if (agentCardUrl === undefined || agentCardUrl === "") return false;
+  try {
+    const host = new URL(agentCardUrl).hostname.toLowerCase().replace(/\.$/, "");
+    return (
+      host === "workbuddy.host" ||
+      host.endsWith(".workbuddy.host") ||
+      host === "workbuddy.cn" ||
+      host.endsWith(".workbuddy.cn")
+    );
+  } catch {
+    return false;
+  }
+}
+
 const DEFAULT_POLL_MS = 2000;
 const DEFAULT_TIMEOUT_MS = 20_000;
 
@@ -130,6 +150,12 @@ function firstSku(intent: Record<string, unknown>): string {
   if (typeof first.sku === "string" && first.sku !== "") return first.sku;
   if (typeof first.query === "string" && first.query !== "") return first.query;
   return "item-1";
+}
+
+/** 用户明确指定的 SKU（与 query 兜底严格区分）。 */
+function explicitIntentSku(intent: Record<string, unknown>): string | undefined {
+  const sku = firstItem(intent).sku;
+  return typeof sku === "string" && sku.trim() !== "" ? sku : undefined;
 }
 
 function firstQuantity(intent: Record<string, unknown>): { value: number; unit?: string } {
@@ -287,21 +313,47 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     context?: ProtocolTaskContext,
   ): Promise<QuoteCandidateInput> {
     const { merchant_id: merchantId, agent_card_url: agentCardUrl } = merchant;
-    if (agentCardUrl === undefined || agentCardUrl === "") {
+    const requestedSku = explicitIntentSku(intent);
+    const offeredSkus = (merchant.matching_skus ?? []).filter(
+      (sku): sku is string => typeof sku === "string" && sku !== "",
+    );
+    // 用户明确指定 SKU 时，发现结果必须与之精确一致；不能被 matching_skus[0]
+    // 悄悄换成本商家的另一个商品。没有任何 matching_skus 时仍信任用户输入
+    // （正常查询/多商品商家兼容）。
+    if (requestedSku !== undefined && offeredSkus.length > 0 && !offeredSkus.includes(requestedSku)) {
       return {
         merchant_id: merchantId,
         status: "failed",
         failure: {
-          classification: "unreachable",
-          retryable: true,
-          detail: "merchant has no agent card URL",
+          classification: "invalid_request",
+          retryable: false,
+          detail: "explicit intent SKU is not offered by the matched merchant",
         },
       };
     }
+    const sku = requestedSku ?? offeredSkus[0] ?? firstSku(intent);
     try {
       const access = await this.accessForMerchant(merchant);
-      const endpoint = access?.openInquiry?.endpoint ?? await this.resolveEndpoint(agentCardUrl, access);
-      const sku = merchant.matching_skus?.[0] ?? firstSku(intent);
+      // 开放询价（免登录目录中继）自带已验真的商家 /a2a 端点：这类商家可以
+      // 没有公开 agent card，路由不应因此失败（真实 linkluck 免登录询价回归）。
+      // 直连商家仍必须提供 agent card URL，原校验与安全边界不变。
+      const openEndpoint = access?.openInquiry?.endpoint;
+      let endpoint: string;
+      if (openEndpoint !== undefined && openEndpoint !== "") {
+        endpoint = openEndpoint;
+      } else if (agentCardUrl !== undefined && agentCardUrl !== "") {
+        endpoint = await this.resolveEndpoint(agentCardUrl, access);
+      } else {
+        return {
+          merchant_id: merchantId,
+          status: "failed",
+          failure: {
+            classification: "unreachable",
+            retryable: true,
+            detail: "merchant has no agent card URL",
+          },
+        };
+      }
       const negotiationId = newNegotiationId();
       const envelope = buildRfqEnvelope({
         negotiationId,
@@ -425,12 +477,22 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   /**
    * 平台门禁解析：声明了 `runtime_access` 的商家必须有可用的发送地址，
    * 否则 fail-closed（抛出被 requestQuote 归类为 access_unavailable）。
+   *
+   * 未声明 `runtime_access` 的普通商家仍走直连；但只要配置了 resolver，就先
+   * 问一次——目录开放询价中继不依赖 `runtime_access`（按 catalog_agent_id
+   * 路由），提前 return null 会把可用的免登录中继跳过。普通商家只接受
+   * **openInquiry** 传输；card 指向 WorkBuddy 平台主机时仍按门禁商家处理，
+   * 绝不把异常/缺失静默回退成无码直连。
    */
   private async accessForMerchant(
     merchant: MerchantRecord,
   ): Promise<MerchantAccessTransport | null> {
-    if (merchant.runtime_access === undefined) return null;
+    const declared = merchant.runtime_access !== undefined;
+    // 缺少 runtime_access 但 card 指向 WorkBuddy 平台主机：仍按门禁商家处理，
+    // resolver 异常/为空时 fail-closed，绝不静默回退无码直连。
+    const workbuddyHost = isWorkBuddyCardHost(merchant.agent_card_url);
     if (this.merchantAccess === undefined) {
+      if (!declared && !workbuddyHost) return null;
       throw new MerchantAccessUnavailable(
         "ACCESS_RESOLVER_MISSING",
         "merchant requires a platform access configuration but no resolver is configured",
@@ -440,6 +502,9 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     try {
       transport = await this.merchantAccess.forMerchant(merchant);
     } catch (error) {
+      // 普通商家直连兼容：中继/门禁回查失败不应把本来能直连的商家拦下。
+      // WorkBuddy 主机例外——它是平台门禁入口，异常时不能静默绕过。
+      if (!declared && !workbuddyHost) return null;
       const code = (error as { code?: unknown } | null)?.code;
       const transient = code === "request_failed" || code === "request_timeout";
       throw new MerchantAccessUnavailable(
@@ -449,11 +514,17 @@ export class A2AQuoteFetcher implements QuoteFetcher {
       );
     }
     if (transport === null) {
+      // 受门禁商家缺访问元数据/传输：绝不静默直连，交给上层归类为 access_unavailable。
+      if (!declared && !workbuddyHost) return null;
       throw new MerchantAccessUnavailable(
         "ACCESS_NOT_CONFIGURED",
         "merchant platform access configuration is unavailable",
       );
     }
+    // 未声明 runtime_access 的记录只允许免登录目录中继；legacy 分享码传输
+    // 不能套到没有声明门禁的普通商家上（否则会把直连误改成带码直连）。
+    // WorkBuddy 主机例外：resolver 已给出传输时必须走门禁，不能直连。
+    if (!declared && transport.openInquiry === undefined) return workbuddyHost ? transport : null;
     return transport;
   }
 
