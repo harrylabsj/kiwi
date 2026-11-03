@@ -50,12 +50,11 @@ export class ReceptionConversationStore {
     this.now = options.now;
     this.retentionDays = options.retentionDays ?? RECEPTION_CONFIG_DEFAULTS.retentionDays;
     this.state = this.load();
-    this.prune();
   }
 
   /** 读取会话；不存在或已过期返回 undefined。 */
   get(merchantId: string, identity: string, contextId: string): ReceptionConversation | undefined {
-    this.prune();
+    this.pruneExpired();
     const stored = this.state.conversations[keyOf(merchantId, identity, contextId)];
     return stored === undefined ? undefined : this.toConversation(stored);
   }
@@ -102,7 +101,7 @@ export class ReceptionConversationStore {
    * 发布校验失败的草稿不调用本方法，不占序号。
    */
   allocateReplySeq(merchantId: string, identity: string, contextId: string): number {
-    this.prune();
+    this.pruneExpired();
     const key = keyOf(merchantId, identity, contextId);
     const stored = this.state.conversations[key];
     const seq = stored?.nextReplySeq ?? 1;
@@ -125,17 +124,19 @@ export class ReceptionConversationStore {
     return { version: 1, conversations: {} };
   }
 
-  private prune(): void {
+  /** 清理超过保留期的会话，返回清理条数（留存作业与读/写路径共用）。 */
+  pruneExpired(): number {
     const cutoff = Date.parse(this.now()) - this.retentionDays * 86_400_000;
-    let changed = false;
+    let pruned = 0;
     for (const [key, stored] of Object.entries(this.state.conversations)) {
       const updated = Date.parse(stored.updatedAt);
       if (!Number.isFinite(updated) || updated < cutoff) {
         delete this.state.conversations[key];
-        changed = true;
+        pruned += 1;
       }
     }
-    if (changed) this.save();
+    if (pruned > 0) this.save();
+    return pruned;
   }
 
   private save(): void {

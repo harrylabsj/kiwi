@@ -78,13 +78,19 @@ describe("merchant reception (P0a)", () => {
       now: () => NOW,
     });
 
-  const input = (text: string, identity = "buyer:1", contextId = "ctx_1") => ({
+  const input = (
+    text: string,
+    identity = "buyer:1",
+    contextId = "ctx_1",
+    messageId?: string,
+  ) => ({
     merchantId: "merchant-1",
     identity,
     identityVerified: false,
     contextId,
     text,
     now: NOW,
+    ...(messageId !== undefined ? { messageId } : {}),
   });
 
   it("按商品源事实回复价格/库存/交期", async () => {
@@ -125,6 +131,43 @@ describe("merchant reception (P0a)", () => {
     const result = await second.respond(input("要三件"));
     expect(result.text).toContain("已记录需求：SKU VQ-001，3 件");
     expect(result.conversation.need.revision).toBe(2);
+  });
+
+  it("字段证据由服务端按入站消息签发，跨轮沿用未变更字段", async () => {
+    let interpretation: Awaited<ReturnType<InquiryInterpreter["interpret"]>> = {
+      intent: "quote_request",
+      topics: ["price"],
+      sku: SKU,
+      quantity: 2,
+      unit: "件",
+      language: "zh",
+    };
+    const engine = engineFor({
+      async interpret() {
+        return interpretation;
+      },
+    });
+    const first = await engine.respond(input("VQ-001 两件", "buyer:1", "ctx_ev", "msg_ev_1"));
+    expect(first.conversation.need.evidence?.sku).toMatchObject({
+      source_message_id: "msg_ev_1",
+      observed_at: NOW,
+      source: "model",
+    });
+    expect(first.conversation.need.evidence?.quantity?.source_message_id).toBe("msg_ev_1");
+
+    interpretation = {
+      intent: "quote_request",
+      topics: ["price"],
+      quantity: 3,
+      unit: "件",
+      language: "zh",
+    };
+    const second = await engine.respond(input("改三件", "buyer:1", "ctx_ev", "msg_ev_2"));
+    expect(second.conversation.need.evidence?.sku?.source_message_id).toBe("msg_ev_1");
+    expect(second.conversation.need.evidence?.quantity).toMatchObject({
+      source_message_id: "msg_ev_2",
+      source: "model",
+    });
   });
 
   it("缺 SKU 时澄清，不猜商品", async () => {

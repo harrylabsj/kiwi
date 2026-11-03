@@ -29,7 +29,7 @@
 | AC | 状态 | 证据 / 说明 |
 |----|------|-------------|
 | AC01 | 部分就绪 | 缺 SKU/空消息追问：`merchant-reception.test.ts`、Q04/Q05；真实 provider 回合 trace 待 M6 |
-| AC02 | P0b 范围外 | P0a 无商品搜索/推荐工具（B.8-2 只要求候选经商品源确认）；不编造由"无 free_text + 发布校验"兜底：`merchant-reception-publish.test.ts`、Q06 |
+| AC02 | 部分就绪 | 本店商品候选搜索（标题/SKU 本地匹配）已接入：唯一命中直接回答、多命中请买家选择：`merchant-reception-search.test.ts`；模型比较与推荐理由仍待 Pi 工具循环 |
 | AC03 | 部分就绪 | 会话持久化 + revision 递增 + 重启恢复（重开文件）：`merchant-reception.test.ts`、Q07；指代消解质量待真实模型评分 |
 | AC04 | P0b 范围外 | "当前需求/未来意向"区分需要意向建模，P0a 只提取当前 quantity 与 target_price 候选 |
 | AC05 | P0b 范围外 | 知识库问答工具未在 P0a 范围 |
@@ -40,7 +40,7 @@
 |----|------|-------------|
 | AC06 | 部分就绪 | unit 仅作候选透传、由商品源口径渲染；无换算表，"两箱"歧义澄清依赖模型候选质量（待 M6 评分） |
 | AC07 | P0b 范围外 | 需求模型无时限槽位，相对日期解析未实现 |
-| AC08 | P0b 范围外 | 无搜索工具，同名 SKU 选择场景不出现 |
+| AC08 | 部分就绪 | 搜索多命中会列出候选并要求买家明确选择（不按价格/模型置信度自动选）：`merchant-reception-search.test.ts`；规格差异比较待商品知识工具 |
 | AC09 | 机制就绪 | 多商品请求明确提示并请买家选择（`skus` 候选 + `multiple_skus` 澄清，候选持久化后可用“第一个”选择）；KNP RFQ/offer/counter_offer 多行商品在推进相位前 decline `field_unsupported`，不静默只取 items[0]：`merchant-multi-item.test.ts` |
 | AC10 | 机制就绪 | 需求变更 revision 递增：`conversation-store.ts`、Q07；接待侧改数量后旧批准失效（新 pending 取代 approved，数量不匹配不消费）：`merchant-reception-active.test.ts`；KNP 旧许可重验：`merchant-approval-invalidation.test.ts` |
 
@@ -98,7 +98,7 @@
 
 | AC | 状态 | 证据 / 说明 |
 |----|------|-------------|
-| AC36 | 部分就绪 | 健康探针（配置/连接/非空输出）：`probe.ts`、`reception-probe.test.ts`；管理界面展示待 WorkBuddy 侧 |
+| AC36 | 机制就绪 | 健康探针（配置/连接/非空输出）已接入 `/ops/v1/reception/status|probe`：`probe.ts`、`reception-probe.test.ts`、`merchant-negotiation-ops.test.ts`；WorkBuddy 页面展示属宿主侧 |
 | AC37 | 机制就绪 | 随主包锁定依赖发布；接待无动态工具加载 |
 | AC38 | 机制就绪 | 接待默认关闭（`KIWI_MERCHANT_RECEPTION` 未设=off）；既有 A2A/KNP 回归全绿 |
 | AC39 | 部分就绪 | Q15 数据集 + 运行器已建（本文）；真实 provider 60 例×3 次评分待 M6 |
@@ -146,7 +146,7 @@
 
 ## 汇总
 
-- 机制就绪：25 条　部分就绪：14 条　P0b 范围外：21 条　已知缺口：0 条
+- 机制就绪：26 条　部分就绪：15 条　P0b 范围外：19 条　已知缺口：0 条
 - AC09 已补齐（`merchant-multi-item.test.ts`，2026-11-03）。
 - 不得宣称通过：AC23/AC45 的多实例隔离（D16 第二商家未建，B.8-5）；
   AC39/AC54 的质量分（真实 provider 评分未执行）。
@@ -164,3 +164,54 @@
   接待只渲染被问到的主题；验签标记 `identityVerified` 已透传到接待引擎。
 - **测试**：新增审批消费/改数量失效/序号选择/结构化主题/验签透传/RFQ·offer·counter
   多行商品顺序校验用例；reception + negotiation 相关 16 个文件 215 条全绿。
+
+## 2026-11-03 M5 接入与 M2 第一片
+
+- `/ops` 新增 `GET /ops/v1/reception/status`（模式、日预算已用/上限、降级事件、
+  审批计数）与 `POST /ops/v1/reception/probe`（配置/连接/正文非空三层）；
+  loopback + Bearer 鉴权沿用既有门。
+- M2 第一片：`MerchantProductSource.searchProducts` 按本店公开商品标题/SKU
+  做候选搜索；唯一命中直接按事实回答，多命中列出候选并持久化，买家可用
+  “第一个”继续；零命中/搜索失败回固定追问，不编造商品。
+- 测试：`merchant-reception-search.test.ts` 4 条、`merchant-negotiation-ops`
+  接待端点 1 条；reception/negotiation 相关 17 个文件 222 条全绿。
+- 未启用：watch 生产开关、WorkBuddy 独立推送、Pi 工具循环与商品比较/推荐。
+
+## 2026-11-03 M2 第二片：Pi 工具循环
+
+- 新增 `src/a2a/reception/agent-runtime.ts`：`KIWI_RECEPTION_RUNTIME=pi` 时启用
+  受控工具循环（`search_products` → `get_commercial_facts` → `propose_need_patch`
+  → `propose_reply`）；工具白名单、参数上限、propose_reply 后禁止再调用；
+  超时/无计划自动回退确定性解释器路径。
+- 事实只以 `fact ref` 进入 ResponsePlan，发布器仍校验租户/版本/可见性/有效期；
+  模型没有改价、改库存、发协议或批准的能力。
+- 默认仍为 `deterministic`；fake provider 下强制确定性并告警。
+- 测试：`reception-agent-runtime.test.ts`（脚本化 fake provider 完整工具链、
+  block 白名单、引擎使用 agent 计划）；reception/negotiation 18 个文件
+  225 条全绿。
+- 未完成：Pi usage 接入日预算、工具级指标、真实 provider Q15 评分。
+
+## 2026-11-03 M2 收尾
+
+- Pi 用量接入：每个模型回合 `turn_start` 申请预算 lease、`turn_end` 按实际
+  output tokens 结算；超时/中止未结算的 lease 按未知用量保留（不记零）。
+  工具级指标（步数、各工具调用次数、usage、quotaRejected）写入
+  `<dataDir>/a2a/reception-agent-metrics.jsonl`。
+- 工具预算：`maxToolAttempts=12`（config 冻结值）在 beforeToolCall 强制。
+- 字段证据：`ReceptionNeed.evidence` 记录 sku/quantity/unit 的
+  `source_message_id`、`observed_at`、`source=structured|model`；只在买家本轮
+  明确给出字段时签发，跨轮沿用未变更字段。
+- 留存作业：`runReceptionRetention` 清理 30 天会话与 90 天用量记录，节点启动
+  与每 6 小时执行；联系字段 P0a 未收集（0）。
+- 测试：agent runtime 5 条（工具链/预算拒绝/批准跳过/指标）、retention 3 条、
+  evidence 1 条；reception/negotiation 18 个文件 196+ 条全绿。
+- M3/M6 仍未完成：商品比较/推荐理由、税费运费、真实 provider Q15 评分、部署。
+
+### M2 收尾补充
+
+- 新增 `compare_products` 工具（最多 3 个 SKU，只读公开价格/库存/交期），
+  模型可在选择前比较候选；仍不能生成 `recommend_option` 的推荐理由块
+  （AC02 保持部分就绪）。
+- Pi 工具预算在 `beforeToolCall` 强制 `maxToolAttempts`（config 12）；指标
+  记录各工具调用次数。
+- 配置新增 `KIWI_RECEPTION_RUNTIME=pi`（默认 deterministic），配置测试覆盖。

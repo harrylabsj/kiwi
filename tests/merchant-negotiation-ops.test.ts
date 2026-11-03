@@ -235,4 +235,65 @@ describe("merchant negotiation ops", () => {
       await handle.close();
     }
   });
+
+  it("/ops 接待状态与探针：鉴权后可用，未配置时 404", async () => {
+    const service = ops();
+    const token = "r".repeat(64);
+    const handle = await startMerchantOpsServer({
+      service,
+      token,
+      port: 0,
+      reception: {
+        status: () => ({
+          mode: "active",
+          locale: "zh-CN",
+          currency: "CNY",
+          budget: { limit: 200_000, usedToday: 1_234 },
+          degradations: [{ at: NOW, reason: "merchant_quota_exhausted" }],
+          approvals: { pending: 1, approved: 0, consumed: 0, expired: 2, rejected: 0 },
+        }),
+        probe: async () => ({
+          ok: true,
+          checked_at: NOW,
+          layers: {
+            configured: "ok",
+            connected: "ok",
+            non_empty_output: "ok",
+            tools: "unknown",
+            channel: "ok",
+          },
+        }),
+      },
+    });
+    try {
+      const baseUrl = `http://127.0.0.1:${handle.port}`;
+      const auth = { authorization: `Bearer ${token}` };
+      expect((await fetch(`${baseUrl}/ops/v1/reception/status`)).status).toBe(401);
+      const status = (await (
+        await fetch(`${baseUrl}/ops/v1/reception/status`, { headers: auth })
+      ).json()) as { ok: boolean; mode: string; budget: { usedToday: number } };
+      expect(status).toMatchObject({
+        ok: true,
+        mode: "active",
+        budget: { limit: 200_000, usedToday: 1_234 },
+      });
+      const probe = (await (
+        await fetch(`${baseUrl}/ops/v1/reception/probe`, { method: "POST", headers: auth })
+      ).json()) as { ok: boolean; probe: { layers: { non_empty_output: string } } };
+      expect(probe.ok).toBe(true);
+      expect(probe.probe.layers.non_empty_output).toBe("ok");
+    } finally {
+      await handle.close();
+    }
+
+    const bare = await startMerchantOpsServer({ service, token, port: 0 });
+    try {
+      const response = await fetch(`http://127.0.0.1:${bare.port}/ops/v1/reception/status`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.status).toBe(404);
+    } finally {
+      await bare.close();
+    }
+  });
 });

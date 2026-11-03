@@ -148,6 +148,15 @@ function renderBlock(block: ReceptionBlock, registry: CommercialFactRegistry): s
           `一次只能咨询一个商品。${mentioned}请告诉我要先确认哪一个，其余商品可以分别咨询。`,
         ];
       }
+      if (block.reason === "product_candidates") {
+        const candidates =
+          block.candidates !== undefined && block.candidates.length > 0
+            ? block.candidates.join("、")
+            : "（无）";
+        return [
+          `我在本店找到这些商品：${candidates}。请告诉我要咨询哪一个，并补充数量和单位。`,
+        ];
+      }
       return ["请提供商品 SKU；如已知数量与单位也请一并说明。"];
     }
     case "show_commercial_terms": {

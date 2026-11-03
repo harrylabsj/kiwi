@@ -6,9 +6,12 @@
  */
 
 export type ReceptionMode = "off" | "advisory" | "active";
+export type ReceptionRuntimeKind = "deterministic" | "pi";
 
 export interface ReceptionConfig {
   mode: ReceptionMode;
+  /** M2：确定性解释器或 Pi 工具循环；默认确定性。 */
+  runtime: ReceptionRuntimeKind;
   /** D05：P0a 仅 zh-CN / CNY。 */
   locale: "zh-CN";
   currency: "CNY";
@@ -34,6 +37,7 @@ export interface ReceptionConfig {
 
 export const RECEPTION_CONFIG_DEFAULTS: Readonly<ReceptionConfig> = Object.freeze({
   mode: "off",
+  runtime: "deterministic",
   locale: "zh-CN",
   currency: "CNY",
   dailyOutputTokenLimit: 200_000,
@@ -69,6 +73,7 @@ export function loadReceptionConfig(
   return {
     ...d,
     mode: modeOf(env.KIWI_MERCHANT_RECEPTION),
+    runtime: env.KIWI_RECEPTION_RUNTIME === "pi" ? "pi" : "deterministic",
     dailyOutputTokenLimit: positiveInt(
       env.KIWI_RECEPTION_DAILY_TOKEN_LIMIT,
       d.dailyOutputTokenLimit,

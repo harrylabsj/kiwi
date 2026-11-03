@@ -32,7 +32,10 @@
  */
 
 import { assertMerchantMcpAuthPolicy } from "./merchant-auth.js";
-import { startMerchantOpsServer } from "./merchant-ops-server.js";
+import {
+  startMerchantOpsServer,
+  type ReceptionOpsView,
+} from "./merchant-ops-server.js";
 import type { NegotiationOps } from "../merchant/negotiation-ops.js";
 import { isIP } from "node:net";
 import { isLoopbackHost } from "../a2a/client/url-policy.js";
@@ -209,6 +212,8 @@ export interface MerchantMcpServerOptions {
     token: string;
     previousToken?: string;
     port?: number;
+    /** 接待状态与探针（P0a）。 */
+    reception?: ReceptionOpsView;
   };
   serverInfo?: { name: string; version: string };
   /** 响应体大小上限（字符）。 */
@@ -1126,6 +1131,7 @@ export async function startMerchantMcpServer(
           ? { previousToken: options.ops.previousToken }
           : {}),
         ...(options.ops.port !== undefined ? { port: options.ops.port } : {}),
+        ...(options.ops.reception !== undefined ? { reception: options.ops.reception } : {}),
       });
     } catch (err) {
       await new Promise<void>((resolve) => {

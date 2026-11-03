@@ -30,6 +30,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { isIP } from "node:net";
 
 import { isLoopbackHost } from "../a2a/client/url-policy.js";
+import type { ReceptionProbeResult } from "../a2a/reception/probe.js";
 import { NegotiationOpsError, type NegotiationOps } from "../merchant/negotiation-ops.js";
 
 export const DEFAULT_MERCHANT_OPS_PORT = 9101;
@@ -42,12 +43,35 @@ const NO_STORE = {
   "x-content-type-options": "nosniff",
 } as const;
 
+/** 接待运营投影（P0a）：只读状态与按需真实探针。 */
+export interface ReceptionOpsStatus {
+  mode: "off" | "advisory" | "active";
+  locale: "zh-CN";
+  currency: "CNY";
+  budget: { limit: number; usedToday: number };
+  degradations: Array<{ at: string; reason: string }>;
+  approvals: {
+    pending: number;
+    approved: number;
+    consumed: number;
+    expired: number;
+    rejected: number;
+  };
+}
+
+export interface ReceptionOpsView {
+  status(): ReceptionOpsStatus | Promise<ReceptionOpsStatus>;
+  probe(): Promise<ReceptionProbeResult>;
+}
+
 export interface MerchantOpsServerOptions {
   service: NegotiationOps;
   token: string;
   /** 轮换窗口内仍接受的旧 token。 */
   previousToken?: string;
   port?: number;
+  /** 接待状态/探针（未配置接待时也可返回 mode=off）。 */
+  reception?: ReceptionOpsView;
 }
 
 export interface MerchantOpsServerHandle {
@@ -157,6 +181,7 @@ export function createMerchantOpsHandler(options: {
   token: string;
   previousToken?: string;
   port: number;
+  reception?: ReceptionOpsView;
 }): (req: IncomingMessage, res: ServerResponse) => void {
   const rate = new Map<string, { windowStart: number; count: number }>();
 
@@ -234,6 +259,22 @@ export function createMerchantOpsHandler(options: {
           writeJson(res, 200, { ok: true, negotiation: options.service.negotiationDetail(id) });
           return;
         }
+        if (req.method === "GET" && url.pathname === "/ops/v1/reception/status") {
+          if (options.reception === undefined) {
+            writeJson(res, 404, { ok: false, error: "not_found" });
+            return;
+          }
+          writeJson(res, 200, { ok: true, ...(await options.reception.status()) });
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/ops/v1/reception/probe") {
+          if (options.reception === undefined) {
+            writeJson(res, 404, { ok: false, error: "not_found" });
+            return;
+          }
+          writeJson(res, 200, { ok: true, probe: await options.reception.probe() });
+          return;
+        }
         if (req.method === "GET" && url.pathname === "/ops/v1/approvals") {
           const status = queryValue(url, "status");
           if (
@@ -296,6 +337,7 @@ export async function startMerchantOpsServer(
       service: options.service,
       token: options.token,
       ...(options.previousToken !== undefined ? { previousToken: options.previousToken } : {}),
+      ...(options.reception !== undefined ? { reception: options.reception } : {}),
       port: requestedPort,
     }),
   );

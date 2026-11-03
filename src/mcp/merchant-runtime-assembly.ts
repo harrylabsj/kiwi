@@ -49,8 +49,12 @@ import { OnboardingStore } from "../cloud/onboarding/store.js";
 import { rfqAdminSurface } from "../merchant-admin/rfq-page.js";
 import { merchantAdminSurface } from "../merchant-admin/pending-page.js";
 import { MerchantOperationStore } from "../merchant-core/operations.js";
+import { loadReceptionConfig } from "../a2a/reception/config.js";
+import { probeReceptionModel } from "../a2a/reception/probe.js";
 import { NegotiationApprovalStore } from "../a2a/server/negotiation-approvals.js";
+import { SqliteDailyBudgetStore } from "../merchant/ai-runtime/sqlite-budget-store.js";
 import { createNegotiationOps } from "../merchant/negotiation-ops.js";
+import type { ReceptionOpsView } from "./merchant-ops-server.js";
 import { MerchantPolicyRuntime } from "../merchant-core/policy-runtime.js";
 import { RfqArtifactStore, ensureArtifactRoot } from "../merchant-core/rfq/artifacts.js";
 import { MerchantClientCommerceDataSource } from "../merchant-core/rfq/data-source-adapter.js";
@@ -263,6 +267,74 @@ export async function assembleMerchantRuntime(
         });
   const db = openAgentDatabase(paths.db);
   const now = () => new Date().toISOString();
+  // P0a 接待运营投影：只读预算用量/降级事件/审批计数；探针按需真实调用。
+  const receptionConfig = loadReceptionConfig();
+  const receptionBudgetFile = path.join(paths.dir, "a2a", "reception-budget.sqlite");
+  const receptionDegradationFile = path.join(paths.dir, "a2a", "reception-degradations.json");
+  const receptionApprovals = NegotiationApprovalStore.forDataDir(options.dataDir, now);
+  const readReceptionDegradations = (): Array<{ at: string; reason: string }> => {
+    try {
+      const parsed = JSON.parse(readFileSync(receptionDegradationFile, "utf8")) as {
+        events?: Array<{ at?: unknown; reason?: unknown }>;
+      };
+      return (parsed.events ?? [])
+        .filter(
+          (event): event is { at: string; reason: string } =>
+            typeof event.at === "string" && typeof event.reason === "string",
+        )
+        .map((event) => ({ at: event.at, reason: event.reason }));
+    } catch {
+      return [];
+    }
+  };
+  const receptionUsedToday = (): number => {
+    if (receptionConfig.mode === "off" || !existsSync(receptionBudgetFile)) return 0;
+    try {
+      const budget = new SqliteDailyBudgetStore(receptionBudgetFile);
+      try {
+        return budget.usedTokens(`${profile.owner_id}@${now().slice(0, 10)}`);
+      } finally {
+        budget.close();
+      }
+    } catch {
+      return 0;
+    }
+  };
+  const receptionOpsView: ReceptionOpsView = {
+    status: () => {
+      receptionApprovals.sweepExpired();
+      const counts = {
+        pending: 0,
+        approved: 0,
+        consumed: 0,
+        expired: 0,
+        rejected: 0,
+      };
+      for (const record of receptionApprovals.list()) counts[record.status] += 1;
+      return {
+        mode: receptionConfig.mode,
+        locale: "zh-CN",
+        currency: "CNY",
+        budget: {
+          limit: receptionConfig.dailyOutputTokenLimit,
+          usedToday: receptionUsedToday(),
+        },
+        degradations: readReceptionDegradations(),
+        approvals: counts,
+      };
+    },
+    probe: () =>
+      probeReceptionModel({
+        enabled: receptionConfig.mode === "active",
+        ...(profile.model?.model !== undefined ? { model: profile.model.model } : {}),
+        ...(profile.model?.api_key_env !== undefined
+          ? { apiKeyEnv: profile.model.api_key_env }
+          : {}),
+        ...(profile.model?.base_url !== undefined ? { baseUrl: profile.model.base_url } : {}),
+        channelEnabled: process.env.KIWI_MERCHANT_WATCH_ENABLED === "1",
+        now,
+      }),
+  };
   const store = new MemoryStore({ db, vault: new PrivateVault(), now });
   const principal = store.ensurePrincipal({
     principal_id: profile.agent_id,
@@ -556,6 +628,7 @@ export async function assembleMerchantRuntime(
             ...(opsPort !== undefined && Number.isSafeInteger(opsPort) && opsPort > 0
               ? { port: opsPort }
               : {}),
+            reception: receptionOpsView,
           },
         }
       : {}),

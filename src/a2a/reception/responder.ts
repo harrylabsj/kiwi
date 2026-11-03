@@ -54,6 +54,9 @@ export function createReceptionResponder(
         contextId: input.contextId,
         text,
         now: input.now(),
+        ...(typeof input.message.messageId === "string"
+          ? { messageId: input.message.messageId }
+          : {}),
       });
       return agentMessage(result.text);
     } catch {

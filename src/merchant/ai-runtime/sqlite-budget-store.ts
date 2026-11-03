@@ -313,6 +313,26 @@ export class SqliteDailyBudgetStore {
     }
   }
 
+  /**
+   * 删除早于 cutoffDayKey（YYYY-MM-DD，不含）的日用量与租约记录。
+   * 仅用于本 adapter 自有库文件的留存清理；返回删除行数。
+   */
+  pruneBefore(cutoffDayKey: string): number {
+    this.assertOpen();
+    assertDayKey(cutoffDayKey);
+    try {
+      const leases = this.db
+        .prepare("DELETE FROM ai_budget_lease WHERE substr(day_key, instr(day_key, '@') + 1) < ?")
+        .run(cutoffDayKey);
+      const days = this.db
+        .prepare("DELETE FROM ai_budget_day WHERE substr(day_key, instr(day_key, '@') + 1) < ?")
+        .run(cutoffDayKey);
+      return Number(leases.changes) + Number(days.changes);
+    } catch (err) {
+      throw this.mapError(err);
+    }
+  }
+
   /** 幂等关闭。 */
   close(): void {
     if (this.closed) return;
