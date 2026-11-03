@@ -222,6 +222,18 @@ export class NegotiationApprovalStore {
   private recordPendingLocked(input: PendingApprovalInput): NegotiationApprovalRecord {
     const now = this.now();
     const shape = this.read();
+    // 同一磋商 + SKU 的新待批请求取代旧的一次性授权：旧 approved 不再可用，
+    // 避免买家改了数量/目标价后仍消费旧批准价（§17.2 / D15）。
+    for (const record of shape.records) {
+      if (
+        record.negotiation_id === input.negotiation_id &&
+        record.sku === input.sku &&
+        record.status === "approved"
+      ) {
+        record.status = "expired";
+        record.updated_at = now;
+      }
+    }
     const records = shape.records.filter(
       (record) =>
         !(

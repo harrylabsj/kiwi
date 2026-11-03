@@ -404,6 +404,23 @@ const declineReply = (
   taskState: "completed",
 });
 
+/** AC09/D03：统计入站商务动作的商品行数（rfq/offer/counter_offer）。 */
+function multiItemCountOf(envelope: { action: string; payload?: unknown }): number {
+  const payload =
+    typeof envelope.payload === "object" && envelope.payload !== null
+      ? (envelope.payload as Record<string, unknown>)
+      : undefined;
+  const items =
+    envelope.action === "rfq"
+      ? payload?.["items"]
+      : envelope.action === "offer"
+        ? (payload?.["terms"] as { items?: unknown } | undefined)?.items
+        : envelope.action === "counter_offer"
+          ? (payload?.["proposed_terms"] as { items?: unknown } | undefined)?.items
+          : undefined;
+  return Array.isArray(items) ? items.length : 0;
+}
+
 const envelopeReply = (reply: ReturnType<typeof finalizeEnvelope>): NegotiationHandlerResult => ({
   kind: "accepted",
   taskState: "working",
@@ -920,6 +937,14 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         if (object.actor !== expectedAuthor) return { kind: "declined", reasonCode: "authorization_failed" };
       }
 
+      // AC09/D03：一次正式协商只支持一个 SKU。多行商品必须在推进相位之前
+      // 拒绝，否则被拒的 counter/offer 会先改写 active offer/相位（audit 发现）。
+      if (multiItemCountOf(envelope) > 1) {
+        return declineReply(
+          "field_unsupported",
+          "一次协商只支持一个 SKU；请为每个商品分别发起。",
+        );
+      }
       // 审查 BUG-10：每个入站 action 经规范转换表推进相位——非法转换
       // fail-closed（state_conflict）。accept 的推进在 §15 校验通过后
       // （见 accept 分支：被拒的 accept 不得进入 AGREEMENT_REACHED）。
@@ -1086,6 +1111,14 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               : undefined;
           const questionCodes = (Array.isArray(inquiry.questions) ? inquiry.questions : [])
             .flatMap((question) => (typeof question.code === "string" ? [question.code] : []));
+          // 结构化问题代码是协议数据：映射成接待主题，决定回答哪些事实。
+          const structuredTopics = new Set<InquiryTopic>();
+          for (const code of questionCodes) {
+            const head = code.split(".")[0] ?? "";
+            if (head === "price") structuredTopics.add("price");
+            else if (head === "stock" || head === "availability") structuredTopics.add("stock");
+            else if (head === "delivery" || head === "fulfillment") structuredTopics.add("delivery");
+          }
           // P0a：inquiry 与普通 A2A 文本统一走接待引擎——结构化 SKU 是协议
           // 数据（权威），自由文本只是补充；引擎故障回退既有确定性路径。
           if (options.reception !== undefined) {
@@ -1093,12 +1126,20 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               const received = await options.reception.engine.respond({
                 merchantId: options.reception.merchantId,
                 identity: ctx.senderIdentity,
-                // inquiry 是问答（D13 匿名可用）；KNP ctx 未携带验签标记。
-                identityVerified: false,
+                identityVerified: ctx.identityVerified === true,
                 contextId: negotiationId,
                 text: buyerMessage ?? "",
                 now: now(),
-                ...(structuredSku !== undefined ? { structured: { sku: structuredSku } } : {}),
+                ...(structuredSku !== undefined || structuredTopics.size > 0
+                  ? {
+                      structured: {
+                        ...(structuredSku !== undefined ? { sku: structuredSku } : {}),
+                        ...(structuredTopics.size > 0
+                          ? { topics: [...structuredTopics] }
+                          : {}),
+                      },
+                    }
+                  : {}),
               });
               return textReply(received.text);
             } catch {
@@ -1122,13 +1163,8 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               "Please provide a product SKU, quantity and declared unit for a source-backed quote.",
             );
           }
-          const topics = new Set<InquiryTopic>(interpreted?.topics ?? []);
-          for (const code of questionCodes) {
-            const head = code.split(".")[0] ?? "";
-            if (head === "price") topics.add("price");
-            else if (head === "stock" || head === "availability") topics.add("stock");
-            else if (head === "delivery" || head === "fulfillment") topics.add("delivery");
-          }
+          const topics = new Set<InquiryTopic>(structuredTopics);
+          for (const topic of interpreted?.topics ?? []) topics.add(topic);
           const language = interpreted?.language ?? "en";
           const resolved = await resolveProductOrDecline(sku);
           if ("declined" in resolved) {
@@ -1191,14 +1227,6 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           const payload = envelope.payload as {
             items?: { sku?: string; quantity?: { value?: number; unit?: string } }[];
           };
-          // AC09/D03：一次正式协商只支持一个 SKU；多行商品明确拒绝并请买家
-          // 分别发起，不静默只处理 items[0]。
-          if ((payload.items?.length ?? 0) > 1) {
-            return declineReply(
-              "field_unsupported",
-              "一次协商只支持一个 SKU；请为每个商品分别发起 RFQ。",
-            );
-          }
           const sku = payload.items?.[0]?.sku;
           const requestedUnit = payload.items?.[0]?.quantity?.unit;
           const quantityRaw = payload.items?.[0]?.quantity?.value;
@@ -1294,13 +1322,6 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             offer_id?: string;
             terms?: { items?: { sku?: string; quantity?: { value?: number; unit?: string } }[] };
           };
-          // AC09/D03：多行商品明确拒绝，不静默只处理 items[0]。
-          if ((buyerOffer.terms?.items?.length ?? 0) > 1) {
-            return declineReply(
-              "field_unsupported",
-              "一次协商只支持一个 SKU；请为每个商品分别发起。",
-            );
-          }
           const sku = buyerOffer.terms?.items?.[0]?.sku;
           const requestedUnit = buyerOffer.terms?.items?.[0]?.quantity?.unit;
           const quantityRaw = buyerOffer.terms?.items?.[0]?.quantity?.value;
@@ -1392,13 +1413,6 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             };
             offer_id?: string;
           };
-          // AC09/D03：多行商品明确拒绝，不静默只处理 items[0]。
-          if ((counter.proposed_terms?.items?.length ?? 0) > 1) {
-            return declineReply(
-              "field_unsupported",
-              "一次协商只支持一个 SKU；请为每个商品分别发起。",
-            );
-          }
           const sku = counter.proposed_terms?.items?.[0]?.sku;
           const requestedUnit = counter.proposed_terms?.items?.[0]?.quantity?.unit;
           const quantityRaw = counter.proposed_terms?.items?.[0]?.quantity?.value;

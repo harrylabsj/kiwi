@@ -83,19 +83,31 @@ function validateFactRef(
   return undefined;
 }
 
-function renderFacts(snapshot: CommercialFactSnapshot): string[] {
+function renderFacts(snapshot: CommercialFactSnapshot, topics?: string[]): string[] {
   const lines: string[] = [];
   const facts = snapshot.facts;
-  if (facts.listPrice !== undefined && facts.currency !== undefined) {
-    lines.push(`当前公开标价 ${facts.listPrice.toFixed(2)} ${facts.currency}。`);
+  const wants = (topic: "price" | "stock" | "delivery"): boolean =>
+    topics === undefined || topics.length === 0 || topics.includes(topic);
+
+  if (wants("price")) {
+    if (facts.approvedPrice !== undefined && facts.currency !== undefined) {
+      // 商家一次性批准价：只在本轮消费审批候选时出现，必须与公开标价区分。
+      lines.push(`商家确认价 ${facts.approvedPrice.toFixed(2)} ${facts.currency}（仅本次）。`);
+    } else if (facts.listPrice !== undefined && facts.currency !== undefined) {
+      lines.push(`当前公开标价 ${facts.listPrice.toFixed(2)} ${facts.currency}。`);
+    }
   }
-  if (facts.stockAvailable === true) lines.push("库存可以覆盖本次数量。");
-  if (facts.stockAvailable === false) lines.push("当前库存不足以覆盖本次数量。");
-  if (facts.stockAvailable === undefined) lines.push("库存状态待确认。");
-  if (facts.deliveryBefore !== undefined) {
-    lines.push(`预计交期不晚于 ${facts.deliveryBefore.slice(0, 10)}。`);
-  } else {
-    lines.push("交期待确认。");
+  if (wants("stock")) {
+    if (facts.stockAvailable === true) lines.push("库存可以覆盖本次数量。");
+    if (facts.stockAvailable === false) lines.push("当前库存不足以覆盖本次数量。");
+    if (facts.stockAvailable === undefined) lines.push("库存状态待确认。");
+  }
+  if (wants("delivery")) {
+    if (facts.deliveryBefore !== undefined) {
+      lines.push(`预计交期不晚于 ${facts.deliveryBefore.slice(0, 10)}。`);
+    } else {
+      lines.push("交期待确认。");
+    }
   }
   return lines;
 }
@@ -140,7 +152,7 @@ function renderBlock(block: ReceptionBlock, registry: CommercialFactRegistry): s
     }
     case "show_commercial_terms": {
       const snapshot = registry.resolve(block.ref);
-      return snapshot === undefined ? [] : renderFacts(snapshot);
+      return snapshot === undefined ? [] : renderFacts(snapshot, block.topics);
     }
     case "request_human_help": {
       // 只显示真实审批状态（刚登记的 pending）：不说已批准、不泄露商家边界
@@ -150,7 +162,7 @@ function renderBlock(block: ReceptionBlock, registry: CommercialFactRegistry): s
           ? `您的目标价 ${block.buyerTargetPrice.toFixed(2)} ${block.currency} `
           : "这个价格 ";
       return [
-        `${target}低于本店可自动确认的范围，这项条件需要商家确认，目前尚未批准。确认后我会继续处理；您也可以稍后用中文追问进度。`,
+        `${target}低于本店可自动确认的范围，这项条件需要商家确认，目前尚未批准。商家确认后请再次询问，我会继续处理。`,
       ];
     }
     case "next_step":

@@ -82,6 +82,7 @@ describe("merchant inquiry via reception engine (P0a)", () => {
     handler: NegotiationHandler,
     envelope: NegotiationEnvelope,
     buyerText?: string,
+    identityVerified = false,
   ) => {
     const result = await handler.handle({
       envelope: envelope as never,
@@ -92,6 +93,7 @@ describe("merchant inquiry via reception engine (P0a)", () => {
       },
       taskId: `task_${seq}`,
       senderIdentity: "buyer:buyer-001",
+      identityVerified,
     });
     const text =
       result.kind === "accepted" && result.message
@@ -202,6 +204,39 @@ describe("merchant inquiry via reception engine (P0a)", () => {
     });
     expect(seen[1]).toMatchObject({ contextId: "neg_b" });
     expect(seen[1]?.structured).toBeUndefined();
+  });
+
+  it("结构化问题代码只回答对应事实（不额外报价格/库存）", async () => {
+    const handler = makeHandler({ engine: realEngine(), merchantId: "merchant-1" });
+    const { text } = await run(
+      handler,
+      inquiryEnvelope({
+        type: "inquiry",
+        subject: { sku: SKU },
+        questions: [{ code: "delivery.estimated_date" }],
+      }),
+    );
+    expect(text).toContain("预计交期不晚于 2026-11-10");
+    expect(text).not.toContain("当前公开标价");
+    expect(text).not.toContain("库存");
+  });
+
+  it("验签标记传递给接待引擎", async () => {
+    const seen: ReceptionEngineInput[] = [];
+    const engine: ReceptionEngine = {
+      async respond(input) {
+        seen.push(input);
+        return {
+          plan: { locale: "zh-CN", blocks: [] },
+          text: "接待回复",
+          conversation: conversationStub,
+          reply: { response_id: "resp_1", reply_seq: 1 },
+        };
+      },
+    };
+    const handler = makeHandler({ engine, merchantId: "merchant-1" });
+    await run(handler, inquiryEnvelope({ type: "inquiry", subject: { sku: SKU } }), "补充", true);
+    expect(seen[0]?.identityVerified).toBe(true);
   });
 
   it("引擎异常时回退确定性路径，不阻断询价", async () => {

@@ -142,6 +142,8 @@ export interface InboundNegotiationContext {
   contextId?: string;
   /** 认证身份（幂等主键的 sender 侧）。 */
   senderIdentity: string;
+  /** 传输层是否已验签（接待会话的可信主体标记；缺省按未验签处理）。 */
+  identityVerified?: boolean;
   /** 对端 socket 地址。 */
   remoteAddress?: string;
   /**
