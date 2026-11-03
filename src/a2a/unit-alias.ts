@@ -113,7 +113,7 @@ export type UnitResolution =
   | { kind: "factor"; unit: string; factor: number }
   | {
       kind: "mismatch";
-      reason: "missing_product_unit" | "ambiguous_factor" | "alias_conflict" | "no_match";
+      reason: "missing_product_unit" | "ambiguous_factor" | "alias_conflict" | "no_match" | "folded_factor_conflict";
     };
 
 /**
@@ -179,20 +179,12 @@ export function resolveUnitConversion(
   }
 
   // Different original spellings that fold to the same canonical unit
-  // (`box` vs `盒`). Explicit configuration may distinguish packaging meaning;
-  // do not blindly overwrite it with the built-in 1:1 alias.
-  // Different original spellings that fold to the same canonical unit. A
-  // non-1 factor whose target is the source/default unit is an explicit
-  // package interpretation (e.g. default box + factor 盒:12), so apply it
-  // instead of silently choosing the built-in 1:1 alias.
+  // (`box` vs `盒`). An explicit factor on this folded spelling is ambiguous;
+  // keep the prior safe rejection rather than guessing a package meaning.
   const factorTargetsSource = policy.defaultUnit !== undefined && product === policy.defaultUnit;
   if (factor !== undefined) {
-    const legacyFactor = policy.defaultUnit === undefined && policy.legacyFactorTarget === true;
-    if (factorTargetsSource || legacyFactor) {
-      if (hasAlias && aliasTarget !== product) {
-        return { kind: "mismatch", reason: "alias_conflict" };
-      }
-      return { kind: "factor", unit: product, factor };
+    if (factor !== 1 && (factorTargetsSource || policy.defaultUnit === undefined)) {
+      return { kind: "mismatch", reason: "folded_factor_conflict" };
     }
     if (hasAlias && aliasTarget !== product) {
       return { kind: "mismatch", reason: "alias_conflict" };

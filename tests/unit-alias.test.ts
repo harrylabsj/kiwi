@@ -80,14 +80,12 @@ describe("explicit box/盒 unit aliases", () => {
     expect(resolveUnitConversion(policy, "盒", "盒")).toEqual({ kind: "identity", unit: "box" });
     expect(resolveUnitConversion(policy, "box", "box")).toEqual({ kind: "identity", unit: "box" });
     expect(resolveUnitConversion(policy, "盒", "box")).toEqual({
-      kind: "factor",
-      unit: "box",
-      factor: 12,
+      kind: "mismatch",
+      reason: "folded_factor_conflict",
     });
     expect(resolveUnitConversion(policy, "box", "盒")).toEqual({
-      kind: "factor",
-      unit: "box",
-      factor: 12,
+      kind: "mismatch",
+      reason: "folded_factor_conflict",
     });
   });
 
