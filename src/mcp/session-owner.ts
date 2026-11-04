@@ -1,40 +1,59 @@
 /**
  * Buyer session ownership.
  *
- * A session label is only a display/namespace hint. It is not an
- * authentication credential. A client must present an independently generated
- * session token (`--session-token`, `KIWI_SESSION_TOKEN`, or a private token
- * file); without one the server creates a fresh random owner for this process,
- * never a shared value derived from a reusable DB key or the session label.
- *
- * Reconnect/restart: reuse the exact token. Different clients or labels get
- * different owners even when they share a database.
+ * The session label is only a namespace hint. Each client gets a private,
+ * automatically persisted token file (0600) under the user's home directory;
+ * the server stores only an HMAC-derived owner hash, never the token. Supplying
+ * the same token file/session again reconnects; different files/labels do not
+ * share tasks. This is a local-client credential, not remote authentication:
+ * another process with the same OS user and access to the file can read it.
  */
-import { createHmac, randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { createHash, createHmac, randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 
 export interface SessionOwnerInput {
+  /** Used only to give each local database its own auto-token namespace. */
+  dbPath?: string;
   principal: string;
   buyerAgentId: string;
   sessionId: string;
   sessionToken?: string;
-  /** Optional path to a client-private token file; not shared with the DB. */
+  /** Optional client-owned token file; must be non-empty. */
   sessionTokenFile?: string;
+  /** Test/embedding override for the auto-token directory. */
+  tokenDir?: string;
+}
+
+function readTokenFile(file: string): string {
+  if (!existsSync(file)) throw new Error("session token file does not exist");
+  const token = readFileSync(file, "utf8").trim();
+  if (token === "") throw new Error("session token file is empty");
+  return token;
+}
+
+function autoTokenFile(input: SessionOwnerInput): string {
+  const key = createHash("sha256")
+    .update(`${input.dbPath ?? ""}\u0000${input.principal}\u0000${input.buyerAgentId}\u0000${input.sessionId}`)
+    .digest("hex");
+  const dir = input.tokenDir ?? path.join(homedir(), ".kiwi", "mcp", "sessions");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return path.join(dir, `${key}.token`);
 }
 
 export function resolveSessionOwner(input: SessionOwnerInput): string {
   let token = input.sessionToken?.trim() ?? "";
   if (token === "" && input.sessionTokenFile !== undefined) {
-    if (!existsSync(input.sessionTokenFile)) {
-      throw new Error("session token file does not exist");
-    }
-    token = readFileSync(input.sessionTokenFile, "utf8").trim();
+    token = readTokenFile(input.sessionTokenFile);
   }
   if (token === "") {
-    // No credential supplied: generate an independent, non-recoverable owner
-    // for this process. It cannot be reconstructed from the session label or
-    // a shared database directory.
-    return `ephemeral:${randomBytes(32).toString("hex")}`;
+    const file = autoTokenFile(input);
+    if (!existsSync(file)) {
+      writeFileSync(file, randomBytes(32).toString("hex"), { mode: 0o600, flag: "wx" });
+      chmodSync(file, 0o600);
+    }
+    token = readTokenFile(file);
   }
   const identity = `${input.principal}\u0000${input.buyerAgentId}\u0000${input.sessionId}`;
   return createHmac("sha256", token).update(identity).digest("hex");

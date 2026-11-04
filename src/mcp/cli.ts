@@ -81,6 +81,7 @@ export interface McpServeOptions {
   sessionToken?: string;
   sessionTokenFile?: string;
   adoptLegacy?: boolean;
+  adoptLegacyOwner?: string;
   policy?: Record<string, unknown>;
   catalogUrl?: string;
   marketplaceUrl?: string;
@@ -127,6 +128,7 @@ export async function runMcpServe(args: string[]): Promise<number> {
     else if (flag === "--session-token") opts.sessionToken = value;
     else if (flag === "--session-token-file") opts.sessionTokenFile = value;
     else if (flag === "--adopt-legacy") opts.adoptLegacy = true;
+    else if (flag === "--adopt-legacy-owner") opts.adoptLegacyOwner = value;
     else if (flag === "--catalog-url") opts.catalogUrl = value;
     else if (flag === "--marketplace-url") opts.marketplaceUrl = value;
     else if (flag === "--buyer-bootstrap-token") opts.buyerBootstrapToken = value;
@@ -153,19 +155,30 @@ export async function runMcpServe(args: string[]): Promise<number> {
   const dbPath =
     opts.db ?? process.env.KIWI_MCP_DB ?? path.join(homedir(), ".kiwi", "mcp", "dsh.sqlite");
   const explicitToken = opts.sessionToken ?? process.env.KIWI_SESSION_TOKEN;
-  const hasTokenFile = opts.sessionTokenFile !== undefined
-    || (process.env.KIWI_SESSION_TOKEN_FILE !== undefined && process.env.KIWI_SESSION_TOKEN_FILE !== "");
+  const tokenFile = opts.sessionTokenFile ?? process.env.KIWI_SESSION_TOKEN_FILE;
+  const hasTokenFile = tokenFile !== undefined && tokenFile !== "";
+  if (opts.adoptLegacy === true && opts.adoptLegacyOwner !== principal) {
+    process.stderr.write("--adopt-legacy requires --adopt-legacy-owner matching the authenticated principal\n");
+    return 2;
+  }
   if (opts.adoptLegacy === true && (explicitToken === undefined || explicitToken.trim() === "") && !hasTokenFile) {
     process.stderr.write("--adopt-legacy requires --session-token, KIWI_SESSION_TOKEN, --session-token-file, or KIWI_SESSION_TOKEN_FILE\n");
     return 2;
   }
-  const sessionOwner = resolveSessionOwner({
+  let sessionOwner: string;
+  try {
+    sessionOwner = resolveSessionOwner({
     principal,
     buyerAgentId,
     sessionId,
     ...(explicitToken !== undefined ? { sessionToken: explicitToken } : {}),
-    ...(opts.sessionTokenFile !== undefined ? { sessionTokenFile: opts.sessionTokenFile } : {}),
-  });
+    ...(tokenFile !== undefined ? { sessionTokenFile: tokenFile } : {}),
+      dbPath,
+    });
+  } catch (error) {
+    process.stderr.write(`session credential rejected: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 2;
+  }
   const policy = readPolicy(opts, principal);
   // 持久 store 默认路径：--db → KIWI_MCP_DB env → ~/.kiwi/mcp/dsh.sqlite（HOME 基准，
   // 稳定可跨宿主；dsh/Hermes 等 host 不传 --db 时也能落一致位置，不再依赖 cwd）。

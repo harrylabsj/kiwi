@@ -59,8 +59,9 @@ describe("buyer task session ownership", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-notoken-"));
     dirs.push(dir);
     const store = new TaskApprovalStore({ dbPath: path.join(dir, "buyer.sqlite") });
-    const aOwner = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same-label" });
-    const bOwner = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same-label" });
+    const tokenDir = path.join(dir, "tokens");
+    const aOwner = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "client-a", tokenDir });
+    const bOwner = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "client-b", tokenDir });
     expect(aOwner).not.toBe(bOwner);
     store.createTask({
       task_id: "task-notoken", task_kind: "request_quotes", status: "succeeded",
@@ -68,7 +69,7 @@ describe("buyer task session ownership", () => {
       updated_at: "2026-11-01T00:00:00Z", resumable: true, owner_hash: aOwner, payload: "{}",
     });
     const b = new KiwiBuyerService({
-      store, principal: "p", buyerAgentId: "a", sessionId: "same-label", sessionOwner: bOwner,
+      store, principal: "p", buyerAgentId: "a", sessionId: "client-b", sessionOwner: bOwner,
       delegationPolicy: {
         policy_id: "p", version: "1.0", principal: "p", expires_at: "2099-12-31T23:59:59Z",
         actions: { counter_offer: { mode: "auto" } }, limits: { max_rounds: 3 },
@@ -99,12 +100,15 @@ describe("buyer task session ownership", () => {
     expect(() => b.getAgreement("agreement-write")).toThrow(/not found/);
   });
 
-  it("same session label without a token is not a shared identity", () => {
-    const one = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same" });
-    const two = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same" });
-    expect(one).not.toBe(two);
-    expect(one.startsWith("ephemeral:")).toBe(true);
-    expect(two.startsWith("ephemeral:")).toBe(true);
+  it("no-token auto credential reconnects the same client and isolates another label", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-auto-"));
+    dirs.push(dir);
+    const one = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same", tokenDir: dir });
+    const again = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same", tokenDir: dir });
+    const other = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "other", tokenDir: dir });
+    expect(one).toBe(again);
+    expect(one).not.toBe(other);
+    expect(one.startsWith("ephemeral:")).toBe(false);
   });
 
   it("same token and the stable default session label reconnect across restarts", () => {
@@ -121,6 +125,15 @@ describe("buyer task session ownership", () => {
     const one = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionTokenFile: file });
     const two = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionTokenFile: file });
     expect(one).toBe(two);
+  });
+
+  it("empty token file fails closed and cannot authorize adoption", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-empty-"));
+    dirs.push(dir);
+    const file = path.join(dir, "empty");
+    writeFileSync(file, "");
+    expect(() => resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionTokenFile: file }))
+      .toThrow(/empty/);
   });
 
   it("legacy adoption is one-time and cannot be repeated by a second session", () => {

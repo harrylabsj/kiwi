@@ -84,6 +84,7 @@ export async function runHttpServe(args: string[]): Promise<number> {
     buyerAgentId: opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-http",
     sessionId,
     sessionOwner: resolveSessionOwner({
+      dbPath,
       principal,
       buyerAgentId: opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-http",
       sessionId,
@@ -103,6 +104,15 @@ export async function runHttpServe(args: string[]): Promise<number> {
   });
   const port = opts.port ?? 8787;
   const host = opts.host ?? "127.0.0.1";
+  // HTTP adapter is deliberately single-user/local. A shared bearer cannot
+  // identify multiple clients, so refusing non-loopback prevents deploying it
+  // as an accidental multi-tenant service.
+  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(host)) {
+    process.stderr.write(
+      "refusing non-loopback HTTP bind: buyer HTTP API is single-tenant; use MCP with per-client session tokens for isolation\n",
+    );
+    return 2;
+  }
   // review P1-1（返修）：认证令牌必选（--auth-token 或 KIWI_BUYER_HTTP_TOKEN）；
   // loopback 监听不再是免鉴权身份（localhost 不是身份）。未配置一律拒绝启动。
   const authToken = opts.authToken ?? process.env.KIWI_BUYER_HTTP_TOKEN;
