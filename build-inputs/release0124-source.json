@@ -2834,7 +2834,7 @@
     },
     {
       "path": "src/a2a/reception/agent-runtime.ts",
-      "sha256": "sha256:b98141f1618f1c45850bb907a895ea3346bd5a39e964ea4d2275c45d566c32f2"
+      "sha256": "sha256:3c8bb3800d979cedc11496dfb28b2dfe90ff90c14c80de69ad88866da1c8eb55"
     },
     {
       "path": "src/a2a/reception/budget.ts",
@@ -2850,7 +2850,7 @@
     },
     {
       "path": "src/a2a/reception/engine.ts",
-      "sha256": "sha256:6698d8043700fb90529089ffc974702d783565d52375c5097b030af08b5e50af"
+      "sha256": "sha256:c0b7578a5d36154d05125dc30561e17acc6cbfd8ad3687b086f2542b7b6affd3"
     },
     {
       "path": "src/a2a/reception/probe.ts",
@@ -4862,9 +4862,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:12b7965e6deb56cb0f6a25d091eb12967427f0c5a192c115bc84a8f496bad49d",
+      "sha256": "sha256:5f81744092186d53a976e78822e8995ca560ffd3287ba65191b509f731945418",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:e1a538905b348131a8a26a22ba62c71ec96fcfd948a2a58434ae2b6356c16420"
+      "raw_sha256": "sha256:5d6ba739528b3ae3106fd1a4e0e7decc7c758cab85fd25b41a7d9f108be748ee"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -6040,7 +6040,7 @@
     },
     {
       "path": "tests/merchant-inquiry-reception.test.ts",
-      "sha256": "sha256:39877697065b66f8594de0da1dfdc5142028e62b6c6b764ffb951c5d2186ee78"
+      "sha256": "sha256:783ce991b378e3902380f8f54a5ef388c2238e7c1769306c4cd6e614da085305"
     },
     {
       "path": "tests/merchant-inquiry.test.ts",
@@ -6669,6 +6669,10 @@
     {
       "path": "tests/reception-retention.test.ts",
       "sha256": "sha256:99d0ca0394dd45b246300c8d01622deb35acd7640dc90efe102e09e3ade49487"
+    },
+    {
+      "path": "tests/reception-structured-sku.test.ts",
+      "sha256": "sha256:12784d7305daf88a9a81967720c9fffff36631a945ed1d825637e47eaf48a7b3"
     },
     {
       "path": "tests/recovery.test.ts",
