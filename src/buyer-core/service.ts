@@ -384,6 +384,41 @@ function normalizeClarificationQuestions(
   });
 }
 
+/** 明确指定的单品 SKU；缺失/空白时返回 undefined（模糊需求允许商家选品）。 */
+function explicitIntentItemSku(intent: Record<string, unknown>): string | undefined {
+  const items = intent.items;
+  if (!Array.isArray(items) || items.length === 0) return undefined;
+  const first = items[0];
+  if (typeof first !== "object" || first === null) return undefined;
+  const sku = (first as Record<string, unknown>).sku;
+  return typeof sku === "string" && sku.trim() !== "" ? sku : undefined;
+}
+
+/** 明确 SKU 的报价必须只包含该 SKU；商家换品/混入其他商品时拒绝接纳。 */
+function rejectQuoteForOtherSku(
+  result: QuoteCandidateInput,
+  explicitSku: string | undefined,
+): QuoteCandidateInput {
+  if (explicitSku === undefined || result.status !== "succeeded") return result;
+  const rawItems = result.terms?.items;
+  const items = Array.isArray(rawItems) ? rawItems : [];
+  const skus = items
+    .map((item) => item.sku)
+    .filter((sku): sku is string => typeof sku === "string" && sku !== "");
+  if (items.length > 0 && skus.length === items.length && skus.every((sku) => sku === explicitSku)) {
+    return result;
+  }
+  return {
+    merchant_id: result.merchant_id,
+    status: "failed",
+    failure: {
+      classification: "protocol_error",
+      retryable: false,
+      detail: "merchant quote SKU does not match explicit intent SKU",
+    },
+  };
+}
+
 /** 候选当前可接受的条款摘要：优先商家最新 agreed terms，其次旧候选快照。 */
 function acceptedTermsDigest(candidate: Record<string, unknown>): string {
   const provenance = (candidate.provenance as Record<string, unknown> | undefined) ?? {};
@@ -650,7 +685,9 @@ export class KiwiBuyerService {
       // Recovery can only read previously persisted protocol receipts/results, never send.
       if(this.quoteFetcher?.recoverQuotes !== undefined && ["in_progress","partial_success"].includes(persisted.status) && !this.store.hasAgreementForTask(persisted.task_id)) {
         const originalCandidates=this.store.listCandidates(persisted.task_id);
-        const results=await this.quoteFetcher.recoverQuotes(this.protocolContext(persisted,input.merchant_ids??[]));
+        const recovered=await this.quoteFetcher.recoverQuotes(this.protocolContext(persisted,input.merchant_ids??[]));
+        const explicitSku=explicitIntentItemSku(input.intent);
+        const results=recovered.map((result)=>rejectQuoteForOtherSku(result,explicitSku));
         if(results.length>0)return this.store.transaction(()=>{
           if(this.store.hasAgreementForTask(persisted.task_id) || contentDigest(this.store.listCandidates(persisted.task_id))!==contentDigest(originalCandidates))throw new McpError("idempotency_conflict","task candidates or accepted agreement changed during recovery");
           for(const result of results)this.store.replaceRecoveredCandidate(persisted.task_id,result);
@@ -705,6 +742,8 @@ export class KiwiBuyerService {
           merchantRecords,
           protocolContext,
         );
+        const explicitSku = explicitIntentItemSku(input.intent);
+        quotedResults = quotedResults.map((result) => rejectQuoteForOtherSku(result, explicitSku));
         dispatchOutcomeUnknown = quotedResults.some(
           (result) =>
             result.status === "failed" &&

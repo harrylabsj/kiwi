@@ -407,7 +407,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         send: (wire) => client.sendMessage(envelopeToMessage(wire)),
         get: (id) => client.getTask(id), timeoutMs:this.timeoutMs, pollIntervalMs:this.pollIntervalMs,
       });
-      return this.project(exchange);
+      return this.project(exchange, requestedSku);
     } catch (error) {
       if (error instanceof A2AEndpointResolutionError) {
         const denied = error.httpStatus === 401 || error.httpStatus === 403;
@@ -468,7 +468,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     }
   }
 
-  private project({reply,wire,endpoint,merchantId}:ProtocolReply):QuoteCandidateInput {
+  private project({reply,wire,endpoint,merchantId}:ProtocolReply, expectedSku?: string):QuoteCandidateInput {
     if (!["offer", "counter_offer"].includes(reply.action)) return {
       merchant_id: merchantId, status: "failed", failure: {
         classification: "protocol_error",
@@ -476,8 +476,27 @@ export class A2AQuoteFetcher implements QuoteFetcher {
       },
     };
     const offerId=(reply.payload as {offer_id?:unknown}).offer_id;
-    const sku=(wire.payload as {items?:Array<{sku?:string}>}).items?.[0]?.sku;
     const terms=projectOfferTerms(reply.payload);
+    const offeredSkus=terms?.items.map((item)=>item.sku) ?? [];
+    if (
+      expectedSku !== undefined &&
+      (terms === undefined ||
+        offeredSkus.length === 0 ||
+        offeredSkus.some((sku) => sku !== expectedSku))
+    ) {
+      return {
+        merchant_id: merchantId,
+        status: "failed",
+        failure: {
+          classification: "protocol_error",
+          retryable: false,
+          detail: "merchant quote SKU does not match explicit intent SKU",
+        },
+      };
+    }
+    // Provenance must describe the merchant's actual quoted SKU, not the
+    // buyer's request SKU (otherwise a swapped product is masked).
+    const sku=terms?.items[0]?.sku ?? (wire.payload as {items?:Array<{sku?:string}>}).items?.[0]?.sku;
     return {merchant_id:merchantId,status:"succeeded",...(terms?{terms}:{}),provenance:{...(typeof offerId==="string"?{offer_id:offerId}:{}),negotiation_id:wire.negotiation_id,merchant_reply_id:reply.message_id,source:"a2a",reply_text:JSON.stringify(reply),sku,a2a_endpoint:endpoint}};
   }
   async recoverQuotes(context:ProtocolTaskContext):Promise<QuoteCandidateInput[]> {

@@ -272,6 +272,8 @@ export async function startTestA2aStack(
      * 混用导致合法 offer 被如实判 offer_expired（probe-1 实证）。
      */
     now?: () => string;
+    /** Test-only replacement handler (raw A2A failure modes). */
+    handler?: { name: string; handle(ctx: never): Promise<never> };
   } = {},
 ): Promise<{
   catalogUrl: string;
@@ -305,7 +307,7 @@ export async function startTestA2aStack(
       ? { negotiationApprovals: options.negotiationApprovals }
       : {}),
   });
-  const handler = options.capture !== undefined
+  const handler = options.handler ?? (options.capture !== undefined
     ? {
         name: inner.name,
         handle: async (ctx: {
@@ -320,7 +322,7 @@ export async function startTestA2aStack(
           return inner.handle(ctx as never);
         },
       }
-    : inner;
+    : inner);
   const server = new A2AServer({
     card: () => ({
       name: "Test Merchant",
