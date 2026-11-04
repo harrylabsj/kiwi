@@ -1,7 +1,6 @@
 import {spawn} from 'node:child_process';
 import {createHmac,randomBytes} from 'node:crypto';
 import {chmodSync,mkdirSync,rmSync,writeFileSync} from 'node:fs';
-import {DatabaseSync} from 'node:sqlite';
 import {delimiter,dirname,isAbsolute,join} from 'node:path';
 
 // Behavioral capability probe for the installed Kiwi runtime. A version string
@@ -43,6 +42,9 @@ export async function probeMcpIdentity({nodeBinary,packageRoot,fixtureHome,timeo
   if(![nodeBinary,packageRoot,fixtureHome].every(isAbsolute))throw new Error('ABSOLUTE_PATH_REQUIRED');
   if(!Number.isInteger(timeoutMs)||timeoutMs<100||timeoutMs>60000)throw new Error('TIMEOUT_INVALID');
   const command=join(packageRoot,'dist','cli.js');
+  // Dynamic import: merely loading the connector must not emit Node's
+  // experimental SQLite warning on unrelated startup paths.
+  const {DatabaseSync}=await import('node:sqlite');
   const dir=join(fixtureHome,`identity-${randomBytes(8).toString('hex')}`);
   const dbPath=join(dir,'buyer.sqlite'),tokenFile=join(dir,'session.token');
   const token=randomBytes(32).toString('hex'),foreignToken=randomBytes(32).toString('hex');
