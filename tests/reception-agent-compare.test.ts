@@ -83,6 +83,8 @@ async function runCompare(input: {
   unit?: string;
   buyerText?: string;
   expectedStockAvailable?: boolean | null;
+  factors?: Record<string, number>;
+  defaultUnit?: string;
   reason: "in_stock" | "lowest_public_price";
 }) {
   const mainRef = expectedRef(input.a, input.quantity, input.unit, input.expectedStockAvailable);
@@ -127,6 +129,8 @@ async function runCompare(input: {
     },
     maxSteps: 4,
     timeoutMs: 5000,
+    ...(input.factors !== undefined ? { unitPackageFactors: input.factors } : {}),
+    ...(input.defaultUnit !== undefined ? { unitDefaultUnit: input.defaultUnit } : {}),
   });
   const registry = new InMemoryFactRegistry();
   const result = await runtime.run({
@@ -218,6 +222,37 @@ describe("Pi compare_products → recommend_option publisher claims", () => {
     });
     expect(result.rejected[0]?.reason).toBe("unverified_claim");
     expect(result.text).not.toContain("库存可以覆盖本次数量");
+  });
+
+  it("ambiguous box quantities still do not bind stock coverage", async () => {
+    const result = await runCompare({
+      a: { ...A, stock: 24 },
+      b: B,
+      quantity: 2,
+      unit: "box",
+      buyerText: "之前2 box，现在1 box",
+      expectedStockAvailable: null,
+      factors: { box: 12 },
+      defaultUnit: "piece",
+      reason: "in_stock",
+    });
+    expect(result.rejected[0]?.reason).toBe("unverified_claim");
+    expect(result.text).not.toContain("库存可以覆盖本次数量");
+  });
+
+  it("2 box converts to 24 piece and legitimately covers stock 24", async () => {
+    const result = await runCompare({
+      a: { ...A, stock: 24 },
+      b: B,
+      quantity: 2,
+      unit: "box",
+      buyerText: "我要2 box",
+      factors: { box: 12 },
+      defaultUnit: "piece",
+      reason: "in_stock",
+    });
+    expect(result.rejected).toHaveLength(0);
+    expect(result.text).toContain("库存可以覆盖本次数量");
   });
 
   it("ambiguous historical vs current quantity: never claims coverage", async () => {

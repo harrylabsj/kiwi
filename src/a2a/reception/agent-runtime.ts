@@ -139,7 +139,7 @@ function toolResult(text: string, details: unknown = {}): AgentToolResult<unknow
 }
 
 const BUYER_QUANTITY_UNIT =
-  "盒|件|个|只|箱|瓶|包|袋|台|套|双|张|份|pieces?|boxes?|pcs?|units?";
+  "盒|件|个|只|箱|瓶|包|袋|台|套|双|张|份|piece(?:s)?|box(?:es)?|pcs?|units?";
 const BUYER_CN_DIGITS: Record<string, number> = {
   一: 1,
   二: 2,
