@@ -1,12 +1,12 @@
 {
   "schema": "kiwi.release-acceptance/1",
-  "recorded_at": "2026-11-03T20:38:28.399Z",
+  "recorded_at": "2026-11-04T03:27:36.695Z",
   "catalog_url": "https://catalog.kiwi.harrylabsj.com",
   "merchant_id": "mkt_veyquo_A0UPvj7XuYk",
   "sku": "VQ-101",
   "quantity": 1,
   "unit": "个",
-  "kiwi_version": "0.12.24",
+  "kiwi_version": "0.12.25",
   "shopping_cli_commit": "6477396331267a61275dc7db7bbc903a11e70159",
   "signed_buyer": true,
   "chain": {
@@ -20,15 +20,15 @@
     "quote": {
       "ok": true,
       "detail": "报价 15900 CNY × 1",
-      "offer_id": "off_01a1a322-7a97-7000-aa71-a50024404cf9",
+      "offer_id": "off_01a1a499-0e77-7000-b862-1cc6c7e81400",
       "unit_price_minor": "15900",
       "currency": "CNY",
       "trade_entry": "https://item.jd.com/100253036806.html"
     },
     "agreement": {
       "ok": true,
-      "detail": "非约束性协议 agreement-01a1a322-7b2a-762d-80ff-1fbaaa1ff46c（不下单/不锁库/不付款）",
-      "agreement_id": "agreement-01a1a322-7b2a-762d-80ff-1fbaaa1ff46c",
+      "detail": "非约束性协议 agreement-01a1a499-0ef3-76a5-a5b2-070de8015116（不下单/不锁库/不付款）",
+      "agreement_id": "agreement-01a1a499-0ef3-76a5-a5b2-070de8015116",
       "binding_effect": "nonbinding"
     },
     "handoff": {
