@@ -79,6 +79,24 @@ describe("buyer task session ownership", () => {
     store.close();
   });
 
+  it("cross-session idempotency key cannot read or revive another task", async () => {
+    const a = fixture("idem-a", "task-idem-owner");
+    a.service.adoptLegacyTasks();
+    const b = new KiwiBuyerService({
+      store: a.store, principal: "p", buyerAgentId: "a", sessionId: "idem-b", sessionOwner: "owner-idem-b",
+      delegationPolicy: {
+        policy_id: "p", version: "1.0", principal: "p", expires_at: "2099-12-31T23:59:59Z",
+        actions: { inquiry_rfq: { mode: "auto" } }, limits: { max_rounds: 3 },
+      },
+    });
+    await expect(b.requestQuotes({
+      intent: { intent_id: "idem-intent", intent_type: "inquiry", items: [{ query: "x", quantity: { value: 1, unit: "piece" } }] },
+      merchant_ids: ["m"],
+      idempotency_key: "idem-task-idem-owner",
+    })).rejects.toMatchObject({ code: "task_not_found" });
+    expect(() => b.getTask("task-idem-owner")).toThrow(/not found/);
+  });
+
   it("different session cannot read approval or agreement rows", () => {
     const a = fixture("a-write", "task-write");
     a.store.setApproval("task-write", {

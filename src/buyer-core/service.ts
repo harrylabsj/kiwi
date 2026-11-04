@@ -784,6 +784,11 @@ export class KiwiBuyerService {
 
     const { task: persisted, created: isCreated } = this.store.createTask(task);
     if (!isCreated) {
+      // idempotency_key is globally unique in the local store. It must never
+      // become a side-channel that lets another session read/revive a task.
+      if (persisted.owner_hash !== this.ownerHash) {
+        throw new McpError("task_not_found", "idempotency key belongs to another session");
+      }
       if(this.quoteFetcher?.recoverQuotes!==undefined){
         const original=this.decodeTask(persisted).intent;
         if(original!==undefined && contentDigest(original)!==contentDigest(input.intent))throw new McpError("idempotency_conflict","same task key has different intent");
