@@ -29,13 +29,39 @@ function taskRow(taskId,ownerHash){
   };
 }
 
-function parseCall(message){
-  if(message?.error)return null;
-  const result=message?.result;
-  if(!result||result.isError)return null;
-  const text=result.content?.find?.(part=>part?.type==='text')?.text;
-  if(typeof text!=='string')return null;
-  try{const value=JSON.parse(text);return value?.task?.task_id??value?.task_id??null}catch{return null}
+function oneText(result){
+  if(!result||!Array.isArray(result.content)||result.content.length!==1)return null;
+  const part=result.content[0];
+  if(!part||part.type!=='text'||typeof part.text!=='string')return null;
+  return part.text;
+}
+
+function parseTaskSuccess(message,expectedTaskId){
+  if(!message||message.error!==undefined)return false;
+  const result=message.result;
+  if(!result||result.isError===true)return false;
+  const text=oneText(result);
+  if(text===null)return false;
+  let value;
+  try{value=JSON.parse(text)}catch{return false}
+  return value?.task?.task_id===expectedTaskId&&value.task.task_kind==='request_quotes';
+}
+
+function parseTaskNotFound(message){
+  if(!message||message.error!==undefined)return false;
+  const result=message.result;
+  if(!result||result.isError!==true)return false;
+  const text=oneText(result);
+  if(text===null)return false;
+  // Require the actual in-band MCP business error, not a generic internal error.
+  return /^error task_not_found: .+$/.test(text);
+}
+
+function validInitialize(message){
+  return message!==undefined&&message.error===undefined
+    &&message.result?.protocolVersion==='2025-06-18'
+    &&message.result?.serverInfo?.name==='kiwi-buyer-mcp'
+    &&typeof message.result?.capabilities?.tools==='object';
 }
 
 export async function probeMcpIdentity({nodeBinary,packageRoot,fixtureHome,timeoutMs=15000}){
@@ -91,14 +117,18 @@ export async function probeMcpIdentity({nodeBinary,packageRoot,fixtureHome,timeo
       p.stdin.on('error',()=>finish(new Error('MCP_IDENTITY_INPUT_FAILED')));
       p.stdin.end(lines.map(x=>JSON.stringify(x)).join('\n')+'\n');
     });
-    const responses=new Map();
+    const responses=new Map(),seen=new Set();
     for(const line of output.split(/\r?\n/).filter(Boolean)){
       let item;try{item=JSON.parse(line)}catch{throw new Error('MCP_IDENTITY_NON_JSON')}
-      if(item.id===2||item.id===3)responses.set(item.id,item);
+      if(item.id===1||item.id===2||item.id===3){
+        if(seen.has(item.id))throw new Error('MCP_IDENTITY_DUPLICATE_RESPONSE');
+        seen.add(item.id);responses.set(item.id,item);
+      }
     }
-    if(responses.size!==2)throw new Error('MCP_IDENTITY_RESPONSE_MISSING');
-    if(parseCall(responses.get(2))!==EXPECTED_TASK)throw new Error('MCP_IDENTITY_MISSING');
-    if(parseCall(responses.get(3))!==null)throw new Error('MCP_IDENTITY_FOREIGN_READABLE');
+    if(responses.size!==3)throw new Error('MCP_IDENTITY_RESPONSE_MISSING');
+    if(!validInitialize(responses.get(1)))throw new Error('MCP_IDENTITY_INITIALIZE_INVALID');
+    if(!parseTaskSuccess(responses.get(2),EXPECTED_TASK))throw new Error('MCP_IDENTITY_OWNER_READ_FAILED');
+    if(!parseTaskNotFound(responses.get(3)))throw new Error('MCP_IDENTITY_FOREIGN_NOT_STRUCTURED');
     return {identity:'supported',probeTasks:2};
   }finally{try{rmSync(dir,{recursive:true,force:true})}catch{void 0}}
 }
