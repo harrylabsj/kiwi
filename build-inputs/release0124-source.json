@@ -1994,7 +1994,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/runtime/instance-store.mjs",
-      "sha256": "sha256:4f83dcad6759b302cfb72764917e65e42d276600bfb8187a8436b6017fffbb08"
+      "sha256": "sha256:f18d24624a839888b9fc6b93b3981b1fa69896b87be014298b9c4b596ed5b16d"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/runtime/latest-resolver.mjs",
@@ -3886,7 +3886,7 @@
     },
     {
       "path": "src/mcp/cli.ts",
-      "sha256": "sha256:89d5f4e4b8cd050a561f7a0f8a104c25ea21c78804db30766ce2cc82b4d9e2b7"
+      "sha256": "sha256:1664ffc9ab29ae536cb6b768103a20173922b2b932b32f294da5bc3441e638dc"
     },
     {
       "path": "src/mcp/merchant-auth.ts",
@@ -3930,7 +3930,7 @@
     },
     {
       "path": "src/mcp/session-owner.ts",
-      "sha256": "sha256:1bd4d8cd96c772f6b594492341df8b099536c3075306cc9c701447ec22473505"
+      "sha256": "sha256:45fd7bba99531df53dd36a7157327669a44e34d2f7f5b5dfb29850758c17cfc4"
     },
     {
       "path": "src/mcp/tools.ts",
@@ -4878,9 +4878,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:61b45caa10e79d723235e763fbce320bd176aa497399e32911914996c209ba45",
+      "sha256": "sha256:459d9d89c39e4e31d2a64663e59782744b408b1685397a14b89c1057a64c13f0",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:adb67220642703f3fbe149b10e45cbd135a4bbad5b53ba855e94199040bff540"
+      "raw_sha256": "sha256:c6f2ca6b4b28764032ed55cad6f2f410a93838b0bc193be7e5b3593f97cd506c"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",

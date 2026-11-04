@@ -1,4 +1,4 @@
-import {constants,closeSync,fsyncSync,fstatSync,lstatSync,mkdirSync,openSync,readdirSync,readFileSync,realpathSync,renameSync,rmSync,unlinkSync,writeFileSync} from 'node:fs';
+import {constants,closeSync,fsyncSync,fstatSync,lstatSync,mkdirSync,openSync,readFileSync,realpathSync,renameSync,rmSync,writeFileSync} from 'node:fs';
 import {randomBytes} from 'node:crypto';
 import {isAbsolute,join} from 'node:path';
 

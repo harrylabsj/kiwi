@@ -160,12 +160,11 @@ export async function runMcpServe(args: string[]): Promise<number> {
     opts.db ?? process.env.KIWI_MCP_DB ?? path.join(homedir(), ".kiwi", "mcp", "dsh.sqlite");
   const explicitToken = opts.sessionToken ?? process.env.KIWI_SESSION_TOKEN;
   const tokenFile = opts.sessionTokenFile ?? process.env.KIWI_SESSION_TOKEN_FILE;
-  const hasTokenFile = tokenFile !== undefined && tokenFile !== "";
   const clientId = opts.clientId ?? process.env.KIWI_CLIENT_ID;
   let sessionOwner: string;
   try {
     sessionOwner = resolveSessionOwner({
-    clientId: opts.clientId ?? process.env.KIWI_CLIENT_ID,
+    clientId,
     principal,
     buyerAgentId,
     sessionId,

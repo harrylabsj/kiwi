@@ -56,8 +56,8 @@ function readTokenFile(file: string): string {
     if (token === "") throw new Error("session token file is empty");
     return token;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error("session token file does not exist");
+    if ((error as {code?: string}).code === "ENOENT") {
+      throw new Error("session token file does not exist", { cause: error });
     }
     throw error;
   } finally {
@@ -112,7 +112,7 @@ function createTokenFileOnce(file: string): void {
     try {
       linkSync(temp, file);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if ((error as {code?: string}).code !== "EEXIST") throw error;
     }
   } finally {
     try { unlinkSync(temp); } catch { /* already removed */ }
