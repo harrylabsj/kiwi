@@ -173,6 +173,8 @@ export async function runMcpServe(args: string[]): Promise<number> {
     sessionId,
     ...(explicitToken !== undefined ? { sessionToken: explicitToken } : {}),
     ...(tokenFile !== undefined ? { sessionTokenFile: tokenFile } : {}),
+    ...(process.env.KIWI_SESSION_TOKEN_DIR !== undefined
+      ? { tokenDir: process.env.KIWI_SESSION_TOKEN_DIR } : {}),
       dbPath,
     });
   } catch (error) {
