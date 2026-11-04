@@ -61,6 +61,7 @@ const model = {
 const expectedFacts = {
   listPrice: 110,
   currency: "CNY",
+  unit: "piece",
   stockAvailable: true,
   deliveryBefore: "2026-11-10T04:00:00.000Z",
 };
@@ -84,8 +85,8 @@ const productSource = {
   },
   async getProduct(sku: string) {
     return sku === "VQ-002"
-      ? { price: 90, currency: "CNY", stock: 50 }
-      : { price: 110, currency: "CNY", stock: 50 };
+      ? { price: 90, currency: "CNY", stock: 50, unit: "piece" }
+      : { price: 110, currency: "CNY", stock: 50, unit: "piece" };
   },
 };
 
@@ -97,15 +98,23 @@ describe("Pi reception runtime", () => {
         fauxToolCall(TOOL_COMPARE_PRODUCTS, { skus: [SKU, "VQ-002"] } as unknown as JsonObject),
       ]),
       fauxAssistantMessage([
-        fauxToolCall(TOOL_GET_COMMERCIAL_FACTS, { sku: SKU, quantity: 2 } as JsonObject),
+        fauxToolCall(TOOL_GET_COMMERCIAL_FACTS, {
+          sku: SKU,
+          quantity: 2,
+          unit: "piece",
+        } as JsonObject),
       ]),
       fauxAssistantMessage([
-        fauxToolCall(TOOL_PROPOSE_NEED_PATCH, { sku: SKU, quantity: 2, unit: "盒" } as JsonObject),
+        fauxToolCall(TOOL_PROPOSE_NEED_PATCH, {
+          sku: SKU,
+          quantity: 2,
+          unit: "piece",
+        } as JsonObject),
       ]),
       fauxAssistantMessage([
         fauxToolCall(TOOL_PROPOSE_REPLY, {
           blocks: [
-            { kind: "acknowledge_need", sku: SKU, quantity: 2, unit: "盒" },
+            { kind: "acknowledge_need", sku: SKU, quantity: 2, unit: "piece" },
             { kind: "show_commercial_terms", ref: expectedRef },
             { kind: "next_step", action: "send_rfq" },
           ],
@@ -141,7 +150,7 @@ describe("Pi reception runtime", () => {
       "show_commercial_terms",
       "next_step",
     ]);
-    expect(result?.need).toMatchObject({ sku: SKU, quantity: 2, unit: "盒" });
+    expect(result?.need).toMatchObject({ sku: SKU, quantity: 2, unit: "piece" });
     expect(registry.resolve(expectedRef)?.facts).toEqual(expectedFacts);
     expect(recordedMetrics?.steps).toBeGreaterThanOrEqual(5);
     expect(recordedMetrics?.toolCalls).toEqual({
@@ -236,12 +245,12 @@ describe("engine uses Pi runtime when configured", () => {
             plan: {
               locale: "zh-CN",
               blocks: [
-                { kind: "acknowledge_need", sku: SKU, quantity: 2, unit: "盒" },
+                { kind: "acknowledge_need", sku: SKU, quantity: 2, unit: "piece" },
                 { kind: "show_commercial_terms", ref },
                 { kind: "next_step", action: "send_rfq" },
               ],
             },
-            need: { sku: SKU, quantity: 2, unit: "盒" },
+            need: { sku: SKU, quantity: 2, unit: "piece" },
             metrics: { steps: 1, toolCalls: {}, usage: { input: 0, output: 0, total: 0 } },
           };
         },
@@ -255,7 +264,7 @@ describe("engine uses Pi runtime when configured", () => {
       text: "办公款来两盒",
       now: NOW,
     });
-    expect(result.text).toContain("已记录需求：SKU VQ-001，2 盒");
+    expect(result.text).toContain("已记录需求：SKU VQ-001，2 piece");
     expect(result.text).toContain("当前公开标价 110.00 CNY");
     expect(result.text).toContain("请发送 RFQ");
   });
@@ -280,6 +289,7 @@ describe("engine uses Pi runtime when configured", () => {
           topics: ["price"],
           sku: SKU,
           quantity: 2,
+          unit: "piece",
           target_price: 98,
           language: "zh",
         };

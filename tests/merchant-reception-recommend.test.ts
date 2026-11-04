@@ -20,7 +20,9 @@ function register(
   registry: InMemoryFactRegistry,
   sku: string,
   price: number | undefined,
-  stockAvailable: boolean,
+  stockAvailable: boolean | undefined,
+  unit: string | null = "piece",
+  currency = "CNY",
 ): FactRef {
   const base = {
     merchantId: MERCHANT,
@@ -28,8 +30,9 @@ function register(
     visibility: "public" as const,
     issuedAt: NOW,
     facts: {
-      ...(price !== undefined ? { listPrice: price, currency: "CNY" } : {}),
-      stockAvailable,
+      ...(price !== undefined ? { listPrice: price, currency } : {}),
+      ...(unit !== null ? { unit } : {}),
+      ...(stockAvailable !== undefined ? { stockAvailable } : {}),
     },
   };
   return registry.register({ ...base, revision: factRevision(base) });
@@ -122,4 +125,81 @@ describe("recommend_option validation", () => {
     });
     expect(result.rejected[0]?.reason).toBe("unverified_claim");
   });
+  it("价格相等不构成更低：拒绝", () => {
+    const registry = new InMemoryFactRegistry();
+    const main = register(registry, "VQ-A", 90, true);
+    const equal = register(registry, "VQ-B", 90, true);
+    const result = publishResponsePlan({
+      plan: {
+        locale: "zh-CN",
+        blocks: [{ kind: "recommend_option", ref: main, comparedRefs: [equal], reasonCode: "lowest_public_price" }],
+      },
+      registry,
+      merchantId: MERCHANT,
+      now: NOW,
+    });
+    expect(result.rejected[0]?.reason).toBe("unverified_claim");
+  });
+
+  it("不同币种不可比较：拒绝", () => {
+    const registry = new InMemoryFactRegistry();
+    const main = register(registry, "VQ-A", 90, true, "piece", "CNY");
+    const usd = register(registry, "VQ-B", 100, true, "piece", "USD");
+    const result = publishResponsePlan({
+      plan: {
+        locale: "zh-CN",
+        blocks: [{ kind: "recommend_option", ref: main, comparedRefs: [usd], reasonCode: "lowest_public_price" }],
+      },
+      registry,
+      merchantId: MERCHANT,
+      now: NOW,
+    });
+    expect(result.rejected[0]?.reason).toBe("unverified_claim");
+  });
+
+  it("不同单位不可比较：拒绝；box/盒同义可比较", () => {
+    const registry = new InMemoryFactRegistry();
+    const main = register(registry, "VQ-A", 90, true, "box");
+    const different = register(registry, "VQ-B", 100, true, "piece");
+    const rejected = publishResponsePlan({
+      plan: {
+        locale: "zh-CN",
+        blocks: [{ kind: "recommend_option", ref: main, comparedRefs: [different], reasonCode: "lowest_public_price" }],
+      },
+      registry,
+      merchantId: MERCHANT,
+      now: NOW,
+    });
+    expect(rejected.rejected[0]?.reason).toBe("unverified_claim");
+
+    const aliasRegistry = new InMemoryFactRegistry();
+    const aliasMain = register(aliasRegistry, "VQ-A", 90, true, "box");
+    const aliasCompared = register(aliasRegistry, "VQ-B", 100, true, "盒");
+    const accepted = publishResponsePlan({
+      plan: {
+        locale: "zh-CN",
+        blocks: [{ kind: "recommend_option", ref: aliasMain, comparedRefs: [aliasCompared], reasonCode: "lowest_public_price" }],
+      },
+      registry: aliasRegistry,
+      merchantId: MERCHANT,
+      now: NOW,
+    });
+    expect(accepted.rejected).toHaveLength(0);
+  });
+
+  it("库存覆盖但缺少单位/数量证据时不声称可覆盖", () => {
+    const registry = new InMemoryFactRegistry();
+    const unknownUnit = register(registry, "VQ-A", 90, true, null);
+    const noUnit = publishResponsePlan({
+      plan: {
+        locale: "zh-CN",
+        blocks: [{ kind: "recommend_option", ref: unknownUnit, reasonCode: "in_stock" }],
+      },
+      registry,
+      merchantId: MERCHANT,
+      now: NOW,
+    });
+    expect(noUnit.rejected[0]?.reason).toBe("unverified_claim");
+  });
+
 });

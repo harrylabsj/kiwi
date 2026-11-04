@@ -8,6 +8,7 @@
 - **单位配置启动前校验**：profile 的 `unit_package_factors` 归一后重复键仅允许相同倍率；不同倍率、归一后等于 `default_unit` 的倍率、alias 与 factor 同键冲突均在加载时给出带原始键和归一单位的错误，保留同值冗余写法兼容并 fail-closed。
 - **包装倍率溢出保护**：reception 两条路径在 `quantity * factor` 后检查安全整数；溢出时拒绝并提示减少数量，不进入库存/报价/金额计算。
 - **Pi 接待 need 与事实一致**：`get_commercial_facts` 的换算结果成为 need 的权威数量/单位，同时保留 `inputQuantity` / `inputUnit`；模型提交原始数量会归一为换算值，提交已换算值不会重复乘倍率，伪造值或冲突安全拒绝，人工审批候选与后续消费使用同一 24 piece 表示。
+- **接待推荐理由收紧**：`compare_products` 仅在数量与单位已知且可比较、库存足够时才给出库存覆盖；`lowest_public_price` 要求币种一致、单位可比较且所有比较项严格更贵，价格为等值或不可比较时拒绝措辞。KNP 报价仍保持权威。
 - **单位配置迁移**：直接调用 reception 构造器且只传 `unitPackageFactors` 的旧形式保留历史换算；新调用方应传 `unitDefaultUnit`。旧 profile 的 `default_unit=盒` + `unit_package_factors: {box: 12}` 现在会在加载时 fail-closed 并给出清晰提示；不自动修改商家倍率，需人工确认包装语义后改配置。
 
 ## v0.12.23 — 2026-11-03

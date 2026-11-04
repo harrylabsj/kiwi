@@ -43,6 +43,8 @@ export interface CommercialFacts {
   /** 公开标价（major units）；低于私有底价时为 undefined。 */
   listPrice?: number;
   currency?: string;
+  /** 该标价对应的商品源单位；未知时不参与跨商品价格比较。 */
+  unit?: string;
   /** 库存是否足以覆盖本次数量；来源未知时 undefined。 */
   stockAvailable?: boolean;
   /** 权威交期（ISO）；未配置 delivery_lead_days 时 undefined。 */
