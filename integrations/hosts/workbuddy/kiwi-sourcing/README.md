@@ -62,3 +62,20 @@ npm run package:workbuddy
 本地专家成功执行的是只读搜索；候选价格仍待询价。向商家询价、报价比较、磋商、接受协议、handoff/approval、下单、订单或库存变更、付款均未在本次验证中执行，不能据此宣称这些业务流程已验收。连接器也不证明真人授权语义或 Kiwi 后端预算、范围策略。
 
 提交此候选到平台不代表审核通过。WorkBuddy 宿主的其他协议版本协商、完整升级/回滚、灰度及紧急下架流程也未由本次只读搜索覆盖。平台版本和审核状态以提交当时的实际平台结果为准。
+
+## 买家实例状态（本地增量）
+
+启动器在 `CODEBUDDY_PLUGIN_DATA` 下创建 `kiwi-instance-v1/`（0700），原子写入：
+
+```text
+instance-id       # 64 位随机十六进制，跨 Kiwi 版本稳定
+session.token     # 64 位随机十六进制，0600
+buyer.sqlite      # 该买家实例的 task/approval 数据
+kiwi-sourcing-latest/  # 仅包缓存，位于实例根下
+```
+
+启动器只把 `CODEBUDDY_PLUGIN_DATA` 当宿主提供的父容器；父目录可能是 WorkBuddy 创建的 `0755`，真正的实例根必须是当前用户所有、非符号链接的 `0700`。实例身份通过 `KIWI_CLIENT_ID`、`KIWI_SESSION_TOKEN_FILE`、`KIWI_MCP_DB` 传给既有 Kiwi 后端；不使用版本缓存目录 `HOME` 保存买家状态。
+
+**归因前提**：不同买家不共用同一个 WorkBuddy 实例，`CODEBUDDY_PLUGIN_DATA` 是该实例内的插件数据目录。若宿主实际把同一数据根共享给多个买家，Connector 无法从子进程侧证明这一点，必须停止启用并把该宿主契约缺口上报；不得把安装级共享目录当作实例隔离。
+
+不自动认领无归属旧任务。旧版本缓存目录中的既有数据库不会自动迁移到新实例目录；需要人工带外证明归属后才能处理。

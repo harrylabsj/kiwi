@@ -1,5 +1,5 @@
 export const runtimeFiles=[
-  'artifact.mjs','audit-gate.mjs','backend-client.mjs',
+  'artifact.mjs','audit-gate.mjs','backend-client.mjs','instance-store.mjs',
   'buyer-cache-store-draft.mjs','buyer-managed-prepare-draft.mjs','buyer-session-cli.mjs','buyer-session.mjs','candidate-check.mjs',
   'cloud_manifest.py','environment-policy.mjs','inspect_buyer_archive_cli.py','inspect_tree_cli.py','installed_root.py','installed_tree.py',
   'latest-resolver.mjs','locked-backend-session.mjs','mcp-production-server.mjs','mcp-schema-probe.mjs','mcp-tools-0.12.12-zh.json','mcp-tools-0.12.12.json','prepare-budget.mjs',

@@ -7,15 +7,18 @@ import {startVerifiedBackend} from './backend-client.mjs';
 import {startBackendWithPreparedLock} from './locked-backend-session.mjs';
 import {startProductionMcpServer} from './mcp-production-server.mjs';
 import {selectEnvironment} from './environment-policy.mjs';
+import {prepareInstanceData} from './instance-store.mjs';
 
 function findExecutable(name){
   const directories=[dirname(process.execPath),...(process.env.PATH??'').split(delimiter)];
   for(const directory of directories){if(!isAbsolute(directory))continue;try{const file=realpathSync(join(directory,name));accessSync(file,constants.X_OK);if(lstatSync(file).isFile())return file}catch{void 0;}}
   throw new Error('RUNTIME_DEPENDENCY_MISSING');
 }
-function assertPrivateDataDirectory(path){
+function assertHostDataDirectory(path){
   if(typeof path!=='string'||!isAbsolute(path)||realpathSync(path)!==path)throw new Error('PLUGIN_DATA_UNAVAILABLE');
-  const st=lstatSync(path);if(!st.isDirectory()||st.isSymbolicLink()||(st.mode&0o777)!==0o700||(typeof process.getuid==='function'&&st.uid!==process.getuid()))throw new Error('PLUGIN_DATA_INVALID');
+  // The host-owned plugin-data root may be 0755 (WorkBuddy creates it this
+  // way). It is only a parent container: the instance root below must be 0700.
+  const st=lstatSync(path);if(!st.isDirectory()||st.isSymbolicLink()||(st.mode&0o022)!==0||(typeof process.getuid==='function'&&st.uid!==process.getuid()))throw new Error('PLUGIN_DATA_INVALID');
 }
 function supportedRuntime(){
   if(!['darwin','linux'].includes(process.platform))throw new Error('PLATFORM_UNSUPPORTED');
@@ -24,7 +27,7 @@ function supportedRuntime(){
 }
 function publicCode(error){
   const message=typeof error?.message==='string'?error.message:'';
-  const exact=new Set(['PLATFORM_UNSUPPORTED','NODE_VERSION_UNSUPPORTED','NODE_RUNTIME_UNVERIFIED','PLUGIN_DATA_UNAVAILABLE','PLUGIN_DATA_INVALID','RUNTIME_DEPENDENCY_MISSING','PREPARE_TIMEOUT','PREPARE_CANCELLED','PREPARE_TERMINATION_UNCONFIRMED','PREPARE_OUTPUT_INVALID','PREPARE_START_FAILED','BACKEND_PATH_INVALID','BACKEND_PROTOCOL_MISMATCH','BACKEND_TOOL_LIST_INVALID','TREE_RECHECK_FAILED','PREPARED_STATE_MISMATCH','CACHE_BUSY','CACHE_POINTER_INVALID','CACHE_DIRECTORY_INVALID','CACHE_LEGACY_STATE_REQUIRES_REVIEW','PACKAGE_INVALID','VERSION_DOWNGRADE','LATEST_METADATA_UNAVAILABLE','AUDIT_FAILED','SIGNATURE_VERIFIER_UNAVAILABLE','SIGNER_POLICY_VERIFICATION_FAILED','ISOLATED_INSTALL_FAILED','TREE_INSPECTION_FAILED','MCP_PROBE_FAILED','MCP_PROBE_TIMEOUT','TOOL_SET_MISMATCH']);
+  const exact=new Set(['PLATFORM_UNSUPPORTED','NODE_VERSION_UNSUPPORTED','NODE_RUNTIME_UNVERIFIED','PLUGIN_DATA_UNAVAILABLE','PLUGIN_DATA_INVALID','INSTANCE_DATA_UNAVAILABLE','INSTANCE_DATA_NOT_PRIVATE','INSTANCE_STATE_INCOMPLETE','INSTANCE_STATE_CORRUPT','INSTANCE_STATE_CONFLICT','RUNTIME_DEPENDENCY_MISSING','PREPARE_TIMEOUT','PREPARE_CANCELLED','PREPARE_TERMINATION_UNCONFIRMED','PREPARE_OUTPUT_INVALID','PREPARE_START_FAILED','BACKEND_PATH_INVALID','BACKEND_PROTOCOL_MISMATCH','BACKEND_TOOL_LIST_INVALID','TREE_RECHECK_FAILED','PREPARED_STATE_MISMATCH','CACHE_BUSY','CACHE_POINTER_INVALID','CACHE_DIRECTORY_INVALID','CACHE_LEGACY_STATE_REQUIRES_REVIEW','PACKAGE_INVALID','VERSION_DOWNGRADE','LATEST_METADATA_UNAVAILABLE','AUDIT_FAILED','SIGNATURE_VERIFIER_UNAVAILABLE','SIGNER_POLICY_VERIFICATION_FAILED','ISOLATED_INSTALL_FAILED','TREE_INSPECTION_FAILED','MCP_PROBE_FAILED','MCP_PROBE_TIMEOUT','TOOL_SET_MISMATCH']);
   if(exact.has(message))return message;
   const detail=/^PREPARE_FAILED:(CACHE_BUSY|CACHE_STATE_INVALID|REGISTRY_UNAVAILABLE|INSTALL_FAILED|PROVENANCE_FAILED|TREE_CHECK_FAILED|TOOL_CHECK_FAILED|VERSION_REJECTED)$/.exec(message);
   return detail?message:'LAUNCH_HOLD';
@@ -33,8 +36,10 @@ function publicCode(error){
 async function main(){
   if(process.argv.length!==2)throw new Error('ARGUMENT_INVALID');
   supportedRuntime();
-  const pluginData=process.env.CODEBUDDY_PLUGIN_DATA;assertPrivateDataDirectory(pluginData);
-  const packageRoot=dirname(fileURLToPath(import.meta.url)),store=join(pluginData,'kiwi-sourcing-latest');
+  const pluginData=process.env.CODEBUDDY_PLUGIN_DATA;assertHostDataDirectory(pluginData);
+  const instance=prepareInstanceData(pluginData);
+  const packageRoot=dirname(fileURLToPath(import.meta.url)),store=join(instance.root,'kiwi-sourcing-latest');
+  const backendEnvironment={...process.env,KIWI_MCP_DB:instance.dbPath,KIWI_CLIENT_ID:instance.instanceId,KIWI_SESSION_TOKEN_FILE:instance.tokenFile};
   const nodeBinary=process.execPath,npmBinary=findExecutable('npm'),pythonBinary=findExecutable('python3');
   const baselineRaw=JSON.parse(readFileSync(join(packageRoot,'mcp-tools-0.12.12.json'),'utf8'));
   const baseline=Array.isArray(baselineRaw)?baselineRaw:baselineRaw.tools;
@@ -76,7 +81,7 @@ async function main(){
       },
       activate:async(prepared,{signal,clientCapabilities,onMessage})=>{
         const startupSignal=AbortSignal.any([signal,controller.signal]),deadlineEpochMs=startupDeadlineEpochMs??Date.now()+600_000;
-        return startBackendWithPreparedLock({storeDirectory:store,prepared,verificationOptions:{nodeBinary,pythonBinary},signal:startupSignal,deadlineEpochMs,backendFactory:selected=>startVerifiedBackend({nodeBinary,sessionDirectory:selected.sessionDirectory,baseline,clientCapabilities,onMessage,timeoutMs:Math.min(15000,Math.max(1,deadlineEpochMs-Date.now())),sourceRoot:packageRoot,environment:process.env,signal:startupSignal})});
+        return startBackendWithPreparedLock({storeDirectory:store,prepared,verificationOptions:{nodeBinary,pythonBinary},signal:startupSignal,deadlineEpochMs,backendFactory:selected=>startVerifiedBackend({nodeBinary,sessionDirectory:selected.sessionDirectory,baseline,clientCapabilities,onMessage,timeoutMs:Math.min(15000,Math.max(1,deadlineEpochMs-Date.now())),sourceRoot:packageRoot,environment:backendEnvironment,signal:startupSignal})});
       },
     });
     await server.done;
