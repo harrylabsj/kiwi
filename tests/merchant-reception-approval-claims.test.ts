@@ -81,7 +81,11 @@ describe("reception approval claims are server-verified", () => {
       return approvals.list(status);
     },
   });
-  const humanAgent = (target: number | undefined, needQuantity: number | undefined): ReceptionAgentRuntime => ({
+  const humanAgent = (
+    target: number | undefined,
+    needQuantity: number | undefined,
+    currency = "CNY",
+  ): ReceptionAgentRuntime => ({
     async run() {
       return {
         plan: {
@@ -90,7 +94,7 @@ describe("reception approval claims are server-verified", () => {
             {
               kind: "request_human_help",
               topic: "price_below_public_bound",
-              ...(target !== undefined ? { buyerTargetPrice: target, currency: "CNY" } : {}),
+              ...(target !== undefined ? { buyerTargetPrice: target, currency } : {}),
             },
           ],
         },
@@ -203,10 +207,60 @@ describe("reception approval claims are server-verified", () => {
     expect(approvals.list("pending")).toHaveLength(0);
   });
 
+  it("agent: target currency mismatch does not create pending or claim", async () => {
+    const engine = engineFor(undefined, approvals, humanAgent(98, 2, "USD"));
+    const result = await engine.respond(input("问价"));
+    expect(result.text).not.toContain("需要商家确认");
+    expect(approvals.list("pending")).toHaveLength(0);
+  });
+
+  it("agent: multiple human-help blocks are not published on one approval", async () => {
+    const agent: ReceptionAgentRuntime = {
+      async run() {
+        return {
+          plan: {
+            locale: "zh-CN",
+            blocks: [
+              {
+                kind: "request_human_help",
+                topic: "price_below_public_bound",
+                buyerTargetPrice: 98,
+                currency: "CNY",
+              },
+              {
+                kind: "request_human_help",
+                topic: "price_below_public_bound",
+                buyerTargetPrice: 97,
+                currency: "CNY",
+              },
+            ],
+          },
+          need: { sku: SKU, quantity: 2, unit: "piece" },
+          metrics: { steps: 1, toolCalls: {}, usage: { input: 0, output: 0, total: 0 } },
+        };
+      },
+    };
+    const engine = engineFor(undefined, approvals, agent);
+    const result = await engine.respond(input("问价"));
+    expect(result.text).not.toContain("需要商家确认");
+    expect(approvals.list("pending")).toHaveLength(0);
+  });
+
   it("agent: verified pending allows the claim", async () => {
     const engine = engineFor(undefined, approvals, humanAgent(98, 2));
     const result = await engine.respond(input("问价"));
     expect(result.text).toContain("需要商家确认");
     expect(approvals.list("pending")).toHaveLength(1);
+    const human = result.plan.blocks.filter((block) => block.kind === "request_human_help");
+    expect(human).toEqual([
+      {
+        kind: "request_human_help",
+        topic: "price_below_public_bound",
+        buyerTargetPrice: 98,
+        currency: "CNY",
+      },
+    ]);
+    expect(approvals.list("pending")[0]?.currency).toBe("CNY");
+    expect(approvals.list("pending")[0]?.buyer_offer_minor).toBe(9_800);
   });
 });

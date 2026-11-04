@@ -335,16 +335,23 @@ export function createMerchantReceptionEngine(
           });
           if (agentResult !== undefined) {
             // 模型选择转人工时，仍由服务端登记审批候选（模型没有写能力）。
-            const human = agentResult.plan.blocks.find(
+            const humanBlocks = agentResult.plan.blocks.filter(
               (block): block is Extract<ReceptionBlock, { kind: "request_human_help" }> =>
                 block.kind === "request_human_help",
             );
+            // Exactly one submitted human block may become one server-verified
+            // block. Multiple model blocks are never all published on the
+            // strength of a single approval.
+            const human = humanBlocks.length === 1 ? humanBlocks[0] : undefined;
             const needSku = agentResult.need?.sku ?? previous?.need.sku;
             const needQuantity = agentResult.need?.quantity ?? previous?.need.quantity;
             const needUnit = agentResult.need?.unit ?? previous?.need.unit;
-            let approvalPending = false;
+            let verifiedHuman:
+              | Extract<ReceptionBlock, { kind: "request_human_help" }>
+              | undefined;
             if (
               human?.buyerTargetPrice !== undefined &&
+              human.currency !== undefined &&
               needSku !== undefined &&
               needQuantity !== undefined &&
               deps.productSource !== undefined &&
@@ -352,52 +359,74 @@ export function createMerchantReceptionEngine(
             ) {
               try {
                 const product = await deps.productSource.getProduct(needSku);
-                const policyNow = deps.policy?.();
-                const boundary = belowPublicBound(
-                  human.buyerTargetPrice,
-                  product,
-                  needSku,
-                  policyNow,
-                );
-                if (boundary !== undefined) {
-                  const floorMinor = minorOf(privateFloorMajor(policyNow, needSku));
-                  const created = deps.approvals.recordPending({
-                    negotiation_id: input.contextId,
-                    sku: needSku,
-                    currency: product.currency,
-                    quantity: needQuantity,
-                    ...(needUnit !== undefined ? { unit: needUnit } : {}),
-                    buyer_offer_minor: boundary.targetMinor,
-                    public_bound_minor: boundary.publicBoundMinor,
-                    ...(floorMinor !== undefined ? { floor_minor: floorMinor } : {}),
-                    ttl_seconds:
-                      deps.approvalTtlSeconds ?? RECEPTION_CONFIG_DEFAULTS.approvalTtlSeconds,
-                  });
-                  approvalPending = pendingApprovalExists(
-                    deps.approvals,
-                    {
-                      negotiationId: input.contextId,
+                if (human.currency !== product.currency) {
+                  // Buyer-visible target currency and the authoritative product
+                  // currency disagree; never persist one and display the other.
+                  verifiedHuman = undefined;
+                } else {
+                  const policyNow = deps.policy?.();
+                  const boundary = belowPublicBound(
+                    human.buyerTargetPrice,
+                    product,
+                    needSku,
+                    policyNow,
+                  );
+                  if (boundary !== undefined) {
+                    const floorMinor = minorOf(privateFloorMajor(policyNow, needSku));
+                    const created = deps.approvals.recordPending({
+                      negotiation_id: input.contextId,
                       sku: needSku,
                       currency: product.currency,
                       quantity: needQuantity,
                       ...(needUnit !== undefined ? { unit: needUnit } : {}),
-                      buyerOfferMinor: boundary.targetMinor,
-                    },
-                    created,
-                  );
+                      buyer_offer_minor: boundary.targetMinor,
+                      public_bound_minor: boundary.publicBoundMinor,
+                      ...(floorMinor !== undefined ? { floor_minor: floorMinor } : {}),
+                      ttl_seconds:
+                        deps.approvalTtlSeconds ?? RECEPTION_CONFIG_DEFAULTS.approvalTtlSeconds,
+                    });
+                    if (
+                      pendingApprovalExists(
+                        deps.approvals,
+                        {
+                          negotiationId: input.contextId,
+                          sku: needSku,
+                          currency: product.currency,
+                          quantity: needQuantity,
+                          ...(needUnit !== undefined ? { unit: needUnit } : {}),
+                          buyerOfferMinor: boundary.targetMinor,
+                        },
+                        created,
+                      )
+                    ) {
+                      verifiedHuman = {
+                        kind: "request_human_help",
+                        topic: "price_below_public_bound",
+                        buyerTargetPrice: boundary.targetMajor,
+                        currency: product.currency,
+                      };
+                    }
+                  }
                 }
               } catch {
                 // 事实/审批存储不可用：不保留 request_human_help，走真实兜底。
-                approvalPending = false;
+                verifiedHuman = undefined;
               }
             }
             const blocks =
-              human === undefined || approvalPending
+              humanBlocks.length === 0
                 ? agentResult.plan.blocks
-                : truthfulHumanFallback(agentResult.plan.blocks, {
-                    ...(needSku !== undefined ? { sku: needSku } : {}),
-                    ...(needQuantity !== undefined ? { quantity: needQuantity } : {}),
-                  });
+                : verifiedHuman !== undefined
+                  ? [
+                      ...agentResult.plan.blocks.filter(
+                        (block) => block.kind !== "request_human_help",
+                      ),
+                      verifiedHuman,
+                    ]
+                  : truthfulHumanFallback(agentResult.plan.blocks, {
+                      ...(needSku !== undefined ? { sku: needSku } : {}),
+                      ...(needQuantity !== undefined ? { quantity: needQuantity } : {}),
+                    });
             const agentStated: StatedFields = {
               ...(agentResult.need?.sku !== undefined ? { sku: "model" as const } : {}),
               ...(agentResult.need?.quantity !== undefined ? { quantity: "model" as const } : {}),
