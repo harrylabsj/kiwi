@@ -147,12 +147,16 @@ export async function runMcpServe(args: string[]): Promise<number> {
   }
   const principal = opts.principal ?? process.env.KIWI_PRINCIPAL ?? "principal:local";
   const buyerAgentId = opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-mcp";
-  const sessionId = opts.sessionId ?? process.env.KIWI_SESSION ?? `session-${process.pid}`;
+  // Stable default: when a token is used, restart/reconnect must recover the
+  // same identity. Never include the process id in the default label.
+  const sessionId = opts.sessionId ?? process.env.KIWI_SESSION ?? "default";
   const dbPath =
     opts.db ?? process.env.KIWI_MCP_DB ?? path.join(homedir(), ".kiwi", "mcp", "dsh.sqlite");
   const explicitToken = opts.sessionToken ?? process.env.KIWI_SESSION_TOKEN;
-  if (opts.adoptLegacy === true && (explicitToken === undefined || explicitToken.trim() === "")) {
-    process.stderr.write("--adopt-legacy requires --session-token or KIWI_SESSION_TOKEN\n");
+  const hasTokenFile = opts.sessionTokenFile !== undefined
+    || (process.env.KIWI_SESSION_TOKEN_FILE !== undefined && process.env.KIWI_SESSION_TOKEN_FILE !== "");
+  if (opts.adoptLegacy === true && (explicitToken === undefined || explicitToken.trim() === "") && !hasTokenFile) {
+    process.stderr.write("--adopt-legacy requires --session-token, KIWI_SESSION_TOKEN, --session-token-file, or KIWI_SESSION_TOKEN_FILE\n");
     return 2;
   }
   const sessionOwner = resolveSessionOwner({

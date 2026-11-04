@@ -170,6 +170,10 @@ export class TaskApprovalStore {
       CREATE INDEX IF NOT EXISTS idx_mcp_tasks_idem ON mcp_tasks(idempotency_key);
       CREATE INDEX IF NOT EXISTS idx_mcp_candidates_task ON mcp_candidates(task_id);
       CREATE INDEX IF NOT EXISTS idx_mcp_approvals_task ON mcp_approvals(task_id);
+      CREATE TABLE IF NOT EXISTS mcp_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS mcp_handoff_intents (
         intent_digest   TEXT PRIMARY KEY,
         intent_id       TEXT NOT NULL,
@@ -287,10 +291,17 @@ export class TaskApprovalStore {
 
   /** Explicit, one-time migration of pre-owner tasks in a local database. */
   adoptLegacyTasks(ownerHash: string): number {
-    const info = this.db
-      .prepare("UPDATE mcp_tasks SET owner_hash = ? WHERE owner_hash = ''")
-      .run(ownerHash);
-    return Number(info.changes);
+    return this.transaction(() => {
+      const marker = "legacy_task_adoption_v1";
+      const existing = this.db.prepare("SELECT value FROM mcp_meta WHERE key = ?").get(marker) as
+        | { value: string } | undefined;
+      if (existing !== undefined) return 0;
+      const info = this.db
+        .prepare("UPDATE mcp_tasks SET owner_hash = ? WHERE owner_hash = ''")
+        .run(ownerHash);
+      this.db.prepare("INSERT INTO mcp_meta(key,value) VALUES(?,?)").run(marker, ownerHash);
+      return Number(info.changes);
+    });
   }
 
   getTask(taskId: string, ownerHash?: string): StoredTask | undefined {

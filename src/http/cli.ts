@@ -77,7 +77,7 @@ export async function runHttpServe(args: string[]): Promise<number> {
   const principal = opts.principal ?? process.env.KIWI_PRINCIPAL ?? "principal:local";
   const policy = opts.policy ?? { ...DEFAULT_DELEGATION_POLICY, principal };
   const dbPath = opts.db ?? path.join(".kiwi", "mcp", "state.sqlite");
-  const sessionId = opts.sessionId ?? process.env.KIWI_SESSION ?? `session-${process.pid}`;
+  const sessionId = opts.sessionId ?? process.env.KIWI_SESSION ?? "default";
   const service = buildBuyerService({
     dbPath,
     principal,

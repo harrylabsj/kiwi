@@ -1,5 +1,5 @@
 /** Session ownership boundary for local buyer tasks (no network). */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -105,6 +105,37 @@ describe("buyer task session ownership", () => {
     expect(one).not.toBe(two);
     expect(one.startsWith("ephemeral:")).toBe(true);
     expect(two.startsWith("ephemeral:")).toBe(true);
+  });
+
+  it("same token and the stable default session label reconnect across restarts", () => {
+    const one = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionToken: "stable-token" });
+    const two = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionToken: "stable-token" });
+    expect(one).toBe(two);
+  });
+
+  it("a token file can authenticate reconnect and adoption", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-token-"));
+    dirs.push(dir);
+    const file = path.join(dir, "token");
+    writeFileSync(file, "file-token", { mode: 0o600 });
+    const one = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionTokenFile: file });
+    const two = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionTokenFile: file });
+    expect(one).toBe(two);
+  });
+
+  it("legacy adoption is one-time and cannot be repeated by a second session", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-adopt-"));
+    dirs.push(dir);
+    const store = new TaskApprovalStore({ dbPath: path.join(dir, "buyer.sqlite") });
+    store.createTask({
+      task_id: "legacy-adopt", task_kind: "request_quotes", status: "succeeded",
+      idempotency_key: "legacy-adopt", created_at: "2026-11-01T00:00:00Z",
+      updated_at: "2026-11-01T00:00:00Z", resumable: true, payload: "{}",
+    });
+    expect(store.adoptLegacyTasks("owner-a")).toBe(1);
+    expect(store.adoptLegacyTasks("owner-b")).toBe(0);
+    expect(store.getTask("legacy-adopt", "owner-b")).toBeUndefined();
+    store.close();
   });
 
   it("only an explicit token gives a stable reconnectable owner", () => {
