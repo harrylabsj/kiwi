@@ -92,6 +92,8 @@ export async function runHttpServe(args: string[]): Promise<number> {
         ? { sessionToken: process.env.KIWI_SESSION_TOKEN } : {}),
       ...(process.env.KIWI_SESSION_TOKEN_FILE !== undefined
         ? { sessionTokenFile: process.env.KIWI_SESSION_TOKEN_FILE } : {}),
+      ...(process.env.KIWI_SESSION_TOKEN_DIR !== undefined
+        ? { tokenDir: process.env.KIWI_SESSION_TOKEN_DIR } : {}),
     }),
     policy,
     catalogUrl: opts.catalogUrl ?? DEFAULT_CATALOG_URL,
