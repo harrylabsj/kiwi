@@ -498,11 +498,6 @@ export class KiwiBuyerService {
    * state; only a subsequent catalog read showing a merchant heartbeat may
    * allow the quote.
    */
-  /** Explicit operator migration; never called implicitly on open. */
-  adoptLegacyTasks(): number {
-    return this.store.adoptLegacyTasks(this.ownerHash);
-  }
-
   private taskFor(taskId: string): StoredTask | undefined {
     return this.store.getTask(taskId, this.ownerHash);
   }

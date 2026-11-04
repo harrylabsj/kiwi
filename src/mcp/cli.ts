@@ -81,8 +81,6 @@ export interface McpServeOptions {
   sessionToken?: string;
   sessionTokenFile?: string;
   clientId?: string;
-  adoptLegacy?: boolean;
-  adoptLegacyOwner?: string;
   policy?: Record<string, unknown>;
   catalogUrl?: string;
   marketplaceUrl?: string;
@@ -129,8 +127,10 @@ export async function runMcpServe(args: string[]): Promise<number> {
     else if (flag === "--session-token") opts.sessionToken = value;
     else if (flag === "--session-token-file") opts.sessionTokenFile = value;
     else if (flag === "--client-id") opts.clientId = value;
-    else if (flag === "--adopt-legacy") opts.adoptLegacy = true;
-    else if (flag === "--adopt-legacy-owner") opts.adoptLegacyOwner = value;
+    else if (flag === "--adopt-legacy" || flag === "--adopt-legacy-owner") {
+      process.stderr.write("legacy task adoption is disabled: ownership must be proven out of band\n");
+      return 2;
+    }
     else if (flag === "--catalog-url") opts.catalogUrl = value;
     else if (flag === "--marketplace-url") opts.marketplaceUrl = value;
     else if (flag === "--buyer-bootstrap-token") opts.buyerBootstrapToken = value;
@@ -160,14 +160,6 @@ export async function runMcpServe(args: string[]): Promise<number> {
   const tokenFile = opts.sessionTokenFile ?? process.env.KIWI_SESSION_TOKEN_FILE;
   const hasTokenFile = tokenFile !== undefined && tokenFile !== "";
   const clientId = opts.clientId ?? process.env.KIWI_CLIENT_ID;
-  if (opts.adoptLegacy === true && opts.adoptLegacyOwner !== principal) {
-    process.stderr.write("--adopt-legacy requires --adopt-legacy-owner matching the authenticated principal\n");
-    return 2;
-  }
-  if (opts.adoptLegacy === true && (explicitToken === undefined || explicitToken.trim() === "") && !hasTokenFile && (clientId === undefined || clientId.trim() === "")) {
-    process.stderr.write("--adopt-legacy requires --session-token, KIWI_SESSION_TOKEN, --session-token-file, or KIWI_SESSION_TOKEN_FILE\n");
-    return 2;
-  }
   let sessionOwner: string;
   try {
     sessionOwner = resolveSessionOwner({
@@ -208,10 +200,6 @@ export async function runMcpServe(args: string[]): Promise<number> {
     // 该公钥的商家把普通询价也变成未验证身份）。
     a2aSigningKeyDir: opts.a2aSigningKeyDir ?? process.env.KIWI_A2A_SIGNING_KEY_DIR,
   });
-  if (opts.adoptLegacy === true) {
-    const adopted = service.adoptLegacyTasks();
-    process.stderr.write(`[kiwi] adopted ${adopted} legacy task(s) into this authenticated session\n`);
-  }
   const tools = buildKiwiTools(service);
   const server = new McpServer({
     tools,

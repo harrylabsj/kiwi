@@ -284,24 +284,22 @@ export class TaskApprovalStore {
         .get(task.idempotency_key) as { task_id: string } | undefined;
       const canonical = existing === undefined ? undefined : this.getTask(existing.task_id);
       if (canonical === undefined) throw new McpError("invalid_params", "idempotent task disappeared");
+      // The idempotency key is globally unique, but it is not an authorization
+      // capability. A caller must never receive another session's task.
+      if (task.owner_hash !== undefined && canonical.owner_hash !== task.owner_hash) {
+        throw new McpError("task_not_found", "idempotency key belongs to another session");
+      }
       return { task: canonical, created: false };
     }
     return { task, created: true };
   }
 
   /** Explicit, one-time migration of pre-owner tasks in a local database. */
-  adoptLegacyTasks(ownerHash: string): number {
-    return this.transaction(() => {
-      const marker = "legacy_task_adoption_v1";
-      const existing = this.db.prepare("SELECT value FROM mcp_meta WHERE key = ?").get(marker) as
-        | { value: string } | undefined;
-      if (existing !== undefined) return 0;
-      const info = this.db
-        .prepare("UPDATE mcp_tasks SET owner_hash = ? WHERE owner_hash = ''")
-        .run(ownerHash);
-      this.db.prepare("INSERT INTO mcp_meta(key,value) VALUES(?,?)").run(marker, ownerHash);
-      return Number(info.changes);
-    });
+  adoptLegacyTasks(_ownerHash: string): number {
+    throw new McpError(
+      "legacy_ownership_unproven",
+      "bulk adoption of legacy tasks is disabled; ownership must be proven out of band",
+    );
   }
 
   getTask(taskId: string, ownerHash?: string): StoredTask | undefined {

@@ -22,10 +22,10 @@ function fixture(sessionName: string, taskId: string) {
   store.createTask({
     task_id: taskId, task_kind: "request_quotes", status: "succeeded",
     idempotency_key: `idem-${taskId}`, created_at: "2026-11-01T00:00:00Z",
-    updated_at: "2026-11-01T00:00:00Z", resumable: true,
+    updated_at: "2026-11-01T00:00:00Z", resumable: true, owner_hash: `owner-${sessionName}`,
     payload: JSON.stringify({ task_id: taskId, task_kind: "request_quotes", status: "succeeded", idempotency_key: `idem-${taskId}`, created_at: "2026-11-01T00:00:00Z", updated_at: "2026-11-01T00:00:00Z", expires_at: "2099-12-31T23:59:59Z", resumable: true, candidates: [], intent: { intent_id: "i", intent_type: "inquiry", items: [] } }),
   });
-  // The task above is legacy (no owner); the service adopts it on open.
+  // The task is created with the exact session owner; there is no legacy adoption.
   const service = new KiwiBuyerService({
     store, principal: "company:test", buyerAgentId: "buyer:test",
     sessionId: sessionName, sessionOwner: `owner-${sessionName}`, delegationPolicy: policy,
@@ -40,8 +40,6 @@ afterEach(() => {
 describe("buyer task session ownership", () => {
   it("same DB, different session cannot read or mutate a task", () => {
     const a = fixture("a", "task-owned");
-    expect(() => a.service.getTask("task-owned")).toThrow(/not found/);
-    expect(a.service.adoptLegacyTasks()).toBe(1);
     expect(a.service.getTask("task-owned").task.task_id).toBe("task-owned");
     const b = new KiwiBuyerService({
       store: a.store, principal: "company:test", buyerAgentId: "buyer:test",
@@ -81,7 +79,6 @@ describe("buyer task session ownership", () => {
 
   it("cross-session idempotency key cannot read or revive another task", async () => {
     const a = fixture("idem-a", "task-idem-owner");
-    a.service.adoptLegacyTasks();
     const b = new KiwiBuyerService({
       store: a.store, principal: "p", buyerAgentId: "a", sessionId: "idem-b", sessionOwner: "owner-idem-b",
       delegationPolicy: {
@@ -162,7 +159,7 @@ describe("buyer task session ownership", () => {
       .toThrow(/empty/);
   });
 
-  it("legacy adoption is one-time and cannot be repeated by a second session", () => {
+  it("unowned legacy tasks cannot be claimed by a caller-controlled identity", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-adopt-"));
     dirs.push(dir);
     const store = new TaskApprovalStore({ dbPath: path.join(dir, "buyer.sqlite") });
@@ -171,9 +168,8 @@ describe("buyer task session ownership", () => {
       idempotency_key: "legacy-adopt", created_at: "2026-11-01T00:00:00Z",
       updated_at: "2026-11-01T00:00:00Z", resumable: true, payload: "{}",
     });
-    expect(store.adoptLegacyTasks("owner-a")).toBe(1);
-    expect(store.adoptLegacyTasks("owner-b")).toBe(0);
-    expect(store.getTask("legacy-adopt", "owner-b")).toBeUndefined();
+    expect(() => store.adoptLegacyTasks("owner-a")).toThrow(/bulk adoption/);
+    expect(store.getTask("legacy-adopt", "owner-a")).toBeUndefined();
     store.close();
   });
 
@@ -187,7 +183,6 @@ describe("buyer task session ownership", () => {
 
   it("owner survives store reopen and a different session stays denied", () => {
     const a = fixture("persist-a", "task-persist");
-    a.service.adoptLegacyTasks();
     a.store.close();
     const reopened = new TaskApprovalStore({ dbPath: a.db });
     const same = new KiwiBuyerService({
