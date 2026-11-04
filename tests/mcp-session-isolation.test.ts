@@ -1,5 +1,5 @@
 /** Session ownership boundary for local buyer tasks (no network). */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -137,6 +137,17 @@ describe("buyer task session ownership", () => {
     expect(one.startsWith("ephemeral:")).toBe(false);
   });
 
+  it("corrupted auto-generated token fails closed", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-corrupt-"));
+    dirs.push(dir);
+    const tokenDir = path.join(dir, "tokens");
+    const input = { principal: "p", buyerAgentId: "a", sessionId: "default", clientId: "client", tokenDir };
+    resolveSessionOwner(input);
+    const tokenFile = path.join(tokenDir, readdirSync(tokenDir).find((name) => name.endsWith(".token")) as string);
+    writeFileSync(tokenFile, "x", { mode: 0o600 });
+    expect(() => resolveSessionOwner(input)).toThrow(/corrupted/);
+  });
+
   it("same token and the stable default session label reconnect across restarts", () => {
     const one = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionToken: "stable-token" });
     const two = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionToken: "stable-token" });
@@ -147,7 +158,7 @@ describe("buyer task session ownership", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-token-"));
     dirs.push(dir);
     const file = path.join(dir, "token");
-    writeFileSync(file, "file-token", { mode: 0o600 });
+    writeFileSync(file, "file-token");
     const one = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionTokenFile: file });
     const two = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionTokenFile: file });
     expect(one).toBe(two);

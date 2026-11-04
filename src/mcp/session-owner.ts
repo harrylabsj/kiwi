@@ -65,6 +65,29 @@ function readTokenFile(file: string): string {
   }
 }
 
+function readExplicitTokenFile(file: string): string {
+  // Explicit token-file callers retain the original contract: any non-empty
+  // token value is valid; only auto-generated files have the 64-hex format.
+  try {
+    const token = readFileSync(file, "utf8").trim();
+    if (token === "") throw new Error("session token file is empty");
+    return token;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error("session token file does not exist");
+    }
+    throw error;
+  }
+}
+
+function readAutoTokenFile(file: string): string {
+  const token = readTokenFile(file);
+  if (!/^[0-9a-f]{64}$/.test(token)) {
+    throw new Error("session token file is corrupted");
+  }
+  return token;
+}
+
 function autoTokenFile(input: SessionOwnerInput): string {
   const key = createHash("sha256")
     .update(`${input.dbPath ?? ""}\u0000${input.principal}\u0000${input.buyerAgentId}\u0000${input.clientId ?? ""}\u0000${input.sessionId}`)
@@ -106,7 +129,7 @@ function createTokenFileOnce(file: string): void {
 
 export function resolveSessionOwner(input: SessionOwnerInput): string {
   let token = input.sessionToken?.trim() ?? "";
-  if (token === "" && input.sessionTokenFile !== undefined) token = readTokenFile(input.sessionTokenFile);
+  if (token === "" && input.sessionTokenFile !== undefined) token = readExplicitTokenFile(input.sessionTokenFile);
   const clientId = input.clientId?.trim() ?? "";
   if (token === "" && clientId === "") {
     // Fail closed on identity: do not silently share a file keyed only by a
@@ -116,11 +139,11 @@ export function resolveSessionOwner(input: SessionOwnerInput): string {
   if (token === "") {
     const file = autoTokenFile(input);
     try {
-      token = readTokenFile(file);
+      token = readAutoTokenFile(file);
     } catch (error) {
       if ((error as Error).message !== "session token file does not exist") throw error;
       createTokenFileOnce(file);
-      token = readTokenFile(file);
+      token = readAutoTokenFile(file);
     }
   }
   const identity = `${input.principal}\u0000${input.buyerAgentId}\u0000${clientId}\u0000${input.sessionId}`;
