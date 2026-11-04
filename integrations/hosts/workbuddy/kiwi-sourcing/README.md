@@ -16,6 +16,16 @@ MCP 前端只支持 `2025-06-18`：客户端请求该版本时原样回应；请
 
 历史正式入口固定为 `@harrylabsj/kiwi@0.12.3`；另一个未提交 staging 副本改为固定 `0.12.7`。本候选用按次 latest 替代这两种固定 pin，是有意的启动契约变化，不能默认为平台接受。
 
+## Runtime 身份能力门禁
+
+安装完成后，除 13 工具 schema 外，启动器还会用**合成任务数据库**实际验证所安装的 Kiwi runtime：
+
+- 用随机合成 token/clientId 建立同 owner 任务和异 owner 任务；
+- 通过新 runtime 的真实 MCP `kiwi_get_task` 读取；
+- 必须能读取同 owner 任务，且必须拒绝异 owner 任务。
+
+只返回版本号、只有工具 schema、或忽略 owner 的旧 runtime 都会失败并停止，不会静默创建无 owner 任务。该探针不访问网络、不调用业务工具、不使用真实数据。
+
 ## 架构与业务边界
 
 ```text
