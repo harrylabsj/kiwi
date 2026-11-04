@@ -127,7 +127,7 @@ export class TaskApprovalStore {
         task_id            TEXT PRIMARY KEY,
         task_kind          TEXT NOT NULL,
         status             TEXT NOT NULL,
-        idempotency_key    TEXT NOT NULL UNIQUE,
+        idempotency_key    TEXT NOT NULL,
         intent_id          TEXT,
         delegation_policy_id TEXT,
         created_at         TEXT NOT NULL,
@@ -167,7 +167,7 @@ export class TaskApprovalStore {
         payload        TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_mcp_tasks_status ON mcp_tasks(status);
-      CREATE INDEX IF NOT EXISTS idx_mcp_tasks_idem ON mcp_tasks(idempotency_key);
+      CREATE INDEX IF NOT EXISTS idx_mcp_tasks_idem ON mcp_tasks(owner_hash, idempotency_key);
       CREATE INDEX IF NOT EXISTS idx_mcp_candidates_task ON mcp_candidates(task_id);
       CREATE INDEX IF NOT EXISTS idx_mcp_approvals_task ON mcp_approvals(task_id);
       CREATE TABLE IF NOT EXISTS mcp_meta (
@@ -200,6 +200,46 @@ export class TaskApprovalStore {
     const taskCols = this.db.prepare("PRAGMA table_info(mcp_tasks)").all() as Array<{ name: string }>;
     if (!taskCols.some((c) => c.name === "owner_hash")) {
       this.db.exec("ALTER TABLE mcp_tasks ADD COLUMN owner_hash TEXT NOT NULL DEFAULT ''");
+    }
+    // v2: idempotency is scoped per owner. Older stores have a global UNIQUE
+    // on idempotency_key, which lets one session pre-occupy another session's
+    // key. Rebuild once, preserving every task and child row by task_id.
+    const scopeMarker = "idempotency_owner_scope_v1";
+    const scoped = this.db.prepare("SELECT value FROM mcp_meta WHERE key = ?").get(scopeMarker) as
+      | { value: string } | undefined;
+    if (scoped === undefined) {
+      this.db.exec("PRAGMA foreign_keys = OFF");
+      try {
+        this.db.exec(`
+          CREATE TABLE mcp_tasks_owner_scope (
+            task_id TEXT PRIMARY KEY,
+            task_kind TEXT NOT NULL,
+            status TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            intent_id TEXT,
+            delegation_policy_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            expires_at TEXT,
+            resumable INTEGER NOT NULL DEFAULT 0,
+            owner_hash TEXT NOT NULL DEFAULT '',
+            payload TEXT NOT NULL
+          );
+          INSERT INTO mcp_tasks_owner_scope
+            (task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id,
+             created_at, updated_at, expires_at, resumable, owner_hash, payload)
+          SELECT task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id,
+             created_at, updated_at, expires_at, resumable, owner_hash, payload
+          FROM mcp_tasks;
+          DROP TABLE mcp_tasks;
+          ALTER TABLE mcp_tasks_owner_scope RENAME TO mcp_tasks;
+          CREATE INDEX idx_mcp_tasks_status ON mcp_tasks(status);
+          CREATE UNIQUE INDEX idx_mcp_tasks_idem ON mcp_tasks(owner_hash, idempotency_key);
+        `);
+        this.db.prepare("INSERT INTO mcp_meta(key,value) VALUES(?,?)").run(scopeMarker, "1");
+      } finally {
+        this.db.exec("PRAGMA foreign_keys = ON");
+      }
     }
   }
 
@@ -263,7 +303,7 @@ export class TaskApprovalStore {
            (task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id,
             created_at, updated_at, expires_at, resumable, owner_hash, payload)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(idempotency_key) DO NOTHING`,
+         ON CONFLICT(owner_hash, idempotency_key) DO NOTHING`,
       )
       .run(
         task.task_id,
@@ -280,15 +320,12 @@ export class TaskApprovalStore {
         task.payload,
       );
     if (result.changes === 0) {
-      const existing = this.db.prepare("SELECT task_id FROM mcp_tasks WHERE idempotency_key = ?")
-        .get(task.idempotency_key) as { task_id: string } | undefined;
+      const owner = task.owner_hash ?? "";
+      const existing = this.db.prepare(
+        "SELECT task_id FROM mcp_tasks WHERE owner_hash = ? AND idempotency_key = ?",
+      ).get(owner, task.idempotency_key) as { task_id: string } | undefined;
       const canonical = existing === undefined ? undefined : this.getTask(existing.task_id);
       if (canonical === undefined) throw new McpError("invalid_params", "idempotent task disappeared");
-      // The idempotency key is globally unique, but it is not an authorization
-      // capability. A caller must never receive another session's task.
-      if (task.owner_hash !== undefined && canonical.owner_hash !== task.owner_hash) {
-        throw new McpError("task_not_found", "idempotency key belongs to another session");
-      }
       return { task: canonical, created: false };
     }
     return { task, created: true };

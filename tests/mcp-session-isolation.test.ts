@@ -1,5 +1,6 @@
 /** Session ownership boundary for local buyer tasks (no network). */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -86,11 +87,13 @@ describe("buyer task session ownership", () => {
         actions: { inquiry_rfq: { mode: "auto" } }, limits: { max_rounds: 3 },
       },
     });
-    await expect(b.requestQuotes({
+    const bTask = await b.requestQuotes({
       intent: { intent_id: "idem-intent", intent_type: "inquiry", items: [{ query: "x", quantity: { value: 1, unit: "piece" } }] },
       merchant_ids: ["m"],
       idempotency_key: "idem-task-idem-owner",
-    })).rejects.toMatchObject({ code: "task_not_found" });
+    });
+    expect(bTask.created).toBe(true);
+    expect(bTask.task.task_id).not.toBe("task-idem-owner");
     expect(() => b.getTask("task-idem-owner")).toThrow(/not found/);
   });
 
@@ -157,6 +160,55 @@ describe("buyer task session ownership", () => {
     writeFileSync(file, "");
     expect(() => resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionTokenFile: file }))
       .toThrow(/empty/);
+  });
+
+  it("idempotency keys are scoped per owner without pre-occupation", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-idem-scope-"));
+    dirs.push(dir);
+    const store = new TaskApprovalStore({ dbPath: path.join(dir, "buyer.sqlite") });
+    const base = {
+      task_kind: "request_quotes", status: "succeeded", created_at: "2026-11-01T00:00:00Z",
+      updated_at: "2026-11-01T00:00:00Z", resumable: true, idempotency_key: "same-key",
+      payload: "{}",
+    };
+    const a1 = store.createTask({ ...base, task_id: "task-a", owner_hash: "owner-a" });
+    const a2 = store.createTask({ ...base, task_id: "task-a2", owner_hash: "owner-a" });
+    const b = store.createTask({ ...base, task_id: "task-b", owner_hash: "owner-b" });
+    expect(a1.created).toBe(true);
+    expect(a2.created).toBe(false);
+    expect(a2.task.task_id).toBe("task-a");
+    expect(b.created).toBe(true);
+    expect(b.task.task_id).toBe("task-b");
+    expect(store.getTask("task-a", "owner-b")).toBeUndefined();
+    store.close();
+  });
+
+  it("migrates an old global-unique task table without losing tasks", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-idem-migrate-"));
+    dirs.push(dir);
+    const dbPath = path.join(dir, "old.sqlite");
+    const db = new DatabaseSync(dbPath);
+    db.exec(`CREATE TABLE mcp_tasks (
+      task_id TEXT PRIMARY KEY, task_kind TEXT NOT NULL, status TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE, intent_id TEXT, delegation_policy_id TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, expires_at TEXT,
+      resumable INTEGER NOT NULL DEFAULT 0, owner_hash TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL
+    )`);
+    db.prepare("INSERT INTO mcp_tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run(
+      "old-task", "request_quotes", "succeeded", "old-key", null, null,
+      "2026-11-01T00:00:00Z", "2026-11-01T00:00:00Z", null, 1, "old-owner", "{}",
+    );
+    db.close();
+    const store = new TaskApprovalStore({ dbPath });
+    expect(store.getTask("old-task")?.owner_hash).toBe("old-owner");
+    const b = store.createTask({
+      task_id: "new-task", task_kind: "request_quotes", status: "succeeded",
+      created_at: "2026-11-01T00:00:00Z", updated_at: "2026-11-01T00:00:00Z",
+      resumable: true, idempotency_key: "old-key", owner_hash: "new-owner", payload: "{}",
+    });
+    expect(b.created).toBe(true);
+    expect(store.getTask("old-task")?.task_id).toBe("old-task");
+    store.close();
   });
 
   it("unowned legacy tasks cannot be claimed by a caller-controlled identity", () => {
