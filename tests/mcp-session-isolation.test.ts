@@ -1,5 +1,5 @@
 /** Session ownership boundary for local buyer tasks (no network). */
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -158,10 +158,25 @@ describe("buyer task session ownership", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-token-"));
     dirs.push(dir);
     const file = path.join(dir, "token");
-    writeFileSync(file, "file-token");
+    writeFileSync(file, "file-token", { mode: 0o600 });
     const one = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionTokenFile: file });
     const two = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionTokenFile: file });
     expect(one).toBe(two);
+  });
+
+  it("explicit token file rejects permissive permissions and symlinks", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-explicit-"));
+    dirs.push(dir);
+    const permissive = path.join(dir, "permissive");
+    writeFileSync(permissive, "file-token", { mode: 0o644 });
+    expect(() => resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionTokenFile: permissive }))
+      .toThrow(/not private/);
+    const target = path.join(dir, "target");
+    writeFileSync(target, "file-token", { mode: 0o600 });
+    const link = path.join(dir, "link");
+    symlinkSync(target, link);
+    expect(() => resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionTokenFile: link }))
+      .toThrow();
   });
 
   it("empty token file fails closed and cannot authorize adoption", () => {

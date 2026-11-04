@@ -66,18 +66,10 @@ function readTokenFile(file: string): string {
 }
 
 function readExplicitTokenFile(file: string): string {
-  // Explicit token-file callers retain the original contract: any non-empty
-  // token value is valid; only auto-generated files have the 64-hex format.
-  try {
-    const token = readFileSync(file, "utf8").trim();
-    if (token === "") throw new Error("session token file is empty");
-    return token;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error("session token file does not exist");
-    }
-    throw error;
-  }
+  // Explicit token files retain value-format compatibility (any non-empty
+  // token), but not insecure filesystem semantics: no symlink, private mode,
+  // current owner, regular file. Only the 64-hex check is auto-file-specific.
+  return readTokenFile(file);
 }
 
 function readAutoTokenFile(file: string): string {
