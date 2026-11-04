@@ -1,6 +1,6 @@
 {
   "schema": "kiwi.release-acceptance/1",
-  "recorded_at": "2026-11-04T03:42:01.308Z",
+  "recorded_at": "2026-11-04T07:57:57.837Z",
   "catalog_url": "https://catalog.kiwi.harrylabsj.com",
   "merchant_id": "mkt_veyquo_A0UPvj7XuYk",
   "sku": "VQ-101",
@@ -12,23 +12,23 @@
   "chain": {
     "search": {
       "ok": true,
-      "detail": "命中 Veyquo，listing lst_121edab7f7c9a94bf169",
+      "detail": "命中 Veyquo，listing lst_456a2f87b7ce917857ac",
       "merchant_id": "mkt_veyquo_A0UPvj7XuYk",
       "merchant_name": "Veyquo",
-      "listing_id": "lst_121edab7f7c9a94bf169"
+      "listing_id": "lst_456a2f87b7ce917857ac"
     },
     "quote": {
       "ok": true,
       "detail": "报价 15900 CNY × 1",
-      "offer_id": "off_01a1a4a6-3fbe-7000-97fb-72a814c0ad57",
+      "offer_id": "off_01a1a590-9248-7000-aa1c-037e4f95d405",
       "unit_price_minor": "15900",
       "currency": "CNY",
       "trade_entry": "https://item.jd.com/100253036806.html"
     },
     "agreement": {
       "ok": true,
-      "detail": "非约束性协议 agreement-01a1a4a6-4051-7727-a888-6e3c92b402ba（不下单/不锁库/不付款）",
-      "agreement_id": "agreement-01a1a4a6-4051-7727-a888-6e3c92b402ba",
+      "detail": "非约束性协议 agreement-01a1a590-92c8-753c-9e13-c7422a91bb63（不下单/不锁库/不付款）",
+      "agreement_id": "agreement-01a1a590-92c8-753c-9e13-c7422a91bb63",
       "binding_effect": "nonbinding"
     },
     "handoff": {
@@ -38,11 +38,5 @@
       "url": "https://item.jd.com/100253036806.html"
     }
   },
-  "source_commit": "aae2f49e8070ff274981b012626444a6dbaddf71",
-  "candidate_artifact": {
-    "name": "harrylabsj-kiwi-0.12.25.tgz",
-    "sha256": "sha256:0c0960c72bbff68087d4a4749ab6c93b4d2ab1f9a7ded8ecb29fd3bfb2d42114",
-    "bytes": 2722825,
-    "source_commit": "aae2f49e8070ff274981b012626444a6dbaddf71"
-  }
+  "source_commit": "561517b0f7970b2ce1bab2cae6c5f662046a6d90"
 }
