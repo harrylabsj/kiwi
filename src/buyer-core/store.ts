@@ -100,6 +100,35 @@ function utcNow(): string {
   return new Date().toISOString();
 }
 
+const INIT_BUSY_TIMEOUT_MS = 10_000;
+const INIT_RETRY_ATTEMPTS = 8;
+
+function isSqliteBusy(error: unknown): boolean {
+  const code = error instanceof Error && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED" || /database is locked|database table is locked/i.test(message);
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+export function withInitRetry<T>(operation: () => T): T {
+  let delay = 25;
+  let last: unknown;
+  for (let attempt = 0; attempt < INIT_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return operation();
+    } catch (error) {
+      last = error;
+      if (!isSqliteBusy(error) || attempt === INIT_RETRY_ATTEMPTS - 1) throw error;
+      sleepSync(delay);
+      delay = Math.min(delay * 2, 1_000);
+    }
+  }
+  throw last;
+}
+
 export class TaskApprovalStore {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
@@ -115,10 +144,13 @@ export class TaskApprovalStore {
       this.db = new DatabaseSync(options.dbPath);
       if (existsSync(options.dbPath)) chmodSync(options.dbPath, 0o600);
     }
+    // busy_timeout must be set before WAL or any schema DDL: journal_mode=WAL
+    // itself needs a lock, and the previous order failed before the timeout
+    // was active. Retry the remaining bootstrap for transient SQLITE_BUSY.
+    this.db.exec(`PRAGMA busy_timeout = ${INIT_BUSY_TIMEOUT_MS}`);
     this.db.exec("PRAGMA foreign_keys = ON");
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA busy_timeout = 5000");
-    this.migrate();
+    withInitRetry(() => this.db.exec("PRAGMA journal_mode = WAL"));
+    withInitRetry(() => this.migrate());
   }
 
   private migrate(): void {
@@ -191,15 +223,20 @@ export class TaskApprovalStore {
       CREATE INDEX IF NOT EXISTS idx_mcp_agreements_task ON mcp_agreements(task_id);
       CREATE INDEX IF NOT EXISTS idx_mcp_handoff_intents_task ON mcp_handoff_intents(task_id);
     `);
-    // 既有库的列补齐（幂等 schema bootstrap，不搬移任何既有数据）。
-    const cols = this.db.prepare("PRAGMA table_info(mcp_approvals)").all() as Array<{ name: string }>;
-    if (!cols.some((c) => c.name === "intent_digest")) {
-      this.db.exec("ALTER TABLE mcp_approvals ADD COLUMN intent_digest TEXT");
-    }
-    const taskCols = this.db.prepare("PRAGMA table_info(mcp_tasks)").all() as Array<{ name: string }>;
-    if (!taskCols.some((c) => c.name === "owner_hash")) {
-      this.db.exec("ALTER TABLE mcp_tasks ADD COLUMN owner_hash TEXT NOT NULL DEFAULT ''");
-    }
+    // 既有库的列补齐。Two initializers can both observe a missing column;
+    // SQLite has no ADD COLUMN IF NOT EXISTS, so the loser of that race must
+    // treat "duplicate column" as success.
+    const addColumn = (table: string, column: string, ddl: string): void => {
+      const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      if (cols.some((c) => c.name === column)) return;
+      try {
+        this.db.exec(ddl);
+      } catch (error) {
+        if (!/duplicate column name/i.test(error instanceof Error ? error.message : String(error))) throw error;
+      }
+    };
+    addColumn("mcp_approvals", "intent_digest", "ALTER TABLE mcp_approvals ADD COLUMN intent_digest TEXT");
+    addColumn("mcp_tasks", "owner_hash", "ALTER TABLE mcp_tasks ADD COLUMN owner_hash TEXT NOT NULL DEFAULT ''");
     // v2: idempotency is scoped per owner. Older stores may have a global
     // UNIQUE on idempotency_key (or no owner column/index at all). Rebuild in
     // one BEGIN IMMEDIATE transaction so a crash cannot drop tasks or children.
