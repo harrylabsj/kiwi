@@ -182,7 +182,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "sha256:ffbbf46f6fc07aff71450aec7ea7d1e0d74ce698ec11aa6288873c46d8878f86"
+      "sha256": "sha256:20b1ef6c2e106aa00c853786e6e9bf84fe5dcd6da865fc3fa8c813ad9153eb75"
     },
     {
       "path": "CODE_OF_CONDUCT.md",
@@ -3238,7 +3238,7 @@
     },
     {
       "path": "src/buyer-core/a2a-quote-fetcher.ts",
-      "sha256": "sha256:b53832d84ce8e5409bf49a1aeeec8816e2f022777983b108f6332611f0def067"
+      "sha256": "sha256:1a78533691dcdbb5d1db675e091cc64ee7e2d197cbf326c8920a42785034bd71"
     },
     {
       "path": "src/buyer-core/build-service.ts",
@@ -3286,7 +3286,7 @@
     },
     {
       "path": "src/buyer-core/service.ts",
-      "sha256": "sha256:7beacde053c16b6278ed44fae4305ec0b204801ab0cb70590c33e62d8d271302"
+      "sha256": "sha256:e703f84e780b0e3eb1e05cafa1fe26f15e58ea86baa12a4cf1b312ffc9a15675"
     },
     {
       "path": "src/buyer-core/store.ts",
@@ -4862,9 +4862,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:f96e2b930d7c7fc2ae25c28cae196d92233676bf5eb500e536a808275c6446c3",
+      "sha256": "sha256:ad4e6f11925cd699648c5a322ae28b0b92bb20b550eda56ea61f2bb7d7e62afe",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:da630bc83a1f8a5edbe61fde0c4158bd68da6c4dee2d974e7d5dcc740ddd4fae"
+      "raw_sha256": "sha256:afb78547113b290a812ed6139937070af59587456d561474b656d3ffe550257a"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -5299,6 +5299,14 @@
       "sha256": "sha256:fc890b54ec9704b44cbbfcaba70f451c08cd5a72836c814dd594af1123f8925a"
     },
     {
+      "path": "tests/buyer-explicit-sku-guard.test.ts",
+      "sha256": "sha256:74c470ee32182e8f4a3943462f31bee3b8747fe0dd32b201f593352e07936755"
+    },
+    {
+      "path": "tests/buyer-explicit-sku-wire.test.ts",
+      "sha256": "sha256:38b0d52ffc55ae9e194fd4c61aa0e3d9f0150aee4b0eb35daa5e45385f092019"
+    },
+    {
       "path": "tests/buyer-follows.test.ts",
       "sha256": "sha256:ac5df8a49cad20a0b74d661b5dc6cba5e466526d887ede41bdd473a7778d0eb8"
     },
@@ -5664,7 +5672,7 @@
     },
     {
       "path": "tests/helpers.ts",
-      "sha256": "sha256:5e00a4963185429f1d83bd5658e45487e7f64581d52c6109dc415708b1788a72"
+      "sha256": "sha256:413dd9acb71e0dea307d491f63ad1cb3f393f28b0cf5c8c012dae6475f06331c"
     },
     {
       "path": "tests/helpers/file-lease-worker.mjs",
