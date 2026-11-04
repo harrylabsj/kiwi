@@ -118,6 +118,12 @@ export async function runMcpServe(args: string[]): Promise<number> {
   const opts: McpServeOptions = {};
   for (let i = 0; i < args.length; i += 1) {
     const flag = args[i];
+    // Disabled migration flags must be rejected even when they are the final
+    // argument (there is no following value to trigger the normal branch).
+    if (flag === "--adopt-legacy" || flag === "--adopt-legacy-owner") {
+      process.stderr.write("legacy task adoption is disabled: ownership must be proven out of band\n");
+      return 2;
+    }
     const value = args[i + 1];
     if (value === undefined) continue;
     if (flag === "--db") opts.db = value;
@@ -127,10 +133,6 @@ export async function runMcpServe(args: string[]): Promise<number> {
     else if (flag === "--session-token") opts.sessionToken = value;
     else if (flag === "--session-token-file") opts.sessionTokenFile = value;
     else if (flag === "--client-id") opts.clientId = value;
-    else if (flag === "--adopt-legacy" || flag === "--adopt-legacy-owner") {
-      process.stderr.write("legacy task adoption is disabled: ownership must be proven out of band\n");
-      return 2;
-    }
     else if (flag === "--catalog-url") opts.catalogUrl = value;
     else if (flag === "--marketplace-url") opts.marketplaceUrl = value;
     else if (flag === "--buyer-bootstrap-token") opts.buyerBootstrapToken = value;
