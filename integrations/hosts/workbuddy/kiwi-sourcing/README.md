@@ -63,14 +63,21 @@ npm run package:workbuddy
 
 提交此候选到平台不代表审核通过。WorkBuddy 宿主的其他协议版本协商、完整升级/回滚、灰度及紧急下架流程也未由本次只读搜索覆盖。平台版本和审核状态以提交当时的实际平台结果为准。
 
-## 买家实例持久化：暂未启用（宿主契约阻塞）
+## 买家实例状态
 
-WorkBuddy 当前只向 Connector 提供 `CODEBUDDY_PLUGIN_DATA`，其路径按插件 ID 派生；没有可作为可信证据的买家实例独占标识。不同买家不共用 WorkBuddy 实例是产品前提，但不能从 MCP 子进程侧验证。因此启动器：
+部署前提：**每个 WorkBuddy 实例拥有自己的受保护 `CODEBUDDY_PLUGIN_DATA`**；不同买家不共用同一 WorkBuddy 实例。该前提是运维验收条件，Connector 子进程无法从代码证明它。
 
-- 输出固定警告 `KIWI_LAUNCHER_WARNING:INSTANCE_SCOPE_UNPROVEN`；
-- **不创建** `kiwi-instance-v1`、随机实例身份或持久买家数据库；
-- 清除父进程继承的 `KIWI_CLIENT_ID`、`KIWI_SESSION*`、`KIWI_MCP_DB`，避免复用其他会话身份；
-- 使用临时会话身份运行，不自动认领旧任务；
-- 仅将包版本缓存放进 `CODEBUDDY_PLUGIN_DATA/kiwi-runtime-cache-v1`（0700）。
+启动器在 `CODEBUDDY_PLUGIN_DATA` 下创建 `kiwi-instance-v1/`（0700），原子写入：
 
-这表示重启/包更新后的任务续接**当前不可用**，是明确的 fail-closed 缺口。只有宿主提供可验证的、按买家实例独占的数据目录契约后，才可重新启用持久身份；不能用口头假设、环境变量或自填 flag 冒充证明。
+```text
+instance-id       # 64 位随机十六进制，跨 Kiwi 版本稳定
+session.token     # 64 位随机十六进制，0600
+buyer.sqlite      # 该实例的 task/approval 数据
+kiwi-sourcing-latest/  # 仅包缓存，位于实例根下
+```
+
+- 父目录可能是 WorkBuddy 创建的 `0755`；实例根必须是当前用户所有、非符号链接的 `0700`。
+- 启动器清除父环境中的 `KIWI_CLIENT_ID`、`KIWI_SESSION*`、`KIWI_MCP_DB`，再注入本实例的绝对 DB、instance-id 和 token 文件，避免继承 token 覆盖。
+- Kiwi 包升级只更新实例根下的版本缓存；实例身份和买家数据库不随版本缓存迁移。
+- 如果同一数据目录被多个 WorkBuddy 实例共享，**不具备实例隔离**，必须停止部署；不能把安装级共享目录当作隔离。
+- 不自动认领无归属旧任务；旧版本缓存目录中的数据库不会自动迁移，需人工带外证明归属后处理。
