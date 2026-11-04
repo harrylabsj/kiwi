@@ -91,6 +91,7 @@ export interface ReceptionApprovalCandidate {
   currency: string;
   quantity: number;
   unit?: string;
+  buyer_offer_minor?: number;
   approved_minor?: number;
   status: ReceptionApprovalStatus;
 }
@@ -340,9 +341,12 @@ export function createMerchantReceptionEngine(
             );
             const needSku = agentResult.need?.sku ?? previous?.need.sku;
             const needQuantity = agentResult.need?.quantity ?? previous?.need.quantity;
+            const needUnit = agentResult.need?.unit ?? previous?.need.unit;
+            let approvalPending = false;
             if (
               human?.buyerTargetPrice !== undefined &&
               needSku !== undefined &&
+              needQuantity !== undefined &&
               deps.productSource !== undefined &&
               deps.approvals !== undefined
             ) {
@@ -357,38 +361,49 @@ export function createMerchantReceptionEngine(
                 );
                 if (boundary !== undefined) {
                   const floorMinor = minorOf(privateFloorMajor(policyNow, needSku));
-                  deps.approvals.recordPending({
+                  const created = deps.approvals.recordPending({
                     negotiation_id: input.contextId,
                     sku: needSku,
                     currency: product.currency,
-                    quantity: needQuantity ?? 1,
-                    ...(agentResult.need?.unit !== undefined
-                      ? { unit: agentResult.need.unit }
-                      : {}),
+                    quantity: needQuantity,
+                    ...(needUnit !== undefined ? { unit: needUnit } : {}),
                     buyer_offer_minor: boundary.targetMinor,
                     public_bound_minor: boundary.publicBoundMinor,
                     ...(floorMinor !== undefined ? { floor_minor: floorMinor } : {}),
                     ttl_seconds:
                       deps.approvalTtlSeconds ?? RECEPTION_CONFIG_DEFAULTS.approvalTtlSeconds,
                   });
+                  approvalPending = pendingApprovalExists(
+                    deps.approvals,
+                    {
+                      negotiationId: input.contextId,
+                      sku: needSku,
+                      currency: product.currency,
+                      quantity: needQuantity,
+                      ...(needUnit !== undefined ? { unit: needUnit } : {}),
+                      buyerOfferMinor: boundary.targetMinor,
+                    },
+                    created,
+                  );
                 }
               } catch {
-                // 事实/审批存储不可用：保留模型计划（发布器仍会校验事实引用）。
+                // 事实/审批存储不可用：不保留 request_human_help，走真实兜底。
+                approvalPending = false;
               }
             }
+            const blocks =
+              human === undefined || approvalPending
+                ? agentResult.plan.blocks
+                : truthfulHumanFallback(agentResult.plan.blocks, {
+                    ...(needSku !== undefined ? { sku: needSku } : {}),
+                    ...(needQuantity !== undefined ? { quantity: needQuantity } : {}),
+                  });
             const agentStated: StatedFields = {
               ...(agentResult.need?.sku !== undefined ? { sku: "model" as const } : {}),
               ...(agentResult.need?.quantity !== undefined ? { quantity: "model" as const } : {}),
               ...(agentResult.need?.unit !== undefined ? { unit: "model" as const } : {}),
             };
-            return finish(
-              input,
-              previous,
-              registry,
-              agentResult.plan.blocks,
-              agentResult.need,
-              agentStated,
-            );
+            return finish(input, previous, registry, blocks, agentResult.need, agentStated);
           }
         } catch {
           // 回退确定性路径。
@@ -702,40 +717,63 @@ export function createMerchantReceptionEngine(
       // 商家确认"；不泄露公开边界数值与私有底价。边界内或无法精确换算时按
       // 普通事实回答（接待本身不发布 Offer，正式报价仍走 KNP fast path）。
       const boundary = belowPublicBound(interpreted?.target_price, product, sku, policy);
-      if (boundary !== undefined && deps.approvals !== undefined) {
-        const floorMinor = minorOf(floor);
-        deps.approvals.recordPending({
-          negotiation_id: input.contextId,
-          sku,
-          currency: product.currency,
-          quantity: quantity ?? 1,
-          ...(unit !== undefined ? { unit } : {}),
-          buyer_offer_minor: boundary.targetMinor,
-          public_bound_minor: boundary.publicBoundMinor,
-          ...(floorMinor !== undefined ? { floor_minor: floorMinor } : {}),
-          ttl_seconds: deps.approvalTtlSeconds ?? RECEPTION_CONFIG_DEFAULTS.approvalTtlSeconds,
-        });
-        return finish(input, previous, registry, [
-          acknowledge,
-          {
-            kind: "show_commercial_terms",
-            ref,
-            ...(structuredTopics.length > 0 ? { topics: structuredTopics } : {}),
-          },
-          {
-            kind: "request_human_help",
-            topic: "price_below_public_bound",
-            buyerTargetPrice: boundary.targetMajor,
+      if (
+        boundary !== undefined &&
+        quantity !== undefined &&
+        deps.approvals !== undefined
+      ) {
+        try {
+          const floorMinor = minorOf(floor);
+          const created = deps.approvals.recordPending({
+            negotiation_id: input.contextId,
+            sku,
             currency: product.currency,
-          },
-        ], {
-          sku,
-          quantity,
-          unit,
-          ...(convertedFrom !== undefined
-            ? { inputQuantity: convertedFrom.quantity, inputUnit: convertedFrom.unit }
-            : {}),
-        }, stated);
+            quantity,
+            ...(unit !== undefined ? { unit } : {}),
+            buyer_offer_minor: boundary.targetMinor,
+            public_bound_minor: boundary.publicBoundMinor,
+            ...(floorMinor !== undefined ? { floor_minor: floorMinor } : {}),
+            ttl_seconds: deps.approvalTtlSeconds ?? RECEPTION_CONFIG_DEFAULTS.approvalTtlSeconds,
+          });
+          if (
+            pendingApprovalExists(
+              deps.approvals,
+              {
+                negotiationId: input.contextId,
+                sku,
+                currency: product.currency,
+                quantity,
+                ...(unit !== undefined ? { unit } : {}),
+                buyerOfferMinor: boundary.targetMinor,
+              },
+              created,
+            )
+          ) {
+            return finish(input, previous, registry, [
+              acknowledge,
+              {
+                kind: "show_commercial_terms",
+                ref,
+                ...(structuredTopics.length > 0 ? { topics: structuredTopics } : {}),
+              },
+              {
+                kind: "request_human_help",
+                topic: "price_below_public_bound",
+                buyerTargetPrice: boundary.targetMajor,
+                currency: product.currency,
+              },
+            ], {
+              sku,
+              quantity,
+              unit,
+              ...(convertedFrom !== undefined
+                ? { inputQuantity: convertedFrom.quantity, inputUnit: convertedFrom.unit }
+                : {}),
+            }, stated);
+          }
+        } catch {
+          // 审批存储失败：不声称待商家确认，继续普通事实回答。
+        }
       }
 
       const blocks: ReceptionBlock[] = [
@@ -857,6 +895,62 @@ function publicBoundMinorOf(
 }
 
 /** 买家目标价是否低于公开折扣边界；无法精确换算（lossy）时按未越界处理。 */
+/**
+ * Verify that a pending approval really exists server-side and matches the
+ * exact buyer request. A successful-looking return value alone is not enough:
+ * storage may have failed after the caller saw an object. Only list("pending")
+ * is treated as authoritative.
+ */
+function pendingApprovalExists(
+  approvals: ReceptionApprovalSink,
+  expected: {
+    negotiationId: string;
+    sku: string;
+    currency: string;
+    quantity: number;
+    unit?: string;
+    buyerOfferMinor: number;
+  },
+  created: unknown,
+): boolean {
+  if (approvals.list === undefined) return false;
+  const approvalId = (created as { approval_id?: unknown } | null)?.approval_id;
+  if (typeof approvalId !== "string" || approvalId === "") return false;
+  try {
+    const pending = approvals.list("pending");
+    return pending.some(
+      (candidate) =>
+        candidate.approval_id === approvalId &&
+        candidate.negotiation_id === expected.negotiationId &&
+        candidate.sku === expected.sku &&
+        candidate.currency === expected.currency &&
+        candidate.quantity === expected.quantity &&
+        (expected.unit === undefined || candidate.unit === expected.unit) &&
+        (candidate.buyer_offer_minor === undefined ||
+          candidate.buyer_offer_minor === expected.buyerOfferMinor),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function truthfulHumanFallback(
+  blocks: ReceptionBlock[],
+  need: { sku?: string; quantity?: number },
+): ReceptionBlock[] {
+  if (need.sku === undefined) {
+    return [{ kind: "ask_clarification", missing: ["sku"], reason: "missing_sku" }];
+  }
+  if (need.quantity === undefined) {
+    return [{ kind: "ask_clarification", missing: ["quantity"], reason: "missing_quantity" }];
+  }
+  const filtered = blocks.filter((block) => block.kind !== "request_human_help");
+  if (filtered.some((block) => block.kind === "ask_clarification" || block.kind === "next_step")) {
+    return filtered;
+  }
+  return [...filtered, { kind: "next_step", action: "send_rfq" }];
+}
+
 function belowPublicBound(
   targetPrice: number | undefined,
   product: { price: number; currency: string },
