@@ -1,11 +1,11 @@
 {
   "schema_version": "0.1.2",
   "artifact_kind": "kiwi-merchant-cloud-package",
-  "runtime_version": "0.12.24",
-  "source_commit": "c0958a4c437740873a124eb329914798f2778de2",
-  "source_artifact_sha256": "sha256:37aa9bd5d63890c27601dc7e67be207b817b7fa2ad2d967564e5782f8b0120cc",
-  "source_contract_sha256": "sha256:c80f681ae751fbfb9769944407057907ade5beb5c4965a26e8b67af3568c62dc",
-  "artifact_sha256": "sha256:deb66bea8315999b72a647b85cbad69f405bfe99035ddfcceae5d01de2ccb89a",
+  "runtime_version": "0.12.25",
+  "source_commit": "aee9fdb0fcf08897c7aa39d50a958e2fc9e8ff86",
+  "source_artifact_sha256": "sha256:ae0ca5a86df82ae9e9910274a810c0cecc55765e7449575582bdfaac1811d2fa",
+  "source_contract_sha256": "sha256:db45217199ae5cb10f06f0e7a86da99b09fadc1ebbf29c5478d8f1524bb40de8",
+  "artifact_sha256": "sha256:5d6ade164ea2533107d7dd3c223bd7f29b6736aa7fe1c26cd9795cfb3750d169",
   "files": [
     {
       "path": "app/a2a/access/gateway-cookie-jar.d.ts",
@@ -264,18 +264,18 @@
     },
     {
       "path": "app/a2a/reception/agent-runtime.d.ts",
-      "size": 3899,
-      "sha256": "sha256:08439f92e9b911fe2ae6583ce11e13cfd8ab9d7710a8d2ea807773aa7042b46f"
+      "size": 4009,
+      "sha256": "sha256:010e36c1e02108c6a8f67dd2af76a66f4bb167c0cbbc325e61359060c70d2d18"
     },
     {
       "path": "app/a2a/reception/agent-runtime.js",
-      "size": 42341,
-      "sha256": "sha256:467b4ed6649d629500ce08235858deaac1867465c9a7600ae1a2aefd8469220b"
+      "size": 44470,
+      "sha256": "sha256:595d3a6d90f6587ed2666f4c6e6652b4389e7379dc26af20064313c055229b67"
     },
     {
       "path": "app/a2a/reception/agent-runtime.js.map",
-      "size": 31017,
-      "sha256": "sha256:541c1d2d69ede7ae6515f88340cf6c16635cb333ce3160662c206b3a3fd94bdc"
+      "size": 32678,
+      "sha256": "sha256:2ac24fe3c295e67230c7ffc8259b9eeaec14aacec911b08d7e557c5f5e4b77e2"
     },
     {
       "path": "app/a2a/reception/budget.d.ts",
@@ -329,13 +329,13 @@
     },
     {
       "path": "app/a2a/reception/engine.js",
-      "size": 37270,
-      "sha256": "sha256:fb765032f41dead68e0d4080892df3e4cf0699cd749099fcec59cda416f1f1ea"
+      "size": 38274,
+      "sha256": "sha256:fb84b3aa816895d2fee9c7b74efc479dbd6b937de2ae7f8132da7cc195da91e8"
     },
     {
       "path": "app/a2a/reception/engine.js.map",
-      "size": 27547,
-      "sha256": "sha256:ef8b651a590a04cec19cf0e574739e99d7491506e263a9e1140527b9a0082abb"
+      "size": 28435,
+      "sha256": "sha256:abdc20eb10f30e25d9be77910557b162ac95d8b8bc61acdb250a8d46dbd98587"
     },
     {
       "path": "app/a2a/reception/probe.d.ts",
@@ -1769,13 +1769,13 @@
     },
     {
       "path": "app/buyer-core/a2a-quote-fetcher.js",
-      "size": 24016,
-      "sha256": "sha256:fdba784dd284137f5bf0bb0110dbca99fb3c7082e268db416e17cd08ad77fd4c"
+      "size": 24821,
+      "sha256": "sha256:a9b946e816ce9430fb6e1f981339a7532f76fee2b728dd1a9d08a01e34babc79"
     },
     {
       "path": "app/buyer-core/a2a-quote-fetcher.js.map",
-      "size": 16553,
-      "sha256": "sha256:f978bc1f408b207fc86e10728b899772037bd938c4d2cd0aa172c536955494ea"
+      "size": 17093,
+      "sha256": "sha256:87c381dfd0e39f6e85171017487a19f2e1f3da34fa284da4a0920cdfd52a8d88"
     },
     {
       "path": "app/buyer-core/build-service.d.ts",
@@ -1949,13 +1949,13 @@
     },
     {
       "path": "app/buyer-core/service.js",
-      "size": 89838,
-      "sha256": "sha256:afcc6f24bb5e44dd588b6db31e03f95e61b63d0c9fa36eab39cc003731ad9f24"
+      "size": 91543,
+      "sha256": "sha256:417f4d61414ca4cbce5ab2040880d760e704cabe067b5047c7044ab393e342ee"
     },
     {
       "path": "app/buyer-core/service.js.map",
-      "size": 61892,
-      "sha256": "sha256:45bb876854521915892db156d9b75f17419100b254f848056595efae04c5c055"
+      "size": 63494,
+      "sha256": "sha256:c9e1b99eaa3626f919f2114b23cc65b6ddb4bb8a83b76db66d4a20f2f1ccb06a"
     },
     {
       "path": "app/buyer-core/store.d.ts",
@@ -1995,7 +1995,7 @@
     {
       "path": "app/cloud-sample/products.json",
       "size": 531,
-      "sha256": "sha256:f5200d435dcd3780a3a3248b9d4775d5b41a109effd5652df6f1dbc6b26990b4"
+      "sha256": "sha256:3953ea347423a0eb1ba90afd35a9f9b7fd125f75b1391a091e3c88f5c319d0d0"
     },
     {
       "path": "app/cloud/access/local-share-vault.d.ts",
@@ -111220,7 +111220,7 @@
     {
       "path": "package.json",
       "size": 1964,
-      "sha256": "sha256:6b14faca98030fb87d5f95aff9f773def0457d3346aece93959ea9ba285145fd"
+      "sha256": "sha256:276b3ed1a61cac55d93c625f8ee0675b26ffda8178f3e9a32f6ffaf7a80b3ad4"
     },
     {
       "path": "prepare.mjs",
@@ -111230,7 +111230,7 @@
     {
       "path": "runtime-package.json",
       "size": 1185,
-      "sha256": "sha256:eec5464960881a651fb54411fd697cfc629d34936209458a198fce888548a2bb"
+      "sha256": "sha256:dfd15e4c61b98405f29289d2b7502dec9a253580bda830bfc73fed154554e865"
     },
     {
       "path": "scripts/check-install-toolchain.mjs",
@@ -111240,16 +111240,16 @@
     {
       "path": "shipping-sbom.cdx.json",
       "size": 279543,
-      "sha256": "sha256:740b5383e0bc8cf8c03cea217b641bff2d5ce8e40c530c346856cefe5f56fa7e"
+      "sha256": "sha256:79d4147d33ef2b9288c2952530034eb678a0dbc387278b78e5fda48f0ffd75db"
     },
     {
       "path": "shipping-source.json",
       "size": 5709,
-      "sha256": "sha256:c6129d2f9188a1f94d62b99c117b4078714c3ae291ced68ebb421df2305bee9b"
+      "sha256": "sha256:d649db666231e54845ad1112216e020daca0d384f5fb77e950dce42b33809a31"
     }
   ],
   "file_count": 22248,
-  "total_bytes": 151231792,
+  "total_bytes": 151242236,
   "notes": [
     "Complete normal npm bundle plan, every shipped file byte except build-manifest itself; no SDK pruning. Project tgz budget <100000000, not an npmjs official limit."
   ]

@@ -1,7 +1,7 @@
 {
-  "$note": "回填自 npm registry 的正式发布物：@harrylabsj/kiwi-merchant-cloud@0.12.24；运行本脚本时已逐项核对 registry dist.integrity 与下载 tarball integrity，并读取包内 build-manifest.json 的 artifact_sha256。",
+  "$note": "回填自 npm registry 的正式发布物：@harrylabsj/kiwi-merchant-cloud@0.12.25；运行本脚本时已逐项核对 registry dist.integrity 与下载 tarball integrity，并读取包内 build-manifest.json 的 artifact_sha256。",
   "npm_package": "@harrylabsj/kiwi-merchant-cloud",
-  "package_version": "0.12.24",
-  "aggregate_digest": "sha256:deb66bea8315999b72a647b85cbad69f405bfe99035ddfcceae5d01de2ccb89a",
-  "npm_integrity": "sha512-O7/pxWK7Kq62hy9jAiikmJfYUMIJCqGebKOnzEQA5meefNU8eM+VIyUa0dj+L6RZGEyjbYufqVGO8jAPmDhhsg=="
+  "package_version": "0.12.25",
+  "aggregate_digest": "sha256:5d6ade164ea2533107d7dd3c223bd7f29b6736aa7fe1c26cd9795cfb3750d169",
+  "npm_integrity": "sha512-RyhYjdTam+ZiOzKGn5Kj7kfY6dy+YhHTgQZX6NPtcIbJghiODE78Vfha49GsLjUmd98PbSooGa7IIr5qpjLc/g=="
 }
