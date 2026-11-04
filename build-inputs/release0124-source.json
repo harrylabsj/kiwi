@@ -182,7 +182,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "sha256:60a388ceb071e35ca5e26fb6bae3c8d58e58b5b052788cffa02e47cb417c1041"
+      "sha256": "sha256:dc9eb9fa1a5319bdc782dff780c340738c6cdfdd9103b781fb4311a7fbb63c56"
     },
     {
       "path": "CODE_OF_CONDUCT.md",
@@ -2850,7 +2850,7 @@
     },
     {
       "path": "src/a2a/reception/engine.ts",
-      "sha256": "sha256:abdb25789cfa95bceed949d8b650d2b17602e361b0af3935a480fd71541dd2d0"
+      "sha256": "sha256:d11dade4d5d9ebe02b6fde57275c79e5a41ac6e0d26051e86e3e546f44b0ffc6"
     },
     {
       "path": "src/a2a/reception/probe.ts",
@@ -4862,9 +4862,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:03f54d680579ca5abd4f98dbf382781e4cf3d975cec45381d7d219e7ba24f343",
+      "sha256": "sha256:2fb44dda2d46ecac3bcb0023116e82cc47f7e5de7446b7ce1ee9ec111fa97d9e",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:1c8587f999a4939d19487584c921c25a2c31a16e2dd370724c8cecd4a1ab24fc"
+      "raw_sha256": "sha256:50bb32c8e6b7c488fc8ad677d0a3dd3866f75e27e90d3d3cf10a96d2c0f08ec8"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -6209,6 +6209,10 @@
     {
       "path": "tests/merchant-reception-active.test.ts",
       "sha256": "sha256:9f0a7acadda77ed02af5d3d0e8cd562eea8c845d994d7516179381d8b56fe852"
+    },
+    {
+      "path": "tests/merchant-reception-approval-claims.test.ts",
+      "sha256": "sha256:c64ee8d43e88d92cd68a217b3665114bfd9e7cd56e4a6c942e2474f5a96a21cb"
     },
     {
       "path": "tests/merchant-reception-budget.test.ts",
