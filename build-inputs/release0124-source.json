@@ -182,7 +182,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "sha256:e15e07cf7594cab20e931da7a606f3bd38c882dad1fc2258e678320e7ebe4737"
+      "sha256": "sha256:dbdeb975251b3e1cc6ad87a2f4a69b999232879643f09e9862a86725f3f158ea"
     },
     {
       "path": "CODE_OF_CONDUCT.md",
@@ -2834,7 +2834,7 @@
     },
     {
       "path": "src/a2a/reception/agent-runtime.ts",
-      "sha256": "sha256:3795609e6518dd385dd1ed1c5bd5238a9c30d6cfbc220ee98fa24ae8865a54bc"
+      "sha256": "sha256:e2b4ffb87b256ced6b568bfd78b276bedaae765a85e68c266a614727dfa15488"
     },
     {
       "path": "src/a2a/reception/budget.ts",
@@ -4862,9 +4862,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:8c1d7be59678d43604900bb932f613bcba2f8481d39ca599c8a256a5538e9aad",
+      "sha256": "sha256:e018e5caaec086be2e0d504152289a202b78caee135954617fd1c85134a81a21",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:1b2f1e3b5c039880c883f3e4dc8c88da083e0061da962d1f040789f9d5526476"
+      "raw_sha256": "sha256:95b6893591485d6d4b3db3774dd7040d9b14ab7f80c5c68371fc5ddf45d0751f"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -6629,6 +6629,10 @@
     {
       "path": "tests/reception-agent-runtime.test.ts",
       "sha256": "sha256:671a5f2b8f97cb5280930291eac57d462d8f7af89598f2637676140b46a7b280"
+    },
+    {
+      "path": "tests/reception-agent-source-unit.test.ts",
+      "sha256": "sha256:5ad32e38f2dcbc55fd1c5e3e8b17f28d197c3de27617dd5f6d8168e31463b787"
     },
     {
       "path": "tests/reception-agent-unit-flow.test.ts",
