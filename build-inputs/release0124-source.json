@@ -1730,7 +1730,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/package/build-manifest.json",
-      "sha256": "sha256:9b9b06d47eaed12cc956941e049c28445a979e13393994b1baaaf1dec2e43297"
+      "sha256": "sha256:641264e0dc0d85c0201efc205181d4a14f6d20f9cbee18bcc8c077c9a51ed88d"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/package/prepare.mjs",
@@ -1738,11 +1738,11 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/references/fallback-prompt.md",
-      "sha256": "sha256:d03df3b13d4f18aa14a706b6bb4f236dd52be995fe797ceae5a54e4ed211aa5a"
+      "sha256": "sha256:2356fdcaec7745670fb218d38e23d5b293e65bd9723290fa98f6cfbf136f3224"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/references/release.json",
-      "sha256": "sha256:5ca887a7243a91a4a14dfd723738291d9def7f51729f778d7a0ee3c2a7bf89c6"
+      "sha256": "sha256:44939a7974a9ab9a6927ebaf9115a5f0283b38a8ac9a965d089c1288d8c8b8c3"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/kiwi-cloud-deploy/scripts/verify-target-node.mjs",
