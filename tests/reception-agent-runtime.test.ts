@@ -141,7 +141,7 @@ describe("Pi reception runtime", () => {
       merchantId: "merchant-1",
       identity: "buyer:1",
       contextId: "ctx_agent",
-      text: "办公室用的那款来两盒",
+      text: "办公室用的那款来两piece",
       registry,
       now: NOW,
     });

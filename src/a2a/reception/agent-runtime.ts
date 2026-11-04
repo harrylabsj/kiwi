@@ -138,6 +138,70 @@ function toolResult(text: string, details: unknown = {}): AgentToolResult<unknow
   return { content: [{ type: "text", text }], details };
 }
 
+const BUYER_QUANTITY_UNIT =
+  "盒|件|个|只|箱|瓶|包|袋|台|套|双|张|份|pieces?|boxes?|pcs?|units?";
+const BUYER_CN_DIGITS: Record<string, number> = {
+  一: 1,
+  二: 2,
+  两: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+};
+function buyerChineseNumber(raw: string): number | undefined {
+  if (raw === "十") return 10;
+  if (raw.includes("十")) {
+    const [tensRaw, onesRaw] = raw.split("十");
+    const tens = tensRaw === "" ? 1 : BUYER_CN_DIGITS[tensRaw ?? ""];
+    const ones = onesRaw === "" ? 0 : BUYER_CN_DIGITS[onesRaw ?? ""];
+    if (tens === undefined || ones === undefined) return undefined;
+    return tens * 10 + ones;
+  }
+  return BUYER_CN_DIGITS[raw];
+}
+
+/**
+ * Server-side buyer quantity/unit extraction. The model may not shrink a
+ * requested quantity for a stock claim; compare_products/get_commercial_facts
+ * only bind stock to this independently parsed value.
+ */
+export function parseBuyerQuantity(
+  text: string,
+): { quantity: number; unit: string } | undefined {
+  const chinese = new RegExp(`([一二两三四五六七八九十]+)\\s*(${BUYER_QUANTITY_UNIT})`, "u").exec(text);
+  if (chinese !== null) {
+    const prefix = text.slice(Math.max(0, (chinese.index ?? 0) - 4), chinese.index ?? 0);
+    const quantity = buyerChineseNumber(chinese[1] ?? "");
+    if (!/[\d¥￥元块]/.test(prefix) && quantity !== undefined && quantity > 0) {
+      return { quantity, unit: chinese[2] ?? "" };
+    }
+  }
+  const arabic = new RegExp(`(?:^|[^\\d])(\\d+)\\s*(${BUYER_QUANTITY_UNIT})`, "iu").exec(text);
+  if (arabic !== null) {
+    const quantity = Number(arabic[1]);
+    if (Number.isSafeInteger(quantity) && quantity > 0) return { quantity, unit: arabic[2] ?? "" };
+  }
+  return undefined;
+}
+
+function buyerUnitMatchesPolicy(
+  policy: ReturnType<typeof unitConversionPolicy>,
+  buyerUnit: string,
+  requestedUnit: string,
+): boolean {
+  const buyer = canonicalUnitToken(buyerUnit);
+  const requested = canonicalUnitToken(requestedUnit);
+  return (
+    buyer === requested ||
+    policy.aliases[buyer] === requested ||
+    policy.aliases[requested] === buyer
+  );
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -308,6 +372,7 @@ export function createPiReceptionRuntime(
       }
       const factUnits = new Map<string, FactUnitState>();
       const rejectedFactUnits = new Map<string, { inputQuantity?: number; inputUnit?: string }>();
+      const buyerQuantity = parseBuyerQuantity(input.text);
       let steps = 0;
       let toolAttempts = 0;
       let timedOut = false;
@@ -434,11 +499,16 @@ export function createPiReceptionRuntime(
                     continue;
                   }
                 }
-                const stockAvailable =
-                  product.stock !== undefined &&
-                  product.unit !== undefined &&
+                const buyerBound =
                   requestedQuantity !== undefined &&
                   requestedUnit !== undefined &&
+                  buyerQuantity !== undefined &&
+                  buyerQuantity.quantity === requestedQuantity &&
+                  buyerUnitMatchesPolicy(unitPolicy, buyerQuantity.unit, requestedUnit);
+                const stockAvailable =
+                  buyerBound &&
+                  product.stock !== undefined &&
+                  product.unit !== undefined &&
                   stockQuantity !== undefined
                     ? product.stock >= stockQuantity
                     : undefined;
@@ -584,7 +654,14 @@ export function createPiReceptionRuntime(
               floorMinor !== undefined && Math.round(product.price * 100) < floorMinor
                 ? undefined
                 : product.price;
+            const stockBound =
+              quantity !== undefined &&
+              requestedUnit !== undefined &&
+              buyerQuantity !== undefined &&
+              buyerQuantity.quantity === quantity &&
+              buyerUnitMatchesPolicy(unitPolicy, buyerQuantity.unit, requestedUnit);
             const stockAvailable =
+              stockBound &&
               product.stock !== undefined &&
               product.unit !== undefined &&
               effectiveQuantity !== undefined
