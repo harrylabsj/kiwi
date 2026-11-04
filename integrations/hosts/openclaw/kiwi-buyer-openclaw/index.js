@@ -89,7 +89,10 @@ function resolveTools(config) {
   // Stable host instance identity; never use the process PID for session
   // ownership. The host should persist config.clientId/KIWI_CLIENT_ID.
   const sessionId = "openclaw";
-  const clientId = config?.clientId || process.env.KIWI_CLIENT_ID || "openclaw-default";
+  // Do not invent a shared default identity. The host must persist a unique
+  // clientId per OpenClaw instance; absent it, the service gets an ephemeral
+  // owner and deliberately does not resume old tasks.
+  const clientId = config?.clientId || process.env.KIWI_CLIENT_ID || "";
   const service = buildBuyerService({
     dbPath,
     principal,

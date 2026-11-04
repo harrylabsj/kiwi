@@ -40,6 +40,7 @@ openclaw plugins install clawhub:kiwi
 | `dbPath` | `~/.kiwi/openclaw.sqlite` | 持久 store（task/approval/agreement）|
 | `principal` | `openclaw:user` | Principal 标识 |
 | `buyerAgentId` | `buyer-agent:openclaw` | buyer agent id |
+| `clientId` | 无 | **每个 OpenClaw 实例必须持久化的唯一客户端身份**；缺失时仅临时会话，不能恢复旧任务，也不会共享固定默认值 |
 
 ## 9 个工具（§6.8 前缀 `kiwi_buyer_*`）
 
