@@ -172,20 +172,35 @@ function buyerChineseNumber(raw: string): number | undefined {
 export function parseBuyerQuantity(
   text: string,
 ): { quantity: number; unit: string } | undefined {
-  const chinese = new RegExp(`([一二两三四五六七八九十]+)\\s*(${BUYER_QUANTITY_UNIT})`, "u").exec(text);
-  if (chinese !== null) {
-    const prefix = text.slice(Math.max(0, (chinese.index ?? 0) - 4), chinese.index ?? 0);
-    const quantity = buyerChineseNumber(chinese[1] ?? "");
+  const validated: Array<{ quantity: number; unit: string }> = [];
+  const chinesePattern = new RegExp(
+    `([一二两三四五六七八九十]+)\\s*(${BUYER_QUANTITY_UNIT})`,
+    "gu",
+  );
+  for (const match of text.matchAll(chinesePattern)) {
+    const prefix = text.slice(Math.max(0, (match.index ?? 0) - 4), match.index ?? 0);
+    const quantity = buyerChineseNumber(match[1] ?? "");
     if (!/[\d¥￥元块]/.test(prefix) && quantity !== undefined && quantity > 0) {
-      return { quantity, unit: chinese[2] ?? "" };
+      validated.push({ quantity, unit: match[2] ?? "" });
     }
   }
-  const arabic = new RegExp(`(?:^|[^\\d])(\\d+)\\s*(${BUYER_QUANTITY_UNIT})`, "iu").exec(text);
-  if (arabic !== null) {
-    const quantity = Number(arabic[1]);
-    if (Number.isSafeInteger(quantity) && quantity > 0) return { quantity, unit: arabic[2] ?? "" };
+  const arabicPattern = new RegExp(
+    `(?:^|[^\\d])(\\d+)\\s*(${BUYER_QUANTITY_UNIT})`,
+    "giu",
+  );
+  for (const match of text.matchAll(arabicPattern)) {
+    const quantity = Number(match[1]);
+    if (Number.isSafeInteger(quantity) && quantity > 0) {
+      validated.push({ quantity, unit: match[2] ?? "" });
+    }
   }
-  return undefined;
+  const distinct = new Map<string, { quantity: number; unit: string }>();
+  for (const item of validated) {
+    distinct.set(`${item.quantity}:${canonicalUnitToken(item.unit)}`, item);
+  }
+  // "之前要一件，现在需要10件" is ambiguous: never bind a stock claim to
+  // whichever quantity happens to be mentioned first.
+  return distinct.size === 1 ? [...distinct.values()][0] : undefined;
 }
 
 function buyerUnitMatchesPolicy(

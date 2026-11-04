@@ -220,6 +220,20 @@ describe("Pi compare_products → recommend_option publisher claims", () => {
     expect(result.text).not.toContain("库存可以覆盖本次数量");
   });
 
+  it("ambiguous historical vs current quantity: never claims coverage", async () => {
+    const result = await runCompare({
+      a: { ...A, stock: 1 },
+      b: B,
+      quantity: 1,
+      unit: "piece",
+      buyerText: "之前要一件，现在需要10件",
+      expectedStockAvailable: null,
+      reason: "in_stock",
+    });
+    expect(result.rejected[0]?.reason).toBe("unverified_claim");
+    expect(result.text).not.toContain("库存可以覆盖本次数量");
+  });
+
   it("buyer asks 10 and model supplies 10: stock 1 still does not cover", async () => {
     const result = await runCompare({
       a: { ...A, stock: 1 },
