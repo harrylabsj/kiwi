@@ -255,6 +255,20 @@ describe("Pi compare_products → recommend_option publisher claims", () => {
     expect(result.text).toContain("库存可以覆盖本次数量");
   });
 
+  it("mixed Arabic and Chinese quantities: never claims coverage", async () => {
+    const result = await runCompare({
+      a: { ...A, stock: 1 },
+      b: B,
+      quantity: 1,
+      unit: "piece",
+      buyerText: "原先1件要十件",
+      expectedStockAvailable: null,
+      reason: "in_stock",
+    });
+    expect(result.rejected[0]?.reason).toBe("unverified_claim");
+    expect(result.text).not.toContain("库存可以覆盖本次数量");
+  });
+
   it("ambiguous historical vs current quantity: never claims coverage", async () => {
     const result = await runCompare({
       a: { ...A, stock: 1 },

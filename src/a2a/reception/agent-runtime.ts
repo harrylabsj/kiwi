@@ -172,7 +172,7 @@ function buyerChineseNumber(raw: string): number | undefined {
 export function parseBuyerQuantity(
   text: string,
 ): { quantity: number; unit: string } | undefined {
-  const validated: Array<{ quantity: number; unit: string }> = [];
+  const candidates: Array<{ quantity: number; unit: string; priceContext: boolean }> = [];
   const chinesePattern = new RegExp(
     `([一二两三四五六七八九十]+)\\s*(${BUYER_QUANTITY_UNIT})`,
     "gu",
@@ -180,8 +180,14 @@ export function parseBuyerQuantity(
   for (const match of text.matchAll(chinesePattern)) {
     const prefix = text.slice(Math.max(0, (match.index ?? 0) - 4), match.index ?? 0);
     const quantity = buyerChineseNumber(match[1] ?? "");
-    if (!/[\d¥￥元块]/.test(prefix) && quantity !== undefined && quantity > 0) {
-      validated.push({ quantity, unit: match[2] ?? "" });
+    if (quantity !== undefined && quantity > 0) {
+      // Keep price-context candidates for the ambiguity check below, but do
+      // not let them become the sole quantity when no other candidate exists.
+      candidates.push({
+        quantity,
+        unit: match[2] ?? "",
+        priceContext: /[\d¥￥元块]/.test(prefix),
+      });
     }
   }
   const arabicPattern = new RegExp(
@@ -191,16 +197,24 @@ export function parseBuyerQuantity(
   for (const match of text.matchAll(arabicPattern)) {
     const quantity = Number(match[1]);
     if (Number.isSafeInteger(quantity) && quantity > 0) {
-      validated.push({ quantity, unit: match[2] ?? "" });
+      candidates.push({ quantity, unit: match[2] ?? "", priceContext: false });
     }
   }
-  const distinct = new Map<string, { quantity: number; unit: string }>();
-  for (const item of validated) {
-    distinct.set(`${item.quantity}:${canonicalUnitToken(item.unit)}`, item);
+  const distinct = new Map<string, { quantity: number; unit: string; priceContext: boolean }>();
+  for (const item of candidates) {
+    const key = `${item.quantity}:${canonicalUnitToken(item.unit)}`;
+    const existing = distinct.get(key);
+    distinct.set(key, {
+      quantity: item.quantity,
+      unit: item.unit,
+      priceContext: existing === undefined ? item.priceContext : existing.priceContext && item.priceContext,
+    });
   }
-  // "之前要一件，现在需要10件" is ambiguous: never bind a stock claim to
-  // whichever quantity happens to be mentioned first.
-  return distinct.size === 1 ? [...distinct.values()][0] : undefined;
+  // Ambiguity is checked over ALL candidate expressions, including ones that
+  // looked like price context. "原先1件要十件" must not silently bind to 1.
+  if (distinct.size !== 1) return undefined;
+  const only = [...distinct.values()][0]!;
+  return only.priceContext ? undefined : { quantity: only.quantity, unit: only.unit };
 }
 
 function buyerUnitMatchesPolicy(
