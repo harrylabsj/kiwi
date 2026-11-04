@@ -183,6 +183,42 @@ describe("buyer task session ownership", () => {
     store.close();
   });
 
+  it("starts from an old task table with no owner column or idempotency index", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-idem-noowner-"));
+    dirs.push(dir);
+    const dbPath = path.join(dir, "old-noowner.sqlite");
+    const db = new DatabaseSync(dbPath);
+    db.exec(`CREATE TABLE mcp_tasks (
+      task_id TEXT PRIMARY KEY, task_kind TEXT NOT NULL, status TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL, intent_id TEXT, delegation_policy_id TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, expires_at TEXT,
+      resumable INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL
+    );
+    CREATE TABLE mcp_candidates (
+      candidate_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES mcp_tasks(task_id) ON DELETE CASCADE,
+      merchant_id TEXT NOT NULL, status TEXT NOT NULL, provenance_json TEXT, failure_json TEXT,
+      expires_at TEXT, retryable INTEGER NOT NULL DEFAULT 0
+    )`);
+    db.prepare("INSERT INTO mcp_tasks VALUES (?,?,?,?,?,?,?,?,?,?,?)").run(
+      "old-noowner", "request_quotes", "succeeded", "old-key", null, null,
+      "2026-11-01T00:00:00Z", "2026-11-01T00:00:00Z", null, 1, "{}",
+    );
+    db.prepare("INSERT INTO mcp_candidates VALUES (?,?,?,?,?,?,?,?)").run(
+      "old-candidate", "old-noowner", "m", "succeeded", null, null, null, 0,
+    );
+    db.close();
+    const store = new TaskApprovalStore({ dbPath });
+    expect(store.getTask("old-noowner")?.task_id).toBe("old-noowner");
+    expect(store.listCandidates("old-noowner")).toHaveLength(1);
+    const created = store.createTask({
+      task_id: "new-owner-task", task_kind: "request_quotes", status: "succeeded",
+      created_at: "2026-11-01T00:00:00Z", updated_at: "2026-11-01T00:00:00Z",
+      resumable: true, idempotency_key: "old-key", owner_hash: "new-owner", payload: "{}",
+    });
+    expect(created.created).toBe(true);
+    store.close();
+  });
+
   it("migrates an old global-unique task table without losing tasks", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-idem-migrate-"));
     dirs.push(dir);

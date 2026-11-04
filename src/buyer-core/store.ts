@@ -167,7 +167,6 @@ export class TaskApprovalStore {
         payload        TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_mcp_tasks_status ON mcp_tasks(status);
-      CREATE INDEX IF NOT EXISTS idx_mcp_tasks_idem ON mcp_tasks(owner_hash, idempotency_key);
       CREATE INDEX IF NOT EXISTS idx_mcp_candidates_task ON mcp_candidates(task_id);
       CREATE INDEX IF NOT EXISTS idx_mcp_approvals_task ON mcp_approvals(task_id);
       CREATE TABLE IF NOT EXISTS mcp_meta (
@@ -201,49 +200,59 @@ export class TaskApprovalStore {
     if (!taskCols.some((c) => c.name === "owner_hash")) {
       this.db.exec("ALTER TABLE mcp_tasks ADD COLUMN owner_hash TEXT NOT NULL DEFAULT ''");
     }
-    // v2: idempotency is scoped per owner. Older stores have a global UNIQUE
-    // on idempotency_key, which lets one session pre-occupy another session's
-    // key. Rebuild once, preserving every task and child row by task_id.
-    const scopeMarker = "idempotency_owner_scope_v1";
-    const scoped = this.db.prepare("SELECT value FROM mcp_meta WHERE key = ?").get(scopeMarker) as
-      | { value: string } | undefined;
-    if (scoped === undefined) {
-      this.db.exec("PRAGMA foreign_keys = OFF");
+    // v2: idempotency is scoped per owner. Older stores may have a global
+    // UNIQUE on idempotency_key (or no owner column/index at all). Rebuild in
+    // one BEGIN IMMEDIATE transaction so a crash cannot drop tasks or children.
+    this.db.exec("PRAGMA foreign_keys = OFF");
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
       try {
-        this.db.exec(`
-          CREATE TABLE mcp_tasks_owner_scope (
-            task_id TEXT PRIMARY KEY,
-            task_kind TEXT NOT NULL,
-            status TEXT NOT NULL,
-            idempotency_key TEXT NOT NULL,
-            intent_id TEXT,
-            delegation_policy_id TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            expires_at TEXT,
-            resumable INTEGER NOT NULL DEFAULT 0,
-            owner_hash TEXT NOT NULL DEFAULT '',
-            payload TEXT NOT NULL
-          );
-          INSERT INTO mcp_tasks_owner_scope
-            (task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id,
-             created_at, updated_at, expires_at, resumable, owner_hash, payload)
-          SELECT task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id,
-             created_at, updated_at, expires_at, resumable, owner_hash, payload
-          FROM mcp_tasks;
-          DROP TABLE mcp_tasks;
-          ALTER TABLE mcp_tasks_owner_scope RENAME TO mcp_tasks;
-          CREATE INDEX idx_mcp_tasks_status ON mcp_tasks(status);
-          CREATE UNIQUE INDEX idx_mcp_tasks_idem ON mcp_tasks(owner_hash, idempotency_key);
-        `);
-        this.db.prepare("INSERT INTO mcp_meta(key,value) VALUES(?,?)").run(scopeMarker, "1");
-      } finally {
-        this.db.exec("PRAGMA foreign_keys = ON");
+        const scopeMarker = "idempotency_owner_scope_v1";
+        const scoped = this.db.prepare("SELECT value FROM mcp_meta WHERE key = ?").get(scopeMarker) as
+          | { value: string } | undefined;
+        if (scoped === undefined) {
+          this.db.exec(`
+            CREATE TABLE mcp_tasks_owner_scope (
+              task_id TEXT PRIMARY KEY,
+              task_kind TEXT NOT NULL,
+              status TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              intent_id TEXT,
+              delegation_policy_id TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              expires_at TEXT,
+              resumable INTEGER NOT NULL DEFAULT 0,
+              owner_hash TEXT NOT NULL DEFAULT '',
+              payload TEXT NOT NULL
+            );
+            INSERT INTO mcp_tasks_owner_scope
+              (task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id,
+               created_at, updated_at, expires_at, resumable, owner_hash, payload)
+            SELECT task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id,
+               created_at, updated_at, expires_at, resumable, owner_hash, payload
+            FROM mcp_tasks;
+            DROP TABLE mcp_tasks;
+            ALTER TABLE mcp_tasks_owner_scope RENAME TO mcp_tasks;
+            CREATE INDEX idx_mcp_tasks_status ON mcp_tasks(status);
+            CREATE UNIQUE INDEX idx_mcp_tasks_idem ON mcp_tasks(owner_hash, idempotency_key);
+          `);
+          this.db.prepare("INSERT INTO mcp_meta(key,value) VALUES(?,?)").run(scopeMarker, "1");
+        }
+        this.db.exec("COMMIT");
+      } catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* already rolled back */ }
+        throw error;
       }
+    } finally {
+      this.db.exec("PRAGMA foreign_keys = ON");
     }
+    // Repair a marker-present store whose idempotency index was lost.
+    this.db.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_tasks_idem ON mcp_tasks(owner_hash, idempotency_key)",
+    );
   }
 
-  /** 写入 handoff 意图（同摘要不可重复；重复写视为调用方错误）。 */
   setHandoffIntent(intent: StoredHandoffIntent): void {
     this.db
       .prepare(
