@@ -1,12 +1,16 @@
 /**
  * Buyer session ownership.
  *
- * The session label is only a namespace hint. Each client gets a private,
- * automatically persisted token file (0600) under the user's home directory;
- * the server stores only an HMAC-derived owner hash, never the token. Supplying
- * the same token file/session again reconnects; different files/labels do not
- * share tasks. This is a local-client credential, not remote authentication:
- * another process with the same OS user and access to the file can read it.
+ * `sessionId` is a display/namespace label and is NEVER sufficient to identify
+ * a client. A host must allocate a per-client instance identity (`clientId`)
+ * and persist it in host-owned storage, or supply a per-client token file.
+ * Without a host identity this function returns an ephemeral owner: two default
+ * clients cannot read each other's tasks, but they also cannot resume after a
+ * restart (there is no trustworthy identity to recover).
+ *
+ * A token file must be non-empty and client-private; this is a local credential,
+ * not remote authentication. Hosts such as DSH/Hermes/WorkBuddy/OpenClaw must
+ * generate/persist clientId themselves.
  */
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -14,15 +18,14 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 export interface SessionOwnerInput {
-  /** Used only to give each local database its own auto-token namespace. */
   dbPath?: string;
   principal: string;
   buyerAgentId: string;
   sessionId: string;
+  /** Host-generated, host-persisted identity for this client instance. */
+  clientId?: string;
   sessionToken?: string;
-  /** Optional client-owned token file; must be non-empty. */
   sessionTokenFile?: string;
-  /** Test/embedding override for the auto-token directory. */
   tokenDir?: string;
 }
 
@@ -35,7 +38,7 @@ function readTokenFile(file: string): string {
 
 function autoTokenFile(input: SessionOwnerInput): string {
   const key = createHash("sha256")
-    .update(`${input.dbPath ?? ""}\u0000${input.principal}\u0000${input.buyerAgentId}\u0000${input.sessionId}`)
+    .update(`${input.dbPath ?? ""}\u0000${input.principal}\u0000${input.buyerAgentId}\u0000${input.clientId ?? ""}\u0000${input.sessionId}`)
     .digest("hex");
   const dir = input.tokenDir ?? path.join(homedir(), ".kiwi", "mcp", "sessions");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -44,8 +47,12 @@ function autoTokenFile(input: SessionOwnerInput): string {
 
 export function resolveSessionOwner(input: SessionOwnerInput): string {
   let token = input.sessionToken?.trim() ?? "";
-  if (token === "" && input.sessionTokenFile !== undefined) {
-    token = readTokenFile(input.sessionTokenFile);
+  if (token === "" && input.sessionTokenFile !== undefined) token = readTokenFile(input.sessionTokenFile);
+  const clientId = input.clientId?.trim() ?? "";
+  if (token === "" && clientId === "") {
+    // Fail closed on identity: do not silently share a file keyed only by a
+    // caller-controlled session label.
+    return `ephemeral:${randomBytes(32).toString("hex")}`;
   }
   if (token === "") {
     const file = autoTokenFile(input);
@@ -55,6 +62,6 @@ export function resolveSessionOwner(input: SessionOwnerInput): string {
     }
     token = readTokenFile(file);
   }
-  const identity = `${input.principal}\u0000${input.buyerAgentId}\u0000${input.sessionId}`;
+  const identity = `${input.principal}\u0000${input.buyerAgentId}\u0000${clientId}\u0000${input.sessionId}`;
   return createHmac("sha256", token).update(identity).digest("hex");
 }

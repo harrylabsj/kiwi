@@ -16,6 +16,7 @@ import process from "node:process";
 import { buildBuyerService } from "@harrylabsj/kiwi/dist/buyer-core/build-service.js";
 import { buildKiwiTools } from "@harrylabsj/kiwi/dist/mcp/tools.js";
 import { DEFAULT_DELEGATION_POLICY, DEFAULT_CATALOG_URL } from "@harrylabsj/kiwi/dist/mcp/cli.js";
+import { resolveSessionOwner } from "@harrylabsj/kiwi/dist/mcp/session-owner.js";
 
 const CONFIG_SCHEMA = {
   type: "object",
@@ -26,6 +27,7 @@ const CONFIG_SCHEMA = {
     dbPath: { type: "string" },
     principal: { type: "string" },
     buyerAgentId: { type: "string" },
+    clientId: { type: "string" },
   },
 };
 
@@ -84,11 +86,16 @@ function resolveTools(config) {
   const principal = config?.principal || "openclaw:user";
   const buyerAgentId = config?.buyerAgentId || "buyer-agent:openclaw";
   const dbPath = config?.dbPath || path.join(os.homedir(), ".kiwi", "openclaw.sqlite");
+  // Stable host instance identity; never use the process PID for session
+  // ownership. The host should persist config.clientId/KIWI_CLIENT_ID.
+  const sessionId = "openclaw";
+  const clientId = config?.clientId || process.env.KIWI_CLIENT_ID || "openclaw-default";
   const service = buildBuyerService({
     dbPath,
     principal,
     buyerAgentId,
-    sessionId: `openclaw-${process.pid}`,
+    sessionId,
+    sessionOwner: resolveSessionOwner({ dbPath, principal, buyerAgentId, sessionId, clientId }),
     policy: { ...DEFAULT_DELEGATION_POLICY, principal },
     catalogUrl,
     ...(config?.a2aSkipDnsCheck === true ? { a2aSkipDnsCheck: true } : {}),

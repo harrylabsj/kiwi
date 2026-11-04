@@ -60,8 +60,8 @@ describe("buyer task session ownership", () => {
     dirs.push(dir);
     const store = new TaskApprovalStore({ dbPath: path.join(dir, "buyer.sqlite") });
     const tokenDir = path.join(dir, "tokens");
-    const aOwner = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "client-a", tokenDir });
-    const bOwner = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "client-b", tokenDir });
+    const aOwner = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "client-a", clientId: "client-a", tokenDir });
+    const bOwner = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "client-b", clientId: "client-b", tokenDir });
     expect(aOwner).not.toBe(bOwner);
     store.createTask({
       task_id: "task-notoken", task_kind: "request_quotes", status: "succeeded",
@@ -100,12 +100,20 @@ describe("buyer task session ownership", () => {
     expect(() => b.getAgreement("agreement-write")).toThrow(/not found/);
   });
 
+  it("same default clients without a host client identity do not share an owner", () => {
+    const one = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default" });
+    const two = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default" });
+    expect(one).not.toBe(two);
+    expect(one.startsWith("ephemeral:")).toBe(true);
+    expect(two.startsWith("ephemeral:")).toBe(true);
+  });
+
   it("no-token auto credential reconnects the same client and isolates another label", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-auto-"));
     dirs.push(dir);
-    const one = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same", tokenDir: dir });
-    const again = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same", tokenDir: dir });
-    const other = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "other", tokenDir: dir });
+    const one = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same", clientId: "client-a", tokenDir: dir });
+    const again = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same", clientId: "client-a", tokenDir: dir });
+    const other = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same", clientId: "client-b", tokenDir: dir });
     expect(one).toBe(again);
     expect(one).not.toBe(other);
     expect(one.startsWith("ephemeral:")).toBe(false);

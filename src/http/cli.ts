@@ -86,6 +86,7 @@ export async function runHttpServe(args: string[]): Promise<number> {
     sessionOwner: resolveSessionOwner({
       dbPath,
       principal,
+      clientId: process.env.KIWI_CLIENT_ID,
       buyerAgentId: opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-http",
       sessionId,
       ...(process.env.KIWI_SESSION_TOKEN !== undefined
