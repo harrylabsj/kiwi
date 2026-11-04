@@ -85,9 +85,10 @@ describe("explicit SKU quote guard", () => {
       intent: intent("10223889834191"),
       merchant_ids: ["merchant-1"],
     });
-    const candidate = result.task.candidates?.[0] as
-      | { status?: string; failure?: { detail?: string } }
+    const candidates = result.task.candidates as
+      | Array<{ status?: string; failure?: { detail?: string } }>
       | undefined;
+    const candidate = candidates?.[0];
     expect(candidate?.status).toBe("failed");
     expect(candidate?.failure?.detail).toContain("SKU");
   });
@@ -124,8 +125,86 @@ describe("explicit SKU quote guard", () => {
       intent: intent("10223889834191"),
       merchant_ids: ["merchant-1"],
     });
-    const candidate = result.task.candidates?.[0] as { status?: string } | undefined;
+    const candidates = result.task.candidates as Array<{ status?: string }> | undefined;
+    const candidate = candidates?.[0];
     expect(candidate?.status).toBe("failed");
+  });
+
+  it("rejects a mismatched quote on the recovery path as well", async () => {
+    const store = new TaskApprovalStore({ dbPath: ":memory:" });
+    const service = new KiwiBuyerService({
+      store,
+      principal: "buyer:test",
+      buyerAgentId: "buyer:test",
+      sessionId: "explicit-sku-recovery",
+      delegationPolicy: policy,
+      quoteFetcher: {
+        async requestQuotes() {
+          return [
+            {
+              merchant_id: "merchant-1",
+              status: "failed",
+              failure: {
+                classification: "protocol_error",
+                retryable: false,
+                detail: "remote result unknown",
+              },
+            },
+          ];
+        },
+        async recoverQuotes() {
+          return [
+            {
+              merchant_id: "merchant-1",
+              status: "succeeded",
+              terms: {
+                currency: "CNY",
+                items: [
+                  {
+                    sku: "10225485016481",
+                    quantity_value: 2,
+                    quantity_unit: "盒",
+                    unit_price_minor: 7000,
+                  },
+                ],
+                total_price_minor: 14000,
+              },
+            },
+          ];
+        },
+      },
+      now: () => "2026-11-04T02:30:00.000Z",
+    });
+    const input = {
+      intent: intent("10223889834191"),
+      merchant_ids: ["merchant-1"],
+      idempotency_key: "explicit-sku-recovery-key",
+    };
+    const first = await service.requestQuotes(input);
+    expect(first.created).toBe(true);
+    const recovered = await service.requestQuotes(input);
+    const candidates = recovered.task.candidates as
+      | Array<{ status?: string; terms?: unknown; failure?: { detail?: string } }>
+      | undefined;
+    expect(candidates?.[0]?.status).toBe("failed");
+    expect(candidates?.[0]?.terms).toBeUndefined();
+  });
+
+  it("multi-item intent retains the existing first-item A2A boundary", async () => {
+    const result = await serviceFor("10223889834191").requestQuotes({
+      intent: {
+        ...intent("10223889834191"),
+        items: [
+          { query: "测试商品", sku: "10223889834191", quantity: { value: 2, unit: "盒" } },
+          { query: "第二件", sku: "second-sku", quantity: { value: 1, unit: "盒" } },
+        ],
+      },
+      merchant_ids: ["merchant-1"],
+    });
+    const candidates = result.task.candidates as Array<{ status?: string }> | undefined;
+    // A2A/KNP currently sends and admits one requested line; the first item's
+    // SKU remains the binding boundary and existing behavior is unchanged.
+    expect(candidates?.[0]?.status).toBe("succeeded");
   });
 
   it("keeps fuzzy intent behavior: merchant may choose the SKU when buyer supplied none", async () => {
@@ -133,7 +212,8 @@ describe("explicit SKU quote guard", () => {
       intent: intent(),
       merchant_ids: ["merchant-1"],
     });
-    const candidate = result.task.candidates?.[0] as { status?: string } | undefined;
+    const candidates = result.task.candidates as Array<{ status?: string }> | undefined;
+    const candidate = candidates?.[0];
     expect(candidate?.status).toBe("succeeded");
   });
 });

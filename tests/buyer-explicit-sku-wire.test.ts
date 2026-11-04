@@ -27,6 +27,7 @@ describe("explicit SKU A2A wire guard", () => {
     const dir = temp();
     const now = new Date().toISOString();
     const sentSkus: string[] = [];
+    let returnMismatch = true;
     const stack = await startTestA2aStack({
       now: () => now,
       handler: {
@@ -42,7 +43,8 @@ describe("explicit SKU A2A wire guard", () => {
           }).envelope;
           const requestedSku = request.payload?.items?.[0]?.sku ?? "";
           sentSkus.push(requestedSku);
-          const offeredSku = requestedSku === "requested-sku" ? "other-sku" : requestedSku;
+          const offeredSku =
+            returnMismatch && requestedSku === "requested-sku" ? "other-sku" : requestedSku;
           const offer = finalizeEnvelope({
             capability: request.capability,
             protocol_version: "1.0",
@@ -87,6 +89,9 @@ describe("explicit SKU A2A wire guard", () => {
         verified: true,
         capabilities: [],
         agent_card_url: `${stack.merchantUrl}/.well-known/agent-card.json`,
+        // The target SKU is present, but another SKU is first. Explicit
+        // requests must still use the target; fuzzy requests may use first.
+        matching_skus: ["other-sku", "requested-sku"],
       };
       const options = {
         allowPrivateRanges: true,
@@ -115,6 +120,20 @@ describe("explicit SKU A2A wire guard", () => {
       expect(explicit[0]?.failure?.detail).toBe("sku_mismatch");
       expect(sentSkus[0]).toBe("requested-sku");
 
+      returnMismatch = false;
+      const exact = await new A2AQuoteFetcher(options).requestQuotes(
+        { ...explicitIntent, intent_id: "wire-exact" },
+        [merchant],
+        {
+          ...context,
+          taskId: "wire-task-exact",
+          intentBindingDigest: contentDigest({ ...explicitIntent, intent_id: "wire-exact" }),
+        },
+      );
+      expect(exact[0]?.status).toBe("succeeded");
+      expect(sentSkus[1]).toBe("requested-sku");
+      expect(exact[0]?.terms?.items?.[0]?.sku).toBe("requested-sku");
+
       const fuzzyIntent = {
         intent_id: "wire-fuzzy",
         intent_type: "inquiry",
@@ -126,8 +145,8 @@ describe("explicit SKU A2A wire guard", () => {
         { ...context, taskId: "wire-task-fuzzy", intentBindingDigest: contentDigest(fuzzyIntent) },
       );
       expect(fuzzy[0]?.status).toBe("succeeded");
-      expect(sentSkus[1]).toBe("测试商品");
-      expect(fuzzy[0]?.terms?.items?.[0]?.sku).toBe(sentSkus[1]);
+      expect(sentSkus[2]).toBe("other-sku");
+      expect(fuzzy[0]?.terms?.items?.[0]?.sku).toBe("other-sku");
     } finally {
       await stack.stop();
     }
