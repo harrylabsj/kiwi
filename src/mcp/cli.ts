@@ -43,6 +43,7 @@ import path from "node:path";
 import { assertNorthboundContractValid } from "../contracts/northbound-schema.js";
 import { buildBuyerService } from "../buyer-core/build-service.js";
 import { McpServer } from "./server.js";
+import { resolveSessionOwner } from "./session-owner.js";
 import { buildKiwiTools } from "./tools.js";
 
 export const KIWI_MCP_VERSION = "0.1.0";
@@ -76,6 +77,8 @@ export interface McpServeOptions {
   principal?: string;
   buyerAgentId?: string;
   sessionId?: string;
+  /** Optional managed-host secret; otherwise a local 0600 key is used. */
+  sessionToken?: string;
   policy?: Record<string, unknown>;
   catalogUrl?: string;
   marketplaceUrl?: string;
@@ -119,6 +122,7 @@ export async function runMcpServe(args: string[]): Promise<number> {
     else if (flag === "--principal") opts.principal = value;
     else if (flag === "--agent") opts.buyerAgentId = value;
     else if (flag === "--session") opts.sessionId = value;
+    else if (flag === "--session-token") opts.sessionToken = value;
     else if (flag === "--catalog-url") opts.catalogUrl = value;
     else if (flag === "--marketplace-url") opts.marketplaceUrl = value;
     else if (flag === "--buyer-bootstrap-token") opts.buyerBootstrapToken = value;
@@ -140,17 +144,25 @@ export async function runMcpServe(args: string[]): Promise<number> {
   const principal = opts.principal ?? process.env.KIWI_PRINCIPAL ?? "principal:local";
   const buyerAgentId = opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-mcp";
   const sessionId = opts.sessionId ?? process.env.KIWI_SESSION ?? `session-${process.pid}`;
+  const dbPath =
+    opts.db ?? process.env.KIWI_MCP_DB ?? path.join(homedir(), ".kiwi", "mcp", "dsh.sqlite");
+  const sessionOwner = resolveSessionOwner({
+    dbPath,
+    principal,
+    buyerAgentId,
+    sessionId,
+    sessionToken: opts.sessionToken ?? process.env.KIWI_SESSION_TOKEN,
+  });
   const policy = readPolicy(opts, principal);
   // 持久 store 默认路径：--db → KIWI_MCP_DB env → ~/.kiwi/mcp/dsh.sqlite（HOME 基准，
   // 稳定可跨宿主；dsh/Hermes 等 host 不传 --db 时也能落一致位置，不再依赖 cwd）。
-  const dbPath =
-    opts.db ?? process.env.KIWI_MCP_DB ?? path.join(homedir(), ".kiwi", "mcp", "dsh.sqlite");
   // 单核心多包装：MCP 与 HTTP 共用同一 buildBuyerService（§6.3）。
   const service = buildBuyerService({
     dbPath,
     principal,
     buyerAgentId,
     sessionId,
+    sessionOwner,
     policy,
     catalogUrl: opts.catalogUrl ?? DEFAULT_CATALOG_URL,
     marketplaceUrl: opts.marketplaceUrl,

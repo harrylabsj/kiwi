@@ -50,6 +50,8 @@ export interface StoredTask {
   updated_at: string;
   expires_at?: string;
   resumable: boolean;
+  /** Opaque owning-session hash; legacy rows use empty string until adopted. */
+  owner_hash?: string;
   /** 完整 task 记录（持久 Task 契约的权威 JSON）。 */
   payload: string;
 }
@@ -132,6 +134,7 @@ export class TaskApprovalStore {
         updated_at         TEXT NOT NULL,
         expires_at         TEXT,
         resumable          INTEGER NOT NULL DEFAULT 0,
+        owner_hash         TEXT NOT NULL DEFAULT '',
         payload            TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS mcp_candidates (
@@ -190,6 +193,10 @@ export class TaskApprovalStore {
     if (!cols.some((c) => c.name === "intent_digest")) {
       this.db.exec("ALTER TABLE mcp_approvals ADD COLUMN intent_digest TEXT");
     }
+    const taskCols = this.db.prepare("PRAGMA table_info(mcp_tasks)").all() as Array<{ name: string }>;
+    if (!taskCols.some((c) => c.name === "owner_hash")) {
+      this.db.exec("ALTER TABLE mcp_tasks ADD COLUMN owner_hash TEXT NOT NULL DEFAULT ''");
+    }
   }
 
   /** 写入 handoff 意图（同摘要不可重复；重复写视为调用方错误）。 */
@@ -208,14 +215,16 @@ export class TaskApprovalStore {
       );
   }
 
-  getHandoffIntent(intentDigest: string): StoredHandoffIntent | undefined {
+  getHandoffIntent(intentDigest: string, ownerHash?: string): StoredHandoffIntent | undefined {
     const row = this.db
       .prepare(
-        `SELECT intent_digest, intent_id, intent_version, task_id, agreement_id, destination_type, url,
-                agreement_sha256, terms_digest, policy_id, policy_digest, issued_at, expires_at
-           FROM mcp_handoff_intents WHERE intent_digest = ?`,
+        `SELECT h.intent_digest, h.intent_id, h.intent_version, h.task_id, h.agreement_id,
+                h.destination_type, h.url, h.agreement_sha256, h.terms_digest,
+                h.policy_id, h.policy_digest, h.issued_at, h.expires_at
+           FROM mcp_handoff_intents h JOIN mcp_tasks t ON t.task_id = h.task_id
+          WHERE h.intent_digest = ? AND (? IS NULL OR t.owner_hash = ?)`,
       )
-      .get(intentDigest) as Record<string, unknown> | undefined;
+      .get(intentDigest, ownerHash ?? null, ownerHash ?? null) as Record<string, unknown> | undefined;
     if (row === undefined) return undefined;
     return {
       intent_id: row.intent_id as string,
@@ -248,8 +257,8 @@ export class TaskApprovalStore {
       .prepare(
         `INSERT INTO mcp_tasks
            (task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id,
-            created_at, updated_at, expires_at, resumable, payload)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            created_at, updated_at, expires_at, resumable, owner_hash, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(idempotency_key) DO NOTHING`,
       )
       .run(
@@ -263,6 +272,7 @@ export class TaskApprovalStore {
         task.updated_at,
         task.expires_at ?? null,
         task.resumable ? 1 : 0,
+        task.owner_hash ?? "",
         task.payload,
       );
     if (result.changes === 0) {
@@ -275,12 +285,20 @@ export class TaskApprovalStore {
     return { task, created: true };
   }
 
-  getTask(taskId: string): StoredTask | undefined {
+  /** Explicit, one-time migration of pre-owner tasks in a local database. */
+  adoptLegacyTasks(ownerHash: string): number {
+    const info = this.db
+      .prepare("UPDATE mcp_tasks SET owner_hash = ? WHERE owner_hash = ''")
+      .run(ownerHash);
+    return Number(info.changes);
+  }
+
+  getTask(taskId: string, ownerHash?: string): StoredTask | undefined {
     const row = this.db
       .prepare(
-        "SELECT task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id, created_at, updated_at, expires_at, resumable, payload FROM mcp_tasks WHERE task_id = ?",
+        "SELECT task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id, created_at, updated_at, expires_at, resumable, owner_hash, payload FROM mcp_tasks WHERE task_id = ? AND (? IS NULL OR owner_hash = ?)",
       )
-      .get(taskId) as
+      .get(taskId, ownerHash ?? null, ownerHash ?? null) as
       | {
           task_id: string;
           task_kind: string;
@@ -292,6 +310,7 @@ export class TaskApprovalStore {
           updated_at: string;
           expires_at: string | null;
           resumable: number;
+          owner_hash: string;
           payload: string;
         }
       | undefined;
@@ -307,6 +326,7 @@ export class TaskApprovalStore {
       updated_at: row.updated_at,
       expires_at: row.expires_at ?? undefined,
       resumable: row.resumable === 1,
+      owner_hash: row.owner_hash,
       payload: row.payload,
     };
   }
@@ -540,12 +560,12 @@ export class TaskApprovalStore {
     }
   }
 
-  getApproval(approvalId: string): StoredApproval | undefined {
+  getApproval(approvalId: string, ownerHash?: string): StoredApproval | undefined {
     const row = this.db
       .prepare(
-        "SELECT approval_id, task_id, action, status, candidate_digest, expires_at, decided_at, authorization_json, intent_digest FROM mcp_approvals WHERE approval_id = ?",
+        "SELECT a.approval_id, a.task_id, a.action, a.status, a.candidate_digest, a.expires_at, a.decided_at, a.authorization_json, a.intent_digest FROM mcp_approvals a JOIN mcp_tasks t ON t.task_id=a.task_id WHERE a.approval_id = ? AND (? IS NULL OR t.owner_hash = ?)",
       )
-      .get(approvalId) as Record<string, unknown> | undefined;
+      .get(approvalId, ownerHash ?? null, ownerHash ?? null) as Record<string, unknown> | undefined;
     if (row === undefined) return undefined;
     return {
       approval_id: row.approval_id as string,
@@ -560,12 +580,12 @@ export class TaskApprovalStore {
     };
   }
 
-  listApprovalsByTask(taskId: string): StoredApproval[] {
+  listApprovalsByTask(taskId: string, ownerHash?: string): StoredApproval[] {
     const rows = this.db
       .prepare(
-        "SELECT approval_id, task_id, action, status, candidate_digest, expires_at, decided_at, authorization_json, intent_digest FROM mcp_approvals WHERE task_id = ?",
+        "SELECT a.approval_id, a.task_id, a.action, a.status, a.candidate_digest, a.expires_at, a.decided_at, a.authorization_json, a.intent_digest FROM mcp_approvals a JOIN mcp_tasks t ON t.task_id=a.task_id WHERE a.task_id = ? AND (? IS NULL OR t.owner_hash = ?)",
       )
-      .all(taskId) as Array<Record<string, unknown>>;
+      .all(taskId, ownerHash ?? null, ownerHash ?? null) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       approval_id: row.approval_id as string,
       task_id: row.task_id as string,
@@ -622,12 +642,12 @@ export class TaskApprovalStore {
     this.db.prepare("DELETE FROM mcp_agreements WHERE agreement_id = ?").run(agreementId);
   }
 
-  getAgreement(agreementId: string): StoredAgreement | undefined {
+  getAgreement(agreementId: string, ownerHash?: string): StoredAgreement | undefined {
     const row = this.db
       .prepare(
-        "SELECT agreement_id, task_id, negotiation_id, terms_digest, created_at, expires_at, payload FROM mcp_agreements WHERE agreement_id = ?",
+        "SELECT a.agreement_id, a.task_id, a.negotiation_id, a.terms_digest, a.created_at, a.expires_at, a.payload FROM mcp_agreements a JOIN mcp_tasks t ON t.task_id=a.task_id WHERE a.agreement_id = ? AND (? IS NULL OR t.owner_hash = ?)",
       )
-      .get(agreementId) as Record<string, unknown> | undefined;
+      .get(agreementId, ownerHash ?? null, ownerHash ?? null) as Record<string, unknown> | undefined;
     if (row === undefined) return undefined;
     return {
       agreement_id: row.agreement_id as string,

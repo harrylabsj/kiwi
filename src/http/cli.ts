@@ -26,6 +26,7 @@ import path from "node:path";
 
 import { DEFAULT_CATALOG_URL, DEFAULT_DELEGATION_POLICY, type McpServeOptions } from "../mcp/cli.js";
 import { buildBuyerService } from "../buyer-core/build-service.js";
+import { resolveSessionOwner } from "../mcp/session-owner.js";
 import { MerchantOpsService } from "../merchant/ops.js";
 import { createBuyerHttpServer } from "./server.js";
 
@@ -76,11 +77,19 @@ export async function runHttpServe(args: string[]): Promise<number> {
   const principal = opts.principal ?? process.env.KIWI_PRINCIPAL ?? "principal:local";
   const policy = opts.policy ?? { ...DEFAULT_DELEGATION_POLICY, principal };
   const dbPath = opts.db ?? path.join(".kiwi", "mcp", "state.sqlite");
+  const sessionId = opts.sessionId ?? process.env.KIWI_SESSION ?? `session-${process.pid}`;
   const service = buildBuyerService({
     dbPath,
     principal,
     buyerAgentId: opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-http",
-    sessionId: opts.sessionId ?? process.env.KIWI_SESSION ?? `session-${process.pid}`,
+    sessionId,
+    sessionOwner: resolveSessionOwner({
+      dbPath,
+      principal,
+      buyerAgentId: opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-http",
+      sessionId,
+      sessionToken: process.env.KIWI_SESSION_TOKEN,
+    }),
     policy,
     catalogUrl: opts.catalogUrl ?? DEFAULT_CATALOG_URL,
     marketplaceUrl: opts.marketplaceUrl,

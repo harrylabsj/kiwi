@@ -31,6 +31,7 @@
  */
 
 import { contentDigest, sha256Hex } from "../negotiation/jcs.js";
+import { fallbackSessionOwner } from "../mcp/session-owner.js";
 import { isDestinationType, isSessionDestinationType, isUrlDestinationType, type DestinationType } from "../handoff/destination.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
 
@@ -286,6 +287,8 @@ export interface KiwiBuyerServiceOptions {
   principal: string;
   buyerAgentId: string;
   sessionId: string;
+  /** HMAC-derived opaque owner for this local buyer session. */
+  sessionOwner?: string;
   /** 冻结的 DelegationPolicy（已通过 schema 校验）。 */
   delegationPolicy: Record<string, unknown>;
   merchantIndex?: MerchantIndex;
@@ -293,6 +296,12 @@ export interface KiwiBuyerServiceOptions {
   negotiator?: Negotiator;
   /** 买家关注 seam（M4）；缺省时关注工具返回可解释登录引导。 */
   followsClient?: BuyerFollowsClient;
+  /**
+   * 可选：对 stale 的 WorkBuddy 商家做一次按需唤醒探测。
+   * 探测只负责发公开 GET；是否恢复在线仍由 catalog 里的商家心跳决定。
+   */
+  staleWake?: (merchant: MerchantRecord) => Promise<boolean>;
+  staleWakeTimeoutMs?: number;
   now?: () => string;
 }
 
@@ -443,6 +452,7 @@ export class KiwiBuyerService {
   private readonly principal: string;
   private readonly buyerAgentId: string;
   private readonly sessionId: string;
+  private readonly ownerHash: string;
   private readonly policySnapshot: DelegationPolicyLike;
   private readonly policyDigest: string;
   /** 兼容既有内部读取点：一律指向已冻结快照，不再暴露可变原对象。 */
@@ -453,6 +463,10 @@ export class KiwiBuyerService {
   private readonly quoteFetcher?: QuoteFetcher;
   private readonly negotiator?: Negotiator;
   private readonly followsClient?: BuyerFollowsClient;
+  private readonly staleWake?: (merchant: MerchantRecord) => Promise<boolean>;
+  private readonly staleWakeTimeoutMs: number;
+  private readonly wakeAttemptAt = new Map<string, number>();
+  private readonly wakeInFlight = new Map<string, Promise<boolean>>();
   private readonly now: () => string;
 
   constructor(options: KiwiBuyerServiceOptions) {
@@ -460,6 +474,12 @@ export class KiwiBuyerService {
     this.principal = options.principal;
     this.buyerAgentId = options.buyerAgentId;
     this.sessionId = options.sessionId;
+    this.ownerHash = options.sessionOwner ?? fallbackSessionOwner(
+      options.principal, options.buyerAgentId, options.sessionId,
+    );
+    // One-time legacy migration: only unowned rows are adopted by the first
+    // service that opens the local store. Already-owned rows are never changed.
+    this.store.adoptLegacyTasks(this.ownerHash);
     const clock = options.now ?? utcNow;
     this.now = () => new Date(Date.parse(clock())).toISOString();
     // A 卡：授权与摘要必须使用同一份 deep-clone/deep-freeze 的 plain-JSON 快照，
@@ -472,6 +492,94 @@ export class KiwiBuyerService {
     this.quoteFetcher = options.quoteFetcher;
     this.negotiator = options.negotiator;
     this.followsClient = options.followsClient;
+    this.staleWake = options.staleWake;
+    this.staleWakeTimeoutMs = options.staleWakeTimeoutMs ?? 5000;
+  }
+
+  /**
+   * Per-merchant singleflight + 60s cooldown. The probe never updates catalog
+   * state; only a subsequent catalog read showing a merchant heartbeat may
+   * allow the quote.
+   */
+  private taskFor(taskId: string): StoredTask | undefined {
+    return this.store.getTask(taskId, this.ownerHash);
+  }
+
+  private approvalFor(approvalId: string): StoredApproval | undefined {
+    return this.store.getApproval(approvalId, this.ownerHash);
+  }
+
+  private agreementFor(agreementId: string): StoredAgreement | undefined {
+    return this.store.getAgreement(agreementId, this.ownerHash);
+  }
+
+  private handoffFor(intentDigest: string): StoredHandoffIntent | undefined {
+    return this.store.getHandoffIntent(intentDigest, this.ownerHash);
+  }
+
+  private approvalsForTask(taskId: string): StoredApproval[] {
+    return this.store.listApprovalsByTask(taskId, this.ownerHash);
+  }
+
+  private async tryStaleWake(record: MerchantRecord): Promise<boolean> {
+    if (this.staleWake === undefined || record.agent_card_url === undefined) return false;
+    const id = record.merchant_id;
+    const existing = this.wakeInFlight.get(id);
+    if (existing !== undefined) return existing;
+    const nowMs = Date.parse(this.now());
+    const last = this.wakeAttemptAt.get(id);
+    if (last !== undefined && Number.isFinite(nowMs) && nowMs - last < 60_000) return false;
+    this.wakeAttemptAt.set(id, nowMs);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const work = (async (): Promise<boolean> => {
+      try {
+        const timeout = new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), this.staleWakeTimeoutMs);
+        });
+        const result = await Promise.race([
+          this.staleWake!(record).then((value) => value === true).catch(() => false),
+          timeout,
+        ]);
+        return result;
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    })();
+    this.wakeInFlight.set(id, work);
+    try {
+      return await work;
+    } finally {
+      this.wakeInFlight.delete(id);
+    }
+  }
+
+  /**
+   * Wake at most three stale WorkBuddy merchants per search, concurrently.
+   * The catalog is re-read per merchant so only a real heartbeat can make the
+   * returned projection fresh; the probe itself never mutates status.
+   */
+  private async refreshStaleMerchants(merchants: MerchantRecord[]): Promise<MerchantRecord[]> {
+    const index = this.merchantIndex;
+    if (index === undefined || this.staleWake === undefined) return merchants;
+    const stale = merchants
+      .map((merchant, indexInList) => ({ merchant, indexInList }))
+      .filter(({ merchant }) => !agentIsFresh(merchant) && merchant.agent_card_url !== undefined)
+      .slice(0, 3);
+    if (stale.length === 0) return merchants;
+    const refreshed = await Promise.all(
+      stale.map(async ({ merchant, indexInList }) => {
+        const sent = await this.tryStaleWake(merchant);
+        if (!sent) return undefined;
+        const fresh = await index.resolveById(merchant.merchant_id).catch(() => undefined);
+        return fresh !== undefined && agentIsFresh(fresh)
+          ? { indexInList, merchant: fresh }
+          : undefined;
+      }),
+    );
+    if (refreshed.every((entry) => entry === undefined)) return merchants;
+    const next = [...merchants];
+    for (const entry of refreshed) if (entry !== undefined) next[entry.indexInList] = entry.merchant;
+    return next;
   }
 
   // ---- Northbound：kiwi_search ----------------------------------------------
@@ -503,7 +611,7 @@ export class KiwiBuyerService {
         });
         // 单侧降级/离线说明如实标注；不静默、不补全。
         return {
-          merchants,
+          merchants: await this.refreshStaleMerchants(merchants),
           ...(diagnostics.notes.length > 0 ? { note: diagnostics.notes.join("；") } : {}),
           network_search: diagnostics,
         };
@@ -520,7 +628,7 @@ export class KiwiBuyerService {
         notes,
       });
       return {
-        merchants,
+        merchants: await this.refreshStaleMerchants(merchants),
         ...(notes.length > 0 ? { note: notes.join("；") } : {}),
         network_search: diagnostics,
       };
@@ -646,6 +754,7 @@ export class KiwiBuyerService {
 
     const task: StoredTask = {
       task_id: taskId,
+      owner_hash: this.ownerHash,
       task_kind: "request_quotes",
       status: "in_progress",
       idempotency_key: idempotencyKey,
@@ -840,7 +949,7 @@ export class KiwiBuyerService {
   // ---- Northbound：kiwi_get_task --------------------------------------------
 
   getTask(taskId: string): { task: Record<string, unknown> } {
-    const task = this.store.getTask(taskId);
+    const task = this.taskFor(taskId);
     if (task === undefined) throw new McpError("task_not_found", `task ${taskId} not found`);
     if (task.expires_at !== undefined && Date.parse(task.expires_at) < Date.parse(this.now())) {
       throw new McpError("task_expired", `task ${taskId} expired at ${task.expires_at}`);
@@ -877,7 +986,7 @@ export class KiwiBuyerService {
     ) {
       throw new McpError("invalid_params", "target_unit_price.amount_minor 必须是正整数（最小货币单位）");
     }
-    const task = this.store.getTask(input.task_id);
+    const task = this.taskFor(input.task_id);
     if (task === undefined) throw new McpError("task_not_found", `task ${input.task_id} not found`);
     if (task.expires_at !== undefined && Date.parse(task.expires_at) < Date.parse(this.now())) {
       throw new McpError("task_expired", `task ${input.task_id} expired`);
@@ -1010,7 +1119,7 @@ export class KiwiBuyerService {
     agreement: Record<string, unknown>;
     authorization: AuthorizationRecord;
   }> {
-    const task = this.store.getTask(input.task_id);
+    const task = this.taskFor(input.task_id);
     if (task === undefined) throw new McpError("task_not_found", `task ${input.task_id} not found`);
     if (task.expires_at !== undefined && Date.parse(task.expires_at) < Date.parse(this.now())) {
       throw new McpError("task_expired", `task ${input.task_id} expired`);
@@ -1088,12 +1197,12 @@ export class KiwiBuyerService {
     // 无事后补偿、不烧毁有效批准——同绑定重试重新进入本事务）。node:sqlite
     // 同步执行 + BEGIN IMMEDIATE 写锁，进程内/跨连接均互斥。
     return this.store.transaction(() => {
-      const freshTask = this.store.getTask(input.task_id);
+      const freshTask = this.taskFor(input.task_id);
       if (freshTask === undefined) {
         throw new McpError("task_not_found", `task ${input.task_id} not found`);
       }
       if (input.approval_id !== undefined) {
-        const fresh = this.store.getApproval(input.approval_id);
+        const fresh = this.approvalFor(input.approval_id);
         if (fresh === undefined) {
           throw new McpError("approval_required", `approval ${input.approval_id} 不存在`, {
             approval_id: input.approval_id,
@@ -1169,7 +1278,7 @@ export class KiwiBuyerService {
             // 同逻辑重放：返回库里既有的同一 agreement（非虚构结果）。
             const existing =
               consumed.ref.startsWith("agreement-")
-                ? this.store.getAgreement(consumed.ref)
+                ? this.agreementFor(consumed.ref)
                 : undefined;
             if (existing === undefined) {
               throw new McpError(
@@ -1178,7 +1287,7 @@ export class KiwiBuyerService {
               );
             }
             return {
-              task: this.decodeTask(this.store.getTask(input.task_id)!),
+              task: this.decodeTask(this.taskFor(input.task_id)!),
               agreement: JSON.parse(existing.payload) as Record<string, unknown>,
               authorization,
             };
@@ -1266,7 +1375,7 @@ export class KiwiBuyerService {
         }),
       }, freshTask);
       if (input.approval_id !== undefined) {
-        const approval = this.store.getApproval(input.approval_id);
+        const approval = this.approvalFor(input.approval_id);
         if (approval !== undefined) {
           this.store.setApproval(approval.task_id, {
             ...approval,
@@ -1284,7 +1393,7 @@ export class KiwiBuyerService {
   // ---- Northbound：kiwi_get_agreement ---------------------------------------
 
   getAgreement(agreementId: string): { agreement: Record<string, unknown> } {
-    const stored = this.store.getAgreement(agreementId);
+    const stored = this.agreementFor(agreementId);
     if (stored === undefined) {
       throw new McpError("agreement_not_found", `agreement ${agreementId} not found`);
     }
@@ -1303,7 +1412,7 @@ export class KiwiBuyerService {
     handoff_ref: { handoff_id: string; destination_type: string; url?: string };
     authorization: AuthorizationRecord;
   }> {
-    const stored = this.store.getAgreement(input.agreement_id);
+    const stored = this.agreementFor(input.agreement_id);
     if (stored === undefined) {
       throw new McpError("agreement_not_found", `agreement ${input.agreement_id} not found`);
     }
@@ -1354,17 +1463,17 @@ export class KiwiBuyerService {
     // 消费；同绑定重放返回**库里记录的同一 ref**（非虚构）；失败 ROLLBACK
     // 不烧毁审批。
     return this.store.transaction(() => {
-      const approval = this.store.getApproval(input.approval_id as string);
+      const approval = this.approvalFor(input.approval_id as string);
       if (approval === undefined) {
         throw new McpError("invalid_params", `approval ${input.approval_id} 不存在`);
       }
       // A 卡：同事务重读 task/agreement，核验意图（含 agreement 摘要、terms 现值、
       // policy 摘要与全部有效期限）；旧审批（无 intent）在此拒绝。
-      const freshTask = this.store.getTask(approval.task_id);
+      const freshTask = this.taskFor(approval.task_id);
       if (freshTask === undefined) {
         throw new McpError("task_not_found", `task ${approval.task_id} not found`);
       }
-      const freshAgreement = this.store.getAgreement(input.agreement_id);
+      const freshAgreement = this.agreementFor(input.agreement_id);
       if (freshAgreement === undefined) {
         throw new McpError("agreement_not_found", `agreement ${input.agreement_id} not found`);
       }
@@ -1484,7 +1593,7 @@ export class KiwiBuyerService {
   }): string {
     const nowIso = this.now();
     const nowMs = Date.parse(nowIso);
-    const task = this.store.getTask(args.agreement.task_id);
+    const task = this.taskFor(args.agreement.task_id);
     if (task === undefined) throw new McpError("task_not_found", `task ${args.agreement.task_id} not found`);
     // policy 自身期限在 ASK 侧同样独立校验（同一 now 样本）。
     this.assertPolicyActive(nowMs);
@@ -1565,7 +1674,7 @@ export class KiwiBuyerService {
         `approval ${args.approval.approval_id} 缺少 handoff 意图（旧审批），请重新 ASK`,
       );
     }
-    const intent = this.store.getHandoffIntent(args.approval.intent_digest);
+    const intent = this.handoffFor(args.approval.intent_digest);
     if (intent === undefined) {
       throw new McpError("approval_denied", `approval ${args.approval.approval_id} 的意图不存在`);
     }
@@ -1609,7 +1718,7 @@ export class KiwiBuyerService {
     action: "accept_nonbinding" | "handoff" | "sensitive_disclosure";
     candidate_digest?: string;
   }): { approval_id: string } {
-    const task = this.store.getTask(input.task_id);
+    const task = this.taskFor(input.task_id);
     if (task === undefined) throw new McpError("task_not_found", `task ${input.task_id} not found`);
     const approvalId = `approval-${uuidv7()}`;
     const approval: StoredApproval = {
@@ -1626,7 +1735,7 @@ export class KiwiBuyerService {
 
   /** 批准一个 pending 审批（绑定授权记录）。 */
   approveApproval(input: { approval_id: string; authorization: AuthorizationRecord }): void {
-    const stored = this.store.getApproval(input.approval_id);
+    const stored = this.approvalFor(input.approval_id);
     if (stored === undefined) throw new McpError("invalid_params", `approval ${input.approval_id} not found`);
     if (stored.status !== "pending" || this.approvalConsumed(stored) !== undefined) {
       throw new McpError("approval_denied", `approval ${input.approval_id} 状态=${stored.status}，只能批准未消费的 pending 审批`);
@@ -1642,7 +1751,7 @@ export class KiwiBuyerService {
 
   /** 拒绝一个 pending 审批（deny 路径；deny 优先，§5.5）。 */
   rejectApproval(input: { approval_id: string; reason?: string }): void {
-    const stored = this.store.getApproval(input.approval_id);
+    const stored = this.approvalFor(input.approval_id);
     if (stored === undefined) throw new McpError("invalid_params", `approval ${input.approval_id} not found`);
     this.store.setApproval(stored.task_id, {
       ...stored,
@@ -1666,7 +1775,7 @@ export class KiwiBuyerService {
     status: "approved";
     decided_at: string;
   } {
-    const stored = this.store.getApproval(input.approval_id);
+    const stored = this.approvalFor(input.approval_id);
     if (stored === undefined) throw new McpError("invalid_params", `approval ${input.approval_id} not found`);
     if (stored.status !== "pending") {
       throw new McpError(
@@ -1705,7 +1814,7 @@ export class KiwiBuyerService {
     status: "denied";
     decided_at: string;
   } {
-    const stored = this.store.getApproval(input.approval_id);
+    const stored = this.approvalFor(input.approval_id);
     if (stored === undefined) throw new McpError("invalid_params", `approval ${input.approval_id} not found`);
     if (stored.status !== "pending") {
       throw new McpError(
@@ -1746,7 +1855,7 @@ export class KiwiBuyerService {
     } else if (mode === "ask") {
       // ASK：必须有已批准的持久审批；approval 动作必须与请求动作一致。
       const expectedAction = action === "accept_nonbinding" ? "accept_nonbinding" : "handoff";
-      const approval = opts.approvalId !== undefined ? this.store.getApproval(opts.approvalId) : undefined;
+      const approval = opts.approvalId !== undefined ? this.approvalFor(opts.approvalId) : undefined;
       if (opts.approvalId !== undefined && approval === undefined) {
         throw new McpError("approval_required", `approval ${opts.approvalId} 不存在`, {
           approval_id: opts.approvalId,
@@ -2209,7 +2318,7 @@ export class KiwiBuyerService {
       expires_at: task.expires_at,
       resumable: task.resumable,
       candidates: this.northboundCandidates(task.task_id),
-      approval: this.store.listApprovalsByTask(task.task_id)[0],
+      approval: this.approvalsForTask(task.task_id)[0],
     };
   }
 
@@ -2248,6 +2357,13 @@ export class KiwiBuyerService {
       // 与上一门区分：这里商家**开通过**实时询价，只是当前不在线——错误码不同，
       // 处置也不同（稍后重试/联系商家，而不是"从未开通"）。
       if (record !== undefined && !agentIsFresh(record)) {
+        // On-demand cold-start probe for WorkBuddy-hosted merchants. It can
+        // wake the app, but the merchant must send its own signed heartbeat
+        // before this buyer allows a quote: no local flag is trusted.
+        if (await this.tryStaleWake(record)) {
+          const refreshed = await index.resolveById(merchantId).catch(() => undefined);
+          if (refreshed !== undefined && agentIsFresh(refreshed)) continue;
+        }
         throw new McpError(
           "merchant_offline",
           `商家 ${merchantId}（${record.name}）的服务当前不在线（未在有效期内上报心跳），` +
