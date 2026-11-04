@@ -4878,9 +4878,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:459d9d89c39e4e31d2a64663e59782744b408b1685397a14b89c1057a64c13f0",
+      "sha256": "sha256:5aeeca36d8a581e0b0bddbfb3e3edce046f9601a84f3c7fef5c2c203e09e6457",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:c6f2ca6b4b28764032ed55cad6f2f410a93838b0bc193be7e5b3593f97cd506c"
+      "raw_sha256": "sha256:2638604926a33e91f923b340cc7c185cf643e5359bb558794e06e62137433b3e"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -6864,7 +6864,7 @@
     },
     {
       "path": "tests/workbuddy-connector.test.ts",
-      "sha256": "sha256:81e07a4a01f05dcab0010a5e05735de75c65adcc1dbddfb8acaef582540e1bd6"
+      "sha256": "sha256:ad99954050955ab0d295fb7097ef84bf2b0edcc0c13152736538a7803310ded6"
     },
     {
       "path": "tests/workbuddy-dual-address.test.ts",
