@@ -82,7 +82,7 @@ function setup() {
     switches: { ownerEnabled: true, aiRuntimeEnabled: true },
     now: () => now,
   };
-  return { base, budget, observer, fail, repair, dataDir };
+  return { base, budget, observer, fail, repair, dataDir, dbPath };
 }
 function sdkFixture(
   options: { unknown?: boolean; breakJournal?: boolean; settlementFault?: boolean } = {},
@@ -140,9 +140,19 @@ async function accountingFailure(work: Promise<unknown>) {
   }
 }
 function ledger(h: ReturnType<typeof setup>, lease: string) {
-  return h.observer
-    .prepare("SELECT settled, amount, actual FROM ai_budget_lease WHERE lease_id=?")
-    .get(lease) as { settled: number; amount: number; actual: number | null };
+  // Use a short-lived reader and close it. A long-lived observer read
+  // transaction can keep a WAL snapshot/lock alive long enough for the next
+  // budget BEGIN IMMEDIATE (after the test repairs the trigger) to fail with
+  // SQLITE_BUSY under full-suite load. Closing the reader ends that snapshot
+  // without changing production accounting behavior.
+  const reader = new DatabaseSync(h.dbPath);
+  try {
+    return reader
+      .prepare("SELECT settled, amount, actual FROM ai_budget_lease WHERE lease_id=?")
+      .get(lease) as { settled: number; amount: number; actual: number | null };
+  } finally {
+    reader.close();
+  }
 }
 
 describe("owner review: strong legacy grant and independent accounting", () => {
