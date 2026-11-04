@@ -48,7 +48,7 @@
     {
       "id": "kiwi-catalog",
       "name": "Kiwi Catalog",
-      "version": "0.5.14",
+      "version": "0.5.15",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
@@ -135,7 +135,7 @@
     {
       "id": "kiwi-catalog-admin",
       "name": "Private Catalog merchant and operations extension",
-      "version": "0.2.12",
+      "version": "0.2.13",
       "version_source": {
         "type": "external-toml",
         "scope": "private",
@@ -149,8 +149,9 @@
       "bundle_reason": "The source repository is private; its package is tracked by immutable repository and commit references instead of being copied into the public portfolio artifact.",
       "state": "candidate; source commit/tag pending; not frozen or deployed",
       "requires": [
-        "kiwi-catalog >=0.5.1,<0.6,!=0.5.2"
-      ]
+        "kiwi-catalog >=0.5.15,<0.6"
+      ],
+      "source_commit": "8f6fb6ab3255da23ad5325118700beebdd5dde09"
     },
     {
       "id": "workbuddy-procurement-expert",
