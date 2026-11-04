@@ -1,4 +1,4 @@
-import {accessSync,constants,lstatSync,realpathSync,readFileSync,readdirSync} from 'node:fs';
+import {accessSync,constants,lstatSync,mkdirSync,realpathSync,readFileSync,readdirSync} from 'node:fs';
 import {delimiter,dirname,join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {runPreparation} from './stage-runner.mjs';
@@ -7,7 +7,6 @@ import {startVerifiedBackend} from './backend-client.mjs';
 import {startBackendWithPreparedLock} from './locked-backend-session.mjs';
 import {startProductionMcpServer} from './mcp-production-server.mjs';
 import {selectEnvironment} from './environment-policy.mjs';
-import {prepareInstanceData} from './instance-store.mjs';
 
 function findExecutable(name){
   const directories=[dirname(process.execPath),...(process.env.PATH??'').split(delimiter)];
@@ -37,9 +36,20 @@ async function main(){
   if(process.argv.length!==2)throw new Error('ARGUMENT_INVALID');
   supportedRuntime();
   const pluginData=process.env.CODEBUDDY_PLUGIN_DATA;assertHostDataDirectory(pluginData);
-  const instance=prepareInstanceData(pluginData);
-  const packageRoot=dirname(fileURLToPath(import.meta.url)),store=join(instance.root,'kiwi-sourcing-latest');
-  const backendEnvironment={...process.env,KIWI_MCP_DB:instance.dbPath,KIWI_CLIENT_ID:instance.instanceId,KIWI_SESSION_TOKEN_FILE:instance.tokenFile};
+  // Persistent instance identity is NOT enabled: WorkBuddy's contract exposes
+  // only a per-plugin data root, not a buyer-instance identity, so we cannot
+  // prove that two buyer instances do not share this root. Keep the connector
+  // functional with an ephemeral session and no persistent task identity.
+  process.stderr.write('KIWI_LAUNCHER_WARNING:INSTANCE_SCOPE_UNPROVEN\n');
+  const cacheRoot=join(pluginData,'kiwi-runtime-cache-v1');
+  mkdirSync(cacheRoot,{recursive:true,mode:0o700});
+  const cacheStat=lstatSync(cacheRoot);
+  if(!cacheStat.isDirectory()||cacheStat.isSymbolicLink()||(cacheStat.mode&0o777)!==0o700||(typeof process.getuid==='function'&&cacheStat.uid!==process.getuid()))throw new Error('CACHE_DIRECTORY_INVALID');
+  const packageRoot=dirname(fileURLToPath(import.meta.url)),store=join(cacheRoot,'kiwi-sourcing-latest');
+  // Never inherit a parent token/client identity or database path. The backend
+  // must get a fresh ephemeral owner until a trusted instance boundary exists.
+  const backendEnvironment={...process.env};
+  for(const key of ['KIWI_CLIENT_ID','KIWI_SESSION','KIWI_SESSION_TOKEN','KIWI_SESSION_TOKEN_FILE','KIWI_SESSION_TOKEN_DIR','KIWI_MCP_DB'])delete backendEnvironment[key];
   const nodeBinary=process.execPath,npmBinary=findExecutable('npm'),pythonBinary=findExecutable('python3');
   const baselineRaw=JSON.parse(readFileSync(join(packageRoot,'mcp-tools-0.12.12.json'),'utf8'));
   const baseline=Array.isArray(baselineRaw)?baselineRaw:baselineRaw.tools;
