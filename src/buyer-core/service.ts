@@ -31,7 +31,7 @@
  */
 
 import { contentDigest, sha256Hex } from "../negotiation/jcs.js";
-import { fallbackSessionOwner } from "../mcp/session-owner.js";
+import { randomBytes as cryptoRandomBytes } from "node:crypto";
 import { isDestinationType, isSessionDestinationType, isUrlDestinationType, type DestinationType } from "../handoff/destination.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
 
@@ -474,12 +474,9 @@ export class KiwiBuyerService {
     this.principal = options.principal;
     this.buyerAgentId = options.buyerAgentId;
     this.sessionId = options.sessionId;
-    this.ownerHash = options.sessionOwner ?? fallbackSessionOwner(
-      options.principal, options.buyerAgentId, options.sessionId,
-    );
-    // One-time legacy migration: only unowned rows are adopted by the first
-    // service that opens the local store. Already-owned rows are never changed.
-    this.store.adoptLegacyTasks(this.ownerHash);
+    // No token/subscription means a fresh, random, non-recoverable owner.
+    // Never derive this from the caller-controlled session label.
+    this.ownerHash = options.sessionOwner ?? `ephemeral:${cryptoRandomBytes(32).toString("hex")}`;
     const clock = options.now ?? utcNow;
     this.now = () => new Date(Date.parse(clock())).toISOString();
     // A 卡：授权与摘要必须使用同一份 deep-clone/deep-freeze 的 plain-JSON 快照，
@@ -501,6 +498,11 @@ export class KiwiBuyerService {
    * state; only a subsequent catalog read showing a merchant heartbeat may
    * allow the quote.
    */
+  /** Explicit operator migration; never called implicitly on open. */
+  adoptLegacyTasks(): number {
+    return this.store.adoptLegacyTasks(this.ownerHash);
+  }
+
   private taskFor(taskId: string): StoredTask | undefined {
     return this.store.getTask(taskId, this.ownerHash);
   }

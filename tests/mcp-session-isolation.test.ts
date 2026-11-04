@@ -40,6 +40,8 @@ afterEach(() => {
 describe("buyer task session ownership", () => {
   it("same DB, different session cannot read or mutate a task", () => {
     const a = fixture("a", "task-owned");
+    expect(() => a.service.getTask("task-owned")).toThrow(/not found/);
+    expect(a.service.adoptLegacyTasks()).toBe(1);
     expect(a.service.getTask("task-owned").task.task_id).toBe("task-owned");
     const b = new KiwiBuyerService({
       store: a.store, principal: "company:test", buyerAgentId: "buyer:test",
@@ -51,6 +53,29 @@ describe("buyer task session ownership", () => {
     expect(() => b.getTask("task-owned")).toThrow(/not found/);
     return expect(b.negotiate({ task_id: "task-owned", action: "clarification", summary: "test" }))
       .rejects.toMatchObject({ code: "task_not_found" });
+  });
+
+  it("same DB, no token, same caller-chosen label cannot read another task", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-notoken-"));
+    dirs.push(dir);
+    const store = new TaskApprovalStore({ dbPath: path.join(dir, "buyer.sqlite") });
+    const aOwner = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same-label" });
+    const bOwner = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same-label" });
+    expect(aOwner).not.toBe(bOwner);
+    store.createTask({
+      task_id: "task-notoken", task_kind: "request_quotes", status: "succeeded",
+      idempotency_key: "idem-notoken", created_at: "2026-11-01T00:00:00Z",
+      updated_at: "2026-11-01T00:00:00Z", resumable: true, owner_hash: aOwner, payload: "{}",
+    });
+    const b = new KiwiBuyerService({
+      store, principal: "p", buyerAgentId: "a", sessionId: "same-label", sessionOwner: bOwner,
+      delegationPolicy: {
+        policy_id: "p", version: "1.0", principal: "p", expires_at: "2099-12-31T23:59:59Z",
+        actions: { counter_offer: { mode: "auto" } }, limits: { max_rounds: 3 },
+      },
+    });
+    expect(() => b.getTask("task-notoken")).toThrow(/not found/);
+    store.close();
   });
 
   it("different session cannot read approval or agreement rows", () => {
@@ -74,16 +99,25 @@ describe("buyer task session ownership", () => {
     expect(() => b.getAgreement("agreement-write")).toThrow(/not found/);
   });
 
-  it("session owner uses a secret, not the caller-controlled session label", () => {
-    const one = resolveSessionOwner({ dbPath: ":memory:", principal: "p", buyerAgentId: "a", sessionId: "same", sessionToken: "token-one" });
-    const two = resolveSessionOwner({ dbPath: ":memory:", principal: "p", buyerAgentId: "a", sessionId: "same", sessionToken: "token-two" });
-    const again = resolveSessionOwner({ dbPath: ":memory:", principal: "p", buyerAgentId: "a", sessionId: "same", sessionToken: "token-one" });
+  it("same session label without a token is not a shared identity", () => {
+    const one = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same" });
+    const two = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same" });
+    expect(one).not.toBe(two);
+    expect(one.startsWith("ephemeral:")).toBe(true);
+    expect(two.startsWith("ephemeral:")).toBe(true);
+  });
+
+  it("only an explicit token gives a stable reconnectable owner", () => {
+    const one = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same", sessionToken: "token-one" });
+    const two = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same", sessionToken: "token-two" });
+    const again = resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "same", sessionToken: "token-one" });
     expect(one).not.toBe(two);
     expect(one).toBe(again);
   });
 
   it("owner survives store reopen and a different session stays denied", () => {
     const a = fixture("persist-a", "task-persist");
+    a.service.adoptLegacyTasks();
     a.store.close();
     const reopened = new TaskApprovalStore({ dbPath: a.db });
     const same = new KiwiBuyerService({

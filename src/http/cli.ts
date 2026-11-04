@@ -84,11 +84,13 @@ export async function runHttpServe(args: string[]): Promise<number> {
     buyerAgentId: opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-http",
     sessionId,
     sessionOwner: resolveSessionOwner({
-      dbPath,
       principal,
       buyerAgentId: opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-http",
       sessionId,
-      sessionToken: process.env.KIWI_SESSION_TOKEN,
+      ...(process.env.KIWI_SESSION_TOKEN !== undefined
+        ? { sessionToken: process.env.KIWI_SESSION_TOKEN } : {}),
+      ...(process.env.KIWI_SESSION_TOKEN_FILE !== undefined
+        ? { sessionTokenFile: process.env.KIWI_SESSION_TOKEN_FILE } : {}),
     }),
     policy,
     catalogUrl: opts.catalogUrl ?? DEFAULT_CATALOG_URL,

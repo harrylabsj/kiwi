@@ -79,6 +79,8 @@ export interface McpServeOptions {
   sessionId?: string;
   /** Optional managed-host secret; otherwise a local 0600 key is used. */
   sessionToken?: string;
+  sessionTokenFile?: string;
+  adoptLegacy?: boolean;
   policy?: Record<string, unknown>;
   catalogUrl?: string;
   marketplaceUrl?: string;
@@ -123,6 +125,8 @@ export async function runMcpServe(args: string[]): Promise<number> {
     else if (flag === "--agent") opts.buyerAgentId = value;
     else if (flag === "--session") opts.sessionId = value;
     else if (flag === "--session-token") opts.sessionToken = value;
+    else if (flag === "--session-token-file") opts.sessionTokenFile = value;
+    else if (flag === "--adopt-legacy") opts.adoptLegacy = true;
     else if (flag === "--catalog-url") opts.catalogUrl = value;
     else if (flag === "--marketplace-url") opts.marketplaceUrl = value;
     else if (flag === "--buyer-bootstrap-token") opts.buyerBootstrapToken = value;
@@ -146,12 +150,17 @@ export async function runMcpServe(args: string[]): Promise<number> {
   const sessionId = opts.sessionId ?? process.env.KIWI_SESSION ?? `session-${process.pid}`;
   const dbPath =
     opts.db ?? process.env.KIWI_MCP_DB ?? path.join(homedir(), ".kiwi", "mcp", "dsh.sqlite");
+  const explicitToken = opts.sessionToken ?? process.env.KIWI_SESSION_TOKEN;
+  if (opts.adoptLegacy === true && (explicitToken === undefined || explicitToken.trim() === "")) {
+    process.stderr.write("--adopt-legacy requires --session-token or KIWI_SESSION_TOKEN\n");
+    return 2;
+  }
   const sessionOwner = resolveSessionOwner({
-    dbPath,
     principal,
     buyerAgentId,
     sessionId,
-    sessionToken: opts.sessionToken ?? process.env.KIWI_SESSION_TOKEN,
+    ...(explicitToken !== undefined ? { sessionToken: explicitToken } : {}),
+    ...(opts.sessionTokenFile !== undefined ? { sessionTokenFile: opts.sessionTokenFile } : {}),
   });
   const policy = readPolicy(opts, principal);
   // 持久 store 默认路径：--db → KIWI_MCP_DB env → ~/.kiwi/mcp/dsh.sqlite（HOME 基准，
@@ -176,6 +185,10 @@ export async function runMcpServe(args: string[]): Promise<number> {
     // 该公钥的商家把普通询价也变成未验证身份）。
     a2aSigningKeyDir: opts.a2aSigningKeyDir ?? process.env.KIWI_A2A_SIGNING_KEY_DIR,
   });
+  if (opts.adoptLegacy === true) {
+    const adopted = service.adoptLegacyTasks();
+    process.stderr.write(`[kiwi] adopted ${adopted} legacy task(s) into this authenticated session\n`);
+  }
   const tools = buildKiwiTools(service);
   const server = new McpServer({
     tools,

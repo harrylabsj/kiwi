@@ -1,46 +1,41 @@
 /**
- * Per-session ownership key for the local buyer store.
+ * Buyer session ownership.
  *
- * The `--session` string is a label, not a credential: two callers may use the
- * same label. A local 0600 key file supplies the secret used to derive an
- * unguessable task-owner hash; the key is created once per database and is
- * never stored in the database or sent to a merchant. Explicit
- * KIWI_SESSION_TOKEN/--session-token is supported for managed hosts.
+ * A session label is only a display/namespace hint. It is not an
+ * authentication credential. A client must present an independently generated
+ * session token (`--session-token`, `KIWI_SESSION_TOKEN`, or a private token
+ * file); without one the server creates a fresh random owner for this process,
+ * never a shared value derived from a reusable DB key or the session label.
+ *
+ * Reconnect/restart: reuse the exact token. Different clients or labels get
+ * different owners even when they share a database.
  */
-import { createHash, createHmac, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
+import { createHmac, randomBytes } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 
 export interface SessionOwnerInput {
-  dbPath: string;
   principal: string;
   buyerAgentId: string;
   sessionId: string;
   sessionToken?: string;
+  /** Optional path to a client-private token file; not shared with the DB. */
+  sessionTokenFile?: string;
 }
 
 export function resolveSessionOwner(input: SessionOwnerInput): string {
-  const identity = `${input.principal}\u0000${input.buyerAgentId}\u0000${input.sessionId}`;
-  let secret = input.sessionToken?.trim() ?? "";
-  if (secret === "") {
-    if (input.dbPath === ":memory:") {
-      // Tests/embedding without a DB file: deterministic per-process identity.
-      secret = `${process.pid}:${randomBytes(32).toString("hex")}`;
-    } else {
-      const keyPath = path.join(path.dirname(input.dbPath), ".kiwi-session-key");
-      mkdirSync(path.dirname(keyPath), { recursive: true, mode: 0o700 });
-      if (!existsSync(keyPath)) {
-        writeFileSync(keyPath, randomBytes(32).toString("hex"), { mode: 0o600, flag: "wx" });
-        chmodSync(keyPath, 0o600);
-      }
-      secret = readFileSync(keyPath, "utf8").trim();
+  let token = input.sessionToken?.trim() ?? "";
+  if (token === "" && input.sessionTokenFile !== undefined) {
+    if (!existsSync(input.sessionTokenFile)) {
+      throw new Error("session token file does not exist");
     }
+    token = readFileSync(input.sessionTokenFile, "utf8").trim();
   }
-  return createHmac("sha256", secret).update(identity).digest("hex");
-}
-
-export function fallbackSessionOwner(principal: string, buyerAgentId: string, sessionId: string): string {
-  // Embedders that construct KiwiBuyerService directly still get a stable
-  // session-scoped namespace; MCP/HTTP entry points should use resolve.
-  return createHash("sha256").update(`${principal}\u0000${buyerAgentId}\u0000${sessionId}`).digest("hex");
+  if (token === "") {
+    // No credential supplied: generate an independent, non-recoverable owner
+    // for this process. It cannot be reconstructed from the session label or
+    // a shared database directory.
+    return `ephemeral:${randomBytes(32).toString("hex")}`;
+  }
+  const identity = `${input.principal}\u0000${input.buyerAgentId}\u0000${input.sessionId}`;
+  return createHmac("sha256", token).update(identity).digest("hex");
 }
