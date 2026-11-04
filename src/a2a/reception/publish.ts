@@ -8,6 +8,7 @@
  */
 
 import { contentDigest } from "../../negotiation/jcs.js";
+import { canonicalUnitToken } from "../unit-alias.js";
 import type {
   CommercialFactSnapshot,
   FactRef,
@@ -255,16 +256,24 @@ export function publishResponsePlan(input: {
         rejected.push({ block, reason: "unverified_claim" });
         continue;
       }
+      const mainUnit = main.facts.unit;
       const claimed =
         block.reasonCode === "in_stock"
-          ? main.facts.stockAvailable === true
+          ? main.facts.stockAvailable === true && mainUnit !== undefined
           : main.facts.listPrice !== undefined &&
+            main.facts.currency !== undefined &&
+            mainUnit !== undefined &&
             compared.length > 0 &&
-            compared.every(
-              (snapshot) =>
-                snapshot.facts.listPrice !== undefined &&
-                snapshot.facts.listPrice >= (main.facts.listPrice as number),
-            );
+            compared.every((snapshot) => {
+              const facts = snapshot.facts;
+              return (
+                facts.listPrice !== undefined &&
+                facts.currency === main.facts.currency &&
+                facts.unit !== undefined &&
+                canonicalUnitToken(facts.unit) === canonicalUnitToken(mainUnit) &&
+                facts.listPrice > (main.facts.listPrice as number)
+              );
+            });
       if (!claimed) {
         rejected.push({ block, reason: "unverified_claim" });
         continue;

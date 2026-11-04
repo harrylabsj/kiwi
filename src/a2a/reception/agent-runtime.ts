@@ -373,6 +373,8 @@ export function createPiReceptionRuntime(
             additionalProperties: false,
             properties: {
               skus: { type: "array" },
+              quantity: { type: "integer", minimum: 1 },
+              unit: { type: "string" },
             },
             required: ["skus"],
           },
@@ -388,6 +390,17 @@ export function createPiReceptionRuntime(
             if (skus.length === 0 || options.productSource === undefined) {
               return toolResult(JSON.stringify({ products: [] }));
             }
+            const requestedQuantity =
+              isObject(args) &&
+              typeof args.quantity === "number" &&
+              Number.isSafeInteger(args.quantity) &&
+              args.quantity > 0
+                ? args.quantity
+                : undefined;
+            const requestedUnit =
+              isObject(args) && typeof args.unit === "string" && args.unit.trim() !== ""
+                ? args.unit.trim()
+                : undefined;
             const products = [];
             for (const sku of skus) {
               try {
@@ -404,14 +417,38 @@ export function createPiReceptionRuntime(
                   floorMinor !== undefined && Math.round(product.price * 100) < floorMinor
                     ? undefined
                     : product.price;
+                let unit = product.unit;
+                let stockQuantity = requestedQuantity;
+                if (product.unit !== undefined && requestedUnit !== undefined) {
+                  const resolution = resolveUnitConversion(unitPolicy, product.unit, requestedUnit);
+                  if (resolution.kind === "factor") {
+                    stockQuantity =
+                      requestedQuantity === undefined
+                        ? undefined
+                        : multiplyQuantitySafe(requestedQuantity, resolution.factor);
+                    unit = product.unit;
+                  } else if (resolution.kind === "identity" || resolution.kind === "alias") {
+                    unit = product.unit;
+                  } else {
+                    products.push({ sku, error: "unit_mismatch", supported_unit: product.unit });
+                    continue;
+                  }
+                }
+                const stockAvailable =
+                  product.stock !== undefined &&
+                  product.unit !== undefined &&
+                  requestedQuantity !== undefined &&
+                  requestedUnit !== undefined &&
+                  stockQuantity !== undefined
+                    ? product.stock >= stockQuantity
+                    : undefined;
                 const delivery = deliveryBefore(policy, input.now);
                 const facts = {
                   ...(listPrice !== undefined
                     ? { listPrice, currency: product.currency }
                     : {}),
-                  ...(product.stock !== undefined
-                    ? { stockAvailable: product.stock > 0 }
-                    : {}),
+                  ...(unit !== undefined ? { unit } : {}),
+                  ...(stockAvailable !== undefined ? { stockAvailable } : {}),
                   ...(delivery !== undefined ? { deliveryBefore: delivery } : {}),
                   ...(product.tax_included !== undefined
                     ? { taxIncluded: product.tax_included }
@@ -548,16 +585,17 @@ export function createPiReceptionRuntime(
                 ? undefined
                 : product.price;
             const stockAvailable =
-              product.stock === undefined
-                ? undefined
-                : effectiveQuantity !== undefined
-                  ? product.stock >= effectiveQuantity
-                  : product.stock > 0;
+              product.stock !== undefined &&
+              product.unit !== undefined &&
+              effectiveQuantity !== undefined
+                ? product.stock >= effectiveQuantity
+                : undefined;
             const delivery = deliveryBefore(policy, input.now);
             const facts = {
               ...(listPrice !== undefined
                 ? { listPrice, currency: product.currency }
                 : {}),
+              ...(unit !== undefined ? { unit } : {}),
               ...(stockAvailable !== undefined ? { stockAvailable } : {}),
               ...(delivery !== undefined ? { deliveryBefore: delivery } : {}),
               ...(product.tax_included !== undefined
