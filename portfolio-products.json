@@ -6,7 +6,7 @@
     {
       "id": "kiwi-merchant-cloud",
       "name": "Kiwi Merchant Cloud",
-      "version": "0.12.25",
+      "version": "0.12.26",
       "version_source": {
         "type": "json",
         "scope": "central",
