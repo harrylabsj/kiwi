@@ -13,7 +13,19 @@
  * generate/persist clientId themselves.
  */
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fsyncSync,
+  fstatSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -30,10 +42,27 @@ export interface SessionOwnerInput {
 }
 
 function readTokenFile(file: string): string {
-  if (!existsSync(file)) throw new Error("session token file does not exist");
-  const token = readFileSync(file, "utf8").trim();
-  if (token === "") throw new Error("session token file is empty");
-  return token;
+  let fd: number | undefined;
+  try {
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const st = fstatSync(fd);
+    // A concurrent creator may briefly hold the other link of the temp file;
+    // the inode is already fully written and mode 0600, so this is safe.
+    if (!st.isFile() || (st.mode & 0o077) !== 0
+      || (typeof process.getuid === "function" && st.uid !== process.getuid())) {
+      throw new Error("session token file is not private");
+    }
+    const token = readFileSync(fd, "utf8").trim();
+    if (token === "") throw new Error("session token file is empty");
+    return token;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error("session token file does not exist");
+    }
+    throw error;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }
 
 function autoTokenFile(input: SessionOwnerInput): string {
@@ -42,7 +71,37 @@ function autoTokenFile(input: SessionOwnerInput): string {
     .digest("hex");
   const dir = input.tokenDir ?? path.join(homedir(), ".kiwi", "mcp", "sessions");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const st = lstatSync(dir);
+  if (!st.isDirectory() || st.isSymbolicLink() || (st.mode & 0o777) !== 0o700
+    || (typeof process.getuid === "function" && st.uid !== process.getuid())) {
+    throw new Error("session token directory is not private");
+  }
   return path.join(dir, `${key}.token`);
+}
+
+function createTokenFileOnce(file: string): void {
+  const token = randomBytes(32).toString("hex");
+  const temp = `${file}.tmp-${process.pid}-${randomBytes(8).toString("hex")}`;
+  let fd: number | undefined;
+  try {
+    fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    writeFileSync(fd, token, { encoding: "utf8" });
+    fsyncSync(fd);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  try {
+    // link(2) publishes a fully written inode atomically. Readers can never
+    // observe the winner's half-written file; only EEXIST means another
+    // process won, in which case its complete file is read below.
+    try {
+      linkSync(temp, file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  } finally {
+    try { unlinkSync(temp); } catch { /* already removed */ }
+  }
 }
 
 export function resolveSessionOwner(input: SessionOwnerInput): string {
@@ -56,11 +115,13 @@ export function resolveSessionOwner(input: SessionOwnerInput): string {
   }
   if (token === "") {
     const file = autoTokenFile(input);
-    if (!existsSync(file)) {
-      writeFileSync(file, randomBytes(32).toString("hex"), { mode: 0o600, flag: "wx" });
-      chmodSync(file, 0o600);
+    try {
+      token = readTokenFile(file);
+    } catch (error) {
+      if ((error as Error).message !== "session token file does not exist") throw error;
+      createTokenFileOnce(file);
+      token = readTokenFile(file);
     }
-    token = readTokenFile(file);
   }
   const identity = `${input.principal}\u0000${input.buyerAgentId}\u0000${clientId}\u0000${input.sessionId}`;
   return createHmac("sha256", token).update(identity).digest("hex");

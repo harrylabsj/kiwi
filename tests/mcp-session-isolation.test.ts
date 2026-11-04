@@ -157,7 +157,7 @@ describe("buyer task session ownership", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-session-empty-"));
     dirs.push(dir);
     const file = path.join(dir, "empty");
-    writeFileSync(file, "");
+    writeFileSync(file, "", { mode: 0o600 });
     expect(() => resolveSessionOwner({ principal: "p", buyerAgentId: "a", sessionId: "default", sessionTokenFile: file }))
       .toThrow(/empty/);
   });
