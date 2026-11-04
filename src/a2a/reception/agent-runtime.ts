@@ -602,7 +602,9 @@ export function createPiReceptionRuntime(
             }
             // AC06：商品源单位与请求同义时始终 1:1；包装倍率只对 default_unit
             // 目标生效，其他情况或别名冲突一律安全拒绝，不猜倍率。
-            let unit = requestedUnit;
+            // Unit facts are source-unit provenance: a model-supplied spelling
+            // is not merchant/source evidence when the product has no unit.
+            let unit = product.unit;
             let effectiveQuantity = quantity;
             let factFactor: number | undefined;
             if (product.unit !== undefined && requestedUnit !== undefined) {
