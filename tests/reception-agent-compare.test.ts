@@ -44,7 +44,12 @@ interface Product {
 const A: Product = { sku: "A", price: 90, currency: "CNY", stock: 10, unit: "piece" };
 const B: Product = { sku: "B", price: 100, currency: "CNY", stock: 10, unit: "piece" };
 
-function expectedRef(product: Product, quantity?: number, requestedUnit?: string): FactRef {
+function expectedRef(
+  product: Product,
+  quantity?: number,
+  requestedUnit?: string,
+  stockAvailableOverride?: boolean | null,
+): FactRef {
   let effective = quantity;
   if (product.unit === "piece" && requestedUnit === "box" && quantity !== undefined) {
     effective = quantity * 12;
@@ -53,9 +58,13 @@ function expectedRef(product: Product, quantity?: number, requestedUnit?: string
     listPrice: product.price,
     currency: product.currency,
     unit: product.unit,
-    ...(quantity !== undefined && requestedUnit !== undefined
-      ? { stockAvailable: product.stock >= (effective as number) }
-      : {}),
+    ...(stockAvailableOverride === null
+      ? {}
+      : stockAvailableOverride !== undefined
+        ? { stockAvailable: stockAvailableOverride }
+        : quantity !== undefined && requestedUnit !== undefined
+          ? { stockAvailable: product.stock >= (effective as number) }
+          : {}),
   };
   const base = {
     merchantId: MERCHANT,
@@ -72,10 +81,12 @@ async function runCompare(input: {
   b: Product;
   quantity?: number;
   unit?: string;
+  buyerText?: string;
+  expectedStockAvailable?: boolean | null;
   reason: "in_stock" | "lowest_public_price";
 }) {
-  const mainRef = expectedRef(input.a, input.quantity, input.unit);
-  const comparedRef = expectedRef(input.b, input.quantity, input.unit);
+  const mainRef = expectedRef(input.a, input.quantity, input.unit, input.expectedStockAvailable);
+  const comparedRef = expectedRef(input.b, input.quantity, input.unit, input.expectedStockAvailable);
   const steps = [
     fauxAssistantMessage([
       fauxToolCall(TOOL_COMPARE_PRODUCTS, {
@@ -122,7 +133,11 @@ async function runCompare(input: {
     merchantId: MERCHANT,
     identity: "buyer:1",
     contextId: "ctx-compare",
-    text: "compare",
+    text:
+      input.buyerText ??
+      (input.quantity !== undefined && input.unit !== undefined
+        ? `我要${input.quantity}${input.unit}`
+        : "compare"),
     registry,
     now: NOW,
   });
@@ -191,4 +206,32 @@ describe("Pi compare_products → recommend_option publisher claims", () => {
     });
     expect(result.rejected[0]?.reason).toBe("unverified_claim");
   });
+  it("buyer asks 10 but model supplies 1: never claims stock coverage", async () => {
+    const result = await runCompare({
+      a: { ...A, stock: 1 },
+      b: B,
+      quantity: 1,
+      unit: "piece",
+      buyerText: "我要10件",
+      expectedStockAvailable: null,
+      reason: "in_stock",
+    });
+    expect(result.rejected[0]?.reason).toBe("unverified_claim");
+    expect(result.text).not.toContain("库存可以覆盖本次数量");
+  });
+
+  it("buyer asks 10 and model supplies 10: stock 1 still does not cover", async () => {
+    const result = await runCompare({
+      a: { ...A, stock: 1 },
+      b: B,
+      quantity: 10,
+      unit: "piece",
+      buyerText: "我要10件",
+      expectedStockAvailable: null,
+      reason: "in_stock",
+    });
+    expect(result.rejected[0]?.reason).toBe("unverified_claim");
+    expect(result.text).not.toContain("库存可以覆盖本次数量");
+  });
+
 });
