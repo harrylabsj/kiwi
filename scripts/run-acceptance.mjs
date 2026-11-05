@@ -29,11 +29,12 @@ const merchantId = process.env.KIWI_ACCEPTANCE_MERCHANT_ID ?? "";
 const sku = process.env.KIWI_ACCEPTANCE_SKU ?? "";
 const query = process.env.KIWI_ACCEPTANCE_QUERY ?? "商品";
 const unit = process.env.KIWI_ACCEPTANCE_UNIT ?? "piece";
-const quantity = Number(arg("--quantity") ?? process.env.KIWI_ACCEPTANCE_QUANTITY ?? "1");
+const quantity = Number(arg("--quantity") ?? process.env.KIWI_ACCEPTANCE_QUANTITY ?? "2");
 const catalogUrl = arg("--catalog") ?? process.env.KIWI_ACCEPTANCE_CATALOG_URL ?? "https://catalog.kiwi.harrylabsj.com";
 const signingKeyDir = process.env.KIWI_A2A_SIGNING_KEY_DIR ?? "";
 const timeoutMs = Number(process.env.KIWI_ACCEPTANCE_TIMEOUT_MS ?? "240000");
 
+const testMarker = `【测试，请勿履约】linkluck 验收询价：SKU ${sku}，${quantity} 盒；仅用于非约束报价、协议与交接，不下单、不付款、不锁库存。`;
 const fail = (message) => {
   console.error(`ACCEPTANCE_FAILED ${message}`);
   process.exit(1);
@@ -113,6 +114,7 @@ const rfq = await call("kiwi_request_quotes", {
   intent: {
     intent_id: `acceptance-${randomUUID()}`,
     intent_type: "inquiry",
+    public_message: testMarker,
     items: [{ query, sku, quantity: { value: quantity, unit } }],
   },
 });
@@ -132,14 +134,62 @@ record("quote", true, `报价 ${unitPrice.amount_minor} ${unitPrice.currency} ×
   trade_entry: terms.handoff_destination ?? null,
 });
 
+// 2b) 一轮非约束磋商：明确测试/不履约，不改变商业承诺。
+const negotiation = await call("kiwi_negotiate", {
+  task_id: task.task_id,
+  action: "clarification",
+  summary: `${testMarker} 请确认本询价为测试用途，且回复不创建订单、不锁库存、不授权付款。`,
+});
+const step = negotiation.json?.step;
+if (step?.action !== "clarification" || typeof step.reply !== "string" || step.reply.trim() === "") {
+  record("negotiation", false, negotiation.text.slice(0, 200));
+  fail("clarification negotiation failed or produced no merchant reply");
+}
+record("negotiation", true, "一轮 clarification 已获商家回复", { action: step.action });
+
+// Re-read the task after negotiation; accept must bind the current offer, not a stale snapshot.
+const afterNegotiation = await call("kiwi_get_task", { task_id: task.task_id });
+const currentCandidate = (afterNegotiation.json?.task?.candidates ?? []).find(
+  (entry) => entry.status === "succeeded" && entry.candidate_id === candidate.candidate_id,
+) ?? (afterNegotiation.json?.task?.candidates ?? []).find((entry) => entry.status === "succeeded");
+
+// 2c) Pre-accept evidence. KNP exposes no merchant-side "nonbinding" flag on an
+// offer; the strongest available evidence is the advertised negotiation
+// capability, an offer-like merchant reply, and the protocol's dedicated
+// accept_nonbinding action. A merchant cannot be proven nonbinding before it
+// returns the agreement; the agreement flags are rechecked immediately below
+// before handoff. Missing capability/reply stops here.
+const capabilities = Array.isArray(found.capabilities) ? found.capabilities : [];
+if (!capabilities.includes("com.harrylabsj.kiwi.shopping.negotiation")) {
+  record("preaccept", false, "商家未广告 Kiwi negotiation capability");
+  fail("pre-accept nonbinding evidence missing: negotiation capability");
+}
+const replyForEvidence = (() => { try { return JSON.parse(currentCandidate?.provenance?.reply_text ?? "{}"); } catch { return {}; } })();
+if (!["offer", "conditional_offer"].includes(replyForEvidence.action)) {
+  record("preaccept", false, "商家最新回复不是 offer-like，不能进入非约束接受");
+  fail("pre-accept nonbinding evidence missing: offer-like reply");
+}
+const preacceptEvidence = {
+  negotiation_capability: "com.harrylabsj.kiwi.shopping.negotiation",
+  offer_action: replyForEvidence.action,
+  accept_action: "accept_nonbinding",
+  merchant_preaccept_nonbinding_flag: null,
+};
+record("preaccept", true, "协议能力 + offer-like 回复 + accept_nonbinding 动作；商家未提供接受前 nonbinding 字段", preacceptEvidence);
+
 // 3) 接受（非约束性协议，带审批）
-let accept = await call("kiwi_accept_agreement", { task_id: task.task_id, candidate_id: candidate.candidate_id });
+if (currentCandidate === undefined) {
+  record("agreement", false, "negotiation 后没有 succeeded candidate");
+  fail("agreement candidate missing after negotiation");
+}
+const acceptedCandidate = currentCandidate;
+let accept = await call("kiwi_accept_agreement", { task_id: task.task_id, candidate_id: acceptedCandidate.candidate_id });
 const approvalId = accept.json?.approval_required?.approval_id;
 if (approvalId !== undefined) {
   await call("kiwi_approve", { approval_id: approvalId });
   accept = await call("kiwi_accept_agreement", {
     task_id: task.task_id,
-    candidate_id: candidate.candidate_id,
+    candidate_id: acceptedCandidate.candidate_id,
     approval_id: approvalId,
   });
 }
@@ -196,6 +246,8 @@ const receipt = {
   sku,
   quantity,
   unit,
+  test_marker: testMarker,
+  preaccept_evidence: preacceptEvidence,
   kiwi_version: JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).version,
   shopping_cli_commit: JSON.parse(readFileSync(path.join(root, "portfolio.lock.json"), "utf8")).repositories?.["shopping-cli"]?.commit,
   signed_buyer: signingKeyDir !== "",

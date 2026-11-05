@@ -242,7 +242,7 @@
     },
     {
       "path": "contracts/commerce-intent/1.0/schema.json",
-      "sha256": "sha256:58e24c3d41dab8d582c7e74b540546ccad601b0e219ea1f988eca21c9107a7fb"
+      "sha256": "sha256:d82c0af66537e2526c759473701f88070ab7ef9b89cf720277c632583c0f2345"
     },
     {
       "path": "contracts/conformance/python-service/run.py",
@@ -2534,7 +2534,7 @@
     },
     {
       "path": "scripts/run-acceptance.mjs",
-      "sha256": "sha256:ea864d99998619b26327adde38edfebb72c04f62c45fe807e3632bc9d2fdb6fa"
+      "sha256": "sha256:13c5bbfecc8729356e498e8366449b2e1d9312ad513f156c67dcb31f33dd7e75"
     },
     {
       "path": "scripts/smoke-cloud-artifact.mjs",
@@ -3242,7 +3242,7 @@
     },
     {
       "path": "src/buyer-core/a2a-knp.ts",
-      "sha256": "sha256:c5d27aa3d47880fff0124f59799a97eb1666e711e8dadbc1744ef053d24f332c"
+      "sha256": "sha256:1917009aa743b380fac74adde0f89d782f9462214d8f2b6e79f4bda5708afa9d"
     },
     {
       "path": "src/buyer-core/a2a-negotiator.ts",
@@ -3250,7 +3250,7 @@
     },
     {
       "path": "src/buyer-core/a2a-quote-fetcher.ts",
-      "sha256": "sha256:1a78533691dcdbb5d1db675e091cc64ee7e2d197cbf326c8920a42785034bd71"
+      "sha256": "sha256:699b6603a78478ae5daf2f32aefc1720979ceeaffa169bfe1bed94d8e02a066c"
     },
     {
       "path": "src/buyer-core/build-service.ts",
@@ -4878,9 +4878,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:5aeeca36d8a581e0b0bddbfb3e3edce046f9601a84f3c7fef5c2c203e09e6457",
+      "sha256": "sha256:66d8e056ae089f2c253714ca6150b7b8bf4a119f437186d70eba64ad39f570d7",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:2638604926a33e91f923b340cc7c185cf643e5359bb558794e06e62137433b3e"
+      "raw_sha256": "sha256:3afa3a3c0608414a51695626fe1c809768a7c2d72f96eb3631ffa91e3a9f78d1"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -4929,6 +4929,10 @@
     {
       "path": "tests/a2a-quote-sku.test.ts",
       "sha256": "sha256:4ac8e97721bd53c6bf03956550b9c6978147a00f2883b64295a0362a6ce2f3cd"
+    },
+    {
+      "path": "tests/a2a-rfq-public-message.test.ts",
+      "sha256": "sha256:b3e52cec7ae5baf74f8e5b9b8bb5df4e9f997fe37d750e4dda1bfd936127b9af"
     },
     {
       "path": "tests/a2a-server-throttle.test.ts",

@@ -314,6 +314,9 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   ): Promise<QuoteCandidateInput> {
     const { merchant_id: merchantId, agent_card_url: agentCardUrl } = merchant;
     const requestedSku = explicitIntentSku(intent);
+    const publicMessage = typeof intent.public_message === "string" && intent.public_message.trim() !== ""
+      ? intent.public_message.trim()
+      : undefined;
     const offeredSkus = (merchant.matching_skus ?? []).filter(
       (sku): sku is string => typeof sku === "string" && sku !== "",
     );
@@ -381,6 +384,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         sku,
         quantity: firstQuantity(intent),
         deliveryBefore: constraintsDeadline(intent),
+        ...(publicMessage !== undefined ? { publicMessage } : {}),
         now: this.now,
       });
       const client = buildA2AClient(endpoint, {
@@ -403,7 +407,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
       const exchange = await this.recovery.exchange({
         context, stage: "rfq", round: 0, merchantId, endpoint,
         binding: { intent, merchant, payload: envelope.payload },
-        build: (id) => buildRfqEnvelope({ negotiationId:id, sku, quantity:firstQuantity(intent), deliveryBefore:constraintsDeadline(intent), now:()=>context.createdAt }),
+        build: (id) => buildRfqEnvelope({ negotiationId:id, sku, quantity:firstQuantity(intent), deliveryBefore:constraintsDeadline(intent), ...(publicMessage !== undefined ? { publicMessage } : {}), now:()=>context.createdAt }),
         send: (wire) => client.sendMessage(envelopeToMessage(wire)),
         get: (id) => client.getTask(id), timeoutMs:this.timeoutMs, pollIntervalMs:this.pollIntervalMs,
       });
