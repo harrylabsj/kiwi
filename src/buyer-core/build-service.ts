@@ -81,6 +81,8 @@ export interface BuyerServiceConfig {
   a2aSkipDnsCheck?: boolean;
   /** A2A 单请求超时 ms。 */
   a2aTimeoutMs?: number;
+  /** Merchant-visible first-RFQ message; test/acceptance only. */
+  rfqPublicMessage?: string;
   /** Explicit recovery directory required for memory/URI database configurations. */
   protocolStateDir?: string;
   /**
@@ -245,6 +247,7 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
       allowPrivateRanges: config.a2aAllowPrivateRanges,
       skipDnsCheck: config.a2aSkipDnsCheck,
       timeoutMs: config.a2aTimeoutMs,
+      ...(config.rfqPublicMessage !== undefined ? { publicMessage: config.rfqPublicMessage } : {}),
     };
     quoteFetcher = new A2AQuoteFetcher(a2a);
     negotiator = new A2ANegotiator({

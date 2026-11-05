@@ -242,7 +242,7 @@
     },
     {
       "path": "contracts/commerce-intent/1.0/schema.json",
-      "sha256": "sha256:d82c0af66537e2526c759473701f88070ab7ef9b89cf720277c632583c0f2345"
+      "sha256": "sha256:58e24c3d41dab8d582c7e74b540546ccad601b0e219ea1f988eca21c9107a7fb"
     },
     {
       "path": "contracts/conformance/python-service/run.py",
@@ -2534,7 +2534,7 @@
     },
     {
       "path": "scripts/run-acceptance.mjs",
-      "sha256": "sha256:13c5bbfecc8729356e498e8366449b2e1d9312ad513f156c67dcb31f33dd7e75"
+      "sha256": "sha256:59f0ce91a94aecf66371a9d8fc29b89a838f6ee64fac69c81dfd4655ff6cf705"
     },
     {
       "path": "scripts/smoke-cloud-artifact.mjs",
@@ -3250,11 +3250,11 @@
     },
     {
       "path": "src/buyer-core/a2a-quote-fetcher.ts",
-      "sha256": "sha256:699b6603a78478ae5daf2f32aefc1720979ceeaffa169bfe1bed94d8e02a066c"
+      "sha256": "sha256:22cf0ac1ffc5b7c650a095a2dcd919dad5be238754568da4a2fe711a5cb1342d"
     },
     {
       "path": "src/buyer-core/build-service.ts",
-      "sha256": "sha256:42a264922ef626178852582184452f212f09282ce66ddaf0c082469650e52cf3"
+      "sha256": "sha256:c481a197046e37d5c1e237c786db2ab557522bfbb2cdab3de09a269a67acf477"
     },
     {
       "path": "src/buyer-core/errors.ts",
@@ -3886,7 +3886,7 @@
     },
     {
       "path": "src/mcp/cli.ts",
-      "sha256": "sha256:1664ffc9ab29ae536cb6b768103a20173922b2b932b32f294da5bc3441e638dc"
+      "sha256": "sha256:b14e949443d399e14e57da1e5d45500756990e3877a08dd13641123eff9cf9ee"
     },
     {
       "path": "src/mcp/merchant-auth.ts",
@@ -4878,9 +4878,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:66d8e056ae089f2c253714ca6150b7b8bf4a119f437186d70eba64ad39f570d7",
+      "sha256": "sha256:376e81dc251970b6f7f81d56988a3db068167fbb2b56bec031aee2322943fd4e",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:3afa3a3c0608414a51695626fe1c809768a7c2d72f96eb3631ffa91e3a9f78d1"
+      "raw_sha256": "sha256:9221757d309dfb6b4ef6653fb6bb27d0a707f3d941d5cafecdb75cecacc11442"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",

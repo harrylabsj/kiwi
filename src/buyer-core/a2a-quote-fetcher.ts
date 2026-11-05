@@ -103,6 +103,8 @@ export interface A2AQuoteFetcherOptions {
    * "最近有采购方报告门禁失败"。回调失败不影响主流程。
    */
   onAccessDenied?: (merchant: MerchantRecord) => void | Promise<void>;
+  /** Merchant-visible first-RFQ message (e.g. a test/no-fulfillment marker). */
+  publicMessage?: string;
 }
 
 /**
@@ -282,6 +284,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   private readonly merchantAccess?: MerchantAccessResolver;
   private readonly signer?: A2AOutboundSigner;
   private readonly onAccessDenied?: (merchant: MerchantRecord) => void | Promise<void>;
+  private readonly publicMessage?: string;
   private readonly endpointCache = new Map<string, string>();
   private readonly now: () => string;
 
@@ -299,6 +302,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     this.merchantAccess = options.merchantAccess;
     this.signer = options.signer;
     this.onAccessDenied = options.onAccessDenied;
+    this.publicMessage = options.publicMessage;
     if (options.protocolStateDir && options.localBuyerAgentId) this.recovery = new BuyerProtocolRecovery(options.protocolStateDir, options.localBuyerAgentId, options.now);
   }
 
@@ -314,9 +318,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   ): Promise<QuoteCandidateInput> {
     const { merchant_id: merchantId, agent_card_url: agentCardUrl } = merchant;
     const requestedSku = explicitIntentSku(intent);
-    const publicMessage = typeof intent.public_message === "string" && intent.public_message.trim() !== ""
-      ? intent.public_message.trim()
-      : undefined;
+    const publicMessage = this.publicMessage;
     const offeredSkus = (merchant.matching_skus ?? []).filter(
       (sku): sku is string => typeof sku === "string" && sku !== "",
     );

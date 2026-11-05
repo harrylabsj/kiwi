@@ -46,6 +46,7 @@ if (merchantId === "" || sku === "") {
 const child = spawn(
   process.execPath,
   [path.join(root, "dist/cli.js"), "mcp", "serve", "--catalog-url", catalogUrl,
+    "--rfq-public-message", testMarker,
     ...(signingKeyDir !== "" ? ["--a2a-signing-key-dir", signingKeyDir] : [])],
   { stdio: ["pipe", "pipe", "inherit"] },
 );
@@ -114,7 +115,6 @@ const rfq = await call("kiwi_request_quotes", {
   intent: {
     intent_id: `acceptance-${randomUUID()}`,
     intent_type: "inquiry",
-    public_message: testMarker,
     items: [{ query, sku, quantity: { value: quantity, unit } }],
   },
 });
