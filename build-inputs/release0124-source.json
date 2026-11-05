@@ -3246,7 +3246,7 @@
     },
     {
       "path": "src/buyer-core/a2a-negotiator.ts",
-      "sha256": "sha256:773d84cfb890b771c690a686324b99af9e48ce37df5caaebd2c8552d2a8fb6f4"
+      "sha256": "sha256:be50dea0aa339142fa385eb7d7c90fe31b7b54fd7915af2a746898a99f1eebe9"
     },
     {
       "path": "src/buyer-core/a2a-quote-fetcher.ts",
@@ -4878,9 +4878,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:9e4b65ac1ab271e964a755b21e3c984d8702212563725b27964acc68e55be84b",
+      "sha256": "sha256:8223877ded773e1461a88eb8509672e1bcb4713ec7a4e0178e6bd07f34ce9a79",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:418ec6e17d4ddf58cc4935462767247220062695d7e5fc856fa676c8d133841e"
+      "raw_sha256": "sha256:79ff7e71149ff937371fa5250d66f9894c846876687df46da2df66bc06dcca6a"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",

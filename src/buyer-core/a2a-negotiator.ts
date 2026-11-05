@@ -535,9 +535,6 @@ export class A2ANegotiator implements Negotiator {
     if (decline !== null) throw new MerchantDeclined(decline);
     const agreement = extractAgreementFromTask(task);
     if (agreement === null) throw new ProtocolOperationUnknown();
-    const acceptedOffer = agreement["accepted_offer_id"];
-    const acceptedDigest = agreement["terms_digest"];
-    const acceptedBy = agreement["accepted_by"];
     let checkedAgreement;
     try {
       checkedAgreement = validateAcceptedNonbindingAgreement(agreement);
