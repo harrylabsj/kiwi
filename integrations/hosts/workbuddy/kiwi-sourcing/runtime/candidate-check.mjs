@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {preflight} from './preflight.mjs';
 import {createTransaction,ensureNoDowngrade} from './transaction.mjs';
 import {probeMcpSchema} from './mcp-schema-probe.mjs';
+import {probeMcpIdentity} from './mcp-identity-probe.mjs';
 import {consumeOfficialLatestResolution} from './latest-resolver.mjs';
 
 const exec=promisify(execFile);
@@ -27,6 +28,7 @@ async function stageBuyerCandidateInternal({stagingParent,npmBinary,nodeBinary,p
   const env={HOME:fixtureHome,TMPDIR:fixtureHome,PATH:[dirname(nodeBinary),'/usr/bin','/bin'].join(delimiter),NODE_ENV:'test',PYTHONDONTWRITEBYTECODE:'1'};
   const schema=await probeMcpSchema({nodeBinary,packageRoot,fixtureHome,baseline,locale:'en'});
   const schemaZh=await probeMcpSchema({nodeBinary,packageRoot,fixtureHome,baseline:baselineZh,locale:'zh'});
+  try{await probeMcpIdentity({nodeBinary,packageRoot,fixtureHome})}catch{throw new Error('MCP_IDENTITY_UNSUPPORTED')}
   // Recheck installed bytes after schema probes. This detects changes but cannot
   // rule out an adversary mutating them after this check.
   let tree;

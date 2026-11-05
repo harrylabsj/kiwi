@@ -295,6 +295,7 @@ function service(file: string, h: ReturnType<typeof server>, extra: Record<strin
     principal: "company:test",
     buyerAgentId: "buyer-fixed",
     sessionId: "session",
+    sessionOwner: "a373-owner",
     policy: policy(),
     catalogUrl: "http://catalog.invalid",
     a2aAllowPrivateRanges: true,
@@ -350,6 +351,7 @@ it("service legacy task without journal evidence cannot trigger a fresh send on 
     created_at: now,
     updated_at: now,
     resumable: true,
+    owner_hash: "a373-owner",
     payload: JSON.stringify({ task_id: "legacy", intent, status: "in_progress" }),
   });
   const r = await s.s.requestQuotes({

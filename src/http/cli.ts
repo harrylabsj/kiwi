@@ -26,6 +26,7 @@ import path from "node:path";
 
 import { DEFAULT_CATALOG_URL, DEFAULT_DELEGATION_POLICY, type McpServeOptions } from "../mcp/cli.js";
 import { buildBuyerService } from "../buyer-core/build-service.js";
+import { resolveSessionOwner } from "../mcp/session-owner.js";
 import { MerchantOpsService } from "../merchant/ops.js";
 import { createBuyerHttpServer } from "./server.js";
 
@@ -51,6 +52,9 @@ export async function runHttpServe(args: string[]): Promise<number> {
     else if (flag === "--principal") opts.principal = value;
     else if (flag === "--agent") opts.buyerAgentId = value;
     else if (flag === "--session") opts.sessionId = value;
+    else if (flag === "--session-token") opts.sessionToken = value;
+    else if (flag === "--session-token-file") opts.sessionTokenFile = value;
+    else if (flag === "--client-id") opts.clientId = value;
     else if (flag === "--catalog-url") opts.catalogUrl = value;
     else if (flag === "--marketplace-url") opts.marketplaceUrl = value;
     else if (flag === "--buyer-bootstrap-token") opts.buyerBootstrapToken = value;
@@ -76,11 +80,36 @@ export async function runHttpServe(args: string[]): Promise<number> {
   const principal = opts.principal ?? process.env.KIWI_PRINCIPAL ?? "principal:local";
   const policy = opts.policy ?? { ...DEFAULT_DELEGATION_POLICY, principal };
   const dbPath = opts.db ?? path.join(".kiwi", "mcp", "state.sqlite");
+  const sessionId = opts.sessionId ?? process.env.KIWI_SESSION ?? "default";
+  let sessionOwner: string;
+  try {
+    sessionOwner = resolveSessionOwner({
+      dbPath,
+      principal,
+      clientId: opts.clientId ?? process.env.KIWI_CLIENT_ID,
+      buyerAgentId: opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-http",
+      sessionId,
+      ...(opts.sessionToken !== undefined || process.env.KIWI_SESSION_TOKEN !== undefined
+        ? { sessionToken: opts.sessionToken ?? process.env.KIWI_SESSION_TOKEN } : {}),
+      ...(opts.sessionTokenFile !== undefined || process.env.KIWI_SESSION_TOKEN_FILE !== undefined
+        ? { sessionTokenFile: opts.sessionTokenFile ?? process.env.KIWI_SESSION_TOKEN_FILE } : {}),
+      ...(process.env.KIWI_SESSION_TOKEN_DIR !== undefined
+        ? { tokenDir: process.env.KIWI_SESSION_TOKEN_DIR } : {}),
+    });
+  } catch (error) {
+    // Invalid/missing session credential is static configuration, not a
+    // transient runtime failure. Keep secrets out of the message.
+    process.stderr.write(
+      `refusing to start: session credential rejected (${error instanceof Error ? error.message : "invalid"})\n`,
+    );
+    return 2;
+  }
   const service = buildBuyerService({
     dbPath,
     principal,
     buyerAgentId: opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-http",
-    sessionId: opts.sessionId ?? process.env.KIWI_SESSION ?? `session-${process.pid}`,
+    sessionId,
+    sessionOwner,
     policy,
     catalogUrl: opts.catalogUrl ?? DEFAULT_CATALOG_URL,
     marketplaceUrl: opts.marketplaceUrl,
@@ -92,10 +121,19 @@ export async function runHttpServe(args: string[]): Promise<number> {
   });
   const port = opts.port ?? 8787;
   const host = opts.host ?? "127.0.0.1";
+  // HTTP adapter is deliberately single-user/local. A shared bearer cannot
+  // identify multiple clients, so refusing non-loopback prevents deploying it
+  // as an accidental multi-tenant service.
+  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(host)) {
+    process.stderr.write(
+      "refusing non-loopback HTTP bind: buyer HTTP API is single-tenant; use MCP with per-client session tokens for isolation\n",
+    );
+    return 2;
+  }
   // review P1-1（返修）：认证令牌必选（--auth-token 或 KIWI_BUYER_HTTP_TOKEN）；
   // loopback 监听不再是免鉴权身份（localhost 不是身份）。未配置一律拒绝启动。
   const authToken = opts.authToken ?? process.env.KIWI_BUYER_HTTP_TOKEN;
-  if (authToken === undefined || authToken === "") {
+  if (authToken === undefined || authToken.trim() === "") {
     process.stderr.write(
       "refusing to start without --auth-token <token>（或 KIWI_BUYER_HTTP_TOKEN）——review P1-1 返修：鉴权必选，loopback 不构成身份\n",
     );

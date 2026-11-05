@@ -38,6 +38,7 @@ export type McpErrorCode =
   | "merchant_offline"
   | "merchant_declined"
   | "store_corrupted"
+  | "legacy_ownership_unproven"
   | "internal_error";
 
 const CODE_TO_JSON_RPC: Record<McpErrorCode, number> = {
@@ -59,6 +60,7 @@ const CODE_TO_JSON_RPC: Record<McpErrorCode, number> = {
   merchant_offline: -32000,
   merchant_declined: -32000,
   store_corrupted: -32603,
+  legacy_ownership_unproven: -32602,
   internal_error: -32603,
 };
 

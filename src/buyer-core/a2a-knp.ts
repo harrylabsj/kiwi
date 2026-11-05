@@ -41,6 +41,8 @@ export interface RfqInput {
   sku: string;
   quantity: { value: number; unit?: string };
   deliveryBefore?: string;
+  /** Merchant-visible message on the first RFQ (e.g. a test/no-fulfillment marker). */
+  publicMessage?: string;
   now: () => string;
 }
 
@@ -55,6 +57,9 @@ export function buildRfqEnvelope(input: RfqInput): NegotiationEnvelope {
     actor: "buyer",
     action: "rfq",
     created_at: input.now(),
+    ...(input.publicMessage !== undefined && input.publicMessage.trim() !== ""
+      ? { public_message: input.publicMessage.trim() }
+      : {}),
     payload: {
       type: "rfq",
       items: [

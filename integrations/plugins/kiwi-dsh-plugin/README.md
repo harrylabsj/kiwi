@@ -45,6 +45,7 @@ dsh plugin --profile web add @harrylabsj/kiwi-dsh-plugin
   | `KIWI_MCP_DB` | `~/.kiwi/mcp/dsh.sqlite` | kiwi-buyer-mcp 持久 store（task/approval）。**需 kiwi ≥ 0.7.19**（0.7.19 起 `mcp serve` 支持该 env 默认路径）；旧版缺省为 cwd 相对的 `.kiwi/mcp/state.sqlite` |
   | `KIWI_PRINCIPAL` | `dsh:<用户名>` | Principal 身份（建议按用户区分） |
   | `KIWI_BUYER_AGENT` | `buyer-agent:kiwi-mcp` | 买家 agent 标识 |
+  | `KIWI_CLIENT_ID` | 无（必须由宿主设置并持久化） | 每个 DSH 客户端实例的稳定身份；缺失时只能使用临时会话，不能恢复旧任务 |
 
 - 代理/内网环境（Clash fake-ip 把 merchant 域名解析成 `198.18.0.0/15` 保留网段）
   需给 `mcp-kiwi` 行的 args 追加 `--a2a-skip-dns-check true`（见下方）。

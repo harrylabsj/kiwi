@@ -155,6 +155,53 @@ describe("merchant inquiry via reception engine (P0a)", () => {
     expect(text).toContain("非约束性信息");
   });
 
+  it("structured SKU is passed to the engine and a model plan for another SKU is ignored", async () => {
+    const engine = createMerchantReceptionEngine({
+      store: new ReceptionConversationStore({
+        file: join(dir, "conversations-structured.json"),
+        now: () => NOW,
+      }),
+      outbox: new ReceptionReplyOutbox({
+        file: join(dir, "reply-outbox-structured.json"),
+        now: () => NOW,
+      }),
+      productSource: {
+        async getProduct(sku: string) {
+          if (sku === SKU) return { price: 110, currency: "CNY", stock: 50 };
+          if (sku === "OTHER-SKU") return { price: 90, currency: "CNY", stock: 50 };
+          throw new Error("unknown sku");
+        },
+      },
+      policy: () => policy as never,
+      agent: {
+        async run() {
+          return {
+            plan: {
+              locale: "zh-CN" as const,
+              blocks: [
+                {
+                  kind: "show_commercial_terms" as const,
+                  ref: { sku: "OTHER-SKU", revision: "model-revision" },
+                },
+              ],
+            },
+            need: { sku: "OTHER-SKU", quantity: 1, unit: "piece" },
+            metrics: { steps: 1, toolCalls: {}, usage: { input: 0, output: 0, total: 0 } },
+          };
+        },
+      },
+      now: () => NOW,
+    });
+    const handler = makeHandler({ engine, merchantId: "merchant-1" });
+    const { text } = await run(
+      handler,
+      inquiryEnvelope({ type: "inquiry", subject: { sku: SKU } }),
+    );
+    expect(text).toContain(`SKU ${SKU}`);
+    expect(text).toContain("110.00 CNY");
+    expect(text).not.toContain("90.00 CNY");
+  });
+
   it("自由文本 inquiry 与接待共用同一引擎与文案", async () => {
     const interpreter: InquiryInterpreter = {
       async interpret() {

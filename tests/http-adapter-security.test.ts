@@ -126,6 +126,26 @@ describe("buyer HTTP 安全中间件（review P1-1）", () => {
 });
 
 describe("P1-1 返修：鉴权必选 + 作用域分离", () => {
+  it("拒绝把 per-request session token 当作多租户隔离（HTTP 单租户边界）", async () => {
+    const local = createBuyerHttpServer({ service: makeService(), authToken: "sec-token-1" });
+    await new Promise<void>((resolve) => local.listen(0, "127.0.0.1", resolve));
+    const addr = local.address();
+    const localBase = `http://127.0.0.1:${typeof addr === "object" && addr !== null ? addr.port : 0}`;
+    const res = await fetch(`${localBase}/tasks`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer sec-token-1",
+        "x-kiwi-session-token": "different-client-token",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe("http_session_scope_unsupported");
+    await new Promise<void>((resolve) => local.close(() => resolve()));
+  });
+
   it("未提供 authToken 时构造即抛错（loopback 不是身份）", () => {
     expect(() =>
       createBuyerHttpServer({ service: makeService() } as never),

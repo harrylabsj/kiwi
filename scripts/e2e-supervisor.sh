@@ -183,7 +183,16 @@ assert procs and all(s == "processed" for (s,) in procs), procs
 (stock,) = conn.execute("SELECT stock FROM products WHERE sku='sku-001'").fetchone()
 assert stock == 12, stock
 tables = [r[0].lower() for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-for banned in ("order", "payment", "reserv"):
-    assert not any(banned in t for t in tables), tables
-print("SUPERVISOR E2E OK: counter -> accept_nonbinding, claims processed, stock unchanged, no order tables")
+# Migrations may legitimately pre-create empty business-fact schemas such as
+# order_facts. The invariant is that this consultation added no order, payment,
+# or inventory-reservation records, not that the schema cannot contain those
+# table names.
+business_tables = [
+    t for t in tables if any(banned in t for banned in ("order", "payment", "reserv"))
+]
+for table in business_tables:
+    quoted = '"' + table.replace('"', '""') + '"'
+    (count,) = conn.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()
+    assert count == 0, f"negotiation created {count} row(s) in {table}"
+print("SUPERVISOR E2E OK: counter -> accept_nonbinding, claims processed, stock unchanged, no order/payment/reservation records")
 PYEOF
