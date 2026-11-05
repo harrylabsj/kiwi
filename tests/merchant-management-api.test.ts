@@ -80,6 +80,10 @@ const options: MerchantManagementApiOptions = {
     candidates = candidates.filter((item) => item.candidate_id !== input.candidateId);
   },
   policy: () => ({ version: 3, digest: "sha256:policy" }),
+  policyCurrent: () => ({
+    price_floors: { "SKU-OLD": 10 },
+    sku_max_discount_percent: { "SKU-OLD": 2 },
+  }),
   productsImport: {
     currentTable: () => {
       const snapshot = loadProductTableSnapshot(productsFile, MERCHANT);
@@ -884,6 +888,37 @@ describe("merchant management api — 策略草稿（BD-03，红线 6）", () =>
     );
     expect(again.status).toBe(409);
   });
+
+  it("SKU 规则表单：与当前 per-SKU map 合并，保留未列出的 SKU", async () => {
+    const owner = await login("owner");
+    const draft = await call("POST", "/merchant/api/v1/policy/form-drafts", {
+      ...owner,
+      body: {
+        sku_rules: [
+          { sku: "SKU-NEW", discount: 5, floor: 65 },
+          { sku: "SKU-OLD", discount: 3 },
+        ],
+      },
+    });
+    expect(draft.status).toBe(200);
+    expect((draft.json["applied_keys"] as string[]).sort()).toEqual([
+      "price_floors",
+      "sku_max_discount_percent",
+    ]);
+    const committed = await call(
+      "POST",
+      `/merchant/api/policy/drafts/${String(draft.json["draft_id"])}/commit`,
+      {
+        ...owner,
+        body: { expected_draft_digest: draft.json["digest"], idempotency_key: "sku1" },
+      },
+    );
+    expect(committed.status).toBe(200);
+    expect(policyApplyMock).toHaveBeenLastCalledWith({
+      price_floors: { "SKU-OLD": 10, "SKU-NEW": 65 },
+      sku_max_discount_percent: { "SKU-OLD": 3, "SKU-NEW": 5 },
+    });
+  });
 });
 
 describe("merchant management page — 同源工作台壳（BD-03）", () => {
@@ -918,6 +953,8 @@ describe("merchant management page — 同源工作台壳（BD-03）", () => {
       expect(html).toContain("/merchant/api/session");
       expect(html).toContain('var API = "/merchant/api/v1"');
       expect(html).toContain("application/problem+json");
+      expect(html).toContain("pf-sku-rules");
+      expect(html).toContain("addSkuRuleRow");
       expect(html).toContain("recovery_action");
       expect(html).toContain("x-csrf-token");
       expect(html).toContain("/merchant/trusted/confirm?ref=");

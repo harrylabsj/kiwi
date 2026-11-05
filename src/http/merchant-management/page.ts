@@ -814,6 +814,10 @@ var views = {
             '<tr><th>最大自动折扣（%）</th><td><input type="text" id="pf-discount" placeholder="0–100，留空不修改"></td></tr>' +
             '<tr><th>交期承诺（天）</th><td><input type="text" id="pf-lead" placeholder="正数，留空不修改"></td></tr>' +
             '<tr><th>报价有效期（秒）</th><td><input type="text" id="pf-ttl" placeholder="正数，留空不修改"></td></tr>' +
+            '<tr><th>SKU 规则</th><td>' +
+            '<table id="pf-sku-rules"><thead><tr><th>SKU</th><th>常态折扣（%）</th><th>私有底价（元）</th><th></th></tr></thead><tbody></tbody></table>' +
+            '<button class="act" type="button" onclick="addSkuRuleRow()">添加 SKU 规则</button>' +
+            '<span class="muted">提交时与现有 SKU 规则合并，不会清掉未列出的 SKU。</span></td></tr>' +
             '<tr><th>超出范围转人工</th><td><span class="row">' +
             '<label><input type="checkbox" id="pf-hr-below" checked> 低于底价</label>' +
             '<label><input type="checkbox" id="pf-hr-warranty"> 特殊售后条款</label>' +
@@ -821,7 +825,7 @@ var views = {
             '<select id="pf-hr"><option value="">不修改</option><option value="set">按左侧勾选设置</option></select></td></tr>' +
             "</table>" +
             '<div class="row" style="margin-top:8px"><button class="act primary" onclick="draftPolicyForm()">生成规则草稿</button>' +
-            '<span class="muted">per-SKU 底价/折扣、促销与库存来源请用下方高级模式。</span></div><div id="polformresult"></div></div>' +
+            '<span class="muted">SKU 规则可在上方表格填写；促销与库存来源仍用下方高级模式。</span></div><div id="polformresult"></div></div>' +
             '<div class="card"><h2>高级：JSON patch 模式</h2>' +
             '<p class="muted">适合 per-SKU 底价/折扣映射、促销与库存来源等完整 patch；字段名以策略 schema 文档为准，不在页面枚举。</p>' +
             '<textarea id="patch" rows="8" aria-label="高级规则 JSON patch"></textarea>' +
@@ -984,6 +988,72 @@ function numberOrUndefined(raw) {
   var value = Number(trimmed);
   return Number.isFinite(value) ? value : NaN;
 }
+function addSkuRuleRow() {
+  var body = document.querySelector("#pf-sku-rules tbody");
+  if (!body) return;
+  var tr = document.createElement("tr");
+  function addInput(cls, placeholder) {
+    var input = document.createElement("input");
+    input.type = "text";
+    input.className = cls;
+    input.placeholder = placeholder;
+    var td = document.createElement("td");
+    td.appendChild(input);
+    tr.appendChild(td);
+  }
+  addInput("sku-rule-sku", "SKU");
+  addInput("sku-rule-discount", "0–100");
+  addInput("sku-rule-floor", "元");
+  var td = document.createElement("td");
+  var remove = document.createElement("button");
+  remove.className = "act";
+  remove.type = "button";
+  remove.textContent = "删除";
+  remove.addEventListener("click", function () { tr.remove(); });
+  td.appendChild(remove);
+  tr.appendChild(td);
+  body.appendChild(tr);
+}
+function readSkuRules() {
+  var rows = document.querySelectorAll("#pf-sku-rules tbody tr");
+  var rules = [];
+  var seen = {};
+  for (var i = 0; i < rows.length; i += 1) {
+    var skuEl = rows[i].querySelector(".sku-rule-sku");
+    var discountEl = rows[i].querySelector(".sku-rule-discount");
+    var floorEl = rows[i].querySelector(".sku-rule-floor");
+    var sku = skuEl ? String(skuEl.value || "").trim() : "";
+    var discountRaw = discountEl ? String(discountEl.value || "").trim() : "";
+    var floorRaw = floorEl ? String(floorEl.value || "").trim() : "";
+    if (sku === "" && discountRaw === "" && floorRaw === "") continue;
+    if (sku === "") { bar("SKU 规则：SKU 不能为空", true); return null; }
+    if (seen[sku]) { bar("SKU 规则：SKU 重复：" + sku, true); return null; }
+    seen[sku] = true;
+    var rule = { sku: sku };
+    if (discountRaw !== "") {
+      var discount = Number(discountRaw);
+      if (!Number.isFinite(discount) || discount < 0 || discount > 100) {
+        bar("SKU 规则：" + sku + " 的常态折扣须在 0–100 之间", true);
+        return null;
+      }
+      rule.discount = discount;
+    }
+    if (floorRaw !== "") {
+      var floor = Number(floorRaw);
+      if (!Number.isFinite(floor) || floor < 0) {
+        bar("SKU 规则：" + sku + " 的底价须为非负数字（元）", true);
+        return null;
+      }
+      rule.floor = floor;
+    }
+    if (rule.discount === undefined && rule.floor === undefined) {
+      bar("SKU 规则：" + sku + " 至少填写折扣或底价", true);
+      return null;
+    }
+    rules.push(rule);
+  }
+  return rules;
+}
 function draftPolicyForm() {
   var form = {};
   var auto = $("pf-auto") ? $("pf-auto").value : "";
@@ -1016,6 +1086,9 @@ function draftPolicyForm() {
     if ($("pf-hr-suspicious") && $("pf-hr-suspicious").checked) triggers.push("suspicious_content");
     form.human_review = triggers;
   }
+  var skuRules = readSkuRules();
+  if (skuRules === null) return;
+  if (skuRules.length > 0) form.sku_rules = skuRules;
   if (Object.keys(form).length === 0) { bar("所有字段都留空：没有可提交的修改", true); return; }
   call("POST", "/policy/form-drafts", form)
     .then(function (draft) {

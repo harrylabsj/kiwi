@@ -79,7 +79,7 @@ import { buildRfqPresentationResources } from "./merchant-rfq-resources.js";
 import { buildRfqMcpTools } from "./merchant-rfq-tools.js";
 import { buildMerchantPresentationResources } from "./merchant-resources.js";
 import type { MerchantMcpServerOptions } from "./merchant-server.js";
-import type { AgentProfile } from "../config/profile.js";
+import type { AgentProfile, MerchantPolicy } from "../config/profile.js";
 import { PRODUCT_VERSION } from "../product-cli.js";
 import { isFakeProvider } from "../config/provider-kind.js";
 
@@ -138,6 +138,8 @@ export interface MerchantRuntimeAssembly {
   authLabel: string;
   /** 运行中生效策略的版本与摘要（就绪检查用；不含策略内容）。 */
   policy: () => { version: number; digest: string };
+  /** 当前完整生效策略（仅管理面用于 per-SKU 表单合并；不进入公开响应）。 */
+  currentPolicy: () => MerchantPolicy | undefined;
   /** Internal only: current private floor converted exactly for quote eligibility. */
   privateFloorMinor: (sku: string, currency: string) => string | undefined;
   /** 关闭装配持有的数据库连接（不涉及 http server）。 */
@@ -645,6 +647,7 @@ export async function assembleMerchantRuntime(
       const current = policyRuntime.current();
       return { version: current.version, digest: current.digest };
     },
+    currentPolicy: () => policyRuntime.current().policy,
     privateFloorMinor: (sku, currency) => {
       const policy = policyRuntime.current().policy;
       if (policy === undefined) return undefined;
