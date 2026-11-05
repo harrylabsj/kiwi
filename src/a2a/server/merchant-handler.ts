@@ -1078,9 +1078,15 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
 
       const publicDiscountBoundMinor = (listMinor: number, sku: string): number => {
         const policy = policyOf();
+        // SKU 级折扣优先于全局兜底（profile.ts: SKU 未列出时才用 max_auto_discount_percent）。
+        const skuRaw = policy?.sku_max_discount_percent?.[sku];
         const autoRaw = policy?.max_auto_discount_percent;
         const auto =
-          typeof autoRaw === "number" && Number.isFinite(autoRaw) && autoRaw > 0 ? autoRaw : 0;
+          typeof skuRaw === "number" && Number.isFinite(skuRaw) && skuRaw >= 0
+            ? skuRaw
+            : typeof autoRaw === "number" && Number.isFinite(autoRaw) && autoRaw > 0
+              ? autoRaw
+              : 0;
         // 促销本身是**公开条款**（promos[sku].bulk_discount_percent），因此公开边界
         // 取其与自动折扣的较大者；未公布任何折扣时边界 = list（不自动折扣）。
         const promoPct = policy?.promos?.[sku]?.bulk_discount_percent ?? 0;
@@ -1469,12 +1475,22 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             authorityPromotion.kind === "applied"
               ? Math.min(policyResponsiveMinor, authorityPromotion.priceMinor)
               : policyResponsiveMinor;
+          // 买家还价低于公开边界：仅在商家为该 SKU 显式配置了 SKU 级折扣
+          // （sku_max_discount_percent）且私有底价低于公开边界时，视为可谈区间，
+          // 转店主审批；其他商家保持旧的 clamp 行为，避免改变默认磋商语义。
+          const skuDiscountConfigured =
+            policyOf()?.sku_max_discount_percent?.[sku] !== undefined;
+          const belowPublicBound =
+            skuDiscountConfigured &&
+            floorMinor > 0 &&
+            floorMinor < publicBoundMinor &&
+            typeof buyerCounterMinor === "number" &&
+            Number.isFinite(buyerCounterMinor) &&
+            buyerCounterMinor < publicBoundMinor;
           // B2：人工批准的一次性授权优先于自动边界；命中即消费，只回答这一笔。
-          // 只在「本轮按自动边界会落到 floor 以下」时才消费：买家重试价已经
-          // 高于边界时按常规报价即可，不能白白烧掉授权、更不能让批准价低于
-          // 买家自己的出价。
+          // 低于公开边界（或旧口径下边界落到 floor 以下）时消费；高于边界时不烧授权。
           const approved =
-            policyResponsiveMinorFinal < floorMinor
+            belowPublicBound || policyResponsiveMinorFinal < floorMinor
               ? options.negotiationApprovals?.consume({
                   negotiation_id: negotiationId,
                   sku,
@@ -1497,7 +1513,10 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                 ? Math.min(priceMinor, Math.max(authorizedMinor, buyerOfferMinor))
                 : authorizedMinor
               : policyResponsiveMinorFinal;
-          if (authorizedMinor === undefined && responsiveMinor < floorMinor) {
+          if (
+            authorizedMinor === undefined &&
+            (belowPublicBound || responsiveMinor < floorMinor)
+          ) {
             // 公开边界低于私有底价：该区间不能自动报价。登记到商家审批队列，
             // 人工批准后买家下一轮还价可命中一次性授权价；本轮不返回价格。
             options.negotiationApprovals?.recordPending({

@@ -78,7 +78,7 @@ describe("WorkBuddy kiwi-sourcing connector", () => {
     expect(meta).toMatchObject({
       source: "kiwi-sourcing",
       type: "mcp",
-      version: "1.0.4",
+      version: "1.0.5",
       minWorkbuddyVersion: "5.0.0",
     });
     for (const tool of [
