@@ -29,12 +29,6 @@
     "preferences": {
       "$ref": "#/$defs/preferences"
     },
-    "public_message": {
-      "description": "Optional merchant-visible message for the first outbound RFQ. Use for a test/no-fulfillment marker; it is carried in KNP envelope.public_message, not used as a binding term.",
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 4096
-    },
     "context_projection": {
       "$ref": "#/$defs/context_projection"
     }
