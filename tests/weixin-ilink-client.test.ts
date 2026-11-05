@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { IlinkClient } from "../src/weixin/ilink-client.js";
 import { WeixinError } from "../src/weixin/types.js";
 import type { BotCredentials } from "../src/weixin/types.js";
+import pkg from "../package.json" with { type: "json" };
 
 interface MockRequest {
   method: string;
@@ -74,10 +75,12 @@ describe("getBotQrcode", () => {
     expect(qr.qrcode).toBe("abc123");
     expect(qr.qrcode_img_content).toContain("liteapp.weixin.qq.com");
     const req = requests[0]!;
-    expect(req.method).toBe("GET");
+    expect(req.method).toBe("POST");
     expect(req.url).toBe("/ilink/bot/get_bot_qrcode?bot_type=3");
     expect(req.headers["ilink-app-id"]).toBe("bot");
     expect(req.headers["ilink-app-clientversion"]).toBe("131584");
+    // 官方客户端的取码请求体（kiwi 不携带已知 token）
+    expect(JSON.parse(req.body)).toEqual({ local_token_list: [] });
   });
 
   it("missing qrcode → validation", async () => {
@@ -96,6 +99,28 @@ describe("getQrcodeStatus", () => {
     const client = new IlinkClient({ baseUrl: base });
     expect((await client.getQrcodeStatus("h")).state).toBe("wait");
     expect((await client.getQrcodeStatus("h")).state).toBe("scaned");
+  });
+
+  it("need_verifycode / verify_code_blocked / binded_redirect pass through", async () => {
+    let n = 0;
+    const base = await startMock((_req, res) => {
+      n++;
+      const status = n === 1 ? "need_verifycode" : n === 2 ? "verify_code_blocked" : "binded_redirect";
+      json(res, 200, { status });
+    });
+    const client = new IlinkClient({ baseUrl: base });
+    expect((await client.getQrcodeStatus("h")).state).toBe("need_verifycode");
+    expect((await client.getQrcodeStatus("h")).state).toBe("verify_code_blocked");
+    expect((await client.getQrcodeStatus("h")).state).toBe("binded_redirect");
+  });
+
+  it("verify_code is appended when provided", async () => {
+    const base = await startMock((_req, res) => json(res, 200, { status: "scaned" }));
+    const client = new IlinkClient({ baseUrl: base });
+    await client.getQrcodeStatus("h", { verifyCode: "246810" });
+    expect(requests[0]!.url).toBe("/ilink/bot/get_qrcode_status?qrcode=h&verify_code=246810");
+    await client.getQrcodeStatus("h", { verifyCode: "" });
+    expect(requests[1]!.url).toBe("/ilink/bot/get_qrcode_status?qrcode=h");
   });
 
   it("confirmed parses credentials", async () => {
@@ -206,6 +231,9 @@ describe("getUpdates", () => {
     const bi = body.base_info as Record<string, unknown>;
     expect(bi.ilink_bot_id).toBe("bot-1");
     expect(bi.bot_token).toBe("tok-123");
+    // iLink 用 bot_agent 标识驱动应用（缺省会显示成 OpenClaw）
+    expect(bi.bot_agent).toBe(`Kiwi/${pkg.version}`);
+    expect(bi.channel_version).toBe(pkg.version);
   });
 
   it("session expired (-14) → session_stale", async () => {

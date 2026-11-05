@@ -21,6 +21,8 @@
  * 首次主动消息可能不可达——用户先发一句任意消息即"唤醒"）。
  */
 
+import { createInterface } from "node:readline/promises";
+
 import { renderQr } from "./qr.js";
 import { DEFAULT_WEIXIN_TIMINGS, WeixinError } from "./types.js";
 import type { BotCredentials } from "./types.js";
@@ -38,13 +40,15 @@ export interface LoginOptions {
   /** 二维码每模块列数（审查 P3：此前 CLI --qr-scale 传到这里就断了，
    *  renderQr 恒用默认 scale=1，文档承诺的 --qr-scale 2 静默无效）。 */
   qrScale?: number;
+  /** 配对码输入（`need_verifycode` 时手机微信显示的数字；测试注入）。 */
+  readVerifyCode?: (prompt: string) => Promise<string>;
   /** 时间源（测试注入）。 */
   now?: () => string;
 }
 
 /**
  * 执行扫码登录并返回凭证（调用方负责持久化）。
- * 失败：网络/协议错抛 WeixinError；多次过期抛 qr_expired。
+ * 失败：网络/协议错抛 WeixinError；多次过期或配对码多次错误抛 qr_expired。
  */
 export async function loginWithQrcode(
   client: IlinkClient,
@@ -54,74 +58,111 @@ export async function loginWithQrcode(
     for (const line of qr) process.stdout.write(`${line}\n`);
   });
   const notice = options.notice ?? ((line: string) => process.stderr.write(`${line}\n`));
+  const readVerifyCode = options.readVerifyCode ?? readVerifyCodeFromStdin;
   const pollMs = options.qrPollMs ?? DEFAULT_WEIXIN_TIMINGS.qrPollMs;
   const refreshCap = options.qrRefreshCap ?? DEFAULT_WEIXIN_TIMINGS.qrRefreshCap;
   const now = options.now ?? (() => new Date().toISOString());
 
   let refreshCount = 0;
+  let pendingVerifyCode: string | undefined;
   for (;;) {
     const qrcode = await client.getBotQrcode();
     render(renderQr(qrcode.qrcode_img_content, options.qrScale ?? 1));
     notice("请使用微信扫一扫登录 kiwi 微信通道（8 分钟内有效，过期自动刷新）");
 
-    // 轮询状态直到 confirmed / expired（自动刷新）
-    const credentials = await pollUntilConfirmed(client, qrcode.qrcode, {
-      pollMs,
-      notice,
-      onExpired: async (): Promise<boolean> => {
-        refreshCount += 1;
-        if (refreshCount > refreshCap) {
-          throw new WeixinError("qr_expired", `二维码多次过期（>${refreshCap} 次），请重新执行 kiwi weixin`);
+    let scannedNoticeShown = false;
+    let refresh = false;
+    while (!refresh) {
+      const status = await client.getQrcodeStatus(
+        qrcode.qrcode,
+        pendingVerifyCode === undefined ? {} : { verifyCode: pendingVerifyCode },
+      );
+      switch (status.state) {
+        case "wait":
+          break;
+        case "scaned":
+          if (pendingVerifyCode !== undefined) {
+            notice("配对码已通过，请在微信上确认登录…");
+            pendingVerifyCode = undefined;
+            scannedNoticeShown = true;
+          } else if (!scannedNoticeShown) {
+            notice("已扫码，请在微信上确认登录…");
+            scannedNoticeShown = true;
+          }
+          break;
+        case "scaned_but_redirect": {
+          notice(`切换服务节点 ${status.baseUrl}`);
+          client.setBaseUrl(status.baseUrl);
+          break;
         }
-        notice(`二维码已过期，正在刷新（${refreshCount}/${refreshCap}）…`);
-        return true; // 外层 for 循环重新取码
-      },
-    });
-    if (credentials !== null) {
-      credentials.saved_at = now();
-      notice("微信连接成功，等待消息…（首次请先发一句任意消息唤醒通道）");
-      return credentials;
+        case "need_verifycode": {
+          // 手机微信显示配对数字：输入后立即带 verify_code 重新轮询；
+          // 配对码错误时服务端会再次返回 need_verifycode，重新提示输入。
+          const code = (
+            await readVerifyCode(
+              pendingVerifyCode === undefined
+                ? "请输入手机微信显示的数字以继续绑定："
+                : "配对码不正确，请重新输入手机微信显示的数字：",
+            )
+          ).trim();
+          if (!/^\d{1,12}$/.test(code)) {
+            throw new WeixinError("validation", "配对码必须是手机微信显示的数字");
+          }
+          pendingVerifyCode = code;
+          continue;
+        }
+        case "verify_code_blocked": {
+          pendingVerifyCode = undefined;
+          refreshCount += 1;
+          if (refreshCount > refreshCap) {
+            throw new WeixinError("qr_expired", `配对码多次错误（>${refreshCap} 次），请重新执行扫码绑定`);
+          }
+          notice(`配对码错误次数过多，该二维码已作废，正在刷新（${refreshCount}/${refreshCap}）…`);
+          refresh = true;
+          break;
+        }
+        case "binded_redirect": {
+          // 该微信号已绑定过本 bot（服务端按 local_token_list 匹配）。
+          throw new WeixinError(
+            "auth",
+            "该微信号已绑定过 Kiwi，无法重复绑定：请在微信中解除原绑定后重试",
+          );
+        }
+        case "expired": {
+          pendingVerifyCode = undefined;
+          refreshCount += 1;
+          if (refreshCount > refreshCap) {
+            throw new WeixinError("qr_expired", `二维码多次过期（>${refreshCap} 次），请重新执行扫码绑定`);
+          }
+          notice(`二维码已过期，正在刷新（${refreshCount}/${refreshCap}）…`);
+          refresh = true;
+          break;
+        }
+        case "confirmed": {
+          const credentials = status.credentials;
+          credentials.saved_at = now();
+          notice("微信连接成功，等待消息…（首次请先发一句任意消息唤醒通道）");
+          return credentials;
+        }
+      }
+      if (!refresh) await sleep(pollMs);
     }
   }
 }
 
-/**
- * 轮询扫码状态直到 confirmed；expired 时回调 onExpired（返回 true 重新取码）。
- * 返回 null 表示 expired 且已请求刷新（由调用方重新取码）。
- */
-async function pollUntilConfirmed(
-  client: IlinkClient,
-  qrcodeHex: string,
-  options: {
-    pollMs: number;
-    notice: (line: string) => void;
-    onExpired: () => Promise<boolean>;
-  },
-): Promise<BotCredentials | null> {
-  for (;;) {
-    const status = await client.getQrcodeStatus(qrcodeHex);
-    switch (status.state) {
-      case "wait":
-        break;
-      case "scaned":
-        options.notice("已扫码，请在微信上确认登录…");
-        break;
-      case "scaned_but_redirect": {
-        options.notice(`切换服务节点 ${status.baseUrl}`);
-        client.setBaseUrl(status.baseUrl);
-        break;
-      }
-      case "expired": {
-        // 审查 K-L13：`shouldRefresh ? null : null` 恒返回 null、shouldRefresh 未
-        // 使用。onExpired 返回 true 表示「已请求刷新」（由调用方重新取码），或
-        // 抛 qr_expired 放弃——统一走「expired → 返回 null」。
-        await options.onExpired();
-        return null;
-      }
-      case "confirmed":
-        return status.credentials;
-    }
-    await sleep(options.pollMs);
+/** 从 stdin 读取一行配对码（非交互环境 fail-closed，避免静默卡死）。 */
+async function readVerifyCodeFromStdin(prompt: string): Promise<string> {
+  if (!process.stdin.isTTY) {
+    throw new WeixinError(
+      "validation",
+      "微信要求输入配对码，但当前环境不能交互输入：请在终端里运行绑定命令后按提示输入",
+    );
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    return await rl.question(prompt);
+  } finally {
+    rl.close();
   }
 }
 
