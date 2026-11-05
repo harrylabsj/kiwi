@@ -2534,7 +2534,7 @@
     },
     {
       "path": "scripts/run-acceptance.mjs",
-      "sha256": "sha256:45bc10acbe3e251196c804f5d66890bf772e03c7c7757c3e5e4e05a21cff78b3"
+      "sha256": "sha256:85b70f0f69ea068f62b91f04c39bf6188d96f6ed75262576c6ff3972e4466d57"
     },
     {
       "path": "scripts/smoke-cloud-artifact.mjs",

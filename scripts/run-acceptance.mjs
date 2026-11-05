@@ -45,6 +45,31 @@ if (merchantId === "" || sku === "") {
   fail("需要 KIWI_ACCEPTANCE_MERCHANT_ID 与 KIWI_ACCEPTANCE_SKU（真实商家与 SKU，不允许编造）");
 }
 
+function validateQuotedTerms(offer, expected) {
+  const terms = offer?.payload?.terms;
+  if (terms === null || typeof terms !== "object" || Array.isArray(terms)) {
+    fail("商家报价缺少结构化 terms，不能确认 SKU/数量/单价");
+  }
+  const items = Array.isArray(terms.items) ? terms.items : [];
+  if (items.length !== 1) fail(`商家报价明细必须恰好 1 行，实际 ${items.length}`);
+  const item = items[0];
+  if (item?.sku !== expected.sku) fail(`商家报价 SKU 不一致：${String(item?.sku)} != ${expected.sku}`);
+  const q = item?.quantity;
+  if (q?.value !== expected.quantity || q?.unit !== expected.unit) {
+    fail(`商家报价数量/单位不一致：${String(q?.value)} ${String(q?.unit)} != ${expected.quantity} ${expected.unit}`);
+  }
+  const price = item?.unit_price;
+  if (!Number.isSafeInteger(price?.amount_minor) || price.amount_minor < 0
+    || typeof price?.currency !== "string" || price.currency === "") {
+    fail("商家报价单价不是安全的 minor 金额或缺少币种");
+  }
+  const total = price.amount_minor * q.value;
+  if (terms.total_price_minor !== undefined && terms.total_price_minor !== total) {
+    fail(`商家报价总价不一致：${String(terms.total_price_minor)} != ${total}`);
+  }
+  return { sku: item.sku, quantity: q.value, unit: q.unit, unit_price_minor: price.amount_minor, currency: price.currency, total_price_minor: total };
+}
+
 async function verifyCatalogCardBinding(found, catalogUrl, expectedMerchantId, expectedSku, timeoutMs) {
   if (found.merchant_id !== expectedMerchantId) fail("catalog 返回的 merchant_id 与请求商家不一致");
   const catalogAgentId = typeof found.catalog_agent_id === "string" ? found.catalog_agent_id.trim() : "";
@@ -58,6 +83,17 @@ async function verifyCatalogCardBinding(found, catalogUrl, expectedMerchantId, e
     fail("Catalog agent-card 验证要求无凭据的 HTTPS catalog URL");
   }
   const cardUrl = new URL(`/v1/agents/${encodeURIComponent(catalogAgentId)}/agent-card.json`, catalog);
+  let returnedCardUrl;
+  try {
+    if (typeof found.agent_card_url !== "string" || found.agent_card_url.trim() === "") throw new Error("missing");
+    returnedCardUrl = new URL(found.agent_card_url);
+  } catch { fail("catalog 搜索结果缺少合法 agent_card_url；拒绝用构造路由替代"); }
+  if (returnedCardUrl.username !== "" || returnedCardUrl.password !== "" || returnedCardUrl.protocol !== "https:") {
+    fail("catalog agent_card_url 必须是无凭据 HTTPS 地址");
+  }
+  if (returnedCardUrl.href !== cardUrl.href) {
+    fail(`catalog 返回 agent_card_url 与 catalog_agent_id 路由不一致：${returnedCardUrl.href} != ${cardUrl.href}`);
+  }
   let response;
   try {
     response = await fetch(cardUrl, {
@@ -171,12 +207,16 @@ if (task?.status !== "succeeded" || candidate?.status !== "succeeded") {
   fail("quote failed");
 }
 const offer = (() => { try { return JSON.parse(candidate.provenance?.reply_text ?? "{}"); } catch { return {}; } })();
-const terms = offer?.payload?.terms ?? {};
-const unitPrice = terms.items?.[0]?.unit_price ?? {};
-record("quote", true, `报价 ${unitPrice.amount_minor} ${unitPrice.currency} × ${quantity}`, {
+const quoted = validateQuotedTerms(offer, { sku, quantity, unit });
+const terms = offer.payload.terms;
+record("quote", true, `报价 ${quoted.unit_price_minor} ${quoted.currency} × ${quoted.quantity} ${quoted.unit}（总价 ${quoted.total_price_minor}）`, {
   offer_id: String(candidate.provenance?.offer_id ?? ""),
-  unit_price_minor: String(unitPrice.amount_minor ?? ""),
-  currency: String(unitPrice.currency ?? ""),
+  sku: quoted.sku,
+  quantity_value: String(quoted.quantity),
+  quantity_unit: quoted.unit,
+  unit_price_minor: String(quoted.unit_price_minor),
+  total_price_minor: String(quoted.total_price_minor),
+  currency: quoted.currency,
   trade_entry: terms.handoff_destination ?? null,
 });
 
@@ -249,6 +289,13 @@ if (agreement?.creates_order !== false || agreement?.reserves_inventory !== fals
   record("agreement", false, "协议不是非约束性的（creates_order/reserves_inventory/authorizes_payment 必须为 false）");
   fail("agreement is not non-binding");
 }
+const agreedTerms = agreement?.agreed_terms;
+if (agreedTerms === null || typeof agreedTerms !== "object" || Array.isArray(agreedTerms)) {
+  record("agreement", false, "协议缺少 agreed_terms，不能确认接受的就是目标报价");
+  fail("agreement terms missing");
+}
+const agreedQuote = validateQuotedTerms({ payload: { terms: agreedTerms } }, { sku, quantity, unit });
+record("agreement_terms", true, "协议条款与目标 SKU/数量/单位/价格一致", agreedQuote);
 record("agreement", true, `非约束性协议 ${agreementId}（不下单/不锁库/不付款）`, {
   agreement_id: agreementId,
   binding_effect: String(agreement?.binding_effect ?? ""),
@@ -292,6 +339,11 @@ const receipt = {
   sku,
   quantity,
   unit,
+  quoted_quantity: quoted.quantity,
+  quoted_unit: quoted.unit,
+  quoted_unit_price_minor: quoted.unit_price_minor,
+  quoted_total_price_minor: quoted.total_price_minor,
+  quoted_currency: quoted.currency,
   test_marker: testMarker,
   preaccept_evidence: preacceptEvidence,
   kiwi_version: JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).version,
