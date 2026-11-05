@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createHash, randomBytes, scryptSync } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,7 +22,7 @@ function defaultDataDir(outDir) {
 }
 
 function parseArgs(argv) {
-  const options = { origin: undefined, out: undefined, dataDir: undefined, catalogUrl: DEFAULT_CATALOG_URL, allowInsecureCatalog: false, sample: false, merchantName: undefined, adminBootstrap: false, ownedMode: "off", ownedPolicyPath: undefined };
+  const options = { origin: undefined, out: undefined, dataDir: undefined, catalogUrl: DEFAULT_CATALOG_URL, allowInsecureCatalog: false, sample: false, merchantName: undefined, adminBootstrap: false, ownedMode: "off", ownedPolicyPath: undefined, skipInstall: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--origin") options.origin = argv[++i];
@@ -32,6 +33,7 @@ function parseArgs(argv) {
     else if (arg === "--sample") options.sample = true;
     else if (arg === "--merchant-name") options.merchantName = argv[++i];
     else if (arg === "--admin-bootstrap") options.adminBootstrap = true;
+    else if (arg === "--skip-install") options.skipInstall = true;
     else if (arg === "--owned-mode") options.ownedMode = argv[++i];
     else if (arg === "--owned-policy") options.ownedPolicyPath = argv[++i];
     else throw new Error(`未知参数 ${arg}`);
@@ -46,7 +48,7 @@ function parseArgs(argv) {
     throw new Error("--owned-mode off 不接受 --owned-policy（不默默启用）");
   }
   if (options.origin === undefined || options.out === undefined) {
-    throw new Error("用法：node prepare.mjs --origin https://<host> --out <部署目录> [--catalog-url <https-url>] [--merchant-name <名称>] [--sample] [--allow-insecure-catalog] [--data-dir <绝对路径>] [--admin-bootstrap] [--owned-mode off|require] [--owned-policy <json文件>]");
+    throw new Error("用法：node prepare.mjs --origin https://<host> --out <部署目录> [--catalog-url <https-url>] [--merchant-name <名称>] [--sample] [--allow-insecure-catalog] [--data-dir <绝对路径>] [--admin-bootstrap] [--owned-mode off|require] [--owned-policy <json文件>] [--skip-install]");
   }
   return options;
 }
@@ -251,6 +253,50 @@ function verifyManifest() {
   return manifest;
 }
 
+/** 轻量包安装：按 package-lock.json 在部署目录执行 npm ci，并逐包核对锁定版本。 */
+function verifyInstalledLock(out) {
+  const lockPath = path.join(out, "package-lock.json");
+  if (!existsSync(lockPath)) throw new Error("部署产物缺少 package-lock.json：轻量发布包必须按锁定版本安装依赖");
+  const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+  if (!Number.isInteger(lock.lockfileVersion) || lock.lockfileVersion < 3) {
+    throw new Error("package-lock.json lockfileVersion 必须 >= 3");
+  }
+  const missing = [];
+  const mismatched = [];
+  for (const [relative, row] of Object.entries(lock.packages ?? {})) {
+    if (relative === "" || row.dev === true || row.link === true) continue;
+    const packageFile = path.join(out, relative, "package.json");
+    if (!existsSync(packageFile)) {
+      if (row.optional === true) continue;
+      missing.push(relative);
+      continue;
+    }
+    let installed;
+    try { installed = JSON.parse(readFileSync(packageFile, "utf8")); } catch { missing.push(relative); continue; }
+    if (installed.version !== row.version) mismatched.push(`${relative}: ${installed.version} != ${row.version}`);
+  }
+  if (missing.length > 0 || mismatched.length > 0) {
+    throw new Error(
+      "依赖安装与 package-lock.json 不一致：" +
+        (missing.length > 0 ? `缺失 ${missing.slice(0, 5).join(", ")}` : "") +
+        (mismatched.length > 0 ? `${missing.length > 0 ? "；" : ""}版本不符 ${mismatched.slice(0, 5).join(", ")}` : ""),
+    );
+  }
+}
+
+function installDependencies(out) {
+  if (!existsSync(path.join(out, "package-lock.json")))
+    throw new Error("部署产物缺少 package-lock.json：轻量发布包必须按锁定版本安装依赖");
+  const toolchain = path.join(out, "scripts", "check-install-toolchain.mjs");
+  if (!existsSync(toolchain)) throw new Error("部署产物缺少 scripts/check-install-toolchain.mjs，无法校验安装运行时");
+  // preinstall 在 npm ci --ignore-scripts 下不会自动执行：安装前跑一次 Node 下界守卫，
+  // 安装后再跑一次依赖树不变量检查（脆弱嵌套依赖 fail-closed）。
+  execFileSync(process.execPath, [toolchain], { cwd: out, stdio: "inherit" });
+  execFileSync("npm", ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: out, stdio: "inherit" });
+  execFileSync(process.execPath, [toolchain], { cwd: out, stdio: "inherit" });
+  verifyInstalledLock(out);
+}
+
 function makeAdminBootstrap(identity) {
   const password = randomBytes(32).toString("base64url");
   const salt = randomBytes(16).toString("base64url");
@@ -302,7 +348,7 @@ function main() {
   // scripts/ 必须一起复制：部署产物的 package.json 保留 preinstall
   // （node scripts/check-install-toolchain.mjs，A106 依赖树守卫），漏复制会让
   // 平台安装以 SITES_INSTALL_FAILED 失败（0.12.21 实测根因）。
-  for (const name of ["app", "contracts", "node_modules", "index.js", "package.json", "build-manifest.json", "scripts"]) {
+  for (const name of ["app", "contracts", "node_modules", "index.js", "package.json", "package-lock.json", "build-manifest.json", "scripts"]) {
     const source = path.join(PACKAGE_ROOT, name);
     if (!existsSync(source)) continue;
     createdNames.push(name);
@@ -321,6 +367,17 @@ function main() {
       throw new Error(
         `部署产物缺少 ${hook} 引用的文件 ${target}；prepare 的复制清单必须与 package.json 的生命周期脚本保持一致`,
       );
+    }
+  }
+  // 轻量发布包不带 node_modules：按 package-lock.json 在部署目录安装第三方依赖。
+  // 兼容旧式随包依赖（包内已有 node_modules）时只做锁定版本核对，不联网。
+  const bundled = createdNames.includes("node_modules");
+  if (!options.skipInstall) {
+    if (bundled) {
+      if (existsSync(path.join(out, "package-lock.json"))) verifyInstalledLock(out);
+    } else {
+      createdNames.push("node_modules");
+      installDependencies(out);
     }
   }
   const identity = { owner_id: `merchant-${randomBytes(16).toString("hex")}` };

@@ -48,7 +48,7 @@ it("physical alias version drift fails normal semver rather than a caller-provid
 });
 it("publisher and cold consumer preserve root/stage protections while leaf/cloud caller lack unusable override",()=>{
  const builder=readFileSync("scripts/build-cloud-package.mjs","utf8"),cold=readFileSync("scripts/verify-npm-shipping-installed.mjs","utf8"),strict=readFileSync("scripts/verify-cloud-package-candidate.mjs","utf8");
- expect(builder).not.toContain('  "overrides",');expect(builder).toContain('pkg.bundledDependencies = pkg.bundleDependencies');expect(cold).toContain('subdir === "root" ? { overrides:');expect(cold).toContain('SHIPPING_CLOUD_CALLER_OVERRIDE_FORBIDDEN');expect(cold).toContain('assertInstalledLockedVersions(root, installed)');expect(strict).toContain('await assertBundledEdges(root, dir)');
+ expect(builder).not.toContain('  "overrides",');expect(builder).not.toContain('pkg.bundledDependencies');expect(builder).toContain('package-lock.json');expect(cold).toContain('overrides: json(path.join(root, "package.json")).overrides');expect(cold).toContain('SHIPPING_CLOUD_CALLER_OVERRIDE_FORBIDDEN');expect(cold).toContain('SHIPPING_CLOUD_PACKAGE_MUST_NOT_BUNDLE_NODE_MODULES');expect(cold).toContain('assertInstalledLockedVersions(root, installed)');expect(strict).not.toContain('assertBundledEdges');expect(strict).toContain('package-lock.json');
 });
 
 it("explicit filesystem alias root preserves normal valid alias edges",async()=>{

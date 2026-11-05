@@ -9,7 +9,7 @@ description: Compare existing Kiwi quotes on consistent cost and delivery terms,
 
 ## 没有任务时的比较
 
-用户只让「比一比」而尚无真实任务时，直接以最近一次 `kiwi_search` 的结果（商家资料价与商品摘要）和互联网商品信息为比较对象，逐项标注信息性质：商家资料价 `merchant_listed_price`、页面参考价 `page_reference`、待询价 `to_be_quoted`。两类可以并列展示，但必须标明性质与适用条件（规格、数量、单位、是否含税运费），**不得把页面价格或商家资料价描述为商家报价**，也不得据此声称已取得报价。
+用户只让「比一比」而尚无真实任务时，先做一次 `kiwi_search`（单品与批量一致；同需求已有最近结果可复用，不重复打扰），再以结果中的商家资料价与商品摘要、以及互联网商品信息为比较对象，逐项标注信息性质：商家资料价 `merchant_listed_price`、页面参考价 `page_reference`、待询价 `to_be_quoted`。两类可以并列展示，但必须标明性质与适用条件（规格、数量、单位、是否含税运费），**不得把页面价格或商家资料价描述为商家报价**，也不得据此声称已取得报价。
 
 外部电商商品只用于比较与展示：不得传入 `kiwi_negotiate`（该工具按 `task_id` 作用于 Kiwi 商家的真实磋商），也不得为其创建任务或套用 Kiwi 协议状态。
 

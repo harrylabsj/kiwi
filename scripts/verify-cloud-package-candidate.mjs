@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /** Validate all current npm shipping bytes and the actual tarball plan, not metadata equality alone. */
-import { assertBundledEdges } from "./lib/npm-bundled-edges.mjs";
 import { packRecord } from "./lib/npm-pack-record.mjs";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -33,10 +32,9 @@ assert.equal(manifest.artifact_kind, "kiwi-merchant-cloud-package");
 assert.equal(manifest.source_commit, source.source_commit);
 assert.equal(manifest.source_contract_sha256, source.contract_sha256);
 assert.deepEqual(pkg.dependencies, json(path.join(root, "package.json")).dependencies);
-assert.deepEqual(pkg.bundleDependencies, Object.keys(pkg.dependencies).sort());
+assert.equal(pkg.bundleDependencies, undefined, "lightweight package must not bundle dependencies");
+assert.equal(pkg.bundledDependencies, undefined, "lightweight package must not bundle dependencies");
 stage("metadata-verified");
-const edges = await assertBundledEdges(root, dir);
-stage("bundled-edges-verified");
 stage("pack-plan-start");
 const plan = packRecord(JSON.parse(npm(dir, ["pack", "--dry-run", "--json"])), {
   name: pkg.name,
@@ -46,6 +44,8 @@ const planned = plan.files
   .map((r) => r.path)
   .filter((p) => p !== "build-manifest.json")
   .sort();
+assert(planned.every((p) => !p.startsWith("node_modules/")), "lightweight package must not include node_modules");
+assert(planned.includes("package-lock.json"), "lightweight package must include package-lock.json");
 stage("pack-plan-verified");
 assert.deepEqual(planned, manifest.files.map((r) => r.path).sort(), "shipping file set mismatch");
 for (const row of manifest.files) {
@@ -57,11 +57,24 @@ for (const row of manifest.files) {
 assert.equal(aggregate(manifest.files), manifest.artifact_sha256);
 assert.equal(manifest.file_count, manifest.files.length);
 assert.equal(assertBudget(manifest.files), manifest.total_bytes);
-for (const name of Object.keys(pkg.dependencies))
-  assert.equal(
-    json(path.join(dir, "node_modules", name, "package.json")).version,
-    json(path.join(root, "package-lock.json")).packages[`node_modules/${name}`].version,
+const lock = json(path.join(dir, "package-lock.json"));
+assert(Number.isInteger(lock.lockfileVersion) && lock.lockfileVersion >= 3, "lockfileVersion must be >= 3");
+assert.deepEqual(lock.packages[""]?.dependencies, pkg.dependencies, "lock root dependencies mismatch");
+for (const [relative, row] of Object.entries(lock.packages)) {
+  if (relative === "" || row.link === true) continue;
+  assert(
+    typeof row.integrity === "string" && row.integrity.startsWith("sha512-"),
+    `lock entry missing integrity: ${relative}`,
   );
+}
+const rootLock = json(path.join(root, "package-lock.json")).packages;
+for (const name of Object.keys(pkg.dependencies)) {
+  const entry = lock.packages[`node_modules/${name}`];
+  assert(entry !== undefined, `lock missing direct dependency ${name}`);
+  assert.equal(entry.version, rootLock[`node_modules/${name}`]?.version, `locked version drift ${name}`);
+  assert(typeof entry.integrity === "string" && entry.integrity.startsWith("sha512-"), `missing integrity ${name}`);
+}
+stage("lock-verified");
 const tgzDir = path.join(root, "release/npm/kiwi-merchant-cloud");
 if (!existsSync(tgzDir)) throw new Error("SHIPPING_ACTUAL_PACK_REQUIRED");
 const tgzs = readdirSync(tgzDir).filter((p) => p.endsWith(".tgz"));
@@ -90,11 +103,6 @@ console.log(
     tgz_bytes: statSync(tgz).size,
     tgz_sha256: sha256(readFileSync(tgz)),
     actual_pack: packed,
-    // 只报计数：完整 edges 数组在 CI 里是一条数 MB 的单行，写进日志管道会
-    // 触发 EPIPE/SIGPIPE，进程静默退出（2026-10-28 发布两次实证）。
-    bundled_edges: {
-      bundled_nodes: edges.bundled_nodes,
-      checked_runtime_edges: edges.checked_runtime_edges,
-    },
+    direct_dependencies: Object.keys(pkg.dependencies).length,
   }),
 );

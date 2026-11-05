@@ -8,11 +8,11 @@
   "files": [
     "app",
     "contracts",
-    "node_modules",
     "index.js",
     "runtime-package.json",
     "prepare.mjs",
     "build-manifest.json",
+    "package-lock.json",
     "scripts",
     "shipping-source.json",
     "shipping-sbom.cdx.json"
