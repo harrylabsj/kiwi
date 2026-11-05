@@ -43,6 +43,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { WriteApprovalCandidate } from "../../agent/merchant/action-candidate.js";
+import type { MerchantPolicy } from "../../config/profile.js";
 import { contentHash } from "../../agent/merchant/action-candidate.js";
 import type { AdminSession, MerchantAdminSessions } from "../../auth/merchant-sessions.js";
 import { ADMIN_SESSION_COOKIE } from "../../auth/merchant-sessions.js";
@@ -240,6 +241,8 @@ export interface MerchantManagementApiOptions {
   fileListingPublication?: ReturnType<typeof createFileListingPublicationService>;
   /** 策略草稿提交（MerchantPolicyRuntime.apply；缺省 → 503）。回执只含版本与摘要。 */
   policyApply?: (patch: Record<string, unknown>) => Promise<{ version: number; digest: string }>;
+  /** 当前生效策略（仅用于 per-SKU 表单的服务端合并；缺省 → per-SKU 表单 503）。 */
+  policyCurrent?: () => MerchantPolicy | undefined;
   /** 管理草稿存储（权威存储；**策略草稿原文不出现在任何 API 响应**，红线 6）。 */
   drafts: MerchantImportDraftStore;
   /** 权威操作/确认记录（state.sqlite）。 */
@@ -3830,6 +3833,7 @@ export function createMerchantManagementApiHandler(
       "lead_days",
       "ttl_seconds",
       "human_review",
+      "sku_rules",
     ]);
     const patch: Record<string, unknown> = {};
     if (fields["auto"] !== undefined) {
@@ -3865,6 +3869,72 @@ export function createMerchantManagementApiHandler(
         }
       }
       patch["human_review_on"] = triggers;
+    }
+    if (fields["sku_rules"] !== undefined) {
+      const rules = fields["sku_rules"];
+      if (!Array.isArray(rules)) {
+        throw new ManagementError("invalid_input", "sku_rules must be an array");
+      }
+      if (options.policyCurrent === undefined) {
+        throw new ManagementError(
+          "unavailable",
+          "per-SKU rules require a readable current policy",
+        );
+      }
+      const current = options.policyCurrent();
+      const floors: Record<string, number> = { ...(current?.price_floors ?? {}) };
+      const discounts: Record<string, number> = {
+        ...(current?.sku_max_discount_percent ?? {}),
+      };
+      const seen = new Set<string>();
+      for (const raw of rules) {
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+          throw new ManagementError("invalid_input", "sku_rules entries must be objects");
+        }
+        const entry = raw as Record<string, unknown>;
+        const sku = typeof entry["sku"] === "string" ? entry["sku"].trim() : "";
+        if (sku === "" || sku.length > 128) {
+          throw new ManagementError(
+            "invalid_input",
+            "sku_rules.sku must be a non-empty string (<=128)",
+          );
+        }
+        if (seen.has(sku)) {
+          throw new ManagementError("invalid_input", `duplicate SKU in sku_rules: ${sku}`);
+        }
+        seen.add(sku);
+        let touched = false;
+        if (entry["floor"] !== undefined) {
+          touched = true;
+          if (entry["floor"] === null) delete floors[sku];
+          else floors[sku] = requireNonNegativeNumber(entry["floor"], `sku_rules.${sku}.floor`);
+        }
+        if (entry["discount"] !== undefined) {
+          touched = true;
+          if (entry["discount"] === null) delete discounts[sku];
+          else {
+            const discount = requireNonNegativeNumber(
+              entry["discount"],
+              `sku_rules.${sku}.discount`,
+            );
+            if (discount > 100) {
+              throw new ManagementError(
+                "invalid_input",
+                `sku_rules.${sku}.discount must be 0-100`,
+              );
+            }
+            discounts[sku] = discount;
+          }
+        }
+        if (!touched) {
+          throw new ManagementError(
+            "invalid_input",
+            `sku_rules.${sku} must include floor or discount`,
+          );
+        }
+      }
+      patch["price_floors"] = floors;
+      patch["sku_max_discount_percent"] = discounts;
     }
     if (Object.keys(patch).length === 0) {
       throw new ManagementError("invalid_input", "form submitted no changes");

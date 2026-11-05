@@ -997,6 +997,7 @@ export async function bootstrapCloudRuntime(
           ? undefined
           : { version: current.version, digest: current.digest };
       },
+      policyCurrent: () => assembly.currentPolicy(),
       merchantOperations,
       ...(productsFilePath !== undefined && config.catalogUrl !== undefined && !config.sample
         ? { fileListingPublication: createFileListingPublicationService({
