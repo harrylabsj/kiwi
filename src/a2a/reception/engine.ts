@@ -921,8 +921,14 @@ function publicBoundMinorOf(
   sku: string,
   policy: MerchantPolicy | undefined,
 ): number {
+  const skuRaw = policy?.sku_max_discount_percent?.[sku];
   const autoRaw = policy?.max_auto_discount_percent;
-  const auto = typeof autoRaw === "number" && Number.isFinite(autoRaw) && autoRaw > 0 ? autoRaw : 0;
+  const auto =
+    typeof skuRaw === "number" && Number.isFinite(skuRaw) && skuRaw >= 0
+      ? skuRaw
+      : typeof autoRaw === "number" && Number.isFinite(autoRaw) && autoRaw > 0
+        ? autoRaw
+        : 0;
   const promoPct = policy?.promos?.[sku]?.bulk_discount_percent ?? 0;
   const pct = Math.max(auto, Number.isFinite(promoPct) && promoPct > 0 ? promoPct : 0);
   return applyDiscountPercentMinor(listMinor, pct);
