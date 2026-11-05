@@ -75,10 +75,22 @@ export interface BotQrcode {
   qrcode_img_content: string;
 }
 
-/** 扫码状态轮询结果（判别联合）。 */
+/**
+ * 扫码状态轮询结果（判别联合）。
+ *
+ * 除基础 wait/scaned/expired/confirmed 外，iLink 还会返回：
+ * - `need_verifycode`：手机微信显示配对数字，需要在终端输入后带
+ *   `verify_code` 重新轮询（官方客户端同样处理）；
+ * - `verify_code_blocked`：配对码错误次数过多，该二维码作废需刷新；
+ * - `binded_redirect`：该微信号已绑定过本 bot（与本地 token 匹配），
+ *   无需重复绑定。
+ */
 export type QrcodeStatus =
   | { state: "wait" | "scaned" }
   | { state: "scaned_but_redirect"; baseUrl: string }
+  | { state: "need_verifycode" }
+  | { state: "verify_code_blocked" }
+  | { state: "binded_redirect" }
   | { state: "expired" }
   | { state: "confirmed"; credentials: BotCredentials };
 

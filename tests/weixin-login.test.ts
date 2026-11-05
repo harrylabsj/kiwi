@@ -112,6 +112,88 @@ describe("loginWithQrcode", () => {
     expect(client.base).toBe("https://ilink-2.example.com");
   });
 
+  it("need_verifycode → 输错重试 → 正确后 confirmed", async () => {
+    let statusCalls = 0;
+    const base = await startMock((url) => {
+      if (url.includes("get_bot_qrcode")) return { status: 200, body: QR_RESP };
+      statusCalls++;
+      if (statusCalls === 1) return { status: 200, body: { status: "need_verifycode" } };
+      // 第二次带错误配对码 → 仍返回 need_verifycode
+      if (statusCalls === 2) {
+        expect(url).toContain("verify_code=111111");
+        return { status: 200, body: { status: "need_verifycode" } };
+      }
+      if (statusCalls === 3) {
+        expect(url).toContain("verify_code=222222");
+        return { status: 200, body: { status: "scaned" } };
+      }
+      return { status: 200, body: { status: "confirmed", ilink_bot_id: "b", bot_token: "t", ilink_user_id: "u" } };
+    });
+    const prompts: string[] = [];
+    const codes = ["111111", "222222"];
+    const creds = await loginWithQrcode(new IlinkClient({ baseUrl: base }), {
+      qrPollMs: 1,
+      render: () => {},
+      notice: () => {},
+      readVerifyCode: async (prompt) => {
+        prompts.push(prompt);
+        return codes.shift()!;
+      },
+    });
+    expect(creds.ilink_bot_id).toBe("b");
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain("手机微信显示的数字");
+    expect(prompts[1]).toContain("不正确");
+  });
+
+  it("need_verifycode → 非数字输入 → validation", async () => {
+    const base = await startMock((url) =>
+      url.includes("get_bot_qrcode")
+        ? { status: 200, body: QR_RESP }
+        : { status: 200, body: { status: "need_verifycode" } },
+    );
+    await expect(
+      loginWithQrcode(new IlinkClient({ baseUrl: base }), {
+        qrPollMs: 1,
+        render: () => {},
+        notice: () => {},
+        readVerifyCode: async () => "abc",
+      }),
+    ).rejects.toMatchObject({ code: "validation" });
+  });
+
+  it("verify_code_blocked → 刷新二维码后继续", async () => {
+    let qrCalls = 0;
+    let statusCalls = 0;
+    const base = await startMock((url) => {
+      if (url.includes("get_bot_qrcode")) {
+        qrCalls++;
+        return { status: 200, body: QR_RESP };
+      }
+      statusCalls++;
+      if (statusCalls === 1) return { status: 200, body: { status: "verify_code_blocked" } };
+      return { status: 200, body: { status: "confirmed", ilink_bot_id: "b", bot_token: "t", ilink_user_id: "u" } };
+    });
+    const creds = await loginWithQrcode(new IlinkClient({ baseUrl: base }), {
+      qrPollMs: 1,
+      render: () => {},
+      notice: () => {},
+    });
+    expect(creds.ilink_bot_id).toBe("b");
+    expect(qrCalls).toBe(2);
+  });
+
+  it("binded_redirect → auth 错误（说明已绑定）", async () => {
+    const base = await startMock((url) =>
+      url.includes("get_bot_qrcode")
+        ? { status: 200, body: QR_RESP }
+        : { status: 200, body: { status: "binded_redirect" } },
+    );
+    await expect(
+      loginWithQrcode(new IlinkClient({ baseUrl: base }), { qrPollMs: 1, render: () => {}, notice: () => {} }),
+    ).rejects.toMatchObject({ code: "auth" });
+  });
+
   it("confirmed 缺少凭证 → validation", async () => {
     const base = await startMock((url) => {
       if (url.includes("get_bot_qrcode")) return { status: 200, body: QR_RESP };

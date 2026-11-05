@@ -26,6 +26,7 @@
  */
 
 import { isRedirectResponse, readJsonBody, SafeHttpError } from "../net/safe-http.js";
+import { WEIXIN_BOT_AGENT, WEIXIN_CHANNEL_VERSION } from "./brand.js";
 import { ILINK_DEFAULT_BASE_URL, WeixinError } from "./types.js";
 import type {
   BotCredentials,
@@ -116,10 +117,17 @@ export class IlinkClient {
     return this.baseUrl;
   }
 
-  /** GET ilink/bot/get_bot_qrcode?bot_type=3 → 二维码（hex token + 完整可扫 URL）。 */
+  /**
+   * POST ilink/bot/get_bot_qrcode?bot_type=3 → 二维码（hex token + 完整可扫 URL）。
+   *
+   * 官方客户端用 POST + `local_token_list`（已存 bot_token）：服务端据此判断
+   * "该微信号已绑定过本 bot"并返回 `binded_redirect`。kiwi 每次绑定都建立
+   * 独立 bot 身份，不带已知 token（空列表），由调用方处理绑定冲突。
+   */
   async getBotQrcode(): Promise<BotQrcode> {
-    const body = (await this.request("GET", `${EP_GET_BOT_QR}?bot_type=3`, {
+    const body = (await this.request("POST", `${EP_GET_BOT_QR}?bot_type=3`, {
       timeoutMs: QR_TIMEOUT_MS,
+      payload: { local_token_list: [] },
     })) as Record<string, unknown>;
     const qrcode = body.qrcode;
     const qrcodeImgContent = body.qrcode_img_content;
@@ -129,9 +137,18 @@ export class IlinkClient {
     return { qrcode, qrcode_img_content: qrcodeImgContent };
   }
 
-  /** GET ilink/bot/get_qrcode_status?qrcode=<hex> → 扫码状态（判别联合）。 */
-  async getQrcodeStatus(qrcode: string): Promise<QrcodeStatus> {
-    const body = (await this.request("GET", `${EP_GET_QR_STATUS}?qrcode=${encodeURIComponent(qrcode)}`, {
+  /**
+   * GET ilink/bot/get_qrcode_status?qrcode=<hex>[&verify_code=<digits>] → 扫码状态。
+   *
+   * `need_verifycode` 时手机微信会显示一串数字，必须带上 `verify_code` 重新
+   * 轮询；配对码错误会再次返回 `need_verifycode`。
+   */
+  async getQrcodeStatus(qrcode: string, options: { verifyCode?: string } = {}): Promise<QrcodeStatus> {
+    const verify =
+      options.verifyCode !== undefined && options.verifyCode !== ""
+        ? `&verify_code=${encodeURIComponent(options.verifyCode)}`
+        : "";
+    const body = (await this.request("GET", `${EP_GET_QR_STATUS}?qrcode=${encodeURIComponent(qrcode)}${verify}`, {
       timeoutMs: QR_TIMEOUT_MS,
     })) as Record<string, unknown>;
     const status = String(body.status ?? "");
@@ -211,6 +228,15 @@ export class IlinkClient {
     }
     if (status === "wait" || status === "scaned" || status === "expired") {
       return { state: status };
+    }
+    if (status === "need_verifycode") {
+      return { state: "need_verifycode" };
+    }
+    if (status === "verify_code_blocked") {
+      return { state: "verify_code_blocked" };
+    }
+    if (status === "binded_redirect") {
+      return { state: "binded_redirect" };
     }
     throw new WeixinError("validation", `get_qrcode_status 未知状态 "${status}"`);
   }
@@ -330,12 +356,20 @@ export class IlinkClient {
   }
 }
 
-/** base_info 身份三件套（getupdates/sendmessage 通用）。 */
+/**
+ * base_info（getupdates/sendmessage 通用）。
+ *
+ * 身份三件套之外显式带 `channel_version` + `bot_agent`：iLink 用
+ * `bot_agent` 标识驱动 bot 的应用；不声明时协议缺省值是 `OpenClaw`
+ * （绑定/会话里显示的应用名就是它）。这里声明 `Kiwi/<version>`。
+ */
 function baseInfoOf(credentials: BotCredentials): Record<string, unknown> {
   return {
     ilink_bot_id: credentials.ilink_bot_id,
     bot_token: credentials.bot_token,
     ilink_user_id: credentials.ilink_user_id,
+    channel_version: WEIXIN_CHANNEL_VERSION,
+    bot_agent: WEIXIN_BOT_AGENT,
   };
 }
 
