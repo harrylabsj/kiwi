@@ -2,7 +2,7 @@
 
 ## 状态与本地验证
 
-此包是 Connector `1.0.4` 候选，展示名称保持 `kiwi网络空间`。平台版本核验结果：`1.0.3` 审核中，`1.0.4` 可用；本候选包尚未提交平台审核。提交审核不等于审核通过。
+此包是 Connector `1.0.5` 本地安装修复版，展示名称保持 `kiwi网络空间`。尚未提交平台审核。修复工具成功响应后残留计时器造成断开，以及请求编号复用时的迟到响应错配。
 
 2026-10-31 在 WorkBuddy 5.9.3 本地专家完成一次只读 `kiwi_search`：工具 `mcp__kiwi-network-local__kiwi_search` 返回 `success`，耗时 1263 ms；结果为 Veyquo 两款保温杯候选（600 ml、500 ml），状态 `completed + has_candidates`，价格待询价。本次未询价、磋商、下单或付款。
 
@@ -10,7 +10,7 @@
 
 ## 启动路径
 
-`mcp.json` 从历史固定 npm CLI 入口改为随包 `runtime/production-launcher.mjs`。启动器要求 Node 22.19+、系统 `npm` 和 Python 3，并要求宿主提供当前用户私有的 `CODEBUDDY_PLUGIN_DATA`。每次启动只解析 npm `latest` 一次，锁定本次包及来源证据，执行隔离安装、来源/完整性/安装树验证、英文和中文 MCP schema 探测，再启动本次确切版本的后端。未准备完成前，前端可返回静态 13 工具基线；该列表本身不是 READY。只有后端 initialize、实际 tools/list 与 13 工具契约都验证通过后，才发出固定 READY 状态。任何未知版本、验证失败、缓存漂移或超时都停止，不回退到旧缓存。
+`mcp.json` 从历史固定 npm CLI 入口改为随包 `runtime/production-launcher.mjs`。启动器要求 Node 22.19+、系统 `npm 12` 和 Python 3，并要求宿主提供当前用户私有的 `CODEBUDDY_PLUGIN_DATA`。每次启动只解析 npm `latest` 一次，锁定本次包及来源证据，执行隔离安装、来源/完整性/安装树验证、英文和中文 MCP schema 探测，再启动本次确切版本的后端。未准备完成前，前端可返回静态 13 工具基线；该列表本身不是 READY。只有后端 initialize、实际 tools/list 与 13 工具契约都验证通过后，才发出固定 READY 状态。任何未知版本、验证失败、缓存漂移或超时都停止，不回退到旧缓存。
 
 MCP 前端只支持 `2025-06-18`：客户端请求该版本时原样回应；请求其他非空版本时回应此服务支持的 `2025-06-18` 作为 counteroffer，并等客户端发 `notifications/initialized` 后才激活后端。如果客户端不接受，会话不会进入 READY，也不会创建 backend。协议诊断仅向 stderr 写固定版本分类、服务协商版本和状态，不记录客户端发送的原始版本字符串或请求正文。该协议处理已通过本地合成流测试。本次本地搜索证明当前 WorkBuddy 路径可用；其他协议版本 counteroffer 行为和写工具流程仍未验证。
 
@@ -63,7 +63,7 @@ npm run verify:workbuddy
 npm run package:workbuddy
 ```
 
-打包默认输出 `release/workbuddy/kiwi-sourcing-1.0.4.zip`，也可通过 `scripts/package.sh <新ZIP路径>` 指定新目标。已存在目标会被拒绝，不覆盖旧包。显式 package manifest 当前包含 connector 元信息、MCP 配置、图标、README、Skill 与 allowlisted Runtime；`PACKAGE-SHA256.json` 固定包内 39 个 payload 文件的尺寸和摘要。测试与原始研究材料不打包。
+打包默认输出 `release/workbuddy/kiwi-sourcing-1.0.5.zip`，也可通过 `scripts/package.sh <新ZIP路径>` 指定新目标。已存在目标会被拒绝，不覆盖旧包。显式 package manifest 当前包含 connector 元信息、MCP 配置、图标、README、Skill 与 allowlisted Runtime；`PACKAGE-SHA256.json` 固定包内 39 个 payload 文件的尺寸和摘要。测试与原始研究材料不打包。
 
 副本离线验证包括 READY observer 对应的 13 工具契约、tree/pointer/lock 检查及格式 3 树摘要回归。离线测试不访问 npm，也不代替 WorkBuddy host 测试。
 
@@ -91,3 +91,11 @@ kiwi-sourcing-latest/  # 仅包缓存，位于实例根下
 - Kiwi 包升级只更新实例根下的版本缓存；实例身份和买家数据库不随版本缓存迁移。
 - 如果同一数据目录被多个 WorkBuddy 实例共享，**不具备实例隔离**，必须停止部署；不能把安装级共享目录当作隔离。
 - 不自动认领无归属旧任务；旧版本缓存目录中的数据库不会自动迁移，需人工带外证明归属后处理。
+
+## 安装本次修复版
+
+请先确认 Node 22.19+、npm 12、Python 3 可用。npm 10 的签名审计输出不具备本连接器需要的证明字段，不能使用。MCP 配置固定英文进程环境，以匹配工具基线；不影响使用中文搜索。
+
+通过 WorkBuddy 导入 ZIP，保留原数据目录及身份。若使用自定义 MCP，采用独立名称 `kiwi-sourcing-local`，指定本机已核实的 Node 绝对路径、包含 npm 12 的 PATH，以及当前用户私有的 CODEBUDDY_PLUGIN_DATA；不要照抄其他人的电脑路径。不要同时启用旧同名插件。重新加载并完成必要信任后，先只读搜索“焕肤丽颜精油”，等待至少 40 秒再搜一次。仅出现 13 个工具不代表已完成启动。不得跳过签名验证或自动重复询价。
+
+本次计时器修复已通过独立合成回归；原本机 WorkBuddy 间隔 40 秒的两次搜索由用户确认成功。其他电脑仍需完成各自实际验收。

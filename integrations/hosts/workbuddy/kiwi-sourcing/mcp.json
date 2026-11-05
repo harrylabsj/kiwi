@@ -3,12 +3,18 @@
     "kiwi-sourcing": {
       "type": "stdio",
       "command": "node",
-      "args": ["${CODEBUDDY_PLUGIN_ROOT}/runtime/production-launcher.mjs"],
+      "args": [
+        "${CODEBUDDY_PLUGIN_ROOT}/runtime/production-launcher.mjs"
+      ],
       "runtime": {
         "type": "node",
         "version": "22"
       },
-      "timeout": 30000
+      "timeout": 30000,
+      "env": {
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8"
+      }
     }
   }
 }
