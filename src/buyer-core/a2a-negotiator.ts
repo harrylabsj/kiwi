@@ -34,7 +34,7 @@ import {
 import type { MerchantOffer, NegotiationStep, Negotiator } from "./service.js";
 import type { A2AOutboundSigner, A2ATask } from "../a2a/client/types.js";
 import type { MerchantAccessResolver } from "./a2a-quote-fetcher.js";
-import { validateConditionalOffer, validateOffer } from "../negotiation/domain/objects.js";
+import { validateAcceptedNonbindingAgreement, validateConditionalOffer, validateOffer } from "../negotiation/domain/objects.js";
 import { evaluateConditionalOffer } from "../negotiation/condition/evaluator.js";
 import { contentDigest } from "../negotiation/jcs.js";
 import type { NegotiationEnvelope } from "../negotiation/domain/envelope.js";
@@ -538,21 +538,31 @@ export class A2ANegotiator implements Negotiator {
     const acceptedOffer = agreement["accepted_offer_id"];
     const acceptedDigest = agreement["terms_digest"];
     const acceptedBy = agreement["accepted_by"];
+    let checkedAgreement;
+    try {
+      checkedAgreement = validateAcceptedNonbindingAgreement(agreement);
+    } catch {
+      throw new McpError(
+        "internal_error",
+        "商家 agreement artifact 不是有效的非约束协议，需人工对账",
+        { reconciliation_required: true, merchant_agreement: agreement },
+      );
+    }
     if (
-      agreement["negotiation_id"] !== negotiationId ||
-      acceptedOffer !== offerId ||
-      acceptedDigest !== termsDigest ||
-      !Array.isArray(acceptedBy) ||
-      !acceptedBy.includes("buyer") ||
-      !acceptedBy.includes("merchant")
+      checkedAgreement.negotiation_id !== negotiationId ||
+      checkedAgreement.accepted_offer_id !== offerId ||
+      checkedAgreement.terms_digest !== termsDigest ||
+      contentDigest(checkedAgreement.agreed_terms) !== checkedAgreement.terms_digest ||
+      !checkedAgreement.accepted_by.includes("buyer") ||
+      !checkedAgreement.accepted_by.includes("merchant")
     ) {
       throw new McpError(
         "internal_error",
         "商家 agreement artifact 与本次接受条款不一致，需人工对账",
-        { reconciliation_required: true },
+        { reconciliation_required: true, merchant_agreement: agreement },
       );
     }
-    return { agreement };
+    return { agreement: checkedAgreement as unknown as Record<string, unknown> };
   }
 
 }

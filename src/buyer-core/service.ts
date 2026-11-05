@@ -31,6 +31,7 @@
  */
 
 import { contentDigest, sha256Hex } from "../negotiation/jcs.js";
+import { validateAcceptedNonbindingAgreement } from "../negotiation/domain/objects.js";
 import { randomBytes as cryptoRandomBytes } from "node:crypto";
 import { isDestinationType, isSessionDestinationType, isUrlDestinationType, type DestinationType } from "../handoff/destination.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
@@ -1211,7 +1212,29 @@ export class KiwiBuyerService {
         if (accepted?.agreement === undefined || accepted.agreement === null) {
           throw new McpError("internal_error", "A2A accept returned no merchant agreement");
         }
-        merchantAgreement = accepted.agreement;
+        let checkedAgreement;
+        try {
+          checkedAgreement = validateAcceptedNonbindingAgreement(accepted.agreement);
+        } catch {
+          throw new McpError(
+            "internal_error",
+            "A2A merchant agreement is not a valid nonbinding agreement; reconciliation required",
+            { reconciliation_required: true, merchant_agreement: accepted.agreement },
+          );
+        }
+        if (checkedAgreement.negotiation_id !== String(provenance.negotiation_id ?? "")
+          || checkedAgreement.accepted_offer_id !== String(provenance.offer_id ?? "")
+          || checkedAgreement.terms_digest !== termsDigest
+          || contentDigest(checkedAgreement.agreed_terms) !== checkedAgreement.terms_digest
+          || !checkedAgreement.accepted_by.includes("buyer")
+          || !checkedAgreement.accepted_by.includes("merchant")) {
+          throw new McpError(
+            "internal_error",
+            "A2A merchant agreement is not bound to the accepted terms; reconciliation required",
+            { reconciliation_required: true, merchant_agreement: accepted.agreement },
+          );
+        }
+        merchantAgreement = checkedAgreement as unknown as Record<string, unknown>;
       }
     }
     // review P1-2（A316 校准）：短事务原子消费——事务内重读授权、写

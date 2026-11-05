@@ -16,7 +16,7 @@ const POLICY = {
 };
 
 describe("A2A accept requires a real merchant agreement", () => {
-  it("sends accept_nonbinding for a direct offer and stores the merchant agreement", async () => {
+  it("rejects a merchant agreement that claims binding/order/payment effects", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-a2a-accept-")); dirs.push(dir);
     const store = new TaskApprovalStore({ dbPath: path.join(dir, "buyer.sqlite") });
     store.createTask({
@@ -40,14 +40,27 @@ describe("A2A accept requires a real merchant agreement", () => {
         negotiate: async (_task, _intent, current) => current,
         acceptNonbinding: async () => {
           merchantCalls += 1;
-          return { agreement: { type: "accepted_nonbinding_agreement", agreement_id: "merchant-agr-1", binding_effect: "nonbinding" } };
+          return { agreement: {
+            type: "accepted_nonbinding_agreement",
+            agreement_id: "merchant-agr-1",
+            negotiation_id: "neg-a2a",
+            accepted_offer_id: "offer-a2a",
+            agreed_terms: { items: [{ sku: "s", quantity: { value: 1, unit: "piece" }, unit_price: { currency: "CNY", amount_minor: 1 } }] },
+            terms_digest: "sha256:" + "a".repeat(64),
+            accepted_by: ["buyer", "merchant"],
+            created_at: "2026-11-05T00:00:00Z",
+            binding_effect: "binding",
+            creates_order: true,
+            reserves_inventory: true,
+            authorizes_payment: true,
+          } };
         },
       },
     });
-    const accepted = await service.acceptAgreement({ task_id: "task-a2a-offer", candidate_id: "cand-a2a-offer" });
+    await expect(service.acceptAgreement({ task_id: "task-a2a-offer", candidate_id: "cand-a2a-offer" }))
+      .rejects.toMatchObject({ code: "internal_error", detail: { reconciliation_required: true } });
     expect(merchantCalls).toBe(1);
-    expect(accepted.agreement.merchant_agreement).toMatchObject({ agreement_id: "merchant-agr-1" });
-    expect(store.hasAgreementForTask("task-a2a-offer")).toBe(true);
+    expect(store.hasAgreementForTask("task-a2a-offer")).toBe(false);
     store.close();
   });
 });
