@@ -1178,14 +1178,22 @@ export class KiwiBuyerService {
     }
     const existingAgreement = this.store.findAgreementByTerms(input.task_id, termsDigest);
     let merchantAgreement: Record<string, unknown> | undefined;
-    if (existingAgreement === undefined && this.negotiator?.acceptNonbinding !== undefined) {
-      // 只有 A2A 候选才向商家发 accept；本地/演示候选保持本地协议语义。
+    if (existingAgreement === undefined) {
       const provenance = (preCandidate.provenance as Record<string, unknown> | undefined) ?? {};
-      if (
-        typeof provenance.a2a_endpoint === "string" &&
-        provenance.a2a_endpoint !== "" &&
-        provenance.latest_offer_type === "conditional_offer"
-      ) {
+      const isA2A = typeof provenance.a2a_endpoint === "string" && provenance.a2a_endpoint !== "";
+      if (isA2A) {
+        // A2A must receive the merchant's agreement artifact. An offer-like
+        // reply that is not a conditional_offer cannot be remotely accepted by
+        // the current KNP handler; never create a local agreement for it.
+        if (this.negotiator?.acceptNonbinding === undefined) {
+          throw new McpError("invalid_params", "A2A candidate cannot be accepted without a negotiator");
+        }
+        if (provenance.latest_offer_type !== "conditional_offer") {
+          throw new McpError(
+            "invalid_params",
+            "A2A candidate latest reply is not conditional_offer; refusing to create a local agreement",
+          );
+        }
         const accepted = await this.negotiator.acceptNonbinding({
           taskId: input.task_id,
           candidate: preCandidate,

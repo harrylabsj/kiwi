@@ -253,6 +253,10 @@ if (!["offer", "conditional_offer"].includes(replyForEvidence.action)) {
   record("preaccept", false, "商家最新回复不是 offer-like，不能进入非约束接受");
   fail("pre-accept nonbinding evidence missing: offer-like reply");
 }
+if (replyForEvidence.action !== "conditional_offer") {
+  record("preaccept", false, "商家最新回复是 offer，不是协议可远程接受的 conditional_offer");
+  fail("A2A accept_nonbinding requires conditional_offer; refusing local agreement");
+}
 const preacceptEvidence = {
   negotiation_capability: catalogCard.extension,
   catalog_agent_id: catalogCard.catalog_agent_id,
