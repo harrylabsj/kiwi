@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Cold normal npm12 production installs of the two exact local tarballs. No registry publication/provider/model operation. */
-import { assertBundledEdges, assertInstalledLockedVersions } from "./lib/npm-bundled-edges.mjs";
+import { assertInstalledLockedVersions } from "./lib/npm-bundled-edges.mjs";
 import { assertAuditReport, classifyAudit } from "./lib/shipping-audit.mjs";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -43,33 +43,51 @@ for (const [name, relative, subdir, app] of [
   const tgz = path.join(root, relative, candidates[0]),
     consumer = path.join(out, subdir);
   mkdirSync(consumer);
-  writeFileSync(
-    path.join(consumer, "package.json"),
-    JSON.stringify(
-      {
-        name: `kiwi-shipping-cold-${subdir}`,
-        version: "1.0.0",
-        private: true,
-        type: "module",
-        ...(subdir === "root" ? { overrides: json(path.join(root, "package.json")).overrides } : {}),
-      },
-      null,
-      2,
-    ) + "\n",
-  );
-  writeFileSync(path.join(consumer, ".npmrc"), "engine-strict=true\n");
-  writeFileSync(
-    path.join(consumer, "install.log"),
-    npm(consumer, ["install", tgz, "--omit=dev"], remaining()),
-  );
-  const installed = path.join(consumer, "node_modules", name);
+  let installed;
+  let installLog;
+  if (subdir === "cloud") {
+    // 轻量云包：解包后必须按 package-lock.json 做确定性 npm ci；
+    // 安装环境负责提供兼容的 Node/npm 并从 registry 下载第三方依赖。
+    execFileSync("tar", ["-xzf", tgz, "-C", consumer, "--strip-components=1"], { encoding: "utf8" });
+    installed = consumer;
+    if (existsSync(path.join(consumer, "node_modules")))
+      throw new Error("SHIPPING_CLOUD_PACKAGE_MUST_NOT_BUNDLE_NODE_MODULES");
+    if (!existsSync(path.join(consumer, "package-lock.json")))
+      throw new Error("SHIPPING_CLOUD_PACKAGE_LOCK_REQUIRED");
+    writeFileSync(path.join(consumer, ".npmrc"), "engine-strict=true\n");
+    installLog = execFileSync(
+      process.execPath,
+      [path.join(consumer, "scripts/check-install-toolchain.mjs")],
+      { cwd: consumer, encoding: "utf8", timeout: remaining() },
+    );
+    installLog += npm(consumer, ["ci", "--omit=dev", "--ignore-scripts"], remaining());
+  } else {
+    writeFileSync(
+      path.join(consumer, "package.json"),
+      JSON.stringify(
+        {
+          name: `kiwi-shipping-cold-${subdir}`,
+          version: "1.0.0",
+          private: true,
+          type: "module",
+          overrides: json(path.join(root, "package.json")).overrides,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    writeFileSync(path.join(consumer, ".npmrc"), "engine-strict=true\n");
+    installLog = npm(consumer, ["install", tgz, "--omit=dev"], remaining());
+    installed = path.join(consumer, "node_modules", name);
+  }
+  writeFileSync(path.join(consumer, "install.log"), installLog);
   if (json(path.join(installed, "package.json")).version !== "0.12.26")
     throw new Error("SHIPPING_COLD_VERSION_MISMATCH");
   let cloudClosure;
   if (subdir === "cloud") {
     if (Object.hasOwn(json(path.join(consumer, "package.json")), "overrides"))
       throw new Error("SHIPPING_CLOUD_CALLER_OVERRIDE_FORBIDDEN");
-    cloudClosure = { edges: await assertBundledEdges(root, installed), versions: assertInstalledLockedVersions(root, installed) };
+    cloudClosure = { versions: assertInstalledLockedVersions(root, installed) };
   }
   const probe = execFileSync(
     process.execPath,

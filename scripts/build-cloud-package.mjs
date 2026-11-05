@@ -27,11 +27,13 @@ if (
 assertFiles(artifact, stage, { excluded: ["artifact-manifest.json"] });
 if (existsSync(out)) throw new Error("SHIPPING_NEW_PACKAGE_OUTPUT_REQUIRED");
 mkdirSync(out, { recursive: true });
+// 轻量发布包：只带程序、版本锁与校验信息；第三方依赖由安装环境按 package-lock.json
+// 执行 `npm ci` 下载，不再随包携带 node_modules。
 for (const name of [
   "app",
   "contracts",
-  "node_modules",
   "index.js",
+  "package-lock.json",
   "scripts",
   "shipping-source.json",
   "shipping-sbom.cdx.json",
@@ -52,9 +54,23 @@ for (const key of [
   "allowScripts",
 ])
   pkg[key] = runtime[key];
-pkg.bundleDependencies = Object.keys(pkg.dependencies).sort();
-pkg.bundledDependencies = pkg.bundleDependencies;
 writeFileSync(path.join(out, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
+// 阶段锁是完整生产依赖树；根条目改成云端包身份，其余条目保持逐项锁定。
+// npm ci 会校验 package.json 与 lock 的依赖集合一致，并逐包校验 integrity。
+const lockPath = path.join(out, "package-lock.json");
+const lock = json(lockPath);
+if (lock.packages?.[""] === undefined || lock.lockfileVersion < 3)
+  throw new Error("SHIPPING_STAGE_LOCK_INVALID");
+lock.name = pkg.name;
+lock.version = pkg.version;
+lock.packages[""] = {
+  name: pkg.name,
+  version: pkg.version,
+  license: pkg.license,
+  dependencies: pkg.dependencies,
+  engines: pkg.engines,
+};
+writeFileSync(lockPath, JSON.stringify(lock, null, 2) + "\n");
 // 本地 smoke fixture；生产商家需替换身份、商品表和策略文件。
 mkdirSync(path.join(out, "app", "cloud-sample"), { recursive: true });
 const merchant = "merchant-001";
@@ -150,10 +166,10 @@ const manifest = {
   file_count: files.length,
   total_bytes: total,
   notes: [
-    "Complete normal npm bundle plan, every shipped file byte except build-manifest itself; no SDK pruning. Project tgz budget <100000000, not an npmjs official limit.",
+    "Lightweight cloud package: program, package-lock.json and integrity manifest only; third-party dependencies are installed by the deployment environment with npm ci, not bundled.",
   ],
 };
 writeFileSync(path.join(out, "build-manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
 console.log(
-  `[cloud-package] current full shipping package ready: ${pkg.name}@${pkg.version}; ${files.length} files; ${total} plain bytes`,
+  `[cloud-package] lightweight cloud package ready: ${pkg.name}@${pkg.version}; ${files.length} files; ${total} plain bytes`,
 );

@@ -46,6 +46,47 @@ function fixture(): { root: string; out: string } {
   return { root: pkg, out };
 }
 
+/** 轻量包夹具：不带 node_modules，只带 package.json + package-lock.json。 */
+function thinFixture({ withLock = true } = {}): { root: string; out: string } {
+  const root = mkdtempSync(path.join(os.tmpdir(), "kiwi-cloud-thin-"));
+  roots.push(root);
+  const pkg = path.join(root, "package");
+  const out = path.join(root, "deploy");
+  const cloudSample = path.join(pkg, "app", "cloud-sample");
+  const app = path.join(pkg, "app", "cloud");
+  const contracts = path.join(pkg, "contracts");
+  const scripts = path.join(pkg, "scripts");
+  for (const dir of [cloudSample, app, contracts, scripts]) mkdirSync(dir, { recursive: true });
+  cpSync(prepareSource, path.join(pkg, "prepare.mjs"));
+  cpSync(path.resolve("scripts/check-install-toolchain.mjs"), path.join(scripts, "check-install-toolchain.mjs"));
+  writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "fixture", version: "0.11.0", type: "module" }));
+  writeFileSync(path.join(app, "main.js"), "fixture\n");
+  writeFileSync(path.join(cloudSample, "merchant.yaml"), "agent_id: merchant-agent:test\nowner_id: merchant-test\n");
+  writeFileSync(path.join(cloudSample, "products.json"), JSON.stringify({
+    schema_version: "0.1.2", merchant_id: "merchant-test", source: "test_fixture", generated_at: new Date().toISOString(),
+    products: [{ sku: "smoke-sku-1", title: "Smoke", currency: "CNY", unit: "piece", price: 10,
+      updated_at: new Date().toISOString(), valid_until: new Date(Date.now() + 60_000).toISOString(), status: "active", test: true }],
+  }));
+  const tracked = [
+    path.join(pkg, "package.json"), path.join(pkg, "prepare.mjs"),
+    path.join(app, "main.js"), path.join(cloudSample, "merchant.yaml"), path.join(cloudSample, "products.json"),
+    path.join(scripts, "check-install-toolchain.mjs"),
+  ];
+  if (withLock) {
+    const lock = path.join(pkg, "package-lock.json");
+    writeFileSync(lock, JSON.stringify({ name: "fixture", version: "0.11.0", lockfileVersion: 3, requires: true, packages: { "": { name: "fixture", version: "0.11.0" } } }));
+    tracked.push(lock);
+  }
+  const manifestFiles = tracked.map((file) => ({
+    path: path.relative(pkg, file).split(path.sep).join("/"),
+    size: readFileSync(file).length,
+    sha256: `sha256:${createHash("sha256").update(readFileSync(file)).digest("hex")}`,
+  }));
+  const aggregate = `sha256:${createHash("sha256").update(manifestFiles.map((item) => `${item.path}\0${item.sha256}`).sort().join("\n")).digest("hex")}`;
+  writeFileSync(path.join(pkg, "build-manifest.json"), JSON.stringify({ runtime_version: "0.11.0", artifact_sha256: aggregate, files: manifestFiles }));
+  return { root: pkg, out };
+}
+
 function run(pkg: string, out: string, ...args: string[]) {
   return spawnSync(process.execPath, [path.join(pkg, "prepare.mjs"), "--origin", "https://merchant.example", "--out", out, ...args], { encoding: "utf8" });
 }
@@ -250,5 +291,20 @@ describe("merchant cloud package prepare", () => {
     const profile = readFileSync(path.join(out, "pilot", "merchant.yaml"), "utf8");
     expect(config.merchant_name_needs_update).toBe(false);
     expect(profile).toContain('name: "Acme 商贸"');
+  });
+
+  it("installs dependencies from the shipped lock instead of bundling node_modules", () => {
+    const { root, out } = thinFixture();
+    const result = run(root, out);
+    expect(result.status).toBe(0);
+    expect(existsSync(path.join(out, "package-lock.json"))).toBe(true);
+    expect(existsSync(path.join(root, "node_modules"))).toBe(false);
+  });
+
+  it("fails closed when a lightweight deployment has no lockfile", () => {
+    const { root, out } = thinFixture({ withLock: false });
+    const result = run(root, out);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("package-lock.json");
   });
 });

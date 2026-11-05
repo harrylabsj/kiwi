@@ -85,7 +85,8 @@ tar -xzf harrylabsj-kiwi-merchant-cloud-<版本>.tgz
 
 - npm 下载自带完整性校验；另执行 `npm view @harrylabsj/kiwi-merchant-cloud@<版本> dist.integrity` 取 registry 侧 sha512 integrity，与 release.json 的 `npm_integrity` 比对，不一致 → 停止（硬规则 5）。
 - 读取解压出的 `package/build-manifest.json` 中的 `artifact_sha256`，与 release.json 的 `aggregate_digest` 比对，不一致 → 停止并报告两边的值。
-- npm pack 失败（网络、版本未发布等）→ 贴报错原文并停止。**禁止**：`curl | sh`、拉取源码现场构建、在本地 `npm install` 现装依赖（本地与云端依赖不一致的风险）。
+- **轻量发布包不随包携带 `node_modules`**：包内只有程序、`package.json`、`package-lock.json`、校验清单与安装脚本。第三方依赖由部署环境按锁文件执行 `npm ci --omit=dev` 下载安装（`prepare.mjs` 默认完成），不要求发布包含依赖。
+- npm pack 失败（网络、版本未发布等）→ 贴报错原文并停止。**禁止**：`curl | sh`、拉取源码现场构建、用 `npm install` 或手工改版本现场解析依赖。安装必须走包内 `package-lock.json` 的 `npm ci`，并核对安装版本与 lock 一致。
 
 ### 2. 首次发布：取得公网地址
 
@@ -103,6 +104,7 @@ node package/prepare.mjs --origin <第 2 步公网地址> --out <部署目录绝
 ```
 
 - `--origin` 必须逐字符等于第 2 步回执的公网地址（prepare 自身会拒绝非 https / 带路径的 origin）。`--out` 要选发布目录之外的**新空目录**：`prepare.mjs` 会拒绝非空目录，不能直接写进已用于首次发布的目录。
+- `prepare.mjs` 会在部署目录按包内 `package-lock.json` 执行 `npm ci --omit=dev` 安装第三方依赖，需要可用的 Node/npm 与 registry 网络；安装后逐包核对锁文件版本。`--skip-install` 仅供离线检查，正式部署不得跳过。
 - 可选：`--merchant-name <商家显示名>`（缺省写入占位名，工作台会提示商家补设）；`--catalog-url` 缺省即生产 Catalog 地址，不要改。
 - 成功时 stdout 打印 JSON 回执（`deployment_dir`、`artifact_sha256`、`version` 等）；核对回执中的摘要与版本和 release.json 一致，不一致 → 停止。
 - 若 `--admin-bootstrap` 会将口令写入 stdout，助手不得运行或读取该命令输出；改由商家本人在安全终端/工作台直接完成，无法隔离时停止。

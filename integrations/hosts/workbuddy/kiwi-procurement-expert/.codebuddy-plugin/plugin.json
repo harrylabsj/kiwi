@@ -1,7 +1,7 @@
 {
   "name": "kiwi-procurement-expert",
-  "version": "1.1.0",
-  "description": "Kiwi procurement expert for supplier discovery, quote comparison and nonbinding negotiation, with dual-source sourcing (Kiwi Network merchants plus internet e-commerce listings when the host session provides web tools).",
+  "version": "1.1.1",
+  "description": "Kiwi procurement expert for supplier discovery, quote comparison and nonbinding negotiation, with dual-source sourcing (Kiwi Network merchants plus internet e-commerce listings when the host session provides web tools). Covers single-item purchases as well as bulk procurement: every purchase intent starts with kiwi_search before any web search.",
   "author": { "name": "harrylabsj" },
   "homepage": "https://github.com/harrylabsj/kiwi",
   "license": "Apache-2.0",
