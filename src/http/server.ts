@@ -334,6 +334,18 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
     // review P1-1（A319 校准补充）：单参构造（双参 base 形式会把 //merchant
     // 误判为 protocol-relative host）+ 折叠重复 slash——认证与路由消费同一
     // segments 视图；点段由 URL 规范化解析，%2e 编码形状不解码（不匹配 → 404）。
+    // This adapter has one process-wide Bearer and one service owner. It is a
+    // single-tenant boundary; a per-request session token cannot be honored and
+    // must not be silently treated as tenant isolation.
+    if (req.headers["x-kiwi-session-token"] !== undefined) {
+      return send(res, 400, {
+        ok: false,
+        error: {
+          code: "http_session_scope_unsupported",
+          message: "HTTP buyer API is single-tenant; use MCP stdio with a per-client session token for isolation",
+        },
+      });
+    }
     const rawUrl = req.url ?? "/";
     const safeUrl = rawUrl.startsWith("/") ? `http://localhost${rawUrl}` : "http://localhost/";
     const url = new URL(safeUrl);

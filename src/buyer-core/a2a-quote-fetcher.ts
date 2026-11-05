@@ -36,6 +36,7 @@ import {
   resolveA2aEndpoint,
 } from "./a2a-knp.js";
 import type { QuoteCandidateInput, QuoteFetcher, MerchantRecord } from "./service.js";
+import { contentDigest } from "../negotiation/jcs.js";
 
 import { GatewayCookieJar } from "../a2a/access/gateway-cookie-jar.js";
 import { BuyerProtocolRecovery, MerchantDeclined, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext, type ProtocolReply } from "./protocol-recovery.js";
@@ -103,6 +104,8 @@ export interface A2AQuoteFetcherOptions {
    * "最近有采购方报告门禁失败"。回调失败不影响主流程。
    */
   onAccessDenied?: (merchant: MerchantRecord) => void | Promise<void>;
+  /** Merchant-visible first-RFQ message (e.g. a test/no-fulfillment marker). */
+  publicMessage?: string;
 }
 
 /**
@@ -282,6 +285,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   private readonly merchantAccess?: MerchantAccessResolver;
   private readonly signer?: A2AOutboundSigner;
   private readonly onAccessDenied?: (merchant: MerchantRecord) => void | Promise<void>;
+  private readonly publicMessage?: string;
   private readonly endpointCache = new Map<string, string>();
   private readonly now: () => string;
 
@@ -299,6 +303,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     this.merchantAccess = options.merchantAccess;
     this.signer = options.signer;
     this.onAccessDenied = options.onAccessDenied;
+    this.publicMessage = options.publicMessage;
     if (options.protocolStateDir && options.localBuyerAgentId) this.recovery = new BuyerProtocolRecovery(options.protocolStateDir, options.localBuyerAgentId, options.now);
   }
 
@@ -314,6 +319,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   ): Promise<QuoteCandidateInput> {
     const { merchant_id: merchantId, agent_card_url: agentCardUrl } = merchant;
     const requestedSku = explicitIntentSku(intent);
+    const publicMessage = this.publicMessage;
     const offeredSkus = (merchant.matching_skus ?? []).filter(
       (sku): sku is string => typeof sku === "string" && sku !== "",
     );
@@ -381,6 +387,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         sku,
         quantity: firstQuantity(intent),
         deliveryBefore: constraintsDeadline(intent),
+        ...(publicMessage !== undefined ? { publicMessage } : {}),
         now: this.now,
       });
       const client = buildA2AClient(endpoint, {
@@ -403,11 +410,11 @@ export class A2AQuoteFetcher implements QuoteFetcher {
       const exchange = await this.recovery.exchange({
         context, stage: "rfq", round: 0, merchantId, endpoint,
         binding: { intent, merchant, payload: envelope.payload },
-        build: (id) => buildRfqEnvelope({ negotiationId:id, sku, quantity:firstQuantity(intent), deliveryBefore:constraintsDeadline(intent), now:()=>context.createdAt }),
+        build: (id) => buildRfqEnvelope({ negotiationId:id, sku, quantity:firstQuantity(intent), deliveryBefore:constraintsDeadline(intent), ...(publicMessage !== undefined ? { publicMessage } : {}), now:()=>context.createdAt }),
         send: (wire) => client.sendMessage(envelopeToMessage(wire)),
         get: (id) => client.getTask(id), timeoutMs:this.timeoutMs, pollIntervalMs:this.pollIntervalMs,
       });
-      return this.project(exchange);
+      return this.project(exchange, requestedSku);
     } catch (error) {
       if (error instanceof A2AEndpointResolutionError) {
         const denied = error.httpStatus === 401 || error.httpStatus === 403;
@@ -468,7 +475,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     }
   }
 
-  private project({reply,wire,endpoint,merchantId}:ProtocolReply):QuoteCandidateInput {
+  private project({reply,wire,endpoint,merchantId}:ProtocolReply, expectedSku?: string):QuoteCandidateInput {
     if (!["offer", "counter_offer"].includes(reply.action)) return {
       merchant_id: merchantId, status: "failed", failure: {
         classification: "protocol_error",
@@ -476,9 +483,43 @@ export class A2AQuoteFetcher implements QuoteFetcher {
       },
     };
     const offerId=(reply.payload as {offer_id?:unknown}).offer_id;
-    const sku=(wire.payload as {items?:Array<{sku?:string}>}).items?.[0]?.sku;
     const terms=projectOfferTerms(reply.payload);
-    return {merchant_id:merchantId,status:"succeeded",...(terms?{terms}:{}),provenance:{...(typeof offerId==="string"?{offer_id:offerId}:{}),negotiation_id:wire.negotiation_id,merchant_reply_id:reply.message_id,source:"a2a",reply_text:JSON.stringify(reply),sku,a2a_endpoint:endpoint}};
+    const offeredSkus=terms?.items.map((item)=>item.sku) ?? [];
+    if (
+      expectedSku !== undefined &&
+      (terms === undefined ||
+        offeredSkus.length === 0 ||
+        offeredSkus.some((sku) => sku !== expectedSku))
+    ) {
+      return {
+        merchant_id: merchantId,
+        status: "failed",
+        failure: {
+          classification: "protocol_error",
+          retryable: false,
+          detail: "merchant quote SKU does not match explicit intent SKU",
+        },
+      };
+    }
+    // Provenance must describe the merchant's actual quoted SKU, not the
+    // buyer's request SKU (otherwise a swapped product is masked).
+    const sku=terms?.items[0]?.sku ?? (wire.payload as {items?:Array<{sku?:string}>}).items?.[0]?.sku;
+    const rawTerms = (reply.payload as {terms?:unknown;proposed_terms?:unknown}).terms
+      ?? (reply.payload as {terms?:unknown;proposed_terms?:unknown}).proposed_terms;
+    const agreedTerms = typeof rawTerms === "object" && rawTerms !== null && !Array.isArray(rawTerms)
+      ? rawTerms as Record<string, unknown>
+      : undefined;
+    return {merchant_id:merchantId,status:"succeeded",...(terms?{terms}:{}),provenance:{
+      ...(typeof offerId==="string"?{offer_id:offerId}:{}),
+      negotiation_id:wire.negotiation_id,
+      merchant_reply_id:reply.message_id,
+      source:"a2a",
+      reply_text:JSON.stringify(reply),
+      sku,
+      a2a_endpoint:endpoint,
+      latest_offer_type: reply.action === "offer" ? "offer" : reply.action === "counter_offer" ? "counter_offer" : "conditional_offer",
+      ...(agreedTerms!==undefined ? {latest_agreed_terms:agreedTerms,latest_terms_digest:contentDigest(agreedTerms)} : {}),
+    }};
   }
   async recoverQuotes(context:ProtocolTaskContext):Promise<QuoteCandidateInput[]> {
     if(!this.recovery)throw new ProtocolOperationUnknown();

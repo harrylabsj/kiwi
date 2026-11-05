@@ -8,6 +8,7 @@ import {resumeTransaction} from './transaction.mjs';
 import {resolveLatestMetadata,downloadLockedArtifact} from './latest-resolver.mjs';
 import {auditStagedPackage} from './audit-gate.mjs';
 import {probeMcpSchema} from './mcp-schema-probe.mjs';
+import {probeMcpIdentity} from './mcp-identity-probe.mjs';
 import {stageBuyerCandidateFromResolution} from './candidate-check.mjs';
 import {ensureNoDowngrade} from './transaction.mjs';
 
@@ -40,6 +41,7 @@ export async function inspectBuyerSession({sessionDirectory,npmBinary,nodeBinary
   const baseline=JSON.parse(await readFile(baselineFile,'utf8')),baselineZh=JSON.parse(await readFile(baselineZhFile,'utf8'));
   const en=await probeMcpSchema({nodeBinary,packageRoot,fixtureHome:sessionDirectory,baseline,locale:'en'});
   const zh=await probeMcpSchema({nodeBinary,packageRoot,fixtureHome:sessionDirectory,baseline:baselineZh,locale:'zh'});
+  try{await probeMcpIdentity({nodeBinary,packageRoot,fixtureHome:sessionDirectory})}catch{throw new Error('MCP_IDENTITY_UNSUPPORTED')}
   const after=await inspect();if(JSON.stringify(before)!==JSON.stringify(after))throw new Error('TREE_DRIFT');
   return {name:lock.name,version:lock.version,integrity:lock.integrity,sourceCommit:provenance.sourceCommit,tree:after,schema:{en,zh},authorizationProven:false,executionAuthorized:false};
 }

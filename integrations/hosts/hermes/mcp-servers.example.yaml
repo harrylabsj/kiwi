@@ -4,6 +4,8 @@
 # （search/request_quotes/get_task/negotiate/accept_agreement/get_agreement/handoff
 #  + approve/reject 审批面）。
 # 持久 store 在 <KIWI_ROOT>/.kiwi/mcp/state.sqlite；principal 建议按 Hermes 用户区分。
+# 每个 Hermes 客户端实例必须由宿主提供稳定的 KIWI_CLIENT_ID（并持久化），
+# 作为任务归属；不要把 PID 或共享默认值当客户端身份。
 #
 # 两种执行 seam（build-service.ts 按 URL 选择）：
 #   A) A2A 直连（推荐）：--catalog-url → catalog 发现 + A2A 直连 merchant 磋商。

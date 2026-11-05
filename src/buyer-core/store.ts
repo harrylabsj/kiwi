@@ -50,6 +50,8 @@ export interface StoredTask {
   updated_at: string;
   expires_at?: string;
   resumable: boolean;
+  /** Opaque owning-session hash; legacy rows use empty string until adopted. */
+  owner_hash?: string;
   /** 完整 task 记录（持久 Task 契约的权威 JSON）。 */
   payload: string;
 }
@@ -98,6 +100,35 @@ function utcNow(): string {
   return new Date().toISOString();
 }
 
+const INIT_BUSY_TIMEOUT_MS = 10_000;
+const INIT_RETRY_ATTEMPTS = 8;
+
+function isSqliteBusy(error: unknown): boolean {
+  const code = error instanceof Error && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED" || /database is locked|database table is locked/i.test(message);
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+export function withInitRetry<T>(operation: () => T): T {
+  let delay = 25;
+  let last: unknown;
+  for (let attempt = 0; attempt < INIT_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return operation();
+    } catch (error) {
+      last = error;
+      if (!isSqliteBusy(error) || attempt === INIT_RETRY_ATTEMPTS - 1) throw error;
+      sleepSync(delay);
+      delay = Math.min(delay * 2, 1_000);
+    }
+  }
+  throw last;
+}
+
 export class TaskApprovalStore {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
@@ -113,10 +144,13 @@ export class TaskApprovalStore {
       this.db = new DatabaseSync(options.dbPath);
       if (existsSync(options.dbPath)) chmodSync(options.dbPath, 0o600);
     }
+    // busy_timeout must be set before WAL or any schema DDL: journal_mode=WAL
+    // itself needs a lock, and the previous order failed before the timeout
+    // was active. Retry the remaining bootstrap for transient SQLITE_BUSY.
+    this.db.exec(`PRAGMA busy_timeout = ${INIT_BUSY_TIMEOUT_MS}`);
     this.db.exec("PRAGMA foreign_keys = ON");
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA busy_timeout = 5000");
-    this.migrate();
+    withInitRetry(() => this.db.exec("PRAGMA journal_mode = WAL"));
+    withInitRetry(() => this.migrate());
   }
 
   private migrate(): void {
@@ -125,13 +159,14 @@ export class TaskApprovalStore {
         task_id            TEXT PRIMARY KEY,
         task_kind          TEXT NOT NULL,
         status             TEXT NOT NULL,
-        idempotency_key    TEXT NOT NULL UNIQUE,
+        idempotency_key    TEXT NOT NULL,
         intent_id          TEXT,
         delegation_policy_id TEXT,
         created_at         TEXT NOT NULL,
         updated_at         TEXT NOT NULL,
         expires_at         TEXT,
         resumable          INTEGER NOT NULL DEFAULT 0,
+        owner_hash         TEXT NOT NULL DEFAULT '',
         payload            TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS mcp_candidates (
@@ -164,9 +199,12 @@ export class TaskApprovalStore {
         payload        TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_mcp_tasks_status ON mcp_tasks(status);
-      CREATE INDEX IF NOT EXISTS idx_mcp_tasks_idem ON mcp_tasks(idempotency_key);
       CREATE INDEX IF NOT EXISTS idx_mcp_candidates_task ON mcp_candidates(task_id);
       CREATE INDEX IF NOT EXISTS idx_mcp_approvals_task ON mcp_approvals(task_id);
+      CREATE TABLE IF NOT EXISTS mcp_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS mcp_handoff_intents (
         intent_digest   TEXT PRIMARY KEY,
         intent_id       TEXT NOT NULL,
@@ -185,14 +223,73 @@ export class TaskApprovalStore {
       CREATE INDEX IF NOT EXISTS idx_mcp_agreements_task ON mcp_agreements(task_id);
       CREATE INDEX IF NOT EXISTS idx_mcp_handoff_intents_task ON mcp_handoff_intents(task_id);
     `);
-    // 既有库的列补齐（幂等 schema bootstrap，不搬移任何既有数据）。
-    const cols = this.db.prepare("PRAGMA table_info(mcp_approvals)").all() as Array<{ name: string }>;
-    if (!cols.some((c) => c.name === "intent_digest")) {
-      this.db.exec("ALTER TABLE mcp_approvals ADD COLUMN intent_digest TEXT");
+    // 既有库的列补齐。Two initializers can both observe a missing column;
+    // SQLite has no ADD COLUMN IF NOT EXISTS, so the loser of that race must
+    // treat "duplicate column" as success.
+    const addColumn = (table: string, column: string, ddl: string): void => {
+      const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      if (cols.some((c) => c.name === column)) return;
+      try {
+        this.db.exec(ddl);
+      } catch (error) {
+        if (!/duplicate column name/i.test(error instanceof Error ? error.message : String(error))) throw error;
+      }
+    };
+    addColumn("mcp_approvals", "intent_digest", "ALTER TABLE mcp_approvals ADD COLUMN intent_digest TEXT");
+    addColumn("mcp_tasks", "owner_hash", "ALTER TABLE mcp_tasks ADD COLUMN owner_hash TEXT NOT NULL DEFAULT ''");
+    // v2: idempotency is scoped per owner. Older stores may have a global
+    // UNIQUE on idempotency_key (or no owner column/index at all). Rebuild in
+    // one BEGIN IMMEDIATE transaction so a crash cannot drop tasks or children.
+    this.db.exec("PRAGMA foreign_keys = OFF");
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        const scopeMarker = "idempotency_owner_scope_v1";
+        const scoped = this.db.prepare("SELECT value FROM mcp_meta WHERE key = ?").get(scopeMarker) as
+          | { value: string } | undefined;
+        if (scoped === undefined) {
+          this.db.exec(`
+            CREATE TABLE mcp_tasks_owner_scope (
+              task_id TEXT PRIMARY KEY,
+              task_kind TEXT NOT NULL,
+              status TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              intent_id TEXT,
+              delegation_policy_id TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              expires_at TEXT,
+              resumable INTEGER NOT NULL DEFAULT 0,
+              owner_hash TEXT NOT NULL DEFAULT '',
+              payload TEXT NOT NULL
+            );
+            INSERT INTO mcp_tasks_owner_scope
+              (task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id,
+               created_at, updated_at, expires_at, resumable, owner_hash, payload)
+            SELECT task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id,
+               created_at, updated_at, expires_at, resumable, owner_hash, payload
+            FROM mcp_tasks;
+            DROP TABLE mcp_tasks;
+            ALTER TABLE mcp_tasks_owner_scope RENAME TO mcp_tasks;
+            CREATE INDEX idx_mcp_tasks_status ON mcp_tasks(status);
+            CREATE UNIQUE INDEX idx_mcp_tasks_idem ON mcp_tasks(owner_hash, idempotency_key);
+          `);
+          this.db.prepare("INSERT INTO mcp_meta(key,value) VALUES(?,?)").run(scopeMarker, "1");
+        }
+        this.db.exec("COMMIT");
+      } catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* already rolled back */ }
+        throw error;
+      }
+    } finally {
+      this.db.exec("PRAGMA foreign_keys = ON");
     }
+    // Repair a marker-present store whose idempotency index was lost.
+    this.db.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_tasks_idem ON mcp_tasks(owner_hash, idempotency_key)",
+    );
   }
 
-  /** 写入 handoff 意图（同摘要不可重复；重复写视为调用方错误）。 */
   setHandoffIntent(intent: StoredHandoffIntent): void {
     this.db
       .prepare(
@@ -208,14 +305,16 @@ export class TaskApprovalStore {
       );
   }
 
-  getHandoffIntent(intentDigest: string): StoredHandoffIntent | undefined {
+  getHandoffIntent(intentDigest: string, ownerHash?: string): StoredHandoffIntent | undefined {
     const row = this.db
       .prepare(
-        `SELECT intent_digest, intent_id, intent_version, task_id, agreement_id, destination_type, url,
-                agreement_sha256, terms_digest, policy_id, policy_digest, issued_at, expires_at
-           FROM mcp_handoff_intents WHERE intent_digest = ?`,
+        `SELECT h.intent_digest, h.intent_id, h.intent_version, h.task_id, h.agreement_id,
+                h.destination_type, h.url, h.agreement_sha256, h.terms_digest,
+                h.policy_id, h.policy_digest, h.issued_at, h.expires_at
+           FROM mcp_handoff_intents h JOIN mcp_tasks t ON t.task_id = h.task_id
+          WHERE h.intent_digest = ? AND (? IS NULL OR t.owner_hash = ?)`,
       )
-      .get(intentDigest) as Record<string, unknown> | undefined;
+      .get(intentDigest, ownerHash ?? null, ownerHash ?? null) as Record<string, unknown> | undefined;
     if (row === undefined) return undefined;
     return {
       intent_id: row.intent_id as string,
@@ -248,9 +347,9 @@ export class TaskApprovalStore {
       .prepare(
         `INSERT INTO mcp_tasks
            (task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id,
-            created_at, updated_at, expires_at, resumable, payload)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(idempotency_key) DO NOTHING`,
+            created_at, updated_at, expires_at, resumable, owner_hash, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(owner_hash, idempotency_key) DO NOTHING`,
       )
       .run(
         task.task_id,
@@ -263,11 +362,14 @@ export class TaskApprovalStore {
         task.updated_at,
         task.expires_at ?? null,
         task.resumable ? 1 : 0,
+        task.owner_hash ?? "",
         task.payload,
       );
     if (result.changes === 0) {
-      const existing = this.db.prepare("SELECT task_id FROM mcp_tasks WHERE idempotency_key = ?")
-        .get(task.idempotency_key) as { task_id: string } | undefined;
+      const owner = task.owner_hash ?? "";
+      const existing = this.db.prepare(
+        "SELECT task_id FROM mcp_tasks WHERE owner_hash = ? AND idempotency_key = ?",
+      ).get(owner, task.idempotency_key) as { task_id: string } | undefined;
       const canonical = existing === undefined ? undefined : this.getTask(existing.task_id);
       if (canonical === undefined) throw new McpError("invalid_params", "idempotent task disappeared");
       return { task: canonical, created: false };
@@ -275,12 +377,20 @@ export class TaskApprovalStore {
     return { task, created: true };
   }
 
-  getTask(taskId: string): StoredTask | undefined {
+  /** Explicit, one-time migration of pre-owner tasks in a local database. */
+  adoptLegacyTasks(_ownerHash: string): number {
+    throw new McpError(
+      "legacy_ownership_unproven",
+      "bulk adoption of legacy tasks is disabled; ownership must be proven out of band",
+    );
+  }
+
+  getTask(taskId: string, ownerHash?: string): StoredTask | undefined {
     const row = this.db
       .prepare(
-        "SELECT task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id, created_at, updated_at, expires_at, resumable, payload FROM mcp_tasks WHERE task_id = ?",
+        "SELECT task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id, created_at, updated_at, expires_at, resumable, owner_hash, payload FROM mcp_tasks WHERE task_id = ? AND (? IS NULL OR owner_hash = ?)",
       )
-      .get(taskId) as
+      .get(taskId, ownerHash ?? null, ownerHash ?? null) as
       | {
           task_id: string;
           task_kind: string;
@@ -292,6 +402,7 @@ export class TaskApprovalStore {
           updated_at: string;
           expires_at: string | null;
           resumable: number;
+          owner_hash: string;
           payload: string;
         }
       | undefined;
@@ -307,6 +418,7 @@ export class TaskApprovalStore {
       updated_at: row.updated_at,
       expires_at: row.expires_at ?? undefined,
       resumable: row.resumable === 1,
+      owner_hash: row.owner_hash,
       payload: row.payload,
     };
   }
@@ -540,12 +652,12 @@ export class TaskApprovalStore {
     }
   }
 
-  getApproval(approvalId: string): StoredApproval | undefined {
+  getApproval(approvalId: string, ownerHash?: string): StoredApproval | undefined {
     const row = this.db
       .prepare(
-        "SELECT approval_id, task_id, action, status, candidate_digest, expires_at, decided_at, authorization_json, intent_digest FROM mcp_approvals WHERE approval_id = ?",
+        "SELECT a.approval_id, a.task_id, a.action, a.status, a.candidate_digest, a.expires_at, a.decided_at, a.authorization_json, a.intent_digest FROM mcp_approvals a JOIN mcp_tasks t ON t.task_id=a.task_id WHERE a.approval_id = ? AND (? IS NULL OR t.owner_hash = ?)",
       )
-      .get(approvalId) as Record<string, unknown> | undefined;
+      .get(approvalId, ownerHash ?? null, ownerHash ?? null) as Record<string, unknown> | undefined;
     if (row === undefined) return undefined;
     return {
       approval_id: row.approval_id as string,
@@ -560,12 +672,12 @@ export class TaskApprovalStore {
     };
   }
 
-  listApprovalsByTask(taskId: string): StoredApproval[] {
+  listApprovalsByTask(taskId: string, ownerHash?: string): StoredApproval[] {
     const rows = this.db
       .prepare(
-        "SELECT approval_id, task_id, action, status, candidate_digest, expires_at, decided_at, authorization_json, intent_digest FROM mcp_approvals WHERE task_id = ?",
+        "SELECT a.approval_id, a.task_id, a.action, a.status, a.candidate_digest, a.expires_at, a.decided_at, a.authorization_json, a.intent_digest FROM mcp_approvals a JOIN mcp_tasks t ON t.task_id=a.task_id WHERE a.task_id = ? AND (? IS NULL OR t.owner_hash = ?)",
       )
-      .all(taskId) as Array<Record<string, unknown>>;
+      .all(taskId, ownerHash ?? null, ownerHash ?? null) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       approval_id: row.approval_id as string,
       task_id: row.task_id as string,
@@ -622,12 +734,12 @@ export class TaskApprovalStore {
     this.db.prepare("DELETE FROM mcp_agreements WHERE agreement_id = ?").run(agreementId);
   }
 
-  getAgreement(agreementId: string): StoredAgreement | undefined {
+  getAgreement(agreementId: string, ownerHash?: string): StoredAgreement | undefined {
     const row = this.db
       .prepare(
-        "SELECT agreement_id, task_id, negotiation_id, terms_digest, created_at, expires_at, payload FROM mcp_agreements WHERE agreement_id = ?",
+        "SELECT a.agreement_id, a.task_id, a.negotiation_id, a.terms_digest, a.created_at, a.expires_at, a.payload FROM mcp_agreements a JOIN mcp_tasks t ON t.task_id=a.task_id WHERE a.agreement_id = ? AND (? IS NULL OR t.owner_hash = ?)",
       )
-      .get(agreementId) as Record<string, unknown> | undefined;
+      .get(agreementId, ownerHash ?? null, ownerHash ?? null) as Record<string, unknown> | undefined;
     if (row === undefined) return undefined;
     return {
       agreement_id: row.agreement_id as string,

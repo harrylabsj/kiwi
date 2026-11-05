@@ -41,7 +41,7 @@ import { A2AQuoteFetcher } from "./a2a-quote-fetcher.js";
 import { KiwiCatalogMerchantIndex, MarketplaceMerchantIndex } from "./merchant-index.js";
 import { MarketplaceNegotiator } from "./negotiator.js";
 import { MarketplaceQuoteFetcher } from "./quote-fetcher.js";
-import { KiwiBuyerService, type BuyerFollowsClient } from "./service.js";
+import { KiwiBuyerService, type BuyerFollowsClient, type MerchantRecord } from "./service.js";
 import { TaskApprovalStore } from "./store.js";
 
 /**
@@ -60,6 +60,8 @@ export interface BuyerServiceConfig {
   principal: string;
   buyerAgentId: string;
   sessionId: string;
+  /** Opaque HMAC owner supplied by an MCP/HTTP wrapper. */
+  sessionOwner?: string;
   policy: Record<string, unknown>;
   catalogUrl?: string;
   marketplaceUrl?: string;
@@ -79,6 +81,8 @@ export interface BuyerServiceConfig {
   a2aSkipDnsCheck?: boolean;
   /** A2A 单请求超时 ms。 */
   a2aTimeoutMs?: number;
+  /** Merchant-visible first-RFQ message; test/acceptance only. */
+  rfqPublicMessage?: string;
   /** Explicit recovery directory required for memory/URI database configurations. */
   protocolStateDir?: string;
   /**
@@ -88,6 +92,8 @@ export interface BuyerServiceConfig {
    * 并持久化（0600），重启不换钥。
    */
   a2aSigningKeyDir?: string;
+  /** Test/embedding override for on-demand stale-merchant wake probes. */
+  staleWake?: (merchant: MerchantRecord) => Promise<boolean>;
 }
 
 /**
@@ -241,6 +247,7 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
       allowPrivateRanges: config.a2aAllowPrivateRanges,
       skipDnsCheck: config.a2aSkipDnsCheck,
       timeoutMs: config.a2aTimeoutMs,
+      ...(config.rfqPublicMessage !== undefined ? { publicMessage: config.rfqPublicMessage } : {}),
     };
     quoteFetcher = new A2AQuoteFetcher(a2a);
     negotiator = new A2ANegotiator({
@@ -254,17 +261,23 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
         (serviceRef === undefined ? "counter proposal gate unavailable (fail-closed)" : undefined),
     });
   }
+  // No-credential wake is not enabled by default: a platform 403/404 does not
+  // prove cold start. Production must opt in only after the platform wake path
+  // is empirically verified; tests inject staleWake explicitly.
+  const staleWake = config.staleWake;
   let serviceRef: KiwiBuyerService | undefined;
   const serviceInstance = new KiwiBuyerService({
     store,
     principal: config.principal,
     buyerAgentId: config.buyerAgentId,
     sessionId: config.sessionId,
+    ...(config.sessionOwner !== undefined ? { sessionOwner: config.sessionOwner } : {}),
     delegationPolicy: config.policy,
     ...(merchantIndex !== undefined ? { merchantIndex } : {}),
     ...(quoteFetcher !== undefined ? { quoteFetcher } : {}),
     ...(negotiator !== undefined ? { negotiator } : {}),
     ...(followsClient !== undefined ? { followsClient } : {}),
+    ...(staleWake !== undefined ? { staleWake } : {}),
   });
   serviceRef = serviceInstance;
   return serviceInstance;

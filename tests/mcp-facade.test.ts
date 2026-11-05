@@ -126,6 +126,7 @@ function makeHarness(store: TaskApprovalStore, policy: Record<string, unknown> =
     principal: "company:acme-test",
     buyerAgentId: "buyer-agent:test",
     sessionId: "session-test-1",
+    sessionOwner: "test-session-owner",
     delegationPolicy: policy,
     merchantIndex: MERCHANTS,
     quoteFetcher: fakeQuoteFetcher(),
@@ -960,6 +961,7 @@ describe("持久化：重启后 pending/approval 可解释（§6.2）", () => {
       principal: "company:acme-test",
       buyerAgentId: "buyer-agent:test",
       sessionId: "session-test-1",
+      sessionOwner: "test-session-owner",
       delegationPolicy: POLICY,
       merchantIndex: MERCHANTS,
     });

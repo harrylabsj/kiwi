@@ -16,6 +16,16 @@ MCP 前端只支持 `2025-06-18`：客户端请求该版本时原样回应；请
 
 历史正式入口固定为 `@harrylabsj/kiwi@0.12.3`；另一个未提交 staging 副本改为固定 `0.12.7`。本候选用按次 latest 替代这两种固定 pin，是有意的启动契约变化，不能默认为平台接受。
 
+## Runtime 身份能力门禁
+
+安装完成后，除 13 工具 schema 外，启动器还会用**合成任务数据库**实际验证所安装的 Kiwi runtime：
+
+- 用随机合成 token/clientId 建立同 owner 任务和异 owner 任务；
+- 通过新 runtime 的真实 MCP `kiwi_get_task` 读取；
+- 必须能读取同 owner 任务，且必须拒绝异 owner 任务。
+
+只返回版本号、只有工具 schema、或忽略 owner 的旧 runtime 都会失败并停止，不会静默创建无 owner 任务。该探针不访问网络、不调用业务工具、不使用真实数据。
+
 ## 架构与业务边界
 
 ```text
@@ -62,3 +72,22 @@ npm run package:workbuddy
 本地专家成功执行的是只读搜索；候选价格仍待询价。向商家询价、报价比较、磋商、接受协议、handoff/approval、下单、订单或库存变更、付款均未在本次验证中执行，不能据此宣称这些业务流程已验收。连接器也不证明真人授权语义或 Kiwi 后端预算、范围策略。
 
 提交此候选到平台不代表审核通过。WorkBuddy 宿主的其他协议版本协商、完整升级/回滚、灰度及紧急下架流程也未由本次只读搜索覆盖。平台版本和审核状态以提交当时的实际平台结果为准。
+
+## 买家实例状态
+
+部署前提：**每个 WorkBuddy 实例拥有自己的受保护 `CODEBUDDY_PLUGIN_DATA`**；不同买家不共用同一 WorkBuddy 实例。该前提是运维验收条件，Connector 子进程无法从代码证明它。
+
+启动器在 `CODEBUDDY_PLUGIN_DATA` 下创建 `kiwi-instance-v1/`（0700），原子写入：
+
+```text
+instance-id       # 64 位随机十六进制，跨 Kiwi 版本稳定
+session.token     # 64 位随机十六进制，0600
+buyer.sqlite      # 该实例的 task/approval 数据
+kiwi-sourcing-latest/  # 仅包缓存，位于实例根下
+```
+
+- 父目录可能是 WorkBuddy 创建的 `0755`；实例根必须是当前用户所有、非符号链接的 `0700`。
+- 启动器清除父环境中的 `KIWI_CLIENT_ID`、`KIWI_SESSION*`、`KIWI_MCP_DB`，再注入本实例的绝对 DB、instance-id 和 token 文件，避免继承 token 覆盖。
+- Kiwi 包升级只更新实例根下的版本缓存；实例身份和买家数据库不随版本缓存迁移。
+- 如果同一数据目录被多个 WorkBuddy 实例共享，**不具备实例隔离**，必须停止部署；不能把安装级共享目录当作隔离。
+- 不自动认领无归属旧任务；旧版本缓存目录中的数据库不会自动迁移，需人工带外证明归属后处理。

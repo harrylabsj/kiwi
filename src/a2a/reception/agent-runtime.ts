@@ -69,6 +69,8 @@ export interface ReceptionAgentInput {
   identity: string;
   contextId: string;
   text: string;
+  /** Immutable server-side KNP structured SKU. The model may not switch it. */
+  structuredSku?: string;
   previousNeed?: ReceptionNeed;
   registry: InMemoryFactRegistry;
   now: string;
@@ -402,6 +404,7 @@ export function createPiReceptionRuntime(
       const factUnits = new Map<string, FactUnitState>();
       const rejectedFactUnits = new Map<string, { inputQuantity?: number; inputUnit?: string }>();
       const buyerQuantity = parseBuyerQuantity(input.text);
+      const boundSku = input.structuredSku?.trim() || undefined;
       let steps = 0;
       let toolAttempts = 0;
       let timedOut = false;
@@ -444,9 +447,13 @@ export function createPiReceptionRuntime(
               return toolResult(JSON.stringify({ candidates: [], note: "search_not_configured" }));
             }
             const candidates = await options.productSource.searchProducts(query).catch(() => []);
+            const visible =
+              boundSku === undefined
+                ? candidates
+                : candidates.filter((candidate) => candidate.sku === boundSku);
             return toolResult(
               JSON.stringify({
-                candidates: candidates.slice(0, 5).map((candidate) => ({
+                candidates: visible.slice(0, 5).map((candidate) => ({
                   sku: candidate.sku,
                   ...(candidate.title !== undefined ? { title: candidate.title } : {}),
                   price: candidate.price,
@@ -481,6 +488,11 @@ export function createPiReceptionRuntime(
               .map((sku) => sku.trim())
               .filter((sku) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(sku))
               .slice(0, 3);
+            if (boundSku !== undefined && skus.some((sku) => sku !== boundSku)) {
+              return toolResult(
+                JSON.stringify({ products: [], error: "sku_mismatch", bound_sku: boundSku }),
+              );
+            }
             if (skus.length === 0 || options.productSource === undefined) {
               return toolResult(JSON.stringify({ products: [] }));
             }
@@ -601,7 +613,12 @@ export function createPiReceptionRuntime(
           },
           execute: async (_id, params): Promise<AgentToolResult<unknown>> => {
             const args: unknown = params;
-            const sku = isObject(args) && typeof args.sku === "string" ? args.sku.trim() : "";
+            const requestedSku =
+              isObject(args) && typeof args.sku === "string" ? args.sku.trim() : "";
+            if (boundSku !== undefined && requestedSku !== "" && requestedSku !== boundSku) {
+              return toolResult(JSON.stringify({ error: "sku_mismatch", bound_sku: boundSku }));
+            }
+            const sku = boundSku ?? requestedSku;
             const quantity =
               isObject(args) &&
               typeof args.quantity === "number" &&
@@ -759,7 +776,10 @@ export function createPiReceptionRuntime(
                 ? args.quantity
                 : undefined;
             const unit = typeof args.unit === "string" && args.unit.trim() !== "" ? args.unit.trim() : undefined;
-            const effectiveSku = sku ?? needPatch.sku;
+            if (boundSku !== undefined && sku !== undefined && sku !== boundSku) {
+              return toolResult(JSON.stringify({ error: "sku_mismatch", bound_sku: boundSku }));
+            }
+            const effectiveSku = boundSku ?? sku ?? needPatch.sku;
             const rejected = effectiveSku !== undefined ? rejectedFactUnits.get(effectiveSku) : undefined;
             if (rejected !== undefined) {
               return toolResult(JSON.stringify({ error: "need_patch_conflict" }));
@@ -825,6 +845,26 @@ export function createPiReceptionRuntime(
             const blocks = sanitizeReceptionBlocks(args.blocks);
             if (blocks === undefined) {
               return toolResult(JSON.stringify({ accepted: false, error: "invalid_blocks" }));
+            }
+            if (boundSku !== undefined) {
+              const wrong = blocks.some((block) => {
+                if (block.kind === "acknowledge_need") {
+                  return block.sku !== undefined && block.sku !== boundSku;
+                }
+                if (block.kind === "show_commercial_terms") return block.ref.sku !== boundSku;
+                if (block.kind === "recommend_option") {
+                  return (
+                    block.ref.sku !== boundSku ||
+                    (block.comparedRefs ?? []).some((ref) => ref.sku !== boundSku)
+                  );
+                }
+                return false;
+              });
+              if (wrong) {
+                return toolResult(
+                  JSON.stringify({ accepted: false, error: "sku_mismatch", bound_sku: boundSku }),
+                );
+              }
             }
             const normalizedBlocks = blocks.map((block) => {
               if (

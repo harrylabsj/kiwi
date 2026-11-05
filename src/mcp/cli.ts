@@ -43,6 +43,7 @@ import path from "node:path";
 import { assertNorthboundContractValid } from "../contracts/northbound-schema.js";
 import { buildBuyerService } from "../buyer-core/build-service.js";
 import { McpServer } from "./server.js";
+import { resolveSessionOwner } from "./session-owner.js";
 import { buildKiwiTools } from "./tools.js";
 
 export const KIWI_MCP_VERSION = "0.1.0";
@@ -76,6 +77,10 @@ export interface McpServeOptions {
   principal?: string;
   buyerAgentId?: string;
   sessionId?: string;
+  /** Optional managed-host secret; otherwise a local 0600 key is used. */
+  sessionToken?: string;
+  sessionTokenFile?: string;
+  clientId?: string;
   policy?: Record<string, unknown>;
   catalogUrl?: string;
   marketplaceUrl?: string;
@@ -86,6 +91,7 @@ export interface McpServeOptions {
   a2aAllowPrivateRanges?: boolean;
   a2aSkipDnsCheck?: boolean;
   a2aTimeoutMs?: number;
+  rfqPublicMessage?: string;
   /**
    * Buyer 自己的持久 Ed25519 身份目录。给定时每个出站 A2A 请求都签名，商家把
    * 公钥登记进 `a2a-trusted-keys.json` 后，受保护操作（GetTask/回执轮询）才会
@@ -113,12 +119,21 @@ export async function runMcpServe(args: string[]): Promise<number> {
   const opts: McpServeOptions = {};
   for (let i = 0; i < args.length; i += 1) {
     const flag = args[i];
+    // Disabled migration flags must be rejected even when they are the final
+    // argument (there is no following value to trigger the normal branch).
+    if (flag === "--adopt-legacy" || flag === "--adopt-legacy-owner") {
+      process.stderr.write("legacy task adoption is disabled: ownership must be proven out of band\n");
+      return 2;
+    }
     const value = args[i + 1];
     if (value === undefined) continue;
     if (flag === "--db") opts.db = value;
     else if (flag === "--principal") opts.principal = value;
     else if (flag === "--agent") opts.buyerAgentId = value;
     else if (flag === "--session") opts.sessionId = value;
+    else if (flag === "--session-token") opts.sessionToken = value;
+    else if (flag === "--session-token-file") opts.sessionTokenFile = value;
+    else if (flag === "--client-id") opts.clientId = value;
     else if (flag === "--catalog-url") opts.catalogUrl = value;
     else if (flag === "--marketplace-url") opts.marketplaceUrl = value;
     else if (flag === "--buyer-bootstrap-token") opts.buyerBootstrapToken = value;
@@ -127,6 +142,7 @@ export async function runMcpServe(args: string[]): Promise<number> {
     else if (flag === "--a2a-allow-private-ranges") opts.a2aAllowPrivateRanges = value === "true";
     else if (flag === "--a2a-skip-dns-check") opts.a2aSkipDnsCheck = value === "true";
     else if (flag === "--a2a-timeout-ms") opts.a2aTimeoutMs = Number(value);
+    else if (flag === "--rfq-public-message") opts.rfqPublicMessage = value;
     else if (flag === "--a2a-signing-key-dir") opts.a2aSigningKeyDir = value;
     else if (flag === "--policy") {
       try {
@@ -139,18 +155,41 @@ export async function runMcpServe(args: string[]): Promise<number> {
   }
   const principal = opts.principal ?? process.env.KIWI_PRINCIPAL ?? "principal:local";
   const buyerAgentId = opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-mcp";
-  const sessionId = opts.sessionId ?? process.env.KIWI_SESSION ?? `session-${process.pid}`;
+  // Stable default: when a token is used, restart/reconnect must recover the
+  // same identity. Never include the process id in the default label.
+  const sessionId = opts.sessionId ?? process.env.KIWI_SESSION ?? "default";
+  const dbPath =
+    opts.db ?? process.env.KIWI_MCP_DB ?? path.join(homedir(), ".kiwi", "mcp", "dsh.sqlite");
+  const explicitToken = opts.sessionToken ?? process.env.KIWI_SESSION_TOKEN;
+  const tokenFile = opts.sessionTokenFile ?? process.env.KIWI_SESSION_TOKEN_FILE;
+  const clientId = opts.clientId ?? process.env.KIWI_CLIENT_ID;
+  let sessionOwner: string;
+  try {
+    sessionOwner = resolveSessionOwner({
+    clientId,
+    principal,
+    buyerAgentId,
+    sessionId,
+    ...(explicitToken !== undefined ? { sessionToken: explicitToken } : {}),
+    ...(tokenFile !== undefined ? { sessionTokenFile: tokenFile } : {}),
+    ...(process.env.KIWI_SESSION_TOKEN_DIR !== undefined
+      ? { tokenDir: process.env.KIWI_SESSION_TOKEN_DIR } : {}),
+      dbPath,
+    });
+  } catch (error) {
+    process.stderr.write(`session credential rejected: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 2;
+  }
   const policy = readPolicy(opts, principal);
   // 持久 store 默认路径：--db → KIWI_MCP_DB env → ~/.kiwi/mcp/dsh.sqlite（HOME 基准，
   // 稳定可跨宿主；dsh/Hermes 等 host 不传 --db 时也能落一致位置，不再依赖 cwd）。
-  const dbPath =
-    opts.db ?? process.env.KIWI_MCP_DB ?? path.join(homedir(), ".kiwi", "mcp", "dsh.sqlite");
   // 单核心多包装：MCP 与 HTTP 共用同一 buildBuyerService（§6.3）。
   const service = buildBuyerService({
     dbPath,
     principal,
     buyerAgentId,
     sessionId,
+    sessionOwner,
     policy,
     catalogUrl: opts.catalogUrl ?? DEFAULT_CATALOG_URL,
     marketplaceUrl: opts.marketplaceUrl,
@@ -160,6 +199,7 @@ export async function runMcpServe(args: string[]): Promise<number> {
     a2aAllowPrivateRanges: opts.a2aAllowPrivateRanges,
     a2aSkipDnsCheck: opts.a2aSkipDnsCheck,
     a2aTimeoutMs: opts.a2aTimeoutMs,
+    ...(opts.rfqPublicMessage !== undefined ? { rfqPublicMessage: opts.rfqPublicMessage } : {}),
     // 保持 opt-in：默认仍匿名，只有显式给了目录才签名出站请求（避免对不认识
     // 该公钥的商家把普通询价也变成未验证身份）。
     a2aSigningKeyDir: opts.a2aSigningKeyDir ?? process.env.KIWI_A2A_SIGNING_KEY_DIR,

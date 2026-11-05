@@ -20,7 +20,7 @@ import {
   resolveUnitConversion,
   unitConversionPolicy,
 } from "../unit-alias.js";
-import type { ReceptionAgentRuntime } from "./agent-runtime.js";
+import type { ReceptionAgentResult, ReceptionAgentRuntime } from "./agent-runtime.js";
 import { RECEPTION_CONFIG_DEFAULTS } from "./config.js";
 import type { ReceptionConversationStore } from "./conversation-store.js";
 import { factRevision, InMemoryFactRegistry, publishResponsePlan } from "./publish.js";
@@ -329,11 +329,16 @@ export function createMerchantReceptionEngine(
             identity: input.identity,
             contextId: input.contextId,
             text,
+            ...(structuredSku !== undefined ? { structuredSku } : {}),
             ...(previous !== undefined ? { previousNeed: previous.need } : {}),
             registry,
             now: input.now,
           });
-          if (agentResult !== undefined) {
+          if (
+            agentResult !== undefined &&
+            (structuredSku === undefined ||
+              agentResultMatchesStructuredSku(agentResult, structuredSku))
+          ) {
             // 模型选择转人工时，仍由服务端登记审批候选（模型没有写能力）。
             const humanBlocks = agentResult.plan.blocks.filter(
               (block): block is Extract<ReceptionBlock, { kind: "request_human_help" }> =>
@@ -961,6 +966,27 @@ function pendingApprovalExists(
   } catch {
     return false;
   }
+}
+
+/** Server-side structured SKU is immutable; a model plan for another SKU is ignored. */
+function agentResultMatchesStructuredSku(
+  result: ReceptionAgentResult,
+  structuredSku: string,
+): boolean {
+  if (result.need?.sku !== undefined && result.need.sku !== structuredSku) return false;
+  return result.plan.blocks.every((block) => {
+    if (block.kind === "acknowledge_need") {
+      return block.sku === undefined || block.sku === structuredSku;
+    }
+    if (block.kind === "show_commercial_terms") return block.ref.sku === structuredSku;
+    if (block.kind === "recommend_option") {
+      return (
+        block.ref.sku === structuredSku &&
+        (block.comparedRefs ?? []).every((ref) => ref.sku === structuredSku)
+      );
+    }
+    return true;
+  });
 }
 
 function truthfulHumanFallback(
