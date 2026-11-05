@@ -1188,10 +1188,14 @@ export class KiwiBuyerService {
         if (this.negotiator?.acceptNonbinding === undefined) {
           throw new McpError("invalid_params", "A2A candidate cannot be accepted without a negotiator");
         }
-        if (provenance.latest_offer_type !== "conditional_offer") {
+        // Merchant handler normalizes a direct `offer` into the same
+        // accept_nonbinding object as a conditional_offer (conditions: []).
+        // Both are remote-acceptable; do not require a synthetic conditional
+        // round or a price change just to obtain the merchant agreement.
+        if (provenance.latest_offer_type !== "conditional_offer" && provenance.latest_offer_type !== "offer") {
           throw new McpError(
             "invalid_params",
-            "A2A candidate latest reply is not conditional_offer; refusing to create a local agreement",
+            "A2A candidate latest reply is not an acceptable offer/conditional_offer; refusing to create a local agreement",
           );
         }
         const accepted = await this.negotiator.acceptNonbinding({
@@ -1199,6 +1203,9 @@ export class KiwiBuyerService {
           candidate: preCandidate,
           context: this.protocolContext(task),
         });
+        if (accepted?.agreement === undefined || accepted.agreement === null) {
+          throw new McpError("internal_error", "A2A accept returned no merchant agreement");
+        }
         merchantAgreement = accepted.agreement;
       }
     }

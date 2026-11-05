@@ -16,7 +16,7 @@ const POLICY = {
 };
 
 describe("A2A accept requires a real merchant agreement", () => {
-  it("does not create a local agreement or call the merchant for an offer reply", async () => {
+  it("sends accept_nonbinding for a direct offer and stores the merchant agreement", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-a2a-accept-")); dirs.push(dir);
     const store = new TaskApprovalStore({ dbPath: path.join(dir, "buyer.sqlite") });
     store.createTask({
@@ -38,13 +38,16 @@ describe("A2A accept requires a real merchant agreement", () => {
       delegationPolicy: POLICY,
       negotiator: {
         negotiate: async (_task, _intent, current) => current,
-        acceptNonbinding: async () => { merchantCalls += 1; return { agreement: { fake: true } }; },
+        acceptNonbinding: async () => {
+          merchantCalls += 1;
+          return { agreement: { type: "accepted_nonbinding_agreement", agreement_id: "merchant-agr-1", binding_effect: "nonbinding" } };
+        },
       },
     });
-    await expect(service.acceptAgreement({ task_id: "task-a2a-offer", candidate_id: "cand-a2a-offer" }))
-      .rejects.toMatchObject({ code: "invalid_params" });
-    expect(merchantCalls).toBe(0);
-    expect(store.hasAgreementForTask("task-a2a-offer")).toBe(false);
+    const accepted = await service.acceptAgreement({ task_id: "task-a2a-offer", candidate_id: "cand-a2a-offer" });
+    expect(merchantCalls).toBe(1);
+    expect(accepted.agreement.merchant_agreement).toMatchObject({ agreement_id: "merchant-agr-1" });
+    expect(store.hasAgreementForTask("task-a2a-offer")).toBe(true);
     store.close();
   });
 });

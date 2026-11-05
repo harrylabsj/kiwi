@@ -253,10 +253,6 @@ if (!["offer", "conditional_offer"].includes(replyForEvidence.action)) {
   record("preaccept", false, "商家最新回复不是 offer-like，不能进入非约束接受");
   fail("pre-accept nonbinding evidence missing: offer-like reply");
 }
-if (replyForEvidence.action !== "conditional_offer") {
-  record("preaccept", false, "商家最新回复是 offer，不是协议可远程接受的 conditional_offer");
-  fail("A2A accept_nonbinding requires conditional_offer; refusing local agreement");
-}
 const preacceptEvidence = {
   negotiation_capability: catalogCard.extension,
   catalog_agent_id: catalogCard.catalog_agent_id,
@@ -265,7 +261,7 @@ const preacceptEvidence = {
   accept_action: "accept_nonbinding",
   merchant_preaccept_nonbinding_flag: null,
 };
-record("preaccept", true, "协议能力 + offer-like 回复 + accept_nonbinding 动作；商家未提供接受前 nonbinding 字段", preacceptEvidence);
+record("preaccept", true, "Catalog card + offer/conditional_offer 回复 + accept_nonbinding；商家未提供接受前 nonbinding 字段", preacceptEvidence);
 
 // 3) 接受（非约束性协议，带审批）
 if (currentCandidate === undefined) {
