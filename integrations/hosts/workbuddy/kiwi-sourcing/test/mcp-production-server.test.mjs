@@ -48,7 +48,7 @@ test('tool list and fast init are available while latest preparation is pending;
 
 test('all 13 tools and exact arguments pass through without connector elicitation or fabricated approval',async()=>{
   let backend;
-  const expectedResults=new Map();
+  const expectedResults=new Map(), backendIds=new Set();
   const h=harness({activate:async(_prepared,{onMessage})=>{backend=fakeBackend();backend.send=async message=>{backend.calls.push(structuredClone(message));if(message.method==='tools/call')onMessage({jsonrpc:'2.0',id:message.id,result:expectedResults.get(message.params.name)})};return backend}});
   try{
     await initialize(h,{});
@@ -66,7 +66,7 @@ test('all 13 tools and exact arguments pass through without connector elicitatio
       const id=10+index;
       await h.send({jsonrpc:'2.0',id,method:'tools/call',params:{name:tool.name,arguments:args}});
       assert.deepEqual((await until(h.messages,m=>m.id===id)).result,result);
-      assert.deepEqual(backend.calls.filter(m=>m.method==='tools/call').at(-1),{jsonrpc:'2.0',id,method:'tools/call',params:{name:tool.name,arguments:args}});
+      const forwarded=backend.calls.filter(m=>m.method==='tools/call').at(-1);assert.match(forwarded.id,/^kiwi-tool:/);assert.notEqual(forwarded.id,id);assert.equal(backendIds.has(forwarded.id),false);backendIds.add(forwarded.id);assert.deepEqual({...forwarded,id},{jsonrpc:'2.0',id,method:'tools/call',params:{name:tool.name,arguments:args}});
     }
     assert.equal(h.messages.some(m=>m.method==='elicitation/create'),false);
     assert.deepEqual(backend.calls.filter(m=>m.method==='tools/call').map(m=>m.params.name),baseline.map(tool=>tool.name));

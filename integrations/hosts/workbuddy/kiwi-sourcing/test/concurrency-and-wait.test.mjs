@@ -62,7 +62,7 @@ test('tools/list stays immediate; read-only calls queue once during prepare and 
     await h.send({jsonrpc:'2.0',id:4,method:'tools/call',params:{name:'kiwi_accept_agreement',arguments:{agreement_id:'synthetic'}}});
     assert.equal(h.messages.some(m=>m.id===3),false);assert.match(h.messages.find(m=>m.id===4).result.content[0].text,/PREPARATION_IN_PROGRESS/);assert.deepEqual(h.messages.find(m=>m.id===4).result.structuredContent,{status:'retryable',code:'PREPARATION_IN_PROGRESS',requestSent:false});
     assert.equal(backend.calls.length,0);resolvePrepare({});await until(h.messages,()=>h.server.status==='ready');
-    assert.equal(backend.calls.filter(m=>m.method==='tools/call').length,1);assert.equal(backend.calls[0].id,3);assert.equal(backend.calls[0].params.name,'kiwi_search');
+    assert.equal(backend.calls.filter(m=>m.method==='tools/call').length,1);assert.notEqual(backend.calls[0].id,3);assert.match(backend.calls[0].id,/^kiwi-tool:/);assert.equal(backend.calls[0].params.name,'kiwi_search');
   } finally {await close(h)}
 });
 
