@@ -2534,7 +2534,7 @@
     },
     {
       "path": "scripts/run-acceptance.mjs",
-      "sha256": "sha256:0b4d71da56efe391bd945bf15694f13baddf51f4eb679a3b2f6405e235c92be3"
+      "sha256": "sha256:04df7935e81fe0db13b90660253a76ed256e50f136abb2a1d2b89dcd2a073ae2"
     },
     {
       "path": "scripts/smoke-cloud-artifact.mjs",
@@ -3246,11 +3246,11 @@
     },
     {
       "path": "src/buyer-core/a2a-negotiator.ts",
-      "sha256": "sha256:982818ef8f64b0d39ac92f992bcf86cf010d64335af92314cb27ccfdcae05f12"
+      "sha256": "sha256:7228255a047ad022f6f73a3137dead16b946bd3ef1d52e1a37b58b092379f8c3"
     },
     {
       "path": "src/buyer-core/a2a-quote-fetcher.ts",
-      "sha256": "sha256:22cf0ac1ffc5b7c650a095a2dcd919dad5be238754568da4a2fe711a5cb1342d"
+      "sha256": "sha256:b6b362ffb4bc9f2564455f64c4ffb6845340a01deeb3b1f56e3b3ce03e147d75"
     },
     {
       "path": "src/buyer-core/build-service.ts",
@@ -3298,7 +3298,7 @@
     },
     {
       "path": "src/buyer-core/service.ts",
-      "sha256": "sha256:b777e3059fb3dd57152af2c8d1e108ff3fa929d8e9474edbef6cd5baaabf9dd6"
+      "sha256": "sha256:18751c2c63f4361caaf30ae25f0c0325402076c21e839b105fc35f2ad2fd1f50"
     },
     {
       "path": "src/buyer-core/store.ts",
@@ -4878,9 +4878,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:ab68690b5589a2768d35796cb23e4390e220e1aa952d13c319cbf0be2eadec7a",
+      "sha256": "sha256:dc0cc60ce7715b03eb9b16f635af46bd843c1583a1c66c0622b50ae07481129e",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:7c2c0a74faeb4b6bedebc4a43f608fa63ab9692fb30c3b42db3282d49fdd65e4"
+      "raw_sha256": "sha256:adce8fda1a97415e9c5b1d031f7515c24897fb2bf608f26600d58d8dee127689"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -4913,6 +4913,10 @@
     {
       "path": "tests/a2a-crash-window.test.ts",
       "sha256": "sha256:533642605731f9fd205aa5f14d8be95f95dcdd1202ede2580df6b61b30c3c72f"
+    },
+    {
+      "path": "tests/a2a-direct-offer-restart.test.ts",
+      "sha256": "sha256:6fad49b880eff8b4ae939809b79c693c0f17504048186ee2a30d38660b6245c6"
     },
     {
       "path": "tests/a2a-node-guard.test.ts",

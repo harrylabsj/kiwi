@@ -36,6 +36,7 @@ import {
   resolveA2aEndpoint,
 } from "./a2a-knp.js";
 import type { QuoteCandidateInput, QuoteFetcher, MerchantRecord } from "./service.js";
+import { contentDigest } from "../negotiation/jcs.js";
 
 import { GatewayCookieJar } from "../a2a/access/gateway-cookie-jar.js";
 import { BuyerProtocolRecovery, MerchantDeclined, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext, type ProtocolReply } from "./protocol-recovery.js";
@@ -503,7 +504,22 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     // Provenance must describe the merchant's actual quoted SKU, not the
     // buyer's request SKU (otherwise a swapped product is masked).
     const sku=terms?.items[0]?.sku ?? (wire.payload as {items?:Array<{sku?:string}>}).items?.[0]?.sku;
-    return {merchant_id:merchantId,status:"succeeded",...(terms?{terms}:{}),provenance:{...(typeof offerId==="string"?{offer_id:offerId}:{}),negotiation_id:wire.negotiation_id,merchant_reply_id:reply.message_id,source:"a2a",reply_text:JSON.stringify(reply),sku,a2a_endpoint:endpoint}};
+    const rawTerms = (reply.payload as {terms?:unknown;proposed_terms?:unknown}).terms
+      ?? (reply.payload as {terms?:unknown;proposed_terms?:unknown}).proposed_terms;
+    const agreedTerms = typeof rawTerms === "object" && rawTerms !== null && !Array.isArray(rawTerms)
+      ? rawTerms as Record<string, unknown>
+      : undefined;
+    return {merchant_id:merchantId,status:"succeeded",...(terms?{terms}:{}),provenance:{
+      ...(typeof offerId==="string"?{offer_id:offerId}:{}),
+      negotiation_id:wire.negotiation_id,
+      merchant_reply_id:reply.message_id,
+      source:"a2a",
+      reply_text:JSON.stringify(reply),
+      sku,
+      a2a_endpoint:endpoint,
+      latest_offer_type: reply.action === "offer" ? "offer" : reply.action === "counter_offer" ? "counter_offer" : "conditional_offer",
+      ...(agreedTerms!==undefined ? {latest_agreed_terms:agreedTerms,latest_terms_digest:contentDigest(agreedTerms)} : {}),
+    }};
   }
   async recoverQuotes(context:ProtocolTaskContext):Promise<QuoteCandidateInput[]> {
     if(!this.recovery)throw new ProtocolOperationUnknown();

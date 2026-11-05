@@ -63,11 +63,27 @@ function validateQuotedTerms(offer, expected) {
     || typeof price?.currency !== "string" || price.currency === "") {
     fail("商家报价单价不是安全的 minor 金额或缺少币种");
   }
-  const total = price.amount_minor * q.value;
-  if (terms.total_price_minor !== undefined && terms.total_price_minor !== total) {
-    fail(`商家报价总价不一致：${String(terms.total_price_minor)} != ${total}`);
+  const subtotal = price.amount_minor * q.value;
+  let declaredTotal = null;
+  if (terms.total_price !== undefined) {
+    const total = terms.total_price;
+    if (total === null || typeof total !== "object" || Array.isArray(total)
+      || !Number.isSafeInteger(total.amount_minor) || total.amount_minor < 0
+      || total.currency !== price.currency) {
+      fail("商家明示总价格式/币种不合法");
+    }
+    declaredTotal = total.amount_minor;
+    if (declaredTotal !== subtotal) {
+      fail(`商家明示总价与单价×数量不一致：${declaredTotal} != ${subtotal}`);
+    }
   }
-  return { sku: item.sku, quantity: q.value, unit: q.unit, unit_price_minor: price.amount_minor, currency: price.currency, total_price_minor: total };
+  return {
+    sku: item.sku, quantity: q.value, unit: q.unit,
+    unit_price_minor: price.amount_minor, currency: price.currency,
+    subtotal_price_minor: subtotal,
+    total_price_minor: declaredTotal,
+    total_source: declaredTotal === null ? "computed_subtotal_merchant_total_absent" : "merchant_declared",
+  };
 }
 
 async function verifyCatalogCardBinding(found, catalogUrl, expectedMerchantId, expectedSku, timeoutMs) {
@@ -209,13 +225,15 @@ if (task?.status !== "succeeded" || candidate?.status !== "succeeded") {
 const offer = (() => { try { return JSON.parse(candidate.provenance?.reply_text ?? "{}"); } catch { return {}; } })();
 const quoted = validateQuotedTerms(offer, { sku, quantity, unit });
 const terms = offer.payload.terms;
-record("quote", true, `报价 ${quoted.unit_price_minor} ${quoted.currency} × ${quoted.quantity} ${quoted.unit}（总价 ${quoted.total_price_minor}）`, {
+record("quote", true, `报价 ${quoted.unit_price_minor} ${quoted.currency} × ${quoted.quantity} ${quoted.unit}（小计 ${quoted.subtotal_price_minor}；${quoted.total_source === "merchant_declared" ? "商家明示总价" : "商家未声明总价"}）`, {
   offer_id: String(candidate.provenance?.offer_id ?? ""),
   sku: quoted.sku,
   quantity_value: String(quoted.quantity),
   quantity_unit: quoted.unit,
   unit_price_minor: String(quoted.unit_price_minor),
-  total_price_minor: String(quoted.total_price_minor),
+  subtotal_price_minor: String(quoted.subtotal_price_minor),
+  declared_total_price_minor: quoted.total_price_minor === null ? null : String(quoted.total_price_minor),
+  total_source: quoted.total_source,
   currency: quoted.currency,
   trade_entry: terms.handoff_destination ?? null,
 });
@@ -342,7 +360,9 @@ const receipt = {
   quoted_quantity: quoted.quantity,
   quoted_unit: quoted.unit,
   quoted_unit_price_minor: quoted.unit_price_minor,
-  quoted_total_price_minor: quoted.total_price_minor,
+  quoted_subtotal_price_minor: quoted.subtotal_price_minor,
+  quoted_declared_total_price_minor: quoted.total_price_minor,
+  quoted_total_source: quoted.total_source,
   quoted_currency: quoted.currency,
   test_marker: testMarker,
   preaccept_evidence: preacceptEvidence,

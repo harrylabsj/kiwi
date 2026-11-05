@@ -497,7 +497,7 @@ export class A2ANegotiator implements Negotiator {
       typeof provenance.merchant_reply_id === "string" ? provenance.merchant_reply_id : "";
     const termsDigest =
       typeof provenance.latest_terms_digest === "string" ? provenance.latest_terms_digest : "";
-    if (provenance.latest_offer_type !== "conditional_offer" && provenance.latest_offer_type !== "offer") {
+    if (provenance.latest_offer_type !== "conditional_offer" && provenance.latest_offer_type !== "offer" && provenance.latest_offer_type !== "counter_offer" && provenance.latest_offer_type !== "counter_offer") {
       throw new McpError(
         "invalid_params",
         "商家最新回复不是 offer/conditional_offer，无法通过 accept_nonbinding 成交",

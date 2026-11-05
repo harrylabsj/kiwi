@@ -202,6 +202,11 @@ export interface QuoteCandidateInput {
     sku?: string;
     /** A2A 磋商端点（agent card JSONRPC url），供 A2ANegotiator 复用。 */
     a2a_endpoint?: string;
+    /** Actual merchant reply action; persisted for restart-safe acceptance. */
+    latest_offer_type?: "offer" | "conditional_offer" | "counter_offer";
+    /** Exact merchant terms used to compute latest_terms_digest. */
+    latest_agreed_terms?: Record<string, unknown>;
+    latest_terms_digest?: string;
   };
   failure?: { classification: string; retryable: boolean; detail?: string };
 }
@@ -1192,7 +1197,7 @@ export class KiwiBuyerService {
         // accept_nonbinding object as a conditional_offer (conditions: []).
         // Both are remote-acceptable; do not require a synthetic conditional
         // round or a price change just to obtain the merchant agreement.
-        if (provenance.latest_offer_type !== "conditional_offer" && provenance.latest_offer_type !== "offer") {
+        if (provenance.latest_offer_type !== "conditional_offer" && provenance.latest_offer_type !== "offer" && provenance.latest_offer_type !== "counter_offer" && provenance.latest_offer_type !== "counter_offer") {
           throw new McpError(
             "invalid_params",
             "A2A candidate latest reply is not an acceptable offer/conditional_offer; refusing to create a local agreement",
