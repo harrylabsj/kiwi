@@ -2338,7 +2338,7 @@
     },
     {
       "path": "scripts/e2e-supervisor.sh",
-      "sha256": "sha256:49e83346139a1b34cb5f2d1337ee603ce88e34150eaf7ef326f5e80b773f1c00"
+      "sha256": "sha256:1b3bbcb93798ab5dfad3f730e0f83a0c7a0acae9e97d03e49a874da5b18da544"
     },
     {
       "path": "scripts/e2e-supplier-watch.sh",
