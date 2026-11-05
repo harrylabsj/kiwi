@@ -2534,7 +2534,7 @@
     },
     {
       "path": "scripts/run-acceptance.mjs",
-      "sha256": "sha256:59f0ce91a94aecf66371a9d8fc29b89a838f6ee64fac69c81dfd4655ff6cf705"
+      "sha256": "sha256:45bc10acbe3e251196c804f5d66890bf772e03c7c7757c3e5e4e05a21cff78b3"
     },
     {
       "path": "scripts/smoke-cloud-artifact.mjs",
@@ -4880,7 +4880,7 @@
       "path": "supply-chain.sbom.json",
       "sha256": "sha256:376e81dc251970b6f7f81d56988a3db068167fbb2b56bec031aee2322943fd4e",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:9221757d309dfb6b4ef6653fb6bb27d0a707f3d941d5cafecdb75cecacc11442"
+      "raw_sha256": "sha256:1e49dbe231292ca9749c352b931ba39d4e93260319950c6604372f5b478ae85b"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",

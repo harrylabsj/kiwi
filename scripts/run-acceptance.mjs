@@ -17,6 +17,8 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findNegotiationExtensions, parseAgentCard } from "../dist/discovery/agent-card/index.js";
+import { jsonRpcEndpoints } from "../dist/discovery/catalog-source/cloud-card.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -41,6 +43,46 @@ const fail = (message) => {
 };
 if (merchantId === "" || sku === "") {
   fail("需要 KIWI_ACCEPTANCE_MERCHANT_ID 与 KIWI_ACCEPTANCE_SKU（真实商家与 SKU，不允许编造）");
+}
+
+async function verifyCatalogCardBinding(found, catalogUrl, expectedMerchantId, expectedSku, timeoutMs) {
+  if (found.merchant_id !== expectedMerchantId) fail("catalog 返回的 merchant_id 与请求商家不一致");
+  const catalogAgentId = typeof found.catalog_agent_id === "string" ? found.catalog_agent_id.trim() : "";
+  if (catalogAgentId === "") fail("catalog 记录缺少 catalog_agent_id，不能用官方 agent-card 路径绑定");
+  if (!Array.isArray(found.matching_skus) || !found.matching_skus.map(String).includes(expectedSku)) {
+    fail("catalog 搜索结果未把目标 SKU 绑定到该商家");
+  }
+  let catalog;
+  try { catalog = new URL(catalogUrl); } catch { fail("catalog URL 无效"); }
+  if (catalog.protocol !== "https:" || catalog.username !== "" || catalog.password !== "") {
+    fail("Catalog agent-card 验证要求无凭据的 HTTPS catalog URL");
+  }
+  const cardUrl = new URL(`/v1/agents/${encodeURIComponent(catalogAgentId)}/agent-card.json`, catalog);
+  let response;
+  try {
+    response = await fetch(cardUrl, {
+      method: "GET",
+      redirect: "manual",
+      signal: AbortSignal.timeout(Math.min(timeoutMs, 15_000)),
+    });
+  } catch { fail("Catalog agent-card 读取失败"); }
+  if (response.status !== 200 || response.type === "opaqueredirect") fail("Catalog agent-card 非 200 或被重定向");
+  let raw;
+  try { raw = await response.json(); } catch { fail("Catalog agent-card JSON 无效"); }
+  let card;
+  try { card = parseAgentCard(raw); } catch { fail("Catalog agent-card 未通过既有 parser"); }
+  const extensions = findNegotiationExtensions(card);
+  const hasNegotiation = extensions.some((uri) => {
+    try { return new URL(uri).pathname === "/a2a/extensions/negotiation/1.0"; } catch { return false; }
+  });
+  if (!hasNegotiation) fail("Catalog agent-card 未声明 negotiation/1.0 扩展");
+  let endpoints;
+  try { endpoints = jsonRpcEndpoints(card); } catch { fail("Catalog agent-card 未声明 JSONRPC 1.0 端点"); }
+  if (endpoints.length === 0) fail("Catalog agent-card 未声明 JSONRPC 1.0 端点");
+  if (card.supportedInterfaces.some((entry) => entry.protocolBinding === "JSONRPC" && entry.protocolVersion !== "1.0")) {
+    fail("Catalog agent-card 的 JSONRPC 端点不是 1.0");
+  }
+  return { catalog_agent_id: catalogAgentId, card_url: cardUrl.toString(), extension: "/a2a/extensions/negotiation/1.0", jsonrpc_endpoints: endpoints };
 }
 
 const child = spawn(
@@ -109,6 +151,10 @@ record("search", true, `命中 ${found.name ?? merchantId}，listing ${listing?.
   listing_id: String(listing?.listing_id ?? ""),
 });
 
+// 2a) Bind the exact merchant/SKU to the Catalog-hosted official card before any RFQ.
+const catalogCard = await verifyCatalogCardBinding(found, catalogUrl, merchantId, sku, timeoutMs);
+record("catalog_card", true, `Catalog agent-card ${catalogCard.catalog_agent_id}：JSONRPC 1.0 + negotiation/1.0`, catalogCard);
+
 // 2) 询价
 const rfq = await call("kiwi_request_quotes", {
   merchant_ids: [merchantId],
@@ -159,18 +205,18 @@ const currentCandidate = (afterNegotiation.json?.task?.candidates ?? []).find(
 // accept_nonbinding action. A merchant cannot be proven nonbinding before it
 // returns the agreement; the agreement flags are rechecked immediately below
 // before handoff. Missing capability/reply stops here.
-const capabilities = Array.isArray(found.capabilities) ? found.capabilities : [];
-if (!capabilities.includes("com.harrylabsj.kiwi.shopping.negotiation")) {
-  record("preaccept", false, "商家未广告 Kiwi negotiation capability");
-  fail("pre-accept nonbinding evidence missing: negotiation capability");
-}
+// Catalog card was verified before the first outbound RFQ; repeat the evidence
+// record at the accept boundary. A catalog extension is a declaration, not
+// merchant consent to this test and not proof of zero side effects.
 const replyForEvidence = (() => { try { return JSON.parse(currentCandidate?.provenance?.reply_text ?? "{}"); } catch { return {}; } })();
 if (!["offer", "conditional_offer"].includes(replyForEvidence.action)) {
   record("preaccept", false, "商家最新回复不是 offer-like，不能进入非约束接受");
   fail("pre-accept nonbinding evidence missing: offer-like reply");
 }
 const preacceptEvidence = {
-  negotiation_capability: "com.harrylabsj.kiwi.shopping.negotiation",
+  negotiation_capability: catalogCard.extension,
+  catalog_agent_id: catalogCard.catalog_agent_id,
+  catalog_card_url: catalogCard.card_url,
   offer_action: replyForEvidence.action,
   accept_action: "accept_nonbinding",
   merchant_preaccept_nonbinding_flag: null,
