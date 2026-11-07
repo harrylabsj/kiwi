@@ -134,6 +134,21 @@ describe("云端配置强校验（T013/T014/T015）", () => {
     expect(configError(missing).code).toBe("A2A_AUTH_REQUIRED");
   });
 
+  it("A2A 限流：云端默认启用；可显式关闭；非法 JSON 拒绝", () => {
+    expect(loadCloudConfig(baseEnv()).a2aThrottle).toBeDefined();
+    expect(
+      loadCloudConfig(baseEnv({ KIWI_CLOUD_A2A_THROTTLE: "off" })).a2aThrottle,
+    ).toBeUndefined();
+    expect(
+      loadCloudConfig(
+        baseEnv({ KIWI_CLOUD_A2A_THROTTLE: '{"windowMs":60000,"unverifiedIdentityScale":0.4}' }),
+      ).a2aThrottle,
+    ).toMatchObject({ windowMs: 60000, unverifiedIdentityScale: 0.4 });
+    expect(
+      configError(baseEnv({ KIWI_CLOUD_A2A_THROTTLE: "{bad json" })).code,
+    ).toBe("A2A_THROTTLE_INVALID");
+  });
+
   it("A2A 准入策略：默认 open；verified/closed 可配；非法值拒绝", () => {
     expect(loadCloudConfig(baseEnv()).a2aAdmission).toBe("open");
     expect(

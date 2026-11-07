@@ -29,6 +29,8 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import type { A2aAdmissionPolicy } from "../a2a/admission.js";
 import { parseA2aAdmissionPolicy } from "../a2a/admission.js";
+import { resolveA2aThrottle } from "../a2a/throttle-config.js";
+import type { ThrottleOptions } from "../a2a/server/throttle.js";
 import * as ownedRuntimeModule from "./owned-runtime.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -72,6 +74,8 @@ export interface CloudRuntimeConfig {
   a2aAuth: CloudA2aAuth;
   /** A2A 陌生调用者准入策略：open（兼容）/ verified / closed。 */
   a2aAdmission: A2aAdmissionPolicy;
+  /** A2A 反滥用限流；云端缺省启用默认档位，可显式关闭或覆盖。 */
+  a2aThrottle?: ThrottleOptions;
   /** readyz 单检查超时（毫秒）：探针不得挂起。 */
   readinessTimeoutMs: number;
   /** Catalog 控制面根 URL；部署配置必须显式提供。 */
@@ -306,6 +310,8 @@ export interface CloudConfigFile {
   a2a_auth?: { mode?: string } | string;
   /** 可选：open | verified | closed；缺省 open（保持现有匿名接待行为）。 */
   a2a_admission?: string;
+  /** 可选："1"/"off" 或 ThrottleOptions JSON；缺省启用默认档位。 */
+  a2a_throttle?: string;
 }
 
 /** 读配置文件（不存在返回 undefined；内容非法即抛错，不静默忽略）。 */
@@ -385,6 +391,18 @@ export function loadCloudConfig(
   const a2aAuthRaw =
     readEnv(env, "KIWI_CLOUD_A2A_AUTH") ?? parseA2aAuthFromFile(file, configFile);
   const a2aAuth = parseA2aAuth(env, a2aAuthRaw);
+  let a2aThrottle: ThrottleOptions | undefined;
+  try {
+    // 云端缺省启用默认档位（公网 A2A 必须有基本反滥用）；显式 0/off 才关闭。
+    a2aThrottle = resolveA2aThrottle(
+      readEnv(env, "KIWI_CLOUD_A2A_THROTTLE") ?? file.a2a_throttle ?? "1",
+    );
+  } catch (err) {
+    throw new CloudConfigError(
+      "A2A_THROTTLE_INVALID",
+      `A2A 限流配置非法：${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   let a2aAdmission: A2aAdmissionPolicy;
   try {
     a2aAdmission = parseA2aAdmissionPolicy(
@@ -465,6 +483,7 @@ export function loadCloudConfig(
     merchantNameNeedsUpdate: file.merchant_name_needs_update === true,
     a2aAuth,
     a2aAdmission,
+    ...(a2aThrottle !== undefined ? { a2aThrottle } : {}),
     readinessTimeoutMs: Math.floor(readinessTimeoutMs),
   };
 }

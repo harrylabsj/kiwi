@@ -58,6 +58,8 @@ import { HttpMessageSignatureVerifier, InMemoryNonceStore } from "../trust/ident
 import type { NonceStore } from "../trust/identity/nonce.js";
 import { OpenInquiryVerifier } from "./open-inquiry-verifier.js";
 import { AdmissionPolicyVerifier, parseA2aAdmissionPolicy, type A2aAdmissionPolicy } from "./admission.js";
+import { resolveA2aThrottle } from "./throttle-config.js";
+export { resolveA2aThrottle };
 import {
   A2A_SIGNING_KEY_FILE,
   loadA2aTrustedKeys,
@@ -512,33 +514,6 @@ function authVerifierFromEnv(ctx: AuthFromEnvContext): AuthVerifier | undefined 
   throw new Error(
     `KIWI_A2A_AUTH 未知模式: ${raw}（可选 loopback | none | bearer:<token> | signature）`,
   );
-}
-
-/**
- * 解析 merchant A2A 反滥用限流（§31）：
- * - 未设置 / "0" / "false" / "off" → 不限流（undefined）；
- * - "1" / "true" / "on" → 默认档位表（60s 窗口；匿名来源限额自动缩窄 0.5）；
- * - 其它 → 按 JSON 解析为 ThrottleOptions 覆盖（如
- *   `{"windowMs":60000,"tiers":{"T0":{"identityRequestsPerWindow":60}}}`）。
- */
-export function resolveA2aThrottle(
-  raw = process.env.KIWI_A2A_THROTTLE ?? "",
-): ThrottleOptions | undefined {
-  const v = raw.trim();
-  if (v === "" || v === "0" || v === "false" || v === "off") return undefined;
-  if (v === "1" || v === "true" || v === "on") return {};
-  try {
-    const parsed = JSON.parse(v) as ThrottleOptions;
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error("ThrottleOptions 必须是对象");
-    }
-    return parsed;
-  } catch (err) {
-    throw new Error(
-      `KIWI_A2A_THROTTLE 非法: ${v}（可选 "1"/"true"/"on" 用默认档位，或 JSON ThrottleOptions）——${err instanceof Error ? err.message : String(err)}`,
-      { cause: err },
-    );
-  }
 }
 
 /** 启动一个 A2A 节点（按 profile 角色）。 */

@@ -545,6 +545,9 @@ export async function bootstrapCloudRuntime(
     admission: config.a2aAdmission,
   });
   log(
+    `[kiwi-cloud] A2A 限流：${config.a2aThrottle === undefined ? "未启用" : "已启用（默认/覆盖档位）"}\n`,
+  );
+  log(
     `[kiwi-cloud] A2A 准入策略：${config.a2aAdmission}` +
       (config.a2aAdmission === "open"
         ? "（无签名请求将以 anonymous/T0 放行；如不接待陌生买家请设 verified/closed）"
@@ -578,6 +581,7 @@ export async function bootstrapCloudRuntime(
     ...(a2aSigningIdentity !== undefined ? { signingIdentity: a2aSigningIdentity } : {}),
     ...(fileProductSource !== undefined ? { productSource: fileProductSource.source } : {}),
     ...(serviceAvailability !== undefined ? { serviceAvailability } : {}),
+    ...(config.a2aThrottle !== undefined ? { throttle: config.a2aThrottle } : {}),
     promotionPrice: ({ sku, quantity }) => {
       const promotion = promotionStoreForExecutors?.activeForSku(
         profile.owner_id,
