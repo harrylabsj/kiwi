@@ -62,7 +62,11 @@ export interface MerchantOperationsReport {
   period: ReportPeriod;
   window: ReportWindow & { basis: "UTC" };
   previous_window: ReportWindow;
+  /** 同一窗口的北京时间边界（UTC 日期窗口从北京时间 08:00 起算）。 */
+  window_beijing: ReportWindow & { timezone: "Asia/Shanghai" };
   generated_at: string;
+  /** 生成时间的北京时间表示（固定 +08:00，避免客户端自行猜测时区）。 */
+  generated_at_beijing: string;
   metrics: {
     distinct_buyers: ReportMetric;
     contact_events: ReportMetric;
@@ -113,6 +117,22 @@ function addDays(day: string, delta: number): string {
  * - week：本周周一 00:00Z 起 7 天（周日归上一周，ISO 口径）；
  * - month：本月 1 号 00:00Z 起到下月 1 号（1 月的上一周期跨年到上一年 12 月）。
  */
+/** UTC 日期窗口 → 北京时间边界（UTC 00:00 = 北京 08:00，固定 +08:00 无夏令时）。 */
+export function reportWindowBeijing(window: ReportWindow): ReportWindow & { timezone: "Asia/Shanghai" } {
+  return {
+    since: `${window.since}T08:00:00+08:00`,
+    until_exclusive: `${window.until_exclusive}T08:00:00+08:00`,
+    timezone: "Asia/Shanghai",
+  };
+}
+
+/** UTC ISO 时间 → 北京时间 ISO（固定 +08:00）。 */
+export function beijingIso(utcIso: string): string {
+  const ms = Date.parse(utcIso);
+  if (!Number.isFinite(ms)) return utcIso;
+  return new Date(ms + 8 * 60 * 60 * 1000).toISOString().replace(/Z$/, "+08:00");
+}
+
 export function reportWindow(period: ReportPeriod, now: Date): { current: ReportWindow; previous: ReportWindow } {
   const today = utcDay(now);
   if (period === "day") {
@@ -274,7 +294,9 @@ export function createOperationsReportBuilder(options: OperationsReportOptions):
         period,
         window: { ...current, basis: "UTC" },
         previous_window: previous,
+        window_beijing: reportWindowBeijing(current),
         generated_at: at.toISOString(),
+        generated_at_beijing: beijingIso(at.toISOString()),
         metrics: {
           distinct_buyers:
             statsCurrent !== undefined && statsPrevious !== undefined

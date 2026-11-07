@@ -183,6 +183,12 @@ describe("只读运营报告工具", () => {
       since: "2026-11-06",
       until_exclusive: "2026-11-07",
     });
+    expect(report.window_beijing).toEqual({
+      since: "2026-11-07T08:00:00+08:00",
+      until_exclusive: "2026-11-08T08:00:00+08:00",
+      timezone: "Asia/Shanghai",
+    });
+    expect(report.generated_at_beijing).toBe("2026-11-07T14:20:00.000+08:00");
     const metrics = report.metrics as Record<string, { available: boolean; value?: number }>;
     expect(metrics.distinct_buyers).toMatchObject({ available: true, value: 1 });
     expect(metrics.contact_events).toMatchObject({ available: true, value: 1 });
@@ -200,6 +206,10 @@ describe("只读运营报告工具", () => {
     );
     expect(invalid.isError).toBe(true);
     expect(invalid.content[0]?.text).toContain("period 必须是 day、week 或 month");
+    expect(invalid.structuredContent?.error).toMatchObject({
+      code: "INVALID_ARGUMENT",
+      retryable: false,
+    });
 
     const withoutSource = buildMerchantMcpTools(buildService(dataDir, { report: false }));
     const missing = await withoutSource.call(
@@ -321,6 +331,7 @@ describe("只读洽谈工具", () => {
     );
     expect(missing.isError).toBe(true);
     expect(missing.content[0]?.text).toContain("未找到磋商 neg-missing");
+    expect(missing.structuredContent?.error).toMatchObject({ code: "NOT_FOUND" });
     const empty = await tools.call(
       "kiwi_merchant_get_a2a_negotiation",
       { negotiation_id: "" },
@@ -337,6 +348,53 @@ describe("只读洽谈工具", () => {
     );
     expect(unavailable.isError).toBe(true);
     expect(unavailable.content[0]?.text).toContain("未配置磋商旁观数据源");
+  });
+
+  it("列表支持 status 过滤与游标分页，终态记录可检索", async () => {
+    const dataDir = fixture();
+    writeLedger(dataDir);
+    const tools = buildMerchantMcpTools(buildService(dataDir));
+    const call = (args: Record<string, unknown>) =>
+      tools.call("kiwi_merchant_list_a2a_negotiations", args, ["merchant:read"]);
+
+    const all = await call({});
+    const allPage = all.structuredContent as {
+      total: number;
+      next_cursor: string | null;
+      items: Array<{ negotiation_id: string }>;
+    };
+    expect(allPage.total).toBe(3);
+    expect(allPage.items).toHaveLength(3);
+    expect(allPage.next_cursor).toBeNull();
+
+    const agreement = await call({ status: "agreement" });
+    const agreementPage = agreement.structuredContent as {
+      items: Array<{ negotiation_id: string }>;
+    };
+    expect(agreementPage.items.map((item) => item.negotiation_id)).toEqual(["neg-1412"]);
+
+    const first = await call({ limit: 2 });
+    const firstPage = first.structuredContent as {
+      items: Array<{ negotiation_id: string }>;
+      next_cursor: string | null;
+    };
+    expect(firstPage.items).toHaveLength(2);
+    expect(firstPage.next_cursor).toBe("2");
+
+    const second = await call({ limit: 2, cursor: "2" });
+    const secondPage = second.structuredContent as {
+      items: Array<{ negotiation_id: string }>;
+      next_cursor: string | null;
+    };
+    expect(secondPage.items).toHaveLength(1);
+    expect(secondPage.next_cursor).toBeNull();
+
+    const badStatus = await call({ status: "done" });
+    expect(badStatus.isError).toBe(true);
+    expect(badStatus.content[0]?.text).toContain("status 必须是");
+    const badCursor = await call({ cursor: "x" });
+    expect(badCursor.isError).toBe(true);
+    expect(badCursor.content[0]?.text).toContain("cursor 必须是非负整数字符串");
   });
 
   it("进行中列表只留非终态，且只读 scope 可见", async () => {

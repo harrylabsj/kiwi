@@ -63,10 +63,28 @@ const KIND_LABEL: Record<MerchantWorkbenchError["kind"], string> = {
   unavailable: "暂时性错误",
 };
 
+/** 稳定错误码：客户端按 code 分支，不解析中文文案。 */
+const KIND_CODE: Record<
+  MerchantWorkbenchError["kind"],
+  { code: string; retryable: boolean }
+> = {
+  auth: { code: "UNAUTHORIZED", retryable: false },
+  not_found: { code: "NOT_FOUND", retryable: false },
+  validation: { code: "INVALID_ARGUMENT", retryable: false },
+  unavailable: { code: "UNAVAILABLE", retryable: true },
+};
+
 function errorResult(err: unknown): MerchantMcpCallResult {
   if (err instanceof MerchantWorkbenchError) {
     return {
       content: [{ type: "text", text: `商家操作失败（${KIND_LABEL[err.kind]}）：${err.message}` }],
+      structuredContent: {
+        error: {
+          code: KIND_CODE[err.kind].code,
+          retryable: KIND_CODE[err.kind].retryable,
+          message: err.message,
+        },
+      },
       isError: true,
     };
   }
@@ -82,6 +100,13 @@ function errorResult(err: unknown): MerchantMcpCallResult {
         text: "商家操作失败（暂时性错误）：请稍后重试；若持续失败请查看服务端日志。",
       },
     ],
+    structuredContent: {
+      error: {
+        code: "INTERNAL",
+        retryable: true,
+        message: "Unexpected error; see server logs.",
+      },
+    },
     isError: true,
   };
 }
@@ -310,8 +335,12 @@ export function buildMerchantMcpTools(
       return { snapshot };
     },
     kiwi_merchant_list_a2a_negotiations: async (args) => {
-      const { total, items } = await service.listA2aNegotiations(args.limit);
-      return { total, count: items.length, items };
+      const { total, items, next_cursor } = await service.listA2aNegotiations({
+        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+        ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+        ...(args.status !== undefined ? { status: args.status } : {}),
+      });
+      return { total, count: items.length, next_cursor, items };
     },
     kiwi_merchant_list_human_reviews: async () => {
       const items = await service.listHumanReviews();
@@ -492,7 +521,7 @@ export function buildMerchantMcpTools(
     {
       name: "kiwi_merchant_list_a2a_negotiations",
       description:
-        "列出商家节点的 A2A 磋商记录（结构化行：negotiation_id、相位、SKU、数量、报价、是否达成协议、时间）。",
+        "列出商家节点的 A2A 磋商记录（结构化行：negotiation_id、相位、SKU、数量、是否达成协议、时间）；默认不投影金额。",
       inputSchema: {
         type: "object",
         properties: {
@@ -500,7 +529,17 @@ export function buildMerchantMcpTools(
             type: "integer",
             minimum: 1,
             maximum: 100,
-            description: "最多返回最近 N 笔（缺省 20，clamp 1..100）",
+            description: "每页最多返回 N 笔（缺省 20，clamp 1..100）",
+          },
+          cursor: {
+            type: "string",
+            pattern: "^\\d+$",
+            description: "上一页返回的 next_cursor；首页省略",
+          },
+          status: {
+            type: "string",
+            enum: ["active", "agreement", "all"],
+            description: "状态过滤：active=进行中、agreement=已达成、all=全部（缺省）",
           },
         },
         additionalProperties: false,

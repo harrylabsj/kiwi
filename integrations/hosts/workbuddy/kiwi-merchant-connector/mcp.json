@@ -55,7 +55,7 @@
     },
     {
       "name": "kiwi_merchant_list_a2a_negotiations",
-      "description": "列出商家节点的 A2A 磋商记录（结构化行：negotiation_id、相位、SKU、数量、报价、是否达成协议、时间）。",
+      "description": "列出商家节点的 A2A 磋商记录（结构化行：negotiation_id、相位、SKU、数量、是否达成协议、时间）；默认不投影金额。",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -63,7 +63,17 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 100,
-            "description": "最多返回最近 N 笔（缺省 20，clamp 1..100）"
+            "description": "每页最多返回 N 笔（缺省 20，clamp 1..100）"
+          },
+          "cursor": {
+            "type": "string",
+            "pattern": "^\\d+$",
+            "description": "上一页返回的 next_cursor；首页省略"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "agreement", "all"],
+            "description": "状态过滤：active=进行中、agreement=已达成、all=全部（缺省）"
           }
         },
         "additionalProperties": false

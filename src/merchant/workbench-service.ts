@@ -43,7 +43,9 @@ import type {
   NegotiationOwnerTimelineView,
   NegotiationTimelineView,
   NegotiationObserver,
+  NegotiationStatusFilter,
 } from "./negotiation-observer.js";
+import { NEGOTIATION_STATUS_FILTERS } from "./negotiation-observer.js";
 import type {
   MerchantOperationsReport,
   OperationsReportBuilder,
@@ -351,15 +353,64 @@ export class MerchantWorkbenchService {
 
   /**
    * 列出商家节点的 A2A 磋商记录（结构化行，按最近落账时间倒序）。
-   * limit 缺省 20，clamp 1..100。未配置 ledger 目录时 fail-closed 抛 unavailable。
+   *
+   * 支持 `limit`（1..100，缺省 20）、`cursor`（上一页 next_cursor，非负整数）
+   * 与 `status`（active / agreement / all）。已注入 observer 时使用其游标
+   * 分页与状态过滤；未注入时退化为旧的 limit-only 扫描。
    */
-  async listA2aNegotiations(limit?: unknown): Promise<{
+  async listA2aNegotiations(query?: unknown): Promise<{
     total: number;
     items: A2aNegotiationRow[];
+    next_cursor: string | null;
   }> {
-    const clamped = Math.min(Math.max(Number(limit ?? 20) || 20, 1), 100);
+    // 兼容旧调用：listA2aNegotiations(5) 等价于 { limit: 5 }。
+    const raw: Record<string, unknown> =
+      typeof query === "object" && query !== null
+        ? (query as Record<string, unknown>)
+        : { limit: query };
+    const limit =
+      raw.limit === undefined
+        ? 20
+        : Math.min(Math.max(Math.trunc(Number(raw.limit)) || 20, 1), 100);
+    let status: NegotiationStatusFilter = "all";
+    if (raw.status !== undefined) {
+      if (
+        typeof raw.status !== "string" ||
+        !(NEGOTIATION_STATUS_FILTERS as readonly string[]).includes(raw.status)
+      ) {
+        throw new MerchantWorkbenchError(
+          "validation",
+          `status 必须是 ${NEGOTIATION_STATUS_FILTERS.join(" / ")}`,
+        );
+      }
+      status = raw.status as NegotiationStatusFilter;
+    }
+    let cursor: string | undefined;
+    if (raw.cursor !== undefined) {
+      if (typeof raw.cursor !== "string" || !/^\d+$/.test(raw.cursor)) {
+        throw new MerchantWorkbenchError("validation", "cursor 必须是非负整数字符串");
+      }
+      cursor = raw.cursor;
+    }
+    if (this.negotiationObserver !== undefined) {
+      const result = this.negotiationObserver.list({
+        limit,
+        status,
+        ...(cursor !== undefined ? { cursor } : {}),
+      });
+      return {
+        total: result.total,
+        items: result.items,
+        next_cursor: result.next_cursor,
+      };
+    }
     const rows = this.scanLedger(false);
-    return { total: rows.length, items: rows.slice(0, clamped) };
+    const offset = cursor === undefined ? 0 : Number(cursor);
+    return {
+      total: rows.length,
+      items: rows.slice(offset, offset + limit),
+      next_cursor: offset + limit < rows.length ? String(offset + limit) : null,
+    };
   }
 
   async getA2aNegotiation(negotiationId: string): Promise<A2aNegotiationRow> {
