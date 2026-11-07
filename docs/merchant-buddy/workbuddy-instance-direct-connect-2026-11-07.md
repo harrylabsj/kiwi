@@ -95,3 +95,63 @@ WorkBuddy 连接器包（`mcp.json`）只描述**一个固定** `streamableHttp`
   “首发不直连”的旧文案，需重新构建平台包后才会更新。
 - 共享网关的实例代理路径（`instance-tools.ts`）保留为历史兜底，本阶段不扩展、
   不作为 WorkBuddy 私有数据通道；按“网关不碰实例”原则不应重新启用。
+
+## 6. WP3 平台路由实测（2026-11-07）
+
+测试账号：WorkBuddy 企业账号（商家端），本机客户端 v5.9.3；未做任何生产配置变更。
+
+### 6.1 平台能力
+
+- WorkBuddy“MCP 服务管理”支持**用户自定义 MCP**：粘贴 `mcpServers` JSON，
+  可为每个用户配置不同的服务器 URL、headers、env、timeout。
+- 没有发现“同一个已发布连接器按商家动态替换 URL”的能力；自定义 MCP 是
+  每用户/每实例配置，更接近 gate **B**。
+
+### 6.2 Linkluck 分享门禁
+
+`linkluck-reception.app.workbuddy.host` 的 MCP/OAuth 端点都在 WorkBuddy 分享门禁后：
+
+| 请求 | 结果 |
+| --- | --- |
+| `POST /mcp?sharecode=…` | 401（通过门禁，需 OAuth） |
+| `POST /mcp` + `X-Share-Code` header | 401（通过门禁） |
+| `POST /mcp` 无分享码 | 403 |
+| `GET /.well-known/oauth-protected-resource?sharecode=…` | 200 |
+| 同端点无分享码 | 403 |
+| `POST /oauth/register?sharecode=…` | 201 |
+| 同端点无分享码 | 403 |
+
+WorkBuddy 的 OAuth 客户端日志显示，`beginAuthorization` 依次请求
+`/.well-known/oauth-protected-resource`、`/.well-known/oauth-authorization-server`、
+`/.well-known/openid-configuration`、`/register`，**均未携带 `X-Share-Code`**，
+收到 403 HTML 后解析失败（`Unexpected token '<'`），UI 从“授权中”退回“连接”。
+
+### 6.3 本地 loopback 验证
+
+为区分“OAuth 实现问题”与“分享门禁问题”，在本机启动临时实例
+（`127.0.0.1:9199`，OAuth issuer 同为 loopback，未使用任何公网隧道）：
+
+- `.well-known/oauth-protected-resource` → 200；
+  `.well-known/oauth-authorization-server` → 200；`/oauth/register` → 201；
+- WorkBuddy 自定义 MCP 指向 `http://127.0.0.1:9199/mcp` 后，完成 OAuth 授权，
+  面板显示 **29/29 个工具已启用**。
+
+结论：OAuth 直连的实现链路可用；失败原因是 Linkluck 的分享门禁，而不是 Kiwi OAuth。
+
+### 6.4 决策与生产要求
+
+- **A 不成立**：没有单连接器按商家动态路由的证据。
+- **B 在当前 Linkluck 拓扑下被分享门禁阻塞**：MCP 请求可带自定义 header，
+  但 WorkBuddy 的 OAuth 发现/注册/换 token 不带该 header。
+- 选定**路径 1**：把实例的 `/mcp`、`/.well-known/*`、`/oauth/*` 暴露到
+  **不带分享门禁的公网 HTTPS 端点**，工作台继续留在分享门禁后。
+  这需要部署侧新增域名/路由，并让 `merchant_mcp.public_url` 指向该端点；
+  本阶段未执行生产变更。
+- 过渡选项（不推荐作为正式方案）：实例 token 模式 + 自定义 MCP 静态
+  `Authorization` header；或等待 WorkBuddy 支持 OAuth 请求携带自定义 header。
+
+### 6.5 验证边界
+
+- 未用 Linkluck 生产实例完成 OAuth（门禁阻塞），未读取任何商家数据。
+- 本地实例的 OAuth 授权、工具列表已验证；未调用实例业务工具（测试实例无真实 ledger）。
+- 测试自定义 MCP 条目与临时数据已删除，`~/.workbuddy/mcp.json` 已恢复。
