@@ -27,6 +27,8 @@
  */
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
+import type { A2aAdmissionPolicy } from "../a2a/admission.js";
+import { parseA2aAdmissionPolicy } from "../a2a/admission.js";
 import * as ownedRuntimeModule from "./owned-runtime.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -68,6 +70,8 @@ export interface CloudRuntimeConfig {
   artifactRoot: string;
   /** A2A 入站认证（弱模式已被拒绝）。 */
   a2aAuth: CloudA2aAuth;
+  /** A2A 陌生调用者准入策略：open（兼容）/ verified / closed。 */
+  a2aAdmission: A2aAdmissionPolicy;
   /** readyz 单检查超时（毫秒）：探针不得挂起。 */
   readinessTimeoutMs: number;
   /** Catalog 控制面根 URL；部署配置必须显式提供。 */
@@ -300,6 +304,8 @@ export interface CloudConfigFile {
   owned_policy?: unknown;
   readyz_timeout_ms?: number;
   a2a_auth?: { mode?: string } | string;
+  /** 可选：open | verified | closed；缺省 open（保持现有匿名接待行为）。 */
+  a2a_admission?: string;
 }
 
 /** 读配置文件（不存在返回 undefined；内容非法即抛错，不静默忽略）。 */
@@ -379,6 +385,17 @@ export function loadCloudConfig(
   const a2aAuthRaw =
     readEnv(env, "KIWI_CLOUD_A2A_AUTH") ?? parseA2aAuthFromFile(file, configFile);
   const a2aAuth = parseA2aAuth(env, a2aAuthRaw);
+  let a2aAdmission: A2aAdmissionPolicy;
+  try {
+    a2aAdmission = parseA2aAdmissionPolicy(
+      readEnv(env, "KIWI_CLOUD_A2A_ADMISSION") ?? file.a2a_admission ?? "open",
+    );
+  } catch (err) {
+    throw new CloudConfigError(
+      "A2A_ADMISSION_INVALID",
+      `A2A 准入策略非法：${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   const timeoutRaw =
     readEnv(env, "KIWI_CLOUD_READYZ_TIMEOUT_MS") ??
     (file.readyz_timeout_ms !== undefined ? String(file.readyz_timeout_ms) : undefined);
@@ -447,6 +464,7 @@ export function loadCloudConfig(
     ...(rawAccessLink !== "" ? { accessShareLink: rawAccessLink } : {}),
     merchantNameNeedsUpdate: file.merchant_name_needs_update === true,
     a2aAuth,
+    a2aAdmission,
     readinessTimeoutMs: Math.floor(readinessTimeoutMs),
   };
 }

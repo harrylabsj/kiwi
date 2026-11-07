@@ -541,7 +541,16 @@ export async function bootstrapCloudRuntime(
     } : {}),
     // 云端必须按声明 origin 重建目标 URI：平台网关会改写入站 Host（M0 事实 #4）。
     authoritySource: "declared",
+    // 陌生调用者准入策略：open 保持兼容；verified/closed 拒绝匿名（见 admission.ts）。
+    admission: config.a2aAdmission,
   });
+  log(
+    `[kiwi-cloud] A2A 准入策略：${config.a2aAdmission}` +
+      (config.a2aAdmission === "open"
+        ? "（无签名请求将以 anonymous/T0 放行；如不接待陌生买家请设 verified/closed）"
+        : "（匿名请求按策略拒绝）") +
+      "\n",
+  );
   // 商品源：配置文件给了商品表就用"商家上传商品表"路径（设计 §10.1），
   // 否则沿用 HTTP 商品源（shopping-cli 开放层）。两条路径都不含演示价回退。
   const fileProductSource: CloudProductSourceHandle | undefined =

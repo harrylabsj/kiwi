@@ -57,6 +57,7 @@ import {
 import { HttpMessageSignatureVerifier, InMemoryNonceStore } from "../trust/identity/index.js";
 import type { NonceStore } from "../trust/identity/nonce.js";
 import { OpenInquiryVerifier } from "./open-inquiry-verifier.js";
+import { AdmissionPolicyVerifier, parseA2aAdmissionPolicy, type A2aAdmissionPolicy } from "./admission.js";
 import {
   A2A_SIGNING_KEY_FILE,
   loadA2aTrustedKeys,
@@ -458,9 +459,12 @@ export function createA2aAuthVerifier(options: A2aAuthVerifierOptions): AuthVeri
     // 失效（JWS/nonce 机制是死代码）。接入内存 nonce 存储后，T1+ 键可强制 nonce。
     nonceStore: new InMemoryNonceStore(),
   });
-  return options.openInquiryNonceStore === undefined ? verifier :
+  const withOpenInquiry = options.openInquiryNonceStore === undefined ? verifier :
     new OpenInquiryVerifier(verifier, new URL(options.advertisedBase).origin, options.openInquiryNonceStore,
       options.openInquiryEnabled);
+  return options.admission === undefined || options.admission === "open"
+    ? withOpenInquiry
+    : new AdmissionPolicyVerifier(withOpenInquiry, options.admission);
 }
 
 /** createA2aAuthVerifier 的显式入参（替代直接读环境变量的隐式形态）。 */
@@ -484,6 +488,8 @@ export interface A2aAuthVerifierOptions {
   openInquiryNonceStore?: NonceStore;
   /** Dynamic owner-consent gate; absent only for explicitly injected test/embedding use. */
   openInquiryEnabled?: () => boolean;
+  /** 陌生调用者准入策略（缺省 open，保持当前行为；verified/closed 见 admission.ts）。 */
+  admission?: A2aAdmissionPolicy;
 }
 
 function authVerifierFromEnv(ctx: AuthFromEnvContext): AuthVerifier | undefined {
@@ -493,6 +499,7 @@ function authVerifierFromEnv(ctx: AuthFromEnvContext): AuthVerifier | undefined 
     signingKeyDir: ctx.signingKeyDir,
     signingKeyId: ctx.signingKeyId,
     advertisedBase: ctx.advertisedBase,
+    admission: parseA2aAdmissionPolicy(process.env.KIWI_A2A_ADMISSION),
   };
   if (raw === "loopback") return createA2aAuthVerifier({ mode: "loopback", ...shared });
   if (raw === "none") return createA2aAuthVerifier({ mode: "none", ...shared });

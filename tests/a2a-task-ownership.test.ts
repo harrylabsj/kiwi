@@ -189,6 +189,27 @@ describe("T044：任务归属与匿名隔离", () => {
     expect(JSON.stringify(anon.body)).not.toContain(taskId);
   });
 
+  it("异主体/匿名向他人任务发消息 → 不能继续该任务", async () => {
+    const stack = await startStack();
+    const sent = await sendMessage(stack, "msg_owner_send", stack.signers.one);
+    const taskId = taskIdOf(sent.body);
+
+    const other = await rpc(
+      stack,
+      "SendMessage",
+      { message: { role: "ROLE_USER", parts: [{ text: "继续" }], taskId } },
+      stack.signers.two,
+    );
+    expect(errorCode(other.body)).toBe(-32001);
+    expect(other.body["result"]).toBeUndefined();
+
+    const anon = await rpc(stack, "SendMessage", {
+      message: { role: "ROLE_USER", parts: [{ text: "继续" }], taskId },
+    });
+    expect([-32001, -32050]).toContain(errorCode(anon.body));
+    expect(anon.body["result"]).toBeUndefined();
+  });
+
   it("ListTasks 只返回本人任务（异主体看不到别人的任务）", async () => {
     const stack = await startStack();
     const sent = await sendMessage(stack, "msg_owner_list", stack.signers.one);

@@ -134,6 +134,19 @@ describe("云端配置强校验（T013/T014/T015）", () => {
     expect(configError(missing).code).toBe("A2A_AUTH_REQUIRED");
   });
 
+  it("A2A 准入策略：默认 open；verified/closed 可配；非法值拒绝", () => {
+    expect(loadCloudConfig(baseEnv()).a2aAdmission).toBe("open");
+    expect(
+      loadCloudConfig(baseEnv({ KIWI_CLOUD_A2A_ADMISSION: "verified" })).a2aAdmission,
+    ).toBe("verified");
+    expect(
+      loadCloudConfig(baseEnv({ KIWI_CLOUD_A2A_ADMISSION: "closed" })).a2aAdmission,
+    ).toBe("closed");
+    expect(configError(baseEnv({ KIWI_CLOUD_A2A_ADMISSION: "nope" })).code).toBe(
+      "A2A_ADMISSION_INVALID",
+    );
+  });
+
   it("Catalog 地址必填且 HTTPS；loopback HTTP 仅允许显式测试开关，sample 禁止生产地址", () => {
     const missing = baseEnv();
     delete missing.KIWI_CATALOG_URL;
