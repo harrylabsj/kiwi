@@ -97,7 +97,16 @@ export function isAllowedRedirectUri(
   if (policy.allowLoopbackFallback === false) return false;
   try {
     const url = new URL(uri);
-    return url.protocol === "http:" && isLoopbackHost(url.hostname);
+    // loopback 回退只接受 WorkBuddy 约定的 /oauth/callback，且不得携带
+    // userinfo/hash（防把回调当开放重定向或把凭据塞进 fragment）。
+    return (
+      url.protocol === "http:" &&
+      isLoopbackHost(url.hostname) &&
+      url.pathname === "/oauth/callback" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.hash === ""
+    );
   } catch {
     return false;
   }
@@ -923,7 +932,18 @@ export class MerchantOAuthServer {
     ) {
       return oauthError(400, "invalid_client_metadata", "redirect_uris 必须是非空字符串数组");
     }
+    if (redirectUris.length > 5) {
+      return oauthError(400, "invalid_client_metadata", "redirect_uris 最多 5 个");
+    }
+    if (input.client_name !== undefined) {
+      if (typeof input.client_name !== "string" || input.client_name.length > 128) {
+        return oauthError(400, "invalid_client_metadata", "client_name 必须是不超过 128 字符的字符串");
+      }
+    }
     for (const uri of redirectUris as string[]) {
+      if ((uri as string).length > 2048) {
+        return oauthError(400, "invalid_redirect_uri", "redirect_uri 过长");
+      }
       if (!isAllowedRedirectUri(uri, this.connectorSource, this.callbackPolicy)) {
         return oauthError(
           400,

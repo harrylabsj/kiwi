@@ -507,4 +507,18 @@ describe("merchant MCP server", () => {
       rmSync(ledgerDir, { recursive: true, force: true });
     }
   });
+  it("商家 MCP/管理面响应带 no-referrer / no-store 安全头", async () => {
+    const h = await setupMcpServer();
+    handles.push(h.handle);
+    const res = await fetch(`${h.url}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    h.cleanup();
+  });
+
 });

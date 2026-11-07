@@ -248,4 +248,12 @@ describe("T044：任务归属与匿名隔离", () => {
     expect(errorCode(anon.body)).toBe(-32050);
     expect(JSON.stringify(anon.body)).toContain("authenticated");
   });
+  it("A2A 响应带 no-referrer / nosniff 安全头", async () => {
+    const stack = await startStack();
+    const res = await fetch(`${stack.base}/.well-known/agent-card.json`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
 });

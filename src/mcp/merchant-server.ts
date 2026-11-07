@@ -598,6 +598,10 @@ export function createMerchantHttpHandler(
   };
 
   const handler = (req: IncomingMessage, res: ServerResponse): void => {
+    // 分享码可能出现在上游 URL/Referer 中：敏感面统一 no-referrer/no-store。
+    res.setHeader("referrer-policy", "no-referrer");
+    res.setHeader("x-content-type-options", "nosniff");
+    res.setHeader("cache-control", "no-store");
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (await routeOAuth(req, res, url)) return;

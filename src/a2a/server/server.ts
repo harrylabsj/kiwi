@@ -323,6 +323,8 @@ export class A2AServer {
   }
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    res.setHeader("referrer-policy", "no-referrer");
+    res.setHeader("x-content-type-options", "nosniff");
     try {
       const pathname = pathOf(req.url);
       const cardConfig = resolveCardConfig(this.cardConfig);

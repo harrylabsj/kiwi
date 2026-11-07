@@ -199,6 +199,31 @@ describe("元数据与注册", () => {
     const empty = h.server.register({ redirect_uris: [] });
     expect(empty.status).toBe(400);
     expect((empty.body as { error: string }).error).toBe("invalid_client_metadata");
+
+    const tooMany = h.server.register({
+      redirect_uris: Array.from({ length: 6 }, (_, i) => `http://127.0.0.1:${54000 + i}/oauth/callback`),
+    });
+    expect(tooMany.status).toBe(400);
+    expect((tooMany.body as { error: string }).error).toBe("invalid_client_metadata");
+
+    const longName = h.server.register({
+      client_name: "x".repeat(129),
+      redirect_uris: ["http://127.0.0.1:54321/oauth/callback"],
+    });
+    expect(longName.status).toBe(400);
+    expect((longName.body as { error: string }).error).toBe("invalid_client_metadata");
+
+    const longUri = h.server.register({
+      redirect_uris: [`http://127.0.0.1:54321/oauth/callback?x=${"a".repeat(2100)}`],
+    });
+    expect(longUri.status).toBe(400);
+    expect((longUri.body as { error: string }).error).toBe("invalid_redirect_uri");
+
+    const fragment = h.server.register({
+      redirect_uris: ["http://127.0.0.1:54321/oauth/callback#frag"],
+    });
+    expect(fragment.status).toBe(400);
+    expect((fragment.body as { error: string }).error).toBe("invalid_redirect_uri");
   });
 });
 

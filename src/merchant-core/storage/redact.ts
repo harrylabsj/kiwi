@@ -31,5 +31,8 @@
 export function sanitize(value: string): string {
   return String(value ?? "")
     .replace(/\b(Bearer|token|api[_-]?key|secret|password)\b\s*[:=]?\s*\S+/giu, "$1 [redacted]")
+    // sharecode 是访问凭据：URL query/路径参数或 header/键值形式都不落日志。
+    .replace(/([?&]sharecode=)[^&#\s]+/giu, "$1[redacted]")
+    .replace(/\b(X-Share-Code|sharecode)\b\s*[:=]\s*\S+/giu, "$1 [redacted]")
     .slice(0, 500);
 }
