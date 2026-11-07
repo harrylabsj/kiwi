@@ -143,6 +143,9 @@ WorkBuddy 的 OAuth 客户端日志显示，`beginAuthorization` 依次请求
 - **A 不成立**：没有单连接器按商家动态路由的证据。
 - **B 在当前 Linkluck 拓扑下被分享门禁阻塞**：MCP 请求可带自定义 header，
   但 WorkBuddy 的 OAuth 发现/注册/换 token 不带该 header。
+- WorkBuddy 客户端「设置 → 数据管理 → 应用」对该应用只展示分享链接；行菜单只有
+  “复制发布链接 / 下线应用 / 删除应用”，没有访问权限、公开模式或自定义域名入口。
+  因此 WorkBuddy 托管当前无法提供“只放行 MCP/OAuth、继续保护工作台”的能力。
 - 选定**路径 1**：把实例的 `/mcp`、`/.well-known/*`、`/oauth/*` 暴露到
   **不带分享门禁的公网 HTTPS 端点**，工作台继续留在分享门禁后。
   这需要部署侧新增域名/路由，并让 `merchant_mcp.public_url` 指向该端点；
