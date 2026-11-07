@@ -1,8 +1,13 @@
 {
+  "$note": [
+    "单商家实例直连包（模板）：url 必须替换为该商家**已授权直连**的云端实例 HTTPS /mcp 地址。",
+    "WorkBuddy 连接器包只有一个固定 streamableHttp URL，不能按用户动态指向任意实例；不得把共享网关或",
+    "目录作为商家私有运营数据的代理。提交前需由实例 OAuth 授权验证归属，并核对 tools/list。"
+  ],
   "mcpServers": {
     "kiwi-merchant": {
       "type": "streamableHttp",
-      "url": "https://merchant.kiwi.harrylabsj.com/mcp",
+      "url": "https://your-instance.example.com/mcp",
       "timeout": 30000
     }
   },
@@ -276,6 +281,45 @@
           }
         },
         "required": ["skus"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_get_operations_report",
+      "description": "读取商家自己的运营报告（只读；day/week/month 周期，UTC 口径，含上一周期对比）。指标不可得时明确标注 available=false 与原因，不用 0 代替。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "type": "string",
+            "enum": ["day", "week", "month"],
+            "description": "统计周期（UTC）：day=今日、week=本周、month=本月"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_get_a2a_negotiation",
+      "description": "按 negotiation_id 读取一笔 A2A 磋商的只读时间线（双方动作、相位、人工标记；不投影金额或私密策略数值）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "negotiation_id": {
+            "type": "string",
+            "description": "磋商 id（negotiation_id）"
+          }
+        },
+        "required": ["negotiation_id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_list_active_consultations",
+      "description": "列出进行中（非终态）的 A2A 磋商（只读；按最近活动倒序）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       }
     },

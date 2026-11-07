@@ -283,6 +283,45 @@
       }
     },
     {
+      "name": "kiwi_merchant_get_operations_report",
+      "description": "读取商家自己的运营报告（只读；day/week/month 周期，UTC 口径，含上一周期对比）。指标不可得时明确标注 available=false 与原因，不用 0 代替。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "type": "string",
+            "enum": ["day", "week", "month"],
+            "description": "统计周期（UTC）：day=今日、week=本周、month=本月"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_get_a2a_negotiation",
+      "description": "按 negotiation_id 读取一笔 A2A 磋商的只读时间线（双方动作、相位、人工标记；不投影金额或私密策略数值）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "negotiation_id": {
+            "type": "string",
+            "description": "磋商 id（negotiation_id）"
+          }
+        },
+        "required": ["negotiation_id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_list_active_consultations",
+      "description": "列出进行中（非终态）的 A2A 磋商（只读；按最近活动倒序）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "kiwi_merchant_get_operation",
       "description": "查询长任务状态（operation_id；queued/running/succeeded/partially_failed/failed + 逐项回执）。",
       "inputSchema": {

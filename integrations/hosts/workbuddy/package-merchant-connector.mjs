@@ -131,9 +131,9 @@ const toolSource = readFileSync(path.join(root, "src/mcp/merchant-tools.ts"), "u
 const sourceToolNames = new Set(
   [...toolSource.matchAll(/name: "(kiwi_merchant_[a-z0-9_]+)"/g)].map((m) => m[1]),
 );
-assert.equal(sourceToolNames.size, 15, `源码应有 15 个工具，实际 ${sourceToolNames.size}`);
+assert.equal(sourceToolNames.size, 18, `源码应有 18 个工具，实际 ${sourceToolNames.size}`);
 const declared = mcp.tools ?? [];
-assert.equal(declared.length, 15, "mcp.json tools 应声明 15 个工具");
+assert.equal(declared.length, 18, "mcp.json tools 应声明 18 个工具");
 const declaredNames = new Set(declared.map((t) => t.name));
 assert.deepEqual(
   [...declaredNames].sort(),

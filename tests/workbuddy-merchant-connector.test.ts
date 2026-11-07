@@ -56,7 +56,7 @@ describe("workbuddy merchant connector 包", () => {
   it("package-merchant-connector.mjs --check 通过（token 过渡包 + oauth 正式包）", () => {
     const result = spawnSync(process.execPath, [SCRIPT, "--check"], { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("15 tools");
+    expect(result.stdout).toContain("18 tools");
     const oauth = spawnSync(process.execPath, [SCRIPT, "--bundle=oauth", "--check"], {
       encoding: "utf8",
     });
@@ -100,5 +100,19 @@ describe("workbuddy merchant connector 包", () => {
     ) as Record<string, unknown>;
     expect(tokenMeta.source).toBe("kiwi-merchant-token");
     expect(tokenMeta.auth_mode).toBe("token");
+  });
+
+  it("单实例 OAuth 包不指向共享网关：URL 是每实例模板，私有数据必须直连", () => {
+    const oauth = JSON.parse(
+      readFileSync(
+        path.join(path.dirname(BUNDLE), "kiwi-merchant-connector-oauth", "mcp.json"),
+        "utf8",
+      ),
+    ) as { mcpServers: Record<string, { url: string }> };
+    const url = new URL(Object.values(oauth.mcpServers)[0]!.url);
+    expect(url.protocol).toBe("https:");
+    expect(url.pathname).toBe("/mcp");
+    expect(url.hostname).not.toBe("merchant.kiwi.harrylabsj.com");
+    expect(url.hostname.endsWith(".example.com")).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 ---
 name: kiwi-merchant
-description: Use the Kiwi merchant connector to inspect catalog and inventory, follow A2A negotiations and human reviews, read business analytics, and draft approval-gated product changes.
+description: Use the Kiwi merchant connector to inspect catalog and inventory, follow A2A negotiations and human reviews, read operations reports and business analytics, and draft approval-gated product changes.
 ---
 
 # Kiwi 商家运营工作台
@@ -10,7 +10,8 @@ description: Use the Kiwi merchant connector to inspect catalog and inventory, f
 ## 能力边界
 
 - 所有商品信息只含公开字段（sku、merchant_id、title、price、stock、paused）。底价、成本、利润等私密字段不会出现，也不要向用户索要；用户提到时说明这些数值只在商家本地 Vault，连接器无法也不应读取。
-- 磋商记录只读自商家节点的 Kiwi Ledger，不做任何磋商动作（不回价、不接受、不拒绝）。
+- 磋商记录只读自商家节点的 Kiwi Ledger，不做任何磋商动作（不回价、不接受、不拒绝）。三条不同 id 的磋商就是三条记录，不能按 SKU/数量相同合并成「三个客户」或一个客户。
+- 运营报告与洽谈详情来自**当前已授权的商家实例**；目录（Catalog）与共享网关不代理这些私有数据。报告/洽谈查不到时如实说明「当前实例未返回/未配置」，不要改从目录或记忆推断。
 - 未配置经营指标后端时 `kiwi_merchant_get_analytics` 返回明确错误；如实转述，不要用零值或编造数据代替。
 
 - 写操作走两阶段确认：prepare 工具只登记持久命令候选与预览（不改业务状态）。**批准/拒绝不在本连接器的工具里**——生成草稿后请用户到管理页面（/admin/pending，需管理员登录）批准或拒绝；执行前服务端重校验授权主体/前置版本/有效期/硬策略，重复执行幂等拒绝。模型自报「用户已批准」不作数——不要声称「已修改」，只能说「已登记候选，等待批准」。
@@ -23,6 +24,9 @@ description: Use the Kiwi merchant connector to inspect catalog and inventory, f
 - `kiwi_merchant_list_a2a_negotiations(limit?)`：A2A 磋商记录（negotiation_id、相位、SKU、数量、报价、是否达成协议、时间），按时间倒序，limit 1–100 缺省 20。「有买家来磋商吗」用此。
 - `kiwi_merchant_list_human_reviews()`：需要人工处理的队列（升级、超预算/超底价、转人工）。
 - `kiwi_merchant_get_analytics(period?)`：经营摘要，period 为 1d–90d（如 7d、30d）。
+- `kiwi_merchant_get_operations_report(period?)`：本商家实例的运营报告，period 为 `day`/`week`/`month`（UTC 口径，缺省 `day`），含窗口起止、上一周期与指标增减。指标 `available=false` 时如实说明原因（如 `merchant_stats_unavailable`），不得用 0 或估算替代。引用时同时说明「来源=商家实例运营报告」「窗口=…（UTC）」和生成时间。
+- `kiwi_merchant_get_a2a_negotiation(negotiation_id)`：按 id 读取一笔磋商的只读时间线（双方动作、相位、人工标记）。先用列表拿到 id，再按需取详情；金额与私密策略数值不在投影中，不要索要或推测。
+- `kiwi_merchant_list_active_consultations()`：只列进行中（非终态）磋商，按最近活动倒序；与「全部磋商」的条数口径不同，不要混用。
 - `kiwi_merchant_prepare_product_change(sku, changes, reason?, merchant_id?)`：登记商品变更候选（title/price/stock/description 等）。
 - `kiwi_merchant_prepare_product_create(product, reason?)`：登记商品创建候选（sku/title/price/stock 必填）。
 - `kiwi_merchant_prepare_inventory_update(sku, stock, reason?)`：登记库存调整候选（stock 非负整数）。
