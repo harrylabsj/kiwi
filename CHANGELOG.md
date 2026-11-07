@@ -2,6 +2,7 @@
 
 ## v0.12.25 — 2026-11-04
 
+- **WorkBuddy 商家 stale 自动唤醒**：买家对 stale 商家发起询价时，仅做一次按需公开 `GET /livez` 唤醒（3s 超时、60s 冷却、单商家 singleflight、仅 WorkBuddy 主机、禁止 sharecode/loopback/私网/重定向）；是否恢复在线仍只由 catalog 重新读到商家签名心跳决定，不伪造状态。
 - **明确 SKU 报价拒绝换品**：买家在 RFQ 中给出 SKU 时，商家 offer 必须是同一 SKU（且不能混入其他商品）；目录匹配、A2A 回执和恢复路径均拒绝 `sku_mismatch`，避免把另一商品的报价展示成目标商品。无明确 SKU 的模糊需求仍允许商家选择。
 
 ## v0.12.24 — 2026-11-04
