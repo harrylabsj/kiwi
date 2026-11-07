@@ -23,13 +23,18 @@ import {
 } from "../src/agent/merchant/fake-merchant-client.js";
 import type { MerchantIntelligenceBackend } from "../src/agent/merchant/intelligence/backend.js";
 import type { MerchantBusinessSnapshot } from "../src/agent/merchant/intelligence/types.js";
-import { MerchantWorkbenchService } from "../src/merchant/workbench-service.js";
+import {
+  MerchantWorkbenchService,
+  type MerchantWorkbenchServiceDeps,
+} from "../src/merchant/workbench-service.js";
 import {
   startMerchantMcpServer,
   type MerchantMcpServerHandle,
   type MerchantMcpServerOptions,
 } from "../src/mcp/merchant-server.js";
 import { createReadAuditLog } from "../src/mcp/read-audit.js";
+import { StaticBearerTokenVerifier } from "../src/mcp/merchant-auth.js";
+import { createNegotiationObserver } from "../src/merchant/negotiation-observer.js";
 import { testProfile } from "./helpers.js";
 
 const T0 = "2026-08-05T12:00:00+08:00";
@@ -74,6 +79,8 @@ async function setupMcpServer(
     intelligence?: MerchantIntelligenceBackend;
     maxChars?: number;
     readAudit?: MerchantMcpServerOptions["readAudit"];
+    auth?: MerchantMcpServerOptions["auth"];
+    negotiationObserver?: MerchantWorkbenchServiceDeps["negotiationObserver"];
   } = {},
 ): Promise<McpHarness> {
   const db = new DatabaseSync(":memory:");
@@ -91,6 +98,9 @@ async function setupMcpServer(
     mode: () => "supervised",
     now: () => T0,
     ...(options.a2aLedgerDir !== undefined ? { a2aLedgerDir: options.a2aLedgerDir } : {}),
+    ...(options.negotiationObserver !== undefined
+      ? { negotiationObserver: options.negotiationObserver }
+      : {}),
     ...(options.intelligence !== undefined ? { intelligence: options.intelligence } : {}),
   });
   const handle = await startMerchantMcpServer({
@@ -99,6 +109,7 @@ async function setupMcpServer(
     port: 0,
     ...(options.maxChars !== undefined ? { maxChars: options.maxChars } : {}),
     ...(options.readAudit !== undefined ? { readAudit: options.readAudit } : {}),
+    ...(options.auth !== undefined ? { auth: options.auth } : {}),
   });
   return {
     handle,
@@ -148,7 +159,7 @@ function writeLedgerFixture(): string {
       action: "conditional_offer",
       payload: {
         type: "conditional_offer",
-        terms: {
+        base_terms: {
           items: [
             {
               sku: "sku-001",
@@ -252,7 +263,10 @@ describe("merchant MCP server", () => {
   it("kiwi_merchant_list_a2a_negotiations：结构化返回 + limit clamp；未配置 ledger 时 fail-closed", async () => {
     const dir = writeLedgerFixture();
     try {
-      const h = await setupMcpServer({ a2aLedgerDir: dir });
+      const h = await setupMcpServer({
+        a2aLedgerDir: dir,
+        negotiationObserver: createNegotiationObserver({ ledgerDir: dir }),
+      });
       handles.push(h.handle);
       const client = await connectClient(h.url);
       const res = await client.callTool({ name: "kiwi_merchant_list_a2a_negotiations", arguments: {} });
@@ -264,9 +278,10 @@ describe("merchant MCP server", () => {
         last_action: "conditional_offer",
         sku: "sku-001",
         quantity: 2,
-        price_minor: 18800,
         agreement: false,
       });
+      // 公共列表不投影金额（A40-1）。
+      expect(items[0]).not.toHaveProperty("price_minor");
       // limit clamp：0 / 999 都被夹住，不报错
       const clamped = await client.callTool({
         name: "kiwi_merchant_list_a2a_negotiations",
@@ -392,6 +407,32 @@ describe("merchant MCP server", () => {
     expect(res.isError).toBe(true);
     await client.close();
     h.cleanup();
+  });
+
+  it("静态 token 模式：MCP 工具可用，但 owner 金额仍脱敏", async () => {
+    const ledgerDir = writeLedgerFixture();
+    try {
+      const h = await setupMcpServer({
+        a2aLedgerDir: ledgerDir,
+        negotiationObserver: createNegotiationObserver({ ledgerDir }),
+        auth: new StaticBearerTokenVerifier("static-test-token"),
+      });
+      handles.push(h.handle);
+      const client = await connectClient(h.url, {
+        authorization: "Bearer static-test-token",
+      });
+      const res = await client.callTool({
+        name: "kiwi_merchant_get_a2a_negotiation",
+        arguments: { negotiation_id: "neg_mcp_001" },
+      });
+      expect(res.isError).toBeUndefined();
+      // 静态 token 没有 OAuth scope，不能获得 owner 投影。
+      expect(JSON.stringify(res.structuredContent)).not.toContain("18800");
+      await client.close();
+      h.cleanup();
+    } finally {
+      rmSync(ledgerDir, { recursive: true, force: true });
+    }
   });
 
   it("私有只读工具写读审计：操作者/实例/工具/结果，不记正文", async () => {

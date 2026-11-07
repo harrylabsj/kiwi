@@ -65,6 +65,7 @@ import { buildCatalogTools } from "./catalog-tools.js";
 import { MerchantPublicationClient } from "./catalog-publications.js";
 import { GatewayCredentialVault } from "./credential-vault.js";
 import { buildInstanceTools, InstanceToolListCache } from "./instance-tools.js";
+import { gatewayInstanceToolsEnabled } from "./instance-tool-policy.js";
 import { InstanceRegistrationStore } from "./instance-registration.js";
 import { combineScopedTools } from "./tool-bundle.js";
 import {
@@ -487,7 +488,14 @@ export async function runGatewayServe(
     ...(vault !== undefined ? { credentials: vault } : {}),
     ...(registrations !== undefined ? { dynamic: { lookup: (id) => registrations.get(id) } } : {}),
   });
+  const instanceToolsEnabled = gatewayInstanceToolsEnabled(env);
   const instanceToolCache = new InstanceToolListCache();
+  if (registrations !== undefined && !instanceToolsEnabled) {
+    process.stderr.write(
+      "ℹ️ 实例私有工具代理默认关闭：WorkBuddy 私有数据应直连实例；" +
+        "如需历史网关代理，显式设置 KIWI_GATEWAY_INSTANCE_TOOLS=1\n",
+    );
+  }
   const handle = await startGatewayEntryServer({
     publicBaseUrl: readiness.publicUrl,
     oauth,
@@ -515,7 +523,11 @@ export async function runGatewayServe(
           }),
         );
       }
-      if (tenantRegistry !== undefined && authorization !== undefined) {
+      if (
+        instanceToolsEnabled &&
+        tenantRegistry !== undefined &&
+        authorization !== undefined
+      ) {
         bundles.push(
           buildInstanceTools({
             registry: tenantRegistry,
