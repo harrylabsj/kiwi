@@ -134,6 +134,19 @@ describe("云端配置强校验（T013/T014/T015）", () => {
     expect(configError(missing).code).toBe("A2A_AUTH_REQUIRED");
   });
 
+  it("A2A 紧急止损：默认关闭；1/true 开启；非法值拒绝", () => {
+    expect(loadCloudConfig(baseEnv()).a2aKillSwitch).toBe(false);
+    expect(
+      loadCloudConfig(baseEnv({ KIWI_CLOUD_A2A_KILL_SWITCH: "1" })).a2aKillSwitch,
+    ).toBe(true);
+    expect(
+      loadCloudConfig(baseEnv({ KIWI_CLOUD_A2A_KILL_SWITCH: "true" })).a2aKillSwitch,
+    ).toBe(true);
+    expect(configError(baseEnv({ KIWI_CLOUD_A2A_KILL_SWITCH: "yes" })).code).toBe(
+      "A2A_KILL_SWITCH_INVALID",
+    );
+  });
+
   it("A2A 限流：云端默认启用；可显式关闭；非法 JSON 拒绝", () => {
     expect(loadCloudConfig(baseEnv()).a2aThrottle).toBeDefined();
     expect(

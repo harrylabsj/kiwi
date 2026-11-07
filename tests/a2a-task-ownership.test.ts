@@ -256,4 +256,28 @@ describe("T044：任务归属与匿名隔离", () => {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
+  it("复用他人 contextId 不会取得或改写他人任务", async () => {
+    const stack = await startStack();
+    const a = await rpc(
+      stack,
+      "SendMessage",
+      { message: { role: "ROLE_USER", parts: [{ text: "A" }], contextId: "ctx-shared" } },
+      stack.signers.one,
+    );
+    const b = await rpc(
+      stack,
+      "SendMessage",
+      { message: { role: "ROLE_USER", parts: [{ text: "B" }], contextId: "ctx-shared" } },
+      stack.signers.two,
+    );
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    const ida = taskIdOf(a.body);
+    const idb = taskIdOf(b.body);
+    expect(idb).not.toBe(ida);
+    const theirs = await rpc(stack, "GetTask", { id: ida }, stack.signers.two);
+    expect(errorCode(theirs.body)).toBe(-32001);
+    expect(theirs.body["result"]).toBeUndefined();
+  });
+
 });

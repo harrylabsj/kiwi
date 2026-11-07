@@ -76,6 +76,8 @@ export interface CloudRuntimeConfig {
   a2aAdmission: A2aAdmissionPolicy;
   /** A2A 反滥用限流；云端缺省启用默认档位，可显式关闭或覆盖。 */
   a2aThrottle?: ThrottleOptions;
+  /** 紧急止损：强制 closed 准入并关闭公开询价会话（不改服务整体状态）。 */
+  a2aKillSwitch: boolean;
   /** readyz 单检查超时（毫秒）：探针不得挂起。 */
   readinessTimeoutMs: number;
   /** Catalog 控制面根 URL；部署配置必须显式提供。 */
@@ -312,6 +314,8 @@ export interface CloudConfigFile {
   a2a_admission?: string;
   /** 可选："1"/"off" 或 ThrottleOptions JSON；缺省启用默认档位。 */
   a2a_throttle?: string;
+  /** 可选：true 时强制 closed 准入并关闭公开询价（紧急止损）。 */
+  a2a_kill_switch?: boolean;
 }
 
 /** 读配置文件（不存在返回 undefined；内容非法即抛错，不静默忽略）。 */
@@ -403,6 +407,17 @@ export function loadCloudConfig(
       `A2A 限流配置非法：${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  const killRaw = readEnv(env, "KIWI_CLOUD_A2A_KILL_SWITCH");
+  if (killRaw !== undefined && !["0", "1", "true", "false"].includes(killRaw.trim().toLowerCase())) {
+    throw new CloudConfigError("A2A_KILL_SWITCH_INVALID", "KIWI_CLOUD_A2A_KILL_SWITCH 只能是 0/1/true/false");
+  }
+  if (file.a2a_kill_switch !== undefined && typeof file.a2a_kill_switch !== "boolean") {
+    throw new CloudConfigError("A2A_KILL_SWITCH_INVALID", "a2a_kill_switch 必须是布尔值");
+  }
+  const a2aKillSwitch =
+    killRaw === undefined
+      ? file.a2a_kill_switch === true
+      : ["1", "true"].includes(killRaw.trim().toLowerCase());
   let a2aAdmission: A2aAdmissionPolicy;
   try {
     a2aAdmission = parseA2aAdmissionPolicy(
@@ -484,6 +499,7 @@ export function loadCloudConfig(
     a2aAuth,
     a2aAdmission,
     ...(a2aThrottle !== undefined ? { a2aThrottle } : {}),
+    a2aKillSwitch,
     readinessTimeoutMs: Math.floor(readinessTimeoutMs),
   };
 }

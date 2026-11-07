@@ -533,7 +533,7 @@ export async function bootstrapCloudRuntime(
     signingKeyId: signingIdentity?.keyid ?? config.publicOrigin,
     advertisedBase: config.publicOrigin,
     ...(config.a2aAuth.mode === "signature" ? {
-      openInquiryEnabled: () => openInquiryPolicy.isEnabled(),
+      openInquiryEnabled: () => !config.a2aKillSwitch && openInquiryPolicy.isEnabled(),
       openInquiryNonceStore: { checkAndSet: (key: string) => {
         try { inquiryNonces ??= new InquiryNonceStore(config.dataDir); return inquiryNonces.checkAndSet(key); }
         catch { return false; }
@@ -542,11 +542,15 @@ export async function bootstrapCloudRuntime(
     // 云端必须按声明 origin 重建目标 URI：平台网关会改写入站 Host（M0 事实 #4）。
     authoritySource: "declared",
     // 陌生调用者准入策略：open 保持兼容；verified/closed 拒绝匿名（见 admission.ts）。
-    admission: config.a2aAdmission,
+    // 紧急止损时强制 closed，并关闭公开询价会话（见下方 kill switch 日志）。
+    admission: config.a2aKillSwitch ? "closed" : config.a2aAdmission,
   });
   log(
     `[kiwi-cloud] A2A 限流：${config.a2aThrottle === undefined ? "未启用" : "已启用（默认/覆盖档位）"}\n`,
   );
+  if (config.a2aKillSwitch) {
+    log("[kiwi-cloud] ⚠️ A2A 紧急止损已开启：准入强制 closed，公开询价会话关闭\n");
+  }
   log(
     `[kiwi-cloud] A2A 准入策略：${config.a2aAdmission}` +
       (config.a2aAdmission === "open"
