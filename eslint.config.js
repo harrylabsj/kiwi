@@ -21,6 +21,10 @@ export default [
       // 会话/任务保留的脚本产物，不是本仓源码。不忽略会让 `npm run lint` ——
       // 进而 `npm run verify` —— 在任何存有 scratch 产物的工作副本上必然失败。
       ".scratch/**",
+      // 本地并行开发用的嵌套 git worktree（.gitignore 已忽略）：它是另一个
+      // checkout，不是本仓源码；不忽略会让带 worktree 的工作副本无法通过
+      // `npm run verify`。
+      "wt/**",
     ],
   },
   js.configs.recommended,
