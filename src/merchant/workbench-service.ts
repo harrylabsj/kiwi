@@ -39,7 +39,11 @@ import type { CommerceDataSource } from "../commerce/data-source.js";
 import { CommerceError } from "../commerce/data-source.js";
 import { LedgerStore } from "../negotiation/ledger/index.js";
 import { TERMINAL_PHASES } from "../negotiation/state/phase.js";
-import type { NegotiationTimelineView, NegotiationObserver } from "./negotiation-observer.js";
+import type {
+  NegotiationOwnerTimelineView,
+  NegotiationTimelineView,
+  NegotiationObserver,
+} from "./negotiation-observer.js";
 import type {
   MerchantOperationsReport,
   OperationsReportBuilder,
@@ -236,6 +240,7 @@ export type MerchantWorkbenchSurface = Pick<
   | "getAnalytics"
   | "getOperationsReport"
   | "getA2aNegotiationTimeline"
+  | "getA2aNegotiationOwnerTimeline"
   | "draftProductChange"
 >;
 
@@ -405,6 +410,30 @@ export class MerchantWorkbenchService {
     }
     try {
       return this.negotiationObserver.timeline(id);
+    } catch (err) {
+      throw toWorkbenchError(err);
+    }
+  }
+
+  /**
+   * 店主投影：在默认时间线之上补金额、币种与公开话术。
+   *
+   * 仅供已通过 `merchant:owner` scope 校验的调用方使用；默认投影仍是
+   * 「金额恒缺省」的隐私不变量（A40-1）。未配置数据源/未知 ID 的行为与
+   * 公共时间线一致。
+   */
+  async getA2aNegotiationOwnerTimeline(
+    negotiationId: string,
+  ): Promise<NegotiationOwnerTimelineView> {
+    if (this.negotiationObserver === undefined) {
+      throw new MerchantWorkbenchError("unavailable", "未配置磋商旁观数据源，无法读取洽谈详情。");
+    }
+    const id = String(negotiationId ?? "").trim();
+    if (id === "") {
+      throw new MerchantWorkbenchError("validation", "negotiation_id 不能为空");
+    }
+    try {
+      return this.negotiationObserver.timelineOwner(id);
     } catch (err) {
       throw toWorkbenchError(err);
     }

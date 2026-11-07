@@ -299,7 +299,7 @@
     },
     {
       "name": "kiwi_merchant_get_a2a_negotiation",
-      "description": "按 negotiation_id 读取一笔 A2A 磋商的只读时间线（双方动作、相位、人工标记；不投影金额或私密策略数值）。",
+      "description": "按 negotiation_id 读取一笔 A2A 磋商的只读时间线（双方动作、相位、人工标记）；默认不投影金额或私密策略数值，仅店主授权（merchant:owner）时返回金额。",
       "inputSchema": {
         "type": "object",
         "properties": {

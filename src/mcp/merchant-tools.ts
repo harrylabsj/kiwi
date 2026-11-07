@@ -24,6 +24,7 @@
  * 写类工具（kiwi_merchant_prepare_product_change）只返回审批候选元数据，绝不直接执行。
  */
 
+import { MERCHANT_OWNER_SCOPE } from "../auth/merchant-scopes.js";
 import type {
   DraftProductChangeResult,
   MerchantWorkbenchSurface,
@@ -286,7 +287,10 @@ export function buildMerchantMcpTools(
 
   const handlers: Record<
     string,
-    (args: Record<string, unknown>) => Promise<Record<string, unknown>>
+    (
+      args: Record<string, unknown>,
+      scopes?: string[],
+    ) => Promise<Record<string, unknown>>
   > = {
     kiwi_merchant_list_products: async () => {
       const { items, source } = await service.listPublicProducts();
@@ -324,10 +328,14 @@ export function buildMerchantMcpTools(
       const report = await service.getOperationsReport(args.period);
       return { report };
     },
-    kiwi_merchant_get_a2a_negotiation: async (args) => {
-      const negotiation = await service.getA2aNegotiationTimeline(
-        typeof args.negotiation_id === "string" ? args.negotiation_id : "",
-      );
+    kiwi_merchant_get_a2a_negotiation: async (args, scopes) => {
+      const id = typeof args.negotiation_id === "string" ? args.negotiation_id : "";
+      // 金额只对显式持有 merchant:owner 的 token 返回；静态 token（scopes
+      // undefined）与普通 merchant:read 都走脱敏投影。
+      const owner = scopes?.includes(MERCHANT_OWNER_SCOPE) === true;
+      const negotiation = owner
+        ? await service.getA2aNegotiationOwnerTimeline(id)
+        : await service.getA2aNegotiationTimeline(id);
       return { negotiation };
     },
     kiwi_merchant_list_active_consultations: async () => {
@@ -538,7 +546,7 @@ export function buildMerchantMcpTools(
     {
       name: "kiwi_merchant_get_a2a_negotiation",
       description:
-        "按 negotiation_id 读取一笔 A2A 磋商的只读时间线（双方动作、相位、人工标记；不投影金额或私密策略数值）。",
+        "按 negotiation_id 读取一笔 A2A 磋商的只读时间线（双方动作、相位、人工标记）；默认不投影金额或私密策略数值，仅店主授权（merchant:owner）时返回金额。",
       inputSchema: {
         type: "object",
         properties: {
@@ -719,7 +727,7 @@ export function buildMerchantMcpTools(
       );
     }
     try {
-      const payload = await withTimeout(handler(args), timeoutMs);
+      const payload = await withTimeout(handler(args, scopes), timeoutMs);
       return okResult(payload, maxChars);
     } catch (err) {
       return errorResult(err);

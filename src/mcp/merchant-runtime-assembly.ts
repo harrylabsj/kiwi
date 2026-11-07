@@ -70,6 +70,7 @@ import { createListingExecutors } from "../merchant/listing-executors.js";
 import { createNegotiationObserver } from "../merchant/negotiation-observer.js";
 import { createOperationsReportBuilder } from "../merchant/operations-report.js";
 import { decimalMajorToMinor } from "../merchant/application/money.js";
+import { merchantOAuthScopes } from "../auth/merchant-scopes.js";
 import {
   assertMerchantMcpAuthPolicy,
   CompositeMerchantMcpVerifier,
@@ -207,6 +208,8 @@ export async function assembleMerchantRuntime(
       );
     }
     // 授权码/token/客户端注册同样落 oauth.sqlite（上面已按 0600 打开）。
+    // owner_scope 必须由实例 profile 显式启用；缺省不进入白名单、不广告。
+    const ownerScopeEnabled = profile.merchant_mcp?.owner_scope === true;
     oauth = new MerchantOAuthServer({
       store: oauthStore,
       issuer,
@@ -214,9 +217,13 @@ export async function assembleMerchantRuntime(
       connectorSource: "kiwi-merchant",
       merchantName: profile.name ?? profile.owner_id,
       merchantId: profile.owner_id,
+      scopes: merchantOAuthScopes(ownerScopeEnabled),
       // 与网关一致：同一连接器/商家/scope 在有效期内不再重复确认。
       rememberConsent: true,
     });
+    if (ownerScopeEnabled) {
+      log("ℹ️ [kiwi] merchant_mcp.owner_scope 已启用：仅 owner 管理会话可申请 merchant:owner（金额读取）");
+    }
     verifier = new MerchantOAuthVerifier({
       store: oauthStore,
       expectedMerchantId: profile.owner_id,

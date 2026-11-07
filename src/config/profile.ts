@@ -236,6 +236,12 @@ export interface AgentProfile {
     auth_mode?: "token" | "oauth";
     /** OAuth issuer / 公网 base URL（https；loopback 开发可省略走 http 推导）。 */
     public_url?: string;
+    /**
+     * 显式启用店主金额 scope（merchant:owner）。缺省 false：不广告、不签发。
+     * 仅单商家 OAuth 入口有效；共享网关/多商家入口不暴露该能力。
+     * 启用后仍要求客户端在 authorize 请求里显式申请，且管理会话角色为 owner。
+     */
+    owner_scope?: boolean;
   };
 }
 
@@ -354,7 +360,16 @@ const MERCHANT_RUNTIME_KEYS = ["data_dir"] as const;
  * auth_mode（V2 阶段一）：token = V1 静态 Bearer（过渡）；oauth = 自建 OAuth
  * 2.1 授权服务器（PKCE/动态注册）。public_url 为 OAuth issuer（生产必须 https）。
  */
-const MERCHANT_MCP_KEYS = ["enabled", "host", "port", "path", "token_env", "auth_mode", "public_url"] as const;
+const MERCHANT_MCP_KEYS = [
+  "enabled",
+  "host",
+  "port",
+  "path",
+  "token_env",
+  "auth_mode",
+  "public_url",
+  "owner_scope",
+] as const;
 const DECISION_BACKENDS: readonly DecisionBackendKind[] = ["deterministic", "mock", "deepseek"];
 
 /** RFC 3339 date-time with an explicit timezone (offset or Z); naive times fail closed. */
@@ -940,6 +955,16 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
         `${source}: merchant_mcp.public_url must be an https URL（OAuth issuer；本地开发可省略）`,
       );
     }
+    if (mm.owner_scope !== undefined) {
+      req(
+        typeof mm.owner_scope === "boolean",
+        `${source}: merchant_mcp.owner_scope must be a boolean`,
+      );
+      // 只对单商家 OAuth 入口有意义；token 模式没有 OAuth scope，不能启用。
+      if (mm.owner_scope === true && mm.auth_mode === "token") {
+        req(false, `${source}: merchant_mcp.owner_scope requires auth_mode=oauth`);
+      }
+    }
     merchantMcp = {
       ...(mm.enabled !== undefined ? { enabled: mm.enabled as boolean } : {}),
       ...(mm.host !== undefined ? { host: String(mm.host) } : {}),
@@ -950,6 +975,7 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
         ? { auth_mode: mm.auth_mode as "token" | "oauth" }
         : {}),
       ...(mm.public_url !== undefined ? { public_url: String(mm.public_url) } : {}),
+      ...(mm.owner_scope !== undefined ? { owner_scope: mm.owner_scope as boolean } : {}),
     };
   }
 

@@ -217,6 +217,10 @@ export class MerchantCoreService {
   getA2aNegotiationTimeline(negotiationId: string) {
     return this.workbench.getA2aNegotiationTimeline(negotiationId);
   }
+  /** 店主投影时间线（含金额）；调用方必须已校验 merchant:owner scope。 */
+  getA2aNegotiationOwnerTimeline(negotiationId: string) {
+    return this.workbench.getA2aNegotiationOwnerTimeline(negotiationId);
+  }
   draftProductChange(input: Parameters<MerchantWorkbenchService["draftProductChange"]>[0]) {
     return this.workbench.draftProductChange(input);
   }

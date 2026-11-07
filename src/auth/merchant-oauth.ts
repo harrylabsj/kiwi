@@ -43,6 +43,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { isLoopbackHost } from "../a2a/client/url-policy.js";
 import { inImmediateTransaction } from "../merchant-core/storage/transaction.js";
 import { MERCHANT_THEME_CSS } from "../merchant-ui/theme.js";
+import {
+  DEFAULT_MERCHANT_SCOPES,
+  MERCHANT_OWNER_SCOPE,
+} from "./merchant-scopes.js";
+
+export { MERCHANT_OWNER_SCOPE };
 
 /** 授权码有效期（10 分钟，一次性使用）。 */
 export const OAUTH_CODE_TTL_MS = 10 * 60 * 1000;
@@ -823,11 +829,10 @@ const SCOPE_LABELS: Readonly<Record<string, string>> = {
 };
 
 /**
- * 店主金额 scope：**不在缺省 scope 中**，必须由客户端在 authorize 请求里显式
- * 申请；授权与确认两步都要求管理会话角色为 owner。静态/配对 token 没有
- * OAuth 授权上下文，拿不到该 scope。
+ * 店主金额 scope 的定义与缺省白名单见 `merchant-scopes.ts`。
+ * 该 scope 不在缺省集合中：实例显式启用、客户端显式申请、owner 会话三者
+ * 同时满足才签发；静态/配对 token 没有 OAuth 授权上下文，拿不到该 scope。
  */
-export const MERCHANT_OWNER_SCOPE = "merchant:owner";
 
 export class MerchantOAuthServer {
   private readonly store: MerchantOAuthStore;
@@ -862,7 +867,7 @@ export class MerchantOAuthServer {
     this.connectorSource = options.connectorSource;
     this.merchantName = options.merchantName;
     this.merchantId = options.merchantId;
-    this.scopes = options.scopes ?? ["merchant:read", "merchant:write"];
+    this.scopes = options.scopes ?? [...DEFAULT_MERCHANT_SCOPES];
     this.loginPath = options.loginPath ?? "/admin/login";
     this.callbackPolicy = options.callbackPolicy ?? {};
     this.rememberConsent = options.rememberConsent === true;

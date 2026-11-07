@@ -272,6 +272,44 @@ describe("只读洽谈工具", () => {
     expect(JSON.stringify(negotiation)).not.toContain("999900");
   });
 
+  it("仅 merchant:owner 返回金额；read 与静态 token 仍脱敏", async () => {
+    const dataDir = fixture();
+    writeLedger(dataDir);
+    const tools = buildMerchantMcpTools(buildService(dataDir));
+
+    const readOnly = await tools.call(
+      "kiwi_merchant_get_a2a_negotiation",
+      { negotiation_id: "neg-1412" },
+      ["merchant:read"],
+    );
+    expect(readOnly.isError).toBeUndefined();
+    expect(JSON.stringify(readOnly.structuredContent)).not.toContain("999900");
+
+    // 静态 token（scopes undefined）不能获得 owner 投影。
+    const staticToken = await tools.call("kiwi_merchant_get_a2a_negotiation", {
+      negotiation_id: "neg-1412",
+    });
+    expect(staticToken.isError).toBeUndefined();
+    expect(JSON.stringify(staticToken.structuredContent)).not.toContain("999900");
+
+    const owner = await tools.call(
+      "kiwi_merchant_get_a2a_negotiation",
+      { negotiation_id: "neg-1412" },
+      ["merchant:read", "merchant:owner"],
+    );
+    expect(owner.isError).toBeUndefined();
+    const payload = owner.structuredContent as {
+      negotiation: {
+        currency?: string;
+        price_minor?: number;
+        timeline: Array<{ total_minor?: number }>;
+      };
+    };
+    expect(payload.negotiation.currency).toBe("CNY");
+    expect(payload.negotiation.price_minor).toBe(999900);
+    expect(JSON.stringify(payload)).toContain("999900");
+  });
+
   it("未找到/空 id 明确报错；未配置旁观数据源 fail-closed", async () => {
     const dataDir = fixture();
     writeLedger(dataDir);

@@ -554,6 +554,36 @@ describe("profile strict validation", () => {
         ),
       ),
     ).toThrow(/public_url must be an https/);
+    // owner_scope：显式布尔开关；token 模式没有 OAuth scope，拒绝启用。
+    const mcpOwner = loadProfile(
+      writeTemp(
+        withChange(
+          "quote_ttl_seconds: 300",
+          "quote_ttl_seconds: 300\nmerchant_mcp:\n  enabled: true\n  auth_mode: oauth\n  owner_scope: true",
+        ),
+      ),
+    );
+    expect(mcpOwner.merchant_mcp?.owner_scope).toBe(true);
+    expect(() =>
+      loadProfile(
+        writeTemp(
+          withChange(
+            "quote_ttl_seconds: 300",
+            "quote_ttl_seconds: 300\nmerchant_mcp:\n  owner_scope: yes",
+          ),
+        ),
+      ),
+    ).toThrow(/owner_scope must be a boolean/);
+    expect(() =>
+      loadProfile(
+        writeTemp(
+          withChange(
+            "quote_ttl_seconds: 300",
+            "quote_ttl_seconds: 300\nmerchant_mcp:\n  auth_mode: token\n  owner_scope: true",
+          ),
+        ),
+      ),
+    ).toThrow(/owner_scope requires auth_mode=oauth/);
     expect(() =>
       loadProfile(
         writeTemp(
