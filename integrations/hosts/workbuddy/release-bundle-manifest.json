@@ -300,9 +300,20 @@
       "id": "oe_a2d0c6cc725719bd",
       "name": "报价助理",
       "platform_version": "0.1.3",
-      "observed_state": "candidate built locally on 2026-11-05; not uploaded/reviewed",
+      "observed_state": "0.1.3 submitted for review 2026-11-05 21:39; rejected 2026-11-06 04:05: 文件质量检测不通过（沙箱评测未达标准，评级：低质量）",
       "source": "kiwi-merchant-buddy/experts/kiwi-catalog-assistant-0.1.3",
       "source_version": "0.1.3",
+      "mapping": "local candidate; submitted and rejected",
+      "bundle_mode": "candidate-source"
+    },
+    {
+      "kind": "expert",
+      "id": "oe_a2d0c6cc725719bd",
+      "name": "报价助理",
+      "platform_version": "0.1.4",
+      "observed_state": "candidate built locally on 2026-11-06 after the 0.1.3 quality rejection; not uploaded/reviewed",
+      "source": "kiwi-merchant-buddy/experts/kiwi-catalog-assistant-0.1.4",
+      "source_version": "0.1.4",
       "mapping": "local candidate; not uploaded",
       "bundle_mode": "candidate-source"
     },
