@@ -2,7 +2,7 @@
  * Merchant Workbench MCP Server tests（WorkBuddy Buddy 应用开发计划 阶段二）：
  * 用官方 SDK 客户端（StreamableHTTPClientTransport）对真实启动的 server
  * （ephemeral 端口）测 initialize / tools/list / tools/call：
- * 7 个 MVP 工具的 schema 稳定、正常路径与错误路径（isError）、limit clamp、
+ * 工具的 schema 稳定、正常路径与错误路径（isError）、limit clamp、
  * draft 只产审批候选不执行、超长响应截断。
  *
  * Deterministic: in-memory SQLite, FakeMerchantClient, 注入时钟。
@@ -40,6 +40,10 @@ const EXPECTED_TOOL_NAMES = [
   "kiwi_merchant_list_a2a_negotiations",
   "kiwi_merchant_list_human_reviews",
   "kiwi_merchant_get_analytics",
+  // WorkBuddy 直连阶段只读运营查询
+  "kiwi_merchant_get_operations_report",
+  "kiwi_merchant_get_a2a_negotiation",
+  "kiwi_merchant_list_active_consultations",
   "kiwi_merchant_prepare_product_change",
   // V2 阶段三写闭环（prepare_* + 确认通道）
   "kiwi_merchant_prepare_product_create",
@@ -158,7 +162,7 @@ function writeLedgerFixture(): string {
 }
 
 describe("merchant MCP server", () => {
-  it("initialize + tools/list：15 个工具（7 只读 + 8 写；execute/reject 不在注册表），schema 稳定", async () => {
+  it("initialize + tools/list：18 个工具（10 只读 + 8 写；execute/reject 不在注册表），schema 稳定", async () => {
     const h = await setupMcpServer();
     handles.push(h.handle);
     const client = await connectClient(h.url);

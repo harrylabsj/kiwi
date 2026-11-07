@@ -15,8 +15,7 @@
  */
 
 /**
- * Merchant Workbench 的 7 个 MVP MCP 工具定义（WorkBuddy Buddy 应用开发计划
- * 阶段二）。全部 handler 委托 MerchantWorkbenchService（阶段一 Facade）——
+ * Merchant Workbench 的 MCP 工具定义（WorkBuddy Buddy 应用开发计划阶段二）。全部 handler 委托 MerchantWorkbenchService（阶段一 Facade）——
  * 本层只做协议适配：稳定 name/description/inputSchema（JSON Schema，
  * additionalProperties: false）、structuredContent 返回、统一错误映射
  * （MerchantWorkbenchError → isError 带内返回，中文标签与 agent 工具层
@@ -263,7 +262,7 @@ function scopeAllows(scopes: string[] | undefined, required: string): boolean {
 }
 
 /**
- * 构建 7 个 MVP 工具的定义与分发器。`call(name, args, scopes)` 返回 MCP
+ * 构建商家工具的定义与分发器。`call(name, args, scopes)` 返回 MCP
  * CallToolResult 形状；业务错误与未知工具名一律带内 isError 返回（中文说明）。
  *
  * scope 过滤（V2 阶段一）：scopes 来自 OAuth access_token 授权上下文；
@@ -319,6 +318,21 @@ export function buildMerchantMcpTools(
         typeof args.period === "string" ? args.period : undefined,
       );
       return { snapshot };
+    },
+    // ---- 只读运营查询（WorkBuddy 直连阶段）：运营报告 + 洽谈详情/进行中列表 ----
+    kiwi_merchant_get_operations_report: async (args) => {
+      const report = await service.getOperationsReport(args.period);
+      return { report };
+    },
+    kiwi_merchant_get_a2a_negotiation: async (args) => {
+      const negotiation = await service.getA2aNegotiationTimeline(
+        typeof args.negotiation_id === "string" ? args.negotiation_id : "",
+      );
+      return { negotiation };
+    },
+    kiwi_merchant_list_active_consultations: async () => {
+      const items = await service.listActiveConsultations();
+      return { count: items.length, items };
     },
     kiwi_merchant_prepare_product_change: async (args) => {
       const result = await service.draftProductChange({
@@ -504,6 +518,40 @@ export function buildMerchantMcpTools(
         },
         additionalProperties: false,
       },
+    },
+    {
+      name: "kiwi_merchant_get_operations_report",
+      description:
+        "读取商家自己的运营报告（只读；day/week/month 周期，UTC 口径，含上一周期对比）。指标不可得时明确标注 available=false 与原因，不用 0 代替。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          period: {
+            type: "string",
+            enum: ["day", "week", "month"],
+            description: "统计周期（UTC）：day=今日、week=本周、month=本月",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "kiwi_merchant_get_a2a_negotiation",
+      description:
+        "按 negotiation_id 读取一笔 A2A 磋商的只读时间线（双方动作、相位、人工标记；不投影金额或私密策略数值）。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          negotiation_id: { type: "string", description: "磋商 id（negotiation_id）" },
+        },
+        required: ["negotiation_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "kiwi_merchant_list_active_consultations",
+      description: "列出进行中（非终态）的 A2A 磋商（只读；按最近活动倒序）。",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
     {
       name: "kiwi_merchant_prepare_product_change",

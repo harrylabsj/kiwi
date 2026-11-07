@@ -209,6 +209,14 @@ export class MerchantCoreService {
   getAnalytics(period?: string) {
     return this.workbench.getAnalytics(period);
   }
+  /** 只读运营报告（day/week/month，UTC）；数据源未配置时 fail-closed。 */
+  getOperationsReport(period?: unknown) {
+    return this.workbench.getOperationsReport(period);
+  }
+  /** 只读洽谈时间线（金额/私密策略值不投影）。 */
+  getA2aNegotiationTimeline(negotiationId: string) {
+    return this.workbench.getA2aNegotiationTimeline(negotiationId);
+  }
   draftProductChange(input: Parameters<MerchantWorkbenchService["draftProductChange"]>[0]) {
     return this.workbench.draftProductChange(input);
   }

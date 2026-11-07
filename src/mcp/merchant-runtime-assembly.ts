@@ -67,6 +67,8 @@ import type { CommandExecutor } from "../merchant-core/executor.js";
 import { createExactProductExecutors } from "../merchant/exact-product-executors.js";
 import { createInventoryExecutors } from "../merchant/inventory-executors.js";
 import { createListingExecutors } from "../merchant/listing-executors.js";
+import { createNegotiationObserver } from "../merchant/negotiation-observer.js";
+import { createOperationsReportBuilder } from "../merchant/operations-report.js";
 import { decimalMajorToMinor } from "../merchant/application/money.js";
 import {
   assertMerchantMcpAuthPolicy,
@@ -490,6 +492,10 @@ export async function assembleMerchantRuntime(
     // 商家 A2A 节点 ledger 基础目录（LedgerStore 会再拼 /ledger）。
     a2aLedgerDir: path.join(paths.dir, "a2a"),
     ...(intelligence !== undefined ? { intelligence } : {}),
+    // 只读运营查询（WorkBuddy 直连阶段）：报告与洽谈详情都读本实例数据目录，
+    // 不接受任何目标实例/商家参数——跨商家隔离由单实例装配保证。
+    operationsReport: createOperationsReportBuilder({ dataDir: options.dataDir }),
+    negotiationObserver: createNegotiationObserver({ ledgerDir: path.join(paths.dir, "a2a") }),
     auditDir: path.join(options.dataDir, "private-audit"),
     // 命令记录授权主体 = 审批 store principal（批准/拒绝主体一致性校验）。
     commandPrincipalId: principal.principal_id,

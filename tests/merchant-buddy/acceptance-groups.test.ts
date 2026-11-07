@@ -100,7 +100,7 @@ describe("验收组 1：商家纯度", () => {
   it("tools/list 无采购/买方能力；连接器 Skill 不挂买方工具", () => {
     const { core, db } = setupCore();
     const tools = buildMerchantMcpTools(core).listTools(undefined);
-    expect(tools.length).toBe(15); // BUG-02：execute/reject 已移出 MCP 注册表
+    expect(tools.length).toBe(18); // BUG-02：execute/reject 已移出；直连阶段 +3 只读运营工具
     for (const t of tools) {
       expect(t.name.startsWith("kiwi_merchant_")).toBe(true);
       expect(t.name).not.toMatch(/buyer|sourcing|supplier|purchase/i);

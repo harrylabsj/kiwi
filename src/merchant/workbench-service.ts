@@ -39,6 +39,12 @@ import type { CommerceDataSource } from "../commerce/data-source.js";
 import { CommerceError } from "../commerce/data-source.js";
 import { LedgerStore } from "../negotiation/ledger/index.js";
 import { TERMINAL_PHASES } from "../negotiation/state/phase.js";
+import type { NegotiationTimelineView, NegotiationObserver } from "./negotiation-observer.js";
+import type {
+  MerchantOperationsReport,
+  OperationsReportBuilder,
+  ReportPeriod,
+} from "./operations-report.js";
 import type { AgentMode } from "../agent/mode.js";
 import type {
   ApprovalExecutionResult,
@@ -205,6 +211,17 @@ export interface MerchantWorkbenchServiceDeps {
   a2aLedgerDir?: string;
   /** 经营指标后端；缺失时 getAnalytics fail-closed 抛 unavailable（不返回演示数据）。 */
   intelligence?: MerchantIntelligenceBackend;
+  /**
+   * 运营报告（WP11 day/week/month 周期聚合）。由装配层注入，读取商家自己的
+   * 实例数据；缺失时 getOperationsReport fail-closed 抛 unavailable，绝不
+   * 返回演示或零填充报告。
+   */
+  operationsReport?: OperationsReportBuilder;
+  /**
+   * 磋商时间线只读投影（与运营报告同一 A2A ledger 事实源）。注入而非在服务内
+   * 构造，避免 facade ↔ observer 的模块环；缺失时详情工具明确「不可得」。
+   */
+  negotiationObserver?: NegotiationObserver;
 }
 
 /** MCP 工具层依赖的服务面（结构类型；merchant-core 包装层同样满足）。 */
@@ -217,8 +234,13 @@ export type MerchantWorkbenchSurface = Pick<
   | "listActiveConsultations"
   | "listHumanReviews"
   | "getAnalytics"
+  | "getOperationsReport"
+  | "getA2aNegotiationTimeline"
   | "draftProductChange"
 >;
+
+/** 运营报告允许的周期（UTC；与 operations-report 同一口径）。 */
+const WORKBENCH_REPORT_PERIODS: readonly string[] = ["day", "week", "month"];
 
 export class MerchantWorkbenchService {
   private readonly profile: AgentProfile;
@@ -230,6 +252,8 @@ export class MerchantWorkbenchService {
   private readonly registerPending?: WriteGateDeps["registerPending"];
   private readonly a2aLedgerDir?: string;
   private readonly intelligence?: MerchantIntelligenceBackend;
+  private readonly operationsReport?: OperationsReportBuilder;
+  private readonly negotiationObserver?: NegotiationObserver;
   private readonly ownerId: string;
   /**
    * 本进程内的候选执行钩子（draft_product_change）。钩子是进程级的，但
@@ -250,6 +274,8 @@ export class MerchantWorkbenchService {
     if (deps.registerPending !== undefined) this.registerPending = deps.registerPending;
     if (deps.a2aLedgerDir !== undefined) this.a2aLedgerDir = deps.a2aLedgerDir;
     if (deps.intelligence !== undefined) this.intelligence = deps.intelligence;
+    if (deps.operationsReport !== undefined) this.operationsReport = deps.operationsReport;
+    if (deps.negotiationObserver !== undefined) this.negotiationObserver = deps.negotiationObserver;
   }
 
   /** 内部依赖只读访问（merchant-core 包装层/两轨适配用；不提供写路径）。 */
@@ -339,6 +365,49 @@ export class MerchantWorkbenchService {
       throw new MerchantWorkbenchError("not_found", `未找到磋商 ${id}`);
     }
     return value;
+  }
+
+  /**
+   * 读取商家自己的运营报告（day/week/month，UTC 窗口 + 上一周期对比）。
+   *
+   * 只读、单商家：报告构建器绑定本实例数据目录，不接受 merchant_id 参数，
+   * 因此不存在用参数指定其他商家实例的路径。指标缺失时报告保留
+   * available=false 与 reason（不填 0）；未配置数据源时 fail-closed。
+   */
+  async getOperationsReport(period?: unknown): Promise<MerchantOperationsReport> {
+    const value = period === undefined ? "day" : period;
+    if (typeof value !== "string" || !WORKBENCH_REPORT_PERIODS.includes(value)) {
+      throw new MerchantWorkbenchError("validation", "period 必须是 day、week 或 month（UTC 口径）");
+    }
+    if (this.operationsReport === undefined) {
+      throw new MerchantWorkbenchError("unavailable", "未配置运营报告数据源，无法读取运营报告。");
+    }
+    try {
+      return this.operationsReport.build(value as ReportPeriod);
+    } catch (err) {
+      throw toWorkbenchError(err);
+    }
+  }
+
+  /**
+   * 读取一笔 A2A 磋商的只读时间线（双方动作、相位、人工标记）。
+   *
+   * 投影由 negotiation-observer 统一完成：金额/币种/私密策略数值不进入返回值；
+   * 未知 negotiation_id 返回 not_found，未配置数据源返回 unavailable。
+   */
+  async getA2aNegotiationTimeline(negotiationId: string): Promise<NegotiationTimelineView> {
+    if (this.negotiationObserver === undefined) {
+      throw new MerchantWorkbenchError("unavailable", "未配置磋商旁观数据源，无法读取洽谈详情。");
+    }
+    const id = String(negotiationId ?? "").trim();
+    if (id === "") {
+      throw new MerchantWorkbenchError("validation", "negotiation_id 不能为空");
+    }
+    try {
+      return this.negotiationObserver.timeline(id);
+    } catch (err) {
+      throw toWorkbenchError(err);
+    }
   }
 
   /** 只留**进行中**（非终态）的磋商。未配置 ledger 目录时 fail-closed 抛 unavailable。 */
