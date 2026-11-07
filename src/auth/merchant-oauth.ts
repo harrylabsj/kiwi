@@ -819,7 +819,15 @@ const SCOPE_LABELS: Readonly<Record<string, string>> = {
   "catalog:write": "写入目录草稿、发布状态与撤回",
   "merchant:read": "读取商家实例的商品、报价规则与磋商",
   "merchant:write": "执行商家操作（仍需在商家应用内逐次确认）",
+  "merchant:owner": "读取本商家的真实报价金额（仅店主授权，且须客户端明确申请）",
 };
+
+/**
+ * 店主金额 scope：**不在缺省 scope 中**，必须由客户端在 authorize 请求里显式
+ * 申请；授权与确认两步都要求管理会话角色为 owner。静态/配对 token 没有
+ * OAuth 授权上下文，拿不到该 scope。
+ */
+export const MERCHANT_OWNER_SCOPE = "merchant:owner";
 
 export class MerchantOAuthServer {
   private readonly store: MerchantOAuthStore;
@@ -885,7 +893,12 @@ export class MerchantOAuthServer {
         token_endpoint: `${this.issuer}/oauth/token`,
         registration_endpoint: `${this.issuer}/oauth/register`,
         revocation_endpoint: `${this.issuer}/oauth/revoke`,
-        scopes_supported: this.scopes,
+        // 只在单商家实例且管理员显式把 owner scope 加入白名单时广告；
+        // 通用网关（multiMerchant）即使误配也不暴露私有金额能力。
+        scopes_supported:
+          this.merchantId !== undefined && this.scopes.includes(MERCHANT_OWNER_SCOPE)
+            ? this.scopes
+            : this.scopes.filter((s) => s !== MERCHANT_OWNER_SCOPE),
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         code_challenge_methods_supported: ["S256"],
@@ -941,7 +954,13 @@ export class MerchantOAuthServer {
    */
   authorize(
     query: Record<string, string | undefined>,
-    session?: { principal_id: string; merchant_id: string; merchant_name?: string },
+    session?: {
+      principal_id: string;
+      merchant_id: string;
+      merchant_name?: string;
+      /** 管理会话角色；merchant:owner 只在 owner 角色下授予。 */
+      role?: string;
+    },
   ): OAuthHttpResult {
     if (session === undefined) {
       const next = `/oauth/authorize?${new URLSearchParams(
@@ -986,12 +1005,29 @@ export class MerchantOAuthServer {
         "必须 PKCE：code_challenge + code_challenge_method=S256",
       );
     }
-    const requestedScopes = (query.scope ?? this.scopes.join(" "))
+    // owner 必须由客户端显式申请：缺省请求即使实例已启用 owner 也不包含它。
+    const requestedScopes = (
+      query.scope ?? this.scopes.filter((s) => s !== MERCHANT_OWNER_SCOPE).join(" ")
+    )
       .split(" ")
       .filter((s) => s !== "");
+    // 严格按实例配置的 scopes 白名单校验；未把 owner 加入白名单的实例不能申请。
     const unknownScope = requestedScopes.find((s) => !this.scopes.includes(s));
     if (unknownScope !== undefined) {
       return redirectFail("invalid_scope", `不支持的 scope：${unknownScope}`);
+    }
+    if (requestedScopes.includes(MERCHANT_OWNER_SCOPE)) {
+      // 三重门：显式启用（scopes 白名单）+ 单商家实例 + owner 会话。
+      const ownerEnabled = this.merchantId !== undefined && this.scopes.includes(MERCHANT_OWNER_SCOPE);
+      if (!ownerEnabled) {
+        return redirectFail(
+          "invalid_scope",
+          "merchant:owner 未由该实例显式启用；共享网关不得代理私有金额",
+        );
+      }
+      if (session.role !== "owner") {
+        return redirectFail("invalid_scope", "merchant:owner 仅限店主管理会话申请");
+      }
     }
     const clientId = query.client_id;
     const challenge = query.code_challenge;
@@ -1102,7 +1138,7 @@ export class MerchantOAuthServer {
   /** POST /oauth/authorize（表单）：会话 + CSRF 校验 → 授权码回跳 / access_denied。 */
   authorizeSubmit(
     form: Record<string, string | undefined>,
-    session: { principal_id: string; merchant_id: string },
+    session: { principal_id: string; merchant_id: string; role?: string },
   ): OAuthHttpResult {
     const pending =
       typeof form.csrf === "string" ? this.store.consumeAuthRequest(form.csrf) : undefined;
@@ -1121,6 +1157,14 @@ export class MerchantOAuthServer {
       session.principal_id !== pending.principal_id
     ) {
       return oauthError(403, "access_denied", "当前登录会话与授权请求主体不匹配");
+    }
+    if (pending.scope.split(" ").includes(MERCHANT_OWNER_SCOPE)) {
+      // 二次校验：配置未启用、共享网关、非 owner 角色任一不满足都绝不下发。
+      const ownerEnabled =
+        this.merchantId !== undefined && this.scopes.includes(MERCHANT_OWNER_SCOPE);
+      if (!ownerEnabled || session.role !== "owner") {
+        return oauthError(403, "access_denied", "merchant:owner 未启用或非店主会话，拒绝确认");
+      }
     }
     if (form.decision !== "approve") {
       if (this.rememberConsent) {

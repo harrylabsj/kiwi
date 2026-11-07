@@ -793,7 +793,7 @@ describe("tools/list 按 scope 过滤（V2 阶段一）", () => {
         ((await readRes.json()) as { result: { isError?: boolean } }).result.isError,
       ).toBeUndefined();
 
-      // 全量 scope → 15 个工具全列出（execute/reject 已移出 MCP 注册表——BUG-02）
+      // 全量 scope → 18 个工具全列出（execute/reject 已移出 MCP 注册表——BUG-02）
       const fullToken = await issueTokenWithScopes(
         issuer,
         "merchant:read merchant:write",
@@ -803,7 +803,7 @@ describe("tools/list 按 scope 过滤（V2 阶段一）", () => {
       const fullTools = (
         (await fullList.json()) as { result: { tools: Array<{ name: string }> } }
       ).result.tools.map((t) => t.name);
-      expect(fullTools).toHaveLength(15);
+      expect(fullTools).toHaveLength(18);
       expect(fullTools).toContain("kiwi_merchant_prepare_product_change");
     } finally {
       await stack.cleanup();
