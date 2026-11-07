@@ -1,0 +1,71 @@
+{
+  "name": "kiwi-catalog-publisher",
+  "version": "0.1.0",
+  "description": "Preflights a merchant catalog before publishing: required fields, price, stock, trade platform and platform product ID, plus full-table replacement impact. Never imports or publishes.",
+  "author": {
+    "name": "harrylabsj",
+    "email": "1711496337@qq.com"
+  },
+  "homepage": "https://github.com/harrylabsj/kiwi",
+  "license": "Apache-2.0",
+  "agents": [
+    "./agents/kiwi-catalog-publisher.md"
+  ],
+  "expertType": "agent",
+  "agentName": "kiwi-catalog-publisher",
+  "displayName": {
+    "zh": "Kiwi 商品发布",
+    "en": "Kiwi Product Publishing"
+  },
+  "profession": {
+    "zh": "商品发布",
+    "en": "Product Publishing"
+  },
+  "displayDescription": {
+    "zh": "预检商品目录的必填字段、价格、库存、交易平台与平台商品 ID，提示整表替换影响；不导入、不发布。",
+    "en": "Preflights a catalog before publishing: required fields, price, stock, trade platform and platform product ID, plus full-replacement impact. Never imports or publishes."
+  },
+  "avatar": "avatars/kiwi.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "帮我预检这份商品表，看看能不能发布",
+    "en": "Preflight this product catalog before publishing"
+  },
+  "plugin": "kiwi-catalog-publisher",
+  "dependencies": {
+    "connectors": [
+      "kiwi-merchant"
+    ]
+  },
+  "tags": [
+    {
+      "zh": "发布预检",
+      "en": "Publish Preflight"
+    },
+    {
+      "zh": "商品表检查",
+      "en": "Catalog Check"
+    },
+    {
+      "zh": "整表替换",
+      "en": "Full Replacement"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我预检这份商品表，看看能不能发布",
+      "en": "Preflight this product catalog before publishing"
+    },
+    {
+      "zh": "检查必填字段、价格和库存有没有问题",
+      "en": "Check required fields, price and stock"
+    },
+    {
+      "zh": "交易平台和平台商品 ID 有没有填错",
+      "en": "Validate trade platform and platform product ID"
+    }
+  ],
+  "skills": [
+    "./skills/merchant-catalog-preflight"
+  ]
+}

@@ -349,6 +349,16 @@
       "source_version": "0.1.4",
       "mapping": "local candidate; not uploaded",
       "bundle_mode": "candidate-source"
+    },
+    {
+      "kind": "expert",
+      "name": "商品发布",
+      "platform_version": "0.1.0",
+      "observed_state": "candidate built locally on 2026-11-05; not uploaded/reviewed; platform asset id not assigned",
+      "source": "kiwi-merchant-buddy/experts/kiwi-catalog-publisher-0.1.0",
+      "source_version": "0.1.0",
+      "mapping": "local candidate; platform id not assigned",
+      "bundle_mode": "candidate-source"
     }
   ],
   "held_items": [
