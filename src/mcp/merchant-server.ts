@@ -68,6 +68,12 @@ import {
   type MerchantMcpCallResult,
   type MerchantMcpToolDefinition,
 } from "./merchant-tools.js";
+import {
+  auditFailureResult,
+  auditReadCall,
+  type ReadAuditContext,
+  type ReadAuditLog,
+} from "./read-audit.js";
 import type { buildMerchantPresentationResources } from "./merchant-resources.js";
 import { OnboardingStore } from "../cloud/onboarding/store.js";
 import { readEnrollmentStore } from "../cloud/binding/enrollment-challenge.js";
@@ -133,6 +139,18 @@ export interface MerchantMcpServerOptions {
   host?: string;
   port?: number;
   path?: string;
+  /**
+   * 私有只读工具的访问审计（阶段一）。配置后每次读取写一行 JSONL；
+   * 写入失败则拒绝返回数据（fail-closed）。未配置时不审计（本地测试/过渡）。
+   */
+  readAudit?: {
+    log: ReadAuditLog;
+    /** 单实例固定商家（静态 token 模式无 OAuth 授权上下文时使用）。 */
+    merchantId: string;
+    /** 静态 token 模式的操作者标识；缺省 static-token。 */
+    staticPrincipalId?: string;
+    now?: () => string;
+  };
   /** 入站认证校验器；提供时所有请求必须携带有效 Bearer token。 */
   auth?: MerchantMcpAuthVerifier;
   /** OAuth 授权服务器（V2 阶段一）：提供时挂载
@@ -298,6 +316,7 @@ export function createProtocolServer(
   scopes: string[] | undefined,
   presentations?: ReturnType<typeof buildMerchantPresentationResources>,
   rfqResources?: ReturnType<typeof import("./merchant-rfq-resources.js").buildRfqPresentationResources>,
+  readAudit?: ReadAuditContext,
 ): Server {
   const hasResources = presentations !== undefined || rfqResources !== undefined;
   const server = new Server(
@@ -332,11 +351,18 @@ export function createProtocolServer(
     });
   }
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const result = await toolsBundle.call(
-      request.params.name,
-      (request.params.arguments ?? {}) as Record<string, unknown>,
-      scopes,
-    );
+    const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+    const result = await toolsBundle.call(request.params.name, args, scopes);
+    try {
+      // 私有只读工具写审计；写入失败时拒绝返回数据（fail-closed）。
+      auditReadCall(readAudit, request.params.name, args, result);
+    } catch (err) {
+      process.stderr.write(
+        `[merchant mcp] 读审计写入失败（${request.params.name}）：` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return auditFailureResult() as CallToolResult;
+    }
     // SDK 1.30 的 CallToolResult 含 task 增强变体；本 server 只用经典
     // content/structuredContent/isError 形状。
     return result as CallToolResult;
@@ -999,6 +1025,8 @@ export function createMerchantHttpHandler(
         return;
       }
       let scopes: string[] | undefined;
+      let auditPrincipalId: string | undefined;
+      let auditMerchantId: string | undefined;
       if (options.auth !== undefined) {
         const verdict = options.auth.verify({
           ...(typeof req.headers.authorization === "string"
@@ -1022,7 +1050,18 @@ export function createMerchantHttpHandler(
         }
         // OAuth 模式按 token scope 过滤；静态 token 过渡模式全量（undefined）。
         scopes = verdict.authorization?.scopes;
+        auditPrincipalId = verdict.authorization?.principal_id;
+        auditMerchantId = verdict.authorization?.merchant_id;
       }
+      const readAuditContext: ReadAuditContext | undefined =
+        options.readAudit === undefined
+          ? undefined
+          : {
+              log: options.readAudit.log,
+              principalId: auditPrincipalId ?? options.readAudit.staticPrincipalId ?? "static-token",
+              merchantId: auditMerchantId ?? options.readAudit.merchantId,
+              now: options.readAudit.now ?? (() => new Date().toISOString()),
+            };
       if (req.method !== "POST" && req.method !== "GET" && req.method !== "DELETE") {
         writeJson(res, 405, { error: "method_not_allowed" }, { allow: "POST, GET, DELETE" });
         return;
@@ -1051,6 +1090,7 @@ export function createMerchantHttpHandler(
         scopes,
         options.presentations,
         options.rfq?.resources,
+        readAuditContext,
       );
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,

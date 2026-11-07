@@ -7,7 +7,7 @@
  *
  * Deterministic: in-memory SQLite, FakeMerchantClient, 注入时钟。
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -27,7 +27,9 @@ import { MerchantWorkbenchService } from "../src/merchant/workbench-service.js";
 import {
   startMerchantMcpServer,
   type MerchantMcpServerHandle,
+  type MerchantMcpServerOptions,
 } from "../src/mcp/merchant-server.js";
+import { createReadAuditLog } from "../src/mcp/read-audit.js";
 import { testProfile } from "./helpers.js";
 
 const T0 = "2026-08-05T12:00:00+08:00";
@@ -71,6 +73,7 @@ async function setupMcpServer(
     a2aLedgerDir?: string;
     intelligence?: MerchantIntelligenceBackend;
     maxChars?: number;
+    readAudit?: MerchantMcpServerOptions["readAudit"];
   } = {},
 ): Promise<McpHarness> {
   const db = new DatabaseSync(":memory:");
@@ -95,6 +98,7 @@ async function setupMcpServer(
     host: "127.0.0.1",
     port: 0,
     ...(options.maxChars !== undefined ? { maxChars: options.maxChars } : {}),
+    ...(options.readAudit !== undefined ? { readAudit: options.readAudit } : {}),
   });
   return {
     handle,
@@ -388,5 +392,78 @@ describe("merchant MCP server", () => {
     expect(res.isError).toBe(true);
     await client.close();
     h.cleanup();
+  });
+
+  it("私有只读工具写读审计：操作者/实例/工具/结果，不记正文", async () => {
+    const auditDir = mkdtempSync(path.join(tmpdir(), "merchant-read-audit-"));
+    const ledgerDir = writeLedgerFixture();
+    try {
+      const h = await setupMcpServer({
+        a2aLedgerDir: ledgerDir,
+        readAudit: {
+          log: createReadAuditLog({ dir: auditDir, now: () => T0 }),
+          merchantId: "merchant-001",
+          now: () => T0,
+        },
+      });
+      handles.push(h.handle);
+      const client = await connectClient(h.url);
+      await client.callTool({ name: "kiwi_merchant_list_a2a_negotiations", arguments: {} });
+      await client.close();
+      h.cleanup();
+
+      const file = path.join(auditDir, "read-access.jsonl");
+      const lines = readFileSync(file, "utf8").trim().split("\n");
+      expect(lines).toHaveLength(1);
+      const event = JSON.parse(lines[0]!) as Record<string, unknown>;
+      expect(event).toMatchObject({
+        at: T0,
+        principal_id: "static-token",
+        merchant_id: "merchant-001",
+        tool: "kiwi_merchant_list_a2a_negotiations",
+        outcome: "ok",
+      });
+      // 审计不记正文/金额/SKU。
+      expect(lines[0]).not.toContain("sku-001");
+      expect(lines[0]).not.toContain("18800");
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(auditDir, { recursive: true, force: true });
+      rmSync(ledgerDir, { recursive: true, force: true });
+    }
+  });
+
+  it("审计写入失败时拒绝返回私有数据（fail-closed）", async () => {
+    const ledgerDir = writeLedgerFixture();
+    try {
+      const h = await setupMcpServer({
+        a2aLedgerDir: ledgerDir,
+        readAudit: {
+          log: {
+            record() {
+              throw new Error("audit disk full");
+            },
+          },
+          merchantId: "merchant-001",
+        },
+      });
+      handles.push(h.handle);
+      const client = await connectClient(h.url);
+      const res = await client.callTool({
+        name: "kiwi_merchant_list_a2a_negotiations",
+        arguments: {},
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent).toMatchObject({
+        error: { code: "AUDIT_UNAVAILABLE" },
+      });
+      const text = (res.content as Array<{ text: string }>)[0]?.text ?? "";
+      expect(text).toContain("审计不可用");
+      expect(text).not.toContain("sku-001");
+      await client.close();
+      h.cleanup();
+    } finally {
+      rmSync(ledgerDir, { recursive: true, force: true });
+    }
   });
 });

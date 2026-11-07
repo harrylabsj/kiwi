@@ -71,6 +71,7 @@ import { createNegotiationObserver } from "../merchant/negotiation-observer.js";
 import { createOperationsReportBuilder } from "../merchant/operations-report.js";
 import { decimalMajorToMinor } from "../merchant/application/money.js";
 import { merchantOAuthScopes } from "../auth/merchant-scopes.js";
+import { createReadAuditLog } from "./read-audit.js";
 import {
   assertMerchantMcpAuthPolicy,
   CompositeMerchantMcpVerifier,
@@ -569,6 +570,12 @@ export async function assembleMerchantRuntime(
     },
     ...(verifier !== undefined ? { auth: verifier } : {}),
     ...(oauth !== undefined ? { oauth } : {}),
+    // 私有只读访问审计：与私密阈值审计同目录约定；写入失败时拒绝返回数据。
+    readAudit: {
+      log: createReadAuditLog({ dir: path.join(options.dataDir, "private-audit") }),
+      merchantId: profile.owner_id,
+      staticPrincipalId: principal.principal_id,
+    },
     presentations,
     // 配套商家确认页面（BUG-01/03）：cookie 会话 + 一次性确认凭证，两种认证
     // 模式下都挂载（会话/凭证存 oauth.sqlite，与 OAuth 授权服务器同库不同表）。
