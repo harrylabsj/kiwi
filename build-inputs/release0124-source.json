@@ -4322,7 +4322,7 @@
     },
     {
       "path": "src/mcp/merchant-server.ts",
-      "sha256": "sha256:5eebd7b2cfe1d5cdf2b62d5f720441fe1066a949119641aba1f1643e62be4c76"
+      "sha256": "sha256:0c2fb0f1f1f1150f373d5116f36366555f838c779ecb34a441ef1975d026b9d4"
     },
     {
       "path": "src/mcp/merchant-tools.ts",
