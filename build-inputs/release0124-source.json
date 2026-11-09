@@ -2662,11 +2662,11 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:2e9d9bb31a568f6f892d273cdc448d7990433c2230d3a9b2d2c462a23e601fc6"
+      "sha256": "sha256:74d689da5c2637726a0a22f3485048d3eb0db8de236600330f72cf93dc7865e6"
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:84b70e39fce2efbd0fe7fb64f5acfc714db57b5aa0f741be881fdcd059621477"
+      "sha256": "sha256:05a56f324976049029b957fbc3f4d8faede719db5a1a6bbee25d1e6cc75182c1"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
