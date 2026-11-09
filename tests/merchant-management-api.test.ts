@@ -648,6 +648,14 @@ describe("Workbench /merchant/api/v1 — RFC 9457 与兼容读取", () => {
     });
   });
 
+  it("v1 读取 policy：与 v0 同一脱敏投影（页面「报价规则」依赖）", async () => {
+    const auth = await login("owner");
+    const policy = await call("GET", "/merchant/api/v1/policy", auth);
+    expect(policy.status).toBe(200);
+    expect(policy.json["policy_revision"]).toBe(3);
+    expect(policy.json["digest"]).toBe("sha256:policy");
+  });
+
   it("v1 管理页写路由的拒绝响应统一使用 RFC 9457", async () => {
     const auth = await login("owner");
     for (const [path, body] of [

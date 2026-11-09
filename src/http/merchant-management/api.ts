@@ -681,6 +681,13 @@ export function createMerchantManagementApiHandler(
       );
       return;
     }
+    if (rest === "/policy") {
+      // Workbench 页面（v1）与旧 v0 页面读取同一份脱敏策略投影；
+      // 此前 v1 缺少该路由，商家后台「报价规则」报 API 路由不存在。
+      const auth = requireActor(req);
+      writeJson(res, 200, await readService.getPolicy(auth.ctx), { "x-request-id": requestId });
+      return;
+    }
     if (rest === "/runtime/status") {
       const auth = requireActor(req);
       writeJson(res, 200, {

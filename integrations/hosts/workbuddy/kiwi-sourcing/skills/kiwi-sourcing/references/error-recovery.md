@@ -5,7 +5,10 @@
 | `partial_success`                          | 保留并展示成功报价，列出失败商家；让用户决定是否补询      |
 | `task_not_found`                           | 检查 task id；无法恢复时重新搜索并发起新询价              |
 | `task_expired`                             | 说明报价可能过期，重新询价，不复用旧审批                  |
-| `approval_required`                        | 执行审批流程，不把它当系统错误                            |
+| `approval_required`                        | 执行审批流程，不把它当系统错误；这不是拒绝                |
+| `below_floor`                              | 该价格低于商家当前可接受范围；不外推“固定价/所有数量不可谈” |
+| `merchant_inquiry_unavailable`             | 商家仅有公开资料、未开通实时询价；不重试询价              |
+| `merchant_offline` / `stale` / 超时        | 查询未完成；读任务或稍后重试，不推断价格政策              |
 | `approval_denied` / `authorization_denied` | 立即停止当前 action，不自动重试                           |
 | 网络或商家超时                             | 调用 `kiwi_get_task` 获取已有结果；需要重试时使用原幂等键 |
 | 空搜索结果                                 | 缩短商品词、放宽非必要规格或询问用户，不编造商家          |
