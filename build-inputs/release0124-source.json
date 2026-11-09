@@ -2790,7 +2790,7 @@
     },
     {
       "path": "scripts/lib/npm-bundled-edges.mjs",
-      "sha256": "sha256:80a7c385987f2eba05e8a6a51948dab9bc21009f8bd8bc4e3c679f7d1496de0d"
+      "sha256": "sha256:23ffad0d820443ac3cb608a693dca0ce35a865f6e5efca38c32291dc88cd48fe"
     },
     {
       "path": "scripts/lib/npm-pack-record.d.mts",
