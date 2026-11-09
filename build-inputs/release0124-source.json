@@ -634,7 +634,7 @@
     },
     {
       "path": "docs/platform-release-ledger.md",
-      "sha256": "sha256:a4775a6f5b63f14aae0958d8300db3ed943da9e570b08ab88eb1f7e871e1c672"
+      "sha256": "sha256:cfe1d673877bdbb4a2caad6932ab6b1ad48ab243c4f99ad39dd3d0bca48e4c21"
     },
     {
       "path": "docs/portfolio-release-management.md",
@@ -2662,7 +2662,7 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:becc9fd393080981c19f57d4eae94edba2689102ff0df5090be66f137408d4b7"
+      "sha256": "sha256:2ade9e00290b2c471cee324d86fb7b3adbfc3d046434c39996234d5326ffc3ba"
     },
     {
       "path": "portfolio.lock.json",
