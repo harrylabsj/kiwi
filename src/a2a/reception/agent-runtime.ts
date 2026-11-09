@@ -23,7 +23,8 @@ import {
   type BeforeToolCallResult,
   type StreamFn,
 } from "@earendil-works/pi-agent-core";
-import type { Api, Message, Model, TSchema } from "@earendil-works/pi-ai";
+import type { Api, Message, Model } from "@earendil-works/pi-ai";
+import type { TSchema } from "typebox";
 
 import type { MerchantPolicy } from "../../config/profile.js";
 import type { AttemptBudgetHooks } from "../server/inquiry-interpreter.js";

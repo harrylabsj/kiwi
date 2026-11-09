@@ -12,7 +12,7 @@ import {
   type ConversationId,
   type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
-import type { TSchema } from "@earendil-works/pi-ai";
+import type { TSchema } from "typebox";
 
 export interface OwnerSdkToolCall {
   readonly taskId: TaskId;

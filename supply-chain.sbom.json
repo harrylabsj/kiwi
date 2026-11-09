@@ -4,28 +4,34 @@
   "package_version": "0.12.26",
   "runtime_dependencies": [
     {
+      "name": "@earendil-works/chord",
+      "spec": "1.5.0",
+      "resolved": "1.5.0",
+      "integrity": "sha512-jf555zbCM21E03DVBDPD/Tuae0lz64YjaHx/athUxNZ/H7phVVb0dWfZsaYnxaXPQ1odW8iHEoVLOlE/prvUPg=="
+    },
+    {
       "name": "@earendil-works/pi-agent-core",
-      "spec": "1.2.0",
-      "resolved": "1.2.0",
-      "integrity": "sha512-pUR0vYmGhHkBQGeCeWjwVIA+l1+MrDu6m6VGuysjh6KBzBpovTV/MlcVrEIOaM8jv/slpAyUmuCEQl1jOBqHJQ=="
+      "spec": "1.5.0",
+      "resolved": "1.5.0",
+      "integrity": "sha512-FOj+jXj48DbzMycR/ghNa2KcsqWmvOln24e0FnQOVgnd8vn5H79g335WdHaZUVdRo+zCeogb40/qPPlCWFuvmA=="
     },
     {
       "name": "@earendil-works/pi-ai",
-      "spec": "1.2.0",
-      "resolved": "1.2.0",
-      "integrity": "sha512-U5/1zXqfV1on7/9sbez03tT4Ru49Lvfb4+zXSDK3DBKF5cRk6KxvAOTOY3HJ4jimlZth+rs7vbJqN6iBQAoNuQ=="
+      "spec": "1.5.0",
+      "resolved": "1.5.0",
+      "integrity": "sha512-VeWxNqTHSqRCf8AcY/6kvNwh+neRL6MPxZPePVztIQy6qqK9MR/YoCSN/ZgDnIyCD3pqEXgRyQbzk4KV4uvjbg=="
     },
     {
       "name": "@earendil-works/pi-coding-agent",
-      "spec": "1.2.0",
-      "resolved": "1.2.0",
-      "integrity": "sha512-h/4WaVWv1VlCaY8x8qEN5U+7jbF/e7+Ck6moPeEOFn5juMTWwNAXjwgYM7gRgbBYh8Zppwt6qWvJDzNTf4GNEQ=="
+      "spec": "1.5.0",
+      "resolved": "1.5.0",
+      "integrity": "sha512-xNDZ5kqowO6Z03FS2gwAkPEGk1ssxVcYKQ6qZId84mFEvwACvvyc2l0vAMOS+c5zvxLRMLBE9r4y44IGYkMJaQ=="
     },
     {
       "name": "@earendil-works/pi-durable",
-      "spec": "1.2.0",
-      "resolved": "1.2.0",
-      "integrity": "sha512-2kDyK7HVCTcxf3CTHkDR0rRGCUfIpoZr76fC6n/KZDu7hkDWR62anEujIkJ+8sKjtNpEM+zyKW3bi2NIEUyiCw=="
+      "spec": "1.5.0",
+      "resolved": "1.5.0",
+      "integrity": "sha512-xeBP2vIo5NvsCMQ4Y/V+Z164xQEi9JWiBWHdjn4Z15EnFqV3c0FxJAX26FqyyyintrYyk+Enre94GNcvRlBA5g=="
     },
     {
       "name": "@modelcontextprotocol/sdk",
@@ -66,13 +72,13 @@
   ],
   "artifact": {
     "name": "harrylabsj-kiwi-0.12.26.tgz",
-    "sha256": "78c578ec3b09d039a0fcb910947544c4bc59831897cccf80158e2db0ce4f2d4a",
-    "bytes": 2734109
+    "sha256": "8f9cfa1711f791a2ce2f129792422da4b5500d96d2fc8d9707a8855196dd58d0",
+    "bytes": 2758007
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-11-05T01:23:26.098Z"
+  "generated_at": "2026-11-09T06:05:19.497Z"
 }

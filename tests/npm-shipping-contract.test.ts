@@ -41,15 +41,16 @@ describe("current 0.12.26 full shipping contract", () => {
     const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
     const staged = stagePackage(root);
     expect(staged.dependencies).toEqual(pkg.dependencies);
-    // Pi 运行时按 0.12.6 发货版本**精确**钉住：`npm audit fix` 曾把它们抬到
-    // 1.4.0，导致打包制品冷启动自检 storage_schema_unknown。
+    // Pi 运行时**精确**钉住 1.5.0：owner storage admission 已同时接受 durable
+    // schema v1（Pi <=1.4）与 v2（Pi 1.5，tasks 增加 sleeping 状态）。
     for (const name of [
+      "@earendil-works/chord",
       "@earendil-works/pi-agent-core",
       "@earendil-works/pi-ai",
       "@earendil-works/pi-coding-agent",
       "@earendil-works/pi-durable",
     ]) {
-      expect(staged.dependencies[name]).toBe("1.2.0");
+      expect(staged.dependencies[name]).toBe("1.5.0");
     }
     expect(staged.dependencies["@simplewebauthn/server"]).toBe("14.0.2");
     expect(staged.overrides).toEqual(pkg.overrides);
