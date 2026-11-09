@@ -98,8 +98,8 @@
     "arch": "arm64"
   },
   "stage": {
-    "package_sha256": "sha256:0d0b77ff3895553a9447eba3202b422640ddc8d6a474d4b94eab35c4e8079781",
-    "lock_sha256": "sha256:05cda191b87873f2a5bc1f62d5071c2c27fb7f4e392e15ce86233a3b89981009"
+    "package_sha256": "sha256:c86bf9de618adf902f79fc1da6153d97d7de1e78dce56c47a0e98114227de680",
+    "lock_sha256": "sha256:665a6c336f5602a92aeb82418e4dddc95f4d0627d34dccf1d76ef69e84cd39da"
   },
   "budgets": {
     "plain_bytes": 268435456,
@@ -142,31 +142,31 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "sha256": "sha256:0aa37fc70ec8fdfe2acf1ba9cd4295236ec7b3fb4f0d4877f17878f4dc5bc51d"
+      "sha256": "sha256:fbfc492005666f329776ac0470d1fcd447acec437e0f772f411c690dc9fa040a"
     },
     {
       "path": ".github/workflows/codeql.yml",
-      "sha256": "sha256:be7be99ea85b6a93027597f388a93aec9ed416150bf5d311c6757989162440b9"
+      "sha256": "sha256:7e3d16b1e19b5b8feb4841f0dbfbd5fe2eab83aec72f9ac82f9f07c8e8886d89"
     },
     {
       "path": ".github/workflows/portfolio-contracts.yml",
-      "sha256": "sha256:5b0284f1b6037436ab21b3946f056e964efc064511b862c58e2f94f552b1b1aa"
+      "sha256": "sha256:de98ddb7cb814728b6363f201aaf0d6bd2f631813a3a9af0ccb8f58ac44eab4f"
     },
     {
       "path": ".github/workflows/portfolio-integration.yml",
-      "sha256": "sha256:649bcd8a7a1a15c4e573534a30268ff64fa3b62357f5b02891c69ee1100bb2e7"
+      "sha256": "sha256:07f37d522b5496fab3cca94a3f1c7f47148a378cf9fcd9e0ef0d172dad70e1a5"
     },
     {
       "path": ".github/workflows/portfolio-release.yml",
-      "sha256": "sha256:ef60d6b3aa6c00f601212719a79b229eca74dd820edb94702cdb87183a1e68c6"
+      "sha256": "sha256:41b2786e4ec55f375c9765cbd3b880c42f6f6b2fe7abd785cfa278c90181ef77"
     },
     {
       "path": ".github/workflows/release-rehearsal.yml",
-      "sha256": "sha256:cb0943edac5bc56d5bcac333d488ad88cf519a617227ab132511c998d63cb273"
+      "sha256": "sha256:8e495965c0dd27653ce09312fd46dae68bcf647c8c17fce40d2c6e609ca0167f"
     },
     {
       "path": ".github/workflows/supply-chain-rehearsal.yml",
-      "sha256": "sha256:5237be9a9ab208700dd8383672058159e03d89700ece1561b09fa7df6d04300d"
+      "sha256": "sha256:5a23250a31ec05f36c806416a6a085815e03ff38a5cf5058edccb2bf03bfc2db"
     },
     {
       "path": ".gitignore",
@@ -222,11 +222,11 @@
     },
     {
       "path": "build-inputs/release0124-stage/package-lock.json",
-      "sha256": "sha256:05cda191b87873f2a5bc1f62d5071c2c27fb7f4e392e15ce86233a3b89981009"
+      "sha256": "sha256:665a6c336f5602a92aeb82418e4dddc95f4d0627d34dccf1d76ef69e84cd39da"
     },
     {
       "path": "build-inputs/release0124-stage/package.json",
-      "sha256": "sha256:0d0b77ff3895553a9447eba3202b422640ddc8d6a474d4b94eab35c4e8079781"
+      "sha256": "sha256:c86bf9de618adf902f79fc1da6153d97d7de1e78dce56c47a0e98114227de680"
     },
     {
       "path": "build-inputs/shipping-audit-allow.json",
@@ -2626,11 +2626,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "sha256:8470aeff9128a61e5027c60bf9e4f1ec5560137d64c3490311ea7f9dc0376fb3"
+      "sha256": "sha256:11112af744d41dc02d5c8e2b591a2d615d2470837198d920ff35221695ebf1f0"
     },
     {
       "path": "package.json",
-      "sha256": "sha256:92402df6faf33258afd27b0a397ad549576b556aaf4cfbda0825b34760ad8791"
+      "sha256": "sha256:cc19cff805600bf9c0490b86392e879da73c81917e760726682f4ac6d266cd9e"
     },
     {
       "path": "packages/merchant-cloud/package-lock.json",
@@ -5298,9 +5298,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:84665bc012dc5589e4d958f2a9fa9d4aead88fee6c8add283ff8bd9d726d576d",
+      "sha256": "sha256:ba3340bda650b8479b4d541e6cb702e2a8d32d549c7a849f5aa98262887b0deb",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:5a2e0c4c85eedd5fe56c1495b14340e917b77e48c0ea766a7b0aedc7d2191b21"
+      "raw_sha256": "sha256:83348f5e2b58fb1e7a6f3d3f6c2be2f861d49478bbb3178200c595795cb90722"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
