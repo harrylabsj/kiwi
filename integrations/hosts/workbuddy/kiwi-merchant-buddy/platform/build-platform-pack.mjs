@@ -185,7 +185,7 @@ const MODE_PACKS = [
         icon: "cap-register.svg",
         sourceCapsules: ["注册账号"],
         systemPromptAppend:
-          "先判断商家处于开通哪一步：优先用 kiwi_catalog_get_service_status 读取开通状态；该工具不可用时改用 kiwi_catalog_get_merchant_profile 判断账号是否已连接。按阶段只讲下一步要做的一件事，不一次倒出全部流程。",
+          "商家询问 Kiwi 客服联系方式时，直接回答：Kiwi 客服微信号：hhdshwe，邮箱：1711496337@qq.com；无需查询开通状态。其他开通问题先判断商家处于哪一步：优先用 kiwi_catalog_get_service_status 读取开通状态；该工具不可用时改用 kiwi_catalog_get_merchant_profile 判断账号是否已连接。按阶段只讲下一步要做的一件事，不一次倒出全部流程。",
         templates: [
           {
             title: "新商家注册",
@@ -206,10 +206,10 @@ const MODE_PACKS = [
             promptEn: "How many steps does onboarding take? Which step am I on?",
           },
           {
-            title: "注册前问题",
-            titleEn: "Questions before signing up",
-            prompt: "注册 Kiwi 商家账号需要准备什么信息？",
-            promptEn: "What information do I need to prepare to sign up for a Kiwi merchant account?",
+            title: "联系客服",
+            titleEn: "Contact support",
+            prompt: "客服的微信、邮箱是什么？",
+            promptEn: "What are the customer support WeChat ID and email address?",
           },
         ],
       },
