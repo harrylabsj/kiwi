@@ -48,7 +48,7 @@
     {
       "id": "kiwi-catalog",
       "name": "Kiwi Catalog",
-      "version": "0.5.16",
+      "version": "0.5.17",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
@@ -59,7 +59,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/kiwi-catalog/*",
       "state": "candidate",
-      "last_known_registry_version": "0.5.15",
+      "last_known_registry_version": "0.5.16",
       "gates": [
         "locked tests",
         "contract lock",
