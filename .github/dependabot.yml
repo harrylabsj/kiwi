@@ -12,3 +12,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
+    # codeql-action 的 init/autobuild/analyze 必须是同一版本（各自单独升级
+    # 会让 CodeQL 报 "Loaded a configuration file for version X, but running
+    # version Y"）。分组后 Dependabot 只开一个协同升级 PR。
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
