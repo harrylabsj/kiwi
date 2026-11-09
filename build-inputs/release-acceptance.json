@@ -1,25 +1,100 @@
 {
   "schema": "kiwi.release-acceptance/1",
-  "recorded_at": "2026-11-05T01:34:06.009Z",
-  "kiwi_version": "0.12.26",
+  "recorded_at": "2026-11-09T22:28:28.436Z",
+  "catalog_url": "https://catalog.kiwi.harrylabsj.com",
+  "merchant_id": "mkt_veyquo_A0UPvj7XuYk",
+  "sku": "VQ-001",
+  "quantity": 2,
+  "unit": "个",
+  "quoted_quantity": 2,
+  "quoted_unit": "个",
+  "quoted_unit_price_minor": 14907,
+  "quoted_subtotal_price_minor": 29814,
+  "quoted_declared_total_price_minor": null,
+  "quoted_total_source": "computed_subtotal_merchant_total_absent",
+  "quoted_currency": "CNY",
+  "test_marker": "【测试，请勿履约】linkluck 验收询价：SKU VQ-001，2 盒；仅用于非约束报价、协议与交接，不下单、不付款、不锁库存。",
+  "preaccept_evidence": {
+    "negotiation_capability": "/a2a/extensions/negotiation/1.0",
+    "catalog_agent_id": "cagt_V4sJmkIokmvx",
+    "catalog_card_url": "https://catalog.kiwi.harrylabsj.com/v1/agents/cagt_V4sJmkIokmvx/agent-card.json",
+    "offer_action": "offer",
+    "accept_action": "accept_nonbinding",
+    "merchant_preaccept_nonbinding_flag": null
+  },
+  "kiwi_version": "0.12.27",
   "shopping_cli_commit": "6477396331267a61275dc7db7bbc903a11e70159",
-  "source_commit": "fe87b4de166472a446ae927ac9f5bb414983f2b8",
-  "private_evidence_sha256": "51170d26a3041a7526a1e746b66fbd839411b197987d597593f6eb26ae453ede",
-  "redacted": true,
+  "signed_buyer": true,
   "chain": {
     "search": {
-      "ok": true
+      "ok": true,
+      "detail": "命中 Veyquo，listing lst_283d954b7df4d168c23b",
+      "merchant_id": "mkt_veyquo_A0UPvj7XuYk",
+      "merchant_name": "Veyquo",
+      "listing_id": "lst_283d954b7df4d168c23b"
+    },
+    "catalog_card": {
+      "ok": true,
+      "detail": "Catalog agent-card cagt_V4sJmkIokmvx：JSONRPC 1.0 + negotiation/1.0",
+      "catalog_agent_id": "cagt_V4sJmkIokmvx",
+      "card_url": "https://catalog.kiwi.harrylabsj.com/v1/agents/cagt_V4sJmkIokmvx/agent-card.json",
+      "extension": "/a2a/extensions/negotiation/1.0",
+      "jsonrpc_endpoints": [
+        "https://veyquo.com/a2a"
+      ]
     },
     "quote": {
-      "ok": true
+      "ok": true,
+      "detail": "报价 14907 CNY × 2 个（小计 29814；商家未声明总价）",
+      "offer_id": "off_01a1c26d-56a8-7000-bba9-078c92dc14b5",
+      "sku": "VQ-001",
+      "quantity_value": "2",
+      "quantity_unit": "个",
+      "unit_price_minor": "14907",
+      "subtotal_price_minor": "29814",
+      "declared_total_price_minor": null,
+      "total_source": "computed_subtotal_merchant_total_absent",
+      "currency": "CNY",
+      "trade_entry": "https://item.jd.com/100184922885.html"
+    },
+    "negotiation": {
+      "ok": true,
+      "detail": "一轮 clarification 已获商家回复",
+      "action": "clarification"
+    },
+    "preaccept": {
+      "ok": true,
+      "detail": "Catalog card + offer/conditional_offer 回复 + accept_nonbinding；商家未提供接受前 nonbinding 字段",
+      "negotiation_capability": "/a2a/extensions/negotiation/1.0",
+      "catalog_agent_id": "cagt_V4sJmkIokmvx",
+      "catalog_card_url": "https://catalog.kiwi.harrylabsj.com/v1/agents/cagt_V4sJmkIokmvx/agent-card.json",
+      "offer_action": "offer",
+      "accept_action": "accept_nonbinding",
+      "merchant_preaccept_nonbinding_flag": null
+    },
+    "agreement_terms": {
+      "ok": true,
+      "detail": "协议条款与目标 SKU/数量/单位/价格一致",
+      "sku": "VQ-001",
+      "quantity": 2,
+      "unit": "个",
+      "unit_price_minor": 14907,
+      "currency": "CNY",
+      "subtotal_price_minor": 29814,
+      "total_price_minor": null,
+      "total_source": "computed_subtotal_merchant_total_absent"
     },
     "agreement": {
-      "ok": true
+      "ok": true,
+      "detail": "非约束性协议 agreement-01a1c26d-5888-75bc-a5f8-84b827944bc2（不下单/不锁库/不付款）",
+      "agreement_id": "agreement-01a1c26d-5888-75bc-a5f8-84b827944bc2",
+      "binding_effect": "nonbinding"
     },
     "handoff": {
       "ok": true,
+      "detail": "成交入口 https://item.jd.com/100184922885.html",
       "destination_type": "external_checkout_url",
-      "url": "https://item.jd.com/10225485016481.html"
+      "url": "https://item.jd.com/100184922885.html"
     }
   }
 }
