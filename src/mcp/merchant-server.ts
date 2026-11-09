@@ -63,6 +63,8 @@ import {
 } from "../auth/app-oauth-callback.js";
 import type { MerchantOAuthServer, OAuthHttpResult } from "../auth/merchant-oauth.js";
 import type { MerchantMcpAuthVerifier } from "./merchant-auth.js";
+import type { MerchantAuthorization } from "../auth/merchant-authorization.js";
+import type { MerchantConversationManager } from "./merchant-conversation.js";
 import {
   buildMerchantMcpTools,
   type MerchantMcpCallResult,
@@ -153,6 +155,11 @@ export interface MerchantMcpServerOptions {
   };
   /** 入站认证校验器；提供时所有请求必须携带有效 Bearer token。 */
   auth?: MerchantMcpAuthVerifier;
+  /**
+   * 商家多轮会话（显式装配；缺失时对话工具不出现）。会话按认证主体绑定，
+   * 不接受模型指定实例/URL。
+   */
+  conversation?: MerchantConversationManager;
   /** OAuth 授权服务器（V2 阶段一）：提供时挂载
    *  /.well-known/oauth-*、/oauth/register|authorize|token|revoke 端点。 */
   oauth?: MerchantOAuthServer;
@@ -304,6 +311,7 @@ export interface ScopedMcpTools {
     name: string,
     args: Record<string, unknown>,
     scopes: string[] | undefined,
+    authorization?: MerchantAuthorization,
   ): Promise<MerchantMcpCallResult>;
 }
 
@@ -317,6 +325,7 @@ export function createProtocolServer(
   presentations?: ReturnType<typeof buildMerchantPresentationResources>,
   rfqResources?: ReturnType<typeof import("./merchant-rfq-resources.js").buildRfqPresentationResources>,
   readAudit?: ReadAuditContext,
+  authorization?: MerchantAuthorization,
 ): Server {
   const hasResources = presentations !== undefined || rfqResources !== undefined;
   const server = new Server(
@@ -352,7 +361,7 @@ export function createProtocolServer(
   }
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
-    const result = await toolsBundle.call(request.params.name, args, scopes);
+    const result = await toolsBundle.call(request.params.name, args, scopes, authorization);
     try {
       // 私有只读工具写审计；写入失败时拒绝返回数据（fail-closed）。
       auditReadCall(readAudit, request.params.name, args, result);
@@ -392,6 +401,7 @@ export function createMerchantHttpHandler(
     ...(options.requestTimeoutMs !== undefined
       ? { requestTimeoutMs: options.requestTimeoutMs }
       : {}),
+    ...(options.conversation !== undefined ? { conversation: options.conversation } : {}),
   });
   // RFQ 工具束合并（v0.1.1 §11.2）：同一 scope 体系逐次强制；名字分发按
   // 前缀路由——rfq_* 走 RFQ 束，其余走 merchant 束。
@@ -1033,6 +1043,7 @@ export function createMerchantHttpHandler(
         return;
       }
       let scopes: string[] | undefined;
+      let authorization: MerchantAuthorization | undefined;
       let auditPrincipalId: string | undefined;
       let auditMerchantId: string | undefined;
       if (options.auth !== undefined) {
@@ -1040,13 +1051,20 @@ export function createMerchantHttpHandler(
           ...(typeof req.headers.authorization === "string"
             ? { authorizationHeader: req.headers.authorization }
             : {}),
+          rawHeaders: req.rawHeaders,
         });
         if (!verdict.ok) {
           // RFC 9728：401 携带 resource_metadata 指引客户端发现授权服务器。
+          const workbuddyHeaderMode = options.auth.name === "workbuddy-header-oauth";
           writeJson(
             res,
             401,
-            { error: "unauthorized", message: "认证失败：需要有效的 Bearer token" },
+            {
+              error: "unauthorized",
+              message: workbuddyHeaderMode
+                ? "认证失败：需要有效的 X-Kiwi-Authorization: Bearer <OAuth access token>"
+                : "认证失败：需要有效的 Bearer token",
+            },
             {
               "www-authenticate":
                 options.oauth !== undefined
@@ -1058,6 +1076,7 @@ export function createMerchantHttpHandler(
         }
         // OAuth 模式按 token scope 过滤；静态 token 过渡模式全量（undefined）。
         scopes = verdict.authorization?.scopes;
+        authorization = verdict.authorization;
         auditPrincipalId = verdict.authorization?.principal_id;
         auditMerchantId = verdict.authorization?.merchant_id;
       }
@@ -1099,6 +1118,7 @@ export function createMerchantHttpHandler(
         options.presentations,
         options.rfq?.resources,
         readAuditContext,
+        authorization,
       );
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,

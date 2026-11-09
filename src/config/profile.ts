@@ -242,6 +242,19 @@ export interface AgentProfile {
      * 启用后仍要求客户端在 authorize 请求里显式申请，且管理会话角色为 owner。
      */
     owner_scope?: boolean;
+    /**
+     * 显式 opt-in：WorkBuddy 实例专用头模式。只接受 `X-Kiwi-Authorization:
+     * Bearer <OAuth access token>`，严格拒绝缺失/重复/逗号合并/异常，完全
+     * 忽略平台注入的标准 Authorization 且不回退。仅 auth_mode=oauth 可用；
+     * 未启用时保持标准 OAuth 行为。
+     */
+    workbuddy_header?: boolean;
+    /**
+     * 显式启用商家多轮会话 MCP 工具（复用既有 `buildChatKernel`）。缺省
+     * false：不暴露对话工具，沿用当前“未启动商家对话内核”的边界。
+     * 仅 OAuth 入口可用；会话按 OAuth 主体/商家绑定，工具不接受实例 URL。
+     */
+    conversation?: boolean;
   };
 }
 
@@ -369,6 +382,8 @@ const MERCHANT_MCP_KEYS = [
   "auth_mode",
   "public_url",
   "owner_scope",
+  "workbuddy_header",
+  "conversation",
 ] as const;
 const DECISION_BACKENDS: readonly DecisionBackendKind[] = ["deterministic", "mock", "deepseek"];
 
@@ -965,6 +980,26 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
         req(false, `${source}: merchant_mcp.owner_scope requires auth_mode=oauth`);
       }
     }
+    if (mm.workbuddy_header !== undefined) {
+      req(
+        typeof mm.workbuddy_header === "boolean",
+        `${source}: merchant_mcp.workbuddy_header must be a boolean`,
+      );
+      // 专用头模式只是入口认证变体，仍必须由原 OAuth token 校验主体/scope。
+      // auth_mode 缺省在正式 Connector 语义下即 OAuth；只拒绝显式 token。
+      if (mm.workbuddy_header === true && mm.auth_mode === "token") {
+        req(false, `${source}: merchant_mcp.workbuddy_header requires auth_mode=oauth`);
+      }
+    }
+    if (mm.conversation !== undefined) {
+      req(
+        typeof mm.conversation === "boolean",
+        `${source}: merchant_mcp.conversation must be a boolean`,
+      );
+      if (mm.conversation === true && mm.auth_mode === "token") {
+        req(false, `${source}: merchant_mcp.conversation requires auth_mode=oauth`);
+      }
+    }
     merchantMcp = {
       ...(mm.enabled !== undefined ? { enabled: mm.enabled as boolean } : {}),
       ...(mm.host !== undefined ? { host: String(mm.host) } : {}),
@@ -976,6 +1011,10 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
         : {}),
       ...(mm.public_url !== undefined ? { public_url: String(mm.public_url) } : {}),
       ...(mm.owner_scope !== undefined ? { owner_scope: mm.owner_scope as boolean } : {}),
+      ...(mm.workbuddy_header !== undefined
+        ? { workbuddy_header: mm.workbuddy_header as boolean }
+        : {}),
+      ...(mm.conversation !== undefined ? { conversation: mm.conversation as boolean } : {}),
     };
   }
 

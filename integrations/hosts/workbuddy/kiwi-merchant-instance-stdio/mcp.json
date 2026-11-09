@@ -1,0 +1,70 @@
+{
+  "$note": [
+    "WorkBuddy 本机 stdio 适配器候选（构建候选，未提交平台、未实测）。",
+    "商家先在本机运行 `kiwi-workbuddy-adapter setup`，在受控页面绑定唯一实例并完成 OAuth PKCE；",
+    "`serve` 只读取本机绑定的固定实例，分享码/令牌不进入模型或 stdout。",
+    "不要用此配置指向共享网关或任意实例 URL。"
+  ],
+  "mcpServers": {
+    "kiwi-merchant-instance": {
+      "type": "stdio",
+      "command": "kiwi-workbuddy-adapter",
+      "args": ["serve"],
+      "timeout": 30000
+    }
+  },
+  "tools": [
+    {
+      "name": "kiwi_merchant_connection_status",
+      "description": "读取本机绑定的固定商家实例与授权状态（不含 token/sharecode）。",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "kiwi_merchant_get_operations_report",
+      "description": "读取本商家实例运营报告（只读；固定绑定实例）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "period": { "type": "string", "enum": ["day", "week", "month"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_list_a2a_negotiations",
+      "description": "列出本商家实例 A2A 磋商（只读；支持 cursor/status/limit）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cursor": { "type": "string", "pattern": "^\\d+$" },
+          "status": { "type": "string", "enum": ["active", "agreement", "all"] },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_get_a2a_negotiation",
+      "description": "按 negotiation_id 读取本商家实例磋商详情（只读）。",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "negotiation_id": { "type": "string" } },
+        "required": ["negotiation_id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kiwi_merchant_chat",
+      "description": "与本商家实例同一个云端 Kiwi 智能体只读多轮对话；返回 conversation_id。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" },
+          "conversation_id": { "type": "string" }
+        },
+        "required": ["message"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

@@ -8,7 +8,8 @@
     "node": ">=22.19.0"
   },
   "bin": {
-    "kiwi": "dist/cli.js"
+    "kiwi": "dist/cli.js",
+    "kiwi-workbuddy-adapter": "dist/workbuddy-adapter/cli.js"
   },
   "exports": {
     ".": "./dist/cli.js",
@@ -24,6 +25,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "postbuild": "node scripts/chmod-workbuddy-adapter.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",

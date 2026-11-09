@@ -25,11 +25,17 @@
  */
 
 import { MERCHANT_OWNER_SCOPE } from "../auth/merchant-scopes.js";
+import type { MerchantAuthorization } from "../auth/merchant-authorization.js";
 import type {
   DraftProductChangeResult,
   MerchantWorkbenchSurface,
 } from "../merchant/workbench-service.js";
 import { MerchantWorkbenchError } from "../merchant/workbench-service.js";
+import {
+  buildMerchantChatToolDefinition,
+  MERCHANT_CHAT_TOOL,
+  type MerchantConversationManager,
+} from "./merchant-conversation.js";
 
 /** 单次工具调用的响应体大小上限（字符；对齐 agent 侧 experienceMaxChars 缺省）。 */
 export const MERCHANT_MCP_MAX_RESPONSE_CHARS = 12_000;
@@ -53,6 +59,8 @@ export interface MerchantMcpCallResult {
 export interface MerchantMcpToolsOptions {
   maxChars?: number;
   requestTimeoutMs?: number;
+  /** 显式装配的多轮会话管理器；缺失时不暴露对话工具（不虚构能力）。 */
+  conversation?: MerchantConversationManager;
 }
 
 /** MerchantWorkbenchError kind → 中文标签（与 agent 工具层 errorText 一致）。 */
@@ -74,8 +82,20 @@ const KIND_CODE: Record<
   unavailable: { code: "UNAVAILABLE", retryable: true },
 };
 
-function errorResult(err: unknown): MerchantMcpCallResult {
-  if (err instanceof MerchantWorkbenchError) {
+/** 普通 merchant:read / 静态 token 的列表投影不得携带 owner-only 报价金额。 */
+function withoutNegotiationPrice<T extends { price_minor?: number }>(
+  rows: T[],
+  scopes: string[] | undefined,
+): T[] {
+  if (scopes?.includes(MERCHANT_OWNER_SCOPE) === true) return rows;
+  return rows.map((row) => {
+    const copy = { ...row };
+    delete copy.price_minor;
+    return copy;
+  });
+}
+
+function errorResult(err: unknown): MerchantMcpCallResult {  if (err instanceof MerchantWorkbenchError) {
     return {
       content: [{ type: "text", text: `商家操作失败（${KIND_LABEL[err.kind]}）：${err.message}` }],
       structuredContent: {
@@ -305,16 +325,19 @@ export function buildMerchantMcpTools(
     name: string,
     args: Record<string, unknown>,
     scopes?: string[],
+    authorization?: MerchantAuthorization,
   ) => Promise<MerchantMcpCallResult>;
 } {
   const maxChars = options.maxChars ?? MERCHANT_MCP_MAX_RESPONSE_CHARS;
   const timeoutMs = options.requestTimeoutMs ?? MERCHANT_MCP_REQUEST_TIMEOUT_MS;
+  const conversation = options.conversation;
 
   const handlers: Record<
     string,
     (
       args: Record<string, unknown>,
       scopes?: string[],
+      authorization?: MerchantAuthorization,
     ) => Promise<Record<string, unknown>>
   > = {
     kiwi_merchant_list_products: async () => {
@@ -334,13 +357,14 @@ export function buildMerchantMcpTools(
       );
       return { snapshot };
     },
-    kiwi_merchant_list_a2a_negotiations: async (args) => {
+    kiwi_merchant_list_a2a_negotiations: async (args, scopes) => {
       const { total, items, next_cursor } = await service.listA2aNegotiations({
         ...(args.limit !== undefined ? { limit: args.limit } : {}),
         ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
         ...(args.status !== undefined ? { status: args.status } : {}),
       });
-      return { total, count: items.length, next_cursor, items };
+      const visible = withoutNegotiationPrice(items, scopes);
+      return { total, count: visible.length, next_cursor, items: visible };
     },
     kiwi_merchant_list_human_reviews: async () => {
       const items = await service.listHumanReviews();
@@ -367,10 +391,25 @@ export function buildMerchantMcpTools(
         : await service.getA2aNegotiationTimeline(id);
       return { negotiation };
     },
-    kiwi_merchant_list_active_consultations: async () => {
-      const items = await service.listActiveConsultations();
+    kiwi_merchant_list_active_consultations: async (_args, scopes) => {
+      const items = withoutNegotiationPrice(await service.listActiveConsultations(), scopes);
       return { count: items.length, items };
     },
+    ...(conversation !== undefined
+      ? {
+          [MERCHANT_CHAT_TOOL]: async (
+            args: Record<string, unknown>,
+            _scopes?: string[],
+            authorization?: MerchantAuthorization,
+          ) => {
+            const result = await conversation!.chat(authorization, {
+              message: args.message,
+              conversation_id: args.conversation_id,
+            });
+            return { ...result };
+          },
+        }
+      : {}),
     kiwi_merchant_prepare_product_change: async (args) => {
       const result = await service.draftProductChange({
         sku: typeof args.sku === "string" ? args.sku : "",
@@ -743,12 +782,14 @@ export function buildMerchantMcpTools(
         additionalProperties: false,
       },
     },
+    ...(conversation !== undefined ? [buildMerchantChatToolDefinition()] : []),
   ];
 
   const call = async (
     name: string,
     args: Record<string, unknown>,
     scopes?: string[],
+    authorization?: MerchantAuthorization,
   ): Promise<MerchantMcpCallResult> => {
     const handler = handlers[name];
     if (handler === undefined) {
@@ -766,7 +807,7 @@ export function buildMerchantMcpTools(
       );
     }
     try {
-      const payload = await withTimeout(handler(args, scopes), timeoutMs);
+      const payload = await withTimeout(handler(args, scopes, authorization), timeoutMs);
       return okResult(payload, maxChars);
     } catch (err) {
       return errorResult(err);

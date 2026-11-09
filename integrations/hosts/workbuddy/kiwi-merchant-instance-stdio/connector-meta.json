@@ -1,0 +1,12 @@
+{
+  "name": "Kiwi 商家实例（本机）",
+  "name_zh": "Kiwi 商家实例（本机）",
+  "name_en": "Kiwi Merchant Instance (Local)",
+  "description": "本机 stdio 适配器：商家本人绑定固定云端实例后，只读运营报告与磋商，并与同一云端商家智能体只读对话。",
+  "description_zh": "本机 stdio 适配器：商家本人绑定固定云端实例后，只读运营报告与磋商，并与同一云端商家智能体只读对话。",
+  "description_en": "Local stdio adapter: after the merchant binds a fixed cloud instance, read operations reports and negotiations and converse read-only with the same cloud merchant agent.",
+  "source": "kiwi-merchant-instance",
+  "type": "mcp",
+  "version": "0.1.0",
+  "minWorkbuddyVersion": "5.0.0"
+}

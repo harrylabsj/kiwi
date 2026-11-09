@@ -93,6 +93,13 @@ export function buildClient(profile: AgentProfile): CommerceClient {
  * 为 profile 构建 AgentKernel（chat/weixin 共享装配）。
  * provider=fake 运行确定性离线 chat fake；真实 provider 解析模型与认证。
  */
+export interface ChatKernelLimits {
+  /** 商家业务事实根目录（a2a ledger / intelligence）；缺省同 dataDir。 */
+  merchantDataRoot?: string;
+  /** 只读商家对话：强制 manual 模式并只注入只读商家工具。 */
+  readOnlyMerchantTools?: boolean;
+}
+
 export async function buildChatKernel(
   profile: AgentProfile,
   dataDir?: string,
@@ -100,6 +107,7 @@ export async function buildChatKernel(
   eventSink?: AgentEventSink,
   eventSessionId?: string,
   merchantAnalyticsSource?: MerchantAnalyticsSource,
+  limits: ChatKernelLimits = {},
 ): Promise<AgentKernel> {
   const paths = ensurePathsForDir(dataDir ?? agentDataDir(profile.agent_id));
 
@@ -200,7 +208,13 @@ export async function buildChatKernel(
     paths,
     providers,
     model,
-    ...(mode !== undefined ? { mode } : {}),
+    // 只读对话不得继承 KIWI_MODE 的 autopilot；即使工具白名单已限制，也把
+    // 运行模式钉死为 manual，避免后续内核路径误用写入分支。
+    mode: limits.readOnlyMerchantTools === true ? "manual" : mode,
+    ...(limits.merchantDataRoot !== undefined
+      ? { merchantDataRoot: limits.merchantDataRoot }
+      : {}),
+    ...(limits.readOnlyMerchantTools === true ? { readOnlyMerchantTools: true } : {}),
     ...(connector !== undefined ? { connector } : {}),
     ...(commerceClient !== undefined ? { commerceClient } : {}),
     ...(merchantClient !== undefined ? { merchantClient } : {}),

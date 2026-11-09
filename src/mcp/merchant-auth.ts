@@ -41,6 +41,26 @@ export const DEFAULT_MERCHANT_MCP_TOKEN_ENV = "KIWI_MERCHANT_MCP_TOKEN";
 export interface MerchantMcpAuthContext {
   /** 原始 Authorization 头（未设置时为 undefined）。 */
   authorizationHeader?: string;
+  /**
+   * node:http 的原始头对数组（`req.rawHeaders`）。WorkBuddy 专用头模式用它
+   * 区分「缺失 / 单字段 / 重复字段 / 逗号合并」；其他模式忽略。
+   */
+  rawHeaders?: readonly string[];
+}
+
+/** WorkBuddy 实例专用认证头（平台实测可单字段透传；标准 Authorization 会被注入）。 */
+export const WORKBUDDY_AUTH_HEADER = "x-kiwi-authorization";
+
+/** 专用头长度上限（只允许一个 OAuth Bearer token）。 */
+export const WORKBUDDY_AUTH_HEADER_MAX_BYTES = 8 * 1024;
+
+/** 控制字符按码点判定，避免 no-control-regex；语义保持 C0 + DEL 拒绝。 */
+function containsControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
 }
 
 export type MerchantMcpAuthResult =
@@ -122,6 +142,65 @@ export class PairedCredentialVerifier implements MerchantMcpAuthVerifier {
     // 与静态令牌同语义：不带 scope（undefined = 全量），工具级门禁由网关侧
     // 按**用户 OAuth 令牌**的 scope 逐次执行（mcp-proxy），实例不重复判定。
     return { ok: true };
+  }
+}
+
+/**
+ * WorkBuddy 实例专用头模式（显式 opt-in）。
+ *
+ * 平台隔离实测：单字段 `X-Kiwi-Authorization` 可短/长 GET/POST 透传；客户端
+ * 重复字段到源站会变成 1 个，标准 Authorization 会被平台注入/改写。该证据
+ * 只属于隔离应用，真实 Linkluck/平台全局行为未证明。
+ *
+ * 因此本校验器：
+ *   - 只读取 `X-Kiwi-Authorization`，**完全忽略** `Authorization`，绝不回退；
+ *   - 要求原始头恰好出现 1 次；缺失、重复、逗号合并、含控制字符、超长、
+ *     非严格 `Bearer <token>` 一律拒绝；
+ *   - 通过后只把专用头里的 token 交给原 OAuth 校验器，scope/merchant/
+ *     revocation 校验保持原样；
+ *   - 未开启该模式的实例仍使用标准 OAuth 校验器，行为不变。
+ */
+export class WorkBuddyHeaderAuthVerifier implements MerchantMcpAuthVerifier {
+  readonly name = "workbuddy-header-oauth";
+  constructor(private readonly inner: MerchantMcpAuthVerifier) {}
+
+  verify(ctx: MerchantMcpAuthContext): MerchantMcpAuthResult {
+    if (ctx.rawHeaders === undefined) {
+      return { ok: false, reason: "WorkBuddy header context missing" };
+    }
+    const values: string[] = [];
+    for (let i = 0; i + 1 < ctx.rawHeaders.length; i += 2) {
+      const name = String(ctx.rawHeaders[i] ?? "").toLowerCase();
+      if (name === WORKBUDDY_AUTH_HEADER) values.push(String(ctx.rawHeaders[i + 1] ?? ""));
+    }
+    if (values.length === 0) {
+      return { ok: false, reason: "missing WorkBuddy authorization header" };
+    }
+    if (values.length !== 1) {
+      return { ok: false, reason: "duplicate WorkBuddy authorization header" };
+    }
+    const raw = values[0] ?? "";
+    if (
+      raw.length === 0 ||
+      raw.length > WORKBUDDY_AUTH_HEADER_MAX_BYTES ||
+      raw.includes(",") ||
+      containsControlChar(raw)
+    ) {
+      return { ok: false, reason: "invalid WorkBuddy authorization header" };
+    }
+    // 只接受单空格 Bearer；token 字符集与 OAuth bearer token 一致，拒绝多值/
+    // 多余空白/协议拼接。
+    const match = /^Bearer ([A-Za-z0-9._~+/=-]+)$/i.exec(raw.trim());
+    if (match === null) {
+      return { ok: false, reason: "invalid WorkBuddy authorization header" };
+    }
+    const token = match[1] ?? "";
+    if (token === "") {
+      return { ok: false, reason: "invalid WorkBuddy authorization header" };
+    }
+    // 只把专用头 token 交给原 OAuth 校验；不传 authorizationHeader，避免
+    // 任何内部实现误用平台注入的标准头。
+    return this.inner.verify({ authorizationHeader: `Bearer ${token}` });
   }
 }
 
