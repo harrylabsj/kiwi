@@ -12,10 +12,10 @@ import {assertBundledEdges} from "../scripts/lib/npm-bundled-edges.mjs";
 // checkpoint, which reads that commit's contract and npm payload manifest and
 // runs toolchain() on it, so the checkpoint can only stay valid while its
 // manifest matches the npm CI installs.
-const VERIFIED_SOURCE = "f809f0cdf267ae9ad30411e0d76ccba5ff817dc1";
-const VERIFIED_CONTRACT_SHA = "5e956bd5652e6e41fdc7e1f2ee6bcb83c85b901827fcca1eeabdc042a9748fed";
+const VERIFIED_SOURCE = "deafaa76648147a095452175c3d0272aed8f2130";
+const VERIFIED_CONTRACT_SHA = "a8e43c4ee5815f22eaa6268a1693211f364e669e32a01a2109372dad44269ca3";
 const VERIFIED_GUARD_CLOSURE = {
-  "scripts/lib/npm-shipping.mjs": "ddf68d45c0c00ea13b342d7c14804d7ee2a6ef021356a56d4b6b5897d043dd99",
+  "scripts/lib/npm-shipping.mjs": "24ddd5484ea33e05b2af0785c70300e3d50ffbaf6e3996d85e95a75c356a5862",
   "scripts/check-install-toolchain.mjs": "ccb86a2707cb23f385f6428eb8c3f28df9ad0c0fe59b584e2b29ffe4eafd9c69",
   "build-inputs/release0124-npm12-payload.json": "ae7810234dbf422fba678c4c0956d31b82563131286c4adca6c2810cb435058a"
 };
@@ -32,7 +32,7 @@ beforeAll(()=>{
  execFileSync("git",["--no-replace-objects","-C",authority,"checkout","--detach",VERIFIED_SOURCE],{stdio:"pipe"});
  assertVerifiedSourceIdentity(authority);
  // Invoke the current imported d8 helper (includes realpath alias support), not the cloned helper.
- expect(digest(path.join(process.cwd(),"scripts/lib/npm-bundled-edges.mjs"))).toBe("80a7c385987f2eba05e8a6a51948dab9bc21009f8bd8bc4e3c679f7d1496de0d");
+ expect(digest(path.join(process.cwd(),"scripts/lib/npm-bundled-edges.mjs"))).toBe("23ffad0d820443ac3cb608a693dca0ce35a865f6e5efca38c32291dc88cd48fe");
  mkdirSync(path.join(leaf,"node_modules"),{recursive:true});
  cpSync(path.join(process.cwd(),"node_modules/yaml"),path.join(leaf,"node_modules/alias-yaml"),{recursive:true});
  writeFileSync(path.join(leaf,"package.json"),JSON.stringify({name:"synthetic-leaf",version:"1.0.0",dependencies:{"alias-yaml":"npm:yaml@2.9.1"},bundleDependencies:["alias-yaml"],bundledDependencies:["alias-yaml"]}));
