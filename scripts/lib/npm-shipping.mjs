@@ -805,13 +805,22 @@ export function assertNoState(rows, { stageNpmrc, generatedLock, compiledApp, ve
       throw new Error(`SHIPPING_STATE_OR_CREDENTIAL_FILE ${row.path}`);
 }
 export function npm(root, args, timeout = MAX_MS) {
-  return execFileSync("npm", args, {
-    cwd: root,
-    env: { ...process.env },
-    encoding: "utf8",
-    maxBuffer: 64 * 1048576,
-    timeout,
-  });
+  try {
+    return execFileSync("npm", args, {
+      cwd: root,
+      env: { ...process.env },
+      encoding: "utf8",
+      maxBuffer: 64 * 1048576,
+      timeout,
+    });
+  } catch (error) {
+    // 子进程 stderr 才是失败原因（npm 的 notice 之外）；默认 Error.message 只有
+    // "Command failed: npm …"，在发布日志里不可诊断。
+    const stderr = String(error?.stderr ?? "").trim().slice(-4000);
+    throw new Error(`Command failed: npm ${args.join(" ")}${stderr ? `\n${stderr}` : ""}`, {
+      cause: error,
+    });
+  }
 }
 
 /** Decode normal npm tar headers/PAX and compare the actual tgz, not merely the staging plan. */
