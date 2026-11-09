@@ -1,15 +1,15 @@
 # Kiwi 平台发布版本台账
 
-最后核验：2026-10-28（北京时间）。本表记录**已观察到的版本与当时状态**，不是实时查询；候选代码、注册表版本、平台审核和实际云端运行分开记录。部署、上线或发布新版本后，应补充平台链接、版本、状态、核验时间与回执；不得以代码提交或审核提交代替上线证据。
+最后核验：2026-11-10（北京时间）。本表记录**已观察到的版本与当时状态**，不是实时查询；候选代码、注册表版本、平台审核和实际云端运行分开记录。部署、上线或发布新版本后，应补充平台链接、版本、状态、核验时间与回执；不得以代码提交或审核提交代替上线证据。
 
 ## npm 与 PyPI
 
 | 平台 | 产品 | 已确认版本 | 证据与限制 |
 |---|---|---:|---|
-| npm | `@harrylabsj/kiwi` | 0.12.7 | 2026-10-28 查询 npm metadata；下载包的 SHA-512 与 registry integrity 一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.7)。该包与源审计 SBOM 的对应证据仍待核实。 |
-| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.7 | 2026-10-28 查询 npm metadata；下载包的 SHA-512 与 registry integrity 一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.7)。npm 发布不代表商家云端已部署或通过验收。 |
+| npm | `@harrylabsj/kiwi` | 0.12.27 | 2026-11-10 查询 npm metadata 并下载 tarball：SHA-512 与 registry integrity 一致，存在 SLSA provenance。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.27)。 |
+| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.27 | 2026-11-10 查询 npm metadata 并下载 tarball：SHA-512 与 registry integrity 一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.27)。npm 发布不代表商家云端已部署或通过验收。 |
 | npm | `@harrylabsj/kiwi-dsh-plugin` | 0.1.2 | 2026-10-28 查询 npm 该指定版本存在。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-dsh-plugin/v/0.1.2)。 |
-| PyPI | `kiwi-catalog` | 0.5.7 | 2026-10-28 查询 PyPI 该指定版本，返回两个发布文件。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.7/)。不代表生产环境已部署。 |
+| PyPI | `kiwi-catalog` | 0.5.17 | 2026-11-10 查询 PyPI 该指定版本，wheel 已核验包含 schema v50；生产 kiwi-hk 已部署 0.5.17 + admin 0.2.15。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.17/)。 |
 | PyPI | `shopping-cli` | 3.2.6 | 2026-10-28 查询 PyPI 该指定版本，返回两个发布文件。[PyPI 版本页](https://pypi.org/project/shopping-cli/3.2.6/)。 |
 
 上表确认指定版本可查，不声称它们必然是 registry 当前 latest。`kiwi-catalog-admin` 0.2.5 据发布负责人提供为源码已推送；私有仓发布 tag、部署位置及生产运行版本尚未核实，不计入已发布 registry 制品。

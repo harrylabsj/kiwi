@@ -22,7 +22,8 @@
         "local npm pack integrity",
         "protected kiwi-release environment",
         "npm trusted publishing"
-      ]
+      ],
+      "last_known_registry_version": "0.12.27"
     },
     {
       "id": "kiwi",
@@ -38,7 +39,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/npm/*.tgz",
       "state": "candidate",
-      "last_known_registry_version": "0.12.26",
+      "last_known_registry_version": "0.12.27",
       "gates": [
         "full Kiwi verify",
         "protected kiwi-release environment",
