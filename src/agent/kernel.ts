@@ -70,6 +70,7 @@ import {
 import type { CredentialBroker } from "./merchant/credential-broker.js";
 import type { MerchantClient } from "./merchant/types.js";
 import { buildMerchantTools } from "./merchant/merchant-tools.js";
+import { filterReadOnlyMerchantTools } from "./merchant/read-only-tools.js";
 import { publicCandidatePreview } from "./merchant/merchant-enrichment.js";
 import { DefaultMerchantIntelligenceBackend } from "./merchant/intelligence/default-backend.js";
 import type { MerchantIntelligenceBackend } from "./merchant/intelligence/backend.js";
@@ -152,6 +153,16 @@ export interface AgentKernelOptions {
   eventSessionId?: string;
   /** Optional authoritative sales/campaign/ROAS source for Merchant Intelligence. */
   merchantAnalyticsSource?: MerchantAnalyticsSource;
+  /**
+   * 商家业务事实根目录（a2a ledger / intelligence data）。缺省为会话
+   * paths.dir；只读对话用它把每次会话的本地状态与**同一实例**的业务事实分离。
+   */
+  merchantDataRoot?: string;
+  /**
+   * 只读商家对话：只注入白名单读工具，排除写工具、记忆写入、技能工具；
+   * 不依赖 prompt 或 runtime mode。
+   */
+  readOnlyMerchantTools?: boolean;
 }
 
 /** A2A 磋商结果记忆记录（/negotiate 与 negotiate_buyer_task 共用形状）。 */
@@ -530,6 +541,7 @@ export class AgentKernel {
     // Reject invalid trusted configuration before files, database handles or timers exist.
     clock();
     const paths = options.paths ?? ensureAgentPaths(options.profile.agent_id);
+    const merchantDataRoot = options.merchantDataRoot ?? path.dirname(paths.db);
     // 会话来自不同模型（如 fake→deepseek）时重置：旧模型的消息会让新模型首轮
     // 产生空响应（模型没有返回任何文本）。模型变更 = 新的对话历史。
     if (options.model !== undefined && existsSync(paths.mainSession)) {
@@ -706,7 +718,7 @@ export class AgentKernel {
       ) {
         merchantIntelligence = new DefaultMerchantIntelligenceBackend({
           merchant_id: principal.owner_id,
-          data_dir: path.dirname(paths.db),
+          data_dir: merchantDataRoot,
           // 口径修复（V2 阶段二遗留核查）：presentation enrich 以
           // context.principalId 作为商家读取键（merchant_id 口径），backend 的
           // principal 校验键必须同口径——用 agent_id 会让 digest/catalog 展示
@@ -737,7 +749,8 @@ export class AgentKernel {
         ...(emitEvent !== undefined ? { emitEvent } : {}),
         // 商家 A2A 节点 ledger 基础目录（<dataDir>/a2a）——LedgerStore 会再拼
         // /ledger 到 <dataDir>/a2a/ledger，list_a2a_negotiations 用。
-        a2aLedgerDir: path.join(path.dirname(paths.db), "a2a"),
+        a2aLedgerDir: path.join(merchantDataRoot, "a2a"),
+        ...(options.readOnlyMerchantTools === true ? { redactAmounts: true } : {}),
       });
     }
 
@@ -762,12 +775,15 @@ export class AgentKernel {
       options.modelRuntime ?? (await buildModelRuntime(options)),
       options.profile.merchant_experience?.prompt_cache_retention,
     );
-    const kiwiTools: KiwiTool[] = [
-      ...buildMemoryTools(store, { turnId: () => turnId.current }),
-      ...buyerTools,
-      ...merchantTools,
-      ...merchantSkillTools,
-    ];
+    const kiwiTools: KiwiTool[] =
+      options.readOnlyMerchantTools === true
+        ? filterReadOnlyMerchantTools(merchantTools)
+        : [
+            ...buildMemoryTools(store, { turnId: () => turnId.current }),
+            ...buyerTools,
+            ...merchantTools,
+            ...merchantSkillTools,
+          ];
     const customTools: ToolDefinition[] = kiwiTools.map((tool) => ({
       name: tool.name,
       label: tool.label,

@@ -854,6 +854,7 @@ ${current}
         ...(typeof req.headers.authorization === "string"
           ? { authorizationHeader: req.headers.authorization }
           : {}),
+        rawHeaders: req.rawHeaders,
       });
       if (!verdict.ok) {
         writeJson(
@@ -896,7 +897,15 @@ ${current}
       });
       return;
     }
-    const protocolServer = createProtocolServer(serverInfo, tools, scopes);
+    const protocolServer = createProtocolServer(
+      serverInfo,
+      tools,
+      scopes,
+      undefined,
+      undefined,
+      undefined,
+      authorization,
+    );
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

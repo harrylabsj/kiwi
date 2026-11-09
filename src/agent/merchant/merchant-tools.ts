@@ -198,6 +198,11 @@ export interface MerchantToolDeps {
   /** 商家 A2A 节点 ledger 目录（`<dataDir>/a2a/ledger`）；提供时挂载
    *  `list_a2a_negotiations` 工具，让运营者查看真实发生的 A2A 磋商记录。 */
   a2aLedgerDir?: string;
+  /**
+   * 只读对话模式：从磋商列表/进行中列表移除金额（price_minor）；金额仅由
+   * 显式 owner 授权路径提供，不从普通 merchant:read 对话暴露。
+   */
+  redactAmounts?: boolean;
   /** Optional commerce-agents-style merchant application layer. */
   intelligence?: MerchantIntelligenceBackend;
   /** Optional host event projection; business state never depends on it. */
@@ -329,7 +334,9 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
         const rows = await workbench.listActiveConsultations();
         const lines = rows.map((r) => {
           const price =
-            r.price_minor !== undefined ? `，价 ${(r.price_minor / 100).toFixed(2)} 元/件` : "";
+            !deps.redactAmounts && r.price_minor !== undefined
+              ? `，价 ${(r.price_minor / 100).toFixed(2)} 元/件`
+              : "";
           return `· ${r.negotiation_id}（${r.phase}）SKU=${r.sku || "-"} 数量=${r.quantity ?? "-"}${price} ${r.recorded_at}`;
         });
         if (lines.length === 0) return textResult("当前没有进行中的磋商。", { count: 0 });
@@ -913,7 +920,9 @@ export function buildMerchantTools(deps: MerchantToolDeps): Tool[] {
         );
         const lines = items.map((r) => {
           const price =
-            r.price_minor !== undefined ? `，价 ${(r.price_minor / 100).toFixed(2)} 元/件` : "";
+            !deps.redactAmounts && r.price_minor !== undefined
+              ? `，价 ${(r.price_minor / 100).toFixed(2)} 元/件`
+              : "";
           return (
             `· ${r.negotiation_id}${r.agreement ? " ✅ 已达成协议" : `（${r.last_action || "?"}）`} ` +
             `SKU=${r.sku || "-"} 数量=${r.quantity ?? "-"}${price} ${r.recorded_at}`

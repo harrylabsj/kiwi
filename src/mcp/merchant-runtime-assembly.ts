@@ -69,6 +69,7 @@ import { createInventoryExecutors } from "../merchant/inventory-executors.js";
 import { createListingExecutors } from "../merchant/listing-executors.js";
 import { createNegotiationObserver } from "../merchant/negotiation-observer.js";
 import { createOperationsReportBuilder } from "../merchant/operations-report.js";
+import { MerchantConversationManager } from "./merchant-conversation.js";
 import { decimalMajorToMinor } from "../merchant/application/money.js";
 import { merchantOAuthScopes } from "../auth/merchant-scopes.js";
 import { createReadAuditLog } from "./read-audit.js";
@@ -77,6 +78,7 @@ import {
   CompositeMerchantMcpVerifier,
   PairedCredentialVerifier,
   resolveMerchantMcpVerifier,
+  WorkBuddyHeaderAuthVerifier,
 } from "./merchant-auth.js";
 import type { MerchantMcpAuthVerifier } from "./merchant-auth.js";
 import { buildRfqPresentationResources } from "./merchant-rfq-resources.js";
@@ -170,6 +172,18 @@ export async function assembleMerchantRuntime(
   const port = options.port;
   const mcpPath = options.mcpPath;
   const authMode = options.authMode;
+  const workbuddyHeaderMode = profile.merchant_mcp?.workbuddy_header === true;
+  const conversationEnabled = profile.merchant_mcp?.conversation === true;
+  if (
+    (workbuddyHeaderMode || conversationEnabled) &&
+    (authMode !== "oauth" || profile.merchant_mcp?.auth_mode === "token")
+  ) {
+    throw new MerchantAssemblyError(
+      "WORKBUDDY_OAUTH_REQUIRED",
+      "merchant_mcp.workbuddy_header/conversation 需要 auth_mode=oauth：" +
+        "入口认证变体与商家会话都必须由原 OAuth token 校验主体/scope/撤销",
+    );
+  }
   const log =
     options.log ??
     ((line: string): void => {
@@ -225,10 +239,21 @@ export async function assembleMerchantRuntime(
     if (ownerScopeEnabled) {
       log("ℹ️ [kiwi] merchant_mcp.owner_scope 已启用：仅 owner 管理会话可申请 merchant:owner（金额读取）");
     }
-    verifier = new MerchantOAuthVerifier({
+    const oauthVerifier = new MerchantOAuthVerifier({
       store: oauthStore,
       expectedMerchantId: profile.owner_id,
     });
+    if (workbuddyHeaderMode) {
+      // 显式 opt-in：只认 X-Kiwi-Authorization，忽略平台注入的标准 Authorization；
+      // 内部仍是同一个 OAuth 校验器（token/owner scope/revocation 语义不变）。
+      verifier = new WorkBuddyHeaderAuthVerifier(oauthVerifier);
+      log(
+        "ℹ️ [kiwi] merchant_mcp.workbuddy_header 已启用：/mcp 只接受 " +
+          "X-Kiwi-Authorization: Bearer <OAuth access token>；忽略标准 Authorization，不回退\n",
+      );
+    } else {
+      verifier = oauthVerifier;
+    }
   } else {
     verifier = resolveMerchantMcpVerifier(options.tokenEnv);
     // token 模式（含网关路由形态：实例只接受网关的静态内部令牌）下，写操作
@@ -254,10 +279,14 @@ export async function assembleMerchantRuntime(
 
   // 配对凭据（§8.4 第二期，最小授权）：由本实例签发、网关持有；与静态令牌
   // 并存，任一通过即放行。商家重配对即轮换，`unpair` 即吊销。
-  verifier = new CompositeMerchantMcpVerifier([
-    ...(verifier !== undefined ? [verifier] : []),
-    new PairedCredentialVerifier(options.dataDir),
-  ]);
+  // WorkBuddy 专用头模式不得回退到标准 Authorization/配对凭据，否则平台注入
+  // 的标准头可能绕过“只认专用头”的约束；该模式下不挂配对校验器。
+  if (!workbuddyHeaderMode) {
+    verifier = new CompositeMerchantMcpVerifier([
+      ...(verifier !== undefined ? [verifier] : []),
+      new PairedCredentialVerifier(options.dataDir),
+    ]);
+  }
 
   // 依赖装配与 chat kernel 同一套：agent data dir + state.sqlite + 审批候选 store。
   // 审批候选与对话内核共享同一 DB——MCP 生成的 draft 候选在内核侧 /pending 可见。
@@ -555,6 +584,21 @@ export async function assembleMerchantRuntime(
       ...(intelligence !== undefined ? { intelligence } : {}),
     },
   });
+  // 商家多轮会话：显式 opt-in 才装配；复用既有 buildChatKernel，不新建智能体。
+  const conversation =
+    conversationEnabled
+      ? new MerchantConversationManager({
+          profile,
+          dataRoot: path.join(options.dataDir, "conversations"),
+          merchantDataDir: options.dataDir,
+        })
+      : undefined;
+  if (conversation !== undefined) {
+    log(
+      "ℹ️ [kiwi] merchant_mcp.conversation 已启用：MCP 暴露 kiwi_merchant_chat，" +
+        "会话按 OAuth 主体/本实例商家绑定（未部署平台路由）\n",
+    );
+  }
   // 配对兑换：两种认证模式都挂载——凭据由本实例在兑换时新签，不依赖环境变量。
   const serverOptions: MerchantMcpServerOptions = {
     service,
@@ -569,6 +613,7 @@ export async function assembleMerchantRuntime(
       }),
     },
     ...(verifier !== undefined ? { auth: verifier } : {}),
+    ...(conversation !== undefined ? { conversation } : {}),
     ...(oauth !== undefined ? { oauth } : {}),
     // 私有只读访问审计：与私密阈值审计同目录约定；写入失败时拒绝返回数据。
     readAudit: {
@@ -676,6 +721,7 @@ export async function assembleMerchantRuntime(
       return decimalMajorToMinor(currency, String(floor)).amount_minor;
     },
     close: createCleanup([
+      { id: "merchant_conversations", run: () => conversation?.close() ?? Promise.resolve() },
       { id: "oauth_database", run: () => { if (oauthDb) closeDatabase(oauthDb); } },
       { id: "merchant_database", run: () => closeDatabase(db) },
     ]),
