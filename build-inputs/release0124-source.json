@@ -99,7 +99,7 @@
   },
   "stage": {
     "package_sha256": "sha256:0d0b77ff3895553a9447eba3202b422640ddc8d6a474d4b94eab35c4e8079781",
-    "lock_sha256": "sha256:7fc86fe79120a8fa165b5392c75d85b80fa2b867acb63e118d430cc721b345f5"
+    "lock_sha256": "sha256:05cda191b87873f2a5bc1f62d5071c2c27fb7f4e392e15ce86233a3b89981009"
   },
   "budgets": {
     "plain_bytes": 268435456,
@@ -138,7 +138,7 @@
     },
     {
       "path": ".github/dependabot.yml",
-      "sha256": "sha256:380024c6a26f631f4d2840833052bf501c8cf417aa4381846971c2481cced781"
+      "sha256": "sha256:255f85af69896ba6e53676094fa4e6c6d511e1d3177f85b581d2aa8d1530b049"
     },
     {
       "path": ".github/workflows/ci.yml",
@@ -146,7 +146,7 @@
     },
     {
       "path": ".github/workflows/codeql.yml",
-      "sha256": "sha256:7587bf7e7b848e81ce6a13dc4f2b0bd8108062268e2bf895b96aaf98b1dfd3bf"
+      "sha256": "sha256:be7be99ea85b6a93027597f388a93aec9ed416150bf5d311c6757989162440b9"
     },
     {
       "path": ".github/workflows/portfolio-contracts.yml",
@@ -222,7 +222,7 @@
     },
     {
       "path": "build-inputs/release0124-stage/package-lock.json",
-      "sha256": "sha256:7fc86fe79120a8fa165b5392c75d85b80fa2b867acb63e118d430cc721b345f5"
+      "sha256": "sha256:05cda191b87873f2a5bc1f62d5071c2c27fb7f4e392e15ce86233a3b89981009"
     },
     {
       "path": "build-inputs/release0124-stage/package.json",
@@ -2626,11 +2626,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "sha256:d923c329a8dd51e187cef7e175c002cd8b08951c1e608f23be75d388fc6f818a"
+      "sha256": "sha256:8470aeff9128a61e5027c60bf9e4f1ec5560137d64c3490311ea7f9dc0376fb3"
     },
     {
       "path": "package.json",
-      "sha256": "sha256:4b42f6a0d4588a555cd5d8f1ed9b914819b9fdf2b5356bd317ffaef22eec9f4d"
+      "sha256": "sha256:92402df6faf33258afd27b0a397ad549576b556aaf4cfbda0825b34760ad8791"
     },
     {
       "path": "packages/merchant-cloud/package-lock.json",
@@ -5298,9 +5298,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:912b2fa27b16b73aaf359f01e069e23ed3551a9a6cfa6acef664a3466d7ddc76",
+      "sha256": "sha256:84665bc012dc5589e4d958f2a9fa9d4aead88fee6c8add283ff8bd9d726d576d",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:89b13cd701796c710bb28f030fbececb454549fec2cb1f948ef39fa5f5537ff6"
+      "raw_sha256": "sha256:5a2e0c4c85eedd5fe56c1495b14340e917b77e48c0ea766a7b0aedc7d2191b21"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
