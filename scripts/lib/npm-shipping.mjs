@@ -681,6 +681,7 @@ export function controlledHiddenNpmLock(stage) {
   return { path: "node_modules/.package-lock.json", size: bytes.length, sha256: sha256(bytes) };
 }
 const compiledAppProofs = new WeakMap(), vendorCodeProofs = new WeakMap();
+const packageCodeProofs = new WeakMap();
 const statePath = /(^|\/)(?:\.env(?:\..*)?|\.package-lock\.json|\.npmrc|\.cache|\.git|\.kiwi-runtime|\.owner-host|state|credentials)(?:\/|$)|\.(?:sqlite(?:-wal|-shm)?|db|pem|key)$/i;
 const hardStatePath = /(^|\/)(?:\.env(?:\..*)?|\.package-lock\.json|\.npmrc|\.cache|\.git|\.kiwi-runtime|\.owner-host)(?:\/|$)|\.(?:sqlite(?:-wal|-shm)?|db|pem|key)$/i;
 const codePath = /\.(?:[cm]?js|ts|d\.[cm]?ts)(?:\.map)?$/;
@@ -719,12 +720,12 @@ export function createCompiledAppProof(root, stage) {
   compiledAppProofs.set(proof, { ...context, rows, receipt_sha256: sha256(readFileSync(path.join(root, "build/npm-shipping-build-receipt.json"))) });
   return proof;
 }
-export function createVendorCodeProof(root, stage, officialTarball) {
+export function createVendorCodeProof(root, stage, officialTarball, packageName = "@anthropic-ai/sdk") {
   const context = codeProofContext(root, stage);
   const locked = json(path.join(root, "build-inputs/release0124-stage/package-lock.json"));
   if (sha256(readFileSync(path.join(stage, "package-lock.json"))) !== context.source.stage.lock_sha256)
     throw new Error("SHIPPING_VENDOR_STAGE_LOCK_CHANGED");
-  const key = "node_modules/@anthropic-ai/sdk", record = locked.packages[key];
+  const key = `node_modules/${packageName}`, record = locked.packages[key];
   if (!record || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(record.integrity) ||
       new URL(record.resolved).origin !== "https://registry.npmjs.org") throw new Error("SHIPPING_VENDOR_LOCK_INVALID");
   const file = path.resolve(officialTarball), stat = lstatSync(file);
@@ -736,7 +737,7 @@ export function createVendorCodeProof(root, stage, officialTarball) {
   const parsed = tarInventory(bytes), metadata = parsed.rows.find((row) => row.path === "package.json");
   const pkg = metadata ? JSON.parse(metadata.body.toString("utf8")) : null;
   const installed = json(path.join(stage, key, "package.json"));
-  if (pkg?.name !== "@anthropic-ai/sdk" || pkg.version !== record.version ||
+  if (pkg?.name !== packageName || pkg.version !== record.version ||
       installed.name !== pkg.name || installed.version !== pkg.version) throw new Error("SHIPPING_VENDOR_VERSION_CHANGED");
   const installedMetadata = { ...metadata, path: `${key}/package.json` };
   if (!exactCodeFile(context.stage, installedMetadata, installedMetadata)) throw new Error("SHIPPING_VENDOR_METADATA_CHANGED");
@@ -745,7 +746,8 @@ export function createVendorCodeProof(root, stage, officialTarball) {
   }));
   for (const row of rows.values()) if (!exactCodeFile(context.stage, row, row)) throw new Error("SHIPPING_VENDOR_CODE_CHANGED");
   const proof = Object.freeze({});
-  vendorCodeProofs.set(proof, { ...context, rows, officialTarball: file, integrity: record.integrity, version: record.version, metadata: installedMetadata });
+  const store = packageName === "@anthropic-ai/sdk" ? vendorCodeProofs : packageCodeProofs;
+  store.set(proof, { ...context, packageName, rows, officialTarball: file, integrity: record.integrity, version: record.version, metadata: installedMetadata });
   return proof;
 }
 function checkedCodeProof(proof, store, artifactRoot) {
@@ -761,20 +763,22 @@ function checkedCodeProof(proof, store, artifactRoot) {
     if (sha256(readFileSync(path.join(data.root, "build/npm-shipping-build-receipt.json"))) !== data.receipt_sha256)
       throw new Error("SHIPPING_CODE_RECEIPT_CHANGED");
   } else {
-    const record = json(path.join(data.root, "build-inputs/release0124-stage/package-lock.json")).packages["node_modules/@anthropic-ai/sdk"];
+    const key = `node_modules/${data.packageName}`;
+    const record = json(path.join(data.root, "build-inputs/release0124-stage/package-lock.json")).packages[key];
     if (!lstatSync(data.officialTarball).isFile() || lstatSync(data.officialTarball).isSymbolicLink() ||
         !exactCodeFile(data.stage, data.metadata, data.metadata) ||
-        record.version !== data.version || record.integrity !== data.integrity ||
+        record?.version !== data.version || record?.integrity !== data.integrity ||
         sha256(readFileSync(path.join(data.stage, "package-lock.json"))) !== current.stage.lock_sha256 ||
         `sha512-${createHash("sha512").update(readFileSync(data.officialTarball)).digest("base64")}` !== data.integrity ||
-        json(path.join(data.stage, "node_modules/@anthropic-ai/sdk/package.json")).version !== data.version)
+        json(path.join(data.stage, key, "package.json")).version !== data.version)
       throw new Error("SHIPPING_VENDOR_PROOF_CHANGED");
   }
   return data;
 }
-export function assertNoState(rows, { stageNpmrc, generatedLock, compiledApp, vendorCode, artifactRoot } = {}) {
+export function assertNoState(rows, { stageNpmrc, generatedLock, compiledApp, vendorCode, packageCodes = [], artifactRoot } = {}) {
   const app = checkedCodeProof(compiledApp, compiledAppProofs, artifactRoot);
   const vendor = checkedCodeProof(vendorCode, vendorCodeProofs, artifactRoot);
+  const packages = packageCodes.map((proof) => checkedCodeProof(proof, packageCodeProofs, artifactRoot));
   for (const row of rows)
     if (
       !(
@@ -795,7 +799,8 @@ export function assertNoState(rows, { stageNpmrc, generatedLock, compiledApp, ve
       statePath.test(row.path) &&
       !(codeDirectoryPath(row.path) &&
         ((app && exactCodeFile(app.stage, row, app.rows.get(row.path))) ||
-         (vendor && exactCodeFile(vendor.stage, row, vendor.rows.get(row.path)))))
+         (vendor && exactCodeFile(vendor.stage, row, vendor.rows.get(row.path))) ||
+         packages.some((p) => p && exactCodeFile(p.stage, row, p.rows.get(row.path)))))
     )
       throw new Error(`SHIPPING_STATE_OR_CREDENTIAL_FILE ${row.path}`);
 }

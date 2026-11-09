@@ -40,6 +40,7 @@ export function assertNoState(
     artifactRoot?: string;
     compiledApp?: CompiledAppProof;
     vendorCode?: VendorCodeProof;
+    packageCodes?: VendorCodeProof[];
     stageNpmrc?: { size: number; sha256: string };
     generatedLock?: { path: string; size: number; sha256: string };
   },
@@ -63,4 +64,9 @@ declare const compiledProofBrand: unique symbol, vendorProofBrand: unique symbol
 export type CompiledAppProof = { readonly [compiledProofBrand]: true };
 export type VendorCodeProof = { readonly [vendorProofBrand]: true };
 export function createCompiledAppProof(root: string, stage: string): CompiledAppProof;
-export function createVendorCodeProof(root: string, stage: string, officialTarball: string): VendorCodeProof;
+export function createVendorCodeProof(
+  root: string,
+  stage: string,
+  officialTarball: string,
+  packageName?: string,
+): VendorCodeProof;

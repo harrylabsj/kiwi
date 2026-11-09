@@ -217,14 +217,26 @@ export function buildShipping({
   assertSource(root);
   const files = inventory(out);
   const npmrc = readFileSync(path.join(root, ".npmrc"));
-  const vendor = json(path.join(root, "build-inputs/release0124-stage/package-lock.json")).packages["node_modules/@anthropic-ai/sdk"];
-  const digest = Buffer.from(vendor.integrity.slice("sha512-".length), "base64").toString("hex");
+  const stageLock = json(path.join(root, "build-inputs/release0124-stage/package-lock.json"));
+  const vendor = stageLock.packages["node_modules/@anthropic-ai/sdk"];
   const cache = npm(out, ["config", "get", "cache"], remaining()).trim();
-  const officialTarball = path.join(cache, "_cacache/content-v2/sha512", digest.slice(0, 2), digest.slice(2, 4), digest.slice(4));
+  const cachedTarball = (integrity) => {
+    const digest = Buffer.from(integrity.slice("sha512-".length), "base64").toString("hex");
+    return path.join(cache, "_cacache/content-v2/sha512", digest.slice(0, 2), digest.slice(2, 4), digest.slice(4));
+  };
+  // 除 SDK vendor 外，锁定依赖中任何在 state/credentials 目录里带编译代码的包
+  // 也必须逐字节证明，否则 assertNoState 会把包内源码当成运行态文件拒绝。
+  const packageCodes = [];
+  for (const name of ["@earendil-works/chord"]) {
+    const record = stageLock.packages[`node_modules/${name}`];
+    if (record?.integrity !== undefined)
+      packageCodes.push(createVendorCodeProof(root, out, cachedTarball(record.integrity), name));
+  }
   assertNoState(files, {
     artifactRoot: out,
     compiledApp: createCompiledAppProof(root, out),
-    vendorCode: createVendorCodeProof(root, out, officialTarball),
+    vendorCode: createVendorCodeProof(root, out, cachedTarball(vendor.integrity)),
+    packageCodes,
     stageNpmrc: { size: npmrc.length, sha256: sha256(npmrc) },
     generatedLock: controlledHiddenNpmLock(out),
   });
