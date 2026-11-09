@@ -1,7 +1,7 @@
 {
   "sbom_version": 1,
   "package": "@harrylabsj/kiwi",
-  "package_version": "0.12.26",
+  "package_version": "0.12.27",
   "runtime_dependencies": [
     {
       "name": "@earendil-works/chord",
@@ -71,14 +71,14 @@
     }
   ],
   "artifact": {
-    "name": "harrylabsj-kiwi-0.12.26.tgz",
-    "sha256": "356069928fa89323238c6bf549789dde4cd0f8bb01a8ba2de53beb2758c6ce87",
-    "bytes": 2758105
+    "name": "harrylabsj-kiwi-0.12.27.tgz",
+    "sha256": "b39658ccf54e792d0405763d55724ac6fa750a31cab45a03ac290715e38d605c",
+    "bytes": 2800457
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-11-09T12:20:49.302Z"
+  "generated_at": "2026-11-09T22:25:04.706Z"
 }
