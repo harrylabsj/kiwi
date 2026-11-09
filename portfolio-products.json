@@ -92,7 +92,7 @@
     {
       "id": "kiwi-dsh-plugin",
       "name": "DeepSeek Harness plugin",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -156,7 +156,7 @@
     {
       "id": "workbuddy-procurement-expert",
       "name": "WorkBuddy procurement expert",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -165,7 +165,7 @@
       },
       "channel": "WorkBuddy expert review",
       "release_controller": "WorkBuddy platform submission",
-      "artifact": "release/workbuddy/kiwi-procurement-expert-1.1.0.zip",
+      "artifact": "release/workbuddy/kiwi-procurement-expert-1.1.1.zip",
       "platform_asset_id": "oe_37aed7f0a679e6d4",
       "platform_live_version": "1.0.0",
       "state": "local candidate; update not submitted",
