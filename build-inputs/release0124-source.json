@@ -2710,7 +2710,7 @@
     },
     {
       "path": "scripts/build-npm-shipping.mjs",
-      "sha256": "sha256:f7c1a37a372950b03a402ac6f3d1e24ad871326c119371692192a03a3c194827"
+      "sha256": "sha256:132836207229d885cc5a543e76b3f170cd76c78b977f1906eb7d8c5339d27b94"
     },
     {
       "path": "scripts/build-portfolio-release-index.mjs",
@@ -2802,11 +2802,11 @@
     },
     {
       "path": "scripts/lib/npm-shipping.d.mts",
-      "sha256": "sha256:804cdc89e6029dcd8f36ffdac4b24677b5bf53639b2311ae1739bdbb75653f13"
+      "sha256": "sha256:38ae0256acf29db4f02ff12e47cbd244726f385cd07dbb468de1f1c13b53d6b9"
     },
     {
       "path": "scripts/lib/npm-shipping.mjs",
-      "sha256": "sha256:ddf68d45c0c00ea13b342d7c14804d7ee2a6ef021356a56d4b6b5897d043dd99"
+      "sha256": "sha256:f7e169a51dc81740aa01b6eb6ee71d6f962c54159bab9cd2dc366d3828031661"
     },
     {
       "path": "scripts/lib/portfolio-lock-verify.d.mts",
