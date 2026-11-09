@@ -59,7 +59,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/kiwi-catalog/*",
       "state": "candidate",
-      "last_known_registry_version": "0.5.16",
+      "last_known_registry_version": "0.5.17",
       "gates": [
         "locked tests",
         "contract lock",
@@ -135,7 +135,7 @@
     {
       "id": "kiwi-catalog-admin",
       "name": "Private Catalog merchant and operations extension",
-      "version": "0.2.13",
+      "version": "0.2.15",
       "version_source": {
         "type": "external-toml",
         "scope": "private",
@@ -147,11 +147,11 @@
       "release_controller": "private extension repository",
       "artifact": null,
       "bundle_reason": "The source repository is private; its package is tracked by immutable repository and commit references instead of being copied into the public portfolio artifact.",
-      "state": "candidate; source commit/tag pending; not frozen or deployed",
+      "state": "released tag v0.2.15; deployed to kiwi-hk with kiwi-catalog 0.5.17",
       "requires": [
-        "kiwi-catalog >=0.5.15,<0.6"
+        "kiwi-catalog >=0.5.17,<0.6"
       ],
-      "source_commit": "8f6fb6ab3255da23ad5325118700beebdd5dde09"
+      "source_commit": "81322a658a1d51e7faebae37d23c72ea344c1aad"
     },
     {
       "id": "workbuddy-procurement-expert",
