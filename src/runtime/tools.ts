@@ -39,7 +39,7 @@ import type {
   BeforeToolCallContext,
   BeforeToolCallResult,
 } from "@earendil-works/pi-agent-core";
-import type { TSchema } from "@earendil-works/pi-ai";
+import type { TSchema } from "typebox";
 import type { BuyerPolicy } from "../config/profile.js";
 import { dereferenceSchema, loadSchema } from "../contracts/schemas.js";
 import {

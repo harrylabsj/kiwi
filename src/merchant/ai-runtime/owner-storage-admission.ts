@@ -213,12 +213,13 @@ function readProvider(s: State): Registration {
   checkFile(s);
   const r = s.registration;
   if (r === undefined) deny("storage_not_initialized");
-  // Read-only, schema1/latest immutable ProviderDoc; never SDK.initialize/migrate.
+  // Read-only immutable ProviderDoc; v1 (pi <=1.4) and v2 (pi 1.5, tasks gains
+  // `sleeping` status) keep the same columns this guard reads. Never migrate here.
   const db = new DatabaseSync(s.file, { readOnly: true });
   try {
     const schema = db.prepare("SELECT version FROM durable_schema").get() as
       { version: number } | undefined;
-    if (schema?.version !== 1) deny("storage_schema_unknown");
+    if (schema?.version !== 1 && schema?.version !== 2) deny("storage_schema_unknown");
     const conversations = db.prepare("SELECT record FROM conversations").all() as {
       record: string;
     }[];
@@ -323,9 +324,11 @@ export function guardOwnerStorage(storage: Storage, cap: OwnerStorageAdmission):
     get(target, property) {
       if (property === "commit")
         return async (
-          writes: readonly StorageWrite[],
+          batches: readonly (readonly StorageWrite[])[],
+          receive: (index: number, seq: import("@earendil-works/pi-durable").Seq) => void,
           context: import("@earendil-works/chord").Context,
         ) => {
+          const writes = batches.flat();
           const creates = writes.filter(
             (w): w is Extract<StorageWrite, { type: "document.create" }> =>
               w.type === "document.create" && w.record.kind === "pi.provider",
@@ -343,8 +346,10 @@ export function guardOwnerStorage(storage: Storage, cap: OwnerStorageAdmission):
             const initializationConversation = init.record.scope.conversationId;
             // Version-specific private owner contract: SDK reserved root is1.
             if (initializationConversation !== 1) deny("storage_root_required");
+            const initBatch = batches.find((batch) => batch.includes(init));
             if (
-              !writes.some(
+              initBatch === undefined ||
+              !initBatch.some(
                 (w) =>
                   w.type === "conversation" &&
                   w.value.id === initializationConversation &&
@@ -383,7 +388,7 @@ export function guardOwnerStorage(storage: Storage, cap: OwnerStorageAdmission):
                 deny("storage_deferred_unsupported");
             }
           }
-          const result = await commit(writes, context);
+          const result = await commit(batches, receive, context);
           if (init !== undefined) register(s, init);
           return result;
         };
