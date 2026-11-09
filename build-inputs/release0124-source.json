@@ -2633,6 +2633,10 @@
       "sha256": "sha256:1580d976e35c4e8b5908272b35c418647075c2af912fa68790f0151094dc2854"
     },
     {
+      "path": "packages/merchant-cloud/package-lock.json",
+      "sha256": "sha256:29644da258d2cadff593c82b5525cae01cefe3bab23efcfbc8237b01d553625c"
+    },
+    {
       "path": "packages/merchant-cloud/package.json",
       "sha256": "sha256:2ceccbc9883377ed4cccfd6d102898fd45a4e4e6388b99e64a62908ce02428bb"
     },
