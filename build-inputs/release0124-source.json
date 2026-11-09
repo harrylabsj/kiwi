@@ -98,8 +98,8 @@
     "arch": "arm64"
   },
   "stage": {
-    "package_sha256": "sha256:9e30c699d74e6a5669f046813b9644bb0a1435824702a259acc3a4a3b3025d66",
-    "lock_sha256": "sha256:84961d50c9dc3ac960e3133f6c76b7d721fb534c11012fea45db9bde2352c7e2"
+    "package_sha256": "sha256:c86bf9de618adf902f79fc1da6153d97d7de1e78dce56c47a0e98114227de680",
+    "lock_sha256": "sha256:665a6c336f5602a92aeb82418e4dddc95f4d0627d34dccf1d76ef69e84cd39da"
   },
   "budgets": {
     "plain_bytes": 268435456,
@@ -138,35 +138,35 @@
     },
     {
       "path": ".github/dependabot.yml",
-      "sha256": "sha256:380024c6a26f631f4d2840833052bf501c8cf417aa4381846971c2481cced781"
+      "sha256": "sha256:255f85af69896ba6e53676094fa4e6c6d511e1d3177f85b581d2aa8d1530b049"
     },
     {
       "path": ".github/workflows/ci.yml",
-      "sha256": "sha256:0aa37fc70ec8fdfe2acf1ba9cd4295236ec7b3fb4f0d4877f17878f4dc5bc51d"
+      "sha256": "sha256:fbfc492005666f329776ac0470d1fcd447acec437e0f772f411c690dc9fa040a"
     },
     {
       "path": ".github/workflows/codeql.yml",
-      "sha256": "sha256:7587bf7e7b848e81ce6a13dc4f2b0bd8108062268e2bf895b96aaf98b1dfd3bf"
+      "sha256": "sha256:7e3d16b1e19b5b8feb4841f0dbfbd5fe2eab83aec72f9ac82f9f07c8e8886d89"
     },
     {
       "path": ".github/workflows/portfolio-contracts.yml",
-      "sha256": "sha256:5b0284f1b6037436ab21b3946f056e964efc064511b862c58e2f94f552b1b1aa"
+      "sha256": "sha256:de98ddb7cb814728b6363f201aaf0d6bd2f631813a3a9af0ccb8f58ac44eab4f"
     },
     {
       "path": ".github/workflows/portfolio-integration.yml",
-      "sha256": "sha256:649bcd8a7a1a15c4e573534a30268ff64fa3b62357f5b02891c69ee1100bb2e7"
+      "sha256": "sha256:07f37d522b5496fab3cca94a3f1c7f47148a378cf9fcd9e0ef0d172dad70e1a5"
     },
     {
       "path": ".github/workflows/portfolio-release.yml",
-      "sha256": "sha256:ef60d6b3aa6c00f601212719a79b229eca74dd820edb94702cdb87183a1e68c6"
+      "sha256": "sha256:41b2786e4ec55f375c9765cbd3b880c42f6f6b2fe7abd785cfa278c90181ef77"
     },
     {
       "path": ".github/workflows/release-rehearsal.yml",
-      "sha256": "sha256:cb0943edac5bc56d5bcac333d488ad88cf519a617227ab132511c998d63cb273"
+      "sha256": "sha256:8e495965c0dd27653ce09312fd46dae68bcf647c8c17fce40d2c6e609ca0167f"
     },
     {
       "path": ".github/workflows/supply-chain-rehearsal.yml",
-      "sha256": "sha256:5237be9a9ab208700dd8383672058159e03d89700ece1561b09fa7df6d04300d"
+      "sha256": "sha256:5a23250a31ec05f36c806416a6a085815e03ff38a5cf5058edccb2bf03bfc2db"
     },
     {
       "path": ".gitignore",
@@ -222,11 +222,11 @@
     },
     {
       "path": "build-inputs/release0124-stage/package-lock.json",
-      "sha256": "sha256:84961d50c9dc3ac960e3133f6c76b7d721fb534c11012fea45db9bde2352c7e2"
+      "sha256": "sha256:665a6c336f5602a92aeb82418e4dddc95f4d0627d34dccf1d76ef69e84cd39da"
     },
     {
       "path": "build-inputs/release0124-stage/package.json",
-      "sha256": "sha256:9e30c699d74e6a5669f046813b9644bb0a1435824702a259acc3a4a3b3025d66"
+      "sha256": "sha256:c86bf9de618adf902f79fc1da6153d97d7de1e78dce56c47a0e98114227de680"
     },
     {
       "path": "build-inputs/shipping-audit-allow.json",
@@ -1878,7 +1878,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/build-platform-pack.mjs",
-      "sha256": "sha256:ccfeb275f1b0bdc7d8d15059e30871b8347a4e219291ccc5f25b1556ac7c38fb"
+      "sha256": "sha256:29ff5418e9818f64fa083135911293e1cc91941347f81189e08fe95e44d8d9be"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/market-draft/README.md",
@@ -2010,7 +2010,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/out/industry-config.json",
-      "sha256": "sha256:dec3ea0482084328d8d9c9173143a2829200aee430b5dd75467abfa5664aac18"
+      "sha256": "sha256:459b4511152ba0eada7c054ac95b98f72976178276ceaf00164b6a2b0def6f50"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/out/market.json",
@@ -2018,7 +2018,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/out/platform-pack.zip",
-      "sha256": "sha256:754cbd8bf932afd845c00293e1594033b15233c60274a15b1a6e86b164d6051a"
+      "sha256": "sha256:82c4a39b6bcde46399a1b1fd05bea634f927ac461e7c5bce6fed524969ce225b"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/skills/candidate-archives/kiwi-cloud-deploy/0.3.2/SKILL.md",
@@ -2642,11 +2642,15 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "sha256:02e4cde1ed9c530a6d4b8d6b690809304efccae389c42abf78ce699732ea1a13"
+      "sha256": "sha256:11112af744d41dc02d5c8e2b591a2d615d2470837198d920ff35221695ebf1f0"
     },
     {
       "path": "package.json",
-      "sha256": "sha256:d1bd7c3fee909c5e52417aa5a01317256a4cfce3982eaa2a6d4cfff4abbbfa11"
+      "sha256": "sha256:c27a8dc913f3813c134a35b2e884da881b9f86be0c467ac26136bf494c589bfc"
+    },
+    {
+      "path": "packages/merchant-cloud/package-lock.json",
+      "sha256": "sha256:29644da258d2cadff593c82b5525cae01cefe3bab23efcfbc8237b01d553625c"
     },
     {
       "path": "packages/merchant-cloud/package.json",
@@ -3258,7 +3262,7 @@
     },
     {
       "path": "src/a2a/reception/agent-runtime.ts",
-      "sha256": "sha256:3c8bb3800d979cedc11496dfb28b2dfe90ff90c14c80de69ad88866da1c8eb55"
+      "sha256": "sha256:915d907172a0c3cb480f5c8f163f18970db4b366109851b80ec77c72d875b5b2"
     },
     {
       "path": "src/a2a/reception/budget.ts",
@@ -4350,7 +4354,7 @@
     },
     {
       "path": "src/mcp/merchant-server.ts",
-      "sha256": "sha256:5fc3b5c01da00a454cf2fc4f5e65de0413f2e705a563cbbe960dda1a1d2828ed"
+      "sha256": "sha256:c1feb70153882bbc28be53c21a0a5af6c875a44acb85c6d60c84a27c601b095f"
     },
     {
       "path": "src/mcp/merchant-tools.ts",
@@ -4782,7 +4786,7 @@
     },
     {
       "path": "src/merchant/ai-runtime/owner-sdk-tools.ts",
-      "sha256": "sha256:9a14098f3d05f9d11ac33d23b0807046f60cf11388b396744acbfa864ddfa35f"
+      "sha256": "sha256:505981473db4ce0f4b8522b5878f9a2681d7f6bb9ff76dca0b123929b65b27f9"
     },
     {
       "path": "src/merchant/ai-runtime/owner-session.ts",
@@ -4790,7 +4794,7 @@
     },
     {
       "path": "src/merchant/ai-runtime/owner-storage-admission.ts",
-      "sha256": "sha256:85249aa67f9f6e0a6482a88db4599f6ad1dc2928e47a2b27187ec2604a15d5f4"
+      "sha256": "sha256:9be94b6ec6efa06f4ac61f75c1987edd7765e409059b86a5f34cbd26f08fe729"
     },
     {
       "path": "src/merchant/ai-runtime/owner-trusted-factory.ts",
@@ -5170,7 +5174,7 @@
     },
     {
       "path": "src/runtime/tools.ts",
-      "sha256": "sha256:ed04af3db25c8935cc260eef75a065c11d65e95ee7cebb8ae0c51bfd8384cd1e"
+      "sha256": "sha256:1ab5ee365320cfca5c125ec28beef1c563d042e7af87ee278c4fab13b9c70829"
     },
     {
       "path": "src/supervisor/init.ts",
@@ -5354,9 +5358,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:8223877ded773e1461a88eb8509672e1bcb4713ec7a4e0178e6bd07f34ce9a79",
+      "sha256": "sha256:ba3340bda650b8479b4d541e6cb702e2a8d32d549c7a849f5aa98262887b0deb",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:79ff7e71149ff937371fa5250d66f9894c846876687df46da2df66bc06dcca6a"
+      "raw_sha256": "sha256:83348f5e2b58fb1e7a6f3d3f6c2be2f861d49478bbb3178200c595795cb90722"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -5632,11 +5636,11 @@
     },
     {
       "path": "tests/a388-owner-evaluation.test.ts",
-      "sha256": "sha256:5c19eee86b2cd580b26b60751169ee7ea244fa893ea36a48247e3b73651f78a4"
+      "sha256": "sha256:0f311e74317f165dc0bee897761e71df4e598d7ec56dba0890f38a24b157c164"
     },
     {
       "path": "tests/a388-sidecar-hardening.test.ts",
-      "sha256": "sha256:b9f0b01acba5f12ed27a1b91a00b92b0856a2821b1348575c3f4af6363ec8091"
+      "sha256": "sha256:1e6ba5897e27c9382a1b0bc1953563746da9e7a2df2c41f27e7ce903cacd1c8b"
     },
     {
       "path": "tests/a391-loopback-compat.test.ts",
@@ -7032,7 +7036,7 @@
     },
     {
       "path": "tests/npm-shipping-contract.test.ts",
-      "sha256": "sha256:29fe33ce1f77cbed0f2b9035f7c1276a7fc4cfd0fe69a7772ca41131d9b0758f"
+      "sha256": "sha256:f9d27a20c4566d8d0469a6680731f3b44dc16bceb20884a9d0dad57fa3b34055"
     },
     {
       "path": "tests/onboarding-local-fallback.test.ts",
