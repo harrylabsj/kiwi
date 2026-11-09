@@ -3,7 +3,7 @@
 import { assertInstalledLockedVersions } from "./lib/npm-bundled-edges.mjs";
 import { assertAuditReport, classifyAudit } from "./lib/shipping-audit.mjs";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -46,14 +46,33 @@ for (const [name, relative, subdir, app] of [
   let installed;
   let installLog;
   if (subdir === "cloud") {
-    // 轻量云包：解包后必须按 package-lock.json 做确定性 npm ci；
-    // 安装环境负责提供兼容的 Node/npm 并从 registry 下载第三方依赖。
+    // 轻量云包：解包后先校验唯一 deployment-lock.json，再恢复部署用 package-lock.json，
+    // 按它做确定性 npm ci；安装环境负责提供兼容的 Node/npm 并从 registry 下载第三方依赖。
     execFileSync("tar", ["-xzf", tgz, "-C", consumer, "--strip-components=1"], { encoding: "utf8" });
     installed = consumer;
     if (existsSync(path.join(consumer, "node_modules")))
       throw new Error("SHIPPING_CLOUD_PACKAGE_MUST_NOT_BUNDLE_NODE_MODULES");
-    if (!existsSync(path.join(consumer, "package-lock.json")))
-      throw new Error("SHIPPING_CLOUD_PACKAGE_LOCK_REQUIRED");
+    const deploymentLock = path.join(consumer, "deployment-lock.json");
+    const packageLock = path.join(consumer, "package-lock.json");
+    if (!existsSync(deploymentLock))
+      throw new Error("SHIPPING_CLOUD_DEPLOYMENT_LOCK_REQUIRED");
+    if (existsSync(packageLock))
+      throw new Error("SHIPPING_CLOUD_CONFLICTING_LOCKS");
+    const lock = json(deploymentLock);
+    if (
+      lock === null ||
+      typeof lock !== "object" ||
+      Array.isArray(lock) ||
+      !Number.isInteger(lock.lockfileVersion) ||
+      lock.lockfileVersion < 3 ||
+      lock.packages === null ||
+      typeof lock.packages !== "object" ||
+      Array.isArray(lock.packages) ||
+      lock.packages[""] === null ||
+      typeof lock.packages[""] !== "object"
+    )
+      throw new Error("SHIPPING_CLOUD_DEPLOYMENT_LOCK_INVALID");
+    cpSync(deploymentLock, packageLock);
     writeFileSync(path.join(consumer, ".npmrc"), "engine-strict=true\n");
     installLog = execFileSync(
       process.execPath,

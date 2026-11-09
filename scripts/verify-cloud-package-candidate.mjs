@@ -45,7 +45,9 @@ const planned = plan.files
   .filter((p) => p !== "build-manifest.json")
   .sort();
 assert(planned.every((p) => !p.startsWith("node_modules/")), "lightweight package must not include node_modules");
-assert(planned.includes("package-lock.json"), "lightweight package must include package-lock.json");
+assert(planned.includes("deployment-lock.json"), "lightweight package must include deployment-lock.json");
+assert(!planned.includes("package-lock.json"), "lightweight package must not carry package-lock.json");
+assert(!planned.includes("npm-shrinkwrap.json"), "lightweight package must not carry npm-shrinkwrap.json");
 stage("pack-plan-verified");
 assert.deepEqual(planned, manifest.files.map((r) => r.path).sort(), "shipping file set mismatch");
 for (const row of manifest.files) {
@@ -57,7 +59,7 @@ for (const row of manifest.files) {
 assert.equal(aggregate(manifest.files), manifest.artifact_sha256);
 assert.equal(manifest.file_count, manifest.files.length);
 assert.equal(assertBudget(manifest.files), manifest.total_bytes);
-const lock = json(path.join(dir, "package-lock.json"));
+const lock = json(path.join(dir, "deployment-lock.json"));
 assert(Number.isInteger(lock.lockfileVersion) && lock.lockfileVersion >= 3, "lockfileVersion must be >= 3");
 assert.deepEqual(lock.packages[""]?.dependencies, pkg.dependencies, "lock root dependencies mismatch");
 for (const [relative, row] of Object.entries(lock.packages)) {
