@@ -38,7 +38,9 @@ export function assertInstalledLockedVersions(sourceRoot, installed) {
   const lock = json(path.join(sourceRoot, "build-inputs/release0124-stage/package-lock.json"));
   const results = [];
   for (const [relative, row] of Object.entries(lock.packages)) {
-    if (!relative || row.dev) continue;
+    // devOptional = 同时是 dev 与 optional 的依赖（例如 chord 的 esbuild peer）：
+    // 生产 --omit=dev 安装本就不会包含它，不能要求它存在。
+    if (!relative || row.dev || row.devOptional) continue;
     const file = path.join(installed, relative, "package.json");
     if (!existsSync(file)) {
       if (row.optional) continue; // npm's platform-optional packages may be absent.
