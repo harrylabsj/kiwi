@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Package only the approved current-source full shipping stage; historical artifacts are refused. */
 import { packRecord } from "./lib/npm-pack-record.mjs";
-import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -27,8 +27,9 @@ if (
 assertFiles(artifact, stage, { excluded: ["artifact-manifest.json"] });
 if (existsSync(out)) throw new Error("SHIPPING_NEW_PACKAGE_OUTPUT_REQUIRED");
 mkdirSync(out, { recursive: true });
-// 轻量发布包：只带程序、版本锁与校验信息；第三方依赖由安装环境按 package-lock.json
-// 执行 `npm ci` 下载，不再随包携带 node_modules。
+// 轻量发布包：只带程序、部署锁与校验信息；npm pack 会强制排除 package-lock.json，
+// 因此包内使用独立命名的 deployment-lock.json，由 prepare 恢复为部署 package-lock。
+// 第三方依赖由安装环境按恢复后的 package-lock.json 执行 npm ci，不随包携带 node_modules。
 for (const name of [
   "app",
   "contracts",
@@ -71,6 +72,11 @@ lock.packages[""] = {
   engines: pkg.engines,
 };
 writeFileSync(lockPath, JSON.stringify(lock, null, 2) + "\n");
+// npm pack 不收录 package-lock.json（npm12 packlist 同样排除 npm-shrinkwrap），
+// 使用普通独立文件携带，实际 tarball/manifest 校验仍覆盖其完整字节。
+const deploymentLockPath = path.join(out, "deployment-lock.json");
+if (existsSync(deploymentLockPath)) throw new Error("SHIPPING_DEPLOYMENT_LOCK_CONFLICT");
+renameSync(lockPath, deploymentLockPath);
 // 本地 smoke fixture；生产商家需替换身份、商品表和策略文件。
 mkdirSync(path.join(out, "app", "cloud-sample"), { recursive: true });
 const merchant = "merchant-001";
@@ -166,7 +172,7 @@ const manifest = {
   file_count: files.length,
   total_bytes: total,
   notes: [
-    "Lightweight cloud package: program, package-lock.json and integrity manifest only; third-party dependencies are installed by the deployment environment with npm ci, not bundled.",
+    "Lightweight cloud package: program, deployment-lock.json and integrity manifest only; prepare restores package-lock.json and the deployment environment installs third-party dependencies with npm ci, not bundled.",
   ],
 };
 writeFileSync(path.join(out, "build-manifest.json"), JSON.stringify(manifest, null, 2) + "\n");

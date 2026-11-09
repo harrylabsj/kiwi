@@ -253,7 +253,7 @@ function verifyManifest() {
   return manifest;
 }
 
-/** 轻量包安装：按 package-lock.json 在部署目录执行 npm ci，并逐包核对锁定版本。 */
+/** 轻量包安装：按 prepare 恢复的 package-lock.json 在部署目录执行 npm ci，并逐包核对锁定版本。 */
 function verifyInstalledLock(out) {
   const lockPath = path.join(out, "package-lock.json");
   if (!existsSync(lockPath)) throw new Error("部署产物缺少 package-lock.json：轻量发布包必须按锁定版本安装依赖");
@@ -306,6 +306,45 @@ function makeAdminBootstrap(identity) {
   return password;
 }
 
+/** 解析包内唯一部署锁；轻量包必须有锁，旧 bundled 包维持无根锁兼容。 */
+function packageLockSource() {
+  const deployment = path.join(PACKAGE_ROOT, "deployment-lock.json");
+  const legacy = path.join(PACKAGE_ROOT, "package-lock.json");
+  const hasDeployment = existsSync(deployment);
+  const hasLegacy = existsSync(legacy);
+  if (hasDeployment && hasLegacy) {
+    throw new Error("包内同时存在 deployment-lock.json 与 package-lock.json：拒绝静默选择");
+  }
+  const file = hasDeployment ? deployment : hasLegacy ? legacy : undefined;
+  if (file === undefined) {
+    // 旧 bundled 包允许没有根锁（依赖已在 node_modules 中）；轻量包没有
+    // node_modules 时必须携带可验证锁，skip-install 也不能绕过。
+    if (existsSync(path.join(PACKAGE_ROOT, "node_modules"))) return undefined;
+    throw new Error("轻量云包缺少 deployment-lock.json，无法恢复部署所需 package-lock.json；旧 bundled 包需提供 node_modules");
+  }
+  let lock;
+  try {
+    lock = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    throw new Error("部署锁不是合法 JSON：拒绝安装");
+  }
+  if (
+    lock === null ||
+    typeof lock !== "object" ||
+    Array.isArray(lock) ||
+    !Number.isInteger(lock.lockfileVersion) ||
+    lock.lockfileVersion < 3 ||
+    lock.packages === null ||
+    typeof lock.packages !== "object" ||
+    Array.isArray(lock.packages) ||
+    lock.packages[""] === null ||
+    typeof lock.packages[""] !== "object"
+  ) {
+    throw new Error("部署锁格式无效：拒绝安装");
+  }
+  return file;
+}
+
 // 失败回滚钩子：只在本次运行创建了临时输出时才非空（见 main 内的 outExisted）。
 let rollbackOnFailure = null;
 
@@ -315,6 +354,7 @@ function main() {
   const catalogUrl = validateCatalogUrl(options.catalogUrl, options);
   const merchantName = options.merchantName?.trim() || (options.sample ? SAMPLE_MERCHANT_NAME : "待设置商家名称");
   if (merchantName.length > 80 || hasControlCharacters(merchantName)) throw new Error("--merchant-name 最长 80 个字符且不得包含控制字符");
+  const lockSource = packageLockSource();
   const manifest = verifyManifest();
   const out = path.resolve(options.out);
   if (out === PACKAGE_ROOT || out.startsWith(`${PACKAGE_ROOT}${path.sep}`)) throw new Error("部署目录必须在包目录之外");
@@ -348,11 +388,17 @@ function main() {
   // scripts/ 必须一起复制：部署产物的 package.json 保留 preinstall
   // （node scripts/check-install-toolchain.mjs，A106 依赖树守卫），漏复制会让
   // 平台安装以 SITES_INSTALL_FAILED 失败（0.12.21 实测根因）。
-  for (const name of ["app", "contracts", "node_modules", "index.js", "package.json", "package-lock.json", "build-manifest.json", "scripts"]) {
+  for (const name of ["app", "contracts", "node_modules", "index.js", "package.json", "build-manifest.json", "scripts"]) {
     const source = path.join(PACKAGE_ROOT, name);
     if (!existsSync(source)) continue;
     createdNames.push(name);
     cpSync(source, path.join(out, name), { recursive: true });
+  }
+  // 云包只携带唯一 deployment-lock；恢复成部署环境实际使用的 package-lock。
+  // 旧 bundled 包没有根锁时不伪造 package-lock，保持原安装路径。
+  if (lockSource !== undefined) {
+    createdNames.push("package-lock.json");
+    cpSync(lockSource, path.join(out, "package-lock.json"));
   }
   // 产物自洽：npm 生命周期钩子（preinstall/install/postinstall/prepare）若以
   // `node <相对文件>` 引用脚本，其目标必须已在部署目录内，否则在这里 fail-closed，
@@ -369,7 +415,7 @@ function main() {
       );
     }
   }
-  // 轻量发布包不带 node_modules：按 package-lock.json 在部署目录安装第三方依赖。
+  // 轻量发布包不带 node_modules：按 prepare 恢复的 package-lock.json 在部署目录安装第三方依赖。
   // 兼容旧式随包依赖（包内已有 node_modules）时只做锁定版本核对，不联网。
   const bundled = createdNames.includes("node_modules");
   if (!options.skipInstall) {

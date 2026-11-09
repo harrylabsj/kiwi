@@ -12,7 +12,7 @@
     "runtime-package.json",
     "prepare.mjs",
     "build-manifest.json",
-    "package-lock.json",
+    "deployment-lock.json",
     "scripts",
     "shipping-source.json",
     "shipping-sbom.cdx.json"
