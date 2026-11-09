@@ -2806,7 +2806,7 @@
     },
     {
       "path": "scripts/lib/npm-shipping.mjs",
-      "sha256": "sha256:f7e169a51dc81740aa01b6eb6ee71d6f962c54159bab9cd2dc366d3828031661"
+      "sha256": "sha256:24ddd5484ea33e05b2af0785c70300e3d50ffbaf6e3996d85e95a75c356a5862"
     },
     {
       "path": "scripts/lib/portfolio-lock-verify.d.mts",
