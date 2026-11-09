@@ -36,8 +36,8 @@
     {
       "name": "@modelcontextprotocol/sdk",
       "spec": "^1.30.0",
-      "resolved": "1.32.1",
-      "integrity": "sha512-2DdE+SJDtzLEEWzY1ZjY7Q+VcPhcV1KisD3zI4u0XZyktsjHum1mwbMI+JaulUBi2OZk+KJAi2uPXzxichPkdw=="
+      "resolved": "1.32.2",
+      "integrity": "sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw=="
     },
     {
       "name": "@simplewebauthn/server",
@@ -72,13 +72,13 @@
   ],
   "artifact": {
     "name": "harrylabsj-kiwi-0.12.26.tgz",
-    "sha256": "8f9cfa1711f791a2ce2f129792422da4b5500d96d2fc8d9707a8855196dd58d0",
-    "bytes": 2758007
+    "sha256": "0c1c7b8230eca984fd1f932635e72e06ebad2a57d86d8e38789e6ee189f035de",
+    "bytes": 2758106
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-11-09T06:05:19.497Z"
+  "generated_at": "2026-11-09T09:05:05.462Z"
 }
