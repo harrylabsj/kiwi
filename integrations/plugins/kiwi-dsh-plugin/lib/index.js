@@ -1,7 +1,7 @@
 /**
  * kiwi-dsh-plugin host side（Cordis 插件）—— 注册 kiwi-buyer SKILL。
  *
- * MCP 连接（kiwi-buyer-mcp，9 个 Sourcing Tools → mcp__kiwi__*）由 cordis.patch.yml
+ * MCP 连接（kiwi-buyer-mcp，13 个 Sourcing Tools → mcp__kiwi__*）由 cordis.patch.yml
  * 的 `mcp-kiwi` 行负责（@deepseek-ai/dsh-mcp-client 静态配置，零动态值：主从
  * kiwi mcp serve 的默认路径/env 解析 —— KIWI_MCP_DB / KIWI_PRINCIPAL /
  * KIWI_BUYER_AGENT，见 kiwi `src/mcp/cli.ts`）。本插件只负责 skill。
@@ -38,7 +38,7 @@ function loadSkill() {
   return {
     name: 'kiwi-buyer',
     description:
-      'Kiwi Sourcing & Negotiation Kit —— 采购/购买/购物一般商品（非餐饮、非外卖、非生鲜）时使用：找商家/供应商、询价、比价、还价、问交期/MOQ。经 mcp__kiwi__* 的 9 个工具完成跨商家发现 → 询价 → 磋商 → 非绑定协议 → handoff。',
+      'Kiwi Sourcing & Negotiation Kit —— 采购/购买/购物一般商品（非餐饮、非外卖、非生鲜）时使用：找商家/供应商、询价、比价、还价、问交期/MOQ。经 mcp__kiwi__* 的 13 个工具完成跨商家发现 → 询价 → 磋商 → 非绑定协议 → handoff（另含关注商家与其公开更新的 4 个工具）。',
     whenToUse: '用户表达采购意图（买 / 找供应商 / 询价 / 比价 / 还价 / 交期 / MOQ）时',
     invocation: { modelInvocable: true, userInvocable: true },
     source: 'bundled',

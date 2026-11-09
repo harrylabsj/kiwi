@@ -7,7 +7,7 @@ Kiwi Buyer plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek
 dsh plugin --profile web add @harrylabsj/kiwi-dsh-plugin
 ```
 
-装完重启 `dsh web` 并开**新会话**，模型即可看到 9 个 `mcp__kiwi__*` Sourcing Tools
+装完重启 `dsh web` 并开**新会话**，模型即可看到 13 个 `mcp__kiwi__*` Sourcing Tools
 和 `kiwi-buyer` skill。
 
 ## 它装了什么
@@ -29,6 +29,10 @@ dsh plugin --profile web add @harrylabsj/kiwi-dsh-plugin
    | `mcp__kiwi__kiwi_handoff` | 生成成交入口（写，ASK） |
    | `mcp__kiwi__kiwi_approve` | 批准持久审批（写） |
    | `mcp__kiwi__kiwi_reject` | 拒绝持久审批（写） |
+   | `mcp__kiwi__kiwi_follow_merchant` | 关注商家（pull 式订阅，非推送）（写） |
+   | `mcp__kiwi__kiwi_unfollow_merchant` | 取消关注商家（幂等）（写） |
+   | `mcp__kiwi__kiwi_list_follows` | 列出当前关注的商家（读） |
+   | `mcp__kiwi__kiwi_get_follow_updates` | 查看已关注商家的公开更新（读） |
 
 2. **SKILL**（`lib/index.js` → `ctx.skills.registerProvider`）：注册 `kiwi-buyer`
    skill，教模型**何时用 kiwi、怎么构造合法 CommerceIntent**（避免

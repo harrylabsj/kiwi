@@ -30,7 +30,7 @@ Kiwi owns cross-merchant sourcing and commercial negotiation。**
 - **不要"先加载工具 schema / 先探测环境"之类的额外步骤** —— 直接调
   `mcp__kiwi__kiwi_search`。
 
-## 9 个工具（DSH 前缀 `mcp__kiwi__`）
+## 13 个工具（DSH 前缀 `mcp__kiwi__`）
 
 | DSH 工具名 | 作用 | 写/读 |
 |---|---|---|
@@ -43,6 +43,10 @@ Kiwi owns cross-merchant sourcing and commercial negotiation。**
 | `mcp__kiwi__kiwi_handoff` | 生成成交入口（checkout/PO/联系路径） | 写 |
 | `mcp__kiwi__kiwi_approve` | 批准持久审批 | 写 |
 | `mcp__kiwi__kiwi_reject` | 拒绝持久审批（deny 优先） | 写 |
+| `mcp__kiwi__kiwi_follow_merchant` | 关注商家（pull 式订阅，非推送） | 写 |
+| `mcp__kiwi__kiwi_unfollow_merchant` | 取消关注商家（幂等） | 写 |
+| `mcp__kiwi__kiwi_list_follows` | 列出当前关注的商家 | 读 |
+| `mcp__kiwi__kiwi_get_follow_updates` | 查看已关注商家的公开更新 | 读 |
 
 ## 触发链
 
@@ -52,6 +56,7 @@ Kiwi owns cross-merchant sourcing and commercial negotiation。**
 - 还价/议价 → `mcp__kiwi__kiwi_negotiate`
 - 交期/MOQ → 约束进 CommerceIntent 的 `constraints` / `preferences`
 - 协议/下单意向 → `accept_agreement` → `handoff`
+- 想持续跟某家商家 → `mcp__kiwi__kiwi_follow_merchant`；之后用 `list_follows` / `get_follow_updates` 读它的公开更新（pull，不会主动推送）
 
 ## CommerceIntent 构造（最小披露）
 

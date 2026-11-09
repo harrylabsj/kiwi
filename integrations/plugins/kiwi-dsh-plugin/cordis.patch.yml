@@ -1,7 +1,7 @@
 # kiwi-dsh-plugin bundle patch（dsh plugin add 后自动合并进 profile）
 #
 # 两行：
-#   mcp-kiwi          —— 把 `kiwi mcp serve`（9 个 Sourcing Tools）挂成 DSH 的 MCP
+#   mcp-kiwi          —— 把 `kiwi mcp serve`（13 个 Sourcing Tools）挂成 DSH 的 MCP
 #                        插件（@deepseek-ai/dsh-mcp-client），工具以 mcp__kiwi__<name>
 #                        暴露。配置零动态值：不传 --db/--principal/--agent，由
 #                        kiwi-buyer-mcp 默认路径/env 解析 —— KIWI_MCP_DB →
