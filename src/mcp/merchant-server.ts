@@ -599,9 +599,13 @@ export function createMerchantHttpHandler(
 
   const handler = (req: IncomingMessage, res: ServerResponse): void => {
     // 分享码可能出现在上游 URL/Referer 中：敏感面统一 no-referrer/no-store。
-    res.setHeader("referrer-policy", "no-referrer");
-    res.setHeader("x-content-type-options", "nosniff");
-    res.setHeader("cache-control", "no-store");
+    // 真实 http.ServerResponse 一定实现 setHeader；这里做能力检查，避免
+    // 无该方法的轻量 res 替身（测试 harness / 内部调用方）直接抛 TypeError。
+    if (typeof res.setHeader === "function") {
+      res.setHeader("referrer-policy", "no-referrer");
+      res.setHeader("x-content-type-options", "nosniff");
+      res.setHeader("cache-control", "no-store");
+    }
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (await routeOAuth(req, res, url)) return;
