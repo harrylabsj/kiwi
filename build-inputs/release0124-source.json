@@ -4350,7 +4350,7 @@
     },
     {
       "path": "src/mcp/merchant-runtime-assembly.ts",
-      "sha256": "sha256:3cff59406ce6a6e676f0a8f6a7023e98cb8c4253b7f4d34d3b2439fd4098423a"
+      "sha256": "sha256:d13e3e9c1b7706b47f395b55b06cae46f279e83804580057758dcdc8fa6d9c09"
     },
     {
       "path": "src/mcp/merchant-server.ts",

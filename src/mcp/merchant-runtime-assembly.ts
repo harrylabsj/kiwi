@@ -702,12 +702,24 @@ export async function assembleMerchantRuntime(
     serverInfo: { name: "kiwi-merchant", version: PRODUCT_VERSION },
   };
 
+  // 标签只由配置推导，不从 verifier 实例读属性：CodeQL 会把
+  // `verifier.name` 视为敏感对象属性读取（clear-text logging），即使 name
+  // 是常量；这里按 authMode/workbuddyHeaderMode 显式映射，语义不变。
+  const authLabel =
+    authMode === "oauth"
+      ? workbuddyHeaderMode
+        ? "workbuddy-header-oauth"
+        : "oauth-bearer"
+      : verifier === undefined
+        ? "none（loopback-only）"
+        : "static-bearer";
+
   return {
     serverOptions,
     service,
     recovered,
     authMode,
-    authLabel: verifier?.name ?? "none（loopback-only）",
+    authLabel,
     policy: () => {
       const current = policyRuntime.current();
       return { version: current.version, digest: current.digest };
