@@ -65,7 +65,9 @@ describe("Cloud shutdown completion and exit status", () => {
   });
   it.each(["success", "failure", "timeout"])("real compiled shutdown exits truthfully for %s", (mode) => {
     const root = fixture(), marker = path.join(root, "closed");
-    const body = mode === "success" ? `async()=>{fs.writeFileSync(${JSON.stringify(marker)},'closed')}`
+    // CodeQL js/bad-code-sanitization: resolve the marker from the generated
+    // module's own URL instead of interpolating a path into source.
+    const body = mode === "success" ? "async()=>{fs.writeFileSync(new URL('./closed',import.meta.url),'closed')}"
       : mode === "failure" ? "async()=>{throw Error('SECRET shutdown fixture')}" : "()=>new Promise(()=>{})";
     const result = run(root, `import fs from 'node:fs';const {createCloudShutdown}=await import('./cloud/main.js');await createCloudShutdown(${body},undefined,undefined,15)();`);
     expect(result.error).toBeUndefined(); expect(result.status).toBe(mode === "success" ? 0 : 1);
@@ -74,7 +76,7 @@ describe("Cloud shutdown completion and exit status", () => {
   });
   it("ordinary SIGTERM and SIGINT share one successful cleanup before exit0", () => {
     const root = fixture(), marker = path.join(root, "calls");
-    writeFileSync(path.join(root, "cloud/bootstrap.js"), `import fs from 'node:fs';export function renderStartupFailure(){return 'FIXED';}export async function bootstrapCloudRuntime(){return {close:async()=>{fs.appendFileSync(${JSON.stringify(marker)},'x');await new Promise(r=>setTimeout(r,25));}};}`);
+    writeFileSync(path.join(root, "cloud/bootstrap.js"), `import fs from 'node:fs';export function renderStartupFailure(){return 'FIXED';}export async function bootstrapCloudRuntime(){return {close:async()=>{fs.appendFileSync(new URL('../calls',import.meta.url),'x');await new Promise(r=>setTimeout(r,25));}};}`);
     const result = run(root, "const {runCloudMain}=await import('./cloud/main.js');void runCloudMain();setTimeout(()=>process.kill(process.pid,'SIGTERM'),20);setTimeout(()=>process.kill(process.pid,'SIGINT'),25);");
     expect(result.error).toBeUndefined(); expect(result.status).toBe(0); expect(readFileSync(marker, "utf8")).toBe("x");
   });

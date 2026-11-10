@@ -1,12 +1,12 @@
 {
   "schema": "kiwi.portfolio.products.v1",
-  "snapshot_date": "2026-11-05",
+  "snapshot_date": "2026-11-10",
   "version_policy": "Versions remain independent by product. The portfolio release bundle binds each available source commit, package version, candidate artifact hash, and external approval state.",
   "products": [
     {
       "id": "kiwi-merchant-cloud",
       "name": "Kiwi Merchant Cloud",
-      "version": "0.12.27",
+      "version": "0.12.28",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -28,7 +28,7 @@
     {
       "id": "kiwi",
       "name": "Kiwi runtime",
-      "version": "0.12.27",
+      "version": "0.12.28",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -49,7 +49,7 @@
     {
       "id": "kiwi-catalog",
       "name": "Kiwi Catalog",
-      "version": "0.5.17",
+      "version": "0.5.18",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
@@ -88,7 +88,7 @@
         "protected kiwi-release environment",
         "PyPI trusted publishing"
       ],
-      "last_known_registry_version": "3.2.10"
+      "last_known_registry_version": "3.2.11"
     },
     {
       "id": "kiwi-dsh-plugin",
