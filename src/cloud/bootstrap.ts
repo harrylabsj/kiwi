@@ -716,6 +716,8 @@ export async function bootstrapCloudRuntime(
       });
       const connection = directConnection;
       let directRunning = false;
+      let ticksSincePublishedCheck = 0;
+      let lastSummaryPublished = false;
       const tickConnection = (): void => {
         // 审查 P2：启动快照之外，运行期向导出现 active 记录时必须停掉直连
         // 编排——两套 enrollment 编排并行会竞速同一 origin/key。
@@ -727,8 +729,17 @@ export async function bootstrapCloudRuntime(
           return;
         }
         if (directRunning) return;
+        // 审查 P2：published 会话每 5s 无条件打一次 Catalog 公开读（约 17k/天）。
+        // 已发布稳定后降为 60s 复查一次；onboarding（preparing/authorized/bound）
+        // 仍按 5s 推进。显式 reconcile（用户操作）不受此节流影响。
+        ticksSincePublishedCheck += 1;
+        if (lastSummaryPublished && ticksSincePublishedCheck < 12) return;
         directRunning = true;
-        directConnectionWork = connection.reconcile().then(() => undefined)
+        directConnectionWork = connection.reconcile()
+          .then((summary) => {
+            lastSummaryPublished = summary.status === "published";
+            ticksSincePublishedCheck = 0;
+          })
           .catch(() => log("[kiwi-cloud] 目录连接暂未完成，请在工作台查看状态。\n"))
           .finally(() => { directRunning = false; });
       };

@@ -994,7 +994,7 @@ export class KiwiBuyerService {
     ) {
       throw new McpError("invalid_params", "target_unit_price.amount_minor 必须是正整数（最小货币单位）");
     }
-    const task = this.taskFor(input.task_id);
+    let task = this.taskFor(input.task_id);
     if (task === undefined) throw new McpError("task_not_found", `task ${input.task_id} not found`);
     if (task.expires_at !== undefined && Date.parse(task.expires_at) < Date.parse(this.now())) {
       throw new McpError("task_expired", `task ${input.task_id} expired`);
@@ -1027,6 +1027,12 @@ export class KiwiBuyerService {
       }
     }
 
+    // 审查 P2：轮次上限此前在锁外判定——并发 negotiate 可双双通过检查后各
+    // 外发一次。槽位在独立表里原子预留（见 store.reserveNegotiationSlot），
+    // 外发前已计入并发预算；成功落步后释放（步本身开始计数）。
+    const slotKind: "counter_offer" | "clarification" =
+      input.action === "counter_offer" ? "counter_offer" : "clarification";
+    let reservedSlot: number | undefined;
     let step: NegotiationStep = {
       // clarification 用总步数保证每次独立（恢复槽位唯一）；counter 用磋商轮次。
       round: input.action === "counter_offer" ? rounds + 1 : this.currentSteps(task) + 1,
@@ -1078,6 +1084,9 @@ export class KiwiBuyerService {
                 target_unit_price: explicitTarget,
               },
             };
+      // 商业闸通过后才占用槽位（被委托阻断的调用不消耗轮次）。
+      reservedSlot = this.store.reserveNegotiationSlot(input.task_id, slotKind, maxRounds);
+      step = { ...step, round: reservedSlot };
       step = await this.negotiator.negotiate(
         input.task_id,
         intentForNegotiator,
@@ -1085,14 +1094,13 @@ export class KiwiBuyerService {
         gated,
         this.protocolContext(task),
       );
+    } else {
+      // 无外发 negotiator（本地确定性模式）同样占用槽位：跨进程并发也不
+      // 能突破 max_rounds。
+      reservedSlot = this.store.reserveNegotiationSlot(input.task_id, slotKind, maxRounds);
+      step = { ...step, round: reservedSlot };
     }
 
-    const decoded = this.decodeTask(task);
-    const prior: NegotiationStep[] = Array.isArray(decoded.steps)
-      ? (decoded.steps as NegotiationStep[])
-      : [];
-    const steps = [...prior, step];
-    const currentStatus = typeof decoded.status === "string" ? decoded.status : "in_progress";
     return this.store.transaction(() => {
       // 商家最新 offer-like 回复必须回写候选：否则 get_task 仍显示上一轮价，
       // accept 也会绑定旧候选（2026-10-30 保温杯会话：接受 ¥151.05，协议
@@ -1108,10 +1116,27 @@ export class KiwiBuyerService {
           terms_digest: step.merchant_offer.terms_digest,
         });
       }
+      // 并发下相邻槽位预留不改 payload；仍以事务内最新任务合并，避免覆盖
+      // 其他完成步骤。落步成功即释放本槽位（步本身开始计入轮次）。
+      if (reservedSlot !== undefined) {
+        this.store.releaseNegotiationSlot(input.task_id, slotKind, reservedSlot);
+      }
+      const latest = this.taskFor(input.task_id);
+      if (latest === undefined) throw new McpError("task_not_found", `task ${input.task_id} not found`);
+      const latestDecoded = this.decodeTask(latest) as Record<string, unknown>;
+      const prior: NegotiationStep[] = Array.isArray(latestDecoded.steps)
+        ? (latestDecoded.steps as NegotiationStep[])
+        : [];
+      const currentStatus =
+        typeof latestDecoded.status === "string" ? latestDecoded.status : "in_progress";
       const updated = this.store.updateTask(input.task_id, {
         status: currentStatus === "pending" ? "in_progress" : currentStatus,
-        payload: JSON.stringify({ ...decoded, steps, updated_at: this.now() }),
-      }, task);
+        payload: JSON.stringify({
+          ...latestDecoded,
+          steps: [...prior, step],
+          updated_at: this.now(),
+        }),
+      }, latest);
       return { task: this.decodeTask(updated), step };
     });
   }

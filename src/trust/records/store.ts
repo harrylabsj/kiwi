@@ -340,8 +340,9 @@ export class TrustRecordStore {
       try {
         const record = this.parseRecord(path.join(dir, name));
         if (record !== null) out.push(record.counterparty_identity);
-      } catch {
-        /* 损坏/被锁定行跳过；数据保留供对账，不被删除或重置。 */
+      } catch (error) {
+        // 锁竞争必须透出（调用方需要 fail-closed）；只有损坏行可跳过。
+        if ((error as { code?: string }).code === "trust_record_locked") throw error;
       }
     }
     return out;

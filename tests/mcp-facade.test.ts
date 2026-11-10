@@ -227,6 +227,42 @@ describe("KiwiBuyerService：negotiate 委托边界", () => {
     expect((step.task.steps as Array<Record<string, unknown>>)).toHaveLength(1);
   });
 
+  it("并发 counter_offer 不能突破 max_rounds（槽位原子占用）", async () => {
+    const policy = {
+      ...POLICY,
+      limits: { ...POLICY.limits, max_rounds: 1 },
+    };
+    const { service } = makeHarness(makeInMemoryStore(), policy);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // 让第一次外发停在 negotiate 内，使第二次调用进入同一检查窗口。
+    (service as unknown as { negotiator: unknown }).negotiator = {
+      negotiate: async (
+        _taskId: string,
+        _intent: Record<string, unknown>,
+        step: Record<string, unknown>,
+      ) => {
+        await gate;
+        return step;
+      },
+    };
+    const created = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-race" });
+    const taskId = String(created.task.task_id);
+    const first = service.negotiate({ task_id: taskId, action: "counter_offer", summary: "r1" });
+    const second = service.negotiate({ task_id: taskId, action: "counter_offer", summary: "r2" });
+    release();
+    const outcomes = await Promise.allSettled([first, second]);
+    const fulfilled = outcomes.filter((entry) => entry.status === "fulfilled");
+    const rejected = outcomes.filter((entry) => entry.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+      code: "delegation_denied",
+    });
+  });
+
   it("超出 max_rounds 被拒（delegation_denied）", async () => {
     const { service } = makeHarness(makeInMemoryStore());
     const created = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-rounds" });

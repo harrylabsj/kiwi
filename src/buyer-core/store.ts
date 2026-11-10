@@ -205,6 +205,13 @@ export class TaskApprovalStore {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS mcp_negotiation_slots (
+        task_id     TEXT NOT NULL REFERENCES mcp_tasks(task_id) ON DELETE CASCADE,
+        kind        TEXT NOT NULL,
+        slot        INTEGER NOT NULL,
+        reserved_at TEXT NOT NULL,
+        PRIMARY KEY (task_id, kind, slot)
+      );
       CREATE TABLE IF NOT EXISTS mcp_handoff_intents (
         intent_digest   TEXT PRIMARY KEY,
         intent_id       TEXT NOT NULL,
@@ -629,6 +636,90 @@ export class TaskApprovalStore {
       .run(decidedAt, authorizationJson, expected.approval_id, expected.task_id, expected.action,
         expected.candidate_digest ?? null, expected.expires_at ?? null, expected.authorization_json ?? null);
     return changed.changes === 1;
+  }
+
+  /**
+   * 审查 P2：磋商槽位的原子预留（并发 negotiate 不得突破 max_rounds）。
+   *
+   * 槽位存在独立表里而不是任务 payload——未知结果后 payload 必须保持不变
+   * （恢复层按 payload 判定"该轮未落步"）。fresh 预留（60s 内）的同一轮次
+   * 再次调用会被拒；超过 60s 视为崩溃残留，允许重试到恢复闸（恢复层会报
+   * unknown 并阻止再次外发）。
+   */
+  reserveNegotiationSlot(
+    taskId: string,
+    kind: "counter_offer" | "clarification",
+    maxRounds: number,
+  ): number {
+    const now = this.now();
+    return this.transaction(() => {
+      const task = this.getTask(taskId);
+      if (task === undefined) {
+        throw new McpError("task_not_found", `task ${taskId} not found`);
+      }
+      let decoded: { steps?: Array<{ action?: string }> } = {};
+      try {
+        decoded = JSON.parse(task.payload) as typeof decoded;
+      } catch {
+        decoded = {};
+      }
+      const steps = Array.isArray(decoded.steps) ? decoded.steps : [];
+      const used =
+        kind === "counter_offer"
+          ? steps.filter((step) => step.action === "counter_offer").length
+          : steps.length;
+      const clarifications = steps.filter((step) => step.action === "clarification").length;
+      const staleBefore = new Date(Date.parse(now) - 60_000).toISOString();
+      this.db
+        .prepare(
+          "DELETE FROM mcp_negotiation_slots WHERE task_id = ? AND kind = ? AND reserved_at < ?",
+        )
+        .run(taskId, kind, staleBefore);
+      const reserved = (
+        this.db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM mcp_negotiation_slots WHERE task_id = ? AND kind = ?",
+          )
+          .get(taskId, kind) as { n: number }
+      ).n;
+      const consumed = (kind === "counter_offer" ? used : clarifications) + reserved;
+      if (consumed >= maxRounds) {
+        throw new McpError(
+          "delegation_denied",
+          kind === "counter_offer"
+            ? `counter_offer 超出委托轮次上限（max_rounds=${maxRounds}）`
+            : `clarification 超出上限（max_rounds=${maxRounds}）`,
+        );
+      }
+      const slot = used + 1;
+      try {
+        this.db
+          .prepare(
+            "INSERT INTO mcp_negotiation_slots(task_id, kind, slot, reserved_at) VALUES (?, ?, ?, ?)",
+          )
+          .run(taskId, kind, slot, now);
+      } catch (error) {
+        if (/UNIQUE|constraint/i.test(error instanceof Error ? error.message : String(error))) {
+          throw new McpError(
+            "delegation_denied",
+            "同一轮次已有进行中的磋商操作；等待其结果后再重试",
+          );
+        }
+        throw error;
+      }
+      return slot;
+    });
+  }
+
+  /** 释放成功落步的槽位（单条 DELETE，可在调用方事务内执行）。 */
+  releaseNegotiationSlot(
+    taskId: string,
+    kind: "counter_offer" | "clarification",
+    slot: number,
+  ): void {
+    this.db
+      .prepare("DELETE FROM mcp_negotiation_slots WHERE task_id = ? AND kind = ? AND slot = ?")
+      .run(taskId, kind, slot);
   }
 
   /**
