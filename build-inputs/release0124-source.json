@@ -4462,7 +4462,7 @@
     },
     {
       "path": "src/merchant-core/operating/service.ts",
-      "sha256": "sha256:e21ec7fba0061c6671ec72f1f974d4f85a222ca8bdfa2db7fb40fc79d1abcd1e"
+      "sha256": "sha256:4645b9fdb51ee08554c6121e8e5a850521143bf6510e9a3cccb090cba6426eeb"
     },
     {
       "path": "src/merchant-core/operating/types.ts",
@@ -4470,7 +4470,7 @@
     },
     {
       "path": "src/merchant-core/operations.ts",
-      "sha256": "sha256:5732c299bb0e1628a001459ff03433f37245aa0b90b6e2d20a756adcaf9beadc"
+      "sha256": "sha256:e29a84421cca8faa8edbb584ff4e984f03b370ab63a2c2d2c291dc518e3fa1a7"
     },
     {
       "path": "src/merchant-core/opportunity/repository.ts",
@@ -4478,7 +4478,7 @@
     },
     {
       "path": "src/merchant-core/opportunity/service.ts",
-      "sha256": "sha256:107c7a557b835d942e3a42116db9b8a55a9ac156149daf2057e21ce980b7bfd5"
+      "sha256": "sha256:8ab7df1c80693e86b48086b2d08e0a852d69d7daa7bcc544c2019bb09ce66c65"
     },
     {
       "path": "src/merchant-core/opportunity/state.ts",
@@ -4542,7 +4542,7 @@
     },
     {
       "path": "src/merchant-core/proposal/service.ts",
-      "sha256": "sha256:63ca517a50734e20a463a64783cfef2c9476b91210f6728f1e4e8883c21ffc53"
+      "sha256": "sha256:9111ef9ef519c3ceba848ae104de8fb9e1d3e1ded0912fdeab860595c53db51c"
     },
     {
       "path": "src/merchant-core/proposal/types.ts",
@@ -4558,7 +4558,7 @@
     },
     {
       "path": "src/merchant-core/rfq/delivery.ts",
-      "sha256": "sha256:fcbc747d1e8b222adea92651889646ae6a9e8201d71c7c9c25489d29acd2b745"
+      "sha256": "sha256:83e3dab5361bf176fb6d104405ef8183768eb4486010778e9b572c710d0ac4d1"
     },
     {
       "path": "src/merchant-core/rfq/fact-resolver.ts",
@@ -4566,7 +4566,7 @@
     },
     {
       "path": "src/merchant-core/rfq/handoff.ts",
-      "sha256": "sha256:c54f54210c0895f1204df8f0ed755ae92b990c632e1b93c0a3db54b3922d39e2"
+      "sha256": "sha256:b178255625999c8d50375fa0d703e73f79ddde4561c8ab608c1e54dc47b624de"
     },
     {
       "path": "src/merchant-core/rfq/pending-candidates.ts",
@@ -4590,7 +4590,7 @@
     },
     {
       "path": "src/merchant-core/rfq/repository.ts",
-      "sha256": "sha256:f8a32619285ba5f01dd99c0355c32a2f67da844dc393347910cf639f39f97429"
+      "sha256": "sha256:4f6d1a57bfb2c541a22f310ff4782eab097ea0c2e39988546a723c326fbb8fec"
     },
     {
       "path": "src/merchant-core/rfq/service.ts",
