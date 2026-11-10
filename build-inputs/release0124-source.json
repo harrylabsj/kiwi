@@ -3266,7 +3266,7 @@
     },
     {
       "path": "src/a2a/reception/agent-runtime.ts",
-      "sha256": "sha256:6f58390e8607cfae8c5087e1def48ef511e9d60a8408a46f433bc57dc9ba1ad6"
+      "sha256": "sha256:170bf2499295944356cb35ce822bda1786cbae7fac41554a17998c8b54304fd1"
     },
     {
       "path": "src/a2a/reception/budget.ts",
@@ -3342,7 +3342,7 @@
     },
     {
       "path": "src/a2a/server/merchant-handler.ts",
-      "sha256": "sha256:3b6453edf4a458aaae8173a2914c6d0efbb0fc4405b7e6008b4c85293851f6d2"
+      "sha256": "sha256:abedf5b60ca607751696261b54449fba206472b393e19dd3e73143aee851420a"
     },
     {
       "path": "src/a2a/server/merchant-product-facts.ts",
@@ -3350,7 +3350,7 @@
     },
     {
       "path": "src/a2a/server/negotiation-advisor.ts",
-      "sha256": "sha256:12b4af182eef079362eab061bb016e0b2e4000833b1df84ab98090eba9d50fcd"
+      "sha256": "sha256:721eeb0136872082905f6932ce4b9ddf621f80a8f3b2591e891e12da89db3484"
     },
     {
       "path": "src/a2a/server/negotiation-approvals.ts",
@@ -3434,7 +3434,7 @@
     },
     {
       "path": "src/agent/buyer/buyer-tools.ts",
-      "sha256": "sha256:663db20df6cc31b6214d10e23a5aa461593a4e2d05799d2c81f49c49d5ae5929"
+      "sha256": "sha256:1c26e204c1952aa25bb356f883d3c2a5817b557fda417f98cad7a91c76bc6573"
     },
     {
       "path": "src/agent/buyer/ranker.ts",
@@ -4574,7 +4574,7 @@
     },
     {
       "path": "src/merchant-core/rfq/policy.ts",
-      "sha256": "sha256:46d79c321f83909446db624bead41020053c80e3319a3f8758f6053092ec29e1"
+      "sha256": "sha256:9a2926432a5e1f4887de559f741da1b0fd1e2086acd4bbce9448b417a15f3812"
     },
     {
       "path": "src/merchant-core/rfq/pricing.ts",
@@ -4942,7 +4942,7 @@
     },
     {
       "path": "src/merchant/watch/weixin.ts",
-      "sha256": "sha256:b4810f17a77ff6c87a1d64707981c3b5b3f97cc29052b68f8e2837d5ac7b286b"
+      "sha256": "sha256:ffa3c00781fd83b06652615a68245767895ff04521fbf93494a656feb4b888ad"
     },
     {
       "path": "src/merchant/workbench-service.ts",
