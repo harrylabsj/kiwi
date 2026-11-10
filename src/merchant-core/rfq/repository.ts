@@ -205,6 +205,11 @@ export class RfqRepository {
     this.now = deps.now;
   }
 
+  /** 供自由函数构造 DTO 时使用同一注入时钟（不要在模块里用 new Date）。 */
+  nowIso(): string {
+    return this.now();
+  }
+
   private inTx = false;
 
   /** 事务执行（可重入：内层调用加入外层事务——内层失败抛错由外层统一回滚）。 */

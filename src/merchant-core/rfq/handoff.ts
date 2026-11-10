@@ -87,9 +87,8 @@ export function recordOwnerRecorded(repo: RfqRepository, handoffId: string, acto
   if (existing.status !== "PACKET_READY") {
     throw new RfqError("approval_stale", `移交 ${handoffId} 状态为 ${existing.status}，不能记录 OWNER_RECORDED`);
   }
-  const updated: RfqHandoffRow = { ...existing, status: "OWNER_RECORDED", updated_at: new Date().toISOString() };
-  repo.updateHandoffStatus(handoffId, "OWNER_RECORDED", actor);
-  return updated;
+  // 以仓储写入后的行为准，避免 DTO 时间戳与持久层使用不同时钟。
+  return repo.updateHandoffStatus(handoffId, "OWNER_RECORDED", actor);
 }
 
 /** 目标系统回执验证（首版 fail-closed：无目标系统凭据查询/签名回执通道）。 */

@@ -106,12 +106,25 @@ export class MerchantOperationStore {
     }
     const now = this.now();
     const id = `op_${randomBytes(12).toString("hex")}`;
-    this.db
-      .prepare(
-        `INSERT INTO merchant_operations (operation_id, kind, idempotency_key, status, receipts_json, created_at, updated_at)
-         VALUES (?, ?, ?, 'queued', '[]', ?, ?)`,
-      )
-      .run(id, input.kind, input.idempotencyKey, now, now);
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO merchant_operations (operation_id, kind, idempotency_key, status, receipts_json, created_at, updated_at)
+           VALUES (?, ?, ?, 'queued', '[]', ?, ?)`,
+        )
+        .run(id, input.kind, input.idempotencyKey, now, now);
+    } catch (error) {
+      // 并发同键：唯一索引命中后读回既有行，而不是把裸 SQLITE 错误抛给调用方。
+      if (/UNIQUE|constraint/i.test(error instanceof Error ? error.message : String(error))) {
+        const raced = this.db
+          .prepare("SELECT * FROM merchant_operations WHERE kind = ? AND idempotency_key = ?")
+          .get(input.kind, input.idempotencyKey) as unknown as OperationRow | undefined;
+        if (raced !== undefined) {
+          return { operation: rowToOperation(raced), created: false };
+        }
+      }
+      throw error;
+    }
     return { operation: this.get(id) as MerchantOperation, created: true };
   }
 
