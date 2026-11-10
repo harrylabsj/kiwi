@@ -317,6 +317,26 @@ export async function consultDecisionBackend(
  * 商家对外公开回复里。
  */
 export function redactPublicMessage(text: string, floor: number | undefined): string {
-  if (floor === undefined || floor <= 0) return text;
-  return text.split(String(floor)).join("[private-floor]");
+  if (floor === undefined || !Number.isFinite(floor) || text === "") return text;
+  // 与 negotiation-chat.redactPrivateFloor 同一 token 口径（只在完整数字
+  // token 上比较规范化十进制，避免误伤子串；此前只匹配 "80" 字面写法）。
+  const needle = canonicalRedactionDecimal(String(floor));
+  if (needle === undefined) return text;
+  return text.replace(
+    /(?<![0-9.,])[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?![0-9]|[.,][0-9])/g,
+    (token) => canonicalRedactionDecimal(token) === needle ? "[私密阈值]" : token,
+  );
+}
+
+function canonicalRedactionDecimal(value: string): string | undefined {
+  const match = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(value);
+  if (match === null) return undefined;
+  let digits = `${match[2] ?? ""}${match[3] ?? ""}`.replace(/^0+/, "");
+  if (digits === "") return "0";
+  let exponent = Number(match[4] ?? 0) - (match[3]?.length ?? 0);
+  if (!Number.isSafeInteger(exponent)) return undefined;
+  const significant = digits.replace(/0+$/, "");
+  exponent += digits.length - significant.length;
+  digits = significant;
+  return `${match[1] === "-" ? "-" : ""}${digits}e${exponent}`;
 }

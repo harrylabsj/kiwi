@@ -964,10 +964,18 @@ ${current}
         await handleMcp(req, res);
         return;
       }
-      writeJson(res, 404, { error: "not_found", message: `unknown path ${url.pathname}` });
+      writeJson(res, 404, { error: "not_found", message: "unknown path" });
     })().catch((err) => {
+      // 审查 P3：回显完整 req.url 可能把一次性凭据（查询串 token）写进日志。
+      // 只记 pathname，查询串一律不进日志。
+      let pathname = "/";
+      try {
+        pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      } catch {
+        /* 保留缺省 */
+      }
       process.stderr.write(
-        `[gateway entry] ${req.method} ${req.url ?? "/"} 处理异常：` +
+        `[gateway entry] ${req.method} ${pathname} 处理异常：` +
           `${err instanceof Error ? err.message : String(err)}\n`,
       );
       if (!res.headersSent) writeJson(res, 500, { error: "internal_error" });

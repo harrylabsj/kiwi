@@ -66,7 +66,9 @@ export function routeCandidate(
   if (mode === "supervised") return "await_approval";
   // autopilot: risk escalation paths still require a human (design §9).
   if (decision.request_human_review || decision.action === "escalate") return "await_approval";
-  if ((decision.confidence ?? 1) < 0.5) return "await_approval";
+  // 审查 P3：缺失 confidence 此前按 1（最高置信）fail-open。缺失 = 无法证明
+  // 高置信 → 转人工。
+  if (decision.confidence === undefined || decision.confidence < 0.5) return "await_approval";
   const reviewOn =
     profile.role === "buyer"
       ? (profile.buyer_policy?.human_review_on ?? [])

@@ -235,6 +235,35 @@ export class OperatorApprovalAuthorizationProvider implements AuthorizationProvi
     }
   }
 
+  /** 审查 P3：重放前重新校验记录形状/状态/时间——损坏或被篡改的行不得
+   *  直接进入内存审批表。 */
+  private isValidApprovalRecord(value: unknown): value is OperatorApprovalRecord {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+    const record = value as Record<string, unknown>;
+    const required = [
+      "approval_id",
+      "session_ref",
+      "terms_digest",
+      "package_digest",
+      "candidate_digest",
+      "remote_revision",
+      "policy_version",
+      "confirmed_at",
+      "expires_at",
+      "recorded_at",
+    ] as const;
+    for (const key of required) {
+      if (typeof record[key] !== "string" || String(record[key]).trim() === "") return false;
+    }
+    if (!(OPERATOR_APPROVAL_RECORD_STATUSES as readonly string[]).includes(String(record.status))) {
+      return false;
+    }
+    for (const key of ["confirmed_at", "expires_at", "recorded_at"] as const) {
+      if (!Number.isFinite(Date.parse(String(record[key])))) return false;
+    }
+    return true;
+  }
+
   /** 从 JSONL 重放审批事件（同 approval_id 后事件胜出；撕裂行容忍跳过）。 */
   private replayJournal(): void {
     if (this.journalPath === undefined || !existsSync(this.journalPath)) return;
@@ -247,7 +276,11 @@ export class OperatorApprovalAuthorizationProvider implements AuthorizationProvi
           approval?: OperatorApprovalRecord;
           approval_id?: string;
         };
-        if (event.type === "record" && event.approval?.approval_id !== undefined) {
+        if (
+          event.type === "record" &&
+          this.isValidApprovalRecord(event.approval) &&
+          event.approval.approval_id !== undefined
+        ) {
           this.records.set(event.approval.approval_id, event.approval);
         } else if (event.type === "revoke" && typeof event.approval_id === "string") {
           const existing = this.records.get(event.approval_id);

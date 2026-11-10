@@ -960,8 +960,26 @@ export async function startOwnedRuntime<T>(options: OwnedRuntimeOptions<T>): Pro
       if (current.terminal) fail("OWNED_RUNTIME_TERMINAL", "窗口已终态，拒绝写入");
       journal.assertOwner(tokenHash);
       const next = mutate({ ...current, revision: current.revision + 1, updated_at_utc: new Date(now()).toISOString() });
-      atomicWrite(ledgerPath, canonical(next));
-      journal.finalize(sha256(canonical(next)));
+      // 审查 P2：普通计数写入此前不走 pending journal——崩溃落在账本替换与
+      // finalize 之间时，journal 摘要停留在旧值 → 永久 OWNED_LEDGER_DRIFT。
+      // 与 terminal 路径同款：先落 intent（base/target 摘要），替换后读回确认，
+      // 最后 finalize；崩溃窗口由恢复逻辑按 pending 判定。
+      const baseBytes = readFileSync(ledgerPath);
+      const targetBytes = canonical(next);
+      journal.setPending({
+        schema: "kiwi.cloud.owned-pending/1",
+        operation_id: `count-${next.revision}`,
+        kind: "count",
+        generation,
+        token_hash: tokenHash,
+        base_sha256: sha256(baseBytes),
+        target_sha256: sha256(targetBytes),
+        target_json: targetBytes.toString("utf8"),
+      });
+      atomicWrite(ledgerPath, targetBytes);
+      const readBack = readFileSync(ledgerPath);
+      if (!readBack.equals(targetBytes)) fail("OWNED_LEDGER_READBACK_MISMATCH", "计数器账本读回不一致");
+      journal.finalize(sha256(readBack));
       return next;
     };
 

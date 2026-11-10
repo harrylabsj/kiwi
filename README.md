@@ -4,7 +4,7 @@
 [A2A](https://a2a-protocol.org/) 与 [UCP](https://ucp.dev/) 完成发现 → capability 协商 →
 磋商 → 非绑定协议。磋商以**非约束性商业协议**终止：不创建订单、不支付、不锁库存。
 
-**Kiwi 当前代码版本以 `package.json` 为准**（当前 0.12.4）：当前发布线包含 A2A 双栈、KNP/1.0 磋商、签名身份
+**Kiwi 当前代码版本以 `package.json` 为准**（当前 0.12.27）：当前发布线包含 A2A 双栈、KNP/1.0 磋商、签名身份
 与安全交接能力。A2A 1.0 线协议互操作以组合 conformance transcript 为准，不用历史审计
 文档替代运行证据。
 
@@ -55,9 +55,16 @@ Buyer Agent ──A2A wire──▶ Merchant Agent
 ```bash
 npm install
 npm run build
-npm test              # 全部离线测试，零外部依赖
+npm test              # 绝大多数测试离线运行（node:sqlite + 本地临时 HTTP）
 npm run verify        # lint + typecheck + build + test + package smoke
 ```
+
+`npm test` 的前提（审查 P2，之前未说明）：
+
+- 三方开放询价 E2E（`tests/three-party-open-inquiry.e2e.test.ts`）需要
+  **kiwi-catalog 仓库检出**（默认 `../kiwi-catalog` 或 `KIWI_CATALOG_DIR`）、
+  `uv` 与 Python 3.13；缺失时该用例会失败并给出结构化诊断，而不是静默跳过。
+  只跑其余离线测试：`npx vitest run --exclude tests/three-party-open-inquiry.e2e.test.ts`。
 
 CLI 概览：
 

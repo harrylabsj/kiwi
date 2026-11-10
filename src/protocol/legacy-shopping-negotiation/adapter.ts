@@ -370,6 +370,17 @@ export class LegacyNegotiationAdapter {
         return { ok: true, payload, termsForId: acceptedTerms };
       }
       case "decline": {
+        // 审查 P3：显式守卫目标消息 id——不依赖 schema 兜底（0/负数/非整数
+        // 不得进入 decline 载荷）。
+        if (
+          !Number.isSafeInteger(decision.in_reply_to_message_id) ||
+          decision.in_reply_to_message_id < 1
+        ) {
+          return {
+            ok: false,
+            error: failClosed("legacy decline requires in_reply_to_message_id >= 1"),
+          };
+        }
         const targetMessageId = legacyMessageIdToKnp(decision.in_reply_to_message_id);
         const targetOfferId = offerIdOfLegacyMessage(decision.in_reply_to_message_id);
         notes.push(
