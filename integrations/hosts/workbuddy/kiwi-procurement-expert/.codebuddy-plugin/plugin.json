@@ -1,11 +1,15 @@
 {
   "name": "kiwi-procurement-expert",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Kiwi procurement expert for supplier discovery, quote comparison and nonbinding negotiation, with dual-source sourcing (Kiwi Network merchants plus internet e-commerce listings when the host session provides web tools). Covers single-item purchases as well as bulk procurement: every purchase intent starts with kiwi_search before any web search.",
-  "author": { "name": "harrylabsj" },
+  "author": {
+    "name": "harrylabsj"
+  },
   "homepage": "https://github.com/harrylabsj/kiwi",
   "license": "Apache-2.0",
-  "agents": ["./agents/kiwi-procurement.md"],
+  "agents": [
+    "./agents/kiwi-procurement.md"
+  ],
   "skills": [
     "./skills/kiwi-source-and-quote",
     "./skills/kiwi-compare-and-negotiate",
@@ -13,8 +17,14 @@
   ],
   "expertType": "agent",
   "agentName": "kiwi-procurement",
-  "displayName": { "zh": "海纳·采购专家", "en": "Haina · Procurement Expert" },
-  "profession": { "zh": "Kiwi购物智能体", "en": "Kiwi Sourcing and Quotes" },
+  "displayName": {
+    "zh": "海纳·采购专家",
+    "en": "Haina · Procurement Expert"
+  },
+  "profession": {
+    "zh": "Kiwi购物智能体",
+    "en": "Kiwi Sourcing and Quotes"
+  },
   "displayDescription": {
     "zh": "整理采购需求，同时查找网络商家与互联网电商商品，比较报价与交期，在授权范围内议价并形成非约束性协议。",
     "en": "Clarifies sourcing needs, searches both network merchants and internet listings, compares quotes and delivery terms, and negotiates within your mandate before nonbinding agreements."
@@ -27,9 +37,18 @@
   },
   "plugin": "kiwi-procurement-expert",
   "tags": [
-    { "zh": "供应商发现", "en": "Supplier Discovery" },
-    { "zh": "询价比价", "en": "Quote Comparison" },
-    { "zh": "采购议价", "en": "Negotiation" }
+    {
+      "zh": "供应商发现",
+      "en": "Supplier Discovery"
+    },
+    {
+      "zh": "询价比价",
+      "en": "Quote Comparison"
+    },
+    {
+      "zh": "采购议价",
+      "en": "Negotiation"
+    }
   ],
   "quickPrompts": [
     {
@@ -45,5 +64,7 @@
       "en": "Prepare a negotiation proposal and send it after my confirmation"
     }
   ],
-  "dependencies": { "connectors": ["kiwi-sourcing"] }
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
 }
