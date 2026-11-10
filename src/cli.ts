@@ -231,6 +231,11 @@ Usage:
   kiwi catalog serve [--db <file>] [--host <host>] [--port <port>]
                                           Start the standalone kiwi-catalog service
                                           (foreground; requires pip install kiwi-catalog)
+  kiwi locks list --data-dir <dir>        List residual ledger/enrollment lock files
+  kiwi locks recover-ledger --data-dir <dir> --negotiation-id <id> [--force]
+                                          Explicitly clear one negotiation's lock files
+  kiwi locks recover-enrollment --data-dir <dir> [--claim <file>] [--force]
+                                          Explicitly clear the enrollment store lock / claim
 
 Product layer (product-strategy rev1.1 §10/§19):
   kiwi buyer --help                       Kiwi Buyer command tree
@@ -2942,6 +2947,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // `kiwi merchant owner <sub>`：A199 本地 owner 会话，独立 flag 集（不经全局 parseArgs）。
   if (argv[0] === "merchant" && argv[1] === "owner") {
     return await cmdMerchantOwner(argv.slice(2));
+  }
+  // `kiwi locks <sub>`：残留锁盘点/显式恢复（review P1-4/P1-8），独立 flag 集。
+  if (argv[0] === "locks") {
+    const { runLocksCommand } = await import("./runtime/locks-cli.js");
+    return runLocksCommand({ argv: argv.slice(1) });
   }
   let args: ParsedArgs;
   try {
