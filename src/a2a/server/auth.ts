@@ -52,6 +52,20 @@ export class NoneAuthVerifier implements AuthVerifier {
   }
 }
 
+/** 线性解析 `Bearer <token>`；非法返回 null。 */
+function bearerTokenOf(header: string): string | null {
+  if (header.length < 8) return null;
+  if (header.slice(0, 6).toLowerCase() !== "bearer") return null;
+  let index = 6;
+  while (index < header.length) {
+    const code = header.charCodeAt(index);
+    if (code !== 32 && code !== 9) break;
+    index += 1;
+  }
+  if (index === 6 || index >= header.length) return null;
+  return header.slice(index);
+}
+
 /** 常量时间 token 比较：长度恒等预检 + timingSafeEqual（审查 P2-D：此前
  *  `presented !== this.token` 逐字节短路，构成时序侧信道）。与
  *  agent/memory/vault.ts fingerprintEquals 同一模式。 */
@@ -82,15 +96,17 @@ export class StaticBearerAuthVerifier implements AuthVerifier {
         reason: "missing Authorization header",
       };
     }
-    const match = /^Bearer\s+(.+)$/i.exec(header.trim());
-    if (match === null) {
+    // CodeQL js/polynomial-redos: parse with a linear scan instead of
+    // /^Bearer\s+(.+)$/ on untrusted headers.
+    const trimmed = header.trim();
+    const presented = bearerTokenOf(trimmed);
+    if (presented === null) {
       return {
         authenticated: false,
         protocolCode: "authorization_failed",
         reason: "Authorization header is not a bearer token",
       };
     }
-    const presented = match[1] ?? "";
     if (!tokenEquals(presented, this.token)) {
       return {
         authenticated: false,

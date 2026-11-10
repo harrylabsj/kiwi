@@ -114,15 +114,12 @@ function cookieValue(req: IncomingMessage, name: string): string | undefined {
 
 /** 只允许管理面内部相对路径，避免 XSS 和开放重定向。 */
 function safeAdminNext(value: string | undefined, fallback = "/admin/pending"): string {
-  if (
-    value === undefined ||
-    value === "" ||
-    !value.startsWith("/") ||
-    value.startsWith("//") ||
-    value.includes("\\")
-  ) {
-    return fallback;
-  }
+  // CodeQL js/reflected-xss: only a conservative internal-path charset may be
+  // reflected. This rejects quotes/angle brackets/backslashes outright instead
+  // of relying on a downstream HTML escaper the scanner cannot follow.
+  if (value === undefined || value === "") return fallback;
+  if (!/^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?#]*$/.test(value)) return fallback;
+  if (value.startsWith("//")) return fallback;
   return value;
 }
 

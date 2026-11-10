@@ -52,7 +52,7 @@ function fixtureArtifacts(dir: string): void {
     const paths = pattern.endsWith("*")
       ? product.id === "kiwi-catalog" || product.id === "shopping-cli"
         ? [pattern.slice(0, -1) + "package.whl", pattern.slice(0, -1) + "package.tar.gz"]
-        : [pattern.replace("*", "candidate.tgz")]
+        : [pattern.replaceAll("*", "candidate.tgz")]
       : [pattern];
     for (const artifact of paths) {
       const file = join(dir, artifact);
