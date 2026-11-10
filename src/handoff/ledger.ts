@@ -41,7 +41,12 @@ import {
   type HandoffCandidateEventKind,
 } from "./lifecycle.js";
 import { deliveryState, transitionDeliveryState } from "./delivery.js";
-import { isTerminalLifecycleState, foldCandidateLifecycle } from "./lifecycle.js";
+import {
+  foldCandidateLifecycle,
+  isHandoffCandidateEventKind,
+  isTerminalLifecycleState,
+  transitionCandidateLifecycle,
+} from "./lifecycle.js";
 import { HandoffError } from "./errors.js";
 
 /** 交付观察事件 kind（KTH rev0.3 §9；不伪装外部成交，§36-27/28）。 */
@@ -148,8 +153,22 @@ export class HandoffEventStore {
     return this.store.append(content);
   }
 
-  /** 候选生命周期事件（kind 限定 candidate 域）。 */
+  /**
+   * 候选生命周期事件（kind 限定 candidate 域）。
+   *
+   * 审查 P2：与交付域对称，append 前必须校验迁移表——否则 fold 只看“最后
+   * 事件胜出”，CONSUMED 之后再来一条 READY 会被静默接受。
+   */
   appendCandidateEvent(input: Omit<HandoffEventInput, "kind"> & { kind: HandoffCandidateEventKind }): LedgerEvent {
+    const candidateId = input.candidate.handoff_candidate_id;
+    const prior = this.store
+      .events(input.candidate.negotiation_id)
+      .filter(
+        (event) =>
+          event.handoff_candidate_id === candidateId &&
+          isHandoffCandidateEventKind(event.event_kind),
+      );
+    transitionCandidateLifecycle(foldCandidateLifecycle(prior), input.kind);
     return this.append(input);
   }
 

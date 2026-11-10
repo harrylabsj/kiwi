@@ -40,6 +40,8 @@ import {
   writeSync,
 } from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { canTakeOverStaleLock, lockOwnerRecord } from "../runtime/lock-owner.js";
 import { HandoffError } from "./errors.js";
 
 export interface HandoffIdempotencyStoreOptions {
@@ -164,6 +166,56 @@ export class HandoffIdempotencyStore {
     return found !== undefined ? { status: "hit", handoff_id: found } : undefined;
   }
 
+  /**
+   * 审查 P2：prune（读全表→写 tmp→rename）与 record（追加）在不同目的地
+   * 并发时互相覆盖——record 的行可能落在 prune 的读-替换窗口里丢失。
+   * 一律走同一把 store 锁（可证明已死的残留锁可接管）。
+   */
+  private withStoreLock<T>(fn: () => T): T {
+    const lock = `${this.filePath}.store.lock`;
+    const token = randomUUID();
+    const deadline = Date.now() + 5_000;
+    let fd: number | undefined;
+    for (;;) {
+      try {
+        fd = openSync(lock, "wx", 0o600);
+        break;
+      } catch (err) {
+        if ((err as { code?: string }).code !== "EEXIST") throw err;
+        try {
+          if (canTakeOverStaleLock(readFileSync(lock, "utf8"))) {
+            unlinkSync(lock);
+            continue;
+          }
+        } catch {
+          continue;
+        }
+        if (Date.now() >= deadline) {
+          throw new HandoffError(
+            "concurrency_lock_timeout",
+            "handoff idempotency store is locked by another writer",
+          );
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+    }
+    try {
+      writeSync(fd, JSON.stringify(lockOwnerRecord(token)));
+    } finally {
+      closeSync(fd);
+    }
+    try {
+      return fn();
+    } finally {
+      try {
+        const owner = JSON.parse(readFileSync(lock, "utf8")) as { token?: unknown };
+        if (owner?.token === token) unlinkSync(lock);
+      } catch {
+        /* 未知归属保留，绝不盲删 */
+      }
+    }
+  }
+
   /** 记录一次成功交付（幂等键 → handoff_id）。 */
   record(candidateId: string, candidateDigest: string, handoffId: string): void {
     const row: IdempotencyRow = {
@@ -175,27 +227,32 @@ export class HandoffIdempotencyStore {
     // 追加 + fsync（评审项 B2）：此前纯追加无 fsync，崩溃时最后一行可能
     // 撕裂——rows() 容忍撕裂行（跳过）→ 同候选再次执行会重复交付。fsync
     // 后成功返回即持久，重试路径可依赖幂等表。
-    const fd = openSync(this.filePath, "a", 0o600);
-    try {
-      writeSync(fd, `${JSON.stringify(row)}\n`);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
+    this.withStoreLock(() => {
+      const fd = openSync(this.filePath, "a", 0o600);
+      try {
+        writeSync(fd, `${JSON.stringify(row)}\n`);
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    });
   }
 
   /** 惰性清理：删除超过保留期的行（重写文件，原子 rename）。 */
   prune(): number {
-    const cutoff = Date.parse(this.now()) - this.retentionMs;
-    const rows = this.rows();
-    const fresh = rows.filter((row) => Date.parse(row.recorded_at) >= cutoff);
-    if (fresh.length === rows.length) return 0;
-    const tmp = `${this.filePath}.tmp`;
-    writeFileSync(tmp, fresh.map((r) => JSON.stringify(r)).join("\n") + (fresh.length > 0 ? "\n" : ""), {
-      mode: 0o600,
+    return this.withStoreLock(() => {
+      const cutoff = Date.parse(this.now()) - this.retentionMs;
+      const rows = this.rows();
+      const fresh = rows.filter((row) => Date.parse(row.recorded_at) >= cutoff);
+      if (fresh.length === rows.length) return 0;
+      // 唯一 tmp 名：两个 prune 并发时不再交错写同一路径。
+      const tmp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
+      writeFileSync(tmp, fresh.map((r) => JSON.stringify(r)).join("\n") + (fresh.length > 0 ? "\n" : ""), {
+        mode: 0o600,
+      });
+      renameSync(tmp, this.filePath);
+      return rows.length - fresh.length;
     });
-    renameSync(tmp, this.filePath);
-    return rows.length - fresh.length;
   }
 
   private rows(): IdempotencyRow[] {

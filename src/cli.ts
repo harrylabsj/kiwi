@@ -386,7 +386,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
     } else if (arg === "--merchant-id") {
       merchantId = argv[++i];
     } else if (arg === "--merchant-token") {
-      merchantToken = argv[++i];
+      // 审查 P2：密钥参数会进 shell history 与 `ps` 输出。与 admin-passwd
+      // 的 promptSecret 纪律一致——只接受环境变量或 TTY 隐藏输入。
+      throw new Error(
+        "--merchant-token is not accepted on the command line (visible in shell history/ps); " +
+          "set SHOPPING_MERCHANT_TOKEN (or the profile's token_env) or run interactively",
+      );
     } else if (arg === "--public-url") {
       publicUrl = argv[++i];
     } else if (arg === "--name") {
@@ -424,7 +429,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
       // 只接受十进制正整数（评审项 L5：Number("abc")=NaN 会流入 server.listen）
       const raw = argv[++i];
       const parsed = /^\d+$/.test(raw ?? "") ? Number(raw) : Number.NaN;
-      port = Number.isInteger(parsed) ? parsed : undefined;
+      // 审查 P3：补范围校验（0 = 由系统选随机端口，保持支持）。
+      if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+        throw new Error(`--port must be an integer in 0..65535 (got ${raw ?? ""})`);
+      }
+      port = parsed;
     } else if (arg === "--host") {
       catalogHost = argv[++i];
     } else if (arg === "--db") {

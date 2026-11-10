@@ -200,6 +200,22 @@ export class MerchantCommandLog {
   }
 
   /**
+   * 审查 P2：候选已死（过期/已决策）时不得核销一次性确认凭证——先核对
+   * 目标仍可决策，再消费凭证（approve/reject 同口径）。
+   */
+  private assertDecisionTargetLive(candidate: WriteApprovalCandidate): void {
+    if (candidate.status !== "pending_approval") {
+      throw new MerchantWorkbenchError(
+        "validation",
+        `候选状态为 ${candidate.status}，不可再决策（确认凭证未核销）`,
+      );
+    }
+    if (Date.parse(candidate.expires_at) <= Date.parse(this.deps.now())) {
+      throw new MerchantWorkbenchError("validation", "候选已过期，不可决策（确认凭证未核销）");
+    }
+  }
+
+  /**
    * 批准并执行（确认通道；管理页面调用）。
    * 授权主体一致性：调用主体必须等于命令记录主体（store 按 principal 绑定）。
    * 配置了确认凭证存储时，必须携带与该候选内容/主体/动作匹配的一次性凭证。
@@ -236,6 +252,7 @@ export class MerchantCommandLog {
       // 审查 P2：核销放在候选存在性/可执行性核对**之后**——候选已死时点击
       // 批准不再白烧一次性凭证。
       if (this.deps.confirmations !== undefined) {
+        this.assertDecisionTargetLive(candidate);
         const confirmation = this.deps.confirmations.consumeConfirmation(confirmationToken ?? "", {
           candidateId: commandId,
           candidateDigest: contentHash({
@@ -399,6 +416,7 @@ export class MerchantCommandLog {
       throw new MerchantWorkbenchError("auth", "该命令只接受已持久提交的 Workbench WebAuthn 决定");
     }
     if (this.deps.confirmations !== undefined) {
+      this.assertDecisionTargetLive(candidate);
       const confirmation = this.deps.confirmations.consumeConfirmation(confirmationToken ?? "", {
         candidateId: commandId,
         candidateDigest: contentHash({

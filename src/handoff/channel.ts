@@ -188,7 +188,9 @@ export class ManualHandoffChannel implements HandoffChannel {
       updated_at: this.now(),
     };
     this.sessions.set(ref, next);
-    return { status: "ok", session_ref: ref, session: next };
+    // 与 getSession 同口径返回拷贝：外部持有者不得拿到 Map 内部对象引用
+    //（审查 P3：此前 updateSession 泄漏引用，可绕过状态机原地改写）。
+    return { status: "ok", session_ref: ref, session: { ...next } };
   }
 
   requestCompletion(ref: string, authorization: PaymentAuthorization): HandoffResult {

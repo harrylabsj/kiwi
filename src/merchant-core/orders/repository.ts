@@ -255,6 +255,14 @@ export class OrderRepository {
     incoming: OrderEvent;
     contract: OrderStreamContract;
   }): { inserted: boolean; status: string } {
+    // 审查 P3：此前只按 record_id 写事件，未校验订单归属——其他商家的
+    // record_id 可被写入事件。先做 merchant 归属核验（fail-closed）。
+    const owned = this.db
+      .prepare("SELECT 1 FROM order_records_v2 WHERE merchant_id = ? AND record_id = ?")
+      .get(input.merchantId, input.recordId);
+    if (owned === undefined) {
+      throw new OrderFactError("not_found", `订单 ${input.recordId} 不属于商家 ${input.merchantId}`);
+    }
     const events = this.listEvents(input.recordId, input.incoming.dimension, input.incoming.identity);
     const current = events.length === 0 ? undefined : events[events.length - 1];
     const merge = mergeOrderEvent({

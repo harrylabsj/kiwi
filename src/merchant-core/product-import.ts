@@ -89,7 +89,9 @@ export function parseProductCsv(
     const priceText = cells[idx.price ?? -1] ?? "";
     // 裸 Number() 会接受 0x10 / 1e3；导入价格只接受十进制数字。
     const price = /^\d+(?:\.\d{1,4})?$/.test(priceText) ? Number(priceText) : Number.NaN;
-    const stock = Number(cells[idx.stock ?? -1]);
+    // 与 price 同口径：stock 只接受十进制非负整数（Number() 会接受 0x10/1e3）。
+    const stockText = cells[idx.stock ?? -1] ?? "";
+    const stock = /^\d+$/.test(stockText) ? Number(stockText) : Number.NaN;
     if (sku === "" || title === "") {
       rowErrors.push({ line: lineNo, error: "sku/title 为空" });
       continue;
