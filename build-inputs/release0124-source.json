@@ -7492,7 +7492,7 @@
     },
     {
       "path": "tests/workflow-refs.test.ts",
-      "sha256": "sha256:bcf05e8cecc658bf7d950df820d5c6dcdedbd84d9faf8ba10926de6db9ff79cc"
+      "sha256": "sha256:23fae3c3b9bb2983f2a022ef90d9160ce2e8207051382d1a7a72111350b97f6f"
     },
     {
       "path": "tests/write-approval-candidate-store.test.ts",
