@@ -4,6 +4,7 @@
 import * as nativeFs from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import path from "node:path";
+import { canTakeOverStaleLock, lockOwnerRecord } from "../../runtime/lock-owner.js";
 export class EnrollmentStoreBusy extends Error {
   readonly code = "ENROLLMENT_STORE_BUSY";
 }
@@ -23,15 +24,28 @@ export function withEnrollmentStoreLock<T>(
   const file = path.join(dataDir, "merchant-enrollments.lock"),
     token = randomUUID();
   let fd: number | undefined;
-  try {
-    fd = openSync(file, "wx", 0o600);
-  } catch (error) {
-    if ((error as { code?: string }).code === "EEXIST")
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      fd = openSync(file, "wx", 0o600);
+      break;
+    } catch (error) {
+      if ((error as { code?: string }).code !== "EEXIST")
+        throw error;
+      // review P1-8：只接管可证明已死的持有者；否则维持 busy。
+      try {
+        if (attempt === 0 && canTakeOverStaleLock(readFileSync(file, "utf8"))) {
+          unlinkSync(file);
+          continue;
+        }
+      } catch {
+        /* 无法证明 → 不接管 */
+      }
       throw new EnrollmentStoreBusy("Enrollment state is locked");
-    throw error;
+    }
   }
+  if (fd === undefined) throw new EnrollmentStoreBusy("Enrollment state is locked");
   try {
-    writeFileSync(fd, JSON.stringify({ pid: process.pid, token }));
+    writeFileSync(fd, JSON.stringify(lockOwnerRecord(token)));
     closeSync(fd);
     fd = undefined;
     return fn();

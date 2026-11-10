@@ -107,6 +107,26 @@ function readEnrollmentStore(dataDir: string): EnrollmentChallengeStore {
   return store;
 }
 
+/**
+ * 确定性拒绝（4xx/本地校验失败）已证明**未产生远端副作用**，可以安全释放
+ * operation_claim；其余（网络/5xx/未归类）保持 unknown，交给显式恢复
+ * （review P1-7：此前所有失败都被打成 unknown，一次 grant 过期即可让会话
+ * 永久卡死）。
+ */
+export const DETERMINISTIC_CONNECT_RELEASE_CODES = new Set([
+  "BIND_REJECTED",
+  "BIND_CLAIM_INVALID",
+  "CARD_PUBLISH_REJECTED",
+  "CARD_PUBLISH_INVALID",
+  "PUBLICATION_RECEIPT_INVALID",
+  "ACTIVATION_RECEIPT_INVALID",
+  "STATE_CAS_CONFLICT",
+]);
+
+export function isDeterministicConnectRelease(error: unknown): boolean {
+  return error instanceof MerchantConnectError && DETERMINISTIC_CONNECT_RELEASE_CODES.has(error.code);
+}
+
 export class MerchantConnectError extends Error {
   constructor(
     readonly code: string,
@@ -1999,14 +2019,18 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       }),
     );
     let result: ConnectionSession | undefined;
+    let deterministicRelease = false;
     this.effectStarted = false;
     try {
       result = await step();
       return result;
+    } catch (error) {
+      deterministicRelease = isDeterministicConnectRelease(error);
+      throw error;
     } finally {
       // Effect uncertainty is durable. Only read-only calls or known pre-effect
       // readiness failures release a claim automatically; no stale lease stealing.
-      const safe = result !== undefined || readOnly || !this.effectStarted;
+      const safe = result !== undefined || readOnly || !this.effectStarted || deterministicRelease;
       this.preEffectReadinessFailure = false;
       this.persist((fresh) =>
         fresh.sessions.map((item) => {
