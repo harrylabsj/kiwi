@@ -77,3 +77,46 @@ describe("CSV import floor + preview (P1-6)", () => {
     }
   });
 });
+
+// P1-7: deterministic 4xx/local rejections must release the operation claim;
+// uncertain network failures stay unknown and require explicit recovery.
+import {
+  MerchantConnectError,
+  isDeterministicConnectRelease,
+} from "../src/cloud/connect-service.js";
+
+describe("connect claim release classification (P1-7)", () => {
+  it("releases claims only for deterministic rejections", () => {
+    expect(isDeterministicConnectRelease(new MerchantConnectError("BIND_REJECTED", "grant expired"))).toBe(true);
+    expect(isDeterministicConnectRelease(new MerchantConnectError("CARD_PUBLISH_INVALID", "bad receipt"))).toBe(true);
+    expect(isDeterministicConnectRelease(new MerchantConnectError("STATE_CAS_CONFLICT", "stale"))).toBe(true);
+    expect(isDeterministicConnectRelease(new MerchantConnectError("PAIRING_COMMUNICATION_FAILED", "network"))).toBe(false);
+    expect(isDeterministicConnectRelease(new MerchantConnectError("CONNECT_STEP_FAILED", "unknown"))).toBe(false);
+    expect(isDeterministicConnectRelease(new Error("boom"))).toBe(false);
+  });
+});
+
+// P1-4 / P1-8: stale lock takeover only when the owner is provably dead.
+import { canTakeOverStaleLock } from "../src/runtime/lock-owner.js";
+
+describe("stale lock takeover (P1-4/P1-8)", () => {
+  const base = { token: "t", pid: 42, host: "host-a" };
+  const opts = (over: Partial<Parameters<typeof canTakeOverStaleLock>[1]>) => ({
+    currentHost: "host-a",
+    currentBootId: () => "boot-1",
+    isAlive: (pid: number) => pid === 42,
+    ...over,
+  });
+  it("takes over only a same-host owner whose pid is gone", () => {
+    expect(canTakeOverStaleLock(JSON.stringify({ ...base, boot_id: "boot-1" }), opts({ isAlive: () => true }))).toBe(false);
+    expect(canTakeOverStaleLock(JSON.stringify({ ...base, boot_id: "boot-1" }), opts({ isAlive: () => false }))).toBe(true);
+  });
+  it("takes over when boot_id proves a previous boot", () => {
+    expect(canTakeOverStaleLock(JSON.stringify({ ...base, boot_id: "boot-0" }), opts({ isAlive: () => true }))).toBe(true);
+  });
+  it("never takes over across hosts or with malformed records", () => {
+    expect(canTakeOverStaleLock(JSON.stringify({ ...base, boot_id: "boot-1" }), opts({ currentHost: "host-b" }))).toBe(false);
+    expect(canTakeOverStaleLock("not-json", opts({}))).toBe(false);
+    expect(canTakeOverStaleLock(JSON.stringify({ token: "t", host: "host-a" }), opts({}))).toBe(false);
+  });
+});

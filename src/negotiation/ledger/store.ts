@@ -37,6 +37,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { canTakeOverStaleLock, lockOwnerRecord } from "../../runtime/lock-owner.js";
 import {
   chmodSync,
   closeSync,
@@ -198,13 +199,21 @@ export class LedgerStore {
           fd = openSync(guardPath, "wx", 0o600);
         } catch (err) {
           if ((err as { code?: string }).code !== "EEXIST") throw err;
-          // No PID/age-based deletion of the guard: that would recreate the
-          // same compare-unlink race at another level.
+          // review P1-4：崩溃残留的 guard 若**可证明持有者已死**（同 host +
+          // boot_id 变化或 pid 不存在）才接管；否则保持 fail-closed 等待。
+          try {
+            if (canTakeOverStaleLock(readFileSync(guardPath, "utf8"))) {
+              unlinkSync(guardPath);
+              continue;
+            }
+          } catch {
+            /* 读不到/无法证明 → 不接管 */
+          }
           wait(until);
           continue;
         }
         try {
-          writeSync(fd, JSON.stringify({ pid: process.pid, token: guardToken }));
+          writeSync(fd, JSON.stringify(lockOwnerRecord(guardToken)));
         } finally {
           closeSync(fd);
         }
