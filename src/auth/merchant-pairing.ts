@@ -300,6 +300,11 @@ export function redeemPairingCodeBound(
   // 绑定校验（T025/T027）：给出期望值时必须逐项一致。
   const binding = state.binding;
   const expect = options.expect;
+  // 审查 P2：调用方给出期望绑定但码文件没有绑定元组（旧格式）时，此前会
+  // 静默跳过全部绑定校验（fail-open）。必须拒绝。
+  if (expect !== undefined && binding === undefined) {
+    return { ok: false, code: "binding_mismatch", reason: "binding_missing" };
+  }
   if (expect !== undefined && binding !== undefined) {
     if (expect.merchant_id !== undefined && expect.merchant_id !== binding.merchant_id) {
       return { ok: false, code: "binding_mismatch", reason: "merchant_id" };

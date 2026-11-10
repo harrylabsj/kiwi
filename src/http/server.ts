@@ -109,13 +109,16 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
 
   const readJson = (req: IncomingMessage): Promise<Record<string, unknown>> =>
     new Promise((resolve, reject) => {
-      let data = "";
+      // 审查 P2：按 chunk 逐段 toString() 会把多字节 UTF-8 字符拆到两个
+      // chunk 边界上而静默损坏（中文 query/intent 在 >64KB body 时不罕见）。
+      // 先累积 Buffer，结束后一次性按 UTF-8 解码。
+      const chunks: Buffer[] = [];
       let settled = false;
       let bodyBytes = 0;
       req.on("data", (chunk: Buffer) => {
         if (settled) return;
         bodyBytes += chunk.length; // review P1-1（返修）：按字节计量（UTF-8 中文体字符数≠字节数）
-        data += chunk.toString();
+        chunks.push(chunk);
         if (bodyBytes > 256 * 1024) {
           // review P1-1：超限即暂停读取并摘除监听，阻止内存持续累积；
           // socket 在 413 响应发出后销毁（见下方 catch 分支）。
@@ -127,9 +130,17 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
       });
       req.on("end", () => {
         if (settled) return;
+        const data = Buffer.concat(chunks).toString("utf8");
         if (data.trim() === "") return resolve({});
         try {
-          resolve(JSON.parse(data) as Record<string, unknown>);
+          const parsed: unknown = JSON.parse(data);
+          // 审查 P3：非 object body（数组/null/字符串）此前被静默当作 {}，
+          // 或是让下游类型错误冒成 500。统一按无效请求拒绝。
+          if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+            reject(new Error("invalid JSON body"));
+            return;
+          }
+          resolve(parsed as Record<string, unknown>);
         } catch {
           reject(new Error("invalid JSON body"));
         }
@@ -174,10 +185,22 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
     {
       method: "POST", path: "/tasks", handler: async (b, _p, res) => {
         try {
+          // 审查 P3：merchant_ids 类型错误此前抛 TypeError → 500。显式校验
+          // 形状并返回 invalid_params。
+          if (
+            b.merchant_ids !== undefined &&
+            (!Array.isArray(b.merchant_ids) ||
+              b.merchant_ids.some((id) => typeof id !== "string"))
+          ) {
+            throw new McpError("invalid_params", "merchant_ids must be a string array");
+          }
           const result = await service.requestQuotes({
-            intent: (b.intent ?? {}) as Record<string, unknown>,
+            intent:
+              b.intent !== null && typeof b.intent === "object" && !Array.isArray(b.intent)
+                ? (b.intent as Record<string, unknown>)
+                : {},
             idempotency_key: b.idempotency_key === undefined ? undefined : String(b.idempotency_key),
-            merchant_ids: b.merchant_ids === undefined ? undefined : (b.merchant_ids as string[]).map(String),
+            merchant_ids: b.merchant_ids === undefined ? undefined : (b.merchant_ids as string[]),
           });
           send(res, 201, { ok: true, result });
         } catch (e) { sendError(res, e); }

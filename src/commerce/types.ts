@@ -170,11 +170,19 @@ export class CommerceError extends Error {
   }
 }
 
-/** Idempotency key convention: agent_id + message_id + protocol version. */
+/**
+ * Idempotency key convention: agent_id + [conversation_id] + message_id +
+ * protocol version. 审查 P2：message_id 只在会话内唯一；不带会话 id 时
+ * 跨会话同 id 会撞键。为兼容已落库的旧键，conversationId 缺省时保持旧格式。
+ */
 export function idempotencyKey(
   agentId: string,
   messageId: number,
   protocolVersion: string,
+  conversationId?: string,
 ): string {
-  return `${agentId}:${messageId}:${protocolVersion}`;
+  const conversation = conversationId ?? "";
+  return conversation === ""
+    ? `${agentId}:${messageId}:${protocolVersion}`
+    : `${agentId}:${conversation}:${messageId}:${protocolVersion}`;
 }

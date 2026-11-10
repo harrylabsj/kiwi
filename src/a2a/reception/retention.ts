@@ -14,6 +14,7 @@ import path from "node:path";
 import { SqliteDailyBudgetStore } from "../../merchant/ai-runtime/sqlite-budget-store.js";
 import { RECEPTION_CONFIG_DEFAULTS } from "./config.js";
 import { ReceptionConversationStore } from "./conversation-store.js";
+import { ReceptionReplyOutbox } from "./reply-outbox.js";
 
 export interface ReceptionRetentionOptions {
   dataDir: string;
@@ -24,6 +25,7 @@ export interface ReceptionRetentionOptions {
 
 export interface ReceptionRetentionResult {
   conversationsPruned: number;
+  outboxRecordsPruned: number;
   budgetRowsPruned: number;
   contactFieldsPruned: 0;
 }
@@ -39,6 +41,17 @@ export function runReceptionRetention(
       options.conversationRetentionDays ?? RECEPTION_CONFIG_DEFAULTS.retentionDays,
   });
   const conversationsPruned = conversations.pruneExpired();
+
+  // 审查 P2：出站投递记录同步按会话留存期清理；`unknown` 记录保留供对账。
+  const retentionDays =
+    options.conversationRetentionDays ?? RECEPTION_CONFIG_DEFAULTS.retentionDays;
+  const outboxCutoff = new Date(
+    Date.parse(options.now()) - retentionDays * 86_400_000,
+  ).toISOString();
+  const outboxPruned = new ReceptionReplyOutbox({
+    file: path.join(options.dataDir, "a2a", "reception-reply-outbox.json"),
+    now: options.now,
+  }).pruneBefore(outboxCutoff);
 
   let budgetRowsPruned = 0;
   const budgetFile = path.join(options.dataDir, "a2a", "reception-budget.sqlite");
@@ -57,5 +70,5 @@ export function runReceptionRetention(
     }
   }
 
-  return { conversationsPruned, budgetRowsPruned, contactFieldsPruned: 0 };
+  return { conversationsPruned, outboxRecordsPruned: outboxPruned, budgetRowsPruned, contactFieldsPruned: 0 };
 }

@@ -1,6 +1,7 @@
 /** Buyer-side client for merchant-follow/1 + merchant-feed/1 with local preference/cursor authority. */
 
 import { createRequestBudget } from "../net/request-budget.js";
+import { assertSafeTargetUrl } from "../a2a/client/url-policy.js";
 import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
@@ -450,6 +451,13 @@ function validateOrigin(value: string): string {
   const url = new URL(value);
   if (url.protocol !== "https:" || url.origin !== value || url.username !== "" || url.password !== "") {
     throw new Error("merchant subscription origin must be an exact credential-free HTTPS origin");
+  }
+  // 审查 P2：出站请求携带 Bearer 凭据——拒绝 loopback/私网/保留网段字面量，
+  // 与全仓 SSRF 纪律一致（DNS 复查仍应在接线时接入 pinned fetch）。
+  try {
+    assertSafeTargetUrl(value, { allowLoopback: false });
+  } catch {
+    throw new Error("merchant subscription origin must not target loopback or a reserved network");
   }
   return url.origin;
 }

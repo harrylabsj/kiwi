@@ -54,11 +54,43 @@ export interface TaskOwner {
  * **不开放私有任务**：匿名查询任务一律拒绝（authentication_required）。
  */
 export function isAnonymousOwner(owner: TaskOwner): boolean {
-  return owner.identity.trim() === "" || owner.identity === "anonymous";
+  const identity = owner.identity.trim();
+  return identity === "" || identity === "anonymous" || identity.startsWith("anonymous:");
 }
+
+const TERMINAL_TASK_STATES: ReadonlySet<string> = new Set([
+  "completed",
+  "canceled",
+  "failed",
+]);
+
+/** 内存任务表上限（审查 P2：无界增长）。超出时优先淘汰终态任务。 */
+const DEFAULT_MAX_TASKS = 1000;
 
 export class TaskRegistry {
   private readonly tasks = new Map<string, { task: A2ATask; owner: TaskOwner }>();
+  private readonly maxTasks: number;
+
+  constructor(maxTasks: number = DEFAULT_MAX_TASKS) {
+    if (!Number.isInteger(maxTasks) || maxTasks < 1) {
+      throw new RangeError("maxTasks must be a positive integer");
+    }
+    this.maxTasks = maxTasks;
+  }
+
+  private evictIfNeeded(): void {
+    if (this.tasks.size < this.maxTasks) return;
+    // 优先淘汰最旧的终态任务；没有终态时淘汰最旧任务（tasks/get 仍可回退
+    // 到 ledger 视图，不会伪造状态）。
+    for (const [id, entry] of this.tasks) {
+      if (TERMINAL_TASK_STATES.has(entry.task.status.state)) {
+        this.tasks.delete(id);
+        return;
+      }
+    }
+    const oldest = this.tasks.keys().next();
+    if (oldest.done !== true) this.tasks.delete(oldest.value);
+  }
 
   /**
    * 按上下文 id 找既有任务（只读）。
@@ -76,6 +108,7 @@ export class TaskRegistry {
   }
 
   set(taskId: string, task: A2ATask, owner: TaskOwner): void {
+    if (!this.tasks.has(taskId)) this.evictIfNeeded();
     this.tasks.set(taskId, { task, owner });
   }
 

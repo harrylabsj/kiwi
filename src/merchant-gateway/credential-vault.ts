@@ -27,7 +27,7 @@
  * 每个商家一行（merchant_id 主键）；重新连接覆盖旧凭据。
  */
 
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 export const CREDENTIAL_KEY_ENV = "KIWI_GATEWAY_CREDENTIAL_KEY";
@@ -39,7 +39,27 @@ CREATE TABLE IF NOT EXISTS gateway_merchant_credentials (
   expires_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS gateway_vault_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `;
+
+/** 新格式前缀：v2 = scrypt(secret, 每库随机盐) 派生密钥。 */
+const CIPHER_PREFIX = "v2:";
+
+/**
+ * 审查 P2：裸 sha256 派生没有盐、没有 KDF 拉伸——低熵部署密钥可被离线
+ * 预计算。新格式用每库随机盐 + scrypt；旧行在读到时用旧密钥解出后惰性
+ * 重加密为 v2（无需停机迁移）。
+ */
+function deriveLegacyKey(secret: string): Buffer {
+  return createHash("sha256").update(secret).digest();
+}
+
+function deriveKey(secret: string, salt: Buffer): Buffer {
+  return scryptSync(secret, salt, 32);
+}
 
 export interface StoredMerchantCredential {
   token: string;
@@ -61,14 +81,10 @@ export function credentialKeyFromEnv(
   return raw === "" ? undefined : raw;
 }
 
-/** 任意长度的部署密钥 → 32 字节 AES 密钥（sha256 派生）。 */
-function deriveKey(secret: string): Buffer {
-  return createHash("sha256").update(secret).digest();
-}
-
 export class GatewayCredentialVault implements MerchantCredentialStore {
   private readonly db: DatabaseSync;
   private readonly key: Buffer;
+  private readonly legacyKey: Buffer;
   private readonly now: () => string;
 
   constructor(options: { db: DatabaseSync; secret: string; now?: () => string }) {
@@ -76,9 +92,26 @@ export class GatewayCredentialVault implements MerchantCredentialStore {
       throw new Error("GatewayCredentialVault requires a non-empty credential secret");
     }
     this.db = options.db;
-    this.key = deriveKey(options.secret);
+    this.legacyKey = deriveLegacyKey(options.secret);
+    this.key = deriveKey(options.secret, this.loadOrCreateSalt());
     this.now = options.now ?? (() => new Date().toISOString());
+  }
+
+  private loadOrCreateSalt(): Buffer {
+    // 表可能尚未建立（首次构造）——先建表再读写。
     this.db.exec(VAULT_SCHEMA);
+    const row = this.db
+      .prepare("SELECT value FROM gateway_vault_meta WHERE key = 'kdf_salt'")
+      .get() as { value?: string } | undefined;
+    if (row?.value !== undefined && row.value !== "") return Buffer.from(row.value, "base64");
+    const salt = randomBytes(16);
+    this.db
+      .prepare("INSERT OR IGNORE INTO gateway_vault_meta(key, value) VALUES ('kdf_salt', ?)")
+      .run(salt.toString("base64"));
+    const stored = this.db
+      .prepare("SELECT value FROM gateway_vault_meta WHERE key = 'kdf_salt'")
+      .get() as { value?: string } | undefined;
+    return Buffer.from(stored?.value ?? salt.toString("base64"), "base64");
   }
 
   private encrypt(plaintext: string): string {
@@ -86,17 +119,24 @@ export class GatewayCredentialVault implements MerchantCredentialStore {
     const cipher = createCipheriv("aes-256-gcm", this.key, iv);
     const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
     const tag = cipher.getAuthTag();
-    return Buffer.concat([iv, tag, ciphertext]).toString("base64");
+    return CIPHER_PREFIX + Buffer.concat([iv, tag, ciphertext]).toString("base64");
   }
 
-  private decrypt(payload: string): string {
+  private decryptWith(key: Buffer, payload: string): string {
     const raw = Buffer.from(payload, "base64");
     const iv = raw.subarray(0, 12);
     const tag = raw.subarray(12, 28);
     const ciphertext = raw.subarray(28);
-    const decipher = createDecipheriv("aes-256-gcm", this.key, iv);
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+  }
+
+  private decrypt(payload: string): { token: string; legacy: boolean } {
+    if (payload.startsWith(CIPHER_PREFIX)) {
+      return { token: this.decryptWith(this.key, payload.slice(CIPHER_PREFIX.length)), legacy: false };
+    }
+    return { token: this.decryptWith(this.legacyKey, payload), legacy: true };
   }
 
   put(merchantId: string, token: string, expiresAt: string): void {
@@ -124,7 +164,16 @@ export class GatewayCredentialVault implements MerchantCredentialStore {
     if (row === undefined) return undefined;
     if (row.expires_at <= this.now()) return undefined;
     try {
-      return { token: this.decrypt(row.ciphertext), expiresAt: row.expires_at };
+      const { token, legacy } = this.decrypt(row.ciphertext);
+      if (legacy) {
+        // 惰性迁移：旧 sha256 派生的密文读一次就换成 v2（scrypt+salt）。
+        this.db
+          .prepare(
+            "UPDATE gateway_merchant_credentials SET ciphertext = ?, updated_at = ? WHERE merchant_id = ?",
+          )
+          .run(this.encrypt(token), this.now(), merchantId);
+      }
+      return { token, expiresAt: row.expires_at };
     } catch {
       // 密钥轮换/数据损坏：当作没有凭据（工具报「需要重新连接」），绝不返回噪音。
       return undefined;

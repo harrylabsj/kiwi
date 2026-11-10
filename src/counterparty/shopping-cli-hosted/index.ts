@@ -174,8 +174,10 @@ class ShoppingCliHostedHandle implements ChannelHandle {
     return new ChannelError("shopping-cli-hosted", "send_failed", err instanceof Error ? err.message : String(err));
   }
 
-  private claimKey(messageId: number): string {
-    return idempotencyKey(this.deps.agentId, messageId, PROTOCOL_VERSION);
+  private claimKey(conversationId: string, messageId: number): string {
+    // 审查 P2：message_id 只在会话内唯一——跨会话同 id 会撞幂等键，导致
+    // 另一会话的消息被误判为已处理。会话 id 必须进键。
+    return idempotencyKey(this.deps.agentId, messageId, PROTOCOL_VERSION, conversationId);
   }
 
   /** 内部 claim（§24，open/send 时触发）：失败/不可 claim → 抛 ChannelError。 */
@@ -183,7 +185,7 @@ class ShoppingCliHostedHandle implements ChannelHandle {
     const result = await this.deps.client.claimMessage({
       conversation_id,
       message_id,
-      idempotency_key: this.claimKey(message_id),
+      idempotency_key: this.claimKey(conversation_id, message_id),
     });
     if (!result.claimed) {
       throw new ChannelError(
@@ -205,16 +207,20 @@ class ShoppingCliHostedHandle implements ChannelHandle {
   }
 
   /** 内部结算：accepted/human_required → complete；rejected_retryable → fail（可重claim）。 */
-  private async settleClaim(message_id: number, result: PolicyResult): Promise<ProcessResult> {
+  private async settleClaim(
+    conversation_id: string,
+    message_id: number,
+    result: PolicyResult,
+  ): Promise<ProcessResult> {
     if (result.result === "accepted" || result.result === "human_required") {
       return this.deps.client.completeClaim({
         message_id,
-        idempotency_key: this.claimKey(message_id),
+        idempotency_key: this.claimKey(conversation_id, message_id),
       });
     }
     return this.deps.client.failClaim({
       message_id,
-      idempotency_key: this.claimKey(message_id),
+      idempotency_key: this.claimKey(conversation_id, message_id),
       error: `policy rejected: ${result.public_reason}`,
     });
   }
@@ -243,7 +249,7 @@ class ShoppingCliHostedHandle implements ChannelHandle {
       await this.deps.client
         .failClaim({
           message_id,
-          idempotency_key: this.claimKey(message_id),
+          idempotency_key: this.claimKey(conversation_id, message_id),
           error: translationError,
         })
         .catch(() => undefined);
@@ -261,13 +267,13 @@ class ShoppingCliHostedHandle implements ChannelHandle {
     try {
       policy = await this.deps.client.submitNegotiationDecision({
         decision,
-        idempotency_key: this.claimKey(message_id),
+        idempotency_key: this.claimKey(conversation_id, message_id),
       });
     } catch (err) {
       await this.deps.client
         .failClaim({
           message_id,
-          idempotency_key: this.claimKey(message_id),
+          idempotency_key: this.claimKey(conversation_id, message_id),
           error: `submit failed: ${err instanceof Error ? err.message : String(err)}`,
         })
         .catch(() => undefined);
@@ -283,13 +289,13 @@ class ShoppingCliHostedHandle implements ChannelHandle {
     //（释放 claim，内容寻址幂等保证重处理无重复效果），保持 settled=false
     // 让 close() 兜底仍生效，然后向外传播原始错误。
     try {
-      await this.settleClaim(message_id, policy);
+      await this.settleClaim(conversation_id, message_id, policy);
     } catch (err) {
       this.settled = false;
       try {
         await this.deps.client.abandonClaim({
           message_id,
-          idempotency_key: this.claimKey(message_id),
+          idempotency_key: this.claimKey(conversation_id, message_id),
           error: `claim settle failed, released: ${err instanceof Error ? err.message : String(err)}`,
         });
       } catch {
@@ -440,7 +446,7 @@ class ShoppingCliHostedHandle implements ChannelHandle {
       await this.deps.client
         .abandonClaim({
           message_id: this.deps.openMessageId,
-          idempotency_key: this.claimKey(this.deps.openMessageId),
+          idempotency_key: this.claimKey(this.deps.openConversationId ?? "", this.deps.openMessageId),
           error: "hosted channel closed before the claim was settled",
         })
         .catch(() => undefined);

@@ -457,6 +457,9 @@ export function createA2aAuthVerifier(options: A2aAuthVerifierOptions): AuthVeri
     // 设计意图：匿名 T0 放行，签名请求更高信任——不阻塞任何 kiwi buyer。
     anonymousTrustLevel: "T0",
     anonymousIdentity: "anonymous",
+    // 审查 P2：匿名调用者按来源地址派生身份，避免所有匿名买家共享一个
+    // 幂等键/磋商绑定/审批消费主体。
+    deriveAnonymousIdentity: true,
     // 审查 M2：此前未接 nonceStore——签名请求的 nonce 永不被校验，重放保护
     // 失效（JWS/nonce 机制是死代码）。接入内存 nonce 存储后，T1+ 键可强制 nonce。
     nonceStore: new InMemoryNonceStore(),
@@ -1085,10 +1088,30 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     }
     nodeHandler(req, res);
   });
-  httpServer.on("clientError", () => {
-    // 畸形请求不得使公开 Runtime 崩溃。
+  httpServer.on("clientError", (_error, socket) => {
+    // 审查 P3：空监听抑制了 Node 默认的 400 + socket 销毁，畸形连接会悬挂到
+    // headersTimeout。显式回 400 并关闭；不可写则直接销毁。
+    if (!socket.writable) {
+      socket.destroy();
+      return;
+    }
+    socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
   });
-  await new Promise<void>((resolve) => httpServer.listen(port, "127.0.0.1", () => resolve()));
+  // 审查 P2：listen 无 error 处理——端口探测与监听之间的 TOCTOU（EADDRINUSE）
+  // 会变成未捕获异常/启动悬挂。把错误转成启动失败。
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error): void => {
+      httpServer.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = (): void => {
+      httpServer.off("error", onError);
+      resolve();
+    };
+    httpServer.once("error", onError);
+    httpServer.once("listening", onListening);
+    httpServer.listen(port, "127.0.0.1");
+  });
   const credentialSwitchMarker = options.dataDir !== undefined
     ? path.join(options.dataDir, "runtime", "credential-rotation.lock")
     : undefined;

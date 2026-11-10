@@ -29,6 +29,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { BoundedIpLimiter } from "../../http/bounded-ip-rate-limit.js";
+import { resolveRequestClientIp } from "../../net/client-ip.js";
 import type { JwsSigningIdentity } from "../../trust/identity/jws.js";
 import {
   BindingChallengeStore,
@@ -155,7 +156,7 @@ export function createChallengeResponder(
         return;
       }
       const nowMs = now().getTime();
-      if (!resourceLimit.take(req.socket?.remoteAddress, nowMs)) {
+      if (!resourceLimit.take(resolveRequestClientIp(req), nowMs)) {
         writeJson(res, 429, { error: "rate_limited", message: "挑战请求过于频繁" });
         return;
       }
@@ -216,7 +217,7 @@ export function createChallengeResponder(
         writeJson(res, 409, { error: "challenge_replayed", message: "该挑战已应答过" });
         return;
       }
-      if (!signatureLimit.take(req.socket?.remoteAddress, nowMs)) {
+      if (!signatureLimit.take(resolveRequestClientIp(req), nowMs)) {
         writeJson(res, 429, { error: "rate_limited", message: "挑战应答过于频繁" });
         return;
       }
