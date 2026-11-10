@@ -16,6 +16,11 @@
   argv；改用 `SHOPPING_MERCHANT_TOKEN` 或 TTY 隐藏输入）；autopilot 下
   `handoff_agreement` 默认转人工 pending，需在 buyer_policy 显式设置
   `auto_handoff: true` 才自动执行。
+- **2026-11-10 复核修复**：A2A 1.0 通用消息释放并发槽、商家页后台刷新不再
+  覆盖全局状态条、匿名派生身份统一判定 + 实例 HMAC 盐 + 可信客户端地址、
+  CI 移除与现状不符的 Prettier 门禁、残留锁删除前复核 inode、私密底价脱敏
+  覆盖千分位；catalog 侧 legacy challenge 自助轮换、治理态重注册重新验证、
+  非 ASCII challenge 不再 500、bound-account 邮箱打码、邮件模式启动期校验。
 - **发布说明**：本版本恢复出厂待审；发布必须经 `kiwi-release` 环境人工批准。
 
 ## v0.12.25 — 2026-11-04
