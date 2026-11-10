@@ -464,8 +464,13 @@ export function createA2aAuthVerifier(options: A2aAuthVerifierOptions): AuthVeri
     anonymousTrustLevel: "T0",
     anonymousIdentity: "anonymous",
     // 审查 P2：匿名调用者按来源地址派生身份，避免所有匿名买家共享一个
-    // 幂等键/磋商绑定/审批消费主体。
+    // 幂等键/磋商绑定/审批消费主体。盐取节点签名公钥：同实例稳定、跨实例
+    // 不可关联；XFF 仅在显式信任反代时采信（最右合法地址，见 verifier）。
     deriveAnonymousIdentity: true,
+    anonymousIdentitySalt: identity.publicKeyPem,
+    trustForwardedFor:
+      options.trustForwardedFor ??
+      (process.env.KIWI_A2A_TRUST_FORWARDED_FOR ?? "").trim() === "1",
     // 审查 M2/P3：签名请求的 nonce 必须持久化——纯内存存储在进程重启后
     // 清空，捕获的签名请求可在有效窗口内重放。持久 dataDir 存在时用 SQLite
     // 存储；临时/测试形态回退内存（目录随进程销毁）。
@@ -496,6 +501,8 @@ export interface A2aAuthVerifierOptions {
   /** 签名 keyid（公网用 advertised origin，否则 role:agent_id）。 */
   signingKeyId: string;
   advertisedBase: string;
+  /** 显式覆盖 XFF 信任（缺省读 KIWI_A2A_TRUST_FORWARDED_FOR）。 */
+  trustForwardedFor?: boolean;
   /** 签名请求 nonce 存储；持久 dataDir 形态由 core 注入并负责关闭。 */
   signatureNonceStore?: NonceStore;
   /** Explicit opt-in only; callers own durable replay-store lifecycle. */

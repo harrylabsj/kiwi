@@ -96,14 +96,8 @@ jobs:
       - run: npm run verify:buyer-skills
       - run: npm run verify:portfolio-products
       - run: npm run verify:supply-chain
+      - run: npm run verify:audit-expiry
       - run: npm run verify:package
-      - name: Prettier check (changed TypeScript files)
-        if: github.event_name == 'pull_request'
-        run: |
-          set -euo pipefail
-          base="origin/${{ github.base_ref }}"
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-          changed=$(git diff --name-only --diff-filter=ACMRT "$base...HEAD" -- '*.ts' '*.mts' || true)
-          if [ -n "$changed" ]; then
-            printf '%s\n' "$changed" | xargs npx prettier --check
-          fi
+      # 审查 2026-11-10 P2-4：仓库存量 350+ TypeScript 文件未按 prettier 格式化，
+      # 只对 PR 变更文件跑 --check 会让任何触碰旧文件的 PR 红灯且诱发无关大
+      # diff；格式化治理需单独的全仓提交，门禁在此之前不启用。

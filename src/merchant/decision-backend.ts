@@ -323,12 +323,14 @@ export function redactPublicMessage(text: string, floor: number | undefined): st
   const needle = canonicalRedactionDecimal(String(floor));
   if (needle === undefined) return text;
   return text.replace(
-    /(?<![0-9.,])[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?![0-9]|[.,][0-9])/g,
+    /(?<![0-9.,])[+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?![0-9]|[.,][0-9])/g,
     (token) => canonicalRedactionDecimal(token) === needle ? "[私密阈值]" : token,
   );
 }
 
-function canonicalRedactionDecimal(value: string): string | undefined {
+function canonicalRedactionDecimal(raw: string): string | undefined {
+  // 审查 C-7：千分位写法（1,000）也要与纯数字等价比较。
+  const value = raw.replaceAll(",", "");
   const match = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(value);
   if (match === null) return undefined;
   let digits = `${match[2] ?? ""}${match[3] ?? ""}`.replace(/^0+/, "");

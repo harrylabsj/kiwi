@@ -521,6 +521,44 @@ describe("A2AServer + throttle: 超限拒绝（rate_limited / retry_after）", (
     expect(String(rpcError(res3.body).message)).toContain("rate limit");
   });
 
+  it("1.0 通用消息的并发槽会释放（maxConcurrentTasks=1 连续消息不被 429）", async () => {
+    const throttle = new A2AServerThrottle({
+      windowMs: 60_000,
+      tiers: {
+        T0: {
+          identityRequestsPerWindow: 10,
+          domainRequestsPerWindow: 10,
+          maxConcurrentTasks: 1,
+          malformedBudget: 100,
+          retryAfterSeconds: 9,
+        },
+      },
+    });
+    const { a2aUrl } = await startServer({
+      throttle,
+      authVerifier: verifiedVerifier("peer-generic-slot", "T0"),
+    });
+    const send = (i: number) =>
+      rpc(
+        a2aUrl,
+        "SendMessage",
+        {
+          message: {
+            role: "ROLE_USER",
+            parts: [{ text: `generic slot ${i}` }],
+            messageId: `generic-slot-${i}`,
+          },
+        },
+        `generic-slot-req-${i}`,
+        { "A2A-Version": "1.0" },
+      );
+    for (let i = 1; i <= 3; i++) {
+      const res = await send(i);
+      expect(res.status).toBe(200);
+      expect(rpcError(res.body)).toEqual({});
+    }
+  });
+
   it("tasks/get 独立限流：未知 id 的全链扫描不再无限制（评审项 B3）", async () => {
     const throttle = new A2AServerThrottle({
       windowMs: 60_000,

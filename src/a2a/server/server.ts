@@ -32,6 +32,7 @@
  * 内部细节回显给远端（基线 §4.5 / §36-11）。
  */
 
+import { isAnonymousIdentity } from "./identity.js";
 import http from "node:http";
 import { isIP } from "node:net";
 import { isOpenInquiryIdentity } from "../open-inquiry-identity.js";
@@ -232,7 +233,7 @@ function sendText(res: http.ServerResponse, status: number, text: string): void 
  * 身份而互相读到任务（设计 §13.3 权限矩阵：首版不开放私有任务）。
  */
 export function anonymousCaller(caller: Caller): boolean {
-  return caller.identity.trim() === "" || caller.identity === "anonymous";
+  return isAnonymousIdentity(caller.identity);
 }
 
 /** 从 SendMessage params 里取 contextId（顶层或 message 内），取不到返回 undefined。 */

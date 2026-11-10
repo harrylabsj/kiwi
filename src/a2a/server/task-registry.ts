@@ -28,6 +28,7 @@ import { uuidv7 } from "../../negotiation/domain/identifiers.js";
 import { A2A_TASK_STATES } from "../client/index.js";
 import type { A2ATask, A2ATaskState } from "../client/index.js";
 import type { LedgerStore } from "../../negotiation/ledger/index.js";
+import { isAnonymousIdentity } from "./identity.js";
 
 export function newTaskId(): string {
   return `task_${uuidv7()}`;
@@ -54,8 +55,7 @@ export interface TaskOwner {
  * **不开放私有任务**：匿名查询任务一律拒绝（authentication_required）。
  */
 export function isAnonymousOwner(owner: TaskOwner): boolean {
-  const identity = owner.identity.trim();
-  return identity === "" || identity === "anonymous" || identity.startsWith("anonymous:");
+  return isAnonymousIdentity(owner.identity);
 }
 
 const TERMINAL_TASK_STATES: ReadonlySet<string> = new Set([

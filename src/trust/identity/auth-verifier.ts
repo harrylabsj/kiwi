@@ -36,7 +36,8 @@
  *     用于身份绑定冲突检测。
  */
 
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
+import { isIP } from "node:net";
 
 import type { AuthContext, AuthResult, AuthVerifier } from "../../a2a/server/types.js";
 import { bindIdentity, type ClaimedIdentity, type VerifiedPrincipal } from "./identity-binding.js";
@@ -79,6 +80,13 @@ export interface HttpMessageSignatureVerifierOptions {
    * 默认 false（保持既有测试/本地语义）；生产 A2A 节点应开启。
    */
   deriveAnonymousIdentity?: boolean;
+  /**
+   * 派生匿名身份的 HMAC 盐（每实例稳定值，例如节点签名公钥）。缺省使用
+   * 固定域分隔串；生产节点应传入实例专属盐，避免跨实例关联与离线枚举。
+   */
+  anonymousIdentitySalt?: string;
+  /** 是否信任反向代理写入的 XFF（取最右合法地址）；缺省 false。 */
+  trustForwardedFor?: boolean;
   /** 验证请求携带的 Agent Card JWS；T2+ 时必需。 */
   verifyCardJws?: (jws: string) => CardJwsVerificationResult;
   /** created/expires 时钟偏差（秒）；默认 300。 */
@@ -152,6 +160,8 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
   private readonly anonymousTrustLevel: TrustLevel;
   private readonly anonymousIdentity: string;
   private readonly deriveAnonymousIdentity: boolean;
+  private readonly anonymousIdentitySalt: string;
+  private readonly trustForwardedFor: boolean;
   private readonly verifyCardJws: ((jws: string) => CardJwsVerificationResult) | undefined;
   private readonly maxClockSkewSeconds: number;
   private readonly maxSignatureAgeSeconds: number;
@@ -170,6 +180,8 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
     this.anonymousTrustLevel = options.anonymousTrustLevel ?? "T0";
     this.anonymousIdentity = options.anonymousIdentity ?? "anonymous";
     this.deriveAnonymousIdentity = options.deriveAnonymousIdentity ?? false;
+    this.anonymousIdentitySalt = options.anonymousIdentitySalt ?? "kiwi-anonymous-identity";
+    this.trustForwardedFor = options.trustForwardedFor ?? false;
     this.verifyCardJws = options.verifyCardJws;
     this.maxClockSkewSeconds = options.maxClockSkewSeconds ?? 300;
     this.maxSignatureAgeSeconds = options.maxSignatureAgeSeconds ?? 900;
@@ -185,9 +197,31 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
     if (!this.deriveAnonymousIdentity || this.anonymousIdentity !== "anonymous") {
       return this.anonymousIdentity;
     }
-    const addr = (ctx.remoteAddress ?? "").trim();
+    const addr = this.anonymousAddress(ctx);
     if (addr === "") return this.anonymousIdentity;
-    return `anonymous:${createHash("sha256").update(addr).digest("hex").slice(0, 16)}`;
+    // 审查 P2：HMAC(实例盐, 地址)——跨实例不可关联，且不能靠枚举 sha256(IP)
+    // 反推；只作为幂等/绑定主体，不进入公开投影。
+    return `anonymous:${createHmac("sha256", this.anonymousIdentitySalt)
+      .update(addr)
+      .digest("hex")
+      .slice(0, 16)}`;
+  }
+
+  /** 可信来源地址：仅在显式信任反代时取 XFF 最右合法地址。 */
+  private anonymousAddress(ctx: AuthContext): string {
+    if (this.trustForwardedFor) {
+      const headers = ctx.headers ?? {};
+      const raw = headers["x-forwarded-for"];
+      const value = Array.isArray(raw) ? raw[0] : raw;
+      if (typeof value === "string") {
+        const hops = value.split(",").map((part) => part.trim());
+        for (let index = hops.length - 1; index >= 0; index -= 1) {
+          const candidate = hops[index] ?? "";
+          if (candidate !== "" && isIP(candidate) !== 0) return candidate;
+        }
+      }
+    }
+    return (ctx.remoteAddress ?? "").trim();
   }
 
   verify(ctx: AuthContext): AuthResult {

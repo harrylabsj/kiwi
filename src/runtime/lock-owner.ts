@@ -21,7 +21,7 @@
  * 启动（或 pid 已不存在）。不同 host / 无法证明时保持 fail-closed，交给显式
  * 恢复；绝不按 mtime 盲删。
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync, unlinkSync } from "node:fs";
 import { hostname } from "node:os";
 
 export interface LockOwnerRecord {
@@ -85,4 +85,30 @@ export function canTakeOverStaleLock(
   const boot = (options.currentBootId ?? currentBootId)();
   if (typeof record.boot_id === "string" && boot !== undefined && record.boot_id !== boot) return true;
   return !(options.isAlive ?? isProcessAlive)(record.pid);
+}
+
+/**
+ * 审查 C-3：读内容判定 → unlink 之间可能被另一进程换上新锁。删除前再次
+ * 比对 inode/mtime/size；不一致就放弃（下次再判定），减少误删活锁窗口。
+ */
+export function removeProvablyStaleLock(
+  path: string,
+  options: LockTakeoverOptions = {},
+): boolean {
+  try {
+    const before = statSync(path);
+    if (!canTakeOverStaleLock(readFileSync(path, "utf8"), options)) return false;
+    const after = statSync(path);
+    if (
+      after.ino !== before.ino ||
+      after.mtimeMs !== before.mtimeMs ||
+      after.size !== before.size
+    ) {
+      return false;
+    }
+    unlinkSync(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
