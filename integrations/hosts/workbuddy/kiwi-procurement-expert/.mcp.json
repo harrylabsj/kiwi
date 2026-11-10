@@ -4,7 +4,7 @@
       "type": "stdio",
       "command": "node",
       "args": [
-        "${CODEBUDDY_PLUGIN_ROOT}/runtime/production-launcher.mjs"
+        "./runtime/production-launcher.mjs"
       ],
       "runtime": {
         "type": "node",
