@@ -2242,11 +2242,15 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/.codebuddy-plugin/plugin.json",
-      "sha256": "sha256:4f5d4567c59dca736a02abaacf3796663e556773c4c76e9e3f6a67dfdfcbc06d"
+      "sha256": "sha256:81a0d9a458de529d8b8a8c0e5aa2fab181a9628ffc03d66af5cfbe255e389fb1"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/.mcp.json",
+      "sha256": "sha256:2e5439ac188f780c989f617d98bc19b5730cd48047b23b39e45b98252ca05598"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/agents/kiwi-procurement.md",
-      "sha256": "sha256:fe1a6b116f0f441273e6d6a94420b9c9e1cff7f98c6882af071dd7ec995e898a"
+      "sha256": "sha256:c05ac52b8109fd4104d863496eac9f3259200b113ba0677feeb267f0cc0430a5"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/avatars/kiwi-procurement.png",
@@ -2262,7 +2266,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/skills/kiwi-source-and-quote/SKILL.md",
-      "sha256": "sha256:4d6b913e94fa5bf2a75f6dc44a89a8bc4c8d5d90ae2d71b18ad311e69024998c"
+      "sha256": "sha256:b4bdfc2597240247f980bd3e5fbf5299c670ea170d63b64b86172aff5f7e3049"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/skills/kiwi-source-and-quote/references/rfq-example.json",
@@ -2602,7 +2606,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/package.mjs",
-      "sha256": "sha256:6c7e0dffd872d54210877c483f4168571b3dbd5f8f05f73153886c25997bba15"
+      "sha256": "sha256:578580558489193868f50f11123bc284d472fc3a1cdd6866ea80d4615c223a2c"
     },
     {
       "path": "integrations/hosts/workbuddy/release-bundle-manifest.json",
@@ -5876,7 +5880,7 @@
     },
     {
       "path": "tests/buyer-tool-contract.test.ts",
-      "sha256": "sha256:01f4155de400307c922a9bb4c7e992fc8f17a11eb7e8619ec4b2a5abfc76203a"
+      "sha256": "sha256:d40d74345b965a50f6c74244a340a824a5ba57b45ce36f1a023380510718503a"
     },
     {
       "path": "tests/buyer-turn.test.ts",
