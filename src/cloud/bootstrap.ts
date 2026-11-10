@@ -1130,6 +1130,7 @@ export async function bootstrapCloudRuntime(
           submitAccessShareLink: (link: string, consentTermsVersion: string) =>
             directConnection!.submitAccessShareLink(link, consentTermsVersion),
           revokeAccess: () => directConnection!.revokeAccess(),
+          readBoundAccount: () => directConnection!.readBoundAccount(),
           readPublicInquiryConsent: () => directConnection!.readPublicInquiryConsent(),
           setPublicInquiryConsent: (granted: boolean) => directConnection!.setPublicInquiryConsent(granted),
         },

@@ -79,6 +79,7 @@ beforeAll(async () => {
       getPairing: async () => ({ user_code: "SAMPLE-CODE", verification_uri: "https://catalog.example/portal/connect/test", expires_at: "2030-01-01T00:00:00Z", grant: "MUST_NOT_LEAK" }),
       begin: async () => { beginCalls += 1; if (missingShareLink) throw new MerchantConnectError("ACCESS_SHARE_LINK_REQUIRED", "safe"); if (failBegin) throw new Error("MUST_NOT_LEAK"); },
       getAccess: async () => accessState,
+      readBoundAccount: async () => "owner@example.test",
       readPublicInquiryConsent: async () => ({ granted: false, policyActive: false, localEnabled: false, termsVersion: "open-inquiry-v1" }),
       setPublicInquiryConsent: async (granted: boolean) => {
         publicConsentCalls += 1;
@@ -161,6 +162,18 @@ describe("runtime Catalog connection API", () => {
       expect(await result.text()).not.toContain("MUST_NOT_LEAK");
     } finally { publicationFail = false; }
   });
+  it("returns the bound account only to the owner and disables caching", async () => {
+    const owner = await login();
+    const operator = await login("operator");
+    const path = base + "/merchant/api/v1/catalog/bound-account";
+    expect((await fetch(path)).status).toBe(401);
+    expect((await fetch(path, { headers: { cookie: operator.cookie } })).status).toBe(403);
+    const result = await fetch(path, { headers: { cookie: owner.cookie } });
+    expect(result.status).toBe(200);
+    expect(result.headers.get("cache-control")).toContain("no-store");
+    expect(await result.json()).toEqual({ email: "owner@example.test" });
+  });
+
   it("requires an owner session for summary and pairing", async () => {
     const operator = await login("operator");
     for (const path of ["/catalog/connect", "/catalog/connect/pairing"]) {

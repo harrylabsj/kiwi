@@ -48,6 +48,7 @@ export function renderMerchantManagementPage(options: {
   a { color: var(--kiwi); text-underline-offset: 3px; }
   button { cursor: pointer; }
   button:disabled { cursor: not-allowed; opacity: .55; }
+  .act.primary:disabled { background: #a4aea7; border-color: #a4aea7; color: #fff; }
   :focus-visible { outline: 3px solid #9b7214; outline-offset: 3px; }
   .skip-link { position: fixed; left: 16px; top: -80px; z-index: 20; padding: 10px 16px; background: #fff; border: 2px solid var(--kiwi); border-radius: 8px; }
   .skip-link:focus { top: 12px; }
@@ -100,6 +101,10 @@ export function renderMerchantManagementPage(options: {
   input[type=checkbox] { accent-color: var(--kiwi); width: 16px; height: 16px; vertical-align: middle; }
   .muted { color: var(--muted); font-size: 12px; line-height: 1.8; }
   .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .consent-label { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+  .consent-label span { flex: 1; min-width: 0; }
+  .consent-label input { flex: none; margin: 3px 0 0; }
+  details summary { cursor: pointer; color: var(--kiwi); text-decoration: underline; text-underline-offset: 3px; }
   .row > .muted { flex: 1 1 180px; }
   pre.digest { font: 11px ui-monospace, monospace; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0; max-width: 320px; }
   label { font-size: 13px; }
@@ -315,6 +320,7 @@ function appendCatalogConnection(html) {
     catalogConnectionState = s;
     return html + '<div class="card"><h2>连接 Kiwi 目录</h2><p id="catalog-status">' + esc(catalogStatusText(s)) +
       (s.errorCode ? ' <span class="muted">[' + esc(s.errorCode) + ']</span>' : '') + '</p>' +
+      (s.bindingId ? '<p>Kiwi 账户：<span id="bound-account">正在核对…</span></p>' : '<p>Kiwi 账户：尚未连接</p>') +
       (s.errorCode && PAIRING_CODE_HINTS[s.errorCode] ? '<p class="muted">' + esc(PAIRING_CODE_HINTS[s.errorCode]) + '</p>' : '') +
       '<p class="muted">连接后，采购方可在目录发现本店。请本人核对配对码与公开资料，并在目录授权页确认发布。</p>' +
       (s.published ? "" : ((WORKBUDDY_ACCESS && !s.bindingId ? '<p class="muted">请在下方填写分享链接并授权，点击一次即可发起或继续连接。</p>' : '<button class="act primary" onclick="beginCatalogConnect()">发起或继续连接</button> ') +
@@ -349,18 +355,18 @@ function appendCatalogAccess(html) {
     var firstConnect = WORKBUDDY_ACCESS && catalogConnectionState && !catalogConnectionState.bindingId && !catalogConnectionState.published;
     return html + '<div class="card"><h2>WorkBuddy 分享码（平台门禁）</h2>' +
       '<p id="access-status">' + esc(accessStatusText(a)) + '</p>' +
-      '<p class="muted">分享码只用于通过 WorkBuddy 网关，不是商家身份或业务授权。本页不会显示分享码；请从平台复制分享链接后粘贴在此。</p>' +
-      '<p class="muted">平台口径：关闭「发布为网站」后链接立即失效；<b>删除源任务或源文件不会</b>让已分享链接失效，需要主动下线；平台不承诺分享码有固定有效期或自动轮换。若平台侧换了码，请重新粘贴新的分享链接。</p>' +
-      '<p class="muted"><b>平台未提供机器专用入口</b>：分享码等价于访问凭据、官方定位为人工分享，网关也不透传 Authorization；平台明确表示不适合大规模机器自动分发。Kiwi 的做法是在<b>你授权</b>后由目录代管、仅对你已接受的采购方按需出示，并按买家限流、可随时撤回。若平台策略变化或你希望不依赖它，请改用自托管公网入口（你的服务器直接对外提供 A2A）。</p>' +
       (a.custodyEnabled === false
         ? '<p class="warn">目录代管当前已被运营关闭，无法新建或更新；你仍可撤回授权。</p>'
         : '') +
-      '<div class="row"><input id="access-link" type="text" autocomplete="off" spellcheck="false" aria-label="WorkBuddy 分享链接" placeholder="粘贴 WorkBuddy 分享链接">' +
-      (firstConnect ? '<button class="act primary" onclick="stageAccessAndBegin()">授权并发起或继续连接</button>' : '<button class="act primary" onclick="submitAccessLink()">提交或更新</button>') +
+      '<div class="row"><input id="access-link" type="text" oninput="updateAccessButton()" autocomplete="off" spellcheck="false" aria-label="WorkBuddy 分享链接" placeholder="粘贴 WorkBuddy 分享链接">' +
+      (firstConnect ? '<button class="act primary" onclick="stageAccessAndBegin()">授权并发起或继续连接</button>' : '<button id="access-submit" class="act primary" onclick="submitAccessLink()" disabled>提交或更新</button>') +
       '<button class="act" onclick="refreshAccess()">刷新状态</button>' +
-      (a.consentGranted ? '<button class="act danger" onclick="revokeAccess()">撤回授权并撤销</button>' : '') + '</div>' +
-      '<label class="row"><input id="access-consent" type="checkbox" aria-label="同意分享码代管授权">' +
-      ' 我确认：允许 Kiwi 目录<b>代为保管</b>此分享码，并仅在我已接受的采购方关注我时自动出示；我可随时撤回，撤回后目录会清空已保存的分享码。</label>' +
+      (a.consentGranted ? '<button id="access-revoke" class="act danger" onclick="revokeAccess()">撤回授权并撤销</button>' : '') + '</div>' +
+      '<div class="row"><label class="consent-label"><input id="access-consent" type="checkbox" aria-label="同意分享码代管授权">' +
+      ' <span>我同意 Kiwi 目录代管分享码，并按需向我已接受的采购方出示。</span></label> ' +
+      '<details><summary>查看代管授权与使用说明</summary><p>分享码用于通过 WorkBuddy 网关，不是商家身份或业务授权；本页不会显示分享码。目录仅向你已接受的采购方按需出示，并按买家限流。你可随时撤回，撤回后目录会清空已保存的分享码。</p>' +
+      '<p>关闭「发布为网站」后链接立即失效；删除源任务或源文件不会使分享链接失效，需要主动下线。平台不承诺分享码的固定有效期或自动轮换；换码后请重新提交。</p>' +
+      '<p>分享码等价于访问凭据，平台未提供机器专用入口，网关不透传 Authorization，也不适合大规模机器自动分发。如不希望依赖此方式，可使用自托管公网入口。</p></details></div>' +
       (a.recentFaults > 0
         ? '<p class="warn">最近 24 小时有 ' + a.recentFaults +
           ' 次采购方报告门禁失败' + (a.recentFaultsLastAt ? '（最后一次 ' + esc(a.recentFaultsLastAt) + '）' : '') +
@@ -370,11 +376,9 @@ function appendCatalogAccess(html) {
       (a.authMode ? '<p class="muted">业务认证：' + esc(a.authMode) + ' · 适配版本：' + esc(a.adapterVersion || "-") + '</p>' : '') +
       '</div>' +
       '<div class="card"><h2>开放询价</h2>' +
-      '<p>允许买家通过 Kiwi 目录主动询价，无需注册、关注或商家逐个批准。Kiwi 负责通过平台门禁；商家后台仍仅供管理员登录。</p>' +
-      '<p class="muted">需先完成目录连接与分享码代管。本项是单独授权，可随时关闭；关闭后停止新的开放询价。</p>' +
       '<p id="public-inquiry-status" class="muted">请查询当前授权状态。</p>' +
-      '<label class="row"><input id="public-inquiry-consent" type="checkbox" aria-label="同意开放询价"> 我确认允许买家无需注册或事先批准，通过 Kiwi 目录主动向本店询价。</label>' +
-      '<div class="row"><button class="act primary" onclick="setPublicInquiry(true)">授权开放询价</button> ' +
+      '<div class="row"><label class="consent-label"><input id="public-inquiry-consent" type="checkbox" aria-label="同意开放询价"> <span>我同意买家无需注册或事先批准即可通过 Kiwi 目录询价。</span></label> <details><summary>查看开放询价授权与使用说明</summary><p>允许买家无需注册、关注或商家逐个批准，通过 Kiwi 目录主动询价。Kiwi 负责通过平台门禁；商家后台仍仅供管理员登录。需先完成目录连接与分享码代管。本项为单独授权，可随时关闭；关闭后停止新的开放询价。</p></details></div>' +
+      '<div class="row"><button id="inquiry-submit" class="act primary" onclick="setPublicInquiry(true)" disabled>授权开放询价</button> ' +
       '<button class="act" onclick="refreshPublicInquiry()">查询授权状态</button> ' +
       '<button class="act danger" onclick="setPublicInquiry(false)">关闭开放询价</button></div></div>';
   }).catch(function () {
@@ -386,26 +390,39 @@ function showPublicInquiryStatus(consent) {
   var text = !consent || !consent.granted ? "尚未授权开放询价" :
     consent.policyActive && consent.localEnabled ? "已授权；买家接入仍需完成实际验证" : "已授权，当前尚未就绪；请检查目录连接和分享码";
   if (target) target.textContent = text;
-  bar(text, false);
+  var button = $("inquiry-submit");
+  if (button) button.disabled = !!(consent && consent.granted);
 }
 function refreshPublicInquiry() {
-  call("POST", "/catalog/public-inquiry/status", {}).then(function (result) {
+  var button = $("inquiry-submit"); if (button) button.disabled = true;
+  return call("POST", "/catalog/public-inquiry/status", {}).then(function (result) {
     showPublicInquiryStatus(result.consent);
   }).catch(function (error) { bar(error && error.message ? error.message : "无法查询开放询价状态", true); });
 }
 function setPublicInquiry(granted) {
+  var button = $("inquiry-submit");
+  if (granted && button && button.disabled) return;
   var checkbox = $("public-inquiry-consent");
   if (granted && (!checkbox || !checkbox.checked)) { bar("请先勾选开放询价授权。", true); return; }
   if (!granted && !window.confirm("关闭后，新的买家将不能通过 Kiwi 目录向本店发起开放询价。确定关闭？")) return;
-  call("POST", "/catalog/public-inquiry/consent", { granted: granted, terms_version: "open-inquiry-v1" }).then(function (result) {
+  if (button) button.disabled = true;
+  return call("POST", "/catalog/public-inquiry/consent", { granted: granted, terms_version: "open-inquiry-v1" }).then(function (result) {
     if (checkbox) checkbox.checked = false;
     showPublicInquiryStatus(result.consent);
   }).catch(function () { bar("开放询价状态尚未确认，请先查询授权状态后再决定是否重试。", true); });
 }
 function accessSummaryBar(a, verb) {
+  var target = $("access-status"); if (target) target.textContent = accessStatusText(a);
   bar(verb + "：" + accessStatusText(a), a && a.status === "invalid");
 }
+var accessSubmitPending = false;
+function updateAccessButton() {
+  var button = $("access-submit"), input = $("access-link");
+  if (button) button.disabled = accessSubmitPending || !input || !String(input.value || "").trim();
+}
 function submitAccessLink() {
+  var button = $("access-submit");
+  if (button && button.disabled) return;
   var input = $("access-link");
   var consent = $("access-consent");
   var link = input ? String(input.value || "").trim() : "";
@@ -414,17 +431,24 @@ function submitAccessLink() {
     bar("请先勾选并同意《分享码代管授权》。", true);
     return;
   }
-  call("POST", "/catalog/access/share-link", {
+  accessSubmitPending = true;
+  if (button) button.disabled = true;
+  return call("POST", "/catalog/access/share-link", {
     link: link,
     consent_terms_version: ACCESS_CONSENT_TERMS
   }).then(function (result) {
     catalogAccessState = result.access;
     if (input) input.value = "";
+    accessSubmitPending = false;
+    updateAccessButton();
     if (consent) consent.checked = false;
     accessSummaryBar(result.access, "已提交");
   }).catch(function (e) {
     // 错误文本由服务端给自有码说明；不把链接回显到页面。
-    bar(e && e.message ? e.message : "提交未完成，请稍后重试。", true);
+    accessSubmitPending = false;
+    if (input) input.value = "";
+    updateAccessButton();
+    bar(e && e.message ? e.message : "提交未完成，请先刷新状态后再试。", true);
   });
 }
 function stageAccessAndBegin() {
@@ -458,7 +482,10 @@ function refreshAccess() {
 function revokeAccess() {
   if (!window.confirm("撤回授权后：采购方将无法经 WorkBuddy 访问本店，目录会清空已保存的分享码。确定撤回？")) return;
   call("POST", "/catalog/access/revoke", {}).then(function (result) {
+    catalogAccessState = result.access;
     accessSummaryBar(result.access, "已撤销");
+    var button = $("access-revoke"); if (button) button.disabled = true;
+    refreshPublicInquiry();
   }).catch(function () { bar("撤销未完成，请稍后重试。", true); });
 }
 function beginCatalogConnect() {
@@ -1391,7 +1418,17 @@ function refresh() {
   $("page-title").textContent = copy[0];
   $("page-description").textContent = copy[1];
   $("view").setAttribute("data-view", current);
-  views[current]().then(function (html) { $("view").innerHTML = html; decorateView(); })
+  views[current]().then(function (html) {
+    $("view").innerHTML = html; decorateView();
+    if (current === "status" && CATALOG_CONNECT && ROLE === "owner") {
+      if (catalogConnectionState && catalogConnectionState.bindingId) {
+        call("GET", "/catalog/bound-account").then(function (result) {
+          var target = $("bound-account"); if (target) target.textContent = result.email || "无法确定，请到 Kiwi 商家门户核对";
+        }).catch(function () { var target = $("bound-account"); if (target) target.textContent = "暂时无法读取，请稍后刷新"; });
+        refreshPublicInquiry();
+      }
+    }
+  })
   .catch(function (e) { if (e.message !== "需要登录") bar(e.message, true); }); }
 Array.prototype.forEach.call(document.querySelectorAll("#tabs button"), function (btn) {
   btn.addEventListener("click", function () {

@@ -403,6 +403,7 @@ export interface MerchantConnectionService {
   submitAccessShareLink(rawLink: string, consentTermsVersion?: string): Promise<RuntimeAccessSummary>;
   /** 撤销访问配置（M-03）；停止向 Buyer 发放分享码。 */
   revokeAccess(): Promise<RuntimeAccessSummary>;
+  readBoundAccount(): Promise<string | null>;
   readPublicInquiryConsent(): Promise<PublicInquiryConsentSummary>;
   setPublicInquiryConsent(granted: boolean): Promise<PublicInquiryConsentSummary>;
 }
@@ -1230,6 +1231,13 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     this.firstBindAccessConfig = undefined;
     this.localShareInvalid = false;
     return this.getAccessSummary();
+  }
+
+  async readBoundAccount(): Promise<string | null> {
+    const binding = await this.getVerifiedBinding();
+    if (binding === null) throw new MerchantConnectError("STATE_INVALID", "尚未建立有效的 Catalog 绑定");
+    return this.client.readBoundAccount({ agentId: binding.agentId, bindingId: binding.bindingId,
+      keyId: this.identity.keyId, runtimeOrigin: this.origin, serviceEpoch: this.serviceEpoch }, this.identity);
   }
 
   async readPublicInquiryConsent(): Promise<PublicInquiryConsentSummary> {

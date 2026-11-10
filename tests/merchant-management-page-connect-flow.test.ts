@@ -41,7 +41,7 @@ const RUNTIME_ORIGIN = "https://runtime.test";
 const LINK = `${RUNTIME_ORIGIN}/a2a?sharecode=staged-secret-1`;
 const TERMS = WORKBUDDY_CUSTODY_TERMS_VERSION;
 
-type Element = { value: string; checked?: boolean; innerHTML: string; textContent: string; className: string;
+type Element = { value: string; checked?: boolean; disabled?: boolean; innerHTML: string; textContent: string; className: string;
   style: { display: string }; setAttribute: (n: string, v: string) => void; removeAttribute: (n: string) => void;
   addEventListener: (t: string, l: () => void) => void };
 interface Recorded { method: string; path: string; body: unknown }
@@ -162,6 +162,24 @@ const problem = (status: number, detail: string): Response =>
   Response.json({ title: "请求未完成", status, detail, code: "INVALID" }, { status, headers: { "content-type": "application/problem+json" } });
 
 describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () => {
+  it("展示目录账户并按权威状态禁用重复授权，输入新链接后可更新", async () => {
+    const page = await loadConnectPage({ connect: { status: "published", bindingId: "b1", published: true },
+      access: { status: "active", consentGranted: true } });
+    const html = page.elements["view"]!.innerHTML;
+    expect(html).toContain('id="bound-account"');
+    expect(html).toContain('查看代管授权与使用说明');
+    expect(html).toContain('查看开放询价授权与使用说明');
+    expect(html).toContain('id="access-submit"');
+    page.set('$("access-link").value = ""; updateAccessButton();');
+    expect(page.elements["access-submit"]!.disabled).toBe(true);
+    page.set('$("access-link").value = "https://example.test/new"; updateAccessButton();');
+    expect(page.elements["access-submit"]!.disabled).toBe(false);
+    page.set('showPublicInquiryStatus({granted:true, policyActive:true, localEnabled:true});');
+    expect(page.elements["inquiry-submit"]!.disabled).toBe(true);
+    page.set('showPublicInquiryStatus({granted:false});');
+    expect(page.elements["inquiry-submit"]!.disabled).toBe(false);
+  });
+
   it("一次点击：同意后先加密暂存、成功后才发起绑定，本人确认文案保留", async () => {
     let stageCalls = 0;
     const page = await loadConnectPage({

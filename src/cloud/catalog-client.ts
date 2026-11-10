@@ -1087,6 +1087,27 @@ export class CatalogClient {
     return projectRuntimeAccess(response["runtime_access"]);
   }
 
+  /** Read the account associated with the active binding; never use public claims for this. */
+  async readBoundAccount(context: RuntimeAccessContext, identity: RuntimeSigningIdentity): Promise<string | null> {
+    const agentId = this.requireAgentId(context.agentId);
+    const bindingId = String(context.bindingId ?? "").trim();
+    if (!bindingId || context.keyId !== identity.keyId || !Number.isInteger(context.serviceEpoch) || context.serviceEpoch < 1)
+      throw new CatalogClientError("INVALID_INPUT", "活动绑定或签名身份无效");
+    const runtimeOrigin = normalizeOrigin(requireHttpsUrl(context.runtimeOrigin, "runtime_origin"));
+    const path = `/v1/agents/${encodeURIComponent(agentId)}/bound-account`;
+    const issuedAt = this.now();
+    const jws = signCompactJws({ method: "GET", path, audience: "kiwi-catalog", body_digest: sha256Json({}),
+      catalog_agent_id: agentId, binding_id: bindingId, key_id: identity.keyId, runtime_origin: runtimeOrigin,
+      service_epoch: context.serviceEpoch, issued_at: issuedAt.toISOString(),
+      exp: new Date(issuedAt.getTime() + 90_000).toISOString(), nonce: this.nonceFactory() },
+    identity.signingIdentity, { extraHeader: { typ: "kiwi-runtime-request" } });
+    const response = recordOrEmpty((await this.request("GET", path, { jws })).json);
+    if (response["email"] === null) return null;
+    if (typeof response["email"] !== "string" || response["email"].length > 254 || !/^[^\s@]+@[^\s@]+$/.test(response["email"]))
+      throw new CatalogClientError("RESPONSE_INVALID", "目录账户信息无效");
+    return response["email"];
+  }
+
   /** Separate owner opt-in; existing share-code custody consent is not sufficient. */
   async readPublicInquiryConsent(
     context: RuntimeAccessContext,

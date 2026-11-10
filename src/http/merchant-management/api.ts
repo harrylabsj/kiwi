@@ -293,6 +293,7 @@ export interface MerchantManagementApiOptions {
     refreshAccess?: () => Promise<CatalogAccessSummary>;
     submitAccessShareLink?: (link: string, consentTermsVersion: string) => Promise<CatalogAccessSummary>;
     revokeAccess?: () => Promise<CatalogAccessSummary>;
+    readBoundAccount?: () => Promise<string | null>;
     readPublicInquiryConsent?: () => Promise<{ granted: boolean; policyActive: boolean; localEnabled: boolean; termsVersion: string }>;
     setPublicInquiryConsent?: (granted: boolean) => Promise<{ granted: boolean; policyActive: boolean; localEnabled: boolean; termsVersion: string }>;
   };
@@ -586,6 +587,15 @@ export function createMerchantManagementApiHandler(
         throw new ManagementError("unavailable", "Catalog access configuration is not configured");
       }
       await runAccessRoute(res, requestId, () => channel.getAccess!());
+      return;
+    }
+    if (rest === "/catalog/bound-account") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "onboarding:manage");
+      if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "only owner can view the bound account");
+      const read = options.catalogConnection?.readBoundAccount;
+      if (read === undefined) throw new ManagementError("unavailable", "目录账户信息不可用");
+      writeJson(res, 200, { email: await read() }, { "x-request-id": requestId, "cache-control": "no-store" });
       return;
     }
     if (rest === "/catalog/connect" || rest === "/catalog/connect/pairing") {
