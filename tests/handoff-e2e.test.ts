@@ -120,6 +120,8 @@ function buyerPolicyBase() {
     acceptable_eta_latest: "2099-12-31T23:59:59+08:00",
     required_after_sales_terms: [] as string[],
     auto_negotiate: true,
+    // 审查 P2：handoff 自动执行需显式授权；本套件正是验证 autopilot 全链路。
+    auto_handoff: true,
     human_review_on: [] as string[],
   };
 }

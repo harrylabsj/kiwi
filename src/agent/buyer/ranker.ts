@@ -56,16 +56,26 @@ export function hardFilter(
   if (constraints.exclude_out_of_stock !== false && product.stock <= 0) {
     reasons.push("缺货");
   }
-  const total = product.price + product.delivery.fee;
+  // 审查 P2：缺失运费/交期是未知事实，不能当成 0（免邮/立即送达）参与
+  // 硬过滤——未知只记录为不确定性，绝不静默放行或误杀（§18.2）。
+  const fee = product.delivery.fee;
+  const total = fee === undefined ? product.price : product.price + fee;
   if (constraints.max_total_price !== undefined && total > constraints.max_total_price) {
     reasons.push(
       `总价 ${total} ${product.currency} 超过上限 ${constraints.max_total_price}`,
     );
+  } else if (constraints.max_total_price !== undefined && fee === undefined) {
+    unknowns.push("运费未知，未计入总价比较");
   }
   if (constraints.latest_eta !== undefined) {
-    const eta = Date.parse(now) + product.delivery.eta_minutes * 60_000;
-    if (eta > Date.parse(constraints.latest_eta)) {
-      reasons.push(`预计送达时间晚于要求的 ${constraints.latest_eta}`);
+    const etaMinutes = product.delivery.eta_minutes;
+    if (etaMinutes === undefined) {
+      unknowns.push("交期未知，无法校验送达要求");
+    } else {
+      const eta = Date.parse(now) + etaMinutes * 60_000;
+      if (eta > Date.parse(constraints.latest_eta)) {
+        reasons.push(`预计送达时间晚于要求的 ${constraints.latest_eta}`);
+      }
     }
   }
   if (constraints.required_terms !== undefined && constraints.required_terms.length > 0) {
@@ -163,10 +173,17 @@ export function scoreCandidate(
   const m = matchScore(product, input.intent);
   push("match", m.score, m.note);
 
-  const total = product.price + product.delivery.fee;
+  // 审查 P2：运费未知时只用商品价排序并标记未知，不把未知当免邮。
+  const fee = product.delivery.fee;
+  const total = product.price + (fee ?? 0);
+  if (fee === undefined) staleFacts.push(`${product.sku} 未提供运费（未按 0 计）`);
   // Normalize cost against a soft reference: 2x the cheapest-in-set would be
   // ideal; without set context use a fixed anchor of intent-free 100 units.
-  push("total_cost", clamp01(1 - total / 200), `总价 ${total} ${product.currency}（含运费 ${product.delivery.fee}）`);
+  push(
+    "total_cost",
+    clamp01(1 - total / 200),
+    `总价 ${total} ${product.currency}（含运费 ${fee === undefined ? "未知" : fee}）`,
+  );
 
   const hasPromotion = observation !== undefined && Object.keys(observation.promotion).length > 0;
   push("promotion", hasPromotion ? 1 : 0.3, hasPromotion ? "有促销信息" : "无促销信息");
@@ -179,19 +196,21 @@ export function scoreCandidate(
     product.stock > 0 ? `库存 ${product.stock}` : "缺货",
   );
 
+  const etaMinutes = product.delivery.eta_minutes;
   const etaOk =
-    input.intent.needed_by === undefined
+    input.intent.needed_by === undefined || etaMinutes === undefined
       ? undefined
-      : Date.parse(input.now) + product.delivery.eta_minutes * 60_000 <=
-        Date.parse(input.intent.needed_by);
+      : Date.parse(input.now) + etaMinutes * 60_000 <= Date.parse(input.intent.needed_by);
   push(
     "delivery",
-    etaOk === undefined ? (product.delivery.eta_minutes <= 1440 ? 0.8 : 0.5) : etaOk ? 1 : 0,
-    etaOk === undefined
-      ? `预计 ${product.delivery.eta_minutes} 分钟`
-      : etaOk
-        ? "交期满足要求"
-        : "交期晚于要求",
+    etaMinutes === undefined ? 0.5 : etaOk === undefined ? (etaMinutes <= 1440 ? 0.8 : 0.5) : etaOk ? 1 : 0,
+    etaMinutes === undefined
+      ? "交期未知"
+      : etaOk === undefined
+        ? `预计 ${etaMinutes} 分钟`
+        : etaOk
+          ? "交期满足要求"
+          : "交期晚于要求",
   );
 
   push("after_sales", 0.3, "搜索事实不含售后条款（需咨询确认）");

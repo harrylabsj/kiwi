@@ -101,6 +101,11 @@ export interface BuyerPolicy {
   acceptable_eta_latest: string;
   required_after_sales_terms: string[];
   auto_negotiate: boolean;
+  /**
+   * 显式授权 autopilot 自动执行 handoff 交付（把买家送向真实成交入口）。
+   * 审查 P2：缺省 false——最接近交易的写动作默认需要人工确认。
+   */
+  auto_handoff?: boolean;
   human_review_on: string[];
 }
 
@@ -352,6 +357,7 @@ const BUYER_POLICY_KEYS = [
   "acceptable_eta_latest",
   "required_after_sales_terms",
   "auto_negotiate",
+  "auto_handoff",
   "human_review_on",
 ] as const;
 const DECISION_KEYS = ["backend", "enabled"] as const;
@@ -1023,9 +1029,11 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     req(isObject(p.buyer_policy), `${source}: buyer_policy must be a mapping`);
     const bp = p.buyer_policy;
     rejectUnknownKeys(bp, BUYER_POLICY_KEYS, "buyer_policy", source);
-    // All buyer_policy fields are required: the local private gate must not
-    // silently run with a half-specified policy.
+    // All gate-relevant buyer_policy fields are required: the local private
+    // gate must not silently run with a half-specified policy. `auto_handoff`
+    // is the one optional、default-deny switch（审查 P2：缺省即人工确认）。
     for (const key of BUYER_POLICY_KEYS) {
+      if (key === "auto_handoff") continue;
       req(bp[key] !== undefined, `${source}: buyer_policy.${key} is required`);
     }
     req(
@@ -1054,6 +1062,10 @@ export function validateProfile(data: unknown, source: string): AgentProfile {
     req(
       typeof bp.auto_negotiate === "boolean",
       `${source}: buyer_policy.auto_negotiate must be a boolean`,
+    );
+    req(
+      bp.auto_handoff === undefined || typeof bp.auto_handoff === "boolean",
+      `${source}: buyer_policy.auto_handoff must be a boolean`,
     );
     req(
       Array.isArray(bp.human_review_on) &&

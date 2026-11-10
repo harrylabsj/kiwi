@@ -27,9 +27,11 @@
 /** Public merchant delivery rule (shopping-cli shape). */
 export interface ConnectorDelivery {
   service_area: string;
-  fee: number;
+  /** 未知时为 undefined——**绝不**按 0（免运费）处理（§18.2）。 */
+  fee?: number;
   currency: string;
-  eta_minutes: number;
+  /** 未知时为 undefined——**绝不**按 0（立即送达）处理（§18.2）。 */
+  eta_minutes?: number;
   radius_km: number;
   notes: string;
 }
@@ -138,11 +140,18 @@ function parseDelivery(value: unknown, at: string): ConnectorDelivery {
     fail(`${at} must be an object`);
   }
   const v = value as Record<string, unknown>;
+  // 审查 P2：缺失的 fee/eta_minutes 是「未知」，不是 0。显式给出的非法值
+  // 仍然硬拒绝；缺失则保留 undefined，由 hardFilter/ranker 按未知处理。
+  const fee = v.fee === undefined || v.fee === null ? undefined : reqNumber(v.fee, `${at}.fee`);
+  const eta =
+    v.eta_minutes === undefined || v.eta_minutes === null
+      ? undefined
+      : reqNumber(v.eta_minutes, `${at}.eta_minutes`);
   return {
     service_area: typeof v.service_area === "string" ? v.service_area : "",
-    fee: reqNumber(v.fee ?? 0, `${at}.fee`),
+    ...(fee === undefined ? {} : { fee }),
     currency: typeof v.currency === "string" ? v.currency : "CNY",
-    eta_minutes: reqNumber(v.eta_minutes ?? 0, `${at}.eta_minutes`),
+    ...(eta === undefined ? {} : { eta_minutes: eta }),
     radius_km: reqNumber(v.radius_km ?? 0, `${at}.radius_km`),
     notes: typeof v.notes === "string" ? v.notes : "",
   };

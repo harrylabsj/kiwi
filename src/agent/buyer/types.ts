@@ -247,7 +247,8 @@ export interface ProductObservation {
   observed_at: string;
   source_url_or_ref: string;
   title: string;
-  price: { list: number; currency: string; delivery_fee: number };
+  /** delivery_fee 未知时缺省——绝不按 0 记录（§18.2）。 */
+  price: { list: number; currency: string; delivery_fee?: number };
   promotion: Record<string, unknown>;
   stock: { quantity: number; observed_at: string };
   delivery: Record<string, unknown>;
