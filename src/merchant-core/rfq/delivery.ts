@@ -58,7 +58,7 @@ export function recordReportedDelivery(repo: RfqRepository, input: DeliveryRecor
     channel: input.channel,
     evidence_ref: input.evidenceRef,
     recorded_by: input.actor,
-    recorded_at: new Date().toISOString(),
+    recorded_at: repo.nowIso(),
   };
   return repo.createDelivery(row);
 }

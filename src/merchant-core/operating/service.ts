@@ -427,6 +427,15 @@ export class MerchantOperatingPlanService {
       return JSON.parse(existing.result) as T;
     }
     return this.repository.transaction(() => {
+      // 审查 P3：并发同键的第二次请求在事务外检查不到第一笔写入；事务内
+      // 复查保证同一键只执行一次（而不是裸 SQLITE 约束错误/双执行）。
+      const again = this.repository.readIdempotent(merchantId, key);
+      if (again !== undefined) {
+        if (again.operation !== operation || again.requestDigest !== digest) {
+          throw new OperatingPlanError("idempotency_conflict", "同一幂等键已用于不同内容");
+        }
+        return JSON.parse(again.result) as T;
+      }
       const result = work();
       this.repository.saveIdempotent({ merchantId, key, operation, request, result });
       return result;
