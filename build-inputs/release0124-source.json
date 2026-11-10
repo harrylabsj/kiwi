@@ -502,7 +502,7 @@
     },
     {
       "path": "docs/kiwi-a2a-architecture-baseline-rev1.3.md",
-      "sha256": "sha256:065ec74a62b70c0efeead502b3284674ee00fe60469a2a89051ea923144d9c21"
+      "sha256": "sha256:68b56e77edf79adb6da0adeeb750febae03db77413b120c99952aa92734782e3"
     },
     {
       "path": "docs/kiwi-rfq-workbench-design-handoff-v0.1.0.zip",
@@ -619,6 +619,10 @@
     {
       "path": "docs/merchant-rfq-pilot/task-cards.md",
       "sha256": "sha256:5194cb888762f2dc71697d895283580d8abbf43c5ad4521a5dcf143b96d74b02"
+    },
+    {
+      "path": "docs/open-inquiry-transport-contract.md",
+      "sha256": "sha256:c012fba4501f3e27705d33d97f3c232493d8d9f38cead860830885f5bb9586a1"
     },
     {
       "path": "docs/operations/connect-reconciliation.md",
@@ -2670,7 +2674,7 @@
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:2e5cee913de2ce181af0f8685230b4b1f2d12c6c5b57730278b28704ddfb0dd5"
+      "sha256": "sha256:d3b1ded6d7db24af10bcc699b2a4e819ea3697425dbeaa1236d304e6223d72f5"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
@@ -4282,7 +4286,7 @@
     },
     {
       "path": "src/http/merchant-management/page.ts",
-      "sha256": "sha256:196983a08b4506bd0ceed244bca74e372b8c93ed97437e36708d232547b9effd"
+      "sha256": "sha256:9ddc5a2023c11f1980b24830d95c8466d47d406132b4916703b8d2e82dcf36bd"
     },
     {
       "path": "src/http/merchant-management/problem-client.ts",
@@ -6648,7 +6652,7 @@
     },
     {
       "path": "tests/merchant-management-page-connect-flow.test.ts",
-      "sha256": "sha256:f2e5d65811815b7704b339bf500a688eb6f4c1058cf2022952f6d453f620d842"
+      "sha256": "sha256:6f3b72a83c4dfa1987daa0a3d3c65690a710f10db49c03b59f266a38097fcbce"
     },
     {
       "path": "tests/merchant-management-page-csrf.test.ts",
