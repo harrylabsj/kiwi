@@ -740,7 +740,9 @@ describe("marketplace product table → public listing → buyer candidate", () 
       const tools = buildBuyerTools({store, connector: new FakeCommerceConnector([]), profile: testBuyerProfile(), catalogSource, now: () => now});
       const search = tools.find((tool) => tool.name === "search_listings")!;
       const result = await search.execute("marketplace-search", {need_description: "Widget Alpha"});
-      const rows = JSON.parse(result.content.map((c) => "text" in c ? c.text : "").join("\n"));
+      const raw = result.content.map((c) => "text" in c ? c.text : "").join("\n");
+      const body = /^<kiwi_external_data_[a-z_]+>\n([\s\S]*)\n<\/kiwi_external_data_[a-z_]+>$/.exec(raw)?.[1] ?? raw;
+      const rows = JSON.parse(body);
       expect(rows[0]?.handoff_destination_ref).toBe(url);
       expect(rows[0]?.handoff_destination_types).toEqual(["external_checkout_url"]);
       const task = store.createTask({goal_text: "Find a Widget", intent:{category:"widgets"}, constraints:{}, idempotency_key:"marketplace-task"});

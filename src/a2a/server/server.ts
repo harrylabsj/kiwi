@@ -708,6 +708,11 @@ export class A2AServer {
       const generic = await this.pipeline.sendGenericMessage(rawMessage, {
         identity: caller.identity,
         identityVerified: caller.identityVerified === true,
+        ...(caller.remoteAddress !== undefined ? { remoteAddress: caller.remoteAddress } : {}),
+        ...(caller.clientAddress !== undefined ? { clientAddress: caller.clientAddress } : {}),
+        ...(ucpAgentProfile !== undefined ? { ucpAgentProfile } : {}),
+        ...(caller.trustLevel !== undefined ? { trustLevel: caller.trustLevel } : {}),
+        ...(caller.fingerprintChanged !== undefined ? { fingerprintChanged: caller.fingerprintChanged } : {}),
       });
       return this.upperTaskState(generic);
     }

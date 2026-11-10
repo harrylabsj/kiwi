@@ -38,7 +38,7 @@ export interface AgentEventSink {
 
 export const NOOP_EVENT_SINK: AgentEventSink = { emit: () => undefined };
 
-const SENSITIVE_EVENT_KEY = /authorization|bearer|token|secret|password|credential|private_key|vault/i;
+const SENSITIVE_EVENT_KEY = /authorization|bearer|token|secret|password|credential|private_key|vault|restricted(?:_value|_kind)?|plaintext/i;
 const MAX_REDACTION_DEPTH = 20;
 
 function redactSensitiveKeys(value: unknown, depth = 0): unknown {

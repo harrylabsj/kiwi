@@ -1428,7 +1428,9 @@ export class AgentKernel {
     // buildSessionProjection。appendMessage 已被消毒包装拦截 thinking。
     this.session.sessionManager.appendMessage({
       role: "user",
-      content: `[系统记录] ${text}`,
+      // 磋商摘要含商家可控字段（商家名/商品文本）：必须按外部数据围栏后再进
+      // 模型上下文，否则恶意商家可把指令藏进这些字段（review P1-2）。
+      content: `[系统记录] ${fenceModelPayload("a2a_message", text)}`,
       timestamp: Date.now(),
     });
     this.session.refreshContext();

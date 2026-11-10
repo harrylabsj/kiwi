@@ -84,3 +84,20 @@ jobs:
       - run: npm run test
       - run: npm run verify:contracts
       - run: npm run verify:vectors
+      # Code review P1-11: these are offline and were previously only run by
+      # the dispatch release rehearsal, so packaging/supply-chain regressions
+      # reached release day. Keep PR CI aligned with the `verify` contract.
+      - run: npm run verify:buyer-skills
+      - run: npm run verify:portfolio-products
+      - run: npm run verify:supply-chain
+      - run: npm run verify:package
+      - name: Prettier check (changed TypeScript files)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          base="origin/${{ github.base_ref }}"
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          changed=$(git diff --name-only --diff-filter=ACMRT "$base...HEAD" -- '*.ts' '*.mts' || true)
+          if [ -n "$changed" ]; then
+            printf '%s\n' "$changed" | xargs npx prettier --check
+          fi
