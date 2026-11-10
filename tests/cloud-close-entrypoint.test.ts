@@ -19,7 +19,14 @@ function fixture(): string {
 }
 function run(root: string, source: string) {
   const entry = path.join(root, "runner.mjs"); writeFileSync(entry, source);
-  return spawnSync(process.execPath, [entry], { encoding: "utf8", timeout: 3_000, maxBuffer: 16_384 });
+  // CodeQL js/bad-code-sanitization: pass fixture paths via env, not by
+  // interpolating them into generated source.
+  return spawnSync(process.execPath, [entry], {
+    encoding: "utf8",
+    timeout: 3_000,
+    maxBuffer: 16_384,
+    env: { ...process.env, KIWI_TEST_MARKER: path.join(root, "bootstrap-loaded") },
+  });
 }
 
 describe("Cloud Node floor before bootstrap evaluation", () => {
@@ -31,7 +38,7 @@ describe("Cloud Node floor before bootstrap evaluation", () => {
   });
   it.each(["22.18.9", "22.19.0"])("runs the real compiled main import order for %s", (version) => {
     const root = fixture(), marker = path.join(root, "bootstrap-loaded");
-    writeFileSync(path.join(root, "cloud/bootstrap.js"), `import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(marker)},'loaded');throw Error('SECRET fixture-import');`);
+    writeFileSync(path.join(root, "cloud/bootstrap.js"), "import fs from 'node:fs';fs.writeFileSync(process.env.KIWI_TEST_MARKER,'loaded');throw Error('SECRET fixture-import');");
     const result = run(root, `Object.defineProperty(process.versions,'node',{value:${JSON.stringify(version)}});const {runCloudMain}=await import('./cloud/main.js');process.exit(await runCloudMain());`);
     expect(result.error).toBeUndefined(); expect(result.status).toBe(1); expect(result.stderr).not.toContain("SECRET");
     expect(existsSync(marker)).toBe(version === "22.19.0");

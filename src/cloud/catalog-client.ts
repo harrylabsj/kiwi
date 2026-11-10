@@ -502,8 +502,15 @@ function originOf(url: string): string {
 }
 
 /** 规范化 origin（去掉末尾斜杠，逐字比对前的统一口径）。 */
+function trimTrailingSlashes(value: string): string {
+  // CodeQL js/polynomial-redos: avoid a backtracking regex on caller input.
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
+  return value.slice(0, end);
+}
+
 export function normalizeOrigin(value: string): string {
-  return value.replace(/\/+$/, "");
+  return trimTrailingSlashes(value);
 }
 
 export class CatalogClient {
@@ -514,9 +521,7 @@ export class CatalogClient {
   private readonly now: () => Date;
 
   constructor(options: CatalogClientOptions) {
-    const trimmed = String(options.baseUrl ?? "")
-      .trim()
-      .replace(/\/+$/, "");
+    const trimmed = trimTrailingSlashes(String(options.baseUrl ?? "").trim());
     if (
       !trimmed.startsWith("https://") &&
       !trimmed.startsWith("http://127.0.0.1") &&
