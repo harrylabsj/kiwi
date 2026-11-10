@@ -5,17 +5,17 @@ import path from "node:path";
 import {tmpdir} from "node:os";
 import {beforeAll,afterAll,it,expect} from "vitest";
 import {assertBundledEdges} from "../scripts/lib/npm-bundled-edges.mjs";
-// Fixed local 0.12.26 source authority checkpoint; normal publisher source
+// Fixed local 0.12.28 source authority checkpoint; normal publisher source
 // admission is independently testable. This is not a claimed Linux release proof.
-// Re-baselined to the frozen 0.12.26 source/contract when the release version
+// Re-baselined to the frozen 0.12.28 source/contract when the release version
 // moved beyond 0.12.24: this test runs assertBundledEdges against the
 // checkpoint, which reads that commit's contract and npm payload manifest and
 // runs toolchain() on it, so the checkpoint can only stay valid while its
 // manifest matches the npm CI installs.
-const VERIFIED_SOURCE = "ef87130a617fc0593cc524eb94b39744b17501b8";
-const VERIFIED_CONTRACT_SHA = "e2d5d8a1fda6448d5bc0aec452806381c949a196e1190c4b4ebf62e84cd8467a";
+const VERIFIED_SOURCE = "ff48f9f9321e71113c364d01184f1563f14ff42d";
+const VERIFIED_CONTRACT_SHA = "d0e984508df44e0b50cf347268787c15c96ba913b404f6c943da451ffb5542b2";
 const VERIFIED_GUARD_CLOSURE = {
-  "scripts/lib/npm-shipping.mjs": "d79bf570518bd088d59e7ed5fc8400f5b92c451b46d74514cddba0ecc3232879",
+  "scripts/lib/npm-shipping.mjs": "21c982f02b1564c1b79b221c8ccd46f3d9e78f132fb6a7046521351a381501ab",
   "scripts/check-install-toolchain.mjs": "ccb86a2707cb23f385f6428eb8c3f28df9ad0c0fe59b584e2b29ffe4eafd9c69",
   "build-inputs/release0124-npm12-payload.json": "ae7810234dbf422fba678c4c0956d31b82563131286c4adca6c2810cb435058a"
 };
