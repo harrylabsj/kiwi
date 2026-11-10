@@ -204,7 +204,14 @@ export class MerchantCommandLog {
    * 目标仍可决策，再消费凭证（approve/reject 同口径）。
    */
   private assertDecisionTargetLive(candidate: WriteApprovalCandidate): void {
-    if (candidate.status !== "pending_approval") {
+    // 已死状态（过期/拒绝/被取代）不得核销凭证；approved/executed 属于并发
+    // 在途或幂等重放，交给执行阶段 CAS 判定（返回 not_approvable/当前状态），
+    // 保持既有并发语义。
+    if (
+      candidate.status === "expired" ||
+      candidate.status === "rejected" ||
+      candidate.status === "superseded"
+    ) {
       throw new MerchantWorkbenchError(
         "validation",
         `候选状态为 ${candidate.status}，不可再决策（确认凭证未核销）`,
