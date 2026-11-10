@@ -192,6 +192,7 @@ describe("HandoffEventStore", () => {
     // 已终态候选（CONSUMED）不受清扫影响
     const consumed = candidate();
     ledger.appendCandidateEvent({ kind: "handoff_candidate_created", candidate: consumed, identity: IDENTITY, capability: CAPABILITY });
+    ledger.appendCandidateEvent({ kind: "handoff_candidate_ready", candidate: consumed, identity: IDENTITY, capability: CAPABILITY });
     ledger.appendCandidateEvent({ kind: "handoff_candidate_consumed", candidate: consumed, identity: IDENTITY, capability: CAPABILITY, handoff_id: "hnd_01" });
 
     const swept = ledger.sweepExpiredCandidates("2026-08-09T00:00:00Z");

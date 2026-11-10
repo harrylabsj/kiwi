@@ -7,7 +7,15 @@
  *   - 非交互路径：flag 令牌经 merchantInit 写入 credentials.env（0600），
  *     secret 不进 profile yaml。
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -52,20 +60,55 @@ afterEach(() => {
   }
 });
 
-describe("--merchant-token（路线 A 过渡入口）", () => {
-  it("parseArgs：空格与 = 两种形式都解析", () => {
-    expect(parseArgs(["merchant", "init", "--merchant-token", "tok_abc"]).merchantToken).toBe("tok_abc");
-    expect(parseArgs(["merchant", "init", "--merchant-token=tok_xyz"]).merchantToken).toBe("tok_xyz");
-    expect(parseArgs(["merchant", "init"]).merchantToken).toBeUndefined();
-    expect(parseArgs(["merchant", "init", "--public-url", "https://merchant.example.test"]).publicUrl).toBe("https://merchant.example.test");
-    expect(parseArgs(["merchant", "init", "--public-url=https://merchant.example.test"]).publicUrl).toBe("https://merchant.example.test");
+describe("merchant token 的非交互安全入口", () => {
+  it("parseArgs 拒绝裸令牌（shell history/ps 泄漏面）", () => {
+    expect(() => parseArgs(["merchant", "init", "--merchant-token", "tok_abc"])).toThrow(
+      /not accepted on the command line/,
+    );
+    expect(() => parseArgs(["merchant", "init", "--merchant-token=tok_xyz"])).toThrow(
+      /not accepted on the command line/,
+    );
   });
 
-  it("帮助文案标注：令牌仅用于商品服务，不用于 Runtime 绑定", () => {
+  it("parseArgs 支持环境变量与 0600 文件两种非交互入口", () => {
+    process.env.KIWI_TEST_MERCHANT_TOKEN = "tok_env";
+    try {
+      expect(
+        parseArgs(["merchant", "init", "--merchant-token-env", "KIWI_TEST_MERCHANT_TOKEN"])
+          .merchantToken,
+      ).toBe("tok_env");
+      expect(() =>
+        parseArgs(["merchant", "init", "--merchant-token-env", "KIWI_TEST_MISSING_TOKEN"]),
+      ).toThrow(/not set or empty/);
+    } finally {
+      delete process.env.KIWI_TEST_MERCHANT_TOKEN;
+    }
+
+    const dir = tmpDir();
+    try {
+      const file = path.join(dir, "token");
+      writeFileSync(file, "tok_file\n", { mode: 0o600 });
+      expect(parseArgs(["merchant", "init", "--merchant-token-file", file]).merchantToken).toBe(
+        "tok_file",
+      );
+      chmodSync(file, 0o644);
+      expect(() => parseArgs(["merchant", "init", "--merchant-token-file", file])).toThrow(
+        /mode 0600/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(parseArgs(["merchant", "init"]).merchantToken).toBeUndefined();
+    expect(
+      parseArgs(["merchant", "init", "--public-url=https://merchant.example.test"]).publicUrl,
+    ).toBe("https://merchant.example.test");
+  });
+
+  it("帮助文案标注：令牌不进入 argv，且仅用于商品服务", () => {
     const help = productHelp("merchant");
-    expect(help).toContain("--merchant-token");
+    expect(help).toContain("--merchant-token-env");
+    expect(help).toContain("--merchant-token-file");
     expect(help).toContain("只用于 shopping-cli");
-    expect(help).toContain("不用于");
   });
 
   it("非交互注入：令牌写入 credentials.env（0600），不进 profile yaml", async () => {

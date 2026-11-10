@@ -136,7 +136,8 @@ Usage:
                                           缺凭据加密密钥时关闭依赖加密存储的功能
   kiwi merchant init [--name <商家名称>] [--merchant-id <shopping-cli merchant_id>]
                      [--profile <路径>] [--catalog <URL>] [--data-dir <路径>]
-                     [--public-url <HTTPS 地址>] [--merchant-token <商品服务令牌>]
+                     [--public-url <HTTPS 地址>]
+                     [--merchant-token-env <ENV_NAME> | --merchant-token-file <0600 文件>]
                                           一站式初始化：检查 shopping-cli、生成或续用
                                           profile/data-dir；提供公网地址时继续 Catalog
                                           账号授权、Runtime 绑定和 Agent Card 发布。
