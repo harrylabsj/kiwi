@@ -26,6 +26,7 @@
  * 的确定性 merchant 行为；未来可替换为 LLM 驱动的 Negotiation Engine（同一 handler 接缝）。
  */
 
+import { BoundedMap, BoundedSet } from "../../runtime/bounded-memory.js";
 import { checkedProductStock, checkedSourceEvidence, quoteFactsStillValid, recoverQuoteSourceSnapshot, type ProductSourceEvidence, type QuoteSourceSnapshot, type ResolvedProductFacts } from "./merchant-product-facts.js";
 import type { CommerceDataSource } from "../../commerce/data-source.js";
 import { LedgerStore } from "../../negotiation/ledger/index.js";
@@ -470,14 +471,14 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
   // 审查 P2-D：终态（AGREEMENT_REACHED / WITHDRAWN / DECLINED / CANCELLED）
   // 不得以同一 negotiation_id 重开（§17.4/§21.2）——运行时此前无任何终态
   // 守卫：连发两份 accept 可产出两份 agreement、withdraw 后可再次成交。
-  const closedNegotiations = new Set<string>();
+  const closedNegotiations = new BoundedSet<string>();
   // 每 negotiation 的相位机状态（审查 BUG-10：完整状态含 active_offer_id /
   // resume_phase——此前只记 OPEN→终态的最小轨迹，中间相位由
   // conditionalByNegotiation 隐式表达，规范转换表不是接收消息的权威门）。
-  const phaseStateByNegotiation = new Map<string, NegotiationPhaseState>();
+  const phaseStateByNegotiation = new BoundedMap<string, NegotiationPhaseState>();
   // 产生商业承诺的动作：终态后一律拒绝；text-only（clarification）放行。
-  const activeObjectByNegotiation = new Map<string, { offerId: string; messageId: string; actor: string }>();
-  const boundPeers = new Map<string, string>();
+  const activeObjectByNegotiation = new BoundedMap<string, { offerId: string; messageId: string; actor: string }>();
+  const boundPeers = new BoundedMap<string, string>();
   const requestTails = new Map<string, Promise<void>>();
   const serialize = async <T>(key: string, fn: () => Promise<T>): Promise<T> => {
     const before = requestTails.get(key) ?? Promise.resolve();

@@ -49,6 +49,7 @@ import {
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { sha256Hex } from "../../negotiation/jcs.js";
+import { canTakeOverStaleLock, lockOwnerRecord } from "../../runtime/lock-owner.js";
 import { isTrustLevel } from "../identity/trust-policy.js";
 import { evaluateTrustRecord } from "./evaluator.js";
 import type { EvaluationResult, EvaluateOptions } from "./evaluator.js";
@@ -175,16 +176,37 @@ export class TrustRecordStore {
       : "Trust record metadata is invalid; preserved for reconciliation"), { code });
   }
 
-  /** Short synchronous mutation, no waiting/age/PID takeover of unknown owners. */
+  /**
+   * 审查 P2：崩溃遗留的 `.mutation.lock` 若属于**可证明已死**的同 host 持有者
+   * （boot_id 变化或 pid 不存在）则接管；跨 host / 无法证明时保持 fail-closed。
+   * 这样进程崩溃不再把该对端记录永久锁死。
+   */
+  private tryClearStaleMutationLock(lock: string): boolean {
+    try {
+      if (!canTakeOverStaleLock(readFileSync(lock, "utf8"))) return false;
+      rmSync(lock);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Short synchronous mutation; only provably-dead locks are reclaimed. */
   private mutate<T>(identity: string, fn: () => T): T {
     const file = this.filePathFor(identity), lock = `${file}.mutation.lock`, token = randomUUID();
-    let fd: number;
-    try { fd = openSync(lock, "wx", 0o600); }
-    catch (err) {
-      if ((err as { code?: string }).code === "EEXIST") throw this.unavailable("trust_record_locked");
-      throw err;
+    let fd: number | undefined;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        fd = openSync(lock, "wx", 0o600);
+        break;
+      } catch (err) {
+        if ((err as { code?: string }).code !== "EEXIST") throw err;
+        if (attempt === 0 && this.tryClearStaleMutationLock(lock)) continue;
+        throw this.unavailable("trust_record_locked");
+      }
     }
-    try { writeSync(fd, JSON.stringify({ pid: process.pid, token })); fsyncSync(fd); }
+    if (fd === undefined) throw this.unavailable("trust_record_locked");
+    try { writeSync(fd, JSON.stringify(lockOwnerRecord(token))); fsyncSync(fd); }
     finally { closeSync(fd); }
     this.ownedMutations.add(file);
     try { return fn(); }
@@ -198,9 +220,12 @@ export class TrustRecordStore {
   }
 
   private assertReadable(file: string): void {
-    if (!this.ownedMutations.has(file) && existsSync(`${file}.mutation.lock`)) {
-      throw this.unavailable("trust_record_locked");
-    }
+    if (this.ownedMutations.has(file)) return;
+    const lock = `${file}.mutation.lock`;
+    if (!existsSync(lock)) return;
+    // 审查 P2：读路径同样回收可证明已死的残留锁，而不是永久回 T0。
+    if (this.tryClearStaleMutationLock(lock)) return;
+    throw this.unavailable("trust_record_locked");
   }
 
   /** 原子写（对齐 supervisor/manifest.ts：同目录临时文件 + fsync + rename，0600）。 */
@@ -311,8 +336,13 @@ export class TrustRecordStore {
     const out: string[] = [];
     for (const name of readdirSync(dir)) {
       if (!name.startsWith("trust-") || !name.endsWith(".json")) continue;
-      const record = this.parseRecord(path.join(dir, name));
-      if (record !== null) out.push(record.counterparty_identity);
+      // 审查 P3：单条损坏记录不得让整个 list 抛错（运维盘点被一条坏行阻断）。
+      try {
+        const record = this.parseRecord(path.join(dir, name));
+        if (record !== null) out.push(record.counterparty_identity);
+      } catch {
+        /* 损坏/被锁定行跳过；数据保留供对账，不被删除或重置。 */
+      }
     }
     return out;
   }

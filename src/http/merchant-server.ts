@@ -235,10 +235,17 @@ export function createMerchantHttpServer(options: MerchantHttpAdapterOptions): S
   };
 
   const sweepIdleSessions = async (): Promise<void> => {
-    const cutoff = nowMs() - sessionIdleTtlMs;
-    const expired = [...sessions.values()].filter(
-      (session) => session.subscribers.size === 0 && session.lastAccessAt <= cutoff,
-    );
+    const now = nowMs();
+    // 审查 P2：持有 SSE 订阅的会话此前永不参与清扫——订阅者断开未触发
+    // close 事件（半开连接/客户端崩溃）时可耗尽全部 session 槽位。给 SSE
+    // 会话一个更长的上限（至少 1h 无任何访问），到时关闭并结束订阅。
+    const expired = [...sessions.values()].filter((session) => {
+      const ttl =
+        session.subscribers.size === 0
+          ? sessionIdleTtlMs
+          : Math.max(sessionIdleTtlMs, 60 * 60 * 1000);
+      return session.lastAccessAt <= now - ttl;
+    });
     await Promise.allSettled(expired.map(closeSession));
   };
 
@@ -317,6 +324,7 @@ export function createMerchantHttpServer(options: MerchantHttpAdapterOptions): S
       if (event.sequence > after) writeSse(response, sseEvent(event));
     }
     session.subscribers.add(response);
+    session.lastAccessAt = nowMs();
     const heartbeat = setInterval(() => writeSse(response, ": keep-alive\n\n"), 15_000);
     heartbeat.unref();
     response.on("close", () => {

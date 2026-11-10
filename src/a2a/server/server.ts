@@ -139,13 +139,23 @@ function requireParamsObject(params: unknown): Record<string, unknown> {
 }
 
 
-/** 可信代理的 `x-forwarded-for` 首个合法 IP；未配置/非法返回 null。 */
+/**
+ * 可信代理的 `x-forwarded-for` 客户端地址；未配置/非法返回 null。
+ *
+ * 审查 P2：取**最右**合法 IP，而不是第一个——代理把真实对端追加在右侧，
+ * 客户端可自行伪造/轮换左侧条目；取首个等于让攻击者任意切换限流桶。
+ * 调用方必须先声明 `trustForwardedFor`（即请求确实经过可信代理）。
+ */
 function forwardedClientAddress(req: http.IncomingMessage): string | null {
   const header = req.headers["x-forwarded-for"];
   const raw = Array.isArray(header) ? header[0] : header;
   if (typeof raw !== "string") return null;
-  const first = raw.split(",")[0]?.trim() ?? "";
-  return first !== "" && isIP(first) !== 0 ? first : null;
+  const parts = raw.split(",").map((part) => part.trim());
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const candidate = parts[index] ?? "";
+    if (candidate !== "" && isIP(candidate) !== 0) return candidate;
+  }
+  return null;
 }
 
 interface Caller {

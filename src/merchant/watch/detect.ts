@@ -204,5 +204,20 @@ export function detectNotifications(
     };
   }
 
+  // 审查 P2：状态文件此前只增不减（每 10s 全量重写，历史磋商/审批永久
+  // 保留）。只保留最近 1000 条跟踪记录；被淘汰的条目若再次出现会按“新条目”
+  // 处理（至多一条重复通知），文件大小有界。
+  capTracking(next.negotiations);
+  capTracking(next.approvals);
   return { notifications, next };
+}
+
+const MAX_TRACKED_ENTRIES = 1000;
+
+function capTracking<T>(record: Record<string, T>): void {
+  const keys = Object.keys(record);
+  if (keys.length <= MAX_TRACKED_ENTRIES) return;
+  for (const key of keys.slice(0, keys.length - MAX_TRACKED_ENTRIES)) {
+    delete record[key];
+  }
 }

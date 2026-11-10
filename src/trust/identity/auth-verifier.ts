@@ -36,6 +36,8 @@
  *     用于身份绑定冲突检测。
  */
 
+import { createHash } from "node:crypto";
+
 import type { AuthContext, AuthResult, AuthVerifier } from "../../a2a/server/types.js";
 import { bindIdentity, type ClaimedIdentity, type VerifiedPrincipal } from "./identity-binding.js";
 import type { KeyResolver } from "./keys.js";
@@ -71,6 +73,12 @@ export interface HttpMessageSignatureVerifierOptions {
   anonymousTrustLevel?: TrustLevel;
   /** 未签名（匿名放行）时的幂等身份；默认 "anonymous"。 */
   anonymousIdentity?: string;
+  /**
+   * 审查 P2：把匿名身份按来源地址派生为 `anonymous:<hash>`，避免所有匿名
+   * 调用者共享同一身份（幂等键/磋商绑定/审批消费在陌生人之间合并）。
+   * 默认 false（保持既有测试/本地语义）；生产 A2A 节点应开启。
+   */
+  deriveAnonymousIdentity?: boolean;
   /** 验证请求携带的 Agent Card JWS；T2+ 时必需。 */
   verifyCardJws?: (jws: string) => CardJwsVerificationResult;
   /** created/expires 时钟偏差（秒）；默认 300。 */
@@ -143,6 +151,7 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
   private readonly scheme: "http" | "https";
   private readonly anonymousTrustLevel: TrustLevel;
   private readonly anonymousIdentity: string;
+  private readonly deriveAnonymousIdentity: boolean;
   private readonly verifyCardJws: ((jws: string) => CardJwsVerificationResult) | undefined;
   private readonly maxClockSkewSeconds: number;
   private readonly maxSignatureAgeSeconds: number;
@@ -160,11 +169,25 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
     this.schemeExplicit = options.scheme !== undefined;
     this.anonymousTrustLevel = options.anonymousTrustLevel ?? "T0";
     this.anonymousIdentity = options.anonymousIdentity ?? "anonymous";
+    this.deriveAnonymousIdentity = options.deriveAnonymousIdentity ?? false;
     this.verifyCardJws = options.verifyCardJws;
     this.maxClockSkewSeconds = options.maxClockSkewSeconds ?? 300;
     this.maxSignatureAgeSeconds = options.maxSignatureAgeSeconds ?? 900;
     this.expectedAuthority = options.expectedAuthority;
     this.authoritySource = options.authoritySource ?? "host-header";
+  }
+
+  /**
+   * 匿名身份：开启派生时按来源地址生成稳定、不可枚举的标识。地址缺失时
+   * 回退到常量（例如测试直连），绝不共享一个可预测的“别人”的身份。
+   */
+  private anonymousIdentityFor(ctx: AuthContext): string {
+    if (!this.deriveAnonymousIdentity || this.anonymousIdentity !== "anonymous") {
+      return this.anonymousIdentity;
+    }
+    const addr = (ctx.remoteAddress ?? "").trim();
+    if (addr === "") return this.anonymousIdentity;
+    return `anonymous:${createHash("sha256").update(addr).digest("hex").slice(0, 16)}`;
   }
 
   verify(ctx: AuthContext): AuthResult {
@@ -179,7 +202,7 @@ export class HttpMessageSignatureVerifier implements AuthVerifier {
           reason: `HTTP Message Signature required at ${this.anonymousTrustLevel}`,
         };
       }
-      return { authenticated: true, identity: this.anonymousIdentity };
+      return { authenticated: true, identity: this.anonymousIdentityFor(ctx) };
     }
 
     // 签名请求：重建 @target-uri / @authority（服务端只有 origin-form req.url）。

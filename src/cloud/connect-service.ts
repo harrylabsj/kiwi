@@ -364,6 +364,8 @@ export interface VerifiedBinding {
   cardRevision: number | null;
 }
 
+const PUBLICATION_CHECK_INTERVAL_MS = 60_000;
+
 export interface MerchantConnectionServiceOptions {
   /** 权威状态目录（merchant-enrollments.json 所在）。 */
   dataDir: string;
@@ -971,6 +973,14 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         throw err;
       }
       if (current.status === "published") {
+        // 审查 P2：published 会话此前每 5s 无条件打一次 Catalog 公开读
+        // （每实例每天约 17k 次）。已验证且未到复查窗口时跳过；窗口内仍
+        // 维持上次结论（撤回最迟一个窗口被发现，fail-closed 不被放宽）。
+        const nowMs = this.now().getTime();
+        if (this.publicationVerified && nowMs - this.lastPublicationCheckAt < PUBLICATION_CHECK_INTERVAL_MS) {
+          return this.toSummary(current);
+        }
+        this.lastPublicationCheckAt = nowMs;
         try {
           await this.assertPublicationActive(current);
         } catch (err) {
@@ -2020,18 +2030,20 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     );
     let result: ConnectionSession | undefined;
     let deterministicRelease = false;
+    let failure: unknown;
     this.effectStarted = false;
     try {
       result = await step();
-      return result;
     } catch (error) {
+      failure = error;
       deterministicRelease = isDeterministicConnectRelease(error);
-      throw error;
-    } finally {
-      // Effect uncertainty is durable. Only read-only calls or known pre-effect
-      // readiness failures release a claim automatically; no stale lease stealing.
-      const safe = result !== undefined || readOnly || !this.effectStarted || deterministicRelease;
-      this.preEffectReadinessFailure = false;
+    }
+    // Effect uncertainty is durable. Only read-only calls or known pre-effect
+    // readiness failures release a claim automatically; no stale lease stealing.
+    const safe = result !== undefined || readOnly || !this.effectStarted || deterministicRelease;
+    this.preEffectReadinessFailure = false;
+    let persistError: unknown;
+    try {
       this.persist((fresh) =>
         fresh.sessions.map((item) => {
           const live = item as ConnectionSession;
@@ -2040,17 +2052,37 @@ class ConnectionServiceImpl implements MerchantConnectionService {
           const updated = { ...live };
           if (safe) delete updated.operation_claim;
           else updated.operation_claim = { ...live.operation_claim, state: "unknown" };
-          if (result) {
+          if (result !== undefined) {
             if (safe) delete result.operation_claim;
             Object.assign(result, updated);
           }
           return result ?? updated;
         }),
       );
+    } catch (error) {
+      persistError = error;
     }
+    // 审查 P2：清理写入抛错不得吞掉原始错误；没有原始错误时上抛（claim
+    // 清理失败不能静默），有原始错误时保留原错误并把失败附在其上。
+    if (failure !== undefined) {
+      if (persistError !== undefined && failure !== null && typeof failure === "object") {
+        Object.assign(failure as Record<string, unknown>, { persist_error: persistError });
+      }
+      throw failure;
+    }
+    if (persistError !== undefined) throw persistError;
+    if (result === undefined) {
+      throw new MerchantConnectError(
+        "CONNECTION_OPERATION_UNKNOWN",
+        "connection step completed without a session",
+      );
+    }
+    return result;
   }
   private preEffectReadinessFailure = false;
   private effectStarted = false;
+  /** published 会话的 Catalog 复查节流（审查 P2）。 */
+  private lastPublicationCheckAt = 0;
 
   private async withLock<T>(fn: () => Promise<T>): Promise<T> {
     const result = this.mutex.then(fn);

@@ -13,7 +13,21 @@ export class BoundedIpLimiter {
     const key = peer ?? "unknown-socket-peer";
     let hits = this.peers.get(key);
     if (!hits) {
-      if (this.peers.size >= this.maxPeers) return false;
+      if (this.peers.size >= this.maxPeers) {
+        // 审查 P2：表满时此前无条件拒绝**所有新来源**——一个扫描全网段的
+        // 攻击者即可让正常客户端全部 429（管理面 DoS）。改为淘汰最久未活动
+        // 的桶（LRU），新来源仍可获得自己的预算。
+        let oldestKey: string | undefined;
+        let oldestAt = Number.POSITIVE_INFINITY;
+        for (const [candidate, candidateHits] of this.peers) {
+          const last = candidateHits[candidateHits.length - 1] ?? 0;
+          if (last < oldestAt) {
+            oldestAt = last;
+            oldestKey = candidate;
+          }
+        }
+        if (oldestKey !== undefined) this.peers.delete(oldestKey);
+      }
       hits = [];
       this.peers.set(key, hits);
     }

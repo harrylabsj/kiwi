@@ -57,6 +57,7 @@ import { createServer as createSecureServer } from "node:https";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import { BoundedIpLimiter } from "../http/bounded-ip-rate-limit.js";
+import { resolveRequestClientIp } from "../net/client-ip.js";
 import type { MerchantAuthorization } from "../auth/merchant-authorization.js";
 import {
   formatAppOAuthCallbackLog,
@@ -942,7 +943,7 @@ ${current}
         return;
       }
       if (["/connect", "/oauth/register", "/instance/pair"].includes(url.pathname)
-        && !publicRequests.take(req.socket?.remoteAddress)) {
+        && !publicRequests.take(resolveRequestClientIp(req))) {
         writeJson(res, 429, { error: "rate_limited" });
         return;
       }

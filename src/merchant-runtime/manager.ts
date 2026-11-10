@@ -28,9 +28,10 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "../fs/atomic-write.js";
+import { canTakeOverStaleLock, lockOwnerRecord } from "../runtime/lock-owner.js";
 
 export interface ManagedServiceSpec {
   /** 服务名（a2a / mcp 等，作为文件名须安全）。 */
@@ -255,6 +256,52 @@ export class MerchantRuntimeManager {
   async start(name: string): Promise<ManagedServiceState> { this.assertMutable(); return this.launch(name, true); }
 
   private async launch(name: string, explicit: boolean, expectedIntent?: { token?: string }): Promise<ManagedServiceState> {
+    // 审查 P2：跨进程启动竞态（两个 manager 同时 start）此前可双 spawn。
+    // 用与 ledger/enrollment 同一套可证明已死的锁原语串行化「检查+spawn+pidfile」。
+    return this.withSpawnLock(name, () => this.launchLocked(name, explicit, expectedIntent));
+  }
+
+  private withSpawnLock<T>(name: string, fn: () => T): T {
+    const lock = `${this.pidFile(name)}.start`;
+    mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+    const token = randomUUID();
+    let fd: number | undefined;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        fd = openSync(lock, "wx", 0o600);
+        break;
+      } catch (err) {
+        if ((err as { code?: string }).code !== "EEXIST") throw err;
+        try {
+          if (attempt === 0 && canTakeOverStaleLock(readFileSync(lock, "utf8"))) {
+            rmSync(lock, { force: true });
+            continue;
+          }
+        } catch {
+          /* 无法证明 → 不接管 */
+        }
+        throw new MerchantRuntimeError(`服务 ${name} 正在由另一个 manager 启动`, "already_running");
+      }
+    }
+    if (fd === undefined) throw new MerchantRuntimeError(`服务 ${name} 启动锁不可用`, "spawn_failed");
+    try {
+      writeSync(fd, JSON.stringify(lockOwnerRecord(token)));
+    } finally {
+      closeSync(fd);
+    }
+    try {
+      return fn();
+    } finally {
+      try {
+        const owner = JSON.parse(readFileSync(lock, "utf8")) as { token?: unknown };
+        if (owner?.token === token) rmSync(lock, { force: true });
+      } catch {
+        /* 未知归属的锁保留，绝不盲删。 */
+      }
+    }
+  }
+
+  private async launchLocked(name: string, explicit: boolean, expectedIntent?: { token?: string }): Promise<ManagedServiceState> {
     const spec = this.spec(name);
     if (!explicit && spec.credentialSwitchMarker !== undefined && existsSync(spec.credentialSwitchMarker)) return this.stateOf(name);
     const observedIntent = this.stopIntent(name);

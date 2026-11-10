@@ -244,7 +244,9 @@ export function parseSignatureInput(value: string): ParsedSignatureInput[] {
 
 /** 解析 Signature 头：`label=:base64:` 序列。 */
 export function parseSignatureHeader(value: string): Record<string, Buffer> {
-  const out: Record<string, Buffer> = {};
+  // 审查 P3：`__proto__` 等外部键写入普通对象会触发原型 setter。用
+  // null-prototype 对象承载，键只作数据。
+  const out: Record<string, Buffer> = Object.create(null) as Record<string, Buffer>;
   for (const part of value.trim().split(/\s+/)) {
     const m = /^([A-Za-z0-9_!#$%&'*+\-.^`|~]+)=:([^:]*):$/.exec(part);
     if (m === null) continue;

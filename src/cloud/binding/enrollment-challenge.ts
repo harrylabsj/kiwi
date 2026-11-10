@@ -20,6 +20,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { BoundedIpLimiter } from "../../http/bounded-ip-rate-limit.js";
+import { resolveRequestClientIp } from "../../net/client-ip.js";
 import { withEnrollmentStoreLock } from "./store-lock.js";
 import { writeFileAtomic } from "../../fs/atomic-write.js";
 import type { JwsSigningIdentity } from "../../trust/identity/jws.js";
@@ -98,7 +99,7 @@ export function createEnrollmentChallengeResponder(input: {
       if (req.url?.split("?", 1)[0] !== "/.well-known/kiwi-binding-challenge")
         return json(res, 404, { error: "not_found" });
       const currentTime = now().getTime();
-      if (!resourceLimit.take(req.socket?.remoteAddress, currentTime)) return json(res, 429, { error: "rate_limited" });
+      if (!resourceLimit.take(resolveRequestClientIp(req), currentTime)) return json(res, 429, { error: "rate_limited" });
       const chunks: Buffer[] = [];
       let size = 0;
       for await (const chunk of req) {
@@ -180,7 +181,7 @@ export function createEnrollmentChallengeResponder(input: {
         return json(res, 409, { error: "challenge_replayed" });
       if (liveConsumed.length >= MAX_CONSUMED)
         return json(res, 503, { error: "challenge_store_full" });
-      if (!signatureLimit.take(req.socket?.remoteAddress, currentTime)) return json(res, 429, { error: "rate_limited" });
+      if (!signatureLimit.take(resolveRequestClientIp(req), currentTime)) return json(res, 429, { error: "rate_limited" });
       const unsigned = {
         enrollment_id: enrollmentId,
         challenge,

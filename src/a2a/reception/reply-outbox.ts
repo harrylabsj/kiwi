@@ -87,6 +87,21 @@ export class ReceptionReplyOutbox {
     return true;
   }
 
+  /**
+   * 审查 P2：清理过期已决记录（此前文件无界增长，每次 record/save 全量
+   * 重写且 list 全表扫描）。`unknown` 状态是对账依据，§16.1 明确不得按
+   * TTL 清空——保留它们。
+   */
+  pruneBefore(cutoffIso: string): number {
+    const before = this.state.records.length;
+    this.state.records = this.state.records.filter(
+      (record) => record.status === "unknown" || record.created_at >= cutoffIso,
+    );
+    const pruned = before - this.state.records.length;
+    if (pruned > 0) this.save();
+    return pruned;
+  }
+
   /** 按会话列出出站记录（reply_seq 升序）。 */
   list(merchantId: string, identity: string, contextId: string): ReplyOutboxRecord[] {
     const key = keyOf(merchantId, identity, contextId);

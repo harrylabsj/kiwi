@@ -59,9 +59,15 @@ export function hashAdminPassword(password: string): string {
 export function verifyAdminPassword(password: string, stored: string): boolean {
   const parts = stored.split("$");
   if (parts.length !== 4 || parts[0] !== "scrypt") return false;
+  // 审查 P3：此前直接信任文件内的 N——被篡改成 2^30 时一次登录就耗尽内存
+  // （凭据文件可写即 DoS）。只接受受支持的参数范围与 32 字节摘要。
+  const cost = Number(parts[1]);
+  if (!Number.isInteger(cost) || cost < 16_384 || cost > 1_048_576) return false;
   const salt = parts[2] ?? "";
+  if (salt.length < 8 || salt.length > 256) return false;
   const expected = Buffer.from(parts[3] ?? "", "base64url");
-  const actual = scryptSync(password, salt, expected.length, { N: Number(parts[1]) });
+  if (expected.length !== 32) return false;
+  const actual = scryptSync(password, salt, expected.length, { N: cost });
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
@@ -187,11 +193,13 @@ export class MerchantAdminSessions {
       | undefined;
     if (row === undefined || row.revoked_at !== null) return undefined;
     if (row.expires_at <= this.now()) return undefined;
+    const role = normalizeRole(row.role);
+    if (role === undefined) return undefined;
     return {
       principal_id: row.principal_id,
       merchant_id: row.merchant_id,
       expires_at: row.expires_at,
-      role: normalizeRole(row.role),
+      role,
     };
   }
 
@@ -210,10 +218,12 @@ function sessionDigest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function normalizeRole(raw: string | null): MerchantRole {
+function normalizeRole(raw: string | null): MerchantRole | undefined {
   // 迁移前创建的历史行 role 为空（DEFAULT 'owner' 只对新 ALTER 行生效）——
-  // 缺失/未知一律按 owner 处理（历史管理员语义），不按最低权限静默降权。
-  return MERCHANT_ROLES.includes(raw as MerchantRole) ? (raw as MerchantRole) : "owner";
+  // **缺失**按历史管理员语义回 owner；但非空未知值必须拒绝会话（审查 P2：
+  // 未知角色 fail-open 成 owner = 最高权限上 fail-open）。
+  if (raw === null || raw === "") return "owner";
+  return MERCHANT_ROLES.includes(raw as MerchantRole) ? (raw as MerchantRole) : undefined;
 }
 
 function escapeHtml(text: string): string {
