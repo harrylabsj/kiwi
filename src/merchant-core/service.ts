@@ -612,6 +612,11 @@ export class MerchantCoreService {
     if (this.operationsStore === undefined) {
       throw new MerchantWorkbenchError("unavailable", "operation store 未配置（不可得）");
     }
+    // 审查 P2：CSV 此前无输入上限——任意长度内容会进审批候选持久化。
+    // 与 RFQ ingest 同口径 2MiB（UTF-8 字节数，不是字符数）。
+    if (Buffer.byteLength(input.csv, "utf8") > 2 * 1024 * 1024) {
+      throw new MerchantWorkbenchError("validation", "CSV 超过 2MiB 上限，请拆分后重试");
+    }
     // 幂等键（审查 P1）：显式 key 与参数摘要绑定——同 key 同内容仍幂等重放，
     // 同 key 不同内容不再碰撞（旧逻辑会静默返回旧 operation 并谎报成功）；
     // 空/纯空白 key 拒绝（nullish 兜底不覆盖空串）。
@@ -766,8 +771,15 @@ export class MerchantCoreService {
       consultations = await this.workbench.merchantClientRef.listIncomingConsultations(
         this.workbench.ownerIdRef,
       );
-    } catch {
-      tracks.shopping = "unavailable";
+    } catch (err) {
+      // 审查 P2：auth/配置类错误不能被伪装成「通道不可得」——那会让商家以为
+      // 只是暂时没数据，而实际是凭据/配置失效。与 A2A 轨同口径：仅
+      // unavailable 降级，其余（auth/validation/未知）fail-closed 透出。
+      if (err instanceof MerchantWorkbenchError && err.kind === "unavailable") {
+        tracks.shopping = "unavailable";
+      } else {
+        throw err;
+      }
     }
     for (const c of consultations) rows.push(fromShoppingConsultation(c));
     rows.sort((a, b) => (a.updated_at > b.updated_at ? -1 : a.updated_at < b.updated_at ? 1 : 0));

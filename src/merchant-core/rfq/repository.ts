@@ -1137,9 +1137,14 @@ export class RfqRepository {
     return this.tx(() => {
       const current = this.getHandoff(handoffId);
       if (current === undefined) throw new RfqError("not_found", `未知移交 ${handoffId}`);
-      this.db
+      const result = this.db
         .prepare("UPDATE rfq_handoffs SET status = ?, recorded_by = ?, updated_at = ? WHERE handoff_id = ? AND merchant_id = ? AND status = ?")
         .run(status, actor, this.now(), handoffId, this.merchantId, current.status);
+      // 审查 P2：并发下 CAS 未命中会静默 no-op 却返回成功——必须像
+      // transitionQuote/transitionRelease 一样校验变更行数。
+      if (Number(result.changes) !== 1) {
+        throw new RfqError("approval_stale", `移交 ${handoffId} 并发状态转移失败`);
+      }
       return this.getHandoff(handoffId) as RfqHandoffRow;
     });
   }

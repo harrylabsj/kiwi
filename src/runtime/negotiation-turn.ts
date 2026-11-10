@@ -138,7 +138,7 @@ export async function runNegotiationTurn(options: NegotiationTurnOptions): Promi
   }
 
   // 2. Claim. Idempotency key: agent_id + message_id + protocol version.
-  const idem = idempotencyKey(profile.agent_id, target.message_id, PROTOCOL_VERSION);
+  const idem = idempotencyKey(profile.agent_id, target.message_id, PROTOCOL_VERSION, target.conversation_id);
   const claim = await client.claimMessage({
     conversation_id: target.conversation_id,
     message_id: target.message_id,

@@ -174,7 +174,16 @@ export async function validateExternalDestinationUrl(
       );
     }
     redirects.push(current);
-    current = new URL(location, current).href;
+    // 审查 P3：畸形 Location 此前抛裸 TypeError（被上层归为终态 stale，
+    // 不可重试）。统一为可识别的 invalid_input。
+    try {
+      current = new URL(location, current).href;
+    } catch {
+      throw new CommerceError(
+        "invalid_input",
+        "destination returned a malformed redirect Location",
+      );
+    }
   }
   throw new CommerceError(
     "invalid_input",

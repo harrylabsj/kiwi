@@ -40,6 +40,7 @@ export type LaunchTradePlatform = "jd" | "taobao" | "tmall";
 /** 固定公共错误分类（不透 URL/host/query 原文或内部异常细节）。 */
 export type MarketplaceLaunchPolicyCode =
   | "trade_uri_invalid"
+  | "trade_sku_missing"
   | "unsupported_platform"
   | "platform_id_invalid";
 
@@ -249,6 +250,18 @@ export function buildMarketplaceSourceBinding(input: MarketplaceSourceBindingInp
     throw new MarketplaceLaunchPolicyError("trade_uri_invalid", "trusted listing declares no trade URI (handoff_destination_ref missing)");
   }
   const parsed = parseMarketplaceTradeUrl(declaredUri);
+  // 审查 P2：没有 source_product_ref 时，SKU 绑定会退化成空对空——核心保证
+  // 只剩平台 ID。缺少商家 SKU 的 listing 不得形成市场交易绑定（fail-closed）。
+  const sourceProductRef =
+    typeof input.listing.source_product_ref === "string"
+      ? input.listing.source_product_ref.trim()
+      : "";
+  if (sourceProductRef === "") {
+    throw new MarketplaceLaunchPolicyError(
+      "trade_sku_missing",
+      "trusted listing has no source_product_ref; cannot bind the agreed SKU",
+    );
+  }
   const snapshot = {
     listing_id: input.listing.listing_id,
     listing_type: input.listing.listing_type,
@@ -271,7 +284,7 @@ export function buildMarketplaceSourceBinding(input: MarketplaceSourceBindingInp
     source_revision: input.listing.source_revision ?? null,
     owner_agent_id: input.listing.owner_agent_id,
     merchant_id: input.listing.merchant_id,
-    merchant_sku: input.listing.source_product_ref ?? "",
+    merchant_sku: sourceProductRef,
     declared_uri: declaredUri,
     parsed_platform: parsed.platform,
     platform_product_id: parsed.platform_product_id,
