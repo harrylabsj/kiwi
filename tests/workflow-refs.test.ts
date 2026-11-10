@@ -283,7 +283,8 @@ it("ordinary quality CI preserves required checks with npm 12 before ci", () => 
   expect(steps[setup].run).toContain('node scripts/check-install-toolchain.mjs "$(npm --version)"');
   expect(steps.filter((s: { run?: string }) => s.run?.startsWith("npm run ")).map((s: { run: string }) => s.run)).toEqual([
     "npm run lint", "npm run typecheck", "npm run build", "npm run test", "npm run verify:contracts", "npm run verify:vectors",
-    "npm run verify:buyer-skills", "npm run verify:portfolio-products", "npm run verify:supply-chain", "npm run verify:package",
+    "npm run verify:buyer-skills", "npm run verify:portfolio-products", "npm run verify:supply-chain",
+    "npm run verify:audit-expiry", "npm run verify:package",
   ]);
 });
 
