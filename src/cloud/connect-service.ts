@@ -364,8 +364,6 @@ export interface VerifiedBinding {
   cardRevision: number | null;
 }
 
-const PUBLICATION_CHECK_INTERVAL_MS = 60_000;
-
 export interface MerchantConnectionServiceOptions {
   /** 权威状态目录（merchant-enrollments.json 所在）。 */
   dataDir: string;
@@ -973,14 +971,8 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         throw err;
       }
       if (current.status === "published") {
-        // 审查 P2：published 会话此前每 5s 无条件打一次 Catalog 公开读
-        // （每实例每天约 17k 次）。已验证且未到复查窗口时跳过；窗口内仍
-        // 维持上次结论（撤回最迟一个窗口被发现，fail-closed 不被放宽）。
-        const nowMs = this.now().getTime();
-        if (this.publicationVerified && nowMs - this.lastPublicationCheckAt < PUBLICATION_CHECK_INTERVAL_MS) {
-          return this.toSummary(current);
-        }
-        this.lastPublicationCheckAt = nowMs;
+        // 显式 reconcile（含用户操作）每次都核对 Catalog；后台轮询节流放在
+        // bootstrap 的 tick 层（published 会话 60s 一次，onboarding 仍 5s）。
         try {
           await this.assertPublicationActive(current);
         } catch (err) {
@@ -2081,8 +2073,6 @@ class ConnectionServiceImpl implements MerchantConnectionService {
   }
   private preEffectReadinessFailure = false;
   private effectStarted = false;
-  /** published 会话的 Catalog 复查节流（审查 P2）。 */
-  private lastPublicationCheckAt = 0;
 
   private async withLock<T>(fn: () => Promise<T>): Promise<T> {
     const result = this.mutex.then(fn);
