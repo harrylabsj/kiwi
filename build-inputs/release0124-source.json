@@ -3314,7 +3314,7 @@
     },
     {
       "path": "src/a2a/server/auth.ts",
-      "sha256": "sha256:5ce3862e40df2ea89ebbf14ac5390b40807bd2f84c3abe2c02cc9e696a43e3d7"
+      "sha256": "sha256:c62b92c1e2dbaf8f5bb72cf618eea2c4484147f919c943a431f3ac6990b30ae3"
     },
     {
       "path": "src/a2a/server/card.ts",
@@ -3802,7 +3802,7 @@
     },
     {
       "path": "src/cloud/catalog-client.ts",
-      "sha256": "sha256:255e8bcd7afbdffdb4b8d933bfd32532ebe8fee52d0e80677519f0287121f64a"
+      "sha256": "sha256:5b7fd69fc3967ac4fd9b83d3adae61960cba79151182a7e986977fa1305dd7ed"
     },
     {
       "path": "src/cloud/config.ts",
@@ -4302,7 +4302,7 @@
     },
     {
       "path": "src/http/merchant-management/trusted-page.ts",
-      "sha256": "sha256:b4fa326c377f561e08216722cd195bbab8907365551d256e600998029494aece"
+      "sha256": "sha256:5e06665cf0393af54e6dd68c91696b2bad0944a732c823549aa03dcb7e1f9dc4"
     },
     {
       "path": "src/http/merchant-management/webauthn-confirmation.ts",
@@ -4366,7 +4366,7 @@
     },
     {
       "path": "src/mcp/merchant-server.ts",
-      "sha256": "sha256:c1feb70153882bbc28be53c21a0a5af6c875a44acb85c6d60c84a27c601b095f"
+      "sha256": "sha256:d4ea2278be758e5b92ce1647d7cca2b19bb7ba2b7c45ec0ca60546d524917b94"
     },
     {
       "path": "src/mcp/merchant-tools.ts",
@@ -5736,7 +5736,7 @@
     },
     {
       "path": "tests/a422-public-boundaries.test.ts",
-      "sha256": "sha256:a641c860e9cddf39b8824e9087a716b6d94a81cd695df711d638583c9f28a04a"
+      "sha256": "sha256:a51ecd9f1986c71d9456f6017b5c3e062cc7e7165a49b0e9d11790b882414361"
     },
     {
       "path": "tests/a422-resource-boundaries.test.ts",
@@ -5960,7 +5960,7 @@
     },
     {
       "path": "tests/cloud-close-entrypoint.test.ts",
-      "sha256": "sha256:afe1888fd25f591aaaa49cd889b791dae9a250d0f8d792c6b5ac2ba400691cfa"
+      "sha256": "sha256:28cbe6bbc965c81fb006535e5358ac451d6e792ad42571268a6a431823a0a7bd"
     },
     {
       "path": "tests/cloud-config-tmpdir-canonicality.test.ts",
@@ -7184,7 +7184,7 @@
     },
     {
       "path": "tests/portfolio-release-index.test.ts",
-      "sha256": "sha256:b5c64ad1579f5e378fb706e797b21c56e3c5e83025d4912dd3b14e161e7d7194"
+      "sha256": "sha256:c06e320552560b512a3bfd735e271684a99d5bdb90da99b33fa576b374e0dd4f"
     },
     {
       "path": "tests/product-buyer.test.ts",
