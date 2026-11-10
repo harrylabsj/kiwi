@@ -104,13 +104,15 @@ export function redactPrivateFloor(text: string, profile: AgentProfile): string 
   if (!Number.isFinite(floor)) return text;
   const needle = canonicalDecimal(String(floor));
   return text.replace(
-    /(?<![0-9.,])[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?![0-9]|[.,][0-9])/g,
+    /(?<![0-9.,])[+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?![0-9]|[.,][0-9])/g,
     (token) => canonicalDecimal(token) === needle ? "[私密阈值]" : token,
   );
 }
 
 /** Compare exact decimal tokens without rounding distinct values through Number. */
-function canonicalDecimal(value: string): string | undefined {
+function canonicalDecimal(raw: string): string | undefined {
+  // 审查 C-7：千分位写法（1,000）也要与纯数字等价比较。
+  const value = raw.replaceAll(",", "");
   const match = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(value);
   if (match === null) return undefined;
   let digits = `${match[2] ?? ""}${match[3] ?? ""}`.replace(/^0+/, "");

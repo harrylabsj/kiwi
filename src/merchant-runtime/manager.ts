@@ -31,7 +31,7 @@ import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "../fs/atomic-write.js";
-import { canTakeOverStaleLock, lockOwnerRecord } from "../runtime/lock-owner.js";
+import { lockOwnerRecord, removeProvablyStaleLock } from "../runtime/lock-owner.js";
 
 export interface ManagedServiceSpec {
   /** 服务名（a2a / mcp 等，作为文件名须安全）。 */
@@ -272,14 +272,7 @@ export class MerchantRuntimeManager {
         break;
       } catch (err) {
         if ((err as { code?: string }).code !== "EEXIST") throw err;
-        try {
-          if (attempt === 0 && canTakeOverStaleLock(readFileSync(lock, "utf8"))) {
-            rmSync(lock, { force: true });
-            continue;
-          }
-        } catch {
-          /* 无法证明 → 不接管 */
-        }
+        if (attempt === 0 && removeProvablyStaleLock(lock)) continue;
         throw new MerchantRuntimeError(`服务 ${name} 正在由另一个 manager 启动`, "already_running");
       }
     }

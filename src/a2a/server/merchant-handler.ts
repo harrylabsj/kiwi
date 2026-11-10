@@ -936,7 +936,13 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
       // 跨进程相位对齐（例如 runtime 的过期报价 job 已写入 EXPIRED）。
       syncPhaseFromLedger(negotiationId);
       // 审查 P2-D：终态不得以同一 negotiation_id 重开（§17.4/§21.2）。
-      if (closedNegotiations.has(negotiationId) && COMMERCIAL_ACTIONS.has(envelope.action)) {
+      // 审查 C-9：内存集合有界（1 万），淘汰后仍以刚从账本同步的相位兜底。
+      const syncedPhase = phaseStateByNegotiation.get(negotiationId)?.phase;
+      if (
+        COMMERCIAL_ACTIONS.has(envelope.action) &&
+        (closedNegotiations.has(negotiationId) ||
+          (syncedPhase !== undefined && isTerminalPhase(syncedPhase)))
+      ) {
         return declineReply("state_conflict");
       }
 

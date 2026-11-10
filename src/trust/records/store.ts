@@ -49,7 +49,7 @@ import {
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { sha256Hex } from "../../negotiation/jcs.js";
-import { canTakeOverStaleLock, lockOwnerRecord } from "../../runtime/lock-owner.js";
+import { lockOwnerRecord, removeProvablyStaleLock } from "../../runtime/lock-owner.js";
 import { isTrustLevel } from "../identity/trust-policy.js";
 import { evaluateTrustRecord } from "./evaluator.js";
 import type { EvaluationResult, EvaluateOptions } from "./evaluator.js";
@@ -182,13 +182,7 @@ export class TrustRecordStore {
    * 这样进程崩溃不再把该对端记录永久锁死。
    */
   private tryClearStaleMutationLock(lock: string): boolean {
-    try {
-      if (!canTakeOverStaleLock(readFileSync(lock, "utf8"))) return false;
-      rmSync(lock);
-      return true;
-    } catch {
-      return false;
-    }
+    return removeProvablyStaleLock(lock);
   }
 
   /** Short synchronous mutation; only provably-dead locks are reclaimed. */

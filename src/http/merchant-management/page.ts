@@ -385,19 +385,24 @@ function appendCatalogAccess(html) {
     return html + '<div class="card"><h2>WorkBuddy 分享码（平台门禁）</h2><p>暂时无法读取访问配置状态，请稍后刷新。</p></div>';
   });
 }
-function showPublicInquiryStatus(consent) {
+function showPublicInquiryStatus(consent, notify) {
   var target = $("public-inquiry-status");
   var text = !consent || !consent.granted ? "尚未授权开放询价" :
     consent.policyActive && consent.localEnabled ? "已授权；买家接入仍需完成实际验证" : "已授权，当前尚未就绪；请检查目录连接和分享码";
   if (target) target.textContent = text;
   var button = $("inquiry-submit");
   if (button) button.disabled = !!(consent && consent.granted);
+  // 后台刷新不得覆盖全局状态条（例如“已撤销”）。只有显式查询/操作才写 bar。
+  if (notify !== false) bar(text, false);
 }
-function refreshPublicInquiry() {
+function refreshPublicInquiry(notify) {
   var button = $("inquiry-submit"); if (button) button.disabled = true;
   return call("POST", "/catalog/public-inquiry/status", {}).then(function (result) {
-    showPublicInquiryStatus(result.consent);
-  }).catch(function (error) { bar(error && error.message ? error.message : "无法查询开放询价状态", true); });
+    showPublicInquiryStatus(result.consent, notify);
+  }).catch(function (error) {
+    // 后台刷新失败同样不得覆盖全局状态条。
+    if (notify !== false) bar(error && error.message ? error.message : "无法查询开放询价状态", true);
+  });
 }
 function setPublicInquiry(granted) {
   var button = $("inquiry-submit");
@@ -445,8 +450,8 @@ function submitAccessLink() {
     accessSummaryBar(result.access, "已提交");
   }).catch(function (e) {
     // 错误文本由服务端给自有码说明；不把链接回显到页面。
+    // 审查 C-11：失败时保留输入框内容，允许用户核对后直接重试。
     accessSubmitPending = false;
-    if (input) input.value = "";
     updateAccessButton();
     bar(e && e.message ? e.message : "提交未完成，请先刷新状态后再试。", true);
   });
@@ -485,7 +490,8 @@ function revokeAccess() {
     catalogAccessState = result.access;
     accessSummaryBar(result.access, "已撤销");
     var button = $("access-revoke"); if (button) button.disabled = true;
-    refreshPublicInquiry();
+    refreshPublicInquiry(false);
+    refresh();
   }).catch(function () { bar("撤销未完成，请稍后重试。", true); });
 }
 function beginCatalogConnect() {
@@ -1425,7 +1431,8 @@ function refresh() {
         call("GET", "/catalog/bound-account").then(function (result) {
           var target = $("bound-account"); if (target) target.textContent = result.email || "无法确定，请到 Kiwi 商家门户核对";
         }).catch(function () { var target = $("bound-account"); if (target) target.textContent = "暂时无法读取，请稍后刷新"; });
-        refreshPublicInquiry();
+        // 后台刷新只更新局部状态，不覆盖全局提示条。
+        refreshPublicInquiry(false);
       }
     }
   })

@@ -4,7 +4,7 @@
 import * as nativeFs from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import path from "node:path";
-import { canTakeOverStaleLock, lockOwnerRecord } from "../../runtime/lock-owner.js";
+import { lockOwnerRecord, removeProvablyStaleLock } from "../../runtime/lock-owner.js";
 export class EnrollmentStoreBusy extends Error {
   readonly code = "ENROLLMENT_STORE_BUSY";
 }
@@ -32,14 +32,7 @@ export function withEnrollmentStoreLock<T>(
       if ((error as { code?: string }).code !== "EEXIST")
         throw error;
       // review P1-8：只接管可证明已死的持有者；否则维持 busy。
-      try {
-        if (attempt === 0 && canTakeOverStaleLock(readFileSync(file, "utf8"))) {
-          unlinkSync(file);
-          continue;
-        }
-      } catch {
-        /* 无法证明 → 不接管 */
-      }
+      if (attempt === 0 && removeProvablyStaleLock(file)) continue;
       throw new EnrollmentStoreBusy("Enrollment state is locked");
     }
   }

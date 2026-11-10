@@ -27,6 +27,7 @@
  * 仍由服务端主体与任务归属检查负责。
  */
 
+import { isAnonymousIdentity } from "./server/identity.js";
 import { OPEN_INQUIRY_IDENTITY_PREFIX } from "./open-inquiry-identity.js";
 import type { AuthContext, AuthResult, AuthVerifier } from "./server/types.js";
 
@@ -70,7 +71,7 @@ export class AdmissionPolicyVerifier implements AuthVerifier {
     const result = await this.delegate.verify(ctx);
     if (!result.authenticated || this.policy === "open") return result;
     const identity = result.identity ?? "";
-    const anonymous = identity.trim() === "" || identity === "anonymous";
+    const anonymous = isAnonymousIdentity(identity);
     if (anonymous) return deny("anonymous access denied by admission policy");
     if (this.policy === "closed" && identity.startsWith(OPEN_INQUIRY_IDENTITY_PREFIX)) {
       return deny("open inquiry session denied by admission policy");

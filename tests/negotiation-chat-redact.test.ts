@@ -32,6 +32,12 @@ describe("redactPrivateFloor（K-L22 出站脱敏）", () => {
     expect(redactPrivateFloor("最低 8900，别再低了", profile)).toBe("最低 [私密阈值]，别再低了");
   });
 
+  it("千分位写法同样被替换（审查 C-7）", () => {
+    expect(redactPrivateFloor("底价是 8,900 元", merchantProfile(8900))).toBe(
+      "底价是 [私密阈值] 元",
+    );
+  });
+
   it("不含底价的文本不变", () => {
     const profile = merchantProfile(8900);
     expect(redactPrivateFloor("我们接受 9000，包邮", profile)).toBe("我们接受 9000，包邮");

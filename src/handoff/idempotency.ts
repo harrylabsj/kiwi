@@ -41,7 +41,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { canTakeOverStaleLock, lockOwnerRecord } from "../runtime/lock-owner.js";
+import { lockOwnerRecord, removeProvablyStaleLock } from "../runtime/lock-owner.js";
 import { HandoffError } from "./errors.js";
 
 export interface HandoffIdempotencyStoreOptions {
@@ -182,14 +182,7 @@ export class HandoffIdempotencyStore {
         break;
       } catch (err) {
         if ((err as { code?: string }).code !== "EEXIST") throw err;
-        try {
-          if (canTakeOverStaleLock(readFileSync(lock, "utf8"))) {
-            unlinkSync(lock);
-            continue;
-          }
-        } catch {
-          continue;
-        }
+        if (removeProvablyStaleLock(lock)) continue;
         if (Date.now() >= deadline) {
           throw new HandoffError(
             "concurrency_lock_timeout",

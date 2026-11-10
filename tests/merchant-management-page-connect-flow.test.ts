@@ -43,7 +43,8 @@ const TERMS = WORKBUDDY_CUSTODY_TERMS_VERSION;
 
 type Element = { value: string; checked?: boolean; disabled?: boolean; innerHTML: string; textContent: string; className: string;
   style: { display: string }; setAttribute: (n: string, v: string) => void; removeAttribute: (n: string) => void;
-  addEventListener: (t: string, l: () => void) => void };
+  addEventListener: (t: string, l: () => void) => void;
+  querySelectorAll: (selector: string) => unknown[]; closest: (selector: string) => null };
 interface Recorded { method: string; path: string; body: unknown }
 
 function pageScript(options: { catalogConnection?: boolean; workbuddyAccess?: boolean }): string {
@@ -135,6 +136,7 @@ async function loadConnectPage(options: {
         (elements[id] ??= {
           value: "", innerHTML: "", textContent: "", className: "", style: { display: "" },
           setAttribute: () => {}, removeAttribute: () => {}, addEventListener: () => {},
+          querySelectorAll: () => [], closest: () => null,
         }),
     },
   });

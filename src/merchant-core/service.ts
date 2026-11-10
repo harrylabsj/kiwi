@@ -33,7 +33,7 @@ import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 
 import type { IncomingConsultation } from "../agent/merchant/types.js";
-import { parseProductCreateInput } from "../agent/merchant/types.js";
+import { MerchantClientError, parseProductCreateInput } from "../agent/merchant/types.js";
 import type { A2aNegotiationRow } from "../merchant/workbench-service.js";
 import {
   MerchantWorkbenchError,
@@ -776,6 +776,10 @@ export class MerchantCoreService {
       // 只是暂时没数据，而实际是凭据/配置失效。与 A2A 轨同口径：仅
       // unavailable 降级，其余（auth/validation/未知）fail-closed 透出。
       if (err instanceof MerchantWorkbenchError && err.kind === "unavailable") {
+        tracks.shopping = "unavailable";
+      } else if (err instanceof MerchantClientError && err.kind === "transient") {
+        // 审查 C-8：传输层瞬时故障同样只是“本轨暂不可得”，不应把整个
+        // 概览打成 500；auth/validation 仍然 fail-closed。
         tracks.shopping = "unavailable";
       } else {
         throw err;

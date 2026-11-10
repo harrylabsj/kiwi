@@ -695,8 +695,9 @@ export class InboundPipeline {
     // review P1-9：1.0 通用消息此前完全绕过限流/并发槽，任意匿名客户端可
     // 高频写入 TaskRegistry 并触发接待引擎。与 KNP 路径同一判定序列。
     const th = this.throttle;
+    let tReq: ThrottleRequest | undefined;
     if (th !== undefined) {
-      const tReq: ThrottleRequest = {
+      tReq = {
         identity: owner.identity,
         remoteAddress: owner.clientAddress ?? owner.remoteAddress,
         domain: domainFromUcpProfile(owner.ucpAgentProfile),
@@ -708,9 +709,15 @@ export class InboundPipeline {
       if (!decision.allowed) {
         throw rateLimited(decision.retryAfterSeconds, decision.reason);
       }
-      th.enterTask(tReq);
+      // 审查 P1（2026-11-10 复核）：与 KNP 路径同构——并发槽必须检查
+      // slot.ok 且在 finally 释放，否则通用消息只占不放，最终连 KNP 一起 429。
+      const slot = th.enterTask(tReq);
+      if (!slot.ok) {
+        throw rateLimited(slot.retryAfterSeconds, slot.reason);
+      }
     }
-    const taskId = newTaskId();
+    try {
+      const taskId = newTaskId();
     const contextId =
       typeof message.contextId === "string" && message.contextId.length > 0
         ? message.contextId
@@ -747,6 +754,9 @@ export class InboundPipeline {
     // 响应器契约：task XOR message；两者皆缺即内部错误（fail-closed）。
     if (result.message === undefined) throw internalServerError();
     return { message: result.message };
+    } finally {
+      if (th !== undefined && tReq !== undefined) th.leaveTask(tReq);
+    }
   }
 
   /** 内存任务注册表是否已存在**本人**任务（issue 10 / TCK CORE-MULTI-004）。 */

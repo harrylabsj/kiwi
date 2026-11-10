@@ -36,11 +36,11 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, userInfo } from "node:os";
@@ -410,7 +410,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
     } else if (arg === "--merchant-token-file") {
       const file = argv[++i] ?? "";
       if (file === "") throw new Error("--merchant-token-file requires a path");
-      const info = statSync(file);
+      // lstat：statSync 会跟随符号链接，isSymbolicLink() 恒 false（审查 C-6）。
+      const info = lstatSync(file);
       if (!info.isFile() || info.isSymbolicLink()) {
         throw new Error("--merchant-token-file must be a regular file");
       }
