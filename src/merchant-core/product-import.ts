@@ -42,6 +42,8 @@ export interface CsvImportPreview {
   creates: number;
   updates: number;
   row_errors: Array<{ line: number; error: string }>;
+  /** 审批预览必须能看到将被写入的每行动作与价格（review P1-6）。 */
+  rows: Array<{ line: number; sku: string; action: "create" | "update"; price: number }>;
 }
 
 const REQUIRED_COLUMNS = ["sku", "title", "price", "stock"] as const;
@@ -54,10 +56,11 @@ export function parseProductCsv(
   const lines = csv.split(/\r?\n/).filter((l) => l.trim() !== "");
   const rowErrors: Array<{ line: number; error: string }> = [];
   const inputs: Array<{ line: number; input: MerchantProductInput }> = [];
+  const rows: Array<{ line: number; sku: string; action: "create" | "update"; price: number }> = [];
   if (lines.length === 0) {
     return {
       inputs,
-      preview: { total_lines: 0, valid: 0, creates: 0, updates: 0, row_errors: [] },
+      preview: { total_lines: 0, valid: 0, creates: 0, updates: 0, row_errors: [], rows: [] },
     };
   }
   const header = lines[0]?.split(",").map((c) => c.trim()) ?? [];
@@ -72,6 +75,7 @@ export function parseProductCsv(
           creates: 0,
           updates: 0,
           row_errors: rowErrors,
+          rows: [],
         },
       };
     }
@@ -82,7 +86,9 @@ export function parseProductCsv(
     const cells = (lines[i] ?? "").split(",").map((c) => c.trim());
     const sku = cells[idx.sku ?? -1] ?? "";
     const title = cells[idx.title ?? -1] ?? "";
-    const price = Number(cells[idx.price ?? -1]);
+    const priceText = cells[idx.price ?? -1] ?? "";
+    // 裸 Number() 会接受 0x10 / 1e3；导入价格只接受十进制数字。
+    const price = /^\d+(?:\.\d{1,4})?$/.test(priceText) ? Number(priceText) : Number.NaN;
     const stock = Number(cells[idx.stock ?? -1]);
     if (sku === "" || title === "") {
       rowErrors.push({ line: lineNo, error: "sku/title 为空" });
@@ -99,6 +105,12 @@ export function parseProductCsv(
       });
       continue;
     }
+    rows.push({
+      line: lineNo,
+      sku,
+      action: existingSkus.has(sku) ? "update" : "create",
+      price,
+    });
     inputs.push({
       line: lineNo,
       input: {
@@ -132,6 +144,7 @@ export function parseProductCsv(
       creates,
       updates: inputs.length - creates,
       row_errors: rowErrors,
+      rows,
     },
   };
 }
@@ -148,6 +161,8 @@ export async function executeProductsImport(input: {
   merchantId: string;
   merchantClient: MerchantClient;
   operations: MerchantOperationStore;
+  /** 与单商品 create/update 同一底价硬策略（review P1-6）。 */
+  enforceFloor?: (price: unknown) => void;
 }): Promise<MerchantOperation | { ok: false; operation: MerchantOperation }> {
   const existing = input.operations.createOrGet({
     kind: PRODUCTS_IMPORT_OPERATION_KIND,
@@ -170,6 +185,7 @@ export async function executeProductsImport(input: {
     }));
     for (const { line, input: product } of inputs) {
       try {
+        input.enforceFloor?.(product.price);
         if (existingSkus.has(product.sku)) {
           await input.merchantClient.updateProduct(product.sku, {
             title: product.title,

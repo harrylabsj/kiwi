@@ -356,7 +356,7 @@ export function createMerchantHttpServer(options: MerchantHttpAdapterOptions): S
         segments[1] !== "merchant" ||
         segments[2] !== "sessions"
       ) {
-        throw new HttpError(404, "not_found", method + " " + url.pathname);
+        throw new HttpError(404, "not_found", "unknown endpoint");
       }
 
       const identity = await authorize(request);
@@ -426,7 +426,7 @@ export function createMerchantHttpServer(options: MerchantHttpAdapterOptions): S
         return;
       }
 
-      throw new HttpError(404, "not_found", method + " " + url.pathname);
+      throw new HttpError(404, "not_found", "unknown endpoint");
     } catch (error) {
       sendError(response, error);
     }

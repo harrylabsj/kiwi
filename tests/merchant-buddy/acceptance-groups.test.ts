@@ -331,7 +331,7 @@ describe("验收组 10：发布", () => {
     expect(checklist.items.find((i) => i.id === "public-projection-separation")?.status).toBe("ok");
     const { core, db } = setupCore();
     const prepared = await core.prepareProductsImport({
-      csv: "sku,title,price,stock\nsku-a,好行,10,1\nbad\n",
+      csv: "sku,title,price,stock\nsku-a,好行,90,1\nbad\n",
       idempotency_key: "grp10",
     });
     const outcome = await core.executeApproved(prepared.candidate.candidate_id);
