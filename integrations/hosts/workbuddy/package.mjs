@@ -66,7 +66,7 @@ const [serverName, server] = servers[0];
 assert.equal(serverName, "kiwi-sourcing");
 assert.equal(server.type, "stdio");
 assert.equal(server.command, "node");
-assert.deepEqual(server.args, ["${CODEBUDDY_PLUGIN_ROOT}/runtime/production-launcher.mjs"]);
+assert.deepEqual(server.args, ["./runtime/production-launcher.mjs"]);
 assert.equal(server["x-workbuddy"].auth.type, "none");
 files.push(".mcp.json");
 const runtimeRoot = path.join(here, "kiwi-sourcing/runtime");

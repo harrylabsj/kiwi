@@ -114,7 +114,7 @@ describe("买方连接器身份（不随商家连接器改变）", () => {
     expect(plugin.dependencies.mcpServers).toBe("./.mcp.json");
     expect(plugin.dependencies.connectors).toBeUndefined();
     expect(mcp.mcpServers["kiwi-sourcing"]["x-workbuddy"].auth.type).toBe("none");
-    expect(mcp.mcpServers["kiwi-sourcing"].args).toEqual(["${CODEBUDDY_PLUGIN_ROOT}/runtime/production-launcher.mjs"]);
+    expect(mcp.mcpServers["kiwi-sourcing"].args).toEqual(["./runtime/production-launcher.mjs"]);
   });
 
   it("商家连接器包不声明买方工具，也不指向买方 source", () => {
