@@ -3434,7 +3434,7 @@
     },
     {
       "path": "src/agent/buyer/buyer-tools.ts",
-      "sha256": "sha256:1c26e204c1952aa25bb356f883d3c2a5817b557fda417f98cad7a91c76bc6573"
+      "sha256": "sha256:7fdec1c4aa26a7ba1b17e4929b99d74eb981829f61d3144922dc3efc6dc14e79"
     },
     {
       "path": "src/agent/buyer/ranker.ts",
