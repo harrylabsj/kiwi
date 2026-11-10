@@ -509,6 +509,10 @@ export function createNegotiationObserver(options: NegotiationObserverOptions): 
     return { status, limit, offset };
   };
 
+  // 审查 P2：旁观投影每次请求全量重扫账本，被 watch 10s 轮询放大。
+  // 1s TTL 缓存按状态过滤后的列表（可接受的看板新鲜度），写入路径不受影响。
+  const factsCache = new Map<string, { at: number; facts: NegotiationFacts[] }>();
+
   const collectFacts = (
     ledger: LedgerStore,
     status: NegotiationStatusFilter,
@@ -526,7 +530,17 @@ export function createNegotiationObserver(options: NegotiationObserverOptions): 
     facts.sort((a, b) =>
       a.row.recorded_at > b.row.recorded_at ? -1 : a.row.recorded_at < b.row.recorded_at ? 1 : 0,
     );
+    factsCache.set(status, { at: Date.now(), facts });
     return facts;
+  };
+
+  const collectFactsCached = (
+    ledger: LedgerStore,
+    status: NegotiationStatusFilter,
+  ): NegotiationFacts[] => {
+    const cached = factsCache.get(status);
+    if (cached !== undefined && Date.now() - cached.at < 1000) return cached.facts;
+    return collectFacts(ledger, status);
   };
 
   const loadOne = (negotiationId: string): NegotiationFacts => {
@@ -555,7 +569,7 @@ export function createNegotiationObserver(options: NegotiationObserverOptions): 
   return {
     list(query: NegotiationListQuery): NegotiationListResult {
       const { status, limit, offset } = parseQuery(query);
-      const facts = collectFacts(loadLedger(), status);
+      const facts = collectFactsCached(loadLedger(), status);
       return {
         total: facts.length,
         items: facts.slice(offset, offset + limit).map((fact) => fact.row),
@@ -564,7 +578,7 @@ export function createNegotiationObserver(options: NegotiationObserverOptions): 
     },
     listOwner(query: NegotiationListQuery): NegotiationOwnerListResult {
       const { status, limit, offset } = parseQuery(query);
-      const facts = collectFacts(loadLedger(), status);
+      const facts = collectFactsCached(loadLedger(), status);
       return {
         total: facts.length,
         items: facts.slice(offset, offset + limit).map((fact) => fact.ownerRow),

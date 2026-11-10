@@ -366,7 +366,8 @@ function policyFloorMinor(
 ): number | undefined {
   const floor = policy?.price_floors?.[sku] ?? policy?.min_unit_price_private;
   if (typeof floor !== "number" || !Number.isFinite(floor)) return undefined;
-  return Math.round(floor * 100);
+  // 审查 P3：与 lossless 纪律一致，展示门控用十分位取整会差 1 分（如 2.675）。
+  return Math.floor(floor * 100 + 1e-9);
 }
 
 function deliveryBefore(policy: MerchantPolicy | undefined, now: string): string | undefined {

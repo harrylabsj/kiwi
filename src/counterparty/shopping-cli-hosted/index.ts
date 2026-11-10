@@ -404,6 +404,7 @@ class ShoppingCliHostedHandle implements ChannelHandle {
       try {
         // 首个 tick 推送当前权威快照（§21）。
         let state = await this.getState({ negotiation_id: this.deps.negotiationId, conversation_id, message_id });
+        let lastPushed = JSON.stringify(state);
         await handler({
           channel: "shopping-cli-hosted",
           kind: "state_changed",
@@ -415,6 +416,10 @@ class ShoppingCliHostedHandle implements ChannelHandle {
           await this.deps.client.heartbeat({ message_id }).catch(() => undefined);
           await new Promise((resolve) => setTimeout(resolve, 100));
           state = await this.getState({ negotiation_id: this.deps.negotiationId, conversation_id, message_id });
+          // 审查 P3：只在状态变化时推送，避免每 100ms 无条件 state_changed。
+          const pushed = JSON.stringify(state);
+          if (pushed === lastPushed) continue;
+          lastPushed = pushed;
           await handler({
             channel: "shopping-cli-hosted",
             kind: "state_changed",

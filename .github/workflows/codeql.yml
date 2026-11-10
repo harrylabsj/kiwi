@@ -3,7 +3,7 @@
 # All third-party actions are pinned to full commit SHAs (no tag/branch refs,
 # no network resolution at workflow runtime):
 #   - actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-#   - github/codeql-action/{init,autobuild,analyze}@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+#   - github/codeql-action/{init,autobuild,analyze}@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
 # The CodeQL action SHA has init/ and analyze/ action directories verified
 # before pinning. No secrets are used.
 name: CodeQL

@@ -717,6 +717,15 @@ export async function bootstrapCloudRuntime(
       const connection = directConnection;
       let directRunning = false;
       const tickConnection = (): void => {
+        // 审查 P2：启动快照之外，运行期向导出现 active 记录时必须停掉直连
+        // 编排——两套 enrollment 编排并行会竞速同一 origin/key。
+        if (onboardingStore.activeRecord(profile.owner_id) !== undefined) {
+          if (directConnectionTimer !== undefined) {
+            clearInterval(directConnectionTimer);
+            directConnectionTimer = undefined;
+          }
+          return;
+        }
         if (directRunning) return;
         directRunning = true;
         directConnectionWork = connection.reconcile().then(() => undefined)

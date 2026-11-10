@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Code Review 2026-11-10 修复批次
+
+- **P1 安全/正确性**：受限值脱敏、buyer 远程内容围栏、整数 minor 还价、
+  A2A 1.0 通用消息限流、CSV 导入底价与预览价格、微信去重失败回滚、
+  connect claim 确定性释放、残留锁可证明已死接管、domain-control 挑战绑定、
+  首绑 IP/密钥预算与通知异步化、UCP checkout fresh 内容绑定。
+- **运营出口**：`kiwi locks list|recover-ledger|recover-enrollment` 显式恢复
+  跨 host/不可证明的残留锁。
+- **P2/P3**：未知运费/交期按未知处理、模型来源审计、kernel 串行注入、
+  XFF 取最右、匿名身份按来源派生、内存表有界、SSE 会话清扫、scrypt 凭据
+  保管、配对码默认 required、会话角色 fail-closed、HTTP body 按 Buffer 解码、
+  市场绑定要求商家 SKU、候选生命周期迁移校验、登录 per-IP/时序防护等。
+- **发布说明**：本版本恢复出厂待审；发布必须经 `kiwi-release` 环境人工批准。
+
 ## v0.12.25 — 2026-11-04
 
 - **WorkBuddy 商家 stale 自动唤醒**：买家对 stale 商家发起询价时，仅做一次按需公开 `GET /livez` 唤醒（3s 超时、60s 冷却、单商家 singleflight、仅 WorkBuddy 主机、禁止 sharecode/loopback/私网/重定向）；是否恢复在线仍只由 catalog 重新读到商家签名心跳决定，不伪造状态。

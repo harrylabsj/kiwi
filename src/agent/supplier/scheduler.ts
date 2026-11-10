@@ -97,6 +97,7 @@ type PullErrorCode =
   | "network"
   | "response_too_large"
   | "invalid_json"
+  | "aborted"
   | "schema_invalid";
 
 class SupplierPullError extends Error {

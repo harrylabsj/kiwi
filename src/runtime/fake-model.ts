@@ -137,7 +137,15 @@ export function deterministicMerchantDecision(
   // the autonomous negotiation never closes.
   const floor = hints.merchant_min_unit_price;
   const buyerProposal = snapshot.current_proposal;
-  if (floor !== undefined && buyerProposal !== null && buyerProposal !== undefined && buyerProposal.unit_price >= floor) {
+  // 审查 P3：accept 路径同样受库存约束（counter 路径已收口），数量超过
+  // 可售库存时不得直接接受。
+  if (
+    floor !== undefined &&
+    buyerProposal !== null &&
+    buyerProposal !== undefined &&
+    buyerProposal.unit_price >= floor &&
+    buyerProposal.quantity <= snapshot.stock.quantity
+  ) {
     return {
       protocol_version: PROTOCOL_VERSION,
       conversation_id: snapshot.conversation.id,

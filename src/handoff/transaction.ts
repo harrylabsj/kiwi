@@ -22,7 +22,7 @@
  *   1. 生命周期门：候选必须 READY（PROPOSED 时先走 approval：通过 →
  *      ready 事件；拒绝 → rejected 事件并返回）；
  *   2. pre-execution revalidation（§10）：重读 agreement / 重算 terms_digest /
- *      验 merchant identity / 验 destination（URL 安全）/ 验 expiry ——
+ *      验 merchant identity（reader 提供时）/ 验 destination（URL 安全）/ 验 expiry ——
  *      任一变化 → handoff_candidate_stale → 返回 stale（不执行）；
  *   3. 幂等（§10.1）：(source_candidate_id, source_candidate_digest) 已交付
  *      → 返回已交付结果（重试不重复交付）；冲突 → fail-closed；
@@ -97,6 +97,11 @@ export interface AgreementReadResult {
   agreement_id: string;
   negotiation_id: string;
   agreed_terms: unknown;
+  /**
+   * 协议商家身份（可选）。reader 能提供时 executeHandoff 会与候选记录比对；
+   * 不提供则跳过（保持既有调用方兼容），不得假装已校验。
+   */
+  merchant_identity_ref?: string;
 }
 
 /**
@@ -296,6 +301,14 @@ async function executeHandoffUnlocked(input: ExecuteHandoffInput): Promise<Execu
   }
   if (agreement.agreement_id !== candidate.agreement_id || agreement.negotiation_id !== candidate.negotiation_id) {
     return stale(input, candidate, now, "agreement identity changed");
+  }
+  // 审查 P3：注释声称“验 merchant identity”，实现缺失。reader 提供身份时
+  // 与候选记录精确比对；未提供则明确跳过（不谎称已校验）。
+  if (
+    agreement.merchant_identity_ref !== undefined &&
+    agreement.merchant_identity_ref !== candidate.merchant_identity_ref
+  ) {
+    return stale(input, candidate, now, "merchant identity changed");
   }
   const recomputedTerms = contentDigest(agreement.agreed_terms);
   if (recomputedTerms !== candidate.terms_digest) {

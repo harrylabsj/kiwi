@@ -25,8 +25,20 @@ import {
   sourceContract,
   git,
 } from "./lib/npm-shipping.mjs";
+const NPMRC_BASELINE_COMMIT = "e703bc0d67e24a98c417274e46f37d210eff86ac";
 function awaitConfig(root) {
-  return git(root, ["show", "e703bc0d67e24a98c417274e46f37d210eff86ac:.npmrc"]) + "\n";
+  try {
+    return git(root, ["show", `${NPMRC_BASELINE_COMMIT}:.npmrc`]) + "\n";
+  } catch (err) {
+    // 审查 P2：此前浅克隆/gc 丢失历史 commit 时只抛出底层 git 错误，不指
+    // 向根因。补可操作的说明（基准是发布契约的一部分，不能静默跳过）。
+    throw new Error(
+      `release build requires historical commit ${NPMRC_BASELINE_COMMIT} (the .npmrc byte baseline); ` +
+        "the clone appears shallow or pruned. Run `git fetch --unshallow` (or deepen the clone) and retry. " +
+        `Original error: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
 }
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CONCRETE_SEMVER =

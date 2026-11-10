@@ -21,6 +21,27 @@ export function createMerchantPrivacyApiHandler(options: {
     body?: Buffer,
   ) => VerifiedBuyerPrincipal | undefined | Promise<VerifiedBuyerPrincipal | undefined>;
 }): (req: IncomingMessage, res: ServerResponse) => void {
+  // 审查 P3：删除请求此前无限频——可反复刷新同意代次与 42 天抑制窗口。
+  // 每个 buyer principal 每 15 分钟最多 3 次（单进程内存桶）。
+  const deletionAttempts = new Map<string, number[]>();
+  const takeDeletionBudget = (buyerPrincipalId: string, now = Date.now()): boolean => {
+    const windowMs = 15 * 60_000;
+    const hits = (deletionAttempts.get(buyerPrincipalId) ?? []).filter(
+      (stamp) => now - stamp < windowMs,
+    );
+    if (hits.length >= 3) {
+      deletionAttempts.set(buyerPrincipalId, hits);
+      return false;
+    }
+    hits.push(now);
+    deletionAttempts.set(buyerPrincipalId, hits);
+    if (deletionAttempts.size > 1024) {
+      for (const [key, stamps] of deletionAttempts) {
+        if (stamps.every((stamp) => now - stamp >= windowMs)) deletionAttempts.delete(key);
+      }
+    }
+    return true;
+  };
   return (req, res) => {
     void handle(req, res).catch(() =>
       writeProblem(res, "INTERNAL_ERROR", requestId(), "内部错误", "隐私请求未处理。"),
@@ -46,6 +67,16 @@ export function createMerchantPrivacyApiHandler(options: {
       return;
     }
     if (collection && req.method === "POST") {
+      if (!takeDeletionBudget(principal.buyerPrincipalId)) {
+        writeProblem(
+          res,
+          "RATE_LIMITED",
+          id,
+          "请求过于频繁",
+          "删除请求过于频繁，请稍后再试。",
+        );
+        return;
+      }
       try {
         const record = options.store.receiveBuyerDeletionRequest({
           merchantId: options.merchantId,

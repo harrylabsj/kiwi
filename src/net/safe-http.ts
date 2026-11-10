@@ -36,7 +36,7 @@
 /** 响应体上限缺省值（8 MiB；Agent Card/UCP profile 等正常响应远小于此）。 */
 export const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
-export type SafeHttpErrorCode = "redirect" | "response_too_large" | "invalid_json";
+export type SafeHttpErrorCode = "redirect" | "response_too_large" | "invalid_json" | "aborted";
 
 export class SafeHttpError extends Error {
   readonly code: SafeHttpErrorCode;
@@ -118,6 +118,13 @@ export async function readJsonBody(response: Response, options: ReadJsonBodyOpti
       }
       chunks.push(value);
     }
+  } catch (error) {
+    // 审查 P3：abort 中断 body 读取此前落入 invalid_json，把超时误报成
+    // “对端发了坏数据”。按 aborted 分类，调用方可重试。
+    if (signal?.aborted === true) {
+      throw new SafeHttpError("aborted", "request aborted while reading the response body");
+    }
+    throw error;
   } finally {
     signal?.removeEventListener("abort", onAbort);
   }
