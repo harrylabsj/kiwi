@@ -1692,6 +1692,12 @@ Merchant Kiwi
 
 商品私有数据不得因为注册到 kiwi-catalog 而自动公开。
 
+> **开放询价中继（显式例外）**：为支持买家无需账号即可询价，kiwi-catalog 在商家
+> 显式授权后提供 `POST /v1/agents/{id}/public-inquiry`，把买家签名的 A2A 报文
+> 原样转发到商家 `/a2a`。这是**传输层例外**，不改变基线角色：目录不裁决报价、
+> 不改条款、不保存磋商状态，但报文对目录可见。方法与响应白名单、授权校验链、
+> 残余风险与变更门槛见 `docs/open-inquiry-transport-contract.md`。
+
 # 35. Legacy Migration
 
 ```text

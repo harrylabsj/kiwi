@@ -377,7 +377,7 @@ function appendCatalogAccess(html) {
       '</div>' +
       '<div class="card"><h2>开放询价</h2>' +
       '<p id="public-inquiry-status" class="muted">请查询当前授权状态。</p>' +
-      '<div class="row"><label class="consent-label"><input id="public-inquiry-consent" type="checkbox" aria-label="同意开放询价"> <span>我同意买家无需注册或事先批准即可通过 Kiwi 目录询价。</span></label> <details><summary>查看开放询价授权与使用说明</summary><p>允许买家无需注册、关注或商家逐个批准，通过 Kiwi 目录主动询价。Kiwi 负责通过平台门禁；商家后台仍仅供管理员登录。需先完成目录连接与分享码代管。本项为单独授权，可随时关闭；关闭后停止新的开放询价。</p></details></div>' +
+      '<div class="row"><label class="consent-label"><input id="public-inquiry-consent" type="checkbox" aria-label="同意开放询价"> <span>我同意买家无需注册或事先批准即可通过 Kiwi 目录询价。</span></label> <details><summary>查看开放询价授权与使用说明</summary><p>允许买家无需注册、关注或商家逐个批准，通过 Kiwi 目录主动询价。询价与报价报文会经 Kiwi 目录转发给商家；目录不裁决条款、不保存磋商内容，但能读到报文明文。Kiwi 负责通过平台门禁；商家后台仍仅供管理员登录。需先完成目录连接与分享码代管。本项为单独授权，可随时关闭；关闭后停止新的开放询价。</p></details></div>' +
       '<div class="row"><button id="inquiry-submit" class="act primary" onclick="setPublicInquiry(true)" disabled>授权开放询价</button> ' +
       '<button class="act" onclick="refreshPublicInquiry()">查询授权状态</button> ' +
       '<button class="act danger" onclick="setPublicInquiry(false)">关闭开放询价</button></div></div>';
