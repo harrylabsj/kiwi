@@ -7,4 +7,4 @@
  */
 import type { webcrypto } from "node:crypto";
 
-export type JsonWebKey = webcrypto.JsonWebKey & { kid?: string };
+export type JsonWebKey = webcrypto.JsonWebKey & { kid?: string; [key: string]: unknown };

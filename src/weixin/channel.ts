@@ -344,7 +344,16 @@ export class WeixinChannel {
 
     this.log(`[weixin] ${shortId(msg.from_user_id)} → ${truncate(msg.text, LOG_TEXT_LENGTH)}`);
 
-    const reply = await this.kernel.handleUserText(msg.text);
+    let reply: Awaited<ReturnType<typeof this.kernel.handleUserText>>;
+    try {
+      reply = await this.kernel.handleUserText(msg.text);
+    } catch (err) {
+      // review P1-5：指纹在成功处理前已加入 seen；若本轮抛错（enqueue/
+      // SQLite/记忆层），必须回滚，否则下一轮重投会被当作重复静默丢弃，
+      // 连 /approve 这类审批命令也会永久丢失。
+      this.seen.delete(fingerprint);
+      throw err;
+    }
     if (reply.text !== "") {
       await this.trySend(msg.from_user_id, reply.text, contextToken);
     }

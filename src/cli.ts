@@ -60,6 +60,7 @@ import { buildChatKernel, buildClient, defaultChatProfile } from "./agent/kernel
 
 import { AgentKernel } from "./agent/kernel.js";
 import { loadProfile, ProfileError, type AgentProfile } from "./config/profile.js";
+import { toMinorUnits } from "./protocol/legacy-shopping-negotiation/money.js";
 import {
   catalogOwnerTokenEnv,
   DEFAULT_CATALOG_OWNER_TOKEN_ENV,
@@ -1522,9 +1523,14 @@ async function cmdMerchantApprovals(args: ParsedArgs): Promise<number> {
         process.stderr.write("price_cny 必须是非负数字\n");
         return EXIT.CONFIG;
       }
+      const approved = toMinorUnits(price, 2);
+      if (!approved.lossless) {
+        process.stderr.write("price_cny 超过两位小数，无法无损换算为 minor units\n");
+        return EXIT.CONFIG;
+      }
       const record = store.approve({
         approval_id: approvalId,
-        approved_minor: Math.round(price * 100),
+        approved_minor: approved.amount_minor,
         approved_by: profile.agent_id,
       });
       printJson({ ok: true, approval: record });

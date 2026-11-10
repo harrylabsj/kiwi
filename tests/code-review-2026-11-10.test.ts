@@ -27,3 +27,53 @@ describe("targetPriceMinor (P1-3)", () => {
     expect(Number.isSafeInteger(target)).toBe(true);
   });
 });
+
+// P1-6: CSV import must run the same private-floor policy as single-product
+// create/update, and the approval preview must expose each row's action/price.
+import { DatabaseSync } from "node:sqlite";
+
+import { parseProductCsv, executeProductsImport } from "../src/merchant-core/product-import.js";
+import { MerchantOperationStore } from "../src/merchant-core/operations.js";
+import { FakeMerchantClient, fakeMerchantProduct } from "../src/agent/merchant/fake-merchant-client.js";
+
+describe("CSV import floor + preview (P1-6)", () => {
+  it("preview lists each row action and price", () => {
+    const csv = "sku,title,price,stock\nNEW-1,New item,12.5,3\nOLD-1,Old item,9,1";
+    const { preview } = parseProductCsv(csv, new Set(["OLD-1"]));
+    expect(preview.rows).toEqual([
+      { line: 2, sku: "NEW-1", action: "create", price: 12.5 },
+      { line: 3, sku: "OLD-1", action: "update", price: 9 },
+    ]);
+  });
+
+  it("rejects a below-floor row without creating the product", async () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const operations = new MerchantOperationStore({ db, now: () => new Date().toISOString() });
+      const client = new FakeMerchantClient();
+      const created: string[] = [];
+      client.createProduct = async (p) => {
+        created.push(p.sku);
+        return fakeMerchantProduct({ sku: p.sku, title: p.title, price: p.price, stock: p.stock });
+      };
+      const result = await executeProductsImport({
+        csv: "sku,title,price,stock\nLOW-1,Too cheap,5,1",
+        idempotencyKey: "floor-1",
+        merchantId: "merchant-001",
+        merchantClient: client,
+        operations,
+        enforceFloor: (price) => {
+          if (typeof price === "number" && price < 10) {
+            throw new Error("执行被硬策略拒绝：价格低于私有底价");
+          }
+        },
+      });
+      expect(created).toEqual([]);
+      const operation = "operation" in result ? result.operation : result;
+      expect(["failed", "partially_failed"]).toContain(operation.status);
+      expect(JSON.stringify(operation.receipts)).toContain("底价");
+    } finally {
+      db.close();
+    }
+  });
+});

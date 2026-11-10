@@ -430,6 +430,49 @@ describe("WeixinChannel 集成", () => {
   });
 });
 
+describe("WeixinChannel 去重与失败回滚（review P1-5）", () => {
+  it("kernel 抛错后同一消息不会被去重指纹永久吞掉", async () => {
+    const mock = await startMockServer();
+    mock.updatesHandler = () => ({
+      ret: 0,
+      msgs: [
+        {
+          from_user_id: PAIRED_USER,
+          message_id: "approve-1",
+          context_token: "ctx-approve",
+          item_list: [{ type: 1, text_item: { text: "/approve A-1" } }],
+        },
+      ],
+      get_updates_buf: "cursor-approve",
+    });
+    const dir = workDir();
+    const files = seedCredentials(dir);
+    let calls = 0;
+    const processed: string[] = [];
+    const kernel = {
+      async handleUserText(text: string) {
+        calls += 1;
+        if (calls === 1) throw new Error("memory store failed");
+        processed.push(text);
+        return { text: "approved", quit: false };
+      },
+    } as unknown as AgentKernel;
+    const channel = await WeixinChannel.open({
+      kernel,
+      apiBaseUrl: mock.base,
+      credentialsPath: files.creds,
+      syncBufPath: files.sync,
+      timings: { schedulerTickMs: 0, negotiateTickMs: 0 },
+    });
+    const run = channel.run();
+    await waitFor(() => processed.length === 1, 8000);
+    await channel.stop();
+    await run;
+    expect(calls).toBe(2);
+    expect(processed).toEqual(["/approve A-1"]);
+  });
+});
+
 function waitFor(cond: () => boolean, timeoutMs = 3000): Promise<void> {
   return new Promise((resolve, reject) => {
     const start = Date.now();

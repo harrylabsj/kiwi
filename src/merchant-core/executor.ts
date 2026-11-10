@@ -132,7 +132,7 @@ export class MerchantExecutorRegistry {
         readPreconditions: productPreconditions,
         execute: async (args, c) => {
           const changes = (args.changes ?? {}) as MerchantProductPatch;
-          enforceFloor(typeof changes.price === "number" ? changes.price : undefined);
+          enforceFloor(changes.price);
           return c.merchantClient.updateProduct(String(args.sku), changes);
         },
         verifyAfter: async (args, _c) => {
@@ -169,7 +169,7 @@ export class MerchantExecutorRegistry {
         readPreconditions: productPreconditions,
         execute: async (args, c) => {
           const changes = (args.changes ?? {}) as MerchantProductPatch;
-          enforceFloor(typeof changes.price === "number" ? changes.price : undefined);
+          enforceFloor(changes.price);
           return c.merchantClient.updateProduct(String(args.sku), changes);
         },
       },
@@ -249,6 +249,7 @@ export class MerchantExecutorRegistry {
             merchantId: c.ownerId,
             merchantClient: c.merchantClient,
             operations: c.operations,
+            enforceFloor,
           });
         },
       },

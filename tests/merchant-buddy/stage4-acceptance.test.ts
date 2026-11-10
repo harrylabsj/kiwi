@@ -76,7 +76,7 @@ function setupCore(client?: MerchantClient, dataDir?: string) {
   return { core, store, db };
 }
 
-const CSV_OK = "sku,title,price,stock\nsku-001,手写陶瓷杯,88,10\nsku-002,机制陶瓷杯,59,20\n";
+const CSV_OK = "sku,title,price,stock\nsku-001,手写陶瓷杯,88,10\nsku-002,机制陶瓷杯,89,20\n";
 
 describe("F04：CSV 导入闭环", () => {
   it("解析预览逐行回执（新增/更新/错误行）", async () => {
