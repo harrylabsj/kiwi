@@ -71,7 +71,6 @@ import type { SupplierRelationshipStore } from "../supplier/store.js";
 import type { ConsultationLink, BuyerTaskStatus } from "./types.js";
 import type { TaskConstraints, TaskEvent, TaskIntent } from "./types.js";
 import { BuyerTaskError } from "./types.js";
-import { uuidv7 } from "@earendil-works/pi-ai";
 
 type Tool = KiwiTool;
 
@@ -958,7 +957,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             ...(deps.catalogSource !== undefined ? { catalogSource: deps.catalogSource } : {}),
           },
           task.task_id,
-          `tool:${uuidv7()}`,
+          `tool:search:${task.task_id}:${task.version}`,
         );
         current = cycle.task;
         if (cycle.outcome === "shortlist_ready") {
@@ -1017,11 +1016,13 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         const p = params as { task_id: string; constraints: unknown };
         const task = store.getTask(p.task_id);
         if (task === undefined) throw new BuyerTaskError("not_found", `no task ${p.task_id}`);
+        const constraints = parseConstraints(p.constraints);
         const updated = store.updateTask(
           p.task_id,
-          { constraints: parseConstraints(p.constraints) },
+          { constraints },
           task.version,
-          `update-constraints:${uuidv7()}`,
+          // 内容寻址：同任务同约束的重试不会产生重复事件。
+          `update-constraints:${p.task_id}:${contentDigest(constraints)}`,
         );
         if (updated.status === "awaiting_user") {
           const searching = store.transitionTask({
@@ -1030,7 +1031,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             expected_version: updated.version,
             event_type: "search_started",
             origin: "model",
-            idempotency_key: `${updated.task_id}:re-search:${uuidv7()}`,
+            idempotency_key: `${updated.task_id}:re-search:${updated.version}`,
           });
           const cycle = await runSearchCycle(
             {
@@ -1040,7 +1041,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
               ...(deps.catalogSource !== undefined ? { catalogSource: deps.catalogSource } : {}),
             },
             searching.task_id,
-            `tool:${uuidv7()}`,
+            `tool:re-search:${updated.task_id}:${updated.version}`,
           );
           return textResult(`约束已更新并重新搜索（结果：${cycle.outcome}）。`);
         }
@@ -1094,7 +1095,14 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           ...(typeof p.cooldown_seconds === "number"
             ? { cooldown_seconds: p.cooldown_seconds }
             : {}),
-          idempotency_key: `rule:${uuidv7()}`,
+          // 内容寻址：同一规则重复安装是幂等的。
+          idempotency_key: `rule:${String(p.task_id)}:${contentDigest({
+            candidate_id: p.candidate_id ?? null,
+            rule_type: p.rule_type,
+            condition: p.condition ?? {},
+            interval_seconds: p.interval_seconds,
+            cooldown_seconds: p.cooldown_seconds ?? null,
+          })}`,
         });
         return textResult(
           `跟踪规则已安装（${rule.rule_id}，每 ${rule.interval_seconds}s 检查）。`,
@@ -1151,7 +1159,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           expected_version: task.version,
           event_type: "cancelled",
           origin: "model",
-          idempotency_key: `cancel:${uuidv7()}`,
+          idempotency_key: `cancel:${p.task_id}`,
         });
         return textResult(`任务 ${p.task_id} 已取消。`);
       } catch (err) {
@@ -1744,7 +1752,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             handoff_destination_ref: p.handoff_destination_ref ?? null,
           },
           "model",
-          `shortlist:${p.task_id}:${p.listing_id}:${uuidv7()}`,
+          `shortlist:${p.task_id}:${p.listing_id}`,
         );
         return textResult(
           JSON.stringify({

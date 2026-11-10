@@ -21,6 +21,7 @@
  * 否则两个 poller 会互相偷消息。命令只服务扫码者本人与显式 allowlist。
  */
 
+import { toMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -280,9 +281,14 @@ export class WeixinOpsBot {
           if (approvalId === undefined || !Number.isFinite(price) || price < 0) {
             return "用法：/approve <审批ID> <单价元>";
           }
+          // 审查 P3：金额转换必须无损（2.675 类输入不得四舍五入差 1 分）。
+          const converted = toMinorUnits(price, 2);
+          if (!converted.lossless) {
+            return "单价最多两位小数（金额不允许四舍五入）";
+          }
           const record = service.approve({
             approval_id: approvalId,
-            approved_minor: Math.round(price * 100),
+            approved_minor: converted.amount_minor,
             actor: `weixin:${fromUser}`,
           });
           return `已批准 ${record.approval_id}；批准价 ${money(record.currency, record.approved_minor ?? 0)}。买家再次还价时生效。`;

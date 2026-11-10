@@ -768,7 +768,9 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
     if (calculated.status !== "quoted" || calculated.source.kind !== "promotion") {
       return { kind: "invalid" };
     }
-    if (Date.parse(value.endsAt) <= Date.parse(now())) return { kind: "invalid" };
+    // 审查 P3：过期促销不应整单转人工——回退到 list 价继续报价；
+    // 促销本身的其他策略问题（低于底价等）仍按 invalid 走审批。
+    if (Date.parse(value.endsAt) <= Date.parse(now())) return { kind: "none" };
     const priceMinor = Number(calculated.unit_price.amount_minor);
     return {
       kind: "applied",

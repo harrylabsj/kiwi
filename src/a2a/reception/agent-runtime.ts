@@ -14,6 +14,7 @@
  *    确定性接待路径。
  */
 
+import { toMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
 import {
   Agent,
   type AgentEvent,
@@ -521,8 +522,10 @@ export function createPiReceptionRuntime(
                   }
                 }
                 const floorMinor = policyFloorMinor(policy, sku);
+                const listMinor = toMinorUnits(product.price, 2);
                 const listPrice =
-                  floorMinor !== undefined && Math.round(product.price * 100) < floorMinor
+                  floorMinor !== undefined &&
+                  (!listMinor.lossless || listMinor.amount_minor < floorMinor)
                     ? undefined
                     : product.price;
                 let unit = product.unit;
@@ -700,8 +703,10 @@ export function createPiReceptionRuntime(
               rejectedFactUnits.delete(sku);
             }
             const floorMinor = policyFloorMinor(policy, sku);
+            const listMinor = toMinorUnits(product.price, 2);
             const listPrice =
-              floorMinor !== undefined && Math.round(product.price * 100) < floorMinor
+              floorMinor !== undefined &&
+              (!listMinor.lossless || listMinor.amount_minor < floorMinor)
                 ? undefined
                 : product.price;
             const stockBound =

@@ -11,6 +11,8 @@
  * 未配置顾问时行为不变；配置后也只改变措辞，不改变任何价格数字。
  */
 
+import { toMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
+
 export interface NegotiationAdvisorInput {
   sku: string;
   quantity: number;
@@ -184,7 +186,8 @@ export function safeAdvisorMessage(
   for (const raw of numbers) {
     const value = Number(raw);
     if (!Number.isFinite(value)) return undefined;
-    const asMinor = Math.round(value * 100);
+    const convertedValue = toMinorUnits(value, 2);
+    const asMinor = convertedValue.lossless ? convertedValue.amount_minor : Number.NaN;
     if (!priceMinor.has(asMinor) && !quantities.has(value)) return undefined;
   }
   return trimmed;
