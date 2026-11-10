@@ -957,7 +957,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             ...(deps.catalogSource !== undefined ? { catalogSource: deps.catalogSource } : {}),
           },
           task.task_id,
-          `tool:search:${task.task_id}:${task.version}`,
+          `tool:search:${task.task_id}:${_id}`,
         );
         current = cycle.task;
         if (cycle.outcome === "shortlist_ready") {
@@ -1021,8 +1021,8 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           p.task_id,
           { constraints },
           task.version,
-          // 内容寻址：同任务同约束的重试不会产生重复事件。
-          `update-constraints:${p.task_id}:${contentDigest(constraints)}`,
+          // 幂等绑定工具调用 id：同一调用的重试去重，新调用（新 id）是新意图。
+          `update-constraints:${p.task_id}:${_id}`,
         );
         if (updated.status === "awaiting_user") {
           const searching = store.transitionTask({
@@ -1031,7 +1031,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             expected_version: updated.version,
             event_type: "search_started",
             origin: "model",
-            idempotency_key: `${updated.task_id}:re-search:${updated.version}`,
+            idempotency_key: `${updated.task_id}:re-search:${_id}`,
           });
           const cycle = await runSearchCycle(
             {
@@ -1041,7 +1041,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
               ...(deps.catalogSource !== undefined ? { catalogSource: deps.catalogSource } : {}),
             },
             searching.task_id,
-            `tool:re-search:${updated.task_id}:${updated.version}`,
+            `tool:re-search:${updated.task_id}:${_id}`,
           );
           return textResult(`约束已更新并重新搜索（结果：${cycle.outcome}）。`);
         }
@@ -1095,14 +1095,8 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           ...(typeof p.cooldown_seconds === "number"
             ? { cooldown_seconds: p.cooldown_seconds }
             : {}),
-          // 内容寻址：同一规则重复安装是幂等的。
-          idempotency_key: `rule:${String(p.task_id)}:${contentDigest({
-            candidate_id: p.candidate_id ?? null,
-            rule_type: p.rule_type,
-            condition: p.condition ?? {},
-            interval_seconds: p.interval_seconds,
-            cooldown_seconds: p.cooldown_seconds ?? null,
-          })}`,
+          // 幂等绑定工具调用 id（同一调用重试去重；新调用是新规则意图）。
+          idempotency_key: `rule:${String(p.task_id)}:${_id}`,
         });
         return textResult(
           `跟踪规则已安装（${rule.rule_id}，每 ${rule.interval_seconds}s 检查）。`,
@@ -1159,7 +1153,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           expected_version: task.version,
           event_type: "cancelled",
           origin: "model",
-          idempotency_key: `cancel:${p.task_id}`,
+          idempotency_key: `cancel:${p.task_id}:${_id}`,
         });
         return textResult(`任务 ${p.task_id} 已取消。`);
       } catch (err) {
@@ -1752,7 +1746,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             handoff_destination_ref: p.handoff_destination_ref ?? null,
           },
           "model",
-          `shortlist:${p.task_id}:${p.listing_id}`,
+          `shortlist:${p.task_id}:${p.listing_id}:${_id}`,
         );
         return textResult(
           JSON.stringify({
