@@ -409,12 +409,12 @@ describe("UcpCheckoutChannel.createSession", () => {
     const { fetchImpl } = routerFetch([
       {
         match: (c) => c.method === "POST" && c.url.endsWith("/checkout-sessions"),
-        handler: () =>
+        handler: (c) =>
           jsonResponse({
             ucp: { status: "success", version: "2026-04-08" },
             status: "incomplete",
             session_id: "cs_default",
-            line_items: [],
+            line_items: (c.body?.line_items as unknown[]) ?? [],
           }),
       },
     ]);
@@ -717,6 +717,100 @@ describe("UcpCheckoutChannel totals validation", () => {
     );
     expect(res.status).toBe("ok");
     expect(server.calls.some((c) => c.url.endsWith("/complete"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4b. 审查 P1-10：fresh checkout 内容必须仍绑定已授权 terms（TOCTOU）
+// ---------------------------------------------------------------------------
+
+describe("UcpCheckoutChannel fresh-content binding (P1-10)", () => {
+  it("createSession fails closed when the business echoes different line_items", async () => {
+    const server = new MockCheckoutServer();
+    server.getHandler = undefined;
+    const original = server.fetchImpl;
+    let created = false;
+    const fetchImpl = (async (input: FetchInput, init?: FetchInit): Promise<Response> => {
+      if (!created && (init?.method ?? "GET").toUpperCase() === "POST") {
+        created = true;
+        return jsonResponse({
+          ucp: { status: "success", version: "2026-04-08" },
+          status: "incomplete",
+          session_id: "cs_changed",
+          line_items: [{ sku: SKU, quantity: 200, unit_price: { currency: "CNY", amount_minor: 99000 } }],
+          expires_at: "2026-08-06T18:00:00Z",
+        });
+      }
+      return original(input, init);
+    }) as typeof fetch;
+    const channel = makeChannel(fetchImpl);
+
+    const res = await channel.createSession(makePackage());
+    expect(res.status).toBe("fail_closed");
+    if (res.status !== "fail_closed") return;
+    expect(res.code).toBe("line_items_mismatch");
+    expect(res.session_ref).toBe("cs_changed");
+    expect(channel.sessionCount).toBe(0);
+  });
+
+  it("requestCompletion refuses when the fresh checkout was repriced after approval", async () => {
+    const server = new MockCheckoutServer();
+    const channel = makeChannel(server.fetchImpl, {
+      authorizationProvider: new FakeAuthorizationProvider(),
+    });
+    const created = await channel.createSession(makePackage());
+    if (created.status !== "ok") return;
+    const updated = await channel.updateSession(created.session_ref, TERMS_2);
+    expect(updated.status).toBe("ok");
+    if (updated.status !== "ok") return;
+
+    // business 在批准后、Complete 前把价格改回/改成另一组内容。
+    server.getHandler = (_id, session) => ({
+      status: 200,
+      body: {
+        ucp: { status: "success", version: "2026-04-08" },
+        ...session,
+        status: "ready_for_complete",
+        line_items: [{ sku: SKU, quantity: 250, unit_price: { currency: "CNY", amount_minor: 99900 } }],
+      },
+    });
+
+    const res = await channel.requestCompletion(
+      created.session_ref,
+      validAuthorization({ session_ref: created.session_ref, terms_digest: digestTerms(TERMS_2) }),
+    );
+    expect(res.status).toBe("fail_closed");
+    if (res.status !== "fail_closed") return;
+    expect(res.code).toBe("line_items_mismatch");
+    expect(server.calls.some((c) => c.url.endsWith("/complete"))).toBe(false);
+  });
+
+  it("requestCompletion refuses when the remote echoes a different terms_digest", async () => {
+    const server = new MockCheckoutServer();
+    const channel = makeChannel(server.fetchImpl, {
+      authorizationProvider: new FakeAuthorizationProvider(),
+    });
+    const created = await channel.createSession(makePackage());
+    if (created.status !== "ok") return;
+
+    server.getHandler = (_id, session) => ({
+      status: 200,
+      body: {
+        ucp: { status: "success", version: "2026-04-08" },
+        ...session,
+        status: "ready_for_complete",
+        reference: { terms_digest: "sha256:someone-elses-terms" },
+      },
+    });
+
+    const res = await channel.requestCompletion(
+      created.session_ref,
+      validAuthorization({ session_ref: created.session_ref, terms_digest: digestTerms(TERMS) }),
+    );
+    expect(res.status).toBe("fail_closed");
+    if (res.status !== "fail_closed") return;
+    expect(res.code).toBe("line_items_mismatch");
+    expect(server.calls.some((c) => c.url.endsWith("/complete"))).toBe(false);
   });
 });
 
@@ -1110,4 +1204,4 @@ describe("findCheckoutEndpoint / profile construction", () => {
   });
 });
 
-it('A422 H10 omitted expiry stays anchored to original creation across refreshes',async()=>{let stamp=NOW;const {fetchImpl,calls}=routerFetch([{match:c=>c.url.includes('/checkout-sessions'),handler:()=>jsonResponse({ucp:{status:'success',version:'2026-04-08'},status:'incomplete',session_id:'cs_anchor',line_items:[]})}]);const channel=makeChannel(fetchImpl,{now:()=>stamp});const first=await channel.createSession(makePackage());expect(first.status).toBe('ok');if(first.status!=='ok')throw Error('creation prerequisite');const original=first.checkout.expires_at;stamp='2026-08-06T13:00:00Z';const refreshed=await channel.getSession(first.session_ref);expect(refreshed.status).toBe('ok');if(refreshed.status!=='ok')throw Error('refresh prerequisite');expect(refreshed.checkout.expires_at).toBe(original);stamp='2026-08-06T19:00:00Z';const expired=await channel.getSession(first.session_ref);expect(expired).toMatchObject({status:'fail_closed',code:'session_expired'});expect(calls.filter(c=>c.method==='POST')).toHaveLength(1);});
+it('A422 H10 omitted expiry stays anchored to original creation across refreshes',async()=>{let stamp=NOW;const {fetchImpl,calls}=routerFetch([{match:c=>c.url.includes('/checkout-sessions'),handler:c=>jsonResponse({ucp:{status:'success',version:'2026-04-08'},status:'incomplete',session_id:'cs_anchor',line_items:(c.body?.line_items as unknown[])??[]})}]);const channel=makeChannel(fetchImpl,{now:()=>stamp});const first=await channel.createSession(makePackage());expect(first.status).toBe('ok');if(first.status!=='ok')throw Error('creation prerequisite');const original=first.checkout.expires_at;stamp='2026-08-06T13:00:00Z';const refreshed=await channel.getSession(first.session_ref);expect(refreshed.status).toBe('ok');if(refreshed.status!=='ok')throw Error('refresh prerequisite');expect(refreshed.checkout.expires_at).toBe(original);stamp='2026-08-06T19:00:00Z';const expired=await channel.getSession(first.session_ref);expect(expired).toMatchObject({status:'fail_closed',code:'session_expired'});expect(calls.filter(c=>c.method==='POST')).toHaveLength(1);});

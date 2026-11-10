@@ -277,12 +277,18 @@ class MockUcpServer {
 
     // -- Checkout routes ----------------------------------------------------
     if (path === CO_BASE && method === "POST") {
+      if (this.fixedSessionId !== undefined) {
+        const existing = this.sessions.get(this.fixedSessionId);
+        if (existing !== undefined) return jsonResponse(successCart(existing));
+      }
       const sessionId = this.fixedSessionId ?? `cs_${++this.sessionSeq}`;
+      const cartId = typeof body?.cart_id === "string" ? body.cart_id : undefined;
+      const cart = cartId !== undefined ? this.carts.get(cartId) : undefined;
       const session: ServerSession = {
         session_id: sessionId,
         status: this.checkoutCreateStatus,
-        line_items: (body?.line_items as unknown[]) ?? [],
-        ...(body?.cart_id !== undefined ? { cart_id: body.cart_id as string } : {}),
+        line_items: cart?.line_items ?? (body?.line_items as unknown[]) ?? [],
+        ...(cartId !== undefined ? { cart_id: cartId } : {}),
         expires_at: "2026-08-06T18:00:00Z",
       };
       this.sessions.set(sessionId, session);
@@ -742,19 +748,22 @@ describe("cart→checkout conversion", () => {
     if (first.status !== "ok") return;
     expect(first.session_ref).toBe("cs_fixed");
 
-    // 换一组 terms（digest 不同，客户端短接不触发）→ 仍收到既有会话 cs_fixed → 按成功处理。
+    // 审查 P1-10：换一组 terms（digest 不同）后 business 仍返回既有会话——
+    // 既有会话的 line_items 仍是旧 terms 的内容 → 必须 fail-closed，
+    // 不得把新授权嫁接到旧内容上。
     const second = await cart.createCheckoutFromCart(created.cart_ref, makePackage(TERMS_2));
-    expect(second.status).toBe("ok");
-    if (second.status !== "ok") return;
+    expect(second.status).toBe("fail_closed");
+    if (second.status !== "fail_closed") return;
+    expect(second.code).toBe("line_items_mismatch");
     expect(second.session_ref).toBe("cs_fixed");
     expect(server.checkoutCreateCalls().length).toBe(2);
     expect(server.checkoutCreateCalls()[1]?.body?.cart_id).toBe(created.cart_ref);
     expect((server.checkoutCreateCalls()[1]?.body as Record<string, unknown>).line_items).toBeUndefined();
 
-    // 链接被重新记录（terms_digest 指向最近一次转换）。
+    // 链接保持最近一次**被接受**的转换（旧 terms）。
     const link = checkout.cartCheckoutLink(created.cart_ref);
     expect(link?.session_ref).toBe("cs_fixed");
-    expect(link?.terms_digest).toBe(digestTerms(TERMS_2));
+    expect(link?.terms_digest).toBe(digestTerms(TERMS));
   });
 
   it("fails closed when the business profile does not declare the cart capability", async () => {
