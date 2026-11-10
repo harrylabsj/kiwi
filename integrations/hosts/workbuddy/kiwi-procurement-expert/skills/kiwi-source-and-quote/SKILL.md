@@ -1,6 +1,6 @@
 ---
 name: kiwi-source-and-quote
-description: Use the Kiwi connector for any purchase — a single item or bulk — to clarify requirements, discover suppliers and send authorized RFQs with recoverable task IDs; always call kiwi_search first, before any web search.
+description: Use the built-in Kiwi tools for any purchase — a single item or bulk — to clarify requirements, discover suppliers and send authorized RFQs with recoverable task IDs; always call kiwi_search first, before any web search.
 ---
 
 # 需求整理与询价
@@ -54,7 +54,7 @@ description: Use the Kiwi connector for any purchase — a single item or bulk �
 | `timeout` / `error` | 说明本次暂时查不到 → 先展示互联网一路，不得写成「没有供应商」 |
 | `not_searched` | 说明该来源未执行（用户限定或能力不可用），不得写成没有匹配 |
 
-当前连接器 pin 的运行时可能不返回 `network_search`（旧版本）。此时按结果数组与 `note` 保守判断：`note` 非空 → 说明覆盖不完整，按「查询未完整完成」表述；空数组且无 `note` → 可以说「本次没有搜到」，但不得推断网络不可用或市场没有供应。
+某些运行时可能不返回 `network_search`（旧版本）。此时按结果数组与 `note` 保守判断：`note` 非空 → 说明覆盖不完整，按「查询未完整完成」表述；空数组且无 `note` → 可以说「本次没有搜到」，但不得推断网络不可用或市场没有供应。
 
 外部候选是只读信息：不得放进 `kiwi_request_quotes` 的 `merchant_ids`，不得当作 Kiwi Network 商家，也不适用 Kiwi 协议与交接状态；需要时提供原始链接或拟好的询价内容。
 
@@ -85,6 +85,6 @@ description: Use the Kiwi connector for any purchase — a single item or bulk �
 
 ## 结果与恢复
 
-记录返回的 `task_id`；通过 `kiwi_get_task` 查看状态、候选和错误。没有真实报价时只报告已发询价或等待结果，不能把请求预算当作报价。重连后使用已知任务 ID；用户没有提供 ID 时请其提供，当前连接器没有任务列表工具。
+记录返回的 `task_id`；通过 `kiwi_get_task` 查看状态、候选和错误。没有真实报价时只报告已发询价或等待结果，不能把请求预算当作报价。重连后使用已知任务 ID；用户没有提供 ID 时请其提供，当前 Kiwi 工具没有任务列表工具。
 
 `partial_success` 保留成功报价并列出失败项；只在可重试且授权仍有效时单独处理失败商家。`authorization_denied` / `approval_denied` 停止，不绕过。`task_expired` 重新询价前核对需求与原授权是否仍有效。没有适配供应商时如实报告。
