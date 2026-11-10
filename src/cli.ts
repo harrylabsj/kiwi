@@ -40,6 +40,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, userInfo } from "node:os";
@@ -385,13 +386,42 @@ export function parseArgs(argv: string[]): ParsedArgs {
       shoppingCliMerchant = argv[++i];
     } else if (arg === "--merchant-id") {
       merchantId = argv[++i];
-    } else if (arg === "--merchant-token") {
+    } else if (
+      arg === "--merchant-token" ||
+      (arg !== undefined && arg.startsWith("--merchant-token="))
+    ) {
       // 审查 P2：密钥参数会进 shell history 与 `ps` 输出。与 admin-passwd
-      // 的 promptSecret 纪律一致——只接受环境变量或 TTY 隐藏输入。
+      // 的 promptSecret 纪律一致——不接受裸令牌；非交互场景用
+      // --merchant-token-env / --merchant-token-file。
       throw new Error(
         "--merchant-token is not accepted on the command line (visible in shell history/ps); " +
-          "set SHOPPING_MERCHANT_TOKEN (or the profile's token_env) or run interactively",
+          "use --merchant-token-env <ENV_NAME>, --merchant-token-file <0600 file>, or run interactively",
       );
+    } else if (arg === "--merchant-token-env") {
+      const name = argv[++i] ?? "";
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        throw new Error("--merchant-token-env requires a valid environment variable name");
+      }
+      const value = (process.env[name] ?? "").trim();
+      if (value === "") {
+        throw new Error(`--merchant-token-env ${name}: environment variable is not set or empty`);
+      }
+      merchantToken = value;
+    } else if (arg === "--merchant-token-file") {
+      const file = argv[++i] ?? "";
+      if (file === "") throw new Error("--merchant-token-file requires a path");
+      const info = statSync(file);
+      if (!info.isFile() || info.isSymbolicLink()) {
+        throw new Error("--merchant-token-file must be a regular file");
+      }
+      if (info.size > 8 * 1024) throw new Error("--merchant-token-file is too large");
+      // POSIX 权限：只接受 0600（所有者可读写），避免同机其他用户读取。
+      if (process.platform !== "win32" && (info.mode & 0o077) !== 0) {
+        throw new Error("--merchant-token-file must be mode 0600 (chmod 600 <file>)");
+      }
+      const value = readFileSync(file, "utf8").trim();
+      if (value === "") throw new Error("--merchant-token-file is empty");
+      merchantToken = value;
     } else if (arg === "--public-url") {
       publicUrl = argv[++i];
     } else if (arg === "--name") {
@@ -489,8 +519,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
       shoppingCliSrc = arg.slice("--shopping-cli-src=".length);
     } else if (arg !== undefined && arg.startsWith("--merchant-id=")) {
       merchantId = arg.slice("--merchant-id=".length);
-    } else if (arg !== undefined && arg.startsWith("--merchant-token=")) {
-      merchantToken = arg.slice("--merchant-token=".length);
     } else if (arg !== undefined && arg.startsWith("--public-url=")) {
       publicUrl = arg.slice("--public-url=".length);
     } else if (arg !== undefined && arg.startsWith("--name=")) {
