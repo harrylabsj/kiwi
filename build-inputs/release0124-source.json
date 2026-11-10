@@ -2246,7 +2246,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/.mcp.json",
-      "sha256": "sha256:2e5439ac188f780c989f617d98bc19b5730cd48047b23b39e45b98252ca05598"
+      "sha256": "sha256:9c5d75d3bb36bddacea7d22e0b2d3bbf756e946f020dd208f259425723fc0f13"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/agents/kiwi-procurement.md",
@@ -2606,7 +2606,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/package.mjs",
-      "sha256": "sha256:578580558489193868f50f11123bc284d472fc3a1cdd6866ea80d4615c223a2c"
+      "sha256": "sha256:527c7307f82282bde06993614a87dbbe039095f1fdaa6d9330887f2b064685f6"
     },
     {
       "path": "integrations/hosts/workbuddy/release-bundle-manifest.json",
@@ -4282,7 +4282,7 @@
     },
     {
       "path": "src/http/merchant-management/page.ts",
-      "sha256": "sha256:bd971b1b85a289d2ea1c31aa5bbfe5872be619c4a5426553d994851a88e630c3"
+      "sha256": "sha256:196983a08b4506bd0ceed244bca74e372b8c93ed97437e36708d232547b9effd"
     },
     {
       "path": "src/http/merchant-management/problem-client.ts",
@@ -5880,7 +5880,7 @@
     },
     {
       "path": "tests/buyer-tool-contract.test.ts",
-      "sha256": "sha256:d40d74345b965a50f6c74244a340a824a5ba57b45ce36f1a023380510718503a"
+      "sha256": "sha256:4b9dfce4ab8f9180d55a826bb87e77a1a794b55d9ad7a4056c868d85e914d790"
     },
     {
       "path": "tests/buyer-turn.test.ts",
@@ -6428,7 +6428,7 @@
     },
     {
       "path": "tests/merchant-catalog-connection-api.test.ts",
-      "sha256": "sha256:3d0f459e4237f6aa93310d8fedcbd88e1f8d12ef4de0392edaf8ec2b82b59779"
+      "sha256": "sha256:36ec6c71d6481b315ad3cb42d54182da782635677774ca04e46a19a3b4205838"
     },
     {
       "path": "tests/merchant-client-inventory.test.ts",
