@@ -57,6 +57,7 @@ import {
 import { HttpMessageSignatureVerifier, InMemoryNonceStore } from "../trust/identity/index.js";
 import type { NonceStore } from "../trust/identity/nonce.js";
 import { OpenInquiryVerifier } from "./open-inquiry-verifier.js";
+import { InquiryNonceStore } from "./inquiry-nonce-store.js";
 import { AdmissionPolicyVerifier, parseA2aAdmissionPolicy, type A2aAdmissionPolicy } from "./admission.js";
 import { resolveA2aThrottle } from "./throttle-config.js";
 export { resolveA2aThrottle };
@@ -405,6 +406,8 @@ interface AuthFromEnvContext {
   signingKeyId: string;
   role: AgentProfile["role"];
   advertisedBase: string;
+  /** 持久 nonce 存储（dataDir 形态由 core 注入）。 */
+  signatureNonceStore?: NonceStore;
 }
 
 /**
@@ -449,6 +452,9 @@ export function createA2aAuthVerifier(options: A2aAuthVerifierOptions): AuthVeri
     trustedKeys = loadA2aTrustedKeys(trustedFile);
   }
   const advertised = new URL(options.advertisedBase);
+  // 持久 nonce 存储由 core 按 dataDir 构造并负责关闭；没有注入时回退内存
+  //（临时/测试形态，重放保护仍在进程生命周期内生效）。
+  const signatureNonceStore: NonceStore = options.signatureNonceStore ?? new InMemoryNonceStore();
   const verifier = new HttpMessageSignatureVerifier({
     resolver: resolveA2aSignatureResolver(identity, trustedKeys),
     scheme: advertised.protocol === "https:" ? "https" : "http",
@@ -460,9 +466,10 @@ export function createA2aAuthVerifier(options: A2aAuthVerifierOptions): AuthVeri
     // 审查 P2：匿名调用者按来源地址派生身份，避免所有匿名买家共享一个
     // 幂等键/磋商绑定/审批消费主体。
     deriveAnonymousIdentity: true,
-    // 审查 M2：此前未接 nonceStore——签名请求的 nonce 永不被校验，重放保护
-    // 失效（JWS/nonce 机制是死代码）。接入内存 nonce 存储后，T1+ 键可强制 nonce。
-    nonceStore: new InMemoryNonceStore(),
+    // 审查 M2/P3：签名请求的 nonce 必须持久化——纯内存存储在进程重启后
+    // 清空，捕获的签名请求可在有效窗口内重放。持久 dataDir 存在时用 SQLite
+    // 存储；临时/测试形态回退内存（目录随进程销毁）。
+    nonceStore: signatureNonceStore,
   });
   const withOpenInquiry = options.openInquiryNonceStore === undefined ? verifier :
     new OpenInquiryVerifier(verifier, new URL(options.advertisedBase).origin, options.openInquiryNonceStore,
@@ -489,6 +496,8 @@ export interface A2aAuthVerifierOptions {
   /** 签名 keyid（公网用 advertised origin，否则 role:agent_id）。 */
   signingKeyId: string;
   advertisedBase: string;
+  /** 签名请求 nonce 存储；持久 dataDir 形态由 core 注入并负责关闭。 */
+  signatureNonceStore?: NonceStore;
   /** Explicit opt-in only; callers own durable replay-store lifecycle. */
   openInquiryNonceStore?: NonceStore;
   /** Dynamic owner-consent gate; absent only for explicitly injected test/embedding use. */
@@ -505,6 +514,9 @@ function authVerifierFromEnv(ctx: AuthFromEnvContext): AuthVerifier | undefined 
     signingKeyId: ctx.signingKeyId,
     advertisedBase: ctx.advertisedBase,
     admission: parseA2aAdmissionPolicy(process.env.KIWI_A2A_ADMISSION),
+    ...(ctx.signatureNonceStore !== undefined
+      ? { signatureNonceStore: ctx.signatureNonceStore }
+      : {}),
   };
   if (raw === "loopback") return createA2aAuthVerifier({ mode: "loopback", ...shared });
   if (raw === "none") return createA2aAuthVerifier({ mode: "none", ...shared });
@@ -530,6 +542,8 @@ export interface A2aNodeCoreOptions {
   dataDir?: string;
   /** 入站认证验证器（公网广告地址必须提供，否则等价于无应用层认证）。 */
   authVerifier?: AuthVerifier;
+  /** 签名 nonce 的持久存储；由 start 创建、core.close 关闭。 */
+  signatureNonceStore?: NonceStore;
   /** 签名身份（signature 形态：Card 内公开签名公钥）。 */
   signingIdentity?: A2aSigningIdentity;
   /** 反滥用限流（KIWI_A2A_THROTTLE 解析结果）。 */
@@ -580,6 +594,7 @@ export function a2aCardSigningIdentity(
  * `startA2aNode` 仍自己 listen。两条路径共用同一份装配，避免第二份漂移实现。
  */
 export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
+  const signatureNonceStore = options.signatureNonceStore;
   const profile = options.profile;
   const role = profile.role;
   const advertisedBase = options.advertisedBase;
@@ -972,7 +987,14 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
   return {
     server, ledger, idempotency, dir, ephemeral: isEphemeral,
     ...(productSource !== undefined ? { productSource } : {}),
-    close: (closeOptions) => { if (closeOptions?.preserveOwnership) closeStats(); else releaseOwnership(); },
+    close: (closeOptions) => {
+      try {
+        if (signatureNonceStore instanceof InquiryNonceStore) signatureNonceStore.close();
+      } catch {
+        /* 已关闭 */
+      }
+      if (closeOptions?.preserveOwnership) closeStats(); else releaseOwnership();
+    },
     releaseOwnership,
   };
 }
@@ -1010,6 +1032,20 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     (process.env.KIWI_A2A_AUTH ?? "").trim(),
     enrollmentSigningIdentity,
   );
+  // 审查 P3：签名 nonce 持久化（重启后仍防重放）。持久 dataDir 形态才建库；
+  // 临时/测试形态保持内存存储。
+  let signatureNonceStore: InquiryNonceStore | undefined;
+  if (
+    options.authVerifier === undefined &&
+    (process.env.KIWI_A2A_AUTH ?? "").trim() === "signature" &&
+    options.dataDir !== undefined
+  ) {
+    try {
+      signatureNonceStore = new InquiryNonceStore(path.join(options.dataDir, "a2a"));
+    } catch {
+      signatureNonceStore = undefined;
+    }
+  }
   const authVerifier =
     options.authVerifier ??
     authVerifierFromEnv({
@@ -1021,6 +1057,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
           : new URL(advertisedBase).origin),
       role,
       advertisedBase,
+      ...(signatureNonceStore !== undefined ? { signatureNonceStore } : {}),
     });
   // 出站签名（Issue 16 B）：节点自持密钥 → 出站 A2A 请求自动签名。
   // A2ADirectChannel 的 env 回退读 KIWI_A2A_SIGNING_KEY_FILE；这里把节点密钥
@@ -1057,6 +1094,7 @@ export async function startA2aNode(options: A2aNodeOptions): Promise<A2aNodeHand
     advertisedBase,
     ...(options.dataDir !== undefined ? { dataDir: options.dataDir } : {}),
     ...(authVerifier !== undefined ? { authVerifier } : {}),
+    ...(signatureNonceStore !== undefined ? { signatureNonceStore } : {}),
     ...(a2aSigningIdentity !== undefined ? { signingIdentity: a2aSigningIdentity } : {}),
     ...(a2aThrottle !== undefined ? { throttle: a2aThrottle } : {}),
     ...(options.merchantPolicy !== undefined ? { merchantPolicy: options.merchantPolicy } : {}),
