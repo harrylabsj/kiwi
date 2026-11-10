@@ -12,6 +12,10 @@
   XFF 取最右、匿名身份按来源派生、内存表有界、SSE 会话清扫、scrypt 凭据
   保管、配对码默认 required、会话角色 fail-closed、HTTP body 按 Buffer 解码、
   市场绑定要求商家 SKU、候选生命周期迁移校验、登录 per-IP/时序防护等。
+- **Breaking（CLI/默认行为）**：`--merchant-token` 不再接受（密钥不得进入
+  argv；改用 `SHOPPING_MERCHANT_TOKEN` 或 TTY 隐藏输入）；autopilot 下
+  `handoff_agreement` 默认转人工 pending，需在 buyer_policy 显式设置
+  `auto_handoff: true` 才自动执行。
 - **发布说明**：本版本恢复出厂待审；发布必须经 `kiwi-release` 环境人工批准。
 
 ## v0.12.25 — 2026-11-04

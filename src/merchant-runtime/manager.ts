@@ -261,7 +261,7 @@ export class MerchantRuntimeManager {
     return this.withSpawnLock(name, () => this.launchLocked(name, explicit, expectedIntent));
   }
 
-  private withSpawnLock<T>(name: string, fn: () => T): T {
+  private async withSpawnLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
     const lock = `${this.pidFile(name)}.start`;
     mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
     const token = randomUUID();
@@ -290,7 +290,9 @@ export class MerchantRuntimeManager {
       closeSync(fd);
     }
     try {
-      return fn();
+      // 注意必须 await：launchLocked 是异步的（spawn + pidfile），锁要覆盖到
+      // 异步体结束，否则 finally 会在 spawn 之前就释放。
+      return await fn();
     } finally {
       try {
         const owner = JSON.parse(readFileSync(lock, "utf8")) as { token?: unknown };
