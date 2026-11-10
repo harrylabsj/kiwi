@@ -4394,7 +4394,7 @@
     },
     {
       "path": "src/merchant-core/commands.ts",
-      "sha256": "sha256:9afa14bd92e5ca44226d63e5947dacc70dd6ca3c46f5aff055bd1006ec5d35db"
+      "sha256": "sha256:2834c3004e0bac183a25f4d82c6856936b3c2ec87110fff695d4b4d800e4d254"
     },
     {
       "path": "src/merchant-core/commercial/calculate.ts",
