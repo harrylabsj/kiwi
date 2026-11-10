@@ -168,6 +168,58 @@ export function mapTermsToLineItems(terms: TermSet): LineItemsResult {
   return { ok: true, items };
 }
 
+/**
+ * 审查 P1-10：完成门禁不能只对照本地镜像——business（MoR）可能在批准后、
+ * Complete 前改价/换 SKU，把授权挪用到不同内容上。
+ *
+ * 把**远端 fresh checkout** 与本地已授权的 terms 绑定比对：
+ * - 远端若回显 `reference.terms_digest`，必须等于本地 terms_digest；
+ * - fresh line_items 必须与 agreed_terms 映射出的行项目逐项一致（sku /
+ *   quantity；本地有 unit_price 时价格也必须一致），且不得多出行项目。
+ *
+ * 返回 undefined 表示绑定成立；否则返回可上报的差异描述（fail-closed）。
+ */
+export function checkoutBindingMismatch(
+  checkout: UcpCheckoutSession,
+  terms: TermSet,
+  termsDigest: string,
+): string | undefined {
+  const reference = checkout.reference;
+  if (
+    reference !== null &&
+    typeof reference === "object" &&
+    typeof (reference as { terms_digest?: unknown }).terms_digest === "string" &&
+    (reference as { terms_digest: string }).terms_digest !== termsDigest
+  ) {
+    return `remote reference.terms_digest ${(reference as { terms_digest: string }).terms_digest} != authorized ${termsDigest}`;
+  }
+  const mapped = mapTermsToLineItems(terms);
+  if (!mapped.ok) return mapped.reason;
+  if (!Array.isArray(checkout.line_items)) {
+    return "remote checkout has no line_items to bind against authorized terms";
+  }
+  const pool = [...checkout.line_items];
+  for (const expected of mapped.items) {
+    const index = pool.findIndex((item) => {
+      if (item.sku !== expected.sku || item.quantity !== expected.quantity) return false;
+      if (expected.unit_price === undefined) return true;
+      return (
+        item.unit_price?.currency === expected.unit_price.currency &&
+        item.unit_price?.amount_minor === expected.unit_price.amount_minor
+      );
+    });
+    if (index < 0) {
+      return `authorized line item ${expected.sku} x${expected.quantity} is missing or changed on the remote checkout`;
+    }
+    pool.splice(index, 1);
+  }
+  if (pool.length > 0) {
+    const extra = pool.map((item) => `${item.sku} x${item.quantity}`).join(", ");
+    return `remote checkout has line items outside the authorized terms: ${extra}`;
+  }
+  return undefined;
+}
+
 function buildSessionRequestBody(
   pkg: HandoffPackage,
   items: UcpCheckoutLineItem[],
@@ -332,6 +384,11 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
       });
     }
     const checkout = this.withEffectiveExpiry(http.response, this.now());
+    // 审查 P1-10：business 返回的 checkout 必须与刚授权的 terms 一致；不一致
+    // 不落本地镜像（避免后续完成门禁把错误内容当成已授权），但把远端
+    // session_ref/checkout 回传，供上层取消。
+    const bound = this.bindFreshCheckout(checkout, terms, pkg.terms_digest);
+    if (!bound.ok) return bound.result;
     const session = this.storeSession(checkout, pkg, terms, pkg.terms_digest, "created");
     const ctx: ResultContext = {
       sessionRef: checkout.session_id,
@@ -388,6 +445,10 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     }
 
     const checkout = this.withEffectiveExpiry(http.response, this.now());
+    // 审查 P1-10（cart→checkout 同理）：cart 内容可能已被 business 改动；
+    // fresh checkout 必须与 agreed_terms 一致才建立本地授权镜像。
+    const bound = this.bindFreshCheckout(checkout, terms, pkg.terms_digest);
+    if (!bound.ok) return bound.result;
     const session = this.storeSession(checkout, pkg, terms, pkg.terms_digest, "created");
     this.recordCartCheckoutLink(cartId, checkout, pkg.terms_digest);
     const ctx: ResultContext = {
@@ -487,6 +548,10 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     }
 
     const updatedCheckout = this.withEffectiveExpiry(put.response, this.now());
+    // 审查 P1-10：PUT 的响应同样是远端权威内容，必须与本次授权的 nextTerms
+    // 一致；否则不更新本地镜像，返回 fail-closed。
+    const bound = this.bindFreshCheckout(updatedCheckout, nextTerms, nextDigest);
+    if (!bound.ok) return bound.result;
     this.checkouts.set(ref, updatedCheckout);
     const session = this.applyUpdate(mirror, nextTerms, nextDigest);
     const ctx: ResultContext = {
@@ -545,10 +610,19 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
       return this.resultForDecision(decision, ctx);
     }
 
-    // 3. ready_for_complete：过期 + totals + 完成门禁，全过才允许 Complete。
+    // 3. ready_for_complete：过期 + 内容绑定 + totals + 完成门禁，全过才允许 Complete。
     if (this.isExpired(checkout, this.now())) {
       return this.failWith(`session_expired: ${ref}`, "session_expired");
     }
+    // 审查 P1-10：完成门禁只能证明“授权存在”，不能证明“远端内容仍是授权内容”。
+    // 这里把 fresh checkout 与本地镜像的 current_terms 绑定比对，阻断 business
+    // 在批准后改价/换 SKU 的 TOCTOU。
+    const bound = this.bindFreshCheckout(
+      checkout,
+      mirror.current_terms,
+      mirror.current_terms_digest,
+    );
+    if (!bound.ok) return bound.result;
     const totalsCheck = validateTotals(checkout.totals);
     if (totalsCheck !== undefined && !totalsCheck.ok) {
       return {
@@ -669,6 +743,28 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
 
   private failWith(reason: string, code: UcpCheckoutFailureCode): UcpCheckoutResult {
     return { status: "fail_closed", reason, code, messages: [] };
+  }
+
+  /** 审查 P1-10：fresh checkout 与已授权 terms 不一致时 fail-closed。 */
+  private bindFreshCheckout(
+    checkout: UcpCheckoutSession,
+    terms: TermSet,
+    termsDigest: string,
+  ): { ok: true } | { ok: false; result: UcpCheckoutResult } {
+    const mismatch = checkoutBindingMismatch(checkout, terms, termsDigest);
+    if (mismatch === undefined) return { ok: true };
+    return {
+      ok: false,
+      result: {
+        status: "fail_closed",
+        reason: `line_items_mismatch: ${mismatch}`,
+        code: "line_items_mismatch",
+        messages: checkout.messages ?? [],
+        checkout_status: checkout.status,
+        session_ref: checkout.session_id,
+        checkout,
+      },
+    };
   }
 
   /** 记录 cart→checkout 链接（幂等：同 cart_id 覆盖为最近一次转换）。 */

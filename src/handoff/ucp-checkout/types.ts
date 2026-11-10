@@ -136,6 +136,9 @@ export const UCP_CHECKOUT_FAILURE_CODES = [
   "not_ready",
   "gate_denied",
   "totals_mismatch",
+  // 审查 P1-10：fresh checkout 的 line_items / reference.terms_digest 与已授权
+  // terms 不一致（business 在批准后改价/换 SKU）→ 拒绝完成。
+  "line_items_mismatch",
   "recoverable",
   "unrecoverable",
   "unsafe_target",
