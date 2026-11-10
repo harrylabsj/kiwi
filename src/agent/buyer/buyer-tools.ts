@@ -22,6 +22,7 @@
 
 import { createHash } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { fenceModelPayload, type ExternalSource } from "../context/fencing.js";
 import type { KiwiTool } from "../kiwi-tool.js";
 import {
   HandoffIdempotencyStore,
@@ -81,6 +82,11 @@ function textResult(text: string, details?: unknown): AgentToolResult<unknown> {
 function errorText(err: unknown): string {
   if (err instanceof BuyerTaskError) return `任务操作被拒绝（${err.code}）：${err.message}`;
   return `任务操作失败：${err instanceof Error ? err.message : String(err)}`;
+}
+
+/** Remote merchant/catalog fields are data, never instructions: fence before the model sees them. */
+function fencedResult(source: ExternalSource, payload: unknown, details?: unknown): AgentToolResult<unknown> {
+  return textResult(fenceModelPayload(source, payload), details);
 }
 
 function parseIntent(value: unknown): TaskIntent {
@@ -700,7 +706,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           merchant: prod.merchant.name,
           city: prod.merchant.city,
         }));
-        return textResult(JSON.stringify(rows), { count: rows.length });
+        return fencedResult("merchant_api", rows, { count: rows.length });
       } catch (err) {
         return textResult(errorText(err));
       }
@@ -721,7 +727,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       try {
         const { sku } = params as { sku: string };
         const p = await connector.getProduct(sku);
-        return textResult(JSON.stringify(p));
+        return fencedResult("merchant_api", p);
       } catch (err) {
         return textResult(errorText(err));
       }
@@ -1647,7 +1653,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             ? { handoff_destination_ref: r.listing.handoff_destination_ref }
             : {}),
         }));
-        return textResult(JSON.stringify(rows), { count: rows.length });
+        return fencedResult("catalog", rows, { count: rows.length });
       } catch (err) {
         return textResult(errorText(err));
       }

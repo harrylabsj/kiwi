@@ -1076,6 +1076,10 @@ describe("search_listings 透出 handoff_destination（P3-11）", () => {
     });
   }
 
+  function fencedBody(text: string): string {
+    const m = /^<kiwi_external_data_[a-z_]+>\n([\s\S]*)\n<\/kiwi_external_data_[a-z_]+>$/.exec(text);
+    return m === null ? text : m[1]!;
+  }
   function toolText(result: { content: { type: string; text?: string }[] }): string {
     return result.content.map((c) => c.text ?? "").join("\n");
   }
@@ -1097,7 +1101,9 @@ describe("search_listings 透出 handoff_destination（P3-11）", () => {
       "call-1",
       { need_description: "保温杯" },
     );
-    const rows = JSON.parse(toolText(result)) as Record<string, unknown>[];
+    const text = toolText(result);
+    expect(text).toMatch(/^<kiwi_external_data_catalog>/);
+    const rows = JSON.parse(fencedBody(text)) as Record<string, unknown>[];
     expect(rows).toHaveLength(1);
     expect(rows[0]?.handoff_destination_types).toEqual(["external_checkout_url"]);
     expect(rows[0]?.handoff_destination_ref).toBe(declaredRef);
@@ -1130,7 +1136,7 @@ describe("search_listings 透出 handoff_destination（P3-11）", () => {
       "call-1",
       { need_description: "保温杯" },
     );
-    const rows = JSON.parse(toolText(result)) as Record<string, unknown>[];
+    const rows = JSON.parse(fencedBody(toolText(result))) as Record<string, unknown>[];
     expect(rows).toHaveLength(1);
     expect(rows[0]).not.toHaveProperty("handoff_destination_types");
     expect(rows[0]).not.toHaveProperty("handoff_destination_ref");

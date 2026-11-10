@@ -684,8 +684,32 @@ export class InboundPipeline {
    */
   async sendGenericMessage(
     message: Record<string, unknown>,
-    owner: TaskOwner,
+    owner: TaskOwner & {
+      remoteAddress?: string;
+      clientAddress?: string;
+      ucpAgentProfile?: string;
+      trustLevel?: TrustLevel;
+      fingerprintChanged?: boolean;
+    },
   ): Promise<GenericSendResult> {
+    // review P1-9：1.0 通用消息此前完全绕过限流/并发槽，任意匿名客户端可
+    // 高频写入 TaskRegistry 并触发接待引擎。与 KNP 路径同一判定序列。
+    const th = this.throttle;
+    if (th !== undefined) {
+      const tReq: ThrottleRequest = {
+        identity: owner.identity,
+        remoteAddress: owner.clientAddress ?? owner.remoteAddress,
+        domain: domainFromUcpProfile(owner.ucpAgentProfile),
+        identityVerified: owner.identityVerified,
+        trustLevel: owner.trustLevel,
+        fingerprintChanged: owner.fingerprintChanged,
+      };
+      const decision = th.check(tReq);
+      if (!decision.allowed) {
+        throw rateLimited(decision.retryAfterSeconds, decision.reason);
+      }
+      th.enterTask(tReq);
+    }
     const taskId = newTaskId();
     const contextId =
       typeof message.contextId === "string" && message.contextId.length > 0

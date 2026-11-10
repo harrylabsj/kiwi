@@ -7,7 +7,7 @@
 
 import { sanitizeModelText } from "../context/fencing.js";
 
-const SENSITIVE_KEY = /authorization|bearer|token|secret|password|credential|private[_-]?key|vault/i;
+const SENSITIVE_KEY = /authorization|bearer|token|secret|password|credential|private[_-]?key|vault|restricted(?:_value|_kind)?|plaintext/i;
 
 /**
  * Keep presentation payloads structured while applying the same external

@@ -477,6 +477,50 @@ describe("A2AServer + throttle: 超限拒绝（rate_limited / retry_after）", (
     expect(idempotency.get("peer-1", "msg_rl_3")).toBeNull();
   });
 
+  it("1.0 通用（非 KNP）消息同样受限流与并发槽约束（review P1-9）", async () => {
+    const throttle = new A2AServerThrottle({
+      windowMs: 60_000,
+      tiers: {
+        T0: {
+          identityRequestsPerWindow: 2,
+          domainRequestsPerWindow: 5,
+          maxConcurrentTasks: 5,
+          malformedBudget: 100,
+          retryAfterSeconds: 11,
+        },
+      },
+    });
+    const { a2aUrl } = await startServer({
+      throttle,
+      authVerifier: verifiedVerifier("peer-generic", "T0"),
+    });
+    const send = (i: number) =>
+      rpc(
+        a2aUrl,
+        "SendMessage",
+        {
+          message: {
+            role: "ROLE_USER",
+            parts: [{ text: `generic ${i}` }],
+            messageId: `generic-${i}`,
+          },
+        },
+        `generic-req-${i}`,
+        { "A2A-Version": "1.0" },
+      );
+
+    for (let i = 1; i <= 2; i++) {
+      const res = await send(i);
+      expect(res.status).toBe(200);
+      expect(rpcError(res.body)).toEqual({});
+    }
+    const res3 = await send(3);
+    expect(res3.status).toBe(200);
+    const err = rpcError(res3.body);
+    expect(err.code).toBe(-32050);
+    expect(String(rpcError(res3.body).message)).toContain("rate limit");
+  });
+
   it("tasks/get 独立限流：未知 id 的全链扫描不再无限制（评审项 B3）", async () => {
     const throttle = new A2AServerThrottle({
       windowMs: 60_000,

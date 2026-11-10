@@ -106,7 +106,7 @@ function intentQuantity(intent: Record<string, unknown>): number {
   return 1;
 }
 
-function targetPriceMinor(
+export function targetPriceMinor(
   intent: Record<string, unknown>,
   current: number | undefined,
   discountRate: number,
@@ -137,7 +137,9 @@ function targetPriceMinor(
       }
     }
   }
-  if (current !== undefined) return Math.round(current * (1 - discountRate) * 100) / 100;
+  // minor units 必须保持整数：×100/÷100 的两位小数舍入会产出非整数
+  // amount_minor，随后被委托限额门的 Number.isSafeInteger 确定性拒绝。
+  if (current !== undefined) return Math.max(0, Math.round(current * (1 - discountRate)));
   return undefined;
 }
 
