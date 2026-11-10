@@ -23,6 +23,7 @@
  * 硬底线不可在「批准报价」动作中修改；策略变更走既有独立策略变更流程。
  */
 
+import { toMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
 import { RfqError, type FactField, type QuoteStatus } from "./types.js";
 import { evaluateFreshness } from "./fact-resolver.js";
 import type { MerchantPolicy } from "../../config/profile.js";
@@ -130,8 +131,11 @@ export function rfqPolicyConfigFromMerchantPolicy(
 ): RfqPolicyConfig | undefined {
   if (policy === undefined) return undefined;
   const config: RfqPolicyConfig = {};
-  const toMinor = (yuan: number): number | undefined =>
-    Number.isFinite(yuan) && yuan >= 0 ? Math.round(yuan * 100) : undefined;
+  // 审查 P3：底价配置必须无损换算；有损值不配置（不四舍五入成错误阈值）。
+  const toMinor = (yuan: number): number | undefined => {
+    const converted = toMinorUnits(yuan, 2);
+    return converted.lossless ? converted.amount_minor : undefined;
+  };
   const globalFloor = policy.min_unit_price_private !== undefined ? toMinor(policy.min_unit_price_private) : undefined;
   if (globalFloor !== undefined) config.floor_price_minor = globalFloor;
   if (policy.price_floors !== undefined) {
