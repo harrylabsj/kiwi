@@ -21,6 +21,10 @@
   CI 移除与现状不符的 Prettier 门禁、残留锁删除前复核 inode、私密底价脱敏
   覆盖千分位；catalog 侧 legacy challenge 自助轮换、治理态重注册重新验证、
   非 ASCII challenge 不再 500、bound-account 邮箱打码、邮件模式启动期校验。
+- **代码扫描修复（0.12.28）**：六个 CodeQL 告警清零——管理端 `next` 与可信
+  确认页不再把请求值反射进 HTML（`ref` 改由页面脚本从 `location.search`
+  读取）、尾斜杠裁剪与 Bearer 解析改为线性扫描（消除多项式 ReDoS）、
+  测试夹具不再把路径拼进生成的源码。
 - **发布说明**：本版本恢复出厂待审；发布必须经 `kiwi-release` 环境人工批准。
 
 ## v0.12.25 — 2026-11-04
