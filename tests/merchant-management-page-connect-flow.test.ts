@@ -171,6 +171,10 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
     expect(html).toContain('id="bound-account"');
     expect(html).toContain('查看代管授权与使用说明');
     expect(html).toContain('查看开放询价授权与使用说明');
+    // 授权文案必须如实说明「报文经目录转发、目录不裁决/不保存」的定性
+    //（docs/open-inquiry-transport-contract.md §1）。
+    expect(html).toContain('询价与报价报文会经 Kiwi 目录转发给商家');
+    expect(html).toContain('目录不裁决条款、不保存磋商内容');
     expect(html).toContain('id="access-submit"');
     page.set('$("access-link").value = ""; updateAccessButton();');
     expect(page.elements["access-submit"]!.disabled).toBe(true);
