@@ -202,10 +202,13 @@ function executeSelection(
       observation_id: observation?.observation_id ?? null,
       selected_at: now(),
       authorization: p.user_instruction,
+      // 审查 P2：user_instruction 是模型自报文本，不是宿主核验过的用户输入。
+      // 审计必须标明来源，避免把模型幻觉/注入内容当成用户授权证据。
+      authorization_source: "model_reported",
       score_explanation: candidate.score_explanation ?? null,
       boundary: "未创建订单；非绑定选定不声明价格、库存或交期仍然有效",
     },
-    "user",
+    "model",
     // 审查 K-L26：幂等键内容寻址（此前 uuidv7 随机，重试产生重复 selected
     // 事件）。与 transition 键同源，重试去重。
     `select:${p.task_id}:${p.candidate_id}`,
@@ -217,7 +220,7 @@ function executeSelection(
     expected_version: task.version,
     event_type: "status_changed",
     payload: { selected_candidate_id: p.candidate_id },
-    origin: "user",
+    origin: "model",
     idempotency_key: `select-transition:${p.task_id}:${p.candidate_id}`,
     selected_candidate_id: p.candidate_id,
   });
@@ -1026,7 +1029,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             to: "searching",
             expected_version: updated.version,
             event_type: "search_started",
-            origin: "user",
+            origin: "model",
             idempotency_key: `${updated.task_id}:re-search:${uuidv7()}`,
           });
           const cycle = await runSearchCycle(
@@ -1147,7 +1150,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           to: "cancelled",
           expected_version: task.version,
           event_type: "cancelled",
-          origin: "user",
+          origin: "model",
           idempotency_key: `cancel:${uuidv7()}`,
         });
         return textResult(`任务 ${p.task_id} 已取消。`);
@@ -1580,11 +1583,14 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
               return { agreement_bound: stillBound };
             },
             // autopilot 政策闸：handoff 把买家送向真实成交入口（外部结账/PO/联系
-            // 商家），是系统里最接近交易的写动作——未授权自动磋商时绝不自动执行。
+            // 商家），是系统里最接近交易的写动作。审查 P2：默认一律转人工
+            // pending，只有 buyer 显式声明 `auto_handoff: true` 才允许自动执行。
             autopilotEscalation: () =>
-              profile.buyer_policy?.auto_negotiate === false
-                ? "buyer 未授权自动交接（auto_negotiate=false），需要人工确认。"
-                : undefined,
+              profile.buyer_policy?.auto_handoff === true
+                ? undefined
+                : profile.buyer_policy?.auto_negotiate === false
+                  ? "buyer 未授权自动交接（auto_negotiate=false），需要人工确认。"
+                  : "handoff 交付默认需要人工确认；如确需自动执行，请在 profile 设置 buyer_policy.auto_handoff: true。",
           },
         );
         return writeGateText(outcome);

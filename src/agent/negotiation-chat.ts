@@ -193,7 +193,7 @@ async function executeNegotiationSubmit(
   if (target === undefined) {
     throw new Error("该会话当前没有可回复的待处理消息（可能已结算或轮次不匹配）。");
   }
-  const idem = idempotencyKey(profile.agent_id, target.message_id, PROTOCOL_VERSION);
+  const idem = idempotencyKey(profile.agent_id, target.message_id, PROTOCOL_VERSION, target.conversation_id);
   const claim = await commerceClient.claimMessage({
     conversation_id: target.conversation_id,
     message_id: target.message_id,
@@ -316,7 +316,7 @@ export function buildNegotiationChatTools(deps: NegotiationChatDeps): Tool[] {
         if (target === undefined) {
           return textResult("该会话当前没有你的待处理消息。");
         }
-        const idem = idempotencyKey(profile.agent_id, target.message_id, PROTOCOL_VERSION);
+        const idem = idempotencyKey(profile.agent_id, target.message_id, PROTOCOL_VERSION, target.conversation_id);
         const claim = await commerceClient.claimMessage({
           conversation_id: target.conversation_id,
           message_id: target.message_id,

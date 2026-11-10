@@ -108,6 +108,7 @@ export function buyerInit(options: BuyerInitOptions): BuyerInitReport {
       acceptable_eta_latest: "2099-12-31T23:59:59+08:00",
       required_after_sales_terms: [],
       auto_negotiate: options.autoNegotiate ?? true,
+      auto_handoff: false,
       human_review_on: [],
     },
   };

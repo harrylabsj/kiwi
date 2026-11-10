@@ -426,9 +426,15 @@ export async function runTui(options: TuiOptions): Promise<number> {
     // After each command, surface newly arrived work (never auto-submits in
     // supervised/manual; prepare is a no-op while one candidate is pending).
     if (!controller.getState().paused && controller.getState().approval.kind === "idle") {
-      const prepared = await controller.prepareNextCandidate();
-      if (prepared.kind !== "no_work" && prepared.kind !== "blocked") {
-        renderPrepare(controller, prepared, write, theme);
+      // 审查 P2：候选携带 secret 被 scan 拒绝时异常此前穿出循环，直接崩掉
+      // 整个 operator 会话。逐轮隔离：报错后继续服务下一条消息。
+      try {
+        const prepared = await controller.prepareNextCandidate();
+        if (prepared.kind !== "no_work" && prepared.kind !== "blocked") {
+          renderPrepare(controller, prepared, write, theme);
+        }
+      } catch (err) {
+        write(`准备候选失败：${err instanceof Error ? err.message : String(err)}\n`);
       }
     }
     if (!rlClosed) refreshPrompt();

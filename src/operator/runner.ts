@@ -434,7 +434,7 @@ export class DeterministicNegotiationRunner implements NegotiationRunner {
     );
     if (!target) return undefined;
 
-    const idem = idempotencyKey(this.profile.agent_id, target.message_id, PROTOCOL_VERSION);
+    const idem = idempotencyKey(this.profile.agent_id, target.message_id, PROTOCOL_VERSION, target.conversation_id);
     const claim = await this.client.claimMessage({
       conversation_id: target.conversation_id,
       message_id: target.message_id,

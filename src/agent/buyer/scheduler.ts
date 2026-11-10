@@ -159,7 +159,9 @@ export class TaskScheduler {
           price: {
             list: product.price,
             currency: product.currency,
-            delivery_fee: product.delivery.fee,
+            ...(product.delivery.fee === undefined
+              ? {}
+              : { delivery_fee: product.delivery.fee }),
           },
           promotion: {},
           stock: { quantity: product.stock, observed_at: now },
@@ -412,6 +414,9 @@ function evaluateRule(
         rule.condition.budget_sealed === "max_total_price" ? taskBudget : rule.condition.threshold;
       const threshold = Number(thresholdRaw);
       if (!Number.isFinite(threshold)) return undefined;
+      // 审查 P2：运费未知时不能声称“到手价已低于阈值”（会把未知当免邮
+      // 误报）。缺少运费 → 本轮不触发通知，等观察到完整价格再判断。
+      if (latest.price.delivery_fee === undefined) return undefined;
       const total = latest.price.list + latest.price.delivery_fee;
       // 通知不回显预算数值（create_buyer_task 契约：绝不在任务输出/事件回显）。
       return total <= threshold
@@ -423,8 +428,10 @@ function evaluateRule(
     case "delivery_before": {
       const before = typeof rule.condition.eta_before === "string" ? rule.condition.eta_before : "";
       if (before === "") return undefined;
-      const etaMinutes = Number((latest.delivery as { eta_minutes?: number }).eta_minutes ?? 0);
-      return Date.parse(now) + etaMinutes * 60_000 <= Date.parse(before)
+      // 审查 P2：交期未知不能当作“0 分钟立即送达”去触发通知。
+      const rawEta = (latest.delivery as { eta_minutes?: unknown }).eta_minutes;
+      if (typeof rawEta !== "number" || !Number.isFinite(rawEta)) return undefined;
+      return Date.parse(now) + rawEta * 60_000 <= Date.parse(before)
         ? `可在 ${before} 前送达`
         : undefined;
     }

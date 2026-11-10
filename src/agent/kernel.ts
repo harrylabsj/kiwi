@@ -1424,16 +1424,21 @@ export class AgentKernel {
    * （消除"两个脑"）。
    */
   async injectContext(text: string): Promise<void> {
-    // 0.87：走 sessionManager 纯入列（不触发模型），下轮 prompt 时进入
-    // buildSessionProjection。appendMessage 已被消毒包装拦截 thinking。
-    this.session.sessionManager.appendMessage({
-      role: "user",
-      // 磋商摘要含商家可控字段（商家名/商品文本）：必须按外部数据围栏后再进
-      // 模型上下文，否则恶意商家可把指令藏进这些字段（review P1-2）。
-      content: `[系统记录] ${fenceModelPayload("a2a_message", text)}`,
-      timestamp: Date.now(),
+    // 审查 P2：与其它写会话入口共用 kernel 串行链——多入口共享装配时，
+    // 宿主在模型回合中调用 injectContext 会与 handleUserText 并发写同一
+    // projection。调用方必须不在链内（当前唯一调用点是 TUI，链外 await）。
+    return this.enqueue(async () => {
+      // 0.87：走 sessionManager 纯入列（不触发模型），下轮 prompt 时进入
+      // buildSessionProjection。appendMessage 已被消毒包装拦截 thinking。
+      this.session.sessionManager.appendMessage({
+        role: "user",
+        // 磋商摘要含商家可控字段（商家名/商品文本）：必须按外部数据围栏后再进
+        // 模型上下文，否则恶意商家可把指令藏进这些字段（review P1-2）。
+        content: `[系统记录] ${fenceModelPayload("a2a_message", text)}`,
+        timestamp: Date.now(),
+      });
+      this.session.refreshContext();
     });
-    this.session.refreshContext();
   }
 
   private async runMerchantGroundingRead(read: GroundingRead): Promise<string> {
