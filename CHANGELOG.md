@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Code Review 2026-11-10 修复批次
+## v0.12.28 — 2026-11-11
 
 - **买家来源统计**：`kiwi mcp serve` 新增 `--buyer-id` / `KIWI_CATALOG_BUYER_ID`，
   仅影响 catalog 的 `X-Buyer-Id`（运营去重买家），不改变本地任务 owner。

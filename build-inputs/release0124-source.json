@@ -182,7 +182,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "sha256:0292a1ad73e57931f78ddbad8afd141d41d5505a9a9b1bb7aaf8ac15093ca665"
+      "sha256": "sha256:a04372fd1994e87456240f394609f1e5139caf6f94abeee2add39718d1e3db84"
     },
     {
       "path": "CODE_OF_CONDUCT.md",
@@ -266,7 +266,7 @@
     },
     {
       "path": "contracts/kiwi-catalog/1.0/agent-record.schema.json",
-      "sha256": "sha256:d1b6a592279acf1de5447ce0e6e7c944164de6b74bf114b4445ec005fa41b169"
+      "sha256": "sha256:374b5082843d353ef2a85eea6a689df3d185404aae7ba8ade4e11738367631f9"
     },
     {
       "path": "contracts/kiwi-catalog/1.0/listing-record.schema.json",
@@ -278,11 +278,11 @@
     },
     {
       "path": "contracts/kiwi-contracts.lock.json",
-      "sha256": "sha256:c1d334ff6058efa70d55bd9918da528cb90a65bed7793d63036568a5567e31f5"
+      "sha256": "sha256:b0eef5be6ef4edc41941de096c310147d37d16129d35b667c0ccba3d2e81262b"
     },
     {
       "path": "contracts/manifest.json",
-      "sha256": "sha256:0efaabbaa47ebfb241eb8ef8ea060b2c3318747fdf5dadda296d7f93cb584a92"
+      "sha256": "sha256:9de7722593115d2cdb106211a23b668d273b0e2f03339b613584c4f77a0ee07e"
     },
     {
       "path": "contracts/merchant-management/1.0/README.md",
@@ -638,7 +638,7 @@
     },
     {
       "path": "docs/platform-release-ledger.md",
-      "sha256": "sha256:cfe1d673877bdbb4a2caad6932ab6b1ad48ab243c4f99ad39dd3d0bca48e4c21"
+      "sha256": "sha256:e924baefcc8ffd5771a2ceb8a2f9fcbf4449beb6236031651fe9570abca32199"
     },
     {
       "path": "docs/portfolio-release-management.md",
@@ -930,11 +930,15 @@
     },
     {
       "path": "integrations/hosts/workbuddy/haina-ecommerce-expert/.codebuddy-plugin/plugin.json",
-      "sha256": "sha256:288a200e4e4eb9ebbc157cc6ffe4451e9446b4ab6d4223a49933c14d2195c237"
+      "sha256": "sha256:55ac6834e392ab5da0d152263119a6d2b756b7cbb37de76de530d5674b17ebc3"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/haina-ecommerce-expert/.mcp.json",
+      "sha256": "sha256:42371c0b46e37affef31515502b5c9f7dcd7e3dde4e8da736e2921033a4e6e77"
     },
     {
       "path": "integrations/hosts/workbuddy/haina-ecommerce-expert/agents/haina-ecommerce-expert.md",
-      "sha256": "sha256:fdcbde8bca36231c6a9b166f71eff8c3e31d942a4490efa92ecb820414a5af0d"
+      "sha256": "sha256:390e21e5c47acf8be3bdb0ddf4adedd69993a22992968cdd4dc1231a54434a45"
     },
     {
       "path": "integrations/hosts/workbuddy/haina-ecommerce-expert/avatars/expert.png",
@@ -942,7 +946,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/haina-ecommerce-expert/skills/online-shopping-assistant/SKILL.md",
-      "sha256": "sha256:efd4c267f226bcffa56ab53a0f2e6d30030dc8cbdce984a52a0f06d5b6ad3f63"
+      "sha256": "sha256:c3f05d6d1fc529cc179352412bee517f6843b040629fd878fa6bd9fc2fd031dc"
     },
     {
       "path": "integrations/hosts/workbuddy/haina-ecommerce-expert/skills/online-shopping-assistant/references/comparison-rules.md",
@@ -950,7 +954,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/haina-ecommerce-expert/skills/online-shopping-assistant/references/kiwi-inquiry-and-negotiation.md",
-      "sha256": "sha256:12695f2cb1cd1a5f450695879bbbd4fafec6035a18b19da233ef0d4d65f7972f"
+      "sha256": "sha256:18697297038526dab0bf92b79c40dc89c43c116218cbfaa6952b62b3338f1d6a"
     },
     {
       "path": "integrations/hosts/workbuddy/haina-ecommerce-expert/skills/online-shopping-assistant/references/output-format.md",
@@ -2250,15 +2254,23 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/.mcp.json",
-      "sha256": "sha256:9c5d75d3bb36bddacea7d22e0b2d3bbf756e946f020dd208f259425723fc0f13"
+      "sha256": "sha256:84b5cc04b9c570af117e9a0579ed2824b5a6cb26f5c70f611ca8c4610d46b499"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/agents/kiwi-procurement.md",
-      "sha256": "sha256:c05ac52b8109fd4104d863496eac9f3259200b113ba0677feeb267f0cc0430a5"
+      "sha256": "sha256:d2f76bc3cd9c7c0ff7fceedfd9eef5bcad61baaa8a04f26da39b71e0b570a747"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/avatars/kiwi-procurement.png",
       "sha256": "sha256:80654383773bb9b0bb154bd6f3b97c37e64bd0b8b3212a710d7b4681b5112760"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/runtime/expert-data.mjs",
+      "sha256": "sha256:bd2399ed54151f06e16a54600eb645e4fbb6a7714a488fbe00b11b0311a05a7e"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/runtime/expert-launcher.mjs",
+      "sha256": "sha256:bbc24928cb3225442563580e4fd049c5ad0b0e8a051a6c96cbac6807fe05c91b"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-procurement-expert/skills/kiwi-agreement-handoff/SKILL.md",
@@ -2354,7 +2366,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/runtime/backend-client.mjs",
-      "sha256": "sha256:6572a98e612d0a0ad30161c6552fd4e9b71a81ea0f68285508a2a10daf5e2b63"
+      "sha256": "sha256:023aa5114be6f82d92d2b6693b074a0ec0afd996772eaf261df2a6a08b647781"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/runtime/buyer-cache-store-draft.mjs",
@@ -2418,7 +2430,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/runtime/mcp-production-server.mjs",
-      "sha256": "sha256:d35e67ef7b9edfd9619f366e9980e256d3f2e60a93e9a0e317cb1f0f20d1d598"
+      "sha256": "sha256:ffe54cd9fd295fcd129ac06ce2eba35e40ccba7dc3a0ca29f64efe1b266ac798"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/runtime/mcp-schema-probe.mjs",
@@ -2433,6 +2445,10 @@
       "sha256": "sha256:2dcbdf94389ace63f7ce5b3a3987f6881440c0b89bc4a99a8d52b0188a0e2c2d"
     },
     {
+      "path": "integrations/hosts/workbuddy/kiwi-sourcing/runtime/npm-discovery.mjs",
+      "sha256": "sha256:16e1e89fdea0024c7a06d5d5a67a102ef247a6492419e48d2231733bd10821cb"
+    },
+    {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/runtime/preflight.mjs",
       "sha256": "sha256:7c3803e68f26233ccc9e7f2c2927b77491669305dd877fc050e87ac189134833"
     },
@@ -2442,7 +2458,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/runtime/production-launcher.mjs",
-      "sha256": "sha256:5e4f75d3715394cf0229d51cd0eeead7199d88154b6fee31865e0037ffd7e286"
+      "sha256": "sha256:089c0d7502395e1d8cfabcbe1df7b51f6fca47782a1a7156299069e2e1ffe880"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/runtime/provenance-policy.mjs",
@@ -2462,7 +2478,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/runtime/stage-runner.mjs",
-      "sha256": "sha256:41bf39a191b0aec43fe94807683e7888f9f30ad1b8f56e663c9a1c0c4e9a19e4"
+      "sha256": "sha256:5f978515609614d39484d42ae49f374dc50ab197a0df059e895f42d10799f810"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/runtime/tool-contract.mjs",
@@ -2478,7 +2494,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/scripts/package-manifest.mjs",
-      "sha256": "sha256:39b52b9a89420c3741fda21a9c676adc3b6e1a77840444e3d61b1d99813111bc"
+      "sha256": "sha256:e7e1fccf0b851da53c3e229a1306b11dff513697ae20a5c51787bc9aaa26fb5e"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/scripts/package-production.mjs",
@@ -2525,6 +2541,10 @@
       "sha256": "sha256:c921d3aa812eafef233d872328a19470066c4fc27d8d230ea1641fd969afd390"
     },
     {
+      "path": "integrations/hosts/workbuddy/kiwi-sourcing/test/expert-data.test.mjs",
+      "sha256": "sha256:2df753c9eb2272e434e01b04a2febd5c35a4943afcc47928f0eab633d6c07834"
+    },
+    {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/test/fixtures/provenance/audit-signatures-locked.json",
       "sha256": "sha256:950bfd3fae3bc3ae25f4efb481754cd111f9abdd91a818da4df30a65739fff5f"
     },
@@ -2546,11 +2566,15 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/test/mcp-production-server.test.mjs",
-      "sha256": "sha256:fc66541d388e3d463dbb9c933cd7e2a2253657642aa68aa81ed25916353f2e38"
+      "sha256": "sha256:a7fb3c82a2dcfcacee4e93be3b41039c247442ac0038be0a69c5eefec574ac05"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/test/mcp-response-lifecycle.test.mjs",
       "sha256": "sha256:948a91161911743c946ae39df20232e4c2dc2d9c324ed5ac1ebb8999a747e940"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-sourcing/test/npm-discovery.test.mjs",
+      "sha256": "sha256:7aa04227cd4dd13d7270892cd745f53f8b28ed09385f95c783c0148c7518afc9"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-sourcing/test/package-production.test.mjs",
@@ -2578,7 +2602,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/online-shopping-assistant/SKILL.md",
-      "sha256": "sha256:efd4c267f226bcffa56ab53a0f2e6d30030dc8cbdce984a52a0f06d5b6ad3f63"
+      "sha256": "sha256:20c69c00a74b882e257cc4a4e9ec096a9c645808a41cdcf7418e611a57e30f2f"
     },
     {
       "path": "integrations/hosts/workbuddy/online-shopping-assistant/references/comparison-rules.md",
@@ -2586,7 +2610,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/online-shopping-assistant/references/kiwi-inquiry-and-negotiation.md",
-      "sha256": "sha256:12695f2cb1cd1a5f450695879bbbd4fafec6035a18b19da233ef0d4d65f7972f"
+      "sha256": "sha256:3168ccec5f84e31663aad1d840c28041c6ef914f2df34a19ce903db9e69d5e0e"
     },
     {
       "path": "integrations/hosts/workbuddy/online-shopping-assistant/references/output-format.md",
@@ -2597,6 +2621,18 @@
       "sha256": "sha256:b93c59da4b251e605c0de1012787698264a58df3f6beb247a389768b91df4225"
     },
     {
+      "path": "integrations/hosts/workbuddy/online-shopping-assistant/scripts/kiwi-tool.mjs",
+      "sha256": "sha256:6836f9ba2a86474bb5f5125688ee3ac56cb2d511da0461e4f78a9a6084649e15"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/online-shopping-assistant/test/kiwi-tool.test.mjs",
+      "sha256": "sha256:f11210e262412b4467116829511be391487644fed42488be96864c264ad19311"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/package-ecommerce-expert.mjs",
+      "sha256": "sha256:1d353984d3ffdeb931c2601971f85b2faa01276eeeac2c4988b15ed0ed9f1a11"
+    },
+    {
       "path": "integrations/hosts/workbuddy/package-gateway-connector.mjs",
       "sha256": "sha256:2f2464d7b9a7c8ab1b2f2cdeed4c3c90db67dd9f3a8352416e333ae793a403df"
     },
@@ -2605,12 +2641,16 @@
       "sha256": "sha256:dd9b7cf4f50444145249cf5d663734ae8686b27310e1edce93a1a8a424dc98eb"
     },
     {
+      "path": "integrations/hosts/workbuddy/package-online-shopping-skill.mjs",
+      "sha256": "sha256:2b1a79f5f94e612c20fe984d90b017945c445f607cf3625dc47a024b45638c68"
+    },
+    {
       "path": "integrations/hosts/workbuddy/package-rfq-workbench-connector.mjs",
       "sha256": "sha256:df9a7667172149a475b11e47e60875beab6bac3745ec0799250653bae3a7ad09"
     },
     {
       "path": "integrations/hosts/workbuddy/package.mjs",
-      "sha256": "sha256:527c7307f82282bde06993614a87dbbe039095f1fdaa6d9330887f2b064685f6"
+      "sha256": "sha256:fc9570a97e6874897f354876dbb76c52f0e2422d16cdb5ff0538eae92b154429"
     },
     {
       "path": "integrations/hosts/workbuddy/release-bundle-manifest.json",
@@ -2674,7 +2714,7 @@
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:e458bdd409f8518fef753ca32b891260f56a369c0c860aa07b41824e620458a5"
+      "sha256": "sha256:7b8ef946cd1f329f5af75f40882b919ef0c1c1369c28d92ffe93e50669e5c7bb"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
@@ -2738,7 +2778,7 @@
     },
     {
       "path": "scripts/conformance/a2a-sdk-roundtrip.mjs",
-      "sha256": "sha256:66be215a1a982598fb29aaeac0807f883c8146576706c7fdc5ec0b87f0215706"
+      "sha256": "sha256:22e333ab30865d100dc63d27544d99748a4afcdf741f71120d13c3c345dbd3c5"
     },
     {
       "path": "scripts/conformance/start-tck-sut.mjs",
@@ -2750,7 +2790,7 @@
     },
     {
       "path": "scripts/conformance/three-way-interop.mjs",
-      "sha256": "sha256:9bea00b31164a868f2984d4a4d39a7f3a425fb6f123dc1cff39a604eed438e2c"
+      "sha256": "sha256:c01698224ee5a9ad08e4b30ed1f349fb892668a67eeb16d2f33027b120d05351"
     },
     {
       "path": "scripts/demo-hermes-buyer.sh",
@@ -2758,7 +2798,7 @@
     },
     {
       "path": "scripts/e2e-local.sh",
-      "sha256": "sha256:88a800438859068fdfc5b9562c9ca1251a0e86c8789a129061a4225733f9dc1d"
+      "sha256": "sha256:65bd9a717ad7e2de9df42e0f91ff53fb30692a1ab908a31a509bfbc628c14500"
     },
     {
       "path": "scripts/e2e-supervisor.sh",
@@ -3690,15 +3730,19 @@
     },
     {
       "path": "src/buyer-core/a2a-negotiator.ts",
-      "sha256": "sha256:c69bb9790caac25d49eefffd27aa163e7f1725c8dd023c266021c4d89fff35fd"
+      "sha256": "sha256:9b2bd0026a9c4326b2932d36db61bb83da6ab3c2bf56a8c5562a41de14bfc8d4"
     },
     {
       "path": "src/buyer-core/a2a-quote-fetcher.ts",
-      "sha256": "sha256:b6b362ffb4bc9f2564455f64c4ffb6845340a01deeb3b1f56e3b3ce03e147d75"
+      "sha256": "sha256:b29590b3e598ed57d26fcc5c3a3911cbb75eb4fb732382b1b977a08257e78f7e"
     },
     {
       "path": "src/buyer-core/build-service.ts",
-      "sha256": "sha256:c481a197046e37d5c1e237c786db2ab557522bfbb2cdab3de09a269a67acf477"
+      "sha256": "sha256:3bb5b4ca846ca66e36014e7ea0b459a626a2eb3b1733a7e092d6717974564256"
+    },
+    {
+      "path": "src/buyer-core/buyer-route-hint-store.ts",
+      "sha256": "sha256:922fa67282f3265e3d36399ff741e53b675a7e95d65efa19f9e610ccfcc74152"
     },
     {
       "path": "src/buyer-core/errors.ts",
@@ -3706,7 +3750,7 @@
     },
     {
       "path": "src/buyer-core/merchant-index.ts",
-      "sha256": "sha256:96362b285a0cc474db5135cd2e9e918cefafb27bc3ca0a18a6ee41b701a2aa98"
+      "sha256": "sha256:43f9fddb2700d207727f8f9d0c8cbaccd004e2494db784b201a1786f010c1bd5"
     },
     {
       "path": "src/buyer-core/negotiator.ts",
@@ -3742,7 +3786,7 @@
     },
     {
       "path": "src/buyer-core/service.ts",
-      "sha256": "sha256:ab30a701d603e8d13f7f14fafc234efc30925ecb4be75c4ace78967dda9c2340"
+      "sha256": "sha256:9d421e9da9a04c0adf36ce7d297dc3ac9f5d9d2fdab0046ca699ce2dd69b7e7c"
     },
     {
       "path": "src/buyer-core/stale-merchant-wake.ts",
@@ -3755,6 +3799,10 @@
     {
       "path": "src/cli.ts",
       "sha256": "sha256:774de077724f7d967615aecc98993d2c0c5e3fe975ecf69abb7f7043e07681e2"
+    },
+    {
+      "path": "src/cloud/access/access-mode.ts",
+      "sha256": "sha256:a7dd2468ecf82cdfe1492d81f5d03ae8490fade503874f36d27c60bef85e81b9"
     },
     {
       "path": "src/cloud/access/local-share-vault.ts",
@@ -3802,11 +3850,11 @@
     },
     {
       "path": "src/cloud/bootstrap.ts",
-      "sha256": "sha256:63923ff123e13790f7136afeabe2601bde7eac00db0c961b8475d207a356c711"
+      "sha256": "sha256:a02ae4d825fa48423c3fcca230bfce07e937acaaf2e60d4212134f53f454eca3"
     },
     {
       "path": "src/cloud/catalog-client.ts",
-      "sha256": "sha256:5b7fd69fc3967ac4fd9b83d3adae61960cba79151182a7e986977fa1305dd7ed"
+      "sha256": "sha256:710aadf6af81c048e03b8cf0bcf960fd904f424699a2544ccd84a930420ee9f3"
     },
     {
       "path": "src/cloud/config.ts",
@@ -3814,7 +3862,7 @@
     },
     {
       "path": "src/cloud/connect-service.ts",
-      "sha256": "sha256:8455aecf876bdeffc193d1fcac71b482b077ae324a133d4ed1189bee5a1213ff"
+      "sha256": "sha256:4c9a96df033b4e2a70fc3d5715a06b5a42b7c988cec8744988abc554a21d7405"
     },
     {
       "path": "src/cloud/file-listing-publication.ts",
@@ -4022,7 +4070,7 @@
     },
     {
       "path": "src/discovery/catalog-source/kiwi-record.ts",
-      "sha256": "sha256:dca11bc784ed226612d0669e14fb9c16ba26a03da3138a74d3b3a14dd287ed22"
+      "sha256": "sha256:a5f860c3c89df2a4aed08956e1cc3dbb14ed7653395a3901f5d33080d2d1385d"
     },
     {
       "path": "src/discovery/catalog-source/kiwi-schema.ts",
@@ -4030,7 +4078,7 @@
     },
     {
       "path": "src/discovery/catalog-source/kiwi-source.ts",
-      "sha256": "sha256:7c19a2116b7649acb5f904af374ace68988c556597124e2efbe882d88df6df35"
+      "sha256": "sha256:6ec61fd54cc0eaf43e6cd89117011906e7bca43f309f200f4f50519f6a2a1f80"
     },
     {
       "path": "src/discovery/catalog-source/merchant-access.ts",
@@ -4278,7 +4326,7 @@
     },
     {
       "path": "src/http/merchant-management/api.ts",
-      "sha256": "sha256:5de9a1fc49eea309bef9f826742a53f8d26aa0f759b9b2727a5d583bd3ada9ff"
+      "sha256": "sha256:8c86bead669b1f1c83c44f8905a8b45d8e42b3bbad7d5c41fbb2186fe3379c04"
     },
     {
       "path": "src/http/merchant-management/draft-store.ts",
@@ -4294,7 +4342,7 @@
     },
     {
       "path": "src/http/merchant-management/page.ts",
-      "sha256": "sha256:25de090c44ad18effacd9274c4dad2a854e6c04f694edfa20a712e327fdb6a9c"
+      "sha256": "sha256:569f3a87c57bcd7439f6d2fe94ae3a66058c5fe42d074ec521985bae37750afb"
     },
     {
       "path": "src/http/merchant-management/problem-client.ts",
@@ -4342,7 +4390,7 @@
     },
     {
       "path": "src/mcp/cli.ts",
-      "sha256": "sha256:b14e949443d399e14e57da1e5d45500756990e3877a08dd13641123eff9cf9ee"
+      "sha256": "sha256:ae9318e115acd1c32561e0db728356c8cae512293016801f2d3982f9003cd684"
     },
     {
       "path": "src/mcp/merchant-auth.ts",
@@ -5771,6 +5819,14 @@
       "sha256": "sha256:37df0d5820d12851690753c88d9a61c9287b5929e6781a92bdbe1229b9e5cfad"
     },
     {
+      "path": "tests/access-mode-sync-file.test.ts",
+      "sha256": "sha256:974b6227b4b32cd9d2962ba3899ece92087f47f5ae38eebcacd7b7e4fa3fbe93"
+    },
+    {
+      "path": "tests/access-settings-relay-s2-integration.test.ts",
+      "sha256": "sha256:b5e85409222fc7097e7046694adcfa9f8c24b357db170cb7d0f96a020c69f8c9"
+    },
+    {
       "path": "tests/acp-commerce.test.ts",
       "sha256": "sha256:4f3746896b61d6d639a869cafa1ab9469e74157059e506f5ba5c3320c52041b3"
     },
@@ -5859,6 +5915,18 @@
       "sha256": "sha256:a2b842dadaf0d33428f6079e1914feb5c946baafe92e994fba90ca1c31458295"
     },
     {
+      "path": "tests/buyer-access-route-recovery-relay.test.ts",
+      "sha256": "sha256:9568af2f0e575456e4021ddb24fb581a303bee2a52f49ccef86ca720d48700f9"
+    },
+    {
+      "path": "tests/buyer-access-route-recovery.test.ts",
+      "sha256": "sha256:f717ade4cbdc067972629021755d573f1c7a9cacc44ea5c96daf42e58ec94e2e"
+    },
+    {
+      "path": "tests/buyer-access-route.test.ts",
+      "sha256": "sha256:22af4e3d1575020470116babb76abdb7bbb58f6ee45dafb23abaafff853879fe"
+    },
+    {
       "path": "tests/buyer-authorization-limits.test.ts",
       "sha256": "sha256:fc890b54ec9704b44cbbfcaba70f451c08cd5a72836c814dd594af1123f8925a"
     },
@@ -5887,12 +5955,16 @@
       "sha256": "sha256:5758fc70a40f04ce81de3e9f217003693ca84a6b21f9bcda0cc75e01d257f1a4"
     },
     {
+      "path": "tests/buyer-route-hint-store.test.ts",
+      "sha256": "sha256:25438b0118641feb4cb9ae8c86d30194a9e3ca36742576f54fd3435174dee774"
+    },
+    {
       "path": "tests/buyer-stale-wake.test.ts",
       "sha256": "sha256:f1d5813b62241b1fd321148c8167e781669f3b807a0adc3aead81fc8c352e298"
     },
     {
       "path": "tests/buyer-tool-contract.test.ts",
-      "sha256": "sha256:4b9dfce4ab8f9180d55a826bb87e77a1a794b55d9ad7a4056c868d85e914d790"
+      "sha256": "sha256:df5b09a6114e5f2b00beb6416c716ed62b4eba81e24da50bf70617a2edaa5338"
     },
     {
       "path": "tests/buyer-turn.test.ts",
@@ -5964,7 +6036,7 @@
     },
     {
       "path": "tests/cloud-catalog-client.test.ts",
-      "sha256": "sha256:c419181a255ec7ff41b4ace2872a5d3845245270955c7c1d1352684fd03bef8f"
+      "sha256": "sha256:932fb8df644b95d1d858843416be34c121104101f7758a07ce54f9eb07d0f68f"
     },
     {
       "path": "tests/cloud-close-cleanup.test.ts",
@@ -6048,7 +6120,7 @@
     },
     {
       "path": "tests/connect-service.test.ts",
-      "sha256": "sha256:78c2a67d9dc002ebce6c2fd5c8041b4463398b4bc3d1a830c6b60ba044b48b05"
+      "sha256": "sha256:b212313d222020c5f9575ed522321f09393182e4cfab021fb2113b3f456a94f5"
     },
     {
       "path": "tests/connector-http.test.ts",
@@ -6440,7 +6512,7 @@
     },
     {
       "path": "tests/merchant-catalog-connection-api.test.ts",
-      "sha256": "sha256:36ec6c71d6481b315ad3cb42d54182da782635677774ca04e46a19a3b4205838"
+      "sha256": "sha256:d89319b400f44c4681bcd6df9d4deae408b4c7012d64ac9dae3126d7111991db"
     },
     {
       "path": "tests/merchant-client-inventory.test.ts",
@@ -6616,7 +6688,7 @@
     },
     {
       "path": "tests/merchant-index-access-wiring.test.ts",
-      "sha256": "sha256:d5026b20b54c3049f2bff5dba841baee820f1353e611107b3b930b955d163b43"
+      "sha256": "sha256:f275db2f7a3efa4243acc2b0f2c9541a226bb066f87c457f5ea4c191ead289f4"
     },
     {
       "path": "tests/merchant-index-freshness.test.ts",
@@ -6660,7 +6732,7 @@
     },
     {
       "path": "tests/merchant-management-page-connect-flow.test.ts",
-      "sha256": "sha256:6f3b72a83c4dfa1987daa0a3d3c65690a710f10db49c03b59f266a38097fcbce"
+      "sha256": "sha256:6cdf5d17e82b4d2e3ba140d3df7819310e488b6b21503c2832ba12f88e2c086b"
     },
     {
       "path": "tests/merchant-management-page-csrf.test.ts",
@@ -7115,6 +7187,10 @@
       "sha256": "sha256:807b50b41684198a5fbe7ed93731f330f675c445869b1599a1cd7deee05da518"
     },
     {
+      "path": "tests/open-inquiry-relay-denial.test.ts",
+      "sha256": "sha256:413f2a29314927efbb380acb115f77fcacba468c63650ecf790bc1f00d8fd89a"
+    },
+    {
       "path": "tests/open-inquiry-route-store.test.ts",
       "sha256": "sha256:d814ce32132d929d79c0556a38983b774c53e80a743c1a8957b5a80cce46d45b"
     },
@@ -7192,7 +7268,7 @@
     },
     {
       "path": "tests/portfolio-lock-verify.test.ts",
-      "sha256": "sha256:79000670003e65cf92c0c1dd91de4c79746ab41c7a71f502c14c59a2d316da5d"
+      "sha256": "sha256:9679a2131ae7df6b3654c75cbd84f26d408e44212e21f23f294b84ac624c93b7"
     },
     {
       "path": "tests/portfolio-release-index.test.ts",
@@ -7480,7 +7556,7 @@
     },
     {
       "path": "tests/workbuddy-connector.test.ts",
-      "sha256": "sha256:29eba3f13e320bcc544ae25432709f4a54487ee6182d8102df04a117f5b7c099"
+      "sha256": "sha256:d992f585dc1001ced8e2e34f13a27a5924ce6558992342b42f81de9424fceae2"
     },
     {
       "path": "tests/workbuddy-dual-address.test.ts",
