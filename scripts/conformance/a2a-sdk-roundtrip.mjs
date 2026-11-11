@@ -4,7 +4,7 @@
  * `@a2a-js/sdk`（官方独立 SDK，非 Kiwi 实现）↔ Kiwi merchant server 往返。
  *
  * 产出：
- * - 断言 SDK 拉取 Agent Card（1.0 声明）+ SendMessage 拿到 task 往返；
+ * - 断言 SDK 拉取 Agent Card（1.0 声明）+ SendMessage 得到 working task 且含真实 KNP offer；
  * - 保存 wire transcript 到 `docs/reviews/a2a-sdk-conformance-transcript-<ts>.jsonl`；
  * - 退出码 0/1（可接 CI）。
  *
@@ -15,7 +15,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ClientFactory } from "@a2a-js/sdk/client";
-import { Role } from "@a2a-js/sdk";
+import { Role, TaskState } from "@a2a-js/sdk";
 import { A2AServer } from "../../dist/a2a/server/index.js";
 import { createMerchantHandler } from "../../dist/a2a/server/merchant-handler.js";
 import { LedgerStore } from "../../dist/negotiation/ledger/index.js";
@@ -39,7 +39,21 @@ async function startKiwiMerchant() {
     productSource: {
       getProduct: async (sku) => {
         if (sku === "VQ-003") {
-          return { price: 8999, currency: "CNY", title: "iPhone 17", stock: 120, handoff_destination: "https://veyquo.example/checkout" };
+          return {
+            price: 8999,
+            currency: "CNY",
+            // 商品单位必须与 RFQ 的 piece 一致，否则 handler 会 fail-closed
+            // decline（field_unsupported）；那样任务虽仍是 completed，却没有真实报价。
+            unit: "piece",
+            title: "iPhone 17",
+            stock: 120,
+            handoff_destination: "https://veyquo.example/checkout",
+            // 测试夹具的来源标记；不改变任何生产校验。
+            source_evidence: {
+              system: "kiwi-conformance-a2a-sdk-fixture",
+              source_version: "1",
+            },
+          };
         }
         throw new Error(`unknown sku ${sku}`);
       },
@@ -122,12 +136,29 @@ async function main() {
     };
     const result = await client.sendMessage({ message });
 
-    // SDK 1.0 client 返回 raw Task（state 是 TaskState 枚举数字；2 = TASK_STATE_COMPLETED）。
+    // SDK 1.0 client 返回 raw Task；state 是 proto TaskState 枚举数字
+    // （TASK_STATE_WORKING = 2，TASK_STATE_COMPLETED = 3）。merchant 对 KNP
+    // offer 返回 working：报价是非终态，任务停在等待买家回应；completed 是
+    // decline/终态。不要硬编码数字：枚举以官方 SDK 为准。
     if (typeof result?.id !== "string" || result.id === "") {
       throw new Error(`expected task result, got ${JSON.stringify(result).slice(0, 300)}`);
     }
-    if (result.status?.state !== 2) {
-      throw new Error(`expected TASK_STATE_COMPLETED(2), got ${result.status?.state}`);
+    if (result.status?.state !== TaskState.TASK_STATE_WORKING) {
+      throw new Error(
+        `expected TASK_STATE_WORKING(${TaskState.TASK_STATE_WORKING}) for KNP offer, got ${result.status?.state}`,
+      );
+    }
+    // working 也可能是非报价回复；必须确认真实收到 KNP offer，不允许把
+    // decline（completed）当成功。否则商品源/单位配置错误会被伪装成互操作成功。
+    const replyParts = result.status?.message?.parts ?? [];
+    const offer = replyParts
+      .filter((part) => part?.content?.$case === "data")
+      .map((part) => part.content.value?.knp_envelope)
+      .find((envelope) => envelope?.action === "offer");
+    if (offer === undefined) {
+      throw new Error(
+        `expected KNP offer in working task, got ${JSON.stringify(replyParts).slice(0, 300)}`,
+      );
     }
 
     // 保存 transcript（稳定路径，覆盖写，可提交作 CI 证据）。
