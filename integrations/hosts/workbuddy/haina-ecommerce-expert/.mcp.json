@@ -1,0 +1,33 @@
+{
+  "mcpServers": {
+    "kiwi-shopping-buyer": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "./runtime/expert-launcher.mjs"
+      ],
+      "runtime": {
+        "type": "node",
+        "version": "22"
+      },
+      "timeout": 30000,
+      "env": {
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8"
+      },
+      "x-workbuddy": {
+        "displayName": {
+          "zh": "Kiwi 购物",
+          "en": "Kiwi Shopping"
+        },
+        "description": {
+          "zh": "本地启动 Kiwi，发现商家并处理采购询价。",
+          "en": "Run Kiwi locally to discover merchants and request quotes."
+        },
+        "auth": {
+          "type": "none"
+        }
+      }
+    }
+  }
+}
