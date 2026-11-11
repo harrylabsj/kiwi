@@ -10,10 +10,10 @@ const root=dirname(fileURLToPath(import.meta.url));
 const raw=JSON.parse(readFileSync(join(root,'..','runtime','mcp-tools-0.12.12.json'),'utf8'));
 const baseline=Array.isArray(raw)?raw:raw.tools;
 const prepared={name:'@harrylabsj/kiwi',latestChecked:true,authorizationProven:false,executionAuthorized:false,sessionDirectory:'/private/tmp/synthetic-prepared'};
-function harness({prepare=async()=>prepared,activate,consentTimeoutMs=50}={}){
+function harness({prepare=async()=>prepared,activate,consentTimeoutMs=50,deferPreparation=false}={}){
   const input=new PassThrough(),output=new PassThrough(),messages=[],statuses=[];let buffer='';
   output.on('data',chunk=>{buffer+=chunk.toString();let index;while((index=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,index);buffer=buffer.slice(index+1);if(line)messages.push(JSON.parse(line))}});
-  const server=startProductionMcpServer({input,output,baseline,prepare,activate:activate??(async()=>fakeBackend()),onStatus:code=>statuses.push(code),consentTimeoutMs,backendRequestTimeoutMs:50});
+  const server=startProductionMcpServer({input,output,baseline,prepare,deferPreparation,activate:activate??(async()=>fakeBackend()),onStatus:code=>statuses.push(code),consentTimeoutMs,backendRequestTimeoutMs:50});
   return {input,messages,statuses,server,async send(message){input.write(JSON.stringify(message)+'\n');await new Promise(resolve=>setImmediate(resolve))}};
 }
 function fakeBackend(){
@@ -131,4 +131,14 @@ test('fixed READY status follows verified 13-tool activation; failures and shutd
       assert.equal(h.messages.every(m=>m&&m.jsonrpc==='2.0'),true);
     }finally{await close(h)}
   }
+});
+
+test('deferred expert preparation starts on tool call, not connection probe',async()=>{
+ let count=0;const h=harness({deferPreparation:true,prepare:async()=>{count++;return prepared}});
+ try{await initialize(h);await h.send({jsonrpc:'2.0',id:2,method:'tools/list'});assert.equal((await until(h.messages,m=>m.id===2)).result.tools.length,13);assert.equal(count,0);await h.send({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'kiwi_search',arguments:{query:'test'}}});await until(h.messages,()=>h.server.status==='ready');assert.equal(count,1)}finally{await close(h)}
+});
+
+test('missing npm 12 gives actionable guidance to the user',async()=>{
+ const h=harness({deferPreparation:true,prepare:async()=>{throw new Error('NPM_12_UNAVAILABLE')}});
+ try{await initialize(h);await h.send({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'kiwi_search',arguments:{query:'test'}}});const reply=await until(h.messages,m=>m.id===3);assert.equal(reply.result.isError,true);assert.match(reply.result.content[0].text,/NPM_12_UNAVAILABLE.*npm 12/)}finally{await close(h)}
 });

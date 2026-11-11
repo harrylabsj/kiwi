@@ -2,6 +2,11 @@
 
 ## Unreleased — Code Review 2026-11-10 修复批次
 
+- **买家来源统计**：`kiwi mcp serve` 新增 `--buyer-id` / `KIWI_CATALOG_BUYER_ID`，
+  仅影响 catalog 的 `X-Buyer-Id`（运营去重买家），不改变本地任务 owner。
+  WorkBuddy 连接器在持久数据目录生成 `workbuddy:<uuid>`，跨 npm 版本稳定；
+  写盘失败时回落到旧常量，避免把去重买家灌成假数据。
+
 - **P1 安全/正确性**：受限值脱敏、buyer 远程内容围栏、整数 minor 还价、
   A2A 1.0 通用消息限流、CSV 导入底价与预览价格、微信去重失败回滚、
   connect claim 确定性释放、残留锁可证明已死接管、domain-control 挑战绑定、

@@ -7,6 +7,7 @@ import {startVerifiedBackend} from './backend-client.mjs';
 import {startBackendWithPreparedLock} from './locked-backend-session.mjs';
 import {startProductionMcpServer} from './mcp-production-server.mjs';
 import {selectEnvironment} from './environment-policy.mjs';
+import {findCompatibleNpm} from './npm-discovery.mjs';
 import {prepareInstanceData} from './instance-store.mjs';
 
 function findExecutable(name){
@@ -27,7 +28,7 @@ function supportedRuntime(){
 }
 function publicCode(error){
   const message=typeof error?.message==='string'?error.message:'';
-  const exact=new Set(['PLATFORM_UNSUPPORTED','NODE_VERSION_UNSUPPORTED','NODE_RUNTIME_UNVERIFIED','PLUGIN_DATA_UNAVAILABLE','PLUGIN_DATA_INVALID','INSTANCE_DATA_UNAVAILABLE','INSTANCE_DATA_NOT_PRIVATE','INSTANCE_STATE_INCOMPLETE','INSTANCE_STATE_CORRUPT','INSTANCE_STATE_CONFLICT','RUNTIME_DEPENDENCY_MISSING','PREPARE_TIMEOUT','PREPARE_CANCELLED','PREPARE_TERMINATION_UNCONFIRMED','PREPARE_OUTPUT_INVALID','PREPARE_START_FAILED','BACKEND_PATH_INVALID','BACKEND_PROTOCOL_MISMATCH','BACKEND_TOOL_LIST_INVALID','TREE_RECHECK_FAILED','PREPARED_STATE_MISMATCH','CACHE_BUSY','CACHE_POINTER_INVALID','CACHE_DIRECTORY_INVALID','CACHE_LEGACY_STATE_REQUIRES_REVIEW','PACKAGE_INVALID','VERSION_DOWNGRADE','LATEST_METADATA_UNAVAILABLE','AUDIT_FAILED','SIGNATURE_VERIFIER_UNAVAILABLE','SIGNER_POLICY_VERIFICATION_FAILED','ISOLATED_INSTALL_FAILED','TREE_INSPECTION_FAILED','MCP_PROBE_FAILED','MCP_PROBE_TIMEOUT','TOOL_SET_MISMATCH']);
+  const exact=new Set(['PLATFORM_UNSUPPORTED','NODE_VERSION_UNSUPPORTED','NODE_RUNTIME_UNVERIFIED','PLUGIN_DATA_UNAVAILABLE','PLUGIN_DATA_INVALID','INSTANCE_DATA_UNAVAILABLE','INSTANCE_DATA_NOT_PRIVATE','INSTANCE_STATE_INCOMPLETE','INSTANCE_STATE_CORRUPT','INSTANCE_STATE_CONFLICT','RUNTIME_DEPENDENCY_MISSING','NPM_12_UNAVAILABLE','PREPARE_TIMEOUT','PREPARE_CANCELLED','PREPARE_TERMINATION_UNCONFIRMED','PREPARE_OUTPUT_INVALID','PREPARE_START_FAILED','BACKEND_PATH_INVALID','BACKEND_PROTOCOL_MISMATCH','BACKEND_TOOL_LIST_INVALID','TREE_RECHECK_FAILED','PREPARED_STATE_MISMATCH','CACHE_BUSY','CACHE_POINTER_INVALID','CACHE_DIRECTORY_INVALID','CACHE_LEGACY_STATE_REQUIRES_REVIEW','PACKAGE_INVALID','VERSION_DOWNGRADE','LATEST_METADATA_UNAVAILABLE','AUDIT_FAILED','SIGNATURE_VERIFIER_UNAVAILABLE','SIGNER_POLICY_VERIFICATION_FAILED','ISOLATED_INSTALL_FAILED','TREE_INSPECTION_FAILED','MCP_PROBE_FAILED','MCP_PROBE_TIMEOUT','TOOL_SET_MISMATCH']);
   if(exact.has(message))return message;
   const detail=/^PREPARE_FAILED:(CACHE_BUSY|CACHE_STATE_INVALID|REGISTRY_UNAVAILABLE|INSTALL_FAILED|PROVENANCE_FAILED|TREE_CHECK_FAILED|TOOL_CHECK_FAILED|IDENTITY_CAPABILITY_MISSING|VERSION_REJECTED)$/.exec(message);
   return detail?message:'LAUNCH_HOLD';
@@ -49,7 +50,7 @@ async function main(){
   backendEnvironment.KIWI_MCP_DB=instance.dbPath;
   backendEnvironment.KIWI_CLIENT_ID=instance.instanceId;
   backendEnvironment.KIWI_SESSION_TOKEN_FILE=instance.tokenFile;
-  const nodeBinary=process.execPath,npmBinary=findExecutable('npm'),pythonBinary=findExecutable('python3');
+  const nodeBinary=process.execPath,pythonBinary=findExecutable('python3');
   const baselineRaw=JSON.parse(readFileSync(join(packageRoot,'mcp-tools-0.12.12.json'),'utf8'));
   const baseline=Array.isArray(baselineRaw)?baselineRaw:baselineRaw.tools;
   if(!Array.isArray(baseline)||baseline.length!==13)throw new Error('TOOL_BASELINE_INVALID');
@@ -65,7 +66,7 @@ async function main(){
   const shutdown=()=>{controller.abort();server?.shutdown()};
   process.once('SIGTERM',shutdown);process.once('SIGINT',shutdown);
   try{
-    server=startProductionMcpServer({input:process.stdin,output:process.stdout,baseline,
+    server=startProductionMcpServer({input:process.stdin,output:process.stdout,baseline,deferPreparation:process.env.KIWI_EXPERT_DEFER_PREPARE==='1',
       // Fixed status records use stderr only; stdout remains newline-delimited MCP JSON-RPC.
       onStatus:code=>{if(['PREPARING','READY','FAILED_PREPARE','FAILED_BACKEND','TIMEOUT_PREPARE','TIMEOUT_BACKEND','FAILED_RUNTIME','BACKEND_EXITED','BACKEND_FAILED','STOPPED'].includes(code))process.stderr.write(`KIWI_STATUS:${code}\n`)},
       onProtocolDiagnostic:event=>{
@@ -79,6 +80,7 @@ async function main(){
         process.stderr.write('KIWI_STATUS:PREPARING\n');
         const deadlineEpochMs=Date.now()+600_000;startupDeadlineEpochMs=deadlineEpochMs;
         await rejectUnanchoredCache(signal,deadlineEpochMs);
+        const npmBinary=findCompatibleNpm();
         const args=['prepare-managed','--store',store,'--floor','0.12.9','--node',nodeBinary,'--npm',npmBinary,'--python',pythonBinary,
           '--baseline-en',join(packageRoot,'mcp-tools-0.12.12.json'),'--baseline-zh',join(packageRoot,'mcp-tools-0.12.12-zh.json')];
         const remainingMs=deadlineEpochMs-Date.now();if(remainingMs<1)throw new Error('PREPARE_TIMEOUT');
@@ -90,7 +92,7 @@ async function main(){
       },
       activate:async(prepared,{signal,clientCapabilities,onMessage})=>{
         const startupSignal=AbortSignal.any([signal,controller.signal]),deadlineEpochMs=startupDeadlineEpochMs??Date.now()+600_000;
-        return startBackendWithPreparedLock({storeDirectory:store,prepared,verificationOptions:{nodeBinary,pythonBinary},signal:startupSignal,deadlineEpochMs,backendFactory:selected=>startVerifiedBackend({nodeBinary,sessionDirectory:selected.sessionDirectory,baseline,clientCapabilities,onMessage,timeoutMs:Math.min(15000,Math.max(1,deadlineEpochMs-Date.now())),sourceRoot:packageRoot,environment:backendEnvironment,signal:startupSignal})});
+        return startBackendWithPreparedLock({storeDirectory:store,prepared,verificationOptions:{nodeBinary,pythonBinary},signal:startupSignal,deadlineEpochMs,backendFactory:selected=>startVerifiedBackend({nodeBinary,sessionDirectory:selected.sessionDirectory,dataDirectory:pluginData,baseline,clientCapabilities,onMessage,timeoutMs:Math.min(15000,Math.max(1,deadlineEpochMs-Date.now())),sourceRoot:packageRoot,environment:backendEnvironment,signal:startupSignal})});
       },
     });
     await server.done;

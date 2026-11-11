@@ -324,6 +324,35 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
     expect(html).toContain('onclick="beginCatalogConnect()"');
     expect(html).not.toContain('onclick="stageAccessAndBegin()"');
   });
+
+  it("展示自动检测/使用分享码/无分享码三种接入方式，并明确切换不删除分享码", async () => {
+    const page = await loadConnectPage({
+      connect: { status: "preparing", bindingId: null, published: false },
+      access: { status: "none", mode: "auto", modePersisted: false, modeInvalid: false, detection: null },
+    });
+    const html = page.elements["view"]!.innerHTML;
+    expect(html).toContain('id="access-mode"');
+    expect(html).toContain("自动检测（默认）");
+    expect(html).toContain("使用分享码");
+    expect(html).toContain("无分享码（直连）");
+    expect(html).toContain("切换接入方式不会删除已保存分享码");
+    expect(html).toContain("接入方式经目录公开为买家路由状态");
+    expect(html).toContain("使用分享码时买家中继");
+
+    page.set('$("access-mode").value = "no_share_code";');
+    await page.run("saveAccessMode()");
+    expect(page.posts).toContainEqual({
+      method: "POST",
+      path: "/merchant/api/v1/catalog/access/mode",
+      body: { mode: "no_share_code" },
+    });
+    await page.run("detectAccessMode()");
+    expect(page.posts).toContainEqual({
+      method: "POST",
+      path: "/merchant/api/v1/catalog/access/detect",
+      body: {},
+    });
+  });
 });
 
 describe("begin key persistence across reload", () => {

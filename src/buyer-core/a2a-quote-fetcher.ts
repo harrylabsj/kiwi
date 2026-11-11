@@ -50,6 +50,19 @@ export interface MerchantAccessTransport {
   sendUrlFor(signUrl: string): string;
   /** Account-free directory relay; never contains a WorkBuddy credential. */
   openInquiry?: import("../discovery/catalog-source/open-inquiry.js").OpenInquiryRoute;
+  /**
+   * Positive directory answer that this merchant has **no active share-code
+   * configuration** (allowlisted / no-code). Only the composition layer may set
+   * it, and only from an explicit directory 404. It must never be inferred from
+   * a single network 401/403 or from a missing `runtime_access` projection.
+   */
+  direct?: true;
+  /**
+   * The relay is wired, the directory still has an active share-code
+   * configuration, but the relay is unavailable. This is a terminal denial:
+   * no URL from this transport may be used, and the key must not be deleted.
+   */
+  relayRequired?: true;
 }
 
 /**
@@ -87,6 +100,14 @@ export interface A2AQuoteFetcherOptions {
   fetchImpl?: typeof fetch;
   protocolStateDir?: string;
   localBuyerAgentId?: string;
+  /**
+   * The account-free directory relay is wired (official Catalog + protocol
+   * state). When true, a legacy share-code transport must never be used for a
+   * direct connection: the relay is the only authorized path for share-code
+   * merchants. Explicit `direct` transports remain the allowlisted/no-code
+   * path. Defaults to false so non-official catalogs keep the legacy behavior.
+   */
+  relayWired?: boolean;
   now?: () => string;
   /**
    * 可选：WorkBuddy 平台门禁解析器。商家记录声明 `runtime_access` 时必须提供，
@@ -283,6 +304,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
    */
   private readonly gatewayCookies = new GatewayCookieJar();
   private readonly merchantAccess?: MerchantAccessResolver;
+  private readonly relayWired: boolean;
   private readonly signer?: A2AOutboundSigner;
   private readonly onAccessDenied?: (merchant: MerchantRecord) => void | Promise<void>;
   private readonly publicMessage?: string;
@@ -301,6 +323,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.rpcFetchImpl = options.fetchImpl;
     this.merchantAccess = options.merchantAccess;
+    this.relayWired = options.relayWired ?? false;
     this.signer = options.signer;
     this.onAccessDenied = options.onAccessDenied;
     this.publicMessage = options.publicMessage;
@@ -525,7 +548,22 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     if(!this.recovery)throw new ProtocolOperationUnknown();
     const results=await this.recovery.recover(context,async (endpoint,id)=>{
       // 恢复路径只知道端点：用按 origin 的映射继续带码（B-04：不是只对首次请求有效）。
-      const access=this.merchantAccess===undefined?null:await this.merchantAccess.forEndpoint(endpoint);
+      const resolved=this.merchantAccess===undefined?null:await this.merchantAccess.forEndpoint(endpoint);
+      if (resolved?.relayRequired===true) {
+        throw new MerchantAccessUnavailable(
+          "RELAY_REQUIRED",
+          "share-code merchant must use the directory relay; legacy coded recovery is disabled",
+        );
+      }
+      // 显式 direct 标记等价于“无门禁传输”，走标准无码恢复；其余传输按 relayWired
+      // 做与首请求相同的终态检查，避免旧缓存把分享码带回恢复请求。
+      const access=resolved?.direct===true?null:resolved;
+      if (access!==null && this.relayWired && access.openInquiry===undefined) {
+        throw new MerchantAccessUnavailable(
+          "RELAY_REQUIRED",
+          "share-code merchant must use the directory relay; legacy coded recovery is disabled",
+        );
+      }
       return buildA2AClient(endpoint,{
         bearerToken:access===null?this.bearerToken:undefined,allowPrivateRanges:this.allowPrivateRanges,skipDnsCheck:this.skipDnsCheck,timeoutMs:this.timeoutMs,
         ...(access?.openInquiry?{signer:access.openInquiry.signer}:this.signer!==undefined?{signer:this.signer}:{}),
@@ -550,11 +588,23 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     merchant: MerchantRecord,
   ): Promise<MerchantAccessTransport | null> {
     const declared = merchant.runtime_access !== undefined;
+    // 目录公开的显式路由状态优先于 legacy runtime_access 推断。`direct` 只
+    // 表示商家选择无分享码（不是平台白名单背书）；`relay` 表示只能走中继。
+    const routeState = merchant.buyer_access?.state;
+    const explicitDirect = routeState === "direct";
+    const explicitRelay = routeState === "relay";
     // 缺少 runtime_access 但 card 指向 WorkBuddy 平台主机：仍按门禁商家处理，
     // resolver 异常/为空时 fail-closed，绝不静默回退无码直连。
     const workbuddyHost = isWorkBuddyCardHost(merchant.agent_card_url);
+    if (routeState === "unknown") {
+      throw new MerchantAccessUnavailable(
+        "ACCESS_ROUTE_UNKNOWN",
+        "directory buyer-access state is unknown; refusing to guess relay/direct",
+      );
+    }
     if (this.merchantAccess === undefined) {
-      if (!declared && !workbuddyHost) return null;
+      if (explicitDirect) return null;
+      if (!declared && !workbuddyHost && !explicitRelay) return null;
       throw new MerchantAccessUnavailable(
         "ACCESS_RESOLVER_MISSING",
         "merchant requires a platform access configuration but no resolver is configured",
@@ -564,10 +614,34 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     try {
       transport = await this.merchantAccess.forMerchant(merchant);
     } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      // 终态拒绝不能被“普通商家直连兼容”吞掉；否则自定义 resolver 的
+      // RELAY_REQUIRED 会在非 WB 主机上变成无码直连。
+      if (
+        code === "RELAY_REQUIRED" ||
+        code === "ACCESS_ROUTE_UNKNOWN" ||
+        code === "ACCESS_ROUTE_REVOKED"
+      ) {
+        // 显式路由的终态拒绝（中继必需/状态未知/授权已变）不能被普通商家的
+        // “直连兼容”吞掉，否则会变成猜测直连。
+        throw new MerchantAccessUnavailable(
+          code,
+          error instanceof Error ? error.message : "share-code merchant must use the directory relay",
+        );
+      }
+      // 显式 relay 的查询失败也是终态：目录已声明必须中继，不能用“普通商家
+      // 直连兼容”把网络故障变成无码直连。显式 direct 无需 resolver，仍直连。
+      if (explicitRelay) {
+        throw new MerchantAccessUnavailable(
+          "RELAY_REQUIRED",
+          "explicit relay route lookup failed; coded/direct fallback is disabled",
+          code === "request_failed" || code === "request_timeout",
+        );
+      }
+      if (explicitDirect) return null;
       // 普通商家直连兼容：中继/门禁回查失败不应把本来能直连的商家拦下。
       // WorkBuddy 主机例外——它是平台门禁入口，异常时不能静默绕过。
       if (!declared && !workbuddyHost) return null;
-      const code = (error as { code?: unknown } | null)?.code;
       const transient = code === "request_failed" || code === "request_timeout";
       throw new MerchantAccessUnavailable(
         typeof code === "string" ? code.toUpperCase() : "ACCESS_UNAVAILABLE",
@@ -575,12 +649,57 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         transient,
       );
     }
+    if (transport !== null && transport.relayRequired === true) {
+      // 目录仍有 active 分享码，但中继当前不可用。分享码商家必须经中继，
+      // 不能回退带码直连；这里不区分主机名，避免非 WB 主机成为旁路。
+      throw new MerchantAccessUnavailable(
+        "RELAY_REQUIRED",
+        "share-code merchant must use the directory relay; legacy coded direct is disabled",
+      );
+    }
+    if (explicitRelay && (transport === null || transport.openInquiry === undefined)) {
+      // 显式 relay 是目录下发的路由事实；resolver 即使误返回分享码传输也不能用。
+      throw new MerchantAccessUnavailable(
+        "RELAY_REQUIRED",
+        "explicit relay route requires the directory relay; coded direct is disabled",
+      );
+    }
+    if (explicitDirect) {
+      // 商家显式选择无分享码：即使 runtime_access 仍存在（切换模式不删已存
+      // 分享码），也走无码直连；resolver 不得改送中继/带码地址。
+      if (transport === null || transport.direct === true) return null;
+      throw new MerchantAccessUnavailable(
+        "ACCESS_ROUTE_INVALID",
+        "explicit direct route resolved to a coded or relay transport",
+      );
+    }
+    if (transport !== null && transport.direct === true) {
+      // 目录明确回答“没有 active 分享码配置”（只有 404 才是这个口径）。
+      // 这是已加白/无码商家的正向信号；声明了 runtime_access 的记录与该
+      // 信号矛盾，仍按门禁商家 fail-closed，绝不据此推断白名单。
+      if (declared) {
+        throw new MerchantAccessUnavailable(
+          "ACCESS_NOT_CONFIGURED",
+          "merchant declares runtime_access but the directory reports no active share-code configuration",
+        );
+      }
+      return null;
+    }
     if (transport === null) {
       // 受门禁商家缺访问元数据/传输：绝不静默直连，交给上层归类为 access_unavailable。
       if (!declared && !workbuddyHost) return null;
       throw new MerchantAccessUnavailable(
         "ACCESS_NOT_CONFIGURED",
         "merchant platform access configuration is unavailable",
+      );
+    }
+    // 中继已接线时，legacy 分享码传输是终态禁止项：分享码商家只能经目录
+    // 中继授权。这里是组合层之外的最后一道门，覆盖自定义 resolver、旧缓存
+    // 传输和协议恢复路径；不是按主机名或单次 401/403 推断白名单。
+    if (this.relayWired && transport.openInquiry === undefined) {
+      throw new MerchantAccessUnavailable(
+        "RELAY_REQUIRED",
+        "share-code merchant must use the directory relay; legacy coded direct is disabled",
       );
     }
     // 未声明 runtime_access 的记录只允许免登录目录中继；legacy 分享码传输

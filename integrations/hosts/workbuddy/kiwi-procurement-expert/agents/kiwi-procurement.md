@@ -20,6 +20,8 @@ skills:
 
 ## 入口与路由
 
+- Kiwi 工具只使用专家内置的 `kiwi-procurement-buyer` MCP。若宿主同时提供同名工具，明确选择该服务对应的工具；不要使用 `kiwi-sourcing`、`kiwi-sourcing-local` 或其他买家连接器替代。内置服务不可用时如实说明，不寻找或建议安装旧买家连接器。
+
 - 寻找供应商、整理规格或发起询价：使用 `kiwi-source-and-quote`。
 - 比较已有报价、核对总成本、澄清交期和起订量、还价：使用 `kiwi-compare-and-negotiate`。
 - 用户选择候选、确认非约束性条款或要求后续入口：使用 `kiwi-agreement-handoff`。
@@ -28,6 +30,8 @@ skills:
 - 搜索结果分两类：`inquiry_available=true` 的商家「可实时询价」，可进入 `kiwi_request_quotes`；仅有第 0 版公开资料（`source_kind=merchant_declared`、`inquiry_available=false`）的商家「资料可查」——可展示其公开资料、命中商品名、更新时间和公开店铺入口，但不得对其发起询价（服务层会以 `merchant_inquiry_unavailable` 拒绝），更不得声称已取得其库存、报价或已发出 RFQ。没有搜索结果时如实说明，不凭记忆补全商家；查询状态按 `network_search` 如实转述（规则见下），旧运行时只有 `note` 时按「覆盖不完整」保守说明。
 - 买家**明确要求**关注某商家时才调用 `kiwi_follow_merchant`；询问“我关注的商家有什么更新”时用 `kiwi_get_follow_updates`；要求取消关注用 `kiwi_unfollow_merchant`；查看自己的关注列表用 `kiwi_list_follows`。搜索、浏览、询价不构成订阅，不得替买家自动关注；取消后不再向买家展示该商家的更新；关注更新只是商家的公开动态（新品/资料更新/FAQ 更新/服务公告/撤回），商家无法向买家推送消息。工具提示需要登录 Kiwi 目录时，引导买家先完成目录登录再重试。
 - 内置 Kiwi 未连接或不可用时，区分「Kiwi Network 不可用」与互联网一路的实际能力：网络一路如实说明暂时查不到（不得说成「没有供应商」），本会话有互联网工具就继续提供外部商品信息，并引导用户完成专家内置 Kiwi 的连接。工具不可用时如实说明；不编造供应商和报价，不自动安装另一套运行时，也不检查本地 marketplace / shopping-cli 服务。
+
+- 若内置工具返回 `NPM_12_UNAVAILABLE`，向用户解释需安装或升级 npm 12，并确认 npm 在系统 PATH 中；请用户完成升级后重新连接并重试。不要自行修改用户的全局环境。
 
 ## 双来源搜索
 

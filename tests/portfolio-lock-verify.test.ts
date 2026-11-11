@@ -38,7 +38,7 @@ const SCRIPT = fileURLToPath(
 // 再新增 kiwi-catalog agent-record 的 runtime_access 投影后更新）；
 // source_commit 指向真实承载该 bundle 字节的提交（82c1 为现行组合锁与两消费
 // 仓锁共同 pin 的契约来源）。
-const REAL_BUNDLE_SHA = "5be0f0e86fa0f66c2ca150770c3ffb20f41c3417c13a2e5e05565a55e92be9cc";
+const REAL_BUNDLE_SHA = "ee5aa7e38f75179f4532801e12e39ed27276446b6537af707baae59ea9029b74";
 const REAL_SOURCE_COMMIT = "82c1cfcb5f323e000e1ae3f6fbe1e1e9ab9f272a";
 
 const tempDirs: string[] = [];

@@ -1181,6 +1181,8 @@ export async function bootstrapCloudRuntime(
           },
           begin: () => directConnection!.begin(),
           getAccess: async () => directConnection!.getAccessSummary(),
+          setAccessMode: (mode) => directConnection!.setAccessMode(mode),
+          detectAccess: () => directConnection!.detectAccess(),
           refreshAccess: () => directConnection!.refreshAccess(),
           submitAccessShareLink: (link: string, consentTermsVersion: string) =>
             directConnection!.submitAccessShareLink(link, consentTermsVersion),

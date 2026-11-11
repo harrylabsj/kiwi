@@ -85,11 +85,51 @@ import {
   type WorkbuddyAccessConfig,
 } from "./access/workbuddy-share-link.js";
 import {
+  readAccessMode,
+  writeAccessMode,
+  type AccessModeState,
+  type MerchantAccessMode,
+} from "./access/access-mode.js";
+import {
   enrollmentStorePath,
   readEnrollmentStore as readEnrollmentStoreRaw,
   type AuthorizedEnrollment,
   type EnrollmentChallengeStore,
 } from "./binding/enrollment-challenge.js";
+
+export type { AccessModeState, MerchantAccessMode } from "./access/access-mode.js";
+
+/**
+ * 一次公开探测的结论。`direct_ok` / `share_code_ok` 只描述本次 HTTP 观察，
+ * **不**表示平台已加白；`uncertain` 是单次 401/403、网络错误、重定向或
+ * 不完整响应唯一安全的结论。
+ */
+export type AccessDetectionStatus = "direct_ok" | "share_code_ok" | "uncertain";
+export type AccessDetectionCode =
+  | "public_card_readable"
+  | "sharecode_public_card_readable"
+  | "gate_rejected"
+  | "share_code_missing"
+  | "unexpected_redirect"
+  | "network_error"
+  | "response_ambiguous"
+  | "http_error";
+
+/**
+ * 一次公开探测的脱敏结果。**不含**分享码、带码 URL、远端响应正文或 Cookie。
+ * `shareCodeAvailable` 只是布尔值，不能反推凭据内容。
+ */
+export interface AccessDetectionResult {
+  readonly status: AccessDetectionStatus;
+  readonly code: AccessDetectionCode;
+  readonly checkedAt: string;
+  readonly mode: MerchantAccessMode;
+  /** 本进程是否持有已授权分享码；只是布尔，绝不回传凭据。 */
+  readonly shareCodeAvailable: boolean;
+  readonly httpStatus: number | null;
+  readonly detail: string;
+  readonly guidance: string;
+}
 
 const observedSession = Symbol("connect-observed-session");
 const sessionDigest = (item: AuthorizedEnrollment) =>
@@ -155,6 +195,8 @@ export const CONNECTION_PAIRING_SAFE_CODES = new Set([
   "RUNTIME_UNREACHABLE",
   "RUNTIME_NOT_READY",
   "RUNTIME_IDENTITY_MISMATCH",
+  "ACCESS_MODE_UNCERTAIN",
+  "ACCESS_STATE_UNAVAILABLE",
   "CATALOG_RUNTIME_NOT_READY",
   "STATE_CAS_CONFLICT",
   "CONNECTION_OPERATION_PENDING",
@@ -414,6 +456,20 @@ export interface MerchantConnectionService {
   getChallengeIdentity(): { merchantId: string; agentId: string } | undefined;
   /** WorkBuddy 访问配置的本地已知状态（M-04：平台门禁是独立于绑定的信号）。 */
   getAccessSummary(): RuntimeAccessSummary;
+  /** 当前接入方式偏好（只读、非凭据；损坏文件按 auto 回退）。 */
+  getAccessMode(): AccessModeState;
+  /**
+   * 保存接入方式偏好：本地原子写后，尽力经 active binding 签名同步到
+   * Catalog 的公开 `buyer_access` 投影。同步失败不回滚本地选择，也不
+   * **撤销 runtime-access、不删除已保存分享码、不清除本进程读卡凭据**；
+   * 页面会显示未同步状态。`share_code` 不会自动要求重新同意条款。
+   */
+  setAccessMode(mode: MerchantAccessMode): Promise<RuntimeAccessSummary>;
+  /**
+   * 对当前实例（构造时的已验证 publicOrigin）做一次公开、无凭据默认的探测。
+   * 不接收目标 URL；单次 401/403/网络错误/坏响应一律返回 `uncertain`。
+   */
+  detectAccess(): Promise<AccessDetectionResult>;
   /** 向 Catalog 拉取权威状态（签名 GET）；本地状态丢失时用它恢复版本。 */
   refreshAccess(): Promise<RuntimeAccessSummary>;
   /**
@@ -457,6 +513,28 @@ export interface RuntimeAccessSummary {
   /** 近 24h 采购方报告的门禁失败数（0 = 正常）。 */
   recentFaults: number;
   recentFaultsLastAt: string;
+  /** 商家选择的接入方式（本地非凭据偏好）；缺省 `auto`。 */
+  mode: MerchantAccessMode;
+  /** 模式是否来自持久化偏好；false 表示旧实例/未选择，按 auto 运行。 */
+  modePersisted: boolean;
+  /** 偏好文件存在但不可解析：安全回退 auto，不删除任何已有分享码。 */
+  modeInvalid: boolean;
+  /** 本进程最近一次显式检测结果；重启后为 null（不持久化过时结论）。 */
+  detection: AccessDetectionResult | null;
+  /** 最近一次确认写入目录的接入方式；null 表示尚未同步/旧目录。 */
+  catalogMode: MerchantAccessMode | null;
+  /** 目录侧单调 revision；null 表示尚未成功同步。 */
+  catalogRevision: number | null;
+  /** 本地模式是否与最近一次确认的目录模式一致。 */
+  catalogSynced: boolean;
+  /**
+   * 目录同步状态：`synced` / `pending`（本地已保存但尚未确认）/
+   * `failed`（最近一次同步失败）/ `unsupported`（旧目录无该端点）/
+   * `unbound`（尚未完成绑定）。
+   */
+  catalogSync: "synced" | "pending" | "failed" | "unsupported" | "unbound";
+  /** 稳定错误码（不含 URL/分享码/远端正文）；无错误为 null。 */
+  catalogSyncError: string | null;
 }
 
 /** 会话内持久化的访问配置投影（只有脱敏元数据，没有分享码）。 */
@@ -479,8 +557,25 @@ export interface RuntimeAccessRecord {
 }
 
 /** 会话里的脱敏投影 → 工作台视图；没有记录即"未配置"。 */
-function accessSummaryOf(session: ConnectionSession | undefined): RuntimeAccessSummary {
+function accessSummaryOf(
+  session: ConnectionSession | undefined,
+  modeState: AccessModeState,
+  detection: AccessDetectionResult | null,
+  syncError: string | null,
+): RuntimeAccessSummary {
   const record = session?.runtime_access;
+  const bound = session !== undefined && session.binding_id !== undefined;
+  const catalog = modeState.catalog;
+  const catalogSynced = catalog !== undefined && catalog.mode === modeState.mode;
+  const catalogSync: RuntimeAccessSummary["catalogSync"] = !bound
+    ? "unbound"
+    : syncError === "UNSUPPORTED"
+      ? "unsupported"
+      : syncError !== null
+        ? "failed"
+        : catalogSynced
+          ? "synced"
+          : "pending";
   return {
     configured: record?.status === "active",
     status: record?.status ?? "none",
@@ -495,7 +590,29 @@ function accessSummaryOf(session: ConnectionSession | undefined): RuntimeAccessS
     statusReason: record?.status_reason ?? "",
     recentFaults: record?.recent_faults ?? 0,
     recentFaultsLastAt: record?.recent_faults_last_at ?? "",
+    mode: modeState.mode,
+    modePersisted: modeState.persisted,
+    modeInvalid: modeState.invalid,
+    detection,
+    catalogMode: catalog?.mode ?? null,
+    catalogRevision: catalog?.revision ?? null,
+    catalogSynced,
+    catalogSync,
+    catalogSyncError: syncError,
   };
+}
+
+/** 接入方式同步失败 → 稳定码（不含 URL/分享码/远端正文）。 */
+function accessSyncErrorCode(error: unknown): string {
+  if (error instanceof CatalogClientError) {
+    if (error.code === "NOT_FOUND") return "UNSUPPORTED";
+    if (error.code === "CATALOG_UNREACHABLE") return "UNREACHABLE";
+    if (error.code === "CONFLICT") return "CONFLICT";
+    if (error.code === "REQUEST_REJECTED") return "REJECTED";
+    if (error.code === "RESPONSE_INVALID") return "RESPONSE_INVALID";
+    return error.code;
+  }
+  return "SYNC_FAILED";
 }
 
 /**
@@ -538,14 +655,27 @@ function cardDigest(card: AgentCard): string {
     .digest("hex")}`;
 }
 
-/** 缺省公开卡加载：与 CLI verifyPublicRuntimeReady 同口径（匿名读 + 签名声明核对）。 */
-async function fetchPublicCard(
+/**
+ * 一次公开 Agent Card 请求的原始观察。这里不决定“是否需要分享码”或“是否
+ * 加白”，只记录本次 HTTP 事实；解释语义由 `fetchPublicCard` / `detectAccess`
+ * 按各自场景收敛，避免把单次 401/403、网络错误或坏响应误报成“未加白”。
+ */
+type PublicCardProbe =
+  | { readonly kind: "ok"; readonly card: AgentCard }
+  | { readonly kind: "http"; readonly status: number }
+  | { readonly kind: "redirect"; readonly status: number }
+  | { readonly kind: "invalid"; readonly code: "timeout" | "network" | "response" };
+
+/**
+ * 只对调用方给定的 origin 发一次 GET；固定 well-known 路径，`redirect: "manual"`
+ * 且不跟随 3xx，`credentials: "omit"`，响应体读取受同一 AbortController 与大小
+ * 上限保护。`shareSecret` 只会追加到本 origin 的固定路径，不参与任何重定向目标。
+ */
+async function requestPublicCard(
   origin: string,
-  expectedEndpoint: string,
-  identity: { keyid: string; publicKeyPem: string },
   fetchImpl: typeof fetch,
   shareSecret?: string,
-): Promise<AgentCard> {
+): Promise<PublicCardProbe> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8_000);
   const url = new URL(`${origin}/.well-known/agent-card.json`);
@@ -554,52 +684,167 @@ async function fetchPublicCard(
     const response = await fetchImpl(url.href, {
       method: "GET",
       redirect: "manual",
+      credentials: "omit",
       signal: controller.signal,
       headers: { accept: "application/json" },
     });
-    if (isRedirectResponse(response) || !response.ok) {
-      throw new MerchantConnectError(
-        "RUNTIME_UNREACHABLE",
-        `暂时无法从外部读取商家服务的 Agent Card（HTTP ${response.status}）。请确认服务已启动且公网入口可访问，然后重新运行 kiwi merchant connect。`,
-      );
+    if (isRedirectResponse(response)) return { kind: "redirect", status: response.status };
+    if (!response.ok) return { kind: "http", status: response.status };
+    try {
+      const card = validateAgentCard(await readJsonBody(response, { signal: controller.signal }));
+      return { kind: "ok", card };
+    } catch {
+      return { kind: "invalid", code: "response" };
     }
-    const card = validateAgentCard(await readJsonBody(response, { signal: controller.signal }));
-    const urls = card.supportedInterfaces.map((entry) => entry.url);
-    if (
-      typeof card.url !== "string" ||
-      new URL(card.url).origin !== origin ||
-      !urls.includes(expectedEndpoint)
-    ) {
-      throw new MerchantConnectError(
-        "RUNTIME_NOT_READY",
-        "公网入口返回的 Agent Card 与当前 Runtime 地址不一致；未发布名片。请检查反向代理与服务配置后重试。",
-      );
-    }
-    const signatureScheme = card.securitySchemes?.["kiwi-signature"];
-    if (
-      signatureScheme !== undefined &&
-      (signatureScheme.type !== "kiwi-http-message-signature" ||
-        signatureScheme.keyid !== identity.keyid ||
-        signatureScheme.publicKeyPem !== identity.publicKeyPem ||
-        signatureScheme.algorithm !== "ed25519")
-    ) {
-      throw new MerchantConnectError(
-        "RUNTIME_IDENTITY_MISMATCH",
-        "公网服务的 A2A 签名声明与当前 Runtime 持久密钥不一致；未发布名片。请在实际承接请求的 Runtime 主机上运行连接命令。",
-      );
-    }
-    return card;
-  } catch (err) {
-    if (err instanceof MerchantConnectError) throw err;
-    throw new MerchantConnectError(
-      "RUNTIME_UNREACHABLE",
-      shareSecret === undefined
-        ? `暂时无法从外部连接你的商家服务（${err instanceof Error ? err.message : String(err)}）。请确认服务已启动、TLS 证书有效且允许公网访问，然后重试。`
-        : "暂时无法通过 WorkBuddy 分享链接读取商家名片。请核对分享链接与服务状态后重试。",
-    );
+  } catch {
+    return { kind: "invalid", code: controller.signal.aborted ? "timeout" : "network" };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** 校验公开卡与当前 Runtime 地址/签名身份一致；不涉及平台加白/门禁结论。 */
+function assertPublicCard(
+  card: AgentCard,
+  origin: string,
+  expectedEndpoint: string,
+  identity: { keyid: string; publicKeyPem: string },
+): AgentCard {
+  const urls = card.supportedInterfaces.map((entry) => entry.url);
+  if (
+    typeof card.url !== "string" ||
+    new URL(card.url).origin !== origin ||
+    !urls.includes(expectedEndpoint)
+  ) {
+    throw new MerchantConnectError(
+      "RUNTIME_NOT_READY",
+      "公网入口返回的 Agent Card 与当前 Runtime 地址不一致；未发布名片。请检查反向代理与服务配置后重试。",
+    );
+  }
+  const signatureScheme = card.securitySchemes?.["kiwi-signature"];
+  if (
+    signatureScheme !== undefined &&
+    (signatureScheme.type !== "kiwi-http-message-signature" ||
+      signatureScheme.keyid !== identity.keyid ||
+      signatureScheme.publicKeyPem !== identity.publicKeyPem ||
+      signatureScheme.algorithm !== "ed25519")
+  ) {
+    throw new MerchantConnectError(
+      "RUNTIME_IDENTITY_MISMATCH",
+      "公网服务的 A2A 签名声明与当前 Runtime 持久密钥不一致；未发布名片。请在实际承接请求的 Runtime 主机上运行连接命令。",
+    );
+  }
+  return card;
+}
+
+/** 门禁拒绝/异常响应的统一安全提示：不推断“未加白”，只给可执行下一步。 */
+function uncertainAccessError(
+  mode: MerchantAccessMode,
+  shareAttempted: boolean,
+): MerchantConnectError {
+  return new MerchantConnectError(
+    "ACCESS_MODE_UNCERTAIN",
+    `暂时无法确认本实例的接入方式：本次公开读取${shareAttempted ? "（含已暂存分享码）" : ""}未被接受。` +
+      "单次 401/403、网络错误或不完整响应都不能判定实例是否加白。" +
+      (mode === "share_code"
+        ? "请核对分享码是否已在平台侧更换或失效，然后重新提交分享链接。"
+        : mode === "no_share_code"
+          ? "当前选择「无分享码」；如平台门禁确实要求分享码，请提交本实例分享链接后切换为自动检测或使用分享码。"
+          : "请先确认服务已启动、公网入口与 TLS 正常；如平台门禁确实拦截，可由商家提交本实例分享链接后重试。") +
+      "目录里已保存的分享码不会被删除。",
+  );
+}
+
+/**
+ * 把一次探测失败收敛成稳定错误。只有 401/403 是门禁信号但仍不足以判定
+ * 加白，所以统一给 `ACCESS_MODE_UNCERTAIN`；其它错误沿用原有运行时就绪码。
+ */
+function probeFailure(
+  probe: Exclude<PublicCardProbe, { kind: "ok" }>,
+  mode: MerchantAccessMode,
+  shareAttempted: boolean,
+): MerchantConnectError {
+  if (probe.kind === "http") {
+    if (probe.status === 401 || probe.status === 403)
+      return uncertainAccessError(mode, shareAttempted);
+    return new MerchantConnectError(
+      "RUNTIME_UNREACHABLE",
+      `暂时无法从外部读取商家服务的 Agent Card（HTTP ${probe.status}）。请确认服务已启动且公网入口可访问，然后重试。`,
+    );
+  }
+  if (probe.kind === "redirect") {
+    return new MerchantConnectError(
+      "RUNTIME_UNREACHABLE",
+      "公网入口返回了重定向；为避免把请求或凭据带到未校验的目标，已停止。请检查反向代理配置后重试。",
+    );
+  }
+  if (probe.code === "response") {
+    return new MerchantConnectError(
+      "RUNTIME_NOT_READY",
+      "公网入口返回的 Agent Card 不完整或不合法；未发布名片。该结果不能用于判断平台加白状态，请检查服务响应后重试。",
+    );
+  }
+  if (shareAttempted) {
+    return new MerchantConnectError(
+      "RUNTIME_UNREACHABLE",
+      "暂时无法通过 WorkBuddy 分享链接读取商家名片。请核对分享链接与服务状态后重试。",
+    );
+  }
+  return new MerchantConnectError(
+    "RUNTIME_UNREACHABLE",
+    probe.code === "timeout"
+      ? "读取商家公开名片超时。请确认服务已启动、TLS 证书有效且允许公网访问，然后重试。"
+      : "暂时无法从外部连接你的商家服务。请确认服务已启动、TLS 证书有效且允许公网访问，然后重试。",
+  );
+}
+
+/**
+ * 缺省公开卡加载：与 CLI verifyPublicRuntimeReady 同口径（匿名读 + 签名声明
+ * 核对）。接入方式只影响“是否/何时追加分享码”，不放宽地址、身份或签名校验。
+ *
+ * - `share_code`：显式带码读取；没有码就在任何网络动作前失败。
+ * - `no_share_code`：只做无码读取；即使本进程有码也不发送。
+ * - `auto`：先无码读取；只有明确 401/403 且本进程有已授权分享码时才带码
+ *   重试一次。网络错误/5xx/重定向/坏响应不拿分享码去试探。
+ */
+async function fetchPublicCard(
+  origin: string,
+  expectedEndpoint: string,
+  identity: { keyid: string; publicKeyPem: string },
+  fetchImpl: typeof fetch,
+  shareSecret: string | undefined,
+  mode: MerchantAccessMode,
+): Promise<AgentCard> {
+  const verify = (probe: PublicCardProbe, shareAttempted: boolean): AgentCard => {
+    if (probe.kind === "ok")
+      return assertPublicCard(probe.card, origin, expectedEndpoint, identity);
+    throw probeFailure(probe, mode, shareAttempted);
+  };
+
+  if (mode === "share_code") {
+    if (shareSecret === undefined) {
+      throw new MerchantConnectError(
+        "ACCESS_SHARE_LINK_REQUIRED",
+        "已选择「使用分享码」，但本进程没有可用的分享码。请由商家重新提交本实例的分享链接；目录里已保存的分享码不会被删除。",
+      );
+    }
+    return verify(await requestPublicCard(origin, fetchImpl, shareSecret), true);
+  }
+
+  if (mode === "no_share_code") {
+    return verify(await requestPublicCard(origin, fetchImpl), false);
+  }
+
+  const direct = await requestPublicCard(origin, fetchImpl);
+  if (direct.kind === "ok") return verify(direct, false);
+  if (
+    direct.kind === "http" &&
+    (direct.status === 401 || direct.status === 403) &&
+    shareSecret !== undefined
+  ) {
+    return verify(await requestPublicCard(origin, fetchImpl, shareSecret), true);
+  }
+  return verify(direct, false);
 }
 
 class ConnectionServiceImpl implements MerchantConnectionService {
@@ -613,6 +858,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
   private readonly identity: RuntimeSigningIdentity;
   private readonly keyThumbprint: string;
   private readonly now: () => Date;
+  private readonly fetchImpl: typeof fetch;
   private readonly loadPublicCard: () => Promise<AgentCard>;
   private readonly beforePublish: ((binding: VerifiedBinding) => Promise<void>) | undefined;
   /**
@@ -637,6 +883,10 @@ class ConnectionServiceImpl implements MerchantConnectionService {
    */
   private publicationVerified = false;
   private availability: { code: string; detail: string } | null = null;
+  /** 本进程最近一次显式检测；不落盘，避免把过时结论当成当前事实。 */
+  private lastDetection: AccessDetectionResult | null = null;
+  /** 最近一次接入方式同步失败的稳定码（不落盘；重启后重新对账）。 */
+  private lastAccessSyncError: string | null = null;
 
   constructor(options: MerchantConnectionServiceOptions) {
     this.dataDir = options.dataDir;
@@ -724,7 +974,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     };
     this.keyThumbprint = runtimePublicKey(this.identity).keyThumbprint;
     this.now = options.now ?? (() => new Date());
-    const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.loadPublicCard =
       options.loadPublicCard ??
       (async () =>
@@ -735,8 +985,9 @@ class ConnectionServiceImpl implements MerchantConnectionService {
             keyid: this.identityRaw.keyid,
             publicKeyPem: this.identityRaw.publicKeyPem,
           },
-          fetchImpl,
+          this.fetchImpl,
           this.firstBindAccessConfig?.secret_value,
+          readAccessMode(this.dataDir).mode,
         ));
     this.beforePublish = options.beforePublish;
   }
@@ -745,9 +996,12 @@ class ConnectionServiceImpl implements MerchantConnectionService {
 
   async begin(): Promise<ConnectionSummary> {
     return await this.withLock(async () => {
-      if (new URL(this.origin).hostname.endsWith(".app.workbuddy.host") &&
+      if (readAccessMode(this.dataDir).mode === "share_code" &&
           this.firstBindAccessConfig === undefined) {
-        throw new MerchantConnectError("ACCESS_SHARE_LINK_REQUIRED", "请先提交并授权本实例的 WorkBuddy 分享链接，再发起目录连接。");
+        throw new MerchantConnectError(
+          "ACCESS_SHARE_LINK_REQUIRED",
+          "已选择「使用分享码」，但本实例还没有可用的分享码。请先提交并授权本实例的 WorkBuddy 分享链接，再发起目录连接。",
+        );
       }
       const card = await this.loadPublicCard();
       const currentDigest = cardDigest(card);
@@ -1121,7 +1375,18 @@ class ConnectionServiceImpl implements MerchantConnectionService {
 
   getAccessSummary(): RuntimeAccessSummary {
     const session = this.selectSession(readEnrollmentStore(this.dataDir));
-    const summary = accessSummaryOf(session as ConnectionSession | undefined);
+    const modeState = readAccessMode(this.dataDir);
+    // 检测结论只在同一模式内有意义；模式切换后不把旧结论当新选择的结果。
+    const detection =
+      this.lastDetection !== null && this.lastDetection.mode === modeState.mode
+        ? this.lastDetection
+        : null;
+    const summary = accessSummaryOf(
+      session as ConnectionSession | undefined,
+      modeState,
+      detection,
+      this.lastAccessSyncError,
+    );
     if (this.localShareInvalid) return { ...summary, configured: false, status: "invalid", statusReason: "local_vault_invalid" };
     // 目录已有分享码、随绑凭据被按版本冲突跳过：不能显示成"已加密暂存，继续
     // 连接即可生效"（那会诱导重复绑定去顶掉目录里的码），要给出唯一的可恢复
@@ -1131,25 +1396,154 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       return { ...summary, configured: false, status: "invalid", statusReason: "catalog_access_exists" };
     }
     if (this.firstBindAccessConfig !== undefined && summary.status === "none") {
+      if (modeState.mode === "no_share_code") {
+        // 本地仍保留已同意的分享码，但当前模式明确不使用：不能显示成
+        // “继续连接即会生效”，也不能让首次绑定悄悄把它提交给目录。
+        return { ...summary, status: "none", statusReason: "local_saved_not_used",
+          consentGranted: true,
+          consentTermsVersion: this.firstBindAccessConfig.consent.terms_version };
+      }
       return { ...summary, status: "pending", statusReason: "local_staged", consentGranted: true,
         consentTermsVersion: this.firstBindAccessConfig.consent.terms_version };
     }
     return summary;
   }
 
-  async refreshAccess(): Promise<RuntimeAccessSummary> {
-    const current = this.selectSession(readEnrollmentStore(this.dataDir)) as ConnectionSession | undefined;
-    if (current === undefined || (current.binding_id === undefined &&
-        (current.status === "preparing" || current.status === "authorized"))) return this.getAccessSummary();
-    const { session, context } = this.requireAccessTarget();
-    const { configVersion, runtimeAccess, custodyEnabled, consent, recentFaults } =
-      await this.client.readRuntimeAccess(context, this.identity);
-    this.recordAccess(session.enrollment_id, configVersion, runtimeAccess, {
-      custodyEnabled,
-      consent,
-      recentFaults,
+  getAccessMode(): AccessModeState {
+    return readAccessMode(this.dataDir);
+  }
+
+  async setAccessMode(mode: MerchantAccessMode): Promise<RuntimeAccessSummary> {
+    return await this.withLock(async () => {
+      const previous = readAccessMode(this.dataDir);
+      try {
+        // 只写模式文件（保留已有目录 revision）；绝不调用 Catalog 撤销/更新
+        // runtime-access，也不清 firstBindAccessConfig / shareVault。
+        writeAccessMode(this.dataDir, mode, previous.catalog);
+      } catch {
+        throw new MerchantConnectError(
+          "ACCESS_STATE_UNAVAILABLE",
+          "接入方式未能保存；请刷新后重试。已保存的分享码不会被删除。",
+        );
+      }
+      // 旧检测结论不再代表新选择，清掉以免误导。
+      this.lastDetection = null;
+      // 经授权把选择同步到目录的公开路由投影；失败不回滚本地选择，页面会
+      // 明确显示“目录尚未同步”，买家继续按旧状态路由。
+      await this.syncAccessModeUnlocked(mode, false);
+      return this.getAccessSummary();
     });
-    return this.getAccessSummary();
+  }
+
+  /**
+   * 把本地接入方式对账到目录公开路由投影（必须已持有 withLock）。
+   *
+   * - `adoptRemote`：目录 revision 比本地已知更新且是另一台设备写入时，采用
+   *   目录状态（本地未同步的修改优先推送，不会被远端静默覆盖）。
+   * - 任何网络/权限失败都收敛为稳定码，不抛出、不影响本地已保存模式；绝不
+   *   触碰 runtime-access 或分享码。
+   */
+  private async syncAccessModeUnlocked(
+    desiredMode?: MerchantAccessMode,
+    adoptRemote = false,
+  ): Promise<void> {
+    let context: RuntimeAccessContext;
+    try {
+      ({ context } = this.requireAccessTarget());
+    } catch {
+      this.lastAccessSyncError = "UNBOUND";
+      return;
+    }
+    const modeState = readAccessMode(this.dataDir);
+    const mode = desiredMode ?? modeState.mode;
+    const localPending =
+      modeState.catalog !== undefined && modeState.catalog.mode !== modeState.mode;
+    try {
+      const remote = await this.client.readBuyerAccess(context, this.identity);
+      if (remote.mode === mode) {
+        this.recordAccessSync(mode, remote.revision);
+        return;
+      }
+      if (
+        adoptRemote &&
+        !localPending &&
+        remote.mode !== null &&
+        (modeState.catalog === undefined || remote.revision > modeState.catalog.revision)
+      ) {
+        // 另一台设备在本机上次同步之后写入：以目录为准收敛本地，避免两台
+        // 设备各自反复覆盖。
+        this.recordAccessSync(remote.mode, remote.revision);
+        return;
+      }
+      try {
+        const updated = await this.client.updateBuyerAccess(
+          context,
+          this.identity,
+          mode,
+          remote.revision,
+        );
+        this.recordAccessSync(mode, updated.revision);
+      } catch (error) {
+        if (!(error instanceof CatalogClientError) || error.code !== "CONFLICT") throw error;
+        // 并发更新：重读后只重试一次。若目录已经是目标模式则视为成功。
+        const head = await this.client.readBuyerAccess(context, this.identity);
+        if (head.mode === mode) {
+          this.recordAccessSync(mode, head.revision);
+          return;
+        }
+        const updated = await this.client.updateBuyerAccess(
+          context,
+          this.identity,
+          mode,
+          head.revision,
+        );
+        this.recordAccessSync(mode, updated.revision);
+      }
+    } catch (error) {
+      this.lastAccessSyncError = accessSyncErrorCode(error);
+    }
+  }
+
+  private recordAccessSync(mode: MerchantAccessMode, revision: number): void {
+    try {
+      writeAccessMode(this.dataDir, mode, {
+        mode,
+        revision,
+        syncedAt: this.now().toISOString(),
+      });
+      this.lastAccessSyncError = null;
+    } catch {
+      this.lastAccessSyncError = "LOCAL_WRITE_FAILED";
+    }
+  }
+
+  async detectAccess(): Promise<AccessDetectionResult> {
+    return await this.withLock(async () => {
+      const result = await this.detectAccessUnlocked();
+      this.lastDetection = result;
+      return result;
+    });
+  }
+
+  async refreshAccess(): Promise<RuntimeAccessSummary> {
+    // 与 setAccessMode / begin / reconcile 串行，避免一次刷新与一次保存交错
+    // 后本地 mode 与目录 revision 指向不同版本。
+    return await this.withLock(async () => {
+      const current = this.selectSession(readEnrollmentStore(this.dataDir)) as ConnectionSession | undefined;
+      if (current === undefined || (current.binding_id === undefined &&
+          (current.status === "preparing" || current.status === "authorized"))) return this.getAccessSummary();
+      const { session, context } = this.requireAccessTarget();
+      const { configVersion, runtimeAccess, custodyEnabled, consent, recentFaults } =
+        await this.client.readRuntimeAccess(context, this.identity);
+      this.recordAccess(session.enrollment_id, configVersion, runtimeAccess, {
+        custodyEnabled,
+        consent,
+        recentFaults,
+      });
+      // 对账接入方式：目录更新则采纳，本地未同步则补推；失败只记状态。
+      await this.syncAccessModeUnlocked(undefined, true);
+      return this.getAccessSummary();
+    });
   }
 
   async submitAccessShareLink(
@@ -1290,6 +1684,149 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       this.inquiryPolicy.set(binding, granted, granted ? remote.policyActive : true);
       return { ...remote, localEnabled: this.inquiryPolicy.isEnabled() };
     });
+  }
+
+  /**
+   * 公开检测只面向构造时的已验证 publicOrigin；**不接受任何目标 URL**。
+   * 每次只发 GET well-known，`redirect: "manual"`，分享码只在内存中已存在
+   * 且明确观察到 401/403 时追加，绝不用探测去试探其它部署或绕过授权。
+   */
+  private async detectAccessUnlocked(): Promise<AccessDetectionResult> {
+    const modeState = readAccessMode(this.dataDir);
+    const mode = modeState.mode;
+    const shareCodeAvailable = this.firstBindAccessConfig !== undefined;
+    const checkedAt = this.now().toISOString();
+    const uncertainGuidance =
+      "单次 401/403、网络错误、重定向或不完整响应都不能判定实例未加白。" +
+      "请先确认服务已启动、公网入口与 TLS 正常；如仍被平台拦截，可提交本实例分享链接后重试，或稍后重新检测。" +
+      "切换接入方式或重新检测都不会删除已保存的分享码。";
+    const result = (
+      status: AccessDetectionStatus,
+      code: AccessDetectionCode,
+      httpStatus: number | null,
+      detail: string,
+      guidance: string,
+    ): AccessDetectionResult => ({
+      status,
+      code,
+      checkedAt,
+      mode,
+      shareCodeAvailable,
+      httpStatus,
+      detail,
+      guidance,
+    });
+    const cardMatches = (card: AgentCard): boolean => {
+      try {
+        assertPublicCard(
+          card,
+          this.origin,
+          this.a2aEndpoint,
+          { keyid: this.identityRaw.keyid, publicKeyPem: this.identityRaw.publicKeyPem },
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const direct = await requestPublicCard(this.origin, this.fetchImpl);
+    if (direct.kind === "ok") {
+      if (!cardMatches(direct.card)) {
+        return result(
+          "uncertain",
+          "response_ambiguous",
+          200,
+          "公开名片可读取，但与当前实例地址或签名身份不一致。",
+          "该响应不足以判断平台加白状态；请检查反向代理、公开入口和签名密钥配置后重试。",
+        );
+      }
+      return result(
+        "direct_ok",
+        "public_card_readable",
+        200,
+        "本次无码读取公开名片成功。",
+        "本次探测只证明无码可读取公开名片，不等于平台已加白，检测本身不改写已保存的接入方式或买家路由状态；如后续仍被门禁拦截，请重新检测或改用分享码。",
+      );
+    }
+
+    if (direct.kind === "http" && (direct.status === 401 || direct.status === 403)) {
+      if (!shareCodeAvailable || mode === "no_share_code") {
+        return result(
+          "uncertain",
+          mode === "share_code" && !shareCodeAvailable ? "share_code_missing" : "gate_rejected",
+          direct.status,
+          `无码读取公开名片被拒绝（HTTP ${direct.status}）。`,
+          mode === "share_code"
+            ? "已选择「使用分享码」，但当前进程没有可用分享码。请由商家提交本实例分享链接后重试；目录里已保存的分享码不会被删除。"
+            : mode === "no_share_code"
+              ? "当前选择「无分享码」，检测没有发送已保存的分享码。单次 401/403 不能判定实例未加白；如平台门禁确实要求分享码，请提交本实例分享链接后切换为自动检测或使用分享码。"
+              : uncertainGuidance,
+        );
+      }
+      const withCode = await requestPublicCard(
+        this.origin,
+        this.fetchImpl,
+        this.firstBindAccessConfig?.secret_value,
+      );
+      if (withCode.kind === "ok") {
+        if (!cardMatches(withCode.card)) {
+          return result(
+            "uncertain",
+            "response_ambiguous",
+            200,
+            "带分享码读取到的公开名片与当前实例地址或签名身份不一致。",
+            uncertainGuidance,
+          );
+        }
+        return result(
+          "share_code_ok",
+          "sharecode_public_card_readable",
+          200,
+          "无码读取被拒绝，但已暂存的分享码可以读取公开名片。",
+          "本次探测只证明已保存的分享码可通过平台门禁；平台是否加白仍未确认。切换接入方式或重新检测都不会删除已保存的分享码。",
+        );
+      }
+      const codeStatus = withCode.kind === "http" ? withCode.status : null;
+      return result(
+        "uncertain",
+        "gate_rejected",
+        codeStatus,
+        `无码读取被拒绝（HTTP ${direct.status}），带分享码读取也未成功。`,
+        "这可能是分享码已更换/失效、门禁形态变化或服务暂时异常，不能据此判定未加白。" +
+          "请核对分享码后在下方重新提交，或稍后重新检测；已保存的分享码不会被删除。",
+      );
+    }
+
+    if (direct.kind === "redirect") {
+      return result(
+        "uncertain",
+        "unexpected_redirect",
+        direct.status,
+        `公开名片请求返回重定向（HTTP ${direct.status}），已停止且未跟随。`,
+        "为避免把请求带到未校验目标，检测不会跟随重定向。请检查反向代理配置后重新检测。",
+      );
+    }
+    if (direct.kind === "invalid") {
+      return result(
+        "uncertain",
+        direct.code === "response" ? "response_ambiguous" : "network_error",
+        null,
+        direct.code === "timeout"
+          ? "公开名片请求超时。"
+          : direct.code === "network"
+            ? "公开名片请求未能建立连接。"
+            : "公开名片响应不完整或不合法。",
+        uncertainGuidance,
+      );
+    }
+    return result(
+      "uncertain",
+      "http_error",
+      direct.status,
+      `公开名片请求返回 HTTP ${direct.status}。`,
+      uncertainGuidance,
+    );
   }
 
   /**
@@ -1481,6 +2018,9 @@ class ConnectionServiceImpl implements MerchantConnectionService {
    */
   private firstBindAccessForFreshBinding(): WorkbuddyAccessConfig | undefined {
     if (this.firstBindAccessConfig === undefined) return undefined;
+    // 显式“无分享码”模式不得把已暂存的凭据随首次绑定提交给目录；凭据仍
+    // 保留在本地，切换回 auto/share_code 后可继续使用，且不会被自动删除。
+    if (readAccessMode(this.dataDir).mode === "no_share_code") return undefined;
     const boundBefore = readEnrollmentStore(this.dataDir).sessions.some((item) => {
       const previous = item as ConnectionSession;
       return typeof previous.binding_id === "string" && previous.binding_id !== "" &&
@@ -1574,6 +2114,9 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     this.persist((fresh) =>
       fresh.sessions.map((item) => (item.enrollment_id === session.enrollment_id ? bound : item)),
     );
+    // 绑定已持久化后补一次接入方式对账（旧目录 404 会记为 unsupported；
+    // 失败绝不影响绑定/发布本身）。
+    await this.syncAccessModeUnlocked(undefined, true);
     // 绑定已持久化：发布交给 reconcile 的 bound 分支——失败阶段归类
     // （CARD_PUBLISH_* + stage=publish）由该分支的阶段标记正确给出，
     // 首配级联路径不再把发布失败误报成 BIND_REJECTED。

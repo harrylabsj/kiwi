@@ -184,6 +184,7 @@ var catalogBeginKey = "";
 var catalogBeginPending = false;
 var catalogConnectionState = null;
 var catalogAccessState = null;
+var catalogAccessDetection = null;
 var publicationDraft = null;
 var publicationPicks = null;
 var publicationBusy = false;
@@ -334,12 +335,37 @@ function appendCatalogConnection(html) {
       (s.bindingId ? '<p>Kiwi 账户：<span id="bound-account">正在核对…</span></p>' : '<p>Kiwi 账户：尚未连接</p>') +
       (s.errorCode && PAIRING_CODE_HINTS[s.errorCode] ? '<p class="muted">' + esc(PAIRING_CODE_HINTS[s.errorCode]) + '</p>' : '') +
       '<p class="muted">连接后，采购方可在目录发现本店。请本人核对配对码与公开资料，并在目录授权页确认发布。</p>' +
-      (s.published ? "" : ((WORKBUDDY_ACCESS && !s.bindingId ? '<p class="muted">请在下方填写分享链接并授权，点击一次即可发起或继续连接。</p>' : '<button class="act primary" onclick="beginCatalogConnect()">发起或继续连接</button> ') +
+      (s.published ? "" : ('<p class="muted">接入方式默认自动检测：连接时先尝试无码读取；单次失败不会判定为已加白或未加白。如平台门禁要求分享码，请在下方提交并授权。</p>' +
+        '<button class="act primary" onclick="beginCatalogConnect()">发起或继续连接</button> ' +
+        (WORKBUDDY_ACCESS && !s.bindingId ? '<button class="act" onclick="stageAccessAndBegin()">提交分享链接并发起</button> ' : '') +
         '<button class="act" onclick="showCatalogPairing()">本人查看配对信息</button>')) +
       ' <button class="act" onclick="refresh()">刷新连接状态</button><div id="catalog-pairing"></div></div>';
   }).catch(function () {
     return html + '<div class="card"><h2>连接 Kiwi 目录</h2><p>暂时无法读取连接状态，请稍后刷新。</p></div>';
   });
+}
+function accessModeLabel(mode) {
+  return { auto: "自动检测（默认）", share_code: "使用分享码", no_share_code: "无分享码（直连）" }[mode] || "自动检测（默认）";
+}
+function safeAccessMode(mode) {
+  return ["auto", "share_code", "no_share_code"].indexOf(mode) >= 0 ? mode : "auto";
+}
+function detectionText(d) {
+  if (!d) {
+    return "尚未检测。默认自动检测：连接时先尝试无码读取；单次失败不会判定为已加白或未加白，也不会删除已保存的分享码。";
+  }
+  if (d.status === "direct_ok") {
+    return "检测结果：本次无码读取公开名片成功。这不等于平台已加白，检测本身不改写已保存的接入方式或买家路由状态；如后续仍被门禁拦截，请重新检测或改用分享码。";
+  }
+  if (d.status === "share_code_ok") {
+    return "检测结果：本次分享码可通过平台门禁。平台是否加白仍未确认；切换接入方式或重新检测都不会删除已保存的分享码。";
+  }
+  return "检测结果：不确定。" + (d.guidance || "单次 401/403、网络错误或不完整响应不能判定实例未加白。请先确认服务、公网入口与 TLS 正常，再提交分享链接或稍后重试。");
+}
+function showAccessDetection(d) {
+  catalogAccessDetection = d || null;
+  var target = $("access-detection");
+  if (target) target.textContent = detectionText(d);
 }
 function accessStatusText(a) {
   if (!a) return "暂时无法读取访问配置状态";
@@ -347,24 +373,63 @@ function accessStatusText(a) {
   // 唯一可恢复路径是商家用权威版本显式更新，所以文案必须指向这个动作。
   if (a.statusReason === "catalog_access_exists")
     return "目录已有分享码配置，本次绑定没有覆盖它（不会用旧码顶掉已生效的码）。如需更换或启用，请重新粘贴分享链接并「提交或更新」，会按目录当前版本更新。";
-  if (a.status === "active") return "已生效（配置版本 " + a.configVersion + "）";
-  if (a.status === "pending" && a.statusReason === "local_staged") return "已加密暂存，请继续连接；绑定完成后由目录验证";
-  if (a.status === "pending") return "已提交，等待平台校验";
-  if (a.status === "invalid") return "校验未通过，请重新提交分享链接";
+  if (a.status === "active") {
+    var routeSynced = a.catalogSync === undefined || a.catalogSync === "synced";
+    if (a.mode === "no_share_code") {
+      return routeSynced
+        ? "目录已保存分享码（配置版本 " + a.configVersion + "），但当前接入方式为无分享码：买家按无码直连，已保存的分享码不用于路由，也不会被删除。"
+        : "目录已保存分享码（配置版本 " + a.configVersion + "），本机选择无分享码，但目录路由状态尚未同步；买家仍按旧状态路由。已保存的分享码不会删除。";
+    }
+    return routeSynced
+      ? "分享码已生效（配置版本 " + a.configVersion + "）：买家按目录中继传输，中继只传输，不决定磋商。"
+      : "分享码已生效（配置版本 " + a.configVersion + "），但目录路由状态尚未同步；买家仍按旧状态路由。目录中继只传输，不决定磋商。";
+  }
+  if (a.statusReason === "local_saved_not_used") return "分享码已加密保存，但当前接入方式为无分享码；连接时不会提交或发送。切换为自动检测或使用分享码后可继续，已保存的分享码不会被删除。";
+  if (a.status === "pending" && a.statusReason === "local_staged") return "分享码已加密暂存，请继续连接；绑定完成后由目录验证";
+  if (a.status === "pending") return "分享码已提交，等待平台校验";
+  if (a.status === "invalid") return "分享码校验未通过，请重新提交分享链接";
   if (a.status === "revoked") {
     return a.statusReason === "superseded"
-      ? "已被新版本替换（旧码不再发放）"
-      : "已撤回，采购方当前无法经平台网关访问";
+      ? "分享码已被新版本替换（旧码不再发放）"
+      : "分享码已撤回，采购方当前无法经平台网关访问";
   }
-  return "未配置：WorkBuddy 上的采购方无法访问本店";
+  return "未保存分享码；当前接入方式：" + accessModeLabel(a.mode) + "。默认自动检测会先尝试无码读取；如平台门禁拦截，请提交本实例分享链接。";
+}
+function accessSyncText(a) {
+  var state = a && a.catalogSync;
+  if (state === "synced")
+    return "目录路由状态已同步" + (a.catalogRevision ? "（revision " + a.catalogRevision + "）" : "") + "。";
+  if (state === "pending")
+    return "本机已保存，但目录尚未确认同步；买家仍按旧状态路由。请点击“保存接入方式”或“刷新状态”重试。已保存的分享码不会被删除。";
+  if (state === "failed")
+    return "目录同步失败（" + esc(a.catalogSyncError || "SYNC_FAILED") + "）；本机选择已保留，买家仍按旧状态路由。已保存的分享码不会被删除。";
+  if (state === "unsupported")
+    return "目录不支持接入方式同步，或当前没有可用的活动绑定；买家仍按旧规则/安全回退。请确认目录连接后重新保存，本机选择与已保存分享码均已保留。";
+  if (state === "unbound")
+    return "尚未完成目录连接：接入方式只在本机保存，完成绑定后会自动同步。";
+  return "目录同步状态未知；请点击“刷新状态”核对。买家不会按未经确认的本机选择路由。";
 }
 function appendCatalogAccess(html) {
   if (!CATALOG_CONNECT || ROLE !== "owner") return html;
   return call("GET", "/catalog/access").then(function (result) {
     var a = result.access || {};
     catalogAccessState = a;
+    catalogAccessDetection = a.detection || null;
+    var mode = safeAccessMode(a.mode);
+    var modeOptions = ["auto", "share_code", "no_share_code"].map(function (value) {
+      return '<option value="' + value + '"' + (mode === value ? ' selected' : '') + '>' + accessModeLabel(value) + '</option>';
+    }).join("");
     var firstConnect = WORKBUDDY_ACCESS && catalogConnectionState && !catalogConnectionState.bindingId && !catalogConnectionState.published;
-    return html + '<div class="card"><h2>WorkBuddy 分享码（平台门禁）</h2>' +
+    return html + '<div class="card"><h2>接入方式与平台门禁</h2>' +
+      '<div class="row"><label for="access-mode">接入方式</label>' +
+      '<select id="access-mode" aria-label="接入方式">' + modeOptions + '</select>' +
+      '<button class="act" onclick="saveAccessMode()">保存接入方式</button>' +
+      '<button class="act" onclick="detectAccessMode()">检测当前接入方式</button></div>' +
+      '<p id="access-detection" class="muted">' + esc(detectionText(a.detection)) + '</p>' +
+      '<p id="access-sync" class="muted">' + esc(accessSyncText(a)) + '</p>' +
+      '<p class="muted">默认自动检测。接入方式经目录公开为买家路由状态：使用分享码时买家中继，无分享码时买家直连，自动检测按目录已有分享码保守回退。无分享码不等于平台已确认加白；平台没有公开的白名单验证接口。切换接入方式不会删除已保存分享码；只有「撤回授权并撤销」会清除分享码。</p>' +
+      (a.modeInvalid ? '<p class="warn">接入方式偏好无法解析，已安全回退自动检测；未删除任何分享码。</p>' : '') +
+      '<h3>WorkBuddy 分享码（平台门禁）</h3>' +
       '<p id="access-status">' + esc(accessStatusText(a)) + '</p>' +
       (a.custodyEnabled === false
         ? '<p class="warn">目录代管当前已被运营关闭，无法新建或更新；你仍可撤回授权。</p>'
@@ -375,7 +440,10 @@ function appendCatalogAccess(html) {
       (a.consentGranted ? '<button id="access-revoke" class="act danger" onclick="revokeAccess()">撤回授权并撤销</button>' : '') + '</div>' +
       '<div class="row"><label class="consent-label"><input id="access-consent" type="checkbox" aria-label="同意分享码代管授权">' +
       ' <span>我同意 Kiwi 目录代管分享码，并按需向我已接受的采购方出示。</span></label> ' +
-      '<details><summary>查看代管授权与使用说明</summary><p>分享码用于通过 WorkBuddy 网关，不是商家身份或业务授权；本页不会显示分享码。目录仅向你已接受的采购方按需出示，并按买家限流。你可随时撤回，撤回后目录会清空已保存的分享码。</p>' +
+      '<details><summary>查看代管授权与使用说明</summary><p>平台仍以分享码门禁拦截时，请以本应用的具体应用 ID 向腾讯云提交工单，申请白名单并取消平台分享码门禁。本页不会自动识别平台是否加白。</p>' +
+      '<p>加白前，新版买家经 Kiwi 目录中继传输询价与磋商。平台确认加白且你自行核实无需分享码后，可在本页选择「无分享码（直连）」并保存；待目录同步确认后，新版买家改为直连，不再经中继。</p>' +
+      '<p>旧客户端可能仍使用旧访问机制，并非所有买家都会立即切换；已接受的采购方仍可能按旧访问机制获取分享码，目录仅向他们按需出示并按买家限流。</p>' +
+      '<p>分享码用于通过 WorkBuddy 网关，不是商家身份或业务授权；本页不会显示分享码。你可随时撤回，撤回后目录会清空已保存的分享码。</p>' +
       '<p>关闭「发布为网站」后链接立即失效；删除源任务或源文件不会使分享链接失效，需要主动下线。平台不承诺分享码的固定有效期或自动轮换；换码后请重新提交。</p>' +
       '<p>分享码等价于访问凭据，平台未提供机器专用入口，网关不透传 Authorization，也不适合大规模机器自动分发。如不希望依赖此方式，可使用自托管公网入口。</p></details></div>' +
       (a.recentFaults > 0
@@ -388,12 +456,12 @@ function appendCatalogAccess(html) {
       '</div>' +
       '<div class="card"><h2>开放询价</h2>' +
       '<p id="public-inquiry-status" class="muted">请查询当前授权状态。</p>' +
-      '<div class="row"><label class="consent-label"><input id="public-inquiry-consent" type="checkbox" aria-label="同意开放询价"> <span>我同意买家无需注册或事先批准即可通过 Kiwi 目录询价。</span></label> <details><summary>查看开放询价授权与使用说明</summary><p>允许买家无需注册、关注或商家逐个批准，通过 Kiwi 目录主动询价。询价与报价报文会经 Kiwi 目录转发给商家；目录不裁决条款、不保存磋商内容，但能读到报文明文。Kiwi 负责通过平台门禁；商家后台仍仅供管理员登录。需先完成目录连接与分享码代管。本项为单独授权，可随时关闭；关闭后停止新的开放询价。</p></details></div>' +
+      '<div class="row"><label class="consent-label"><input id="public-inquiry-consent" type="checkbox" aria-label="同意开放询价"> <span>我同意买家无需注册或事先批准即可通过 Kiwi 目录询价。</span></label> <details><summary>查看开放询价授权与使用说明</summary><p>允许买家无需注册、关注或商家逐个批准，通过 Kiwi 目录主动询价。询价与报价报文会经 Kiwi 目录转发给商家；目录不裁决条款、不保存磋商内容，但能读到报文明文。Kiwi 负责通过平台门禁；商家后台仍仅供管理员登录。需先完成目录连接；如平台门禁要求分享码，还需完成受控代管。本项为单独授权，可随时关闭；关闭后停止新的开放询价。</p></details></div>' +
       '<div class="row"><button id="inquiry-submit" class="act primary" onclick="setPublicInquiry(true)" disabled>授权开放询价</button> ' +
       '<button class="act" onclick="refreshPublicInquiry()">查询授权状态</button> ' +
       '<button class="act danger" onclick="setPublicInquiry(false)">关闭开放询价</button></div></div>';
   }).catch(function () {
-    return html + '<div class="card"><h2>WorkBuddy 分享码（平台门禁）</h2><p>暂时无法读取访问配置状态，请稍后刷新。</p></div>';
+    return html + '<div class="card"><h2>接入方式与平台门禁</h2><p>暂时无法读取访问配置状态，请稍后刷新。</p></div>';
   });
 }
 function showPublicInquiryStatus(consent, notify) {
@@ -429,7 +497,36 @@ function setPublicInquiry(granted) {
 }
 function accessSummaryBar(a, verb) {
   var target = $("access-status"); if (target) target.textContent = accessStatusText(a);
-  bar(verb + "：" + accessStatusText(a), a && a.status === "invalid");
+  var sync = $("access-sync"); if (sync) sync.textContent = accessSyncText(a);
+  if (a && a.detection !== undefined) showAccessDetection(a.detection);
+  bar(verb + "：" + accessStatusText(a) + " " + accessSyncText(a), a && (a.status === "invalid" || (a.catalogSync && a.catalogSync !== "synced")));
+}
+function saveAccessMode() {
+  var select = $("access-mode");
+  var mode = select ? String(select.value || "") : "";
+  if (["auto", "share_code", "no_share_code"].indexOf(mode) < 0) {
+    bar("请选择自动检测、使用分享码或无分享码。", true);
+    return;
+  }
+  return call("POST", "/catalog/access/mode", { mode: mode }).then(function (result) {
+    catalogAccessState = result.access || {};
+    showAccessDetection(catalogAccessState.detection);
+    var sync = $("access-sync"); if (sync) sync.textContent = accessSyncText(catalogAccessState);
+    var synced = catalogAccessState.catalogSync === "synced";
+    bar("接入方式已保存：" + accessModeLabel(mode) + "。" + accessSyncText(catalogAccessState) + " 已保存的分享码没有被删除。", !synced);
+  }).catch(function (error) {
+    bar(error && error.message ? error.message : "接入方式未保存，请刷新后重试。", true);
+  });
+}
+function detectAccessMode() {
+  return call("POST", "/catalog/access/detect", {}).then(function (result) {
+    showAccessDetection(result.detection);
+    bar(detectionText(result.detection), !!(result.detection && result.detection.status === "uncertain"));
+  }).catch(function () {
+    var target = $("access-detection");
+    if (target) target.textContent = "检测结果：不确定。单次 401/403、网络错误或不完整响应不能判定实例未加白。请确认服务已启动、公网入口与 TLS 正常后重试；如平台门禁拦截，可提交分享链接。已保存的分享码不会被删除。";
+    bar("接入方式检测未完成，请按页面提示核对后重试。", true);
+  });
 }
 var accessSubmitPending = false;
 function updateAccessButton() {
@@ -515,7 +612,17 @@ function beginCatalogConnect() {
     if (receipt.status === "succeeded") { catalogBeginKey = ""; try { sessionStorage.removeItem("kiwi-catalog-connect-key"); } catch (_) {} }
     bar(receipt.status === "succeeded" ? "连接申请已准备，请本人查看配对信息并确认公开资料。" : "连接结果尚未确认，请先查看状态，不要重复提交。");
     refresh();
-  }).catch(function (error) { bar(error && error.message ? error.message : "连接申请暂未完成，请先刷新状态后再试。", true); })
+  }).catch(function (error) {
+    var message = error && error.message ? error.message : "连接申请暂未完成，请先刷新状态后再试。";
+    // 连接时的公开探测失败同样只能呈现“不确定”，不能把单次失败说成未加白。
+    if (/接入方式|公开名片|公网入口|商家服务|分享码|不确定|超时/.test(message)) {
+      showAccessDetection({
+        status: "uncertain",
+        guidance: message + " 单次失败不能判定实例未加白；已保存的分享码不会被删除。"
+      });
+    }
+    bar(message, true);
+  })
     .finally(function () { catalogBeginPending = false; });
 }
 function showCatalogPairing() {

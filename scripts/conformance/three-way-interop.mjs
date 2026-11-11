@@ -125,7 +125,18 @@ async function startTsMerchant() {
   const ledger = new LedgerStore({ dir });
   const idempotency = new IdempotencyStore({ dir });
   const holder = { baseUrl: "http://127.0.0.1:0" };
-  const handler = createMerchantHandler({ ledger, now: NOW, sender: "merchant:interop", counterparty: "buyer:*" });
+  const handler = createMerchantHandler({
+    ledger,
+    now: NOW,
+    sender: "merchant:interop",
+    counterparty: "buyer:*",
+    // 测试夹具显式接入合成商品源：生产版 handler 在无商品源时 fail-closed
+    // （decline temporarily_unavailable），不会自动回退演示价。这里走真实
+    // 商品源路径，让报价、库存、来源证据与成交前重验等安全检查照常执行。
+    productSource: INTEROP_PRODUCT_SOURCE,
+    // 明确关闭演示价回退：商品源异常/未知 SKU 仍然 fail-closed，不伪造成功。
+    allowDemoPriceFallback: false,
+  });
   const server = new A2AServer({
     card: () => ({
       name: "Interop TS Merchant",
@@ -156,6 +167,36 @@ async function startTsMerchant() {
 const SKU = "SKU-001";
 const QUANTITY = 200;
 const DELIVERY_BEFORE = "2026-08-20T18:00:00Z";
+
+/**
+ * 三方互操作夹具专用的合成商品源（仅用于测试，不接真实商家数据）。
+ *
+ * `createMerchantHandler` 未配置商品源时按 fail-closed 处理，RFQ 会得到
+ * `temporarily_unavailable`；这里显式提供合成商品，使完整 RFQ → Offer →
+ * CounterOffer → ConditionalOffer → Accept 链路和真实安全闸门（库存、
+ * 来源证据、报价有效期、成交前商品事实重验）全部照常运行。
+ *
+ * 不使用 `allowDemoPriceFallback`：商品源出错仍应失败，而不是拿演示价
+ * 冒充成功。`source_evidence.system` 明确标注这是测试夹具数据。
+ */
+const INTEROP_PRODUCT_SOURCE = {
+  async getProduct(sku) {
+    if (sku !== SKU) throw new Error(`unknown sku: ${sku}`);
+    return {
+      // MerchantProductSource.price 单位为元（major units）→ 85000 minor，
+      // 与 Python 参考商家的默认报价保持一致。
+      price: 850,
+      currency: "CNY",
+      unit: "piece",
+      stock: 1_000,
+      title: "Interop synthetic product",
+      source_evidence: {
+        system: "kiwi-conformance-three-way-fixture",
+        source_version: "1",
+      },
+    };
+  },
+};
 
 function seedEnvelope(fields) {
   return finalizeEnvelope({ capability: CAPABILITY, protocol_version: "1.0", exchange_id: newExchangeId(), message_id: newMessageId(), ...fields });

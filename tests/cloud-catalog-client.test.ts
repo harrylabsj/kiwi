@@ -640,3 +640,106 @@ it("public legacy dummy JWS is rejected, never accepted as a verified binding", 
     code: "RESPONSE_INVALID",
   });
 });
+
+describe("buyer-access sync（非凭据路由状态）", () => {
+  it("PUT 的 JWS 覆盖 mode/expected_revision，并解析 public_state", async () => {
+    const id = identity();
+    const { fetchImpl, calls } = mockFetch(() => ({
+      status: 200,
+      json: {
+        ok: true,
+        mode: "no_share_code",
+        revision: 3,
+        updated_at: "2026-11-11T00:00:00Z",
+        public_state: "direct",
+      },
+    }));
+    const client = new CatalogClient({ baseUrl: CATALOG, fetchImpl });
+    const context = {
+      agentId: AGENT,
+      bindingId: "binding_demo",
+      keyId: id.keyId,
+      runtimeOrigin: ORIGIN,
+      serviceEpoch: 7,
+    };
+    const result = await client.updateBuyerAccess(context, id, "no_share_code", 2);
+    expect(result).toEqual({
+      mode: "no_share_code",
+      revision: 3,
+      updatedAt: "2026-11-11T00:00:00Z",
+      publicState: "direct",
+    });
+    expect(calls).toHaveLength(1);
+    const call = calls[0]!;
+    expect(call.method).toBe("PUT");
+    expect(call.url).toBe(`${CATALOG}/v1/agents/${AGENT}/buyer-access`);
+    expect(call.body).toEqual({
+      binding: { binding_id: "binding_demo" },
+      mode: "no_share_code",
+      expected_revision: 2,
+    });
+    const jws = call.headers["x-kiwi-binding-jws"]!;
+    const { keyJwk } = runtimePublicKey(id);
+    const verified = verifyCompactJws(jws, keyJwk);
+    const payload = JSON.parse(verified.payload.toString("utf8")) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      method: "PUT",
+      path: `/v1/agents/${AGENT}/buyer-access`,
+      audience: "kiwi-catalog",
+      catalog_agent_id: AGENT,
+      binding_id: "binding_demo",
+      key_id: id.keyId,
+      runtime_origin: ORIGIN,
+      service_epoch: 7,
+    });
+    expect(typeof payload["body_digest"]).toBe("string");
+    expect(typeof payload["nonce"]).toBe("string");
+  });
+
+  it("GET 解析旧目录的 null mode / revision 0", async () => {
+    const id = identity();
+    const { fetchImpl, calls } = mockFetch(() => ({
+      status: 200,
+      json: { ok: true, mode: null, revision: 0, updated_at: null, public_state: "unknown" },
+    }));
+    const client = new CatalogClient({ baseUrl: CATALOG, fetchImpl });
+    const result = await client.readBuyerAccess(
+      {
+        agentId: AGENT,
+        bindingId: "binding_demo",
+        keyId: id.keyId,
+        runtimeOrigin: ORIGIN,
+        serviceEpoch: 7,
+      },
+      id,
+    );
+    expect(result).toEqual({
+      mode: null,
+      revision: 0,
+      updatedAt: null,
+      publicState: "unknown",
+    });
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[0]!.url).toBe(`${CATALOG}/v1/agents/${AGENT}/buyer-access`);
+  });
+
+  it("409 → CONFLICT（调用方重读后决定是否重试）", async () => {
+    const id = identity();
+    const { fetchImpl } = mockFetch(() => ({ status: 409, json: { ok: false } }));
+    const client = new CatalogClient({ baseUrl: CATALOG, fetchImpl });
+    await expect(
+      client.updateBuyerAccess(
+        {
+          agentId: AGENT,
+          bindingId: "binding_demo",
+          keyId: id.keyId,
+          runtimeOrigin: ORIGIN,
+          serviceEpoch: 7,
+        },
+        id,
+        "share_code",
+        1,
+      ),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+});

@@ -63,12 +63,13 @@ const mcp = JSON.parse(read(".mcp.json"));
 const servers = Object.entries(mcp.mcpServers ?? {});
 assert.equal(servers.length, 1);
 const [serverName, server] = servers[0];
-assert.equal(serverName, "kiwi-sourcing");
+assert.equal(serverName, "kiwi-procurement-buyer");
 assert.equal(server.type, "stdio");
 assert.equal(server.command, "node");
-assert.deepEqual(server.args, ["./runtime/production-launcher.mjs"]);
+assert.deepEqual(server.args, ["./runtime/expert-launcher.mjs"]);
 assert.equal(server["x-workbuddy"].auth.type, "none");
-files.push(".mcp.json");
+files.push(".mcp.json", "runtime/expert-launcher.mjs", "runtime/expert-data.mjs");
+for (const file of ["runtime/expert-launcher.mjs", "runtime/expert-data.mjs"]) read(file);
 const runtimeRoot = path.join(here, "kiwi-sourcing/runtime");
 for (const file of runtimeFiles) {
   const full = path.join(runtimeRoot, file);
@@ -138,7 +139,7 @@ for (const file of files) {
   mkdirSync(path.dirname(dest), { recursive: true });
   cpSync(path.join(bundle, file), dest);
 }
-mkdirSync(path.join(stage, "runtime"));
+mkdirSync(path.join(stage, "runtime"), { recursive: true });
 for (const file of runtimeFiles) {
   cpSync(path.join(runtimeRoot, file), path.join(stage, "runtime", file));
   files.push(`runtime/${file}`);

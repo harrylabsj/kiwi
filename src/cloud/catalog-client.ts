@@ -309,6 +309,17 @@ export interface RuntimeAccessProjection {
   updatedAt: string;
 }
 
+/** 商家接入方式（本地偏好与目录公开路由状态共用同一枚举）。 */
+export type BuyerAccessMode = "auto" | "share_code" | "no_share_code";
+
+/** 目录侧权威的接入方式状态（脱敏；不含分享码/绑定密钥）。 */
+export interface BuyerAccessProjection {
+  mode: BuyerAccessMode | null;
+  revision: number;
+  updatedAt: string | null;
+  publicState: "relay" | "direct" | "unknown";
+}
+
 export interface RequestBindingResult {
   /** 服务端回执里的 binding_request_id（未返回则 null）。 */
   bindingRequestId: string | null;
@@ -389,6 +400,42 @@ export interface ActivateCardResult {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const BUYER_ACCESS_MODES = new Set(["auto", "share_code", "no_share_code"]);
+const BUYER_ACCESS_PUBLIC_STATES = new Set(["relay", "direct", "unknown"]);
+
+/** 解析目录侧 buyer-access 响应；未知 mode/state fail-closed。 */
+function projectBuyerAccess(value: unknown): BuyerAccessProjection {
+  const record = recordOrEmpty(value);
+  const rawMode = record["mode"];
+  const mode =
+    rawMode === null || rawMode === undefined
+      ? null
+      : typeof rawMode === "string" && BUYER_ACCESS_MODES.has(rawMode)
+        ? (rawMode as BuyerAccessMode)
+        : undefined;
+  if (mode === undefined) {
+    throw new CatalogClientError("RESPONSE_INVALID", "buyer-access.mode 非法");
+  }
+  const revision = record["revision"];
+  if (typeof revision !== "number" || !Number.isInteger(revision) || revision < 0) {
+    throw new CatalogClientError("RESPONSE_INVALID", "buyer-access.revision 非法");
+  }
+  const publicState = record["public_state"];
+  if (typeof publicState !== "string" || !BUYER_ACCESS_PUBLIC_STATES.has(publicState)) {
+    throw new CatalogClientError("RESPONSE_INVALID", "buyer-access.public_state 非法");
+  }
+  const updatedAt = record["updated_at"];
+  if (updatedAt !== null && updatedAt !== undefined && typeof updatedAt !== "string") {
+    throw new CatalogClientError("RESPONSE_INVALID", "buyer-access.updated_at 非法");
+  }
+  return {
+    mode,
+    revision,
+    updatedAt: typeof updatedAt === "string" ? updatedAt : null,
+    publicState: publicState as BuyerAccessProjection["publicState"],
+  };
 }
 
 function recordOrEmpty(value: unknown): Record<string, unknown> {
@@ -1090,6 +1137,127 @@ export class CatalogClient {
       throw new CatalogClientError("RESPONSE_INVALID", "Catalog runtime-access 响应不是 ok");
     }
     return projectRuntimeAccess(response["runtime_access"]);
+  }
+
+  /**
+   * GET /v1/agents/{id}/buyer-access —— 商家侧权威读（签名、脱敏）。
+   *
+   * 目录没有显式行时返回 mode=null/revision=0；旧目录没有该端点时 404，
+   * 调用方按“不支持同步”处理，不能把本地模式当成已生效。
+   */
+  async readBuyerAccess(
+    context: RuntimeAccessContext,
+    identity: RuntimeSigningIdentity,
+  ): Promise<BuyerAccessProjection> {
+    const agentId = this.requireAgentId(context.agentId);
+    const bindingId = String(context.bindingId ?? "").trim();
+    if (bindingId === "") {
+      throw new CatalogClientError("INVALID_INPUT", "binding_id 不能为空");
+    }
+    if (String(context.keyId ?? "") !== identity.keyId) {
+      throw new CatalogClientError("INVALID_INPUT", "key_id 与当前签名身份不一致");
+    }
+    const runtimeOrigin = normalizeOrigin(requireHttpsUrl(context.runtimeOrigin, "runtime_origin"));
+    const path = `/v1/agents/${encodeURIComponent(agentId)}/buyer-access`;
+    const issuedAt = this.now();
+    const jws = signCompactJws(
+      {
+        method: "GET",
+        path,
+        audience: "kiwi-catalog",
+        body_digest: sha256Json({}),
+        catalog_agent_id: agentId,
+        binding_id: bindingId,
+        key_id: identity.keyId,
+        runtime_origin: runtimeOrigin,
+        service_epoch: context.serviceEpoch,
+        issued_at: issuedAt.toISOString(),
+        exp: new Date(issuedAt.getTime() + 90_000).toISOString(),
+        nonce: this.nonceFactory(),
+      },
+      identity.signingIdentity,
+      { extraHeader: { typ: "kiwi-runtime-request" } },
+    );
+    const { status, json } = await this.request("GET", path, { jws });
+    if (status === 404) {
+      throw new CatalogClientError("NOT_FOUND", "catalog 上暂无可同步的买家接入状态", 404);
+    }
+    if (status === 401 || status === 403) {
+      throw new CatalogClientError("REQUEST_REJECTED", "catalog 拒绝了买家接入状态读取", status);
+    }
+    return projectBuyerAccess(json);
+  }
+
+  /**
+   * PUT /v1/agents/{id}/buyer-access —— 商家显式设置买家路由方式。
+   *
+   * CAS：`expected_revision` 必须等于目录当前 revision；冲突抛 CONFLICT，由
+   * 调用方重读后决定是否重试。只写非凭据模式，不触碰分享码/代管密文。
+   */
+  async updateBuyerAccess(
+    context: RuntimeAccessContext,
+    identity: RuntimeSigningIdentity,
+    mode: BuyerAccessMode,
+    expectedRevision: number,
+  ): Promise<BuyerAccessProjection> {
+    const agentId = this.requireAgentId(context.agentId);
+    const bindingId = String(context.bindingId ?? "").trim();
+    if (bindingId === "") {
+      throw new CatalogClientError("INVALID_INPUT", "binding_id 不能为空");
+    }
+    if (!["auto", "share_code", "no_share_code"].includes(mode)) {
+      throw new CatalogClientError("INVALID_INPUT", "不支持的接入方式");
+    }
+    if (
+      !Number.isInteger(expectedRevision) ||
+      expectedRevision < 0
+    ) {
+      throw new CatalogClientError("INVALID_INPUT", "expected_revision 必须是非负整数");
+    }
+    if (String(context.keyId ?? "") !== identity.keyId) {
+      throw new CatalogClientError("INVALID_INPUT", "key_id 与当前签名身份不一致");
+    }
+    const runtimeOrigin = normalizeOrigin(requireHttpsUrl(context.runtimeOrigin, "runtime_origin"));
+    const path = `/v1/agents/${encodeURIComponent(agentId)}/buyer-access`;
+    const body = {
+      binding: { binding_id: bindingId },
+      mode,
+      expected_revision: expectedRevision,
+    };
+    const issuedAt = this.now();
+    const jws = signCompactJws(
+      {
+        method: "PUT",
+        path,
+        audience: "kiwi-catalog",
+        body_digest: sha256Json(body),
+        catalog_agent_id: agentId,
+        binding_id: bindingId,
+        key_id: identity.keyId,
+        runtime_origin: runtimeOrigin,
+        service_epoch: context.serviceEpoch,
+        issued_at: issuedAt.toISOString(),
+        exp: new Date(issuedAt.getTime() + 90_000).toISOString(),
+        nonce: this.nonceFactory(),
+      },
+      identity.signingIdentity,
+      { extraHeader: { typ: "kiwi-runtime-request" } },
+    );
+    const { status, json } = await this.request("PUT", path, { body, jws });
+    if (status === 409) {
+      throw new CatalogClientError("CONFLICT", "买家接入方式版本冲突", 409);
+    }
+    if (status === 404) {
+      throw new CatalogClientError("NOT_FOUND", "catalog 上没有该 agent 的活动绑定", 404);
+    }
+    if (status === 401 || status === 403) {
+      throw new CatalogClientError("REQUEST_REJECTED", "catalog 拒绝了买家接入方式更新", status);
+    }
+    const response = recordOrEmpty(json);
+    if (response["ok"] !== true) {
+      throw new CatalogClientError("RESPONSE_INVALID", "Catalog buyer-access 响应不是 ok");
+    }
+    return projectBuyerAccess(response);
   }
 
   /** Read the account associated with the active binding; never use public claims for this. */

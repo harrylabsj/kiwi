@@ -91,7 +91,14 @@ import { managementRequestDigest, MerchantManagementOperationStore } from "./ope
 import type { MutableServiceState } from "./service-state.js";
 import { OnboardingStore } from "../../cloud/onboarding/store.js";
 import { readEnrollmentStore } from "../../cloud/binding/enrollment-challenge.js";
-import { MerchantConnectError } from "../../cloud/connect-service.js";
+import {
+  MerchantConnectError,
+  type AccessDetectionResult,
+} from "../../cloud/connect-service.js";
+import {
+  isMerchantAccessMode,
+  type MerchantAccessMode,
+} from "../../cloud/access/access-mode.js";
 import { requestsDisabledLocalImplementation } from "../../cloud/onboarding/local-fallback.js";
 import { checkStepSubmission, planWizard, WIZARD_STEPS } from "../../cloud/onboarding/steps.js";
 import type { Evidence, PlatformEvidenceResult } from "../../cloud/onboarding/types.js";
@@ -176,6 +183,9 @@ const CATALOG_CONNECTION_SAFE_CODES = new Set([
  */
 const CONNECT_BEGIN_PRE_EFFECT_CODES = new Set([
   "CATALOG_MISMATCH", "STATE_INVALID", "PREVIEW_CHANGED", "RUNTIME_CARD_CHANGED",
+  // 接入方式/公开名片读取发生在本机，且在任何 create enrollment 之前：
+  // 失败没有不确定的远端副作用，商家修正后可用同一幂等键重试。
+  "ACCESS_SHARE_LINK_REQUIRED", "ACCESS_MODE_UNCERTAIN",
 ]);
 const MAX_BODY_BYTES = 1_048_576;
 /** 非候选写命令确认引用的有效期（BD §7.3：短时、单次）。 */
@@ -193,6 +203,18 @@ export interface CatalogAccessSummary {
   adapterVersion: string | null;
   authMode: string | null;
   updatedAt: string | null;
+  /** 本地接入方式偏好；旧调用方可以省略（接口保持向后兼容）。 */
+  mode?: MerchantAccessMode;
+  modePersisted?: boolean;
+  modeInvalid?: boolean;
+  /** 仅本进程最近一次显式检测结果；不持久化，可以为空。 */
+  detection?: AccessDetectionResult | null;
+  /** 目录侧最近一次确认的接入方式（旧目录/未同步为 null）。 */
+  catalogMode?: MerchantAccessMode | null;
+  catalogRevision?: number | null;
+  catalogSynced?: boolean;
+  catalogSync?: "synced" | "pending" | "failed" | "unsupported" | "unbound";
+  catalogSyncError?: string | null;
 }
 
 export interface MerchantManagementApiOptions {
@@ -296,6 +318,8 @@ export interface MerchantManagementApiOptions {
      * 受控保存，运行时与工作台都从不回显。缺省（undefined）时对应路由 503。
      */
     getAccess?: () => Promise<CatalogAccessSummary>;
+    setAccessMode?: (mode: MerchantAccessMode) => Promise<CatalogAccessSummary>;
+    detectAccess?: () => Promise<AccessDetectionResult>;
     refreshAccess?: () => Promise<CatalogAccessSummary>;
     submitAccessShareLink?: (link: string, consentTermsVersion: string) => Promise<CatalogAccessSummary>;
     revokeAccess?: () => Promise<CatalogAccessSummary>;
@@ -1331,13 +1355,46 @@ export function createMerchantManagementApiHandler(
     if (
       rest === "/catalog/access/refresh" ||
       rest === "/catalog/access/share-link" ||
-      rest === "/catalog/access/revoke"
+      rest === "/catalog/access/revoke" ||
+      rest === "/catalog/access/mode" ||
+      rest === "/catalog/access/detect"
     ) {
       const auth = requireActor(req);
       assertWriteGuards(req, auth.sessionId);
       authorizeOrThrow(auth.ctx, "onboarding:manage");
       if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "only owner can manage Catalog access");
       const channel = options.catalogConnection;
+      if (rest === "/catalog/access/mode") {
+        if (channel?.setAccessMode === undefined) {
+          throw new ManagementError("unavailable", "Catalog access configuration is not configured");
+        }
+        const fields = objectFields(await readJsonBody(req), ["mode"]);
+        const mode = fields["mode"];
+        if (!isMerchantAccessMode(mode)) {
+          throw new ManagementError("invalid_input", "接入方式必须是 auto、share_code 或 no_share_code");
+        }
+        await runAccessRoute(res, requestId, () => channel.setAccessMode!(mode));
+        return;
+      }
+      if (rest === "/catalog/access/detect") {
+        if (channel?.detectAccess === undefined) {
+          throw new ManagementError("unavailable", "Catalog access configuration is not configured");
+        }
+        // 探测目标固定为运行时已验证的 publicOrigin；请求体不允许携带 URL、
+        // 分享码或任何目标，避免把公开探测变成任意 SSRF/凭据试探入口。
+        objectFields(await readJsonBody(req), []);
+        let detection: AccessDetectionResult;
+        try {
+          detection = await channel.detectAccess();
+        } catch {
+          throw new ManagementError("unavailable", "接入方式检测未完成，请稍后重试。");
+        }
+        writeJson(res, 200, { detection }, {
+          "x-request-id": requestId,
+          "cache-control": "no-store",
+        });
+        return;
+      }
       if (rest === "/catalog/access/refresh") {
         if (channel?.refreshAccess === undefined) {
           throw new ManagementError("unavailable", "Catalog access configuration is not configured");
@@ -4531,6 +4588,8 @@ async function runAccessRoute(
       ACCESS_NOT_CONFIGURED: "VALIDATION_ERROR",
       ACCESS_NOT_FOUND: "RESOURCE_NOT_FOUND",
       ACCESS_UNAVAILABLE: "DEPENDENCY_UNAVAILABLE",
+      ACCESS_MODE_UNCERTAIN: "DEPENDENCY_UNAVAILABLE",
+      ACCESS_STATE_UNAVAILABLE: "DEPENDENCY_UNAVAILABLE",
       STATE_INVALID: "VALIDATION_ERROR",
       MALFORMED_URL: "VALIDATION_ERROR",
       NOT_HTTPS: "VALIDATION_ERROR",

@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "kiwi-sourcing": {
+    "kiwi-procurement-buyer": {
       "type": "stdio",
       "command": "node",
       "args": [
-        "./runtime/production-launcher.mjs"
+        "./runtime/expert-launcher.mjs"
       ],
       "runtime": {
         "type": "node",

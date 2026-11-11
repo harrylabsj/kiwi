@@ -65,6 +65,7 @@ const KIWI_SEARCH_QUERY_KEYS: readonly string[] = [
   "handoff_destination_types",
   "limit",
   "cursor",
+  "include",
 ];
 
 /** listing 搜索查询键白名单（v0.4 §8；未知键 fail-closed invalid_input）。 */
@@ -125,6 +126,8 @@ function buildSearchQuery(query: KiwiCatalogSearchQuery): string {
   }
   if (query.limit !== undefined) push("limit", String(query.limit));
   push("cursor", query.cursor);
+  // 非凭据路由投影：旧目录忽略未知查询参数，旧客户端不会主动请求。
+  push("include", query.include);
   return new URLSearchParams(entries).toString();
 }
 
@@ -264,7 +267,10 @@ export class KiwiCatalogSource {
     if (typeof catalogAgentId !== "string" || catalogAgentId.length === 0) {
       throw new CatalogSourceError("invalid_input", "catalogAgentId must be a non-empty string");
     }
-    const raw = await this.getJson(`/v1/agents/${encodeURIComponent(catalogAgentId)}`, options);
+    const raw = await this.getJson(
+      `/v1/agents/${encodeURIComponent(catalogAgentId)}?include=buyer_access`,
+      options,
+    );
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
       throw new CatalogSourceError("response_invalid", "kiwi-catalog get response must be a JSON object");
     }

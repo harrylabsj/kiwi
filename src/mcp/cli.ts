@@ -21,6 +21,8 @@
  *   --db <path>        持久 store 路径（默认 $KIWI_MCP_DB 或 ~/.kiwi/mcp/dsh.sqlite）
  *   --principal <id>   Principal opaque 标识（默认 env KIWI_PRINCIPAL）
  *   --agent <id>       buyer_agent_id（默认 env KIWI_BUYER_AGENT）
+ *   --buyer-id <id>    仅用于 catalog 去重统计的 X-Buyer-Id（默认 env
+ *                      KIWI_CATALOG_BUYER_ID；缺省 = --agent，不影响本地任务 owner）
  *   --session <id>     session_id（默认 env KIWI_SESSION）
  *   --policy <file>    冻结 DelegationPolicy JSON（默认 env KIWI_DELEGATION_POLICY；
  *                      未提供则用内置安全默认：读 AUTO、accept/handoff ASK、payment NEVER）
@@ -76,6 +78,8 @@ export interface McpServeOptions {
   db?: string;
   principal?: string;
   buyerAgentId?: string;
+  /** 仅用于 catalog 用量统计的稳定买家标识；缺省 = buyerAgentId。 */
+  catalogBuyerId?: string;
   sessionId?: string;
   /** Optional managed-host secret; otherwise a local 0600 key is used. */
   sessionToken?: string;
@@ -130,6 +134,7 @@ export async function runMcpServe(args: string[]): Promise<number> {
     if (flag === "--db") opts.db = value;
     else if (flag === "--principal") opts.principal = value;
     else if (flag === "--agent") opts.buyerAgentId = value;
+    else if (flag === "--buyer-id") opts.catalogBuyerId = value;
     else if (flag === "--session") opts.sessionId = value;
     else if (flag === "--session-token") opts.sessionToken = value;
     else if (flag === "--session-token-file") opts.sessionTokenFile = value;
@@ -155,6 +160,12 @@ export async function runMcpServe(args: string[]): Promise<number> {
   }
   const principal = opts.principal ?? process.env.KIWI_PRINCIPAL ?? "principal:local";
   const buyerAgentId = opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-mcp";
+  // 只影响 catalog 的 X-Buyer-Id（运营去重买家统计），不影响本地任务 owner。
+  const catalogBuyerId = opts.catalogBuyerId ?? process.env.KIWI_CATALOG_BUYER_ID;
+  if (catalogBuyerId !== undefined && !/^[A-Za-z0-9._:-]{1,128}$/.test(catalogBuyerId)) {
+    process.stderr.write("--buyer-id/KIWI_CATALOG_BUYER_ID must be 1-128 chars of [A-Za-z0-9._:-]\n");
+    return 2;
+  }
   // Stable default: when a token is used, restart/reconnect must recover the
   // same identity. Never include the process id in the default label.
   const sessionId = opts.sessionId ?? process.env.KIWI_SESSION ?? "default";
@@ -188,6 +199,7 @@ export async function runMcpServe(args: string[]): Promise<number> {
     dbPath,
     principal,
     buyerAgentId,
+    ...(catalogBuyerId !== undefined ? { catalogBuyerId } : {}),
     sessionId,
     sessionOwner,
     policy,

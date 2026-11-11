@@ -273,3 +273,26 @@ describe("受门禁商家不得静默直连 / 中继契约", () => {
     }
   });
 });
+
+describe("买家路由投影透传", () => {
+  it("agents 命中保留 buyer_access，供买家按显式状态路由", async () => {
+    const calls: string[] = [];
+    const buyerAccess = {
+      schema_version: 1,
+      state: "direct",
+      source: "merchant_setting",
+      mode: "no_share_code",
+      revision: 3,
+      updated_at: NOW,
+      platform_verification: "unverified",
+    };
+    const idx = index(
+      { agents: { results: [{ ...AGENT_RECORD, buyer_access: buyerAccess }] } },
+      calls,
+    );
+    const merchants = await idx.search("测试商品");
+    expect(calls).toContain("/v1/agents/search");
+    expect(merchants[0]?.catalog_agent_id).toBe(AGENT);
+    expect(merchants[0]?.buyer_access).toEqual(buyerAccess);
+  });
+});

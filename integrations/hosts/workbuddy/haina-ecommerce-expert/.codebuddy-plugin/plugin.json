@@ -1,6 +1,6 @@
 {
   "name": "haina-ecommerce-expert",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Shopping decisions that start every purchase — single item or bulk — with kiwi_search, then Kiwi Network merchant discovery, authorized inquiries and non-binding negotiation, plus sourced comparison.",
   "author": {
     "name": "harrylabsj",
@@ -70,8 +70,6 @@
     }
   ],
   "dependencies": {
-    "connectors": [
-      "kiwi-sourcing"
-    ]
+    "mcpServers": "./.mcp.json"
   }
 }

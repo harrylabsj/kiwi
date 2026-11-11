@@ -156,7 +156,7 @@ export class KiwiCatalogMerchantIndex {
         ...(opts?.region !== undefined ? { region: opts.region } : {}),
         limit: 50,
       }),
-      this.source.searchRecords({ q: query }),
+      this.source.searchRecords({ q: query, include: "buyer_access" }),
       this.publications.searchPublications({
         q: query,
         ...(opts?.category !== undefined ? { category: opts.category } : {}),
@@ -437,7 +437,7 @@ export class KiwiCatalogMerchantIndex {
   async resolveById(merchantId: string): Promise<MerchantRecord | undefined> {
     if (merchantId === undefined || merchantId === "") return undefined;
     const [agentsRes, listingsRes, publicationsRes] = await Promise.allSettled([
-      this.source.searchRecords({}),
+      this.source.searchRecords({ include: "buyer_access" }),
       this.source.searchListings({ limit: 50 }),
       this.publications.searchPublications({ merchant_id: merchantId, limit: 50 }),
     ]);
@@ -523,6 +523,7 @@ export class KiwiCatalogMerchantIndex {
         record.catalog_agent_id = agent.catalog_agent_id;
         record.freshness_state = agent.freshness_state ?? record.freshness_state;
         if (agent.runtime_access !== undefined) record.runtime_access = agent.runtime_access;
+        if (agent.buyer_access !== undefined) record.buyer_access = agent.buyer_access;
       } else {
         try {
           const owner = await this.source.getRecord(listing.listing.owner_agent_id);
@@ -537,6 +538,7 @@ export class KiwiCatalogMerchantIndex {
           record.catalog_agent_id = owner.catalog_agent_id;
           record.freshness_state = owner.freshness_state ?? record.freshness_state;
           if (owner.runtime_access !== undefined) record.runtime_access = owner.runtime_access;
+          if (owner.buyer_access !== undefined) record.buyer_access = owner.buyer_access;
         } catch {
           // 商家不可达：保留已收集字段，不编造
         }
@@ -584,6 +586,7 @@ function mapRecord(record: CatalogAgentRecord): MerchantRecord {
     catalog_agent_id: record.catalog_agent_id,
     // 平台门禁投影（G1 §2.2）：只含能力元数据，分享码另行受控获取。
     ...(record.runtime_access !== undefined ? { runtime_access: record.runtime_access } : {}),
+    ...(record.buyer_access !== undefined ? { buyer_access: record.buyer_access } : {}),
   };
 }
 

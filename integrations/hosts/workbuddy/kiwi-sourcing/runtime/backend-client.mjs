@@ -1,27 +1,52 @@
 import {spawn} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {randomUUID} from 'node:crypto';
-import {lstatSync,realpathSync} from 'node:fs';
+import {lstatSync,realpathSync,readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {dirname,join,delimiter,isAbsolute} from 'node:path';
 import {checkToolContract} from './tool-contract.mjs';
 import {selectEnvironment} from './environment-policy.mjs';
 
 const PROTOCOL='2025-06-18';
 const key=id=>`${typeof id}:${String(id)}`;
+
+/**
+ * 每个安装实例一个稳定、互不相同的 catalog 统计身份。
+ *
+ * 只用于 X-Buyer-Id（运营端去重买家），不改变本地任务 owner（--agent 仍是
+ * buyer-agent:workbuddy）。文件写不进去时 fail-safe 回落到旧常量，避免每次
+ * 启动生成新 id 把「去重买家」灌成假数据。
+ */
+function catalogBuyerId(directory){
+  const file=join(directory,'catalog-buyer-id');
+  const valid=value=>/^[A-Za-z0-9._:-]{1,128}$/.test(value);
+  try{const existing=readFileSync(file,'utf8').trim();if(valid(existing))return existing}catch{void 0}
+  const id='workbuddy:'+randomUUID();
+  try{
+    mkdirSync(directory,{recursive:true});
+    writeFileSync(file,id,{encoding:'utf8',mode:0o600,flag:'wx'});
+    return id;
+  }catch{
+    try{const existing=readFileSync(file,'utf8').trim();if(valid(existing))return existing}catch{void 0}
+    return 'buyer-agent:workbuddy';
+  }
+}
 function writeLine(stream,line){return new Promise((resolve,reject)=>{
   const error=e=>{cleanup();reject(e)};const cleanup=()=>stream.off('error',error);stream.once('error',error);
   try{if(stream.write(line+'\n')){cleanup();resolve()}else stream.once('drain',()=>{cleanup();resolve()})}catch(e){cleanup();reject(e)}
 })}
 
-export async function startVerifiedBackend({nodeBinary,sessionDirectory,baseline,clientCapabilities={},onMessage=()=>{},timeoutMs=15000,sourceRoot,environment=process.env,signal}){
+export async function startVerifiedBackend({nodeBinary,sessionDirectory,dataDirectory,baseline,clientCapabilities={},onMessage=()=>{},timeoutMs=15000,sourceRoot,environment=process.env,signal}){
   if(!isAbsolute(nodeBinary??'')||!isAbsolute(sessionDirectory??'')||!isAbsolute(sourceRoot??'')||!Array.isArray(baseline)||typeof onMessage!=='function'||!environment||typeof environment!=='object')throw new Error('BACKEND_ARGUMENT_INVALID');
   if(signal?.aborted)throw new Error('BACKEND_CANCELLED');
   if(realpathSync(sourceRoot)!==sourceRoot)throw new Error('BACKEND_SOURCE_ROOT_INVALID');
   const cli=join(sessionDirectory,'node_modules','@harrylabsj','kiwi','dist','cli.js');
   if(realpathSync(cli)!==cli){throw new Error('BACKEND_PATH_INVALID')}
   const cliStat=lstatSync(cli);if(!cliStat.isFile()||cliStat.isSymbolicLink())throw new Error('BACKEND_PATH_INVALID');
+  // 统计身份的落盘目录必须跨 npm 版本更新稳定：优先 Host 提供的持久数据目录，
+  // 其次用户 HOME；准备缓存目录随版本变化，只能作为最后兜底。
+  const buyerIdDirectory=isAbsolute(dataDirectory??'')?join(dataDirectory,'identity'):(isAbsolute(environment.HOME??'')?join(environment.HOME,'.kiwi'):sessionDirectory);
   const env={...selectEnvironment(environment,'backend'),HOME:sessionDirectory,TMPDIR:sessionDirectory,PATH:[dirname(nodeBinary),'/usr/bin','/bin'].join(delimiter),PYTHONDONTWRITEBYTECODE:'1'};
-  const child=spawn(nodeBinary,[cli,'mcp','serve','--principal','workbuddy:local','--agent','buyer-agent:workbuddy','--a2a-timeout-ms','15000'],{env,stdio:['pipe','pipe','pipe']});
+  const child=spawn(nodeBinary,[cli,'mcp','serve','--principal','workbuddy:local','--agent','buyer-agent:workbuddy','--buyer-id',catalogBuyerId(buyerIdDirectory),'--a2a-timeout-ms','15000'],{env,stdio:['pipe','pipe','pipe']});
   child.stderr.resume();
   const sendToChild=message=>writeLine(child.stdin,JSON.stringify(message));
   const reader=createInterface({input:child.stdout,crlfDelay:Infinity}),waiters=new Map();let stopped=false,requestCounter=0;

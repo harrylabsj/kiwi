@@ -65,6 +65,35 @@
         ]
       }
     },
+    "buyer_access": {
+      "description": "商家接入方式 → 买家路由的公开非凭据投影。仅在请求 include=buyer_access 时出现；旧客户端不请求，记录形状不变。direct 只表示商家显式选择无分享码；platform_verification=unverified 表示目录没有平台白名单验证 API，绝不代表平台已加白。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "state",
+        "source",
+        "revision",
+        "platform_verification"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "state": { "enum": ["relay", "direct", "unknown"] },
+        "source": {
+          "enum": [
+            "merchant_setting",
+            "legacy_runtime_access",
+            "legacy_no_share_code",
+            "authorization_changed",
+            "agent_inactive"
+          ]
+        },
+        "mode": { "enum": ["auto", "share_code", "no_share_code"] },
+        "revision": { "type": "integer", "minimum": 0 },
+        "updated_at": { "type": "string", "minLength": 1 },
+        "platform_verification": { "const": "unverified" }
+      }
+    },
     "runtime_access": {
       "description": "当前 active WorkBuddy 访问能力公开投影；秘密、密文和非 active 配置禁止进入此字段。",
       "type": "object",

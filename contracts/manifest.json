@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "authority": "kiwi/contracts",
-  "bundle_sha256": "5be0f0e86fa0f66c2ca150770c3ffb20f41c3417c13a2e5e05565a55e92be9cc",
+  "bundle_sha256": "ee5aa7e38f75179f4532801e12e39ed27276446b6537af707baae59ea9029b74",
   "contracts": [
     {
       "id": "commerce-intent",
@@ -37,7 +37,7 @@
       "id": "kiwi-catalog-agent-record",
       "version": "1.0",
       "path": "contracts/kiwi-catalog/1.0/agent-record.schema.json",
-      "sha256": "d1b6a592279acf1de5447ce0e6e7c944164de6b74bf114b4445ec005fa41b169"
+      "sha256": "374b5082843d353ef2a85eea6a689df3d185404aae7ba8ade4e11738367631f9"
     },
     {
       "id": "kiwi-catalog-listing-record",

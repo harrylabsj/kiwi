@@ -18,7 +18,7 @@ describe("WorkBuddy kiwi-sourcing connector", () => {
       encoding: "utf8",
     });
 
-    expect(output).toContain("VALIDATION_OK:41");
+    expect(output).toContain("VALIDATION_OK:42");
   });
 
   it("uses one local stdio server with bounded timeouts and a pinned Kiwi release", () => {

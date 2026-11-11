@@ -34,6 +34,7 @@ import {
 import type { MerchantOffer, NegotiationStep, Negotiator } from "./service.js";
 import type { A2AOutboundSigner, A2ATask } from "../a2a/client/types.js";
 import type { MerchantAccessResolver } from "./a2a-quote-fetcher.js";
+import { MerchantAccessUnavailable } from "./a2a-quote-fetcher.js";
 import { validateAcceptedNonbindingAgreement, validateConditionalOffer, validateOffer } from "../negotiation/domain/objects.js";
 import { evaluateConditionalOffer } from "../negotiation/condition/evaluator.js";
 import { contentDigest } from "../negotiation/jcs.js";
@@ -44,6 +45,11 @@ import { BuyerReplyRejected } from "./receive-gate.js";
 
 export interface A2ANegotiatorOptions {
   merchantAccess?: MerchantAccessResolver;
+  /**
+   * 目录中继已接线：恢复/磋商路径不得再使用 legacy 分享码直连。与
+   * A2AQuoteFetcher 的同一选项保持一致，覆盖 forEndpoint 缓存。
+   */
+  relayWired?: boolean;
   /** 出站 HTTP Message Signature 签名器（B-05）：WorkBuddy 商家的业务身份。 */
   signer?: A2AOutboundSigner;
   allowPrivateRanges?: boolean;
@@ -260,6 +266,7 @@ export class A2ANegotiator implements Negotiator {
   private readonly defaultDiscountRate: number;
   private readonly fetchImpl?: typeof fetch;
   private readonly merchantAccess?: MerchantAccessResolver;
+  private readonly relayWired: boolean;
 
   private readonly recovery?: BuyerProtocolRecovery;
   private readonly counterProposalGate: CounterProposalGate | undefined;
@@ -274,13 +281,29 @@ export class A2ANegotiator implements Negotiator {
     this.defaultDiscountRate = options.defaultDiscountRate ?? DEFAULT_DISCOUNT_RATE;
     this.fetchImpl = options.fetchImpl;
     this.merchantAccess = options.merchantAccess;
+    this.relayWired = options.relayWired ?? false;
     this.counterProposalGate = options.counterProposalGate;
     this.now = options.now ?? utcNow;
     if(options.protocolStateDir && options.localBuyerAgentId)this.recovery=new BuyerProtocolRecovery(options.protocolStateDir,options.localBuyerAgentId,options.now);
   }
 
   private async clientFor(endpoint: string) {
-    const access = await this.merchantAccess?.forEndpoint(endpoint) ?? null;
+    const resolved = await this.merchantAccess?.forEndpoint(endpoint) ?? null;
+    // 显式 direct 标记 -> 标准无码传输；中继已接线时 legacy 分享码传输是
+    // 终态禁止项，恢复/磋商也不能把旧缓存里的码带回去。
+    if (resolved?.relayRequired === true) {
+      throw new MerchantAccessUnavailable(
+        "RELAY_REQUIRED",
+        "share-code merchant must use the directory relay; legacy coded negotiation is disabled",
+      );
+    }
+    const access = resolved?.direct === true ? null : resolved;
+    if (access !== null && this.relayWired && access.openInquiry === undefined) {
+      throw new MerchantAccessUnavailable(
+        "RELAY_REQUIRED",
+        "share-code merchant must use the directory relay; legacy coded negotiation is disabled",
+      );
+    }
     if (access?.openInquiry && access.openInquiry.endpoint !== endpoint) throw new Error("open inquiry endpoint mismatch");
     return buildA2AClient(endpoint, {
       ...(access === null ? { bearerToken: this.bearerToken } : {}),

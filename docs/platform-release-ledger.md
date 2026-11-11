@@ -62,3 +62,19 @@ WorkBuddy连接器 `oc_bd73f860e3e2b5d3`：原1.0.3审核由用户撤回；本�
 - ZIP：`kiwi-sourcing-1.0.4-final-20261031.zip`；SHA256 `8dc813df535c488cc7fbabfc0a8fb5d641ba9ab26e9d8fefbcd9b2e863307f73`。
 - 本地验证：40项测试、包清单39项、33个runtime与源提交一致；WorkBuddy本地专家只读搜索成功，不代表询价/磋商/交易验收。
 - 详细记录：本轮工作区 `outputs/kiwi-connector-release-104-20261031.md`。平台不提供包哈希回读，此处哈希为实际选择上传的本地包。
+
+## 2026-11-10 Kiwi购物智能体 1.1.2 提交审核
+
+WorkBuddy 专家 `oe_37aed7f0a679e6d4`：1.1.2 已提交审核，平台回执预计 7 个工作日内出结果；未证明审核通过或发布。上传包 `kiwi-procurement-expert-1.1.2-sigstore.zip`，本地 SHA-256 `85853883f966b873c73fa9610b9ef6414994fc54fc4695f39c9ee2449e13ecfa`。平台未回读包哈希。
+
+专家自带 `kiwi-procurement-buyer` MCP，不依赖独立买家市场连接器；Kiwi npm 使用 latest，运行前校验来源、工具契约及实例身份。前提是同一系统用户只对应一个买家，不同买家不共享系统用户；仅支持 macOS/Linux，npm 12 且 sigstore 可用，缺失时提示用户升级，不自动变更全局环境。
+
+WorkBuddy 5.9.3 本地测试专家与上传包除测试名称/标识外逐文件一致；2026-11-10 20:22 CST 调用内置 `kiwi_search` 搜索保温杯得到 `completed + has_candidates`，1 家商家、2 个待询价商品，未询价或下单。首次准备较慢，准备中请求未发出且需就绪后重试。20 项相关自动测试通过；未验证询价、磋商、交易及其他操作系统。被驳回的 `kiwi网络空间` 连接器未重新提交。
+
+## 2026-11-10 网购助手 1.2.2 提交审核
+
+WorkBuddy 专家 `oe_6038d999d6308c6b`：1.2.2 已提交审核，平台回执预计 7 个工作日内出结果；尚未证明审核通过或发布。上传 `haina-ecommerce-expert-1.2.2-candidate.zip`，本地 SHA-256 `87d5fa610e2b5a017570e06f5d380cd001bc7c4fc2b05e9398cc3f8ed923e13f`，平台未回读包哈希。
+
+候选自带 `kiwi-shopping-buyer` MCP，不依赖独立买家市场连接器；沿用采购专家的单系统用户对应单买家数据范围及 npm latest 校验。WorkBuddy 5.9.3 测试专家除测试名称/标识外与包逐文件一致；20:42 CST 内置 `kiwi_search` 返回 `completed + has_candidates`，1 家商家和 2 个待询价商品，未询价或下单。20 项相关自动测试通过；首次准备期间请求未发出，准备完成后重试成功。询价、磋商和交易未验收。
+
+用户要求新版发布后删除 Kiwi购物智能体和网购助手本地测试目录与数据；本次仍在审核，尚未发布，因此未执行清理。实际清理时须区分测试资产与两专家共用的买家数据。

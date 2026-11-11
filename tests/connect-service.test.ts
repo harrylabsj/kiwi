@@ -32,7 +32,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -43,6 +43,7 @@ import { buildBindingClaims } from "../src/trust/binding/claims.js";
 import { signCompactJws, type JwsSigningIdentity } from "../src/trust/identity/jws.js";
 import { readEnrollmentStore } from "../src/cloud/binding/enrollment-challenge.js";
 import { createMerchantConnectionService, type VerifiedBinding } from "../src/cloud/connect-service.js";
+import { accessModePath } from "../src/cloud/access/access-mode.js";
 import { OpenInquiryLocalPolicy } from "../src/cloud/access/open-inquiry-policy.js";
 import { connectMerchant } from "../src/cloud/merchant-connect.js";
 import type { AgentProfile } from "../src/config/profile.js";
@@ -140,6 +141,12 @@ interface CatalogStubOptions {
   failRuntimeAccessPut?: boolean;
   /** 目录侧 runtime-access 权威版本（stub GET/PUT 语义；0 = 目录无配置）。 */
   accessHeadVersion?: number;
+  /** 目录侧 buyer-access 初始模式（null = 旧目录/未设置）。 */
+  buyerAccessMode?: "auto" | "share_code" | "no_share_code" | null;
+  /** 目录侧 buyer-access 初始 revision。 */
+  buyerAccessRevision?: number;
+  /** 非空时 buyer-access PUT 固定失败（模拟目录拒绝/不可用）。 */
+  failBuyerAccessPutWith?: { status: number; code: string } | null;
 }
 
 interface CatalogStub {
@@ -156,6 +163,13 @@ interface CatalogStub {
   /** 非空时：每次公开读对**重签后**的声明做篡改（模拟 Catalog 侧被换绑/错签）。 */
   corruptClaims: ((claims: Record<string, unknown>) => Record<string, unknown>) | null;
   lastBindingClaims: Record<string, unknown> | null;
+  /** buyer-access PUT 的实际请求体（按顺序）。 */
+  buyerAccessPuts: Array<{ mode: string; expected_revision: number }>;
+  /** 可变：打开后 buyer-access PUT 固定失败。 */
+  failBuyerAccessPut: { status: number; code: string } | null;
+  /** 当前目录侧 buyer-access 模式/revision（测试可直接改）。 */
+  buyerAccessMode: "auto" | "share_code" | "no_share_code" | null;
+  buyerAccessRevision: number;
 }
 
 async function startRuntimeStub(): Promise<{ port: number; close: () => Promise<void> }> {
@@ -187,6 +201,10 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
   const bindAccessOutcome = options.bindAccessOutcome ?? null;
   const accessHeadVersion = options.accessHeadVersion ?? 0;
   const failRuntimeAccessPut = options.failRuntimeAccessPut === true;
+  let buyerAccessMode = options.buyerAccessMode ?? null;
+  let buyerAccessRevision = options.buyerAccessRevision ?? 0;
+  let failBuyerAccessPut = options.failBuyerAccessPutWith ?? null;
+  const buyerAccessPuts: Array<{ mode: string; expected_revision: number }> = [];
   /** 首签声明的基线（bind 时生成）；每次公开读在此基础上重签 expires_at。 */
   let boundClaims: Record<string, unknown> | null = null;
   let corruptClaims: ((claims: Record<string, unknown>) => Record<string, unknown>) | null = null;
@@ -320,6 +338,55 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
         sendJson(response, 200, publishReceiptInvalid ? { active_revision: 1 } : { revision: 1 });
         return;
       }
+      if (url === `/v1/agents/${AGENT_ID}/buyer-access`) {
+        const publicState = buyerAccessMode === "share_code"
+          ? "relay"
+          : buyerAccessMode === "no_share_code" || buyerAccessMode === "auto"
+            ? "direct"
+            : "unknown";
+        const projection = {
+          ok: true,
+          mode: buyerAccessMode,
+          revision: buyerAccessRevision,
+          updated_at: buyerAccessRevision > 0 ? "2026-11-11T00:00:00+00:00" : null,
+          public_state: publicState,
+        };
+        if (request.method === "GET") {
+          sendJson(response, 200, projection);
+          return;
+        }
+        if (request.method === "PUT") {
+          if (failBuyerAccessPut !== null) {
+            sendJson(response, failBuyerAccessPut.status, { ok: false, error: failBuyerAccessPut.code });
+            return;
+          }
+          const body = JSON.parse(rawBody || "{}") as { mode?: unknown; expected_revision?: unknown };
+          if (body.expected_revision !== buyerAccessRevision) {
+            sendJson(response, 409, { ok: false, error: "buyer access revision conflict" });
+            return;
+          }
+          if (body.mode !== "auto" && body.mode !== "share_code" && body.mode !== "no_share_code") {
+            sendJson(response, 400, { ok: false, error: "invalid mode" });
+            return;
+          }
+          buyerAccessPuts.push({ mode: body.mode, expected_revision: buyerAccessRevision });
+          buyerAccessMode = body.mode;
+          buyerAccessRevision += 1;
+          const nextPublicState = buyerAccessMode === "share_code"
+            ? "relay"
+            : buyerAccessMode === "no_share_code" || buyerAccessMode === "auto"
+              ? "direct"
+              : "unknown";
+          sendJson(response, 200, {
+            ok: true,
+            mode: buyerAccessMode,
+            revision: buyerAccessRevision,
+            updated_at: "2026-11-11T00:00:00+00:00",
+            public_state: nextPublicState,
+          });
+          return;
+        }
+      }
       if (url === `/v1/agents/${AGENT_ID}/runtime-access` && accessHeadVersion > 0) {
         // 目录侧 runtime-access 语义：PUT 带 expected_version 严格 CAS（落后 → 409）；
         // GET 返回权威版本投影。projection 形状与 catalog-client 解析一致。
@@ -404,6 +471,25 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
     },
     get lastBindingClaims() {
       return lastBindingClaims;
+    },
+    buyerAccessPuts,
+    get failBuyerAccessPut() {
+      return failBuyerAccessPut;
+    },
+    set failBuyerAccessPut(value: { status: number; code: string } | null) {
+      failBuyerAccessPut = value;
+    },
+    get buyerAccessMode() {
+      return buyerAccessMode;
+    },
+    set buyerAccessMode(value: "auto" | "share_code" | "no_share_code" | null) {
+      buyerAccessMode = value;
+    },
+    get buyerAccessRevision() {
+      return buyerAccessRevision;
+    },
+    set buyerAccessRevision(value: number) {
+      buyerAccessRevision = value;
     },
   };
 }
@@ -520,6 +606,318 @@ describe("connect-service 内核", () => {
     expect(summary.status).toBe("awaiting_confirmation");
   });
 
+  it("WorkBuddy 主机默认自动检测：无码可读时允许连接，无码被拒时保守失败且不创建 enrollment", async () => {
+    const harness = await makeHarness();
+    const workbuddyOrigin = "https://pilot.example.app.workbuddy.host";
+    const allowlistedCard = {
+      ...CARD,
+      url: workbuddyOrigin,
+      supportedInterfaces: [
+        { url: `${workbuddyOrigin}/a2a`, protocolBinding: "JSONRPC", protocolVersion: "1.0" },
+      ],
+    };
+    const allowlistedFetch: typeof fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.origin === workbuddyOrigin && url.pathname === "/.well-known/agent-card.json")
+        return Response.json(allowlistedCard);
+      return harness.serviceOptions.fetchImpl(input, init);
+    };
+    const allowlisted = createMerchantConnectionService({
+      ...harness.serviceOptions,
+      publicOrigin: workbuddyOrigin,
+      fetchImpl: allowlistedFetch,
+    });
+    expect((await allowlisted.begin()).status).toBe("awaiting_confirmation");
+
+    const deniedHarness = await makeHarness();
+    const deniedFetch: typeof fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.origin === workbuddyOrigin && url.pathname === "/.well-known/agent-card.json")
+        return new Response("forbidden", { status: 403 });
+      return deniedHarness.serviceOptions.fetchImpl(input, init);
+    };
+    const denied = createMerchantConnectionService({
+      ...deniedHarness.serviceOptions,
+      publicOrigin: workbuddyOrigin,
+      fetchImpl: deniedFetch,
+    });
+    await expect(denied.begin()).rejects.toMatchObject({ code: "ACCESS_MODE_UNCERTAIN" });
+    expect(deniedHarness.catalog.counts.deviceCreates).toBe(0);
+  });
+
+  it("默认自动检测；切换接入方式持久化且不删除已保存分享码", async () => {
+    const harness = await makeHarness();
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    expect(service.getAccessMode()).toEqual({ mode: "auto", persisted: false, invalid: false });
+
+    const consent = "workbuddy-share-v1-2026-10-27";
+    await service.submitAccessShareLink(`${RUNTIME_ORIGIN}/?sharecode=mode-secret`, consent);
+    const vaultFile = path.join(harness.dataDir, "workbuddy-access-vault.json");
+    const vaultBefore = readFileSync(vaultFile, "utf8");
+    const modeFile = accessModePath(harness.dataDir);
+    expect(existsSync(modeFile)).toBe(false);
+    const catalogEffectsBeforeModeSwitch = { ...harness.catalog.counts };
+
+    const switched = await service.setAccessMode("no_share_code");
+    expect(switched).toMatchObject({
+      mode: "no_share_code",
+      modePersisted: true,
+      modeInvalid: false,
+      status: "none",
+      statusReason: "local_saved_not_used",
+    });
+    expect(readFileSync(vaultFile, "utf8")).toBe(vaultBefore);
+    expect(readFileSync(modeFile, "utf8")).not.toContain("mode-secret");
+    // 模式切换只写本地偏好：不产生 Catalog 读写，因此不会撤销/覆盖分享码。
+    expect(harness.catalog.counts).toEqual(catalogEffectsBeforeModeSwitch);
+
+    // 重启后偏好仍在；再切回分享码仍不触碰 vault。
+    const restarted = createMerchantConnectionService(harness.serviceOptions);
+    expect(restarted.getAccessMode()).toEqual({
+      mode: "no_share_code",
+      persisted: true,
+      invalid: false,
+    });
+    await restarted.setAccessMode("share_code");
+    expect(restarted.getAccessMode().mode).toBe("share_code");
+    expect(readFileSync(vaultFile, "utf8")).toBe(vaultBefore);
+  });
+
+  it("绑定后保存接入方式经签名同步到目录公开路由（本地文件不含凭据）", async () => {
+    const harness = await makeHarness({ accessHeadVersion: 1 });
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    await service.begin();
+    expect((await service.reconcile()).status).toBe("published");
+    // 首绑后自动补一次对账：默认 auto 也会被明确写入，便于后续 CAS。
+    expect(harness.catalog.buyerAccessPuts.map((put) => put.mode)).toContain("auto");
+
+    const summary = await service.setAccessMode("no_share_code");
+    expect(summary).toMatchObject({
+      mode: "no_share_code",
+      catalogMode: "no_share_code",
+      catalogSync: "synced",
+    });
+    expect(summary.catalogRevision).toBeGreaterThanOrEqual(1);
+    expect(harness.catalog.buyerAccessMode).toBe("no_share_code");
+    expect(harness.catalog.buyerAccessPuts.at(-1)?.mode).toBe("no_share_code");
+
+    const raw = readFileSync(accessModePath(harness.dataDir), "utf8");
+    expect(raw).not.toContain("sharecode");
+    const parsed = JSON.parse(raw) as { mode: string; catalog?: { mode: string; revision: number } };
+    expect(parsed.mode).toBe("no_share_code");
+    expect(parsed.catalog?.mode).toBe("no_share_code");
+    expect(parsed.catalog?.revision).toBe(summary.catalogRevision);
+  });
+
+  it("目录同步失败保留本地模式，刷新后重试成功", async () => {
+    const harness = await makeHarness({
+      accessHeadVersion: 1,
+      failBuyerAccessPutWith: { status: 503, code: "unavailable" },
+    });
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    await service.begin();
+    expect((await service.reconcile()).status).toBe("published");
+
+    const summary = await service.setAccessMode("no_share_code");
+    expect(summary.mode).toBe("no_share_code");
+    expect(summary.catalogSync).toBe("failed");
+    expect(summary.catalogSyncError).toBe("UNREACHABLE");
+    expect(harness.catalog.buyerAccessPuts).toHaveLength(0);
+    // 本地模式与已保存凭据都保留；不会因为同步失败回滚用户选择。
+    expect(JSON.parse(readFileSync(accessModePath(harness.dataDir), "utf8")).mode)
+      .toBe("no_share_code");
+
+    harness.catalog.failBuyerAccessPut = null;
+    const refreshed = await service.refreshAccess();
+    expect(refreshed).toMatchObject({
+      mode: "no_share_code",
+      catalogMode: "no_share_code",
+      catalogSync: "synced",
+    });
+    expect(harness.catalog.buyerAccessPuts.at(-1)?.mode).toBe("no_share_code");
+  });
+
+  it("刷新时采纳另一台设备更新的目录模式", async () => {
+    const harness = await makeHarness({ accessHeadVersion: 1 });
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    await service.begin();
+    expect((await service.reconcile()).status).toBe("published");
+    expect(service.getAccessMode().mode).toBe("auto");
+
+    // 模拟另一台设备在 catalog 直接写入更新 revision。
+    harness.catalog.buyerAccessMode = "share_code";
+    harness.catalog.buyerAccessRevision = 9;
+    const refreshed = await service.refreshAccess();
+    expect(refreshed).toMatchObject({
+      mode: "share_code",
+      catalogMode: "share_code",
+      catalogRevision: 9,
+      catalogSync: "synced",
+    });
+    expect(service.getAccessMode().mode).toBe("share_code");
+  });
+
+  it("无分享码模式不把已暂存凭据随首次绑定提交，切换回来仍保留", async () => {
+    const harness = await makeHarness();
+    let sawAccessConfig = false;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.pathname.endsWith("/runtime-bindings") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { access_config?: unknown };
+        sawAccessConfig = body.access_config !== undefined;
+      }
+      return harness.serviceOptions.fetchImpl(input, init);
+    };
+    const service = createMerchantConnectionService({ ...harness.serviceOptions, fetchImpl });
+    await service.submitAccessShareLink(
+      `${RUNTIME_ORIGIN}/?sharecode=staged-secret`,
+      "workbuddy-share-v1-2026-10-27",
+    );
+    await service.setAccessMode("no_share_code");
+    expect((await service.begin()).status).toBe("awaiting_confirmation");
+    expect((await service.reconcile()).status).toBe("published");
+    expect(sawAccessConfig).toBe(false);
+    expect(readFileSync(path.join(harness.dataDir, "workbuddy-access-vault.json"), "utf8"))
+      .not.toContain("staged-secret");
+    // 切回使用分享码后，旧的本地凭据仍可用于后续显式更新；这里只证明偏好
+    // 切换没有删除/改写 vault。
+    await service.setAccessMode("share_code");
+    expect(readFileSync(path.join(harness.dataDir, "workbuddy-access-vault.json"), "utf8"))
+      .not.toContain("staged-secret");
+  });
+
+  it("非法接入方式被拒绝且不新建或破坏偏好文件", async () => {
+    const harness = await makeHarness();
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    await expect(
+      service.setAccessMode("direct" as never),
+    ).rejects.toMatchObject({ code: "ACCESS_STATE_UNAVAILABLE" });
+    expect(existsSync(accessModePath(harness.dataDir))).toBe(false);
+
+    await service.setAccessMode("no_share_code");
+    const before = readFileSync(accessModePath(harness.dataDir), "utf8");
+    await expect(
+      service.setAccessMode("bogus" as never),
+    ).rejects.toMatchObject({ code: "ACCESS_STATE_UNAVAILABLE" });
+    expect(readFileSync(accessModePath(harness.dataDir), "utf8")).toBe(before);
+  });
+
+  it("损坏的接入方式偏好安全回退自动检测且不删除文件", async () => {
+    const harness = await makeHarness();
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    const file = accessModePath(harness.dataDir);
+    writeFileSync(file, "{not-json");
+    expect(service.getAccessMode()).toEqual({ mode: "auto", persisted: true, invalid: true });
+    expect(service.getAccessSummary()).toMatchObject({ mode: "auto", modePersisted: true, modeInvalid: true });
+    expect(readFileSync(file, "utf8")).toBe("{not-json");
+  });
+
+  it("自动检测：明确 401/403 且已保存分享码时只报告本次可用，不宣称已加白", async () => {
+    const harness = await makeHarness();
+    const seen: string[] = [];
+    const gatedFetch: typeof fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.origin === RUNTIME_ORIGIN && url.pathname === "/.well-known/agent-card.json") {
+        seen.push(url.search);
+        if (url.searchParams.get("sharecode") !== "gate-secret")
+          return new Response("forbidden", { status: 403 });
+      }
+      return harness.serviceOptions.fetchImpl(input, init);
+    };
+    const service = createMerchantConnectionService({
+      ...harness.serviceOptions,
+      accessShareLink: `${RUNTIME_ORIGIN}/?sharecode=gate-secret`,
+      fetchImpl: gatedFetch,
+    });
+    const detection = await service.detectAccess();
+    expect(detection).toMatchObject({
+      status: "share_code_ok",
+      code: "sharecode_public_card_readable",
+      mode: "auto",
+      shareCodeAvailable: true,
+    });
+    expect(detection.guidance).toContain("平台是否加白仍未确认");
+    expect(JSON.stringify(detection)).not.toContain("gate-secret");
+    expect(seen).toEqual(["", "?sharecode=gate-secret"]);
+    expect((await service.getAccessSummary()).detection).toEqual(detection);
+  });
+
+  it("自动检测：单次 401/403、网络错误和重定向都保守报告不确定", async () => {
+    const harness = await makeHarness();
+    const deniedFetch: typeof fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.origin === RUNTIME_ORIGIN && url.pathname === "/.well-known/agent-card.json")
+        return new Response("forbidden", { status: 403 });
+      return harness.serviceOptions.fetchImpl(input, init);
+    };
+    const noCode = createMerchantConnectionService({ ...harness.serviceOptions, fetchImpl: deniedFetch });
+    expect(await noCode.detectAccess()).toMatchObject({
+      status: "uncertain",
+      code: "gate_rejected",
+      shareCodeAvailable: false,
+    });
+    expect((await noCode.detectAccess()).guidance).toContain("不能判定实例未加白");
+
+    const networkFailure = createMerchantConnectionService({
+      ...harness.serviceOptions,
+      fetchImpl: async () => { throw new Error("network down"); },
+    });
+    expect(await networkFailure.detectAccess()).toMatchObject({
+      status: "uncertain",
+      code: "network_error",
+    });
+
+    let redirects = 0;
+    const redirected = createMerchantConnectionService({
+      ...harness.serviceOptions,
+      fetchImpl: async (input, init) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        if (url.pathname === "/.well-known/agent-card.json") {
+          redirects += 1;
+          return new Response(null, { status: 302, headers: { location: "https://evil.example/card" } });
+        }
+        return harness.serviceOptions.fetchImpl(input, init);
+      },
+    });
+    expect(await redirected.detectAccess()).toMatchObject({
+      status: "uncertain",
+      code: "unexpected_redirect",
+    });
+    expect(redirects).toBe(1);
+  });
+
+  it("显式无分享码时不发送已保存的分享码，门禁拒绝不得绕回带码读取", async () => {
+    const harness = await makeHarness();
+    const seen: string[] = [];
+    const gatedFetch: typeof fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.origin === RUNTIME_ORIGIN && url.pathname === "/.well-known/agent-card.json") {
+        seen.push(url.search);
+        return new Response("forbidden", { status: 403 });
+      }
+      return harness.serviceOptions.fetchImpl(input, init);
+    };
+    const service = createMerchantConnectionService({
+      ...harness.serviceOptions,
+      fetchImpl: gatedFetch,
+    });
+    await service.submitAccessShareLink(
+      `${RUNTIME_ORIGIN}/?sharecode=gate-secret`,
+      "workbuddy-share-v1-2026-10-27",
+    );
+    await service.setAccessMode("no_share_code");
+    await expect(service.begin()).rejects.toMatchObject({ code: "ACCESS_MODE_UNCERTAIN" });
+    expect(seen).toEqual([""]);
+    expect((await service.detectAccess())).toMatchObject({
+      status: "uncertain",
+      code: "gate_rejected",
+    });
+    expect(seen).toEqual(["", ""]);
+    expect(harness.catalog.counts.deviceCreates).toBe(0);
+    expect(readFileSync(path.join(harness.dataDir, "workbuddy-access-vault.json"), "utf8"))
+      .not.toContain("gate-secret");
+  });
+
   it("随绑凭据被目录按版本冲突跳过：摘要给出唯一可恢复路径，重提交按权威版本完成更换", async () => {
     // 首绑只能声明 expected_version=0；目录已有 v3 配置时保留既有配置并在回执
     // 里说明。本地不得假装码已生效（不得显示 local_staged），摘要给出
@@ -581,7 +979,7 @@ describe("connect-service 内核", () => {
     });
   });
 
-  it("WorkBuddy 初次连接未配置分享链接时在任何网络动作前明确失败", async () => {
+  it("显式选择使用分享码但未配置时在任何网络动作前明确失败", async () => {
     const harness = await makeHarness();
     let networkCalls = 0;
     const service = createMerchantConnectionService({
@@ -589,6 +987,7 @@ describe("connect-service 内核", () => {
       publicOrigin: "https://pilot.example.app.workbuddy.host",
       fetchImpl: async () => { networkCalls += 1; throw new Error("must not reach network"); },
     });
+    await service.setAccessMode("share_code");
     await expect(service.begin()).rejects.toMatchObject({ code: "ACCESS_SHARE_LINK_REQUIRED" });
     expect(networkCalls).toBe(0);
     expect(harness.catalog.counts.deviceCreates).toBe(0);
@@ -682,7 +1081,7 @@ describe("connect-service 内核", () => {
       accessShareLink: `${RUNTIME_ORIGIN}/?sharecode=test-only-gate`,
       fetchImpl: async (input) => { throw new Error(`network error ${String(input)}`); },
     });
-    await expect(service.begin()).rejects.toThrow("暂时无法通过 WorkBuddy 分享链接读取商家名片");
+    await expect(service.begin()).rejects.toThrow("暂时无法从外部连接你的商家服务");
     await service.begin().catch((error: Error) => {
       expect(error.message).not.toContain("test-only-gate");
       expect(error.message).not.toContain("sharecode=");

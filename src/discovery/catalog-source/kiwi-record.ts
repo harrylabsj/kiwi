@@ -73,6 +73,8 @@ export interface CatalogAgentRecord {
   readonly hosting_mode: HostingMode;
   readonly handoff_destination_types?: readonly DestinationType[];
   readonly runtime_access?: CatalogRuntimeAccess;
+  /** 仅在 GET 带 include=buyer_access 时出现；旧目录/旧客户端为 undefined。 */
+  readonly buyer_access?: CatalogBuyerAccess;
   readonly verification_level: VerificationLevel;
   readonly freshness_state: FreshnessState;
   readonly administrative_state: AdministrativeState;
@@ -80,6 +82,32 @@ export interface CatalogAgentRecord {
   readonly fresh_until?: string;
   readonly created_at: string;
   readonly updated_at: string;
+}
+
+/** 买家路由的公开、非凭据状态（`include=buyer_access` 时才出现）。 */
+export type BuyerAccessState = "relay" | "direct" | "unknown";
+
+/**
+ * 商家接入方式 → 买家路由投影。
+ *
+ * - `direct` 只表示商家显式选择无分享码，**不是**平台白名单验证；
+ *   `platform_verification` 恒为 `unverified`，因为平台没有公开验证 API。
+ * - `unknown` 表示无法确认（授权撤销/轮换/过期、agent 非 active），买家必须
+ *   fail-closed，不能回退到猜测。
+ */
+export interface CatalogBuyerAccess {
+  readonly schema_version: 1;
+  readonly state: BuyerAccessState;
+  readonly source:
+    | "merchant_setting"
+    | "legacy_runtime_access"
+    | "legacy_no_share_code"
+    | "authorization_changed"
+    | "agent_inactive";
+  readonly mode?: "auto" | "share_code" | "no_share_code";
+  readonly revision: number;
+  readonly updated_at?: string;
+  readonly platform_verification: "unverified";
 }
 
 /** 公开 skill（v0.3 §6，与 DTO 1.0 CandidateSkill 同形）。 */
@@ -108,6 +136,8 @@ export interface KiwiCatalogSearchQuery
   handoff_destination_types?: readonly DestinationType[];
   /** 分页游标（searchRecords 内部翻页用；调用方无需直接设置）。 */
   cursor?: string;
+  /** 显式请求非凭据买家路由投影；旧目录忽略该参数。 */
+  include?: "buyer_access";
 }
 
 /** listing 类型（v0.4 §4/§5；词表单一来源见 listing-record.schema.json）。 */

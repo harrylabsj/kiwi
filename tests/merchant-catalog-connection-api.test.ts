@@ -21,7 +21,7 @@ import { createMerchantManagementApiHandler } from "../src/http/merchant-managem
 import { MerchantImportDraftStore } from "../src/http/merchant-management/draft-store.js";
 import { MerchantManagementOperationStore } from "../src/http/merchant-management/operation-store.js";
 import { MutableServiceState } from "../src/http/merchant-management/service-state.js";
-import { MerchantConnectError } from "../src/cloud/connect-service.js";
+import { MerchantConnectError, type AccessDetectionResult } from "../src/cloud/connect-service.js";
 
 const ORIGIN = "https://merchant.example";
 const db = new DatabaseSync(":memory:");
@@ -47,6 +47,28 @@ const accessState = {
 };
 let submittedLink = "";
 let submittedConsent = "";
+let accessMode: "auto" | "share_code" | "no_share_code" = "auto";
+let accessModeCalls = 0;
+let detectCalls = 0;
+let detection: AccessDetectionResult = {
+  status: "uncertain",
+  code: "network_error",
+  checkedAt: "2026-11-11T00:00:00.000Z",
+  mode: "auto",
+  shareCodeAvailable: false,
+  httpStatus: null,
+  detail: "公开名片请求未能建立连接。",
+  guidance: "单次 401/403、网络错误、重定向或不完整响应都不能判定实例未加白。已保存的分享码不会被删除。",
+};
+function currentAccess() {
+  return {
+    ...accessState,
+    mode: accessMode,
+    modePersisted: true,
+    modeInvalid: false,
+    detection,
+  };
+}
 const publicationDraft = {
   schema_version: "0.1", draft_id: "flp_test_123456789abc", digest: "sha256:test",
   created_at: "2026-09-30T00:00:00Z", expires_at: "2026-09-30T00:15:00Z", products_digest: "sha256:products",
@@ -78,14 +100,23 @@ beforeAll(async () => {
       }),
       getPairing: async () => ({ user_code: "SAMPLE-CODE", verification_uri: "https://catalog.example/portal/connect/test", expires_at: "2030-01-01T00:00:00Z", grant: "MUST_NOT_LEAK" }),
       begin: async () => { beginCalls += 1; if (missingShareLink) throw new MerchantConnectError("ACCESS_SHARE_LINK_REQUIRED", "safe"); if (failBegin) throw new Error("MUST_NOT_LEAK"); },
-      getAccess: async () => accessState,
+      getAccess: async () => currentAccess(),
+      setAccessMode: async (mode: "auto" | "share_code" | "no_share_code") => {
+        accessModeCalls += 1;
+        accessMode = mode;
+        return currentAccess();
+      },
+      detectAccess: async () => {
+        detectCalls += 1;
+        return detection;
+      },
       readBoundAccount: async () => "owner@example.test",
       readPublicInquiryConsent: async () => ({ granted: false, policyActive: false, localEnabled: false, termsVersion: "open-inquiry-v1" }),
       setPublicInquiryConsent: async (granted: boolean) => {
         publicConsentCalls += 1;
         return { granted, policyActive: granted, localEnabled: granted, termsVersion: "open-inquiry-v1" };
       },
-      refreshAccess: async () => accessState,
+      refreshAccess: async () => currentAccess(),
       submitAccessShareLink: async (link: string, consentTermsVersion: string) => {
         submittedLink = link;
         submittedConsent = consentTermsVersion;
@@ -95,9 +126,9 @@ beforeAll(async () => {
         if (link.includes("denied")) {
           throw Object.assign(new Error("Catalog 拒绝了访问配置，请确认绑定仍有效后重试"), { code: "ACCESS_REJECTED" });
         }
-        return accessState;
+        return currentAccess();
       },
-      revokeAccess: async () => accessState,
+      revokeAccess: async () => currentAccess(),
     },
   }));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -491,5 +522,65 @@ describe("catalog access configuration API", () => {
     });
     expect(response.status).toBeGreaterThanOrEqual(400);
     expect(response.status).toBeLessThan(500);
+  });
+
+  it("接入方式仅限 owner + CSRF，非法值不落盘，响应不含凭据", async () => {
+    const owner = await login();
+    const operator = await login("operator");
+    const post = (auth: typeof owner, body: unknown, guards = true) => fetch(
+      base + "/merchant/api/v1/catalog/access/mode",
+      {
+        method: "POST",
+        headers: {
+          cookie: auth.cookie,
+          "content-type": "application/json",
+          ...(guards ? { origin: ORIGIN, "x-csrf-token": auth.csrf } : {}),
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    const before = accessModeCalls;
+    expect((await post(owner, { mode: "auto" }, false)).status).toBe(403);
+    expect((await post(operator, { mode: "auto" })).status).toBe(403);
+    expect((await post(owner, { mode: "direct" })).status).toBe(422);
+    expect((await post(owner, { mode: "auto", target: "https://evil.example" })).status).toBe(422);
+    expect(accessModeCalls).toBe(before);
+
+    const response = await post(owner, { mode: "no_share_code" });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).not.toContain("SECRET-CODE");
+    expect(JSON.parse(text)).toMatchObject({ access: { mode: "no_share_code", modePersisted: true } });
+    expect(accessModeCalls).toBe(before + 1);
+  });
+
+  it("检测只允许 owner + CSRF，目标固定为本实例且请求体不得携带 URL", async () => {
+    const owner = await login();
+    const operator = await login("operator");
+    const post = (auth: typeof owner, body: unknown, guards = true) => fetch(
+      base + "/merchant/api/v1/catalog/access/detect",
+      {
+        method: "POST",
+        headers: {
+          cookie: auth.cookie,
+          "content-type": "application/json",
+          ...(guards ? { origin: ORIGIN, "x-csrf-token": auth.csrf } : {}),
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    const before = detectCalls;
+    expect((await post(owner, {}, false)).status).toBe(403);
+    expect((await post(operator, {})).status).toBe(403);
+    expect((await post(owner, { target: "https://evil.example" })).status).toBe(422);
+    expect(detectCalls).toBe(before);
+
+    const response = await post(owner, {});
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    const body = await response.json() as { detection: AccessDetectionResult };
+    expect(body.detection).toMatchObject({ status: "uncertain", code: "network_error" });
+    expect(JSON.stringify(body)).not.toContain("SECRET-CODE");
+    expect(detectCalls).toBe(before + 1);
   });
 });

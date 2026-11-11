@@ -11,11 +11,12 @@ const responseError=(id,code,message)=>({jsonrpc:'2.0',id,error:{code,message}})
 // Transparent MCP transport only. Business policy, scope, approval, and action
 // outcomes belong to the verified Kiwi backend / calling expert. This adapter
 // must not invent approval, call kiwi_approve, or block a listed business tool.
-export function startProductionMcpServer({input,output,baseline,prepare,activate,onStatus=()=>{},onProtocolDiagnostic=()=>{},backendRequestTimeoutMs=30000,toolTimeoutMs=30000,prepareWaitTimeoutMs=25000}){
+export function startProductionMcpServer({input,output,baseline,prepare,activate,onStatus=()=>{},onProtocolDiagnostic=()=>{},backendRequestTimeoutMs=30000,toolTimeoutMs=30000,prepareWaitTimeoutMs=25000,deferPreparation=false}){
   if(!input||!output||!Array.isArray(baseline)||baseline.length!==13||typeof prepare!=='function'||typeof activate!=='function'||backendRequestTimeoutMs<1||toolTimeoutMs<1||prepareWaitTimeoutMs<0||prepareWaitTimeoutMs>=30000)throw new Error('SERVER_ARGUMENT_INVALID');
   const baselineByName=new Map(baseline.map(tool=>[tool?.name,tool]));
   if(baselineByName.size!==13||[...baselineByName.keys()].some(name=>!KNOWN.has(name)))throw new Error('TOOL_BASELINE_INVALID');
   const abort=new AbortController(),reader=createInterface({input,crlfDelay:Infinity});
+  let preparationErrorMessage='Latest verification failed; connector is stopped.';
   let phase='preparing',hostInitialized=false,hostReady=false,hostCanElicit=false,clientProtocolVersionClass='NOT_OBSERVED',backend,stopped=false,stopping=false,preparedResult,runTask,finishTask;
   const status=code=>{try{onStatus(code)}catch{void 0;}};
   const protocolDiagnostic=state=>{try{onProtocolDiagnostic({clientProtocolVersionClass,negotiatedProtocolVersion:PROTOCOL,state})}catch{void 0;}};
@@ -113,6 +114,7 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
       const name=message.params?.name,args=message.params?.arguments??{};
       if(typeof name!=='string'||!KNOWN.has(name)||!args||typeof args!=='object'||Array.isArray(args)){emit(responseError(message.id,-32602,'Invalid tool request'));return}
       if(Buffer.byteLength(JSON.stringify(message))>256*1024){emit({jsonrpc:'2.0',id:message.id,result:unavailable('Tool request exceeds the supported size; action stopped.')});return}
+      if(deferPreparation&&!runTask&&!stopped)runTask=run();
       const callKey=`${typeof message.id}:${String(message.id)}`;if(activeToolCalls.has(callKey)){fail('DUPLICATE_REQUEST_ID');return}
       timedOutClientIds.delete(callKey);settledToolCalls.delete(callKey);
       const pending={id:message.id,message,timer:null,sent:false,deadline:Date.now()+toolTimeoutMs};
@@ -133,7 +135,7 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
         }else answerTool(message.id,preparationPending('PREPARATION_IN_PROGRESS: Verification is still running; this request was not sent. Retry once the connector is ready.'));
         return;
       }
-      if(phase!=='ready'){answerTool(message.id,unavailable('Latest verification failed; connector is stopped.'));return}
+      if(phase!=='ready'){answerTool(message.id,unavailable(preparationErrorMessage));return}
       pending.sent=true;await sendToolCall(pending);return;
     }
     if(message.method==='logging/setLevel'||message.method==='resources/list'||message.method==='prompts/list'){
@@ -192,7 +194,7 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
   async function run(){
     try{
       let prepared;
-      try{prepared=await prepare({signal:abort.signal})}catch(error){status(error?.message==='PREPARE_TIMEOUT'?'TIMEOUT_PREPARE':'FAILED_PREPARE');throw new Error('PREPARE_FAILED',{cause:error})}
+      try{prepared=await prepare({signal:abort.signal})}catch(error){if(/^PREPARE_FAILED:(SIGNATURE_VERIFIER_UNAVAILABLE|SIGNER_POLICY_VERIFICATION_FAILED|ATTESTATION_INVALID|PROVENANCE_MISSING)$/.test(error?.message??''))preparationErrorMessage=`KIWI_${error.message}: Package provenance verification failed; no package was run.`;else if(error?.message==='PREPARE_FAILED:REGISTRY_UNAVAILABLE')preparationErrorMessage='KIWI_PREPARE_REGISTRY_UNAVAILABLE: Cannot reach the official npm registry or its attestation endpoint; verify network access and reconnect.';else if(error?.message==='PREPARE_FAILED:PROVENANCE_FAILED')preparationErrorMessage='KIWI_PREPARE_PROVENANCE_FAILED: Package provenance verification failed; no package was run.';else if(error?.message==='PREPARE_FAILED:CACHE_STATE_INVALID'||error?.message==='CACHE_STATE_INVALID')preparationErrorMessage='KIWI_PREPARE_CACHE_STATE_INVALID: Incomplete or invalid cache needs review; no package was run.';else if(error?.message==='NPM_12_UNAVAILABLE')preparationErrorMessage='NPM_12_UNAVAILABLE: Kiwi requires npm 12. Install or upgrade npm to version 12, ensure it is on PATH, then reconnect and retry.';status(error?.message==='PREPARE_TIMEOUT'?'TIMEOUT_PREPARE':'FAILED_PREPARE');throw new Error('PREPARE_FAILED',{cause:error})}
       if(stopped||abort.signal.aborted)return;
       preparedResult=prepared;
       const initialized=await Promise.race([hostReadyPromise,new Promise(resolve=>abort.signal.addEventListener('abort',()=>resolve(false),{once:true}))]);
@@ -210,9 +212,9 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
         pending.sent=true;await sendToolCall(pending)
       }
       active.done.then(()=>{if(!stopped)fail('BACKEND_EXITED')}).catch(()=>{if(!stopped)fail('BACKEND_FAILED')});
-    }catch{if(!stopped){phase='failed';for(const pending of [...activeToolCalls.values()])answerTool(pending.id,unavailable('Latest verification failed; connector is stopped.'));queuedToolCalls.clear();backendToolIds.clear();passthroughBackendIds.clear()}}
+    }catch{if(!stopped){phase='failed';for(const pending of [...activeToolCalls.values()])answerTool(pending.id,unavailable(preparationErrorMessage));queuedToolCalls.clear();backendToolIds.clear();passthroughBackendIds.clear()}}
   }
-  runTask=run();
+  if(!deferPreparation)runTask=run();
   function shutdown(){
     if(stopping)return finishTask;stopping=true;stopped=true;phase='stopped';status('STOPPED');abort.abort();resolveHostReady(false);
     for(const pending of activeToolCalls.values())clearTimeout(pending.timer);activeToolCalls.clear();queuedToolCalls.clear();backendToolIds.clear();passthroughBackendIds.clear();

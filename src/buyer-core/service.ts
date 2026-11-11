@@ -128,6 +128,26 @@ export interface MerchantRecord {
     auth_mode: "signature";
   };
   /**
+   * 目录公开的非凭据买家路由状态（新目录 + include=buyer_access）。
+   *
+   * 缺省（旧目录/旧记录）表示走既有 legacy 分流；`unknown` 必须 fail-closed；
+   * `direct` 不是平台白名单验证，只是商家显式选择无分享码。
+   */
+  buyer_access?: {
+    schema_version: 1;
+    state: "relay" | "direct" | "unknown";
+    source:
+      | "merchant_setting"
+      | "legacy_runtime_access"
+      | "legacy_no_share_code"
+      | "authorization_changed"
+      | "agent_inactive";
+    mode?: "auto" | "share_code" | "no_share_code";
+    revision: number;
+    updated_at?: string;
+    platform_verification: "unverified";
+  };
+  /**
    * 配送时效摘要（商家按区域维护，如 `东北 3-4天；华北 1-2天`）。来自 listing
    * 的 commercial_hints.lead_time_hint；买家发现/选择时的重要指标。
    */
