@@ -38,6 +38,7 @@ import {
   type VerifiedActorContext,
 } from "./actor.js";
 import type { WriteApprovalCandidate } from "../../agent/merchant/action-candidate.js";
+import type { MarketplaceTradePlatform } from "../../handoff/marketplace-product-link.js";
 
 /** 管理与对话工具的契约大版本（BD §11.1；与 Kiwi / 协议版本分开）。 */
 export const MANAGEMENT_API_MAJOR = 1;
@@ -76,7 +77,7 @@ export interface ApprovalPage {
 /** BD §13.2 的最小公开商品投影（成本/底价在私有策略区，绝不经此通道）。 */
 export interface MerchantProductProjection {
   /** Public marketplace product page; never evidence of payment or negotiated price. */
-  trade_platform?: "jd" | "taobao" | "tmall";
+  trade_platform?: MarketplaceTradePlatform;
   platform_product_id?: string;
   platform_product_url?: string;
   sku: string;

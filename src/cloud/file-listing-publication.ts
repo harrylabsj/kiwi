@@ -43,6 +43,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import path from "node:path";
 import type { AgentProfile } from "../config/profile.js";
 import { buildMarketplaceProductLink } from "../handoff/marketplace-product-link.js";
+import type { TradePlatformRule } from "../handoff/trade-platform-rules.js";
 import { canonicalize } from "../negotiation/jcs.js";
 import { CatalogClient, type CatalogClientError } from "./catalog-client.js";
 import {
@@ -85,6 +86,8 @@ export interface FileListingPublicationOptions {
   productsFile: string;
   /** Catalog base URL。 */
   catalogUrl: string;
+  /** 运营配置的交易平台规则；缺省使用内置 jd/taobao/tmall。 */
+  platformRules?: readonly TradePlatformRule[];
   /** 当前公网 Runtime origin（地址迁移守卫；缺省读 profile.merchant_public.public_url）。 */
   publicOrigin?: string;
   /** 测试缝。 */
@@ -310,7 +313,8 @@ export function createFileListingPublicationService(options: FileListingPublicat
     return context;
   };
 
-  const loadTable = () => loadProductTableSnapshot(options.productsFile, options.profile.owner_id);
+  const loadTable = () =>
+    loadProductTableSnapshot(options.productsFile, options.profile.owner_id, options.platformRules);
 
   async function preview(selections: readonly FileListingSelection[]): Promise<FileListingPreview> {
     if (!Array.isArray(selections) || selections.length === 0) {
@@ -346,7 +350,11 @@ export function createFileListingPublicationService(options: FileListingPublicat
       if (Date.parse(record.valid_until) <= nowMs) {
         throw new FileListingPublicationError("PRODUCT_EXPIRED", `SKU 有效期已过，不可发布：${sku}`);
       }
-      const productLink = buildMarketplaceProductLink(record.trade_platform, record.platform_product_id);
+      const productLink = buildMarketplaceProductLink(
+        record.trade_platform,
+        record.platform_product_id,
+        options.platformRules,
+      );
       const listing = canonicalizeCatalogListing(
         {
           listing_type: "product",

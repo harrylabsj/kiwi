@@ -64,6 +64,10 @@ import {
   renderImportTemplateXlsx,
   TABULAR_IMPORT_MAX_BYTES,
 } from "../../cloud/product-import-tabular.js";
+import {
+  normalizeTradePlatformRules,
+  type TradePlatformRule,
+} from "../../handoff/trade-platform-rules.js";
 import { MerchantImportDraftStore } from "./draft-store.js";
 import {
   ActorContextError,
@@ -267,6 +271,8 @@ export interface MerchantManagementApiOptions {
       /** 平台报告的 applicationId（适配器从真实回执里取，不来自请求）。 */
     }) => Promise<PlatformEvidenceResult>;
   };
+  /** 运营配置的交易平台规则（商家导入/模板）；缺省内置 jd/taobao/tmall。 */
+  marketplacePlatforms?: () => Promise<TradePlatformRule[]>;
   /** 已部署实例的目录连接；独立于需要平台回执的部署向导。 */
   catalogConnection?: {
     getSummary: () => Promise<{
@@ -426,6 +432,16 @@ export interface MerchantManagementApiOptions {
 }
 
 class BodyTooLarge {}
+
+async function resolvePlatformRules(
+  options: MerchantManagementApiOptions,
+): Promise<readonly TradePlatformRule[]> {
+  try {
+    return normalizeTradePlatformRules(await options.marketplacePlatforms?.());
+  } catch {
+    return normalizeTradePlatformRules(undefined);
+  }
+}
 
 export function createMerchantManagementApiHandler(
   options: MerchantManagementApiOptions,
@@ -744,8 +760,9 @@ export function createMerchantManagementApiHandler(
         res.end();
         return;
       }
+      const platforms = await resolvePlatformRules(options);
       if (format === "csv") {
-        const body = renderImportTemplateCsv();
+        const body = renderImportTemplateCsv(platforms);
         res.writeHead(200, {
           "content-type": "text/csv; charset=utf-8",
           "content-disposition": 'attachment; filename="kiwi-product-import-template.csv"',
@@ -755,7 +772,7 @@ export function createMerchantManagementApiHandler(
         res.end(body);
         return;
       }
-      const bytes = renderImportTemplateXlsx();
+      const bytes = renderImportTemplateXlsx(platforms);
       res.writeHead(200, {
         "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "content-disposition": 'attachment; filename="kiwi-product-import-template.xlsx"',
@@ -3667,7 +3684,11 @@ export function createMerchantManagementApiHandler(
       format === "csv"
         ? { kind: "csv", text: buffer.toString("utf8") }
         : { kind: "xlsx", bytes: new Uint8Array(buffer) },
-      { merchantId: options.merchantId, now: () => now() },
+      {
+        merchantId: options.merchantId,
+        platformRules: await resolvePlatformRules(options),
+        now: () => now(),
+      },
     );
     writeJson(res, 200, {
       ok: result.ok,

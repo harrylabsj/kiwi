@@ -198,8 +198,19 @@ function marketplaceLink(it) {
   if (typeof value !== "string") return "-";
   try {
     var url = new URL(value);
-    if (url.protocol !== "https:" || url.username || url.password ||
-        ["item.jd.com", "item.taobao.com", "detail.tmall.com"].indexOf(url.hostname) < 0) return "-";
+    if (url.protocol !== "https:" || url.username || url.password) return "-";
+    // 链接由服务端按运营配置的模板生成；这里仍拒绝仿冒已知平台的域名
+    // （如 item.jd.com.evil.example），避免页面为冒名站点背书。
+    var labels = url.hostname.split(".");
+    var knownDomains = [["jd", "com"], ["taobao", "com"], ["tmall", "com"]];
+    var allowedHosts = ["item.jd.com", "item.taobao.com", "detail.tmall.com"];
+    var looksLikeKnown = knownDomains.some(function (d) {
+      for (var i = 0; i + 1 < labels.length; i += 1) {
+        if (labels[i] === d[0] && labels[i + 1] === d[1]) return true;
+      }
+      return false;
+    });
+    if (looksLikeKnown && allowedHosts.indexOf(url.hostname) < 0) return "-";
     return '<a href="' + esc(value) + '" target="_blank" rel="noopener noreferrer">' + esc(value) + '</a>';
   } catch (_) { return "-"; }
 }
@@ -661,7 +672,7 @@ function renderProducts(items) {
         esc(it.currency) + " " + esc(it.price) + " / " + esc(it.price_unit) + "</td><td>" +
         esc(it.min_order_qty == null ? "-" : it.min_order_qty) + "</td><td>" +
         esc(it.valid_until) + "</td><td>" + esc(it.status) + "</td><td>" +
-        esc(({jd:"京东",taobao:"淘宝",tmall:"天猫"})[it.trade_platform] || "-") + "</td><td>" +
+        esc(({jd:"京东",taobao:"淘宝",tmall:"天猫"})[it.trade_platform] || it.trade_platform || "-") + "</td><td>" +
         esc(it.platform_product_id || "-") + "</td><td>" + marketplaceLink(it) + "</td></tr>";
     }
     var money = it.money || {};

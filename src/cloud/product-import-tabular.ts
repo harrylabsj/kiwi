@@ -40,6 +40,10 @@ import {
   parseMarketplaceProductFields,
   type MarketplaceProductFields,
 } from "../handoff/marketplace-product-link.js";
+import {
+  DEFAULT_TRADE_PLATFORM_RULES,
+  type TradePlatformRule,
+} from "../handoff/trade-platform-rules.js";
 
 import {
   parseProductTable,
@@ -831,46 +835,56 @@ export const TABULAR_TEMPLATE_HEADER: readonly string[] = [
   "平台商品ID/platform_product_id",
 ];
 
-export const TABULAR_TEMPLATE_EXAMPLE_ROWS: readonly string[][] = [
-  [
-    "DEMO-001",
-    "示例保温杯（请替换为实际商品）",
-    "CNY",
-    "piece",
-    "29.90",
-    "50",
-    "2000",
-    "仅格式示例；平台商品ID不代表已核实商品，请替换",
-    "",
-    "2027-12-31",
-    "在售",
-    "京东",
-    "12345678901234567890",
-  ],
-  [
-    "DEMO-002",
-    "示例纸箱（请替换为实际商品）",
-    "CNY",
-    "box",
-    "3.50",
-    "100",
-    "8000",
-    "仅格式示例；平台商品ID不代表已核实商品，请替换",
-    "2026-09-01",
-    "2028-06-30",
-    "在售",
-    "淘宝",
-    "98765432101234567890",
-  ],
-];
+export function templateExampleRows(
+  rules: readonly TradePlatformRule[] = DEFAULT_TRADE_PLATFORM_RULES,
+): string[][] {
+  const first = rules[0]?.label ?? "京东";
+  const second = rules[1]?.label ?? first;
+  return [
+    [
+      "DEMO-001",
+      "示例保温杯（请替换为实际商品）",
+      "CNY",
+      "piece",
+      "29.90",
+      "50",
+      "2000",
+      "仅格式示例；平台商品ID不代表已核实商品，请替换",
+      "",
+      "2027-12-31",
+      "在售",
+      first,
+      "12345678901234567890",
+    ],
+    [
+      "DEMO-002",
+      "示例纸箱（请替换为实际商品）",
+      "CNY",
+      "box",
+      "3.50",
+      "100",
+      "8000",
+      "仅格式示例；平台商品ID不代表已核实商品，请替换",
+      "2026-09-01",
+      "2028-06-30",
+      "在售",
+      second,
+      "98765432101234567890",
+    ],
+  ];
+}
+
+export const TABULAR_TEMPLATE_EXAMPLE_ROWS: readonly string[][] = templateExampleRows();
 
 function csvEscape(cell: string): string {
   return /[",\r\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell;
 }
 
 /** CSV 模板（带 BOM，Excel 直接打开中文不乱码；本模块的解析器会剥掉 BOM）。 */
-export function renderImportTemplateCsv(): string {
-  const lines = [TABULAR_TEMPLATE_HEADER, ...TABULAR_TEMPLATE_EXAMPLE_ROWS].map((row) =>
+export function renderImportTemplateCsv(
+  rules: readonly TradePlatformRule[] = DEFAULT_TRADE_PLATFORM_RULES,
+): string {
+  const lines = [TABULAR_TEMPLATE_HEADER, ...templateExampleRows(rules)].map((row) =>
     row.map(csvEscape).join(","),
   );
   return `\ufeff${lines.join("\r\n")}\r\n`;
@@ -961,7 +975,10 @@ function buildStoredZip(entries: readonly StoredZipInput[]): Uint8Array {
   return out;
 }
 
-function sheetXmlFromGrid(rows: readonly (readonly string[])[]): string {
+function sheetXmlFromGrid(
+  rows: readonly (readonly string[])[],
+  platformLabels: readonly string[] = [],
+): string {
   const columnCount = Math.max(...rows.map((row) => row.length));
   const body = rows
     .map((row, rowIndex) => {
@@ -979,11 +996,21 @@ function sheetXmlFromGrid(rows: readonly (readonly string[])[]): string {
     const width = index === 0 || index === 7 ? 260 : 110;
     return `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"${index === 12 ? ' style="1"' : ""}/>`;
   }).join("");
+  // 平台下拉来自运营配置；Excel 的 formula1 列表上限 255 字符，超长时省略
+  // 下拉（导入解析仍会按规则拒绝未知平台）。
+  const labels = platformLabels
+    .map((label) => label.replace(/["\r\n]/g, "").trim())
+    .filter((label) => label !== "")
+    .join(",");
+  const validation =
+    labels !== "" && labels.length <= 255
+      ? `<dataValidations count="1"><dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="L2:L5001"><formula1>"${labels.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] ?? c)}"</formula1></dataValidation></dataValidations>`
+      : "";
   return (
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
     `<cols>${cols}</cols><sheetData>${body}</sheetData>` +
-    `<dataValidations count="1"><dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="L2:L5001"><formula1>"京东,淘宝,天猫"</formula1></dataValidation></dataValidations></worksheet>`
+    `${validation}</worksheet>`
   );
 }
 
@@ -998,8 +1025,11 @@ function columnName(index: number): string {
 }
 
 /** xlsx 模板（单工作表「商品导入模板」；单元格为内联字符串，stored ZIP）。 */
-export function renderImportTemplateXlsx(): Uint8Array {
-  const grid = [TABULAR_TEMPLATE_HEADER, ...TABULAR_TEMPLATE_EXAMPLE_ROWS];
+export function renderImportTemplateXlsx(
+  rules: readonly TradePlatformRule[] = DEFAULT_TRADE_PLATFORM_RULES,
+): Uint8Array {
+  const grid = [TABULAR_TEMPLATE_HEADER, ...templateExampleRows(rules)];
+  const platformLabels = rules.map((rule) => rule.label);
   return buildStoredZip([
     {
       name: "[Content_Types].xml",
@@ -1038,7 +1068,7 @@ export function renderImportTemplateXlsx(): Uint8Array {
         `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
         `</Relationships>`,
     },
-    { name: "xl/worksheets/sheet1.xml", content: sheetXmlFromGrid(grid) },
+    { name: "xl/worksheets/sheet1.xml", content: sheetXmlFromGrid(grid, platformLabels) },
     {
       name: "xl/styles.xml",
       content:
@@ -1089,6 +1119,8 @@ export interface TabularImportOptions {
   /** 运行实例租户 id（写入 runtime_owner_id；Catalog 确认后的 merchant_id 由
    *  import-drafts 的服务端 prepareTable 注入，转换层不猜、不采信上传方）。 */
   merchantId: string;
+  /** 运营配置的交易平台规则；缺省使用内置 jd/taobao/tmall。 */
+  platformRules?: readonly TradePlatformRule[];
   now?: () => Date;
 }
 
@@ -1412,10 +1444,13 @@ export function convertTabularImport(
       });
     } else {
       try {
-        tradeFields = parseMarketplaceProductFields({
-          trade_platform: platformRaw,
-          platform_product_id: productIdRaw,
-        });
+        tradeFields = parseMarketplaceProductFields(
+          {
+            trade_platform: platformRaw,
+            platform_product_id: productIdRaw,
+          },
+          options.platformRules,
+        );
       } catch (error) {
         if (!(error instanceof MarketplaceProductLinkError)) throw error;
         errors.push({
@@ -1473,7 +1508,7 @@ export function convertTabularImport(
   };
   try {
     // 复用 product-source 的严格校验（任何结构问题都不放行）。
-    parseProductTable(table, "tabular import");
+    parseProductTable(table, "tabular import", options.platformRules);
   } catch (err) {
     const message = err instanceof ProductTableError ? err.message : String(err);
     return {

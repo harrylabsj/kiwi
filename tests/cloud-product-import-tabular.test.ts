@@ -51,6 +51,41 @@ describe("convertTabularImport — 表头识别", () => {
     });
   });
 
+  it("按运营配置的平台校验导入并生成模板", () => {
+    const rules = [
+      {
+        id: "pinduoduo",
+        label: "拼多多",
+        domain: "yangkeduo.com",
+        url_template: "https://mobile.yangkeduo.com/goods.html?goods_id={id}",
+        sort_order: 40,
+      },
+    ];
+    const text = "sku,title,currency,unit,price,valid_until,交易平台,平台商品ID\nA-1,合成测试,CNY,piece,1,2027-12-31,拼多多,123";
+    const result = convertTabularImport(
+      { kind: "csv", text },
+      { ...OPTIONS, platformRules: rules },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.table?.products[0]).toMatchObject({
+      trade_platform: "pinduoduo",
+      platform_product_id: "123",
+    });
+
+    const unknown = convertTabularImport(
+      {
+        kind: "csv",
+        text: "sku,title,currency,unit,price,valid_until,交易平台,平台商品ID\nA-1,合成测试,CNY,piece,1,2027-12-31,京东,123",
+      },
+      { ...OPTIONS, platformRules: rules },
+    );
+    expect(unknown.ok).toBe(false);
+
+    const xml = Buffer.from(renderImportTemplateXlsx(rules)).toString("utf8");
+    expect(xml).toContain('"拼多多"');
+    expect(xml).not.toContain("京东");
+  });
+
   it("旧列和新两列都空保持兼容", () => {
     const result = convertCsv(MINIMAL_EN + "\nB-1,Other,CNY,piece,1,2027-12-31");
     expect(result.ok).toBe(true);

@@ -138,6 +138,8 @@ import { loadOrCreateMerchantIdentity } from "./merchant-identity.js";
 import { createMerchantConnectionService, MerchantConnectError, type MerchantConnectionService } from "./connect-service.js";
 import { createProbeHandler } from "../tools/workbuddy-echo.js";
 import { createFileListingPublicationService } from "./file-listing-publication.js";
+import { fetchTradePlatformRules } from "./trade-platforms-client.js";
+import { DEFAULT_TRADE_PLATFORM_RULES } from "../handoff/trade-platform-rules.js";
 
 /** 回显探针开关（I-01）：只在测试部署上打开，生产默认关闭。 */
 function probeEchoEnabled(): boolean {
@@ -171,7 +173,11 @@ function createProbeRequestListener() {
 export const CLOUD_A2A_PATH = "/a2a";
 
 /** Public management projection of an already validated file-product record. */
-export function projectFileProductRecord(record: CloudProductRecord, nowMs: number): MerchantProductProjection {
+export function projectFileProductRecord(
+  record: CloudProductRecord,
+  nowMs: number,
+  platformRules: readonly import("../handoff/trade-platform-rules.js").TradePlatformRule[] = DEFAULT_TRADE_PLATFORM_RULES,
+): MerchantProductProjection {
   return {
     sku: record.sku,
     title: record.title,
@@ -181,7 +187,11 @@ export function projectFileProductRecord(record: CloudProductRecord, nowMs: numb
     ...(record.trade_platform === undefined ? {} : { trade_platform: record.trade_platform }),
     ...(record.platform_product_id === undefined ? {} : { platform_product_id: record.platform_product_id }),
     ...(record.trade_platform === undefined ? {} : {
-      platform_product_url: buildMarketplaceProductLink(record.trade_platform, record.platform_product_id),
+      platform_product_url: buildMarketplaceProductLink(
+        record.trade_platform,
+        record.platform_product_id,
+        platformRules,
+      ),
     }),
     min_order_qty: record.moq ?? null,
     valid_until: record.valid_until,
@@ -560,9 +570,23 @@ export async function bootstrapCloudRuntime(
   );
   // 商品源：配置文件给了商品表就用"商家上传商品表"路径（设计 §10.1），
   // 否则沿用 HTTP 商品源（shopping-cli 开放层）。两条路径都不含演示价回退。
+  // 运营配置的交易平台规则：启动时拉一次作为商品源校验快照；管理 API
+  // 每次导入/下载模板时再拉取最新值（catalog 不可达时回落到内置三家）。
+  const tradePlatformRules =
+    config.catalogUrl === undefined
+      ? [...DEFAULT_TRADE_PLATFORM_RULES]
+      : await fetchTradePlatformRules(config.catalogUrl, options.catalogFetchImpl);
+  const marketplacePlatforms = async (): Promise<typeof tradePlatformRules> =>
+    config.catalogUrl === undefined
+      ? [...DEFAULT_TRADE_PLATFORM_RULES]
+      : fetchTradePlatformRules(config.catalogUrl, options.catalogFetchImpl);
   const fileProductSource: CloudProductSourceHandle | undefined =
     config.productsFile !== undefined
-      ? createFileProductSource({ file: config.productsFile, merchantId: profile.owner_id })
+      ? createFileProductSource({
+          file: config.productsFile,
+          merchantId: profile.owner_id,
+          platformRules: tradePlatformRules,
+        })
       : undefined;
   // 服务可取用性闸门（M4 §5.4/T012 + BD-02）：由可变服务状态驱动——初始值来自
   // 操作者显式环境声明，之后可经管理 API 暂停/恢复（owner + 确认 + 就绪门）。
@@ -1040,6 +1064,7 @@ export async function bootstrapCloudRuntime(
         ? { fileListingPublication: createFileListingPublicationService({
             dataDir: config.dataDir, productsFile: productsFilePath, profile,
             catalogUrl: config.catalogUrl, publicOrigin: config.publicOrigin,
+            platformRules: tradePlatformRules,
             ...(options.catalogFetchImpl !== undefined ? { fetchImpl: options.catalogFetchImpl } : {}),
           }) }
         : {}),
@@ -1067,7 +1092,7 @@ export async function bootstrapCloudRuntime(
                   : 0;
               const limit = Math.min(Math.max(query.limit ?? 50, 1), 100);
               const nowMs = Date.now();
-              const items = records.slice(offset, offset + limit).map((record) => projectFileProductRecord(record, nowMs));
+              const items = records.slice(offset, offset + limit).map((record) => projectFileProductRecord(record, nowMs, tradePlatformRules));
               return {
                 items,
                 next_cursor: offset + limit < records.length ? String(offset + limit) : null,
@@ -1075,7 +1100,11 @@ export async function bootstrapCloudRuntime(
             },
             productsImport: {
               currentTable: () => {
-                const snapshot = loadProductTableSnapshot(productsFilePath, profile.owner_id);
+                const snapshot = loadProductTableSnapshot(
+                  productsFilePath,
+                  profile.owner_id,
+                  tradePlatformRules,
+                );
                 return { digest: snapshot.digest, records: snapshot.records };
               },
               prepareTable: async (table) => {
@@ -1100,7 +1129,12 @@ export async function bootstrapCloudRuntime(
                 };
               },
               commit: (table: Parameters<typeof commitProductTable>[2]) =>
-                commitProductTable(productsFilePath, profile.owner_id, table),
+                commitProductTable(
+                  productsFilePath,
+                  profile.owner_id,
+                  table,
+                  tradePlatformRules,
+                ),
             },
           }
         : {}),
@@ -1125,6 +1159,7 @@ export async function bootstrapCloudRuntime(
       //       绝不用请求体自报的证据顶上，T029）；
       //   - 未配 catalog_url：适配器整体不配置，需要权威证据的步骤明确 503。
       onboarding: onboardingChannel,
+      marketplacePlatforms,
       ...(directConnection !== undefined ? {
         catalogConnection: {
           getSummary: async () => {

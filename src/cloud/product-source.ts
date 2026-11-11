@@ -39,6 +39,7 @@ import {
   parseMarketplaceProductFields,
   type MarketplaceTradePlatform,
 } from "../handoff/marketplace-product-link.js";
+import type { TradePlatformRule } from "../handoff/trade-platform-rules.js";
 
 /** 商品表 schema 版本（与交接包控制面同版）。 */
 export const PRODUCT_TABLE_SCHEMA_VERSION = "0.1.2";
@@ -127,7 +128,11 @@ function requireIso(value: unknown, field: string): string {
 }
 
 /** 严格解析商品表：任何结构问题都抛错（不"尽力解析"半个表）。 */
-export function parseProductTable(value: unknown, source: string): CloudProductTable {
+export function parseProductTable(
+  value: unknown,
+  source: string,
+  platformRules?: readonly TradePlatformRule[],
+): CloudProductTable {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new ProductTableError("PRODUCT_TABLE_INVALID", `商品表必须是 JSON 对象：${source}`);
   }
@@ -171,10 +176,13 @@ export function parseProductTable(value: unknown, source: string): CloudProductT
     }
     let tradeFields;
     try {
-      tradeFields = parseMarketplaceProductFields({
-        trade_platform: record["trade_platform"],
-        platform_product_id: record["platform_product_id"],
-      });
+      tradeFields = parseMarketplaceProductFields(
+        {
+          trade_platform: record["trade_platform"],
+          platform_product_id: record["platform_product_id"],
+        },
+        platformRules,
+      );
     } catch (error) {
       if (error instanceof MarketplaceProductLinkError) {
         throw new ProductTableError(
@@ -225,6 +233,8 @@ export interface FileProductSourceOptions {
   file: string;
   /** 运行实例的商家 id（租户边界；不一致即拒绝）。 */
   merchantId: string;
+  /** 运营配置的交易平台规则；缺省使用内置 jd/taobao/tmall。 */
+  platformRules?: readonly TradePlatformRule[];
   now?: () => number;
 }
 
@@ -261,7 +271,7 @@ export function createFileProductSource(
     if (cached !== undefined && cached.raw === raw) return cached.table;
     let table: CloudProductTable;
     try {
-      table = parseProductTable(JSON.parse(raw) as unknown, options.file);
+      table = parseProductTable(JSON.parse(raw) as unknown, options.file, options.platformRules);
     } catch (err) {
       if (err instanceof ProductTableError) throw err;
       throw new ProductTableError(
@@ -322,6 +332,7 @@ export function createFileProductSource(
         const handoffDestination = buildMarketplaceProductLink(
           record.trade_platform,
           record.platform_product_id,
+          options.platformRules,
         );
         return {
           sku: record.sku,
@@ -367,12 +378,16 @@ export interface ProductTableSnapshot {
 }
 
 /** 读当前商品表快照（管理面读投影与导入 CAS 共用；解析/租户失败抛错 → 上层 503）。 */
-export function loadProductTableSnapshot(file: string, merchantId: string): ProductTableSnapshot {
+export function loadProductTableSnapshot(
+  file: string,
+  merchantId: string,
+  platformRules?: readonly TradePlatformRule[],
+): ProductTableSnapshot {
   if (!existsSync(file)) {
     return { table: undefined, digest: "", records: [] };
   }
   const raw = readFileSync(file, "utf8");
-  const table = parseProductTable(JSON.parse(raw) as unknown, file);
+  const table = parseProductTable(JSON.parse(raw) as unknown, file, platformRules);
   if ((table.runtime_owner_id ?? table.merchant_id) !== merchantId) {
     throw new ProductTableError(
       "PRODUCT_TABLE_TENANT_MISMATCH",
@@ -391,8 +406,9 @@ export function commitProductTable(
   file: string,
   merchantId: string,
   table: CloudProductTable,
+  platformRules?: readonly TradePlatformRule[],
 ): { digest: string } {
-  const checked = parseProductTable(table, file);
+  const checked = parseProductTable(table, file, platformRules);
   if ((checked.runtime_owner_id ?? checked.merchant_id) !== merchantId) {
     throw new ProductTableError(
       "PRODUCT_TABLE_TENANT_MISMATCH",
