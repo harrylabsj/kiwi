@@ -28,6 +28,15 @@ test('builds separate asset ZIPs and an inspectable status report',()=>{
     assert.equal(report.assets.some(asset=>asset.name==='Kiwi购物智能体'&&asset.status==='HOLD'),false);
     const sidecar=JSON.parse(readFileSync(join(out,'oe_37aed7f0a679e6d4-v1.1.0.zip.manifest.json'),'utf8'));
     assert.match(sidecar.source.mapping,/uploaded ZIP hash unknown/);
+    const onboarding=report.assets.find(asset=>asset.id==='oe_eee5ab6349f00203'&&asset.version==='0.1.6');
+    assert.equal(onboarding?.status,'CANDIDATE_PACKAGE_BUILT');
+    const onboardingSidecar=JSON.parse(readFileSync(join(out,'oe_eee5ab6349f00203-v0.1.6.zip.manifest.json'),'utf8'));
+    const onboardingFiles=onboardingSidecar.package.files.map(file=>file.path);
+    assert.ok(onboardingFiles.includes('kiwi-onboarding-advisor/skills/kiwi-cloud-deploy/first-publish/index.js'));
+    assert.ok(onboardingFiles.includes('kiwi-onboarding-advisor/skills/kiwi-cloud-deploy/first-publish/package.json'));
+    assert.ok(onboardingFiles.includes('kiwi-onboarding-advisor/skills/kiwi-cloud-deploy/first-publish/README.md'));
+    const immutableSidecar=JSON.parse(readFileSync(join(out,'oe_eee5ab6349f00203-v0.1.5.zip.manifest.json'),'utf8'));
+    assert.equal(immutableSidecar.package.files.some(file=>file.path.includes('/first-publish/')),false);
     const names=readdirSync(out);
     const zips=names.filter(name=>name.endsWith('.zip'));
     assert.equal(zips.length,report.status_counts.built+report.status_counts.candidate);

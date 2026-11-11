@@ -29,6 +29,7 @@ mkdirSync(dirname(outDir),{recursive:true});
 assertRealPathOutsideRepository(dirname(outDir));
 mkdirSync(outDir,{recursive:true});
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
+const SKILL_RESOURCE_DIRS=new Set(['references','scripts','templates','package','first-publish']);
 function assetRoot(asset){
   const p=resolve(here,asset.source);assert(p.startsWith(`${here}${sep}`),`Asset source escapes directory: ${asset.source}`);
   assert(realpathSync(p).startsWith(`${realpathSync(here)}${sep}`),`Asset source resolves outside directory: ${asset.source}`);return p;
@@ -58,7 +59,7 @@ function expertSnapshot(asset,staging,output){
     if(listName==='agents'){assert(lstatSync(p).isFile(),`Missing expert agent file: ${ref}`);files.add(rel);}
     else{
       assert(lstatSync(p).isDirectory(),`Missing expert skill directory: ${ref}`);
-      const found=new Set();collectAllowed(p,root,new Set(['references','scripts','templates','package']),found);
+      const found=new Set();collectAllowed(p,root,SKILL_RESOURCE_DIRS,found);
       assert(found.has(`${rel}/SKILL.md`),`Missing referenced SKILL.md: ${ref}`);for(const f of found)files.add(f);
     }
   }
@@ -91,7 +92,7 @@ function parseSkill(asset,staging,output){
   for(const required of ['name','display_name','display_name_en','description','description_zh','description_en','version','author'])assert(field(required),`Skill ${asset.id} missing ${required}`);
   assert.equal(field('version'),asset.platform_version,`Skill ${asset.id}: local version does not match historical platform version`);
   assert(/^[a-z0-9-]+$/.test(field('name')),'Invalid skill package root name');
-  const files=new Set();collectAllowed(root,root,new Set(['references','scripts','templates','package']),files);files.add('SKILL.md');
+  const files=new Set();collectAllowed(root,root,SKILL_RESOURCE_DIRS,files);files.add('SKILL.md');
   const names=[...files].sort();
   const rootName=field('name');const copyRoot=join(staging,rootName);mkdirSync(copyRoot,{recursive:true});
   for(const rel of names){const src=join(root,rel);assert(lstatSync(src).isFile()&&!lstatSync(src).isSymbolicLink());const dest=join(copyRoot,rel);mkdirSync(dirname(dest),{recursive:true});copyFileSync(src,dest);}

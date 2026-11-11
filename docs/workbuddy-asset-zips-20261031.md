@@ -23,7 +23,7 @@ This test command passed 4/4 checks on 2026-10-31, including a complete temporar
 ## Package checks
 
 - Standalone experts and expert teams use the official basic layout: one root directory containing `.codebuddy-plugin/plugin.json`, its declared agent/skill/avatar files, and `README.md`. Local version must match the manifest row. ZIP entries are compared with the enumerated files and `unzip -t` is run.
-- Standalone skills use the official basic layout: one root directory containing `SKILL.md`, with only `references/`, `scripts/`, `templates/`, or the existing cloud skill `package/` content as subresources. Required frontmatter fields and exact version are checked. ZIP entries are compared with the allowlisted files and `unzip -t` is run.
+- Standalone skills use the official basic layout: one root directory containing `SKILL.md`, with only `references/`, `scripts/`, `templates/`, `package/`, or `first-publish/` content as subresources. Required frontmatter fields and exact version are checked. ZIP entries are compared with the allowlisted files and `unzip -t` is run.
 - Connector ZIPs are produced by the existing connector-specific project packagers, which validate their declared package structure. The package ZIP hash is recorded in its sidecar.
 - No directory is zipped wholesale. Experts derive included content from `plugin.json` references; skill subresources are restricted to named resource directories. Symlinks and path traversal are rejected.
 

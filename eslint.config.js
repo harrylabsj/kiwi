@@ -52,7 +52,7 @@ export default [
     // kiwi-dsh-plugin（纯 ESM JS 插件包）在 dsh 宿主下以 Node 运行。
     files: [
       "integrations/plugins/kiwi-dsh-plugin/**/*.{js,mjs}",
-      "integrations/hosts/workbuddy/**/*.mjs",
+      "integrations/hosts/workbuddy/**/*.{js,mjs}",
     ],
     languageOptions: {
       globals: { ...globals.node },

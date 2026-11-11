@@ -289,10 +289,21 @@
       "id": "oe_eee5ab6349f00203",
       "name": "开通顾问",
       "platform_version": "0.1.5",
-      "observed_state": "candidate built locally on 2026-11-05; not uploaded/reviewed",
+      "observed_state": "reviewing (user-reported); immutable submitted candidate; local source preserved unchanged",
       "source": "kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.1.5",
       "source_version": "0.1.5",
-      "mapping": "local candidate; not uploaded",
+      "mapping": "submitted candidate; local source unchanged; uploaded archive hash unknown",
+      "bundle_mode": "candidate-source"
+    },
+    {
+      "kind": "expert",
+      "id": "oe_eee5ab6349f00203",
+      "name": "开通顾问",
+      "platform_version": "0.1.6",
+      "observed_state": "local candidate; not uploaded/reviewed",
+      "source": "kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.1.6",
+      "source_version": "0.1.6",
+      "mapping": "local candidate; npm latest resolved once by cloud-session stage; adds fixed skills/kiwi-cloud-deploy/first-publish bootstrap; embedded skill 0.3.3 (not independently published); independent 0.3.2 unchanged",
       "bundle_mode": "candidate-source"
     },
     {
