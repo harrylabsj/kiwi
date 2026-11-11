@@ -1,18 +1,25 @@
 # Kiwi 平台发布版本台账
 
-最后核验：2026-11-10（北京时间）。本表记录**已观察到的版本与当时状态**，不是实时查询；候选代码、注册表版本、平台审核和实际云端运行分开记录。部署、上线或发布新版本后，应补充平台链接、版本、状态、核验时间与回执；不得以代码提交或审核提交代替上线证据。
+最后核验：2026-11-11（北京时间）。本表记录**已观察到的版本与当时状态**，不是实时查询；候选代码、注册表版本、平台审核和实际云端运行分开记录。部署、上线或发布新版本后，应补充平台链接、版本、状态、核验时间与回执；不得以代码提交或审核提交代替上线证据。
 
 ## npm 与 PyPI
 
 | 平台 | 产品 | 已确认版本 | 证据与限制 |
 |---|---|---:|---|
-| npm | `@harrylabsj/kiwi` | 0.12.27 | 2026-11-10 查询 npm metadata 并下载 tarball：SHA-512 与 registry integrity 一致，存在 SLSA provenance。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.27)。 |
-| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.27 | 2026-11-10 查询 npm metadata 并下载 tarball：SHA-512 与 registry integrity 一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.27)。npm 发布不代表商家云端已部署或通过验收。 |
-| npm | `@harrylabsj/kiwi-dsh-plugin` | 0.1.2 | 2026-10-28 查询 npm 该指定版本存在。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-dsh-plugin/v/0.1.2)。 |
-| PyPI | `kiwi-catalog` | 0.5.17 | 2026-11-10 查询 PyPI 该指定版本，wheel 已核验包含 schema v50；生产 kiwi-hk 已部署 0.5.17 + admin 0.2.15。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.17/)。 |
-| PyPI | `shopping-cli` | 3.2.6 | 2026-10-28 查询 PyPI 该指定版本，返回两个发布文件。[PyPI 版本页](https://pypi.org/project/shopping-cli/3.2.6/)。 |
+| npm | `@harrylabsj/kiwi` | 0.12.28 | 2026-11-11 portfolio run [43005756999](https://github.com/harrylabsj/kiwi/actions/runs/43005756999) 发布并由 `verify-registry` 回读核验；npm latest 为 0.12.28。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.28)。 |
+| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.28 | 2026-11-11 同一 portfolio run 发布并回读核验；npm 可查 0.12.28。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.28)。 |
+| npm | `@harrylabsj/kiwi-dsh-plugin` | 0.1.4 | 2026-11-11 同一 portfolio run 发布并回读核验；npm 可查 0.1.4。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-dsh-plugin/v/0.1.4)。 |
+| PyPI | `kiwi-catalog` | 0.5.20 | 2026-11-11 同一 portfolio run 发布并回读核验；生产 kiwi-hk 已部署 0.5.20 + admin 0.2.18，schema user_version=54。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.20/)。 |
+| PyPI | `shopping-cli` | 3.2.11 | 2026-11-11 同一 portfolio run 发布并回读核验；PyPI 可查 3.2.11。[PyPI 版本页](https://pypi.org/project/shopping-cli/3.2.11/)。 |
 
-上表确认指定版本可查，不声称它们必然是 registry 当前 latest。`kiwi-catalog-admin` 0.2.5 据发布负责人提供为源码已推送；私有仓发布 tag、部署位置及生产运行版本尚未核实，不计入已发布 registry 制品。
+上表确认指定版本可查，不声称它们必然是 registry 当前 latest（`@harrylabsj/kiwi` 已另行确认 latest=0.12.28）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
+
+## 2026-11-11 kiwi 0.12.28 发布与生产部署
+
+- 发布源：kiwi `1b16cfac`，catalog `8933e797`，shopping-cli `5ee2163`；真实端到端验收回执已提交于 `95c82c2f`。
+- GitHub run：[43005756999](https://github.com/harrylabsj/kiwi/actions/runs/43005756999)，build、五个 registry publish job 与 fail-closed `verify-registry` 均成功；发布前 dry-run 为 [43000526448](https://github.com/harrylabsj/kiwi/actions/runs/43000526448)。
+- 生产 catalog：`/opt/kiwi-catalog-0.5.20-admin-0.2.18`，schema `54`，`integrity_check=ok`，`/v1/marketplace-platforms` 返回 jd/taobao/tmall，四个 dashboard tab 均为 200。部署前 DB 快照为 `/opt/kiwi-catalog-backups/catalog.sqlite.bak-20261111-181719`。
+- 生产网关：`/opt/kiwi-gateway/app` 已升级到 npm 包 `@harrylabsj/kiwi@0.12.28`；`node dist/cli.js --version` 输出 `kiwi 0.12.28`，`https://merchant.kiwi.harrylabsj.com/health` 与 OAuth metadata 正常。旧应用保留在 `/opt/kiwi-gateway/app.prev-20261111-190520`。
 
 ## WorkBuddy 开放平台
 
