@@ -214,7 +214,9 @@ describe("merchant-cloud protected portfolio release", () => {
       }>;
     };
     const publish = doc.jobs["publish-kiwi-merchant-cloud"];
-    expect(publish?.if).toBe("inputs.publish == true");
+    expect(publish?.if).toBe(
+      "inputs.publish == true && (inputs.channels == 'all' || contains(inputs.channels, 'merchant-cloud'))",
+    );
     expect(publish?.environment).toBe("kiwi-release");
     expect(publish?.permissions?.["id-token"]).toBe("write");
     expect(publish?.steps?.map((step) => step.run ?? "").join("\n")).toContain("npm publish \"${TARBALL}\" --provenance --access public");
@@ -229,10 +231,20 @@ describe("default release npm 12 toolchain contract", () => {
     const doc = YAML.parse(readFileSync(join(WORKFLOWS_DIR, "portfolio-release.yml"), "utf8"));
     const publishers = ["publish-npm", "publish-dsh-plugin", "publish-kiwi-merchant-cloud", "publish-kiwi-catalog", "publish-shopping-cli"];
     expect(doc.on.workflow_dispatch.inputs.publish.default).toBe(false);
+    expect(doc.on.workflow_dispatch.inputs.channels.default).toBe("all");
     expect(Object.keys(doc.on.workflow_dispatch.inputs)).not.toContain("publication_scope");
     expect(doc.concurrency).toEqual({ group: "portfolio-release", "cancel-in-progress": false });
+    const channelByJob: Record<string, string> = {
+      "publish-npm": "npm",
+      "publish-dsh-plugin": "dsh-plugin",
+      "publish-kiwi-merchant-cloud": "merchant-cloud",
+      "publish-kiwi-catalog": "kiwi-catalog",
+      "publish-shopping-cli": "shopping-cli",
+    };
     for (const name of publishers) {
-      expect(doc.jobs[name].if).toBe("inputs.publish == true");
+      expect(doc.jobs[name].if).toBe(
+        `inputs.publish == true && (inputs.channels == 'all' || contains(inputs.channels, '${channelByJob[name]}'))`,
+      );
       expect(doc.jobs[name].environment).toBe("kiwi-release");
       expect(doc.jobs[name].permissions["id-token"]).toBe("write");
     }

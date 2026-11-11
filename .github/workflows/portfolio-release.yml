@@ -74,6 +74,17 @@ on:
         required: false
         default: false
         type: boolean
+      channels:
+        description: >-
+          Comma-separated publish channels when publish=true: all (default),
+          npm, dsh-plugin, merchant-cloud, kiwi-catalog, shopping-cli.
+          Non-selected channels are skipped. verify-registry only runs for a
+          full "all" publish: the built manifest contains unpublished
+          artifacts for skipped channels, so a partial run must verify its
+          own channel manually.
+        required: false
+        default: "all"
+        type: string
       ref:
         description: >-
           Central kiwi source ref or full 40-char commit SHA to build and
@@ -142,6 +153,26 @@ jobs:
           else
             echo "central ref is a named ref (dry-run only): ${REF}"
           fi
+
+      - name: Validate publish channel selection
+        env:
+          CHANNELS_INPUT: ${{ inputs.channels }}
+          PUBLISH_INPUT: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          CHANNELS="$(printf '%s' "${CHANNELS_INPUT}" | tr -d '[:space:]')"
+          if [[ -z "${CHANNELS}" ]]; then
+            echo "error: channels input is empty" >&2
+            exit 1
+          fi
+          IFS=',' read -r -a SELECTED <<< "${CHANNELS}"
+          for channel in "${SELECTED[@]}"; do
+            case "${channel}" in
+              all|npm|dsh-plugin|merchant-cloud|kiwi-catalog|shopping-cli) ;;
+              *) echo "error: unknown release channel '${channel}'" >&2; exit 1 ;;
+            esac
+          done
+          echo "publish=${PUBLISH_INPUT}; channels=${CHANNELS}"
 
       # The lock's central kiwi entry (repositories.kiwi.commit) is a SHA-shaped
       # composition snapshot anchor, not a self-referential commit: a commit
@@ -497,7 +528,7 @@ jobs:
   publish-npm:
     name: Publish @harrylabsj/kiwi to npm (protected kiwi-release)
     needs: build-once
-    if: inputs.publish == true
+    if: inputs.publish == true && (inputs.channels == 'all' || contains(inputs.channels, 'npm'))
     runs-on: ubuntu-latest
     environment: kiwi-release
     # published=true 表示本 run 真实发布了新版本；false 表示版本已存在幂等
@@ -582,7 +613,7 @@ jobs:
   publish-dsh-plugin:
     name: Publish @harrylabsj/kiwi-dsh-plugin to npm (protected kiwi-release)
     needs: build-once
-    if: inputs.publish == true
+    if: inputs.publish == true && (inputs.channels == 'all' || contains(inputs.channels, 'dsh-plugin'))
     runs-on: ubuntu-latest
     environment: kiwi-release
     outputs:
@@ -641,7 +672,7 @@ jobs:
   publish-kiwi-merchant-cloud:
     name: Publish @harrylabsj/kiwi-merchant-cloud to npm (protected kiwi-release)
     needs: build-once
-    if: inputs.publish == true
+    if: inputs.publish == true && (inputs.channels == 'all' || contains(inputs.channels, 'merchant-cloud'))
     runs-on: ubuntu-latest
     environment: kiwi-release
     outputs:
@@ -697,7 +728,7 @@ jobs:
   publish-kiwi-catalog:
     name: Publish kiwi-catalog to PyPI (protected kiwi-release)
     needs: build-once
-    if: inputs.publish == true
+    if: inputs.publish == true && (inputs.channels == 'all' || contains(inputs.channels, 'kiwi-catalog'))
     runs-on: ubuntu-latest
     environment: kiwi-release
     outputs:
@@ -761,7 +792,7 @@ jobs:
   publish-shopping-cli:
     name: Publish shopping-cli to PyPI (protected kiwi-release)
     needs: build-once
-    if: inputs.publish == true
+    if: inputs.publish == true && (inputs.channels == 'all' || contains(inputs.channels, 'shopping-cli'))
     runs-on: ubuntu-latest
     environment: kiwi-release
     outputs:
