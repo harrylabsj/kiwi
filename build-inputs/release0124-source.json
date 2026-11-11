@@ -2670,11 +2670,11 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:8ef680f5affa90b533d9f0bd196c549cdaf291ec1279ab83359e3ec044293787"
+      "sha256": "sha256:66cd870bffbb0469111a01ef2d71e6c83bdea687ec95d136613ade8184747502"
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:2b8118c5288a861063f0359990d53ba5d0805c80b62a251ca6f18ed72abdfbc3"
+      "sha256": "sha256:e458bdd409f8518fef753ca32b891260f56a369c0c860aa07b41824e620458a5"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
@@ -3802,7 +3802,7 @@
     },
     {
       "path": "src/cloud/bootstrap.ts",
-      "sha256": "sha256:04a07dc9602f0b63c29a14803b2928305e3053b541d5c61eef9124bb208e538b"
+      "sha256": "sha256:63923ff123e13790f7136afeabe2601bde7eac00db0c961b8475d207a356c711"
     },
     {
       "path": "src/cloud/catalog-client.ts",
@@ -3818,7 +3818,7 @@
     },
     {
       "path": "src/cloud/file-listing-publication.ts",
-      "sha256": "sha256:f0a273dad6afcf45afe0a833b12dfa76bd79a8d34ea2b4627526bebd02337f1e"
+      "sha256": "sha256:7bd2cb12d02ee07775fdb5af96aa889ef38e958d32721eeb0fdabdd9846b8e6e"
     },
     {
       "path": "src/cloud/http-router.ts",
@@ -3870,15 +3870,19 @@
     },
     {
       "path": "src/cloud/product-import-tabular.ts",
-      "sha256": "sha256:4b2a138d9ea3e742468899f12524a6494530583e21583ddddfc39b3a77c5704e"
+      "sha256": "sha256:3771dedea7f10ac3d686ad374fde9dfba8f2b33782d14e4479e082c0edbc4305"
     },
     {
       "path": "src/cloud/product-source.ts",
-      "sha256": "sha256:e50ddc4af1fc15e42df6beb0acd9f57797ed12b2b8f6eb078aef7955d3efba91"
+      "sha256": "sha256:1fd368485c58ae2f8f547cc90267b7cd1c5a2ce2b707d8f785dc18161da83fca"
     },
     {
       "path": "src/cloud/readiness.ts",
       "sha256": "sha256:012346b275bb04b0a4413081e1e637a6e39ae97125fec492121ad53a8a8f0aa3"
+    },
+    {
+      "path": "src/cloud/trade-platforms-client.ts",
+      "sha256": "sha256:dcf53d3ea4990338ef44d17590a6fdd3ddb21261223ade9bf9a1b5e572209344"
     },
     {
       "path": "src/commerce/data-source.ts",
@@ -4182,7 +4186,7 @@
     },
     {
       "path": "src/handoff/marketplace-product-link.ts",
-      "sha256": "sha256:e4eeca504fd6eb6f4f38a5960042f3d7d2958f0599f00b91d13aafcc3a96e81b"
+      "sha256": "sha256:abfcc5cb9c1207f6b38272b7ff181ea14bf89e297ea7189f14e5af76fcd171d8"
     },
     {
       "path": "src/handoff/metrics.ts",
@@ -4199,6 +4203,10 @@
     {
       "path": "src/handoff/package.ts",
       "sha256": "sha256:7c8cd00cfff208906e07682eb623ba1abab9226a5bfb07fa403cd6f7c4b9328a"
+    },
+    {
+      "path": "src/handoff/trade-platform-rules.ts",
+      "sha256": "sha256:e5bc65d28ac1e496a154d12b74fb62a0ebd8cead388d40e442bb6d5c0a6e73dc"
     },
     {
       "path": "src/handoff/transaction.ts",
@@ -4270,7 +4278,7 @@
     },
     {
       "path": "src/http/merchant-management/api.ts",
-      "sha256": "sha256:9ccb2c2ef2970315bd128cc3958efca52654eef33018a6117a31e9b01019fa11"
+      "sha256": "sha256:5de9a1fc49eea309bef9f826742a53f8d26aa0f759b9b2727a5d583bd3ada9ff"
     },
     {
       "path": "src/http/merchant-management/draft-store.ts",
@@ -4286,7 +4294,7 @@
     },
     {
       "path": "src/http/merchant-management/page.ts",
-      "sha256": "sha256:9ddc5a2023c11f1980b24830d95c8466d47d406132b4916703b8d2e82dcf36bd"
+      "sha256": "sha256:25de090c44ad18effacd9274c4dad2a854e6c04f694edfa20a712e327fdb6a9c"
     },
     {
       "path": "src/http/merchant-management/problem-client.ts",
@@ -4834,7 +4842,7 @@
     },
     {
       "path": "src/merchant/application/service.ts",
-      "sha256": "sha256:d65aad6a812ee1e3b4f549051510850f26fddd61314395c36d741eabe96f7e15"
+      "sha256": "sha256:06729fb434c280fb469049ff65643b9caefe53aca97f1861984fafe71b0e6db1"
     },
     {
       "path": "src/merchant/clock-safety.ts",
@@ -6016,7 +6024,7 @@
     },
     {
       "path": "tests/cloud-product-import-tabular.test.ts",
-      "sha256": "sha256:235aca42f9d52f44328d16aa4c3d2aa842326f335aec70875aa04d13614551fd"
+      "sha256": "sha256:bf835114d3598b04dbca656aed0f43f38ffc0d9e62677cc56102f015b5308f1c"
     },
     {
       "path": "tests/cloud-product-table.test.ts",
@@ -7349,6 +7357,10 @@
     {
       "path": "tests/tools-guard.test.ts",
       "sha256": "sha256:321288732ec4646a85edd21cce7c299c224bfca62cba6b4f28dee4740d18ee3c"
+    },
+    {
+      "path": "tests/trade-platform-rules.test.ts",
+      "sha256": "sha256:c9af0d61001c0ae3fc8f508bb6fe229fca1a94e8883e6c907631e0a63ebb4cf7"
     },
     {
       "path": "tests/trust-auth-verifier-integration.test.ts",
