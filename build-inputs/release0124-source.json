@@ -158,7 +158,7 @@
     },
     {
       "path": ".github/workflows/portfolio-release.yml",
-      "sha256": "sha256:41b2786e4ec55f375c9765cbd3b880c42f6f6b2fe7abd785cfa278c90181ef77"
+      "sha256": "sha256:71b739a359bd526c708c0b84bfa9fe04b4367e32df28c81d5b7b44a723ca2743"
     },
     {
       "path": ".github/workflows/release-rehearsal.yml",
@@ -2670,11 +2670,11 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:7b6ebf24f6908f814c62401ae9bf1f0e281b327b446f1d77a1fc5923df32b2fe"
+      "sha256": "sha256:8ef680f5affa90b533d9f0bd196c549cdaf291ec1279ab83359e3ec044293787"
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:d3b1ded6d7db24af10bcc699b2a4e819ea3697425dbeaa1236d304e6223d72f5"
+      "sha256": "sha256:2b8118c5288a861063f0359990d53ba5d0805c80b62a251ca6f18ed72abdfbc3"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
@@ -7500,7 +7500,7 @@
     },
     {
       "path": "tests/workflow-refs.test.ts",
-      "sha256": "sha256:23fae3c3b9bb2983f2a022ef90d9160ce2e8207051382d1a7a72111350b97f6f"
+      "sha256": "sha256:8a79d9126a97550def6c0fe958a0eefcf7087b0b3ddb3b23c9c1181914e4bf69"
     },
     {
       "path": "tests/write-approval-candidate-store.test.ts",
