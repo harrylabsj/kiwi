@@ -4,8 +4,8 @@
 #
 # Proves: buyer message -> merchant counter -> buyer accept_nonbinding.
 # Both claims end processed, exactly 3 structured messages, next_actor is
-# correct, no duplicates, stock untouched, and the database has no
-# order/payment/reservation tables at all.
+# correct, no duplicates, stock untouched, and this flow adds no
+# order/payment/transaction/reservation records (schema may pre-exist).
 #
 # The script is read-only w.r.t. the shopping-cli repo and cleans up after
 # itself: it kills only the server PID it started and removes only its own
@@ -89,6 +89,30 @@ for _ in $(seq 1 40); do
   sleep 0.5
 done
 curl -sf "${BASE}/health" >/dev/null || { echo "server did not start"; cat "${WORK}/server.log"; exit 1; }
+
+# Baseline commerce-record counts AFTER server startup (which runs schema
+# migrations) but BEFORE any business flow. Newer shopping-cli releases
+# pre-create empty order-fact tables; schema existence is not an order. The
+# safety boundary is that this flow creates no order/payment/transaction
+# record, so compare row counts instead of banning table names.
+COMMERCE_BASELINE="${WORK}/commerce-baseline.json"
+"${PY}" - "${SHOPPING_DB}" "${COMMERCE_BASELINE}" <<'PYEOF'
+import json
+import sqlite3
+import sys
+
+db_path, out_path = sys.argv[1], sys.argv[2]
+conn = sqlite3.connect(db_path)
+banned = ("order", "payment", "transaction", "trade", "reserv")
+counts = {}
+for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"):
+    if any(marker in name.lower() for marker in banned):
+        quoted = '"' + name.replace('"', '""') + '"'
+        counts[name] = conn.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0]
+with open(out_path, "w", encoding="utf-8") as handle:
+    json.dump(counts, handle, ensure_ascii=False, sort_keys=True)
+print(f"== commerce-record baseline: {counts}")
+PYEOF
 
 json_get() { "${PY}" -c "import json,sys;print(json.load(sys.stdin)$1)"; }
 
@@ -200,12 +224,14 @@ echo "== kiwi buyer fake --once again (expect no_work, no duplicate write)"
 node "${KIWI_ROOT}/dist/cli.js" agent run --profile "${BUYER_PROFILE}" --once
 
 echo "== final assertions against the real database"
-"${PY}" - "${SHOPPING_DB}" "${CONV_ID}" <<'PYEOF'
+"${PY}" - "${SHOPPING_DB}" "${CONV_ID}" "${COMMERCE_BASELINE}" <<'PYEOF'
 import json
 import sqlite3
 import sys
 
-db_path, conv_id = sys.argv[1], sys.argv[2]
+db_path, conv_id, baseline_path = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(baseline_path, encoding="utf-8") as handle:
+    commerce_before = json.load(handle)
 conn = sqlite3.connect(db_path)
 cur = conn.cursor()
 
@@ -254,10 +280,35 @@ assert agents == [
 (stock,) = cur.execute("SELECT stock FROM products WHERE sku='sku-001'").fetchone()
 assert stock == 12, stock
 
-# No order/payment/reservation tables exist at all (structural no-order boundary).
-tables = [r[0].lower() for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-for banned in ("order", "payment", "reserv"):
-    assert not any(banned in t for t in tables), f"forbidden table matching {banned}: {tables}"
+# No order/payment/transaction *records*. Newer shopping-cli releases
+# pre-create empty fact tables (e.g. order_facts) during migration; that schema
+# is not an order. Recompute the same table set and require every pre-existing
+# table to keep its exact row count, and any newly created matching table to be
+# empty. A row delta means this flow recorded commerce.
+banned = ("order", "payment", "transaction", "trade", "reserv")
+commerce_after = {}
+# Snapshot the table names first: the same cursor is reused for the COUNT
+# queries below, and executing on it would otherwise reset the outer
+# sqlite_master iteration after the first matching table.
+table_names = [row[0] for row in cur.execute(
+    "SELECT name FROM sqlite_master WHERE type='table'"
+).fetchall()]
+for name in table_names:
+    if any(marker in name.lower() for marker in banned):
+        quoted = '"' + name.replace('"', '""') + '"'
+        commerce_after[name] = cur.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0]
+for name, before_count in commerce_before.items():
+    assert name in commerce_after, f"commerce table disappeared during flow: {name}"
+    after_count = commerce_after[name]
+    assert after_count == before_count, (
+        f"negotiation added {after_count - before_count} row(s) to {name}: "
+        f"before={before_count}, after={after_count}"
+    )
+for name, after_count in commerce_after.items():
+    if name not in commerce_before:
+        assert after_count == 0, (
+            f"negotiation created {after_count} row(s) in new commerce table {name}"
+        )
 
 # Audit chain complete.
 events = [
@@ -278,6 +329,6 @@ assert events.count("negotiation_policy_accepted") == 2, events
 print(
     "E2E OK: buyer ask -> merchant counter -> buyer accept_nonbinding; "
     "3 messages, next_actor=merchant_agent, 2 claims processed, "
-    "stock=12, no order/payment/reservation tables"
+    "stock=12, no new order/payment/transaction rows"
 )
 PYEOF
