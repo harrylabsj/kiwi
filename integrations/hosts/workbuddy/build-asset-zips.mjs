@@ -65,6 +65,13 @@ function expertSnapshot(asset,staging,output){
   }
   assert(typeof plugin.avatar==='string','Expert must reference avatar');
   const avatar=safeRef(root,plugin.avatar);assert(lstatSync(avatar.p).isFile(),`Missing avatar ${plugin.avatar}`);files.add(avatar.rel);
+  // 团队包：每位成员的头像也必须在包内，否则平台解析会报 members[].avatar 不存在。
+  for(const member of plugin.members??[]){
+    assert(typeof member?.avatar==='string',`Member ${member?.id??'?'} must reference avatar`);
+    const memberAvatar=safeRef(root,member.avatar);
+    assert(lstatSync(memberAvatar.p).isFile(),`Missing member avatar ${member.avatar}`);
+    files.add(memberAvatar.rel);
+  }
   for(const extra of ['setting.json','settings.json'])if(existsSync(join(root,extra)))files.add(extra);
   const name=plugin.name;assert(/^[a-z0-9-]+$/.test(name),'Invalid expert package root name');
   // Use an isolated staging copy, keeping the package's required single root directory.

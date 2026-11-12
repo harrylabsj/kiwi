@@ -289,10 +289,10 @@
       "id": "oe_eee5ab6349f00203",
       "name": "开通顾问",
       "platform_version": "0.1.5",
-      "observed_state": "reviewing (user-reported); immutable submitted candidate; local source preserved unchanged",
+      "observed_state": "review withdrawn; immutable submitted candidate; local source preserved unchanged",
       "source": "kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.1.5",
       "source_version": "0.1.5",
-      "mapping": "submitted candidate; local source unchanged; uploaded archive hash unknown",
+      "mapping": "review withdrawn 2026-11-12 19:40 on the WorkBuddy open platform to republish 0.1.7; local source unchanged; uploaded archive hash unknown",
       "bundle_mode": "candidate-source"
     },
     {
@@ -304,6 +304,17 @@
       "source": "kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.1.6",
       "source_version": "0.1.6",
       "mapping": "local candidate; npm latest resolved once by cloud-session stage; adds fixed skills/kiwi-cloud-deploy/first-publish bootstrap; embedded skill 0.3.3 (not independently published); independent 0.3.2 unchanged",
+      "bundle_mode": "candidate-source"
+    },
+    {
+      "kind": "expert",
+      "id": "oe_eee5ab6349f00203",
+      "name": "开通顾问",
+      "platform_version": "0.1.7",
+      "observed_state": "submitted for review; result pending",
+      "source": "kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.1.7",
+      "source_version": "0.1.7",
+      "mapping": "local candidate; adds verified in-place upgrade procedure (swap program files only, keep cloud.config.json + pilot/merchant.yaml, verify version via content hash or version-unique marker); embedded skill 0.3.4 (not independently published); 0.1.5 immutable and 0.1.6 unchanged; uploaded 2026-11-12 19:41 as oe_eee5ab6349f00203 v0.1.7 on the WorkBuddy open platform, review result pending",
       "bundle_mode": "candidate-source"
     },
     {
@@ -322,10 +333,21 @@
       "id": "oe_a2d0c6cc725719bd",
       "name": "报价助理",
       "platform_version": "0.1.4",
-      "observed_state": "candidate built locally on 2026-11-06 after the 0.1.3 quality rejection; not uploaded/reviewed",
+      "observed_state": "review withdrawn; local source preserved unchanged",
       "source": "kiwi-merchant-buddy/experts/kiwi-catalog-assistant-0.1.4",
       "source_version": "0.1.4",
-      "mapping": "local candidate; not uploaded",
+      "mapping": "candidate built locally 2026-11-06 after the 0.1.3 quality rejection; uploaded and under review as of 2026-11-12; review withdrawn 2026-11-12 20:14 to republish 0.1.5; uploaded archive hash unknown",
+      "bundle_mode": "candidate-source"
+    },
+    {
+      "kind": "expert",
+      "id": "oe_a2d0c6cc725719bd",
+      "name": "报价助理",
+      "platform_version": "0.1.5",
+      "observed_state": "submitted for review; result pending",
+      "source": "kiwi-merchant-buddy/experts/kiwi-catalog-assistant-0.1.5",
+      "source_version": "0.1.5",
+      "mapping": "local candidate; adds append-publish guidance (import stays full-table replace, publishing adds only unpublished SKUs via the workbench catalog-status column); embedded kiwi-product-import bumped 0.1.0 -> 0.2.0 (platform trade columns synced from the team candidate); uploaded 2026-11-12 20:15 as oe_a2d0c6cc725719bd v0.1.5 on the WorkBuddy open platform, review result pending",
       "bundle_mode": "candidate-source"
     },
     {
@@ -355,10 +377,21 @@
       "id": "oe_a1da12ace3d9c62c",
       "name": "Kiwi开店团队",
       "platform_version": "0.1.4",
-      "observed_state": "candidate built locally on 2026-11-05; not uploaded/reviewed",
+      "observed_state": "review withdrawn; local source preserved unchanged",
       "source": "kiwi-merchant-buddy/experts/kiwi-launch-team-0.1.4",
       "source_version": "0.1.4",
-      "mapping": "local candidate; not uploaded",
+      "mapping": "uploaded earlier and under review as of 2026-11-12; review withdrawn 2026-11-12 19:48 to republish 0.1.5; uploaded archive hash unknown",
+      "bundle_mode": "candidate-source"
+    },
+    {
+      "kind": "expert-team",
+      "id": "oe_a1da12ace3d9c62c",
+      "name": "Kiwi开店团队",
+      "platform_version": "0.1.5",
+      "observed_state": "submitted for review; result pending",
+      "source": "kiwi-merchant-buddy/experts/kiwi-launch-team-0.1.5",
+      "source_version": "0.1.5",
+      "mapping": "local candidate; syncs embedded kiwi-cloud-deploy to 0.3.4 (first-publish entry + verified in-place upgrade procedure and upgrade-in-place.mjs); other agents/skills unchanged from 0.1.4; uploaded 2026-11-12 19:55 as oe_a1da12ace3d9c62c v0.1.5 on the WorkBuddy open platform, review result pending",
       "bundle_mode": "candidate-source"
     },
     {

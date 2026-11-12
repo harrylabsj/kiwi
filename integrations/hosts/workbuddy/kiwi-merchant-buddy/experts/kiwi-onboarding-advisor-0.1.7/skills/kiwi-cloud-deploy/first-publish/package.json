@@ -1,0 +1,14 @@
+{
+  "name": "kiwi-onboarding-first-publish",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Minimal first-publish bootstrap used only to obtain a WorkBuddy public origin before prepare.",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

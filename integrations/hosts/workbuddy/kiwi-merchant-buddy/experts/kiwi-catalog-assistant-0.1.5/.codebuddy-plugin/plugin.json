@@ -1,0 +1,71 @@
+{
+  "name": "kiwi-catalog-assistant",
+  "version": "0.1.5",
+  "description": "Turns product notes into import-ready sheets, appends new products without dropping live ones, drafts quote rules, and watches listing slots.",
+  "author": {
+    "name": "harrylabsj",
+    "email": "1711496337@qq.com"
+  },
+  "homepage": "https://github.com/harrylabsj/kiwi",
+  "license": "Apache-2.0",
+  "agents": [
+    "./agents/kiwi-catalog-assistant.md"
+  ],
+  "expertType": "agent",
+  "agentName": "kiwi-catalog-assistant",
+  "displayName": {
+    "zh": "Kiwi 报价助理",
+    "en": "Kiwi Quote Assistant"
+  },
+  "profession": {
+    "zh": "报价助理",
+    "en": "Quote Assistant"
+  },
+  "displayDescription": {
+    "zh": "整理商品导入表、起草报价规则、盯商品名额与公开资料，价格与发布都由你在工作台确认。",
+    "en": "Turns product notes into import-ready CSV sheets, drafts quote rule sets, and reports listing slots and public listings; you confirm prices and publishing in the workbench."
+  },
+  "avatar": "avatars/kiwi.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "把我这份商品表整理成可导入的 CSV",
+    "en": "Turn this product sheet into an import-ready CSV"
+  },
+  "plugin": "kiwi-catalog-assistant",
+  "dependencies": {
+    "connectors": [
+      "kiwi-merchant"
+    ]
+  },
+  "tags": [
+    {
+      "zh": "商品导入",
+      "en": "Product Import"
+    },
+    {
+      "zh": "报价规则",
+      "en": "Quote Rules"
+    },
+    {
+      "zh": "商品名额",
+      "en": "Listing Slots"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "把我这份商品表整理成可导入的 CSV",
+      "en": "Turn this product sheet into an import-ready CSV"
+    },
+    {
+      "zh": "帮我起草一版报价规则",
+      "en": "Draft a quote rule set for me"
+    },
+    {
+      "zh": "我还能上架多少商品？",
+      "en": "How many more listings can I add?"
+    }
+  ],
+  "skills": [
+    "./skills/kiwi-product-import"
+  ]
+}

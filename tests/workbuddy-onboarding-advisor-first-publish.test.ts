@@ -251,7 +251,7 @@ describe("开通顾问不可变候选与首次发布入口", () => {
     expect(rows).toHaveLength(2);
     const v15 = rows.find((asset) => asset.platform_version === "0.1.5")!;
     const v16 = rows.find((asset) => asset.platform_version === "0.1.6")!;
-    expect(v15.observed_state).toContain("reviewing");
+    expect(v15.observed_state).toContain("review withdrawn");
     expect(v15.observed_state).toContain("immutable");
     expect(v15.observed_state).not.toMatch(/20\d\d-\d\d-\d\d/);
     expect(v16.observed_state).toContain("local candidate");
