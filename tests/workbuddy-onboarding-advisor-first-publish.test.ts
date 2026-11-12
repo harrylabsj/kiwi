@@ -8,6 +8,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -195,12 +196,38 @@ describe("开通顾问不可变候选与首次发布入口", () => {
 
     const notAllowed = await fetch(`${base}/livez`, { method: "POST" });
     expect(notAllowed.status).toBe(405);
+    expect(notAllowed.headers.get("x-content-type-options")).toBe("nosniff");
 
     child.kill("SIGTERM");
     await new Promise<void>((resolve) => {
       if (child.exitCode !== null) resolve();
       else child.once("exit", () => resolve());
     });
+  });
+
+  it("端口被占用时输出稳定 HOLD 码而不是未捕获崩溃", async () => {
+    const blocker = createServer();
+    await new Promise<void>((resolve) => blocker.listen(0, "127.0.0.1", resolve));
+    const address = blocker.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    try {
+      const child = spawn(process.execPath, [path.join(firstPublishRoot, "index.js")], {
+        env: { ...process.env, HOST: "127.0.0.1", PORT: String(port) },
+        stdio: "pipe",
+      });
+      children.push(child);
+      const result = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+        let stderr = "";
+        child.stderr.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString();
+        });
+        child.once("exit", (code) => resolve({ code, stderr }));
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("KIWI_LAUNCHER_HOLD:FIRST_PUBLISH_PORT_IN_USE");
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
   });
 
   it("发布资产清单同时记录 0.1.5 审核候选和 0.1.6 本地候选", () => {

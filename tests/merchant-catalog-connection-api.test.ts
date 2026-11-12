@@ -250,6 +250,10 @@ describe("runtime Catalog connection API", () => {
     await runInContext(script!, context);
     runInContext('ROLE = "owner"', context);
     expect(await runInContext('views.products()', context)).toContain("预览公开内容");
+    // 错误码只在 HTML 拼接点转义一次；函数本身返回纯文本。
+    const failure = '{ catalogSync: "failed", catalogSyncError: "A<B" }';
+    expect(await runInContext(`accessSyncText(${failure})`, context)).toContain("A<B");
+    expect(await runInContext(`esc(accessSyncText(${failure}))`, context)).toContain("A&lt;B");
     expect(requests.filter((r) => r.path.includes("publication-drafts"))).toHaveLength(0);
     await runInContext('previewPublication()', context);
     expect(elements["publication-result"]?.innerHTML).toContain("&lt;验收商品&gt;");

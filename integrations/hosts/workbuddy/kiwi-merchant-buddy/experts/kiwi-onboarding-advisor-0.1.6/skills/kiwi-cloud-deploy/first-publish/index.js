@@ -41,12 +41,13 @@ function respond(res, status, contentType, body, method) {
 }
 
 export function createFirstPublishServer() {
-  return createServer((req, res) => {
+  const server = createServer((req, res) => {
     const method = req.method ?? "GET";
     if (method !== "GET" && method !== "HEAD") {
       res.writeHead(405, {
         allow: "GET, HEAD",
         "content-type": "application/json; charset=utf-8",
+        "x-content-type-options": "nosniff",
       });
       res.end(JSON.stringify({ ok: false, error: "method_not_allowed" }) + "\n");
       return;
@@ -81,6 +82,16 @@ export function createFirstPublishServer() {
     }
     respond(res, 404, "text/plain; charset=utf-8", "not found\n", method);
   });
+  // 监听失败（如端口占用）时给出稳定的 HOLD 码，而不是未捕获异常崩溃。
+  server.on("error", (error) => {
+    const code =
+      error && typeof error === "object" && error.code === "EADDRINUSE"
+        ? "PORT_IN_USE"
+        : "LISTEN_FAILED";
+    process.stderr.write(`KIWI_LAUNCHER_HOLD:FIRST_PUBLISH_${code}\n`);
+    process.exitCode = 1;
+  });
+  return server;
 }
 
 export function startFirstPublishServer({

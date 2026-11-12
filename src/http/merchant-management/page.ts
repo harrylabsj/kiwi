@@ -402,7 +402,9 @@ function accessSyncText(a) {
   if (state === "pending")
     return "本机已保存，但目录尚未确认同步；买家仍按旧状态路由。请点击“保存接入方式”或“刷新状态”重试。已保存的分享码不会被删除。";
   if (state === "failed")
-    return "目录同步失败（" + esc(a.catalogSyncError || "SYNC_FAILED") + "）；本机选择已保留，买家仍按旧状态路由。已保存的分享码不会被删除。";
+    // 错误码只做纯文本插值：HTML 调用点在拼接时统一 esc()，textContent
+    // 调用点本身安全；此处再转义会变成双重转义。
+    return "目录同步失败（" + (a.catalogSyncError || "SYNC_FAILED") + "）；本机选择已保留，买家仍按旧状态路由。已保存的分享码不会被删除。";
   if (state === "unsupported")
     return "目录不支持接入方式同步，或当前没有可用的活动绑定；买家仍按旧规则/安全回退。请确认目录连接后重新保存，本机选择与已保存分享码均已保留。";
   if (state === "unbound")

@@ -13,7 +13,10 @@ export async function invoke({tool, args, launcher, node=process.execPath, timeo
   const child=spawn(node,[launcher],{stdio:['pipe','pipe','pipe'],env:{...process.env,...(dataDirectory?{CODEBUDDY_PLUGIN_DATA:dataDirectory,KIWI_EXPERT_DEFER_PREPARE:'1'}:{})}});
   const reader=createInterface({input:child.stdout,crlfDelay:Infinity});let buffer='',settled=false,id=10,timer;
   function finish(error,value){if(settled)return;settled=true;clearTimeout(timer);reader.close();child.kill('SIGTERM');error?reject(error):resolve(value)}
-  function send(message){child.stdin.write(JSON.stringify(message)+'\n')}
+  // 子进程已退出时写入会触发 EPIPE；交给 child 'exit' 收敛为
+  // KIWI_RUNTIME_STOPPED，避免未监听的 stdin error 直接崩溃。
+  child.stdin.on('error',()=>{/* 交给 child exit 收敛 */});
+  function send(message){try{child.stdin.write(JSON.stringify(message)+'\n')}catch{/* 同上 */}}
   function call(){send({jsonrpc:'2.0',id:++id,method:'tools/call',params:{name:tool,arguments:args}})}
   timer=setTimeout(()=>finish(new Error('KIWI_STARTUP_TIMEOUT')),timeoutMs);
   child.stderr.on('data',data=>{buffer=(buffer+data.toString()).slice(-2048)});

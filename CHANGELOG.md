@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- **首次发布入口健壮性**：405 响应补 `x-content-type-options: nosniff`；
+  监听失败（端口占用等）输出 `KIWI_LAUNCHER_HOLD:FIRST_PUBLISH_*` 并以
+  非零码退出，不再未捕获崩溃。
+- **管理页同步状态文案**：`accessSyncText` 不再在函数内转义错误码，HTML
+  拼接点统一转义，避免双重转义显示成实体文本。
+- **WorkBuddy 购物运行时脚本**：`kiwi-tool.mjs` 捕获 stdin EPIPE，由子进程
+  退出事件收敛为 `KIWI_RUNTIME_STOPPED`。
+- **策略变化（发布说明需保留）**：
+  - `begin()` 只在显式 `share_code` 模式下要求分享码；auto 模式下
+    `*.app.workbuddy.host` 实例可无码发起连接，401/403 仍按
+    `ACCESS_MODE_UNCERTAIN` fail-closed。
+  - 商品链接的信任锚从代码内硬编码主机移到运营配置的
+    `trade_platform_rules.domain`（https-only、子域匹配、商品 ID 纯十进制）；
+    运营端需把该表视为安全边界。
+
 ## v0.12.28 — 2026-11-11
 
 - **买家来源统计**：`kiwi mcp serve` 新增 `--buyer-id` / `KIWI_CATALOG_BUYER_ID`，
