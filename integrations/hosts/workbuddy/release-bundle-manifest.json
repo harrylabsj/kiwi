@@ -352,6 +352,17 @@
     },
     {
       "kind": "expert",
+      "id": "oe_a2d0c6cc725719bd",
+      "name": "报价助理",
+      "platform_version": "0.1.6",
+      "observed_state": "local candidate; not uploaded/reviewed",
+      "source": "kiwi-merchant-buddy/experts/kiwi-catalog-assistant-0.1.6",
+      "source_version": "0.1.6",
+      "mapping": "local candidate; re-aligns the embedded kiwi-product-import with the SKU-merge import shipped in 8b6d0403 (files add/update only their own SKUs; existing products are kept) and rewrites append-publish guidance; embedded skill 0.3.0",
+      "bundle_mode": "candidate-source"
+    },
+    {
+      "kind": "expert",
       "id": "oe_85c8bf08203ad422",
       "name": "运营分析师",
       "platform_version": "0.1.2",
