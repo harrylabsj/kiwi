@@ -344,10 +344,10 @@
       "id": "oe_a2d0c6cc725719bd",
       "name": "报价助理",
       "platform_version": "0.1.5",
-      "observed_state": "submitted for review; result pending",
+      "observed_state": "review withdrawn; superseded by 0.1.6",
       "source": "kiwi-merchant-buddy/experts/kiwi-catalog-assistant-0.1.5",
       "source_version": "0.1.5",
-      "mapping": "local candidate; adds append-publish guidance (import stays full-table replace, publishing adds only unpublished SKUs via the workbench catalog-status column); embedded kiwi-product-import bumped 0.1.0 -> 0.2.0 (platform trade columns synced from the team candidate); uploaded 2026-11-12 20:15 as oe_a2d0c6cc725719bd v0.1.5 on the WorkBuddy open platform, review result pending",
+      "mapping": "local candidate; adds append-publish guidance (import stays full-table replace, publishing adds only unpublished SKUs via the workbench catalog-status column); embedded kiwi-product-import bumped 0.1.0 -> 0.2.0 (platform trade columns synced from the team candidate); uploaded 2026-11-12 20:15 as oe_a2d0c6cc725719bd v0.1.5 on the WorkBuddy open platform, review result pending; review withdrawn 2026-11-12 20:45 after the import semantics changed to SKU-merge in 8b6d0403",
       "bundle_mode": "candidate-source"
     },
     {
@@ -355,10 +355,10 @@
       "id": "oe_a2d0c6cc725719bd",
       "name": "报价助理",
       "platform_version": "0.1.6",
-      "observed_state": "local candidate; not uploaded/reviewed",
+      "observed_state": "submitted for review; result pending",
       "source": "kiwi-merchant-buddy/experts/kiwi-catalog-assistant-0.1.6",
       "source_version": "0.1.6",
-      "mapping": "local candidate; re-aligns the embedded kiwi-product-import with the SKU-merge import shipped in 8b6d0403 (files add/update only their own SKUs; existing products are kept) and rewrites append-publish guidance; embedded skill 0.3.0",
+      "mapping": "local candidate; re-aligns the embedded kiwi-product-import with the SKU-merge import shipped in 8b6d0403 (files add/update only their own SKUs; existing products are kept) and rewrites append-publish guidance; embedded skill 0.3.0; uploaded 2026-11-12 20:47 as oe_a2d0c6cc725719bd v0.1.6 on the WorkBuddy open platform, review result pending",
       "bundle_mode": "candidate-source"
     },
     {
