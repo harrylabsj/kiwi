@@ -87,6 +87,115 @@ function thinFixture({ withLock = true } = {}): { root: string; out: string } {
   return { root: pkg, out };
 }
 
+/**
+ * 轻量包夹具 + 假 npm：按 `npm ci --omit=dev` 的真实语义落盘依赖集合
+ * （跳过 dev / devOptional / optional）。0.12.28 的 deployment-lock 把
+ * esbuild 标为 devOptional（chord 的 optional peer），正是本夹具复现的场景。
+ * scripts/check-install-toolchain.mjs 用 stub 替换：本用例只锁定
+ * verifyInstalledLock 与 npm 安装语义的一致性，真实工具链由 verify:package 覆盖。
+ */
+function lockedInstallFixture(): {
+  root: string;
+  out: string;
+  bin: string;
+  fakeNpm: string;
+} {
+  const base = mkdtempSync(path.join(os.tmpdir(), "kiwi-cloud-locked-install-"));
+  roots.push(base);
+  const pkg = path.join(base, "package");
+  const out = path.join(base, "deploy");
+  const bin = path.join(base, "bin");
+  const fakeNpm = path.join(base, "fake-npm.cjs");
+  for (const dir of [
+    path.join(pkg, "app", "cloud"),
+    path.join(pkg, "app", "cloud-sample"),
+    path.join(pkg, "scripts"),
+    bin,
+  ]) mkdirSync(dir, { recursive: true });
+  cpSync(prepareSource, path.join(pkg, "prepare.mjs"));
+  writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "fixture", version: "0.11.0", type: "module" }));
+  writeFileSync(path.join(pkg, "app", "cloud", "main.js"), "fixture\n");
+  writeFileSync(path.join(pkg, "app", "cloud-sample", "merchant.yaml"), "agent_id: merchant-agent:test\nowner_id: merchant-test\n");
+  writeFileSync(path.join(pkg, "app", "cloud-sample", "products.json"), JSON.stringify({
+    schema_version: "0.1.2", merchant_id: "merchant-test", source: "test_fixture", generated_at: new Date().toISOString(), products: [],
+  }));
+  writeFileSync(path.join(pkg, "scripts", "check-install-toolchain.mjs"), "process.stdout.write('[stub-toolchain] ok\\n');\n");
+  const lock = {
+    name: "fixture",
+    version: "0.11.0",
+    lockfileVersion: 3,
+    requires: true,
+    packages: {
+      "": { name: "fixture", version: "0.11.0", dependencies: { required: "1.0.0", "dev-optional": "1.0.0", "optional-native": "1.0.0" } },
+      "node_modules/required": { version: "1.0.0" },
+      // 与 0.12.28 锁里的 node_modules/esbuild 同形：dev + optional ⇒ --omit=dev 不安装。
+      "node_modules/dev-optional": { version: "1.0.0", devOptional: true },
+      "node_modules/optional-native": { version: "1.0.0", optional: true },
+    },
+  };
+  writeFileSync(path.join(pkg, "deployment-lock.json"), JSON.stringify(lock, null, 2) + "\n");
+  // 假 npm：模拟 `npm ci --omit=dev`；FAKE_NPM_SKIP / FAKE_NPM_MANGLE 只用于构造失败场景。
+  writeFileSync(fakeNpm, [
+    'const fs = require("node:fs");',
+    'const path = require("node:path");',
+    'if (process.argv[2] !== "ci") { console.error("fake npm only supports ci"); process.exit(2); }',
+    'const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));',
+    'const skip = new Set(String(process.env.FAKE_NPM_SKIP || "").split(",").filter(Boolean));',
+    'const mangle = new Map(String(process.env.FAKE_NPM_MANGLE || "").split(",").filter(Boolean).map((pair) => pair.split("=")));',
+    'for (const [relative, row] of Object.entries(lock.packages)) {',
+    '  if (!relative || relative.startsWith("node_modules/.bin")) continue;',
+    '  if (row.dev === true || row.devOptional === true || row.optional === true) continue;',
+    '  if (skip.has(relative)) continue;',
+    '  const dir = path.join(process.cwd(), relative);',
+    '  fs.mkdirSync(dir, { recursive: true });',
+    '  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: relative.replace(/^node_modules\\//, ""), version: mangle.get(relative) || row.version }));',
+    '}',
+    'process.stdout.write("fake npm ci --omit=dev: installed production closure\\n");',
+    "",
+  ].join("\n"));
+  writeFileSync(path.join(bin, "npm"), '#!/bin/sh\nexec "$FAKE_NPM_NODE" "$FAKE_NPM_SCRIPT" "$@"\n', { mode: 0o755 });
+  const tracked = [
+    path.join(pkg, "package.json"),
+    path.join(pkg, "prepare.mjs"),
+    path.join(pkg, "deployment-lock.json"),
+    path.join(pkg, "app", "cloud", "main.js"),
+    path.join(pkg, "app", "cloud-sample", "merchant.yaml"),
+    path.join(pkg, "app", "cloud-sample", "products.json"),
+    path.join(pkg, "scripts", "check-install-toolchain.mjs"),
+  ];
+  const manifestFiles = tracked
+    .map((file) => ({
+      path: path.relative(pkg, file).split(path.sep).join("/"),
+      size: readFileSync(file).length,
+      sha256: `sha256:${createHash("sha256").update(readFileSync(file)).digest("hex")}`,
+    }))
+    .sort((a, b) => (a.path < b.path ? -1 : 1));
+  const aggregate = `sha256:${createHash("sha256").update(manifestFiles.map((item) => `${item.path}\0${item.sha256}`).sort().join("\n")).digest("hex")}`;
+  writeFileSync(path.join(pkg, "build-manifest.json"), JSON.stringify({ runtime_version: "0.11.0", artifact_sha256: aggregate, files: manifestFiles }));
+  return { root: pkg, out, bin, fakeNpm };
+}
+
+function runWithFakeNpm(
+  fixture: { root: string; out: string; bin: string; fakeNpm: string },
+  env: Record<string, string> = {},
+) {
+  return spawnSync(
+    process.execPath,
+    [path.join(fixture.root, "prepare.mjs"), "--origin", "https://merchant.example", "--out", fixture.out],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${fixture.bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        FAKE_NPM_NODE: process.execPath,
+        FAKE_NPM_SCRIPT: fixture.fakeNpm,
+        KIWI_CLOUD_PLATFORM_WORKSPACE: "/nonexistent-kiwi-locked-install",
+        ...env,
+      },
+    },
+  );
+}
+
 function run(pkg: string, out: string, ...args: string[]) {
   return spawnSync(process.execPath, [path.join(pkg, "prepare.mjs"), "--origin", "https://merchant.example", "--out", out, ...args], { encoding: "utf8" });
 }
@@ -299,6 +408,33 @@ describe("merchant cloud package prepare", () => {
     expect(result.status).toBe(0);
     expect(existsSync(path.join(out, "package-lock.json"))).toBe(true);
     expect(existsSync(path.join(root, "node_modules"))).toBe(false);
+  });
+
+  it("treats devOptional lock entries as legitimately absent from npm ci --omit=dev (0.12.28 esbuild regression)", () => {
+    const fixture = lockedInstallFixture();
+    const result = runWithFakeNpm(fixture);
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(existsSync(path.join(fixture.out, "node_modules", "required", "package.json"))).toBe(true);
+    // npm ci --omit=dev 不安装 devOptional / optional；prepare 不得把它们报成缺失。
+    expect(existsSync(path.join(fixture.out, "node_modules", "dev-optional"))).toBe(false);
+    expect(existsSync(path.join(fixture.out, "node_modules", "optional-native"))).toBe(false);
+    expect(existsSync(path.join(fixture.out, "cloud.config.json"))).toBe(true);
+  });
+
+  it("still fails closed when a required production dependency is missing from the install", () => {
+    const fixture = lockedInstallFixture();
+    const result = runWithFakeNpm(fixture, { FAKE_NPM_SKIP: "node_modules/required" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("依赖安装与 package-lock.json 不一致");
+    expect(result.stderr).toContain("缺失 node_modules/required");
+  });
+
+  it("still fails closed when an installed production dependency drifts from the locked version", () => {
+    const fixture = lockedInstallFixture();
+    const result = runWithFakeNpm(fixture, { FAKE_NPM_MANGLE: "node_modules/required=9.9.9" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("版本不符 node_modules/required: 9.9.9 != 1.0.0");
   });
 
   it("fails closed when a lightweight deployment has no lockfile", () => {
