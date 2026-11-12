@@ -264,7 +264,11 @@ function verifyInstalledLock(out) {
   const missing = [];
   const mismatched = [];
   for (const [relative, row] of Object.entries(lock.packages ?? {})) {
-    if (relative === "" || row.dev === true || row.link === true) continue;
+    // devOptional = 同时是 dev 与 optional 的依赖（0.12.28 锁里 chord 的 esbuild
+    // peer）：`npm ci --omit=dev` 本就不会安装它，不能把它报成缺失生产依赖。
+    // 与发布侧 scripts/lib/npm-bundled-edges.mjs 的 assertInstalledLockedVersions
+    // 保持同一安装语义；非 dev/devOptional/optional 的行仍然逐包核对版本。
+    if (relative === "" || row.dev === true || row.devOptional === true || row.link === true) continue;
     const packageFile = path.join(out, relative, "package.json");
     if (!existsSync(packageFile)) {
       if (row.optional === true) continue;
