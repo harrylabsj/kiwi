@@ -139,15 +139,46 @@ export class MerchantImportDraftStore {
     };
   }
 
-  /** 提交终态（幂等安全：只从 draft → committed 一次）。 */
+  /**
+   * 提交终态（幂等安全：只从 draft → committed 一次）。
+   *
+   * 唯一键是 (merchant_id, kind, payload_digest, status)，所以同一份内容先后
+   * 提交两次时，第二条 draft→committed 会撞上第一条已 committed 的行。导入
+   * 本来就是幂等操作（同内容再提交应成功），因此在同一事务里先清掉同内容的
+   * 历史已提交行，只保留最新一条；提交回执由 operations 表另行留痕。
+   */
   markCommitted(merchantId: string, draftId: string): boolean {
-    const result = this.db
+    const row = this.db
       .prepare(
-        `UPDATE merchant_management_import_drafts
-         SET status = 'committed', committed_at = ?
+        `SELECT kind, payload_digest FROM merchant_management_import_drafts
          WHERE draft_id = ? AND merchant_id = ? AND status = 'draft'`,
       )
-      .run(this.now(), draftId, merchantId);
-    return result.changes === 1;
+      .get(draftId, merchantId) as { kind: string; payload_digest: string } | undefined;
+    if (row === undefined) return false;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db
+        .prepare(
+          `DELETE FROM merchant_management_import_drafts
+           WHERE merchant_id = ? AND kind = ? AND payload_digest = ? AND status = 'committed'`,
+        )
+        .run(merchantId, row.kind, row.payload_digest);
+      const result = this.db
+        .prepare(
+          `UPDATE merchant_management_import_drafts
+           SET status = 'committed', committed_at = ?
+           WHERE draft_id = ? AND merchant_id = ? AND status = 'draft'`,
+        )
+        .run(this.now(), draftId, merchantId);
+      this.db.exec("COMMIT");
+      return result.changes === 1;
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // 回滚失败不掩盖原始错误。
+      }
+      throw err;
+    }
   }
 }

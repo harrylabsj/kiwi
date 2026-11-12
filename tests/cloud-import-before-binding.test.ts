@@ -291,7 +291,8 @@ describe("WP17 语义统一：绑定前导入 → 绑定 → 可报价", () => {
     const stored = JSON.parse(readFileSync(productsFile, "utf8")) as CloudProductTable;
     expect(stored.merchant_id).toBe(CATALOG_MERCHANT);
     expect(stored.runtime_owner_id).toBe(OWNER);
-    expect(stored.products.map((row) => row.sku)).toEqual(["BIND-001", "BIND-003"]);
+    // 导入按 SKU 合并：文件里的 BIND-001 更新、BIND-003 新增，文件外的 BIND-002 保留。
+    expect(stored.products.map((row) => row.sku)).toEqual(["BIND-001", "BIND-002", "BIND-003"]);
 
     const bound = createFileProductSource({ file: productsFile, merchantId: OWNER });
     expect(bound.describeSku("BIND-003")).toEqual({ available: true });
