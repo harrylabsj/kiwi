@@ -789,6 +789,87 @@ describe("merchant management api — 商品导入（BD-03）", () => {
     expect(again.status).toBe(409);
   });
 
+  it("按 SKU 合并追加：文件外的现有商品保留，removed 恒为 0", async () => {
+    const auth = await login("owner");
+    const first = await call("POST", "/merchant/api/products/import-drafts", {
+      ...auth,
+      body: { table: productTable(), idempotency_key: "merge-1" },
+    });
+    expect(first.status).toBe(200);
+    const firstCommit = await call(
+      "POST",
+      `/merchant/api/products/import-drafts/${String(first.json["draft_id"])}/commit`,
+      {
+        ...auth,
+        body: { expected_draft_digest: String(first.json["digest"]), idempotency_key: "merge-c1" },
+      },
+    );
+    expect(firstCommit.status).toBe(200);
+
+    const second = await call("POST", "/merchant/api/products/import-drafts", {
+      ...auth,
+      body: {
+        table: productTable({
+          products: [
+            {
+              sku: "SKU-2",
+              title: "追加商品",
+              currency: "CNY",
+              unit: "piece",
+              price: 12,
+              updated_at: "2026-09-21T10:00:00Z",
+              valid_until: "2099-01-01T00:00:00Z",
+              status: "active",
+            },
+          ],
+        }),
+        idempotency_key: "merge-2",
+      },
+    });
+    expect(second.status).toBe(200);
+    expect(second.json["preview"]).toMatchObject({
+      rows_total: 1,
+      added: 1,
+      updated: 0,
+      unchanged: 0,
+      kept: 1,
+      removed: 0,
+    });
+    const secondCommit = await call(
+      "POST",
+      `/merchant/api/products/import-drafts/${String(second.json["draft_id"])}/commit`,
+      {
+        ...auth,
+        body: { expected_draft_digest: String(second.json["digest"]), idempotency_key: "merge-c2" },
+      },
+    );
+    expect(secondCommit.status).toBe(200);
+    const snapshot = loadProductTableSnapshot(productsFile, MERCHANT);
+    const skus = snapshot.records.map((record) => record.sku);
+    expect(skus).toContain("SKU-1");
+    expect(skus).toContain("SKU-2");
+  });
+
+  it("同一文件内重复 SKU 整批拒绝（400）", async () => {
+    const auth = await login("owner");
+    const row = {
+      sku: "SKU-DUP",
+      title: "重复商品",
+      currency: "CNY",
+      unit: "piece",
+      price: 10,
+      updated_at: "2026-09-21T10:00:00Z",
+      valid_until: "2099-01-01T00:00:00Z",
+      status: "active",
+    };
+    const dupe = await call("POST", "/merchant/api/products/import-drafts", {
+      ...auth,
+      body: { table: productTable({ products: [row, row] }), idempotency_key: "dup" },
+    });
+    expect(dupe.status).toBe(400);
+    expect(String(dupe.json["message"])).toContain("重复 SKU");
+  });
+
   it("行级校验失败整表拒绝（400 报行号）；base_digest 不符 → 409；租户不符 → 403", async () => {
     const auth = await login("owner");
     const badRow = await call("POST", "/merchant/api/products/import-drafts", {

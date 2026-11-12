@@ -173,7 +173,7 @@ function main() {
     `导出 ${result.exportedCount} 行商品`,
     result.skippedPaused.length > 0 ? `跳过 ${result.skippedPaused.length} 个已停用商品（--include-paused 可包含，状态=暂停）` : "",
     `计价单位统一填「${options.unit}」（shopping-cli 无此字段）、有效期统一填 ${options.validDays} 天后（shopping-cli 无此字段）——导入前可在表格里按商品改`,
-    "提示：Kiwi 导入是整表替换，表里没有的 SKU 提交后会被下架。",
+    "提示：Kiwi 导入按 SKU 合并追加/更新，文件里没有的现有商品会保留。",
   ].filter(Boolean);
   process.stderr.write(notes.join("；") + "\n");
   if (options.out !== "") {

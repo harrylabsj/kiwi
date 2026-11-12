@@ -1,10 +1,10 @@
 ---
 name: merchant-catalog-preflight
-description: 对商家主动提供的已成形商品目录做发布前字段与行级一致性检查，识别阻断项、警告和整表替换风险；不负责列映射、写回、上传或发布。
+description: 对商家主动提供的已成形商品目录做发布前字段与行级一致性检查，识别阻断项、警告和按 SKU 合并导入的影响；不负责列映射、写回、上传或发布。
 display_name: "Kiwi 商品目录发布预检"
 display_name_en: "Kiwi Product Catalog Publish Preflight"
-description_zh: "预检商家提供的完整商品目录字段与行级一致性，提示阻断项和整表替换影响。"
-description_en: "Preflight a merchant-provided complete catalog for field and row consistency, blockers, and full-replacement impact."
+description_zh: "预检商家提供的商品目录字段与行级一致性，提示阻断项和按 SKU 合并导入的影响。"
+description_en: "Preflight a merchant-provided catalog for field and row consistency, blockers, and merge-by-SKU import impact."
 category: writing
 version: 0.1.0
 author: harrylabsj
@@ -32,7 +32,7 @@ author: harrylabsj
 ## 输出格式
 
 **目录范围：** 文件/版本、行数、导出时间（未提供则注明）。  
-**整表影响提醒：** Kiwi 导入会以整表替换；本次材料是否明确包含全部仍在售 SKU：是 / 否 / 未知。
+**合并影响提醒：** Kiwi 导入按 SKU 新增/更新，文件外的现有商品与已发布商品不受影响；请确认同 SKU 行是否表达了本次要更新的字段。
 
 | 行号 | SKU | 状态 | 问题字段 | 问题说明 | 商家需要做什么 |
 | --- | --- | --- | --- | --- | --- |

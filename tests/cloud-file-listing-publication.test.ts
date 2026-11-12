@@ -208,7 +208,7 @@ function createFixture(options: { ownerId?: string; enrollmentStatus?: string } 
     const parsed = new URL(String(url));
     const method = String(init?.method ?? "GET");
     fetchCalls.push({ method, path: parsed.pathname });
-    if (method === "GET") {
+    if (method === "GET" && parsed.pathname !== `/v1/agents/${CATALOG_AGENT}/listings`) {
       const headers = new Headers(init?.headers);
       expect(headers.get("authorization")).toBeNull();
       expect(headers.get("x-kiwi-binding-jws")).toBeNull();
@@ -221,6 +221,19 @@ function createFixture(options: { ownerId?: string; enrollmentStatus?: string } 
     }
     if (parsed.pathname === `/v1/agents/${CATALOG_AGENT}/runtime-binding` && method === "GET") {
       return new Response(JSON.stringify(bindingDocument(stub.bindingId)), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (parsed.pathname === `/v1/agents/${CATALOG_AGENT}/listings` && method === "GET") {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("x-kiwi-binding-jws")).not.toBeNull();
+      return Response.json({
+        ok: true,
+        results: [
+          { listing_type: "product", source_product_ref: "SKU-A", publication_state: "ACTIVE", listing_id: "lst_a", owner_agent_id: CATALOG_AGENT, merchant_id: MERCHANT },
+          { listing_type: "product", source_product_ref: "SKU-B", publication_state: "PAUSED", listing_id: "lst_b", owner_agent_id: CATALOG_AGENT, merchant_id: MERCHANT },
+          { listing_type: "product", source_product_ref: "SKU-C", publication_state: "WITHDRAWN", listing_id: "lst_c", owner_agent_id: CATALOG_AGENT, merchant_id: MERCHANT },
+        ],
+        next_cursor: null,
+      });
     }
     if (parsed.pathname === "/v1/listings/publish" && method === "POST") {
       const headers = new Headers(init?.headers);
@@ -301,6 +314,17 @@ describe("file listing publication core", () => {
     rmSync(path.join(fixture.dataDir, "merchant-enrollments.json"));
     const service = newService(fixture);
     await expect(service.preview([SEL("SKU-A")])).rejects.toMatchObject({ code: "LISTING_PUBLISH_NOT_CONNECTED" });
+  });
+
+  it("listPublished：签名自查目录，只返回未撤回的商品 SKU", async () => {
+    const fixture = createFixture();
+    const service = newService(fixture);
+    const result = await service.listPublished();
+    expect(result.results).toEqual([
+      { sku: "SKU-A", listing_id: "lst_a", publication_state: "ACTIVE" },
+      { sku: "SKU-B", listing_id: "lst_b", publication_state: "PAUSED" },
+    ]);
+    expect(fixture.stub.publishCalls).toHaveLength(0);
   });
 
   it("预览只读：不产生发布写、不改商品表、投影无价格/库存/私有列，且带冻结幂等键", async () => {

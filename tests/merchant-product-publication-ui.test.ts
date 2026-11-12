@@ -103,6 +103,7 @@ type MountOptions = {
   productPages?: Array<{ items: Array<Record<string, unknown>>; next_cursor?: string | null }>;
   commitFailsOnCall?: number;
   receipts?: Array<Record<string, unknown>>;
+  published?: Array<{ sku: string; listing_id?: string; publication_state: string }>;
 };
 
 async function mount(options: MountOptions = {}) {
@@ -126,6 +127,9 @@ async function mount(options: MountOptions = {}) {
       const page = cursor === null ? pages[0] : pages.find((_, index) => String(index) === cursor);
       return Response.json(page ?? { items: [], next_cursor: null });
     }
+    if (path === "/merchant/api/v1/products/publication-status") {
+      return Response.json({ results: options.published ?? [] });
+    }
     if (path === "/merchant/api/v1/products/publication-drafts" && init?.method === "POST") {
       posts.push({ path, body: JSON.parse(String(init.body)) as Record<string, unknown> });
       return Response.json(DRAFT);
@@ -147,7 +151,10 @@ async function mount(options: MountOptions = {}) {
     URL, Date, Math, Response, JSON, Promise, Array, String, Object, Error, setTimeout,
     document: {
       getElementById: (id: string) => (elements[id] ??= el()),
-      querySelectorAll: (selector: string) => (selector === "#pub-rows tr" ? rows : []),
+      querySelectorAll: (selector: string) =>
+        selector === "#pub-rows tr" ? rows
+          : selector === "#pub-rows input.pub-pick" ? rows.map((item) => item.box)
+            : [],
     },
     fetch: fetchImpl,
   });
@@ -161,17 +168,41 @@ async function flush() {
 }
 
 describe("商品发布体验（勾选 + 分类 → 表格预览/结果）", () => {
-  it("商品页用选择表替代手输 SKU，并保留整表替换提示", async () => {
+  it("商品页用选择表替代手输 SKU，并说明导入按 SKU 追加", async () => {
     const { context } = await mount();
     const html = (await runInContext("views.products()", context)) as string;
     expect(html).toContain('id="pub-rows"');
     expect(html).toContain('data-sku="SKU-1"');
     expect(html).toContain('class="pub-pick"');
     expect(html).toContain('class="pub-category"');
+    expect(html).toContain('id="pub-select-all"');
+    expect(html).toContain("全选当前商品");
     expect(html).toContain("预览公开内容");
-    expect(html).toContain("整表替换");
+    expect(html).toContain("按 SKU 追加/更新");
+    expect(html).toContain("文件里没有的商品会保留");
+    expect(html).not.toContain("整表替换");
+    // 只有一个商品表：不再出现上下重复的列表。
+    expect((html.match(/id="pub-rows"/g) ?? []).length).toBe(1);
     expect(html).not.toContain("publication-selection");
     expect(html).not.toContain("用英文竖线分隔");
+  });
+
+  it("显示目录发布状态，并能用全选勾选当前商品", async () => {
+    const rows = [row("SKU-1", false, ""), row("SKU-2", false, "")];
+    const { context } = await mount({
+      rows,
+      published: [{ sku: "SKU-1", listing_id: "lst_1", publication_state: "ACTIVE" }],
+    });
+    const html = (await runInContext("views.products()", context)) as string;
+    expect(html).toContain("已发布到目录 1 件，未发布 1 件。");
+    expect(html).toContain("已发布");
+    expect(html).toContain("未发布");
+    await runInContext("togglePublicationPicks({ checked: true })", context);
+    expect(rows[0]!.box.checked).toBe(true);
+    expect(rows[1]!.box.checked).toBe(true);
+    await runInContext("togglePublicationPicks({ checked: false })", context);
+    expect(rows[0]!.box.checked).toBe(false);
+    expect(rows[1]!.box.checked).toBe(false);
   });
 
   it("预览用表格展示实际链接、fresh_until 与其余公开字段，并区分草稿到期与新鲜期", async () => {
@@ -290,7 +321,7 @@ describe("商品发布体验（勾选 + 分类 → 表格预览/结果）", () =
     };
     const { context, paths } = await mount({ productPages: [page1, page2] });
     const html = (await runInContext("views.products()", context)) as string;
-    expect(html).toContain("当前商品（101）");
+    expect(html).toContain("商品与目录发布（101）");
     expect(html).toContain('data-sku="S-0"');
     expect(html).toContain('data-sku="S-100"');
     expect(paths).toContain("/merchant/api/products?limit=100");

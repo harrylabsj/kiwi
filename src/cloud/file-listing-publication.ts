@@ -271,10 +271,19 @@ function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+export interface FileListingPublishedItem {
+  sku: string;
+  listing_id: string;
+  /** Catalog 当前发布态（已排除 WITHDRAWN）。 */
+  publication_state: string;
+}
+
 export function createFileListingPublicationService(options: FileListingPublicationOptions): {
   preview: (selections: readonly FileListingSelection[]) => Promise<FileListingPreview>;
   commit: (draftId: string, expectedDigest: string) => Promise<FileListingCommitResult>;
   getDraft: (draftId: string) => Promise<FileListingDraftView>;
+  /** 目录中当前仍公开（非 WITHDRAWN）的商品 SKU，供管理页标注发布状态。 */
+  listPublished: () => Promise<{ results: FileListingPublishedItem[] }>;
 } {
   const now = options.now ?? (() => new Date());
   const previewTtlMs = options.previewTtlMs ?? 15 * 60_000;
@@ -605,5 +614,37 @@ export function createFileListingPublicationService(options: FileListingPublicat
       if (draftCommitTails.get(file) === tail) draftCommitTails.delete(file);
     }
   }
-  return { preview, commit: serializedCommit, getDraft };
+  async function listPublished(): Promise<{ results: FileListingPublishedItem[] }> {
+    const binding = await requireActiveBinding();
+    const results: FileListingPublishedItem[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 50; page += 1) {
+      const listed = await client.listSignedListings(
+        {
+          catalogAgentId: binding.agentId,
+          merchantId: binding.merchantId,
+          bindingId: binding.bindingId,
+          keyId: binding.keyId,
+        },
+        binding.signingIdentity,
+        { limit: 100, ...(cursor !== undefined ? { cursor } : {}) },
+      );
+      for (const record of listed.results) {
+        if (String(record["listing_type"] ?? "") !== "product") continue;
+        const state = String(record["publication_state"] ?? "");
+        const sku = String(record["source_product_ref"] ?? "");
+        if (state === "WITHDRAWN" || sku === "") continue;
+        results.push({
+          sku,
+          listing_id: String(record["listing_id"] ?? ""),
+          publication_state: state,
+        });
+      }
+      cursor = listed.nextCursor;
+      if (cursor === undefined || cursor === "") break;
+    }
+    return { results };
+  }
+
+  return { preview, commit: serializedCommit, getDraft, listPublished };
 }

@@ -641,28 +641,38 @@ function showCatalogPairing() {
   }).catch(function () { bar("无法读取配对信息，请刷新连接状态。", true); });
 }
 
-/** 发布选择表：直接勾选已导入/已有商品并填分类，无需再手输 SKU。 */
-function publicationCard(items) {
-  var rows = (items || []).map(function (it) {
-    var sku = esc(it.sku);
-    return '<tr data-sku="' + sku + '">' +
-      '<td><input type="checkbox" class="pub-pick" aria-label="选择商品 ' + sku + '"></td>' +
-      '<td>' + sku + '</td><td>' + esc(it.title) + '</td><td>' + esc(it.status || "-") + '</td>' +
-      '<td><input type="text" class="pub-category" maxlength="120" placeholder="填写分类" aria-label="' + sku + ' 的分类"></td></tr>';
-  }).join("");
-  var body = rows
-    ? '<div class="row"><input type="text" id="pub-category-all" maxlength="120" placeholder="统一分类（可选）" aria-label="统一分类">' +
-      '<button class="act" id="pub-apply" onclick="applyPublicationCategory()">应用到已勾选</button>' +
-      '<button class="act" id="pub-clear" onclick="clearPublicationPicks()">清空选择</button></div>' +
-      '<div class="table-scroll"><table id="pub-table"><tr><th>选择</th><th>SKU</th><th>名称</th><th>状态</th><th>分类（必填）</th></tr>' +
-      '<tbody id="pub-rows">' + rows + '</tbody></table></div>' +
-      '<p class="muted">公开名称、SKU、分类、商品页链接与其余公开字段；价格、库存及私有规则不会发布。' +
-      '可发布已导入或已有商品，不涉及下架其他商品。预览后选择会锁定，修改需先「重新选择」。</p>' +
-      '<button class="act" id="pub-preview" onclick="previewPublication()">预览公开内容</button>'
-    : '<p class="muted">暂无商品，请先在上方导入商品后再选择发布。</p>';
-  return '<div class="card"><h2>发布商品到 Kiwi 目录</h2>' +
-    '<p class="muted">先完成目录连接，再勾选要公开的商品并填写分类；预览确认后才发布。</p>' + body +
-    '<div id="publication-result"></div></div>';
+/** 目录发布状态文案：known=false 时不把“读不到”说成“未发布”。 */
+function publicationStateLabel(state, known) {
+  if (!known) return "状态未知";
+  var normalized = String(state || "").toLowerCase();
+  if (normalized === "active") return "已发布";
+  if (normalized === "paused") return "已暂停";
+  return "未发布";
+}
+function togglePublicationPicks(box) {
+  if (publicationDraft !== null) {
+    box.checked = false;
+    bar("预览已生成，选择已锁定；如需修改请先点「重新选择」", true);
+    return;
+  }
+  var rows = document.querySelectorAll("#pub-rows input.pub-pick");
+  for (var i = 0; i < rows.length; i++) {
+    if (!rows[i].disabled) rows[i].checked = box.checked;
+  }
+  syncPublicationSelectAll();
+}
+function syncPublicationSelectAll() {
+  var all = $("pub-select-all");
+  if (!all) return;
+  var picks = document.querySelectorAll("#pub-rows input.pub-pick");
+  var enabled = 0, checked = 0;
+  for (var i = 0; i < picks.length; i++) {
+    if (picks[i].disabled) continue;
+    enabled += 1;
+    if (picks[i].checked) checked += 1;
+  }
+  all.checked = enabled > 0 && checked === enabled;
+  all.indeterminate = checked > 0 && checked < enabled;
 }
 function applyPublicationCategory() {
   if (publicationDraft !== null) { bar("预览已生成，选择已锁定；如需修改请先点「重新选择」", true); return; }
@@ -685,6 +695,7 @@ function clearPublicationPicks() {
     if (box) box.checked = false;
     if (input) input.value = "";
   }
+  syncPublicationSelectAll();
 }
 function lockPublicationSelection(locked) {
   var rows = document.querySelectorAll("#pub-rows tr");
@@ -696,10 +707,13 @@ function lockPublicationSelection(locked) {
   }
   var all = $("pub-category-all");
   if (all) all.disabled = locked;
+  var selectAll = $("pub-select-all");
+  if (selectAll) selectAll.disabled = locked;
   var apply = $("pub-apply");
   if (apply) apply.disabled = locked;
   var clear = $("pub-clear");
   if (clear) clear.disabled = locked;
+  if (!locked) syncPublicationSelectAll();
 }
 function samePublicationPicks(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
@@ -772,36 +786,75 @@ function renderPublicationReceipts(receipts, heading, counts) {
   return "<h3>" + esc(heading) + "</h3>" + (counts ? "<p>" + esc(counts) + "</p>" : "") +
     '<div class="table-scroll"><table><tr><th>SKU</th><th>结果</th><th>说明</th></tr>' + rows + "</table></div>";
 }
-/** 商品页统一渲染：全部已加载商品（含分页）与准确数量。 */
-function renderProducts(items) {
+/** 商品页统一渲染：一张表同时承载商品信息、目录发布状态与发布选择。 */
+function renderProducts(items, publication) {
   var list = items || [];
+  var pub = publication || {};
+  var canPublish = pub.canPublish === true;
+  var known = pub.known === true;
+  var published = pub.published || {};
+  var publishedCount = 0;
+  for (var n = 0; n < list.length; n++) {
+    if (published[list[n].sku]) publishedCount += 1;
+  }
   var rows = list.map(function (it) {
+    var sku = esc(it.sku);
     if (FILE_PRODUCTS) {
-      return "<tr><td>" + esc(it.sku) + "</td><td>" + esc(it.title) + "</td><td>" +
-        esc(it.currency) + " " + esc(it.price) + " / " + esc(it.price_unit) + "</td><td>" +
+      var price = esc(it.currency) + " " + esc(it.price) + " / " + esc(it.price_unit);
+      var platform = esc(({jd:"京东",taobao:"淘宝",tmall:"天猫"})[it.trade_platform] || it.trade_platform || "-");
+      if (canPublish) {
+        return '<tr data-sku="' + sku + '">' +
+          '<td><input type="checkbox" class="pub-pick" onchange="syncPublicationSelectAll()" aria-label="选择商品 ' + sku + '"></td>' +
+          "<td>" + sku + "</td><td>" + esc(it.title) + "</td><td>" + esc(it.status) + "</td>" +
+          '<td class="pub-state">' + esc(publicationStateLabel(published[it.sku], known)) + "</td>" +
+          '<td><input type="text" class="pub-category" maxlength="120" placeholder="填写分类" aria-label="' + sku + ' 的分类"></td>' +
+          "<td>" + price + "</td><td>" + esc(it.min_order_qty == null ? "-" : it.min_order_qty) + "</td><td>" +
+          esc(it.valid_until) + "</td><td>" + platform + "</td><td>" +
+          esc(it.platform_product_id || "-") + "</td><td>" + marketplaceLink(it) + "</td></tr>";
+      }
+      return "<tr><td>" + sku + "</td><td>" + esc(it.title) + "</td><td>" + price + "</td><td>" +
         esc(it.min_order_qty == null ? "-" : it.min_order_qty) + "</td><td>" +
-        esc(it.valid_until) + "</td><td>" + esc(it.status) + "</td><td>" +
-        esc(({jd:"京东",taobao:"淘宝",tmall:"天猫"})[it.trade_platform] || it.trade_platform || "-") + "</td><td>" +
+        esc(it.valid_until) + "</td><td>" + esc(it.status) + "</td><td>" + platform + "</td><td>" +
         esc(it.platform_product_id || "-") + "</td><td>" + marketplaceLink(it) + "</td></tr>";
     }
     var money = it.money || {};
-    return "<tr><td>" + esc(it.sku) + "</td><td>" + esc(it.title) + "</td><td>" +
+    return "<tr><td>" + sku + "</td><td>" + esc(it.title) + "</td><td>" +
       esc(money.currency || "-") + " " + esc(money.amount_minor == null ? "-" : money.amount_minor) +
       "（最小币单位）</td><td>" + esc(it.stock == null ? "-" : it.stock) + "</td><td>" +
       esc(it.authority_version == null ? "-" : it.authority_version) + "</td></tr>";
   }).join("");
-  return '<div class="card"><h2>当前商品（' + list.length + "）</h2>" +
-    (rows ? (FILE_PRODUCTS
-      ? "<table><tr><th>SKU</th><th>名称</th><th>单价</th><th>起订量</th><th>有效期至</th><th>状态</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
-      : "<table><tr><th>SKU</th><th>名称</th><th>价格（最小币单位）</th><th>库存</th><th>版本</th></tr>") + rows + "</table>"
-          : '<p class="muted">暂无商品，请先导入商品。没有商品时服务不会报价或发布名片。</p>') + "</div>" +
-    '<div class="card"><h2>导入商品表（整表替换）</h2>' +
+  var summary = canPublish
+    ? '<p class="muted" id="pub-summary">已发布到目录 ' + publishedCount + " 件，未发布 " + (list.length - publishedCount) + " 件。" +
+      (known ? "" : "目录发布状态暂不可读取，刷新后重试。") + "</p>"
+    : "";
+  var selectAll = canPublish && list.length > 0
+    ? '<div class="row"><label class="consent-label"><input type="checkbox" id="pub-select-all" aria-label="全选商品" onchange="togglePublicationPicks(this)"> 全选当前商品</label></div>'
+    : "";
+  var header = canPublish
+    ? "<tr><th>选择</th><th>SKU</th><th>名称</th><th>状态</th><th>目录状态</th><th>分类（必填）</th><th>单价</th><th>起订量</th><th>有效期至</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
+    : (FILE_PRODUCTS
+      ? "<tr><th>SKU</th><th>名称</th><th>单价</th><th>起订量</th><th>有效期至</th><th>状态</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
+      : "<tr><th>SKU</th><th>名称</th><th>价格（最小币单位）</th><th>库存</th><th>版本</th></tr>");
+  var table = '<div class="table-scroll"><table' + (canPublish ? ' id="pub-table"' : '') + ">" + header +
+    (canPublish ? '<tbody id="pub-rows">' + rows + "</tbody>" : rows) + "</table></div>";
+  var publishControls = canPublish && list.length > 0
+    ? '<div class="row"><input type="text" id="pub-category-all" maxlength="120" placeholder="统一分类（可选）" aria-label="统一分类">' +
+      '<button class="act" id="pub-apply" onclick="applyPublicationCategory()">应用到已勾选</button>' +
+      '<button class="act" id="pub-clear" onclick="clearPublicationPicks()">清空选择</button></div>' +
+      '<p class="muted">公开名称、SKU、分类、商品页链接与其余公开字段；价格、库存及私有规则不会发布。' +
+      '可发布已导入或已有商品，不涉及下架其他商品。预览后选择会锁定，修改需先「重新选择」。</p>' +
+      '<button class="act" id="pub-preview" onclick="previewPublication()">预览公开内容</button>' +
+      '<div id="publication-result"></div>'
+    : (canPublish ? '<p class="muted">暂无商品，请先在下方导入商品后再选择发布。</p>' : "");
+  return '<div class="card"><h2>' + (canPublish ? "商品与目录发布" : "当前商品") + "（" + list.length + "）</h2>" + summary +
+    selectAll + (rows ? table : '<p class="muted">暂无商品，请先导入商品。没有商品时服务不会报价或发布名片。</p>') +
+    publishControls + "</div>" +
+    '<div class="card"><h2>导入商品表（按 SKU 追加/更新）</h2>' +
     '<p class="muted">交易链接仅为平台商品页；是否成交、实际价格与付款结果由交易平台确认。</p>' +
-    '<p class="muted">支持 CSV、Excel（.xlsx）与商品表 JSON：先转换校验、预览增/改/留/删，确认后整批生效（不成功的批次不改动现有商品）。</p>' +
+    '<p class="muted">支持 CSV、Excel（.xlsx）与商品表 JSON：先转换校验、预览新增/更新/保留，确认后整批生效（不成功的批次不改动现有商品）。文件里没有的商品会保留，只有同 SKU 会被更新；导入不会撤回已发布到目录的商品。</p>' +
     '<p class="muted">模板：<a href="/merchant/api/v1/products/import-template?format=csv" download="kiwi-product-import-template.csv">下载 CSV 模板</a> · <a href="/merchant/api/v1/products/import-template?format=xlsx" download="kiwi-product-import-template.xlsx">下载 Excel 模板</a>（中文表头与示例行；中英文常见列名会自动识别）。</p>' +
     '<div class="row"><input type="file" id="pfile" aria-label="选择商品导入文件" accept=".json,.csv,.xlsx">' +
-    '<button class="act" onclick="previewImport()">校验预览</button></div><div id="presult"></div></div>' +
-    (FILE_PRODUCTS && CATALOG_CONNECT && ROLE === "owner" ? publicationCard(list) : '');
+    '<button class="act" onclick="previewImport()">校验预览</button></div><div id="presult"></div></div>';
 }
 var views = {
   status: function () {
@@ -843,16 +896,32 @@ var views = {
     // 商品可能超过 100 件：跟随 next_cursor 拉全量，保证全部可选、计数准确。
     var base = FILE_PRODUCTS ? "/merchant/api" : API;
     var items = [];
+    var canPublish = FILE_PRODUCTS && CATALOG_CONNECT && ROLE === "owner";
+    var published = {};
+    var known = false;
     function loadPage(cursor, page) {
       var path = "/products?limit=100" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : "");
       return call("GET", path, undefined, base).then(function (p) {
         items = items.concat(p.items || []);
         var next = p.next_cursor;
         if (typeof next === "string" && next !== "" && page < 50) return loadPage(next, page + 1);
-        return renderProducts(items);
       });
     }
-    return loadPage("", 0);
+    var statusPromise = canPublish
+      ? call("GET", "/products/publication-status").then(function (result) {
+          var rows = (result && result.results) || [];
+          for (var i = 0; i < rows.length; i++) {
+            var sku = String(rows[i].sku || "");
+            if (!sku) continue;
+            var state = String(rows[i].publication_state || "");
+            if (!published[sku] || state.toLowerCase() === "active") published[sku] = state;
+          }
+          known = true;
+        }).catch(function () { known = false; })
+      : Promise.resolve();
+    return Promise.all([loadPage("", 0), statusPromise]).then(function () {
+      return renderProducts(items, { canPublish: canPublish, known: known, published: published });
+    });
   },
   approvals: function () {
     return call("GET", "/approvals").then(function (p) {
@@ -1314,13 +1383,40 @@ function previewPublication() {
       '<div class="table-scroll"><table><tr><th>名称</th><th>SKU</th><th>分类</th><th>商品页链接</th><th>新鲜期至</th><th>其余公开字段</th></tr>' +
       rows + "</table></div>" +
       '<p class="muted">预览有效期至 ' + esc(draft.expires_at) +
-      '（草稿到期时间）；价格、库存与私有规则不在公开内容中。整表替换只影响商品导入，不会改动本次未勾选的其他公开商品。</p>' +
+      '（草稿到期时间）；价格、库存与私有规则不在公开内容中。导入只按 SKU 新增/更新本机商品，不会撤回本次未勾选的其他已发布商品。</p>' +
       '<button class="act primary" onclick="commitPublication()">确认公开这 ' + esc(items.length) + ' 件商品</button> ' +
       '<button class="act" onclick="resetPublication()">重新选择（作废本次预览）</button>';
   }).catch(function (err) {
     publicationDraft = previousDraft;  // 网络失败不丢旧草稿引用
     bar(err.message, true);
   }).finally(function () { publicationBusy = false; });
+}
+/** 发布/续办后只刷新目录状态列与摘要，不覆盖发布回执。 */
+function refreshPublicationStatus() {
+  if (!(FILE_PRODUCTS && CATALOG_CONNECT && ROLE === "owner")) return Promise.resolve();
+  return call("GET", "/products/publication-status").then(function (result) {
+    var published = {};
+    var rows = (result && result.results) || [];
+    for (var i = 0; i < rows.length; i++) {
+      var sku = String(rows[i].sku || "");
+      if (!sku) continue;
+      var state = String(rows[i].publication_state || "");
+      if (!published[sku] || state.toLowerCase() === "active") published[sku] = state;
+    }
+    var trs = document.querySelectorAll("#pub-rows tr");
+    var publishedCount = 0;
+    for (var j = 0; j < trs.length; j++) {
+      var rowSku = String(trs[j].getAttribute("data-sku") || "");
+      var current = published[rowSku];
+      if (current) publishedCount += 1;
+      var cell = trs[j].querySelector(".pub-state");
+      if (cell) cell.textContent = publicationStateLabel(current, true);
+    }
+    var summary = $("pub-summary");
+    if (summary) {
+      summary.textContent = "已发布到目录 " + publishedCount + " 件，未发布 " + Math.max(0, trs.length - publishedCount) + " 件。";
+    }
+  }).catch(function () { bar("目录发布状态暂不可读取，请稍后刷新。", true); });
 }
 function commitPublication() {
   if (publicationBusy || !publicationDraft) return;
@@ -1346,6 +1442,7 @@ function commitPublication() {
       publicationPicks = null;
       lockPublicationSelection(false);
     }
+    refreshPublicationStatus();
   }).catch(function (err) { bar(err.message + " 请保留本页，查看原草稿回执。", true); })
     .finally(function () { publicationBusy = false; });
 }
@@ -1435,8 +1532,8 @@ function renderParseReport(r) {
       "。若其中有需要导入的信息，请改用模板列名后重新上传。</p>" : "") +
     (defaulted ? '<p class="muted">未提供、按默认值处理的列：' + esc(defaulted) +
       "（状态默认「在售」；更新时间默认取导入时刻）。</p>" : "") +
-    '<p class="muted">确认列映射无误后继续；下一步做整表严格校验与替换预览。' +
-    '<b style="color:#b3261e">整表替换：表里没有的 SKU 提交后会被移除下架。</b></p>' +
+    '<p class="muted">确认列映射无误后继续；下一步做严格校验与合并预览。' +
+    '只会新增或更新文件中的 SKU，现有商品与已发布到目录的商品都不会被删除或撤回。</p>' +
     '<button class="act primary" id="pcontinue">已确认列映射，继续校验预览</button></div>';
   var btn = $("pcontinue");
   if (btn) btn.addEventListener("click", function () {
@@ -1451,9 +1548,9 @@ function submitImportTable(table) {
       var pv = draft.preview;
       $("presult").innerHTML = '<div class="card" style="margin-top:10px;background:#fbfcfd">' +
         "<div>草稿 <b>" + esc(draft.draft_id) + "</b>：新增 " + pv.added + "，更新 " + pv.updated +
-        "，不变 " + pv.unchanged + "，<b style=\\"color:#b3261e\\">移除 " + pv.removed + "</b>（共 " + pv.rows_total + " 行）</div>" +
+        "，不变 " + pv.unchanged + "，保留现有 " + (pv.kept || 0) + "（文件共 " + pv.rows_total + " 行）。</div>" +
         '<pre class="digest">' + esc(draft.digest) + "</pre>" +
-        (pv.removed > 0 ? '<p class="muted" style="color:#b3261e">注意：整表替换会移除上表未包含的 SKU。</p>' : "") +
+        '<p class="muted">确认后只合并本文件中的 SKU；不会撤回已发布到目录的商品。</p>' +
         '<button class="act primary" onclick="commitImport()">确认导入（整批生效）</button></div>';
     })
     .catch(function (e) { bar("校验未通过：" + e.message, true); });

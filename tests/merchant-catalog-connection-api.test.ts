@@ -86,6 +86,7 @@ beforeAll(async () => {
     fileListingPublication: {
       preview: async () => publicationDraft,
       getDraft: async () => ({ found: true, draft: publicationDraft, receipts: [] }),
+      listPublished: async () => ({ results: [{ sku: "SKU1", listing_id: "listing_test", publication_state: "ACTIVE" }] }),
       commit: async () => {
         publicationCalls += 1;
         if (publicationFail) throw new Error("upstream URL contains MUST_NOT_LEAK");
@@ -192,6 +193,19 @@ describe("runtime Catalog connection API", () => {
       expect(result.status).toBe(503);
       expect(await result.text()).not.toContain("MUST_NOT_LEAK");
     } finally { publicationFail = false; }
+  });
+  it("returns published product status only to the owner", async () => {
+    const owner = await login();
+    const operator = await login("operator");
+    const path = base + "/merchant/api/v1/products/publication-status";
+    expect((await fetch(path)).status).toBe(401);
+    expect((await fetch(path, { headers: { cookie: operator.cookie } })).status).toBe(403);
+    const result = await fetch(path, { headers: { cookie: owner.cookie } });
+    expect(result.status).toBe(200);
+    expect(result.headers.get("cache-control")).toContain("no-store");
+    expect(await result.json()).toEqual({
+      results: [{ sku: "SKU1", listing_id: "listing_test", publication_state: "ACTIVE" }],
+    });
   });
   it("returns the bound account only to the owner and disables caching", async () => {
     const owner = await login();

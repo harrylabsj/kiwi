@@ -606,6 +606,24 @@ export function createMerchantManagementApiHandler(
     rest: string,
     requestId: string,
   ): Promise<void> {
+    if (rest === "/products/publication-status") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "products:import");
+      if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "only owner can publish products");
+      const channel = options.fileListingPublication;
+      if (channel === undefined) throw new ManagementError("unavailable", "product publication is unavailable");
+      try {
+        const result = await channel.listPublished();
+        writeJson(res, 200, result, { "x-request-id": requestId, "cache-control": "no-store" });
+      } catch (err) {
+        if (err instanceof FileListingPublicationError) {
+          // 不反射远端错误或凭据；页面按“状态未知”降级。
+          throw new ManagementError("precondition_changed", "目录发布状态暂不可读取，请检查连接状态后刷新。");
+        }
+        throw err;
+      }
+      return;
+    }
     const listingDraftMatch = /^\/products\/publication-drafts\/(flp_[a-z0-9]+_[0-9a-f]{12})$/.exec(rest);
     if (listingDraftMatch !== null) {
       const auth = requireActor(req);
@@ -3624,9 +3642,10 @@ export function createMerchantManagementApiHandler(
   // ── 商品导入（BD §10.1：校验预览 → 确认提交；全批成功或全批不变）────────
 
   /**
-   * POST /products/import-drafts —— 整表严格校验（任何行错误 → 整表拒绝并报
-   * 行号）+ 当前表 CAS（base_digest）+ 增/改/留/删预览；只存草稿，不动商品表。
-   * 语义是**整表替换**：新表未包含的 SKU 提交后即移除（预览给出 removed 数）。
+   * POST /products/import-drafts —— 严格校验上传表（任何行错误 → 整批拒绝并报
+   * 行号）+ 当前表 CAS（base_digest）+ 增/改/留预览；只存草稿，不动商品表。
+   * 语义是**按 SKU 合并追加**：文件里的 SKU 新增或覆盖同 SKU 的本机记录，
+   * 未出现在文件中的现有商品保持不变（removed 恒为 0）。
    */
   async function postProductsImportDraft(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const auth = requireActor(req);
@@ -3668,6 +3687,13 @@ export function createMerchantManagementApiHandler(
       throw new ManagementError("precondition_changed", "product table changed since preview");
     }
     const currentBySku = new Map(base.records.map((record) => [record.sku, record]));
+    const incomingBySku = new Map<string, CloudProductRecord>();
+    for (const record of table.products) {
+      if (incomingBySku.has(record.sku)) {
+        throw new ManagementError("invalid_input", `商品表存在重复 SKU：${record.sku}`);
+      }
+      incomingBySku.set(record.sku, record);
+    }
     let added = 0;
     let updated = 0;
     let unchanged = 0;
@@ -3677,14 +3703,21 @@ export function createMerchantManagementApiHandler(
       else if (JSON.stringify(previous) === JSON.stringify(record)) unchanged += 1;
       else updated += 1;
     }
-    const removedCount = base.records.filter(
-      (record) => !table.products.some((item) => item.sku === record.sku),
-    ).length;
-    const digest = productTableDigest(table);
+    // 按 SKU 合并：现有商品保持原顺序，同 SKU 用上传行覆盖，新 SKU 追加。
+    // 未出现在文件里的现有商品不删除——导入永远不是“整表替换”。
+    const kept = base.records.filter((record) => !incomingBySku.has(record.sku)).length;
+    const mergedProducts: CloudProductRecord[] = base.records.map(
+      (record) => incomingBySku.get(record.sku) ?? record,
+    );
+    for (const record of table.products) {
+      if (!currentBySku.has(record.sku)) mergedProducts.push(record);
+    }
+    const mergedTable: CloudProductTable = { ...table, products: mergedProducts };
+    const digest = productTableDigest(mergedTable);
     const created = options.drafts.create({
       merchantId: auth.ctx.merchantId,
       kind: "products_import",
-      payloadJson: JSON.stringify(table),
+      payloadJson: JSON.stringify(mergedTable),
       payloadDigest: digest,
       ...(base.digest !== "" ? { baseDigest: base.digest } : {}),
     });
@@ -3698,7 +3731,8 @@ export function createMerchantManagementApiHandler(
         added,
         updated,
         unchanged,
-        removed: removedCount,
+        kept,
+        removed: 0,
       },
     });
   }
@@ -3706,7 +3740,7 @@ export function createMerchantManagementApiHandler(
   /**
    * POST /products/import-parse?format=csv|xlsx —— 把商家上传的 CSV/xlsx 原文
    * （WP12）转换为商品表草稿：表头映射报告 + 逐行问题清单。无状态（不落盘），
-   * 商家确认后仍走 import-drafts 严格校验与整表替换预览；服务端解析保证工作
+   * 商家确认后仍走 import-drafts 严格校验与按 SKU 合并预览；服务端解析保证工作
    * 台、脚本与技能共用同一实现（`product-import-tabular.ts`）。
    */
   async function postProductsImportParse(
