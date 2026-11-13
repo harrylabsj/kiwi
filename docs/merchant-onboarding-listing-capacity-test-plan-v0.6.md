@@ -5,7 +5,7 @@
 
 ## 1. v0.6 验收目标
 
-验证新商家从注册、邮箱验证、Runtime 接入，到活动绑定、Agent Card 上线、商品 Listings 同步和 Buyer 询价的完整路径；验证 free 方案名额、治理限制、迁移和清理行为。
+验证新商家从注册、邮箱验证、Runtime 接入，到活动绑定、Agent Card 上线、商品 Listings 同步和 Buyer 询价的完整路径；验证 lite 方案名额、治理限制、迁移和清理行为。
 
 新商家发布权限由三项状态共同决定：
 
@@ -32,7 +32,7 @@
 1. 确认当前生产脏改动的归属；或明确同意将未知改动仅保留在上述归档中，使用独立干净 release 目录部署，原目录保持不动。
 2. 固定两仓确切提交和制品摘要；审查、合并 Catalog v0.6 entitlement 代码及当前 admin 路由重构，并通过 lint/typecheck/全量测试/CodeQL。
 3. 对生产 SQLite 做一致性备份；在副本上从 schema 37 演练至 41，验证备份可恢复、迁移审计正确。
-4. 迁移 40 会为现有 ACTIVE Listings 超过 free 上限的商家设置临时覆盖额度并留审计；迁移 41 仅把未自定义的 free 默认值从 10 调至 20。必须核对迁移前后商家、绑定、公开条目计数及已有自定义额度。
+4. 迁移 40 会为现有 ACTIVE Listings 超过原 free 上限的商家设置临时覆盖额度并留审计；迁移 41 曾把未自定义的 free 默认值从 10 调至 20；迁移 55 建立五档并把旧 free 改名 lite、默认降到 5，清除 v40 的临时 override。必须核对迁移前后商家、绑定、公开条目计数及已有自定义额度。
 5. 旧代码拒绝打开高于自身支持版本的数据库。回滚需要恢复兼容的应用版本与数据库备份成对进行；不得只回退代码。
 
 ## 3. E2E 流程
@@ -56,11 +56,11 @@ flowchart TD
     L --> M[撤回测试商品、核验释放名额并清理]
 ```
 
-### A. 注册、邮箱验证与 free 名额
+### A. 注册、邮箱验证与 lite 名额
 
 - 用两个隔离商家身份分别覆盖 Veyquo Runtime 与 WorkBuddy Runtime；每个商家使用独立 Catalog `merchant_id`，不要让两个 Runtime 共用一个商家身份。
-- 新注册字段：商家名称、电话、邮箱、密码必填，微信选填。注册即创建 `merchant_id`、`merchants` 影子行和 free 权益；不创建 token request 或待审批申请。
-- 未验证邮箱时登录/公开 Listings 必须被拒绝。验证邮箱后检查 admin dashboard 已能看到账号，并用 `GET /v1/accounts/me` 核对 `listing_capacity` 的 `active_used=0`、`active_limit=20`、剩余名额。
+- 新注册字段：商家名称、电话、邮箱、密码必填，微信选填。注册即创建 `merchant_id`、`merchants` 影子行和 lite 权益；不创建 token request 或待审批申请。
+- 未验证邮箱时登录/公开 Listings 必须被拒绝。验证邮箱后检查 admin dashboard 已能看到账号，并用 `GET /v1/accounts/me` 核对 `listing_capacity` 的 `active_used=0`、`active_limit=5`、剩余名额。
 - 独立验证公开声明资料路径：发布后可被公开搜索，但 `inquiry_available=false`，不生成 Agent Card / A2A 端点，也不增加 Listings 名额。
 
 ### B. Runtime enrollment 与绑定
@@ -74,18 +74,18 @@ flowchart TD
 
 | 用例 | 操作 | 预期 |
 | --- | --- | --- |
-| 默认额度 | 新账号查询 `/v1/accounts/me` | free / 20 名额，初始已用 0 |
+| 默认额度 | 新账号查询 `/v1/accounts/me` | lite / 5 名额，初始已用 0 |
 | 签名发布 | Runtime 发布一条合成 `product`，再自查 | Catalog 验证账号、邮箱、活动绑定、已发布 enrollment、治理和额度；成功后已用 +1；请求不含 owner token |
 | 更新/幂等 | 对同一稳定商品键重复同步、内容更新、重试 | 更新原行，不重复占额；幂等重放返回原结果 |
 | 产品类型共享 | 对同一测试商家发布 `product` 和 `capability` | 两种类型共用同一容量上限 |
-| 到达上限 | 只对空的测试商家设置 per-merchant `limit_override=1`，发布第二个新商品 | 被拒绝并返回 `LISTINGS_CAPACITY_EXCEEDED`；不更改全局 free 方案 |
+| 到达上限 | 只对空的测试商家设置 per-merchant `limit_override=1`，发布第二个新商品 | 被拒绝并返回 `LISTINGS_CAPACITY_EXCEEDED`；不更改全局 lite 方案 |
 | 撤回/重发 | 撤回一条后核对 `active_used`，再重新发布 | 撤回释放名额；重新发布再次检查当前额度 |
 | freshness/state | 测试 stale ACTIVE、WITHDRAWN、SUSPENDED | stale ACTIVE 仍占名额；WITHDRAWN/SUSPENDED 不占名额 |
 | 降额 | 将测试商家额度降到低于当前占用 | 不自动隐藏现有 ACTIVE；允许更新/撤回，拒绝新增与重新上架 |
 | 方案暂停/治理 hold | 暂停测试商家权益；另测 listing `governance_hold` | 方案暂停时允许签名自查/撤回、拒绝发布；治理 hold 不能靠 Runtime 重发解除，需管理员先解除 |
 | 账号 owner-token | 对 account-backed 测试商家用旧 token 路径，含 legacy flag 开启的隔离副本用例 | 账号商家不能靠 owner token 发布；新 Runtime 也不能接收 token |
 
-生产环境仅对专用测试 merchant 写入临时 `limit_override`，所有调整和复位都检查审计事件。全局 free 限额调整、制造 21 条真实 Listing 的迁移场景，只在数据库副本测试。
+生产环境仅对专用测试 merchant 写入临时 `limit_override`，所有调整和复位都检查审计事件。全局 lite 限额调整、制造 21 条真实 Listing 的迁移场景，只在数据库副本测试。
 
 ### D. Buyer 与失败用例
 
@@ -95,7 +95,7 @@ flowchart TD
 
 ### E. 迁移副本和生产迁移验证
 
-在数据库副本中覆盖：schema 39→40→41；已有 ACTIVE 数量大于 20 时 grandfather override 等于当前占用且写审计；未自定义 free 默认从 10 升至 20；管理员自定义 plan limit / merchant override 均保留。对迁移前后进行结构、计数和审计核对，不读取或导出生产商家明细。
+在数据库副本中覆盖：schema 39→40→41→55；v40 的临时 override 在 v55 清除；已有 ACTIVE 超过 5 的 lite 商家保留存量但阻止新增；管理员自定义 plan limit / merchant override 均保留。对迁移前后进行结构、计数和审计核对，不读取或导出生产商家明细。
 
 ### F. 清理与证据
 
@@ -105,7 +105,7 @@ flowchart TD
 
 ## 4. 当前自动化覆盖与补齐项
 
-- Kiwi `verify-enrollment-cross-repo.mjs` 已覆盖：注册后 free `active_limit=20`、一条签名 Listing 发布后已用 +1、签名撤回后已用回到 0。它不覆盖容量满、迁移或 production 网络路径。
+- Kiwi `verify-enrollment-cross-repo.mjs` 已覆盖：注册后 lite `active_limit=5`、一条签名 Listing 发布后已用 +1、签名撤回后已用回到 0。它不覆盖容量满、迁移或 production 网络路径。
 - Catalog `tests/test_listings_binding_auth.py` 已有额度上限/幂等更新、并发不能超额、邮箱验证、治理 hold、owner token 不控制签名发布、绑定/JWS 校验、签名自查与撤回等用例。
 - Catalog `tests/test_listing_entitlements.py` 有 plan 与单商家 override 分离、迁移 grandfather、v41 默认升级并保留管理员自定义值。
 - 计划仍需明确覆盖 stale ACTIVE 占额、WITHDRAWN/SUSPENDED 的名额计算、`product`/`capability` 共额、账号 owner-token 在 legacy flag 下仍 fail closed，以及迁移后后台展示/审计回执。

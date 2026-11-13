@@ -110,7 +110,13 @@ export interface MerchantServiceStatus {
     readonly state: "fresh" | "stale" | "unknown";
     readonly last_seen_at: string;
   };
-  readonly listings: { readonly used: number; readonly total: number; readonly plan: string | null };
+  readonly listings: {
+    readonly used: number;
+    readonly total: number;
+    readonly plan: string | null;
+    /** Display label from the catalog plan table; absent on older catalogs. */
+    readonly plan_label?: string | null;
+  };
 }
 
 export interface PublicationSaveResult {
@@ -305,7 +311,12 @@ export class MerchantPublicationClient {
       typeof card.published !== "boolean" ||
       typeof used !== "number" || !Number.isSafeInteger(used) || used < 0 ||
       typeof total !== "number" || !Number.isSafeInteger(total) || total < 0 ||
-      !(typeof listings.plan === "string" || listings.plan === null)
+      !(typeof listings.plan === "string" || listings.plan === null) ||
+      !(
+        listings.plan_label === undefined ||
+        typeof listings.plan_label === "string" ||
+        listings.plan_label === null
+      )
     ) {
       throw new CatalogSourceError("response_invalid", "service-status response violates its schema");
     }
@@ -345,7 +356,18 @@ export class MerchantPublicationClient {
         state: presenceState as MerchantServiceStatus["presence"]["state"],
         last_seen_at: asString(presence, "last_seen_at"),
       },
-      listings: { used, total, plan: listings.plan as string | null },
+      listings: {
+        used,
+        total,
+        plan: listings.plan as string | null,
+        // Keep older catalog responses byte-compatible: only include the field
+        // when the catalog actually sent it (string or explicit null).
+        ...(typeof listings.plan_label === "string"
+          ? { plan_label: listings.plan_label }
+          : listings.plan_label === null
+            ? { plan_label: null }
+            : {}),
+      },
     };
   }
 

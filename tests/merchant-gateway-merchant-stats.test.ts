@@ -136,7 +136,7 @@ describe("fetchServiceStatus", () => {
       },
       card: { published: false, origin: "", verification_level: "discovered" },
       presence: { state: "unknown", last_seen_at: "" },
-      listings: { used: 0, total: 20, plan: "free" },
+      listings: { used: 0, total: 5, plan: "lite" },
     };
     const result = await client(stubFetch({ capture, body: { ok: true, ...expected } })).fetchServiceStatus("cmt_merchant_token");
     expect(capture).toEqual([{
@@ -154,10 +154,26 @@ describe("fetchServiceStatus", () => {
       onboarding: { status: "awaiting_merchant_confirmation", authorization_url: "https://evil.example/x", expires_at: "" },
       card: { published: false, origin: "", verification_level: "unknown" },
       presence: { state: "unknown", last_seen_at: "" },
-      listings: { used: 0, total: 20, plan: "free" },
+      listings: { used: 0, total: 5, plan: "lite" },
     };
     await expect(client(stubFetch({ body: { ok: true, ...expected } })).fetchServiceStatus("cmt_t")).rejects.toThrow(/Catalog page URL/);
     await expect(client(stubFetch({ body: { ok: true, ...expected, onboarding: { ...expected.onboarding, authorization_url: "", status: "mystery" } } })).fetchServiceStatus("cmt_t"))
       .rejects.toThrow(/violates its schema/);
+  });
+
+  it("透传 plan_label，旧 Catalog 缺少该字段时保持兼容", async () => {
+    const withLabel = {
+      account: { merchant_id: "mkt_1", email_verified: true },
+      onboarding: { status: "published", authorization_url: "", expires_at: "" },
+      card: { published: true, origin: "https://shop.example", verification_level: "verified" },
+      presence: { state: "fresh", last_seen_at: "" },
+      listings: { used: 1, total: 20, plan: "plus", plan_label: "Plus" },
+    };
+    const result = await client(stubFetch({ body: { ok: true, ...withLabel } })).fetchServiceStatus("cmt");
+    expect(result.listings).toEqual({ used: 1, total: 20, plan: "plus", plan_label: "Plus" });
+
+    const legacy = { ...withLabel, listings: { used: 1, total: 5, plan: "lite" } };
+    const old = await client(stubFetch({ body: { ok: true, ...legacy } })).fetchServiceStatus("cmt");
+    expect(old.listings).toEqual({ used: 1, total: 5, plan: "lite" });
   });
 });

@@ -147,7 +147,7 @@ assert.equal(r.status, 200, r.text);
 r = dispatch("GET", "/v1/accounts/me", undefined, { cookie });
 assert.equal(r.status, 200, r.text);
 assert.deepEqual(JSON.parse(r.text).listing_capacity.active_used, 0);
-assert.deepEqual(JSON.parse(r.text).listing_capacity.active_limit, 20);
+assert.deepEqual(JSON.parse(r.text).listing_capacity.active_limit, 5);
 console.log("PASS verified account automatically receives configurable free Listings capacity");
 r = dispatch(
   "POST",

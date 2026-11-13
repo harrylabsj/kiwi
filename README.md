@@ -8,7 +8,7 @@
 与安全交接能力。A2A 1.0 线协议互操作以组合 conformance transcript 为准，不用历史审计
 文档替代运行证据。
 
-商家注册、一次连接确认和默认 20 个可配置商品名额的现行流程见 [商家接入与商品名额设计 v0.6](docs/merchant-onboarding-listing-capacity-v0.6.md)。
+商家注册、一次连接确认和默认 5 个可配置商品名额（Lite/Plus/Pro/Max/Ultra = 5/20/50/100/500）的现行流程见 [商家接入与商品名额设计 v0.6](docs/merchant-onboarding-listing-capacity-v0.6.md)。
 十种产品形态的版本来源、制品、平台审批状态和统一 release bundle 见[Portfolio 发布管理](docs/portfolio-release-management.md)与 [`portfolio-products.json`](portfolio-products.json)。
 
 ## 协议：KNP/1.0

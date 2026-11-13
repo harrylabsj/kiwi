@@ -125,7 +125,7 @@ function fakeClient(calls: RecordedCall[], options: { fail?: boolean } = {}) {
         },
         card: { published: false, origin: "", verification_level: "discovered" },
         presence: { state: "unknown" as const, last_seen_at: "" },
-        listings: { used: 0, total: 20, plan: "free" },
+        listings: { used: 0, total: 5, plan: "lite", plan_label: "Lite" },
       };
     },
   } as unknown as MerchantPublicationClient;

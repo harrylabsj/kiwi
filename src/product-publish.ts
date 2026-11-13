@@ -370,7 +370,7 @@ export async function merchantPublish(
       } catch (err) {
         const remoteCode = err instanceof Error && "remoteCode" in err && typeof err.remoteCode === "string" ? err.remoteCode : undefined;
         const guidance: Record<string, string> = {
-          LISTINGS_CAPACITY_EXCEEDED: "商品名额已满：请下架一个商品，或在 Catalog 升级/调整额度；此商品未发布，可稍后重试",
+          LISTINGS_CAPACITY_EXCEEDED: "商品名额已满：请先下架不用的商品释放名额，或联系 Kiwi 运营升级套餐；此商品未发布，可稍后重试",
           LISTINGS_ENTITLEMENT_SUSPENDED: "商品发布资格已暂停：请在 Catalog 查看状态；此商品未发布",
           LISTINGS_ACCOUNT_NOT_READY: "商家账号尚未完成邮箱验证或已暂停：请先到 Catalog 处理",
           LISTINGS_GOVERNANCE_HOLD: "该商品被平台暂停：请联系管理员解除，重新发布不能恢复",
