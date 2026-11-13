@@ -23,7 +23,7 @@
         "protected kiwi-release environment",
         "npm trusted publishing"
       ],
-      "last_known_registry_version": "0.12.28"
+      "last_known_registry_version": "0.12.29"
     },
     {
       "id": "kiwi",
@@ -39,7 +39,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/npm/*.tgz",
       "state": "candidate",
-      "last_known_registry_version": "0.12.28",
+      "last_known_registry_version": "0.12.29",
       "gates": [
         "full Kiwi verify",
         "protected kiwi-release environment",
@@ -60,7 +60,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/kiwi-catalog/*",
       "state": "candidate",
-      "last_known_registry_version": "0.5.20",
+      "last_known_registry_version": "0.5.22",
       "gates": [
         "locked tests",
         "contract lock",
