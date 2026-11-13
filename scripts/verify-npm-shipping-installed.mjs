@@ -100,7 +100,7 @@ for (const [name, relative, subdir, app] of [
     installed = path.join(consumer, "node_modules", name);
   }
   writeFileSync(path.join(consumer, "install.log"), installLog);
-  if (json(path.join(installed, "package.json")).version !== "0.12.28")
+  if (json(path.join(installed, "package.json")).version !== "0.12.29")
     throw new Error("SHIPPING_COLD_VERSION_MISMATCH");
   let cloudClosure;
   if (subdir === "cloud") {
@@ -166,7 +166,7 @@ for (const [name, relative, subdir, app] of [
   budget();
   results.push({
     name,
-    version: "0.12.28",
+    version: "0.12.29",
     source_commit: source.source_commit,
     tgz_sha256: sha256(readFileSync(tgz)),
     runtime_log_sha256: sha256(Buffer.from(probe)),
