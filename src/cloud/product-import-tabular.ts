@@ -42,6 +42,7 @@ import {
 } from "../handoff/marketplace-product-link.js";
 import {
   DEFAULT_TRADE_PLATFORM_RULES,
+  buildTradePlatformUrl,
   type TradePlatformRule,
 } from "../handoff/trade-platform-rules.js";
 
@@ -86,7 +87,8 @@ export type TabularField =
   | "valid_until"
   | "status"
   | "trade_platform"
-  | "platform_product_id";
+  | "platform_product_id"
+  | "platform_product_url";
 
 export interface TabularFieldSpec {
   field: TabularField;
@@ -252,6 +254,25 @@ export const TABULAR_FIELDS: readonly TabularFieldSpec[] = [
     zh: "平台商品ID",
     required: false,
     aliases: ["platformproductid", "平台商品id", "交易平台商品id"],
+  },
+  {
+    field: "platform_product_url",
+    zh: "商品链接",
+    required: false,
+    aliases: [
+      "platformproducturl",
+      "producturl",
+      "productlink",
+      "商品链接",
+      "商品详情页链接",
+      "商品详情链接",
+      "平台商品链接",
+      "交易链接",
+      "详情页链接",
+      "链接",
+      "url",
+      "link",
+    ],
   },
 ];
 
@@ -833,6 +854,7 @@ export const TABULAR_TEMPLATE_HEADER: readonly string[] = [
   "状态/status",
   "交易平台/trade_platform",
   "平台商品ID/platform_product_id",
+  "商品链接/platform_product_url",
 ];
 
 export function templateExampleRows(
@@ -840,6 +862,8 @@ export function templateExampleRows(
 ): string[][] {
   const first = rules[0]?.label ?? "京东";
   const second = rules[1]?.label ?? first;
+  const secondId = "98765432101234567890";
+  const secondUrl = rules[1] !== undefined ? (buildTradePlatformUrl(rules[1], secondId) ?? "") : "";
   return [
     [
       "DEMO-001",
@@ -849,12 +873,13 @@ export function templateExampleRows(
       "29.90",
       "50",
       "2000",
-      "仅格式示例；平台商品ID不代表已核实商品，请替换",
+      "仅格式示例；商品ID或商品链接不代表已核实商品，请替换",
       "",
       "2027-12-31",
       "在售",
       first,
       "12345678901234567890",
+      "",
     ],
     [
       "DEMO-002",
@@ -864,12 +889,13 @@ export function templateExampleRows(
       "3.50",
       "100",
       "8000",
-      "仅格式示例；平台商品ID不代表已核实商品，请替换",
+      "仅格式示例；商品ID或商品链接不代表已核实商品，请替换",
       "2026-09-01",
       "2028-06-30",
       "在售",
       second,
-      "98765432101234567890",
+      "",
+      secondUrl,
     ],
   ];
 }
@@ -994,7 +1020,7 @@ function sheetXmlFromGrid(
     .join("");
   const cols = Array.from({ length: columnCount }, (_, index) => {
     const width = index === 0 || index === 7 ? 260 : 110;
-    return `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"${index === 12 ? ' style="1"' : ""}/>`;
+    return `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"${index === 12 || index === 13 ? ' style="1"' : ""}/>`;
   }).join("");
   // 平台下拉来自运营配置；Excel 的 formula1 列表上限 255 字符，超长时省略
   // 下拉（导入解析仍会按规则拒绝未知平台）。
@@ -1430,17 +1456,30 @@ export function convertTabularImport(
     let tradeFields: MarketplaceProductFields = {};
     const platformRaw = cellOf(row, "trade_platform");
     const productIdRaw = cellOf(row, "platform_product_id");
+    const productUrlRaw = cellOf(row, "platform_product_url");
     const productIdColumn = columnIndex.get("platform_product_id");
-    if (
+    const productUrlColumn = columnIndex.get("platform_product_url");
+    const idNotText =
       productIdRaw !== "" &&
       productIdColumn !== undefined &&
-      nonTextCells.has(`${index}:${productIdColumn}`)
-    ) {
+      nonTextCells.has(`${index}:${productIdColumn}`);
+    const urlNotText =
+      productUrlRaw !== "" &&
+      productUrlColumn !== undefined &&
+      nonTextCells.has(`${index}:${productUrlColumn}`);
+    if (idNotText) {
       errors.push({
         row: rowNumber,
         field: "platform_product_id",
         code: "BAD_PLATFORM_PRODUCT_ID_TYPE",
         message: `第 ${rowNumber} 行平台商品ID必须是文本单元格，不能用数字或公式；请从平台重新复制准确ID到文本列`,
+      });
+    } else if (urlNotText) {
+      errors.push({
+        row: rowNumber,
+        field: "platform_product_url",
+        code: "BAD_PLATFORM_PRODUCT_URL_TYPE",
+        message: `第 ${rowNumber} 行商品链接必须是文本单元格，不能用数字或公式；请粘贴完整商品详情页链接`,
       });
     } else {
       try {
@@ -1448,6 +1487,7 @@ export function convertTabularImport(
           {
             trade_platform: platformRaw,
             platform_product_id: productIdRaw,
+            platform_product_url: productUrlRaw,
           },
           options.platformRules,
         );

@@ -1316,6 +1316,8 @@ export function createMerchantManagementApiHandler(
       if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "only owner can publish products");
       const channel = options.fileListingPublication;
       if (channel === undefined) throw new ManagementError("unavailable", "product publication is unavailable");
+      // 发布链接按当前运营规则生成（无需重启实例）。
+      await options.marketplacePlatforms?.();
       try {
         if (publicationCommitMatch !== null) {
           const fields = objectFields(await readJsonBody(req), ["expected_digest", "confirm_publication"]);
@@ -2579,6 +2581,8 @@ export function createMerchantManagementApiHandler(
     }
     if (rest === "/products") {
       const auth = requireActor(req);
+      // 列表里的成交链接要按运营当前规则生成；catalog 不可达时保留上次快照。
+      await options.marketplacePlatforms?.();
       writeJson(res, 200, await readService.listProducts(auth.ctx, pageQuery(url)));
       return;
     }
@@ -3659,7 +3663,9 @@ export function createMerchantManagementApiHandler(
     }
     let table: CloudProductTable;
     try {
-      table = parseProductTable(fields["table"], "request body");
+      // 导入预览/提交都用运营最新规则校验平台与链接，不依赖进程启动快照。
+      const platformRules = await options.marketplacePlatforms?.();
+      table = parseProductTable(fields["table"], "request body", platformRules);
       table = await importChannel.prepareTable?.(table) ?? table;
     } catch (err) {
       if (err instanceof ProductTableError) {
@@ -3869,6 +3875,8 @@ export function createMerchantManagementApiHandler(
       return;
     }
     try {
+      // 落盘前再刷一次运营规则：运营新增平台后无需重启实例即可提交。
+      await options.marketplacePlatforms?.();
       const written = importChannel.commit(table);
       const marked = options.drafts.markCommitted(auth.ctx.merchantId, draftId);
       if (!marked) {

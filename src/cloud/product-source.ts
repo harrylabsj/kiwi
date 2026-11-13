@@ -180,6 +180,7 @@ export function parseProductTable(
         {
           trade_platform: record["trade_platform"],
           platform_product_id: record["platform_product_id"],
+          platform_product_url: record["platform_product_url"],
         },
         platformRules,
       );
@@ -235,6 +236,10 @@ export interface FileProductSourceOptions {
   merchantId: string;
   /** 运营配置的交易平台规则；缺省使用内置 jd/taobao/tmall。 */
   platformRules?: readonly TradePlatformRule[];
+  /** 读取当前规则快照（运营改平台后无需重启；优先于 platformRules）。 */
+  platformRulesProvider?: () => readonly TradePlatformRule[];
+  /** 读取前用 catalog 最新规则刷新快照；失败时调用方保留旧快照。 */
+  refreshPlatformRules?: () => Promise<readonly TradePlatformRule[]>;
   now?: () => number;
 }
 
@@ -257,6 +262,8 @@ export function createFileProductSource(
 ): CloudProductSourceHandle {
   const now = options.now ?? (() => Date.now());
   let cached: { raw: string; table: CloudProductTable } | undefined;
+  const currentRules = (): readonly TradePlatformRule[] | undefined =>
+    options.platformRulesProvider?.() ?? options.platformRules;
 
   const load = (): CloudProductTable => {
     let raw: string;
@@ -271,7 +278,7 @@ export function createFileProductSource(
     if (cached !== undefined && cached.raw === raw) return cached.table;
     let table: CloudProductTable;
     try {
-      table = parseProductTable(JSON.parse(raw) as unknown, options.file, options.platformRules);
+      table = parseProductTable(JSON.parse(raw) as unknown, options.file, currentRules());
     } catch (err) {
       if (err instanceof ProductTableError) throw err;
       throw new ProductTableError(
@@ -320,6 +327,8 @@ export function createFileProductSource(
     list: () => load().products,
     source: {
       async getProduct(sku: string) {
+        // 运营新增平台后无需重启：读取商品与生成成交链接前刷新规则快照。
+        await options.refreshPlatformRules?.();
         const check = availability(sku);
         if (!check.available) {
           // 抛错即 fail-closed：merchant handler 走 decline，不产生任何价格。
@@ -332,7 +341,7 @@ export function createFileProductSource(
         const handoffDestination = buildMarketplaceProductLink(
           record.trade_platform,
           record.platform_product_id,
-          options.platformRules,
+          currentRules(),
         );
         return {
           sku: record.sku,

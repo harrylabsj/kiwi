@@ -88,6 +88,8 @@ export interface FileListingPublicationOptions {
   catalogUrl: string;
   /** 运营配置的交易平台规则；缺省使用内置 jd/taobao/tmall。 */
   platformRules?: readonly TradePlatformRule[];
+  /** 读取当前规则快照（运营改平台后无需重启；优先于 platformRules）。 */
+  platformRulesProvider?: () => readonly TradePlatformRule[];
   /** 当前公网 Runtime origin（地址迁移守卫；缺省读 profile.merchant_public.public_url）。 */
   publicOrigin?: string;
   /** 测试缝。 */
@@ -322,8 +324,11 @@ export function createFileListingPublicationService(options: FileListingPublicat
     return context;
   };
 
+  const currentRules = (): readonly TradePlatformRule[] | undefined =>
+    options.platformRulesProvider?.() ?? options.platformRules;
+
   const loadTable = () =>
-    loadProductTableSnapshot(options.productsFile, options.profile.owner_id, options.platformRules);
+    loadProductTableSnapshot(options.productsFile, options.profile.owner_id, currentRules());
 
   async function preview(selections: readonly FileListingSelection[]): Promise<FileListingPreview> {
     if (!Array.isArray(selections) || selections.length === 0) {
@@ -362,7 +367,7 @@ export function createFileListingPublicationService(options: FileListingPublicat
       const productLink = buildMarketplaceProductLink(
         record.trade_platform,
         record.platform_product_id,
-        options.platformRules,
+        currentRules(),
       );
       const listing = canonicalizeCatalogListing(
         {

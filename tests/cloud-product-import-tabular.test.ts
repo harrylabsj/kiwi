@@ -86,6 +86,59 @@ describe("convertTabularImport — 表头识别", () => {
     expect(xml).not.toContain("京东");
   });
 
+  it("商品链接可替代平台商品ID，平台中英文皆可", () => {
+    const rules = [
+      {
+        id: "walmart",
+        label: "沃尔玛",
+        domain: "www.walmart.com",
+        url_template: "https://www.walmart.com/ip/{id}",
+        sort_order: 3,
+      },
+    ];
+    for (const platform of ["沃尔玛", "Walmart", "walmart"]) {
+      const text =
+        "sku,title,currency,unit,price,valid_until,交易平台,商品链接\n" +
+        `A-1,合成测试,CNY,piece,1,2027-12-31,${platform},https://www.walmart.com/ip/123456789?utm_source=x`;
+      const result = convertTabularImport(
+        { kind: "csv", text },
+        { ...OPTIONS, platformRules: rules },
+      );
+      expect(result.ok).toBe(true);
+      expect(result.table?.products[0]).toMatchObject({
+        trade_platform: "walmart",
+        platform_product_id: "123456789",
+      });
+    }
+  });
+
+  it("商品链接缺失平台、域名不符或与ID不一致时整行拒绝", () => {
+    const rules = [
+      {
+        id: "walmart",
+        label: "沃尔玛",
+        domain: "www.walmart.com",
+        url_template: "https://www.walmart.com/ip/{id}",
+        sort_order: 3,
+      },
+    ];
+    for (const row of [
+      "A-1,合成测试,CNY,piece,1,2027-12-31,,,https://www.walmart.com/ip/123",
+      "A-1,合成测试,CNY,piece,1,2027-12-31,沃尔玛,,https://evil.example/ip/123",
+      "A-1,合成测试,CNY,piece,1,2027-12-31,沃尔玛,456,https://www.walmart.com/ip/123",
+      "A-1,合成测试,CNY,piece,1,2027-12-31,沃尔玛,,",
+    ]) {
+      const text =
+        "sku,title,currency,unit,price,valid_until,交易平台,平台商品ID,商品链接\n" + row;
+      const result = convertTabularImport(
+        { kind: "csv", text },
+        { ...OPTIONS, platformRules: rules },
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.some((e) => e.code === "BAD_PRODUCT_TRADE_ENTRY")).toBe(true);
+    }
+  });
+
   it("旧列和新两列都空保持兼容", () => {
     const result = convertCsv(MINIMAL_EN + "\nB-1,Other,CNY,piece,1,2027-12-31");
     expect(result.ok).toBe(true);
@@ -398,6 +451,7 @@ describe("xlsx 模板 roundtrip 与日期序列", () => {
     // Stored XML is deliberately readable in the existing minimal ZIP generator.
     const xml = bytes.toString("utf8");
     expect(xml).toContain('<col min="13" max="13"');
+    expect(xml).toContain('<col min="14" max="14"');
     expect(xml).toContain('style="1"');
     expect(xml).toContain('numFmtId="49"');
     expect(xml).toContain('sqref="L2:L5001"');
@@ -413,8 +467,10 @@ describe("xlsx 模板 roundtrip 与日期序列", () => {
     expect(result.report.format).toBe("xlsx");
     expect(result.table?.products).toHaveLength(2);
     expect(result.table?.products[0]?.supply_note).toContain("仅格式示例");
-    expect(grid[0]).toHaveLength(13);
+    expect(grid[0]).toHaveLength(14);
+    expect(grid[0]?.[13]).toBe("商品链接/platform_product_url");
     expect(result.table?.products[0]?.platform_product_id).toBe("12345678901234567890");
+    expect(result.table?.products[1]?.platform_product_id).toBe("98765432101234567890");
     expect(result.table?.products[1]?.updated_at).toBe("2026-09-01T00:00:00.000Z");
   });
 
