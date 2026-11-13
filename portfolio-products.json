@@ -49,7 +49,7 @@
     {
       "id": "kiwi-catalog",
       "name": "Kiwi Catalog",
-      "version": "0.5.21",
+      "version": "0.5.22",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
