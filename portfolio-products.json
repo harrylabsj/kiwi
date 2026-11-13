@@ -28,7 +28,7 @@
     {
       "id": "kiwi",
       "name": "Kiwi runtime",
-      "version": "0.12.28",
+      "version": "0.12.29",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -39,7 +39,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/npm/*.tgz",
       "state": "candidate",
-      "last_known_registry_version": "0.12.27",
+      "last_known_registry_version": "0.12.28",
       "gates": [
         "full Kiwi verify",
         "protected kiwi-release environment",
