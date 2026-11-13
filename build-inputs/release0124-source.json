@@ -862,7 +862,7 @@
     },
     {
       "path": "integrations/hosts/openclaw/kiwi-buyer-openclaw/package-lock.json",
-      "sha256": "sha256:2570f03b35e3d981f87a7e939a3be5804dee00d7dd993e1fe58559a3052dafa7"
+      "sha256": "sha256:7391bb4a8683d20bc9cc58fd071612a0f6e35f7414cfca6b27f68327ad52af72"
     },
     {
       "path": "integrations/hosts/openclaw/kiwi-buyer-openclaw/package.json",
@@ -3326,7 +3326,7 @@
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:a235f0754da212ed589029fef7abf5ee3c8deef46b71db147b6300508b2f24fb"
+      "sha256": "sha256:7eb34fd6161b331fe50324ec91a756b2703f21deb1fef6fea853b52620a73dbf"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
