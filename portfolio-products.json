@@ -6,7 +6,7 @@
     {
       "id": "kiwi-merchant-cloud",
       "name": "Kiwi Merchant Cloud",
-      "version": "0.12.29",
+      "version": "0.12.30",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -28,7 +28,7 @@
     {
       "id": "kiwi",
       "name": "Kiwi runtime",
-      "version": "0.12.29",
+      "version": "0.12.30",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -49,7 +49,7 @@
     {
       "id": "kiwi-catalog",
       "name": "Kiwi Catalog",
-      "version": "0.5.22",
+      "version": "0.5.23",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
