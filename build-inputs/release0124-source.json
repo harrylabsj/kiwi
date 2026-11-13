@@ -214,7 +214,7 @@
     },
     {
       "path": "build-inputs/release-acceptance.json",
-      "sha256": "sha256:feff03a6154ab0d93a8cf812fd9ae6c8f833c5869220bd0a682d3b1060662fae"
+      "sha256": "sha256:3ff1c7a569887c537df0ca83e126bceffdc953e554d6d5db696a36be7a02fbbc"
     },
     {
       "path": "build-inputs/release0124-npm12-payload.json",
@@ -3322,7 +3322,7 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:ea9f3e1cb5a61dfafdcb50950b7b5daebdcb4c8d64587d35f1e522625bc8b8f7"
+      "sha256": "sha256:15df45f393ea4d5b120dca0038a8f4365001538936bc8b91873bc615430caf88"
     },
     {
       "path": "portfolio.lock.json",
@@ -3638,7 +3638,7 @@
     },
     {
       "path": "scripts/verify-cloud-package-candidate.mjs",
-      "sha256": "sha256:fef43f1e12ccee9fec6a1bf7edddfae6ff116821f4f09a11f22aa3ed2ed9a5ba"
+      "sha256": "sha256:a3a841d03bd3a90076f18f47682cec4a91c5050eef8de620fa9b529e741959ac"
     },
     {
       "path": "scripts/verify-contract-vectors.mjs",
@@ -3662,7 +3662,7 @@
     },
     {
       "path": "scripts/verify-npm-shipping-installed.mjs",
-      "sha256": "sha256:55339875692006ff3eeaa5ff93d2347430e80bcc902a6282423369e90d779dc3"
+      "sha256": "sha256:edb7a41a72a43b467436dbd4dc460d5e7a6cc1ed41c2bb930544678d158d2812"
     },
     {
       "path": "scripts/verify-npm-shipping-runtime.mjs",
@@ -7780,7 +7780,7 @@
     },
     {
       "path": "tests/npm-shipping-contract.test.ts",
-      "sha256": "sha256:bb731a821cb4a611553fa185b5d783ba83f48e40b90c3c4476e69f66aeef0299"
+      "sha256": "sha256:4b5c7343a782598522133e21c5d521c99db9b838cb17ce0e73eb95092d62b7f5"
     },
     {
       "path": "tests/onboarding-local-fallback.test.ts",
