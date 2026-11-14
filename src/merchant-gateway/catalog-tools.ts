@@ -197,7 +197,8 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
           presence: status.presence,
           listings: status.listings,
           note:
-            "只有 card.published=true 且 presence.state=fresh 时，才可回答商家「已上线」。" +
+            "只有 card.published=true 且 presence.state=fresh 时，才可说「名片已发布、连接正常」；" +
+            "这只证明连接与心跳，不代表买家可搜索到该商家或能发起询价（该能力未实测时一律标未验证）。" +
             "授权中的配对码、设备码和 grant 不会由此工具返回。",
         },
         maxChars,
@@ -330,7 +331,8 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
       name: "kiwi_catalog_get_service_status",
       description:
         "读取当前商家的开通进度、名片发布、心跳新鲜度和商品名额（只读）。" +
-        "只有 card.published=true 且 presence.state=fresh 时，才可告诉商家「已上线」。" +
+        "只有 card.published=true 且 presence.state=fresh 时，才可说「名片已发布、连接正常」；" +
+        "不要据此宣称买家可搜索到商家或能发起询价。" +
         "待商家确认时只返回 Catalog 授权页 URL 与过期时间，不返回配对码、device_code、grant 或 owner token。",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },

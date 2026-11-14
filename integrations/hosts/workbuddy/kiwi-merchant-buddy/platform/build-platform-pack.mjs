@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * WP18/WP19/WP25：从 buddy-app.config.json（1.8.0）生成 WorkBuddy 开放平台可导入的配置包。
+ * WP18/WP19/WP25：从 buddy-app.config.json（1.8.2）生成 WorkBuddy 开放平台可导入的配置包。
  *
  * 输出（默认写到本目录 out/，市场草稿写到本目录 market-draft/）：
  *   - industry-config.json：平台「导入配置」用（格式为项目经理从平台前端 importer 反推的
@@ -26,6 +26,7 @@
  */
 import { Buffer } from "node:buffer";
 import console from "node:console";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import process from "node:process";
 import path from "node:path";
@@ -41,14 +42,20 @@ const PLATFORM_TEMPLATE_VERSION = "1.0.0";
 const PLATFORM_TEMPLATE_ID = "";
 // 已撤回的 v1.1.0 连接器资产，任何输出不得引用。
 const WITHDRAWN_CONNECTOR_ID = "oc_c86216e2a36110bf";
-// 平台技能资产 ID：目前只有 cs-prep 有先例 ID（见 buddy-app.config.json $pending.skills）；
-// kiwi-cloud-deploy / kiwi-product-import 审核通过后由项目经理回填并重新生成。
-// 占位 id 统一用 pending:<技能名>（一眼可辨、可 grep，绝不伪装成真实资产 ID）。
+// 平台技能资产 ID：三个商家应用内引用的技能均已创建平台资产。
+// 提交前仍需在平台核对当前审核/发布状态；未通过时不要把 pending 占位写进导入包。
 const SKILL_ASSET_IDS = {
   "kiwi-merchant-cs-prep": "os_dc3a52407574eb77",
+  "kiwi-cloud-deploy": "os_1ea25f81ce98fea3",
+  "kiwi-product-import": "os_32c612d72d2c3bcd",
 };
 const pendingSkillAssetId = (skill) => `pending:${skill}`;
 const skillAssetIdFor = (skill) => SKILL_ASSET_IDS[skill] ?? pendingSkillAssetId(skill);
+for (const [skill, assetId] of Object.entries(SKILL_ASSET_IDS)) {
+  if (!/^os_[0-9a-f]{16}$/.test(assetId)) {
+    throw new Error(`技能 ${skill} 的平台资产 ID 不是 16 位 os_ 资产：${assetId}`);
+  }
+}
 
 // —— 首页标题（WP19）——
 // 平台 header.title 的精确分隔格式未确认（docs/…/platform-ref/ 目录为空，无已存资料），
@@ -166,7 +173,7 @@ const ICONS = {
  * 平台包内容映射表。约定：
  * - modeKey 对应 buddy-app.config.json 的 home.modes[].key；模式名/系统提示词/skills 均从源配置读取，
  *   保证「以 buddy-app.config.json 为唯一内容源」不漂移。
- * - sourceCapsules 必须是该模式在 1.8.0 中的真实胶囊 label（脚本校验）；本地草稿「一个胶囊 = 一句
+ * - sourceCapsules 必须是该模式在当前草稿中的真实胶囊 label（脚本校验）；本地草稿「一个胶囊 = 一句
  *   提示词」，平台要求「胶囊 = 场景 + 4–10 条模板」，因此按主题合并/扩写。
  * - systemPromptAppend 把原 bindTools/bindSkills 的「该用哪个工具/技能」改写为文字指引（平台不存在
  *   按胶囊绑定工具）；其中提到的工具/技能必须出现在源模式的 tools/skills 里（脚本校验）。
@@ -185,7 +192,7 @@ const MODE_PACKS = [
         icon: "cap-register.svg",
         sourceCapsules: ["注册账号"],
         systemPromptAppend:
-          "商家询问 Kiwi 客服联系方式时，直接回答：Kiwi 客服微信号：hhdshwe，邮箱：1711496337@qq.com；无需查询开通状态。其他开通问题先判断商家处于哪一步：优先用 kiwi_catalog_get_service_status 读取开通状态；该工具不可用时改用 kiwi_catalog_get_merchant_profile 判断账号是否已连接。按阶段只讲下一步要做的一件事，不一次倒出全部流程。",
+          "商家询问 Kiwi 客服联系方式时，可以直接回答：Kiwi 客服微信号：hhdshwe，邮箱：1711496337@qq.com。其他开通问题先判断商家处于哪一步：优先用 kiwi_catalog_get_service_status 读取开通状态；该工具不可用时改用 kiwi_catalog_get_merchant_profile 判断账号是否已连接。按阶段只讲下一步要做的一件事，不一次倒出全部流程。",
         templates: [
           {
             title: "新商家注册",
@@ -329,7 +336,7 @@ const MODE_PACKS = [
         icon: "cap-golive.svg",
         sourceCapsules: ["上线检查"],
         systemPromptAppend:
-          "只有 kiwi_catalog_get_service_status 显示名片已发布且在线状态正常时，才能说「已上线，采购方可以发现你并发来询价」；否则如实说明卡在哪一步和下一步动作，不确定就说不确定。",
+          "只有 kiwi_catalog_get_service_status 显示名片已发布且心跳正常时，才能说「名片已发布、连接正常」；不要据此说买家已能搜索到你或发来询价——商品是否可被搜索、买家能否发起询价，当前版本以实测为准；否则如实说明卡在哪一步和下一步动作，不确定就说不确定。",
         templates: [
           {
             title: "是否已上线",
@@ -512,7 +519,7 @@ const MODE_PACKS = [
         icon: "cap-slots.svg",
         sourceCapsules: ["商品名额"],
         systemPromptAppend:
-          "用 kiwi_catalog_get_service_status 读取商品名额（已用/总数）与服务在线状态；名额满时说明需先下架商品释放名额，或联系 Kiwi 运营升级套餐（Lite/Plus/Pro/Max/Ultra），首版无自助支付。",
+          "用 kiwi_catalog_get_service_status 读取商品名额（已用/总数）与心跳状态；名额以工作台显示的已用/总数为准，商品与能力条目共用上限；套餐档位为 Lite 5 / Plus 20 / Pro 50 / Max 100 / Ultra 500（具体以工作台为准）；名额满时说明需先下架商品释放名额，或联系 Kiwi 运营调整套餐；是否调整及费用以运营确认为准，当前无自助支付。",
         templates: [
           {
             title: "剩余名额",
@@ -1150,17 +1157,19 @@ const EXPERT_BOUNDARY_APPEND =
   "不在对话里收集密码、邮箱验证码、配对码、密钥或 token。";
 
 // —— 市场配置数据（WP25 更新：随 1.8.0 四工作场景重排）——
-// 专家/专家团 id 为平台已创建的市场资产 ID（oe_*，2026-09-30 回填）：六个资产当前全部
-// 处于「审核中」状态——不得据此宣称已过审、已发布或平台可用；状态变化只改
+// 专家/专家团 id 为平台已创建的市场资产 ID（oe_*，2026-09-30 回填）。状态是带日期的观察，
+// 不是实时查询：2026-10-27 盘点为已发布；开通顾问 0.1.8 于 2026-11-12 提交审核、0.1.2 仍为
+// 线上版本。不得把历史盘点当成当前可用证明；提交前以平台页面为准。状态变化只改
 // MARKET_ASSET_REVIEW_STATUS 一处并重新生成。精选场景 id 仍为占位（scn-*，待平台创建后
 // 回填）；改动需同步 industry-config.json 胶囊 expertId 与 platform/market-draft/。
 // 专用专家 5 个，对应 4 个工作场景：开通顾问（注册开通）、报价助理（商品报价）、
 // 运营分析师（运营分析的数据类胶囊）、客服教练（运营分析的客服类胶囊）、
 // 洽谈审批官（审批磋商）。
-const MARKET_ASSET_REVIEW_STATUS = "审核中";
+const MARKET_ASSET_REVIEW_STATUS =
+  "以平台页面为准；开通顾问 0.1.8 审核中（2026-11-12 提交），其余按 2026-10-27 盘点为已发布";
 const MARKET_EXPERTS = [
   {
-    id: "oe_ee5ab6349f00203",
+    id: "oe_eee5ab6349f00203",
     name: "开通顾问",
     nameEn: "Onboarding Advisor",
     categoryId: "cat-onboarding",
@@ -1179,7 +1188,7 @@ const MARKET_EXPERTS = [
     descriptionEn: "Turns product notes into import-ready sheets, drafts quote rules, and watches listing slots.",
     skills: ["kiwi-product-import"],
     systemPrompt:
-      "你是 Kiwi 商家应用的报价助理，帮商家把商品和价格准备到位。整理商品按 kiwi-product-import 技能执行：与商家逐列确认映射，生成与工作台「商品与导入」页可下载模板完全一致的文件；绝不编造价格/库存/规格/有效期，缺失标「需商家补充」；疑似底价/成本/进价列一律剔除；每次提醒整表替换语义，上传与确认导入由商家本人在工作台完成。帮商家起草报价规则草稿与规则调整建议（可自动报价范围、底价口径、必须人工审批的情形），缺失信息标「需商家补充」。用 kiwi_catalog_get_service_status 读取商品名额与在线状态并如实转述；名额满时说明先下架商品释放名额或联系 Kiwi，联系 Kiwi 运营调整套餐。优化文案与搜索词时先用 kiwi_catalog_get_publication 逐条读取当前内容，改好用 kiwi_catalog_save_publication_draft 存草稿，发布由商家到门户确认。",
+      "你是 Kiwi 商家应用的报价助理，帮商家把商品和价格准备到位。整理商品按 kiwi-product-import 技能执行：与商家逐列确认映射，生成与工作台「商品与导入」页可下载模板完全一致的文件；绝不编造价格/库存/规格/有效期，缺失标「需商家补充」；疑似底价/成本/进价列一律剔除；每次提醒整表替换语义，上传与确认导入由商家本人在工作台完成。帮商家起草报价规则草稿与规则调整建议（可自动报价范围、底价口径、必须人工审批的情形），缺失信息标「需商家补充」。用 kiwi_catalog_get_service_status 读取商品名额与心跳状态并如实转述；名额以工作台已用/总数为准，商品与能力条目共用上限；套餐档位为 Lite 5 / Plus 20 / Pro 50 / Max 100 / Ultra 500（具体以工作台为准）；名额满时说明先下架商品释放名额或联系 Kiwi 运营调整套餐；是否调整及费用以运营确认为准，当前无自助支付。优化文案与搜索词时先用 kiwi_catalog_get_publication 逐条读取当前内容，改好用 kiwi_catalog_save_publication_draft 存草稿，发布由商家到门户确认。",
   },
   {
     id: "oe_85c8bf08203ad422",
@@ -1193,7 +1202,7 @@ const MARKET_EXPERTS = [
       "你是 Kiwi 商家应用的运营分析师，帮商家读懂经营数据。首发阶段运营明细在商家自己的云端实例工作台（运营报告），你不直连实例：请商家把工作台里看到的数字或内容贴过来，帮其解读趋势、找出问题、给出下一步建议，绝不编造访客数、询价数或接待效果。你能用 kiwi_catalog_get_merchant_stats（匿名聚合：关注人数、浏览量）与 kiwi_catalog_get_service_status（在线状态、商品名额已用/总数）这两类只读网关工具回答数据问题；结论给依据，引用数据时说明口径与时间范围；数据不足就说不确定；该汇总没有关注者身份、名单或联系方式，也没有群发通道，如实说明。",
   },
   {
-    id: "oe_ee7d761fbcdefee",
+    id: "oe_ee7df761fbcdefee",
     name: "客服教练",
     nameEn: "CS Coach",
     categoryId: "cat-service",
@@ -1233,7 +1242,7 @@ const MARKET_SCENARIOS = [
     nameEn: "Open my first store",
     description: "从注册到一键上云，一步一步陪你把店开起来。",
     descriptionEn: "From sign-up to go-live, one step at a time.",
-    memberIds: ["oe_ee5ab6349f00203", "oe_a1da12ace3d9c62c"],
+    memberIds: ["oe_eee5ab6349f00203", "oe_a1da12ace3d9c62c"],
   },
   {
     id: "scn-list-products",
@@ -1249,7 +1258,7 @@ const MARKET_SCENARIOS = [
     nameEn: "Understand my numbers",
     description: "匿名汇总与工作台报告怎么读，下一步该改什么。",
     descriptionEn: "Read aggregated stats and workbench reports, and decide what to improve.",
-    memberIds: ["oe_85c8bf08203ad422", "oe_ee7d761fbcdefee"],
+    memberIds: ["oe_85c8bf08203ad422", "oe_ee7df761fbcdefee"],
   },
   {
     id: "scn-handle-negotiation",
@@ -1276,12 +1285,12 @@ const MARKET_EXPERT_CATEGORIES = [
 // 运营分析的数据类胶囊（今日概况/访客询价/热门问题/关注人数/周报月报）归运营分析师，
 // 客服类胶囊（常见问答/接待话术/模拟接待）归客服教练。
 const SCENE_EXPERT_IDS = {
-  "cap-register": "oe_ee5ab6349f00203",
-  "cap-email": "oe_ee5ab6349f00203",
-  "cap-connect": "oe_ee5ab6349f00203",
-  "cap-cloud": "oe_ee5ab6349f00203",
-  "cap-golive": "oe_ee5ab6349f00203",
-  "cap-upgrade": "oe_ee5ab6349f00203",
+  "cap-register": "oe_eee5ab6349f00203",
+  "cap-email": "oe_eee5ab6349f00203",
+  "cap-connect": "oe_eee5ab6349f00203",
+  "cap-cloud": "oe_eee5ab6349f00203",
+  "cap-golive": "oe_eee5ab6349f00203",
+  "cap-upgrade": "oe_eee5ab6349f00203",
   "cap-products": "oe_a2d0c6cc725719bd",
   "cap-import": "oe_a2d0c6cc725719bd",
   "cap-rules": "oe_a2d0c6cc725719bd",
@@ -1293,9 +1302,9 @@ const SCENE_EXPERT_IDS = {
   "cap-hot-questions": "oe_85c8bf08203ad422",
   "cap-followers": "oe_85c8bf08203ad422",
   "cap-reports": "oe_85c8bf08203ad422",
-  "cap-faq": "oe_ee7d761fbcdefee",
-  "cap-scripts": "oe_ee7d761fbcdefee",
-  "cap-mock": "oe_ee7d761fbcdefee",
+  "cap-faq": "oe_ee7df761fbcdefee",
+  "cap-scripts": "oe_ee7df761fbcdefee",
+  "cap-mock": "oe_ee7df761fbcdefee",
   "cap-approvals": "oe_8033777b83a3de05",
   "cap-observe": "oe_8033777b83a3de05",
   "cap-discount": "oe_8033777b83a3de05",
@@ -1307,7 +1316,7 @@ const SCENE_EXPERT_IDS = {
 const TOOL_NAME_RE = /\b(kiwi_[a-z0-9_]+)\b/g;
 const SKILL_NAME_RE = /\b(kiwi-(?:cloud-deploy|product-import|merchant-cs-prep))\b/g;
 const KNOWN_SKILL_NAMES = new Set(["kiwi-cloud-deploy", "kiwi-product-import", "kiwi-merchant-cs-prep"]);
-const MARKET_EXPERT_ASSET_ID_RE = /^oe_[0-9a-f]{8,}$/;
+const MARKET_EXPERT_ASSET_ID_RE = /^oe_[0-9a-f]{16}$/;
 
 export {
   CONFIG_PATH,
@@ -1324,8 +1333,8 @@ export {
 
 function readConfig(configPath = CONFIG_PATH) {
   const config = JSON.parse(readFileSync(configPath, "utf8"));
-  if (config.version !== "1.8.0") {
-    throw new Error(`buddy-app.config.json 版本应为 1.8.0，实际 ${config.version}`);
+  if (config.version !== "1.8.2") {
+    throw new Error(`buddy-app.config.json 版本应为 1.8.2，实际 ${config.version}`);
   }
   return config;
 }
@@ -1514,8 +1523,8 @@ function buildMarketPack() {
     $note:
       "WP19 市场配置草稿（中英双语）：平台「市场配置」页的填写底稿，也是 zip 导入包 market.json 的内容源" +
       "（由 platform/build-platform-pack.mjs 生成，勿手改；改内容请改生成器常量后重新生成）。" +
-      `专家/专家团 id 为平台已创建的市场资产 ID（oe_*），当前状态：${MARKET_ASSET_REVIEW_STATUS}` +
-      "——审核通过前不代表平台已可用；精选场景 id 仍为占位（scn-*），待平台创建后回填。",
+      `专家/专家团 id 为平台已创建的市场资产 ID（oe_*），状态：${MARKET_ASSET_REVIEW_STATUS}` +
+      "——历史盘点与审核提交不代表当前平台已可用；精选场景 id 仍为占位（scn-*），待平台创建后回填。",
     experts: experts.map((expert) => ({
       ...expert,
       skills: expert.skillIds.map((assetId) => ({
@@ -1540,9 +1549,9 @@ function buildMarketPack() {
     enableExpertTeams: true,
     enableFeaturedScenarios: true,
     pendingBackfill: [
-      `专家（5 个）与专家团（1 个）id 已回填为平台资产 ID（oe_*，2026-09-30），六个资产当前全部「${MARKET_ASSET_REVIEW_STATUS}」：审核通过前不得对外表述为已过审或平台已可用；若平台重新分配 ID，改生成器 MARKET_EXPERTS / MARKET_EXPERT_TEAM 与 SCENE_EXPERT_IDS（胶囊 expertId 同步）后重新生成。`,
+      `专家（5 个）与专家团（1 个）id 已回填为平台资产 ID（oe_*，2026-09-30）。状态：${MARKET_ASSET_REVIEW_STATUS}；不得把历史盘点或审核提交表述为当前已可用。开通顾问 0.1.8 审核中、线上仍为 0.1.2；若平台重新分配 ID，改生成器 MARKET_EXPERTS / MARKET_EXPERT_TEAM 与 SCENE_EXPERT_IDS（胶囊 expertId 同步）后重新生成。`,
       "精选场景 id（scn-*）仍为占位：平台创建真实记录后，把真实 id 回填生成器 MARKET_SCENARIOS，再重新生成。",
-      "技能资产 ID：kiwi-cloud-deploy、kiwi-product-import 审核通过后回填生成器 SKILL_ASSET_IDS（草稿中显示为 pending:<技能名>）；kiwi-merchant-cs-prep 已有先例 ID。",
+      "技能资产 ID：kiwi-cloud-deploy（os_1ea25f81ce98fea3）、kiwi-product-import（os_32c612d72d2c3bcd）、kiwi-merchant-cs-prep（os_dc3a52407574eb77）均已回填；提交前仍需核对平台当前审核/发布状态。",
       "header.title 的分隔格式（当前 HOME_TITLE_SEPARATOR = \"·\"）与 titleEn 字段名待导入实测确认。",
       "market.json 字段名为按平台「市场配置」表单反推的近似格式（experts/expertTeams/featuredScenarios/…），以 zip 导入实测为准。",
       "专家头像与精选场景图标：平台若要求，另行补充 SVG/PNG（当前草稿不带）。",
@@ -1814,8 +1823,8 @@ function validatePlatformPack(industryConfig, config, sourceModes) {
     errors.push(`jointAuth.connectorName 不是合法连接器资产 ID：${industryConfig.jointAuth.connectorName}`);
   }
 
-  // 首页标题（WP19）：品牌名/标语/英文与 1.7.0 home.title 一致；中文两字段合计 ≤15 字、
-  // 英文合计 ≤8 词（平台口径，Kiwi 等 Latin 词按字符计）。
+  // 首页标题（WP19）：品牌名/标语/英文与 home.title 一致；平台口径是「中文汉字合计 ≤15 字」，
+  // 因此只统计 Han 字符（Kiwi 等拉丁字符不计入汉字数）；英文合计 ≤8 词。
   const header = homeItem.config.header;
   const homeTitle = config.home.title;
   const expectedTitle = `${homeTitle.brandName.zh}${HOME_TITLE_SEPARATOR}${homeTitle.slogan.zh}`;
@@ -1826,8 +1835,8 @@ function validatePlatformPack(industryConfig, config, sourceModes) {
   if (header.titleEn !== expectedTitleEn) {
     errors.push(`header.titleEn（${header.titleEn}）与 home.title 英文拼接结果（${expectedTitleEn}）不一致`);
   }
-  const titleZhLength = [...`${homeTitle.brandName.zh}${homeTitle.slogan.zh}`].length;
-  if (titleZhLength > 15) errors.push(`首页标题中文合计 ${titleZhLength} 字，超 15 字`);
+  const titleZhLength = `${homeTitle.brandName.zh}${homeTitle.slogan.zh}`.match(/\p{Script=Han}/gu)?.length ?? 0;
+  if (titleZhLength > 15) errors.push(`首页标题中文汉字合计 ${titleZhLength} 字，超 15 字`);
   const titleEnWords = `${homeTitle.brandName.en} ${homeTitle.slogan.en}`.trim().split(/\s+/).length;
   if (titleEnWords > 8) errors.push(`首页标题英文合计 ${titleEnWords} 词，超 8 词`);
 
@@ -1915,9 +1924,8 @@ function validateMarketPack(marketConfig, industryConfig) {
       if (!KNOWN_SKILL_NAMES.has(m[1])) errors.push(`${label} 的 systemPrompt 引用了未知技能 ${m[1]}`);
     }
     for (const assetId of expert.skillIds) {
-      if (/^os_[0-9a-f]{8,}$/.test(assetId)) continue;
-      if (assetId.startsWith("pending:") && KNOWN_SKILL_NAMES.has(assetId.slice("pending:".length))) continue;
-      errors.push(`${label} 的技能资产 ID 既非 os_ 资产也非 pending:<技能名> 占位：${assetId}`);
+      if (/^os_[0-9a-f]{16}$/.test(assetId)) continue;
+      errors.push(`${label} 的技能资产 ID 不是 16 位 os_ 资产：${assetId}`);
     }
     if (expert.sceneIds.length === 0) errors.push(`${label} 没有负责的场景胶囊`);
   }
@@ -1994,7 +2002,22 @@ function main() {
   writeFileSync(path.join(outDir, "market.json"), `${JSON.stringify(marketConfig, null, 2)}\n`);
   writeFileSync(path.join(outDir, "platform-pack.zip"), zipBuffer);
   mkdirSync(marketDraftDir, { recursive: true });
-  writeFileSync(path.join(marketDraftDir, "market-draft.json"), `${JSON.stringify(marketDraft, null, 2)}\n`);
+  const marketDraftPath = path.join(marketDraftDir, "market-draft.json");
+  writeFileSync(marketDraftPath, `${JSON.stringify(marketDraft, null, 2)}\n`);
+
+  const sha256File = (file) => `sha256:${createHash("sha256").update(readFileSync(file)).digest("hex")}`;
+  const fingerprint = {
+    schema: "kiwi.workbuddy.platform-pack-fingerprint.v1",
+    config_version: config.version,
+    source: "buddy-app.config.json",
+    files: {
+      "industry-config.json": sha256File(path.join(outDir, "industry-config.json")),
+      "market.json": sha256File(path.join(outDir, "market.json")),
+      "platform-pack.zip": sha256File(path.join(outDir, "platform-pack.zip")),
+      "market-draft/market-draft.json": sha256File(marketDraftPath),
+    },
+  };
+  writeFileSync(path.join(outDir, "CONTENT-FINGERPRINT.json"), `${JSON.stringify(fingerprint, null, 2)}\n`);
 
   const modes = industryConfig.ui.nav.items[0].config.modes.items;
   const sceneCount = modes.reduce((sum, m) => sum + m.scenes.length, 0);
@@ -2004,7 +2027,8 @@ function main() {
   console.log(`- icons/：${Object.keys(icons).length} 个 SVG（模式 ${modes.length} + 胶囊 ${sceneCount}）`);
   console.log(`- market.json：${marketConfig.experts.length} 个专用专家 / ${marketConfig.expertTeams.length} 个专家团 / ${marketConfig.featuredScenarios.length} 个精选场景`);
   console.log(`- platform-pack.zip：${ZIP_TEMPLATE_DIR}/industry-config.json + icons/ + market.json（zip 导入验证用）`);
-  console.log(`- 市场草稿：${path.join(marketDraftDir, "market-draft.json")}`);
+  console.log(`- 市场草稿：${marketDraftPath}`);
+  console.log(`- CONTENT-FINGERPRINT.json：版本 ${fingerprint.config_version}，记录 4 个产物的 sha256`);
   console.log(`- jointAuth.connectorName = ${industryConfig.jointAuth.connectorName}；defaultSelected = ${industryConfig.ui.nav.items[0].config.modes.defaultSelected}`);
   if (warnings.length > 0) {
     console.warn("警告：");

@@ -1,0 +1,11 @@
+{
+  "schema": "kiwi.workbuddy.platform-pack-fingerprint.v1",
+  "config_version": "1.8.2",
+  "source": "buddy-app.config.json",
+  "files": {
+    "industry-config.json": "sha256:02abcd265aedea8b2158703f557fa0432bd99a3b5e4e67a7e26311e7c12132fd",
+    "market.json": "sha256:274933b7325251c59a50b7b13f7c1674a28761f3fff16d4410689857ac8637f1",
+    "platform-pack.zip": "sha256:b46a4610d28142e57b4fd90ba07ffa8babdce4a93f1190769ce524fdadf7162f",
+    "market-draft/market-draft.json": "sha256:b6c3a86bd75e9643e85f1150291d66f4ffef1323887f8a601b9d18bc911bc0d9"
+  }
+}

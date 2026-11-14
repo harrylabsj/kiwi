@@ -1,0 +1,188 @@
+{
+  "schema": "kiwi.workbuddy.platform-export-expected-diffs.v1",
+  "export_date": "2026-11-14",
+  "diff_count": 19,
+  "diffs": [
+    {
+      "path": "authConfig.capabilityDescription",
+      "live_sha256": "sha256:5c87bf2e48505622fc7b6d89533a7a3d9b265577ebdeb93075a082e265f75347",
+      "local_sha256": "sha256:56c7aa99596afc725b8fbe6e1283aa3f91f9bc7befcc25c3f709e7a83def2157",
+      "live_length": 27,
+      "local_length": 25
+    },
+    {
+      "path": "header.title",
+      "live_sha256": "sha256:6073c48123d3a1bcf27bb9974c8039c164ebf446f6240143b68da432ff40402d",
+      "local_sha256": "sha256:cdb93d82bc89180284ac921c240b47e33fadf2081c179d84ce681bd1474333e2",
+      "live_length": 18,
+      "local_length": 16
+    },
+    {
+      "path": "header.titleEn",
+      "live_sha256": "sha256:6c832484c37bcb443a3e7c386c6025166f84fbda35b89b4050e4b4bb8ee20386",
+      "local_sha256": "sha256:984383174ad975335ceca2e0124162734ad6c55289bf9d60a1cb85761413a127",
+      "live_length": 45,
+      "local_length": 43
+    },
+    {
+      "path": "jointAuth",
+      "live": {
+        "connectorName": "kiwi-merchant"
+      },
+      "local": {
+        "connectorName": "oc_0053ad85c92a6587"
+      }
+    },
+    {
+      "path": "modes.catalog.scenes.cap-import.systemPrompt",
+      "live_sha256": "sha256:16cd2efcf9611c296f2cbccf7ad89dc43c2d61c3c805d81963712fffd257256f",
+      "local_sha256": "sha256:258d439b039d55203592e4a86a54deb46d76a34a3078c3a690332b52a2f28c5b",
+      "live_length": 252,
+      "local_length": 145
+    },
+    {
+      "path": "modes.catalog.scenes.cap-products.systemPrompt",
+      "live_sha256": "sha256:feac12d5ed5c2f7fbd37b303c00c79671da221cbf9395206d7cca80867f9a299",
+      "local_sha256": "sha256:deb803807a6719ff11b4832627a7d198382fb9b78ce3ca75606207d8219a0479",
+      "live_length": 319,
+      "local_length": 212
+    },
+    {
+      "path": "modes.catalog.scenes.cap-slots.systemPrompt",
+      "live_sha256": "sha256:cdf997302a592c60e016e1a2a65b65be70baac51eb9fab075cee26bcd62664a5",
+      "local_sha256": "sha256:a0c66023b5e78acf1a80a327b1b6e15cb48cb4082bd694dac49501d87837df84",
+      "live_length": 94,
+      "local_length": 202
+    },
+    {
+      "path": "modes.catalog.skills",
+      "live": [],
+      "local": [
+        "os_32c612d72d2c3bcd"
+      ]
+    },
+    {
+      "path": "modes.catalog.systemPrompt",
+      "live_sha256": "sha256:c41b8d7510148d8b44ea6368fbaffef818a06fff08aa3e33f8f1638e1b008b03",
+      "local_sha256": "sha256:c18022e8b38eaebf00fc3d6af0db06568709f4917c49eee5ae669d7196d855bb",
+      "live_length": 964,
+      "local_length": 1095
+    },
+    {
+      "path": "modes.insights.systemPrompt",
+      "live_sha256": "sha256:04148e0343c93943926f5aaba761f60eb7252e06ba8714c13878538c3ae8e917",
+      "local_sha256": "sha256:9971905cb44016863c179e83c49cdba25338e3b53934b0fdd90b34684c1282f9",
+      "live_length": 863,
+      "local_length": 950
+    },
+    {
+      "path": "modes.negotiation.systemPrompt",
+      "live_sha256": "sha256:8d54b257d70024c020c8899ed545bceb7a1a55260edce86f8c93f3ea855dd9ef",
+      "local_sha256": "sha256:64dee251cf723b7d7108ea5325c901c67191e636d22ea20dedb61489d49a40ec",
+      "live_length": 711,
+      "local_length": 736
+    },
+    {
+      "path": "modes.onboarding.scenes.cap-cloud.systemPrompt",
+      "live_sha256": "sha256:cb07b813da5f3d4a5b49a346c2ca5803136ca45d927d9e78dcb85f2f01db89b8",
+      "local_sha256": "sha256:50a1bfe100c8395c7dbbcfbe6aeac29cce38102156571b68a1cd6bc53cae7973",
+      "live_length": 435,
+      "local_length": 296
+    },
+    {
+      "path": "modes.onboarding.scenes.cap-golive.systemPrompt",
+      "live_sha256": "sha256:035e0918b1fb5efc4055906eed17a868461280e3f13209bc268525279be62fb2",
+      "local_sha256": "sha256:6c6ad265924ce3d74142d24192abc028ebce62fdecebb0dde60ce1aff3ebdee8",
+      "live_length": 101,
+      "local_length": 140
+    },
+    {
+      "path": "modes.onboarding.scenes.cap-register.systemPrompt",
+      "live_sha256": "sha256:b9d122838393716b1406024f0aa2292e2965cd52bf1ba734f2a459e7eb7e37bf",
+      "local_sha256": "sha256:9cbc6b65f303bd41fbca64d8e6dc26da3469579bcf90499ef79c5a2af508e6e9",
+      "live_length": 135,
+      "local_length": 204
+    },
+    {
+      "path": "modes.onboarding.scenes.cap-register.templates.t4.prompt",
+      "live_sha256": "sha256:5b934950c249f105cacbed6511c7264f621127b8ac26db6ad24f1e593ccbc3c6",
+      "local_sha256": "sha256:8e560db4adb9fed90e1327e6ff953258e8d62cb56cab50e28a6a3ee12bc91675",
+      "live_length": 21,
+      "local_length": 12
+    },
+    {
+      "path": "modes.onboarding.scenes.cap-register.templates.t4.title",
+      "live_sha256": "sha256:e117e952f1055a943d9133146f0057f4fe7106f58441b8a9d602a338c309d2ee",
+      "local_sha256": "sha256:a68c4cb7808b5c82262d19ad2f471484694fd639141b874d91f566130d10fdc9",
+      "live_length": 5,
+      "local_length": 4
+    },
+    {
+      "path": "modes.onboarding.scenes.cap-upgrade.systemPrompt",
+      "live_sha256": "sha256:8d70ac3ea9519b0a8ddd4c8030a92e58255ec4cf78e9dd719e2c0473cdd84afc",
+      "local_sha256": "sha256:5de111ee6d0fd306ccc6fc92452bd17c7f4c173f1901258269eba31b897317b9",
+      "live_length": 314,
+      "local_length": 175
+    },
+    {
+      "path": "modes.onboarding.skills",
+      "live": [],
+      "local": [
+        "os_1ea25f81ce98fea3"
+      ]
+    },
+    {
+      "path": "modes.onboarding.systemPrompt",
+      "live_sha256": "sha256:79bb5731265e5b9d9d7bdb0e1c4bcb0a0d221c71d3bcef5ff27b539410f96eea",
+      "local_sha256": "sha256:3a5abc715195337d961c026c48f6894f5b428f0f7675410e452dd3305fa1b766",
+      "live_length": 1380,
+      "local_length": 1684
+    }
+  ],
+  "live_market": {
+    "schema": "platform_tree",
+    "sceneExpertCounts": [
+      {
+        "name": "第一次开店",
+        "experts": 3
+      },
+      {
+        "name": "上架商品和报价",
+        "experts": 3
+      },
+      {
+        "name": "看懂运营数据",
+        "experts": 3
+      },
+      {
+        "name": "处理审批与洽谈",
+        "experts": 3
+      }
+    ],
+    "sceneCount": 4,
+    "expertIdPrefix": "ex_"
+  },
+  "local_market": {
+    "schema": "local_flat",
+    "sceneExpertCounts": [
+      {
+        "name": "第一次开店",
+        "experts": 2
+      },
+      {
+        "name": "上架商品和报价",
+        "experts": 2
+      },
+      {
+        "name": "看懂运营数据",
+        "experts": 2
+      },
+      {
+        "name": "处理审批与洽谈",
+        "experts": 2
+      }
+    ],
+    "sceneCount": 4,
+    "expertIdPrefix": "oe_"
+  }
+}

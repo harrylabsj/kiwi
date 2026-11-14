@@ -22,7 +22,7 @@ author: harrylabsj
 
 ## 随包资源与执行目录
 
-技能包附带 `package/build-manifest.json` 和 `package/prepare.mjs`，均为 `references/release.json` 固定版本 npm 正式包中的原始文件，用于审核、查阅和比对。这两个文件不是完整运行时，不得从技能安装目录直接执行 prepare。实际部署必须先按第 1 步下载并解压完整 npm 包，在独立取包目录中校验后执行；下文命令的 `package/` 均指该取包目录下解压得到的完整目录。不得把这两个审核副本当作完整部署包。
+技能包附带 `package/build-manifest.json` 和 `package/prepare.mjs`，是历史上一次正式 npm 包的审核副本（0.12.25），仅用于结构审阅与比对；它们不是 `references/release.json` 的当前 pin，也不是完整运行时，不得从技能安装目录直接执行 prepare。当前固定版本、聚合摘要与 registry 完整性只以 `references/release.json` 为准；实际部署必须先按第 1 步下载并解压完整 npm 包，在独立取包目录中校验后执行；下文命令的 `package/` 均指该取包目录下解压得到的完整目录。不得把这两个审核副本当作完整部署包。
 
 ## 硬规则（先读，任何一步都不例外）
 

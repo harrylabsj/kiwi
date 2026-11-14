@@ -100,7 +100,7 @@
       "id": "os_1ea25f81ce98fea3",
       "name": "Kiwi云端接待部署",
       "platform_version": "0.2.5",
-      "observed_state": "published in 2026-10-27 snapshot; 0.3.2 reviewing on 2026-10-31",
+      "observed_state": "published in 2026-10-27 snapshot; superseded by published 0.3.2 (2026-11-05); active source is 0.2.6 legacy and must not be repackaged",
       "source": "kiwi-merchant-buddy/skills/kiwi-cloud-deploy",
       "source_version": "0.2.5",
       "mapping": "version-match-to-historical-published-baseline",
@@ -256,7 +256,7 @@
       "id": "os_1ea25f81ce98fea3",
       "name": "Kiwi云端接待部署",
       "platform_version": "0.3.2",
-      "observed_state": "reviewing on 2026-10-31",
+      "observed_state": "published on 2026-11-05; current live standalone skill",
       "source": "kiwi-merchant-buddy/skills/candidate-archives/kiwi-cloud-deploy/0.3.2",
       "source_version": "0.3.2",
       "mapping": "candidate-version-match; uploaded archive hash unknown",
@@ -326,6 +326,17 @@
       "source": "kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.1.8",
       "source_version": "0.1.8",
       "mapping": "local candidate; embeds skill 0.3.5 with the platform-confirmed publish-target rules (local directory + .wbapp_<appId>.genie binding marker, post-publish appId check) and the data-directory/backup boundaries from ticket 202611126202; uploaded 2026-11-12 21:46 as oe_eee5ab6349f00203 v0.1.8 on the WorkBuddy open platform, review result pending",
+      "bundle_mode": "candidate-source"
+    },
+    {
+      "kind": "expert",
+      "id": "oe_eee5ab6349f00203",
+      "name": "开通顾问",
+      "platform_version": "0.1.9",
+      "observed_state": "local candidate; not uploaded/reviewed",
+      "source": "kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.1.9",
+      "source_version": "0.1.9",
+      "mapping": "local candidate; embeds skill 0.3.6 (not independently published); stage/verify report executionAuthorized:true after the integrity/source checks pass when the merchant explicitly asks for install/upgrade (never a platform receipt); adds references/publish-params.json and scripts/discover-target.mjs; updates fallback first-publish docs and removes stale executionAuthorized:false/test-only wording; 0.1.8 remains unchanged and pending review",
       "bundle_mode": "candidate-source"
     },
     {

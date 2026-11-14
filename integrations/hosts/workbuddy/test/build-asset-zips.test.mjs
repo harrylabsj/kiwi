@@ -37,6 +37,18 @@ test('builds separate asset ZIPs and an inspectable status report',()=>{
     assert.ok(onboardingFiles.includes('kiwi-onboarding-advisor/skills/kiwi-cloud-deploy/first-publish/README.md'));
     const immutableSidecar=JSON.parse(readFileSync(join(out,'oe_eee5ab6349f00203-v0.1.5.zip.manifest.json'),'utf8'));
     assert.equal(immutableSidecar.package.files.some(file=>file.path.includes('/first-publish/')),false);
+    const onboarding019=report.assets.find(asset=>asset.id==='oe_eee5ab6349f00203'&&asset.version==='0.1.9');
+    assert.equal(onboarding019?.status,'CANDIDATE_PACKAGE_BUILT');
+    const onboarding019Sidecar=JSON.parse(readFileSync(join(out,'oe_eee5ab6349f00203-v0.1.9.zip.manifest.json'),'utf8'));
+    const onboarding019Files=onboarding019Sidecar.package.files.map(file=>file.path);
+    assert.ok(onboarding019Files.includes('kiwi-onboarding-advisor/skills/kiwi-cloud-deploy/references/publish-params.json'));
+    assert.ok(onboarding019Files.includes('kiwi-onboarding-advisor/skills/kiwi-cloud-deploy/scripts/discover-target.mjs'));
+    assert.equal(onboarding019Files.some(file=>file.includes('__pycache__')),false);
+    const cloudDeploySnapshot=report.assets.find(asset=>asset.id==='os_1ea25f81ce98fea3'&&asset.status==='HOLD');
+    assert.ok(cloudDeploySnapshot,'活动源 0.2.6 必须被标记为 HOLD');
+    assert.match(cloudDeploySnapshot?.reason??'',/0\.2\.6/);
+    const cloudDeployPublished=report.assets.find(asset=>asset.id==='os_1ea25f81ce98fea3'&&asset.version==='0.3.2');
+    assert.equal(cloudDeployPublished?.status,'CANDIDATE_PACKAGE_BUILT');
     const names=readdirSync(out);
     const zips=names.filter(name=>name.endsWith('.zip'));
     assert.equal(zips.length,report.status_counts.built+report.status_counts.candidate);

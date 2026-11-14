@@ -1,6 +1,8 @@
-# 市场配置草稿（WP19，WP25 随 1.8.0 四场景重排更新）
+# 市场配置草稿（WP19；WP25 随 1.8.0 四场景重排；1.8.1 修正资产 ID 与对外表述；1.8.2 合并线上 V5 品牌与提示词）
 
 平台「市场配置」页实测要求：**配置专家（必填）至少 5 个专用专家，公共专家数量不得超过专用专家**；「启用专家团」「启用精选场景」默认打开，打开时分别要求配置专家团、精选场景（≥4 个，每个可关联 ≤3 个专家/专家团）；专家分类/专家团分类选填（填则 ≥3 个）。
+
+> **2026-11-14 平台核对警告**：线上 V5 的市场配置使用平台内部专家 ID（`ex_...`），且 4 个精选场景各关联 **3 个**专家/专家团；本目录草稿使用 `oe_...` 资产 ID、每场景 2 个。两者不是同一份数据。**不要把本目录的 `market.json` / `platform-pack.zip` 直接覆盖线上市场配置**；更新市场配置时应以平台导出为基线，人工核对后再改。
 
 本目录是按该要求准备的**填写底稿**：
 
@@ -31,25 +33,25 @@
 
 生成器校验强制：专家提示词只允许引用 `kiwi_catalog_*` 只读网关工具与三个已知技能（`kiwi-cloud-deploy` / `kiwi-product-import` / `kiwi-merchant-cs-prep`）。
 
-## 资产 ID 与审核状态（2026-09-30 回填）
+## 资产 ID 与审核状态（带日期观察，非实时）
 
-专家/专家团使用平台已创建的市场资产 ID，六个资产**全部处于「审核中」状态**——不得在对外材料或对商家的表述中写成已过审、已发布或平台可用：
+专家/专家团使用平台已创建的市场资产 ID。下列状态是历史观察，**不代表当前平台可用**；对外表述与提交前必须以 WorkBuddy 页面为准：
 
 | 资产 | ID | 状态 |
 |---|---|---|
-| 开通顾问 | `oe_ee5ab6349f00203` | 审核中 |
-| 报价助理 | `oe_a2d0c6cc725719bd` | 审核中 |
-| 运营分析师 | `oe_85c8bf08203ad422` | 审核中 |
-| 客服教练 | `oe_ee7d761fbcdefee` | 审核中 |
-| 洽谈审批官 | `oe_8033777b83a3de05` | 审核中 |
-| Kiwi开店团队（专家团） | `oe_a1da12ace3d9c62c` | 审核中 |
+| 开通顾问 | `oe_eee5ab6349f00203` | 0.1.2 线上已发布；0.1.8 审核中（2026-11-12 提交） |
+| 报价助理 | `oe_a2d0c6cc725719bd` | 2026-10-27 盘点已发布 |
+| 运营分析师 | `oe_85c8bf08203ad422` | 2026-10-27 盘点已发布 |
+| 客服教练 | `oe_ee7df761fbcdefee` | 2026-10-27 盘点已发布 |
+| 洽谈审批官 | `oe_8033777b83a3de05` | 2026-10-27 盘点已发布 |
+| Kiwi开店团队（专家团） | `oe_a1da12ace3d9c62c` | 2026-10-27 盘点已发布 |
 
-回填位置：生成器 `MARKET_EXPERTS`（5 位专家）/ `MARKET_EXPERT_TEAM`（团队）与 `SCENE_EXPERT_IDS`（26 个胶囊的 `expertId`，行业配置包同源）；审核状态文字集中在生成器 `MARKET_ASSET_REVIEW_STATUS` 一处，状态变化改这一处并重新生成。
+回填位置：生成器 `MARKET_EXPERTS`（5 位专家）/ `MARKET_EXPERT_TEAM`（团队）与 `SCENE_EXPERT_IDS`（26 个胶囊的 `expertId`，行业配置包同源）；状态文字集中在生成器 `MARKET_ASSET_REVIEW_STATUS` 一处，状态变化改这一处并重新生成。
 
 ## 占位 id 与待回填（勿当成真实 id 提交平台）
 
 - 精选场景 `scn-*` 仍为**占位 id**（专家/专家团 id 已按上节回填）：平台创建真实记录后，回填生成器 `MARKET_SCENARIOS` 后重新生成。
-- 技能资产 ID：`kiwi-cloud-deploy`、`kiwi-product-import` 审核通过前显示为 `pending:<技能名>`；回填生成器 `SKILL_ASSET_IDS`。`kiwi-merchant-cs-prep` 已有先例 ID（`os_dc3a52407574eb77`）。
+- 技能资产 ID：`kiwi-cloud-deploy`（`os_1ea25f81ce98fea3`）、`kiwi-product-import`（`os_32c612d72d2c3bcd`）、`kiwi-merchant-cs-prep`（`os_dc3a52407574eb77`）均已回填；生成器强制校验 16 位 `os_` 资产，不再接受 `pending:` 占位。提交前仍需核对平台当前审核/发布状态。
 - `header.title` 分隔格式（当前 `HOME_TITLE_SEPARATOR = "·"`）与 `titleEn` 字段名待导入实测确认（`docs/.../platform-ref/` 为空，无已存资料）。
 - `market.json` 字段名为按平台表单反推的近似格式（`experts` / `expertTeams` / `featuredScenarios` / `expertCategories` / `enableExpertTeams` / `enableFeaturedScenarios`），以 zip 导入实测为准，不符则改生成器 `buildMarketPack()`。
 - 专家头像与精选场景图标：平台若要求，另行补充（当前草稿不带图标字段）。

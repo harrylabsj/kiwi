@@ -74,8 +74,8 @@ describe("WP18 平台配置包：平台规则", () => {
     });
     expect(homeItem.config.header).toEqual({
       visible: true,
-      title: `Kiwi商家${HOME_TITLE_SEPARATOR}让采购专家找到你`,
-      titleEn: `Kiwi Merchant${HOME_TITLE_SEPARATOR}Get found by buyers`,
+      title: `Kiwi商家智能体${HOME_TITLE_SEPARATOR}生意自主进行`,
+      titleEn: `Kiwi Merchant Agent${HOME_TITLE_SEPARATOR}Let business run itself`,
     });
     expect(industryConfig.models).toEqual({ custom: { disabled: true } });
     expect(industryConfig.i18n).toEqual({ source: { en: {} } });
@@ -152,8 +152,8 @@ describe("WP18 平台配置包：平台规则", () => {
 describe("WP19 首页标题", () => {
   it("中文两字段合计 ≤15 字，英文合计 ≤8 词，值取自源配置 home.title", () => {
     const { brandName, slogan } = config.home.title;
-    const zhLength = [...`${brandName.zh}${slogan.zh}`].length;
-    expect(zhLength, "中文两字段合计字数").toBeLessThanOrEqual(15);
+    const zhLength = `${brandName.zh}${slogan.zh}`.match(/\p{Script=Han}/gu)?.length ?? 0;
+    expect(zhLength, "中文两字段汉字合计").toBeLessThanOrEqual(15);
     const enWords = `${brandName.en} ${slogan.en}`.trim().split(/\s+/).length;
     expect(enWords, "英文两字段合计词数").toBeLessThanOrEqual(8);
     expect(homeItem.config.header.title).toBe(`${brandName.zh}${HOME_TITLE_SEPARATOR}${slogan.zh}`);
@@ -206,10 +206,10 @@ describe("WP19 sites_deploy 新口径（WP17 后）", () => {
 
 describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）", () => {
   const ASSET_IDS = {
-    开通顾问: "oe_ee5ab6349f00203",
+    开通顾问: "oe_eee5ab6349f00203",
     报价助理: "oe_a2d0c6cc725719bd",
     运营分析师: "oe_85c8bf08203ad422",
-    客服教练: "oe_ee7d761fbcdefee",
+    客服教练: "oe_ee7df761fbcdefee",
     洽谈审批官: "oe_8033777b83a3de05",
     Kiwi开店团队: "oe_a1da12ace3d9c62c",
   } as const;
@@ -247,13 +247,22 @@ describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）",
   it("技能资产 ID：cs-prep 为真实资产，未知技能为 pending:<技能名> 占位（不编造）", () => {
     const byId = new Map(marketConfig.experts.map((e) => [e.id, e]));
     expect(byId.get(ASSET_IDS.客服教练)!.skillIds).toEqual(["os_dc3a52407574eb77"]);
-    expect(byId.get(ASSET_IDS.开通顾问)!.skillIds).toEqual(["pending:kiwi-cloud-deploy"]);
-    expect(byId.get(ASSET_IDS.报价助理)!.skillIds).toEqual(["pending:kiwi-product-import"]);
+    expect(byId.get(ASSET_IDS.开通顾问)!.skillIds).toEqual(["os_1ea25f81ce98fea3"]);
+    expect(byId.get(ASSET_IDS.报价助理)!.skillIds).toEqual(["os_32c612d72d2c3bcd"]);
     expect(byId.get(ASSET_IDS.运营分析师)!.skillIds).toEqual([]);
     expect(byId.get(ASSET_IDS.洽谈审批官)!.skillIds).toEqual([]);
     for (const assetId of marketConfig.experts.flatMap((e) => e.skillIds)) {
-      expect(/^os_[0-9a-f]{8,}$/.test(assetId) || assetId.startsWith("pending:"), assetId).toBe(true);
+      expect(/^os_[0-9a-f]{16}$/.test(assetId), assetId).toBe(true);
     }
+  });
+
+  it("报价助理提示词包含最新五档用户分级（Lite/Plus/Pro/Max/Ultra）", () => {
+    const quote = marketConfig.experts.find((expert) => expert.name === "报价助理")!;
+    for (const tier of ["Lite 5", "Plus 20", "Pro 50", "Max 100", "Ultra 500"]) {
+      expect(quote.systemPrompt, `报价助理缺档位 ${tier}`).toContain(tier);
+    }
+    expect(quote.systemPrompt).toContain("具体以工作台为准");
+    expect(quote.systemPrompt).toContain("是否调整及费用以运营确认为准");
   });
 
   it("专家团 1 个：由全部 5 位专用专家组成", () => {
@@ -299,7 +308,7 @@ describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）",
   it("胶囊 expertId 与专家草稿用资产 id 对应（SCENE_EXPERT_IDS 完备且双向一致）", () => {
     for (const scene of allScenes) {
       expect(scene.expertId).toBe(SCENE_EXPERT_IDS[scene.id]!);
-      expect(scene.expertId).toMatch(/^oe_[0-9a-f]{8,}$/);
+      expect(scene.expertId).toMatch(/^oe_[0-9a-f]{16}$/);
     }
     const byExpert = new Map(marketConfig.experts.map((e) => [e.id, [] as string[]]));
     for (const scene of allScenes) byExpert.get(scene.expertId)!.push(scene.id);
@@ -333,7 +342,7 @@ describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）",
       ...marketConfig.experts.map((e) => e.id),
       ...marketConfig.expertTeams.map((t) => t.id),
     ]) {
-      expect(id, "专家/专家团应使用平台真实资产 ID").toMatch(/^oe_[0-9a-f]{8,}$/);
+      expect(id, "专家/专家团应使用平台真实资产 ID").toMatch(/^oe_[0-9a-f]{16}$/);
     }
     for (const scenario of marketConfig.featuredScenarios) {
       expect(scenario.id).toMatch(/^scn-[a-z-]+$/);
@@ -341,8 +350,11 @@ describe("WP19 市场配置（5 专用专家 + 1 专家团 + 4 精选场景）",
     const backfill = marketDraft.pendingBackfill.join("\n");
     expect(marketDraft.pendingBackfill.length).toBeGreaterThanOrEqual(4);
     expect(backfill).toContain("审核中");
+    expect(backfill).toContain("2026-10-27");
+    expect(backfill).toContain("0.1.8 审核中");
     expect(backfill).toContain("占位");
-    expect(backfill).toContain("pending:kiwi-cloud-deploy".slice(0, 7));
+    expect(backfill).toContain("os_1ea25f81ce98fea3");
+    expect(backfill).not.toContain("pending:");
   });
 });
 
@@ -468,11 +480,11 @@ describe("WP18/WP25 平台配置包：与 1.8.0 草稿一致性", () => {
   it("技能挂载：cs-prep 有平台资产 ID；其余两个技能缺 ID 时省略并给出警告", () => {
     const byMode = new Map(modes.map((m) => [m.modeId, m.skills]));
     expect(byMode.get("insights")).toEqual([{ id: "os_dc3a52407574eb77" }]);
-    expect(byMode.get("onboarding")).toEqual([]);
-    expect(byMode.get("catalog")).toEqual([]);
+    expect(byMode.get("onboarding")).toEqual([{ id: "os_1ea25f81ce98fea3" }]);
+    expect(byMode.get("catalog")).toEqual([{ id: "os_32c612d72d2c3bcd" }]);
     expect(byMode.get("negotiation")).toEqual([]);
-    expect(warnings.join("\n")).toContain("kiwi-cloud-deploy");
-    expect(warnings.join("\n")).toContain("kiwi-product-import");
+    expect(warnings.join("\n")).not.toContain("kiwi-cloud-deploy");
+    expect(warnings.join("\n")).not.toContain("kiwi-product-import");
   });
 
   it("默认模式为注册开通（1.8.0 首个模式）", () => {
@@ -544,8 +556,9 @@ describe("WP18/WP19 落盘产物（platform/out、platform/market-draft）与构
     expect(draftReadme).toContain("占位");
   });
 
-  it("out/ 目录无陈旧文件（恰好 4 项：industry-config.json / icons / market.json / platform-pack.zip）", () => {
+  it("out/ 目录无陈旧文件（恰好 5 项：industry-config.json / icons / market.json / platform-pack.zip / CONTENT-FINGERPRINT.json）", () => {
     expect(readdirSync(outDir).sort()).toEqual([
+      "CONTENT-FINGERPRINT.json",
       "icons",
       "industry-config.json",
       "market.json",
