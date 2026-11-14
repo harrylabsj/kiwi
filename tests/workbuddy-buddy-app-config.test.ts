@@ -15,7 +15,10 @@ const config = JSON.parse(
   readFileSync(path.join(buddyRoot, "buddy-app.config.json"), "utf8"),
 ) as {
   version: string;
-  home: { modes: Array<{ key: string; name: string; systemPrompt: string; skills?: string[]; capsules: Array<{ label: string; prompt: string; bindSkills?: string[] }> }> };
+  home: {
+    "内置连接器": string;
+    modes: Array<{ key: string; name: string; description: string; systemPrompt: string; skills?: string[]; capsules: Array<{ label: string; prompt: string; bindSkills?: string[] }> }>;
+  };
   market: { skills: string[] };
 };
 
@@ -76,8 +79,35 @@ describe("Buddy 应用配置（buddy-app.config.json）", () => {
     expect(catalog?.capsules.find((c) => c.label === "整理商品")?.bindSkills).toEqual(["kiwi-product-import"]);
   });
 
-  it("版本为 1.8.0（东哥四工作场景重排）", () => {
-    expect(config.version).toBe("1.8.0");
+  it("版本为 1.8.2（四工作场景 + P0 审核修复 + 合并线上 V5）", () => {
+    expect(config.version).toBe("1.8.2");
+  });
+
+  it("1.8.2 合并线上 V5：品牌/标题/简介与模型配置引导", () => {
+    expect((config as unknown as { identity: { appName: string; appNameEn: string; 简介: string } }).identity).toMatchObject({
+      appName: "kiwi商家智能体",
+      appNameEn: "Kiwi Merchant Agent",
+    });
+    expect((config as unknown as { home: { title: { brandName: { zh: string }; slogan: { zh: string } } } }).home.title).toMatchObject({
+      brandName: { zh: "Kiwi商家智能体" },
+      slogan: { zh: "生意自主进行" },
+    });
+    for (const mode of config.home.modes) {
+      expect(mode.systemPrompt, `${mode.key} 缺模型配置引导`).toContain("模型配置引导");
+    }
+    expect(config.home.modes.find((m) => m.key === "onboarding")!.systemPrompt).toContain("技能与运行状态");
+    expect(config.home.modes.find((m) => m.key === "catalog")!.systemPrompt).toContain("技能与工具边界");
+    expect(config.home.modes.find((m) => m.key === "insights")!.systemPrompt).toContain("技能与工具边界");
+    expect(JSON.stringify(config)).not.toContain("商品导入表整理技能当前未获平台发布");
+  });
+
+  it("1.8.1 上线边界：不宣称买家可发现/可询价，内置连接器状态与台账一致", () => {
+    const onboarding = config.home.modes.find((m) => m.key === "onboarding")!;
+    expect(onboarding.description).not.toContain("让采购方发现你并直接发来询价");
+    expect(onboarding.systemPrompt).toContain("名片已发布、连接正常");
+    expect(onboarding.systemPrompt).toContain("不要据此说买家已能搜索到你或发来询价");
+    expect(onboarding.systemPrompt).not.toContain("采购方可以发现你并发来询价");
+    expect(config.home["内置连接器"]).toContain("v1.2.0");
   });
 
   it("③④（运营分析/审批磋商）系统提示词写明首发边界：工作台 + 网关不碰实例 + 不编造数据", () => {

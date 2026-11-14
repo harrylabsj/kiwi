@@ -1,0 +1,71 @@
+{
+  "name": "kiwi-onboarding-advisor",
+  "version": "0.1.9",
+  "description": "Installs and upgrades the Kiwi merchant reception runtime in the merchant's WorkBuddy cloud app, with verified packages, identity-preserving in-place upgrades, and real publish receipts.",
+  "author": {
+    "name": "harrylabsj",
+    "email": "1711496337@qq.com"
+  },
+  "homepage": "https://github.com/harrylabsj/kiwi",
+  "license": "Apache-2.0",
+  "agents": [
+    "./agents/kiwi-onboarding-advisor.md"
+  ],
+  "expertType": "agent",
+  "agentName": "kiwi-onboarding-advisor",
+  "displayName": {
+    "zh": "Kiwi 开通顾问",
+    "en": "Kiwi Onboarding Advisor"
+  },
+  "profession": {
+    "zh": "开通顾问",
+    "en": "Onboarding Advisor"
+  },
+  "displayDescription": {
+    "zh": "陪你完成注册、连接、一键上云与原地升级；按校验、备份、同应用发布、自检的顺序真实执行，卡在哪一步就先解决哪一步。",
+    "en": "Walks you through sign-up, connection, cloud setup, in-place upgrade and go-live; verifies, backs up and republishes to the same app, one step at a time."
+  },
+  "avatar": "avatars/kiwi.png",
+  "categoryId": "07-SalesCommerce",
+  "defaultInitPrompt": {
+    "zh": "帮我处理一键上云",
+    "en": "Help me with onboarding advisor"
+  },
+  "plugin": "kiwi-onboarding-advisor",
+  "dependencies": {
+    "connectors": [
+      "kiwi-merchant"
+    ]
+  },
+  "tags": [
+    {
+      "zh": "一键上云",
+      "en": "Cloud setup"
+    },
+    {
+      "zh": "连接发布",
+      "en": "Connect & publish"
+    },
+    {
+      "zh": "邮箱验证",
+      "en": "Email verification"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我处理一键上云",
+      "en": "Help me with onboarding advisor"
+    },
+    {
+      "zh": "帮我处理连接发布",
+      "en": "Help me with onboarding advisor"
+    },
+    {
+      "zh": "帮我处理邮箱验证",
+      "en": "Help me with onboarding advisor"
+    }
+  ],
+  "skills": [
+    "./skills/kiwi-cloud-deploy"
+  ]
+}

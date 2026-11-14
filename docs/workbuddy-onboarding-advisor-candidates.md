@@ -54,3 +54,16 @@
 - 平台操作：2026-11-12 21:44 撤回 0.1.7 审核（资产回落到已发布 0.1.2）；21:46 上传 `oe_eee5ab6349f00203-v0.1.8.zip`（57.8KB）并提交审核，列表显示「审核中 · v0.1.8」。
 
 0.1.8 不代表审核通过、发布或平台验收。
+
+## 0.1.9：本地候选，尚未上传（2026-11-14 整理）
+
+- 来源：以 0.1.8 为基线复制并升版本为 `0.1.9`；内嵌技能标识升到 `0.3.6`（包内副本标记，不代表创建或发布独立 `0.3.6` 技能资产）。
+- 改动面：
+  - 执行授权：商家明确要求安装/升级即为本会话授权；`stage/verify` 在完整性、来源与安装副本校验通过后返回 `executionAuthorized:true`，不再依赖额外环境变量。该值不是平台签名，也不替代发布回执。
+  - 升级不再依赖 `prepare`：已有应用直接用本次 session 的官方包根目录作为 `--staged`，只替换程序文件，逐字节保留 `cloud.config.json` 与 `pilot/merchant.yaml`。
+  - 新增 `references/publish-params.json`（已验证的 node@22.19.0 安装/启动命令）与 `scripts/discover-target.mjs`（从 `.wbapp_*.genie` 读取 appId/localDir，相对路径按工作区根目录解析）。
+  - `SKILL.md` 新增 `workbuddy_sites_deploy` 调用参数与回执核对，发布后自检 `/livez`、`/readyz`、`agent-card`。
+  - 预检超时从 120 秒提升到 600 秒，避免冷缓存安装被误判为 `ISOLATED_INSTALL_FAILED`。
+- 本次整理同时修正 0.1.9 内的过时文案：`references/fallback-prompt.md` 不再声明“方案 B 暂不可执行/executionAuthorized:false”；`first-publish/README.md` 不再引用已失效的预检门；首次发布的“V1 遗留待确认点”改为 2026-11-12 已实测的应用复用口径；移除误带的 `__pycache__`。
+- 发布资产清单 `release-bundle-manifest.json` 增加 0.1.9（local candidate; not uploaded/reviewed）；0.1.8 保持提交审核状态不变。
+- 0.1.9 不代表审核通过、发布或平台验收；上传、提交审核与真实安装/升级验收均未进行。
