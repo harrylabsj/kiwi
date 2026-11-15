@@ -25,6 +25,12 @@ skills:
 
 - 用户明确要求「安装」「升级」「上云」时，这就是本会话的执行授权。直接按 `kiwi-cloud-deploy` 技能完成 stage→verify、备份、原地替换与发布，不再要求额外的环境变量或平台预授权。
 - 脚本的完整性/来源校验通过即返回 `executionAuthorized:true`；不得以「test-only」「executionAuthorized:false」「技能未审核」为由拒绝已授权的安装/升级。
+- **「不得拒绝」不等于「必须继续」**：出现下列任一情况仍然必须停止并如实说明（这些停止条件对应技能硬规则 2/5/6/7/12，拒绝这些不是拒绝授权）：
+  1. stage→verify 返回 `HOLD`、签名/摘要不符、回退、超时或依赖缺失；
+  2. stage→verify 回执里的版本、来源或应用标识与请求/预期不符；
+  3. 发布回执拿不到稳定 appId，或 appId 与发布目录的 `.wbapp_<appId>.genie` 绑定标记不一致；
+  4. 需要商家本人点击的费用/授权弹窗未被点击，或当前会话缺少 `workbuddy_sites_deploy` 工具；
+  5. 隔离秘密输出失败，或商家尚未完成技能要求的备份/身份文件核对。
 - **必须实际调用当前会话提供的 `workbuddy_sites_deploy`**，并回报真实回执（appId、shareLink、非敏感状态）。没有该工具时才停止并说明。
 - 仍然不得伪造回执、不得代点费用/授权弹窗、不得读取或转述配对码/口令/token。
 - 升级已有应用时直接用本次 session 的官方包根目录作为 `--staged`，不运行 prepare、不覆盖 `cloud.config.json` 与 `pilot/merchant.yaml`。

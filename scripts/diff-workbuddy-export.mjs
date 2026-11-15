@@ -43,6 +43,11 @@ function readZipEntry(zipPath, suffix) {
     .filter(Boolean);
   const match = entries.find((entry) => entry === suffix || entry.endsWith(`/${suffix}`));
   if (!match) throw new Error(`导出包缺少 ${suffix}`);
+  // `unzip -p` 把条目名当通配符模式解释；含元字符的名字会匹配并拼接多个条目。
+  // 以 `-` 开头的名字会被 unzip 当成选项，同样拒绝。
+  if (/[*?[\]]/.test(match) || match.startsWith("-")) {
+    throw new Error(`导出包条目名不安全（通配符元字符或以 - 开头）：${match}`);
+  }
   return execFileSync("unzip", ["-p", zipPath, match], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
@@ -81,23 +86,51 @@ function resolveI18n(locale, value) {
   return Object.hasOwn(locale, value) ? locale[value] : value;
 }
 
-function normalizeModes(industryConfig, locale) {
+/**
+ * Export 侧英文文案：与中文共用同一个 i18n key（平台 en map 键名与 zh 相同）。
+ * 键在 en map 里不存在时返回 undefined——这本身就是要报告的漂移（平台缺英文
+ * 文案 vs 本地有英文文案），不能回退成 key 字符串假装有值。
+ */
+function resolveI18nEn(localeEn, value) {
+  if (typeof value !== "string") return undefined;
+  return Object.hasOwn(localeEn, value) ? localeEn[value] : undefined;
+}
+
+/**
+ * 本地侧英文字段是直接文本（titleEn/promptEn），与 zh 同层。localeEn 传
+ * undefined 表示本地模式（直接读字段），传 map 表示平台模式（按 key 解析）。
+ */
+function modeTitleEn(mode, localeEn) {
+  return localeEn === undefined ? mode.titleEn : resolveI18nEn(localeEn, mode.title);
+}
+
+function normalizeModes(industryConfig, locale, localeEn) {
   const items = industryConfig?.ui?.nav?.items ?? [];
   const home = items.find((item) => item.id === "home") ?? items[0];
   const modes = home?.config?.modes?.items ?? [];
   return modes.map((mode) => ({
     id: mode.modeId,
     title: resolveI18n(locale, mode.title),
+    titleEn: modeTitleEn(mode, localeEn),
     prompt: mode.systemPromptAppend ?? "",
     skills: (mode.skills ?? []).map((skill) => skill.id).sort(),
     scenes: (mode.scenes ?? []).map((scene) => ({
       id: scene.id,
       title: resolveI18n(locale, scene.title),
+      titleEn: localeEn === undefined ? scene.titleEn : resolveI18nEn(localeEn, scene.title),
       prompt: scene.systemPromptAppend ?? "",
       templates: (scene.templates ?? []).map((template) => ({
         id: template.id,
         title: resolveI18n(locale, template.title),
+        titleEn:
+          localeEn === undefined
+            ? template.titleEn
+            : resolveI18nEn(localeEn, template.title),
         prompt: resolveI18n(locale, template.prompt),
+        promptEn:
+          localeEn === undefined
+            ? template.promptEn
+            : resolveI18nEn(localeEn, template.prompt),
       })),
     })),
   }));
@@ -110,17 +143,19 @@ export function normalizeExport({ industryConfig, marketConfig }) {
     industryConfig?.ui?.nav?.items?.[0];
   const headerTitleKey = home?.config?.header?.title;
   const headerTitleEnKey = home?.config?.header?.titleEn ?? headerTitleKey;
+  const chatPlaceholderKey = industryConfig?.ui?.chatInput?.placeholder;
   return {
     header: {
       title: resolveI18n(locale, headerTitleKey),
       titleEn: resolveI18n(localeEn, headerTitleEnKey),
     },
     brand: resolveI18n(locale, industryConfig?.brand?.title),
-    chatPlaceholder: resolveI18n(locale, industryConfig?.ui?.chatInput?.placeholder),
+    chatPlaceholder: resolveI18n(locale, chatPlaceholderKey),
+    chatPlaceholderEn: resolveI18nEn(localeEn, chatPlaceholderKey),
     models: industryConfig?.models,
     authConfig: industryConfig?.authConfig,
     jointAuth: industryConfig?.jointAuth,
-    modes: normalizeModes(industryConfig, locale),
+    modes: normalizeModes(industryConfig, locale, localeEn),
     market: summarizeMarketTree(marketConfig),
   };
 }
@@ -135,6 +170,7 @@ export function normalizeLocal({ industryConfig, marketConfig }) {
     },
     brand: undefined,
     chatPlaceholder: industryConfig?.ui?.chatInput?.placeholder,
+    chatPlaceholderEn: industryConfig?.ui?.chatInput?.placeholderEn,
     models: industryConfig?.models,
     authConfig: industryConfig?.authConfig,
     jointAuth: industryConfig?.jointAuth,
@@ -188,6 +224,7 @@ export function diffPlatformConfigs(live, local) {
   pushText("header.title", live.header.title, local.header.title);
   pushText("header.titleEn", live.header.titleEn, local.header.titleEn);
   pushText("chat.placeholder", live.chatPlaceholder, local.chatPlaceholder);
+  pushText("chat.placeholderEn", live.chatPlaceholderEn, local.chatPlaceholderEn);
   pushText(
     "authConfig.capabilityDescription",
     live.authConfig?.capabilityDescription,
@@ -205,6 +242,8 @@ export function diffPlatformConfigs(live, local) {
   if (liveModes.size !== localModes.size) {
     diffs.push({ path: "modes.count", live: liveModes.size, local: localModes.size });
   }
+  // 双向遍历：只看 live 侧会漏掉「本地新增」的实体——那正是生成器改了内容
+  // 而平台快照没有的漂移，必须逐一点名，不能只靠 count 差异。
   for (const [modeId, liveMode] of liveModes) {
     const localMode = localModes.get(modeId);
     if (!localMode) {
@@ -212,6 +251,7 @@ export function diffPlatformConfigs(live, local) {
       continue;
     }
     pushText(`modes.${modeId}.title`, liveMode.title, localMode.title);
+    pushText(`modes.${modeId}.titleEn`, liveMode.titleEn, localMode.titleEn);
     pushText(`modes.${modeId}.systemPrompt`, liveMode.prompt, localMode.prompt);
     if (JSON.stringify(liveMode.skills) !== JSON.stringify(localMode.skills)) {
       diffs.push({ path: `modes.${modeId}.skills`, live: liveMode.skills, local: localMode.skills });
@@ -232,8 +272,16 @@ export function diffPlatformConfigs(live, local) {
         continue;
       }
       pushText(`modes.${modeId}.scenes.${sceneId}.title`, liveScene.title, localScene.title);
+      pushText(`modes.${modeId}.scenes.${sceneId}.titleEn`, liveScene.titleEn, localScene.titleEn);
       pushText(`modes.${modeId}.scenes.${sceneId}.systemPrompt`, liveScene.prompt, localScene.prompt);
       const localTemplates = new Map(localScene.templates.map((template) => [template.id, template]));
+      if (liveScene.templates.length !== localScene.templates.length) {
+        diffs.push({
+          path: `modes.${modeId}.scenes.${sceneId}.templates.count`,
+          live: liveScene.templates.length,
+          local: localScene.templates.length,
+        });
+      }
       for (const liveTemplate of liveScene.templates) {
         const localTemplate = localTemplates.get(liveTemplate.id);
         if (!localTemplate) {
@@ -250,11 +298,40 @@ export function diffPlatformConfigs(live, local) {
           localTemplate.title,
         );
         pushText(
+          `modes.${modeId}.scenes.${sceneId}.templates.${liveTemplate.id}.titleEn`,
+          liveTemplate.titleEn,
+          localTemplate.titleEn,
+        );
+        pushText(
           `modes.${modeId}.scenes.${sceneId}.templates.${liveTemplate.id}.prompt`,
           liveTemplate.prompt,
           localTemplate.prompt,
         );
+        pushText(
+          `modes.${modeId}.scenes.${sceneId}.templates.${liveTemplate.id}.promptEn`,
+          liveTemplate.promptEn,
+          localTemplate.promptEn,
+        );
       }
+      for (const [templateId] of localTemplates) {
+        if (!liveScene.templates.some((template) => template.id === templateId)) {
+          diffs.push({
+            path: `modes.${modeId}.scenes.${sceneId}.templates.${templateId}`,
+            live: "missing",
+            local: "present",
+          });
+        }
+      }
+    }
+    for (const [sceneId] of localScenes) {
+      if (!liveMode.scenes.some((scene) => scene.id === sceneId)) {
+        diffs.push({ path: `modes.${modeId}.scenes.${sceneId}`, live: "missing", local: "present" });
+      }
+    }
+  }
+  for (const [modeId] of localModes) {
+    if (!live.modes.some((mode) => mode.id === modeId)) {
+      diffs.push({ path: `modes.${modeId}`, live: "missing", local: "present" });
     }
   }
   return diffs;
@@ -316,7 +393,9 @@ function main() {
   const args = process.argv.slice(2);
   const value = (name) => {
     const index = args.indexOf(name);
-    return index >= 0 ? args[index + 1] : undefined;
+    const next = index >= 0 ? args[index + 1] : undefined;
+    // 下一个参数以 -- 开头说明少传了值（如 --export --json），宁可报用法错误。
+    return next !== undefined && !next.startsWith("--") ? next : undefined;
   };
   const exportPath = value("--export");
   if (!exportPath) {

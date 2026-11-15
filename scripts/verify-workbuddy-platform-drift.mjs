@@ -6,27 +6,45 @@
  * `platform/out/` 的生成结果相对平台导出发生了新的文本差异，或既有差异消失，
  * 本脚本失败并要求显式更新基线。这样“版本号不变但内容漂移”会在 CI 前暴露。
  *
+ * 快照目录自动取 `platform/platform-export/` 下日期最新的一个（可用
+ * --snapshot 覆盖）；export_date 从目录名派生，并在比对前断言基线的
+ * schema/export_date 与本次运行一致——基线落后于快照时直接报错，而不是
+ * 拿着旧基线装作还在守门。
+ *
  * 用法：
  *   node scripts/verify-workbuddy-platform-drift.mjs
  *   node scripts/verify-workbuddy-platform-drift.mjs --update
+ *   node scripts/verify-workbuddy-platform-drift.mjs --snapshot <目录>
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { runDiff } from "./diff-workbuddy-export.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const snapshotDir = path.join(
+const platformExportRoot = path.join(
   repoRoot,
-  "integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/platform-export/2026-11-14",
+  "integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/platform-export",
 );
-const expectedPath = path.join(snapshotDir, "expected-diffs.json");
 
-function project(result) {
+/** 日期命名（YYYY-MM-DD）的快照目录里取最新的一个。 */
+function latestSnapshotDir() {
+  const dates = readdirSync(platformExportRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+  const latest = dates[dates.length - 1];
+  if (latest === undefined) {
+    throw new Error(`缺少平台导出快照目录：${platformExportRoot}/<YYYY-MM-DD>`);
+  }
+  return path.join(platformExportRoot, latest);
+}
+
+function project(result, exportDate) {
   return {
     schema: "kiwi.workbuddy.platform-export-expected-diffs.v1",
-    export_date: "2026-11-14",
+    export_date: exportDate,
     diff_count: result.diff_count,
     diffs: result.diffs
       .map((diff) =>
@@ -47,8 +65,18 @@ function project(result) {
 }
 
 const args = process.argv.slice(2);
+const value = (name) => {
+  const index = args.indexOf(name);
+  const next = index >= 0 ? args[index + 1] : undefined;
+  return next !== undefined && !next.startsWith("--") ? next : undefined;
+};
+const snapshotArg = value("--snapshot");
+const snapshotDir = snapshotArg !== undefined ? path.resolve(snapshotArg) : latestSnapshotDir();
+const exportDate = path.basename(snapshotDir);
+const expectedPath = path.join(snapshotDir, "expected-diffs.json");
+
 const result = runDiff({ exportPath: snapshotDir });
-const actual = project(result);
+const actual = project(result, exportDate);
 
 if (args.includes("--update")) {
   writeFileSync(expectedPath, `${JSON.stringify(actual, null, 2)}\n`);
@@ -62,6 +90,18 @@ try {
 } catch (error) {
   console.error(`缺少或无法读取差异基线 ${expectedPath}：${error.message}`);
   console.error("运行 node scripts/verify-workbuddy-platform-drift.mjs --update 生成基线。");
+  process.exit(1);
+}
+
+// 基线元数据与本次运行不一致 = 基线不是为这份快照写的，直接失败并提示刷新，
+// 避免「加了新快照却一直拿旧基线比对」的假门禁。
+if (expected.schema !== actual.schema || expected.export_date !== actual.export_date) {
+  console.error(
+    `WORKBUDDY_PLATFORM_DRIFT_BASELINE_STALE：基线（export_date=${expected.export_date ?? "缺失"}，` +
+      `schema=${expected.schema ?? "缺失"}）与本次快照（export_date=${actual.export_date}）不匹配`,
+  );
+  console.error(`基线：${expectedPath}`);
+  console.error("确认新快照已就位后运行：node scripts/verify-workbuddy-platform-drift.mjs --update");
   process.exit(1);
 }
 
@@ -79,7 +119,7 @@ const marketDrift =
 
 if (added.length === 0 && removed.length === 0 && changed.length === 0 && !marketDrift) {
   console.log(
-    `WORKBUDDY_PLATFORM_DRIFT_OK：与 2026-11-14 平台导出的 ${actual.diff_count} 处已知差异一致。`,
+    `WORKBUDDY_PLATFORM_DRIFT_OK：与 ${exportDate} 平台导出的 ${actual.diff_count} 处已知差异一致。`,
   );
   process.exit(0);
 }
