@@ -50,6 +50,14 @@ const DUAL_SOURCE_FILES = [
     path: "integrations/hosts/workbuddy/kiwi-procurement-expert/skills/kiwi-source-and-quote/SKILL.md",
     lang: "zh",
   },
+  {
+    path: "integrations/hosts/workbuddy/online-shopping-assistant/SKILL.md",
+    lang: "zh",
+  },
+  {
+    path: "integrations/hosts/workbuddy/haina-ecommerce-expert/skills/online-shopping-assistant/SKILL.md",
+    lang: "zh",
+  },
   // 跨仓（本机存在时校验；Hermes 插件仓与本仓同目录层级）。
   { path: "../hermes-plugin-kiwi/skills/kiwi-buyer/SKILL.md", lang: "en", optional: true },
   { path: "../hermes-plugin-kiwi/skills/kiwi-buyer/SKILL.zh-CN.md", lang: "zh", optional: true },

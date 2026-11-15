@@ -15,7 +15,7 @@ function safeFile(root,name){const p=resolve(root,name);assert(p.startsWith(root
 for(const f of files)safeFile(bundle,f);
 const meta=JSON.parse(readFileSync(join(bundle,files[0]),'utf8'));
 const mcp=JSON.parse(readFileSync(join(bundle,'.mcp.json'),'utf8'));
-assert.equal(meta.version,'1.2.2');assert.equal(meta.dependencies.mcpServers,'./.mcp.json');assert(!meta.dependencies.connectors?.length);
+assert.equal(meta.version,'1.2.3');assert.equal(meta.dependencies.mcpServers,'./.mcp.json');assert(!meta.dependencies.connectors?.length);
 assert.deepEqual(Object.keys(mcp.mcpServers),['kiwi-shopping-buyer']);
 const server=mcp.mcpServers['kiwi-shopping-buyer'];assert.equal(server.type,'stdio');assert.equal(server.command,'node');assert.deepEqual(server.args,['./runtime/expert-launcher.mjs']);assert.equal(server['x-workbuddy'].auth.type,'none');
 for(const f of runtimeFiles)safeFile(runtime,f);
