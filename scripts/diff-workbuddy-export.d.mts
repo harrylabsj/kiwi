@@ -5,20 +5,29 @@ export declare const DEFAULT_LOCAL_OUT: string;
 export interface NormalizedMode {
   id: string;
   title: string;
+  titleEn?: string;
   prompt: string;
   skills: string[];
   scenes: Array<{
     id: string;
     title: string;
+    titleEn?: string;
     prompt: string;
-    templates: Array<{ id: string; title: string; prompt: string }>;
+    templates: Array<{
+      id: string;
+      title: string;
+      titleEn?: string;
+      prompt: string;
+      promptEn?: string;
+    }>;
   }>;
 }
 
 export interface NormalizedConfig {
-  header: { title: string; titleEn: string };
+  header: { title: string | undefined; titleEn: string | undefined };
   brand?: string;
   chatPlaceholder?: string;
+  chatPlaceholderEn?: string;
   models?: unknown;
   authConfig?: unknown;
   jointAuth?: unknown;

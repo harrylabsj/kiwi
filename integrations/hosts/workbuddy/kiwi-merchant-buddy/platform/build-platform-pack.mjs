@@ -1443,7 +1443,12 @@ export function buildPlatformPack(config) {
           },
         ],
       },
-      chatInput: { placeholder: config.misc["输入框占位符"].zh },
+      chatInput: {
+        placeholder: config.misc["输入框占位符"].zh,
+        // 平台导入格式里 zh/en 是同一 i18n key 的两个值；本地不产出 en 时，
+        // 导入包的英文占位符会永远停留在平台旧文案（zh 改了 en 不动）。
+        placeholderEn: config.misc["输入框占位符"].en,
+      },
     },
     // 模板 title/prompt 直接使用中文文案并内嵌 promptEn，不依赖 i18n key，故英文源留空。
     i18n: { source: { en: {} } },
@@ -1812,6 +1817,9 @@ function validatePlatformPack(industryConfig, config, sourceModes) {
   // 与源配置一致性：占位符 / 授权文案 / 连接器。
   if (industryConfig.ui.chatInput.placeholder !== config.misc["输入框占位符"].zh) {
     errors.push("chatInput.placeholder 与源配置 misc.输入框占位符.zh 不一致");
+  }
+  if (industryConfig.ui.chatInput.placeholderEn !== config.misc["输入框占位符"].en) {
+    errors.push("chatInput.placeholderEn 与源配置 misc.输入框占位符.en 不一致");
   }
   if (industryConfig.authConfig.capabilityDescription !== config.misc["绑定应用授权文案"]) {
     errors.push("authConfig.capabilityDescription 与源配置 misc.绑定应用授权文案 不一致");

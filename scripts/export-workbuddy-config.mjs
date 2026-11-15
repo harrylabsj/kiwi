@@ -45,7 +45,13 @@ function requireField(value, label) {
   return value;
 }
 
-export function convertToPlatformImport(base, local) {
+export function convertToPlatformImport(base, local, { onSkip } = {}) {
+  // base 独有（本地已删除）的模式/胶囊/模板会被跳过：导入包保留平台旧文案。
+  // 这是合法操作，但必须让调用方看见，不能静默——否则「发布物里带已删除内容」
+  // 没有任何提示。
+  const skip = (label) => {
+    onSkip?.(label);
+  };
   const output = clone(base);
   const baseHome = homeItem(output);
   const localHome = homeItem(local);
@@ -54,8 +60,8 @@ export function convertToPlatformImport(base, local) {
   const localHeader = localHome.config?.header ?? {};
   const headerTitle = requireField(localHeader.title, "local header.title");
   const headerTitleEn = requireField(localHeader.titleEn, "local header.titleEn");
-  const brandZh = headerTitle.split(/[·|]/)[0]?.trim() ?? headerTitle;
-  const brandEn = headerTitleEn.split(/[·|]/)[0]?.trim() ?? headerTitleEn;
+  const brandZh = headerTitle.split(/[·|]/)[0]?.trim() || headerTitle;
+  const brandEn = headerTitleEn.split(/[·|]/)[0]?.trim() || headerTitleEn;
   setI18n(output, "home.header.title", headerTitle, headerTitleEn);
   setI18n(output, "brand.title", brandZh, brandEn);
   if (baseHome.config.header) baseHome.config.header.title = "home.header.title";
@@ -63,7 +69,13 @@ export function convertToPlatformImport(base, local) {
 
   const localChat = local.ui?.chatInput?.placeholder;
   if (typeof localChat === "string" && localChat.trim()) {
-    setI18n(output, "home.chatInput.placeholder", localChat, undefined);
+    // zh 写了而 en 不写，导入包的英文占位符会停留在平台旧文案（zh/en 不一致
+    // 随包发布）。英文占位符是必填源字段，缺失直接报错而不是悄悄保留旧值。
+    const localChatEn = local.ui?.chatInput?.placeholderEn;
+    if (typeof localChatEn !== "string" || localChatEn.trim() === "") {
+      throw new Error("缺少 local ui.chatInput.placeholderEn（英文输入框占位符）");
+    }
+    setI18n(output, "home.chatInput.placeholder", localChat, localChatEn);
   }
 
   if (output.authConfig && local.authConfig?.capabilityDescription !== undefined) {
@@ -75,7 +87,10 @@ export function convertToPlatformImport(base, local) {
   );
   for (const baseMode of baseHome.config?.modes?.items ?? []) {
     const localMode = localModes.get(baseMode.modeId);
-    if (!localMode) continue;
+    if (!localMode) {
+      skip(`modes.${baseMode.modeId}`);
+      continue;
+    }
     baseMode.systemPromptAppend = localMode.systemPromptAppend ?? "";
     if (Array.isArray(localMode.skills) && localMode.skills.length > 0) {
       baseMode.skills = localMode.skills.map((skill) => ({ id: skill.id }));
@@ -87,7 +102,10 @@ export function convertToPlatformImport(base, local) {
     const localScenes = new Map((localMode.scenes ?? []).map((scene) => [scene.id, scene]));
     for (const baseScene of baseMode.scenes ?? []) {
       const localScene = localScenes.get(baseScene.id);
-      if (!localScene) continue;
+      if (!localScene) {
+        skip(`modes.${baseMode.modeId}.scenes.${baseScene.id}`);
+        continue;
+      }
       baseScene.systemPromptAppend = localScene.systemPromptAppend ?? "";
       setI18n(output, baseScene.title, localScene.title, localScene.titleEn);
 
@@ -96,7 +114,10 @@ export function convertToPlatformImport(base, local) {
       );
       for (const baseTemplate of baseScene.templates ?? []) {
         const localTemplate = localTemplates.get(baseTemplate.id);
-        if (!localTemplate) continue;
+        if (!localTemplate) {
+          skip(`modes.${baseMode.modeId}.scenes.${baseScene.id}.templates.${baseTemplate.id}`);
+          continue;
+        }
         setI18n(
           output,
           baseTemplate.title,
@@ -120,7 +141,9 @@ function main() {
   const args = process.argv.slice(2);
   const value = (name) => {
     const index = args.indexOf(name);
-    return index >= 0 ? args[index + 1] : undefined;
+    const next = index >= 0 ? args[index + 1] : undefined;
+    // 下一个参数以 -- 开头说明少传了值，宁可报用法错误。
+    return next !== undefined && !next.startsWith("--") ? next : undefined;
   };
   const basePath = value("--base") ?? DEFAULT_BASE;
   const localPath = value("--local") ?? DEFAULT_LOCAL;
@@ -134,6 +157,7 @@ function main() {
   const converted = convertToPlatformImport(
     JSON.parse(readFileSync(basePath, "utf8")),
     JSON.parse(readFileSync(localPath, "utf8")),
+    { onSkip: (label) => console.warn(`警告：平台侧存在但本地已删除，导入包保留平台旧文案：${label}`) },
   );
   writeFileSync(outPath, `${JSON.stringify(converted, null, 2)}\n`);
   console.log(`已生成平台导入格式：${outPath}`);

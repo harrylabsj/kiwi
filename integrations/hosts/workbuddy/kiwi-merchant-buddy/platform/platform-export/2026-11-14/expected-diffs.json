@@ -1,7 +1,7 @@
 {
   "schema": "kiwi.workbuddy.platform-export-expected-diffs.v1",
   "export_date": "2026-11-14",
-  "diff_count": 19,
+  "diff_count": 22,
   "diffs": [
     {
       "path": "authConfig.capabilityDescription",
@@ -9,6 +9,13 @@
       "local_sha256": "sha256:56c7aa99596afc725b8fbe6e1283aa3f91f9bc7befcc25c3f709e7a83def2157",
       "live_length": 27,
       "local_length": 25
+    },
+    {
+      "path": "chat.placeholderEn",
+      "live_sha256": "sha256:9d2ee5f2c286c92990af79d8425c63b779d4c96911635116d0f00a29c1977ab8",
+      "local_sha256": "sha256:86fbedf931c0a0f28e5a971f52f1e32776e163bf3b8200f2ccbd0dc9c7c9ec2e",
+      "live_length": 101,
+      "local_length": 58
     },
     {
       "path": "header.title",
@@ -111,11 +118,25 @@
       "local_length": 12
     },
     {
+      "path": "modes.onboarding.scenes.cap-register.templates.t4.promptEn",
+      "live_sha256": "sha256:2e6df5c501a44dc2c60b652fbdb5391bc0545ff41db8542c31a07191ec2ed004",
+      "local_sha256": "sha256:6be8ed7ea11b5d637cac29e4f6a6e343174f555efced6f158745f47e2aa304f2",
+      "live_length": 77,
+      "local_length": 58
+    },
+    {
       "path": "modes.onboarding.scenes.cap-register.templates.t4.title",
       "live_sha256": "sha256:e117e952f1055a943d9133146f0057f4fe7106f58441b8a9d602a338c309d2ee",
       "local_sha256": "sha256:a68c4cb7808b5c82262d19ad2f471484694fd639141b874d91f566130d10fdc9",
       "live_length": 5,
       "local_length": 4
+    },
+    {
+      "path": "modes.onboarding.scenes.cap-register.templates.t4.titleEn",
+      "live_sha256": "sha256:cf21cac667a7ead80ee772b4fbfdc7843cc3f123900d56f052f10656b4c83ab3",
+      "local_sha256": "sha256:814f4ed2d5bd33e3a1b93f0d555b2224913e418a41390c90368d856c08c87d42",
+      "live_length": 27,
+      "local_length": 15
     },
     {
       "path": "modes.onboarding.scenes.cap-upgrade.systemPrompt",

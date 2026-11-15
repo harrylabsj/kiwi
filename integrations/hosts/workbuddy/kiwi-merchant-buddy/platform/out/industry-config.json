@@ -1071,7 +1071,8 @@
       ]
     },
     "chatInput": {
-      "placeholder": "问问我：注册开通、商品报价、运营分析、审批磋商…"
+      "placeholder": "问问我：注册开通、商品报价、运营分析、审批磋商…",
+      "placeholderEn": "Ask me about onboarding, quotes, insights and negotiation…"
     }
   },
   "i18n": {
