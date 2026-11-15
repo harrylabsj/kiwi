@@ -77,6 +77,25 @@ describe("createTradePlatformRulesCache", () => {
     expect(calls).toHaveLength(4);
   });
 
+  it("同一毫秒内成功后再失败仍按失败退避，不误用成功 TTL", async () => {
+    let t = 0;
+    const { impl, calls } = fetchSequencer([RULES_A, "fail"]);
+    const cache = createTradePlatformRulesCache({
+      catalogUrl: "https://catalog.example",
+      fetchImpl: impl,
+      now: () => t,
+      successTtlMs: 0,
+      failureRetryMs: 10_000,
+    });
+    expect(await cache.refresh()).toEqual(RULES_A);
+    // successTtlMs=0 且时间未前进：允许立刻重试，这次失败。
+    expect(await cache.refresh()).toEqual(RULES_A);
+    expect(calls).toHaveLength(2);
+    // 失败与上次成功同为 t=0：必须按失败退避窗口跳过，而不是当成成功窗口重试。
+    expect(await cache.refresh()).toEqual(RULES_A);
+    expect(calls).toHaveLength(2);
+  });
+
   it("未配置 catalog 时永远使用内置规则，不发请求", async () => {
     const { impl, calls } = fetchSequencer([RULES_A]);
     const cache = createTradePlatformRulesCache({ catalogUrl: undefined, fetchImpl: impl });

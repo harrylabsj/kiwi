@@ -91,24 +91,23 @@ export function createTradePlatformRulesCache(
   const failureRetryMs = options.failureRetryMs ?? 10_000;
   const now = options.now ?? Date.now;
   let snapshot: readonly TradePlatformRule[] = [...DEFAULT_TRADE_PLATFORM_RULES];
-  let lastSuccessAt = Number.NEGATIVE_INFINITY;
   let lastAttemptAt = Number.NEGATIVE_INFINITY;
+  // 显式记录上次尝试结果：用时间戳相等推断「上次是否成功」在毫秒碰撞时会误判。
+  let lastAttemptFailed = false;
   return {
     current: () => snapshot,
     async refresh(): Promise<readonly TradePlatformRule[]> {
       if (options.catalogUrl === undefined) return snapshot;
       const t = now();
-      // 上次尝试即上次成功 → 成功窗口；上次尝试失败 → 短退避窗口。
-      const skipWindow = lastSuccessAt === lastAttemptAt ? successTtlMs : failureRetryMs;
+      // 上次成功 → 成功窗口；上次失败 → 短退避窗口。
+      const skipWindow = lastAttemptFailed ? failureRetryMs : successTtlMs;
       if (lastAttemptAt > Number.NEGATIVE_INFINITY && t - lastAttemptAt < skipWindow) {
         return snapshot;
       }
       lastAttemptAt = t;
       const fresh = await fetchTradePlatformRulesOrNull(options.catalogUrl, options.fetchImpl);
-      if (fresh !== undefined) {
-        snapshot = fresh;
-        lastSuccessAt = t;
-      }
+      lastAttemptFailed = fresh === undefined;
+      if (fresh !== undefined) snapshot = fresh;
       return snapshot;
     },
   };
