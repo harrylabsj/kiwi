@@ -21,7 +21,7 @@ const server=mcp.mcpServers['kiwi-shopping-buyer'];assert.equal(server.type,'std
 for(const f of runtimeFiles)safeFile(runtime,f);
 for(const f of ['expert-data.mjs','expert-launcher.mjs'])safeFile(expertRuntime,f);
 const instructions=['agents/haina-ecommerce-expert.md','skills/online-shopping-assistant/SKILL.md','skills/online-shopping-assistant/references/kiwi-inquiry-and-negotiation.md'].map(f=>readFileSync(join(bundle,f),'utf8')).join('\n');
-assert(instructions.includes('kiwi-shopping-buyer'));assert(!instructions.includes('`kiwi-sourcing` 连接器'));
+assert(instructions.includes('kiwi-shopping-buyer'));assert(!instructions.includes('`kiwi-sourcing` 连接器'));assert(!instructions.includes('scripts/kiwi-tool.mjs'));
 console.log(`Validated ${meta.profession.zh} v${meta.version}: built-in MCP and ${runtimeFiles.length+2} runtime files.`);
 const args=process.argv.slice(2);if(args.length===1&&args[0]==='--check')process.exit(0);
 assert(args.length===2&&args[0]==='--out','Usage: node package-ecommerce-expert.mjs --check | --out /absolute/path.zip');

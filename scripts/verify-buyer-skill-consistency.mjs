@@ -81,6 +81,43 @@ const PENDING_FILES = [
   "integrations/plugins/kiwi-dsh-plugin/skills/kiwi-buyer/SKILL.md",
 ];
 
+/**
+ * 严格顺序副本：先完成并展示 Kiwi Network，再检索其他平台。
+ *
+ * 该顺序目前只用于 WorkBuddy 网上购物助手（1.3.0 起）；主仓 `skills/kiwi-buyer/`
+ * 与采购专家仍允许「同轮并行」。两份副本必须逐字保留顺序标记，避免只改一份时
+ * 静默退回并行语义（token 校验看不出顺序差异）。
+ */
+const SEQUENTIAL_ORDER_FILES = [
+  "integrations/hosts/workbuddy/online-shopping-assistant/SKILL.md",
+  "integrations/hosts/workbuddy/haina-ecommerce-expert/skills/online-shopping-assistant/SKILL.md",
+];
+
+/** 顺序标记与并行措辞；两份副本必须命中前者、不得命中后者。 */
+const SEQUENTIAL_ORDER_MARKERS = {
+  require: ["先 Kiwi，后其他平台"],
+  forbid: ["或同轮并行"],
+};
+
+/**
+ * 询价 reference 的入口必须与所在包的实际形态一致：
+ * - 独立技能随包 `scripts/kiwi-tool.mjs`；
+ * - 专家内嵌副本没有 scripts/，只能走内置 `kiwi-shopping-buyer` MCP。
+ * 两份文件内容相近，但入口口径不能互换。
+ */
+const REFERENCE_ENTRY_FILES = [
+  {
+    path: "integrations/hosts/workbuddy/online-shopping-assistant/references/kiwi-inquiry-and-negotiation.md",
+    require: ["scripts/kiwi-tool.mjs"],
+    forbid: [],
+  },
+  {
+    path: "integrations/hosts/workbuddy/haina-ecommerce-expert/skills/online-shopping-assistant/references/kiwi-inquiry-and-negotiation.md",
+    require: ["kiwi-shopping-buyer"],
+    forbid: ["scripts/kiwi-tool.mjs"],
+  },
+];
+
 /** 语言相关的措辞标记（展示名称与外部来源表述）。 */
 const LANGUAGE_TOKENS = {
   zh: ["互联网电商", "网络内商家"],
@@ -136,11 +173,40 @@ for (const relative of PENDING_FILES) {
   }
 }
 
+for (const relative of SEQUENTIAL_ORDER_FILES) {
+  if (!existsSync(path.join(root, relative))) {
+    fail(`${relative} 不存在`);
+    continue;
+  }
+  const text = read(relative);
+  for (const token of SEQUENTIAL_ORDER_MARKERS.require) {
+    if (!text.includes(token)) fail(`${relative} 缺少严格顺序标记：${token}`);
+  }
+  for (const token of SEQUENTIAL_ORDER_MARKERS.forbid) {
+    if (text.includes(token)) fail(`${relative} 仍允许并行，与严格顺序规则冲突：${token}`);
+  }
+}
+
+for (const entry of REFERENCE_ENTRY_FILES) {
+  if (!existsSync(path.join(root, entry.path))) {
+    fail(`${entry.path} 不存在`);
+    continue;
+  }
+  const text = read(entry.path);
+  for (const token of entry.require) {
+    if (!text.includes(token)) fail(`${entry.path} 缺少入口标记：${token}`);
+  }
+  for (const token of entry.forbid) {
+    if (text.includes(token)) fail(`${entry.path} 引用了本包不存在的入口：${token}`);
+  }
+}
+
 if (failures.length > 0) {
   console.error(`buyer-skill consistency FAILED: ${failures.length} 项`);
   process.exit(1);
 }
 console.log(
   `buyer-skill consistency OK: ${DUAL_SOURCE_FILES.length} 个双来源副本 + ` +
-    `${BOUNDARY_FILES.length} 个边界副本 + ${PENDING_FILES.length} 个未支持副本`,
+    `${BOUNDARY_FILES.length} 个边界副本 + ${PENDING_FILES.length} 个未支持副本 + ` +
+    `${SEQUENTIAL_ORDER_FILES.length} 个严格顺序副本 + ${REFERENCE_ENTRY_FILES.length} 个 reference 入口`,
 );

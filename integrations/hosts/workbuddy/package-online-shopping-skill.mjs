@@ -9,7 +9,7 @@ const here=dirname(fileURLToPath(import.meta.url));const root=join(here,'online-
 const local=['SKILL.md','scripts/kiwi-tool.mjs',...['comparison-rules.md','kiwi-inquiry-and-negotiation.md','output-format.md','platform-research.md'].map(x=>`references/${x}`)];
 function safe(base,rel){const p=resolve(base,rel);assert(p.startsWith(base+sep));assert(lstatSync(p).isFile()&&!lstatSync(p).isSymbolicLink());assert(realpathSync(p).startsWith(realpathSync(base)+sep));return p}
 for(const x of local)safe(root,x);for(const x of runtimeFiles)safe(runtime,x);for(const x of ['expert-data.mjs','expert-launcher.mjs'])safe(expert,x);
-const skill=readFileSync(join(root,'SKILL.md'),'utf8');assert.match(skill,/^name: online-shopping-assistant$/m);assert.match(skill,/^version: 1\.3\.0$/m);assert(skill.includes('scripts/kiwi-tool.mjs'));assert(!skill.includes('`kiwi-sourcing` 连接器'));
+const skill=readFileSync(join(root,'SKILL.md'),'utf8');assert.match(skill,/^name: online-shopping-assistant$/m);assert.match(skill,/^version: 1\.3\.0$/m);assert(skill.includes('scripts/kiwi-tool.mjs'));assert(!skill.includes('`kiwi-sourcing` 连接器'));const reference=readFileSync(join(root,'references/kiwi-inquiry-and-negotiation.md'),'utf8');assert(reference.includes('scripts/kiwi-tool.mjs'));
 console.log(`Validated 网上购物助手 1.3.0 with bundled Kiwi runtime (${runtimeFiles.length+2} files).`);
 const args=process.argv.slice(2);if(args.length===1&&args[0]==='--check')process.exit(0);assert(args.length===2&&args[0]==='--out');const output=resolve(args[1]);assert(output.endsWith('.zip')&&!existsSync(output));mkdirSync(dirname(output),{recursive:true});
 const stage=mkdtempSync(join(tmpdir(),'kiwi-skill-'));const dir=join(stage,'online-shopping-assistant');const entries=[];

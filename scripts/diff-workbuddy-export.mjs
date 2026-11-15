@@ -147,7 +147,7 @@ export function normalizeExport({ industryConfig, marketConfig }) {
   return {
     header: {
       title: resolveI18n(locale, headerTitleKey),
-      titleEn: resolveI18n(localeEn, headerTitleEnKey),
+      titleEn: resolveI18nEn(localeEn, headerTitleEnKey),
     },
     brand: resolveI18n(locale, industryConfig?.brand?.title),
     chatPlaceholder: resolveI18n(locale, chatPlaceholderKey),
