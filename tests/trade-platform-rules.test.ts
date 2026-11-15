@@ -61,6 +61,14 @@ describe("operator trade platform rules", () => {
     expect(normalized.map((rule) => rule.id)).toEqual(["pinduoduo"]);
   });
 
+  it("运营停用全部平台（空数组）被如实保留，不静默回落内置三家", () => {
+    expect(normalizeTradePlatformRules([])).toEqual([]);
+    // 非数组（缺字段/坏响应）仍走内置兜底。
+    expect(normalizeTradePlatformRules("nope")).toEqual([
+      ...DEFAULT_TRADE_PLATFORM_RULES,
+    ]);
+  });
+
   it("generates custom-platform links through the shared link builder", () => {
     const rules = [...DEFAULT_TRADE_PLATFORM_RULES, PINDUODUO];
     expect(buildMarketplaceProductLink("拼多多", "987654", rules)).toBe(

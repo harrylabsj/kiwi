@@ -32,7 +32,11 @@ export async function fetchTradePlatformRulesOrNull(
     if (!response.ok) return undefined;
     const body = (await response.json()) as { platforms?: unknown };
     if (!Array.isArray(body.platforms)) return undefined;
-    return normalizeTradePlatformRules(body.platforms);
+    const normalized = normalizeTradePlatformRules(body.platforms);
+    // 非空输入全部不合法 = 响应无效（schema 漂移/脏行），不能当成「运营主动
+    // 停用了全部平台」：返回 undefined 让调用方保留上次成功快照。
+    if (body.platforms.length > 0 && normalized.length === 0) return undefined;
+    return normalized;
   } catch {
     return undefined;
   }
@@ -47,4 +51,65 @@ export async function fetchTradePlatformRules(
       ...DEFAULT_TRADE_PLATFORM_RULES,
     ]
   );
+}
+
+export interface TradePlatformRulesCacheOptions {
+  /** undefined = 未配置 catalog：永远使用内置规则，不发请求。 */
+  catalogUrl: string | undefined;
+  /** 测试缝。 */
+  fetchImpl?: typeof fetch;
+  /** 成功刷新后的缓存窗口（毫秒）；默认 30s。 */
+  successTtlMs?: number;
+  /** 拉取失败后的退避窗口（毫秒）；默认 10s。 */
+  failureRetryMs?: number;
+  /** 测试缝。 */
+  now?: () => number;
+}
+
+export interface TradePlatformRulesCache {
+  /** 当前快照（内置默认、上次成功值，或运营清空后的 []）。 */
+  current(): readonly TradePlatformRule[];
+  /**
+   * 缓存到期则拉取最新规则并更新快照；始终返回当前快照。
+   *
+   * 每次导入/列表/发布/报价前都同步打一次 catalog，会让买家报价热路径在
+   * catalog 慢或不可达时最多吃满 2s 请求超时，并对 catalog 形成每请求一查的
+   * 压力。因此：成功后 successTtlMs 内直接返回快照（运营改平台最迟 30s 生效，
+   * 无需重启实例）；失败后 failureRetryMs 内不重试，退避结束前的调用继续用
+   * 上次成功快照。
+   *
+   * 并发调用不共享 in-flight 请求：刷新进行中的调用直接拿当前快照（最多等
+   * 一次 2s 请求超时），不会排在请求后面；刷新完成后才更新快照。
+   */
+  refresh(): Promise<readonly TradePlatformRule[]>;
+}
+
+export function createTradePlatformRulesCache(
+  options: TradePlatformRulesCacheOptions,
+): TradePlatformRulesCache {
+  const successTtlMs = options.successTtlMs ?? 30_000;
+  const failureRetryMs = options.failureRetryMs ?? 10_000;
+  const now = options.now ?? Date.now;
+  let snapshot: readonly TradePlatformRule[] = [...DEFAULT_TRADE_PLATFORM_RULES];
+  let lastSuccessAt = Number.NEGATIVE_INFINITY;
+  let lastAttemptAt = Number.NEGATIVE_INFINITY;
+  return {
+    current: () => snapshot,
+    async refresh(): Promise<readonly TradePlatformRule[]> {
+      if (options.catalogUrl === undefined) return snapshot;
+      const t = now();
+      // 上次尝试即上次成功 → 成功窗口；上次尝试失败 → 短退避窗口。
+      const skipWindow = lastSuccessAt === lastAttemptAt ? successTtlMs : failureRetryMs;
+      if (lastAttemptAt > Number.NEGATIVE_INFINITY && t - lastAttemptAt < skipWindow) {
+        return snapshot;
+      }
+      lastAttemptAt = t;
+      const fresh = await fetchTradePlatformRulesOrNull(options.catalogUrl, options.fetchImpl);
+      if (fresh !== undefined) {
+        snapshot = fresh;
+        lastSuccessAt = t;
+      }
+      return snapshot;
+    },
+  };
 }

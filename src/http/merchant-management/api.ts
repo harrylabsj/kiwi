@@ -294,7 +294,7 @@ export interface MerchantManagementApiOptions {
     }) => Promise<PlatformEvidenceResult>;
   };
   /** 运营配置的交易平台规则（商家导入/模板）；缺省内置 jd/taobao/tmall。 */
-  marketplacePlatforms?: () => Promise<TradePlatformRule[]>;
+  marketplacePlatforms?: () => Promise<readonly TradePlatformRule[]>;
   /** 已部署实例的目录连接；独立于需要平台回执的部署向导。 */
   catalogConnection?: {
     getSummary: () => Promise<{
@@ -3663,7 +3663,8 @@ export function createMerchantManagementApiHandler(
     }
     let table: CloudProductTable;
     try {
-      // 导入预览/提交都用运营最新规则校验平台与链接，不依赖进程启动快照。
+      // 导入预览/提交都用运营规则校验平台与链接；规则来自 TTL 缓存（成功后最多
+      // 30s 陈旧、失败后 10s 不重试），不是进程启动快照，也不保证每次实时。
       const platformRules = await options.marketplacePlatforms?.();
       table = parseProductTable(fields["table"], "request body", platformRules);
       table = await importChannel.prepareTable?.(table) ?? table;

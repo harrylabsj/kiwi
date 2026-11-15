@@ -68,8 +68,12 @@ export function isTradePlatformRule(value: unknown): value is TradePlatformRule 
 }
 
 export function normalizeTradePlatformRules(value: unknown): TradePlatformRule[] {
+  // 非数组（含 undefined）= 没有可用数据 → 内置三家兜底。
+  // 空数组 = 运营明确停用了全部平台 → 如实保留 []，绝不静默复活内置三家
+  //（否则运营刚停用的平台会在下一次刷新时悄悄回来）。调用方若还没有快照，
+  // 由调用方决定是否用 DEFAULT 兜底（见 fetchTradePlatformRules）。
   if (!Array.isArray(value)) return [...DEFAULT_TRADE_PLATFORM_RULES];
-  const rules = value
+  return value
     .filter(isTradePlatformRule)
     .map((row) => ({
       id: row.id.trim().toLowerCase(),
@@ -79,7 +83,6 @@ export function normalizeTradePlatformRules(value: unknown): TradePlatformRule[]
       sort_order: Number.isFinite(row.sort_order) ? Number(row.sort_order) : 0,
     }))
     .filter((row) => row.id !== "");
-  return rules.length > 0 ? rules : [...DEFAULT_TRADE_PLATFORM_RULES];
 }
 
 /** Resolve a merchant-entered platform (id, label, or legacy alias) to a rule. */
