@@ -138,7 +138,7 @@ import { loadOrCreateMerchantIdentity } from "./merchant-identity.js";
 import { createMerchantConnectionService, MerchantConnectError, type MerchantConnectionService } from "./connect-service.js";
 import { createProbeHandler } from "../tools/workbuddy-echo.js";
 import { createFileListingPublicationService } from "./file-listing-publication.js";
-import { fetchTradePlatformRulesOrNull } from "./trade-platforms-client.js";
+import { createTradePlatformRulesCache } from "./trade-platforms-client.js";
 import {
   DEFAULT_TRADE_PLATFORM_RULES,
   type TradePlatformRule,
@@ -575,36 +575,30 @@ export async function bootstrapCloudRuntime(
   // 否则沿用 HTTP 商品源（shopping-cli 开放层）。两条路径都不含演示价回退。
   // 运营配置的交易平台规则：启动时拉一次作为初始快照；导入/下载模板/商品列表/
   // 发布/报价前按需刷新（catalog 不可达时保留上次成功快照，不回落内置三家）。
-  let tradePlatformRules: TradePlatformRule[] =
-    config.catalogUrl === undefined
-      ? [...DEFAULT_TRADE_PLATFORM_RULES]
-      : ((await fetchTradePlatformRulesOrNull(config.catalogUrl, options.catalogFetchImpl)) ?? [
-          ...DEFAULT_TRADE_PLATFORM_RULES,
-        ]);
+  // 刷新走 TTL 缓存：成功后 30s 内直接用快照（买家报价热路径不再每次读取都等
+  // catalog），失败后 10s 内不重试（避免每笔报价都吃满 2s 请求超时）。
+  const tradePlatformRulesCache = createTradePlatformRulesCache({
+    catalogUrl: config.catalogUrl,
+    ...(options.catalogFetchImpl !== undefined ? { fetchImpl: options.catalogFetchImpl } : {}),
+  });
+  await tradePlatformRulesCache.refresh();
   /**
    * Re-read the operator's platform rules. Catalog unreachable keeps the last
    * known-good snapshot: downgrading to the built-in three would make a newly
    * configured platform look invalid, and an operator-disabled platform would
    * silently reappear. Call before every import/list/publish decision so a
-   * rules edit takes effect without restarting the instance.
+   * rules edit takes effect without restarting the instance (within the cache
+   * TTL; see createTradePlatformRulesCache).
    */
-  const marketplacePlatforms = async (): Promise<TradePlatformRule[]> => {
-    if (config.catalogUrl !== undefined) {
-      const fresh = await fetchTradePlatformRulesOrNull(
-        config.catalogUrl,
-        options.catalogFetchImpl,
-      );
-      if (fresh !== undefined) tradePlatformRules = fresh;
-    }
-    return tradePlatformRules;
-  };
+  const marketplacePlatforms = (): Promise<readonly TradePlatformRule[]> =>
+    tradePlatformRulesCache.refresh();
   const fileProductSource: CloudProductSourceHandle | undefined =
     config.productsFile !== undefined
       ? createFileProductSource({
           file: config.productsFile,
           merchantId: profile.owner_id,
-          platformRules: tradePlatformRules,
-          platformRulesProvider: () => tradePlatformRules,
+          platformRules: tradePlatformRulesCache.current(),
+          platformRulesProvider: () => tradePlatformRulesCache.current(),
           refreshPlatformRules: marketplacePlatforms,
         })
       : undefined;
@@ -1084,8 +1078,8 @@ export async function bootstrapCloudRuntime(
         ? { fileListingPublication: createFileListingPublicationService({
             dataDir: config.dataDir, productsFile: productsFilePath, profile,
             catalogUrl: config.catalogUrl, publicOrigin: config.publicOrigin,
-            platformRules: tradePlatformRules,
-            platformRulesProvider: () => tradePlatformRules,
+            platformRules: tradePlatformRulesCache.current(),
+            platformRulesProvider: () => tradePlatformRulesCache.current(),
             ...(options.catalogFetchImpl !== undefined ? { fetchImpl: options.catalogFetchImpl } : {}),
           }) }
         : {}),
@@ -1113,7 +1107,7 @@ export async function bootstrapCloudRuntime(
                   : 0;
               const limit = Math.min(Math.max(query.limit ?? 50, 1), 100);
               const nowMs = Date.now();
-              const items = records.slice(offset, offset + limit).map((record) => projectFileProductRecord(record, nowMs, tradePlatformRules));
+              const items = records.slice(offset, offset + limit).map((record) => projectFileProductRecord(record, nowMs, tradePlatformRulesCache.current()));
               return {
                 items,
                 next_cursor: offset + limit < records.length ? String(offset + limit) : null,
@@ -1124,7 +1118,7 @@ export async function bootstrapCloudRuntime(
                 const snapshot = loadProductTableSnapshot(
                   productsFilePath,
                   profile.owner_id,
-                  tradePlatformRules,
+                  tradePlatformRulesCache.current(),
                 );
                 return { digest: snapshot.digest, records: snapshot.records };
               },
@@ -1154,7 +1148,7 @@ export async function bootstrapCloudRuntime(
                   productsFilePath,
                   profile.owner_id,
                   table,
-                  tradePlatformRules,
+                  tradePlatformRulesCache.current(),
                 ),
             },
           }

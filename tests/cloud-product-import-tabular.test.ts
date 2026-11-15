@@ -14,6 +14,7 @@ import {
   parseXlsx,
   renderImportTemplateCsv,
   renderImportTemplateXlsx,
+  templateExampleRows,
   TABULAR_IMPORT_MAX_COLUMNS,
   TABULAR_IMPORT_MAX_ROWS,
   XLSX_MAX_ENTRY_BYTES,
@@ -137,6 +138,86 @@ describe("convertTabularImport — 表头识别", () => {
       expect(result.ok).toBe(false);
       expect(result.errors.some((e) => e.code === "BAD_PRODUCT_TRADE_ENTRY")).toBe(true);
     }
+  });
+
+  it("单平台配置下模板示例行不填平台，未修改的模板可直接导入", () => {
+    const rules = [
+      {
+        id: "walmart",
+        label: "沃尔玛",
+        domain: "www.walmart.com",
+        url_template: "https://www.walmart.com/ip/{id}",
+        sort_order: 3,
+      },
+    ];
+    const rows = templateExampleRows(rules);
+    expect(rows).toHaveLength(2);
+    // 第二示例行平台留空（没有第二条规则可引用），两行都保持「可留空」合法性。
+    expect(rows[1]![11]).toBe("");
+    expect(rows[1]![13]).toBe("");
+    const result = convertTabularImport(
+      { kind: "csv", text: renderImportTemplateCsv(rules) },
+      { ...OPTIONS, platformRules: rules },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.table?.products).toHaveLength(2);
+    expect(result.table?.products[1]?.trade_platform).toBeUndefined();
+    // 双平台配置不受影响：第二行仍带平台与由模板生成的链接。
+    const twoRows = templateExampleRows([...rules, { ...rules[0]!, id: "jd", label: "京东", domain: "item.jd.com", url_template: "https://item.jd.com/{id}.html" }]);
+    expect(twoRows[1]![11]).toBe("京东");
+    expect(twoRows[1]![13]).toContain("98765432101234567890");
+  });
+
+  it("运营停用全部平台时模板两行都不填平台，未修改的模板可直接导入", () => {
+    const rows = templateExampleRows([]);
+    expect(rows[1]![11]).toBe("");
+    expect(rows[1]![12]).toBe("");
+    expect(rows[1]![13]).toBe("");
+    expect(rows[0]![11]).toBe("");
+    expect(rows[0]![12]).toBe("");
+    const result = convertTabularImport(
+      { kind: "csv", text: renderImportTemplateCsv([]) },
+      { ...OPTIONS, platformRules: [] },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.table?.products).toHaveLength(2);
+    expect(result.table?.products.every((product) => product.trade_platform === undefined)).toBe(true);
+  });
+
+  it("ID 与链接单元格同时为非文本时两个类型错误都报告", () => {
+    const header = [
+      "sku",
+      "title",
+      "currency",
+      "unit",
+      "price",
+      "valid_until",
+      "trade_platform",
+      "platform_product_id",
+      "platform_product_url",
+    ];
+    const values = ["A-1", "Synthetic", "CNY", "piece", "1", "2027-12-31", "walmart"];
+    const textCells = (cells: string[], row: number): string =>
+      cells
+        .map(
+          (v, i) =>
+            `<c r="${String.fromCharCode(65 + i)}${row}" t="inlineStr"><is><t>${v}</t></is></c>`,
+        )
+        .join("");
+    const sheet = `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1">${textCells(header, 1)}</row><row r="2">${textCells(values, 2)}<c r="H2"><v>123</v></c><c r="I2"><v>456</v></c></row></sheetData></worksheet>`;
+    const invalid = convertTabularImport(
+      { kind: "xlsx", bytes: buildTestXlsx([
+        { name: "[Content_Types].xml", content: contentTypes() },
+        { name: "_rels/.rels", content: rels() },
+        { name: "xl/workbook.xml", content: workbook() },
+        { name: "xl/_rels/workbook.xml.rels", content: workbookRels() },
+        { name: "xl/worksheets/sheet1.xml", content: sheet },
+      ]) },
+      OPTIONS,
+    );
+    expect(invalid.ok).toBe(false);
+    expect(invalid.errors.some((e) => e.code === "BAD_PLATFORM_PRODUCT_ID_TYPE")).toBe(true);
+    expect(invalid.errors.some((e) => e.code === "BAD_PLATFORM_PRODUCT_URL_TYPE")).toBe(true);
   });
 
   it("旧列和新两列都空保持兼容", () => {

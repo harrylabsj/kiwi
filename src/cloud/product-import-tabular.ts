@@ -860,10 +860,17 @@ export const TABULAR_TEMPLATE_HEADER: readonly string[] = [
 export function templateExampleRows(
   rules: readonly TradePlatformRule[] = DEFAULT_TRADE_PLATFORM_RULES,
 ): string[][] {
-  const first = rules[0]?.label ?? "京东";
+  // 运营停用全部平台（rules=[]）时两行都不填平台/ID/链接：第一行若回退硬编码
+  // 「京东」，未修改的模板导入时整行会被拒（平台不在允许范围内）。
+  const first = rules[0]?.label ?? "";
   const second = rules[1]?.label ?? first;
+  const firstId = first === "" ? "" : "12345678901234567890";
   const secondId = "98765432101234567890";
   const secondUrl = rules[1] !== undefined ? (buildTradePlatformUrl(rules[1], secondId) ?? "") : "";
+  // 平台列只在链接能按模板生成时才填：单平台配置（或模板缺 {id}）下第二示例行
+  // 平台已填而 ID/链接均空，会让未修改的模板导入时整行被拒；留空则两行都是
+  // 合法的「平台可留空」示例。
+  const secondPlatform = secondUrl === "" ? "" : second;
   return [
     [
       "DEMO-001",
@@ -878,7 +885,7 @@ export function templateExampleRows(
       "2027-12-31",
       "在售",
       first,
-      "12345678901234567890",
+      firstId,
       "",
     ],
     [
@@ -893,7 +900,7 @@ export function templateExampleRows(
       "2026-09-01",
       "2028-06-30",
       "在售",
-      second,
+      secondPlatform,
       "",
       secondUrl,
     ],
@@ -1467,6 +1474,7 @@ export function convertTabularImport(
       productUrlRaw !== "" &&
       productUrlColumn !== undefined &&
       nonTextCells.has(`${index}:${productUrlColumn}`);
+    // ID 与链接单元格类型问题各自独立报告，方便商家一次改完两列。
     if (idNotText) {
       errors.push({
         row: rowNumber,
@@ -1474,14 +1482,16 @@ export function convertTabularImport(
         code: "BAD_PLATFORM_PRODUCT_ID_TYPE",
         message: `第 ${rowNumber} 行平台商品ID必须是文本单元格，不能用数字或公式；请从平台重新复制准确ID到文本列`,
       });
-    } else if (urlNotText) {
+    }
+    if (urlNotText) {
       errors.push({
         row: rowNumber,
         field: "platform_product_url",
         code: "BAD_PLATFORM_PRODUCT_URL_TYPE",
         message: `第 ${rowNumber} 行商品链接必须是文本单元格，不能用数字或公式；请粘贴完整商品详情页链接`,
       });
-    } else {
+    }
+    if (!idNotText && !urlNotText) {
       try {
         tradeFields = parseMarketplaceProductFields(
           {
