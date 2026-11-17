@@ -271,6 +271,10 @@ describe("运行期技能加载与守卫", () => {
     });
     expect(result?.plan.blocks).toEqual([{ kind: "next_step", action: "send_rfq" }]);
     expect(result?.metrics.toolCalls[TOOL_LOAD_RECEPTION_SKILL]).toBe(1);
+    // A17 审计：记录实际加载的 skill_key 与冻结 release。
+    expect(result?.metrics.loadedSkills).toEqual([
+      { skill_key: skillKey, release_id: "rel_run", accepted: true },
+    ]);
   });
 
   it("运行中技能被撤回：工具/发布门守卫失败，运行返回 undefined（引擎回退确定性）", async () => {

@@ -115,6 +115,13 @@ export interface ReceptionAgentMetrics {
   toolCalls: Record<string, number>;
   usage: { input: number; output: number; total: number };
   quotaRejected?: boolean;
+  /** 本轮接收的技能加载结果（审计 A17–A20；只含 key/release/结果）。 */
+  loadedSkills?: Array<{
+    skill_key: string;
+    release_id: string;
+    accepted: boolean;
+    reason?: string;
+  }>;
 }
 
 export interface ReceptionAgentResult {
@@ -622,6 +629,7 @@ export function createPiReceptionRuntime(
       ];
       let loadedSkillCount = 0;
       let loadedSkillChars = 0;
+      const loadedSkills: NonNullable<ReceptionAgentMetrics["loadedSkills"]> = [];
       let steps = 0;
       let toolAttempts = 0;
       let timedOut = false;
@@ -1071,11 +1079,23 @@ export function createPiReceptionRuntime(
                       : "";
                   const binding = skillBindings.find((item) => item.skill_key === skillKey);
                   if (binding === undefined) {
+                    loadedSkills.push({
+                      skill_key: skillKey,
+                      release_id: "",
+                      accepted: false,
+                      reason: "skill_not_bound",
+                    });
                     return toolResult(
                       JSON.stringify({ accepted: false, error: "skill_not_bound" }),
                     );
                   }
                   if (loadedSkillCount >= MAX_LOADED_SKILLS) {
+                    loadedSkills.push({
+                      skill_key: skillKey,
+                      release_id: binding.release_id,
+                      accepted: false,
+                      reason: "max_skills",
+                    });
                     return toolResult(
                       JSON.stringify({
                         accepted: false,
@@ -1090,6 +1110,12 @@ export function createPiReceptionRuntime(
                     binding.release_id,
                   );
                   if (artifact === undefined) {
+                    loadedSkills.push({
+                      skill_key: skillKey,
+                      release_id: binding.release_id,
+                      accepted: false,
+                      reason: "skill_unavailable",
+                    });
                     return toolResult(
                       JSON.stringify({ accepted: false, error: "skill_unavailable" }),
                     );
@@ -1098,6 +1124,12 @@ export function createPiReceptionRuntime(
                     loadedSkillChars + artifact.body_text.length >
                     MAX_LOADED_SKILL_CHARS
                   ) {
+                    loadedSkills.push({
+                      skill_key: skillKey,
+                      release_id: binding.release_id,
+                      accepted: false,
+                      reason: "body_budget",
+                    });
                     return toolResult(
                       JSON.stringify({
                         accepted: false,
@@ -1108,6 +1140,11 @@ export function createPiReceptionRuntime(
                   }
                   loadedSkillCount += 1;
                   loadedSkillChars += artifact.body_text.length;
+                  loadedSkills.push({
+                    skill_key: artifact.skill_key,
+                    release_id: artifact.release_id,
+                    accepted: true,
+                  });
                   return toolResult(
                     JSON.stringify({
                       accepted: true,
@@ -1341,6 +1378,7 @@ export function createPiReceptionRuntime(
         steps: 0,
         toolCalls: {},
         usage: { input: 0, output: 0, total: 0 },
+        loadedSkills,
       };
       let activeLease: string | undefined;
       let lastSettledOutput = 0;
