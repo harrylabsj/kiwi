@@ -153,6 +153,14 @@ assert.deepEqual(
   listed.stdout.trim().split("\n").sort(),
   files.map((p) => p.replace(/^\.\//, "")).sort(),
 );
+// The expert bundle must contain exactly the runtime that passed validation.
+for (const file of files) {
+  const source = file.startsWith("runtime/") && runtimeFiles.includes(file.slice(8))
+    ? path.join(runtimeRoot, file.slice(8)) : path.join(bundle, file);
+  const extracted = spawnSync("unzip", ["-p", output, file.replace(/^\.\//, "")]);
+  assert.equal(extracted.status, 0, `Cannot read ${file} from package`);
+  assert.deepEqual(extracted.stdout, readFileSync(source), `Package content differs: ${file}`);
+}
 const checked = spawnSync("unzip", ["-t", output], { encoding: "utf8" });
 assert.equal(checked.status, 0, checked.stdout + checked.stderr);
 console.log(`Created ${output}`);
